@@ -11,11 +11,7 @@ set(VALKEY_SERVER_SRCS
     ${CMAKE_SOURCE_DIR}/src/ae.c
     ${CMAKE_SOURCE_DIR}/src/anet.c
     ${CMAKE_SOURCE_DIR}/src/dict.c
-<<<<<<< HEAD
     ${CMAKE_SOURCE_DIR}/src/reply_blocking.c
-=======
-    ${CMAKE_SOURCE_DIR}/src/durable_write.c
->>>>>>> upstream/durability
     ${CMAKE_SOURCE_DIR}/src/hashtable.c
     ${CMAKE_SOURCE_DIR}/src/kvstore.c
     ${CMAKE_SOURCE_DIR}/src/sds.c

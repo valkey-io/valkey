@@ -895,14 +895,6 @@ typedef struct serverDb {
     long long dirty_repl_offset; /* Replication offset for a dirty DB */
     raxIterator next_scan_iter;  /* The next iterator for db scan */
     int scan_in_progress;  /* Flag of showing whether db is in scan or not */
-
-    /* fields related to dirty key tracking 
-     * for consistent writes with durability */
-    // TODO: move hashtable/references directly in the robj
-    rax *uncommitted_keys; /* Map of dirty keys to the offset required by replica acknowledgement */
-    long long dirty_repl_offset; /* Replication offset for a dirty DB */
-    raxIterator next_scan_iter;  /* The next iterator for db scan */
-    int scan_in_progress;  /* Flag of showing whether db is in scan or not */
 } serverDb;
 
 /* forward declaration for functions ctx */

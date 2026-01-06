@@ -27,15 +27,7 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-<<<<<<< HEAD
-<<<<<<< HEAD
-#include "reply_blocking.h"
-=======
 #include "durable_write.h"
->>>>>>> 20d33dec9 (Initial commit for key blocking)
-=======
-#include "durable_write.h"
->>>>>>> upstream/durability
 #include "server.h"
 #include "cluster.h"
 #include "cluster_slot_stats.h"
@@ -351,7 +343,6 @@ client *createClient(connection *conn) {
     c->bstate = NULL;
     c->pubsub_data = NULL;
     c->module_data = NULL;
-    c->durability_data = NULL;
     c->mstate = NULL;
     c->woff = 0;
     c->peerid = NULL;

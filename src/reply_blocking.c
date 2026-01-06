@@ -43,7 +43,7 @@ static long long getSingleCommandBlockingOffsetForConsistentWrites(struct client
 int isDurabilityEnabled(void) {
     // should this have its own flag?
     // or general 'durability flag'
-    return true;
+    return false;
 }
 
 int isPrimaryDurabilityEnabled(void) {
@@ -56,7 +56,7 @@ int isPrimaryDurabilityEnabled(void) {
  * Using 2 as default for POC. 
  */
 static inline unsigned replicaAcksForConsensus(void) {
-    return 1; 
+    return 2; 
 }
 
 /*
@@ -221,7 +221,7 @@ static inline void trackCommandPreExecutionPosition(struct client *c) {
  * @return 1 if the client is successfully marked unblocked, 0 otherwise 
  */
 static int unblockClientWaitingReplicaAck(struct client *c) {
-    if (c->durability_data && c->durability_data->durable_blocked_client) {
+    if (c->durability_data->durable_blocked_client) {
         listNode *ln = listSearchKey(server.durability.clients_waiting_replica_ack, c);
         if(ln != NULL) {
             listDelNode(server.durability.clients_waiting_replica_ack, ln);
@@ -239,12 +239,6 @@ void durableClientInit(struct client *c) {
     if (!isDurabilityEnabled()) {
         return;
     }
-    
-    if (!c->durability_data) {
-        c->durability_data = zcalloc(sizeof(ClientDurabilityData));
-        c->durability_data->durable_blocked_client = 0;
-    }
-
     if (c->clientDurabilityInfo.blocked_responses == NULL) {
         c->clientDurabilityInfo.blocked_responses = listCreate();
         listSetFreeMethod(c->clientDurabilityInfo.blocked_responses, zfree);
@@ -401,7 +395,7 @@ void blockClientOnReplOffset(struct client *c, long long blockingReplOffset) {
     /* If needed, we block the client and put it into our list of clients
      * waiting for ack from slaves. */
     if (isBlockingNeededForOffset(c, blockingReplOffset)) {
-        serverLog(LOG_DEBUG, "client should be blocked at offset %lld", blockingReplOffset);
+        serverLog(LOG_DEBUG, "client should be blocked at offset %lld,", blockingReplOffset);
         blockLastResponseIfExist(c, blockingReplOffset);
         if (!c->durability_data->durable_blocked_client) {
             listAddNodeTail(server.durability.clients_waiting_replica_ack,c);

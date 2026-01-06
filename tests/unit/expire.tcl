@@ -999,8 +999,8 @@ start_server {tags {"expire"}} {
                 $replica expire "expire_key_$i" 1
             }
             
-            # Check the initial replicaKeysWithExpire count
-            set replica_count_before [$replica debug replica-keys-with-expire-count]
+            # Check the initial replicaKeysWithExpire count via info command
+            set replica_count_before [s 0 slave_expires_tracked_keys]
             assert {$replica_count_before > 0}
             
             # Now perform failover from primary to this replica
@@ -1014,7 +1014,7 @@ start_server {tags {"expire"}} {
             }
             
             # Verify that the count is the same - this demonstrates the memory leak
-            set primary_count_before_cleanup [$replica debug replica-keys-with-expire-count]
+            set primary_count_before_cleanup [s 0 slave_expires_tracked_keys]
             assert {$primary_count_before_cleanup == $replica_count_before} 
             
             # Now enable the cleanup via debug command
@@ -1022,7 +1022,7 @@ start_server {tags {"expire"}} {
 
             # Check the replicaKeysWithExpire count after cleanup - should be 0
             wait_for_condition 50 100 {
-                [$replica debug replica-keys-with-expire-count] eq "0"
+                [s 0 slave_expires_tracked_keys] eq "0"
             } else {
                 fail "Count should be 0 after cleanup"
             }
@@ -1031,7 +1031,7 @@ start_server {tags {"expire"}} {
             $replica flushall
             assert_equal [$replica dbsize] 0
         }
-    } {} {needs:debug}
+    }
 }
 
 start_server {tags {expire} overrides {hz 100}} {

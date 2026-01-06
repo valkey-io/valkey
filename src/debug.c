@@ -887,8 +887,6 @@ void debugCommand(client *c) {
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "set-active-expire") && c->argc == 3) {
         server.active_expire_enabled = atoi(objectGetVal(c->argv[2]));
         addReply(c, shared.ok);
-    } else if (!strcasecmp(objectGetVal(c->argv[1]), "replica-keys-with-expire-count") && c->argc == 2) {
-        addReplyLongLong(c, getReplicaKeyWithExpireCount());
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "quicklist-packed-threshold") && c->argc == 3) {
         int memerr;
         unsigned long long sz = memtoull((const char *)objectGetVal(c->argv[2]), &memerr);

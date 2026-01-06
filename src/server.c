@@ -50,6 +50,7 @@
 #include "sds.h"
 #include "module.h"
 #include "scripting_engine.h"
+#include "util.h"
 
 #include "eval.h"
 
@@ -182,6 +183,7 @@ void serverLogRaw(int level, const char *msg) {
     const char *verbose_level[] = {"debug", "info", "notice", "warning"};
     const char *roles[] = {"sentinel", "RDB/AOF", "replica", "primary"};
     const char *role_chars = "XCSM";
+    const char *logfmt_format = "pid=%d role=%s timestamp=\"%s\" level=%s message=\"%s\"\n";
     FILE *fp;
     char buf[64];
     int rawmode = (level & LL_RAW);
@@ -237,13 +239,19 @@ void serverLogRaw(int level, const char *msg) {
             if (hasInvalidLogfmtChar(msg)) {
                 char safemsg[LOG_MAX_LEN];
                 filterInvalidLogfmtChar(safemsg, LOG_MAX_LEN, msg);
-                fprintf(fp, "pid=%d role=%s timestamp=\"%s\" level=%s message=\"%s\"\n", (int)getpid(), roles[role_index],
-                        buf, verbose_level[level], safemsg);
+                fprintf(fp, logfmt_format, (int)getpid(), roles[role_index], buf, verbose_level[level], safemsg);
             } else {
-                fprintf(fp, "pid=%d role=%s timestamp=\"%s\" level=%s message=\"%s\"\n", (int)getpid(), roles[role_index],
-                        buf, verbose_level[level], msg);
+                fprintf(fp, logfmt_format, (int)getpid(), roles[role_index], buf, verbose_level[level], msg);
             }
             break;
+
+        case LOG_FORMAT_JSON: {
+            sds jsonmsg = escapeJsonString(sdsempty(), msg, strlen(msg));
+            fprintf(fp, "{\"pid\":%d,\"role\":\"%s\",\"timestamp\":\"%s\",\"level\":\"%s\",\"message\":%s}\n",
+                    (int)getpid(), roles[role_index], buf, verbose_level[level], jsonmsg);
+            sdsfree(jsonmsg);
+            break;
+        }
 
         case LOG_FORMAT_LEGACY:
             fprintf(fp, "%d:%c %s %c %s\n", (int)getpid(), role_chars[role_index], buf, c[level], msg);

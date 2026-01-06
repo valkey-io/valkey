@@ -485,8 +485,6 @@ void debugCommand(client *c) {
             "    Default value is 1GB, allows values up to 4GB. Setting to 0 restores to default.",
             "SET-SKIP-CHECKSUM-VALIDATION <0|1>",
             "    Enables or disables checksum checks for RDB files and RESTORE's payload.",
-            "REPLICA-KEYS-WITH-EXPIRE-COUNT",
-            "    Return the number of keys in the replica keys with expire dictionary.",
             "SLEEP <seconds>",
             "    Stop the server for <seconds>. Decimals allowed.",
             "STRINGMATCH-TEST",

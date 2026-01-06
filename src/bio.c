@@ -327,6 +327,11 @@ void bioKillThreads(void) {
                 serverLog(LL_WARNING, "Bio worker thread #%zu terminated", bioWorkerNum(bwd));
             }
         }
+
+        bio_job *job;
+        while ((job = mutexQueuePop(bwd->bio_jobs, false)) != NULL) {
+            zfree(job);
+        }
     }
 }
 

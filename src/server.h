@@ -1183,11 +1183,6 @@ typedef struct ClientFlags {
                                             * acknowledge the write of the command that caused it to be blocked. */
 } ClientFlags;
 
-typedef struct ClientDurabilityData {
-    uint64_t durable_blocked_client: 1;    /* This is a durable blocked client that is waiting for the server to
-                                            * acknowledge the write of the command that caused it to be blocked. */
-} ClientDurabilityData;
-
 typedef struct ClientPubSubData {
     hashtable *pubsub_channels;      /* channels a client is interested in (SUBSCRIBE) */
     hashtable *pubsub_patterns;      /* patterns a client is interested in (PSUBSCRIBE) */
@@ -1310,7 +1305,6 @@ typedef struct client {
     ClientPubSubData *pubsub_data;        /* Required for: pubsub commands and tracking. lazily initialized when first needed */
     ClientReplicationData *repl_data;     /* Required for Replication operations. lazily initialized when first needed */
     ClientModuleData *module_data;        /* Required for Module operations. lazily initialized when first needed */
-    ClientDurabilityData *durability_data;        /* Required for Module operations. lazily initialized when first needed */
     multiState *mstate;                   /* MULTI/EXEC state, lazily initialized when first needed */
     blockingState *bstate;                /* Blocking state, lazily initialized when first needed */
     slotMigrationJob *slot_migration_job; /* Pointer to the slot migration job, or NULL. */

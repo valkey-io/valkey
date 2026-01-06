@@ -15,6 +15,7 @@
             "KEYSPACE",
             "WRITE"
         ],
+        "get_dbid_args": "moveDbIdArgs",
         "key_specs": [
             {
                 "flags": [

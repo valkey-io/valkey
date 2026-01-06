@@ -120,32 +120,34 @@
 
 #define clusterManagerLogOk(...) clusterManagerLog(CLUSTER_MANAGER_LOG_LVL_SUCCESS, __VA_ARGS__)
 
-#define CLUSTER_MANAGER_FLAG_MYSELF 1 << 0
-#define CLUSTER_MANAGER_FLAG_REPLICA 1 << 1
-#define CLUSTER_MANAGER_FLAG_FRIEND 1 << 2
-#define CLUSTER_MANAGER_FLAG_NOADDR 1 << 3
-#define CLUSTER_MANAGER_FLAG_DISCONNECT 1 << 4
-#define CLUSTER_MANAGER_FLAG_FAIL 1 << 5
+#define CLUSTER_MANAGER_FLAG_MYSELF (1 << 0)
+#define CLUSTER_MANAGER_FLAG_REPLICA (1 << 1)
+#define CLUSTER_MANAGER_FLAG_FRIEND (1 << 2)
+#define CLUSTER_MANAGER_FLAG_NOADDR (1 << 3)
+#define CLUSTER_MANAGER_FLAG_DISCONNECT (1 << 4)
+#define CLUSTER_MANAGER_FLAG_FAIL (1 << 5)
 
-#define CLUSTER_MANAGER_CMD_FLAG_FIX 1 << 0
-#define CLUSTER_MANAGER_CMD_FLAG_REPLICA 1 << 1
-#define CLUSTER_MANAGER_CMD_FLAG_YES 1 << 2
-#define CLUSTER_MANAGER_CMD_FLAG_AUTOWEIGHTS 1 << 3
-#define CLUSTER_MANAGER_CMD_FLAG_EMPTY_PRIMARY 1 << 4
-#define CLUSTER_MANAGER_CMD_FLAG_SIMULATE 1 << 5
-#define CLUSTER_MANAGER_CMD_FLAG_REPLACE 1 << 6
-#define CLUSTER_MANAGER_CMD_FLAG_COPY 1 << 7
-#define CLUSTER_MANAGER_CMD_FLAG_COLOR 1 << 8
-#define CLUSTER_MANAGER_CMD_FLAG_CHECK_OWNERS 1 << 9
-#define CLUSTER_MANAGER_CMD_FLAG_FIX_WITH_UNREACHABLE_PRIMARIES 1 << 10
-#define CLUSTER_MANAGER_CMD_FLAG_PRIMARIES_ONLY 1 << 11
-#define CLUSTER_MANAGER_CMD_FLAG_REPLICAS_ONLY 1 << 12
+#define CLUSTER_MANAGER_CMD_FLAG_FIX (1 << 0)
+#define CLUSTER_MANAGER_CMD_FLAG_REPLICA (1 << 1)
+#define CLUSTER_MANAGER_CMD_FLAG_YES (1 << 2)
+#define CLUSTER_MANAGER_CMD_FLAG_AUTOWEIGHTS (1 << 3)
+#define CLUSTER_MANAGER_CMD_FLAG_EMPTY_PRIMARY (1 << 4)
+#define CLUSTER_MANAGER_CMD_FLAG_SIMULATE (1 << 5)
+#define CLUSTER_MANAGER_CMD_FLAG_REPLACE (1 << 6)
+#define CLUSTER_MANAGER_CMD_FLAG_COPY (1 << 7)
+#define CLUSTER_MANAGER_CMD_FLAG_COLOR (1 << 8)
+#define CLUSTER_MANAGER_CMD_FLAG_CHECK_OWNERS (1 << 9)
+#define CLUSTER_MANAGER_CMD_FLAG_FIX_WITH_UNREACHABLE_PRIMARIES (1 << 10)
+#define CLUSTER_MANAGER_CMD_FLAG_PRIMARIES_ONLY (1 << 11)
+#define CLUSTER_MANAGER_CMD_FLAG_REPLICAS_ONLY (1 << 12)
+#define CLUSTER_MANAGER_CMD_FLAG_USE_ATOMIC_SLOT_MIGRATION (1 << 13)
 
-#define CLUSTER_MANAGER_OPT_GETFRIENDS 1 << 0
-#define CLUSTER_MANAGER_OPT_COLD 1 << 1
-#define CLUSTER_MANAGER_OPT_UPDATE 1 << 2
-#define CLUSTER_MANAGER_OPT_QUIET 1 << 6
-#define CLUSTER_MANAGER_OPT_VERBOSE 1 << 7
+#define CLUSTER_MANAGER_OPT_GETFRIENDS (1 << 0)
+#define CLUSTER_MANAGER_OPT_COLD (1 << 1)
+#define CLUSTER_MANAGER_OPT_UPDATE (1 << 2)
+#define CLUSTER_MANAGER_OPT_QUIET (1 << 6)
+#define CLUSTER_MANAGER_OPT_VERBOSE (1 << 7)
+#define CLUSTER_MANAGER_OPT_USE_ATOMIC_SLOT_MIGRATION (1 << 8)
 
 #define CLUSTER_MANAGER_LOG_LVL_INFO 1
 #define CLUSTER_MANAGER_LOG_LVL_WARN 2
@@ -2808,6 +2810,8 @@ static int parseOptions(int argc, char **argv) {
         } else if (!strcmp(argv[i], "--cluster-fix-with-unreachable-masters") ||
                    !strcmp(argv[i], "--cluster-fix-with-unreachable-primaries")) {
             config.cluster_manager_command.flags |= CLUSTER_MANAGER_CMD_FLAG_FIX_WITH_UNREACHABLE_PRIMARIES;
+        } else if (!strcmp(argv[i], "--cluster-use-atomic-slot-migration")) {
+            config.cluster_manager_command.flags |= CLUSTER_MANAGER_CMD_FLAG_USE_ATOMIC_SLOT_MIGRATION;
         } else if (!strcmp(argv[i], "--test_hint") && !lastarg) {
             config.test_hint = argv[++i];
         } else if (!strcmp(argv[i], "--test_hint_file") && !lastarg) {
@@ -3648,10 +3652,16 @@ typedef struct clusterManagerNodeArray {
     int count;                  /* Non-NULL nodes count */
 } clusterManagerNodeArray;
 
-/* Used for the reshard table. */
+/* Represents a single slot range within a reshard table item */
+typedef struct clusterManagerReshardSlotRange {
+    int start;
+    int end;
+} clusterManagerReshardSlotRange;
+
+/* Used for the reshard table. Represents all slot ranges migrating from one source node. */
 typedef struct clusterManagerReshardTableItem {
     clusterManagerNode *source;
-    int slot;
+    list *slot_ranges;
 } clusterManagerReshardTableItem;
 
 /* Info about a cluster internal link. */
@@ -4667,6 +4677,252 @@ static clusterManagerNode *clusterManagerGetSlotOwner(clusterManagerNode *n, int
     return owner;
 }
 
+static sds clusterManagerGetSlotRangeString(list *slot_ranges) {
+    listIter li;
+    listNode *ln;
+    listRewind(slot_ranges, &li);
+    sds slot_range_str = sdsempty();
+    while ((ln = listNext(&li)) != NULL) {
+        clusterManagerReshardSlotRange *slot_range = ln->value;
+        if (sdslen(slot_range_str) > 0) {
+            slot_range_str = sdscat(slot_range_str, " ");
+        }
+        slot_range_str = sdscatfmt(slot_range_str, "%i-%i", slot_range->start, slot_range->end);
+    }
+    return slot_range_str;
+}
+
+static int clusterManagerMigrateSlots(clusterManagerNode *node1, clusterManagerNode *node2, list *slot_ranges, char **err) {
+    /* Create the command */
+    const char **argv = zmalloc(sizeof(char *) * (5 + listLength(slot_ranges) * 2));
+    size_t *argvlen = zmalloc(sizeof(size_t) * (5 + listLength(slot_ranges) * 2));
+    int argv_idx = 0;
+    argvlen[argv_idx] = 7;
+    argv[argv_idx++] = "CLUSTER";
+    argvlen[argv_idx] = 12;
+    argv[argv_idx++] = "MIGRATESLOTS";
+    argvlen[argv_idx] = 11;
+    argv[argv_idx++] = "SLOTSRANGE";
+    listIter li;
+    listNode *ln;
+    listRewind(slot_ranges, &li);
+    size_t sds_start = argv_idx;
+    while ((ln = listNext(&li)) != NULL) {
+        clusterManagerReshardSlotRange *slot_range = ln->value;
+        argv[argv_idx] = sdscatfmt(sdsempty(), "%i", slot_range->start);
+        argvlen[argv_idx] = sdslen(argv[argv_idx]);
+        argv_idx++;
+        argv[argv_idx] = sdscatfmt(sdsempty(), "%i", slot_range->end);
+        argvlen[argv_idx] = sdslen(argv[argv_idx]);
+        argv_idx++;
+    }
+    size_t sds_end = argv_idx;
+    argvlen[argv_idx] = 4;
+    argv[argv_idx++] = "NODE";
+    argvlen[argv_idx] = 40;
+    argv[argv_idx++] = (char *)node2->name;
+
+    /* Send the command and parse the reply */
+    valkeyAppendCommandArgv(node1->context, argv_idx, argv, argvlen);
+    valkeyReply *reply;
+    if (err != NULL) *err = NULL;
+    if (valkeyGetReply(node1->context, (void **)&reply) != VALKEY_OK || reply == NULL) {
+        if (err) *err = zstrdup("CLUSTER MIGRATESLOTS failed to run");
+        return 0;
+    }
+    int success = 1;
+    if (reply->type == VALKEY_REPLY_ERROR) {
+        success = 0;
+        if (err != NULL) {
+            *err = zmalloc((reply->len + 1) * sizeof(char));
+            valkey_strlcpy(*err, reply->str, (reply->len + 1));
+        } else
+            CLUSTER_MANAGER_PRINT_REPLY_ERROR(node1, reply->str);
+        goto cleanup;
+    }
+
+cleanup:
+    for (size_t i = sds_start; i < sds_end; i++) sdsfree((sds)argv[i]);
+    zfree(argv);
+    zfree(argvlen);
+    freeReplyObject(reply);
+    return success;
+}
+
+/* The current state of the migration. We only handle success, cancelled, and failed, all others are
+ * considered in progress. */
+typedef enum getSlotMigrationsEntryState {
+    MIGRATION_SUCCESS,
+    MIGRATION_CANCELLED,
+    MIGRATION_FAILED,
+    MIGRATION_IN_PROGRESS,
+} getSlotMigrationsEntryState;
+
+/* Represents a single parsed slot migration in a CLUSTER GETSLOTMIGRATIONS response */
+typedef struct getSlotMigrationsEntry {
+    getSlotMigrationsEntryState state;
+    sds slot_ranges;
+    sds message;
+} getSlotMigrationsEntry;
+
+void releaseGetSlotMigrationsEntry(void *entry) {
+    getSlotMigrationsEntry *e = entry;
+    if (e->slot_ranges) sdsfree(e->slot_ranges);
+    if (e->message) sdsfree(e->message);
+    zfree(e);
+}
+
+/* Parse the given key and value pair into the provided target_entry. */
+static int parseGetSlotMigrationsEntryKeyValuePair(getSlotMigrationsEntry *target_entry, valkeyReply *key, valkeyReply *value, char **err) {
+    if (key->type != VALKEY_REPLY_STRING) {
+        if (err) *err = zstrdup("Expected string type for each key in CLUSTER GETSLOTMIGRATIONS");
+        return 0;
+    }
+    if (strcasecmp(key->str, "slot_ranges") == 0) {
+        if (value->type != VALKEY_REPLY_STRING) {
+            if (err) *err = zstrdup("Expected slot_ranges to be of type string in CLUSTER GETSLOTMIGRATIONS");
+            return 0;
+        }
+        target_entry->slot_ranges = sdsnew(value->str);
+        return 1;
+    }
+    if (strcasecmp(key->str, "state") == 0) {
+        if (value->type != VALKEY_REPLY_STRING) {
+            if (err) *err = zstrdup("Expected state to be of type string in CLUSTER GETSLOTMIGRATIONS");
+            return 0;
+        }
+        if (strcasecmp(value->str, "success") == 0) {
+            target_entry->state = MIGRATION_SUCCESS;
+            return 1;
+        }
+        if (strcasecmp(value->str, "cancelled") == 0) {
+            target_entry->state = MIGRATION_CANCELLED;
+            return 1;
+        }
+        if (strcasecmp(value->str, "failed") == 0) {
+            target_entry->state = MIGRATION_FAILED;
+            return 1;
+        }
+        target_entry->state = MIGRATION_IN_PROGRESS;
+        return 1;
+    }
+    if (strcasecmp(key->str, "message") == 0) {
+        if (value->type != VALKEY_REPLY_STRING) {
+            if (err) *err = zstrdup("Expected message to be of type string in CLUSTER GETSLOTMIGRATIONS");
+            return 0;
+        }
+        if (value->str[0] != '\0') {
+            target_entry->message = sdsnew(value->str);
+        }
+        return 1;
+    }
+    /* We skip all other key/value pairs. */
+    return 1;
+}
+
+/* Parse the provided element into a single getSlotMigrationsEntry */
+static getSlotMigrationsEntry *parseGetSlotMigrationsEntry(valkeyReply *elem, char **err) {
+    if (elem->type != VALKEY_REPLY_ARRAY && elem->type != VALKEY_REPLY_MAP) {
+        if (err) *err = zstrdup("Expected element type to be array or map in CLUSTER GETSLOTMIGRATIONS array response");
+        return NULL;
+    }
+    getSlotMigrationsEntry *migration_entry = zcalloc(sizeof(getSlotMigrationsEntry));
+    for (size_t j = 0; j < elem->elements; j += 2) {
+        valkeyReply *key = elem->element[j];
+        valkeyReply *val = elem->element[j + 1];
+        if (!parseGetSlotMigrationsEntryKeyValuePair(migration_entry, key, val, err)) {
+            releaseGetSlotMigrationsEntry(migration_entry);
+            return NULL;
+        }
+    }
+    return migration_entry;
+}
+
+/* Parse the provided reply to CLUSTER GETSLOTMIGRATIONS into a list of parsed entries. */
+static list *parseGetSlotMigrationReply(valkeyReply *reply, char **err) {
+    list *result = listCreate();
+    listSetFreeMethod(result, releaseGetSlotMigrationsEntry);
+    if (reply->type != VALKEY_REPLY_ARRAY) {
+        if (err) *err = zstrdup("Expected array as reply to CLUSTER GETSLOTMIGRATIONS");
+        listRelease(result);
+        return NULL;
+    }
+    for (size_t i = 0; i < reply->elements; i++) {
+        valkeyReply *elem = reply->element[i];
+        getSlotMigrationsEntry *migration_entry = parseGetSlotMigrationsEntry(elem, err);
+        if (!migration_entry) {
+            listRelease(result);
+            return NULL;
+        }
+        listAddNodeTail(result, migration_entry);
+    }
+    return result;
+}
+
+static int clusterManagerGetSlotMigration(clusterManagerNode *node, list *slot_ranges, int *in_progress, char **err) {
+    sds want_slot_range_str = NULL;
+    list *parsed_reply = NULL;
+    valkeyReply *reply = CLUSTER_MANAGER_COMMAND(node, "CLUSTER GETSLOTMIGRATIONS");
+    if (err != NULL) *err = NULL;
+    if (!reply) {
+        if (err) *err = zstrdup("CLUSTER GETSLOTMIGRATIONS failed to run");
+        return 0;
+    }
+    int success = 1;
+    if (reply->type == VALKEY_REPLY_ERROR) {
+        success = 0;
+        if (err != NULL) {
+            *err = zmalloc((reply->len + 1) * sizeof(char));
+            valkey_strlcpy(*err, reply->str, (reply->len + 1));
+        } else
+            CLUSTER_MANAGER_PRINT_REPLY_ERROR(node, reply->str);
+        goto cleanup;
+    }
+    parsed_reply = parseGetSlotMigrationReply(reply, err);
+    if (!parsed_reply) {
+        success = 0;
+        goto cleanup;
+    }
+    want_slot_range_str = clusterManagerGetSlotRangeString(slot_ranges);
+    listIter li;
+    listNode *ln;
+    listRewind(parsed_reply, &li);
+    while ((ln = listNext(&li)) != NULL) {
+        getSlotMigrationsEntry *entry = ln->value;
+        if (sdscmp(entry->slot_ranges, want_slot_range_str) == 0) {
+            /* Found the one we are looking for */
+            switch (entry->state) {
+            case MIGRATION_IN_PROGRESS:
+                *in_progress = 1;
+                success = 1;
+                goto cleanup;
+            case MIGRATION_SUCCESS:
+                *in_progress = 0;
+                success = 1;
+                goto cleanup;
+            case MIGRATION_CANCELLED:
+                *in_progress = 0;
+                success = 0;
+                if (err) *err = zstrdup("Slot migration was cancelled");
+                goto cleanup;
+            case MIGRATION_FAILED:
+                *in_progress = 0;
+                success = 0;
+                if (err) *err = zstrdup(entry->message);
+                goto cleanup;
+            }
+        }
+    }
+    success = 0;
+    if (err) *err = zstrdup("Slot migration not found in GETSLOTMIGRATIONS");
+    goto cleanup;
+cleanup:
+    freeReplyObject(reply);
+    if (parsed_reply) listRelease(parsed_reply);
+    if (want_slot_range_str) sdsfree(want_slot_range_str);
+    return success;
+}
+
 /* Set slot status to "importing" or "migrating" */
 static int
 clusterManagerSetSlot(clusterManagerNode *node1, clusterManagerNode *node2, int slot, const char *status, char **err) {
@@ -5122,6 +5378,54 @@ static int clusterManagerMigrateKeysInSlot(clusterManagerNode *source,
     config.conn_info.input_dbnum = orig_db;
     cliSelect(&config, source->context);
     return success;
+}
+
+/* clusterManagerMoveSlotRangesASM moves the slot ranges specified by
+ * slot_ranges from the source node to the target node. If there is an error,
+ * err will be populated with an error string that should be freed by the
+ * caller.
+ *
+ * Options:
+ * CLUSTER_MANAGER_OPT_VERBOSE -- Print a dot for every moved key.
+ * CLUSTER_MANAGER_OPT_COLD    -- No effect for atomic slot migration.
+ * CLUSTER_MANAGER_OPT_UPDATE  -- Update node->slots for source/target nodes.
+ * CLUSTER_MANAGER_OPT_QUIET   -- Don't print info messages.
+ */
+static int clusterManagerMoveSlotRangesASM(clusterManagerNode *source, clusterManagerNode *target, list *slot_ranges, int opts, char **err) {
+    if (!(opts & CLUSTER_MANAGER_OPT_QUIET)) {
+        sds to_print = clusterManagerGetSlotRangeString(slot_ranges);
+        printf("Moving slot range %s from %s:%d to %s:%d via atomic slot migration", to_print, source->ip, source->port, target->ip, target->port);
+        fflush(stdout);
+        sdsfree(to_print);
+    }
+    int print_dots = (opts & CLUSTER_MANAGER_OPT_VERBOSE), success = 1, in_progress = 0;
+    success = clusterManagerMigrateSlots(source, target, slot_ranges, err);
+    if (!success) return 0;
+    while (1) {
+        success = clusterManagerGetSlotMigration(source, slot_ranges, &in_progress, err);
+        if (!success) return 0;
+        if (!in_progress) break;
+        if (print_dots) {
+            printf(".");
+            fflush(stdout);
+        }
+        /* Wait 100ms and try again */
+        usleep(100000);
+    }
+    /* Apply the change to our local state so any queued operations are aware of it. */
+    if (opts & CLUSTER_MANAGER_OPT_UPDATE) {
+        listIter li;
+        listNode *ln;
+        listRewind(slot_ranges, &li);
+        while ((ln = listNext(&li)) != NULL) {
+            clusterManagerReshardSlotRange *range = ln->value;
+            for (int i = range->start; i <= range->end; i++) {
+                source->slots[i] = 0;
+                target->slots[i] = 1;
+            }
+        }
+    }
+    return 1;
 }
 
 /* Move slots between source and target nodes using MIGRATE.
@@ -6633,6 +6937,7 @@ static clusterManagerNode *clusterNodeForResharding(char *id, clusterManagerNode
 
 static list *clusterManagerComputeReshardTable(list *sources, int numslots) {
     list *moved = listCreate();
+    listSetFreeMethod(moved, zfree);
     int src_count = listLength(sources), i = 0, tot_slots = 0, j;
     clusterManagerNode **sorted = zmalloc(src_count * sizeof(*sorted));
     listIter li;
@@ -6652,16 +6957,31 @@ static list *clusterManagerComputeReshardTable(list *sources, int numslots) {
         else
             n = floor(n);
         int max = (int)n, count = 0;
+        clusterManagerReshardTableItem *item = NULL;
+        clusterManagerReshardSlotRange *range = NULL;
         for (j = 0; j < CLUSTER_MANAGER_SLOTS; j++) {
             int slot = node->slots[j];
-            if (!slot) continue;
-            if (count >= max || (int)listLength(moved) >= numslots) break;
-            clusterManagerReshardTableItem *item = zmalloc(sizeof(*item));
-            item->source = node;
-            item->slot = j;
-            listAddNodeTail(moved, item);
+            if (!slot) {
+                /* Disjoint range, ensure we start a new one on next slot. */
+                range = NULL;
+                continue;
+            }
+            if (count >= max) break;
+            if (!item) {
+                item = zmalloc(sizeof(*item));
+                item->source = node;
+                item->slot_ranges = listCreate();
+                listSetFreeMethod(item->slot_ranges, zfree);
+            }
+            if (!range) {
+                range = zmalloc(sizeof(*range));
+                range->start = j;
+                listAddNodeTail(item->slot_ranges, range);
+            }
+            range->end = j;
             count++;
         }
+        if (item) listAddNodeTail(moved, item);
     }
     zfree(sorted);
     return moved;
@@ -6674,7 +6994,9 @@ static void clusterManagerShowReshardTable(list *table) {
     while ((ln = listNext(&li)) != NULL) {
         clusterManagerReshardTableItem *item = ln->value;
         clusterManagerNode *n = item->source;
-        printf("    Moving slot %d from %s\n", item->slot, (char *)n->name);
+        sds range_str = clusterManagerGetSlotRangeString(item->slot_ranges);
+        printf("    Moving slot range %s from %s\n", range_str, (char *)n->name);
+        sdsfree(range_str);
     }
 }
 
@@ -6685,7 +7007,7 @@ static void clusterManagerReleaseReshardTable(list *table) {
         listRewind(table, &li);
         while ((ln = listNext(&li)) != NULL) {
             clusterManagerReshardTableItem *item = ln->value;
-            zfree(item);
+            listRelease(item->slot_ranges);
         }
         listRelease(table);
     }
@@ -7325,6 +7647,55 @@ static int clusterManagerCommandFix(int argc, char **argv) {
     return clusterManagerCommandCheck(argc, argv);
 }
 
+/* Perform the slot migrations specified in the table, which is a list of
+ * clusterManagerReshardTableItem pointers. Opts is a bitwise-or of
+ * CLUSTER_MANAGER_CMD_FLAG_ flags. Returns 1 on success, 0 on error. */
+static int clusterApplyReshardTable(list *table, clusterManagerNode *target, int opts) {
+    listIter li;
+    listNode *ln;
+    listRewind(table, &li);
+    if (opts & CLUSTER_MANAGER_OPT_COLD) {
+        /* Cold is only possible via legacy slot migration. */
+        opts &= ~CLUSTER_MANAGER_OPT_USE_ATOMIC_SLOT_MIGRATION;
+    }
+    while ((ln = listNext(&li)) != NULL) {
+        clusterManagerReshardTableItem *item = ln->value;
+        char *err;
+        if (opts & CLUSTER_MANAGER_OPT_USE_ATOMIC_SLOT_MIGRATION) {
+            /* For atomic slot migration, we move everything as one command */
+            int result = clusterManagerMoveSlotRangesASM(item->source, target, item->slot_ranges, opts, &err);
+            if (!result) {
+                clusterManagerLogErr("Atomic slot migration failed: %s\n", err);
+                return result;
+            }
+        }
+        listIter li2;
+        listNode *ln2;
+        listRewind(item->slot_ranges, &li2);
+        while ((ln2 = listNext(&li2)) != NULL) {
+            clusterManagerReshardSlotRange *range = ln2->value;
+            for (int slot = range->start; slot <= range->end; slot++) {
+                if (opts & CLUSTER_MANAGER_OPT_USE_ATOMIC_SLOT_MIGRATION) {
+                    /* Now that the migration is done, print all the #'s */
+                    printf("#");
+                    continue;
+                }
+
+                /* For non-atomic slot migration, move the slot here */
+                int result = clusterManagerMoveSlot(item->source, target, slot, opts, &err);
+                if (!result) {
+                    clusterManagerLogErr("clusterManagerMoveSlot failed: %s\n", err);
+                    return result;
+                }
+                printf("#");
+                fflush(stdout);
+            }
+            fflush(stdout);
+        }
+    }
+    return 1;
+}
+
 static int clusterManagerCommandReshard(int argc, char **argv) {
     int port = 0;
     char *ip = NULL;
@@ -7487,18 +7858,10 @@ static int clusterManagerCommandReshard(int argc, char **argv) {
         }
     }
     int opts = CLUSTER_MANAGER_OPT_VERBOSE;
-    listRewind(table, &li);
-    while ((ln = listNext(&li)) != NULL) {
-        clusterManagerReshardTableItem *item = ln->value;
-        char *err = NULL;
-        result = clusterManagerMoveSlot(item->source, target, item->slot, opts, &err);
-        if (!result) {
-            if (err != NULL) {
-                clusterManagerLogErr("clusterManagerMoveSlot failed: %s\n", err);
-                zfree(err);
-            }
-            goto cleanup;
-        }
+    if (config.cluster_manager_command.flags & CLUSTER_MANAGER_CMD_FLAG_USE_ATOMIC_SLOT_MIGRATION)
+        opts |= CLUSTER_MANAGER_OPT_USE_ATOMIC_SLOT_MIGRATION;
+    if (!clusterApplyReshardTable(table, target, opts)) {
+        goto cleanup;
     }
 cleanup:
     listRelease(sources);
@@ -7645,29 +8008,15 @@ static int clusterManagerCommandRebalance(int argc, char **argv) {
             listAddNodeTail(lsrc, src);
             table = clusterManagerComputeReshardTable(lsrc, numslots);
             listRelease(lsrc);
-            int table_len = (int)listLength(table);
-            if (!table || table_len != numslots) {
-                clusterManagerLogErr("*** Assertion failed: Reshard table "
-                                     "!= number of slots");
-                result = 0;
-                goto end_move;
-            }
             if (simulate) {
-                for (i = 0; i < table_len; i++) printf("#");
+                for (i = 0; i < numslots; i++) printf("#");
             } else {
                 int opts = CLUSTER_MANAGER_OPT_QUIET | CLUSTER_MANAGER_OPT_UPDATE;
-                listRewind(table, &li);
-                while ((ln = listNext(&li)) != NULL) {
-                    clusterManagerReshardTableItem *item = ln->value;
-                    char *err;
-                    result = clusterManagerMoveSlot(item->source, dst, item->slot, opts, &err);
-                    if (!result) {
-                        clusterManagerLogErr("*** clusterManagerMoveSlot: %s\n", err);
-                        zfree(err);
-                        goto end_move;
-                    }
-                    printf("#");
-                    fflush(stdout);
+                if (config.cluster_manager_command.flags & CLUSTER_MANAGER_CMD_FLAG_USE_ATOMIC_SLOT_MIGRATION) {
+                    opts |= CLUSTER_MANAGER_OPT_USE_ATOMIC_SLOT_MIGRATION;
+                }
+                if (!clusterApplyReshardTable(table, dst, opts)) {
+                    goto end_move;
                 }
             }
             printf("\n");

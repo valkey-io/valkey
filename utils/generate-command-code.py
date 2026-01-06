@@ -465,7 +465,7 @@ class Command(object):
                 s += "CMD_DOC_%s|" % flag
             return s[:-1] if s else "CMD_DOC_NONE"
 
-        s = "MAKE_CMD(\"%s\",%s,%s,%s,%s,%s,%s,%s,%s,%s,%d,%s,%d,%s,%d,%s,%s,%s,%d,%s,%d)," % (
+        s = "MAKE_CMD(\"%s\",%s,%s,%s,%s,%s,%s,%s,%s,%s,%d,%s,%d,%s,%d,%s,%s,%s,%s,%d,%s,%d)," % (
             self.name.lower(),
             get_optional_desc_string(self.desc, "summary"),
             get_optional_desc_string(self.desc, "complexity"),
@@ -483,6 +483,7 @@ class Command(object):
             self.desc["arity"],
             _flags_code(),
             _acl_categories_code(),
+            self.desc.get("get_dbid_args", "NULL"),
             self.key_specs_table_name(),
             len(self.key_specs),
             self.desc.get("get_keys_function", "NULL"),

@@ -33,7 +33,6 @@
  */
 #include "server.h"
 #include "connection.h"
-#include "durable_write.h"
 #include "monotonic.h"
 #include "cluster.h"
 #include "cluster_slot_stats.h"

@@ -43,7 +43,7 @@ static long long getSingleCommandBlockingOffsetForConsistentWrites(struct client
 int isDurabilityEnabled(void) {
     // should this have its own flag?
     // or general 'durability flag'
-    return false;
+    return true;
 }
 
 int isPrimaryDurabilityEnabled(void) {
@@ -56,7 +56,7 @@ int isPrimaryDurabilityEnabled(void) {
  * Using 2 as default for POC. 
  */
 static inline unsigned replicaAcksForConsensus(void) {
-    return 2; 
+    return 1; 
 }
 
 /*
@@ -221,11 +221,11 @@ static inline void trackCommandPreExecutionPosition(struct client *c) {
  * @return 1 if the client is successfully marked unblocked, 0 otherwise 
  */
 static int unblockClientWaitingReplicaAck(struct client *c) {
-    if (c->durability_data->durable_blocked_client) {
+    if (c->clientDurabilityInfo.durable_blocked_client) {
         listNode *ln = listSearchKey(server.durability.clients_waiting_replica_ack, c);
         if(ln != NULL) {
             listDelNode(server.durability.clients_waiting_replica_ack, ln);
-            c->durability_data->durable_blocked_client = 0;
+            c->clientDurabilityInfo.durable_blocked_client = 0;
             return 1;
         }
     }
@@ -397,9 +397,9 @@ void blockClientOnReplOffset(struct client *c, long long blockingReplOffset) {
     if (isBlockingNeededForOffset(c, blockingReplOffset)) {
         serverLog(LOG_DEBUG, "client should be blocked at offset %lld,", blockingReplOffset);
         blockLastResponseIfExist(c, blockingReplOffset);
-        if (!c->durability_data->durable_blocked_client) {
+        if (!c->clientDurabilityInfo.durable_blocked_client) {
             listAddNodeTail(server.durability.clients_waiting_replica_ack,c);
-            c->durability_data->durable_blocked_client = 1;
+            c->clientDurabilityInfo.durable_blocked_client = 1;
         }
     }
 

@@ -89,6 +89,9 @@ typedef struct clientDurabilityInfo {
 
     // Replication offset to block this current command response 
     long long current_command_repl_offset;
+
+    uint64_t durable_blocked_client: 1;    /* This is a durable blocked client that is waiting for the server to
+                                        * acknowledge the write of the command that caused it to be blocked. */
 } clientDurableInfo;
 
 /**

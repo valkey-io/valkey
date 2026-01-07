@@ -5967,8 +5967,8 @@ int getClientTypeByName(char *name) {
         return -1;
 }
 
-char *getClientTypeName(int class) {
-    switch (class) {
+char *getClientTypeName(int client_class) {
+    switch (client_class) {
     case CLIENT_TYPE_NORMAL: return "normal";
     case CLIENT_TYPE_REPLICA: return "slave";
     case CLIENT_TYPE_PUBSUB: return "pubsub";

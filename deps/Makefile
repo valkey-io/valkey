@@ -43,6 +43,7 @@ distclean:
 	-(cd hdr_histogram && $(MAKE) clean) > /dev/null || true
 	-(cd fpconv && $(MAKE) clean) > /dev/null || true
 	-(cd fast_float_c_interface && $(MAKE) clean) > /dev/null || true
+	-(cd googletest && rm -rf build) > /dev/null || true
 	-(rm -f .make-*)
 
 .PHONY: distclean
@@ -128,3 +129,27 @@ fast_float_c_interface: .make-prerequisites
 	cd fast_float_c_interface && $(MAKE)
 
 .PHONY: fast_float_c_interface
+
+CMAKE := $(shell command -v cmake3 || command -v cmake)
+
+gtest: .make-prerequisites
+	@printf '%b %b\n' $(MAKECOLOR)MAKE$(ENDCOLOR) $(BINCOLOR)$@$(ENDCOLOR)
+	@if [ ! -f googletest/CMakeLists.txt ]; then \
+		echo "Downloading googletest..."; \
+		rm -rf googletest; \
+		git clone --depth 1 --branch v1.8.x https://github.com/google/googletest.git googletest; \
+	fi
+	@if [ ! -f gtest-parallel/gtest_parallel.py ]; then \
+		echo "Downloading gtest-parallel..."; \
+		rm -rf gtest-parallel; \
+		git clone --depth 1 https://github.com/google/gtest-parallel.git gtest-parallel; \
+	fi
+	cd googletest && $(CMAKE) -B build \
+		-DCMAKE_BUILD_TYPE=Release \
+		-DCMAKE_C_FLAGS="$(CFLAGS)" \
+		-DCMAKE_CXX_FLAGS="$(CFLAGS)" \
+		-DCMAKE_EXE_LINKER_FLAGS="$(LDFLAGS)" \
+		-DCMAKE_POLICY_VERSION_MINIMUM=3.17
+	cd googletest && $(CMAKE) --build build --parallel
+
+.PHONY: gtest

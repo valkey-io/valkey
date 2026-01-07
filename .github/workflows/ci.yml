@@ -43,6 +43,9 @@ jobs:
       - name: unit tests
         run: |
           ./src/valkey-unit-tests
+          ./src/gtest/valkey-unit-gtests
+          rm -rf deps/googletest
+          rm -rf deps/gtest-parallel
 
   test-ubuntu-latest-compatibility:
     runs-on: ubuntu-latest
@@ -55,6 +58,10 @@ jobs:
           - {version: "8.1.4", file: "valkey-8.1.4-noble-x86_64.tar.gz"}
     steps:
       - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+      - name: Install modern CMake
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake
       - name: make
         # Fail build if there are warnings
         # build with TLS just for compilation coverage
@@ -84,10 +91,12 @@ jobs:
       - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
       - name: cmake and make
         run: |
+          sudo apt-get update
           sudo apt-get install -y cmake libssl-dev
+          cmake --version
           mkdir -p build-release
           cd build-release
-          cmake -DCMAKE_BUILD_TYPE=Release .. -DBUILD_TLS=yes -DBUILD_UNIT_TESTS=yes
+          cmake -DCMAKE_BUILD_TYPE=Release .. -DBUILD_TLS=yes -DBUILD_UNIT_TESTS=yes -DBUILD_UNIT_GTESTS=yes
           make -j$(nproc)
       - name: test
         run: |
@@ -102,6 +111,9 @@ jobs:
       - name: unit tests
         run: |
           ./build-release/bin/valkey-unit-tests
+          ./build-release/bin/valkey-unit-gtests
+          rm -rf deps/googletest
+          rm -rf deps/gtest-parallel
 
   test-sanitizer-address:
     runs-on: ubuntu-latest
@@ -117,7 +129,11 @@ jobs:
       - name: module api test
         run: CFLAGS='-Werror' ./runtest-moduleapi --verbose --dump-logs
       - name: unit tests
-        run: ./src/valkey-unit-tests
+        run: |
+          ./src/valkey-unit-tests
+          ./src/gtest/valkey-unit-gtests
+          rm -rf deps/googletest
+          rm -rf deps/gtest-parallel
 
   test-rdma:
     runs-on: ubuntu-latest
@@ -157,9 +173,16 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+      - name: Install build dependencies
+        run: |
+          brew install llvm
       - name: make
         # Build with additional upcoming features
-        run: make -j3 all-with-unit-tests SERVER_CFLAGS='-Werror' USE_FAST_FLOAT=yes
+        run: |
+          export PATH="/opt/homebrew/opt/llvm/bin:$PATH"
+          export CC=/opt/homebrew/opt/llvm/bin/clang
+          export CXX=/opt/homebrew/opt/llvm/bin/clang++
+          make -j3 all-with-unit-tests SERVER_CFLAGS='-Werror' USE_FAST_FLOAT=yes
 
   build-32bit:
     runs-on: ubuntu-latest
@@ -178,6 +201,9 @@ jobs:
       - name: unit tests
         run: |
           ./src/valkey-unit-tests
+          ./src/gtest/valkey-unit-gtests
+          rm -rf deps/googletest
+          rm -rf deps/gtest-parallel
 
   build-libc-malloc:
     runs-on: ubuntu-latest
@@ -194,7 +220,7 @@ jobs:
 
       - name: make
         run: |
-          dnf -y install epel-release gcc gcc-c++ make procps-ng which
+          dnf -y install epel-release gcc gcc-c++ make procps-ng which git cmake
           make -j4 SERVER_CFLAGS='-Werror' USE_FAST_FLOAT=yes
 
   format-yaml:

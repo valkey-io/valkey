@@ -455,6 +455,7 @@ ENGINE_LIB_NAME=lib$(ENGINE_NAME).a
 ENGINE_TEST_FILES:=$(wildcard unit/*.c)
 ENGINE_TEST_OBJ:=$(sort $(patsubst unit/%.c,unit/%.o,$(ENGINE_TEST_FILES)))
 ENGINE_UNIT_TESTS:=$(ENGINE_NAME)-unit-tests$(PROG_SUFFIX)
+ENGINE_UNIT_GTESTS:=$(ENGINE_NAME)-unit-gtests$(PROG_SUFFIX)
 ALL_SOURCES=$(sort $(patsubst %.o,%.c,$(ENGINE_SERVER_OBJ) $(ENGINE_CLI_OBJ) $(ENGINE_BENCHMARK_OBJ)))
 
 USE_FAST_FLOAT?=no
@@ -467,6 +468,8 @@ ifeq ($(USE_FAST_FLOAT),yes)
 	FAST_FLOAT_STRTOD_OBJECT := ../deps/fast_float_c_interface/fast_float_strtod.o
 	FINAL_LIBS += $(FAST_FLOAT_STRTOD_OBJECT)
 endif
+
+DEPENDENCY_TARGETS+= gtest
 
 all: $(SERVER_NAME) $(ENGINE_SENTINEL_NAME) $(ENGINE_CLI_NAME) $(ENGINE_BENCHMARK_NAME) $(ENGINE_CHECK_RDB_NAME) $(ENGINE_CHECK_AOF_NAME) $(TLS_MODULE) $(RDMA_MODULE) $(LUA_MODULE)
 	@echo ""
@@ -482,7 +485,7 @@ endif
 
 .PHONY: all
 
-all-with-unit-tests: all $(ENGINE_UNIT_TESTS)
+all-with-unit-tests: all $(ENGINE_UNIT_TESTS) $(ENGINE_UNIT_GTESTS)
 .PHONY: all
 
 persist-settings: distclean
@@ -502,6 +505,7 @@ persist-settings: distclean
 	echo SERVER_LDFLAGS=$(SERVER_LDFLAGS) >> .make-settings
 	echo PREV_FINAL_CFLAGS=$(FINAL_CFLAGS) >> .make-settings
 	echo PREV_FINAL_LDFLAGS=$(FINAL_LDFLAGS) >> .make-settings
+	echo ENGINE_SERVER_OBJ=$(ENGINE_SERVER_OBJ) >> .make-settings
 	-(cd ../deps && $(MAKE) $(DEPENDENCY_TARGETS))
 
 .PHONY: persist-settings
@@ -598,7 +602,7 @@ endif
 commands.c: $(COMMANDS_DEF_FILENAME).def
 
 clean:
-	rm -rf $(SERVER_NAME) $(ENGINE_SENTINEL_NAME) $(ENGINE_CLI_NAME) $(ENGINE_BENCHMARK_NAME) $(ENGINE_CHECK_RDB_NAME) $(ENGINE_CHECK_AOF_NAME) $(ENGINE_UNIT_TESTS) $(ENGINE_LIB_NAME) unit/*.o unit/*.d trace/*.o trace/*.d *.o *.gcda *.gcno *.gcov valkey.info lcov-html Makefile.dep *.so
+	rm -rf $(SERVER_NAME) $(ENGINE_SENTINEL_NAME) $(ENGINE_CLI_NAME) $(ENGINE_BENCHMARK_NAME) $(ENGINE_CHECK_RDB_NAME) $(ENGINE_CHECK_AOF_NAME) $(ENGINE_UNIT_TESTS) $(ENGINE_UNIT_GTESTS) $(ENGINE_LIB_NAME) unit/*.o unit/*.d trace/*.o trace/*.d *.o *.gcda *.gcno *.gcov valkey.info lcov-html Makefile.dep *.so
 	rm -f $(DEP)
 	-(cd modules/lua && $(MAKE) clean)
 
@@ -608,15 +612,27 @@ distclean: clean
 	-(cd ../deps && $(MAKE) distclean)
 	-(cd modules && $(MAKE) clean)
 	-(cd ../tests/modules && $(MAKE) clean)
+	-(cd gtest && $(MAKE) clean)
 	-(rm -f .make-*)
+	-(find gtest -type d -name __pycache__ -exec rm -rf {} +)
 
 .PHONY: distclean
 
 test: $(SERVER_NAME) $(ENGINE_CHECK_AOF_NAME) $(ENGINE_CHECK_RDB_NAME) $(ENGINE_CLI_NAME) $(ENGINE_BENCHMARK_NAME)
 	@(cd ..; VALKEY_PROG_SUFFIX="$(PROG_SUFFIX)" ./runtest)
 
-test-unit: $(ENGINE_UNIT_TESTS)
-	./$(ENGINE_UNIT_TESTS)
+test-unit: $(ENGINE_UNIT_TESTS) $(ENGINE_UNIT_GTESTS)
+	@echo "Running C unit tests..."
+	./$(ENGINE_UNIT_TESTS) || echo "C unit tests failed"
+	@echo "Running gtest unit tests..."
+	./gtest/$(ENGINE_UNIT_GTESTS) || echo "gtest unit tests failed"
+
+test-gtest:
+	@(cd gtest && $(MAKE) test-gtest)
+
+# valkey-unit-gtests
+$(ENGINE_UNIT_GTESTS): $(ENGINE_LIB_NAME)
+	@(cd gtest && $(MAKE) $(ENGINE_UNIT_GTESTS))
 
 test-modules: $(SERVER_NAME)
 	@(cd ..; ./runtest-moduleapi)

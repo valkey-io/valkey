@@ -14,6 +14,7 @@ dump*.rdb
 *-sentinel
 *-server
 *-unit-tests
+*-unit-gtests
 doc-tools
 release
 misc/*
@@ -54,3 +55,5 @@ build-debug/
 build-release/
 cmake-build-debug/
 cmake-build-release/
+__pycache__
+src/gtest/.flags

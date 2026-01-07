@@ -110,6 +110,10 @@ if (BUILD_UNIT_TESTS)
     add_subdirectory(unit)
 endif ()
 
+if (BUILD_UNIT_GTESTS)
+    add_subdirectory(gtest)
+endif ()
+
 # Friendly hint like the Makefile one
 file(RELATIVE_PATH _CMAKE_DIR_RELATIVE_PATH "${CMAKE_SOURCE_DIR}" "${CMAKE_BINARY_DIR}")
 add_custom_target(hint ALL

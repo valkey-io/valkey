@@ -77,14 +77,14 @@ After building Valkey, it is a good idea to test it using:
 
 The above runs the main integration tests. Additional tests are started using:
 
-    % make test-unit     # Unit tests
+    % make test-unit     # Unit tests (both C unit tests and gtest unit tests)
     % make test-modules  # Tests of the module API
     % make test-sentinel # Valkey Sentinel integration tests
     % make test-cluster  # Valkey Cluster integration tests
 
 More about running the integration tests can be found in
-[tests/README.md](tests/README.md) and for unit tests, see
-[src/unit/README.md](src/unit/README.md).
+[tests/README.md](tests/README.md), for unit tests, see
+[src/unit/README.md](src/unit/README.md) and [src/gtest/README.md](src/gtest/README.md).
 
 ## Performance monitoring
 
@@ -333,6 +333,7 @@ Other options supported by Valkey's `CMake` build system:
 - `-DBUILD_MALLOC=<libc|jemalloc|tcmalloc|tcmalloc_minimal>` choose the allocator to use. Default on Linux: `jemalloc`, for other OS: `libc`
 - `-DBUILD_SANITIZER=<address|thread|undefined>` build with address sanitizer enabled. Default: disabled (no sanitizer)
 - `-DBUILD_UNIT_TESTS=[yes|no]`  when set, the build will produce the executable `valkey-unit-tests`. Default: `no`
+- `-DBUILD_UNIT_GTESTS=[yes|no]`  when set, the build will produce gtest unit tests executable `valkey-unit-gtests`. Default: `no`
 - `-DBUILD_TEST_MODULES=[yes|no]`  when set, the build will include the modules located under the `tests/modules` folder. Default: `no`
 - `-DBUILD_EXAMPLE_MODULES=[yes|no]`  when set, the build will include the example modules located under the `src/modules` folder. Default: `no`
 

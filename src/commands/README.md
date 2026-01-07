@@ -54,6 +54,7 @@ following keys. To be safe, assume all of them are optional.
   the command. (Don't use it for anything else.)
 * `"command_flags"`: An array of flags represented as strings. Command flags:
   * `"ADMIN"`
+  * `"ALL_DBS"`
   * `"ALLOW_BUSY"`
   * `"ASKING"`
   * `"BLOCKING"`
@@ -93,6 +94,9 @@ following keys. To be safe, assume all of them are optional.
   * `"STREAM"`
   * `"STRING"`
   * `"TRANSACTION"`
+* `"get_dbid_args"`: The name of the C function in Valkey's source code
+  implementing retrieval of database ID arguments from commands that accept
+  database ID as an argument.
 * `"command_tips"`: Optional. A list of one or more of these strings:
   * `"NONDETERMINISTIC_OUTPUT"`
   * `"NONDETERMINISTIC_OUTPUT_ORDER"`
@@ -134,16 +138,13 @@ following keys. To be safe, assume all of them are optional.
     if type is "pure-token". If type is anything else, then `"token"` indicates
     the argument is preceded by an extra (fixed string) argument.
 
-Implicit ACL categories
+ACL categories
 -----------------------
 
-The ACL categories specified as `"acl_categories"` are not the ones actually used.
-The effective ACL categories are affected also by command flags.
+The ACL categories specified as `"acl_categories"` are the ones that are actually used.
+**Note:** commands categories should follow specific rules that are checked in `utils/generate-command-code.py`
 
-The logic for this can be found in the function `setImplicitACLCategories()` in
-`server.c`. Here are the rules (unless they have changed since this
-documentation was written):
-
+**ACL Category Rules:**
 * Command flag WRITE implies ACL category WRITE.
 * Command flag READONLY and not ACL category SCRIPTING implies ACL category READ.
   "Exclude scripting commands from the RO category."
@@ -152,9 +153,6 @@ documentation was written):
 * Command flag FAST implies ACL category FAST.
 * Command flag BLOCKING implies ACL category BLOCKING.
 * Not ACL category FAST implies ACL category SLOW. "If it's not fast, it's slow."
-
-There's an issue about explicitly listing all categories, removing this
-discrepancy: https://github.com/valkey-io/valkey/issues/417
 
 Key specs
 ---------

@@ -48,18 +48,18 @@ if {[catch {cd tmp}]} {
 # the provided configuration file. Returns the PID of the process.
 proc exec_instance {type dirname cfgfile} {
     if {$type eq "valkey"} {
-        set prgname valkey-server
+        set program_path $::VALKEY_SERVER_BIN
     } elseif {$type eq "sentinel"} {
-        set prgname valkey-sentinel
+        set program_path $::VALKEY_SENTINEL_BIN
     } else {
         error "Unknown instance type."
     }
 
     set errfile [file join $dirname err.txt]
     if {$::valgrind} {
-        set pid [exec valgrind --track-origins=yes --suppressions=../../../src/valgrind.sup --show-reachable=no --show-possibly-lost=no --leak-check=full ../../../src/${prgname} $cfgfile 2>> $errfile &]
+        set pid [exec valgrind --track-origins=yes --suppressions=../../../src/valgrind.sup --show-reachable=no --show-possibly-lost=no --leak-check=full ${program_path} $cfgfile 2>> $errfile &]
     } else {
-        set pid [exec ../../../src/${prgname} $cfgfile 2>> $errfile &]
+        set pid [exec ${program_path} $cfgfile 2>> $errfile &]
     }
     return $pid
 }

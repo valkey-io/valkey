@@ -18,6 +18,9 @@
             "items": {
                 "type": "string"
             }
-        }
+        },
+        "acl_categories": [
+            "SLOW"
+        ]
     }
 }

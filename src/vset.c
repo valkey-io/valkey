@@ -1450,7 +1450,7 @@ static inline size_t vsetBucketRemoveExpired_HASHTABLE(vsetBucket **bucket, vset
         expiryFunc(entry, ctx);
         count++;
     }
-    hashtableResetIterator(&it);
+    hashtableCleanupIterator(&it);
 
     /* in case we completed scanning the hashtable which is now empty */
     size_t ht_size = hashtableSize(ht);
@@ -1557,7 +1557,7 @@ static inline int vsetBucketNext_HASHTABLE(vsetInternalIterator *it, void **entr
         hashtableInitIterator(&it->hiter, ht, 0);
     }
     if (!hashtableNext(&it->hiter, &it->entry)) {
-        hashtableResetIterator(&it->hiter);
+        hashtableCleanupIterator(&it->hiter);
         return 0;
     }
     if (entryptr) *entryptr = it->entry;
@@ -2195,7 +2195,7 @@ void vsetResetIterator(vsetIterator *iter) {
     if (parent_bucket_type == VSET_BUCKET_RAX)
         raxStop(&it->riter);
     if (bucket_type == VSET_BUCKET_HT)
-        hashtableResetIterator(&it->hiter);
+        hashtableCleanupIterator(&it->hiter);
 }
 
 /* Initializes an empty volatile set.

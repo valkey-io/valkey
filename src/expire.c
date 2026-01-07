@@ -615,13 +615,13 @@ void rememberReplicaKeyWithExpire(serverDb *db, robj *key) {
     }
     if (db->id > 63) return;
 
-    dictEntry *de = dictAddOrFind(replicaKeysWithExpire, key->ptr);
+    dictEntry *de = dictAddOrFind(replicaKeysWithExpire, objectGetVal(key));
     /* If the entry was just created, set it to a copy of the SDS string
      * representing the key: we don't want to need to take those keys
      * in sync with the main DB. The keys will be removed by expireReplicaKeys()
      * as it scans to find keys to remove. */
-    if (dictGetKey(de) == key->ptr) {
-        dictSetKey(replicaKeysWithExpire, de, sdsdup(key->ptr));
+    if (dictGetKey(de) == objectGetVal(key)) {
+        dictSetKey(replicaKeysWithExpire, de, sdsdup(objectGetVal(key)));
         dictSetUnsignedIntegerVal(de, 0);
     }
 
@@ -644,9 +644,13 @@ size_t getReplicaKeyWithExpireCount(void) {
  * but it is not worth it since anyway race conditions using the same set
  * of key names in a writable replica and in its primary will lead to
  * inconsistencies. This is just a best-effort thing we do. */
-void flushReplicaKeysWithExpireList(void) {
+void flushReplicaKeysWithExpireList(int async) {
     if (replicaKeysWithExpire) {
-        dictRelease(replicaKeysWithExpire);
+        if (async) {
+            freeReplicaKeysWithExpireAsync(replicaKeysWithExpire);
+        } else {
+            dictRelease(replicaKeysWithExpire);
+        }
         replicaKeysWithExpire = NULL;
     }
 }
@@ -681,7 +685,7 @@ int parseExtendedExpireArgumentsOrReply(client *c, int *flags, int max_args) {
 
     int j = 3;
     while (j < max_args) {
-        char *opt = c->argv[j]->ptr;
+        char *opt = objectGetVal(c->argv[j]);
         if (!strcasecmp(opt, "nx")) {
             *flags |= EXPIRE_NX;
             nx = 1;
@@ -781,6 +785,13 @@ void expireGenericCommand(client *c, long long basetime, int unit) {
         return;
     }
     when += basetime;
+    /* A negative expiration time should cause a key to expire and be deleted immediately.
+     * However, in some cases (such as import-mode), we might need to pause expiration,
+     * and we don't want keys with negative expiration times (could cause a crash during active expiration).
+     * Therefore, we simply change the expiration time to 0 to mark the key as expired. */
+    if (when < 0) {
+        when = 0;
+    }
 
     robj *obj = lookupKeyWrite(c->db, key);
 

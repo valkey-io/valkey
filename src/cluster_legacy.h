@@ -49,19 +49,22 @@ typedef struct clusterLink {
 #define linkSupportsExtension(link) ((link)->flags & CLUSTER_LINK_EXTENSIONS_SUPPORTED)
 
 /* Cluster node flags and macros. */
-#define CLUSTER_NODE_PRIMARY (1 << 0)                      /* The node is a primary */
-#define CLUSTER_NODE_REPLICA (1 << 1)                      /* The node is a replica */
-#define CLUSTER_NODE_PFAIL (1 << 2)                        /* Failure? Need acknowledge */
-#define CLUSTER_NODE_FAIL (1 << 3)                         /* The node is believed to be malfunctioning */
-#define CLUSTER_NODE_MYSELF (1 << 4)                       /* This node is myself */
-#define CLUSTER_NODE_HANDSHAKE (1 << 5)                    /* We have still to exchange the first ping */
-#define CLUSTER_NODE_NOADDR (1 << 6)                       /* We don't know the address of this node */
-#define CLUSTER_NODE_MEET (1 << 7)                         /* Send a MEET message to this node */
-#define CLUSTER_NODE_MIGRATE_TO (1 << 8)                   /* Primary eligible for replica migration. */
-#define CLUSTER_NODE_NOFAILOVER (1 << 9)                   /* Replica will not try to failover. */
-#define CLUSTER_NODE_EXTENSIONS_SUPPORTED (1 << 10)        /* This node supports extensions. */
-#define CLUSTER_NODE_LIGHT_HDR_PUBLISH_SUPPORTED (1 << 11) /* This node supports light message header for publish type. */
-#define CLUSTER_NODE_LIGHT_HDR_MODULE_SUPPORTED (1 << 12)  /* This node supports light message header for module type. */
+#define CLUSTER_NODE_PRIMARY (1 << 0)                                             /* The node is a primary */
+#define CLUSTER_NODE_REPLICA (1 << 1)                                             /* The node is a replica */
+#define CLUSTER_NODE_PFAIL (1 << 2)                                               /* Failure? Need acknowledge */
+#define CLUSTER_NODE_FAIL (1 << 3)                                                /* The node is believed to be malfunctioning */
+#define CLUSTER_NODE_MYSELF (1 << 4)                                              /* This node is myself */
+#define CLUSTER_NODE_HANDSHAKE (1 << 5)                                           /* We have still to exchange the first ping */
+#define CLUSTER_NODE_NOADDR (1 << 6)                                              /* We don't know the address of this node */
+#define CLUSTER_NODE_MEET (1 << 7)                                                /* Send a MEET message to this node */
+#define CLUSTER_NODE_MIGRATE_TO (1 << 8)                                          /* Primary eligible for replica migration. */
+#define CLUSTER_NODE_NOFAILOVER (1 << 9)                                          /* Replica will not try to failover. */
+#define CLUSTER_NODE_EXTENSIONS_SUPPORTED (1 << 10)                               /* This node supports extensions. */
+#define CLUSTER_NODE_LIGHT_HDR_PUBLISH_SUPPORTED (1 << 11)                        /* This node supports light message header for publish type. */
+#define CLUSTER_NODE_LIGHT_HDR_MODULE_SUPPORTED (1 << 12)                         /* This node supports light message header for module type. */
+#define CLUSTER_NODE_MULTI_MEET_SUPPORTED CLUSTER_NODE_LIGHT_HDR_MODULE_SUPPORTED /* This node handles multi meet packet.                             \
+                                                                                     Light hdr for module and multi meet were both introduced in 8.1, \
+                                                                                     so we could reduce the same flag value. */
 #define CLUSTER_NODE_NULL_NAME                                                                                         \
     "\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000" \
     "\000\000\000\000\000\000\000\000\000\000\000\000"
@@ -75,6 +78,7 @@ typedef struct clusterLink {
 #define nodeFailed(n) ((n)->flags & CLUSTER_NODE_FAIL)
 #define nodeCantFailover(n) ((n)->flags & CLUSTER_NODE_NOFAILOVER)
 #define nodeSupportsExtensions(n) ((n)->flags & CLUSTER_NODE_EXTENSIONS_SUPPORTED)
+#define nodeSupportsMultiMeet(n) ((n)->flags & CLUSTER_NODE_MULTI_MEET_SUPPORTED)
 #define nodeInNormalState(n) (!((n)->flags & (CLUSTER_NODE_HANDSHAKE | CLUSTER_NODE_MEET | CLUSTER_NODE_PFAIL | CLUSTER_NODE_FAIL)))
 
 /* Cluster messages header */
@@ -340,6 +344,22 @@ static_assert(offsetof(clusterMsgLight, data) == 16, "unexpected field offset");
 
 #define CLUSTERMSG_LIGHT_MIN_LEN (sizeof(clusterMsgLight) - sizeof(union clusterMsgData))
 
+typedef struct {
+    char sig[4];       /* Signature "RCmb" (Cluster message bus). */
+    uint32_t totlen;   /* Total length of this message */
+    uint16_t ver;      /* Protocol version, currently set to CLUSTER_PROTO_VER. */
+    uint16_t notused1; /* full: port, light: notused1 */
+    uint16_t type;     /* Message type */
+    uint16_t notused2; /* full: count, light: notused2 */
+} clusterMsgHeader;
+
+static_assert(offsetof(clusterMsgHeader, sig) == offsetof(clusterMsg, sig), "unexpected field offset");
+static_assert(offsetof(clusterMsgHeader, totlen) == offsetof(clusterMsg, totlen), "unexpected field offset");
+static_assert(offsetof(clusterMsgHeader, ver) == offsetof(clusterMsg, ver), "unexpected field offset");
+static_assert(offsetof(clusterMsgHeader, type) == offsetof(clusterMsg, type), "unexpected field offset");
+static_assert(offsetof(clusterMsgHeader, notused1) == offsetof(clusterMsg, port), "unexpected field offset");
+static_assert(offsetof(clusterMsgHeader, notused2) == offsetof(clusterMsg, count), "unexpected field offset");
+
 struct _clusterNode {
     mstime_t ctime;                         /* Node object creation time. */
     char name[CLUSTER_NAMELEN];             /* Node name, hex string, sha1-size */
@@ -401,6 +421,7 @@ struct clusterState {
     uint64_t currentEpoch;
     int state;              /* CLUSTER_OK, CLUSTER_FAIL, ... */
     int fail_reason;        /* Why the cluster state changes to fail. */
+    int safe_to_join;       /* Can the restarted node safely join the cluster? */
     int size;               /* Num of primary nodes with at least one slot */
     dict *nodes;            /* Hash table of name -> clusterNode structures */
     dict *shards;           /* Hash table of shard_id -> list (of nodes) structures */

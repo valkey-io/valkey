@@ -285,6 +285,10 @@ static void shutdownIOThread(int id) {
     if (tid == pthread_self()) return;
     if (tid == 0) return;
 
+    /* Only unlock mutex for inactive threads. Active threads are already unlocked. */
+    if (id >= server.active_io_threads_num) {
+        pthread_mutex_unlock(&io_threads_mutex[id]);
+    }
     pthread_cancel(tid);
 
     if ((err = pthread_join(tid, NULL)) != 0) {
@@ -563,8 +567,8 @@ int tryOffloadFreeObjToIOThreads(robj *obj) {
 
     /* We offload only the free of the ptr that may be allocated by the I/O thread.
      * The object itself was allocated by the main thread and will be freed by the main thread. */
-    IOJobQueue_push(jq, sdsfreeVoid, obj->ptr);
-    obj->ptr = NULL;
+    IOJobQueue_push(jq, sdsfreeVoid, objectGetVal(obj));
+    objectSetVal(obj, NULL);
     decrRefCount(obj);
 
     server.stat_io_freed_objects++;

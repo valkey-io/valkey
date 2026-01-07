@@ -122,5 +122,6 @@ void getRandomBytes(unsigned char *p, size_t len);
 long long ustime(void);
 mstime_t mstime(void);
 void writePointerWithPadding(unsigned char *buf, const void *ptr);
+sds escapeJsonString(sds s, const char *p, size_t len);
 
 #endif

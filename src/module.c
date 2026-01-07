@@ -3893,6 +3893,12 @@ int modulePopulateReplicationInfoStructure(void *ri, int structver) {
  *     VALKEYMODULE_CLIENTINFO_FLAG_UNIXSOCKET   Client using unix domain socket.
  *     VALKEYMODULE_CLIENTINFO_FLAG_MULTI        Client in MULTI state.
  *     VALKEYMODULE_CLIENTINFO_FLAG_READONLY     Client in ReadOnly state.
+ *     VALKEYMODULE_CLIENTINFO_FLAG_PRIMARY      Client is a primary.
+ *     VALKEYMODULE_CLIENTINFO_FLAG_MONITOR      Client in monitor mode.
+ *     VALKEYMODULE_CLIENTINFO_FLAG_MODULE       Client is a module.
+ *     VALKEYMODULE_CLIENTINFO_FLAG_AUTHENTICATED Client has been authenticated.
+ *     VALKEYMODULE_CLIENTINFO_FLAG_EVER_AUTHENTICATED Client has successfully been authenticated in its lifetime.
+ *     VALKEYMODULE_CLIENTINFO_FLAG_FAKE         Fake clients are internal to valkey.
  *
  * However passing NULL is a way to just check if the client exists in case
  * we are not interested in any additional information.

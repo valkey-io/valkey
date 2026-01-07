@@ -35,11 +35,22 @@ typedef struct durable_t {
     /* clients waiting for offset ack/quorum*/
     struct list *clients_waiting_replica_ack;
 
-    // cached allocation of replica offsets to prevent allocation per cmd.
+    /*  cached allocation of replica offsets to prevent allocation per cmd. */
     unsigned long replica_offsets_size;
     long long *replica_offsets;
-    // Previously acknowledged replication offset by replicas
+
+    /* Previously acknowledged replication offset by replicas */
     long long previous_acked_offset;
+
+    /* Track the replication offset prior to executing a single command in call() */
+    long long pre_call_replication_offset;
+
+    /* Track the replication offset prior to executing a command block
+     including single command and multi-command transactions */
+    long long pre_command_replication_offset;
+
+    /* Track the number of commands awaiting propagation prior to executing a single command in call() */
+    int pre_call_num_ops_pending_propagation;
 } durable_t;
 
 // Blocked response structure used by client to mark
@@ -78,6 +89,9 @@ typedef struct clientDurabilityInfo {
 
     // Replication offset to block this current command response 
     long long current_command_repl_offset;
+
+    uint64_t durable_blocked_client: 1;    /* This is a durable blocked client that is waiting for the server to
+                                        * acknowledge the write of the command that caused it to be blocked. */
 } clientDurableInfo;
 
 /**
@@ -89,8 +103,8 @@ void durableClientReset(struct client *c);
 /*
   Command processing hooks for offset and cob tracking
 */
-void preCall(void);
-void postCall(struct client *c);
+void beforeCommandTrackReplOffset(void);
+void afterCommandTrackReplOffset(struct client *c);
 int preCommandExec(struct client *c);
 void postCommandExec(struct client *c);
 void postReplicaAck(void);

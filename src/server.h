@@ -36,6 +36,7 @@
 #include "rio.h"
 #include "commands.h"
 #include "allocator_defrag.h"
+#include "reply_blocking.h"
 
 #include <stdint.h>
 #include <stdio.h>
@@ -945,6 +946,7 @@ typedef struct serverDb {
 
     /* fields related to dirty key tracking 
      * for consistent writes with durability */
+    // TODO: move hashtable/references directly in the robj
     rax *uncommitted_keys; /* Map of dirty keys to the offset required by replica acknowledgement */
     long long dirty_repl_offset; /* Replication offset for a dirty DB */
     raxIterator next_scan_iter;  /* The next iterator for db scan */
@@ -1237,7 +1239,6 @@ typedef struct ClientFlags {
     uint64_t durable_blocked_client: 1;    /* This is a durable blocked client that is waiting for the server to
                                             * acknowledge the write of the command that caused it to be blocked. */
 } ClientFlags;
-
 typedef struct ClientPubSubData {
     hashtable *pubsub_channels;      /* channels a client is interested in (SUBSCRIBE) */
     hashtable *pubsub_patterns;      /* patterns a client is interested in (PSUBSCRIBE) */

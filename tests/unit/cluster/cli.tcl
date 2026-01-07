@@ -289,6 +289,9 @@ test {Migrate the last slot away from a node using valkey-cli} {
         # Cluster check just verifies the config state is self-consistent,
         # waiting for cluster_state to be okay is an independent check that all the
         # nodes actually believe each other are healthy, prevent cluster down error.
+        # Cluster check just verifies the config state is self-consistent,
+        # waiting for cluster_state to be okay is an independent check that all the
+        # nodes actually believe each other are healthy, prevent cluster down error.
         wait_for_condition 1000 50 {
             [catch {exec src/valkey-cli --cluster check 127.0.0.1:[srv 0 port]}] == 0 &&
             [catch {exec src/valkey-cli --cluster check 127.0.0.1:[srv -1 port]}] == 0 &&

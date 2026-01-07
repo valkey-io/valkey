@@ -1,11 +1,10 @@
-#include "durable_write.h"
+#include "reply_blocking.h"
 #include "expire.h"
 #include "server.h"
 #include <assert.h>
 #include <math.h>
 
 // TODO: handle PSYNC
-// TODO: handle durability on/off?
 // TODO: handle failovers (clear durability state)
 // TODO: remove debug logging
 // TODO: handle lua & multi
@@ -13,17 +12,6 @@
 // TODO: handle DB level commands (swap flushall etc)
 // TODO: handle monitors
 // TODO: temetry
-/*================================= Global state ============================ */
-
-// Track the replication offset prior to executing a command block
-// including single command and multi-command transactions
-static long long pre_command_replication_offset;
-
-// Track the replication offset prior to executing a single command in call()
-static long long pre_call_replication_offset;
-
-// Track the number of commands awaiting propagation prior to executing a single command in call()
-static int pre_call_num_ops_pending_propagation;
 
 /*============================ Internal prototypes ========================= */
 
@@ -53,7 +41,6 @@ static long long getSingleCommandBlockingOffsetForConsistentWrites(struct client
  * return       1 if durability is enabled, 0 otherwise.
  */
 int isDurabilityEnabled(void) {
-    // TODO: this should be configurable
     // should this have its own flag?
     // or general 'durability flag'
     return true;
@@ -69,7 +56,7 @@ int isPrimaryDurabilityEnabled(void) {
  * Using 2 as default for POC. 
  */
 static inline unsigned replicaAcksForConsensus(void) {
-    return 2; 
+    return 1; 
 }
 
 /*
@@ -169,26 +156,18 @@ long long getConsensusOffset(const unsigned long numAcksNeeded) {
     if (numReplicas < numAcksNeeded) {
         return -1;
     }
+    
+    long long replica_offsets[numReplicas];
 
-    // fetch and sort the replica offsets for all replicas. This way we get the top offsets that have been acknowledged.
-    // Kth element in the sorted array will give us the offset that has been acknowledged by K replicas.
-    durable_t *durability = &server.durability;
-
-    // make sure we have enough space for the replicas. Resize only if the required 
-    // replica count is larger. No need to downsize.
-    if(durability->replica_offsets_size < numReplicas) {
-        durability->replica_offsets = zrealloc(durability->replica_offsets, numReplicas * sizeof(long long));
-        durability->replica_offsets_size = numReplicas;
-    }
-    populateReplicaOffsets(durability->replica_offsets, numReplicas);
+    populateReplicaOffsets(replica_offsets, numReplicas);
 
     // don't bother sorting if there is only one replica. 
     if (numReplicas > 1) { 
-        qsort(durability->replica_offsets, numReplicas, sizeof(long long), offsetSorterDesc);
+        qsort(replica_offsets, numReplicas, sizeof(long long), offsetSorterDesc);
     }
 
     // get the Kth element
-    return durability->replica_offsets[numAcksNeeded - 1];
+    return replica_offsets[numAcksNeeded - 1];
 }
 
 /*================================= Client management ======================== */
@@ -242,11 +221,11 @@ static inline void trackCommandPreExecutionPosition(struct client *c) {
  * @return 1 if the client is successfully marked unblocked, 0 otherwise 
  */
 static int unblockClientWaitingReplicaAck(struct client *c) {
-    if (c->flag.durable_blocked_client) {
+    if (c->clientDurabilityInfo.durable_blocked_client) {
         listNode *ln = listSearchKey(server.durability.clients_waiting_replica_ack, c);
         if(ln != NULL) {
             listDelNode(server.durability.clients_waiting_replica_ack, ln);
-            c->flag.durable_blocked_client = 0;
+            c->clientDurabilityInfo.durable_blocked_client = 0;
             return 1;
         }
     }
@@ -418,10 +397,11 @@ void blockClientOnReplOffset(struct client *c, long long blockingReplOffset) {
     if (isBlockingNeededForOffset(c, blockingReplOffset)) {
         serverLog(LOG_DEBUG, "client should be blocked at offset %lld,", blockingReplOffset);
         blockLastResponseIfExist(c, blockingReplOffset);
-        if (!c->flag.durable_blocked_client) {
+        if (!c->clientDurabilityInfo.durable_blocked_client) {
             listAddNodeTail(server.durability.clients_waiting_replica_ack,c);
-            c->flag.durable_blocked_client = 1;
+            c->clientDurabilityInfo.durable_blocked_client = 1;
         }
+        replicationRequestAckFromReplicas();
     }
 
     // Now we have processed the client blocking information and tracked it,
@@ -836,7 +816,7 @@ static long long getSingleCommandBlockingOffsetForConsistentWrites(struct client
 
     long long blocking_repl_offset = -1;
 
-    if ((server.primary_repl_offset > pre_call_replication_offset) || (server.also_propagate.numops > pre_call_num_ops_pending_propagation)) {
+    if ((server.primary_repl_offset > server.durability.pre_call_replication_offset) || (server.also_propagate.numops > server.durability.pre_call_num_ops_pending_propagation)) {
         blocking_repl_offset = getSingleCommandBlockingOffsetForReplicatingCommand(c);
     } else {
         blocking_repl_offset = getSingleCommandBlockingOffsetForNonReplicatingCommand(c);
@@ -857,14 +837,14 @@ static long long getSingleCommandBlockingOffsetForConsistentWrites(struct client
  * For synchronous replication, we need to record the starting replication offset of the command
  * about to be executed.
  */
-void preCall(void) {
+void beforeCommandTrackReplOffset(void) {
     serverLog(LOG_DEBUG, "preCall hook entered");
     if (!isPrimaryDurabilityEnabled()) return;
 
-    pre_call_replication_offset = server.primary_repl_offset;
-    pre_call_num_ops_pending_propagation = server.also_propagate.numops;
+    server.durability.pre_call_replication_offset = server.primary_repl_offset;
+    server.durability.pre_call_num_ops_pending_propagation = server.also_propagate.numops;
     serverLog(LOG_DEBUG, "preCall hook: pre_call_replication_offset=%lld, pre_call_num_ops_pending_propagation=%d", 
-              pre_call_replication_offset, pre_call_num_ops_pending_propagation);
+              server.durability.pre_call_replication_offset, server.durability.pre_call_num_ops_pending_propagation);
 }
 
 /**
@@ -879,7 +859,7 @@ void preCall(void) {
  *
  * @param c The client executing the valkey command
  */
-void postCall(struct client *c) {
+void afterCommandTrackReplOffset(struct client *c) {
     // log debug tracing
     serverLog(LOG_DEBUG, "Call hook entered for command '%s'", c->cmd->declared_name);
     if (!isPrimaryDurabilityEnabled() || (c->flag.blocked))
@@ -935,7 +915,7 @@ int preCommandExec(struct client *c) {
         // todo: handle monitors
     }
 
-    pre_command_replication_offset = server.primary_repl_offset;
+    server.durability.pre_command_replication_offset = server.primary_repl_offset;
     return CMD_FILTER_ALLOW;
 }
 
@@ -971,7 +951,7 @@ void postCommandExec(struct client *c) {
     // Otherwise we will try to block the response without tracking the command's pre-execution
     // position in the client reply buffer, which wouldn't work. If this assert fails, then we
     // need to fix clientEligibleForResponseTracking() to handle the problematic command.
-    if (blocking_repl_offset > pre_command_replication_offset) {
+    if (blocking_repl_offset > server.durability.pre_command_replication_offset) {
         serverAssert(clientEligibleForResponseTracking(c));
     }
 
@@ -984,8 +964,6 @@ void postCommandExec(struct client *c) {
  */ 
 void durableInit(void) {
     // Initialize synchronous replication
-    server.durability.replica_offsets_size = 0;
-    server.durability.replica_offsets = NULL;
     server.durability.previous_acked_offset = -1;
     server.durability.curr_db_scan_idx = 0;
     server.durability.clients_waiting_replica_ack = listCreate();

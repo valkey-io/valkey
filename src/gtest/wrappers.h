@@ -41,7 +41,6 @@ extern "C" {
 #define _Bool bool           /* Replace C _Bool with C++ bool */
 #define typename _typename   /* Avoid conflict with C++ 'typename' keyword */
 #define protected protected_ /* Avoid conflict with C++ 'protected' keyword */
-
 #include "server.h"
 
 /**
@@ -55,7 +54,6 @@ extern "C" {
  *       Example: serverLog(int level, const char *fmt, ...) should NOT be mocked.
  */
 int __wrap_processCommand(struct client *c);
-
 #undef protected
 #undef _Bool
 #undef typename

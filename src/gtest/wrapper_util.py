@@ -82,10 +82,10 @@ def find_wrapper_functions_in_header(header_file_name):
             for arg in split_args(full_args):
 
                 # Normal argument
-                m_normal = re.match(r"(.+[\s\*])([a-zA-Z0-9_]+)$", arg)
+                m_normal = re.match(r"(.+?)\s*((?:\*+\s*)*)([a-zA-Z_][a-zA-Z0-9_]*\s*(?:\[[^\]]*\])*)$", arg)
                 if m_normal:
-                    arg_type = m_normal.group(1).strip()
-                    arg_name = m_normal.group(2).strip()
+                    arg_type = (m_normal.group(1) + m_normal.group(2)).strip()
+                    arg_name = m_normal.group(3).strip()
                     args_definition.append(Arg(arg_type, arg_name))
                     args_declaration.append(Arg(arg_type, arg_name))
                     continue

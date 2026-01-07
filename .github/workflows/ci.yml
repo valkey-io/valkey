@@ -27,7 +27,9 @@ jobs:
       - name: make
         # Fail build if there are warnings
         # build with TLS just for compilation coverage
-        run: make -j4 all-with-unit-tests SERVER_CFLAGS='-Werror' BUILD_TLS=yes USE_FAST_FLOAT=yes
+        run: |
+          sudo apt-get install pkg-config libgtest-dev libgmock-dev
+          make -j4 all-with-unit-tests SERVER_CFLAGS='-Werror' BUILD_TLS=yes USE_FAST_FLOAT=yes
       - name: test
         run: |
           sudo apt-get install tcl8.6 tclx
@@ -44,8 +46,6 @@ jobs:
         run: |
           ./src/valkey-unit-tests
           ./src/gtest/valkey-unit-gtests
-          rm -rf deps/googletest
-          rm -rf deps/gtest-parallel
 
   test-ubuntu-latest-compatibility:
     runs-on: ubuntu-latest
@@ -60,8 +60,7 @@ jobs:
       - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
       - name: Install modern CMake
         run: |
-          sudo apt-get update
-          sudo apt-get install -y cmake
+          sudo apt-get install pkg-config libgtest-dev libgmock-dev
       - name: make
         # Fail build if there are warnings
         # build with TLS just for compilation coverage
@@ -91,9 +90,7 @@ jobs:
       - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
       - name: cmake and make
         run: |
-          sudo apt-get update
           sudo apt-get install -y cmake libssl-dev
-          cmake --version
           mkdir -p build-release
           cd build-release
           cmake -DCMAKE_BUILD_TYPE=Release .. -DBUILD_TLS=yes -DBUILD_UNIT_TESTS=yes -DBUILD_UNIT_GTESTS=yes
@@ -112,8 +109,6 @@ jobs:
         run: |
           ./build-release/bin/valkey-unit-tests
           ./build-release/bin/valkey-unit-gtests
-          rm -rf deps/googletest
-          rm -rf deps/gtest-parallel
 
   test-sanitizer-address:
     runs-on: ubuntu-latest
@@ -121,7 +116,9 @@ jobs:
       - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
       - name: make
         # build with TLS module just for compilation coverage
-        run: make -j4 all-with-unit-tests SANITIZER=address SERVER_CFLAGS='-Werror' BUILD_TLS=module
+        run: |
+          sudo apt-get install pkg-config libgtest-dev libgmock-dev
+          make -j4 all-with-unit-tests SANITIZER=address SERVER_CFLAGS='-Werror' BUILD_TLS=module
       - name: testprep
         run: sudo apt-get install tcl8.6 tclx -y
       - name: test
@@ -132,8 +129,6 @@ jobs:
         run: |
           ./src/valkey-unit-tests
           ./src/gtest/valkey-unit-gtests
-          rm -rf deps/googletest
-          rm -rf deps/gtest-parallel
 
   test-rdma:
     runs-on: ubuntu-latest
@@ -175,7 +170,7 @@ jobs:
       - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
       - name: Install build dependencies
         run: |
-          brew install llvm
+          brew install llvm googletest
       - name: make
         # Build with additional upcoming features
         run: |
@@ -195,15 +190,29 @@ jobs:
         # suffixed version of g++. g++-multilib generally includes libstdc++.
         # *cross version as well, but it is also added explicitly just in case.
         run: |
-          sudo apt-get update
-          sudo apt-get install libc6-dev-i386 libstdc++-11-dev-i386-cross gcc-multilib g++-multilib
-          make -j4 SERVER_CFLAGS='-Werror' 32bit USE_FAST_FLOAT=yes
+          sudo apt-get install libc6-dev-i386 libstdc++-11-dev-i386-cross gcc-multilib g++-multilib libgtest-dev
+          mkdir -p /tmp/gtest32
+          cd /tmp/gtest32
+          cmake -B build32 \
+              -DCMAKE_BUILD_TYPE=Release \
+              -DCMAKE_C_FLAGS="-m32" \
+              -DCMAKE_CXX_FLAGS="-m32" \
+              -DCMAKE_EXE_LINKER_FLAGS="-m32" \
+              -DCMAKE_POLICY_VERSION_MINIMUM=3.17 \
+              /usr/src/googletest
+          cmake --build build32 --parallel
+          sudo cp build32/lib/*.a /usr/lib32/
+          cd $GITHUB_WORKSPACE
+          make -j4 SERVER_CFLAGS='-Werror' 32bit USE_FAST_FLOAT=yes \
+          GTEST_CFLAGS="\
+            -I/usr/src/googletest/googletest/include \
+            -I/usr/src/googletest/googlemock/include \
+            -Wno-error=float-equal" \
+          GTEST_LIBS="/usr/lib32/libgtest.a /usr/lib32/libgmock.a"
       - name: unit tests
         run: |
           ./src/valkey-unit-tests
           ./src/gtest/valkey-unit-gtests
-          rm -rf deps/googletest
-          rm -rf deps/gtest-parallel
 
   build-libc-malloc:
     runs-on: ubuntu-latest

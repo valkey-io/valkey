@@ -56,12 +56,12 @@ GCC_FLAGS :=
 
 # Only add GCC-only warnings and flags
 ifeq ($(IS_GCC),g++)
-    # GCC supports these extra warnings and -fno-var-tracking-assignments
-    MORE_WARNINGS += -Wsync-nand -Wtrampolines -Werror=logical-op -Werror=aggressive-loop-optimizations
-    GCC_FLAGS += -fno-var-tracking-assignments
+	# GCC supports these extra warnings and -fno-var-tracking-assignments
+	MORE_WARNINGS += -Wsync-nand -Wtrampolines -Werror=logical-op -Werror=aggressive-loop-optimizations
+	GCC_FLAGS += -fno-var-tracking-assignments
 else
-    # Clang: disable warnings that are errors in gtest/gmock
-    MORE_WARNINGS += -Wno-deprecated-copy
+	# Clang: disable warnings that are errors in gtest/gmock
+	MORE_WARNINGS += -Wno-deprecated-copy
 	MORE_WARNINGS += -Wno-keyword-macro
 endif
 
@@ -86,8 +86,16 @@ HIREDIS_LIB := ../../deps/libvalkey/lib/libvalkey.a
 JEMALLOC_LIB := ../../deps/jemalloc/lib/libjemalloc.a
 HDR_HISTOGRAM_LIB := ../../deps/hdr_histogram/libhdrhistogram.a
 FPCONV_LIB := ../../deps/fpconv/libfpconv.a
-GTEST_LIB := ../../deps/googletest/build/googlemock/gtest/libgtest.a
-GMOCK_LIB := ../../deps/googletest/build/googlemock/libgmock.a
+GTEST_CFLAGS ?=
+GTEST_LIBS   ?=
+ifeq ($(strip $(GTEST_LIBS)),)
+	GTEST_CFLAGS := $(shell pkg-config --cflags gtest gmock 2>/dev/null)
+	GTEST_LIBS   := $(shell pkg-config --libs   gtest gmock 2>/dev/null)
+endif
+
+ifeq ($(strip $(GTEST_LIBS)),)
+	$(error googletest not found. Install gtest or set GTEST_CFLAGS/GTEST_LIBS explicitly)
+endif
 FAST_FLOAT_LIB := ../../deps/fast_float_c_interface/fast_float_strtod.o
 
 # On Darwin (macOS), the linker does not support -Wl,--wrap,
@@ -99,28 +107,24 @@ VALKEY_SERVER_WRAP_LIB := $(WRAP_DIR)/wrappedlibvalkey.a
 ENGINE_SERVER_WRAP_OBJ := $(addprefix $(WRAP_DIR)/, $(ENGINE_SERVER_OBJ))
 
 $(WRAP_DIR):
-	mkdir -p $(WRAP_DIR)
+	@mkdir -p $(WRAP_DIR)
 
 $(WRAP_DIR)/%.o: ../%.o $(WRAP_DIR) generated_wrappers.o
 	@mkdir -p $(dir $@)
 	@if file $< | grep -q "LLVM bitcode"; then \
 		llc $< -filetype=obj -o $(WRAP_DIR)/$*_temp.o; \
-		python3 generate-redefine-syms.py $(WRAP_DIR)/$*_temp.o >$(WRAP_DIR)/$*-wrap-syms; \
+		python3 generate-redefine-syms.py $(WRAP_DIR)/$*_temp.o > $(WRAP_DIR)/$*-wrap-syms; \
 		llvm-objcopy --redefine-syms=$(WRAP_DIR)/$*-wrap-syms $(WRAP_DIR)/$*_temp.o $@; \
-		rm $(WRAP_DIR)/$*_temp.o 2>/dev/null; \
+		rm -f $(WRAP_DIR)/$*_temp.o; \
 	else \
-		python3 generate-wrapper-objects.py $< >$(WRAP_DIR)/$*-wrap-syms; \
+		python3 generate-wrapper-objects.py $< > $(WRAP_DIR)/$*-wrap-syms; \
 		llvm-objcopy --redefine-syms=$(WRAP_DIR)/$*-wrap-syms $< $@; \
 	fi
-	rm $(WRAP_DIR)/$*-wrap-syms 2>/dev/null
+	@rm -f $(WRAP_DIR)/$*-wrap-syms
 
 $(VALKEY_SERVER_WRAP_LIB): $(VALKEY_SERVER_LIB) $(ENGINE_SERVER_WRAP_OBJ) generated_wrappers.o
 	$(SERVER_AR) rcs $@ $(ENGINE_SERVER_WRAP_OBJ)
 endif
-
-# Ensure GoogleTest is built
-../../deps/googletest/build/googlemock/gtest/libgtest.a ../../deps/googletest/build/googlemock/libgmock.a:
-	cd ../../deps && $(MAKE) gtest
 
 # Ensure Valkey server library is built
 $(VALKEY_SERVER_LIB):
@@ -140,9 +144,9 @@ endif
 
 # Default target to compile against Valkey, LUA, jemalloc (as Valkey does) as well as gmock
 %.o: %.cpp make-prerequisites generated_wrappers.o .flags
-	$(CXX) -MD -MP -std=c++14 -faligned-new -Wno-write-strings -fpermissive $(GCC_FLAGS) $(OPT) $(DEBUG) $(TEST_CFLAGS) -Wall -Wno-deprecated-declarations -c \
+	$(CXX) -MD -MP -std=c++17 -faligned-new -Wno-write-strings -fpermissive $(GCC_FLAGS) $(OPT) $(DEBUG) $(TEST_CFLAGS) -Wall -Wno-deprecated-declarations -c \
 	-isystem .. -I ../../deps/lua/src/ -I ../../deps/hdr_histogram/ -I ../../deps/fpconv/ $(JEMALLOC_CFLAGS) \
-	-I ../../deps/googletest/googletest/include -I ../../deps/googletest/googlemock/include $<
+	$(GTEST_CFLAGS) $<
 
 $(ALL_OBJECTS): OPT := $(OPT) $(MORE_WARNINGS)
 
@@ -150,10 +154,10 @@ $(ALL_OBJECTS): OPT := $(OPT) $(MORE_WARNINGS)
 # wrappers.h and begin with the prefix '__wrap_' (which is required by the linker).  These command line arguments are then
 # passed in to g++ during linking.
 ifneq ($(wildcard wrappers.h),)
-CMD:=egrep '__wrap_.*\(.*;' wrappers.h | sed 's/__wrap_/@/' | sed 's/[^@]*@\([^(]*\)(.*/\1/' | sort | uniq | xargs -I{} echo "-Wl,--wrap={}" | tr "\n" " "
-OVERRIDES:=$(shell $(CMD))
+	CMD:=egrep '__wrap_.*\(.*;' wrappers.h | sed 's/__wrap_/@/' | sed 's/[^@]*@\([^(]*\)(.*/\1/' | sort | uniq | xargs -I{} echo "-Wl,--wrap={}" | tr "\n" " "
+	OVERRIDES:=$(shell $(CMD))
 else
-OVERRIDES:=
+	OVERRIDES:=
 endif
 
 # Generate a new set of wrappers every time our header changes.
@@ -163,15 +167,14 @@ generated_wrappers.cpp: wrappers.h generate-wrappers.py
 generated_wrappers.o: generated_wrappers.cpp
 
 LD_LIBS := $(HIREDIS_LIB) \
-    $(JEMALLOC_LIB) \
-    $(GMOCK_LIB) \
-    $(GTEST_LIB) \
-    $(HDR_HISTOGRAM_LIB) \
-    $(FPCONV_LIB)
+	$(JEMALLOC_LIB) \
+	$(GTEST_LIBS) \
+	$(HDR_HISTOGRAM_LIB) \
+	$(FPCONV_LIB)
 
 # Add fast_float support if enabled
 ifeq ($(USE_FAST_FLOAT),yes)
-    LD_LIBS += $(FAST_FLOAT_LIB)
+	LD_LIBS += $(FAST_FLOAT_LIB)
 endif
 
 # Generate the single test binary in parent directory.

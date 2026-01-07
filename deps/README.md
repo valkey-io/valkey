@@ -7,7 +7,6 @@ should be provided by the operating system.
 * **lua** is Lua 5.1 with minor changes for security and additional libraries.
 * **hdr_histogram** Used for per-command latency tracking histograms.
 * **fast_float** is a replacement for strtod to convert strings to floats efficiently.
-* **googletest** is Google's testing framework used for gtest unit tests.
 * **gtest-parallel** is a script for running googletest tests in parallel.
 
 How to upgrade the above dependencies
@@ -124,21 +123,14 @@ To upgrade the library,
 3. Invoke "python3 ./script/amalgamate.py --output fast_float.h"
 4. Copy fast_float.h file to "deps/fast_float/".
 
-googletest and gtest-parallel
+gtest-parallel
 ---
 
-To upgrade googletest and gtest-parallel:
+The gtest-parallel directory is pulled as a subtree from the upstream gtest-parallel github repo. To update it you should run from the project root:
 
 ```sh
-# googletest (v1.8.x)
-rm -rf googletest
-git clone --branch v1.8.x --depth 1 https://github.com/google/googletest.git googletest
-rm -rf googletest/.git
-
-# gtest-parallel (master)
-rm -rf gtest-parallel
-git clone --depth 1 https://github.com/google/gtest-parallel.git gtest-parallel
-rm -rf gtest-parallel/.git
+git fetch gtest-parallel-upstream
+git merge -s subtree --squash --allow-unrelated-histories gtest-parallel-upstream/master
 ```
 
-Commit the changes.
+Commit the changes if any conflicts arise.

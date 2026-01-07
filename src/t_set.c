@@ -701,7 +701,6 @@ void sismemberCommand(client *c) {
     robj *set;
     int xx = 0;
 
-    /* Check if XX parameter is provided */
     if (c->argc == 4 && !strcasecmp(objectGetVal(c->argv[3]), "XX")) {
         xx = 1;
     } else if (c->argc > 3) {
@@ -709,22 +708,19 @@ void sismemberCommand(client *c) {
         return;
     }
 
-    /* Try to lookup the key */
     set = lookupKeyRead(c->db, c->argv[1]);
     if (set == NULL) {
-        /* If key doesn't exist and XX is specified, return -1 */
         if (xx)
+            /* If key doesn't exist and XX is specified, return -1 */
             addReplyLongLong(c, -1);
-        /* If key doesn't exist and XX is not specified, return 0 */
         else
+            /* If key doesn't exist and XX is not specified, return 0 */
             addReply(c, shared.czero);
         return;
     }
 
-    /* Check if the key is of the correct type */
     if (checkType(c, set, OBJ_SET)) return;
 
-    /* Check if the member exists in the set */
     if (setTypeIsMember(set, objectGetVal(c->argv[2])))
         addReply(c, shared.cone);
     else

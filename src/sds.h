@@ -38,6 +38,7 @@ extern const char *SDS_NOINIT;
 #include <sys/types.h>
 #include <stdarg.h>
 #include <stdint.h>
+#include <limits.h>
 
 /* Constness:
  *
@@ -115,6 +116,17 @@ static inline void sdsSetAuxBit(sds s, int bit, int value) {
         flags &= ~(1 << (SDS_TYPE_BITS + bit));
     }
     s[-1] = (char)flags;
+}
+
+/* The maximum length of a string that can be stored with the given SDS type. */
+static inline size_t sdsTypeMaxSize(char type) {
+    if (type == SDS_TYPE_5) return (1 << 5) - 1;
+    if (type == SDS_TYPE_8) return (1 << 8) - 1;
+    if (type == SDS_TYPE_16) return (1 << 16) - 1;
+#if (LONG_MAX == LLONG_MAX)
+    if (type == SDS_TYPE_32) return (1ll << 32) - 1;
+#endif
+    return -1; /* this is equivalent to the max SDS_TYPE_64 or SDS_TYPE_32 */
 }
 
 static inline size_t sdslen(const_sds s) {

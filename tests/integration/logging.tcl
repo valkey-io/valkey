@@ -53,7 +53,7 @@ if {$backtrace_supported} {
         test "Server is able to generate a stack trace on selected systems" {
             r config set watchdog-period 200
             r debug sleep 1
-            
+
             check_log_backtrace_for_debug "*WATCHDOG TIMER EXPIRED*"
             # make sure the server is still alive
             assert_equal "PONG" [r ping]
@@ -65,7 +65,7 @@ if {$backtrace_supported} {
 if {!$::valgrind} {
     if {$backtrace_supported} {
         set check_cb check_log_backtrace_for_debug
-    } else {  
+    } else {
         set check_cb check_crash_log
     }
 
@@ -141,6 +141,39 @@ if {$backtrace_supported} {
             catch {r debug assert}
             check_log_backtrace_for_debug "*ASSERTION FAILED*"
         }
+    }
+}
+
+# test JSON log format with special characters
+start_server {overrides {log-format json}} {
+    test {JSON log format escapes backslash and double quote} {
+        set log_lines [count_log_lines 0]
+        r debug log "Test \"quotes\" and \\backslash\\"
+        verify_log_message 0 {*"message":"DEBUG LOG: Test \\"quotes\\" and \\\\backslash\\\\"*} $log_lines
+    }
+
+    test {JSON log format escapes tab character} {
+        set log_lines [count_log_lines 0]
+        r debug log "Test\ttab"
+        verify_log_message 0 {*"message":"DEBUG LOG: Test\\ttab"*} $log_lines
+    }
+
+    test {JSON log format escapes carriage return} {
+        set log_lines [count_log_lines 0]
+        r debug log "Test\rcarriage"
+        verify_log_message 0 {*"message":"DEBUG LOG: Test\\rcarriage"*} $log_lines
+    }
+
+    test {JSON log format escapes form feed} {
+        set log_lines [count_log_lines 0]
+        r debug log "Test\fformfeed"
+        verify_log_message 0 {*"message":"DEBUG LOG: Test\\fformfeed"*} $log_lines
+    }
+
+    test {JSON log format escapes backspace} {
+        set log_lines [count_log_lines 0]
+        r debug log "Test\bbackspace"
+        verify_log_message 0 {*"message":"DEBUG LOG: Test\\bbackspace"*} $log_lines
     }
 }
 

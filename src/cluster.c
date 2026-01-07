@@ -209,18 +209,18 @@ void restoreCommand(client *c) {
     /* Parse additional options */
     for (j = 4; j < c->argc; j++) {
         int additional = c->argc - j - 1;
-        if (!strcasecmp(c->argv[j]->ptr, "replace")) {
+        if (!strcasecmp(objectGetVal(c->argv[j]), "replace")) {
             replace = 1;
-        } else if (!strcasecmp(c->argv[j]->ptr, "absttl")) {
+        } else if (!strcasecmp(objectGetVal(c->argv[j]), "absttl")) {
             absttl = 1;
-        } else if (!strcasecmp(c->argv[j]->ptr, "idletime") && additional >= 1 && lfu_freq == -1) {
+        } else if (!strcasecmp(objectGetVal(c->argv[j]), "idletime") && additional >= 1 && lfu_freq == -1) {
             if (getLongLongFromObjectOrReply(c, c->argv[j + 1], &lru_idle, NULL) != C_OK) return;
             if (lru_idle < 0) {
                 addReplyError(c, "Invalid IDLETIME value, must be >= 0");
                 return;
             }
             j++; /* Consume additional arg. */
-        } else if (!strcasecmp(c->argv[j]->ptr, "freq") && additional >= 1 && lru_idle == -1) {
+        } else if (!strcasecmp(objectGetVal(c->argv[j]), "freq") && additional >= 1 && lru_idle == -1) {
             if (getLongLongFromObjectOrReply(c, c->argv[j + 1], &lfu_freq, NULL) != C_OK) return;
             if (lfu_freq < 0 || lfu_freq > 255) {
                 addReplyError(c, "Invalid FREQ value, must be >= 0 and <= 255");
@@ -249,12 +249,12 @@ void restoreCommand(client *c) {
     }
 
     /* Verify RDB version and data checksum. */
-    if (verifyDumpPayload(c->argv[3]->ptr, sdslen(c->argv[3]->ptr), &rdbver) == C_ERR) {
+    if (verifyDumpPayload(objectGetVal(c->argv[3]), sdslen(objectGetVal(c->argv[3])), &rdbver) == C_ERR) {
         addReplyError(c, "DUMP payload version or checksum are wrong");
         return;
     }
 
-    rioInitWithBuffer(&payload, c->argv[3]->ptr);
+    rioInitWithBuffer(&payload, objectGetVal(c->argv[3]));
     type = rdbLoadObjectType(&payload);
     if (type == -1) {
         addReplyError(c, "Bad data format");
@@ -268,7 +268,7 @@ void restoreCommand(client *c) {
         return;
     }
 
-    obj = rdbLoadObject(type, &payload, key->ptr, c->db->id, NULL);
+    obj = rdbLoadObject(type, &payload, objectGetVal(key), c->db->id, NULL);
     if (obj == NULL) {
         addReplyError(c, "Bad data format");
         return;
@@ -344,9 +344,9 @@ migrateCachedSocket *migrateGetSocket(client *c, robj *host, robj *port, long ti
     migrateCachedSocket *cs;
 
     /* Check if we have an already cached socket for this ip:port pair. */
-    name = sdscatlen(name, host->ptr, sdslen(host->ptr));
+    name = sdscatlen(name, objectGetVal(host), sdslen(objectGetVal(host)));
     name = sdscatlen(name, ":", 1);
-    name = sdscatlen(name, port->ptr, sdslen(port->ptr));
+    name = sdscatlen(name, objectGetVal(port), sdslen(objectGetVal(port)));
     cs = dictFetchValue(server.migrate_cached_sockets, name);
     if (cs) {
         sdsfree(name);
@@ -366,7 +366,7 @@ migrateCachedSocket *migrateGetSocket(client *c, robj *host, robj *port, long ti
 
     /* Create the connection */
     conn = connCreate(connTypeOfCluster());
-    if (connBlockingConnect(conn, host->ptr, atoi(port->ptr), timeout) != C_OK) {
+    if (connBlockingConnect(conn, objectGetVal(host), atoi(objectGetVal(port)), timeout) != C_OK) {
         addReplyError(c, "-IOERR error or timeout connecting to the client");
         connClose(conn);
         sdsfree(name);
@@ -388,9 +388,9 @@ void migrateCloseSocket(robj *host, robj *port) {
     sds name = sdsempty();
     migrateCachedSocket *cs;
 
-    name = sdscatlen(name, host->ptr, sdslen(host->ptr));
+    name = sdscatlen(name, objectGetVal(host), sdslen(objectGetVal(host)));
     name = sdscatlen(name, ":", 1);
-    name = sdscatlen(name, port->ptr, sdslen(port->ptr));
+    name = sdscatlen(name, objectGetVal(port), sdslen(objectGetVal(port)));
     cs = dictFetchValue(server.migrate_cached_sockets, name);
     if (!cs) {
         sdsfree(name);
@@ -449,29 +449,29 @@ void migrateCommand(client *c) {
     /* Parse additional options */
     for (j = 6; j < c->argc; j++) {
         int moreargs = (c->argc - 1) - j;
-        if (!strcasecmp(c->argv[j]->ptr, "copy")) {
+        if (!strcasecmp(objectGetVal(c->argv[j]), "copy")) {
             copy = 1;
-        } else if (!strcasecmp(c->argv[j]->ptr, "replace")) {
+        } else if (!strcasecmp(objectGetVal(c->argv[j]), "replace")) {
             replace = 1;
-        } else if (!strcasecmp(c->argv[j]->ptr, "auth")) {
+        } else if (!strcasecmp(objectGetVal(c->argv[j]), "auth")) {
             if (!moreargs) {
                 addReplyErrorObject(c, shared.syntaxerr);
                 return;
             }
             j++;
-            password = c->argv[j]->ptr;
+            password = objectGetVal(c->argv[j]);
             redactClientCommandArgument(c, j);
-        } else if (!strcasecmp(c->argv[j]->ptr, "auth2")) {
+        } else if (!strcasecmp(objectGetVal(c->argv[j]), "auth2")) {
             if (moreargs < 2) {
                 addReplyErrorObject(c, shared.syntaxerr);
                 return;
             }
-            username = c->argv[++j]->ptr;
+            username = objectGetVal(c->argv[++j]);
             redactClientCommandArgument(c, j);
-            password = c->argv[++j]->ptr;
+            password = objectGetVal(c->argv[++j]);
             redactClientCommandArgument(c, j);
-        } else if (!strcasecmp(c->argv[j]->ptr, "keys")) {
-            if (sdslen(c->argv[3]->ptr) != 0) {
+        } else if (!strcasecmp(objectGetVal(c->argv[j]), "keys")) {
+            if (sdslen(objectGetVal(c->argv[3])) != 0) {
                 addReplyError(c, "When using MIGRATE KEYS option, the key argument"
                                  " must be set to the empty string");
                 return;
@@ -578,7 +578,7 @@ try_again:
         else
             serverAssertWithInfo(c, NULL, rioWriteBulkString(&cmd, "RESTORE", 7));
         serverAssertWithInfo(c, NULL, sdsEncodedObject(kv[j]));
-        serverAssertWithInfo(c, NULL, rioWriteBulkString(&cmd, kv[j]->ptr, sdslen(kv[j]->ptr)));
+        serverAssertWithInfo(c, NULL, rioWriteBulkString(&cmd, objectGetVal(kv[j]), sdslen(objectGetVal(kv[j]))));
         serverAssertWithInfo(c, NULL, rioWriteBulkLongLong(&cmd, ttl));
 
         /* Emit the payload argument, that is the serialized object using
@@ -877,27 +877,27 @@ void clusterCommand(client *c) {
         return;
     }
 
-    if (c->argc == 2 && !strcasecmp(c->argv[1]->ptr, "help")) {
+    if (c->argc == 2 && !strcasecmp(objectGetVal(c->argv[1]), "help")) {
         clusterCommandHelp(c);
-    } else if (!strcasecmp(c->argv[1]->ptr, "nodes") && c->argc == 2) {
+    } else if (!strcasecmp(objectGetVal(c->argv[1]), "nodes") && c->argc == 2) {
         /* CLUSTER NODES */
         /* Report TLS ports to TLS client, and report non-TLS port to non-TLS client. */
         sds nodes = clusterGenNodesDescription(c, 0, shouldReturnTlsInfo());
         addReplyVerbatim(c, nodes, sdslen(nodes), "txt");
         sdsfree(nodes);
-    } else if (!strcasecmp(c->argv[1]->ptr, "myid") && c->argc == 2) {
+    } else if (!strcasecmp(objectGetVal(c->argv[1]), "myid") && c->argc == 2) {
         /* CLUSTER MYID */
         clusterCommandMyId(c);
-    } else if (!strcasecmp(c->argv[1]->ptr, "myshardid") && c->argc == 2) {
+    } else if (!strcasecmp(objectGetVal(c->argv[1]), "myshardid") && c->argc == 2) {
         /* CLUSTER MYSHARDID */
         clusterCommandMyShardId(c);
-    } else if (!strcasecmp(c->argv[1]->ptr, "slots") && c->argc == 2) {
+    } else if (!strcasecmp(objectGetVal(c->argv[1]), "slots") && c->argc == 2) {
         /* CLUSTER SLOTS */
         clusterCommandSlots(c);
-    } else if (!strcasecmp(c->argv[1]->ptr, "shards") && c->argc == 2) {
+    } else if (!strcasecmp(objectGetVal(c->argv[1]), "shards") && c->argc == 2) {
         /* CLUSTER SHARDS */
         clusterCommandShards(c);
-    } else if (!strcasecmp(c->argv[1]->ptr, "info") && c->argc == 2) {
+    } else if (!strcasecmp(objectGetVal(c->argv[1]), "info") && c->argc == 2) {
         /* CLUSTER INFO */
 
         sds info = genClusterInfoString(sdsempty());
@@ -905,12 +905,12 @@ void clusterCommand(client *c) {
         /* Produce the reply protocol. */
         addReplyVerbatim(c, info, sdslen(info), "txt");
         sdsfree(info);
-    } else if (!strcasecmp(c->argv[1]->ptr, "keyslot") && c->argc == 3) {
+    } else if (!strcasecmp(objectGetVal(c->argv[1]), "keyslot") && c->argc == 3) {
         /* CLUSTER KEYSLOT <key> */
-        sds key = c->argv[2]->ptr;
+        sds key = objectGetVal(c->argv[2]);
 
         addReplyLongLong(c, keyHashSlot(key, sdslen(key)));
-    } else if (!strcasecmp(c->argv[1]->ptr, "countkeysinslot") && c->argc == 3) {
+    } else if (!strcasecmp(objectGetVal(c->argv[1]), "countkeysinslot") && c->argc == 3) {
         /* CLUSTER COUNTKEYSINSLOT <slot> */
         long long slot;
 
@@ -920,7 +920,7 @@ void clusterCommand(client *c) {
             return;
         }
         addReplyLongLong(c, countKeysInSlotForDb(slot, c->db));
-    } else if (!strcasecmp(c->argv[1]->ptr, "getkeysinslot") && c->argc == 4) {
+    } else if (!strcasecmp(objectGetVal(c->argv[1]), "getkeysinslot") && c->argc == 4) {
         /* CLUSTER GETKEYSINSLOT <slot> <count> */
         long long maxkeys, slot;
 
@@ -944,14 +944,14 @@ void clusterCommand(client *c) {
             addReplyBulkCBuffer(c, sdskey, sdslen(sdskey));
         }
         kvstoreReleaseHashtableIterator(kvs_di);
-    } else if ((!strcasecmp(c->argv[1]->ptr, "slaves") || !strcasecmp(c->argv[1]->ptr, "replicas")) && c->argc == 3) {
+    } else if ((!strcasecmp(objectGetVal(c->argv[1]), "slaves") || !strcasecmp(objectGetVal(c->argv[1]), "replicas")) && c->argc == 3) {
         /* CLUSTER REPLICAS <NODE ID> */
-        clusterNode *n = clusterLookupNode(c->argv[2]->ptr, sdslen(c->argv[2]->ptr));
+        clusterNode *n = clusterLookupNode(objectGetVal(c->argv[2]), sdslen(objectGetVal(c->argv[2])));
         int j;
 
         /* Lookup the specified node in our table. */
         if (!n) {
-            addReplyErrorFormat(c, "Unknown node %s", (char *)c->argv[2]->ptr);
+            addReplyErrorFormat(c, "Unknown node %s", (char *)objectGetVal(c->argv[2]));
             return;
         }
 
@@ -985,7 +985,7 @@ int clusterSlotByCommand(struct serverCommand *cmd, robj **argv, int argc, int *
     int slot = -1;
     if (numkeys == 0) *read_flags |= READ_FLAGS_NO_KEYS;
     for (int i = 0; i < numkeys; i++) {
-        sds key = argv[result.keys[i].pos]->ptr;
+        sds key = objectGetVal(argv[result.keys[i].pos]);
         int keyslot = keyHashSlot(key, sdslen(key));
         if (slot == -1) {
             slot = keyslot;
@@ -1201,7 +1201,7 @@ clusterNode *getNodeByQuery(client *c, int *error_code) {
              * Allowing cross-DB COPY is possible, but it would require looking up the second key in the target DB.
              * The command should only be allowed if the key exists. We may revisit this decision in the future. */
             if (mcmd->proc == copyCommand &&
-                margc >= 4 && !strcasecmp(margv[3]->ptr, "db")) {
+                margc >= 4 && !strcasecmp(objectGetVal(margv[3]), "db")) {
                 long long value;
                 if (getLongLongFromObject(margv[4], &value) != C_OK || value != currentDb->id) {
                     if (error_code) *error_code = CLUSTER_REDIR_UNSTABLE;
@@ -1371,7 +1371,7 @@ int clusterRedirectBlockedClientIfNeeded(client *c) {
         di = dictGetIterator(c->bstate->keys);
         if ((de = dictNext(di)) != NULL) {
             robj *key = dictGetKey(de);
-            int slot = keyHashSlot((char *)key->ptr, sdslen(key->ptr));
+            int slot = keyHashSlot((char *)objectGetVal(key), sdslen(objectGetVal(key)));
             serverAssert(slot == c->slot);
             clusterNode *node = getNodeBySlot(slot);
 
@@ -1616,9 +1616,9 @@ void clusterCommandFlushslot(client *c) {
     int lazy = server.lazyfree_lazy_user_flush;
     if ((slot = getSlotOrReply(c, c->argv[2])) == -1) return;
     if (c->argc == 4) {
-        if (!strcasecmp(c->argv[3]->ptr, "async")) {
+        if (!strcasecmp(objectGetVal(c->argv[3]), "async")) {
             lazy = 1;
-        } else if (!strcasecmp(c->argv[3]->ptr, "sync")) {
+        } else if (!strcasecmp(objectGetVal(c->argv[3]), "sync")) {
             lazy = 0;
         } else {
             addReplyErrorObject(c, shared.syntaxerr);

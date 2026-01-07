@@ -252,7 +252,7 @@ void computeDatasetProfile(int dbid, robj *keyobj, robj *o, long long expiretime
 
     rdbStats *stats = rdbstate.stats[o->type + dbid * OBJ_TYPE_MAX];
 
-    stats->all_key_size += sdslen(keyobj->ptr);
+    stats->all_key_size += sdslen(objectGetVal(keyobj));
     stats->keys++;
 
     /* Check if the key already expired. */
@@ -285,7 +285,7 @@ void computeDatasetProfile(int dbid, robj *keyobj, robj *o, long long expiretime
         statsRecordCount(setTypeSize(o), stats);
     } else if (o->type == OBJ_ZSET) {
         if (o->encoding == OBJ_ENCODING_LISTPACK) {
-            unsigned char *zl = o->ptr;
+            unsigned char *zl = objectGetVal(o);
             unsigned char *eptr, *sptr;
             unsigned char *vstr;
             unsigned int vlen;
@@ -315,9 +315,9 @@ void computeDatasetProfile(int dbid, robj *keyobj, robj *o, long long expiretime
                 statsRecordElementSize(eleLen, 1, stats);
                 zzlNext(zl, &eptr, &sptr);
             }
-            statsRecordCount(lpLength(o->ptr), stats);
+            statsRecordCount(lpLength(objectGetVal(o)), stats);
         } else if (o->encoding == OBJ_ENCODING_SKIPLIST) {
-            zset *zs = o->ptr;
+            zset *zs = objectGetVal(o);
             hashtableIterator iter;
             hashtableInitIterator(&iter, zs->ht, 0);
 
@@ -357,7 +357,7 @@ void computeDatasetProfile(int dbid, robj *keyobj, robj *o, long long expiretime
         statsRecordCount(hashTypeLength(o), stats);
     } else if (o->type == OBJ_STREAM) {
         streamIterator si;
-        streamIteratorStart(&si, o->ptr, NULL, NULL, 0);
+        streamIteratorStart(&si, objectGetVal(o), NULL, NULL, 0);
         streamID id;
         int64_t numfields;
 
@@ -524,7 +524,7 @@ void rdbCheckError(const char *fmt, ...) {
     printf("--- RDB ERROR DETECTED ---\n");
     printf("[offset %llu] %s\n", (unsigned long long)(rdbstate.rio ? rdbstate.rio->processed_bytes : 0), msg);
     printf("[additional info] While doing: %s\n", rdb_check_doing_string[rdbstate.doing]);
-    if (rdbstate.key) printf("[additional info] Reading key '%s'\n", (char *)rdbstate.key->ptr);
+    if (rdbstate.key) printf("[additional info] Reading key '%s'\n", (char *)objectGetVal(rdbstate.key));
     if (rdbstate.key_type != -1)
         printf("[additional info] Reading type %d (%s)\n", rdbstate.key_type,
                ((unsigned)rdbstate.key_type < sizeof(rdb_type_string) / sizeof(char *))
@@ -725,11 +725,11 @@ int redis_check_rdb(char *rdbfilename, FILE *fp) {
                 decrRefCount(auxkey);
                 goto eoferr;
             }
-            if (!strcasecmp(auxkey->ptr, "lua")) {
+            if (!strcasecmp(objectGetVal(auxkey), "lua")) {
                 /* In older version before 7.0, we may save lua scripts in a replication RDB. */
                 rdbstate.lua_scripts++;
             }
-            rdbCheckInfo("AUX FIELD %s = '%s'", (char *)auxkey->ptr, (char *)auxval->ptr);
+            rdbCheckInfo("AUX FIELD %s = '%s'", (char *)objectGetVal(auxkey), (char *)objectGetVal(auxval));
             decrRefCount(auxkey);
             decrRefCount(auxval);
             continue; /* Read type again. */
@@ -788,7 +788,7 @@ int redis_check_rdb(char *rdbfilename, FILE *fp) {
         rdbstate.keys++;
         /* Read value */
         rdbstate.doing = RDB_CHECK_DOING_READ_OBJECT_VALUE;
-        if ((val = rdbLoadObject(type, &rdb, key->ptr, selected_dbid, NULL)) == NULL) goto eoferr;
+        if ((val = rdbLoadObject(type, &rdb, objectGetVal(key), selected_dbid, NULL)) == NULL) goto eoferr;
         if (rdbCheckStats) {
             int max_stats_num = (rdbstate.databases + 1) * OBJ_TYPE_MAX;
             if (max_stats_num > rdbstate.stats_num) {

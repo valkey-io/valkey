@@ -3767,7 +3767,7 @@ void call(client *c, int flags) {
     struct ClientFlags client_old_flags = c->flag;
 
     struct serverCommand *real_cmd = c->realcmd;
-    preCall();
+    beforeCommandTrackReplOffset();
     client *prev_client = server.executing_client;
     server.executing_client = c;
 
@@ -3967,7 +3967,7 @@ void call(client *c, int flags) {
     /* Do some maintenance job and cleanup */
     // TODO: should blocking postCall could be moved into afterCommand?
     afterCommand(c);
-    postCall(c);
+    afterCommandTrackReplOffset(c);
 
     /* Remember the replication offset of the client, right after its last
      * command that resulted in propagation. */

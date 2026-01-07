@@ -401,6 +401,7 @@ void blockClientOnReplOffset(struct client *c, long long blockingReplOffset) {
             listAddNodeTail(server.durability.clients_waiting_replica_ack,c);
             c->clientDurabilityInfo.durable_blocked_client = 1;
         }
+        replicationRequestAckFromReplicas();
     }
 
     // Now we have processed the client blocking information and tracked it,

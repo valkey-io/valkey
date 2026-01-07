@@ -565,7 +565,7 @@ void handleUncommittedKeyForClient(client *c, robj *key, serverDb *db) {
     } else {
         // Otherwise, the key is updated outside of a transaction or a script, simply mark the key
         // dirty at the current primary_repl_offset
-        addUncommittedKey(key->ptr, server.primary_repl_offset, db->uncommitted_keys);
+        addUncommittedKey(objectGetVal(key), server.primary_repl_offset, db->uncommitted_keys);
     }
 }
 
@@ -668,7 +668,7 @@ static int isSingleCommandAccessingUncommittedKeys(serverDb *db, struct serverCo
     keyReference *keys = keysResult.keys;
 
     for (int i = 0; i < numkeys; i++) {
-        sds keystr = argv[keys[i].pos]->ptr;
+        sds keystr = objectGetVal(argv[keys[i].pos]);
         // Check if we are trying to access an uncommitted key
         void *result;
         if (raxFind(db->uncommitted_keys, (unsigned char*)keystr, sdslen(keystr), &result)) {
@@ -782,7 +782,7 @@ static long long getSingleCommandBlockingOffsetForNonReplicatingCommand(client *
         keyReference *keys = result.keys;
 
         for (int i = 0; i < numkeys; i++) {
-            sds keystr = c->argv[keys[i].pos]->ptr;
+            sds keystr = objectGetVal(c->argv[keys[i].pos]);
             // If we try to access an uncommitted key, then block the client
             // until all prior updates on this key have been acknowledged.
             // So here we essentially need to track the biggest offset amongst

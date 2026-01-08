@@ -368,7 +368,7 @@ client *createClient(connection *conn) {
     c->io_last_written.buf = NULL;
     c->io_last_written.bufpos = 0;
     c->io_last_written.data_len = 0;
-    
+
     // init durability info like
     // key blocking on primary
     // TODO: this probably doesn't need to be a separate function
@@ -1692,7 +1692,7 @@ int clientHasPendingReplies(client *c) {
         // after the current position that valkey has written up to in the COB.
         const blockedResponse *n = listNodeValue(listFirst(c->clientDurabilityInfo.blocked_responses));
         if ((c->bufpos && n->disallowed_reply_block == NULL) ||
-             (c->bufpos == 0 && n->disallowed_reply_block != NULL && listFirst(c->reply) == n->disallowed_reply_block)) {
+            (c->bufpos == 0 && n->disallowed_reply_block != NULL && listFirst(c->reply) == n->disallowed_reply_block)) {
             // Both positions are pointing both at the initial 16KB buffer or the
             // first reply block, compare the sentlen with the last allowed byte offset
             return c->io_last_written.data_len < n->disallowed_byte_offset;

@@ -48,5 +48,4 @@ typedef struct commandlogEntry {
 
 /* Exported API */
 void commandlogInit(void);
-
 #endif /* __COMMANDLOG_H__ */

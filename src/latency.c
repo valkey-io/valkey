@@ -72,6 +72,7 @@ void latencyMonitorInit(void) {
     server.latency_events = dictCreate(&latencyTimeSeriesDictType);
 }
 
+
 /* Add the specified sample to the specified time series "event".
  * This function is usually called via latencyAddSampleIfNeeded(), that
  * is a macro that only adds the sample if the latency is above

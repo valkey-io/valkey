@@ -601,6 +601,14 @@ void resetDbExpiryState(serverDb *db) {
     memset(db->expiry, 0, sizeof(db->expiry));
 }
 
+/* Free reply duration tracking resources for a database */
+void freeDatabaseReplyDuration(serverDb *db) {
+    if (db->reply_duration) {
+        raxFree(db->reply_duration);
+        db->reply_duration = NULL;
+    }
+}
+
 /* Remove all keys from the database(s) structure. The dbarray argument
  * may not be the server main DBs (could be a temporary DB).
  *
@@ -629,6 +637,19 @@ long long emptyDbStructure(serverDb **dbarray, int dbnum, int async, void(callba
             kvstoreEmpty(dbarray[j]->expires, callback);
             kvstoreEmpty(dbarray[j]->keys_with_volatile_items, callback);
         }
+        
+        /* Free uncommitted_keys rax if it exists */
+        if (dbarray[j]->uncommitted_keys != NULL) {
+            /* Stop any ongoing scan before freeing */
+            if (dbarray[j]->scan_in_progress) {
+                raxStop(&dbarray[j]->next_scan_iter);
+                dbarray[j]->scan_in_progress = 0;
+            }
+            raxFree(dbarray[j]->uncommitted_keys);
+            dbarray[j]->uncommitted_keys = raxNew();
+            dbarray[j]->dirty_repl_offset = -1;
+        }
+        
         /* Because all keys of database are removed, reset average ttl. */
         resetDbExpiryState(dbarray[j]);
     }
@@ -716,6 +737,18 @@ void discardTempDb(serverDb **tempDb) {
             dictRelease(tempDb[i]->blocking_keys_unblock_on_nokey);
             dictRelease(tempDb[i]->ready_keys);
             dictRelease(tempDb[i]->watched_keys);
+            
+            /* Free uncommitted_keys rax if it exists */
+            if (tempDb[i]->uncommitted_keys != NULL) {
+                /* Stop any ongoing scan before freeing */
+                if (tempDb[i]->scan_in_progress) {
+                    raxStop(&tempDb[i]->next_scan_iter);
+                    tempDb[i]->scan_in_progress = 0;
+                }
+                raxFree(tempDb[i]->uncommitted_keys);
+                tempDb[i]->uncommitted_keys = NULL;
+            }
+            
             zfree(tempDb[i]);
             tempDb[i] = NULL;
         }

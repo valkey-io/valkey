@@ -1,6 +1,7 @@
 #include "reply_blocking.h"
 #include "expire.h"
 #include "server.h"
+#include "zmalloc.h"
 #include <assert.h>
 #include <math.h>
 
@@ -41,9 +42,7 @@ static long long getSingleCommandBlockingOffsetForConsistentWrites(struct client
  * return       1 if durability is enabled, 0 otherwise.
  */
 int isDurabilityEnabled(void) {
-    // should this have its own flag?
-    // or general 'durability flag'
-    return true;
+    return server.durability.sync_replication_enabled;
 }
 
 int isPrimaryDurabilityEnabled(void) {
@@ -232,6 +231,15 @@ static int unblockClientWaitingReplicaAck(struct client *c) {
     return 0;
 }
 
+/* Add a free function for blockedResponse entries */
+static void blockedResponseFree(void *value) {
+    blockedResponse *br = (blockedResponse*)value;
+    /* If the blocked response ever contains dynamically allocated fields,
+       free them here.  For now the structure only holds pointers owned
+       elsewhere, so we simply free the structure itself. */
+    zfree(br);
+}
+
 /**
  * Initialize the durable write client attributes when client is created
  */
@@ -241,7 +249,7 @@ void durableClientInit(struct client *c) {
     }
     if (c->clientDurabilityInfo.blocked_responses == NULL) {
         c->clientDurabilityInfo.blocked_responses = listCreate();
-        listSetFreeMethod(c->clientDurabilityInfo.blocked_responses, zfree);
+        listSetFreeMethod(c->clientDurabilityInfo.blocked_responses, blockedResponseFree);
         resetPreExecutionOffset(c);
         c->clientDurabilityInfo.current_command_repl_offset = -1;
     }
@@ -438,10 +446,9 @@ static void blockClientAndMonitorsOnReplOffset(struct client *c, long long block
 void unblockResponsesWithAckOffset(struct durable_t *durability, long long consensus_ack_offset) {
     serverLog(LOG_DEBUG, "unblocking clients for consensus offset %lld,", consensus_ack_offset);
     // Traverses through all the clients that wait for replica ack
-    listIter li, li_response;
-    listNode *ln, *ln_response;
+    listIter li;
+    listNode *ln;
     listRewind(durability->clients_waiting_replica_ack, &li);
-    blockedResponse *br = NULL;
     while ((ln = listNext(&li))) {
         client *c = ln->value;
 
@@ -450,16 +457,16 @@ void unblockResponsesWithAckOffset(struct durable_t *durability, long long conse
         // ACK'ed by the required number of replicas
         // If the max repl offset is acked, all blocked responses will be unblocked
         serverAssert(c->clientDurabilityInfo.blocked_responses != NULL);
-        listRewind(c->clientDurabilityInfo.blocked_responses, &li_response);
         bool unblocked_responses = false;
 
-        while ((ln_response = listNext(&li_response))) {
-            br = listNodeValue(ln_response);
+        // Keep deleting from the front while the first response can be unblocked
+        while (listLength(c->clientDurabilityInfo.blocked_responses) > 0) {
+            listNode *first = listFirst(c->clientDurabilityInfo.blocked_responses);
+            blockedResponse *br = listNodeValue(first);
+            
             if (br->primary_repl_offset <= consensus_ack_offset) {
                 unblockFirstResponse(c);
-                if (unblocked_responses == false) {
-                    unblocked_responses = true;
-                }
+                unblocked_responses = true;
             } else {
                 // As soon as we encounter a client response that has the
                 // required reply offset greater than the replicas ACK'ed offset,
@@ -738,11 +745,13 @@ static long long getSingleCommandBlockingOffsetForReplicatingCommand(client *c) 
         if (c->cmd->proc == moveCommand) {
             // TODO: support MOVE command: we need to mark the key as dirty in the destination DB
             // dont block for now
+            getKeysFreeResult(&result);
             return -1;
         } else if (c->cmd->proc == copyCommand) {
             //  TODO: handle copy command
             // handle the dirty keys in the destination db
             // dont block for now
+            getKeysFreeResult(&result);
             return -1;
         }
 
@@ -955,11 +964,39 @@ void postCommandExec(struct client *c) {
 
 /**
  * Function used to initialize the durability datastructures.
- * TODO: exit clean up?
  */
 void durableInit(void) {
     // Initialize synchronous replication
     server.durability.previous_acked_offset = -1;
     server.durability.curr_db_scan_idx = 0;
     server.durability.clients_waiting_replica_ack = listCreate();
+}
+
+/**
+ * Function used to cleanup the durability datastructures on server shutdown.
+ */
+void durableCleanup(void) {
+    serverLog(LL_DEBUG, "Cleanup reply blocking structures");
+    server.durability.replica_offsets_size = 0;
+    zfree(server.durability.replica_offsets);
+
+    if (server.durability.clients_waiting_replica_ack != NULL) {
+        listRelease(server.durability.clients_waiting_replica_ack);
+        server.durability.clients_waiting_replica_ack = NULL;
+    }
+
+     // Clear all the uncommitted keys map
+    for (int i = 0; i < server.dbnum; i++) {
+        serverDb *db = server.db[i];
+        if (db == NULL) continue;
+        raxFree(db->uncommitted_keys);
+        db->uncommitted_keys = NULL;
+        db->dirty_repl_offset = -1;
+        if(db->scan_in_progress) {
+            raxStop(&db->next_scan_iter);
+            db->scan_in_progress = 0;
+        }
+    }
+
+    server.durability.curr_db_scan_idx = 0;  
 }

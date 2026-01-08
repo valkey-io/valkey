@@ -172,7 +172,7 @@ typedef struct ValkeyModuleStreamID {
 #define VALKEYMODULE_CTX_FLAGS_MULTI (1 << 1)
 /* The instance is a primary */
 #define VALKEYMODULE_CTX_FLAGS_PRIMARY (1 << 2)
-/* The instance is a replic */
+/* The instance is a replica */
 #define VALKEYMODULE_CTX_FLAGS_REPLICA (1 << 3)
 /* The instance is read-only (usually meaning it's a replica as well) */
 #define VALKEYMODULE_CTX_FLAGS_READONLY (1 << 4)
@@ -674,7 +674,8 @@ static const ValkeyModuleEvent ValkeyModuleEvent_ReplicationRoleChanged = {VALKE
 #define VALKEYMODULE_SUBEVENT_ATOMIC_SLOT_MIGRATION_EXPORT_COMPLETED 5
 #define _VALKEYMODULE_SUBEVENT_ATOMIC_SLOT_MIGRATION_NEXT 6
 
-/* ValkeyModuleClientInfo flags. */
+/* ValkeyModuleClientInfo flags. 
+ * Note: flags VALKEYMODULE_CLIENTINFO_FLAG_PRIMARY and below were added in Valkey 9.1 */
 #define VALKEYMODULE_CLIENTINFO_FLAG_SSL (1 << 0)
 #define VALKEYMODULE_CLIENTINFO_FLAG_PUBSUB (1 << 1)
 #define VALKEYMODULE_CLIENTINFO_FLAG_BLOCKED (1 << 2)

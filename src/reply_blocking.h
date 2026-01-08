@@ -28,7 +28,7 @@ typedef struct durable_t {
     unsigned int keys_cleanup_time_limit_ms;
     /* The current scanning database index, starting from 0 */
     int curr_db_scan_idx;
-    
+
     /* Number of replicas to ack for an update to be considered committed */
     long long num_replicas_to_ack;
 
@@ -59,10 +59,10 @@ typedef struct blockedResponse {
     // Pointer to the client's reply node where the blocked response starts.
     // NULL if the blocked response starts from the 16KB initial buffer
     // Here we don't take ownership of this pointer so we never
-    // release the memory pointed to by this block. 
+    // release the memory pointed to by this block.
     struct listNode *disallowed_reply_block;
     // The boundary in the reply buffer where the blocked response starts.
-    // We don't write data from this point onwards to the client socket 
+    // We don't write data from this point onwards to the client socket
     size_t disallowed_byte_offset;
     // The replication offset to wait for ACK from replicas
     long long primary_repl_offset;
@@ -87,11 +87,11 @@ typedef struct clientDurabilityInfo {
      * to record the boundaries of the COB. */
     preExecutionOffsetPosition offset;
 
-    // Replication offset to block this current command response 
+    // Replication offset to block this current command response
     long long current_command_repl_offset;
 
-    uint64_t durable_blocked_client: 1;    /* This is a durable blocked client that is waiting for the server to
-                                        * acknowledge the write of the command that caused it to be blocked. */
+    uint64_t durable_blocked_client : 1; /* This is a durable blocked client that is waiting for the server to
+                                          * acknowledge the write of the command that caused it to be blocked. */
 } clientDurableInfo;
 
 /**
@@ -120,11 +120,9 @@ int isDurabilityEnabled(void);
 void clearUncommittedKeysAcknowledged(void);
 // TODO:
 //  preReplyToBlockedClient
-// for streams and timeounts, when a blocked client is being unblocked 
+// for streams and timeounts, when a blocked client is being unblocked
 // before a reply is added, the command will not be reprocessed via processCommand()
 // we should hook this to get pre-execution offsets
-
-
 
 
 #endif /* DURABLE_WRITE_H */

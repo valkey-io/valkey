@@ -943,13 +943,13 @@ typedef struct serverDb {
         unsigned long cursor; /* Cursor of the active expire cycle. */
     } expiry[ACTIVE_EXPIRY_TYPE_COUNT];
 
-    /* fields related to dirty key tracking 
+    /* fields related to dirty key tracking
      * for consistent writes with durability */
     // TODO: move hashtable/references directly in the robj
-    rax *uncommitted_keys; /* Map of dirty keys to the offset required by replica acknowledgement */
+    rax *uncommitted_keys;       /* Map of dirty keys to the offset required by replica acknowledgement */
     long long dirty_repl_offset; /* Replication offset for a dirty DB */
     raxIterator next_scan_iter;  /* The next iterator for db scan */
-    int scan_in_progress;  /* Flag of showing whether db is in scan or not */
+    int scan_in_progress;        /* Flag of showing whether db is in scan or not */
 } serverDb;
 
 /* forward declaration for functions ctx */
@@ -1235,7 +1235,7 @@ typedef struct ClientFlags {
                                               or client::buf. */
     uint64_t keyspace_notified : 1;        /* Indicates that a keyspace notification was triggered during the execution of the
                                               current command. */
-    uint64_t durable_blocked_client: 1;    /* This is a durable blocked client that is waiting for the server to
+    uint64_t durable_blocked_client : 1;   /* This is a durable blocked client that is waiting for the server to
                                             * acknowledge the write of the command that caused it to be blocked. */
 } ClientFlags;
 typedef struct ClientPubSubData {
@@ -3002,7 +3002,7 @@ int processIOThreadsWriteDone(void);
 void releaseReplyReferences(client *c);
 void resetLastWrittenBuf(client *c);
 
-//TODO:jules move this elsewhere
+// TODO:jules move this elsewhere
 int getIntFromObject(robj *o, int *target);
 
 int parseExtendedCommandArgumentsOrReply(client *c, int *flags, int *unit, robj **expire, robj **compare_val, int command_type, int max_args);

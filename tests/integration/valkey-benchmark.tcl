@@ -225,7 +225,29 @@ tags {"benchmark network external:skip logreqres:skip"} {
 
         test {benchmark: dataset XML with field placeholders} {
             # Create test XML dataset matching Wikipedia structure
-            set xml_data "<doc><title>XML Title 1</title><abstract>XML Abstract 1</abstract><url>http://example1.com</url><links><sublink><anchor>test1</anchor><link>http://test1.com</link></sublink></links></doc>\n<doc><title>XML Title 2</title><abstract>XML Abstract 2</abstract><url>http://example2.com</url><links><sublink><anchor>test2</anchor><link>http://test2.com</link></sublink></links></doc>"
+            set xml_data "
+            <doc>
+                <title>XML Title 1</title>
+                <abstract>XML Abstract 1</abstract>
+                <url>http://example1.com</url>
+                <links>
+                    <sublink>
+                        <anchor>test1</anchor>
+                        <link>http://test1.com</link>
+                    </sublink>
+                </links>
+            </doc>
+            <doc>
+                <title>XML Title 2</title>
+                <abstract>XML Abstract 2</abstract>
+                <url>http://example2.com</url>
+                <links>
+                    <sublink>
+                        <anchor>test2</anchor>
+                        <link>http://test2.com</link>
+                    </sublink>
+                </links>
+            </doc>"
             set xml_file [tmpfile "dataset.xml"]
             set fd [open $xml_file w]
             puts $fd $xml_data

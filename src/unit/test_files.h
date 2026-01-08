@@ -9,6 +9,9 @@ typedef struct unitTest {
 int test_popcount(int argc, char **argv, int flags);
 int test_crc64(int argc, char **argv, int flags);
 int test_crc64combine(int argc, char **argv, int flags);
+int test_field_mapping_optimization(int argc, char **argv, int flags);
+int test_csv_quoted_fields(int argc, char **argv, int flags);
+int test_field_count_correctness(int argc, char **argv, int flags);
 int test_dictCreate(int argc, char **argv, int flags);
 int test_dictAdd16Keys(int argc, char **argv, int flags);
 int test_dictDisableResize(int argc, char **argv, int flags);
@@ -258,6 +261,7 @@ int test_zmallocAllocZeroByteAndFree(int argc, char **argv, int flags);
 unitTest __test_bitops_c[] = {{"test_popcount", test_popcount}, {NULL, NULL}};
 unitTest __test_crc64_c[] = {{"test_crc64", test_crc64}, {NULL, NULL}};
 unitTest __test_crc64combine_c[] = {{"test_crc64combine", test_crc64combine}, {NULL, NULL}};
+unitTest __test_dataset_c[] = {{"test_field_mapping_optimization", test_field_mapping_optimization}, {"test_csv_quoted_fields", test_csv_quoted_fields}, {"test_field_count_correctness", test_field_count_correctness}, {NULL, NULL}};
 unitTest __test_dict_c[] = {{"test_dictCreate", test_dictCreate}, {"test_dictAdd16Keys", test_dictAdd16Keys}, {"test_dictDisableResize", test_dictDisableResize}, {"test_dictAddOneKeyTriggerResize", test_dictAddOneKeyTriggerResize}, {"test_dictDeleteKeys", test_dictDeleteKeys}, {"test_dictDeleteOneKeyTriggerResize", test_dictDeleteOneKeyTriggerResize}, {"test_dictEmptyDirAdd128Keys", test_dictEmptyDirAdd128Keys}, {"test_dictDisableResizeReduceTo3", test_dictDisableResizeReduceTo3}, {"test_dictDeleteOneKeyTriggerResizeAgain", test_dictDeleteOneKeyTriggerResizeAgain}, {"test_dictBenchmark", test_dictBenchmark}, {NULL, NULL}};
 unitTest __test_endianconv_c[] = {{"test_endianconv", test_endianconv}, {NULL, NULL}};
 unitTest __test_entry_c[] = {{"test_entryCreate", test_entryCreate}, {"test_entryUpdate", test_entryUpdate}, {"test_entryHasexpiry_entrySetExpiry", test_entryHasexpiry_entrySetExpiry}, {"test_entryIsExpired", test_entryIsExpired}, {"test_entryMemUsage_entrySetExpiry_entrySetValue", test_entryMemUsage_entrySetExpiry_entrySetValue}, {NULL, NULL}};
@@ -287,6 +291,7 @@ struct unitTestSuite {
     {"test_bitops.c", __test_bitops_c},
     {"test_crc64.c", __test_crc64_c},
     {"test_crc64combine.c", __test_crc64combine_c},
+    {"test_dataset.c", __test_dataset_c},
     {"test_dict.c", __test_dict_c},
     {"test_endianconv.c", __test_endianconv_c},
     {"test_entry.c", __test_entry_c},

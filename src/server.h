@@ -1647,6 +1647,7 @@ typedef struct serverTLSContextConfig {
     int session_caching;
     int session_cache_size;
     int session_cache_timeout;
+    int auto_reload_interval;
 } serverTLSContextConfig;
 
 /*-----------------------------------------------------------------------------
@@ -4202,6 +4203,13 @@ void debugPauseProcess(void);
 #define serverDebugMark() printf("-- MARK %s:%d --\n", __FILE__, __LINE__)
 
 int iAmPrimary(void);
+
+/* TLS reload functions - only available when TLS is built-in, not as a module */
+#if defined(USE_OPENSSL) && USE_OPENSSL == 1 /* BUILD_YES */
+void tlsReconfigureIfNeeded(void);
+void tlsApplyPendingReload(void);
+void tlsConfigureAsync(void);
+#endif
 
 #define STRINGIFY_(x) #x
 #define STRINGIFY(x) STRINGIFY_(x)

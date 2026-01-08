@@ -33,6 +33,7 @@
 #include "connhelpers.h"
 #include "adlist.h"
 #include "io_threads.h"
+#include "bio.h"
 
 #if defined(USE_OPENSSL) &&                    \
     ((USE_OPENSSL == 1 /* BUILD_YES */) ||     \
@@ -48,6 +49,7 @@
 #if OPENSSL_VERSION_NUMBER >= 0x30000000L
 #include <openssl/decoder.h>
 #endif
+#include <sys/stat.h>
 #include <sys/uio.h>
 #include <arpa/inet.h>
 
@@ -284,21 +286,15 @@ error:
     return NULL;
 }
 
-/* Attempt to configure/reconfigure TLS. This operation is atomic and will
- * leave the SSL_CTX unchanged if fails.
- * @priv: config of serverTLSContextConfig.
- * @reconfigure: if true, ignore the previous configure; if false, only
- *               configure from @ctx_config if valkey_tls_ctx is NULL.
- */
-static int tlsConfigure(void *priv, int reconfigure) {
-    serverTLSContextConfig *ctx_config = (serverTLSContextConfig *)priv;
+/* Helper function to create SSL contexts from config.
+ * This does the CPU-intensive work of parsing certificates and creating SSL contexts.
+ * Returns C_OK on success, C_ERR on failure.
+ * On success, *ctx and *client_ctx are set (client_ctx may be NULL).
+ * On failure, both are set to NULL. */
+static int tlsCreateContexts(serverTLSContextConfig *ctx_config, SSL_CTX **out_ctx, SSL_CTX **out_client_ctx) {
     char errbuf[256];
     SSL_CTX *ctx = NULL;
     SSL_CTX *client_ctx = NULL;
-
-    if (!reconfigure && valkey_tls_ctx) {
-        return C_OK;
-    }
 
     if (!ctx_config->cert_file) {
         serverLog(LL_WARNING, "No tls-cert-file configured!");
@@ -406,18 +402,238 @@ static int tlsConfigure(void *priv, int reconfigure) {
         if (!client_ctx) goto error;
     }
 
-    SSL_CTX_free(valkey_tls_ctx);
-    SSL_CTX_free(valkey_tls_client_ctx);
-    valkey_tls_ctx = ctx;
-    valkey_tls_client_ctx = client_ctx;
-
+    *out_ctx = ctx;
+    *out_client_ctx = client_ctx;
     return C_OK;
 
 error:
     if (ctx) SSL_CTX_free(ctx);
     if (client_ctx) SSL_CTX_free(client_ctx);
+    *out_ctx = NULL;
+    *out_client_ctx = NULL;
     return C_ERR;
 }
+
+/* Last known TLS materials metadata to detect changes */
+static unsigned char last_cert_fingerprint[EVP_MAX_MD_SIZE] = {0};
+static unsigned int last_cert_fingerprint_len = 0;
+static unsigned char last_client_cert_fingerprint[EVP_MAX_MD_SIZE] = {0};
+static unsigned int last_client_cert_fingerprint_len = 0;
+static unsigned char last_ca_cert_fingerprint[EVP_MAX_MD_SIZE] = {0};
+static unsigned int last_ca_cert_fingerprint_len = 0;
+static ino_t last_ca_cert_dir_inode = 0;
+static time_t last_ca_cert_dir_mtime = 0;
+static ino_t last_key_file_inode = 0;
+static time_t last_key_file_mtime = 0;
+static ino_t last_client_key_file_inode = 0;
+static time_t last_client_key_file_mtime = 0;
+
+/* Compute certificate fingerprint from file. */
+static int getCertFingerprint(const char *cert_file, unsigned char *fingerprint, unsigned int *fingerprint_len) {
+    if (!cert_file) return C_ERR;
+
+    FILE *fp = fopen(cert_file, "r");
+    if (!fp) return C_ERR;
+
+    X509 *cert = PEM_read_X509(fp, NULL, NULL, NULL);
+    fclose(fp);
+    if (!cert) return C_ERR;
+
+    const EVP_MD *digest = EVP_sha256();
+    if (X509_digest(cert, digest, fingerprint, fingerprint_len) != 1) {
+        X509_free(cert);
+        return C_ERR;
+    }
+
+    X509_free(cert);
+    return C_OK;
+}
+
+/* Check if a single TLS cert file fingerprint changed and update cached value. */
+static int checkAndUpdateFingerprint(const char *file,
+                                     unsigned char *last_fingerprint,
+                                     unsigned int *last_len) {
+    unsigned char current[EVP_MAX_MD_SIZE];
+    unsigned int current_len;
+
+    if (!file) return 0;
+    if (getCertFingerprint(file, current, &current_len) != C_OK) return 0;
+
+    if (*last_len == 0 || *last_len != current_len || memcmp(last_fingerprint, current, current_len) != 0) {
+        memcpy(last_fingerprint, current, current_len);
+        *last_len = current_len;
+        return 1;
+    }
+    return 0;
+}
+
+/* Check if a file/directory stat changed and update cached inode/mtime. */
+static int checkAndUpdateStat(const char *path, ino_t *last_inode, time_t *last_mtime) {
+    if (!path) return 0;
+
+    struct stat st;
+    if (stat(path, &st) != 0) return 0;
+
+    if (*last_inode == 0 || *last_inode != st.st_ino || *last_mtime != st.st_mtime) {
+        *last_inode = st.st_ino;
+        *last_mtime = st.st_mtime;
+        return 1;
+    }
+    return 0;
+}
+
+/* Check if TLS materials have changed and update cached metadata. */
+static int tlsCheckMaterialsAndUpdateCache(serverTLSContextConfig *ctx_config) {
+    int changed = 0;
+
+    /* Certificate files: fingerprint-based detection */
+    if (checkAndUpdateFingerprint(ctx_config->cert_file, last_cert_fingerprint, &last_cert_fingerprint_len)) {
+        changed = 1;
+    }
+
+    if (checkAndUpdateFingerprint(ctx_config->client_cert_file, last_client_cert_fingerprint, &last_client_cert_fingerprint_len)) {
+        changed = 1;
+    }
+
+    if (checkAndUpdateFingerprint(ctx_config->ca_cert_file, last_ca_cert_fingerprint, &last_ca_cert_fingerprint_len)) {
+        changed = 1;
+    }
+
+    /* Remaining: inode + mtime */
+    if (checkAndUpdateStat(ctx_config->ca_cert_dir, &last_ca_cert_dir_inode, &last_ca_cert_dir_mtime)) {
+        changed = 1;
+    }
+
+    if (checkAndUpdateStat(ctx_config->key_file, &last_key_file_inode, &last_key_file_mtime)) {
+        changed = 1;
+    }
+
+    if (checkAndUpdateStat(ctx_config->client_key_file, &last_client_key_file_inode, &last_client_key_file_mtime)) {
+        changed = 1;
+    }
+
+    return changed;
+}
+
+/* TLS background reload state */
+static _Atomic long long lastTlsConfigureTime = 0;
+static SSL_CTX *pending_tls_ctx = NULL;
+static SSL_CTX *pending_tls_client_ctx = NULL;
+static _Atomic int tls_reload_pending = 0;
+
+/* Attempt to configure/reconfigure TLS. This operation is atomic and will
+ * leave the SSL_CTX unchanged if fails.
+ * @priv: config of serverTLSContextConfig.
+ * @reconfigure: if true, ignore the previous configure; if false, only
+ *               configure from @ctx_config if valkey_tls_ctx is NULL.
+ * @background: if true, do heavy work in background thread and store in pending;
+ *              if false, do work synchronously and swap immediately.
+ */
+static int tlsConfigure(void *priv, int reconfigure, int background) {
+    serverTLSContextConfig *ctx_config = (serverTLSContextConfig *)priv;
+    SSL_CTX *ctx = NULL;
+    SSL_CTX *client_ctx = NULL;
+
+    if (!reconfigure && valkey_tls_ctx) {
+        return C_OK;
+    }
+
+    if (reconfigure) {
+        serverLog(LL_DEBUG, background ? "Background TLS reconfiguration started" : "Reconfiguring TLS");
+    } else {
+        serverLog(LL_DEBUG, "Configuring TLS");
+    }
+
+    atomic_store_explicit(&lastTlsConfigureTime, server.ustime, memory_order_relaxed);
+
+    if (tlsCreateContexts(ctx_config, &ctx, &client_ctx) == C_ERR) {
+        if (background) {
+            serverLog(LL_WARNING, "Background TLS reload failed");
+        }
+        return C_ERR;
+    }
+
+    if (background) {
+        if (atomic_load_explicit(&tls_reload_pending, memory_order_relaxed)) {
+            SSL_CTX_free(ctx);
+            SSL_CTX_free(client_ctx);
+            serverLog(LL_DEBUG, "TLS reload already pending, discarding result");
+        } else {
+            pending_tls_ctx = ctx;
+            pending_tls_client_ctx = client_ctx;
+            atomic_store_explicit(&tls_reload_pending, 1, memory_order_release);
+            serverLog(LL_DEBUG, "Background TLS reload completed successfully");
+        }
+    } else {
+        SSL_CTX_free(valkey_tls_ctx);
+        SSL_CTX_free(valkey_tls_client_ctx);
+        valkey_tls_ctx = ctx;
+        valkey_tls_client_ctx = client_ctx;
+        (void)tlsCheckMaterialsAndUpdateCache(ctx_config);
+    }
+
+    return C_OK;
+}
+
+/* Synchronous TLS configuration - blocks until complete.
+ * Called from CONFIG SET commands and server initialization. */
+static int tlsConfigureSync(void *priv, int reconfigure) {
+    return tlsConfigure(priv, reconfigure, 0);
+}
+
+#if !defined(BUILD_TLS_MODULE) || BUILD_TLS_MODULE != 2
+/* Auto-reload functions are only available when TLS is built-in, not as a module. */
+
+/* Asynchronous TLS configuration - runs in background thread.
+ * Does CPU-intensive certificate loading without blocking main thread.
+ * The main thread will later call tlsApplyPendingReload() to swap in the new contexts. */
+void tlsConfigureAsync(void) {
+    tlsConfigure(&server.tls_ctx_config, 1, 1);
+}
+
+/* This function runs in the main thread and applies the TLS contexts
+ * that were prepared by the background thread. This is a quick operation
+ * that just swaps pointers and frees old contexts. */
+void tlsApplyPendingReload(void) {
+    if (!atomic_load_explicit(&tls_reload_pending, memory_order_acquire)) {
+        return;
+    }
+    SSL_CTX *old_ctx = valkey_tls_ctx;
+    SSL_CTX *old_client_ctx = valkey_tls_client_ctx;
+
+    valkey_tls_ctx = pending_tls_ctx;
+    valkey_tls_client_ctx = pending_tls_client_ctx;
+
+    pending_tls_ctx = NULL;
+    pending_tls_client_ctx = NULL;
+
+    SSL_CTX_free(old_ctx);
+    SSL_CTX_free(old_client_ctx);
+
+    atomic_store_explicit(&tls_reload_pending, 0, memory_order_release);
+    serverLog(LL_NOTICE, "TLS materials reloaded successfully");
+}
+
+/* Check if TLS materials need reloading and trigger background reload if needed. */
+void tlsReconfigureIfNeeded(void) {
+    long long lastConfigureTime = atomic_load_explicit(&lastTlsConfigureTime, memory_order_relaxed);
+    const long long configAgeMicros = server.ustime - lastConfigureTime;
+    const long long configAgeSeconds = (configAgeMicros / 1000) / 1000;
+    if (server.tls_ctx_config.auto_reload_interval == 0 ||
+        configAgeSeconds < server.tls_ctx_config.auto_reload_interval) {
+        return;
+    }
+
+    if (!tlsCheckMaterialsAndUpdateCache(&server.tls_ctx_config)) {
+        serverLog(LL_DEBUG, "TLS reload skipped: materials unchanged");
+        atomic_store_explicit(&lastTlsConfigureTime, server.ustime, memory_order_relaxed);
+        return;
+    }
+
+    serverLog(LL_NOTICE, "TLS materials changed, triggering background reload");
+    bioCreateTlsReloadJob();
+}
+#endif /* !BUILD_TLS_MODULE */
 
 static ConnectionType CT_TLS;
 
@@ -1223,7 +1439,7 @@ static ConnectionType CT_TLS = {
     /* connection type initialize & finalize & configure */
     .init = tlsInit,
     .cleanup = tlsCleanup,
-    .configure = tlsConfigure,
+    .configure = tlsConfigureSync,
 
     /* ae & accept & listen & error & address handler */
     .ae_handler = tlsEventHandler,

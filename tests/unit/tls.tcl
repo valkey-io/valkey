@@ -173,5 +173,134 @@ start_server {tags {"tls"}} {
 
             $s close
         }
+
+        test {TLS: Auto-reload detects changes} {
+            # Get current certificate files
+            set server_crt [lindex [r config get tls-cert-file] 1]
+            set server_key [lindex [r config get tls-key-file] 1]
+
+            # Save original certificates
+            set backup_crt "$server_crt.backup"
+            set backup_key "$server_key.backup"
+            file copy -force $server_crt $backup_crt
+            file copy -force $server_key $backup_key
+
+            # Enable auto-reload with 1 second interval for faster testing
+            r CONFIG SET tls-auto-reload-interval 1
+
+            # Verify initial connection works
+            set s [valkey_client]
+            assert_equal "PONG" [$s PING]
+            $s close
+
+            # Replace with different certificate
+            set valkey_crt [format "%s/tests/tls/valkey.crt" [pwd]]
+            set valkey_key [format "%s/tests/tls/valkey.key" [pwd]]
+            file copy -force $valkey_crt $server_crt
+            file copy -force $valkey_key $server_key
+
+            # Wait for auto-reload to trigger and verify connection works
+            wait_for_condition 50 100 {
+                [catch {
+                    set s [valkey_client]
+                    set result [$s PING]
+                    $s close
+                    expr {$result eq "PONG"}
+                } err] == 0
+            } else {
+                fail "Connection failed after certificate reload: $err"
+            }
+
+            # Restore original certificates
+            file copy -force $backup_crt $server_crt
+            file copy -force $backup_key $server_key
+            file delete $backup_crt $backup_key
+
+            # Wait for reload back to original and verify
+            wait_for_condition 50 100 {
+                [catch {
+                    set s [valkey_client]
+                    set result [$s PING]
+                    $s close
+                    expr {$result eq "PONG"}
+                } err] == 0
+            } else {
+                fail "Connection failed after restoring certificates: $err"
+            }
+
+            # Disable auto-reload
+            r CONFIG SET tls-auto-reload-interval 0
+        }
+
+        test {TLS: Auto-reload skips unchanged materials} {
+            # Enable auto-reload with 1 second interval
+            r CONFIG SET tls-auto-reload-interval 1
+
+            # Get server log file
+            set logfile [srv 0 stdout]
+            set size_before [file size $logfile]
+
+            # Wait for at least one reload check cycle
+            wait_for_condition 50 100 {
+                set fd [open $logfile r]
+                seek $fd $size_before
+                set new_logs [read $fd]
+                close $fd
+                [string match {*certificates unchanged*} $new_logs]
+            } else {
+                fail "Did not find 'certificates unchanged' log message"
+            }
+
+            # Disable auto-reload
+            r CONFIG SET tls-auto-reload-interval 0
+        }
+
+        test {TLS: Auto-reload interval validation} {
+            # Valid intervals
+            r CONFIG SET tls-auto-reload-interval 0
+            r CONFIG SET tls-auto-reload-interval 5
+            r CONFIG SET tls-auto-reload-interval 3600
+
+            # Invalid intervals should fail
+            catch {r CONFIG SET tls-auto-reload-interval -1} e
+            assert_match {*invalid*} $e
+
+            # Reset to disabled
+            r CONFIG SET tls-auto-reload-interval 0
+        }
+
+        test {TLS: Auto-reload with CA cert directory} {
+            # Get current CA cert directory
+            set ca_cert_dir [lindex [r config get tls-ca-cert-dir] 1]
+
+            if {$ca_cert_dir ne ""} {
+                # Enable auto-reload with 1 second interval
+                r CONFIG SET tls-auto-reload-interval 1
+
+                # Touch a file in the directory to trigger change detection
+                set test_file "$ca_cert_dir/test_marker"
+                set fd [open $test_file w]
+                puts $fd "test"
+                close $fd
+
+                # Wait for reload and verify connection works
+                wait_for_condition 50 100 {
+                    [catch {
+                        set s [valkey_client]
+                        set result [$s PING]
+                        $s close
+                        expr {$result eq "PONG"}
+                    } err] == 0
+                } else {
+                    fail "Connection failed after CA cert directory change: $err"
+                }
+
+                # Clean up
+                file delete $test_file
+
+                # Disable auto-reload
+                r CONFIG SET tls-auto-reload-interval 0
+            }
+        }
     }
 }

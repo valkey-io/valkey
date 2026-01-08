@@ -9,6 +9,7 @@
         "get_keys_function": "zunionInterDiffStoreGetKeys",
         "command_flags": [
             "WRITE",
+            "WRITE_FIRSTKEY_ONLY",
             "DENYOOM"
         ],
         "acl_categories": [

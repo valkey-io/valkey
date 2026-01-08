@@ -3893,7 +3893,9 @@ int modulePopulateReplicationInfoStructure(void *ri, int structver) {
  *     VALKEYMODULE_CLIENTINFO_FLAG_UNIXSOCKET   Client using unix domain socket.
  *     VALKEYMODULE_CLIENTINFO_FLAG_MULTI        Client in MULTI state.
  *     VALKEYMODULE_CLIENTINFO_FLAG_READONLY     Client in ReadOnly state.
- *     VALKEYMODULE_CLIENTINFO_FLAG_PRIMARY      Client is a primary.
+ *     VALKEYMODULE_CLIENTINFO_FLAG_PRIMARY      Client is a fake client used
+ *                                               for applying replicated
+ *                                               commands from the primary.
  *     VALKEYMODULE_CLIENTINFO_FLAG_MONITOR      Client in monitor mode.
  *     VALKEYMODULE_CLIENTINFO_FLAG_MODULE       Client is a module.
  *     VALKEYMODULE_CLIENTINFO_FLAG_AUTHENTICATED Client has been authenticated.

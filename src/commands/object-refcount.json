@@ -11,7 +11,9 @@
             "READONLY"
         ],
         "acl_categories": [
-            "KEYSPACE"
+            "KEYSPACE",
+            "READ",
+            "SLOW"
         ],
         "command_tips": [
             "NONDETERMINISTIC_OUTPUT"

@@ -44,6 +44,11 @@
                 "name": "event",
                 "type": "string"
             }
+        ],
+        "acl_categories": [
+            "ADMIN",
+            "DANGEROUS",
+            "SLOW"
         ]
     }
 }

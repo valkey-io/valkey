@@ -1280,11 +1280,11 @@ sds catAppendOnlyGenericCommand(sds dst, int argc, robj **argv) {
     for (j = 0; j < argc; j++) {
         o = getDecodedObject(argv[j]);
         buf[0] = '$';
-        len = 1 + ll2string(buf + 1, sizeof(buf) - 1, sdslen(o->ptr));
+        len = 1 + ll2string(buf + 1, sizeof(buf) - 1, sdslen(objectGetVal(o)));
         buf[len++] = '\r';
         buf[len++] = '\n';
         dst = sdscatlen(dst, buf, len);
-        dst = sdscatlen(dst, o->ptr, sdslen(o->ptr));
+        dst = sdscatlen(dst, objectGetVal(o), sdslen(objectGetVal(o)));
         dst = sdscatlen(dst, "\r\n", 2);
         decrRefCount(o);
     }
@@ -1452,14 +1452,7 @@ int loadSingleAppendOnlyFile(char *filename) {
 
         if (fseek(fp, 0, SEEK_SET) == -1) goto readerr;
         rioInitWithFile(&rdb, fp);
-        rdbSaveInfo rsi = RDB_SAVE_INFO_INIT;
-        int rdb_flags = RDBFLAGS_AOF_PREAMBLE;
-        int rsi_is_valid = 0;
-        if (iAmPrimary()) {
-            if (server.repl_backlog == NULL) createReplicationBacklog();
-            rdb_flags |= RDBFLAGS_FEED_REPL;
-        }
-        if (rdbLoadRio(&rdb, rdb_flags, &rsi) != RDB_OK) {
+        if (rdbLoadRio(&rdb, RDBFLAGS_AOF_PREAMBLE, NULL) != RDB_OK) {
             if (old_style)
                 serverLog(LL_WARNING, "Error reading the RDB preamble of the AOF file %s, AOF loading aborted",
                           filename);
@@ -1469,15 +1462,10 @@ int loadSingleAppendOnlyFile(char *filename) {
             ret = AOF_FAILED;
             goto cleanup;
         } else {
-            /* Restore the replication ID / offset from the RDB file. */
-            rsi_is_valid = rdbRestoreOffsetFromSaveInfo(&rsi, true);
             loadingAbsProgress(ftello(fp));
             last_progress_report_size = ftello(fp);
             if (old_style) serverLog(LL_NOTICE, "Reading the remaining AOF tail...");
         }
-        /* If the AOF didn't contain replication info, it's not possible to
-         * support partial resync, so we can free the backlog to save memory. */
-        if (!rsi_is_valid && server.repl_backlog && listLength(server.replicas) == 0) freeReplicationBacklog();
     }
 
     /* Read the actual AOF file, in REPL format, command by command. */
@@ -1790,9 +1778,9 @@ int rioWriteBulkObject(rio *r, robj *obj) {
     /* Avoid using getDecodedObject to help copy-on-write (we are often
      * in a child process when this function is called). */
     if (obj->encoding == OBJ_ENCODING_INT) {
-        return rioWriteBulkLongLong(r, (long)obj->ptr);
+        return rioWriteBulkLongLong(r, (long)objectGetVal(obj));
     } else if (sdsEncodedObject(obj)) {
-        return rioWriteBulkString(r, obj->ptr, sdslen(obj->ptr));
+        return rioWriteBulkString(r, objectGetVal(obj), sdslen(objectGetVal(obj)));
     } else {
         serverPanic("Unknown string encoding");
     }
@@ -1872,7 +1860,7 @@ int rewriteSortedSetObject(rio *r, robj *key, robj *o) {
     long long count = 0, items = zsetLength(o);
 
     if (o->encoding == OBJ_ENCODING_LISTPACK) {
-        unsigned char *zl = o->ptr;
+        unsigned char *zl = objectGetVal(o);
         unsigned char *eptr, *sptr;
         unsigned char *vstr;
         unsigned int vlen;
@@ -1907,7 +1895,7 @@ int rewriteSortedSetObject(rio *r, robj *key, robj *o) {
             items--;
         }
     } else if (o->encoding == OBJ_ENCODING_SKIPLIST) {
-        zset *zs = o->ptr;
+        zset *zs = objectGetVal(o);
         hashtableIterator iter;
         hashtableInitIterator(&iter, zs->ht, 0);
         void *next;
@@ -1918,19 +1906,19 @@ int rewriteSortedSetObject(rio *r, robj *key, robj *o) {
 
                 if (!rioWriteBulkCount(r, '*', 2 + cmd_items * 2) || !rioWriteBulkString(r, "ZADD", 4) ||
                     !rioWriteBulkObject(r, key)) {
-                    hashtableResetIterator(&iter);
+                    hashtableCleanupIterator(&iter);
                     return 0;
                 }
             }
             sds ele = zslGetNodeElement(node);
             if (!rioWriteBulkDouble(r, node->score) || !rioWriteBulkString(r, ele, sdslen(ele))) {
-                hashtableResetIterator(&iter);
+                hashtableCleanupIterator(&iter);
                 return 0;
             }
             if (++count == AOF_REWRITE_ITEMS_PER_CMD) count = 0;
             items--;
         }
-        hashtableResetIterator(&iter);
+        hashtableCleanupIterator(&iter);
     } else {
         serverPanic("Unknown sorted zset encoding");
     }
@@ -1955,8 +1943,9 @@ static int rioWriteHashIteratorCursor(rio *r, hashTypeIterator *hi, int what) {
         else
             return rioWriteBulkLongLong(r, vll);
     } else if (hi->encoding == OBJ_ENCODING_HASHTABLE) {
-        sds value = hashTypeCurrentFromHashTable(hi, what);
-        return rioWriteBulkString(r, value, sdslen(value));
+        size_t len;
+        char *value = hashTypeCurrentFromHashTable(hi, what, &len);
+        return rioWriteBulkString(r, value, len);
     }
 
     serverPanic("Unknown hash encoding");
@@ -1974,7 +1963,8 @@ int rewriteHashObject(rio *r, robj *key, robj *o) {
         while (hashTypeNext(&hi) != C_ERR) {
             long long expiry = entryGetExpiry(hi.next);
             sds field = entryGetField(hi.next);
-            sds value = entryGetValue(hi.next);
+            size_t value_len;
+            char *value = entryGetValue(hi.next, &value_len);
             if (rioWriteBulkCount(r, '*', 8) == 0) return 0;
             if (rioWriteBulkString(r, "HSETEX", 6) == 0) return 0;
             if (rioWriteBulkObject(r, key) == 0) return 0;
@@ -1983,7 +1973,7 @@ int rewriteHashObject(rio *r, robj *key, robj *o) {
             if (rioWriteBulkString(r, "FIELDS", 6) == 0) return 0;
             if (rioWriteBulkLongLong(r, 1) == 0) return 0;
             if (rioWriteBulkString(r, field, sdslen(field)) == 0) return 0;
-            if (rioWriteBulkString(r, value, sdslen(value)) == 0) return 0;
+            if (rioWriteBulkString(r, value, value_len) == 0) return 0;
             volatile_items++;
         }
         hashTypeResetIterator(&hi);
@@ -2079,7 +2069,7 @@ int rioWriteStreamEmptyConsumer(rio *r,
 /* Emit the commands needed to rebuild a stream object.
  * The function returns 0 on error, 1 on success. */
 int rewriteStreamObject(rio *r, robj *key, robj *o) {
-    stream *s = o->ptr;
+    stream *s = objectGetVal(o);
     streamIterator si;
     streamIteratorStart(&si, s, NULL, NULL, 0);
     streamID id;
@@ -2200,7 +2190,7 @@ int rewriteStreamObject(rio *r, robj *key, robj *o) {
  * The function returns 0 on error, 1 on success. */
 int rewriteModuleObject(rio *r, robj *key, robj *o, int dbid) {
     ValkeyModuleIO io;
-    moduleValue *mv = o->ptr;
+    moduleValue *mv = objectGetVal(o);
     moduleType *mt = mv->type;
     moduleInitIOContext(&io, mt, r, key, dbid);
     mt->aof_rewrite(&io, key, mv->value);
@@ -2412,10 +2402,8 @@ int rewriteAppendOnlyFile(char *filename) {
     startSaving(RDBFLAGS_AOF_PREAMBLE);
 
     if (server.aof_use_rdb_preamble) {
-        rdbSaveInfo rsi, *rsiptr;
-        rsiptr = rdbPopulateSaveInfo(&rsi);
         int error;
-        if (rdbSaveRio(REPLICA_REQ_NONE, &aof, &error, RDBFLAGS_AOF_PREAMBLE, rsiptr) == C_ERR) {
+        if (rdbSaveRio(REPLICA_REQ_NONE, RDB_VERSION, &aof, &error, RDBFLAGS_AOF_PREAMBLE, NULL) == C_ERR) {
             errno = error;
             goto werr;
         }

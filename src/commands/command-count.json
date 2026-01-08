@@ -13,7 +13,8 @@
             "SENTINEL"
         ],
         "acl_categories": [
-            "CONNECTION"
+            "CONNECTION",
+            "SLOW"
         ],
         "reply_schema": {
             "description": "Number of total commands in this server.",

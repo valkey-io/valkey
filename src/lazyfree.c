@@ -85,6 +85,15 @@ void lazyFreeReplicationBacklogRefMem(void *args[]) {
     atomic_fetch_add_explicit(&lazyfreed_objects, len, memory_order_relaxed);
 }
 
+/* Release the replicaKeysWithExpire dict. */
+void lazyFreeReplicaKeysWithExpire(void *args[]) {
+    dict *replica_keys_with_expire = args[0];
+    size_t len = dictSize(replica_keys_with_expire);
+    dictRelease(replica_keys_with_expire);
+    atomic_fetch_sub_explicit(&lazyfree_objects, len, memory_order_relaxed);
+    atomic_fetch_add_explicit(&lazyfreed_objects, len, memory_order_relaxed);
+}
+
 /* Return the number of currently pending objects to free. */
 size_t lazyfreeGetPendingObjectsCount(void) {
     size_t aux = atomic_load_explicit(&lazyfree_objects, memory_order_relaxed);
@@ -118,20 +127,20 @@ void lazyfreeResetStats(void) {
  * representing the list. */
 size_t lazyfreeGetFreeEffort(robj *key, robj *obj, int dbid) {
     if (obj->type == OBJ_LIST && obj->encoding == OBJ_ENCODING_QUICKLIST) {
-        quicklist *ql = obj->ptr;
+        quicklist *ql = objectGetVal(obj);
         return ql->len;
     } else if (obj->type == OBJ_SET && obj->encoding == OBJ_ENCODING_HASHTABLE) {
-        hashtable *ht = obj->ptr;
+        hashtable *ht = objectGetVal(obj);
         return hashtableSize(ht);
     } else if (obj->type == OBJ_ZSET && obj->encoding == OBJ_ENCODING_SKIPLIST) {
-        zset *zs = obj->ptr;
+        zset *zs = objectGetVal(obj);
         return zs->zsl->length;
     } else if (obj->type == OBJ_HASH && obj->encoding == OBJ_ENCODING_HASHTABLE) {
-        hashtable *ht = obj->ptr;
+        hashtable *ht = objectGetVal(obj);
         return hashtableSize(ht);
     } else if (obj->type == OBJ_STREAM) {
         size_t effort = 0;
-        stream *s = obj->ptr;
+        stream *s = objectGetVal(obj);
 
         /* Make a best effort estimate to maintain constant runtime. Every macro
          * node in the Stream is one allocation. */
@@ -258,5 +267,16 @@ void freeReplicationBacklogRefMemAsync(list *blocks, rax *index) {
     } else {
         listRelease(blocks);
         raxFree(index);
+    }
+}
+
+
+/* Free replicaKeysWithExpire dict, if the dict is huge enough, free it in async way. */
+void freeReplicaKeysWithExpireAsync(dict *replica_keys_with_expire) {
+    if (dictSize(replica_keys_with_expire) > LAZYFREE_THRESHOLD) {
+        atomic_fetch_add_explicit(&lazyfree_objects, dictSize(replica_keys_with_expire), memory_order_relaxed);
+        bioCreateLazyFreeJob(lazyFreeReplicaKeysWithExpire, 1, replica_keys_with_expire);
+    } else {
+        dictRelease(replica_keys_with_expire);
     }
 }

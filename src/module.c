@@ -6574,7 +6574,7 @@ ValkeyModuleCallReply *VM_Call(ValkeyModuleCtx *ctx, const char *cmdname, const 
          * could enlarge the memory usage are not allowed, but only if this is the
          * first write in the context of this script, otherwise we can't stop
          * in the middle. */
-        if (is_running_script && scriptIsWriteDirty() && !server.pre_command_oom_state) {
+        if (is_running_script && scriptIsWriteDirty()) {
             flags &= ~VALKEYMODULE_ARGV_RESPECT_DENY_OOM;
         }
     }

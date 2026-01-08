@@ -3898,8 +3898,11 @@ int modulePopulateReplicationInfoStructure(void *ri, int structver) {
  *                                               commands from the primary.
  *     VALKEYMODULE_CLIENTINFO_FLAG_MONITOR      Client in monitor mode.
  *     VALKEYMODULE_CLIENTINFO_FLAG_MODULE       Client is a module.
- *     VALKEYMODULE_CLIENTINFO_FLAG_AUTHENTICATED Client has been authenticated.
- *     VALKEYMODULE_CLIENTINFO_FLAG_EVER_AUTHENTICATED Client has successfully been authenticated in its lifetime.
+ *     VALKEYMODULE_CLIENTINFO_FLAG_AUTHENTICATED
+ *                                               Client has been authenticated.
+ *     VALKEYMODULE_CLIENTINFO_FLAG_EVER_AUTHENTICATED
+ *                                               Client has successfully been
+ *                                               authenticated in its lifetime.
  *     VALKEYMODULE_CLIENTINFO_FLAG_FAKE         Fake clients are internal to valkey.
  *
  * However passing NULL is a way to just check if the client exists in case

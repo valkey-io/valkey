@@ -54,7 +54,6 @@
 #include <netinet/in.h>
 #include <sys/socket.h>
 #include <signal.h>
-#include "durable_write.h"
 #ifdef HAVE_LIBSYSTEMD
 #include <systemd/sd-daemon.h>
 #endif

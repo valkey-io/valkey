@@ -514,7 +514,7 @@ void postReplicaAck(void) {
  * @param uncommittedKeys The set of uncommitted keys
  */
 static inline void addUncommittedKey(const sds key, const long long offset, rax *uncommittedKeys) {
-    // The value in the uncomittedKeys is the replication offset in long long format
+    // The value in the uncommittedKeys is the replication offset in long long format
     int retval = raxInsert(uncommittedKeys, (unsigned char *)key, sdslen(key), (void *)offset, NULL);
     serverAssert(retval == 1 || errno == 0);
 }

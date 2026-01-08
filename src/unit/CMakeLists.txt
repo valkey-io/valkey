@@ -23,7 +23,7 @@ add_library(valkeylib STATIC ${VALKEY_SERVER_SRCS})
 target_compile_options(valkeylib PRIVATE "${COMPILE_FLAGS}")
 target_compile_definitions(valkeylib PRIVATE "${COMPILE_DEFINITIONS}")
 
-add_executable(valkey-unit-tests ${UNIT_TEST_SRCS})
+add_executable(valkey-unit-tests ${UNIT_TEST_SRCS} ${CMAKE_SOURCE_DIR}/src/valkey-benchmark-dataset.c)
 target_compile_options(valkey-unit-tests PRIVATE "${COMPILE_FLAGS}")
 target_compile_definitions(valkey-unit-tests PRIVATE "${COMPILE_DEFINITIONS}")
 add_dependencies(valkey-unit-tests generate_test_files_h)

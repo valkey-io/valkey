@@ -3905,7 +3905,9 @@ int modulePopulateReplicationInfoStructure(void *ri, int structver) {
  *                                               authenticated in its lifetime.
  *     VALKEYMODULE_CLIENTINFO_FLAG_FAKE         Fake clients are internal to valkey.
  *
- * However passing NULL is a way to just check if the client exists in case
+ * Note: The flags VALKEYMODULE_CLIENTINFO_FLAG_PRIMARY and below were added in Valkey 9.1.
+ *
+ * Passing NULL is a way to just check if the client exists in case
  * we are not interested in any additional information.
  *
  * This is the correct usage when we want the client info structure

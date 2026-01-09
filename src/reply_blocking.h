@@ -101,9 +101,11 @@ typedef struct clientDurabilityInfo {
  */
 void durableInit(void);
 void durableCleanup(void);
+void durabilityReset(void);
 void durableClientInit(struct client *c);
 void durableClientReset(struct client *c);
-/*
+
+/**
   Command processing hooks for offset and cob tracking
 */
 void beforeCommandTrackReplOffset(void);

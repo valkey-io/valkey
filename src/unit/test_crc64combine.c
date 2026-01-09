@@ -6,6 +6,7 @@
 #include <unistd.h>
 
 #include "test_help.h"
+#include "../fmacros.h"
 #include "../zmalloc.h"
 #include "../crc64.h"
 #include "../crcspeed.h"

@@ -11,7 +11,8 @@
             "NOSCRIPT"
         ],
         "acl_categories": [
-            "SCRIPTING"
+            "SCRIPTING",
+            "SLOW"
         ],
         "arguments": [
             {

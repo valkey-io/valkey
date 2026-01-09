@@ -359,7 +359,7 @@ void fireModuleSlotMigrationEvent(slotMigrationJob *job, int subevent) {
 
 /* Save the active slot imports to the RDB file. The import job name and the
  * slot ranges are saved. */
-int clusterRDBSaveSlotImports(rio *rdb) {
+int clusterRDBSaveSlotImports(rio *rdb, int rdbver) {
     if (!server.cluster_enabled) return C_OK;
     if (listLength(server.cluster->slot_migration_jobs) == 0) return C_OK;
     listNode *ln;
@@ -371,6 +371,10 @@ int clusterRDBSaveSlotImports(rio *rdb) {
         slotMigrationJob *job = ln->value;
         if (isSlotMigrationJobFinished(job)) continue;
         if (job->type == SLOT_MIGRATION_EXPORT) continue;
+        if (rdbver < 80) {
+            serverLog(LL_WARNING, "Can't store slot migrations in RDB version %d", rdbver);
+            return C_ERR;
+        }
         if (rdbSaveType(rdb, RDB_OPCODE_SLOT_IMPORT) < 0) return C_ERR;
         if (rdbSaveRawString(rdb, (unsigned char *)job->name, CLUSTER_NAMELEN) < 0) return C_ERR;
         if (rdbSaveLen(rdb, listLength(job->slot_ranges)) < 0) return C_ERR;
@@ -402,7 +406,7 @@ int clusterRDBLoadSlotImport(rio *rdb) {
         slot_range->end_slot = end_slot;
         listAddNodeTail(slot_ranges, slot_range);
     }
-    slotMigrationJob *new_import = createSlotImportJob(NULL, NULL, job_name->ptr, slot_ranges);
+    slotMigrationJob *new_import = createSlotImportJob(NULL, NULL, objectGetVal(job_name), slot_ranges);
     listAddNodeTail(server.cluster->slot_migration_jobs, new_import);
     decrRefCount(job_name);
     return C_OK;
@@ -542,9 +546,9 @@ void clusterCommandSyncSlotsEstablish(client *c) {
     bool is_tracking_only = c->flag.primary || c->id == CLIENT_ID_AOF;
     int i = 3;
     while (i < c->argc) {
-        if (!strcasecmp(c->argv[i]->ptr, "source")) {
+        if (!strcasecmp(objectGetVal(c->argv[i]), "source")) {
             if (source_node || i + 1 >= c->argc ||
-                sdslen(c->argv[i + 1]->ptr) != CLUSTER_NAMELEN) {
+                sdslen(objectGetVal(c->argv[i + 1])) != CLUSTER_NAMELEN) {
                 addReplyErrorObject(c, shared.syntaxerr);
                 goto cleanup;
             }
@@ -556,7 +560,7 @@ void clusterCommandSyncSlotsEstablish(client *c) {
                 i += 2;
                 continue;
             }
-            source_node_name = c->argv[i + 1]->ptr;
+            source_node_name = objectGetVal(c->argv[i + 1]);
             source_node = clusterLookupNode(source_node_name, CLUSTER_NAMELEN);
             i += 2;
 
@@ -570,17 +574,17 @@ void clusterCommandSyncSlotsEstablish(client *c) {
             }
             continue;
         }
-        if (!strcasecmp(c->argv[i]->ptr, "name")) {
+        if (!strcasecmp(objectGetVal(c->argv[i]), "name")) {
             if (name || i + 1 >= c->argc ||
-                sdslen(c->argv[i + 1]->ptr) != CLUSTER_NAMELEN) {
+                sdslen(objectGetVal(c->argv[i + 1])) != CLUSTER_NAMELEN) {
                 addReplyErrorObject(c, shared.syntaxerr);
                 goto cleanup;
             }
-            name = c->argv[i + 1]->ptr;
+            name = objectGetVal(c->argv[i + 1]);
             i += 2;
             continue;
         }
-        if (!strcasecmp(c->argv[i]->ptr, "slotsrange")) {
+        if (!strcasecmp(objectGetVal(c->argv[i]), "slotsrange")) {
             if (slot_ranges) {
                 addReplyErrorObject(c, shared.syntaxerr);
                 goto cleanup;
@@ -722,31 +726,31 @@ void clusterCommandSyncSlotsFinish(client *c) {
     char *message = NULL;
     int i = 3;
     while (i < c->argc) {
-        if (!strcasecmp(c->argv[i]->ptr, "state")) {
+        if (!strcasecmp(objectGetVal(c->argv[i]), "state")) {
             if (state || i + 1 >= c->argc) {
                 addReplyErrorObject(c, shared.syntaxerr);
                 return;
             }
-            state = c->argv[i + 1]->ptr;
+            state = objectGetVal(c->argv[i + 1]);
             i += 2;
             continue;
         }
-        if (!strcasecmp(c->argv[i]->ptr, "name")) {
+        if (!strcasecmp(objectGetVal(c->argv[i]), "name")) {
             if (name || i + 1 >= c->argc ||
-                sdslen(c->argv[i + 1]->ptr) != CLUSTER_NAMELEN) {
+                sdslen(objectGetVal(c->argv[i + 1])) != CLUSTER_NAMELEN) {
                 addReplyErrorObject(c, shared.syntaxerr);
                 return;
             }
-            name = c->argv[i + 1]->ptr;
+            name = objectGetVal(c->argv[i + 1]);
             i += 2;
             continue;
         }
-        if (!strcasecmp(c->argv[i]->ptr, "message")) {
+        if (!strcasecmp(objectGetVal(c->argv[i]), "message")) {
             if (message || i + 1 >= c->argc) {
                 addReplyErrorObject(c, shared.syntaxerr);
                 return;
             }
-            message = c->argv[i + 1]->ptr;
+            message = objectGetVal(c->argv[i + 1]);
             i += 2;
             continue;
         }
@@ -1151,7 +1155,7 @@ void clusterCommandMigrateSlots(client *c) {
     list *slot_ranges = NULL;
 
     while (curr_index < c->argc) {
-        if (strcasecmp(c->argv[curr_index]->ptr, "slotsrange")) {
+        if (strcasecmp(objectGetVal(c->argv[curr_index]), "slotsrange")) {
             addReplyErrorObject(c, shared.syntaxerr);
             goto cleanup;
         }
@@ -1192,21 +1196,21 @@ void clusterCommandMigrateSlots(client *c) {
         }
 
         if (curr_index + 1 >= c->argc ||
-            strcasecmp(c->argv[curr_index]->ptr, "node")) {
+            strcasecmp(objectGetVal(c->argv[curr_index]), "node")) {
             addReplyErrorObject(c, shared.syntaxerr);
             goto cleanup;
         }
         curr_index++;
-        if (sdslen(c->argv[curr_index]->ptr) != CLUSTER_NAMELEN) {
+        if (sdslen(objectGetVal(c->argv[curr_index])) != CLUSTER_NAMELEN) {
             addReplyErrorFormat(c, "Invalid node name: %s",
-                                (sds)c->argv[curr_index]->ptr);
+                                (sds)objectGetVal(c->argv[curr_index]));
             goto cleanup;
         }
-        clusterNode *target_node = clusterLookupNode(c->argv[curr_index]->ptr,
+        clusterNode *target_node = clusterLookupNode(objectGetVal(c->argv[curr_index]),
                                                      CLUSTER_NAMELEN);
         if (!target_node) {
             addReplyErrorFormat(c, "Unknown node name: %s",
-                                (sds)c->argv[curr_index]->ptr);
+                                (sds)objectGetVal(c->argv[curr_index]));
             goto cleanup;
         }
         if (target_node == server.cluster->myself) {
@@ -2561,12 +2565,12 @@ void clusterCommandSyncSlotsCapa(client *c) {
  * with slot import. */
 void clusterCommandSyncSlots(client *c) {
     /* Commands used by primary and replica */
-    if (!strcasecmp(c->argv[2]->ptr, "establish")) {
+    if (!strcasecmp(objectGetVal(c->argv[2]), "establish")) {
         /* CLUSTER SYNCSLOTS ESTABLISH <args> */
         clusterCommandSyncSlotsEstablish(c);
         return;
     }
-    if (!strcasecmp(c->argv[2]->ptr, "finish")) {
+    if (!strcasecmp(objectGetVal(c->argv[2]), "finish")) {
         /* CLUSTER SYNCSLOTS FINISH <args> */
         clusterCommandSyncSlotsFinish(c);
         return;
@@ -2574,37 +2578,37 @@ void clusterCommandSyncSlots(client *c) {
 
     /* Commands only used by primary (ignored on replica) */
     if (c->flag.primary) return;
-    if (!strcasecmp(c->argv[2]->ptr, "snapshot-eof")) {
+    if (!strcasecmp(objectGetVal(c->argv[2]), "snapshot-eof")) {
         /* CLUSTER SYNCSLOTS SNAPSHOT-EOF */
         clusterCommandSyncSlotsSnapshotEof(c);
         return;
     }
-    if (!strcasecmp(c->argv[2]->ptr, "request-pause")) {
+    if (!strcasecmp(objectGetVal(c->argv[2]), "request-pause")) {
         /* CLUSTER SYNCSLOTS REQUEST-PAUSE */
         clusterCommandSyncSlotsRequestPause(c);
         return;
     }
-    if (!strcasecmp(c->argv[2]->ptr, "paused")) {
+    if (!strcasecmp(objectGetVal(c->argv[2]), "paused")) {
         /* CLUSTER SYNCSLOTS PAUSED */
         clusterCommandSyncSlotsPaused(c);
         return;
     }
-    if (!strcasecmp(c->argv[2]->ptr, "request-failover")) {
+    if (!strcasecmp(objectGetVal(c->argv[2]), "request-failover")) {
         /* CLUSTER SYNCSLOTS REQUEST-FAILOVER */
         clusterCommandSyncSlotsRequestFailover(c);
         return;
     }
-    if (!strcasecmp(c->argv[2]->ptr, "failover-granted")) {
+    if (!strcasecmp(objectGetVal(c->argv[2]), "failover-granted")) {
         /* CLUSTER SYNCSLOTS FAILOVER-GRANTED */
         clusterCommandSyncSlotsFailoverGranted(c);
         return;
     }
-    if (!strcasecmp(c->argv[2]->ptr, "ack")) {
+    if (!strcasecmp(objectGetVal(c->argv[2]), "ack")) {
         /* CLUSTER SYNCSLOTS ACK */
         clusterCommandSyncSlotsAck(c);
         return;
     }
-    if (!strcasecmp(c->argv[2]->ptr, "capa")) {
+    if (!strcasecmp(objectGetVal(c->argv[2]), "capa")) {
         /* CLUSTER SYNCSLOTS CAPA <field> [<field>...] */
         clusterCommandSyncSlotsCapa(c);
         return;

@@ -11,9 +11,12 @@
             "FAST"
         ],
         "acl_categories": [
+            "DANGEROUS",
+            "FAST",
             "KEYSPACE",
-            "DANGEROUS"
+            "WRITE"
         ],
+        "get_dbid_args": "swapdbDbIdArgs",
         "arguments": [
             {
                 "name": "index1",

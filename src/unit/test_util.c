@@ -1,7 +1,7 @@
+#include "../fmacros.h"
 #include <sys/mman.h>
 #include <string.h>
 #include <unistd.h>
-
 #include "../config.h"
 #include "../util.h"
 #include "test_help.h"

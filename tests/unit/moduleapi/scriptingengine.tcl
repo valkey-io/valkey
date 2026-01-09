@@ -469,7 +469,7 @@ start_server {tags {"modules"}} {
         assert_match "*name=HELLO*" $info
 
         # Verify LUA is built-in and HELLO is from module
-        assert_match "*name=LUA,module=built-in*" $info
+        assert_match "*name=LUA,module=lua*" $info
         assert_match "*name=HELLO,module=helloengine*" $info
     }
 

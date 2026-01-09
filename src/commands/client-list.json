@@ -53,7 +53,10 @@
             "SENTINEL"
         ],
         "acl_categories": [
-            "CONNECTION"
+            "ADMIN",
+            "CONNECTION",
+            "DANGEROUS",
+            "SLOW"
         ],
         "command_tips": [
             "NONDETERMINISTIC_OUTPUT"

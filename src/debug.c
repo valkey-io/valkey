@@ -1711,6 +1711,96 @@ static void setupStacktracePipe(void) { /* we don't need a pipe to write the sta
 #ifdef HAVE_BACKTRACE
 #define BACKTRACE_MAX_SIZE 100
 
+#ifdef USE_LIBBACKTRACE
+/* Callback data for libbacktrace */
+typedef struct {
+    int fd;
+    int count;
+    int found_symbols;
+} backtrace_callback_data;
+
+/* Error callback for libbacktrace */
+static void libbacktrace_error_cb(void *data, const char *msg, int errnum) {
+    int fd = data ? *(int *)data : STDERR_FILENO;
+    char buf[256];
+    int len = snprintf(buf, sizeof(buf), "libbacktrace error: %s (errno %d)\n", msg, errnum);
+    if (len > 0 && write(fd, buf, len)) { /* Avoid warning. */
+    }
+}
+
+/* Full callback for libbacktrace - called for each frame with symbol info */
+static int libbacktrace_full_cb(void *data, uintptr_t pc, const char *filename, int lineno, const char *function) {
+    backtrace_callback_data *cb_data = (backtrace_callback_data *)data;
+    char buf[512];
+    int len;
+
+    if (function) {
+        if (filename && lineno > 0) {
+            len = snprintf(buf, sizeof(buf), "#%d 0x%lx %s at %s:%d\n",
+                           cb_data->count, (unsigned long)pc, function, filename, lineno);
+        } else {
+            len = snprintf(buf, sizeof(buf), "#%d 0x%lx %s\n",
+                           cb_data->count, (unsigned long)pc, function);
+        }
+        /* Mark that we found a real function name */
+        cb_data->found_symbols = 1;
+    } else {
+        len = snprintf(buf, sizeof(buf), "#%d 0x%lx <unknown>\n",
+                       cb_data->count, (unsigned long)pc);
+    }
+
+    if (len > 0 && write(cb_data->fd, buf, len) == -1) { /* Avoid warning. */
+    }
+    cb_data->count++;
+    return 0;
+}
+
+/* Fork and symbolize using libbacktrace (signal-safe approach) */
+static void symbolizeWithLibbacktrace(void **trace, int trace_size, int fd, int uplevel) {
+    pid_t pid = fork();
+
+    if (pid == 0) {
+        /* Child process - safe to use libbacktrace here */
+        struct backtrace_state *state = backtrace_create_state(
+            NULL, 0, libbacktrace_error_cb, &fd);
+        if (state) {
+            backtrace_callback_data cb_data = {.fd = fd, .count = 0, .found_symbols = 0};
+            for (int i = uplevel; i < trace_size; i++) {
+                backtrace_pcinfo(state, (uintptr_t)trace[i], libbacktrace_full_cb,
+                                 libbacktrace_error_cb, &cb_data);
+            }
+            /* If libbacktrace produced no frames or no useful function names, fall back to standard backtrace */
+            if (cb_data.count == 0 || !cb_data.found_symbols) {
+                char *msg = "\n(libbacktrace failed to resolve symbols, falling back to standard backtrace)\n";
+                if (write(fd, msg, strlen(msg)) == -1) { /* Avoid warning. */
+                }
+                backtrace_symbols_fd(trace + uplevel, trace_size - uplevel, fd);
+            }
+        } else {
+            /* Fallback if state creation fails */
+            backtrace_symbols_fd(trace + uplevel, trace_size - uplevel, fd);
+        }
+        _exit(0);
+    } else if (pid > 0) {
+        /* Parent process - wait for child with timeout */
+        int status;
+        int waited = 0;
+        while (waitpid(pid, &status, WNOHANG) == 0 && waited < 50) {
+            usleep(10000); /* 10ms */
+            waited++;
+        }
+        if (waited >= 50) {
+            /* Child hung, kill it */
+            kill(pid, SIGKILL);
+            waitpid(pid, NULL, 0);
+        }
+    } else {
+        /* Fork failed, fall back to backtrace_symbols_fd */
+        backtrace_symbols_fd(trace + uplevel, trace_size - uplevel, fd);
+    }
+}
+#endif /* USE_LIBBACKTRACE */
+
 #ifdef __linux__
 #if !defined(_GNU_SOURCE)
 #define _GNU_SOURCE
@@ -1747,93 +1837,6 @@ __attribute__((noinline)) static void collect_stacktrace_data(void) {
     };
 }
 
-#ifdef USE_LIBBACKTRACE
-/* Callback data for libbacktrace */
-typedef struct {
-    int fd;
-    int count;
-} backtrace_callback_data;
-
-/* Error callback for libbacktrace */
-static void libbacktrace_error_cb(void *data, const char *msg, int errnum) {
-    int fd = data ? *(int *)data : STDERR_FILENO;
-    char buf[256];
-    int len = snprintf(buf, sizeof(buf), "libbacktrace error: %s (errno %d)\n", msg, errnum);
-    if (len > 0 && write(fd, buf, len)) { /* Avoid warning. */ }
-}
-
-/* Full callback for libbacktrace - called for each frame with symbol info */
-static int libbacktrace_full_cb(void *data, uintptr_t pc, const char *filename,
-                                 int lineno, const char *function) {
-    backtrace_callback_data *cb_data = (backtrace_callback_data *)data;
-    char buf[512];
-    int len;
-
-    if (function) {
-        if (filename && lineno > 0) {
-            len = snprintf(buf, sizeof(buf), "#%d 0x%lx %s at %s:%d\n",
-                          cb_data->count, (unsigned long)pc, function, filename, lineno);
-        } else {
-            len = snprintf(buf, sizeof(buf), "#%d 0x%lx %s\n",
-                          cb_data->count, (unsigned long)pc, function);
-        }
-    } else {
-        len = snprintf(buf, sizeof(buf), "#%d 0x%lx <unknown>\n",
-                      cb_data->count, (unsigned long)pc);
-    }
-
-    if (len > 0 && write(cb_data->fd, buf, len) == -1) { /* Avoid warning. */ }
-    cb_data->count++;
-    return 0;
-}
-
-/* Fork and symbolize using libbacktrace (signal-safe approach) */
-static void symbolizeWithLibbacktrace(void **trace, int trace_size, int fd, int uplevel) {
-    pid_t pid = fork();
-
-    if (pid == 0) {
-        /* Child process - safe to use libbacktrace here */
-        /* Read executable path from /proc/self/exe */
-        char exe_path[PATH_MAX];
-        ssize_t len = readlink("/proc/self/exe", exe_path, sizeof(exe_path) - 1);
-        if (len > 0) {
-            exe_path[len] = '\0';
-        } else {
-            exe_path[0] = '\0';
-        }
-        
-        struct backtrace_state *state = backtrace_create_state(
-            exe_path[0] ? exe_path : NULL, 0, libbacktrace_error_cb, &fd);
-        if (state) {
-            backtrace_callback_data cb_data = {.fd = fd, .count = 0};
-            for (int i = uplevel; i < trace_size; i++) {
-                backtrace_pcinfo(state, (uintptr_t)trace[i], libbacktrace_full_cb,
-                                libbacktrace_error_cb, &cb_data);
-            }
-        } else {
-            /* Fallback if state creation fails */
-            backtrace_symbols_fd(trace + uplevel, trace_size - uplevel, fd);
-        }
-        _exit(0);
-    } else if (pid > 0) {
-        /* Parent process - wait for child with timeout */
-        int status;
-        int waited = 0;
-        while (waitpid(pid, &status, WNOHANG) == 0 && waited < 50) {
-            usleep(10000); /* 10ms */
-            waited++;
-        }
-        if (waited >= 50) {
-            /* Child hung, kill it */
-            kill(pid, SIGKILL);
-            waitpid(pid, NULL, 0);
-        }
-    } else {
-        /* Fork failed, fall back to backtrace_symbols_fd */
-        backtrace_symbols_fd(trace + uplevel, trace_size - uplevel, fd);
-    }
-}
-#endif /* USE_LIBBACKTRACE */
 
 __attribute__((noinline)) static void writeStacktraces(int fd, int uplevel) {
     /* get the list of all the process's threads that don't block or ignore the THREADS_SIGNAL */

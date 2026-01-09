@@ -1,0 +1,8 @@
+.libs/
+config.h
+config.status
+Makefile
+backtrace-supported.h
+libtool
+stamp-h1
+install-debuginfo-for-buildid.sh

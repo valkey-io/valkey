@@ -97,6 +97,7 @@ void commandlogInit(void) {
     }
 }
 
+
 /* Push a new entry into the command log.
  * This function will make sure to trim the command log accordingly to the
  * configured max length. */

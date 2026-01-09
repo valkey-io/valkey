@@ -169,7 +169,7 @@ int test_entryUpdate(int argc, char **argv, int flags) {
     // Update the value so that memory usage is less than 3/4 of the current allocation size
     // Ensuring required_embedded_size < current_embedded_allocation_size * 3 / 4, which creates a new entry
     size_t current_embedded_allocation_size = entryMemUsage(e9);
-    sds value10 = sdsnew("xxxxxxxxxxxxxxxxxxxxx");
+    sds value10 = sdsnew("xxxxxx");
     sds value_copy10 = sdsdup(value10);
     long long expiry10 = expiry9;
     entry *e10 = entryUpdate(e9, value10, expiry10);

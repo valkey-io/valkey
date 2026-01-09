@@ -950,6 +950,7 @@ typedef struct serverDb {
     long long dirty_repl_offset; /* Replication offset for a dirty DB */
     raxIterator next_scan_iter;  /* The next iterator for db scan */
     int scan_in_progress;        /* Flag of showing whether db is in scan or not */
+    rax *reply_duration;         /* Radix tree tracking reply durations for durable blocked clients */
 } serverDb;
 
 /* forward declaration for functions ctx */

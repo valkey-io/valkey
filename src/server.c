@@ -3033,12 +3033,7 @@ void initServer(void) {
     /* Initialize the EVAL scripting component. */
     evalInit();
 
-    commandlogInit();
-    latencyMonitorInit();
-    initSharedQueryBuf();
     durableInit();
-    /* Initialize ACL default password if it exists */
-    ACLUpdateDefaultUserPassword(server.requirepass);
 
     applyWatchdogPeriod();
 
@@ -4791,6 +4786,9 @@ int finishShutdown(void) {
 
     /* Fire the shutdown modules event. */
     moduleFireServerEvent(VALKEYMODULE_EVENT_SHUTDOWN, 0, NULL);
+
+    /* Cleanup durability tracking resources. */
+    durableCleanup();
 
     /* Remove the pid file if possible and needed. */
     if (server.daemonize || server.pidfile) {

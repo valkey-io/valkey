@@ -24,6 +24,8 @@ typedef long long mstime_t;
  * Durability container to house all the durability related fields.
  */
 typedef struct durable_t {
+    /* Flag to enable/disable sync replication (durability) */
+    int sync_replication_enabled;
     /* Uncommitted keys cleanup configuration time limit in milliseconds */
     unsigned int keys_cleanup_time_limit_ms;
     /* The current scanning database index, starting from 0 */
@@ -98,9 +100,12 @@ typedef struct clientDurabilityInfo {
  * Init
  */
 void durableInit(void);
+void durableCleanup(void);
+void durabilityReset(void);
 void durableClientInit(struct client *c);
 void durableClientReset(struct client *c);
-/*
+
+/**
   Command processing hooks for offset and cob tracking
 */
 void beforeCommandTrackReplOffset(void);

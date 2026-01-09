@@ -63,3 +63,4 @@ deps/libbacktrace/Makefile
 deps/libbacktrace/backtrace-supported.h
 deps/libbacktrace/libtool
 deps/libbacktrace/stamp-h1
+deps/libbacktrace/install-debuginfo-for-buildid.sh

@@ -35,8 +35,7 @@ POSSIBILITY OF SUCH DAMAGE.  */
 extern int f3(int, int);
 extern int f2(int);
 
-int f2(int x)
-{
+int f2(int x) {
   /* Returning a value here and elsewhere avoids a tailcall which
      would mess up the backtrace.  */
   return f3(x, __LINE__) + 3;

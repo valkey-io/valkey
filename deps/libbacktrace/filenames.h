@@ -31,22 +31,23 @@ IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 POSSIBILITY OF SUCH DAMAGE.  */
 
 #ifndef GCC_VERSION
-# define GCC_VERSION (__GNUC__ * 1000 + __GNUC_MINOR__)
+#define GCC_VERSION (__GNUC__ * 1000 + __GNUC_MINOR__)
 #endif
 
 #if (GCC_VERSION < 2007)
-# define __attribute__(x)
+#define __attribute__(x)
 #endif
 
 #ifndef ATTRIBUTE_UNUSED
-# define ATTRIBUTE_UNUSED __attribute__ ((__unused__))
+#define ATTRIBUTE_UNUSED __attribute__((__unused__))
 #endif
 
-#if defined(__MSDOS__) || defined(_WIN32) || defined(__OS2__) || defined (__CYGWIN__)
-# define IS_DIR_SEPARATOR(c) ((c) == '/' || (c) == '\\')
-# define HAS_DRIVE_SPEC(f) ((f)[0] != '\0' && (f)[1] == ':')
-# define IS_ABSOLUTE_PATH(f) (IS_DIR_SEPARATOR((f)[0]) || HAS_DRIVE_SPEC(f))
+#if defined(__MSDOS__) || defined(_WIN32) || defined(__OS2__) ||               \
+    defined(__CYGWIN__)
+#define IS_DIR_SEPARATOR(c) ((c) == '/' || (c) == '\\')
+#define HAS_DRIVE_SPEC(f) ((f)[0] != '\0' && (f)[1] == ':')
+#define IS_ABSOLUTE_PATH(f) (IS_DIR_SEPARATOR((f)[0]) || HAS_DRIVE_SPEC(f))
 #else
-# define IS_DIR_SEPARATOR(c) ((c) == '/')
-# define IS_ABSOLUTE_PATH(f) (IS_DIR_SEPARATOR((f)[0]))
+#define IS_DIR_SEPARATOR(c) ((c) == '/')
+#define IS_ABSOLUTE_PATH(f) (IS_DIR_SEPARATOR((f)[0]))
 #endif

@@ -3970,7 +3970,7 @@ int clusterProcessPacket(clusterLink *link) {
                     serverLog(LL_VERBOSE,
                               "Handshake: we already know node %.40s (%s), "
                               "updating the address if needed.",
-                              sender->name, sender->human_nodename);
+                              sender->name, humanNodename(sender));
                     if (nodeUpdateAddressIfNeeded(sender, link, msg)) {
                         clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_UPDATE_STATE);
                     }
@@ -3983,7 +3983,7 @@ int clusterProcessPacket(clusterLink *link) {
                 /* First thing to do is replacing the random name with the
                  * right node name if this was a handshake stage. */
                 clusterRenameNode(link->node, msg->sender);
-                serverLog(LL_DEBUG, "Handshake with node %.40s (%s) completed.", link->node->name, link->node->human_nodename);
+                serverLog(LL_DEBUG, "Handshake with node %.40s (%s) completed.", link->node->name, humanNodename(link->node));
                 link->node->flags &= ~CLUSTER_NODE_HANDSHAKE;
                 link->node->flags |= flags & (CLUSTER_NODE_PRIMARY | CLUSTER_NODE_REPLICA);
                 clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG);
@@ -4282,7 +4282,7 @@ int clusterProcessPacket(clusterLink *link) {
             failing = clusterLookupNode(msg->data.fail.about.nodename, CLUSTER_NAMELEN);
             if (failing && !(failing->flags & (CLUSTER_NODE_FAIL | CLUSTER_NODE_MYSELF))) {
                 serverLog(LL_NOTICE, "FAIL message received from %.40s (%s) about %.40s (%s)", msg->sender,
-                          sender->human_nodename, msg->data.fail.about.nodename, failing->human_nodename);
+                          humanNodename(sender), msg->data.fail.about.nodename, humanNodename(failing));
                 markNodeAsFailing(failing);
             }
         } else {
@@ -5166,7 +5166,7 @@ void clusterSendFailoverAuthIfNeeded(clusterNode *node, clusterMsg *request) {
 
     if (!server.cluster->safe_to_join) {
         serverLog(LL_WARNING, "Failover auth denied to %.40s (%s): it is not safe to vote in this moment)",
-                  node->name, node->human_nodename);
+                  node->name, humanNodename(node));
         return;
     }
 
@@ -7612,10 +7612,10 @@ void clusterCommandSetSlot(client *c) {
     /* Slot states have been updated on the compatible replicas (if any).
      * Now execute the command on the primary. */
     if (!strcasecmp(objectGetVal(c->argv[3]), "migrating")) {
-        serverLog(LL_NOTICE, "Migrating slot %d to node %.40s (%s)", slot, n->name, n->human_nodename);
+        serverLog(LL_NOTICE, "Migrating slot %d to node %.40s (%s)", slot, n->name, humanNodename(n));
         setMigratingSlotDest(slot, n);
     } else if (!strcasecmp(objectGetVal(c->argv[3]), "importing")) {
-        serverLog(LL_NOTICE, "Importing slot %d from node %.40s (%s)", slot, n->name, n->human_nodename);
+        serverLog(LL_NOTICE, "Importing slot %d from node %.40s (%s)", slot, n->name, humanNodename(n));
         setImportingSlotSource(slot, n);
     } else if (!strcasecmp(objectGetVal(c->argv[3]), "stable")) {
         /* CLUSTER SETSLOT <SLOT> STABLE */

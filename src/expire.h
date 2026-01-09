@@ -1,6 +1,10 @@
 #ifndef EXPIRE_H
 #define EXPIRE_H
 
+/* Include feature-test macros early for unit tests that include expire.h
+ * before server.h. */
+#include "fmacros.h"
+
 #include <stdbool.h>
 #include "util.h"
 

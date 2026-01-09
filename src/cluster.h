@@ -142,6 +142,7 @@ int patternHashSlot(char *pattern, int length);
 int isValidAuxString(char *s, unsigned int length);
 void migrateCommand(client *c);
 void clusterCommand(client *c);
+void clusterKeySlotCommand(client *c);
 ConnectionType *connTypeOfCluster(void);
 int isNodeAvailable(clusterNode *node);
 long long getNodeReplicationOffset(clusterNode *node);

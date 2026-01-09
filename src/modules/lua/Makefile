@@ -32,6 +32,7 @@ LIBS = \
     $(DEPS_DIR)/fpconv/libfpconv.a
 SRCS= $(wildcard *.c)
 OBJS = \
+    $(SRCS:.c=.o) \
     sha1.o \
     rand.o
 

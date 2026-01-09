@@ -4,6 +4,8 @@
 *.xo
 *.so
 *.d
+*.lo
+*.la
 *.log
 dump*.rdb
 *-benchmark
@@ -54,3 +56,10 @@ build-debug/
 build-release/
 cmake-build-debug/
 cmake-build-release/
+deps/libbacktrace/.libs/
+deps/libbacktrace/config.h
+deps/libbacktrace/config.status
+deps/libbacktrace/Makefile
+deps/libbacktrace/backtrace-supported.h
+deps/libbacktrace/libtool
+deps/libbacktrace/stamp-h1

@@ -628,6 +628,13 @@ ifeq ($(USE_FAST_FLOAT),yes)
 	FINAL_LIBS += $(FAST_FLOAT_STRTOD_OBJECT)
 endif
 
+USE_LIBBACKTRACE?=no
+ifeq ($(USE_LIBBACKTRACE),yes)
+	FINAL_CFLAGS += -DUSE_LIBBACKTRACE -I../deps/libbacktrace
+	DEPENDENCY_TARGETS += libbacktrace
+	FINAL_LIBS += ../deps/libbacktrace/.libs/libbacktrace.a
+endif
+
 ALL_BUILD_PREREQUISITES=$(SERVER_NAME) $(ENGINE_SENTINEL_NAME) $(ENGINE_CLI_NAME) $(ENGINE_BENCHMARK_NAME) $(ENGINE_CHECK_RDB_NAME) $(ENGINE_CHECK_AOF_NAME) $(TLS_MODULE) $(RDMA_MODULE) $(LUA_MODULE)
 
 all: $(ALL_BUILD_PREREQUISITES)
@@ -658,6 +665,7 @@ persist-settings: distclean
 	echo USE_SYSTEMD=$(USE_SYSTEMD) >> .make-settings
 	echo BUILD_LUA=$(BUILD_LUA) >> .make-settings
 	echo USE_FAST_FLOAT=$(USE_FAST_FLOAT) >> .make-settings
+	echo USE_LIBBACKTRACE=$(USE_LIBBACKTRACE) >> .make-settings
 	echo CFLAGS=$(CFLAGS) >> .make-settings
 	echo LDFLAGS=$(LDFLAGS) >> .make-settings
 	echo SERVER_CFLAGS=$(SERVER_CFLAGS) >> .make-settings

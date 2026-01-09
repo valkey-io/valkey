@@ -28,7 +28,7 @@ jobs:
       - name: Install Valkey dependencies
         run: sudo apt install -y gcc procps libssl-dev
       - name: Build with cov-build
-        run: cov-analysis-linux64/bin/cov-build --dir cov-int make
+        run: cov-analysis-linux64/bin/cov-build --dir cov-int make USE_LIBBACKTRACE=yes
       - name: Upload the result
         run: |
           tar czvf cov-int.tgz cov-int

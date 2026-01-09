@@ -29,7 +29,7 @@ jobs:
     steps:
       - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
       - name: Build
-        run: make SERVER_CFLAGS=-Werror
+        run: make SERVER_CFLAGS=-Werror USE_LIBBACKTRACE=yes
       - name: Start valkey-server
         run: |
           ./src/valkey-server --daemonize yes --save "" --logfile external-server.log \
@@ -54,7 +54,7 @@ jobs:
     steps:
       - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
       - name: Build
-        run: make SERVER_CFLAGS=-Werror
+        run: make SERVER_CFLAGS=-Werror USE_LIBBACKTRACE=yes
       - name: Start valkey-server
         run: |
           ./src/valkey-server --cluster-enabled yes --cluster-databases 16 --daemonize yes \
@@ -83,7 +83,7 @@ jobs:
     steps:
       - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
       - name: Build
-        run: make SERVER_CFLAGS=-Werror
+        run: make SERVER_CFLAGS=-Werror USE_LIBBACKTRACE=yes
       - name: Start valkey-server
         run: |
           ./src/valkey-server --daemonize yes --save "" --logfile external-server.log

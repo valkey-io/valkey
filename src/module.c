@@ -9434,7 +9434,8 @@ int moduleGetClusterNodeInfoForClient(ValkeyModuleCtx *ctx,
  * need to populate back certain info. If an `ip` and `primary_id` (only populated
  * if the instance is a replica) are specified, they point to buffers holding
  * at least VALKEYMODULE_NODE_ID_LEN bytes. The strings written back as `ip`
- * and `primary_id` are not null terminated.
+ * and `primary_id` are not null terminated. The `id` needs to be at least
+ * VALKEYMODULE_NODE_ID_LEN bytes long and doesn't need to be null terminated.
  *
  * The list of flags reported is the following:
  *

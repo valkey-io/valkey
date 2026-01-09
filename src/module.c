@@ -12768,6 +12768,16 @@ int moduleLoad(const char *path, void **module_argv, int module_argc, int is_loa
     int (*onload)(void *, void **, int);
     void *handle;
 
+    if (server.async_loading) {
+        serverLog(LL_WARNING, "Module %s failed to load: cannot load during async replication.", path);
+        return C_ERR;
+    }
+
+    if (server.cluster_enabled && (isAnySlotInManualMigratingState() || isAnySlotInManualImportingState())) {
+        serverLog(LL_WARNING, "Module %s failed to load: cannot load during slot migration.", path);
+        return C_ERR;
+    }
+
     struct stat st;
     if (stat(path, &st) == 0) {
         /* This check is best effort */

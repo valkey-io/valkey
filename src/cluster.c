@@ -873,8 +873,16 @@ void clusterCommandHelp(client *c) {
 
 void clusterCommand(client *c) {
     if (server.cluster_enabled == 0) {
-        addReplyError(c, "This instance has cluster support disabled");
-        return;
+        if (!strcasecmp(objectGetVal(c->argv[1]), "keyslot") && c->argc == 3) {
+            /* CLUSTER KEYSLOT <key> */
+            sds key = objectGetVal(c->argv[2]);
+
+            addReplyLongLong(c, keyHashSlot(key, sdslen(key)));
+            return;
+        } else {
+            addReplyError(c, "This instance has cluster support disabled");
+            return;
+        }
     }
 
     if (c->argc == 2 && !strcasecmp(objectGetVal(c->argv[1]), "help")) {

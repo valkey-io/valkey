@@ -374,7 +374,7 @@ client *createClient(connection *conn) {
     // TODO: this probably doesn't need to be a separate function
     // just makes it a bit easier to review the POC with all related functionality
     // together
-    durableClientInit(c);
+    syncReplicationClientInit(c);
 
     return c;
 }
@@ -1900,7 +1900,7 @@ void unlinkClient(client *c) {
     /* Wait for IO operations to be done before unlinking the client. */
     waitForClientIO(c);
 
-    durableClientReset(c);
+    syncReplicationClientReset(c);
 
     /* If this is marked as current client unset it. */
     if (c->conn && server.current_client == c) server.current_client = NULL;

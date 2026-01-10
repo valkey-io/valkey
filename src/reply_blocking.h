@@ -1,5 +1,5 @@
-#ifndef DURABLE_WRITE_H
-#define DURABLE_WRITE_H
+#ifndef REPLY_BLOCKING_H
+#define REPLY_BLOCKING_H
 
 #include <inttypes.h>
 #include <sys/types.h>
@@ -7,7 +7,7 @@
 #include "expire.h"
 #include "sds.h"
 
-#define DURABLE_ACCESSED_DATA_UNAVAILABLE "Accessed data unavailable to be served"
+#define SYNC_REPL_ACCESSED_DATA_UNAVAILABLE "Accessed data unavailable to be served"
 /* Command filter codes that are used in pre execution stage of a command. */
 #define CMD_FILTER_ALLOW 0
 #define CMD_FILTER_REJECT 1
@@ -99,33 +99,33 @@ typedef struct clientDurabilityInfo {
 /**
  * Init
  */
-void durableInit(void);
-void durableCleanup(void);
-void durabilityReset(void);
-void durableClientInit(struct client *c);
-void durableClientReset(struct client *c);
+void syncReplicationInit(void);
+void syncReplicationCleanup(void);
+void syncReplicationReset(void);
+void syncReplicationClientInit(struct client *c);
+void syncReplicationClientReset(struct client *c);
 void syncReplicationClearPrimaryState(void);
 
 /**
   Command processing hooks for offset and cob tracking
 */
 void beforeCommandTrackReplOffset(void);
-void afterCommandTrackReplOffset(struct client *c);
-int preCommandExec(struct client *c);
-void postCommandExec(struct client *c);
+void afterCommandTrackReplOffset(client *c);
+int preCommandExec(client *c);
+void postCommandExec(client *c);
 void postReplicaAck(void);
 
-/*
+/**
     Utils
 */
-int isPrimaryDurabilityEnabled(void);
-bool isClientReplyBufferLimited(struct client *c);
-long long durablePurgeAndGetUncommittedKeyOffset(const sds key, struct serverDb *db);
-// TODO: naming of these flags.
-int isDurabilityEnabled(void);
+int isPrimarySyncReplicationEnabled(void);
+bool isClientReplyBufferLimited(client *c);
+long long syncReplicationPurgeAndGetUncommittedKeyOffset(sds key, serverDb *db);
+
+int isSyncReplicationEnabled(void);
 void clearUncommittedKeysAcknowledged(void);
-void durableInitDatabase(struct serverDb *db);
-void handleUncommittedKeyForClient(struct client *c, struct serverObject *key, struct serverDb *db);
+void syncReplicationInitDatabase(serverDb *db);
+void handleUncommittedKeyForClient(const client *c, const struct serverObject *key, const serverDb *db);
 // TODO:
 //  preReplyToBlockedClient
 // for streams and timeounts, when a blocked client is being unblocked
@@ -133,4 +133,4 @@ void handleUncommittedKeyForClient(struct client *c, struct serverObject *key, s
 // we should hook this to get pre-execution offsets
 
 
-#endif /* DURABLE_WRITE_H */
+#endif /* REPLY_BLOCKING_H */

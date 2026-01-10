@@ -2665,7 +2665,7 @@ int updateAppendFsync(const char **err) {
 
 static int updateSynReplicationEnabled(const char **err) {
     UNUSED(err);
-    durabilityReset();
+    syncReplicationReset();
     return 1;
 }
 

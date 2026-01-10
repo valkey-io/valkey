@@ -687,6 +687,12 @@ foreach testType {Successful Aborted} {
                         assert_error {LOADING*} {$replica REPLICAOF no one}
                     }
 
+                    test {MODULE LOAD is blocked during async-loading} {
+                        set testmodule [file normalize tests/modules/basics.so]
+                        catch {$replica MODULE LOAD $testmodule} err
+                        assert_match "*Error loading the extension*" $err
+                    }
+
                     # Make sure that next sync will not start immediately so that we can catch the replica in between syncs
                     $master config set repl-diskless-sync-delay 5
 

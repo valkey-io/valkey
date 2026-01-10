@@ -12773,7 +12773,7 @@ int moduleLoad(const char *path, void **module_argv, int module_argc, int is_loa
         return C_ERR;
     }
 
-    if (server.cluster_enabled && (isAnySlotInManualMigratingState() || isAnySlotInManualImportingState())) {
+    if (clusterIsAnySlotImporting() || clusterIsAnySlotExporting()) {
         serverLog(LL_WARNING, "Module %s failed to load: cannot load during slot migration.", path);
         return C_ERR;
     }

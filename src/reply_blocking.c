@@ -6,7 +6,6 @@
 #include <math.h>
 
 // TODO: handle PSYNC
-// TODO: handle failovers (clear durability state)
 // TODO: remove debug logging
 // TODO: handle lua & multi
 // TODO: handle blocking commands
@@ -15,34 +14,31 @@
 // TODO: temetry
 
 /*============================ Internal prototypes ========================= */
-
 static void resetPreExecutionOffset(struct client *c);
-static inline void trackCommandPreExecutionPosition(struct client *c);
+static void trackCommandPreExecutionPosition(struct client *c);
 static int unblockClientWaitingReplicaAck(struct client *c);
 static bool clientEligibleForResponseTracking(client *c);
-static inline void unblockFirstResponse(struct client *c);
-static inline int isBlockingNeededForOffset(struct client *c, long long offset);
+static void unblockFirstResponse(const struct client *c);
+static int isBlockingNeededForOffset(const struct client *c, long long offset);
 static void blockClientAndMonitorsOnReplOffset(struct client *c, long long blockingReplOffset);
 static void populateReplicaOffsets(long long *offsets, const size_t numReplicas);
-static inline int offsetSorterDesc(const void *v1, const void *v2);
+static int offsetSorterDesc(const void *v1, const void *v2);
 static unsigned long long getNumberOfUncommittedKeys(void);
-static inline int hasUncommittedKeys(void);
 static uint64_t uncommittedKeysHash(const void *key);
 static int uncommittedKeysKeyCompare(const void *key1, const void *key2);
 static const void *uncommittedKeyEntryGetKey(const void *entry);
 static void uncommittedKeyEntryDestructor(void *entry);
-static inline void addUncommittedKey(const sds key, const long long offset, hashtable *uncommittedKeys);
+static void addUncommittedKey(sds key,long long offset, hashtable *uncommittedKeys);
 static void uncommittedKeysCleanupScanCallback(void *privdata, void *entry);
-static int isSingleCommandAccessingUncommittedKeys(serverDb *db, struct serverCommand *cmd, robj **argv, int argc);
+static int isSingleCommandAccessingUncommittedKeys(const serverDb *db, struct serverCommand *cmd, robj **argv, int argc);
 static int isAccessingUncommittedData(client *c);
 static bool shouldRejectCommandWithUncommittedData(client *c);
 static long long getSingleCommandBlockingOffsetForReplicatingCommand(client *c);
 static long long getSingleCommandBlockingOffsetForNonReplicatingCommand(client *c);
-static long long getSingleCommandBlockingOffsetForConsistentWrites(struct client *c);
+static long long getSingleCommandBlockingOffsetForConsistentWrites(client *c);
 static void syncReplicationResetPrimaryState(bool is_free_clients_needed);
 
-/*================================= Utility functions ======================== */
-
+/*================================= Internal Data structures ======================== */
 typedef struct uncommittedKeyEntry {
     sds key;
     long long offset;
@@ -61,16 +57,22 @@ static hashtableType uncommittedKeysHashtableType = {
     .entryDestructor = uncommittedKeyEntryDestructor,
 };
 
+/*================================= Utility functions ======================== */
+
 /**
  * Utility function to determine whether the durability flag has been enabled.
  * return       1 if durability is enabled, 0 otherwise.
  */
-int isDurabilityEnabled(void) {
+int isSyncReplicationEnabled(void) {
     return server.durability.sync_replication_enabled;
 }
 
-int isPrimaryDurabilityEnabled(void) {
-    return isDurabilityEnabled() && iAmPrimary();
+/**
+ * Utility function to determine whether the primary sync replication flag has been enabled.
+ * return       1 if durability is enabled and we are a primary, 0 otherwise.
+ */
+int isPrimarySyncReplicationEnabled(void) {
+    return isSyncReplicationEnabled() && iAmPrimary();
 }
 
 /**
@@ -138,20 +140,6 @@ unsigned long long getUncommittedKeysCleanupTimeLimit(unsigned long long num_unc
         time_limit_ms = ceil(server.durability.keys_cleanup_time_limit_ms * MIN(1, (double)(num_uncommitted_keys / 1000000.0)));
     }
     return time_limit_ms;
-}
-
-/**
- * Determine if there are uncommitted keys in the valkey server or not
- * Returns 1 if there are uncommitted keys, 0 otherwise.
- */
-static inline int hasUncommittedKeys(void) {
-    for (int i = 0; i < server.dbnum; i++) {
-        if (server.db[i] != NULL) {
-            if (hashtableSize(server.db[i]->uncommitted_keys) > 0)
-                return 1;
-        }
-    }
-    return 0;
 }
 
 /*================================= Replica offset management =============== */
@@ -257,19 +245,20 @@ static inline void trackCommandPreExecutionPosition(struct client *c) {
     c->clientDurabilityInfo.offset.recorded = true;
 }
 
-/* If the client is currently waiting for replica acknowledgement,
+/**
+ * If the client is currently waiting for replica acknowledgement,
  * mark it unblocked and reset the client flags.
  * This involves us removing the client from the clients_waiting_replica_ack list,
- * and mark the client as unblocked for durability.
+ * and mark the client as unblocked for sync replication.
  *
  * @param c The client
  * @return 1 if the client is successfully marked unblocked, 0 otherwise
  */
 static int unblockClientWaitingReplicaAck(struct client *c) {
     if (c->clientDurabilityInfo.durable_blocked_client) {
-        listNode *ln = listSearchKey(server.durability.clients_waiting_replica_ack, c);
-        if (ln != NULL) {
-            listDelNode(server.durability.clients_waiting_replica_ack, ln);
+        listNode *node = listSearchKey(server.durability.clients_waiting_replica_ack, c);
+        if (node != NULL) {
+            listDelNode(server.durability.clients_waiting_replica_ack, node);
             c->clientDurabilityInfo.durable_blocked_client = 0;
             return 1;
         }
@@ -277,25 +266,16 @@ static int unblockClientWaitingReplicaAck(struct client *c) {
     return 0;
 }
 
-/* Add a free function for blockedResponse entries */
-static void blockedResponseFree(void *value) {
-    blockedResponse *br = (blockedResponse *)value;
-    /* If the blocked response ever contains dynamically allocated fields,
-       free them here.  For now the structure only holds pointers owned
-       elsewhere, so we simply free the structure itself. */
-    zfree(br);
-}
-
 /**
- * Initialize the durable write client attributes when client is created
+ * Initialize the sync replication client attributes when client is created
  */
-void durableClientInit(struct client *c) {
-    if (!isDurabilityEnabled()) {
+void syncReplicationClientInit(client *c) {
+    if (!isSyncReplicationEnabled()) {
         return;
     }
     if (c->clientDurabilityInfo.blocked_responses == NULL) {
         c->clientDurabilityInfo.blocked_responses = listCreate();
-        listSetFreeMethod(c->clientDurabilityInfo.blocked_responses, blockedResponseFree);
+        listSetFreeMethod(c->clientDurabilityInfo.blocked_responses, zfree);
         resetPreExecutionOffset(c);
         c->clientDurabilityInfo.current_command_repl_offset = -1;
     }
@@ -305,7 +285,7 @@ void durableClientInit(struct client *c) {
  * Reset the client durable write attributes during a client clean-up.
  * This method is invoked when a client is freed.
  */
-void durableClientReset(struct client *c) {
+void syncReplicationClientReset(client *c) {
     // Free this client from the clients_waiting_replica_ack list and emit a metric on
     // how many clients are disconnected before the response gets flushed/unblocked.
     unblockClientWaitingReplicaAck(c);
@@ -319,7 +299,7 @@ void durableClientReset(struct client *c) {
     c->clientDurabilityInfo.current_command_repl_offset = -1;
 }
 
-/*
+/**
  * Returns true if the client is eligible for keyspace tracking
  * on a primary node.
  */
@@ -332,19 +312,20 @@ static bool clientEligibleForResponseTracking(client *c) {
     // i.e: keyspace, does it include dirty keys?
     // Administrative commands that are not keyspace informational nor
     // write commands are not eligible for response tracking/blocking.
-    if ((c->cmd->flags & CMD_ADMIN) && !(c->cmd->flags & CMD_WRITE)) {
+    if (c->cmd->flags & CMD_ADMIN && !(c->cmd->flags & CMD_WRITE)) {
         return false;
     }
 
-    return ((c->cmd->flags & (CMD_WRITE | CMD_READONLY))); // Read or write command
+    return c->cmd->flags & (CMD_WRITE | CMD_READONLY); // Read or write command
                                                            // TODO: transactions, lua, scripts, etc
                                                            // TODO: functions
 }
 
-/* Check if we only allow client to receive up to a certain
+/**
+ * Check if we only allow client to receive up to a certain
  * position in the client reply buffer
  */
-inline bool isClientReplyBufferLimited(struct client *c) {
+inline bool isClientReplyBufferLimited(client *c) {
     return c->clientDurabilityInfo.blocked_responses != NULL &&
            listLength(c->clientDurabilityInfo.blocked_responses) > 0;
 }
@@ -356,14 +337,14 @@ inline bool isClientReplyBufferLimited(struct client *c) {
  * @param c The client to block the last response in the COB
  * @param blocked_offset The replication offset to block on
  */
-void blockLastResponseIfExist(struct client *c, long long blocked_offset) {
+void blockLastResponseIfExist(const client *c, const long long blocked_offset) {
     // We must have called the pre-hook to track COB position
     serverAssert(c->clientDurabilityInfo.offset.recorded);
 
     // Flag to indicate whether there is new response added in client output
     // buffer
     bool has_new_response = false;
-    struct listNode *disallowed_reply_block =
+    listNode *disallowed_reply_block =
         c->clientDurabilityInfo.offset.reply_block;
     size_t disallowed_byte_offset =
         c->clientDurabilityInfo.offset.byte_offset;
@@ -383,7 +364,7 @@ void blockLastResponseIfExist(struct client *c, long long blocked_offset) {
         }
     } else {
         // The end of the previous response is in the client reply list
-        clientReplyBlock *last_reply_block = (clientReplyBlock *)listNodeValue(disallowed_reply_block);
+        const clientReplyBlock *last_reply_block = listNodeValue(disallowed_reply_block);
         if (last_reply_block->used > disallowed_byte_offset) {
             // More data comes after the last reply in the same reply block
             has_new_response = true;
@@ -406,8 +387,11 @@ void blockLastResponseIfExist(struct client *c, long long blocked_offset) {
     }
 }
 
-/* Unblock the first response for the client */
-static inline void unblockFirstResponse(struct client *c) {
+/**
+ * Unblocks the first response in the client's blocked responses list
+ * @param c the client to unblock the first response for.
+ */
+static void unblockFirstResponse(const client *c) {
     serverAssert(c->clientDurabilityInfo.blocked_responses != NULL);
     if (listLength(c->clientDurabilityInfo.blocked_responses) > 0) {
         listNode *first = listFirst(c->clientDurabilityInfo.blocked_responses);
@@ -415,12 +399,13 @@ static inline void unblockFirstResponse(struct client *c) {
     }
 }
 
-/* Determines if we need to block on a given replication offset for a given client
+/**
+ * Determines if we need to block on a given replication offset for a given client
  * @param c Client
  * @param offset The replication offset we are checking
  * @return 0 if we don't need to block at the specified offset, and 1 if we do.
  */
-static inline int isBlockingNeededForOffset(struct client *c, long long offset) {
+static int isBlockingNeededForOffset(const client *c, const long long offset) {
     // If the blocking offset is -1 or no replica is needed to ACK, don't block.
     if (offset == -1 || replicaAcksForConsensus() == 0) {
         return 0;
@@ -440,11 +425,11 @@ static inline int isBlockingNeededForOffset(struct client *c, long long offset) 
  * And clears the client's pre-execution byte offset fields so it won't carry
  * forward to the next command.
  *
- * @param c Client
+ * @param c client whose response we will block.
  * @param blockingReplOffset The replication offset to block the client on
  */
-void blockClientOnReplOffset(struct client *c, long long blockingReplOffset) {
-    serverAssert(isPrimaryDurabilityEnabled());
+void blockClientOnReplOffset(client *c, const long long blockingReplOffset) {
+    serverAssert(isPrimarySyncReplicationEnabled());
 
     /* If needed, we block the client and put it into our list of clients
      * waiting for ack from slaves. */
@@ -473,7 +458,7 @@ void blockClientOnReplOffset(struct client *c, long long blockingReplOffset) {
  * @param c Client
  * @param blockingReplOffset The replication offset to block the client and the monitors on
  */
-static void blockClientAndMonitorsOnReplOffset(struct client *c, long long blockingReplOffset) {
+static void blockClientAndMonitorsOnReplOffset(client *c, long long blockingReplOffset) {
     // Block the client that issues the command on the replication offset
     blockClientOnReplOffset(c, blockingReplOffset);
 
@@ -489,7 +474,7 @@ static void blockClientAndMonitorsOnReplOffset(struct client *c, long long block
  * @param durability Durability object of the current primary
  * @param consensus_ack_offset Repl offset that have been acked by the required number of replicas
  */
-void unblockResponsesWithAckOffset(struct durable_t *durability, long long consensus_ack_offset) {
+void unblockResponsesWithAckOffset(const durable_t *durability, const long long consensus_ack_offset) {
     serverLog(LL_DEBUG, "unblocking clients for consensus offset %lld,", consensus_ack_offset);
     // Traverses through all the clients that wait for replica ack
     listIter li;
@@ -507,8 +492,8 @@ void unblockResponsesWithAckOffset(struct durable_t *durability, long long conse
 
         // Keep deleting from the front while the first response can be unblocked
         while (listLength(c->clientDurabilityInfo.blocked_responses) > 0) {
-            listNode *first = listFirst(c->clientDurabilityInfo.blocked_responses);
-            blockedResponse *br = listNodeValue(first);
+            const listNode *first = listFirst(c->clientDurabilityInfo.blocked_responses);
+            const blockedResponse *br = listNodeValue(first);
 
             if (br->primary_repl_offset <= consensus_ack_offset) {
                 unblockFirstResponse(c);
@@ -525,8 +510,7 @@ void unblockResponsesWithAckOffset(struct durable_t *durability, long long conse
         // If there are no more blocked responses for the client, we can safely
         // mark it unblocked entirely
         if (listLength(c->clientDurabilityInfo.blocked_responses) == 0) {
-            if (unblockClientWaitingReplicaAck(c)) {
-            }
+            unblockClientWaitingReplicaAck(c);
         }
         // Put client in pending write queue so responses can be flushed
         // to client if we have unblocked at least 1 response objects.
@@ -536,16 +520,18 @@ void unblockResponsesWithAckOffset(struct durable_t *durability, long long conse
     }
 }
 
-/* Check if there are clients blocked that can be unblocked since
- * we received enough ACKs from replicas */
+/**
+ * Checks if there are clients blocked that can be unblocked since
+ * we received enough ACKs from replicas.
+ */
 void postReplicaAck(void) {
     serverLog(LL_DEBUG, "postReplicaAck hook entered");
-    if (!isPrimaryDurabilityEnabled()) {
+    if (!isPrimarySyncReplicationEnabled()) {
         return;
     }
 
-    struct durable_t *durability = &server.durability;
-    long long consensus_ack_offset = getConsensusOffset(replicaAcksForConsensus());
+    durable_t *durability = &server.durability;
+    const long long consensus_ack_offset = getConsensusOffset(replicaAcksForConsensus());
     if (consensus_ack_offset <= durability->previous_acked_offset) {
         return;
     }
@@ -566,7 +552,7 @@ void postReplicaAck(void) {
  * @param offset The replication offset to wait on the uncommitted key
  * @param uncommittedKeys The set of uncommitted keys
  */
-static inline void addUncommittedKey(const sds key, const long long offset, hashtable *uncommittedKeys) {
+static void addUncommittedKey(const sds key, const long long offset, hashtable *uncommittedKeys) {
     uncommittedKeyEntry *entry = zmalloc(sizeof(*entry));
     entry->key = sdsdup(key);
     entry->offset = offset;
@@ -582,6 +568,11 @@ static inline void addUncommittedKey(const sds key, const long long offset, hash
     zfree(entry);
 }
 
+/**
+ * function executed by hashtableScan for cleaning up uncommitted keys.
+ * @param privdata
+ * @param entry
+ */
 static void uncommittedKeysCleanupScanCallback(void *privdata, void *entry) {
     uncommittedKeyCleanupCtx *ctx = privdata;
     uncommittedKeyEntry *uke = entry;
@@ -599,7 +590,7 @@ static void uncommittedKeysCleanupScanCallback(void *privdata, void *entry) {
  * @param db The serverDB object
  * @return the ACK offset of the key if key is uncommitted, returns -1 otherwise.
  */
-long long durablePurgeAndGetUncommittedKeyOffset(const sds key, serverDb *db) {
+long long syncReplicationPurgeAndGetUncommittedKeyOffset(const sds key, serverDb *db) {
     serverAssert(iAmPrimary());
     uncommittedKeyEntry *entry = NULL;
     if (!hashtableFind(db->uncommitted_keys, key, (void **)&entry)) {
@@ -623,11 +614,11 @@ long long durablePurgeAndGetUncommittedKeyOffset(const sds key, serverDb *db) {
 
 /**
  * Utility method to handle a dirty key for a given client.
- * @param c The calling client. NULL if the key becomes dirty outside of a client command (i.e. expiry/eviction)
+ * @param c The calling client. NULL if the key becomes dirty outside a client command (i.e. expiry/eviction)
  * @param key
  * @param db
  */
-void handleUncommittedKeyForClient(client *c, robj *key, serverDb *db) {
+void handleUncommittedKeyForClient(const client *c, const robj *key, const serverDb *db) {
     // If we are in the context of a MULTI/EXEC transaction (or TODO: a script)
     // we mark the dirty key
     // pending so it can be properly recorded later on with the final replication offset.
@@ -641,7 +632,7 @@ void handleUncommittedKeyForClient(client *c, robj *key, serverDb *db) {
 }
 
 /**
- * Clear all uncommitted DBs and keys that are properly acknowledged by
+ * Clears all uncommitted DBs and keys that are properly acknowledged by
  * sufficient number of replicas and mark them no longer dirty.
  *
  * This method iterates through all the valkey databases and checks the
@@ -650,7 +641,7 @@ void handleUncommittedKeyForClient(client *c, robj *key, serverDb *db) {
  * It is applicable only to primary.
  */
 void clearUncommittedKeysAcknowledged(void) {
-    if (!isPrimaryDurabilityEnabled()) {
+    if (!isPrimarySyncReplicationEnabled()) {
         return;
     }
 
@@ -691,8 +682,8 @@ void clearUncommittedKeysAcknowledged(void) {
                     db->uncommitted_keys_cursor =
                         hashtableScan(db->uncommitted_keys, db->uncommitted_keys_cursor, uncommittedKeysCleanupScanCallback, &ctx);
 
-                    if ((time_limit_ms > 0) && (scan_count >= next_time_check)) {
-                        unsigned long long cur_time_ms = mstime();
+                    if (time_limit_ms > 0 && scan_count >= next_time_check) {
+                        const unsigned long long cur_time_ms = mstime();
                         if (cur_time_ms - start_time_ms > time_limit_ms) {
                             // Stop the current scan, continue to do in the next run
                             return;
@@ -717,7 +708,11 @@ void clearUncommittedKeysAcknowledged(void) {
     }
 }
 
-void durableInitDatabase(serverDb *db) {
+/**
+ * Initialize sync replication related fields for a database.
+ * @param db database to initialize.
+ */
+void syncReplicationInitDatabase(serverDb *db) {
     db->uncommitted_keys = hashtableCreate(&uncommittedKeysHashtableType);
     db->dirty_repl_offset = -1;
     db->uncommitted_keys_cursor = 0;
@@ -727,13 +722,13 @@ void durableInitDatabase(serverDb *db) {
 /**
  * Utility function to clear all uncommitted keys for each database
  */
-static inline void clearAllUncommittedKeys(void) {
+static void clearAllUncommittedKeys(void) {
     serverLog(LL_NOTICE, "Clearing all uncommitted keys for sync replication");
     for (int i = 0; i < server.dbnum; i++) {
         serverDb *db = server.db[i];
         if (db == NULL) continue;
         hashtableRelease(db->uncommitted_keys);
-        durableInitDatabase(db);
+        syncReplicationInitDatabase(db);
     }
     server.durability.curr_db_scan_idx = 0;
 }
@@ -744,19 +739,19 @@ static inline void clearAllUncommittedKeys(void) {
  * Determines if a single valkey command is trying to access an uncommitted key.
  * Returns 1 if so, 0 otherwise.
  */
-static int isSingleCommandAccessingUncommittedKeys(serverDb *db, struct serverCommand *cmd, robj **argv, int argc) {
+static int isSingleCommandAccessingUncommittedKeys(const serverDb *db, struct serverCommand *cmd, robj **argv, int argc) {
     // If the database has no uncommitted keys, return 0
     if (hashtableSize(db->uncommitted_keys) == 0) return 0;
 
     getKeysResult keysResult;
     initGetKeysResult(&keysResult);
-    int numkeys = getKeysFromCommand(cmd, argv, argc, &keysResult);
-    keyReference *keys = keysResult.keys;
+    const int numKeys = getKeysFromCommand(cmd, argv, argc, &keysResult);
+    const keyReference *keys = keysResult.keys;
 
-    for (int i = 0; i < numkeys; i++) {
-        sds keystr = objectGetVal(argv[keys[i].pos]);
+    for (int i = 0; i < numKeys; i++) {
+        const sds keyStr = objectGetVal(argv[keys[i].pos]);
         // Check if we are trying to access an uncommitted key
-        if (hashtableFind(db->uncommitted_keys, keystr, NULL)) {
+        if (hashtableFind(db->uncommitted_keys, keyStr, NULL)) {
             getKeysFreeResult(&keysResult);
             return 1;
         }
@@ -768,18 +763,27 @@ static int isSingleCommandAccessingUncommittedKeys(serverDb *db, struct serverCo
 }
 
 /**
- * Determine if a client is trying to access uncommitted keys or function store.
+ * Determine if a client is trying to access uncommitted keys.
  * Returns 1 if so, 0 otherwise.
  */
 static int isAccessingUncommittedData(client *c) {
-    // Single command handling
     if (isSingleCommandAccessingUncommittedKeys(c->db, c->cmd, c->argv, c->argc)) {
         return 1;
     }
-
+    // TODO: handle other commands
     return 0;
 }
 
+/**
+ * Checks if we should reject a command that is accessing uncommitted data.
+ * The command is allowed if:
+ * 1. The command is an administrative command
+ * 2. The command is issued by the primary (but the response might be blocked)
+ * 3. The command is a read-only command
+ * 4. The command is a write command but the primary is not operating as a primary
+ * @param c
+ * @return
+ */
 static bool shouldRejectCommandWithUncommittedData(client *c) {
     if (c->cmd == NULL // command is null
         || ((c->cmd->flags & CMD_ADMIN)) || c->flag.primary) {
@@ -812,7 +816,7 @@ static long long getSingleCommandBlockingOffsetForReplicatingCommand(client *c) 
     // If the command executed generated replication data, then this means the server data changed.
     // We need to mark the modified data as dirty and block the response to the client until the
     // replica's replication offset is caught up to the current global offset.
-    // todo handle functions
+    // TODO: handle functions
     getKeysResult result;
     initGetKeysResult(&result);
     int numkeys = getKeysFromCommand(c->cmd, c->argv, c->argc, &result);
@@ -869,7 +873,7 @@ static long long getSingleCommandBlockingOffsetForNonReplicatingCommand(client *
             // until all prior updates on this key have been acknowledged.
             // So here we essentially need to track the biggest offset amongst
             // all the uncommitted keys accessed by the command.
-            long long offset = durablePurgeAndGetUncommittedKeyOffset(keystr, c->db);
+            long long offset = syncReplicationPurgeAndGetUncommittedKeyOffset(keystr, c->db);
             if (offset > blocking_repl_offset) {
                 blocking_repl_offset = offset;
             }
@@ -890,7 +894,7 @@ static long long getSingleCommandBlockingOffsetForNonReplicatingCommand(client *
  *         to ACK write, then it needs to block writes.
  */
 static long long getSingleCommandBlockingOffsetForConsistentWrites(struct client *c) {
-    serverAssert(isPrimaryDurabilityEnabled());
+    serverAssert(isPrimarySyncReplicationEnabled());
 
     // If no replicas are required for ACK, then return -1 (no need to block)
     if (replicaAcksForConsensus() == 0)
@@ -920,12 +924,12 @@ static long long getSingleCommandBlockingOffsetForConsistentWrites(struct client
  * about to be executed.
  */
 void beforeCommandTrackReplOffset(void) {
-    serverLog(LL_DEBUG, "preCall hook entered");
-    if (!isPrimaryDurabilityEnabled()) return;
+    serverLog(LL_DEBUG, "beforeCommandTrackReplOffset hook entered");
+    if (!isPrimarySyncReplicationEnabled()) return;
 
     server.durability.pre_call_replication_offset = server.primary_repl_offset;
     server.durability.pre_call_num_ops_pending_propagation = server.also_propagate.numops;
-    serverLog(LL_DEBUG, "preCall hook: pre_call_replication_offset=%lld, pre_call_num_ops_pending_propagation=%d",
+    serverLog(LL_DEBUG, "beforeCommandTrackReplOffset hook: pre_call_replication_offset=%lld, pre_call_num_ops_pending_propagation=%d",
               server.durability.pre_call_replication_offset, server.durability.pre_call_num_ops_pending_propagation);
 }
 
@@ -941,10 +945,9 @@ void beforeCommandTrackReplOffset(void) {
  *
  * @param c The client executing the valkey command
  */
-void afterCommandTrackReplOffset(struct client *c) {
-    // log debug tracing
-    serverLog(LL_DEBUG, "Call hook entered for command '%s'", c->cmd->declared_name);
-    if (!isPrimaryDurabilityEnabled() || (c->flag.blocked))
+void afterCommandTrackReplOffset(client *c) {
+    serverLog(LL_DEBUG, "afterCommandTrackReplOffset entered for command '%s'", c->cmd->declared_name);
+    if (!isPrimarySyncReplicationEnabled() || (c->flag.blocked))
         return;
 
     // Determine the blocking replication offset for the current command
@@ -954,7 +957,7 @@ void afterCommandTrackReplOffset(struct client *c) {
     // by the calling client somewhere. This is usually tracked in the calling
     // client itself. But for the case of scripts, the script caller client is
     // different from the fake client created to execute each script command
-    struct client *tracking_client = server.current_client ? server.current_client : c;
+    client *tracking_client = server.current_client ? server.current_client : c;
 
     if (current_cmd_blocking_offset > tracking_client->clientDurabilityInfo.current_command_repl_offset) {
         tracking_client->clientDurabilityInfo.current_command_repl_offset = current_cmd_blocking_offset;
@@ -969,10 +972,10 @@ void afterCommandTrackReplOffset(struct client *c) {
  * For non-administrative commands that is either read or write, we will track the pre-execution positions
  * in the reply COB of the client and all the connected monitors.
  */
-int preCommandExec(struct client *c) {
+int preCommandExec(client *c) {
     serverLog(LL_DEBUG, "preCommandExec hook entered for command '%s'",
               c->cmd ? c->cmd->declared_name : "NULL");
-    if (!isDurabilityEnabled()) {
+    if (!isSyncReplicationEnabled()) {
         serverLog(LL_DEBUG, "preCommandExec hook: durability not enabled, allowing");
         return CMD_FILTER_ALLOW;
     }
@@ -983,7 +986,7 @@ int preCommandExec(struct client *c) {
     if (shouldRejectCommandWithUncommittedData(c)) {
         serverAssert(!(c->cmd->flags & CMD_WRITE));
         flagTransaction(c);
-        addReplyError(c, DURABLE_ACCESSED_DATA_UNAVAILABLE);
+        addReplyError(c, SYNC_REPL_ACCESSED_DATA_UNAVAILABLE);
         return CMD_FILTER_REJECT;
     }
 
@@ -1012,8 +1015,8 @@ int preCommandExec(struct client *c) {
  *
  * @param c client
  */
-void postCommandExec(struct client *c) {
-    if (!isPrimaryDurabilityEnabled()) {
+void postCommandExec(client *c) {
+    if (!isPrimarySyncReplicationEnabled()) {
         return;
     }
     serverLog(LL_DEBUG, "postCommandExec hook entered for command '%s'",
@@ -1042,17 +1045,16 @@ void postCommandExec(struct client *c) {
 /**
  * Function used to initialize the durability datastructures.
  */
-void durableInit(void) {
-    // Initialize synchronous replication
+void syncReplicationInit(void) {
     server.durability.previous_acked_offset = -1;
     server.durability.curr_db_scan_idx = 0;
     server.durability.clients_waiting_replica_ack = listCreate();
 }
 
 /**
- * Function used to cleanup the durability datastructures on server shutdown.
+ * Function used to clean up the sync replication datastructures on server shutdown.
  */
-void durableCleanup(void) {
+void syncReplicationCleanup(void) {
     serverLog(LL_DEBUG, "Cleanup reply blocking structures");
     server.durability.replica_offsets_size = 0;
     zfree(server.durability.replica_offsets);
@@ -1068,7 +1070,7 @@ void durableCleanup(void) {
 /**
  * Utility function to release buffer used for replica offsets
  */
-static inline void releaseReplicaOffsetBuffer(void) {
+static void releaseReplicaOffsetBuffer(void) {
     server.durability.replica_offsets_size = 0;
     zfree(server.durability.replica_offsets);
     server.durability.replica_offsets = NULL;
@@ -1077,7 +1079,7 @@ static inline void releaseReplicaOffsetBuffer(void) {
 /**
  * Utility function to disconnect and free clients waiting for replica ACK
  */
-static inline void freeClientsWaitingAck(struct durable_t *durability) {
+static void freeClientsWaitingAck(const durable_t *durability) {
     listIter li;
     listNode *ln;
     listRewind(durability->clients_waiting_replica_ack, &li);
@@ -1094,9 +1096,8 @@ static inline void freeClientsWaitingAck(struct durable_t *durability) {
  * Both cases require related resources to be reset to initial state. The only difference is how we handle the
  * clients waiting for replica ACK. If sync replication is disabled, all blocked responses and keyspace
  * notifications will be flushed for these clients, whose connections to primary will still be maintained.
- * TODO: if the primary becomes a replica, all these clients should be disconnected and freed.
  */
-static inline void syncReplicationResetPrimaryState(bool is_free_clients_needed) {
+static void syncReplicationResetPrimaryState(bool is_free_clients_needed) {
     // Release buffer we use for replica offsets
     releaseReplicaOffsetBuffer();
 
@@ -1117,7 +1118,7 @@ static inline void syncReplicationResetPrimaryState(bool is_free_clients_needed)
  * This method is invoked when a master node becomes a replica.
  */
 void syncReplicationClearPrimaryState(void) {
-    if (!isDurabilityEnabled()) return;
+    if (!isSyncReplicationEnabled()) return;
 
     // Clear all blocked responses and free the clients waiting for replica ACK
     syncReplicationResetPrimaryState(true);
@@ -1128,8 +1129,8 @@ void syncReplicationClearPrimaryState(void) {
  * Reset related resources when disabling synchronous replication
  * This method is invoked when user turns off durability via config set command
  */
-void durabilityReset(void) {
-    if (isDurabilityEnabled()) {
+void syncReplicationReset(void) {
+    if (isSyncReplicationEnabled()) {
         // To enable sync replication, we update the pre-command offset so that the CONFIG SET command
         // itself doesn't get inadvertently blocked because the primary replication offset is greater
         // than the stale pre_command_replication_offset.
@@ -1139,7 +1140,7 @@ void durabilityReset(void) {
         listRewind(server.clients, &li);
         while ((ln = listNext(&li)) != NULL) {
             client *c = listNodeValue(ln);
-            durableClientInit(c);
+            syncReplicationClientInit(c);
         }
     } else {
         // To disable durable write, we need to flush all blocked responses and keyspace

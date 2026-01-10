@@ -285,6 +285,7 @@ int test_durablePurgeAndGetUncommittedKeyOffset(int argc, char **argv, int flags
     char *old_primary_host = server.primary_host;
     int old_cluster_enabled = server.cluster_enabled;
     long long old_previous_acked_offset = server.durability.previous_acked_offset;
+    long long old_primary_repl_offset = server.primary_repl_offset;
 
     server.cluster_enabled = 0;
     server.primary_host = NULL;
@@ -292,28 +293,26 @@ int test_durablePurgeAndGetUncommittedKeyOffset(int argc, char **argv, int flags
     server.db = zcalloc(sizeof(serverDb *));
 
     serverDb *db = zcalloc(sizeof(serverDb));
-    db->uncommitted_keys = raxNew();
-    db->dirty_repl_offset = -1;
-    db->scan_in_progress = 0;
+    durableInitDatabase(db);
     server.db[0] = db;
 
-    sds key = sdsnew("key");
+    robj *key_obj = createStringObject("key", 3);
+    sds key = objectGetVal(key_obj);
     long long offset = 10;
-    raxInsert(db->uncommitted_keys, (unsigned char *)key, sdslen(key), (void *)offset, NULL);
+    server.primary_repl_offset = offset;
+    handleUncommittedKeyForClient(NULL, key_obj, db);
 
     server.durability.previous_acked_offset = 5;
     TEST_ASSERT(durablePurgeAndGetUncommittedKeyOffset(key, db) == offset);
 
-    void *result = NULL;
-    TEST_ASSERT(raxFind(db->uncommitted_keys, (unsigned char *)key, sdslen(key), &result));
-    TEST_ASSERT((long long)result == offset);
+    TEST_ASSERT(hashtableSize(db->uncommitted_keys) == 1);
 
     server.durability.previous_acked_offset = 10;
     TEST_ASSERT(durablePurgeAndGetUncommittedKeyOffset(key, db) == -1);
-    TEST_ASSERT(!raxFind(db->uncommitted_keys, (unsigned char *)key, sdslen(key), &result));
+    TEST_ASSERT(hashtableSize(db->uncommitted_keys) == 0);
 
-    sdsfree(key);
-    raxFree(db->uncommitted_keys);
+    decrRefCount(key_obj);
+    hashtableRelease(db->uncommitted_keys);
     zfree(db);
     zfree(server.db);
 
@@ -322,6 +321,7 @@ int test_durablePurgeAndGetUncommittedKeyOffset(int argc, char **argv, int flags
     server.primary_host = old_primary_host;
     server.cluster_enabled = old_cluster_enabled;
     server.durability.previous_acked_offset = old_previous_acked_offset;
+    server.primary_repl_offset = old_primary_repl_offset;
 
     return 0;
 }

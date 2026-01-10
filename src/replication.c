@@ -4391,6 +4391,7 @@ void replicationSetPrimary(char *ip, int port, int full_sync_required, bool disc
         freeClient(server.primary);
     }
 
+    syncReplicationClearPrimaryState();
     /* Setting primary_host only after the call to freeClient since it calls
      * replicationHandlePrimaryDisconnection which can trigger a re-connect
      * directly from within that call. */

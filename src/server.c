@@ -2811,9 +2811,7 @@ serverDb *createDatabase(int id) {
     db->watched_keys = dictCreate(&keylistDictType);
     db->id = id;
 
-    db->uncommitted_keys = raxNew();
-    db->dirty_repl_offset = -1;
-    db->scan_in_progress = 0;
+    durableInitDatabase(db);
     resetDbExpiryState(db);
     return db;
 }

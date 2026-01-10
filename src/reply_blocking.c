@@ -27,15 +27,39 @@ static void populateReplicaOffsets(long long *offsets, const size_t numReplicas)
 static inline int offsetSorterDesc(const void *v1, const void *v2);
 static unsigned long long getNumberOfUncommittedKeys(void);
 static inline int hasUncommittedKeys(void);
-static inline void addUncommittedKey(const sds key, const long long offset, rax *uncommittedKeys);
+static uint64_t uncommittedKeysHash(const void *key);
+static int uncommittedKeysKeyCompare(const void *key1, const void *key2);
+static const void *uncommittedKeyEntryGetKey(const void *entry);
+static void uncommittedKeyEntryDestructor(void *entry);
+static inline void addUncommittedKey(const sds key, const long long offset, hashtable *uncommittedKeys);
+static void uncommittedKeysCleanupScanCallback(void *privdata, void *entry);
 static int isSingleCommandAccessingUncommittedKeys(serverDb *db, struct serverCommand *cmd, robj **argv, int argc);
 static int isAccessingUncommittedData(client *c);
 static bool shouldRejectCommandWithUncommittedData(client *c);
 static long long getSingleCommandBlockingOffsetForReplicatingCommand(client *c);
 static long long getSingleCommandBlockingOffsetForNonReplicatingCommand(client *c);
 static long long getSingleCommandBlockingOffsetForConsistentWrites(struct client *c);
+static void syncReplicationResetPrimaryState(bool is_free_clients_needed);
 
 /*================================= Utility functions ======================== */
+
+typedef struct uncommittedKeyEntry {
+    sds key;
+    long long offset;
+} uncommittedKeyEntry;
+
+typedef struct uncommittedKeyCleanupCtx {
+    hashtable *ht;
+    long long acked_offset;
+    unsigned long long *scan_count;
+} uncommittedKeyCleanupCtx;
+
+static hashtableType uncommittedKeysHashtableType = {
+    .entryGetKey = uncommittedKeyEntryGetKey,
+    .hashFunction = uncommittedKeysHash,
+    .keyCompare = uncommittedKeysKeyCompare,
+    .entryDestructor = uncommittedKeyEntryDestructor,
+};
 
 /**
  * Utility function to determine whether the durability flag has been enabled.
@@ -73,11 +97,33 @@ static inline int offsetSorterDesc(const void *v1, const void *v2) {
     return (*b - *a);
 }
 
+static uint64_t uncommittedKeysHash(const void *key) {
+    const sds keystr = (const sds)key;
+    return hashtableGenHashFunction((const char *)keystr, sdslen(keystr));
+}
+
+static int uncommittedKeysKeyCompare(const void *key1, const void *key2) {
+    const sds s1 = (const sds)key1;
+    const sds s2 = (const sds)key2;
+    return sdslen(s1) != sdslen(s2) || memcmp(s1, s2, sdslen(s1));
+}
+
+static const void *uncommittedKeyEntryGetKey(const void *entry) {
+    return ((const uncommittedKeyEntry *)entry)->key;
+}
+
+static void uncommittedKeyEntryDestructor(void *entry) {
+    if (entry == NULL) return;
+    uncommittedKeyEntry *uke = entry;
+    sdsfree(uke->key);
+    zfree(uke);
+}
+
 static unsigned long long getNumberOfUncommittedKeys(void) {
     unsigned long long num_uncommitted_keys = 0;
     for (int i = 0; i < server.dbnum; i++) {
         if (server.db[i] != NULL) {
-            num_uncommitted_keys += raxSize(server.db[i]->uncommitted_keys);
+            num_uncommitted_keys += hashtableSize(server.db[i]->uncommitted_keys);
         }
     }
     return num_uncommitted_keys;
@@ -101,7 +147,7 @@ unsigned long long getUncommittedKeysCleanupTimeLimit(unsigned long long num_unc
 static inline int hasUncommittedKeys(void) {
     for (int i = 0; i < server.dbnum; i++) {
         if (server.db[i] != NULL) {
-            if (raxSize(server.db[i]->uncommitted_keys) > 0)
+            if (hashtableSize(server.db[i]->uncommitted_keys) > 0)
                 return 1;
         }
     }
@@ -520,10 +566,29 @@ void postReplicaAck(void) {
  * @param offset The replication offset to wait on the uncommitted key
  * @param uncommittedKeys The set of uncommitted keys
  */
-static inline void addUncommittedKey(const sds key, const long long offset, rax *uncommittedKeys) {
-    // The value in the uncommittedKeys is the replication offset in long long format
-    int retval = raxInsert(uncommittedKeys, (unsigned char *)key, sdslen(key), (void *)offset, NULL);
-    serverAssert(retval == 1 || errno == 0);
+static inline void addUncommittedKey(const sds key, const long long offset, hashtable *uncommittedKeys) {
+    uncommittedKeyEntry *entry = zmalloc(sizeof(*entry));
+    entry->key = sdsdup(key);
+    entry->offset = offset;
+
+    void *existing = NULL;
+    if (hashtableAddOrFind(uncommittedKeys, entry, &existing)) {
+        return;
+    }
+
+    uncommittedKeyEntry *existing_entry = existing;
+    existing_entry->offset = offset;
+    sdsfree(entry->key);
+    zfree(entry);
+}
+
+static void uncommittedKeysCleanupScanCallback(void *privdata, void *entry) {
+    uncommittedKeyCleanupCtx *ctx = privdata;
+    uncommittedKeyEntry *uke = entry;
+    if (uke->offset <= ctx->acked_offset) {
+        hashtableDelete(ctx->ht, uke->key);
+    }
+    (*ctx->scan_count)++;
 }
 
 /**
@@ -536,12 +601,12 @@ static inline void addUncommittedKey(const sds key, const long long offset, rax 
  */
 long long durablePurgeAndGetUncommittedKeyOffset(const sds key, serverDb *db) {
     serverAssert(iAmPrimary());
-    void *result;
-    if (!raxFind(db->uncommitted_keys, (unsigned char *)key, sdslen(key), &result)) {
+    uncommittedKeyEntry *entry = NULL;
+    if (!hashtableFind(db->uncommitted_keys, key, (void **)&entry)) {
         return -1;
     }
 
-    long long key_offset = (long long)result;
+    long long key_offset = entry->offset;
 
     /**
      * If the replication offset of key has been properly acked by replicas,
@@ -549,7 +614,7 @@ long long durablePurgeAndGetUncommittedKeyOffset(const sds key, serverDb *db) {
      * indicating the key has been committed.
      */
     if (key_offset <= server.durability.previous_acked_offset) {
-        raxRemove(db->uncommitted_keys, (unsigned char *)key, sdslen(key), NULL);
+        hashtableDelete(db->uncommitted_keys, key);
         return -1;
     }
 
@@ -599,11 +664,10 @@ void clearUncommittedKeysAcknowledged(void) {
 
     unsigned long long time_limit_ms = getUncommittedKeysCleanupTimeLimit(num_uncommitted_keys);
     unsigned long long start_time_ms = mstime();
+    unsigned long long next_time_check = TIME_CHECK_INTERVAL;
     while (durability->curr_db_scan_idx < server.dbnum) {
         serverDb *db = server.db[durability->curr_db_scan_idx];
         if (db != NULL) {
-            raxIterator *iter = &db->next_scan_iter;
-
             // Clear the database's dirty replication offset if it is acknowledged by replicas
             if (db->dirty_repl_offset <= server.durability.previous_acked_offset) {
                 db->dirty_repl_offset = -1;
@@ -611,40 +675,36 @@ void clearUncommittedKeysAcknowledged(void) {
 
             // In a time-bound fashion, clear the uncommitted keys if the required replication
             // offset has been acknowledged by replicas.
-            if (raxSize(db->uncommitted_keys) > 0) {
+            if (hashtableSize(db->uncommitted_keys) > 0) {
+                uncommittedKeyCleanupCtx ctx = {
+                    .ht = db->uncommitted_keys,
+                    .acked_offset = server.durability.previous_acked_offset,
+                    .scan_count = &scan_count,
+                };
+
                 if (!db->scan_in_progress) {
-                    raxStart(iter, db->uncommitted_keys);
-                    raxSeek(iter, "^", NULL, 0);
+                    db->uncommitted_keys_cursor = 0;
                     db->scan_in_progress = 1;
-                } else {
-                    raxSeek(iter, ">=", iter->key, iter->key_len);
                 }
 
-                while (raxNext(iter)) {
-                    // Use scan_count % TIME_CHECK_INTERVAL to reduce the number of calling mstime
-                    // method, it can make sure to scan some keys if time_limit_ms
-                    // is very small.
-                    if ((time_limit_ms > 0) && (scan_count > 0) && (scan_count % TIME_CHECK_INTERVAL == 0)) {
+                do {
+                    db->uncommitted_keys_cursor =
+                        hashtableScan(db->uncommitted_keys, db->uncommitted_keys_cursor, uncommittedKeysCleanupScanCallback, &ctx);
+
+                    if ((time_limit_ms > 0) && (scan_count >= next_time_check)) {
                         unsigned long long cur_time_ms = mstime();
                         if (cur_time_ms - start_time_ms > time_limit_ms) {
                             // Stop the current scan, continue to do in the next run
                             return;
                         }
+                        next_time_check += TIME_CHECK_INTERVAL;
                     }
-
-                    long long dirty_key_offset = (long long)iter->data;
-                    if (dirty_key_offset <= server.durability.previous_acked_offset) {
-                        raxRemove(db->uncommitted_keys, iter->key, iter->key_len, NULL);
-                        raxSeek(iter, ">", iter->key, iter->key_len);
-                    }
-                    scan_count++;
-                }
+                } while (db->uncommitted_keys_cursor != 0);
             }
 
             // Finish to DB scan.
             if (db->scan_in_progress) {
                 db->scan_in_progress = 0;
-                raxStop(iter);
             }
         }
         durability->curr_db_scan_idx++;
@@ -658,8 +718,9 @@ void clearUncommittedKeysAcknowledged(void) {
 }
 
 void durableInitDatabase(serverDb *db) {
-    db->uncommitted_keys = raxNew();
+    db->uncommitted_keys = hashtableCreate(&uncommittedKeysHashtableType);
     db->dirty_repl_offset = -1;
+    db->uncommitted_keys_cursor = 0;
     db->scan_in_progress = 0;
 }
 
@@ -671,10 +732,7 @@ static inline void clearAllUncommittedKeys(void) {
     for (int i = 0; i < server.dbnum; i++) {
         serverDb *db = server.db[i];
         if (db == NULL) continue;
-        raxFree(db->uncommitted_keys);
-        if (db->scan_in_progress) {
-            raxStop(&db->next_scan_iter);
-        }
+        hashtableRelease(db->uncommitted_keys);
         durableInitDatabase(db);
     }
     server.durability.curr_db_scan_idx = 0;
@@ -688,7 +746,7 @@ static inline void clearAllUncommittedKeys(void) {
  */
 static int isSingleCommandAccessingUncommittedKeys(serverDb *db, struct serverCommand *cmd, robj **argv, int argc) {
     // If the database has no uncommitted keys, return 0
-    if (raxSize(db->uncommitted_keys) == 0) return 0;
+    if (hashtableSize(db->uncommitted_keys) == 0) return 0;
 
     getKeysResult keysResult;
     initGetKeysResult(&keysResult);
@@ -698,8 +756,7 @@ static int isSingleCommandAccessingUncommittedKeys(serverDb *db, struct serverCo
     for (int i = 0; i < numkeys; i++) {
         sds keystr = objectGetVal(argv[keys[i].pos]);
         // Check if we are trying to access an uncommitted key
-        void *result;
-        if (raxFind(db->uncommitted_keys, (unsigned char *)keystr, sdslen(keystr), &result)) {
+        if (hashtableFind(db->uncommitted_keys, keystr, NULL)) {
             getKeysFreeResult(&keysResult);
             return 1;
         }
@@ -715,10 +772,6 @@ static int isSingleCommandAccessingUncommittedKeys(serverDb *db, struct serverCo
  * Returns 1 if so, 0 otherwise.
  */
 static int isAccessingUncommittedData(client *c) {
-    if (hasUncommittedKeys()) {
-        return 1;
-    }
-
     // Single command handling
     if (isSingleCommandAccessingUncommittedKeys(c->db, c->cmd, c->argv, c->argc)) {
         return 1;
@@ -1022,6 +1075,20 @@ static inline void releaseReplicaOffsetBuffer(void) {
 }
 
 /**
+ * Utility function to disconnect and free clients waiting for replica ACK
+ */
+static inline void freeClientsWaitingAck(struct durable_t *durability) {
+    listIter li;
+    listNode *ln;
+    listRewind(durability->clients_waiting_replica_ack, &li);
+    while ((ln = listNext(&li))) {
+        client *c = listNodeValue(ln);
+        freeClient(c);
+    }
+    listEmpty(durability->clients_waiting_replica_ack);
+}
+
+/**
  * Function to reset primary state for synchronous replication
  * This function will be invoked at primary when sync replication is dynamically disabled or it becomes a replica.
  * Both cases require related resources to be reset to initial state. The only difference is how we handle the
@@ -1029,17 +1096,33 @@ static inline void releaseReplicaOffsetBuffer(void) {
  * notifications will be flushed for these clients, whose connections to primary will still be maintained.
  * TODO: if the primary becomes a replica, all these clients should be disconnected and freed.
  */
-static inline void syncReplicationResetPrimaryState() {
+static inline void syncReplicationResetPrimaryState(bool is_free_clients_needed) {
     // Release buffer we use for replica offsets
     releaseReplicaOffsetBuffer();
 
     if (listLength(server.durability.clients_waiting_replica_ack) > 0) {
-        // Flush all blocked response and keyspace notifications to clients waiting for replica ACK
-        unblockResponsesWithAckOffset(&server.durability, LLONG_MAX);
+        if (is_free_clients_needed) {
+            freeClientsWaitingAck(&server.durability);
+        } else {
+            // Flush all blocked response and keyspace notifications to clients waiting for replica ACK
+            unblockResponsesWithAckOffset(&server.durability, LLONG_MAX);
+        }
         // Make sure there is no clients waiting for replica ACK
         serverAssert(listLength(server.durability.clients_waiting_replica_ack) == 0);
     }
 }
+
+/**
+ * Clear the sync replication attributes specific to the primary.
+ * This method is invoked when a master node becomes a replica.
+ */
+void syncReplicationClearPrimaryState(void) {
+    if (!isDurabilityEnabled()) return;
+
+    // Clear all blocked responses and free the clients waiting for replica ACK
+    syncReplicationResetPrimaryState(true);
+}
+
 
 /**
  * Reset related resources when disabling synchronous replication
@@ -1062,7 +1145,7 @@ void durabilityReset(void) {
         // To disable durable write, we need to flush all blocked responses and keyspace
         // notifications, and then reset all durability related resources to initial state at the primary node.
         if (iAmPrimary()) {
-            syncReplicationResetPrimaryState();
+            syncReplicationResetPrimaryState(false);
         }
         clearAllUncommittedKeys();
     }

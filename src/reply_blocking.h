@@ -104,6 +104,7 @@ void durableCleanup(void);
 void durabilityReset(void);
 void durableClientInit(struct client *c);
 void durableClientReset(struct client *c);
+void syncReplicationClearPrimaryState(void);
 
 /**
   Command processing hooks for offset and cob tracking
@@ -123,6 +124,8 @@ long long durablePurgeAndGetUncommittedKeyOffset(const sds key, struct serverDb 
 // TODO: naming of these flags.
 int isDurabilityEnabled(void);
 void clearUncommittedKeysAcknowledged(void);
+void durableInitDatabase(struct serverDb *db);
+void handleUncommittedKeyForClient(struct client *c, struct serverObject *key, struct serverDb *db);
 // TODO:
 //  preReplyToBlockedClient
 // for streams and timeounts, when a blocked client is being unblocked

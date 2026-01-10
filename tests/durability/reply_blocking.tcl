@@ -110,5 +110,31 @@ start_server {tags {"repl durability external:skip"} overrides {sync-replication
             assert_equal "OK" [$primary config set sync-replication yes]
             assert_equal "yes" [lindex [$primary config get sync-replication] 1]
         }
+
+        test "Failover disconnects clients waiting for ack" {
+            assert_equal "yes" [lindex [$primary config get sync-replication] 1]
+
+            set rd [valkey_deferring_client -1]
+            $rd client setname durability-waiter
+            $rd read
+            $rd set durable:failover value
+
+            set fd [$rd channel]
+            fconfigure $fd -blocking 0
+            set early_reply [read $fd]
+            assert_equal "" $early_reply
+            fconfigure $fd -blocking 1
+
+            $primary replicaof $replica_host $replica_port
+
+            catch {$rd read} err
+            assert_match {*I/O error*} $err
+        }
+
+        test "Demoted primary returns ERR on dirty data" {
+            set reader [valkey_client -1]
+            catch {$reader get durable:failover} err
+            assert_equal "ERR Accessed data unavailable to be served" $err
+        }
     }
 }

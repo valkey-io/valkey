@@ -885,6 +885,14 @@ start_server {tags {"hashexpire"}} {
         assert_equal {0} $res2
     }
 
+    test {HEXPIRE GT - Do not expire items when expiration in the past} {
+        r FLUSHALL
+        r HSETEX myhash EX 600 FIELDS 1 field1 val1
+        assert_equal {1} [r HLEN myhash]
+        assert_equal {0 -2} [r HEXPIRE myhash 0 GT FIELDS 2 field1 field2]
+        assert_equal {1} [r HLEN myhash]
+    }
+
     # Conditionals: LT
     test {HEXPIRE LT - only set if new TTL < existing TTL} {
         r FLUSHALL

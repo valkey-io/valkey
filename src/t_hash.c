@@ -1779,7 +1779,9 @@ void hexpireGenericCommand(client *c, long long basetime, int unit) {
 
     for (i = 0; i < num_fields; i++) {
         expiryModificationResult result = EXPIRATION_MODIFICATION_NOT_EXIST;
-        if (set_expired) {
+        /* If the flags included the GT flag, we cannot delete the entries since existing entries
+         * MUST have expiration time bigger than a past time. */
+        if (set_expired && !(flag & EXPIRE_GT)) {
             if (obj && hashTypeDelete(obj, objectGetVal(c->argv[fields_index + i]))) {
                 /* In case we are expiring all the elements prepare a new argv since we are going to delete all the expired fields. */
                 if (new_argv == NULL) {

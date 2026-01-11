@@ -16,7 +16,7 @@ Most of the style guidelines are enforced by clang format, but some additional c
 
 1. C style comments `/* comment */` can be used for both single and multi-line comments.
    C++ comments `//` can only be used for single line comments.
-   Multi line comments should have the leading `*` in aligned and the final `*/` should be on the same line as the last line of text.
+   Multi line comments should have the leading `*` align and the final `*/` should be on the same line as the last line of text.
    e.g.
 ```c
 /* Blah Blah
@@ -24,7 +24,7 @@ Most of the style guidelines are enforced by clang format, but some additional c
    ```
 2. Comments should generally be used to describe behavior that is not obvious from reading the code itself.
    This includes complex behavior, why code was written the way it was and describing non-obvious behavior.
-   Additionally, functions should be documented to explain all of functions behavior without without having to read the code.
+   Additionally, functions should be documented to explain all of the function's behavior without having to read the code.
 1. Generally keep line lengths below 90 characters when reasonable, however there is no explicit line length enforcement.
    Use your best judgement for readability.
 1. Use static functions when a function is only intended to be accessed from the same file.
@@ -54,7 +54,7 @@ There isn't a well defined test for what is considered a material change, but a 
 
 ## Test coverage
 Valkey uses two types of tests: unit and integration tests.
-All contributions should include a test of some form. 
+All contributions should include a test of some form.
 
 Unit tests are present in the `src/unit` directory, and are intended to test individual structures or files.
 For example, most changes to data structures should include corresponding unit tests.
@@ -68,6 +68,6 @@ Valkey keeps most of the user documentation in the [valkey-doc](https://github.c
 1. Major functionality is documented in the [topics](https://github.com/valkey-io/valkey-doc/tree/main/topics) section.
 1. Specific command behavior is documented in the [commands](https://github.com/valkey-io/valkey-doc/tree/main/commands) section.
    Command history is also documented in the [command json file](https://github.com/valkey-io/valkey/tree/unstable/src/commands).
-1. Server info fields are documented in the [info](https://github.com/valkey-io/valkey-doc/blob/main/commands/info.md) command.
+1. Server info fields are documented in the [INFO](https://github.com/valkey-io/valkey-doc/blob/main/commands/info.md) command.
 
 When a PR is opened that requires documentation to be updated, the `needs-doc-pr` should be added until the corresponding documentation PR is open.

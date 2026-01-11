@@ -9,7 +9,7 @@ During our long development history, we've made a lot of inconsistent decisions,
 1. Avoid adding configuration when a feature can be fully controlled by heuristics.
    We want Valkey to work correctly out of the box without much tuning.
    Configurations can be added to provide additional tuning of features.
-    When the workload characteristics can't be inferred or imply a tradeoff (CPU vs memory), then provide a configuration.
+   When the workload characteristics can't be inferred or imply a tradeoff (CPU vs memory), then provide a configuration.
 
 ## General style guidelines
 Most of the style guidelines are enforced by clang format, but some additional comments are included here.

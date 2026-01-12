@@ -50,6 +50,9 @@ extern "C" {
  * '__wrap_') and have its method signature match the overridden
  * method exactly.
  *
+ * Important: Please read the README.md file for guidelines about mocking. Your
+ * usage of mocking will not be approved if it doesn't follow the guidelines.
+ *
  * Note: You should NOT wrap variable argument functions (i.e have "...")
  *       See: https://github.com/google/googletest/blob/master/googlemock/docs/gmock_faq.md#can-i-mock-a-variadic-function
  *       Example: serverLog(int level, const char *fmt, ...) should NOT be mocked.

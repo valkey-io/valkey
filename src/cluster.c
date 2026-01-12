@@ -871,6 +871,11 @@ void clusterCommandHelp(client *c) {
     addExtendedReplyHelp(c, help, clusterCommandExtendedHelp());
 }
 
+void clusterKeySlotCommand(client *c) {
+    sds key = objectGetVal(c->argv[2]);
+    addReplyLongLong(c, keyHashSlot(key, sdslen(key)));
+}
+
 void clusterCommand(client *c) {
     if (server.cluster_enabled == 0) {
         addReplyError(c, "This instance has cluster support disabled");
@@ -905,11 +910,6 @@ void clusterCommand(client *c) {
         /* Produce the reply protocol. */
         addReplyVerbatim(c, info, sdslen(info), "txt");
         sdsfree(info);
-    } else if (!strcasecmp(objectGetVal(c->argv[1]), "keyslot") && c->argc == 3) {
-        /* CLUSTER KEYSLOT <key> */
-        sds key = objectGetVal(c->argv[2]);
-
-        addReplyLongLong(c, keyHashSlot(key, sdslen(key)));
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "countkeysinslot") && c->argc == 3) {
         /* CLUSTER COUNTKEYSINSLOT <slot> */
         long long slot;

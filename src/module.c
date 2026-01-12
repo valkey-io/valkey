@@ -11710,11 +11710,10 @@ int moduleUnregisterCommandResultCallbacks(ValkeyModule *module) {
     listNode *ln;
     int count = 0;
 
-    listRewind(module->result_callbacks, &li);
+    listRewind(moduleCommandResultCallbacks, &li);
     while ((ln = listNext(&li))) {
         ValkeyModuleCommandResult *result = ln->value;
-        listNode *ln = listSearchKey(moduleCommandResultCallbacks, result);
-        if (ln) {
+        if (result->module == module) {
             listDelNode(moduleCommandResultCallbacks, ln);
             count++;
         }

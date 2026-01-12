@@ -783,6 +783,61 @@ static void restoreBackupConfig(standardConfig **set_configs,
     }
 }
 
+/* Match configs by name or pattern. Returns a dict of matched configs. */
+static dict *matchSinglePatternToConfigs(sds pattern) {
+    dict *matches = dictCreate(&externalStringType);
+    
+    /* If the string doesn't contain glob patterns, just directly
+     * look up the key in the dictionary. */
+    if (!strpbrk(pattern, "[*?")) {
+        standardConfig *config = lookupConfig(pattern);
+        if (config) {
+            dictAdd(matches, (void *)config->name, config);
+        }
+        return matches;
+    }
+    
+    /* Otherwise, do a match against all items in the dictionary. */
+    dictIterator *di = dictGetIterator(configs);
+    dictEntry *de;
+    
+    while ((de = dictNext(di)) != NULL) {
+        standardConfig *config = dictGetVal(de);
+        /* Note that hidden configs require an exact match (not a pattern) */
+        if (config->flags & HIDDEN_CONFIG) continue;
+        if (stringmatch(pattern, dictGetKey(de), 1)) {
+            dictAdd(matches, dictGetKey(de), config);
+        }
+    }
+    dictReleaseIterator(di);
+    
+    return matches;
+}
+
+/* Match config patterns from client arguments. Returns a dict of all matched configs (deduplicated). */
+static dict *matchPatternsToConfigs(client *c) {
+    dict *all_matches = dictCreate(&externalStringType);
+    dictIterator *di;
+    dictEntry *de;
+    
+    for (int i = 2; i < c->argc; i++) {
+        robj *o = c->argv[i];
+        sds pattern = objectGetVal(o);
+
+        dict *single_pattern_matches = matchSinglePatternToConfigs(pattern);
+        di = dictGetIterator(single_pattern_matches);
+        while ((de = dictNext(di)) != NULL) {
+            if (dictFind(all_matches, dictGetKey(de))) continue;
+            dictAdd(all_matches, dictGetKey(de), dictGetVal(de));
+        }
+        dictReleaseIterator(di);
+        dictRelease(single_pattern_matches);
+    }
+    
+    return all_matches;
+}
+
+
 /*-----------------------------------------------------------------------------
  * CONFIG SET implementation
  *----------------------------------------------------------------------------*/
@@ -962,41 +1017,9 @@ static int configKeyCompare(const void *a, const void *b) {
  *----------------------------------------------------------------------------*/
 
 void configGetCommand(client *c) {
-    int i;
     dictEntry *de;
     dictIterator *di;
-    /* Create a dictionary to store the matched configs */
-    dict *matches = dictCreate(&externalStringType);
-    for (i = 0; i < c->argc - 2; i++) {
-        robj *o = c->argv[2 + i];
-        sds name = objectGetVal(o);
-
-        /* If the string doesn't contain glob patterns, just directly
-         * look up the key in the dictionary. */
-        if (!strpbrk(name, "[*?")) {
-            if (dictFind(matches, name)) continue;
-            standardConfig *config = lookupConfig(name);
-
-            if (config) {
-                dictAdd(matches, name, config);
-            }
-            continue;
-        }
-
-        /* Otherwise, do a match against all items in the dictionary. */
-        di = dictGetIterator(configs);
-
-        while ((de = dictNext(di)) != NULL) {
-            standardConfig *config = dictGetVal(de);
-            /* Note that hidden configs require an exact match (not a pattern) */
-            if (config->flags & HIDDEN_CONFIG) continue;
-            if (dictFind(matches, config->name)) continue;
-            if (stringmatch(name, dictGetKey(de), 1)) {
-                dictAdd(matches, dictGetKey(de), config);
-            }
-        }
-        dictReleaseIterator(di);
-    }
+    dict *matches = matchPatternsToConfigs(c);
 
     di = dictGetIterator(matches);
     int n = dictSize(matches);
@@ -1007,7 +1030,7 @@ void configGetCommand(client *c) {
         sds value;
     } *sorted = zmalloc(sizeof(*sorted) * n);
 
-    i = 0;
+    int i = 0;
     while ((de = dictNext(di)) != NULL) {
         standardConfig *config = (standardConfig *)dictGetVal(de);
         sorted[i].key = dictGetKey(de);
@@ -3610,14 +3633,21 @@ static void addConfigInfoReply(client *c, standardConfig *config) {
 }
 
 void configHelpCommand(client *c) {
-    if (c->argc == 3) {
-        sds name = objectGetVal(c->argv[2]);
-        standardConfig *config = lookupConfig(name);
-        if (!config) {
-            addReplyErrorFormat(c, "Unknown config '%s'", name);
-            return;
+    if (c->argc >= 3) {
+        dictEntry *de;
+        dictIterator *di;
+        dict *matches = matchPatternsToConfigs(c);
+        
+        int n = dictSize(matches);
+        addReplyArrayLen(c, n);
+        
+        di = dictGetIterator(matches);
+        while ((de = dictNext(di)) != NULL) {
+            standardConfig *config = dictGetVal(de);
+            addConfigInfoReply(c, config);
         }
-        addConfigInfoReply(c, config);
+        dictReleaseIterator(di);
+        dictRelease(matches);
         return;
     }
 

@@ -20,40 +20,50 @@ start_server {tags {"other"}} {
     }
 
     test {CONFIG HELP with config name - enum type} {
-        set info [r CONFIG HELP repl-diskless-load]
+        set result [r CONFIG HELP repl-diskless-load]
+        assert_equal [llength $result] 1
+        set info [lindex $result 0]
         assert_equal [dict get $info name] "repl-diskless-load"
         assert_equal [dict get $info type] "enum"
         assert_match "*disabled*" [dict get $info values]
     }
 
     test {CONFIG HELP with config name - numeric type} {
-        set info [r CONFIG HELP maxmemory]
+        set result [r CONFIG HELP maxmemory]
+        assert_equal [llength $result] 1
+        set info [lindex $result 0]
         assert_equal [dict get $info name] "maxmemory"
         assert_equal [dict get $info type] "numeric"
         assert_equal [llength [dict get $info range]] 2
     }
 
     test {CONFIG HELP with config name - bool type} {
-        set info [r CONFIG HELP activerehashing]
+        set result [r CONFIG HELP activerehashing]
+        assert_equal [llength $result] 1
+        set info [lindex $result 0]
         assert_equal [dict get $info name] "activerehashing"
         assert_equal [dict get $info type] "bool"
     }
 
     test {CONFIG HELP with config name - string type} {
-        set info [r CONFIG HELP dbfilename]
+        set result [r CONFIG HELP dbfilename]
+        assert_equal [llength $result] 1
+        set info [lindex $result 0]
         assert_equal [dict get $info name] "dbfilename"
         assert_equal [dict get $info type] "string"
     }
 
     test {CONFIG HELP with config name - special type} {
-        set info [r CONFIG HELP save]
+        set result [r CONFIG HELP save]
+        assert_equal [llength $result] 1
+        set info [lindex $result 0]
         assert_equal [dict get $info name] "save"
         assert_equal [dict get $info type] "special"
     }
 
     test {CONFIG HELP with non-existent config} {
-        catch {r CONFIG HELP nonexistent} err
-        assert_match "*Unknown config*" $err
+        set result [r CONFIG HELP nonexistent]
+        assert_equal [llength $result] 0
     }
 
     test {Coverage: MEMORY MALLOC-STATS} {

@@ -2642,6 +2642,7 @@ start_server {tags {"scripting"}} {
             server.call('set', KEYS[1], ARGV[1])
         } 1 foo bar
        assert_equal bar [r get foo]
+       r config set maxmemory 0
     }
 
     test "Stop the non-dirty scripts when an OOM occurs midway through execution" {
@@ -2654,5 +2655,6 @@ start_server {tags {"scripting"}} {
             } 1 foo bar
         }
        assert_equal {} [r get foo]
+       r config set maxmemory 0
     }
 }

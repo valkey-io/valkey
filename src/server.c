@@ -47,6 +47,7 @@
 #include "threads_mngr.h"
 #include "fmtargs.h"
 #include "io_threads.h"
+#include "tls.h"
 #include "sds.h"
 #include "module.h"
 #include "scripting_engine.h"

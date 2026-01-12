@@ -70,6 +70,7 @@
 #include "connection.h"
 #include "bio.h"
 #include "mutexqueue.h"
+#include "tls.h"
 #include <stdatomic.h>
 
 static unsigned int bio_job_to_worker[] = {

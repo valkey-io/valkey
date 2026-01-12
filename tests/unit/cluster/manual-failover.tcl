@@ -40,11 +40,14 @@ test "Send CLUSTER FAILOVER to #5, during load" {
         # as well, that has tests to prevent Lua to write into wrong
         # hash slots.
         if {$listid % 2} {
-            $cluster rpush $key $ele
+            set success [catch {$cluster rpush $key $ele} result]
         } else {
-           $cluster eval {server.call("rpush",KEYS[1],ARGV[1])} 1 $key $ele
+            set success [catch {$cluster eval {server.call("rpush",KEYS[1],ARGV[1])} 1 $key $ele} result]
         }
-        lappend content($key) $ele
+        
+        if {$success == 0} {
+            lappend content($key) $ele
+        }
 
         if {($j % 1000) == 0} {
             puts -nonewline W; flush stdout

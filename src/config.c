@@ -2746,7 +2746,6 @@ static int applyTlsCfg(const char **err) {
         *err = "Unable to update TLS configuration. Check server logs.";
         return 0;
     }
-    tlsUpdateServerCertInfo();
     return 1;
 }
 
@@ -2768,7 +2767,6 @@ static int applyTLSPort(const char **err) {
         *err = "Unable to listen on this port. Check server logs.";
         return 0;
     }
-    tlsUpdateServerCertInfo();
 
     return 1;
 }
@@ -3429,6 +3427,7 @@ standardConfig static_configs[] = {
     createBoolConfig("tls-replication", NULL, MODIFIABLE_CONFIG, server.tls_replication, 0, NULL, applyTlsCfg),
     createEnumConfig("tls-auth-clients", NULL, MODIFIABLE_CONFIG, tls_auth_clients_enum, server.tls_auth_clients, TLS_CLIENT_AUTH_YES, NULL, NULL),
     createEnumConfig("tls-auth-clients-user", NULL, MODIFIABLE_CONFIG, tls_client_auth_user_enum, server.tls_ctx_config.client_auth_user, TLS_CLIENT_FIELD_OFF, NULL, NULL),
+    createIntConfig("tls-cert-expiry-warning-days", NULL, MODIFIABLE_CONFIG, 0, 3650, server.tls_cert_expiry_warning_days, 7, INTEGER_CONFIG, NULL, NULL),
     createBoolConfig("tls-prefer-server-ciphers", NULL, MODIFIABLE_CONFIG, server.tls_ctx_config.prefer_server_ciphers, 0, NULL, applyTlsCfg),
     createBoolConfig("tls-session-caching", NULL, MODIFIABLE_CONFIG, server.tls_ctx_config.session_caching, 1, NULL, applyTlsCfg),
     createStringConfig("tls-cert-file", NULL, VOLATILE_CONFIG | MODIFIABLE_CONFIG, EMPTY_STRING_IS_NULL, server.tls_ctx_config.cert_file, NULL, NULL, applyTlsCfg),

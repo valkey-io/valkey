@@ -92,8 +92,6 @@
 #include <sys/types.h>
 static_assert(sizeof(off_t) >= 8, "off_t must be 64-bit; ensure _FILE_OFFSET_BITS=64 is in effect before system headers");
 
-int tlsGetServerCertExpiry(long long *expiry);
-
 #ifdef USE_LTTNG
 #define valkey_fork() do_fork()
 #else
@@ -2329,7 +2327,13 @@ struct valkeyServer {
     int tls_replication;
     int tls_auth_clients;
     serverTLSContextConfig tls_ctx_config;
-    long long tls_server_cert_expires_in_seconds;
+    int tls_cert_expiry_warning_days;
+    long long tls_server_cert_expire_time;
+    long long tls_client_cert_expire_time;
+    long long tls_ca_cert_expire_time;
+    sds tls_server_cert_serial;
+    sds tls_client_cert_serial;
+    sds tls_ca_cert_serial;
     serverUnixContextConfig unix_ctx_config;
     serverRdmaContextConfig rdma_ctx_config;
     /* cpu affinity */
@@ -3462,8 +3466,8 @@ sds activeDefragSds(sds sdsptr);
 robj *activeDefragStringOb(robj *ob);
 void dismissSds(sds s);
 void dismissMemoryInChild(void);
-/* Refresh cached TLS certificate expiration state and emit logs on transitions. */
-void tlsUpdateServerCertInfo(void);
+int tlsGetServerCertExpiry(long long *expiry);
+void tlsLogServerCertExpiry(void);
 
 #define RESTART_SERVER_NONE 0
 #define RESTART_SERVER_GRACEFULLY (1 << 0)     /* Do proper shutdown. */

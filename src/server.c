@@ -1571,8 +1571,8 @@ long long serverCron(struct aeEventLoop *eventLoop, long long id, void *clientDa
         }
     }
 
-    run_with_period(3600000) {
-        tlsUpdateServerCertInfo();
+    run_with_period(86400000) {
+        tlsLogServerCertExpiry();
     }
 
     /* Handle background operations on databases. */
@@ -2287,7 +2287,13 @@ void initServerConfig(void) {
     server.latency_tracking_info_percentiles[1] = 99.0; /* p99 */
     server.latency_tracking_info_percentiles[2] = 99.9; /* p999 */
 
-    server.tls_server_cert_expires_in_seconds = 0;
+    server.tls_cert_expiry_warning_days = 7;
+    server.tls_server_cert_expire_time = 0;
+    server.tls_client_cert_expire_time = 0;
+    server.tls_ca_cert_expire_time = 0;
+    server.tls_server_cert_serial = NULL;
+    server.tls_client_cert_serial = NULL;
+    server.tls_ca_cert_serial = NULL;
 
     resetServerSaveParams();
 
@@ -3063,7 +3069,6 @@ void initListeners(void) {
             serverLog(LL_WARNING, "Failed to configure TLS. Check logs for more info.");
             exit(1);
         }
-        tlsUpdateServerCertInfo();
     }
 
     if (server.tls_port != 0) {
@@ -3117,31 +3122,6 @@ void initListeners(void) {
     if (listen_fds == 0) {
         serverLog(LL_WARNING, "Configured to not listen anywhere, exiting.");
         exit(1);
-    }
-}
-
-/* Refresh cached TLS certificate expiration metadata and emit logs */
-void tlsUpdateServerCertInfo(void) {
-    if (!(server.tls_port || server.tls_replication || server.tls_cluster)) {
-        server.tls_server_cert_expires_in_seconds = 0;
-        return;
-    }
-
-    long long expiry;
-    if (tlsGetServerCertExpiry(&expiry) != C_OK) {
-        server.tls_server_cert_expires_in_seconds = 0;
-        return;
-    }
-
-    long long seconds_remaining = expiry - (long long)server.unixtime;
-    server.tls_server_cert_expires_in_seconds = seconds_remaining;
-
-    if (seconds_remaining <= 0) {
-        serverLog(LL_WARNING, "TLS server certificate has EXPIRED");
-    } else {
-        long long days_remaining = (seconds_remaining + 86400 - 1) / 86400;
-        if (days_remaining < 1) days_remaining = 1;
-        serverLog(LL_NOTICE, "TLS server certificate expiring in %lld days", days_remaining);
     }
 }
 
@@ -5960,12 +5940,35 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
     /* TLS */
     if (all_sections || (dictFind(section_dict, "tls") != NULL)) {
         if (sections++) info = sdscat(info, "\r\n");
+        long long tls_server_seconds_remaining = 0;
+        if (server.tls_server_cert_expire_time > 0) {
+            tls_server_seconds_remaining = server.tls_server_cert_expire_time - (long long)server.unixtime;
+            if (tls_server_seconds_remaining < 0) tls_server_seconds_remaining = 0;
+        }
+        long long tls_client_seconds_remaining = 0;
+        if (server.tls_client_cert_expire_time > 0) {
+            tls_client_seconds_remaining = server.tls_client_cert_expire_time - (long long)server.unixtime;
+            if (tls_client_seconds_remaining < 0) tls_client_seconds_remaining = 0;
+        }
+        long long tls_ca_seconds_remaining = 0;
+        if (server.tls_ca_cert_expire_time > 0) {
+            tls_ca_seconds_remaining = server.tls_ca_cert_expire_time - (long long)server.unixtime;
+            if (tls_ca_seconds_remaining < 0) tls_ca_seconds_remaining = 0;
+        }
         info = sdscatprintf(info,
                             "# TLS\r\n"
-                            "tls_enabled:%s\r\n"
-                            "tls_server_cert_expires_in_seconds:%lld\r\n",
-                            (server.tls_port || server.tls_replication || server.tls_cluster) ? "yes" : "no",
-                            server.tls_server_cert_expires_in_seconds);
+                            "tls_server_cert_serial:%s\r\n"
+                            "tls_server_cert_expires_in_seconds:%lld\r\n"
+                            "tls_client_cert_serial:%s\r\n"
+                            "tls_client_cert_expires_in_seconds:%lld\r\n"
+                            "tls_ca_cert_serial:%s\r\n"
+                            "tls_ca_cert_expires_in_seconds:%lld\r\n",
+                            server.tls_server_cert_serial ? server.tls_server_cert_serial : "none",
+                            tls_server_seconds_remaining,
+                            server.tls_client_cert_serial ? server.tls_client_cert_serial : "none",
+                            tls_client_seconds_remaining,
+                            server.tls_ca_cert_serial ? server.tls_ca_cert_serial : "none",
+                            tls_ca_seconds_remaining);
     }
 
     /* Clients */

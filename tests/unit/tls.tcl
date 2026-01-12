@@ -173,5 +173,136 @@ start_server {tags {"tls"}} {
 
             $s close
         }
+
+        test {TLS: INFO tls reports decreasing expiration countdown} {
+            set info1 [r info tls]
+            if {![regexp {tls_server_cert_serial:([^\r\n]+)} $info1 -> server_serial]} {
+                fail "INFO tls missing tls_server_cert_serial"
+            }
+            assert {$server_serial ne "none"}
+            if {![regexp {tls_client_cert_serial:([^\r\n]+)} $info1 -> client_serial]} {
+                fail "INFO tls missing tls_client_cert_serial"
+            }
+            assert {$client_serial ne "none"}
+            if {![regexp {tls_ca_cert_serial:([^\r\n]+)} $info1 -> ca_serial]} {
+                fail "INFO tls missing tls_ca_cert_serial"
+            }
+            assert {$ca_serial ne "none"}
+            if {![regexp {tls_server_cert_expires_in_seconds:(-?[0-9]+)} $info1 -> expire1]} {
+                fail "INFO tls missing tls_server_cert_expires_in_seconds"
+            }
+            assert_morethan $expire1 0
+            foreach field {tls_client_cert_expires_in_seconds tls_ca_cert_expires_in_seconds} {
+                if {![regexp "${field}:(-?[0-9]+)" $info1 -> exp_value]} {
+                    fail "INFO tls missing $field"
+                }
+                assert_morethan $exp_value 0
+            }
+
+            after 1200
+
+            set info2 [r info tls]
+            if {![regexp {tls_server_cert_expires_in_seconds:(-?[0-9]+)} $info2 -> expire2]} {
+                fail "INFO tls missing tls_server_cert_expires_in_seconds after delay"
+            }
+
+            assert_morethan $expire1 $expire2
+            set delta [expr {$expire1 - $expire2}]
+            assert_morethan_equal $delta 1
+        }
+
+        test {TLS: INFO tls resets expiration countdown when TLS disabled/enabled} {
+            set host [srv 0 host]
+            set tls_port [srv 0 port]
+            set plain_port [srv 0 pport]
+
+            if {$plain_port == 0} {
+                fail "Plaintext port not available for TLS test harness"
+            }
+
+            set tls_client [valkey $host $tls_port 0 1]
+            set plain_client [valkey $host $plain_port 0 0]
+
+            set info_enabled [$tls_client info tls]
+            if {![regexp {tls_server_cert_expires_in_seconds:(-?[0-9]+)} $info_enabled -> expire_enabled]} {
+                fail "INFO tls missing tls_server_cert_expires_in_seconds (enabled)"
+            }
+            assert_morethan $expire_enabled 0
+
+            $tls_client close
+
+            $plain_client CONFIG SET tls-port 0
+
+            set info_disabled [$plain_client info tls]
+            foreach field {tls_server_cert_serial tls_client_cert_serial tls_ca_cert_serial} {
+                set pattern [format {%s:([^\r\n]+)} $field]
+                if {![regexp $pattern $info_disabled -> serial_value]} {
+                    fail "INFO tls missing $field (disabled)"
+                }
+                assert_equal "none" $serial_value
+            }
+            if {![regexp {tls_server_cert_expires_in_seconds:(-?[0-9]+)} $info_disabled -> expire_disabled]} {
+                fail "INFO tls missing tls_server_cert_expires_in_seconds (disabled)"
+            }
+            assert_equal 0 $expire_disabled
+            foreach field {tls_client_cert_expires_in_seconds tls_ca_cert_expires_in_seconds} {
+                set pattern [format {%s:(-?[0-9]+)} $field]
+                if {![regexp $pattern $info_disabled -> exp_value]} {
+                    fail "INFO tls missing $field (disabled)"
+                }
+                assert_equal 0 $exp_value
+            }
+
+            $plain_client CONFIG SET tls-port $tls_port
+
+            wait_for_condition 50 100 {
+                [catch {set tls_client [valkey $host $tls_port 0 1]} err] == 0
+            } else {
+                fail "Timed out waiting for TLS listener to restart ($err)"
+            }
+
+            set info_reenabled [$tls_client info tls]
+            foreach field {tls_server_cert_serial tls_client_cert_serial tls_ca_cert_serial} {
+                set pattern [format {%s:([^\r\n]+)} $field]
+                if {![regexp $pattern $info_reenabled -> serial_enabled]} {
+                    fail "INFO tls missing $field after re-enable"
+                }
+                assert {$serial_enabled ne "none"}
+            }
+            if {![regexp {tls_server_cert_expires_in_seconds:(-?[0-9]+)} $info_reenabled -> expire_reenabled]} {
+                fail "INFO tls missing tls_server_cert_expires_in_seconds (re-enabled)"
+            }
+            assert_morethan $expire_reenabled 0
+            foreach field {tls_client_cert_expires_in_seconds tls_ca_cert_expires_in_seconds} {
+                set pattern [format {%s:(-?[0-9]+)} $field]
+                if {![regexp $pattern $info_reenabled -> exp_value]} {
+                    fail "INFO tls missing $field (re-enabled)"
+                }
+                assert_morethan $exp_value 0
+            }
+
+            $tls_client close
+            $plain_client close
+        }
+    }
+}
+
+start_server {} {
+    test {INFO tls reports empty values when TLS disabled} {
+        set info [r info tls]
+        foreach field {tls_server_cert_serial tls_client_cert_serial tls_ca_cert_serial} {
+            set pattern [format {%s:([^\r\n]+)} $field]
+            if {![regexp $pattern $info -> value]} {
+                fail "INFO tls missing $field"
+            }
+            assert_equal "none" $value
+        }
+        foreach field {tls_server_cert_expires_in_seconds tls_client_cert_expires_in_seconds tls_ca_cert_expires_in_seconds} {
+            set pattern [format {%s:(-?[0-9]+)} $field]
+            if {![regexp $pattern $info -> value]} {
+                fail "INFO tls missing $field"
+            }
+            assert_equal 0 $value
+        }
     }
 }

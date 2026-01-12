@@ -433,14 +433,21 @@ static int getCertFingerprint(const char *cert_file, unsigned char *fingerprint,
     if (!cert_file) return C_ERR;
 
     FILE *fp = fopen(cert_file, "r");
-    if (!fp) return C_ERR;
+    if (!fp) {
+        serverLog(LL_WARNING, "Failed to open certificate file '%s': %s", cert_file, strerror(errno));
+        return C_ERR;
+    }
 
     X509 *cert = PEM_read_X509(fp, NULL, NULL, NULL);
     fclose(fp);
-    if (!cert) return C_ERR;
+    if (!cert) {
+        serverLog(LL_WARNING, "Failed to parse X509 certificate from '%s'", cert_file);
+        return C_ERR;
+    }
 
     const EVP_MD *digest = EVP_sha256();
     if (X509_digest(cert, digest, fingerprint, fingerprint_len) != 1) {
+        serverLog(LL_WARNING, "Failed to compute certificate fingerprint for '%s'", cert_file);
         X509_free(cert);
         return C_ERR;
     }
@@ -522,12 +529,13 @@ static SSL_CTX *pending_tls_client_ctx = NULL;
 static _Atomic int tls_reload_pending = 0;
 
 /* Attempt to configure/reconfigure TLS. This operation is atomic and will
- * leave the SSL_CTX unchanged if fails.
- * @priv: config of serverTLSContextConfig.
- * @reconfigure: if true, ignore the previous configure; if false, only
- *               configure from @ctx_config if valkey_tls_ctx is NULL.
- * @background: if true, do heavy work in background thread and store in pending;
- *              if false, do work synchronously and swap immediately.
+ * leave the SSL_CTX unchanged if it fails.
+ *
+ * If reconfigure is true, always reconfigure; if false, only configure if
+ * valkey_tls_ctx is NULL.
+ *
+ * If background is true, do heavy work in background thread and store in
+ * pending variables; if false, do work synchronously and swap immediately.
  */
 static int tlsConfigure(void *priv, int reconfigure, int background) {
     serverTLSContextConfig *ctx_config = (serverTLSContextConfig *)priv;
@@ -562,7 +570,7 @@ static int tlsConfigure(void *priv, int reconfigure, int background) {
             pending_tls_ctx = ctx;
             pending_tls_client_ctx = client_ctx;
             atomic_store_explicit(&tls_reload_pending, 1, memory_order_release);
-            serverLog(LL_DEBUG, "Background TLS reload completed successfully");
+            serverLog(LL_DEBUG, "Background TLS reload parsed TLS materials successfully");
         }
     } else {
         SSL_CTX_free(valkey_tls_ctx);
@@ -580,9 +588,6 @@ static int tlsConfigure(void *priv, int reconfigure, int background) {
 static int tlsConfigureSync(void *priv, int reconfigure) {
     return tlsConfigure(priv, reconfigure, 0);
 }
-
-#if !defined(BUILD_TLS_MODULE) || BUILD_TLS_MODULE != 2
-/* Auto-reload functions are only available when TLS is built-in, not as a module. */
 
 /* Asynchronous TLS configuration - runs in background thread.
  * Does CPU-intensive certificate loading without blocking main thread.
@@ -633,7 +638,6 @@ void tlsReconfigureIfNeeded(void) {
     serverLog(LL_NOTICE, "TLS materials changed, triggering background reload");
     bioCreateTlsReloadJob();
 }
-#endif /* !BUILD_TLS_MODULE */
 
 static ConnectionType CT_TLS;
 

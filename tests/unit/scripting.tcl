@@ -2632,4 +2632,27 @@ start_server {tags {"scripting"}} {
         r del testkey
         set _ {}
     } {} {singledb:skip}
+
+    test "Don't stop the dirty scripts when an OOM occurs midway through execution" {
+        r flushall
+        r config set maxmemory 1
+        r eval {
+            server.call('get', KEYS[1])
+            server.call('del', KEYS[1])
+            server.call('set', KEYS[1], ARGV[1])
+        } 1 foo bar
+       assert_equal bar [r get foo]
+    }
+
+    test "Stop the non-dirty scripts when an OOM occurs midway through execution" {
+        r flushall
+        r config set maxmemory 1
+        assert_error {OOM *} {
+            r eval {
+                server.call('get', KEYS[1])
+                server.call('set', KEYS[1], ARGV[1])
+            } 1 foo bar
+        }
+       assert_equal {} [r get foo]
+    }
 }

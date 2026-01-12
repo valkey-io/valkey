@@ -6565,7 +6565,16 @@ ValkeyModuleCallReply *VM_Call(ValkeyModuleCtx *ctx, const char *cmdname, const 
             }
         }
 
+        /* Allow running any command even if OOM reached. */
         if (is_running_script && scriptAllowsOOM()) {
+            flags &= ~VALKEYMODULE_ARGV_RESPECT_DENY_OOM;
+        }
+
+        /* If we reached the memory limit configured via maxmemory, commands that
+         * could enlarge the memory usage are not allowed, but only if this is the
+         * first write in the context of this script, otherwise we can't stop
+         * in the middle. */
+        if (is_running_script && scriptIsWriteDirty()) {
             flags &= ~VALKEYMODULE_ARGV_RESPECT_DENY_OOM;
         }
     }

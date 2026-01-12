@@ -41,6 +41,7 @@ extern "C" {
 #define _Bool bool           /* Replace C _Bool with C++ bool */
 #define typename _typename   /* Avoid conflict with C++ 'typename' keyword */
 #define protected protected_ /* Avoid conflict with C++ 'protected' keyword */
+#include "ae.h"
 #include "server.h"
 
 /**
@@ -53,7 +54,7 @@ extern "C" {
  *       See: https://github.com/google/googletest/blob/master/googlemock/docs/gmock_faq.md#can-i-mock-a-variadic-function
  *       Example: serverLog(int level, const char *fmt, ...) should NOT be mocked.
  */
-int __wrap_processCommand(struct client *c);
+long long __wrap_aeCreateTimeEvent(aeEventLoop *eventLoop, long long milliseconds, aeTimeProc *proc, void *clientData, aeEventFinalizerProc *finalizerProc);
 #undef protected
 #undef _Bool
 #undef typename

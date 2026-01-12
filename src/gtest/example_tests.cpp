@@ -57,15 +57,9 @@ TEST_F(ExampleTest, TestMatchers) {
     decrRefCount(robj_str);
 }
 
-// Verify mocking works via processCommand
-TEST_F(ExampleTest, TestMocking) {
-    client prev_client = {};
-    client c = {};
-    server.current_client = &prev_client;
-    c.flag.blocked = 1;
-
-    // verifies that processCommand() is called once and return C_OK
-    EXPECT_CALL(mock, processCommand(_)).WillOnce(Return(C_OK));
-    ASSERT_EQ(processCommandAndResetClient(&c), C_OK);
-    ASSERT_EQ(server.current_client, &prev_client);
+// Verify mocking works
+TEST_F(ExampleTest, TestMockingV2) {
+    // verifies that aeCreateTimeEvent() is called at least once in startEvictionTimeProc.
+    EXPECT_CALL(mock, aeCreateTimeEvent(_, _, _, _, _)).Times(AtLeast(1));
+    startEvictionTimeProc();
 }

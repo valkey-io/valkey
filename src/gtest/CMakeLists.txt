@@ -31,7 +31,7 @@ FetchContent_MakeAvailable(googletest)
 
 # Build Valkey sources as a static library for the test (C code compiled with C compiler)
 add_library(valkeylib-gtest STATIC ${VALKEY_SERVER_SRCS})
-target_compile_options(valkeylib-gtest PRIVATE "${COMPILE_FLAGS}")
+target_compile_options(valkeylib-gtest PRIVATE -Og -g -fno-lto)
 target_compile_definitions(valkeylib-gtest PRIVATE "${COMPILE_DEFINITIONS}")
 target_include_directories(valkeylib-gtest PRIVATE ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/deps)
 
@@ -69,7 +69,7 @@ set_target_properties(valkey-unit-gtests PROPERTIES
 target_compile_definitions(valkey-unit-gtests PRIVATE "${COMPILE_DEFINITIONS}")
 
 # Allow C-style void pointer conversions in C++
-target_compile_options(valkey-unit-gtests PRIVATE "${COMPILE_FLAGS}")
+target_compile_options(valkey-unit-gtests PRIVATE -Og -g)
 
 # Disable warnings
 target_compile_options(valkey-unit-gtests PRIVATE

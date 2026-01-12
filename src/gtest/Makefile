@@ -2,7 +2,7 @@ CXX ?= g++
 AR ?= ar
 SERVER_AR ?= $(AR)
 -include ../.make-settings
-OPT=-O3 -DNDEBUG
+OPT=-Og -g
 uname_S := $(shell sh -c 'uname -s 2>/dev/null || echo not')
 
 # Add -m32 for 32bit builds
@@ -11,9 +11,12 @@ ifeq ($(findstring -m32,$(CFLAGS)),-m32)
 endif
 
 .DEFAULT_GOAL := all
-SOURCES := $(wildcard *.cpp)
+SOURCES := $(filter-out generated_wrappers.cpp, $(wildcard *.cpp))
 ALL_OBJECTS := $(patsubst %.cpp,%.o,$(SOURCES))
 DEPENDS := $(patsubst %.cpp,%.d,$(SOURCES))
+
+# Inherit CFLAGS from parent Makefile
+TEST_CFLAGS := $(CFLAGS)
 
 # Hold new gtest test to a high standard
 MORE_WARNINGS=-Wold-style-cast \
@@ -86,6 +89,7 @@ HIREDIS_LIB := ../../deps/libvalkey/lib/libvalkey.a
 JEMALLOC_LIB := ../../deps/jemalloc/lib/libjemalloc.a
 HDR_HISTOGRAM_LIB := ../../deps/hdr_histogram/libhdrhistogram.a
 FPCONV_LIB := ../../deps/fpconv/libfpconv.a
+TLS_LIBS := ../../deps/libvalkey/lib/libvalkey_tls.a -lssl -lcrypto
 GTEST_CFLAGS ?=
 GTEST_LIBS   ?=
 ifeq ($(strip $(GTEST_LIBS)),)
@@ -143,7 +147,7 @@ ifeq ($(MALLOC),libc)
 endif
 
 # Default target to compile against Valkey, LUA, jemalloc (as Valkey does) as well as gmock
-%.o: %.cpp make-prerequisites generated_wrappers.o .flags
+%.o: %.cpp make-prerequisites generated_wrappers.cpp .flags
 	$(CXX) -MD -MP -std=c++17 -faligned-new -Wno-write-strings -fpermissive $(GCC_FLAGS) $(OPT) $(DEBUG) $(TEST_CFLAGS) -Wall -Wno-deprecated-declarations -c \
 	-isystem .. -I ../../deps/lua/src/ -I ../../deps/hdr_histogram/ -I ../../deps/fpconv/ $(JEMALLOC_CFLAGS) \
 	$(GTEST_CFLAGS) $<
@@ -177,18 +181,22 @@ ifeq ($(USE_FAST_FLOAT),yes)
 	LD_LIBS += $(FAST_FLOAT_LIB)
 endif
 
+# Add TLS libraries if enabled
+ifeq ($(BUILD_TLS),yes)
+	LD_LIBS += $(TLS_LIBS)
+endif
+
 # Generate the single test binary in parent directory.
 ifeq ($(uname_S), Darwin)
 valkey-unit-gtests: $(ALL_OBJECTS) generated_wrappers.o $(VALKEY_SERVER_WRAP_LIB) $(FINAL_LIBS)
-	$(CXX) -g -fno-lto \
+	$(CXX) -g $(LDFLAGS) -fno-lto \
 		-Wl,-flat_namespace -Wl,-undefined,dynamic_lookup \
 		-Wall -Wno-deprecated-declarations \
 		-o $@ $^ $(LD_LIBS) \
 		-lm -pthread -ldl
 else
 valkey-unit-gtests: $(ALL_OBJECTS) generated_wrappers.o $(VALKEY_SERVER_LIB) $(FINAL_LIBS)
-	$(CXX) -g \
-		-Wl,--allow-multiple-definition \
+	$(CXX) -g $(LDFLAGS) -fno-lto \
 		$(OVERRIDES) \
 		-Wall -Wno-deprecated-declarations \
 		-o $@ $^ $(LD_LIBS) \

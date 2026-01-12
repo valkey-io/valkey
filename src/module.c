@@ -15200,11 +15200,11 @@ void moduleRegisterCoreAPI(void) {
     REGISTER_API(CommandFilterGetClientId);
     REGISTER_API(RegisterCommandResult);
     REGISTER_API(UnregisterCommandResult);
-    REGISTER_API(CommandResultStatus);
-    REGISTER_API(CommandResultCommandName);
-    REGISTER_API(CommandResultDuration);
-    REGISTER_API(CommandResultDirty);
-    REGISTER_API(CommandResultClientId);
+    REGISTER_API(CommandResultGetStatus);
+    REGISTER_API(CommandResultGetCommandName);
+    REGISTER_API(CommandResultGetDuration);
+    REGISTER_API(CommandResultGetNumDirtyKeys);
+    REGISTER_API(CommandResultGetClientId);
     REGISTER_API(Fork);
     REGISTER_API(SendChildHeartbeat);
     REGISTER_API(ExitFromChild);

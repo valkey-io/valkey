@@ -3572,7 +3572,55 @@ void addModuleNumericConfig(const char *module_name,
  * CONFIG HELP
  *----------------------------------------------------------------------------*/
 
+static void addConfigInfoReply(client *c, standardConfig *config) {
+    int fields = 2; /* name and type */
+    if (config->type == ENUM_CONFIG || config->type == NUMERIC_CONFIG) fields++;
+
+    addReplyMapLen(c, fields);
+    addReplyBulkCString(c, "name");
+    addReplyBulkCString(c, config->name);
+    addReplyBulkCString(c, "type");
+    const char *type_str;
+    switch (config->type) {
+    case BOOL_CONFIG: type_str = "bool"; break;
+    case NUMERIC_CONFIG: type_str = "numeric"; break;
+    case STRING_CONFIG: type_str = "string"; break;
+    case SDS_CONFIG: type_str = "string"; break;
+    case ENUM_CONFIG: type_str = "enum"; break;
+    case SPECIAL_CONFIG: type_str = "special"; break;
+    default: type_str = "unknown"; break;
+    }
+    addReplyBulkCString(c, type_str);
+
+    if (config->type == ENUM_CONFIG) {
+        configEnum *enumNode = config->data.enumd.enum_value;
+        int count = 0;
+        while (enumNode[count].name != NULL) count++;
+        addReplyBulkCString(c, "values");
+        addReplyArrayLen(c, count);
+        for (int i = 0; i < count; i++) {
+            addReplyBulkCString(c, enumNode[i].name);
+        }
+    } else if (config->type == NUMERIC_CONFIG) {
+        addReplyBulkCString(c, "range");
+        addReplyArrayLen(c, 2);
+        addReplyLongLong(c, config->data.numeric.lower_bound);
+        addReplyLongLong(c, config->data.numeric.upper_bound);
+    }
+}
+
 void configHelpCommand(client *c) {
+    if (c->argc == 3) {
+        sds name = objectGetVal(c->argv[2]);
+        standardConfig *config = lookupConfig(name);
+        if (!config) {
+            addReplyErrorFormat(c, "Unknown config '%s'", name);
+            return;
+        }
+        addConfigInfoReply(c, config);
+        return;
+    }
+
     const char *help[] = {"GET <pattern>",
                           "    Return parameters matching the glob-like <pattern> and their values.",
                           "SET <directive> <value>",
@@ -3581,6 +3629,8 @@ void configHelpCommand(client *c) {
                           "    Reset statistics reported by the INFO command.",
                           "REWRITE",
                           "    Rewrite the configuration file.",
+                          "HELP [<config>]",
+                          "    Show help about a specific config.",
                           NULL};
 
     addReplyHelp(c, help);

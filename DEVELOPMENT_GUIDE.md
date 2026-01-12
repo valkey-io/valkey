@@ -31,6 +31,7 @@ Most of the style guidelines are enforced by clang format, but some additional c
    For historical reasons, some private functions are prefixed by `_`, and they are kept as is to make it easier to backport changes.
 1. Use the boolean type for true/false values.
    For historical reasons, some functions used the integer type, and they are kept as is to make it easier to backport changes.
+
 ## Naming conventions
 Valkey has a long history of inconsistent naming conventions.
 Generally follow the style of the surrounding code, but you can also always use the following conventions for variable and structure names:

@@ -11,6 +11,21 @@
 /* Command filter codes that are used in pre execution stage of a command. */
 #define CMD_FILTER_ALLOW 0
 #define CMD_FILTER_REJECT 1
+// Returns true if the cmd is a script command that never replicates.
+#define IS_SCRIPT_CALL_READONLY_CMD(cmd) ((cmd) && (        \
+((cmd)->proc == fcallroCommand)  \
+|| ((cmd)->proc == evalRoCommand)   \
+|| ((cmd)->proc == evalShaRoCommand)))
+
+// Returns true if the cmd is a script command
+// (EVAL/EVAL_RO/EVALSHA/EVALSHA_RO/FCALL/FCALL_RO).
+#define IS_SCRIPT_CALL_CMD(cmd) ((cmd) && (                 \
+((cmd)->proc == fcallCommand)    \
+|| ((cmd)->proc == fcallroCommand)  \
+|| ((cmd)->proc == evalCommand)     \
+|| ((cmd)->proc == evalRoCommand)   \
+|| ((cmd)->proc == evalShaCommand)  \
+|| ((cmd)->proc == evalShaRoCommand)))
 
 struct client;
 struct serverObject;
@@ -112,9 +127,9 @@ void syncReplicationClearPrimaryState(void);
 void beforeCommandTrackReplOffset(void);
 void afterCommandTrackReplOffset(client *c);
 int preCommandExec(client *c);
+char *preScriptCmd(client *c);
 void postCommandExec(client *c);
 void postReplicaAck(void);
-
 /**
     Utils
 */
@@ -125,7 +140,7 @@ long long syncReplicationPurgeAndGetUncommittedKeyOffset(sds key, serverDb *db);
 int isSyncReplicationEnabled(void);
 void clearUncommittedKeysAcknowledged(void);
 void syncReplicationInitDatabase(serverDb *db);
-void handleUncommittedKeyForClient(const client *c, const struct serverObject *key, const serverDb *db);
+void handleUncommittedKeyForClient(const client *c, struct serverObject *key, serverDb *db);
 // TODO:
 //  preReplyToBlockedClient
 // for streams and timeounts, when a blocked client is being unblocked

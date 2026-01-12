@@ -38,6 +38,83 @@ start_server {tags {"repl durability external:skip"} overrides {sync-replication
             }
         }
 
+        test "Sync replication blocks EXEC replies until replica acks" {
+            assert_equal "yes" [lindex [$primary config get sync-replication] 1]
+
+            set rd [valkey_deferring_client -1]
+            $rd multi
+            $rd set durable:multi value
+
+            assert_equal "OK" [$rd read]
+            assert_equal "QUEUED" [$rd read]
+
+            $rd exec
+            set fd [$rd channel]
+            fconfigure $fd -blocking 0
+            set early_reply [read $fd]
+            fconfigure $fd -blocking 1
+            assert_equal "" $early_reply
+
+            $replica replicaof $primary_host $primary_port
+            wait_replica_online $primary
+            wait_replica_acked_ofs $primary $replica $replica_host $replica_port
+
+            assert_equal {OK} [$rd read]
+        }
+
+        test "Sync replication blocks only the keys we write to in EXEC replies until replica acks" {
+            assert_equal "yes" [lindex [$primary config get sync-replication] 1]
+
+            set rd [valkey_deferring_client -1]
+            $rd multi
+            $rd set durable:multi-dirty value
+            $rd get durable:multi
+
+            assert_equal "OK" [$rd read]
+            assert_equal "QUEUED" [$rd read]
+            assert_equal "QUEUED" [$rd read]
+
+            set reader [valkey_client]
+            assert_equal {value} [$reader get durable:multi]
+
+            $rd exec
+            set fd [$rd channel]
+            fconfigure $fd -blocking 0
+            set early_reply [read $fd]
+            fconfigure $fd -blocking 1
+            assert_equal "" $early_reply
+
+            $replica replicaof $primary_host $primary_port
+            wait_replica_online $primary
+            wait_replica_acked_ofs $primary $replica $replica_host $replica_port
+
+            assert_equal {OK value} [$rd read]
+        }
+
+        test "Sync replication blocks Lua script replies until replica acks" {
+            assert_equal "yes" [lindex [$primary config get sync-replication] 1]
+
+            assert_equal "OK" [$primary set durable:lua-clean clean]
+
+            set rd [valkey_deferring_client -1]
+            $rd eval {redis.call('set', KEYS[1], ARGV[1]); return redis.call('get', KEYS[2])} 2 durable:lua-dirty durable:lua-clean value
+
+            set fd [$rd channel]
+            fconfigure $fd -blocking 0
+            set early_reply [read $fd]
+            fconfigure $fd -blocking 1
+            assert_equal "" $early_reply
+
+            set reader [valkey_client]
+            assert_equal {clean} [$reader get durable:lua-clean]
+
+            $replica replicaof $primary_host $primary_port
+            wait_replica_online $primary
+            wait_replica_acked_ofs $primary $replica $replica_host $replica_port
+
+            assert_equal {clean} [$rd read]
+        }
+
         test "Sync replication blocks reads on dirty keys" {
             assert_equal "yes" [lindex [$primary config get sync-replication] 1]
 

@@ -43,12 +43,12 @@ int test_durableClientInitAndReset(int argc, char **argv, int flags) {
 
     // Test initialization when durability is disabled
     server.durability.sync_replication_enabled = 0;
-    durableClientInit(c);
+    syncReplicationClientInit(c);
     TEST_ASSERT(c->clientDurabilityInfo.blocked_responses == NULL);
 
     // Test initialization when durability is enabled
     server.durability.sync_replication_enabled = 1;
-    durableClientInit(c);
+    syncReplicationClientInit(c);
     TEST_ASSERT(c->clientDurabilityInfo.blocked_responses != NULL);
     TEST_ASSERT(listLength(c->clientDurabilityInfo.blocked_responses) == 0);
     TEST_ASSERT(c->clientDurabilityInfo.offset.recorded == false);
@@ -57,7 +57,7 @@ int test_durableClientInitAndReset(int argc, char **argv, int flags) {
     TEST_ASSERT(c->clientDurabilityInfo.current_command_repl_offset == -1);
 
     // Test reset
-    durableClientReset(c);
+    syncReplicationClientReset(c);
     TEST_ASSERT(c->clientDurabilityInfo.blocked_responses == NULL);
     TEST_ASSERT(c->clientDurabilityInfo.offset.recorded == false);
     TEST_ASSERT(c->clientDurabilityInfo.current_command_repl_offset == -1);
@@ -81,11 +81,11 @@ int test_isDurabilityEnabled(int argc, char **argv, int flags) {
 
     // Test that durability is disabled by default
     server.durability.sync_replication_enabled = 0;
-    TEST_ASSERT(isDurabilityEnabled() == 0);
+    TEST_ASSERT(isSyncReplicationEnabled() == 0);
 
     // Test that durability can be enabled
     server.durability.sync_replication_enabled = 1;
-    TEST_ASSERT(isDurabilityEnabled() == 1);
+    TEST_ASSERT(isSyncReplicationEnabled() == 1);
 
     // Reset to default
     server.durability.sync_replication_enabled = 0;
@@ -106,17 +106,17 @@ int test_isPrimaryDurabilityEnabled(int argc, char **argv, int flags) {
 
     // Test when server is primary (not a replica)
     server.primary_host = NULL;
-    TEST_ASSERT(isPrimaryDurabilityEnabled() == 1);
+    TEST_ASSERT(isPrimarySyncReplicationEnabled() == 1);
 
     // Test when server is a replica
     server.primary_host = sdsnew("127.0.0.1");
-    TEST_ASSERT(isPrimaryDurabilityEnabled() == 0);
+    TEST_ASSERT(isPrimarySyncReplicationEnabled() == 0);
 
     // Test when durability is disabled but server is primary
     server.durability.sync_replication_enabled = 0;
     sdsfree(server.primary_host);
     server.primary_host = NULL;
-    TEST_ASSERT(isPrimaryDurabilityEnabled() == 0);
+    TEST_ASSERT(isPrimarySyncReplicationEnabled() == 0);
 
     // Cleanup and reset
     server.durability.sync_replication_enabled = 0;
@@ -173,7 +173,7 @@ int test_durableInit(int argc, char **argv, int flags) {
     }
 
     // Initialize durability
-    durableInit();
+    syncReplicationInit();
 
     // Verify initialization
     TEST_ASSERT(server.durability.sync_replication_enabled == 0);
@@ -293,7 +293,7 @@ int test_durablePurgeAndGetUncommittedKeyOffset(int argc, char **argv, int flags
     server.db = zcalloc(sizeof(serverDb *));
 
     serverDb *db = zcalloc(sizeof(serverDb));
-    durableInitDatabase(db);
+    syncReplicationInitDatabase(db);
     server.db[0] = db;
 
     robj *key_obj = createStringObject("key", 3);
@@ -303,12 +303,12 @@ int test_durablePurgeAndGetUncommittedKeyOffset(int argc, char **argv, int flags
     handleUncommittedKeyForClient(NULL, key_obj, db);
 
     server.durability.previous_acked_offset = 5;
-    TEST_ASSERT(durablePurgeAndGetUncommittedKeyOffset(key, db) == offset);
+    TEST_ASSERT(syncReplicationPurgeAndGetUncommittedKeyOffset(key, db) == offset);
 
     TEST_ASSERT(hashtableSize(db->uncommitted_keys) == 1);
 
     server.durability.previous_acked_offset = 10;
-    TEST_ASSERT(durablePurgeAndGetUncommittedKeyOffset(key, db) == -1);
+    TEST_ASSERT(syncReplicationPurgeAndGetUncommittedKeyOffset(key, db) == -1);
     TEST_ASSERT(hashtableSize(db->uncommitted_keys) == 0);
 
     decrRefCount(key_obj);
@@ -333,8 +333,8 @@ int test_beforeCommandTrackReplOffset(int argc, char **argv, int flags) {
 
     // Create a mock client
     client *c = zcalloc(sizeof(client));
-    durableClientInit(c);
-    durableInit();
+    syncReplicationClientInit(c);
+    syncReplicationInit();
 
     // Test when durability is enabled
     server.durability.sync_replication_enabled = 1;
@@ -349,7 +349,7 @@ int test_beforeCommandTrackReplOffset(int argc, char **argv, int flags) {
     // Reset to default
     server.durability.sync_replication_enabled = 0;
 
-    durableCleanup();
+    syncReplicationCleanup();
     return 0;
 }
 
@@ -391,7 +391,158 @@ int test_preCommandExec(int argc, char **argv, int flags) {
     zfree(c);
 
     server.durability.sync_replication_enabled = 0;
-    durableCleanup();
-    durableClientReset(c);
+    syncReplicationCleanup();
+    syncReplicationClientReset(c);
+    return 0;
+}
+
+int test_multi_exec_defers_dirty_keys(int argc, char **argv, int flags) {
+    UNUSED(argc);
+    UNUSED(argv);
+    UNUSED(flags);
+
+    initReplyBlockingTestEnv();
+
+    serverDb **old_db = server.db;
+    int old_dbnum = server.dbnum;
+    char *old_primary_host = server.primary_host;
+    int old_cluster_enabled = server.cluster_enabled;
+    long long old_primary_repl_offset = server.primary_repl_offset;
+    int old_get_ack = server.get_ack_from_replicas;
+    durable_t old_durability = server.durability;
+
+    server.cluster_enabled = 0;
+    server.primary_host = NULL;
+    server.dbnum = 1;
+    server.db = zcalloc(sizeof(serverDb *));
+    server.db[0] = zcalloc(sizeof(serverDb));
+    syncReplicationInitDatabase(server.db[0]);
+
+    server.durability.sync_replication_enabled = 1;
+    syncReplicationInit();
+
+    client *c = zcalloc(sizeof(client));
+    syncReplicationClientInit(c);
+    c->db = server.db[0];
+    c->reply = listCreate();
+    listSetFreeMethod(c->reply, zfree);
+
+    c->flag.multi = 1;
+    robj *key_obj = createStringObject("multi-key", 9);
+    handleUncommittedKeyForClient(c, key_obj, server.db[0]);
+    TEST_ASSERT(hashtableSize(server.db[0]->uncommitted_keys) == 0);
+
+    c->flag.multi = 0;
+    struct serverCommand exec_cmd = {.declared_name = "exec", .proc = execCommand, .flags = 0};
+    c->cmd = &exec_cmd;
+    c->clientDurabilityInfo.current_command_repl_offset = -1;
+    server.primary_repl_offset = 100;
+    server.durability.pre_command_replication_offset = 100;
+    server.durability.previous_acked_offset = 0;
+    postCommandExec(c);
+
+    TEST_ASSERT(hashtableSize(server.db[0]->uncommitted_keys) == 1);
+    TEST_ASSERT(syncReplicationPurgeAndGetUncommittedKeyOffset(objectGetVal(key_obj), server.db[0]) == 100);
+
+    decrRefCount(key_obj);
+    listRelease(c->reply);
+    syncReplicationClientReset(c);
+    zfree(c);
+
+    syncReplicationCleanup();
+    hashtableRelease(server.db[0]->uncommitted_keys);
+    zfree(server.db[0]);
+    zfree(server.db);
+
+    server.db = old_db;
+    server.dbnum = old_dbnum;
+    server.primary_host = old_primary_host;
+    server.cluster_enabled = old_cluster_enabled;
+    server.primary_repl_offset = old_primary_repl_offset;
+    server.get_ack_from_replicas = old_get_ack;
+    server.durability = old_durability;
+
+    return 0;
+}
+
+int test_exec_blocks_reply_and_tracks_dirty_keys(int argc, char **argv, int flags) {
+    UNUSED(argc);
+    UNUSED(argv);
+    UNUSED(flags);
+
+    initReplyBlockingTestEnv();
+
+    serverDb **old_db = server.db;
+    int old_dbnum = server.dbnum;
+    char *old_primary_host = server.primary_host;
+    int old_cluster_enabled = server.cluster_enabled;
+    long long old_primary_repl_offset = server.primary_repl_offset;
+    int old_get_ack = server.get_ack_from_replicas;
+    durable_t old_durability = server.durability;
+
+    server.cluster_enabled = 0;
+    server.primary_host = NULL;
+    server.dbnum = 1;
+    server.db = zcalloc(sizeof(serverDb *));
+    server.db[0] = zcalloc(sizeof(serverDb));
+    syncReplicationInitDatabase(server.db[0]);
+
+    server.durability.sync_replication_enabled = 1;
+    syncReplicationInit();
+
+    client *c = zcalloc(sizeof(client));
+    syncReplicationClientInit(c);
+    c->db = server.db[0];
+    c->reply = listCreate();
+    listSetFreeMethod(c->reply, zfree);
+    c->bufpos = 5;
+
+    struct serverCommand exec_cmd = {.declared_name = "exec", .proc = execCommand, .flags = 0};
+    c->cmd = &exec_cmd;
+
+    c->flag.multi = 1;
+    robj *key_obj = createStringObject("multi-exec-key", 14);
+    handleUncommittedKeyForClient(c, key_obj, server.db[0]);
+    c->flag.multi = 0;
+
+    server.primary_repl_offset = 100;
+    TEST_ASSERT(preCommandExec(c) == CMD_FILTER_ALLOW);
+    TEST_ASSERT(c->clientDurabilityInfo.offset.recorded == true);
+
+    c->bufpos = 9;
+    server.primary_repl_offset = 150;
+    server.durability.previous_acked_offset = 0;
+    postCommandExec(c);
+
+    TEST_ASSERT(listLength(c->clientDurabilityInfo.blocked_responses) == 1);
+    blockedResponse *br = listNodeValue(listFirst(c->clientDurabilityInfo.blocked_responses));
+    TEST_ASSERT(br->primary_repl_offset == 150);
+    TEST_ASSERT(br->disallowed_reply_block == NULL);
+    TEST_ASSERT(br->disallowed_byte_offset == 5);
+    TEST_ASSERT(c->clientDurabilityInfo.durable_blocked_client == 1);
+    TEST_ASSERT(listLength(server.durability.clients_waiting_replica_ack) == 1);
+    TEST_ASSERT(server.get_ack_from_replicas == 1);
+
+    TEST_ASSERT(hashtableSize(server.db[0]->uncommitted_keys) == 1);
+    TEST_ASSERT(syncReplicationPurgeAndGetUncommittedKeyOffset(objectGetVal(key_obj), server.db[0]) == 150);
+
+    decrRefCount(key_obj);
+    listRelease(c->reply);
+    syncReplicationClientReset(c);
+    zfree(c);
+
+    syncReplicationCleanup();
+    hashtableRelease(server.db[0]->uncommitted_keys);
+    zfree(server.db[0]);
+    zfree(server.db);
+
+    server.db = old_db;
+    server.dbnum = old_dbnum;
+    server.primary_host = old_primary_host;
+    server.cluster_enabled = old_cluster_enabled;
+    server.primary_repl_offset = old_primary_repl_offset;
+    server.get_ack_from_replicas = old_get_ack;
+    server.durability = old_durability;
+
     return 0;
 }

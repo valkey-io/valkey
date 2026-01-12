@@ -5,13 +5,15 @@
 #include <assert.h>
 #include <math.h>
 
+#include "script.h"
+
 // TODO: handle PSYNC
 // TODO: remove debug logging
 // TODO: handle lua & multi
 // TODO: handle blocking commands
 // TODO: handle DB level commands (swap flushall etc)
 // TODO: handle monitors
-// TODO: temetry
+// TODO: telemetry
 
 /*============================ Internal prototypes ========================= */
 static void resetPreExecutionOffset(struct client *c);
@@ -30,6 +32,8 @@ static const void *uncommittedKeyEntryGetKey(const void *entry);
 static void uncommittedKeyEntryDestructor(void *entry);
 static void addUncommittedKey(sds key,long long offset, hashtable *uncommittedKeys);
 static void uncommittedKeysCleanupScanCallback(void *privdata, void *entry);
+static void pendingUncommittedKeyDestructor(void *entry);
+static void handleDatabaseModification(client *c);
 static int isSingleCommandAccessingUncommittedKeys(const serverDb *db, struct serverCommand *cmd, robj **argv, int argc);
 static int isAccessingUncommittedData(client *c);
 static bool shouldRejectCommandWithUncommittedData(client *c);
@@ -57,7 +61,40 @@ static hashtableType uncommittedKeysHashtableType = {
     .entryDestructor = uncommittedKeyEntryDestructor,
 };
 
+/**
+ * Below are the data structures used to buffer intermediate dirty keys/DBs for multi-command
+ * blocks including MULTI/EXEC and Lua script. As we execute the individual commands in the
+ * transaction, we don't know the final replication offset so we store the updated keys and DBs
+ * in afterCommandTrackReplOffset(), and process them in postCommandExec() after the entire transaction is
+ * propagated to the replication buffer.
+ *
+ * Note: here it is impossible to skip processing the buffered keys/DBs at the end of each command
+ * because the command processing is single-threaded and atomic, so afterCommandTrackReplOffset() always
+ * get invoked after call() even if call() fails with some error.
+ * See processCommand() implementation in server.c.
+ */
+typedef struct pendingUncommittedKey {
+    robj *key;
+    hashtable *uncommitted_keys;
+} pendingUncommittedKey;
+
+// Track the list of pending uncommitted keys for an ongoing multi-command block
+// such as a MULTI/EXEC or Lua.
+static list *pending_uncommitted_keys;
+
+// Track the list of pending uncommitted databases for an ongoing multi-command block
+// such as MULTI/EXEC or Lua
+static list *pending_uncommitted_dbs;
+
+static bool all_dbs_dirty_in_current_cmd;
+
 /*================================= Utility functions ======================== */
+static void pendingUncommittedKeyDestructor(void *entry) {
+    if (entry == NULL) return;
+    pendingUncommittedKey *uk = entry;
+    if (uk->key != NULL) decrRefCount(uk->key);
+    zfree(uk);
+}
 
 /**
  * Utility function to determine whether the durability flag has been enabled.
@@ -80,11 +117,11 @@ int isPrimarySyncReplicationEnabled(void) {
  * to tell us when we've achieved consensus via raft.
  * Using 2 as default for POC.
  */
-static inline unsigned replicaAcksForConsensus(void) {
+static unsigned replicaAcksForConsensus(void) {
     return 1;
 }
 
-/*
+/**
  * Utility function to sort offsets in descending order
  * @v1    Pointer to long long representing the first offset
  * @v2    Pointer to long long representing the second offset
@@ -92,7 +129,7 @@ static inline unsigned replicaAcksForConsensus(void) {
  *            zero if both offsets are equal
  *            +ve  if first offset < second offset
  */
-static inline int offsetSorterDesc(const void *v1, const void *v2) {
+static int offsetSorterDesc(const void *v1, const void *v2) {
     const long long *a = v1;
     const long long *b = v2;
 
@@ -101,7 +138,7 @@ static inline int offsetSorterDesc(const void *v1, const void *v2) {
 
 static uint64_t uncommittedKeysHash(const void *key) {
     const sds keystr = (const sds)key;
-    return hashtableGenHashFunction((const char *)keystr, sdslen(keystr));
+    return hashtableGenHashFunction(keystr, sdslen(keystr));
 }
 
 static int uncommittedKeysKeyCompare(const void *key1, const void *key2) {
@@ -144,7 +181,7 @@ unsigned long long getUncommittedKeysCleanupTimeLimit(unsigned long long num_unc
 
 /*================================= Replica offset management =============== */
 
-/*
+/**
  * Populates the offset of each replica. If the replica is offline,
  * then the function places a ZERO for its entry.
  * @offsets        The array that needs to be filled in. Function assumes that proper memory has been allocated for it.
@@ -222,7 +259,7 @@ static void resetPreExecutionOffset(struct client *c) {
  * (For a monitor client, this position is the byte position in the COB prior to command replication. The command
  * will be replicated after this position.)
  */
-static inline void trackCommandPreExecutionPosition(struct client *c) {
+static void trackCommandPreExecutionPosition(struct client *c) {
     // There can be cases when the client gets blocked by other mechanisms such as slot migration
     // after we tracked the command's pre-execution position when the reply buffer is non-empty.
     // Later on when the client unblocks, the reply buffer can get flushed to the client so the
@@ -300,6 +337,14 @@ void syncReplicationClientReset(client *c) {
 }
 
 /**
+ * Determines if a client is doing a transaction or not. This applies to either
+ * MULTI/EXEC or scripts
+ */
+static bool isClientDoingTransaction(client *c) {
+    return c->cmd->proc == execCommand || IS_SCRIPT_CALL_CMD(c->cmd);
+}
+
+/**
  * Returns true if the client is eligible for keyspace tracking
  * on a primary node.
  */
@@ -316,9 +361,8 @@ static bool clientEligibleForResponseTracking(client *c) {
         return false;
     }
 
-    return c->cmd->flags & (CMD_WRITE | CMD_READONLY); // Read or write command
-                                                           // TODO: transactions, lua, scripts, etc
-                                                           // TODO: functions
+    return c->cmd->flags & (CMD_WRITE | CMD_READONLY)
+        || isClientDoingTransaction(c);// Read or write command // TODO: functions
 }
 
 /**
@@ -619,16 +663,29 @@ long long syncReplicationPurgeAndGetUncommittedKeyOffset(const sds key, serverDb
  * @param db
  */
 void handleUncommittedKeyForClient(const client *c, const robj *key, const serverDb *db) {
-    // If we are in the context of a MULTI/EXEC transaction (or TODO: a script)
-    // we mark the dirty key
+    // If we are in the context of a MULTI/EXEC transaction or a script, mark the dirty key
     // pending so it can be properly recorded later on with the final replication offset.
-    if ((c != NULL) && ((c->flag.multi))) {
-        // TODO: handle multi
+    if ((c != NULL) && ((c->flag.multi) || scriptIsRunning())) {
+        // If all DBs are already dirty, no need to track dirty keys
+        if (all_dbs_dirty_in_current_cmd) return;
+        if (pending_uncommitted_keys == NULL) {
+            pending_uncommitted_keys = listCreate();
+            listSetFreeMethod(pending_uncommitted_keys, pendingUncommittedKeyDestructor);
+        }
+        pendingUncommittedKey *dirty_key = (pendingUncommittedKey*)zmalloc(sizeof(pendingUncommittedKey));
+        incrRefCount(key);
+        dirty_key->key = key;
+        dirty_key->uncommitted_keys = db->uncommitted_keys;
+        listAddNodeTail(pending_uncommitted_keys, dirty_key);
     } else {
         // Otherwise, the key is updated outside of a transaction or a script, simply mark the key
         // dirty at the current primary_repl_offset
         addUncommittedKey(objectGetVal(key), server.primary_repl_offset, db->uncommitted_keys);
     }
+}
+
+static void handleDatabaseModification(client *c) {
+    UNUSED(c);
 }
 
 /**
@@ -809,6 +866,18 @@ static bool shouldRejectCommandWithUncommittedData(client *c) {
  *         offset has not been updated yet.
  */
 static long long getSingleCommandBlockingOffsetForReplicatingCommand(client *c) {
+    /* We check the CMD_WRITE flag because there are three cases where the post-call replication offset can
+    * be greater than the pre-call replication offset, but we don't consider the command to be replicating:
+    *
+    * 1. Top-level commands of transactions (e.g. EVAL, FCALL, EXEC). The necessary keys will already be
+    *    added to the pending_uncommitted_keys array when the nested write commands are processed.
+    * 2. Read commands that cause a write as a side-effect. The only case currently is passive expiration.
+    *    The mutated keys are marked dirty by a separate hook and the keys accessed by the read command
+    *    don't need to be marked dirty here.
+    * 3. The pre-call hook was skipped so we have an outdated pre-call replication offset. This can happen
+    *    when sync-replication is dynamically enabled on a primary with CONFIG SET or when a replica becomes
+    *    a primary via REPLICAOF NO ONE.
+    */
     if (!(c->cmd->flags & CMD_WRITE)) {
         return -1;
     }
@@ -842,8 +911,14 @@ static long long getSingleCommandBlockingOffsetForReplicatingCommand(client *c) 
     }
     getKeysFreeResult(&result);
 
+    // If we're in a nested call, we do not update the blocking replication offset yet because
+    // the replication data is not propagated until after the transaction completes.
+    // Instead, the blocking repl offset will be finalized in postCommandTrackReplOffset
+    if (!server.execution_nesting) {
+        return server.primary_repl_offset;
+    }
 
-    return server.primary_repl_offset;
+    return -1;
 }
 
 /**
@@ -855,6 +930,11 @@ static long long getSingleCommandBlockingOffsetForReplicatingCommand(client *c) 
 static long long getSingleCommandBlockingOffsetForNonReplicatingCommand(client *c) {
     long long blocking_repl_offset = -1;
     // TODO: handle function, module, etc
+    if (IS_SCRIPT_CALL_READONLY_CMD(c->cmd)) {
+        // We don't need to indiscriminately block on dirty keys specified in read-only script run commands.
+        // We only block on ones that are actually accessed which is handled during the nested calls.
+        return -1;
+    }
     if (c->cmd->flags & (CMD_READONLY | CMD_WRITE)) {
         serverLog(LL_DEBUG, "getSingleCommandBlockingOffsetForNonReplicatingCommand for command");
         // For read/write commands that didn't generate replication data, we would block
@@ -868,12 +948,12 @@ static long long getSingleCommandBlockingOffsetForNonReplicatingCommand(client *
         keyReference *keys = result.keys;
 
         for (int i = 0; i < numkeys; i++) {
-            sds keystr = objectGetVal(c->argv[keys[i].pos]);
+            sds key = objectGetVal(c->argv[keys[i].pos]);
             // If we try to access an uncommitted key, then block the client
             // until all prior updates on this key have been acknowledged.
             // So here we essentially need to track the biggest offset amongst
             // all the uncommitted keys accessed by the command.
-            long long offset = syncReplicationPurgeAndGetUncommittedKeyOffset(keystr, c->db);
+            const long long offset = syncReplicationPurgeAndGetUncommittedKeyOffset(key, c->db);
             if (offset > blocking_repl_offset) {
                 blocking_repl_offset = offset;
             }
@@ -924,7 +1004,6 @@ static long long getSingleCommandBlockingOffsetForConsistentWrites(struct client
  * about to be executed.
  */
 void beforeCommandTrackReplOffset(void) {
-    serverLog(LL_DEBUG, "beforeCommandTrackReplOffset hook entered");
     if (!isPrimarySyncReplicationEnabled()) return;
 
     server.durability.pre_call_replication_offset = server.primary_repl_offset;
@@ -947,6 +1026,7 @@ void beforeCommandTrackReplOffset(void) {
  */
 void afterCommandTrackReplOffset(client *c) {
     serverLog(LL_DEBUG, "afterCommandTrackReplOffset entered for command '%s'", c->cmd->declared_name);
+    //TODO: blocked by module
     if (!isPrimarySyncReplicationEnabled() || (c->flag.blocked))
         return;
 
@@ -963,7 +1043,20 @@ void afterCommandTrackReplOffset(client *c) {
         tracking_client->clientDurabilityInfo.current_command_repl_offset = current_cmd_blocking_offset;
     }
 
-    // TODO: handle db level modifications like FLUSHALL, SWAPDB
+    // Handle database level modifications done by the current command
+    handleDatabaseModification(c);
+}
+
+char *preScriptCmd(client *c) {
+    if (!isSyncReplicationEnabled()) {
+        return NULL;
+    }
+
+    if (shouldRejectCommandWithUncommittedData(c)) {
+        return SYNC_REPL_ACCESSED_DATA_UNAVAILABLE;
+    }
+
+    return NULL;
 }
 
 /**
@@ -1003,6 +1096,29 @@ int preCommandExec(client *c) {
     return CMD_FILTER_ALLOW;
 }
 
+
+/**
+ * Marks keys, databases, and the function store dirty at the current
+ * replication offset if they were updated during a transaction.
+ */
+static void processPendingUncommittedData(long long blocking_repl_offset) {
+    // Process the dirty keys in the current command block if needed
+    if (listLength(pending_uncommitted_keys) > 0) {
+        listIter li;
+        listNode *key_node;
+        listRewind(pending_uncommitted_keys, &li);
+        while ((key_node = listNext(&li)) != NULL) {
+            const pendingUncommittedKey *uk = listNodeValue(key_node);
+            addUncommittedKey(objectGetVal(uk->key), blocking_repl_offset, uk->uncommitted_keys);
+            listDelNode(pending_uncommitted_keys, key_node);
+        }
+    }
+
+    serverAssert(listLength(pending_uncommitted_keys) == 0);
+    serverAssert(all_dbs_dirty_in_current_cmd == false);
+}
+
+
 /**
  * Perform post-processing after command execution for a given client.
  *
@@ -1022,14 +1138,31 @@ void postCommandExec(client *c) {
     serverLog(LL_DEBUG, "postCommandExec hook entered for command '%s'",
               c->cmd ? c->cmd->declared_name : "NULL");
     // If the command is NULL or is in a MULTI/EXEC block, then we skip
-    // TODO: handle multi
-    if (c->cmd == NULL || c->flag.multi) {
+    if(c->cmd == NULL || c->flag.multi) {
         return;
     }
 
     // Block the client (TODO:monitors) based on the required replication offset
     // for the current command.
     long long blocking_repl_offset = c->clientDurabilityInfo.current_command_repl_offset;
+
+
+    // TODO CMD_MAY_REPLICATE
+
+    // If the client ran a transaction or a script that included write commands, the
+    // blocking offset was not accurately set in amzPostCall() so we update it here.
+    //
+    // There are 2 exceptions to this rule:
+    // 1. We exclude sync commands as the master replication offset will have increased
+    // despite no change to the primary's state occurring.
+    // 2. SHUTDOWN command may execute REPLCONF GETACK command if there is uncommitted data
+    // and this increments the master replication offset. However, the client is not eligible
+    // for blocking and the SHUTDOWN command should not be blocked.
+    if (server.primary_repl_offset > server.durability.pre_command_replication_offset
+            && c->cmd->proc != syncCommand && c->cmd->proc != clusterCommand && c->cmd->proc != shutdownCommand) {
+        blocking_repl_offset = server.primary_repl_offset;
+            }
+
 
     // If the client needs to block, we need to enforce that it is eligible for response tracking.
     // Otherwise we will try to block the response without tracking the command's pre-execution
@@ -1038,6 +1171,9 @@ void postCommandExec(client *c) {
     if (blocking_repl_offset > server.durability.pre_command_replication_offset) {
         serverAssert(clientEligibleForResponseTracking(c));
     }
+
+
+    processPendingUncommittedData(server.primary_repl_offset);
 
     blockClientAndMonitorsOnReplOffset(c, blocking_repl_offset);
 }
@@ -1049,6 +1185,10 @@ void syncReplicationInit(void) {
     server.durability.previous_acked_offset = -1;
     server.durability.curr_db_scan_idx = 0;
     server.durability.clients_waiting_replica_ack = listCreate();
+    if (pending_uncommitted_keys == NULL) {
+        pending_uncommitted_keys = listCreate();
+        listSetFreeMethod(pending_uncommitted_keys, pendingUncommittedKeyDestructor);
+    }
 }
 
 /**
@@ -1062,6 +1202,10 @@ void syncReplicationCleanup(void) {
     if (server.durability.clients_waiting_replica_ack != NULL) {
         listRelease(server.durability.clients_waiting_replica_ack);
         server.durability.clients_waiting_replica_ack = NULL;
+    }
+    if (pending_uncommitted_keys != NULL) {
+        listRelease(pending_uncommitted_keys);
+        pending_uncommitted_keys = NULL;
     }
 
     clearAllUncommittedKeys();

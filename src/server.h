@@ -945,7 +945,6 @@ typedef struct serverDb {
 
     /* fields related to dirty key tracking
      * for consistent writes with durability */
-    // TODO: move hashtable/references directly in the robj
     hashtable *uncommitted_keys;    /* Map of dirty keys to the offset required by replica acknowledgement */
     long long dirty_repl_offset;    /* Replication offset for a dirty DB */
     size_t uncommitted_keys_cursor; /* Cursor for incremental cleanup scans */

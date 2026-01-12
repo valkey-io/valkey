@@ -10,6 +10,7 @@
 
 /* Special Expiry values */
 #define EXPIRY_NONE -1
+#define EXPIRY_FORCE_EXPIRED -2
 
 /* Flags for expireIfNeeded */
 #define EXPIRE_FORCE_DELETE_EXPIRED 1

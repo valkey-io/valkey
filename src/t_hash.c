@@ -483,7 +483,7 @@ static expiryModificationResult hashTypeSetExpire(robj *o, sds field, long long 
         /* When listpack representation is used, we consider it as infinite TTL,
          * so expire command with gt always fail the GT as well as existence(XX).
          * Else, if the ttl is set in the past, just delete the entry (we know it exists)
-         * we already know we are going to set an expiration so we expend to hashtable encoding. */
+         * Else, we already know we are going to set an expiration so we expend to hashtable encoding. */
         if (flag & EXPIRE_XX || flag & EXPIRE_GT) {
             return EXPIRATION_MODIFICATION_FAILED_CONDITION;
         } else if (expiry == EXPIRY_FORCE_EXPIRED) {

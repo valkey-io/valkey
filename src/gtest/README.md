@@ -24,6 +24,17 @@ To extend the Valkey classes for mocking further methods, simply add your method
 to 'wrappers.h' and re-run 'make test-gtest' to regenerate the Valkey glue code
 and run the tests.
 
+Important: All mocking should occur at software boundaries where interfaces are
+clearly defined. Your use of mocking will be denied if it is not at a well
+defined boundary. Overuse of mocking turns the unit tests into a "change
+detector" which will fail whenever the code is modified. Please also consider
+whether other testing strategies like injecting fakes/stubs or integration
+testing would yield similar test coverage.
+
+This framework depends on GoogleTest and GoogleMock. You need to install them manually
+before building the gtests (e.g., `libgtest-dev` / `libgmock-dev` on Debian/Ubuntu,
+`gtest-devel` / `gmock-devel` on CentOS/Fedora, or `brew install googletest` on macOS).
+
 ## Tricks in running unit tests
 
 Sometimes the developer might want to run only one gtest unit test, or only a

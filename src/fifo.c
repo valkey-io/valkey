@@ -351,3 +351,16 @@ fifo *fifoPopAll(fifo *q) {
     overwriteFifoContents(newQ, q);
     return newQ;
 }
+
+void fifoPrepareForMemcheck(fifo *q) {
+    /* Just mask out the tagging bits - ensuring that the pointers between blocks are valid.  This
+     * ensures that the blocks will be properly recognized by memcheck.  However, with the tagging
+     * bits gone, the queue itself becomes invalid as we don't know where it starts & ends.  */
+    if (q->length > 0) {
+        fifoBlock *cur = q->first;
+        while (cur != NULL) {
+            cur->u.last_or_first_idx &= ~IDX_MASK; /* zero out the last 3 bits */
+            cur = cur->u.next;
+        }
+    }
+}

@@ -63,4 +63,11 @@ void *mutexQueuePop(mutexQueue *theQueue, bool blocking);
 /* Retrieves all items from the mutexQueue as a fifo (or NULL if the mutexQueue is empty). */
 fifo *mutexQueuePopAll(mutexQueue *theQueue, bool blocking);
 
+/* Prepare for memcheck
+ * This is a destructive operation which renders all future operations as undefined.  This removes
+ * internal pointer tagging, preparing the data structure to be scanned by memcheck.  This should
+ * only be used during shutdown/crash as there is no mechanism for safely traversing the queue or
+ * freeing memory after calling this API.  */
+void mutexQueuePrepareForMemcheck(mutexQueue *theQueue);
+
 #endif

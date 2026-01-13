@@ -319,6 +319,9 @@ void bioKillThreads(void) {
     int err;
 
     for (bio_worker_data *bwd = bio_workers; bwd != bio_worker_end; ++bwd) {
+        // Uncleanly terminate the mutexQueue, preparing it for memcheck.
+        mutexQueuePrepareForMemcheck(bwd->bio_jobs);
+
         if (pthread_equal(bwd->bio_thread_id, pthread_self())) continue;
         if (bwd->bio_thread_id && pthread_cancel(bwd->bio_thread_id) == 0) {
             if ((err = pthread_join(bwd->bio_thread_id, NULL)) != 0) {

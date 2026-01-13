@@ -71,4 +71,11 @@ void fifoJoin(fifo *q, fifo *other);
  *          // Process batch, then fifoRelease(batch) when done */
 fifo *fifoPopAll(fifo *q);
 
+/* Prepare for memcheck
+ * This is a destructive operation which renders all future operations as undefined.  This removes
+ * internal pointer tagging, preparing the data structure to be scanned by memcheck.  This should
+ * only be used during shutdown/crash as there is no mechanism for safely traversing the queue or
+ * freeing memory after calling this API.  */
+void fifoPrepareForMemcheck(fifo *q);
+
 #endif

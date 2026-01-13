@@ -157,3 +157,9 @@ fifo *mutexQueuePopAll(mutexQueue *theQueue, bool blocking) {
     pthread_mutex_unlock(&mq->mutex);
     return result;
 }
+
+
+void mutexQueuePrepareForMemcheck(mutexQueue *theQueue) {
+    fifoPrepareForMemcheck(theQueue->priority_fifo);
+    fifoPrepareForMemcheck(theQueue->normal_fifo);
+}

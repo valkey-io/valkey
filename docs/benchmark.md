@@ -25,6 +25,8 @@ valkey-benchmark [OPTIONS] [--] [COMMAND ARGS...]
 |--------|-------------|
 | `-c <clients>` | Number of parallel connections (default: 50) |
 | `-n <requests>` | Total number of requests (default: 100000) |
+| `--duration <seconds>` | Run benchmark for specified number of seconds (mutually exclusive with `-n`) |
+| `--warmup <seconds>` | Run benchmark for specified warmup period before recording data |
 | `-d <size>` | Data size of SET/GET value in bytes (default: 3) |
 | `-P <numreq>` | Pipeline requests (default: 1, no pipeline) |
 | `-k <boolean>` | Keep alive: 1=keep alive, 0=reconnect (default: 1) |
@@ -69,6 +71,8 @@ Available tests: `ping`, `ping_inline`, `ping_mbulk`, `set`, `get`, `incr`, `lpu
 | Option | Description |
 |--------|-------------|
 | `--dataset <file>` | Dataset file for field placeholder replacement |
+| `--maxdocs <num>` | Maximum number of documents to load from dataset (default: unlimited) |
+| `--xml-root-element <name>` | Root element name for XML dataset parsing (required for XML files) |
 
 ### File Formats
 

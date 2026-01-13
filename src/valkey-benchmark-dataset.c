@@ -705,25 +705,30 @@ static sds replaceOccurrence(sds processed_arg, const char *pos, const char *rep
 static sds processFieldsInArg(dataset *ds, sds arg, int record_index) {
     if (!strstr(arg, FIELD_PREFIX)) return arg;
 
-    const char *field_pos = strstr(arg, FIELD_PREFIX);
-    const char *field_start = field_pos + FIELD_PREFIX_LEN;
-    const char *field_end = strstr(field_start, FIELD_SUFFIX);
-    if (!field_end) return arg;
+    /* Loop through all field placeholders in the argument */
+    while (strstr(arg, FIELD_PREFIX)) {
+        const char *field_pos = strstr(arg, FIELD_PREFIX);
+        const char *field_start = field_pos + FIELD_PREFIX_LEN;
+        const char *field_end = strstr(field_start, FIELD_SUFFIX);
+        if (!field_end) break;
 
-    size_t field_name_len = field_end - field_start;
-    int field_idx = findFieldIndex(ds, field_start, field_name_len);
-    if (field_idx == -1) return arg;
+        size_t field_name_len = field_end - field_start;
+        int field_idx = findFieldIndex(ds, field_start, field_name_len);
+        if (field_idx == -1) break;
 
-    const char *field_value = extractDatasetFieldValue(ds, field_idx, record_index);
-    size_t before_len = field_pos - arg;
-    const char *after_start = field_end + FIELD_SUFFIX_LEN;
+        const char *field_value = extractDatasetFieldValue(ds, field_idx, record_index);
+        size_t before_len = field_pos - arg;
+        const char *after_start = field_end + FIELD_SUFFIX_LEN;
 
-    sds result = sdsnewlen(arg, before_len);
-    result = sdscat(result, field_value);
-    result = sdscat(result, after_start);
+        sds result = sdsnewlen(arg, before_len);
+        result = sdscat(result, field_value);
+        result = sdscat(result, after_start);
 
-    sdsfree(arg);
-    return result;
+        sdsfree(arg);
+        arg = result;
+    }
+
+    return arg;
 }
 
 static sds processRandPlaceholdersForDataSet(sds cmd, _Atomic uint64_t *seq_key, int replace_placeholders, int keyspacelen, int sequential_replacement) {

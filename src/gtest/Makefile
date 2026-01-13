@@ -127,7 +127,7 @@ $(WRAP_DIR)/%.o: ../%.o $(WRAP_DIR) generated_wrappers.o
 		llvm-objcopy --redefine-syms=$(WRAP_DIR)/$*-wrap-syms $(WRAP_DIR)/$*_temp.o $@; \
 		rm -f $(WRAP_DIR)/$*_temp.o; \
 	else \
-		python3 generate-wrapper-objects.py $< > $(WRAP_DIR)/$*-wrap-syms; \
+		python3 generate-redefine-syms.py $< > $(WRAP_DIR)/$*-wrap-syms; \
 		llvm-objcopy --redefine-syms=$(WRAP_DIR)/$*-wrap-syms $< $@; \
 	fi
 	@rm -f $(WRAP_DIR)/$*-wrap-syms

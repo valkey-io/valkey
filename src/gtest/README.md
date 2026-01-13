@@ -2,7 +2,7 @@
 
 To use this framework to write unit tests, we have modified Valkey to build as
 a library that can link against other test executables. This framework uses the
-GNU C++ linker, which implements 'wrap' functionality to rename function calls
+GNU linker (ld), which implements 'wrap' functionality to rename function calls
 to foo() to a method __wrap_foo() and renames the real foo() method to
 __real_foo().
 

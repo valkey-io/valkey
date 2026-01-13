@@ -126,12 +126,35 @@ To upgrade the library,
 gtest-parallel
 ---
 
-The gtest-parallel directory is pulled as a subtree from the upstream gtest-parallel github repo.
+The `deps/gtest-parallel` directory is imported from the upstream
+https://github.com/google/gtest-parallel repository as a subtree snapshot (not a real Git subtree).
 
-To update it, run from the project root:
+Current upstream version:
+- Upstream commit: `cd488bd` (from google/gtest-parallel)
 
-```sh
-git pull -s subtree gtest-parallel master
-```
+Updating gtest-parallel
 
-Commit the changes if any changes arise.
+Run the following from the repository root.
+
+1. Add the remote and fetch upstream:
+   ```sh
+   git remote add gtest-parallel https://github.com/google/gtest-parallel.git
+   git fetch gtest-parallel master
+   ```
+
+2. Remove any previous import and commit (commit A):
+   ```sh
+   rm -rf deps/gtest-parallel
+   ```
+
+3. Update the subtree from upstream:
+   ```sh
+   git subtree add --prefix=deps/gtest-parallel gtest-parallel master --squash
+   ```
+
+4. Reset back to commit A with proper sign-off:
+   ```sh
+   git reset --soft <commit-A-hash>
+   ```
+
+5. Commit the changes.

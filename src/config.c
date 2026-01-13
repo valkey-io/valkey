@@ -786,7 +786,7 @@ static void restoreBackupConfig(standardConfig **set_configs,
 /* Match configs by name or pattern. Returns a dict of matched configs. */
 static dict *matchSinglePatternToConfigs(sds pattern) {
     dict *matches = dictCreate(&externalStringType);
-    
+
     /* If the string doesn't contain glob patterns, just directly
      * look up the key in the dictionary. */
     if (!strpbrk(pattern, "[*?")) {
@@ -796,11 +796,11 @@ static dict *matchSinglePatternToConfigs(sds pattern) {
         }
         return matches;
     }
-    
+
     /* Otherwise, do a match against all items in the dictionary. */
     dictIterator *di = dictGetIterator(configs);
     dictEntry *de;
-    
+
     while ((de = dictNext(di)) != NULL) {
         standardConfig *config = dictGetVal(de);
         /* Note that hidden configs require an exact match (not a pattern) */
@@ -810,7 +810,7 @@ static dict *matchSinglePatternToConfigs(sds pattern) {
         }
     }
     dictReleaseIterator(di);
-    
+
     return matches;
 }
 
@@ -819,7 +819,7 @@ static dict *matchPatternsToConfigs(client *c) {
     dict *all_matches = dictCreate(&externalStringType);
     dictIterator *di;
     dictEntry *de;
-    
+
     for (int i = 2; i < c->argc; i++) {
         robj *o = c->argv[i];
         sds pattern = objectGetVal(o);
@@ -833,7 +833,7 @@ static dict *matchPatternsToConfigs(client *c) {
         dictReleaseIterator(di);
         dictRelease(single_pattern_matches);
     }
-    
+
     return all_matches;
 }
 
@@ -3637,10 +3637,10 @@ void configHelpCommand(client *c) {
         dictEntry *de;
         dictIterator *di;
         dict *matches = matchPatternsToConfigs(c);
-        
+
         int n = dictSize(matches);
         addReplyArrayLen(c, n);
-        
+
         di = dictGetIterator(matches);
         while ((de = dictNext(di)) != NULL) {
             standardConfig *config = dictGetVal(de);

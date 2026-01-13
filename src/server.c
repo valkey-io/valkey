@@ -2957,7 +2957,7 @@ void initServer(void) {
     server.crashed = 0;
     resetServerStats();
     /* A few stats we don't want to reset: server startup time, and peak mem. */
-    server.stat_starttime = getMonotonicUs();
+    server.stat_starttime = time(NULL);
     server.stat_peak_memory = 0;
     server.stat_current_cow_peak = 0;
     server.stat_current_cow_bytes = 0;
@@ -5862,8 +5862,7 @@ void totalNumberOfStatefulKeys(unsigned long *blocking_keys,
  * on memory corruption problems. */
 sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
     sds info = sdsempty();
-    monotime uptime_mono = getMonotonicUs() - server.stat_starttime;
-    time_t uptime = uptime_mono / 1000000;
+    time_t uptime = server.unixtime - server.stat_starttime;
     int j;
     int sections = 0;
     if (everything) all_sections = 1;

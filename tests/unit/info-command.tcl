@@ -75,8 +75,7 @@ start_server {tags {"info and its relative command"}} {
         set info [r info]
         set active_time [getInfoProperty $info used_cpu_active_main_thread]
         
-        # Verify the field exists and has a non-zero value after activity
-        assert {$active_time ne ""}
+        # Verify the field has a non-zero value after activity
         assert {$active_time > 0}
     }
    

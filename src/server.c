@@ -1845,12 +1845,9 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
 
     /* Run a fast expire cycle (the called function will return
      * ASAP if a fast cycle is not needed). */
+    long long expire_cycle_time = 0;
     if (server.active_expire_enabled && !server.import_mode && iAmPrimary()) {
-        long long expire_cycle_time = activeExpireCycle(ACTIVE_EXPIRE_CYCLE_FAST);
-        /* Count expiration time as active CPU time for all event loops. */
-        if (ProcessingEventsWhileBlocked || !server.el_iteration_active) {
-            server.stat_active_time += expire_cycle_time;
-        }
+        expire_cycle_time = activeExpireCycle(ACTIVE_EXPIRE_CYCLE_FAST);
     }
 
     if (moduleCount()) {
@@ -1953,6 +1950,9 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
         /* Accumulate time only for active cycles */
         if (!ProcessingEventsWhileBlocked && server.el_iteration_active) {
             server.stat_active_time += el_duration;
+        } else {
+            /* Count expiration time as active CPU time for all event loops. */
+            server.stat_active_time += expire_cycle_time;
         }
     }
     server.el_cron_duration += duration_before_aof + duration_after_write;

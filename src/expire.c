@@ -452,7 +452,9 @@ static long long activeExpireCycleJob(enum activeExpiryType jobType, int cycleTy
  * starvation of either mechanism. Since the memory reclaim pace and iteration
  * model of keys versus hash fields are different and unpredictable,
  * alternating naturally balances the overall expiry effort when both are
- * fully consuming their available time budget. */
+ * fully consuming their available time budget.
+ *
+ * Returns the time spend on active expiration in microseconds. */
 long long activeExpireCycle(int type) {
     /* If 'expire' action is paused, for whatever reason, then don't expire any key.
      * Typically, at the end of the pause we will properly expire the key OR we

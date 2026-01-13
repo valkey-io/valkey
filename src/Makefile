@@ -469,7 +469,7 @@ ifeq ($(USE_FAST_FLOAT),yes)
 	FINAL_LIBS += $(FAST_FLOAT_STRTOD_OBJECT)
 endif
 
-DEPENDENCY_TARGETS+= gtest
+DEPENDENCY_TARGETS+= gtest-parallel
 
 all: $(SERVER_NAME) $(ENGINE_SENTINEL_NAME) $(ENGINE_CLI_NAME) $(ENGINE_BENCHMARK_NAME) $(ENGINE_CHECK_RDB_NAME) $(ENGINE_CHECK_AOF_NAME) $(TLS_MODULE) $(RDMA_MODULE) $(LUA_MODULE)
 	@echo ""
@@ -623,9 +623,9 @@ test: $(SERVER_NAME) $(ENGINE_CHECK_AOF_NAME) $(ENGINE_CHECK_RDB_NAME) $(ENGINE_
 
 test-unit: $(ENGINE_UNIT_TESTS) $(ENGINE_UNIT_GTESTS)
 	@echo "Running C unit tests..."
-	./$(ENGINE_UNIT_TESTS) || echo "C unit tests failed"
+	./$(ENGINE_UNIT_TESTS) || { echo "C unit tests failed"; exit 1; }
 	@echo "Running gtest unit tests..."
-	./gtest/$(ENGINE_UNIT_GTESTS) || echo "gtest unit tests failed"
+	./gtest/$(ENGINE_UNIT_GTESTS) || { echo "gtest unit tests failed"; exit 1; }
 
 test-gtest:
 	@(cd gtest && $(MAKE) test-gtest)

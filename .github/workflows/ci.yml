@@ -198,17 +198,13 @@ jobs:
               -DCMAKE_C_FLAGS="-m32" \
               -DCMAKE_CXX_FLAGS="-m32" \
               -DCMAKE_EXE_LINKER_FLAGS="-m32" \
-              -DCMAKE_POLICY_VERSION_MINIMUM=3.17 \
               /usr/src/googletest
           cmake --build build32 --parallel
           sudo cp build32/lib/*.a /usr/lib32/
           cd $GITHUB_WORKSPACE
           make -j4 SERVER_CFLAGS='-Werror' 32bit USE_FAST_FLOAT=yes \
-          GTEST_CFLAGS="\
-            -I/usr/src/googletest/googletest/include \
-            -I/usr/src/googletest/googlemock/include \
-            -Wno-error=float-equal" \
-          GTEST_LIBS="/usr/lib32/libgtest.a /usr/lib32/libgmock.a"
+            GTEST_CFLAGS="-I/usr/src/googletest/googletest/include -I/usr/src/googletest/googlemock/include" \
+            GTEST_LIBS="/usr/lib32/libgtest.a /usr/lib32/libgmock.a"
       - name: unit tests
         run: |
           ./src/valkey-unit-tests

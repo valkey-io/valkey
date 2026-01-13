@@ -30,7 +30,6 @@ MORE_WARNINGS=-Wold-style-cast \
 	-Wframe-larger-than=32768 \
 	-Wno-strict-overflow \
 	-Wsign-compare \
-	-Werror=float-equal \
 	-Werror=missing-braces \
 	-Werror=init-self \
 	-Werror=write-strings \
@@ -66,6 +65,13 @@ else
 	# Clang: disable warnings that are errors in gtest/gmock
 	MORE_WARNINGS += -Wno-deprecated-copy
 	MORE_WARNINGS += -Wno-keyword-macro
+endif
+
+# Enable -Werror=float-equal only for non-32bit builds.
+# On 32bit (-m32), GoogleTest headers trigger -Wfloat-equal
+# (e.g., in gtest-printers.h), which would fail the build.
+ifneq ($(findstring -m32,$(CFLAGS)),-m32)
+	MORE_WARNINGS += -Werror=float-equal
 endif
 
 -include $(DEPENDS)
@@ -200,7 +206,7 @@ valkey-unit-gtests: $(ALL_OBJECTS) generated_wrappers.o $(VALKEY_SERVER_LIB) $(F
 		$(OVERRIDES) \
 		-Wall -Wno-deprecated-declarations \
 		-o $@ $^ $(LD_LIBS) \
-		-lrt -lm -pthread -ldl -lgcov
+		-lrt -lm -pthread -ldl $(if $(COVERAGE),-lgcov)
 endif
 
 .PHONY: all

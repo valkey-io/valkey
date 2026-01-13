@@ -136,5 +136,3 @@ gtest-parallel: .make-prerequisites
 		rm -rf gtest-parallel; \
 		git clone --depth 1 https://github.com/google/gtest-parallel.git gtest-parallel; \
 	fi
-
-.PHONY: gtest

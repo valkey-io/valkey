@@ -58,7 +58,7 @@ TEST_F(ExampleTest, TestMatchers) {
 }
 
 // Verify mocking works
-TEST_F(ExampleTest, TestMockingV2) {
+TEST_F(ExampleTest, TestMocking) {
     // verifies that aeCreateTimeEvent() is called at least once in startEvictionTimeProc.
     EXPECT_CALL(mock, aeCreateTimeEvent(_, _, _, _, _)).Times(AtLeast(1));
     startEvictionTimeProc();

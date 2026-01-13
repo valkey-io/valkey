@@ -552,7 +552,6 @@ start_cluster 1 0 {tags {external:skip cluster}} {
             ]
         ]
         set slot_stats [R 0 CLUSTER SLOT-STATS SLOTSRANGE $key_slot $key_slot]
-        puts $slot_stats
         assert_empty_slot_stats_with_exception $slot_stats $expected_slot_stats $metrics_to_assert
 
         R 0 config set min-string-size-avoid-copy-reply $copy_avoid

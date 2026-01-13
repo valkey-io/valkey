@@ -58,7 +58,7 @@ gtest unit tests that you can filter/play with:
 
    ```bash
    make valkey-unit-gtests
-   ./src/gtest/valkey-unit-gtests --gtest_filter=<TEST_CLASS_NAME>
+   ./src/gtest/valkey-unit-gtests --gtest_filter=TEST_CLASS_NAME.*
    ```
 
 4. Running a subset of gtest unit tests in the test class, replace

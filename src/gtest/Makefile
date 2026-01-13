@@ -104,7 +104,7 @@ ifeq ($(strip $(GTEST_LIBS)),)
 endif
 
 ifeq ($(strip $(GTEST_LIBS)),)
-	$(error googletest not found. Install gtest or set GTEST_CFLAGS/GTEST_LIBS explicitly)
+    $(error googletest not found. Install gtest or set GTEST_CFLAGS/GTEST_LIBS explicitly)
 endif
 FAST_FLOAT_LIB := ../../deps/fast_float_c_interface/fast_float_strtod.o
 

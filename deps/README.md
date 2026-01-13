@@ -126,11 +126,12 @@ To upgrade the library,
 gtest-parallel
 ---
 
-The gtest-parallel directory is pulled as a subtree from the upstream gtest-parallel github repo. To update it you should run from the project root:
+The gtest-parallel directory is pulled as a subtree from the upstream gtest-parallel github repo.
+
+To update it, run from the project root:
 
 ```sh
-git fetch gtest-parallel-upstream
-git merge -s subtree --squash --allow-unrelated-histories gtest-parallel-upstream/master
+git pull -s subtree gtest-parallel master
 ```
 
-Commit the changes if any conflicts arise.
+Commit the changes if any changes arise.

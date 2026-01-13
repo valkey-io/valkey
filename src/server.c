@@ -2291,6 +2291,7 @@ void initServerConfig(void) {
     server.tls_server_cert_expire_time = 0;
     server.tls_client_cert_expire_time = 0;
     server.tls_ca_cert_expire_time = 0;
+    server.tls_ca_cert_count = 0;
     server.tls_server_cert_serial = NULL;
     server.tls_client_cert_serial = NULL;
     server.tls_ca_cert_serial = NULL;
@@ -5962,13 +5963,15 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                             "tls_client_cert_serial:%s\r\n"
                             "tls_client_cert_expires_in_seconds:%lld\r\n"
                             "tls_ca_cert_serial:%s\r\n"
-                            "tls_ca_cert_expires_in_seconds:%lld\r\n",
+                            "tls_ca_cert_expires_in_seconds:%lld\r\n"
+                            "tls_ca_cert_count:%d\r\n",
                             server.tls_server_cert_serial ? server.tls_server_cert_serial : "none",
                             tls_server_seconds_remaining,
                             server.tls_client_cert_serial ? server.tls_client_cert_serial : "none",
                             tls_client_seconds_remaining,
                             server.tls_ca_cert_serial ? server.tls_ca_cert_serial : "none",
-                            tls_ca_seconds_remaining);
+                            tls_ca_seconds_remaining,
+                            server.tls_ca_cert_count);
     }
 
     /* Clients */

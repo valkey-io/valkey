@@ -2331,6 +2331,7 @@ struct valkeyServer {
     long long tls_server_cert_expire_time;
     long long tls_client_cert_expire_time;
     long long tls_ca_cert_expire_time;
+    int tls_ca_cert_count;
     sds tls_server_cert_serial;
     sds tls_client_cert_serial;
     sds tls_ca_cert_serial;

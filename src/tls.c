@@ -71,6 +71,7 @@ SSL_CTX *valkey_tls_ctx = NULL;
 SSL_CTX *valkey_tls_client_ctx = NULL;
 
 static void tlsClearCertInfo(long long *expiry, sds *serial);
+static void tlsClearCACertInfo(void);
 
 static int parseProtocolsConfig(const char *str) {
     int i, count = 0;
@@ -194,7 +195,7 @@ static void tlsCleanup(void) {
     }
     tlsClearCertInfo(&server.tls_server_cert_expire_time, &server.tls_server_cert_serial);
     tlsClearCertInfo(&server.tls_client_cert_expire_time, &server.tls_client_cert_serial);
-    tlsClearCertInfo(&server.tls_ca_cert_expire_time, &server.tls_ca_cert_serial);
+    tlsClearCACertInfo();
 
 #if OPENSSL_VERSION_NUMBER >= 0x10100000L && !defined(LIBRESSL_VERSION_NUMBER)
     // unavailable on LibreSSL
@@ -339,6 +340,11 @@ static void tlsClearCertInfo(long long *expiry, sds *serial) {
     }
 }
 
+static void tlsClearCACertInfo(void) {
+    tlsClearCertInfo(&server.tls_ca_cert_expire_time, &server.tls_ca_cert_serial);
+    server.tls_ca_cert_count = 0;
+}
+
 /* Cache the certificate expiration timestamp for later INFO reporting. */
 static sds tlsX509SerialToSds(X509 *cert) {
     if (!cert) return NULL;
@@ -373,22 +379,37 @@ static int tlsUpdateCertInfoFromCtx(SSL_CTX *ctx, long long *expiry, sds *serial
     return C_OK;
 }
 
-static int tlsUpdateCertInfoFromFile(const char *path, long long *expiry, sds *serial) {
+static int tlsUpdateCertInfoFromFile(const char *path, long long *expiry, sds *serial, int *count) {
     if (!path) return C_ERR;
     FILE *fp = fopen(path, "r");
     if (!fp) return C_ERR;
-    X509 *cert = PEM_read_X509(fp, NULL, NULL, NULL);
-    fclose(fp);
-    if (!cert) return C_ERR;
-    int rc = tlsGetX509Expiry(cert, expiry);
-    tlsClearCertSerial(serial);
-    if (rc == C_OK) {
-        *serial = tlsX509SerialToSds(cert);
-    } else {
-        *serial = NULL;
+    int cert_count = 0;
+    long long earliest_expiry = 0;
+    sds earliest_serial = NULL;
+    X509 *cert = NULL;
+    while ((cert = PEM_read_X509(fp, NULL, NULL, NULL)) != NULL) {
+        cert_count++;
+        long long cert_expiry = 0;
+        if (tlsGetX509Expiry(cert, &cert_expiry) == C_OK) {
+            if (earliest_expiry == 0 || cert_expiry < earliest_expiry) {
+                earliest_expiry = cert_expiry;
+                if (earliest_serial) sdsfree(earliest_serial);
+                earliest_serial = tlsX509SerialToSds(cert);
+            }
+        }
+        X509_free(cert);
     }
-    X509_free(cert);
-    return rc;
+    fclose(fp);
+    if (count) *count = cert_count;
+    tlsClearCertSerial(serial);
+    if (earliest_expiry == 0) {
+        if (earliest_serial) sdsfree(earliest_serial);
+        if (count) *count = 0;
+        return C_ERR;
+    }
+    if (expiry) *expiry = earliest_expiry;
+    *serial = earliest_serial;
+    return C_OK;
 }
 
 static void tlsRefreshServerCertInfo(void) {
@@ -405,8 +426,11 @@ static void tlsRefreshClientCertInfo(void) {
 }
 
 static void tlsRefreshCACertInfo(void) {
-    if (tlsUpdateCertInfoFromFile(server.tls_ctx_config.ca_cert_file, &server.tls_ca_cert_expire_time, &server.tls_ca_cert_serial) == C_ERR) {
-        tlsClearCertInfo(&server.tls_ca_cert_expire_time, &server.tls_ca_cert_serial);
+    if (tlsUpdateCertInfoFromFile(server.tls_ctx_config.ca_cert_file,
+                                  &server.tls_ca_cert_expire_time,
+                                  &server.tls_ca_cert_serial,
+                                  &server.tls_ca_cert_count) == C_ERR) {
+        tlsClearCACertInfo();
     }
 }
 
@@ -430,7 +454,7 @@ void tlsLogServerCertExpiry(void) {
     if (!(server.tls_port || server.tls_replication || server.tls_cluster)) {
         tlsClearCertInfo(&server.tls_server_cert_expire_time, &server.tls_server_cert_serial);
         tlsClearCertInfo(&server.tls_client_cert_expire_time, &server.tls_client_cert_serial);
-        tlsClearCertInfo(&server.tls_ca_cert_expire_time, &server.tls_ca_cert_serial);
+        tlsClearCACertInfo();
         return;
     }
 
@@ -1549,6 +1573,7 @@ void tlsLogServerCertExpiry(void) {
     server.tls_server_cert_expire_time = 0;
     server.tls_client_cert_expire_time = 0;
     server.tls_ca_cert_expire_time = 0;
+    server.tls_ca_cert_count = 0;
 }
 
 int RedisRegisterConnectionTypeTLS(void) {

@@ -471,6 +471,7 @@ static expiryModificationResult hashTypeSetExpire(robj *o, sds field, long long 
     /* If no object we will return -2 */
     if (o == NULL) return EXPIRATION_MODIFICATION_NOT_EXIST;
 
+    bool time_is_expired = checkAlreadyExpired(expiry);
     if (o->encoding == OBJ_ENCODING_LISTPACK) {
         unsigned char *vstr;
         unsigned int vlen;
@@ -486,7 +487,7 @@ static expiryModificationResult hashTypeSetExpire(robj *o, sds field, long long 
          * Else, we already know we are going to set an expiration so we expend to hashtable encoding. */
         if (flag & EXPIRE_XX || flag & EXPIRE_GT) {
             return EXPIRATION_MODIFICATION_FAILED_CONDITION;
-        } else if (expiry == EXPIRY_FORCE_EXPIRED) {
+        } else if (time_is_expired) {
             serverAssert(hashTypeDelete(o, field));
             return EXPIRATION_MODIFICATION_EXPIRE_ASAP;
         } else {
@@ -537,7 +538,7 @@ static expiryModificationResult hashTypeSetExpire(robj *o, sds field, long long 
         }
         /* In case we are set to expire the entry after we went through all the validations,
          * We can just delete the entry. */
-        if (expiry == EXPIRY_FORCE_EXPIRED) {
+        if (time_is_expired) {
             serverAssert(hashTypeDelete(o, field));
             return EXPIRATION_MODIFICATION_EXPIRE_ASAP;
         }
@@ -1771,9 +1772,6 @@ void hexpireGenericCommand(client *c, long long basetime, int unit) {
 
     if (convertExpireArgumentToUnixTime(c, param, basetime, unit, &when) == C_ERR)
         return;
-
-    if (checkAlreadyExpired(when))
-        when = EXPIRY_FORCE_EXPIRED;
 
     robj *obj = lookupKeyWrite(c->db, key);
 

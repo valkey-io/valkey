@@ -5,6 +5,51 @@ proc log_file_matches {log pattern} {
     string match $pattern $content
 }
 
+start_server {tags {"hsetex keepttl"} overrides {save {}}} {
+    start_server {overrides {save {}}} {
+        set node_0 [srv 0 client]
+        set node_0_host [srv 0 host]
+        set node_0_port [srv 0 port]
+        set node_0_pid [srv 0 pid]
+
+        set node_1 [srv -1 client]
+        set node_1_host [srv -1 host]
+        set node_1_port [srv -1 port]
+        set node_1_pid [srv -1 pid]
+
+        $node_1 replicaof $node_0_host $node_0_port
+        wait_for_sync $node_1
+        verify_replica_online $node_0 0 50
+
+        test {HSETEX KEEPTTL on paused replica with expired field} {
+            $node_0 debug set-active-expire 0
+
+            assert_equal 1 [$node_0 hsetex myhash EX 3 fields 1 f1 v1]
+
+            wait_for_condition 50 100 {
+                [$node_1 hexists myhash f1] == 1
+            } else {
+                fail "Replica did not receive the initial HSETEX command in time."
+            }
+
+            pause_process $node_1_pid
+
+            assert_equal 1 [$node_0 hsetex myhash keepttl fields 1 f1 v2]
+
+            # wait for f1 to expired
+            after 3500
+
+            resume_process $node_1_pid
+
+            wait_for_sync $node_1
+
+            assert_equal {-2} [$node_0 httl myhash fields 1 f1]
+            # will return -1 since keepttl with an expired field
+            assert_equal {-2} [$node_1 httl myhash fields 1 f1]
+        }
+    }
+}
+
 start_server {tags {"repl network external:skip"}} {
     set slave [srv 0 client]
     set slave_host [srv 0 host]

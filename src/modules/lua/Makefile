@@ -1,13 +1,19 @@
 uname_S := $(shell sh -c 'uname -s 2>/dev/null || echo not')
+CLANG := $(findstring clang,$(shell sh -c '$(CC) --version | head -1'))
 
 DEPS_DIR=../../../deps
 
 ifeq ($(uname_S),Darwin)
-	SHOBJ_CFLAGS= -I. -I$(DEPS_DIR)/lua/src -I$(DEPS_DIR)/fpconv -fPIC -W -Wall -dynamic -fno-common $(OPTIMIZATION) -std=c99 -D_GNU_SOURCE $(CFLAGS)
+	SHOBJ_CFLAGS= -I. -I$(DEPS_DIR)/lua/src -I$(DEPS_DIR)/fpconv -fPIC -W -Wall -dynamic -fno-common $(OPTIMIZATION) -std=gnu11 -D_GNU_SOURCE $(CFLAGS)
 	SHOBJ_LDFLAGS= -bundle -undefined dynamic_lookup $(LDFLAGS)
 else
-	SHOBJ_CFLAGS= -I. -I$(DEPS_DIR)/lua/src -I$(DEPS_DIR)/fpconv -fPIC -W -Wall -fno-common $(OPTIMIZATION) -std=c99 -D_GNU_SOURCE $(CFLAGS)
+	SHOBJ_CFLAGS= -I. -I$(DEPS_DIR)/lua/src -I$(DEPS_DIR)/fpconv -fPIC -W -Wall -fno-common $(OPTIMIZATION) -std=gnu11 -D_GNU_SOURCE $(CFLAGS)
 	SHOBJ_LDFLAGS= -shared $(LDFLAGS)
+
+ifeq (clang,$(CLANG))
+	SHOBJ_LDFLAGS+= -fuse-ld=lld
+endif
+
 endif
 
 # BSD variants support

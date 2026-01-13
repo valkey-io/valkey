@@ -49,8 +49,6 @@ void parseUri(const char *uri, const char *tool_name, cliConnInfo *connInfo, int
 
 void freeCliConnInfo(cliConnInfo connInfo);
 
-sds escapeJsonString(sds s, const char *p, size_t len);
-
 sds cliVersion(void);
 
 valkeyContext *valkeyConnectWrapper(enum valkeyConnectionType ct, const char *ip_or_path, int port, const struct timeval tv, int nonblock, int multipath);

@@ -414,19 +414,32 @@ error:
     return C_ERR;
 }
 
-/* Last known TLS materials metadata to detect changes */
-static unsigned char last_cert_fingerprint[EVP_MAX_MD_SIZE] = {0};
-static unsigned int last_cert_fingerprint_len = 0;
-static unsigned char last_client_cert_fingerprint[EVP_MAX_MD_SIZE] = {0};
-static unsigned int last_client_cert_fingerprint_len = 0;
-static unsigned char last_ca_cert_fingerprint[EVP_MAX_MD_SIZE] = {0};
-static unsigned int last_ca_cert_fingerprint_len = 0;
-static ino_t last_ca_cert_dir_inode = 0;
-static time_t last_ca_cert_dir_mtime = 0;
-static ino_t last_key_file_inode = 0;
-static time_t last_key_file_mtime = 0;
-static ino_t last_client_key_file_inode = 0;
-static time_t last_client_key_file_mtime = 0;
+/* TLS materials metadata for change detection */
+typedef struct {
+    unsigned char cert_fingerprint[EVP_MAX_MD_SIZE];
+    unsigned int cert_fingerprint_len;
+    unsigned char client_cert_fingerprint[EVP_MAX_MD_SIZE];
+    unsigned int client_cert_fingerprint_len;
+    unsigned char ca_cert_fingerprint[EVP_MAX_MD_SIZE];
+    unsigned int ca_cert_fingerprint_len;
+    ino_t ca_cert_dir_inode;
+    time_t ca_cert_dir_mtime;
+    ino_t key_file_inode;
+    time_t key_file_mtime;
+    ino_t client_key_file_inode;
+    time_t client_key_file_mtime;
+} tlsMaterialsMetadata;
+
+/* Pending TLS reload that holds both SSL contexts and their metadata.
+ * Updated serially by BIO thread, applied atomically by main thread. */
+typedef struct {
+    SSL_CTX *ctx;
+    SSL_CTX *client_ctx;
+    tlsMaterialsMetadata metadata;
+} tlsPendingReload;
+
+/* Last known (active) TLS materials metadata */
+static tlsMaterialsMetadata active_metadata = {0};
 
 /* Compute certificate fingerprint from file. */
 static int getCertFingerprint(const char *cert_file, unsigned char *fingerprint, unsigned int *fingerprint_len) {
@@ -456,77 +469,68 @@ static int getCertFingerprint(const char *cert_file, unsigned char *fingerprint,
     return C_OK;
 }
 
-/* Check if a single TLS cert file fingerprint changed and update cached value. */
-static int checkAndUpdateFingerprint(const char *file,
-                                     unsigned char *last_fingerprint,
-                                     unsigned int *last_len) {
-    unsigned char current[EVP_MAX_MD_SIZE];
-    unsigned int current_len;
-
-    if (!file) return 0;
-    if (getCertFingerprint(file, current, &current_len) != C_OK) return 0;
-
-    if (*last_len == 0 || *last_len != current_len || memcmp(last_fingerprint, current, current_len) != 0) {
-        memcpy(last_fingerprint, current, current_len);
-        *last_len = current_len;
-        return 1;
-    }
-    return 0;
-}
-
-/* Check if a file/directory stat changed and update cached inode/mtime. */
-static int checkAndUpdateStat(const char *path, ino_t *last_inode, time_t *last_mtime) {
-    if (!path) return 0;
-
-    struct stat st;
-    if (stat(path, &st) != 0) return 0;
-
-    if (*last_inode == 0 || *last_inode != st.st_ino || *last_mtime != st.st_mtime) {
-        *last_inode = st.st_ino;
-        *last_mtime = st.st_mtime;
-        return 1;
-    }
-    return 0;
-}
-
-/* Check if TLS materials have changed and update cached metadata. */
-static int tlsCheckMaterialsAndUpdateCache(serverTLSContextConfig *ctx_config) {
-    int changed = 0;
+/* Capture current metadata from files into a metadata structure. */
+static void captureMetadata(serverTLSContextConfig *ctx_config, tlsMaterialsMetadata *metadata) {
+    memset(metadata, 0, sizeof(*metadata));
 
     /* Certificate files: fingerprint-based detection */
-    if (checkAndUpdateFingerprint(ctx_config->cert_file, last_cert_fingerprint, &last_cert_fingerprint_len)) {
-        changed = 1;
-    }
+    getCertFingerprint(ctx_config->cert_file, metadata->cert_fingerprint, &metadata->cert_fingerprint_len);
+    getCertFingerprint(ctx_config->client_cert_file, metadata->client_cert_fingerprint, &metadata->client_cert_fingerprint_len);
+    getCertFingerprint(ctx_config->ca_cert_file, metadata->ca_cert_fingerprint, &metadata->ca_cert_fingerprint_len);
 
-    if (checkAndUpdateFingerprint(ctx_config->client_cert_file, last_client_cert_fingerprint, &last_client_cert_fingerprint_len)) {
-        changed = 1;
+    /* Key files and CA dir: inode + mtime */
+    struct stat st;
+    if (ctx_config->ca_cert_dir && stat(ctx_config->ca_cert_dir, &st) == 0) {
+        metadata->ca_cert_dir_inode = st.st_ino;
+        metadata->ca_cert_dir_mtime = st.st_mtime;
     }
-
-    if (checkAndUpdateFingerprint(ctx_config->ca_cert_file, last_ca_cert_fingerprint, &last_ca_cert_fingerprint_len)) {
-        changed = 1;
+    if (ctx_config->key_file && stat(ctx_config->key_file, &st) == 0) {
+        metadata->key_file_inode = st.st_ino;
+        metadata->key_file_mtime = st.st_mtime;
     }
-
-    /* Remaining: inode + mtime */
-    if (checkAndUpdateStat(ctx_config->ca_cert_dir, &last_ca_cert_dir_inode, &last_ca_cert_dir_mtime)) {
-        changed = 1;
+    if (ctx_config->client_key_file && stat(ctx_config->client_key_file, &st) == 0) {
+        metadata->client_key_file_inode = st.st_ino;
+        metadata->client_key_file_mtime = st.st_mtime;
     }
-
-    if (checkAndUpdateStat(ctx_config->key_file, &last_key_file_inode, &last_key_file_mtime)) {
-        changed = 1;
-    }
-
-    if (checkAndUpdateStat(ctx_config->client_key_file, &last_client_key_file_inode, &last_client_key_file_mtime)) {
-        changed = 1;
-    }
-
-    return changed;
 }
+
+/* Compare two metadata structures to detect changes. */
+static int metadataChanged(const tlsMaterialsMetadata *old, const tlsMaterialsMetadata *new) {
+    /* Check certificate fingerprints */
+    if (old->cert_fingerprint_len != new->cert_fingerprint_len ||
+        (new->cert_fingerprint_len > 0 && memcmp(old->cert_fingerprint, new->cert_fingerprint, new->cert_fingerprint_len) != 0)) {
+        return 1;
+    }
+
+    if (old->client_cert_fingerprint_len != new->client_cert_fingerprint_len ||
+        (new->client_cert_fingerprint_len > 0 && memcmp(old->client_cert_fingerprint, new->client_cert_fingerprint, new->client_cert_fingerprint_len) != 0)) {
+        return 1;
+    }
+
+    if (old->ca_cert_fingerprint_len != new->ca_cert_fingerprint_len ||
+        (new->ca_cert_fingerprint_len > 0 && memcmp(old->ca_cert_fingerprint, new->ca_cert_fingerprint, new->ca_cert_fingerprint_len) != 0)) {
+        return 1;
+    }
+
+    /* Check inode/mtime */
+    if (old->ca_cert_dir_inode != new->ca_cert_dir_inode || old->ca_cert_dir_mtime != new->ca_cert_dir_mtime) {
+        return 1;
+    }
+    if (old->key_file_inode != new->key_file_inode || old->key_file_mtime != new->key_file_mtime) {
+        return 1;
+    }
+    if (old->client_key_file_inode != new->client_key_file_inode || old->client_key_file_mtime != new->client_key_file_mtime) {
+        return 1;
+    }
+
+    return 0;
+}
+
 
 /* TLS background reload state */
 static _Atomic long long lastTlsConfigureTime = 0;
-static SSL_CTX *pending_tls_ctx = NULL;
-static SSL_CTX *pending_tls_client_ctx = NULL;
-static _Atomic int tls_reload_pending = 0;
+static tlsPendingReload pending_reload = {0};
+static pthread_mutex_t pending_reload_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 /* Attempt to configure/reconfigure TLS. This operation is atomic and will
  * leave the SSL_CTX unchanged if it fails.
@@ -534,8 +538,8 @@ static _Atomic int tls_reload_pending = 0;
  * If reconfigure is true, always reconfigure; if false, only configure if
  * valkey_tls_ctx is NULL.
  *
- * If background is true, do heavy work in background thread and store in
- * pending variables; if false, do work synchronously and swap immediately.
+ * If background is true, check for changes and do heavy work in background thread;
+ * if false, do work synchronously and swap immediately.
  */
 static int tlsConfigure(void *priv, int reconfigure, int background) {
     serverTLSContextConfig *ctx_config = (serverTLSContextConfig *)priv;
@@ -552,34 +556,47 @@ static int tlsConfigure(void *priv, int reconfigure, int background) {
         serverLog(LL_DEBUG, "Configuring TLS");
     }
 
-    atomic_store_explicit(&lastTlsConfigureTime, server.ustime, memory_order_relaxed);
+    if (background && reconfigure) {
+        tlsMaterialsMetadata new_metadata;
+        captureMetadata(ctx_config, &new_metadata);
 
-    if (tlsCreateContexts(ctx_config, &ctx, &client_ctx) == C_ERR) {
-        if (background) {
+        if (!metadataChanged(&active_metadata, &new_metadata)) {
+            serverLog(LL_DEBUG, "TLS reload skipped: materials unchanged");
+            atomic_store_explicit(&lastTlsConfigureTime, server.ustime, memory_order_relaxed);
+            return C_OK;
+        }
+        serverLog(LL_NOTICE, "TLS materials changed, reloading in background");
+
+        if (tlsCreateContexts(ctx_config, &ctx, &client_ctx) == C_ERR) {
             serverLog(LL_WARNING, "Background TLS reload failed");
+            return C_ERR;
         }
-        return C_ERR;
-    }
 
-    if (background) {
-        if (atomic_load_explicit(&tls_reload_pending, memory_order_relaxed)) {
-            SSL_CTX_free(ctx);
-            SSL_CTX_free(client_ctx);
-            serverLog(LL_DEBUG, "TLS reload already pending, discarding result");
-        } else {
-            pending_tls_ctx = ctx;
-            pending_tls_client_ctx = client_ctx;
-            atomic_store_explicit(&tls_reload_pending, 1, memory_order_release);
-            serverLog(LL_DEBUG, "Background TLS reload parsed TLS materials successfully");
+        pthread_mutex_lock(&pending_reload_mutex);
+        if (pending_reload.ctx) {
+            SSL_CTX_free(pending_reload.ctx);
+            SSL_CTX_free(pending_reload.client_ctx);
+            serverLog(LL_DEBUG, "Replacing previous pending TLS reload");
         }
+        pending_reload.ctx = ctx;
+        pending_reload.client_ctx = client_ctx;
+        pending_reload.metadata = new_metadata;
+        pthread_mutex_unlock(&pending_reload_mutex);
+
+        serverLog(LL_DEBUG, "Background TLS reload parsed TLS materials successfully");
     } else {
+        if (tlsCreateContexts(ctx_config, &ctx, &client_ctx) == C_ERR) {
+            return C_ERR;
+        }
+
         SSL_CTX_free(valkey_tls_ctx);
         SSL_CTX_free(valkey_tls_client_ctx);
         valkey_tls_ctx = ctx;
         valkey_tls_client_ctx = client_ctx;
-        (void)tlsCheckMaterialsAndUpdateCache(ctx_config);
+        captureMetadata(ctx_config, &active_metadata);
     }
 
+    atomic_store_explicit(&lastTlsConfigureTime, server.ustime, memory_order_relaxed);
     return C_OK;
 }
 
@@ -597,29 +614,44 @@ void tlsConfigureAsync(void) {
 }
 
 /* This function runs in the main thread and applies the TLS contexts
- * that were prepared by the background thread. This is a quick operation
- * that just swaps pointers and frees old contexts. */
+ * that were prepared by the background thread atomically. This is a quick operation
+ * that just swaps pointers, updates metadata, and frees old contexts. */
 void tlsApplyPendingReload(void) {
-    if (!atomic_load_explicit(&tls_reload_pending, memory_order_acquire)) {
+    tlsPendingReload local_pending;
+    pthread_mutex_lock(&pending_reload_mutex);
+    if (!pending_reload.ctx) {
+        pthread_mutex_unlock(&pending_reload_mutex);
         return;
     }
+
+    if (!metadataChanged(&active_metadata, &pending_reload.metadata)) {
+        SSL_CTX_free(pending_reload.ctx);
+        SSL_CTX_free(pending_reload.client_ctx);
+        memset(&pending_reload, 0, sizeof(pending_reload));
+        pthread_mutex_unlock(&pending_reload_mutex);
+        serverLog(LL_DEBUG, "Discarding pending TLS reload with unchanged materials");
+        return;
+    }
+
+    local_pending = pending_reload;
+    memset(&pending_reload, 0, sizeof(pending_reload));
+    pthread_mutex_unlock(&pending_reload_mutex);
+
     SSL_CTX *old_ctx = valkey_tls_ctx;
     SSL_CTX *old_client_ctx = valkey_tls_client_ctx;
 
-    valkey_tls_ctx = pending_tls_ctx;
-    valkey_tls_client_ctx = pending_tls_client_ctx;
+    valkey_tls_ctx = local_pending.ctx;
+    valkey_tls_client_ctx = local_pending.client_ctx;
 
-    pending_tls_ctx = NULL;
-    pending_tls_client_ctx = NULL;
+    active_metadata = local_pending.metadata;
 
     SSL_CTX_free(old_ctx);
     SSL_CTX_free(old_client_ctx);
 
-    atomic_store_explicit(&tls_reload_pending, 0, memory_order_release);
     serverLog(LL_NOTICE, "TLS materials reloaded successfully");
 }
 
-/* Check if TLS materials need reloading and trigger background reload if needed. */
+/* Check if it's time to trigger a background TLS reload check. */
 void tlsReconfigureIfNeeded(void) {
     long long lastConfigureTime = atomic_load_explicit(&lastTlsConfigureTime, memory_order_relaxed);
     const long long configAgeMicros = server.ustime - lastConfigureTime;
@@ -628,14 +660,6 @@ void tlsReconfigureIfNeeded(void) {
         configAgeSeconds < server.tls_ctx_config.auto_reload_interval) {
         return;
     }
-
-    if (!tlsCheckMaterialsAndUpdateCache(&server.tls_ctx_config)) {
-        serverLog(LL_DEBUG, "TLS reload skipped: materials unchanged");
-        atomic_store_explicit(&lastTlsConfigureTime, server.ustime, memory_order_relaxed);
-        return;
-    }
-
-    serverLog(LL_NOTICE, "TLS materials changed, triggering background reload");
     bioCreateTlsReloadJob();
 }
 

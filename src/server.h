@@ -2986,6 +2986,7 @@ void ioThreadWriteToClient(void *data);
 int canParseCommand(client *c);
 int processIOThreadsReadDone(void);
 int processIOThreadsWriteDone(void);
+void accountEncodedReplyBytes(client *c);
 void releaseReplyReferences(client *c);
 void resetLastWrittenBuf(client *c);
 

@@ -1399,14 +1399,8 @@ static int tryAvoidBulkStrCopyToReply(client *c, robj *obj) {
 /* Add an Object as a bulk reply */
 void addReplyBulk(client *c, robj *obj) {
     if (tryAvoidBulkStrCopyToReply(c, obj) == C_OK) {
-        /* If copy avoidance allowed, then we explicitly maintain net_output_bytes_curr_cmd. */
-        serverAssert(obj->encoding == OBJ_ENCODING_RAW);
-        size_t str_len = sdslen(objectGetVal(obj));
-        uint32_t num_len = digits10(str_len);
-        /* RESP encodes bulk strings as $<length>\r\n<data>\r\n */
-        c->net_output_bytes_curr_cmd += (num_len + 3); /* $<length>\r\n */
-        c->net_output_bytes_curr_cmd += str_len;       /* <data> */
-        c->net_output_bytes_curr_cmd += 2;             /* \r\n */
+        /* If copy avoidance allowed, net_output_bytes_curr_cmd will be updated later
+         * in accountEncodedReplyBytes() using the reply_len calculated by the IO thread. */
         return;
     }
     addReplyBulkLen(c, obj);
@@ -2757,6 +2751,25 @@ void resetLastWrittenBuf(client *c) {
     c->io_last_written.data_len = 0;
 }
 
+/* Calculate total reply bytes from encoded buffer without releasing references.
+ * This is used to account net_output_bytes_curr_cmd before resetClient() for commandlog. */
+static unsigned long long calculateEncodedReplyBytes(char *buf, size_t bufpos) {
+    unsigned long long total_bytes = 0;
+    char *ptr = buf;
+    while (ptr < buf + bufpos) {
+        payloadHeader *header = (payloadHeader *)ptr;
+        ptr += sizeof(payloadHeader);
+
+        if (header->payload_type == BULK_STR_REF) {
+            total_bytes += header->reply_len;
+        }
+
+        ptr += header->payload_len;
+    }
+    serverAssert(ptr == buf + bufpos);
+    return total_bytes;
+}
+
 /* Release references to string objects inside an encoded buffer */
 static void releaseBufReferences(char *buf, size_t bufpos) {
     char *ptr = buf;
@@ -2781,6 +2794,24 @@ static void releaseBufReferences(char *buf, size_t bufpos) {
         ptr += header->payload_len;
     }
     serverAssert(ptr == buf + bufpos);
+}
+
+/* Account for encoded reply bytes in net_output_bytes_curr_cmd.
+ * This must be called before resetClient() to ensure commandlog gets the correct value. */
+void accountEncodedReplyBytes(client *c) {
+    if (c->bufpos > 0 && c->flag.buf_encoded) {
+        c->net_output_bytes_curr_cmd += calculateEncodedReplyBytes(c->buf, c->bufpos);
+    }
+
+    listIter iter;
+    listNode *next;
+    listRewind(c->reply, &iter);
+    while ((next = listNext(&iter))) {
+        clientReplyBlock *o = (clientReplyBlock *)listNodeValue(next);
+        if (o->flag.buf_encoded) {
+            c->net_output_bytes_curr_cmd += calculateEncodedReplyBytes(o->buf, o->used);
+        }
+    }
 }
 
 void releaseReplyReferences(client *c) {
@@ -3707,6 +3738,7 @@ void commandProcessed(client *c) {
 
     reqresAppendResponse(c);
     clusterSlotStatsAddNetworkBytesInForUserClient(c);
+    accountEncodedReplyBytes(c);
     resetClient(c);
 
     if (!c->repl_data) return;

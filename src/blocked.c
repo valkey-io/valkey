@@ -240,6 +240,7 @@ void unblockClient(client *c, int queue_for_reprocessing) {
          * unblockClientOnKey is called, which eventually calls processCommand,
          * which calls reqresAppendResponse) */
         reqresAppendResponse(c);
+        accountEncodedReplyBytes(c);
         resetClient(c);
     }
 

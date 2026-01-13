@@ -525,7 +525,7 @@ start_cluster 1 0 {tags {external:skip cluster}} {
         # +OK\r\n --> 5 bytes
 
         R 0 GET $key
-        # $3\r\nvalue\r\n -> 11 bytes
+        # $5\r\nvalue\r\n -> 11 bytes
 
         set expected_slot_stats [
             dict create $key_slot [

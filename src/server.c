@@ -1948,7 +1948,7 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
         latencyTraceIfNeeded(server, eventloop, el_duration);
 
         /* Accumulate time only for active cycles */
-        if (!ProcessingEventsWhileBlocked && server.el_iteration_active) {
+        if (server.el_iteration_active) {
             server.stat_active_time += el_duration;
         } else {
             /* Count expiration time as active CPU time for all event loops. */

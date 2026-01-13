@@ -4506,6 +4506,75 @@ start_server {tags {"hashexpire external:skip"}} {
             $rd_primary close
             $rd_replica close
         }
+
+        foreach command {HINCRBY HINCRBYFLOAT} {
+            test "$command is executed on repilca's expired fields" {
+                lassign [setup_replication_test $primary $replica $primary_host $primary_port] primary_initial_expired replica_initial_expired
+                $primary debug set-active-expire 0
+                
+                $primary flushall
+                
+                $primary $command myhash f1 1
+                wait_for_ofs_sync $primary $replica
+                assert_equal 1 [$primary hpexpire myhash 1 fields 1 f1]
+                after 1
+                $primary $command myhash f1 1
+                wait_for_ofs_sync $primary $replica
+
+                assert_equal [$replica hget myhash f1] [$primary hget myhash f1]
+                $primary debug set-active-expire 1
+            } {OK} {needs:debug}
+        }
+
+        test {HINCRBYFLOAT maintains TTL on repilca's fields} {
+            lassign [setup_replication_test $primary $replica $primary_host $primary_port] primary_initial_expired replica_initial_expired
+            $primary debug set-active-expire 0
+            $primary flushall
+            set long_expiry [get_long_expire_value HEXPIRE]
+            $primary hsetex myhash ex $long_expiry fields 1 f1 1
+            wait_for_ofs_sync $primary $replica
+
+            assert_equal {1} [$primary hget myhash f1]
+            assert_equal [$replica hget myhash f1] [$primary hget myhash f1]
+            assert_equal [$primary HPEXPIRETIME myhash FIELDS 1 f1] [$replica HPEXPIRETIME myhash FIELDS 1 f1]
+
+            $primary hincrbyfloat myhash f1 1.0
+            wait_for_ofs_sync $primary $replica
+
+            assert_equal {2} [$primary hget myhash f1]
+            assert_equal [$replica hget myhash f1] [$primary hget myhash f1]
+            assert_equal [$primary HPEXPIRETIME myhash FIELDS 1 f1] [$replica HPEXPIRETIME myhash FIELDS 1 f1]
+
+            $primary debug set-active-expire 1
+        } {OK} {needs:debug}
+
+        test {HSETNX set the value for expired replica field} {
+            lassign [setup_replication_test $primary $replica $primary_host $primary_port] primary_initial_expired replica_initial_expired
+            $primary debug set-active-expire 0
+            $primary flushall
+            
+            $primary hsetex myhash px 1 fields 1 f1 v1
+
+            wait_for_condition 50 100 {
+                [$primary hexists myhash f1] == 0
+            } else {
+                fail "Field was not logically expired on primary"
+            }
+            wait_for_ofs_sync $primary $replica
+            
+            assert_equal {1} [$primary hlen myhash]
+            assert_equal {1} [$replica hlen myhash]
+            assert_equal {0} [$replica hexists myhash f1]
+        
+            $primary hsetnx myhash f1 v2
+            wait_for_ofs_sync $primary $replica
+
+            assert_equal {v2} [$primary hget myhash f1]
+            assert_equal {v2} [$replica hget myhash f1]
+            assert_equal [$primary HPEXPIRETIME myhash FIELDS 1 f1] [$replica HPEXPIRETIME myhash FIELDS 1 f1]
+            
+            $primary debug set-active-expire 1
+        } {OK} {needs:debug}
     }
 }
 

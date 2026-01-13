@@ -537,7 +537,7 @@ static expiryModificationResult hashTypeSetExpire(robj *o, sds field, long long 
             }
         }
         /* In case we are set to expire the entry after we went through all the validations,
-         * We can just delete the entry. */
+         * we can just delete the entry. */
         if (time_is_expired) {
             serverAssert(hashTypeDelete(o, field));
             return EXPIRATION_MODIFICATION_EXPIRE_ASAP;

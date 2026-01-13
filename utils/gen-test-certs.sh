@@ -55,4 +55,7 @@ generate_cert server "Server-only" "-extfile tests/tls/openssl.cnf -extensions s
 generate_cert client "Client-only" "-extfile tests/tls/openssl.cnf -extensions client_cert"
 generate_cert valkey "Generic-cert"
 
+# Bundle two certs to exercise multi-CA parsing in tests.
+cat tests/tls/ca.crt tests/tls/server.crt > tests/tls/ca-multi.crt
+
 [ -f tests/tls/valkey.dh ] || openssl dhparam -out tests/tls/valkey.dh 2048

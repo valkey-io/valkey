@@ -11828,27 +11828,27 @@ void moduleCallCommandResultCallbacks(client *c,
 
 /* Get the result status from a command result context.
  * Returns VALKEYMODULE_CMDRESULT_SUCCESS (0) or VALKEYMODULE_CMDRESULT_FAILURE (1). */
-int VM_CommandResultStatus(ValkeyModuleCommandResultCtx *rctx) {
+int VM_CommandResultGetStatus(ValkeyModuleCommandResultCtx *rctx) {
     return rctx->result_status;
 }
 
 /* Get the command name from a command result context. */
-const char *VM_CommandResultCommandName(ValkeyModuleCommandResultCtx *rctx) {
+const char *VM_CommandResultGetCommandName(ValkeyModuleCommandResultCtx *rctx) {
     return rctx->cmd ? rctx->cmd->fullname : NULL;
 }
 
 /* Get the command execution duration in microseconds from a command result context. */
-long long VM_CommandResultDuration(ValkeyModuleCommandResultCtx *rctx) {
+long long VM_CommandResultGetDuration(ValkeyModuleCommandResultCtx *rctx) {
     return rctx->duration;
 }
 
 /* Get the number of dirty (modified) keys from a command result context. */
-long long VM_CommandResultDirty(ValkeyModuleCommandResultCtx *rctx) {
+long long VM_CommandResultGetDirty(ValkeyModuleCommandResultCtx *rctx) {
     return rctx->dirty;
 }
 
 /* Get the client ID from a command result context. */
-unsigned long long VM_CommandResultClientId(ValkeyModuleCommandResultCtx *rctx) {
+unsigned long long VM_CommandResultGetClientId(ValkeyModuleCommandResultCtx *rctx) {
     return rctx->c->id;
 }
 

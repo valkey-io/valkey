@@ -29,8 +29,10 @@
             "WRITE"
         ],
         "acl_categories": [
+            "DANGEROUS",
             "KEYSPACE",
-            "DANGEROUS"
+            "SLOW",
+            "WRITE"
         ],
         "command_tips": [
             "NONDETERMINISTIC_OUTPUT"

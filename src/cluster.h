@@ -75,7 +75,7 @@ unsigned long getClusterConnectionsCount(void);
 int isClusterHealthy(void);
 
 sds clusterGenNodesDescription(client *c, int filter, int tls_primary);
-sds genClusterInfoString(void);
+sds genClusterInfoString(sds info);
 /* handle implementation specific debug cluster commands. Return 1 if handled, 0 otherwise. */
 int handleDebugClusterCommand(client *c);
 const char **clusterDebugCommandExtendedHelp(void);
@@ -142,6 +142,7 @@ int patternHashSlot(char *pattern, int length);
 int isValidAuxString(char *s, unsigned int length);
 void migrateCommand(client *c);
 void clusterCommand(client *c);
+void clusterKeySlotCommand(client *c);
 ConnectionType *connTypeOfCluster(void);
 int isNodeAvailable(clusterNode *node);
 long long getNodeReplicationOffset(clusterNode *node);

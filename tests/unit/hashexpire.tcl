@@ -607,6 +607,9 @@ start_server {tags {"hashexpire"}} {
         r HSETEX myhash PX 0 FIELDS 1 field1 val1
         after 10
         assert_equal 0 [r HEXISTS myhash field1]
+        # The hash should also not exist
+        assert_equal 0 [r EXISTS myhash]
+        assert_equal 0 [r HLEN myhash]
     }
 
     test {HSETEX PX - test mix of expiring and persistent fields} {
@@ -627,7 +630,43 @@ start_server {tags {"hashexpire"}} {
          assert_error {ERR numfields should be greater than 0 and match the provided number of fields} {r HSETEX myhash PX 100 FIELDS 1 field1 val1 extra}
     } 
 
+    ## NX/XX key-level tests
 
+    test {HSETEX NX - non-existing key creates the key} {
+        r FLUSHALL
+        set res [r HSETEX myhash NX FIELDS 2 f1 v1 f2 v2]
+        assert_equal 1 $res
+        assert_equal v1 [r HGET myhash f1]
+        assert_equal v2 [r HGET myhash f2]
+    }
+
+    test {HSETEX NX - existing key blocked} {
+        r FLUSHALL
+        r HSET myhash f1 v1
+        set res [r HSETEX myhash NX FIELDS 2 f1 new1 f2 new2]
+        assert_equal 0 $res
+        assert_equal v1 [r HGET myhash f1]
+        assert_equal 0 [r HEXISTS myhash f2]
+    }
+
+    test {HSETEX XX - existing key updates fields} {
+        r FLUSHALL
+        r HSET myhash f1 v1 f2 v2
+        set res [r HSETEX myhash XX FIELDS 2 f1 new1 f2 new2]
+        assert_equal 1 $res
+        assert_equal new1 [r HGET myhash f1]
+        assert_equal new2 [r HGET myhash f2]
+    }
+
+    test {HSETEX XX - non-existing key blocked} {
+        r FLUSHALL
+        set res [r HSETEX myhash XX FIELDS 2 f1 v1 f2 v2]
+        assert_equal 0 $res
+        assert_equal 0 [r EXISTS myhash]
+        assert_equal 0 [r HEXISTS myhash f1]
+        assert_equal 0 [r HEXISTS myhash f2]
+    }
+    
     ## FNX/FXX
 
     # hsetex throws ERR *, it shouldn't
@@ -688,6 +727,93 @@ start_server {tags {"hashexpire"}} {
         r FLUSHALL
         assert_equal 0 [r HSETEX myhash EX 10 FXX FIELDS 1 x y]
         assert_equal 0 [r EXISTS myhash]
+    }
+
+    ## NX/XX + FNX/FXX combinations
+
+    # NX + FNX — only set if key does not exist AND fields do not exist
+    test {HSETEX EX NX FNX - set only if key missing and fields missing} {
+        r FLUSHALL
+        set res [r HSETEX myhash EX 10 NX FNX FIELDS 2 f1 v1 f2 v2]
+        assert_equal 1 $res
+        assert_equal v1 [r HGET myhash f1]
+        assert_equal v2 [r HGET myhash f2]
+
+        # Try again — key exists now, should block
+        set res [r HSETEX myhash EX 10 NX FNX FIELDS 2 f3 v3 f4 v4]
+        assert_equal 0 $res
+        assert_equal 0 [r HEXISTS myhash f3]
+        assert_equal 0 [r HEXISTS myhash f4]
+    }
+
+    # NX + FXX — only set if key does not exist AND all fields exist (key missing → blocked)
+    test {HSETEX EX NX FXX - key missing blocks all} {
+        r FLUSHALL
+        set res [r HSETEX myhash EX 10 NX FXX FIELDS 2 f1 v1 f2 v2]
+        assert_equal 0 $res
+        assert_equal 0 [r EXISTS myhash]
+        assert_equal 0 [r HEXISTS myhash f1]
+        assert_equal 0 [r HEXISTS myhash f2]
+    }
+
+    # XX + FNX — only set if key exists AND none of the fields exist
+    test {HSETEX EX XX FNX - set only if key exists and fields missing} {
+        r FLUSHALL
+        r HSET myhash f1 old1
+        set res [r HSETEX myhash EX 10 XX FNX FIELDS 2 f2 v2 f3 v3]
+        assert_equal 1 $res
+        assert_equal v2 [r HGET myhash f2]
+        assert_equal v3 [r HGET myhash f3]
+
+        # Try again — fields already exist → should block
+        set res [r HSETEX myhash EX 10 XX FNX FIELDS 2 f2 x f4 y]
+        assert_equal 0 $res
+        assert_equal v2 [r HGET myhash f2]
+        assert_equal 0 [r HEXISTS myhash f4]
+    }
+
+    # XX + FXX — only set if key exists AND all fields exist
+    test {HSETEX EX XX FXX - set only if key exists and all fields exist} {
+        r FLUSHALL
+        r HSET myhash f1 old1 f2 old2
+        set res [r HSETEX myhash EX 10 XX FXX FIELDS 2 f1 new1 f2 new2]
+        assert_equal 1 $res
+        assert_equal new1 [r HGET myhash f1]
+        assert_equal new2 [r HGET myhash f2]
+
+        # Try when one field is missing → should block
+        set res [r HSETEX myhash EX 10 XX FXX FIELDS 2 f1 x f3 y]
+        assert_equal 0 $res
+        assert_equal new1 [r HGET myhash f1]
+        assert_equal 0 [r HEXISTS myhash f3]
+    }
+
+    test {HSETEX is not replicating validation arguments} {
+        r flushall
+        set repl [attach_to_replication_stream]
+        set exp [get_longer_then_long_expire_value PXAT]
+
+        r HSETEX myhash NX PXAT $exp FIELDS 1 f1 v1
+        r HSETEX myhash XX PXAT $exp FIELDS 1 f1 v1
+        r HSETEX myhash FNX PXAT $exp FIELDS 1 f2 v2
+        r HSETEX myhash FXX PXAT $exp FIELDS 1 f2 v2
+        r HSETEX myhash2 nx PXAT $exp FIELDS 1 f1 v1
+        r HSETEX myhash2 xx PXAT $exp FIELDS 1 f1 v1
+        r HSETEX myhash2 fnx PXAT $exp FIELDS 1 f2 v2
+        r HSETEX myhash2 fxx PXAT $exp FIELDS 1 f2 v2
+
+        assert_replication_stream $repl [subst {
+            {select *}
+            {hsetex myhash PXAT $exp FIELDS 1 f1 v1}
+            {hsetex myhash PXAT $exp FIELDS 1 f1 v1}
+            {hsetex myhash PXAT $exp FIELDS 1 f2 v2}
+            {hsetex myhash PXAT $exp FIELDS 1 f2 v2}
+            {hsetex myhash2 PXAT $exp FIELDS 1 f1 v1}
+            {hsetex myhash2 PXAT $exp FIELDS 1 f1 v1}
+            {hsetex myhash2 PXAT $exp FIELDS 1 f2 v2}
+            {hsetex myhash2 PXAT $exp FIELDS 1 f2 v2}
+        }]
+        close_replication_stream $repl
     }
 
     ###### Test EXPIRE #############
@@ -759,6 +885,19 @@ start_server {tags {"hashexpire"}} {
         assert_equal {0} $res2
     }
 
+    test {HEXPIRE GT - Do not expire items when expiration in the past} {
+        r FLUSHALL
+        r HSETEX myhash EX 600 FIELDS 1 field1 val1
+        assert_equal {1} [r HLEN myhash]
+        assert_equal {0 -2} [r HEXPIRE myhash 0 GT FIELDS 2 field1 field2]
+        assert_equal {1} [r HLEN myhash]
+        assert_equal {0 -2} [r HEXPIRE myhash 0 NX FIELDS 2 field1 field2]
+        assert_equal {1} [r HLEN myhash]
+        r HSET myhash field1 val1
+        assert_equal {0 -2} [r HEXPIRE myhash 0 XX FIELDS 2 field1 field2]
+        assert_equal {1} [r HLEN myhash]
+    }
+
     # Conditionals: LT
     test {HEXPIRE LT - only set if new TTL < existing TTL} {
         r FLUSHALL
@@ -790,6 +929,21 @@ start_server {tags {"hashexpire"}} {
         r HEXPIRE myhash 1000 FIELDS 1 f2
         assert_equal 0 [r HEXISTS myhash f2]
         assert_equal -2 [r HTTL myhash FIELDS 1 f2]
+    }
+
+    # HEXPIRE on a non-existent field
+    test {HEXPIRE on a non-existent field (should not issue notifications)} {
+        r FLUSHALL
+        r HSET myhash f1 v1
+        set rd [setup_single_keyspace_notification r]
+        
+        r HEXPIRE myhash 1000 FIELDS 1 f2
+        r HEXPIRE myhash 0 FIELDS 1 f2
+        # Verify no notification (getting hset and not hexpire)
+        r HSET dummy dummy dummy
+        assert_keyevent_patterns $rd dummy hset
+        assert_equal 0 [get_keys_with_volatile_items r]
+        $rd close
     }
 
     # Error Cases
@@ -1632,11 +1786,12 @@ start_server {tags {"hashexpire"}} {
         # Sanity check: check we only have one field in the hash
         assert_equal 1 [r HLEN myhash]
 
-        # TTL should now be gone; field becomes persistent
+        # TTL should now be gone; field becomes persistent; key should not be tracked
         set ttl [r HPTTL myhash FIELDS 1 field1]
         assert_equal -1 $ttl
         assert_equal 1 [r HGET myhash field1]
         assert_equal 1 [r HLEN myhash]
+        assert_equal 0 [get_keys_with_volatile_items r]
 
         # set expiration on the field
         assert_equal 1 [r HEXPIRE myhash 100000000 FIELDS 1 field1]
@@ -1674,11 +1829,12 @@ start_server {tags {"hashexpire"}} {
         # Sanity check: check we only have one field in the hash
         assert_equal 1 [r HLEN myhash]
 
-        # TTL should now be gone; field becomes persistent
+        # TTL should now be gone; field becomes persistent; key should not be tracked
         set ttl [r HPTTL myhash FIELDS 1 field1]
         assert_equal -1 $ttl
         assert_equal 1 [r HGET myhash field1]
         assert_equal 1 [r HLEN myhash]
+        assert_equal 0 [get_keys_with_volatile_items r]
 
         # set expiration on the field
         assert_equal 1 [r HEXPIRE myhash 100000000 FIELDS 1 field1]
@@ -2182,6 +2338,7 @@ start_server {tags {"hashexpire external:skip"}} {
                 fail "hash object was not deleted on replica after timeout"
             }
         }
+
         test {HEXPIREAT with expired time is propagated to the replica} {
             $primary flushall            
 
@@ -2898,7 +3055,7 @@ start_server {tags {"hashexpire external:skip"}} {
     }
 
     ##### HGETEX Active Expiry Keyspace Notifications #####
-    foreach command {EX PX EXAT PXAT} {
+    foreach command {EX PX} {
         test "HGETEX $command keyspace notifications for active expiry" {
             r FLUSHALL
             set initial_expired [info_field [r info stats] expired_fields]
@@ -2919,7 +3076,7 @@ start_server {tags {"hashexpire external:skip"}} {
             $rd close
         }
     }
-    
+
     test "HGETEX keyspace notification when key deleted with active expiry" {
         r FLUSHALL
         set initial_expired [info_field [r info stats] expired_fields]
@@ -3020,7 +3177,7 @@ start_server {tags {"hashexpire external:skip"}} {
     }
 
     ##### HSETEX Active Expiry Keyspace Notifications #####
-    foreach command {EX PX EXAT PXAT} {
+    foreach command {EX PX} {
         test "HSETEX $command - keyspace notifications fired on field expiry" {
             r FLUSHALL
             set initial_expired [info_field [r info stats] expired_fields]
@@ -3947,7 +4104,7 @@ start_server {tags {"hashexpire external:skip"}} {
             
             test {Hash field TTL and active expiry propagates correctly through chain replication} {
                 $replica replicaof $primary_host $primary_port
-                # Wait for R2 to connect to R1
+                # Wait for R1 to connect to Primary
                 wait_for_condition 100 100 {
                     [info_field [$replica info replication] master_link_status] eq "up"
                 } else {
@@ -3957,7 +4114,7 @@ start_server {tags {"hashexpire external:skip"}} {
                 $replica_2 replicaof $replica_host $replica_port
                 # Wait for R2 to connect to R1
                 wait_for_condition 100 100 {
-                    [info_field [$replica info replication] master_link_status] eq "up"
+                    [info_field [$replica_2 info replication] master_link_status] eq "up"
                 } else {
                     fail "Second replica <-> First replica connection not established"
                 }
@@ -4355,4 +4512,58 @@ start_server {tags {"hashexpire external:skip"}} {
             $rd_replica close
         }
     }
+}
+
+start_server {tags {"hash"}} {
+    test {Overwriting hash with volatile fields updates keys_with_volatile_items tracking} {
+        r FLUSHALL
+        r DEBUG SET-ACTIVE-EXPIRE 0
+
+        r HSETEX myhash EX 100 FIELDS 1 field1 value1
+
+        set info1 [r INFO keyspace]
+        assert_match {*keys_with_volatile_items=1*} $info1
+        assert_equal 1 [r EXISTS myhash]
+
+        r SET myhash "I'm a string now"
+
+        set info2 [r INFO keyspace]
+        assert_match {*keys_with_volatile_items=0*} $info2
+        assert_equal {string} [r TYPE myhash]
+        assert_equal "I'm a string now" [r GET myhash]
+
+        r DEBUG SET-ACTIVE-EXPIRE 1
+    } {OK} {needs:debug}
+
+    test {RESTORE REPLACE clears keys_with_volatile_items tracking} {
+       r FLUSHALL
+       r HSETEX myhash EX 100 FIELDS 1 f1 v1
+       assert_match {*keys_with_volatile_items=1*} [r INFO keyspace]
+
+       r SET tempkey "I'm a string"
+       set serialized [r DUMP tempkey]
+
+       r RESTORE myhash 0 $serialized REPLACE
+       assert_match {*keys_with_volatile_items=0*} [r INFO keyspace]
+       assert_equal {string} [r TYPE myhash]
+   }
+
+   test {Zero is a valid ttl in HFE} {
+       r flushall
+       r hset myhash f1 v1
+       assert_equal [r OBJECT ENCODING myhash] "listpack"
+       assert_equal [r hsetex myhash exat 0 fields 2 f2 v2 f3 v3] 0
+       assert_equal [r hlen myhash] 1
+       assert_equal [r OBJECT ENCODING myhash] "listpack"
+       r config set import-mode yes
+       assert_equal [r hsetex myhash exat 0 fields 2 f2 v2 f3 v3] 1
+       assert_equal [r hlen myhash] 3
+       assert_equal [r OBJECT ENCODING myhash] "hashtable"
+       r config set import-mode no
+       wait_for_condition 30 100 {
+           [r hlen myhash] == 1
+       } else {
+           fail "field wasn't expired"
+       }
+   }
 }

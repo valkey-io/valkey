@@ -39,6 +39,7 @@
 #include "io_threads.h"
 #include "module.h"
 #include "connection.h"
+#include "zmalloc.h"
 #include <strings.h>
 #include <sys/socket.h>
 #include <sys/uio.h>
@@ -163,7 +164,7 @@ typedef enum {
 size_t getStringObjectSdsUsedMemory(robj *o) {
     serverAssertWithInfo(NULL, o, o->type == OBJ_STRING);
     if (o->encoding != OBJ_ENCODING_INT) {
-        return sdsAllocSize(o->ptr);
+        return sdsAllocSize(objectGetVal(o));
     }
     return 0;
 }
@@ -173,22 +174,28 @@ size_t getStringObjectSdsUsedMemory(robj *o) {
 size_t getStringObjectLen(robj *o) {
     serverAssertWithInfo(NULL, o, o->type == OBJ_STRING);
     switch (o->encoding) {
-    case OBJ_ENCODING_RAW: return sdslen(o->ptr);
-    case OBJ_ENCODING_EMBSTR: return sdslen(o->ptr);
+    case OBJ_ENCODING_RAW: return sdslen(objectGetVal(o));
+    case OBJ_ENCODING_EMBSTR: return sdslen(objectGetVal(o));
     default: return 0; /* Just integer encoding for now. */
     }
 }
 
+/* Actual allocated size of a client reply block */
+static size_t clientReplyAllocSize(clientReplyBlock *block) {
+    return sizeof(clientReplyBlock) + block->size;
+}
+
 /* Client.reply list dup and free methods. */
 void *dupClientReplyValue(void *o) {
-    clientReplyBlock *old = o;
-    clientReplyBlock *buf = zmalloc(sizeof(clientReplyBlock) + old->size);
-    memcpy(buf, o, sizeof(clientReplyBlock) + old->size);
+    size_t bufsize = clientReplyAllocSize((clientReplyBlock *)o);
+    clientReplyBlock *buf = zmalloc(bufsize);
+    memcpy(buf, o, bufsize);
     return buf;
 }
 
 void freeClientReplyValue(void *o) {
-    zfree(o);
+    if (!o) return;
+    zfree_with_size(o, clientReplyAllocSize((clientReplyBlock *)o));
 }
 
 /* This function links the client to the global linked list of clients.
@@ -261,10 +268,10 @@ static int isCopyAvoidPreferred(client *c, robj *obj) {
     /* Main thread only. No I/O threads */
     if (server.io_threads_num == 1) {
         /* Copy avoidance is preferred starting certain string size */
-        return server.min_string_size_copy_avoid && sdslen(obj->ptr) >= (size_t)server.min_string_size_copy_avoid;
+        return server.min_string_size_copy_avoid && sdslen(objectGetVal(obj)) >= (size_t)server.min_string_size_copy_avoid;
     }
     /* Main thread + I/O threads */
-    return server.min_string_size_copy_avoid_threaded && sdslen(obj->ptr) >= (size_t)server.min_string_size_copy_avoid_threaded;
+    return server.min_string_size_copy_avoid_threaded && sdslen(objectGetVal(obj)) >= (size_t)server.min_string_size_copy_avoid_threaded;
 }
 
 client *createClient(connection *conn) {
@@ -713,7 +720,7 @@ static void _addBulkStrRefToBufferOrList(client *c, robj *obj) {
     /* Refcount will be decremented in write completion handler by the main thread */
     incrRefCount(obj);
 
-    bulkStrRef str_ref = {.obj = obj, .str = obj->ptr};
+    bulkStrRef str_ref = {.obj = obj, .str = objectGetVal(obj)};
     if (!_addBulkStrRefToBuffer(c, (void *)&str_ref, sizeof(str_ref))) {
         _addBulkStrRefToToList(c, (void *)&str_ref, sizeof(str_ref));
     }
@@ -729,13 +736,13 @@ void addReply(client *c, robj *obj) {
     if (prepareClientToWrite(c) != C_OK) return;
 
     if (sdsEncodedObject(obj)) {
-        _addReplyToBufferOrList(c, obj->ptr, sdslen(obj->ptr));
+        _addReplyToBufferOrList(c, objectGetVal(obj), sdslen(objectGetVal(obj)));
     } else if (obj->encoding == OBJ_ENCODING_INT) {
         /* For integer encoded strings we just convert it into a string
          * using our optimized function, and attach the resulting string
          * to the output buffer. */
         char buf[32];
-        size_t len = ll2string(buf, sizeof(buf), (long)obj->ptr);
+        size_t len = ll2string(buf, sizeof(buf), (long)objectGetVal(obj));
         _addReplyToBufferOrList(c, buf, len);
     } else {
         serverPanic("Wrong obj->encoding in addReply()");
@@ -811,7 +818,7 @@ void afterErrorReply(client *c, const char *s, size_t len, int flags) {
         char *err_prefix = "ERR";
         size_t prefix_len = 3;
         if (s[0] == '-') {
-            char *spaceloc = memchr(s, ' ', len < 32 ? len : 32);
+            const char *spaceloc = memchr(s, ' ', len < 32 ? len : 32);
             /* If we cannot retrieve the error prefix, use the default: "ERR". */
             if (spaceloc) {
                 const size_t errEndPos = (size_t)(spaceloc - s);
@@ -901,7 +908,7 @@ void afterErrorReply(client *c, const char *s, size_t len, int flags) {
  * Unlike addReplyErrorSds and others alike which rely on addReplyErrorLength. */
 void addReplyErrorObject(client *c, robj *err) {
     addReply(c, err);
-    afterErrorReply(c, err->ptr, sdslen(err->ptr) - 2, 0); /* Ignore trailing \r\n */
+    afterErrorReply(c, objectGetVal(err), sdslen(objectGetVal(err)) - 2, 0); /* Ignore trailing \r\n */
 }
 
 /* Sends either a reply or an error reply by checking the first char.
@@ -911,7 +918,7 @@ void addReplyErrorObject(client *c, robj *err) {
  * logging and stats update. */
 void addReplyOrErrorObject(client *c, robj *reply) {
     serverAssert(sdsEncodedObject(reply));
-    sds rep = reply->ptr;
+    sds rep = objectGetVal(reply);
     if (sdslen(rep) > 1 && rep[0] == '-') {
         addReplyErrorObject(c, reply);
     } else {
@@ -1137,15 +1144,15 @@ void setDeferredAggregateLen(client *c, void *node, long length, char prefix) {
     const size_t hdr_len = OBJ_SHARED_HDR_STRLEN(length);
     const int opt_hdr = length < OBJ_SHARED_BULKHDR_LEN;
     if (prefix == '*' && opt_hdr) {
-        setDeferredReply(c, node, shared.mbulkhdr[length]->ptr, hdr_len);
+        setDeferredReply(c, node, objectGetVal(shared.mbulkhdr[length]), hdr_len);
         return;
     }
     if (prefix == '%' && opt_hdr) {
-        setDeferredReply(c, node, shared.maphdr[length]->ptr, hdr_len);
+        setDeferredReply(c, node, objectGetVal(shared.maphdr[length]), hdr_len);
         return;
     }
     if (prefix == '~' && opt_hdr) {
-        setDeferredReply(c, node, shared.sethdr[length]->ptr, hdr_len);
+        setDeferredReply(c, node, objectGetVal(shared.sethdr[length]), hdr_len);
         return;
     }
 
@@ -1267,16 +1274,16 @@ static void _addReplyLongLongWithPrefix(client *c, long long ll, char prefix) {
     const int opt_hdr = ll < OBJ_SHARED_BULKHDR_LEN && ll >= 0;
     const size_t hdr_len = OBJ_SHARED_HDR_STRLEN(ll);
     if (prefix == '*' && opt_hdr) {
-        _addReplyToBufferOrList(c, shared.mbulkhdr[ll]->ptr, hdr_len);
+        _addReplyToBufferOrList(c, objectGetVal(shared.mbulkhdr[ll]), hdr_len);
         return;
     } else if (prefix == '$' && opt_hdr) {
-        _addReplyToBufferOrList(c, shared.bulkhdr[ll]->ptr, hdr_len);
+        _addReplyToBufferOrList(c, objectGetVal(shared.bulkhdr[ll]), hdr_len);
         return;
     } else if (prefix == '%' && opt_hdr) {
-        _addReplyToBufferOrList(c, shared.maphdr[ll]->ptr, hdr_len);
+        _addReplyToBufferOrList(c, objectGetVal(shared.maphdr[ll]), hdr_len);
         return;
     } else if (prefix == '~' && opt_hdr) {
-        _addReplyToBufferOrList(c, shared.sethdr[ll]->ptr, hdr_len);
+        _addReplyToBufferOrList(c, objectGetVal(shared.sethdr[ll]), hdr_len);
         return;
     }
 
@@ -1391,7 +1398,17 @@ static int tryAvoidBulkStrCopyToReply(client *c, robj *obj) {
 
 /* Add an Object as a bulk reply */
 void addReplyBulk(client *c, robj *obj) {
-    if (tryAvoidBulkStrCopyToReply(c, obj) == C_OK) return;
+    if (tryAvoidBulkStrCopyToReply(c, obj) == C_OK) {
+        /* If copy avoidance allowed, then we explicitly maintain net_output_bytes_curr_cmd. */
+        serverAssert(obj->encoding == OBJ_ENCODING_RAW);
+        size_t str_len = sdslen(objectGetVal(obj));
+        uint32_t num_len = digits10(str_len);
+        /* RESP encodes bulk strings as $<length>\r\n<data>\r\n */
+        c->net_output_bytes_curr_cmd += (num_len + 3); /* $<length>\r\n */
+        c->net_output_bytes_curr_cmd += str_len;       /* <data> */
+        c->net_output_bytes_curr_cmd += 2;             /* \r\n */
+        return;
+    }
     addReplyBulkLen(c, obj);
     addReply(c, obj);
     addReplyProto(c, "\r\n", 2);
@@ -1503,7 +1520,7 @@ void addReplyVerbatim(client *c, const char *s, size_t len, const char *ext) {
  * specific subcommands in `extended_help`.
  */
 void addExtendedReplyHelp(client *c, const char **help, const char **extended_help) {
-    sds cmd = sdsnew((char *)c->argv[0]->ptr);
+    sds cmd = sdsnew((char *)objectGetVal(c->argv[0]));
     void *blenp = addReplyDeferredLen(c);
     int blen = 0;
     int idx = 0;
@@ -1538,10 +1555,10 @@ void addReplyHelp(client *c, const char **help) {
  * This function is typically invoked by from commands that support
  * subcommands in response to an unknown subcommand or argument error. */
 void addReplySubcommandSyntaxError(client *c) {
-    sds cmd = sdsnew((char *)c->argv[0]->ptr);
+    sds cmd = sdsnew((char *)objectGetVal(c->argv[0]));
     sdstoupper(cmd);
     addReplyErrorFormat(c, "unknown subcommand or wrong number of arguments for '%.128s'. Try %s HELP.",
-                        (char *)c->argv[1]->ptr, cmd);
+                        (char *)objectGetVal(c->argv[1]), cmd);
     sdsfree(cmd);
 }
 
@@ -1846,7 +1863,10 @@ void disconnectReplicas(void) {
     listNode *ln;
     listRewind(server.replicas, &li);
     while ((ln = listNext(&li))) {
-        freeClient((client *)ln->value);
+        client *replica = (client *)ln->value;
+        /* If we are going to disconnect all replicas, there is no need to protect the rdb channel. */
+        replica->flag.protected_rdb_channel = 0;
+        freeClient(replica);
     }
 }
 
@@ -2745,7 +2765,13 @@ static void releaseBufReferences(char *buf, size_t bufpos) {
         ptr += sizeof(payloadHeader);
 
         if (header->payload_type == BULK_STR_REF) {
-            clusterSlotStatsAddNetworkBytesOutForSlot(header->slot, header->reply_len);
+            /* Here clusterSlotStatsAddNetworkBytesOutForSlot() is called in
+             * the IO thread after writing the reply to the client, and after
+             * #2652 it is also done in the normal code path in the main thread
+             * (afterCommand() -> clusterSlotStatsAddNetworkBytesOutForUserClient()).
+             * Before we come up with a better solution (see #2652), we need to
+             * comment it out to avoid the duplicate calculations. */
+            /* clusterSlotStatsAddNetworkBytesOutForSlot(header->slot, header->reply_len); */
 
             bulkStrRef *str_ref = (bulkStrRef *)ptr;
             size_t len = header->payload_len;
@@ -2989,6 +3015,9 @@ void handleParseError(client *c) {
     } else if (flags & READ_FLAGS_ERROR_UNBALANCED_QUOTES) {
         addReplyError(c, "Protocol error: unbalanced quotes in request");
         setProtocolError("unbalanced quotes in inline request", c);
+    } else if (flags & READ_FLAGS_ERROR_INVALID_CRLF) {
+        addReplyError(c, "Protocol error: invalid CRLF in request");
+        setProtocolError("invalid CRLF in request", c);
     } else if (flags & READ_FLAGS_ERROR_UNEXPECTED_INLINE_FROM_REPLICATED_CLIENT) {
         if (getClientType(c) == CLIENT_TYPE_SLOT_IMPORT) {
             serverLog(LL_WARNING, "WARNING: Receiving inline protocol from slot import, import stream corruption? Closing the "
@@ -3009,7 +3038,8 @@ int isParsingError(client *c) {
                             READ_FLAGS_ERROR_INVALID_MULTIBULK_LEN | READ_FLAGS_ERROR_UNAUTHENTICATED_MULTIBULK_LEN |
                             READ_FLAGS_ERROR_UNAUTHENTICATED_BULK_LEN | READ_FLAGS_ERROR_MBULK_INVALID_BULK_LEN |
                             READ_FLAGS_ERROR_BIG_BULK_COUNT | READ_FLAGS_ERROR_MBULK_UNEXPECTED_CHARACTER |
-                            READ_FLAGS_ERROR_UNEXPECTED_INLINE_FROM_REPLICATED_CLIENT | READ_FLAGS_ERROR_UNBALANCED_QUOTES);
+                            READ_FLAGS_ERROR_UNEXPECTED_INLINE_FROM_REPLICATED_CLIENT | READ_FLAGS_ERROR_UNBALANCED_QUOTES |
+                            READ_FLAGS_ERROR_INVALID_CRLF);
 }
 
 /* This function is called after the query-buffer was parsed.
@@ -3270,7 +3300,7 @@ void unprotectClient(client *c) {
 void parseInlineBuffer(client *c) {
     char *newline;
     int argc, j, linefeed_chars = 1;
-    sds *argv, aux;
+    sds *argv;
     size_t querylen;
     int is_replicated = c->read_flags & READ_FLAGS_REPLICATED;
 
@@ -3290,9 +3320,7 @@ void parseInlineBuffer(client *c) {
 
     /* Split the input buffer up to the \r\n */
     querylen = newline - (c->querybuf + c->qb_pos);
-    aux = sdsnewlen(c->querybuf + c->qb_pos, querylen);
-    argv = sdssplitargs(aux, &argc);
-    sdsfree(aux);
+    argv = sdsnsplitargs(c->querybuf + c->qb_pos, querylen, &argc);
     if (argv == NULL) {
         c->read_flags |= READ_FLAGS_ERROR_UNBALANCED_QUOTES;
         return;
@@ -3486,6 +3514,11 @@ static int parseMultibulk(client *c,
         /* Buffer should also contain \n */
         if (newline - (c->querybuf + c->qb_pos) > (ssize_t)(sdslen(c->querybuf) - c->qb_pos - 2)) return 0;
 
+        /* Check that what follows \r is a real \n */
+        if (unlikely(newline[1] != '\n')) {
+            return READ_FLAGS_ERROR_INVALID_CRLF;
+        }
+
         /* We know for sure there is a whole line since newline != NULL,
          * so go ahead and find out the multi bulk length. */
         serverAssertWithInfo(c, NULL, c->querybuf[c->qb_pos] == '*');
@@ -3565,6 +3598,11 @@ static int parseMultibulk(client *c,
                 return READ_FLAGS_ERROR_MBULK_UNEXPECTED_CHARACTER;
             }
 
+            /* Check that what follows \r is a real \n */
+            if (unlikely(newline[1] != '\n')) {
+                return READ_FLAGS_ERROR_INVALID_CRLF;
+            }
+
             size_t bulklen_slen = newline - (c->querybuf + c->qb_pos + 1);
             ok = string2ll(c->querybuf + c->qb_pos + 1, bulklen_slen, &ll);
             if (!ok || ll < 0 || (!(is_replicated) && ll > server.proto_max_bulk_len)) {
@@ -3618,6 +3656,12 @@ static int parseMultibulk(client *c,
                 *argv_len = min(*argv_len < INT_MAX / 2 ? (*argv_len) * 2 : INT_MAX,
                                 *argc + c->multibulklen);
                 *argv = zrealloc(*argv, sizeof(robj *) * (*argv_len));
+            }
+
+            /* Check that what follows argv is a real \r\n */
+            if (unlikely(c->querybuf[c->qb_pos + c->bulklen] != '\r' ||
+                         c->querybuf[c->qb_pos + c->bulklen + 1] != '\n')) {
+                return READ_FLAGS_ERROR_INVALID_CRLF;
             }
 
             /* Optimization: if a non-replicated client's buffer contains JUST our bulk element
@@ -3890,14 +3934,14 @@ static int addKeysToIncrFindBatch(client *c,
         int kvstore_idx = 0;
         if (server.cluster_enabled) {
             robj *first_key = argv[result.keys[0].pos];
-            kvstore_idx = keyHashSlot(first_key->ptr, sdslen(first_key->ptr));
+            kvstore_idx = keyHashSlot(objectGetVal(first_key), sdslen(objectGetVal(first_key)));
         }
         hashtable *ht = kvstoreGetHashtable(c->db->keys, kvstore_idx);
         if (ht != NULL) {
             for (int i = 0; i < numkeys && num < max; i++) {
                 hashtableIncrementalFindState *incr_state = &incr_states[num++];
                 robj *keyobj = argv[result.keys[i].pos];
-                hashtableIncrementalFindInit(incr_state, ht, keyobj->ptr);
+                hashtableIncrementalFindInit(incr_state, ht, objectGetVal(keyobj));
             }
         }
     }
@@ -3966,7 +4010,7 @@ static void prefetchCommandQueueKeys(client *c) {
             /* TODO? Prefetch all types and encodings except OBJ_ENCODING_EMBSTR
              * and OBJ_ENCODING_INT. */
             if (val->encoding == OBJ_ENCODING_RAW && val->type == OBJ_STRING) {
-                valkey_prefetch(val->ptr);
+                valkey_prefetch(objectGetVal(val));
             }
         }
     }
@@ -4177,11 +4221,17 @@ int isClientConnIpV6(client *c) {
     /* The cached client peer id is on the form "[IPv6]:port" for IPv6
      * addresses, so we just check for '[' here. */
     if (c->flag.fake && server.current_client) {
-        /* Fake client? Use current client instead.
-         * Noted that in here we are assuming server.current_client is set
-         * and real (aof has already violated this in loadSingleAppendOnlyFil). */
+        /* Fake client? Use current client instead, if we have one. */
         c = server.current_client;
     }
+
+    if (c->flag.fake || !c->conn) {
+        /* If we still don't have a client with a real connection (e.g., called
+         * from module timer with no real current client), default to IPv4 to
+         * avoid crashing. */
+        return 0;
+    }
+
     return getClientPeerId(c)[0] == '[';
 }
 
@@ -4247,7 +4297,7 @@ sds catClientInfoString(sds s, client *client, int hide_user_data) {
             " addr=%s", getClientPeerId(client),
             " laddr=%s", getClientSockname(client),
             " %s", connGetInfo(client->conn, conninfo, sizeof(conninfo)),
-            " name=%s", hide_user_data ? "*redacted*" : (client->name ? (char *)client->name->ptr : ""),
+            " name=%s", hide_user_data ? "*redacted*" : (client->name ? (char *)objectGetVal(client->name) : ""),
             " age=%I", (long long)(commandTimeSnapshot() / 1000 - client->ctime),
             " idle=%I", (long long)(server.unixtime - client->last_interaction),
             " flags=%s", flags,
@@ -4273,8 +4323,8 @@ sds catClientInfoString(sds s, client *client, int hide_user_data) {
             " user=%s", hide_user_data ? "*redacted*" : (client->user ? client->user->name : "(superuser)"),
             " redir=%I", (client->flag.tracking) ? (long long)client->pubsub_data->client_tracking_redirection : -1,
             " resp=%i", client->resp,
-            " lib-name=%s", client->lib_name ? (char *)client->lib_name->ptr : "",
-            " lib-ver=%s", client->lib_ver ? (char *)client->lib_ver->ptr : "",
+            " lib-name=%s", client->lib_name ? (char *)objectGetVal(client->lib_name) : "",
+            " lib-ver=%s", client->lib_ver ? (char *)objectGetVal(client->lib_ver) : "",
             " tot-net-in=%U", client->net_input_bytes,
             " tot-net-out=%U", client->net_output_bytes,
             " tot-cmds=%U", client->commands_processed));
@@ -4297,10 +4347,10 @@ sds catClientInfoShortString(sds s, client *client, int hide_user_data) {
             " addr=%s", getClientPeerId(client),
             " laddr=%s", getClientSockname(client),
             " %s", connGetInfo(client->conn, conninfo, sizeof(conninfo)),
-            " name=%s", hide_user_data ? "*redacted*" : (client->name ? (char *)client->name->ptr : ""),
+            " name=%s", hide_user_data ? "*redacted*" : (client->name ? (char *)objectGetVal(client->name) : ""),
             " user=%s", hide_user_data ? "*redacted*" : (client->user ? client->user->name : "(superuser)"),
-            " lib-name=%s", client->lib_name ? (char *)client->lib_name->ptr : "",
-            " lib-ver=%s", client->lib_ver ? (char *)client->lib_ver->ptr : ""));
+            " lib-name=%s", client->lib_name ? (char *)objectGetVal(client->lib_name) : "",
+            " lib-ver=%s", client->lib_ver ? (char *)objectGetVal(client->lib_ver) : ""));
     return ret;
 }
 
@@ -4353,10 +4403,10 @@ int validateClientAttr(const char *val) {
 /* Returns C_OK if the name is valid. Returns C_ERR & sets `err` (when provided) otherwise. */
 int validateClientName(robj *name, const char **err) {
     const char *err_msg = "Client names cannot contain spaces, newlines or special characters.";
-    int len = (name != NULL) ? sdslen(name->ptr) : 0;
+    int len = (name != NULL) ? sdslen(objectGetVal(name)) : 0;
     /* We allow setting the client name to an empty string. */
     if (len == 0) return C_OK;
-    if (validateClientAttr(name->ptr) == C_ERR) {
+    if (validateClientAttr(objectGetVal(name)) == C_ERR) {
         if (err) *err = err_msg;
         return C_ERR;
     }
@@ -4368,7 +4418,7 @@ int clientSetName(client *c, robj *name, const char **err) {
     if (validateClientName(name, err) == C_ERR) {
         return C_ERR;
     }
-    int len = (name != NULL) ? sdslen(name->ptr) : 0;
+    int len = (name != NULL) ? sdslen(objectGetVal(name)) : 0;
     /* Setting the client name to an empty string actually removes
      * the current name. */
     if (len == 0) {
@@ -4402,9 +4452,9 @@ int clientSetNameOrReply(client *c, robj *name) {
 
 /* Set client or connection related info */
 void clientSetinfoCommand(client *c) {
-    sds attr = c->argv[2]->ptr;
+    sds attr = objectGetVal(c->argv[2]);
     robj *valob = c->argv[3];
-    sds val = valob->ptr;
+    sds val = objectGetVal(valob);
     robj **destvar = NULL;
     if (!strcasecmp(attr, "lib-name")) {
         destvar = &c->lib_name;
@@ -4459,7 +4509,7 @@ static int parseClientFiltersOrReply(client *c, int index, clientFilter *filter)
     while (index < c->argc) {
         int moreargs = c->argc > index + 1;
 
-        if (!strcasecmp(c->argv[index]->ptr, "id")) {
+        if (!strcasecmp(objectGetVal(c->argv[index]), "id")) {
             if (filter->ids == NULL) {
                 /* Initialize the intset for IDs */
                 filter->ids = intsetNew();
@@ -4469,7 +4519,7 @@ static int parseClientFiltersOrReply(client *c, int index, clientFilter *filter)
             /* Process all IDs until a non-numeric argument or end of args */
             while (index < c->argc) {
                 long long id;
-                if (!string2ll(c->argv[index]->ptr, sdslen(c->argv[index]->ptr), &id)) {
+                if (!string2ll(objectGetVal(c->argv[index]), sdslen(objectGetVal(c->argv[index])), &id)) {
                     break; /* Stop processing IDs if a non-numeric argument is encountered */
                 }
                 if (id < 1) {
@@ -4481,7 +4531,7 @@ static int parseClientFiltersOrReply(client *c, int index, clientFilter *filter)
                 filter->ids = intsetAdd(filter->ids, id, &added);
                 index++; /* Move to the next argument */
             }
-        } else if (!strcasecmp(c->argv[index]->ptr, "not-id")) {
+        } else if (!strcasecmp(objectGetVal(c->argv[index]), "not-id")) {
             if (filter->not_ids == NULL) {
                 /* Initialize the intset for NOT-IDs */
                 filter->not_ids = intsetNew();
@@ -4491,7 +4541,7 @@ static int parseClientFiltersOrReply(client *c, int index, clientFilter *filter)
             /* Process all NOT-IDs until a non-numeric argument or end of args */
             while (index < c->argc) {
                 long long not_id;
-                if (!string2ll(c->argv[index]->ptr, sdslen(c->argv[index]->ptr), &not_id)) {
+                if (!string2ll(objectGetVal(c->argv[index]), sdslen(objectGetVal(c->argv[index])), &not_id)) {
                     break; /* Stop processing NOT-IDs if a non-numeric argument is encountered */
                 }
                 if (not_id < 1) {
@@ -4503,7 +4553,7 @@ static int parseClientFiltersOrReply(client *c, int index, clientFilter *filter)
                 filter->not_ids = intsetAdd(filter->not_ids, not_id, &added);
                 index++; /* Move to the next argument */
             }
-        } else if (!strcasecmp(c->argv[index]->ptr, "maxage") && moreargs) {
+        } else if (!strcasecmp(objectGetVal(c->argv[index]), "maxage") && moreargs) {
             long long maxage;
 
             if (getLongLongFromObjectOrReply(c, c->argv[index + 1], &maxage,
@@ -4516,57 +4566,57 @@ static int parseClientFiltersOrReply(client *c, int index, clientFilter *filter)
 
             filter->max_age = maxage;
             index += 2;
-        } else if (!strcasecmp(c->argv[index]->ptr, "type") && moreargs) {
-            filter->type = getClientTypeByName(c->argv[index + 1]->ptr);
+        } else if (!strcasecmp(objectGetVal(c->argv[index]), "type") && moreargs) {
+            filter->type = getClientTypeByName(objectGetVal(c->argv[index + 1]));
             if (filter->type == -1) {
-                addReplyErrorFormat(c, "Unknown client type '%s'", (char *)c->argv[index + 1]->ptr);
+                addReplyErrorFormat(c, "Unknown client type '%s'", (char *)objectGetVal(c->argv[index + 1]));
                 return C_ERR;
             }
             index += 2;
-        } else if (!strcasecmp(c->argv[index]->ptr, "not-type") && moreargs) {
-            filter->not_type = getClientTypeByName(c->argv[index + 1]->ptr);
+        } else if (!strcasecmp(objectGetVal(c->argv[index]), "not-type") && moreargs) {
+            filter->not_type = getClientTypeByName(objectGetVal(c->argv[index + 1]));
             if (filter->not_type == -1) {
-                addReplyErrorFormat(c, "Unknown client type '%s'", (char *)c->argv[index + 1]->ptr);
+                addReplyErrorFormat(c, "Unknown client type '%s'", (char *)objectGetVal(c->argv[index + 1]));
                 return C_ERR;
             }
             index += 2;
-        } else if (!strcasecmp(c->argv[index]->ptr, "addr") && moreargs) {
-            filter->addr = c->argv[index + 1]->ptr;
+        } else if (!strcasecmp(objectGetVal(c->argv[index]), "addr") && moreargs) {
+            filter->addr = objectGetVal(c->argv[index + 1]);
             index += 2;
-        } else if (!strcasecmp(c->argv[index]->ptr, "not-addr") && moreargs) {
-            filter->not_addr = c->argv[index + 1]->ptr;
+        } else if (!strcasecmp(objectGetVal(c->argv[index]), "not-addr") && moreargs) {
+            filter->not_addr = objectGetVal(c->argv[index + 1]);
             index += 2;
-        } else if (!strcasecmp(c->argv[index]->ptr, "laddr") && moreargs) {
-            filter->laddr = c->argv[index + 1]->ptr;
+        } else if (!strcasecmp(objectGetVal(c->argv[index]), "laddr") && moreargs) {
+            filter->laddr = objectGetVal(c->argv[index + 1]);
             index += 2;
-        } else if (!strcasecmp(c->argv[index]->ptr, "not-laddr") && moreargs) {
-            filter->not_laddr = c->argv[index + 1]->ptr;
+        } else if (!strcasecmp(objectGetVal(c->argv[index]), "not-laddr") && moreargs) {
+            filter->not_laddr = objectGetVal(c->argv[index + 1]);
             index += 2;
-        } else if (!strcasecmp(c->argv[index]->ptr, "user") && moreargs) {
-            filter->user = ACLGetUserByName(c->argv[index + 1]->ptr, sdslen(c->argv[index + 1]->ptr));
+        } else if (!strcasecmp(objectGetVal(c->argv[index]), "user") && moreargs) {
+            filter->user = ACLGetUserByName(objectGetVal(c->argv[index + 1]), sdslen(objectGetVal(c->argv[index + 1])));
             if (filter->user == NULL) {
-                addReplyErrorFormat(c, "No such user '%s'", (char *)c->argv[index + 1]->ptr);
+                addReplyErrorFormat(c, "No such user '%s'", (char *)objectGetVal(c->argv[index + 1]));
                 return C_ERR;
             }
             index += 2;
-        } else if (!strcasecmp(c->argv[index]->ptr, "not-user") && moreargs) {
-            filter->not_user = ACLGetUserByName(c->argv[index + 1]->ptr, sdslen(c->argv[index + 1]->ptr));
+        } else if (!strcasecmp(objectGetVal(c->argv[index]), "not-user") && moreargs) {
+            filter->not_user = ACLGetUserByName(objectGetVal(c->argv[index + 1]), sdslen(objectGetVal(c->argv[index + 1])));
             if (filter->not_user == NULL) {
-                addReplyErrorFormat(c, "No such user '%s'", (char *)c->argv[index + 1]->ptr);
+                addReplyErrorFormat(c, "No such user '%s'", (char *)objectGetVal(c->argv[index + 1]));
                 return C_ERR;
             }
             index += 2;
-        } else if (!strcasecmp(c->argv[index]->ptr, "skipme") && moreargs) {
-            if (!strcasecmp(c->argv[index + 1]->ptr, "yes")) {
+        } else if (!strcasecmp(objectGetVal(c->argv[index]), "skipme") && moreargs) {
+            if (!strcasecmp(objectGetVal(c->argv[index + 1]), "yes")) {
                 filter->skipme = 1;
-            } else if (!strcasecmp(c->argv[index + 1]->ptr, "no")) {
+            } else if (!strcasecmp(objectGetVal(c->argv[index + 1]), "no")) {
                 filter->skipme = 0;
             } else {
                 addReplyErrorObject(c, shared.syntaxerr);
                 return C_ERR;
             }
             index += 2;
-        } else if (!strcasecmp(c->argv[index]->ptr, "idle") && moreargs) {
+        } else if (!strcasecmp(objectGetVal(c->argv[index]), "idle") && moreargs) {
             long long idle_time;
 
             if (getLongLongFromObjectOrReply(c, c->argv[index + 1], &idle_time,
@@ -4579,35 +4629,35 @@ static int parseClientFiltersOrReply(client *c, int index, clientFilter *filter)
 
             filter->idle = idle_time;
             index += 2;
-        } else if (!strcasecmp(c->argv[index]->ptr, "flags") && moreargs) {
+        } else if (!strcasecmp(objectGetVal(c->argv[index]), "flags") && moreargs) {
             if (filter->flags) {
                 sdsfree(filter->flags);
                 filter->flags = NULL;
             }
-            filter->flags = sdsnew(c->argv[index + 1]->ptr);
+            filter->flags = sdsnew(objectGetVal(c->argv[index + 1]));
             if (validateClientFlagFilter(filter->flags) == C_ERR) {
                 addReplyErrorFormat(c, "Unknown flags found in the provided filter: %s", filter->flags);
                 return C_ERR;
             }
             index += 2;
-        } else if (!strcasecmp(c->argv[index]->ptr, "not-flags") && moreargs) {
+        } else if (!strcasecmp(objectGetVal(c->argv[index]), "not-flags") && moreargs) {
             if (filter->not_flags) {
                 sdsfree(filter->not_flags);
                 filter->not_flags = NULL;
             }
-            filter->not_flags = sdsnew(c->argv[index + 1]->ptr);
+            filter->not_flags = sdsnew(objectGetVal(c->argv[index + 1]));
             if (validateClientFlagFilter(filter->not_flags) == C_ERR) {
                 addReplyErrorFormat(c, "Unknown flags found in the NOT-FLAGS filter: %s", filter->not_flags);
                 return C_ERR;
             }
             index += 2;
-        } else if (!strcasecmp(c->argv[index]->ptr, "name") && moreargs) {
-            filter->name = c->argv[index + 1]->ptr;
+        } else if (!strcasecmp(objectGetVal(c->argv[index]), "name") && moreargs) {
+            filter->name = objectGetVal(c->argv[index + 1]);
             index += 2;
-        } else if (!strcasecmp(c->argv[index]->ptr, "not-name") && moreargs) {
-            filter->not_name = c->argv[index + 1]->ptr;
+        } else if (!strcasecmp(objectGetVal(c->argv[index]), "not-name") && moreargs) {
+            filter->not_name = objectGetVal(c->argv[index + 1]);
             index += 2;
-        } else if (!strcasecmp(c->argv[index]->ptr, "lib-name") && moreargs) {
+        } else if (!strcasecmp(objectGetVal(c->argv[index]), "lib-name") && moreargs) {
             if (filter->lib_name) {
                 decrRefCount(filter->lib_name);
                 filter->lib_name = NULL;
@@ -4615,7 +4665,7 @@ static int parseClientFiltersOrReply(client *c, int index, clientFilter *filter)
             filter->lib_name = c->argv[index + 1];
             incrRefCount(filter->lib_name);
             index += 2;
-        } else if (!strcasecmp(c->argv[index]->ptr, "not-lib-name") && moreargs) {
+        } else if (!strcasecmp(objectGetVal(c->argv[index]), "not-lib-name") && moreargs) {
             if (filter->not_lib_name) {
                 decrRefCount(filter->not_lib_name);
                 filter->not_lib_name = NULL;
@@ -4623,7 +4673,7 @@ static int parseClientFiltersOrReply(client *c, int index, clientFilter *filter)
             filter->not_lib_name = c->argv[index + 1];
             incrRefCount(filter->not_lib_name);
             index += 2;
-        } else if (!strcasecmp(c->argv[index]->ptr, "lib-ver") && moreargs) {
+        } else if (!strcasecmp(objectGetVal(c->argv[index]), "lib-ver") && moreargs) {
             if (filter->lib_ver) {
                 decrRefCount(filter->lib_ver);
                 filter->lib_ver = NULL;
@@ -4631,7 +4681,7 @@ static int parseClientFiltersOrReply(client *c, int index, clientFilter *filter)
             filter->lib_ver = c->argv[index + 1];
             incrRefCount(filter->lib_ver);
             index += 2;
-        } else if (!strcasecmp(c->argv[index]->ptr, "not-lib-ver") && moreargs) {
+        } else if (!strcasecmp(objectGetVal(c->argv[index]), "not-lib-ver") && moreargs) {
             if (filter->not_lib_ver) {
                 decrRefCount(filter->not_lib_ver);
                 filter->not_lib_ver = NULL;
@@ -4639,7 +4689,7 @@ static int parseClientFiltersOrReply(client *c, int index, clientFilter *filter)
             filter->not_lib_ver = c->argv[index + 1];
             incrRefCount(filter->not_lib_ver);
             index += 2;
-        } else if (!strcasecmp(c->argv[index]->ptr, "db") && moreargs) {
+        } else if (!strcasecmp(objectGetVal(c->argv[index]), "db") && moreargs) {
             int db_id;
             if (getIntFromObjectOrReply(c, c->argv[index + 1], &db_id,
                                         "DB is not an integer or out of range") != C_OK)
@@ -4650,7 +4700,7 @@ static int parseClientFiltersOrReply(client *c, int index, clientFilter *filter)
             }
             filter->db_number = db_id;
             index += 2;
-        } else if (!strcasecmp(c->argv[index]->ptr, "not-db") && moreargs) {
+        } else if (!strcasecmp(objectGetVal(c->argv[index]), "not-db") && moreargs) {
             int not_db_id;
             if (getIntFromObjectOrReply(c, c->argv[index + 1], &not_db_id,
                                         "NOT-DB is not an integer or out of range") != C_OK)
@@ -4661,41 +4711,41 @@ static int parseClientFiltersOrReply(client *c, int index, clientFilter *filter)
             }
             filter->not_db_number = not_db_id;
             index += 2;
-        } else if (!strcasecmp(c->argv[index]->ptr, "capa") && moreargs) {
+        } else if (!strcasecmp(objectGetVal(c->argv[index]), "capa") && moreargs) {
             if (filter->capa) {
                 sdsfree(filter->capa);
                 filter->capa = NULL;
             }
-            filter->capa = sdsnew(c->argv[index + 1]->ptr);
+            filter->capa = sdsnew(objectGetVal(c->argv[index + 1]));
             if (validateClientCapaFilter(filter->capa) == C_ERR) {
                 addReplyErrorFormat(c, "Unknown capa found in the provided filter: %s", filter->capa);
                 return C_ERR;
             }
             index += 2;
-        } else if (!strcasecmp(c->argv[index]->ptr, "not-capa") && moreargs) {
+        } else if (!strcasecmp(objectGetVal(c->argv[index]), "not-capa") && moreargs) {
             if (filter->not_capa) {
                 sdsfree(filter->not_capa);
                 filter->not_capa = NULL;
             }
-            filter->not_capa = sdsnew(c->argv[index + 1]->ptr);
+            filter->not_capa = sdsnew(objectGetVal(c->argv[index + 1]));
             if (validateClientCapaFilter(filter->not_capa) == C_ERR) {
                 addReplyErrorFormat(c, "Unknown capa found in the NOT-CAPA filter: %s", filter->not_capa);
                 return C_ERR;
             }
             index += 2;
-        } else if (!strcasecmp(c->argv[index]->ptr, "ip") && moreargs) {
+        } else if (!strcasecmp(objectGetVal(c->argv[index]), "ip") && moreargs) {
             if (filter->ip) {
                 sdsfree(filter->ip);
                 filter->ip = NULL;
             }
-            filter->ip = sdsnew(c->argv[index + 1]->ptr);
+            filter->ip = sdsnew(objectGetVal(c->argv[index + 1]));
             index += 2;
-        } else if (!strcasecmp(c->argv[index]->ptr, "not-ip") && moreargs) {
+        } else if (!strcasecmp(objectGetVal(c->argv[index]), "not-ip") && moreargs) {
             if (filter->not_ip) {
                 sdsfree(filter->not_ip);
                 filter->not_ip = NULL;
             }
-            filter->not_ip = sdsnew(c->argv[index + 1]->ptr);
+            filter->not_ip = sdsnew(objectGetVal(c->argv[index + 1]));
             index += 2;
         } else {
             addReplyErrorObject(c, shared.syntaxerr);
@@ -4766,7 +4816,7 @@ static int clientMatchesFilter(client *client, clientFilter *client_filter) {
     if (client_filter->idle != 0 && (long long)(commandTimeSnapshot() / 1000 - client->last_interaction) < client_filter->idle) return 0;
     if (client_filter->flags && clientMatchesFlagFilter(client, client_filter->flags) == 0) return 0;
     if (client_filter->name) {
-        if (!client->name || !client->name->ptr || strcmp(client->name->ptr, client_filter->name) != 0) {
+        if (!client->name || !objectGetVal(client->name) || strcmp(objectGetVal(client->name), client_filter->name) != 0) {
             return 0;
         }
     }
@@ -4784,7 +4834,7 @@ static int clientMatchesFilter(client *client, clientFilter *client_filter) {
     if (client_filter->not_user && client->user == client_filter->not_user) return 0;
     if (client_filter->not_flags && clientMatchesFlagFilter(client, client_filter->not_flags) != 0) return 0;
     if (client_filter->not_name) {
-        if (client->name && client->name->ptr && strcmp(client->name->ptr, client_filter->not_name) == 0) {
+        if (client->name && objectGetVal(client->name) && strcmp(objectGetVal(client->name), client_filter->not_name) == 0) {
             return 0;
         }
     }
@@ -5080,13 +5130,13 @@ void clientListCommand(client *c) {
 
 void clientReplyCommand(client *c) {
     /* CLIENT REPLY ON|OFF|SKIP */
-    if (!strcasecmp(c->argv[2]->ptr, "on")) {
+    if (!strcasecmp(objectGetVal(c->argv[2]), "on")) {
         c->flag.reply_skip = 0;
         c->flag.reply_off = 0;
         addReply(c, shared.ok);
-    } else if (!strcasecmp(c->argv[2]->ptr, "off")) {
+    } else if (!strcasecmp(objectGetVal(c->argv[2]), "off")) {
         c->flag.reply_off = 1;
-    } else if (!strcasecmp(c->argv[2]->ptr, "skip")) {
+    } else if (!strcasecmp(objectGetVal(c->argv[2]), "skip")) {
         if (!c->flag.reply_off) c->flag.reply_skip_next = 1;
     } else {
         addReplyErrorObject(c, shared.syntaxerr);
@@ -5096,11 +5146,11 @@ void clientReplyCommand(client *c) {
 
 void clientNoEvictCommand(client *c) {
     /* CLIENT NO-EVICT ON|OFF */
-    if (!strcasecmp(c->argv[2]->ptr, "on")) {
+    if (!strcasecmp(objectGetVal(c->argv[2]), "on")) {
         c->flag.no_evict = 1;
         removeClientFromMemUsageBucket(c, 0);
         addReply(c, shared.ok);
-    } else if (!strcasecmp(c->argv[2]->ptr, "off")) {
+    } else if (!strcasecmp(objectGetVal(c->argv[2]), "off")) {
         c->flag.no_evict = 0;
         updateClientMemUsageAndBucket(c);
         addReply(c, shared.ok);
@@ -5128,7 +5178,7 @@ void clientKillCommand(client *c) {
 
     if (c->argc == 3) {
         /* Old style syntax: CLIENT KILL <addr> */
-        client_filter.addr = c->argv[2]->ptr;
+        client_filter.addr = objectGetVal(c->argv[2]);
         client_filter.skipme = 0; /* With the old form, you can kill yourself. */
     } else if (c->argc > 3) {
         int i = 2; /* Next option index. */
@@ -5235,9 +5285,9 @@ void clientUnblockCommand(client *c) {
     int unblock_error = 0;
 
     if (c->argc == 4) {
-        if (!strcasecmp(c->argv[3]->ptr, "timeout")) {
+        if (!strcasecmp(objectGetVal(c->argv[3]), "timeout")) {
             unblock_error = 0;
-        } else if (!strcasecmp(c->argv[3]->ptr, "error")) {
+        } else if (!strcasecmp(objectGetVal(c->argv[3]), "error")) {
             unblock_error = 1;
         } else {
             addReplyError(c, "CLIENT UNBLOCK reason should be TIMEOUT or ERROR");
@@ -5288,9 +5338,9 @@ void clientPauseCommand(client *c) {
     mstime_t end;
     int isPauseClientAll = 1;
     if (c->argc == 4) {
-        if (!strcasecmp(c->argv[3]->ptr, "write")) {
+        if (!strcasecmp(objectGetVal(c->argv[3]), "write")) {
             isPauseClientAll = 0;
-        } else if (strcasecmp(c->argv[3]->ptr, "all")) {
+        } else if (strcasecmp(objectGetVal(c->argv[3]), "all")) {
             addReplyError(c, "CLIENT PAUSE mode must be WRITE or ALL");
             return;
         }
@@ -5314,7 +5364,7 @@ void clientTrackingCommand(client *c) {
     for (int j = 3; j < c->argc; j++) {
         int moreargs = (c->argc - 1) - j;
 
-        if (!strcasecmp(c->argv[j]->ptr, "redirect") && moreargs) {
+        if (!strcasecmp(objectGetVal(c->argv[j]), "redirect") && moreargs) {
             j++;
             if (redir != 0) {
                 addReplyError(c, "A client can only redirect to a single "
@@ -5336,15 +5386,15 @@ void clientTrackingCommand(client *c) {
                 zfree(prefix);
                 return;
             }
-        } else if (!strcasecmp(c->argv[j]->ptr, "bcast")) {
+        } else if (!strcasecmp(objectGetVal(c->argv[j]), "bcast")) {
             options.tracking_bcast = 1;
-        } else if (!strcasecmp(c->argv[j]->ptr, "optin")) {
+        } else if (!strcasecmp(objectGetVal(c->argv[j]), "optin")) {
             options.tracking_optin = 1;
-        } else if (!strcasecmp(c->argv[j]->ptr, "optout")) {
+        } else if (!strcasecmp(objectGetVal(c->argv[j]), "optout")) {
             options.tracking_optout = 1;
-        } else if (!strcasecmp(c->argv[j]->ptr, "noloop")) {
+        } else if (!strcasecmp(objectGetVal(c->argv[j]), "noloop")) {
             options.tracking_noloop = 1;
-        } else if (!strcasecmp(c->argv[j]->ptr, "prefix") && moreargs) {
+        } else if (!strcasecmp(objectGetVal(c->argv[j]), "prefix") && moreargs) {
             j++;
             prefix = zrealloc(prefix, sizeof(robj *) * (numprefix + 1));
             prefix[numprefix++] = c->argv[j];
@@ -5356,7 +5406,7 @@ void clientTrackingCommand(client *c) {
     }
 
     /* Options are ok: enable or disable the tracking for this client. */
-    if (!strcasecmp(c->argv[2]->ptr, "on")) {
+    if (!strcasecmp(objectGetVal(c->argv[2]), "on")) {
         /* Before enabling tracking, make sure options are compatible
          * among each other and with the current state of the client. */
         if (!(options.tracking_bcast) && numprefix) {
@@ -5406,7 +5456,7 @@ void clientTrackingCommand(client *c) {
         }
 
         enableTracking(c, redir, options, prefix, numprefix);
-    } else if (!strcasecmp(c->argv[2]->ptr, "off")) {
+    } else if (!strcasecmp(objectGetVal(c->argv[2]), "off")) {
         disableTracking(c);
     } else {
         zfree(prefix);
@@ -5425,7 +5475,7 @@ void clientCachingCommand(client *c) {
         return;
     }
 
-    char *opt = c->argv[2]->ptr;
+    char *opt = objectGetVal(c->argv[2]);
     if (!strcasecmp(opt, "yes")) {
         if (c->flag.tracking_optin) {
             c->flag.tracking_caching = 1;
@@ -5523,10 +5573,10 @@ void clientTrackingInfoCommand(client *c) {
 
 void clientNoTouchCommand(client *c) {
     /* CLIENT NO-TOUCH ON|OFF */
-    if (!strcasecmp(c->argv[2]->ptr, "on")) {
+    if (!strcasecmp(objectGetVal(c->argv[2]), "on")) {
         c->flag.no_touch = 1;
         addReply(c, shared.ok);
-    } else if (!strcasecmp(c->argv[2]->ptr, "off")) {
+    } else if (!strcasecmp(objectGetVal(c->argv[2]), "off")) {
         c->flag.no_touch = 0;
         addReply(c, shared.ok);
     } else {
@@ -5536,7 +5586,7 @@ void clientNoTouchCommand(client *c) {
 
 void clientCapaCommand(client *c) {
     for (int i = 2; i < c->argc; i++) {
-        if (!strcasecmp(c->argv[i]->ptr, "redirect")) {
+        if (!strcasecmp(objectGetVal(c->argv[i]), "redirect")) {
             c->capa |= CLIENT_CAPA_REDIRECT;
         }
     }
@@ -5545,14 +5595,14 @@ void clientCapaCommand(client *c) {
 
 void clientImportSourceCommand(client *c) {
     /* CLIENT IMPORT-SOURCE ON|OFF */
-    if (!server.import_mode && strcasecmp(c->argv[2]->ptr, "off")) {
+    if (!server.import_mode && strcasecmp(objectGetVal(c->argv[2]), "off")) {
         addReplyError(c, "Server is not in import mode");
         return;
     }
-    if (!strcasecmp(c->argv[2]->ptr, "on")) {
+    if (!strcasecmp(objectGetVal(c->argv[2]), "on")) {
         c->flag.import_source = 1;
         addReply(c, shared.ok);
-    } else if (!strcasecmp(c->argv[2]->ptr, "off")) {
+    } else if (!strcasecmp(objectGetVal(c->argv[2]), "off")) {
         c->flag.import_source = 0;
         addReply(c, shared.ok);
     } else {
@@ -5587,7 +5637,7 @@ void helloCommand(client *c) {
     robj *clientname = NULL;
     for (int j = next_arg; j < c->argc; j++) {
         int moreargs = (c->argc - 1) - j;
-        const char *opt = c->argv[j]->ptr;
+        const char *opt = objectGetVal(c->argv[j]);
         if (!strcasecmp(opt, "AUTH") && moreargs >= 2) {
             redactClientCommandArgument(c, j + 1);
             redactClientCommandArgument(c, j + 2);
@@ -5968,12 +6018,13 @@ int checkClientOutputBufferLimits(client *c) {
      * This doesn't have memory consumption implications since the replica client
      * will share the backlog buffers memory. */
     size_t hard_limit_bytes = server.client_obuf_limits[class].hard_limit_bytes;
+    size_t soft_limit_bytes = server.client_obuf_limits[class].soft_limit_bytes;
     if (class == CLIENT_TYPE_REPLICA && hard_limit_bytes && (long long)hard_limit_bytes < server.repl_backlog_size)
         hard_limit_bytes = server.repl_backlog_size;
+    if (class == CLIENT_TYPE_REPLICA && soft_limit_bytes && (long long)soft_limit_bytes < server.repl_backlog_size)
+        soft_limit_bytes = server.repl_backlog_size;
     if (server.client_obuf_limits[class].hard_limit_bytes && used_mem >= hard_limit_bytes) hard = 1;
-    if (server.client_obuf_limits[class].soft_limit_bytes &&
-        used_mem >= server.client_obuf_limits[class].soft_limit_bytes)
-        soft = 1;
+    if (server.client_obuf_limits[class].soft_limit_bytes && used_mem >= soft_limit_bytes) soft = 1;
 
     /* We need to check if the soft limit is reached continuously for the
      * specified amount of seconds. */

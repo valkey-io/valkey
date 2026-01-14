@@ -29,6 +29,7 @@
  */
 
 #include "io_threads.h"
+#include "sds.h"
 #include "server.h"
 #include "cluster.h"
 #include "connection.h"
@@ -164,7 +165,7 @@ configEnum propagation_error_behavior_enum[] = {
     {"panic-on-replicas", PROPAGATION_ERR_BEHAVIOR_PANIC_ON_REPLICAS},
     {NULL, 0}};
 
-configEnum log_format_enum[] = {{"legacy", LOG_FORMAT_LEGACY}, {"logfmt", LOG_FORMAT_LOGFMT}, {NULL, 0}};
+configEnum log_format_enum[] = {{"legacy", LOG_FORMAT_LEGACY}, {"logfmt", LOG_FORMAT_LOGFMT}, {"json", LOG_FORMAT_JSON}, {NULL, 0}};
 
 configEnum log_timestamp_format_enum[] = {{"legacy", LOG_TIMESTAMP_LEGACY},
                                           {"iso8601", LOG_TIMESTAMP_ISO8601},
@@ -817,11 +818,11 @@ void configSetCommand(client *c) {
 
     /* Find all relevant configs */
     for (i = 0; i < config_count; i++) {
-        standardConfig *config = lookupConfig(c->argv[2 + i * 2]->ptr);
+        standardConfig *config = lookupConfig(objectGetVal(c->argv[2 + i * 2]));
         /* Fail if we couldn't find this config */
         if (!config) {
             if (!invalid_args) {
-                invalid_arg_name = c->argv[2 + i * 2]->ptr;
+                invalid_arg_name = objectGetVal(c->argv[2 + i * 2]);
                 invalid_args = 1;
             }
             continue;
@@ -842,7 +843,7 @@ void configSetCommand(client *c) {
             (config->flags & PROTECTED_CONFIG && !allowProtectedAction(server.enable_protected_configs, c))) {
             /* Note: we don't abort the loop since we still want to handle redacting sensitive configs (above) */
             errstr = (config->flags & IMMUTABLE_CONFIG) ? "can't set immutable config" : "can't set protected config";
-            err_arg_name = c->argv[2 + i * 2]->ptr;
+            err_arg_name = objectGetVal(c->argv[2 + i * 2]);
             invalid_args = 1;
             continue;
         }
@@ -859,14 +860,14 @@ void configSetCommand(client *c) {
             if (set_configs[j] == config) {
                 /* Note: we don't abort the loop since we still want to handle redacting sensitive configs (above) */
                 errstr = "duplicate parameter";
-                err_arg_name = c->argv[2 + i * 2]->ptr;
+                err_arg_name = objectGetVal(c->argv[2 + i * 2]);
                 invalid_args = 1;
                 break;
             }
         }
         set_configs[i] = config;
         config_names[i] = config->name;
-        new_values[i] = c->argv[2 + i * 2 + 1]->ptr;
+        new_values[i] = objectGetVal(c->argv[2 + i * 2 + 1]);
     }
 
     if (invalid_args) goto err;
@@ -968,7 +969,7 @@ void configGetCommand(client *c) {
     dict *matches = dictCreate(&externalStringType);
     for (i = 0; i < c->argc - 2; i++) {
         robj *o = c->argv[2 + i];
-        sds name = o->ptr;
+        sds name = objectGetVal(o);
 
         /* If the string doesn't contain glob patterns, just directly
          * look up the key in the dictionary. */
@@ -1455,7 +1456,7 @@ void rewriteConfigUserOption(struct rewriteConfigState *state) {
         line = sdscatsds(line, u->name);
         line = sdscatlen(line, " ", 1);
         robj *descr = ACLDescribeUser(u);
-        line = sdscatsds(line, descr->ptr);
+        line = sdscatsds(line, objectGetVal(descr));
         decrRefCount(descr);
         rewriteConfigRewriteLine(state, "user", line, 1);
     }
@@ -3187,6 +3188,15 @@ static int applyClientMaxMemoryUsage(const char **err) {
     return 1;
 }
 
+#define HASH_SEED_MAX_LEN 256
+static int isValidDbHashSeed(sds val, const char **err) {
+    if (sdslen(val) > HASH_SEED_MAX_LEN) {
+        *err = "hash-seed must be less than or equal to " STRINGIFY(HASH_SEED_MAX_LEN) " characters";
+        return 0;
+    }
+    return 1;
+}
+
 standardConfig static_configs[] = {
     /* Bool configs */
     createBoolConfig("rdbchecksum", NULL, IMMUTABLE_CONFIG, server.rdb_checksum, 1, NULL, NULL),
@@ -3277,6 +3287,7 @@ standardConfig static_configs[] = {
     createSDSConfig("primaryauth", "masterauth", MODIFIABLE_CONFIG | SENSITIVE_CONFIG, EMPTY_STRING_IS_NULL, server.primary_auth, NULL, NULL, NULL),
     createSDSConfig("requirepass", NULL, MODIFIABLE_CONFIG | SENSITIVE_CONFIG, EMPTY_STRING_IS_NULL, server.requirepass, NULL, NULL, updateRequirePass),
     createSDSConfig("availability-zone", NULL, MODIFIABLE_CONFIG, ALLOW_EMPTY_STRING, server.availability_zone, "", NULL, NULL),
+    createSDSConfig("hash-seed", NULL, IMMUTABLE_CONFIG, EMPTY_STRING_IS_NULL, server.hash_seed, NULL, isValidDbHashSeed, NULL),
 
     /* Enum Configs */
     createEnumConfig("supervised", NULL, IMMUTABLE_CONFIG, supervised_mode_enum, server.supervised_mode, SUPERVISED_NONE, NULL, NULL),

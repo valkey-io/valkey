@@ -8,7 +8,7 @@ tags {tls:skip external:skip cluster singledb} {
 set base_conf [list cluster-enabled yes cluster-node-timeout 1000]
 start_multiple_servers 3 [list overrides $base_conf] {
     test {Create 1 node cluster} {
-        exec src/valkey-cli --cluster-yes --cluster create \
+        exec $::VALKEY_CLI_BIN --cluster-yes --cluster create \
                             127.0.0.1:[srv 0 port]
 
         wait_for_condition 1000 50 {
@@ -19,7 +19,7 @@ start_multiple_servers 3 [list overrides $base_conf] {
     }
 
     test {Create 2 node cluster} {
-        exec src/valkey-cli --cluster-yes --cluster create \
+        exec $::VALKEY_CLI_BIN --cluster-yes --cluster create \
                             127.0.0.1:[srv -1 port] \
                             127.0.0.1:[srv -2 port]
 
@@ -32,6 +32,8 @@ start_multiple_servers 3 [list overrides $base_conf] {
     }
 }
 
+foreach use_atomic_slot_migration {0 1} {
+
 # start three servers
 set base_conf [list cluster-enabled yes cluster-node-timeout 1000 cluster-databases 16]
 start_multiple_servers 3 [list overrides $base_conf] {
@@ -42,11 +44,11 @@ start_multiple_servers 3 [list overrides $base_conf] {
     set node3_pid [srv -2 pid]
     set node3_rd [valkey_deferring_client -2]
 
-    test {Create 3 node cluster} {
-        exec src/valkey-cli --cluster-yes --cluster create \
-                           127.0.0.1:[srv 0 port] \
-                           127.0.0.1:[srv -1 port] \
-                           127.0.0.1:[srv -2 port]
+    test "Create 3 node cluster (with ASM $use_atomic_slot_migration)" {
+        exec $::VALKEY_CLI_BIN --cluster-yes --cluster create \
+                        127.0.0.1:[srv 0 port] \
+                        127.0.0.1:[srv -1 port] \
+                        127.0.0.1:[srv -2 port]
 
         wait_for_condition 1000 50 {
             [CI 0 cluster_state] eq {ok} &&
@@ -57,7 +59,7 @@ start_multiple_servers 3 [list overrides $base_conf] {
         }
     }
 
-    test "Run blocking command on cluster node3" {
+    test "Run blocking command on cluster node3 (with ASM $use_atomic_slot_migration)" {
         # key9184688 is mapped to slot 10923 (first slot of node 3)
         $node3_rd brpop key9184688 0
         $node3_rd flush
@@ -69,14 +71,21 @@ start_multiple_servers 3 [list overrides $base_conf] {
         }
     }
 
-    test "Perform a Resharding" {
-        exec src/valkey-cli --cluster-yes --cluster reshard 127.0.0.1:[srv -2 port] \
-                           --cluster-to [$node1 cluster myid] \
-                           --cluster-from [$node3 cluster myid] \
-                           --cluster-slots 1
+    test "Perform a Resharding (with ASM $use_atomic_slot_migration)" {
+        if {$use_atomic_slot_migration} {
+            exec $::VALKEY_CLI_BIN --cluster-yes --cluster reshard 127.0.0.1:[srv -2 port] \
+                            --cluster-to [$node1 cluster myid] \
+                            --cluster-from [$node3 cluster myid] \
+                            --cluster-slots 1 --cluster-use-atomic-slot-migration
+        } else {
+            exec $::VALKEY_CLI_BIN --cluster-yes --cluster reshard 127.0.0.1:[srv -2 port] \
+                            --cluster-to [$node1 cluster myid] \
+                            --cluster-from [$node3 cluster myid] \
+                            --cluster-slots 1
+        }
     }
 
-    test "Verify command got unblocked after resharding" {
+    test "Verify command got unblocked after resharding (with ASM $use_atomic_slot_migration)" {
         # this (read) will wait for the node3 to realize the new topology
         assert_error {*MOVED*} {$node3_rd read}
 
@@ -86,14 +95,14 @@ start_multiple_servers 3 [list overrides $base_conf] {
         assert_equal [s -2 blocked_clients]  {0}
     }
 
-    test "Wait for cluster to be stable" {
+    test "Wait for cluster to be stable (with ASM $use_atomic_slot_migration)" {
         # Cluster check just verifies the config state is self-consistent,
         # waiting for cluster_state to be okay is an independent check that all the
         # nodes actually believe each other are healthy, prevent cluster down error.
         wait_for_condition 1000 50 {
-            [catch {exec src/valkey-cli --cluster check 127.0.0.1:[srv 0 port]}] == 0 &&
-            [catch {exec src/valkey-cli --cluster check 127.0.0.1:[srv -1 port]}] == 0 &&
-            [catch {exec src/valkey-cli --cluster check 127.0.0.1:[srv -2 port]}] == 0 &&
+            [catch {exec $::VALKEY_CLI_BIN --cluster check 127.0.0.1:[srv 0 port]}] == 0 &&
+            [catch {exec $::VALKEY_CLI_BIN --cluster check 127.0.0.1:[srv -1 port]}] == 0 &&
+            [catch {exec $::VALKEY_CLI_BIN --cluster check 127.0.0.1:[srv -2 port]}] == 0 &&
             [CI 0 cluster_state] eq {ok} &&
             [CI 1 cluster_state] eq {ok} &&
             [CI 2 cluster_state] eq {ok}
@@ -104,7 +113,7 @@ start_multiple_servers 3 [list overrides $base_conf] {
 
     set node1_rd [valkey_deferring_client 0]
 
-    test "use previous hostip in \"cluster-preferred-endpoint-type unknown-endpoint\" mode" {
+    test "use previous hostip in \"cluster-preferred-endpoint-type unknown-endpoint\" mode (with ASM $use_atomic_slot_migration)" {
         
         # backup and set cluster-preferred-endpoint-type unknown-endpoint
         set endpoint_type_before_set [lindex [split [$node1 CONFIG GET cluster-preferred-endpoint-type] " "] 1]
@@ -115,13 +124,13 @@ start_multiple_servers 3 [list overrides $base_conf] {
         assert_error "*MOVED $slot_for_foo :*" {$node1 set foo bar}
 
         # when in cluster mode, redirect using previous hostip
-        assert_equal "[exec src/valkey-cli -h 127.0.0.1 -p [srv 0 port] -c set foo bar]" {OK}
-        assert_match "[exec src/valkey-cli -h 127.0.0.1 -p [srv 0 port] -c get foo]" {bar}
+        assert_equal "[exec $::VALKEY_CLI_BIN -h 127.0.0.1 -p [srv 0 port] -c set foo bar]" {OK}
+        assert_match "[exec $::VALKEY_CLI_BIN -h 127.0.0.1 -p [srv 0 port] -c get foo]" {bar}
 
         assert_equal [$node1 CONFIG SET cluster-preferred-endpoint-type "$endpoint_type_before_set"]  {OK}
     }
 
-    test "Sanity test push cmd after resharding" {
+    test "Sanity test push cmd after resharding (with ASM $use_atomic_slot_migration)" {
         assert_error {*MOVED*} {$node3 lpush key9184688 v1}
 
         $node1_rd brpop key9184688 0
@@ -141,7 +150,7 @@ start_multiple_servers 3 [list overrides $base_conf] {
 
     $node3_rd close
 
-    test "Run blocking command again on cluster node1" {
+    test "Run blocking command again on cluster node1 (with ASM $use_atomic_slot_migration)" {
         $node1 del key9184688
         # key9184688 is mapped to slot 10923 which has been moved to node1
         $node1_rd brpop key9184688 0
@@ -154,7 +163,7 @@ start_multiple_servers 3 [list overrides $base_conf] {
         }
     }
 
-     test "Kill a cluster node and wait for fail state" {
+    test "Kill a cluster node and wait for fail state (with ASM $use_atomic_slot_migration)" {
         # kill node3 in cluster
         pause_process $node3_pid
 
@@ -166,7 +175,7 @@ start_multiple_servers 3 [list overrides $base_conf] {
         }
     }
 
-     test "Verify command got unblocked after cluster failure" {
+    test "Verify command got unblocked after cluster failure (with ASM $use_atomic_slot_migration)" {
         assert_error {*CLUSTERDOWN*} {$node1_rd read}
 
         # verify there are no blocked clients
@@ -179,6 +188,8 @@ start_multiple_servers 3 [list overrides $base_conf] {
 
 } ;# stop servers
 
+} ;# foreach use_atomic_slot_migration
+
 # Test valkey-cli -- cluster create, add-node, call.
 # Test that functions are propagated on add-node
 start_multiple_servers 5 [list overrides $base_conf] {
@@ -187,7 +198,7 @@ start_multiple_servers 5 [list overrides $base_conf] {
     set node5_rd [valkey_client -4]
 
     test {Functions are added to new node on valkey-cli cluster add-node} {
-        exec src/valkey-cli --cluster-yes --cluster create \
+        exec $::VALKEY_CLI_BIN --cluster-yes --cluster create \
                            127.0.0.1:[srv 0 port] \
                            127.0.0.1:[srv -1 port] \
                            127.0.0.1:[srv -2 port]
@@ -202,13 +213,13 @@ start_multiple_servers 5 [list overrides $base_conf] {
         }
 
         # upload a function to all the cluster
-        exec src/valkey-cli --cluster-yes --cluster call 127.0.0.1:[srv 0 port] \
+        exec $::VALKEY_CLI_BIN --cluster-yes --cluster call 127.0.0.1:[srv 0 port] \
                            FUNCTION LOAD {#!lua name=TEST
                                server.register_function('test', function() return 'hello' end)
                            }
 
         # adding node to the cluster
-        exec src/valkey-cli --cluster-yes --cluster add-node \
+        exec $::VALKEY_CLI_BIN --cluster-yes --cluster add-node \
                        127.0.0.1:[srv -3 port] \
                        127.0.0.1:[srv 0 port]
 
@@ -236,7 +247,7 @@ start_multiple_servers 5 [list overrides $base_conf] {
 
         # adding node 5 to the cluster should failed because it already contains the 'test' function
         catch {
-            exec src/valkey-cli --cluster-yes --cluster add-node \
+            exec $::VALKEY_CLI_BIN --cluster-yes --cluster add-node \
                         127.0.0.1:[srv -4 port] \
                         127.0.0.1:[srv 0 port]
         } e
@@ -250,7 +261,7 @@ test {Migrate the last slot away from a node using valkey-cli} {
     start_multiple_servers 4 [list overrides $base_conf] {
 
         # Create a cluster of 3 nodes
-        exec src/valkey-cli --cluster-yes --cluster create \
+        exec $::VALKEY_CLI_BIN --cluster-yes --cluster create \
                            127.0.0.1:[srv 0 port] \
                            127.0.0.1:[srv -1 port] \
                            127.0.0.1:[srv -2 port]
@@ -264,18 +275,25 @@ test {Migrate the last slot away from a node using valkey-cli} {
         }
 
         # Insert some data
-        assert_equal OK [exec src/valkey-cli -c -p [srv 0 port] SET foo bar]
-        set slot [exec src/valkey-cli -c -p [srv 0 port] CLUSTER KEYSLOT foo]
+        assert_equal OK [exec $::VALKEY_CLI_BIN -c -p [srv 0 port] SET foo bar]
+        set slot [exec $::VALKEY_CLI_BIN -c -p [srv 0 port] CLUSTER KEYSLOT foo]
 
         # Add new node to the cluster
-        exec src/valkey-cli --cluster-yes --cluster add-node \
+        exec $::VALKEY_CLI_BIN --cluster-yes --cluster add-node \
                      127.0.0.1:[srv -3 port] \
                      127.0.0.1:[srv 0 port]
         
         # First we wait for new node to be recognized by entire cluster
         wait_for_cluster_size 4
         
+        # Cluster check just verifies the config state is self-consistent,
+        # waiting for cluster_state to be okay is an independent check that all the
+        # nodes actually believe each other are healthy, prevent cluster down error.
         wait_for_condition 1000 50 {
+            [catch {exec src/valkey-cli --cluster check 127.0.0.1:[srv 0 port]}] == 0 &&
+            [catch {exec src/valkey-cli --cluster check 127.0.0.1:[srv -1 port]}] == 0 &&
+            [catch {exec src/valkey-cli --cluster check 127.0.0.1:[srv -2 port]}] == 0 &&
+            [catch {exec src/valkey-cli --cluster check 127.0.0.1:[srv -3 port]}] == 0 &&
             [CI 0 cluster_state] eq {ok} &&
             [CI 1 cluster_state] eq {ok} &&
             [CI 2 cluster_state] eq {ok} &&
@@ -306,10 +324,10 @@ test {Migrate the last slot away from a node using valkey-cli} {
         # Using --cluster check make sure we won't get `Not all slots are covered by nodes`.
         # Wait for the cluster to become stable make sure the cluster is up during MIGRATE.
         wait_for_condition 1000 50 {
-            [catch {exec src/valkey-cli --cluster check 127.0.0.1:[srv 0 port]}] == 0 &&
-            [catch {exec src/valkey-cli --cluster check 127.0.0.1:[srv -1 port]}] == 0 &&
-            [catch {exec src/valkey-cli --cluster check 127.0.0.1:[srv -2 port]}] == 0 &&
-            [catch {exec src/valkey-cli --cluster check 127.0.0.1:[srv -3 port]}] == 0 &&
+            [catch {exec $::VALKEY_CLI_BIN --cluster check 127.0.0.1:[srv 0 port]}] == 0 &&
+            [catch {exec $::VALKEY_CLI_BIN --cluster check 127.0.0.1:[srv -1 port]}] == 0 &&
+            [catch {exec $::VALKEY_CLI_BIN --cluster check 127.0.0.1:[srv -2 port]}] == 0 &&
+            [catch {exec $::VALKEY_CLI_BIN --cluster check 127.0.0.1:[srv -3 port]}] == 0 &&
             [CI 0 cluster_state] eq {ok} &&
             [CI 1 cluster_state] eq {ok} &&
             [CI 2 cluster_state] eq {ok} &&
@@ -319,7 +337,7 @@ test {Migrate the last slot away from a node using valkey-cli} {
         }
 
         # Move the only slot back to original node using valkey-cli
-        exec src/valkey-cli --cluster reshard 127.0.0.1:[srv -3 port] \
+        exec $::VALKEY_CLI_BIN --cluster reshard 127.0.0.1:[srv -3 port] \
             --cluster-from $newnode_id \
             --cluster-to $owner_id \
             --cluster-slots 1 \
@@ -361,7 +379,7 @@ start_server [list overrides [list cluster-enabled yes cluster-node-timeout 1 cl
     # The last two are used to test --cluster add-node
 
     test "valkey-cli -4 --cluster create using $ip_or_localhost with cluster-port" {
-        exec src/valkey-cli -4 --cluster-yes --cluster create \
+        exec $::VALKEY_CLI_BIN -4 --cluster-yes --cluster create \
                            $ip_or_localhost:[srv 0 port] \
                            $ip_or_localhost:[srv -1 port] \
                            $ip_or_localhost:[srv -2 port]
@@ -382,7 +400,7 @@ start_server [list overrides [list cluster-enabled yes cluster-node-timeout 1 cl
 
     test "valkey-cli -4 --cluster add-node using $ip_or_localhost with cluster-port" {
         # Adding node to the cluster (without cluster-port)
-        exec src/valkey-cli -4 --cluster-yes --cluster add-node \
+        exec $::VALKEY_CLI_BIN -4 --cluster-yes --cluster add-node \
                            $ip_or_localhost:[srv -3 port] \
                            $ip_or_localhost:[srv 0 port]
 
@@ -398,7 +416,7 @@ start_server [list overrides [list cluster-enabled yes cluster-node-timeout 1 cl
         }
 
         # Adding node to the cluster (with cluster-port)
-        exec src/valkey-cli -4 --cluster-yes --cluster add-node \
+        exec $::VALKEY_CLI_BIN -4 --cluster-yes --cluster add-node \
                            $ip_or_localhost:[srv -4 port] \
                            $ip_or_localhost:[srv 0 port]
 
@@ -430,6 +448,8 @@ start_server [list overrides [list cluster-enabled yes cluster-node-timeout 1 cl
 
 } ;# foreach ip_or_localhost
 
+foreach use_atomic_slot_migration {0 1} {
+
 set base_conf [list cluster-enabled yes cluster-node-timeout 1000 cluster-databases 16]
 start_multiple_servers 3 [list overrides $base_conf] {
 
@@ -439,11 +459,11 @@ start_multiple_servers 3 [list overrides $base_conf] {
     set node3_pid [srv -2 pid]
     set node3_rd [valkey_deferring_client -2]
 
-    test {Create 3 node cluster} {
-        exec src/valkey-cli --cluster-yes --cluster create \
-                           127.0.0.1:[srv 0 port] \
-                           127.0.0.1:[srv -1 port] \
-                           127.0.0.1:[srv -2 port]
+    test "Create 3 node cluster (with ASM $use_atomic_slot_migration)" {
+        exec $::VALKEY_CLI_BIN --cluster-yes --cluster create \
+                        127.0.0.1:[srv 0 port] \
+                        127.0.0.1:[srv -1 port] \
+                        127.0.0.1:[srv -2 port]
 
         wait_for_condition 1000 50 {
             [CI 0 cluster_state] eq {ok} &&
@@ -455,7 +475,7 @@ start_multiple_servers 3 [list overrides $base_conf] {
     }
 
     
-    test "Multi-database fill slot 0" {
+    test "Multi-database fill slot 0  (with ASM $use_atomic_slot_migration)" {
         # keys {3560}* mapped to slot 0
         # Iterate over databases 0, 1, 2, and 3.
         for {set db 0} {$db < 4} {incr db} {
@@ -478,19 +498,28 @@ start_multiple_servers 3 [list overrides $base_conf] {
         }
     }
 
-    test "Perform a Multi-database Resharding" {
+    test "Perform a Multi-database Resharding (with ASM $use_atomic_slot_migration)" {
         # 4 batches to migrate 100 keys
         for {set i 0} {$i < 4} {incr i} {
-            exec src/valkey-cli --cluster-yes --cluster reshard 127.0.0.1:[srv 0 port] \
-                                --cluster-to [$node3 cluster myid] \
-                                --cluster-from [$node1 cluster myid] \
-                                --cluster-pipeline 25 \
-                                --cluster-slots 1
+            if {$use_atomic_slot_migration} {
+                exec src/valkey-cli --cluster-yes --cluster reshard 127.0.0.1:[srv 0 port] \
+                                    --cluster-to [$node3 cluster myid] \
+                                    --cluster-from [$node1 cluster myid] \
+                                    --cluster-pipeline 25 \
+                                    --cluster-slots 1 \
+                                    --cluster-use-atomic-slot-migration
+            } else {
+                exec $::VALKEY_CLI_BIN --cluster-yes --cluster reshard 127.0.0.1:[srv 0 port] \
+                                    --cluster-to [$node3 cluster myid] \
+                                    --cluster-from [$node1 cluster myid] \
+                                    --cluster-pipeline 25 \
+                                    --cluster-slots 1
+            }
         }
     }
 
 
-    test "Verify multi-database slot migrate" {
+    test "Verify multi-database slot migrate (with ASM $use_atomic_slot_migration)" {
 
         # For each database, verify that node3 now holds all 100 keys in slot 0 with correct contents.
         for {set db 0} {$db < 4} {incr db} {
@@ -529,5 +558,7 @@ start_multiple_servers 3 [list overrides $base_conf] {
         }
     }
 }
+
+} ;# foreach use_atomic_slot_migration
 
 }

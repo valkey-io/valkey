@@ -52,6 +52,17 @@ as libsystemd-dev on Debian/Ubuntu or systemd-devel on CentOS) and run:
 
     % make USE_SYSTEMD=yes
 
+Since Valkey version 8.1, `fast_float` has been introduced as an optional
+dependency, which can speed up sorted sets and other commands that use
+the double datatype. To build with `fast_float` support, you'll need a
+C++ compiler and run:
+
+    % make USE_FAST_FLOAT=yes
+
+To build Valkey without the Lua engine:
+
+    % make BUILD_LUA=no
+
 To append a suffix to Valkey program names, use:
 
     % make PROG_SUFFIX="-alt"
@@ -74,6 +85,13 @@ The above runs the main integration tests. Additional tests are started using:
 More about running the integration tests can be found in
 [tests/README.md](tests/README.md) and for unit tests, see
 [src/unit/README.md](src/unit/README.md).
+
+## Performance monitoring
+
+Valkey Performance Dashboards provide a consolidated view of throughput trends across versions, helping contributors validate improvements and identify regressions quickly.
+
+- [Performance Overview](https://valkey.io/performance/) - Compare throughput across Valkey versions
+- [Unstable Branch Dashboard](https://perf-dashboard.valkey.io/public-dashboards/3e45bf8ded3043edaa941331cd1a94e2) - Track performance of all commits in the unstable branch
 
 ## Fixing build problems with dependencies or cached build options
 

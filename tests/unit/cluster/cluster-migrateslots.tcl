@@ -512,6 +512,54 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster} overrides {cluste
         }
     }
 
+    test "Slot migration DBSIZE after migration" {
+        assert_does_not_resync {
+            # Populate data before migration
+            populate 1000 "$16381_slot_tag:" 1000 -2
+            populate 1000 "$16382_slot_tag:" 1000 -2
+            populate 1000 "$16383_slot_tag:" 1000 -2
+            wait_for_countkeysinslot 5 16381 1000
+            wait_for_countkeysinslot 5 16382 1000
+            wait_for_countkeysinslot 5 16383 1000
+            assert_equal "3000" [R 2 DBSIZE]
+            assert_equal "0" [R 0 DBSIZE]
+            assert_equal "3000" [R 5 DBSIZE]
+            assert_equal "0" [R 3 DBSIZE]
+
+            foreach slot_to_migrate {16381 16382 16383} {
+                # Perform one-shot migration
+                assert_match "OK" [R 2 CLUSTER MIGRATESLOTS SLOTSRANGE $slot_to_migrate $slot_to_migrate NODE $node0_id]
+                wait_for_migration 0 $slot_to_migrate
+            
+                # Reflected in DBSIZE
+                assert_match "1000" [R 0 CLUSTER COUNTKEYSINSLOT $slot_to_migrate]
+                assert_match "0" [R 2 CLUSTER COUNTKEYSINSLOT $slot_to_migrate]
+                assert_equal "2000" [R 2 DBSIZE]
+                assert_equal "1000" [R 0 DBSIZE]
+                wait_for_countkeysinslot 3 $slot_to_migrate 1000
+                wait_for_countkeysinslot 5 $slot_to_migrate 0
+                assert_equal "2000" [R 5 DBSIZE]
+                assert_equal "1000" [R 3 DBSIZE]
+
+                # Perform migration back
+                assert_match "OK" [R 0 CLUSTER MIGRATESLOTS SLOTSRANGE $slot_to_migrate $slot_to_migrate NODE $node2_id]
+                set jobname [get_job_name 0 $slot_to_migrate]
+                wait_for_migration 2 $slot_to_migrate
+
+                # Reflected in DBSIZE
+                assert_equal "3000" [R 2 DBSIZE]
+                assert_equal "0" [R 0 DBSIZE]
+                wait_for_countkeysinslot 5 $slot_to_migrate 1000
+                wait_for_countkeysinslot 3 $slot_to_migrate 0
+                assert_equal "3000" [R 5 DBSIZE]
+                assert_equal "0" [R 3 DBSIZE]
+            }
+
+            # Cleanup for next test
+            assert_match "OK" [R 2 FLUSHDB SYNC]
+        }
+    }
+
     test "Single source import - two phase" {
         assert_does_not_resync {
             set_debug_prevent_pause 1
@@ -754,6 +802,13 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster} overrides {cluste
                 assert_match "$slot_to_test_tag:my_key" [R $node_idx RANDOMKEY]
                 assert_match "1" [R $target_idx DEL $slot_to_test_tag:my_key]
                 wait_for_countkeysinslot $node_idx $slot_to_test 0
+            }
+            test "Let nodes converge after importing key containment tests" {
+                wait_for_condition 50 100 {
+                    [R $target_idx debug digest] eq [R $target_repl_idx debug digest]
+                } else {
+                    fail "Target and its replica have different digests: [R $target_idx debug digest] VS [R $target_repl_idx debug digest]"
+                }
             }
         }
 
@@ -2006,6 +2061,26 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster} overrides {cluste
                 set owning_repl 3
             }
 
+            # Restart the node again to verify resync is capable. This would
+            # catch if the result of the above operation caused some kind of
+            # kvstore/RDB corruption.
+            if {$do_save} {
+                assert_match "OK" [R $idx_to_restart SAVE]
+            }
+            do_node_restart $idx_to_restart
+
+            # Wait for resync
+            wait_for_condition 50 1000 {
+                [status [srv -3 client] master_link_status] == "up"
+            } else {
+                fail "Node 3 is not synced"
+            }
+            wait_for_condition 50 1000 {
+                [status [srv -5 client] master_link_status] == "up"
+            } else {
+                fail "Node 5 is not synced"
+            }
+
             if {$owning_prim == $idx_to_restart && ! $do_save} {
                 assert_match "0" [R $owning_prim CLUSTER COUNTKEYSINSLOT 16379]
                 assert_match "0" [R $owning_prim CLUSTER COUNTKEYSINSLOT 16381]
@@ -2013,6 +2088,8 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster} overrides {cluste
                 wait_for_countkeysinslot $owning_repl 16379 0
                 wait_for_countkeysinslot $owning_repl 16381 0
                 wait_for_countkeysinslot $owning_repl 16383 0
+                assert_equal "0" [R $owning_prim DBSIZE]
+                assert_equal "0" [R $owning_repl DBSIZE]
             } else {
                 assert_match "333" [R $owning_prim CLUSTER COUNTKEYSINSLOT 16379]
                 assert_match "333" [R $owning_prim CLUSTER COUNTKEYSINSLOT 16381]
@@ -2020,6 +2097,8 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster} overrides {cluste
                 wait_for_countkeysinslot $owning_repl 16379 333
                 wait_for_countkeysinslot $owning_repl 16381 333
                 wait_for_countkeysinslot $owning_repl 16383 334
+                assert_equal "1000" [R $owning_prim DBSIZE]
+                assert_equal "1000" [R $owning_repl DBSIZE]
             }
             assert_match "0" [R $not_owning_prim CLUSTER COUNTKEYSINSLOT 16379]
             assert_match "0" [R $not_owning_prim CLUSTER COUNTKEYSINSLOT 16381]
@@ -2027,6 +2106,8 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster} overrides {cluste
             wait_for_countkeysinslot $not_owning_repl 16379 0
             wait_for_countkeysinslot $not_owning_repl 16381 0
             wait_for_countkeysinslot $not_owning_repl 16383 0
+            assert_equal "0" [R $not_owning_repl DBSIZE]
+            assert_equal "0" [R $not_owning_repl DBSIZE]
 
             # Cleanup for the next test
             assert_match "OK" [R $owning_prim FLUSHDB SYNC]
@@ -2039,6 +2120,42 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster} overrides {cluste
             # Since we are restarting primaries, we need to ensure the cluster becomes stable
             wait_for_cluster_state ok
         }
+    }
+}
+
+start_cluster 3 0 {tags {logreqres:skip external:skip cluster}} {
+    set 16383_slot_tag "{6ZJ}"
+    set node0_id [R 0 CLUSTER MYID]
+
+    test "Import with default user having no permission" {
+        # Configure ACLs on both source and target nodes
+        R 2 ACL SETUSER admin on >S3cureAdmin! ~* &* +@all
+        R 2 ACL SETUSER default off -@all
+        R 2 AUTH admin S3cureAdmin!
+
+        R 0 ACL SETUSER admin on >S3cureAdmin! ~* &* +@all
+        R 0 ACL SETUSER default off -@all
+        R 0 AUTH admin S3cureAdmin!
+
+        # Set primaryuser and primaryauth on the source node
+        R 2 CONFIG SET primaryuser admin
+        R 2 CONFIG SET primaryauth S3cureAdmin!
+
+        # Populate data before migration
+        populate 1000 "$16383_slot_tag:" 1000 -2
+
+        # Perform one-shot import
+        assert_match "OK" [R 2 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node0_id]
+        set jobname [get_job_name 2 16383]
+        wait_for_migration 0 16383
+
+        # Keys successfully migrated
+        assert_match "1000" [R 0 CLUSTER COUNTKEYSINSLOT 16383]
+        assert_match "0" [R 2 CLUSTER COUNTKEYSINSLOT 16383]
+
+        # Migration log shows success on both ends
+        assert {[dict get [get_migration_by_name 0 $jobname] state] eq "success"}
+        assert {[dict get [get_migration_by_name 2 $jobname] state] eq "success"}
     }
 }
 

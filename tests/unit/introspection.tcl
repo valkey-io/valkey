@@ -265,7 +265,7 @@ start_server {tags {"introspection"}} {
     } {}
 
     start_server {tags {"ipv6"} overrides {bind {127.0.0.1 ::1}}} {
-        test {CLIENT LIST with IPv6 filter} {
+        test {CLIENT KILL with IPv6 filter} {
             set c [valkey ::1 [srv 0 port] 0 $::tls]
             $c client setname "client-ipv6"
 
@@ -1225,6 +1225,7 @@ start_server {tags {"introspection"}} {
             disable-thp
             aclfile
             unixsocket
+            hash-seed
             pidfile
             syslog-ident
             appendfilename
@@ -1502,44 +1503,44 @@ start_server {tags {"introspection"}} {
 
     test {valkey-server command line arguments - error cases} {
         # Take '--invalid' as the option.
-        catch {exec src/valkey-server --invalid} err
+        catch {exec $::VALKEY_SERVER_BIN --invalid} err
         assert_match {*Bad directive or wrong number of arguments*} $err
 
-        catch {exec src/valkey-server --port} err
+        catch {exec $::VALKEY_SERVER_BIN --port} err
         assert_match {*'port'*wrong number of arguments*} $err
 
-        catch {exec src/valkey-server --port 6380 --loglevel} err
+        catch {exec $::VALKEY_SERVER_BIN --port 6380 --loglevel} err
         assert_match {*'loglevel'*wrong number of arguments*} $err
 
         # Take `6379` and `6380` as the port option value.
-        catch {exec src/valkey-server --port 6379 6380} err
+        catch {exec $::VALKEY_SERVER_BIN --port 6379 6380} err
         assert_match {*'port "6379" "6380"'*wrong number of arguments*} $err
 
         # Take `--loglevel` and `verbose` as the port option value.
-        catch {exec src/valkey-server --port --loglevel verbose} err
+        catch {exec $::VALKEY_SERVER_BIN --port --loglevel verbose} err
         assert_match {*'port "--loglevel" "verbose"'*wrong number of arguments*} $err
 
         # Take `--bla` as the port option value.
-        catch {exec src/valkey-server --port --bla --loglevel verbose} err
+        catch {exec $::VALKEY_SERVER_BIN --port --bla --loglevel verbose} err
         assert_match {*'port "--bla"'*argument couldn't be parsed into an integer*} $err
 
         # Take `--bla` as the loglevel option value.
-        catch {exec src/valkey-server --logfile --my--log--file --loglevel --bla} err
+        catch {exec $::VALKEY_SERVER_BIN --logfile --my--log--file --loglevel --bla} err
         assert_match {*'loglevel "--bla"'*argument(s) must be one of the following*} $err
 
         # Using MULTI_ARG's own check, empty option value
-        catch {exec src/valkey-server --shutdown-on-sigint} err
+        catch {exec $::VALKEY_SERVER_BIN --shutdown-on-sigint} err
         assert_match {*'shutdown-on-sigint'*argument(s) must be one of the following*} $err
-        catch {exec src/valkey-server --shutdown-on-sigint "now force" --shutdown-on-sigterm} err
+        catch {exec $::VALKEY_SERVER_BIN --shutdown-on-sigint "now force" --shutdown-on-sigterm} err
         assert_match {*'shutdown-on-sigterm'*argument(s) must be one of the following*} $err
 
         # Something like `valkey-server --some-config --config-value1 --config-value2 --loglevel debug` would break,
         # because if you want to pass a value to a config starting with `--`, it can only be a single value.
-        catch {exec src/valkey-server --replicaof 127.0.0.1 abc} err
+        catch {exec $::VALKEY_SERVER_BIN --replicaof 127.0.0.1 abc} err
         assert_match {*'replicaof "127.0.0.1" "abc"'*Invalid primary port*} $err
-        catch {exec src/valkey-server --replicaof --127.0.0.1 abc} err
+        catch {exec $::VALKEY_SERVER_BIN --replicaof --127.0.0.1 abc} err
         assert_match {*'replicaof "--127.0.0.1" "abc"'*Invalid primary port*} $err
-        catch {exec src/valkey-server --replicaof --127.0.0.1 --abc} err
+        catch {exec $::VALKEY_SERVER_BIN --replicaof --127.0.0.1 --abc} err
         assert_match {*'replicaof "--127.0.0.1"'*wrong number of arguments*} $err
     } {} {external:skip}
 
@@ -1954,5 +1955,13 @@ test {CONFIG REWRITE handles alias config properly} {
         restart_server 0 true false
 
         assert_equal [r config get hash-max-listpack-entries] {hash-max-listpack-entries 100}
+    }
+} {} {external:skip}
+
+test {CONFIG hash-seed is immutable and settable at startup} {
+    start_server {tags {"introspection"} overrides {hash-seed aabbccddeeffgghh}} {
+        assert_error "ERR CONFIG SET failed (possibly related to argument 'hash-seed') - can't set immutable config*" {
+            r config set hash-seed newseed
+        }
     }
 } {} {external:skip}

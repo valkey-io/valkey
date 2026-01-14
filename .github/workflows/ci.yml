@@ -50,9 +50,9 @@ jobs:
       fail-fast: false
       matrix:
         server:
-          - {version: "7.2.10", file: "valkey-7.2.10-noble-x86_64.tar.gz"}
-          - {version: "8.0.4", file: "valkey-8.0.4-noble-x86_64.tar.gz"}
-          - {version: "8.1.3", file: "valkey-8.1.3-noble-x86_64.tar.gz"}
+          - {version: "7.2.11", file: "valkey-7.2.11-noble-x86_64.tar.gz"}
+          - {version: "8.0.6", file: "valkey-8.0.6-noble-x86_64.tar.gz"}
+          - {version: "8.1.4", file: "valkey-8.1.4-noble-x86_64.tar.gz"}
     steps:
       - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
       - name: make

@@ -550,9 +550,10 @@ typedef enum {
 #define TLS_CLIENT_AUTH_YES 1
 #define TLS_CLIENT_AUTH_OPTIONAL 2
 
-/* TLS Client Certfiicate Authentication */
+/* TLS Client Certificate Authentication */
 #define TLS_CLIENT_FIELD_OFF 0
 #define TLS_CLIENT_FIELD_CN 1
+#define TLS_CLIENT_FIELD_URI 2
 
 /* Sanitize dump payload */
 #define SANITIZE_DUMP_NO 0

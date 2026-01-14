@@ -43,6 +43,7 @@
 #include <openssl/conf.h>
 #include <openssl/ssl.h>
 #include <openssl/x509.h>
+#include <openssl/x509v3.h>
 #include <openssl/err.h>
 #include <openssl/rand.h>
 #include <openssl/pem.h>
@@ -924,7 +925,7 @@ static void updateSSLState(connection *conn_) {
     updatePendingData(conn);
 }
 
-static int getCertFieldByName(X509 *cert, const char *field, char *out, size_t outlen) {
+static int getCertSubjectFieldByName(X509 *cert, const char *field, char *out, size_t outlen) {
     if (!cert || !field || !out) return 0;
 
     int nid = -1;
@@ -943,32 +944,68 @@ static int getCertFieldByName(X509 *cert, const char *field, char *out, size_t o
     return X509_NAME_get_text_by_NID(subject, nid, out, outlen) > 0;
 }
 
+/* Extract URI from Subject Alternative Name extension and return the first URI
+ * that matches an existing Valkey user. Returns NULL if no matching user found. */
+static sds getCertSANUri(X509 *cert) {
+    if (!cert) return NULL;
+
+    GENERAL_NAMES *san_names = X509_get_ext_d2i(cert, NID_subject_alt_name, NULL, NULL);
+    if (!san_names) return NULL;
+
+    sds result = NULL;
+    int num_names = sk_GENERAL_NAME_num(san_names);
+
+    for (int i = 0; i < num_names; i++) {
+        GENERAL_NAME *name = sk_GENERAL_NAME_value(san_names, i);
+
+        if (name->type == GEN_URI) {
+            ASN1_STRING *uri_asn1 = name->d.uniformResourceIdentifier;
+            const unsigned char *uri_data = ASN1_STRING_get0_data(uri_asn1);
+            int uri_len = ASN1_STRING_length(uri_asn1);
+
+            if (uri_data && uri_len > 0) {
+                user *u = ACLGetUserByName((const char *)uri_data, uri_len);
+                if (u && (u->flags & USER_FLAG_ENABLED)) {
+                    result = sdsnewlen(uri_data, uri_len);
+                    break;
+                }
+            }
+        }
+    }
+
+    GENERAL_NAMES_free(san_names);
+    return result;
+}
+
 sds tlsGetPeerUsername(connection *conn_) {
     tls_connection *conn = (tls_connection *)conn_;
     if (!conn || !SSL_is_init_finished(conn->ssl)) return NULL;
 
-    /* Find the corresponding field name from the enum mapping */
-    const char *field = NULL;
-    switch (server.tls_ctx_config.client_auth_user) {
-    case TLS_CLIENT_FIELD_CN:
-        field = "CN";
-        break;
-    default:
-        return NULL;
-    }
-
-    if (!field) return NULL;
-
     X509 *cert = SSL_get_peer_certificate(conn->ssl);
     if (!cert) return NULL;
 
-    char field_value[256];
     sds result = NULL;
 
-    if (getCertFieldByName(cert, field, field_value, sizeof(field_value))) {
-        result = sdsnew(field_value);
-    } else {
-        serverLog(LL_NOTICE, "TLS: Failed to extract field '%s' from certificate", field);
+    switch (server.tls_ctx_config.client_auth_user) {
+    case TLS_CLIENT_FIELD_URI:
+        result = getCertSANUri(cert);
+        if (!result) {
+            serverLog(LL_NOTICE, "TLS: No matching user found in certificate SAN URI fields");
+        }
+        break;
+
+    case TLS_CLIENT_FIELD_CN: {
+        char field_value[256];
+        if (getCertSubjectFieldByName(cert, "CN", field_value, sizeof(field_value))) {
+            result = sdsnew(field_value);
+        } else {
+            serverLog(LL_NOTICE, "TLS: Failed to extract CN in certificate subject");
+        }
+        break;
+    }
+
+    default:
+        break;
     }
 
     X509_free(cert);

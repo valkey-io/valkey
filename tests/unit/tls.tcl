@@ -174,6 +174,26 @@ start_server {tags {"tls"}} {
             $s close
         }
 
+        test {TLS: Auto-authenticate using tls-auth-clients-user (URI)} {
+            # Create a user matching the URI in the client certificate
+            # URI in cert: urn:valkey:user:Client-only
+            r ACL SETUSER {urn:valkey:user:Client-only} on >clientpass allcommands allkeys
+
+            # Enable the feature to auto-authenticate based on URI
+            r CONFIG SET tls-auth-clients-user URI
+
+            # With feature on, client should be auto-authenticated using the URI from SAN
+            set s [valkey_client]
+
+            # Now no explicit AUTH is needed
+            assert_equal "PONG" [$s PING]
+
+            # Verify that the authenticated user matches the URI
+            assert_equal "urn:valkey:user:Client-only" [$s ACL WHOAMI]
+
+            $s close
+        }
+
         test {TLS: Auto-reload detects changes} {
             if {$::tls_module} {
                 # Auto-reload requires built-in TLS

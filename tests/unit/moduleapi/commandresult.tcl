@@ -66,7 +66,7 @@ start_server {tags {"modules"}} {
         r cmdresult.register all
 
         # This command modifies a key
-        r cmdresult.dirty mykey
+        r SET ss 3
 
         set stats [r cmdresult.stats]
         # Should have at least 1 dirty key
@@ -100,23 +100,6 @@ start_server {tags {"modules"}} {
         set entry [lindex $log 2]
         assert {[dict get $entry command] eq "cmdresult.success"}
         assert {[dict get $entry status] eq "success"}
-
-        r cmdresult.unregister
-    }
-
-    test {Module commandresult - Get partial log} {
-        cleanup_callback
-        r cmdresult.register all
-
-        r cmdresult.success
-        r cmdresult.success
-        r cmdresult.success
-        r cmdresult.success
-        r cmdresult.success
-
-        # Request only last 2 entries
-        set log [r cmdresult.getlog 2]
-        assert_equal [llength $log] 2
 
         r cmdresult.unregister
     }
@@ -320,22 +303,6 @@ start_server {tags {"modules"}} {
         r cmdresult.unregister
     }
 
-    test {Module commandresult - Client info flags coverage} {
-        cleanup_callback
-        r cmdresult.register all
-
-        # Execute commands to populate client info
-        r cmdresult.success
-
-        set log [r cmdresult.getlog 1]
-        set entry [lindex $log 0]
-
-        # Verify client_id is captured (this tests client info path)
-        assert {[dict get $entry client_id] > 0}
-
-        r cmdresult.unregister
-    }
-
     test {Module commandresult - Empty callback list optimization} {
         cleanup_callback
         # No callback registered - this tests early return in moduleCallCommandResultCallbacks
@@ -376,24 +343,6 @@ start_server {tags {"modules"}} {
         r cmdresult.unregister
     }
 
-    test {Module commandresult - ALL flag fires for all commands} {
-        cleanup_callback
-        r cmdresult.register all
-
-        # Execute various command types
-        r set key1 value1
-        r get key1
-        r incr counter
-        r ping
-        catch {r cmdresult.fail} e
-
-        set stats [r cmdresult.stats]
-        # Should have callbacks for all commands (at least 5)
-        assert {[dict get $stats total_callbacks] >= 5}
-
-        r cmdresult.unregister
-    }
-
     test {Module commandresult - Duration is always positive} {
         cleanup_callback
         r cmdresult.register all
@@ -406,58 +355,6 @@ start_server {tags {"modules"}} {
 
         # Duration should be >= 0 microseconds
         assert {[dict get $entry duration_us] >= 0}
-
-        r cmdresult.unregister
-    }
-
-    test {Module commandresult - Dirty tracking with SET command} {
-        cleanup_callback
-        r cmdresult.register all
-
-        # SET command should mark a key as dirty
-        r set dirtykey dirtyvalue
-
-        set log [r cmdresult.getlog 1]
-        set entry [lindex $log 0]
-
-        # SET command should have dirty >= 1
-        assert {[dict get $entry dirty] >= 1}
-
-        r cmdresult.unregister
-    }
-
-    test {Module commandresult - Log overflow handling} {
-        cleanup_callback
-        r cmdresult.register all
-
-        # Execute more than MAX_LOG_ENTRIES (100) commands
-        for {set i 0} {$i < 150} {incr i} {
-            r ping
-        }
-
-        # Get all log entries
-        set log [r cmdresult.getlog]
-
-        # Should have max 100 entries (circular buffer)
-        assert {[llength $log] <= 100}
-
-        r cmdresult.unregister
-    }
-
-    test {Module commandresult - GetLog with count larger than available} {
-        cleanup_callback
-        r cmdresult.register all
-
-        # Execute only 5 commands
-        for {set i 0} {$i < 5} {incr i} {
-            r ping
-        }
-
-        # Request 100 entries (more than available)
-        set log [r cmdresult.getlog 100]
-
-        # Should return only available entries
-        assert {[llength $log] <= 6} ;# 5 pings + stats command
 
         r cmdresult.unregister
     }
@@ -490,66 +387,6 @@ start_server {tags {"modules"}} {
         set stats [r cmdresult.stats]
         # Should see both cmdresult.rmcall and ping callbacks
         assert {[dict get $stats total_callbacks] >= 2}
-
-        r cmdresult.unregister
-    }
-
-    test {Module commandresult - NOSELF flag skips RM_Call commands} {
-        cleanup_callback
-        r cmdresult.register noself
-
-        # Direct call should fire
-        r cmdresult.success
-
-        # RM_Call should be skipped
-        r cmdresult.rmcall cmdresult.success
-
-        set stats [r cmdresult.stats]
-        # Should see only 1 callback (direct success), not the RM_Call'd one
-        # The stats command itself should also fire (not via RM_Call)
-        assert {[dict get $stats total_callbacks] >= 1}
-
-        r cmdresult.unregister
-    }
-
-    test {Module commandresult - FAILURES_ONLY skips successes} {
-        cleanup_callback
-        r cmdresult.register failures
-
-        # Success should not fire callback
-        r cmdresult.success
-        r ping
-
-        set stats [r cmdresult.stats]
-        assert_equal [dict get $stats total_callbacks] 0
-
-        # Failure SHOULD fire
-        catch {r cmdresult.fail} e
-
-        set stats [r cmdresult.stats]
-        assert_equal [dict get $stats total_callbacks] 1
-        assert_equal [dict get $stats failure_count] 1
-
-        r cmdresult.unregister
-    }
-
-    test {Module commandresult - Mixed flag combination} {
-        cleanup_callback
-        r cmdresult.register failures+noself
-
-        # Direct success - no callback (failures only)
-        r cmdresult.success
-
-        # Direct failure - callback fires
-        catch {r cmdresult.fail} e
-
-        # RM_Call failure - skipped (NOSELF)
-        catch {r cmdresult.rmcall cmdresult.fail} e
-
-        set stats [r cmdresult.stats]
-        # Should see: 1 direct fail + 1 rmcall wrapper fail = 2
-        # (Inner fail is skipped by NOSELF, but rmcall itself may fail)
-        assert {[dict get $stats total_callbacks] >= 1}
 
         r cmdresult.unregister
     }

@@ -63,12 +63,11 @@ void LogResult(const char *cmd_name, int status, long long duration,
 void CommandResultCallback(ValkeyModuleCommandResultCtx *ctx) {
     stats.total_callbacks++;
 
-    int status = ValkeyModule_CommandResultStatus(ctx);
-    const char *cmd_name = ValkeyModule_CommandResultCommandName(ctx);
-    long long duration = ValkeyModule_CommandResultDuration(ctx);
-    long long dirty = ValkeyModule_CommandResultDirty(ctx);
-    unsigned long long client_id = ValkeyModule_CommandResultClientId(ctx);
-
+    int status = ValkeyModule_CommandResultGetStatus(ctx);
+    const char *cmd_name = ValkeyModule_CommandResultGetCommandName(ctx);
+    long long duration = ValkeyModule_CommandResultGetDuration(ctx);
+    long long dirty = ValkeyModule_CommandResultGetDirty(ctx);
+    unsigned long long client_id = ValkeyModule_CommandResultGetClientId(ctx);
     if (status == VALKEYMODULE_CMDRESULT_SUCCESS) {
         stats.success_count++;
     } else {
@@ -85,7 +84,7 @@ void CommandResultCallback(ValkeyModuleCommandResultCtx *ctx) {
 /* CMDRESULT.REGISTER <flags>
  * Flags can be: "all", "failures", "noself", "failures+noself"
  */
-int CmdResultRegister_RedisCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+int CmdResultRegister_ValkeyCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     if (argc != 2) {
         return ValkeyModule_WrongArity(ctx);
     }
@@ -118,7 +117,7 @@ int CmdResultRegister_RedisCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **ar
 }
 
 /* CMDRESULT.UNREGISTER */
-int CmdResultUnregister_RedisCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+int CmdResultUnregister_ValkeyCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     VALKEYMODULE_NOT_USED(argv);
 
     if (argc != 1) {
@@ -142,7 +141,7 @@ int CmdResultUnregister_RedisCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **
 /* CMDRESULT.STATS
  * Returns: total_callbacks, success_count, failure_count, total_duration_us, total_dirty
  */
-int CmdResultStats_RedisCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+int CmdResultStats_ValkeyCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     VALKEYMODULE_NOT_USED(argv);
 
     if (argc != 1) {
@@ -165,7 +164,7 @@ int CmdResultStats_RedisCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
 }
 
 /* CMDRESULT.RESET */
-int CmdResultReset_RedisCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+int CmdResultReset_ValkeyCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     VALKEYMODULE_NOT_USED(argv);
 
     if (argc != 1) {
@@ -187,7 +186,7 @@ int CmdResultReset_RedisCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
 /* CMDRESULT.GETLOG [count]
  * Returns the last N command results from the log
  */
-int CmdResultGetLog_RedisCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+int CmdResultGetLog_ValkeyCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     if (argc > 2) {
         return ValkeyModule_WrongArity(ctx);
     }
@@ -228,7 +227,7 @@ int CmdResultGetLog_RedisCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv
 /* CMDRESULT.SUCCESS
  * A command that always succeeds
  */
-int CmdResultSuccess_RedisCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+int CmdResultSuccess_ValkeyCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     VALKEYMODULE_NOT_USED(argv);
     VALKEYMODULE_NOT_USED(argc);
 
@@ -238,39 +237,17 @@ int CmdResultSuccess_RedisCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **arg
 /* CMDRESULT.FAIL
  * A command that always fails
  */
-int CmdResultFail_RedisCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+int CmdResultFail_ValkeyCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     VALKEYMODULE_NOT_USED(argv);
     VALKEYMODULE_NOT_USED(argc);
 
     return ValkeyModule_ReplyWithError(ctx, "ERR intentional failure");
 }
 
-/* CMDRESULT.DIRTY <key>
- * A command that modifies a key (increments dirty count)
- */
-int CmdResultDirty_RedisCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
-    if (argc != 2) {
-        return ValkeyModule_WrongArity(ctx);
-    }
-
-    /* Use RM_Call to execute SET, which will properly increment dirty count */
-    ValkeyModuleString *value = ValkeyModule_CreateString(ctx, "modified", 8);
-    ValkeyModuleCallReply *reply = ValkeyModule_Call(ctx, "SET", "ss", argv[1], value);
-
-    if (!reply) {
-        ValkeyModule_FreeString(ctx, value);
-        return ValkeyModule_ReplyWithError(ctx, "ERR failed to set key");
-    }
-
-    ValkeyModule_FreeCallReply(reply);
-    ValkeyModule_FreeString(ctx, value);
-    return ValkeyModule_ReplyWithSimpleString(ctx, "OK");
-}
-
 /* CMDRESULT.RMCALL <command> [args...]
  * Test that NOSELF flag works - this calls a command via RM_Call
  */
-int CmdResultRMCall_RedisCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+int CmdResultRMCall_ValkeyCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     if (argc < 2) {
         return ValkeyModule_WrongArity(ctx);
     }
@@ -298,47 +275,42 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
         return VALKEYMODULE_ERR;
     }
 
-    if (ValkeyModule_CreateCommand(ctx, "cmdresult.register", CmdResultRegister_RedisCommand,
+    if (ValkeyModule_CreateCommand(ctx, "cmdresult.register", CmdResultRegister_ValkeyCommand,
                                    "admin", 0, 0, 0) == VALKEYMODULE_ERR) {
         return VALKEYMODULE_ERR;
     }
 
-    if (ValkeyModule_CreateCommand(ctx, "cmdresult.unregister", CmdResultUnregister_RedisCommand,
+    if (ValkeyModule_CreateCommand(ctx, "cmdresult.unregister", CmdResultUnregister_ValkeyCommand,
                                    "admin", 0, 0, 0) == VALKEYMODULE_ERR) {
         return VALKEYMODULE_ERR;
     }
 
-    if (ValkeyModule_CreateCommand(ctx, "cmdresult.stats", CmdResultStats_RedisCommand,
+    if (ValkeyModule_CreateCommand(ctx, "cmdresult.stats", CmdResultStats_ValkeyCommand,
                                    "readonly", 0, 0, 0) == VALKEYMODULE_ERR) {
         return VALKEYMODULE_ERR;
     }
 
-    if (ValkeyModule_CreateCommand(ctx, "cmdresult.reset", CmdResultReset_RedisCommand,
+    if (ValkeyModule_CreateCommand(ctx, "cmdresult.reset", CmdResultReset_ValkeyCommand,
                                    "admin", 0, 0, 0) == VALKEYMODULE_ERR) {
         return VALKEYMODULE_ERR;
     }
 
-    if (ValkeyModule_CreateCommand(ctx, "cmdresult.getlog", CmdResultGetLog_RedisCommand,
+    if (ValkeyModule_CreateCommand(ctx, "cmdresult.getlog", CmdResultGetLog_ValkeyCommand,
                                    "readonly", 0, 0, 0) == VALKEYMODULE_ERR) {
         return VALKEYMODULE_ERR;
     }
 
-    if (ValkeyModule_CreateCommand(ctx, "cmdresult.success", CmdResultSuccess_RedisCommand,
+    if (ValkeyModule_CreateCommand(ctx, "cmdresult.success", CmdResultSuccess_ValkeyCommand,
                                    "readonly", 0, 0, 0) == VALKEYMODULE_ERR) {
         return VALKEYMODULE_ERR;
     }
 
-    if (ValkeyModule_CreateCommand(ctx, "cmdresult.fail", CmdResultFail_RedisCommand,
+    if (ValkeyModule_CreateCommand(ctx, "cmdresult.fail", CmdResultFail_ValkeyCommand,
                                    "readonly", 0, 0, 0) == VALKEYMODULE_ERR) {
         return VALKEYMODULE_ERR;
     }
 
-    if (ValkeyModule_CreateCommand(ctx, "cmdresult.dirty", CmdResultDirty_RedisCommand,
-                                   "write", 1, 1, 1) == VALKEYMODULE_ERR) {
-        return VALKEYMODULE_ERR;
-    }
-
-    if (ValkeyModule_CreateCommand(ctx, "cmdresult.rmcall", CmdResultRMCall_RedisCommand,
+    if (ValkeyModule_CreateCommand(ctx, "cmdresult.rmcall", CmdResultRMCall_ValkeyCommand,
                                    "readonly", 0, 0, 0) == VALKEYMODULE_ERR) {
         return VALKEYMODULE_ERR;
     }

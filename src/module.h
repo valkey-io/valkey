@@ -23,6 +23,7 @@ struct ValkeyModuleCtx;
 struct moduleLoadQueueEntry;
 struct ValkeyModuleKeyOptCtx;
 struct ValkeyModuleCommand;
+struct ValkeyModuleCommandResult;
 struct clusterState;
 
 /* Each module type implementation should export a set of methods in order
@@ -105,7 +106,7 @@ typedef struct ValkeyModule {
     list *usedby;                         /* List of modules using APIs from this one. */
     list *using;                          /* List of modules we use some APIs of. */
     list *filters;                        /* List of filters the module has registered. */
-    list *result_callbacks;               /* List of command result callbacks the module has registered. */
+    struct ValkeyModuleCommandResult *result_callback; /* Command result callback the module has registered (one per module). */
     list *module_configs;                 /* List of configurations the module has registered */
     int configs_initialized;              /* Have the module configurations been initialized? */
     int in_call;                          /* RM_Call() nesting level */

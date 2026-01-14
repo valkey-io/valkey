@@ -411,9 +411,6 @@ typedef struct ValkeyModuleCommandResult {
     long long registered_at_cmd_count;
 } ValkeyModuleCommandResult;
 
-/* Registered command result callbacks */
-static list *moduleCommandResultCallbacks;
-
 typedef void (*ValkeyModuleForkDoneHandler)(int exitcode, int bysignal, void *user_data);
 
 static struct ValkeyModuleForkInfo {
@@ -2450,7 +2447,7 @@ void VM_SetModuleAttribs(ValkeyModuleCtx *ctx, const char *name, int ver, int ap
     module->usedby = listCreate();
     module->using = listCreate();
     module->filters = listCreate();
-    module->result_callbacks = listCreate();
+    module->result_callback = NULL;
     module->module_configs = listCreate();
     listSetMatchMethod(module->module_configs, moduleListConfigMatch);
     listSetFreeMethod(module->module_configs, moduleListFree);
@@ -11701,25 +11698,17 @@ unsigned long long VM_CommandFilterGetClientId(ValkeyModuleCommandFilterCtx *fct
  * ## Module Command Result Callback API
  * -------------------------------------------------------------------------- */
 
-/* Unregister all command result callbacks registered by a module.
+/* Unregister the command result callback registered by a module.
  * This is called when a module is being unloaded.
  *
  * Returns the number of callbacks unregistered. */
 int moduleUnregisterCommandResultCallbacks(ValkeyModule *module) {
-    listIter li;
-    listNode *ln;
-    int count = 0;
-
-    listRewind(moduleCommandResultCallbacks, &li);
-    while ((ln = listNext(&li))) {
-        ValkeyModuleCommandResult *result = ln->value;
-        if (result->module == module) {
-            listDelNode(moduleCommandResultCallbacks, ln);
-            count++;
-        }
-        zfree(result);
+    if (module->result_callback) {
+        zfree(module->result_callback);
+        module->result_callback = NULL;
+        return 1;
     }
-    return count;
+    return 0;
 }
 
 /* Register a new command result callback function.
@@ -11754,6 +11743,18 @@ int moduleUnregisterCommandResultCallbacks(ValkeyModule *module) {
 ValkeyModuleCommandResult *VM_RegisterCommandResult(ValkeyModuleCtx *ctx,
                                                     ValkeyModuleCommandResultFunc callback,
                                                     int flags) {
+    /* Only allow one callback per module */
+    if (ctx->module->result_callback != NULL) {
+        return NULL;  /* Already registered */
+    }
+
+    /* Validate flags - only accept known flag bits */
+    int valid_flags = VALKEYMODULE_CMDRESULT_FAILURES_ONLY | 
+                      VALKEYMODULE_CMDRESULT_NOSELF;
+    if (flags & ~valid_flags) {
+        return NULL;  /* Invalid flags */
+    }
+
     ValkeyModuleCommandResult *result = zmalloc(sizeof(*result));
     result->module = ctx->module;
     result->callback = callback;
@@ -11762,26 +11763,19 @@ ValkeyModuleCommandResult *VM_RegisterCommandResult(ValkeyModuleCtx *ctx,
      * for the registration command itself */
     result->registered_at_cmd_count = server.stat_numcommands;
 
-    listAddNodeTail(moduleCommandResultCallbacks, result);
-    listAddNodeTail(ctx->module->result_callbacks, result);
+    ctx->module->result_callback = result;
     return result;
 }
 
 /* Unregister a command result callback. */
 int VM_UnregisterCommandResult(ValkeyModuleCtx *ctx, ValkeyModuleCommandResult *result) {
-    listNode *ln;
-
-    /* A module can only remove its own callbacks */
+    /* A module can only remove its own callback */
     if (result->module != ctx->module) return VALKEYMODULE_ERR;
+    
+    /* Verify this is the registered callback */
+    if (ctx->module->result_callback != result) return VALKEYMODULE_ERR;
 
-    ln = listSearchKey(moduleCommandResultCallbacks, result);
-    if (!ln) return VALKEYMODULE_ERR;
-    listDelNode(moduleCommandResultCallbacks, ln);
-
-    ln = listSearchKey(ctx->module->result_callbacks, result);
-    if (!ln) return VALKEYMODULE_ERR; /* Shouldn't happen */
-    listDelNode(ctx->module->result_callbacks, ln);
-
+    ctx->module->result_callback = NULL;
     zfree(result);
 
     return VALKEYMODULE_OK;
@@ -11794,19 +11788,22 @@ void moduleCallCommandResultCallbacks(client *c,
                                       int command_failed,
                                       long long duration,
                                       long long dirty) {
-    if (listLength(moduleCommandResultCallbacks) == 0) return;
-
-    listIter li;
-    listNode *ln;
-    listRewind(moduleCommandResultCallbacks, &li);
+    dictIterator *di;
+    dictEntry *de;
 
     int result_status = command_failed ? 1 : 0; /* 1 = FAILURE, 0 = SUCCESS */
 
     ValkeyModuleCommandResultCtx result_ctx = {
         .c = c, .cmd = cmd, .result_status = result_status, .duration = duration, .dirty = dirty};
 
-    while ((ln = listNext(&li))) {
-        ValkeyModuleCommandResult *r = ln->value;
+    /* Iterate through all loaded modules */
+    di = dictGetIterator(modules);
+    while ((de = dictNext(di)) != NULL) {
+        ValkeyModule *module = dictGetVal(de);
+        ValkeyModuleCommandResult *r = module->result_callback;
+
+        /* Skip if no callback registered */
+        if (!r) continue;
 
         /* Skip callbacks registered during the current command to avoid firing on registration */
         if (r->registered_at_cmd_count == server.stat_numcommands) {
@@ -11819,13 +11816,14 @@ void moduleCallCommandResultCallbacks(client *c,
         }
 
         /* Skip if NOSELF flag is set and module is currently processing a command */
-        if ((r->flags & VALKEYMODULE_CMDRESULT_NOSELF) && r->module->in_call) {
+        if ((r->flags & VALKEYMODULE_CMDRESULT_NOSELF) && module->in_call) {
             continue;
         }
 
         /* Call the callback */
         r->callback(&result_ctx);
     }
+    dictReleaseIterator(di);
 }
 
 /* Get the result status from a command result context.
@@ -12970,9 +12968,6 @@ void moduleInitModulesSystem(void) {
     /* Set up filter list */
     moduleCommandFilters = listCreate();
 
-    /* Set up command result callback list */
-    moduleCommandResultCallbacks = listCreate();
-
     moduleRegisterCoreAPI();
 
     /* Create a pipe for module threads to be able to wake up the server main thread.
@@ -13097,7 +13092,9 @@ void moduleLoadFromQueue(void) {
 void moduleFreeModuleStructure(struct ValkeyModule *module) {
     listRelease(module->types);
     listRelease(module->filters);
-    listRelease(module->result_callbacks);
+    if (module->result_callback) {
+        zfree(module->result_callback);
+    }
     listRelease(module->usedby);
     listRelease(module->using);
     listRelease(module->module_configs);
@@ -15203,7 +15200,7 @@ void moduleRegisterCoreAPI(void) {
     REGISTER_API(CommandResultGetStatus);
     REGISTER_API(CommandResultGetCommandName);
     REGISTER_API(CommandResultGetDuration);
-    REGISTER_API(CommandResultGetNumDirtyKeys);
+    REGISTER_API(CommandResultGetDirty);
     REGISTER_API(CommandResultGetClientId);
     REGISTER_API(Fork);
     REGISTER_API(SendChildHeartbeat);

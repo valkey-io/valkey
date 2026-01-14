@@ -2127,12 +2127,12 @@ VALKEYMODULE_API ValkeyModuleCommandResult *(*ValkeyModule_RegisterCommandResult
                                                                                   int flags) VALKEYMODULE_ATTR;
 VALKEYMODULE_API int (*ValkeyModule_UnregisterCommandResult)(ValkeyModuleCtx *ctx,
                                                              ValkeyModuleCommandResult *result) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*ValkeyModule_CommandResultStatus)(ValkeyModuleCommandResultCtx *rctx) VALKEYMODULE_ATTR;
-VALKEYMODULE_API const char *(*ValkeyModule_CommandResultCommandName)(ValkeyModuleCommandResultCtx *rctx)
+VALKEYMODULE_API int (*ValkeyModule_CommandResultGetStatus)(ValkeyModuleCommandResultCtx *rctx) VALKEYMODULE_ATTR;
+VALKEYMODULE_API const char *(*ValkeyModule_CommandResultGetCommandName)(ValkeyModuleCommandResultCtx *rctx)
     VALKEYMODULE_ATTR;
-VALKEYMODULE_API long long (*ValkeyModule_CommandResultDuration)(ValkeyModuleCommandResultCtx *rctx) VALKEYMODULE_ATTR;
-VALKEYMODULE_API long long (*ValkeyModule_CommandResultDirty)(ValkeyModuleCommandResultCtx *rctx) VALKEYMODULE_ATTR;
-VALKEYMODULE_API unsigned long long (*ValkeyModule_CommandResultClientId)(ValkeyModuleCommandResultCtx *rctx)
+VALKEYMODULE_API long long (*ValkeyModule_CommandResultGetDuration)(ValkeyModuleCommandResultCtx *rctx) VALKEYMODULE_ATTR;
+VALKEYMODULE_API long long (*ValkeyModule_CommandResultGetDirty)(ValkeyModuleCommandResultCtx *rctx) VALKEYMODULE_ATTR;
+VALKEYMODULE_API unsigned long long (*ValkeyModule_CommandResultGetClientId)(ValkeyModuleCommandResultCtx *rctx)
     VALKEYMODULE_ATTR;
 VALKEYMODULE_API int (*ValkeyModule_Fork)(ValkeyModuleForkDoneHandler cb, void *user_data) VALKEYMODULE_ATTR;
 VALKEYMODULE_API void (*ValkeyModule_SendChildHeartbeat)(double progress) VALKEYMODULE_ATTR;
@@ -2628,11 +2628,11 @@ static int ValkeyModule_Init(ValkeyModuleCtx *ctx, const char *name, int ver, in
     VALKEYMODULE_GET_API(CommandFilterGetClientId);
     VALKEYMODULE_GET_API(RegisterCommandResult);
     VALKEYMODULE_GET_API(UnregisterCommandResult);
-    VALKEYMODULE_GET_API(CommandResultStatus);
-    VALKEYMODULE_GET_API(CommandResultCommandName);
-    VALKEYMODULE_GET_API(CommandResultDuration);
-    VALKEYMODULE_GET_API(CommandResultDirty);
-    VALKEYMODULE_GET_API(CommandResultClientId);
+    VALKEYMODULE_GET_API(CommandResultGetStatus);
+    VALKEYMODULE_GET_API(CommandResultGetCommandName);
+    VALKEYMODULE_GET_API(CommandResultGetDuration);
+    VALKEYMODULE_GET_API(CommandResultGetDirty);
+    VALKEYMODULE_GET_API(CommandResultGetClientId);
     VALKEYMODULE_GET_API(Fork);
     VALKEYMODULE_GET_API(SendChildHeartbeat);
     VALKEYMODULE_GET_API(ExitFromChild);

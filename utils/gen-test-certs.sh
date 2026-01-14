@@ -58,38 +58,41 @@ generate_cert valkey "Generic-cert"
 # Bundle two certs to exercise multi-CA parsing in tests.
 cat tests/tls/ca.crt tests/tls/server.crt > tests/tls/ca-multi.crt
 
-# Create a CA cert directory for tls-ca-cert-dir tests.
-ca_dir="tests/tls/ca-dir"
-rm -rf "${ca_dir}"
-mkdir -p "${ca_dir}"
-cp tests/tls/ca.crt "${ca_dir}/ca.crt"
-ca_hash=$(openssl x509 -hash -noout -in tests/tls/ca.crt)
-ca_hash_old=$(openssl x509 -subject_hash_old -noout -in tests/tls/ca.crt)
-ln -sf ca.crt "${ca_dir}/${ca_hash}.0"
-if [ "${ca_hash_old}" != "${ca_hash}" ]; then
-    ln -sf ca.crt "${ca_dir}/${ca_hash_old}.0"
-fi
+generate_ca_dir() {
+    local ca_dir=tests/tls/ca-dir
+    local ca_cert=tests/tls/ca.crt
+
+    rm -rf $ca_dir
+    mkdir -p $ca_dir
+    cp $ca_cert $ca_dir/ca.crt
+    local ca_hash=$(openssl x509 -hash -noout -in $ca_cert)
+    local ca_hash_old=$(openssl x509 -subject_hash_old -noout -in $ca_cert)
+    ln -sf ca.crt $ca_dir/${ca_hash}.0
+    if [ "$ca_hash_old" != "$ca_hash" ]; then
+        ln -sf ca.crt $ca_dir/${ca_hash_old}.0
+    fi
+}
 
 generate_expired_cert() {
     local name=$1
     local cn="$2"
 
-    local expired_dir="tests/tls/ca-expired"
-    local keyfile="tests/tls/${name}.key"
-    local csrfile="tests/tls/${name}.csr"
-    local certfile="tests/tls/${name}.crt"
+    local expired_dir=tests/tls/ca-expired
+    local keyfile=tests/tls/${name}.key
+    local csrfile=tests/tls/${name}.csr
+    local certfile=tests/tls/${name}.crt
 
-    rm -rf "${expired_dir}"
-    mkdir -p "${expired_dir}/newcerts"
-    : > "${expired_dir}/index.txt"
-    echo 1000 > "${expired_dir}/serial"
+    rm -rf $expired_dir
+    mkdir -p $expired_dir/newcerts
+    : > $expired_dir/index.txt
+    echo 1000 > $expired_dir/serial
 
-    cat > "${expired_dir}/openssl.cnf" <<_END_
+    cat > $expired_dir/openssl.cnf <<_END_
 [ ca ]
 default_ca = CA_default
 
 [ CA_default ]
-dir = ${expired_dir}
+dir = $expired_dir
 database = \$dir/index.txt
 new_certs_dir = \$dir/newcerts
 serial = \$dir/serial
@@ -102,13 +105,22 @@ policy = policy_any
 commonName = supplied
 _END_
 
-    openssl genrsa -out "${keyfile}" 2048
-    openssl req -new -sha256 -subj "/O=Valkey Test/CN=${cn}" -key "${keyfile}" -out "${csrfile}"
-    openssl ca -batch -config "${expired_dir}/openssl.cnf" -in "${csrfile}" -out "${certfile}" \
+    openssl genrsa -out $keyfile 2048
+    openssl req \
+        -new -sha256 \
+        -subj "/O=Valkey Test/CN=$cn" \
+        -key $keyfile \
+        -out $csrfile
+    openssl ca -batch \
+        -config $expired_dir/openssl.cnf \
+        -in $csrfile \
+        -out $certfile \
         -startdate 20000101000000Z -enddate 20000102000000Z
 }
 
 # Generate an expired server cert for INFO TLS tests.
 generate_expired_cert server-expired "Expired Server"
+
+generate_ca_dir
 
 [ -f tests/tls/valkey.dh ] || openssl dhparam -out tests/tls/valkey.dh 2048

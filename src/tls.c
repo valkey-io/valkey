@@ -541,7 +541,7 @@ static pthread_mutex_t pending_reload_mutex = PTHREAD_MUTEX_INITIALIZER;
  * If background is true, check for changes and do heavy work in background thread;
  * if false, do work synchronously and swap immediately.
  */
-static int tlsConfigure(void *priv, int reconfigure, int background) {
+static int tlsConfigure(void *priv, int reconfigure, bool background) {
     serverTLSContextConfig *ctx_config = (serverTLSContextConfig *)priv;
     SSL_CTX *ctx = NULL;
     SSL_CTX *client_ctx = NULL;
@@ -603,14 +603,14 @@ static int tlsConfigure(void *priv, int reconfigure, int background) {
 /* Synchronous TLS configuration - blocks until complete.
  * Called from CONFIG SET commands and server initialization. */
 static int tlsConfigureSync(void *priv, int reconfigure) {
-    return tlsConfigure(priv, reconfigure, 0);
+    return tlsConfigure(priv, reconfigure, false);
 }
 
 /* Asynchronous TLS configuration - runs in background thread.
  * Does CPU-intensive certificate loading without blocking main thread.
  * The main thread will later call tlsApplyPendingReload() to swap in the new contexts. */
 void tlsConfigureAsync(void) {
-    tlsConfigure(&server.tls_ctx_config, 1, 1);
+    tlsConfigure(&server.tls_ctx_config, 1, true);
 }
 
 /* This function runs in the main thread and applies the TLS contexts

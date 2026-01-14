@@ -14,8 +14,6 @@ void clusterSlotStatsInvalidateSlotIfApplicable(scriptRunCtx *ctx);
 
 /* network-bytes-in metric. */
 void clusterSlotStatsAddNetworkBytesInForUserClient(client *c);
-void clusterSlotStatsSetClusterMsgLength(uint32_t len);
-void clusterSlotStatsResetClusterMsgLength(void);
 
 /* network-bytes-out metric. */
 void clusterSlotStatsAddNetworkBytesOutForSlot(int slot, unsigned long long net_bytes_out);

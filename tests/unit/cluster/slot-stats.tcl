@@ -525,7 +525,7 @@ start_cluster 1 0 {tags {external:skip cluster}} {
         # +OK\r\n --> 5 bytes
 
         R 0 GET $key
-        # $3\r\nvalue\r\n -> 11 bytes
+        # $5\r\nvalue\r\n -> 11 bytes
 
         set expected_slot_stats [
             dict create $key_slot [
@@ -534,6 +534,27 @@ start_cluster 1 0 {tags {external:skip cluster}} {
         ]
         set slot_stats [R 0 CLUSTER SLOT-STATS SLOTSRANGE 0 16383]
         assert_empty_slot_stats_with_exception $slot_stats $expected_slot_stats $metrics_to_assert
+    }
+    R 0 CONFIG RESETSTAT
+    R 0 FLUSHALL
+
+    test "CLUSTER SLOT-STATS network-bytes-out, for slot specific commands, for reply copy avoidance" {
+        set copy_avoid [lindex [R 0 config get min-string-size-avoid-copy-reply] 1]
+        R 0 config set min-string-size-avoid-copy-reply 1
+
+        set value [string repeat A 1024] ;# Make sure it is a RAW string
+        R 0 set $key $value ;# +OK\r\n --> 5 bytes
+        R 0 get $key        ;# $1024\r\nAA..AA\r\n -> 1033 bytes
+
+        set expected_slot_stats [
+            dict create $key_slot [
+                dict create network-bytes-out 1038
+            ]
+        ]
+        set slot_stats [R 0 CLUSTER SLOT-STATS SLOTSRANGE $key_slot $key_slot]
+        assert_empty_slot_stats_with_exception $slot_stats $expected_slot_stats $metrics_to_assert
+
+        R 0 config set min-string-size-avoid-copy-reply $copy_avoid
     }
     R 0 CONFIG RESETSTAT
     R 0 FLUSHALL

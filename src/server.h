@@ -3467,7 +3467,7 @@ sds activeDefragSds(sds sdsptr);
 robj *activeDefragStringOb(robj *ob);
 void dismissSds(sds s);
 void dismissMemoryInChild(void);
-int tlsGetServerCertExpiry(long long *expiry);
+void tlsResetCertInfo(void);
 void tlsLogServerCertExpiry(void);
 
 #define RESTART_SERVER_NONE 0

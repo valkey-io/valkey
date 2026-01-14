@@ -197,7 +197,8 @@ start_server {tags {"tls"}} {
             }
             assert_morethan $expire1 0
             foreach field {tls_client_cert_expires_in_seconds tls_ca_cert_expires_in_seconds} {
-                if {![regexp "${field}:(-?[0-9]+)" $info1 -> exp_value]} {
+                set pattern [format {%s:(-?[0-9]+)} $field]
+                if {![regexp $pattern $info1 -> exp_value]} {
                     fail "INFO tls missing $field"
                 }
                 assert_morethan $exp_value 0
@@ -244,6 +245,87 @@ start_server {tags {"tls"}} {
             }
         }
 
+        test {TLS: INFO tls counts CA certs from directory} {
+            set ca_dir [format "%s/tests/tls/ca-dir" [pwd]]
+            if {![file isdirectory $ca_dir]} {
+                fail "missing $ca_dir; run utils/gen-test-certs.sh"
+            }
+            start_server [list overrides [list tls-ca-cert-dir $ca_dir]] {
+                set info [r info tls]
+                if {![regexp {tls_ca_cert_count:([0-9]+)} $info -> ca_count]} {
+                    fail "INFO tls missing tls_ca_cert_count"
+                }
+                assert_morethan_equal $ca_count 2
+                if {![regexp {tls_ca_cert_serial:([^\r\n]+)} $info -> ca_serial]} {
+                    fail "INFO tls missing tls_ca_cert_serial"
+                }
+                assert {$ca_serial ne "none"}
+                if {![regexp {tls_ca_cert_expires_in_seconds:(-?[0-9]+)} $info -> ca_exp]} {
+                    fail "INFO tls missing tls_ca_cert_expires_in_seconds"
+                }
+                assert_morethan $ca_exp 0
+            }
+        }
+
+        test {TLS: INFO tls counts CA certs from directory only} {
+            set ca_dir [format "%s/tests/tls/ca-dir" [pwd]]
+            if {![file isdirectory $ca_dir]} {
+                fail "missing $ca_dir; run utils/gen-test-certs.sh"
+            }
+            start_server [list overrides [list tls-ca-cert-dir $ca_dir] \
+                               omit [list tls-ca-cert-file]] {
+                set info [r info tls]
+                if {![regexp {tls_ca_cert_count:([0-9]+)} $info -> ca_count]} {
+                    fail "INFO tls missing tls_ca_cert_count"
+                }
+                assert_morethan_equal $ca_count 2
+                if {![regexp {tls_ca_cert_serial:([^\r\n]+)} $info -> ca_serial]} {
+                    fail "INFO tls missing tls_ca_cert_serial"
+                }
+                assert {$ca_serial ne "none"}
+                if {![regexp {tls_ca_cert_expires_in_seconds:(-?[0-9]+)} $info -> ca_exp]} {
+                    fail "INFO tls missing tls_ca_cert_expires_in_seconds"
+                }
+                assert_morethan $ca_exp 0
+            }
+        }
+
+        test {TLS: INFO tls clamps expired cert to zero} {
+            set expired_crt [format "%s/tests/tls/server-expired.crt" [pwd]]
+            set expired_key [format "%s/tests/tls/server-expired.key" [pwd]]
+            if {![file exists $expired_crt] || ![file exists $expired_key]} {
+                fail "missing expired certs; run utils/gen-test-certs.sh"
+            }
+            start_server [list overrides [list tls-cert-file $expired_crt tls-key-file $expired_key]] {
+                set info [r info tls]
+                if {![regexp {tls_server_cert_serial:([^\r\n]+)} $info -> server_serial]} {
+                    fail "INFO tls missing tls_server_cert_serial (expired)"
+                }
+                assert {$server_serial ne "none"}
+                if {![regexp {tls_server_cert_expires_in_seconds:(-?[0-9]+)} $info -> expire]} {
+                    fail "INFO tls missing tls_server_cert_expires_in_seconds (expired)"
+                }
+                assert_equal 0 $expire
+            }
+        }
+
+        test {TLS: INFO tls shows none for missing client cert} {
+            start_server [list overrides [list tls-auth-clients no] \
+                               omit [list tls-client-cert-file tls-client-key-file]] {
+                set s [valkey [srv 0 host] [srv 0 port] 0 1]
+                set info [r info tls]
+                if {![regexp {tls_client_cert_serial:([^\r\n]+)} $info -> client_serial]} {
+                    fail "INFO tls missing tls_client_cert_serial"
+                }
+                assert_equal "none" $client_serial
+                if {![regexp {tls_client_cert_expires_in_seconds:(-?[0-9]+)} $info -> client_exp]} {
+                    fail "INFO tls missing tls_client_cert_expires_in_seconds"
+                }
+                assert_equal 0 $client_exp
+                $s close
+            }
+        }
+
         test {TLS: INFO tls resets expiration countdown when TLS disabled/enabled} {
             set host [srv 0 host]
             set tls_port [srv 0 port]
@@ -254,7 +336,6 @@ start_server {tags {"tls"}} {
             }
 
             set tls_client [valkey $host $tls_port 0 1]
-            set plain_client [valkey $host $plain_port 0 0]
 
             set info_enabled [$tls_client info tls]
             if {![regexp {tls_server_cert_expires_in_seconds:(-?[0-9]+)} $info_enabled -> expire_enabled]} {
@@ -262,8 +343,15 @@ start_server {tags {"tls"}} {
             }
             assert_morethan $expire_enabled 0
 
+            # Ensure the plaintext listener is active in case a prior test disabled it.
+            $tls_client CONFIG SET port $plain_port
+
+            set plain_client [valkey $host $plain_port 0 0]
+
             $tls_client close
 
+            $plain_client CONFIG SET tls-replication no
+            $plain_client CONFIG SET tls-cluster no
             $plain_client CONFIG SET tls-port 0
 
             set info_disabled [$plain_client info tls]
@@ -291,6 +379,8 @@ start_server {tags {"tls"}} {
             }
 
             $plain_client CONFIG SET tls-port $tls_port
+            $plain_client CONFIG SET tls-replication yes
+            $plain_client CONFIG SET tls-cluster yes
 
             wait_for_condition 50 100 {
                 [catch {set tls_client [valkey $host $tls_port 0 1]} err] == 0
@@ -330,6 +420,9 @@ start_server {tags {"tls"}} {
 
 start_server {} {
     test {INFO tls reports empty values when TLS disabled} {
+        if {$::tls} {
+            skip "TLS enabled"
+        }
         set info [r info tls]
         foreach field {tls_server_cert_serial tls_client_cert_serial tls_ca_cert_serial} {
             set pattern [format {%s:([^\r\n]+)} $field]

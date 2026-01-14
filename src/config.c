@@ -2746,6 +2746,7 @@ static int applyTlsCfg(const char **err) {
         *err = "Unable to update TLS configuration. Check server logs.";
         return 0;
     }
+    tlsResetCertInfo();
     return 1;
 }
 
@@ -2767,6 +2768,8 @@ static int applyTLSPort(const char **err) {
         *err = "Unable to listen on this port. Check server logs.";
         return 0;
     }
+
+    tlsResetCertInfo();
 
     return 1;
 }

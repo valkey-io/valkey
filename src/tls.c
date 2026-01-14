@@ -51,7 +51,10 @@
 #endif
 #include <sys/uio.h>
 #include <arpa/inet.h>
+#include <dirent.h>
 #include <ctype.h>
+#include <limits.h>
+#include <sys/stat.h>
 #include <stdint.h>
 #include <stdio.h>
 
@@ -313,18 +316,6 @@ static int asn1TimeToEpoch(const ASN1_TIME *time, long long *epoch) {
     return 1;
 }
 
-/* Return the server-side certificate expiration timestamp via OpenSSL. */
-int tlsGetServerCertExpiry(long long *expiry) {
-    if (!valkey_tls_ctx) return C_ERR;
-    X509 *cert = SSL_CTX_get0_certificate(valkey_tls_ctx);
-    if (!cert) return C_ERR;
-    const ASN1_TIME *not_after = X509_get0_notAfter(cert);
-    long long ts;
-    if (!asn1TimeToEpoch(not_after, &ts)) return C_ERR;
-    if (expiry) *expiry = ts;
-    return C_OK;
-}
-
 static int tlsGetX509Expiry(X509 *cert, long long *expiry) {
     if (!cert) return C_ERR;
     const ASN1_TIME *not_after = X509_get0_notAfter(cert);
@@ -343,6 +334,13 @@ static void tlsClearCertInfo(long long *expiry, sds *serial) {
 static void tlsClearCACertInfo(void) {
     tlsClearCertInfo(&server.tls_ca_cert_expire_time, &server.tls_ca_cert_serial);
     server.tls_ca_cert_count = 0;
+}
+
+void tlsResetCertInfo(void) {
+    if (server.tls_port || server.tls_replication || server.tls_cluster) return;
+    tlsClearCertInfo(&server.tls_server_cert_expire_time, &server.tls_server_cert_serial);
+    tlsClearCertInfo(&server.tls_client_cert_expire_time, &server.tls_client_cert_serial);
+    tlsClearCACertInfo();
 }
 
 /* Cache the certificate expiration timestamp for later INFO reporting. */
@@ -370,6 +368,19 @@ static void tlsClearCertSerial(sds *serial) {
     }
 }
 
+static int tlsStoreCertInfo(long long expiry, sds serial, int count, long long *out_expiry, sds *out_serial, int *out_count) {
+    if (out_count) *out_count = count;
+    tlsClearCertSerial(out_serial);
+    if (expiry == 0) {
+        if (serial) sdsfree(serial);
+        if (out_count) *out_count = 0;
+        return C_ERR;
+    }
+    if (out_expiry) *out_expiry = expiry;
+    *out_serial = serial;
+    return C_OK;
+}
+
 static int tlsUpdateCertInfoFromCtx(SSL_CTX *ctx, long long *expiry, sds *serial) {
     if (!ctx) return C_ERR;
     X509 *cert = SSL_CTX_get0_certificate(ctx);
@@ -379,10 +390,7 @@ static int tlsUpdateCertInfoFromCtx(SSL_CTX *ctx, long long *expiry, sds *serial
     return C_OK;
 }
 
-static int tlsUpdateCertInfoFromFile(const char *path, long long *expiry, sds *serial, int *count) {
-    if (!path) return C_ERR;
-    FILE *fp = fopen(path, "r");
-    if (!fp) return C_ERR;
+static int tlsUpdateCertInfoFromFileHandle(FILE *fp, long long *expiry, sds *serial, int *count) {
     int cert_count = 0;
     long long earliest_expiry = 0;
     sds earliest_serial = NULL;
@@ -399,9 +407,7 @@ static int tlsUpdateCertInfoFromFile(const char *path, long long *expiry, sds *s
         }
         X509_free(cert);
     }
-    fclose(fp);
     if (count) *count = cert_count;
-    tlsClearCertSerial(serial);
     if (earliest_expiry == 0) {
         if (earliest_serial) sdsfree(earliest_serial);
         if (count) *count = 0;
@@ -410,6 +416,63 @@ static int tlsUpdateCertInfoFromFile(const char *path, long long *expiry, sds *s
     if (expiry) *expiry = earliest_expiry;
     *serial = earliest_serial;
     return C_OK;
+}
+
+static void tlsMergeCertInfo(long long *expiry, sds *serial, int *count, long long src_expiry, sds src_serial, int src_count) {
+    if (count) *count += src_count;
+    if (src_expiry > 0 && (*expiry == 0 || src_expiry < *expiry)) {
+        if (*serial) sdsfree(*serial);
+        *expiry = src_expiry;
+        *serial = src_serial;
+    } else if (src_serial) {
+        sdsfree(src_serial);
+    }
+}
+
+static int tlsUpdateCertInfoFromFile(const char *path, long long *expiry, sds *serial, int *count) {
+    if (!path) return C_ERR;
+    FILE *fp = fopen(path, "r");
+    if (!fp) return C_ERR;
+    long long file_expiry = 0;
+    sds file_serial = NULL;
+    int file_count = 0;
+    int result = tlsUpdateCertInfoFromFileHandle(fp, &file_expiry, &file_serial, &file_count);
+    fclose(fp);
+    if (result == C_ERR) {
+        return tlsStoreCertInfo(0, file_serial, file_count, expiry, serial, count);
+    }
+    return tlsStoreCertInfo(file_expiry, file_serial, file_count, expiry, serial, count);
+}
+
+static int tlsUpdateCertInfoFromDir(const char *path, long long *expiry, sds *serial, int *count) {
+    if (!path) return C_ERR;
+    DIR *dir = opendir(path);
+    if (!dir) return C_ERR;
+    int cert_count = 0;
+    long long earliest_expiry = 0;
+    sds earliest_serial = NULL;
+    struct dirent *de;
+    while ((de = readdir(dir)) != NULL) {
+        if (de->d_name[0] == '.') continue;
+        char fullpath[PATH_MAX];
+        if (snprintf(fullpath, sizeof(fullpath), "%s/%s", path, de->d_name) >= (int)sizeof(fullpath)) continue;
+        struct stat st;
+        if (stat(fullpath, &st) == -1) continue;
+        if (!S_ISREG(st.st_mode)) continue;
+        FILE *fp = fopen(fullpath, "r");
+        if (!fp) continue;
+        long long file_expiry = 0;
+        sds file_serial = NULL;
+        int file_count = 0;
+        if (tlsUpdateCertInfoFromFileHandle(fp, &file_expiry, &file_serial, &file_count) == C_OK) {
+            tlsMergeCertInfo(&earliest_expiry, &earliest_serial, &cert_count, file_expiry, file_serial, file_count);
+        } else {
+            if (file_serial) sdsfree(file_serial);
+        }
+        fclose(fp);
+    }
+    closedir(dir);
+    return tlsStoreCertInfo(earliest_expiry, earliest_serial, cert_count, expiry, serial, count);
 }
 
 static void tlsRefreshServerCertInfo(void) {
@@ -426,11 +489,34 @@ static void tlsRefreshClientCertInfo(void) {
 }
 
 static void tlsRefreshCACertInfo(void) {
-    if (tlsUpdateCertInfoFromFile(server.tls_ctx_config.ca_cert_file,
-                                  &server.tls_ca_cert_expire_time,
-                                  &server.tls_ca_cert_serial,
-                                  &server.tls_ca_cert_count) == C_ERR) {
-        tlsClearCACertInfo();
+    long long file_expiry = 0, dir_expiry = 0;
+    sds file_serial = NULL, dir_serial = NULL;
+    int file_count = 0, dir_count = 0;
+    int file_ok = tlsUpdateCertInfoFromFile(server.tls_ctx_config.ca_cert_file,
+                                            &file_expiry,
+                                            &file_serial,
+                                            &file_count) == C_OK;
+    int dir_ok = tlsUpdateCertInfoFromDir(server.tls_ctx_config.ca_cert_dir,
+                                          &dir_expiry,
+                                          &dir_serial,
+                                          &dir_count) == C_OK;
+
+    tlsClearCACertInfo();
+    if (!file_ok && !dir_ok) {
+        if (file_serial) sdsfree(file_serial);
+        if (dir_serial) sdsfree(dir_serial);
+        return;
+    }
+
+    server.tls_ca_cert_count = file_count + dir_count;
+    if (file_ok && (!dir_ok || file_expiry <= dir_expiry)) {
+        server.tls_ca_cert_expire_time = file_expiry;
+        server.tls_ca_cert_serial = file_serial;
+        if (dir_serial) sdsfree(dir_serial);
+    } else {
+        server.tls_ca_cert_expire_time = dir_expiry;
+        server.tls_ca_cert_serial = dir_serial;
+        if (file_serial) sdsfree(file_serial);
     }
 }
 
@@ -451,12 +537,7 @@ static void tlsMaybeLogCertWarning(const char *label, long long expiry, sds seri
 }
 
 void tlsLogServerCertExpiry(void) {
-    if (!(server.tls_port || server.tls_replication || server.tls_cluster)) {
-        tlsClearCertInfo(&server.tls_server_cert_expire_time, &server.tls_server_cert_serial);
-        tlsClearCertInfo(&server.tls_client_cert_expire_time, &server.tls_client_cert_serial);
-        tlsClearCACertInfo();
-        return;
-    }
+    if (!(server.tls_port || server.tls_replication || server.tls_cluster)) return;
 
     tlsMaybeLogCertWarning("server", server.tls_server_cert_expire_time, server.tls_server_cert_serial);
     tlsMaybeLogCertWarning("client", server.tls_client_cert_expire_time, server.tls_client_cert_serial);
@@ -1551,13 +1632,7 @@ int RedisRegisterConnectionTypeTLS(void) {
 
 #else /* USE_OPENSSL */
 
-/* No TLS support compiled in; report failure to fetch expiry. */
-int tlsGetServerCertExpiry(long long *expiry) {
-    UNUSED(expiry);
-    return C_ERR;
-}
-
-void tlsLogServerCertExpiry(void) {
+void tlsResetCertInfo(void) {
     if (server.tls_server_cert_serial) {
         sdsfree(server.tls_server_cert_serial);
         server.tls_server_cert_serial = NULL;
@@ -1574,6 +1649,11 @@ void tlsLogServerCertExpiry(void) {
     server.tls_client_cert_expire_time = 0;
     server.tls_ca_cert_expire_time = 0;
     server.tls_ca_cert_count = 0;
+}
+
+void tlsLogServerCertExpiry(void) {
+    /* No TLS support: keep INFO tls fields cleared. */
+    tlsResetCertInfo();
 }
 
 int RedisRegisterConnectionTypeTLS(void) {

@@ -4508,8 +4508,26 @@ start_server {tags {"hashexpire external:skip"}} {
         }
 
         foreach command {HINCRBY HINCRBYFLOAT} {
+            array set primary_ksn_event {
+                HINCRBY  hincrby
+                HINCRBYFLOAT hincrbyfloat
+            }
+            array set replica_ksn_event {
+                HINCRBY  hincrby
+                HINCRBYFLOAT hset
+            }
             test "$command is executed on repilca's expired fields" {
                 lassign [setup_replication_test $primary $replica $primary_host $primary_port] primary_initial_expired replica_initial_expired
+                # Initialize deferred clients and subscribe to keyspace notifications
+                foreach instance [list $primary $replica] {
+                    $instance config set notify-keyspace-events KEA
+                }
+                set primary_ksn [valkey_deferring_client -1]
+                set replica_ksn [valkey_deferring_client $replica_host $replica_port]
+                foreach rd [list $primary_ksn $replica_ksn] {
+                    assert_equal {1} [psubscribe $rd __keyevent@*]
+                }
+
                 $primary debug set-active-expire 0
                 
                 $primary flushall
@@ -4517,11 +4535,20 @@ start_server {tags {"hashexpire external:skip"}} {
                 $primary $command myhash f1 1
                 wait_for_ofs_sync $primary $replica
                 assert_equal 1 [$primary hpexpire myhash 1 fields 1 f1]
-                after 1
+                wait_for_condition 50 100 {
+                    [$primary hexists myhash f1] == 0
+                } else {
+                    fail "Field was not logically expired on primary"
+                }
                 $primary $command myhash f1 1
                 wait_for_ofs_sync $primary $replica
 
                 assert_equal [$replica hget myhash f1] [$primary hget myhash f1]
+
+                assert_keyevent_patterns $primary_ksn myhash $primary_ksn_event($command) hexpire hexpired $primary_ksn_event($command)
+                assert_keyevent_patterns $replica_ksn myhash $replica_ksn_event($command) hexpire hdel del $replica_ksn_event($command)
+                $primary_ksn close
+                $replica_ksn close
                 $primary debug set-active-expire 1
             } {OK} {needs:debug}
         }
@@ -4550,6 +4577,15 @@ start_server {tags {"hashexpire external:skip"}} {
 
         test {HSETNX set the value for expired replica field} {
             lassign [setup_replication_test $primary $replica $primary_host $primary_port] primary_initial_expired replica_initial_expired
+            # Initialize deferred clients and subscribe to keyspace notifications
+            foreach instance [list $primary $replica] {
+                $instance config set notify-keyspace-events KEA
+            }
+            set primary_ksn [valkey_deferring_client -1]
+            set replica_ksn [valkey_deferring_client $replica_host $replica_port]
+            foreach rd [list $primary_ksn $replica_ksn] {
+                assert_equal {1} [psubscribe $rd __keyevent@*]
+            }
             $primary debug set-active-expire 0
             $primary flushall
             
@@ -4561,7 +4597,7 @@ start_server {tags {"hashexpire external:skip"}} {
                 fail "Field was not logically expired on primary"
             }
             wait_for_ofs_sync $primary $replica
-            
+
             assert_equal {1} [$primary hlen myhash]
             assert_equal {1} [$replica hlen myhash]
             assert_equal {0} [$replica hexists myhash f1]
@@ -4572,7 +4608,8 @@ start_server {tags {"hashexpire external:skip"}} {
             assert_equal {v2} [$primary hget myhash f1]
             assert_equal {v2} [$replica hget myhash f1]
             assert_equal [$primary HPEXPIRETIME myhash FIELDS 1 f1] [$replica HPEXPIRETIME myhash FIELDS 1 f1]
-            
+            assert_keyevent_patterns $primary_ksn myhash hset hexpire hexpired hset
+            assert_keyevent_patterns $replica_ksn myhash hset hexpire hdel del hset
             $primary debug set-active-expire 1
         } {OK} {needs:debug}
     }

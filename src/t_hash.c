@@ -32,6 +32,7 @@
  * SPDX-License-Identifier: BSD-3-Clause
  */
 
+#include "expire.h"
 #include "hashtable.h"
 #include "rax.h"
 #include "sds.h"
@@ -470,6 +471,7 @@ static expiryModificationResult hashTypeSetExpire(robj *o, sds field, long long 
     /* If no object we will return -2 */
     if (o == NULL) return EXPIRATION_MODIFICATION_NOT_EXIST;
 
+    bool time_is_expired = checkAlreadyExpired(expiry);
     if (o->encoding == OBJ_ENCODING_LISTPACK) {
         unsigned char *vstr;
         unsigned int vlen;
@@ -481,9 +483,13 @@ static expiryModificationResult hashTypeSetExpire(robj *o, sds field, long long 
         }
         /* When listpack representation is used, we consider it as infinite TTL,
          * so expire command with gt always fail the GT as well as existence(XX).
+         * Else, if the ttl is set in the past, just delete the entry (we know it exists)
          * Else, we already know we are going to set an expiration so we expend to hashtable encoding. */
         if (flag & EXPIRE_XX || flag & EXPIRE_GT) {
             return EXPIRATION_MODIFICATION_FAILED_CONDITION;
+        } else if (time_is_expired) {
+            serverAssert(hashTypeDelete(o, field));
+            return EXPIRATION_MODIFICATION_EXPIRE_ASAP;
         } else {
             hashTypeConvert(o, OBJ_ENCODING_HASHTABLE);
         }
@@ -529,6 +535,12 @@ static expiryModificationResult hashTypeSetExpire(robj *o, sds field, long long 
                     return EXPIRATION_MODIFICATION_FAILED_CONDITION;
                 }
             }
+        }
+        /* In case we are set to expire the entry after we went through all the validations,
+         * we can just delete the entry. */
+        if (time_is_expired) {
+            serverAssert(hashTypeDelete(o, field));
+            return EXPIRATION_MODIFICATION_EXPIRE_ASAP;
         }
         *entry_ref = entrySetExpiry(current_entry, expiry);
         hashTypeTrackUpdateEntry(o, current_entry, *entry_ref, current_expire, expiry);
@@ -1740,7 +1752,6 @@ void hexpireGenericCommand(client *c, long long basetime, int unit) {
     int fields_index = 3;
     long long num_fields = 0;
     int i, expired = 0, updated = 0;
-    int set_expired = 0;
     robj **new_argv = NULL;
     int new_argc = 0;
 
@@ -1762,9 +1773,6 @@ void hexpireGenericCommand(client *c, long long basetime, int unit) {
     if (convertExpireArgumentToUnixTime(c, param, basetime, unit, &when) == C_ERR)
         return;
 
-    if (checkAlreadyExpired(when))
-        set_expired = 1;
-
     robj *obj = lookupKeyWrite(c->db, key);
 
     /* Non HASH type return simple error */
@@ -1778,30 +1786,24 @@ void hexpireGenericCommand(client *c, long long basetime, int unit) {
     addReplyArrayLen(c, num_fields);
 
     for (i = 0; i < num_fields; i++) {
-        expiryModificationResult result = EXPIRATION_MODIFICATION_NOT_EXIST;
-        /* If the flags included the GT flag, we cannot delete the entries since existing entries
-         * MUST have expiration time bigger than a past time. */
-        if (set_expired && !(flag & EXPIRE_GT)) {
-            if (obj && hashTypeDelete(obj, objectGetVal(c->argv[fields_index + i]))) {
-                /* In case we are expiring all the elements prepare a new argv since we are going to delete all the expired fields. */
-                if (new_argv == NULL) {
-                    new_argv = zmalloc(sizeof(robj *) * (num_fields + 3));
-                    new_argv[new_argc++] = shared.hdel;
-                    incrRefCount(shared.hdel);
-                    new_argv[new_argc++] = c->argv[1];
-                    incrRefCount(c->argv[1]);
-                }
-                /* In case we deleted the field, add it to the new hdel command vector. */
-                new_argv[new_argc++] = c->argv[fields_index + i];
-                incrRefCount(c->argv[fields_index + i]);
-                result = EXPIRATION_MODIFICATION_EXPIRE_ASAP;
-                /* we treat this case exactly as active expiration. */
-                server.stat_expiredfields++;
-                expired++;
+        expiryModificationResult result = hashTypeSetExpire(obj, objectGetVal(c->argv[fields_index + i]), when, flag);
+        if (result == EXPIRATION_MODIFICATION_SUCCESSFUL)
+            updated++;
+        else if (result == EXPIRATION_MODIFICATION_EXPIRE_ASAP) {
+            /* In case we are expiring all the elements prepare a new argv since we are going to delete all the expired fields. */
+            if (new_argv == NULL) {
+                new_argv = zmalloc(sizeof(robj *) * (num_fields + 3));
+                new_argv[new_argc++] = shared.hdel;
+                incrRefCount(shared.hdel);
+                new_argv[new_argc++] = c->argv[1];
+                incrRefCount(c->argv[1]);
             }
-        } else {
-            result = hashTypeSetExpire(obj, objectGetVal(c->argv[fields_index + i]), when, flag);
-            if (result == EXPIRATION_MODIFICATION_SUCCESSFUL) updated++;
+            /* In case we deleted the field, add it to the new hdel command vector. */
+            new_argv[new_argc++] = c->argv[fields_index + i];
+            incrRefCount(c->argv[fields_index + i]);
+            /* we treat this case exactly as active expiration. */
+            server.stat_expiredfields++;
+            expired++;
         }
         addReplyLongLong(c, result);
     }

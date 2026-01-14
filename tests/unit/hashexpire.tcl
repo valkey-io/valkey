@@ -891,6 +891,11 @@ start_server {tags {"hashexpire"}} {
         assert_equal {1} [r HLEN myhash]
         assert_equal {0 -2} [r HEXPIRE myhash 0 GT FIELDS 2 field1 field2]
         assert_equal {1} [r HLEN myhash]
+        assert_equal {0 -2} [r HEXPIRE myhash 0 NX FIELDS 2 field1 field2]
+        assert_equal {1} [r HLEN myhash]
+        r HSET myhash field1 val1
+        assert_equal {0 -2} [r HEXPIRE myhash 0 XX FIELDS 2 field1 field2]
+        assert_equal {1} [r HLEN myhash]
     }
 
     # Conditionals: LT

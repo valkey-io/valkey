@@ -3122,7 +3122,13 @@ void InitServerLast(void) {
     bioInit();
     initIOThreads();
     set_jemalloc_bg_thread(server.jemalloc_bg_thread);
-    server.initial_memory_usage = zmalloc_used_memory();
+
+    /* First set initial_memory_usage to zero as baseline for getMemoryOverheadData(). */
+    server.initial_memory_usage = 0;
+    struct serverMemOverhead *mh = getMemoryOverheadData();
+    /* Exclude current overhead memory to avoid double counting in the future. */
+    server.initial_memory_usage = zmalloc_used_memory() - mh->overhead_total;
+    freeMemoryOverheadData(mh);
 }
 
 /* The purpose of this function is to try to "glue" consecutive range

@@ -1478,15 +1478,18 @@ void hsetexCommand(client *c) {
             hashTypeSet(o, objectGetVal(c->argv[i]), objectGetVal(c->argv[i + 1]), when, set_flags, &expired);
             changes++;
 
-            /* When KEEPTTL is used, we need to track all fields to propagate them
-             * individually with their actual timestamps */
-            if ((flags & ARGS_KEEPTTL) && expired) {
-                if (keepttl_fields == NULL) {
-                    keepttl_fields = zmalloc(sizeof(robj *) * num_fields);
+            if (expired) {
+                /* When KEEPTTL is used, we need to track all fields to propagate them
+                 * individually with their actual timestamps */
+                if ((flags & ARGS_KEEPTTL)) {
+                    if (keepttl_fields == NULL) {
+                        keepttl_fields = zmalloc(sizeof(robj *) * num_fields);
+                    }
+                    keepttl_fields[expired_overriten] = c->argv[i];
+                    incrRefCount(c->argv[i]);
                 }
-                keepttl_fields[expired_overriten] = c->argv[i];
-                incrRefCount(c->argv[i]);
-            } 
+                expired_overriten++;
+            }
 
             if (need_rewrite_argv) {
                 new_argv[new_argc++] = c->argv[i];
@@ -1494,8 +1497,6 @@ void hsetexCommand(client *c) {
                 new_argv[new_argc++] = c->argv[i + 1];
                 incrRefCount(c->argv[i + 1]);
             }
-
-            if (expired) expired_overriten++;
         }
     }
 
@@ -1508,21 +1509,24 @@ void hsetexCommand(client *c) {
             /* We would like to reduce the number of hexpired events in case there are potential many expired fields. */
             notifyKeyspaceEvent(NOTIFY_HASH, "hexpired", c->argv[1], c->db->id);
         } else {
+            /* In case we overwritten fields which were expired we need to act as if we actively expired them */
             if (expired_overriten > 0) {
                 server.stat_expiredfields += expired_overriten;
                 notifyKeyspaceEvent(NOTIFY_HASH, "hexpired", c->argv[1], c->db->id);
-            }
-
-            /* Propagate deletions for expired/non-existent fields in batches */
-            if (keepttl_fields != NULL) {
-                /* Propagate individual fields deletions */
-                int idx = 0;
-                while (idx < expired_overriten) {
-                    idx += propagateFieldsDeletion(c->db, o, expired_overriten - idx,
-                                                   &keepttl_fields[idx], c->slot);
+                /* Propagate deletions for expired/non-existent fields in batches.
+                 * When KEEPTTL is used the replica has noway telling if, at the time the primary was executing the command,
+                 * the fields were expired or not. When the replica executes the command it will ALWAYS overwrite the field, so
+                 * we need to propagate hdel explicitly to prevent the replica from keeping the TTL on it's side. */
+                if (keepttl_fields != NULL) {
+                    /* Propagate individual fields deletions */
+                    int idx = 0;
+                    while (idx < expired_overriten) {
+                        idx += propagateFieldsDeletion(c->db, o, expired_overriten - idx,
+                                                       &keepttl_fields[idx], c->slot);
+                    }
+                    zfree(keepttl_fields);
+                    keepttl_fields = NULL;
                 }
-                zfree(keepttl_fields);
-                keepttl_fields = NULL;
             }
 
             notifyKeyspaceEvent(NOTIFY_HASH, "hset", c->argv[1], c->db->id);
@@ -1541,8 +1545,6 @@ void hsetexCommand(client *c) {
         if (set_expired)
             decrRefCount(c->argv[1]);
         if (new_argv) zfree(new_argv);
-
-        serverAssert(keepttl_fields == NULL);
     }
 
     /* Delete the object in case it was left empty or created with all expired items. */
@@ -1550,7 +1552,8 @@ void hsetexCommand(client *c) {
         dbDelete(c->db, c->argv[1]);
         notifyKeyspaceEvent(NOTIFY_GENERIC, "del", c->argv[1], c->db->id);
     }
-
+    /* make sure that if we ever allocated this it was freed */
+    serverAssert(keepttl_fields == NULL);
     addReplyLongLong(c, changes == num_fields ? 1 : 0);
 }
 

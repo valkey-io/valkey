@@ -9543,7 +9543,7 @@ void VM_SetClusterFlags(ValkeyModuleCtx *ctx, uint64_t flags) {
 
 /* Returns the cluster slot of a key, similar to the `CLUSTER KEYSLOT` command.
  * This function works even if cluster mode is not enabled. */
-unsigned int VM_ClusterKeySlotC(void *key, size_t keylen) {
+unsigned int VM_ClusterKeySlotC(const char *key, size_t keylen) {
     return keyHashSlot(key, keylen);
 }
 

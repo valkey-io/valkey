@@ -535,7 +535,7 @@ int test_keyslot(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
 
         size_t keylen;
         const char *keyptr = ValkeyModule_StringPtrLen(key, &keylen);
-        assert(slot == ValkeyModule_ClusterKeySlotC((void*)keyptr, keylen));
+        assert(slot == ValkeyModule_ClusterKeySlotC(keyptr, keylen));
 
         ValkeyModule_FreeString(ctx, key);
     }

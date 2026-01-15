@@ -1356,6 +1356,9 @@ void hsetexCommand(client *c) {
     int new_argc = 0;
     int need_rewrite_argv = 0;
 
+    robj **keepttl_fields = NULL;
+    int expired_overriten = 0;
+
     for (; fields_index < c->argc - 1; fields_index++) {
         if (!strcasecmp(objectGetVal(c->argv[fields_index]), "fields")) {
             /* checking optional flags */
@@ -1461,7 +1464,6 @@ void hsetexCommand(client *c) {
         }
     }
 
-    int expired_overriten = 0;
     for (i = fields_index; i < c->argc; i += 2) {
         if (set_expired) {
             if (hashTypeDelete(o, objectGetVal(c->argv[i]))) {
@@ -1474,17 +1476,28 @@ void hsetexCommand(client *c) {
         } else {
             bool expired;
             hashTypeSet(o, objectGetVal(c->argv[i]), objectGetVal(c->argv[i + 1]), when, set_flags, &expired);
-            if (expired) expired_overriten++;
             changes++;
+
+            /* When KEEPTTL is used, we need to track all fields to propagate them
+             * individually with their actual timestamps */
+            if ((flags & ARGS_KEEPTTL) && expired) {
+                if (keepttl_fields == NULL) {
+                    keepttl_fields = zmalloc(sizeof(robj *) * num_fields);
+                }
+                keepttl_fields[expired_overriten] = c->argv[i];
+                incrRefCount(c->argv[i]);
+            } 
+
             if (need_rewrite_argv) {
                 new_argv[new_argc++] = c->argv[i];
                 incrRefCount(c->argv[i]);
                 new_argv[new_argc++] = c->argv[i + 1];
                 incrRefCount(c->argv[i + 1]);
             }
+
+            if (expired) expired_overriten++;
         }
     }
-
 
     if (changes) {
         if (has_volatile_fields != hashTypeHasVolatileFields(o)) {
@@ -1495,11 +1508,25 @@ void hsetexCommand(client *c) {
             /* We would like to reduce the number of hexpired events in case there are potential many expired fields. */
             notifyKeyspaceEvent(NOTIFY_HASH, "hexpired", c->argv[1], c->db->id);
         } else {
-            if (expired_overriten) {
+            if (expired_overriten > 0) {
                 server.stat_expiredfields += expired_overriten;
                 notifyKeyspaceEvent(NOTIFY_HASH, "hexpired", c->argv[1], c->db->id);
             }
+
+            /* Propagate deletions for expired/non-existent fields in batches */
+            if (keepttl_fields != NULL) {
+                /* Propagate individual fields deletions */
+                int idx = 0;
+                while (idx < expired_overriten) {
+                    idx += propagateFieldsDeletion(c->db, o, expired_overriten - idx,
+                                                   &keepttl_fields[idx], c->slot);
+                }
+                zfree(keepttl_fields);
+                keepttl_fields = NULL;
+            }
+
             notifyKeyspaceEvent(NOTIFY_HASH, "hset", c->argv[1], c->db->id);
+
             if (need_rewrite_argv) {
                 replaceClientCommandVector(c, new_argc, new_argv);
             }
@@ -1514,6 +1541,8 @@ void hsetexCommand(client *c) {
         if (set_expired)
             decrRefCount(c->argv[1]);
         if (new_argv) zfree(new_argv);
+
+        serverAssert(keepttl_fields == NULL);
     }
 
     /* Delete the object in case it was left empty or created with all expired items. */

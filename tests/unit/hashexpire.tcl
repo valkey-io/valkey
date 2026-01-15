@@ -4642,7 +4642,7 @@ start_server {tags {"hashexpire external:skip"}} {
             assert_equal {5} [$primary hlen myhash]
             assert_equal {5} [$replica hlen myhash]
             assert_equal {} [$replica hgetall myhash]
-        
+
             $primary hmset myhash f1 v1 f2 v2 f3 v3 f4 v4 f5 v5
 
             wait_for_ofs_sync $primary $replica

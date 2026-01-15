@@ -31,6 +31,12 @@ def generate_header(header_file, methods):
 using namespace ::testing;
 using ::testing::StrictMock;
 
+#ifndef GTEST_REMOVE_LEGACY_TEST_CASEAPI_
+    // Older versions and transition versions have 'TestCase' naming available.
+    #define SetUpTestSuite SetUpTestCase
+    #define TearDownTestSuite TearDownTestCase
+#endif
+
 extern "C" {
 ''')
 

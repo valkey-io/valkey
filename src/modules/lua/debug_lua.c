@@ -13,6 +13,8 @@
 #include <lauxlib.h>
 #include <lualib.h>
 
+extern char *lm_asprintf(char const *fmt, ...);
+
 /* ---------------------------------------------------------------------------
  * LDB: Lua debugging facilities
  * ------------------------------------------------------------------------- */
@@ -375,10 +377,9 @@ static void ldbPrintAll(lua_State *lua) {
         while ((name = lua_getlocal(lua, &ar, i)) != NULL) {
             i++;
             if (!strstr(name, "(*temporary)")) {
-                char *prefix;
-                asprintf(&prefix, "<value> %s = ", name);
+                char *prefix = lm_asprintf("<value> %s = ", name);
                 ldbLogStackValue(lua, prefix);
-                free(prefix);
+                ValkeyModule_Free(prefix);
                 vars++;
             }
             lua_pop(lua, 1);
@@ -397,10 +398,9 @@ static void ldbBreak(ValkeyModuleString **argv, int argc) {
             ldbLogCString("No breakpoints set. Use 'b <line>' to add one.");
             return;
         } else {
-            char *msg;
-            asprintf(&msg, "%i breakpoints set:", ldb.bpcount);
+            char *msg = lm_asprintf("%i breakpoints set:", ldb.bpcount);
             ldbLogCString(msg);
-            free(msg);
+            ValkeyModule_Free(msg);
             int j;
             for (j = 0; j < ldb.bpcount; j++) ldbLogSourceLine(ldb.bp[j]);
         }
@@ -411,10 +411,9 @@ static void ldbBreak(ValkeyModuleString **argv, int argc) {
             int res = ValkeyModule_StringToLongLong(argv[j], &line);
             if (res != VALKEYMODULE_OK) {
                 const char *arg = ValkeyModule_StringPtrLen(argv[j], NULL);
-                char *msg;
-                asprintf(&msg, "Invalid argument:'%s'", arg);
+                char *msg = lm_asprintf("Invalid argument:'%s'", arg);
                 ldbLogCString(msg);
-                free(msg);
+                ValkeyModule_Free(msg);
             } else {
                 if (line == 0) {
                     ldb.bpcount = 0;
@@ -466,10 +465,9 @@ static void ldbEval(lua_State *lua, ValkeyModuleString **argv, int argc) {
         lua_pop(lua, 1);
         /* Failed? Try as a statement. */
         if (luaL_loadbuffer(lua, code_str, code_len, "@ldb_eval")) {
-            char *err_msg;
-            asprintf(&err_msg, "Error compiling code: %s", lua_tostring(lua, -1));
+            char *err_msg = lm_asprintf("Error compiling code: %s", lua_tostring(lua, -1));
             ldbLogCString(err_msg);
-            free(err_msg);
+            ValkeyModule_Free(err_msg);
             ValkeyModule_FreeString(NULL, code);
             ValkeyModule_FreeString(NULL, expr);
             return;
@@ -480,10 +478,9 @@ static void ldbEval(lua_State *lua, ValkeyModuleString **argv, int argc) {
     ValkeyModule_FreeString(NULL, code);
     ValkeyModule_FreeString(NULL, expr);
     if (lua_pcall(lua, 0, 1, 0)) {
-        char *err_msg;
-        asprintf(&err_msg, "<error> %s", lua_tostring(lua, -1));
+        char *err_msg = lm_asprintf("<error> %s", lua_tostring(lua, -1));
         ldbLogCString(err_msg);
-        free(err_msg);
+        ValkeyModule_Free(err_msg);
         lua_pop(lua, 1);
         return;
     }
@@ -532,10 +529,9 @@ static void ldbTrace(lua_State *lua) {
     while (lua_getstack(lua, level, &ar)) {
         lua_getinfo(lua, "Snl", &ar);
         if (strstr(ar.short_src, "user_script") != NULL) {
-            char *msg;
-            asprintf(&msg, "%s %s:", (level == 0) ? "In" : "From", ar.name ? ar.name : "top level");
+            char *msg = lm_asprintf("%s %s:", (level == 0) ? "In" : "From", ar.name ? ar.name : "top level");
             ldbLogCString(msg);
-            free(msg);
+            ValkeyModule_Free(msg);
             ldbLogSourceLine(ar.currentline);
         }
         level++;

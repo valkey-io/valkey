@@ -335,3 +335,18 @@ int intsetValidateIntegrity(const unsigned char *p, size_t size, int deep) {
 
     return 1;
 }
+
+/* Free an intset */
+void intsetFree(intset *is) {
+    if (is) zfree(is);
+}
+
+/* Deep copy an intset */
+intset *intsetDup(intset *is) {
+    if (!is) return intsetNew();
+
+    size_t size = intsetBlobLen(is);
+    intset *copy = zmalloc(size);
+    memcpy(copy, is, size);
+    return copy;
+}

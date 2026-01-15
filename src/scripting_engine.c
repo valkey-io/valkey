@@ -588,9 +588,9 @@ void scriptingEngineDebuggerLog(robj *entry) {
 void scriptingEngineDebuggerLogWithMaxLen(robj *entry) {
     int trimmed = 0;
 
-    if (ds.maxlen && sdslen(entry->ptr) > ds.maxlen) {
-        sdsrange(entry->ptr, 0, ds.maxlen - 1);
-        entry->ptr = sdscatlen(entry->ptr, " ...", 4);
+    if (ds.maxlen && sdslen(objectGetVal(entry)) > ds.maxlen) {
+        sdsrange(objectGetVal(entry), 0, ds.maxlen - 1);
+        objectSetVal(entry, sdscatlen(objectGetVal(entry), " ...", 4));
         trimmed = 1;
     }
     scriptingEngineDebuggerLog(entry);
@@ -620,8 +620,8 @@ void scriptingEngineDebuggerFlushLogs(void) {
         listNode *ln = listFirst(ds.logs);
         robj *msg = ln->value;
         proto = sdscatlen(proto, "+", 1);
-        sdsmapchars(msg->ptr, "\r\n", "  ", 2);
-        proto = sdscatsds(proto, msg->ptr);
+        sdsmapchars(objectGetVal(msg), "\r\n", "  ", 2);
+        proto = sdscatsds(proto, objectGetVal(msg));
         proto = sdscatlen(proto, "\r\n", 2);
         listDelNode(ds.logs, ln);
     }
@@ -910,7 +910,7 @@ static int maxlenCommandHandler(robj **argv, size_t argc, void *context) {
         scriptingEngineDebuggerLog(createObject(OBJ_STRING, msg));
     } else if (argc == 2) {
         long long new_maxlen;
-        if (string2ll(argv[1]->ptr, sdslen(argv[1]->ptr), &new_maxlen) && new_maxlen >= 0) {
+        if (string2ll(objectGetVal(argv[1]), sdslen(objectGetVal(argv[1])), &new_maxlen) && new_maxlen >= 0) {
             scriptingEngineDebuggerSetMaxlen((size_t)new_maxlen);
             if (new_maxlen == 0) {
                 sds msg = sdscatfmt(sdsempty(), "<value> replies are not truncated.");
@@ -1013,9 +1013,9 @@ static const debuggerCommand *findCommand(robj **argv, size_t argc) {
     // Check built-in commands first.
     for (size_t i = 0; i < builtins_len; i++) {
         const debuggerCommand *cmd = &builtins[i];
-        if ((sdslen(argv[0]->ptr) == cmd->prefix_len &&
-             strncasecmp(cmd->name, argv[0]->ptr, cmd->prefix_len) == 0) ||
-            strcasecmp(cmd->name, argv[0]->ptr) == 0) {
+        if ((sdslen(objectGetVal(argv[0])) == cmd->prefix_len &&
+             strncasecmp(cmd->name, objectGetVal(argv[0]), cmd->prefix_len) == 0) ||
+            strcasecmp(cmd->name, objectGetVal(argv[0])) == 0) {
             if (checkCommandParameters(cmd, argc)) {
                 return cmd;
             }
@@ -1025,9 +1025,9 @@ static const debuggerCommand *findCommand(robj **argv, size_t argc) {
     // Then check the commands exported by the scripting engine.
     for (size_t i = 0; i < ds.commands_len; i++) {
         const debuggerCommand *cmd = &ds.commands[i];
-        if ((sdslen(argv[0]->ptr) == cmd->prefix_len &&
-             strncasecmp(cmd->name, argv[0]->ptr, cmd->prefix_len) == 0) ||
-            strcasecmp(cmd->name, argv[0]->ptr) == 0) {
+        if ((sdslen(objectGetVal(argv[0])) == cmd->prefix_len &&
+             strncasecmp(cmd->name, objectGetVal(argv[0]), cmd->prefix_len) == 0) ||
+            strcasecmp(cmd->name, objectGetVal(argv[0])) == 0) {
             if (checkCommandParameters(cmd, argc)) {
                 return cmd;
             }

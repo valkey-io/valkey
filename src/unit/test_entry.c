@@ -1,3 +1,4 @@
+#include "../fmacros.h"
 #include "../entry.h"
 #include "test_help.h"
 #include "../expire.h"

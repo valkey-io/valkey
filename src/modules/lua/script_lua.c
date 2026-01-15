@@ -1286,10 +1286,11 @@ static int luaRedisAclCheckCmdPermissionsCommand(lua_State *lua) {
 
     ValkeyModuleString *username = ValkeyModule_GetCurrentUserName(rctx->module_ctx);
     ValkeyModuleUser *user = ValkeyModule_GetModuleUserFromUserName(username);
+    int dbid = ValkeyModule_GetSelectedDb(rctx->module_ctx);
     ValkeyModule_FreeString(rctx->module_ctx, username);
 
-    if (ValkeyModule_ACLCheckCommandPermissions(user, argv, argc) != VALKEYMODULE_OK) {
-        if (errno == ENOENT) {
+    if (ValkeyModule_ACLCheckPermissions(user, argv, argc, dbid, NULL) != VALKEYMODULE_OK) {
+        if (errno == EINVAL) {
             luaPushError(lua, "ERR Invalid command passed to server.acl_check_cmd()");
             raise_error = 1;
         } else {

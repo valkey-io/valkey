@@ -6411,7 +6411,7 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
         long long active_seconds = server.stat_active_time / 1000000;
         long long active_microseconds = server.stat_active_time % 1000000;
         info = sdscatprintf(info,
-                            "used_cpu_active_main_thread:%lld.%06lld\r\n",
+                            "used_active_time_main_thread:%lld.%06lld\r\n",
                             active_seconds, active_microseconds);
     }
 

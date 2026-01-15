@@ -1225,7 +1225,6 @@ struct serverMemOverhead *getMemoryOverheadData(void) {
 
     for (j = 0; j < server.dbnum; j++) {
         serverDb *db = server.db + j;
-        if (!kvstoreNumAllocatedDicts(db->keys)) continue;
 
         unsigned long long keyscount = kvstoreSize(db->keys);
 

@@ -85,9 +85,10 @@ ifdef FORCE_RUN_SKIPPED_TESTS
 endif
 
 # Track compilation flags to force rebuild when they change
-.PHONY: .flags
-.flags:
+.flags: FORCE
 	@echo '$(TEST_CFLAGS)' | cmp -s - $@ || echo '$(TEST_CFLAGS)' > $@
+
+.PHONY: FORCE
 
 # Valkey server library dependencies
 VALKEY_SERVER_LIB := ../libvalkey.a
@@ -137,7 +138,7 @@ $(VALKEY_SERVER_WRAP_LIB): $(VALKEY_SERVER_LIB) $(ENGINE_SERVER_WRAP_OBJ) genera
 endif
 
 # Ensure Valkey server library is built
-$(VALKEY_SERVER_LIB):
+$(VALKEY_SERVER_LIB): make-prerequisites
 	cd .. && $(MAKE) libvalkey.a
 
 # Ensure parent prerequisites are built
@@ -152,12 +153,13 @@ ifeq ($(MALLOC),libc)
 	JEMALLOC_LIB :=
 endif
 
-# Default target to compile against Valkey, LUA, jemalloc (as Valkey does) as well as gmock
-%.o: %.cpp make-prerequisites generated_wrappers.cpp .flags
+# Compile C++ test files, recompile if generated_wrappers or compiler flags change
+%.o: %.cpp generated_wrappers.cpp .flags
 	$(CXX) -MD -MP -std=c++17 -faligned-new -Wno-write-strings -fpermissive $(GCC_FLAGS) $(OPT) $(DEBUG) $(TEST_CFLAGS) -Wall -Wno-deprecated-declarations -c \
 	-isystem .. -I ../../deps/lua/src/ -I ../../deps/hdr_histogram/ -I ../../deps/fpconv/ $(JEMALLOC_CFLAGS) \
 	$(GTEST_CFLAGS) $<
 
+$(ALL_OBJECTS): generated_wrappers.o
 $(ALL_OBJECTS): OPT := $(OPT) $(MORE_WARNINGS)
 
 # Obtain the list of function calls for which we are generating mocks using the gmock library.  We assume they are defined in
@@ -171,7 +173,7 @@ else
 endif
 
 # Generate a new set of wrappers every time our header changes.
-generated_wrappers.cpp: wrappers.h generate-wrappers.py
+generated_wrappers.cpp: make-prerequisites wrappers.h generate-wrappers.py
 	./generate-wrappers.py
 
 generated_wrappers.o: generated_wrappers.cpp

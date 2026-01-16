@@ -1817,10 +1817,12 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
     }
 
     /* We should handle pending reads clients ASAP after event loop. */
-    processIOThreadsReadDone();
+    int io_responses = processIOThreadsReadDone();
+    if (io_responses > 0) server.el_iteration_active = true;
 
     /* Handle pending data(typical TLS). (must be done before flushAppendOnlyFile) */
-    connTypeProcessPendingData();
+    int conn_pending = connTypeProcessPendingData();
+    if (conn_pending > 0) server.el_iteration_active = true;
 
     /* If any connection type(typical TLS) still has pending unread data don't sleep at all. */
     int dont_sleep = connTypeHasPendingData();
@@ -1843,7 +1845,10 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
 
     /* Run a fast expire cycle (the called function will return
      * ASAP if a fast cycle is not needed). */
-    if (server.active_expire_enabled && !server.import_mode && iAmPrimary()) activeExpireCycle(ACTIVE_EXPIRE_CYCLE_FAST);
+    long long expire_cycle_time = 0;
+    if (server.active_expire_enabled && !server.import_mode && iAmPrimary()) {
+        expire_cycle_time = activeExpireCycle(ACTIVE_EXPIRE_CYCLE_FAST);
+    }
 
     if (moduleCount()) {
         moduleFireServerEvent(VALKEYMODULE_EVENT_EVENTLOOP, VALKEYMODULE_SUBEVENT_EVENTLOOP_BEFORE_SLEEP, NULL);
@@ -1908,14 +1913,17 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
     }
 
     /* Handle writes with pending output buffers. */
-    handleClientsWithPendingWrites();
+    int client_writes = handleClientsWithPendingWrites();
+    if (client_writes > 0) server.el_iteration_active = true;
 
     /* Try to process more IO reads that are ready to be processed. */
     if (server.aof_fsync != AOF_FSYNC_ALWAYS) {
-        processIOThreadsReadDone();
+        int io_responses_after = processIOThreadsReadDone();
+        if (io_responses_after > 0) server.el_iteration_active = true;
     }
 
-    processIOThreadsWriteDone();
+    int io_writes = processIOThreadsWriteDone();
+    if (io_writes > 0) server.el_iteration_active = true;
 
     /* Record cron time in beforeSleep. This does not include the time consumed by AOF writing and IO writing above. */
     monotime cron_start_time_after_write = getMonotonicUs();
@@ -1938,6 +1946,14 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
         monotime el_duration = getMonotonicUs() - server.el_start;
         durationAddSample(EL_DURATION_TYPE_EL, el_duration);
         latencyTraceIfNeeded(server, eventloop, el_duration);
+
+        /* Accumulate time only for active cycles */
+        if (server.el_iteration_active) {
+            server.stat_active_time += el_duration;
+        } else {
+            /* Count expiration time as active CPU time for all event loops. */
+            server.stat_active_time += expire_cycle_time;
+        }
     }
     server.el_cron_duration += duration_before_aof + duration_after_write;
     durationAddSample(EL_DURATION_TYPE_CRON, server.el_cron_duration);
@@ -1987,6 +2003,8 @@ void afterSleep(struct aeEventLoop *eventLoop, int numevents) {
         }
         /* Set the eventloop start time. */
         server.el_start = getMonotonicUs();
+        /* Reset iteration work flag */
+        server.el_iteration_active = (numevents > 0);
         /* Set the eventloop command count at start. */
         server.el_cmd_cnt_start = server.stat_numcommands;
     }
@@ -2765,6 +2783,8 @@ void resetServerStats(void) {
     server.stat_reply_buffer_expands = 0;
     memset(server.duration_stats, 0, sizeof(durationStats) * EL_DURATION_TYPE_NUM);
     server.el_cmd_cnt_max = 0;
+    server.stat_active_time = 0;
+    server.el_iteration_active = false;
     lazyfreeResetStats();
 }
 
@@ -6394,6 +6414,11 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                             (long)m_ru.ru_stime.tv_sec, (long)m_ru.ru_stime.tv_usec, (long)m_ru.ru_utime.tv_sec,
                             (long)m_ru.ru_utime.tv_usec);
 #endif /* RUSAGE_THREAD */
+        long long active_seconds = server.stat_active_time / 1000000;
+        long long active_microseconds = server.stat_active_time % 1000000;
+        info = sdscatprintf(info,
+                            "used_active_time_main_thread:%lld.%06lld\r\n",
+                            active_seconds, active_microseconds);
     }
 
     /* Modules */

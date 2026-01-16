@@ -178,6 +178,7 @@ typedef struct ValkeyModuleExternalStorageCtx {
     _Atomic int ext_data_dump_status;     /* Status of external data dump in bio job */
     sds ext_data_dump_backup_id;          /* Backup ID from last external data dump */
     _Atomic int ext_data_load_status;     /* Status of external data load in bio job */
+    void *snapshot;                       /* Snapshot of data for async dump */
 } ValkeyModuleExternalStorageCtx;
 
 typedef struct ValkeyModuleExternalFilterCtx {
@@ -186,6 +187,7 @@ typedef struct ValkeyModuleExternalFilterCtx {
     _Atomic int ext_data_dump_status;     /* Status of external data dump in bio job */
     sds ext_data_dump_backup_id;          /* Backup ID from last external data dump */
     _Atomic int ext_data_load_status;     /* Status of external data load in bio job */
+    void *snapshot;                       /* Snapshot of data for async dump */
 } ValkeyModuleExternalFilterCtx;
 
 /* Just start with a digest composed of all zero bytes. */

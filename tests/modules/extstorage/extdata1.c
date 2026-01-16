@@ -48,6 +48,8 @@ static char* get_external_data_path(ValkeyModuleCtx *module_ctx, const char *ser
 #define MAX_DB 16
 ValkeyModuleDict *storage_mem_pool[MAX_DB];  // Memory pool for storage
 ValkeyModuleDict *filter_mem_pool[MAX_DB];  // Memory pool for filter
+ValkeyModuleDict *storage_snapshot_pool[MAX_DB]; // Snapshot pool for storage
+ValkeyModuleDict *filter_snapshot_pool[MAX_DB]; // Snapshot pool for filter
 
 /* Failure simulation configuration */
 static long long set_failure_percent = 0;  // 0 = no failures, >0 = p out of 100 sets fail
@@ -193,6 +195,118 @@ waitExternalFilterReady(ValkeyModuleExternalFilterCtx *filter_ctx) {
     return state;
 }
 
+/* Snapshot methods */
+static void *storageSnapshotFunction(ValkeyModuleCtx *module_ctx,
+                                     ValkeyModuleExternalStorageCtx *storage_ctx,
+                                     int dbid) {
+    VALKEYMODULE_NOT_USED(module_ctx);
+    VALKEYMODULE_NOT_USED(storage_ctx);
+
+    if (dbid < 0 || dbid >= MAX_DB || storage_mem_pool[dbid] == NULL) {
+        return NULL;
+    }
+
+    /* Create a deep copy of the dictionary */
+    ValkeyModuleDict *snapshot = ValkeyModule_CreateDict(NULL);
+    ValkeyModuleDictIter *iter = ValkeyModule_DictIteratorStartC(storage_mem_pool[dbid], "^", NULL, 0);
+    char *key;
+    size_t key_len;
+    ValkeyModuleString *value;
+
+    while ((key = ValkeyModule_DictNextC(iter, &key_len, (void **)&value)) != NULL) {
+        if (value == NULL) continue;
+
+        ValkeyModuleString *key_str = ValkeyModule_CreateString(NULL, key, key_len);
+        ValkeyModule_DictReplace(snapshot, key_str, value);
+        ValkeyModule_RetainString(NULL, value); /* Retain value for the snapshot */
+        ValkeyModule_FreeString(NULL, key_str);
+    }
+    ValkeyModule_DictIteratorStop(iter);
+
+    storage_snapshot_pool[dbid] = snapshot;
+    return snapshot;
+}
+
+static void storageFreeSnapshotFunction(ValkeyModuleCtx *module_ctx,
+                                        ValkeyModuleExternalStorageCtx *storage_ctx,
+                                        void *snapshot) {
+    VALKEYMODULE_NOT_USED(module_ctx);
+    VALKEYMODULE_NOT_USED(storage_ctx);
+
+    if (snapshot == NULL) return;
+
+    ValkeyModuleDict *dict = (ValkeyModuleDict *)snapshot;
+    
+    /* Clear from pool */
+    for (int i = 0; i < MAX_DB; i++) {
+        if (storage_snapshot_pool[i] == dict) {
+            storage_snapshot_pool[i] = NULL;
+            break;
+        }
+    }
+
+    /* Free retained values */
+    ValkeyModuleDictIter *iter = ValkeyModule_DictIteratorStartC(dict, "^", NULL, 0);
+    char *key;
+    ValkeyModuleString *value;
+    
+    while ((key = ValkeyModule_DictNextC(iter, NULL, (void **)&value)) != NULL) {
+        if (value) {
+            ValkeyModule_FreeString(NULL, value);
+        }
+    }
+    ValkeyModule_DictIteratorStop(iter);
+
+    ValkeyModule_FreeDict(NULL, dict);
+}
+
+static void *filterSnapshotFunction(ValkeyModuleCtx *module_ctx,
+                                    ValkeyModuleExternalFilterCtx *filter_ctx,
+                                    int dbid) {
+    VALKEYMODULE_NOT_USED(module_ctx);
+    VALKEYMODULE_NOT_USED(filter_ctx);
+
+    if (dbid < 0 || dbid >= MAX_DB || filter_mem_pool[dbid] == NULL) {
+        return NULL;
+    }
+
+    /* Create a deep copy of the dictionary */
+    ValkeyModuleDict *snapshot = ValkeyModule_CreateDict(NULL);
+    ValkeyModuleDictIter *iter = ValkeyModule_DictIteratorStartC(filter_mem_pool[dbid], "^", NULL, 0);
+    char *key;
+    size_t key_len;
+
+    while ((key = ValkeyModule_DictNextC(iter, &key_len, NULL)) != NULL) {
+        ValkeyModuleString *key_str = ValkeyModule_CreateString(NULL, key, key_len);
+        ValkeyModule_DictReplace(snapshot, key_str, "");
+        ValkeyModule_FreeString(NULL, key_str);
+    }
+    ValkeyModule_DictIteratorStop(iter);
+
+    filter_snapshot_pool[dbid] = snapshot;
+    return snapshot;
+}
+
+static void filterFreeSnapshotFunction(ValkeyModuleCtx *module_ctx,
+                                       ValkeyModuleExternalFilterCtx *filter_ctx,
+                                       void *snapshot) {
+    VALKEYMODULE_NOT_USED(module_ctx);
+    VALKEYMODULE_NOT_USED(filter_ctx);
+
+    if (snapshot == NULL) return;
+
+    ValkeyModuleDict *dict = (ValkeyModuleDict *)snapshot;
+
+    /* Clear from pool */
+    for (int i = 0; i < MAX_DB; i++) {
+        if (filter_snapshot_pool[i] == dict) {
+            filter_snapshot_pool[i] = NULL;
+            break;
+        }
+    }
+
+    ValkeyModule_FreeDict(NULL, dict);
+}
 /* Storage methods */
 static int storageDumpFunction(ValkeyModuleCtx *module_ctx,
                                ValkeyModuleExternalStorageCtx *storage_ctx,
@@ -682,6 +796,13 @@ static int filterDumpFunction(ValkeyModuleCtx *module_ctx,
     VALKEYMODULE_NOT_USED(slot);
     VALKEYMODULE_NOT_USED(timestamp);
     ValkeyModule_AutoMemory(module_ctx);
+
+    /* Check if we have a snapshot available in the global pool */
+    ValkeyModuleDict *snapshot_dict = NULL;
+    if (dbid >= 0 && dbid < MAX_DB && filter_snapshot_pool[dbid]) {
+        snapshot_dict = filter_snapshot_pool[dbid];
+        ValkeyModule_Log(module_ctx, "notice", "filterDumpFunction: using snapshot for dump of db%d", dbid);
+    }
     
     /* Extract server ID from target parameter if provided, otherwise use local server ID */
     char target_server_id[1024];
@@ -773,7 +894,8 @@ static int filterDumpFunction(ValkeyModuleCtx *module_ctx,
         }
         
         /* Iterate through the specific database for filter data */
-        ValkeyModuleDictIter *filter_iter = ValkeyModule_DictIteratorStartC(filter_mem_pool[dbid], "^", NULL, 0);
+        ValkeyModuleDict *dict_to_dump = snapshot_dict ? snapshot_dict : filter_mem_pool[dbid];
+        ValkeyModuleDictIter *filter_iter = ValkeyModule_DictIteratorStartC(dict_to_dump, "^", NULL, 0);
         char *key;
         size_t key_len;
         while ((key = ValkeyModule_DictNextC(filter_iter, &key_len, NULL)) != NULL) {
@@ -839,6 +961,13 @@ static int storageDumpFunction(ValkeyModuleCtx *module_ctx,
     VALKEYMODULE_NOT_USED(slot);
     VALKEYMODULE_NOT_USED(timestamp);
     ValkeyModule_AutoMemory(module_ctx);
+
+    /* Check if we have a snapshot available in the global pool */
+    ValkeyModuleDict *snapshot_dict = NULL;
+    if (dbid >= 0 && dbid < MAX_DB && storage_snapshot_pool[dbid]) {
+        snapshot_dict = storage_snapshot_pool[dbid];
+        ValkeyModule_Log(module_ctx, "notice", "storageDumpFunction: using snapshot for dump of db%d", dbid);
+    }
     
     /* Extract server ID from target parameter if provided, otherwise use local server ID */
     char target_server_id[1024];
@@ -935,7 +1064,8 @@ static int storageDumpFunction(ValkeyModuleCtx *module_ctx,
         }
         
         /* Iterate through the specific database */
-        ValkeyModuleDictIter *iter = ValkeyModule_DictIteratorStartC(storage_mem_pool[dbid], "^", NULL, 0);
+        ValkeyModuleDict *dict_to_dump = snapshot_dict ? snapshot_dict : storage_mem_pool[dbid];
+        ValkeyModuleDictIter *iter = ValkeyModule_DictIteratorStartC(dict_to_dump, "^", NULL, 0);
         char *key;
         size_t key_len, val_len;
         ValkeyModuleString *value;
@@ -1743,6 +1873,8 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
         .load = storageLoadFunction,
         .get_state = storageGetStateFunction,
         .iterate = storageIterateFunction,
+        .snapshot = storageSnapshotFunction,
+        .free_snapshot = storageFreeSnapshotFunction,
     };
 
     // Initialize filter methods
@@ -1759,6 +1891,8 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
         .load = filterLoadFunction,
         .get_state = filterGetStateFunction,
         .keys_count = filterKeysCountFunction,
+        .snapshot = filterSnapshotFunction,
+        .free_snapshot = filterFreeSnapshotFunction,
     };
 
     // Create memory pools

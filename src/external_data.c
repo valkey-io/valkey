@@ -1887,6 +1887,36 @@ void bioExternalDataDumpForFullSync(void) {
 /* Start async dump of external data for full sync */
 int externalDataDumpForFullSync(void) {
     if (!isExtDataOn()) return EXTERNAL_ERROR;
+
+    externalDataCtx *ctx = getCurrentExternalDataCtx();
+    if (ctx) {
+        /* Iterate all databases and create snapshots if supported */
+        dictIterator *di = dictGetIterator(ctx->dbdata);
+        dictEntry *de;
+        while ((de = dictNext(di))) {
+            externalDbData *dbData = dictGetVal(de);
+            externalDataModuleInstance *mi = dbData->module_instance;
+            sds db_name = dictGetKey(de);
+            int dbid = atoi(db_name + 2); /* Skip "db" prefix */
+
+            /* Create storage snapshot */
+            if (mi->external_module->storage_methods.snapshot) {
+                mi->storage_ctx->snapshot = mi->external_module->storage_methods.snapshot(
+                    mi->module_ctx, mi->storage_ctx, dbid);
+            } else {
+                mi->storage_ctx->snapshot = NULL;
+            }
+
+            /* Create filter snapshot */
+            if (mi->external_module->filter_methods.snapshot) {
+                mi->filter_ctx->snapshot = mi->external_module->filter_methods.snapshot(
+                    mi->module_ctx, mi->filter_ctx, dbid);
+            } else {
+                mi->filter_ctx->snapshot = NULL;
+            }
+        }
+        dictReleaseIterator(di);
+    }
     
     /* Submit BIO job - state will be set in the BIO thread */
     bioCreateExtDataDumpJob();
@@ -1938,6 +1968,18 @@ int externalDataDumpCheckComplete(ValkeyModuleString **backup_id) {
     }
     
     if (storage_status == VMES_DUMP_STATE_SUCCESS && filter_status == VMEF_DUMP_STATE_SUCCESS) {
+        /* Free snapshots */
+        if (dbData->module_instance->external_module->storage_methods.free_snapshot && storage_ctx->snapshot) {
+            dbData->module_instance->external_module->storage_methods.free_snapshot(
+                dbData->module_instance->module_ctx, storage_ctx, storage_ctx->snapshot);
+            storage_ctx->snapshot = NULL;
+        }
+        if (dbData->module_instance->external_module->filter_methods.free_snapshot && filter_ctx->snapshot) {
+            dbData->module_instance->external_module->filter_methods.free_snapshot(
+                dbData->module_instance->module_ctx, filter_ctx, filter_ctx->snapshot);
+            filter_ctx->snapshot = NULL;
+        }
+
         if (backup_id) {
             *backup_id = (ValkeyModuleString *)createStringObject(storage_ctx->ext_data_dump_backup_id,
                                                                    sdslen(storage_ctx->ext_data_dump_backup_id));

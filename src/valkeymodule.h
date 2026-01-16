@@ -1576,6 +1576,13 @@ typedef struct ValkeyModuleExternalStorageMethods {
      * This allows restoring from backups/snapshots for replication and backup/restore. */
     ValkeyModuleExternalStorageLoadFunc load;
     ValkeyModuleExternalStorageGetStateFunc get_state;
+
+    /* The callback function called to create a snapshot of the data for async dumping.
+     * Returns a pointer to the snapshot, or NULL if not supported/failed. */
+    void *(*snapshot)(ValkeyModuleCtx *module_ctx, ValkeyModuleExternalStorageCtx *storage_ctx, int dbid);
+
+    /* The callback function called to free a snapshot. */
+    void (*free_snapshot)(ValkeyModuleCtx *module_ctx, ValkeyModuleExternalStorageCtx *storage_ctx, void *snapshot);
 } ValkeyModuleExternalStorageMethodsV1;
 
 #define ValkeyModuleExternalStorageMethods ValkeyModuleExternalStorageMethodsV1
@@ -1797,6 +1804,13 @@ typedef struct ValkeyModuleExternalFilterMethods {
     /* The callback function called when `EXTERNAL_DATA LOAD` command is called for filter data.
      * This allows restoring filter data from backups/snapshots for replication and backup/restore. */
     ValkeyModuleExternalFilterLoadFunc load;
+
+    /* The callback function called to create a snapshot of the filter data for async dumping.
+     * Returns a pointer to the snapshot, or NULL if not supported/failed. */
+    void *(*snapshot)(ValkeyModuleCtx *module_ctx, ValkeyModuleExternalFilterCtx *filter_ctx, int dbid);
+
+    /* The callback function called to free a snapshot. */
+    void (*free_snapshot)(ValkeyModuleCtx *module_ctx, ValkeyModuleExternalFilterCtx *filter_ctx, void *snapshot);
 } ValkeyModuleExternalFilterMethodsV2;
 
 #define ValkeyModuleExternalFilterMethods ValkeyModuleExternalFilterMethodsV2

@@ -46,6 +46,7 @@
 #include "module.h"
 #include "cluster.h"
 #include "cluster_migrateslots.h"
+#include "external_data.h"
 
 #include <math.h>
 #include <fcntl.h>
@@ -3962,6 +3963,15 @@ void bgsaveCommand(client *c) {
         }
     } else if (rdbSaveBackground(REPLICA_REQ_NONE, server.rdb_filename, rsiptr, RDBFLAGS_NONE) == C_OK) {
         addReplyStatus(c, "Background saving started");
+        
+        /* Start async dump of external data if BGSAVE succeeded */
+        if (isExtDataOn()) {
+            if (externalDataDumpForFullSync() == EXTERNAL_SUCCESS) {
+                serverLog(LL_NOTICE, "External data dump started asynchronously");
+            } else {
+                serverLog(LL_WARNING, "Failed to start external data dump");
+            }
+        }
     } else {
         addReplyErrorObject(c, shared.err);
     }

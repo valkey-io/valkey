@@ -4,6 +4,7 @@
 #include "dict.h"
 #include "sds.h"
 #include "server.h"
+#include "cluster.h"
 #include "valkeymodule.h"
 #include "zmalloc.h"
 #include <assert.h>
@@ -16,6 +17,51 @@
 /* Forward declarations */
 static void moduleStatsDispose(void *obj);
 static void externalDataAutoInitFromModule(externalDataModule *module);
+static int tryAutoInitFromModuleState(externalDataModule *module);
+
+/* Helper function to check if this node is a replica (standalone or cluster mode) */
+static inline int is_replica(void) {
+    int result = 0;
+    if (server.primary_host) {
+        /* Standalone replica */
+        result = 1;
+    } else if (server.cluster_enabled) {
+        /* Cluster mode - check if this node is a replica */
+        result = clusterNodeIsReplica(getMyClusterNode());
+    }
+    return result;
+}
+
+/* Helper function to get primary address for replica nodes
+ * Returns a newly allocated string that must be freed by caller, or NULL if not a replica */
+static char *get_primary_address(void) {
+    static char addr_buf[256];
+    
+    if (server.primary_host) {
+        /* Standalone replica - use server.primary_host and server.primary_port */
+        snprintf(addr_buf, sizeof(addr_buf), "%s:%d",
+                 server.primary_host, server.primary_port);
+        serverLog(LL_DEBUG, "get_primary_address() = %s (standalone mode)", addr_buf);
+        return addr_buf;
+    }
+    
+    if (server.cluster_enabled && clusterNodeIsReplica(getMyClusterNode())) {
+        /* Cluster replica - get primary node info */
+        clusterNode *myself = getMyClusterNode();
+        clusterNode *primary = clusterNodeGetPrimary(myself);
+        if (primary) {
+            const char *ip = clusterNodeIp(primary, NULL);
+            int port = clusterNodeClientPort(primary, 0, NULL);
+            snprintf(addr_buf, sizeof(addr_buf), "%s:%d", ip, port);
+            serverLog(LL_DEBUG, "get_primary_address() = %s (cluster mode)", addr_buf);
+            return addr_buf;
+        }
+        serverLog(LL_DEBUG, "get_primary_address() = NULL (cluster mode, no primary)");
+    }
+    
+    serverLog(LL_DEBUG, "get_primary_address() = NULL (not a replica)");
+    return NULL;
+}
 
 struct externalDataCtx {
     dict *modules;       /* Module name -> Module object */
@@ -103,37 +149,70 @@ static void moduleStatsDispose(void *obj) {
 void processExternalDataLoadForFullSync(void) {
     /* Load external data for full sync if enabled
      * We check if external data context exists, which means modules have been loaded */
-    if (isExtDataOn()) {
-        if (server.ext_data_async_load) {
-            /* Async mode: Start load in background and proceed immediately */
-            serverLog(LL_NOTICE, "Starting async external data load for full sync");
-            if (externalDataLoadForFullSync() == EXTERNAL_SUCCESS) {
-                serverLog(LL_NOTICE, "External data async load initiated");
-            } else {
-                serverLog(LL_WARNING, "Failed to initiate async external data load");
+    if (!isExtDataOn()) {
+        return;
+    }
+
+    externalDataCtx *ctx = getCurrentExternalDataCtx();
+    int db_count = ctx ? dictSize(ctx->dbdata) : 0;
+    int is_repl = is_replica();
+    
+    serverLog(LL_NOTICE, "processExternalDataLoadForFullSync: db_count=%d, is_replica=%d", db_count, is_repl);
+    
+    /* If no databases are initialized yet and we're a replica, try auto-initialization
+        * This handles cluster replicas where topology isn't established during module load */
+    if (ctx && db_count == 0 && is_repl) {
+        serverLog(LL_NOTICE, "No databases initialized, attempting auto-initialization from modules");
+        serverLog(LL_NOTICE, "DEBUG: primary_host=%s, primary_port=%d, cluster_enabled=%d",
+                  server.primary_host ? server.primary_host : "NULL",
+                  server.primary_port,
+                  server.cluster_enabled);
+        
+        /* Iterate through all registered modules and try auto-init */
+        dictIterator *di = dictGetIterator(ctx->modules);
+        dictEntry *de;
+        while ((de = dictNext(di))) {
+            externalDataModule *module = dictGetVal(de);
+            serverLog(LL_NOTICE, "Trying auto-init for module: %s", module->name);
+            int initialized = tryAutoInitFromModuleState(module);
+            serverLog(LL_NOTICE, "Auto-init for module %s: %s", module->name, initialized ? "SUCCESS" : "FAILED");
+        }
+        dictReleaseIterator(di);
+        
+        /* Re-check db_count after auto-init attempts */
+        db_count = ctx ? dictSize(ctx->dbdata) : 0;
+        serverLog(LL_NOTICE, "After auto-init: db_count=%d", db_count);
+    }
+    
+    if (server.ext_data_async_load) {
+        /* Async mode: Start load in background and proceed immediately */
+        serverLog(LL_NOTICE, "Starting async external data load for full sync");
+        if (externalDataLoadForFullSync() == EXTERNAL_SUCCESS) {
+            serverLog(LL_NOTICE, "External data async load initiated");
+        } else {
+            serverLog(LL_WARNING, "Failed to initiate async external data load");
+        }
+    } else {
+        /* Sync mode: Start load and wait for completion */
+        serverLog(LL_NOTICE, "Starting sync external data load for full sync");
+        if (externalDataLoadForFullSync() == EXTERNAL_SUCCESS) {
+            /* Wait for load to complete */
+            int sleep_ms = 100;
+            int max_wait = server.ext_data_load_timeout_ms / sleep_ms; /* Convert ms to iterations */
+            int waited = 0;
+            while (waited < max_wait) {
+                if (externalDataLoadCheckComplete() == C_OK) {
+                    serverLog(LL_NOTICE, "External data loaded synchronously for full sync");
+                    break;
+                }
+                usleep(sleep_ms * 1000); /* Sleep 100ms */
+                waited++;
+            }
+            if (waited >= max_wait) {
+                serverLog(LL_WARNING, "Timeout waiting for external data load to complete");
             }
         } else {
-            /* Sync mode: Start load and wait for completion */
-            serverLog(LL_NOTICE, "Starting sync external data load for full sync");
-            if (externalDataLoadForFullSync() == EXTERNAL_SUCCESS) {
-                /* Wait for load to complete */
-                int sleep_ms = 100;
-                int max_wait = server.ext_data_load_timeout_ms / sleep_ms; /* Convert ms to iterations */
-                int waited = 0;
-                while (waited < max_wait) {
-                    if (externalDataLoadCheckComplete() == C_OK) {
-                        serverLog(LL_NOTICE, "External data loaded synchronously for full sync");
-                        break;
-                    }
-                    usleep(sleep_ms * 1000); /* Sleep 100ms */
-                    waited++;
-                }
-                if (waited >= max_wait) {
-                    serverLog(LL_WARNING, "Timeout waiting for external data load to complete");
-                }
-            } else {
-                serverLog(LL_WARNING, "Failed to initiate external data load for full sync");
-            }
+            serverLog(LL_WARNING, "Failed to initiate external data load for full sync");
         }
     }
 }
@@ -151,7 +230,12 @@ int externalDataModuleRegister(const char *name,
                                ValkeyModule *module,
                                storageMethods *storage_methods,
                                filterMethods *filter_methods) {
+    serverLog(LL_NOTICE, "=== externalDataModuleRegister called for module: %s ===", name);
+    serverLog(LL_NOTICE, "DEBUG: isExtDataOn=%d, loading=%d, repl_state=%d",
+              isExtDataOn(), server.loading, server.repl_state);
+    
     if (!isExtDataOn()) {
+        serverLog(LL_NOTICE, "externalDataModuleRegister: external data is OFF, returning C_ERR");
         return C_ERR;
     }
     assert(getCurrentExternalDataCtx() != NULL);
@@ -163,6 +247,8 @@ int externalDataModuleRegister(const char *name,
         return C_ERR;
     }
 
+    serverLog(LL_NOTICE, "Registering external module: %s", name_sds);
+
     externalDataModule *m = zmalloc(sizeof(*m));
     *m = (externalDataModule){
         .name = name_sds,
@@ -172,9 +258,12 @@ int externalDataModuleRegister(const char *name,
     };
 
     dictAdd(curr_external_data_ctx->modules, name_sds, m);
+    serverLog(LL_NOTICE, "Module %s added to modules dictionary", name_sds);
 
     /* Auto init databases data from module, if there are any */
+    serverLog(LL_NOTICE, "Calling externalDataAutoInitFromModule for module: %s", name_sds);
     externalDataAutoInitFromModule(m);
+    serverLog(LL_NOTICE, "externalDataAutoInitFromModule returned for module: %s", name_sds);
 
     return C_OK;
 }
@@ -259,8 +348,13 @@ void externalDataStatsCommand(client *c) {
     assert(getCurrentExternalDataCtx() != NULL);
 
     int size = dictSize(curr_external_data_ctx->dbdata);
+    
+    /* DEBUG: Log stats command execution */
+    serverLog(LL_NOTICE, "DEBUG: externalDataStatsCommand called - dbdata size: %d", size);
+    
     addReplyArrayLen(c, size);
     if (size == 0) {
+        serverLog(LL_NOTICE, "DEBUG: externalDataStatsCommand - returning empty array");
         return;
     }
 
@@ -275,6 +369,9 @@ void externalDataStatsCommand(client *c) {
         char line[sizeof(name) + sizeof(ed->module_instance->external_module->name) + 2];
         snprintf(line, sizeof(line), "%s:%s", name, ed->module_instance->external_module->name);
         lines[num_lines++] = sdsnew(line);
+        
+        /* DEBUG: Log each entry */
+        serverLog(LL_NOTICE, "DEBUG: externalDataStatsCommand - entry: %s", line);
     }
     dictReleaseIterator(dbdata_iter);
 
@@ -283,6 +380,7 @@ void externalDataStatsCommand(client *c) {
         addReplyBulkCString(c, lines[i]);
         sdsfree(lines[i]);
     }
+    serverLog(LL_NOTICE, "DEBUG: externalDataStatsCommand - returning %d entries", num_lines);
     return;
 }
 
@@ -525,6 +623,21 @@ static void teardownModuleCtx(externalDataModuleInstance *mi) {
 int externalStorageCallSetFunc(externalDataModuleInstance *mi, int dbid, robj *key, robj *value) {
     setupModuleCtx(mi);
 
+    // Validate parameters before calling module
+    if (!key) {
+        serverLog(LL_WARNING, "externalStorageCallSetFunc: NULL key parameter for db %d", dbid);
+        teardownModuleCtx(mi);
+        return EXTERNAL_ERROR;
+    }
+    if (!value) {
+        serverLog(LL_WARNING, "externalStorageCallSetFunc: NULL value parameter for db %d", dbid);
+        teardownModuleCtx(mi);
+        return EXTERNAL_ERROR;
+    }
+
+    // Add logging before calling module function
+    serverLog(LL_DEBUG, "DEBUG: externalStorageCallSetFunc - calling module set function with key=%p, value=%p, dbid=%d", (void*)key, (void*)value, dbid);
+    
     ValkeyModuleKeyOptCtx key_ctx = {key, NULL, dbid, -1};
     int success = mi->external_module->storage_methods.set(mi->module_ctx, mi->storage_ctx, &key_ctx, value);
 
@@ -535,7 +648,22 @@ int externalStorageCallSetFunc(externalDataModuleInstance *mi, int dbid, robj *k
 int externalStorageCallGetFunc(externalDataModuleInstance *si, int dbid, robj *key, void **found) {
     setupModuleCtx(si);
 
-    serverAssert(si->external_module != NULL && si->storage_ctx != NULL && si->module_ctx != NULL && key != NULL);
+    // Validate parameters before calling module
+    if (!key) {
+        serverLog(LL_WARNING, "externalStorageCallGetFunc: NULL key parameter for db %d", dbid);
+        teardownModuleCtx(si);
+        return 0;
+    }
+    if (!found) {
+        serverLog(LL_WARNING, "externalStorageCallGetFunc: NULL found parameter for db %d", dbid);
+        teardownModuleCtx(si);
+        return 0;
+    }
+
+    // Add logging before calling module function
+    serverLog(LL_DEBUG, "DEBUG: externalStorageCallGetFunc - calling module get function with key=%p, found=%p, dbid=%d", (void*)key, (void*)found, dbid);
+    
+    serverAssert(si->external_module != NULL && si->storage_ctx != NULL && si->module_ctx != NULL);
     ValkeyModuleKeyOptCtx key_ctx = {key, NULL, dbid, -1};
     int exists = si->external_module->storage_methods.get(si->module_ctx, si->storage_ctx, &key_ctx, found);
 
@@ -546,7 +674,22 @@ int externalStorageCallGetFunc(externalDataModuleInstance *si, int dbid, robj *k
 int externalStorageCallDelFunc(externalDataModuleInstance *mi, int dbid, robj *key, robj **value) {
     setupModuleCtx(mi);
 
-    serverAssert(mi->external_module != NULL && mi->storage_ctx != NULL && mi->module_ctx != NULL && key != NULL);
+    // Validate parameters before calling module
+    if (!key) {
+        serverLog(LL_WARNING, "externalStorageCallDelFunc: NULL key parameter for db %d", dbid);
+        teardownModuleCtx(mi);
+        return 0;
+    }
+    if (!value) {
+        serverLog(LL_WARNING, "externalStorageCallDelFunc: NULL value parameter for db %d", dbid);
+        teardownModuleCtx(mi);
+        return 0;
+    }
+
+    // Add logging before calling module function
+    serverLog(LL_DEBUG, "DEBUG: externalStorageCallDelFunc - calling module del function with key=%p, value=%p, dbid=%d", (void*)key, (void*)value, dbid);
+    
+    serverAssert(mi->external_module != NULL && mi->storage_ctx != NULL && mi->module_ctx != NULL);
 
     ValkeyModuleKeyOptCtx key_ctx = {key, NULL, dbid, -1};
     int result = mi->external_module->storage_methods.del(mi->module_ctx, mi->storage_ctx, &key_ctx, value);
@@ -558,7 +701,17 @@ int externalStorageCallDelFunc(externalDataModuleInstance *mi, int dbid, robj *k
 int externalFilterCallSetFunc(externalDataModuleInstance *fi, int dbid, robj *key) {
     setupModuleCtx(fi);
 
-    serverAssert(fi->external_module != NULL && fi->filter_ctx != NULL && fi->module_ctx != NULL && key != NULL);
+    // Validate parameters before calling module
+    if (!key) {
+        serverLog(LL_WARNING, "externalFilterCallSetFunc: NULL key parameter for db %d", dbid);
+        teardownModuleCtx(fi);
+        return EXTERNAL_ERROR;
+    }
+
+    // Add logging before calling module function
+    serverLog(LL_DEBUG, "DEBUG: externalFilterCallSetFunc - calling module set function with key=%p, dbid=%d", (void*)key, dbid);
+    
+    serverAssert(fi->external_module != NULL && fi->filter_ctx != NULL && fi->module_ctx != NULL);
     ValkeyModuleKeyOptCtx key_ctx = {key, NULL, dbid, -1};
     int success = fi->external_module->filter_methods.set(fi->module_ctx, fi->filter_ctx, &key_ctx);
 
@@ -569,7 +722,17 @@ int externalFilterCallSetFunc(externalDataModuleInstance *fi, int dbid, robj *ke
 int externalFilterCallGetFunc(externalDataModuleInstance *fi, int dbid, robj *key) {
     setupModuleCtx(fi);
 
-    serverAssert(fi->external_module != NULL && fi->filter_ctx != NULL && fi->module_ctx != NULL && key != NULL);
+    // Validate parameters before calling module
+    if (!key) {
+        serverLog(LL_WARNING, "externalFilterCallGetFunc: NULL key parameter for db %d", dbid);
+        teardownModuleCtx(fi);
+        return 0;
+    }
+
+    // Add logging before calling module function
+    serverLog(LL_DEBUG, "DEBUG: externalFilterCallGetFunc - calling module get function with key=%p, dbid=%d", (void*)key, dbid);
+    
+    serverAssert(fi->external_module != NULL && fi->filter_ctx != NULL && fi->module_ctx != NULL);
     ValkeyModuleKeyOptCtx key_ctx = {key, NULL, dbid, -1};
     int exists = fi->external_module->filter_methods.get(fi->module_ctx, fi->filter_ctx, &key_ctx);
 
@@ -580,6 +743,21 @@ int externalFilterCallGetFunc(externalDataModuleInstance *fi, int dbid, robj *ke
 int externalFilterCallDelFunc(externalDataModuleInstance *fi, int dbid, robj *key, robj **value) {
     setupModuleCtx(fi);
 
+    // Validate parameters before calling module
+    if (!key) {
+        serverLog(LL_WARNING, "externalFilterCallDelFunc: NULL key parameter for db %d", dbid);
+        teardownModuleCtx(fi);
+        return 0;
+    }
+    if (!value) {
+        serverLog(LL_WARNING, "externalFilterCallDelFunc: NULL value parameter for db %d", dbid);
+        teardownModuleCtx(fi);
+        return 0;
+    }
+
+    // Add logging before calling module function
+    serverLog(LL_DEBUG, "DEBUG: externalFilterCallDelFunc - calling module del function with key=%p, value=%p, dbid=%d", (void*)key, (void*)value, dbid);
+    
     ValkeyModuleKeyOptCtx key_ctx = {key, NULL, dbid, -1};
     int result = fi->external_module->filter_methods.del(fi->module_ctx, fi->filter_ctx, &key_ctx, value);
 
@@ -653,12 +831,16 @@ int externalDataCallDumpFunc(externalDataModuleInstance *mi,
 
     /* Create server ID string (host:port) if target is NULL */
     ValkeyModuleString *server_target = target;
-    int should_free_target = 0;
     if (target == NULL) {
         char server_id[256];
-        snprintf(server_id, sizeof(server_id), "localhost:%d", server.port);
+        snprintf(server_id, sizeof(server_id), "127.0.0.1:%d", server.port);
         server_target = (ValkeyModuleString *)createStringObject(server_id, strlen(server_id));
-        should_free_target = 1;
+        
+        /* Check if string creation failed */
+        if (server_target == NULL) {
+            serverLog(LL_WARNING, "Failed to create server target string for external data dump");
+            return EXTERNAL_ERROR;
+        }
     }
 
     /* Pass -1 as dbid to indicate all databases */
@@ -671,7 +853,36 @@ int externalDataCallDumpFunc(externalDataModuleInstance *mi,
         server_target,
         backup_id);
 
-    if (should_free_target) {
+    if (result != EXTERNAL_SUCCESS) {
+        serverLog(LL_WARNING, "External data dump failed");
+        if (server_target) {
+            decrRefCount((robj *)server_target);
+        }
+        return EXTERNAL_ERROR;
+    }
+
+    /* Call filter dump method if available, after storage dump */
+    if (mi->external_module->filter_methods.dump) {
+        int filter_result = mi->external_module->filter_methods.dump(
+            mi->module_ctx,
+            mi->filter_ctx,
+            -1,  /* -1 means all databases */
+            slot,
+            timestamp,
+            server_target,
+            backup_id);
+        
+        if (filter_result != EXTERNAL_SUCCESS) {
+            /* If filter dump failed, log but don't fail the overall operation */
+            serverLog(LL_WARNING, "Filter dump failed");
+            if (server_target) {
+                decrRefCount((robj *)server_target);
+            }
+            return EXTERNAL_ERROR;
+        }
+    }
+
+    if (server_target) {
         decrRefCount((robj *)server_target);
     }
 
@@ -703,6 +914,50 @@ int externalDataCallLoadFunc(externalDataModuleInstance *mi,
         -1,  /* -1 means all databases */
         backup_id,
         source);
+
+    /* Call filter load method if available, after storage load */
+    if (result == EXTERNAL_SUCCESS && mi->external_module->filter_methods.load) {
+        int filter_result = mi->external_module->filter_methods.load(
+            mi->module_ctx,
+            mi->filter_ctx,
+            -1,  /* -1 means all databases */
+            backup_id,
+            source);
+        
+        /* If filter load failed, log but don't fail the overall operation */
+        if (filter_result != EXTERNAL_SUCCESS) {
+            serverLog(LL_WARNING, "Filter load failed but storage load succeeded");
+        }
+    }
+
+    teardownModuleCtx(mi);
+    return result;
+}
+
+/* Call the get_state callback function for a module instance
+ * Returns EXTERNAL_SUCCESS on success, EXTERNAL_ERROR on failure */
+int externalDataCallGetStateFunc(externalDataModuleInstance *mi,
+                                 ValkeyModuleString *source,
+                                 int **db_numbers,
+                                 size_t *num_dbs) {
+    if (!mi || !mi->external_module || !mi->storage_ctx || !mi->module_ctx) {
+        return EXTERNAL_ERROR;
+    }
+
+    /* Check if get_state function is available */
+    if (!mi->external_module->storage_methods.get_state) {
+        return EXTERNAL_ERROR;
+    }
+
+    setupModuleCtx(mi);
+
+    /* Call storage get_state method */
+    int result = mi->external_module->storage_methods.get_state(
+        mi->module_ctx,
+        mi->storage_ctx,
+        source,
+        db_numbers,
+        num_dbs);
 
     teardownModuleCtx(mi);
     return result;
@@ -971,13 +1226,13 @@ void externalDataLoadCommand(client *c) {
     ValkeyModuleString *source = NULL;
     int should_free_source = 0;
     
-    if (server.primary_host) {
+    if (is_replica()) {
         /* We're a replica - create source string with primary address */
-        char source_buf[256];
-        snprintf(source_buf, sizeof(source_buf), "%s:%d",
-                 server.primary_host, server.primary_port);
-        source = (ValkeyModuleString *)createStringObject(source_buf, strlen(source_buf));
-        should_free_source = 1;
+        char *primary_addr = get_primary_address();
+        if (primary_addr) {
+            source = (ValkeyModuleString *)createStringObject(primary_addr, strlen(primary_addr));
+            should_free_source = 1;
+        }
     }
 
     /* Call the load function - it will load all databases */
@@ -1037,6 +1292,16 @@ int externalDataWrite(int id, void *key, void *value) {
     externalDbData *dbData = dictGetVal(db);
     externalDataModuleInstance *mi = dbData->module_instance;
     if (!mi) return EXTERNAL_ERROR;
+
+    // Validate key and value parameters
+    if (!key) {
+        serverLog(LL_WARNING, "externalDataWrite: NULL key parameter for db %d", id);
+        return EXTERNAL_ERROR;
+    }
+    if (!value) {
+        serverLog(LL_WARNING, "externalDataWrite: NULL value parameter for db %d", id);
+        return EXTERNAL_ERROR;
+    }
 
     // Check if both storage and filter are in readonly state
     ValkeyModuleExternalStorageState storage_state = mi->storage_ctx->state;
@@ -1102,7 +1367,24 @@ void externalDataFlushDb(int dbid) {
     sds db_name = getDBName(dbid);
     dictEntry *db = dictFind(ctx->dbdata, db_name);
     sdsfree(db_name);
-    if (!db) return;
+    
+    /* DEBUG: Log dbdata state before flush */
+    int dbdata_size_before = dictSize(ctx->dbdata);
+    serverLog(LL_NOTICE, "DEBUG: externalDataFlushDb(dbid=%d) - dbdata size before: %d", dbid, dbdata_size_before);
+    
+    /* Log all entries in dbdata for debugging */
+    dictIterator *di = dictGetIterator(ctx->dbdata);
+    dictEntry *de;
+    while ((de = dictNext(di))) {
+        sds key = dictGetKey(de);
+        serverLog(LL_NOTICE, "DEBUG: externalDataFlushDb - dbdata entry: %s", key);
+    }
+    dictReleaseIterator(di);
+    
+    if (!db) {
+        serverLog(LL_NOTICE, "DEBUG: externalDataFlushDb(dbid=%d) - db entry not found in dbdata", dbid);
+        return;
+    }
 
     externalDbData *dbData = dictGetVal(db);
     externalDataModuleInstance *mi = dbData->module_instance;
@@ -1160,6 +1442,16 @@ void externalDataFlushDb(int dbid) {
     }
 
     teardownModuleCtx(mi);
+
+    /* DEBUG: Log dbdata state after flush */
+    int dbdata_size_after = dictSize(ctx->dbdata);
+    serverLog(LL_NOTICE, "DEBUG: externalDataFlushDb(dbid=%d) - dbdata size after: %d", dbid, dbdata_size_after);
+    
+    if (dbdata_size_before != dbdata_size_after) {
+        serverLog(LL_WARNING, "DEBUG: externalDataFlushDb - dbdata size changed from %d to %d!", dbdata_size_before, dbdata_size_after);
+    } else {
+        serverLog(LL_NOTICE, "DEBUG: externalDataFlushDb - dbdata size unchanged, as expected");
+    }
 }
 
 /* Flush external data for all databases */
@@ -1461,7 +1753,57 @@ void bioExternalDataDumpForFullSync(void) {
     
     /* Check if there are any initialized databases */
     if (dictSize(ctx->dbdata) == 0) {
-        serverLog(LL_WARNING, "No external data initialized for full sync dump");
+        serverLog(LL_NOTICE, "No external data initialized for full sync dump - creating empty backup");
+        /* When there are no databases, we should still mark the dump as successful
+         * to prevent replication failures in cluster mode */
+        
+        /* Create an empty backup ID to indicate successful dump */
+        ValkeyModuleString *empty_backup_id = (ValkeyModuleString *)createStringObject("empty_backup", 12);
+        if (!empty_backup_id) {
+            serverLog(LL_WARNING, "Failed to create empty backup ID");
+            return;
+        }
+        
+        /* Set the backup ID in all module contexts to indicate successful dump */
+        dictIterator *di = dictGetIterator(ctx->modules);
+        dictEntry *de;
+        while ((de = dictNext(di))) {
+            externalDataModule *module = dictGetVal(de);
+            
+            /* Find any database using this module */
+            dictIterator *db_di = dictGetIterator(ctx->dbdata);
+            dictEntry *db_de;
+            while ((db_de = dictNext(db_di))) {
+                externalDbData *dbData = dictGetVal(db_de);
+                if (dbData->module_instance->external_module == module) {
+                    storageCtx *storage_ctx = dbData->module_instance->storage_ctx;
+                    filterCtx *filter_ctx = dbData->module_instance->filter_ctx;
+                    
+                    /* Set both storage and filter dump status to success */
+                    atomic_store_explicit(&storage_ctx->ext_data_dump_status, VMES_DUMP_STATE_SUCCESS, memory_order_release);
+                    atomic_store_explicit(&filter_ctx->ext_data_dump_status, VMEF_DUMP_STATE_SUCCESS, memory_order_release);
+                    
+                    /* Store backup ID in both storage and filter contexts */
+                    if (storage_ctx->ext_data_dump_backup_id) {
+                        sdsfree(storage_ctx->ext_data_dump_backup_id);
+                    }
+                    storage_ctx->ext_data_dump_backup_id = sdsnew("empty_backup");
+                    
+                    if (filter_ctx->ext_data_dump_backup_id) {
+                        sdsfree(filter_ctx->ext_data_dump_backup_id);
+                    }
+                    filter_ctx->ext_data_dump_backup_id = sdsnew("empty_backup");
+                    
+                    serverLog(LL_NOTICE, "Set empty backup for module %s", module->name);
+                    break;
+                }
+            }
+            dictReleaseIterator(db_di);
+        }
+        dictReleaseIterator(di);
+        
+        /* Free the empty backup ID */
+        decrRefCount((robj *)empty_backup_id);
         return;
     }
     
@@ -1500,12 +1842,25 @@ void bioExternalDataDumpForFullSync(void) {
         /* Call dump with timestamp 0 for full backup, -1 for all slots */
         int result = externalDataCallDumpFunc(mi, -1, 0, NULL, &backup_id);
         
-        if (result != EXTERNAL_SUCCESS || !backup_id) {
+        if (result != EXTERNAL_SUCCESS) {
             serverLog(LL_WARNING, "Failed to dump external data for module %s",
                       mi->external_module->name);
             atomic_store_explicit(&storage_ctx->ext_data_dump_status, VMES_DUMP_STATE_FAILED, memory_order_release);
             atomic_store_explicit(&filter_ctx->ext_data_dump_status, VMEF_DUMP_STATE_FAILED, memory_order_release);
             continue;
+        }
+        
+        /* If dump succeeded but backup_id is NULL, create a dummy backup ID to indicate success
+         * This can happen when there are no databases to dump */
+        if (!backup_id) {
+            backup_id = (ValkeyModuleString *)createStringObject("empty_backup", 12);
+            if (!backup_id) {
+                serverLog(LL_WARNING, "Failed to create backup ID for module %s",
+                          mi->external_module->name);
+                atomic_store_explicit(&storage_ctx->ext_data_dump_status, VMES_DUMP_STATE_FAILED, memory_order_release);
+                atomic_store_explicit(&filter_ctx->ext_data_dump_status, VMEF_DUMP_STATE_FAILED, memory_order_release);
+                continue;
+            }
         }
 
         atomic_store_explicit(&storage_ctx->ext_data_dump_status, VMES_DUMP_STATE_SUCCESS, memory_order_release);
@@ -1544,6 +1899,15 @@ int externalDataDumpCheckComplete(ValkeyModuleString **backup_id) {
     externalDataCtx *ctx = getCurrentExternalDataCtx();
     if (!ctx) return C_ERR;
     
+    /* Check if there are any initialized databases */
+    if (dictSize(ctx->dbdata) == 0) {
+        serverLog(LL_NOTICE, "No external data initialized - dump completed successfully");
+        if (backup_id) {
+            *backup_id = (ValkeyModuleString *)createStringObject("empty_backup", 12);
+        }
+        return C_OK; /* No databases to dump = successful dump */
+    }
+    
     /* Find any initialized database to get the module instance */
     dictIterator *di = dictGetIterator(ctx->dbdata);
     dictEntry *de = dictNext(di);
@@ -1563,17 +1927,29 @@ int externalDataDumpCheckComplete(ValkeyModuleString **backup_id) {
         return C_ERR; /* Still in progress */
     }
     
-    if (storage_status == VMES_DUMP_STATE_SUCCESS && filter_status == VMEF_DUMP_STATE_SUCCESS &&
-        storage_ctx->ext_data_dump_backup_id) {
+    /* Handle the case where dump completed with empty_backup */
+    if (storage_ctx->ext_data_dump_backup_id &&
+        strcmp(storage_ctx->ext_data_dump_backup_id, "empty_backup") == 0) {
+        serverLog(LL_NOTICE, "External data dump completed successfully: empty_backup");
+        if (backup_id) {
+            *backup_id = (ValkeyModuleString *)createStringObject("empty_backup", 12);
+        }
+        return C_OK;
+    }
+    
+    if (storage_status == VMES_DUMP_STATE_SUCCESS && filter_status == VMEF_DUMP_STATE_SUCCESS) {
         if (backup_id) {
             *backup_id = (ValkeyModuleString *)createStringObject(storage_ctx->ext_data_dump_backup_id,
                                                                    sdslen(storage_ctx->ext_data_dump_backup_id));
         }
-        serverLog(LL_NOTICE, "External data dump completed successfully: %s", storage_ctx->ext_data_dump_backup_id);
+        serverLog(LL_NOTICE, "External data dump completed successfully: %s",
+                  storage_ctx->ext_data_dump_backup_id ? storage_ctx->ext_data_dump_backup_id : "empty");
         return C_OK;
     }
     
-    serverLog(LL_WARNING, "External data dump failed or backup ID is empty");
+    serverLog(LL_WARNING, "External data dump check failed - storage_status=%d, filter_status=%d, backup_id=%s",
+              storage_status, filter_status,
+              storage_ctx->ext_data_dump_backup_id ? storage_ctx->ext_data_dump_backup_id : "NULL");
     return C_ERR;
 }
 
@@ -1586,7 +1962,36 @@ void bioExternalDataLoadForFullSync(void) {
     
     /* Check if there are any initialized databases */
     if (dictSize(ctx->dbdata) == 0) {
-        serverLog(LL_WARNING, "No external data initialized for sync load");
+        serverLog(LL_NOTICE, "No external data initialized for sync load - marking as completed");
+        /* When there are no databases, we should still mark the load as successful
+         * to prevent replication failures in cluster mode */
+        
+        /* Find any module to mark load as successful */
+        dictIterator *di = dictGetIterator(ctx->modules);
+        dictEntry *de;
+        while ((de = dictNext(di))) {
+            externalDataModule *module = dictGetVal(de);
+            
+            /* Find any database using this module (shouldn't exist, but be safe) */
+            dictIterator *db_di = dictGetIterator(ctx->dbdata);
+            dictEntry *db_de;
+            while ((db_de = dictNext(db_di))) {
+                externalDbData *dbData = dictGetVal(db_de);
+                if (dbData->module_instance->external_module == module) {
+                    storageCtx *storage_ctx = dbData->module_instance->storage_ctx;
+                    filterCtx *filter_ctx = dbData->module_instance->filter_ctx;
+                    
+                    /* Set both storage and filter load status to success */
+                    atomic_store_explicit(&storage_ctx->ext_data_load_status, VMES_LOAD_STATE_SUCCESS, memory_order_release);
+                    atomic_store_explicit(&filter_ctx->ext_data_load_status, VMEF_LOAD_STATE_SUCCESS, memory_order_release);
+                    
+                    serverLog(LL_NOTICE, "Marked load as successful for module %s (no databases)", module->name);
+                    break;
+                }
+            }
+            dictReleaseIterator(db_di);
+        }
+        dictReleaseIterator(di);
         return;
     }
     
@@ -1625,19 +2030,19 @@ void bioExternalDataLoadForFullSync(void) {
          * - Primary address (host:port) if we're on replica loading from primary */
         ValkeyModuleString *source = NULL;
         int result = EXTERNAL_ERROR;
-        if (server.primary_host) {
+        if (is_replica()) {
             /* We're a replica - create source string with primary address including port */
-            char source_buf[256];
-            snprintf(source_buf, sizeof(source_buf), "%s:%d",
-                     server.primary_host, server.primary_port);
-            source = (ValkeyModuleString *)createStringObject(source_buf, strlen(source_buf));
-                    
-            /* Call load function with NULL (latest backup) and source */
-            result = externalDataCallLoadFunc(mi, NULL, source);
+            char *primary_addr = get_primary_address();
+            if (primary_addr) {
+                source = (ValkeyModuleString *)createStringObject(primary_addr, strlen(primary_addr));
+                        
+                /* Call load function with NULL (latest backup) and source */
+                result = externalDataCallLoadFunc(mi, NULL, source);
+            }
         } else {
             /* We're on primary or standalone - load from local backup with server ID */
             char server_id[256];
-            snprintf(server_id, sizeof(server_id), "localhost:%d", server.port);
+            snprintf(server_id, sizeof(server_id), "127.0.0.1:%d", server.port);
             source = (ValkeyModuleString *)createStringObject(server_id, strlen(server_id));
             
             serverLog(LL_NOTICE, "Loading external data from local backup for module %s (server: %s)",
@@ -1711,21 +2116,46 @@ int externalDataLoadCheckComplete(void) {
     return C_ERR;
 }
 
-/* Auto-initialize external data from module state
- * This is called when a module is registered to check if it has state to restore */
-void externalDataAutoInitFromModule(externalDataModule *module) {
-    if (!isExtDataOn()) return;
+/* Helper function to try auto-initialization from a module's state
+ * Returns 1 if databases were initialized, 0 otherwise
+ * This is extracted to be reusable from both module registration and deferred init */
+static int tryAutoInitFromModuleState(externalDataModule *module) {
+    serverLog(LL_NOTICE, "=== tryAutoInitFromModuleState START ===");
+    
+    if (!isExtDataOn()) {
+        serverLog(LL_WARNING, "tryAutoInitFromModuleState: external data is OFF");
+        return EXTERNAL_ERROR;
+    }
     
     externalDataCtx *ctx = getCurrentExternalDataCtx();
-    if (!ctx) return;
-
+    if (!ctx) {
+        serverLog(LL_WARNING, "tryAutoInitFromModuleState: failed to get external data context");
+        return EXTERNAL_ERROR;
+    }
+    
+    /* Check if module pointer is valid */
+    if (!module) {
+        serverLog(LL_WARNING, "tryAutoInitFromModuleState: NULL module pointer");
+        return EXTERNAL_ERROR;
+    }
+    
+    if (!module->module) {
+        serverLog(LL_WARNING, "tryAutoInitFromModuleState: NULL module->module pointer");
+        return EXTERNAL_ERROR;
+    }
+    
     const char *module_name = module->name;
-    serverLog(LL_NOTICE, "Checking module %s for state to auto-initialize", module_name);
+    if (!module_name) {
+        serverLog(LL_WARNING, "tryAutoInitFromModuleState: NULL module->name");
+        return EXTERNAL_ERROR;
+    }
+    
+    serverLog(LL_NOTICE, "tryAutoInitFromModuleState: module=%s, module->module=%p", module_name, (void*)module->module);
     
     /* Check if the module implements the get_state callback in filter methods */
     if (!module->filter_methods.get_state) {
-        serverLog(LL_DEBUG, "Module %s does not implement get_state, skipping auto-init", module_name);
-        return;
+        serverLog(LL_DEBUG, "Module %s does not implement filter get_state, skipping auto-init", module_name);
+        return EXTERNAL_ERROR;
     }
     
     /* Create a temporary filter context for the callback */
@@ -1737,55 +2167,200 @@ void externalDataAutoInitFromModule(externalDataModule *module) {
         .ext_data_load_status = VMEF_LOAD_STATE_NONE,
     };
     
+    serverLog(LL_NOTICE, "tryAutoInitFromModuleState: created temp_filter_ctx at %p", (void*)&temp_filter_ctx);
+    
     /* Create a temporary module context */
     ValkeyModuleCtx *temp_module_ctx = moduleAllocateContext();
+    if (!temp_module_ctx) {
+        serverLog(LL_WARNING, "tryAutoInitFromModuleState: failed to allocate temp_module_ctx");
+        return EXTERNAL_ERROR;
+    }
+    
+    serverLog(LL_NOTICE, "tryAutoInitFromModuleState: allocated temp_module_ctx at %p", (void*)temp_module_ctx);
+    
     moduleExternalFilterInitContext(temp_module_ctx, module->module);
+    serverLog(LL_NOTICE, "tryAutoInitFromModuleState: initialized temp_module_ctx");
+    
+    serverLog(LL_NOTICE, "tryAutoInitFromModuleState: initialized temp_module_ctx");
     
     /* Determine source for get_state operation:
      * - NULL if we're on primary/standalone (query local state)
      * - Primary address (host:port) if we're on replica (query primary's state) */
     ValkeyModuleString *source = NULL;
-    if (server.primary_host) {
+    int is_replica_node = is_replica();
+    
+    serverLog(LL_NOTICE, "tryAutoInitFromModuleState: is_replica_node=%d", is_replica_node);
+    
+    if (is_replica_node) {
         /* We're a replica - create source string with primary address */
-        char source_buf[256];
-        snprintf(source_buf, sizeof(source_buf), "%s:%d",
-                 server.primary_host, server.primary_port);
-        source = (ValkeyModuleString *)createStringObject(source_buf, strlen(source_buf));
+        char *primary_addr = get_primary_address();
+        serverLog(LL_NOTICE, "tryAutoInitFromModuleState: is_replica=true, primary_addr=%s",
+                  primary_addr ? primary_addr : "NULL");
+        
+        if (primary_addr) {
+            source = (ValkeyModuleString *)createStringObject(primary_addr, strlen(primary_addr));
+            serverLog(LL_NOTICE, "tryAutoInitFromModuleState: created source string at %p, len=%zu",
+                      (void*)source, source ? sdslen((sds)objectGetVal(source)) : 0);
+            
+        //     if (!source) {
+        //         serverLog(LL_WARNING, "tryAutoInitFromModuleState: failed to create source string");
+        //         moduleFreeContext(temp_module_ctx);
+        //         zfree(temp_module_ctx);
+        //         return EXTERNAL_ERROR;
+        //     }
+        // } else {
+        //     /* Replica but no primary address available yet - skip for now */
+        //     moduleFreeContext(temp_module_ctx);
+        //     zfree(temp_module_ctx);
+        //     return EXTERNAL_ERROR;
+        }
+    // } else {
+    //     moduleFreeContext(temp_module_ctx);
+    //     zfree(temp_module_ctx);
+    //     return EXTERNAL_ERROR;
     }
     
     /* Ask the module to get its state and which databases to initialize */
     int *db_numbers = NULL;
     size_t num_dbs = 0;
+    
+    serverLog(LL_NOTICE, "Calling module %s filter get_state with source=%s", module_name,
+              source ? (char*)(objectGetVal(source)) : "NULL");
+    
+    /* Validate all parameters before calling module */
+    serverLog(LL_NOTICE, "tryAutoInitFromModuleState: calling get_state with - temp_module_ctx=%p, &temp_filter_ctx=%p, source=%p, &db_numbers=%p, &num_dbs=%p",
+              (void*)temp_module_ctx, (void*)&temp_filter_ctx, (void*)source, (void*)&db_numbers, (void*)&num_dbs);
+    
     int result = module->filter_methods.get_state(temp_module_ctx, &temp_filter_ctx, source, &db_numbers, &num_dbs);
+    
+    serverLog(LL_NOTICE, "Module %s filter get_state returned: result=%d, num_dbs=%zu, db_numbers=%p",
+              module_name, result, num_dbs, (void*)db_numbers);
+    
+    /* Also call storage get_state if available */
+    int *storage_db_numbers = NULL;
+    size_t storage_num_dbs = 0;
+    if (module->storage_methods.get_state) {
+        serverLog(LL_NOTICE, "Calling module %s storage get_state with source=%s", module_name,
+                  source ? (char*)(objectGetVal(source)) : "NULL");
+        
+        /* Create a temporary storage context for the storage get_state call */
+        storageCtx temp_storage_ctx = {
+            .state = VMES_STATE_READY,
+            .ext_data_timeout = server.ext_data_timeout,
+            .ext_data_dump_status = VMES_DUMP_STATE_NONE,
+            .ext_data_dump_backup_id = NULL,
+            .ext_data_load_status = VMES_LOAD_STATE_NONE,
+        };
+        
+        serverLog(LL_NOTICE, "tryAutoInitFromModuleState: created temp_storage_ctx at %p", (void*)&temp_storage_ctx);
+        
+        int storage_result = module->storage_methods.get_state(temp_module_ctx, &temp_storage_ctx, source, &storage_db_numbers, &storage_num_dbs);
+        
+        serverLog(LL_NOTICE, "Module %s storage get_state returned: result=%d, num_dbs=%zu, db_numbers=%p",
+                  module_name, storage_result, storage_num_dbs, (void*)storage_db_numbers);
+        
+        /* If storage get_state succeeded and returned databases, use those instead */
+        if (storage_result == EXTERNAL_SUCCESS && storage_db_numbers != NULL && storage_num_dbs > 0) {
+            /* Free filter db_numbers if they were allocated */
+            if (db_numbers) {
+                serverLog(LL_NOTICE, "tryAutoInitFromModuleState: freeing filter db_numbers=%p", (void*)db_numbers);
+                zfree(db_numbers);
+                db_numbers = NULL;
+            }
+            db_numbers = storage_db_numbers;
+            num_dbs = storage_num_dbs;
+            result = storage_result;
+            serverLog(LL_NOTICE, "tryAutoInitFromModuleState: using storage results instead of filter");
+        } else {
+            /* Free storage db_numbers if they were allocated but result was not successful */
+            if (storage_db_numbers) {
+                serverLog(LL_NOTICE, "tryAutoInitFromModuleState: freeing storage db_numbers=%p", (void*)storage_db_numbers);
+                zfree(storage_db_numbers);
+                storage_db_numbers = NULL;
+            }
+            /* Keep filter results as fallback */
+            serverLog(LL_NOTICE, "tryAutoInitFromModuleState: keeping filter results as fallback");
+        }
+    }
     
     /* Free source string if we created it */
     if (source) {
+        serverLog(LL_NOTICE, "tryAutoInitFromModuleState: freeing source string %p", (void*)source);
         decrRefCount((robj *)source);
+        source = NULL;
     }
     
     /* Clean up temporary context */
+    serverLog(LL_NOTICE, "tryAutoInitFromModuleState: freeing temp_module_ctx %p", (void*)temp_module_ctx);
     moduleFreeContext(temp_module_ctx);
     zfree(temp_module_ctx);
+    temp_module_ctx = NULL;
     
     if (result == EXTERNAL_SUCCESS && db_numbers != NULL && num_dbs > 0) {
         serverLog(LL_NOTICE, "Module %s returned state, auto-initializing %zu database(s)",
                  module_name, num_dbs);
         
+        /* Log which databases will be initialized */
+        for (size_t i = 0; i < num_dbs; i++) {
+            serverLog(LL_NOTICE, "  - Will initialize db%d", db_numbers[i]);
+        }
+        
         /* Initialize all databases specified by the module */
-        initializeDatabasesFromState(ctx, module, db_numbers, num_dbs);
+        int init_result = initializeDatabasesFromState(ctx, module, db_numbers, num_dbs);
+        serverLog(LL_NOTICE, "initializeDatabasesFromState returned: %d", init_result);
         
         /* Free the db_numbers array allocated by the module using ValkeyModule_Alloc
          * ValkeyModule_Alloc uses zmalloc internally, so we can use zfree */
         if (db_numbers) {
+            serverLog(LL_NOTICE, "tryAutoInitFromModuleState: freeing db_numbers=%p", (void*)db_numbers);
             zfree(db_numbers);
+            db_numbers = NULL;
         }
+        
+        serverLog(LL_NOTICE, "=== tryAutoInitFromModuleState SUCCESS ===");
+        return EXTERNAL_SUCCESS; /* Databases were initialized */
+    }
+    
+    serverLog(LL_NOTICE, "Module %s returned no state or error (result=%d, num_dbs=%zu)", module_name, result, num_dbs);
+    serverLog(LL_NOTICE, "=== tryAutoInitFromModuleState ERROR ===");
+    return EXTERNAL_ERROR;
+}
 
-        if (server.primary_host) {
-            /* For primary it is initiated in server.c */
-            processExternalDataLoadForFullSync();
-        }
+/* Auto-initialize external data from module state
+ * This is called when a module is registered to check if it has state to restore */
+void externalDataAutoInitFromModule(externalDataModule *module) {
+    if (!isExtDataOn()) {
+        serverLog(LL_NOTICE, "externalDataAutoInitFromModule: external data is OFF, skipping");
+        return;
+    }
+    
+    int is_repl = is_replica();
+    serverLog(LL_NOTICE, "Checking module %s for state to auto-initialize (is_replica=%d)", module->name, is_repl);
+    serverLog(LL_NOTICE, "DEBUG: primary_host=%s, primary_port=%d, cluster_enabled=%d, repl_state=%d",
+              server.primary_host ? server.primary_host : "NULL",
+              server.primary_port,
+              server.cluster_enabled,
+              server.repl_state);
+    
+    /* Try to auto-initialize from module state */
+    int init_result = tryAutoInitFromModuleState(module);
+    serverLog(LL_NOTICE, "tryAutoInitFromModuleState returned: %d", init_result);
+    
+    if (init_result == EXTERNAL_SUCCESS && is_repl) {
+        serverLog(LL_NOTICE, "Module %s initialized successfully on replica, triggering processExternalDataLoadForFullSync", module->name);
+        /* For replica, trigger load after initialization */
+        processExternalDataLoadForFullSync();
+    } else if (is_repl && server.repl_state == REPL_STATE_CONNECTED) {
+        /* Special case: replica with active connection but auto-init didn't find/create databases
+         * This happens when module loads after initial sync completed.
+         * Trigger load process anyway - processExternalDataLoadForFullSync will handle
+         * auto-initialization from modules when db_count==0 */
+        serverLog(LL_NOTICE, "Module %s loaded on connected replica (init_result=%d), triggering processExternalDataLoadForFullSync for late-load scenario",
+                  module->name, init_result);
+        processExternalDataLoadForFullSync();
     } else {
-        serverLog(LL_DEBUG, "Module %s returned no state or error", module_name);
+        serverLog(LL_NOTICE, "Module %s auto-init result: init_result=%d, is_replica=%d, repl_state=%d - NOT triggering load",
+                  module->name, init_result, is_repl, server.repl_state);
     }
 }
 

@@ -20,7 +20,7 @@ typedef ValkeyModuleExternalStorageMethods storageMethods;
 typedef ValkeyModuleExternalStorageState storageState;
 /* ValkeyModule type aliases for external filter structs and types */
 typedef ValkeyModuleExternalFilterCtx filterCtx;
-typedef ValkeyModuleExternalFilterMethods filterMethods;
+typedef ValkeyModuleExternalFilterMethodsV2 filterMethods;
 typedef ValkeyModuleExternalFilterState filterState;
 
 /* New module registration functions */
@@ -43,6 +43,7 @@ int externalDataCallSetReadonlyFunc(externalDataModuleInstance *mi);
 int externalDataCallDropReadonlyFunc(externalDataModuleInstance *mi);
 int externalDataCallDumpFunc(externalDataModuleInstance *mi, int slot, long long timestamp, ValkeyModuleString *target, ValkeyModuleString **backup_id);
 int externalDataCallLoadFunc(externalDataModuleInstance *mi, ValkeyModuleString *backup_id, ValkeyModuleString *source);
+int externalDataCallGetStateFunc(externalDataModuleInstance *mi, ValkeyModuleString *source, int **db_numbers, size_t *num_dbs);
 int externalDataDumpForFullSync(void);
 int externalDataDumpCheckComplete(ValkeyModuleString **backup_id);
 int externalDataLoadForFullSync(void);

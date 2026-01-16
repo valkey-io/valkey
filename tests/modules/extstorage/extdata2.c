@@ -116,8 +116,16 @@ static int storageDelFunction(ValkeyModuleCtx *module_ctx,
 
     int dbid = ValkeyModule_GetDbIdFromOptCtx(key_ctx);
     const ValkeyModuleString *key = ValkeyModule_GetKeyNameFromOptCtx(key_ctx);
+    if (key == NULL) {
+        ValkeyModule_Log(module_ctx, "error", "ERROR: storageDelFunction called with NULL key");
+        ValkeyModule_ReplyWithError(module_ctx, "ERR Internal error: NULL key");
+        return EXTERNAL_ERROR;
+    }
+    // Add logging before StringPtrLen call
+    ValkeyModule_Log(module_ctx, "debug", "DEBUG: storageDelFunction - about to call StringPtrLen on key=%p", (void*)key);
+    const char *key_str = (key != NULL) ? ValkeyModule_StringPtrLen(key, NULL) : "NULL";
     ValkeyModule_Log(module_ctx, "debug", "storageDelFunction: dbid=%d, key=%s",
-                     dbid, ValkeyModule_StringPtrLen(key, NULL));
+                     dbid, key_str);
     
     ValkeyModuleString *value =
         ValkeyModule_DictGet(storage_mem_pool[dbid], (ValkeyModuleString *)key, NULL);
@@ -131,8 +139,11 @@ static int storageDelFunction(ValkeyModuleCtx *module_ctx,
     ValkeyModule_Log(module_ctx, "debug", "storageDelFunction: found value, attempting delete");
     if (ValkeyModule_DictDel(storage_mem_pool[dbid], (ValkeyModuleString *)key, NULL) != VALKEYMODULE_OK) {
         ValkeyModule_Log(module_ctx, "debug", "storageDelFunction: delete failed");
+        // Add logging before StringPtrLen call
+        ValkeyModule_Log(module_ctx, "debug", "DEBUG: storageDelFunction error - about to call StringPtrLen on key=%p", (void*)key);
+        const char *key_str = (key != NULL) ? ValkeyModule_StringPtrLen(key, NULL) : "NULL";
         ValkeyModule_ReplyWithErrorFormat(module_ctx, "ERR Failed to del key %s",
-                                          ValkeyModule_StringPtrLen(key, NULL));
+                                          key_str);
         return EXTERNAL_ERROR;
     }
 
@@ -180,7 +191,12 @@ static int filterSetFunction(ValkeyModuleCtx *module_ctx,
 
     int dbid = ValkeyModule_GetDbIdFromOptCtx(key_ctx);
     const ValkeyModuleString *key = ValkeyModule_GetKeyNameFromOptCtx(key_ctx);
-    ValkeyModuleString *previous_value = 
+    if (key == NULL) {
+        ValkeyModule_Log(module_ctx, "error", "ERROR: filterSetFunction called with NULL key");
+        ValkeyModule_ReplyWithError(module_ctx, "ERR Internal error: NULL key");
+        return 0;
+    }
+    ValkeyModuleString *previous_value =
         ValkeyModule_DictGet(filter_mem_pool[dbid], (ValkeyModuleString *)key, NULL);
     
     if (previous_value != NULL) {
@@ -189,8 +205,11 @@ static int filterSetFunction(ValkeyModuleCtx *module_ctx,
     }
 
     if (ValkeyModule_DictReplace(filter_mem_pool[dbid], (ValkeyModuleString *)key, "") == VALKEYMODULE_ERR) {
+        // Add logging before StringPtrLen call
+        ValkeyModule_Log(module_ctx, "debug", "DEBUG: filterSetFunction error - about to call StringPtrLen on key=%p", (void*)key);
+        const char *key_str = (key != NULL) ? ValkeyModule_StringPtrLen(key, NULL) : "NULL";
         ValkeyModule_ReplyWithErrorFormat(module_ctx, "ERR Failed to set key %s",
-                                          ValkeyModule_StringPtrLen(key, NULL));
+                                          key_str);
         return 0;
     }
 
@@ -204,8 +223,15 @@ static int filterGetFunction(ValkeyModuleCtx *module_ctx,
     ValkeyModule_AutoMemory(module_ctx);
     int dbid = ValkeyModule_GetDbIdFromOptCtx(key_ctx);
     const ValkeyModuleString *key = ValkeyModule_GetKeyNameFromOptCtx(key_ctx);
+    if (key == NULL) {
+        ValkeyModule_Log(module_ctx, "error", "ERROR: filterGetFunction called with NULL key");
+        ValkeyModule_ReplyWithError(module_ctx, "ERR Internal error: NULL key");
+        return 0;
+    }
 
     size_t length;
+    // Add logging before StringPtrLen call
+    ValkeyModule_Log(module_ctx, "debug", "DEBUG: filterGetFunction - about to call StringPtrLen on key=%p", (void*)key);
     ValkeyModule_StringPtrLen(key, &length);
     if (length == 0) {
         ValkeyModule_ReplyWithSimpleString(module_ctx, "OK");
@@ -231,8 +257,16 @@ static int filterDelFunction(ValkeyModuleCtx *module_ctx,
 
     int dbid = ValkeyModule_GetDbIdFromOptCtx(key_ctx);
     const ValkeyModuleString *key = ValkeyModule_GetKeyNameFromOptCtx(key_ctx);
+    if (key == NULL) {
+        ValkeyModule_Log(module_ctx, "error", "ERROR: filterDelFunction called with NULL key");
+        ValkeyModule_ReplyWithError(module_ctx, "ERR Internal error: NULL key");
+        return EXTERNAL_ERROR;
+    }
+    // Add logging before StringPtrLen call
+    ValkeyModule_Log(module_ctx, "debug", "DEBUG: filterDelFunction - about to call StringPtrLen on key=%p", (void*)key);
+    const char *key_str = (key != NULL) ? ValkeyModule_StringPtrLen(key, NULL) : "NULL";
     ValkeyModule_Log(module_ctx, "debug", "filterDelFunction: dbid=%d, key=%s",
-                     dbid, ValkeyModule_StringPtrLen(key, NULL));
+                     dbid, key_str);
     
     ValkeyModuleString *value =
         ValkeyModule_DictGet(filter_mem_pool[dbid], (ValkeyModuleString *)key, NULL);
@@ -246,8 +280,11 @@ static int filterDelFunction(ValkeyModuleCtx *module_ctx,
     ValkeyModule_Log(module_ctx, "debug", "filterDelFunction: found value, attempting delete");
     if (ValkeyModule_DictDel(filter_mem_pool[dbid], (ValkeyModuleString *)key, NULL) != VALKEYMODULE_OK) {
         ValkeyModule_Log(module_ctx, "debug", "filterDelFunction: delete failed");
+        // Add logging before StringPtrLen call
+        ValkeyModule_Log(module_ctx, "debug", "DEBUG: filterDelFunction error - about to call StringPtrLen on key=%p", (void*)key);
+        const char *key_str = (key != NULL) ? ValkeyModule_StringPtrLen(key, NULL) : "NULL";
         ValkeyModule_ReplyWithErrorFormat(module_ctx, "ERR Failed to del key %s",
-                                          ValkeyModule_StringPtrLen(key, NULL));
+                                          key_str);
         return EXTERNAL_ERROR;
     }
     

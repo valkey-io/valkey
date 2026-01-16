@@ -2388,6 +2388,11 @@ void externalDataAutoInitFromModule(externalDataModule *module) {
     int init_result = tryAutoInitFromModuleState(module);
     serverLog(LL_NOTICE, "tryAutoInitFromModuleState returned: %d", init_result);
     
+    if (server.initial_memory_usage == 0) {
+        serverLog(LL_NOTICE, "Initial start detected, skipping load");
+        return;
+    }
+
     if (init_result == EXTERNAL_SUCCESS && is_repl) {
         serverLog(LL_NOTICE, "Module %s initialized successfully on replica, triggering processExternalDataLoadForFullSync", module->name);
         /* For replica, trigger load after initialization */

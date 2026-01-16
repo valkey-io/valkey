@@ -20,7 +20,7 @@ typedef ValkeyModuleExternalStorageMethods storageMethods;
 typedef ValkeyModuleExternalStorageState storageState;
 /* ValkeyModule type aliases for external filter structs and types */
 typedef ValkeyModuleExternalFilterCtx filterCtx;
-typedef ValkeyModuleExternalFilterMethodsV2 filterMethods;
+typedef ValkeyModuleExternalFilterMethods filterMethods;
 typedef ValkeyModuleExternalFilterState filterState;
 
 /* New module registration functions */

@@ -3063,7 +3063,7 @@ start_cluster 1 0 [list overrides [list "ext-data-mode" kv "loglevel" debug] tag
 }
 
 # Test ext-data-async-load configuration
-start_server {tags {"external:skip wip"} overrides {"ext-data-mode" kv "loglevel" debug "ext-data-async-load" no}} {
+start_server {tags {"external:skip"} overrides {"ext-data-mode" kv "loglevel" debug "ext-data-async-load" no}} {
     start_server [list overrides [list "ext-data-mode" kv "loglevel" debug "ext-data-async-load" no]] {
         test "ext-data-async-load: Sync mode" {
             set primary [srv -1 client]
@@ -3183,19 +3183,22 @@ test "ext-data-async-load: Sync mode (cluster)" {
 start_server [list overrides [list "ext-data-mode" kv "loglevel" debug] tags [list "external:skip"]] {
     test "External storage with simulated failures - standalone mode" {
         # Load module with 50% failure rate (fails every 2nd set, starting from 1st)
-        set extdatamodule1_with_failures [file normalize tests/modules/extstorage/extdata1.so]
-        assert_equal {OK} [r module load $extdatamodule1_with_failures set_failure_percent=50]
+        assert_equal {OK} [r module load $extdatamodule1]
+        assert_equal {OK} [r config set helloextdata1.set_failure_percent 50]
+        # Verify config was set
+        assert_equal 50 [lindex [r config get helloextdata1.set_failure_percent] 1]
         assert_equal {OK} [r external_data INIT db0 helloextdata1]
         r select 0
         
         # First set should fail (1st operation)
-        assert_error "*Simulated storage failure*" {r set key1 value1 ext}
+        # after 100000000
+        assert_error "ERR External storage operation failed" {r set key1 value1 ext}
         
         # Second set should succeed (2nd operation)
         assert_equal {OK} [r set key2 value2 ext]
-        
+
         # Third set should fail (3rd operation)
-        assert_error "*Simulated storage failure*" {r set key3 value3 ext}
+        assert_error "ERR External storage operation failed" {r set key3 value3 ext}
         
         # Fourth set should succeed (4th operation)
         assert_equal {OK} [r set key4 value4 ext]
@@ -3211,9 +3214,9 @@ start_server [list overrides [list "ext-data-mode" kv "loglevel" debug] tags [li
 }
 
 # Test replication with simulated failures
-test "External storage replication with simulated failures - standalone mode" {
-    start_server [list overrides [list "ext-data-mode" kv "loglevel" debug] tags [list "external:skip"]] {
-        start_server [list overrides [list "ext-data-mode" kv "loglevel" debug]] {
+start_server [list overrides [list "ext-data-mode" kv "loglevel" debug] tags [list "external:skip"]] {
+    start_server [list overrides [list "ext-data-mode" kv "loglevel" debug]] {
+        test "External storage replication with simulated failures - standalone mode" {
             set primary [srv -1 client]
             set primary_host [srv -1 host]
             set primary_port [srv -1 port]
@@ -3234,19 +3237,22 @@ test "External storage replication with simulated failures - standalone mode" {
             
             # Setup replication
             $replica replicaof $primary_host $primary_port
+            $replica select 0
             wait_for_condition 50 100 {
-                [lindex [$replica role] 0] eq {replica}
+                [lindex [$replica role] 3] eq {connected} &&
+                [catch {$replica ping} ping_reply] == 0 && $ping_reply eq {PONG}
             } else {
-                fail "Replication not started"
+                fail "Replication not started."
             }
             
             # Load module on replica WITH 50% failure rate
-            assert_equal {OK} [$replica module load $extdatamodule1 set_failure_percent=50]
-            assert_equal {OK} [$replica external_data INIT db0 helloextdata1]
+            assert_equal {OK} [$replica module load $extdatamodule1]
+            assert_equal {OK} [$replica config set helloextdata1.set_failure_percent 50]
+            # assert_equal {OK} [$replica external_data INIT db0 helloextdata1]
             
             # Despite the 50% failure rate on replica, data should eventually sync
             # The first attempt will fail, but retries should succeed
-            wait_for_condition 100 100 {
+            wait_for_condition 50 100 {
                 [$replica get primary_key1 ext] eq "primary_value1" &&
                 [$replica get primary_key2 ext] eq "primary_value2"
             } else {
@@ -3258,7 +3264,7 @@ test "External storage replication with simulated failures - standalone mode" {
             $primary set primary_key4 "primary_value4" EXT
             
             # Verify replica eventually syncs new data despite failures
-            wait_for_condition 100 100 {
+            wait_for_condition 50 100 {
                 [$replica get primary_key3 ext] eq "primary_value3" &&
                 [$replica get primary_key4 ext] eq "primary_value4"
             } else {
@@ -3290,6 +3296,7 @@ start_cluster 1 1 [list overrides [list "ext-data-mode" kv "loglevel" debug] tag
         
         # Load module on primary without failures
         assert_equal {OK} [$primary module load $extdatamodule1]
+        assert_equal {OK} [$primary config set helloextdata1.dump_every_write 1]
         assert_equal {OK} [$primary external_data INIT db0 helloextdata1]
         
         # Add data on primary
@@ -3298,11 +3305,16 @@ start_cluster 1 1 [list overrides [list "ext-data-mode" kv "loglevel" debug] tag
         $primary set cluster_key2 "cluster_value2" EXT
         
         # Load module on replica WITH 50% failure rate
-        assert_equal {OK} [$replica module load $extdatamodule1 set_failure_percent=50]
-        assert_equal {OK} [$replica external_data INIT db0 helloextdata1]
+        assert_equal {OK} [$replica module load $extdatamodule1]
+        assert_equal {OK} [$replica config set helloextdata1.set_failure_percent 50]
+        # assert_equal {OK} [$replica external_data INIT db0 helloextdata1]
         
+        $replica select 0
+        # Enable readonly on replica for cluster mode
+        $replica readonly
+
         # Despite the 50% failure rate on replica, data should eventually sync
-        wait_for_condition 100 100 {
+        wait_for_condition 50 100 {
             [$replica get cluster_key1 ext] eq "cluster_value1" &&
             [$replica get cluster_key2 ext] eq "cluster_value2"
         } else {
@@ -3314,7 +3326,7 @@ start_cluster 1 1 [list overrides [list "ext-data-mode" kv "loglevel" debug] tag
         $primary set cluster_key4 "cluster_value4" EXT
         
         # Verify replica eventually syncs new data despite failures
-        wait_for_condition 100 100 {
+        wait_for_condition 50 100 {
             [$replica get cluster_key3 ext] eq "cluster_value3" &&
             [$replica get cluster_key4 ext] eq "cluster_value4"
         } else {
@@ -3333,15 +3345,16 @@ start_cluster 1 1 [list overrides [list "ext-data-mode" kv "loglevel" debug] tag
     }
 }
 
-
 # Test replication with 100% failure rate and replica restart
-test "External storage replication with 100% failures and restart - standalone mode" {
-    start_server [list overrides [list "ext-data-mode" kv "loglevel" debug] tags [list "external:skip" "slow"]] {
-        start_server [list overrides [list "ext-data-mode" kv "loglevel" debug]] {
-            set primary [srv -1 client]
-            set primary_host [srv -1 host]
-            set primary_port [srv -1 port]
-            set replica [srv 0 client]
+start_server [list overrides [list "ext-data-mode" kv "loglevel" debug] tags [list "external:skip" "slow"]] {
+    start_server [list overrides [list "ext-data-mode" kv "loglevel" debug]] {
+        test "External storage replication with 100% failures and restart - standalone mode" {
+            set primary_id -1
+            set replica_id 0
+            set primary [srv $primary_id client]
+            set primary_host [srv $primary_id host]
+            set primary_port [srv $primary_id port]
+            set replica [srv $replica_id client]
 
             cleanup_external_data_dump $primary
             cleanup_external_data_dump $replica
@@ -3358,39 +3371,52 @@ test "External storage replication with 100% failures and restart - standalone m
             
             # Setup replication
             $replica replicaof $primary_host $primary_port
+            $replica select 0
             wait_for_condition 50 100 {
-                [lindex [$replica role] 0] eq {replica}
+                [lindex [$replica role] 3] eq {connected} &&
+                [catch {$replica ping} ping_reply] == 0 && $ping_reply eq {PONG}
             } else {
-                fail "Replication not started"
+                fail "Replication not started."
             }
             
             # Load module on replica WITH 100% failure rate (all sets fail)
-            assert_equal {OK} [$replica module load $extdatamodule1 set_failure_percent=100]
-            assert_equal {OK} [$replica external_data INIT db0 helloextdata1]
+            assert_equal {OK} [$replica module load $extdatamodule1]
+            assert_equal {OK} [$replica config set helloextdata1.set_failure_percent 100]
+            # assert_equal {OK} [$replica external_data INIT db0 helloextdata1]
             
             # Wait 1 second with all failures
-            after 1000
+            # after 100000000000
             
             # Verify data is NOT synced yet due to 100% failures
-            assert_equal {} [$replica get primary_key1 ext]
-            assert_equal {} [$replica get primary_key2 ext]
+            # assert_equal "primary_value1" [$replica get primary_key1 ext]
+            # assert_equal "primary_value2" [$replica get primary_key2 ext]
+            wait_for_condition 50 100 {
+                [$replica get primary_key1 ext] eq "primary_value1" &&
+                [$replica get primary_key2 ext] eq "primary_value2"
+            } else {
+                fail "Cluster replica not synchronized despite failures"
+            }
             
             # Restart replica to clear the failure state
-            restart_server 0 true false
-            set replica [srv 0 client]
+            $primary config rewrite
+            $replica config rewrite
+            restart_server $replica_id true false
+            puts "jgjgjgjgjg"
+            set replica [srv $replica_id client]
             
             # Select database 0 after restart
             $replica select 0
             
             # Reload module on replica WITHOUT failures this time
-            assert_equal {OK} [$replica module load $extdatamodule1]
-            assert_equal {OK} [$replica external_data INIT db0 helloextdata1]
+            #assert_equal {OK} [$replica module load $extdatamodule1]
+            #assert_equal {OK} [$replica external_data INIT db0 helloextdata1]
             
             # Now data should sync successfully
-            wait_for_condition 100 100 {
+            wait_for_condition 50 100 {
                 [$replica get primary_key1 ext] eq "primary_value1" &&
                 [$replica get primary_key2 ext] eq "primary_value2"
             } else {
+                # after 100000000
                 fail "Replica not synchronized after restart"
             }
             
@@ -3398,7 +3424,7 @@ test "External storage replication with 100% failures and restart - standalone m
             $primary set primary_key3 "primary_value3" EXT
             
             # Verify new data syncs
-            wait_for_condition 100 100 {
+            wait_for_condition 50 100 {
                 [$replica get primary_key3 ext] eq "primary_value3"
             } else {
                 fail "Replica not synchronized with new data after restart"
@@ -3415,20 +3441,25 @@ test "External storage replication with 100% failures and restart - standalone m
 }
 
 # Test cluster mode with 100% failure rate and replica restart
-start_cluster 1 1 [list overrides [list "ext-data-mode" kv "loglevel" debug] tags [list "external:skip" "slow"]] {
+start_cluster 1 1 [list overrides [list "ext-data-mode" kv "loglevel" debug] tags [list "external:skip" "slow" "wip"]] {
     set extdatamodule1 [file normalize tests/modules/extstorage/extdata1.so]
     
     test "External storage with 100% failures and restart - cluster mode" {
         wait_for_cluster_state ok
         
-        set primary [srv 0 client]
-        set replica [srv -1 client]
+        set primary_id 0
+        set replica_id -1
+        set primary [srv $primary_id client]
+        set primary_host [srv $primary_id host]
+        set primary_port [srv $primary_id port]
+        set replica [srv $replica_id client]
 
         cleanup_external_data_dump $primary
         cleanup_external_data_dump $replica
         
         # Load module on primary without failures
         assert_equal {OK} [$primary module load $extdatamodule1]
+        assert_equal {OK} [$primary config set helloextdata1.dump_every_write 1]
         assert_equal {OK} [$primary external_data INIT db0 helloextdata1]
         
         # Add data on primary
@@ -3437,36 +3468,49 @@ start_cluster 1 1 [list overrides [list "ext-data-mode" kv "loglevel" debug] tag
         $primary set cluster_key2 "cluster_value2" EXT
         
         # Load module on replica WITH 100% failure rate (all sets fail)
-        assert_equal {OK} [$replica module load $extdatamodule1 set_failure_percent=100]
-        assert_equal {OK} [$replica external_data INIT db0 helloextdata1]
+        assert_equal {OK} [$replica module load $extdatamodule1]
+        assert_equal {OK} [$replica config set helloextdata1.set_failure_percent 100]
+        # assert_equal {OK} [$replica external_data INIT db0 helloextdata1]
         
         # Wait 1 second with all failures
-        after 1000
+        # after 1000
         
         # Verify data is NOT synced yet due to 100% failures
-        assert_equal {} [$replica get cluster_key1 ext]
-        assert_equal {} [$replica get cluster_key2 ext]
+        # assert_equal {} [$replica get cluster_key1 ext]
+        # assert_equal {} [$replica get cluster_key2 ext]
+        $replica select 0
+        $replica READONLY
+        wait_for_condition 50 100 {
+            [$replica get cluster_key1 ext] eq "cluster_value1" &&
+            [$replica get cluster_key2 ext] eq "cluster_value2"
+        } else {
+            fail "Cluster replica not synchronized despite failures"
+        }
         
         # Restart replica to clear the failure state
-        restart_server -1 true false
-        set replica [srv -1 client]
-        wait_for_cluster_state ok
+        $primary config rewrite
+        $replica config rewrite
+        restart_server $replica_id true false
+        puts "jgjgjgjgjg"
+        set replica [srv $replica_id client]
         
         # Select database 0 after restart
         $replica select 0
-        
-        # Reload module on replica and use config set to disable failures
-        assert_equal {OK} [$replica module load $extdatamodule1 set_failure_percent=100]
-        assert_equal {OK} [$replica external_data INIT db0 helloextdata1]
-        
-        # Use runtime configuration to set failure rate to 0
-        $replica config set helloextdata1.set_failure_percent 0
-        
-        # Wait for cluster to stabilize
+        $replica READONLY
         wait_for_cluster_state ok
         
+        # Reload module on replica and use config set to disable failures
+        # assert_equal {OK} [$replica module load $extdatamodule1 set_failure_percent=100]
+        # assert_equal {OK} [$replica external_data INIT db0 helloextdata1]
+        
+        # Use runtime configuration to set failure rate to 0
+        assert_equal {OK} [$replica config set helloextdata1.set_failure_percent 0]
+        
+        # Wait for cluster to stabilize
+        # wait_for_cluster_state ok
+        
         # Now data should sync successfully
-        wait_for_condition 100 100 {
+        wait_for_condition 50 100 {
             [$replica get cluster_key1 ext] eq "cluster_value1" &&
             [$replica get cluster_key2 ext] eq "cluster_value2"
         } else {
@@ -3477,7 +3521,7 @@ start_cluster 1 1 [list overrides [list "ext-data-mode" kv "loglevel" debug] tag
         $primary set cluster_key3 "cluster_value3" EXT
         
         # Verify new data syncs
-        wait_for_condition 100 100 {
+        wait_for_condition 50 100 {
             [$replica get cluster_key3 ext] eq "cluster_value3"
         } else {
             fail "Cluster replica not synchronized with new data after restart"

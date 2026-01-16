@@ -114,10 +114,11 @@ void setGenericCommand(client *c,
             blockPostponeClient(c);
             return;
         } else if (result == EXTERNAL_ERROR) {
-            /* Only send error reply to non-replicated clients.
-             * Replicated clients (from primary/AOF) should not receive replies. */
+            /* Module returned error - send error reply to client */
+            /* Note: Module's detailed error message is lost due to teardownModuleCtx,
+             * so we send a generic error here */
             if (!mustObeyClient(c)) {
-                addReply(c, abort_reply ? abort_reply : shared.null[c->resp]);
+                addReplyError(c, "External storage operation failed");
             }
         } else {
             // Success

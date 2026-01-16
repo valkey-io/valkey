@@ -1575,6 +1575,9 @@ typedef struct ValkeyModuleExternalStorageMethods {
     /* The callback function called when `EXTERNAL_DATA LOAD` command is called.
      * This allows restoring from backups/snapshots for replication and backup/restore. */
     ValkeyModuleExternalStorageLoadFunc load;
+
+    /* The callback function called to get the current state from the storage.
+     * This allows the module to report which databases should be initialized. */
     ValkeyModuleExternalStorageGetStateFunc get_state;
 
     /* The callback function called to create a snapshot of the data for async dumping.
@@ -1811,9 +1814,9 @@ typedef struct ValkeyModuleExternalFilterMethods {
 
     /* The callback function called to free a snapshot. */
     void (*free_snapshot)(ValkeyModuleCtx *module_ctx, ValkeyModuleExternalFilterCtx *filter_ctx, void *snapshot);
-} ValkeyModuleExternalFilterMethodsV2;
+} ValkeyModuleExternalFilterMethodsV1;
 
-#define ValkeyModuleExternalFilterMethods ValkeyModuleExternalFilterMethodsV2
+#define ValkeyModuleExternalFilterMethods ValkeyModuleExternalFilterMethodsV1
 
 /* External data functions result codes */
 typedef enum ValkeyModuleExternalDataResult {

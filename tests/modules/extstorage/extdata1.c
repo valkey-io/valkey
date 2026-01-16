@@ -85,6 +85,7 @@ static long long getFailurePercentConfig(const char *name, void *privdata) {
 static int setFailurePercentConfig(const char *name, long long new_val, void *privdata, ValkeyModuleString **err) {
     VALKEYMODULE_NOT_USED(name);
     VALKEYMODULE_NOT_USED(privdata);
+    ValkeyModule_Log(NULL, "notice", "DEBUG: setFailurePercentConfig called - set_failure_percent=%lld", new_val);
     if (new_val < 0 || new_val > 100) {
         *err = ValkeyModule_CreateString(NULL, "set_failure_percent must be between 0 and 100", 47);
         return VALKEYMODULE_ERR;
@@ -327,7 +328,6 @@ static int storageSetFunction(ValkeyModuleCtx *module_ctx,
     
     if (key == NULL) {
         ValkeyModule_Log(module_ctx, "error", "ERROR: storageSetFunction called with NULL key");
-        ValkeyModule_ReplyWithError(module_ctx, "ERR Internal error: NULL key");
         return EXTERNAL_ERROR;
     }
 
@@ -350,24 +350,27 @@ static int storageSetFunction(ValkeyModuleCtx *module_ctx,
             command_queue_tail = cmd;
         }
         
-        ValkeyModule_ReplyWithSimpleString(module_ctx, "OK");
+        ValkeyModule_Log(module_ctx, "debug", "DEBUG: storageSetFunction - command queued during loading");
         return EXTERNAL_SUCCESS;
     }
     
     ValkeyModuleExternalStorageState state = waitExternalStorageReady(storage_ctx);
     ValkeyModule_Assert(state == VMES_STATE_READONLY || state == VMES_STATE_READY);
     if (state == VMES_STATE_READONLY) {
-        ValkeyModule_ReplyWithError(module_ctx, "ERR External storage readonly");
+        ValkeyModule_Log(module_ctx, "error", "ERROR: External storage readonly");
         return EXTERNAL_ERROR;
     }
 
+    ValkeyModule_Log(module_ctx, "debug", "DEBUG: storageSetFunction - failure percent: %d", set_failure_percent);
     /* Simulate failures if configured */
     if (set_failure_percent > 0) {
         set_operation_counter++;
         /* Fail every (100/set_failure_percent)th operation starting from the 1st */
         int fail_interval = 100 / set_failure_percent;
+        ValkeyModule_Log(module_ctx, "notice", "Simulating storage failure: fail_interval=%d, counter=%d, mod=%d",
+            fail_interval, set_operation_counter, set_operation_counter % fail_interval);
         if (fail_interval > 0 && (set_operation_counter % fail_interval) == 1) {
-            ValkeyModule_ReplyWithError(module_ctx, "ERR Simulated storage failure");
+            ValkeyModule_Log(module_ctx, "warning", "Simulated storage failure");
             return EXTERNAL_ERROR;
         }
     }
@@ -377,7 +380,7 @@ static int storageSetFunction(ValkeyModuleCtx *module_ctx,
 
     if (previous_value != NULL &&
         ValkeyModule_StringCompare(previous_value, value) == 0) {
-        ValkeyModule_ReplyWithSimpleString(module_ctx, "OK");
+        ValkeyModule_Log(module_ctx, "debug", "DEBUG: storageSetFunction - value unchanged");
         return EXTERNAL_SUCCESS;
     }
 
@@ -409,7 +412,7 @@ static int storageSetFunction(ValkeyModuleCtx *module_ctx,
         ValkeyModule_Log(module_ctx, "debug", "AUTO_DUMP: dump_every_write is 0, skipping automatic dump");
     }
     
-    ValkeyModule_ReplyWithSimpleString(module_ctx, "OK");
+    ValkeyModule_Log(module_ctx, "debug", "DEBUG: storageSetFunction - success");
     return EXTERNAL_SUCCESS;
 }
 
@@ -428,7 +431,6 @@ static int storageGetFunction(ValkeyModuleCtx *module_ctx,
     
     if (key == NULL) {
         ValkeyModule_Log(module_ctx, "error", "ERROR: storageGetFunction called with NULL key");
-        ValkeyModule_ReplyWithError(module_ctx, "ERR Internal error: NULL key");
         return EXTERNAL_ERROR;
     }
     
@@ -439,7 +441,6 @@ static int storageGetFunction(ValkeyModuleCtx *module_ctx,
     void *value = ValkeyModule_DictGet(storage_mem_pool[dbid], (ValkeyModuleString *)key, NULL);
     if (!value) {
         ValkeyModule_Log(module_ctx, "debug", "storageGetFunction: key not found in storage");
-        ValkeyModule_ReplyWithSimpleString(module_ctx, "OK");
         return 0;
     }
 
@@ -448,7 +449,6 @@ static int storageGetFunction(ValkeyModuleCtx *module_ctx,
         *found = value;
     }
 
-    ValkeyModule_ReplyWithSimpleString(module_ctx, "OK");
     return 1;
 }
 
@@ -460,7 +460,7 @@ static int storageDelFunction(ValkeyModuleCtx *module_ctx,
     ValkeyModuleExternalStorageState state = waitExternalStorageReady(storage_ctx);
     ValkeyModule_Assert(state == VMES_STATE_READONLY || state == VMES_STATE_READY);
     if (state == VMES_STATE_READONLY) {
-        ValkeyModule_ReplyWithError(module_ctx, "ERR External storage readonly");
+        ValkeyModule_Log(module_ctx, "error", "ERROR: External storage readonly");
         return EXTERNAL_ERROR;
     }
 
@@ -469,7 +469,6 @@ static int storageDelFunction(ValkeyModuleCtx *module_ctx,
     
     if (key == NULL) {
         ValkeyModule_Log(module_ctx, "error", "ERROR: storageDelFunction called with NULL key");
-        ValkeyModule_ReplyWithError(module_ctx, "ERR Internal error: NULL key");
         return EXTERNAL_ERROR;
     }
     ValkeyModule_Log(module_ctx, "debug", "storageDelFunction: dbid=%d, key=%s",
@@ -541,21 +540,19 @@ static int filterSetFunction(ValkeyModuleCtx *module_ctx,
     
     if (key == NULL) {
         ValkeyModule_Log(module_ctx, "error", "ERROR: filterSetFunction called with NULL key");
-        ValkeyModule_ReplyWithError(module_ctx, "ERR Internal error: NULL key");
         return EXTERNAL_ERROR;
     }
     
     /* If we're currently loading, just return success - storage will queue the commands */
     if (is_loading[dbid]) {
         ValkeyModule_Log(module_ctx, "debug", "DEBUG: filterSetFunction - storage is loading, just return OK");
-        ValkeyModule_ReplyWithSimpleString(module_ctx, "OK");
         return EXTERNAL_SUCCESS;
     }
     
     ValkeyModuleExternalFilterState state = waitExternalFilterReady(filter_ctx);
     ValkeyModule_Assert(state == VMEF_STATE_READONLY || state == VMEF_STATE_READY);
     if (state == VMEF_STATE_READONLY) {
-        ValkeyModule_ReplyWithError(module_ctx, "ERR External filter readonly");
+        ValkeyModule_Log(module_ctx, "error", "ERROR: External filter readonly");
         return EXTERNAL_ERROR;
     }
 
@@ -563,13 +560,12 @@ static int filterSetFunction(ValkeyModuleCtx *module_ctx,
         ValkeyModule_DictGet(filter_mem_pool[dbid], (ValkeyModuleString *)key, NULL);
     
     if (previous_value != NULL) {
-        ValkeyModule_ReplyWithSimpleString(module_ctx, "OK");
+        ValkeyModule_Log(module_ctx, "debug", "DEBUG: filterSetFunction - key already exists");
         return EXTERNAL_SUCCESS;
     }
 
     if (ValkeyModule_DictReplace(filter_mem_pool[dbid], (ValkeyModuleString *)key, "") == VALKEYMODULE_ERR) {
-        ValkeyModule_ReplyWithErrorFormat(module_ctx, "ERR Failed to set key %s",
-                                          ValkeyModule_StringPtrLen(key, NULL));
+        ValkeyModule_Log(module_ctx, "error", "ERROR: Failed to set key in filter");
         return EXTERNAL_ERROR;
     }
 
@@ -587,8 +583,7 @@ static int filterSetFunction(ValkeyModuleCtx *module_ctx,
         }
     }
 
-
-    ValkeyModule_ReplyWithSimpleString(module_ctx, "OK");
+    ValkeyModule_Log(module_ctx, "debug", "DEBUG: filterSetFunction - success");
     return EXTERNAL_SUCCESS;
 }
 
@@ -610,14 +605,13 @@ static int filterGetFunction(ValkeyModuleCtx *module_ctx,
     size_t length;
     ValkeyModule_StringPtrLen(key, &length);
     if (length == 0) {
-        ValkeyModule_ReplyWithSimpleString(module_ctx, "OK");
+        ValkeyModule_Log(module_ctx, "error", "ERROR: filterGetFunction called with empty key");
         return EXTERNAL_ERROR;
     }
 
     void *value = ValkeyModule_DictGet(filter_mem_pool[dbid], (ValkeyModuleString *)key, NULL);
     int found = (value != NULL);
     ValkeyModule_Log(module_ctx, "debug", "filterGetFunction: key %s in filter", found ? "found" : "not found");
-    ValkeyModule_ReplyWithSimpleString(module_ctx, "OK");
     return found;
 }
 
@@ -629,7 +623,7 @@ static int filterDelFunction(ValkeyModuleCtx *module_ctx,
     ValkeyModuleExternalFilterState state = waitExternalFilterReady(filter_ctx);
     ValkeyModule_Assert(state == VMEF_STATE_READONLY || state == VMEF_STATE_READY);
     if (state == VMEF_STATE_READONLY) {
-        ValkeyModule_ReplyWithError(module_ctx, "ERR External filter readonly");
+        ValkeyModule_Log(module_ctx, "error", "ERROR: External filter readonly");
         return EXTERNAL_ERROR;
     }
 

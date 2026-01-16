@@ -179,3 +179,147 @@ int test_unembed_value(int argc, char **argv, int flags) {
     decrRefCount(obj);
     return 0;
 }
+
+/* Define the metadata structure for testing. */
+typedef struct objMetadata {
+    uint32_t meta_int;
+} objMetadata;
+
+/* Helper function to set meta_int */
+static void objectSetMetaInt(robj *o, uint32_t metadata_int) {
+    objMetadata *meta = (objMetadata *)objectGetMetadata(o);
+    if (meta) {
+        meta->meta_int = metadata_int;
+    }
+}
+
+/* Helper function to get meta_int */
+static uint32_t objectGetMetaInt(const robj *o) {
+    objMetadata *meta = (objMetadata *)objectGetMetadata(o);
+    return meta ? meta->meta_int : 0;
+}
+
+/* Test that metadata size is 0 when not configured. */
+int test_metadata_disabled(int argc, char **argv, int flags) {
+    UNUSED(argc);
+    UNUSED(argv);
+    UNUSED(flags);
+
+    /* When metadata is not configured, objectGetMetadataSize should return 0 */
+    TEST_ASSERT(objectGetMetadataSize() == 0);
+
+    return 0;
+}
+
+/* Test that metadata is allocated and initialized when configured. */
+int test_metadata_enabled(int argc, char **argv, int flags) {
+    UNUSED(argc);
+    UNUSED(argv);
+    UNUSED(flags);
+
+    /* Configure metadata size */
+    objectSetMetadataSize(sizeof(objMetadata));
+    TEST_ASSERT(objectGetMetadataSize() == sizeof(objMetadata));
+
+    /* Create object with embedded key */
+    sds key = sdsnew("testkey");
+    robj *obj = createStringObject("value", 5);
+    robj *obj_with_key = objectSetKeyAndExpire(obj, key, -1);
+
+    /* Metadata should be accessible */
+    void *meta_ptr = objectGetMetadata(obj_with_key);
+    TEST_ASSERT(meta_ptr != NULL);
+
+    /* Metadata should be initialized to zero */
+    objMetadata *meta = (objMetadata *)meta_ptr;
+    TEST_ASSERT(meta->meta_int == 0);
+
+    sdsfree(key);
+    decrRefCount(obj_with_key);
+    return 0;
+}
+
+/* Test reading and writing metadata values. */
+int test_metadata_read_write(int argc, char **argv, int flags) {
+    UNUSED(argc);
+    UNUSED(argv);
+    UNUSED(flags);
+
+    /* Metadata should already be configured from previous test */
+    TEST_ASSERT(objectGetMetadataSize() == sizeof(objMetadata));
+
+    /* Create object WITHOUT embedded key - metadata should not be accessible */
+    robj *obj_no_key = createStringObject("value_without_key", 17);
+    TEST_ASSERT(objectGetMetadata(obj_no_key) == NULL);
+    TEST_ASSERT(objectGetMetaInt(obj_no_key) == 0); /* Should return 0 for NULL metadata */
+    decrRefCount(obj_no_key);
+
+    /* Create object with embedded key */
+    sds key = sdsnew("mykey");
+    robj *obj = createStringObject("myvalue", 7);
+    robj *obj_with_key = objectSetKeyAndExpire(obj, key, -1);
+
+    /* Write metadata_int value */
+    objectSetMetaInt(obj_with_key, 12345);
+
+    /* Read metadata_int value back */
+    uint32_t metadata_int = objectGetMetaInt(obj_with_key);
+    TEST_ASSERT(metadata_int == 12345);
+
+    /* Update metadata_int value */
+    objectSetMetaInt(obj_with_key, 67890);
+    metadata_int = objectGetMetaInt(obj_with_key);
+    TEST_ASSERT(metadata_int == 67890);
+
+    sdsfree(key);
+    decrRefCount(obj_with_key);
+    return 0;
+}
+
+
+/* Test that multiple objects maintain independent metadata values. */
+int test_metadata_multiple_objects(int argc, char **argv, int flags) {
+    UNUSED(argc);
+    UNUSED(argv);
+    UNUSED(flags);
+
+    /* Metadata should already be configured */
+    TEST_ASSERT(objectGetMetadataSize() == sizeof(objMetadata));
+
+    /* Create multiple objects with different metadata_int values */
+    sds key1 = sdsnew("key1");
+    sds key2 = sdsnew("key2");
+    sds key3 = sdsnew("key3");
+
+    robj *obj1 = createStringObject("val1", 4);
+    robj *obj2 = createStringObject("val2", 4);
+    robj *obj3 = createStringObject("val3", 4);
+
+    robj *obj_with_key1 = objectSetKeyAndExpire(obj1, key1, -1);
+    robj *obj_with_key2 = objectSetKeyAndExpire(obj2, key2, -1);
+    robj *obj_with_key3 = objectSetKeyAndExpire(obj3, key3, -1);
+
+    /* Set different metadata_int values */
+    objectSetMetaInt(obj_with_key1, 100);
+    objectSetMetaInt(obj_with_key2, 200);
+    objectSetMetaInt(obj_with_key3, 300);
+
+    /* Verify each object has its own metadata */
+    TEST_ASSERT(objectGetMetaInt(obj_with_key1) == 100);
+    TEST_ASSERT(objectGetMetaInt(obj_with_key2) == 200);
+    TEST_ASSERT(objectGetMetaInt(obj_with_key3) == 300);
+
+    /* Modify one and verify others are unchanged */
+    objectSetMetaInt(obj_with_key2, 999);
+    TEST_ASSERT(objectGetMetaInt(obj_with_key1) == 100);
+    TEST_ASSERT(objectGetMetaInt(obj_with_key2) == 999);
+    TEST_ASSERT(objectGetMetaInt(obj_with_key3) == 300);
+
+    sdsfree(key1);
+    sdsfree(key2);
+    sdsfree(key3);
+    decrRefCount(obj_with_key1);
+    decrRefCount(obj_with_key2);
+    decrRefCount(obj_with_key3);
+    return 0;
+}

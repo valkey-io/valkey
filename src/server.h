@@ -819,25 +819,27 @@ typedef struct ValkeyModuleType moduleType;
  * The optional variable-sized embedded data has 2 possible layouts. If value is embedded (hasembval == 1)
  *  the `val_ptr` pointer is not used - instead the val data is embedded:
  *
- *    +------+----------+-----+------------+----------+--------+-----------------+---------+------------+
- *    | type | encoding | lru | has* flags | refcount | expire | key_header_size | key sds | value data |
- *    +------+----------+-----+------------+----------+--------+-----------------+---------+------------+
- *                                                      ^        ^                 ^         ^
- *                                                      |        |                 |         |
- *                                                      |        |                 |         +--- present because hasembval == 1
- *                                                      |        |                 |
- *                                                      |        +-----------------+--- present if hasembkey == 1
+ *    +------+----------+-----+------------+----------+--------+----------+-----------------+---------+------------+
+ *    | type | encoding | lru | has* flags | refcount | expire | metadata | key_header_size | key sds | value data |
+ *    +------+----------+-----+------------+----------+--------+----------+-----------------+---------+------------+
+ *                                                      ^        ^          ^                 ^         ^
+ *                                                      |        |          |                 |         |
+ *                                                      |        |          |                 |         +--- present because hasembval == 1
+ *                                                      |        |          |                 |
+ *                                                      |        +----------+-----------------+--- present if hasembkey == 1
+ *                                                      |
  *                                                      |
  *                                                      +--- present if hasexpire == 1
  *
  * Otherwise value is not embedded and we use the `val_ptr` pointer:
  *
- *    +------+----------+-----+------------+----------+---------+--------+-----------------+---------+
- *    | type | encoding | lru | has* flags | refcount | val_ptr | expire | key_header_size | key sds |
- *    +------+----------+-----+------------+----------+---------+--------+-----------------+---------+
- *                                                      ^         ^        ^                 ^
- *                                                      |         |        |                 |
- *                                                      |         |        +-----------------+--- present if hasembkey == 1
+ *    +------+----------+-----+------------+----------+---------+--------+----------+-----------------+---------+
+ *    | type | encoding | lru | has* flags | refcount | val_ptr | expire | metadata | key_header_size | key sds |
+ *    +------+----------+-----+------------+----------+---------+--------+----------+-----------------+---------+
+ *                                                      ^         ^        ^          ^                 ^
+ *                                                      |         |        |          |                 |
+ *                                                      |         |        +----------+-----------------+--- present if hasembkey == 1
+ *                                                      |         |
  *                                                      |         |
  *                                                      |         +--- present if hasexpire == 1
  *                                                      |
@@ -1942,6 +1944,7 @@ struct valkeyServer {
     int active_expire_effort;    /* From 1 (default) to 10, active effort. */
     int lazy_expire_disabled;    /* If > 0, don't trigger lazy expire */
     int active_defrag_enabled;
+    int forkless_options_supported;              /* Enable forkless options support. */
     int sanitize_dump_payload;                   /* Enables deep sanitization for ziplist and listpack in RDB and RESTORE. */
     int skip_checksum_validation;                /* Disable checksum validation for RDB and RESTORE payload. */
     int rdb_version_check;                       /* Try to load RDB produced by a future version. */
@@ -3132,6 +3135,11 @@ long long objectGetExpire(const robj *o);
 uint8_t objectGetLFUFrequency(robj *o);
 uint32_t objectGetLRUIdleSecs(robj *o);
 uint32_t objectGetIdleness(robj *o);
+
+/* Object metadata management */
+void objectSetMetadataSize(size_t size);
+size_t objectGetMetadataSize(void);
+void *objectGetMetadata(const robj *o);
 
 /* Synchronous I/O with timeout */
 ssize_t syncWrite(int fd, char *ptr, ssize_t size, long long timeout);

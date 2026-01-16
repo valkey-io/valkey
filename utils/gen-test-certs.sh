@@ -4,6 +4,8 @@
 #
 #   tests/tls/ca.{crt,key}                       Self signed CA certificate.
 #   tests/tls/ca-{expired,notyet}.crt            Self signed invalid CA certificates.
+#   tests/tls/ca-expired/                        Directory containing expired CA certificate.
+#   tests/tls/ca-notyet/                         Directory containing not-yet-valid CA certificate.
 #   tests/tls/valkey.{crt,key}                   A certificate with no key usage/policy restrictions.
 #   tests/tls/client.{crt,key}                   A certificate restricted for SSL client usage.
 #   tests/tls/client-{expired,notyet}.crt        Invalid certificates restricted for SSL client usage.
@@ -62,7 +64,6 @@ generate_cert valkey "Generic-cert"
 
 echo "Generating invalid TLS test certificates for fail-fast testing..."
 
-# Create a temporary CA config for custom validity dates for CA self-signing
 CA_CONFIG="tests/tls/ca_temp.cnf"
 cat > "$CA_CONFIG" <<EOF
 [ ca ]
@@ -95,7 +96,6 @@ keyUsage = digitalSignature, keyEncipherment
 nsCertType = client
 EOF
 
-# Initialize CA database files if needed
 touch tests/tls/index.txt
 echo "01" > tests/tls/serial
 
@@ -160,13 +160,11 @@ openssl ca -batch -config "$CA_CONFIG" \
   -out tests/tls/client-notyet.crt
 
 # Generate expired CA certificate (valid Jan 1-2, 2020) using the CA to sign itself
-# First create a CSR for the expired CA
 openssl req -new -sha256 \
   -subj "/O=Valkey Test/CN=Certificate Authority Expired" \
   -key tests/tls/ca.key \
   -out tests/tls/ca-expired.csr
 
-# Sign it with custom dates (self-signed but with expired dates)
 openssl ca -batch -config "$CA_CONFIG" \
   -selfsign \
   -in tests/tls/ca-expired.csr \
@@ -188,6 +186,17 @@ openssl ca -batch -config "$CA_CONFIG" \
   -startdate 20990101000000Z \
   -enddate 20990201000000Z \
   -out tests/tls/ca-notyet.crt
+
+# Create CA certificate directories for testing tls-ca-cert-dir with invalid certs
+mkdir -p tests/tls/ca-expired
+mkdir -p tests/tls/ca-notyet
+
+cp tests/tls/ca-expired.crt tests/tls/ca-expired/
+cp tests/tls/ca-notyet.crt tests/tls/ca-notyet/
+
+echo "Created CA certificate test directories:"
+echo "  tests/tls/ca-expired/ (contains expired CA cert)"
+echo "  tests/tls/ca-notyet/ (contains not-yet-valid CA cert)"
 
 # Clean up temporary files
 rm -f tests/tls/*-expired.csr tests/tls/*-notyet.csr tests/tls/ca-expired.csr tests/tls/ca-notyet.csr

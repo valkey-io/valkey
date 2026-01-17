@@ -373,6 +373,8 @@ start_cluster 1 0 {tags {external:skip cluster} overrides {cluster-slot-stats-en
         # SET key value\r\n --> 15 bytes.
         $rd write "SET $key value\r\n"
         $rd flush
+        # Wait for response to ensure command is fully processed.
+        $rd read
 
         set slot_stats [R 0 CLUSTER SLOT-STATS SLOTSRANGE 0 16383]
         set expected_slot_stats [

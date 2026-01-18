@@ -242,7 +242,7 @@ static void updateClusterSlotsConfiguration(void);
 static long long showThroughput(struct aeEventLoop *eventLoop, long long id, void *clientData);
 static int bm_printf(outputType type, const char *format, ...);
 static void bm_fflush(outputType type);
-static void closeOutputFileIfNeed();
+static void closeOutputFileIfNeed(void);
 static void exitAndCloseOutputFile(int exit_code);
 /* Dict callbacks */
 static uint64_t dictSdsHash(const void *key);
@@ -313,7 +313,7 @@ static int bm_printf(outputType type, const char *format, ...) {
 
     switch (type) {
     case OUTPUT_ERR:
-        if (config.output_err_to_file) 
+        if (config.output_err_to_file)
             stream = config.output_file ? config.output_file : stderr;
         else
             stream = stderr;
@@ -354,7 +354,7 @@ static void bm_fflush(outputType type) {
     }
 }
 
-static void bm_closeOutputFileIfNeed() {
+static void closeOutputFileIfNeed(void) {
     if (config.output_file) {
         fclose(config.output_file);
         config.output_file = NULL;
@@ -364,7 +364,7 @@ static void bm_closeOutputFileIfNeed() {
 static void exitAndCloseOutputFile(int exit_code) {
     bm_fflush(OUTPUT_RES);
     bm_fflush(OUTPUT_INFO);
-    bm_closeOutputFileIfNeed();
+    closeOutputFileIfNeed();
     exit(exit_code);
 }
 
@@ -1960,7 +1960,7 @@ usage:
         "";
 
 
-    bm_printf(OUTPUT_INFO, 
+    bm_printf(OUTPUT_INFO,
         "%s%s%s%s%s%s", /* Split to avoid strings longer than 4095 (-Woverlength-strings). */
         "Usage: valkey-benchmark [OPTIONS] [--] [COMMAND ARGS...]\n\n"
         "Simulates sending commands using multiple clients. The utility provides a\n"
@@ -2295,12 +2295,12 @@ int main(int argc, char **argv) {
         /* Fetch cluster configuration. */
         if (!fetchClusterConfiguration() || !config.cluster_nodes) {
             if (config.ct != VALKEY_CONN_UNIX) {
-                bm_printf(OUTPUT_ERR, 
+                bm_printf(OUTPUT_ERR,
                         "Failed to fetch cluster configuration from "
                         "%s:%d\n",
                         config.conn_info.hostip, config.conn_info.hostport);
             } else {
-                bm_printf(OUTPUT_ERR, 
+                bm_printf(OUTPUT_ERR,
                         "Failed to fetch cluster configuration from "
                         "%s\n",
                         config.conn_info.hostip);
@@ -2667,6 +2667,6 @@ int main(int argc, char **argv) {
     if (config.server_config != NULL) freeServerConfig(config.server_config);
     resetPlaceholders();
 
-    bm_closeOutputFileIfNeed();
+    closeOutputFileIfNeed();
     return 0;
 }

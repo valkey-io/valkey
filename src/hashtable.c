@@ -554,27 +554,23 @@ static bucket *fetchEntryForExpand(bucket *b, void *buf[], int *size, int max_fe
     return b;
 }
 
-/* Performs one step of incremental rehashing during table expansion. */
-static void rehashStepWhenExpand(hashtable *ht) {
-    /* To reduce CPU stall time caused by random memory access (when accessing entries),
-     * we employ a batch processing and phase separation approach to leverage CPU multi-issue capability,
-     * achieving concurrent memory access to entries, thereby reducing the execution time of rehashing. */
+/* Processes one bucket chain during incremental table expansion.
+ * Uses batch processing to optimize memory access patterns. */
+static void rehashStepExpand(hashtable *ht) {
     void *entry_buf[FETCH_ENTRY_BUFFER_SIZE_WHEN_EXPAND];
     const void *key_buf[FETCH_ENTRY_BUFFER_SIZE_WHEN_EXPAND];
     size_t idx = ht->rehash_idx;
     bucket *b = ht->tables[0] + idx;
     int size = 0;
     while (b != NULL) {
-        /* Fetch a batch of entries from the bucket chain. */
         b = fetchEntryForExpand(b, entry_buf, &size, FETCH_BUCKET_COUNT_WHEN_EXPAND);
 
-        /* Since there is no dependency between loop iterations, the CPU can leverage
-         * its multi-issue capability to perform concurrent memory accesses. */
+        /* Key optimization: no loop-carried dependency enables concurrent memory access,
+         * reducing CPU stall cycles. */
         for (int i = 0; i < size; i++) {
             key_buf[i] = entryGetKey(ht, entry_buf[i]);
         }
 
-        /* Recompute entry hash and rehash entry. */
         for (int i = 0; i < size; i++) {
             uint64_t hash = hashKey(ht, key_buf[i]);
             rehashEntry(ht, entry_buf[i], hash, highBits(hash));
@@ -582,8 +578,8 @@ static void rehashStepWhenExpand(hashtable *ht) {
     }
 }
 
-/* Rehashes a single bucket during table shrinkage. */
-static void rehashBucketWhenShrink(hashtable *ht, bucket *b) {
+/* Rehashes a bucket during table shrinkage. */
+static void rehashBucketShrink(hashtable *ht, bucket *b) {
     for (int pos = 0; pos < numBucketPositions(b); pos++) {
         if (!isPositionFilled(b, pos)) continue; /* empty */
         void *entry = b->entries[pos];
@@ -596,19 +592,19 @@ static void rehashBucketWhenShrink(hashtable *ht, bucket *b) {
     }
 }
 
-/* Performs one step of incremental rehashing during table shrinkage. */
-static void rehashStepWhenShrink(hashtable *ht) {
+/* Processes one bucket chain during incremental table shrinkage. */
+static void rehashStepShrink(hashtable *ht) {
     size_t idx = ht->rehash_idx;
     bucket *b = ht->tables[0] + idx;
     while (b != NULL) {
         bucket *next = getChildBucket(b);
-        rehashBucketWhenShrink(ht, b);
+        rehashBucketShrink(ht, b);
         b = next;
     }
 }
 
 /* Finalizes a single rehash step. */
-static void finalizeRehashStep(hashtable *ht) {
+static void rehashStepFinalize(hashtable *ht) {
     size_t idx = ht->rehash_idx;
     /* Free child bucket. */
     bucket *b = getChildBucket(ht->tables[0] + idx);
@@ -634,13 +630,16 @@ static void finalizeRehashStep(hashtable *ht) {
 
 static void rehashStep(hashtable *ht) {
     assert(hashtableIsRehashing(ht));
+    /* Note: rehashStepShrink and rehashStepExpand are responsible only for
+     * migrating entries from the old table to the new one. The cleanup of
+     * old buckets is handled separately in rehashStepFinalize. */
     if (ht->bucket_exp[1] < ht->bucket_exp[0]) {
-        rehashStepWhenShrink(ht);
-        finalizeRehashStep(ht);
+        rehashStepShrink(ht);
+        rehashStepFinalize(ht);
         return;
     }
-    rehashStepWhenExpand(ht);
-    finalizeRehashStep(ht);
+    rehashStepExpand(ht);
+    rehashStepFinalize(ht);
 }
 
 /* Called internally on lookup and other reads to the table. */

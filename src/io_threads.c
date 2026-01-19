@@ -225,14 +225,26 @@ static void *IOThreadMain(void *myid) {
     thread_id = (int)id;
     size_t jobs_to_process = 0;
     IOJobQueue *jq = &io_jobs[id];
+    struct timespec work_start_time = {0, 0};
+    struct timespec prev_work_start_time = {0, 0};
     while (1) {
         /* Cancellation point so that pthread_cancel() from main thread is honored. */
         pthread_testcancel();
 
-        /* Wait for jobs */
-        for (int j = 0; j < 1000000; j++) {
-            jobs_to_process = IOJobQueue_availableJobs(jq);
-            if (jobs_to_process) break;
+        prev_work_start_time = work_start_time;
+        clock_gettime(CLOCK_MONOTONIC, &work_start_time);
+        if (prev_work_start_time.tv_sec != 0 || prev_work_start_time.tv_nsec != 0) {
+            atomic_fetch_add_explicit(&used_active_time_io_thread[id], timespec_diff_us(prev_work_start_time, work_start_time), memory_order_relaxed);
+        }
+
+        jobs_to_process = IOJobQueue_availableJobs(jq);
+        if (jobs_to_process == 0) {
+            /* Wait for jobs */
+            for (int j = 0; j < 1000000; j++) {
+                jobs_to_process = IOJobQueue_availableJobs(jq);
+                if (jobs_to_process) break;
+            }
+            clock_gettime(CLOCK_MONOTONIC, &work_start_time);
         }
 
         /* Give the main thread a chance to stop this thread. */
@@ -241,9 +253,6 @@ static void *IOThreadMain(void *myid) {
             pthread_mutex_unlock(&io_threads_mutex[id]);
             continue;
         }
-
-        struct timespec work_start_time, work_end_time;
-        clock_gettime(CLOCK_MONOTONIC, &work_start_time);
 
         for (size_t j = 0; j < jobs_to_process; j++) {
             job_handler handler;
@@ -259,8 +268,6 @@ static void *IOThreadMain(void *myid) {
          * We do it once per loop and not per tail-update for optimization reasons.
          * As the main-thread main concern is to check if the queue is empty, it's enough to do it once at the end. */
         atomic_thread_fence(memory_order_release);
-        clock_gettime(CLOCK_MONOTONIC, &work_end_time);
-        atomic_fetch_add_explicit(&used_active_time_io_thread[id], timespec_diff_us(work_start_time, work_end_time), memory_order_relaxed);
     }
     pthread_cleanup_pop(0);
     return NULL;

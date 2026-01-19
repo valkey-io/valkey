@@ -1,0 +1,22 @@
+name: Copilot Review Trigger
+
+on:
+  pull_request:
+    types: [opened, synchronize, ready_for_review]
+
+jobs:
+  trigger-review:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Signal for AI Review
+        if: github.event.pull_request.draft == false
+        run: |
+          echo "PR #${{ github.event.pull_request.number }} is ready for review."
+          echo "Please ensure the AI Reviewer checks this PR based on .github/copilot-instructions.md"
+          # In a real integration, this step might call a webhook or add a specific label
+          # to trigger an external Copilot-based bot if one is configured.
+          # For native integration, the existence of this active workflow and the instructions file
+          # serves as the configuration context.

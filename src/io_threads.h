@@ -21,6 +21,5 @@ void trySendPollJobToIOThreads(void);
 int trySendAcceptToIOThreads(connection *conn);
 int updateIOThreads(const char **err);
 long long getIOThreadUsefulTimeMicroseconds(int id);
-long long getIOThreadUptimeMicroseconds(int id);
 
 #endif /* IO_THREADS_H */

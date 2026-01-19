@@ -26,10 +26,8 @@ start_server {config "minimal.conf" tags {"external:skip"} overrides {enable-deb
             assert_equal {15} [$rd15 read]
             set info [r info]
             # Verify non-zero io-threads active usage metric
-            set io_threads_1_active_usage_ms [getInfoProperty $info usefultime_cpu_io_thread_1]
-            set io_threads_1_uptime_ms [getInfoProperty $info uptime_cpu_io_thread_1]
-            assert {$io_threads_1_uptime_ms > 0}
-            assert {$io_threads_1_active_usage_ms > 0}
+            set used_active_time_io_thread_1 [getInfoProperty $info used_active_time_io_thread_1]
+            assert {$used_active_time_io_thread_1 > 0}
         }
     }
 }

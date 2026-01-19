@@ -1,10 +1,15 @@
 name: Copilot Review Trigger
 
 on:
-  pull_request:
+  push:
     branches: [ unstable ]
+  pull_request:
     types: [opened, synchronize, ready_for_review]
   workflow_dispatch:
+
+concurrency:
+  group: copilot-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
 
 jobs:
   trigger-review:
@@ -15,6 +20,11 @@ jobs:
 
       - name: Signal for AI Review
         run: |
-          echo "PR #${{ github.event.pull_request.number }} triggered the review workflow."
-          echo "Draft Status: ${{ github.event.pull_request.draft }}"
+          echo "Event: ${{ github.event_name }}"
+          if [ "${{ github.event_name }}" == "pull_request" ]; then
+            echo "PR #${{ github.event.pull_request.number }} triggered the review workflow."
+            echo "Draft Status: ${{ github.event.pull_request.draft }}"
+          else
+            echo "Triggered by push to ${{ github.ref }}"
+          fi
           echo "Instructions loaded from .github/copilot-instructions.md"

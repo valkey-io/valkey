@@ -2884,8 +2884,10 @@ void initServer(void) {
         if (server.locale_collate[0] == '\0') {
             /* If we fail to set the locale_collate through environment variables, we maintain
              * backward compatibility and do not exit. */
-            serverLog(LL_WARNING, "Warning: Failed to configure LOCALE derived from the environment variables, "
-                                  "using the default locale '%s'.", setlocale(LC_COLLATE, NULL));
+            serverLog(LL_WARNING,
+                      "Warning: Failed to configure LOCALE derived from the environment variables, "
+                      "using the default locale '%s'.",
+                      setlocale(LC_COLLATE, NULL));
         } else {
             serverLog(LL_WARNING, "Failed to configure LOCALE for invalid locale name: '%s'.", server.locale_collate);
             exit(1);

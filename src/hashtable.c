@@ -540,10 +540,37 @@ static void rehashEntry(hashtable *ht, void *entry, uint64_t hash, uint8_t h2) {
     ht->used[1]++;
 }
 
+/* After migrating entries in a bucket chain from the old table
+ * to the new one, this function should be called immediately to
+ * handle the cleanup of old buckets, such as clearing presence bits. */
+static void rehashStepFinalize(hashtable *ht) {
+    size_t idx = ht->rehash_idx;
+    /* Free child bucket. */
+    bucket *b = getChildBucket(ht->tables[0] + idx);
+    while (b != NULL) {
+        bucket *next = getChildBucket(b);
+        zfree(b);
+        if (ht->type->trackMemUsage) ht->type->trackMemUsage(ht, -sizeof(bucket));
+        ht->child_buckets[0]--;
+        b = next;
+    }
+
+    /* Reset the bucket after clearing its child buckets. */
+    b = ht->tables[0] + idx;
+    b->chained = 0;
+    b->presence = 0;
+
+    /* Advance to the next bucket. */
+    ht->rehash_idx++;
+    if ((size_t)ht->rehash_idx >= numBuckets(ht->bucket_exp[0])) {
+        rehashingCompleted(ht);
+    }
+}
+
 /* Fetches entries from a bucket chain for batch processing. */
-static bucket *fetchEntryForExpand(bucket *b, void *buf[], int *size, int max_fetch_count) {
+static bucket *fetchEntriesForExpand(bucket *b, void *buf[], int *size, int max_bucket_count) {
     *size = 0;
-    for (int idx = 0; idx < max_fetch_count && b != NULL; idx += 1) {
+    for (int idx = 0; idx < max_bucket_count && b != NULL; idx += 1) {
         for (int pos = 0; pos < numBucketPositions(b); pos++) {
             if (!isPositionFilled(b, pos)) continue; /* empty */
             buf[*size] = b->entries[pos];
@@ -563,7 +590,7 @@ static void rehashStepExpand(hashtable *ht) {
     bucket *b = ht->tables[0] + idx;
     int size = 0;
     while (b != NULL) {
-        b = fetchEntryForExpand(b, entry_buf, &size, FETCH_BUCKET_COUNT_WHEN_EXPAND);
+        b = fetchEntriesForExpand(b, entry_buf, &size, FETCH_BUCKET_COUNT_WHEN_EXPAND);
 
         /* Key optimization: no loop-carried dependency enables concurrent memory access,
          * reducing CPU stall cycles. */
@@ -576,6 +603,8 @@ static void rehashStepExpand(hashtable *ht) {
             rehashEntry(ht, entry_buf[i], hash, highBits(hash));
         }
     }
+
+    rehashStepFinalize(ht);
 }
 
 /* Rehashes a bucket during table shrinkage. */
@@ -601,45 +630,17 @@ static void rehashStepShrink(hashtable *ht) {
         rehashBucketShrink(ht, b);
         b = next;
     }
-}
 
-/* Finalizes a single rehash step. */
-static void rehashStepFinalize(hashtable *ht) {
-    size_t idx = ht->rehash_idx;
-    /* Free child bucket. */
-    bucket *b = getChildBucket(ht->tables[0] + idx);
-    while (b != NULL) {
-        bucket *next = getChildBucket(b);
-        zfree(b);
-        if (ht->type->trackMemUsage) ht->type->trackMemUsage(ht, -sizeof(bucket));
-        ht->child_buckets[0]--;
-        b = next;
-    }
-
-    /* Reset the bucket after clearing its child buckets. */
-    b = ht->tables[0] + idx;
-    b->chained = 0;
-    b->presence = 0;
-
-    /* Advance to the next bucket. */
-    ht->rehash_idx++;
-    if ((size_t)ht->rehash_idx >= numBuckets(ht->bucket_exp[0])) {
-        rehashingCompleted(ht);
-    }
+    rehashStepFinalize(ht);
 }
 
 static void rehashStep(hashtable *ht) {
     assert(hashtableIsRehashing(ht));
-    /* Note: rehashStepShrink and rehashStepExpand are responsible only for
-     * migrating entries from the old table to the new one. The cleanup of
-     * old buckets is handled separately in rehashStepFinalize. */
     if (ht->bucket_exp[1] < ht->bucket_exp[0]) {
         rehashStepShrink(ht);
-        rehashStepFinalize(ht);
         return;
     }
     rehashStepExpand(ht);
-    rehashStepFinalize(ht);
 }
 
 /* Called internally on lookup and other reads to the table. */

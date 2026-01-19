@@ -2330,6 +2330,9 @@ struct valkeyServer {
     int tls_replication;
     int tls_auth_clients;
     serverTLSContextConfig tls_ctx_config;
+    long long tls_client_cert_expiry_warn_threshold; /* Days remaining before logging warnings */
+    long long tls_client_presented_cert_expires_in_seconds; /* Minimum seconds observed across client certificates */
+    dict *client_cert_expiry_warned;                  /* Fingerprints logged for expiry warnings */
     serverUnixContextConfig unix_ctx_config;
     serverRdmaContextConfig rdma_ctx_config;
     /* cpu affinity */
@@ -2780,6 +2783,7 @@ extern double R_Zero, R_PosInf, R_NegInf, R_Nan;
 extern hashtableType hashHashtableType;
 extern hashtableType hashWithVolatileItemsHashtableType;
 extern dictType stringSetDictType;
+extern dictType stringLongLongDictType;
 extern dictType externalStringType;
 extern dictType sdsHashDictType;
 extern hashtableType clientHashtableType;

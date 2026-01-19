@@ -168,3 +168,15 @@ sds getListensInfoString(sds info) {
 
     return info;
 }
+
+/* Return a printable fingerprint for the peer certificate, when available. */
+sds connGetPeerCertFingerprint(connection *conn) {
+    if (!conn || !conn->type->get_peer_cert_fingerprint) return NULL;
+    return conn->type->get_peer_cert_fingerprint(conn);
+}
+
+/* Return seconds until the peer certificate expires, or C_ERR on failure. */
+int connGetPeerCertValidity(connection *conn, long long *remaining_seconds) {
+    if (!conn || !remaining_seconds || !conn->type->get_peer_cert_validity) return C_ERR;
+    return conn->type->get_peer_cert_validity(conn, remaining_seconds);
+}

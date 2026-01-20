@@ -51,6 +51,7 @@ jobs:
     needs: determine-release-branches
     if: needs.determine-release-branches.outputs.has-branches == 'true' && github.repository == 'valkey-io/valkey'
     strategy:
+      fail-fast: false
       matrix:
         release-branch: ${{ fromJson(needs.determine-release-branches.outputs.branches) }}
       max-parallel: 1

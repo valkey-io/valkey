@@ -6382,7 +6382,7 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                             (long)m_ru.ru_stime.tv_sec, (long)m_ru.ru_stime.tv_usec, (long)m_ru.ru_utime.tv_sec,
                             (long)m_ru.ru_utime.tv_usec);
 #endif /* RUSAGE_THREAD */
-        for (int i = 1; i < server.active_io_threads_num; i++) {
+        for (int i = 1; i < server.io_threads_num; i++) {
             long long used_active_time_io_thread = getIOThreadUsefulTimeMicroseconds(i);
             info = sdscatprintf(info, "used_active_time_io_thread_%d:%lld.%06lld\r\n", i, used_active_time_io_thread / 1000000, used_active_time_io_thread % 1000000);
         }

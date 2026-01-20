@@ -2334,14 +2334,11 @@ void hashtableDump(hashtable *ht) {
             bucket *b = &ht->tables[table][idx];
             int level = 0;
             do {
-                printf("Bucket %d:%zu level:%d\n", table, idx, level);
+                printf("  Bucket %d:%zu level:%d\n", table, idx, level);
                 for (int pos = 0; pos < ENTRIES_PER_BUCKET; pos++) {
-                    printf("  %d ", pos);
                     if (isPositionFilled(b, pos)) {
-                        printf("h2 %02x, key \"%s\"\n", b->hashes[pos],
+                        printf("    %d h2 %02x, key \"%s\"\n", pos, b->hashes[pos],
                                (const char *)entryGetKey(ht, b->entries[pos]));
-                    } else {
-                        printf("(empty)\n");
                     }
                 }
                 b = getChildBucket(b);

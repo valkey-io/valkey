@@ -201,7 +201,7 @@ proc verify_log_message {srv_idx pattern from_line} {
     incr from_line
     set result [exec tail -n +$from_line < [srv $srv_idx stdout]]
     if {![string match $pattern $result]} {
-        fail "expected message not found in log file: $pattern"
+        fail "expected pattern found in log file: $pattern, but instead got: $result"
     }
 }
 
@@ -1278,5 +1278,24 @@ proc bp {{s {}}} {
         if {$line=="i"} {set line "info locals"}
         catch {uplevel 1 $line} res
         puts $res
+    }
+}
+
+# Compares two version strings. Returns 1 if a >= b, 0 otherwise.
+proc version_greater_or_equal {a b} {
+    regexp {^([0-9]+)\.([0-9]+)\.([0-9]+)$} $a -> a_major a_minor a_patch
+    regexp {^([0-9]+)\.([0-9]+)\.([0-9]+)$} $b -> b_major b_minor b_patch
+    if {$a_major < $b_major} {
+        return 0
+    } elseif {$a_major > $b_major} {
+        return 1
+    } elseif {$a_minor < $b_minor} {
+        return 0
+    } elseif {$a_minor > $b_minor} {
+        return 1
+    } elseif {$a_patch < $b_patch} {
+        return 0
+    } else {
+        return 1
     }
 }

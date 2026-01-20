@@ -9,13 +9,29 @@ message(STATUS "CFLAGS: ${CMAKE_C_FLAGS}")
 
 get_valkey_server_linker_option(VALKEY_SERVER_LDFLAGS)
 list(APPEND SERVER_LIBS "fpconv")
-list(APPEND SERVER_LIBS "lualib")
 list(APPEND SERVER_LIBS "hdr_histogram")
 valkey_build_and_install_bin(valkey-server "${VALKEY_SERVER_SRCS}" "${VALKEY_SERVER_LDFLAGS}" "${SERVER_LIBS}"
                              "redis-server")
 add_dependencies(valkey-server generate_commands_def)
 add_dependencies(valkey-server generate_fmtargs_h)
 add_dependencies(valkey-server release_header)
+
+if (BUILD_LUA)
+    message(STATUS "Build Lua scripting engine module")
+    add_subdirectory(modules/lua)
+    add_dependencies(valkey-server valkeylua)
+    target_compile_definitions(valkey-server PRIVATE LUA_ENABLED)
+    target_compile_definitions(valkey-server PRIVATE LUA_LIB=libvalkeylua.so)
+    target_link_options(valkey-server PRIVATE -Wl,--disable-new-dtags)
+
+    set(VALKEY_INSTALL_RPATH "")
+    set_target_properties(valkey-server PROPERTIES
+        INSTALL_RPATH "${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR};${CMAKE_LIBRARY_OUTPUT_DIRECTORY}"
+        INSTALL_RPATH_USE_LINK_PATH TRUE
+        BUILD_WITH_INSTALL_RPATH TRUE
+    )
+endif()
+unset(BUILD_LUA CACHE)
 
 if (VALKEY_RELEASE_BUILD)
     # Enable LTO for Release build

@@ -3,6 +3,7 @@
 
 #include "test_help.h"
 
+#include "../fmacros.h"
 #include "../config.h"
 #include "../zmalloc.h"
 

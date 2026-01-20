@@ -1,6 +1,15 @@
 #ifndef __LRULFU_H__
 #define __LRULFU_H__
 
+/*
+ * Important: include fmacros.h before any system header
+ * so feature-test macros like _FILE_OFFSET_BITS are in effect
+ * when glibc's <features.h> is first seen (transitively via
+ * headers like <stdint.h>). This prevents 32-bit off_t on
+ * 32-bit builds due to include-order.
+ */
+#include "fmacros.h"
+
 #include <stdint.h>
 #include <stdbool.h>
 

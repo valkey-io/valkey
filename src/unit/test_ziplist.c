@@ -1,5 +1,6 @@
 #include <sys/time.h>
 #include "../ziplist.c"
+#include "../fmacros.h"
 #include "../adlist.h"
 #include "test_help.h"
 

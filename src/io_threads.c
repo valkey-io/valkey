@@ -225,16 +225,16 @@ static void *IOThreadMain(void *myid) {
     thread_id = (int)id;
     size_t jobs_to_process = 0;
     IOJobQueue *jq = &io_jobs[id];
-    struct timespec work_start_time = {0, 0};
-    struct timespec prev_work_start_time = {0, 0};
+    monotime work_start_time = 0;
+    monotime prev_work_start_time = 0;
     while (1) {
         /* Cancellation point so that pthread_cancel() from main thread is honored. */
         pthread_testcancel();
 
         prev_work_start_time = work_start_time;
-        clock_gettime(CLOCK_MONOTONIC, &work_start_time);
-        if (prev_work_start_time.tv_sec != 0 || prev_work_start_time.tv_nsec != 0) {
-            atomic_fetch_add_explicit(&used_active_time_io_thread[id], timespec_diff_us(prev_work_start_time, work_start_time), memory_order_relaxed);
+        work_start_time = getMonotonicUs();
+        if (prev_work_start_time != 0) {
+            atomic_fetch_add_explicit(&used_active_time_io_thread[id], (work_start_time - prev_work_start_time), memory_order_relaxed);
         }
 
         jobs_to_process = IOJobQueue_availableJobs(jq);
@@ -244,7 +244,7 @@ static void *IOThreadMain(void *myid) {
                 jobs_to_process = IOJobQueue_availableJobs(jq);
                 if (jobs_to_process) break;
             }
-            clock_gettime(CLOCK_MONOTONIC, &work_start_time);
+            work_start_time = getMonotonicUs();
         }
 
         /* Give the main thread a chance to stop this thread. */

@@ -213,21 +213,22 @@ static int tlsPasswordCallback(char *buf, int size, int rwflag, void *u) {
 }
 
 /* Check a single X509 certificate validity */
-static int is_cert_valid(X509 *cert) {
-    if (!cert) return 0;
+static bool isCertValid(X509 *cert) {
+    if (!cert) return false;
     const ASN1_TIME *not_before = X509_get0_notBefore(cert);
     const ASN1_TIME *not_after = X509_get0_notAfter(cert);
-    if (!not_before || !not_after) return 0;
+    if (!not_before || !not_after) return false;
     if (X509_cmp_current_time(not_before) > 0 ||
         X509_cmp_current_time(not_after) < 0) {
-        return 0;
+        return false;
     }
-    return 1;
+    return true;
 }
 
-/* Load all certificates from a directory into the X509_STORE */
-static int load_ca_cert_dir(SSL_CTX *ctx, const char *ca_cert_dir) {
-    if (!ca_cert_dir) return 1;
+/* Load all certificates from a directory into the X509_STORE
+ * Returns true on success, false on failure */
+static bool loadCaCertDir(SSL_CTX *ctx, const char *ca_cert_dir) {
+    if (!ca_cert_dir) return true;
 
     DIR *dir;
     struct dirent *entry;
@@ -236,13 +237,13 @@ static int load_ca_cert_dir(SSL_CTX *ctx, const char *ca_cert_dir) {
 
     if (!store) {
         serverLog(LL_WARNING, "Failed to get X509_STORE from SSL_CTX");
-        return 0;
+        return false;
     }
 
     dir = opendir(ca_cert_dir);
     if (!dir) {
         serverLog(LL_WARNING, "Failed to open CA certificate directory: %s", ca_cert_dir);
-        return 0;
+        return false;
     }
 
     while ((entry = readdir(dir)) != NULL) {
@@ -262,7 +263,7 @@ static int load_ca_cert_dir(SSL_CTX *ctx, const char *ca_cert_dir) {
                     serverLog(LL_WARNING, "Failed to add CA certificate from %s to store", full_path);
                     X509_free(cert);
                     closedir(dir);
-                    return 0;
+                    return false;
                 }
                 ERR_clear_error();
             }
@@ -271,26 +272,26 @@ static int load_ca_cert_dir(SSL_CTX *ctx, const char *ca_cert_dir) {
     }
 
     closedir(dir);
-    return 1;
+    return true;
 }
 
 /* Iterate over all CA certs in the SSL_CTX and fail-fast if any are invalid */
-int check_loaded_ca_certs(SSL_CTX *ctx) {
+bool areAllCaCertsValid(SSL_CTX *ctx) {
     X509_STORE *store = SSL_CTX_get_cert_store(ctx);
-    if (!store) return 0;
+    if (!store) return false;
     STACK_OF(X509_OBJECT) *objs = X509_STORE_get0_objects(store);
-    if (!objs) return 0;
+    if (!objs) return false;
     for (int i = 0; i < sk_X509_OBJECT_num(objs); i++) {
         X509_OBJECT *obj = sk_X509_OBJECT_value(objs, i);
         int type = X509_OBJECT_get_type(obj);
         if (type == X509_LU_X509) {
             X509 *ca_cert = X509_OBJECT_get0_X509(obj);
-            if (ca_cert && !is_cert_valid(ca_cert)) {
-                return 0;
+            if (ca_cert && !isCertValid(ca_cert)) {
+                return false;
             }
         }
     }
-    return 1;
+    return true;
 }
 
 /* Create a *base* SSL_CTX using the SSL configuration provided. The base context
@@ -337,7 +338,7 @@ static SSL_CTX *createSSLContext(serverTLSContextConfig *ctx_config, int protoco
         goto error;
     }
 
-    if (!is_cert_valid(SSL_CTX_get0_certificate(ctx))) {
+    if (!isCertValid(SSL_CTX_get0_certificate(ctx))) {
         serverLog(LL_WARNING, "%s TLS certificate is invalid. Aborting TLS configuration.", client ? "Client" : "Server");
         goto error;
     }
@@ -355,12 +356,12 @@ static SSL_CTX *createSSLContext(serverTLSContextConfig *ctx_config, int protoco
             goto error;
         }
 
-        if (!load_ca_cert_dir(ctx, ctx_config->ca_cert_dir)) {
+        if (!loadCaCertDir(ctx, ctx_config->ca_cert_dir)) {
             serverLog(LL_WARNING, "Failed to load CA certificates from directory: %s", ctx_config->ca_cert_dir);
             goto error;
         }
 
-        if (!check_loaded_ca_certs(ctx)) {
+        if (!areAllCaCertsValid(ctx)) {
             serverLog(LL_WARNING, "One or more loaded CA certificates are invalid. Aborting TLS configuration.");
             goto error;
         }

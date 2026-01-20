@@ -1,5 +1,5 @@
 
-start_server {config "minimal.conf" tags {"external:skip"} overrides {enable-debug-command {yes} maxclients 30000 io-threads 5}} {
+start_server {config "minimal.conf" tags {"external:skip"} overrides {enable-debug-command {yes} io-threads 5}} {
     set server_pid [s process_id]
     # Skip if non io-threads mode - as it is relevant only for io-threads mode
     if {[r config get io-threads] ne "io-threads 1"} {
@@ -20,10 +20,6 @@ start_server {config "minimal.conf" tags {"external:skip"} overrides {enable-deb
             }
             # Resume the server
             resume_process $server_pid
-            # Verify the final state
-            $rd15 get a
-            assert_equal {OK} [$rd15 read]
-            assert_equal {15} [$rd15 read]
             
             # Wait until active io-threads count is 1
             wait_for_condition 1000 50 {

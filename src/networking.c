@@ -2765,7 +2765,13 @@ static void releaseBufReferences(char *buf, size_t bufpos) {
         ptr += sizeof(payloadHeader);
 
         if (header->payload_type == BULK_STR_REF) {
-            clusterSlotStatsAddNetworkBytesOutForSlot(header->slot, header->reply_len);
+            /* Here clusterSlotStatsAddNetworkBytesOutForSlot() is called in
+             * the IO thread after writing the reply to the client, and after
+             * #2652 it is also done in the normal code path in the main thread
+             * (afterCommand() -> clusterSlotStatsAddNetworkBytesOutForUserClient()).
+             * Before we come up with a better solution (see #2652), we need to
+             * comment it out to avoid the duplicate calculations. */
+            /* clusterSlotStatsAddNetworkBytesOutForSlot(header->slot, header->reply_len); */
 
             bulkStrRef *str_ref = (bulkStrRef *)ptr;
             size_t len = header->payload_len;

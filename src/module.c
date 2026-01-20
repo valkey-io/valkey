@@ -6565,7 +6565,16 @@ ValkeyModuleCallReply *VM_Call(ValkeyModuleCtx *ctx, const char *cmdname, const 
             }
         }
 
+        /* Allow running any command even if OOM reached. */
         if (is_running_script && scriptAllowsOOM()) {
+            flags &= ~VALKEYMODULE_ARGV_RESPECT_DENY_OOM;
+        }
+
+        /* If we reached the memory limit configured via maxmemory, commands that
+         * could enlarge the memory usage are not allowed, but only if this is the
+         * first write in the context of this script, otherwise we can't stop
+         * in the middle. */
+        if (is_running_script && scriptIsWriteDirty()) {
             flags &= ~VALKEYMODULE_ARGV_RESPECT_DENY_OOM;
         }
     }
@@ -9534,8 +9543,13 @@ void VM_SetClusterFlags(ValkeyModuleCtx *ctx, uint64_t flags) {
 
 /* Returns the cluster slot of a key, similar to the `CLUSTER KEYSLOT` command.
  * This function works even if cluster mode is not enabled. */
+unsigned int VM_ClusterKeySlotC(const char *key, size_t keylen) {
+    return keyHashSlot(key, keylen);
+}
+
+/* Like VM_ClusterKeySlotC() but gets the key as a ValkeyModuleString. */
 unsigned int VM_ClusterKeySlot(ValkeyModuleString *key) {
-    return keyHashSlot(objectGetVal(key), sdslen(objectGetVal(key)));
+    return VM_ClusterKeySlotC(objectGetVal(key), sdslen(objectGetVal(key)));
 }
 
 /* Returns a short string that can be used as a key or as a hash tag in a key,
@@ -14611,6 +14625,7 @@ void moduleRegisterCoreAPI(void) {
     REGISTER_API(SetDisconnectCallback);
     REGISTER_API(GetBlockedClientHandle);
     REGISTER_API(SetClusterFlags);
+    REGISTER_API(ClusterKeySlotC);
     REGISTER_API(ClusterKeySlot);
     REGISTER_API(ClusterCanonicalKeyNameInSlot);
     REGISTER_API(CreateDict);

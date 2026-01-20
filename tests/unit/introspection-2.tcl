@@ -17,7 +17,7 @@ start_server {tags {"introspection"}} {
     test {The microsecond part of the TIME command will not overflow} {
         set now [r time]
         set microseconds [lindex $now 1]
-        assert_morethan $microseconds 0
+        assert_morethan_equal $microseconds 0
         assert_lessthan $microseconds 1000000
     }
 

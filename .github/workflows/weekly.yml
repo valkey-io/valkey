@@ -6,6 +6,7 @@ on:
 permissions:
   actions: read
   contents: read
+  pull-requests: write
 concurrency:
   group: weekly-release-tests
   cancel-in-progress: false

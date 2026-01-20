@@ -227,6 +227,55 @@ void bioCreateSaveRDBToDiskJob(connection *conn, int is_dual_channel) {
     bioSubmitJob(BIO_RDB_SAVE, job);
 }
 
+static void bioCloseFileJob(bio_job *job) {
+    if (job->fd_args.need_fsync && valkey_fsync(job->fd_args.fd) == -1 && errno != EBADF && errno != EINVAL) {
+        serverLog(LL_WARNING, "Fail to fsync the AOF file: %s", strerror(errno));
+    }
+    if (job->fd_args.need_reclaim_cache) {
+        if (reclaimFilePageCache(job->fd_args.fd, 0, 0) == -1) {
+            serverLog(LL_NOTICE, "Unable to reclaim page cache: %s", strerror(errno));
+        }
+    }
+    close(job->fd_args.fd);
+}
+
+static void bioAofFsyncJob(bio_job *job) {
+    /* The fd may be closed by main thread and reused for another
+     * socket, pipe, or file. We just ignore these errno because
+     * aof fsync did not really fail. */
+    if (valkey_fsync(job->fd_args.fd) == -1 && errno != EBADF && errno != EINVAL) {
+        int last_status = atomic_load_explicit(&server.aof_bio_fsync_status, memory_order_relaxed);
+
+        atomic_store_explicit(&server.aof_bio_fsync_errno, errno, memory_order_relaxed);
+        atomic_store_explicit(&server.aof_bio_fsync_status, C_ERR, memory_order_release);
+        if (last_status == C_OK) {
+            serverLog(LL_WARNING, "Fail to fsync the AOF file: %s", strerror(errno));
+        }
+    } else {
+        atomic_store_explicit(&server.aof_bio_fsync_status, C_OK, memory_order_relaxed);
+        atomic_store_explicit(&server.fsynced_reploff_pending, job->fd_args.offset, memory_order_relaxed);
+    }
+
+    if (job->fd_args.need_reclaim_cache) {
+        if (reclaimFilePageCache(job->fd_args.fd, 0, 0) == -1) {
+            serverLog(LL_NOTICE, "Unable to reclaim page cache: %s", strerror(errno));
+        }
+    }
+}
+
+static void bioLazyFreeJob(bio_job *job) {
+    job->free_args.free_fn(job->free_args.free_args);
+}
+
+static void bioCloseAofJob(bio_job *job) {
+    bioAofFsyncJob(job);
+    close(job->fd_args.fd);
+}
+
+static void bioRdbSaveJob(bio_job *job) {
+    replicaReceiveRDBFromPrimaryToDisk(job->save_to_disk_args.conn, job->save_to_disk_args.is_dual_channel);
+}
+
 void *bioProcessBackgroundJobs(void *arg) {
     bio_worker_data *const bwd = arg;
     sigset_t sigset;
@@ -254,44 +303,23 @@ void *bioProcessBackgroundJobs(void *arg) {
         /* Process the job accordingly to its type. */
         int job_type = job->header.type;
 
-        if (job_type == BIO_CLOSE_FILE) {
-            if (job->fd_args.need_fsync && valkey_fsync(job->fd_args.fd) == -1 && errno != EBADF && errno != EINVAL) {
-                serverLog(LL_WARNING, "Fail to fsync the AOF file: %s", strerror(errno));
-            }
-            if (job->fd_args.need_reclaim_cache) {
-                if (reclaimFilePageCache(job->fd_args.fd, 0, 0) == -1) {
-                    serverLog(LL_NOTICE, "Unable to reclaim page cache: %s", strerror(errno));
-                }
-            }
-            close(job->fd_args.fd);
-        } else if (job_type == BIO_AOF_FSYNC || job_type == BIO_CLOSE_AOF) {
-            /* The fd may be closed by main thread and reused for another
-             * socket, pipe, or file. We just ignore these errno because
-             * aof fsync did not really fail. */
-            if (valkey_fsync(job->fd_args.fd) == -1 && errno != EBADF && errno != EINVAL) {
-                int last_status = atomic_load_explicit(&server.aof_bio_fsync_status, memory_order_relaxed);
-
-                atomic_store_explicit(&server.aof_bio_fsync_errno, errno, memory_order_relaxed);
-                atomic_store_explicit(&server.aof_bio_fsync_status, C_ERR, memory_order_release);
-                if (last_status == C_OK) {
-                    serverLog(LL_WARNING, "Fail to fsync the AOF file: %s", strerror(errno));
-                }
-            } else {
-                atomic_store_explicit(&server.aof_bio_fsync_status, C_OK, memory_order_relaxed);
-                atomic_store_explicit(&server.fsynced_reploff_pending, job->fd_args.offset, memory_order_relaxed);
-            }
-
-            if (job->fd_args.need_reclaim_cache) {
-                if (reclaimFilePageCache(job->fd_args.fd, 0, 0) == -1) {
-                    serverLog(LL_NOTICE, "Unable to reclaim page cache: %s", strerror(errno));
-                }
-            }
-            if (job_type == BIO_CLOSE_AOF) close(job->fd_args.fd);
-        } else if (job_type == BIO_LAZY_FREE) {
-            job->free_args.free_fn(job->free_args.free_args);
-        } else if (job_type == BIO_RDB_SAVE) {
-            replicaReceiveRDBFromPrimaryToDisk(job->save_to_disk_args.conn, job->save_to_disk_args.is_dual_channel);
-        } else {
+        switch (job_type) {
+        case BIO_CLOSE_FILE:
+            bioCloseFileJob(job);
+            break;
+        case BIO_AOF_FSYNC:
+            bioAofFsyncJob(job);
+            break;
+        case BIO_LAZY_FREE:
+            bioLazyFreeJob(job);
+            break;
+        case BIO_CLOSE_AOF:
+            bioCloseAofJob(job);
+            break;
+        case BIO_RDB_SAVE:
+            bioRdbSaveJob(job);
+            break;
+        default:
             serverPanic("Wrong job type in bioProcessBackgroundJobs().");
         }
         zfree(job);

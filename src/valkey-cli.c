@@ -291,6 +291,7 @@ static struct config {
     char *server_version;
     char *test_hint;
     char *test_hint_file;
+    char *client_name;
     int prefer_ipv4; /* Prefer IPv4 over IPv6 on DNS lookup. */
     int prefer_ipv6; /* Prefer IPv6 over IPv4 on DNS lookup. */
 } config;
@@ -1620,6 +1621,26 @@ static int cliSwitchProto(void) {
     return result;
 }
 
+/* Set the client name if configured. */
+static int cliSetClientName(void) {
+    int result = VALKEY_OK;
+    valkeyReply *reply = NULL;
+
+    if (config.client_name == NULL) return VALKEY_OK;
+
+    reply = valkeyCommand(context,"CLIENT SETNAME %s", config.client_name);
+    if (reply == NULL) {
+        fprintf(stderr, "\nI/O error\n");
+        return VALKEY_ERR;
+    }
+    if (reply->type == VALKEY_REPLY_ERROR) {
+        fprintf(stderr,"CLIENT SETNAME failed: %s\n", reply->str);
+        result = VALKEY_ERR;
+    }
+    freeReplyObject(reply);
+    return result;
+}
+
 static void resetConfig(void) {
     config.dbnum = 0;
     config.in_multi = 0;
@@ -1679,6 +1700,7 @@ static int cliConnect(int flags) {
         if (cliAuth(context, config.conn_info.user, config.conn_info.auth) != VALKEY_OK) return VALKEY_ERR;
         if (cliSelect(&config, context) != VALKEY_OK) return VALKEY_ERR;
         if (cliSwitchProto() != VALKEY_OK) return VALKEY_ERR;
+        if (cliSetClientName() != VALKEY_OK) return VALKEY_ERR;
     }
 
     /* Set a PUSH handler if configured to do so. */
@@ -2803,6 +2825,8 @@ static int parseOptions(int argc, char **argv) {
             config.test_hint = argv[++i];
         } else if (!strcmp(argv[i], "--test_hint_file") && !lastarg) {
             config.test_hint_file = argv[++i];
+        } else if (!strcmp(argv[i], "--name") && !lastarg) {
+            config.client_name = argv[++i];
 #ifdef USE_OPENSSL
         } else if (!strcmp(argv[i], "--tls")) {
             config.tls = 1;
@@ -3002,6 +3026,7 @@ static void usage(int err) {
             "                     This interval is also used in --scan and --stat per cycle.\n"
             "                     and in --bigkeys, --memkeys, and --hotkeys per 100 cycles.\n"
             "  -n <db>            Database number.\n"
+            "  --name <name>      Set the client name.\n"
             "  -2                 Start session in RESP2 protocol mode.\n"
             "  -3                 Start session in RESP3 protocol mode.\n"
             "  -x                 Read last argument from STDIN (see example below).\n"

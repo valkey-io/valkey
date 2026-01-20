@@ -2060,7 +2060,7 @@ long long showThroughput(struct aeEventLoop *eventLoop, long long id, void *clie
             atomic_store_explicit(&config.previous_requests_finished, 0, memory_order_relaxed);
             hdr_reset(config.latency_histogram);
         }
-    } else if (config.num_threads && isBenchmarkFinished(requests_finished)) {
+    } else if (isBenchmarkFinished(requests_finished)) {
         aeStop(eventLoop);
         return AE_NOMORE;
     }

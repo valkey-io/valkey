@@ -129,6 +129,8 @@ size_t hashtableMemUsage(hashtable *ht);
 void hashtablePauseAutoShrink(hashtable *ht);
 void hashtableResumeAutoShrink(hashtable *ht);
 bool hashtableIsRehashing(hashtable *ht);
+void hashtablePauseRehashing(hashtable *ht);
+void hashtableResumeRehashing(hashtable *ht);
 bool hashtableIsRehashingPaused(hashtable *ht);
 void hashtableRehashingInfo(hashtable *ht, size_t *from_size, size_t *to_size);
 int hashtableRehashMicroseconds(hashtable *ht, uint64_t us);

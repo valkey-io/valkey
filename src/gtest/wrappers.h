@@ -43,6 +43,7 @@ extern "C" {
 #define protected protected_ /* Avoid conflict with C++ 'protected' keyword */
 
 #include "server.h"
+#include "ae.h"
 
 /**
  * The list of wrapper methods defined.  Each wrapper method must
@@ -55,6 +56,14 @@ extern "C" {
  *       Example: serverLog(int level, const char *fmt, ...) should NOT be mocked.
  */
 int __wrap_processCommand(struct client *c);
+long long __wrap_aeCreateTimeEvent(aeEventLoop *eventLoop, long long milliseconds, aeTimeProc *proc, void *clientData, aeEventFinalizerProc *finalizerProc);
+int __wrap_ACLCheckAllUserCommandPerm(user *u, struct serverCommand *cmd, robj **argv, int argc, int dbid, int *idxptr);
+
+
+//JHB these still need refactor.  Allowing dummy functions to be mocked.
+void __wrap_amzUnblockClientsOnKey(void *info, robj *key); // temp for mock
+int __wrap_amzBlockClientOnKeys(void *info, client *c, robj **keys, int nKeys); // temp for mock
+
 
 #undef protected
 #undef _Bool

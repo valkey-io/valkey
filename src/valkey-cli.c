@@ -9801,8 +9801,12 @@ static void LRUTestMode(void) {
             }
         }
         /* Print stats. */
-        printf("%lld Gets/sec | Hits: %lld (%.2f%%) | Misses: %lld (%.2f%%)\n", hits + misses, hits,
-               (double)hits / (hits + misses) * 100, misses, (double)misses / (hits + misses) * 100);
+        long long total = hits + misses;
+        printf(
+            "%lld Gets/sec | Hits: %lld (%.2f%%) | Misses: %lld (%.2f%%)\n", 
+            hits + misses, 
+            hits, total > 0 ? (double)hits / total * 100 : 0.0, 
+            misses, total > 0 ? (double)misses / total * 100 : 0.0);
     }
     exit(0);
 }

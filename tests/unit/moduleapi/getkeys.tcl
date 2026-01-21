@@ -89,5 +89,4 @@ start_server {tags {"modules"}} {
     test "Unload the module - getkeys" {
         assert_equal {OK} [r module unload getkeys]
     }
-    
 }

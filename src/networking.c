@@ -324,6 +324,7 @@ client *createClient(connection *conn) {
     c->multibulklen = 0;
     c->bulklen = -1;
     c->raw_flag = 0;
+    c->flag.track_net_output_bytes = (server.commandlog[COMMANDLOG_TYPE_LARGE_REQUEST].threshold != -1);
     c->capa = 0;
     c->slot = -1;
     c->ctime = c->last_interaction = server.unixtime;
@@ -1399,14 +1400,17 @@ static int tryAvoidBulkStrCopyToReply(client *c, robj *obj) {
 /* Add an Object as a bulk reply */
 void addReplyBulk(client *c, robj *obj) {
     if (tryAvoidBulkStrCopyToReply(c, obj) == C_OK) {
-        /* If copy avoidance allowed, then we explicitly maintain net_output_bytes_curr_cmd. */
-        serverAssert(obj->encoding == OBJ_ENCODING_RAW);
-        size_t str_len = sdslen(objectGetVal(obj));
-        uint32_t num_len = digits10(str_len);
-        /* RESP encodes bulk strings as $<length>\r\n<data>\r\n */
-        c->net_output_bytes_curr_cmd += (num_len + 3); /* $<length>\r\n */
-        c->net_output_bytes_curr_cmd += str_len;       /* <data> */
-        c->net_output_bytes_curr_cmd += 2;             /* \r\n */
+        /* If copy avoidance allowed, then we explicitly maintain net_output_bytes_curr_cmd.
+         * We only track bytes if the client flag indicates it's enabled. */
+        if (c->flag.track_net_output_bytes) {
+            serverAssert(obj->encoding == OBJ_ENCODING_RAW);
+            size_t str_len = sdslen(objectGetVal(obj));
+            uint32_t num_len = digits10(str_len);
+            /* RESP encodes bulk strings as $<length>\r\n<data>\r\n */
+            c->net_output_bytes_curr_cmd += (num_len + 3); /* $<length>\r\n */
+            c->net_output_bytes_curr_cmd += str_len;       /* <data> */
+            c->net_output_bytes_curr_cmd += 2;             /* \r\n */
+        }
         return;
     }
     addReplyBulkLen(c, obj);

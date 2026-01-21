@@ -27,27 +27,6 @@ proc get_my_primary_peer {srv_idx} {
     return $primary_peer
 }
 
-# Check if all given nodes have the expected key/value pairs.
-proc keys_match {nodes kv_pairs} {
-    foreach node $nodes {
-        dict for {key val} $kv_pairs {
-            if {[R $node get $key] ne $val} {
-                return 0
-            }
-        }
-    }
-    return 1
-}
-
-# Wait until all given nodes have the expected key/value pairs.
-proc wait_for_key_consistent {nodes kv_pairs} {
-    wait_for_condition 1000 50 {
-        [keys_match $nodes $kv_pairs]
-    } else {
-        fail "Keys not consistent"
-    }
-}
-
 proc test_migrated_replica {type} {
     test "Migrated replica reports zero repl offset and rank, and fails to win election - $type" {
         # Write some data to primary 0, slot 1, make a small repl_offset.
@@ -123,7 +102,16 @@ proc test_migrated_replica {type} {
         # Make sure the key exists and is consistent.
         R 3 readonly
         R 7 readonly
-        wait_for_key_consistent {3 4 7} {key_991803 1024 key_977613 10240}
+        wait_for_condition 1000 50 {
+            [R 3 get key_991803] == 1024 && [R 3 get key_977613] == 10240 &&
+            [R 4 get key_991803] == 1024 && [R 4 get key_977613] == 10240 &&
+            [R 7 get key_991803] == 1024 && [R 7 get key_977613] == 10240
+        } else {
+            puts "R 3: [R 3 keys *]"
+            puts "R 4: [R 4 keys *]"
+            puts "R 7: [R 7 keys *]"
+            fail "Key not consistent"
+        }
 
         if {$type == "sigstop"} {
             resume_process $primary0_pid
@@ -201,7 +189,14 @@ proc test_nonempty_replica {type} {
 
         # Make sure the key exists and is consistent.
         R 7 readonly
-        wait_for_key_consistent {4 7} {key_991803 1024}
+        wait_for_condition 1000 50 {
+            [R 4 get key_991803] == 1024 &&
+            [R 7 get key_991803] == 1024
+        } else {
+            puts "R 4: [R 4 get key_991803]"
+            puts "R 7: [R 7 get key_991803]"
+            fail "Key not consistent"
+        }
 
         if {$type == "sigstop"} {
             resume_process $primary0_pid
@@ -307,7 +302,16 @@ proc test_sub_replica {type} {
         # Make sure the key exists and is consistent.
         R 3 readonly
         R 7 readonly
-        wait_for_key_consistent {3 4 7} {key_991803 1024 key_977613 10240}
+        wait_for_condition 1000 50 {
+            [R 3 get key_991803] == 1024 && [R 3 get key_977613] == 10240 &&
+            [R 4 get key_991803] == 1024 && [R 4 get key_977613] == 10240 &&
+            [R 7 get key_991803] == 1024 && [R 7 get key_977613] == 10240
+        } else {
+            puts "R 3: [R 3 keys *]"
+            puts "R 4: [R 4 keys *]"
+            puts "R 7: [R 7 keys *]"
+            fail "Key not consistent"
+        }
 
         if {$type == "sigstop"} {
             resume_process $primary0_pid

@@ -19,10 +19,9 @@ typedef enum {
 } PrefetchState;
 
 typedef enum {
-    HASHTABLE_PREFETCH_ENTRY, /* Initial state, prefetch entries associated with the given key's hash */
-    HASHTABLE_PREFETCH_INIT, /* Initial state, prefetch entries associated with the given key's hash */
-    HASHTABLE_PREFETCH_VALUE, /* prefetch the value object of the entry found in the previous step */
-    HASHTABLE_PREFETCH_DONE   /* Indicates that prefetching for this key is complete */
+    HASHTABLE_PREFETCH_ENTRY, /* Initial state, prefetch the hashtable pointer */
+    HASHTABLE_PREFETCH_INIT,  /* Initialize incremental find for the nested hashtable */
+    HASHTABLE_PREFETCH_VALUE, /* Prefetch the value object via incremental find steps */
 } HashtablePrefetchState;
 
 typedef struct {
@@ -36,7 +35,7 @@ typedef struct {
 typedef struct KeyPrefetchInfo {
     PrefetchState state; /* Current state of the prefetch operation */
     hashtableIncrementalFindState hashtab_state;
-    client* client;
+    client *client;
     ValuePrefetchInfo value_prefetch_info;
 } KeyPrefetchInfo;
 
@@ -98,24 +97,22 @@ void onMaxBatchSizeChange(void) {
     prefetchCommandsBatchInit();
 }
 
-/* Move to the next key in the batch. */
-static void moveToNextKey(void) {
-    batch->cur_idx = (batch->cur_idx + 1) % batch->key_count;
-}
-
 static void markKeyAsdone(KeyPrefetchInfo *info) {
     info->state = PREFETCH_DONE;
     server.stat_total_prefetch_entries++;
     batch->keys_done++;
 }
 
-/* Returns the next KeyPrefetchInfo structure that needs to be processed. */
+/* Returns the next KeyPrefetchInfo structure that needs to be processed,
+ * advancing the index internally. Returns NULL when all keys are done. */
 static KeyPrefetchInfo *getNextPrefetchInfo(void) {
+    if (batch->keys_done >= batch->key_count) return NULL;
+
     size_t start_idx = batch->cur_idx;
     do {
         KeyPrefetchInfo *info = &batch->prefetch_info[batch->cur_idx];
-        if (info->state != PREFETCH_DONE) return info;
         batch->cur_idx = (batch->cur_idx + 1) % batch->key_count;
+        if (info->state != PREFETCH_DONE) return info;
     } while (batch->cur_idx != start_idx);
     return NULL;
 }
@@ -137,12 +134,35 @@ static void initBatchInfo(hashtable **tables) {
 }
 
 static void prefetchEntry(KeyPrefetchInfo *info) {
-    if (hashtableIncrementalFindStep(&info->hashtab_state) == 1) {
-        /* Not done yet */
-        moveToNextKey();
-    } else {
+    if (hashtableIncrementalFindStep(&info->hashtab_state) != 1) {
+        /* Step complete, move to value prefetch */
         info->state = PREFETCH_VALUE;
     }
+    /* Otherwise still in progress, will continue on next iteration */
+}
+
+/* Prefetch hashtable value.
+ * Returns 1 if prefetch is still in progress, 0 if complete. */
+static int prefetchHashtableValue(KeyPrefetchInfo *info, robj *val, int key_arg_index) {
+    if (!info->client) return 0;
+
+    switch (info->value_prefetch_info.state) {
+    case HASHTABLE_PREFETCH_ENTRY:
+        valkey_prefetch(val->ptr);
+        info->value_prefetch_info.state = HASHTABLE_PREFETCH_INIT;
+        return 1;
+    case HASHTABLE_PREFETCH_INIT:
+        hashtableIncrementalFindInit(&info->value_prefetch_info.data.hashtab_state, val->ptr,
+                                     info->client->argv[key_arg_index]->ptr);
+        info->value_prefetch_info.state = HASHTABLE_PREFETCH_VALUE;
+        return 1;
+    case HASHTABLE_PREFETCH_VALUE:
+        if (hashtableIncrementalFindStep(&info->value_prefetch_info.data.hashtab_state)) {
+            return 1;
+        }
+        return 0;
+    }
+    return 0;
 }
 
 /* Prefetch the entry's value. If the value is found.*/
@@ -153,31 +173,9 @@ static void prefetchValue(KeyPrefetchInfo *info) {
         if (val->encoding == OBJ_ENCODING_RAW && val->type == OBJ_STRING) {
             valkey_prefetch(val->ptr);
         } else if (val->encoding == OBJ_ENCODING_HASHTABLE && val->type == OBJ_HASH) {
-            if (info->client) {
-                if (info->client->io_parsed_cmd->proc == hsetCommand || info->client->io_parsed_cmd->proc ==
-                    hgetCommand) {
-                    if (info->value_prefetch_info.state == HASHTABLE_PREFETCH_ENTRY) {
-                        valkey_prefetch(val->ptr);
-                        info->value_prefetch_info.state = HASHTABLE_PREFETCH_INIT;
-                        return;
-                    }
-                    if (info->value_prefetch_info.state == HASHTABLE_PREFETCH_INIT) {
-                        hashtableIncrementalFindInit(&info->value_prefetch_info.data.hashtab_state,
-                                                     val->ptr, info->client->argv[2]->ptr
-                        );
-                        info->value_prefetch_info.state = HASHTABLE_PREFETCH_VALUE;
-                        return;
-                    }
-                    if (info->value_prefetch_info.state == HASHTABLE_PREFETCH_VALUE) {
-                        if (!hashtableIncrementalFindStep(&info->value_prefetch_info.data.hashtab_state)) {
-                            info->value_prefetch_info.state = HASHTABLE_PREFETCH_DONE;
-                            info->state = PREFETCH_DONE;
-                        } else {
-                            return;
-                        }
-                    }
-
-                    }
+            if (info->client && (info->client->io_parsed_cmd->proc == hsetCommand ||
+                                 info->client->io_parsed_cmd->proc == hgetCommand)) {
+                if (prefetchHashtableValue(info, val, 2)) return;
             }
         }
     }
@@ -192,23 +190,15 @@ static void prefetchValue(KeyPrefetchInfo *info) {
  * on those keys.
  *
  * tables - An array of hashtables to prefetch data from.
- * prefetch_value - If true, we prefetch the value data for each key.
- * to bring the key's value data closer to the L1 cache as well.
  */
- static void hashtablePrefetch(hashtable **tables) {
+static void hashtablePrefetch(hashtable **tables) {
     initBatchInfo(tables);
     KeyPrefetchInfo *info;
     while ((info = getNextPrefetchInfo())) {
         switch (info->state) {
-            case PREFETCH_ENTRY: prefetchEntry(info); break;
-            case PREFETCH_VALUE: {
-                prefetchValue(info);
-                if (info->state != PREFETCH_DONE) {
-                    moveToNextKey();
-                }
-                break;
-            }
-            default: serverPanic("Unknown prefetch state %d", info->state);
+        case PREFETCH_ENTRY: prefetchEntry(info); break;
+        case PREFETCH_VALUE: prefetchValue(info); break;
+        default: serverPanic("Unknown prefetch state %d", info->state);
         }
     }
 }

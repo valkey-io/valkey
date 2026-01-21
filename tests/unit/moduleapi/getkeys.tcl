@@ -79,9 +79,6 @@ start_server {tags {"modules"}} {
         for {set i 0} {$i < 300} {incr i} {
             lappend args key k$i
         }
-        
-        set reply [r getkeys.introspect 1 getkeys.command_with_flags {*}$args]
- 
         set reply [r getkeys.introspect 1 getkeys.command_with_flags {*}$args]
         assert {[llength $reply] == 300}
         foreach pair $reply {

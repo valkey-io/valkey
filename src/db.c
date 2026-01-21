@@ -1993,7 +1993,7 @@ int propagateFieldsDeletion(serverDb *db, robj *o, size_t n_fields, robj *fields
     server.replication_allowed = 1;
 
     robj *argv[EXPIRE_BULK_LIMIT + 2]; /* HDEL + key + fields */
-    if (n_fields > EXPIRE_BULK_LIMIT - 2) n_fields = EXPIRE_BULK_LIMIT - 2;
+    if (n_fields > EXPIRE_BULK_LIMIT) n_fields = EXPIRE_BULK_LIMIT;
 
     int argc = 0;
     robj *keyobj = createStringObjectFromSds(objectGetKey(o));

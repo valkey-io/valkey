@@ -193,7 +193,7 @@ inline uint64_t elapsedMs(monotime start_time) {
 static int server_math_random(lua_State *L);
 static int server_math_randomseed(lua_State *L);
 
-static void luaReplyToServerReply(ValkeyModuleCtx *ctx, int resp_version, lua_State *lua);
+static void luaReplyToServerReply(ValkeyModuleCtx *ctx, int resp_version, lua_State *lua, int level);
 
 /*
  * Save the give pointer on Lua registry, used to save the Lua context and
@@ -568,7 +568,8 @@ char *copy_string_from_lua_stack(lua_State *lua) {
 
 /* Reply to client 'c' converting the top element in the Lua stack to a
  * server reply. As a side effect the element is consumed from the stack.  */
-static void luaReplyToServerReply(ValkeyModuleCtx *ctx, int resp_version, lua_State *lua) {
+#define MAX_STACK_DEPTH 5000
+static void luaReplyToServerReply(ValkeyModuleCtx *ctx, int resp_version, lua_State *lua, int level) {
     int t = lua_type(lua, -1);
 
     if (!lua_checkstack(lua, 4)) {
@@ -578,6 +579,13 @@ static void luaReplyToServerReply(ValkeyModuleCtx *ctx, int resp_version, lua_St
          * require push 4 elements to the Lua stack.*/
         ValkeyModule_ReplyWithError(ctx, "ERR reached lua stack limit");
         lua_pop(lua, 1); /* pop the element from the stack */
+        return;
+    }
+
+    if (++level > MAX_STACK_DEPTH) {
+        /* This case is for preventing server crashes when the C stack limit is reached first */
+        ValkeyModule_ReplyWithError(ctx, "ERR max recursion level reached");
+        lua_pop(lua,1);
         return;
     }
 
@@ -698,8 +706,8 @@ static void luaReplyToServerReply(ValkeyModuleCtx *ctx, int resp_version, lua_St
             while (lua_next(lua, -2)) {
                 /* Stack now: table, key, value */
                 lua_pushvalue(lua, -2);                        /* Dup key before consuming. */
-                luaReplyToServerReply(ctx, resp_version, lua); /* Return key. */
-                luaReplyToServerReply(ctx, resp_version, lua); /* Return value. */
+                luaReplyToServerReply(ctx, resp_version, lua, level); /* Return key. */
+                luaReplyToServerReply(ctx, resp_version, lua, level); /* Return value. */
                 /* Stack now: table, key. */
                 maplen++;
             }
@@ -722,7 +730,7 @@ static void luaReplyToServerReply(ValkeyModuleCtx *ctx, int resp_version, lua_St
                 /* Stack now: table, key, true */
                 lua_pop(lua, 1);                               /* Discard the boolean value. */
                 lua_pushvalue(lua, -1);                        /* Dup key before consuming. */
-                luaReplyToServerReply(ctx, resp_version, lua); /* Return key. */
+                luaReplyToServerReply(ctx, resp_version, lua, level); /* Return key. */
                 /* Stack now: table, key. */
                 setlen++;
             }
@@ -744,7 +752,7 @@ static void luaReplyToServerReply(ValkeyModuleCtx *ctx, int resp_version, lua_St
                 lua_pop(lua, 1);
                 break;
             }
-            luaReplyToServerReply(ctx, resp_version, lua);
+            luaReplyToServerReply(ctx, resp_version, lua, level);
             mbulklen++;
         }
         ValkeyModule_ReplySetArrayLength(ctx, mbulklen);
@@ -2050,7 +2058,7 @@ void luaCallFunction(ValkeyModuleCtx *ctx,
         /* On success convert the Lua return value into RESP, and
          * send it to * the client. */
 
-        luaReplyToServerReply(ctx, call_ctx.resp, lua); /* Convert and consume the reply. */
+        luaReplyToServerReply(ctx, call_ctx.resp, lua, 0); /* Convert and consume the reply. */
     }
 
     /* Perform some cleanup that we need to do both on error and success. */

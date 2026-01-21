@@ -1533,6 +1533,19 @@ start_server {tags {"hashexpire"}} {
         }
     }
 
+    test "HRANDFIELD - returns null response when all fields are expired" {
+        r FLUSHALL
+        r DEBUG SET-ACTIVE-EXPIRE 0
+        assert_equal {1} [r HSETEX myhash PX 1 fields 2 f1 v1 f2 v2]
+        wait_for_condition 100 100 {
+            [r HGETALL myhash] eq {}
+        } else {
+            fail "Hash is showing expired elements"
+        }
+        assert_equal {} [r hrandfield myhash2]
+        r DEBUG SET-ACTIVE-EXPIRE 1
+    } {OK} {needs:debug}
+    
     foreach cmd {RENAME RESTORE} {
         test "$cmd Preserves Field TTLs" {
             r FLUSHALL

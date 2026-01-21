@@ -873,8 +873,11 @@ void hashReplyFromListpackEntry(client *c, listpackEntry *e) {
 /* Return random element from a non empty hash.
  * 'field' and 'val' will be set to hold the element.
  * The memory in them is not to be freed or modified by the caller.
- * 'val' can be NULL in which case it's not extracted. */
-static void hashTypeRandomElement(robj *hashobj, unsigned long hashsize, listpackEntry *field, listpackEntry *val) {
+ * 'val' can be NULL in which case it's not extracted.
+ * Return C_ERR in case no random element was found (when all existing elements are expired).
+ * Return C_OK otherwise. */
+static int hashTypeRandomElement(robj *hashobj, unsigned long hashsize, listpackEntry *field, listpackEntry *val) {
+    int rc = C_OK;
     if (hashobj->encoding == OBJ_ENCODING_HASHTABLE) {
         void *e = NULL;
         int maxtries = 100;
@@ -887,8 +890,7 @@ static void hashTypeRandomElement(robj *hashobj, unsigned long hashsize, listpac
             } else if (maxtries == 0) {
                 /* in case we will not be able to locate an entry which is not expired, we will just not return any
                  * result. An alternative would have been that we end up returning an expired entry. */
-                field->sval = NULL;
-                if (val) val->sval = NULL;
+                rc = C_ERR;
                 break;
             }
             sds sds_field = entryGetField(e);
@@ -904,6 +906,7 @@ static void hashTypeRandomElement(robj *hashobj, unsigned long hashsize, listpac
     } else {
         serverPanic("Unknown hash encoding");
     }
+    return rc;
 }
 
 
@@ -2034,11 +2037,11 @@ void hrandfieldWithCountCommand(client *c, long l, int withvalues) {
         if (hash->encoding == OBJ_ENCODING_HASHTABLE) {
             while (count--) {
                 listpackEntry field, value;
-                hashTypeRandomElement(hash, size, &field, &value);
 
                 /* In case we were unable to locate random element, it is probably because there is no such element
                  * since all elements are expired. */
-                if (!field.sval) break;
+                if (hashTypeRandomElement(hash, size, &field, &value) != C_OK)
+                    break;
 
                 if (withvalues && c->resp > 2) addWritePreparedReplyArrayLen(wpc, 2);
                 addWritePreparedReplyBulkCBuffer(wpc, field.sval, field.slen);
@@ -2166,11 +2169,10 @@ void hrandfieldWithCountCommand(client *c, long l, int withvalues) {
         hashtable *ht = hashtableCreate(&setHashtableType);
         hashtableExpand(ht, count);
         while (added < count) {
-            hashTypeRandomElement(hash, size, &field, withvalues ? &value : NULL);
-
             /* In case we were unable to locate random element, it is probably because there is no such element
              * since all elements are expired. */
-            if (!field.sval) break;
+            if (hashTypeRandomElement(hash, size, &field, withvalues ? &value : NULL) != C_OK)
+                break;
 
             /* Try to add the object to the hashtable. If expired, stop adding (there are probably non left).
              * If it already exists free it, otherwise increment the number of objects we have
@@ -2229,8 +2231,10 @@ void hrandfieldCommand(client *c) {
     if ((hash = lookupKeyReadOrReply(c, c->argv[1], shared.null[c->resp])) == NULL || checkType(c, hash, OBJ_HASH)) {
         return;
     }
-    hashTypeRandomElement(hash, hashTypeLength(hash), &ele, NULL);
-    hashReplyFromListpackEntry(c, &ele);
+    if (hashTypeRandomElement(hash, hashTypeLength(hash), &ele, NULL) == C_OK)
+        hashReplyFromListpackEntry(c, &ele);
+    else
+        addReplyNull(c);
 }
 
 /* Context structure for tracking expiry operations on hash fields. */

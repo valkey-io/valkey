@@ -2762,20 +2762,20 @@ void resetLastWrittenBuf(client *c) {
 }
 
 /* Release references to string objects inside an encoded buffer */
-static void releaseBufReferences(char *buf, size_t bufpos) {
+static void releaseBufReferences(char *buf, size_t bufpos, int track_bytes) {
     char *ptr = buf;
     while (ptr < buf + bufpos) {
         payloadHeader *header = (payloadHeader *)ptr;
         ptr += sizeof(payloadHeader);
 
         if (header->payload_type == BULK_STR_REF) {
-            /* Here clusterSlotStatsAddNetworkBytesOutForSlot() is called in
-             * the IO thread after writing the reply to the client, and after
-             * #2652 it is also done in the normal code path in the main thread
-             * (afterCommand() -> clusterSlotStatsAddNetworkBytesOutForUserClient()).
-             * Before we come up with a better solution (see #2652), we need to
-             * comment it out to avoid the duplicate calculations. */
-            /* clusterSlotStatsAddNetworkBytesOutForSlot(header->slot, header->reply_len); */
+            /* When net byte tracking is disabled in the main thread (commandlog-request-larger-than -1),
+             * we account for cluster slot stats here in the IO thread after writing the reply.
+             * When tracking is enabled, it's already accounted in the main thread via
+             * afterCommand() -> clusterSlotStatsAddNetworkBytesOutForUserClient(). */
+            if (!track_bytes) {
+                clusterSlotStatsAddNetworkBytesOutForSlot(header->slot, header->reply_len);
+            }
 
             bulkStrRef *str_ref = (bulkStrRef *)ptr;
             size_t len = header->payload_len;
@@ -2795,7 +2795,7 @@ static void releaseBufReferences(char *buf, size_t bufpos) {
 
 void releaseReplyReferences(client *c) {
     if (c->bufpos > 0 && c->flag.buf_encoded) {
-        releaseBufReferences(c->buf, c->bufpos);
+        releaseBufReferences(c->buf, c->bufpos, c->flag.track_net_output_bytes);
     }
 
     listIter iter;
@@ -2804,7 +2804,7 @@ void releaseReplyReferences(client *c) {
     while ((next = listNext(&iter))) {
         clientReplyBlock *o = (clientReplyBlock *)listNodeValue(next);
         if (o->flag.buf_encoded) {
-            releaseBufReferences(o->buf, o->used);
+            releaseBufReferences(o->buf, o->used, c->flag.track_net_output_bytes);
         }
     }
 }
@@ -2824,7 +2824,7 @@ static void _postWriteToClient(client *c) {
         /* If buffer is completely written */
         if (!last_written || c->bufpos == c->io_last_written.bufpos) {
             /* If encoded then release references to bulk string objects */
-            if (c->flag.buf_encoded) releaseBufReferences(c->buf, c->bufpos);
+            if (c->flag.buf_encoded) releaseBufReferences(c->buf, c->bufpos, c->flag.track_net_output_bytes);
             /* Reset buffer metadata */
             c->bufpos = 0;
             c->flag.buf_encoded = 0;
@@ -2846,7 +2846,7 @@ static void _postWriteToClient(client *c) {
         if (!last_written || o->used == c->io_last_written.bufpos) {
             c->reply_bytes -= o->size;
             /* If encoded then release references to bulk string objects */
-            if (o->flag.buf_encoded) releaseBufReferences(o->buf, o->used);
+            if (o->flag.buf_encoded) releaseBufReferences(o->buf, o->used, c->flag.track_net_output_bytes);
             listDelNode(c->reply, next);
             /* If completely written buffer is last written then reset last written state */
             if (last_written) resetLastWrittenBuf(c);

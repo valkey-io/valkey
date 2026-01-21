@@ -276,7 +276,7 @@ static bool loadCaCertDir(SSL_CTX *ctx, const char *ca_cert_dir) {
 }
 
 /* Iterate over all CA certs in the SSL_CTX and fail-fast if any are invalid */
-bool areAllCaCertsValid(SSL_CTX *ctx) {
+static bool areAllCaCertsValid(SSL_CTX *ctx) {
     X509_STORE *store = SSL_CTX_get_cert_store(ctx);
     if (!store) return false;
     STACK_OF(X509_OBJECT) *objs = X509_STORE_get0_objects(store);

@@ -385,5 +385,56 @@ start_server {tags {"tls"}} {
             # Not-yet-valid CA certificate directory
             test_tls_cert_rejection ca-dir $tlsdir/ca-notyet {*One or more loaded CA certificates are invalid*}
         }
+
+        proc test_tls_cert_rejection_runtime {r cert_type cert_path expected_error} {
+            set tlsdir [file normalize ./tests/tls]
+
+            switch -- $cert_type {
+                server {
+                    catch {$r CONFIG SET tls-cert-file $cert_path} err
+                    assert_match $expected_error $err
+                }
+                client {
+                    catch {$r CONFIG SET tls-client-cert-file $cert_path} err
+                    assert_match $expected_error $err
+                }
+                "ca-file" {
+                    catch {$r CONFIG SET tls-ca-cert-file $cert_path} err
+                    assert_match $expected_error $err
+                }
+                "ca-dir" {
+                    catch {$r CONFIG SET tls-ca-cert-dir $cert_path} err
+                    assert_match $expected_error $err
+                }
+            }
+        }
+
+        test {TLS: Fail-fast on invalid certificates at runtime} {
+            set tlsdir [file normalize ./tests/tls]
+
+            # Expired server certificate
+            test_tls_cert_rejection_runtime $r server $tlsdir/server-expired.crt {*Server TLS certificate is invalid*}
+
+            # Not-yet-valid server certificate
+            test_tls_cert_rejection_runtime $r server $tlsdir/server-notyet.crt {*Server TLS certificate is invalid*}
+
+            # Expired client certificate
+            test_tls_cert_rejection_runtime $r client $tlsdir/client-expired.crt {*Client TLS certificate is invalid*}
+
+            # Not-yet-valid client certificate
+            test_tls_cert_rejection_runtime $r client $tlsdir/client-notyet.crt {*Client TLS certificate is invalid*}
+
+            # Expired CA certificate file
+            test_tls_cert_rejection_runtime $r ca-file $tlsdir/ca-expired.crt {*One or more loaded CA certificates are invalid*}
+
+            # Not-yet-valid CA certificate file
+            test_tls_cert_rejection_runtime $r ca-file $tlsdir/ca-notyet.crt {*One or more loaded CA certificates are invalid*}
+
+            # Expired CA certificate directory
+            test_tls_cert_rejection_runtime $r ca-dir $tlsdir/ca-expired {*One or more loaded CA certificates are invalid*}
+
+            # Not-yet-valid CA certificate directory
+            test_tls_cert_rejection_runtime $r ca-dir $tlsdir/ca-notyet {*One or more loaded CA certificates are invalid*}
+        }
     }
 }

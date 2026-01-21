@@ -47,6 +47,7 @@
 #include "threads_mngr.h"
 #include "fmtargs.h"
 #include "io_threads.h"
+#include "tls.h"
 #include "sds.h"
 #include "module.h"
 #include "scripting_engine.h"
@@ -1684,6 +1685,17 @@ long long serverCron(struct aeEventLoop *eventLoop, long long id, void *clientDa
         if (rdbSaveBackground(REPLICA_REQ_NONE, server.rdb_filename, rsiptr, RDBFLAGS_NONE) == C_OK)
             server.rdb_bgsave_scheduled = 0;
     }
+
+    /* TLS auto-reload if enabled (only when TLS is built-in). */
+#if defined(USE_OPENSSL) && USE_OPENSSL == 1 /* BUILD_YES */
+    if ((server.tls_port || server.tls_replication || server.tls_cluster) &&
+        server.tls_ctx_config.auto_reload_interval > 0) {
+        run_with_period(1000) {
+            tlsReconfigureIfNeeded();
+            tlsApplyPendingReload();
+        }
+    }
+#endif
 
     if (moduleCount()) {
         run_with_period(100) modulesCron();

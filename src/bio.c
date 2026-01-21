@@ -70,6 +70,7 @@
 #include "connection.h"
 #include "bio.h"
 #include "mutexqueue.h"
+#include "tls.h"
 #include <stdatomic.h>
 
 static unsigned int bio_job_to_worker[] = {
@@ -78,6 +79,9 @@ static unsigned int bio_job_to_worker[] = {
     [BIO_CLOSE_AOF] = 1,
     [BIO_LAZY_FREE] = 2,
     [BIO_RDB_SAVE] = 3,
+#if defined(USE_OPENSSL) && USE_OPENSSL == 1 /* BUILD_YES */
+    [BIO_TLS_RELOAD] = 4,
+#endif
 };
 
 typedef struct {
@@ -91,6 +95,9 @@ static bio_worker_data bio_workers[] = {
     {"bio_aof"},
     {"bio_lazy_free"},
     {"bio_rdb_save"},
+#if defined(USE_OPENSSL) && USE_OPENSSL == 1 /* BUILD_YES */
+    {"bio_tls_reload"},
+#endif
 };
 static const bio_worker_data *const bio_worker_end = bio_workers + (sizeof bio_workers / sizeof *bio_workers);
 
@@ -133,6 +140,10 @@ typedef union bio_job {
         connection *conn;    /* Connection to download the RDB from */
         int is_dual_channel; /* Single vs dual channel */
     } save_to_disk_args;
+
+    struct {
+        int type;
+    } tls_reload_args;
 } bio_job;
 
 void *bioProcessBackgroundJobs(void *arg);
@@ -227,6 +238,11 @@ void bioCreateSaveRDBToDiskJob(connection *conn, int is_dual_channel) {
     bioSubmitJob(BIO_RDB_SAVE, job);
 }
 
+void bioCreateTlsReloadJob(void) {
+    bio_job *job = zmalloc(sizeof(*job));
+    bioSubmitJob(BIO_TLS_RELOAD, job);
+}
+
 void *bioProcessBackgroundJobs(void *arg) {
     bio_worker_data *const bwd = arg;
     sigset_t sigset;
@@ -291,6 +307,12 @@ void *bioProcessBackgroundJobs(void *arg) {
             job->free_args.free_fn(job->free_args.free_args);
         } else if (job_type == BIO_RDB_SAVE) {
             replicaReceiveRDBFromPrimaryToDisk(job->save_to_disk_args.conn, job->save_to_disk_args.is_dual_channel);
+        } else if (job_type == BIO_TLS_RELOAD) {
+#if defined(USE_OPENSSL) && USE_OPENSSL == 1 /* BUILD_YES */
+            tlsConfigureAsync();
+#else
+            serverPanic("BIO_TLS_RELOAD job type requires built-in TLS (BUILD_TLS=yes).");
+#endif
         } else {
             serverPanic("Wrong job type in bioProcessBackgroundJobs().");
         }

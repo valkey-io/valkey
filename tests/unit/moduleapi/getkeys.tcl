@@ -80,9 +80,10 @@ start_server {tags {"modules"}} {
             lappend args key k$i
         }
         set reply [r getkeys.introspect 1 getkeys.command_with_flags {*}$args]
-        assert {[llength $reply] == 300}
+        assert_equal {300} [llength $reply]
         foreach pair $reply {
-            assert {[llength $pair] == 2}
+            assert_equal {2} [llength $pair]
+            
         }
     }
 

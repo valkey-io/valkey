@@ -273,7 +273,7 @@ static void *IOThreadMain(void *myid) {
     return NULL;
 }
 
-long long getIOThreadUsefulTimeMicroseconds(int id) {
+long long getIOThreadActiveTimeMicroseconds(int id) {
     return atomic_load_explicit(&used_active_time_io_thread[id], memory_order_relaxed);
 }
 

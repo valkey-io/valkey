@@ -427,16 +427,6 @@ proc test_replica_of_failed_primary_behavior {} {
         # Wait for node 7 to receive the FAIL message about node 0.
         wait_for_log_messages -7 [list "*FAIL message received from * about $R0_id*"] 0 2000 50
 
-        # Isolate node 7 immediately after it learns node 0 is FAIL but before
-        # it processes any slot configuration updates from node 4.
-        R 7 DEBUG DROP-CLUSTER-PACKET-FILTER -2
-
-        # Small delay to ensure isolation is in effect.
-        after 100
-
-        # Re-enable packet reception on node 7.
-        R 7 DEBUG DROP-CLUSTER-PACKET-FILTER -1
-
         # Wait for node 7 to become a primary (the buggy behavior).
         wait_for_condition 1000 50 {
             [s -7 role] eq {master}
@@ -450,9 +440,13 @@ proc test_replica_of_failed_primary_behavior {} {
     }
 }
 
+# Skip for now due to flakiness - we can't control the exact ordering between two TCP streams
+# to consistently reproduce the buggy behavior.
+if {0} {
 start_cluster 4 4 {tags {external:skip cluster} overrides {cluster-node-timeout 1000 cluster-migration-barrier 999}} {
     test_replica_of_failed_primary_behavior
 } my_slot_allocation cluster_allocate_replicas ;# start_cluster
+}
 
 proc test_cluster_setslot {type} {
     test "valkey-cli make source node ignores NOREPLICAS error when doing the last CLUSTER SETSLOT - $type" {

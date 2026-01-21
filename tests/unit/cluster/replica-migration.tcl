@@ -1,11 +1,3 @@
-# Most test cases in this file would involve the following setup design:
-#
-# Replica 4 follows primary 0. Replica 7 follows primary 3, and they have
-# only one slot. We migrate this slot to shard 0, thus making server 3 and 7
-# become primary 0's new replicas. At this point all these 4 servers are
-# in the same shard. Then we stop primary 0 to trigger failover, and test
-# how the remaining three servers would behave.
-
 # Allocate slot 0 to the last primary and evenly distribute the remaining
 # slots to the remaining primaries.
 proc my_slot_allocation {masters replicas} {

@@ -1,3 +1,11 @@
+# Most test cases in this file would involve the following setup design:
+#
+# Replica 4 follows primary 0. Replica 7 follows primary 3, and they have
+# only one slot. We migrate this slot to shard 0, thus making server 3 and 7
+# become primary 0's new replicas. At this point all these 4 servers are
+# in the same shard. Then we stop primary 0 to trigger failover, and test
+# how the remaining three servers would behave.
+
 # Allocate slot 0 to the last primary and evenly distribute the remaining
 # slots to the remaining primaries.
 proc my_slot_allocation {masters replicas} {
@@ -17,6 +25,27 @@ proc get_my_primary_peer {srv_idx} {
     set primary_port [lindex $role_response 2]
     set primary_peer "$primary_ip:$primary_port"
     return $primary_peer
+}
+
+# Check if all given nodes have the expected key/value pairs.
+proc keys_match {nodes kv_pairs} {
+    foreach node $nodes {
+        dict for {key val} $kv_pairs {
+            if {[R $node get $key] ne $val} {
+                return 0
+            }
+        }
+    }
+    return 1
+}
+
+# Wait until all given nodes have the expected key/value pairs.
+proc wait_for_key_consistent {nodes kv_pairs} {
+    wait_for_condition 1000 50 {
+        [keys_match $nodes $kv_pairs]
+    } else {
+        fail "Keys not consistent"
+    }
 }
 
 proc test_migrated_replica {type} {
@@ -89,32 +118,12 @@ proc test_migrated_replica {type} {
         verify_log_message -4 "*Start of election*rank #0*" 0
 
         # Wait for the cluster to be ok.
-        wait_for_condition 1000 50 {
-            [R 3 cluster slots] eq [R 4 cluster slots] &&
-            [R 4 cluster slots] eq [R 7 cluster slots] &&
-            [CI 3 cluster_state] eq "ok" &&
-            [CI 4 cluster_state] eq "ok" &&
-            [CI 7 cluster_state] eq "ok"
-        } else {
-            puts "R 3: [R 3 cluster info]"
-            puts "R 4: [R 4 cluster info]"
-            puts "R 7: [R 7 cluster info]"
-            fail "Cluster is down"
-        }
+        wait_for_cluster_propagation 0
 
         # Make sure the key exists and is consistent.
         R 3 readonly
         R 7 readonly
-        wait_for_condition 1000 50 {
-            [R 3 get key_991803] == 1024 && [R 3 get key_977613] == 10240 &&
-            [R 4 get key_991803] == 1024 && [R 4 get key_977613] == 10240 &&
-            [R 7 get key_991803] == 1024 && [R 7 get key_977613] == 10240
-        } else {
-            puts "R 3: [R 3 keys *]"
-            puts "R 4: [R 4 keys *]"
-            puts "R 7: [R 7 keys *]"
-            fail "Key not consistent"
-        }
+        wait_for_key_consistent {3 4 7} {key_991803 1024 key_977613 10240}
 
         if {$type == "sigstop"} {
             resume_process $primary0_pid
@@ -188,26 +197,11 @@ proc test_nonempty_replica {type} {
         }
 
         # Wait for the cluster to be ok.
-        wait_for_condition 1000 50 {
-            [R 4 cluster slots] eq [R 7 cluster slots] &&
-            [CI 4 cluster_state] eq "ok" &&
-            [CI 7 cluster_state] eq "ok"
-        } else {
-            puts "R 4: [R 4 cluster info]"
-            puts "R 7: [R 7 cluster info]"
-            fail "Cluster is down"
-        }
+        wait_for_cluster_propagation 0
 
         # Make sure the key exists and is consistent.
         R 7 readonly
-        wait_for_condition 1000 50 {
-            [R 4 get key_991803] == 1024 &&
-            [R 7 get key_991803] == 1024
-        } else {
-            puts "R 4: [R 4 get key_991803]"
-            puts "R 7: [R 7 get key_991803]"
-            fail "Key not consistent"
-        }
+        wait_for_key_consistent {4 7} {key_991803 1024}
 
         if {$type == "sigstop"} {
             resume_process $primary0_pid
@@ -308,32 +302,12 @@ proc test_sub_replica {type} {
         }
 
         # Wait for the cluster to be ok.
-        wait_for_condition 1000 50 {
-            [R 3 cluster slots] eq [R 4 cluster slots] &&
-            [R 4 cluster slots] eq [R 7 cluster slots] &&
-            [CI 3 cluster_state] eq "ok" &&
-            [CI 4 cluster_state] eq "ok" &&
-            [CI 7 cluster_state] eq "ok"
-        } else {
-            puts "R 3: [R 3 cluster info]"
-            puts "R 4: [R 4 cluster info]"
-            puts "R 7: [R 7 cluster info]"
-            fail "Cluster is down"
-        }
+        wait_for_cluster_propagation 0
 
         # Make sure the key exists and is consistent.
         R 3 readonly
         R 7 readonly
-        wait_for_condition 1000 50 {
-            [R 3 get key_991803] == 1024 && [R 3 get key_977613] == 10240 &&
-            [R 4 get key_991803] == 1024 && [R 4 get key_977613] == 10240 &&
-            [R 7 get key_991803] == 1024 && [R 7 get key_977613] == 10240
-        } else {
-            puts "R 3: [R 3 keys *]"
-            puts "R 4: [R 4 keys *]"
-            puts "R 7: [R 7 keys *]"
-            fail "Key not consistent"
-        }
+        wait_for_key_consistent {3 4 7} {key_991803 1024 key_977613 10240}
 
         if {$type == "sigstop"} {
             resume_process $primary0_pid

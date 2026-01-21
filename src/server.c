@@ -1576,9 +1576,18 @@ long long serverCron(struct aeEventLoop *eventLoop, long long id, void *clientDa
     databasesCron();
 
     /* Start a scheduled AOF rewrite if this was requested by the user while
-     * a BGSAVE was in progress. */
-    if (!hasActiveChildProcess() && server.aof_rewrite_scheduled && !aofRewriteLimited()) {
-        rewriteAppendOnlyFileBackground();
+     * a BGSAVE was in progress. Also handle rewrites triggered by aof-max-size. */
+    if (!hasActiveChildProcess() && !aofRewriteLimited()) {
+        if (server.aof_rewrite_scheduled ||
+            server.aof_current_size >= server.aof_rewrite_min_size &&
+            server.aof_current_size >= server.aof_max_size &&
+            server.aof_rewrite_base_size < server.aof_max_size) {
+            /* user-initiated OR
+               (AOF is large enough AND
+               last rewrite success should be less than aof-max-size - or we might end up with eternal rewrites)
+            */
+            rewriteAppendOnlyFileBackground();
+        }
     }
 
     /* Check if a background saving or AOF rewrite in progress terminated. */

@@ -1016,18 +1016,6 @@ int startAppendOnly(void) {
 ssize_t aofWrite(int fd, const char *buf, size_t len) {
     ssize_t nwritten = 0, totwritten = 0;
 
-    if (!isAofRewriteInProgress() &&
-        server.aof_max_size &&
-        server.aof_current_size >= server.aof_max_size &&
-        server.aof_rewrite_base_size < server.aof_max_size) {
-        /* 1. no need to start already initiated rewrite
-           2. aof-max-size == 0 turns off this
-           3. size should be large enough
-           4. last rewrite success should be less than aof-max-size - or we might end up with eternal rewrites
-        */
-        rewriteAppendOnlyFileBackground();
-    }
-
     while (len) {
         nwritten = write(fd, buf, len);
 

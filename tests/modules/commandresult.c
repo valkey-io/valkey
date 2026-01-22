@@ -28,12 +28,22 @@ static struct {
 
 /* Command result log entry */
 #define MAX_LOG_ENTRIES 100
+#define MAX_ARGV_LOG 10
+#define MAX_ARG_LEN 128
+#define MAX_REPLY_LEN 256
+
 typedef struct {
     char command_name[64];
     int status;
     long long duration;
     long long dirty;
     unsigned long long client_id;
+    /* New fields for argv and reply */
+    int argc;
+    char argv[MAX_ARGV_LOG][MAX_ARG_LEN];
+    size_t reply_size;
+    char reply_proto[MAX_REPLY_LEN];
+    size_t reply_proto_len;
 } ResultLogEntry;
 
 static ResultLogEntry result_log[MAX_LOG_ENTRIES];
@@ -43,9 +53,17 @@ static int log_count = 0;
 /* Registered callback handle */
 static ValkeyModuleCommandResult *registered_callback = NULL;
 
+/* For testing VM_CommandResultCreateReply */
+static int test_create_reply_enabled = 0;
+static char last_reply_type[32] = "";
+static char last_reply_string[MAX_REPLY_LEN] = "";
+static long long last_reply_integer = 0;
+
 /* Add entry to circular log */
 void LogResult(const char *cmd_name, int status, long long duration,
-               long long dirty, unsigned long long client_id) {
+               long long dirty, unsigned long long client_id,
+               ValkeyModuleString **argv, int argc,
+               size_t reply_size, const char *reply_proto, size_t reply_proto_len) {
     ResultLogEntry *entry = &result_log[log_head];
 
     strncpy(entry->command_name, cmd_name, sizeof(entry->command_name) - 1);
@@ -54,6 +72,40 @@ void LogResult(const char *cmd_name, int status, long long duration,
     entry->duration = duration;
     entry->dirty = dirty;
     entry->client_id = client_id;
+
+    /* Store argv */
+    if (argv && argc > 0) {
+        entry->argc = (argc < MAX_ARGV_LOG) ? argc : MAX_ARGV_LOG;
+        for (int i = 0; i < entry->argc; i++) {
+            if (argv[i] == NULL) {
+                strcpy(entry->argv[i], "(null)");
+                continue;
+            }
+            size_t len;
+            const char *arg = ValkeyModule_StringPtrLen(argv[i], &len);
+            if (arg == NULL) {
+                strcpy(entry->argv[i], "(empty)");
+                continue;
+            }
+            size_t copy_len = (len < MAX_ARG_LEN - 1) ? len : MAX_ARG_LEN - 1;
+            memcpy(entry->argv[i], arg, copy_len);
+            entry->argv[i][copy_len] = '\0';
+        }
+    } else {
+        entry->argc = 0;
+    }
+
+    /* Store reply info */
+    entry->reply_size = reply_size;
+    if (reply_proto && reply_proto_len > 0) {
+        size_t copy_len = (reply_proto_len < MAX_REPLY_LEN - 1) ? reply_proto_len : MAX_REPLY_LEN - 1;
+        memcpy(entry->reply_proto, reply_proto, copy_len);
+        entry->reply_proto[copy_len] = '\0';
+        entry->reply_proto_len = copy_len;
+    } else {
+        entry->reply_proto[0] = '\0';
+        entry->reply_proto_len = 0;
+    }
 
     log_head = (log_head + 1) % MAX_LOG_ENTRIES;
     if (log_count < MAX_LOG_ENTRIES) log_count++;
@@ -68,6 +120,17 @@ void CommandResultCallback(ValkeyModuleCommandResultCtx *ctx) {
     long long duration = ValkeyModule_CommandResultGetDuration(ctx);
     long long dirty = ValkeyModule_CommandResultGetDirty(ctx);
     unsigned long long client_id = ValkeyModule_CommandResultGetClientId(ctx);
+
+    /* Get command arguments using new accessor */
+    ValkeyModuleString **argv = NULL;
+    int argc = 0;
+    int argv_result = ValkeyModule_CommandResultGetArgv(ctx, &argv, &argc);
+
+    /* Get reply info using new accessors */
+    size_t reply_size = ValkeyModule_CommandResultGetReplySize(ctx);
+    size_t reply_proto_len = 0;
+    const char *reply_proto = ValkeyModule_CommandResultGetReplyProto(ctx, &reply_proto_len);
+
     if (status == VALKEYMODULE_CMDRESULT_SUCCESS) {
         stats.success_count++;
     } else {
@@ -77,8 +140,67 @@ void CommandResultCallback(ValkeyModuleCommandResultCtx *ctx) {
     stats.total_duration_us += duration;
     stats.total_dirty += dirty;
 
-    /* Log the result */
-    LogResult(cmd_name ? cmd_name : "unknown", status, duration, dirty, client_id);
+    /* Optionally test VM_CommandResultCreateReply */
+    if (test_create_reply_enabled && reply_size > 0) {
+        /* Skip large replies to avoid issues */
+        ValkeyModuleCallReply *reply = ValkeyModule_CommandResultCreateReply(ctx);
+        if (reply) {
+            int type = ValkeyModule_CallReplyType(reply);
+            switch (type) {
+                case VALKEYMODULE_REPLY_STRING:
+                case VALKEYMODULE_REPLY_SIMPLE_STRING:
+                    strcpy(last_reply_type, type == VALKEYMODULE_REPLY_STRING ? "string" : "simple_string");
+                    {
+                        size_t len;
+                        const char *str = ValkeyModule_CallReplyStringPtr(reply, &len);
+                        if (str && len < MAX_REPLY_LEN) {
+                            memcpy(last_reply_string, str, len);
+                            last_reply_string[len] = '\0';
+                        }
+                    }
+                    break;
+                case VALKEYMODULE_REPLY_INTEGER:
+                    strcpy(last_reply_type, "integer");
+                    /* Get the integer value */
+                    last_reply_integer = ValkeyModule_CallReplyInteger(reply);
+                    /* Clear the string */
+                    last_reply_string[0] = '\0';
+                    break;
+                case VALKEYMODULE_REPLY_ARRAY:
+                    strcpy(last_reply_type, "array");
+                    break;
+                case VALKEYMODULE_REPLY_ERROR:
+                    strcpy(last_reply_type, "error");
+                    {
+                        size_t len;
+                        const char *str = ValkeyModule_CallReplyStringPtr(reply, &len);
+                        if (str && len < MAX_REPLY_LEN) {
+                            memcpy(last_reply_string, str, len);
+                            last_reply_string[len] = '\0';
+                        }
+                    }
+                    break;
+                case VALKEYMODULE_REPLY_NULL:
+                    strcpy(last_reply_type, "null");
+                    break;
+                default:
+                    strcpy(last_reply_type, "other");
+                    break;
+            }
+            ValkeyModule_FreeCallReply(reply);
+        } else {
+            strcpy(last_reply_type, "none");
+        }
+    }
+
+    /* Log the result - skip if we couldn't get argv */
+    if (argv_result == VALKEYMODULE_OK) {
+        LogResult(cmd_name ? cmd_name : "unknown", status, duration, dirty, client_id,
+                  argv, argc, reply_size, reply_proto, reply_proto_len);
+    } else {
+        LogResult(cmd_name ? cmd_name : "unknown", status, duration, dirty, client_id,
+                  NULL, 0, reply_size, reply_proto, reply_proto_len);
+    }
 }
 
 /* CMDRESULT.REGISTER <flags>
@@ -207,7 +329,7 @@ int CmdResultGetLog_ValkeyCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **arg
         int idx = (log_head - 1 - i + MAX_LOG_ENTRIES) % MAX_LOG_ENTRIES;
         ResultLogEntry *entry = &result_log[idx];
 
-        ValkeyModule_ReplyWithArray(ctx, 10);
+        ValkeyModule_ReplyWithArray(ctx, 16);
         ValkeyModule_ReplyWithSimpleString(ctx, "command");
         ValkeyModule_ReplyWithCString(ctx, entry->command_name);
         ValkeyModule_ReplyWithSimpleString(ctx, "status");
@@ -219,6 +341,16 @@ int CmdResultGetLog_ValkeyCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **arg
         ValkeyModule_ReplyWithLongLong(ctx, entry->dirty);
         ValkeyModule_ReplyWithSimpleString(ctx, "client_id");
         ValkeyModule_ReplyWithLongLong(ctx, entry->client_id);
+        /* New fields for argv and reply */
+        ValkeyModule_ReplyWithSimpleString(ctx, "argv");
+        ValkeyModule_ReplyWithArray(ctx, entry->argc);
+        for (int j = 0; j < entry->argc; j++) {
+            ValkeyModule_ReplyWithCString(ctx, entry->argv[j]);
+        }
+        ValkeyModule_ReplyWithSimpleString(ctx, "reply_size");
+        ValkeyModule_ReplyWithLongLong(ctx, entry->reply_size);
+        ValkeyModule_ReplyWithSimpleString(ctx, "reply_proto");
+        ValkeyModule_ReplyWithStringBuffer(ctx, entry->reply_proto, entry->reply_proto_len);
     }
 
     return VALKEYMODULE_OK;
@@ -267,6 +399,49 @@ int CmdResultRMCall_ValkeyCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **arg
     return VALKEYMODULE_OK;
 }
 
+/* CMDRESULT.TESTREPLY <on|off>
+ * Enable or disable testing of VM_CommandResultCreateReply in the callback
+ */
+int CmdResultTestReply_ValkeyCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    if (argc != 2) {
+        return ValkeyModule_WrongArity(ctx);
+    }
+
+    size_t len;
+    const char *arg = ValkeyModule_StringPtrLen(argv[1], &len);
+
+    if (strcmp(arg, "on") == 0) {
+        test_create_reply_enabled = 1;
+    } else if (strcmp(arg, "off") == 0) {
+        test_create_reply_enabled = 0;
+    } else {
+        return ValkeyModule_ReplyWithError(ctx, "ERR argument must be 'on' or 'off'");
+    }
+
+    return ValkeyModule_ReplyWithSimpleString(ctx, "OK");
+}
+
+/* CMDRESULT.GETLASTREPLY
+ * Get the last parsed reply from VM_CommandResultCreateReply
+ */
+int CmdResultGetLastReply_ValkeyCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    VALKEYMODULE_NOT_USED(argv);
+
+    if (argc != 1) {
+        return ValkeyModule_WrongArity(ctx);
+    }
+
+    ValkeyModule_ReplyWithArray(ctx, 6);
+    ValkeyModule_ReplyWithSimpleString(ctx, "type");
+    ValkeyModule_ReplyWithCString(ctx, last_reply_type);
+    ValkeyModule_ReplyWithSimpleString(ctx, "string");
+    ValkeyModule_ReplyWithCString(ctx, last_reply_string);
+    ValkeyModule_ReplyWithSimpleString(ctx, "integer");
+    ValkeyModule_ReplyWithLongLong(ctx, last_reply_integer);
+
+    return VALKEYMODULE_OK;
+}
+
 int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     VALKEYMODULE_NOT_USED(argv);
     VALKEYMODULE_NOT_USED(argc);
@@ -311,6 +486,16 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
     }
 
     if (ValkeyModule_CreateCommand(ctx, "cmdresult.rmcall", CmdResultRMCall_ValkeyCommand,
+                                   "readonly", 0, 0, 0) == VALKEYMODULE_ERR) {
+        return VALKEYMODULE_ERR;
+    }
+
+    if (ValkeyModule_CreateCommand(ctx, "cmdresult.testreply", CmdResultTestReply_ValkeyCommand,
+                                   "admin", 0, 0, 0) == VALKEYMODULE_ERR) {
+        return VALKEYMODULE_ERR;
+    }
+
+    if (ValkeyModule_CreateCommand(ctx, "cmdresult.getlastreply", CmdResultGetLastReply_ValkeyCommand,
                                    "readonly", 0, 0, 0) == VALKEYMODULE_ERR) {
         return VALKEYMODULE_ERR;
     }

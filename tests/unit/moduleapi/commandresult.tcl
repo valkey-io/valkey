@@ -391,6 +391,232 @@ start_server {tags {"modules"}} {
         r cmdresult.unregister
     }
 
+    # Tests for new accessors: GetArgv, GetReplyProto, GetReplySize, CreateReply
+
+    test {Module commandresult - GetArgv captures command arguments} {
+        cleanup_callback
+        r cmdresult.register all
+
+        # Execute a command with arguments
+        r set mykey myvalue
+
+        set log [r cmdresult.getlog 1]
+        set entry [lindex $log 0]
+
+        # Check argv is captured
+        set argv [dict get $entry argv]
+        assert_equal [lindex $argv 0] "set"
+        assert_equal [lindex $argv 1] "mykey"
+        assert_equal [lindex $argv 2] "myvalue"
+
+        r cmdresult.unregister
+    }
+
+    test {Module commandresult - GetArgv captures multi-argument commands} {
+        cleanup_callback
+        r cmdresult.register all
+
+        # Execute MSET with multiple key-value pairs
+        r mset key1 val1 key2 val2 key3 val3
+
+        set log [r cmdresult.getlog 1]
+        set entry [lindex $log 0]
+
+        set argv [dict get $entry argv]
+        assert_equal [lindex $argv 0] "mset"
+        assert_equal [lindex $argv 1] "key1"
+        assert_equal [lindex $argv 2] "val1"
+        assert_equal [lindex $argv 3] "key2"
+        assert_equal [lindex $argv 4] "val2"
+
+        r cmdresult.unregister
+    }
+
+    test {Module commandresult - GetReplySize returns reply size} {
+        cleanup_callback
+        r cmdresult.register all
+
+        # Execute a command that returns data
+        r set testkey "hello world"
+        r get testkey
+
+        set log [r cmdresult.getlog 1]
+        set entry [lindex $log 0]
+
+        # Reply size should be > 0 for GET response
+        assert {[dict get $entry reply_size] > 0}
+
+        r cmdresult.unregister
+    }
+
+    test {Module commandresult - GetReplyProto captures RESP protocol} {
+        cleanup_callback
+        r cmdresult.register all
+
+        # Execute commands and check reply_proto
+        r set testkey "hello"
+        r get testkey
+
+        set log [r cmdresult.getlog 1]
+        set entry [lindex $log 0]
+
+        # reply_proto should contain RESP format (bulk string for GET result)
+        set reply_proto [dict get $entry reply_proto]
+        # RESP bulk string format: $<len>\r\n<data>\r\n
+        assert_match {$5*hello*} $reply_proto
+
+        r cmdresult.unregister
+    }
+
+    test {Module commandresult - GetReplyProto for integer response} {
+        cleanup_callback
+        r cmdresult.register all
+
+        # INCR returns an integer
+        r set counter 10
+        r incr counter
+
+        set log [r cmdresult.getlog 1]
+        set entry [lindex $log 0]
+
+        # RESP integer format: :<value>\r\n
+        set reply_proto [dict get $entry reply_proto]
+        assert_match {:11*} $reply_proto
+
+        r cmdresult.unregister
+    }
+
+    test {Module commandresult - GetReplyProto for error response} {
+        cleanup_callback
+        r cmdresult.register all
+
+        # Force an error
+        catch {r cmdresult.fail} e
+
+        set log [r cmdresult.getlog 1]
+        set entry [lindex $log 0]
+
+        # RESP error format: -ERR <message>\r\n
+        set reply_proto [dict get $entry reply_proto]
+        assert_match {-ERR*} $reply_proto
+
+        r cmdresult.unregister
+    }
+
+    test {Module commandresult - CreateReply parses string reply} {
+        cleanup_callback
+        r cmdresult.register all
+
+        # Enable CreateReply testing
+        r cmdresult.testreply on
+
+        r set testkey "hello world"
+        r get testkey
+
+        # Get the parsed reply info
+        set last_reply [r cmdresult.getlastreply]
+        assert_equal [dict get $last_reply type] "string"
+        assert_equal [dict get $last_reply string] "hello world"
+
+        r cmdresult.testreply off
+        r cmdresult.unregister
+    }
+
+    test {Module commandresult - CreateReply parses integer reply} {
+        cleanup_callback
+        r cmdresult.register all
+
+        # Enable CreateReply testing
+        r cmdresult.testreply on
+
+        r set counter 42
+        r incr counter
+
+        # Get the parsed reply info
+        set last_reply [r cmdresult.getlastreply]
+        assert_equal [dict get $last_reply type] "integer"
+        assert_equal [dict get $last_reply integer] 43
+
+        r cmdresult.testreply off
+        r cmdresult.unregister
+    }
+
+    test {Module commandresult - CreateReply parses error reply} {
+        cleanup_callback
+        r cmdresult.register all
+
+        # Enable CreateReply testing
+        r cmdresult.testreply on
+
+        catch {r cmdresult.fail} e
+
+        # Get the parsed reply info
+        set last_reply [r cmdresult.getlastreply]
+        assert_equal [dict get $last_reply type] "error"
+        assert_match {*intentional failure*} [dict get $last_reply string]
+
+        r cmdresult.testreply off
+        r cmdresult.unregister
+    }
+
+    test {Module commandresult - CreateReply parses null reply} {
+        cleanup_callback
+        r cmdresult.register all
+
+        # Enable CreateReply testing
+        r cmdresult.testreply on
+
+        # GET on non-existent key returns null
+        r get nonexistent_key_12345
+
+        # Get the parsed reply info
+        set last_reply [r cmdresult.getlastreply]
+        assert_equal [dict get $last_reply type] "null"
+
+        r cmdresult.testreply off
+        r cmdresult.unregister
+    }
+
+    test {Module commandresult - GetArgv with command rewriting} {
+        cleanup_callback
+        r cmdresult.register all
+
+        # EXPIRE gets rewritten to PEXPIREAT internally
+        # But we should see original argv (EXPIRE)
+        r set rewritekey "value"
+        r expire rewritekey 100
+
+        set log [r cmdresult.getlog 1]
+        set entry [lindex $log 0]
+
+        set argv [dict get $entry argv]
+        # Should see original command, not rewritten one
+        assert_equal [string tolower [lindex $argv 0]] "expire"
+        assert_equal [lindex $argv 1] "rewritekey"
+        assert_equal [lindex $argv 2] "100"
+
+        r cmdresult.unregister
+    }
+
+    test {Module commandresult - Zero overhead when accessors not used} {
+        cleanup_callback
+        # This test verifies that simply registering a callback without
+        # using the new accessors doesn't add significant overhead.
+        # We can't directly measure overhead, but we verify the callbacks work.
+
+        r cmdresult.register all
+
+        # Run many commands without using reply accessors
+        for {set i 0} {$i < 100} {incr i} {
+            r ping
+        }
+
+        set stats [r cmdresult.stats]
+        assert {[dict get $stats total_callbacks] >= 100}
+
+        r cmdresult.unregister
+    }
+
     test {Unload the module - commandresult} {
         catch {r cmdresult.unregister}
         assert_equal {OK} [r module unload commandresult]

@@ -2134,6 +2134,14 @@ VALKEYMODULE_API long long (*ValkeyModule_CommandResultGetDuration)(ValkeyModule
 VALKEYMODULE_API long long (*ValkeyModule_CommandResultGetDirty)(ValkeyModuleCommandResultCtx *rctx) VALKEYMODULE_ATTR;
 VALKEYMODULE_API unsigned long long (*ValkeyModule_CommandResultGetClientId)(ValkeyModuleCommandResultCtx *rctx)
     VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_CommandResultGetArgv)(ValkeyModuleCommandResultCtx *rctx,
+                                                          ValkeyModuleString ***argv,
+                                                          int *argc) VALKEYMODULE_ATTR;
+VALKEYMODULE_API size_t (*ValkeyModule_CommandResultGetReplySize)(ValkeyModuleCommandResultCtx *rctx) VALKEYMODULE_ATTR;
+VALKEYMODULE_API const char *(*ValkeyModule_CommandResultGetReplyProto)(ValkeyModuleCommandResultCtx *rctx,
+                                                                        size_t *len) VALKEYMODULE_ATTR;
+VALKEYMODULE_API ValkeyModuleCallReply *(*ValkeyModule_CommandResultCreateReply)(ValkeyModuleCommandResultCtx *rctx)
+    VALKEYMODULE_ATTR;
 VALKEYMODULE_API int (*ValkeyModule_Fork)(ValkeyModuleForkDoneHandler cb, void *user_data) VALKEYMODULE_ATTR;
 VALKEYMODULE_API void (*ValkeyModule_SendChildHeartbeat)(double progress) VALKEYMODULE_ATTR;
 VALKEYMODULE_API int (*ValkeyModule_ExitFromChild)(int retcode) VALKEYMODULE_ATTR;
@@ -2633,6 +2641,10 @@ static int ValkeyModule_Init(ValkeyModuleCtx *ctx, const char *name, int ver, in
     VALKEYMODULE_GET_API(CommandResultGetDuration);
     VALKEYMODULE_GET_API(CommandResultGetDirty);
     VALKEYMODULE_GET_API(CommandResultGetClientId);
+    VALKEYMODULE_GET_API(CommandResultGetArgv);
+    VALKEYMODULE_GET_API(CommandResultGetReplySize);
+    VALKEYMODULE_GET_API(CommandResultGetReplyProto);
+    VALKEYMODULE_GET_API(CommandResultCreateReply);
     VALKEYMODULE_GET_API(Fork);
     VALKEYMODULE_GET_API(SendChildHeartbeat);
     VALKEYMODULE_GET_API(ExitFromChild);

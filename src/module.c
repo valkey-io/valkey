@@ -3025,6 +3025,10 @@ ValkeyModuleString *VM_HoldString(ValkeyModuleCtx *ctx, ValkeyModuleString *str)
     return str;
 }
 
+/* Thread-local buffer for integer-to-string conversion in VM_StringPtrLen.
+ * LONG_STR_SIZE (21) is sufficient for any 64-bit integer. */
+static __thread char vm_string_int_buffer[24];
+
 /* Given a string module object, this function returns the string pointer
  * and length of the string. The returned pointer and length should only
  * be used for read only accesses and never modified. */
@@ -11852,6 +11856,129 @@ unsigned long long VM_CommandResultGetClientId(ValkeyModuleCommandResultCtx *rct
     return rctx->c->id;
 }
 
+/* Get the command arguments from a command result context.
+ * This returns the original arguments as sent by the client (before any
+ * internal rewriting that may have occurred).
+ *
+ * The returned array points directly to the existing argument data - no memory
+ * is allocated and no copies are made. The returned pointers are valid only
+ * during the callback execution.
+ *
+ * Returns VALKEYMODULE_OK on success, VALKEYMODULE_ERR if arguments are not available. */
+int VM_CommandResultGetArgv(ValkeyModuleCommandResultCtx *rctx,
+                            ValkeyModuleString ***argv,
+                            int *argc) {
+    if (!rctx || !rctx->c) return VALKEYMODULE_ERR;
+
+    /* Prefer original_argv if available (contains unmodified client input),
+     * otherwise fall back to current argv. This matches MONITOR behavior. */
+    if (rctx->c->original_argv) {
+        *argv = (ValkeyModuleString **)rctx->c->original_argv;
+        *argc = rctx->c->original_argc;
+    } else {
+        *argv = (ValkeyModuleString **)rctx->c->argv;
+        *argc = rctx->c->argc;
+    }
+    return VALKEYMODULE_OK;
+}
+
+/* Get the total size of the command reply in bytes.
+ *
+ * This returns the total size of the reply data without copying or allocating
+ * any memory. Use this to determine the reply size before calling
+ * VM_CommandResultGetReplyProto() or to decide whether to process the reply.
+ *
+ * Returns the total reply size in bytes. */
+size_t VM_CommandResultGetReplySize(ValkeyModuleCommandResultCtx *rctx) {
+    if (!rctx || !rctx->c) return 0;
+
+    client *c = rctx->c;
+    return c->bufpos + c->reply_bytes;
+}
+
+/* Get the raw reply buffer from a command result context.
+ *
+ * This provides zero-copy access to the reply data in RESP protocol format.
+ * No memory is allocated - the returned pointer points directly to the
+ * internal buffer. The pointer is valid only during the callback execution.
+ *
+ * For replies that fit in the static buffer, this returns the complete reply.
+ * For larger replies that span multiple blocks, this returns the first portion
+ * from the static buffer. Use VM_CommandResultGetReplySize() to check the
+ * total size and VM_CommandResultCreateReply() if you need the complete
+ * parsed reply for large responses.
+ *
+ * Returns the reply buffer pointer and sets *len to the buffer length.
+ * Returns NULL if no reply is available. */
+const char *VM_CommandResultGetReplyProto(ValkeyModuleCommandResultCtx *rctx,
+                                          size_t *len) {
+    if (!rctx || !rctx->c || !len) return NULL;
+
+    client *c = rctx->c;
+
+    /* If there's data in the static buffer, return it */
+    if (c->bufpos > 0) {
+        *len = c->bufpos;
+        return c->buf;
+    }
+
+    /* If static buffer is empty but reply list has data, return first block */
+    if (listLength(c->reply) > 0) {
+        clientReplyBlock *block = listNodeValue(listFirst(c->reply));
+        *len = block->used;
+        return block->buf;
+    }
+
+    /* No reply data available */
+    *len = 0;
+    return NULL;
+}
+
+/* Create a parsed ValkeyModuleCallReply object from the command result.
+ *
+ * Unlike the other CommandResult accessors, this function DOES allocate memory
+ * and copies the reply buffer to create a fully parsed reply object. Use this
+ * when you need to inspect the reply structure (type, nested elements, etc.)
+ * rather than just the raw bytes.
+ *
+ * The returned ValkeyModuleCallReply can be used with all the standard
+ * ValkeyModule_CallReply*() functions.
+ *
+ * IMPORTANT: The caller is responsible for freeing the returned reply object
+ * using ValkeyModule_FreeCallReply() when done.
+ *
+ * Returns a new ValkeyModuleCallReply object, or NULL if the reply cannot
+ * be created (e.g., no reply data or allocation failure). */
+ValkeyModuleCallReply *VM_CommandResultCreateReply(ValkeyModuleCommandResultCtx *rctx) {
+    if (!rctx || !rctx->c) return NULL;
+
+    client *c = rctx->c;
+
+    /* Check if there's any reply data */
+    if (c->bufpos == 0 && listLength(c->reply) == 0) {
+        return NULL;
+    }
+
+    /* Build an sds containing the complete reply.
+     * This copies data from both the static buffer and the reply list. */
+    sds proto = sdsnewlen(c->buf, c->bufpos);
+
+    listIter li;
+    listNode *ln;
+    listRewind(c->reply, &li);
+    while ((ln = listNext(&li)) != NULL) {
+        clientReplyBlock *block = listNodeValue(ln);
+        proto = sdscatlen(proto, block->buf, block->used);
+    }
+
+    /* Create the CallReply object. Note: we pass NULL for deferred_error_list
+     * because we don't want to transfer ownership - the client still owns it.
+     * We also pass NULL for private_data as there's no module context here. */
+    CallReply *reply = callReplyCreate(proto, NULL, NULL);
+
+    return (ValkeyModuleCallReply *)reply;
+}
+
 /* For a given pointer allocated via ValkeyModule_Alloc() or
  * ValkeyModule_Realloc(), return the amount of memory allocated for it.
  * Note that this may be different (larger) than the memory we allocated
@@ -15202,6 +15329,10 @@ void moduleRegisterCoreAPI(void) {
     REGISTER_API(CommandResultGetDuration);
     REGISTER_API(CommandResultGetDirty);
     REGISTER_API(CommandResultGetClientId);
+    REGISTER_API(CommandResultGetArgv);
+    REGISTER_API(CommandResultGetReplySize);
+    REGISTER_API(CommandResultGetReplyProto);
+    REGISTER_API(CommandResultCreateReply);
     REGISTER_API(Fork);
     REGISTER_API(SendChildHeartbeat);
     REGISTER_API(ExitFromChild);

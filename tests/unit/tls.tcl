@@ -202,15 +202,7 @@ start_server {tags {"tls"}} {
                 file copy -force $valkey_key $server_key
 
                 # Wait for reload to actually complete by checking server logs
-                set logfile [srv 0 stdout]
-                wait_for_condition 50 100 {
-                    set fd [open $logfile r]
-                    set logs [read $fd]
-                    close $fd
-                    [string match {*TLS materials reloaded successfully*} $logs]
-                } else {
-                    fail "TLS reload did not complete in time"
-                }
+                wait_for_log_messages 0 {"*TLS materials reloaded successfully*"} 0 100 100
 
                 # Verify connection still works after reload
                 set s [valkey_client]
@@ -222,16 +214,7 @@ start_server {tags {"tls"}} {
                 file copy -force $backup_key $server_key
 
                 # Clear log position and wait for second reload to complete
-                set log_size_before [file size $logfile]
-                wait_for_condition 50 100 {
-                    set fd [open $logfile r]
-                    seek $fd $log_size_before
-                    set new_logs [read $fd]
-                    close $fd
-                    [string match {*TLS materials reloaded successfully*} $new_logs]
-                } else {
-                    fail "TLS reload back to original did not complete in time"
-                }
+                wait_for_log_messages 0 {"*TLS materials reloaded successfully*"} 0 50 100
 
                 # Verify connection still works after restore
                 set s [valkey_client]
@@ -249,21 +232,10 @@ start_server {tags {"tls"}} {
         test {TLS: Auto-reload skips unchanged materials} {
             # Enable auto-reload with 1 second interval
             r CONFIG SET tls-auto-reload-interval 1
-
-            # Get server log file
-            set logfile [srv 0 stdout]
-            set size_before [file size $logfile]
+            r CONFIG SET loglevel debug
 
             # Wait for at least one reload check cycle
-            wait_for_condition 50 100 {
-                set fd [open $logfile r]
-                seek $fd $size_before
-                set new_logs [read $fd]
-                close $fd
-                [string match {*materials unchanged*} $new_logs]
-            } else {
-                fail "Did not find 'materials unchanged' log message"
-            }
+            wait_for_log_messages 0 {"*materials unchanged*"} 0 50 100
 
             # Disable auto-reload
             r CONFIG SET tls-auto-reload-interval 0
@@ -277,7 +249,7 @@ start_server {tags {"tls"}} {
 
             # Invalid intervals should fail
             catch {r CONFIG SET tls-auto-reload-interval -1} e
-            assert_match {*invalid*} $e
+            assert_match {*ERR CONFIG SET failed*} $e
 
             # Reset to disabled
             r CONFIG SET tls-auto-reload-interval 0
@@ -300,15 +272,7 @@ start_server {tags {"tls"}} {
                     r CONFIG SET tls-auto-reload-interval 1
 
                     # Wait for reload to actually complete by checking server logs
-                    set logfile [srv 0 stdout]
-                    wait_for_condition 50 100 {
-                        set fd [open $logfile r]
-                        set logs [read $fd]
-                        close $fd
-                        [string match {*TLS materials reloaded successfully*} $logs]
-                    } else {
-                        fail "TLS reload did not complete after CA cert directory change"
-                    }
+                    wait_for_log_messages 0 {"*TLS materials reloaded successfully*"} 0 50 100
 
                     # Verify connection still works after reload
                     set s [valkey_client]

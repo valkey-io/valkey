@@ -109,6 +109,11 @@ typedef enum {
     BULK_STR_REF     /* bulk string references */
 } payloadType;
 
+typedef struct PayloadHeaderFlags {
+    uint8_t track_bytes : 1; /* 1 if net bytes tracking was enabled when reply was added */
+    uint8_t reserved : 7;
+} PayloadHeaderFlags;
+
 /* Encoded reply buffers consist from chunks
  * Each chunk contains header followed by payload
  * The packed attribute is specified because buffer is accessed at arbitrary offsets,
@@ -118,6 +123,7 @@ typedef struct __attribute__((__packed__)) payloadHeader {
     size_t reply_len;     /* actual reply length for non-plain payloads */
     uint8_t payload_type; /* one of payloadType */
     int16_t slot;         /* to report network-bytes-out for BULK_STR_REF chunks */
+    PayloadHeaderFlags flags;
 } payloadHeader;
 
 /* To avoid copy of whole string in reply buffer
@@ -324,7 +330,6 @@ client *createClient(connection *conn) {
     c->multibulklen = 0;
     c->bulklen = -1;
     c->raw_flag = 0;
-    c->flag.track_net_output_bytes = (server.commandlog[COMMANDLOG_TYPE_LARGE_REQUEST].threshold != -1);
     c->capa = 0;
     c->slot = -1;
     c->ctime = c->last_interaction = server.unixtime;
@@ -514,7 +519,7 @@ void deleteCachedResponseClient(client *recording_client) {
 
 /* Updates an existing header, if possible; otherwise inserts a new one
  * Returns the length of data that can be added to the reply buffer (i.e. min(available, requested)) */
-static size_t upsertPayloadHeader(char *buf, size_t *bufpos, payloadHeader **last_header, uint8_t type, size_t len, int slot, size_t available) {
+static size_t upsertPayloadHeader(char *buf, size_t *bufpos, payloadHeader **last_header, uint8_t type, size_t len, int slot, int track_bytes, size_t available) {
     /* Enforce min len for BULK_STR_REF chunks as whole pointers must be written to the buffer */
     size_t min_len = (type == BULK_STR_REF ? len : 1);
     if (min_len > available) return 0;
@@ -524,7 +529,7 @@ static size_t upsertPayloadHeader(char *buf, size_t *bufpos, payloadHeader **las
     if (!clusterSlotStatsEnabled(slot)) slot = -1;
 
     /* Try to add payload to last chunk if possible */
-    if (*last_header != NULL && (*last_header)->payload_type == type && (*last_header)->slot == slot) {
+    if (*last_header != NULL && (*last_header)->payload_type == type && (*last_header)->slot == slot && (*last_header)->flags.track_bytes == track_bytes) {
         (*last_header)->payload_len += allowed_len;
         return allowed_len;
     }
@@ -541,6 +546,8 @@ static size_t upsertPayloadHeader(char *buf, size_t *bufpos, payloadHeader **las
     (*last_header)->payload_len = allowed_len;
     (*last_header)->slot = slot;
     (*last_header)->reply_len = 0;
+    (*last_header)->flags.track_bytes = track_bytes;
+    (*last_header)->flags.reserved = 0;
 
     *bufpos += sizeof(payloadHeader);
 
@@ -564,7 +571,8 @@ static size_t _addReplyPayloadToBuffer(client *c, const void *payload, size_t le
     size_t available = c->buf_usable_size - c->bufpos;
     size_t reply_len = min(available, len);
     if (c->flag.buf_encoded) {
-        reply_len = upsertPayloadHeader(c->buf, &c->bufpos, &c->last_header, payload_type, len, c->slot, available);
+        int track_bytes = (server.commandlog[COMMANDLOG_TYPE_LARGE_REQUEST].threshold != -1);
+        reply_len = upsertPayloadHeader(c->buf, &c->bufpos, &c->last_header, payload_type, len, c->slot, track_bytes, available);
     }
     if (!reply_len) return 0;
 
@@ -614,7 +622,8 @@ static void _addReplyPayloadToList(client *c, list *reply_list, const char *payl
         size_t copy = avail >= len ? len : avail;
 
         if (tail->flag.buf_encoded) {
-            copy = upsertPayloadHeader(tail->buf, &tail->used, &tail->last_header, payload_type, len, c->slot, avail);
+            int track_bytes = (server.commandlog[COMMANDLOG_TYPE_LARGE_REQUEST].threshold != -1);
+            copy = upsertPayloadHeader(tail->buf, &tail->used, &tail->last_header, payload_type, len, c->slot, track_bytes, avail);
         } else if (encoded) {
             /* If encoded buffer is required but tail is unencoded then pretend nothing can be added to it
              * and, as consequence, cause addition of a new tail */
@@ -642,7 +651,8 @@ static void _addReplyPayloadToList(client *c, list *reply_list, const char *payl
         tail->flag.buf_encoded = encoded;
         tail->last_header = NULL;
         if (tail->flag.buf_encoded) {
-            upsertPayloadHeader(tail->buf, &tail->used, &tail->last_header, payload_type, len, c->slot, tail->size);
+            int track_bytes = (server.commandlog[COMMANDLOG_TYPE_LARGE_REQUEST].threshold != -1);
+            upsertPayloadHeader(tail->buf, &tail->used, &tail->last_header, payload_type, len, c->slot, track_bytes, tail->size);
         }
         memcpy(tail->buf + tail->used, payload, len);
         tail->used += len;
@@ -1401,8 +1411,8 @@ static int tryAvoidBulkStrCopyToReply(client *c, robj *obj) {
 void addReplyBulk(client *c, robj *obj) {
     if (tryAvoidBulkStrCopyToReply(c, obj) == C_OK) {
         /* If copy avoidance allowed, then we explicitly maintain net_output_bytes_curr_cmd.
-         * We only track bytes if the client flag indicates it's enabled. */
-        if (c->flag.track_net_output_bytes) {
+         * We determine per-reply if tracking is enabled by checking the config in the main thread. */
+        if (server.commandlog[COMMANDLOG_TYPE_LARGE_REQUEST].threshold != -1) {
             serverAssert(obj->encoding == OBJ_ENCODING_RAW);
             size_t str_len = sdslen(objectGetVal(obj));
             uint32_t num_len = digits10(str_len);
@@ -2762,18 +2772,18 @@ void resetLastWrittenBuf(client *c) {
 }
 
 /* Release references to string objects inside an encoded buffer */
-static void releaseBufReferences(char *buf, size_t bufpos, int track_bytes) {
+static void releaseBufReferences(char *buf, size_t bufpos) {
     char *ptr = buf;
     while (ptr < buf + bufpos) {
         payloadHeader *header = (payloadHeader *)ptr;
         ptr += sizeof(payloadHeader);
 
         if (header->payload_type == BULK_STR_REF) {
-            /* When net byte tracking is disabled in the main thread (commandlog-request-larger-than -1),
-             * we account for cluster slot stats here in the IO thread after writing the reply.
-             * When tracking is enabled, it's already accounted in the main thread via
-             * afterCommand() -> clusterSlotStatsAddNetworkBytesOutForUserClient(). */
-            if (!track_bytes) {
+            /* When net byte tracking was disabled in the main thread (commandlog-request-larger-than -1)
+             * at the time this reply was added, we account for cluster slot stats here in the IO thread
+             * after writing the reply. When tracking was enabled, it's already accounted in the main thread
+             * via afterCommand() -> clusterSlotStatsAddNetworkBytesOutForUserClient(). */
+            if (!header->flags.track_bytes) {
                 clusterSlotStatsAddNetworkBytesOutForSlot(header->slot, header->reply_len);
             }
 
@@ -2795,7 +2805,7 @@ static void releaseBufReferences(char *buf, size_t bufpos, int track_bytes) {
 
 void releaseReplyReferences(client *c) {
     if (c->bufpos > 0 && c->flag.buf_encoded) {
-        releaseBufReferences(c->buf, c->bufpos, c->flag.track_net_output_bytes);
+        releaseBufReferences(c->buf, c->bufpos);
     }
 
     listIter iter;
@@ -2804,7 +2814,7 @@ void releaseReplyReferences(client *c) {
     while ((next = listNext(&iter))) {
         clientReplyBlock *o = (clientReplyBlock *)listNodeValue(next);
         if (o->flag.buf_encoded) {
-            releaseBufReferences(o->buf, o->used, c->flag.track_net_output_bytes);
+            releaseBufReferences(o->buf, o->used);
         }
     }
 }
@@ -2824,7 +2834,7 @@ static void _postWriteToClient(client *c) {
         /* If buffer is completely written */
         if (!last_written || c->bufpos == c->io_last_written.bufpos) {
             /* If encoded then release references to bulk string objects */
-            if (c->flag.buf_encoded) releaseBufReferences(c->buf, c->bufpos, c->flag.track_net_output_bytes);
+            if (c->flag.buf_encoded) releaseBufReferences(c->buf, c->bufpos);
             /* Reset buffer metadata */
             c->bufpos = 0;
             c->flag.buf_encoded = 0;
@@ -2846,7 +2856,7 @@ static void _postWriteToClient(client *c) {
         if (!last_written || o->used == c->io_last_written.bufpos) {
             c->reply_bytes -= o->size;
             /* If encoded then release references to bulk string objects */
-            if (o->flag.buf_encoded) releaseBufReferences(o->buf, o->used, c->flag.track_net_output_bytes);
+            if (o->flag.buf_encoded) releaseBufReferences(o->buf, o->used);
             listDelNode(c->reply, next);
             /* If completely written buffer is last written then reset last written state */
             if (last_written) resetLastWrittenBuf(c);

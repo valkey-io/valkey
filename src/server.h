@@ -1225,7 +1225,6 @@ typedef struct ClientFlags {
                                               or client::buf. */
     uint64_t keyspace_notified : 1;        /* Indicates that a keyspace notification was triggered during the execution of the
                                               current command. */
-    uint64_t track_net_output_bytes : 1;   /* Track net_output_bytes_curr_cmd (disabled when commandlog-request-larger-than is -1). */
 } ClientFlags;
 
 typedef struct ClientPubSubData {

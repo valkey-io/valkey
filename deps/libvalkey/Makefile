@@ -12,7 +12,7 @@ TEST_DIR = tests
 
 INCLUDE_DIR = include/valkey
 
-    TEST_SRCS = $(TEST_DIR)/client_test.c $(TEST_DIR)/ut_parse_cmd.c $(TEST_DIR)/ut_slotmap_update.c
+TEST_SRCS = $(TEST_DIR)/client_test.c $(TEST_DIR)/ut_parse_cmd.c $(TEST_DIR)/ut_slotmap_update.c
 TEST_BINS = $(patsubst $(TEST_DIR)/%.c,$(TEST_DIR)/%,$(TEST_SRCS))
 
 SOURCES = $(filter-out $(SRC_DIR)/tls.c $(SRC_DIR)/rdma.c, $(wildcard $(SRC_DIR)/*.c))

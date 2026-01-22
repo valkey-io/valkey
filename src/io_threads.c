@@ -6,7 +6,7 @@
 
 #include "io_threads.h"
 
-static __thread int thread_id = 0; /* Thread local var */
+static _Thread_local int thread_id = 0; /* Thread local var */
 static pthread_t io_threads[IO_THREADS_MAX_NUM] = {0};
 static pthread_mutex_t io_threads_mutex[IO_THREADS_MAX_NUM];
 
@@ -215,18 +215,19 @@ static void *IOThreadMain(void *myid) {
     long id = (long)myid;
     char thdname[32];
 
-    serverAssert(server.io_threads_num > 0);
-    serverAssert(id > 0 && id < server.io_threads_num);
     snprintf(thdname, sizeof(thdname), "io_thd_%ld", id);
     valkey_set_thread_title(thdname);
     serverSetCpuAffinity(server.server_cpulist);
-    makeThreadKillable();
     initSharedQueryBuf();
+    pthread_cleanup_push(freeSharedQueryBuf, NULL);
 
     thread_id = (int)id;
     size_t jobs_to_process = 0;
     IOJobQueue *jq = &io_jobs[id];
     while (1) {
+        /* Cancellation point so that pthread_cancel() from main thread is honored. */
+        pthread_testcancel();
+
         /* Wait for jobs */
         for (int j = 0; j < 1000000; j++) {
             jobs_to_process = IOJobQueue_availableJobs(jq);
@@ -255,18 +256,22 @@ static void *IOThreadMain(void *myid) {
          * As the main-thread main concern is to check if the queue is empty, it's enough to do it once at the end. */
         atomic_thread_fence(memory_order_release);
     }
-    freeSharedQueryBuf();
+    pthread_cleanup_pop(0);
     return NULL;
 }
 
 #define IO_JOB_QUEUE_SIZE 2048
 static void createIOThread(int id) {
+    serverAssert(server.io_threads_num > 0);
+    serverAssert(id > 0 && id < server.io_threads_num);
+
     pthread_t tid;
     pthread_mutex_init(&io_threads_mutex[id], NULL);
     IOJobQueue_init(&io_jobs[id], IO_JOB_QUEUE_SIZE);
     pthread_mutex_lock(&io_threads_mutex[id]); /* Thread will be stopped. */
-    if (pthread_create(&tid, NULL, IOThreadMain, (void *)(long)id) != 0) {
-        serverLog(LL_WARNING, "Fatal: Can't initialize IO thread, pthread_create failed with: %s", strerror(errno));
+    int err = pthread_create(&tid, NULL, IOThreadMain, (void *)(long)id);
+    if (err) {
+        serverLog(LL_WARNING, "Fatal: Can't initialize IO thread, pthread_create failed with: %s", strerror(err));
         exit(1);
     }
     io_threads[id] = tid;
@@ -280,6 +285,10 @@ static void shutdownIOThread(int id) {
     if (tid == pthread_self()) return;
     if (tid == 0) return;
 
+    /* Only unlock mutex for inactive threads. Active threads are already unlocked. */
+    if (id >= server.active_io_threads_num) {
+        pthread_mutex_unlock(&io_threads_mutex[id]);
+    }
     pthread_cancel(tid);
 
     if ((err = pthread_join(tid, NULL)) != 0) {
@@ -287,7 +296,7 @@ static void shutdownIOThread(int id) {
     } else {
         serverLog(LL_NOTICE, "IO thread(tid:%lu) terminated", (unsigned long)tid);
     }
-
+    pthread_mutex_destroy(&io_threads_mutex[id]);
     IOJobQueue_cleanup(&io_jobs[id]);
 }
 
@@ -295,6 +304,45 @@ void killIOThreads(void) {
     for (int j = 1; j < server.io_threads_num; j++) { /* We don't kill thread 0, which is the main thread. */
         shutdownIOThread(j);
     }
+}
+
+int updateIOThreads(const char **err) {
+    serverAssert(inMainThread());
+    UNUSED(err);
+    int prev_threads_num = 1;
+    for (int i = IO_THREADS_MAX_NUM - 1; i > 0; i--) {
+        if (io_threads[i]) {
+            prev_threads_num = i + 1;
+            break;
+        }
+    }
+    if (prev_threads_num == server.io_threads_num) return 1;
+
+    serverLog(LL_NOTICE, "Changing number of IO threads from %d to %d.", prev_threads_num, server.io_threads_num);
+    drainIOThreadsQueue();
+    /* Set active threads to 1, will be adjusted based on workload later. */
+    for (int i = 1; i < server.active_io_threads_num; i++) {
+        pthread_mutex_lock(&io_threads_mutex[i]);
+    }
+    server.active_io_threads_num = 1;
+
+    // Create new threads.
+    if (server.io_threads_num > prev_threads_num) {
+        prefetchCommandsBatchInit();
+        for (int i = prev_threads_num; i < server.io_threads_num; i++) {
+            createIOThread(i);
+        }
+    }
+    // Decrease the number of threads.
+    else {
+        for (int i = prev_threads_num - 1; i >= server.io_threads_num; i--) {
+            // Unblock inactive thread.
+            pthread_mutex_unlock(&io_threads_mutex[i]);
+            shutdownIOThread(i);
+            io_threads[i] = 0;
+        }
+    }
+    return 1;
 }
 
 /* Initialize the data structures needed for I/O threads. */
@@ -345,7 +393,7 @@ int trySendReadToIOThreads(client *c) {
     c->cur_tid = tid;
     c->read_flags = canParseCommand(c) ? 0 : READ_FLAGS_DONT_PARSE;
     c->read_flags |= authRequired(c) ? READ_FLAGS_AUTH_REQUIRED : 0;
-    c->read_flags |= c->flag.primary ? READ_FLAGS_PRIMARY : 0;
+    c->read_flags |= isReplicatedClient(c) ? READ_FLAGS_REPLICATED : 0;
 
     c->io_read_state = CLIENT_PENDING_IO;
     connSetPostponeUpdateState(c->conn, 1);
@@ -404,9 +452,14 @@ int trySendWriteToIOThreads(client *c) {
          * threads from reading data that might be invalid in their local CPU cache. */
         c->io_last_reply_block = listLast(c->reply);
         if (c->io_last_reply_block) {
-            c->io_last_bufpos = ((clientReplyBlock *)listNodeValue(c->io_last_reply_block))->used;
+            clientReplyBlock *block = (clientReplyBlock *)listNodeValue(c->io_last_reply_block);
+            c->io_last_bufpos = block->used;
+            /* If buffer is encoded force new header */
+            if (block->flag.buf_encoded) block->last_header = NULL;
         } else {
             c->io_last_bufpos = (size_t)c->bufpos;
+            /* If buffer is encoded force new header */
+            if (c->flag.buf_encoded) c->last_header = NULL;
         }
     }
 
@@ -514,8 +567,8 @@ int tryOffloadFreeObjToIOThreads(robj *obj) {
 
     /* We offload only the free of the ptr that may be allocated by the I/O thread.
      * The object itself was allocated by the main thread and will be freed by the main thread. */
-    IOJobQueue_push(jq, sdsfreeVoid, obj->ptr);
-    obj->ptr = NULL;
+    IOJobQueue_push(jq, sdsfreeVoid, objectGetVal(obj));
+    objectSetVal(obj, NULL);
     decrRefCount(obj);
 
     server.stat_io_freed_objects++;

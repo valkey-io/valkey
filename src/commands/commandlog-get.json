@@ -68,18 +68,26 @@
                 "arguments": [
                     {
                         "name": "slow",
-                        "type": "string"
+                        "type": "pure-token",
+                        "token": "slow"
                     },
                     {
                         "name": "large-request",
-                        "type": "string"
+                        "type": "pure-token",
+                        "token": "large-request"
                     },
                     {
                         "name": "large-reply",
-                        "type": "string"
+                        "type": "pure-token",
+                        "token": "large-reply"
                     }
                 ]
             }
+        ],
+        "acl_categories": [
+            "ADMIN",
+            "DANGEROUS",
+            "SLOW"
         ]
     }
 }

@@ -48,6 +48,7 @@ TEST_MODULES = \
     defragtest.so \
     keyspecs.so \
     hash.so \
+    hash_stringref.so \
     zset.so \
     stream.so \
     mallocsize.so \
@@ -67,7 +68,8 @@ TEST_MODULES = \
     rdbloadsave.so \
     crash.so \
     cluster.so \
-    helloscripting.so
+    helloscripting.so \
+    unsupported_features.so
 
 .PHONY: all
 

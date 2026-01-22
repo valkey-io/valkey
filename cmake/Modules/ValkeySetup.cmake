@@ -50,13 +50,13 @@ endif ()
 
 # Helper function for creating symbolic link so that: link -> source
 macro (valkey_create_symlink source link)
-    install(
-        CODE "execute_process(                      \
-    COMMAND /bin/bash ${CMAKE_BINARY_DIR}/CreateSymlink.sh \
-    ${source} \
-    ${link}   \
-    )"
-        COMPONENT "valkey")
+  add_custom_command(
+    TARGET ${source} POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E create_symlink
+            "$<TARGET_FILE_NAME:${source}>"
+            "$<TARGET_FILE_DIR:${source}>/${link}"
+    VERBATIM
+  )
 endmacro ()
 
 # Install a binary
@@ -83,10 +83,15 @@ macro (valkey_build_and_install_bin target sources ld_flags libs link_name)
 
     # Place this line last to ensure that ${ld_flags} is placed last on the linker line
     target_link_libraries(${target} ${libs} ${ld_flags})
-    target_link_libraries(${target} hiredis)
+    target_link_libraries(${target} valkey::valkey)
     if (USE_TLS)
         # Add required libraries needed for TLS
-        target_link_libraries(${target} OpenSSL::SSL hiredis_ssl)
+        target_link_libraries(${target} OpenSSL::SSL valkey::valkey_tls)
+    endif ()
+
+    if (USE_RDMA)
+        # Add required libraries needed for RDMA
+        target_link_libraries(${target} valkey::valkey_rdma)
     endif ()
 
     if (IS_FREEBSD)
@@ -99,30 +104,6 @@ macro (valkey_build_and_install_bin target sources ld_flags libs link_name)
     # Install cli tool and create a redis symbolic link
     valkey_install_bin(${target})
     valkey_create_symlink(${target} ${link_name})
-endmacro ()
-
-# Helper function that defines, builds and installs `target` module.
-macro (valkey_build_and_install_module target sources ld_flags libs)
-    add_library(${target} SHARED ${sources})
-
-    if (USE_JEMALLOC)
-        # Using jemalloc
-        target_link_libraries(${target} jemalloc)
-    endif ()
-
-    # Place this line last to ensure that ${ld_flags} is placed last on the linker line
-    target_link_libraries(${target} ${libs} ${ld_flags})
-    if (USE_TLS)
-        # Add required libraries needed for TLS
-        target_link_libraries(${target} OpenSSL::SSL hiredis_ssl)
-    endif ()
-
-    if (IS_FREEBSD)
-        target_link_libraries(${target} execinfo)
-    endif ()
-
-    # Install cli tool and create a redis symbolic link
-    valkey_install_bin(${target})
 endmacro ()
 
 # Determine if we are building in Release or Debug mode
@@ -296,9 +277,9 @@ if (BUILD_SANITIZER)
     endif ()
 endif ()
 
-include_directories("${CMAKE_SOURCE_DIR}/deps/hiredis")
+include_directories("${CMAKE_SOURCE_DIR}/deps/libvalkey/include")
+include_directories("${CMAKE_SOURCE_DIR}/src/modules/lua")
 include_directories("${CMAKE_SOURCE_DIR}/deps/linenoise")
-include_directories("${CMAKE_SOURCE_DIR}/deps/lua/src")
 include_directories("${CMAKE_SOURCE_DIR}/deps/hdr_histogram")
 include_directories("${CMAKE_SOURCE_DIR}/deps/fpconv")
 
@@ -311,6 +292,10 @@ endif ()
 
 # Common compiler flags
 add_valkey_server_compiler_options("-pedantic")
+
+if (NOT BUILD_LUA)
+    message(STATUS "Lua scripting engine is disabled")
+endif()
 
 # ----------------------------------------------------
 # Build options (allocator, tls, rdma et al) - end

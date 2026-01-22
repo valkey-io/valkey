@@ -1,0 +1,45 @@
+#!/bin/bash
+
+# Settings
+REDIS_VERSION=${REDIS_VERSION:-"6.2.1"}
+CLUSTER_HOST=${CLUSTER_HOST:-127.0.0.1}
+PORT=${PORT:-30000}
+TIMEOUT=${TIMEOUT:-2000}
+NODES=${NODES:-6}
+REPLICAS=${REPLICAS:-1}
+ADDITIONAL_OPTIONS=${ADDITIONAL_OPTIONS:-""}
+ADDITIONAL_CLI_OPTIONS=${ADDITIONAL_CLI_OPTIONS:-""}
+
+# Version specific options
+if [[ $REDIS_VERSION == 7* ]]; then
+    ADDITIONAL_OPTIONS="--enable-debug-command yes ${ADDITIONAL_OPTIONS}"
+fi
+
+if [ "$1" == "start" ]; then
+    FIRST_PORT=${PORT}
+    HOSTS=""
+    for i in $(seq $NODES); do
+        echo "Starting redis:${REDIS_VERSION} on port $PORT..."
+        docker run --name redis-${PORT} --net=host -d redis:${REDIS_VERSION} redis-server --cluster-enabled yes --port ${PORT} --cluster-node-timeout ${TIMEOUT} ${ADDITIONAL_OPTIONS}
+        HOSTS="$HOSTS $CLUSTER_HOST:$PORT"
+        PORT=$((PORT+1))
+    done
+
+    sleep 20
+
+    echo 'yes' | docker run --name redis-cli --net=host -i --rm redis:${REDIS_VERSION} redis-cli -p ${FIRST_PORT} ${ADDITIONAL_CLI_OPTIONS} --cluster create ${HOSTS} --cluster-replicas ${REPLICAS}
+    exit 0
+fi
+
+if [ "$1" == "stop" ]; then
+    for i in $(seq $NODES); do
+        echo "Stopping redis on port $PORT..."
+        docker rm -f redis-${PORT} &> /dev/null
+        PORT=$((PORT+1))
+    done
+    exit 0
+fi
+
+echo "Usage: $0 [start|stop]"
+echo "start       -- Start Redis Cluster instances."
+echo "stop        -- Stop Redis Cluster instances."

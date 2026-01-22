@@ -1,8 +1,8 @@
 #ifndef __CLICOMMON_H
 #define __CLICOMMON_H
 
-#include <hiredis.h>
-#include <sdscompat.h> /* Use hiredis' sds compat header that maps sds calls to their hi_ variants */
+#include <valkey/valkey.h>
+#include "sds.h"
 
 typedef struct cliSSLconfig {
     /* Requested SNI, or NULL */
@@ -33,9 +33,9 @@ typedef struct cliConnInfo {
     char *user;
 } cliConnInfo;
 
-int cliSecureConnection(redisContext *c, cliSSLconfig config, const char **err);
+int cliSecureConnection(valkeyContext *c, cliSSLconfig config, const char **err);
 
-ssize_t cliWriteConn(redisContext *c, const char *buf, size_t buf_len);
+ssize_t cliWriteConn(valkeyContext *c, const char *buf, size_t buf_len);
 
 int cliSecureInit(void);
 
@@ -49,11 +49,8 @@ void parseUri(const char *uri, const char *tool_name, cliConnInfo *connInfo, int
 
 void freeCliConnInfo(cliConnInfo connInfo);
 
-sds escapeJsonString(sds s, const char *p, size_t len);
-
 sds cliVersion(void);
 
-redisContext *redisConnectWrapper(const char *ip, int port, const struct timeval tv, int nonblock);
-redisContext *redisConnectUnixWrapper(const char *path, const struct timeval tv, int nonblock);
+valkeyContext *valkeyConnectWrapper(enum valkeyConnectionType ct, const char *ip_or_path, int port, const struct timeval tv, int nonblock, int multipath);
 
 #endif /* __CLICOMMON_H */

@@ -434,7 +434,36 @@ start_server {tags {"pause network"}} {
 
         r client unpause
         assert_equal [r randomkey] {}
+    }
 
+    test "CLIENT UNBLOCK is not allow to unblock client blocked by CLIENT PAUSE" {
+        set rd1 [valkey_deferring_client]
+        set rd2 [valkey_deferring_client]
+        $rd1 client id
+        $rd2 client id
+        set client_id1 [$rd1 read]
+        set client_id2 [$rd2 read]
+
+        r del mylist
+        r client pause 100000 write
+        $rd1 blpop mylist 0
+        $rd2 blpop mylist 0
+        wait_for_blocked_clients_count 2 50 100
+
+        # This used to trigger a panic.
+        assert_equal 0 [r client unblock $client_id1 timeout]
+        # THis used to return a UNBLOCKED error.
+        assert_equal 0 [r client unblock $client_id2 error]
+
+        # After the unpause, it must be able to unblock the client.
+        r client unpause
+        assert_equal 1 [r client unblock $client_id1 timeout]
+        assert_equal 1 [r client unblock $client_id2 error]
+        assert_equal {} [$rd1 read]
+        assert_error "UNBLOCKED*" {$rd2 read}
+
+        $rd1 close
+        $rd2 close
     }
 
     # Make sure we unpause at the end

@@ -949,6 +949,61 @@ start_server {tags {"expire"}} {
             fail "Keys did not actively expire."
         }
     }
+
+    test {Negative ttl will not cause server to crash when import mode is on} {
+        r flushall
+        r config set import-mode yes
+        r set foo bar
+        r expireat foo -1
+        r set foo1 bar
+        r expireat foo1 -10000
+        assert_equal [r dbsize] 2
+        r config set import-mode no
+        wait_for_condition 30 100 {
+            [r dbsize] == 0
+        } else {
+            fail "key wasn't expired"
+        }
+    }
+}
+
+start_server {tags {expire} overrides {hz 100}} {
+    test {Active expiration triggers hashtable shrink} {
+        r debug SET-ACTIVE-EXPIRE 0
+        set persistent_keys 5
+        set volatile_keys 100
+        set total_keys [expr $persistent_keys + $volatile_keys]
+
+        for {set i 0} {$i < $persistent_keys} {incr i} {
+            r set "key_$i" "value_$i"
+        }
+        for {set i 0} {$i < $volatile_keys} {incr i} {
+            r psetex "expire_key_${i}" 100 "expire_value_${i}"
+        }
+        set table_size_before_expire [main_hash_table_size]
+
+        # Verify keys are set
+        assert_equal $total_keys [r dbsize]
+
+        # Wait for active expiration
+        r debug SET-ACTIVE-EXPIRE 1
+        wait_for_condition 100 50 {
+            [r dbsize] eq $persistent_keys
+        } else {
+            fail "Keys not expired"
+        }
+
+        # Wait for the table to shrink and active rehashing finish
+        wait_for_condition 100 50 {
+            [main_hash_table_size] < $table_size_before_expire
+        } else {
+            puts [r debug htstats 9]
+            fail "Table didn't shrink"
+        }
+
+        # Verify server is still responsive
+        assert_equal [r ping] {PONG}
+    } {} {needs:debug}
 }
 
 start_cluster 1 0 {tags {"expire external:skip cluster"}} {
@@ -999,6 +1054,13 @@ start_cluster 1 0 {tags {"expire external:skip cluster"}} {
 
         # Enable resizing
         r debug dict-resizing 1
+
+        # Wait for ongoing rehashing to complete, if any
+        wait_for_condition 100 50 {
+            [dict get [r memory stats] db.dict.rehashing.count] == 0
+        } else {
+            fail "Active rehashing didn't finish"
+        }
 
         # put some data into slot 12182 and trigger the resize
         # by deleting it to trigger shrink

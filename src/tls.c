@@ -33,17 +33,23 @@
 #include "connhelpers.h"
 #include "adlist.h"
 #include "io_threads.h"
+#include "bio.h"
 
-#if (USE_OPENSSL == 1 /* BUILD_YES */) || ((USE_OPENSSL == 2 /* BUILD_MODULE */) && (BUILD_TLS_MODULE == 2))
+#if defined(USE_OPENSSL) &&                    \
+    ((USE_OPENSSL == 1 /* BUILD_YES */) ||     \
+     ((USE_OPENSSL == 2 /* BUILD_MODULE */) && \
+      (defined(BUILD_TLS_MODULE) && BUILD_TLS_MODULE == 2)))
 
 #include <openssl/conf.h>
 #include <openssl/ssl.h>
+#include <openssl/x509.h>
 #include <openssl/err.h>
 #include <openssl/rand.h>
 #include <openssl/pem.h>
 #if OPENSSL_VERSION_NUMBER >= 0x30000000L
 #include <openssl/decoder.h>
 #endif
+#include <sys/stat.h>
 #include <sys/uio.h>
 #include <arpa/inet.h>
 
@@ -280,21 +286,15 @@ error:
     return NULL;
 }
 
-/* Attempt to configure/reconfigure TLS. This operation is atomic and will
- * leave the SSL_CTX unchanged if fails.
- * @priv: config of serverTLSContextConfig.
- * @reconfigure: if true, ignore the previous configure; if false, only
- *               configure from @ctx_config if valkey_tls_ctx is NULL.
- */
-static int tlsConfigure(void *priv, int reconfigure) {
-    serverTLSContextConfig *ctx_config = (serverTLSContextConfig *)priv;
+/* Helper function to create SSL contexts from config.
+ * This does the CPU-intensive work of parsing certificates and creating SSL contexts.
+ * Returns C_OK on success, C_ERR on failure.
+ * On success, *ctx and *client_ctx are set (client_ctx may be NULL).
+ * On failure, both are set to NULL. */
+static int tlsCreateContexts(serverTLSContextConfig *ctx_config, SSL_CTX **out_ctx, SSL_CTX **out_client_ctx) {
     char errbuf[256];
     SSL_CTX *ctx = NULL;
     SSL_CTX *client_ctx = NULL;
-
-    if (!reconfigure && valkey_tls_ctx) {
-        return C_OK;
-    }
 
     if (!ctx_config->cert_file) {
         serverLog(LL_WARNING, "No tls-cert-file configured!");
@@ -402,17 +402,265 @@ static int tlsConfigure(void *priv, int reconfigure) {
         if (!client_ctx) goto error;
     }
 
-    SSL_CTX_free(valkey_tls_ctx);
-    SSL_CTX_free(valkey_tls_client_ctx);
-    valkey_tls_ctx = ctx;
-    valkey_tls_client_ctx = client_ctx;
-
+    *out_ctx = ctx;
+    *out_client_ctx = client_ctx;
     return C_OK;
 
 error:
     if (ctx) SSL_CTX_free(ctx);
     if (client_ctx) SSL_CTX_free(client_ctx);
+    *out_ctx = NULL;
+    *out_client_ctx = NULL;
     return C_ERR;
+}
+
+/* TLS materials metadata for change detection */
+typedef struct {
+    unsigned char cert_fingerprint[EVP_MAX_MD_SIZE];
+    unsigned int cert_fingerprint_len;
+    unsigned char client_cert_fingerprint[EVP_MAX_MD_SIZE];
+    unsigned int client_cert_fingerprint_len;
+    unsigned char ca_cert_fingerprint[EVP_MAX_MD_SIZE];
+    unsigned int ca_cert_fingerprint_len;
+    ino_t ca_cert_dir_inode;
+    time_t ca_cert_dir_mtime;
+    ino_t key_file_inode;
+    time_t key_file_mtime;
+    ino_t client_key_file_inode;
+    time_t client_key_file_mtime;
+} tlsMaterialsMetadata;
+
+/* Pending TLS reload that holds both SSL contexts and their metadata.
+ * Updated serially by BIO thread, applied atomically by main thread. */
+typedef struct {
+    SSL_CTX *ctx;
+    SSL_CTX *client_ctx;
+    tlsMaterialsMetadata metadata;
+} tlsPendingReload;
+
+/* Last known (active) TLS materials metadata */
+static tlsMaterialsMetadata active_metadata = {0};
+
+/* Compute certificate fingerprint from file. */
+static int getCertFingerprint(const char *cert_file, unsigned char *fingerprint, unsigned int *fingerprint_len) {
+    if (!cert_file) return C_ERR;
+
+    FILE *fp = fopen(cert_file, "r");
+    if (!fp) {
+        serverLog(LL_WARNING, "Failed to open certificate file '%s': %s", cert_file, strerror(errno));
+        return C_ERR;
+    }
+
+    X509 *cert = PEM_read_X509(fp, NULL, NULL, NULL);
+    fclose(fp);
+    if (!cert) {
+        serverLog(LL_WARNING, "Failed to parse X509 certificate from '%s'", cert_file);
+        return C_ERR;
+    }
+
+    const EVP_MD *digest = EVP_sha256();
+    if (X509_digest(cert, digest, fingerprint, fingerprint_len) != 1) {
+        serverLog(LL_WARNING, "Failed to compute certificate fingerprint for '%s'", cert_file);
+        X509_free(cert);
+        return C_ERR;
+    }
+
+    X509_free(cert);
+    return C_OK;
+}
+
+/* Capture current metadata from files into a metadata structure. */
+static void captureMetadata(serverTLSContextConfig *ctx_config, tlsMaterialsMetadata *metadata) {
+    memset(metadata, 0, sizeof(*metadata));
+
+    /* Certificate files: fingerprint-based detection */
+    getCertFingerprint(ctx_config->cert_file, metadata->cert_fingerprint, &metadata->cert_fingerprint_len);
+    getCertFingerprint(ctx_config->client_cert_file, metadata->client_cert_fingerprint, &metadata->client_cert_fingerprint_len);
+    getCertFingerprint(ctx_config->ca_cert_file, metadata->ca_cert_fingerprint, &metadata->ca_cert_fingerprint_len);
+
+    /* Key files and CA dir: inode + mtime */
+    struct stat st;
+    if (ctx_config->ca_cert_dir && stat(ctx_config->ca_cert_dir, &st) == 0) {
+        metadata->ca_cert_dir_inode = st.st_ino;
+        metadata->ca_cert_dir_mtime = st.st_mtime;
+    }
+    if (ctx_config->key_file && stat(ctx_config->key_file, &st) == 0) {
+        metadata->key_file_inode = st.st_ino;
+        metadata->key_file_mtime = st.st_mtime;
+    }
+    if (ctx_config->client_key_file && stat(ctx_config->client_key_file, &st) == 0) {
+        metadata->client_key_file_inode = st.st_ino;
+        metadata->client_key_file_mtime = st.st_mtime;
+    }
+}
+
+/* Compare two metadata structures to detect changes. */
+static int metadataChanged(const tlsMaterialsMetadata *old, const tlsMaterialsMetadata *new) {
+    /* Check certificate fingerprints */
+    if (old->cert_fingerprint_len != new->cert_fingerprint_len ||
+        (new->cert_fingerprint_len > 0 && memcmp(old->cert_fingerprint, new->cert_fingerprint, new->cert_fingerprint_len) != 0)) {
+        return 1;
+    }
+
+    if (old->client_cert_fingerprint_len != new->client_cert_fingerprint_len ||
+        (new->client_cert_fingerprint_len > 0 && memcmp(old->client_cert_fingerprint, new->client_cert_fingerprint, new->client_cert_fingerprint_len) != 0)) {
+        return 1;
+    }
+
+    if (old->ca_cert_fingerprint_len != new->ca_cert_fingerprint_len ||
+        (new->ca_cert_fingerprint_len > 0 && memcmp(old->ca_cert_fingerprint, new->ca_cert_fingerprint, new->ca_cert_fingerprint_len) != 0)) {
+        return 1;
+    }
+
+    /* Check inode/mtime */
+    if (old->ca_cert_dir_inode != new->ca_cert_dir_inode || old->ca_cert_dir_mtime != new->ca_cert_dir_mtime) {
+        return 1;
+    }
+    if (old->key_file_inode != new->key_file_inode || old->key_file_mtime != new->key_file_mtime) {
+        return 1;
+    }
+    if (old->client_key_file_inode != new->client_key_file_inode || old->client_key_file_mtime != new->client_key_file_mtime) {
+        return 1;
+    }
+
+    return 0;
+}
+
+
+/* TLS background reload state */
+static _Atomic long long lastTlsConfigureTime = 0;
+static tlsPendingReload pending_reload = {0};
+static pthread_mutex_t pending_reload_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+/* Attempt to configure/reconfigure TLS. This operation is atomic and will
+ * leave the SSL_CTX unchanged if it fails.
+ *
+ * If reconfigure is true, always reconfigure; if false, only configure if
+ * valkey_tls_ctx is NULL.
+ *
+ * If background is true, check for changes and do heavy work in background thread;
+ * if false, do work synchronously and swap immediately.
+ */
+static int tlsConfigure(void *priv, int reconfigure, bool background) {
+    serverTLSContextConfig *ctx_config = (serverTLSContextConfig *)priv;
+    SSL_CTX *ctx = NULL;
+    SSL_CTX *client_ctx = NULL;
+
+    if (!reconfigure && valkey_tls_ctx) {
+        return C_OK;
+    }
+
+    if (reconfigure) {
+        serverLog(LL_DEBUG, background ? "Background TLS reconfiguration started" : "Reconfiguring TLS");
+    } else {
+        serverLog(LL_DEBUG, "Configuring TLS");
+    }
+
+    if (background && reconfigure) {
+        tlsMaterialsMetadata new_metadata;
+        captureMetadata(ctx_config, &new_metadata);
+
+        if (!metadataChanged(&active_metadata, &new_metadata)) {
+            serverLog(LL_DEBUG, "TLS reload skipped: materials unchanged");
+            atomic_store_explicit(&lastTlsConfigureTime, server.ustime, memory_order_relaxed);
+            return C_OK;
+        }
+        serverLog(LL_NOTICE, "TLS materials changed, reloading in background");
+
+        if (tlsCreateContexts(ctx_config, &ctx, &client_ctx) == C_ERR) {
+            serverLog(LL_WARNING, "Background TLS reload failed");
+            return C_ERR;
+        }
+
+        pthread_mutex_lock(&pending_reload_mutex);
+        if (pending_reload.ctx) {
+            SSL_CTX_free(pending_reload.ctx);
+            SSL_CTX_free(pending_reload.client_ctx);
+            serverLog(LL_DEBUG, "Replacing previous pending TLS reload");
+        }
+        pending_reload.ctx = ctx;
+        pending_reload.client_ctx = client_ctx;
+        pending_reload.metadata = new_metadata;
+        pthread_mutex_unlock(&pending_reload_mutex);
+
+        serverLog(LL_DEBUG, "Background TLS reload parsed TLS materials successfully");
+    } else {
+        if (tlsCreateContexts(ctx_config, &ctx, &client_ctx) == C_ERR) {
+            return C_ERR;
+        }
+
+        SSL_CTX_free(valkey_tls_ctx);
+        SSL_CTX_free(valkey_tls_client_ctx);
+        valkey_tls_ctx = ctx;
+        valkey_tls_client_ctx = client_ctx;
+        captureMetadata(ctx_config, &active_metadata);
+    }
+
+    atomic_store_explicit(&lastTlsConfigureTime, server.ustime, memory_order_relaxed);
+    return C_OK;
+}
+
+/* Synchronous TLS configuration - blocks until complete.
+ * Called from CONFIG SET commands and server initialization. */
+static int tlsConfigureSync(void *priv, int reconfigure) {
+    return tlsConfigure(priv, reconfigure, false);
+}
+
+/* Asynchronous TLS configuration - runs in background thread.
+ * Does CPU-intensive certificate loading without blocking main thread.
+ * The main thread will later call tlsApplyPendingReload() to swap in the new contexts. */
+void tlsConfigureAsync(void) {
+    tlsConfigure(&server.tls_ctx_config, 1, true);
+}
+
+/* This function runs in the main thread and applies the TLS contexts
+ * that were prepared by the background thread atomically. This is a quick operation
+ * that just swaps pointers, updates metadata, and frees old contexts. */
+void tlsApplyPendingReload(void) {
+    tlsPendingReload local_pending;
+    pthread_mutex_lock(&pending_reload_mutex);
+    if (!pending_reload.ctx) {
+        pthread_mutex_unlock(&pending_reload_mutex);
+        return;
+    }
+
+    if (!metadataChanged(&active_metadata, &pending_reload.metadata)) {
+        SSL_CTX_free(pending_reload.ctx);
+        SSL_CTX_free(pending_reload.client_ctx);
+        memset(&pending_reload, 0, sizeof(pending_reload));
+        pthread_mutex_unlock(&pending_reload_mutex);
+        serverLog(LL_DEBUG, "Discarding pending TLS reload with unchanged materials");
+        return;
+    }
+
+    local_pending = pending_reload;
+    memset(&pending_reload, 0, sizeof(pending_reload));
+    pthread_mutex_unlock(&pending_reload_mutex);
+
+    SSL_CTX *old_ctx = valkey_tls_ctx;
+    SSL_CTX *old_client_ctx = valkey_tls_client_ctx;
+
+    valkey_tls_ctx = local_pending.ctx;
+    valkey_tls_client_ctx = local_pending.client_ctx;
+
+    active_metadata = local_pending.metadata;
+
+    SSL_CTX_free(old_ctx);
+    SSL_CTX_free(old_client_ctx);
+
+    serverLog(LL_NOTICE, "TLS materials reloaded successfully");
+}
+
+/* Check if it's time to trigger a background TLS reload check. */
+void tlsReconfigureIfNeeded(void) {
+    long long lastConfigureTime = atomic_load_explicit(&lastTlsConfigureTime, memory_order_relaxed);
+    const long long configAgeMicros = server.ustime - lastConfigureTime;
+    const long long configAgeSeconds = (configAgeMicros / 1000) / 1000;
+    if (server.tls_ctx_config.auto_reload_interval == 0 ||
+        configAgeSeconds < server.tls_ctx_config.auto_reload_interval) {
+        return;
+    }
+    bioCreateTlsReloadJob();
 }
 
 static ConnectionType CT_TLS;
@@ -452,6 +700,14 @@ typedef struct tls_connection {
     size_t last_failed_write_data_len;
 } tls_connection;
 
+/* Fetch the latest OpenSSL error and store it in the connection */
+static void updateTLSError(tls_connection *conn) {
+    conn->c.last_errno = 0;
+    if (conn->ssl_error) zfree(conn->ssl_error);
+    conn->ssl_error = zmalloc(512);
+    ERR_error_string_n(ERR_get_error(), conn->ssl_error, 512);
+}
+
 static connection *createTLSConnection(int client_side) {
     SSL_CTX *ctx = valkey_tls_ctx;
     if (client_side && valkey_tls_client_ctx) ctx = valkey_tls_client_ctx;
@@ -460,19 +716,15 @@ static connection *createTLSConnection(int client_side) {
     conn->c.fd = -1;
     conn->c.iovcnt = IOV_MAX;
     conn->ssl = SSL_new(ctx);
+    if (!conn->ssl) {
+        updateTLSError(conn);
+        conn->c.state = CONN_STATE_ERROR;
+    }
     return (connection *)conn;
 }
 
 static connection *connCreateTLS(void) {
     return createTLSConnection(1);
-}
-
-/* Fetch the latest OpenSSL error and store it in the connection */
-static void updateTLSError(tls_connection *conn) {
-    conn->c.last_errno = 0;
-    if (conn->ssl_error) zfree(conn->ssl_error);
-    conn->ssl_error = zmalloc(512);
-    ERR_error_string_n(ERR_get_error(), conn->ssl_error, 512);
 }
 
 /* Create a new TLS connection that is already associated with
@@ -488,13 +740,8 @@ static connection *connCreateAcceptedTLS(int fd, void *priv) {
     int require_auth = *(int *)priv;
     tls_connection *conn = (tls_connection *)createTLSConnection(0);
     conn->c.fd = fd;
+    if (conn->c.state == CONN_STATE_ERROR) return (connection *)conn;
     conn->c.state = CONN_STATE_ACCEPTING;
-
-    if (!conn->ssl) {
-        updateTLSError(conn);
-        conn->c.state = CONN_STATE_ERROR;
-        return (connection *)conn;
-    }
 
     switch (require_auth) {
     case TLS_CLIENT_AUTH_NO: SSL_set_verify(conn->ssl, SSL_VERIFY_NONE, NULL); break;
@@ -677,6 +924,57 @@ static void updateSSLState(connection *conn_) {
     updatePendingData(conn);
 }
 
+static int getCertFieldByName(X509 *cert, const char *field, char *out, size_t outlen) {
+    if (!cert || !field || !out) return 0;
+
+    int nid = -1;
+
+    if (!strcasecmp(field, "CN"))
+        nid = NID_commonName;
+    else if (!strcasecmp(field, "O"))
+        nid = NID_organizationName;
+    /* Add more mappings here as needed */
+
+    if (nid == -1) return 0;
+
+    X509_NAME *subject = X509_get_subject_name(cert);
+    if (!subject) return 0;
+
+    return X509_NAME_get_text_by_NID(subject, nid, out, outlen) > 0;
+}
+
+sds tlsGetPeerUsername(connection *conn_) {
+    tls_connection *conn = (tls_connection *)conn_;
+    if (!conn || !SSL_is_init_finished(conn->ssl)) return NULL;
+
+    /* Find the corresponding field name from the enum mapping */
+    const char *field = NULL;
+    switch (server.tls_ctx_config.client_auth_user) {
+    case TLS_CLIENT_FIELD_CN:
+        field = "CN";
+        break;
+    default:
+        return NULL;
+    }
+
+    if (!field) return NULL;
+
+    X509 *cert = SSL_get_peer_certificate(conn->ssl);
+    if (!cert) return NULL;
+
+    char field_value[256];
+    sds result = NULL;
+
+    if (getCertFieldByName(cert, field, field_value, sizeof(field_value))) {
+        result = sdsnew(field_value);
+    } else {
+        serverLog(LL_NOTICE, "TLS: Failed to extract field '%s' from certificate", field);
+    }
+
+    X509_free(cert);
+    return result;
+}
+
 static void TLSAccept(void *_conn) {
     tls_connection *conn = (tls_connection *)_conn;
     ERR_clear_error();
@@ -789,6 +1087,7 @@ static void tlsAcceptHandler(aeEventLoop *el, int fd, void *privdata, int mask) 
     while (max--) {
         cfd = anetTcpAccept(server.neterr, fd, cip, sizeof(cip), &cport);
         if (cfd == ANET_ERR) {
+            if (anetRetryAcceptOnError(errno)) continue;
             if (errno != EWOULDBLOCK) serverLog(LL_WARNING, "Accepting client connection: %s", server.neterr);
             return;
         }
@@ -985,7 +1284,8 @@ static const char *connTLSGetLastError(connection *conn_) {
     tls_connection *conn = (tls_connection *)conn_;
 
     if (conn->ssl_error) return conn->ssl_error;
-    return NULL;
+    /* If no SSL error is set, return the last errno string. */
+    return strerror(conn_->last_errno);
 }
 
 static int connTLSSetWriteHandler(connection *conn, ConnectionCallbackFunc func, int barrier) {
@@ -1112,9 +1412,7 @@ exit:
     return nread;
 }
 
-static const char *connTLSGetType(connection *conn_) {
-    (void)conn_;
-
+static int connTLSGetType(void) {
     return CONN_TYPE_TLS;
 }
 
@@ -1169,7 +1467,7 @@ static ConnectionType CT_TLS = {
     /* connection type initialize & finalize & configure */
     .init = tlsInit,
     .cleanup = tlsCleanup,
-    .configure = tlsConfigure,
+    .configure = tlsConfigureSync,
 
     /* ae & accept & listen & error & address handler */
     .ae_handler = tlsEventHandler,
@@ -1209,9 +1507,11 @@ static ConnectionType CT_TLS = {
 
     /* TLS specified methods */
     .get_peer_cert = connTLSGetPeerCert,
+    .get_peer_username = tlsGetPeerUsername,
 
     /* Miscellaneous */
     .connIntegrityChecked = connTLSIsIntegrityChecked,
+
 };
 
 int RedisRegisterConnectionTypeTLS(void) {
@@ -1221,13 +1521,13 @@ int RedisRegisterConnectionTypeTLS(void) {
 #else /* USE_OPENSSL */
 
 int RedisRegisterConnectionTypeTLS(void) {
-    serverLog(LL_VERBOSE, "Connection type %s not builtin", CONN_TYPE_TLS);
+    serverLog(LL_VERBOSE, "Connection type %s not builtin", getConnectionTypeName(CONN_TYPE_TLS));
     return C_ERR;
 }
 
 #endif
 
-#if BUILD_TLS_MODULE == 2 /* BUILD_MODULE */
+#if defined(BUILD_TLS_MODULE) && BUILD_TLS_MODULE == 2 /* BUILD_MODULE */
 
 #include "release.h"
 
@@ -1237,7 +1537,7 @@ int ValkeyModule_OnLoad(void *ctx, ValkeyModuleString **argv, int argc) {
 
     /* Connection modules must be part of the same build as the server. */
     if (strcmp(REDIS_BUILD_ID_RAW, serverBuildIdRaw())) {
-        serverLog(LL_NOTICE, "Connection type %s was not built together with the valkey-server used.", CONN_TYPE_TLS);
+        serverLog(LL_NOTICE, "Connection type %s was not built together with the valkey-server used.", getConnectionTypeName(CONN_TYPE_TLS));
         return VALKEYMODULE_ERR;
     }
 
@@ -1245,11 +1545,11 @@ int ValkeyModule_OnLoad(void *ctx, ValkeyModuleString **argv, int argc) {
 
     /* Connection modules is available only bootup. */
     if ((ValkeyModule_GetContextFlags(ctx) & VALKEYMODULE_CTX_FLAGS_SERVER_STARTUP) == 0) {
-        serverLog(LL_NOTICE, "Connection type %s can be loaded only during bootup", CONN_TYPE_TLS);
+        serverLog(LL_NOTICE, "Connection type %s can be loaded only during bootup", getConnectionTypeName(CONN_TYPE_TLS));
         return VALKEYMODULE_ERR;
     }
 
-    ValkeyModule_SetModuleOptions(ctx, VALKEYMODULE_OPTIONS_HANDLE_REPL_ASYNC_LOAD);
+    ValkeyModule_SetModuleOptions(ctx, VALKEYMODULE_OPTIONS_HANDLE_REPL_ASYNC_LOAD | VALKEYMODULE_OPTIONS_HANDLE_ATOMIC_SLOT_MIGRATION);
 
     if (connTypeRegister(&CT_TLS) != C_OK) return VALKEYMODULE_ERR;
 
@@ -1258,7 +1558,7 @@ int ValkeyModule_OnLoad(void *ctx, ValkeyModuleString **argv, int argc) {
 
 int ValkeyModule_OnUnload(void *arg) {
     UNUSED(arg);
-    serverLog(LL_NOTICE, "Connection type %s can not be unloaded", CONN_TYPE_TLS);
+    serverLog(LL_NOTICE, "Connection type %s can not be unloaded", getConnectionTypeName(CONN_TYPE_TLS));
     return VALKEYMODULE_ERR;
 }
 #endif

@@ -36,7 +36,7 @@ ifneq ($(shell sh -c '[ -f .make-ldflags ] && cat .make-ldflags || echo none'), 
 endif
 
 distclean:
-	-(cd hiredis && $(MAKE) clean) > /dev/null || true
+	-(cd libvalkey && $(MAKE) clean) > /dev/null || true
 	-(cd linenoise && $(MAKE) clean) > /dev/null || true
 	-(cd lua && $(MAKE) clean) > /dev/null || true
 	-(cd jemalloc && [ -f Makefile ] && $(MAKE) distclean) > /dev/null || true
@@ -47,15 +47,20 @@ distclean:
 
 .PHONY: distclean
 
+LIBVALKEY_MAKE_FLAGS = SDS_INCLUDE_DIR=../../src/ DICT_INCLUDE_DIR=../../src/
 ifneq (,$(filter $(BUILD_TLS),yes module))
-    HIREDIS_MAKE_FLAGS = USE_SSL=1
+    LIBVALKEY_MAKE_FLAGS += USE_TLS=1
 endif
 
-hiredis: .make-prerequisites
-	@printf '%b %b\n' $(MAKECOLOR)MAKE$(ENDCOLOR) $(BINCOLOR)$@$(ENDCOLOR)
-	cd hiredis && $(MAKE) static $(HIREDIS_MAKE_FLAGS)
+ifneq (,$(filter $(BUILD_RDMA),yes module))
+    LIBVALKEY_MAKE_FLAGS += USE_RDMA=1
+endif
 
-.PHONY: hiredis
+libvalkey: .make-prerequisites
+	@printf '%b %b\n' $(MAKECOLOR)MAKE$(ENDCOLOR) $(BINCOLOR)$@$(ENDCOLOR)
+	cd libvalkey && $(MAKE) static $(LIBVALKEY_MAKE_FLAGS)
+
+.PHONY: libvalkey
 
 linenoise: .make-prerequisites
 	@printf '%b %b\n' $(MAKECOLOR)MAKE$(ENDCOLOR) $(BINCOLOR)$@$(ENDCOLOR)
@@ -71,7 +76,7 @@ hdr_histogram: .make-prerequisites
 
 fpconv: .make-prerequisites
 	@printf '%b %b\n' $(MAKECOLOR)MAKE$(ENDCOLOR) $(BINCOLOR)$@$(ENDCOLOR)
-	cd fpconv && $(MAKE)
+	cd fpconv && $(MAKE) CFLAGS="-fPIC $(CFLAGS)"
 
 .PHONY: fpconv
 
@@ -80,12 +85,12 @@ ifeq ($(uname_S),SunOS)
 	LUA_CFLAGS= -D__C99FEATURES__=1
 endif
 
-LUA_CFLAGS+= -Wall -DLUA_ANSI -DENABLE_CJSON_GLOBAL -DLUA_USE_MKSTEMP $(CFLAGS)
+LUA_CFLAGS+= -Wall -DLUA_ANSI -DENABLE_CJSON_GLOBAL -DLUA_USE_MKSTEMP $(CFLAGS) -fPIC
 LUA_LDFLAGS+= $(LDFLAGS)
 ifeq ($(LUA_DEBUG),yes)
 	LUA_CFLAGS+= -O0 -g -DLUA_USE_APICHECK
 else
-	LUA_CFLAGS+= -O2 
+	LUA_CFLAGS+= -O2
 endif
 ifeq ($(LUA_COVERAGE),yes)
 	LUA_CFLAGS += -fprofile-arcs -ftest-coverage

@@ -26,7 +26,6 @@ start_server {tags {"commandlog"} overrides {commandlog-execution-slower-than 10
         r set testkey $value
         assert_equal [r commandlog len large-request] 1
 
-        # for large-reply
         r config set commandlog-reply-larger-than 1024
         r ping
         assert_equal [r commandlog len large-reply] 0
@@ -119,7 +118,11 @@ start_server {tags {"commandlog"} overrides {commandlog-execution-slower-than 10
         assert_equal [lindex $e 3] {set testkey {AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA... (896 more bytes)}}
         assert_equal {foobar} [lindex $e 5]
 
-        # for large-reply
+        # for large-reply - without reply copy avoidance
+        set copy_avoid [lindex [r config get min-string-size-avoid-copy-reply] 1]
+        if {!$::external} {
+            assert_morethan $copy_avoid 1024
+        }
         r get testkey
         set e [lindex [r commandlog get -1 large-reply] 0]
         assert_equal [llength $e] 6
@@ -129,7 +132,22 @@ start_server {tags {"commandlog"} overrides {commandlog-execution-slower-than 10
         assert_equal [expr {[lindex $e 2] > 1024}] 1
         assert_equal [lindex $e 3] {get testkey}
         assert_equal {foobar} [lindex $e 5]
-    } {} {needs:debug}
+
+        # for large-reply - with reply copy avoidance
+        # set min-string-size-avoid-copy-reply to 1 so wo will use reply copy avoidance
+        r config set min-string-size-avoid-copy-reply 1
+        r get testkey
+        set e [lindex [r commandlog get -1 large-reply] 0]
+        assert_equal [llength $e] 6
+        if {!$::external} {
+            assert_equal [lindex $e 0] 118
+        }
+        assert_equal [expr {[lindex $e 2] > 1024}] 1
+        assert_equal [lindex $e 3] {get testkey}
+        assert_equal {foobar} [lindex $e 5]
+        # Restore min-string-size-avoid-copy-reply value
+        r config set min-string-size-avoid-copy-reply $copy_avoid
+    } {OK} {needs:debug}
 
     test {COMMANDLOG slow - Certain commands are omitted that contain sensitive information} {
         r config set commandlog-slow-execution-max-len 100

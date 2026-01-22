@@ -10,6 +10,10 @@ proc fail {msg} {
     error "assertion:$msg"
 }
 
+proc skip {msg} {
+    error "skipped:$msg"
+}
+
 proc assert {condition} {
     if {![uplevel 1 [list expr $condition]]} {
         set context "(context: [info frame -1])"
@@ -210,6 +214,7 @@ proc test {name code {okpattern undefined} {tags {}}} {
         return
     }
 
+    set old_singledb $::singledb
     set tags [concat $::tags $tags]
     if {![tags_acceptable $tags err]} {
         incr ::num_aborted
@@ -217,6 +222,9 @@ proc test {name code {okpattern undefined} {tags {}}} {
         return
     }
 
+    if {[lsearch $tags singledb] >= 0} {
+        set ::singledb 1
+    }
     incr ::num_tests
     set details {}
     lappend details "$name in $::curfile"
@@ -252,7 +260,12 @@ proc test {name code {okpattern undefined} {tags {}}} {
     set test_start_time [clock milliseconds]
     if {[catch {set retval [uplevel 1 $code]} error]} {
         set assertion [string match "assertion:*" $error]
-        if {$assertion || $::durable} {
+        set skip [string match "skipped:*" $error]
+        if {$skip} {
+            incr ::num_skipped
+            set msg [string range $error 8 end]
+            send_data_packet $::test_server_fd skip "$::cur_test: $msg"
+        } elseif {$assertion || $::durable} {
             # durable prevents the whole tcl test from exiting on an exception.
             # an assertion is handled gracefully anyway.
             set msg [string range $error 10 end]
@@ -300,5 +313,6 @@ proc test {name code {okpattern undefined} {tags {}}} {
             send_data_packet $::test_server_fd err "Detected a memory leak in test '$name': $output"
         }
     }
+    set ::singledb $old_singledb
     set ::cur_test $prev_test
 }

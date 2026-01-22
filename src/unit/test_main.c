@@ -9,10 +9,13 @@
 #include <stdio.h>
 #include "test_files.h"
 #include "test_help.h"
+#include "../fmacros.h"
 #include "../util.h"
 #include "../mt19937-64.h"
 #include "../hashtable.h"
 #include "../zmalloc.h"
+
+int failed_expects;
 
 /* We override the default assertion mechanism, so that it prints out info and then dies. */
 void _serverAssert(const char *estr, const char *file, int line) {
@@ -24,12 +27,14 @@ void _serverAssert(const char *estr, const char *file, int line) {
 int runTestSuite(struct unitTestSuite *test, int argc, char **argv, int flags) {
     int test_num = 0;
     int failed_tests = 0;
+    size_t used_mem_before = zmalloc_used_memory();
     printf("[" KBLUE "START" KRESET "] - %s\n", test->filename);
 
     for (int id = 0; test->tests[id].proc != NULL; id++) {
         test_num++;
-        int test_result = (test->tests[id].proc(argc, argv, flags) != 0);
-        if (!test_result) {
+        failed_expects = 0;
+        int test_result = test->tests[id].proc(argc, argv, flags);
+        if (!test_result && !failed_expects) {
             printf("[" KGRN "ok" KRESET "] - %s:%s\n", test->filename, test->tests[id].name);
         } else {
             printf("[" KRED "fail" KRESET "] - %s:%s\n", test->filename, test->tests[id].name);
@@ -38,8 +43,11 @@ int runTestSuite(struct unitTestSuite *test, int argc, char **argv, int flags) {
     }
 
     /* Check if the test suite has cleaned up all the memory used. */
-    if (zmalloc_used_memory() > 0) {
-        printf("[" KRED "%s" KRESET "] Memory leak detected of %zu bytes\n", test->filename, zmalloc_used_memory());
+    test_num++;
+    if (zmalloc_used_memory() != used_mem_before) {
+        printf("[" KRED "%s" KRESET "] Memory leak detected of %lld bytes\n",
+               test->filename,
+               (long long)zmalloc_used_memory() - (long long)used_mem_before);
         failed_tests++;
     }
 

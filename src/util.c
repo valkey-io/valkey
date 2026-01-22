@@ -52,10 +52,11 @@
 #include "config.h"
 #include "zmalloc.h"
 #include "serverassert.h"
-
 #include "valkey_strtod.h"
 
-#define UNUSED(x) ((void)(x))
+#if HAVE_X86_SIMD
+#include <immintrin.h>
+#endif
 
 /* Glob-style pattern matching. */
 static int stringmatchlen_impl(const char *pattern,
@@ -193,6 +194,20 @@ int stringmatchlen(const char *pattern, int patternLen, const char *string, int 
 
 int stringmatch(const char *pattern, const char *string, int nocase) {
     return stringmatchlen(pattern, strlen(pattern), string, strlen(string), nocase);
+}
+
+int prefixmatchlen(const char *pattern, int patternLen, const char *string, int stringLen, int nocase) {
+    if (patternLen == 1 && pattern[0] == '*') {
+        /* Minor optimization: fast path: avoid calling "stringmatchlen" if the input pattern is exactly "*":
+         * We always return 1 in this case. */
+        return 1;
+    } else if (patternLen > 0 && pattern[patternLen - 1] != '*') {
+        /* Reject the pattern if it doesn't end with '*' */
+        return 0;
+    } else {
+        /* Call existing string match algorithm */
+        return stringmatchlen(pattern, patternLen, string, stringLen, nocase);
+    }
 }
 
 /* Fuzz stringmatchlen() trying to crash it with bad input. */
@@ -415,6 +430,133 @@ err:
     return 0;
 }
 
+#if HAVE_X86_SIMD
+
+#define MULTIPLIER_10E8 100000000
+#define MULTIPLIER_10E16 10000000000000000ULL
+
+/**
+ * Convert a string into an signed 64-bit integer using AVX-512 instructions.
+ *
+ * This function parses a string of digits and converts it into an signed
+ * 64-bit integer. It leverages AVX-512 SIMD instructions for optimized
+ * processing and performs strict validation to ensure the input string
+ * represents a valid signed integer.
+ *
+ * Notes:
+ * - The input string must not contain leading zeros unless it is "0".
+ * - The function checks for overflow and returns 0 if the result exceeds
+ *   the maximum value of LLONG_MAX.
+ * - This function requires AVX-512 support and will only be compiled if
+ *   `HAVE_X86_SIMD` is defined.
+ *
+ * Example:
+ * Input: s = "1234567890", slen = 10
+ * Steps:
+ * 1. Load the string into SIMD registers and subtract '0' from each character
+ *    to convert ASCII digits to integers.
+ *    Format (32 bytes, 8 bits each):
+ *      0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1 2 3 4 5 6 7 8 9 0
+ * 2. Validate that all characters are digits (0-9).
+ * 3. Multiply by 10 and horizontally add adjacent pairs of intermediate values.
+ *    Format (16 bytes, 8 bits each):
+ *      00 00 00 00 00 00 00 00 00 00 00 12 34 56 78 90
+ * 4. Multiply by 100 and horizontally add adjacent pairs of intermediate values.
+ *    Format (8 bytes, 16 bits each):
+ *      0000 0000 0000 0000 0000 0012 3456 7890
+ * 5. Multiply by 10000 and horizontally add adjacent pairs of intermediate values.
+ *    Format (4 bytes, 32 bits each):
+ *      00000000 00000000 00000012 34567890
+ * 6. Extract the final value.
+ * Output: *value = 1234567890
+ */
+ATTRIBUTE_TARGET_AVX512
+static int string2llAVX512(const char *s, size_t slen, long long *value) {
+    const char *p = s;
+    unsigned long plen = 0;
+    int negative = 0;
+
+    /* Abort if length indicates this cannot possibly be an int */
+    if (slen == 0 || slen >= LONG_STR_SIZE) return 0;
+
+    /* Special case: first and only digit is 0. Also handle single-digit 1-9 here. */
+    if (slen == 1 && p[0] >= '0' && p[0] <= '9') {
+        if (value != NULL) *value = p[0] - '0';
+        return 1;
+    }
+
+    if (p[0] == '-') {
+        negative = 1;
+        p++;
+        plen++;
+
+        /* Abort on only a negative sign. */
+        if (plen == slen) return 0;
+    }
+
+    /* If first digit is 0, the string should just be 0. */
+    if (unlikely(p[0] == '0')) {
+        return 0;
+    }
+
+    const __m256i ascii0 = _mm256_set1_epi8('0');
+    const __m256i nine = _mm256_set1_epi8(9);
+    uint32_t mask = (uint32_t)(0xFFFFFFFF << (32 - slen + plen));
+    __m256i input = _mm256_maskz_loadu_epi8(mask, s + slen - 32);
+    /* Load the string into SIMD registers and subtract '0' to convert ASCII to integers */
+    __m256i ascii_digits = _mm256_maskz_sub_epi8(mask, input, ascii0);
+    /* Validate that all characters are digits (0-9) */
+    uint32_t nondigits = _mm256_mask_cmpgt_epu8_mask(mask, ascii_digits, nine);
+    if (nondigits) {
+        return 0;
+    }
+
+    const __m256i mul_1_10 = _mm256_set_epi8(1, 10, 1, 10, 1, 10, 1, 10, 1, 10, 1, 10, 1, 10, 1, 10, 1, 10, 1, 10, 1, 10, 1, 10, 1, 10, 1, 10, 1, 10, 1, 10);
+    /* Multiply by 10 and horizontally add adjacent pairs of intermediate values. */
+    __m256i multiplied_by_10 = _mm256_maddubs_epi16(ascii_digits, mul_1_10);
+    __m128i reduced_to_16bit = _mm256_cvtepi16_epi8(multiplied_by_10);
+
+    const __m128i mul_1_100 = _mm_set_epi8(1, 100, 1, 100, 1, 100, 1, 100, 1, 100, 1, 100, 1, 100, 1, 100);
+    /* Multiply by 100 and horizontally add adjacent pairs of intermediate values. */
+    __m128i multiplied_by_100 = _mm_maddubs_epi16(reduced_to_16bit, mul_1_100);
+
+    const __m128i mul_1_10000 = _mm_set_epi16(1, 10000, 1, 10000, 1, 10000, 1, 10000);
+    /* Multiply by 10000 and horizontally add adjacent pairs of intermediate values. */
+    __m128i multiplied_by_10000 = _mm_madd_epi16(multiplied_by_100, mul_1_10000);
+    uint64_t low = (uint64_t)_mm_extract_epi32(multiplied_by_10000, 3);
+    if ((mask & 0xFFFFFF) == 0) {
+        if (value != NULL) *value = negative ? -low : low;
+        return 1;
+    }
+
+    uint64_t middle = (uint64_t)_mm_extract_epi32(multiplied_by_10000, 2);
+    uint64_t middle_low = low + MULTIPLIER_10E8 * middle;
+    if ((mask & 0xFFFF) == 0) {
+        if (value != NULL) *value = negative ? -middle_low : middle_low;
+        return 1;
+    }
+
+    uint64_t high = (uint64_t)_mm_extract_epi32(multiplied_by_10000, 1);
+    uint64_t result = middle_low + MULTIPLIER_10E16 * high;
+    /* ULONG_MAX = 18446744073709551615 */
+    if (high > 1844 || result < middle_low) { /* Overflow. */
+        return 0;
+    }
+    /* Convert to negative if needed, and do the final overflow check when
+     * converting from unsigned long long to long long. */
+    if (negative) {
+        if (result > ((unsigned long long)(-(LLONG_MIN + 1)) + 1)) /* Overflow. */
+            return 0;
+        if (value != NULL) *value = -result;
+    } else {
+        if (result > LLONG_MAX) /* Overflow. */
+            return 0;
+        if (value != NULL) *value = result;
+    }
+    return 1;
+}
+#endif
+
 /* Convert a string into a long long. Returns 1 if the string could be parsed
  * into a (non-overflowing) long long, 0 otherwise. The value will be set to
  * the parsed value when appropriate.
@@ -427,7 +569,7 @@ err:
  * Because of its strictness, it is safe to use this function to check if
  * you can convert a string into a long long, and obtain back the string
  * from the number without any loss in the string representation. */
-int string2ll(const char *s, size_t slen, long long *value) {
+static int string2llScalar(const char *s, size_t slen, long long *value) {
     const char *p = s;
     size_t plen = 0;
     int negative = 0;
@@ -436,9 +578,9 @@ int string2ll(const char *s, size_t slen, long long *value) {
     /* A string of zero length or excessive length is not a valid number. */
     if (plen == slen || slen >= LONG_STR_SIZE) return 0;
 
-    /* Special case: first and only digit is 0. */
-    if (slen == 1 && p[0] == '0') {
-        if (value != NULL) *value = 0;
+    /* Special case: first and only digit is 0. Also handle single-digit 1-9 here. */
+    if (slen == 1 && p[0] >= '0' && p[0] <= '9') {
+        if (value != NULL) *value = p[0] - '0';
         return 1;
     }
 
@@ -492,6 +634,32 @@ int string2ll(const char *s, size_t slen, long long *value) {
     }
     return 1;
 }
+
+#if HAVE_IFUNC && HAVE_X86_SIMD
+__attribute__((no_sanitize_address, used)) static int (*string2ll_resolver(void))(const char *, size_t, long long *) {
+    /* Ifunc resolvers run before ASan initialization and before CPU detection
+     * is initialized, so disable ASan and init CPU detection here. */
+    __builtin_cpu_init();
+    if (__builtin_cpu_supports("avx512f") &&
+        __builtin_cpu_supports("avx512vl") &&
+        __builtin_cpu_supports("avx512bw"))
+        return string2llAVX512;
+    return string2llScalar;
+}
+
+int string2ll(const char *s, size_t slen, long long *value)
+    __attribute__((ifunc("string2ll_resolver")));
+#else
+int string2ll(const char *s, size_t slen, long long *value) {
+#if HAVE_X86_SIMD
+    if (__builtin_cpu_supports("avx512f") &&
+        __builtin_cpu_supports("avx512vl") &&
+        __builtin_cpu_supports("avx512bw"))
+        return string2llAVX512(s, slen, value);
+#endif
+    return string2llScalar(s, slen, value);
+}
+#endif /* HAVE_IFUNC && HAVE_X86_SIMD */
 
 /* Helper function to convert a string to an unsigned long long value.
  * The function attempts to use the faster string2ll() function inside
@@ -882,6 +1050,21 @@ err:
     if (len > 0) buf[0] = '\0';
     return 0;
 }
+
+/* Populate the provided seed array by hashing the provided string with SHA256
+ * and copying the first outlen bytes of the digest into the seed buffer. */
+void getHashSeedFromString(unsigned char *seed_array, size_t outlen, const char *value) {
+    SHA256_CTX ctx;
+    unsigned char digest[SHA256_BLOCK_SIZE];
+
+    sha256_init(&ctx);
+    sha256_update(&ctx, (const BYTE *)value, strlen(value));
+    sha256_final(&ctx, digest);
+
+    if (outlen > SHA256_BLOCK_SIZE) outlen = SHA256_BLOCK_SIZE;
+    memcpy(seed_array, digest, outlen);
+}
+
 
 /* Parses a version string on the form "major.minor.patch" and returns an
  * integer on the form 0xMMmmpp. Returns -1 on parse error. */
@@ -1412,4 +1595,51 @@ int snprintf_async_signal_safe(char *to, size_t n, const char *fmt, ...) {
     result = vsnprintf_async_signal_safe(to, n, fmt, args);
     va_end(args);
     return result;
+}
+
+/* Return the UNIX time in microseconds */
+long long ustime(void) {
+    struct timeval tv;
+    long long ust;
+
+    gettimeofday(&tv, NULL);
+    ust = ((long long)tv.tv_sec) * 1000000;
+    ust += tv.tv_usec;
+    return ust;
+}
+
+/* Return the UNIX time in milliseconds */
+mstime_t mstime(void) {
+    return ustime() / 1000;
+}
+
+/* Writes a pointer into an 8 bytes field, padding with zeros on 32bit targets
+ * to ensure a consistent fixed width encoding. */
+void writePointerWithPadding(unsigned char *buf, const void *ptr) {
+    size_t ptr_size = sizeof(ptr); /* 4 on 32‑bit, 8 on 64‑bit */
+    memcpy(buf, &ptr, ptr_size);
+    /* if it is 32-bit system, pad the remaining 4 bytes with zero */
+    if (ptr_size == 4) memset(buf + ptr_size, 0, ptr_size);
+}
+
+/*
+ * Escape a Unicode string for JSON output, following RFC 7159:
+ * https://datatracker.ietf.org/doc/html/rfc7159#section-7
+ */
+sds escapeJsonString(sds s, const char *p, size_t len) {
+    s = sdscatlen(s, "\"", 1);
+    while (len--) {
+        switch (*p) {
+        case '\\':
+        case '"': s = sdscatprintf(s, "\\%c", *p); break;
+        case '\n': s = sdscatlen(s, "\\n", 2); break;
+        case '\f': s = sdscatlen(s, "\\f", 2); break;
+        case '\r': s = sdscatlen(s, "\\r", 2); break;
+        case '\t': s = sdscatlen(s, "\\t", 2); break;
+        case '\b': s = sdscatlen(s, "\\b", 2); break;
+        default: s = sdscatprintf(s, *(unsigned char *)p <= 0x1f ? "\\u%04x" : "%c", *p);
+        }
+        p++;
+    }
+    return sdscatlen(s, "\"", 1);
 }

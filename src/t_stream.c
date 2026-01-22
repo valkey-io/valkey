@@ -2275,7 +2275,7 @@ void xreadCommand(client *c) {
                                  "just return an empty result set.");
                 goto cleanup;
             }
-            if (o) {
+            if (o && ((stream *)(o->ptr))->length) {
                 stream *s = o->ptr;
                 ids[id_idx] = s->last_id;
                 if (streamDecrID(&ids[id_idx]) != C_OK) {

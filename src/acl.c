@@ -2435,7 +2435,7 @@ static int ACLLoadConfiguredUsers(void) {
  *
  *  user <username> ... rules ...
  *
- * Any line starting with # is ignored as a comment. 
+ * Any line starting with # is ignored as a comment.
  * Comments will not be preserved after an ACL SAVE. Empty lines are allowed.
  *
  * One important part of implementing ACL LOAD, that uses this function, is

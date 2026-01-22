@@ -83,7 +83,6 @@ start_server {tags {"modules"}} {
         assert_equal {300} [llength $reply]
         foreach pair $reply {
             assert_equal {2} [llength $pair]
-            
         }
     }
 

@@ -1259,7 +1259,6 @@ start_server [list overrides [list "dir" $server_path "aclfile" "user.acl"] tags
         exec cp -f tests/assets/user.acl $server_path
 
         # Add comments to the ACL file
-        # set acl_content "# Initial comment at the top of the file user alice on allcommands allkeys &* >alice\n# Comment placed between user definitions user bob on -@all +@set +acl ~set* &* >bob\n\n# Comment following an empty line user doug on resetchannels &test +@all ~* >doug user default on nopass ~* &* +@all\n# Final comment at the bottom"
         set acl_content "# This is a comment at the beginning\nuser alice on allcommands allkeys &* >alice\n# Comment between users\nuser bob on -@all +@set +acl ~set* &* >bob\n\n# Comment with blank line above\nuser doug on resetchannels &test +@all ~* >doug\nuser default on nopass ~* &* +@all\n# Comment at the end"
         set fd [open $server_path/user.acl w]
         puts $fd $acl_content

@@ -214,17 +214,11 @@ sds activeDefragSds(sds sdsptr) {
 static robj *activeDefragStringObWithoutFree(robj *ob, size_t *allocation_size) {
     if (ob->type == OBJ_STRING && ob->encoding == OBJ_ENCODING_RAW) {
         // Try to defrag the linked sds, regardless of if robj will be moved
-        sds newsds = activeDefragSds((sds)ob->ptr);
-        if (newsds) ob->ptr = newsds;
+        sds newsds = activeDefragSds((sds)objectGetVal(ob));
+        if (newsds) objectSetVal(ob, newsds);
     }
 
     robj *new_robj = activeDefragAllocWithoutFree(ob, allocation_size);
-
-    if (new_robj && ob->type == OBJ_STRING && ob->encoding == OBJ_ENCODING_EMBSTR) {
-        // If the robj is moved, correct the internal pointer
-        long embstr_offset = (intptr_t)ob->ptr - (intptr_t)ob;
-        new_robj->ptr = (void *)((intptr_t)new_robj + embstr_offset);
-    }
     return new_robj;
 }
 
@@ -371,7 +365,7 @@ static void defragLater(robj *obj) {
 
 /* returns 0 if no more work needs to be been done, and 1 if time is up and more work is needed. */
 static long scanLaterList(robj *ob, unsigned long *cursor, monotime endtime) {
-    quicklist *ql = ob->ptr;
+    quicklist *ql = objectGetVal(ob);
     quicklistNode *node;
     serverAssert(ob->type == OBJ_LIST && ob->encoding == OBJ_ENCODING_QUICKLIST);
 
@@ -395,7 +389,7 @@ static long scanLaterList(robj *ob, unsigned long *cursor, monotime endtime) {
         /* Check time limit after processing each node */
         if (getMonotonicUs() > endtime) {
             if (quicklistBookmarkCreate(&ql, "_AD", node)) {
-                ob->ptr = ql; /* bookmark creation may have re-allocated the quicklist */
+                objectSetVal(ob, ql); /* bookmark creation may have re-allocated the quicklist */
                 (*cursor)++;
                 return 1;
             }
@@ -417,7 +411,7 @@ static void scanLaterZsetCallback(void *privdata, void *element_ref) {
 
 static void scanLaterZset(robj *ob, unsigned long *cursor) {
     serverAssert(ob->type == OBJ_ZSET && ob->encoding == OBJ_ENCODING_SKIPLIST);
-    zset *zs = (zset *)ob->ptr;
+    zset *zs = (zset *)objectGetVal(ob);
     *cursor = hashtableScanDefrag(zs->ht, *cursor, scanLaterZsetCallback, zs->zsl, activeDefragAlloc, HASHTABLE_SCAN_EMIT_REF);
 }
 
@@ -431,7 +425,7 @@ static void scanHashtableCallbackCountScanned(void *privdata, void *elemref) {
 
 static void scanLaterSet(robj *ob, unsigned long *cursor) {
     serverAssert(ob->type == OBJ_SET && ob->encoding == OBJ_ENCODING_HASHTABLE);
-    hashtable *ht = ob->ptr;
+    hashtable *ht = objectGetVal(ob);
     *cursor = hashtableScanDefrag(ht, *cursor, activeDefragSdsHashtableCallback, NULL, activeDefragAlloc, HASHTABLE_SCAN_EMIT_REF);
 }
 
@@ -441,9 +435,12 @@ static void scanLaterHash(robj *ob, unsigned long *cursor) {
 }
 
 static void defragQuicklist(robj *ob) {
-    quicklist *ql = ob->ptr, *newql;
+    quicklist *ql = objectGetVal(ob), *newql;
     serverAssert(ob->type == OBJ_LIST && ob->encoding == OBJ_ENCODING_QUICKLIST);
-    if ((newql = activeDefragAlloc(ql))) ob->ptr = ql = newql;
+    if ((newql = activeDefragAlloc(ql))) {
+        objectSetVal(ob, newql);
+        ql = newql;
+    }
     if (ql->len > server.active_defrag_max_scan_fields)
         defragLater(ob);
     else
@@ -452,12 +449,15 @@ static void defragQuicklist(robj *ob) {
 
 static void defragZsetSkiplist(robj *ob) {
     serverAssert(ob->type == OBJ_ZSET && ob->encoding == OBJ_ENCODING_SKIPLIST);
-    zset *zs = (zset *)ob->ptr;
+    zset *zs = (zset *)objectGetVal(ob);
 
     zset *newzs;
     zskiplist *newzsl;
     struct zskiplistNode *newheader;
-    if ((newzs = activeDefragAlloc(zs))) ob->ptr = zs = newzs;
+    if ((newzs = activeDefragAlloc(zs))) {
+        objectSetVal(ob, newzs);
+        zs = newzs;
+    }
     if ((newzsl = activeDefragAlloc(zs->zsl))) zs->zsl = newzsl;
     if ((newheader = activeDefragAlloc(zs->zsl->header))) zs->zsl->header = newheader;
 
@@ -480,7 +480,7 @@ static void defragZsetSkiplist(robj *ob) {
  * Smaller ones are defragmented immediately, possibly over multiple passes.
  * Listpack-encoded hashes are always handled in a single pass. */
 static void defragHash(robj *ob) {
-    hashtable *ht = ob->ptr;
+    hashtable *ht = objectGetVal(ob);
     if (ob->encoding == OBJ_ENCODING_HASHTABLE && hashtableSize(ht) > server.active_defrag_max_scan_fields) {
         /* Large hashtable-encoded hashes are deferred via `defrag_later` */
         defragLater(ob);
@@ -496,7 +496,7 @@ static void defragHash(robj *ob) {
 
 static void defragSet(robj *ob) {
     serverAssert(ob->type == OBJ_SET && ob->encoding == OBJ_ENCODING_HASHTABLE);
-    hashtable *ht = ob->ptr;
+    hashtable *ht = objectGetVal(ob);
     if (hashtableSize(ht) > server.active_defrag_max_scan_fields) {
         defragLater(ob);
     } else {
@@ -507,7 +507,7 @@ static void defragSet(robj *ob) {
     }
     /* defrag the hashtable struct and tables */
     hashtable *new_hashtable = hashtableDefragTables(ht, activeDefragAlloc);
-    if (new_hashtable) ob->ptr = new_hashtable;
+    if (new_hashtable) objectSetVal(ob, new_hashtable);
 }
 
 /* Defrag callback for radix tree iterator, called for each node,
@@ -528,7 +528,7 @@ static int scanLaterStreamListpacks(robj *ob, unsigned long *cursor, monotime en
     long iterations = 0;
     serverAssert(ob->type == OBJ_STREAM && ob->encoding == OBJ_ENCODING_STREAM);
 
-    stream *s = ob->ptr;
+    stream *s = objectGetVal(ob);
     raxStart(&ri, s->rax);
     if (*cursor == 0) {
         /* if cursor is 0, we start new iteration */
@@ -640,10 +640,13 @@ static void *defragStreamConsumerGroup(raxIterator *ri, void *privdata) {
 
 static void defragStream(robj *ob) {
     serverAssert(ob->type == OBJ_STREAM && ob->encoding == OBJ_ENCODING_STREAM);
-    stream *s = ob->ptr, *news;
+    stream *s = objectGetVal(ob), *news;
 
     /* handle the main struct */
-    if ((news = activeDefragAlloc(s))) ob->ptr = s = news;
+    if ((news = activeDefragAlloc(s))) {
+        objectSetVal(ob, news);
+        s = news;
+    }
 
     if (raxSize(s->rax) > server.active_defrag_max_scan_fields) {
         rax *newrax = activeDefragAlloc(s->rax);
@@ -704,7 +707,7 @@ static void defragKey(defragKeysCtx *ctx, robj **elemref) {
         if (ob->encoding == OBJ_ENCODING_QUICKLIST) {
             defragQuicklist(ob);
         } else if (ob->encoding == OBJ_ENCODING_LISTPACK) {
-            if ((newzl = activeDefragAlloc(ob->ptr))) ob->ptr = newzl;
+            if ((newzl = activeDefragAlloc(objectGetVal(ob)))) objectSetVal(ob, newzl);
         } else {
             serverPanic("Unknown list encoding");
         }
@@ -712,14 +715,14 @@ static void defragKey(defragKeysCtx *ctx, robj **elemref) {
         if (ob->encoding == OBJ_ENCODING_HASHTABLE) {
             defragSet(ob);
         } else if (ob->encoding == OBJ_ENCODING_INTSET || ob->encoding == OBJ_ENCODING_LISTPACK) {
-            void *newptr, *ptr = ob->ptr;
-            if ((newptr = activeDefragAlloc(ptr))) ob->ptr = newptr;
+            void *newptr, *ptr = objectGetVal(ob);
+            if ((newptr = activeDefragAlloc(ptr))) objectSetVal(ob, newptr);
         } else {
             serverPanic("Unknown set encoding");
         }
     } else if (ob->type == OBJ_ZSET) {
         if (ob->encoding == OBJ_ENCODING_LISTPACK) {
-            if ((newzl = activeDefragAlloc(ob->ptr))) ob->ptr = newzl;
+            if ((newzl = activeDefragAlloc(objectGetVal(ob)))) objectSetVal(ob, newzl);
         } else if (ob->encoding == OBJ_ENCODING_SKIPLIST) {
             defragZsetSkiplist(ob);
         } else {

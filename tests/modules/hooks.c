@@ -116,7 +116,7 @@ void clearEvents(ValkeyModuleCtx *ctx)
 {
     ValkeyModuleString *key;
     EventElement *event;
-    ValkeyModuleDictIter *iter = ValkeyModule_DictIteratorStart(event_log, "^", NULL);
+    ValkeyModuleDictIter *iter = ValkeyModule_DictIteratorStartC(event_log, "^", NULL, 0);
     while((key = ValkeyModule_DictNext(ctx, iter, (void**)&event)) != NULL) {
         event->count = 0;
         event->last_val_int = 0;
@@ -124,6 +124,8 @@ void clearEvents(ValkeyModuleCtx *ctx)
         event->last_val_string = NULL;
         ValkeyModule_DictDel(event_log, key, NULL);
         ValkeyModule_Free(event);
+        ValkeyModule_DictIteratorReseek(iter, ">=", key);
+        ValkeyModule_FreeString(ctx, key);
     }
     ValkeyModule_DictIteratorStop(iter);
 }

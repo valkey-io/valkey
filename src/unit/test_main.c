@@ -9,6 +9,7 @@
 #include <stdio.h>
 #include "test_files.h"
 #include "test_help.h"
+#include "../fmacros.h"
 #include "../util.h"
 #include "../mt19937-64.h"
 #include "../hashtable.h"

@@ -242,10 +242,12 @@ end
 require "./" ++ File.dirname(__FILE__) ++ '/module-api-since.rb'
 git_dir = File.dirname(__FILE__) ++ "/../.git"
 if File.directory?(git_dir) && `which git` != ""
-    `git --git-dir="#{git_dir}" tag --sort=v:refname`.each_line do |version|
-        next if version !~ /^(\d+)\.\d+\.\d+?$/ || $1.to_i < 4
-        version.chomp!
-        `git --git-dir="#{git_dir}" cat-file blob "#{version}:src/module.c"`.each_line do |line|
+    `git --git-dir="#{git_dir}" tag --sort=v:refname`.each_line do |git_tag|
+        next if git_tag !~ /^(\d+)\.(\d+)\.(\d+)(?:-rc\d+)?$/ || $1.to_i < 7
+        # Version number, ignoring suffixes like -rc1.
+        version = "#{$1}.#{$2}.#{$3}"
+        git_tag.chomp!
+        `git --git-dir="#{git_dir}" cat-file blob "#{git_tag}:src/module.c"`.each_line do |line|
             if line =~ /^\w.*[ \*]VM_([A-z0-9]+)/
                 name = $1
                 if ! $since[name]

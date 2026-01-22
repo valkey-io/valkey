@@ -14127,6 +14127,7 @@ int *VM_GetCommandKeysWithFlags(ValkeyModuleCtx *ctx,
         if (out_flags) (*out_flags)[i] = moduleConvertKeySpecsFlags(result.keys[i].flags, 0);
     }
 
+    getKeysFreeResult(&result);
     return res;
 }
 

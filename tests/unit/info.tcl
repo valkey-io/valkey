@@ -570,3 +570,226 @@ start_server {tags {"info" "external:skip"}} {
         assert_equal [dict get $mem_stats db.dict.rehashing.count] {1}
     }
 }
+
+start_server {tags {"info" "external:skip"} overrides {save "" forkless-options-supported yes}} {
+    test {INFO threadsave metrics show default values when no save is running} {
+        r config set save ""
+        r flushall
+        
+        set info [r info persistence]
+        
+        # When no threadsave is running, time metrics should be -1
+        assert_match "*threadsave_current_item_seconds:-1*" $info
+        assert_match "*threadsave_estimated_seconds_remaining:-1*" $info
+        
+        # Debug metrics should be 0
+        set dbg [r info debug]
+        assert_match "*threadsave_current_queue_length:0*" $dbg
+        assert_match "*threadsave_queue_length_target:0*" $dbg
+        assert_match "*threadsave_dbentries_queued:0*" $dbg
+        assert_match "*threadsave_dbentries_processed:0*" $dbg
+    }
+
+    test {INFO threadsave metrics are present during active save} {
+        r config set save ""
+        r flushall
+        r debug populate 1000
+        
+        # Start slow threadsave
+        r config set rdb-key-save-delay 100000
+        r bgsave thread
+        
+        wait_for_condition 50 100 {
+            [s rdb_bgsave_in_progress] == 1
+        } else {
+            fail "threadsave didn't start"
+        }
+        
+        set info [r info persistence]
+        
+        # Verify time metrics are present in persistence section
+        assert_match "*threadsave_current_item_seconds:*" $info
+        assert_match "*threadsave_estimated_seconds_remaining:*" $info
+        
+        # Verify queue metrics are present in debug section
+        set dbg [r info debug]
+        assert_match "*threadsave_current_queue_length:*" $dbg
+        assert_match "*threadsave_queue_length_target:*" $dbg
+        assert_match "*threadsave_dbentries_queued:*" $dbg
+        assert_match "*threadsave_dbentries_processed:*" $dbg
+        
+        # Verify queue_length_target has a reasonable value
+        set target [getInfoProperty $dbg threadsave_queue_length_target]
+        assert {$target > 0}
+        
+        r config set rdb-key-save-delay 0
+        r bgsave cancel
+        waitForBgsave r
+    }
+
+    test {INFO threadsave cumulative metrics increase during save} {
+        r config set save ""
+        r flushall
+        r debug populate 100
+        
+        # Start slow threadsave
+        r config set rdb-key-save-delay 50000
+        r bgsave thread
+        
+        wait_for_condition 50 100 {
+            [s rdb_bgsave_in_progress] == 1
+        } else {
+            fail "threadsave didn't start"
+        }
+        
+        # Wait a bit for some processing
+        after 200
+        
+        set dbg [r info debug]
+        set queued1 [getInfoProperty $dbg threadsave_dbentries_queued]
+        set processed1 [getInfoProperty $dbg threadsave_dbentries_processed]
+        
+        # Wait more
+        after 200
+        
+        set dbg [r info debug]
+        set queued2 [getInfoProperty $dbg threadsave_dbentries_queued]
+        set processed2 [getInfoProperty $dbg threadsave_dbentries_processed]
+        
+        # Cumulative metrics should increase or stay same (never decrease)
+        assert {$queued2 >= $queued1}
+        assert {$processed2 >= $processed1}
+        
+        # At least one should have increased
+        assert {$queued2 > $queued1 || $processed2 > $processed1}
+        
+        r config set rdb-key-save-delay 0
+        r bgsave cancel
+        waitForBgsave r
+    }
+
+    test {INFO threadsave current_item_seconds is counted} {
+        r config set save ""
+        r flushall
+        r debug populate 10
+        
+        # Start very slow threadsave - 2 seconds per key
+        r config set rdb-key-save-delay 2000000
+        r bgsave thread
+        
+        wait_for_condition 50 100 {
+            [s rdb_bgsave_in_progress] == 1
+        } else {
+            fail "threadsave didn't start"
+        }
+        
+        # Wait until the item has been processing for at least 1 second
+        wait_for_condition 50 100 {
+            [s threadsave_current_item_seconds] > 0
+        } else {
+            fail "threadsave_current_item_seconds never exceeded 0"
+        }
+        
+        set item_time [s threadsave_current_item_seconds]
+        
+        # Should be processing an item for ~1 second
+        assert {$item_time > 0}
+        
+        r config set rdb-key-save-delay 0
+        r bgsave cancel
+        waitForBgsave r
+    }
+
+    test {INFO threadsave estimated_seconds_remaining is reasonable} {
+        r config set save ""
+        r flushall
+        r debug populate 100
+        
+        # Set 1 second delay per key
+        r config set rdb-key-save-delay 1000000
+        waitForBgsave r
+        r bgsave thread
+        
+        wait_for_condition 50 100 {
+            [s rdb_bgsave_in_progress] == 1
+        } else {
+            fail "threadsave didn't start"
+        }
+        
+        # Wait for ~1 key to be processed (1.2 seconds to be safe)
+        after 1200
+        
+        set dbg [r info debug]
+        set processed [getInfoProperty $dbg threadsave_dbentries_processed]
+        set estimated [s threadsave_estimated_seconds_remaining]
+        
+        # Should have processed at least 1 key
+        assert {$processed >= 1}
+        
+        # With 100 keys total, ~1 processed, ~99 remaining at 1 sec each
+        # Estimate should be roughly 99 seconds, allow ±20% margin
+        set expected_min 79
+        set expected_max 119
+        
+        assert {$estimated >= $expected_min && $estimated <= $expected_max}
+        
+        r config set rdb-key-save-delay 0
+        r bgsave cancel
+        waitForBgsave r
+    }
+
+    test {INFO threadsave metrics show default values after save completes} {
+        r config set save ""
+        r flushall
+        r debug populate 100
+        
+        # Start and complete a fast threadsave
+        r config set rdb-key-save-delay 0
+        r bgsave thread
+        waitForBgsave r
+        
+        set info [r info persistence]
+        
+        # After save completes, time metrics should be -1
+        assert_match "*threadsave_current_item_seconds:-1*" $info
+        assert_match "*threadsave_estimated_seconds_remaining:-1*" $info
+        
+        # Debug metrics should be 0
+        set dbg [r info debug]
+        assert_match "*threadsave_current_queue_length:0*" $dbg
+        assert_match "*threadsave_queue_length_target:0*" $dbg
+        assert_match "*threadsave_dbentries_queued:0*" $dbg
+        assert_match "*threadsave_dbentries_processed:0*" $dbg
+    }
+
+    test {INFO rdb_current_bgsave_time_sec increases during threadsave} {
+        r config set save ""
+        r flushall
+        r debug populate 100
+        
+        # Start slow threadsave
+        r config set rdb-key-save-delay 100000
+        r bgsave thread
+        
+        wait_for_condition 50 100 {
+            [s rdb_bgsave_in_progress] == 1
+        } else {
+            fail "threadsave didn't start"
+        }
+        
+        set time1 [s rdb_current_bgsave_time_sec]
+        
+        # Wait 2 seconds
+        after 2000
+        
+        set time2 [s rdb_current_bgsave_time_sec]
+        
+        # Time should have increased by approximately 2 seconds
+        assert {$time2 >= $time1 + 1}
+        assert {$time2 <= $time1 + 3}
+        
+        r config set rdb-key-save-delay 0
+        r bgsave cancel
+        waitForBgsave r
+    }
+}

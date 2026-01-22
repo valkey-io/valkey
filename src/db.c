@@ -38,6 +38,7 @@
 #include "vector.h"
 #include "expire.h"
 #include "bgiteration.h"
+#include "threadsave.h"
 
 /*-----------------------------------------------------------------------------
  * C-level DB API
@@ -817,7 +818,8 @@ int getFlushCommandFlags(client *c, int *flags) {
 /* Flushes the whole server data set. */
 void flushAllDataAndResetRDB(int flags) {
     server.dirty += emptyData(-1, flags, NULL);
-    if (server.child_type == CHILD_TYPE_RDB) killRDBChild();
+    if (isForkBgsaveInProgress()) killRDBChild();
+    if (isThreadBgsaveInProgress()) threadsaveCancel();
     if (server.child_type == CHILD_TYPE_SLOT_MIGRATION) killSlotMigrationChild();
     if (server.saveparamslen > 0) {
         rdbSaveInfo rsi, *rsiptr;

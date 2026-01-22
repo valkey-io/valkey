@@ -178,6 +178,7 @@ enum RdbType {
 #define RDBFLAGS_FEED_REPL (1 << 3)    /* Feed replication stream when loading.*/
 #define RDBFLAGS_KEEP_CACHE (1 << 4)   /* Don't reclaim cache after rdb file is generated */
 #define RDBFLAGS_EMPTY_DATA (1 << 5)   /* Flush the database after validating magic and rdb version*/
+#define RDBFLAGS_THREADSAVE (1 << 6)   /* Save is performed by threadsave (background thread). */
 
 /* When rdbLoadObject() returns NULL, the err flag is
  * set to hold the type of error that occurred */
@@ -226,5 +227,10 @@ int rdbSaveRio(int req, int rdbver, rio *rdb, int *error, int rdbflags, rdbSaveI
 ssize_t rdbSaveFunctions(rio *rdb);
 rdbSaveInfo *rdbPopulateSaveInfo(rdbSaveInfo *rsi);
 void replicationEmptyDbCallback(hashtable *ht);
+ssize_t rdbSaveDbSizeHints(rio *rdb, serverDb *db, int include_importing);
+int rdbWriteHeader(rio *rdb, int req, int rdbver, int rdbflags, rdbSaveInfo *rsi);
+int rdbWriteFooter(rio *rdb, int req);
+void rdbRecordStartMetrics(int bgsave_type);
+void rdbRecordEndMetrics(int bgsave_type, int status, time_t save_end);
 
 #endif

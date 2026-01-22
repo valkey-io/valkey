@@ -3038,6 +3038,14 @@ const char *VM_StringPtrLen(const ValkeyModuleString *str, size_t *len) {
         if (len) *len = strlen(errmsg);
         return errmsg;
     }
+    /* Handle integer-encoded strings by converting to a thread-local buffer.
+     * This is safe because the caller is expected to copy/process the data
+     * immediately and not hold onto the pointer across multiple calls. */
+    if (str->encoding == OBJ_ENCODING_INT) {
+        size_t l = ll2string(vm_string_int_buffer, sizeof(vm_string_int_buffer), (long)objectGetVal(str));
+        if (len) *len = l;
+        return vm_string_int_buffer;
+    }
     if (len) *len = sdslen(objectGetVal(str));
     return objectGetVal(str);
 }

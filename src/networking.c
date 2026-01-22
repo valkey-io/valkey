@@ -109,21 +109,17 @@ typedef enum {
     BULK_STR_REF     /* bulk string references */
 } payloadType;
 
-typedef struct PayloadHeaderFlags {
-    uint8_t track_bytes : 1; /* 1 if net bytes tracking was enabled when reply was added */
-    uint8_t reserved : 7;
-} PayloadHeaderFlags;
-
 /* Encoded reply buffers consist from chunks
  * Each chunk contains header followed by payload
  * The packed attribute is specified because buffer is accessed at arbitrary offsets,
  * so no benefit in data structure padding and applying packed saves the space in the buffer  */
 typedef struct __attribute__((__packed__)) payloadHeader {
-    size_t payload_len;   /* payload length in a reply buffer */
-    size_t reply_len;     /* actual reply length for non-plain payloads */
-    uint8_t payload_type; /* one of payloadType */
-    int16_t slot;         /* to report network-bytes-out for BULK_STR_REF chunks */
-    PayloadHeaderFlags flags;
+    size_t payload_len;       /* payload length in a reply buffer */
+    size_t reply_len;         /* actual reply length for non-plain payloads */
+    int16_t slot;             /* to report network-bytes-out for BULK_STR_REF chunks */
+    uint8_t payload_type : 1; /* one of payloadType */
+    uint8_t track_bytes : 1;  /* 1 if net bytes tracking was enabled when reply was added */
+    uint8_t reserved : 6;
 } payloadHeader;
 
 /* To avoid copy of whole string in reply buffer
@@ -529,7 +525,7 @@ static size_t upsertPayloadHeader(char *buf, size_t *bufpos, payloadHeader **las
     if (!clusterSlotStatsEnabled(slot)) slot = -1;
 
     /* Try to add payload to last chunk if possible */
-    if (*last_header != NULL && (*last_header)->payload_type == type && (*last_header)->slot == slot && (*last_header)->flags.track_bytes == track_bytes) {
+    if (*last_header != NULL && (*last_header)->payload_type == type && (*last_header)->slot == slot && (*last_header)->track_bytes == track_bytes) {
         (*last_header)->payload_len += allowed_len;
         return allowed_len;
     }
@@ -546,8 +542,8 @@ static size_t upsertPayloadHeader(char *buf, size_t *bufpos, payloadHeader **las
     (*last_header)->payload_len = allowed_len;
     (*last_header)->slot = slot;
     (*last_header)->reply_len = 0;
-    (*last_header)->flags.track_bytes = track_bytes;
-    (*last_header)->flags.reserved = 0;
+    (*last_header)->track_bytes = track_bytes;
+    (*last_header)->reserved = 0;
 
     *bufpos += sizeof(payloadHeader);
 
@@ -2783,7 +2779,7 @@ static void releaseBufReferences(char *buf, size_t bufpos) {
              * at the time this reply was added, we account for cluster slot stats here in the IO thread
              * after writing the reply. When tracking was enabled, it's already accounted in the main thread
              * via afterCommand() -> clusterSlotStatsAddNetworkBytesOutForUserClient(). */
-            if (!header->flags.track_bytes) {
+            if (!header->track_bytes) {
                 clusterSlotStatsAddNetworkBytesOutForSlot(header->slot, header->reply_len);
             }
 

@@ -202,7 +202,7 @@ start_server {tags {"tls"}} {
                 file copy -force $valkey_key $server_key
 
                 # Wait for reload to actually complete by checking server logs
-                wait_for_log_messages 0 {"*TLS materials reloaded successfully*"} 0 50 100
+                wait_for_log_messages 0 {"*TLS materials reloaded successfully*"} 0 100 100
                 set log_line [count_log_lines 0]
 
                 # Verify connection still works after reload

@@ -17,10 +17,12 @@ static char monotonic_info_string[32];
  * generally safe on modern systems, this link provides additional information
  * about use of the x86 TSC: http://oliveryang.net/2015/09/pitfalls-of-TSC-usage
  *
- * To use the processor clock, either uncomment this line, or build with
- *   CFLAGS="-DUSE_PROCESSOR_CLOCK"
-#define USE_PROCESSOR_CLOCK
+ * The processor clock is now enabled by default. To disable it, build with
+ *   CFLAGS="-DNO_PROCESSOR_CLOCK"
  */
+#ifndef NO_PROCESSOR_CLOCK
+#define USE_PROCESSOR_CLOCK
+#endif
 
 
 #if defined(USE_PROCESSOR_CLOCK) && defined(__x86_64__) && defined(__linux__)

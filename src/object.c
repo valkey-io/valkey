@@ -68,17 +68,16 @@ void objectSetMetadataSize(size_t size) {
     if (object_metadata_size == size) return;
 
     /* Size must be greater than 0 */
-    serverAssert(size > 0 && "objectSetMetadataSize requires size > 0");
+    serverAssert(size > 0);
 
-    /* Size should not be changed once set. */
-    serverAssert(object_metadata_size == 0 && "Metadata Size cannot be changed once set");
+    /* When metadata size is 0 - setting for the first time */
+    serverAssert(object_metadata_size == 0);
 
-    /* Metadata size is 0 - setting for the first time */
     /* Check that all databases are empty */
     if (server.db != NULL) {
         for (int j = 0; j < server.dbnum; j++) {
             if (server.db[j] != NULL) {
-                serverAssert(kvstoreSize(server.db[j]->keys) == 0 && "First objectSetMetadataSize must be called before any objects exist");
+                serverAssert(kvstoreSize(server.db[j]->keys) == 0);
             }
         }
     }
@@ -86,15 +85,10 @@ void objectSetMetadataSize(size_t size) {
     object_metadata_size = size;
 }
 
-/* Get the configured metadata size. */
-size_t objectGetMetadataSize(void) {
-    return object_metadata_size;
-}
-
 /* Calculate the size of metadata for an object.
  * Returns the configured metadata size if the object has an embedded key, 0 otherwise. */
-static size_t objectMetadataSize(int has_embkey) {
-    if (has_embkey) return object_metadata_size;
+size_t objectGetMetadataSize(const robj *o) {
+    if (o->hasembkey) return object_metadata_size;
     return 0;
 }
 
@@ -148,8 +142,7 @@ static robj *createUnembeddedObjectWithKeyAndExpire(int type, void *val, const_s
     size_t key_sds_len = has_embkey ? sdslen(key) : 0;
     char key_sds_type = has_embkey ? sdsReqType(key_sds_len) : 0;
     size_t key_sds_size = has_embkey ? sdsReqSize(key_sds_len, key_sds_type) : 0;
-    size_t metadata_size = objectMetadataSize(has_embkey);
-
+    size_t metadata_size = has_embkey ? object_metadata_size : 0;
     size_t min_size = sizeof(robj);
     if (has_expire) {
         min_size += sizeof(long long);
@@ -248,8 +241,7 @@ static robj *createEmbeddedStringObjectWithKeyAndExpire(const char *val_ptr,
     char key_sds_type = has_embkey ? sdsReqType(key_sds_len) : 0;
     size_t key_sds_size = has_embkey ? sdsReqSize(key_sds_len, key_sds_type) : 0;
     size_t val_sds_size = sdsReqSize(val_len, SDS_TYPE_8);
-    size_t metadata_size = objectMetadataSize(has_embkey);
-
+    size_t metadata_size = has_embkey ? object_metadata_size : 0;
     if (val_sds_size < sizeof(void *)) {
         val_sds_size = sizeof(void *); /* Ensure it's possible to "unembed" value later */
     }
@@ -367,11 +359,9 @@ void *objectGetVal(const robj *o) {
             data += sizeof(long long);
         }
         if (o->hasembkey) {
-            /* Skip metadata if present */
-            size_t metadata_size = objectMetadataSize(o->hasembkey);
-            if (metadata_size > 0) {
-                data += metadata_size;
-            }
+            /* Skip metadata */
+            size_t metadata_size = objectGetMetadataSize(o);
+            data += metadata_size;
             /* Skip embedded key */
             uint8_t hdr_size = *(uint8_t *)data;
             data += 1 + hdr_size;                /* +1 for header size byte */
@@ -391,11 +381,9 @@ sds objectGetKey(const robj *o) {
         data += sizeof(long long);
     }
     if (o->hasembkey) {
-        /* Skip metadata if present */
-        size_t metadata_size = objectMetadataSize(o->hasembkey);
-        if (metadata_size > 0) {
-            data += metadata_size;
-        }
+        /* Skip metadata */
+        size_t metadata_size = objectGetMetadataSize(o);
+        data += metadata_size;
         /* Skip header size byte */
         uint8_t hdr_size = *(uint8_t *)data;
         data += 1 + hdr_size;

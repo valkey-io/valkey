@@ -1944,7 +1944,6 @@ struct valkeyServer {
     int active_expire_effort;    /* From 1 (default) to 10, active effort. */
     int lazy_expire_disabled;    /* If > 0, don't trigger lazy expire */
     int active_defrag_enabled;
-    int forkless_options_supported;              /* Enable forkless options support. */
     int sanitize_dump_payload;                   /* Enables deep sanitization for ziplist and listpack in RDB and RESTORE. */
     int skip_checksum_validation;                /* Disable checksum validation for RDB and RESTORE payload. */
     int rdb_version_check;                       /* Try to load RDB produced by a future version. */
@@ -2030,6 +2029,7 @@ struct valkeyServer {
     int rdb_checksum;                     /* Use RDB checksum? */
     int rdb_del_sync_files;               /* Remove RDB files used only for SYNC if
                                              the instance does not use persistence. */
+    int forkless_options_supported;       /* Enable forkless options support. */
     time_t lastsave;                      /* Unix time of last successful save */
     time_t lastbgsave_try;                /* Unix time of last attempted bgsave */
     time_t rdb_save_time_last;            /* Time used by last RDB save run. */
@@ -3138,7 +3138,7 @@ uint32_t objectGetIdleness(robj *o);
 
 /* Object metadata management */
 void objectSetMetadataSize(size_t size);
-size_t objectGetMetadataSize(void);
+size_t objectGetMetadataSize(const robj *o);
 void *objectGetMetadata(const robj *o);
 
 /* Synchronous I/O with timeout */

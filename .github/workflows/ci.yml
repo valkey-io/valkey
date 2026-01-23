@@ -88,7 +88,7 @@ jobs:
           mkdir -p build-release
           cd build-release
           cmake -DCMAKE_BUILD_TYPE=Release .. -DBUILD_TLS=yes -DBUILD_UNIT_TESTS=yes
-          make -j$(nproc)
+          make -j$(nproc) -i
       - name: test
         run: |
           sudo apt-get install -y tcl8.6 tclx
@@ -172,6 +172,7 @@ jobs:
         # suffixed version of g++. g++-multilib generally includes libstdc++.
         # *cross version as well, but it is also added explicitly just in case.
         run: |
+          CFLAGS="-m32" LDFLAGS="-m32" make clean
           sudo apt-get update
           sudo apt-get install libc6-dev-i386 libstdc++-11-dev-i386-cross gcc-multilib g++-multilib
           make -j4 SERVER_CFLAGS='-Werror' 32bit USE_FAST_FLOAT=yes

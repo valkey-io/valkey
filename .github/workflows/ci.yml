@@ -84,7 +84,7 @@ jobs:
       - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
       - name: cmake and make
         run: |
-          sudo apt-get install -y cmake libssl-dev
+          sudo apt-get install -y cmake libssl-dev libxxhash-dev
           mkdir -p build-release
           cd build-release
           cmake -DCMAKE_BUILD_TYPE=Release .. -DBUILD_TLS=yes -DBUILD_UNIT_TESTS=yes

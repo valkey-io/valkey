@@ -115,7 +115,7 @@ void setGenericCommand(client *c,
             addReply(c, abort_reply ? abort_reply : shared.null[c->resp]);
         }
         goto cleanup;
-    }else if (flags & ARGS_SET_IFNE && found) {
+    } else if (flags & ARGS_SET_IFNE && found) {
         if (!(flags & ARGS_SET_GET) && checkType(c, existing_value, OBJ_STRING)) {
             goto cleanup;
         }
@@ -126,7 +126,7 @@ void setGenericCommand(client *c,
             }
             goto cleanup;
         }
-    } 
+    }
 
     if ((flags & ARGS_SET_NX && found) || (flags & ARGS_SET_XX && !found)) {
         if (!(flags & ARGS_SET_GET)) {

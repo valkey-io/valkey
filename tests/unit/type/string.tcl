@@ -849,4 +849,113 @@ if {[string match {*jemalloc*} [s mem_allocator]]} {
     } {} {needs:debug}
 } ; # if jemalloc
 
+    test {Extended SET digest consistency with same content} {
+        r set key1 "identical"
+        r set key2 "identical"
+        set digest1 [r digest key1]
+        set digest2 [r digest key2]
+        assert_equal $digest1 $digest2
+        
+        # Both should be settable with the same digest
+        assert_equal "OK" [r set key1 "new1" IFDEQ $digest1]
+        assert_equal "OK" [r set key2 "new2" IFDEQ $digest2]
+        assert_equal "new1" [r get key1]
+        assert_equal "new2" [r get key2]
+    }
+
+    test {Extended SET digest with different content} {
+        r set key1 "value1"
+        r set key2 "value2"
+        set digest1 [r digest key1]
+        set digest2 [r digest key2]
+        assert {$digest1 != $digest2}
+        
+        # Should not be able to set with wrong digest
+        assert_equal {} [r set key1 "new1" IFDEQ $digest2]
+        assert_equal {} [r set key2 "new2" IFDEQ $digest1]
+        assert_equal "value1" [r get key1]
+        assert_equal "value2" [r get key2]
+        
+        # Should be able to set with correct digest
+        assert_equal "OK" [r set key1 "new1" IFDEQ $digest1]
+        assert_equal "OK" [r set key2 "new2" IFDEQ $digest2]
+        assert_equal "new1" [r get key1]
+        assert_equal "new2" [r get key2]
+    }
+
+    test {Extended SET with very long string and IFEQ} {
+        set longstring [string repeat "Lorem ipsum dolor sit amet. " 1000]
+        r set mykey $longstring
+        assert_equal "OK" [r set mykey "world" IFEQ $longstring]
+        assert_equal "world" [r get mykey]
+    }
+
+    test {Extended SET with negative digest} {
+        r set mykey "test"
+        set digest [r digest mykey]
+        set wrong_digest [format %x [expr [scan [r digest mykey] %x] + 1]]
+        assert_equal "OK" [r set mykey "world" IFDNE $wrong_digest]
+        assert_equal "world" [r get mykey]
+    }
+
+    test {DIGEST always returns exactly 16 hex characters with leading zeros} {
+        # Test with a value that produces a digest with leading zeros
+        r set foo "v8lf0c11xh8ymlqztfd3eeq16kfn4sspw7fqmnuuq3k3t75em5wdizgcdw7uc26nnf961u2jkfzkjytls2kwlj7626sd"
+        # Verify it matches the expected value with leading zeros
+        assert_equal "00006c38adf31777" [r digest foo]
+    }
+
+    test {IFDEQ/IFDNE reject digest with incorrect format} {
+        r set mykey "test"
+        set digest [r digest mykey]
+
+        # Test with too short digest (15 chars)
+        set short_digest [string range $digest 1 end]
+        assert_error "*must be exactly 16 hexadecimal characters*" {r set mykey "new" IFDEQ $short_digest}
+        assert_error "*must be exactly 16 hexadecimal characters*" {r set mykey "new" IFDNE $short_digest}
+        assert_error "*must be exactly 16 hexadecimal characters*" {r delex mykey IFDEQ $short_digest}
+        assert_error "*must be exactly 16 hexadecimal characters*" {r delex mykey IFDNE $short_digest}
+
+        # Test with too long digest (17 chars)
+        set long_digest "0${digest}"
+        assert_error "*must be exactly 16 hexadecimal characters*" {r set mykey "new" IFDEQ $long_digest}
+        assert_error "*must be exactly 16 hexadecimal characters*" {r set mykey "new" IFDNE $long_digest}
+        assert_error "*must be exactly 16 hexadecimal characters*" {r delex mykey IFDEQ $long_digest}
+        assert_error "*must be exactly 16 hexadecimal characters*" {r delex mykey IFDNE $long_digest}
+
+        # Test with empty digest
+        assert_error "*must be exactly 16 hexadecimal characters*" {r set mykey "new" IFDEQ ""}
+        assert_error "*must be exactly 16 hexadecimal characters*" {r set mykey "new" IFDNE ""}
+        assert_error "*must be exactly 16 hexadecimal characters*" {r delex mykey IFDEQ ""}
+        assert_error "*must be exactly 16 hexadecimal characters*" {r delex mykey IFDNE ""}
+    }
+
+    test {IFDEQ/IFDNE accepts uppercase hex digits (case-insensitive)} {
+        # Test SET IFDEQ with uppercase
+        r set mykey "hello"
+        set digest [r digest mykey]
+        set upper_digest [string toupper $digest]
+        assert_equal "OK" [r set mykey "world" IFDEQ $upper_digest]
+        assert_equal "world" [r get mykey]
+
+        # Test SET IFDEQ with uppercase
+        r set mykey "hello"
+        set digest [r digest mykey]
+        set upper_digest [string toupper $digest]
+        assert_equal "" [r set mykey "world" IFDNE $upper_digest]
+        assert_equal "hello" [r get mykey]
+
+        # Test DELEX IFDEQ with uppercase
+        r set mykey "hello"
+        set upper_digest [string toupper [r digest mykey]]
+        assert_equal 1 [r delex mykey IFDEQ $upper_digest]
+        assert_equal 0 [r exists mykey]
+
+        # Test DELEX IFDNE with uppercase
+        r set mykey "hello"
+        set upper_digest [string toupper [r digest mykey]]
+        assert_equal 0 [r delex mykey IFDNE $upper_digest]
+        assert_equal 1 [r exists mykey]
+    }
+
 }

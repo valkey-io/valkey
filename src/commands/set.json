@@ -27,6 +27,14 @@
             [
                 "8.1.0",
                 "Added the `IFEQ` option."
+            ],
+            [
+                "9.0.0",
+                "Added the `IFDEQ` option."
+            ],
+            [
+                "9.0.0",
+                "Added the `IFDNE` option."
             ]
         ],
         "command_flags": [
@@ -114,6 +122,20 @@
                         "token": "IFEQ",
                         "since": "8.1.0",
                         "summary": "Sets the key's value only if the current value matches the specified comparison value."
+                    },
+                    {
+                        "name": "ifdeq-digest",
+                        "type": "string",
+                        "token": "IFDEQ",
+                        "since": "9.0.0",
+                        "summary": "Sets the key's value only if the current value digest matches the specified comparison value digest."
+                    },
+                    {
+                        "name": "ifdne-digest",
+                        "type": "string",
+                        "token": "IFDNE",
+                        "since": "9.0.0",
+                        "summary": "Sets the key's value only if the current value digest not matches the specified comparison value digest."
                     }
                 ]
             },

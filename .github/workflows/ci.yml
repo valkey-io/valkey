@@ -194,7 +194,7 @@ jobs:
 
       - name: make
         run: |
-          dnf -y install epel-release gcc gcc-c++ make procps-ng which
+          dnf -y install epel-release gcc gcc-c++ make procps-ng which xxhash-devel
           make -j4 SERVER_CFLAGS='-Werror' USE_FAST_FLOAT=yes
 
   format-yaml:

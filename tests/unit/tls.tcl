@@ -174,6 +174,193 @@ start_server {tags {"tls"}} {
             $s close
         }
 
+        test {TLS: Auto-reload detects changes} {
+            if {$::tls_module} {
+                # Auto-reload requires built-in TLS
+                skip "Not supported with TLS built as a module"
+            }
+            # Get current certificate files
+            set orig_server_crt [lindex [r config get tls-cert-file] 1]
+            set orig_server_key [lindex [r config get tls-key-file] 1]
+
+            # Create temporary certificate files (copies of current ones)
+            set temp_crt "$orig_server_crt.temp"
+            set temp_key "$orig_server_key.temp"
+            file copy -force $orig_server_crt $temp_crt
+            file copy -force $orig_server_key $temp_key
+
+            # Ensure cleanup happens even if test fails
+            try {
+                # Update server to use temporary certificate files
+                r CONFIG SET tls-cert-file $temp_crt tls-key-file $temp_key
+
+                # Enable auto-reload with 1 second interval for faster testing
+                r CONFIG SET tls-auto-reload-interval 1
+
+                # Verify initial connection works
+                set s [valkey_client]
+                assert_equal "PONG" [$s PING]
+                $s close
+
+                # Wait for at least one auto-reload cycle to complete
+                after 1100
+
+                # Update temporary files with different certificate
+                set valkey_crt [format "%s/tests/tls/valkey.crt" [pwd]]
+                set valkey_key [format "%s/tests/tls/valkey.key" [pwd]]
+                file copy -force $valkey_crt $temp_crt
+                file copy -force $valkey_key $temp_key
+
+                # Wait for reload to actually complete by checking server logs
+                # Use generous timeout for slow/busy CI systems
+                wait_for_log_messages 0 {"*TLS materials reloaded successfully*"} 0 150 100
+
+                # Verify connection still works after reload
+                set s [valkey_client]
+                assert_equal "PONG" [$s PING]
+                $s close
+
+                # Wait again to ensure filesystem timestamp will be different
+                # for the second modification and next reload cycle can detect it
+                after 1100
+
+                # Restore original certificate content to temporary files
+                file copy -force $orig_server_crt $temp_crt
+                file copy -force $orig_server_key $temp_key
+
+                # Wait for second reload to complete
+                # Use generous timeout for slow/busy CI systems
+                wait_for_log_messages 0 {"*TLS materials reloaded successfully*"} 0 150 100
+
+                # Verify connection still works after restore
+                set s [valkey_client]
+                assert_equal "PONG" [$s PING]
+                $s close
+            } finally {
+                # Restore original configuration
+                r CONFIG SET tls-cert-file $orig_server_crt tls-key-file $orig_server_key
+
+                # Disable auto-reload
+                r CONFIG SET tls-auto-reload-interval 0
+
+                # Clean up temporary files
+                file delete -force $temp_crt $temp_key
+            }
+        }
+
+        test {TLS: Auto-reload skips unchanged materials} {
+            if {$::tls_module} {
+                # Auto-reload requires built-in TLS
+                skip "Not supported with TLS built as a module"
+            }
+            # Save original loglevel
+            set orig_loglevel [lindex [r config get loglevel] 1]
+
+            try {
+                # Enable auto-reload with 1 second interval
+                r CONFIG SET loglevel debug
+                r CONFIG SET tls-auto-reload-interval 1
+
+                # Wait for at least one cron cycle to ensure reload check happens
+                after 1100
+
+                # Wait for at least one reload check cycle
+                # Use generous timeout for slow/busy CI systems
+                wait_for_log_messages 0 {"*materials unchanged*"} 0 150 100
+            } finally {
+                # Disable auto-reload and restore loglevel
+                r CONFIG SET tls-auto-reload-interval 0 loglevel $orig_loglevel
+            }
+        }
+
+        test {TLS: Auto-reload interval validation} {
+            if {$::tls_module} {
+                # Auto-reload requires built-in TLS
+                skip "Not supported with TLS built as a module"
+            }
+            try {
+                # Valid intervals
+                r CONFIG SET tls-auto-reload-interval 0
+                r CONFIG SET tls-auto-reload-interval 5
+                r CONFIG SET tls-auto-reload-interval 3600
+
+                # Invalid intervals should fail
+                catch {r CONFIG SET tls-auto-reload-interval -1} e
+                assert_match {*ERR CONFIG SET failed*} $e
+            } finally {
+                # Reset to disabled
+                r CONFIG SET tls-auto-reload-interval 0
+            }
+        }
+
+        test {TLS: Auto-reload with CA cert directory} {
+            if {$::tls_module} {
+                # Auto-reload requires built-in TLS
+                skip "Not supported with TLS built as a module"
+            }
+            # Get current CA cert directory
+            set ca_cert_dir [lindex [r config get tls-ca-cert-dir] 1]
+
+            if {$ca_cert_dir ne ""} {
+                # Touch a file in the directory to trigger change detection
+                set test_file "$ca_cert_dir/test_marker"
+                set fd [open $test_file w]
+                puts $fd "test"
+                close $fd
+
+                # Ensure cleanup happens even if test fails
+                try {
+                    # Enable auto-reload with 1 second interval
+                    r CONFIG SET tls-auto-reload-interval 1
+
+                    # Wait for reload to actually complete by checking server logs
+                    wait_for_log_messages 0 {"*TLS materials reloaded successfully*"} 0 50 100
+
+                    # Verify connection still works after reload
+                    set s [valkey_client]
+                    assert_equal "PONG" [$s PING]
+                    $s close
+                } finally {
+                    # Disable auto-reload
+                    r CONFIG SET tls-auto-reload-interval 0
+
+                    # Clean up test file
+                    file delete -force $test_file
+                }
+            }
+        }
+    }
+}
+
+start_server {} {
+    test {INFO tls reports empty values when TLS disabled} {
+        if {$::tls} {
+            skip "TLS enabled"
+        }
+        set info [r info tls]
+        foreach field {tls_server_cert_serial tls_client_cert_serial tls_ca_cert_serial} {
+            set pattern [format {%s:([^\r\n]+)} $field]
+            if {![regexp $pattern $info -> value]} {
+                fail "INFO tls missing $field"
+            }
+            assert_equal "none" $value
+        }
+        if {![regexp {tls_ca_cert_count:([0-9]+)} $info -> ca_count]} {
+            fail "INFO tls missing tls_ca_cert_count"
+        }
+        assert_equal 0 $ca_count
+        foreach field {tls_server_cert_expires_in_seconds tls_client_cert_expires_in_seconds tls_ca_cert_expires_in_seconds} {
+            set pattern [format {%s:(-?[0-9]+)} $field]
+            if {![regexp $pattern $info -> value]} {
+                fail "INFO tls missing $field"
+            }
+            assert_equal 0 $value
+        }
+    }
+}
+
+start_server {tags {"tls"}} {
+    if {$::tls} {
         test {TLS: INFO tls reports decreasing expiration countdown} {
             set info1 [r info tls]
             if {![regexp {tls_server_cert_serial:([^\r\n]+)} $info1 -> server_serial]} {
@@ -414,187 +601,6 @@ start_server {tags {"tls"}} {
 
             $tls_client close
             $plain_client close
-        }
-    }
-}
-
-start_server {} {
-    test {INFO tls reports empty values when TLS disabled} {
-        if {$::tls} {
-            skip "TLS enabled"
-        }
-        set info [r info tls]
-        foreach field {tls_server_cert_serial tls_client_cert_serial tls_ca_cert_serial} {
-            set pattern [format {%s:([^\r\n]+)} $field]
-            if {![regexp $pattern $info -> value]} {
-                fail "INFO tls missing $field"
-            }
-            assert_equal "none" $value
-        }
-        if {![regexp {tls_ca_cert_count:([0-9]+)} $info -> ca_count]} {
-            fail "INFO tls missing tls_ca_cert_count"
-        }
-        assert_equal 0 $ca_count
-        foreach field {tls_server_cert_expires_in_seconds tls_client_cert_expires_in_seconds tls_ca_cert_expires_in_seconds} {
-            set pattern [format {%s:(-?[0-9]+)} $field]
-            if {![regexp $pattern $info -> value]} {
-                fail "INFO tls missing $field"
-            }
-            assert_equal 0 $value
-        test {TLS: Auto-reload detects changes} {
-            if {$::tls_module} {
-                # Auto-reload requires built-in TLS
-                skip "Not supported with TLS built as a module"
-            }
-            # Get current certificate files
-            set orig_server_crt [lindex [r config get tls-cert-file] 1]
-            set orig_server_key [lindex [r config get tls-key-file] 1]
-
-            # Create temporary certificate files (copies of current ones)
-            set temp_crt "$orig_server_crt.temp"
-            set temp_key "$orig_server_key.temp"
-            file copy -force $orig_server_crt $temp_crt
-            file copy -force $orig_server_key $temp_key
-
-            # Ensure cleanup happens even if test fails
-            try {
-                # Update server to use temporary certificate files
-                r CONFIG SET tls-cert-file $temp_crt tls-key-file $temp_key
-
-                # Enable auto-reload with 1 second interval for faster testing
-                r CONFIG SET tls-auto-reload-interval 1
-
-                # Verify initial connection works
-                set s [valkey_client]
-                assert_equal "PONG" [$s PING]
-                $s close
-
-                # Wait for at least one auto-reload cycle to complete
-                after 1100
-
-                # Update temporary files with different certificate
-                set valkey_crt [format "%s/tests/tls/valkey.crt" [pwd]]
-                set valkey_key [format "%s/tests/tls/valkey.key" [pwd]]
-                file copy -force $valkey_crt $temp_crt
-                file copy -force $valkey_key $temp_key
-
-                # Wait for reload to actually complete by checking server logs
-                # Use generous timeout for slow/busy CI systems
-                wait_for_log_messages 0 {"*TLS materials reloaded successfully*"} 0 150 100
-
-                # Verify connection still works after reload
-                set s [valkey_client]
-                assert_equal "PONG" [$s PING]
-                $s close
-
-                # Wait again to ensure filesystem timestamp will be different
-                # for the second modification and next reload cycle can detect it
-                after 1100
-
-                # Restore original certificate content to temporary files
-                file copy -force $orig_server_crt $temp_crt
-                file copy -force $orig_server_key $temp_key
-
-                # Wait for second reload to complete
-                # Use generous timeout for slow/busy CI systems
-                wait_for_log_messages 0 {"*TLS materials reloaded successfully*"} 0 150 100
-
-                # Verify connection still works after restore
-                set s [valkey_client]
-                assert_equal "PONG" [$s PING]
-                $s close
-            } finally {
-                # Restore original configuration
-                r CONFIG SET tls-cert-file $orig_server_crt tls-key-file $orig_server_key
-
-                # Disable auto-reload
-                r CONFIG SET tls-auto-reload-interval 0
-
-                # Clean up temporary files
-                file delete -force $temp_crt $temp_key
-            }
-        }
-
-        test {TLS: Auto-reload skips unchanged materials} {
-            if {$::tls_module} {
-                # Auto-reload requires built-in TLS
-                skip "Not supported with TLS built as a module"
-            }
-            # Save original loglevel
-            set orig_loglevel [lindex [r config get loglevel] 1]
-
-            try {
-                # Enable auto-reload with 1 second interval
-                r CONFIG SET loglevel debug
-                r CONFIG SET tls-auto-reload-interval 1
-
-                # Wait for at least one cron cycle to ensure reload check happens
-                after 1100
-
-                # Wait for at least one reload check cycle
-                # Use generous timeout for slow/busy CI systems
-                wait_for_log_messages 0 {"*materials unchanged*"} 0 150 100
-            } finally {
-                # Disable auto-reload and restore loglevel
-                r CONFIG SET tls-auto-reload-interval 0 loglevel $orig_loglevel
-            }
-        }
-
-        test {TLS: Auto-reload interval validation} {
-            if {$::tls_module} {
-                # Auto-reload requires built-in TLS
-                skip "Not supported with TLS built as a module"
-            }
-            try {
-                # Valid intervals
-                r CONFIG SET tls-auto-reload-interval 0
-                r CONFIG SET tls-auto-reload-interval 5
-                r CONFIG SET tls-auto-reload-interval 3600
-
-                # Invalid intervals should fail
-                catch {r CONFIG SET tls-auto-reload-interval -1} e
-                assert_match {*ERR CONFIG SET failed*} $e
-            } finally {
-                # Reset to disabled
-                r CONFIG SET tls-auto-reload-interval 0
-            }
-        }
-
-        test {TLS: Auto-reload with CA cert directory} {
-            if {$::tls_module} {
-                # Auto-reload requires built-in TLS
-                skip "Not supported with TLS built as a module"
-            }
-            # Get current CA cert directory
-            set ca_cert_dir [lindex [r config get tls-ca-cert-dir] 1]
-
-            if {$ca_cert_dir ne ""} {
-                # Touch a file in the directory to trigger change detection
-                set test_file "$ca_cert_dir/test_marker"
-                set fd [open $test_file w]
-                puts $fd "test"
-                close $fd
-
-                # Ensure cleanup happens even if test fails
-                try {
-                    # Enable auto-reload with 1 second interval
-                    r CONFIG SET tls-auto-reload-interval 1
-
-                    # Wait for reload to actually complete by checking server logs
-                    wait_for_log_messages 0 {"*TLS materials reloaded successfully*"} 0 50 100
-
-                    # Verify connection still works after reload
-                    set s [valkey_client]
-                    assert_equal "PONG" [$s PING]
-                    $s close
-                } finally {
-                    # Disable auto-reload
-                    r CONFIG SET tls-auto-reload-interval 0
-
-                    # Clean up test file
-                    file delete -force $test_file
-                }
-            }
         }
     }
 }

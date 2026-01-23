@@ -105,13 +105,16 @@ void setGenericCommand(client *c,
 
     /* Handle the IFEQ conditional check */
     if ((flags & (ARGS_SET_IFDEQ | ARGS_SET_IFDNE)) && sdslen(objectGetVal(comparison)) != DIGEST_HEX_LENGTH) {
+<<<<<<< HEAD
         addReplyErrorFormat(c, "must be exactly %d hexadecimal characters", DIGEST_HEX_LENGTH);
         goto cleanup;
     } else if (flags & ARGS_SET_IFEQ && found) {
     if ((flags & (ARGS_SET_IFDEQ | ARGS_SET_IFDNE)) && sdslen(objectGetVal(comparison)) != DIGEST_HEX_LENGTH) {   
+=======
+>>>>>>> 32701d5c7 (Added digest)
         addReplyErrorFormat(c, "must be exactly %d hexadecimal characters", DIGEST_HEX_LENGTH);
         goto cleanup;
-    }else if (flags & ARGS_SET_IFEQ && found) {
+    } else if (flags & ARGS_SET_IFEQ && found) {
         if (!(flags & ARGS_SET_GET) && checkType(c, existing_value, OBJ_STRING)) {
             goto cleanup;
         }
@@ -127,6 +130,7 @@ void setGenericCommand(client *c,
             addReply(c, abort_reply ? abort_reply : shared.null[c->resp]);
         }
         goto cleanup;
+<<<<<<< HEAD
     }else if (flags & ARGS_SET_IFDEQ && found) {
                         serverLog(LL_NOTICE, "444444 %d", strcmp(stringDigest(existing_value), objectGetVal(comparison)));
 
@@ -136,6 +140,11 @@ void setGenericCommand(client *c,
         // }
 
         if (strcmp(stringDigest(existing_value), objectGetVal(comparison)) != 0) {
+=======
+    } else if (flags & ARGS_SET_IFDEQ && found) {
+        sds digest = stringDigest(existing_value);
+        if (strcmp(digest, objectGetVal(comparison)) != 0) {
+>>>>>>> 32701d5c7 (Added digest)
             if (!(flags & ARGS_SET_GET)) {
                 addReply(c, abort_reply ? abort_reply : shared.null[c->resp]);
             }
@@ -143,8 +152,11 @@ void setGenericCommand(client *c,
             goto cleanup;
         }
         sdsfree(digest);
+<<<<<<< HEAD
     }else if(flags & ARGS_SET_IFEQ && !found){
         sdsfree(digest);
+=======
+>>>>>>> 32701d5c7 (Added digest)
     } else if (flags & ARGS_SET_IFEQ && !found) {
         if (!(flags & ARGS_SET_GET)) {
             addReply(c, abort_reply ? abort_reply : shared.null[c->resp]);

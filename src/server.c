@@ -2759,6 +2759,8 @@ void resetServerStats(void) {
     server.stat_net_repl_output_bytes = 0;
     server.stat_net_cluster_slot_export_bytes = 0;
     server.stat_net_cluster_slot_import_bytes = 0;
+    memset(server.stat_request_payload_bytes_bucket, 0, sizeof(server.stat_request_payload_bytes_bucket));
+    memset(server.stat_reply_payload_bytes_bucket, 0, sizeof(server.stat_reply_payload_bytes_bucket));
     server.stat_unexpected_error_replies = 0;
     server.stat_total_error_replies = 0;
     server.stat_dump_payload_sanitizations = 0;
@@ -6144,6 +6146,16 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                 "instantaneous_ops_per_sec:%lld\r\n", getInstantaneousMetric(STATS_METRIC_COMMAND),
                 "total_net_input_bytes:%lld\r\n", server.stat_net_input_bytes + server.stat_net_repl_input_bytes + server.bio_stat_net_repl_input_bytes + server.stat_net_cluster_slot_import_bytes,
                 "total_net_output_bytes:%lld\r\n", server.stat_net_output_bytes + server.stat_net_repl_output_bytes + server.stat_net_cluster_slot_export_bytes,
+                "request_payload_bytes_bucket_lt_64kb:%llu\r\n", server.stat_request_payload_bytes_bucket[0],
+                "request_payload_bytes_bucket_64kb_256kb:%llu\r\n", server.stat_request_payload_bytes_bucket[1],
+                "request_payload_bytes_bucket_256kb_1mb:%llu\r\n", server.stat_request_payload_bytes_bucket[2],
+                "request_payload_bytes_bucket_1mb_5mb:%llu\r\n", server.stat_request_payload_bytes_bucket[3],
+                "request_payload_bytes_bucket_gt_5mb:%llu\r\n", server.stat_request_payload_bytes_bucket[4],
+                "reply_payload_bytes_bucket_lt_64kb:%llu\r\n", server.stat_reply_payload_bytes_bucket[0],
+                "reply_payload_bytes_bucket_64kb_256kb:%llu\r\n", server.stat_reply_payload_bytes_bucket[1],
+                "reply_payload_bytes_bucket_256kb_1mb:%llu\r\n", server.stat_reply_payload_bytes_bucket[2],
+                "reply_payload_bytes_bucket_1mb_5mb:%llu\r\n", server.stat_reply_payload_bytes_bucket[3],
+                "reply_payload_bytes_bucket_gt_5mb:%llu\r\n", server.stat_reply_payload_bytes_bucket[4],
                 "total_net_repl_input_bytes:%lld\r\n", server.stat_net_repl_input_bytes + server.bio_stat_net_repl_input_bytes,
                 "total_net_repl_output_bytes:%lld\r\n", server.stat_net_repl_output_bytes,
                 "total_net_cluster_slot_import_bytes:%lld\r\n", server.stat_net_cluster_slot_import_bytes,

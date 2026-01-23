@@ -3657,6 +3657,14 @@ static int parseMultibulk(client *c,
  * 1. The client is reset unless there are reasons to avoid doing it.
  * 2. In the case of primary clients, the replication offset is updated.
  * 3. Propagate commands we got from our primary to replicas down the line. */
+void trackPayloadBytesBuckets(client *c) {
+    if (getClientType(c) != CLIENT_TYPE_NORMAL) return;
+    if (c->flag.reply_off || c->flag.reply_skip) return;
+
+    server.stat_request_payload_bytes_bucket[payloadBytesBucketIndex((size_t)c->net_input_bytes_curr_cmd)]++;
+    server.stat_reply_payload_bytes_bucket[payloadBytesBucketIndex((size_t)c->net_output_bytes_curr_cmd)]++;
+}
+
 void commandProcessed(client *c) {
     /* If client is blocked(including paused), just return avoid reset and replicate.
      *
@@ -3669,6 +3677,7 @@ void commandProcessed(client *c) {
 
     reqresAppendResponse(c);
     clusterSlotStatsAddNetworkBytesInForUserClient(c);
+    trackPayloadBytesBuckets(c);
     resetClient(c);
 
     if (!c->repl_data) return;

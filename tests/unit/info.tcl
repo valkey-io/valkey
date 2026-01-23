@@ -569,4 +569,77 @@ start_server {tags {"info" "external:skip"}} {
         assert_range [dict get $mem_stats overhead.db.hashtable.rehashing] 1 64
         assert_equal [dict get $mem_stats db.dict.rehashing.count] {1}
     }
+
+    test {payload buckets: info fields exist} {
+        set info [r INFO stats]
+        foreach field {request_payload_bytes_bucket_lt_64kb
+                       request_payload_bytes_bucket_64kb_256kb
+                       request_payload_bytes_bucket_256kb_1mb
+                       request_payload_bytes_bucket_1mb_5mb
+                       request_payload_bytes_bucket_gt_5mb
+                       reply_payload_bytes_bucket_lt_64kb
+                       reply_payload_bytes_bucket_64kb_256kb
+                       reply_payload_bytes_bucket_256kb_1mb
+                       reply_payload_bytes_bucket_1mb_5mb
+                       reply_payload_bytes_bucket_gt_5mb} {
+            set value [getInfoProperty $info $field]
+            assert {[string is integer -strict $value]}
+        }
+    }
+
+    test {payload buckets: request and reply increments} {
+        r config resetstat
+        set sizes {32768 131072 524288 2097152 6291456}
+        set req_fields {request_payload_bytes_bucket_lt_64kb
+                        request_payload_bytes_bucket_64kb_256kb
+                        request_payload_bytes_bucket_256kb_1mb
+                        request_payload_bytes_bucket_1mb_5mb
+                        request_payload_bytes_bucket_gt_5mb}
+        set rep_fields {reply_payload_bytes_bucket_lt_64kb
+                        reply_payload_bytes_bucket_64kb_256kb
+                        reply_payload_bytes_bucket_256kb_1mb
+                        reply_payload_bytes_bucket_1mb_5mb
+                        reply_payload_bytes_bucket_gt_5mb}
+
+        for {set i 0} {$i < [llength $sizes]} {incr i} {
+            set size [lindex $sizes $i]
+            set key "pbk:$i"
+            set val [string repeat x $size]
+            set req_field [lindex $req_fields $i]
+            set rep_field [lindex $rep_fields $i]
+
+            set info1 [r INFO stats]
+            set before_req [getInfoProperty $info1 $req_field]
+            assert {[string is integer -strict $before_req]}
+
+            r set $key $val
+
+            set info2 [r INFO stats]
+            set after_req [getInfoProperty $info2 $req_field]
+            assert {[string is integer -strict $after_req]}
+
+            if {$i == 0} {
+                assert {$after_req >= $before_req + 1}
+            } else {
+                assert_equal [expr {$before_req + 1}] $after_req
+            }
+
+            set before_rep [getInfoProperty $info2 $rep_field]
+            assert {[string is integer -strict $before_rep]}
+
+            r get $key
+
+            set info3 [r INFO stats]
+            set after_rep [getInfoProperty $info3 $rep_field]
+            assert {[string is integer -strict $after_rep]}
+
+            if {$i == 0} {
+                assert {$after_rep >= $before_rep + 1}
+            } else {
+                assert_equal [expr {$before_rep + 1}] $after_rep
+            }
+
+            r del $key
+        }
+    }
 }

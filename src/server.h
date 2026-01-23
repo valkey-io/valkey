@@ -201,6 +201,20 @@ typedef enum {
 #define PROTO_REPLY_MIN_BYTES (1024)           /* the lower limit on reply buffer size */
 #define REDIS_AUTOSYNC_BYTES (1024 * 1024 * 4) /* Sync file every 4MB. */
 
+#define PAYLOAD_BUCKET_COUNT 5
+#define PAYLOAD_BUCKET_64KB (64 * 1024)
+#define PAYLOAD_BUCKET_256KB (256 * 1024)
+#define PAYLOAD_BUCKET_1MB (1024 * 1024)
+#define PAYLOAD_BUCKET_5MB (5 * 1024 * 1024)
+
+static inline int payloadBytesBucketIndex(size_t bytes) {
+    if (bytes < PAYLOAD_BUCKET_64KB) return 0;
+    if (bytes < PAYLOAD_BUCKET_256KB) return 1;
+    if (bytes < PAYLOAD_BUCKET_1MB) return 2;
+    if (bytes < PAYLOAD_BUCKET_5MB) return 3;
+    return 4;
+}
+
 #define REPLY_BUFFER_DEFAULT_PEAK_RESET_TIME 5000     /* 5 seconds */
 #define REPLY_BUFFER_SIZE_UNAUTHENTICATED_CLIENT 1024 /* 1024 bytes */
 
@@ -1828,6 +1842,8 @@ struct valkeyServer {
     long long stat_net_repl_output_bytes;
     long long stat_net_cluster_slot_import_bytes;       /* Bytes read from slot import sources. */
     long long stat_net_cluster_slot_export_bytes;       /* Bytes written to slot export sources. */
+    unsigned long long stat_request_payload_bytes_bucket[PAYLOAD_BUCKET_COUNT];
+    unsigned long long stat_reply_payload_bytes_bucket[PAYLOAD_BUCKET_COUNT];
     size_t stat_current_cow_peak;                       /* Peak size of copy on write bytes. */
     size_t stat_current_cow_bytes;                      /* Copy on write bytes while child is active. */
     monotime stat_current_cow_updated;                  /* Last update time of stat_current_cow_bytes */
@@ -3320,6 +3336,7 @@ void unprepareCommand(client *c);
 int processCommand(client *c);
 int processPendingCommandAndInputBuffer(client *c);
 int processCommandAndResetClient(client *c);
+void trackPayloadBytesBuckets(client *c);
 void setupSignalHandlers(void);
 int createSocketAcceptHandler(connListener *sfd, aeFileProc *accept_handler);
 connListener *listenerByType(int type);

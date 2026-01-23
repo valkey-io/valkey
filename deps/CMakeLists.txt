@@ -30,6 +30,8 @@ add_subdirectory(libvalkey)
 add_subdirectory(linenoise)
 add_subdirectory(fpconv)
 add_subdirectory(hdr_histogram)
+add_subdirectory(xxhash)
+
 
 # Clear any cached variables passed to libvalkey from the cache
 unset(BUILD_SHARED_LIBS CACHE)

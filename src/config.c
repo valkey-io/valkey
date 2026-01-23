@@ -3417,7 +3417,7 @@ standardConfig static_configs[] = {
     /* Other configs */
     createTimeTConfig("repl-backlog-ttl", NULL, MODIFIABLE_CONFIG, 0, LONG_MAX, server.repl_backlog_time_limit, 60 * 60, INTEGER_CONFIG, NULL, NULL), /* Default: 1 hour */
     createOffTConfig("auto-aof-rewrite-min-size", NULL, MODIFIABLE_CONFIG, 0, LLONG_MAX, server.aof_rewrite_min_size, 64 * 1024 * 1024, MEMORY_CONFIG, NULL, NULL),
-    createOffTConfig("aof-max-size", NULL, MODIFIABLE_CONFIG, 0, LLONG_MAX, server.aof_max_size, 0, MEMORY_CONFIG, NULL, NULL),
+    createOffTConfig("auto-aof-rewrite-max-size", NULL, MODIFIABLE_CONFIG, 0, LLONG_MAX, server.aof_rewrite_max_size, 0, MEMORY_CONFIG, NULL, NULL),
     createOffTConfig("loading-process-events-interval-bytes", NULL, MODIFIABLE_CONFIG | HIDDEN_CONFIG, 1024, INT_MAX, server.loading_process_events_interval_bytes, 1024 * 1024 * 2, INTEGER_CONFIG, NULL, NULL),
 
     /* Tls configs */

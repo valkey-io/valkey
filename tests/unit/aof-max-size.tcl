@@ -25,7 +25,7 @@ proc check_rewrites_new {count} {
 proc setup {aof_max_size {min_size 64mb}} {
     r config set hz 10  ; # serverCron runs every ~100ms
     r config set auto-aof-rewrite-percentage 0 ; # disable auto-rewrite
-    r config set aof-max-size $aof_max_size
+    r config set auto-aof-rewrite-max-size $aof_max_size
     r config set auto-aof-rewrite-min-size $min_size
     r config set appendonly yes ; # enable AOF
 
@@ -44,14 +44,14 @@ proc check_rewrites_old {log_count_before aof_rewrites} {
 }
 
 proc cleanup {} {
-    r config set aof-max-size 0
+    r config set auto-aof-rewrite-max-size 0
     r flushall
 }
 
 proc fill_aof_to_size {target_size_mb {repeated_keys_size 0}} {
-    # Save current aof-max-size and disable it during fill
-    set saved_max_size [lindex [r config get aof-max-size] 1]
-    r config set aof-max-size 0
+    # Save current auto-aof-rewrite-max-size and disable it during fill
+    set saved_max_size [lindex [r config get auto-aof-rewrite-max-size] 1]
+    r config set auto-aof-rewrite-max-size 0
 
     set target_bytes [expr {$target_size_mb * 1024 * 1024}]
     set current_size [status r aof_current_size]
@@ -71,14 +71,14 @@ proc fill_aof_to_size {target_size_mb {repeated_keys_size 0}} {
         }
     }
 
-    # Restore original aof-max-size
-    r config set aof-max-size $saved_max_size
+    # Restore original auto-aof-rewrite-max-size
+    r config set auto-aof-rewrite-max-size $saved_max_size
 
     return $current_size
 }
 
 start_server {tags {"external:skip" "slow"}} {
-    test "aof-max-size triggers successful rewrite and reduces size" {
+    test "auto-aof-rewrite-max-size triggers successful rewrite and reduces size" {
         setup 102400 64kb
 
         # Fill AOF with redundant commands that will compress during rewrite
@@ -99,7 +99,7 @@ start_server {tags {"external:skip" "slow"}} {
 }
 
 start_server {tags {"external:skip" "slow"}} {
-    test "aof-max-size prevents eternal rewrite loop when base >= max" {
+    test "auto-aof-rewrite-max-size prevents eternal rewrite loop when base >= max" {
         setup 51200 32kb
 
         # Create dataset that won't compress below 50KB using fill helper
@@ -124,7 +124,7 @@ start_server {tags {"external:skip" "slow"}} {
 }
 
 start_server {tags {"external:skip" "slow"}} {
-    test "aof-max-size=0 disables size-based rewriting" {
+    test "auto-aof-rewrite-max-size=0 disables size-based rewriting" {
         setup 0 0
 
         set log_count_before [count_log_message 0 "*Background append only file rewriting started*"]
@@ -140,16 +140,16 @@ start_server {tags {"external:skip" "slow"}} {
 }
 
 start_server {tags {"external:skip" "slow"}} {
-    test "user-initiated BGREWRITEAOF works independently of aof-max-size" {
+    test "user-initiated BGREWRITEAOF works independently of auto-aof-rewrite-max-size" {
         setup 10485760
 
-        # Add some data but not enough to trigger aof-max-size
+        # Add some data but not enough to trigger auto-aof-rewrite-max-size
         fill_aof_to_size 1
 
         # Manually trigger rewrite
         assert {[r bgrewriteaof] eq "Background append only file rewriting started"}
 
-        # Should start rewrite even though aof-max-size not exceeded
+        # Should start rewrite even though auto-aof-rewrite-max-size not exceeded
         check_rewrites_new 2
 
         cleanup
@@ -157,7 +157,7 @@ start_server {tags {"external:skip" "slow"}} {
 }
 
 start_server {tags {"external:skip" "slow"}} {
-    test "aof-max-size checks all conditions in serverCron" {
+    test "auto-aof-rewrite-max-size checks all conditions in serverCron" {
         setup 524288 262144
 
         set log_count_before [count_log_message 0 "*Background append only file rewriting started*"]

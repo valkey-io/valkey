@@ -1576,15 +1576,15 @@ long long serverCron(struct aeEventLoop *eventLoop, long long id, void *clientDa
     databasesCron();
 
     /* Start a scheduled AOF rewrite if this was requested by the user while
-     * a BGSAVE was in progress. Also handle rewrites triggered by aof-max-size. */
+     * a BGSAVE was in progress. Also handle rewrites triggered by auto-aof-rewrite-max-size. */
     if (!hasActiveChildProcess() && !aofRewriteLimited()) {
         if (server.aof_rewrite_scheduled ||
-            server.aof_current_size >= server.aof_rewrite_min_size &&
-            server.aof_current_size >= server.aof_max_size &&
-            server.aof_rewrite_base_size < server.aof_max_size) {
+            (server.aof_current_size >= server.aof_rewrite_min_size &&
+             server.aof_current_size >= server.aof_rewrite_max_size &&
+             server.aof_rewrite_base_size < server.aof_rewrite_max_size)) {
             /* user-initiated OR
                (AOF is large enough AND
-               last rewrite success should be less than aof-max-size - or we might end up with eternal rewrites)
+               last rewrite success should be less than auto-aof-rewrite-max-size - or we might end up with eternal rewrites)
             */
             rewriteAppendOnlyFileBackground();
         }
@@ -6164,17 +6164,10 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                 "slot_migration_fork_in_progress:%d\r\n", server.child_type == CHILD_TYPE_SLOT_MIGRATION));
 
         if (server.aof_enabled) {
-            char aof_current_size_hdsk[64];
-            char aof_max_size_hdsk[64];
-            bytesToHuman(aof_current_size_hdsk, sizeof(aof_current_size_hdsk), (unsigned long long)server.aof_current_size);
-            bytesToHuman(aof_max_size_hdsk, sizeof(aof_max_size_hdsk), (unsigned long long)server.aof_max_size);
             info = sdscatprintf(
                 info,
                 FMTARGS(
                     "aof_current_size:%lld\r\n", (long long)server.aof_current_size,
-                    "aof_current_size_human:%s\r\n", aof_current_size_hdsk,
-                    "aof_max_size:%lld\r\n", (long long)server.aof_max_size,
-                    "aof_max_size_human:%s\r\n", aof_max_size_hdsk,
                     "aof_base_size:%lld\r\n", (long long)server.aof_rewrite_base_size,
                     "aof_pending_rewrite:%d\r\n", server.aof_rewrite_scheduled,
                     "aof_buffer_length:%zu\r\n", sdslen(server.aof_buf),
@@ -7548,12 +7541,12 @@ __attribute__((weak)) int main(int argc, char **argv) {
                   server.maxmemory);
     }
 
-    /* Warning the user about suspicious aof-max-size setting. */
-    if (server.aof_max_size > 0 && server.aof_max_size < 1024 * 1024) {
+    /* Warning the user about suspicious auto-aof-rewrite-max-size setting. */
+    if (server.aof_rewrite_max_size > 0 && server.aof_rewrite_max_size < 1024 * 1024) {
         serverLog(LL_WARNING,
-                  "WARNING: You specified a aof-max-size value that is less than 1MB (current value is %lld bytes). Are "
+                  "WARNING: You specified a auto-aof-rewrite-max-size value that is less than 1MB (current value is %lld bytes). Are "
                   "you sure this is what you really want?",
-                  (long long)server.aof_max_size);
+                  (long long)server.aof_rewrite_max_size);
     }
 
     serverSetCpuAffinity(server.server_cpulist);

@@ -30,6 +30,7 @@
 
 #include "fmacros.h"
 
+#include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -104,14 +105,14 @@ static struct config {
     int mptcp;
     struct cliSSLconfig sslconfig;
     int numclients;
-    _Atomic int liveclients;
+    _Atomic int liveclients __attribute__((aligned(__alignof__(int))));
     int requests;
     int duration;
     int warmup_duration;
-    _Atomic int current_warmup_duration;
-    _Atomic int requests_issued;
-    _Atomic int requests_finished;
-    _Atomic int previous_requests_finished;
+    _Atomic int current_warmup_duration __attribute__((aligned(__alignof__(int))));
+    _Atomic int requests_issued __attribute__((aligned(__alignof__(int))));
+    _Atomic int requests_finished __attribute__((aligned(__alignof__(int))));
+    _Atomic int previous_requests_finished __attribute__((aligned(__alignof__(int))));
     int last_printed_bytes;
     long long previous_tick;
     int keysize;
@@ -147,9 +148,9 @@ static struct config {
     struct hdr_histogram *latency_histogram;
     struct hdr_histogram *current_sec_latency_histogram;
     struct hdr_histogram *rps_histogram;
-    _Atomic int is_fetching_slots;
-    _Atomic int is_updating_slots;
-    _Atomic int slots_last_update;
+    _Atomic int is_fetching_slots __attribute__((aligned(__alignof__(int))));
+    _Atomic int is_updating_slots __attribute__((aligned(__alignof__(int))));
+    _Atomic int slots_last_update __attribute__((aligned(__alignof__(int))));
     int enable_tracking;
     int num_functions;
     int num_keys_in_fcall;
@@ -157,7 +158,7 @@ static struct config {
     pthread_mutex_t is_updating_slots_mutex;
     int resp3; /* use RESP3 */
     int rps;
-    atomic_uint_fast64_t last_time_ns;
+    atomic_uint_fast64_t last_time_ns __attribute__((aligned(__alignof__(uint_fast64_t))));
     uint64_t time_per_token;
     uint64_t time_per_burst;
 } config;

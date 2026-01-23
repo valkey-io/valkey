@@ -1012,7 +1012,7 @@ int startAppendOnly(void) {
  * is likely to fail. However apparently in modern systems this is no longer
  * true, and in general it looks just more resilient to retry the write. If
  * there is an actual error condition we'll get it at the next try.
- * We also run bgrewriteaof on aof-max-size exceeding here. */
+ * We also run bgrewriteaof on auto-aof-rewrite-max-size exceeding here. */
 ssize_t aofWrite(int fd, const char *buf, size_t len) {
     ssize_t nwritten = 0, totwritten = 0;
 

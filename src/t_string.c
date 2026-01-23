@@ -104,10 +104,10 @@ void setGenericCommand(client *c,
     found = existing_value != NULL;
 
     /* Handle the IFEQ conditional check */
-    if ((flags & (ARGS_SET_IFDEQ | ARGS_SET_IFDNE)) && sdslen(objectGetVal(comparison)) != DIGEST_HEX_LENGTH) {   
+    if ((flags & (ARGS_SET_IFDEQ | ARGS_SET_IFDNE)) && sdslen(objectGetVal(comparison)) != DIGEST_HEX_LENGTH) {
         addReplyErrorFormat(c, "must be exactly %d hexadecimal characters", DIGEST_HEX_LENGTH);
         goto cleanup;
-    }else if (flags & ARGS_SET_IFEQ && found) {
+    } else if (flags & ARGS_SET_IFEQ && found) {
         if (!(flags & ARGS_SET_GET) && checkType(c, existing_value, OBJ_STRING)) {
             goto cleanup;
         }
@@ -123,8 +123,7 @@ void setGenericCommand(client *c,
             addReply(c, abort_reply ? abort_reply : shared.null[c->resp]);
         }
         goto cleanup;
-    }else if (flags & ARGS_SET_IFDEQ && found) {
-
+    } else if (flags & ARGS_SET_IFDEQ && found) {
         sds digest = stringDigest(existing_value);
         if (strcmp(digest, objectGetVal(comparison)) != 0) {
             if (!(flags & ARGS_SET_GET)) {
@@ -134,13 +133,12 @@ void setGenericCommand(client *c,
             goto cleanup;
         }
         sdsfree(digest);
-    }else if(flags & ARGS_SET_IFEQ && !found){
+    } else if (flags & ARGS_SET_IFEQ && !found) {
         if (!(flags & ARGS_SET_GET)) {
             addReply(c, abort_reply ? abort_reply : shared.null[c->resp]);
         }
         goto cleanup;
-    }else if (flags & ARGS_SET_IFDNE && found) {
-
+    } else if (flags & ARGS_SET_IFDNE && found) {
         sds digest = stringDigest(existing_value);
         if (strcmp(digest, objectGetVal(comparison)) == 0) {
             if (!(flags & ARGS_SET_GET)) {
@@ -962,7 +960,7 @@ sds stringDigest(robj *o) {
         hash = XXH3_64bits(objectGetVal(o), sdslen(objectGetVal(o)));
     } else if (o->encoding == OBJ_ENCODING_INT) {
         char buf[LONG_STR_SIZE];
-        size_t len = ll2string(buf,sizeof(buf),(long)o->val_ptr);
+        size_t len = ll2string(buf, sizeof(buf), (long)o->val_ptr);
         hash = XXH3_64bits(buf, len);
     } else {
         serverPanic("Wrong obj->encoding stringDigest()");
@@ -983,9 +981,8 @@ void digestCommand(client *c) {
     if ((o = lookupKeyReadOrReply(c, c->argv[1], shared.null[c->resp])) == NULL)
         return;
 
-    if (checkType(c,o,OBJ_STRING))
+    if (checkType(c, o, OBJ_STRING))
         return;
 
     addReplyBulkSds(c, stringDigest(o));
-
 }

@@ -104,7 +104,10 @@ void setGenericCommand(client *c,
     found = existing_value != NULL;
 
     /* Handle the IFEQ conditional check */
-    if (flags & ARGS_SET_IFEQ && found) {
+    if ((flags & (ARGS_SET_IFDEQ | ARGS_SET_IFDNE)) && sdslen(objectGetVal(comparison)) != DIGEST_HEX_LENGTH) {   
+        addReplyErrorFormat(c, "must be exactly %d hexadecimal characters", DIGEST_HEX_LENGTH);
+        goto cleanup;
+    }else if (flags & ARGS_SET_IFEQ && found) {
         if (!(flags & ARGS_SET_GET) && checkType(c, existing_value, OBJ_STRING)) {
             goto cleanup;
         }
@@ -121,25 +124,32 @@ void setGenericCommand(client *c,
         }
         goto cleanup;
     }else if (flags & ARGS_SET_IFDEQ && found) {
-                        serverLog(LL_NOTICE, "444444 %d", strcmp(stringDigest(existing_value), objectGetVal(comparison)));
 
-        // if (!(flags & ARGS_SET_GET)){
-        //     addReply(c, abort_reply ? abort_reply : shared.null[c->resp]);
-        //     goto cleanup;
-        // }
-
-        if (strcmp(stringDigest(existing_value), objectGetVal(comparison)) != 0) {
+        sds digest = stringDigest(existing_value);
+        if (strcmp(digest, objectGetVal(comparison)) != 0) {
             if (!(flags & ARGS_SET_GET)) {
                 addReply(c, abort_reply ? abort_reply : shared.null[c->resp]);
-                serverLog(LL_NOTICE, "SSS %d", strcmp(stringDigest(existing_value), objectGetVal(comparison)));
             }
+            sdsfree(digest);
             goto cleanup;
         }
+        sdsfree(digest);
     }else if(flags & ARGS_SET_IFEQ && !found){
         if (!(flags & ARGS_SET_GET)) {
             addReply(c, abort_reply ? abort_reply : shared.null[c->resp]);
         }
         goto cleanup;
+    }else if (flags & ARGS_SET_IFDNE && found) {
+
+        sds digest = stringDigest(existing_value);
+        if (strcmp(digest, objectGetVal(comparison)) == 0) {
+            if (!(flags & ARGS_SET_GET)) {
+                addReply(c, abort_reply ? abort_reply : shared.null[c->resp]);
+            }
+            sdsfree(digest);
+            goto cleanup;
+        }
+        sdsfree(digest);
     }
 
     if ((flags & ARGS_SET_NX && found) || (flags & ARGS_SET_XX && !found)) {

@@ -26,7 +26,7 @@ jobs:
           mkdir cov-analysis-linux64
           tar xzf cov-analysis-linux64.tar.gz --strip 1 -C cov-analysis-linux64
       - name: Install Valkey dependencies
-        run: sudo apt install -y gcc procps libssl-dev libxxhash-dev
+        run: sudo apt install -y gcc procps libssl-dev
       - name: Build with cov-build
         run: cov-analysis-linux64/bin/cov-build --dir cov-int make
       - name: Upload the result

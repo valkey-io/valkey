@@ -757,6 +757,8 @@ typedef enum {
                                 * at argv[2]. */
 #define ARGS_SET_FNX (1 << 11) /* Set if key item not exists. */
 #define ARGS_SET_FXX (1 << 12) /* Set if key item exists. */
+#define ARGS_SET_IFDEQ (1<<13)  /* Set if current digest equals match digest */
+#define ARGS_SET_IFDNE (1<<14)  /* Set if current digest does not equal match digest */
 
 /* An Object, that is a type able to hold a string / list / set */
 
@@ -4138,6 +4140,7 @@ void lcsCommand(client *c);
 void quitCommand(client *c);
 void resetCommand(client *c);
 void failoverCommand(client *c);
+void digestCommand(client *c);
 
 /* Helper functions for getting database id args from argv, argc */
 int *selectDbIdArgs(robj **argv, int argc, int *count);

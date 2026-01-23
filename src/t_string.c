@@ -33,10 +33,15 @@
  */
 
 #include "server.h"
+#include "xxhash.h"
 #include <math.h> /* isnan(), isinf() */
+
+/* XXH3 64-bit hash produces 16 hex characters when formatted */
+#define DIGEST_HEX_LENGTH 16
 
 /* Forward declarations */
 int getGenericCommand(client *c);
+sds stringDigest(robj *o);
 
 /*-----------------------------------------------------------------------------
  * String Commands
@@ -111,6 +116,26 @@ void setGenericCommand(client *c,
             goto cleanup;
         }
     } else if (flags & ARGS_SET_IFEQ && !found) {
+        if (!(flags & ARGS_SET_GET)) {
+            addReply(c, abort_reply ? abort_reply : shared.null[c->resp]);
+        }
+        goto cleanup;
+    }else if (flags & ARGS_SET_IFDEQ && found) {
+                        serverLog(LL_NOTICE, "444444 %d", strcmp(stringDigest(existing_value), objectGetVal(comparison)));
+
+        // if (!(flags & ARGS_SET_GET)){
+        //     addReply(c, abort_reply ? abort_reply : shared.null[c->resp]);
+        //     goto cleanup;
+        // }
+
+        if (strcmp(stringDigest(existing_value), objectGetVal(comparison)) != 0) {
+            if (!(flags & ARGS_SET_GET)) {
+                addReply(c, abort_reply ? abort_reply : shared.null[c->resp]);
+                serverLog(LL_NOTICE, "SSS %d", strcmp(stringDigest(existing_value), objectGetVal(comparison)));
+            }
+            goto cleanup;
+        }
+    }else if(flags & ARGS_SET_IFEQ && !found){
         if (!(flags & ARGS_SET_GET)) {
             addReply(c, abort_reply ? abort_reply : shared.null[c->resp]);
         }
@@ -225,7 +250,7 @@ static int getExpireMillisecondsOrReply(client *c, robj *expire, int flags, int 
     return C_OK;
 }
 
-/* SET key value [NX | XX | IFEQ comparison-value] [GET]
+/* SET key value [NX | XX | IFEQ comparison-value | IFDEQ ifdeq-digest | IFDNE ifdne-digest] [GET]
  *     [EX seconds | PX milliseconds |
  *      EXAT seconds-timestamp | PXAT milliseconds-timestamp | KEEPTTL] */
 void setCommand(client *c) {
@@ -902,4 +927,55 @@ cleanup:
     if (obja) decrRefCount(obja);
     if (objb) decrRefCount(objb);
     return;
+}
+
+/* Validate that a digest string has the correct length (DIGEST_HEX_LENGTH characters).
+ * Note: This only validates length, not whether characters are valid hex digits.
+ * Invalid hex characters will simply fail to match during comparison.
+ * Returns C_OK if length is correct, C_ERR otherwise. */
+int validateHexDigest(client *c, const sds digest) {
+    size_t len = sdslen(digest);
+    if (len != DIGEST_HEX_LENGTH) {
+        addReplyErrorFormat(c, "must be exactly %d hexadecimal characters", DIGEST_HEX_LENGTH);
+        return C_ERR;
+    }
+    return C_OK;
+}
+
+/* Return the xxh3 hash of a string object as a hex string stored in an sds.
+ * The user is responsible for freeing the sds. */
+sds stringDigest(robj *o) {
+    serverAssert(o && o->type == OBJ_STRING);
+
+    XXH64_hash_t hash = 0;
+    if (sdsEncodedObject(o)) {
+        hash = XXH3_64bits(objectGetVal(o), sdslen(objectGetVal(o)));
+    } else if (o->encoding == OBJ_ENCODING_INT) {
+        char buf[LONG_STR_SIZE];
+        size_t len = ll2string(buf,sizeof(buf),(long)o->val_ptr);
+        hash = XXH3_64bits(buf, len);
+    } else {
+        serverPanic("Wrong obj->encoding stringDigest()");
+    }
+
+    sds hexhash = sdsempty();
+    hexhash = sdscatprintf(hexhash, "%0" STRINGIFY(DIGEST_HEX_LENGTH) PRIx64, hash);
+    return hexhash;
+}
+
+/* DIGEST key
+ *
+ * Return digest of the key's value computed via XXH3 hash. The key must be a
+ * STRING object. */
+void digestCommand(client *c) {
+    robj *o;
+
+    if ((o = lookupKeyReadOrReply(c, c->argv[1], shared.null[c->resp])) == NULL)
+        return;
+
+    if (checkType(c,o,OBJ_STRING))
+        return;
+
+    addReplyBulkSds(c, stringDigest(o));
+
 }

@@ -250,25 +250,18 @@ ifdef OPENSSL_PREFIX
 	export OPENSSL_PREFIX
 endif
 
-XXHASH_CFLAGS :=
-XXHASH_LIBS :=
+USE_XXHASH?=yes
 
-XXHASH_PKGCONFIG := $(shell pkg-config --exists xxhash && echo $$?)
-ifeq ($(XXHASH_PKGCONFIG),0)
-    XXHASH_CFLAGS := $(shell pkg-config --cflags xxhash)
-    XXHASH_LIBS   := $(shell pkg-config --libs xxhash)
-else
-    ifeq ($(uname_M),arm64)
-        XXHASH_CFLAGS := -I/opt/homebrew/include
-        XXHASH_LIBS   := -L/opt/homebrew/lib -lxxhash
+ifeq ($(USE_XXHASH),yes)
+    XXHASH_PKGCONFIG := $(shell $(PKG_CONFIG) --exists libxxhash && echo $$?)
+    ifeq ($(XXHASH_PKGCONFIG),0)
+        FINAL_LIBS+=$(shell $(PKG_CONFIG) --libs libxxhash)
+        FINAL_CFLAGS+=$(shell $(PKG_CONFIG) --cflags libxxhash)
     else
-        XXHASH_CFLAGS := -I/usr/local/include
-        XXHASH_LIBS   := -L/usr/local/lib -lxxhash
+        FINAL_LIBS+=-lxxhash
     endif
+    FINAL_CFLAGS+=-DUSE_XXHASH
 endif
-
-FINAL_CFLAGS += $(XXHASH_CFLAGS)
-FINAL_LIBS   += $(XXHASH_LIBS)
 
 # Include paths to dependencies
 FINAL_CFLAGS+= -I../deps/libvalkey/include -I../deps/linenoise -I../deps/hdr_histogram -I../deps/fpconv

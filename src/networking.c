@@ -1766,7 +1766,7 @@ void acceptCommonHandler(connection *conn, struct ClientFlags flags, char *ip) {
     char addr[CONN_ADDR_STR_LEN] = {0};
     char laddr[CONN_ADDR_STR_LEN] = {0};
     connFormatAddr(conn, addr, sizeof(addr), 1);
-    connFormatAddr(conn, laddr, sizeof(addr), 0);
+    connFormatAddr(conn, laddr, sizeof(laddr), 0);
 
     if (connGetState(conn) != CONN_STATE_ACCEPTING) {
         serverLog(LL_VERBOSE, "Accepted client connection in error state: %s (addr=%s laddr=%s)",

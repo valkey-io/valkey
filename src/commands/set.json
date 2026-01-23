@@ -29,11 +29,11 @@
                 "Added the `IFEQ` option."
             ],
             [
-                "9.0.0",
+                "9.1.0",
                 "Added the `IFDEQ` option."
             ],
             [
-                "9.0.0",
+                "9.1.0",
                 "Added the `IFDNE` option."
             ]
         ],
@@ -127,14 +127,14 @@
                         "name": "ifdeq-digest",
                         "type": "string",
                         "token": "IFDEQ",
-                        "since": "9.0.0",
+                        "since": "9.1.0",
                         "summary": "Sets the key's value only if the current value digest matches the specified comparison value digest."
                     },
                     {
                         "name": "ifdne-digest",
                         "type": "string",
                         "token": "IFDNE",
-                        "since": "9.0.0",
+                        "since": "9.1.0",
                         "summary": "Sets the key's value only if the current value digest not matches the specified comparison value digest."
                     }
                 ]

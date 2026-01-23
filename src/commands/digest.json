@@ -3,7 +3,11 @@
         "summary": "Returns the XXH3 hash of a string value.",
         "complexity": "O(N) where N is the length of the string value.",
         "group": "string",
+<<<<<<< HEAD
         "since": "8.4.0",
+=======
+        "since": "9.1.0",
+>>>>>>> 324414a88e026a9df2e76b8d7f7d3ee859d7e33b
         "arity": 2,
         "function": "digestCommand",
         "command_flags": [

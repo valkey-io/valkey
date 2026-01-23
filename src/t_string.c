@@ -34,13 +34,18 @@
 
 #include "server.h"
 #include "xxhash.h"
+#include "xxhash.h"
 #include <math.h> /* isnan(), isinf() */
+
+/* XXH3 64-bit hash produces 16 hex characters when formatted */
+#define DIGEST_HEX_LENGTH 16
 
 /* XXH3 64-bit hash produces 16 hex characters when formatted */
 #define DIGEST_HEX_LENGTH 16
 
 /* Forward declarations */
 int getGenericCommand(client *c);
+sds stringDigest(robj *o);
 sds stringDigest(robj *o);
 
 /*-----------------------------------------------------------------------------

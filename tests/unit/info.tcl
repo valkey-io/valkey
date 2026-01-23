@@ -588,7 +588,9 @@ start_server {tags {"info" "external:skip"}} {
     }
 
     test {payload buckets: request and reply increments} {
-        r config resetstat
+        set c [valkey_client]
+        $c ping
+        $c config resetstat
         set sizes {32768 131072 524288 2097152 6291456}
         set req_fields {request_payload_bytes_bucket_lt_64kb
                         request_payload_bytes_bucket_64kb_256kb
@@ -608,13 +610,13 @@ start_server {tags {"info" "external:skip"}} {
             set req_field [lindex $req_fields $i]
             set rep_field [lindex $rep_fields $i]
 
-            set info1 [r INFO stats]
+            set info1 [$c INFO stats]
             set before_req [getInfoProperty $info1 $req_field]
             assert {[string is integer -strict $before_req]}
 
-            r set $key $val
+            $c set $key $val
 
-            set info2 [r INFO stats]
+            set info2 [$c INFO stats]
             set after_req [getInfoProperty $info2 $req_field]
             assert {[string is integer -strict $after_req]}
 
@@ -627,9 +629,9 @@ start_server {tags {"info" "external:skip"}} {
             set before_rep [getInfoProperty $info2 $rep_field]
             assert {[string is integer -strict $before_rep]}
 
-            r get $key
+            $c get $key
 
-            set info3 [r INFO stats]
+            set info3 [$c INFO stats]
             set after_rep [getInfoProperty $info3 $rep_field]
             assert {[string is integer -strict $after_rep]}
 
@@ -639,7 +641,9 @@ start_server {tags {"info" "external:skip"}} {
                 assert_equal [expr {$before_rep + 1}] $after_rep
             }
 
-            r del $key
+            $c del $key
         }
+
+        $c close
     }
 }

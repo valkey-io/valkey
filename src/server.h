@@ -1842,8 +1842,6 @@ struct valkeyServer {
     long long stat_net_repl_output_bytes;
     long long stat_net_cluster_slot_import_bytes;       /* Bytes read from slot import sources. */
     long long stat_net_cluster_slot_export_bytes;       /* Bytes written to slot export sources. */
-    unsigned long long stat_request_payload_bytes_bucket[PAYLOAD_BUCKET_COUNT]; /* Per-command request size buckets. */
-    unsigned long long stat_reply_payload_bytes_bucket[PAYLOAD_BUCKET_COUNT];   /* Per-command reply size buckets. */
     size_t stat_current_cow_peak;                       /* Peak size of copy on write bytes. */
     size_t stat_current_cow_bytes;                      /* Copy on write bytes while child is active. */
     monotime stat_current_cow_updated;                  /* Last update time of stat_current_cow_bytes */
@@ -1871,6 +1869,9 @@ struct valkeyServer {
     long long stat_client_outbuf_limit_disconnections; /* Total number of clients reached output buf length limit */
     long long stat_total_prefetch_entries;             /* Total number of prefetched dict entries */
     long long stat_total_prefetch_batches;             /* Total number of prefetched batches */
+    /* Per-command payload size buckets (normal clients only). */
+    unsigned long long stat_request_payload_bytes_bucket[PAYLOAD_BUCKET_COUNT];
+    unsigned long long stat_reply_payload_bytes_bucket[PAYLOAD_BUCKET_COUNT];
     /* The following two are used to track instantaneous metrics, like
      * number of operations per second, network traffic. */
     struct {

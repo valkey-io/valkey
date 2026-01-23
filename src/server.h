@@ -1227,6 +1227,8 @@ typedef struct ClientFlags {
                                               current command. */
 } ClientFlags;
 
+static_assert(sizeof(ClientFlags) == sizeof(uint64_t), "ClientFlags size mismatch");
+
 typedef struct ClientPubSubData {
     hashtable *pubsub_channels;      /* channels a client is interested in (SUBSCRIBE) */
     hashtable *pubsub_patterns;      /* patterns a client is interested in (PSUBSCRIBE) */

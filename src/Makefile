@@ -31,7 +31,7 @@ endif
 ifneq ($(OPTIMIZATION),-O0)
 	OPTIMIZATION+=-fno-omit-frame-pointer
 endif
-DEPENDENCY_TARGETS=libvalkey linenoise hdr_histogram fpconv xxhash
+DEPENDENCY_TARGETS=libvalkey linenoise hdr_histogram fpconv
 NODEPS:=clean distclean
 
 # Default settings
@@ -250,8 +250,28 @@ ifdef OPENSSL_PREFIX
 	export OPENSSL_PREFIX
 endif
 
+XXHASH_CFLAGS :=
+XXHASH_LIBS :=
+
+XXHASH_PKGCONFIG := $(shell pkg-config --exists xxhash && echo $$?)
+ifeq ($(XXHASH_PKGCONFIG),0)
+    XXHASH_CFLAGS := $(shell pkg-config --cflags xxhash)
+    XXHASH_LIBS   := $(shell pkg-config --libs xxhash)
+else
+    ifeq ($(uname_M),arm64)
+        XXHASH_CFLAGS := -I/opt/homebrew/include
+        XXHASH_LIBS   := -L/opt/homebrew/lib -lxxhash
+    else
+        XXHASH_CFLAGS := -I/usr/local/include
+        XXHASH_LIBS   := -L/usr/local/lib -lxxhash
+    endif
+endif
+
+FINAL_CFLAGS += $(XXHASH_CFLAGS)
+FINAL_LIBS   += $(XXHASH_LIBS)
+
 # Include paths to dependencies
-FINAL_CFLAGS+= -I../deps/libvalkey/include -I../deps/linenoise -I../deps/hdr_histogram -I../deps/fpconv -I../deps/xxhash
+FINAL_CFLAGS+= -I../deps/libvalkey/include -I../deps/linenoise -I../deps/hdr_histogram -I../deps/fpconv
 
 # Lua scripting engine module
 LUA_MODULE_NAME:=modules/lua/libvalkeylua.so
@@ -521,7 +541,7 @@ endif
 
 # valkey-server
 $(SERVER_NAME): $(ENGINE_SERVER_OBJ)
-	$(SERVER_LD) -o $@ $^ ../deps/libvalkey/lib/libvalkey.a ../deps/hdr_histogram/libhdrhistogram.a ../deps/fpconv/libfpconv.a ../deps/xxhash/libxxhash.a $(FINAL_LIBS)
+	$(SERVER_LD) -o $@ $^ ../deps/libvalkey/lib/libvalkey.a ../deps/hdr_histogram/libhdrhistogram.a ../deps/fpconv/libfpconv.a $(FINAL_LIBS)
 
 # Valkey static library, used to compile against for unit testing
 $(ENGINE_LIB_NAME): $(ENGINE_SERVER_OBJ)
@@ -529,7 +549,7 @@ $(ENGINE_LIB_NAME): $(ENGINE_SERVER_OBJ)
 
 # valkey-unit-tests
 $(ENGINE_UNIT_TESTS): $(ENGINE_TEST_OBJ) $(ENGINE_LIB_NAME)
-	$(SERVER_LD) -o $@ $^ ../deps/libvalkey/lib/libvalkey.a ../deps/hdr_histogram/libhdrhistogram.a ../deps/fpconv/libfpconv.a ../deps/xxhash/libxxhash.a $(FINAL_LIBS)
+	$(SERVER_LD) -o $@ $^ ../deps/libvalkey/lib/libvalkey.a ../deps/hdr_histogram/libhdrhistogram.a ../deps/fpconv/libfpconv.a $(FINAL_LIBS)
 
 # valkey-sentinel
 $(ENGINE_SENTINEL_NAME): $(SERVER_NAME)
@@ -557,11 +577,11 @@ $(LUA_MODULE_NAME): $(SERVER_NAME)
 
 # valkey-cli
 $(ENGINE_CLI_NAME): $(ENGINE_CLI_OBJ)
-	$(SERVER_LD) -o $@ $^ ../deps/libvalkey/lib/libvalkey.a ../deps/linenoise/linenoise.o ../deps/fpconv/libfpconv.a ../deps/xxhash/libxxhash.a $(FINAL_LIBS) $(TLS_CLIENT_LIBS) $(RDMA_CLIENT_LIBS)
+	$(SERVER_LD) -o $@ $^ ../deps/libvalkey/lib/libvalkey.a ../deps/linenoise/linenoise.o ../deps/fpconv/libfpconv.a $(FINAL_LIBS) $(TLS_CLIENT_LIBS) $(RDMA_CLIENT_LIBS)
 
 # valkey-benchmark
 $(ENGINE_BENCHMARK_NAME): $(ENGINE_BENCHMARK_OBJ)
-	$(SERVER_LD) -o $@ $^ ../deps/libvalkey/lib/libvalkey.a ../deps/hdr_histogram/libhdrhistogram.a ../deps/fpconv/libfpconv.a ../deps/xxhash/libxxhash.a $(FINAL_LIBS) $(TLS_CLIENT_LIBS) $(RDMA_CLIENT_LIBS)
+	$(SERVER_LD) -o $@ $^ ../deps/libvalkey/lib/libvalkey.a ../deps/hdr_histogram/libhdrhistogram.a ../deps/fpconv/libfpconv.a $(FINAL_LIBS) $(TLS_CLIENT_LIBS) $(RDMA_CLIENT_LIBS)
 
 DEP = $(ENGINE_SERVER_OBJ:%.o=%.d) $(ENGINE_CLI_OBJ:%.o=%.d) $(ENGINE_BENCHMARK_OBJ:%.o=%.d)
 -include $(DEP)

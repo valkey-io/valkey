@@ -678,9 +678,7 @@ if {[string match {*jemalloc*} [s mem_allocator]]} {
 
     test "SET with IFNE conditional - non string current value with get" {
         r del foo
-
         r sadd foo "some_set_value"
-
         assert_error {WRONGTYPE Operation against a key holding the wrong kind of value} \
             {r set foo "new_value" ifne "initial_value" get}
     }

@@ -93,6 +93,14 @@ static hashtableResizePolicy resize_policy = HASHTABLE_RESIZE_ALLOW;
 #define MIN_FILL_PERCENT_SOFT 13
 #define MIN_FILL_PERCENT_HARD 3
 
+/* --- Rehash policy --- */
+
+/* We reduce memory access time during rehashing (in the scenario of expansion)
+ * through batch processing. The following parameters are used to set the batch size. */
+
+#define FETCH_BUCKET_COUNT_WHEN_EXPAND 4
+#define FETCH_ENTRY_BUFFER_SIZE_WHEN_EXPAND (FETCH_BUCKET_COUNT_WHEN_EXPAND * ENTRIES_PER_BUCKET)
+
 /* --- Hash function API --- */
 
 /* The seed needs to be 16 bytes. */
@@ -408,11 +416,6 @@ static inline uint64_t hashKey(hashtable *ht, const void *key) {
     }
 }
 
-static inline uint64_t hashEntry(hashtable *ht, const void *entry) {
-    return hashKey(ht, entryGetKey(ht, entry));
-}
-
-
 /* For the hash bits stored in the bucket, we use the highest bits of the hash
  * value, since these are not used for selecting the bucket. */
 static inline uint8_t highBits(uint64_t hash) {
@@ -526,59 +529,118 @@ static bucket *bucketDefrag(bucket *prev, bucket *b, void *(*defragfn)(void *)) 
     return reallocated;
 }
 
-/* Rehashes one bucket. */
-static void rehashBucket(hashtable *ht, bucket *b) {
-    int pos;
-    for (pos = 0; pos < numBucketPositions(b); pos++) {
-        if (!isPositionFilled(b, pos)) continue; /* empty */
-        void *entry = b->entries[pos];
-        uint8_t h2 = b->hashes[pos];
-        /* Insert into table 1. */
-        uint64_t hash;
-        /* When shrinking, it's possible to avoid computing the hash. We can
-         * just use idx has the hash. */
-        if (ht->bucket_exp[1] < ht->bucket_exp[0]) {
-            hash = ht->rehash_idx;
-        } else {
-            hash = hashEntry(ht, entry);
-        }
-        int pos_in_dst_bucket;
-        bucket *dst = findBucketForInsert(ht, hash, &pos_in_dst_bucket, NULL);
-        dst->entries[pos_in_dst_bucket] = entry;
-        dst->hashes[pos_in_dst_bucket] = h2;
-        dst->presence |= (1 << pos_in_dst_bucket);
-        ht->used[0]--;
-        ht->used[1]++;
-    }
-    /* Mark the source bucket as empty. */
-    b->presence = 0;
+/* Rehashes a single entry from the old table to the new table. */
+static void rehashEntry(hashtable *ht, void *entry, uint64_t hash, uint8_t h2) {
+    int pos_in_dst_bucket;
+    bucket *dst = findBucketForInsert(ht, hash, &pos_in_dst_bucket, NULL);
+    dst->entries[pos_in_dst_bucket] = entry;
+    dst->hashes[pos_in_dst_bucket] = h2;
+    dst->presence |= (1 << pos_in_dst_bucket);
+    ht->used[0]--;
+    ht->used[1]++;
 }
 
-static void rehashStep(hashtable *ht) {
-    assert(hashtableIsRehashing(ht));
+/* After migrating entries in a bucket chain from the old table
+ * to the new one, this function should be called immediately to
+ * handle the cleanup of old buckets, such as clearing presence bits. */
+static void rehashStepFinalize(hashtable *ht) {
     size_t idx = ht->rehash_idx;
-    bucket *b = &ht->tables[0][idx];
-    rehashBucket(ht, b);
-    if (b->chained) {
-        /* Rehash and free child buckets. */
+    /* Free child bucket. */
+    bucket *b = getChildBucket(ht->tables[0] + idx);
+    while (b != NULL) {
         bucket *next = getChildBucket(b);
-        b->chained = 0;
+        zfree(b);
+        if (ht->type->trackMemUsage) ht->type->trackMemUsage(ht, -sizeof(bucket));
+        ht->child_buckets[0]--;
         b = next;
-        while (b != NULL) {
-            rehashBucket(ht, b);
-            next = getChildBucket(b);
-            zfree(b);
-            if (ht->type->trackMemUsage) ht->type->trackMemUsage(ht, -sizeof(bucket));
-            ht->child_buckets[0]--;
-            b = next;
-        }
     }
+
+    /* Reset the bucket after clearing its child buckets. */
+    b = ht->tables[0] + idx;
+    b->chained = 0;
+    b->presence = 0;
 
     /* Advance to the next bucket. */
     ht->rehash_idx++;
     if ((size_t)ht->rehash_idx >= numBuckets(ht->bucket_exp[0])) {
         rehashingCompleted(ht);
     }
+}
+
+/* Fetches entries from a bucket chain for batch processing. */
+static bucket *fetchEntriesForExpand(bucket *b, void *buf[], int *size, int max_bucket_count) {
+    *size = 0;
+    for (int idx = 0; idx < max_bucket_count && b != NULL; idx += 1) {
+        for (int pos = 0; pos < numBucketPositions(b); pos++) {
+            if (!isPositionFilled(b, pos)) continue; /* empty */
+            buf[*size] = b->entries[pos];
+            (*size)++;
+        }
+        b = getChildBucket(b);
+    }
+    return b;
+}
+
+/* Processes one bucket chain during incremental table expansion.
+ * Uses batch processing to optimize memory access patterns. */
+static void rehashStepExpand(hashtable *ht) {
+    void *entry_buf[FETCH_ENTRY_BUFFER_SIZE_WHEN_EXPAND];
+    const void *key_buf[FETCH_ENTRY_BUFFER_SIZE_WHEN_EXPAND];
+    size_t idx = ht->rehash_idx;
+    bucket *b = ht->tables[0] + idx;
+    int size = 0;
+    while (b != NULL) {
+        b = fetchEntriesForExpand(b, entry_buf, &size, FETCH_BUCKET_COUNT_WHEN_EXPAND);
+
+        /* Key optimization: no loop-carried dependency enables concurrent memory access,
+         * reducing CPU stall cycles. */
+        for (int i = 0; i < size; i++) {
+            key_buf[i] = entryGetKey(ht, entry_buf[i]);
+        }
+
+        for (int i = 0; i < size; i++) {
+            uint64_t hash = hashKey(ht, key_buf[i]);
+            rehashEntry(ht, entry_buf[i], hash, highBits(hash));
+        }
+    }
+
+    rehashStepFinalize(ht);
+}
+
+/* Rehashes a bucket during table shrinkage. */
+static void rehashBucketShrink(hashtable *ht, bucket *b) {
+    for (int pos = 0; pos < numBucketPositions(b); pos++) {
+        if (!isPositionFilled(b, pos)) continue; /* empty */
+        void *entry = b->entries[pos];
+        uint8_t h2 = b->hashes[pos];
+        /* When shrinking, it's possible to avoid computing the hash. We can
+         * just use idx has the hash. */
+        uint64_t hash = ht->rehash_idx;
+        /* Reinsert the entry into the new table using the derived hash. */
+        rehashEntry(ht, entry, hash, h2);
+    }
+}
+
+/* Processes one bucket chain during incremental table shrinkage. */
+static void rehashStepShrink(hashtable *ht) {
+    size_t idx = ht->rehash_idx;
+    bucket *b = ht->tables[0] + idx;
+    while (b != NULL) {
+        bucket *next = getChildBucket(b);
+        rehashBucketShrink(ht, b);
+        b = next;
+    }
+
+    rehashStepFinalize(ht);
+}
+
+static void rehashStep(hashtable *ht) {
+    assert(hashtableIsRehashing(ht));
+    if (ht->bucket_exp[1] < ht->bucket_exp[0]) {
+        rehashStepShrink(ht);
+        return;
+    }
+    rehashStepExpand(ht);
 }
 
 /* Called internally on lookup and other reads to the table. */

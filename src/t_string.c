@@ -98,7 +98,7 @@ void setGenericCommand(client *c,
     robj *existing_value = lookupKeyWrite(c->db, key);
     found = existing_value != NULL;
 
-    /* Handle the IFEQ conditional check */
+    /* Handle the IFEQ or IFNE conditional check */
     if (flags & ARGS_SET_IFEQ && found) {
         if (!(flags & ARGS_SET_GET) && checkType(c, existing_value, OBJ_STRING)) {
             goto cleanup;
@@ -115,7 +115,18 @@ void setGenericCommand(client *c,
             addReply(c, abort_reply ? abort_reply : shared.null[c->resp]);
         }
         goto cleanup;
-    }
+    }else if (flags & ARGS_SET_IFNE && found) {
+        if (!(flags & ARGS_SET_GET) && checkType(c, existing_value, OBJ_STRING)) {
+            goto cleanup;
+        }
+
+        if (compareStringObjects(existing_value, comparison) == 0) {
+            if (!(flags & ARGS_SET_GET)) {
+                addReply(c, abort_reply ? abort_reply : shared.null[c->resp]);
+            }
+            goto cleanup;
+        }
+    } 
 
     if ((flags & ARGS_SET_NX && found) || (flags & ARGS_SET_XX && !found)) {
         if (!(flags & ARGS_SET_GET)) {

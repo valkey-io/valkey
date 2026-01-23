@@ -7594,6 +7594,16 @@ int parseExtendedCommandArgumentsOrReply(client *c, int *flags, int *unit, robj 
             *flags |= ARGS_SET_IFEQ;
             *compare_val = next;
             j++;
+        } else if ((opt[0] == 'i' || opt[0] == 'I') &&
+                   (opt[1] == 'f' || opt[1] == 'F') &&
+                   (opt[2] == 'n' || opt[2] == 'N') &&
+                   (opt[3] == 'e' || opt[3] == 'E') && opt[4] == '\0' &&
+                   next &&
+                   !(*flags & ARGS_SET_NX || *flags & ARGS_SET_XX || *flags & ARGS_SET_IFNE) && (command_type == COMMAND_SET))
+        {
+            *flags |= ARGS_SET_IFNE;
+            *compare_val = next;
+            j++;
         } else if ((opt[0] == 'g' || opt[0] == 'G') &&
                    (opt[1] == 'e' || opt[1] == 'E') &&
                    (opt[2] == 't' || opt[2] == 'T') && opt[3] == '\0' &&

@@ -1998,6 +1998,7 @@ VALKEYMODULE_API void (*ValkeyModule_GetRandomHexChars)(char *dst, size_t len) V
 VALKEYMODULE_API void (*ValkeyModule_SetDisconnectCallback)(ValkeyModuleBlockedClient *bc,
                                                             ValkeyModuleDisconnectFunc callback) VALKEYMODULE_ATTR;
 VALKEYMODULE_API void (*ValkeyModule_SetClusterFlags)(ValkeyModuleCtx *ctx, uint64_t flags) VALKEYMODULE_ATTR;
+VALKEYMODULE_API unsigned int (*ValkeyModule_ClusterKeySlotC)(const char *key, size_t keylen) VALKEYMODULE_ATTR;
 VALKEYMODULE_API unsigned int (*ValkeyModule_ClusterKeySlot)(ValkeyModuleString *key) VALKEYMODULE_ATTR;
 VALKEYMODULE_API const char *(*ValkeyModule_ClusterCanonicalKeyNameInSlot)(unsigned int slot)VALKEYMODULE_ATTR;
 VALKEYMODULE_API int (*ValkeyModule_ExportSharedAPI)(ValkeyModuleCtx *ctx,
@@ -2491,6 +2492,7 @@ static int ValkeyModule_Init(ValkeyModuleCtx *ctx, const char *name, int ver, in
     VALKEYMODULE_GET_API(GetRandomBytes);
     VALKEYMODULE_GET_API(GetRandomHexChars);
     VALKEYMODULE_GET_API(SetClusterFlags);
+    VALKEYMODULE_GET_API(ClusterKeySlotC);
     VALKEYMODULE_GET_API(ClusterKeySlot);
     VALKEYMODULE_GET_API(ClusterCanonicalKeyNameInSlot);
     VALKEYMODULE_GET_API(ExportSharedAPI);

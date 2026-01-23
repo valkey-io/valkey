@@ -1018,6 +1018,17 @@ proc is_ipv6_available {} {
     return 0
 }
 
+# MPTCP detection
+proc is_mptcp_available {} {
+    # Typical error output from valkey-cli --mptcp:
+    # Could not connect to Valkey at 127.0.0.1:6379: MPTCP is not supported on this platform
+    if {[catch {exec $::VALKEY_CLI_BIN --mptcp ping} e] &&
+        [string match "*MPTCP is not supported on this platform*" $e]} {
+        return 0
+    }
+    return 1
+}
+
 # With the parallel test running multiple server instances at the same time
 # we need a fast enough computer, otherwise a lot of tests may generate
 # false positives.

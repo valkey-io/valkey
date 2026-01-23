@@ -6237,14 +6237,13 @@ int clusterPrimariesHaveReplicas(void) {
     dictIterator di;
     dictInitIterator(&di, server.cluster->nodes);
     dictEntry *de;
-    int replicas = 0;
     while ((de = dictNext(&di)) != NULL) {
         clusterNode *node = dictGetVal(de);
 
         if (nodeIsReplica(node)) continue;
-        replicas += node->num_replicas;
+        if (node->num_replicas) return 1;
     }
-    return replicas != 0;
+    return 0;
 }
 
 void clusterNodeSetSlotBit(clusterNode *n, int slot) {

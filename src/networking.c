@@ -1766,7 +1766,7 @@ void acceptCommonHandler(connection *conn, struct ClientFlags flags, char *ip) {
     char addr[CONN_ADDR_STR_LEN] = {0};
     char laddr[CONN_ADDR_STR_LEN] = {0};
     connFormatAddr(conn, addr, sizeof(addr), 1);
-    connFormatAddr(conn, laddr, sizeof(addr), 0);
+    connFormatAddr(conn, laddr, sizeof(laddr), 0);
 
     if (connGetState(conn) != CONN_STATE_ACCEPTING) {
         serverLog(LL_VERBOSE, "Accepted client connection in error state: %s (addr=%s laddr=%s)",
@@ -2765,7 +2765,13 @@ static void releaseBufReferences(char *buf, size_t bufpos) {
         ptr += sizeof(payloadHeader);
 
         if (header->payload_type == BULK_STR_REF) {
-            clusterSlotStatsAddNetworkBytesOutForSlot(header->slot, header->reply_len);
+            /* Here clusterSlotStatsAddNetworkBytesOutForSlot() is called in
+             * the IO thread after writing the reply to the client, and after
+             * #2652 it is also done in the normal code path in the main thread
+             * (afterCommand() -> clusterSlotStatsAddNetworkBytesOutForUserClient()).
+             * Before we come up with a better solution (see #2652), we need to
+             * comment it out to avoid the duplicate calculations. */
+            /* clusterSlotStatsAddNetworkBytesOutForSlot(header->slot, header->reply_len); */
 
             bulkStrRef *str_ref = (bulkStrRef *)ptr;
             size_t len = header->payload_len;

@@ -753,16 +753,8 @@ static int tlsCreateContexts(serverTLSContextConfig *ctx_config, SSL_CTX **out_c
         if (!client_ctx) goto error;
     }
 
-    SSL_CTX_free(valkey_tls_ctx);
-    SSL_CTX_free(valkey_tls_client_ctx);
-    valkey_tls_ctx = ctx;
-    valkey_tls_client_ctx = client_ctx;
-
-    tlsRefreshServerCertInfo();
-    tlsRefreshClientCertInfo();
-    tlsRefreshCACertInfo();
-    tlsLogServerCertExpiry();
-
+    *out_ctx = ctx;
+    *out_client_ctx = client_ctx;
     return C_OK;
 
 error:
@@ -953,6 +945,10 @@ static int tlsConfigure(void *priv, int reconfigure, bool background) {
         valkey_tls_ctx = ctx;
         valkey_tls_client_ctx = client_ctx;
         captureMetadata(ctx_config, &active_metadata);
+        tlsRefreshServerCertInfo();
+        tlsRefreshClientCertInfo();
+        tlsRefreshCACertInfo();
+        tlsLogServerCertExpiry();
     }
 
     atomic_store_explicit(&lastTlsConfigureTime, server.ustime, memory_order_relaxed);
@@ -1006,6 +1002,11 @@ void tlsApplyPendingReload(void) {
 
     SSL_CTX_free(old_ctx);
     SSL_CTX_free(old_client_ctx);
+
+    tlsRefreshServerCertInfo();
+    tlsRefreshClientCertInfo();
+    tlsRefreshCACertInfo();
+    tlsLogServerCertExpiry();
 
     serverLog(LL_NOTICE, "TLS materials reloaded successfully");
 }

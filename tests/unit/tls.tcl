@@ -201,6 +201,11 @@ start_server {tags {"tls"}} {
                 set s [valkey_client]
                 assert_equal "PONG" [$s PING]
                 $s close
+                set info1 [r info tls]
+                if {![regexp {tls_server_cert_serial:([^\r\n]+)} $info1 -> serial1]} {
+                    fail "INFO tls missing tls_server_cert_serial"
+                }
+                assert {$serial1 ne "none"}
 
                 # Wait for at least one auto-reload cycle to complete
                 after 1100
@@ -219,6 +224,12 @@ start_server {tags {"tls"}} {
                 set s [valkey_client]
                 assert_equal "PONG" [$s PING]
                 $s close
+                set info2 [r info tls]
+                if {![regexp {tls_server_cert_serial:([^\r\n]+)} $info2 -> serial2]} {
+                    fail "INFO tls missing tls_server_cert_serial after reload"
+                }
+                assert {$serial2 ne "none"}
+                assert {$serial1 ne $serial2}
 
                 # Wait again to ensure filesystem timestamp will be different
                 # for the second modification and next reload cycle can detect it

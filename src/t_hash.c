@@ -1355,7 +1355,6 @@ void hsetexCommand(client *c) {
     robj **new_argv = NULL;
     int new_argc = 0;
     int need_rewrite_argv = 0;
-
     robj **keepttl_fields = NULL;
     int expired_overitten = 0;
 

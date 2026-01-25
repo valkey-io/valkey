@@ -226,15 +226,15 @@ static void *IOThreadMain(void *myid) {
     size_t jobs_to_process = 0;
     IOJobQueue *jq = &io_jobs[id];
     monotime work_start_time = 0;
-    monotime prev_work_start_time = 0;
     while (1) {
         /* Cancellation point so that pthread_cancel() from main thread is honored. */
         pthread_testcancel();
-
-        prev_work_start_time = work_start_time;
+        monotime prev_work_start_time = work_start_time;
         work_start_time = getMonotonicUs();
-        if (prev_work_start_time != 0) {
-            atomic_fetch_add_explicit(&used_active_time_io_thread[id], (work_start_time - prev_work_start_time), memory_order_relaxed);
+        if (jobs_to_process != 0) {
+            atomic_fetch_add_explicit(&used_active_time_io_thread[id],
+                                      work_start_time - prev_work_start_time,
+                                      memory_order_relaxed);
         }
 
         jobs_to_process = IOJobQueue_availableJobs(jq);

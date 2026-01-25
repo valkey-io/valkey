@@ -953,8 +953,7 @@ void hincrbyCommand(client *c) {
     if (has_volatile_fields) {
         char buf[MAX_LONG_DOUBLE_CHARS];
         int len = ld2string(buf, sizeof(buf), value, LD_STR_HUMAN);
-        robj *newobj;
-        newobj = createRawStringObject(buf, len);
+        robj *newobj = createRawStringObject(buf, len);
         if (expiry == EXPIRY_NONE) {
             rewriteClientCommandArgument(c, 0, shared.hset);
             rewriteClientCommandArgument(c, 3, newobj);

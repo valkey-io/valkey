@@ -4546,7 +4546,12 @@ start_server {tags {"hashexpire external:skip"}} {
                 $primary $command myhash f1 1
                 wait_for_ofs_sync $primary $replica
 
-                assert_equal [$replica hget myhash f1] [$primary hget myhash f1]
+                # verify the value is freshly incremented on the primary and replica
+                assert_equal {1} [$primary hget myhash f1]
+                assert_equal {1} [$replica hget myhash f1]
+                # verify the entry has no expiry on the primary and the replica
+                assert_equal {-1} [$primary httl myhash fields 1 f1]
+                assert_equal {-1} [$replica httl myhash fields 1 f1]
 
                 assert_keyevent_patterns $primary_ksn myhash $primary_ksn_event($command) hexpire hexpired $primary_ksn_event($command)
                 assert_keyevent_patterns $replica_ksn myhash $replica_ksn_event($command) hexpire hset

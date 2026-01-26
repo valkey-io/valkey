@@ -4565,7 +4565,7 @@ start_server {tags {"hash"}} {
        r flushall
        r hset myhash f1 v1
        assert_equal [r OBJECT ENCODING myhash] "listpack"
-       assert_equal [r hsetex myhash exat 0 fields 2 f2 v2 f3 v3] 0
+       assert_equal [r hsetex myhash exat 0 fields 2 f2 v2 f3 v3] 1
        assert_equal [r hlen myhash] 1
        assert_equal [r OBJECT ENCODING myhash] "listpack"
        r config set import-mode yes

@@ -1986,12 +1986,15 @@ void propagateDeletion(serverDb *db, robj *key, int lazy, int slot) {
  *
  * This function builds and propagates a single HDEL command with multiple fields
  * for the given hash object `o`. It temporarily enables replication (if needed),
- * constructs the command using the field names, and sends it via alsoPropagate(). */
-static void propagateFieldsDeletion(serverDb *db, robj *o, size_t n_fields, robj *fields[], int didx) {
+ * constructs the command using the field names, and sends it via alsoPropagate().
+ * Returns how many fields where propagated */
+int propagateFieldsDeletion(serverDb *db, robj *o, size_t n_fields, robj *fields[], int didx) {
     int prev_replication_allowed = server.replication_allowed;
     server.replication_allowed = 1;
 
     robj *argv[EXPIRE_BULK_LIMIT + 2]; /* HDEL + key + fields */
+    if (n_fields > EXPIRE_BULK_LIMIT) n_fields = EXPIRE_BULK_LIMIT;
+
     int argc = 0;
     robj *keyobj = createStringObjectFromSds(objectGetKey(o));
     argv[argc++] = shared.hdel; // HDEL command
@@ -2006,6 +2009,7 @@ static void propagateFieldsDeletion(serverDb *db, robj *o, size_t n_fields, robj
     for (int i = 0; i < argc; i++) {
         decrRefCount(argv[i]);
     }
+    return n_fields;
 }
 
 /* Process expired fields for a hash delete them and propagate changes to replicas and AOF.

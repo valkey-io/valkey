@@ -144,6 +144,18 @@ tags {"needs:debug"} {
         assert_morethan_equal $low 300
     }
 
+    test {LATENCY DOCTOR includes last spike info when samples exist} {
+        # Ensure "Xs ago" is at least 1s to avoid 0s in output.
+        after 1100
+        set res [r latency doctor]
+        if {$::verbose} {
+            puts "LATENCY DOCTOR data:"
+            puts $res
+        }
+        assert_match {*Last spike:*} $res
+        assert_match {*Worst all time event:*} $res
+    }
+
     r config set latency-monitor-threshold $old_threshold_value
 } ;# tag
 

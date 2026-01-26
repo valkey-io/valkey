@@ -244,11 +244,22 @@ sds createLatencyReport(void) {
         }
         analyzeLatencyForEvent(event, &ls);
 
-        report = sdscatprintf(report,
-                              "%d. %s: %d latency spikes (average %lums, mean deviation %lums, period %.2f sec). Worst "
-                              "all time event %lums.",
-                              eventnum, event, ls.samples, (unsigned long)ls.avg, (unsigned long)ls.mad,
-                              (double)ls.period / ls.samples, (unsigned long)ts->max);
+        time_t last_time = 0;
+        int j;
+        for (j = 0; j < LATENCY_TS_LEN; j++) {
+            if (ts->samples[j].time > last_time) last_time = ts->samples[j].time;
+        }
+
+        report = sdscatprintf(
+            report, "%d. %s: %d latency spikes (average %lums, mean deviation %lums, period %.2f sec).\n",
+            eventnum, event, ls.samples, (unsigned long)ls.avg, (unsigned long)ls.mad,
+            (double)ls.period / ls.samples);
+        if (last_time) {
+            report = sdscatprintf(report, "Last spike: %lds ago (%ld).\n",
+                                  (long)(time(NULL) - last_time), (long)last_time);
+        }
+        report = sdscatprintf(report, "Worst all time event: %lums.",
+                              (unsigned long)ts->max);
 
         /* Fork */
         if (!strcasecmp(event, "fork")) {

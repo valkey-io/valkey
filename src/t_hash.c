@@ -1477,8 +1477,9 @@ void hsetexCommand(client *c) {
             changes++;
 
             if (expired) {
-                /* When KEEPTTL is used, we need to track all fields to propagate them
-                 * individually with their actual timestamps */
+                /* When KEEPTTL is used, we need to track all fields to propagate hdel per each of them
+                 * Replicas will not ignore expired fields on the replication stream. This is why we have to explicitly delete them,
+                 * so the replica will take the new field expiration time. */
                 if ((flags & ARGS_KEEPTTL)) {
                     if (keepttl_fields == NULL) {
                         keepttl_fields = zmalloc(sizeof(robj *) * num_fields);

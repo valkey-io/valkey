@@ -946,7 +946,7 @@ static int getCertSubjectFieldByName(X509 *cert, const char *field, char *out, s
 
 /* Extract URI from Subject Alternative Name extension and return the first URI
  * that matches an existing Valkey user. Returns NULL if no matching user found. */
-static sds getCertSANUri(X509 *cert) {
+static sds getCertSanUri(X509 *cert) {
     if (!cert) return NULL;
 
     GENERAL_NAMES *san_names = X509_get_ext_d2i(cert, NID_subject_alt_name, NULL, NULL);
@@ -988,7 +988,7 @@ sds tlsGetPeerUsername(connection *conn_) {
 
     switch (server.tls_ctx_config.client_auth_user) {
     case TLS_CLIENT_FIELD_URI:
-        result = getCertSANUri(cert);
+        result = getCertSanUri(cert);
         if (!result) {
             serverLog(LL_NOTICE, "TLS: No matching user found in certificate SAN URI fields");
         }

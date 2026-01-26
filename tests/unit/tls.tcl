@@ -175,21 +175,31 @@ start_server {tags {"tls"}} {
         }
 
         test {TLS: Auto-authenticate using tls-auth-clients-user (URI)} {
-            # Create a user matching the URI in the client certificate
-            # URI in cert: urn:valkey:user:Client-only
-            r ACL SETUSER {urn:valkey:user:Client-only} on >clientpass allcommands allkeys
-
             # Enable the feature to auto-authenticate based on URI
             r CONFIG SET tls-auth-clients-user URI
+            
+            # Create users matching the URI in the client certificate
+            r ACL SETUSER {urn:valkey:user:first} on >clientpass allcommands
+            r ACL SETUSER {urn:valkey:user:second} on >clientpass allcommands
 
             # With feature on, client should be auto-authenticated using the URI from SAN
+            # Verify that the authenticated user matches the first URI
             set s [valkey_client]
+            assert_equal "urn:valkey:user:first" [$s ACL WHOAMI]
 
-            # Now no explicit AUTH is needed
-            assert_equal "PONG" [$s PING]
+            # Turn off the first user
+            r ACL SETUSER {urn:valkey:user:first} off
 
-            # Verify that the authenticated user matches the URI
-            assert_equal "urn:valkey:user:Client-only" [$s ACL WHOAMI]
+            # Verify that the authenticated user matches the second URI
+            set s [valkey_client]
+            assert_equal "urn:valkey:user:second" [$s ACL WHOAMI]
+
+            # Turn off the second user
+            r ACL SETUSER {urn:valkey:user:second} off
+
+            # Verify that the authenticated user matches the default
+            set s [valkey_client]
+            assert_equal "default" [$s ACL WHOAMI]
 
             $s close
         }

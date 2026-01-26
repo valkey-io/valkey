@@ -376,4 +376,36 @@ start_server {tags {"commandlog"} overrides {commandlog-execution-slower-than 10
             assert_equal {test-client} [lindex $ping_cmd 5]
         }
     }
+
+    test {COMMANDLOG large-reply - byte tracking with copy avoidance} {
+        set copy_avoid [lindex [r config get min-string-size-avoid-copy-reply] 1]
+        r config set min-string-size-avoid-copy-reply 1
+        
+        # Disable request tracking
+        r config set commandlog-request-larger-than -1
+        r commandlog reset large-reply
+        
+        set value [string repeat A 2048]
+        r set testkey $value
+        
+        # Should not be logged
+        r get testkey
+        assert_equal [r commandlog len large-reply] 0
+        
+        # Enable tracking
+        r config set commandlog-request-larger-than 1024
+        r commandlog reset large-reply
+        
+        # Get the value again, should be tracked
+        r get testkey
+        assert_equal [r commandlog len large-reply] 1
+        set e [lindex [r commandlog get -1 large-reply] 0]
+        assert_equal [lindex $e 3] {get testkey}
+        # For 2048 bytes: $2048\r\n<data>\r\n = 2057
+        assert_equal [lindex $e 2] 2057
+        
+        # Cleanup
+        r config set min-string-size-avoid-copy-reply $copy_avoid
+        r del testkey
+    }
 }

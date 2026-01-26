@@ -1,17 +1,17 @@
-proc activate_io_threads_and_wait {server_pid} {
-    # Create 16 (prefetch batch size) + 1 clients
+proc activate_io_threads_and_wait {} {
+    set server_pid [s process_id]
+    # Create 16 clients
     for {set i 0} {$i < 16} {incr i} {
-        set rd$i [valkey_deferring_client]
+        set rd($i) [valkey_deferring_client]
     }
-    # set a key that will be later be prefetch
     r set a 0
     # Create a batch of commands by suspending the server for a while
     # before responding to the first command
     pause_process $server_pid
     # Send set commands for all clients except the first
     for {set i 1} {$i < 16} {incr i} {
-        [set rd$i] incr a
-        [set rd$i] flush
+        $rd($i) incr a
+        $rd($i) flush
     }
     # Resume the server
     resume_process $server_pid
@@ -31,16 +31,15 @@ proc activate_io_threads_and_wait {server_pid} {
     }
 
     for {set i 0} {$i < 16} {incr i} {
-        [set rd$i] close
+        $rd($i) close
     }
 }
 
 start_server {config "minimal.conf" tags {"external:skip"} overrides {enable-debug-command {yes} io-threads 5}} {
-    set server_pid [s process_id]
     # Skip if non io-threads mode - as it is relevant only for io-threads mode
     assert_equal {io-threads 5} [r config get io-threads]
     test {Force the use of IO threads and assert active IO thread usage} {
-        activate_io_threads_and_wait $server_pid
+        activate_io_threads_and_wait
         set info [r info]
         set io_threads_count [dict get [r config get io-threads] io-threads]
         array set initial_active_times {}
@@ -81,11 +80,11 @@ start_server {config "minimal.conf" tags {"external:skip"} overrides {enable-deb
 
         # Sleep for a time duration that is significantly longer than how much
         # time each of the io_threads would be active again when reactivated.
-        set sleep_time_ms 4000
+        set sleep_time_ms 1000
         after $sleep_time_ms
 
         # Reactivate io-threads and wait for execution
-        activate_io_threads_and_wait $server_pid
+        activate_io_threads_and_wait
 
         set info [r info]
         for {set i 1} {$i <= $io_threads_count} {incr i} {

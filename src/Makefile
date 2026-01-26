@@ -442,13 +442,173 @@ endif
 ENGINE_NAME=valkey
 SERVER_NAME=$(ENGINE_NAME)-server$(PROG_SUFFIX)
 ENGINE_SENTINEL_NAME=$(ENGINE_NAME)-sentinel$(PROG_SUFFIX)
-ENGINE_TRACE_OBJ=trace/trace.o trace/trace_commands.o trace/trace_db.o trace/trace_cluster.o trace/trace_server.o trace/trace_rdb.o trace/trace_aof.o
-ENGINE_SERVER_OBJ=threads_mngr.o adlist.o vector.o quicklist.o ae.o anet.o dict.o hashtable.o kvstore.o server.o sds.o zmalloc.o lzf_c.o lzf_d.o pqsort.o zipmap.o sha1.o ziplist.o release.o memory_prefetch.o io_threads.o networking.o util.o object.o db.o replication.o rdb.o t_string.o t_list.o t_set.o t_zset.o t_hash.o config.o aof.o pubsub.o multi.o debug.o sort.o intset.o syncio.o cluster.o cluster_legacy.o cluster_slot_stats.o crc16.o cluster_migrateslots.o endianconv.o commandlog.o eval.o bio.o rio.o rand.o memtest.o syscheck.o crcspeed.o crccombine.o crc64.o bitops.o sentinel.o notify.o setproctitle.o blocked.o hyperloglog.o latency.o sparkline.o valkey-check-rdb.o valkey-check-aof.o geo.o lazyfree.o module.o lrulfu.o evict.o expire.o geohash.o geohash_helper.o childinfo.o allocator_defrag.o defrag.o siphash.o rax.o t_stream.o listpack.o localtime.o lolwut.o lolwut5.o lolwut6.o lolwut9.o acl.o tracking.o socket.o tls.o sha256.o timeout.o setcpuaffinity.o monotonic.o mt19937-64.o resp_parser.o call_reply.o script.o functions.o commands.o strl.o connection.o unix.o logreqres.o rdma.o scripting_engine.o entry.o vset.o fifo.o mutexqueue.o
+ENGINE_TRACE_OBJ = \
+    trace/trace.o \
+    trace/trace_aof.o \
+    trace/trace_cluster.o \
+    trace/trace_commands.o \
+    trace/trace_db.o \
+    trace/trace_rdb.o \
+    trace/trace_server.o
+ENGINE_SERVER_OBJ = \
+    acl.o \
+    adlist.o \
+    ae.o \
+    allocator_defrag.o \
+    anet.o \
+    aof.o \
+    bio.o \
+    bitops.o \
+    blocked.o \
+    call_reply.o \
+    childinfo.o \
+    cluster.o \
+    cluster_legacy.o \
+    cluster_migrateslots.o \
+    cluster_slot_stats.o \
+    commandlog.o \
+    commands.o \
+    config.o \
+    connection.o \
+    crc16.o \
+    crc64.o \
+    crccombine.o \
+    crcspeed.o \
+    db.o \
+    debug.o \
+    defrag.o \
+    dict.o \
+    endianconv.o \
+    entry.o \
+    eval.o \
+    evict.o \
+    expire.o \
+    fifo.o \
+    functions.o \
+    geo.o \
+    geohash.o \
+    geohash_helper.o \
+    hashtable.o \
+    hyperloglog.o \
+    intset.o \
+    io_threads.o \
+    kvstore.o \
+    latency.o \
+    lazyfree.o \
+    listpack.o \
+    localtime.o \
+    logreqres.o \
+    lolwut.o \
+    lolwut5.o \
+    lolwut6.o \
+    lolwut9.o \
+    lrulfu.o \
+    lzf_c.o \
+    lzf_d.o \
+    memory_prefetch.o \
+    memtest.o \
+    module.o \
+    monotonic.o \
+    mt19937-64.o \
+    multi.o \
+    mutexqueue.o \
+    networking.o \
+    notify.o \
+    object.o \
+    pqsort.o \
+    pubsub.o \
+    quicklist.o \
+    rand.o \
+    rax.o \
+    rdb.o \
+    rdma.o \
+    release.o \
+    replication.o \
+    resp_parser.o \
+    rio.o \
+    script.o \
+    scripting_engine.o \
+    sds.o \
+    sentinel.o \
+    server.o \
+    setcpuaffinity.o \
+    setproctitle.o \
+    sha1.o \
+    sha256.o \
+    siphash.o \
+    socket.o \
+    sort.o \
+    sparkline.o \
+    strl.o \
+    syncio.o \
+    syscheck.o \
+    t_hash.o \
+    t_list.o \
+    t_set.o \
+    t_stream.o \
+    t_string.o \
+    t_zset.o \
+    threads_mngr.o \
+    timeout.o \
+    tls.o \
+    tracking.o \
+    unix.o \
+    util.o \
+    valkey-check-aof.o \
+    valkey-check-rdb.o \
+    vector.o \
+    vset.o \
+    ziplist.o \
+    zipmap.o \
+    zmalloc.o
 ENGINE_SERVER_OBJ+=$(ENGINE_TRACE_OBJ)
 ENGINE_CLI_NAME=$(ENGINE_NAME)-cli$(PROG_SUFFIX)
-ENGINE_CLI_OBJ=anet.o adlist.o dict.o valkey-cli.o zmalloc.o release.o ae.o serverassert.o crcspeed.o crccombine.o crc64.o siphash.o crc16.o monotonic.o cli_common.o mt19937-64.o strl.o cli_commands.o sds.o util.o sha256.o
+ENGINE_CLI_OBJ = \
+    adlist.o \
+    ae.o \
+    anet.o \
+    cli_commands.o \
+    cli_common.o \
+    crc16.o \
+    crc64.o \
+    crccombine.o \
+    crcspeed.o \
+    dict.o \
+    monotonic.o \
+    mt19937-64.o \
+    release.o \
+    sds.o \
+    serverassert.o \
+    sha256.o \
+    siphash.o \
+    strl.o \
+    util.o \
+    valkey-cli.o \
+    zmalloc.o
 ENGINE_BENCHMARK_NAME=$(ENGINE_NAME)-benchmark$(PROG_SUFFIX)
-ENGINE_BENCHMARK_OBJ=ae.o anet.o valkey-benchmark.o adlist.o dict.o zmalloc.o serverassert.o release.o crcspeed.o crccombine.o crc64.o siphash.o crc16.o monotonic.o cli_common.o mt19937-64.o strl.o sds.o util.o sha256.o fuzzer_client.o fuzzer_command_generator.o
+ENGINE_BENCHMARK_OBJ = \
+    adlist.o \
+    ae.o \
+    anet.o \
+    cli_common.o \
+    crc16.o \
+    crc64.o \
+    crccombine.o \
+    crcspeed.o \
+    dict.o \
+    fuzzer_client.o \
+    fuzzer_command_generator.o \
+    monotonic.o \
+    mt19937-64.o \
+    release.o \
+    sds.o \
+    serverassert.o \
+    sha256.o \
+    siphash.o \
+    strl.o \
+    util.o \
+    valkey-benchmark.o \
+    zmalloc.o
 ENGINE_CHECK_RDB_NAME=$(ENGINE_NAME)-check-rdb$(PROG_SUFFIX)
 ENGINE_CHECK_AOF_NAME=$(ENGINE_NAME)-check-aof$(PROG_SUFFIX)
 ENGINE_LIB_NAME=lib$(ENGINE_NAME).a

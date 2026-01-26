@@ -344,6 +344,22 @@ static_assert(offsetof(clusterMsgLight, data) == 16, "unexpected field offset");
 
 #define CLUSTERMSG_LIGHT_MIN_LEN (sizeof(clusterMsgLight) - sizeof(union clusterMsgData))
 
+typedef struct {
+    char sig[4];       /* Signature "RCmb" (Cluster message bus). */
+    uint32_t totlen;   /* Total length of this message */
+    uint16_t ver;      /* Protocol version, currently set to CLUSTER_PROTO_VER. */
+    uint16_t notused1; /* full: port, light: notused1 */
+    uint16_t type;     /* Message type */
+    uint16_t notused2; /* full: count, light: notused2 */
+} clusterMsgHeader;
+
+static_assert(offsetof(clusterMsgHeader, sig) == offsetof(clusterMsg, sig), "unexpected field offset");
+static_assert(offsetof(clusterMsgHeader, totlen) == offsetof(clusterMsg, totlen), "unexpected field offset");
+static_assert(offsetof(clusterMsgHeader, ver) == offsetof(clusterMsg, ver), "unexpected field offset");
+static_assert(offsetof(clusterMsgHeader, type) == offsetof(clusterMsg, type), "unexpected field offset");
+static_assert(offsetof(clusterMsgHeader, notused1) == offsetof(clusterMsg, port), "unexpected field offset");
+static_assert(offsetof(clusterMsgHeader, notused2) == offsetof(clusterMsg, count), "unexpected field offset");
+
 struct _clusterNode {
     mstime_t ctime;                         /* Node object creation time. */
     char name[CLUSTER_NAMELEN];             /* Node name, hex string, sha1-size */

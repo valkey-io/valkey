@@ -885,6 +885,19 @@ start_server {tags {"hashexpire"}} {
         assert_equal {0} $res2
     }
 
+    test {HEXPIRE GT - Do not expire items when expiration in the past} {
+        r FLUSHALL
+        r HSETEX myhash EX 600 FIELDS 1 field1 val1
+        assert_equal {1} [r HLEN myhash]
+        assert_equal {0 -2} [r HEXPIRE myhash 0 GT FIELDS 2 field1 field2]
+        assert_equal {1} [r HLEN myhash]
+        assert_equal {0 -2} [r HEXPIRE myhash 0 NX FIELDS 2 field1 field2]
+        assert_equal {1} [r HLEN myhash]
+        r HSET myhash field1 val1
+        assert_equal {0 -2} [r HEXPIRE myhash 0 XX FIELDS 2 field1 field2]
+        assert_equal {1} [r HLEN myhash]
+    }
+
     # Conditionals: LT
     test {HEXPIRE LT - only set if new TTL < existing TTL} {
         r FLUSHALL
@@ -1520,6 +1533,19 @@ start_server {tags {"hashexpire"}} {
         }
     }
 
+    test "HRANDFIELD - returns null response when all fields are expired" {
+        r FLUSHALL
+        r DEBUG SET-ACTIVE-EXPIRE 0
+        assert_equal {1} [r HSETEX myhash PX 1 fields 2 f1 v1 f2 v2]
+        wait_for_condition 100 100 {
+            [r HGETALL myhash] eq {}
+        } else {
+            fail "Hash is showing expired elements"
+        }
+        assert_equal {} [r hrandfield myhash2]
+        r DEBUG SET-ACTIVE-EXPIRE 1
+    } {OK} {needs:debug}
+    
     foreach cmd {RENAME RESTORE} {
         test "$cmd Preserves Field TTLs" {
             r FLUSHALL
@@ -4497,4 +4523,58 @@ start_server {tags {"hashexpire external:skip"}} {
             $rd_replica close
         }
     }
+}
+
+start_server {tags {"hash"}} {
+    test {Overwriting hash with volatile fields updates keys_with_volatile_items tracking} {
+        r FLUSHALL
+        r DEBUG SET-ACTIVE-EXPIRE 0
+
+        r HSETEX myhash EX 100 FIELDS 1 field1 value1
+
+        set info1 [r INFO keyspace]
+        assert_match {*keys_with_volatile_items=1*} $info1
+        assert_equal 1 [r EXISTS myhash]
+
+        r SET myhash "I'm a string now"
+
+        set info2 [r INFO keyspace]
+        assert_match {*keys_with_volatile_items=0*} $info2
+        assert_equal {string} [r TYPE myhash]
+        assert_equal "I'm a string now" [r GET myhash]
+
+        r DEBUG SET-ACTIVE-EXPIRE 1
+    } {OK} {needs:debug}
+
+    test {RESTORE REPLACE clears keys_with_volatile_items tracking} {
+       r FLUSHALL
+       r HSETEX myhash EX 100 FIELDS 1 f1 v1
+       assert_match {*keys_with_volatile_items=1*} [r INFO keyspace]
+
+       r SET tempkey "I'm a string"
+       set serialized [r DUMP tempkey]
+
+       r RESTORE myhash 0 $serialized REPLACE
+       assert_match {*keys_with_volatile_items=0*} [r INFO keyspace]
+       assert_equal {string} [r TYPE myhash]
+   }
+
+   test {Zero is a valid ttl in HFE} {
+       r flushall
+       r hset myhash f1 v1
+       assert_equal [r OBJECT ENCODING myhash] "listpack"
+       assert_equal [r hsetex myhash exat 0 fields 2 f2 v2 f3 v3] 0
+       assert_equal [r hlen myhash] 1
+       assert_equal [r OBJECT ENCODING myhash] "listpack"
+       r config set import-mode yes
+       assert_equal [r hsetex myhash exat 0 fields 2 f2 v2 f3 v3] 1
+       assert_equal [r hlen myhash] 3
+       assert_equal [r OBJECT ENCODING myhash] "hashtable"
+       r config set import-mode no
+       wait_for_condition 30 100 {
+           [r hlen myhash] == 1
+       } else {
+           fail "field wasn't expired"
+       }
+   }
 }

@@ -294,7 +294,11 @@ start_server {tags {"expire"}} {
         r del foo
         assert_error {ERR value is not an integer or out of range} {r getex foo ex abcd}
         r set foo bar
-        assert_error {ERR value is not an integer or out of range} {r getex foo ex -abcd}
+        assert_error {ERR value is not an integer or out of range} {r getex foo px -abcd}
+        r del foo
+        r hset foo f v
+        assert_error {ERR value is not an integer or out of range} {r getex foo exat -abcd}
+        r del foo
     }
 
     test {EXPIRE with big integer overflows when converted to milliseconds} {

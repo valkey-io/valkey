@@ -32,7 +32,6 @@
  * SPDX-License-Identifier: BSD-3-Clause
  */
 
-#include "expire.h"
 #include "hashtable.h"
 #include "rax.h"
 #include "sds.h"

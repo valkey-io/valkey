@@ -553,7 +553,7 @@ start_server {tags {"hashexpire"}} {
     } {ERR *}
 
     foreach command {EX PX EXAT PXAT} {
-        test "HSETEX $command 0/past time works correctly with 1 field" {
+        test "HSETEX $command 0/past time works correctly with 2 fields" {
             r FLUSHALL
             r config resetstat
             # Create hash with field
@@ -564,7 +564,7 @@ start_server {tags {"hashexpire"}} {
             set rd [setup_single_keyspace_notification r]
             
             # Set field to expire immediately
-            assert_equal {1} [r HSETEX myhash $command [get_past_zero_expire_value $command] FIELDS 1 f1 v1]
+            assert_equal {1} [r HSETEX myhash $command [get_past_zero_expire_value $command] FIELDS 2 f1 v1 f2 v2]
 
             # Verify field and keys are deleted
             assert_keyevent_patterns $rd myhash hset hexpire hexpired del
@@ -573,7 +573,7 @@ start_server {tags {"hashexpire"}} {
             assert_equal 0 [r EXISTS myhash]
             assert_equal 0 [get_keys r]
             assert_equal 0 [get_keys_with_volatile_items r]
-            assert_equal 1 [info_field [r info stats] expired_fields]
+            assert_equal 2 [info_field [r info stats] expired_fields]
             $rd close
         }
     }

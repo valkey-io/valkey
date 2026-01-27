@@ -1395,13 +1395,15 @@ void hsetexCommand(client *c) {
 
     for (i = fields_index; i < c->argc; i += 2) {
         if (set_expired) {
+            hashTypeIgnoreTTL(o, true);
             if (hashTypeDelete(o, objectGetVal(c->argv[i]))) {
                 new_argv[new_argc++] = c->argv[i];
                 incrRefCount(c->argv[i]);
-                /* we treat this case exactly as active expiration. */
-                server.stat_expiredfields++;
                 changes++;
             }
+            /* we treat this case exactly as active expiration. */
+            server.stat_expiredfields++;
+            hashTypeIgnoreTTL(o, false);
         } else {
             hashTypeSet(o, objectGetVal(c->argv[i]), objectGetVal(c->argv[i + 1]), when, set_flags);
             changes++;

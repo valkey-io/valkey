@@ -560,7 +560,9 @@ int performEvictions(void) {
             enterExecutionUnit(1, 0);
             delta = (long long)zmalloc_used_memory();
             latencyStartMonitor(eviction_latency);
-            dbGenericDelete(db, keyobj, server.lazyfree_lazy_eviction, DB_FLAG_KEY_EVICTED);
+            int deleted = dbGenericDelete(db, keyobj, server.lazyfree_lazy_eviction, DB_FLAG_KEY_EVICTED);
+            serverAssertWithInfo(NULL, keyobj, deleted);
+            server.dirty++;
             latencyEndMonitor(eviction_latency);
             latencyAddSampleIfNeeded("eviction-del", eviction_latency);
             latencyTraceIfNeeded(db, eviction_del, eviction_latency);

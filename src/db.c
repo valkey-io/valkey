@@ -1917,7 +1917,9 @@ long long getExpire(serverDb *db, robj *key) {
 void deleteExpiredKeyAndPropagateWithDictIndex(serverDb *db, robj *keyobj, int dict_index) {
     mstime_t expire_latency;
     latencyStartMonitor(expire_latency);
-    dbGenericDeleteWithDictIndex(db, keyobj, server.lazyfree_lazy_expire, DB_FLAG_KEY_EXPIRED, dict_index);
+    int deleted = dbGenericDeleteWithDictIndex(db, keyobj, server.lazyfree_lazy_expire, DB_FLAG_KEY_EXPIRED, dict_index);
+    serverAssertWithInfo(NULL, keyobj, deleted);
+    server.dirty++;
     latencyEndMonitor(expire_latency);
     latencyAddSampleIfNeeded("expire-del", expire_latency);
     latencyTraceIfNeeded(db, expire_del, expire_latency);

@@ -290,6 +290,13 @@ start_server {tags {"expire"}} {
         set e
     } {ERR invalid expire time in 'getex' command}
 
+    test {GETEX with error expiration time} {
+        r del foo
+        assert_error {ERR value is not an integer or out of range} {r getex foo ex abcd}
+        r set foo bar
+        assert_error {ERR value is not an integer or out of range} {r getex foo ex -abcd}
+    }
+
     test {EXPIRE with big integer overflows when converted to milliseconds} {
         r set foo bar
 

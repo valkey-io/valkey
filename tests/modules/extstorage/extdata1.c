@@ -50,6 +50,8 @@ ValkeyModuleDict *storage_mem_pool[MAX_DB];  // Memory pool for storage
 ValkeyModuleDict *filter_mem_pool[MAX_DB];  // Memory pool for filter
 ValkeyModuleDict *storage_snapshot_pool[MAX_DB]; // Snapshot pool for storage
 ValkeyModuleDict *filter_snapshot_pool[MAX_DB]; // Snapshot pool for filter
+ValkeyModuleDict *storage_slot_pool[MAX_DB];  // Slot tracking for storage
+ValkeyModuleDict *filter_slot_pool[MAX_DB];   // Slot tracking for filter
 
 /* Failure simulation configuration */
 static long long set_failure_percent = 0;  // 0 = no failures, >0 = p out of 100 sets fail
@@ -63,6 +65,9 @@ static long long last_backup_second = 0;
 static int backup_sequence_counter = 0;
 static char last_backup_id[256] = {0};
 static int reuse_last_backup_id = 0;  /* Flag: 1 = reuse last_backup_id, 0 = generate new */
+
+/* Cluster mode flag */
+static int is_cluster_enabled = 0;  /* 0 = standalone, 1 = cluster */
 
 /* Loading state and command queue */
 static int is_loading[MAX_DB] = {0};  // Flag to indicate if we're currently loading from backup
@@ -331,6 +336,11 @@ static int storageSetFunction(ValkeyModuleCtx *module_ctx,
         return EXTERNAL_ERROR;
     }
 
+    ValkeyModule_Log(module_ctx, "debug", "storageSet: about to get slot for cluster mode%s",
+                     is_cluster_enabled ? "enabled" : "disabled");
+    int slot = is_cluster_enabled ? ValkeyModule_ClusterKeySlot(key) : EXTERNAL_ALL_SLOTS;
+    ValkeyModule_Log(module_ctx, "notice", "storageSet: key=%s slot=%d",
+                     ValkeyModule_StringPtrLen(key, NULL), slot);
     ValkeyModule_Log(module_ctx, "debug", "DEBUG: storageSetFunction called - key=%s, dbid=%d, dump_every_write=%d",
                      ValkeyModule_StringPtrLen(key, NULL), dbid, dump_every_write);
     
@@ -393,6 +403,15 @@ static int storageSetFunction(ValkeyModuleCtx *module_ctx,
         ValkeyModule_FreeString(NULL, previous_value);
     }
     
+    /* Track slot information for this key */
+    ValkeyModuleString *old_slot_value = ValkeyModule_DictGet(storage_slot_pool[dbid], (ValkeyModuleString *)key, NULL);
+    ValkeyModuleString *slot_value = ValkeyModule_CreateStringPrintf(NULL, "%d", slot);
+    ValkeyModule_DictReplace(storage_slot_pool[dbid], (ValkeyModuleString *)key, slot_value);
+    ValkeyModule_RetainString(NULL, slot_value);
+    if (old_slot_value != NULL) {
+        ValkeyModule_FreeString(NULL, old_slot_value);
+    }
+    
     /* Auto-dump on every write if configured */
     if (dump_every_write) {
         ValkeyModule_Log(module_ctx, "notice", "Auto-dumping data after SET operation (dump_every_write=1)");
@@ -434,6 +453,10 @@ static int storageGetFunction(ValkeyModuleCtx *module_ctx,
         return EXTERNAL_ERROR;
     }
     
+    int slot = is_cluster_enabled ? ValkeyModule_ClusterKeySlot(key) : EXTERNAL_ALL_SLOTS;
+    ValkeyModule_Log(module_ctx, "notice", "storageGet: key=%s slot=%d",
+                     ValkeyModule_StringPtrLen(key, NULL), slot);
+    
     size_t dict_size = storage_mem_pool[dbid] ? ValkeyModule_DictSize(storage_mem_pool[dbid]) : 0;
     ValkeyModule_Log(module_ctx, "debug", "storageGetFunction: dbid=%d, key=%s, dict_size=%zu",
                      dbid, ValkeyModule_StringPtrLen(key, NULL), dict_size);
@@ -471,6 +494,10 @@ static int storageDelFunction(ValkeyModuleCtx *module_ctx,
         ValkeyModule_Log(module_ctx, "error", "ERROR: storageDelFunction called with NULL key");
         return EXTERNAL_ERROR;
     }
+    
+    int slot = is_cluster_enabled ? ValkeyModule_ClusterKeySlot(key) : EXTERNAL_ALL_SLOTS;
+    ValkeyModule_Log(module_ctx, "notice", "storageDel: key=%s slot=%d",
+                     ValkeyModule_StringPtrLen(key, NULL), slot);
     ValkeyModule_Log(module_ctx, "debug", "storageDelFunction: dbid=%d, key=%s",
                      dbid, ValkeyModule_StringPtrLen(key, NULL));
     
@@ -488,6 +515,13 @@ static int storageDelFunction(ValkeyModuleCtx *module_ctx,
         ValkeyModule_ReplyWithErrorFormat(module_ctx, "ERR Failed to del key %s",
                                           ValkeyModule_StringPtrLen(key, NULL) );
         return EXTERNAL_ERROR;
+    }
+    
+    /* Also remove slot tracking */
+    ValkeyModuleString *old_slot_value = ValkeyModule_DictGet(storage_slot_pool[dbid], (ValkeyModuleString *)key, NULL);
+    ValkeyModule_DictDel(storage_slot_pool[dbid], (ValkeyModuleString *)key, NULL);
+    if (old_slot_value != NULL) {
+        ValkeyModule_FreeString(NULL, old_slot_value);
     }
 
     ValkeyModule_Log(module_ctx, "debug", "storageDelFunction: delete successful");
@@ -536,12 +570,16 @@ static int filterSetFunction(ValkeyModuleCtx *module_ctx,
     
     int dbid = ValkeyModule_GetDbIdFromOptCtx(key_ctx);
     const ValkeyModuleString *key = ValkeyModule_GetKeyNameFromOptCtx(key_ctx);
-    ValkeyModule_Log(module_ctx, "debug", "DEBUG: filterSetFunction called");
     
     if (key == NULL) {
         ValkeyModule_Log(module_ctx, "error", "ERROR: filterSetFunction called with NULL key");
         return EXTERNAL_ERROR;
     }
+    
+    int slot = is_cluster_enabled ? ValkeyModule_ClusterKeySlot(key) : EXTERNAL_ALL_SLOTS;
+    ValkeyModule_Log(module_ctx, "notice", "filterSet: key=%s slot=%d",
+                     ValkeyModule_StringPtrLen(key, NULL), slot);
+    ValkeyModule_Log(module_ctx, "debug", "DEBUG: filterSetFunction called");
     
     /* If we're currently loading, just return success - storage will queue the commands */
     if (is_loading[dbid]) {
@@ -567,6 +605,15 @@ static int filterSetFunction(ValkeyModuleCtx *module_ctx,
     if (ValkeyModule_DictReplace(filter_mem_pool[dbid], (ValkeyModuleString *)key, "") == VALKEYMODULE_ERR) {
         ValkeyModule_Log(module_ctx, "error", "ERROR: Failed to set key in filter");
         return EXTERNAL_ERROR;
+    }
+    
+    /* Track slot information for this key */
+    ValkeyModuleString *old_slot_value = ValkeyModule_DictGet(filter_slot_pool[dbid], (ValkeyModuleString *)key, NULL);
+    ValkeyModuleString *slot_value = ValkeyModule_CreateStringPrintf(NULL, "%d", slot);
+    ValkeyModule_DictReplace(filter_slot_pool[dbid], (ValkeyModuleString *)key, slot_value);
+    ValkeyModule_RetainString(NULL, slot_value);
+    if (old_slot_value != NULL) {
+        ValkeyModule_FreeString(NULL, old_slot_value);
     }
 
     ValkeyModule_Log(module_ctx, "debug", "DEBUG: filterSetFunction - set successfully: %zu",
@@ -598,6 +645,11 @@ static int filterGetFunction(ValkeyModuleCtx *module_ctx,
         ValkeyModule_Log(module_ctx, "error", "ERROR: filterGetFunction called with NULL key");
         return EXTERNAL_ERROR;
     }
+    
+    int slot = is_cluster_enabled ? ValkeyModule_ClusterKeySlot(key) : EXTERNAL_ALL_SLOTS;
+    ValkeyModule_Log(module_ctx, "notice", "filterGet: key=%s slot=%d",
+                     ValkeyModule_StringPtrLen(key, NULL), slot);
+    
     size_t dict_size = filter_mem_pool[dbid] ? ValkeyModule_DictSize(filter_mem_pool[dbid]) : 0;
     ValkeyModule_Log(module_ctx, "debug", "filterGetFunction: dbid=%d, key=%s, dict_size=%zu",
                      dbid, ValkeyModule_StringPtrLen(key, NULL), dict_size);
@@ -634,6 +686,10 @@ static int filterDelFunction(ValkeyModuleCtx *module_ctx,
         ValkeyModule_Log(module_ctx, "error", "ERROR: filterDelFunction called with NULL key");
         return EXTERNAL_ERROR;
     }
+    
+    int slot = is_cluster_enabled ? ValkeyModule_ClusterKeySlot(key) : EXTERNAL_ALL_SLOTS;
+    ValkeyModule_Log(module_ctx, "notice", "filterDel: key=%s slot=%d",
+                     ValkeyModule_StringPtrLen(key, NULL), slot);
     ValkeyModule_Log(module_ctx, "debug", "filterDelFunction: dbid=%d, key=%s",
                      dbid, ValkeyModule_StringPtrLen(key, NULL));
     
@@ -651,6 +707,13 @@ static int filterDelFunction(ValkeyModuleCtx *module_ctx,
         ValkeyModule_ReplyWithErrorFormat(module_ctx, "ERR Failed to del key %s",
                                           ValkeyModule_StringPtrLen(key, NULL));
         return EXTERNAL_ERROR;
+    }
+    
+    /* Also remove slot tracking */
+    ValkeyModuleString *old_slot_value = ValkeyModule_DictGet(filter_slot_pool[dbid], (ValkeyModuleString *)key, NULL);
+    ValkeyModule_DictDel(filter_slot_pool[dbid], (ValkeyModuleString *)key, NULL);
+    if (old_slot_value != NULL) {
+        ValkeyModule_FreeString(NULL, old_slot_value);
     }
     
     ValkeyModule_Log(module_ctx, "debug", "filterDelFunction: delete successful");
@@ -840,7 +903,7 @@ static int filterDumpFunction(ValkeyModuleCtx *module_ctx,
             
             /* Format: backup_-1_<timestamp>_<sequence> */
             snprintf(backup_id_str, sizeof(backup_id_str), "backup_%d_%lld_%d",
-                    -1, (long long)tv.tv_sec, backup_sequence_counter);
+                    EXTERNAL_ALL_DBS, (long long)tv.tv_sec, backup_sequence_counter);
             
             /* Store for potential reuse by paired dump (storage/filter) */
             strncpy(last_backup_id, backup_id_str, sizeof(last_backup_id) - 1);
@@ -907,11 +970,8 @@ static int filterDumpFunction(ValkeyModuleCtx *module_ctx,
         ValkeyModule_Log(module_ctx, "notice", "Dumped filter data for database %d to %s",
                          dbid, filter_filename);
         
-    } else if (dbid == -1) {
-        /* Dump all databases */
+    } else if (dbid == EXTERNAL_ALL_DBS) {
         ValkeyModule_Log(module_ctx, "notice", "filterDumpFunction: dumping all databases");
-        
-        /* Iterate through all databases */
         for (int db = 0; db < MAX_DB; db++) {
             if (filterDumpFunction(module_ctx,
                                    filter_ctx,
@@ -1010,7 +1070,7 @@ static int storageDumpFunction(ValkeyModuleCtx *module_ctx,
             
             /* Format: backup_-1_<timestamp>_<sequence> */
             snprintf(backup_id_str, sizeof(backup_id_str), "backup_%d_%lld_%d",
-                    -1, (long long)tv.tv_sec, backup_sequence_counter);
+                    EXTERNAL_ALL_DBS, (long long)tv.tv_sec, backup_sequence_counter);
             
             /* Store for potential reuse by paired dump (storage/filter) */
             strncpy(last_backup_id, backup_id_str, sizeof(last_backup_id) - 1);
@@ -1088,11 +1148,8 @@ static int storageDumpFunction(ValkeyModuleCtx *module_ctx,
         ValkeyModule_Log(module_ctx, "notice", "Dumped storage data for database %d to %s",
                          dbid, storage_filename);
         
-    } else if (dbid == -1) {
-        /* Dump all databases */
+    } else if (dbid == EXTERNAL_ALL_DBS) {
         ValkeyModule_Log(module_ctx, "notice", "storageDumpFunction: dumping all databases");
-        
-        /* Iterate through all databases */
         for (int db = 0; db < MAX_DB; db++) {
             if (storageDumpFunction(module_ctx,
                                     storage_ctx,
@@ -1133,7 +1190,7 @@ static int filterLoadFunction(ValkeyModuleCtx *module_ctx,
     VALKEYMODULE_NOT_USED(filter_ctx);
     ValkeyModule_AutoMemory(module_ctx);
    
-    if (dbid == -1) {
+    if (dbid == EXTERNAL_ALL_DBS) {
         int success = 0;
         for (int db = 0; db < MAX_DB; db++) {
             int res = filterLoadFunction(module_ctx,
@@ -1182,7 +1239,7 @@ static int filterLoadFunction(ValkeyModuleCtx *module_ctx,
         for (int i = 0; i < 15 && !found_backup; i++) {
             time_t t = current_time - i;
             char prefix[256];
-            snprintf(prefix, sizeof(prefix), "backup_%d_%lld_", -1, (long long)t);
+            snprintf(prefix, sizeof(prefix), "backup_%d_%lld_", EXTERNAL_ALL_DBS, (long long)t);
             
             ValkeyModule_Log(module_ctx, "debug", "filterLoad: Searching for backups with prefix=%s in dir=%s", prefix, source_dir);
             
@@ -1403,7 +1460,7 @@ static int storageLoadFunction(ValkeyModuleCtx *module_ctx,
     VALKEYMODULE_NOT_USED(dbid);
     ValkeyModule_AutoMemory(module_ctx);
    
-    if (dbid == -1) {
+    if (dbid == EXTERNAL_ALL_DBS) {
         int success = 0;
         for (int db = 0; db < MAX_DB; db++) {
             int res = storageLoadFunction(module_ctx,
@@ -1455,7 +1512,7 @@ static int storageLoadFunction(ValkeyModuleCtx *module_ctx,
         for (int i = 0; i < 15 && !found_backup; i++) {
             time_t t = current_time - i;
             char prefix[256];
-            snprintf(prefix, sizeof(prefix), "backup_%d_%lld_", -1, (long long)t);
+            snprintf(prefix, sizeof(prefix), "backup_%d_%lld_", EXTERNAL_ALL_DBS, (long long)t);
             
             DIR *dir = opendir(source_dir);
             if (dir) {
@@ -1811,6 +1868,68 @@ static int filterKeysCountFunction(ValkeyModuleCtx *module_ctx,
     return EXTERNAL_SUCCESS;
 }
 
+/* Module command to get slot for a key from storage */
+int StorageGetSlotCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    if (argc != 3) {
+        return ValkeyModule_WrongArity(ctx);
+    }
+    
+    /* Parse db number */
+    const char *db_str = ValkeyModule_StringPtrLen(argv[1], NULL);
+    if (strncmp(db_str, "db", 2) != 0) {
+        ValkeyModule_ReplyWithError(ctx, "ERR invalid database format");
+        return VALKEYMODULE_OK;
+    }
+    int dbid = atoi(db_str + 2);
+    if (dbid < 0 || dbid >= MAX_DB) {
+        ValkeyModule_ReplyWithError(ctx, "ERR invalid database number");
+        return VALKEYMODULE_OK;
+    }
+    
+    /* Get slot for key */
+    ValkeyModuleString *key = argv[2];
+    ValkeyModuleString *slot_value = ValkeyModule_DictGet(storage_slot_pool[dbid], key, NULL);
+    
+    if (slot_value) {
+        ValkeyModule_ReplyWithString(ctx, slot_value);
+    } else {
+        ValkeyModule_ReplyWithLongLong(ctx, EXTERNAL_ALL_SLOTS);
+    }
+    
+    return VALKEYMODULE_OK;
+}
+
+/* Module command to get slot for a key from filter */
+int FilterGetSlotCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    if (argc != 3) {
+        return ValkeyModule_WrongArity(ctx);
+    }
+    
+    /* Parse db number */
+    const char *db_str = ValkeyModule_StringPtrLen(argv[1], NULL);
+    if (strncmp(db_str, "db", 2) != 0) {
+        ValkeyModule_ReplyWithError(ctx, "ERR invalid database format");
+        return VALKEYMODULE_OK;
+    }
+    int dbid = atoi(db_str + 2);
+    if (dbid < 0 || dbid >= MAX_DB) {
+        ValkeyModule_ReplyWithError(ctx, "ERR invalid database number");
+        return VALKEYMODULE_OK;
+    }
+    
+    /* Get slot for key */
+    ValkeyModuleString *key = argv[2];
+    ValkeyModuleString *slot_value = ValkeyModule_DictGet(filter_slot_pool[dbid], key, NULL);
+    
+    if (slot_value) {
+        ValkeyModule_ReplyWithString(ctx, slot_value);
+    } else {
+        ValkeyModule_ReplyWithLongLong(ctx, EXTERNAL_ALL_SLOTS);
+    }
+    
+    return VALKEYMODULE_OK;
+}
+
 /* Module initialization */
 int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {   
     VALKEYMODULE_NOT_USED(argv);
@@ -1853,6 +1972,12 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
         return VALKEYMODULE_ERR;
     }
 
+    // Get cluster mode flag
+    int flags = ValkeyModule_GetContextFlags(ctx);
+    is_cluster_enabled = (flags & VALKEYMODULE_CTX_FLAGS_CLUSTER) ? 1 : 0;
+    ValkeyModule_Log(ctx, "notice", "Module %s cluster mode: %s", module_name,
+                     is_cluster_enabled ? "enabled" : "disabled");
+
     // Initialize storage methods
     ValkeyModuleExternalStorageMethods storage_methods = {
         .version = VALKEYMODULE_EXTERNAL_STORAGE_ABI_VERSION,
@@ -1893,6 +2018,8 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
     for (int i = 0; i < MAX_DB; i++) {
         storage_mem_pool[i] = ValkeyModule_CreateDict(NULL);
         filter_mem_pool[i] = ValkeyModule_CreateDict(NULL);
+        storage_slot_pool[i] = ValkeyModule_CreateDict(NULL);
+        filter_slot_pool[i] = ValkeyModule_CreateDict(NULL);
     }
 
     // Load configurations
@@ -1908,6 +2035,20 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
     }
     
     ValkeyModule_Log(ctx, "warning", "=== ValkeyModule_RegisterExternalDataModule SUCCESS for module: %s ===", module_name);
+    
+    /* Register module commands for slot debugging */
+    if (ValkeyModule_CreateCommand(ctx, "helloextdata1.storage_getslot",
+                                   StorageGetSlotCommand, "readonly", 0, 0, 0) == VALKEYMODULE_ERR) {
+        ValkeyModule_Log(ctx, "warning", "=== ValkeyModule_CreateCommand storage_getslot FAILED for module: %s ===", module_name);
+        return VALKEYMODULE_ERR;
+    }
+    
+    if (ValkeyModule_CreateCommand(ctx, "helloextdata1.filter_getslot",
+                                   FilterGetSlotCommand, "readonly", 0, 0, 0) == VALKEYMODULE_ERR) {
+        ValkeyModule_Log(ctx, "warning", "=== ValkeyModule_CreateCommand filter_getslot FAILED for module: %s ===", module_name);
+        return VALKEYMODULE_ERR;
+    }
+    
     return VALKEYMODULE_OK;
 }
 
@@ -1920,6 +2061,8 @@ int ValkeyModule_OnUnload(ValkeyModuleCtx *ctx) {
     for (int i = 0; i < MAX_DB; i++) {
         ValkeyModule_FreeDict(NULL, storage_mem_pool[i]);
         ValkeyModule_FreeDict(NULL, filter_mem_pool[i]);
+        ValkeyModule_FreeDict(NULL, storage_slot_pool[i]);
+        ValkeyModule_FreeDict(NULL, filter_slot_pool[i]);
     }
 
     return VALKEYMODULE_OK;

@@ -63,6 +63,19 @@ static char *get_primary_address(void) {
     return NULL;
 }
 
+/* Helper function to calculate the slot for a given key.
+ * Returns:
+ *   -1 for standalone mode (no clustering)
+ *   0-16383 for cluster mode (calculated using CRC16 hash)
+ */
+static int externalDataGetKeySlot(robj *key) {
+    if (!server.cluster_enabled) {
+        return EXTERNAL_ALL_SLOTS;  /* Standalone mode - no slot concept */
+    }
+    /* Cluster mode - calculate slot using key hash */
+    return keyHashSlot(key->ptr, sdslen(key->ptr));
+}
+
 struct externalDataCtx {
     dict *modules;       /* Module name -> Module object */
     dict *dbdata;        /* Database name -> Database data */
@@ -638,7 +651,8 @@ int externalStorageCallSetFunc(externalDataModuleInstance *mi, int dbid, robj *k
     // Add logging before calling module function
     serverLog(LL_DEBUG, "DEBUG: externalStorageCallSetFunc - calling module set function with key=%p, value=%p, dbid=%d", (void*)key, (void*)value, dbid);
     
-    ValkeyModuleKeyOptCtx key_ctx = {key, NULL, dbid, -1};
+    int slot = externalDataGetKeySlot(key);
+    ValkeyModuleKeyOptCtx key_ctx = {key, NULL, dbid, slot};
     int success = mi->external_module->storage_methods.set(mi->module_ctx, mi->storage_ctx, &key_ctx, value);
 
     teardownModuleCtx(mi);
@@ -664,7 +678,8 @@ int externalStorageCallGetFunc(externalDataModuleInstance *si, int dbid, robj *k
     serverLog(LL_DEBUG, "DEBUG: externalStorageCallGetFunc - calling module get function with key=%p, found=%p, dbid=%d", (void*)key, (void*)found, dbid);
     
     serverAssert(si->external_module != NULL && si->storage_ctx != NULL && si->module_ctx != NULL);
-    ValkeyModuleKeyOptCtx key_ctx = {key, NULL, dbid, -1};
+    int slot = externalDataGetKeySlot(key);
+    ValkeyModuleKeyOptCtx key_ctx = {key, NULL, dbid, slot};
     int exists = si->external_module->storage_methods.get(si->module_ctx, si->storage_ctx, &key_ctx, found);
 
     teardownModuleCtx(si);
@@ -691,7 +706,8 @@ int externalStorageCallDelFunc(externalDataModuleInstance *mi, int dbid, robj *k
     
     serverAssert(mi->external_module != NULL && mi->storage_ctx != NULL && mi->module_ctx != NULL);
 
-    ValkeyModuleKeyOptCtx key_ctx = {key, NULL, dbid, -1};
+    int slot = externalDataGetKeySlot(key);
+    ValkeyModuleKeyOptCtx key_ctx = {key, NULL, dbid, slot};
     int result = mi->external_module->storage_methods.del(mi->module_ctx, mi->storage_ctx, &key_ctx, value);
 
     teardownModuleCtx(mi);
@@ -712,7 +728,8 @@ int externalFilterCallSetFunc(externalDataModuleInstance *fi, int dbid, robj *ke
     serverLog(LL_DEBUG, "DEBUG: externalFilterCallSetFunc - calling module set function with key=%p, dbid=%d", (void*)key, dbid);
     
     serverAssert(fi->external_module != NULL && fi->filter_ctx != NULL && fi->module_ctx != NULL);
-    ValkeyModuleKeyOptCtx key_ctx = {key, NULL, dbid, -1};
+    int slot = externalDataGetKeySlot(key);
+    ValkeyModuleKeyOptCtx key_ctx = {key, NULL, dbid, slot};
     int success = fi->external_module->filter_methods.set(fi->module_ctx, fi->filter_ctx, &key_ctx);
 
     teardownModuleCtx(fi);
@@ -733,7 +750,8 @@ int externalFilterCallGetFunc(externalDataModuleInstance *fi, int dbid, robj *ke
     serverLog(LL_DEBUG, "DEBUG: externalFilterCallGetFunc - calling module get function with key=%p, dbid=%d", (void*)key, dbid);
     
     serverAssert(fi->external_module != NULL && fi->filter_ctx != NULL && fi->module_ctx != NULL);
-    ValkeyModuleKeyOptCtx key_ctx = {key, NULL, dbid, -1};
+    int slot = externalDataGetKeySlot(key);
+    ValkeyModuleKeyOptCtx key_ctx = {key, NULL, dbid, slot};
     int exists = fi->external_module->filter_methods.get(fi->module_ctx, fi->filter_ctx, &key_ctx);
 
     teardownModuleCtx(fi);
@@ -758,7 +776,8 @@ int externalFilterCallDelFunc(externalDataModuleInstance *fi, int dbid, robj *ke
     // Add logging before calling module function
     serverLog(LL_DEBUG, "DEBUG: externalFilterCallDelFunc - calling module del function with key=%p, value=%p, dbid=%d", (void*)key, (void*)value, dbid);
     
-    ValkeyModuleKeyOptCtx key_ctx = {key, NULL, dbid, -1};
+    int slot = externalDataGetKeySlot(key);
+    ValkeyModuleKeyOptCtx key_ctx = {key, NULL, dbid, slot};
     int result = fi->external_module->filter_methods.del(fi->module_ctx, fi->filter_ctx, &key_ctx, value);
 
     teardownModuleCtx(fi);
@@ -847,7 +866,7 @@ int externalDataCallDumpFunc(externalDataModuleInstance *mi,
     int result = mi->external_module->storage_methods.dump(
         mi->module_ctx,
         mi->storage_ctx,
-        -1,  /* -1 means all databases */
+        EXTERNAL_ALL_DBS,
         slot,
         timestamp,
         server_target,
@@ -866,7 +885,7 @@ int externalDataCallDumpFunc(externalDataModuleInstance *mi,
         int filter_result = mi->external_module->filter_methods.dump(
             mi->module_ctx,
             mi->filter_ctx,
-            -1,  /* -1 means all databases */
+            EXTERNAL_ALL_DBS,
             slot,
             timestamp,
             server_target,
@@ -911,7 +930,7 @@ int externalDataCallLoadFunc(externalDataModuleInstance *mi,
     int result = mi->external_module->storage_methods.load(
         mi->module_ctx,
         mi->storage_ctx,
-        -1,  /* -1 means all databases */
+        EXTERNAL_ALL_DBS,
         backup_id,
         source);
 
@@ -920,7 +939,7 @@ int externalDataCallLoadFunc(externalDataModuleInstance *mi,
         int filter_result = mi->external_module->filter_methods.load(
             mi->module_ctx,
             mi->filter_ctx,
-            -1,  /* -1 means all databases */
+            EXTERNAL_ALL_DBS,
             backup_id,
             source);
         
@@ -972,6 +991,8 @@ struct extStorageInstanceIterator {
 };
 
 externalStorageInstanceIterator *externalStorageInstanceIteratorInit(int dbid, robj *match, long long *type) {
+    assert(getCurrentExternalDataCtx() != NULL);
+
     sds db_name = getDBName(dbid);
     dictEntry *db = dictFind(curr_external_data_ctx->dbdata, db_name);
 
@@ -1134,7 +1155,7 @@ void externalDataDumpCommand(client *c) {
     assert(getCurrentExternalDataCtx() != NULL);
 
     /* Parse optional arguments in any order */
-    int slot = -1;  /* -1 means all slots */
+    int slot = EXTERNAL_ALL_SLOTS;
     long long timestamp = 0;  /* 0 means full dump from beginning of time */
     ValkeyModuleString *target = NULL;
 
@@ -1256,6 +1277,8 @@ void externalDataLoadCommand(client *c) {
 }
 
 int externalDataFind(int id, void *key, void **found) {
+    assert(getCurrentExternalDataCtx() != NULL);
+
     sds db_name = getDBName(id);
     dictEntry *db = dictFind(curr_external_data_ctx->dbdata, db_name);
     sdsfree(db_name);
@@ -1271,6 +1294,8 @@ int externalDataFind(int id, void *key, void **found) {
 }
 
 int externalFilterIsIn(int id, void *key) {
+    assert(getCurrentExternalDataCtx() != NULL);
+
     sds db_name = getDBName(id);
     dictEntry *db = dictFind(curr_external_data_ctx->dbdata, db_name);
     sdsfree(db_name);
@@ -1284,14 +1309,22 @@ int externalFilterIsIn(int id, void *key) {
 }
 
 int externalDataWrite(int id, void *key, void *value) {
+    assert(getCurrentExternalDataCtx() != NULL);
+
     sds db_name = getDBName(id);
     dictEntry *db = dictFind(curr_external_data_ctx->dbdata, db_name);
     sdsfree(db_name);
-    if (!db) return EXTERNAL_ERROR;
+    if (!db) {
+        serverLog(LL_WARNING, "externalDataWrite: db not found for %d", id);
+        return EXTERNAL_ERROR;
+    }
 
     externalDbData *dbData = dictGetVal(db);
     externalDataModuleInstance *mi = dbData->module_instance;
-    if (!mi) return EXTERNAL_ERROR;
+    if (!mi) {
+        serverLog(LL_WARNING, "externalDataWrite: mi not found for %d", id);
+        return EXTERNAL_ERROR;
+    }
 
     // Validate key and value parameters
     if (!key) {
@@ -1315,7 +1348,10 @@ int externalDataWrite(int id, void *key, void *value) {
         return EXTERNAL_READONLY; // Signal to block the client
     }
 
-    if (externalStorageCallSetFunc(mi, id, key, value) != EXTERNAL_SUCCESS) return EXTERNAL_ERROR;
+    if (externalStorageCallSetFunc(mi, id, key, value) != EXTERNAL_SUCCESS) {
+        serverLog(LL_WARNING, "externalDataWrite: storage set failed for %d", id);
+        return EXTERNAL_ERROR;
+    }
     return externalFilterCallSetFunc(mi, id, key);
 }
 
@@ -1840,7 +1876,7 @@ void bioExternalDataDumpForFullSync(void) {
         ValkeyModuleString *backup_id = NULL;
         
         /* Call dump with timestamp 0 for full backup, -1 for all slots */
-        int result = externalDataCallDumpFunc(mi, -1, 0, NULL, &backup_id);
+        int result = externalDataCallDumpFunc(mi, EXTERNAL_ALL_SLOTS, 0, NULL, &backup_id);
         
         if (result != EXTERNAL_SUCCESS) {
             serverLog(LL_WARNING, "Failed to dump external data for module %s",

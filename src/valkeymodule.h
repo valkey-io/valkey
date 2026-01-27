@@ -1826,6 +1826,11 @@ typedef enum ValkeyModuleExternalDataResult {
     EXTERNAL_READONLY = 3   /* Readonly storage */
 } ValkeyModuleExternalDataResult;
 
+/* External data default for all slots at once */
+#define EXTERNAL_ALL_SLOTS -1
+/* External data default for all databases at once */
+#define EXTERNAL_ALL_DBS -1
+
 /* ------------------------- End of common defines ------------------------ */
 
 /* ----------- The rest of the defines are only for modules ----------------- */

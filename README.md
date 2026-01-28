@@ -143,14 +143,18 @@ To compile against jemalloc on Mac OS X systems, use:
 
 ## Monotonic clock
 
-By default, Valkey will build using the POSIX clock_gettime function as the
-monotonic clock source.  On most modern systems, the internal processor clock
-can be used to improve performance.  Cautions can be found here:
+By default, Valkey uses the processor's internal instruction clock (TSC on x86,
+CNTVCT on ARM) for monotonic time tracking, which provides approximately 3x
+faster time access compared to POSIX clock_gettime (~10-30ns vs ~100ns).
+This is enabled by default on supported architectures (x86_64 Linux and aarch64)
+and automatically falls back to POSIX clock_gettime on unsupported systems.
+
+For more information about processor clock usage, see:
     http://oliveryang.net/2015/09/pitfalls-of-TSC-usage/
 
-To build with support for the processor's internal instruction clock, use:
+To disable the processor clock and force POSIX clock_gettime, use:
 
-    % make CFLAGS="-DUSE_PROCESSOR_CLOCK"
+    % make CFLAGS="-DNO_PROCESSOR_CLOCK"
 
 ## Verbose build
 

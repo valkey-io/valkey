@@ -1,31 +1,8 @@
 /* Dataset support for valkey-benchmark
  *
- * Copyright (c) 2009-2012, Redis Ltd.
+ * Copyright Valkey Contributors.
  * All rights reserved.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- *   * Redistributions of source code must retain the above copyright notice,
- *     this list of conditions and the following disclaimer.
- *   * Redistributions in binary form must reproduce the above copyright
- *     notice, this list of conditions and the following disclaimer in the
- *     documentation and/or other materials provided with the distribution.
- *   * Neither the name of Redis nor the names of its contributors may be used
- *     to endorse or promote products derived from this software without
- *     specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
- * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
- * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
- * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
- * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
- * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
- * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD 3-Clause
  */
 
 #include "fmacros.h"
@@ -33,29 +10,31 @@
 #include "valkey-benchmark-dataset.h"
 #include "zmalloc.h"
 #include <valkey/valkey.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-/* Internal constants for rand placeholders */
+/* Internal constants */
 #define PLACEHOLDER_COUNT 10
 #define PLACEHOLDER_LEN 12
+#define XML_TAG_OVERHEAD 16 /* Space for XML tag syntax ("<", ">", "</", ">") and null terminator */
 
 static const char *PLACEHOLDERS[PLACEHOLDER_COUNT] = {
     "__rand_int__", "__rand_1st__", "__rand_2nd__", "__rand_3rd__", "__rand_4th__",
     "__rand_5th__", "__rand_6th__", "__rand_7th__", "__rand_8th__", "__rand_9th__"};
 
 /* Forward declarations */
-static int datasetBuildFieldMap(dataset *ds, sds *template_argv, int template_argc);
+static bool datasetBuildFieldMap(dataset *ds, sds *template_argv, int template_argc);
 static sds getFieldValue(const char *row, int column_index, char delimiter);
 static sds getXmlFieldValue(const char *xml_doc, const char *field_name);
 static sds formatBytes(size_t bytes);
-static int csvDiscoverFields(dataset *ds);
-static int scanXmlFieldsFromFile(dataset *ds, const char *xml_root_element);
-static int scanXmlFields(const char *doc_start, const char *doc_end, dataset *ds, const char *start_root_tag, const char *end_root_tag);
-static int loadXmlDataset(dataset *ds, const char *xml_root_element);
-static int csvLoadDocuments(dataset *ds);
-static int shouldStopLoading(dataset *ds);
+static bool csvDiscoverFields(dataset *ds);
+static bool scanXmlFieldsFromFile(dataset *ds, const char *xml_root_element);
+static bool scanXmlFields(const char *doc_start, const char *doc_end, dataset *ds, const char *start_root_tag, const char *end_root_tag);
+static bool loadXmlDataset(dataset *ds, const char *xml_root_element);
+static bool csvLoadDocuments(dataset *ds);
+static bool shouldStopLoading(dataset *ds);
 static int findFieldIndex(dataset *ds, const char *field_name, size_t field_name_len);
 static const char *extractDatasetFieldValue(dataset *ds, int field_idx, int record_index);
 static sds replaceOccurrence(sds processed_arg, const char *pos, const char *replacement);
@@ -126,7 +105,11 @@ void datasetFree(dataset *ds) {
     if (!ds) return;
 
     if (ds->field_names) {
-        sdsfreesplitres(ds->field_names, ds->field_count);
+        /* Unified memory management: all formats use zmalloc + individual sdsnew */
+        for (int i = 0; i < ds->field_count; i++) {
+            sdsfree(ds->field_names[i]);
+        }
+        zfree(ds->field_names);
     }
 
     if (ds->field_map) {
@@ -148,8 +131,8 @@ void datasetFree(dataset *ds) {
     zfree(ds);
 }
 
-int datasetBuildFieldMap(dataset *ds, sds *template_argv, int template_argc) {
-    if (!ds) return 0;
+bool datasetBuildFieldMap(dataset *ds, sds *template_argv, int template_argc) {
+    if (!ds) return false;
 
     ds->field_map = zmalloc(ds->field_count * sizeof(int));
     ds->used_field_count = 0;
@@ -185,7 +168,7 @@ int datasetBuildFieldMap(dataset *ds, sds *template_argv, int template_argc) {
                     fprintf(stderr, "%s%s", ds->field_names[j], (j < ds->field_count - 1) ? ", " : "\n");
                 }
                 sdsfree(field_name);
-                return 0;
+                return false;
             }
 
             if (ds->field_map[field_idx] == -1) {
@@ -197,11 +180,11 @@ int datasetBuildFieldMap(dataset *ds, sds *template_argv, int template_argc) {
         }
     }
 
-    return 1;
+    return true;
 }
 
-int datasetLoad(dataset *ds, const char *xml_root_element) {
-    if (!ds) return 0;
+bool datasetLoad(dataset *ds, const char *xml_root_element) {
+    if (!ds) return false;
     (void)xml_root_element; /* Use stored value in ds */
 
     if (ds->format == DATASET_FORMAT_XML) {
@@ -265,11 +248,11 @@ static sds formatBytes(size_t bytes) {
     }
 }
 
-static int shouldStopLoading(dataset *ds) {
+static bool shouldStopLoading(dataset *ds) {
     if (ds->max_documents > 0 && (int)ds->record_count >= ds->max_documents) {
-        return 1;
+        return true;
     }
-    return 0;
+    return false;
 }
 
 static sds getFieldValue(const char *row, int column_index, char delimiter) {
@@ -309,7 +292,12 @@ static sds getFieldValue(const char *row, int column_index, char delimiter) {
 }
 
 static sds getXmlFieldValue(const char *xml_doc, const char *field_name) {
-    char start_tag_prefix[128], end_tag[128];
+    size_t field_len = strlen(field_name);
+    if (field_len > MAX_FIELD_NAME_LEN) {
+        return sdsempty();
+    }
+
+    char start_tag_prefix[MAX_FIELD_NAME_LEN + XML_TAG_OVERHEAD], end_tag[MAX_FIELD_NAME_LEN + XML_TAG_OVERHEAD];
     snprintf(start_tag_prefix, sizeof(start_tag_prefix), "<%s", field_name);
     snprintf(end_tag, sizeof(end_tag), "</%s>", field_name);
 
@@ -331,11 +319,11 @@ static sds getXmlFieldValue(const char *xml_doc, const char *field_name) {
     return sdsnewlen(content_start, content_len);
 }
 
-static int csvDiscoverFields(dataset *ds) {
+static bool csvDiscoverFields(dataset *ds) {
     FILE *fp = fopen(ds->filename, "r");
     if (!fp) {
         fprintf(stderr, "Cannot open dataset file: %s\n", ds->filename);
-        return 0;
+        return false;
     }
 
     char *line = NULL;
@@ -344,7 +332,7 @@ static int csvDiscoverFields(dataset *ds) {
         fprintf(stderr, "Cannot read header from dataset file\n");
         free(line);
         fclose(fp);
-        return 0;
+        return false;
     }
 
     len = strlen(line);
@@ -353,16 +341,22 @@ static int csvDiscoverFields(dataset *ds) {
 
     int count;
     char delim_str[2] = {ds->delimiter, '\0'};
-    ds->field_names = sdssplitlen(line, strlen(line), delim_str, 1, &count);
+    sds *temp = sdssplitlen(line, strlen(line), delim_str, 1, &count);
+
+    ds->field_names = zmalloc(count * sizeof(sds));
+    for (int i = 0; i < count; i++) {
+        ds->field_names[i] = sdsdup(temp[i]);
+    }
+    sdsfreesplitres(temp, count);
     ds->field_count = count;
 
     free(line);
     fclose(fp);
-    return 1;
+    return true;
 }
 
-static int scanXmlFields(const char *doc_start, const char *doc_end, dataset *ds, const char *start_root_tag, const char *end_root_tag) {
-    char field_names[MAX_DATASET_FIELDS][64];
+static bool scanXmlFields(const char *doc_start, const char *doc_end, dataset *ds, const char *start_root_tag, const char *end_root_tag) {
+    char field_names[MAX_DATASET_FIELDS][MAX_FIELD_NAME_LEN + 1];
     int field_count = 0;
     int root_start_tag_len = strlen(start_root_tag);
     int root_end_tag_len = strlen(end_root_tag);
@@ -388,7 +382,7 @@ static int scanXmlFields(const char *doc_start, const char *doc_end, dataset *ds
 
         size_t field_name_len = field_name_end - field_start;
 
-        if (field_name_len == 0 || field_name_len >= 64) {
+        if (field_name_len == 0 || field_name_len > MAX_FIELD_NAME_LEN) {
             current_pos = tag_end + 1;
             continue;
         }
@@ -402,7 +396,11 @@ static int scanXmlFields(const char *doc_start, const char *doc_end, dataset *ds
             }
         }
 
-        if (!is_duplicate && field_count < MAX_DATASET_FIELDS) {
+        if (!is_duplicate) {
+            if (field_count >= MAX_DATASET_FIELDS) {
+                fprintf(stderr, "Error: Dataset contains more than %d fields (limit exceeded)\n", MAX_DATASET_FIELDS);
+                return false;
+            }
             memcpy(field_names[field_count], field_start, field_name_len);
             field_names[field_count][field_name_len] = '\0';
             field_count++;
@@ -411,7 +409,7 @@ static int scanXmlFields(const char *doc_start, const char *doc_end, dataset *ds
         current_pos = tag_end + 1;
     }
 
-    if (field_count == 0) return 0;
+    if (field_count == 0) return false;
 
     ds->field_names = zmalloc(field_count * sizeof(sds));
     for (int i = 0; i < field_count; i++) {
@@ -419,14 +417,14 @@ static int scanXmlFields(const char *doc_start, const char *doc_end, dataset *ds
     }
     ds->field_count = field_count;
 
-    return 1;
+    return true;
 }
 
-static int scanXmlFieldsFromFile(dataset *ds, const char *xml_root_element) {
+static bool scanXmlFieldsFromFile(dataset *ds, const char *xml_root_element) {
     FILE *fp = fopen(ds->filename, "r");
-    if (!fp) return 0;
+    if (!fp) return false;
 
-    char start_tag_prefix[64], start_tag[64], end_tag[64];
+    char start_tag_prefix[MAX_FIELD_NAME_LEN + XML_TAG_OVERHEAD], start_tag[MAX_FIELD_NAME_LEN + XML_TAG_OVERHEAD], end_tag[MAX_FIELD_NAME_LEN + XML_TAG_OVERHEAD];
     snprintf(start_tag_prefix, sizeof(start_tag_prefix), "<%s", xml_root_element);
     snprintf(start_tag, sizeof(start_tag), "<%s>", xml_root_element);
     snprintf(end_tag, sizeof(end_tag), "</%s>", xml_root_element);
@@ -449,7 +447,7 @@ static int scanXmlFieldsFromFile(dataset *ds, const char *xml_root_element) {
 
         doc_end += strlen(end_tag);
 
-        int result = scanXmlFields(doc_start, doc_end, ds, start_tag, end_tag);
+        bool result = scanXmlFields(doc_start, doc_end, ds, start_tag, end_tag);
         sdsfree(current_doc);
         fclose(fp);
         return result;
@@ -457,14 +455,14 @@ static int scanXmlFieldsFromFile(dataset *ds, const char *xml_root_element) {
 
     sdsfree(current_doc);
     fclose(fp);
-    return 0;
+    return false;
 }
 
-static int loadXmlDataset(dataset *ds, const char *xml_root_element) {
+static bool loadXmlDataset(dataset *ds, const char *xml_root_element) {
     FILE *fp = fopen(ds->filename, "r");
-    if (!fp) return 0;
+    if (!fp) return false;
 
-    char start_tag_prefix[64], start_tag[64], end_tag[64];
+    char start_tag_prefix[MAX_FIELD_NAME_LEN + XML_TAG_OVERHEAD], start_tag[MAX_FIELD_NAME_LEN + XML_TAG_OVERHEAD], end_tag[MAX_FIELD_NAME_LEN + XML_TAG_OVERHEAD];
     size_t end_tag_len;
     snprintf(start_tag_prefix, sizeof(start_tag_prefix), "<%s", xml_root_element);
     snprintf(start_tag, sizeof(start_tag), "<%s>", xml_root_element);
@@ -474,7 +472,7 @@ static int loadXmlDataset(dataset *ds, const char *xml_root_element) {
     size_t buffer_capacity = 4 * 1024 * 1024;
     char *buffer = zmalloc(buffer_capacity);
     size_t buffer_used = 0;
-    int fields_discovered = 0;
+    bool fields_discovered = false;
     size_t capacity = 1000;
 
     ds->records = zmalloc(sizeof(datasetRecord) * capacity);
@@ -482,7 +480,7 @@ static int loadXmlDataset(dataset *ds, const char *xml_root_element) {
     printf("Loading XML dataset from %s...\n", ds->filename);
 
     if (ds->field_names && ds->field_count > 0) {
-        fields_discovered = 1;
+        fields_discovered = true;
         printf("Using %d fields: ", ds->field_count);
         for (int i = 0; i < ds->field_count; i++) {
             printf("%s%s", ds->field_names[i], (i < ds->field_count - 1) ? ", " : "\n");
@@ -543,9 +541,9 @@ static int loadXmlDataset(dataset *ds, const char *xml_root_element) {
                     fprintf(stderr, "No XML fields discovered\n");
                     zfree(buffer);
                     fclose(fp);
-                    return 0;
+                    return false;
                 }
-                fields_discovered = 1;
+                fields_discovered = true;
 
                 printf("Discovered %d fields: ", ds->field_count);
                 for (int i = 0; i < ds->field_count; i++) {
@@ -562,9 +560,17 @@ static int loadXmlDataset(dataset *ds, const char *xml_root_element) {
             record->fields = zmalloc(sizeof(sds) * ds->used_field_count);
 
             sds doc_str = sdsnewlen(doc_start, doc_len);
-            for (int i = 0; i < ds->field_count; i++) {
-                if (ds->field_map && ds->field_map[i] >= 0) {
-                    record->fields[ds->field_map[i]] = getXmlFieldValue(doc_str, ds->field_names[i]);
+            if (ds->field_map) {
+                /* With field mapping - only load used fields */
+                for (int i = 0; i < ds->field_count; i++) {
+                    if (ds->field_map[i] >= 0) {
+                        record->fields[ds->field_map[i]] = getXmlFieldValue(doc_str, ds->field_names[i]);
+                    }
+                }
+            } else {
+                /* No field mapping - load all fields directly */
+                for (int i = 0; i < ds->field_count; i++) {
+                    record->fields[i] = getXmlFieldValue(doc_str, ds->field_names[i]);
                 }
             }
             sdsfree(doc_str);
@@ -596,12 +602,12 @@ static int loadXmlDataset(dataset *ds, const char *xml_root_element) {
 
     zfree(buffer);
     fclose(fp);
-    return 1;
+    return true;
 }
 
-static int csvLoadDocuments(dataset *ds) {
+static bool csvLoadDocuments(dataset *ds) {
     FILE *fp = fopen(ds->filename, "r");
-    if (!fp) return 0;
+    if (!fp) return false;
 
     char *line = NULL;
     size_t len = 0;
@@ -609,7 +615,7 @@ static int csvLoadDocuments(dataset *ds) {
         fprintf(stderr, "Cannot read header from dataset file\n");
         free(line);
         fclose(fp);
-        return 0;
+        return false;
     }
 
     size_t capacity = 1000;
@@ -663,7 +669,7 @@ static int csvLoadDocuments(dataset *ds) {
     if (load_indices) zfree(load_indices);
     free(line);
     fclose(fp);
-    return 1;
+    return true;
 }
 
 static int findFieldIndex(dataset *ds, const char *field_name, size_t field_name_len) {

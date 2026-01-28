@@ -147,6 +147,10 @@ set(VALKEY_CLI_SRCS
     ${CMAKE_SOURCE_DIR}/src/strl.c
     ${CMAKE_SOURCE_DIR}/src/cli_commands.c)
 
+# Benchmark dataset module - used by benchmark binary and unit tests
+set(BENCHMARK_DATASET_SRCS
+    ${CMAKE_SOURCE_DIR}/src/valkey-benchmark-dataset.c)
+
 # valkey-benchmark
 set(VALKEY_BENCHMARK_SRCS
     ${CMAKE_SOURCE_DIR}/src/ae.c
@@ -155,7 +159,7 @@ set(VALKEY_BENCHMARK_SRCS
     ${CMAKE_SOURCE_DIR}/src/sha256.c
     ${CMAKE_SOURCE_DIR}/src/util.c
     ${CMAKE_SOURCE_DIR}/src/valkey-benchmark.c
-    ${CMAKE_SOURCE_DIR}/src/valkey-benchmark-dataset.c
+    ${BENCHMARK_DATASET_SRCS}
     ${CMAKE_SOURCE_DIR}/src/adlist.c
     ${CMAKE_SOURCE_DIR}/src/dict.c
     ${CMAKE_SOURCE_DIR}/src/zmalloc.c

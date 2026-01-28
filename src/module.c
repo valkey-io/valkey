@@ -5467,7 +5467,7 @@ int VM_HashSet(ValkeyModuleKey *key, int flags, ...) {
 
         robj *argv[2] = {field, value};
         hashTypeTryConversion(key->value, argv, 0, 1);
-        int updated = hashTypeSet(key->value, objectGetVal(field), objectGetVal(value), EXPIRY_NONE, low_flags);
+        int updated = hashTypeSet(key->value, objectGetVal(field), objectGetVal(value), EXPIRY_NONE, low_flags, NULL);
         count += (flags & VALKEYMODULE_HASH_COUNT_ALL) ? 1 : updated;
 
         /* If CFIELDS is active, SDS string ownership is now of hashTypeSet(),
@@ -6565,7 +6565,16 @@ ValkeyModuleCallReply *VM_Call(ValkeyModuleCtx *ctx, const char *cmdname, const 
             }
         }
 
+        /* Allow running any command even if OOM reached. */
         if (is_running_script && scriptAllowsOOM()) {
+            flags &= ~VALKEYMODULE_ARGV_RESPECT_DENY_OOM;
+        }
+
+        /* If we reached the memory limit configured via maxmemory, commands that
+         * could enlarge the memory usage are not allowed, but only if this is the
+         * first write in the context of this script, otherwise we can't stop
+         * in the middle. */
+        if (is_running_script && scriptIsWriteDirty()) {
             flags &= ~VALKEYMODULE_ARGV_RESPECT_DENY_OOM;
         }
     }
@@ -9534,8 +9543,13 @@ void VM_SetClusterFlags(ValkeyModuleCtx *ctx, uint64_t flags) {
 
 /* Returns the cluster slot of a key, similar to the `CLUSTER KEYSLOT` command.
  * This function works even if cluster mode is not enabled. */
+unsigned int VM_ClusterKeySlotC(const char *key, size_t keylen) {
+    return keyHashSlot(key, keylen);
+}
+
+/* Like VM_ClusterKeySlotC() but gets the key as a ValkeyModuleString. */
 unsigned int VM_ClusterKeySlot(ValkeyModuleString *key) {
-    return keyHashSlot(objectGetVal(key), sdslen(objectGetVal(key)));
+    return VM_ClusterKeySlotC(objectGetVal(key), sdslen(objectGetVal(key)));
 }
 
 /* Returns a short string that can be used as a key or as a hash tag in a key,
@@ -11248,8 +11262,10 @@ void moduleCallCommandFilters(client *c) {
 
     ValkeyModuleCommandFilterCtx filter = {.argv = c->argv, .argv_len = c->argv_len, .argc = c->argc, .c = c};
 
-    robj *tmp = c->argv[0];
-    incrRefCount(tmp);
+    robj *pre_filter_command = c->argv[0];
+    incrRefCount(pre_filter_command);
+    const int pre_filter_argc = c->argc;
+
     while ((ln = listNext(&li))) {
         ValkeyModuleCommandFilter *f = ln->value;
 
@@ -11262,15 +11278,21 @@ void moduleCallCommandFilters(client *c) {
         f->callback(&filter);
     }
 
+    /* Apply filter output */
     c->argv = filter.argv;
     c->argv_len = filter.argv_len;
     c->argc = filter.argc;
-    if (tmp != c->argv[0]) {
+
+    /* If filter changed the command or number of arguments, redo prepareCommand */
+    const bool command_changed = (c->argv[0] != pre_filter_command);
+    const bool argc_changed = (c->argc != pre_filter_argc);
+
+    if (command_changed || argc_changed) {
         /* Reset and lookup the command and cluster slot again. */
         unprepareCommand(c);
         prepareCommand(c);
     }
-    decrRefCount(tmp);
+    decrRefCount(pre_filter_command);
 }
 
 /* Return the number of arguments a filtered command has.  The number of
@@ -14105,6 +14127,7 @@ int *VM_GetCommandKeysWithFlags(ValkeyModuleCtx *ctx,
         if (out_flags) (*out_flags)[i] = moduleConvertKeySpecsFlags(result.keys[i].flags, 0);
     }
 
+    getKeysFreeResult(&result);
     return res;
 }
 
@@ -14603,6 +14626,7 @@ void moduleRegisterCoreAPI(void) {
     REGISTER_API(SetDisconnectCallback);
     REGISTER_API(GetBlockedClientHandle);
     REGISTER_API(SetClusterFlags);
+    REGISTER_API(ClusterKeySlotC);
     REGISTER_API(ClusterKeySlot);
     REGISTER_API(ClusterCanonicalKeyNameInSlot);
     REGISTER_API(CreateDict);

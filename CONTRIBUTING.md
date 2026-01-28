@@ -100,7 +100,10 @@ certain issues/PRs over others. If you think your issue/PR is very important
 try to popularize it, have other users commenting and sharing their point of
 view, and so forth. This helps.
 
-4. For minor fixes, open a pull request on GitHub.
+4. While developing code, make sure to refer to our [DEVELOPMENT_GUIDE.md](DEVELOPMENT_GUIDE.md),
+which includes documentation about various best practices for writing Valkey code.
+
+5. For minor fixes, open a pull request on GitHub.
 
 To link a pull request to an existing issue, please write "Fixes #xyz" somewhere
 in the pull request description, where xyz is the issue number.

@@ -452,12 +452,14 @@ static long long activeExpireCycleJob(enum activeExpiryType jobType, int cycleTy
  * starvation of either mechanism. Since the memory reclaim pace and iteration
  * model of keys versus hash fields are different and unpredictable,
  * alternating naturally balances the overall expiry effort when both are
- * fully consuming their available time budget. */
-void activeExpireCycle(int type) {
+ * fully consuming their available time budget.
+ *
+ * Returns the time spend on active expiration in microseconds. */
+long long activeExpireCycle(int type) {
     /* If 'expire' action is paused, for whatever reason, then don't expire any key.
      * Typically, at the end of the pause we will properly expire the key OR we
      * will have failed over and the new primary will send us the expire. */
-    if (isPausedActionsWithUpdate(PAUSE_ACTION_EXPIRE)) return;
+    if (isPausedActionsWithUpdate(PAUSE_ACTION_EXPIRE)) return 0;
 
     /* Adjust the running parameters according to the configured expire
      * effort. The default effort is 1, and the maximum configurable effort
@@ -470,7 +472,7 @@ void activeExpireCycle(int type) {
          * as the fast cycle total duration itself. */
         static monotime last_fast_cycle_start_time; /* When last fast cycle ran. */
         monotime start = getMonotonicUs();
-        if (start < last_fast_cycle_start_time + config_cycle_fast_duration * 2) return;
+        if (start < last_fast_cycle_start_time + config_cycle_fast_duration * 2) return 0;
 
         last_fast_cycle_start_time = start;
         timelimit_us = config_cycle_fast_duration;
@@ -500,6 +502,7 @@ void activeExpireCycle(int type) {
     latencyAddSampleIfNeeded("expire-cycle", elapsed);
     latencyTraceIfNeeded(db, expire_cycle, elapsed);
     expireCycleStartWithFields = !expireCycleStartWithFields;
+    return elapsed;
 }
 
 /*-----------------------------------------------------------------------------

@@ -39,7 +39,7 @@ match different external server configurations. All options are listed by
 Running with TLS requires the following preparations:
 
 * Build Valkey is TLS support, e.g. using `make BUILD_TLS=yes`, or `make BUILD_TLS=module`.
-* Run `./utils/gen-test-certs.sh` to generate a root CA and a server certificate.
+* Run `./utils/gen-test-certs.sh` to generate a root CA, server certificates, and invalid certificates for testing.
 * Install TLS support for TCL, e.g. the `tcl-tls` package on Debian/Ubuntu.
 
 Additional tests

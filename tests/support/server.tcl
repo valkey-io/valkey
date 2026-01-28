@@ -273,6 +273,11 @@ proc tags_acceptable {tags err_return} {
         return 0
     }
 
+    if {[lsearch $tags "mptcp"] >= 0 && ![is_mptcp_available]} {
+        set err "MPTCP not available on this system"
+        return 0
+    }
+
     return 1
 }
 

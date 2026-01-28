@@ -1623,6 +1623,9 @@ VALKEYMODULE_API ValkeyModuleString *(*ValkeyModule_CreateStringPrintf)(ValkeyMo
     VALKEYMODULE_ATTR_PRINTF(2, 3) VALKEYMODULE_ATTR;
 VALKEYMODULE_API void (*ValkeyModule_FreeString)(ValkeyModuleCtx *ctx, ValkeyModuleString *str) VALKEYMODULE_ATTR;
 VALKEYMODULE_API const char *(*ValkeyModule_StringPtrLen)(const ValkeyModuleString *str, size_t *len)VALKEYMODULE_ATTR;
+VALKEYMODULE_API size_t (*ValkeyModule_StringLength)(const ValkeyModuleString *str) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_StringIsSingleOwner)(const ValkeyModuleString *str) VALKEYMODULE_ATTR;
+VALKEYMODULE_API ValkeyModuleString *(*ValkeyModule_ReplaceString)(ValkeyModuleString *str, const char *new_str, size_t new_len) VALKEYMODULE_ATTR;
 VALKEYMODULE_API int (*ValkeyModule_ReplyWithError)(ValkeyModuleCtx *ctx, const char *err) VALKEYMODULE_ATTR;
 VALKEYMODULE_API int (*ValkeyModule_ReplyWithErrorFormat)(ValkeyModuleCtx *ctx, const char *fmt, ...) VALKEYMODULE_ATTR;
 VALKEYMODULE_API int (*ValkeyModule_ReplyWithCustomErrorFormat)(ValkeyModuleCtx *ctx, int update_error_stats, const char *fmt, ...) VALKEYMODULE_ATTR;
@@ -2374,6 +2377,9 @@ static int ValkeyModule_Init(ValkeyModuleCtx *ctx, const char *name, int ver, in
     VALKEYMODULE_GET_API(CreateStringPrintf);
     VALKEYMODULE_GET_API(FreeString);
     VALKEYMODULE_GET_API(StringPtrLen);
+    VALKEYMODULE_GET_API(StringLength);
+    VALKEYMODULE_GET_API(StringIsSingleOwner);
+    VALKEYMODULE_GET_API(ReplaceString);
     VALKEYMODULE_GET_API(AutoMemory);
     VALKEYMODULE_GET_API(Replicate);
     VALKEYMODULE_GET_API(ReplicateVerbatim);

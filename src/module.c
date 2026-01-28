@@ -3012,8 +3012,17 @@ const char *VM_StringPtrLen(const ValkeyModuleString *str, size_t *len) {
         if (len) *len = strlen(errmsg);
         return errmsg;
     }
-    if (len) *len = sdslen(objectGetVal(str));
-    return objectGetVal(str);
+    void *val = objectGetVal(str);
+    if (len) *len = sdslen(val);
+    return val;
+}
+
+size_t VM_StringLength(const ValkeyModuleString *str) {
+    return sdslen(objectGetVal(str));
+}
+
+int VM_StringIsSingleOwner(const ValkeyModuleString *str) {
+    return str->refcount == 1;
 }
 
 /* --------------------------------------------------------------------------
@@ -3105,6 +3114,45 @@ int VM_StringAppendBuffer(ValkeyModuleCtx *ctx, ValkeyModuleString *str, const c
     if (str == NULL) return VALKEYMODULE_ERR;
     objectSetVal(str, sdscatlen(objectGetVal(str), buf, len));
     return VALKEYMODULE_OK;
+}
+
+/* Given a string module object, this function replaces the string stored in
+ * the string buffer by the `new_str` string. If the string fits in the string
+ * buffer, no allocation is performed, otherwise the string buffer is reallocated.
+ *
+ * If the string has multiple owners (refcount > 1), the original string is freed
+ * and a new string is created with the new contents.
+ *
+ * Returns the same ValkeyModuleString pointer if the replacement was done in-place,
+ * or a new ValkeyModuleString pointer if a new string was created. */
+ValkeyModuleString *VM_ReplaceString(ValkeyModuleString *str, const char *new_str, size_t new_len) {
+    if (str->refcount != 1) {
+        ValkeyModuleString *new_obj = VM_CreateString(NULL, new_str, new_len);
+        VM_FreeString(NULL, str);
+        return new_obj;
+    }
+
+    sds ptr = objectGetVal(str);
+    serverAssert(ptr != NULL);
+    size_t len = sdslen(ptr);
+
+    if (new_len > len + sdsavail(ptr)) {
+        if (str->encoding == OBJ_ENCODING_EMBSTR) {
+            objectUnembedVal(str);
+            ptr = objectGetVal(str);
+            len = sdslen(ptr);
+        }
+        if (new_len > len + sdsavail(ptr)) {
+            ptr = sdsMakeRoomForNonGreedy(ptr, new_len - len);
+            serverAssert(ptr != NULL);
+            objectSetVal(str, ptr);
+        }
+    }
+
+    memcpy(ptr, new_str, new_len);
+    ((char *)ptr)[new_len] = '\0';
+    sdssetlen(ptr, new_len);
+    return str;
 }
 
 /* Trim possible excess memory allocated for a ValkeyModuleString.
@@ -14831,6 +14879,9 @@ void moduleRegisterCoreAPI(void) {
     REGISTER_API(CreateStringPrintf);
     REGISTER_API(FreeString);
     REGISTER_API(StringPtrLen);
+    REGISTER_API(StringLength);
+    REGISTER_API(StringIsSingleOwner);
+    REGISTER_API(ReplaceString);
     REGISTER_API(AutoMemory);
     REGISTER_API(Replicate);
     REGISTER_API(ReplicateVerbatim);

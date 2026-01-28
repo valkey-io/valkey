@@ -21,29 +21,15 @@
  */
 
 const char *module_name = "helloextdata1";
-static char server_id[256] = "127.0.0.1:6379"; /* Default server ID, will be updated from target */
 
-/* Helper function to get external data path and replace localhost with 127.0.0.1 */
-static char* get_external_data_path(ValkeyModuleCtx *module_ctx, const char *server_id) {
-    static char path[1024];
-    
-    /* Create the base path */
-    snprintf(path, sizeof(path), "/tmp/external_data/%s", server_id);
-    
-    /* Replace localhost with 127.0.0.1 if present */
-    char *localhost_pos = strstr(path, "localhost");
-    if (localhost_pos != NULL) {
-        /* Replace "localhost" with "127.0.0.1" */
-        char temp_path[1024];
-        snprintf(temp_path, sizeof(temp_path), "%.*s127.0.0.1%s",
-                (int)(localhost_pos - path), path, localhost_pos + 9);
-        strncpy(path, temp_path, sizeof(path) - 1);
-        path[sizeof(path) - 1] = '\0';
-    }
-    
-    ValkeyModule_Log(module_ctx, "debug", "get_external_data_path: returning %s", path);
-    return path;
-}
+/* Maximum length for node identifiers (e.g., IP:port or custom IDs) */
+#define NODE_ID_MAX_LEN 64
+
+/* Maximum length for backup identifiers (timestamp-based format YYYYMMDD_HHMMSS) */
+#define BACKUP_ID_MAX_LEN 256
+
+static char node_id[NODE_ID_MAX_LEN] = {0};  /* Unique node identifier */
+
 
 #define MAX_DB 16
 ValkeyModuleDict *storage_mem_pool[MAX_DB];  // Memory pool for storage
@@ -63,7 +49,7 @@ static int dump_every_write = 0;  // 0 = no auto-dump, 1 = dump on every write
 /* Backup ID coordination for same-second dumps */
 static long long last_backup_second = 0;
 static int backup_sequence_counter = 0;
-static char last_backup_id[256] = {0};
+static char last_backup_id[BACKUP_ID_MAX_LEN] = {0};
 static int reuse_last_backup_id = 0;  /* Flag: 1 = reuse last_backup_id, 0 = generate new */
 
 /* Cluster mode flag */
@@ -313,6 +299,55 @@ static void filterFreeSnapshotFunction(ValkeyModuleCtx *module_ctx,
 
     ValkeyModule_FreeDict(NULL, dict);
 }
+/* Forward declarations */
+static const char *find_node_id_by_address(ValkeyModuleCtx *ctx, const char *ip_port);
+
+/**
+ * Resolves node ID from a target/source string.
+ * If target_or_source is NULL, uses the local node_id.
+ * If target_or_source is a valid address, looks it up and resolves to node_id.
+ * Otherwise uses the target_or_source string directly as node_id.
+ *
+ * @param module_ctx Module context for logging
+ * @param target_or_source The target/source string to resolve (can be NULL)
+ * @param local_node_id The local node ID to use as fallback
+ * @param buffer Output buffer for resolved node_id
+ * @param buffer_size Size of output buffer
+ * @param operation_name Name of operation for logging (e.g., "filterDump", "storageLoad")
+ * @return 0 on success, -1 on error
+ */
+static int resolve_node_id(ValkeyModuleCtx *module_ctx,
+                          ValkeyModuleString *target_or_source,
+                          const char *local_node_id,
+                          char *buffer,
+                          size_t buffer_size,
+                          const char *operation_name) {
+    if (target_or_source != NULL) {
+        size_t len;
+        const char *str = ValkeyModule_StringPtrLen(target_or_source, &len);
+        
+        /* String might be ip:port, need to look up node_id in mapping */
+        const char *looked_up_node_id = find_node_id_by_address(module_ctx, str);
+        if (looked_up_node_id) {
+            /* Found in mapping - use the node_id */
+            snprintf(buffer, buffer_size, "%s", looked_up_node_id);
+            ValkeyModule_Log(module_ctx, "notice", "%s: target/source=%.*s resolved to node_id=%s",
+                           operation_name, (int)len, str, buffer);
+        } else {
+            /* Not in mapping - assume string is already a node_id */
+            snprintf(buffer, buffer_size, "%.*s", (int)len, str);
+            ValkeyModule_Log(module_ctx, "notice", "%s: using target/source as node_id=%s",
+                           operation_name, buffer);
+        }
+    } else {
+        /* Use local node_id */
+        snprintf(buffer, buffer_size, "%s", local_node_id);
+        ValkeyModule_Log(module_ctx, "notice", "%s: using local node_id=%s",
+                       operation_name, buffer);
+    }
+    return 0;
+}
+
 /* Storage methods */
 static int storageDumpFunction(ValkeyModuleCtx *module_ctx,
                                ValkeyModuleExternalStorageCtx *storage_ctx,
@@ -338,7 +373,7 @@ static int storageSetFunction(ValkeyModuleCtx *module_ctx,
 
     ValkeyModule_Log(module_ctx, "debug", "storageSet: about to get slot for cluster mode%s",
                      is_cluster_enabled ? "enabled" : "disabled");
-    int slot = is_cluster_enabled ? ValkeyModule_ClusterKeySlot(key) : EXTERNAL_ALL_SLOTS;
+    int slot = is_cluster_enabled ? ValkeyModule_ClusterKeySlot((ValkeyModuleString *)key) : (unsigned int)EXTERNAL_ALL_SLOTS;
     ValkeyModule_Log(module_ctx, "notice", "storageSet: key=%s slot=%d",
                      ValkeyModule_StringPtrLen(key, NULL), slot);
     ValkeyModule_Log(module_ctx, "debug", "DEBUG: storageSetFunction called - key=%s, dbid=%d, dump_every_write=%d",
@@ -371,7 +406,7 @@ static int storageSetFunction(ValkeyModuleCtx *module_ctx,
         return EXTERNAL_ERROR;
     }
 
-    ValkeyModule_Log(module_ctx, "debug", "DEBUG: storageSetFunction - failure percent: %d", set_failure_percent);
+    ValkeyModule_Log(module_ctx, "debug", "DEBUG: storageSetFunction - failure percent: %lld", set_failure_percent);
     /* Simulate failures if configured */
     if (set_failure_percent > 0) {
         set_operation_counter++;
@@ -415,13 +450,13 @@ static int storageSetFunction(ValkeyModuleCtx *module_ctx,
     /* Auto-dump on every write if configured */
     if (dump_every_write) {
         ValkeyModule_Log(module_ctx, "notice", "Auto-dumping data after SET operation (dump_every_write=1)");
-        ValkeyModule_Log(module_ctx, "debug", "AUTO_DUMP: server_id=%s, dbid=%d", server_id, dbid);
+        ValkeyModule_Log(module_ctx, "debug", "AUTO_DUMP: node_id=%s, dbid=%d", node_id, dbid);
         /* Call storage dump function with appropriate parameters */
         ValkeyModuleString *backup_id = NULL;
         
-        ValkeyModule_Log(module_ctx, "debug", "AUTO_DUMP: Calling storageDumpFunction with target=%s", server_id);
-        ValkeyModuleString *server_id_str = ValkeyModule_CreateStringPrintf(NULL, "%s", server_id);
-        storageDumpFunction(module_ctx, storage_ctx, dbid, 0, time(NULL), server_id_str, &backup_id);
+        ValkeyModule_Log(module_ctx, "debug", "AUTO_DUMP: Calling storageDumpFunction with target=%s", node_id);
+        ValkeyModuleString *node_id_str = ValkeyModule_CreateStringPrintf(NULL, "%s", node_id);
+        storageDumpFunction(module_ctx, storage_ctx, dbid, 0, time(NULL), node_id_str, &backup_id);
         ValkeyModule_Log(module_ctx, "debug", "AUTO_DUMP: storageDumpFunction completed");
         
         if (backup_id) {
@@ -453,7 +488,7 @@ static int storageGetFunction(ValkeyModuleCtx *module_ctx,
         return EXTERNAL_ERROR;
     }
     
-    int slot = is_cluster_enabled ? ValkeyModule_ClusterKeySlot(key) : EXTERNAL_ALL_SLOTS;
+    int slot = is_cluster_enabled ? ValkeyModule_ClusterKeySlot((ValkeyModuleString *)key) : (unsigned int)EXTERNAL_ALL_SLOTS;
     ValkeyModule_Log(module_ctx, "notice", "storageGet: key=%s slot=%d",
                      ValkeyModule_StringPtrLen(key, NULL), slot);
     
@@ -495,7 +530,7 @@ static int storageDelFunction(ValkeyModuleCtx *module_ctx,
         return EXTERNAL_ERROR;
     }
     
-    int slot = is_cluster_enabled ? ValkeyModule_ClusterKeySlot(key) : EXTERNAL_ALL_SLOTS;
+    int slot = is_cluster_enabled ? ValkeyModule_ClusterKeySlot((ValkeyModuleString *)key) : (unsigned int)EXTERNAL_ALL_SLOTS;
     ValkeyModule_Log(module_ctx, "notice", "storageDel: key=%s slot=%d",
                      ValkeyModule_StringPtrLen(key, NULL), slot);
     ValkeyModule_Log(module_ctx, "debug", "storageDelFunction: dbid=%d, key=%s",
@@ -576,7 +611,7 @@ static int filterSetFunction(ValkeyModuleCtx *module_ctx,
         return EXTERNAL_ERROR;
     }
     
-    int slot = is_cluster_enabled ? ValkeyModule_ClusterKeySlot(key) : EXTERNAL_ALL_SLOTS;
+    int slot = is_cluster_enabled ? ValkeyModule_ClusterKeySlot((ValkeyModuleString *)key) : (unsigned int)EXTERNAL_ALL_SLOTS;
     ValkeyModule_Log(module_ctx, "notice", "filterSet: key=%s slot=%d",
                      ValkeyModule_StringPtrLen(key, NULL), slot);
     ValkeyModule_Log(module_ctx, "debug", "DEBUG: filterSetFunction called");
@@ -623,8 +658,8 @@ static int filterSetFunction(ValkeyModuleCtx *module_ctx,
     if (dump_every_write) {
         ValkeyModule_Log(module_ctx, "notice", "Auto-dumping filter data after SET operation (dump_every_write=1)");
         ValkeyModuleString *backup_id = NULL;
-        ValkeyModuleString *server_id_str = ValkeyModule_CreateStringPrintf(NULL, "%s", server_id);
-        filterDumpFunction(module_ctx, filter_ctx, dbid, 0, time(NULL), server_id_str, &backup_id);
+        ValkeyModuleString *node_id_str = ValkeyModule_CreateStringPrintf(NULL, "%s", node_id);
+        filterDumpFunction(module_ctx, filter_ctx, dbid, 0, time(NULL), node_id_str, &backup_id);
         if (backup_id) {
             ValkeyModule_FreeString(NULL, backup_id);
         }
@@ -646,7 +681,7 @@ static int filterGetFunction(ValkeyModuleCtx *module_ctx,
         return EXTERNAL_ERROR;
     }
     
-    int slot = is_cluster_enabled ? ValkeyModule_ClusterKeySlot(key) : EXTERNAL_ALL_SLOTS;
+    int slot = is_cluster_enabled ? ValkeyModule_ClusterKeySlot((ValkeyModuleString *)key) : (unsigned int)EXTERNAL_ALL_SLOTS;
     ValkeyModule_Log(module_ctx, "notice", "filterGet: key=%s slot=%d",
                      ValkeyModule_StringPtrLen(key, NULL), slot);
     
@@ -687,7 +722,7 @@ static int filterDelFunction(ValkeyModuleCtx *module_ctx,
         return EXTERNAL_ERROR;
     }
     
-    int slot = is_cluster_enabled ? ValkeyModule_ClusterKeySlot(key) : EXTERNAL_ALL_SLOTS;
+    int slot = is_cluster_enabled ? ValkeyModule_ClusterKeySlot((ValkeyModuleString *)key) : (unsigned int)EXTERNAL_ALL_SLOTS;
     ValkeyModule_Log(module_ctx, "notice", "filterDel: key=%s slot=%d",
                      ValkeyModule_StringPtrLen(key, NULL), slot);
     ValkeyModule_Log(module_ctx, "debug", "filterDelFunction: dbid=%d, key=%s",
@@ -861,19 +896,12 @@ static int filterDumpFunction(ValkeyModuleCtx *module_ctx,
         ValkeyModule_Log(module_ctx, "notice", "filterDumpFunction: using snapshot for dump of db%d", dbid);
     }
     
-    /* Extract server ID from target parameter if provided, otherwise use local server ID */
-    char target_server_id[1024];
-    if (target != NULL) {
-        size_t target_len;
-        const char *target_str = ValkeyModule_StringPtrLen(target, &target_len);
-        snprintf(target_server_id, sizeof(target_server_id), "%.*s", (int)target_len, target_str);
-    } else {
-        /* Use local server ID */
-        snprintf(target_server_id, sizeof(target_server_id), "%s", server_id);
-    }
+    /* Extract node_id from target parameter if provided, otherwise use local node_id */
+    char target_node_id[NODE_ID_MAX_LEN];
+    resolve_node_id(module_ctx, target, node_id, target_node_id, sizeof(target_node_id), "filterDumpFunction");
     
     /* Handle backup_id: use passed value if initialized, otherwise calculate using current time */
-    char backup_id_str[256];
+    char backup_id_str[BACKUP_ID_MAX_LEN];
     if (backup_id != NULL && *backup_id != NULL) {
         /* backup_id was passed in - use it instead of creating a new one */
         size_t backup_id_len;
@@ -915,8 +943,8 @@ static int filterDumpFunction(ValkeyModuleCtx *module_ctx,
     }
     
     /* Create directory for this server instance */
-    char server_dir[1024];
-    snprintf(server_dir, sizeof(server_dir), "%s", get_external_data_path(module_ctx, target_server_id));
+    char server_dir[2048];
+    snprintf(server_dir, sizeof(server_dir), "/tmp/external_data/%s", target_node_id);
     mkdir("/tmp/external_data", 0755);
     mkdir(server_dir, 0755);
     ValkeyModule_Log(module_ctx, "notice", "filterDumpFunction: creating backup in directory=%s", server_dir);
@@ -936,12 +964,12 @@ static int filterDumpFunction(ValkeyModuleCtx *module_ctx,
         }
         
         /* Create database-specific directory */
-        char db_dir[1024];
+        char db_dir[4096];
         snprintf(db_dir, sizeof(db_dir), "%s/db%d", server_dir, dbid);
         mkdir(db_dir, 0755);
         
         /* Dump filter data to database-specific file */
-        char filter_filename[1536];
+        char filter_filename[5120];
         snprintf(filter_filename, sizeof(filter_filename), "%s/%s_filter_%s.dat", db_dir, module_name, backup_id_str);
         
         FILE *filter_file = fopen(filter_filename, "w");
@@ -1023,24 +1051,12 @@ static int storageDumpFunction(ValkeyModuleCtx *module_ctx,
         ValkeyModule_Log(module_ctx, "notice", "storageDumpFunction: using snapshot for dump of db%d", dbid);
     }
     
-    /* Extract server ID from target parameter if provided, otherwise use local server ID */
-    char target_server_id[1024];
-    if (target != NULL) {
-        size_t target_len;
-        // Add logging before StringPtrLen call
-        ValkeyModule_Log(module_ctx, "debug", "DEBUG: storageDumpFunction - about to call StringPtrLen on target=%p", (void*)target);
-        const char *target_str = ValkeyModule_StringPtrLen(target, &target_len);
-        snprintf(target_server_id, sizeof(target_server_id), "%.*s", (int)target_len, target_str);
-        ValkeyModule_Log(module_ctx, "notice", "storageDumpFunction: using target server_id=%s", server_id);
-    } else {
-        ValkeyModule_Log(module_ctx, "warning", "storageDumpFunction: target is NULL, using local server_id=%s", server_id);
-        /* Use local server ID */
-        ValkeyModule_Log(module_ctx, "notice", "storageDumpFunction: using local server_id=%s", server_id);
-        snprintf(target_server_id, sizeof(target_server_id), "%s", server_id);
-    }
+    /* Extract node_id from target parameter if provided, otherwise use local node_id */
+    char target_node_id[NODE_ID_MAX_LEN];
+    resolve_node_id(module_ctx, target, node_id, target_node_id, sizeof(target_node_id), "storageDumpFunction");
     
     /* Handle backup_id: use passed value if initialized, otherwise calculate using current time */
-    char backup_id_str[256];
+    char backup_id_str[BACKUP_ID_MAX_LEN];
     if (backup_id != NULL && *backup_id != NULL) {
         /* backup_id was passed in - use it instead of creating a new one */
         size_t backup_id_len;
@@ -1082,8 +1098,8 @@ static int storageDumpFunction(ValkeyModuleCtx *module_ctx,
     }
     
     /* Create directory for this server instance */
-    char server_dir[1024];
-    snprintf(server_dir, sizeof(server_dir), "%s", get_external_data_path(module_ctx, target_server_id));
+    char server_dir[2048];
+    snprintf(server_dir, sizeof(server_dir), "/tmp/external_data/%s", target_node_id);
     mkdir("/tmp/external_data", 0755);
     mkdir(server_dir, 0755);
     ValkeyModule_Log(module_ctx, "notice", "storageDumpFunction: creating backup in directory=%s", server_dir);
@@ -1103,12 +1119,12 @@ static int storageDumpFunction(ValkeyModuleCtx *module_ctx,
         }
         
         /* Create database-specific directory */
-        char db_dir[1024];
+        char db_dir[4096];
         snprintf(db_dir, sizeof(db_dir), "%s/db%d", server_dir, dbid);
         mkdir(db_dir, 0755);
         
         /* Dump storage data to database-specific file */
-        char storage_filename[1536];
+        char storage_filename[5120];
         snprintf(storage_filename, sizeof(storage_filename), "%s/%s_storage_%s.dat", db_dir, module_name, backup_id_str);
         
         FILE *storage_file = fopen(storage_filename, "w");
@@ -1204,23 +1220,11 @@ static int filterLoadFunction(ValkeyModuleCtx *module_ctx,
         return success ? EXTERNAL_SUCCESS : EXTERNAL_ERROR;
     }
 
-    /* Extract source server ID (host:port) */
-    char source_server_id[256];
-    if (source != NULL) {
-        size_t source_len;
-        const char *source_str = ValkeyModule_StringPtrLen(source, &source_len);
-        
-        /* Use the full source string as server ID (includes port if present) */
-        snprintf(source_server_id, sizeof(source_server_id), "%.*s", (int)source_len, source_str);
-        
-        ValkeyModule_Log(module_ctx, "notice", "Loading filter from source: %s", source_server_id);
-    } else {
-        /* Use local server ID */
-        snprintf(source_server_id, sizeof(source_server_id), "%s", server_id);
-        ValkeyModule_Log(module_ctx, "notice", "Loading filter from local instance: %s", source_server_id);
-    }
+    /* Extract node_id from source parameter if provided, otherwise use local node_id */
+    char source_node_id[NODE_ID_MAX_LEN];
+    resolve_node_id(module_ctx, source, node_id, source_node_id, sizeof(source_node_id), "filterLoadFunction");
     
-    char backup_id_buf[256];
+    char backup_id_buf[BACKUP_ID_MAX_LEN];
     size_t backup_id_len;
     const char *backup_id_str;
     
@@ -1230,7 +1234,7 @@ static int filterLoadFunction(ValkeyModuleCtx *module_ctx,
         
         /* Use server-specific directory */
         char source_dir[1024];
-        snprintf(source_dir, sizeof(source_dir), "%s", get_external_data_path(module_ctx, source_server_id));
+        snprintf(source_dir, sizeof(source_dir), "/tmp/external_data/%s", source_node_id);
         
         /* Use a simple heuristic: check the last 15 seconds for backup files */
         time_t current_time = time(NULL);
@@ -1253,7 +1257,7 @@ static int filterLoadFunction(ValkeyModuleCtx *module_ctx,
                         ValkeyModule_Log(module_ctx, "debug", "filterLoad: entry_dbid=%d, target_dbid=%d", entry_dbid, dbid);
                         if (entry_dbid == dbid) {
                             /* Found a database directory, check for filter files matching prefix */
-                            char db_dir[1024];
+                            char db_dir[2048];
                             snprintf(db_dir, sizeof(db_dir), "%s/%s", source_dir, entry->d_name);
                         
                             ValkeyModule_Log(module_ctx, "debug", "filterLoad: Opening db_dir=%s for dbid=%d", db_dir, dbid);
@@ -1286,8 +1290,10 @@ static int filterLoadFunction(ValkeyModuleCtx *module_ctx,
                                                 ValkeyModule_Log(module_ctx, "debug", "filterLoad: Found backup %s with sequence=%d", temp_backup_id, seq);
                                                 if (seq > max_sequence) {
                                                     max_sequence = seq;
-                                                    strncpy(best_backup_id, temp_backup_id, sizeof(best_backup_id) - 1);
-                                                    best_backup_id[sizeof(best_backup_id) - 1] = '\0';
+                                                    size_t len = strlen(temp_backup_id);
+                                                    if (len >= sizeof(best_backup_id)) len = sizeof(best_backup_id) - 1;
+                                                    memcpy(best_backup_id, temp_backup_id, len);
+                                                    best_backup_id[len] = '\0';
                                                 }
                                             }
                                         }
@@ -1329,7 +1335,7 @@ static int filterLoadFunction(ValkeyModuleCtx *module_ctx,
     
     /* Load filter data from disk using source server directory */
     char source_dir[1024];
-    snprintf(source_dir, sizeof(source_dir), "%s/db%d", get_external_data_path(module_ctx, source_server_id), dbid);
+    snprintf(source_dir, sizeof(source_dir), "/tmp/external_data/%s/db%d", source_node_id, dbid);
     
     char filter_filename[1536];
     snprintf(filter_filename, sizeof(filter_filename), "%s/%s_filter_%.*s.dat",
@@ -1474,26 +1480,11 @@ static int storageLoadFunction(ValkeyModuleCtx *module_ctx,
         return success ? EXTERNAL_SUCCESS : EXTERNAL_ERROR;
     }
 
-    /* Extract source server ID (host:port) */
-    char source_server_id[256];
-    if (source != NULL) {
-        size_t source_len;
-        // Add logging before StringPtrLen call
-        ValkeyModule_Log(module_ctx, "debug", "DEBUG: storageLoadFunction - about to call StringPtrLen on source=%p", (void*)source);
-        const char *source_str = ValkeyModule_StringPtrLen(source, &source_len);
-        
-        /* Use the full source string as server ID (includes port if present) */
-        snprintf(source_server_id, sizeof(source_server_id), "%.*s", (int)source_len, source_str);
-        
-        ValkeyModule_Log(module_ctx, "notice", "Loading storage from source: %s", source_server_id);
-    } else {
-        ValkeyModule_Log(module_ctx, "warning", "storageLoadFunction: source is NULL, using local server_id=%s", server_id);
-        /* Use local server ID */
-        snprintf(source_server_id, sizeof(source_server_id), "%s", server_id);
-        ValkeyModule_Log(module_ctx, "notice", "Loading storage from local instance: %s", source_server_id);
-    }
+    /* Extract node_id from source parameter if provided, otherwise use local node_id */
+    char source_node_id[NODE_ID_MAX_LEN];
+    resolve_node_id(module_ctx, source, node_id, source_node_id, sizeof(source_node_id), "storageLoadFunction");
     
-    char backup_id_buf[256];
+    char backup_id_buf[BACKUP_ID_MAX_LEN];
     size_t backup_id_len;
     const char *backup_id_str;
     
@@ -1503,7 +1494,7 @@ static int storageLoadFunction(ValkeyModuleCtx *module_ctx,
         
         /* Use server-specific directory */
         char source_dir[1024];
-        snprintf(source_dir, sizeof(source_dir), "%s", get_external_data_path(module_ctx, source_server_id));
+        snprintf(source_dir, sizeof(source_dir), "/tmp/external_data/%s", source_node_id);
         
         /* Use a simple heuristic: check the last 15 seconds for backup files */
         time_t current_time = time(NULL);
@@ -1520,7 +1511,7 @@ static int storageLoadFunction(ValkeyModuleCtx *module_ctx,
                 while ((entry = readdir(dir)) != NULL) {
                     if (strncmp(entry->d_name, "db", 2) == 0 && strtol(entry->d_name + 2, NULL, 10) == dbid) {
                         /* Found a database directory, check for storage files matching prefix */
-                        char db_dir[1024];
+                        char db_dir[2048];
                         snprintf(db_dir, sizeof(db_dir), "%s/%s", source_dir, entry->d_name);
                         
                         DIR *db_subdir = opendir(db_dir);
@@ -1550,8 +1541,10 @@ static int storageLoadFunction(ValkeyModuleCtx *module_ctx,
                                             ValkeyModule_Log(module_ctx, "debug", "storageLoad: Found backup %s with sequence=%d", temp_backup_id, seq);
                                             if (seq > max_sequence) {
                                                 max_sequence = seq;
-                                                strncpy(best_backup_id, temp_backup_id, sizeof(best_backup_id) - 1);
-                                                best_backup_id[sizeof(best_backup_id) - 1] = '\0';
+                                                size_t len = strlen(temp_backup_id);
+                                                if (len >= sizeof(best_backup_id)) len = sizeof(best_backup_id) - 1;
+                                                memcpy(best_backup_id, temp_backup_id, len);
+                                                best_backup_id[len] = '\0';
                                             }
                                         }
                                     }
@@ -1602,7 +1595,7 @@ static int storageLoadFunction(ValkeyModuleCtx *module_ctx,
     
     /* Load storage data from disk using source server directory */
     char source_dir[1024];
-    snprintf(source_dir, sizeof(source_dir), "%s/db%d", get_external_data_path(module_ctx, source_server_id), dbid);
+    snprintf(source_dir, sizeof(source_dir), "/tmp/external_data/%s/db%d", source_node_id, dbid);
     
     char storage_filename[1536];
     snprintf(storage_filename, sizeof(storage_filename), "%s/%s_storage_%.*s.dat",
@@ -1743,12 +1736,16 @@ static int findDatabasesFromBackup(ValkeyModuleCtx *module_ctx, ValkeyModuleStri
         /* We're on a replica - use the primary's directory */
         size_t source_len;
         const char *source_str = ValkeyModule_StringPtrLen(source, &source_len);
-        snprintf(server_dir, sizeof(server_dir), "%s",
-                 get_external_data_path(module_ctx, source_str));
+        /* Source might be ip:port, need to look up node_id in mapping */
+        const char *looked_up_node_id = find_node_id_by_address(module_ctx, source_str);
+        if (looked_up_node_id) {
+            source_str = looked_up_node_id;
+        }
+        snprintf(server_dir, sizeof(server_dir), "/tmp/external_data/%s", source_str);
         ValkeyModule_Log(module_ctx, "notice", "Looking for backups in primary's directory: %s", server_dir);
     } else {
         /* We're on primary - use local directory */
-        snprintf(server_dir, sizeof(server_dir), "%s", get_external_data_path(module_ctx, server_id));
+        snprintf(server_dir, sizeof(server_dir), "/tmp/external_data/%s", node_id);
         ValkeyModule_Log(module_ctx, "notice", "Looking for backups in local directory: %s", server_dir);
     }
     
@@ -1769,7 +1766,7 @@ static int findDatabasesFromBackup(ValkeyModuleCtx *module_ctx, ValkeyModuleStri
             int db = atoi(entry->d_name + 2);
             if (db >= 0 && db < MAX_DB) {
                 /* Check if this database has any backup files */
-                char db_dir[1024];
+                char db_dir[2048];
                 snprintf(db_dir, sizeof(db_dir), "%s/%s", server_dir, entry->d_name);
                 
                 DIR *db_subdir = opendir(db_dir);
@@ -1930,6 +1927,220 @@ int FilterGetSlotCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int ar
     return VALKEYMODULE_OK;
 }
 
+/* Node ID and mapping storage */
+static ValkeyModuleDict *node_mapping_dict = NULL; /* In-memory mapping of ip:port -> node_id */
+
+/* Note: load_node_id() and save_node_id() removed - using mapping file as source of truth */
+
+/* Load node mappings from /tmp/external_data/node_mappings.dat */
+static void load_node_mappings(ValkeyModuleCtx *ctx) {
+    const char *filepath = "/tmp/external_data/node_mappings.dat";
+    FILE *f = fopen(filepath, "r");
+    if (!f) {
+        ValkeyModule_Log(ctx, "notice", "No existing node mappings file");
+        return;
+    }
+    
+    char line[512];
+    int count = 0;
+    while (fgets(line, sizeof(line), f)) {
+        /* Remove trailing newline */
+        size_t len = strlen(line);
+        if (len > 0 && line[len-1] == '\n') {
+            line[len-1] = '\0';
+        }
+        
+        /* Parse line: ip:port,node_id */
+        char *comma = strchr(line, ',');
+        if (!comma) continue;
+        
+        *comma = '\0';
+        char *ip_port = line;
+        char *node_id_value = comma + 1;
+        
+        /* Store in dictionary */
+        ValkeyModuleString *key = ValkeyModule_CreateString(ctx, ip_port, strlen(ip_port));
+        ValkeyModuleString *val = ValkeyModule_CreateString(ctx, node_id_value, strlen(node_id_value));
+        ValkeyModule_DictSet(node_mapping_dict, key, val);
+        
+        count++;
+    }
+    
+    fclose(f);
+    ValkeyModule_Log(ctx, "notice", "Loaded %d node mappings", count);
+}
+
+/* Save a single node mapping to /tmp/external_data/node_mappings.dat */
+static int save_node_mapping(ValkeyModuleCtx *ctx, const char *ip_port, const char *node_id_value) {
+    const char *dirpath = "/tmp/external_data";
+    const char *filepath = "/tmp/external_data/node_mappings.dat";
+    
+    /* Create directory if it doesn't exist */
+    struct stat st = {0};
+    if (stat(dirpath, &st) == -1) {
+        if (mkdir(dirpath, 0755) == -1) {
+            ValkeyModule_Log(ctx, "warning", "Failed to create directory %s: %s", 
+                           dirpath, strerror(errno));
+            return 0;
+        }
+    }
+    
+    /* First, load all existing mappings into memory */
+    FILE *f = fopen(filepath, "r");
+    char **lines = NULL;
+    int line_count = 0;
+    int found_existing = 0;
+    
+    if (f) {
+        /* Read all lines */
+        char line[512];
+        while (fgets(line, sizeof(line), f)) {
+            /* Check if this line is for our ip_port */
+            char *comma = strchr(line, ',');
+            if (comma) {
+                *comma = '\0';
+                if (strcmp(line, ip_port) == 0) {
+                    found_existing = 1;
+                    /* Replace with new mapping */
+                    snprintf(line, sizeof(line), "%s,%s\n", ip_port, node_id_value);
+                    *comma = ',';
+                } else {
+                    *comma = ',';
+                }
+            }
+            
+            /* Store line */
+            lines = realloc(lines, sizeof(char*) * (line_count + 1));
+            lines[line_count] = strdup(line);
+            line_count++;
+        }
+        fclose(f);
+    }
+    
+    /* Write back all lines */
+    f = fopen(filepath, "w");
+    if (!f) {
+        ValkeyModule_Log(ctx, "warning", "Failed to open %s for writing: %s", 
+                       filepath, strerror(errno));
+        /* Free allocated memory */
+        for (int i = 0; i < line_count; i++) {
+            free(lines[i]);
+        }
+        free(lines);
+        return 0;
+    }
+    
+    for (int i = 0; i < line_count; i++) {
+        fputs(lines[i], f);
+        free(lines[i]);
+    }
+    free(lines);
+    
+    /* If not found, append new mapping */
+    if (!found_existing) {
+        fprintf(f, "%s,%s\n", ip_port, node_id_value);
+    }
+    
+    fclose(f);
+    ValkeyModule_Log(ctx, "debug", "Saved mapping: %s -> %s", ip_port, node_id_value);
+    return 1;
+}
+
+/* Helper function to get the announced IP:port for this node
+ * Returns a dynamically allocated string that must be freed by the caller.
+ * Format: "ip:port"
+ * 
+ * In cluster mode, respects cluster-announce-ip and cluster-announce-port
+ * In standalone mode, respects replica-announce-ip and replica-announce-port
+ * Falls back to actual bind address if announce addresses are not set
+ */
+static char *get_announced_address(ValkeyModuleCtx *ctx) {
+    char *result = NULL;
+    
+    if (is_cluster_enabled) {
+        /* Cluster mode: use ValkeyModule_GetClusterNodeInfo to get announced address */
+        const char *my_id = ValkeyModule_GetMyClusterID();
+        if (my_id) {
+            char ip[256] = {0};
+            int port = 0;
+            
+            /* Get this node's cluster info (includes announced IP and port) */
+            if (ValkeyModule_GetClusterNodeInfo(ctx, my_id, ip, NULL, &port, NULL) == VALKEYMODULE_OK) {
+                /* Allocate and format result */
+                result = ValkeyModule_Alloc(strlen(ip) + 16);  /* IP + ":" + port + null */
+                snprintf(result, strlen(ip) + 16, "%s:%d", ip, port);
+                ValkeyModule_Log(ctx, "notice", "Cluster mode: announced address = %s", result);
+            } else {
+                ValkeyModule_Log(ctx, "warning", "Failed to get cluster node info");
+            }
+        } else {
+            ValkeyModule_Log(ctx, "warning", "Failed to get cluster ID");
+        }
+    } else {
+        /* Standalone mode: use ValkeyModule_GetServerInfo */
+        ValkeyModuleServerInfoData *info = ValkeyModule_GetServerInfo(ctx, "server");
+        if (info) {
+            /* Get TCP port from server info */
+            int err = 0;
+            long long port = ValkeyModule_ServerInfoGetFieldSigned(info, "tcp_port", &err);
+            
+            if (err == VALKEYMODULE_OK && port > 0) {
+                /* Try to get announced IP from replication section */
+                ValkeyModule_FreeServerInfo(ctx, info);
+                info = ValkeyModule_GetServerInfo(ctx, "replication");
+                
+                const char *announced_ip = NULL;
+                if (info) {
+                    /* Try to get replica-announce-ip if configured */
+                    announced_ip = ValkeyModule_ServerInfoGetFieldC(info, "replica_announce_ip");
+                }
+                
+                /* If no announced IP, use localhost as fallback */
+                if (!announced_ip || announced_ip[0] == '\0') {
+                    announced_ip = "127.0.0.1";
+                }
+                
+                /* Allocate and format result */
+                result = ValkeyModule_Alloc(strlen(announced_ip) + 32);
+                snprintf(result, strlen(announced_ip) + 32, "%s:%lld", announced_ip, port);
+                ValkeyModule_Log(ctx, "notice", "Standalone mode: announced address = %s", result);
+                
+                if (info) {
+                    ValkeyModule_FreeServerInfo(ctx, info);
+                }
+            } else {
+                ValkeyModule_Log(ctx, "warning", "Failed to get tcp_port from server info");
+                if (info) {
+                    ValkeyModule_FreeServerInfo(ctx, info);
+                }
+            }
+        } else {
+            ValkeyModule_Log(ctx, "warning", "Failed to get server info");
+        }
+    }
+    
+    return result;
+}
+
+/* Find node_id by ip:port address */
+static const char *find_node_id_by_address(ValkeyModuleCtx *ctx, const char *ip_port) {
+    if (!ip_port || strlen(ip_port) == 0) {
+        /* Empty string means self */
+        return node_id;
+    }
+    
+    ValkeyModuleString *key = ValkeyModule_CreateString(ctx, ip_port, strlen(ip_port));
+    ValkeyModuleString *val = ValkeyModule_DictGet(node_mapping_dict, key, NULL);
+    
+    if (val) {
+        size_t len;
+        const char *result = ValkeyModule_StringPtrLen(val, &len);
+        return result;
+    }
+    
+    return NULL;
+}
+
 /* Module initialization */
 int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {   
     VALKEYMODULE_NOT_USED(argv);
@@ -1940,17 +2151,48 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
 
     ValkeyModule_Log(ctx, "warning", "=== ValkeyModule_Init SUCCESS for module: %s ===", module_name);
 
-    // Get the actual server port and update server_id
-    ValkeyModuleServerInfoData *info = ValkeyModule_GetServerInfo(ctx, "server");
-    if (info) {
-        long long port = ValkeyModule_ServerInfoGetFieldSigned(info, "tcp_port", NULL);
-        if (port > 0) {
-            snprintf(server_id, sizeof(server_id), "127.0.0.1:%lld", port);
-            ValkeyModule_Log(ctx, "notice", "Module %s initialized with server_id=%s", module_name, server_id);
-        }
-        ValkeyModule_FreeServerInfo(ctx, info);
+    // Initialize node mapping dictionary
+    // Step 1: Initialize node mapping dictionary
+    node_mapping_dict = ValkeyModule_CreateDict(ctx);
+
+    // Step 2: Get the announced address for this node
+    char *server_address = get_announced_address(ctx);
+    if (!server_address) {
+        ValkeyModule_Log(ctx, "warning", "Failed to get announced address");
+        return VALKEYMODULE_ERR;
     }
-    ValkeyModule_Log(ctx, "notice", "Module %s initialized with default server_id=%s", module_name, server_id);
+    
+    ValkeyModule_Log(ctx, "notice", "Announced address: %s", server_address);
+    
+    // Step 3: Load existing mappings from file
+    load_node_mappings(ctx);
+    
+    // Step 4: Read node_id from Valkey configuration
+    ValkeyModuleString *config_value = ValkeyModule_GetConfigValue(ctx, "ext-data-id");
+    if (!config_value) {
+        ValkeyModule_Log(ctx, "warning", "Failed to read ext-data-id from config");
+        return VALKEYMODULE_ERR;
+    }
+    
+    size_t len;
+    const char *config_node_id = ValkeyModule_StringPtrLen(config_value, &len);
+    strncpy(node_id, config_node_id, sizeof(node_id) - 1);
+    node_id[sizeof(node_id) - 1] = '\0';
+    ValkeyModule_FreeString(ctx, config_value);
+    
+    ValkeyModule_Log(ctx, "notice", "Using node_id from config: %s", node_id);
+    
+    // Step 5: Update mapping with self entry
+    ValkeyModuleString *key = ValkeyModule_CreateString(ctx, server_address, strlen(server_address));
+    ValkeyModuleString *val = ValkeyModule_CreateString(ctx, node_id, strlen(node_id));
+    ValkeyModule_DictSet(node_mapping_dict, key, val);
+    save_node_mapping(ctx, server_address, node_id);
+    
+    ValkeyModule_Log(ctx, "notice", "Module initialized: node_id=%s address=%s",
+                        node_id, server_address);
+    
+    /* Free the allocated server_address */
+    ValkeyModule_Free(server_address);
 
     // Register runtime configuration for set_failure_percent
     if (ValkeyModule_RegisterNumericConfig(ctx, "set_failure_percent", 0,

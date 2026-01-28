@@ -1,10 +1,10 @@
 {
     "STATS": {
-        "summary": "Returns statistics on loaded external data modules which are used for a certain database.",
+        "summary": "Returns statistics on loaded external data modules or node information.",
         "complexity": "O(1)",
         "group": "server",
         "since": "8.0.2",
-        "arity": 2,
+        "arity": 3,
         "container": "EXTERNAL_DATA",
         "function": "externalDataStatsCommand",
         "command_flags": [
@@ -19,9 +19,37 @@
         "command_tips": [
             "NONDETERMINISTIC_OUTPUT_ORDER"
         ],
+        "arguments": [
+            {
+                "name": "subcommand",
+                "type": "oneof",
+                "arguments": [
+                    {
+                        "name": "dbs",
+                        "type": "pure-token",
+                        "token": "DBS",
+                        "display": "dbs"
+                    },
+                    {
+                        "name": "nodeid",
+                        "type": "pure-token",
+                        "token": "NODEID",
+                        "display": "nodeid"
+                    }
+                ]
+            }
+        ],
         "reply_schema": {
-            "description": "A map where each key is a db name, and each value is a module used for this db.",
-            "type": "string"
+            "oneOf": [
+                {
+                    "description": "Database statistics - a map where each key is a db name, and each value is a module used for this db.",
+                    "type": "string"
+                },
+                {
+                    "description": "Node ID string.",
+                    "type": "string"
+                }
+            ]
         }
     }
 }

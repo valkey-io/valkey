@@ -2086,6 +2086,7 @@ struct valkeyServer {
     unsigned int ext_data_store_by_size;  /* Size to exceed to store externally */
     int ext_data_async_load;              /* Load external data asynchronously on replica (1=async, 0=sync) */
     int ext_data_load_timeout_ms;         /* Timeout in milliseconds for sync external data load */
+    char *ext_data_id;                    /* Node ID for external data module */
     /* Pipe and data structures for child -> parent info sharing. */
     int child_info_pipe[2]; /* Pipe used to write the child_info_data. */
     int child_info_nread;   /* Num of bytes of the last read from pipe */
@@ -3655,6 +3656,7 @@ int rewriteConfig(char *path, int force_write);
 void initConfigValues(void);
 void removeConfig(sds name);
 sds getConfigDebugInfo(void);
+sds getConfigValue(const char *name);
 int allowProtectedAction(int config, client *c);
 void updateSharedObjectsWithCompat(void);
 void initServerClientMemUsageBuckets(void);

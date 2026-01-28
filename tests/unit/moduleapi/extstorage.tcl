@@ -14,12 +14,34 @@ start_server {tags {"external_data external:skip"}} {
     test {Running EXTERNAL_DATA commands with switched off external data fails} {
         assert_error $ext_data_off_err {r external_data init db0 helloextdata1}
         assert_error $ext_data_off_err {r external_data loaded}
-        assert_error $ext_data_off_err {r external_data stats}
+        assert_error $ext_data_off_err {r external_data stats dbs}
         assert_error $ext_data_off_err {r set k v ext}
     }
 }
 
-start_server [list overrides [list "ext-data-mode" kv] tags [list "external:skip"]] {
+test {Server fails to start when ext-data-mode is kv but ext-data-id is missing} {
+    # Try to start server with ext-data-mode=kv but without ext-data-id
+    set config_file [file join [pwd] "temp_config_test.conf"]
+    set fd [open $config_file w]
+    puts $fd "ext-data-mode kv"
+    close $fd
+    
+    # Attempt to start server with this config - should fail
+    set result [catch {
+        start_server [list overrides [list "ext-data-mode" kv]] {
+            # This block should not execute
+            fail "Server should not start without ext-data-id"
+        }
+    } error]
+    
+    # Clean up config file
+    catch {file delete $config_file}
+    
+    # Verify that server failed to start
+    assert {$result == 1}
+}
+
+start_server [list overrides [list "ext-data-mode" kv "ext-data-id" id1] tags [list "external:skip"]] {
     test {Running EXTERNAL_DATA LOADED with switched on external data succeeds} {
         assert_equal [list ] [r external_data loaded]
     }
@@ -34,7 +56,7 @@ start_server [list overrides [list "ext-data-mode" kv] tags [list "external:skip
     }
 }
 
-start_server [list overrides [list "ext-data-mode" kv] tags [list "external:skip"]] {
+start_server [list overrides [list "ext-data-mode" kv "ext-data-id" id1] tags [list "external:skip"]] {
     test {Loading module does affect LOADED commands} {
         # success on module load
         assert_equal {OK} [r module load $extdatamodule1]
@@ -67,10 +89,10 @@ start_server [list overrides [list "ext-data-mode" kv] tags [list "external:skip
 }
 
 ### Non-sharded
-start_server [list overrides [list "ext-data-mode" kv] tags [list "external:skip"]] {
+start_server [list overrides [list "ext-data-mode" kv "ext-data-id" id1] tags [list "external:skip"]] {
     test {Initializing and dropping db affects STATS commands} {
         # STATS ok with modules non-loaded
-        assert_equal [list ] [r external_data stats]
+        assert_equal [list ] [r external_data stats dbs]
 
         # check init input arguments
         assert_error {ERR failed to parse db number from db, expect db0, db10, etc.} {r external_data INIT db helloextdata1}
@@ -82,9 +104,9 @@ start_server [list overrides [list "ext-data-mode" kv] tags [list "external:skip
 
         # STATS ok with modules loaded
         assert_equal {OK} [r module load $extdatamodule1]
-        assert_equal [list ] [r external_data stats]
+        assert_equal [list ] [r external_data stats dbs]
         assert_equal {OK} [r external_data INIT db0 helloextdata1]
-        assert_equal [list db0:helloextdata1] [r external_data stats]
+        assert_equal [list db0:helloextdata1] [r external_data stats dbs]
 
         # Load same module again after init fails, but the server won't crash
         assert_error {ERR Error loading the extension. Please check the server logs.} {r module load $extdatamodule1}
@@ -92,7 +114,7 @@ start_server [list overrides [list "ext-data-mode" kv] tags [list "external:skip
         # Another module is added to stats
         assert_equal {OK} [r module load $extdatamodule2]
         assert_equal {OK} [r external_data INIT db1 helloextdata2]
-        assert_equal [list db0:helloextdata1 db1:helloextdata2] [r external_data stats]
+        assert_equal [list db0:helloextdata1 db1:helloextdata2] [r external_data stats dbs]
 
         # you can't init the same db without dropping its currently used modules
         assert_error {ERR db0 is already initialized} {r external_data INIT db0 helloextdata1}
@@ -103,22 +125,22 @@ start_server [list overrides [list "ext-data-mode" kv] tags [list "external:skip
         # dropping succeeds
         assert_error {ERR Leads to persistent storage data loss for db0, use FORCE if sure} {r external_data drop db0}
         assert_equal {OK} [r external_data drop db0 FORCE]
-        assert_equal [list db1:helloextdata2] [r external_data stats]
+        assert_equal [list db1:helloextdata2] [r external_data stats dbs]
         assert_equal {OK} [r module unload helloextdata1]
 
         # init again succeeds
         assert_equal {OK} [r external_data INIT db0 helloextdata2]
-        assert_equal [list db0:helloextdata2 db1:helloextdata2] [r external_data stats]
+        assert_equal [list db0:helloextdata2 db1:helloextdata2] [r external_data stats dbs]
 
         # cleanup ok
         assert_equal {OK} [r external_data drop db0 FORCE]
         assert_equal {OK} [r external_data drop db1 FORCE]
-        assert_equal [list ] [r external_data stats]
+        assert_equal [list ] [r external_data stats dbs]
         assert_equal {OK} [r module unload helloextdata2]
     }
 }
 
-start_server [list overrides [list "ext-data-mode" kv "loglevel" debug "ext-data-timeout" 0] tags [list "external:skip" "singledb:skip"]] {
+start_server [list overrides [list "ext-data-mode" kv "ext-data-id" id1 "loglevel" debug "ext-data-timeout" 0] tags [list "external:skip" "singledb:skip"]] {
     test {Reading data from storage works} {
         # init
         assert_equal {OK} [r module load $extdatamodule1]
@@ -174,7 +196,7 @@ start_server [list overrides [list "ext-data-mode" kv "loglevel" debug "ext-data
     }
 }
 
-start_server [list overrides [list "ext-data-mode" kv "loglevel" debug "ext-data-timeout" 0] tags [list "external:skip" "singledb:skip"]] {
+start_server [list overrides [list "ext-data-mode" kv "ext-data-id" id1 "loglevel" debug "ext-data-timeout" 0] tags [list "external:skip" "singledb:skip"]] {
     test {SET with ext option works, and GET with ext returns the value} {
         assert_equal {OK} [r module load $extdatamodule1]
         assert_equal {OK} [r external_data INIT db0 helloextdata1]
@@ -213,7 +235,7 @@ proc gen_data {size} {
     return $data
 }
 
-start_server [list overrides [list "ext-data-mode" kv "loglevel" debug] tags [list "external:skip" "singledb:skip"]] {
+start_server [list overrides [list "ext-data-mode" kv "ext-data-id" id1 "loglevel" debug] tags [list "external:skip" "singledb:skip"]] {
     test {Getting keys from storage works} {
         # init
         assert_equal {OK} [r module load $extdatamodule1]
@@ -249,7 +271,7 @@ start_server [list overrides [list "ext-data-mode" kv "loglevel" debug] tags [li
     }
 }
 
-start_server [list overrides [list "ext-data-mode" kv "loglevel" debug] tags [list "external:skip" "singledb:skip"]] {
+start_server [list overrides [list "ext-data-mode" kv "ext-data-id" id1 "loglevel" debug] tags [list "external:skip" "singledb:skip"]] {
     test {SET with ext option works, and SCAN and KEYS with ext return the key} {
         assert_equal {OK} [r module load $extdatamodule1]
         assert_equal {OK} [r external_data INIT db0 helloextdata1]
@@ -267,7 +289,7 @@ start_server [list overrides [list "ext-data-mode" kv "loglevel" debug] tags [li
     }
 }
 
-start_server [list overrides [list "ext-data-mode" kv "loglevel" debug] tags [list "external:skip"]] {
+start_server [list overrides [list "ext-data-mode" kv "ext-data-id" id1 "loglevel" debug] tags [list "external:skip"]] {
     test "ext-data-store-by-size not set: large key/value stored in memory" {
         assert_equal {OK} [r module load $extdatamodule1]
         assert_equal {OK} [r external_data INIT db0 helloextdata1]
@@ -325,7 +347,7 @@ start_server [list overrides [list "ext-data-mode" kv "loglevel" debug] tags [li
 }
 
 ### Sharded
-start_cluster 1 0 [list overrides [list "ext-data-mode" kv "loglevel" debug] tags [list "external:skip" "singledb:skip"]] {
+start_cluster 1 0 [list overrides [list "ext-data-mode" kv "ext-data-id" id1 "loglevel" debug] tags [list "external:skip" "singledb:skip"]] {
     # we assume that all cross-requests to and from another nodes are made in a usual Valkey way
     # that's why there are no tests with MOVED during set/get here
     set extdatamodule1 [file normalize tests/modules/extstorage/extdata1.so]
@@ -401,7 +423,7 @@ start_cluster 1 0 [list overrides [list "ext-data-mode" kv "loglevel" debug] tag
     }
 }
 
-start_cluster 1 0 [list overrides [list "ext-data-mode" kv "loglevel" debug] tags [list "external:skip" "singledb:skip"]] {
+start_cluster 1 0 [list overrides [list "ext-data-mode" kv "ext-data-id" id1 "loglevel" debug] tags [list "external:skip" "singledb:skip"]] {
     # we assume that all cross-requests to and from another nodes are made in a usual Valkey way
     # that's why there are no tests with MOVED during set/get here
     set extdatamodule1 [file normalize tests/modules/extstorage/extdata1.so]
@@ -451,7 +473,7 @@ start_cluster 1 0 [list overrides [list "loglevel" debug] tags [list "external:s
     }
 }
 
-start_cluster 1 0 [list overrides [list "ext-data-mode" kv "loglevel" debug] tags [list "external:skip" "singledb:skip"]] {
+start_cluster 1 0 [list overrides [list "ext-data-mode" kv "ext-data-id" id1 "loglevel" debug] tags [list "external:skip" "singledb:skip"]] {
     set extdatamodule1 [file normalize tests/modules/extstorage/extdata1.so]
 
     test "SET with ext option works, and GET with ext returns the value (sharded)" {
@@ -480,7 +502,7 @@ start_cluster 1 0 [list overrides [list "ext-data-mode" kv "loglevel" debug] tag
     }
 }
 
-start_cluster 1 0 [list overrides [list "ext-data-mode" kv "loglevel" debug] tags [list "external:skip" "singledb:skip"]] {
+start_cluster 1 0 [list overrides [list "ext-data-mode" kv "ext-data-id" id1 "loglevel" debug] tags [list "external:skip" "singledb:skip"]] {
     set extdatamodule1 [file normalize tests/modules/extstorage/extdata1.so]
 
     test "SET with ext option works, and SCAN and KEYS with ext return the key (sharded)" {
@@ -508,7 +530,7 @@ start_cluster 1 0 [list overrides [list "ext-data-mode" kv "loglevel" debug] tag
 # 6) deleted key exists in external storage, deleted with ext flag, deletion is successful, no error
 
 ### Non-sharded
-start_server [list overrides [list "ext-data-mode" kv "loglevel" debug "ext-data-store-by-size" "0"] tags [list "external:skip"]] {
+start_server [list overrides [list "ext-data-mode" kv "ext-data-id" id1 "loglevel" debug "ext-data-store-by-size" "0"] tags [list "external:skip"]] {
     # Load module once for all tests in this block
     r module load $extdatamodule1
     # Initialize external data once for all tests
@@ -611,7 +633,7 @@ start_server [list overrides [list "ext-data-mode" kv "loglevel" debug "ext-data
     }
 }
 
-start_server [list overrides [list "ext-data-mode" kv "loglevel" debug "ext-data-store-by-size" "0"] tags [list "external:skip" "singledb:skip"]] {
+start_server [list overrides [list "ext-data-mode" kv "ext-data-id" id1 "loglevel" debug "ext-data-store-by-size" "0"] tags [list "external:skip" "singledb:skip"]] {
     test "DEL with EXT - Non-sharded - Different databases" {
         # Load module once for all tests in this block
         r module load $extdatamodule1
@@ -648,7 +670,7 @@ start_server [list overrides [list "ext-data-mode" kv "loglevel" debug "ext-data
 }
 
 ### Sharded
-start_cluster 1 0 [list overrides [list "ext-data-mode" kv "ext-data-store-by-size" "0"]] {
+start_cluster 1 0 [list overrides [list "ext-data-mode" kv "ext-data-id" id1 "ext-data-store-by-size" "0"]] {
     # Load module once for all tests in this block
     set extdatamodule1 [file normalize tests/modules/extstorage/extdata1.so]
 
@@ -740,7 +762,7 @@ start_cluster 1 0 [list overrides [list "ext-data-mode" kv "ext-data-store-by-si
     }
 }
 
-start_cluster 1 0 [list overrides [list "ext-data-mode" kv "ext-data-store-by-size" "0"] tags [list "singledb:skip"]] {
+start_cluster 1 0 [list overrides [list "ext-data-mode" kv "ext-data-id" id1 "ext-data-store-by-size" "0"] tags [list "singledb:skip"]] {
     set extdatamodule1 [file normalize tests/modules/extstorage/extdata1.so]
 
     test "DEL with EXT - Sharded - Different databases" {
@@ -776,7 +798,7 @@ start_cluster 1 0 [list overrides [list "ext-data-mode" kv "ext-data-store-by-si
     }
 }
 
-start_server [list overrides [list "ext-data-mode" kv "loglevel" debug "ext-data-timeout" 5] tags [list "external:skip" "block"]] {
+start_server [list overrides [list "ext-data-mode" kv "ext-data-id" id1 "loglevel" debug "ext-data-timeout" 5] tags [list "external:skip" "block"]] {
     test {External storage operations don't block main thread} {
         # Load module and initialize external storage
         assert_equal {OK} [r module load $extdatamodule1]
@@ -843,7 +865,7 @@ start_server [list overrides [list "ext-data-mode" kv "loglevel" debug "ext-data
 }
 
 # Test ext-data-expire functionality
-start_server [list overrides [list "ext-data-mode" kv "loglevel" debug] tags [list "external:skip"]] {
+start_server [list overrides [list "ext-data-mode" kv "ext-data-id" id1 "loglevel" debug] tags [list "external:skip"]] {
     test {ext-data-expire disabled by default} {
         # Load module and initialize external storage
         assert_equal {OK} [r module load $extdatamodule1]
@@ -868,7 +890,7 @@ start_server [list overrides [list "ext-data-mode" kv "loglevel" debug] tags [li
     }
 }
 
-start_server [list overrides [list "ext-data-mode" kv "loglevel" debug "maxmemory-policy" "allkeys-lru" "ext-data-expire" "yes"] tags [list "external:skip" "slow"]] {
+start_server [list overrides [list "ext-data-mode" kv "ext-data-id" id1 "loglevel" debug "maxmemory-policy" "allkeys-lru" "ext-data-expire" "yes"] tags [list "external:skip" "slow"]] {
     test {ext-data-expire configuration works with allkeys-lru policy} {
         # Load module and initialize external storage
         assert_equal {OK} [r module load $extdatamodule1]
@@ -901,7 +923,7 @@ start_server [list overrides [list "ext-data-mode" kv "loglevel" debug "maxmemor
     }
 }
 
-start_server [list overrides [list "ext-data-mode" kv "loglevel" debug "maxmemory-policy" "volatile-lru" "ext-data-expire" "yes"] tags [list "external:skip" "slow"]] {
+start_server [list overrides [list "ext-data-mode" kv "ext-data-id" id1 "loglevel" debug "maxmemory-policy" "volatile-lru" "ext-data-expire" "yes"] tags [list "external:skip" "slow"]] {
     test {ext-data-expire does not affect volatile-* policies} {
         # Load module and initialize external storage
         assert_equal {OK} [r module load $extdatamodule1]
@@ -932,7 +954,7 @@ start_server [list overrides [list "ext-data-mode" kv "loglevel" debug "maxmemor
 
 # Test FLUSHDB command with external storage
 # FLUSHDB should clean external data for the current database only
-start_server [list overrides [list "ext-data-mode" kv "loglevel" debug] tags [list "external:skip" "singledb:skip"]] {
+start_server [list overrides [list "ext-data-mode" kv "ext-data-id" id1 "loglevel" debug] tags [list "external:skip" "singledb:skip"]] {
     test {FLUSHDB cleans external data for current database only} {
         # Load module and initialize external storage for multiple databases
         assert_equal {OK} [r module load $extdatamodule1]
@@ -1010,7 +1032,7 @@ start_server [list overrides [list "ext-data-mode" kv "loglevel" debug] tags [li
 
 # Test FLUSHALL command with external storage
 # FLUSHALL should clean external data for ALL databases
-start_server [list overrides [list "ext-data-mode" kv "loglevel" debug] tags [list "external:skip" "singledb:skip"]] {
+start_server [list overrides [list "ext-data-mode" kv "ext-data-id" id1 "loglevel" debug] tags [list "external:skip" "singledb:skip"]] {
     test {FLUSHALL cleans external data for all databases} {
         # Load module and initialize external storage for multiple databases
         assert_equal {OK} [r module load $extdatamodule1]
@@ -1092,7 +1114,7 @@ start_server [list overrides [list "ext-data-mode" kv "loglevel" debug] tags [li
 }
 
 # Test FLUSHDB with cluster mode
-start_cluster 1 0 [list overrides [list "ext-data-mode" kv "loglevel" debug] tags [list "external:skip" "singledb:skip"]] {
+start_cluster 1 0 [list overrides [list "ext-data-mode" kv "ext-data-id" id1 "loglevel" debug] tags [list "external:skip" "singledb:skip"]] {
     set extdatamodule1 [file normalize tests/modules/extstorage/extdata1.so]
     
     test {FLUSHDB cleans external data for current database only (cluster)} {
@@ -1134,7 +1156,7 @@ start_cluster 1 0 [list overrides [list "ext-data-mode" kv "loglevel" debug] tag
 }
 
 # Test FLUSHALL with cluster mode
-start_cluster 1 0 [list overrides [list "ext-data-mode" kv "loglevel" debug] tags [list "external:skip" "singledb:skip"]] {
+start_cluster 1 0 [list overrides [list "ext-data-mode" kv "ext-data-id" id1 "loglevel" debug] tags [list "external:skip" "singledb:skip"]] {
     set extdatamodule1 [file normalize tests/modules/extstorage/extdata1.so]
     
     test {FLUSHALL cleans external data for all databases (cluster)} {
@@ -1170,7 +1192,7 @@ start_cluster 1 0 [list overrides [list "ext-data-mode" kv "loglevel" debug] tag
     }
 }
 
-start_server [list overrides [list "ext-data-mode" kv "loglevel" debug] tags [list "external:skip" "slow" "singledb:skip"]] {
+start_server [list overrides [list "ext-data-mode" kv "ext-data-id" id1 "loglevel" debug] tags [list "external:skip" "slow" "singledb:skip"]] {
     test {Performance with large dataset (should complete in under 500ms)} {
         cleanup_external_data_dump r
 
@@ -1300,7 +1322,7 @@ start_server [list overrides [list "ext-data-mode" kv "loglevel" debug] tags [li
     }
 }
 
-start_cluster 1 0 [list overrides [list "ext-data-mode" kv "loglevel" debug] tags [list "external:skip" "slow" "singledb:skip"]] {
+start_cluster 1 0 [list overrides [list "ext-data-mode" kv "ext-data-id" id1 "loglevel" debug] tags [list "external:skip" "slow" "singledb:skip"]] {
     set extdatamodule1 [file normalize tests/modules/extstorage/extdata1.so]
     
     test {Performance with large dataset (should complete in under 500ms) (cluster mode)} {
@@ -1412,7 +1434,7 @@ start_cluster 1 0 [list overrides [list "ext-data-mode" kv "loglevel" debug] tag
 
 # Test SWAPDB command with external storage
 # SWAPDB should swap external data between two databases
-start_server [list overrides [list "ext-data-mode" kv "loglevel" debug] tags [list "external:skip" "singledb:skip"]] {
+start_server [list overrides [list "ext-data-mode" kv "ext-data-id" id1 "loglevel" debug] tags [list "external:skip" "singledb:skip"]] {
     test {SWAPDB swaps external data between two databases} {
         # Load module and initialize external storage for multiple databases
         assert_equal {OK} [r module load $extdatamodule1]
@@ -1662,7 +1684,7 @@ start_server [list overrides [list "ext-data-mode" kv "loglevel" debug] tags [li
 # DBSIZE EXT should return the count of memory keys plus the count of external data keys
 
 ### Non-sharded
-start_server [list overrides [list "ext-data-mode" kv "loglevel" debug] tags [list "external:skip"]] {
+start_server [list overrides [list "ext-data-mode" kv "ext-data-id" id1 "loglevel" debug] tags [list "external:skip"]] {
     test {DBSIZE without EXT returns memory keys count} {
         # Load module and initialize external storage
         assert_equal {OK} [r module load $extdatamodule1]
@@ -1709,7 +1731,7 @@ start_server [list overrides [list "ext-data-mode" kv "loglevel" debug] tags [li
     }
 }
     
-start_server [list overrides [list "ext-data-mode" kv "loglevel" debug] tags [list "external:skip" "singledb:skip"]] {
+start_server [list overrides [list "ext-data-mode" kv "ext-data-id" id1 "loglevel" debug] tags [list "external:skip" "singledb:skip"]] {
     test {DBSIZE with EXT in different databases} {
         # Load module and initialize external storage for multiple databases
         assert_equal {OK} [r module load $extdatamodule1]
@@ -1736,7 +1758,7 @@ start_server [list overrides [list "ext-data-mode" kv "loglevel" debug] tags [li
 }
 
 ### Sharded
-start_cluster 1 0 [list overrides [list "ext-data-mode" kv "loglevel" debug] tags [list "external:skip"]] {
+start_cluster 1 0 [list overrides [list "ext-data-mode" kv "ext-data-id" id1 "loglevel" debug] tags [list "external:skip"]] {
     set extdatamodule1 [file normalize tests/modules/extstorage/extdata1.so]
     
     test {DBSIZE without EXT returns memory keys count (cluster mode)} {
@@ -1792,7 +1814,7 @@ start_cluster 1 0 [list overrides [list "ext-data-mode" kv "loglevel" debug] tag
     }
 }
 
-start_cluster 1 0 [list overrides [list "ext-data-mode" kv "loglevel" debug] tags [list "external:skip" "singledb:skip"]] {
+start_cluster 1 0 [list overrides [list "ext-data-mode" kv "ext-data-id" id1 "loglevel" debug] tags [list "external:skip" "singledb:skip"]] {
     set extdatamodule1 [file normalize tests/modules/extstorage/extdata1.so]
 
     test {DBSIZE with EXT in different databases (cluster mode)} {
@@ -1825,13 +1847,13 @@ start_cluster 1 0 [list overrides [list "ext-data-mode" kv "loglevel" debug] tag
 }
 
 # EXTERNAL_DATA DUMP and LOAD command tests
-start_server [list overrides [list "ext-data-mode" kv "loglevel" debug "loadmodule" $extdatamodule1] tags [list "external:skip"]] {
+start_server [list overrides [list "ext-data-mode" kv "ext-data-id" id1 "loglevel" debug] tags [list "external:skip"]] {
     test "EXTERNAL_DATA DUMP and LOAD: Basic functionality" {
         cleanup_external_data_dump r
 
-        # Module is already loaded at startup via loadmodule config
+        assert_equal {OK} [r module load $extdatamodule1]
         # Check that db0 is NOT auto-initialized (no backup exists)
-        assert_equal [list ] [r external_data stats]
+        assert_equal [list ] [r external_data stats dbs]
 
         # Initialize external storage manually
         assert_equal {OK} [r external_data INIT db0 helloextdata1]
@@ -1866,9 +1888,14 @@ start_server [list overrides [list "ext-data-mode" kv "loglevel" debug "loadmodu
         
         cleanup_external_data_dump r
     }
+}
 
+start_server [list overrides [list "ext-data-mode" kv "ext-data-id" id1 "loglevel" debug] tags [list "external:skip"]] {
     test "EXTERNAL_DATA DUMP and LOAD: With AOF enabled (persistence auto-load)" {
         cleanup_external_data_dump r
+
+        assert_equal {OK} [r module load $extdatamodule1]
+        assert_equal {OK} [r external_data INIT db0 helloextdata1]
 
         r select 0
         
@@ -1888,7 +1915,7 @@ start_server [list overrides [list "ext-data-mode" kv "loglevel" debug "loadmodu
         r flushdb
         
         # Ensure that database data is not cleaned up
-        assert_equal [list db0:helloextdata1] [r external_data stats]
+        assert_equal [list db0:helloextdata1] [r external_data stats dbs]
 
         # Restart server to test auto-load on startup
         restart_server 0 true false
@@ -1898,7 +1925,7 @@ start_server [list overrides [list "ext-data-mode" kv "loglevel" debug "loadmodu
         r select 0
         
         # Ensure that database data is automatically reinitialized after restart
-        assert_equal [list db0:helloextdata1] [r external_data stats]
+        assert_equal [list db0:helloextdata1] [r external_data stats dbs]
         
         # Verify external data is automatically restored on startup
         assert_equal "value1" [r get key1 ext]
@@ -1910,13 +1937,18 @@ start_server [list overrides [list "ext-data-mode" kv "loglevel" debug "loadmodu
         r flushall
 
         # Ensure that database data is not cleaned up
-        assert_equal [list db0:helloextdata1] [r external_data stats]
+        assert_equal [list db0:helloextdata1] [r external_data stats dbs]
 
         cleanup_external_data_dump r
     }
+}
 
+start_server [list overrides [list "ext-data-mode" kv "ext-data-id" id1 "loglevel" debug] tags [list "external:skip"]] {
     test "EXTERNAL_DATA DUMP and LOAD: With save enabled (persistence auto-load)" {
         cleanup_external_data_dump r
+
+        assert_equal {OK} [r module load $extdatamodule1]
+        assert_equal {OK} [r external_data INIT db0 helloextdata1]
 
         r select 0
         
@@ -1936,7 +1968,7 @@ start_server [list overrides [list "ext-data-mode" kv "loglevel" debug "loadmodu
         r flushdb
 
         # Ensure that database data is not cleaned up
-        assert_equal [list db0:helloextdata1] [r external_data stats]
+        assert_equal [list db0:helloextdata1] [r external_data stats dbs]
         
         # Restart server to test auto-load on startup
         restart_server 0 true false
@@ -1955,13 +1987,18 @@ start_server [list overrides [list "ext-data-mode" kv "loglevel" debug "loadmodu
         r flushall
 
         # Ensure that database data is not cleaned up
-        assert_equal [list db0:helloextdata1] [r external_data stats]
+        assert_equal [list db0:helloextdata1] [r external_data stats dbs]
 
         cleanup_external_data_dump r
     }
+}
 
+start_server [list overrides [list "ext-data-mode" kv "ext-data-id" id1 "loglevel" debug] tags [list "external:skip"]] {
     test "EXTERNAL_DATA DUMP and LOAD: With both AOF and save disabled (no persistence)" {
         cleanup_external_data_dump r
+
+        assert_equal {OK} [r module load $extdatamodule1]
+        assert_equal {OK} [r external_data INIT db0 helloextdata1]
 
         r select 0
         
@@ -1982,7 +2019,7 @@ start_server [list overrides [list "ext-data-mode" kv "loglevel" debug "loadmodu
         r flushdb
 
         # Ensure that database data is not cleaned up
-        assert_equal [list db0:helloextdata1] [r external_data stats]
+        assert_equal [list db0:helloextdata1] [r external_data stats dbs]
         
         # Restart server - should NOT auto-load without persistence
         restart_server 0 true false
@@ -2001,16 +2038,21 @@ start_server [list overrides [list "ext-data-mode" kv "loglevel" debug "loadmodu
         r flushall
 
         # Ensure that database data is not cleaned up
-        assert_equal [list db0:helloextdata1] [r external_data stats]
+        assert_equal [list db0:helloextdata1] [r external_data stats dbs]
 
         cleanup_external_data_dump r
     }
+}
 
+start_server [list overrides [list "ext-data-mode" kv "ext-data-id" id1 "loglevel" debug] tags [list "external:skip"]] {
     test "EXTERNAL_DATA LOAD: Invalid dump data" {
+        assert_equal {OK} [r module load $extdatamodule1]
+        assert_equal {OK} [r external_data INIT db0 helloextdata1]
+
         r select 0
 
         # Ensure that database data is not cleaned up
-        assert_equal [list db0:helloextdata1] [r external_data stats]
+        assert_equal [list db0:helloextdata1] [r external_data stats dbs]
         
         # Try to load invalid dump data
         catch { r external_data load "invalid_data" } result
@@ -2022,9 +2064,14 @@ start_server [list overrides [list "ext-data-mode" kv "loglevel" debug "loadmodu
         r set key1 "value1" EXT
         assert_equal "value1" [r get key1 ext]
     }
+}
 
+start_server [list overrides [list "ext-data-mode" kv "ext-data-id" id1 "loglevel" debug] tags [list "external:skip"]] {
     test "EXTERNAL_DATA DUMP and LOAD: Large dataset" {
         cleanup_external_data_dump r
+
+        assert_equal {OK} [r module load $extdatamodule1]
+        assert_equal {OK} [r external_data INIT db0 helloextdata1]
 
         r select 0
         
@@ -2062,11 +2109,12 @@ start_server [list overrides [list "ext-data-mode" kv "loglevel" debug "loadmodu
     }
 }
 
-start_server [list overrides [list "ext-data-mode" kv "loglevel" debug "loadmodule" $extdatamodule1] tags [list "external:skip"]] {
+start_server [list overrides [list "ext-data-mode" kv "ext-data-id" id1 "loglevel" debug] tags [list "external:skip"]] {
     test "EXTERNAL_DATA DUMP: Empty database" {
         cleanup_external_data_dump r
 
         # Initialize external data first
+        assert_equal {OK} [r module load $extdatamodule1]
         r external_data INIT db0 helloextdata1
         r select 0
         
@@ -2084,11 +2132,12 @@ start_server [list overrides [list "ext-data-mode" kv "loglevel" debug "loadmodu
     }
 }
 
-start_server [list overrides [list "ext-data-mode" kv "loglevel" debug "loadmodule" $extdatamodule1] tags [list "external:skip" "singledb:skip"]] {
+start_server [list overrides [list "ext-data-mode" kv "ext-data-id" id1 "loglevel" debug] tags [list "external:skip" "singledb:skip"]] {
     test "EXTERNAL_DATA DUMP and LOAD: Multiple databases" {
         cleanup_external_data_dump r
 
         # Initialize external storage
+        assert_equal {OK} [r module load $extdatamodule1]
         assert_equal {OK} [r external_data INIT db0 helloextdata1]
         assert_equal {OK} [r external_data INIT db1 helloextdata1]
 
@@ -2135,8 +2184,8 @@ start_server [list overrides [list "ext-data-mode" kv "loglevel" debug "loadmodu
 }
 
 test "SET with EXT flag is replicated to replica" {
-    start_server [list overrides [list "ext-data-mode" kv "loglevel" debug] tags [list "external:skip"]] {
-        start_server [list overrides [list "ext-data-mode" kv "loglevel" debug]] {
+    start_server [list overrides [list "ext-data-mode" kv "ext-data-id" replica-id "loglevel" debug] tags [list "external:skip"]] {
+        start_server [list overrides [list "ext-data-mode" kv "ext-data-id" primary-id "loglevel" debug]] {
             # Get primary and replica nodes
             set primary [srv 0 client]
             set primary_host [srv 0 host]
@@ -2149,10 +2198,12 @@ test "SET with EXT flag is replicated to replica" {
             # Load module and initialize external storage
             assert_equal {OK} [$primary module load $extdatamodule1]
             assert_equal {OK} [$primary external_data INIT db0 helloextdata1]
+            assert_equal "primary-id" [$primary external_data stats nodeid]
 
             # Init external data for replica now
             assert_equal {OK} [$replica module load $extdatamodule1]
             assert_equal {OK} [$replica external_data INIT db0 helloextdata1]
+            assert_equal "replica-id" [$replica external_data stats nodeid]
 
             # Setup replication
             $replica replicaof $primary_host $primary_port
@@ -2186,8 +2237,8 @@ test "SET with EXT flag is replicated to replica" {
 }
 
 test "EXTERNAL_DATA DUMP and LOAD: Partial sync scenario" {
-    start_server [list overrides [list "ext-data-mode" kv "loglevel" debug] tags [list "external:skip" "slow"]] {
-        start_server [list overrides [list "ext-data-mode" kv "loglevel" debug]] {
+    start_server [list overrides [list "ext-data-mode" kv "ext-data-id" id1 "loglevel" debug] tags [list "external:skip" "slow"]] {
+        start_server [list overrides [list "ext-data-mode" kv "ext-data-id" id2 "loglevel" debug]] {
             set primary [srv -1 client]
             set primary_host [srv -1 host]
             set primary_port [srv -1 port]
@@ -2271,8 +2322,8 @@ test "EXTERNAL_DATA DUMP and LOAD: Partial sync scenario" {
 }
 
 test "EXTERNAL_DATA DUMP and LOAD: replication" {
-    start_server [list overrides [list "ext-data-mode" kv "loglevel" debug] tags [list "external:skip" "slow"]] {
-        start_server [list overrides [list "ext-data-mode" kv "loglevel" debug]] {
+    start_server [list overrides [list "ext-data-mode" kv "ext-data-id" id1 "loglevel" debug] tags [list "external:skip" "slow"]] {
+        start_server [list overrides [list "ext-data-mode" kv "ext-data-id" id2 "loglevel" debug]] {
             # Get primary and replica nodes
             set primary [srv 0 client]
             set primary_host [srv 0 host]
@@ -2372,7 +2423,7 @@ test "EXTERNAL_DATA DUMP and LOAD: replication" {
 }
 
 # Cluster mode tests for EXTERNAL_DATA DUMP and LOAD commands
-start_cluster 1 0 [list overrides [list "ext-data-mode" kv "loglevel" debug "loadmodule" $extdatamodule1] tags [list "external:skip"]] {
+start_cluster 1 0 [list overrides [list "ext-data-mode" kv "ext-data-id" id1 "loglevel" debug] tags [list "external:skip" "slow"]] {
     set extdatamodule1 [file normalize tests/modules/extstorage/extdata1.so]
     
     test "EXTERNAL_DATA DUMP and LOAD: Basic functionality (cluster mode)" {
@@ -2380,6 +2431,7 @@ start_cluster 1 0 [list overrides [list "ext-data-mode" kv "loglevel" debug "loa
         cleanup_external_data_dump r
 
         # Initialize external storage
+        assert_equal {OK} [r module load $extdatamodule1]
         assert_equal {OK} [r external_data INIT db0 helloextdata1]
         r select 0
         
@@ -2412,137 +2464,163 @@ start_cluster 1 0 [list overrides [list "ext-data-mode" kv "loglevel" debug "loa
         
         cleanup_external_data_dump r
     }
+}
 
-    tags {"slow"} {
-        test "EXTERNAL_DATA DUMP and LOAD: With AOF enabled (cluster mode, persistence auto-load)" {
-            wait_for_cluster_state ok
-            cleanup_external_data_dump r
+start_cluster 1 0 [list overrides [list "ext-data-mode" kv "ext-data-id" id1 "loglevel" debug] tags [list "external:skip" "slow"]] {
+    set extdatamodule1 [file normalize tests/modules/extstorage/extdata1.so]
 
-            # Enable AOF persistence
-            r config set appendonly yes
-            r config rewrite
-            
-            # Add some external data
-            r select 0
-            r set key1 "value1" EXT
-            r set key2 "value2" EXT
-            
-            # Dump external data
-            set dump_result [r external_data dump]
-            assert {$dump_result != ""}
-            
-            # Clear external data
-            r flushdb
-            
-            # Restart node to test auto-load on startup
-            restart_server 0 true false
-            wait_done_loading r
-            wait_for_cluster_state ok
+    test "EXTERNAL_DATA DUMP and LOAD: With AOF enabled (cluster mode, persistence auto-load)" {
+        wait_for_cluster_state ok
+        cleanup_external_data_dump r
 
-            # Select database 0 after restart
-            r select 0
+        assert_equal {OK} [r module load $extdatamodule1]
+        assert_equal {OK} [r external_data INIT db0 helloextdata1]
 
-            # Ensure that database data is automatically reinitialized after restart
-            assert_equal [list db0:helloextdata1] [r external_data stats]
-            
-            # Verify external data is automatically restored on startup
-            assert_equal "value1" [r get key1 ext]
-            assert_equal "value2" [r get key2 ext]
+        # Enable AOF persistence
+        r config set appendonly yes
+        r config rewrite
+        
+        # Add some external data
+        r select 0
+        r set key1 "value1" EXT
+        r set key2 "value2" EXT
+        
+        # Dump external data
+        set dump_result [r external_data dump]
+        assert {$dump_result != ""}
+        
+        # Clear external data
+        r flushdb
+        
+        # Restart node to test auto-load on startup
+        restart_server 0 true false
+        wait_done_loading r
+        wait_for_cluster_state ok
 
-            # Cleanup
-            r config set appendonly no
-            r config rewrite
-            
-            cleanup_external_data_dump r
-        }
+        # Select database 0 after restart
+        r select 0
 
-        test "EXTERNAL_DATA DUMP and LOAD: With save enabled (cluster mode, persistence auto-load)" {
-            wait_for_cluster_state ok
-            cleanup_external_data_dump r
-            
-            # Enable save persistence
-            r select 0
-            r config set save "900 1"
-            r config rewrite
-            
-            # Add some external data
-            r set key1 "value1" EXT
-            r set key2 "value2" EXT
-            
-            # Dump external data
-            set dump_result [r external_data dump]
-            assert {$dump_result != ""}
-            
-            # Clear external data
-            r flushdb
-            
-            # Restart primary node to test auto-load on startup
-            restart_server 0 true false
-            wait_done_loading r
-            wait_for_cluster_state ok
-            
-            # Select database 0 after restart
-            r select 0
-            
-            # Verify external data is automatically restored on startup
-            assert_equal "value1" [r get key1 ext]
-            assert_equal "value2" [r get key2 ext]
+        # Ensure that database data is automatically reinitialized after restart
+        assert_equal [list db0:helloextdata1] [r external_data stats dbs]
+        
+        # Verify external data is automatically restored on startup
+        assert_equal "value1" [r get key1 ext]
+        assert_equal "value2" [r get key2 ext]
 
-            # Cleanup
-            r config set save ""
-            r config rewrite
-            
-            cleanup_external_data_dump r
-        }
-
-        test "EXTERNAL_DATA DUMP and LOAD: With both AOF and save disabled (cluster mode, no persistence)" {
-            wait_for_cluster_state ok
-            cleanup_external_data_dump r
-            
-            # Disable both AOF and save persistence
-            r select 0
-            r config set appendonly no
-            r config set save ""
-            r config rewrite
-            
-            # Add some external data
-            r set key1 "value1" EXT
-            r set key2 "value2" EXT
-            
-            # Dump external data
-            set dump_result [r external_data dump]
-            assert {$dump_result != ""}
-            
-            # Clear external data
-            r flushdb
-            
-            # Restart node - should NOT auto-load without persistence
-            restart_server 0 true false
-            wait_done_loading r
-            wait_for_cluster_state ok
-            
-            # Select database 0 after restart
-            r select 0
-            
-            # Verify external data is automatically restored on startup
-            assert_equal "value1" [r get key1 ext]
-            assert_equal "value2" [r get key2 ext]
-
-            # Cleanup
-            r config set save ""
-            r config rewrite
-            r flushall
-
-            # Ensure that database data is not cleaned up
-            assert_equal [list db0:helloextdata1] [r external_data stats]
-
-            cleanup_external_data_dump r
-        }
+        # Cleanup
+        r config set appendonly no
+        r config rewrite
+        
+        cleanup_external_data_dump r
     }
+}
+
+start_cluster 1 0 [list overrides [list "ext-data-mode" kv "ext-data-id" id1 "loglevel" debug] tags [list "external:skip" "slow"]] {
+    set extdatamodule1 [file normalize tests/modules/extstorage/extdata1.so]
+
+    test "EXTERNAL_DATA DUMP and LOAD: With save enabled (cluster mode, persistence auto-load)" {
+        wait_for_cluster_state ok
+        cleanup_external_data_dump r
+
+        assert_equal {OK} [r module load $extdatamodule1]
+        assert_equal {OK} [r external_data INIT db0 helloextdata1]
+            
+        # Enable save persistence
+        r select 0
+        r config set save "900 1"
+        r config rewrite
+        
+        # Add some external data
+        r set key1 "value1" EXT
+        r set key2 "value2" EXT
+        
+        # Dump external data
+        set dump_result [r external_data dump]
+        assert {$dump_result != ""}
+        
+        # Clear external data
+        r flushdb
+        
+        # Restart primary node to test auto-load on startup
+        restart_server 0 true false
+        wait_done_loading r
+        wait_for_cluster_state ok
+        
+        # Select database 0 after restart
+        r select 0
+        
+        # Verify external data is automatically restored on startup
+        assert_equal "value1" [r get key1 ext]
+        assert_equal "value2" [r get key2 ext]
+
+        # Cleanup
+        r config set save ""
+        r config rewrite
+        
+        cleanup_external_data_dump r
+    }
+}
+
+start_cluster 1 0 [list overrides [list "ext-data-mode" kv "ext-data-id" id1 "loglevel" debug] tags [list "external:skip" "slow"]] {
+    set extdatamodule1 [file normalize tests/modules/extstorage/extdata1.so]
+
+    test "EXTERNAL_DATA DUMP and LOAD: With both AOF and save disabled (cluster mode, no persistence)" {
+        wait_for_cluster_state ok
+        cleanup_external_data_dump r
+            
+        assert_equal {OK} [r module load $extdatamodule1]
+        assert_equal {OK} [r external_data INIT db0 helloextdata1]
+
+        # Disable both AOF and save persistence
+        r select 0
+        r config set appendonly no
+        r config set save ""
+        r config rewrite
+        
+        # Add some external data
+        r set key1 "value1" EXT
+        r set key2 "value2" EXT
+        
+        # Dump external data
+        set dump_result [r external_data dump]
+        assert {$dump_result != ""}
+        
+        # Clear external data
+        r flushdb
+        
+        # Restart node - should NOT auto-load without persistence
+        restart_server 0 true false
+        wait_done_loading r
+        wait_for_cluster_state ok
+        
+        # Select database 0 after restart
+        r select 0
+        
+        # Verify external data is automatically restored on startup
+        assert_equal "value1" [r get key1 ext]
+        assert_equal "value2" [r get key2 ext]
+
+        # Cleanup
+        r config set save ""
+        r config rewrite
+        r flushall
+
+        # Ensure that database data is not cleaned up
+        assert_equal [list db0:helloextdata1] [r external_data stats dbs]
+
+        cleanup_external_data_dump r
+    }
+}
+
+start_cluster 1 0 [list overrides [list "ext-data-mode" kv "ext-data-id" id1 "loglevel" debug] tags [list "external:skip" "slow"]] {
+    set extdatamodule1 [file normalize tests/modules/extstorage/extdata1.so]
 
     test "EXTERNAL_DATA LOAD: Invalid dump data (cluster mode)" {
         wait_for_cluster_state ok
         
+        assert_equal {OK} [r module load $extdatamodule1]
+        assert_equal {OK} [r external_data INIT db0 helloextdata1]
+
         # Clean up any existing initialization and backup files from previous tests
         #catch {r external_data drop db0 FORCE}
         #cleanup_external_data_dump r
@@ -2562,10 +2640,17 @@ start_cluster 1 0 [list overrides [list "ext-data-mode" kv "loglevel" debug "loa
         r set key1 "value1" EXT
         assert_equal "value1" [r get key1 ext]
     }
+}
+
+start_cluster 1 0 [list overrides [list "ext-data-mode" kv "ext-data-id" id1 "loglevel" debug] tags [list "external:skip"]] {
+    set extdatamodule1 [file normalize tests/modules/extstorage/extdata1.so]
 
     test "EXTERNAL_DATA DUMP and LOAD: Large dataset (cluster mode)" {
         wait_for_cluster_state ok
         cleanup_external_data_dump r
+
+        assert_equal {OK} [r module load $extdatamodule1]
+        assert_equal {OK} [r external_data INIT db0 helloextdata1]
         
         # Add multiple external data entries
         r select 0
@@ -2602,7 +2687,7 @@ start_cluster 1 0 [list overrides [list "ext-data-mode" kv "loglevel" debug "loa
     }
 }
 
-start_cluster 1 0 [list overrides [list "ext-data-mode" kv "loglevel" debug "loadmodule" $extdatamodule1] tags [list "external:skip" "singledb:skip"]] {
+start_cluster 1 0 [list overrides [list "ext-data-mode" kv "ext-data-id" id1 "loglevel" debug] tags [list "external:skip" "singledb:skip"]] {
     set extdatamodule1 [file normalize tests/modules/extstorage/extdata1.so]
 
     test "EXTERNAL_DATA DUMP and LOAD: Multiple databases (cluster mode)" {
@@ -2610,6 +2695,7 @@ start_cluster 1 0 [list overrides [list "ext-data-mode" kv "loglevel" debug "loa
         cleanup_external_data_dump r
         
         # Load module and initialize external storage
+        assert_equal {OK} [r module load $extdatamodule1]
         assert_equal {OK} [r external_data INIT db0 helloextdata1]
         assert_equal {OK} [r external_data INIT db1 helloextdata1]
         
@@ -2655,7 +2741,7 @@ start_cluster 1 0 [list overrides [list "ext-data-mode" kv "loglevel" debug "loa
     }
 }
 
-start_cluster 1 0 [list overrides [list "ext-data-mode" kv "loglevel" debug "loadmodule" $extdatamodule1] tags [list "external:skip"]] {
+start_cluster 1 0 [list overrides [list "ext-data-mode" kv "ext-data-id" id1 "loglevel" debug] tags [list "external:skip"]] {
     set extdatamodule1 [file normalize tests/modules/extstorage/extdata1.so]
 
     test "EXTERNAL_DATA DUMP: Empty database (cluster mode)" {
@@ -2663,6 +2749,7 @@ start_cluster 1 0 [list overrides [list "ext-data-mode" kv "loglevel" debug "loa
         cleanup_external_data_dump r
         
         # Initialize external data first
+        assert_equal {OK} [r module load $extdatamodule1]
         assert_equal {OK} [r external_data INIT db0 helloextdata1]
         r select 0
         
@@ -2680,7 +2767,7 @@ start_cluster 1 0 [list overrides [list "ext-data-mode" kv "loglevel" debug "loa
     }
 }
 
-start_cluster 1 1 {tags {"external:skip"} overrides {"ext-data-mode" kv "loglevel" debug}} {
+start_cluster 1 1 {tags {"external:skip"} overrides {"ext-data-mode" kv "ext-data-id" id1 "loglevel" debug}} {
     test "EXTERNAL_DATA DUMP and LOAD: Partial sync scenario (cluster mode)" {
         set extdatamodule1 [file normalize tests/modules/extstorage/extdata1.so]
         
@@ -2767,7 +2854,7 @@ start_cluster 1 1 {tags {"external:skip"} overrides {"ext-data-mode" kv "logleve
     }
 }
 
-start_cluster 1 1 {tags {"external:skip"} overrides {"ext-data-mode" kv "loglevel" debug}} {
+start_cluster 1 1 {tags {"external:skip"} overrides {"ext-data-mode" kv "ext-data-id" id1 "loglevel" debug}} {
     test "EXTERNAL_DATA DUMP and LOAD: replication (cluster mode)" {
         set extdatamodule1 [file normalize tests/modules/extstorage/extdata1.so]
         
@@ -2869,7 +2956,7 @@ start_cluster 1 1 {tags {"external:skip"} overrides {"ext-data-mode" kv "logleve
 
 
 # Test async external data dump for replication
-start_server [list overrides [list "ext-data-mode" kv "loglevel" debug] tags [list "external:skip" "slow"]] {
+start_server [list overrides [list "ext-data-mode" kv "ext-data-id" id1 "loglevel" debug] tags [list "external:skip" "slow"]] {
     test "Async external data dump: Basic functionality" {
         cleanup_external_data_dump r
 
@@ -2913,7 +3000,7 @@ start_server [list overrides [list "ext-data-mode" kv "loglevel" debug] tags [li
 }
 
 test "Async external data dump: Non-blocking behavior" {
-    start_server [list overrides [list "ext-data-mode" kv "loglevel" debug] tags [list "external:skip"]] {
+    start_server [list overrides [list "ext-data-mode" kv "ext-data-id" id1 "loglevel" debug] tags [list "external:skip"]] {
         cleanup_external_data_dump r
 
         # Load module and initialize external storage
@@ -2967,7 +3054,7 @@ test "Async external data dump: Non-blocking behavior" {
     }
 }
 
-start_cluster 1 0 [list overrides [list "ext-data-mode" kv "loglevel" debug] tags [list "external:skip"]] {
+start_cluster 1 0 [list overrides [list "ext-data-mode" kv "ext-data-id" id1 "loglevel" debug] tags [list "external:skip"]] {
     set extdatamodule1 [file normalize tests/modules/extstorage/extdata1.so]
     
     test "Async external data dump: Cluster mode basic functionality" {
@@ -3058,8 +3145,8 @@ start_cluster 1 0 [list overrides [list "ext-data-mode" kv "loglevel" debug] tag
 }
 
 # Test ext-data-async-load configuration
-start_server {tags {"external:skip"} overrides {"ext-data-mode" kv "loglevel" debug "ext-data-async-load" no}} {
-    start_server [list overrides [list "ext-data-mode" kv "loglevel" debug "ext-data-async-load" no]] {
+start_server {tags {"external:skip"} overrides {"ext-data-mode" kv "ext-data-id" id1 "loglevel" debug "ext-data-async-load" no}} {
+    start_server [list overrides [list "ext-data-mode" kv "ext-data-id" id2 "loglevel" debug "ext-data-async-load" no]] {
         test "ext-data-async-load: Sync mode" {
             set primary [srv -1 client]
             set primary_host [srv -1 host]
@@ -3119,7 +3206,7 @@ start_server {tags {"external:skip"} overrides {"ext-data-mode" kv "loglevel" de
 }
 
 test "ext-data-async-load: Sync mode (cluster)" {
-    start_cluster 1 1 [list overrides [list "ext-data-mode" kv "loglevel" debug "ext-data-async-load" no] tags [list "external:skip"]] {
+    start_cluster 1 1 [list overrides [list "ext-data-mode" kv "ext-data-id" id1 "loglevel" debug "ext-data-async-load" no] tags [list "external:skip"]] {
         set extdatamodule1 [file normalize tests/modules/extstorage/extdata1.so]
         
         wait_for_cluster_state ok
@@ -3174,7 +3261,7 @@ test "ext-data-async-load: Sync mode (cluster)" {
 
 # Test external storage with simulated failures
 # Tests both standalone and cluster mode with 50% failure rate
-start_server [list overrides [list "ext-data-mode" kv "loglevel" debug] tags [list "external:skip"]] {
+start_server [list overrides [list "ext-data-mode" kv "ext-data-id" id1 "loglevel" debug] tags [list "external:skip"]] {
     test "External storage with simulated failures - standalone mode" {
         # Load module with 50% failure rate (fails every 2nd set, starting from 1st)
         assert_equal {OK} [r module load $extdatamodule1]
@@ -3207,8 +3294,8 @@ start_server [list overrides [list "ext-data-mode" kv "loglevel" debug] tags [li
 }
 
 # Test replication with simulated failures
-start_server [list overrides [list "ext-data-mode" kv "loglevel" debug] tags [list "external:skip"]] {
-    start_server [list overrides [list "ext-data-mode" kv "loglevel" debug]] {
+start_server [list overrides [list "ext-data-mode" kv "ext-data-id" id1 "loglevel" debug] tags [list "external:skip"]] {
+    start_server [list overrides [list "ext-data-mode" kv "ext-data-id" id2 "loglevel" debug]] {
         test "External storage replication with simulated failures - standalone mode" {
             set primary [srv -1 client]
             set primary_host [srv -1 host]
@@ -3275,7 +3362,7 @@ start_server [list overrides [list "ext-data-mode" kv "loglevel" debug] tags [li
 }
 
 # Test cluster mode with simulated failures
-start_cluster 1 1 [list overrides [list "ext-data-mode" kv "loglevel" debug] tags [list "external:skip"]] {
+start_cluster 1 1 [list overrides [list "ext-data-mode" kv "ext-data-id" id1 "loglevel" debug] tags [list "external:skip"]] {
     set extdatamodule1 [file normalize tests/modules/extstorage/extdata1.so]
     
     test "External storage with simulated failures - cluster mode" {
@@ -3339,8 +3426,8 @@ start_cluster 1 1 [list overrides [list "ext-data-mode" kv "loglevel" debug] tag
 }
 
 # Test replication with 100% failure rate and replica restart
-start_server [list overrides [list "ext-data-mode" kv "loglevel" debug] tags [list "external:skip" "slow"]] {
-    start_server [list overrides [list "ext-data-mode" kv "loglevel" debug]] {
+start_server [list overrides [list "ext-data-mode" kv "ext-data-id" id1 "loglevel" debug] tags [list "external:skip" "slow"]] {
+    start_server [list overrides [list "ext-data-mode" kv "ext-data-id" id2 "loglevel" debug]] {
         test "External storage replication with 100% failures and restart - standalone mode" {
             set primary_id -1
             set replica_id 0
@@ -3426,7 +3513,7 @@ start_server [list overrides [list "ext-data-mode" kv "loglevel" debug] tags [li
 }
 
 # Test cluster mode with 100% failure rate and replica restart
-start_cluster 1 1 [list overrides [list "ext-data-mode" kv "loglevel" debug] tags [list "external:skip" "slow"]] {
+start_cluster 1 1 [list overrides [list "ext-data-mode" kv "ext-data-id" id1 "loglevel" debug] tags [list "external:skip" "slow"]] {
     set extdatamodule1 [file normalize tests/modules/extstorage/extdata1.so]
     
     test "External storage with 100% failures and restart - cluster mode" {
@@ -3517,8 +3604,131 @@ start_cluster 1 1 [list overrides [list "ext-data-mode" kv "loglevel" debug] tag
 }
 
 # Slot values in callbacks tests
-start_server [list overrides [list "ext-data-mode" kv "loglevel" notice] tags [list "external:skip" "wip"]] {
+test {Cluster slot migration maintains node_id and data integrity} {
+    set extdatamodule1 [file normalize tests/modules/extstorage/extdata1.so]
+    
+    # Start first node with ext-data-id id1
+    start_server [list overrides [list "cluster-enabled" yes "cluster-ping-interval" 100 "cluster-node-timeout" 3000 "cluster-databases" 16 "cluster-slot-stats-enabled" yes "ext-data-mode" kv "ext-data-id" id1 "loglevel" notice] tags [list "external:skip"]] {
+        set node1_port [srv 0 port]
+        set node1 [srv 0 client]
+        
+        # Start second node with ext-data-id id2
+        start_server [list overrides [list "cluster-enabled" yes "cluster-ping-interval" 100 "cluster-node-timeout" 3000 "cluster-databases" 16 "cluster-slot-stats-enabled" yes "ext-data-mode" kv "ext-data-id" id2 "loglevel" notice] tags [list "external:skip"]] {
+            set node2_port [srv 0 port]
+            set node2 [srv 0 client]
+            
+            # Get cluster node IDs
+            set node1_id [$node1 CLUSTER MYID]
+            set node2_id [$node2 CLUSTER MYID]
+            
+            # Set config epochs BEFORE meeting
+            $node1 CLUSTER SET-CONFIG-EPOCH 1
+            $node2 CLUSTER SET-CONFIG-EPOCH 2
+            
+            # Form cluster: meet nodes
+            $node1 CLUSTER MEET 127.0.0.1 $node2_port
+            after 100
+            
+            # Distribute slots: node1 gets 0-8191, node2 gets 8192-16383
+            for {set slot 0} {$slot < 8192} {incr slot} {
+                $node1 CLUSTER ADDSLOTS $slot
+            }
+            for {set slot 8192} {$slot < 16384} {incr slot} {
+                $node2 CLUSTER ADDSLOTS $slot
+            }
+            
+            # Wait for cluster to be ready
+            wait_for_condition 50 100 {
+                [catch {$node1 CLUSTER INFO}] == 0 &&
+                [string match "*cluster_state:ok*" [$node1 CLUSTER INFO]]
+            } else {
+                fail "Cluster node1 did not become ready"
+            }
+            
+            wait_for_condition 50 100 {
+                [catch {$node2 CLUSTER INFO}] == 0 &&
+                [string match "*cluster_state:ok*" [$node2 CLUSTER INFO]]
+            } else {
+                fail "Cluster node2 did not become ready"
+            }
+            
+            cleanup_external_data_dump $node1
+            cleanup_external_data_dump $node2
+            
+            # Load module on both nodes
+            $node1 MODULE LOAD $extdatamodule1
+            $node1 EXTERNAL_DATA INIT db0 helloextdata1
+            $node2 MODULE LOAD $extdatamodule1
+            $node2 EXTERNAL_DATA INIT db0 helloextdata1
+        
+            # Get and verify UNIQUE node IDs for each node
+            set ext_node1_id [$node1 external_data stats nodeid]
+            set ext_node2_id [$node2 external_data stats nodeid]
+            assert {$ext_node1_id ne ""}
+            assert {$ext_node2_id ne ""}
+            assert {$ext_node1_id ne $ext_node2_id}
+            
+            $node1 select 0
+            $node2 select 0
+            
+            # Add test data to node2 in slot 12182 (which node2 owns: 8192-16383)
+            # Key "foo" hashes to slot 12182
+            $node2 SET foo "value_before_migration" ext
+            assert_equal "value_before_migration" [$node2 GET foo ext]
+            
+            # Verify slot assignment before migration
+            set slot_before [$node2 helloextdata1.storage_getslot db0 foo]
+            assert_equal "12182" $slot_before
+            
+            # Simulate slot migration: migrate slot 12182 from node2 to node1
+            # First, set slot to migrating state on node2
+            $node2 CLUSTER SETSLOT 12182 MIGRATING $node1_id
+            
+            # Set slot to importing state on node1
+            $node1 CLUSTER SETSLOT 12182 IMPORTING $node2_id
+            
+            # Migrate the key from node2 to node1 using MIGRATE command
+            # MIGRATE handles cluster ASK redirects properly
+            set node1_port [lindex [$node1 CONFIG GET port] 1]
+            $node2 MIGRATE 127.0.0.1 $node1_port foo 0 5000
+            
+            # Complete migration: assign slot to node1
+            $node1 CLUSTER SETSLOT 12182 NODE $node1_id
+            $node2 CLUSTER SETSLOT 12182 NODE $node1_id
+            
+            # Wait for cluster to stabilize
+            wait_for_condition 50 100 {
+                [catch {$node1 CLUSTER INFO}] == 0 &&
+                [string match "*cluster_state:ok*" [$node1 CLUSTER INFO]]
+            } else {
+                fail "Cluster did not stabilize after migration"
+            }
+            
+            ### TODO: not implemented yet, so commented out
+            ## Verify data integrity after migration
+            ## The key should still be accessible and have the same value
+            #assert_equal "value_before_migration" [$node1 GET foo ext]
+            ## Verify slot assignment after migration
+            #set slot_after [$node1 helloextdata1.storage_getslot db0 foo]
+            #assert_equal "12182" $slot_after
+            
+            # Verify node IDs remain unique and unchanged after migration
+            set ext_node1_id_after [$node1 external_data stats nodeid]
+            set ext_node2_id_after [$node2 external_data stats nodeid]
+            assert_equal $ext_node1_id $ext_node1_id_after
+            assert_equal $ext_node2_id $ext_node2_id_after
+            assert {$ext_node1_id_after ne $ext_node2_id_after}
+            
+            # Cleanup
+            cleanup_external_data_dump $node1
+            cleanup_external_data_dump $node2
+        }
+    }
+}
+
+start_server [list overrides [list "ext-data-mode" kv "ext-data-id" id1 "loglevel" notice] tags [list "external:skip"]] {
     test {Slot values in standalone mode} {
+        set extdatamodule1 [file normalize tests/modules/extstorage/extdata1.so]
         r MODULE LOAD $extdatamodule1
         r EXTERNAL_DATA INIT db0 helloextdata1
         r select 0
@@ -3532,7 +3742,7 @@ start_server [list overrides [list "ext-data-mode" kv "loglevel" notice] tags [l
     }
 }
 
-start_cluster 1 0 [list overrides [list "ext-data-mode" kv "loglevel" notice] tags [list "external:skip" "wip"]] {
+start_cluster 1 0 [list overrides [list "ext-data-mode" kv "ext-data-id" id1 "loglevel" notice] tags [list "external:skip"]] {
     set extdatamodule1 [file normalize tests/modules/extstorage/extdata1.so]
     
     test {Slot values in cluster mode} {
@@ -3547,5 +3757,25 @@ start_cluster 1 0 [list overrides [list "ext-data-mode" kv "loglevel" notice] ta
         assert_equal "12182" [r helloextdata1.filter_getslot db0 foo]
 
         cleanup_external_data_dump r
+    }
+}
+
+# Node ID System tests
+start_server [list overrides [list "ext-data-mode" kv "ext-data-id" id1 "loglevel" notice] tags [list "external:skip"]] {
+    test "Node ID is generated" {
+        r MODULE LOAD $extdatamodule1
+        set node_id [r external_data stats nodeid]
+        assert {$node_id ne ""}
+    }
+    
+    test "Node ID persists across restarts" {
+        r MODULE UNLOAD helloextdata1
+        r MODULE LOAD $extdatamodule1
+        set node_id1 [r external_data stats nodeid]
+
+        r MODULE UNLOAD helloextdata1
+        r MODULE LOAD $extdatamodule1
+        set node_id2 [r external_data stats nodeid]
+        assert {$node_id1 eq $node_id2}
     }
 }

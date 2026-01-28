@@ -1586,6 +1586,12 @@ typedef struct ValkeyModuleExternalStorageMethods {
 
     /* The callback function called to free a snapshot. */
     void (*free_snapshot)(ValkeyModuleCtx *module_ctx, ValkeyModuleExternalStorageCtx *storage_ctx, void *snapshot);
+
+    /* The callback function to get node_id by ip:port address.
+     * If ip_port is empty string "" or NULL, returns the node_id of the current node.
+     * Otherwise, looks up the node_id for the given ip:port address.
+     * Returns NULL if the address is not found in the mapping. */
+    const char *(*get_node_id_by_address)(ValkeyModuleCtx *ctx, const char *ip_port);
 } ValkeyModuleExternalStorageMethodsV1;
 
 #define ValkeyModuleExternalStorageMethods ValkeyModuleExternalStorageMethodsV1
@@ -2686,6 +2692,7 @@ VALKEYMODULE_API int (*ValkeyModule_RegisterEnumConfig)(ValkeyModuleCtx *ctx,
                                                         ValkeyModuleConfigApplyFunc applyfn,
                                                         void *privdata) VALKEYMODULE_ATTR;
 VALKEYMODULE_API int (*ValkeyModule_LoadConfigs)(ValkeyModuleCtx *ctx) VALKEYMODULE_ATTR;
+VALKEYMODULE_API ValkeyModuleString *(*ValkeyModule_GetConfigValue)(ValkeyModuleCtx *ctx, const char *name) VALKEYMODULE_ATTR;
 VALKEYMODULE_API ValkeyModuleRdbStream *(*ValkeyModule_RdbStreamCreateFromFile)(const char *filename)VALKEYMODULE_ATTR;
 VALKEYMODULE_API void (*ValkeyModule_RdbStreamFree)(ValkeyModuleRdbStream *stream) VALKEYMODULE_ATTR;
 VALKEYMODULE_API int (*ValkeyModule_RdbLoad)(ValkeyModuleCtx *ctx,
@@ -3110,6 +3117,7 @@ static int ValkeyModule_Init(ValkeyModuleCtx *ctx, const char *name, int ver, in
     VALKEYMODULE_GET_API(RegisterStringConfig);
     VALKEYMODULE_GET_API(RegisterEnumConfig);
     VALKEYMODULE_GET_API(LoadConfigs);
+    VALKEYMODULE_GET_API(GetConfigValue);
     VALKEYMODULE_GET_API(RdbStreamCreateFromFile);
     VALKEYMODULE_GET_API(RdbStreamFree);
     VALKEYMODULE_GET_API(RdbLoad);

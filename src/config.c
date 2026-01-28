@@ -1695,6 +1695,19 @@ sds getConfigDebugInfo(void) {
     rewriteConfigReleaseState(state);
     return info;
 }
+/* Get a single configuration value as a string by name.
+ * Returns NULL if the config doesn't exist.
+ * The returned sds must be freed by the caller. */
+sds getConfigValue(const char *name) {
+    sds name_sds = sdsnew(name);
+    standardConfig *config = lookupConfig(name_sds);
+    sdsfree(name_sds);
+    
+    if (!config) return NULL;
+    
+    return config->interface.get(config);
+}
+
 
 /* This function replaces the old configuration file with the new content
  * in an atomic manner.
@@ -3204,6 +3217,19 @@ static int isValidDbHashSeed(sds val, const char **err) {
     return 1;
 }
 
+/* Validate that ext-data-id is set when ext-data-mode is enabled */
+static int validateExtDataId(sds val, const char **err) {
+    if (!isExtDataOn()) {
+        return 1;
+    }
+
+    if (sdslen(val) == 0) {
+        *err = "ext-data-id must be set when ext-data-mode is enabled";
+        return 0;
+    }
+    return 1;
+}
+
 standardConfig static_configs[] = {
     /* Bool configs */
     createBoolConfig("rdbchecksum", NULL, IMMUTABLE_CONFIG, server.rdb_checksum, 1, NULL, NULL),
@@ -3291,6 +3317,7 @@ standardConfig static_configs[] = {
     createStringConfig("req-res-logfile", NULL, IMMUTABLE_CONFIG | HIDDEN_CONFIG, EMPTY_STRING_IS_NULL, server.req_res_logfile, NULL, NULL, NULL),
 #endif
     createStringConfig("locale-collate", NULL, MODIFIABLE_CONFIG, ALLOW_EMPTY_STRING, server.locale_collate, "", NULL, updateLocaleCollate),
+    createStringConfig("ext-data-id", NULL, IMMUTABLE_CONFIG, EMPTY_STRING_IS_NULL, server.ext_data_id, "", validateExtDataId, NULL),
     createStringConfig("debug-context", NULL, MODIFIABLE_CONFIG | DEBUG_CONFIG | HIDDEN_CONFIG, ALLOW_EMPTY_STRING, server.debug_context, "", NULL, NULL),
 
     /* SDS Configs */

@@ -13623,6 +13623,20 @@ int VM_LoadConfigs(ValkeyModuleCtx *ctx) {
     if (loadModuleConfigs(module)) return VALKEYMODULE_ERR;
     return VALKEYMODULE_OK;
 }
+/* Get a configuration value as a string.
+ * The returned string should be freed with ValkeyModule_FreeString().
+ * Returns NULL if the configuration key doesn't exist. */
+ValkeyModuleString *VM_GetConfigValue(ValkeyModuleCtx *ctx, const char *name) {
+    VALKEYMODULE_NOT_USED(ctx);
+    
+    sds config_val = getConfigValue(name);
+    if (!config_val) return NULL;
+    
+    ValkeyModuleString *ret = createStringObject(config_val, sdslen(config_val));
+    sdsfree(config_val);
+    return ret;
+}
+
 
 /* --------------------------------------------------------------------------
  * ## RDB load/save API
@@ -14925,6 +14939,7 @@ void moduleRegisterCoreAPI(void) {
     REGISTER_API(RegisterStringConfig);
     REGISTER_API(RegisterEnumConfig);
     REGISTER_API(LoadConfigs);
+    REGISTER_API(GetConfigValue);
     REGISTER_API(RegisterAuthCallback);
     REGISTER_API(RdbStreamCreateFromFile);
     REGISTER_API(RdbStreamFree);

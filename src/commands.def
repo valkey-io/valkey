@@ -7849,6 +7849,17 @@ const char *EXTERNAL_DATA_STATS_Tips[] = {
 #define EXTERNAL_DATA_STATS_Keyspecs NULL
 #endif
 
+/* EXTERNAL_DATA STATS subcommand argument table */
+struct COMMAND_ARG EXTERNAL_DATA_STATS_subcommand_Subargs[] = {
+{MAKE_ARG("dbs",ARG_TYPE_PURE_TOKEN,-1,"DBS",NULL,NULL,CMD_ARG_NONE,0,NULL),.display_text="dbs"},
+{MAKE_ARG("nodeid",ARG_TYPE_PURE_TOKEN,-1,"NODEID",NULL,NULL,CMD_ARG_NONE,0,NULL),.display_text="nodeid"},
+};
+
+/* EXTERNAL_DATA STATS argument table */
+struct COMMAND_ARG EXTERNAL_DATA_STATS_Args[] = {
+{MAKE_ARG("subcommand",ARG_TYPE_ONEOF,-1,NULL,NULL,NULL,CMD_ARG_NONE,2,NULL),.subargs=EXTERNAL_DATA_STATS_subcommand_Subargs},
+};
+
 /* EXTERNAL_DATA command table */
 struct COMMAND_STRUCT EXTERNAL_DATA_Subcommands[] = {
 {MAKE_CMD("debug","Debug commands for manipulating persistent data for a certain db.","O(1)","8.0.2",CMD_DOC_NONE,NULL,NULL,"server",COMMAND_GROUP_SERVER,EXTERNAL_DATA_DEBUG_History,0,EXTERNAL_DATA_DEBUG_Tips,1,externalDataDebugCommand,-4,CMD_ADMIN,ACL_CATEGORY_ADMIN|ACL_CATEGORY_DANGEROUS|ACL_CATEGORY_SLOW,NULL,EXTERNAL_DATA_DEBUG_Keyspecs,0,NULL,2),.args=EXTERNAL_DATA_DEBUG_Args},
@@ -7857,7 +7868,7 @@ struct COMMAND_STRUCT EXTERNAL_DATA_Subcommands[] = {
 {MAKE_CMD("init","Inits previously loaded external data modules.","O(1)","8.0.2",CMD_DOC_NONE,NULL,NULL,"server",COMMAND_GROUP_SERVER,EXTERNAL_DATA_INIT_History,0,EXTERNAL_DATA_INIT_Tips,1,externalDataInitCommand,4,CMD_FAST|CMD_READONLY,ACL_CATEGORY_FAST|ACL_CATEGORY_KEYSPACE|ACL_CATEGORY_READ,NULL,EXTERNAL_DATA_INIT_Keyspecs,0,NULL,2),.args=EXTERNAL_DATA_INIT_Args},
 {MAKE_CMD("load","Loads external data from backup for restore or replication.","O(N) where N is the number of external data entries in the backup","8.0.2",CMD_DOC_NONE,NULL,NULL,"server",COMMAND_GROUP_SERVER,EXTERNAL_DATA_LOAD_History,0,EXTERNAL_DATA_LOAD_Tips,0,externalDataLoadCommand,-2,CMD_WRITE|CMD_DENYOOM,ACL_CATEGORY_KEYSPACE|ACL_CATEGORY_WRITE|ACL_CATEGORY_SLOW,NULL,EXTERNAL_DATA_LOAD_Keyspecs,0,NULL,1),.args=EXTERNAL_DATA_LOAD_Args},
 {MAKE_CMD("loaded","Lists previously loaded external data modules.","O(1)","8.0.2",CMD_DOC_NONE,NULL,NULL,"server",COMMAND_GROUP_SERVER,EXTERNAL_DATA_LOADED_History,0,EXTERNAL_DATA_LOADED_Tips,1,externalDataLoadedCommand,2,CMD_FAST|CMD_READONLY,ACL_CATEGORY_FAST|ACL_CATEGORY_KEYSPACE|ACL_CATEGORY_READ,NULL,EXTERNAL_DATA_LOADED_Keyspecs,0,NULL,0)},
-{MAKE_CMD("stats","Returns statistics on loaded external data modules which are used for a certain database.","O(1)","8.0.2",CMD_DOC_NONE,NULL,NULL,"server",COMMAND_GROUP_SERVER,EXTERNAL_DATA_STATS_History,0,EXTERNAL_DATA_STATS_Tips,1,externalDataStatsCommand,2,CMD_FAST|CMD_READONLY,ACL_CATEGORY_FAST|ACL_CATEGORY_KEYSPACE|ACL_CATEGORY_READ,NULL,EXTERNAL_DATA_STATS_Keyspecs,0,NULL,0)},
+{MAKE_CMD("stats","Returns statistics on loaded external data modules or node information.","O(1)","8.0.2",CMD_DOC_NONE,NULL,NULL,"server",COMMAND_GROUP_SERVER,EXTERNAL_DATA_STATS_History,0,EXTERNAL_DATA_STATS_Tips,1,externalDataStatsCommand,3,CMD_FAST|CMD_READONLY,ACL_CATEGORY_FAST|ACL_CATEGORY_KEYSPACE|ACL_CATEGORY_READ,NULL,EXTERNAL_DATA_STATS_Keyspecs,0,NULL,1),.args=EXTERNAL_DATA_STATS_Args},
 {0}
 };
 

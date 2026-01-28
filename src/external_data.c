@@ -18,6 +18,7 @@
 static void moduleStatsDispose(void *obj);
 static void externalDataAutoInitFromModule(externalDataModule *module);
 static int tryAutoInitFromModuleState(externalDataModule *module);
+static void setupModuleCtx(externalDataModuleInstance *mi);
 
 /* Helper function to check if this node is a replica (standalone or cluster mode) */
 static inline int is_replica(void) {
@@ -63,6 +64,15 @@ static char *get_primary_address(void) {
     return NULL;
 }
 
+/* Creates a string object from the configured node ID.
+ * Returns NULL if node ID is not configured. */
+static inline robj *createNodeIdStringObject(void) {
+    if (!server.ext_data_id || server.ext_data_id[0] == '\0') {
+        return NULL;
+    }
+    return createStringObject(server.ext_data_id, strlen(server.ext_data_id));
+}
+
 /* Helper function to calculate the slot for a given key.
  * Returns:
  *   -1 for standalone mode (no clustering)
@@ -73,7 +83,7 @@ static int externalDataGetKeySlot(robj *key) {
         return EXTERNAL_ALL_SLOTS;  /* Standalone mode - no slot concept */
     }
     /* Cluster mode - calculate slot using key hash */
-    return keyHashSlot(key->ptr, sdslen(key->ptr));
+    return keyHashSlot(objectGetVal(key), sdslen(objectGetVal(key)));
 }
 
 struct externalDataCtx {
@@ -360,6 +370,23 @@ void externalDataStatsCommand(client *c) {
     }
     assert(getCurrentExternalDataCtx() != NULL);
 
+    /* Parse subcommand */
+    robj *subcommand = c->argv[2];
+    
+    /* Handle NODEID subcommand */
+    if (!strcasecmp(objectGetVal(subcommand), "nodeid")) {
+        /* Return ext-data-id from server config */
+        if (!server.ext_data_id || server.ext_data_id[0] == '\0') {
+            addReplyError(c, "ERR ext-data-id not configured");
+            return;
+        }
+        
+        /* Return node_id as simple string */
+        addReplyBulkCString(c, server.ext_data_id);
+        return;
+    }
+    
+    /* Handle DBS subcommand (default behavior) */
     int size = dictSize(curr_external_data_ctx->dbdata);
     
     /* DEBUG: Log stats command execution */
@@ -848,12 +875,11 @@ int externalDataCallDumpFunc(externalDataModuleInstance *mi,
 
     setupModuleCtx(mi);
 
-    /* Create server ID string (host:port) if target is NULL */
+    /* Use ext-data-id from config if target is NULL */
     ValkeyModuleString *server_target = target;
     if (target == NULL) {
-        char server_id[256];
-        snprintf(server_id, sizeof(server_id), "127.0.0.1:%d", server.port);
-        server_target = (ValkeyModuleString *)createStringObject(server_id, strlen(server_id));
+        /* Use configured ext-data-id */
+        server_target = (ValkeyModuleString *)createNodeIdStringObject();
         
         /* Check if string creation failed */
         if (server_target == NULL) {
@@ -2118,13 +2144,11 @@ void bioExternalDataLoadForFullSync(void) {
                 result = externalDataCallLoadFunc(mi, NULL, source);
             }
         } else {
-            /* We're on primary or standalone - load from local backup with server ID */
-            char server_id[256];
-            snprintf(server_id, sizeof(server_id), "127.0.0.1:%d", server.port);
-            source = (ValkeyModuleString *)createStringObject(server_id, strlen(server_id));
+            /* We're on primary or standalone - load from local backup with configured ext-data-id */
+            source = (ValkeyModuleString *)createNodeIdStringObject();
             
-            serverLog(LL_NOTICE, "Loading external data from local backup for module %s (server: %s)",
-                      mi->external_module->name, server_id);
+            serverLog(LL_NOTICE, "Loading external data from local backup for module %s (node: %s)",
+                      mi->external_module->name, server.ext_data_id);
             result = externalDataCallLoadFunc(mi, NULL, source);
         }
         

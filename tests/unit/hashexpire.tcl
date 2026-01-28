@@ -116,7 +116,9 @@ proc wait_for_active_expiry {r key expected_len initial_expired expected_increme
     wait_for_condition $timeout $interval {
         [check_myhash_and_expired_subkeys $r $key $expected_len $initial_expired $expected_increment]
     } else {
-        fail "Active expiry did not occur as expected"
+        set expired_fields [info_field [$r info stats] expired_fields]
+        set expected_expired [expr {$initial_expired + $expected_increment}]
+        fail "Active expiry did not occur as expected expected: $expected_expired ststs: $expired_fields"
     }
 }
 
@@ -4407,6 +4409,7 @@ start_server {tags {"hashexpire external:skip"}} {
         set replica [srv 0 client]
         set replica_host [srv 0 host]
         set replica_port [srv 0 port]
+        set replica_pid [srv 0 pid]
 
         test {expired_fields metric increments only on primary not replica during field expiry} {
             lassign [setup_replication_test $primary $replica $primary_host $primary_port] primary_initial_expired replica_initial_expired
@@ -4524,6 +4527,208 @@ start_server {tags {"hashexpire external:skip"}} {
             $rd_primary close
             $rd_replica close
         }
+
+        foreach command {HINCRBY HINCRBYFLOAT} {
+            array set primary_ksn_event {
+                HINCRBY  hincrby
+                HINCRBYFLOAT hincrbyfloat
+            }
+            array set replica_ksn_event {
+                HINCRBY  hincrby
+                HINCRBYFLOAT hset
+            }
+            test "$command is executed on repilca's expired fields" {
+                lassign [setup_replication_test $primary $replica $primary_host $primary_port] primary_initial_expired replica_initial_expired
+                # Initialize deferred clients and subscribe to keyspace notifications
+                foreach instance [list $primary $replica] {
+                    $instance config set notify-keyspace-events KEA
+                }
+                set primary_ksn [valkey_deferring_client -1]
+                set replica_ksn [valkey_deferring_client $replica_host $replica_port]
+                foreach rd [list $primary_ksn $replica_ksn] {
+                    assert_equal {1} [psubscribe $rd __keyevent@*]
+                }
+
+                $primary debug set-active-expire 0
+                
+                $primary flushall
+                
+                $primary $command myhash f1 1
+                wait_for_ofs_sync $primary $replica
+                assert_equal 1 [$primary hpexpire myhash 1 fields 1 f1]
+                wait_for_condition 50 100 {
+                    [$primary hexists myhash f1] == 0
+                } else {
+                    fail "Field was not logically expired on primary"
+                }
+                $primary $command myhash f1 1
+                wait_for_ofs_sync $primary $replica
+
+                # verify the value is freshly incremented on the primary and replica
+                assert_equal {1} [$primary hget myhash f1]
+                assert_equal {1} [$replica hget myhash f1]
+                # verify the entry has no expiry on the primary and the replica
+                assert_equal {-1} [$primary httl myhash fields 1 f1]
+                assert_equal {-1} [$replica httl myhash fields 1 f1]
+
+                assert_keyevent_patterns $primary_ksn myhash $primary_ksn_event($command) hexpire hexpired $primary_ksn_event($command)
+                assert_keyevent_patterns $replica_ksn myhash $replica_ksn_event($command) hexpire hset
+                $primary_ksn close
+                $replica_ksn close
+                $primary debug set-active-expire 1
+            } {OK} {needs:debug}
+        }
+
+        test {HINCRBYFLOAT maintains TTL on repilca's fields} {
+            lassign [setup_replication_test $primary $replica $primary_host $primary_port] primary_initial_expired replica_initial_expired
+            $primary debug set-active-expire 0
+            $primary flushall
+            set long_expiry [get_long_expire_value HEXPIRE]
+            $primary hsetex myhash ex $long_expiry fields 1 f1 1
+            wait_for_ofs_sync $primary $replica
+
+            assert_equal {1} [$primary hget myhash f1]
+            assert_equal [$replica hget myhash f1] [$primary hget myhash f1]
+            assert_equal [$primary HPEXPIRETIME myhash FIELDS 1 f1] [$replica HPEXPIRETIME myhash FIELDS 1 f1]
+
+            $primary hincrbyfloat myhash f1 1.0
+            wait_for_ofs_sync $primary $replica
+
+            assert_equal {2} [$primary hget myhash f1]
+            assert_equal [$replica hget myhash f1] [$primary hget myhash f1]
+            assert_equal [$primary HPEXPIRETIME myhash FIELDS 1 f1] [$replica HPEXPIRETIME myhash FIELDS 1 f1]
+
+            $primary debug set-active-expire 1
+        } {OK} {needs:debug}
+
+        test {HSETNX set the value for expired replica field} {
+            lassign [setup_replication_test $primary $replica $primary_host $primary_port] primary_initial_expired replica_initial_expired
+            # Initialize deferred clients and subscribe to keyspace notifications
+            foreach instance [list $primary $replica] {
+                $instance config set notify-keyspace-events KEA
+            }
+            set primary_ksn [valkey_deferring_client -1]
+            set replica_ksn [valkey_deferring_client $replica_host $replica_port]
+            foreach rd [list $primary_ksn $replica_ksn] {
+                assert_equal {1} [psubscribe $rd __keyevent@*]
+            }
+            $primary debug set-active-expire 0
+            $primary flushall
+            
+            $primary hsetex myhash px 1 fields 1 f1 v1
+
+            wait_for_condition 50 100 {
+                [$primary hexists myhash f1] == 0
+            } else {
+                fail "Field was not logically expired on primary"
+            }
+            wait_for_ofs_sync $primary $replica
+
+            assert_equal {1} [$primary hlen myhash]
+            assert_equal {1} [$replica hlen myhash]
+            assert_equal {0} [$replica hexists myhash f1]
+        
+            $primary hsetnx myhash f1 v2
+            wait_for_ofs_sync $primary $replica
+
+            assert_equal {v2} [$primary hget myhash f1]
+            assert_equal {v2} [$replica hget myhash f1]
+            assert_equal [$primary HPEXPIRETIME myhash FIELDS 1 f1] [$replica HPEXPIRETIME myhash FIELDS 1 f1]
+            assert_keyevent_patterns $primary_ksn myhash hset hexpire hexpired hset
+            assert_keyevent_patterns $replica_ksn myhash hset hexpire hset
+            $primary debug set-active-expire 1
+        } {OK} {needs:debug}
+
+        test {HMSET reports hexpired when overwrites expired fields} {
+            lassign [setup_replication_test $primary $replica $primary_host $primary_port] primary_initial_expired replica_initial_expired
+            # Initialize deferred clients and subscribe to keyspace notifications
+            foreach instance [list $primary $replica] {
+                $instance config set notify-keyspace-events KEA
+            }
+            set primary_ksn [valkey_deferring_client -1]
+            set replica_ksn [valkey_deferring_client $replica_host $replica_port]
+            foreach rd [list $primary_ksn $replica_ksn] {
+                assert_equal {1} [psubscribe $rd __keyevent@*]
+            }
+            $primary debug set-active-expire 0
+            $primary flushall
+            
+            $primary hsetex myhash px 1 fields 5 f1 v1 f2 v2 f3 v3 f4 v4 f5 v5
+
+            wait_for_condition 50 100 {
+                [$primary hgetall myhash] eq {}
+            } else {
+                fail "Fields were not logically expired on primary"
+            }
+            wait_for_ofs_sync $primary $replica
+
+            assert_equal {5} [$primary hlen myhash]
+            assert_equal {5} [$replica hlen myhash]
+            assert_equal {} [$replica hgetall myhash]
+
+            $primary hmset myhash f1 v1 f2 v2 f3 v3 f4 v4 f5 v5
+
+            wait_for_ofs_sync $primary $replica
+
+            assert_equal [$primary hgetall myhash] [$replica hgetall myhash]
+            assert_keyevent_patterns $primary_ksn myhash hset hexpire hexpired hset
+            assert_keyevent_patterns $replica_ksn myhash hset hexpire hset
+            $primary debug set-active-expire 1
+        } {OK} {needs:debug}
+
+        test {HSETEX KEEPTTL replica should preserve ttl when field is not expired on primary} {
+            lassign [setup_replication_test $primary $replica $primary_host $primary_port] primary_initial_expired replica_initial_expired
+            $primary debug set-active-expire 0
+
+            $primary hset myhash f1 v1
+
+            wait_for_ofs_sync $primary $replica
+
+            pause_process $replica_pid
+            
+            $primary multi
+            $primary hpexpire myhash 1 fields 1 f1
+            $primary hsetex myhash KEEPTTL fields 1 f1 v2
+            $primary exec
+
+            # wait for f1 to expired
+            wait_for_condition 50 100 {
+                [$primary httl myhash fields 1 f1] == -2
+            } else {
+                fail "Field was not logically expired on primary"
+            }
+
+            resume_process $replica_pid
+
+            wait_for_ofs_sync $primary $replica
+
+            assert_equal {-2} [$primary httl myhash fields 1 f1]
+            assert_equal {-2} [$replica httl myhash fields 1 f1]
+            $primary debug set-active-expire 1
+        } {OK} {needs:debug}
+
+        test {HSETEX KEEPTTL replica should NOT preserve ttl when field is expired on primary} {
+            lassign [setup_replication_test $primary $replica $primary_host $primary_port] primary_initial_expired replica_initial_expired
+            $primary debug set-active-expire 0
+
+            # write a short lived field on the primary and wait for the propagation
+            $primary hsetex myhash PX 1 fields 1 f1 v1
+        
+            # wait for f1 to expired
+            wait_for_condition 50 100 {
+                [$primary httl myhash fields 1 f1] == -2
+            } else {
+                fail "Field was not logically expired on primary"
+            }
+
+            # Now overite the expired field on the primary and wait for it to propagate to the replica
+            $primary hsetex myhash KEEPTTL fields 1 f1 v2
+            wait_for_ofs_sync $primary $replica
+
+            assert_equal {v2} [$primary hget myhash f1]
+            assert_equal {v2} [$replica hget myhash f1]
+            $primary debug set-active-expire 1
+        } {OK} {needs:debug}
     }
 }
 

@@ -539,6 +539,8 @@ int ValkeyModule_OnUnload(ValkeyModuleCtx *ctx) {
         return VALKEYMODULE_ERR;
     }
 
+    clearCallArgvCache();
+
     destroyEngineContext(engine_ctx);
     engine_ctx = NULL;
 

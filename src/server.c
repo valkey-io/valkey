@@ -1272,8 +1272,18 @@ void databasesCron(void) {
     if (server.active_expire_enabled) {
         if (!iAmPrimary()) {
             expireReplicaKeys();
-        } else if (!server.import_mode) {
-            activeExpireCycle(ACTIVE_EXPIRE_CYCLE_SLOW);
+        } else {
+            if (!server.import_mode) {
+                activeExpireCycle(ACTIVE_EXPIRE_CYCLE_SLOW);
+            }
+            /* If this node was previously a writable replica
+             * and replicaKeysWithExpire is not empty,
+             * it needs to be cleaned up;
+             * otherwise, it may lead to memory leaks. */
+            size_t replica_key_count = getReplicaKeyWithExpireCount();
+            if (replica_key_count > 0) {
+                flushReplicaKeysWithExpireList(1);
+            }
         }
     }
 

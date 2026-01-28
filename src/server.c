@@ -2901,7 +2901,8 @@ void initServer(void) {
 
     /* Set object metadata size before creating any objects */
     if (server.forkless_options_supported) {
-        objectSetMetadataSize(sizeof(uint32_t)); /* 4 bytes for iterator_epoch */
+        objectSetMetadataSize(sizeof(uint32_t)); /* This is a placeholder until Threadsave defines a metadata structure */
+                                                 /* 4 bytes for iterator_epoch for now*/
     }
 
     createDatabaseIfNeeded(0); /* The default database should always exist */

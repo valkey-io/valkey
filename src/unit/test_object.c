@@ -188,15 +188,13 @@ typedef struct objMetadata {
 /* Helper function to set meta_int */
 static void objectSetMetaInt(robj *o, uint32_t metadata_int) {
     objMetadata *meta = (objMetadata *)objectGetMetadata(o);
-    if (meta) {
-        meta->meta_int = metadata_int;
-    }
+    meta->meta_int = metadata_int;
 }
 
 /* Helper function to get meta_int */
 static uint32_t objectGetMetaInt(const robj *o) {
     objMetadata *meta = (objMetadata *)objectGetMetadata(o);
-    return meta ? meta->meta_int : 0;
+    return meta->meta_int;
 }
 
 /* Test that metadata size is 0 when not configured. */
@@ -205,11 +203,12 @@ int test_metadata_disabled(int argc, char **argv, int flags) {
     UNUSED(argv);
     UNUSED(flags);
 
-    /* When metadata is not configured, objectGetMetadataSize should return 0 even for objects with embedded keys */
+    /* When metadata is not configured, objectGetMetadata should return NULL even for objects with embedded keys */
     sds key = sdsnew("testkey");
     robj *obj = createStringObject("value", 5);
     robj *obj_with_key = objectSetKeyAndExpire(obj, key, -1);
 
+    TEST_ASSERT(objectGetMetadata(obj_with_key) == NULL);
     TEST_ASSERT(objectGetMetadataSize(obj_with_key) == 0);
 
     sdsfree(key);
@@ -217,8 +216,8 @@ int test_metadata_disabled(int argc, char **argv, int flags) {
     return 0;
 }
 
-/* Test that metadata is allocated and initialized when configured. */
-int test_metadata_enabled(int argc, char **argv, int flags) {
+/* Test that metadata is not accessible for objects without embedded keys. */
+int test_metadata_without_key(int argc, char **argv, int flags) {
     UNUSED(argc);
     UNUSED(argv);
     UNUSED(flags);
@@ -228,10 +227,23 @@ int test_metadata_enabled(int argc, char **argv, int flags) {
 
     /* Create object WITHOUT embedded key - metadata should not be accessible */
     robj *obj_no_key = createStringObject("value_without_key", 17);
+
     TEST_ASSERT(objectGetMetadata(obj_no_key) == NULL);
-    TEST_EXPECT(objectGetMetadataSize(obj_no_key) == 0); /* Should return 0 for objects without embedded keys */
-    TEST_EXPECT(objectGetMetaInt(obj_no_key) == 0); /* Should return 0 for NULL metadata */
+    TEST_ASSERT(objectGetMetadataSize(obj_no_key) == 0); /* Should return 0 for objects without embedded keys */
+
     decrRefCount(obj_no_key);
+
+    return 0;
+}
+
+/* Test that metadata is allocated and initialized for objects with embedded keys. */
+int test_metadata_with_key(int argc, char **argv, int flags) {
+    UNUSED(argc);
+    UNUSED(argv);
+    UNUSED(flags);
+
+    /* Configure metadata size */
+    objectSetMetadataSize(sizeof(objMetadata));
 
     /* Create object with embedded key */
     sds key = sdsnew("testkey");
@@ -239,7 +251,7 @@ int test_metadata_enabled(int argc, char **argv, int flags) {
     robj *obj_with_key = objectSetKeyAndExpire(obj, key, -1);
 
     /* Verify metadata size is configured for objects with embedded keys */
-    TEST_EXPECT(objectGetMetadataSize(obj_with_key) == sizeof(objMetadata));
+    TEST_ASSERT(objectGetMetadataSize(obj_with_key) == sizeof(objMetadata));
 
     /* Metadata should be accessible */
     void *meta_ptr = objectGetMetadata(obj_with_key);
@@ -259,6 +271,9 @@ int test_metadata_read_write(int argc, char **argv, int flags) {
     UNUSED(argc);
     UNUSED(argv);
     UNUSED(flags);
+
+    /* Configure metadata size */
+    objectSetMetadataSize(sizeof(objMetadata));
 
     /* Create object with embedded key */
     sds key = sdsnew("mykey");
@@ -291,6 +306,9 @@ int test_metadata_multiple_objects(int argc, char **argv, int flags) {
     UNUSED(argc);
     UNUSED(argv);
     UNUSED(flags);
+
+    /* Configure metadata size */
+    objectSetMetadataSize(sizeof(objMetadata));
 
     /* Create multiple objects with different metadata_int values */
     sds key1 = sdsnew("key1");

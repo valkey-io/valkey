@@ -67,10 +67,7 @@ void objectSetMetadataSize(size_t size) {
     /* Metadata size already set - only allow setting to the same value */
     if (object_metadata_size == size) return;
 
-    /* Size must be greater than 0 */
-    serverAssert(size > 0);
-
-    /* When metadata size is 0 - setting for the first time */
+    /* When current size is 0 and the incoming size is not - setting for the first time */
     serverAssert(object_metadata_size == 0);
 
     /* Check that all databases are empty */
@@ -114,9 +111,7 @@ size_t objectGetMetadataSize(const robj *o) {
  * └─────────────────────────────────────────────────────────────────┘
  */
 void *objectGetMetadata(const robj *o) {
-    if (object_metadata_size == 0 || !o->hasembkey) {
-        return NULL;
-    }
+    if (object_metadata_size == 0 || !o->hasembkey) return NULL;
 
     /* The memory after the struct where we embedded metadata. */
     unsigned char *data = objectEmbeddedData(o);
@@ -360,8 +355,7 @@ void *objectGetVal(const robj *o) {
         }
         if (o->hasembkey) {
             /* Skip metadata */
-            size_t metadata_size = objectGetMetadataSize(o);
-            data += metadata_size;
+            data += objectGetMetadataSize(o);
             /* Skip embedded key */
             uint8_t hdr_size = *(uint8_t *)data;
             data += 1 + hdr_size;                /* +1 for header size byte */
@@ -382,8 +376,7 @@ sds objectGetKey(const robj *o) {
     }
     if (o->hasembkey) {
         /* Skip metadata */
-        size_t metadata_size = objectGetMetadataSize(o);
-        data += metadata_size;
+        data += objectGetMetadataSize(o);
         /* Skip header size byte */
         uint8_t hdr_size = *(uint8_t *)data;
         data += 1 + hdr_size;

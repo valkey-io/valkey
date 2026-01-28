@@ -3118,8 +3118,8 @@ start_server {tags {"hashexpire external:skip"}} {
         test "HSETEX $command single field expires leaving other fields intact" {
             r FLUSHALL
             set initial_expired [info_field [r info stats] expired_fields]
-            r HSET myhash f2 v2
-            assert_equal 1 [r HLEN myhash]
+            r HSET myhash f1 v1 f2 v2
+            assert_equal 2 [r HLEN myhash]
             assert_equal 0 [get_keys_with_volatile_items r]
             # Use HSETEX to set expiry
             r HSETEX myhash $command [get_short_expire_value $command] FIELDS 1 f1 v1

@@ -39,6 +39,9 @@ start_server {config "minimal.conf" tags {"external:skip"} overrides {enable-deb
     # Skip if non io-threads mode - as it is relevant only for io-threads mode
     assert_equal {io-threads 5} [r config get io-threads]
     test {Force the use of IO threads and assert active IO thread usage} {
+        if {$::valgrind} {
+            skip "Too slow with Valgrind"
+        }
         activate_io_threads_and_wait
         set info [r info]
         set io_threads_count [dict get [r config get io-threads] io-threads]

@@ -381,8 +381,8 @@ start_server {tags {"commandlog"} overrides {commandlog-execution-slower-than 10
         set copy_avoid [lindex [r config get min-string-size-avoid-copy-reply] 1]
         r config set min-string-size-avoid-copy-reply 1
         
-        # Disable request tracking
-        r config set commandlog-request-larger-than -1
+        # Disable reply tracking
+        r config set commandlog-reply-larger-than -1
         r commandlog reset large-reply
         
         set value [string repeat A 2048]
@@ -393,7 +393,7 @@ start_server {tags {"commandlog"} overrides {commandlog-execution-slower-than 10
         assert_equal [r commandlog len large-reply] 0
         
         # Enable tracking
-        r config set commandlog-request-larger-than 1024
+        r config set commandlog-reply-larger-than 1024
         r commandlog reset large-reply
         
         # Get the value again, should be tracked

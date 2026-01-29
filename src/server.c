@@ -2925,8 +2925,17 @@ void initServer(void) {
 
     /* Make sure the locale is set on startup based on the config file. */
     if (setlocale(LC_COLLATE, server.locale_collate) == NULL) {
-        serverLog(LL_WARNING, "Failed to configure LOCALE for invalid locale name.");
-        exit(1);
+        if (server.locale_collate[0] == '\0') {
+            /* If we fail to set the locale_collate through environment variables, we maintain
+             * backward compatibility and do not exit. */
+            serverLog(LL_WARNING,
+                      "Warning: Failed to configure LOCALE derived from the environment variables, "
+                      "using the default locale '%s'.",
+                      setlocale(LC_COLLATE, NULL));
+        } else {
+            serverLog(LL_WARNING, "Failed to configure LOCALE for invalid locale name: '%s'.", server.locale_collate);
+            exit(1);
+        }
     }
 
     createSharedObjects();
@@ -7467,7 +7476,7 @@ __attribute__((weak)) int main(int argc, char **argv) {
 
     if (argc == 1) {
         serverLog(LL_WARNING,
-                  "Warning: no config file specified, using the default config. In order to specify a config file use "
+                  "Warning: No config file specified, using the default config. In order to specify a config file use "
                   "%s /path/to/valkey.conf",
                   argv[0]);
     } else {

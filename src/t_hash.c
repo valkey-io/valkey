@@ -1409,6 +1409,7 @@ void hsetexCommand(client *c) {
             return;
 
         if (checkAlreadyExpired(when)) {
+            need_rewrite_argv = 1;
             set_expired = 1;
         }
     }
@@ -1477,13 +1478,15 @@ void hsetexCommand(client *c) {
 
     for (i = fields_index; i < c->argc; i += 2) {
         if (set_expired) {
+            hashTypeIgnoreTTL(o, true);
             if (hashTypeDelete(o, objectGetVal(c->argv[i]))) {
                 new_argv[new_argc++] = c->argv[i];
                 incrRefCount(c->argv[i]);
-                /* we treat this case exactly as active expiration. */
-                server.stat_expiredfields++;
                 changes++;
             }
+            /* we treat this case exactly as active expiration. */
+            server.stat_expiredfields++;
+            hashTypeIgnoreTTL(o, false);
         } else {
             bool expired;
             hashTypeSet(o, objectGetVal(c->argv[i]), objectGetVal(c->argv[i + 1]), when, set_flags, &expired);
@@ -1516,40 +1519,31 @@ void hsetexCommand(client *c) {
         if (has_volatile_fields != hashTypeHasVolatileFields(o)) {
             dbUpdateObjectWithVolatileItemsTracking(c->db, o);
         }
-        if (set_expired) {
-            replaceClientCommandVector(c, new_argc, new_argv);
-            /* We would like to reduce the number of hexpired events in case there are potential many expired fields. */
+
+        /* In case we overwritten fields which were expired we need to act as if we actively expired them */
+        if (expired_overwritten > 0) {
+            server.stat_expiredfields += expired_overwritten;
             notifyKeyspaceEvent(NOTIFY_HASH, "hexpired", c->argv[1], c->db->id);
-        } else {
-            /* In case we overwritten fields which were expired we need to act as if we actively expired them */
-            if (expired_overwritten > 0) {
-                server.stat_expiredfields += expired_overwritten;
-                notifyKeyspaceEvent(NOTIFY_HASH, "hexpired", c->argv[1], c->db->id);
-                /* Propagate deletions for expired/non-existent fields in batches.
-                 * When KEEPTTL is used the replica has noway telling if, at the time the primary was executing the command,
-                 * the fields were expired or not. When the replica executes the command it will ALWAYS overwrite the field, so
-                 * we need to propagate hdel explicitly to prevent the replica from keeping the TTL on it's side. */
-                if (keepttl_fields != NULL) {
-                    /* Propagate individual fields deletions */
-                    int idx = 0;
-                    while (idx < expired_overwritten) {
-                        idx += propagateFieldsDeletion(c->db, o, expired_overwritten - idx,
-                                                       &keepttl_fields[idx], c->slot);
-                    }
-                    zfree(keepttl_fields);
-                    keepttl_fields = NULL;
+            /* Propagate deletions for expired/non-existent fields in batches.
+             * When KEEPTTL is used the replica has noway telling if, at the time the primary was executing the command,
+             * the fields were expired or not. When the replica executes the command it will ALWAYS overwrite the field, so
+             * we need to propagate hdel explicitly to prevent the replica from keeping the TTL on it's side. */
+            if (keepttl_fields != NULL) {
+                /* Propagate individual fields deletions */
+                int idx = 0;
+                while (idx < expired_overwritten) {
+                    idx += propagateFieldsDeletion(c->db, o, expired_overwritten - idx,
+                                                   &keepttl_fields[idx], c->slot);
                 }
-            }
-
-            notifyKeyspaceEvent(NOTIFY_HASH, "hset", c->argv[1], c->db->id);
-
-            if (need_rewrite_argv) {
-                replaceClientCommandVector(c, new_argc, new_argv);
-            }
-            if (expire) {
-                notifyKeyspaceEvent(NOTIFY_HASH, "hexpire", c->argv[1], c->db->id);
+                zfree(keepttl_fields);
+                keepttl_fields = NULL;
             }
         }
+
+        if (need_rewrite_argv) {
+            replaceClientCommandVector(c, new_argc, new_argv);
+        }
+
         signalModifiedKey(c, c->db, c->argv[1]);
         server.dirty += changes;
     } else {
@@ -1559,6 +1553,17 @@ void hsetexCommand(client *c) {
         if (new_argv) zfree(new_argv);
     }
 
+    /* Handle keyspace notifications and object delete if needed.
+     * since setting fields in hash object should always work in case all validations pass,
+     * it is safe to assume that in case we reach this point events should be issues */
+    notifyKeyspaceEvent(NOTIFY_HASH, "hset", c->argv[1], c->db->id);
+    if (expire) {
+        notifyKeyspaceEvent(NOTIFY_HASH, "hexpire", c->argv[1], c->db->id);
+    }
+    if (set_expired) {
+        /* We would like to reduce the number of hexpired events in case there are potential many expired fields. */
+        notifyKeyspaceEvent(NOTIFY_HASH, "hexpired", c->argv[1], c->db->id);
+    }
     /* Delete the object in case it was left empty or created with all expired items. */
     if (hashTypeLength(o) == 0) {
         dbDelete(c->db, c->argv[1]);
@@ -1566,7 +1571,9 @@ void hsetexCommand(client *c) {
     }
     /* make sure that if we ever allocated this it was freed */
     serverAssert(keepttl_fields == NULL);
-    addReplyLongLong(c, changes == num_fields ? 1 : 0);
+    /* In case we reached here we know that we operated on ALL the fields,
+     * even in case we end up in the same original state, we still need to reflect as the operation was done on all the fields. */
+    addReply(c, shared.cone);
 }
 
 /* High-Level Algorithm of HGETEX Command:

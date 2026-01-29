@@ -555,7 +555,7 @@ start_server {tags {"hashexpire"}} {
     } {ERR *}
 
     foreach command {EX PX EXAT PXAT} {
-        test "HSETEX $command 0/past time works correctly with 1 field" {
+        test "HSETEX $command 0/past time works correctly with 2 fields" {
             r FLUSHALL
             r config resetstat
             # Create hash with field
@@ -566,16 +566,16 @@ start_server {tags {"hashexpire"}} {
             set rd [setup_single_keyspace_notification r]
             
             # Set field to expire immediately
-            assert_equal {1} [r HSETEX myhash $command [get_past_zero_expire_value $command] FIELDS 1 f1 v1]
+            assert_equal {1} [r HSETEX myhash $command [get_past_zero_expire_value $command] FIELDS 2 f1 v1 f2 v2]
 
             # Verify field and keys are deleted
-            assert_keyevent_patterns $rd myhash hexpired del
+            assert_keyevent_patterns $rd myhash hset hexpire hexpired del
             assert_equal -2 [r HTTL myhash FIELDS 1 f1]
             assert_equal 0 [r HLEN myhash]
             assert_equal 0 [r EXISTS myhash]
             assert_equal 0 [get_keys r]
             assert_equal 0 [get_keys_with_volatile_items r]
-            assert_equal 1 [info_field [r info stats] expired_fields]
+            assert_equal 2 [info_field [r info stats] expired_fields]
             $rd close
         }
     }
@@ -668,7 +668,7 @@ start_server {tags {"hashexpire"}} {
         assert_equal 0 [r HEXISTS myhash f1]
         assert_equal 0 [r HEXISTS myhash f2]
     }
-    
+
     ## FNX/FXX
 
     # hsetex throws ERR *, it shouldn't
@@ -938,7 +938,7 @@ start_server {tags {"hashexpire"}} {
         r FLUSHALL
         r HSET myhash f1 v1
         set rd [setup_single_keyspace_notification r]
-        
+
         r HEXPIRE myhash 1000 FIELDS 1 f2
         r HEXPIRE myhash 0 FIELDS 1 f2
         # Verify no notification (getting hset and not hexpire)
@@ -947,7 +947,7 @@ start_server {tags {"hashexpire"}} {
         assert_equal 0 [get_keys_with_volatile_items r]
         $rd close
     }
-
+    
     # Error Cases
     test {HEXPIRE - conflicting conditions error} {
         r FLUSHALL
@@ -3070,7 +3070,7 @@ start_server {tags {"hashexpire external:skip"}} {
     }
 
     ##### HGETEX Active Expiry Keyspace Notifications #####
-    foreach command {EX PX} {
+    foreach command {EX PX EXAT PXAT} {
         test "HGETEX $command keyspace notifications for active expiry" {
             r FLUSHALL
             set initial_expired [info_field [r info stats] expired_fields]
@@ -3192,7 +3192,7 @@ start_server {tags {"hashexpire external:skip"}} {
     }
 
     ##### HSETEX Active Expiry Keyspace Notifications #####
-    foreach command {EX PX} {
+    foreach command {EX PX EXAT PXAT} {
         test "HSETEX $command - keyspace notifications fired on field expiry" {
             r FLUSHALL
             set initial_expired [info_field [r info stats] expired_fields]
@@ -4770,7 +4770,7 @@ start_server {tags {"hash"}} {
        r flushall
        r hset myhash f1 v1
        assert_equal [r OBJECT ENCODING myhash] "listpack"
-       assert_equal [r hsetex myhash exat 0 fields 2 f2 v2 f3 v3] 0
+       assert_equal [r hsetex myhash exat 0 fields 2 f2 v2 f3 v3] 1
        assert_equal [r hlen myhash] 1
        assert_equal [r OBJECT ENCODING myhash] "listpack"
        r config set import-mode yes

@@ -963,12 +963,15 @@ static sds getCertSanUri(X509 *cert) {
             const unsigned char *uri_data = ASN1_STRING_get0_data(uri_asn1);
             int uri_len = ASN1_STRING_length(uri_asn1);
 
-            if (uri_data && uri_len > 0) {
-                user *u = ACLGetUserByName((const char *)uri_data, uri_len);
-                if (u && (u->flags & USER_FLAG_ENABLED)) {
-                    result = sdsnewlen(uri_data, uri_len);
-                    break;
-                }
+            if (!uri_data || uri_len <= 0 || memchr(uri_data, '\0', uri_len)) {
+                serverLog(LL_DEBUG, "TLS: Invalid or malformed SAN URI in certificate");
+                continue;
+            }
+
+            user *u = ACLGetUserByName((const char *)uri_data, uri_len);
+            if (u && (u->flags & USER_FLAG_ENABLED)) {
+                result = sdsnewlen(uri_data, uri_len);
+                break;
             }
         }
     }
@@ -981,7 +984,14 @@ sds tlsGetPeerUsername(connection *conn_) {
     tls_connection *conn = (tls_connection *)conn_;
     if (!conn || !SSL_is_init_finished(conn->ssl)) return NULL;
 
-    X509 *cert = SSL_get_peer_certificate(conn->ssl);
+    long verify_result = SSL_get_verify_result(conn->ssl);
+    if (verify_result != X509_V_OK) {
+        serverLog(LL_DEBUG, "TLS: Client certificate verification failed: %s",
+                  X509_verify_cert_error_string(verify_result));
+        return NULL;
+    }
+
+    X509 *cert = SSL_get0_peer_certificate(conn->ssl);
     if (!cert) return NULL;
 
     sds result = NULL;
@@ -1008,7 +1018,6 @@ sds tlsGetPeerUsername(connection *conn_) {
         break;
     }
 
-    X509_free(cert);
     return result;
 }
 

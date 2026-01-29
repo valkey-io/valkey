@@ -186,6 +186,7 @@ start_server {tags {"tls"}} {
             # Verify that the authenticated user matches the first URI
             set s [valkey_client]
             assert_equal "urn:valkey:user:first" [$s ACL WHOAMI]
+            $s close
 
             # Turn off the first user
             r ACL SETUSER {urn:valkey:user:first} off
@@ -193,6 +194,7 @@ start_server {tags {"tls"}} {
             # Verify that the authenticated user matches the second URI
             set s [valkey_client]
             assert_equal "urn:valkey:user:second" [$s ACL WHOAMI]
+            $s close
 
             # Turn off the second user
             r ACL SETUSER {urn:valkey:user:second} off
@@ -200,8 +202,40 @@ start_server {tags {"tls"}} {
             # Verify that the authenticated user matches the default
             set s [valkey_client]
             assert_equal "default" [$s ACL WHOAMI]
-
             $s close
+
+            # Delete all users
+            r ACL DELUSER {urn:valkey:user:first} {urn:valkey:user:second}
+
+            # Verify that the authenticated user matches the default
+            set s [valkey_client]
+            assert_equal "default" [$s ACL WHOAMI]
+            $s close
+
+            # Restore
+            r CONFIG SET tls-auth-clients-user off
+        }
+
+        test {TLS: Verify CN and URI modes are mutually exclusive} {
+            # Create both CN and URI users
+            r ACL SETUSER {Client-only} on >clientpass allcommands allkeys
+            r ACL SETUSER {urn:valkey:user:first} on >clientpass allcommands allkeys
+
+            # Set to CN mode
+            r CONFIG SET tls-auth-clients-user CN
+            set s [valkey_client]
+            assert_equal "Client-only" [$s ACL WHOAMI]
+            $s close
+
+            # Set to URI mode
+            r CONFIG SET tls-auth-clients-user URI
+            set s [valkey_client]
+            assert_equal "urn:valkey:user:first" [$s ACL WHOAMI]
+            $s close
+
+            # Clean up
+            r ACL DELUSER {Client-only} {urn:valkey:user:first}
+            r CONFIG SET tls-auth-clients-user off
         }
 
         test {TLS: Auto-reload detects changes} {

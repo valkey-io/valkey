@@ -3091,7 +3091,7 @@ start_server {tags {"hashexpire external:skip"}} {
             $rd close
         }
     }
-    
+
     test "HGETEX keyspace notification when key deleted with active expiry" {
         r FLUSHALL
         set initial_expired [info_field [r info stats] expired_fields]

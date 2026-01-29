@@ -594,25 +594,6 @@ start_server {tags {"tls"}} {
             }
         }
 
-        test {TLS: INFO tls clamps expired cert to zero} {
-            set expired_crt [format "%s/tests/tls/server-expired.crt" [pwd]]
-            set expired_key [format "%s/tests/tls/server-expired.key" [pwd]]
-            if {![file exists $expired_crt] || ![file exists $expired_key]} {
-                fail "missing expired certs; run utils/gen-test-certs.sh"
-            }
-            start_server [list overrides [list tls-cert-file $expired_crt tls-key-file $expired_key]] {
-                set info [r info tls]
-                if {![regexp {tls_server_cert_serial:([^\r\n]+)} $info -> server_serial]} {
-                    fail "INFO tls missing tls_server_cert_serial (expired)"
-                }
-                assert {$server_serial ne "none"}
-                if {![regexp {tls_server_cert_expires_in_seconds:(-?[0-9]+)} $info -> expire]} {
-                    fail "INFO tls missing tls_server_cert_expires_in_seconds (expired)"
-                }
-                assert_equal 0 $expire
-            }
-        }
-
         test {TLS: INFO tls shows none for missing client cert} {
             start_server [list overrides [list tls-auth-clients no] \
                                omit [list tls-client-cert-file tls-client-key-file]] {

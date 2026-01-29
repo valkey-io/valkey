@@ -1272,8 +1272,18 @@ void databasesCron(void) {
     if (server.active_expire_enabled) {
         if (!iAmPrimary()) {
             expireReplicaKeys();
-        } else if (!server.import_mode) {
-            activeExpireCycle(ACTIVE_EXPIRE_CYCLE_SLOW);
+        } else {
+            if (!server.import_mode) {
+                activeExpireCycle(ACTIVE_EXPIRE_CYCLE_SLOW);
+            }
+            /* If this node was previously a writable replica
+             * and replicaKeysWithExpire is not empty,
+             * it needs to be cleaned up;
+             * otherwise, it may lead to memory leaks. */
+            size_t replica_key_count = getReplicaKeyWithExpireCount();
+            if (replica_key_count > 0) {
+                flushReplicaKeysWithExpireList(1);
+            }
         }
     }
 
@@ -1328,6 +1338,7 @@ static inline void updateCachedTimeWithUs(int update_daylight_info, const long l
     server.ustime = ustime;
     server.mstime = server.ustime / 1000;
     server.unixtime = server.mstime / 1000;
+    lrulfu_updateClockAndPolicy(server.mstime, (server.maxmemory_policy & MAXMEMORY_FLAG_LFU) != 0);
 
     /* To get information about daylight saving time, we need to call
      * localtime_r and cache the result. However calling localtime_r in this
@@ -2169,6 +2180,7 @@ void createSharedObjects(void) {
     shared.multi = createSharedString("MULTI");
     shared.exec = createSharedString("EXEC");
     shared.hset = createSharedString("HSET");
+    shared.hsetex = createSharedString("HSETEX");
     shared.hdel = createSharedString("HDEL");
     shared.hpexpireat = createSharedString("HPEXPIREAT");
     shared.hpersist = createSharedString("HPERSIST");
@@ -2926,8 +2938,17 @@ void initServer(void) {
 
     /* Make sure the locale is set on startup based on the config file. */
     if (setlocale(LC_COLLATE, server.locale_collate) == NULL) {
-        serverLog(LL_WARNING, "Failed to configure LOCALE for invalid locale name.");
-        exit(1);
+        if (server.locale_collate[0] == '\0') {
+            /* If we fail to set the locale_collate through environment variables, we maintain
+             * backward compatibility and do not exit. */
+            serverLog(LL_WARNING,
+                      "Warning: Failed to configure LOCALE derived from the environment variables, "
+                      "using the default locale '%s'.",
+                      setlocale(LC_COLLATE, NULL));
+        } else {
+            serverLog(LL_WARNING, "Failed to configure LOCALE for invalid locale name: '%s'.", server.locale_collate);
+            exit(1);
+        }
     }
 
     createSharedObjects();
@@ -6480,6 +6501,14 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
         info = sdscatprintf(info,
                             "used_active_time_main_thread:%lld.%06lld\r\n",
                             active_seconds, active_microseconds);
+        for (int i = 1; i < server.io_threads_num; i++) {
+            long long used_active_time_io_thread = getIOThreadActiveTimeMicroseconds(i);
+            info = sdscatprintf(info,
+                                "used_active_time_io_thread_%d:%lld.%06lld\r\n",
+                                i,
+                                used_active_time_io_thread / 1000000,
+                                used_active_time_io_thread % 1000000);
+        }
     }
 
     /* Modules */
@@ -7496,7 +7525,7 @@ __attribute__((weak)) int main(int argc, char **argv) {
 
     if (argc == 1) {
         serverLog(LL_WARNING,
-                  "Warning: no config file specified, using the default config. In order to specify a config file use "
+                  "Warning: No config file specified, using the default config. In order to specify a config file use "
                   "%s /path/to/valkey.conf",
                   argv[0]);
     } else {

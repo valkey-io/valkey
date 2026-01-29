@@ -2,42 +2,51 @@
 
 # Generate some test certificates which are used by the regression test suite:
 #
-#   tests/tls/ca.{crt,key}           Self signed CA certificate.
-#   tests/tls/valkey.{crt,key}       A certificate with no key usage/policy restrictions.
-#   tests/tls/client.{crt,key}       A certificate restricted for SSL client usage.
-#   tests/tls/server.{crt,key}       A certificate restricted for SSL server usage.
-#   tests/tls/server-expired.{crt,key} An expired server certificate for INFO tls tests.
-#   tests/tls/ca-multi.crt           A CA bundle with multiple certs.
-#   tests/tls/ca-dir/                CA directory with hashed links.
-#   tests/tls/valkey.dh              DH Params file.
+#   tests/tls/ca.{crt,key}                       Self signed CA certificate.
+#   tests/tls/ca-{expired,notyet}.crt            Self signed invalid CA certificates.
+#   tests/tls/ca-expired/                        Directory containing expired CA certificate.
+#   tests/tls/ca-notyet/                         Directory containing not-yet-valid CA certificate.
+#   tests/tls/valkey.{crt,key}                   A certificate with no key usage/policy restrictions.
+#   tests/tls/client.{crt,key}                   A certificate restricted for SSL client usage.
+#   tests/tls/client-{expired,notyet}.crt        Invalid certificates restricted for SSL client usage.
+#   tests/tls/server.{crt,key}                   A certificate restricted for SSL server usage.
+#   tests/tls/server-{expired,notyet}.crt        Invalid certificates restricted for SSL server usage.
+#   tests/tls/valkey.dh                          DH Params file.
 
-TLS_DIR="tests/tls"
+generate_cert() {
+    local name=$1
+    local cn="$2"
+    local opts="$3"
 
-emit_output() {
-    local status="$1"
-    local subject="$2"
-    if [ "$status" -eq 0 ]; then
-        echo "Signature ok"
-    else
-        echo "Signature failed"
-    fi
-    echo "subject=$subject"
-}
+    local keyfile=tests/tls/${name}.key
+    local certfile=tests/tls/${name}.crt
 
-init_ca() {
-    mkdir -p "$TLS_DIR"
-    [ -f "$TLS_DIR/ca.key" ] || openssl genrsa -out "$TLS_DIR/ca.key" 4096 >/dev/null 2>&1
+    [ -f $keyfile ] || openssl genrsa -out $keyfile 2048
     openssl req \
-        -x509 -new -nodes -sha256 \
-        -key "$TLS_DIR/ca.key" \
-        -days 3650 \
-        -subj '/O=Valkey Test/CN=Certificate Authority' \
-        -out "$TLS_DIR/ca.crt" >/dev/null 2>&1
-    emit_output $? "/O=Valkey Test/CN=Certificate Authority"
+        -new -sha256 \
+        -subj "/O=Valkey Test/CN=$cn" \
+        -key $keyfile | \
+        openssl x509 \
+            -req -sha256 \
+            -CA tests/tls/ca.crt \
+            -CAkey tests/tls/ca.key \
+            -CAserial tests/tls/ca.txt \
+            -CAcreateserial \
+            -days 365 \
+            $opts \
+            -out $certfile
 }
 
-write_ext_config() {
-    cat > "$TLS_DIR/openssl.cnf" <<_END_
+mkdir -p tests/tls
+[ -f tests/tls/ca.key ] || openssl genrsa -out tests/tls/ca.key 4096
+openssl req \
+    -x509 -new -nodes -sha256 \
+    -key tests/tls/ca.key \
+    -days 3650 \
+    -subj '/O=Valkey Test/CN=Certificate Authority' \
+    -out tests/tls/ca.crt
+
+cat > tests/tls/openssl.cnf <<_END_
 [ server_cert ]
 keyUsage = digitalSignature, keyEncipherment
 nsCertType = server
@@ -46,119 +55,160 @@ nsCertType = server
 keyUsage = digitalSignature, keyEncipherment
 nsCertType = client
 _END_
-}
 
-generate_cert() {
-    local name=$1
-    local cn="$2"
-    local opts="$3"
+generate_cert server "Server-only" "-extfile tests/tls/openssl.cnf -extensions server_cert"
+generate_cert client "Client-only" "-extfile tests/tls/openssl.cnf -extensions client_cert"
+generate_cert valkey "Generic-cert"
 
-    local keyfile="$TLS_DIR/${name}.key"
-    local certfile="$TLS_DIR/${name}.crt"
+[ -f tests/tls/valkey.dh ] || openssl dhparam -out tests/tls/valkey.dh 2048
 
-    [ -f "$keyfile" ] || openssl genrsa -out "$keyfile" 2048 >/dev/null 2>&1
-    openssl req \
-        -new -sha256 \
-        -subj "/O=Valkey Test/CN=$cn" \
-        -key "$keyfile" 2>/dev/null | \
-        openssl x509 \
-            -req -sha256 \
-            -CA "$TLS_DIR/ca.crt" \
-            -CAkey "$TLS_DIR/ca.key" \
-            -CAserial "$TLS_DIR/ca.txt" \
-            -CAcreateserial \
-            -days 365 \
-            $opts \
-            -out "$certfile" >/dev/null 2>&1
-    emit_output $? "/O=Valkey Test/CN=$cn"
-}
+echo "Generating invalid TLS test certificates for fail-fast testing..."
 
-generate_bundle() {
-    cat "$TLS_DIR/ca.crt" "$TLS_DIR/server.crt" > "$TLS_DIR/ca-multi.crt"
-    emit_output $? "$TLS_DIR/ca-multi.crt"
-}
-
-generate_ca_dir() {
-    local ca_dir="$TLS_DIR/ca-dir"
-    local ca_cert="$TLS_DIR/ca.crt"
-
-    rm -rf "$ca_dir"
-    mkdir -p "$ca_dir"
-    cp "$ca_cert" "$ca_dir/ca.crt"
-    local ca_hash
-    ca_hash=$(openssl x509 -hash -noout -in "$ca_cert")
-    local ca_hash_old
-    ca_hash_old=$(openssl x509 -subject_hash_old -noout -in "$ca_cert")
-    ln -sf ca.crt "$ca_dir/${ca_hash}.0"
-    if [ "$ca_hash_old" != "$ca_hash" ]; then
-        ln -sf ca.crt "$ca_dir/${ca_hash_old}.0"
-    fi
-    emit_output $? "$ca_dir"
-}
-
-generate_expired_cert() {
-    local name=$1
-    local cn="$2"
-
-    local expired_dir="$TLS_DIR/ca-expired"
-    local keyfile="$TLS_DIR/${name}.key"
-    local csrfile="$TLS_DIR/${name}.csr"
-    local certfile="$TLS_DIR/${name}.crt"
-
-    rm -rf "$expired_dir"
-    mkdir -p "$expired_dir/newcerts"
-    : > "$expired_dir/index.txt"
-    echo 1000 > "$expired_dir/serial"
-
-    cat > "$expired_dir/openssl.cnf" <<_END_
+CA_CONFIG="tests/tls/ca_temp.cnf"
+cat > "$CA_CONFIG" <<EOF
 [ ca ]
 default_ca = CA_default
 
 [ CA_default ]
-dir = $expired_dir
-database = \$dir/index.txt
-new_certs_dir = \$dir/newcerts
-serial = \$dir/serial
-private_key = $TLS_DIR/ca.key
-certificate = $TLS_DIR/ca.crt
-default_md = sha256
-policy = policy_any
+dir              = tests/tls
+database         = \$dir/index.txt
+new_certs_dir    = \$dir
+serial           = \$dir/serial
+default_md       = sha256
+policy           = policy_anything
+default_days     = 1
 
-[ policy_any ]
-commonName = supplied
-_END_
+[ policy_anything ]
+countryName            = optional
+stateOrProvinceName    = optional
+localityName           = optional
+organizationName       = optional
+organizationalUnitName = optional
+commonName             = supplied
+emailAddress           = optional
 
-    openssl genrsa -out "$keyfile" 2048 >/dev/null 2>&1
-    openssl req \
-        -new -sha256 \
-        -subj "/O=Valkey Test/CN=$cn" \
-        -key "$keyfile" \
-        -out "$csrfile" >/dev/null 2>&1
-    openssl ca -batch \
-        -config "$expired_dir/openssl.cnf" \
-        -in "$csrfile" \
-        -out "$certfile" \
-        -startdate 20000101000000Z -enddate 20000102000000Z >/dev/null 2>&1
-    emit_output $? "/O=Valkey Test/CN=$cn"
-}
+[ server_cert ]
+keyUsage = digitalSignature, keyEncipherment
+nsCertType = server
 
-generate_dh_params() {
-    [ -f "$TLS_DIR/valkey.dh" ] || openssl dhparam -out "$TLS_DIR/valkey.dh" 2048 >/dev/null 2>&1
-    emit_output $? "$TLS_DIR/valkey.dh"
-}
+[ client_cert ]
+keyUsage = digitalSignature, keyEncipherment
+nsCertType = client
+EOF
 
-main() {
-    init_ca
-    write_ext_config
+touch tests/tls/index.txt
+echo "01" > tests/tls/serial
 
-    generate_cert server "Server-only" "-extfile $TLS_DIR/openssl.cnf -extensions server_cert"
-    generate_cert client "Client-only" "-extfile $TLS_DIR/openssl.cnf -extensions client_cert"
-    generate_cert valkey "Generic-cert"
+# Generate expired server cert (valid Jan 1-2, 2020)
+openssl req -new -sha256 \
+  -subj "/O=Valkey Test/CN=Server-expired" \
+  -key tests/tls/server.key \
+  -out tests/tls/server-expired.csr
 
-    generate_bundle
-    generate_expired_cert server-expired "Expired Server"
-    generate_ca_dir
-    generate_dh_params
-}
+openssl ca -batch -config "$CA_CONFIG" \
+  -in tests/tls/server-expired.csr \
+  -cert tests/tls/ca.crt \
+  -keyfile tests/tls/ca.key \
+  -startdate 20200101000000Z \
+  -enddate 20200102000000Z \
+  -extensions server_cert \
+  -out tests/tls/server-expired.crt
 
-main "$@"
+# Generate expired client cert (valid Jan 1-2, 2020)
+openssl req -new -sha256 \
+  -subj "/O=Valkey Test/CN=Client-expired" \
+  -key tests/tls/client.key \
+  -out tests/tls/client-expired.csr
+
+openssl ca -batch -config "$CA_CONFIG" \
+  -in tests/tls/client-expired.csr \
+  -cert tests/tls/ca.crt \
+  -keyfile tests/tls/ca.key \
+  -startdate 20200101000000Z \
+  -enddate 20200102000000Z \
+  -extensions client_cert \
+  -out tests/tls/client-expired.crt
+
+# Generate not-yet-valid server cert (valid Jan 1-31, 2099)
+openssl req -new -sha256 \
+  -subj "/O=Valkey Test/CN=Server-notyet" \
+  -key tests/tls/server.key \
+  -out tests/tls/server-notyet.csr
+
+openssl ca -batch -config "$CA_CONFIG" \
+  -in tests/tls/server-notyet.csr \
+  -cert tests/tls/ca.crt \
+  -keyfile tests/tls/ca.key \
+  -startdate 20990101000000Z \
+  -enddate 20990201000000Z \
+  -extensions server_cert \
+  -out tests/tls/server-notyet.crt
+
+# Generate not-yet-valid client cert (valid Jan 1-31, 2099)
+openssl req -new -sha256 \
+  -subj "/O=Valkey Test/CN=Client-notyet" \
+  -key tests/tls/client.key \
+  -out tests/tls/client-notyet.csr
+
+openssl ca -batch -config "$CA_CONFIG" \
+  -in tests/tls/client-notyet.csr \
+  -cert tests/tls/ca.crt \
+  -keyfile tests/tls/ca.key \
+  -startdate 20990101000000Z \
+  -enddate 20990201000000Z \
+  -extensions client_cert \
+  -out tests/tls/client-notyet.crt
+
+# Generate expired CA certificate (valid Jan 1-2, 2020) using the CA to sign itself
+openssl req -new -sha256 \
+  -subj "/O=Valkey Test/CN=Certificate Authority Expired" \
+  -key tests/tls/ca.key \
+  -out tests/tls/ca-expired.csr
+
+openssl ca -batch -config "$CA_CONFIG" \
+  -selfsign \
+  -in tests/tls/ca-expired.csr \
+  -keyfile tests/tls/ca.key \
+  -startdate 20200101000000Z \
+  -enddate 20200102000000Z \
+  -out tests/tls/ca-expired.crt
+
+# Generate not-yet-valid CA certificate (valid Jan 1-31, 2099)
+openssl req -new -sha256 \
+  -subj "/O=Valkey Test/CN=Certificate Authority Not Yet Valid" \
+  -key tests/tls/ca.key \
+  -out tests/tls/ca-notyet.csr
+
+openssl ca -batch -config "$CA_CONFIG" \
+  -selfsign \
+  -in tests/tls/ca-notyet.csr \
+  -keyfile tests/tls/ca.key \
+  -startdate 20990101000000Z \
+  -enddate 20990201000000Z \
+  -out tests/tls/ca-notyet.crt
+
+# Create CA certificate directories for testing tls-ca-cert-dir with invalid certs
+mkdir -p tests/tls/ca-expired
+mkdir -p tests/tls/ca-notyet
+
+cp tests/tls/ca-expired.crt tests/tls/ca-expired/
+cp tests/tls/ca-notyet.crt tests/tls/ca-notyet/
+
+echo "Created CA certificate test directories:"
+echo "  tests/tls/ca-expired/ (contains expired CA cert)"
+echo "  tests/tls/ca-notyet/ (contains not-yet-valid CA cert)"
+
+# Clean up temporary files
+rm -f tests/tls/*-expired.csr tests/tls/*-notyet.csr tests/tls/ca-expired.csr tests/tls/ca-notyet.csr
+rm -f "$CA_CONFIG" tests/tls/index.txt tests/tls/index.txt.attr tests/tls/index.txt.attr.old tests/tls/index.txt.old tests/tls/serial tests/tls/serial.old
+rm -f tests/tls/0[1-9].pem tests/tls/[0-9][0-9].pem
+
+echo ""
+echo "Verification of generated invalid certificates:"
+for crt in tests/tls/ca-expired.crt tests/tls/ca-notyet.crt tests/tls/*-expired.crt tests/tls/*-notyet.crt; do
+  if [ -f "$crt" ]; then
+    echo ""
+    echo "Certificate: $crt"
+    openssl x509 -in "$crt" -noout -subject -dates
+  fi
+done

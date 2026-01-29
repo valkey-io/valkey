@@ -181,7 +181,7 @@ void moduleFreeContext(ValkeyModuleCtx *ctx);
 void moduleInitModulesSystem(void);
 void moduleInitModulesSystemLast(void);
 void modulesCron(void);
-int moduleLoad(const char *path, void **argv, int argc, int is_loadex);
+int moduleLoad(const char *path, void **argv, int argc, int is_loadex, const char **errmsg);
 int moduleUnload(sds name, const char **errmsg);
 void moduleUnloadAllModules(void);
 void moduleLoadFromQueue(void);

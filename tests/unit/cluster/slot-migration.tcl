@@ -685,11 +685,11 @@ start_cluster 2 0 {tags {external:skip cluster} overrides {cluster-node-timeout 
 
         # Attempt to load module during migration should fail on exporting node
         catch {R 0 MODULE LOAD $testmodule} err
-        assert_match "*Error loading the extension*" $err
+        assert_match "*Error loading module: cannot load module during slot migration*" $err
 
         # Attempt to load module during migration should fail on importing node
         catch {R 1 MODULE LOAD $testmodule} err
-        assert_match "*Error loading the extension*" $err
+        assert_match "*Error loading module: cannot load module during slot migration*" $err
 
         # Cancel migration
         R 0 CLUSTER CANCELSLOTMIGRATIONS

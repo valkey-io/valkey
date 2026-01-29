@@ -7433,8 +7433,9 @@ __attribute__((weak)) int main(int argc, char **argv) {
 #ifdef LUA_ENABLED
 #define LUA_LIB_STR STRINGIFY(LUA_LIB)
     if (scriptingEngineManagerFind("lua") == NULL) {
-        if (moduleLoad(LUA_LIB_STR, NULL, 0, 0) != C_OK) {
-            serverPanic("Lua engine initialization failed, check the server logs.");
+        const char *errmsg = NULL;
+        if (moduleLoad(LUA_LIB_STR, NULL, 0, 0, &errmsg) != C_OK) {
+            serverPanic("Lua engine initialization failed, %s", errmsg ? errmsg : "check the server logs.");
         }
     }
 #endif

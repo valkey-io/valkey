@@ -12583,8 +12583,10 @@ void moduleLoadFromQueue(void) {
     listRewind(server.loadmodule_queue, &li);
     while ((ln = listNext(&li))) {
         struct moduleLoadQueueEntry *loadmod = ln->value;
-        if (moduleLoad(loadmod->path, (void **)loadmod->argv, loadmod->argc, 0) == C_ERR) {
-            serverLog(LL_WARNING, "Can't load module from %s: server aborting", loadmod->path);
+        const char *errmsg = NULL;
+        if (moduleLoad(loadmod->path, (void **)loadmod->argv, loadmod->argc, 0, &errmsg) == C_ERR) {
+            serverLog(LL_WARNING, "Can't load module from %s: %s. Server aborting.", loadmod->path,
+                      errmsg ? errmsg : "unknown error");
             exit(1);
         }
         moduleLoadQueueEntryFree(loadmod);
@@ -12763,18 +12765,20 @@ void moduleUnregisterCleanup(ValkeyModule *module) {
 }
 
 /* Load a module and initialize it. On success C_OK is returned, otherwise
- * C_ERR is returned. */
-int moduleLoad(const char *path, void **module_argv, int module_argc, int is_loadex) {
+ * C_ERR is returned and errmsg is set with an appropriate message. */
+int moduleLoad(const char *path, void **module_argv, int module_argc, int is_loadex, const char **errmsg) {
     int (*onload)(void *, void **, int);
     void *handle;
 
     if (server.async_loading) {
         serverLog(LL_WARNING, "Module %s failed to load: cannot load during async replication.", path);
+        if (errmsg) *errmsg = "cannot load module during async replication";
         return C_ERR;
     }
 
     if (clusterIsAnySlotImporting() || clusterIsAnySlotExporting()) {
         serverLog(LL_WARNING, "Module %s failed to load: cannot load during slot migration.", path);
+        if (errmsg) *errmsg = "cannot load module during slot migration";
         return C_ERR;
     }
 
@@ -12783,6 +12787,7 @@ int moduleLoad(const char *path, void **module_argv, int module_argc, int is_loa
         /* This check is best effort */
         if (!(st.st_mode & (S_IXUSR | S_IXGRP | S_IXOTH))) {
             serverLog(LL_WARNING, "Module %s failed to load: It does not have execute permissions.", path);
+            if (errmsg) *errmsg = "module does not have execute permissions";
             return C_ERR;
         }
     }
@@ -12801,6 +12806,7 @@ int moduleLoad(const char *path, void **module_argv, int module_argc, int is_loa
     handle = dlopen(path, dlopen_flags);
     if (handle == NULL) {
         serverLog(LL_WARNING, "Module %s failed to load: %s", path, dlerror());
+        if (errmsg) *errmsg = "failed to open the module library. Check the server logs for more info";
         return C_ERR;
     }
 
@@ -12821,6 +12827,7 @@ int moduleLoad(const char *path, void **module_argv, int module_argc, int is_loa
                   "Module %s does not export ValkeyModule_OnLoad() or RedisModule_OnLoad() "
                   "symbol. Module not loaded.",
                   path);
+        if (errmsg) *errmsg = "module does not export the OnLoad symbol";
         return C_ERR;
     }
     ValkeyModuleCtx ctx;
@@ -12831,10 +12838,12 @@ int moduleLoad(const char *path, void **module_argv, int module_argc, int is_loa
             moduleUnregisterCleanup(ctx.module);
             moduleRemoveCateogires(ctx.module);
             moduleFreeModuleStructure(ctx.module);
+            if (errmsg) *errmsg = "module initialization failed";
         } else {
             /* If there is no ctx.module, this means that our ValkeyModule_Init call failed,
              * and currently init will only fail on busy name. */
             serverLog(LL_WARNING, "Module %s initialization failed. Module name is busy.", path);
+            if (errmsg) *errmsg = "module initialization failed, module name is busy";
         }
         moduleFreeContext(&ctx);
         dlclose(handle);
@@ -12867,12 +12876,14 @@ int moduleLoad(const char *path, void **module_argv, int module_argc, int is_loa
         serverLogRaw(LL_WARNING,
                      "Module Configurations were not set, likely a missing LoadConfigs call. Unloading the module.");
         post_load_err = 1;
+        if (errmsg) *errmsg = "module configurations were not set, likely a missing LoadConfigs call";
     }
 
     if (is_loadex && dictSize(server.module_configs_queue)) {
         serverLogRaw(LL_WARNING,
                      "Loadex configurations were not applied, likely due to invalid arguments. Unloading the module.");
         post_load_err = 1;
+        if (errmsg) *errmsg = "loadex configurations were not applied, likely due to invalid arguments";
     }
 
     if (post_load_err) {
@@ -13865,10 +13876,13 @@ void moduleCommand(client *c) {
             argv = &c->argv[3];
         }
 
-        if (moduleLoad(objectGetVal(c->argv[2]), (void **)argv, argc, 0) == C_OK)
+        const char *errmsg = NULL;
+        if (moduleLoad(objectGetVal(c->argv[2]), (void **)argv, argc, 0, &errmsg) == C_OK)
             addReply(c, shared.ok);
-        else
-            addReplyError(c, "Error loading the extension. Please check the server logs.");
+        else {
+            if (errmsg == NULL) errmsg = "operation not possible";
+            addReplyErrorFormat(c, "Error loading module: %s", errmsg);
+        }
     } else if (!strcasecmp(subcmd, "loadex") && c->argc >= 3) {
         robj **argv = NULL;
         int argc = 0;
@@ -13879,12 +13893,14 @@ void moduleCommand(client *c) {
         }
         /* If this is a loadex command we want to populate server.module_configs_queue with
          * sds NAME VALUE pairs. We also want to increment argv to just after ARGS, if supplied. */
+        const char *errmsg = NULL;
         if (parseLoadexArguments((ValkeyModuleString ***)&argv, &argc) == VALKEYMODULE_OK &&
-            moduleLoad(objectGetVal(c->argv[2]), (void **)argv, argc, 1) == C_OK)
+            moduleLoad(objectGetVal(c->argv[2]), (void **)argv, argc, 1, &errmsg) == C_OK)
             addReply(c, shared.ok);
         else {
             dictEmpty(server.module_configs_queue, NULL);
-            addReplyError(c, "Error loading the extension. Please check the server logs.");
+            if (errmsg == NULL) errmsg = "operation not possible";
+            addReplyErrorFormat(c, "Error loading module: %s", errmsg);
         }
 
     } else if (!strcasecmp(subcmd, "unload") && c->argc == 3) {

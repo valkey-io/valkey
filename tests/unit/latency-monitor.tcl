@@ -147,6 +147,10 @@ tags {"needs:debug"} {
     test {LATENCY DOCTOR includes last spike info when samples exist} {
         # Ensure "Xs ago" is at least 1s to avoid 0s in output.
         after 1100
+        # Create a fresh latency sample so the latest slot is populated.
+        r config set latency-monitor-threshold 200
+        r debug sleep 0.3
+        r config set latency-monitor-threshold 0
         set res [r latency doctor]
         if {$::verbose} {
             puts "LATENCY DOCTOR data:"

@@ -236,6 +236,8 @@ sds createLatencyReport(void) {
         char *event = dictGetKey(de);
         struct latencyTimeSeries *ts = dictGetVal(de);
         struct latencyStats ls;
+        int last;
+        int32_t last_time;
 
         if (ts == NULL) continue;
         eventnum++;
@@ -244,11 +246,8 @@ sds createLatencyReport(void) {
         }
         analyzeLatencyForEvent(event, &ls);
 
-        time_t last_time = 0;
-        int j;
-        for (j = 0; j < LATENCY_TS_LEN; j++) {
-            if (ts->samples[j].time > last_time) last_time = ts->samples[j].time;
-        }
+        last = (ts->idx + LATENCY_TS_LEN - 1) % LATENCY_TS_LEN;
+        last_time = ts->samples[last].time;
 
         report = sdscatprintf(
             report, "%d. %s: %d latency spikes (average %lums, mean deviation %lums, period %.2f sec).\n",

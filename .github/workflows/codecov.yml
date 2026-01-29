@@ -29,6 +29,9 @@ jobs:
       - name: Install lcov and run test
         run: |
           sudo apt-get install lcov tclx
+          git clone https://github.com/ianlancetaylor/libbacktrace.git /tmp/libbacktrace
+          cd /tmp/libbacktrace && ./configure && make && sudo make install
+          cd $GITHUB_WORKSPACE
           make lcov USE_LIBBACKTRACE=yes
 
       - name: Upload code coverage

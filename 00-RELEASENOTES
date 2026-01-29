@@ -11,6 +11,36 @@ Upgrade urgency levels:
 | CRITICAL | There is a critical bug affecting MOST USERS. Upgrade ASAP.         |
 | SECURITY | There are security fixes in the release.                            |
 
+Valkey 9.0.2 - February 3, 2026
+-------------------------------
+
+Upgrade urgency HIGH: There are critical bugs that may affect a subset of users.
+
+### Bug fixes
+
+* Avoid memory leak of new argv when HEXPIRE commands target only non-exiting fields (#2973)
+* Fix HINCRBY and HINCRBYFLOAT to update volatile key tracking (#2974)
+* Avoid empty hash object when HSETEX added no fields (#2998)
+* Fix case-sensitive check for the FNX and FXX arguments in HSETEX (#3000)
+* Prevent assertion in active expiration job after a hash with volatile fields is overwritten (#3003, #3007)
+* Fix HRANDFIELD to return null response when no field could be found (#3022)
+* Fix HEXPIRE to not delete items when validation rules fail and expiration is in the past (#3023, #3048)
+* Fix how hash is handling overriding of expired fields overwrite (#3060)
+* HSETEX - Always issue keyspace notifications after validation (#3001)
+* Make zero a valid TTL for hash fields during import mode and data loading (#3006)
+* Trigger prepareCommand on argc change in module command filters (#2945)
+* Restrict TTL from being negative and avoid crash in import-mode (#2944)
+* Fix chained replica crash when doing dual channel replication (#2983)
+* Skip slot cache optimization for AOF client to prevent key duplication and data corruption (#3004)
+* Fix used_memory_dataset underflow due to miscalculated used_memory_overhead (#3005)
+* Avoid duplicate calculations of network-bytes-out in slot stats with copy-avoidance (#3046)
+* Fix XREAD returning error on empty stream with + ID (#2742)
+
+### Performance/Efficiency Improvements
+
+* Track reply bytes in I/O threads if commandlog-reply-larger-than is -1 (#3086, #3126).
+  This makes it possible to mitigate a performance regression in 9.0.1 caused by the bug fix #2652.
+
 Valkey 9.0.1 - December 9, 2025
 -------------------------------
 

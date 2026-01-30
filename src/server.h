@@ -3727,6 +3727,7 @@ size_t lazyfreeGetFreedObjectsCount(void);
 void lazyfreeResetStats(void);
 void freeObjAsync(robj *key, robj *obj, int dbid);
 void freeReplicationBacklogRefMemAsync(list *blocks, rax *index);
+void freePendingReplDataBufAsync(list *pending_repl_data_blocks);
 void dbUntrackKeyWithVolatileItems(serverDb *db, robj *o);
 void dbTrackKeyWithVolatileItems(serverDb *db, robj *o);
 void dbUpdateObjectWithVolatileItemsTracking(serverDb *db, robj *o);

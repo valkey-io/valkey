@@ -94,6 +94,15 @@ void lazyFreeReplicaKeysWithExpire(void *args[]) {
     atomic_fetch_add_explicit(&lazyfreed_objects, len, memory_order_relaxed);
 }
 
+/* Release the pending_repl_data.blocks list. */
+void lazyfreePendingReplDataBuf(void *args[]) {
+    list *pending_repl_data_blocks = args[0];
+    size_t len = listLength(pending_repl_data_blocks);
+    listRelease(pending_repl_data_blocks);
+    atomic_fetch_sub_explicit(&lazyfree_objects, len, memory_order_relaxed);
+    atomic_fetch_add_explicit(&lazyfreed_objects, len, memory_order_relaxed);
+}
+
 /* Return the number of currently pending objects to free. */
 size_t lazyfreeGetPendingObjectsCount(void) {
     size_t aux = atomic_load_explicit(&lazyfree_objects, memory_order_relaxed);
@@ -270,7 +279,6 @@ void freeReplicationBacklogRefMemAsync(list *blocks, rax *index) {
     }
 }
 
-
 /* Free replicaKeysWithExpire dict, if the dict is huge enough, free it in async way. */
 void freeReplicaKeysWithExpireAsync(dict *replica_keys_with_expire) {
     if (dictSize(replica_keys_with_expire) > LAZYFREE_THRESHOLD) {
@@ -278,5 +286,15 @@ void freeReplicaKeysWithExpireAsync(dict *replica_keys_with_expire) {
         bioCreateLazyFreeJob(lazyFreeReplicaKeysWithExpire, 1, replica_keys_with_expire);
     } else {
         dictRelease(replica_keys_with_expire);
+    }
+}
+
+/* Free pending replication data buffer, if the buffer contains enough data, free it in async way. */
+void freePendingReplDataBufAsync(list *pending_repl_data_blocks) {
+    if (listLength(pending_repl_data_blocks) > LAZYFREE_THRESHOLD) {
+        atomic_fetch_add_explicit(&lazyfree_objects, listLength(pending_repl_data_blocks), memory_order_relaxed);
+        bioCreateLazyFreeJob(lazyfreePendingReplDataBuf, 1, pending_repl_data_blocks);
+    } else {
+        listRelease(pending_repl_data_blocks);
     }
 }

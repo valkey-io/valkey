@@ -1444,8 +1444,7 @@ int slotExportTryDoPause(slotMigrationJob *job) {
 
     if (server.debug_slot_migration_prevent_pause ||
         (server.slot_migration_max_failover_repl_bytes >= 0 &&
-         getClientOutputBufferMemoryUsage(job->client) >
-             (size_t)server.slot_migration_max_failover_repl_bytes)) {
+         job->client->reply_bytes > (size_t)server.slot_migration_max_failover_repl_bytes)) {
         return C_ERR;
     }
     serverLog(LL_NOTICE,
@@ -2418,7 +2417,7 @@ void clusterCommandGetSlotMigrations(client *c) {
         addReplyLongLong(c, (long long)job->stat_cow_bytes);
         addReplyBulkCString(c, "remaining_repl_size");
         if (job->type == SLOT_MIGRATION_EXPORT && job->client) {
-            addReplyLongLong(c, (long long)getClientOutputBufferMemoryUsage(job->client));
+            addReplyLongLong(c, (long long)job->client->reply_bytes);
         } else {
             addReplyLongLong(c, 0);
         }

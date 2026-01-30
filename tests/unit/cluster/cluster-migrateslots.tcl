@@ -2451,7 +2451,7 @@ start_cluster 3 0 {tags {logreqres:skip external:skip cluster} overrides {cluste
 
         # Pause R0 and generate some data to populate the buffer.
         pause_process [srv 0 pid]
-        set bigstr [string repeat x 1000000]
+        set bigstr [string repeat x 1024000]
         for {set j 0} {$j < 50} {incr j} {
             R 2 set "$16383_slot_tag:key:" $bigstr
         }

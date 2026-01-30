@@ -953,7 +953,7 @@ ssize_t rdbSaveObject(rio *rdb, robj *o, robj *key, int dbid, unsigned char rdbt
             zset *zs = objectGetVal(o);
             zskiplist *zsl = zs->zsl;
 
-            if ((n = rdbSaveLen(rdb, zsl->length)) == -1) return -1;
+            if ((n = rdbSaveLen(rdb, zslGetLength(zsl))) == -1) return -1;
             nwritten += n;
 
             /* We save the skiplist elements from the greatest to the smallest
@@ -962,7 +962,7 @@ ssize_t rdbSaveObject(rio *rdb, robj *o, robj *key, int dbid, unsigned char rdbt
              * element will always be the smaller, so adding to the skiplist
              * will always immediately stop at the head, making the insertion
              * O(1) instead of O(log(N)). */
-            zskiplistNode *zn = zsl->tail;
+            zskiplistNode *zn = zslGetTail(zsl);
             while (zn != NULL) {
                 sds ele = zslGetNodeElement(zn);
                 if ((n = rdbSaveRawString(rdb, (unsigned char *)ele, sdslen(ele))) == -1) {

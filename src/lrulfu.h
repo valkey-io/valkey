@@ -35,6 +35,9 @@
 
 #define LRULFU_BITS 24
 
+extern int lfu_config_log_factor; /* LFU logarithmic counter factor. */
+extern int lfu_config_decay_time; /* LFU counter decay factor. */
+
 /**************** LRU ****************/
 
 /* Import a given LRU idleness to the current time.  */
@@ -58,11 +61,14 @@ uint32_t lfu_getFrequency(uint32_t lfu, uint8_t *freq);
 
 /**************** Generic API ****************/
 /* These API functions can be used interchangeably between LRU and LFU, depending on the setting of
- * server.maxmemory_policy.  It is preferred to use these functions rather than directly accessing
- * the LRU/LFU API functions if the use case permits.  Note that if the server's policy is changed,
+ * LRU/LFU policy.  It is preferred to use these functions rather than directly accessing
+ * the LRU/LFU API functions if the use case permits.  Note that if the LRU/LFU policy is changed,
  * LRU <-> LFU, evaluations will be incorrect until values have had time to be touched/updated.*/
 
-/* Is the server using LFU policy? */
+/* Update the LRU/LFU clock and policy.  This should be called periodically.  */
+void lrulfu_updateClockAndPolicy(long long mstime, bool isPolicyLfu);
+
+/* Are we currently using LFU policy? */
 bool lrulfu_isUsingLFU(void);
 
 /* Provide an initial value for LRU or LFU */

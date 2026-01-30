@@ -74,6 +74,18 @@ start_server {tags {"modules"}} {
         assert_match {*has no permissions to access the 'write' key*} [r ACL DRYRUN testuser getkeys.command_with_flags key write]
     }
 
+    test "introspect with > MAX_KEYS_BUFFER keys triggers VM_GetCommandKeysWithFlags heap alloc" {
+        set args {}
+        for {set i 0} {$i < 300} {incr i} {
+            lappend args key k$i
+        }
+        set reply [r getkeys.introspect 1 getkeys.command_with_flags {*}$args]
+        assert_equal {300} [llength $reply]
+        foreach pair $reply {
+            assert_equal {2} [llength $pair]
+        }
+    }
+
     test "Unload the module - getkeys" {
         assert_equal {OK} [r module unload getkeys]
     }

@@ -720,11 +720,11 @@ void dismissZsetObject(robj *o, size_t size_hint) {
     if (o->encoding == OBJ_ENCODING_SKIPLIST) {
         zset *zs = objectGetVal(o);
         zskiplist *zsl = zs->zsl;
-        serverAssert(zsl->length != 0);
+        serverAssert(zslGetLength(zsl) != 0);
         /* We iterate all nodes only when average member size is bigger than a
          * page size, and there's a high chance we'll actually dismiss something. */
-        if (size_hint / zsl->length >= server.page_size) {
-            zskiplistNode *zn = zsl->tail;
+        if (size_hint / zslGetLength(zsl) >= server.page_size) {
+            zskiplistNode *zn = zslGetTail(zsl);
             while (zn != NULL) {
                 zskiplistNode *next = zn->backward;
                 dismissMemory(zn, 0);
@@ -1244,9 +1244,9 @@ size_t objectComputeSize(robj *key, robj *o, size_t sample_size, int dbid) {
         } else if (o->encoding == OBJ_ENCODING_SKIPLIST) {
             hashtable *ht = ((zset *)objectGetVal(o))->ht;
             zskiplist *zsl = ((zset *)objectGetVal(o))->zsl;
-            zskiplistNode *znode = zsl->header->level[0].forward;
-            asize += sizeof(zset) + sizeof(zskiplist) +
-                     hashtableMemUsage(ht) + zmalloc_size(zsl->header);
+            zskiplistNode *zheader = zslGetHeader(zsl);
+            zskiplistNode *znode = zheader->level[0].forward;
+            asize += sizeof(zset) + zslGetAllocSize() + hashtableMemUsage(ht);
             while (znode != NULL && samples < sample_size) {
                 elesize += zmalloc_size(znode);
                 samples++;

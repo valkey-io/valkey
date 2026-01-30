@@ -151,15 +151,15 @@ void mixStringObjectDigest(unsigned char *digest, robj *o) {
  * will continue mixing this object digest to anything that was already
  * present. */
 void xorObjectDigest(serverDb *db, robj *keyobj, unsigned char *digest, robj *o) {
-    uint32_t aux = htonl(o->type);
+    uint32_t aux = htonl(objectGetType(o));
     mixDigest(digest, &aux, sizeof(aux));
     long long expiretime = objectGetExpire(o);
     char buf[128];
 
     /* Save the key and associated value */
-    if (o->type == OBJ_STRING) {
+    if (objectGetType(o) == OBJ_STRING) {
         mixStringObjectDigest(digest, o);
-    } else if (o->type == OBJ_LIST) {
+    } else if (objectGetType(o) == OBJ_LIST) {
         listTypeIterator *li = listTypeInitIterator(o, 0, LIST_TAIL);
         listTypeEntry entry;
         while (listTypeNext(li, &entry)) {
@@ -168,7 +168,7 @@ void xorObjectDigest(serverDb *db, robj *keyobj, unsigned char *digest, robj *o)
             decrRefCount(eleobj);
         }
         listTypeReleaseIterator(li);
-    } else if (o->type == OBJ_SET) {
+    } else if (objectGetType(o) == OBJ_SET) {
         setTypeIterator *si = setTypeInitIterator(o);
         sds sdsele;
         while ((sdsele = setTypeNextObject(si)) != NULL) {
@@ -176,10 +176,10 @@ void xorObjectDigest(serverDb *db, robj *keyobj, unsigned char *digest, robj *o)
             sdsfree(sdsele);
         }
         setTypeReleaseIterator(si);
-    } else if (o->type == OBJ_ZSET) {
+    } else if (objectGetType(o) == OBJ_ZSET) {
         unsigned char eledigest[20];
 
-        if (o->encoding == OBJ_ENCODING_LISTPACK) {
+        if (objectGetEncoding(o) == OBJ_ENCODING_LISTPACK) {
             unsigned char *zl = objectGetVal(o);
             unsigned char *eptr, *sptr;
             unsigned char *vstr;
@@ -209,7 +209,7 @@ void xorObjectDigest(serverDb *db, robj *keyobj, unsigned char *digest, robj *o)
                 xorDigest(digest, eledigest, 20);
                 zzlNext(zl, &eptr, &sptr);
             }
-        } else if (o->encoding == OBJ_ENCODING_SKIPLIST) {
+        } else if (objectGetEncoding(o) == OBJ_ENCODING_SKIPLIST) {
             zset *zs = objectGetVal(o);
             hashtableIterator iter;
             hashtableInitIterator(&iter, zs->ht, 0);
@@ -229,7 +229,7 @@ void xorObjectDigest(serverDb *db, robj *keyobj, unsigned char *digest, robj *o)
         } else {
             serverPanic("Unknown sorted set encoding");
         }
-    } else if (o->type == OBJ_HASH) {
+    } else if (objectGetType(o) == OBJ_HASH) {
         hashTypeIterator hi;
         hashTypeInitIterator(o, &hi);
         while (hashTypeNext(&hi) != C_ERR) {
@@ -246,7 +246,7 @@ void xorObjectDigest(serverDb *db, robj *keyobj, unsigned char *digest, robj *o)
             xorDigest(digest, eledigest, 20);
         }
         hashTypeResetIterator(&hi);
-    } else if (o->type == OBJ_STREAM) {
+    } else if (objectGetType(o) == OBJ_STREAM) {
         streamIterator si;
         streamIteratorStart(&si, objectGetVal(o), NULL, NULL, 0);
         streamID id;
@@ -266,7 +266,7 @@ void xorObjectDigest(serverDb *db, robj *keyobj, unsigned char *digest, robj *o)
             }
         }
         streamIteratorStop(&si);
-    } else if (o->type == OBJ_MODULE) {
+    } else if (objectGetType(o) == OBJ_MODULE) {
         ValkeyModuleDigest md = {{0}, {0}, keyobj, db->id};
         moduleValue *mv = objectGetVal(o);
         moduleType *mt = mv->type;
@@ -737,7 +737,7 @@ void debugCommand(client *c) {
 
         if ((o = objectCommandLookupOrReply(c, c->argv[2], shared.nokeyerr)) == NULL) return;
 
-        if (o->encoding != OBJ_ENCODING_LISTPACK) {
+        if (objectGetEncoding(o) != OBJ_ENCODING_LISTPACK) {
             addReplyError(c, "Not a listpack encoded object.");
         } else {
             lpRepr(objectGetVal(o));
@@ -750,7 +750,7 @@ void debugCommand(client *c) {
 
         int full = 0;
         if (c->argc == 4) full = atoi(objectGetVal(c->argv[3]));
-        if (o->encoding != OBJ_ENCODING_QUICKLIST) {
+        if (objectGetEncoding(o) != OBJ_ENCODING_QUICKLIST) {
             addReplyError(c, "Not a quicklist encoded object.");
         } else {
             quicklistRepr(objectGetVal(o), full);
@@ -972,7 +972,7 @@ void debugCommand(client *c) {
 
         /* Get the hashtable reference from the object, if possible. */
         hashtable *ht = NULL;
-        switch (o->encoding) {
+        switch (objectGetEncoding(o)) {
         case OBJ_ENCODING_SKIPLIST: {
             zset *zs = objectGetVal(o);
             ht = zs->ht;
@@ -1157,9 +1157,9 @@ void _serverAssertPrintClientInfo(const client *c) {
 }
 
 void serverLogObjectDebugInfo(const robj *o) {
-    serverLog(LL_WARNING, "Object type: %u", o->type);
-    serverLog(LL_WARNING, "Object encoding: %u", o->encoding);
-    serverLog(LL_WARNING, "Object refcount: %d", o->refcount);
+    serverLog(LL_WARNING, "Object type: %u", objectGetType(o));
+    serverLog(LL_WARNING, "Object encoding: %u", objectGetEncoding(o));
+    serverLog(LL_WARNING, "Object refcount: %d", objectGetRefcount(o));
 #if defined(UNSAFE_CRASH_REPORT) && UNSAFE_CRASH_REPORT
     /* This code is now disabled. o->ptr may be unreliable to print. in some
      * cases a ziplist could have already been freed by realloc, but not yet
@@ -1168,24 +1168,24 @@ void serverLogObjectDebugInfo(const robj *o) {
      * For some cases it may be ok to crash here again, but these could cause
      * invalid memory access which will bother valgrind and also possibly cause
      * random memory portion to be "leaked" into the logfile. */
-    if (o->type == OBJ_STRING && sdsEncodedObject(o)) {
+    if (objectGetType(o) == OBJ_STRING && sdsEncodedObject(o)) {
         serverLog(LL_WARNING, "Object raw string len: %zu", sdslen(o->ptr));
         if (sdslen(o->ptr) < 4096) {
             sds repr = sdscatrepr(sdsempty(), o->ptr, sdslen(o->ptr));
             serverLog(LL_WARNING, "Object raw string content: %s", repr);
             sdsfree(repr);
         }
-    } else if (o->type == OBJ_LIST) {
+    } else if (objectGetType(o) == OBJ_LIST) {
         serverLog(LL_WARNING, "List length: %d", (int)listTypeLength(o));
-    } else if (o->type == OBJ_SET) {
+    } else if (objectGetType(o) == OBJ_SET) {
         serverLog(LL_WARNING, "Set size: %d", (int)setTypeSize(o));
-    } else if (o->type == OBJ_HASH) {
+    } else if (objectGetType(o) == OBJ_HASH) {
         serverLog(LL_WARNING, "Hash size: %d", (int)hashTypeLength(o));
-    } else if (o->type == OBJ_ZSET) {
+    } else if (objectGetType(o) == OBJ_ZSET) {
         serverLog(LL_WARNING, "Sorted set size: %d", (int)zsetLength(o));
-        if (o->encoding == OBJ_ENCODING_SKIPLIST)
+        if (objectGetEncoding(o) == OBJ_ENCODING_SKIPLIST)
             serverLog(LL_WARNING, "Skiplist level: %d", (int)((const zset *)o->ptr)->zsl->level);
-    } else if (o->type == OBJ_STREAM) {
+    } else if (objectGetType(o) == OBJ_STREAM) {
         serverLog(LL_WARNING, "Stream size: %d", (int)streamLength(o));
     }
 #endif

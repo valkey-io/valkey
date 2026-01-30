@@ -9,12 +9,14 @@
         "function": "clientReplyCommand",
         "command_flags": [
             "NOSCRIPT",
+            "NO_MULTI",
             "LOADING",
             "STALE",
             "SENTINEL"
         ],
         "acl_categories": [
-            "CONNECTION"
+            "CONNECTION",
+            "SLOW"
         ],
         "reply_schema": {
             "const": "OK",

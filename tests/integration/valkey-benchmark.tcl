@@ -9,11 +9,12 @@ proc cmdstat {cmd} {
 proc common_bench_setup {cmd} {
     r config resetstat
     r flushall
-    if {[catch { exec {*}$cmd } error]} {
-        set first_line [lindex [split $error "\n"] 0]
-        puts [colorstr red "valkey-benchmark non zero code, the output is: $error"]
+    if {[catch { exec {*}$cmd } output]} {
+        set first_line [lindex [split $output "\n"] 0]
+        puts [colorstr red "valkey-benchmark non zero code, the output is: $output"]
         fail "valkey-benchmark non zero code. first line: $first_line"
     }
+    return $output
 }
 
 # we use this extra asserts on a simple set,get test for features like uri parsing
@@ -81,7 +82,7 @@ tags {"benchmark network external:skip logreqres:skip"} {
             default_set_get_checks
 
             # ensure only one key was populated
-            assert_match  {1} [scan [regexp -inline {keys\=([\d]*)} [r info keyspace]] keys=%d]
+            assert_equal  {keys=1} [regexp -inline {keys=[\d]*} [r info keyspace]]
         }
 
         test {benchmark: pipelined full set,get} {
@@ -93,7 +94,7 @@ tags {"benchmark network external:skip logreqres:skip"} {
             assert_match  {} [cmdstat lrange]
 
             # ensure only one key was populated
-            assert_match  {1} [scan [regexp -inline {keys\=([\d]*)} [r info keyspace]] keys=%d]
+            assert_equal  {keys=1} [regexp -inline {keys=[\d]*} [r info keyspace]]
         }
 
         test {benchmark: arbitrary command} {
@@ -104,7 +105,7 @@ tags {"benchmark network external:skip logreqres:skip"} {
             assert_match  {} [cmdstat get]
 
             # ensure only one key was populated
-            assert_match  {1} [scan [regexp -inline {keys\=([\d]*)} [r info keyspace]] keys=%d]
+            assert_equal  {keys=1} [regexp -inline {keys=[\d]*} [r info keyspace]]
         }
 
         test {benchmark: arbitrary command sequence} {
@@ -130,9 +131,152 @@ tags {"benchmark network external:skip logreqres:skip"} {
             assert_match  {} [cmdstat get]
 
             # ensure the keyspace has the desired size
-            assert_match  {50} [scan [regexp -inline {keys\=([\d]*)} [r info keyspace]] keys=%d]
+            assert_equal  {keys=50} [regexp -inline {keys=[\d]*} [r info keyspace]]
         }
-        
+
+        test {benchmark: keyspace covered by sequential option} {
+            set cmd [valkeybenchmark $master_host $master_port "-r 50 -t set -n 50 --sequential"]
+            common_bench_setup $cmd
+            assert_match  {*calls=50,*} [cmdstat set]
+
+            # ensure the keyspace has the desired size
+            assert_equal  {keys=50} [regexp -inline {keys=[\d]*} [r info keyspace]]
+        }
+
+        test {benchmark: multiple independent sequential replacements} {
+            set cmd [valkeybenchmark $master_host $master_port "-r 50 -n 1000 --sequential -- set j__rand_int__ rain ; set k__rand_1st__ rain"]
+            common_bench_setup $cmd
+            assert_match  {*calls=1000,*} [cmdstat set]
+            
+            # ensure the keyspace has the desired size
+            assert_equal  {keys=100} [regexp -inline {keys=[\d]*} [r info keyspace]]
+        }
+
+        test {benchmark: multiple occurrences of first placeholder have different values} {
+            set cmd [valkeybenchmark $master_host $master_port "-r 100 -n 100 --sequential -- set rain__rand_int__ rain__rand_int__"]
+            common_bench_setup $cmd
+            assert_match  {*calls=100,*} [cmdstat set]
+            
+            # Each command takes two sequential values, so keys count by twos
+            assert_equal  {keys=50} [regexp -inline {keys=[\d]*} [r info keyspace]]
+
+            # randomly check some keys
+            for {set i 0} {$i < 10} {incr i} {
+                set key [r randomkey]
+                assert {$key ne [r get $key]}
+            }
+        }
+
+        test {benchmark: besides first placeholder, multiple placeholder occurrences have same value} {
+            set cmd [valkeybenchmark $master_host $master_port "-r 100 -n 100 -P 5 --sequential -- set rain__rand_1st__ rain__rand_1st__"]
+            common_bench_setup $cmd
+            assert_match  {*calls=100,*} [cmdstat set]
+            
+            # Each command is handled separately regardness of pipelining
+            assert_equal  {keys=100} [regexp -inline {keys=[\d]*} [r info keyspace]]
+
+            # randomly check some keys
+            for {set i 0} {$i < 10} {incr i} {
+                set key [r randomkey]
+                assert_equal $key [r get $key]
+            }
+        }
+
+        test {benchmark: multiple placeholder occurrences have same value} {
+            set cmd [valkeybenchmark $master_host $master_port "-r 30000000 -n 20 -- set rain__rand_int__ rain__rand_1st__"]
+            common_bench_setup $cmd
+            assert_match  {*calls=20,*} [cmdstat set]
+
+            # randomly check some keys
+            set different_count 0
+            for {set i 0} {$i < 10} {incr i} {
+                set key [r randomkey]
+                set value [r get $key]
+                if {$key ne $value} {
+                    incr different_count
+                }
+            }
+            assert {$different_count > 0}
+        }
+
+        test {benchmark: sequential zadd results in expected number of keys} {
+            set cmd [valkeybenchmark $master_host $master_port "-r 50 -n 50 --sequential -t zadd"]
+            common_bench_setup $cmd
+            assert_match  {*calls=50,*} [cmdstat zadd]
+
+            # ensure the keyspace has the desired size
+            assert_equal  {keys=1} [regexp -inline {keys=[\d]*} [r info keyspace]]
+            assert_match  {50} [r zcard myzset]
+        }
+
+        test {benchmark: warmup and duration are cumulative} {
+            set start_time [clock clicks -millisec]
+            set cmd [valkeybenchmark $master_host $master_port "-r 5 --warmup 1 --duration 1 -t set"]
+            set output [common_bench_setup $cmd]
+            set end_time [clock clicks -millisec]
+
+            # Verify total duration was at least 2 seconds
+            set elapsed [expr {($end_time - $start_time)/1000.0}]
+            assert {$elapsed >= 2}
+
+            # Check reported duration
+            lassign [regexp -inline {(\d+) requests completed in ([\d.]+) seconds} $output] -> requests duration
+            assert {$duration < 2.0 && $duration >= 1.0}
+        }
+
+        test {benchmark: warmup can be used with request count} {
+            set start_time [clock clicks -millisec]
+            set cmd [valkeybenchmark $master_host $master_port "-r 5 --warmup 1 -n 100 -t set"]
+            set output [common_bench_setup $cmd]
+            set end_time [clock clicks -millisec]
+
+            # Verify total duration was at least 1 seconds
+            set elapsed [expr {($end_time - $start_time)/1000.0}]
+            assert {$elapsed >= 1}
+
+            # Check reported duration and command count
+            lassign [regexp -inline {(\d+) requests completed in ([\d.]+) seconds} $output] -> requests duration
+            assert {$duration < 1.0}
+            assert {$requests >= 100 && $requests < 150}
+        }
+
+        test {benchmark: -n and --duration are mutually exclusive} {
+            set cmd [valkeybenchmark $master_host $master_port "-r 5 -n 5 --duration 1 -t set"]
+            catch { exec {*}$cmd } error
+            assert_match "*Options -n and --duration are mutually exclusive*" $error
+        }
+
+        test {benchmark: warmup applies to all tests in multi-test run} {
+            set start_time [clock clicks -millisec]
+            set cmd [valkeybenchmark $master_host $master_port "-r 5 --warmup 2 -n 50 -t set,get,incr"]
+            set output [common_bench_setup $cmd]
+            set end_time [clock clicks -millisec]
+
+            # Verify total duration includes warmup for all 3 tests (at least 6 seconds)
+            set elapsed [expr {($end_time - $start_time)/1000.0}]
+            assert {$elapsed >= 6}
+
+            # Verify all tests ran - with warmup, we expect more than 50 calls per command
+            # since warmup commands are also counted in server stats
+            assert_match  {*calls=*} [cmdstat set]
+            assert_match  {*calls=*} [cmdstat get]
+            assert_match  {*calls=*} [cmdstat incr]
+            
+            # Verify that each command was called more than the base 50 requests
+            # due to warmup period adding extra requests
+            set set_calls [regexp -inline {calls=(\d+)} [cmdstat set]]
+            set get_calls [regexp -inline {calls=(\d+)} [cmdstat get]]
+            set incr_calls [regexp -inline {calls=(\d+)} [cmdstat incr]]
+            
+            lassign $set_calls -> set_count
+            lassign $get_calls -> get_count
+            lassign $incr_calls -> incr_count
+            
+            assert {$set_count > 50}
+            assert {$get_count > 50}
+            assert {$incr_count > 50}
+        }
+
         test {benchmark: clients idle mode should return error when reached maxclients limit} {
             set cmd [valkeybenchmark $master_host $master_port "-c 10 -I"]
             set original_maxclients [lindex [r config get maxclients] 1]
@@ -148,6 +292,30 @@ tags {"benchmark network external:skip logreqres:skip"} {
             common_bench_setup $cmd
             r get key
         } {arg}
+
+        test {benchmark: CSV output format} {
+            set cmd [valkeybenchmark $master_host $master_port "-c 5 -n 10 -t set,get --csv"]
+            set output [common_bench_setup $cmd]
+            # CSV output should contain comma-separated values
+            assert_match "*,*,*,*" $output
+            # Should not contain the usual formatted output
+            assert_no_match "*requests per second*" $output
+            # Should not contain carriage returns or progress indicators
+            assert_no_match "*\r*" $output
+            assert_no_match "*rps=*" $output
+            default_set_get_checks
+        }
+
+        test {benchmark: quiet mode} {
+            set cmd [valkeybenchmark $master_host $master_port "-c 5 -n 10 -t set,get -q"]
+            set output [common_bench_setup $cmd]
+            # Quiet mode should only show query/sec values (case-insensitive)
+            assert {[string match -nocase "*requests per second*" $output]}
+            # Should not contain detailed latency information (case-insensitive)
+            assert {![string match -nocase "*distribution*" $output]}
+            assert {![string match -nocase "*percentile*" $output]}
+            default_set_get_checks
+        }
 
         # tls specific tests
         if {$::tls} {

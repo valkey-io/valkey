@@ -15,23 +15,17 @@ timeout 5s ./simulated-valkey.pl -p 7401 -d --sigcont $syncpid1 <<'EOF' &
 EXPECT CONNECT
 EXPECT ["CLUSTER", "SLOTS"]
 SEND [[0, 1, ["127.0.0.1", 7401, "nodeid7401"]]]
-EXPECT CLOSE
 
 # Slotmap update due to the slot for `foo1` is not served.
 # The reply is still missing slots.
-EXPECT CONNECT
 EXPECT ["CLUSTER", "SLOTS"]
 SEND [[0, 1, ["127.0.0.1", 7401, "nodeid7401"]]]
-EXPECT CLOSE
 
 # Slotmap update due to the slot for `foo2` is not served.
 # The reply now has full slot coverage.
-EXPECT CONNECT
 EXPECT ["CLUSTER", "SLOTS"]
 SEND [[0, 16383, ["127.0.0.1", 7401, "nodeid7401"]]]
-EXPECT CLOSE
 
-EXPECT CONNECT
 EXPECT ["GET", "foo2"]
 SEND "bar2"
 EXPECT CLOSE

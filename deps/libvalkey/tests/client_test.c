@@ -210,7 +210,7 @@ static valkeyContext *select_database(valkeyContext *c) {
         /* Awesome, DB 9 is empty and we can continue. */
         freeReplyObject(reply);
     } else {
-        printf("Database #9 is not empty, test can not continue\n");
+        printf("Database #9 is not empty, test cannot continue\n");
         exit(1);
     }
 
@@ -738,7 +738,7 @@ static void test_reply_reader(void) {
     freeReplyObject(reply);
     valkeyReaderFree(reader);
 
-    /* RESP3 push messages (Github issue #815) */
+    /* RESP3 push messages (GitHub issue #815) */
     test("Can parse RESP3 push messages: ");
     reader = valkeyReaderCreate();
     valkeyReaderFeed(reader, (char *)">2\r\n$6\r\nLOLWUT\r\n:42\r\n", 21);
@@ -1034,7 +1034,7 @@ static void test_allocator_injection(void) {
     valkeyResetAllocators();
 }
 
-#define VALKEY_BAD_DOMAIN "idontexist-noreally.com"
+#define VALKEY_BAD_DOMAIN "nonexistent.example.com"
 static void test_blocking_connection_errors(void) {
     struct addrinfo hints = {.ai_family = AF_INET};
     struct addrinfo *ai_tmp = NULL;
@@ -1091,7 +1091,7 @@ static void test_blocking_connection_errors(void) {
     valkeyFree(c);
 
     test("Returns error when the unix_sock socket path doesn't accept connections: ");
-    c = valkeyConnectUnix((char *)"/tmp/idontexist.sock");
+    c = valkeyConnectUnix((char *)"/tmp/nonexistent.sock");
     test_cond(c->err == VALKEY_ERR_IO); /* Don't care about the message... */
     valkeyFree(c);
 #endif
@@ -1787,7 +1787,7 @@ void ssubscribe_crossslot_error_cb(valkeyAsyncContext *ac, void *r, void *privda
 }
 
 /* Subscribe callback for test_sharded_pubsub_crossslot_handling:
- * - a published message triggers another ssubscribe to first channel and other slot chahhel
+ * - a published message triggers another ssubscribe to first channel and other slot channel
  * - after receiving CROSSLOT error send smessage to first channel
  * - a command is sent before the unsubscribe response is received. */
 void ssubscribe_crossslot_cb(valkeyAsyncContext *ac, void *r, void *privdata) {

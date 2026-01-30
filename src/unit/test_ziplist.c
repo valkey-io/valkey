@@ -1,5 +1,6 @@
 #include <sys/time.h>
 #include "../ziplist.c"
+#include "../fmacros.h"
 #include "../adlist.h"
 #include "test_help.h"
 
@@ -639,7 +640,7 @@ int test_ziplistStressWithRandomPayloadsOfDifferentEncoding(int argc, char **arg
     /* Hold temp vars from ziplist */
     unsigned char *sstr;
     unsigned int slen;
-    long long sval;
+    long long sval = 0;
 
     iteration = accurate ? 20000 : 20;
     for (i = 0; i < iteration; i++) {

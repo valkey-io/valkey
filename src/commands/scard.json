@@ -11,6 +11,8 @@
             "FAST"
         ],
         "acl_categories": [
+            "FAST",
+            "READ",
             "SET"
         ],
         "key_specs": [

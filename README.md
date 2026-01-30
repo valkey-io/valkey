@@ -11,13 +11,13 @@ It supports a wide range of native structures and an extensible plugin system fo
 
 # Building Valkey using `Makefile`
 
-Valkey can be compiled and used on Linux, OSX, OpenBSD, NetBSD, FreeBSD.
+Valkey can be compiled and used on Linux, macOS, OpenBSD, NetBSD, FreeBSD.
 We support big endian and little endian architectures, and both 32 bit
 and 64 bit systems.
 
 It may compile on Solaris derived systems (for instance SmartOS) but our
 support for this platform is *best effort* and Valkey is not guaranteed to
-work as well as in Linux, OSX, and \*BSD.
+work as well as in Linux, macOS, and \*BSD.
 
 It is as simple as:
 
@@ -52,6 +52,17 @@ as libsystemd-dev on Debian/Ubuntu or systemd-devel on CentOS) and run:
 
     % make USE_SYSTEMD=yes
 
+Since Valkey version 8.1, `fast_float` has been introduced as an optional
+dependency, which can speed up sorted sets and other commands that use
+the double datatype. To build with `fast_float` support, you'll need a
+C++ compiler and run:
+
+    % make USE_FAST_FLOAT=yes
+
+To build Valkey without the Lua engine:
+
+    % make BUILD_LUA=no
+
 To append a suffix to Valkey program names, use:
 
     % make PROG_SUFFIX="-alt"
@@ -74,6 +85,13 @@ The above runs the main integration tests. Additional tests are started using:
 More about running the integration tests can be found in
 [tests/README.md](tests/README.md) and for unit tests, see
 [src/unit/README.md](src/unit/README.md).
+
+## Performance monitoring
+
+Valkey Performance Dashboards provide a consolidated view of throughput trends across versions, helping contributors validate improvements and identify regressions quickly.
+
+- [Performance Overview](https://valkey.io/performance/) - Compare throughput across Valkey versions
+- [Unstable Branch Dashboard](https://perf-dashboard.valkey.io/public-dashboards/3e45bf8ded3043edaa941331cd1a94e2) - Track performance of all commits in the unstable branch
 
 ## Fixing build problems with dependencies or cached build options
 
@@ -125,14 +143,18 @@ To compile against jemalloc on Mac OS X systems, use:
 
 ## Monotonic clock
 
-By default, Valkey will build using the POSIX clock_gettime function as the
-monotonic clock source.  On most modern systems, the internal processor clock
-can be used to improve performance.  Cautions can be found here:
+By default, Valkey uses the processor's internal instruction clock (TSC on x86,
+CNTVCT on ARM) for monotonic time tracking, which provides approximately 3x
+faster time access compared to POSIX clock_gettime (~10-30ns vs ~100ns).
+This is enabled by default on supported architectures (x86_64 Linux and aarch64)
+and automatically falls back to POSIX clock_gettime on unsupported systems.
+
+For more information about processor clock usage, see:
     http://oliveryang.net/2015/09/pitfalls-of-TSC-usage/
 
-To build with support for the processor's internal instruction clock, use:
+To disable the processor clock and force POSIX clock_gettime, use:
 
-    % make CFLAGS="-DUSE_PROCESSOR_CLOCK"
+    % make CFLAGS="-DNO_PROCESSOR_CLOCK"
 
 ## Verbose build
 
@@ -167,7 +189,8 @@ line, with exactly the same name.
 
 ## Running manually
 
-To manually run a Valkey server with TLS mode (assuming `./gen-test-certs.sh` was invoked so sample certificates/keys are available):
+To manually run a Valkey server with TLS mode (assuming `./utils/gen-test-certs.sh`
+was invoked so sample certificates/keys are available):
 
 * TLS built-in mode:
     ```
@@ -282,7 +305,7 @@ for Ubuntu and Debian systems:
     % cd utils
     % ./install_server.sh
 
-_Note_: `install_server.sh` will not work on Mac OSX; it is built for Linux only.
+_Note_: `install_server.sh` will not work on macOS; it is built for Linux only.
 
 The script will ask you a few questions and will setup everything you need
 to run Valkey properly as a background daemon that will start again on

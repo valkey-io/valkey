@@ -65,5 +65,18 @@ start_server {tags {"info and its relative command"}} {
         # check that we didn't get the same info twice
         assert { ![string match "*used_cpu_user_children*used_cpu_user_children*" $info] }
     }
+
+    test "info command includes used_active_time_main_thread field" {
+        # Execute some commands to generate activity
+        r set test_key test_value
+        r get test_key
+        r del test_key
+        
+        set info [r info]
+        set active_time [getInfoProperty $info used_active_time_main_thread]
+        
+        # Verify the field has a non-zero value after activity
+        assert {$active_time > 0}
+    }
    
 }

@@ -294,7 +294,7 @@ start_server {
         r SWAPDB 4 9
         assert_error "*NOGROUP*" {$rd read}
         $rd close
-    } {0} {external:skip}
+    } {0} {singledb:skip cluster:skip}
 
     test {Blocking XREADGROUP: swapped DB, key is not a stream} {
         r SELECT 4
@@ -312,7 +312,7 @@ start_server {
         r SWAPDB 4 9
         assert_error "*WRONGTYPE*" {$rd read}
         $rd close
-    } {0} {external:skip}
+    } {0} {singledb:skip cluster:skip}
 
     test {XREAD and XREADGROUP against wrong parameter} {
         r DEL mystream

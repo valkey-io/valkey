@@ -64,13 +64,12 @@ endif()
 
 ADD_LIBRARY(valkey ${valkey_sources})
 ADD_LIBRARY(valkey::valkey ALIAS valkey)
-set(valkey_export_name valkey CACHE STRING "Name of the exported target")
-set_target_properties(valkey PROPERTIES EXPORT_NAME ${valkey_export_name})
+set_target_properties(valkey PROPERTIES
+  C_VISIBILITY_PRESET hidden
+  WINDOWS_EXPORT_ALL_SYMBOLS TRUE
+  SOVERSION "${VERSION_MAJOR}"
+  VERSION "${VERSION}")
 
-SET_TARGET_PROPERTIES(valkey
-    PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS TRUE
-    SOVERSION "${VERSION_MAJOR}"
-    VERSION "${VERSION}")
 IF(MSVC)
     SET_TARGET_PROPERTIES(valkey
         PROPERTIES COMPILE_FLAGS /Z7)
@@ -132,8 +131,11 @@ if (MSVC AND BUILD_SHARED_LIBS)
         CONFIGURATIONS Debug RelWithDebInfo)
 endif()
 
+# Install public headers
 install(DIRECTORY include/valkey
-        DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+        DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
+        PATTERN "tls.h" EXCLUDE
+        PATTERN "rdma.h" EXCLUDE)
 
 INSTALL(FILES ${CMAKE_CURRENT_BINARY_DIR}/valkey.pc
     DESTINATION ${CMAKE_INSTALL_LIBDIR}/pkgconfig)
@@ -189,11 +191,11 @@ IF(ENABLE_TLS)
         SET_PROPERTY(TARGET valkey_tls PROPERTY LINK_FLAGS "-Wl,-undefined -Wl,dynamic_lookup")
     ENDIF()
 
-    SET_TARGET_PROPERTIES(valkey_tls
-        PROPERTIES
-        WINDOWS_EXPORT_ALL_SYMBOLS TRUE
-        SOVERSION "${VERSION_MAJOR}"
-        VERSION "${VERSION}")
+    set_target_properties(valkey_tls PROPERTIES
+      C_VISIBILITY_PRESET hidden
+      WINDOWS_EXPORT_ALL_SYMBOLS TRUE
+      SOVERSION "${VERSION_MAJOR}"
+      VERSION "${VERSION}")
     IF(MSVC)
         SET_TARGET_PROPERTIES(valkey_tls
             PROPERTIES COMPILE_FLAGS /Z7)
@@ -209,6 +211,10 @@ IF(ENABLE_TLS)
         RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
         LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
         ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR})
+
+    # Install public header
+    install(FILES include/valkey/tls.h
+            DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/valkey)
 
     if (MSVC AND BUILD_SHARED_LIBS)
         INSTALL(FILES $<TARGET_PDB_FILE:valkey_tls>
@@ -257,11 +263,11 @@ if(ENABLE_RDMA)
             $<BUILD_INTERFACE:${SDS_INCLUDE_DIR}>
     )
 
-    set_target_properties(valkey_rdma
-        PROPERTIES
-        WINDOWS_EXPORT_ALL_SYMBOLS TRUE
-        SOVERSION "${VERSION_MAJOR}"
-        VERSION "${VERSION}")
+    set_target_properties(valkey_rdma PROPERTIES
+      C_VISIBILITY_PRESET hidden
+      WINDOWS_EXPORT_ALL_SYMBOLS TRUE
+      SOVERSION "${VERSION_MAJOR}"
+      VERSION "${VERSION}")
     configure_file(valkey_rdma.pc.in valkey_rdma.pc @ONLY)
 
     install(TARGETS valkey_rdma
@@ -269,6 +275,10 @@ if(ENABLE_RDMA)
         RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
         LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
         ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR})
+
+    # Install public header
+    install(FILES include/valkey/rdma.h
+            DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/valkey)
 
     install(FILES ${CMAKE_CURRENT_BINARY_DIR}/valkey_rdma.pc
         DESTINATION ${CMAKE_INSTALL_LIBDIR}/pkgconfig)
@@ -293,6 +303,24 @@ endif()
 
 # Add tests
 if(NOT DISABLE_TESTS)
+  if(BUILD_SHARED_LIBS)
+    # Test using a static library since symbols are not hidden then.
+    # Use same source, include dirs and dependencies as the shared library.
+    add_library(valkey_unittest STATIC ${valkey_sources})
+    get_target_property(include_directories valkey::valkey INCLUDE_DIRECTORIES)
+    target_include_directories(valkey_unittest PUBLIC ${include_directories})
+    get_target_property(link_libraries valkey::valkey LINK_LIBRARIES)
+    if(link_libraries)
+      target_link_libraries(valkey_unittest PUBLIC ${link_libraries})
+    endif()
+    # Create libvalkey_unittest.a in the tests directory.
+    set_target_properties(valkey_unittest PROPERTIES
+      ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/tests")
+  else()
+    # Target is an alias for the static library.
+    add_library(valkey_unittest ALIAS valkey)
+  endif()
+
   # Make sure ctest prints the output when a test fails.
   # Must be set before including CTest.
   set(CMAKE_CTEST_ARGUMENTS "--output-on-failure")

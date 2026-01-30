@@ -1,6 +1,6 @@
 proc shutdown_how {srv_id how} {
     if {$how == "shutdown"} {
-        catch {R $srv_id shutdown nosave}
+        catch {R $srv_id shutdown nosave failover}
     } elseif {$how == "sigterm"} {
         exec kill -SIGTERM [s -$srv_id process_id]
     }
@@ -10,7 +10,7 @@ proc shutdown_how {srv_id how} {
 # We will pause the replica 1, and then shutdown the primary 1, and making replica 2 to become
 # the new primary.
 proc test_auto_failover {how shutdown_timeout} {
-    test "auto-failover-on-shutdown hands over primaryship to a fully sync'd replica - $how - shutdown-timeout: $shutdown_timeout" {
+    test "Failover on shutdown hands over primaryship to a fully sync'd replica - $how - shutdown-timeout: $shutdown_timeout" {
         set primary [srv 0 client]
         set replica1 [srv -3 client]
         set replica1_pid [s -3 process_id]
@@ -18,7 +18,9 @@ proc test_auto_failover {how shutdown_timeout} {
         set replica2_host [srv -6 host]
         set replica2_port [srv -6 port]
 
-        $primary config set auto-failover-on-shutdown yes
+        if {$how == "sigterm"} {
+            $primary config set shutdown-on-sigterm failover
+        }
         $primary config set shutdown-timeout $shutdown_timeout
         $primary config set repl-ping-replica-period 3600
 
@@ -66,7 +68,9 @@ proc test_auto_failover {how shutdown_timeout} {
 
         pause_process $replica1_pid
 
-        $primary config set auto-failover-on-shutdown yes
+        if {$how == "sigterm"} {
+            $primary config set shutdown-on-sigterm failover
+        }
         $primary client kill type replica
         shutdown_how 6 $how
         wait_for_log_messages -6 {"*Unable to find a replica to perform the auto failover on shutdown*"} 0 1000 10

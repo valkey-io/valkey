@@ -33,13 +33,13 @@ match different external server configurations. All options are listed by
 | `--large-memory`           | Enables tests that consume more than 100MB |
 | `--tls`                    | Run tests with TLS. See below. |
 | `--tls-module`             | Run tests with TLS, when TLS support is built as a module. |
-| `--other-server-path PATH` | Run compatibility tests with an other server executable. |
+| `--other-server-path PATH` | Run compatibility tests with another server executable. |
 | `--help`                   | Displays the full set of options. |
 
 Running with TLS requires the following preparations:
 
 * Build Valkey is TLS support, e.g. using `make BUILD_TLS=yes`, or `make BUILD_TLS=module`.
-* Run `./utils/gen-test-certs.sh` to generate a root CA and a server certificate.
+* Run `./utils/gen-test-certs.sh` to generate a root CA, server certificates, and invalid certificates for testing.
 * Install TLS support for TCL, e.g. the `tcl-tls` package on Debian/Ubuntu.
 
 Additional tests

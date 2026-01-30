@@ -34,6 +34,7 @@
 #ifndef VALKEY_VALKEY_H
 #define VALKEY_VALKEY_H
 #include "read.h"
+#include "visibility.h"
 
 #include <stdarg.h> /* for va_list */
 #ifndef _MSC_VER
@@ -49,8 +50,8 @@ typedef SSIZE_T ssize_t;
 #include <stdint.h> /* uintXX_t, etc */
 
 #define LIBVALKEY_VERSION_MAJOR 0
-#define LIBVALKEY_VERSION_MINOR 1
-#define LIBVALKEY_VERSION_PATCH 0
+#define LIBVALKEY_VERSION_MINOR 2
+#define LIBVALKEY_VERSION_PATCH 1
 
 /* Connection type can be blocking or non-blocking and is set in the
  * least significant bit of the flags field in valkeyContext. */
@@ -138,16 +139,16 @@ typedef struct valkeyReply {
     struct valkeyReply **element; /* elements vector for VALKEY_REPLY_ARRAY */
 } valkeyReply;
 
-valkeyReader *valkeyReaderCreate(void);
+LIBVALKEY_API valkeyReader *valkeyReaderCreate(void);
 
 /* Function to free the reply objects hivalkey returns by default. */
-void freeReplyObject(void *reply);
+LIBVALKEY_API void freeReplyObject(void *reply);
 
 /* Functions to format a command according to the protocol. */
-int valkeyvFormatCommand(char **target, const char *format, va_list ap);
-int valkeyFormatCommand(char **target, const char *format, ...);
-long long valkeyFormatCommandArgv(char **target, int argc, const char **argv, const size_t *argvlen);
-void valkeyFreeCommand(char *cmd);
+LIBVALKEY_API int valkeyvFormatCommand(char **target, const char *format, va_list ap);
+LIBVALKEY_API int valkeyFormatCommand(char **target, const char *format, ...);
+LIBVALKEY_API long long valkeyFormatCommandArgv(char **target, int argc, const char **argv, const size_t *argvlen);
+LIBVALKEY_API void valkeyFreeCommand(char *cmd);
 
 enum valkeyConnectionType {
     VALKEY_CONN_TCP,
@@ -315,18 +316,18 @@ typedef struct valkeyContext {
     valkeyPushFn *push_cb;
 } valkeyContext;
 
-valkeyContext *valkeyConnectWithOptions(const valkeyOptions *options);
-valkeyContext *valkeyConnect(const char *ip, int port);
-valkeyContext *valkeyConnectWithTimeout(const char *ip, int port, const struct timeval tv);
-valkeyContext *valkeyConnectNonBlock(const char *ip, int port);
-valkeyContext *valkeyConnectBindNonBlock(const char *ip, int port,
-                                         const char *source_addr);
-valkeyContext *valkeyConnectBindNonBlockWithReuse(const char *ip, int port,
-                                                  const char *source_addr);
-valkeyContext *valkeyConnectUnix(const char *path);
-valkeyContext *valkeyConnectUnixWithTimeout(const char *path, const struct timeval tv);
-valkeyContext *valkeyConnectUnixNonBlock(const char *path);
-valkeyContext *valkeyConnectFd(valkeyFD fd);
+LIBVALKEY_API valkeyContext *valkeyConnectWithOptions(const valkeyOptions *options);
+LIBVALKEY_API valkeyContext *valkeyConnect(const char *ip, int port);
+LIBVALKEY_API valkeyContext *valkeyConnectWithTimeout(const char *ip, int port, const struct timeval tv);
+LIBVALKEY_API valkeyContext *valkeyConnectNonBlock(const char *ip, int port);
+LIBVALKEY_API valkeyContext *valkeyConnectBindNonBlock(const char *ip, int port,
+                                                       const char *source_addr);
+LIBVALKEY_API valkeyContext *valkeyConnectBindNonBlockWithReuse(const char *ip, int port,
+                                                                const char *source_addr);
+LIBVALKEY_API valkeyContext *valkeyConnectUnix(const char *path);
+LIBVALKEY_API valkeyContext *valkeyConnectUnixWithTimeout(const char *path, const struct timeval tv);
+LIBVALKEY_API valkeyContext *valkeyConnectUnixNonBlock(const char *path);
+LIBVALKEY_API valkeyContext *valkeyConnectFd(valkeyFD fd);
 
 /**
  * Reconnect the given context using the saved information.
@@ -337,47 +338,47 @@ valkeyContext *valkeyConnectFd(valkeyFD fd);
  *
  * Returns VALKEY_OK on successful connect or VALKEY_ERR otherwise.
  */
-int valkeyReconnect(valkeyContext *c);
+LIBVALKEY_API int valkeyReconnect(valkeyContext *c);
 
-valkeyPushFn *valkeySetPushCallback(valkeyContext *c, valkeyPushFn *fn);
-int valkeySetTimeout(valkeyContext *c, const struct timeval tv);
+LIBVALKEY_API valkeyPushFn *valkeySetPushCallback(valkeyContext *c, valkeyPushFn *fn);
+LIBVALKEY_API int valkeySetTimeout(valkeyContext *c, const struct timeval tv);
 
 /* Configurations using socket options. Applied directly to the underlying
  * socket and not automatically applied after a reconnect. */
-int valkeyEnableKeepAlive(valkeyContext *c);
-int valkeyEnableKeepAliveWithInterval(valkeyContext *c, int interval);
-int valkeySetTcpUserTimeout(valkeyContext *c, unsigned int timeout);
+LIBVALKEY_API int valkeyEnableKeepAlive(valkeyContext *c);
+LIBVALKEY_API int valkeyEnableKeepAliveWithInterval(valkeyContext *c, int interval);
+LIBVALKEY_API int valkeySetTcpUserTimeout(valkeyContext *c, unsigned int timeout);
 
-void valkeyFree(valkeyContext *c);
-valkeyFD valkeyFreeKeepFd(valkeyContext *c);
-int valkeyBufferRead(valkeyContext *c);
-int valkeyBufferWrite(valkeyContext *c, int *done);
+LIBVALKEY_API void valkeyFree(valkeyContext *c);
+LIBVALKEY_API valkeyFD valkeyFreeKeepFd(valkeyContext *c);
+LIBVALKEY_API int valkeyBufferRead(valkeyContext *c);
+LIBVALKEY_API int valkeyBufferWrite(valkeyContext *c, int *done);
 
 /* In a blocking context, this function first checks if there are unconsumed
  * replies to return and returns one if so. Otherwise, it flushes the output
  * buffer to the socket and reads until it has a reply. In a non-blocking
  * context, it will return unconsumed replies until there are no more. */
-int valkeyGetReply(valkeyContext *c, void **reply);
-int valkeyGetReplyFromReader(valkeyContext *c, void **reply);
+LIBVALKEY_API int valkeyGetReply(valkeyContext *c, void **reply);
+LIBVALKEY_API int valkeyGetReplyFromReader(valkeyContext *c, void **reply);
 
 /* Write a formatted command to the output buffer. Use these functions in blocking mode
  * to get a pipeline of commands. */
-int valkeyAppendFormattedCommand(valkeyContext *c, const char *cmd, size_t len);
+LIBVALKEY_API int valkeyAppendFormattedCommand(valkeyContext *c, const char *cmd, size_t len);
 
 /* Write a command to the output buffer. Use these functions in blocking mode
  * to get a pipeline of commands. */
-int valkeyvAppendCommand(valkeyContext *c, const char *format, va_list ap);
-int valkeyAppendCommand(valkeyContext *c, const char *format, ...);
-int valkeyAppendCommandArgv(valkeyContext *c, int argc, const char **argv, const size_t *argvlen);
+LIBVALKEY_API int valkeyvAppendCommand(valkeyContext *c, const char *format, va_list ap);
+LIBVALKEY_API int valkeyAppendCommand(valkeyContext *c, const char *format, ...);
+LIBVALKEY_API int valkeyAppendCommandArgv(valkeyContext *c, int argc, const char **argv, const size_t *argvlen);
 
 /* Issue a command to Valkey. In a blocking context, it is identical to calling
  * valkeyAppendCommand, followed by valkeyGetReply. The function will return
- * NULL if there was an error in performing the request, otherwise it will
+ * NULL if there was an error in performing the request; otherwise, it will
  * return the reply. In a non-blocking context, it is identical to calling
  * only valkeyAppendCommand and will always return NULL. */
-void *valkeyvCommand(valkeyContext *c, const char *format, va_list ap);
-void *valkeyCommand(valkeyContext *c, const char *format, ...);
-void *valkeyCommandArgv(valkeyContext *c, int argc, const char **argv, const size_t *argvlen);
+LIBVALKEY_API void *valkeyvCommand(valkeyContext *c, const char *format, va_list ap);
+LIBVALKEY_API void *valkeyCommand(valkeyContext *c, const char *format, ...);
+LIBVALKEY_API void *valkeyCommandArgv(valkeyContext *c, int argc, const char **argv, const size_t *argvlen);
 
 #ifdef __cplusplus
 }

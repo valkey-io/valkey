@@ -1424,3 +1424,52 @@ test "Test dual-channel-replication replica can lazyfree the local buffer" {
         }
     }
 }
+
+test "Test dual-channel-replication replica can lazyfree the local buffer" {
+    start_server {tags {"dual-channel-replication external:skip"}} {
+        set primary [srv 0 client]
+        set primary_host [srv 0 host]
+        set primary_port [srv 0 port]
+
+        $primary config set repl-diskless-sync yes
+        $primary config set dual-channel-replication-enabled yes
+        $primary config set repl-diskless-sync-delay 0
+        # Generating RDB will cost 500s (1000000 * 0.0001s)
+        $primary debug populate 1000000 primary 1
+        $primary config set rdb-key-save-delay 100
+
+        start_server {} {
+            set replica [srv 0 client]
+
+            $replica config set dual-channel-replication-enabled yes
+
+            # Wait for sync session to start
+            $replica replicaof $primary_host $primary_port
+            wait_for_condition 1000 50 {
+                [string match "*slave*,state=wait_bgsave*,type=rdb-channel*" [$primary info replication]] &&
+                [string match "*slave*,state=bg_transfer*,type=main-channel*" [$primary info replication]] &&
+                [s -1 rdb_bgsave_in_progress] eq 1
+            } else {
+                fail "replica didn't start sync session in time"
+            }
+
+            # Adding more data to replica local buffer
+            set bigstr [string repeat x 1000000]
+            for {set j 0} {$j < 50} {incr j} {
+                $primary set key $bigstr
+            }
+
+            # Kill the main channel so that the replica will abort the sync
+            set replica_main_conn_id [get_client_id_by_last_cmd $primary "psync"]
+            assert_not_equal $replica_main_conn_id ""
+            $primary client kill id $replica_main_conn_id
+
+            # Wait for replica to abort the sync and lazyfree the local buffer.
+            wait_for_condition 1000 50 {
+                [s lazyfreed_objects] > 0
+            } else {
+                fail "Replica did not lazyfree repl buf block after sync failure"
+            }
+        }
+    }
+}

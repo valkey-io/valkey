@@ -48,6 +48,7 @@ TEST_MODULES = \
     defragtest.so \
     keyspecs.so \
     hash.so \
+    hash_stringref.so \
     zset.so \
     stream.so \
     mallocsize.so \

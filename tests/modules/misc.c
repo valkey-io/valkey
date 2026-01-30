@@ -532,6 +532,11 @@ int test_keyslot(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
         const char *tag = ValkeyModule_ClusterCanonicalKeyNameInSlot(slot);
         ValkeyModuleString *key = ValkeyModule_CreateStringPrintf(ctx, "x{%s}y", tag);
         assert(slot == ValkeyModule_ClusterKeySlot(key));
+
+        size_t keylen;
+        const char *keyptr = ValkeyModule_StringPtrLen(key, &keylen);
+        assert(slot == ValkeyModule_ClusterKeySlotC(keyptr, keylen));
+
         ValkeyModule_FreeString(ctx, key);
     }
     if (argc != 2){

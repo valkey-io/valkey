@@ -1,6 +1,10 @@
 #ifndef EXPIRE_H
 #define EXPIRE_H
 
+/* Include feature-test macros early for unit tests that include expire.h
+ * before server.h. */
+#include "fmacros.h"
+
 #include <stdbool.h>
 #include "util.h"
 
@@ -62,7 +66,7 @@ int parseExtendedExpireArgumentsOrReply(client *c, int *flags, int max_args);
 int convertExpireArgumentToUnixTime(client *c, robj *arg, long long basetime, int unit, long long *unixtime);
 
 /* Handling of expired keys and hash fields */
-void activeExpireCycle(int type);
+long long activeExpireCycle(int type);
 void expireReplicaKeys(void);
 void rememberReplicaKeyWithExpire(serverDb *db, robj *key);
 void flushReplicaKeysWithExpireList(int async);

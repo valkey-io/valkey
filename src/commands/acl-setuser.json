@@ -15,6 +15,10 @@
             [
                 "7.0.0",
                 "Added selectors and key based permissions."
+            ],
+            [
+                "9.1.0",
+                "Added database permission rules."
             ]
         ],
         "command_flags": [

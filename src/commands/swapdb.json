@@ -16,6 +16,7 @@
             "KEYSPACE",
             "WRITE"
         ],
+        "get_dbid_args": "swapdbDbIdArgs",
         "arguments": [
             {
                 "name": "index1",

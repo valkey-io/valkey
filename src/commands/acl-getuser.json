@@ -15,6 +15,10 @@
             [
                 "7.0.0",
                 "Added selectors and changed the format of key and channel patterns from a list to their rule representation."
+            ],
+            [
+                "9.1.0",
+                "Added database permission rules."
             ]
         ],
         "command_flags": [
@@ -61,6 +65,10 @@
                             "description": "Root selector's channels.",
                             "type": "string"
                         },
+                        "databases": {
+                            "description": "Root selector's databases.",
+                            "type": "string"
+                        },
                         "selectors": {
                             "type": "array",
                             "items": {
@@ -74,6 +82,9 @@
                                         "type": "string"
                                     },
                                     "channels": {
+                                        "type": "string"
+                                    },
+                                    "databases": {
                                         "type": "string"
                                     }
                                 }

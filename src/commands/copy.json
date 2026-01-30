@@ -15,6 +15,7 @@
             "SLOW",
             "WRITE"
         ],
+        "get_dbid_args": "copyDbIdArgs",
         "key_specs": [
             {
                 "flags": [

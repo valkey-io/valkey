@@ -51,6 +51,13 @@
  * string. */
 #define RDB_VERSION 80
 
+/* Mapping between RDB version and the Valkey version where it was added. */
+static const int RDB_VERSION_MAP[][2] = {
+    /* {RDB version, added in Valkey version} from oldest to newest. */
+    {11, 0x070200},
+    {80, 0x090000},
+};
+
 /* Reserved range for foreign (unsupported, non-OSS) RDB format. */
 #define RDB_FOREIGN_VERSION_MIN 12
 #define RDB_FOREIGN_VERSION_MAX 79
@@ -59,6 +66,10 @@ static_assert(RDB_VERSION < RDB_FOREIGN_VERSION_MIN || RDB_VERSION > RDB_FOREIGN
 
 static inline bool rdbIsForeignVersion(int rdbver) {
     return rdbver >= RDB_FOREIGN_VERSION_MIN && rdbver <= RDB_FOREIGN_VERSION_MAX;
+}
+
+static inline bool rdbUseValkeyMagic(int rdbver) {
+    return rdbver > RDB_FOREIGN_VERSION_MAX;
 }
 
 /* Defines related to the dump file format. To store 32 bits lengths for short
@@ -110,13 +121,13 @@ enum RdbType {
     RDB_TYPE_HASH_ZIPLIST = 13,
     RDB_TYPE_LIST_QUICKLIST = 14,
     RDB_TYPE_STREAM_LISTPACKS = 15,
-    RDB_TYPE_HASH_LISTPACK = 16,
+    RDB_TYPE_HASH_LISTPACK = 16, /* Added in RDB 10 (7.0) */
     RDB_TYPE_ZSET_LISTPACK = 17,
     RDB_TYPE_LIST_QUICKLIST_2 = 18,
     RDB_TYPE_STREAM_LISTPACKS_2 = 19,
-    RDB_TYPE_SET_LISTPACK = 20,
+    RDB_TYPE_SET_LISTPACK = 20, /* Added in RDB 11 (7.2) */
     RDB_TYPE_STREAM_LISTPACKS_3 = 21,
-    RDB_TYPE_HASH_2 = 22, /* Hash with field-level expiration (Valkey 9.0) */
+    RDB_TYPE_HASH_2 = 22, /* Hash with field-level expiration, RDB 80 (9.0) */
     RDB_TYPE_LAST
 };
 /* NOTE: WHEN ADDING NEW RDB TYPE, UPDATE rdb_type_string[] */
@@ -131,7 +142,7 @@ enum RdbType {
 
 /* Special RDB opcodes (saved/loaded with rdbSaveType/rdbLoadType).
  * These are special RDB types, but they start from 255 and grow down. */
-#define RDB_OPCODE_SLOT_IMPORT 243     /* Slot import state. */
+#define RDB_OPCODE_SLOT_IMPORT 243     /* Slot import state (9.0). */
 #define RDB_OPCODE_SLOT_INFO 244       /* Foreign slot info, safe to ignore. */
 #define RDB_OPCODE_FUNCTION2 245       /* function library data */
 #define RDB_OPCODE_FUNCTION_PRE_GA 246 /* old function library data for 7.0 rc1 and rc2 */
@@ -184,19 +195,19 @@ ssize_t rdbSaveMillisecondTime(rio *rdb, long long t);
 long long rdbLoadMillisecondTime(rio *rdb, int rdbver);
 uint64_t rdbLoadLen(rio *rdb, int *isencoded);
 int rdbLoadLenByRef(rio *rdb, int *isencoded, uint64_t *lenptr);
-int rdbSaveObjectType(rio *rdb, robj *o);
+int rdbGetObjectType(robj *o, int rdbver);
 int rdbLoadObjectType(rio *rdb);
 int rdbLoad(char *filename, rdbSaveInfo *rsi, int rdbflags);
 int rdbSaveBackground(int req, char *filename, rdbSaveInfo *rsi, int rdbflags);
-int rdbSaveToReplicasSockets(int req, rdbSaveInfo *rsi);
+int rdbSaveToReplicasSockets(int req, int rdbver, rdbSaveInfo *rsi);
 void rdbRemoveTempFile(pid_t childpid, int from_signal);
 int rdbSaveToFile(const char *filename);
 int rdbSave(int req, char *filename, rdbSaveInfo *rsi, int rdbflags);
-ssize_t rdbSaveObject(rio *rdb, robj *o, robj *key, int dbid);
+ssize_t rdbSaveObject(rio *rdb, robj *o, robj *key, int dbid, unsigned char type);
 size_t rdbSavedObjectLen(robj *o, robj *key, int dbid);
 robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error);
 void backgroundSaveDoneHandler(int exitcode, int bysignal);
-int rdbSaveKeyValuePair(rio *rdb, robj *key, robj *val, long long expiretime, int dbid);
+int rdbSaveKeyValuePair(rio *rdb, robj *key, robj *val, long long expiretime, int dbid, int rdbver);
 ssize_t rdbSaveSingleModuleAux(rio *rdb, int when, moduleType *mt);
 robj *rdbLoadCheckModuleValue(rio *rdb, char *modulename);
 robj *rdbLoadStringObject(rio *rdb);
@@ -210,7 +221,7 @@ int rdbLoadBinaryFloatValue(rio *rdb, float *val);
 int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi);
 int rdbLoadRioWithLoadingCtxScopedRdb(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadingCtx *rdb_loading_ctx);
 int rdbFunctionLoad(rio *rdb, int ver, functionsLibCtx *lib_ctx, int rdbflags, sds *err);
-int rdbSaveRio(int req, rio *rdb, int *error, int rdbflags, rdbSaveInfo *rsi);
+int rdbSaveRio(int req, int rdbver, rio *rdb, int *error, int rdbflags, rdbSaveInfo *rsi);
 ssize_t rdbSaveFunctions(rio *rdb);
 rdbSaveInfo *rdbPopulateSaveInfo(rdbSaveInfo *rsi);
 void replicationEmptyDbCallback(hashtable *ht);

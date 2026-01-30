@@ -1,3 +1,4 @@
+#include "../fmacros.h"
 #include "../hashtable.h"
 #include "test_help.h"
 #include "../mt19937-64.h"

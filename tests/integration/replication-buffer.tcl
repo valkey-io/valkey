@@ -301,7 +301,6 @@ test "Replica client-output-buffer size is limited to backlog_limit/16 when no r
             set master [srv 0 client]
             set master_host [srv 0 host]
             set master_port [srv 0 port]
-            $master config set maxmemory-clients 0
             $master config set maxmemory-policy allkeys-lru
 
             $master config set repl-backlog-size 16384

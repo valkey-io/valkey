@@ -2389,7 +2389,7 @@ void clusterCommandGetSlotMigrations(client *c) {
     listRewind(server.cluster->slot_migration_jobs, &li);
     while ((ln = listNext(&li)) != NULL) {
         slotMigrationJob *job = ln->value;
-        addReplyMapLen(c, job->is_tracking_only ? 9 : 11);
+        addReplyMapLen(c, job->is_tracking_only ? 10 : 12);
         addReplyBulkCString(c, "name");
         addReplyBulkCBuffer(c, job->name, CLUSTER_NAMELEN);
         addReplyBulkCString(c, "operation");
@@ -2416,6 +2416,12 @@ void clusterCommandGetSlotMigrations(client *c) {
         addReplyBulkCString(c, job->status_msg ? job->status_msg : "");
         addReplyBulkCString(c, "cow_size");
         addReplyLongLong(c, (long long)job->stat_cow_bytes);
+        addReplyBulkCString(c, "remaining_repl_size");
+        if (job->type == SLOT_MIGRATION_EXPORT && job->client) {
+            addReplyLongLong(c, (long long)getClientOutputBufferMemoryUsage(job->client));
+        } else {
+            addReplyLongLong(c, 0);
+        }
     }
 }
 

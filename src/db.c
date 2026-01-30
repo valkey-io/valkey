@@ -2057,8 +2057,10 @@ size_t dbReclaimExpiredFields(robj *o, serverDb *db, mstime_t now, unsigned long
             dbDelete(db, keyobj);
             propagateDeletion(db, keyobj, server.lazyfree_lazy_expire, didx);
             notifyKeyspaceEvent(NOTIFY_GENERIC, "del", keyobj, db->id);
+            server.dirty++;
         } else {
             if (!hashTypeHasVolatileFields(o)) dbUntrackKeyWithVolatileItems(db, o);
+            server.dirty += (long long)expired;
         }
         signalModifiedKey(NULL, db, keyobj);
         exitExecutionUnit();

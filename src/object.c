@@ -49,6 +49,36 @@
  * so if expire is set later, we don't need to reallocate the object. */
 #define KEY_SIZE_TO_INCLUDE_EXPIRE_THRESHOLD 128
 
+/* ===================== Accessor functions for serverObject fields ==================== */
+
+int objectGetType(const robj *o) {
+    return o->type;
+}
+
+void objectSetType(robj *o, int type) {
+    o->type = type;
+}
+
+int objectGetEncoding(const robj *o) {
+    return o->encoding;
+}
+
+void objectSetEncoding(robj *o, int encoding) {
+    o->encoding = encoding;
+}
+
+unsigned int objectGetRefcount(const robj *o) {
+    return o->refcount;
+}
+
+unsigned int objectGetLRU(const robj *o) {
+    return o->lru;
+}
+
+void objectSetLRU(robj *o, unsigned int lru) {
+    o->lru = lru;
+}
+
 /* ===================== Creation and parsing of objects ==================== */
 
 /* Creates an object, optionally with embedded key and expire fields. The key

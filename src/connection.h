@@ -34,12 +34,18 @@
 #include <errno.h>
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
 #include <sys/uio.h>
 
 #include "ae.h"
+#include "sds.h"
 
 #define CONN_INFO_LEN 32
-#define CONN_ADDR_STR_LEN 128 /* Similar to INET6_ADDRSTRLEN, hoping to handle other protocols. */
+#define CONN_ADDR_STR_LEN 128
+
+#define NET_HOST_STR_LEN 256                          /* Longest valid hostname */
+#define NET_IP_STR_LEN 46                             /* INET6_ADDRSTRLEN is 46, but we need to be sure */
+#define NET_HOST_PORT_STR_LEN (NET_HOST_STR_LEN + 32) /* Must be enough for hostname:port */
 
 struct aeEventLoop;
 typedef struct connection connection;
@@ -58,17 +64,35 @@ typedef enum {
 #define CONN_FLAG_WRITE_BARRIER (1 << 1)        /* Write barrier requested */
 #define CONN_FLAG_ALLOW_ACCEPT_OFFLOAD (1 << 2) /* Connection accept can be offloaded to IO threads. */
 
-#define CONN_TYPE_SOCKET "tcp"
-#define CONN_TYPE_UNIX "unix"
-#define CONN_TYPE_TLS "tls"
-#define CONN_TYPE_RDMA "rdma"
-#define CONN_TYPE_MAX 8 /* 8 is enough to be extendable */
+typedef enum {
+    CONN_TYPE_INVALID = -1,
+    CONN_TYPE_SOCKET,
+    CONN_TYPE_UNIX,
+    CONN_TYPE_TLS,
+    CONN_TYPE_RDMA,
+    CONN_TYPE_MAX,
+} ConnectionTypeId;
+
+static inline const char *getConnectionTypeName(int type) {
+    switch (type) {
+    case CONN_TYPE_SOCKET:
+        return "tcp";
+    case CONN_TYPE_UNIX:
+        return "unix";
+    case CONN_TYPE_TLS:
+        return "tls";
+    case CONN_TYPE_RDMA:
+        return "rdma";
+    default:
+        return "invalid type";
+    }
+}
 
 typedef void (*ConnectionCallbackFunc)(struct connection *conn);
 
 typedef struct ConnectionType {
     /* connection type */
-    const char *(*get_type)(struct connection *conn);
+    int (*get_type)(void);
 
     /* connection type initialize & finalize & configure */
     void (*init)(void); /* auto-call during register */
@@ -94,6 +118,7 @@ typedef struct ConnectionType {
                    const char *addr,
                    int port,
                    const char *source_addr,
+                   int multipath,
                    ConnectionCallbackFunc connect_handler);
     int (*blocking_connect)(struct connection *conn, const char *addr, int port, long long timeout);
     int (*accept)(struct connection *conn, ConnectionCallbackFunc accept_handler);
@@ -121,6 +146,9 @@ typedef struct ConnectionType {
 
     /* TLS specified methods */
     sds (*get_peer_cert)(struct connection *conn);
+
+    /* Get peer username based on connection type */
+    sds (*get_peer_username)(connection *conn);
 
     /* Miscellaneous */
     int (*connIntegrityChecked)(void); // return 1 if connection type has built-in integrity checks
@@ -188,8 +216,9 @@ static inline int connConnect(connection *conn,
                               const char *addr,
                               int port,
                               const char *src_addr,
+                              int multipath,
                               ConnectionCallbackFunc connect_handler) {
-    return conn->type->connect(conn, addr, port, src_addr, connect_handler);
+    return conn->type->connect(conn, addr, port, src_addr, multipath, connect_handler);
 }
 
 /* Blocking connect.
@@ -288,9 +317,11 @@ static inline ssize_t connSyncReadLine(connection *conn, char *ptr, ssize_t size
     return conn->type->sync_readline(conn, ptr, size, timeout);
 }
 
-/* Return CONN_TYPE_* for the specified connection */
-static inline const char *connGetType(connection *conn) {
-    return conn->type->get_type(conn);
+static inline int connGetType(connection *conn) {
+    if (!conn || conn->type->get_type == NULL) {
+        return CONN_TYPE_INVALID;
+    }
+    return conn->type->get_type();
 }
 
 static inline int connLastErrorRetryable(connection *conn) {
@@ -393,6 +424,14 @@ static inline sds connGetPeerCert(connection *conn) {
     return NULL;
 }
 
+/* Get Peer username based on connection type */
+static inline sds connGetPeerUsername(connection *conn) {
+    if (conn->type && conn->type->get_peer_username) {
+        return conn->type->get_peer_username(conn);
+    }
+    return NULL;
+}
+
 /* Initialize the connection framework */
 int connTypeInitialize(void);
 
@@ -400,7 +439,7 @@ int connTypeInitialize(void);
 int connTypeRegister(ConnectionType *ct);
 
 /* Lookup a connection type by type name */
-ConnectionType *connectionByType(const char *typename);
+ConnectionType *connectionByType(int type);
 
 /* Fast path to get TCP connection type */
 ConnectionType *connectionTypeTcp(void);
@@ -410,9 +449,6 @@ ConnectionType *connectionTypeTls(void);
 
 /* Fast path to get Unix connection type */
 ConnectionType *connectionTypeUnix(void);
-
-/* Lookup the index of a connection type by type name, return -1 if not found */
-int connectionIndexByType(const char *typename);
 
 /* Create a connection of specified type */
 static inline connection *connCreate(ConnectionType *ct) {

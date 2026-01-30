@@ -1,8 +1,4 @@
-# make sure the test infra won't use SELECT
-set old_singledb $::singledb
-set ::singledb 1
-
-tags {tls:skip external:skip cluster} {
+tags {tls:skip external:skip cluster singledb} {
     set CLUSTER_PACKET_TYPE_PING 0
     set CLUSTER_PACKET_TYPE_PONG 1
     set CLUSTER_PACKET_TYPE_MEET 2
@@ -75,8 +71,6 @@ tags {tls:skip external:skip cluster} {
         }
     } ;# stop servers
 } ;# tags
-
-set ::singledb $old_singledb
 
 proc cluster_get_first_node_in_handshake id {
     set nodes [get_cluster_nodes $id]
@@ -158,7 +152,7 @@ start_cluster 2 0 {tags {external:skip cluster} overrides {cluster-node-timeout 
             # We want Node 0 to learn about Node 2 through the gossip section of the MEET message
             set meet_retry 0
             while {[cluster_get_node_by_id 0 $node2_id] eq {}} {
-                if {$meet_retry == 10} {
+                if {$meet_retry == 50} {
                     error "assertion: Retried to meet Node 0 too many times"
                 }
                 # If Node 0 doesn't know about Node 1 & 2, it means Node 1 did not gossip about node 2 in its MEET message.

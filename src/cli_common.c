@@ -32,20 +32,22 @@
 #include "cli_common.h"
 #include "version.h"
 
+#include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <fcntl.h>
 #include <errno.h>
-#include <hiredis.h>
-#include <sdscompat.h> /* Use hiredis' sds compat header that maps sds calls to their hi_ variants */
-#include <sds.h>       /* use sds.h from hiredis, so that only one set of sds functions will be present in the binary */
+#include "sds.h"
 #include <unistd.h>
 #include <string.h>
 #include <ctype.h>
 #ifdef USE_OPENSSL
 #include <openssl/ssl.h>
 #include <openssl/err.h>
-#include <hiredis_ssl.h>
+#include <valkey/tls.h>
+#endif
+#ifdef USE_RDMA
+#include <valkey/rdma.h>
 #endif
 
 #define UNUSED(V) ((void)V)
@@ -53,10 +55,10 @@
 char *serverGitSHA1(void);
 char *serverGitDirty(void);
 
-/* Wrapper around redisSecureConnection to avoid hiredis_ssl dependencies if
+/* Wrapper around valkeyInitiateTLS to avoid libvalkey_tls dependencies if
  * not building with TLS support.
  */
-int cliSecureConnection(redisContext *c, cliSSLconfig config, const char **err) {
+int cliSecureConnection(valkeyContext *c, cliSSLconfig config, const char **err) {
 #ifdef USE_OPENSSL
     static SSL_CTX *ssl_ctx = NULL;
 
@@ -105,32 +107,32 @@ int cliSecureConnection(redisContext *c, cliSSLconfig config, const char **err) 
     SSL *ssl = SSL_new(ssl_ctx);
     if (!ssl) {
         *err = "Failed to create SSL object";
-        return REDIS_ERR;
+        return VALKEY_ERR;
     }
 
     if (config.sni && !SSL_set_tlsext_host_name(ssl, config.sni)) {
         *err = "Failed to configure SNI";
         SSL_free(ssl);
-        return REDIS_ERR;
+        return VALKEY_ERR;
     }
 
-    return redisInitiateSSL(c, ssl);
+    return valkeyInitiateTLS(c, ssl);
 
 error:
     SSL_CTX_free(ssl_ctx);
     ssl_ctx = NULL;
-    return REDIS_ERR;
+    return VALKEY_ERR;
 #else
     (void)config;
     (void)c;
     (void)err;
-    return REDIS_OK;
+    return VALKEY_OK;
 #endif
 }
 
-/* Wrapper around hiredis to allow arbitrary reads and writes.
+/* Wrapper around libvalkey to allow arbitrary reads and writes.
  *
- * We piggybacks on top of hiredis to achieve transparent TLS support,
+ * We piggybacks on top of libvalkey to achieve transparent TLS support,
  * and use its internal buffers so it can co-exist with commands
  * previously/later issued on the connection.
  *
@@ -138,19 +140,19 @@ error:
  * work transparently.
  */
 
-/* Write a raw buffer through a redisContext. If we already have something
- * in the buffer (leftovers from hiredis operations) it will be written
+/* Write a raw buffer through a valkeyContext. If we already have something
+ * in the buffer (leftovers from libvalkey operations) it will be written
  * as well.
  */
-ssize_t cliWriteConn(redisContext *c, const char *buf, size_t buf_len) {
+ssize_t cliWriteConn(valkeyContext *c, const char *buf, size_t buf_len) {
     int done = 0;
 
     /* Append data to buffer which is *usually* expected to be empty
      * but we don't assume that, and write.
      */
     c->obuf = sdscatlen(c->obuf, buf, buf_len);
-    if (redisBufferWrite(c, &done) == REDIS_ERR) {
-        if (!(c->flags & REDIS_BLOCK)) errno = EAGAIN;
+    if (valkeyBufferWrite(c, &done) == VALKEY_ERR) {
+        if (!(c->flags & VALKEY_BLOCK)) errno = EAGAIN;
 
         /* On error, we assume nothing was written and we roll back the
          * buffer to its original state.
@@ -200,7 +202,7 @@ int cliSecureInit(void) {
     SSL_load_error_strings();
     SSL_library_init();
 #endif
-    return REDIS_OK;
+    return VALKEY_OK;
 }
 
 /* Create an sds from stdin */
@@ -303,12 +305,12 @@ static sds percentDecode(const char *pe, size_t len) {
 /* Parse a URI and extract the server connection information.
  * URI scheme is based on the provisional specification[1] excluding support
  * for query parameters. Valid URIs are:
- *   scheme:    "valkey://"
+ *   scheme:    "valkey://" or "valkeys://" or "redis://" or "rediss://"
  *   authority: [[<username> ":"] <password> "@"] [<hostname> [":" <port>]]
  *   path:      ["/" [<db>]]
  *
  *  [1]: https://www.iana.org/assignments/uri-schemes/prov/redis */
-void parseRedisUri(const char *uri, const char *tool_name, cliConnInfo *connInfo, int *tls_flag) {
+void parseUri(const char *uri, const char *tool_name, cliConnInfo *connInfo, int *tls_flag) {
 #ifdef USE_OPENSSL
     UNUSED(tool_name);
 #else
@@ -329,7 +331,7 @@ void parseRedisUri(const char *uri, const char *tool_name, cliConnInfo *connInfo
         !strncasecmp(redisTlsscheme, curr, strlen(redisTlsscheme))) {
 #ifdef USE_OPENSSL
         *tls_flag = 1;
-        char *del = strstr(curr, "://");
+        const char *del = strstr(curr, "://");
         curr += (del - curr) + 3;
 #else
         char *copy = strdup(curr);
@@ -339,7 +341,7 @@ void parseRedisUri(const char *uri, const char *tool_name, cliConnInfo *connInfo
         exit(1);
 #endif
     } else if (!strncasecmp(scheme, curr, strlen(scheme)) || !strncasecmp(redisScheme, curr, strlen(redisScheme))) {
-        char *del = strstr(curr, "://");
+        const char *del = strstr(curr, "://");
         curr += (del - curr) + 3;
     } else {
         fprintf(stderr, "Invalid URI scheme\n");
@@ -393,28 +395,6 @@ void freeCliConnInfo(cliConnInfo connInfo) {
     if (connInfo.user) sdsfree(connInfo.user);
 }
 
-/*
- * Escape a Unicode string for JSON output (--json), following RFC 7159:
- * https://datatracker.ietf.org/doc/html/rfc7159#section-7
- */
-sds escapeJsonString(sds s, const char *p, size_t len) {
-    s = sdscatlen(s, "\"", 1);
-    while (len--) {
-        switch (*p) {
-        case '\\':
-        case '"': s = sdscatprintf(s, "\\%c", *p); break;
-        case '\n': s = sdscatlen(s, "\\n", 2); break;
-        case '\f': s = sdscatlen(s, "\\f", 2); break;
-        case '\r': s = sdscatlen(s, "\\r", 2); break;
-        case '\t': s = sdscatlen(s, "\\t", 2); break;
-        case '\b': s = sdscatlen(s, "\\b", 2); break;
-        default: s = sdscatprintf(s, *(unsigned char *)p <= 0x1f ? "\\u%04x" : "%c", *p);
-        }
-        p++;
-    }
-    return sdscatlen(s, "\"", 1);
-}
-
 sds cliVersion(void) {
     sds version = sdscatprintf(sdsempty(), "%s", VALKEY_VERSION);
 
@@ -427,34 +407,43 @@ sds cliVersion(void) {
     return version;
 }
 
-/* This is a wrapper to call redisConnect or redisConnectWithTimeout. */
-redisContext *redisConnectWrapper(const char *ip, int port, const struct timeval tv, int nonblock) {
-    redisOptions options = {0};
-    REDIS_OPTIONS_SET_TCP(&options, ip, port);
+/* This is a wrapper to call valkeyConnect or valkeyConnectWithTimeout. */
+valkeyContext *valkeyConnectWrapper(enum valkeyConnectionType ct, const char *ip_or_path, int port, const struct timeval tv, int nonblock, int multipath) {
+    valkeyOptions options = {0};
+
+    switch (ct) {
+    case VALKEY_CONN_TCP:
+        VALKEY_OPTIONS_SET_TCP(&options, ip_or_path, port);
+        break;
+
+    case VALKEY_CONN_UNIX:
+        VALKEY_OPTIONS_SET_UNIX(&options, ip_or_path);
+        break;
+
+    case VALKEY_CONN_RDMA:
+#ifdef USE_RDMA
+        VALKEY_OPTIONS_SET_RDMA(&options, ip_or_path, port);
+        break;
+#else
+        assert(0); /* requesting RDMA connection without RDMA support??? */
+#endif
+
+    default:
+        assert(0); /* this should not happen */
+    }
 
     if (tv.tv_sec || tv.tv_usec) {
         options.connect_timeout = &tv;
     }
 
     if (nonblock) {
-        options.options |= REDIS_OPT_NONBLOCK;
+        options.options |= VALKEY_OPT_NONBLOCK;
     }
 
-    return redisConnectWithOptions(&options);
-}
-
-/* This is a wrapper to call redisConnectUnix or redisConnectUnixWithTimeout. */
-redisContext *redisConnectUnixWrapper(const char *path, const struct timeval tv, int nonblock) {
-    redisOptions options = {0};
-    REDIS_OPTIONS_SET_UNIX(&options, path);
-
-    if (tv.tv_sec || tv.tv_usec) {
-        options.connect_timeout = &tv;
+    if (multipath) {
+        assert(ct == VALKEY_CONN_TCP); /* caller should make sure multipath is available for TCP only */
+        options.options |= VALKEY_OPT_MPTCP;
     }
 
-    if (nonblock) {
-        options.options |= REDIS_OPT_NONBLOCK;
-    }
-
-    return redisConnectWithOptions(&options);
+    return valkeyConnectWithOptions(&options);
 }

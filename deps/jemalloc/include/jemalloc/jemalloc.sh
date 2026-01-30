@@ -5,6 +5,11 @@ objroot=$1
 cat <<EOF
 #ifndef JEMALLOC_H_
 #define JEMALLOC_H_
+
+/* A macro that is used to indicate that this the jemalloc vendored with the project
+ * and has been tested with active defragmentation. */
+#define VALKEY_VENDORED_JEMALLOC 1
+
 #ifdef __cplusplus
 extern "C" {
 #endif

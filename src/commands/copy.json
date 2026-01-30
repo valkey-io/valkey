@@ -11,8 +11,11 @@
             "DENYOOM"
         ],
         "acl_categories": [
-            "KEYSPACE"
+            "KEYSPACE",
+            "SLOW",
+            "WRITE"
         ],
+        "get_dbid_args": "copyDbIdArgs",
         "key_specs": [
             {
                 "flags": [
@@ -82,7 +85,7 @@
                     "const": 1
                 },
                 {
-                    "description": "Source was not copied.",
+                    "description": "Source was not copied when the destination key already exists",
                     "const": 0
                 }
             ]

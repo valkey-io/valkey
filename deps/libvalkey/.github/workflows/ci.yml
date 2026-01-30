@@ -1,0 +1,302 @@
+name: CI
+
+on: [push, pull_request]
+
+permissions:
+  contents: read
+
+jobs:
+  checkers:
+    name: Run static checkers
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+    - name: Run clang-format style check (.c and .h)
+      uses: jidicula/clang-format-action@4726374d1aa3c6aecf132e5197e498979588ebc8 # v4.15.0
+      with:
+        clang-format-version: '18'
+
+  ubuntu-cmake:
+    name: Build with CMake ${{ matrix.sanitizer && format('and {0}-sanitizer', matrix.sanitizer ) }} [${{ matrix.compiler }}, cmake-${{ matrix.cmake-version }}, ${{ matrix.cmake-build-type }}]
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # New compilers
+          - compiler: 'clang-20'
+            cmake-version: '4.0'
+            cmake-build-type: Release
+          - compiler: 'gcc-14'
+            cmake-version: '4.0'
+            cmake-build-type: Release
+          # Old compilers
+          - compiler: 'clang-14'
+            cmake-version: '3.13'
+            cmake-build-type: Release
+          - compiler: 'gcc-9'
+            cmake-version: '3.13'
+            cmake-build-type: Release
+        # Sanitizers enabled
+        compiler: ['gcc-14', 'clang-20']
+        cmake-version: ['4.0']
+        cmake-build-type: [RelWithDebInfo]
+        sanitizer: [thread, undefined, leak, address]
+    steps:
+    - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+    - name: Prepare
+      uses: awalsh128/cache-apt-pkgs-action@2c09a5e66da6c8016428a2172bd76e5e4f14bb17 # v1.5.3
+      with:
+        packages: libevent-dev libuv1-dev libev-dev libglib2.0-dev valkey-server
+        version: 1.0
+    - name: Setup compiler
+      uses: aminya/setup-cpp@a276e6e3d1db9160db5edc458e99a30d3b109949 # v1.7.1
+      with:
+        compiler: ${{ matrix.compiler }}
+    - name: Setup CMake
+      uses: jwlawson/actions-setup-cmake@802fa1a2c4e212495c05bf94dba2704a92a472be # v2.0.2
+      with:
+        cmake-version: ${{ matrix.cmake-version }}
+    - name: Generate makefiles
+      run: |
+        if [ -n "${{ matrix.sanitizer }}" ]; then
+          export CFLAGS="-fno-omit-frame-pointer -fsanitize=${{ matrix.sanitizer }}"
+        fi
+        cmake -B build -S . -DCMAKE_BUILD_TYPE=${{ matrix.cmake-build-type }} -DENABLE_TLS=ON -DENABLE_IPV6_TESTS=ON
+    - name: Build
+      working-directory: build
+      run: VERBOSE=1 make
+    - name: Setup clusters
+      working-directory: build
+      run: make start
+    - name: Wait for clusters to start..
+      uses: kibertoad/wait-action@99f6f101c5be7b88bb9b41c0d3b810722491b8e5 # 1.0.1
+      with:
+        time: '20s'
+    - name: Run tests
+      working-directory: build
+      run: make test
+    - name: Teardown clusters
+      working-directory: build
+      run: make stop
+
+  ubuntu-make:
+    name: Build with make
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+      - name: Prepare
+        uses: awalsh128/cache-apt-pkgs-action@2c09a5e66da6c8016428a2172bd76e5e4f14bb17 # v1.5.3
+        with:
+          packages: libevent-dev valgrind valkey-server
+          version: 1.0
+      - name: Build
+        run: USE_TLS=1 TEST_ASYNC=1 make
+      - name: Run tests
+        working-directory: tests
+        env:
+          SKIPS_AS_FAILS: 1
+          TEST_TLS: 1
+        run: ./test.sh
+      - name: Run tests under valgrind
+        working-directory: tests
+        env:
+          SKIPS_AS_FAILS: 1
+          TEST_TLS: 1
+          TEST_PREFIX: valgrind --error-exitcode=99 --track-origins=yes --leak-check=full
+        run: ./test.sh
+
+  ubuntu-32bit:
+    name: Build for 32-bit
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+      - name: Prepare
+        uses: awalsh128/cache-apt-pkgs-action@2c09a5e66da6c8016428a2172bd76e5e4f14bb17 # v1.5.3
+        with:
+          packages: gcc-multilib valkey-server
+          version: 1.0
+      - name: Build
+        run: |
+          make 32bit
+      - name: Run tests
+        working-directory: tests
+        run: |
+          ./test.sh
+
+  install:
+    name: Installation tests
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+    - name: Prepare
+      uses: awalsh128/cache-apt-pkgs-action@2c09a5e66da6c8016428a2172bd76e5e4f14bb17 # v1.5.3
+      with:
+        packages: libevent-dev libuv1-dev libev-dev libglib2.0-dev
+        version: 1.0
+    - name: Install static and dynamic libraries using Makefile
+      run: |
+        make USE_TLS=1 DESTDIR=${{ github.workspace }}/make-install install
+    - name: Install dynamic libraries using CMake
+      run: |
+        mkdir build-dyn && cd build-dyn
+        cmake -DDISABLE_TESTS=ON -DENABLE_TLS=ON ..
+        make DESTDIR=${{ github.workspace }}/dynamic-cmake-install install
+    - name: Install static libraries using CMake
+      run: |
+        mkdir build-static && cd build-static
+        cmake -DDISABLE_TESTS=ON -DENABLE_TLS=ON -DBUILD_SHARED_LIBS=OFF ..
+        make DESTDIR=${{ github.workspace }}/static-cmake-install install
+    - name: Build examples with Makefile using a Makefile-installed libvalkey
+      run: |
+        make STLIBNAME="${{ github.workspace }}/make-install/usr/local/lib/libvalkey.a" \
+             TLS_STLIBNAME="${{ github.workspace }}/make-install/usr/local/lib/libvalkey_tls.a" \
+             INCLUDE_DIR="${{ github.workspace }}/make-install/usr/local/include" \
+             USE_TLS=1 -C examples
+    - name: Build examples with Makefile using a CMake-installed libvalkey
+      run: |
+        make STLIBNAME="${{ github.workspace }}/static-cmake-install/usr/local/lib/libvalkey.a" \
+             TLS_STLIBNAME="${{ github.workspace }}/static-cmake-install/usr/local/lib/libvalkey_tls.a" \
+             INCLUDE_DIR="${{ github.workspace }}/static-cmake-install/usr/local/include" \
+             USE_TLS=1 -C examples
+    - name: Build examples with CMake using CMake-installed dynamic libraries
+      run: |
+        cd examples && mkdir build-dyn && cd build-dyn
+        cmake -DCMAKE_PREFIX_PATH=${{ github.workspace }}/dynamic-cmake-install/usr/local -DENABLE_TLS=ON ..
+        make
+    - name: Build examples with CMake using CMake-installed static libraries
+      run: |
+        cd examples && mkdir build-static && cd build-static
+        cmake -DCMAKE_PREFIX_PATH=${{ github.workspace }}/static-cmake-install/usr/local -DENABLE_TLS=ON ..
+        make
+
+  rdma:
+    name: RDMA support enabled
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+      - name: Prepare
+        uses: awalsh128/cache-apt-pkgs-action@2c09a5e66da6c8016428a2172bd76e5e4f14bb17 # v1.5.3
+        with:
+          packages: librdmacm-dev libibverbs-dev
+          version: 1.0
+      - name: Build shared libraries using CMake
+        run: |
+          mkdir build-shared && cd build-shared
+          cmake -DENABLE_RDMA=ON ..
+          sudo make install
+      - name: Build static libraries using CMake
+        run: |
+          mkdir build-static && cd build-static
+          cmake -DBUILD_SHARED_LIBS=OFF -DENABLE_RDMA=ON ..
+          sudo make install
+      - name: Build using Makefile
+        run: |
+          sudo USE_RDMA=1 make install
+
+  cmake-minimum-required:
+    name: CMake 3.7.0 (min. required)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+      - name: Setup CMake
+        uses: jwlawson/actions-setup-cmake@802fa1a2c4e212495c05bf94dba2704a92a472be # v2.0.2
+        with:
+          cmake-version: '3.7.0'
+      - name: Generate makefiles
+        run: |
+          mkdir build && cd build
+          cmake -DENABLE_TLS=ON -DENABLE_IPV6_TESTS=ON -DENABLE_EXAMPLES=ON ..
+          sudo make install
+
+  macos:
+    name: macOS
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+      - name: Install dependencies
+        run: |
+          brew update
+          brew install valkey
+      - name: Build and install using CMake
+        run: |
+          mkdir build && cd build
+          cmake .. -G Ninja -DCMAKE_BUILD_TYPE=Release -DENABLE_TLS=ON
+          sudo ninja -v install
+      - name: Build using Makefile
+        run: USE_TLS=1 make
+      - name: Run tests
+        working-directory: tests
+        env:
+          TEST_TLS: 1
+        run: ./test.sh
+
+  windows:
+    name: Windows
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+      - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
+      - name: Remove installed OpenSSL 1.1.1 (has reached End of Life)
+        shell: bash
+        run: rm -rf 'C:/Program Files/OpenSSL/'
+      - name: Install dependencies (choco)
+        run: |
+          choco install -y memurai-developer
+      - name: Install dependencies (vcpkg)
+        uses: johnwason/vcpkg-action@caa1c94fbb94d8b023a0cc93edf10cd3791349a7 # v7.0.1
+        with:
+          pkgs: pkgconf libevent openssl
+          triplet: x64-windows
+          token: ${{ github.token }}
+      - name: Build and install
+        run: |
+          mkdir build && cd build
+          cmake .. -G Ninja -DENABLE_TLS=ON -DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE=${{ github.workspace }}\vcpkg\scripts\buildsystems\vcpkg.cmake
+          ninja -v install
+      - name: Run tests
+        working-directory: build
+        run: .\tests\client_test.exe
+
+  windows-cygwin:
+    name: Windows (Cygwin)
+    runs-on: windows-latest
+    steps:
+      - name: Prepare
+        run: |
+          git config --global core.autocrlf input
+          choco install -y memurai-developer
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+      - name: Install Cygwin
+        uses: cygwin/cygwin-install-action@f2009323764960f80959895c7bc3bb30210afe4d # v6
+        with:
+          packages: make gcc-core cmake libssl-devel
+      - name: Build with CMake using Cygwin
+        run: |
+          mkdir build && cd build
+          cmake -DENABLE_TLS=ON -DENABLE_EXAMPLES=ON ..
+          make install
+      - name: Run tests
+        working-directory: build
+        run: .\tests\client_test.exe
+
+  windows-mingw64:
+    name: Windows (MinGW64)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+      - name: Set up MinGW
+        uses: msys2/setup-msys2@40677d36a502eb2cf0fb808cc9dec31bf6152638 # v2.28.0
+        with:
+          msystem: mingw64
+          install: |
+            mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-cmake
+            mingw-w64-x86_64-ninja
+            mingw-w64-x86_64-libevent
+      - name: Build and install
+        shell: msys2 {0}
+        run: |
+          mkdir build && cd build
+          cmake .. -G Ninja
+          ninja -v install

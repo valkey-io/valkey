@@ -55,6 +55,7 @@ list *listCreate(void) {
 
 /* Remove all the elements from the list without destroying the list itself. */
 void listEmpty(list *list) {
+    if (!list) return;
     unsigned long len;
     listNode *current, *next;
 
@@ -74,7 +75,6 @@ void listEmpty(list *list) {
  *
  * This function can't fail. */
 void listRelease(list *list) {
-    if (!list) return;
     listEmpty(list);
     zfree(list);
 }

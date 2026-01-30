@@ -63,7 +63,7 @@ static long long line = 1;
 static time_t to_timestamp = 0;
 
 int consumeNewline(char *buf) {
-    if (strncmp(buf, "\r\n", 2) != 0) {
+    if (buf[0] != '\r' || buf[1] != '\n') {
         ERROR("Expected \\r\\n, got: %02x%02x", buf[0], buf[1]);
         return 0;
     }
@@ -553,6 +553,12 @@ int redis_check_aof_main(int argc, char **argv) {
             goto invalid_args;
         }
     } else {
+        goto invalid_args;
+    }
+
+    /* Check if filepath is longer than PATH_MAX */
+    if (strnlen(filepath, PATH_MAX + 1) > PATH_MAX) {
+        printf("Error: filepath is too long (exceeds PATH_MAX)\n");
         goto invalid_args;
     }
 

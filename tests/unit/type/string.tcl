@@ -59,6 +59,31 @@ start_server {tags {"string"}} {
         } {10000}
     }
 
+    test {memoryusage of string} {
+        # Simple test
+        set key "key"
+        set value "value"
+        r set $key $value
+        assert_lessthan_equal [expr [string length $key] + [string length $value]] [r memory usage key]
+
+        # Big value
+        set key "key"
+        set value [string repeat A 100000]
+        r set $key $value
+        assert_lessthan_equal [expr [string length $key] + [string length $value]] [r memory usage key]
+
+        # Big key
+        set key [string repeat A 100000]
+        set value "value"
+        r set $key $value
+        assert_lessthan_equal [expr [string length $key] + [string length $value]] [r memory usage key]
+
+        # Big key for int
+        set key [string repeat B 100000]
+        r incr $key
+        assert_lessthan_equal [string length $key] [r memory usage $key]
+    }
+
     test "SETNX target key missing" {
         r del novar
         assert_equal 1 [r setnx novar foobared]
@@ -756,24 +781,66 @@ if {[string match {*jemalloc*} [s mem_allocator]]} {
         lappend res [r get bar]
     } {12 12}
 
+    test {DELIFEQ non-existing key} {
+        r del foo
+        assert_equal 0 [r delifeq foo "test"]
+    }
+
+    test {DELIFEQ existing key, matching value} {
+        r set foo "test"
+        assert_equal 1 [r delifeq foo "test"]
+    }
+
+    test {DELIFEQ existing key, non-matching value} {
+        r set foo "nope"
+        assert_equal 0 [r delifeq foo "test"]
+    }
+
+    test {DELIFEQ existing key, non-string value} {
+        r del foo
+        r sadd foo "test"
+        assert_error "WRONGTYPE*" {r delifeq foo "test"}
+    }
+
+    test {DELIFEQ propagate as DEL command to replica} {
+        set repl [attach_to_replication_stream]
+        r set foo bar
+        r delifeq foo bar
+        assert_replication_stream $repl {
+            {select *}
+            {set foo bar}
+            {del foo}
+        }
+        close_replication_stream $repl
+    } {} {needs:repl}
+
 if {[string match {*jemalloc*} [s mem_allocator]]} {
     test {Memory usage of embedded string value} {
-        # Check that we can fit 9 bytes of key + value into a 32 byte
+        # Check that we can fit 9 bytes of key + value into a 24 byte
         # allocation, including the serverObject itself.
         r set quux xyzzy
-        assert_lessthan_equal [r memory usage quux] 32
+        assert_lessthan_equal [r memory usage quux] 24
 
         # Check that the SDS overhead of the embedded key and value is 6 bytes
         # (sds5 + sds8). This is the memory layout:
         #
-        # +--------------+--------------+---------------+----------------+
-        # | serverObject |              | sds5 key      | sds8 value     |
-        # | header       | key-hdr-size | hdr "quux" \0 | hdr "xyzzy" \0 |
-        # | 16 bytes     | 1            | 1  + 4    + 1 | 3  + 5     + 1 |
-        # +--------------+--------------+---------------+----------------+
+        # +-------------------+----------+---------------+----------------+
+        # | robj header       | key sds  | sds5 key      | sds8 value     |
+        # | excluding val_ptr | hdr size | hdr "quux" \0 | hdr "xyzzy" \0 |
+        # | 8 bytes           | 1        | 1  + 4    + 1 | 3  + 5     + 1 |
+        # +-------------------+----------+---------------+----------------+
         #
+        # The test must work when the server is compiled for 32 bit and TCL is
+        # compiled and run on a 64 bit system or vice versa. The size of a
+        # pointer in the server is what matters.
+        set info_server [r info server]
+        regexp {arch_bits:(\d+)} $info_server _ arch_bits
+        set pointer_size [expr {$arch_bits / 8}]
+
         set content_size [expr {[string length quux] + [string length xyzzy]}]
         regexp {robj:(\d+)} [r debug structsize] _ obj_header_size
+        # remove the size of the void *ptr (which is reused when value is embedded)
+        set obj_header_size [expr {$obj_header_size - $pointer_size}]
         set debug_sdslen [r debug sdslen quux]
         regexp {key_sds_len:4 key_sds_avail:0 obj_alloc:(\d+)} $debug_sdslen _ obj_alloc
         regexp {val_sds_len:5 val_sds_avail:(\d+) val_alloc:(\d+)} $debug_sdslen _ avail val_alloc

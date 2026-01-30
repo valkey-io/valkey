@@ -179,7 +179,7 @@ start_server {tags {"acl external:skip"}} {
         set curruser "hpuser"
         foreach user [lshuffle $users] {
             if {[string first $curruser $user] != -1} {
-                assert_equal {user hpuser on nopass sanitize-payload resetchannels &foo +@all} $user
+                assert_equal {user hpuser on nopass sanitize-payload resetchannels &foo alldbs +@all} $user
             }
         }
 
@@ -737,6 +737,27 @@ start_server {tags {"acl external:skip"}} {
         assert {[dict get $entry object] eq {somechannelnotallowed}}
     }
 
+    test {ACL LOG is able to log database access violations} {
+        r ACL LOG RESET
+        r ACL SETUSER dbuser on nopass db=0 +@all ~*
+        r AUTH dbuser password
+        
+        catch {r SELECT 1}
+        catch {r SWAPDB 0 2}
+        catch {r FLUSHALL}
+        
+        set log [r ACL LOG]
+        set entry [lindex $log 0]
+        assert {[dict get $entry reason] eq {database}}
+        assert {[dict get $entry object] eq {flushall}}
+        set entry [lindex $log 1]
+        assert {[dict get $entry reason] eq {database}}
+        assert {[dict get $entry object] eq {2}}
+        set entry [lindex $log 2]
+        assert {[dict get $entry reason] eq {database}}
+        assert {[dict get $entry object] eq {1}}
+    }
+
     test {ACL LOG RESET is able to flush the entries in the log} {
         r ACL LOG RESET
         assert {[llength [r ACL LOG]] == 0}
@@ -1227,10 +1248,10 @@ start_server [list overrides [list "dir" $server_path "aclfile" "user.acl"] tags
     }
     
     test {Test loading duplicate users in config on startup} {
-        catch {exec src/valkey-server --user foo --user foo} err
+        catch {exec $::VALKEY_SERVER_BIN --user foo --user foo} err
         assert_match {*Duplicate user*} $err
 
-        catch {exec src/valkey-server --user default --user default} err
+        catch {exec $::VALKEY_SERVER_BIN --user default --user default} err
         assert_match {*Duplicate user*} $err
     } {} {external:skip}
 }
@@ -1303,6 +1324,44 @@ tags {acl external:skip} {
             # Arbitrary subcommands are compacted
             r ACL SETUSER adv-test -@all +client|list +client|list +config|get +config +acl|list -acl
             assert_equal "-@all +client|list +config -acl" [dict get [r ACL getuser adv-test] commands]
+        }
+    }
+}
+
+set server_path [tmpdir "server.acl"]
+exec cp -f tests/assets/user.acl $server_path
+start_server [list overrides [list "dir" $server_path "aclfile" "user.acl"] tags {"repl external:skip"}] {
+    set primary [srv 0 client]
+    set primary_host [srv 0 host]
+    set primary_port [srv 0 port]
+
+    test "Test ACL LOAD works on primary" {
+        exec cp -f tests/assets/user.acl $server_path
+        $primary ACL setuser harry on nopass resetchannels &test +@all ~*
+        $primary ACL save
+        $primary ACL load
+        $primary AUTH harry anything
+    }
+
+    start_server [list overrides [list "dir" $server_path "aclfile" "user.acl"]] {
+        set replica [srv 0 client]
+        $replica replicaof $primary_host $primary_port
+
+        test "Test ACL LOAD works on replica" {
+            # wait for replication to be in sync
+            wait_for_condition 50 100 {
+                [lindex [$replica role] 0] eq {slave} &&
+                [string match {*master_link_status:up*} [$replica info replication]]
+            } else {
+                fail "Can't turn the instance into a replica"
+            }
+
+            # Check ACL LOAD works as expected
+            exec cp -f tests/assets/user.acl $server_path
+            $replica ACL setuser joe on nopass resetchannels &test +@all ~*
+            $replica ACL save
+            $replica ACL load
+            $replica AUTH joe anything
         }
     }
 }

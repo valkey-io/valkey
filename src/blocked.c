@@ -104,8 +104,8 @@ void freeClientBlockingState(client *c) {
  * flag is set client query buffer is not longer processed, but accumulated,
  * and will be processed when the client is unblocked. */
 void blockClient(client *c, int btype) {
-    /* Primary client should never be blocked unless pause or module */
-    serverAssert(!(c->flag.primary && btype != BLOCKED_MODULE && btype != BLOCKED_POSTPONE));
+    /* Replicated clients should never be blocked unless pause or module */
+    serverAssert(!(isReplicatedClient(c) && btype != BLOCKED_MODULE && btype != BLOCKED_POSTPONE));
 
     initClientBlockingState(c);
 
@@ -148,7 +148,8 @@ void updateStatsOnUnblock(client *c, long blocked_us, long reply_us, int failed_
     commandlogPushCurrentCommand(c, c->lastcmd);
     c->duration = 0;
     /* Log the reply duration event. */
-    latencyAddSampleIfNeeded("command-unblocking", reply_us / 1000);
+    latencyAddSampleIfNeeded("command-unblocking", reply_us);
+    latencyTraceIfNeeded(server, command_unblocking, reply_us);
 }
 
 /* This function is called in the beforeSleep() function of the event loop
@@ -254,6 +255,22 @@ void unblockClient(client *c, int queue_for_reprocessing) {
     if (queue_for_reprocessing) queueClientForReprocessing(c);
 }
 
+/* Check if the specified client can be safely timed out using
+ * unblockClientOnTimeout(). */
+int blockedClientMayTimeout(client *c) {
+    if (c->bstate->btype == BLOCKED_MODULE) {
+        return moduleBlockedClientMayTimeout(c);
+    }
+
+    if (c->bstate->btype == BLOCKED_LIST ||
+        c->bstate->btype == BLOCKED_ZSET ||
+        c->bstate->btype == BLOCKED_STREAM ||
+        c->bstate->btype == BLOCKED_WAIT) {
+        return 1;
+    }
+    return 0;
+}
+
 /* This function gets called when a blocked client timed out in order to
  * send it a reply of some kind. After this function is called,
  * unblockClient() will be called with the same client as argument. */
@@ -301,9 +318,12 @@ void replyToClientsBlockedOnShutdown(void) {
  * in an instance which turns from primary to replica is unsafe, so this function
  * is called when a primary turns into a replica.
  *
- * The semantics is to send an -UNBLOCKED error to the client, disconnecting
- * it at the same time. */
-void disconnectAllBlockedClients(void) {
+ * The semantics are as follows:
+ * - If the client is read-only, and blocked by a read command we can handle, we do not unblock it.
+ * - Send a -MOVED to the client in cluster-enabled mode.
+ * - Send a -REDIRECT when the client has redirect capability in standalone mode.
+ * - Otherwise, send a -UNBLOCKED error to the client while disconnecting it at the same time. */
+void disconnectOrRedirectAllBlockedClients(void) {
     listNode *ln;
     listIter li;
 
@@ -318,9 +338,24 @@ void disconnectAllBlockedClients(void) {
              * which the command is already in progress in a way. */
             if (c->bstate->btype == BLOCKED_POSTPONE) continue;
 
-            unblockClientOnError(c, "-UNBLOCKED force unblock from blocking operation, "
-                                    "instance state changed (master -> replica?)");
-            c->flag.close_after_reply = 1;
+            if (server.cluster_enabled) {
+                if (clusterRedirectBlockedClientIfNeeded(c))
+                    unblockClientOnError(c, NULL);
+            } else {
+                /* if the client is read-only and blocked by a read command, we do not unblock it */
+                if (c->flag.readonly && !(c->lastcmd->flags & CMD_WRITE)) continue;
+                if (clientSupportStandAloneRedirect(c) && (c->bstate->btype == BLOCKED_LIST || c->bstate->btype == BLOCKED_ZSET ||
+                                                           c->bstate->btype == BLOCKED_STREAM || c->bstate->btype == BLOCKED_MODULE)) {
+                    if (c->bstate->btype == BLOCKED_MODULE && !moduleClientIsBlockedOnKeys(c)) continue;
+                    /* Client has redirect capability and blocked on keys */
+                    addReplyErrorSds(c, sdscatprintf(sdsempty(), "-REDIRECT %s:%d", server.primary_host, server.primary_port));
+                    unblockClientOnError(c, NULL);
+                } else {
+                    unblockClientOnError(c, "-UNBLOCKED force unblock from blocking operation, "
+                                            "instance state changed (master -> replica?)");
+                    c->flag.close_after_reply = 1;
+                }
+            }
         }
     }
 }
@@ -403,7 +438,7 @@ void blockForKeys(client *c, int btype, robj **keys, int numkeys, mstime_t timeo
 
     initClientBlockingState(c);
 
-    if (!c->flag.reprocessing_command) {
+    if (!c->flag.reexecuting_command) {
         /* If the client is re-processing the command, we do not set the timeout
          * because we need to retain the client's original timeout. */
         c->bstate->timeout = timeout;
@@ -653,6 +688,8 @@ void blockPostponeClient(client *c) {
 
 /* Block client due to shutdown command */
 void blockClientShutdown(client *c) {
+    initClientBlockingState(c);
+    c->bstate->timeout = 0;
     blockClient(c, BLOCKED_SHUTDOWN);
 }
 
@@ -678,6 +715,7 @@ static void unblockClientOnKey(client *c, robj *key) {
      * we need to re process the command again */
     if (c->flag.pending_command) {
         c->flag.pending_command = 0;
+        c->flag.reexecuting_command = 1;
         /* We want the command processing and the unblock handler (see RM_Call 'K' option)
          * to run atomically, this is why we must enter the execution unit here before
          * running the command, and exit the execution unit after calling the unblock handler (if exists).
@@ -696,6 +734,8 @@ static void unblockClientOnKey(client *c, robj *key) {
         }
         exitExecutionUnit();
         afterCommand(c);
+        /* Clear the reexecuting_command flag after the proc is executed. */
+        c->flag.reexecuting_command = 0;
         server.current_client = old_client;
     }
 }

@@ -5,6 +5,7 @@
 #include <sys/time.h>
 #include <stdlib.h>
 
+#include "../fmacros.h"
 #include "../zmalloc.h"
 #include "../listpack.h"
 #include "../quicklist.c"
@@ -21,21 +22,6 @@ static unsigned int err = 0;
 /*-----------------------------------------------------------------------------
  * Unit Function
  *----------------------------------------------------------------------------*/
-/* Return the UNIX time in microseconds */
-static long long ustime(void) {
-    struct timeval tv;
-    long long ust;
-
-    gettimeofday(&tv, NULL);
-    ust = ((long long)tv.tv_sec) * 1000000;
-    ust += tv.tv_usec;
-    return ust;
-}
-
-/* Return the UNIX time in milliseconds */
-static long long mstime(void) {
-    return ustime() / 1000;
-}
 
 /* Generate new string concatenating integer i against string 'prefix' */
 static char *genstr(char *prefix, int i) {

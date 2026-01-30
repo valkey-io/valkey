@@ -1,4 +1,6 @@
 start_server {tags {"dump"}} {
+    set db [expr {$::singledb ? 0 : 9}]
+
     test {DUMP / RESTORE are able to serialize / unserialize a simple key} {
         r set foo bar
         set encoded [r dump foo]
@@ -155,7 +157,7 @@ start_server {tags {"dump"}} {
             set second_port [srv 0 port]
 
             assert_match {*migrate_cached_sockets:0*} [r -1 info]
-            r -1 migrate $second_host $second_port key 9 1000
+            r -1 migrate $second_host $second_port key $db 1000
             assert_match {*migrate_cached_sockets:1*} [r -1 info]
         }
     } {} {external:skip}
@@ -175,7 +177,7 @@ start_server {tags {"dump"}} {
 
             assert {[$first exists key] == 1}
             assert {[$second exists key] == 0}
-            set ret [r -1 migrate $second_host $second_port key 9 5000]
+            set ret [r -1 migrate $second_host $second_port key $db 5000]
             assert {$ret eq {OK}}
             assert {[$first exists key] == 0}
             assert {[$second exists key] == 1}
@@ -195,7 +197,7 @@ start_server {tags {"dump"}} {
 
             assert {[$first exists list] == 1}
             assert {[$second exists list] == 0}
-            set ret [r -1 migrate $second_host $second_port list 9 5000 copy]
+            set ret [r -1 migrate $second_host $second_port list $db 5000 copy]
             assert {$ret eq {OK}}
             assert {[$first exists list] == 1}
             assert {[$second exists list] == 1}
@@ -215,9 +217,9 @@ start_server {tags {"dump"}} {
             assert {[$first exists list] == 1}
             assert {[$second exists list] == 0}
             $second set list somevalue
-            catch {r -1 migrate $second_host $second_port list 9 5000 copy} e
+            catch {r -1 migrate $second_host $second_port list $db 5000 copy} e
             assert_match {ERR*} $e
-            set ret [r -1 migrate $second_host $second_port list 9 5000 copy replace]
+            set ret [r -1 migrate $second_host $second_port list $db 5000 copy replace]
             assert {$ret eq {OK}}
             assert {[$first exists list] == 1}
             assert {[$second exists list] == 1}
@@ -236,7 +238,7 @@ start_server {tags {"dump"}} {
             assert {[$first exists key] == 1}
             assert {[$second exists key] == 0}
             $first expire key 10
-            set ret [r -1 migrate $second_host $second_port key 9 5000]
+            set ret [r -1 migrate $second_host $second_port key $db 5000]
             assert {$ret eq {OK}}
             assert {[$first exists key] == 0}
             assert {[$second exists key] == 1}
@@ -261,7 +263,7 @@ start_server {tags {"dump"}} {
 
             assert {[$first exists key] == 1}
             assert {[$second exists key] == 0}
-            set ret [r -1 migrate $second_host $second_port key 9 10000]
+            set ret [r -1 migrate $second_host $second_port key $db 10000]
             assert {$ret eq {OK}}
             assert {[$first exists key] == 0}
             assert {[$second exists key] == 1}
@@ -282,7 +284,7 @@ start_server {tags {"dump"}} {
 
             assert {[$first exists key] == 1}
             assert {[$second exists key] == 0}
-            set ret [r -1 migrate $second_host $second_port key 9 10000]
+            set ret [r -1 migrate $second_host $second_port key $db 10000]
             assert {$ret eq {OK}}
             assert {[$first exists key] == 0}
             assert {[$second exists key] == 1}
@@ -305,7 +307,7 @@ start_server {tags {"dump"}} {
             $rd debug sleep 1.0 ; # Make second server unable to reply.
             after 100; # wait to make sure DEBUG command was executed.
             set e {}
-            catch {r -1 migrate $second_host $second_port key 9 500} e
+            catch {r -1 migrate $second_host $second_port key $db 500} e
             assert_match {IOERR*} $e
         }
     } {} {external:skip}
@@ -322,7 +324,7 @@ start_server {tags {"dump"}} {
 
             assert {[$first exists key1] == 1}
             assert {[$second exists key1] == 0}
-            set ret [r -1 migrate $second_host $second_port "" 9 5000 keys key1 key2 key3]
+            set ret [r -1 migrate $second_host $second_port "" $db 5000 keys key1 key2 key3]
             assert {$ret eq {OK}}
             assert {[$first exists key1] == 0}
             assert {[$first exists key2] == 0}
@@ -334,7 +336,7 @@ start_server {tags {"dump"}} {
     } {} {external:skip}
 
     test {MIGRATE with multiple keys must have empty key arg} {
-        catch {r MIGRATE 127.0.0.1 6379 NotEmpty 9 5000 keys a b c} e
+        catch {r MIGRATE 127.0.0.1 6379 NotEmpty $db 5000 keys a b c} e
         set e
     } {*empty string*} {external:skip}
 
@@ -348,12 +350,12 @@ start_server {tags {"dump"}} {
             set second_host [srv 0 host]
             set second_port [srv 0 port]
 
-            set ret [r -1 migrate $second_host $second_port "" 9 5000 keys nokey-1 nokey-2 nokey-2]
+            set ret [r -1 migrate $second_host $second_port "" $db 5000 keys nokey-1 nokey-2 nokey-2]
             assert {$ret eq {NOKEY}}
 
             assert {[$first exists key1] == 1}
             assert {[$second exists key1] == 0}
-            set ret [r -1 migrate $second_host $second_port "" 9 5000 keys nokey-1 key1 nokey-2 key2 nokey-3 key3]
+            set ret [r -1 migrate $second_host $second_port "" $db 5000 keys nokey-1 key1 nokey-2 key2 nokey-3 key3]
             assert {$ret eq {OK}}
             assert {[$first exists key1] == 0}
             assert {[$first exists key2] == 0}
@@ -373,7 +375,7 @@ start_server {tags {"dump"}} {
             set second_host [srv 0 host]
             set second_port [srv 0 port]
 
-            set ret [r -1 migrate $second_host $second_port "" 9 5000 keys a b c d e f g h i l m n o p q]
+            set ret [r -1 migrate $second_host $second_port "" $db 5000 keys a b c d e f g h i l m n o p q]
 
             assert {[$first dbsize] == 0}
             assert {[$second dbsize] == 15}
@@ -391,7 +393,7 @@ start_server {tags {"dump"}} {
 
             $second mset c _ d _; # Two busy keys and no REPLACE used
 
-            catch {r -1 migrate $second_host $second_port "" 9 5000 keys a b c d e f g h i l m n o p q} e
+            catch {r -1 migrate $second_host $second_port "" $db 5000 keys a b c d e f g h i l m n o p q} e
 
             assert {[$first dbsize] == 2}
             assert {[$second dbsize] == 15}
@@ -413,14 +415,14 @@ start_server {tags {"dump"}} {
 
             assert {[$first exists list] == 1}
             assert {[$second exists list] == 0}
-            set ret [r -1 migrate $second_host $second_port list 9 5000 AUTH foobar]
+            set ret [r -1 migrate $second_host $second_port list $db 5000 AUTH foobar]
             assert {$ret eq {OK}}
             assert {[$second exists list] == 1}
             assert {[$second lrange list 0 -1] eq {d c b a}}
 
             r -1 lpush list a b c d
             $second config set requirepass foobar2
-            catch {r -1 migrate $second_host $second_port list 9 5000 AUTH foobar} err
+            catch {r -1 migrate $second_host $second_port list $db 5000 AUTH foobar} err
             assert_match {*WRONGPASS*} $err
         }
     } {} {external:skip}

@@ -84,7 +84,7 @@ test "Cluster consistency during live resharding" {
             flush stdout
             set target [dict get [get_myself [randomInt 5]] id]
             set tribpid [lindex [exec \
-                ../../../src/valkey-cli --cluster reshard \
+                $::VALKEY_CLI_BIN --cluster reshard \
                 127.0.0.1:[get_instance_attrib valkey 0 port] \
                 --cluster-from all \
                 --cluster-to $target \

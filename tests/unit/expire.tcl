@@ -949,6 +949,128 @@ start_server {tags {"expire"}} {
             fail "Keys did not actively expire."
         }
     }
+
+    test {Negative ttl will not cause server to crash when import mode is on} {
+        r flushall
+        r config set import-mode yes
+        r set foo bar
+        r expireat foo -1
+        r set foo1 bar
+        r expireat foo1 -10000
+        assert_equal [r dbsize] 2
+        r config set import-mode no
+        wait_for_condition 30 100 {
+            [r dbsize] == 0
+        } else {
+            fail "key wasn't expired"
+        }
+    }
+
+    test {replicaKeysWithExpire memory leak verification and cleanup} {
+        # This test verifies the memory leak issue and cleanup mechanism for replicaKeysWithExpire
+        
+        # Set up a primary-replica relationship
+        start_server {tags {needs:repl external:skip}} {
+            # Set the outer layer server as primary
+            set primary [srv -1 client]
+            set primary_host [srv -1 host]
+            set primary_port [srv -1 port]
+            # Set this inner layer server as replica
+            set replica [srv 0 client]
+            set replica_host [srv 0 host]
+            set replica_port [srv 0 port]
+            
+            $replica replicaof $primary_host $primary_port
+            
+            # Wait for replication to sync
+            wait_for_sync $replica
+            
+            # Enable writable replica mode
+            $replica config set replica-read-only no
+            
+            # Disable the cleanup via debug command to simulate the memory leak scenario
+            $replica debug set-active-expire 0
+            
+            # Write a batch of keys with expiration directly to the replica
+            $replica flushall
+            set key_count 10
+            for {set i 0} {$i < $key_count} {incr i} {
+                $replica set "expire_key_$i" "value_from_replica_$i"
+                $replica expire "expire_key_$i" 1
+            }
+            
+            # Check the initial replicaKeysWithExpire count via info command
+            set replica_count_before [s 0 slave_expires_tracked_keys]
+            assert {$replica_count_before > 0}
+            
+            # Now perform failover from primary to this replica
+            $primary failover to $replica_host $replica_port
+            
+            # Verify the failover completed and this server is now primary
+            wait_for_condition 50 100 {
+                [s -1 master_failover_state] == "no-failover"
+            } else {
+                fail "Failover from primary to replica did not finish"
+            }
+            
+            # Verify that the count is the same - this demonstrates the memory leak
+            set primary_count_before_cleanup [s 0 slave_expires_tracked_keys]
+            assert {$primary_count_before_cleanup == $replica_count_before} 
+            
+            # Now enable the cleanup via debug command
+            $replica debug set-active-expire 1
+
+            # Check the replicaKeysWithExpire count after cleanup - should be 0
+            wait_for_condition 50 100 {
+                [s 0 slave_expires_tracked_keys] eq "0"
+            } else {
+                fail "Count should be 0 after cleanup"
+            }
+            
+            # Clean up
+            $replica flushall
+            assert_equal [$replica dbsize] 0
+        }
+    }
+}
+
+start_server {tags {expire} overrides {hz 100}} {
+    test {Active expiration triggers hashtable shrink} {
+        r debug SET-ACTIVE-EXPIRE 0
+        set persistent_keys 5
+        set volatile_keys 100
+        set total_keys [expr $persistent_keys + $volatile_keys]
+
+        for {set i 0} {$i < $persistent_keys} {incr i} {
+            r set "key_$i" "value_$i"
+        }
+        for {set i 0} {$i < $volatile_keys} {incr i} {
+            r psetex "expire_key_${i}" 100 "expire_value_${i}"
+        }
+        set table_size_before_expire [main_hash_table_size]
+
+        # Verify keys are set
+        assert_equal $total_keys [r dbsize]
+
+        # Wait for active expiration
+        r debug SET-ACTIVE-EXPIRE 1
+        wait_for_condition 100 50 {
+            [r dbsize] eq $persistent_keys
+        } else {
+            fail "Keys not expired"
+        }
+
+        # Wait for the table to shrink and active rehashing finish
+        wait_for_condition 100 50 {
+            [main_hash_table_size] < $table_size_before_expire
+        } else {
+            puts [r debug htstats 9]
+            fail "Table didn't shrink"
+        }
+
+        # Verify server is still responsive
+        assert_equal [r ping] {PONG}
+    } {} {needs:debug}
 }
 
 start_cluster 1 0 {tags {"expire external:skip cluster"}} {
@@ -999,6 +1121,13 @@ start_cluster 1 0 {tags {"expire external:skip cluster"}} {
 
         # Enable resizing
         r debug dict-resizing 1
+
+        # Wait for ongoing rehashing to complete, if any
+        wait_for_condition 100 50 {
+            [dict get [r memory stats] db.dict.rehashing.count] == 0
+        } else {
+            fail "Active rehashing didn't finish"
+        }
 
         # put some data into slot 12182 and trigger the resize
         # by deleting it to trigger shrink

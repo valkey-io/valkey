@@ -557,8 +557,10 @@ jobs:
           CACHE0=$(grep -w file /sys/fs/cgroup/memory.stat | awk '{print $2}')
           echo "$CACHE0"
           ./src/valkey-server --daemonize yes --logfile /dev/null --dir /tmp/master --port 8080 --repl-diskless-sync no --pidfile /tmp/master/valkey.pid --rdbcompression no --enable-debug-command yes
+          sleep 1 # wait for server startup
           ./src/valkey-cli -p 8080 debug populate 10000 k 102400
           ./src/valkey-server --daemonize yes --logfile /dev/null --dir /tmp/slave --port 8081 --repl-diskless-load disabled --rdbcompression no
+          sleep 1 # wait for server startup
           ./src/valkey-cli -p 8080 save > /dev/null
           VMOUT=$(vmtouch -v /tmp/master/dump.rdb)
           echo $VMOUT
@@ -585,6 +587,7 @@ jobs:
           kill -15 $PID
           while [ -x /proc/${PID} ]; do sleep 1; done
           ./src/valkey-server --daemonize yes --logfile /dev/null --dir /tmp/master --port 8080
+          sleep 1 # wait for server startup
           while [ $(./src/valkey-cli -p 8080 info persistence | grep "loading:1") ]; do sleep 1; done;
           sleep 1 # wait for the completion of cache reclaim bio
           VMOUT=$(vmtouch -v /tmp/master/dump.rdb)

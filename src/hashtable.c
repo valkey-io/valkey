@@ -562,7 +562,9 @@ static void rehashStepFinalize(hashtable *ht) {
 
     /* Advance to the next bucket. */
     ht->rehash_idx++;
-    if ((size_t)ht->rehash_idx >= numBuckets(ht->bucket_exp[0])) {
+
+    /* Check if we already rehashed the whole table. */
+    if ((size_t)ht->rehash_idx >= numBuckets(ht->bucket_exp[0]) || ht->used[0] == 0) {
         rehashingCompleted(ht);
     }
 }

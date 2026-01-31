@@ -1009,7 +1009,7 @@ start_cluster 1 0 {tags {external:skip cluster} overrides {cluster-slot-stats-en
         R 0 config set min-string-size-avoid-copy-reply 1
         
         # Disable commandlog tracking
-        R 0 config set commandlog-request-larger-than -1
+        R 0 config set commandlog-reply-larger-than -1
         R 0 config resetstat
         
         set value [string repeat A 2048]
@@ -1033,7 +1033,7 @@ start_cluster 1 0 {tags {external:skip cluster} overrides {cluster-slot-stats-en
         assert_equal $network_bytes_out 2057
         
         # Re-enable commandlog
-        R 0 config set commandlog-request-larger-than 1024
+        R 0 config set commandlog-reply-larger-than 1024
         R 0 config resetstat
         
         # Get should still track correctly

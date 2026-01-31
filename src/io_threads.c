@@ -24,6 +24,7 @@ typedef struct IOJobQueue {
     _Atomic size_t tail __attribute__((aligned(CACHE_LINE_SIZE))); /* Next read index for consumer  (IO-thread) */
 } IOJobQueue;
 IOJobQueue io_jobs[IO_THREADS_MAX_NUM] = {0};
+_Atomic long long used_active_time_io_thread[IO_THREADS_MAX_NUM] = {0};
 
 /* Initialize the job queue with a specified number of items. */
 static void IOJobQueue_init(IOJobQueue *jq, size_t item_count) {
@@ -224,14 +225,26 @@ static void *IOThreadMain(void *myid) {
     thread_id = (int)id;
     size_t jobs_to_process = 0;
     IOJobQueue *jq = &io_jobs[id];
+    monotime work_start_time = 0;
     while (1) {
         /* Cancellation point so that pthread_cancel() from main thread is honored. */
         pthread_testcancel();
+        monotime prev_work_start_time = work_start_time;
+        work_start_time = getMonotonicUs();
+        if (jobs_to_process != 0) {
+            atomic_fetch_add_explicit(&used_active_time_io_thread[id],
+                                      work_start_time - prev_work_start_time,
+                                      memory_order_relaxed);
+        }
 
-        /* Wait for jobs */
-        for (int j = 0; j < 1000000; j++) {
-            jobs_to_process = IOJobQueue_availableJobs(jq);
-            if (jobs_to_process) break;
+        jobs_to_process = IOJobQueue_availableJobs(jq);
+        if (jobs_to_process == 0) {
+            /* Wait for jobs */
+            for (int j = 0; j < 1000000; j++) {
+                jobs_to_process = IOJobQueue_availableJobs(jq);
+                if (jobs_to_process) break;
+            }
+            work_start_time = getMonotonicUs();
         }
 
         /* Give the main thread a chance to stop this thread. */
@@ -258,6 +271,10 @@ static void *IOThreadMain(void *myid) {
     }
     pthread_cleanup_pop(0);
     return NULL;
+}
+
+long long getIOThreadActiveTimeMicroseconds(int id) {
+    return atomic_load_explicit(&used_active_time_io_thread[id], memory_order_relaxed);
 }
 
 #define IO_JOB_QUEUE_SIZE 2048

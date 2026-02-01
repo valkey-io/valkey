@@ -185,23 +185,9 @@ static void tlsInit(void) {
     pending_list = listCreate();
 }
 
-static void tlsClearCertInfo(long long *expiry, sds *serial) {
-    if (expiry) *expiry = 0;
-    if (serial && *serial) {
-        sdsfree(*serial);
-        *serial = NULL;
-    }
-}
-
-static void tlsClearCACertInfo(void) {
-    tlsClearCertInfo(&server.tls_ca_cert_expire_time, &server.tls_ca_cert_serial);
-}
-
-static void tlsClearAllCertInfo(void) {
-    tlsClearCertInfo(&server.tls_server_cert_expire_time, &server.tls_server_cert_serial);
-    tlsClearCertInfo(&server.tls_client_cert_expire_time, &server.tls_client_cert_serial);
-    tlsClearCACertInfo();
-}
+static void tlsClearCertInfo(long long *expiry, sds *serial);
+static void tlsClearCACertInfo(void);
+static void tlsClearAllCertInfo(void);
 
 static void tlsCleanup(void) {
     if (valkey_tls_ctx) {
@@ -449,6 +435,12 @@ static void tlsRefreshCACertInfo(void) {
         server.tls_ca_cert_serial = dir_serial;
         if (file_serial) sdsfree(file_serial);
     }
+}
+
+static void tlsRefreshAllCertInfo(void) {
+    tlsRefreshServerCertInfo();
+    tlsRefreshClientCertInfo();
+    tlsRefreshCACertInfo();
 }
 
 /* Callback for passing a keyfile password stored as an sds to OpenSSL */
@@ -948,9 +940,7 @@ static int tlsConfigure(void *priv, int reconfigure, bool background) {
         valkey_tls_ctx = ctx;
         valkey_tls_client_ctx = client_ctx;
         captureMetadata(ctx_config, &active_metadata);
-        tlsRefreshServerCertInfo();
-        tlsRefreshClientCertInfo();
-        tlsRefreshCACertInfo();
+        tlsRefreshAllCertInfo();
     }
 
     atomic_store_explicit(&lastTlsConfigureTime, server.ustime, memory_order_relaxed);
@@ -1005,9 +995,7 @@ void tlsApplyPendingReload(void) {
     SSL_CTX_free(old_ctx);
     SSL_CTX_free(old_client_ctx);
 
-    tlsRefreshServerCertInfo();
-    tlsRefreshClientCertInfo();
-    tlsRefreshCACertInfo();
+    tlsRefreshAllCertInfo();
 
     serverLog(LL_NOTICE, "TLS materials reloaded successfully");
 }
@@ -1881,6 +1869,8 @@ int RedisRegisterConnectionTypeTLS(void) {
 
 #else /* USE_OPENSSL */
 
+static void tlsClearAllCertInfo(void);
+
 void tlsResetCertInfo(void) {
     tlsClearAllCertInfo();
 }
@@ -1891,6 +1881,24 @@ int RedisRegisterConnectionTypeTLS(void) {
 }
 
 #endif
+
+static void tlsClearCertInfo(long long *expiry, sds *serial) {
+    if (expiry) *expiry = 0;
+    if (serial && *serial) {
+        sdsfree(*serial);
+        *serial = NULL;
+    }
+}
+
+static void tlsClearCACertInfo(void) {
+    tlsClearCertInfo(&server.tls_ca_cert_expire_time, &server.tls_ca_cert_serial);
+}
+
+static void tlsClearAllCertInfo(void) {
+    tlsClearCertInfo(&server.tls_server_cert_expire_time, &server.tls_server_cert_serial);
+    tlsClearCertInfo(&server.tls_client_cert_expire_time, &server.tls_client_cert_serial);
+    tlsClearCACertInfo();
+}
 
 #if defined(BUILD_TLS_MODULE) && BUILD_TLS_MODULE == 2 /* BUILD_MODULE */
 

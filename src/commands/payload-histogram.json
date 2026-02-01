@@ -1,0 +1,62 @@
+{
+    "HISTOGRAM": {
+        "summary": "Returns the per-bucket distribution of payload sizes for client commands.",
+        "complexity": "O(V+B) where V is the number of configured views and B is the number of buckets in each view.",
+        "group": "server",
+        "since": "8.2.0",
+        "arity": -2,
+        "container": "PAYLOAD",
+        "function": "payloadCommand",
+        "command_flags": [
+            "ADMIN",
+            "NOSCRIPT",
+            "LOADING",
+            "STALE"
+        ],
+        "command_tips": [
+            "NONDETERMINISTIC_OUTPUT",
+            "REQUEST_POLICY:ALL_NODES",
+            "RESPONSE_POLICY:SPECIAL"
+        ],
+        "reply_schema": {
+            "type": "object",
+            "description": "A map containing read and/or write payload histograms, each with multiple views.",
+            "patternProperties": {
+                "^(read|write)$": {
+                    "type": "object",
+                    "description": "Map of view base size to histogram buckets.",
+                    "additionalProperties": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "properties": {
+                            "calls": {
+                                "description": "Total calls recorded in the histogram.",
+                                "type": "integer",
+                                "minimum": 0
+                            },
+                            "histogram_bytes": {
+                                "description": "Histogram map, bucket upper bound in bytes to bucket count.",
+                                "type": "object",
+                                "additionalProperties": {
+                                    "type": "integer"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "arguments": [
+            {
+                "name": "direction",
+                "type": "string",
+                "optional": true
+            }
+        ],
+        "acl_categories": [
+            "ADMIN",
+            "DANGEROUS",
+            "SLOW"
+        ]
+    }
+}

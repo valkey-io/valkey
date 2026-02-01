@@ -1,0 +1,12 @@
+{
+    "PAYLOAD": {
+        "summary": "A container for payload diagnostics commands.",
+        "complexity": "Depends on subcommand.",
+        "group": "server",
+        "since": "8.2.0",
+        "arity": -2,
+        "acl_categories": [
+            "SLOW"
+        ]
+    }
+}

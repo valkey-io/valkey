@@ -725,6 +725,11 @@ typedef enum {
                                                  * LATENCY_HISTOGRAM_MAX_VALUE range. Value quantization within the range will thus be no larger than 1/100th \
                                                  * (or 1%) of any value. The total size per histogram should sit around 40 KiB Bytes. */
 
+/* payload histogram init settings */
+#define PAYLOAD_HISTOGRAM_MIN_VALUE 1L
+#define PAYLOAD_HISTOGRAM_MAX_VALUE (1LL << 30) /* 1 GiB */
+#define PAYLOAD_HISTOGRAM_PRECISION 2
+
 /* Busy module flags, see busy_module_yield_flags */
 #define BUSY_MODULE_YIELD_NONE (0)
 #define BUSY_MODULE_YIELD_EVENTS (1 << 0)
@@ -1990,6 +1995,12 @@ struct valkeyServer {
     int latency_tracking_enabled;              /* 1 if extended latency tracking is enabled, 0 otherwise. */
     double *latency_tracking_info_percentiles; /* Extended latency tracking info output percentile list configuration. */
     int latency_tracking_info_percentiles_len;
+    int payload_tracking_enabled;    /* 1 if payload histogram tracking is enabled, 0 otherwise. */
+    size_t *payload_histogram_views; /* Base sizes for payload histogram views. */
+    int payload_histogram_views_len; /* Number of payload histogram views. */
+    int payload_histogram_factor;    /* Factor for payload histogram bucket growth. */
+    struct hdr_histogram *payload_read_histogram;
+    struct hdr_histogram *payload_write_histogram;
     unsigned int max_new_tls_conns_per_cycle; /* The maximum number of tls connections that will be accepted during each
                                                  invocation of the event loop. */
     unsigned int max_new_conns_per_cycle;     /* The maximum number of tcp connections that will be accepted during each
@@ -3447,6 +3458,7 @@ void preventCommandAOF(client *c);
 void preventCommandReplication(client *c);
 void commandlogPushCurrentCommand(client *c, struct serverCommand *cmd);
 void updateCommandLatencyHistogram(struct hdr_histogram **latency_histogram, int64_t duration_hist);
+void updatePayloadHistogram(struct hdr_histogram **histogram, int64_t bytes);
 int prepareForShutdown(client *c, int flags);
 void replyToClientsBlockedOnShutdown(void);
 int abortShutdown(void);
@@ -4146,6 +4158,7 @@ void pfcountCommand(client *c);
 void pfmergeCommand(client *c);
 void pfdebugCommand(client *c);
 void latencyCommand(client *c);
+void payloadCommand(client *c);
 void moduleCommand(client *c);
 void securityWarningCommand(client *c);
 void xaddCommand(client *c);

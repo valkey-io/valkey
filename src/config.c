@@ -3139,6 +3139,54 @@ static sds getConfigLatencyTrackingInfoPercentilesOutputOption(standardConfig *c
     return buf;
 }
 
+static int setConfigPayloadHistogramViewsOption(standardConfig *config, sds *argv, int argc, const char **err) {
+    UNUSED(config);
+    zfree(server.payload_histogram_views);
+    server.payload_histogram_views = NULL;
+    server.payload_histogram_views_len = argc;
+
+    if (argc == 1 && sdslen(argv[0]) == 0) {
+        server.payload_histogram_views_len = 0;
+        return 1;
+    }
+
+    server.payload_histogram_views = zmalloc(sizeof(size_t) * argc);
+    size_t previous = 0;
+    for (int j = 0; j < server.payload_histogram_views_len; j++) {
+        int memerr;
+        unsigned long long value = memtoull(argv[j], &memerr);
+        if (memerr || value == 0 || value > PAYLOAD_HISTOGRAM_MAX_VALUE) {
+            *err = "Invalid payload-histogram-views parameters";
+            goto configerr;
+        }
+        if (j > 0 && value <= previous) {
+            *err = "payload-histogram-views must be strictly increasing";
+            goto configerr;
+        }
+        server.payload_histogram_views[j] = value;
+        previous = value;
+    }
+
+    return 1;
+configerr:
+    zfree(server.payload_histogram_views);
+    server.payload_histogram_views = NULL;
+    server.payload_histogram_views_len = 0;
+    return 0;
+}
+
+static sds getConfigPayloadHistogramViewsOption(standardConfig *config) {
+    UNUSED(config);
+    sds buf = sdsempty();
+    for (int j = 0; j < server.payload_histogram_views_len; j++) {
+        char fbuf[128];
+        rewriteConfigFormatMemory(fbuf, sizeof(fbuf), server.payload_histogram_views[j]);
+        buf = sdscatlen(buf, fbuf, strlen(fbuf));
+        if (j != server.payload_histogram_views_len - 1) buf = sdscatlen(buf, " ", 1);
+    }
+    return buf;
+}
+
 /* Rewrite the latency-tracking-info-percentiles option. */
 void rewriteConfigLatencyTrackingInfoPercentilesOutputOption(standardConfig *config,
                                                              const char *name,
@@ -3157,6 +3205,23 @@ void rewriteConfigLatencyTrackingInfoPercentilesOutputOption(standardConfig *con
             size_t len = snprintf(fbuf, sizeof(fbuf), " %f", server.latency_tracking_info_percentiles[j]);
             len = trimDoubleString(fbuf, len);
             line = sdscatlen(line, fbuf, len);
+        }
+    }
+    rewriteConfigRewriteLine(state, name, line, 1);
+}
+
+void rewriteConfigPayloadHistogramViewsOption(standardConfig *config,
+                                              const char *name,
+                                              struct rewriteConfigState *state) {
+    UNUSED(config);
+    sds line = sdsnew(name);
+    if (!server.payload_histogram_views_len) {
+        line = sdscat(line, " \"\"");
+    } else {
+        for (int j = 0; j < server.payload_histogram_views_len; j++) {
+            char fbuf[128];
+            rewriteConfigFormatMemory(fbuf, sizeof(fbuf), server.payload_histogram_views[j]);
+            line = sdscatprintf(line, " %s", fbuf);
         }
     }
     rewriteConfigRewriteLine(state, name, line, 1);
@@ -3245,6 +3310,7 @@ standardConfig static_configs[] = {
     createBoolConfig("cluster-allow-replica-migration", NULL, MODIFIABLE_CONFIG, server.cluster_allow_replica_migration, 1, NULL, NULL),
     createBoolConfig("replica-announced", NULL, MODIFIABLE_CONFIG, server.replica_announced, 1, NULL, NULL),
     createBoolConfig("latency-tracking", NULL, MODIFIABLE_CONFIG, server.latency_tracking_enabled, 1, NULL, NULL),
+    createBoolConfig("payload-tracking", NULL, MODIFIABLE_CONFIG, server.payload_tracking_enabled, 0, NULL, NULL),
     createBoolConfig("aof-disable-auto-gc", NULL, MODIFIABLE_CONFIG | HIDDEN_CONFIG, server.aof_disable_auto_gc, 0, NULL, updateAofAutoGCEnabled),
     createBoolConfig("replica-ignore-disk-write-errors", NULL, MODIFIABLE_CONFIG, server.repl_ignore_disk_write_error, 0, NULL, NULL),
     createBoolConfig("extended-redis-compatibility", NULL, MODIFIABLE_CONFIG, server.extended_redis_compat, 0, NULL, updateExtendedRedisCompat),
@@ -3338,6 +3404,7 @@ standardConfig static_configs[] = {
     createIntConfig("repl-diskless-sync-delay", NULL, MODIFIABLE_CONFIG, 0, INT_MAX, server.repl_diskless_sync_delay, 5, INTEGER_CONFIG, NULL, NULL),
     createIntConfig("maxmemory-samples", NULL, MODIFIABLE_CONFIG, 1, 64, server.maxmemory_samples, 5, INTEGER_CONFIG, NULL, NULL),
     createIntConfig("maxmemory-eviction-tenacity", NULL, MODIFIABLE_CONFIG, 0, 100, server.maxmemory_eviction_tenacity, 10, INTEGER_CONFIG, NULL, NULL),
+    createIntConfig("payload-histogram-factor", NULL, MODIFIABLE_CONFIG, 2, 10, server.payload_histogram_factor, 2, INTEGER_CONFIG, NULL, NULL),
     createIntConfig("timeout", NULL, MODIFIABLE_CONFIG, 0, INT_MAX, server.maxidletime, 0, INTEGER_CONFIG, NULL, NULL), /* Default client timeout: infinite */
     createIntConfig("replica-announce-port", "slave-announce-port", MODIFIABLE_CONFIG, 0, 65535, server.replica_announce_port, 0, INTEGER_CONFIG, NULL, NULL),
     createIntConfig("tcp-backlog", NULL, IMMUTABLE_CONFIG, 0, INT_MAX, server.tcp_backlog, 511, INTEGER_CONFIG, NULL, NULL), /* TCP listen backlog. */
@@ -3455,6 +3522,7 @@ standardConfig static_configs[] = {
     createSpecialConfig("rdma-bind", NULL, MODIFIABLE_CONFIG | MULTI_ARG_CONFIG, setConfigRdmaBindOption, getConfigRdmaBindOption, rewriteConfigRdmaBindOption, applyRdmaBind),
     createSpecialConfig("replicaof", "slaveof", IMMUTABLE_CONFIG | MULTI_ARG_CONFIG, setConfigReplicaOfOption, getConfigReplicaOfOption, rewriteConfigReplicaOfOption, NULL),
     createSpecialConfig("latency-tracking-info-percentiles", NULL, MODIFIABLE_CONFIG | MULTI_ARG_CONFIG, setConfigLatencyTrackingInfoPercentilesOutputOption, getConfigLatencyTrackingInfoPercentilesOutputOption, rewriteConfigLatencyTrackingInfoPercentilesOutputOption, NULL),
+    createSpecialConfig("payload-histogram-views", NULL, MODIFIABLE_CONFIG | MULTI_ARG_CONFIG, setConfigPayloadHistogramViewsOption, getConfigPayloadHistogramViewsOption, rewriteConfigPayloadHistogramViewsOption, NULL),
 
     /* NULL Terminator, this is dropped when we convert to the runtime array. */
     {NULL},

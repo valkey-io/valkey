@@ -2325,6 +2325,17 @@ void initServerConfig(void) {
     server.latency_tracking_info_percentiles[0] = 50.0; /* p50 */
     server.latency_tracking_info_percentiles[1] = 99.0; /* p99 */
     server.latency_tracking_info_percentiles[2] = 99.9; /* p999 */
+    server.payload_tracking_enabled = 0;
+    server.payload_histogram_factor = 2;
+    server.payload_histogram_views_len = 5;
+    server.payload_histogram_views = zmalloc(sizeof(size_t) * server.payload_histogram_views_len);
+    server.payload_histogram_views[0] = 32 * 1024;
+    server.payload_histogram_views[1] = 64 * 1024;
+    server.payload_histogram_views[2] = 128 * 1024;
+    server.payload_histogram_views[3] = 256 * 1024;
+    server.payload_histogram_views[4] = 512 * 1024;
+    server.payload_read_histogram = NULL;
+    server.payload_write_histogram = NULL;
 
     server.tls_server_cert_expire_time = 0;
     server.tls_client_cert_expire_time = 0;
@@ -3692,6 +3703,14 @@ void updateCommandLatencyHistogram(struct hdr_histogram **latency_histogram, int
     hdr_record_value(*latency_histogram, duration_hist);
 }
 
+void updatePayloadHistogram(struct hdr_histogram **histogram, int64_t bytes) {
+    if (bytes < PAYLOAD_HISTOGRAM_MIN_VALUE) bytes = PAYLOAD_HISTOGRAM_MIN_VALUE;
+    if (bytes > PAYLOAD_HISTOGRAM_MAX_VALUE) bytes = PAYLOAD_HISTOGRAM_MAX_VALUE;
+    if (*histogram == NULL)
+        hdr_init(PAYLOAD_HISTOGRAM_MIN_VALUE, PAYLOAD_HISTOGRAM_MAX_VALUE, PAYLOAD_HISTOGRAM_PRECISION, histogram);
+    hdr_record_value(*histogram, bytes);
+}
+
 /* Handle the alsoPropagate() API to handle commands that want to propagate
  * multiple separated commands. Note that alsoPropagate() is not affected
  * by CLIENT_PREVENT_PROP flag. */
@@ -3952,6 +3971,10 @@ void call(client *c, int flags) {
         real_cmd->microseconds += c->duration;
         if (server.latency_tracking_enabled && !c->flag.blocked)
             updateCommandLatencyHistogram(&(real_cmd->latency_histogram), c->duration * 1000);
+        if (server.payload_tracking_enabled && !c->flag.blocked && !isReplicatedClient(c) && c->id != CLIENT_ID_AOF) {
+            updatePayloadHistogram(&server.payload_read_histogram, (int64_t)c->net_input_bytes_curr_cmd);
+            updatePayloadHistogram(&server.payload_write_histogram, (int64_t)c->net_output_bytes_curr_cmd);
+        }
         clusterSlotStatsAddCpuDuration(c, c->duration);
     }
 

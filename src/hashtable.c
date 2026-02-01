@@ -2338,7 +2338,7 @@ size_t hashtableGetStatsMsg(char *buf, size_t bufsize, hashtableStats *stats, in
                   stats->used);
     if (stats->table_index == 0) {
         l += snprintf(buf + l, bufsize - l,
-                      " rehashing index: %ld\n",
+                      " rehashing index: %zd\n",
                       stats->rehash_index);
     }
     if (full) {

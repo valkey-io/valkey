@@ -2340,11 +2340,9 @@ struct valkeyServer {
     int tls_replication;
     int tls_auth_clients;
     serverTLSContextConfig tls_ctx_config;
-    int tls_cert_expiry_warning_days;
     long long tls_server_cert_expire_time;
     long long tls_client_cert_expire_time;
     long long tls_ca_cert_expire_time;
-    int tls_ca_cert_count;
     sds tls_server_cert_serial;
     sds tls_client_cert_serial;
     sds tls_ca_cert_serial;
@@ -3487,7 +3485,6 @@ robj *activeDefragStringOb(robj *ob);
 void dismissSds(sds s);
 void dismissMemoryInChild(void);
 void tlsResetCertInfo(void);
-void tlsLogServerCertExpiry(void);
 
 #define RESTART_SERVER_NONE 0
 #define RESTART_SERVER_GRACEFULLY (1 << 0)     /* Do proper shutdown. */

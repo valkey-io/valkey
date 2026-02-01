@@ -1583,10 +1583,6 @@ long long serverCron(struct aeEventLoop *eventLoop, long long id, void *clientDa
         }
     }
 
-    run_with_period(86400000) {
-        tlsLogServerCertExpiry();
-    }
-
     /* Handle background operations on databases. */
     databasesCron();
 
@@ -2329,11 +2325,9 @@ void initServerConfig(void) {
     server.latency_tracking_info_percentiles[1] = 99.0; /* p99 */
     server.latency_tracking_info_percentiles[2] = 99.9; /* p999 */
 
-    server.tls_cert_expiry_warning_days = 7;
     server.tls_server_cert_expire_time = 0;
     server.tls_client_cert_expire_time = 0;
     server.tls_ca_cert_expire_time = 0;
-    server.tls_ca_cert_count = 0;
     server.tls_server_cert_serial = NULL;
     server.tls_client_cert_serial = NULL;
     server.tls_ca_cert_serial = NULL;
@@ -6022,15 +6016,13 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                             "tls_client_cert_serial:%s\r\n"
                             "tls_client_cert_expires_in_seconds:%lld\r\n"
                             "tls_ca_cert_serial:%s\r\n"
-                            "tls_ca_cert_expires_in_seconds:%lld\r\n"
-                            "tls_ca_cert_count:%d\r\n",
+                            "tls_ca_cert_expires_in_seconds:%lld\r\n",
                             server.tls_server_cert_serial ? server.tls_server_cert_serial : "none",
                             tls_server_seconds_remaining,
                             server.tls_client_cert_serial ? server.tls_client_cert_serial : "none",
                             tls_client_seconds_remaining,
                             server.tls_ca_cert_serial ? server.tls_ca_cert_serial : "none",
-                            tls_ca_seconds_remaining,
-                            server.tls_ca_cert_count);
+                            tls_ca_seconds_remaining);
     }
 
     /* Clients */

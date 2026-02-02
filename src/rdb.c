@@ -1694,7 +1694,7 @@ int rdbSaveBackground(int req, char *filename, rdbSaveInfo *rsi, int rdbflags) {
         }
         serverLog(LL_NOTICE, "Background saving started by pid %ld", (long)childpid);
         server.rdb_save_time_start = time(NULL);
-        server.rdb_child_type = RDB_CHILD_TYPE_DISK;
+        server.rdb_child_type = SNAPSHOT_CHILD_TYPE_DISK;
         return C_OK;
     }
     return C_OK; /* unreached */
@@ -3685,17 +3685,17 @@ void backgroundSaveDoneHandler(int exitcode, int bysignal) {
     time_t save_end = time(NULL);
 
     switch (server.rdb_child_type) {
-    case RDB_CHILD_TYPE_DISK: backgroundSaveDoneHandlerDisk(exitcode, bysignal, save_end); break;
-    case RDB_CHILD_TYPE_SOCKET: backgroundSaveDoneHandlerSocket(exitcode, bysignal); break;
+    case SNAPSHOT_CHILD_TYPE_DISK: backgroundSaveDoneHandlerDisk(exitcode, bysignal, save_end); break;
+    case SNAPSHOT_CHILD_TYPE_SOCKET: backgroundSaveDoneHandlerSocket(exitcode, bysignal); break;
     default: serverPanic("Unknown RDB child type."); break;
     }
 
-    server.rdb_child_type = RDB_CHILD_TYPE_NONE;
+    server.rdb_child_type = SNAPSHOT_CHILD_TYPE_NONE;
     server.rdb_save_time_last = save_end - server.rdb_save_time_start;
     server.rdb_save_time_start = -1;
     /* Possibly there are replicas waiting for a BGSAVE in order to be served
      * (the first stage of SYNC is a bulk transfer of dump.rdb) */
-    updateReplicasWaitingBgsave((!bysignal && exitcode == 0) ? C_OK : C_ERR, type);
+    updateReplicasWaitingBgSnapshotGenerate((!bysignal && exitcode == 0) ? C_OK : C_ERR, type, false);
 }
 
 /* Kill the RDB saving child using SIGUSR1 (so that the parent will know
@@ -3780,7 +3780,7 @@ int rdbSaveToReplicasSockets(int req, int rdbver, rdbSaveInfo *rsi) {
                 connSendTimeout(replica->conn, server.repl_timeout * 1000);
                 /* This replica uses diskless dual channel sync, hence we need
                  * to inform it with the save end offset.*/
-                sendCurrentOffsetToReplica(replica);
+                sendCurrentOffsetToReplica(replica, false);
                 /* Make sure repl traffic is appended to the replication backlog */
                 addRdbReplicaToPsyncWait(replica);
                 /* Put the socket in blocking mode to simplify RDB transfer. */
@@ -3788,7 +3788,7 @@ int rdbSaveToReplicasSockets(int req, int rdbver, rdbSaveInfo *rsi) {
             } else {
                 server.rdb_pipe_numconns++;
             }
-            replicationSetupReplicaForFullResync(replica, getPsyncInitialOffset());
+            replicationSetupReplicaForFullResync(replica, getPsyncInitialOffset(), false);
         }
 
         // do not skip RDB checksum on the primary if connection doesn't have integrity check or if the replica doesn't support it
@@ -3876,7 +3876,7 @@ int rdbSaveToReplicasSockets(int req, int rdbver, rdbSaveInfo *rsi) {
                       skip_rdb_checksum ? " while skipping RDB checksum for this transfer" : "");
 
             server.rdb_save_time_start = time(NULL);
-            server.rdb_child_type = RDB_CHILD_TYPE_SOCKET;
+            server.rdb_child_type = SNAPSHOT_CHILD_TYPE_SOCKET;
             if (dual_channel) {
                 /* For dual channel sync, the main process no longer requires these RDB connections. */
                 zfree(conns);

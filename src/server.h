@@ -470,18 +470,25 @@ typedef enum {
                              * PSYNC FAILOVER request. */
 } failover_state;
 
+typedef enum {
+    REPL_SNAPSHOT_RDB,
+    REPL_SNAPSHOT_AOF
+} replSnapshotType;
+
 
 /* State of replicas from the POV of the primary. Used in client->replstate.
  * In SEND_BULK and ONLINE state the replica receives new updates
  * in its output queue. In the WAIT_BGSAVE states instead the server is waiting
  * to start the next background saving in order to send updates to it. */
-#define REPLICA_STATE_WAIT_BGSAVE_START 6 /* We need to produce a new RDB file. */
-#define REPLICA_STATE_WAIT_BGSAVE_END 7   /* Waiting RDB file creation to finish. */
-#define REPLICA_STATE_SEND_BULK 8         /* Sending RDB file to replica. */
-#define REPLICA_STATE_ONLINE 9            /* RDB file transmitted, sending just updates. */
-#define REPLICA_STATE_RDB_TRANSMITTED 10  /* RDB file transmitted - This state is used only for \
-                                           * a replica that only wants RDB without replication buffer  */
-#define REPLICA_STATE_BG_RDB_LOAD 11      /* Main channel of a replica which uses dual channel replication. */
+#define REPLICA_STATE_WAIT_BGSAVE_START 6     /* We need to produce a new RDB file. */
+#define REPLICA_STATE_WAIT_BGSAVE_END 7       /* Waiting RDB file creation to finish. */
+#define REPLICA_STATE_SEND_BULK 8             /* Sending RDB file to replica. */
+#define REPLICA_STATE_ONLINE 9                /* RDB file transmitted, sending just updates. */
+#define REPLICA_STATE_RDB_TRANSMITTED 10      /* RDB file transmitted - This state is used only for \
+                                               * a replica that only wants RDB without replication buffer  */
+#define REPLICA_STATE_BG_RDB_LOAD 11          /* Main channel of a replica which uses dual channel replication. */
+#define REPLICA_STATE_WAIT_BGREWRITE_START 12 /* We need to produce a new base aof file. */
+#define REPLICA_STATE_WAIT_BGREWRITE_END 13   /* Waiting base aof rewrite to finish. */
 
 /* Replica capability flags */
 #define REPLICA_CAPA_NONE 0
@@ -489,6 +496,7 @@ typedef enum {
 #define REPLICA_CAPA_PSYNC2 (1 << 1)            /* Supports PSYNC2 protocol. */
 #define REPLICA_CAPA_DUAL_CHANNEL (1 << 2)      /* Supports dual channel replication sync */
 #define REPLICA_CAPA_SKIP_RDB_CHECKSUM (1 << 3) /* Supports skipping RDB checksum for sync requests. */
+#define REPLICA_CAPA_FULLSYNC_AOF (1 << 4)      /* Supports fullsync AOF */
 
 /* Replica capability strings */
 #define REPLICA_CAPA_SKIP_RDB_CHECKSUM_STR "skip-rdb-checksum" /* Supports skipping RDB checksum for sync requests. */
@@ -676,10 +684,10 @@ typedef enum {
     CLUSTER_ENDPOINT_TYPE_UNKNOWN_ENDPOINT /* Show NULL or empty */
 } cluster_endpoint_type;
 
-/* RDB active child save type. */
-#define RDB_CHILD_TYPE_NONE 0
-#define RDB_CHILD_TYPE_DISK 1   /* RDB is written to disk. */
-#define RDB_CHILD_TYPE_SOCKET 2 /* RDB is written to replica socket. */
+/* Snapshot active child save type. */
+#define SNAPSHOT_CHILD_TYPE_NONE 0
+#define SNAPSHOT_CHILD_TYPE_DISK 1   /* RDB/AOF is written to disk. */
+#define SNAPSHOT_CHILD_TYPE_SOCKET 2 /* RDB/AOF is written to replica socket. */
 
 /* Keyspace changes notification classes. Every class is associated with a
  * character for configuration purposes. */
@@ -2130,6 +2138,8 @@ struct valkeyServer {
                                                 * delay (start sooner if they all connect). */
     int dual_channel_replication;              /* Config used to determine if the replica should
                                                 * use dual channel replication for full syncs. */
+    int fullsync_aof_replication;              /* Config used to determine if the primary should
+                                                * use the base aof for full syncs. */
     _Atomic int replica_bio_disk_save_state;   /* Flag set by the bio thread to indicate that the
                                                 * RDB save to disk has completed, or failed */
     _Atomic bool replica_bio_abort_save;       /* Flag set by main thread, used to signal to replica's
@@ -2162,16 +2172,20 @@ struct valkeyServer {
         long long read_reploff;
         int dbid;
     } repl_provisional_primary;
-    client *cached_primary;              /* Cached primary to be reused for PSYNC. */
-    rio *loading_rio;                    /* Pointer to the rio object currently used for loading data. */
-    int repl_syncio_timeout;             /* Timeout for synchronous I/O calls */
-    int repl_state;                      /* Replication status if the instance is a replica */
-    int repl_rdb_channel_state;          /* State of the replica's rdb channel during dual-channel-replication */
-    off_t repl_transfer_size;            /* Size of RDB to read from primary during sync. */
-    off_t repl_transfer_read;            /* Amount of RDB read from primary during sync. */
-    off_t repl_transfer_last_fsync_off;  /* Offset when we fsync-ed last time. */
-    connection *repl_transfer_s;         /* Replica -> Primary SYNC connection */
-    connection *repl_rdb_transfer_s;     /* Primary FULL SYNC connection (RDB download) */
+    client *cached_primary;             /* Cached primary to be reused for PSYNC. */
+    rio *loading_rio;                   /* Pointer to the rio object currently used for loading data. */
+    int repl_syncio_timeout;            /* Timeout for synchronous I/O calls */
+    int repl_state;                     /* Replication status if the instance is a replica */
+    int repl_rdb_channel_state;         /* State of the replica's rdb channel during dual-channel-replication */
+    off_t repl_transfer_size;           /* Size of RDB to read from primary during sync. */
+    off_t repl_transfer_read;           /* Amount of RDB read from primary during sync. */
+    off_t repl_transfer_last_fsync_off; /* Offset when we fsync-ed last time. */
+    connection *repl_transfer_s;        /* Replica -> Primary SYNC connection */
+    connection *repl_rdb_transfer_s;    /* Primary FULL SYNC connection (RDB download) */
+    replSnapshotType repl_transfer_format;
+    sds repl_transfer_fullsync_aof_name;
+    int repl_stream_dbid;
+    int repl_replica_stream_dbid;
     int repl_transfer_fd;                /* Replica -> Primary SYNC temp file descriptor */
     char *repl_transfer_tmpfile;         /* Replica-> Primary SYNC temp file name */
     _Atomic time_t repl_transfer_lastio; /* Unix time of the latest read, for timeout */
@@ -3179,7 +3193,7 @@ void resetReplicationBuffer(void);
 void feedReplicationBuffer(char *buf, size_t len);
 void freeReplicaReferencedReplBuffer(client *replica);
 void replicationFeedMonitors(client *c, list *monitors, int dictid, robj **argv, int argc);
-void updateReplicasWaitingBgsave(int bgsaveerr, int type);
+void updateReplicasWaitingBgSnapshotGenerate(int bgerr, int type, bool use_aof);
 void replicationCron(void);
 void replicationStartPendingFork(void);
 void replicationHandlePrimaryDisconnection(void);
@@ -3197,7 +3211,7 @@ void replicationSendNewlineToPrimary(void);
 long long replicationGetReplicaOffset(void);
 char *replicationGetReplicaName(client *c);
 long long getPsyncInitialOffset(void);
-int replicationSetupReplicaForFullResync(client *replica, long long offset);
+int replicationSetupReplicaForFullResync(client *replica, long long offset, bool fullsync_aof);
 void changeReplicationId(void);
 void clearReplicationId2(void);
 void createReplicationBacklog(void);
@@ -3217,7 +3231,7 @@ void updateFailoverStatus(void);
 void abortFailover(const char *err);
 const char *getFailoverStateString(void);
 sds getReplicaPortString(void);
-int sendCurrentOffsetToReplica(client *replica);
+int sendCurrentOffsetToReplica(client *replica, bool fullsync_aof);
 int replicaRdbVersion(client *replica);
 void addRdbReplicaToPsyncWait(client *replica);
 void initClientReplicationData(client *c);
@@ -3254,12 +3268,13 @@ int bg_unlink(const char *filename);
 void flushAppendOnlyFile(int force);
 void feedAppendOnlyFile(int dictid, robj **argv, int argc);
 void aofRemoveTempFile(pid_t childpid, int from_signal);
-int rewriteAppendOnlyFileBackground(void);
+int rewriteAppendOnlyFileToReplicasSockets(int req);
+int rewriteAppendOnlyFileBackground(bool for_replication, int req);
 int loadAppendOnlyFiles(aofManifest *am);
 void stopAppendOnly(void);
 int startAppendOnly(void);
 void backgroundRewriteDoneHandler(int exitcode, int bysignal);
-void killAppendOnlyChild(void);
+void killAppendOnlyChild(bool async);
 void restartAOFAfterSYNC(void);
 void aofLoadManifestFromDisk(void);
 void aofOpenIfNeededOnServerStart(void);
@@ -3267,6 +3282,8 @@ void aofManifestFree(aofManifest *am);
 int aofDelHistoryFiles(void);
 int aofRewriteLimited(void);
 int rewriteSlotToAppendOnlyFileRio(rio *aof, int db_num, int hashslot, size_t *key_count);
+int loadSnapshotAofFromPath(const char *path);
+int loadSnapshotAofFromRioScopedAOF(rio *aof, char *eofmark, int usemark);
 
 /* Child info */
 void openChildInfoPipe(void);

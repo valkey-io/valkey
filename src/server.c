@@ -1590,7 +1590,7 @@ long long serverCron(struct aeEventLoop *eventLoop, long long id, void *clientDa
     /* Start a scheduled AOF rewrite if this was requested by the user while
      * a BGSAVE was in progress. */
     if (!hasActiveChildProcess() && server.aof_rewrite_scheduled && !aofRewriteLimited()) {
-        rewriteAppendOnlyFileBackground();
+        rewriteAppendOnlyFileBackground(false, REPLICA_REQ_NONE);
     }
 
     /* Check if a background saving or AOF rewrite in progress terminated. */
@@ -1625,7 +1625,7 @@ long long serverCron(struct aeEventLoop *eventLoop, long long id, void *clientDa
             long long growth = (server.aof_current_size * 100 / base) - 100;
             if (growth >= server.aof_rewrite_perc && !aofRewriteLimited()) {
                 serverLog(LL_NOTICE, "Starting automatic rewriting of AOF on %lld%% growth", growth);
-                rewriteAppendOnlyFileBackground();
+                rewriteAppendOnlyFileBackground(false, REPLICA_REQ_NONE);
             }
         }
     }
@@ -2324,6 +2324,7 @@ void initServerConfig(void) {
     server.pause_cron = 0;
     server.dict_resizing = 1;
     server.import_mode = 0;
+    server.repl_stream_dbid = -1;
 
     server.latency_tracking_info_percentiles_len = 3;
     server.latency_tracking_info_percentiles = zmalloc(sizeof(double) * (server.latency_tracking_info_percentiles_len));
@@ -2985,7 +2986,7 @@ void initServer(void) {
     server.client_pause_in_transaction = 0;
     server.child_pid = -1;
     server.child_type = CHILD_TYPE_NONE;
-    server.rdb_child_type = RDB_CHILD_TYPE_NONE;
+    server.rdb_child_type = SNAPSHOT_CHILD_TYPE_NONE;
     server.rdb_pipe_conns = NULL;
     server.rdb_pipe_numconns = 0;
     server.rdb_pipe_numconns_writing = 0;
@@ -4805,7 +4806,7 @@ int finishShutdown(void) {
             }
         }
         serverLog(LL_WARNING, "There is a child rewriting the AOF. Killing it!");
-        killAppendOnlyChild();
+        killAppendOnlyChild(false);
     }
     if (server.aof_state != AOF_OFF) {
         /* Append only file: flush buffers and fsync() the AOF at exit */
@@ -5764,6 +5765,8 @@ const char *replstateToString(int replstate) {
     switch (replstate) {
     case REPLICA_STATE_WAIT_BGSAVE_START:
     case REPLICA_STATE_WAIT_BGSAVE_END: return "wait_bgsave";
+    case REPLICA_STATE_WAIT_BGREWRITE_START:
+    case REPLICA_STATE_WAIT_BGREWRITE_END: return "wait_bgrewrite";
     case REPLICA_STATE_BG_RDB_LOAD: return "bg_transfer";
     case REPLICA_STATE_SEND_BULK: return "send_bulk";
     case REPLICA_STATE_ONLINE: return "online";

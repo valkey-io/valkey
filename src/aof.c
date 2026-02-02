@@ -46,7 +46,7 @@ off_t getAppendOnlyFileSize(sds filename, int *status);
 off_t getBaseAndIncrAppendOnlyFilesSize(aofManifest *am, int *status);
 int getBaseAndIncrAppendOnlyFilesNum(aofManifest *am);
 int aofFileExist(char *filename);
-int rewriteAppendOnlyFile(char *filename);
+int rewriteAppendOnlyFile(char *filename, int req);
 aofManifest *aofLoadManifestFromFile(sds am_filepath);
 void aofManifestFreeAndUpdate(aofManifest *am);
 void aof_background_fsync_and_close(int fd);
@@ -715,7 +715,7 @@ void aofOpenIfNeededOnServerStart(void) {
     if (!server.aof_manifest->base_aof_info && !incr_aof_len) {
         sds base_name = getNewBaseFileNameAndMarkPreAsHistory(server.aof_manifest, server.aof_use_rdb_preamble);
         sds base_filepath = makePath(server.aof_dirname, base_name);
-        if (rewriteAppendOnlyFile(base_filepath) != C_OK) {
+        if (rewriteAppendOnlyFile(base_filepath, REPLICA_REQ_NONE) != C_OK) {
             exit(1);
         }
         sdsfree(base_filepath);
@@ -914,18 +914,21 @@ void aof_background_fsync_and_close(int fd) {
 }
 
 /* Kills an AOFRW child process if exists */
-void killAppendOnlyChild(void) {
+void killAppendOnlyChild(bool async) {
     int statloc;
     /* No AOFRW child? return. */
     if (server.child_type != CHILD_TYPE_AOF) return;
     /* Kill AOFRW child, wait for child exit. */
     serverLog(LL_NOTICE, "Killing running AOF rewrite child: %ld", (long)server.child_pid);
-    if (kill(server.child_pid, SIGUSR1) != -1) {
-        while (waitpid(-1, &statloc, 0) != server.child_pid);
+    int ret = kill(server.child_pid, SIGUSR1);
+    if (!async) {
+        if (ret != -1) {
+            while (waitpid(-1, &statloc, 0) != server.child_pid);
+        }
+        aofRemoveTempFile(server.child_pid, 0);
+        resetChildState();
+        server.aof_rewrite_time_start = -1;
     }
-    aofRemoveTempFile(server.child_pid, 0);
-    resetChildState();
-    server.aof_rewrite_time_start = -1;
 }
 
 /* Called when the user switches from "appendonly yes" to "appendonly no"
@@ -953,7 +956,7 @@ void stopAppendOnly(void) {
     server.aof_last_incr_fsync_offset = 0;
     server.fsynced_reploff = -1;
     atomic_store_explicit(&server.fsynced_reploff_pending, 0, memory_order_relaxed);
-    killAppendOnlyChild();
+    killAppendOnlyChild(false);
     sdsfree(server.aof_buf);
     server.aof_buf = sdsempty();
 }
@@ -979,10 +982,10 @@ int startAppendOnly(void) {
         if (server.child_type == CHILD_TYPE_AOF) {
             serverLog(LL_NOTICE, "AOF was enabled but there is already an AOF rewriting in background. Stopping "
                                  "background AOF and starting a rewrite now.");
-            killAppendOnlyChild();
+            killAppendOnlyChild(false);
         }
 
-        if (rewriteAppendOnlyFileBackground() == C_ERR) {
+        if (rewriteAppendOnlyFileBackground(false, REPLICA_REQ_NONE) == C_ERR) {
             server.aof_state = AOF_OFF;
             serverLog(LL_WARNING, "The server needs to enable the AOF but can't trigger a background AOF rewrite "
                                   "operation. Check the above logs for more info about the error.");
@@ -2318,7 +2321,7 @@ int rewriteSlotToAppendOnlyFileRio(rio *aof, int db_num, int hashslot, size_t *k
     return C_OK;
 }
 
-int rewriteAppendOnlyFileRio(rio *aof) {
+int rewriteAppendOnlyFileRio(rio *aof, int req) {
     int j;
     long key_count = 0;
     long long updated_time = 0;
@@ -2334,8 +2337,9 @@ int rewriteAppendOnlyFileRio(rio *aof) {
         sdsfree(ts);
     }
 
-    if (rewriteFunctions(aof) == C_ERR) goto werr;
+    if (!(req & REPLICA_REQ_RDB_EXCLUDE_FUNCTIONS) && rewriteFunctions(aof) == C_ERR) goto werr;
 
+    if ((req & REPLICA_REQ_RDB_EXCLUDE_DATA)) return C_OK;
     for (j = 0; j < server.dbnum; j++) {
         if (dbHasNoKeys(j)) continue;
         serverDb *db = server.db[j];
@@ -2371,6 +2375,24 @@ werr:
     return C_ERR;
 }
 
+int rewriteRioWithEOFMark(rio *aof, int req) {
+    char eofmark[RDB_EOF_MARK_SIZE];
+
+    startSaving(RDBFLAGS_REPLICATION);
+    getRandomHexChars(eofmark, RDB_EOF_MARK_SIZE);
+    if (rioWrite(aof, "$EOF:", 5) == 0) goto werr;
+    if (rioWrite(aof, eofmark, RDB_EOF_MARK_SIZE) == 0) goto werr;
+    if (rioWrite(aof, "\r\n", 2) == 0) goto werr;
+    if (rewriteAppendOnlyFileRio(aof, req) == C_ERR) goto werr;
+    if (rioWrite(aof, eofmark, RDB_EOF_MARK_SIZE) == 0) goto werr;
+    stopSaving(1);
+    return C_OK;
+
+werr: /* Write error. */
+    stopSaving(0);
+    return C_ERR;
+}
+
 /* Write a sequence of commands able to fully rebuild the dataset into
  * "filename". Used both by REWRITEAOF and BGREWRITEAOF.
  *
@@ -2378,7 +2400,7 @@ werr:
  * log, the server uses variadic commands when possible, such as RPUSH, SADD
  * and ZADD. However at max AOF_REWRITE_ITEMS_PER_CMD items per time
  * are inserted using a single command. */
-int rewriteAppendOnlyFile(char *filename) {
+int rewriteAppendOnlyFile(char *filename, int req) {
     rio aof;
     FILE *fp = NULL;
     char tmpfile[256];
@@ -2408,7 +2430,7 @@ int rewriteAppendOnlyFile(char *filename) {
             goto werr;
         }
     } else {
-        if (rewriteAppendOnlyFileRio(&aof) == C_ERR) goto werr;
+        if (rewriteAppendOnlyFileRio(&aof, req) == C_ERR) goto werr;
     }
 
     /* Make sure data will not remain on the OS's output buffers */
@@ -2461,7 +2483,7 @@ werr:
  *    4d) persist AOF manifest file
  *    4e) Delete the history files use bio
  */
-int rewriteAppendOnlyFileBackground(void) {
+int rewriteAppendOnlyFileBackground(bool for_replication, int req) {
     pid_t childpid;
 
     if (hasActiveChildProcess()) return C_ERR;
@@ -2508,7 +2530,10 @@ int rewriteAppendOnlyFileBackground(void) {
         }
         serverSetCpuAffinity(server.aof_rewrite_cpulist);
         snprintf(tmpfile, 256, "temp-rewriteaof-bg-%d.aof", (int)getpid());
-        if (rewriteAppendOnlyFile(tmpfile) == C_OK) {
+
+        /* Do not use RDB format for fullsync-aof replication */
+        if (for_replication) server.aof_use_rdb_preamble = 0;
+        if (rewriteAppendOnlyFile(tmpfile, req) == C_OK) {
             serverLog(LL_NOTICE, "Successfully created the temporary AOF base file %s", tmpfile);
             sendChildCowInfo(CHILD_INFO_TYPE_AOF_COW_SIZE, "AOF rewrite");
             exitFromChild(0);
@@ -2525,10 +2550,153 @@ int rewriteAppendOnlyFileBackground(void) {
         serverLog(LL_NOTICE, "Background append only file rewriting started by pid %ld", (long)childpid);
         server.aof_rewrite_scheduled = 0;
         server.aof_rewrite_time_start = time(NULL);
-        server.aof_rewrite_use_rdb_preamble = server.aof_use_rdb_preamble;
+        server.aof_rewrite_use_rdb_preamble = for_replication ? 0 : server.aof_use_rdb_preamble;
+        server.rdb_child_type = SNAPSHOT_CHILD_TYPE_DISK;
         return C_OK;
     }
     return C_OK; /* unreached */
+}
+
+/* For fullsync-aof replication, rewrite the AOF to the replica sockets.
+ * Almost the same logic as rdbSaveToReplicasSockets. */
+int rewriteAppendOnlyFileToReplicasSockets(int req) {
+    listNode *ln;
+    listIter li;
+    pid_t childpid;
+    int pipefds[2], aof_pipe_write = -1, safe_to_exit_pipe = -1;
+    int dual_channel = (req & REPLICA_REQ_RDB_CHANNEL);
+
+    if (hasActiveChildProcess()) return C_ERR;
+    serverAssert(server.rdb_pipe_read == -1 && server.rdb_child_exit_pipe == -1);
+
+    if (server.rdb_pipe_conns) return C_ERR;
+
+    if (!dual_channel) {
+        if (anetPipe(pipefds, O_NONBLOCK, 0) == -1) return C_ERR;
+        server.rdb_pipe_read = pipefds[0];
+        aof_pipe_write = pipefds[1];
+
+        if (anetPipe(pipefds, 0, 0) == -1) {
+            close(aof_pipe_write);
+            close(server.rdb_pipe_read);
+            return C_ERR;
+        }
+        safe_to_exit_pipe = pipefds[0];
+        server.rdb_child_exit_pipe = pipefds[1];
+    }
+
+    int connsnum = 0;
+    connection **conns = zmalloc(sizeof(connection *) * listLength(server.replicas));
+    server.rdb_pipe_conns = NULL;
+    if (!dual_channel) {
+        server.rdb_pipe_conns = conns;
+        server.rdb_pipe_numconns = 0;
+        server.rdb_pipe_numconns_writing = 0;
+    }
+
+    listRewind(server.replicas, &li);
+    while ((ln = listNext(&li))) {
+        client *replica = ln->value;
+        if (replica->repl_data->repl_state == REPLICA_STATE_WAIT_BGREWRITE_START) {
+            if (replica->repl_data->replica_req != req) continue;
+
+            conns[connsnum++] = replica->conn;
+            if (dual_channel) {
+                connSendTimeout(replica->conn, server.repl_timeout * 1000);
+                sendCurrentOffsetToReplica(replica, true);
+                addRdbReplicaToPsyncWait(replica);
+                connBlock(replica->conn);
+            } else {
+                server.rdb_pipe_numconns++;
+            }
+            replicationSetupReplicaForFullResync(replica, getPsyncInitialOffset(), true);
+        }
+    }
+
+    if ((childpid = serverFork(CHILD_TYPE_AOF)) == 0) {
+        int retval, dummy;
+        rio aof;
+        if (dual_channel) {
+            rioInitWithConnset(&aof, conns, connsnum);
+        } else {
+            rioInitWithFd(&aof, aof_pipe_write);
+        }
+
+        if (!dual_channel) close(server.rdb_pipe_read);
+        if (strstr(server.exec_argv[0], "redis-server") != NULL) {
+            serverSetProcTitle("redis-aof-to-slaves");
+        } else {
+            serverSetProcTitle("valkey-aof-to-replicas");
+        }
+        serverSetCpuAffinity(server.aof_rewrite_cpulist);
+
+        server.aof_use_rdb_preamble = 0;
+        retval = rewriteRioWithEOFMark(&aof, req);
+
+        if (retval == C_OK && rioFlush(&aof) == 0) retval = C_ERR;
+
+        if (retval == C_OK) {
+            sendChildCowInfo(CHILD_INFO_TYPE_AOF_COW_SIZE, "AOF rewrite");
+            if (dual_channel) {
+                sendChildInfoGeneric(CHILD_INFO_TYPE_REPL_OUTPUT_BYTES, 0, aof.processed_bytes, -1, "AOF");
+            }
+        }
+        if (dual_channel) {
+            rioFreeConnset(&aof);
+        } else {
+            rioFreeFd(&aof);
+            close(aof_pipe_write);
+            close(server.rdb_child_exit_pipe);
+        }
+        zfree(conns);
+        if (!dual_channel) dummy = read(safe_to_exit_pipe, pipefds, 1);
+        UNUSED(dummy);
+        exitFromChild((retval == C_OK) ? 0 : 1);
+    } else {
+        if (childpid == -1) {
+            serverLog(LL_WARNING, "Can't rewrite in background: fork: %s", strerror(errno));
+
+            listRewind(server.replicas, &li);
+            while ((ln = listNext(&li))) {
+                client *replica = ln->value;
+                if (replica->repl_data->repl_state == REPLICA_STATE_WAIT_BGREWRITE_END) {
+                    replica->repl_data->repl_state = REPLICA_STATE_WAIT_BGREWRITE_START;
+                }
+            }
+            if (!dual_channel) {
+                close(aof_pipe_write);
+                close(server.rdb_pipe_read);
+                close(server.rdb_child_exit_pipe);
+            }
+            zfree(conns);
+            if (dual_channel) {
+                closeChildInfoPipe();
+            } else {
+                server.rdb_pipe_conns = NULL;
+                server.rdb_pipe_numconns = 0;
+                server.rdb_pipe_numconns_writing = 0;
+            }
+        } else {
+            serverLog(LL_NOTICE, "Background AOF transfer started by pid %ld to %s",
+                      (long)childpid,
+                      dual_channel ? "direct socket to replica" : "pipe through parent process");
+
+            server.rdb_save_time_start = time(NULL);
+            server.rdb_child_type = SNAPSHOT_CHILD_TYPE_SOCKET;
+            if (dual_channel) {
+                zfree(conns);
+            } else {
+                close(aof_pipe_write);
+                if (aeCreateFileEvent(server.el, server.rdb_pipe_read, AE_READABLE, rdbPipeReadHandler, NULL) ==
+                    AE_ERR) {
+                    serverPanic("Unrecoverable error creating server.rdb_pipe_read file event.");
+                }
+            }
+        }
+        if (!dual_channel) close(safe_to_exit_pipe);
+        return (childpid == -1) ? C_ERR : C_OK;
+    }
+    return C_OK;
 }
 
 void bgrewriteaofCommand(client *c) {
@@ -2541,7 +2709,7 @@ void bgrewriteaofCommand(client *c) {
         server.stat_aofrw_consecutive_failures = 0;
         serverLog(LL_NOTICE, "Background append only file rewriting scheduled.");
         addReplyStatus(c, "Background append only file rewriting scheduled");
-    } else if (rewriteAppendOnlyFileBackground() == C_OK) {
+    } else if (rewriteAppendOnlyFileBackground(false, REPLICA_REQ_NONE) == C_OK) {
         addReplyStatus(c, "Background append only file rewriting started");
     } else {
         addReplyError(c, "Can't execute an AOF background rewriting. "
@@ -2640,9 +2808,37 @@ int getBaseAndIncrAppendOnlyFilesNum(aofManifest *am) {
     return num;
 }
 
+void backgroundRewriteDoneHandlerSocket(int exitcode, int bysignal) {
+    if (!bysignal && exitcode == 0) {
+        serverLog(LL_NOTICE, "Background AOF transfer terminated with success");
+    } else if (!bysignal && exitcode != 0) {
+        serverLog(LL_WARNING, "Background AOF transfer error");
+    } else {
+        serverLog(LL_WARNING, "Background AOF transfer terminated by signal %d", bysignal);
+    }
+
+    /* Same cleanup as RDB diskless pipe mode. */
+    if (server.rdb_child_exit_pipe != -1) close(server.rdb_child_exit_pipe);
+    if (server.rdb_pipe_read > 0) {
+        aeDeleteFileEvent(server.el, server.rdb_pipe_read, AE_READABLE);
+        close(server.rdb_pipe_read);
+    }
+    server.rdb_child_exit_pipe = -1;
+    server.rdb_pipe_read = -1;
+
+    zfree(server.rdb_pipe_conns);
+    server.rdb_pipe_conns = NULL;
+    server.rdb_pipe_numconns = 0;
+    server.rdb_pipe_numconns_writing = 0;
+
+    zfree(server.rdb_pipe_buff);
+    server.rdb_pipe_buff = NULL;
+    server.rdb_pipe_bufflen = 0;
+}
+
 /* A background append only file rewriting (BGREWRITEAOF) terminated its work.
  * Handle this. */
-void backgroundRewriteDoneHandler(int exitcode, int bysignal) {
+void backgroundRewriteDoneHandlerDisk(int exitcode, int bysignal) {
     if (!bysignal && exitcode == 0) {
         char tmpfile[256];
         long long now = ustime();
@@ -2675,8 +2871,10 @@ void backgroundRewriteDoneHandler(int exitcode, int bysignal) {
             sdsfree(new_base_filepath);
             server.aof_lastbgrewrite_status = C_ERR;
             server.stat_aofrw_consecutive_failures++;
-            goto cleanup;
+            return;
         }
+        sdsfree(server.repl_transfer_fullsync_aof_name);
+        server.repl_transfer_fullsync_aof_name = sdsdup(new_base_filepath);
         latencyEndMonitor(latency);
         latencyAddSampleIfNeeded("aof-rename", latency);
         latencyTraceIfNeeded(aof, aof_rename, latency);
@@ -2702,7 +2900,7 @@ void backgroundRewriteDoneHandler(int exitcode, int bysignal) {
                 sdsfree(temp_incr_aof_name);
                 server.aof_lastbgrewrite_status = C_ERR;
                 server.stat_aofrw_consecutive_failures++;
-                goto cleanup;
+                return;
             }
             latencyEndMonitor(latency);
             latencyAddSampleIfNeeded("aof-rename", latency);
@@ -2728,7 +2926,7 @@ void backgroundRewriteDoneHandler(int exitcode, int bysignal) {
             }
             server.aof_lastbgrewrite_status = C_ERR;
             server.stat_aofrw_consecutive_failures++;
-            goto cleanup;
+            return;
         }
         sdsfree(new_base_filepath);
         if (new_incr_filepath) sdsfree(new_incr_filepath);
@@ -2778,8 +2976,17 @@ void backgroundRewriteDoneHandler(int exitcode, int bysignal) {
 
         serverLog(LL_WARNING, "Background AOF rewrite terminated by signal %d", bysignal);
     }
+}
 
-cleanup:
+void backgroundRewriteDoneHandler(int exitcode, int bysignal) {
+    switch (server.rdb_child_type) {
+    case SNAPSHOT_CHILD_TYPE_DISK: backgroundRewriteDoneHandlerDisk(exitcode, bysignal); break;
+    case SNAPSHOT_CHILD_TYPE_SOCKET: backgroundRewriteDoneHandlerSocket(exitcode, bysignal); break;
+    default: serverPanic("Unknown BGREWRITE child type."); break;
+    }
+
+    updateReplicasWaitingBgSnapshotGenerate((!bysignal && exitcode == 0) ? C_OK : C_ERR, server.rdb_child_type, true);
+    server.rdb_child_type = SNAPSHOT_CHILD_TYPE_NONE;
     aofRemoveTempFile(server.child_pid, 0);
     /* Clear AOF buffer and delete temp incr aof for next rewrite. */
     if (server.aof_state == AOF_WAIT_REWRITE) {
@@ -2791,4 +2998,332 @@ cleanup:
     server.aof_rewrite_time_start = -1;
     /* Schedule a new rewrite if we are waiting for it to switch the AOF ON. */
     if (server.aof_state == AOF_WAIT_REWRITE) server.aof_rewrite_scheduled = 1;
+}
+
+/* Track loading progress in order to serve clients from time to time. */
+void aofLoadProgressCallback(rio *r, const void *buf, size_t len) {
+    UNUSED(buf);
+    if (server.loading_process_events_interval_bytes &&
+        (r->processed_bytes + len) / server.loading_process_events_interval_bytes >
+            r->processed_bytes / server.loading_process_events_interval_bytes) {
+        if (server.primary_host && server.repl_state == REPL_STATE_TRANSFER) replicationSendNewlineToPrimary();
+        loadingAbsProgress(r->processed_bytes);
+        processEventsWhileBlocked();
+        processModuleLoadingProgressEvent(1);
+    }
+    if (server.repl_state == REPL_STATE_TRANSFER && rioCheckType(r) == RIO_TYPE_CONN) {
+        server.stat_net_repl_input_bytes += len;
+    }
+}
+
+static int rioReadLineTail(rio *r, char *buf, size_t buflen) {
+    /* Reads bytes until '\r\n', stores content excluding CRLF into buf (NUL terminated).
+     * Returns 1 on success, 0 on read error/EOF. */
+    size_t i = 0;
+    while (i < buflen - 1) {
+        char c;
+        if (rioRead(r, &c, 1) == 0) return 0;
+        buf[i++] = c;
+        if (i >= 2 && buf[i - 2] == '\r' && buf[i - 1] == '\n') {
+            buf[i - 2] = '\0';
+            return 1;
+        }
+    }
+    buf[buflen - 1] = '\0';
+    serverLog(LL_WARNING, "AOF line is too long");
+    return 0; /* line too long => caller should treat as error */
+}
+
+static int rioReadBulkWithCRLF(rio *r, sds *out, unsigned long len) {
+    sds s = sdsnewlen(SDS_NOINIT, len);
+    if (len && rioRead(r, s, len) == 0) {
+        sdsfree(s);
+        return 0;
+    }
+    char crlf[2];
+    if (rioRead(r, crlf, 2) == 0 || crlf[0] != '\r' || crlf[1] != '\n') {
+        sdsfree(s);
+        return 0;
+    }
+    *out = s;
+    return 1;
+}
+
+int loadSnapshotAofFromRio(rio *r, char *eofmark, int usemark) {
+    client *fakeClient = NULL;
+    client *old_cur_client = server.current_client;
+    client *old_exec_client = server.executing_client;
+    char buf[AOF_ANNOTATION_LINE_MAX_LEN];
+
+    fakeClient = createAOFClient();
+    server.current_client = server.executing_client = fakeClient;
+
+    int ret = AOF_OK;
+    r->update_cksum = aofLoadProgressCallback;
+    r->max_processing_chunk = server.loading_process_events_interval_bytes;
+
+    while (1) {
+        char first;
+
+        if (rioRead(r, &first, 1) == 0) {
+            ret = AOF_OK;
+            break;
+        }
+
+        if (first == '#') {
+            if (!rioReadLineTail(r, buf, sizeof(buf))) {
+                ret = AOF_FAILED;
+                break;
+            }
+            continue;
+        }
+
+        if (first != '*') {
+            /* check EOF mark. */
+            if (!usemark) {
+                ret = AOF_FAILED;
+                break;
+            }
+
+            buf[0] = first;
+            if (rioRead(r, buf + 1, RDB_EOF_MARK_SIZE - 1) == 0) {
+                ret = AOF_FAILED;
+                break;
+            }
+            if (memcmp(buf, eofmark, RDB_EOF_MARK_SIZE) != 0) {
+                ret = AOF_FAILED;
+                break;
+            }
+
+            ret = AOF_OK;
+            break;
+        }
+
+        if (!rioReadLineTail(r, buf, sizeof(buf))) {
+            ret = AOF_FAILED;
+            break;
+        }
+        int argc = atoi(buf);
+        if (argc < 1 || (size_t)argc > SIZE_MAX / sizeof(robj *)) {
+            ret = AOF_FAILED;
+            break;
+        }
+
+        robj **argv = zmalloc(sizeof(robj *) * argc);
+        fakeClient->argc = argc;
+        fakeClient->argv = argv;
+        fakeClient->argv_len = argc;
+
+        for (int j = 0; j < argc; j++) {
+            if (rioRead(r, buf, 1) == 0 || buf[0] != '$') {
+                fakeClient->argc = j;
+                freeClientArgv(fakeClient);
+                ret = AOF_FAILED;
+                goto cleanup;
+            }
+            if (!rioReadLineTail(r, buf, sizeof(buf))) {
+                fakeClient->argc = j;
+                freeClientArgv(fakeClient);
+                ret = AOF_FAILED;
+                goto cleanup;
+            }
+            unsigned long blen = strtoul(buf, NULL, 10);
+            sds arg;
+            if (!rioReadBulkWithCRLF(r, &arg, blen)) {
+                fakeClient->argc = j;
+                freeClientArgv(fakeClient);
+                ret = AOF_FAILED;
+                goto cleanup;
+            }
+            argv[j] = createObject(OBJ_STRING, arg);
+        }
+
+        sds err = NULL;
+        struct serverCommand *cmd = lookupCommand(fakeClient->argv, fakeClient->argc);
+        if ((!cmd && !commandCheckExistence(fakeClient, &err)) ||
+            (cmd && !commandCheckArity(cmd, fakeClient->argc, &err))) {
+            serverLog(LL_WARNING, "Error loading BASE AOF stream: %s", err);
+            sdsfree(err);
+            freeClientArgv(fakeClient);
+            ret = AOF_FAILED;
+            goto cleanup;
+        }
+
+        fakeClient->cmd = fakeClient->lastcmd = cmd;
+
+        if (fakeClient->flag.multi && cmd->proc != execCommand) {
+            queueMultiCommand(fakeClient, cmd->flags);
+        } else {
+            cmd->proc(fakeClient);
+        }
+
+        serverAssert(fakeClient->bufpos == 0 && listLength(fakeClient->reply) == 0);
+        serverAssert(fakeClient->flag.blocked == 0);
+
+        freeClientArgv(fakeClient);
+        if (server.key_load_delay) debugDelay(server.key_load_delay);
+    }
+
+    if (fakeClient->flag.multi) {
+        ret = AOF_FAILED;
+        goto cleanup;
+    }
+
+    serverLog(LL_WARNING, "Done loading AOF for replication.");
+
+cleanup:
+    if (fakeClient) freeClient(fakeClient);
+    server.current_client = old_cur_client;
+    server.executing_client = old_exec_client;
+    return ret;
+}
+
+int loadSnapshotAofFromRioScopedAOF(rio *aof, char *eofmark, int usemark) {
+    rio *prev_rio = server.loading_rio;
+    server.loading_rio = aof;
+    int retval = loadSnapshotAofFromRio(aof, eofmark, usemark);
+    server.loading_rio = prev_rio;
+    return retval;
+}
+
+/* Raw-load an AOF format file from disk. */
+int loadSnapshotAofFromPath(const char *path) {
+    FILE *fp = NULL;
+    long loops = 0;
+    off_t last_progress_report_size = 0;
+    struct valkey_stat sb;
+    client *fakeClient = NULL;
+    client *old_cur_client = server.current_client;
+    client *old_exec_client = server.executing_client;
+
+    int ret = AOF_OK;
+
+    fp = fopen(path, "r");
+    if (fp == NULL) {
+        int en = errno;
+        if (valkey_stat(path, &sb) == 0 || errno != ENOENT) {
+            serverLog(LL_WARNING, "Can't open AOF file %s for reading: %s", path, strerror(en));
+            return AOF_OPEN_ERR;
+        }
+        serverLog(LL_WARNING, "AOF file %s doesn't exist: %s", path, strerror(errno));
+        return AOF_NOT_EXIST;
+    }
+
+    if (valkey_fstat(fileno(fp), &sb) != -1 && sb.st_size == 0) {
+        fclose(fp);
+        serverLog(LL_NOTICE, "Done loading AOF for replication.");
+        return AOF_OK;
+    }
+
+    startLoading(sb.st_size, RDBFLAGS_AOF_PREAMBLE, 0);
+    fakeClient = createAOFClient();
+    server.current_client = server.executing_client = fakeClient;
+
+    while (1) {
+        int argc, j;
+        unsigned long len;
+        robj **argv;
+        char buf[AOF_ANNOTATION_LINE_MAX_LEN];
+        struct serverCommand *cmd;
+        sds err = NULL;
+
+        /* Serve the clients from time to time */
+        if (!(loops++ % 1024)) {
+            off_t progress_delta = ftello(fp) - last_progress_report_size;
+            loadingIncrProgress(progress_delta);
+            last_progress_report_size += progress_delta;
+            processEventsWhileBlocked();
+            processModuleLoadingProgressEvent(1);
+        }
+
+        if (fgets(buf, sizeof(buf), fp) == NULL) {
+            if (feof(fp)) break;
+            ret = AOF_FAILED;
+            goto cleanup;
+        }
+
+        if (buf[0] == '#') continue;
+        if (buf[0] != '*') {
+            ret = AOF_FAILED;
+            goto cleanup;
+        }
+
+        argc = atoi(buf + 1);
+        if (argc < 1 || (size_t)argc > SIZE_MAX / sizeof(robj *)) {
+            ret = AOF_FAILED;
+            goto cleanup;
+        }
+
+        argv = zmalloc(sizeof(robj *) * argc);
+        fakeClient->argc = argc;
+        fakeClient->argv = argv;
+        fakeClient->argv_len = argc;
+
+        for (j = 0; j < argc; j++) {
+            if (fgets(buf, sizeof(buf), fp) == NULL || buf[0] != '$') {
+                fakeClient->argc = j;
+                freeClientArgv(fakeClient);
+                ret = AOF_FAILED;
+                goto cleanup;
+            }
+            len = strtoul(buf + 1, NULL, 10);
+
+            sds argsds = sdsnewlen(SDS_NOINIT, len);
+            if (len && fread(argsds, len, 1, fp) == 0) {
+                sdsfree(argsds);
+                fakeClient->argc = j;
+                freeClientArgv(fakeClient);
+                ret = AOF_FAILED;
+                goto cleanup;
+            }
+            argv[j] = createObject(OBJ_STRING, argsds);
+
+            /* Discard CRLF */
+            if (fread(buf, 2, 1, fp) == 0) {
+                fakeClient->argc = j + 1;
+                freeClientArgv(fakeClient);
+                ret = AOF_FAILED;
+                goto cleanup;
+            }
+        }
+
+        fakeClient->cmd = fakeClient->lastcmd = cmd = lookupCommand(fakeClient->argv, fakeClient->argc);
+        if ((!cmd && !commandCheckExistence(fakeClient, &err)) ||
+            (cmd && !commandCheckArity(cmd, fakeClient->argc, &err))) {
+            serverLog(LL_WARNING, "Error loading AOF file %s: %s", path, err);
+            sdsfree(err);
+            freeClientArgv(fakeClient);
+            ret = AOF_FAILED;
+            goto cleanup;
+        }
+
+        if (fakeClient->flag.multi && cmd->proc != execCommand) {
+            queueMultiCommand(fakeClient, cmd->flags);
+        } else {
+            cmd->proc(fakeClient);
+        }
+
+        serverAssert(fakeClient->bufpos == 0 && listLength(fakeClient->reply) == 0);
+        serverAssert(fakeClient->flag.blocked == 0);
+
+        freeClientArgv(fakeClient);
+
+        if (server.key_load_delay) debugDelay(server.key_load_delay);
+    }
+
+    if (fakeClient->flag.multi) {
+        ret = AOF_FAILED;
+        goto cleanup;
+    }
+
+    loadingIncrProgress(ftello(fp) - last_progress_report_size);
+    serverLog(LL_NOTICE, "Done loading AOF for replication.");
+
+cleanup:
+    if (fakeClient) freeClient(fakeClient);
+    server.current_client = old_cur_client;
+    server.executing_client = old_exec_client;
+    if (fp) fclose(fp);
+    stopLoading(ret == AOF_OK);
+    return ret;
 }

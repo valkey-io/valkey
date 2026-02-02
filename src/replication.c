@@ -69,7 +69,7 @@ void syncWithPrimary(connection *conn);
 /* We take a global flag to remember if this instance generated an RDB
  * because of replication, so that we can remove the RDB file in case
  * the instance is configured to have no persistence. */
-int RDBGeneratedByReplication = 0;
+int SnapshotGeneratedByReplication = 0;
 
 /* --------------------------- Utility functions ---------------------------- */
 ConnectionType *connTypeOfReplication(void) {
@@ -324,7 +324,7 @@ int canFeedReplicaReplBuffer(client *replica) {
     if (replica->flag.repl_rdbonly) return 0;
 
     /* Don't feed replicas that are still waiting for BGSAVE to start. */
-    if (replica->repl_data->repl_state == REPLICA_STATE_WAIT_BGSAVE_START) return 0;
+    if (replica->repl_data->repl_state == REPLICA_STATE_WAIT_BGSAVE_START || replica->repl_data->repl_state == REPLICA_STATE_WAIT_BGREWRITE_START) return 0;
 
     return 1;
 }
@@ -821,12 +821,12 @@ long long getPsyncInitialOffset(void) {
  * Normally this function should be called immediately after a successful
  * BGSAVE for replication was started, or when there is one already in
  * progress that we attached our replica to. */
-int replicationSetupReplicaForFullResync(client *replica, long long offset) {
+int replicationSetupReplicaForFullResync(client *replica, long long offset, bool fullsync_aof) {
     char buf[128];
     int buflen;
 
     replica->repl_data->psync_initial_offset = offset;
-    replica->repl_data->repl_state = REPLICA_STATE_WAIT_BGSAVE_END;
+    replica->repl_data->repl_state = fullsync_aof ? REPLICA_STATE_WAIT_BGREWRITE_END : REPLICA_STATE_WAIT_BGSAVE_END;
     /* We are going to accumulate the incremental changes for this
      * replica as well. Set replicas_eldb to -1 in order to force to re-emit
      * a SELECT statement in the replication stream. */
@@ -835,7 +835,12 @@ int replicationSetupReplicaForFullResync(client *replica, long long offset) {
     /* Don't send this reply to replicas that approached us with
      * the old SYNC command. */
     if (!(replica->flag.pre_psync)) {
-        buflen = snprintf(buf, sizeof(buf), "+FULLRESYNC %s %lld\r\n", server.replid, offset);
+        if (fullsync_aof) {
+            /* AOF do not have aux field, so we send dbid here. */
+            buflen = snprintf(buf, sizeof(buf), "+FULLRESYNC %s %lld AOF %d\r\n", server.replid, offset, server.repl_stream_dbid);
+        } else {
+            buflen = snprintf(buf, sizeof(buf), "+FULLRESYNC %s %lld\r\n", server.replid, offset);
+        }
         if (connWrite(replica->conn, buf, buflen) != buflen) {
             freeClientAsync(replica);
             return C_ERR;
@@ -983,45 +988,59 @@ need_full_resync:
  *    started.
  *
  * Returns C_OK on success or C_ERR otherwise. */
-int startBgsaveForReplication(int mincapa, int req, int rdbver) {
+int startGenerateSnapshotForReplication(int mincapa, int req, int rdbver) {
     int retval;
-    int socket_target = 0;
+    int socket_target = 0, fullsync_aof = 0;
     listIter li;
     listNode *ln;
 
     /* We use a socket target if replica can handle the EOF marker and we're
      * configured to do diskless syncs.
      *
-     * Note that in case we're creating a "filtered" RDB (functions-only, for
+     * Note that in case we're creating a "filtered" RDB/AOF (functions-only, for
      * example) or an older RDB version, we also force socket replication to
-     * avoid overwriting the snapshot RDB file, which needs to be usable by
-     * other replicas (not using filtered RDB or older versions) in disk-based
+     * avoid overwriting the snapshot RDB/AOF file, which needs to be usable by
+     * other replicas (not using filtered RDB/AOF or older versions) in disk-based
      * full sync. */
+    fullsync_aof = mincapa & REPLICA_CAPA_FULLSYNC_AOF;
     socket_target = (mincapa & REPLICA_CAPA_EOF) && (server.repl_diskless_sync ||
                                                      (req & REPLICA_REQ_RDB_MASK) ||
-                                                     rdbver != RDB_VERSION);
+                                                     rdbver != RDB_VERSION ||
+                                                     fullsync_aof);
     /* `SYNC` should have failed with error if we don't support socket and require a filter, assert this here */
     serverAssert(socket_target || !(req & REPLICA_REQ_RDB_MASK));
 
-    serverLog(LL_NOTICE, "Starting BGSAVE for SYNC with target: %s using: %s",
+    serverLog(LL_NOTICE, "Starting %s for SYNC with target: %s using: %s",
+              fullsync_aof ? "BGREWRITE" : "BGSAVE",
               socket_target ? "replicas sockets" : "disk",
               (req & REPLICA_REQ_RDB_CHANNEL) ? "dual-channel" : "normal sync");
+
 
     rdbSaveInfo rsi, *rsiptr;
     rsiptr = rdbPopulateSaveInfo(&rsi);
     /* Only do rdbSave* when rsiptr is not NULL,
      * otherwise replica will miss repl-stream-db. */
     if (rsiptr) {
-        if (socket_target)
-            retval = rdbSaveToReplicasSockets(req, rdbver, rsiptr);
-        else {
-            /* Keep the page cache since it'll get used soon */
-            retval = rdbSaveBackground(req, server.rdb_filename, rsiptr, RDBFLAGS_REPLICATION | RDBFLAGS_KEEP_CACHE);
+        server.repl_stream_dbid = rsiptr->repl_stream_db;
+        if (fullsync_aof) {
+            if (socket_target) {
+                retval = rewriteAppendOnlyFileToReplicasSockets(req);
+            } else {
+                retval = rewriteAppendOnlyFileBackground(true, req);
+            }
+        } else {
+            if (socket_target)
+                retval = rdbSaveToReplicasSockets(req, rdbver, rsiptr);
+            else {
+                /* Keep the page cache since it'll get used soon */
+                retval = rdbSaveBackground(req, server.rdb_filename, rsiptr, RDBFLAGS_REPLICATION | RDBFLAGS_KEEP_CACHE);
+            }
         }
         if (server.debug_pause_after_fork) debugPauseProcess();
     } else {
-        serverLog(LL_WARNING, "BGSAVE for replication: replication information not available, can't generate the RDB "
-                              "file right now. Try later.");
+        serverLog(LL_WARNING, "%s for replication: replication information not available, can't generate the RDB "
+                              "file right now. Try later.",
+                  fullsync_aof ? "BGREWRITE" : "BGSAVE");
         retval = C_ERR;
     }
 
@@ -1030,40 +1049,42 @@ int startBgsaveForReplication(int mincapa, int req, int rdbver) {
      * that we don't set the flag to 1 if the feature is disabled, otherwise
      * it would never be cleared: the file is not deleted. This way if
      * the user enables it later with CONFIG SET, we are fine. */
-    if (retval == C_OK && !socket_target && server.rdb_del_sync_files) RDBGeneratedByReplication = 1;
+    if (retval == C_OK && !socket_target && server.rdb_del_sync_files) SnapshotGeneratedByReplication = 1;
 
     /* If we failed to BGSAVE, remove the replicas waiting for a full
      * resynchronization from the list of replicas, inform them with
      * an error about what happened, close the connection ASAP. */
     if (retval == C_ERR) {
-        serverLog(LL_WARNING, "BGSAVE for replication failed");
+        serverLog(LL_WARNING, "Generate snapshot for replication failed");
         listRewind(server.replicas, &li);
         while ((ln = listNext(&li))) {
             client *replica = ln->value;
 
-            if (replica->repl_data->repl_state == REPLICA_STATE_WAIT_BGSAVE_START) {
+            if ((replica->repl_data->repl_state == REPLICA_STATE_WAIT_BGSAVE_START && !fullsync_aof) || (replica->repl_data->repl_state == REPLICA_STATE_WAIT_BGREWRITE_START && fullsync_aof)) {
                 replica->repl_data->repl_state = REPL_STATE_NONE;
                 replica->flag.replica = 0;
                 listDelNode(server.replicas, ln);
-                addReplyError(replica, "BGSAVE failed, replication can't continue");
+                addReplyError(replica, "Generate snapshot failed, replication can't continue");
                 replica->flag.close_after_reply = 1;
             }
         }
         return retval;
     }
 
-    /* If the target is socket, rdbSaveToReplicasSockets() already setup
-     * the replicas for a full resync. Otherwise for disk target do it now.*/
+    /* If the target is socket, rdbSaveToReplicasSockets() and rewriteAppendOnlyFileToReplicasSockets()
+     * already setup the replicas for a full resync. Otherwise for disk target do it now.*/
     if (!socket_target) {
         listRewind(server.replicas, &li);
         while ((ln = listNext(&li))) {
             client *replica = ln->value;
-
-            if (replica->repl_data->repl_state == REPLICA_STATE_WAIT_BGSAVE_START) {
+            if (replica->repl_data->repl_state == REPLICA_STATE_WAIT_BGREWRITE_START && fullsync_aof) {
+                if (replica->repl_data->replica_req != req) continue;
+                replicationSetupReplicaForFullResync(replica, getPsyncInitialOffset(), true);
+            } else if (replica->repl_data->repl_state == REPLICA_STATE_WAIT_BGSAVE_START && !fullsync_aof) {
                 /* Check replica has the exact requirements */
                 if (replica->repl_data->replica_req != req) continue;
                 if (replicaRdbVersion(replica) != rdbver) continue;
-                replicationSetupReplicaForFullResync(replica, getPsyncInitialOffset());
+                replicationSetupReplicaForFullResync(replica, getPsyncInitialOffset(), false);
             }
         }
     }
@@ -1188,9 +1209,10 @@ void syncCommand(client *c) {
     /* Full resynchronization. */
     server.stat_sync_full++;
 
+    bool use_fullsync_aof = (c->repl_data->replica_capa & REPLICA_CAPA_FULLSYNC_AOF);
     /* Setup the replica as one waiting for BGSAVE to start. The following code
      * paths will change the state if we handle the replica differently. */
-    c->repl_data->repl_state = REPLICA_STATE_WAIT_BGSAVE_START;
+    c->repl_data->repl_state = use_fullsync_aof ? REPLICA_STATE_WAIT_BGREWRITE_START : REPLICA_STATE_WAIT_BGSAVE_START;
     if (server.repl_disable_tcp_nodelay) anetDisableTcpNoDelay(NULL, c->conn->fd); /* Non critical if it fails. */
     c->repl_data->repldbfd = -1;
     c->flag.replica = 1;
@@ -1211,7 +1233,7 @@ void syncCommand(client *c) {
     }
 
     /* CASE 1: BGSAVE is in progress, with disk target. */
-    if (server.child_type == CHILD_TYPE_RDB && server.rdb_child_type == RDB_CHILD_TYPE_DISK) {
+    if (((server.child_type == CHILD_TYPE_RDB && !use_fullsync_aof) || (server.child_type == CHILD_TYPE_AOF && use_fullsync_aof)) && server.rdb_child_type == SNAPSHOT_CHILD_TYPE_DISK) {
         /* Ok a background save is in progress. Let's check if it is a good
          * one for replication, i.e. if there is another replica that is
          * registering differences since the server forked to save. */
@@ -1224,7 +1246,7 @@ void syncCommand(client *c) {
             replica = ln->value;
             /* If the client needs a buffer of commands, we can't use
              * a replica without replication buffer. */
-            if (replica->repl_data->repl_state == REPLICA_STATE_WAIT_BGSAVE_END &&
+            if ((replica->repl_data->repl_state == REPLICA_STATE_WAIT_BGSAVE_END || replica->repl_data->repl_state == REPLICA_STATE_WAIT_BGREWRITE_END) &&
                 (!(replica->flag.repl_rdbonly) || (c->flag.repl_rdbonly)))
                 break;
         }
@@ -1237,55 +1259,55 @@ void syncCommand(client *c) {
              * another replica. Set the right state, and copy the buffer.
              * We don't copy buffer if clients don't want. */
             if (!c->flag.repl_rdbonly) copyReplicaOutputBuffer(c, replica);
-            replicationSetupReplicaForFullResync(c, replica->repl_data->psync_initial_offset);
-            serverLog(LL_NOTICE, "Waiting for end of BGSAVE for SYNC");
+            replicationSetupReplicaForFullResync(c, replica->repl_data->psync_initial_offset, use_fullsync_aof);
+            serverLog(LL_NOTICE, "Waiting for end of generating snapshot for SYNC");
         } else {
-            /* No way, we need to wait for the next BGSAVE in order to
+            /* No way, we need to wait for the next BGSAVE/BGREWRITE in order to
              * register differences. */
-            serverLog(LL_NOTICE, "Can't attach the replica to the current BGSAVE. Waiting for next BGSAVE for SYNC");
+            serverLog(LL_NOTICE, "Can't attach the replica to the current BGSAVE/BGREWRITE. Waiting for next BGSAVE/BGREWRITE for SYNC");
         }
 
         /* CASE 2: BGSAVE is in progress, with socket target. */
-    } else if (server.child_type == CHILD_TYPE_RDB && server.rdb_child_type == RDB_CHILD_TYPE_SOCKET) {
-        /* There is an RDB child process but it is writing directly to
-         * children sockets. We need to wait for the next BGSAVE
+    } else if ((server.child_type == CHILD_TYPE_RDB || server.child_type == CHILD_TYPE_AOF) && server.rdb_child_type == SNAPSHOT_CHILD_TYPE_SOCKET) {
+        /* There is an RDB/AOF child process but it is writing directly to
+         * children sockets. We need to wait for the next BGSAVE/BGREWRITE
          * in order to synchronize. */
-        serverLog(LL_NOTICE, "Current BGSAVE has socket target. Waiting for next BGSAVE for SYNC");
+        serverLog(LL_NOTICE, "Current snapshot has socket target. Waiting for next BGSAVE/BGREWRITE for SYNC");
 
         /* CASE 3: There is no BGSAVE is in progress. */
     } else {
         if (server.repl_diskless_sync && (c->repl_data->replica_capa & REPLICA_CAPA_EOF) && server.repl_diskless_sync_delay) {
-            /* Diskless replication RDB child is created inside
+            /* Diskless replication RDB/AOF child is created inside
              * replicationCron() since we want to delay its start a
              * few seconds to wait for more replicas to arrive. */
-            serverLog(LL_NOTICE, "Delay next BGSAVE for diskless SYNC");
+            serverLog(LL_NOTICE, "Delay next BGSAVE/BGREWRITE for diskless SYNC");
         } else {
             /* We don't have a BGSAVE in progress, let's start one. Diskless
              * or disk-based mode is determined by replica's capacity. */
             if (!hasActiveChildProcess()) {
-                startBgsaveForReplication(c->repl_data->replica_capa,
-                                          c->repl_data->replica_req,
-                                          replicaRdbVersion(c));
+                startGenerateSnapshotForReplication(c->repl_data->replica_capa,
+                                                    c->repl_data->replica_req,
+                                                    replicaRdbVersion(c));
             } else {
-                serverLog(LL_NOTICE, "No BGSAVE in progress, but another BG operation is active. "
-                                     "BGSAVE for replication delayed");
+                serverLog(LL_NOTICE, "Another BG operation is active. "
+                                     "BGSAVE/BGREWRITE for replication delayed");
             }
         }
     }
     return;
 }
 
-/* Check if there is any other replica waiting dumping RDB finished expect me.
- * This function is useful to judge current dumping RDB can be used for full
+/* Check if there is any other replica waiting dumping RDB/AOF finished expect me.
+ * This function is useful to judge current dumping RDB/AOF can be used for full
  * synchronization or not. */
-int anyOtherReplicaWaitRdb(client *except_me) {
+int anyOtherReplicaWaitSnapshot(client *except_me, int state) {
     listIter li;
     listNode *ln;
 
     listRewind(server.replicas, &li);
     while ((ln = listNext(&li))) {
         client *replica = ln->value;
-        if (replica != except_me && replica->repl_data->repl_state == REPLICA_STATE_WAIT_BGSAVE_END) {
+        if (replica != except_me && replica->repl_data->repl_state == state) {
             return 1;
         }
     }
@@ -1311,10 +1333,16 @@ void freeClientReplicationData(client *c) {
          * should not remove directly since that means RDB is important for users
          * to keep data safe and we may delay configured 'save' for full sync. */
         if (server.saveparamslen == 0 && c->repl_data->repl_state == REPLICA_STATE_WAIT_BGSAVE_END &&
-            server.child_type == CHILD_TYPE_RDB && server.rdb_child_type == RDB_CHILD_TYPE_DISK &&
-            anyOtherReplicaWaitRdb(c) == 0) {
+            server.child_type == CHILD_TYPE_RDB && server.rdb_child_type == SNAPSHOT_CHILD_TYPE_DISK &&
+            anyOtherReplicaWaitSnapshot(c, REPLICA_STATE_WAIT_BGSAVE_END) == 0) {
             serverLog(LL_NOTICE, "Background saving, persistence disabled, last replica dropped, killing fork child.");
             killRDBChild();
+        }
+        if (server.aof_enabled == 0 && c->repl_data->repl_state == REPLICA_STATE_WAIT_BGREWRITE_END &&
+            server.child_type == CHILD_TYPE_AOF && server.rdb_child_type == SNAPSHOT_CHILD_TYPE_DISK &&
+            anyOtherReplicaWaitSnapshot(c, REPLICA_STATE_WAIT_BGREWRITE_END) == 0) {
+            serverLog(LL_NOTICE, "Background rewriting, appendonly disabled, last replica dropped, killing fork child.");
+            killAppendOnlyChild(true);
         }
         if (c->repl_data->repl_state == REPLICA_STATE_SEND_BULK) {
             if (c->repl_data->repldbfd != -1) close(c->repl_data->repldbfd);
@@ -1356,13 +1384,14 @@ void freeClientReplicationData(client *c) {
  * the primary can accurately lists replicas and their listening ports in the
  * INFO output.
  *
- * - capa <eof|psync2|dual-channel|skip-rdb-checksum>
+ * - capa <eof|psync2|dual-channel|skip-rdb-checksum|fullsync-aof>
  * What is the capabilities of this instance.
  * eof: supports EOF-style RDB transfer for diskless replication.
  * psync2: supports PSYNC v2, so understands +CONTINUE <new repl ID>.
  * dual-channel: supports full sync using rdb channel.
  * skip-rdb-checksum: supports skipping RDB checksum calculations during diskless sync using
  *                    a connection that has integrity checks (such as TLS).
+ * fullsync-aof: using AOF instead of RDB for full synchronization
  *
  * - ack <offset> [fack <aofofs>]
  * Replica informs the primary the amount of replication stream that it
@@ -1437,10 +1466,16 @@ void replconfCommand(client *c) {
                  * replconf option. */
                 if (server.repl_diskless_sync) {
                     c->repl_data->replica_capa |= REPLICA_CAPA_DUAL_CHANNEL;
+                    c->repl_data->replica_capa &= ~REPLICA_CAPA_FULLSYNC_AOF; // reset fullsync-aof and wait rdb-channel to shake again
                 } else {
                     /* repl-diskless-sync is disabled, unable to use the dual channel replication,
                      * print a log so that user will get to know that they are missing something. */
                     serverLog(LL_NOTICE, "Dual channel capability ignored: repl-diskless-sync disabled");
+                }
+            } else if (!strcasecmp(objectGetVal(c->argv[j + 1]), "fullsync-aof")) {
+                /* AOF do not have aux field to support slot migration. */
+                if (server.fullsync_aof_replication && !(c->repl_data->replica_capa & REPLICA_CAPA_DUAL_CHANNEL) && !clusterIsAnySlotMoving()) {
+                    c->repl_data->replica_capa |= REPLICA_CAPA_FULLSYNC_AOF;
                 }
             } else if (!strcasecmp(objectGetVal(c->argv[j + 1]), REPLICA_CAPA_SKIP_RDB_CHECKSUM_STR))
                 c->repl_data->replica_capa |= REPLICA_CAPA_SKIP_RDB_CHECKSUM;
@@ -1466,7 +1501,8 @@ void replconfCommand(client *c) {
              * There's a chance the ACK got to us before we detected that the
              * bgsave is done (since that depends on cron ticks), so run a
              * quick check first (instead of waiting for the next ACK. */
-            if (server.child_type == CHILD_TYPE_RDB && c->repl_data->repl_state == REPLICA_STATE_WAIT_BGSAVE_END)
+            if ((server.child_type == CHILD_TYPE_RDB && c->repl_data->repl_state == REPLICA_STATE_WAIT_BGSAVE_END) ||
+                (server.child_type == CHILD_TYPE_AOF && c->repl_data->repl_state == REPLICA_STATE_WAIT_BGREWRITE_END))
                 checkChildrenDone();
             if (c->repl_data->repl_start_cmd_stream_on_ack && c->repl_data->repl_state == REPLICA_STATE_ONLINE) replicaStartCommandStream(c);
             if (c->repl_data->repl_state == REPLICA_STATE_BG_RDB_LOAD) {
@@ -1623,38 +1659,40 @@ void replicaStartCommandStream(client *replica) {
  * without any persistence. We don't want instances without persistence
  * to take RDB files around, this violates certain policies in certain
  * environments. */
-void removeRDBUsedToSyncReplicas(void) {
+void removeSnapshotUsedToSyncReplicas(void) {
     /* If the feature is disabled, return ASAP but also clear the
-     * RDBGeneratedByReplication flag in case it was set. Otherwise if the
+     * SnapshotGeneratedByReplication flag in case it was set. Otherwise if the
      * feature was enabled, but gets disabled later with CONFIG SET, the
      * flag may remain set to one: then next time the feature is re-enabled
      * via CONFIG SET we have it set even if no RDB was generated
      * because of replication recently. */
     if (!server.rdb_del_sync_files) {
-        RDBGeneratedByReplication = 0;
+        SnapshotGeneratedByReplication = 0;
         return;
     }
 
-    if (allPersistenceDisabled() && RDBGeneratedByReplication) {
+    if (allPersistenceDisabled() && SnapshotGeneratedByReplication) {
         client *replica;
         listNode *ln;
         listIter li;
 
-        int delrdb = 1;
+        int del_snapshot = 1;
         listRewind(server.replicas, &li);
         while ((ln = listNext(&li))) {
             replica = ln->value;
             if (replica->repl_data->repl_state == REPLICA_STATE_WAIT_BGSAVE_START ||
                 replica->repl_data->repl_state == REPLICA_STATE_WAIT_BGSAVE_END ||
+                replica->repl_data->repl_state == REPLICA_STATE_WAIT_BGREWRITE_START ||
+                replica->repl_data->repl_state == REPLICA_STATE_WAIT_BGREWRITE_END ||
                 replica->repl_data->repl_state == REPLICA_STATE_SEND_BULK) {
-                delrdb = 0;
+                del_snapshot = 0;
                 break; /* No need to check the other replicas. */
             }
         }
-        if (delrdb) {
+        if (del_snapshot) {
             struct stat sb;
             if (lstat(server.rdb_filename, &sb) != -1) {
-                RDBGeneratedByReplication = 0;
+                SnapshotGeneratedByReplication = 0;
                 serverLog(LL_NOTICE, "Removing the RDB file used to feed replicas "
                                      "in a persistence-less instance");
                 bg_unlink(server.rdb_filename);
@@ -1802,6 +1840,7 @@ void rdbPipeReadHandler(struct aeEventLoop *eventLoop, int fd, void *clientData,
                 server.rdb_pipe_conns[i] = NULL;
             }
             killRDBChild();
+            killAppendOnlyChild(true);
             return;
         }
 
@@ -1960,10 +1999,11 @@ void slotMigrationPipeReadHandler(struct aeEventLoop *eventLoop, int fd, void *c
  * otherwise C_ERR is passed to the function.
  * The 'type' argument is the type of the child that terminated
  * (if it had a disk or socket target). */
-void updateReplicasWaitingBgsave(int bgsaveerr, int type) {
+void updateReplicasWaitingBgSnapshotGenerate(int bgerr, int type, bool use_aof) {
     listNode *ln;
     listIter li;
-
+    int state = use_aof ? REPLICA_STATE_WAIT_BGREWRITE_END : REPLICA_STATE_WAIT_BGSAVE_END;
+    char *method = use_aof ? "BGREWRITEAOF" : "BGSAVE";
     /* Note: there's a chance we got here from within the REPLCONF ACK command
      * so we must avoid using freeClient, otherwise we'll crash on our way up. */
 
@@ -1971,15 +2011,15 @@ void updateReplicasWaitingBgsave(int bgsaveerr, int type) {
     while ((ln = listNext(&li))) {
         client *replica = ln->value;
 
-        if (replica->repl_data->repl_state == REPLICA_STATE_WAIT_BGSAVE_END) {
+        if (replica->repl_data->repl_state == state) {
             int repldbfd;
             struct valkey_stat buf;
 
-            if (bgsaveerr != C_OK) {
-                /* If bgsaveerr is error, there is no need to protect the rdb channel. */
+            if (bgerr != C_OK) {
+                /* If error, there is no need to protect the rdb channel. */
                 replica->flag.protected_rdb_channel = 0;
                 freeClientAsync(replica);
-                serverLog(LL_WARNING, "SYNC failed. BGSAVE child returned an error");
+                serverLog(LL_WARNING, "SYNC failed. %s child returned an error", method);
                 continue;
             }
 
@@ -1988,11 +2028,11 @@ void updateReplicasWaitingBgsave(int bgsaveerr, int type) {
              * already an RDB -> Replicas socket transfer, used in the case of
              * diskless replication, our work is trivial, we can just put
              * the replica online. */
-            if (type == RDB_CHILD_TYPE_SOCKET) {
+            if (type == SNAPSHOT_CHILD_TYPE_SOCKET) {
                 serverLog(LL_NOTICE,
-                          "Streamed RDB transfer with replica %s succeeded (socket). Waiting for REPLCONF ACK from "
+                          "Streamed %s transfer with replica %s succeeded (socket). Waiting for REPLCONF ACK from "
                           "replica to enable streaming",
-                          replicationGetReplicaName(replica));
+                          use_aof ? "AOF" : "RDB", replicationGetReplicaName(replica));
                 /* Note: we wait for a REPLCONF ACK message from the replica in
                  * order to really put it online (install the write handler
                  * so that the accumulated data can be transferred). However
@@ -2024,15 +2064,15 @@ void updateReplicasWaitingBgsave(int bgsaveerr, int type) {
                 }
                 replica->repl_data->repl_start_cmd_stream_on_ack = 1;
             } else {
-                repldbfd = open(server.rdb_filename, O_RDONLY);
+                repldbfd = open(use_aof ? server.repl_transfer_fullsync_aof_name : server.rdb_filename, O_RDONLY);
                 if (repldbfd == -1) {
                     freeClientAsync(replica);
-                    serverLog(LL_WARNING, "SYNC failed. Can't open DB after BGSAVE: %s", strerror(errno));
+                    serverLog(LL_WARNING, "SYNC failed. Can't open DB after %s: %s", method, strerror(errno));
                     continue;
                 }
                 if (valkey_fstat(repldbfd, &buf) == -1) {
                     freeClientAsync(replica);
-                    serverLog(LL_WARNING, "SYNC failed. Can't stat DB after BGSAVE: %s", strerror(errno));
+                    serverLog(LL_WARNING, "SYNC failed. Can't stat DB after %s: %s", method, strerror(errno));
                     close(repldbfd);
                     continue;
                 }
@@ -2596,6 +2636,92 @@ int replicaLoadPrimaryRDBFromDisk(rdbSaveInfo *rsi) {
     return C_OK;
 }
 
+int replicaLoadPrimarySnapshotAOFFromSocket(connection *conn, char *eofmark, int *usemark) {
+    rio aofrio;
+    int empty_db_flags = server.repl_replica_lazy_flush ? EMPTYDB_ASYNC : EMPTYDB_NO_FLAGS;
+
+    replicationAttachToNewPrimary();
+
+    rioInitWithConn(&aofrio, conn, server.repl_transfer_size);
+    connBlock(conn);
+    connRecvTimeout(conn, server.repl_timeout * 1000);
+
+    serverLog(LL_NOTICE, "PRIMARY <-> REPLICA sync: Flushing old data before loading BASE AOF");
+    emptyData(-1, empty_db_flags, replicationEmptyDbCallback);
+
+    serverLog(LL_NOTICE, "PRIMARY <-> REPLICA sync: Loading DB in memory");
+    startLoading(server.repl_transfer_size, RDBFLAGS_REPLICATION, 0);
+
+    int ret = loadSnapshotAofFromRioScopedAOF(&aofrio, eofmark, *usemark);
+
+    rioFreeConn(&aofrio, NULL);
+    if (ret == AOF_FAILED) {
+        serverLog(LL_WARNING, "Failed trying to load the PRIMARY synchronization DB "
+                              "from socket, check server logs.");
+        stopLoading(0);
+        serverLog(LL_NOTICE, "PRIMARY <-> REPLICA sync: Discarding the half-loaded data (BASE AOF load failed)");
+        emptyData(-1, empty_db_flags, replicationEmptyDbCallback);
+        return C_ERR;
+    }
+
+    server.dirty++;
+    stopLoading(1);
+
+    connNonBlock(conn);
+    connRecvTimeout(conn, 0);
+    return C_OK;
+}
+
+int replicaLoadPrimaryAOFFromDisk(void) {
+    int ret = C_OK;
+    int empty_db_flags = server.repl_replica_lazy_flush ? EMPTYDB_ASYNC : EMPTYDB_NO_FLAGS;
+
+    /* Ensure the downloaded temp file is fully synced to disk. */
+    if (fsync(server.repl_transfer_fd) == -1) {
+        serverLog(LL_WARNING,
+                  "Failed trying to sync the temp BASE AOF to disk in "
+                  "PRIMARY <-> REPLICA synchronization: %s",
+                  strerror(errno));
+        ret = C_ERR;
+        goto cleanup;
+    }
+
+    /* Replication history is about to change, discard cached primary and
+     * force resync of sub-replicas. */
+    replicationAttachToNewPrimary();
+
+    /* We must explicitly flush old dataset before applying the base AOF. */
+    serverLog(LL_NOTICE, "PRIMARY <-> REPLICA sync: Flushing old data before loading BASE AOF");
+    emptyData(-1, empty_db_flags, replicationEmptyDbCallback);
+
+    serverLog(LL_NOTICE, "PRIMARY <-> REPLICA sync: Loading DB in memory");
+    int aofret = loadSnapshotAofFromPath(server.repl_transfer_tmpfile);
+
+    if (aofret != AOF_OK) {
+        serverLog(LL_WARNING, "Failed trying to load the PRIMARY synchronization "
+                              "DB from disk, check server logs.");
+
+        /* Remove the half-loaded dataset to avoid an inconsistent state. */
+        serverLog(LL_NOTICE, "PRIMARY <-> REPLICA sync: Discarding the half-loaded data (BASE AOF load failed)");
+        emptyData(-1, empty_db_flags, replicationEmptyDbCallback);
+        ret = C_ERR;
+    }
+
+cleanup:
+    /* Cleanup transfer resources (temp file is no longer needed). */
+    if (server.repl_transfer_tmpfile) {
+        bg_unlink(server.repl_transfer_tmpfile);
+        zfree(server.repl_transfer_tmpfile);
+        server.repl_transfer_tmpfile = NULL;
+    }
+    if (server.repl_transfer_fd != -1) {
+        close(server.repl_transfer_fd);
+        server.repl_transfer_fd = -1;
+    }
+
+    return ret;
+}
+
 /* Asynchronously read the SYNC payload we receive from a primary, parse it,
  * and load it directly to memory without going through the disk */
 void replicaReceiveRDBFromPrimaryToMemory(connection *conn) {
@@ -2637,10 +2763,19 @@ read_from_socket:
     }
 
     replicaBeforeLoadPrimaryRDB(conn, 1);
-    if (replicaLoadPrimaryRDBFromSocket(conn, buf, eofmark, &usemark, &rsi) == C_ERR) {
-        serverLog(LL_WARNING, "Failed to load RDB");
-        cancelReplicationHandshake(1);
-        return;
+    if (server.repl_transfer_format == REPL_SNAPSHOT_AOF) {
+        if (replicaLoadPrimarySnapshotAOFFromSocket(conn, eofmark, &usemark) == C_ERR) {
+            serverLog(LL_WARNING, "Failed to load SNAPSHOT AOF");
+            cancelReplicationHandshake(1);
+            return;
+        }
+        rsi.repl_stream_db = server.repl_replica_stream_dbid;
+    } else {
+        if (replicaLoadPrimaryRDBFromSocket(conn, buf, eofmark, &usemark, &rsi) == C_ERR) {
+            serverLog(LL_WARNING, "Failed to load RDB");
+            cancelReplicationHandshake(1);
+            return;
+        }
     }
     replicaAfterLoadPrimaryRDB(conn, &rsi);
 }
@@ -2970,15 +3105,16 @@ void replicationAbortDualChannelSyncTransfer(void) {
 
 /* Replication: Primary side.
  * Send current replication offset to replica. Use the following structure:
- * $ENDOFF:<repl-offset> <primary-repl-id> <current-db-id> <client-id> */
-int sendCurrentOffsetToReplica(client *replica) {
+ * $ENDOFF:<repl-offset> <primary-repl-id> <current-db-id> <client-id> <aof> */
+int sendCurrentOffsetToReplica(client *replica, bool fullsync_aof) {
     char buf[128];
     int buflen;
-    buflen = snprintf(buf, sizeof(buf), "$ENDOFF:%lld %s %d %llu\r\n", server.primary_repl_offset, server.replid,
-                      server.replicas_eldb, (long long unsigned int)replica->id);
-    dualChannelServerLog(LL_NOTICE, "Sending to replica %s RDB end offset %lld and client-id %llu",
+    char *format = fullsync_aof ? "aof" : "rdb";
+    buflen = snprintf(buf, sizeof(buf), "$ENDOFF:%lld %s %d %llu %s\r\n", server.primary_repl_offset, server.replid,
+                      server.repl_stream_dbid, (long long unsigned int)replica->id, format);
+    dualChannelServerLog(LL_NOTICE, "Sending to replica %s RDB end offset %lld client-id %llu format %s and dbid %d.",
                          replicationGetReplicaName(replica), server.primary_repl_offset,
-                         (long long unsigned int)replica->id);
+                         (long long unsigned int)replica->id, format, server.repl_stream_dbid);
     if (connSyncWrite(replica->conn, buf, buflen, server.repl_syncio_timeout * 1000) != buflen) {
         freeClientAsync(replica);
         return C_ERR;
@@ -3025,8 +3161,14 @@ static int dualChannelReplHandleHandshake(connection *conn, sds *err) {
     }
     /* Send replica listening port to primary for clarification */
     sds portstr = getReplicaPortString();
-    *err = sendCommand(conn, "REPLCONF", "capa", "eof", "rdb-only", "1", "rdb-channel", "1", "listening-port", portstr,
-                       NULL);
+    if (server.fullsync_aof_replication && server.repl_diskless_load != REPL_DISKLESS_LOAD_SWAPDB) {
+        *err = sendCommand(conn, "REPLCONF", "capa", "eof", "capa", "fullsync-aof", "rdb-only", "1", "rdb-channel", "1", "listening-port", portstr,
+                           NULL);
+    } else {
+        *err = sendCommand(conn, "REPLCONF", "capa", "eof", "rdb-only", "1", "rdb-channel", "1", "listening-port", portstr,
+                           NULL);
+    }
+
     sdsfree(portstr);
     if (*err) {
         dualChannelServerLog(LL_WARNING, "Sending command to primary in dual channel replication handshake: %s", *err);
@@ -3099,6 +3241,18 @@ static int dualChannelReplHandleReplconfReply(connection *conn, sds *err) {
     return C_OK;
 }
 
+void syncWithPrimaryHandleError(connection **conn) {
+    connClose(*conn);
+    *conn = NULL;
+    server.repl_transfer_s = NULL;
+    if (server.repl_rdb_transfer_s) {
+        connClose(server.repl_rdb_transfer_s);
+        server.repl_rdb_transfer_s = NULL;
+    }
+    replicationAbortSyncTransfer();
+    server.repl_state = REPL_STATE_CONNECT;
+}
+
 static int dualChannelReplHandleEndOffsetResponse(connection *conn, sds *err) {
     uint64_t rdb_client_id;
     *err = receiveSynchronousResponse(conn);
@@ -3113,14 +3267,25 @@ static int dualChannelReplHandleEndOffsetResponse(connection *conn, sds *err) {
     long long reploffset;
     char primary_replid[CONFIG_RUN_ID_SIZE + 1];
     int dbid;
+    char fmt[8] = {0};
     /* Parse end offset response */
-    char *endoff_format = "$ENDOFF:%lld %40s %d %llu";
-    if (sscanf(*err, endoff_format, &reploffset, primary_replid, &dbid, &rdb_client_id) != 4) {
+    char *endoff_format = "$ENDOFF:%lld %40s %d %llu %7s";
+    int n = sscanf(*err, endoff_format, &reploffset, primary_replid, &dbid, &rdb_client_id, fmt);
+    if (n < 4) {
         dualChannelServerLog(LL_WARNING, "Received unexpected $ENDOFF response: %s", *err);
         return C_ERR;
     }
     server.rdb_client_id = rdb_client_id;
     server.primary_initial_offset = reploffset;
+    if (n == 4) {
+        server.repl_transfer_format = REPL_SNAPSHOT_RDB;
+    } else {
+        if (!strcasecmp(fmt, "aof"))
+            server.repl_transfer_format = REPL_SNAPSHOT_AOF;
+        else
+            server.repl_transfer_format = REPL_SNAPSHOT_RDB;
+    }
+    serverLog(LL_NOTICE, "Dual channel snapshot format: %s", server.repl_transfer_format == REPL_SNAPSHOT_AOF ? "AOF" : "RDB");
 
     /* Initiate repl_provisional_primary to act as this replica temp primary until RDB is loaded */
     server.repl_provisional_primary.conn = server.repl_transfer_s;
@@ -3527,6 +3692,7 @@ int replicaProcessPsyncReply(connection *conn) {
     connSetReadHandler(conn, NULL);
 
     if (!strncmp(reply, "+FULLRESYNC", 11)) {
+        server.repl_transfer_format = REPL_SNAPSHOT_RDB;
         char *replid = NULL, *offset = NULL;
 
         /* FULL RESYNC, parse the reply in order to extract the replid
@@ -3548,8 +3714,21 @@ int replicaProcessPsyncReply(connection *conn) {
             memcpy(server.primary_replid, replid, offset - replid - 1);
             server.primary_replid[CONFIG_RUN_ID_SIZE] = '\0';
             server.primary_initial_offset = strtoll(offset, NULL, 10);
-            serverLog(LL_NOTICE, "Full resync from primary: %s:%lld", server.primary_replid,
-                      server.primary_initial_offset);
+
+            char *p = offset;
+            if (*p == '-') p++;
+            while (*p >= '0' && *p <= '9') p++;
+            while (*p == ' ') p++;
+            if (!strncasecmp(p, "AOF", 3)) {
+                server.repl_transfer_format = REPL_SNAPSHOT_AOF;
+                p += 3;
+                while (*p == ' ') p++;
+                long long dbid_ll = strtoll(p, NULL, 10);
+                server.repl_replica_stream_dbid = (int)dbid_ll;
+            }
+
+            serverLog(LL_NOTICE, "Full resync from primary: %s:%lld, format:%s, dbid:%d", server.primary_replid,
+                      server.primary_initial_offset, server.repl_transfer_format == REPL_SNAPSHOT_AOF ? "AOF" : "RDB", server.repl_replica_stream_dbid);
         }
         sdsfree(reply);
         return PSYNC_FULLRESYNC;
@@ -3845,6 +4024,15 @@ int syncWithPrimaryHandleSendHandshakeState(connection *conn) {
         lens[argc] = strlen("dual-channel");
         argc++;
     }
+    /* swapdb in fullsync-aof is not supported now . */
+    if (server.fullsync_aof_replication && server.repl_diskless_load != REPL_DISKLESS_LOAD_SWAPDB) {
+        argv[argc] = "capa";
+        lens[argc] = strlen("capa");
+        argc++;
+        argv[argc] = "fullsync-aof";
+        lens[argc] = strlen("fullsync-aof");
+        argc++;
+    }
     err = sendCommandArgv(conn, argc, argv, lens);
     if (err) goto err;
 
@@ -3966,18 +4154,6 @@ int syncWithPrimaryHandleSendPsyncState(connection *conn) {
         return C_ERR;
     }
     return C_OK;
-}
-
-void syncWithPrimaryHandleError(connection **conn) {
-    connClose(*conn);
-    *conn = NULL;
-    server.repl_transfer_s = NULL;
-    if (server.repl_rdb_transfer_s) {
-        connClose(server.repl_rdb_transfer_s);
-        server.repl_rdb_transfer_s = NULL;
-    }
-    replicationAbortSyncTransfer();
-    server.repl_state = REPL_STATE_CONNECT;
 }
 
 /*
@@ -5178,10 +5354,10 @@ void handleBioThreadFinishedRDBDownload(void) {
     int bio_repl_transfer_read = server.bio_repl_transfer_read;
     resetBioRDBSaveState();
 
-    serverLog(LL_NOTICE, "Replica main thread detected RDB download completion in Bio thread");
+    serverLog(LL_NOTICE, "Replica main thread detected %s download completion in Bio thread", server.repl_transfer_format == REPL_SNAPSHOT_AOF ? "AOF" : "RDB");
 
     /* Handle Bio sync success */
-    serverLog(LL_NOTICE, "Loading the RDB and finalizing primary-replica sync...");
+    serverLog(LL_NOTICE, "Loading the Snapshot and finalizing primary-replica sync...");
     rdbSaveInfo rsi = RDB_SAVE_INFO_INIT;
     connection *conn;
     if (server.repl_rdb_channel_state != REPL_DUAL_CHANNEL_STATE_NONE) {
@@ -5195,10 +5371,19 @@ void handleBioThreadFinishedRDBDownload(void) {
     debugServerAssert(conn);
 
     replicaBeforeLoadPrimaryRDB(conn, 0);
-    if (replicaLoadPrimaryRDBFromDisk(&rsi) == C_ERR) {
-        serverLog(LL_WARNING, "Failed to load RDB");
-        cancelReplicationHandshake(1);
-        return;
+    if (server.repl_transfer_format == REPL_SNAPSHOT_AOF) {
+        if (replicaLoadPrimaryAOFFromDisk() == C_ERR) {
+            serverLog(LL_WARNING, "Failed to load Snapshot AOF");
+            cancelReplicationHandshake(1);
+            return;
+        }
+        rsi.repl_stream_db = server.repl_replica_stream_dbid;
+    } else {
+        if (replicaLoadPrimaryRDBFromDisk(&rsi) == C_ERR) {
+            serverLog(LL_WARNING, "Failed to load RDB");
+            cancelReplicationHandshake(1);
+            return;
+        }
     }
     replicaAfterLoadPrimaryRDB(conn, &rsi);
     server.repl_transfer_size = bio_repl_transfer_size;
@@ -5292,7 +5477,9 @@ void replicationCron(void) {
 
         int is_presync =
             (replica->repl_data->repl_state == REPLICA_STATE_WAIT_BGSAVE_START ||
-             (replica->repl_data->repl_state == REPLICA_STATE_WAIT_BGSAVE_END && server.rdb_child_type != RDB_CHILD_TYPE_SOCKET));
+             replica->repl_data->repl_state == REPLICA_STATE_WAIT_BGREWRITE_START ||
+             ((replica->repl_data->repl_state == REPLICA_STATE_WAIT_BGSAVE_END || replica->repl_data->repl_state == REPLICA_STATE_WAIT_BGREWRITE_END) &&
+              server.rdb_child_type != SNAPSHOT_CHILD_TYPE_SOCKET));
 
         if (is_presync) {
             connWrite(replica->conn, "\n", 1);
@@ -5320,8 +5507,8 @@ void replicationCron(void) {
             /* We consider disconnecting only diskless replicas because disk-based replicas aren't fed
              * by the fork child so if a disk-based replica is stuck it doesn't prevent the fork child
              * from terminating. */
-            if (replica->repl_data->repl_state == REPLICA_STATE_WAIT_BGSAVE_END &&
-                server.rdb_child_type == RDB_CHILD_TYPE_SOCKET) {
+            if ((replica->repl_data->repl_state == REPLICA_STATE_WAIT_BGSAVE_END || replica->repl_data->repl_state == REPLICA_STATE_WAIT_BGREWRITE_END) &&
+                server.rdb_child_type == SNAPSHOT_CHILD_TYPE_SOCKET) {
                 if (replica->repl_data->repl_last_partial_write != 0 &&
                     (server.unixtime - replica->repl_data->repl_last_partial_write) > server.repl_timeout) {
                     serverLog(LL_WARNING, "Disconnecting timedout replica (full sync): %s",
@@ -5376,7 +5563,7 @@ void replicationCron(void) {
 
     /* Remove the RDB file used for replication if the server is not running
      * with any persistence. */
-    removeRDBUsedToSyncReplicas();
+    removeSnapshotUsedToSyncReplicas();
 
     /* Sanity check replication buffer, the first block of replication buffer blocks
      * must be referenced by someone, since it will be freed when not referenced,
@@ -5413,7 +5600,7 @@ int shouldStartChildReplication(int *mincapa_out, int *req_out, int *rdbver_out)
         listRewind(server.replicas, &li);
         while ((ln = listNext(&li))) {
             client *replica = ln->value;
-            if (replica->repl_data->repl_state == REPLICA_STATE_WAIT_BGSAVE_START) {
+            if (replica->repl_data->repl_state == REPLICA_STATE_WAIT_BGSAVE_START || replica->repl_data->repl_state == REPLICA_STATE_WAIT_BGREWRITE_START) {
                 if (first) {
                     /* Get first replica's requirements */
                     req = replica->repl_data->replica_req;
@@ -5454,7 +5641,7 @@ void replicationStartPendingFork(void) {
         /* Start the BGSAVE. The called function may start a
          * BGSAVE with socket target or disk target depending on the
          * configuration and replicas capabilities and requirements. */
-        startBgsaveForReplication(mincapa, req, rdbver);
+        startGenerateSnapshotForReplication(mincapa, req, rdbver);
     }
 }
 

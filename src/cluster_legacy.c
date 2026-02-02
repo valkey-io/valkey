@@ -8321,3 +8321,12 @@ bool isAnySlotInManualImportingState(void) {
 bool isAnySlotInManualMigratingState(void) {
     return dictSize(server.cluster->migrating_slots_to) > 0;
 }
+
+bool clusterIsAnySlotMoving(void) {
+    if (!server.cluster_enabled) {
+        return false;
+    }
+    bool atomic = clusterIsAnySlotImporting() || clusterIsAnySlotExporting();
+    bool manual = isAnySlotInManualImportingState() || isAnySlotInManualMigratingState();
+    return atomic || manual;
+}

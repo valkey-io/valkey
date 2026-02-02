@@ -1933,7 +1933,8 @@ void unlinkClient(client *c) {
          * snapshot child may take some time to die, during which the migration will continue past
          * the snapshot state. */
         if (c->repl_data && server.rdb_pipe_conns &&
-            ((c->flag.replica && c->repl_data->repl_state == REPLICA_STATE_WAIT_BGSAVE_END))) {
+            ((c->flag.replica &&
+              (c->repl_data->repl_state == REPLICA_STATE_WAIT_BGSAVE_END || c->repl_data->repl_state == REPLICA_STATE_WAIT_BGREWRITE_END)))) {
             int i;
             int still_alive = 0;
             for (i = 0; i < server.rdb_pipe_numconns; i++) {
@@ -1946,6 +1947,7 @@ void unlinkClient(client *c) {
             if (still_alive == 0) {
                 serverLog(LL_NOTICE, "Diskless rdb transfer, last replica dropped, killing fork child.");
                 killRDBChild();
+                killAppendOnlyChild(true);
             }
         }
         /* Check if this is the slot migration client we are writing to in a

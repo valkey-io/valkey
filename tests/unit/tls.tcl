@@ -332,7 +332,7 @@ start_server {tags {"tls"}} {
 
         proc test_tls_cert_rejection {cert_type cert_path expected_error} {
             set tlsdir [file normalize ./tests/tls]
-            set server_path [file normalize ./src/valkey-server]
+            set server_path $::VALKEY_SERVER_BIN
             set server_cert $tlsdir/server.crt
             set server_key $tlsdir/server.key
             set client_cert $tlsdir/client.crt
@@ -355,7 +355,7 @@ start_server {tags {"tls"}} {
             if {$ca_cert_dir ne ""}  { lappend cmd --tls-ca-cert-dir  $ca_cert_dir }
 
             if {$::tls_module} {
-                lappend cmd --loadmodule [file normalize ./src/valkey-tls.so]
+                lappend cmd --loadmodule $::VALKEY_TLS_MODULE
             }
 
             catch {exec {*}$cmd 2>@1} err

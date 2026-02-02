@@ -545,7 +545,7 @@ proc start_server {options {code undefined}} {
     set config {}
     if {$::tls} {
         if {$::tls_module} {
-            lappend config_lines [list "loadmodule" [format "%s/src/valkey-tls.so" [pwd]]]
+            lappend config_lines [list "loadmodule" $::VALKEY_TLS_MODULE]
         }
         dict set config "tls-cert-file" [format "%s/tests/tls/server.crt" [pwd]]
         dict set config "tls-key-file" [format "%s/tests/tls/server.key" [pwd]]

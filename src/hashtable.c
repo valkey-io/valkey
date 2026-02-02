@@ -635,8 +635,24 @@ static void rehashStepShrink(hashtable *ht) {
     rehashStepFinalize(ht);
 }
 
+/* Performs one step of incremental rehashing.
+ *
+ * Note that a rehashing step consists in moving a bucket and all its child buckets,
+ * (that may have more than one key as we use bucket and bucket chaining) from the
+ * old to the new hash table, however since part of the hash table may be composed
+ * of empty buckets, to speed up the rehashing of empty buckets, we will visit at
+ * max n empty buckets in total. */
 static void rehashStep(hashtable *ht) {
     assert(hashtableIsRehashing(ht));
+
+    /* Skip a maximum of n empty buckets. */
+    int empty_visits = 10;
+    while (ht->tables[0] + ht->rehash_idx == NULL) {
+        rehashStepFinalize(ht);
+        if (!hashtableIsRehashing(ht)) return;
+        if (--empty_visits == 0) return;
+    }
+
     if (ht->bucket_exp[1] < ht->bucket_exp[0]) {
         rehashStepShrink(ht);
         return;

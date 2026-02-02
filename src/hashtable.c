@@ -638,7 +638,7 @@ static void rehashStepShrink(hashtable *ht) {
         if (b->presence != 0 || b->chained) break; /* non-empty bucket */
         rehashStepFinalize(ht);
         if (!hashtableIsRehashing(ht)) return; /* rehashing completed */
-        if (--empty_visits == 0) return; /* too many empty buckets */
+        if (--empty_visits == 0) return;       /* too many empty buckets */
     }
 
     /* Rehash all the entries in this bucket chain from the old to the new hash HT */

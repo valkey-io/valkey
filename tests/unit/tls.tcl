@@ -387,16 +387,16 @@ start_server {tags {"tls"}} {
             set tlsdir [file normalize ./tests/tls]
 
             # Expired server certificate
-            test_tls_cert_rejection server $tlsdir/server-expired.crt {*Server TLS certificate is invalid*}
+            test_tls_cert_rejection server $tlsdir/server-expired.crt {*Server TLS certificate has expired*}
 
             # Not-yet-valid server certificate
-            test_tls_cert_rejection server $tlsdir/server-notyet.crt {*Server TLS certificate is invalid*}
+            test_tls_cert_rejection server $tlsdir/server-notyet.crt {*Server TLS certificate is not yet valid*}
 
             # Expired client certificate
-            test_tls_cert_rejection client $tlsdir/client-expired.crt {*Client TLS certificate is invalid*}
+            test_tls_cert_rejection client $tlsdir/client-expired.crt {*Client TLS certificate has expired*}
 
             # Not-yet-valid client certificate
-            test_tls_cert_rejection client $tlsdir/client-notyet.crt {*Client TLS certificate is invalid*}
+            test_tls_cert_rejection client $tlsdir/client-notyet.crt {*Client TLS certificate is not yet valid*}
 
             # Expired CA certificate file
             test_tls_cert_rejection ca-file $tlsdir/ca-expired.crt {*One or more loaded CA certificates are invalid*}

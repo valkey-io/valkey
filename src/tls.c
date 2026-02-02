@@ -466,7 +466,7 @@ static int isCertExpired(X509 *cert) {
 }
 
 static void logExpiredCert(const char *context, X509 *cert, const char *path) {
-    if (!isCertExpired(cert)) return;
+    if (!cert || !context) return;
     char subject[256];
     const char *subject_str = "unknown";
     X509_NAME *name = X509_get_subject_name(cert);
@@ -480,14 +480,35 @@ static void logExpiredCert(const char *context, X509 *cert, const char *path) {
     }
 }
 
+static void logNotYetValidCert(const char *context, X509 *cert, const char *path) {
+    if (!context || !cert) return;
+    char subject[256];
+    const char *subject_str = "unknown";
+    X509_NAME *name = X509_get_subject_name(cert);
+    if (name && X509_NAME_oneline(name, subject, sizeof(subject))) {
+        subject_str = subject;
+    }
+    if (path) {
+        serverLog(LL_WARNING, "%s TLS certificate is not yet valid (file: %s)", context, path);
+    } else {
+        serverLog(LL_WARNING, "%s TLS certificate is not yet valid: subject=%s", context, subject_str);
+    }
+}
+
 /* Check a single X509 certificate validity */
-static bool isCertValid(X509 *cert) {
+static bool isCertValid(X509 *cert, const char *context, const char *path) {
     if (!cert) return false;
     const ASN1_TIME *not_before = X509_get0_notBefore(cert);
     const ASN1_TIME *not_after = X509_get0_notAfter(cert);
     if (!not_before || !not_after) return false;
-    if (X509_cmp_current_time(not_before) > 0 ||
-        X509_cmp_current_time(not_after) < 0) {
+    int not_before_cmp = X509_cmp_current_time(not_before);
+    int not_after_cmp = X509_cmp_current_time(not_after);
+    if (not_before_cmp > 0) {
+        logNotYetValidCert(context, cert, path);
+        return false;
+    }
+    if (not_after_cmp < 0) {
+        logExpiredCert(context, cert, path);
         return false;
     }
     return true;
@@ -554,11 +575,8 @@ static bool areAllCaCertsValid(SSL_CTX *ctx) {
         int type = X509_OBJECT_get_type(obj);
         if (type == X509_LU_X509) {
             X509 *ca_cert = X509_OBJECT_get0_X509(obj);
-            if (ca_cert) {
-                logExpiredCert("CA", ca_cert, NULL);
-                if (!isCertValid(ca_cert)) {
-                    return false;
-                }
+            if (ca_cert && !isCertValid(ca_cert, "CA", NULL)) {
+                return false;
             }
         }
     }
@@ -611,10 +629,7 @@ static SSL_CTX *createSSLContext(serverTLSContextConfig *ctx_config, int protoco
 
     X509 *server_cert = SSL_CTX_get0_certificate(ctx);
     int expired = isCertExpired(server_cert);
-    if (expired) {
-        logExpiredCert(client ? "Client" : "Server", server_cert, cert_file);
-    }
-    if (!isCertValid(server_cert)) {
+    if (!isCertValid(server_cert, client ? "Client" : "Server", cert_file)) {
         if (!expired) {
             serverLog(LL_WARNING, "%s TLS certificate is invalid. Aborting TLS configuration.",
                       client ? "Client" : "Server");

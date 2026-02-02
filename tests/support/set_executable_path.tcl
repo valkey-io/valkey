@@ -30,9 +30,9 @@ set ::VALKEY_SENTINEL_BIN  [valkey_bin_absolute_path "valkey-sentinel"]
 # TLS module path: in CMake builds it's in lib/, in Make builds it's in src/
 if {[info exists ::env(VALKEY_BIN_DIR)]} {
     # CMake build: lib/ is sibling to bin/
-    set ::VALKEY_TLS_MODULE [file join [file dirname $::VALKEY_BIN_DIR] "lib" "valkey-tls.so"]
+    set ::VALKEY_TLS_MODULE [file join [file dirname $::VALKEY_BIN_DIR] "lib" "valkey-tls${::VALKEY_PROG_SUFFIX}.so"]
 } else {
-    set ::VALKEY_TLS_MODULE "[pwd]/src/valkey-tls.so"
+    set ::VALKEY_TLS_MODULE "[pwd]/src/valkey-tls${::VALKEY_PROG_SUFFIX}.so"
 }
 
 if {![file executable $::VALKEY_SERVER_BIN]} {

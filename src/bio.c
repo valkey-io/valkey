@@ -73,7 +73,7 @@
 #include "tls.h"
 #include <stdatomic.h>
 
-static unsigned int bio_job_to_worker[] = {
+static unsigned int bio_job_to_worker[BIO_NUM_OPS] = {
     [BIO_CLOSE_FILE] = 0,
     [BIO_AOF_FSYNC] = 1,
     [BIO_CLOSE_AOF] = 1,
@@ -238,10 +238,12 @@ void bioCreateSaveRDBToDiskJob(connection *conn, int is_dual_channel) {
     bioSubmitJob(BIO_RDB_SAVE, job);
 }
 
+#if defined(USE_OPENSSL) && USE_OPENSSL == 1 /* BUILD_YES */
 void bioCreateTlsReloadJob(void) {
     bio_job *job = zmalloc(sizeof(*job));
     bioSubmitJob(BIO_TLS_RELOAD, job);
 }
+#endif
 
 void *bioProcessBackgroundJobs(void *arg) {
     bio_worker_data *const bwd = arg;
@@ -307,13 +309,13 @@ void *bioProcessBackgroundJobs(void *arg) {
             job->free_args.free_fn(job->free_args.free_args);
         } else if (job_type == BIO_RDB_SAVE) {
             replicaReceiveRDBFromPrimaryToDisk(job->save_to_disk_args.conn, job->save_to_disk_args.is_dual_channel);
-        } else if (job_type == BIO_TLS_RELOAD) {
+        }
 #if defined(USE_OPENSSL) && USE_OPENSSL == 1 /* BUILD_YES */
+        else if (job_type == BIO_TLS_RELOAD) {
             tlsConfigureAsync();
-#else
-            serverPanic("BIO_TLS_RELOAD job type requires built-in TLS (BUILD_TLS=yes).");
+        }
 #endif
-        } else {
+        else {
             serverPanic("Wrong job type in bioProcessBackgroundJobs().");
         }
         zfree(job);

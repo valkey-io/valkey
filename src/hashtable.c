@@ -361,6 +361,7 @@ static_assert(sizeof(hashtableIncrementalFindState) >= sizeof(incrementalFind),
 /* Struct used for stats functions. */
 struct hashtableStats {
     int table_index;                /* 0 or 1 (old or new while rehashing). */
+    ssize_t rehash_index;           /* Rehash index while rehashing. */
     unsigned long toplevel_buckets; /* Number of buckets in table. */
     unsigned long child_buckets;    /* Number of child buckets. */
     unsigned long size;             /* Capacity of toplevel buckets. */
@@ -2298,6 +2299,7 @@ hashtableStats *hashtableGetStatsHt(hashtable *ht, int table_index, int full) {
     unsigned long *clvector = zcalloc(sizeof(unsigned long) * HASHTABLE_STATS_VECTLEN);
     hashtableStats *stats = zcalloc(sizeof(hashtableStats));
     stats->table_index = table_index;
+    stats->rehash_index = ht->rehash_idx;
     stats->clvector = clvector;
     stats->toplevel_buckets = numBuckets(ht->bucket_exp[table_index]);
     stats->child_buckets = ht->child_buckets[table_index];
@@ -2326,13 +2328,6 @@ hashtableStats *hashtableGetStatsHt(hashtable *ht, int table_index, int full) {
 
 /* Generates human readable stats. */
 size_t hashtableGetStatsMsg(char *buf, size_t bufsize, hashtableStats *stats, int full) {
-    if (stats->used == 0) {
-        return snprintf(buf, bufsize,
-                        "Hash table %d stats (%s):\n"
-                        "No stats available for empty hash tables\n",
-                        stats->table_index,
-                        (stats->table_index == 0) ? "main hash table" : "rehashing target");
-    }
     size_t l = 0;
     l += snprintf(buf + l, bufsize - l,
                   "Hash table %d stats (%s):\n"
@@ -2341,6 +2336,11 @@ size_t hashtableGetStatsMsg(char *buf, size_t bufsize, hashtableStats *stats, in
                   stats->table_index,
                   (stats->table_index == 0) ? "main hash table" : "rehashing target", stats->size,
                   stats->used);
+    if (stats->table_index == 0) {
+        l += snprintf(buf + l, bufsize - l,
+                      " rehashing index: %zd\n",
+                      stats->rehash_index);
+    }
     if (full) {
         l += snprintf(buf + l, bufsize - l,
                       " top-level buckets: %lu\n"

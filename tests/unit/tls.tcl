@@ -162,7 +162,7 @@ start_server {tags {"tls"}} {
             catch {r config set tls-cert-file $expired_crt} e
             assert_match {*Unable to update TLS*} $e
 
-            wait_for_log_messages 0 {"*TLS certificate has expired*"} $logline 100 10
+            wait_for_log_messages 0 {"*Server TLS certificate has expired.*"} $logline 100 10
         }
 
         test {TLS: Auto-authenticate using tls-auth-clients-user (CN)} {
@@ -387,16 +387,16 @@ start_server {tags {"tls"}} {
             set tlsdir [file normalize ./tests/tls]
 
             # Expired server certificate
-            test_tls_cert_rejection server $tlsdir/server-expired.crt {*Server TLS certificate has expired*}
+            test_tls_cert_rejection server $tlsdir/server-expired.crt {*Server TLS certificate has expired.*}
 
             # Not-yet-valid server certificate
-            test_tls_cert_rejection server $tlsdir/server-notyet.crt {*Server TLS certificate is not yet valid*}
+            test_tls_cert_rejection server $tlsdir/server-notyet.crt {*Server TLS certificate is not yet valid.*}
 
             # Expired client certificate
-            test_tls_cert_rejection client $tlsdir/client-expired.crt {*Client TLS certificate has expired*}
+            test_tls_cert_rejection client $tlsdir/client-expired.crt {*Client TLS certificate has expired.*}
 
             # Not-yet-valid client certificate
-            test_tls_cert_rejection client $tlsdir/client-notyet.crt {*Client TLS certificate is not yet valid*}
+            test_tls_cert_rejection client $tlsdir/client-notyet.crt {*Client TLS certificate is not yet valid.*}
 
             # Expired CA certificate file
             test_tls_cert_rejection ca-file $tlsdir/ca-expired.crt {*One or more loaded CA certificates are invalid*}

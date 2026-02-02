@@ -49,13 +49,13 @@ int inBioThread(void);
 
 /* Background job opcodes */
 enum {
-    BIO_CLOSE_FILE = 0, /* Deferred close(2) syscall. */
-    BIO_AOF_FSYNC,      /* Deferred AOF fsync. */
-    BIO_LAZY_FREE,      /* Deferred objects freeing. */
-    BIO_CLOSE_AOF,      /* Deferred close for AOF files. */
-    BIO_RDB_SAVE,       /* Deferred save RDB to disk on replica */
+    BIO_CLOSE_FILE = 0,                      /* Deferred close(2) syscall. */
+    BIO_AOF_FSYNC,                           /* Deferred AOF fsync. */
+    BIO_LAZY_FREE,                           /* Deferred objects freeing. */
+    BIO_CLOSE_AOF,                           /* Deferred close for AOF files. */
+    BIO_RDB_SAVE,                            /* Deferred save RDB to disk on replica */
 #if defined(USE_OPENSSL) && USE_OPENSSL == 1 /* BUILD_YES */
-    BIO_TLS_RELOAD, /* Deferred TLS reload. */
+    BIO_TLS_RELOAD,                          /* Deferred TLS reload. */
 #endif
     BIO_NUM_OPS
 };

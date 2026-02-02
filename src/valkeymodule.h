@@ -317,22 +317,6 @@ typedef uint64_t ValkeyModuleTimerID;
 /* Do filter ValkeyModule_Call() commands initiated by module itself. */
 #define VALKEYMODULE_CMDFILTER_NOSELF (1 << 0)
 
-/* Command Result Callback Flags */
-
-/* Only invoke callback for failed commands */
-#define VALKEYMODULE_CMDRESULT_FAILURES_ONLY (1 << 0)
-
-/* Don't invoke callback for ValkeyModule_Call() commands initiated by module itself. */
-#define VALKEYMODULE_CMDRESULT_NOSELF (1 << 1)
-
-/* Command Result Status Values */
-
-/* Command executed successfully */
-#define VALKEYMODULE_CMDRESULT_SUCCESS 0
-
-/* Command execution failed */
-#define VALKEYMODULE_CMDRESULT_FAILURE 1
-
 /* Declare that the module can handle errors with ValkeyModule_SetModuleOptions. */
 #define VALKEYMODULE_OPTIONS_HANDLE_IO_ERRORS (1 << 0)
 
@@ -552,7 +536,8 @@ typedef void (*ValkeyModuleEventLoopOneShotFunc)(void *user_data);
 #define VALKEYMODULE_EVENT_KEY 17
 #define VALKEYMODULE_EVENT_AUTHENTICATION_ATTEMPT 18
 #define VALKEYMODULE_EVENT_ATOMIC_SLOT_MIGRATION 19
-#define _VALKEYMODULE_EVENT_NEXT 20 /* Next event flag, should be updated if a new event added. */
+#define VALKEYMODULE_EVENT_COMMAND_RESULT 20
+#define _VALKEYMODULE_EVENT_NEXT 21 /* Next event flag, should be updated if a new event added. */
 
 typedef struct ValkeyModuleEvent {
     uint64_t id;      /* VALKEYMODULE_EVENT_... defines. */
@@ -611,7 +596,8 @@ static const ValkeyModuleEvent ValkeyModuleEvent_ReplicationRoleChanged = {VALKE
                                ValkeyModuleEvent_Config = {VALKEYMODULE_EVENT_CONFIG, 1},
                                ValkeyModuleEvent_Key = {VALKEYMODULE_EVENT_KEY, 1},
                                ValkeyModuleEvent_AuthenticationAttempt = {VALKEYMODULE_EVENT_AUTHENTICATION_ATTEMPT, 1},
-                               ValkeyModuleEvent_AtomicSlotMigration = {VALKEYMODULE_EVENT_ATOMIC_SLOT_MIGRATION, 1};
+                               ValkeyModuleEvent_AtomicSlotMigration = {VALKEYMODULE_EVENT_ATOMIC_SLOT_MIGRATION, 1},
+                               ValkeyModuleEvent_CommandResult = {VALKEYMODULE_EVENT_COMMAND_RESULT, 1};
 
 /* Those are values that are used for the 'subevent' callback argument. */
 #define VALKEYMODULE_SUBEVENT_PERSISTENCE_RDB_START 0
@@ -863,6 +849,20 @@ typedef struct ValkeyModuleAtomicSlotMigrationInfo {
 } ValkeyModuleAtomicSlotMigrationInfoV1;
 
 #define ValkeyModuleAtomicSlotMigrationInfo ValkeyModuleAtomicSlotMigrationInfoV1
+
+#define VALKEYMODULE_COMMANDRESULTINFO_VERSION 1
+typedef struct ValkeyModuleCommandResultInfo {
+    uint64_t version;           /* Version of this structure for ABI compat. */
+    const char *command_name;   /* Command name (e.g., "SET", "GET"). */
+    long long duration_us;      /* Execution duration in microseconds. */
+    long long dirty;            /* Number of keys modified. */
+    uint64_t client_id;         /* Client ID that executed the command. */
+    int is_module_client;       /* 1 if command was from RM_Call, 0 otherwise. */
+    int argc;                   /* Number of command arguments. */
+    struct ValkeyModuleString **argv; /* Command arguments array (zero-copy). */
+} ValkeyModuleCommandResultInfoV1;
+
+#define ValkeyModuleCommandResultInfo ValkeyModuleCommandResultInfoV1
 
 #define VALKEYMODULE_ATOMICSLOTMIGRATIONINFO_INITIALIZER_V1 {.version = 1}
 
@@ -1424,8 +1424,6 @@ typedef struct ValkeyModuleDict ValkeyModuleDict;
 typedef struct ValkeyModuleDictIter ValkeyModuleDictIter;
 typedef struct ValkeyModuleCommandFilterCtx ValkeyModuleCommandFilterCtx;
 typedef struct ValkeyModuleCommandFilter ValkeyModuleCommandFilter;
-typedef struct ValkeyModuleCommandResultCtx ValkeyModuleCommandResultCtx;
-typedef struct ValkeyModuleCommandResult ValkeyModuleCommandResult;
 typedef struct ValkeyModuleServerInfoData ValkeyModuleServerInfoData;
 typedef struct ValkeyModuleScanCursor ValkeyModuleScanCursor;
 typedef struct ValkeyModuleUser ValkeyModuleUser;
@@ -1459,7 +1457,6 @@ typedef void (*ValkeyModuleClusterMessageReceiver)(ValkeyModuleCtx *ctx,
                                                    uint32_t len);
 typedef void (*ValkeyModuleTimerProc)(ValkeyModuleCtx *ctx, void *data);
 typedef void (*ValkeyModuleCommandFilterFunc)(ValkeyModuleCommandFilterCtx *filter);
-typedef void (*ValkeyModuleCommandResultFunc)(ValkeyModuleCommandResultCtx *result);
 typedef void (*ValkeyModuleForkDoneHandler)(int exitcode, int bysignal, void *user_data);
 typedef void (*ValkeyModuleScanCB)(ValkeyModuleCtx *ctx,
                                    ValkeyModuleString *keyname,
@@ -2122,26 +2119,6 @@ VALKEYMODULE_API int (*ValkeyModule_CommandFilterArgDelete)(ValkeyModuleCommandF
                                                             int pos) VALKEYMODULE_ATTR;
 VALKEYMODULE_API unsigned long long (*ValkeyModule_CommandFilterGetClientId)(ValkeyModuleCommandFilterCtx *fctx)
     VALKEYMODULE_ATTR;
-VALKEYMODULE_API ValkeyModuleCommandResult *(*ValkeyModule_RegisterCommandResult)(ValkeyModuleCtx *ctx,
-                                                                                  ValkeyModuleCommandResultFunc cb,
-                                                                                  int flags) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*ValkeyModule_UnregisterCommandResult)(ValkeyModuleCtx *ctx,
-                                                             ValkeyModuleCommandResult *result) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*ValkeyModule_CommandResultGetStatus)(ValkeyModuleCommandResultCtx *rctx) VALKEYMODULE_ATTR;
-VALKEYMODULE_API const char *(*ValkeyModule_CommandResultGetCommandName)(ValkeyModuleCommandResultCtx *rctx)
-    VALKEYMODULE_ATTR;
-VALKEYMODULE_API long long (*ValkeyModule_CommandResultGetDuration)(ValkeyModuleCommandResultCtx *rctx) VALKEYMODULE_ATTR;
-VALKEYMODULE_API long long (*ValkeyModule_CommandResultGetDirty)(ValkeyModuleCommandResultCtx *rctx) VALKEYMODULE_ATTR;
-VALKEYMODULE_API unsigned long long (*ValkeyModule_CommandResultGetClientId)(ValkeyModuleCommandResultCtx *rctx)
-    VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*ValkeyModule_CommandResultGetArgv)(ValkeyModuleCommandResultCtx *rctx,
-                                                          ValkeyModuleString ***argv,
-                                                          int *argc) VALKEYMODULE_ATTR;
-VALKEYMODULE_API size_t (*ValkeyModule_CommandResultGetReplySize)(ValkeyModuleCommandResultCtx *rctx) VALKEYMODULE_ATTR;
-VALKEYMODULE_API const char *(*ValkeyModule_CommandResultGetReplyProto)(ValkeyModuleCommandResultCtx *rctx,
-                                                                        size_t *len) VALKEYMODULE_ATTR;
-VALKEYMODULE_API ValkeyModuleCallReply *(*ValkeyModule_CommandResultCreateReply)(ValkeyModuleCommandResultCtx *rctx)
-    VALKEYMODULE_ATTR;
 VALKEYMODULE_API int (*ValkeyModule_Fork)(ValkeyModuleForkDoneHandler cb, void *user_data) VALKEYMODULE_ATTR;
 VALKEYMODULE_API void (*ValkeyModule_SendChildHeartbeat)(double progress) VALKEYMODULE_ATTR;
 VALKEYMODULE_API int (*ValkeyModule_ExitFromChild)(int retcode) VALKEYMODULE_ATTR;
@@ -2634,17 +2611,6 @@ static int ValkeyModule_Init(ValkeyModuleCtx *ctx, const char *name, int ver, in
     VALKEYMODULE_GET_API(CommandFilterArgReplace);
     VALKEYMODULE_GET_API(CommandFilterArgDelete);
     VALKEYMODULE_GET_API(CommandFilterGetClientId);
-    VALKEYMODULE_GET_API(RegisterCommandResult);
-    VALKEYMODULE_GET_API(UnregisterCommandResult);
-    VALKEYMODULE_GET_API(CommandResultGetStatus);
-    VALKEYMODULE_GET_API(CommandResultGetCommandName);
-    VALKEYMODULE_GET_API(CommandResultGetDuration);
-    VALKEYMODULE_GET_API(CommandResultGetDirty);
-    VALKEYMODULE_GET_API(CommandResultGetClientId);
-    VALKEYMODULE_GET_API(CommandResultGetArgv);
-    VALKEYMODULE_GET_API(CommandResultGetReplySize);
-    VALKEYMODULE_GET_API(CommandResultGetReplyProto);
-    VALKEYMODULE_GET_API(CommandResultCreateReply);
     VALKEYMODULE_GET_API(Fork);
     VALKEYMODULE_GET_API(SendChildHeartbeat);
     VALKEYMODULE_GET_API(ExitFromChild);

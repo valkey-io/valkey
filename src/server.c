@@ -3978,8 +3978,8 @@ void call(client *c, int flags) {
         command_failed = 1;
     }
 
-    /* Call module command result callbacks if any are registered. */
-    moduleCallCommandResultCallbacks(c, real_cmd, command_failed, duration, dirty);
+    /* Fire command result event for subscribed modules. */
+    moduleFireCommandResultEvent(c, real_cmd, command_failed, duration, dirty);
 
     /* After executing command, we will close the client after writing entire
      * reply if it is set 'CLIENT_CLOSE_AFTER_COMMAND' flag. */

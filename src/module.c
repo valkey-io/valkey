@@ -390,26 +390,6 @@ typedef struct ValkeyModuleCommandFilter {
 /* Registered filters */
 static list *moduleCommandFilters;
 
-typedef struct ValkeyModuleCommandResultCtx {
-    client *c;
-    struct serverCommand *cmd;
-    int result_status;
-    long long duration;
-    long long dirty;
-} ValkeyModuleCommandResultCtx;
-
-typedef void (*ValkeyModuleCommandResultFunc)(ValkeyModuleCommandResultCtx *result);
-
-typedef struct ValkeyModuleCommandResult {
-    /* The module that registered the result callback */
-    ValkeyModule *module;
-    /* Result callback function */
-    ValkeyModuleCommandResultFunc callback;
-    /* VALKEYMODULE_CMDRESULT_* flags */
-    int flags;
-    /* Command counter when this callback was registered (to skip firing on registration command) */
-    long long registered_at_cmd_count;
-} ValkeyModuleCommandResult;
 
 typedef void (*ValkeyModuleForkDoneHandler)(int exitcode, int bysignal, void *user_data);
 
@@ -2447,7 +2427,6 @@ void VM_SetModuleAttribs(ValkeyModuleCtx *ctx, const char *name, int ver, int ap
     module->usedby = listCreate();
     module->using = listCreate();
     module->filters = listCreate();
-    module->result_callback = NULL;
     module->module_configs = listCreate();
     listSetMatchMethod(module->module_configs, moduleListConfigMatch);
     listSetFreeMethod(module->module_configs, moduleListFree);
@@ -11707,284 +11686,42 @@ unsigned long long VM_CommandFilterGetClientId(ValkeyModuleCommandFilterCtx *fct
 }
 
 /* --------------------------------------------------------------------------
- * ## Module Command Result Callback API
+ * ## Module Command Result Event
  * -------------------------------------------------------------------------- */
 
-/* Unregister the command result callback registered by a module.
- * This is called when a module is being unloaded.
- *
- * Returns the number of callbacks unregistered. */
-int moduleUnregisterCommandResultCallbacks(ValkeyModule *module) {
-    if (module->result_callback) {
-        zfree(module->result_callback);
-        module->result_callback = NULL;
-        return 1;
-    }
-    return 0;
-}
-
-/* Register a new command result callback function.
- *
- * Command result callbacks are invoked after a command has been executed,
- * providing modules with information about whether the command succeeded or
- * failed, along with timing and other execution details.
- *
- * The callback is invoked for all commands including:
- * 1. Commands from clients
- * 2. Commands from ValkeyModule_Call()
- * 3. Commands from Lua scripts
- * 4. Replicated commands
- *
- * The callback receives a ValkeyModuleCommandResultCtx with:
- * - result_status: VALKEYMODULE_CMDRESULT_SUCCESS or VALKEYMODULE_CMDRESULT_FAILURE
- * - cmd: The command that was executed
- * - c: The client that executed the command
- * - duration: Command execution time in microseconds
- * - dirty: Number of keys modified
- *
- * Flags:
- * - VALKEYMODULE_CMDRESULT_FAILURES_ONLY: Only invoke callback for failed commands
- * - VALKEYMODULE_CMDRESULT_NOSELF: Don't invoke for commands from this module's RM_Call()
- *
- * Note: Callbacks execute on the critical path. Keep them efficient to minimize
- * performance impact. Using FAILURES_ONLY is recommended for most use cases.
- *
- * Returns a ValkeyModuleCommandResult pointer that can be used with
- * ValkeyModule_UnregisterCommandResult().
- */
-ValkeyModuleCommandResult *VM_RegisterCommandResult(ValkeyModuleCtx *ctx,
-                                                    ValkeyModuleCommandResultFunc callback,
-                                                    int flags) {
-    /* Only allow one callback per module */
-    if (ctx->module->result_callback != NULL) {
-        return NULL;  /* Already registered */
-    }
-
-    /* Validate flags - only accept known flag bits */
-    int valid_flags = VALKEYMODULE_CMDRESULT_FAILURES_ONLY | 
-                      VALKEYMODULE_CMDRESULT_NOSELF;
-    if (flags & ~valid_flags) {
-        return NULL;  /* Invalid flags */
-    }
-
-    ValkeyModuleCommandResult *result = zmalloc(sizeof(*result));
-    result->module = ctx->module;
-    result->callback = callback;
-    result->flags = flags;
-    /* Record the command count at registration time to avoid firing callback
-     * for the registration command itself */
-    result->registered_at_cmd_count = server.stat_numcommands;
-
-    ctx->module->result_callback = result;
-    return result;
-}
-
-/* Unregister a command result callback. */
-int VM_UnregisterCommandResult(ValkeyModuleCtx *ctx, ValkeyModuleCommandResult *result) {
-    /* A module can only remove its own callback */
-    if (result->module != ctx->module) return VALKEYMODULE_ERR;
-    
-    /* Verify this is the registered callback */
-    if (ctx->module->result_callback != result) return VALKEYMODULE_ERR;
-
-    ctx->module->result_callback = NULL;
-    zfree(result);
-
-    return VALKEYMODULE_OK;
-}
-
-/* Call all registered command result callbacks.
+/* Fire command result server event.
  * This is invoked from call() after command execution. */
-void moduleCallCommandResultCallbacks(client *c,
-                                      struct serverCommand *cmd,
-                                      int command_failed,
-                                      long long duration,
-                                      long long dirty) {
-    dictIterator *di;
-    dictEntry *de;
+void moduleFireCommandResultEvent(client *c,
+                                  struct serverCommand *cmd,
+                                  int command_failed,
+                                  long long duration,
+                                  long long dirty) {
+    /* Fast path: skip if no modules are subscribed to any events.
+     * This avoids building the info struct when there are no listeners. */
+    if (listLength(ValkeyModule_EventListeners) == 0) return;
 
-    int result_status = command_failed ? 1 : 0; /* 1 = FAILURE, 0 = SUCCESS */
+    /* Get argv - prefer original_argv if available (before any rewriting) */
+    robj **argv = c->original_argv ? c->original_argv : c->argv;
+    int argc = c->original_argv ? c->original_argc : c->argc;
 
-    ValkeyModuleCommandResultCtx result_ctx = {
-        .c = c, .cmd = cmd, .result_status = result_status, .duration = duration, .dirty = dirty};
+    /* Build the event data structure */
+    ValkeyModuleCommandResultInfoV1 info = {
+        .version = VALKEYMODULE_COMMANDRESULTINFO_VERSION,
+        .command_name = cmd ? cmd->fullname : NULL,
+        .duration_us = duration,
+        .dirty = dirty,
+        .client_id = c->id,
+        .is_module_client = (c->flag.module ? 1 : 0),
+        .argc = argc,
+        .argv = (ValkeyModuleString **)argv,
+    };
 
-    /* Iterate through all loaded modules */
-    di = dictGetIterator(modules);
-    while ((de = dictNext(di)) != NULL) {
-        ValkeyModule *module = dictGetVal(de);
-        ValkeyModuleCommandResult *r = module->result_callback;
+    /* Determine sub-event based on success/failure */
+    int subevent = command_failed ? VALKEYMODULE_SUBEVENT_COMMAND_RESULT_FAILURE
+                                  : VALKEYMODULE_SUBEVENT_COMMAND_RESULT_SUCCESS;
 
-        /* Skip if no callback registered */
-        if (!r) continue;
-
-        /* Skip callbacks registered during the current command to avoid firing on registration */
-        if (r->registered_at_cmd_count == server.stat_numcommands) {
-            continue;
-        }
-
-        /* Skip if FAILURES_ONLY flag is set and command succeeded */
-        if ((r->flags & VALKEYMODULE_CMDRESULT_FAILURES_ONLY) && !command_failed) {
-            continue;
-        }
-
-        /* Skip if NOSELF flag is set and module is currently processing a command */
-        if ((r->flags & VALKEYMODULE_CMDRESULT_NOSELF) && module->in_call) {
-            continue;
-        }
-
-        /* Call the callback */
-        r->callback(&result_ctx);
-    }
-    dictReleaseIterator(di);
-}
-
-/* Get the result status from a command result context.
- * Returns VALKEYMODULE_CMDRESULT_SUCCESS (0) or VALKEYMODULE_CMDRESULT_FAILURE (1). */
-int VM_CommandResultGetStatus(ValkeyModuleCommandResultCtx *rctx) {
-    return rctx->result_status;
-}
-
-/* Get the command name from a command result context. */
-const char *VM_CommandResultGetCommandName(ValkeyModuleCommandResultCtx *rctx) {
-    return rctx->cmd ? rctx->cmd->fullname : NULL;
-}
-
-/* Get the command execution duration in microseconds from a command result context. */
-long long VM_CommandResultGetDuration(ValkeyModuleCommandResultCtx *rctx) {
-    return rctx->duration;
-}
-
-/* Get the number of dirty (modified) keys from a command result context. */
-long long VM_CommandResultGetDirty(ValkeyModuleCommandResultCtx *rctx) {
-    return rctx->dirty;
-}
-
-/* Get the client ID from a command result context. */
-unsigned long long VM_CommandResultGetClientId(ValkeyModuleCommandResultCtx *rctx) {
-    return rctx->c->id;
-}
-
-/* Get the command arguments from a command result context.
- * This returns the original arguments as sent by the client (before any
- * internal rewriting that may have occurred).
- *
- * The returned array points directly to the existing argument data - no memory
- * is allocated and no copies are made. The returned pointers are valid only
- * during the callback execution.
- *
- * Returns VALKEYMODULE_OK on success, VALKEYMODULE_ERR if arguments are not available. */
-int VM_CommandResultGetArgv(ValkeyModuleCommandResultCtx *rctx,
-                            ValkeyModuleString ***argv,
-                            int *argc) {
-    if (!rctx || !rctx->c) return VALKEYMODULE_ERR;
-
-    /* Prefer original_argv if available (contains unmodified client input),
-     * otherwise fall back to current argv. This matches MONITOR behavior. */
-    if (rctx->c->original_argv) {
-        *argv = (ValkeyModuleString **)rctx->c->original_argv;
-        *argc = rctx->c->original_argc;
-    } else {
-        *argv = (ValkeyModuleString **)rctx->c->argv;
-        *argc = rctx->c->argc;
-    }
-    return VALKEYMODULE_OK;
-}
-
-/* Get the total size of the command reply in bytes.
- *
- * This returns the total size of the reply data without copying or allocating
- * any memory. Use this to determine the reply size before calling
- * VM_CommandResultGetReplyProto() or to decide whether to process the reply.
- *
- * Returns the total reply size in bytes. */
-size_t VM_CommandResultGetReplySize(ValkeyModuleCommandResultCtx *rctx) {
-    if (!rctx || !rctx->c) return 0;
-
-    client *c = rctx->c;
-    return c->bufpos + c->reply_bytes;
-}
-
-/* Get the raw reply buffer from a command result context.
- *
- * This provides zero-copy access to the reply data in RESP protocol format.
- * No memory is allocated - the returned pointer points directly to the
- * internal buffer. The pointer is valid only during the callback execution.
- *
- * For replies that fit in the static buffer, this returns the complete reply.
- * For larger replies that span multiple blocks, this returns the first portion
- * from the static buffer. Use VM_CommandResultGetReplySize() to check the
- * total size and VM_CommandResultCreateReply() if you need the complete
- * parsed reply for large responses.
- *
- * Returns the reply buffer pointer and sets *len to the buffer length.
- * Returns NULL if no reply is available. */
-const char *VM_CommandResultGetReplyProto(ValkeyModuleCommandResultCtx *rctx,
-                                          size_t *len) {
-    if (!rctx || !rctx->c || !len) return NULL;
-
-    client *c = rctx->c;
-
-    /* If there's data in the static buffer, return it */
-    if (c->bufpos > 0) {
-        *len = c->bufpos;
-        return c->buf;
-    }
-
-    /* If static buffer is empty but reply list has data, return first block */
-    if (listLength(c->reply) > 0) {
-        clientReplyBlock *block = listNodeValue(listFirst(c->reply));
-        *len = block->used;
-        return block->buf;
-    }
-
-    /* No reply data available */
-    *len = 0;
-    return NULL;
-}
-
-/* Create a parsed ValkeyModuleCallReply object from the command result.
- *
- * Unlike the other CommandResult accessors, this function DOES allocate memory
- * and copies the reply buffer to create a fully parsed reply object. Use this
- * when you need to inspect the reply structure (type, nested elements, etc.)
- * rather than just the raw bytes.
- *
- * The returned ValkeyModuleCallReply can be used with all the standard
- * ValkeyModule_CallReply*() functions.
- *
- * IMPORTANT: The caller is responsible for freeing the returned reply object
- * using ValkeyModule_FreeCallReply() when done.
- *
- * Returns a new ValkeyModuleCallReply object, or NULL if the reply cannot
- * be created (e.g., no reply data or allocation failure). */
-ValkeyModuleCallReply *VM_CommandResultCreateReply(ValkeyModuleCommandResultCtx *rctx) {
-    if (!rctx || !rctx->c) return NULL;
-
-    client *c = rctx->c;
-
-    /* Check if there's any reply data */
-    if (c->bufpos == 0 && listLength(c->reply) == 0) {
-        return NULL;
-    }
-
-    /* Build an sds containing the complete reply.
-     * This copies data from both the static buffer and the reply list. */
-    sds proto = sdsnewlen(c->buf, c->bufpos);
-
-    listIter li;
-    listNode *ln;
-    listRewind(c->reply, &li);
-    while ((ln = listNext(&li)) != NULL) {
-        clientReplyBlock *block = listNodeValue(ln);
-        proto = sdscatlen(proto, block->buf, block->used);
-    }
-
-    /* Create the CallReply object. Note: we pass NULL for deferred_error_list
-     * because we don't want to transfer ownership - the client still owns it.
-     * We also pass NULL for private_data as there's no module context here. */
-    CallReply *reply = callReplyCreate(proto, NULL, NULL);
-
-    return (ValkeyModuleCallReply *)reply;
+    /* Fire the event */
+    moduleFireServerEvent(VALKEYMODULE_EVENT_COMMAND_RESULT, subevent, &info);
 }
 
 /* For a given pointer allocated via ValkeyModule_Alloc() or
@@ -12440,6 +12177,7 @@ static uint64_t moduleEventVersions[] = {
     VALKEYMODULE_KEYINFO_VERSION,                  /* VALKEYMODULE_EVENT_KEY */
     VALKEYMODULE_AUTHENTICATION_INFO_VERSION,      /* VALKEYMODULE_EVENT_AUTHENTICATION_ATTEMPT */
     VALKEYMODULE_ATOMICSLOTMIGRATION_INFO_VERSION, /* VALKEYMODULE_EVENT_ATOMIC_SLOT_MIGRATION */
+    VALKEYMODULE_COMMANDRESULTINFO_VERSION,        /* VALKEYMODULE_EVENT_COMMAND_RESULT */
 };
 
 /* Register to be notified, via a callback, when the specified server event
@@ -12845,6 +12583,7 @@ int VM_IsSubEventSupported(ValkeyModuleEvent event, int64_t subevent) {
     case VALKEYMODULE_EVENT_EVENTLOOP: return subevent < _VALKEYMODULE_SUBEVENT_EVENTLOOP_NEXT;
     case VALKEYMODULE_EVENT_CONFIG: return subevent < _VALKEYMODULE_SUBEVENT_CONFIG_NEXT;
     case VALKEYMODULE_EVENT_KEY: return subevent < _VALKEYMODULE_SUBEVENT_KEY_NEXT;
+    case VALKEYMODULE_EVENT_COMMAND_RESULT: return subevent < _VALKEYMODULE_SUBEVENT_COMMAND_RESULT_NEXT;
     default: break;
     }
     return 0;
@@ -12933,6 +12672,8 @@ void moduleFireServerEvent(uint64_t eid, int subid, void *data) {
             } else if (eid == VALKEYMODULE_EVENT_AUTHENTICATION_ATTEMPT) {
                 moduledata = data;
             } else if (eid == VALKEYMODULE_EVENT_ATOMIC_SLOT_MIGRATION) {
+                moduledata = data;
+            } else if (eid == VALKEYMODULE_EVENT_COMMAND_RESULT) {
                 moduledata = data;
             }
 
@@ -13227,9 +12968,6 @@ void moduleLoadFromQueue(void) {
 void moduleFreeModuleStructure(struct ValkeyModule *module) {
     listRelease(module->types);
     listRelease(module->filters);
-    if (module->result_callback) {
-        zfree(module->result_callback);
-    }
     listRelease(module->usedby);
     listRelease(module->using);
     listRelease(module->module_configs);
@@ -13388,7 +13126,6 @@ void moduleUnregisterCleanup(ValkeyModule *module) {
     moduleUnregisterSharedAPI(module);
     moduleUnregisterUsedAPI(module);
     moduleUnregisterFilters(module);
-    moduleUnregisterCommandResultCallbacks(module);
     moduleUnsubscribeAllServerEvents(module);
     moduleRemoveConfigs(module);
     moduleUnregisterAuthCBs(module);
@@ -15330,17 +15067,6 @@ void moduleRegisterCoreAPI(void) {
     REGISTER_API(CommandFilterArgReplace);
     REGISTER_API(CommandFilterArgDelete);
     REGISTER_API(CommandFilterGetClientId);
-    REGISTER_API(RegisterCommandResult);
-    REGISTER_API(UnregisterCommandResult);
-    REGISTER_API(CommandResultGetStatus);
-    REGISTER_API(CommandResultGetCommandName);
-    REGISTER_API(CommandResultGetDuration);
-    REGISTER_API(CommandResultGetDirty);
-    REGISTER_API(CommandResultGetClientId);
-    REGISTER_API(CommandResultGetArgv);
-    REGISTER_API(CommandResultGetReplySize);
-    REGISTER_API(CommandResultGetReplyProto);
-    REGISTER_API(CommandResultCreateReply);
     REGISTER_API(Fork);
     REGISTER_API(SendChildHeartbeat);
     REGISTER_API(ExitFromChild);

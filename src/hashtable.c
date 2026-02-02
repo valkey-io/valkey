@@ -566,6 +566,8 @@ static void rehashStepFinalize(hashtable *ht) {
     /* Check if we already rehashed the whole table. */
     if (ht->used[0] == 0 && ht->child_buckets[0] == 0) {
         rehashingCompleted(ht);
+    } else {
+        assert((size_t)ht->rehash_idx < numBuckets(ht->bucket_exp[0]));
     }
 }
 

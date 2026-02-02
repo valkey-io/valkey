@@ -79,10 +79,7 @@ static unsigned int bio_job_to_worker[BIO_NUM_OPS] = {
     [BIO_CLOSE_AOF] = 1,
     [BIO_LAZY_FREE] = 2,
     [BIO_RDB_SAVE] = 3,
-#if defined(USE_OPENSSL) &&                    \
-    ((USE_OPENSSL == 1 /* BUILD_YES */) ||     \
-     ((USE_OPENSSL == 2 /* BUILD_MODULE */) && \
-      (defined(BUILD_TLS_MODULE) && BUILD_TLS_MODULE == 2)))
+#if defined(USE_OPENSSL) && USE_OPENSSL == 1 /* BUILD_YES */
     [BIO_TLS_RELOAD] = 4,
 #endif
 };
@@ -241,10 +238,7 @@ void bioCreateSaveRDBToDiskJob(connection *conn, int is_dual_channel) {
     bioSubmitJob(BIO_RDB_SAVE, job);
 }
 
-#if defined(USE_OPENSSL) &&                    \
-    ((USE_OPENSSL == 1 /* BUILD_YES */) ||     \
-     ((USE_OPENSSL == 2 /* BUILD_MODULE */) && \
-      (defined(BUILD_TLS_MODULE) && BUILD_TLS_MODULE == 2)))
+#if defined(USE_OPENSSL) && USE_OPENSSL == 1 /* BUILD_YES */
 void bioCreateTlsReloadJob(void) {
     bio_job *job = zmalloc(sizeof(*job));
     bioSubmitJob(BIO_TLS_RELOAD, job);
@@ -316,10 +310,7 @@ void *bioProcessBackgroundJobs(void *arg) {
         } else if (job_type == BIO_RDB_SAVE) {
             replicaReceiveRDBFromPrimaryToDisk(job->save_to_disk_args.conn, job->save_to_disk_args.is_dual_channel);
         }
-#if defined(USE_OPENSSL) &&                    \
-    ((USE_OPENSSL == 1 /* BUILD_YES */) ||     \
-     ((USE_OPENSSL == 2 /* BUILD_MODULE */) && \
-      (defined(BUILD_TLS_MODULE) && BUILD_TLS_MODULE == 2)))
+#if defined(USE_OPENSSL) && USE_OPENSSL == 1 /* BUILD_YES */
         else if (job_type == BIO_TLS_RELOAD) {
             tlsConfigureAsync();
         }

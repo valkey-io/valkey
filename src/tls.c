@@ -706,6 +706,7 @@ static int tlsConfigureSync(void *priv, int reconfigure) {
     return tlsConfigure(priv, reconfigure, false);
 }
 
+#if defined(USE_OPENSSL) && USE_OPENSSL == 1 /* BUILD_YES */
 /* Asynchronous TLS configuration - runs in background thread.
  * Does CPU-intensive certificate loading without blocking main thread.
  * The main thread will later call tlsApplyPendingReload() to swap in the new contexts. */
@@ -762,6 +763,7 @@ void tlsReconfigureIfNeeded(void) {
     }
     bioCreateTlsReloadJob();
 }
+#endif
 
 static ConnectionType CT_TLS;
 

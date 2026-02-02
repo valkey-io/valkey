@@ -42,10 +42,7 @@ void bioCreateCloseAofJob(int fd, long long offset, int need_reclaim_cache);
 void bioCreateFsyncJob(int fd, long long offset, int need_reclaim_cache);
 void bioCreateLazyFreeJob(lazy_free_fn free_fn, int arg_count, ...);
 void bioCreateSaveRDBToDiskJob(connection *conn, int is_dual_channel);
-#if defined(USE_OPENSSL) &&                    \
-    ((USE_OPENSSL == 1 /* BUILD_YES */) ||     \
-     ((USE_OPENSSL == 2 /* BUILD_MODULE */) && \
-      (defined(BUILD_TLS_MODULE) && BUILD_TLS_MODULE == 2)))
+#if defined(USE_OPENSSL) && USE_OPENSSL == 1 /* BUILD_YES */
 void bioCreateTlsReloadJob(void);
 #endif
 int inBioThread(void);
@@ -57,10 +54,7 @@ enum {
     BIO_LAZY_FREE,      /* Deferred objects freeing. */
     BIO_CLOSE_AOF,      /* Deferred close for AOF files. */
     BIO_RDB_SAVE,       /* Deferred save RDB to disk on replica */
-#if defined(USE_OPENSSL) &&                    \
-    ((USE_OPENSSL == 1 /* BUILD_YES */) ||     \
-     ((USE_OPENSSL == 2 /* BUILD_MODULE */) && \
-      (defined(BUILD_TLS_MODULE) && BUILD_TLS_MODULE == 2)))
+#if defined(USE_OPENSSL) && USE_OPENSSL == 1 /* BUILD_YES */
     BIO_TLS_RELOAD, /* Deferred TLS reload. */
 #endif
     BIO_NUM_OPS

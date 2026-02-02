@@ -6009,20 +6009,15 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
             tls_ca_seconds_remaining = server.tls_ca_cert_expire_time - (long long)server.unixtime;
             if (tls_ca_seconds_remaining < 0) tls_ca_seconds_remaining = 0;
         }
-        info = sdscatprintf(info,
-                            "# TLS\r\n"
-                            "tls_server_cert_serial:%s\r\n"
-                            "tls_server_cert_expires_in_seconds:%lld\r\n"
-                            "tls_client_cert_serial:%s\r\n"
-                            "tls_client_cert_expires_in_seconds:%lld\r\n"
-                            "tls_ca_cert_serial:%s\r\n"
-                            "tls_ca_cert_expires_in_seconds:%lld\r\n",
-                            server.tls_server_cert_serial ? server.tls_server_cert_serial : "none",
-                            tls_server_seconds_remaining,
-                            server.tls_client_cert_serial ? server.tls_client_cert_serial : "none",
-                            tls_client_seconds_remaining,
-                            server.tls_ca_cert_serial ? server.tls_ca_cert_serial : "none",
-                            tls_ca_seconds_remaining);
+        info = sdscatprintf(
+            info,
+            "# TLS\r\n" FMTARGS(
+                "tls_server_cert_serial:%s\r\n", server.tls_server_cert_serial ? server.tls_server_cert_serial : "none",
+                "tls_server_cert_expires_in_seconds:%lld\r\n", tls_server_seconds_remaining,
+                "tls_client_cert_serial:%s\r\n", server.tls_client_cert_serial ? server.tls_client_cert_serial : "none",
+                "tls_client_cert_expires_in_seconds:%lld\r\n", tls_client_seconds_remaining,
+                "tls_ca_cert_serial:%s\r\n", server.tls_ca_cert_serial ? server.tls_ca_cert_serial : "none",
+                "tls_ca_cert_expires_in_seconds:%lld\r\n", tls_ca_seconds_remaining));
     }
 
     /* Clients */

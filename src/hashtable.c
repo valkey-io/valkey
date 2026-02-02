@@ -645,12 +645,16 @@ static void rehashStepShrink(hashtable *ht) {
 static void rehashStep(hashtable *ht) {
     assert(hashtableIsRehashing(ht));
 
-    /* Skip a maximum of n empty buckets. */
+    /* In shrinking case, there is a case that the ht0 can be very empty, but the
+     * table size is huge, when doing one step rehash, if there are a lot of empty
+     * buckets, we can rehash more buckets to make the rehash faster. */
     int empty_visits = 10;
-    while (ht->tables[0] + ht->rehash_idx == NULL) {
+    bucket *b = ht->tables[0] + ht->rehash_idx;
+    while (b == NULL) {
         rehashStepFinalize(ht);
         if (!hashtableIsRehashing(ht)) return;
         if (--empty_visits == 0) return;
+        b = ht->tables[0] + ht->rehash_idx;
     }
 
     if (ht->bucket_exp[1] < ht->bucket_exp[0]) {

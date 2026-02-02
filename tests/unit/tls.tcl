@@ -155,6 +155,16 @@ start_server {tags {"tls"}} {
             r config set tls-key-file $keyfile_encrypted
         }
 
+        test {TLS: Expired certificate logs warning} {
+            set logline [count_log_lines 0]
+            set expired_crt [format "%s/tests/tls/server-expired.crt" [pwd]]
+
+            catch {r config set tls-cert-file $expired_crt} e
+            assert_match {*Unable to update TLS*} $e
+
+            wait_for_log_messages 0 {"*TLS certificate has expired*"} $logline 100 10
+        }
+
         test {TLS: Auto-authenticate using tls-auth-clients-user (CN)} {
             # Create a user matching the CN in the client certificate (CN=Client-only)
             r ACL SETUSER {Client-only} on >clientpass allcommands allkeys

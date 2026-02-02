@@ -458,6 +458,28 @@ static int tlsPasswordCallback(char *buf, int size, int rwflag, void *u) {
     return (int)pass_len;
 }
 
+static int isCertExpired(X509 *cert) {
+    if (!cert) return 0;
+    const ASN1_TIME *not_after = X509_get0_notAfter(cert);
+    if (!not_after) return 0;
+    return X509_cmp_current_time(not_after) < 0;
+}
+
+static void logExpiredCert(const char *context, X509 *cert, const char *path) {
+    if (!isCertExpired(cert)) return;
+    char subject[256];
+    const char *subject_str = "unknown";
+    X509_NAME *name = X509_get_subject_name(cert);
+    if (name && X509_NAME_oneline(name, subject, sizeof(subject))) {
+        subject_str = subject;
+    }
+    if (path) {
+        serverLog(LL_WARNING, "%s TLS certificate has expired (file: %s)", context, path);
+    } else {
+        serverLog(LL_WARNING, "%s TLS certificate has expired: subject=%s", context, subject_str);
+    }
+}
+
 /* Check a single X509 certificate validity */
 static bool isCertValid(X509 *cert) {
     if (!cert) return false;
@@ -532,8 +554,11 @@ static bool areAllCaCertsValid(SSL_CTX *ctx) {
         int type = X509_OBJECT_get_type(obj);
         if (type == X509_LU_X509) {
             X509 *ca_cert = X509_OBJECT_get0_X509(obj);
-            if (ca_cert && !isCertValid(ca_cert)) {
-                return false;
+            if (ca_cert) {
+                logExpiredCert("CA", ca_cert, NULL);
+                if (!isCertValid(ca_cert)) {
+                    return false;
+                }
             }
         }
     }
@@ -584,8 +609,16 @@ static SSL_CTX *createSSLContext(serverTLSContextConfig *ctx_config, int protoco
         goto error;
     }
 
-    if (!isCertValid(SSL_CTX_get0_certificate(ctx))) {
-        serverLog(LL_WARNING, "%s TLS certificate is invalid. Aborting TLS configuration.", client ? "Client" : "Server");
+    X509 *server_cert = SSL_CTX_get0_certificate(ctx);
+    int expired = isCertExpired(server_cert);
+    if (expired) {
+        logExpiredCert(client ? "Client" : "Server", server_cert, cert_file);
+    }
+    if (!isCertValid(server_cert)) {
+        if (!expired) {
+            serverLog(LL_WARNING, "%s TLS certificate is invalid. Aborting TLS configuration.",
+                      client ? "Client" : "Server");
+        }
         goto error;
     }
 

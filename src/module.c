@@ -12921,6 +12921,21 @@ static int moduleUnloadInternal(struct ValkeyModule *module, const char **errmsg
         return C_ERR;
     }
 
+    sds acl_user = NULL;
+    sds acl_rule = NULL;
+    if (ACLModuleHasCommandRules(module, &acl_user, &acl_rule)) {
+        serverLog(LL_WARNING,
+                  "Module %s unload blocked: ACL user '%s' has rule '%s'",
+                  module->name,
+                  acl_user ? acl_user : "unknown",
+                  acl_rule ? acl_rule : "unknown");
+        if (acl_user) sdsfree(acl_user);
+        if (acl_rule) sdsfree(acl_rule);
+        *errmsg = "one or more ACL users reference commands from this module. "
+                  "Remove those ACL rules before unloading";
+        return C_ERR;
+    }
+
     /* Give module a chance to clean up. */
     const char *onUnloadNames[] = {"ValkeyModule_OnUnload", "RedisModule_OnUnload"};
     int (*onunload)(void *) = NULL;

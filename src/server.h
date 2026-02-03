@@ -3274,9 +3274,11 @@ void resetChildState(void);
 int isMutuallyExclusiveChildType(int type);
 
 /* acl.c -- Authentication related prototypes. */
+struct ValkeyModule;
 extern rax *Users;
 extern user *DefaultUser;
 void ACLInit(void);
+int ACLModuleHasCommandRules(const struct ValkeyModule *module, sds *user_out, sds *rule_out);
 /* Return values for ACLCheckAllPerm(). */
 #define ACL_OK 0                    /* Permission granted */
 #define ACL_DENIED_DB 1             /* Database access denied */

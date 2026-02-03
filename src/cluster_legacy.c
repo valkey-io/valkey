@@ -1303,6 +1303,10 @@ static void updateAnnouncedHumanNodename(clusterNode *node, char *value) {
     updateSdsExtensionField(&node->human_nodename, value);
 }
 
+static void updateAvailabilityZone(clusterNode *node, char *value) {
+    updateSdsExtensionField(&node->availability_zone, value);
+}
+
 static void updateAnnouncedClientIpV4(clusterNode *node, char *value) {
     updateSdsExtensionField(&node->announce_client_ipv4, value);
 }
@@ -1386,6 +1390,11 @@ void clusterUpdateMyselfHostname(void) {
 void clusterUpdateMyselfHumanNodename(void) {
     if (!myself) return;
     updateAnnouncedHumanNodename(myself, server.cluster_announce_human_nodename);
+}
+
+void clusterUpdateMyselfAvailabilityZone(void) {
+    if (!myself) return;
+    updateAvailabilityZone(myself, server.availability_zone);
 }
 
 void clusterUpdateMyselfClientIpV4(void) {
@@ -1495,6 +1504,7 @@ void clusterInit(void) {
     clusterUpdateMyselfClientIpV6();
     clusterUpdateMyselfHostname();
     clusterUpdateMyselfHumanNodename();
+    clusterUpdateMyselfAvailabilityZone();
     resetClusterStats();
 }
 
@@ -1917,6 +1927,7 @@ clusterNode *createClusterNode(char *nodename, int flags) {
     node->announce_client_ipv6 = sdsempty();
     node->hostname = sdsempty();
     node->human_nodename = sdsempty();
+    node->availability_zone = sdsempty();
     node->tcp_port = 0;
     node->cport = 0;
     node->tls_port = 0;
@@ -2155,6 +2166,7 @@ void freeClusterNode(clusterNode *n) {
     /* Free these members after links are freed, as freeClusterLink may access them. */
     sdsfree(n->hostname);
     sdsfree(n->human_nodename);
+    sdsfree(n->availability_zone);
     sdsfree(n->announce_client_ipv4);
     sdsfree(n->announce_client_ipv6);
     raxFree(n->fail_reports);
@@ -3381,6 +3393,9 @@ static uint32_t writePingExtensions(clusterMsg *hdr, int gossipcount) {
         writePortPingExtIfNonzero(&totlen, &cursor, CLUSTERMSG_EXT_TYPE_CLIENT_PORT, myself->announce_client_tcp_port);
     extensions +=
         writePortPingExtIfNonzero(&totlen, &cursor, CLUSTERMSG_EXT_TYPE_CLIENT_TLS_PORT, myself->announce_client_tls_port);
+    extensions +=
+        writeSdsPingExtIfNonempty(&totlen, &cursor, CLUSTERMSG_EXT_TYPE_AVAILABILITY_ZONE, myself->availability_zone);
+
 
     /* Gossip forgotten nodes */
     if (dictSize(server.cluster->nodes_black_list) > 0) {
@@ -3430,6 +3445,7 @@ void clusterProcessPingExtensions(clusterMsg *hdr, clusterLink *link) {
     clusterNode *sender = link->node ? link->node : clusterLookupNode(hdr->sender, CLUSTER_NAMELEN);
     char *ext_hostname = NULL;
     char *ext_humannodename = NULL;
+    char *ext_availability_zone = NULL;
     char *ext_clientipv4 = NULL;
     char *ext_clientipv6 = NULL;
     int ext_clientport = 0;
@@ -3481,6 +3497,10 @@ void clusterProcessPingExtensions(clusterMsg *hdr, clusterLink *link) {
         } else if (type == CLUSTERMSG_EXT_TYPE_SHARDID) {
             clusterMsgPingExtShardId *shardid_ext = (clusterMsgPingExtShardId *)&(ext->ext[0].shard_id);
             ext_shardid = shardid_ext->shard_id;
+        } else if (type == CLUSTERMSG_EXT_TYPE_AVAILABILITY_ZONE) {
+            clusterMsgPingExtAvailabilityZone *availability_zone_ext =
+                (clusterMsgPingExtAvailabilityZone *)&(ext->ext[0].availability_zone);
+            ext_availability_zone = availability_zone_ext->availability_zone;
         } else {
             /* Unknown type, we will ignore it but log what happened. */
             serverLog(LL_WARNING, "Received unknown extension type %d", type);
@@ -3499,6 +3519,7 @@ void clusterProcessPingExtensions(clusterMsg *hdr, clusterLink *link) {
     updateAnnouncedClientIpV6(sender, ext_clientipv6);
     updateAnnouncedClientPort(sender, ext_clientport);
     updateAnnouncedClientTlsPort(sender, ext_clienttlsport);
+    updateAvailabilityZone(sender, ext_availability_zone);
     /* If the node did not send us a shard-id extension, it means the sender
      * does not support it (old version), node->shard_id is randomly generated.
      * A cluster-wide consensus for the node's shard_id is not necessary.
@@ -6788,6 +6809,11 @@ sds clusterGenNodeDescription(client *c, clusterNode *node, int tls_primary) {
             }
         }
     }
+
+    /* Append availability zone at the end for client output. */
+    if (c != NULL && sdslen(node->availability_zone) != 0) {
+        ci = sdscatfmt(ci, " %s", node->availability_zone);
+    }
     return ci;
 }
 
@@ -7043,12 +7069,6 @@ void addNodeDetailsToShardReply(client *c, clusterNode *node) {
     addReplyBulkCString(c, clusterNodePreferredEndpoint(node, c));
     reply_count++;
 
-    if (sdslen(node->hostname) != 0) {
-        addReplyBulkCString(c, "hostname");
-        addReplyBulkCBuffer(c, node->hostname, sdslen(node->hostname));
-        reply_count++;
-    }
-
     long long node_offset = getNodeReplicationOffset(node);
 
     addReplyBulkCString(c, "role");
@@ -7070,6 +7090,17 @@ void addNodeDetailsToShardReply(client *c, clusterNode *node) {
     }
     addReplyBulkCString(c, health_msg);
     reply_count++;
+
+    if (sdslen(node->hostname) != 0) {
+        addReplyBulkCString(c, "hostname");
+        addReplyBulkCBuffer(c, node->hostname, sdslen(node->hostname));
+        reply_count++;
+    }
+    if (sdslen(node->availability_zone) != 0) {
+        addReplyBulkCString(c, "availability_zone");
+        addReplyBulkCBuffer(c, node->availability_zone, sdslen(node->availability_zone));
+        reply_count++;
+    }
 
     setDeferredMapLen(c, node_replylen, reply_count);
 }

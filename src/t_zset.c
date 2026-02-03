@@ -1937,7 +1937,7 @@ void zremCommand(client *c) {
     for (j = 2; j < c->argc; j++) {
         if (zsetDel(zobj, objectGetVal(c->argv[j]))) deleted++;
         if (zsetLength(zobj) == 0) {
-            dbDelete(c->db, c->argv[1]);
+            dbDelete(c->db, key);
             keyremoved = 1;
             break;
         }
@@ -1946,7 +1946,7 @@ void zremCommand(client *c) {
 
     if (deleted) {
         notifyKeyspaceEvent(NOTIFY_ZSET, "zrem", key, c->db->id);
-        if (keyremoved) notifyKeyspaceEvent(NOTIFY_GENERIC, "del", c->argv[1], c->db->id);
+        if (keyremoved) notifyKeyspaceEvent(NOTIFY_GENERIC, "del", key, c->db->id);
         signalModifiedKey(c, c->db, key);
         server.dirty += deleted;
     }

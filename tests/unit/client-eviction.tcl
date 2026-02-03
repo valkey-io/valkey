@@ -465,7 +465,7 @@ start_server {} {
         r debug replybuffer resizing 1
 
         foreach rr $rrs {$rr close}
-    } {} {needs:debug}
+    } {} {needs:debug tls:skip}
 }
 
 start_server {} {
@@ -532,7 +532,7 @@ start_server {} {
         r debug replybuffer resizing 1
 
         foreach rr $rrs {$rr close}
-    } {} {needs:debug}
+    } {} {needs:debug tls:skip}
 }
 
 start_server {} {

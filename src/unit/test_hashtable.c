@@ -254,7 +254,10 @@ int test_empty_buckets_rehashing(int argc, char **argv, int flags) {
         TEST_ASSERT(hashtableAdd(ht, (void *)j));
     }
     TEST_ASSERT(hashtableSize(ht) == 11);
-    TEST_ASSERT(hashtableGetRehashingIndex(ht) >= 90 && hashtableGetRehashingIndex(ht) <= 100);
+    /* Only assert on 64-bit build. */
+    if (sizeof(long) == 8) {
+        TEST_ASSERT(hashtableGetRehashingIndex(ht) >= 90 && hashtableGetRehashingIndex(ht) <= 100);
+    }
 
     hashtableRelease(ht);
     return 0;

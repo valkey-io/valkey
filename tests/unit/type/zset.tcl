@@ -2733,7 +2733,14 @@ start_server {tags {"zset"}} {
             r config set zset-max-listpack-entries $original_max
         }
     }
+}
 
+start_server [list overrides [list save ""] tags {"zset needs:debug external:skip"}] {
+# Test if the server supports such large configs (avoid 32 bit builds)
+catch {
+    r config set proto-max-bulk-len 10000000000 ;#10gb
+}
+if {[lindex [r config get proto-max-bulk-len] 1] == 10000000000} {
     test {ZSET resize test - rehash more empty buckets in shrinking case} {
         # We added elements to ensure we would have enough buckets.
         # There should be 4096 buckets here.
@@ -2772,4 +2779,5 @@ start_server {tags {"zset"}} {
         }
         assert_equal 1 [string match {*rehashing index: -1*} [r debug htstats-key myzset full]] ;# no rehash ongoing
     }
-}
+} ;# skip 32bit builds
+} ;# start_server

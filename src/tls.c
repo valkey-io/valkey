@@ -458,22 +458,75 @@ static int tlsPasswordCallback(char *buf, int size, int rwflag, void *u) {
     return (int)pass_len;
 }
 
+static const char *getCertSerialString(X509 *cert, char *buf, size_t buf_len);
+
+static void logCertIssue(const char *context, X509 *cert, const char *issue) {
+    if (!context || !issue) return;
+    if (cert) {
+        char serial_buf[128];
+        const char *serial_str = getCertSerialString(cert, serial_buf, sizeof(serial_buf));
+        serverLog(LL_WARNING, "%s TLS certificate %s (serial %s).", context, issue, serial_str);
+    } else {
+        serverLog(LL_WARNING, "%s TLS certificate %s.", context, issue);
+    }
+}
+
 static void logExpiredCert(const char *context, X509 *cert) {
-    if (!cert || !context) return;
-    serverLog(LL_WARNING, "%s TLS certificate has expired.", context);
+    if (!cert) return;
+    logCertIssue(context, cert, "has expired");
 }
 
 static void logNotYetValidCert(const char *context, X509 *cert) {
-    if (!context || !cert) return;
-    serverLog(LL_WARNING, "%s TLS certificate is not yet valid.", context);
+    if (!cert) return;
+    logCertIssue(context, cert, "is not yet valid");
+}
+
+static void logMissingCert(const char *context) {
+    logCertIssue(context, NULL, "is missing");
+}
+
+static void logInvalidValidityCert(const char *context, X509 *cert) {
+    logCertIssue(context, cert, "has invalid validity period");
+}
+
+static const char *getCertSerialString(X509 *cert, char *buf, size_t buf_len) {
+    if (!cert || !buf || buf_len == 0) return "unknown";
+    ASN1_INTEGER *serial = X509_get_serialNumber(cert);
+    if (!serial) return "unknown";
+    BIGNUM *bn = ASN1_INTEGER_to_BN(serial, NULL);
+    if (!bn) return "unknown";
+    char *hex = BN_bn2hex(bn);
+    if (!hex) {
+        BN_free(bn);
+        return "unknown";
+    }
+    snprintf(buf, buf_len, "%s", hex);
+    OPENSSL_free(hex);
+    BN_free(bn);
+    return buf;
+}
+
+static void logExpiredCertIfNeeded(const char *label, X509 *cert) {
+    if (!label || !cert) return;
+    const ASN1_TIME *not_after = X509_get0_notAfter(cert);
+    if (!not_after) return;
+    if (X509_cmp_current_time(not_after) < 0) {
+        logExpiredCert(label, cert);
+    }
 }
 
 /* Check a single X509 certificate validity */
 static bool isCertValid(X509 *cert, const char *context) {
-    if (!cert) return false;
+    if (!cert) {
+        logMissingCert(context);
+        return false;
+    }
     const ASN1_TIME *not_before = X509_get0_notBefore(cert);
     const ASN1_TIME *not_after = X509_get0_notAfter(cert);
-    if (!not_before || !not_after) return false;
+    if (!not_before || !not_after) {
+        logInvalidValidityCert(context, cert);
+        return false;
+    }
     int not_before_cmp = X509_cmp_current_time(not_before);
     int not_after_cmp = X509_cmp_current_time(not_after);
     if (not_before_cmp > 0) {
@@ -540,9 +593,15 @@ static bool loadCaCertDir(SSL_CTX *ctx, const char *ca_cert_dir) {
 /* Iterate over all CA certs in the SSL_CTX and fail-fast if any are invalid */
 static bool areAllCaCertsValid(SSL_CTX *ctx) {
     X509_STORE *store = SSL_CTX_get_cert_store(ctx);
-    if (!store) return false;
+    if (!store) {
+        serverLog(LL_WARNING, "CA TLS certificate store is unavailable.");
+        return false;
+    }
     STACK_OF(X509_OBJECT) *objs = X509_STORE_get0_objects(store);
-    if (!objs) return false;
+    if (!objs) {
+        serverLog(LL_WARNING, "CA TLS certificate store is empty.");
+        return false;
+    }
     for (int i = 0; i < sk_X509_OBJECT_num(objs); i++) {
         X509_OBJECT *obj = sk_X509_OBJECT_value(objs, i);
         int type = X509_OBJECT_get_type(obj);
@@ -602,8 +661,6 @@ static SSL_CTX *createSSLContext(serverTLSContextConfig *ctx_config, int protoco
 
     X509 *server_cert = SSL_CTX_get0_certificate(ctx);
     if (!isCertValid(server_cert, client ? "Client" : "Server")) {
-        serverLog(LL_WARNING, "%s TLS certificate is invalid. Aborting TLS configuration.",
-                  client ? "Client" : "Server");
         goto error;
     }
 
@@ -626,7 +683,6 @@ static SSL_CTX *createSSLContext(serverTLSContextConfig *ctx_config, int protoco
         }
 
         if (!areAllCaCertsValid(ctx)) {
-            serverLog(LL_WARNING, "One or more loaded CA certificates are invalid. Aborting TLS configuration.");
             goto error;
         }
     }
@@ -1028,6 +1084,53 @@ void tlsReconfigureIfNeeded(void) {
         return;
     }
     bioCreateTlsReloadJob();
+}
+
+void tlsLogCertValidityIfNeeded(void) {
+    if (!valkey_tls_ctx) return;
+
+    X509 *server_cert = SSL_CTX_get0_certificate(valkey_tls_ctx);
+    logExpiredCertIfNeeded("Server", server_cert);
+
+    if (valkey_tls_client_ctx && server.tls_ctx_config.client_cert_file) {
+        X509 *client_cert = SSL_CTX_get0_certificate(valkey_tls_client_ctx);
+        logExpiredCertIfNeeded("Client", client_cert);
+    }
+
+    if (server.tls_ctx_config.ca_cert_file || server.tls_ctx_config.ca_cert_dir) {
+        X509_STORE *store = SSL_CTX_get_cert_store(valkey_tls_ctx);
+        if (!store) return;
+        STACK_OF(X509_OBJECT) *objs = X509_STORE_get0_objects(store);
+        if (!objs) return;
+        int expired_ca_count = 0;
+        int logged = 0;
+        const int max_log = 3;
+        for (int i = 0; i < sk_X509_OBJECT_num(objs); i++) {
+            X509_OBJECT *obj = sk_X509_OBJECT_value(objs, i);
+            int type = X509_OBJECT_get_type(obj);
+            if (type == X509_LU_X509) {
+                X509 *ca_cert = X509_OBJECT_get0_X509(obj);
+                const ASN1_TIME *not_after = X509_get0_notAfter(ca_cert);
+                if (!not_after) continue;
+                int days = 0, secs = 0;
+                if (!ASN1_TIME_diff(&days, &secs, NULL, not_after)) continue;
+                long long remaining = (long long)days * 86400 + secs;
+                if (remaining <= 0) {
+                    expired_ca_count++;
+                    if (logged < max_log) {
+                        logExpiredCert("CA", ca_cert);
+                        logged++;
+                    }
+                }
+            }
+        }
+        if (expired_ca_count > max_log) {
+            serverLog(LL_WARNING, "CA TLS certificates expired: %d (logged %d).",
+                      expired_ca_count, max_log);
+        } else if (expired_ca_count > 0 && expired_ca_count <= max_log) {
+            serverLog(LL_WARNING, "CA TLS certificates expired: %d.", expired_ca_count);
+        }
+    }
 }
 
 static ConnectionType CT_TLS;

@@ -1707,6 +1707,11 @@ long long serverCron(struct aeEventLoop *eventLoop, long long id, void *clientDa
             tlsApplyPendingReload();
         }
     }
+    if (server.tls_port || server.tls_replication || server.tls_cluster) {
+        run_with_period(3600000) {
+            tlsLogCertValidityIfNeeded();
+        }
+    }
 #endif
 
     if (moduleCount()) {

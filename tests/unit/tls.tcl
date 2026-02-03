@@ -155,14 +155,14 @@ start_server {tags {"tls"}} {
             r config set tls-key-file $keyfile_encrypted
         }
 
-        test {TLS: Expired certificate logs warning} {
+        test {TLS: Expired certificate logs warning includes serial} {
             set logline [count_log_lines 0]
             set expired_crt [format "%s/tests/tls/server-expired.crt" [pwd]]
 
             catch {r config set tls-cert-file $expired_crt} e
             assert_match {*Unable to update TLS*} $e
 
-            wait_for_log_messages 0 {"*Server TLS certificate has expired.*"} $logline 100 10
+            wait_for_log_messages 0 {"*Server TLS certificate has expired (serial *).*"} $logline 100 10
         }
 
         test {TLS: Auto-authenticate using tls-auth-clients-user (CN)} {
@@ -387,28 +387,28 @@ start_server {tags {"tls"}} {
             set tlsdir [file normalize ./tests/tls]
 
             # Expired server certificate
-            test_tls_cert_rejection server $tlsdir/server-expired.crt {*Server TLS certificate has expired.*}
+            test_tls_cert_rejection server $tlsdir/server-expired.crt {*Server TLS certificate has expired (serial *).*}
 
             # Not-yet-valid server certificate
-            test_tls_cert_rejection server $tlsdir/server-notyet.crt {*Server TLS certificate is not yet valid.*}
+            test_tls_cert_rejection server $tlsdir/server-notyet.crt {*Server TLS certificate is not yet valid (serial *).*}
 
             # Expired client certificate
-            test_tls_cert_rejection client $tlsdir/client-expired.crt {*Client TLS certificate has expired.*}
+            test_tls_cert_rejection client $tlsdir/client-expired.crt {*Client TLS certificate has expired (serial *).*}
 
             # Not-yet-valid client certificate
-            test_tls_cert_rejection client $tlsdir/client-notyet.crt {*Client TLS certificate is not yet valid.*}
+            test_tls_cert_rejection client $tlsdir/client-notyet.crt {*Client TLS certificate is not yet valid (serial *).*}
 
             # Expired CA certificate file
-            test_tls_cert_rejection ca-file $tlsdir/ca-expired.crt {*One or more loaded CA certificates are invalid*}
+            test_tls_cert_rejection ca-file $tlsdir/ca-expired.crt {*CA TLS certificate has expired (serial *).*}
 
             # Not-yet-valid CA certificate file
-            test_tls_cert_rejection ca-file $tlsdir/ca-notyet.crt {*One or more loaded CA certificates are invalid*}
+            test_tls_cert_rejection ca-file $tlsdir/ca-notyet.crt {*CA TLS certificate is not yet valid (serial *).*}
 
             # Expired CA certificate directory
-            test_tls_cert_rejection ca-dir $tlsdir/ca-expired {*One or more loaded CA certificates are invalid*}
+            test_tls_cert_rejection ca-dir $tlsdir/ca-expired {*CA TLS certificate has expired (serial *).*}
 
             # Not-yet-valid CA certificate directory
-            test_tls_cert_rejection ca-dir $tlsdir/ca-notyet {*One or more loaded CA certificates are invalid*}
+            test_tls_cert_rejection ca-dir $tlsdir/ca-notyet {*CA TLS certificate is not yet valid (serial *).*}
         }
 
         proc test_tls_cert_rejection_runtime {r cert_type cert_path} {

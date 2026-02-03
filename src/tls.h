@@ -12,6 +12,7 @@
 void tlsReconfigureIfNeeded(void);
 void tlsApplyPendingReload(void);
 void tlsConfigureAsync(void);
+void tlsLogCertValidityIfNeeded(void);
 #endif
 
 #endif /* __VALKEY_TLS_H */

@@ -5222,6 +5222,16 @@ static sds generateCommandInfoResponse(struct serverCommand *cmd, int resp) {
     return command_info_response;
 }
 
+int verifyCachedCommandInfoResponse(struct serverCommand *cmd, sds cached_response, int resp) {
+    sds generated_response = generateCommandInfoResponse(cmd, resp);
+    int is_equal = !sdscmp(generated_response, cached_response);
+    /* Here, we use LL_WARNING so this gets printed when debug assertions are enabled and the system is about to crash. */
+    if (!is_equal)
+        serverLog(LL_WARNING, "\ngenerated_response:\n%s\n\ncached_response:\n%s", generated_response, cached_response);
+    sdsfree(generated_response);
+    return is_equal;
+}
+
 /* Output the representation of a server command. Used by the COMMAND command and COMMAND INFO. */
 void addReplyCommandInfo(client *c, struct serverCommand *cmd) {
     if (!cmd) {
@@ -5234,6 +5244,8 @@ void addReplyCommandInfo(client *c, struct serverCommand *cmd) {
         if (cache == NULL) {
             cache = generateCommandInfoResponse(cmd, c->resp);
             cmd->info_cache[cache_idx] = cache;
+        } else {
+            debugServerAssertWithInfo(c, NULL, verifyCachedCommandInfoResponse(cmd, cache, c->resp) == 1);
         }
 
         addReplyProto(c, cache, sdslen(cache));
@@ -5390,6 +5402,16 @@ static sds generateCommandResponse(int resp) {
     return command_response;
 }
 
+int verifyCachedCommandResponse(sds cached_response, int resp) {
+    sds generated_response = generateCommandResponse(resp);
+    int is_equal = !sdscmp(generated_response, cached_response);
+    /* Here, we use LL_WARNING so this gets printed when debug assertions are enabled and the system is about to crash. */
+    if (!is_equal)
+        serverLog(LL_WARNING, "\ngenerated_response:\n%s\n\ncached_response:\n%s", generated_response, cached_response);
+    sdsfree(generated_response);
+    return is_equal;
+}
+
 /* COMMAND (no args) */
 void commandCommand(client *c) {
     /* Use cached response if available for the client's protocol version */
@@ -5399,6 +5421,8 @@ void commandCommand(client *c) {
     if (!cache) {
         cache = generateCommandResponse(c->resp);
         server.command_response_cache[cache_idx] = cache;
+    } else {
+        debugServerAssertWithInfo(c, NULL, verifyCachedCommandResponse(cache, c->resp) == 1);
     }
 
     addReplyProto(c, cache, sdslen(cache));

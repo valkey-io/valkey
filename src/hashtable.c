@@ -1378,6 +1378,11 @@ bool hashtableIsRehashing(hashtable *ht) {
     return ht->rehash_idx != -1;
 }
 
+/* Returns the rehashing index. */
+ssize_t hashtableGetRehashingIndex(hashtable *ht) {
+    return ht->rehash_idx;
+}
+
 /* Provides the number of buckets in the old and new tables during rehashing. To
  * get the sizes in bytes, multiply by HASHTABLE_BUCKET_SIZE. This function can
  * only be used when rehashing is in progress, and from the rehashingStarted and

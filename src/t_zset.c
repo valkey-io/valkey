@@ -1937,18 +1937,16 @@ void zremCommand(client *c) {
     for (j = 2; j < c->argc; j++) {
         if (zsetDel(zobj, objectGetVal(c->argv[j]))) deleted++;
         if (zsetLength(zobj) == 0) {
+            dbDelete(c->db, c->argv[1]);
             keyremoved = 1;
             break;
         }
     }
-    if (zobj->encoding == OBJ_ENCODING_SKIPLIST) hashtableResumeAutoShrink(((zset *)objectGetVal(zobj))->ht);
+    if (!keyremoved && zobj->encoding == OBJ_ENCODING_SKIPLIST) hashtableResumeAutoShrink(((zset *)objectGetVal(zobj))->ht);
 
     if (deleted) {
         notifyKeyspaceEvent(NOTIFY_ZSET, "zrem", key, c->db->id);
-        if (keyremoved) {
-            dbDelete(c->db, key);
-            notifyKeyspaceEvent(NOTIFY_GENERIC, "del", key, c->db->id);
-        }
+        if (keyremoved) notifyKeyspaceEvent(NOTIFY_GENERIC, "del", c->argv[1], c->db->id);
         signalModifiedKey(c, c->db, key);
         server.dirty += deleted;
     }
@@ -2023,6 +2021,7 @@ void zremrangeGenericCommand(client *c, zrange_type rangetype) {
         case ZRANGE_LEX: objectSetVal(zobj, zzlDeleteRangeByLex(objectGetVal(zobj), &lexrange, &deleted)); break;
         }
         if (zzlLength(objectGetVal(zobj)) == 0) {
+            dbDelete(c->db, key);
             keyremoved = 1;
         }
     } else if (zobj->encoding == OBJ_ENCODING_SKIPLIST) {
@@ -2036,6 +2035,7 @@ void zremrangeGenericCommand(client *c, zrange_type rangetype) {
         }
         hashtableResumeAutoShrink(zs->ht);
         if (hashtableSize(zs->ht) == 0) {
+            dbDelete(c->db, key);
             keyremoved = 1;
         }
     } else {
@@ -2046,10 +2046,7 @@ void zremrangeGenericCommand(client *c, zrange_type rangetype) {
     if (deleted) {
         signalModifiedKey(c, c->db, key);
         notifyKeyspaceEvent(NOTIFY_ZSET, notify_type, key, c->db->id);
-        if (keyremoved) {
-            dbDelete(c->db, key);
-            notifyKeyspaceEvent(NOTIFY_GENERIC, "del", key, c->db->id);
-        }
+        if (keyremoved) notifyKeyspaceEvent(NOTIFY_GENERIC, "del", key, c->db->id);
         server.dirty += deleted;
     }
     addReplyLongLong(c, deleted);

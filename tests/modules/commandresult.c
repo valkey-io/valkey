@@ -1,7 +1,7 @@
 /* Test module for command result event API
  *
- * This module tests the VALKEYMODULE_EVENT_COMMAND_RESULT server event
- * using ValkeyModule_SubscribeToServerEvent().
+ * This module tests the VALKEYMODULE_EVENT_COMMAND_RESULT_SUCCESS and
+ * VALKEYMODULE_EVENT_COMMAND_RESULT_FAILURE server events.
  *
  * Commands provided:
  * - CMDRESULT.REGISTER <mode> - Register event subscription (success/failure/all)
@@ -94,7 +94,7 @@ void LogResult(const char *cmd_name, int status, long long duration,
 void CommandResultEventCallback(ValkeyModuleCtx *ctx, ValkeyModuleEvent eid,
                                  uint64_t subevent, void *data) {
     VALKEYMODULE_NOT_USED(ctx);
-    VALKEYMODULE_NOT_USED(eid);
+    VALKEYMODULE_NOT_USED(subevent);
 
     ValkeyModuleCommandResultInfo *info = (ValkeyModuleCommandResultInfo *)data;
 
@@ -105,7 +105,8 @@ void CommandResultEventCallback(ValkeyModuleCtx *ctx, ValkeyModuleEvent eid,
 
     stats.total_callbacks++;
 
-    int status = (subevent == VALKEYMODULE_SUBEVENT_COMMAND_RESULT_FAILURE) ? 1 : 0;
+    /* Determine status from event ID */
+    int status = (eid.id == VALKEYMODULE_EVENT_COMMAND_RESULT_FAILURE) ? 1 : 0;
 
     if (status == 0) {
         stats.success_count++;
@@ -137,21 +138,42 @@ int CmdResultRegister_ValkeyCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **a
     size_t len;
     const char *mode_str = ValkeyModule_StringPtrLen(argv[1], &len);
 
+    int subscribe_success = 0;
+    int subscribe_failure = 0;
+
     if (strcmp(mode_str, "all") == 0) {
+        subscribe_success = 1;
+        subscribe_failure = 1;
         subscription_mode = 3;
     } else if (strcmp(mode_str, "success") == 0) {
+        subscribe_success = 1;
         subscription_mode = 1;
     } else if (strcmp(mode_str, "failure") == 0) {
+        subscribe_failure = 1;
         subscription_mode = 2;
     } else {
         return ValkeyModule_ReplyWithError(ctx, "ERR invalid mode. Use: all, success, or failure");
     }
 
-    /* Subscribe to the command result event */
-    if (ValkeyModule_SubscribeToServerEvent(ctx, ValkeyModuleEvent_CommandResult,
-                                            CommandResultEventCallback) == VALKEYMODULE_ERR) {
-        subscription_mode = 0;
-        return ValkeyModule_ReplyWithError(ctx, "ERR failed to subscribe to event");
+    /* Subscribe to the appropriate event(s) */
+    if (subscribe_success) {
+        if (ValkeyModule_SubscribeToServerEvent(ctx, ValkeyModuleEvent_CommandResultSuccess,
+                                                CommandResultEventCallback) == VALKEYMODULE_ERR) {
+            subscription_mode = 0;
+            return ValkeyModule_ReplyWithError(ctx, "ERR failed to subscribe to success event");
+        }
+    }
+
+    if (subscribe_failure) {
+        if (ValkeyModule_SubscribeToServerEvent(ctx, ValkeyModuleEvent_CommandResultFailure,
+                                                CommandResultEventCallback) == VALKEYMODULE_ERR) {
+            /* Unsubscribe from success if we subscribed to it */
+            if (subscribe_success) {
+                ValkeyModule_SubscribeToServerEvent(ctx, ValkeyModuleEvent_CommandResultSuccess, NULL);
+            }
+            subscription_mode = 0;
+            return ValkeyModule_ReplyWithError(ctx, "ERR failed to subscribe to failure event");
+        }
     }
 
     return ValkeyModule_ReplyWithSimpleString(ctx, "OK");
@@ -169,10 +191,12 @@ int CmdResultUnsubscribe_ValkeyCommand(ValkeyModuleCtx *ctx, ValkeyModuleString 
         return ValkeyModule_ReplyWithError(ctx, "ERR not subscribed to command result events");
     }
 
-    /* Unsubscribe by passing NULL callback */
-    if (ValkeyModule_SubscribeToServerEvent(ctx, ValkeyModuleEvent_CommandResult,
-                                            NULL) == VALKEYMODULE_ERR) {
-        return ValkeyModule_ReplyWithError(ctx, "ERR failed to unsubscribe from event");
+    /* Unsubscribe from the event(s) we subscribed to */
+    if (subscription_mode == 1 || subscription_mode == 3) {
+        ValkeyModule_SubscribeToServerEvent(ctx, ValkeyModuleEvent_CommandResultSuccess, NULL);
+    }
+    if (subscription_mode == 2 || subscription_mode == 3) {
+        ValkeyModule_SubscribeToServerEvent(ctx, ValkeyModuleEvent_CommandResultFailure, NULL);
     }
 
     subscription_mode = 0;

@@ -11716,12 +11716,10 @@ void moduleFireCommandResultEvent(client *c,
         .argv = (ValkeyModuleString **)argv,
     };
 
-    /* Determine sub-event based on success/failure */
-    int subevent = command_failed ? VALKEYMODULE_SUBEVENT_COMMAND_RESULT_FAILURE
-                                  : VALKEYMODULE_SUBEVENT_COMMAND_RESULT_SUCCESS;
-
-    /* Fire the event */
-    moduleFireServerEvent(VALKEYMODULE_EVENT_COMMAND_RESULT, subevent, &info);
+    /* Fire the appropriate event based on success/failure */
+    uint64_t event_id = command_failed ? VALKEYMODULE_EVENT_COMMAND_RESULT_FAILURE
+                                       : VALKEYMODULE_EVENT_COMMAND_RESULT_SUCCESS;
+    moduleFireServerEvent(event_id, 0, &info);
 }
 
 /* For a given pointer allocated via ValkeyModule_Alloc() or
@@ -12177,7 +12175,8 @@ static uint64_t moduleEventVersions[] = {
     VALKEYMODULE_KEYINFO_VERSION,                  /* VALKEYMODULE_EVENT_KEY */
     VALKEYMODULE_AUTHENTICATION_INFO_VERSION,      /* VALKEYMODULE_EVENT_AUTHENTICATION_ATTEMPT */
     VALKEYMODULE_ATOMICSLOTMIGRATION_INFO_VERSION, /* VALKEYMODULE_EVENT_ATOMIC_SLOT_MIGRATION */
-    VALKEYMODULE_COMMANDRESULTINFO_VERSION,        /* VALKEYMODULE_EVENT_COMMAND_RESULT */
+    VALKEYMODULE_COMMANDRESULTINFO_VERSION,        /* VALKEYMODULE_EVENT_COMMAND_RESULT_SUCCESS */
+    VALKEYMODULE_COMMANDRESULTINFO_VERSION,        /* VALKEYMODULE_EVENT_COMMAND_RESULT_FAILURE */
 };
 
 /* Register to be notified, via a callback, when the specified server event
@@ -12519,6 +12518,41 @@ static uint64_t moduleEventVersions[] = {
  *    Importing keys will not be accessible to clients unless the slot migration
  *    is COMPLETED.
  *
+ * * ValkeyModuleEvent_CommandResultSuccess
+ *
+ *     Called after a command completes successfully. This event fires for every
+ *     successful command execution, including commands called via RM_Call.
+ *     Modules can subscribe to this event to monitor command execution, collect
+ *     metrics, or implement audit logging.
+ *
+ *     The data pointer can be casted to a ValkeyModuleCommandResultInfo
+ *     structure with the following fields:
+ *
+ *         const char *command_name;        // Full command name (e.g., "SET", "CLIENT|LIST")
+ *         long long duration_us;           // Command execution time in microseconds
+ *         long long dirty;                 // Number of keys modified by the command
+ *         unsigned long long client_id;    // Client ID that executed the command
+ *         int is_module_client;            // 1 if called via RM_Call, 0 otherwise
+ *         int argc;                        // Number of command arguments
+ *         ValkeyModuleString **argv;       // Command arguments (read-only, zero-copy)
+ *
+ *     Performance note: Subscribe only to ValkeyModuleEvent_CommandResultFailure
+ *     if you only need to track failures, as this avoids the overhead of firing
+ *     callbacks for successful commands.
+ *
+ * * ValkeyModuleEvent_CommandResultFailure
+ *
+ *     Called after a command fails (returns an error). This event fires for every
+ *     failed command execution, including commands called via RM_Call.
+ *     Modules can subscribe to this event to monitor errors, implement alerting,
+ *     or track client misbehavior.
+ *
+ *     The data pointer can be casted to a ValkeyModuleCommandResultInfo
+ *     structure with the same fields as ValkeyModuleEvent_CommandResultSuccess.
+ *
+ *     This event is useful for monitoring command failures without the overhead
+ *     of receiving callbacks for all successful commands.
+ *
  * The function returns VALKEYMODULE_OK if the module was successfully subscribed
  * for the specified event. If the API is called from a wrong context or unsupported event
  * is given then VALKEYMODULE_ERR is returned. */
@@ -12583,7 +12617,7 @@ int VM_IsSubEventSupported(ValkeyModuleEvent event, int64_t subevent) {
     case VALKEYMODULE_EVENT_EVENTLOOP: return subevent < _VALKEYMODULE_SUBEVENT_EVENTLOOP_NEXT;
     case VALKEYMODULE_EVENT_CONFIG: return subevent < _VALKEYMODULE_SUBEVENT_CONFIG_NEXT;
     case VALKEYMODULE_EVENT_KEY: return subevent < _VALKEYMODULE_SUBEVENT_KEY_NEXT;
-    case VALKEYMODULE_EVENT_COMMAND_RESULT: return subevent < _VALKEYMODULE_SUBEVENT_COMMAND_RESULT_NEXT;
+    /* VALKEYMODULE_EVENT_COMMAND_RESULT_SUCCESS and _FAILURE have no sub-events */
     default: break;
     }
     return 0;
@@ -12673,7 +12707,8 @@ void moduleFireServerEvent(uint64_t eid, int subid, void *data) {
                 moduledata = data;
             } else if (eid == VALKEYMODULE_EVENT_ATOMIC_SLOT_MIGRATION) {
                 moduledata = data;
-            } else if (eid == VALKEYMODULE_EVENT_COMMAND_RESULT) {
+            } else if (eid == VALKEYMODULE_EVENT_COMMAND_RESULT_SUCCESS ||
+                       eid == VALKEYMODULE_EVENT_COMMAND_RESULT_FAILURE) {
                 moduledata = data;
             }
 

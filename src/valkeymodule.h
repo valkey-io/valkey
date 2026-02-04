@@ -536,8 +536,9 @@ typedef void (*ValkeyModuleEventLoopOneShotFunc)(void *user_data);
 #define VALKEYMODULE_EVENT_KEY 17
 #define VALKEYMODULE_EVENT_AUTHENTICATION_ATTEMPT 18
 #define VALKEYMODULE_EVENT_ATOMIC_SLOT_MIGRATION 19
-#define VALKEYMODULE_EVENT_COMMAND_RESULT 20
-#define _VALKEYMODULE_EVENT_NEXT 21 /* Next event flag, should be updated if a new event added. */
+#define VALKEYMODULE_EVENT_COMMAND_RESULT_SUCCESS 20
+#define VALKEYMODULE_EVENT_COMMAND_RESULT_FAILURE 21
+#define _VALKEYMODULE_EVENT_NEXT 22 /* Next event flag, should be updated if a new event added. */
 
 typedef struct ValkeyModuleEvent {
     uint64_t id;      /* VALKEYMODULE_EVENT_... defines. */
@@ -597,7 +598,8 @@ static const ValkeyModuleEvent ValkeyModuleEvent_ReplicationRoleChanged = {VALKE
                                ValkeyModuleEvent_Key = {VALKEYMODULE_EVENT_KEY, 1},
                                ValkeyModuleEvent_AuthenticationAttempt = {VALKEYMODULE_EVENT_AUTHENTICATION_ATTEMPT, 1},
                                ValkeyModuleEvent_AtomicSlotMigration = {VALKEYMODULE_EVENT_ATOMIC_SLOT_MIGRATION, 1},
-                               ValkeyModuleEvent_CommandResult = {VALKEYMODULE_EVENT_COMMAND_RESULT, 1};
+                               ValkeyModuleEvent_CommandResultSuccess = {VALKEYMODULE_EVENT_COMMAND_RESULT_SUCCESS, 1},
+                               ValkeyModuleEvent_CommandResultFailure = {VALKEYMODULE_EVENT_COMMAND_RESULT_FAILURE, 1};
 
 /* Those are values that are used for the 'subevent' callback argument. */
 #define VALKEYMODULE_SUBEVENT_PERSISTENCE_RDB_START 0

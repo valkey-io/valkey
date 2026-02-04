@@ -38,10 +38,11 @@ start_server {tags {"modules"}} {
         catch {r cmdresult.fail} e
         catch {r cmdresult.fail} e
 
-        # With success-only subscription, failures should also be tracked
-        # (the event fires for all commands, filtering is done by the module)
+        # With success-only subscription, only success events are received
         set stats [r cmdresult.stats]
         assert {[dict get $stats success_count] >= 3}
+        # Failures should NOT be tracked since we only subscribed to success
+        assert_equal [dict get $stats failure_count] 0
 
         r cmdresult.unsubscribe
     }
@@ -57,9 +58,11 @@ start_server {tags {"modules"}} {
         catch {r cmdresult.fail} e
         catch {r cmdresult.fail} e
 
-        # Event still fires for all, but we track failures
+        # With failure-only subscription, only failure events are received
         set stats [r cmdresult.stats]
-        assert {[dict get $stats failure_count] >= 2}
+        assert_equal [dict get $stats failure_count] 2
+        # Successes should NOT be tracked since we only subscribed to failure
+        assert_equal [dict get $stats success_count] 0
 
         r cmdresult.unsubscribe
     }

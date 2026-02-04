@@ -7026,6 +7026,14 @@ const char *moduleNameFromCommand(struct serverCommand *cmd) {
     return cp->module->name;
 }
 
+/* Return the module from a module command. */
+ValkeyModule *moduleFromCommand(struct serverCommand *cmd) {
+    serverAssert(cmd->proc == ValkeyModuleCommandDispatcher);
+
+    ValkeyModuleCommand *cp = cmd->module_cmd;
+    return cp->module;
+}
+
 /* Create a copy of a module type value using the copy callback. If failed
  * or not supported, produce an error reply and return NULL.
  */
@@ -12921,15 +12929,12 @@ static int moduleUnloadInternal(struct ValkeyModule *module, const char **errmsg
         return C_ERR;
     }
 
-    sds acl_user = NULL;
     sds acl_rule = NULL;
-    if (ACLModuleHasCommandRules(module, &acl_user, &acl_rule)) {
+    if (ACLModuleHasCommandRules(module, &acl_rule)) {
         serverLog(LL_WARNING,
-                  "Module %s unload blocked: ACL user '%s' has rule '%s'",
+                  "Module %s unload blocked: An ACL user has reference to rule '%s'",
                   module->name,
-                  acl_user ? acl_user : "unknown",
                   acl_rule ? acl_rule : "unknown");
-        if (acl_user) sdsfree(acl_user);
         if (acl_rule) sdsfree(acl_rule);
         *errmsg = "one or more ACL users reference commands from this module. "
                   "Remove those ACL rules before unloading";

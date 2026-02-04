@@ -733,7 +733,7 @@ static int ACLSetSelectorCategory(aclSelector *selector, const char *category, i
     return C_OK;
 }
 
-int ACLModuleHasCommandRules(const struct ValkeyModule *module, sds *user_out, sds *rule_out) {
+int ACLModuleHasCommandRules(const struct ValkeyModule *module, sds *rule_out) {
     raxIterator ri;
     raxStart(&ri, Users);
     raxSeek(&ri, "^", NULL, 0);
@@ -766,10 +766,8 @@ int ACLModuleHasCommandRules(const struct ValkeyModule *module, sds *user_out, s
                     }
                 }
                 if (!cmd || !(cmd->flags & CMD_MODULE)) continue;
-                const char *module_name = moduleNameFromCommand(cmd);
-                if (!module_name || strcmp(module_name, module->name) != 0) continue;
+                if (moduleFromCommand(cmd) != module) continue;
 
-                if (user_out) *user_out = sdsdup(u->name);
                 if (rule_out) *rule_out = sdsdup(rule);
                 sdsfreesplitres(argv, argc);
                 raxStop(&ri);

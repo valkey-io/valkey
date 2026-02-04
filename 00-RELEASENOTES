@@ -12,6 +12,24 @@ SECURITY: There are security fixes in the release.
 --------------------------------------------------------------------------------
 
 ================================================================================
+Valkey 7.2.12  -  Released Mon 23 February 2026
+================================================================================
+
+Upgrade urgency SECURITY: This release includes security fixes we recommend you
+apply as soon as possible.
+
+Security fixes
+==============
+* (CVE-2026-21863) Remote DoS with malformed Valkey Cluster bus message
+* (CVE-2025-67733) RESP Protocol Injection via Lua error_reply
+
+Bug fixes
+=========
+* Fix ltrim should not call signalModifiedKey when no elements are removed (#2787)
+* Fix potential infinite loop in clusterNodeGetMaster (#2830)
+* Avoids crash during MODULE UNLOAD when ACL rules reference a module command and subcommand (#3160)
+
+================================================================================
 Valkey 7.2.11  -  Released Fri 03 October 2025
 ================================================================================
 

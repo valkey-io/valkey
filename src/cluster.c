@@ -1523,6 +1523,8 @@ sds generateClusterSlotResponse(int resp) {
         }
     }
     setDeferredArrayLen(recording_client, slot_replylen, num_primaries);
+    /* For cluster slots, deferred length should put all data in reply list, not buffer */
+    serverAssert(recording_client->bufpos == 0);
     sds cluster_slot_response = aggregateClientOutputBuffer(recording_client);
     deleteCachedResponseClient(recording_client);
     return cluster_slot_response;

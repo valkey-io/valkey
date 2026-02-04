@@ -155,16 +155,6 @@ start_server {tags {"tls"}} {
             r config set tls-key-file $keyfile_encrypted
         }
 
-        test {TLS: Expired certificate logs warning includes serial} {
-            set logline [count_log_lines 0]
-            set expired_crt [format "%s/tests/tls/server-expired.crt" [pwd]]
-
-            catch {r config set tls-cert-file $expired_crt} e
-            assert_match {*Unable to update TLS*} $e
-
-            wait_for_log_messages 0 {"*Server TLS certificate has expired (serial *).*"} $logline 100 10
-        }
-
         test {TLS: Auto-authenticate using tls-auth-clients-user (CN)} {
             # Create a user matching the CN in the client certificate (CN=Client-only)
             r ACL SETUSER {Client-only} on >clientpass allcommands allkeys
@@ -411,7 +401,8 @@ start_server {tags {"tls"}} {
             test_tls_cert_rejection ca-dir $tlsdir/ca-notyet {*CA TLS certificate is not yet valid (serial *).*}
         }
 
-        proc test_tls_cert_rejection_runtime {r cert_type cert_path} {
+        proc test_tls_cert_rejection_runtime {r cert_type cert_path {validity ""}} {
+            set logline [count_log_lines 0]
             switch -- $cert_type {
                 server {
                     catch {$r CONFIG SET tls-cert-file $cert_path} err
@@ -427,34 +418,49 @@ start_server {tags {"tls"}} {
                 }
             }
             assert_match {*Unable to update TLS*} $err
+            if {$validity ne ""} {
+                switch -- $cert_type {
+                    server { set label "Server" }
+                    client { set label "Client" }
+                    default { set label "CA" }
+                }
+                if {$validity eq "expired"} {
+                    set expected "*$label TLS certificate has expired (serial *).*"
+                } elseif {$validity eq "notyet"} {
+                    set expected "*$label TLS certificate is not yet valid (serial *).*"
+                } else {
+                    fail "Unknown validity flag: $validity"
+                }
+                wait_for_log_messages 0 $expected $logline 100 10
+            }
         }
 
         test {TLS: Fail-fast on invalid certificates at runtime} {
             set tlsdir [file normalize ./tests/tls]
 
             # Expired server certificate
-            test_tls_cert_rejection_runtime r server $tlsdir/server-expired.crt
+            test_tls_cert_rejection_runtime r server $tlsdir/server-expired.crt expired
 
             # Not-yet-valid server certificate
-            test_tls_cert_rejection_runtime r server $tlsdir/server-notyet.crt
+            test_tls_cert_rejection_runtime r server $tlsdir/server-notyet.crt notyet
 
             # Expired client certificate
-            test_tls_cert_rejection_runtime r client $tlsdir/client-expired.crt
+            test_tls_cert_rejection_runtime r client $tlsdir/client-expired.crt expired
 
             # Not-yet-valid client certificate
-            test_tls_cert_rejection_runtime r client $tlsdir/client-notyet.crt
+            test_tls_cert_rejection_runtime r client $tlsdir/client-notyet.crt notyet
 
             # Expired CA certificate file
-            test_tls_cert_rejection_runtime r ca-file $tlsdir/ca-expired.crt
+            test_tls_cert_rejection_runtime r ca-file $tlsdir/ca-expired.crt expired
 
             # Not-yet-valid CA certificate file
-            test_tls_cert_rejection_runtime r ca-file $tlsdir/ca-notyet.crt
+            test_tls_cert_rejection_runtime r ca-file $tlsdir/ca-notyet.crt notyet
 
             # Expired CA certificate directory
-            test_tls_cert_rejection_runtime r ca-dir $tlsdir/ca-expired
+            test_tls_cert_rejection_runtime r ca-dir $tlsdir/ca-expired expired
 
             # Not-yet-valid CA certificate directory
-            test_tls_cert_rejection_runtime r ca-dir $tlsdir/ca-notyet
+            test_tls_cert_rejection_runtime r ca-dir $tlsdir/ca-notyet notyet
         }
     }
 }

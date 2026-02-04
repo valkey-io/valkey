@@ -2736,12 +2736,10 @@ start_server {tags {"zset"}} {
 }
 
 start_server [list overrides [list save ""] tags {"zset needs:debug external:skip"}] {
-# Test if the server supports such large configs (avoid 32 bit builds)
-catch {
-    r config set proto-max-bulk-len 10000000000 ;#10gb
-}
-if {[lindex [r config get proto-max-bulk-len] 1] == 10000000000} {
     test {ZSET resize test - rehash more empty buckets in shrinking case} {
+        if {[s arch_bits] != 64} {
+            skip "This is only for 64-bit platforms"
+        }
         # We added elements to ensure we would have enough buckets.
         # There should be 4096 buckets here.
         r del myzset

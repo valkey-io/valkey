@@ -458,14 +458,13 @@ static int tlsPasswordCallback(char *buf, int size, int rwflag, void *u) {
     return (int)pass_len;
 }
 
-static const char *getCertSerialString(X509 *cert, char *buf, size_t buf_len);
-
 static void logCertIssue(const char *context, X509 *cert, const char *issue) {
     if (!context || !issue) return;
     if (cert) {
-        char serial_buf[128];
-        const char *serial_str = getCertSerialString(cert, serial_buf, sizeof(serial_buf));
+        sds serial_sds = tlsX509SerialToSds(cert);
+        const char *serial_str = serial_sds ? serial_sds : "unknown";
         serverLog(LL_WARNING, "%s TLS certificate %s (serial %s).", context, issue, serial_str);
+        if (serial_sds) sdsfree(serial_sds);
     } else {
         serverLog(LL_WARNING, "%s TLS certificate %s.", context, issue);
     }
@@ -487,23 +486,6 @@ static void logMissingCert(const char *context) {
 
 static void logInvalidValidityCert(const char *context, X509 *cert) {
     logCertIssue(context, cert, "has invalid validity period");
-}
-
-static const char *getCertSerialString(X509 *cert, char *buf, size_t buf_len) {
-    if (!cert || !buf || buf_len == 0) return "unknown";
-    ASN1_INTEGER *serial = X509_get_serialNumber(cert);
-    if (!serial) return "unknown";
-    BIGNUM *bn = ASN1_INTEGER_to_BN(serial, NULL);
-    if (!bn) return "unknown";
-    char *hex = BN_bn2hex(bn);
-    if (!hex) {
-        BN_free(bn);
-        return "unknown";
-    }
-    snprintf(buf, buf_len, "%s", hex);
-    OPENSSL_free(hex);
-    BN_free(bn);
-    return buf;
 }
 
 static void logExpiredCertIfNeeded(const char *label, X509 *cert) {
@@ -1112,10 +1094,7 @@ void tlsLogCertValidityIfNeeded(void) {
                 X509 *ca_cert = X509_OBJECT_get0_X509(obj);
                 const ASN1_TIME *not_after = X509_get0_notAfter(ca_cert);
                 if (!not_after) continue;
-                int days = 0, secs = 0;
-                if (!ASN1_TIME_diff(&days, &secs, NULL, not_after)) continue;
-                long long remaining = (long long)days * 86400 + secs;
-                if (remaining <= 0) {
+                if (X509_cmp_current_time(not_after) < 0) {
                     expired_ca_count++;
                     if (logged < max_log) {
                         logExpiredCert("CA", ca_cert);

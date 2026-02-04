@@ -5245,7 +5245,7 @@ void addReplyCommandInfo(client *c, struct serverCommand *cmd) {
             cache = generateCommandInfoResponse(cmd, c->resp);
             cmd->info_cache[cache_idx] = cache;
         } else {
-            debugServerAssertWithInfo(c, NULL, verifyCachedCommandInfoResponse(cmd, cache, c->resp) == 1);
+            debugServerAssertWithInfo(c, NULL, verifyCachedCommandInfoResponse(cmd, cache, c->resp));
         }
 
         addReplyProto(c, cache, sdslen(cache));
@@ -5422,7 +5422,7 @@ void commandCommand(client *c) {
         cache = generateCommandResponse(c->resp);
         server.command_response_cache[cache_idx] = cache;
     } else {
-        debugServerAssertWithInfo(c, NULL, verifyCachedCommandResponse(cache, c->resp) == 1);
+        debugServerAssertWithInfo(c, NULL, verifyCachedCommandResponse(cache, c->resp));
     }
 
     addReplyProto(c, cache, sdslen(cache));

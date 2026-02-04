@@ -46,6 +46,7 @@
 #include <openssl/err.h>
 #include <openssl/rand.h>
 #include <openssl/pem.h>
+#include <openssl/bn.h>
 #if OPENSSL_VERSION_NUMBER >= 0x30000000L
 #include <openssl/decoder.h>
 #endif
@@ -53,7 +54,10 @@
 #include <sys/uio.h>
 #include <arpa/inet.h>
 #include <dirent.h>
+#include <ctype.h>
 #include <limits.h>
+#include <stdint.h>
+#include <stdio.h>
 
 #define REDIS_TLS_PROTO_TLSv1 (1 << 0)
 #define REDIS_TLS_PROTO_TLSv1_1 (1 << 1)
@@ -181,6 +185,10 @@ static void tlsInit(void) {
     pending_list = listCreate();
 }
 
+static void tlsClearCertInfo(long long *expiry, sds *serial);
+static void tlsClearCACertInfo(void);
+static void tlsClearAllCertInfo(void);
+
 static void tlsCleanup(void) {
     if (valkey_tls_ctx) {
         SSL_CTX_free(valkey_tls_ctx);
@@ -190,11 +198,249 @@ static void tlsCleanup(void) {
         SSL_CTX_free(valkey_tls_client_ctx);
         valkey_tls_client_ctx = NULL;
     }
+    tlsClearAllCertInfo();
 
 #if OPENSSL_VERSION_NUMBER >= 0x10100000L && !defined(LIBRESSL_VERSION_NUMBER)
     // unavailable on LibreSSL
     OPENSSL_cleanup();
 #endif
+}
+
+/* Convert ASN1_TIME into a UTC tm plus a timezone offset (seconds). */
+static int tlsAsn1TimeToTm(const ASN1_TIME *time, struct tm *tm, int *tz_off) {
+    if (!time || !tm) return 0;
+#if OPENSSL_VERSION_NUMBER >= 0x10002000L || defined(LIBRESSL_VERSION_NUMBER)
+    if (ASN1_TIME_to_tm(time, tm)) {
+        if (tz_off) *tz_off = 0;
+        return 1;
+    }
+#endif
+    return 0;
+}
+
+/* Civil-from-fixed algorithm: convert Y/M/D to absolute days since Unix epoch. */
+static int64_t daysFromCivil(int64_t y, unsigned m, unsigned d) {
+    y -= m <= 2;
+    const int64_t era = (y >= 0 ? y : y - 399) / 400;
+    const unsigned yoe = (unsigned)(y - era * 400);
+    const unsigned doy = (unsigned)((153 * (m + (m > 2 ? -3 : 9)) + 2) / 5 + d - 1);
+    const unsigned doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    return era * 146097 + (int64_t)doe - 719468;
+}
+
+/* Convert a UTC tm to a unix timestamp (seconds since epoch). */
+static long long tmToEpochUTC(const struct tm *tm) {
+    int64_t year = tm->tm_year + 1900;
+    unsigned month = tm->tm_mon + 1;
+    unsigned day = tm->tm_mday;
+    int64_t days = daysFromCivil(year, month, day);
+    int64_t seconds = days * 86400 + tm->tm_hour * 3600 + tm->tm_min * 60 + tm->tm_sec;
+    return (long long)seconds;
+}
+
+/* Helper that returns the unix timestamp for an ASN1_TIME value. */
+static int asn1TimeToEpoch(const ASN1_TIME *time, long long *epoch) {
+    struct tm tm;
+    int tz_offset = 0;
+    if (!tlsAsn1TimeToTm(time, &tm, &tz_offset)) return 0;
+    long long ts = tmToEpochUTC(&tm);
+    ts -= tz_offset;
+    if (epoch) *epoch = ts;
+    return 1;
+}
+
+static int tlsGetX509Expiry(X509 *cert, long long *expiry) {
+    if (!cert) return C_ERR;
+    const ASN1_TIME *not_after = X509_get0_notAfter(cert);
+    if (!not_after) return C_ERR;
+    return asn1TimeToEpoch(not_after, expiry) ? C_OK : C_ERR;
+}
+
+void tlsResetCertInfo(void) {
+    if (server.tls_port || server.tls_replication || server.tls_cluster) return;
+    tlsClearAllCertInfo();
+}
+
+/* Convert a certificate serial number to hex string for INFO reporting. */
+static sds tlsX509SerialToSds(X509 *cert) {
+    if (!cert) return NULL;
+    ASN1_INTEGER *serial = X509_get_serialNumber(cert);
+    if (!serial) return NULL;
+    sds serial_sds = NULL;
+    BIGNUM *bn = ASN1_INTEGER_to_BN(serial, NULL);
+    if (bn) {
+        char *hex = BN_bn2hex(bn);
+        if (hex) {
+            serial_sds = sdsnew(hex);
+            OPENSSL_free(hex);
+        }
+        BN_free(bn);
+    }
+    return serial_sds;
+}
+
+static void tlsClearCertSerial(sds *serial) {
+    if (*serial) {
+        sdsfree(*serial);
+        *serial = NULL;
+    }
+}
+
+static int tlsStoreCertInfo(long long expiry, sds serial, int count, long long *out_expiry, sds *out_serial, int *out_count) {
+    if (out_count) *out_count = count;
+    tlsClearCertSerial(out_serial);
+    if (expiry == 0) {
+        if (serial) sdsfree(serial);
+        if (out_count) *out_count = 0;
+        return C_ERR;
+    }
+    if (out_expiry) *out_expiry = expiry;
+    *out_serial = serial;
+    return C_OK;
+}
+
+static int tlsUpdateCertInfoFromCtx(SSL_CTX *ctx, long long *expiry, sds *serial) {
+    if (!ctx) return C_ERR;
+    X509 *cert = SSL_CTX_get0_certificate(ctx);
+    if (tlsGetX509Expiry(cert, expiry) != C_OK) return C_ERR;
+    tlsClearCertSerial(serial);
+    *serial = tlsX509SerialToSds(cert);
+    return C_OK;
+}
+
+static int tlsUpdateCertInfoFromFileHandle(FILE *fp, long long *expiry, sds *serial, int *count) {
+    int cert_count = 0;
+    long long earliest_expiry = 0;
+    sds earliest_serial = NULL;
+    X509 *cert = NULL;
+    while ((cert = PEM_read_X509(fp, NULL, NULL, NULL)) != NULL) {
+        cert_count++;
+        long long cert_expiry = 0;
+        if (tlsGetX509Expiry(cert, &cert_expiry) == C_OK) {
+            if (earliest_expiry == 0 || cert_expiry < earliest_expiry) {
+                earliest_expiry = cert_expiry;
+                if (earliest_serial) sdsfree(earliest_serial);
+                earliest_serial = tlsX509SerialToSds(cert);
+            }
+        }
+        X509_free(cert);
+    }
+    if (count) *count = cert_count;
+    if (earliest_expiry == 0) {
+        if (earliest_serial) sdsfree(earliest_serial);
+        if (count) *count = 0;
+        return C_ERR;
+    }
+    if (expiry) *expiry = earliest_expiry;
+    *serial = earliest_serial;
+    return C_OK;
+}
+
+static void tlsMergeCertInfo(long long *expiry, sds *serial, int *count, long long src_expiry, sds src_serial, int src_count) {
+    if (count) *count += src_count;
+    if (src_expiry > 0 && (*expiry == 0 || src_expiry < *expiry)) {
+        if (*serial) sdsfree(*serial);
+        *expiry = src_expiry;
+        *serial = src_serial;
+    } else if (src_serial) {
+        sdsfree(src_serial);
+    }
+}
+
+static int tlsUpdateCertInfoFromFile(const char *path, long long *expiry, sds *serial, int *count) {
+    if (!path) return C_ERR;
+    FILE *fp = fopen(path, "r");
+    if (!fp) return C_ERR;
+    long long file_expiry = 0;
+    sds file_serial = NULL;
+    int file_count = 0;
+    int result = tlsUpdateCertInfoFromFileHandle(fp, &file_expiry, &file_serial, &file_count);
+    fclose(fp);
+    if (result == C_ERR) {
+        return tlsStoreCertInfo(0, file_serial, file_count, expiry, serial, count);
+    }
+    return tlsStoreCertInfo(file_expiry, file_serial, file_count, expiry, serial, count);
+}
+
+static int tlsUpdateCertInfoFromDir(const char *path, long long *expiry, sds *serial, int *count) {
+    if (!path) return C_ERR;
+    DIR *dir = opendir(path);
+    if (!dir) return C_ERR;
+    int cert_count = 0;
+    long long earliest_expiry = 0;
+    sds earliest_serial = NULL;
+    struct dirent *de;
+    while ((de = readdir(dir)) != NULL) {
+        if (de->d_name[0] == '.') continue;
+        char fullpath[PATH_MAX];
+        if (snprintf(fullpath, sizeof(fullpath), "%s/%s", path, de->d_name) >= (int)sizeof(fullpath)) continue;
+        struct stat st;
+        if (stat(fullpath, &st) == -1) continue;
+        if (!S_ISREG(st.st_mode)) continue;
+        FILE *fp = fopen(fullpath, "r");
+        if (!fp) continue;
+        long long file_expiry = 0;
+        sds file_serial = NULL;
+        int file_count = 0;
+        if (tlsUpdateCertInfoFromFileHandle(fp, &file_expiry, &file_serial, &file_count) == C_OK) {
+            tlsMergeCertInfo(&earliest_expiry, &earliest_serial, &cert_count, file_expiry, file_serial, file_count);
+        } else {
+            if (file_serial) sdsfree(file_serial);
+        }
+        fclose(fp);
+    }
+    closedir(dir);
+    return tlsStoreCertInfo(earliest_expiry, earliest_serial, cert_count, expiry, serial, count);
+}
+
+static void tlsRefreshServerCertInfo(void) {
+    if (!(server.tls_port || server.tls_replication || server.tls_cluster) || !valkey_tls_ctx ||
+        tlsUpdateCertInfoFromCtx(valkey_tls_ctx, &server.tls_server_cert_expire_time, &server.tls_server_cert_serial) == C_ERR) {
+        tlsClearCertInfo(&server.tls_server_cert_expire_time, &server.tls_server_cert_serial);
+    }
+}
+
+static void tlsRefreshClientCertInfo(void) {
+    if (tlsUpdateCertInfoFromCtx(valkey_tls_client_ctx, &server.tls_client_cert_expire_time, &server.tls_client_cert_serial) == C_ERR) {
+        tlsClearCertInfo(&server.tls_client_cert_expire_time, &server.tls_client_cert_serial);
+    }
+}
+
+static void tlsRefreshCACertInfo(void) {
+    long long file_expiry = 0, dir_expiry = 0;
+    sds file_serial = NULL, dir_serial = NULL;
+    int file_count = 0, dir_count = 0;
+    int file_ok = tlsUpdateCertInfoFromFile(server.tls_ctx_config.ca_cert_file,
+                                            &file_expiry,
+                                            &file_serial,
+                                            &file_count) == C_OK;
+    int dir_ok = tlsUpdateCertInfoFromDir(server.tls_ctx_config.ca_cert_dir,
+                                          &dir_expiry,
+                                          &dir_serial,
+                                          &dir_count) == C_OK;
+
+    tlsClearCACertInfo();
+    if (!file_ok && !dir_ok) {
+        if (file_serial) sdsfree(file_serial);
+        if (dir_serial) sdsfree(dir_serial);
+        return;
+    }
+
+    if (file_ok && (!dir_ok || file_expiry <= dir_expiry)) {
+        server.tls_ca_cert_expire_time = file_expiry;
+        server.tls_ca_cert_serial = file_serial;
+        if (dir_serial) sdsfree(dir_serial);
+    } else {
+        server.tls_ca_cert_expire_time = dir_expiry;
+        server.tls_ca_cert_serial = dir_serial;
+        if (file_serial) sdsfree(file_serial);
+    }
+}
+
+static void tlsRefreshAllCertInfo(void) {
+    tlsRefreshServerCertInfo();
+    tlsRefreshClientCertInfo();
+    tlsRefreshCACertInfo();
 }
 
 /* Callback for passing a keyfile password stored as an sds to OpenSSL */
@@ -694,6 +940,7 @@ static int tlsConfigure(void *priv, int reconfigure, bool background) {
         valkey_tls_ctx = ctx;
         valkey_tls_client_ctx = client_ctx;
         captureMetadata(ctx_config, &active_metadata);
+        tlsRefreshAllCertInfo();
     }
 
     atomic_store_explicit(&lastTlsConfigureTime, server.ustime, memory_order_relaxed);
@@ -747,6 +994,8 @@ void tlsApplyPendingReload(void) {
 
     SSL_CTX_free(old_ctx);
     SSL_CTX_free(old_client_ctx);
+
+    tlsRefreshAllCertInfo();
 
     serverLog(LL_NOTICE, "TLS materials reloaded successfully");
 }
@@ -1620,12 +1869,36 @@ int RedisRegisterConnectionTypeTLS(void) {
 
 #else /* USE_OPENSSL */
 
+static void tlsClearAllCertInfo(void);
+
+void tlsResetCertInfo(void) {
+    tlsClearAllCertInfo();
+}
+
 int RedisRegisterConnectionTypeTLS(void) {
     serverLog(LL_VERBOSE, "Connection type %s not builtin", getConnectionTypeName(CONN_TYPE_TLS));
     return C_ERR;
 }
 
 #endif
+
+static void tlsClearCertInfo(long long *expiry, sds *serial) {
+    if (expiry) *expiry = 0;
+    if (serial && *serial) {
+        sdsfree(*serial);
+        *serial = NULL;
+    }
+}
+
+static void tlsClearCACertInfo(void) {
+    tlsClearCertInfo(&server.tls_ca_cert_expire_time, &server.tls_ca_cert_serial);
+}
+
+static void tlsClearAllCertInfo(void) {
+    tlsClearCertInfo(&server.tls_server_cert_expire_time, &server.tls_server_cert_serial);
+    tlsClearCertInfo(&server.tls_client_cert_expire_time, &server.tls_client_cert_serial);
+    tlsClearCACertInfo();
+}
 
 #if defined(BUILD_TLS_MODULE) && BUILD_TLS_MODULE == 2 /* BUILD_MODULE */
 

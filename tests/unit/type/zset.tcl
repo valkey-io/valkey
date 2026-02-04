@@ -2777,5 +2777,4 @@ start_server [list overrides [list save ""] tags {"zset needs:debug external:ski
         }
         assert_equal 1 [string match {*rehashing index: -1*} [r debug htstats-key myzset full]] ;# no rehash ongoing
     }
-} ;# skip 32bit builds
-} ;# start_server
+}

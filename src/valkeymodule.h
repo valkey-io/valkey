@@ -861,7 +861,7 @@ typedef struct ValkeyModuleCommandResultInfo {
     uint64_t client_id;         /* Client ID that executed the command. */
     int is_module_client;       /* 1 if command was from RM_Call, 0 otherwise. */
     int argc;                   /* Number of command arguments. */
-    struct ValkeyModuleString **argv; /* Command arguments array (zero-copy). */
+    ValkeyModuleString **argv; /* Command arguments array (zero-copy). */
 } ValkeyModuleCommandResultInfoV1;
 
 #define ValkeyModuleCommandResultInfo ValkeyModuleCommandResultInfoV1

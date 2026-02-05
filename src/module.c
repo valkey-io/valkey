@@ -3004,10 +3004,6 @@ ValkeyModuleString *VM_HoldString(ValkeyModuleCtx *ctx, ValkeyModuleString *str)
     return str;
 }
 
-/* Thread-local buffer for integer-to-string conversion in VM_StringPtrLen.
- * LONG_STR_SIZE (21) is sufficient for any 64-bit integer. */
-static __thread char vm_string_int_buffer[24];
-
 /* Given a string module object, this function returns the string pointer
  * and length of the string. The returned pointer and length should only
  * be used for read only accesses and never modified. */
@@ -3016,14 +3012,6 @@ const char *VM_StringPtrLen(const ValkeyModuleString *str, size_t *len) {
         const char *errmsg = "(NULL string reply referenced in module)";
         if (len) *len = strlen(errmsg);
         return errmsg;
-    }
-    /* Handle integer-encoded strings by converting to a thread-local buffer.
-     * This is safe because the caller is expected to copy/process the data
-     * immediately and not hold onto the pointer across multiple calls. */
-    if (str->encoding == OBJ_ENCODING_INT) {
-        size_t l = ll2string(vm_string_int_buffer, sizeof(vm_string_int_buffer), (long)objectGetVal(str));
-        if (len) *len = l;
-        return vm_string_int_buffer;
     }
     if (len) *len = sdslen(objectGetVal(str));
     return objectGetVal(str);
@@ -11704,6 +11692,28 @@ void moduleFireCommandResultEvent(client *c,
     robj **argv = c->original_argv ? c->original_argv : c->argv;
     int argc = c->original_argv ? c->original_argc : c->argc;
 
+    /* Some commands (e.g. SET) call tryObjectEncoding() on argv entries during
+     * execution, converting string args to OBJ_ENCODING_INT. ValkeyModuleString
+     * only supports string-encoded objects, so we decode any INT-encoded entries
+     * before passing them to the module callback. For the common case where no
+     * entries are INT-encoded, this adds only a scan with no allocations. */
+    robj **decoded_argv = argv;
+    int needs_decode = 0;
+
+    for (int i = 0; i < argc; i++) {
+        if (argv[i]->encoding == OBJ_ENCODING_INT) {
+            needs_decode = 1;
+            break;
+        }
+    }
+
+    if (needs_decode) {
+        decoded_argv = zmalloc(sizeof(robj *) * argc);
+        for (int i = 0; i < argc; i++) {
+            decoded_argv[i] = getDecodedObject(argv[i]);
+        }
+    }
+
     /* Build the event data structure */
     ValkeyModuleCommandResultInfoV1 info = {
         .version = VALKEYMODULE_COMMANDRESULTINFO_VERSION,
@@ -11713,13 +11723,20 @@ void moduleFireCommandResultEvent(client *c,
         .client_id = c->id,
         .is_module_client = (c->flag.module ? 1 : 0),
         .argc = argc,
-        .argv = (ValkeyModuleString **)argv,
+        .argv = (ValkeyModuleString **)decoded_argv,
     };
 
     /* Fire the appropriate event based on success/failure */
     uint64_t event_id = command_failed ? VALKEYMODULE_EVENT_COMMAND_RESULT_FAILURE
                                        : VALKEYMODULE_EVENT_COMMAND_RESULT_SUCCESS;
     moduleFireServerEvent(event_id, 0, &info);
+
+    if (needs_decode) {
+        for (int i = 0; i < argc; i++) {
+            decrRefCount(decoded_argv[i]);
+        }
+        zfree(decoded_argv);
+    }
 }
 
 /* For a given pointer allocated via ValkeyModule_Alloc() or

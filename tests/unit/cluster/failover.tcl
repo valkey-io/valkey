@@ -146,7 +146,7 @@ start_cluster 3 6 {tags {external:skip cluster}} {
             }
         }
         
-        # If test will fail, print debug info
+        # If test will fail, print debug info AND entire logs
         if {!$test_will_pass} {
             puts "========== TEST FAILING - DEBUG INFO =========="
             puts "Replica -3 role: $role3"
@@ -157,6 +157,16 @@ start_cluster 3 6 {tags {external:skip cluster}} {
             puts "Replica -6 has rank #0: $srv6_has_rank0"
             puts "Replica -6 has rank #1: $srv6_has_rank1"
             puts "========== END DEBUG INFO =========="
+            
+            puts ""
+            puts "========== REPLICA -3 FULL LOG =========="
+            puts $log3
+            puts "========== END REPLICA -3 LOG =========="
+            
+            puts ""
+            puts "========== REPLICA -6 FULL LOG =========="
+            puts $log6
+            puts "========== END REPLICA -6 LOG =========="
         }
         
         # Original test logic

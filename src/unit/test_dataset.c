@@ -1,9 +1,3 @@
-/* Unit tests for valkey-benchmark dataset module
- *
- * Copyright (c) 2024, Redis Ltd.
- * All rights reserved.
- */
-
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>

@@ -586,8 +586,6 @@ ENGINE_CLI_OBJ = \
     valkey-cli.o \
     zmalloc.o
 ENGINE_BENCHMARK_NAME=$(ENGINE_NAME)-benchmark$(PROG_SUFFIX)
-# Dataset module shared between benchmark and unit tests
-BENCHMARK_DATASET_OBJ=valkey-benchmark-dataset.o
 ENGINE_BENCHMARK_OBJ = \
     adlist.o \
     ae.o \
@@ -610,7 +608,7 @@ ENGINE_BENCHMARK_OBJ = \
     strl.o \
     util.o \
     valkey-benchmark.o \
-	$(BENCHMARK_DATASET_OBJ) \
+    valkey-benchmark-dataset.o \
     zmalloc.o
 ENGINE_CHECK_RDB_NAME=$(ENGINE_NAME)-check-rdb$(PROG_SUFFIX)
 ENGINE_CHECK_AOF_NAME=$(ENGINE_NAME)-check-aof$(PROG_SUFFIX)
@@ -691,7 +689,7 @@ $(ENGINE_LIB_NAME): $(ENGINE_SERVER_OBJ)
 	$(SERVER_AR) rcs $@ $^
 
 # valkey-unit-tests
-$(ENGINE_UNIT_TESTS): $(ENGINE_TEST_OBJ) $(ENGINE_LIB_NAME) $(BENCHMARK_DATASET_OBJ)
+$(ENGINE_UNIT_TESTS): $(ENGINE_TEST_OBJ) $(ENGINE_LIB_NAME) valkey-benchmark-dataset.o
 	$(SERVER_LD) -o $@ $^ ../deps/libvalkey/lib/libvalkey.a ../deps/lua/src/liblua.a ../deps/hdr_histogram/libhdrhistogram.a ../deps/fpconv/libfpconv.a $(FINAL_LIBS)
 
 # valkey-sentinel

@@ -123,7 +123,8 @@ Use [`.github/workflows/daily.yml`](.github/workflows/daily.yml) with
 6. Click **Run workflow**.
 
 Notes:
-* To run the full matrix, set `skipjobs` and `skiptests` to `""`.
+* To run the full matrix, set `skipjobs` and `skiptests` to `none`.
+  Do not leave them empty, since the workflow input defaults may be applied.
 * The scheduled part of this workflow is gated to `valkey-io/valkey`, but manual
   `workflow_dispatch` runs work for forks.
 

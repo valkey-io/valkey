@@ -121,16 +121,18 @@ start_cluster 3 6 {tags {external:skip cluster}} {
     }
 
     test "Make sure the replicas always get the different ranks" {
-        set log3 [exec tail -n +1 < [srv -3 stdout]]
-        set log6 [exec tail -n +1 < [srv -6 stdout]]
-        
-        set srv3_has_rank0 [string match "*(rank #0,*" $log3]
-        set srv3_has_rank1 [string match "*(rank #1,*" $log3]
-        set srv6_has_rank0 [string match "*(rank #0,*" $log6]
-        set srv6_has_rank1 [string match "*(rank #1,*" $log6]
-        
-        assert {($srv3_has_rank0 && $srv6_has_rank1) || ($srv3_has_rank1 && $srv6_has_rank0)} \
-            "Replicas should have different ranks: srv3_rank0=$srv3_has_rank0, srv3_rank1=$srv3_has_rank1, srv6_rank0=$srv6_has_rank0, srv6_rank1=$srv6_has_rank1"
+        set log3 [exec cat [srv -3 stdout]]
+        set log6 [exec cat [srv -6 stdout]]
+    
+        set srv3_has_rank0 [string match "*Start of election*(rank #0*" $log3]
+        set srv3_has_rank1 [string match "*Start of election*(rank #1*" $log3]
+        set srv6_has_rank0 [string match "*Start of election*(rank #0*" $log6]
+        set srv6_has_rank1 [string match "*Start of election*(rank #1*" $log6]
+    
+        # One should have rank #0, other should have rank #1 (different ranks)
+        if {!(($srv3_has_rank0 && $srv6_has_rank1) || ($srv3_has_rank1 && $srv6_has_rank0))} {
+            fail "Replicas should have different ranks: srv3_rank0=$srv3_has_rank0, srv3_rank1=$srv3_has_rank1, srv6_rank0=$srv6_has_rank0, srv6_rank1=$srv6_has_rank1"
+        }
     }
 
 } ;# start_cluster

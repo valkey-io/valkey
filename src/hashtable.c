@@ -628,8 +628,24 @@ static void rehashBucketShrink(hashtable *ht, bucket *b) {
 
 /* Processes one bucket chain during incremental table shrinkage. */
 static void rehashStepShrink(hashtable *ht) {
-    size_t idx = ht->rehash_idx;
-    bucket *b = ht->tables[0] + idx;
+    bucket *b;
+
+    /* Find a non-empty bucket, skipping up to 10 empty buckets.
+     *
+     * In shrinking case, there is a case that the ht0 can be very empty, but the
+     * table size is huge, when doing one step rehash, if there are a lot of empty
+     * buckets, we can rehash more buckets to make the rehash faster. */
+    int empty_visits = 10;
+    while (true) {
+        size_t idx = ht->rehash_idx;
+        b = ht->tables[0] + idx;
+        if (b->presence != 0 || b->chained) break; /* non-empty bucket */
+        rehashStepFinalize(ht);
+        if (!hashtableIsRehashing(ht)) return; /* rehashing completed */
+        if (--empty_visits == 0) return;       /* too many empty buckets */
+    }
+
+    /* Rehash all the entries in this bucket chain from the old to the new hash HT */
     while (b != NULL) {
         bucket *next = getChildBucket(b);
         rehashBucketShrink(ht, b);
@@ -639,6 +655,11 @@ static void rehashStepShrink(hashtable *ht) {
     rehashStepFinalize(ht);
 }
 
+/* Performs one step of incremental rehashing.
+ *
+ * Note that a rehashing step consists in moving a bucket and all its child buckets,
+ * (that may have more than one key as we use bucket and bucket chaining) from the
+ * old to the new hash table. */
 static void rehashStep(hashtable *ht) {
     assert(hashtableIsRehashing(ht));
     if (ht->bucket_exp[1] < ht->bucket_exp[0]) {
@@ -1359,6 +1380,11 @@ bool hashtableIsRehashingPaused(hashtable *ht) {
 /* Returns true if incremental rehashing is in progress, false otherwise. */
 bool hashtableIsRehashing(hashtable *ht) {
     return ht->rehash_idx != -1;
+}
+
+/* Returns the rehashing index. */
+ssize_t hashtableGetRehashingIndex(hashtable *ht) {
+    return ht->rehash_idx;
 }
 
 /* Provides the number of buckets in the old and new tables during rehashing. To

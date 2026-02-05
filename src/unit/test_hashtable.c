@@ -223,6 +223,44 @@ int test_instant_rehashing(int argc, char **argv, int flags) {
     return 0;
 }
 
+int test_empty_buckets_rehashing(int argc, char **argv, int flags) {
+    UNUSED(argc);
+    UNUSED(argv);
+    UNUSED(flags);
+
+    hashtableType type = {0};
+    hashtable *ht = hashtableCreate(&type);
+    long j;
+
+    /* Populate and make sure there is no rehashing ongoing. */
+    for (j = 0; j < 1000; j++) {
+        TEST_ASSERT(hashtableAdd(ht, (void *)j));
+    }
+    while (hashtableIsRehashing(ht)) {
+        TEST_ASSERT(!hashtableAdd(ht, (void *)0));
+    }
+
+    /* Delete all elements except for one so there are a lot of empty buckets. */
+    hashtablePauseAutoShrink(ht);
+    for (j = 0; j < 1000 - 1; j++) {
+        TEST_ASSERT(hashtableDelete(ht, (void *)j));
+    }
+    hashtableResumeAutoShrink(ht);
+    TEST_ASSERT(hashtableSize(ht) == 1);
+    TEST_ASSERT(hashtableGetRehashingIndex(ht) == 0);
+
+    /* Add elements to trigger rehashing, a rehash step will rehash a maximum of 10 buckets. */
+    for (j = 0; j < 10; j++) {
+        TEST_ASSERT(hashtableAdd(ht, (void *)j));
+    }
+    TEST_ASSERT(hashtableSize(ht) == 11);
+    /* Check that at least 90 buckets are rehashed or that rehashing is completed. */
+    TEST_ASSERT(hashtableGetRehashingIndex(ht) >= 90 || hashtableGetRehashingIndex(ht) == -1);
+
+    hashtableRelease(ht);
+    return 0;
+}
+
 int test_bucket_chain_length(int argc, char **argv, int flags) {
     UNUSED(argc);
     UNUSED(argv);

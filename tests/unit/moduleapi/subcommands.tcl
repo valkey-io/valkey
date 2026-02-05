@@ -84,6 +84,7 @@ start_server {tags {"modules"}} {
     }
 
     test "Unload the module - subcommands" {
+        r ACL DELUSER subcmduser basecmduser denycmduser selcmduser
         assert_equal {OK} [r module unload subcommands]
     }
 }

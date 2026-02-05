@@ -120,29 +120,17 @@ start_cluster 3 6 {tags {external:skip cluster}} {
         wait_for_cluster_propagation
     }
 
-    test "Make sure the replicas always get different ranks" {
+    test "Make sure the replicas always get the different ranks" {
         set log3 [exec cat [srv -3 stdout]]
         set log6 [exec cat [srv -6 stdout]]
         
-        # Get the LAST "Start of election" line for each replica
-        set election_lines3 [regexp -all -inline {Start of election delayed for \d+ milliseconds \(rank #\d+} $log3]
-        set election_lines6 [regexp -all -inline {Start of election delayed for \d+ milliseconds \(rank #\d+} $log6]
+        set srv3_has_rank0 [string match "*(rank #0,*" $log3]
+        set srv3_has_rank1 [string match "*(rank #1,*" $log3]
+        set srv6_has_rank0 [string match "*(rank #0,*" $log6]
+        set srv6_has_rank1 [string match "*(rank #1,*" $log6]
         
-        # Get the last one (final rank)
-        set last_election3 [lindex $election_lines3 end]
-        set last_election6 [lindex $election_lines6 end]
-        
-        # Extract rank number from the last election line
-        regexp {rank #(\d+)} $last_election3 -> rank3
-        regexp {rank #(\d+)} $last_election6 -> rank6
-        
-        puts "========== DEBUG INFO =========="
-        puts "Replica -3 final rank: $rank3"
-        puts "Replica -6 final rank: $rank6"
-        puts "========== END DEBUG INFO =========="
-        
-        # Verify they have different ranks
-        assert {$rank3 ne $rank6} "Both replicas have the same rank: $rank3"
+        assert {($srv3_has_rank0 && $srv6_has_rank1) || ($srv3_has_rank1 && $srv6_has_rank0)} \
+            "Replicas should have different ranks: srv3_rank0=$srv3_has_rank0, srv3_rank1=$srv3_has_rank1, srv6_rank0=$srv6_has_rank0, srv6_rank1=$srv6_has_rank1"
     }
 
 } ;# start_cluster

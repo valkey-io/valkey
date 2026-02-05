@@ -121,8 +121,8 @@ start_cluster 3 6 {tags {external:skip cluster}} {
     }
 
     test "Make sure the replicas always get the different ranks" {
-        set log3 [exec cat [srv -3 stdout]]
-        set log6 [exec cat [srv -6 stdout]]
+        set log3 [exec tail -n +1 < [srv -3 stdout]]
+        set log6 [exec tail -n +1 < [srv -6 stdout]]
         
         set srv3_has_rank0 [string match "*(rank #0,*" $log3]
         set srv3_has_rank1 [string match "*(rank #1,*" $log3]

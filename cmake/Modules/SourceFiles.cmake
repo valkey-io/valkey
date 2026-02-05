@@ -66,6 +66,7 @@ set(VALKEY_SERVER_SRCS
     ${CMAKE_SOURCE_DIR}/src/blocked.c
     ${CMAKE_SOURCE_DIR}/src/hyperloglog.c
     ${CMAKE_SOURCE_DIR}/src/latency.c
+    ${CMAKE_SOURCE_DIR}/src/payload_histogram.c
     ${CMAKE_SOURCE_DIR}/src/sparkline.c
     ${CMAKE_SOURCE_DIR}/src/valkey-check-rdb.c
     ${CMAKE_SOURCE_DIR}/src/valkey-check-aof.c

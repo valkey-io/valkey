@@ -729,6 +729,9 @@ typedef enum {
 #define PAYLOAD_HISTOGRAM_MIN_VALUE 1L
 #define PAYLOAD_HISTOGRAM_MAX_VALUE (1LL << 30) /* 1 GiB */
 #define PAYLOAD_HISTOGRAM_PRECISION 2
+#define PAYLOAD_TRACKING_MODE_READ 1
+#define PAYLOAD_TRACKING_MODE_WRITE 2
+#define PAYLOAD_TRACKING_MODE_BOTH (PAYLOAD_TRACKING_MODE_READ | PAYLOAD_TRACKING_MODE_WRITE)
 
 /* Busy module flags, see busy_module_yield_flags */
 #define BUSY_MODULE_YIELD_NONE (0)
@@ -1996,6 +1999,10 @@ struct valkeyServer {
     double *latency_tracking_info_percentiles; /* Extended latency tracking info output percentile list configuration. */
     int latency_tracking_info_percentiles_len;
     int payload_tracking_enabled;    /* 1 if payload histogram tracking is enabled, 0 otherwise. */
+    int payload_tracking_mode;       /* Payload tracking mode (read/write/both). */
+    long long payload_tracking_sample_rate;
+    unsigned long long payload_tracking_sample_counter;
+    mstime_t payload_tracking_disable_at;
     size_t *payload_histogram_views; /* Base sizes for payload histogram views. */
     int payload_histogram_views_len; /* Number of payload histogram views. */
     int payload_histogram_factor;    /* Factor for payload histogram bucket growth. */

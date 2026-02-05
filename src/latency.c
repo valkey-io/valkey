@@ -529,44 +529,6 @@ void fillCommandCDF(client *c, struct hdr_histogram *histogram) {
     setDeferredMapLen(c, replylen, samples);
 }
 
-static void fillPayloadCDF(client *c, struct hdr_histogram *histogram, int64_t base, int64_t factor) {
-    addReplyMapLen(c, 2);
-    addReplyBulkCString(c, "calls");
-    addReplyLongLong(c, (long long)histogram->total_count);
-    addReplyBulkCString(c, "histogram_bytes");
-    void *replylen = addReplyDeferredLen(c);
-    int samples = 0;
-    struct hdr_iter iter;
-    hdr_iter_log_init(&iter, histogram, base, factor);
-    int64_t previous_count = 0;
-    while (hdr_iter_next(&iter)) {
-        const int64_t bytes = iter.highest_equivalent_value;
-        const int64_t cumulative_count = iter.cumulative_count;
-        const int64_t bucket_count = cumulative_count - previous_count;
-        if (bucket_count > 0) {
-            addReplyLongLong(c, (long long)bytes);
-            addReplyLongLong(c, (long long)bucket_count);
-            samples++;
-        }
-        previous_count = cumulative_count;
-    }
-    setDeferredMapLen(c, replylen, samples);
-}
-
-static void fillPayloadViews(client *c, struct hdr_histogram *histogram) {
-    void *replylen = addReplyDeferredLen(c);
-    int views = 0;
-    if (histogram && histogram->total_count > 0) {
-        for (int j = 0; j < server.payload_histogram_views_len; j++) {
-            size_t base = server.payload_histogram_views[j];
-            addReplyLongLong(c, (long long)base);
-            fillPayloadCDF(c, histogram, base, server.payload_histogram_factor);
-            views++;
-        }
-    }
-    setDeferredMapLen(c, replylen, views);
-}
-
 /* latencyCommand() helper to produce for all commands,
  * a per command cumulative distribution of latencies. */
 void latencyAllCommandsFillCDF(client *c, hashtable *commands, int *command_with_data) {
@@ -801,51 +763,6 @@ nodataerr:
     /* Common error when the user asks for an event we have no latency
      * information about. */
     addReplyErrorFormat(c, "No samples available for event '%s'", (char *)objectGetVal(c->argv[2]));
-}
-
-static void payloadHistogramCommand(client *c) {
-    int direction = 0;
-    if (c->argc == 2) {
-        direction = 3;
-    } else if (c->argc == 3) {
-        if (!strcasecmp(objectGetVal(c->argv[2]), "read")) {
-            direction = 1;
-        } else if (!strcasecmp(objectGetVal(c->argv[2]), "write")) {
-            direction = 2;
-        } else {
-            addReplySubcommandSyntaxError(c);
-            return;
-        }
-    } else {
-        addReplySubcommandSyntaxError(c);
-        return;
-    }
-
-    addReplyMapLen(c, (direction == 3) ? 2 : 1);
-    if (direction & 1) {
-        addReplyBulkCString(c, "read");
-        fillPayloadViews(c, server.payload_read_histogram);
-    }
-    if (direction & 2) {
-        addReplyBulkCString(c, "write");
-        fillPayloadViews(c, server.payload_write_histogram);
-    }
-}
-
-void payloadCommand(client *c) {
-    if (!strcasecmp(objectGetVal(c->argv[1]), "histogram")) {
-        payloadHistogramCommand(c);
-    } else if (!strcasecmp(objectGetVal(c->argv[1]), "help") && c->argc == 2) {
-        const char *help[] = {
-            "HISTOGRAM [read|write]",
-            "    Return a per-bucket distribution of payload sizes for client commands.",
-            "    Without an argument, return both read and write histograms.",
-            NULL,
-        };
-        addReplyHelp(c, help);
-    } else {
-        addReplySubcommandSyntaxError(c);
-    }
 }
 
 void durationAddSample(int type, monotime duration) {

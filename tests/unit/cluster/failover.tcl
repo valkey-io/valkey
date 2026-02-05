@@ -121,6 +121,7 @@ start_cluster 3 6 {tags {external:skip cluster}} {
     }
 
     test "Make sure the replicas always get the different ranks" {
+        puts "========== MAKE SURE TEST STARTING =========="
         # Get logs first
         set log3 [exec cat [srv -3 stdout]]
         set log6 [exec cat [srv -6 stdout]]

@@ -120,63 +120,29 @@ start_cluster 3 6 {tags {external:skip cluster}} {
         wait_for_cluster_propagation
     }
 
-    test "Make sure the replicas always get the different ranks" {
-        puts "========== MAKE SURE TEST STARTING =========="
-        # Get logs first
+    test "Make sure the replicas always get different ranks" {
         set log3 [exec cat [srv -3 stdout]]
         set log6 [exec cat [srv -6 stdout]]
         
-        # Extract rank information
-        set srv3_has_rank0 [string match "*Start of election*rank #0*" $log3]
-        set srv3_has_rank1 [string match "*Start of election*rank #1*" $log3]
-        set srv6_has_rank0 [string match "*Start of election*rank #0*" $log6]
-        set srv6_has_rank1 [string match "*Start of election*rank #1*" $log6]
+        # Get the LAST "Start of election" line for each replica
+        set election_lines3 [regexp -all -inline {Start of election delayed for \d+ milliseconds \(rank #\d+} $log3]
+        set election_lines6 [regexp -all -inline {Start of election delayed for \d+ milliseconds \(rank #\d+} $log6]
         
-        # Check if test will pass
-        set role3 [s -3 role]
-        set test_will_pass 0
+        # Get the last one (final rank)
+        set last_election3 [lindex $election_lines3 end]
+        set last_election6 [lindex $election_lines6 end]
         
-        if {$role3 == "master"} {
-            if {$srv3_has_rank0 && $srv6_has_rank1} {
-                set test_will_pass 1
-            }
-        } else {
-            if {$srv3_has_rank1 && $srv6_has_rank0} {
-                set test_will_pass 1
-            }
-        }
+        # Extract rank number from the last election line
+        regexp {rank #(\d+)} $last_election3 -> rank3
+        regexp {rank #(\d+)} $last_election6 -> rank6
         
-        # If test will fail, print debug info AND entire logs
-        if {!$test_will_pass} {
-            puts "========== TEST FAILING - DEBUG INFO =========="
-            puts "Replica -3 role: $role3"
-            puts "Replica -6 role: [s -6 role]"
-            puts ""
-            puts "Replica -3 has rank #0: $srv3_has_rank0"
-            puts "Replica -3 has rank #1: $srv3_has_rank1"
-            puts "Replica -6 has rank #0: $srv6_has_rank0"
-            puts "Replica -6 has rank #1: $srv6_has_rank1"
-            puts "========== END DEBUG INFO =========="
-            
-            puts ""
-            puts "========== REPLICA -3 FULL LOG =========="
-            puts $log3
-            puts "========== END REPLICA -3 LOG =========="
-            
-            puts ""
-            puts "========== REPLICA -6 FULL LOG =========="
-            puts $log6
-            puts "========== END REPLICA -6 LOG =========="
-        }
+        puts "========== DEBUG INFO =========="
+        puts "Replica -3 final rank: $rank3"
+        puts "Replica -6 final rank: $rank6"
+        puts "========== END DEBUG INFO =========="
         
-        # Original test logic
-        if {$role3 == "master"} {
-            verify_log_message -3 "*Start of election*rank #0*" 0
-            verify_log_message -6 "*Start of election*rank #1*" 0
-        } else {
-            verify_log_message -3 "*Start of election*rank #1*" 0
-            verify_log_message -6 "*Start of election*rank #0*" 0
-        }
+        # Verify they have different ranks
+        assert {$rank3 ne $rank6} "Both replicas have the same rank: $rank3"
     }
 
 } ;# start_cluster

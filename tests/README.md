@@ -84,6 +84,14 @@ Tags can be applied in different context levels:
 * `tags` context that bundles several tests together
 * A single test context.
 
+**Important:** Some tags are restricted to top-level use only (they can only be used in `start_server` blocks, not in nested `tags` blocks or individual `test` contexts). These tags are:
+* `large-memory`
+* `needs:other-server`
+* `compatible-redis`
+* `network`
+
+If you attempt to use these tags in a nested context, the test framework will raise a "Test design error" and abort the test run. This is done for proper test filtering and prevents issues with the `--tags` option.
+
 The following compatibility and capability tags are currently used:
 
 | Tag                       | Indicates |

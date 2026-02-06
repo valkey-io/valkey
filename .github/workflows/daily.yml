@@ -786,8 +786,7 @@ jobs:
         (github.event_name == 'schedule' && github.repository == 'valkey-io/valkey') ||
         (github.event_name == 'pull_request' && github.event.pull_request.base.ref != 'unstable')) &&
       !contains(github.event.inputs.skipjobs, 'sanitizer') &&
-      !contains(github.event.inputs.skiptests, 'large-memory') &&
-      github.event_name != 'schedule'
+      !contains(github.event.inputs.skiptests, 'large-memory')
     timeout-minutes: 1440
     strategy:
       fail-fast: false
@@ -880,8 +879,7 @@ jobs:
         (github.event_name == 'schedule' && github.repository == 'valkey-io/valkey') ||
         (github.event_name == 'pull_request' && github.event.pull_request.base.ref != 'unstable')) &&
       !contains(github.event.inputs.skipjobs, 'sanitizer') &&
-      !contains(github.event.inputs.skiptests, 'large-memory') &&
-      github.event_name != 'schedule'
+      !contains(github.event.inputs.skiptests, 'large-memory')
     timeout-minutes: 1440
     strategy:
       fail-fast: false

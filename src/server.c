@@ -2997,6 +2997,7 @@ void initServer(void) {
     server.rdb_save_time_start = -1;
     server.rdb_last_load_keys_expired = 0;
     server.rdb_last_load_keys_loaded = 0;
+    server.rdb_last_load_keys_skipped_unowned_slot = 0;
     server.dirty = 0;
     server.crashed = 0;
     resetServerStats();
@@ -6276,6 +6277,7 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                 "rdb_last_cow_size:%zu\r\n", server.stat_rdb_cow_bytes,
                 "rdb_last_load_keys_expired:%lld\r\n", server.rdb_last_load_keys_expired,
                 "rdb_last_load_keys_loaded:%lld\r\n", server.rdb_last_load_keys_loaded,
+                "rdb_last_load_keys_skipped_unowned_slot:%lld\r\n", server.rdb_last_load_keys_skipped_unowned_slot,
                 "aof_enabled:%d\r\n", server.aof_state != AOF_OFF,
                 "aof_rewrite_in_progress:%d\r\n", server.child_type == CHILD_TYPE_AOF,
                 "aof_rewrite_scheduled:%d\r\n", server.aof_rewrite_scheduled,

@@ -847,8 +847,24 @@ proc start_server {options {code undefined}} {
 
 # Start multiple servers with the same options, run code, then stop them.
 proc start_multiple_servers {num options code} {
+    # Extract tags from options, they should only be applied to last call.
+    set tags {}
+    set options_without_tags {}
+    foreach {key value} $options {
+        if {$key eq "tags"} {
+            set tags $value
+        } else {
+            lappend options_without_tags $key $value
+        }
+    }
+    
     for {set i 0} {$i < $num} {incr i} {
-        set code [list start_server $options $code]
+        if {$i == [expr {$num - 1}] && $tags ne {}} {
+            # Last call gets the tags
+            set code [list start_server [concat $options_without_tags [list tags $tags]] $code]
+        } else {
+            set code [list start_server $options_without_tags $code]
+        }
     }
     uplevel 1 $code
 }

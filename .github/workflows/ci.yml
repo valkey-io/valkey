@@ -144,7 +144,7 @@ jobs:
       - name: show-kernel-log
         run: sudo dmesg -c
 
-  test-tls:
+  test-tls-only:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1

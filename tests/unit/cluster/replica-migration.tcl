@@ -89,18 +89,7 @@ proc test_migrated_replica {type} {
         verify_log_message -4 "*Start of election*rank #0*" 0
 
         # Wait for the cluster to be ok.
-        wait_for_condition 1000 50 {
-            [R 3 cluster slots] eq [R 4 cluster slots] &&
-            [R 4 cluster slots] eq [R 7 cluster slots] &&
-            [CI 3 cluster_state] eq "ok" &&
-            [CI 4 cluster_state] eq "ok" &&
-            [CI 7 cluster_state] eq "ok"
-        } else {
-            puts "R 3: [R 3 cluster info]"
-            puts "R 4: [R 4 cluster info]"
-            puts "R 7: [R 7 cluster info]"
-            fail "Cluster is down"
-        }
+        wait_for_cluster_propagation 0
 
         # Make sure the key exists and is consistent.
         R 3 readonly
@@ -188,15 +177,7 @@ proc test_nonempty_replica {type} {
         }
 
         # Wait for the cluster to be ok.
-        wait_for_condition 1000 50 {
-            [R 4 cluster slots] eq [R 7 cluster slots] &&
-            [CI 4 cluster_state] eq "ok" &&
-            [CI 7 cluster_state] eq "ok"
-        } else {
-            puts "R 4: [R 4 cluster info]"
-            puts "R 7: [R 7 cluster info]"
-            fail "Cluster is down"
-        }
+        wait_for_cluster_propagation 0
 
         # Make sure the key exists and is consistent.
         R 7 readonly
@@ -308,18 +289,7 @@ proc test_sub_replica {type} {
         }
 
         # Wait for the cluster to be ok.
-        wait_for_condition 1000 50 {
-            [R 3 cluster slots] eq [R 4 cluster slots] &&
-            [R 4 cluster slots] eq [R 7 cluster slots] &&
-            [CI 3 cluster_state] eq "ok" &&
-            [CI 4 cluster_state] eq "ok" &&
-            [CI 7 cluster_state] eq "ok"
-        } else {
-            puts "R 3: [R 3 cluster info]"
-            puts "R 4: [R 4 cluster info]"
-            puts "R 7: [R 7 cluster info]"
-            fail "Cluster is down"
-        }
+        wait_for_cluster_propagation 0
 
         # Make sure the key exists and is consistent.
         R 3 readonly

@@ -512,12 +512,14 @@ void debugCommand(client *c) {
             "DICT-RESIZING <0|1>",
             "    Enable or disable the main dict and expire dict resizing.",
             "CLIENT-ENFORCE-REPLY-LIST <0|1>",
-            "When set to 1, it enforces the use of the client reply list directly",
+            "    When set to 1, it enforces the use of the client reply list directly",
             "    and avoids using the client's static buffer.",
             "SLOTMIGRATION PREVENT-PAUSE <0|1>",
             "    When set to 1, slot migrations will be prevented from pausing on the source node.",
             "SLOTMIGRATION PREVENT-FAILOVER <0|1>",
             "    When set to 1, slot migrations will be prevented from performing the slot-level failover on the target node.",
+            "HASHTABLE-CAN-ABORT-SHRINK <0|1>",
+            "    Enable or disable the hashtable shrink abort.",
             NULL};
         addExtendedReplyHelp(c, help, clusterDebugCommandExtendedHelp());
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "segfault")) {
@@ -1055,6 +1057,9 @@ void debugCommand(client *c) {
         addReply(c, shared.ok);
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "client-enforce-reply-list") && c->argc == 3) {
         server.debug_client_enforce_reply_list = atoi(objectGetVal(c->argv[2]));
+        addReply(c, shared.ok);
+    } else if (!strcasecmp(objectGetVal(c->argv[1]), "hashtable-can-abort-shrink") && c->argc == 3) {
+        hashtableSetCanAbortShrink(atoi(objectGetVal(c->argv[2])));
         addReply(c, shared.ok);
     } else if (!handleDebugClusterCommand(c)) {
         addReplySubcommandSyntaxError(c);

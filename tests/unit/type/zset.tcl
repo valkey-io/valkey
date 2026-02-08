@@ -2740,6 +2740,8 @@ start_server [list overrides [list save ""] tags {"zset needs:debug external:ski
         if {[s arch_bits] != 64} {
             skip "This is only for 64-bit platforms"
         }
+        r debug hashtable-can-abort-shrink 0
+
         # We added elements to ensure we would have enough buckets.
         # There should be 4096 buckets here.
         r del myzset
@@ -2759,6 +2761,10 @@ start_server [list overrides [list save ""] tags {"zset needs:debug external:ski
         # Since we deleted the elements and only left one element, there is a resize operation.
         # So ht0 will contain a large number of empty buckets, while ht1 will be a minimal hashtable.
         set htstats [r debug htstats-key myzset full]
+        if {$::verbose} {
+            puts "After deleting the elements:"
+            puts $htstats
+        }
         assert_equal 1 [string match {*number of entries: 1*} $htstats] ;# ht0 has 1 entry
         assert_equal 1 [string match {*rehashing index: 0*} $htstats]   ;# ht0 rehash just started
         assert_equal 1 [string match {*rehashing target*} $htstats]     ;# ht1 started rehashing
@@ -2775,6 +2781,136 @@ start_server [list overrides [list save ""] tags {"zset needs:debug external:ski
         for {set i 0} {$i < 2000} {incr i} {
             r zadd myzset $i $i
         }
+        if {$::verbose} {
+            puts "After adding the elements:"
+            puts $htstats
+        }
         assert_equal 1 [string match {*rehashing index: -1*} [r debug htstats-key myzset full]] ;# no rehash ongoing
+
+        r debug hashtable-can-abort-shrink 1
+    }
+
+    test {ZSET resize test - shrink rehashing can be abort if the new hashtable is too full} {
+        if {[s arch_bits] != 64} {
+            skip "This is only for 64-bit platforms"
+        }
+        r debug hashtable-can-abort-shrink 1
+
+        # We added elements to ensure we would have enough buckets.
+        r del myzset
+        set elements {}
+        for {set i 0} {$i < 20000} {incr i} {
+            lappend elements $i $i
+        }
+        r zadd myzset {*}$elements
+        assert_equal 20000 [r zcard myzset]
+        assert_equal 1 [string match {*top-level buckets: 4096*} [r debug htstats-key myzset full]]
+
+        # We deleted all elements except for one so there ht0 is quite empty.
+        r zremrangebyrank myzset 1 -1
+        assert_equal 1 [r zcard myzset]
+        assert_encoding skiplist myzset
+
+        # Since we deleted the elements and only left one element, there is a resize operation.
+        # So ht0 will contain a large number of empty buckets, while ht1 will be a minimal hashtable.
+        set htstats [r debug htstats-key myzset full]
+        if {$::verbose} {
+            puts "After deleting the elements:"
+            puts $htstats
+        }
+        assert_equal 1 [string match {*number of entries: 1*} $htstats] ;# ht0 has 1 entry
+        assert_equal 1 [string match {*rehashing index: 0*} $htstats]   ;# ht0 rehash just started
+        assert_equal 1 [string match {*rehashing target*} $htstats]     ;# ht1 started rehashing
+        assert_equal 1 [string match {*table size: 7*} $htstats]        ;# ht1 table size is the minimal number
+        assert_equal 1 [string match {*number of entries: 0*} $htstats] ;# ht1 has 0 entry
+
+        # Currently ENTRIES_PER_BUCKET is 7 and MAX_FILL_PERCENT_HARD is 500.
+        # So we need to add 35 elements to make ht1 reach MAX_FILL_PERCENT_HARD.
+        for {set i 0} {$i < 36} {incr i} {
+            r zadd myzset $i $i
+        }
+
+        # There are several possibilities here:
+        # 1: One is that we finish the rehash during the add.
+        # 2. The second is that we finish the rehash after the last add and then trigger a expand.
+        # 3. The last one is the situation we want to test, ht1 reached MAX_FILL_PERCENT_HARD after
+        #    adding 35 new elements.
+        set htstats [r debug htstats-key myzset full]
+        if {$::verbose} {
+            puts "After adding 35 new elements:"
+            puts $htstats
+        }
+        #Hash table 0 stats (main hash table):
+        # table size: 28672
+        # number of entries: 1
+        # rehashing index: 710
+        # top-level buckets: 4096
+        # child buckets: 0
+        # max chain length: 0
+        # avg chain length: 0.000000
+        # chain length distribution:
+        #   0: 4096 (100.00%)
+        #Hash table 1 stats (rehashing target):
+        # table size: 7
+        # number of entries: 35
+        # top-level buckets: 1
+        # child buckets: 5
+        # max chain length: 5
+        # avg chain length: 5.000000
+        # chain length distribution:
+        #   5: 1 (100.00%)
+
+        if {[string match {*number of entries: 35*} $htstats]} {
+            assert_equal 1 [string match {*number of entries: 1*} $htstats]  ;# ht0 has 1 entry
+            assert_equal 1 [string match {*number of entries: 35*} $htstats] ;# ht1 has 35 entries
+
+            # Adding a new element to ht1, since we already reach MAX_FILL_PERCENT_HARD, in this add,
+            # we will abort the shrink.
+            r zadd myzset 36 36
+
+            # There are several possibilities here:
+            # 1. One is that we finish the rehash during the add and then trigger a new expand.
+            # 2. The last one is the situation we want to test, we abort the shrink and swap
+            #    the tables during the add, and the new element was actually added to ht1, which
+            #    was ht0 before the swap.
+            set htstats [r debug htstats-key myzset full]
+            if {$::verbose} {
+                puts "After adding 1 new element:"
+                puts $htstats
+            }
+            #Hash table 0 stats (main hash table):
+            # table size: 7
+            # number of entries: 35
+            # rehashing index: 0
+            # top-level buckets: 1
+            # child buckets: 5
+            # max chain length: 5
+            # avg chain length: 5.000000
+            # chain length distribution:
+            #   5: 1 (100.00%)
+            #Hash table 1 stats (rehashing target):
+            # table size: 28672
+            # number of entries: 2
+            # top-level buckets: 4096
+            # child buckets: 0
+            # max chain length: 0
+            # avg chain length: 0.000000
+            # chain length distribution:
+            #   0: 4096 (100.00%)
+
+            if {[string match {*number of entries: 2*} $htstats]} {
+                assert_equal 1 [string match {*table size: 7*} $htstats]         ;# ht0 table size is 7
+                assert_equal 1 [string match {*number of entries: 35*} $htstats] ;# ht0 has 35 entries
+                assert_equal 1 [string match {*rehashing index: 0*} $htstats]    ;# rehash index is back to 0
+                assert_equal 1 [string match {*number of entries: 2*} $htstats]  ;# ht1 has 2 entries
+            }
+        }
+
+        # Fuzzy test around normal zset commands to make sure we are ok.
+        for {set i 0} {$i < 20000} {incr i} {
+            r zadd myzset $i $i
+            assert_equal [r zscore myzset $i] $i
+            assert_equal [r zrem myzset $i] 1
+        }
     }
 }

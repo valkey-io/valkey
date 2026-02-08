@@ -7129,10 +7129,7 @@ void clusterCommandShards(client *c) {
 sds genClusterInfoString(sds info) {
     char *statestr[] = {"ok", "fail"};
     int slots_assigned = 0, slots_ok = 0, slots_pfail = 0, slots_fail = 0;
-    uint64_t my_epoch = 0;
-    if (myself != NULL) {
-        my_epoch = nodeEpoch(myself);
-    }
+    uint64_t my_epoch = myself ? nodeEpoch(myself) : 0;
 
     dictIterator *di = dictGetIterator(server.cluster->nodes);
     dictEntry *de;

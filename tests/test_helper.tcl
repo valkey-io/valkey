@@ -139,6 +139,8 @@ set ::numclients 16
 proc execute_test_file __testname {
     set path "tests/$__testname.tcl"
     set ::curfile $path
+    # Reset tags at the start of each test file
+    set ::tags {}
     source $path
     send_data_packet $::test_server_fd done "$__testname"
 }
@@ -150,6 +152,8 @@ proc execute_test_file __testname {
 # finished.
 proc execute_test_code {__testname filename code} {
     set ::curfile $filename
+    # Reset tags at the start of each test code execution
+    set ::tags {}
     eval $code
     send_data_packet $::test_server_fd done "$__testname"
 }

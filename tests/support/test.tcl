@@ -216,12 +216,10 @@ proc test {name code {okpattern undefined} {tags {}}} {
 
     set old_singledb $::singledb
     check_subtags $tags
-    incr ::tags_nesting_level
     set tags [concat $::tags $tags]
     if {![tags_acceptable $tags err]} {
         incr ::num_aborted
         send_data_packet $::test_server_fd ignore "$name: $err"
-        incr ::tags_nesting_level -1
         return
     }
 
@@ -318,5 +316,4 @@ proc test {name code {okpattern undefined} {tags {}}} {
     }
     set ::singledb $old_singledb
     set ::cur_test $prev_test
-    incr ::tags_nesting_level -1
 }

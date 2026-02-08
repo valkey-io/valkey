@@ -84,13 +84,7 @@ Tags can be applied in different context levels:
 * `tags` context that bundles several tests together
 * A single test context.
 
-**Important:** Some tags are restricted to top-level use only (they can only be used in `start_server` blocks, not in nested `tags` blocks or individual `test` contexts). These tags are:
-* `large-memory`
-* `needs:other-server`
-* `compatible-redis`
-* `network`
-
-If you attempt to use these tags in a nested context, the test framework will raise a "Test design error" and abort the test run. This is done for proper test filtering and prevents issues with the `--tags` option.
+Some tags are restricted to top-level use only. These tags are `large-memory`, `needs:other-server`, `compatible-redis` and `network`.
 
 The following compatibility and capability tags are currently used:
 
@@ -111,6 +105,8 @@ The following compatibility and capability tags are currently used:
 | `needs:reset`             | Uses `RESET` to reset client connections. |
 | `needs:save`              | Uses `SAVE` or `BGSAVE` to create an RDB file. |
 | `needs:other-server`      | Requires `--other-server-path`. |
+| `compatible-redis`        | Tests that run against Redis (compatibility tests). |
+| `network`                 | Tests that require network operations. |
 | `singledb`                | Test runs as if `--singledb` was given. |
 
 When using an external server (`--host` and `--port`), filtering using the

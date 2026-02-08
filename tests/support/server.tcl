@@ -3,7 +3,6 @@ set ::tags {}
 set ::valgrind_errors {}
 # Tags that are only allowed at the top level (not in nested blocks)
 set ::toplevel_only_tags {large-memory needs:other-server compatible-redis network}
-set ::tags_nesting_level 0
 
 proc start_server_error {executable config_file error} {
     set err {}
@@ -193,13 +192,16 @@ proc server_is_up {host port retrynum} {
 }
 
 # Checks if $tags are allowed on a sub-level.
+# If ::tags is empty, we're at top level; otherwise we're nested.
 proc check_subtags {tags} {
-    if {$::tags_nesting_level == 0} {
+    if {$::tags eq {}} {
         # We're entering a top-level block with tags.
         return
     }
     foreach tag $tags {
-        if {[lsearch -exact $::toplevel_only_tags $tag] >= 0} {
+        # Only error if it's a top-level-only tag AND it's not already in ::tags
+        if {[lsearch -exact $::toplevel_only_tags $tag] >= 0 &&
+            [lsearch -exact $::tags $tag] < 0} {
             error "Test design error: Tag is only allowed on toplevel: $tag"
         }
     }
@@ -303,18 +305,15 @@ proc tags {tags code} {
     # we want to get rid of the quotes in order to have a proper list
     set tags [string map { \" "" } $tags]
     check_subtags $tags
-    incr ::tags_nesting_level
     set ::tags [concat $::tags $tags]
     if {![tags_acceptable $::tags err]} {
         incr ::num_aborted
         send_data_packet $::test_server_fd ignore $err
         set ::tags [lrange $::tags 0 end-[llength $tags]]
-        incr ::tags_nesting_level -1
         return
     }
     uplevel 1 $code
     set ::tags [lrange $::tags 0 end-[llength $tags]]
-    incr ::tags_nesting_level -1
 }
 
 # Write the configuration in the dictionary 'config' in the specified
@@ -529,19 +528,12 @@ proc start_server {options {code undefined}} {
         }
     }
 
-    if {$code ne "undefined"} {
-        incr ::tags_nesting_level
-    }
-
     # We skip unwanted tags
     if {![tags_acceptable $::tags err]} {
         incr ::num_aborted
         send_data_packet $::test_server_fd ignore $err
         set ::singledb $old_singledb
         set ::tags [lrange $::tags 0 end-[llength $tags]]
-        if {$code ne "undefined"} {
-            incr ::tags_nesting_level -1
-        }
         return
     }
 
@@ -832,7 +824,6 @@ proc start_server {options {code undefined}} {
 
         set ::singledb $old_singledb
         set ::tags [lrange $::tags 0 end-[llength $tags]]
-        incr ::tags_nesting_level -1
         kill_server $srv
         if {!$keep_persistence} {
             clean_persistence $srv
@@ -847,24 +838,8 @@ proc start_server {options {code undefined}} {
 
 # Start multiple servers with the same options, run code, then stop them.
 proc start_multiple_servers {num options code} {
-    # Extract tags from options, they should only be applied to last call.
-    set tags {}
-    set options_without_tags {}
-    foreach {key value} $options {
-        if {$key eq "tags"} {
-            set tags $value
-        } else {
-            lappend options_without_tags $key $value
-        }
-    }
-    
     for {set i 0} {$i < $num} {incr i} {
-        if {$i == [expr {$num - 1}] && $tags ne {}} {
-            # Last call gets the tags
-            set code [list start_server [concat $options_without_tags [list tags $tags]] $code]
-        } else {
-            set code [list start_server $options_without_tags $code]
-        }
+        set code [list start_server $options $code]
     }
     uplevel 1 $code
 }

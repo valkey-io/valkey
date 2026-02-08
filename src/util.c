@@ -282,7 +282,7 @@ unsigned long long memtoull(const char *p, int *err) {
     char *endptr;
     errno = 0;
     val = strtoull(buf, &endptr, 10);
-    if ((val == 0 && errno == EINVAL) || *endptr != '\0') {
+    if ((errno == ERANGE) || (val == 0 && errno == EINVAL) || *endptr != '\0') {
         if (err) *err = 1;
         return 0;
     }

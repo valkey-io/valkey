@@ -312,8 +312,13 @@ proc tags {tags code} {
         set ::tags [lrange $::tags 0 end-[llength $tags]]
         return
     }
-    uplevel 1 $code
+    # Catch to ensure cleanup always happens
+    set err_code [catch {uplevel 1 $code} result]
     set ::tags [lrange $::tags 0 end-[llength $tags]]
+    if {$err_code} {
+        # Re-raise, let handler up the stack take care of this.
+        error $result $::errorInfo
+    }
 }
 
 # Write the configuration in the dictionary 'config' in the specified
@@ -802,6 +807,9 @@ proc start_server {options {code undefined}} {
                 incr ::num_failed
                 send_data_packet $::test_server_fd err [join $details "\n"]
             } else {
+                # Restore state before re-raising
+                set ::singledb $old_singledb
+                set ::tags [lrange $::tags 0 end-[llength $tags]]
                 # Re-raise, let handler up the stack take care of this.
                 error $error $backtrace
             }

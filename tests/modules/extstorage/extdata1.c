@@ -138,6 +138,65 @@ static int parseBackupIdV0(const char *backup_id_str, int *slot,
     
     return EXTERNAL_SUCCESS;
 }
+/* Helper function to handle backup_id generation/reuse logic
+ * Returns 0 on success, non-zero on error
+ * 
+ * Parameters:
+ * - module_ctx: Module context for logging
+ * - backup_id: Pointer to ValkeyModuleString* for passed backup_id (may be NULL)
+ * - slot: Slot number for the backup
+ * - timestamp: Timestamp for the backup
+ * - target_node_id: Target node identifier
+ * - function_name: Name of calling function (for logging)
+ * - backup_id_str: Output buffer for the backup_id string (size BACKUP_ID_MAX_LEN)
+ */
+static void generateOrReuseBackupId(ValkeyModuleCtx *module_ctx,
+                                     ValkeyModuleString **backup_id,
+                                     int slot, long long timestamp,
+                                     const char *target_node_id,
+                                     const char *function_name,
+                                     char *backup_id_str) {
+    if (backup_id != NULL && *backup_id != NULL) {
+        /* backup_id was passed in - use it instead of creating a new one */
+        size_t backup_id_len;
+        const char *existing_backup_id = ValkeyModule_StringPtrLen(*backup_id, &backup_id_len);
+        snprintf(backup_id_str, BACKUP_ID_MAX_LEN, "%.*s", (int)backup_id_len, existing_backup_id);
+        ValkeyModule_Log(module_ctx, "notice", "%s: using passed backup_id=%s", function_name, backup_id_str);
+    } else {
+        /* backup_id not initialized - check if we should reuse last backup_id */
+        if (reuse_last_backup_id && last_backup_id[0] != '\0') {
+            /* Reuse the backup_id from previous dump */
+            strncpy(backup_id_str, last_backup_id, BACKUP_ID_MAX_LEN - 1);
+            backup_id_str[BACKUP_ID_MAX_LEN - 1] = '\0';
+            reuse_last_backup_id = 0;  /* Clear flag after reuse */
+            ValkeyModule_Log(module_ctx, "notice", "%s: reusing backup_id=%s", function_name, backup_id_str);
+        } else {
+            /* Generate new backup_id using timestamp and sequence counter */
+            struct timeval tv;
+            gettimeofday(&tv, NULL);
+            
+            /* Check if we're still in the same second as last dump */
+            if (tv.tv_sec == last_backup_second) {
+                backup_sequence_counter++;
+            } else {
+                last_backup_second = tv.tv_sec;
+                backup_sequence_counter = 0;
+            }
+            
+            /* Use v0 format for backup_id: v0:<slot>:<timestamp>:<node_id> */
+            const char *encoded_id = encodeBackupIdV0(slot, timestamp, target_node_id, NULL);
+            snprintf(backup_id_str, BACKUP_ID_MAX_LEN, "%s", encoded_id);
+            
+            /* Store for potential reuse by paired dump (storage/filter) */
+            strncpy(last_backup_id, backup_id_str, sizeof(last_backup_id) - 1);
+            last_backup_id[sizeof(last_backup_id) - 1] = '\0';
+            reuse_last_backup_id = 1;  /* Set flag for next dump to reuse */
+            
+            ValkeyModule_Log(module_ctx, "notice", "%s: calculated new backup_id=%s", function_name, backup_id_str);
+        }
+    }
+}
+
 
 
 /* Configuration callbacks for set_failure_percent */
@@ -959,8 +1018,6 @@ static int filterDumpFunction(ValkeyModuleCtx *module_ctx,
                               ValkeyModuleString *target,
                               ValkeyModuleString **backup_id) {
     VALKEYMODULE_NOT_USED(filter_ctx);
-    VALKEYMODULE_NOT_USED(slot);
-    VALKEYMODULE_NOT_USED(timestamp);
     ValkeyModule_AutoMemory(module_ctx);
 
     /* Check if we have a snapshot available in the global pool */
@@ -976,45 +1033,8 @@ static int filterDumpFunction(ValkeyModuleCtx *module_ctx,
     
     /* Handle backup_id: use passed value if initialized, otherwise calculate using current time */
     char backup_id_str[BACKUP_ID_MAX_LEN];
-    if (backup_id != NULL && *backup_id != NULL) {
-        /* backup_id was passed in - use it instead of creating a new one */
-        size_t backup_id_len;
-        const char *existing_backup_id = ValkeyModule_StringPtrLen(*backup_id, &backup_id_len);
-        snprintf(backup_id_str, sizeof(backup_id_str), "%.*s", (int)backup_id_len, existing_backup_id);
-        ValkeyModule_Log(module_ctx, "notice", "filterDumpFunction: using passed backup_id=%s", backup_id_str);
-    } else {
-        /* backup_id not initialized - check if we should reuse last backup_id */
-        if (reuse_last_backup_id && last_backup_id[0] != '\0') {
-            /* Reuse the backup_id from storage dump */
-            strncpy(backup_id_str, last_backup_id, sizeof(backup_id_str) - 1);
-            backup_id_str[sizeof(backup_id_str) - 1] = '\0';
-            reuse_last_backup_id = 0;  /* Clear flag after reuse */
-            ValkeyModule_Log(module_ctx, "notice", "filterDumpFunction: reusing backup_id=%s", backup_id_str);
-        } else {
-            /* Generate new backup_id using timestamp and sequence counter */
-            struct timeval tv;
-            gettimeofday(&tv, NULL);
-            
-            /* Check if we're still in the same second as last dump */
-            if (tv.tv_sec == last_backup_second) {
-                backup_sequence_counter++;
-            } else {
-                last_backup_second = tv.tv_sec;
-                backup_sequence_counter = 0;
-            }
-            
-            /* Format: backup_-1_<timestamp>_<sequence> */
-            snprintf(backup_id_str, sizeof(backup_id_str), "backup_%d_%lld_%d",
-                    EXTERNAL_ALL_DBS, (long long)tv.tv_sec, backup_sequence_counter);
-            
-            /* Store for potential reuse by paired dump (storage/filter) */
-            strncpy(last_backup_id, backup_id_str, sizeof(last_backup_id) - 1);
-            last_backup_id[sizeof(last_backup_id) - 1] = '\0';
-            reuse_last_backup_id = 1;  /* Set flag for next dump to reuse */
-            
-            ValkeyModule_Log(module_ctx, "notice", "filterDumpFunction: calculated new backup_id=%s", backup_id_str);
-        }
-    }
+    generateOrReuseBackupId(module_ctx, backup_id, slot, timestamp, target_node_id,
+                            "filterDumpFunction", backup_id_str);
     
     /* Create directory for this server instance */
     char server_dir[2048];
@@ -1114,8 +1134,6 @@ static int storageDumpFunction(ValkeyModuleCtx *module_ctx,
                                ValkeyModuleString *target,
                                ValkeyModuleString **backup_id) {
     VALKEYMODULE_NOT_USED(storage_ctx);
-    VALKEYMODULE_NOT_USED(slot);
-    VALKEYMODULE_NOT_USED(timestamp);
     ValkeyModule_AutoMemory(module_ctx);
 
     /* Check if we have a snapshot available in the global pool */
@@ -1131,45 +1149,8 @@ static int storageDumpFunction(ValkeyModuleCtx *module_ctx,
     
     /* Handle backup_id: use passed value if initialized, otherwise calculate using current time */
     char backup_id_str[BACKUP_ID_MAX_LEN];
-    if (backup_id != NULL && *backup_id != NULL) {
-        /* backup_id was passed in - use it instead of creating a new one */
-        size_t backup_id_len;
-        const char *existing_backup_id = ValkeyModule_StringPtrLen(*backup_id, &backup_id_len);
-        snprintf(backup_id_str, sizeof(backup_id_str), "%.*s", (int)backup_id_len, existing_backup_id);
-        ValkeyModule_Log(module_ctx, "notice", "storageDumpFunction: using passed backup_id=%s", backup_id_str);
-    } else {
-        /* backup_id not initialized - check if we should reuse last backup_id */
-        if (reuse_last_backup_id && last_backup_id[0] != '\0') {
-            /* Reuse the backup_id from filter dump */
-            strncpy(backup_id_str, last_backup_id, sizeof(backup_id_str) - 1);
-            backup_id_str[sizeof(backup_id_str) - 1] = '\0';
-            reuse_last_backup_id = 0;  /* Clear flag after reuse */
-            ValkeyModule_Log(module_ctx, "notice", "storageDumpFunction: reusing backup_id=%s", backup_id_str);
-        } else {
-            /* Generate new backup_id using timestamp and sequence counter */
-            struct timeval tv;
-            gettimeofday(&tv, NULL);
-            
-            /* Check if we're still in the same second as last dump */
-            if (tv.tv_sec == last_backup_second) {
-                backup_sequence_counter++;
-            } else {
-                last_backup_second = tv.tv_sec;
-                backup_sequence_counter = 0;
-            }
-            
-            /* Format: backup_-1_<timestamp>_<sequence> */
-            snprintf(backup_id_str, sizeof(backup_id_str), "backup_%d_%lld_%d",
-                    EXTERNAL_ALL_DBS, (long long)tv.tv_sec, backup_sequence_counter);
-            
-            /* Store for potential reuse by paired dump (storage/filter) */
-            strncpy(last_backup_id, backup_id_str, sizeof(last_backup_id) - 1);
-            last_backup_id[sizeof(last_backup_id) - 1] = '\0';
-            reuse_last_backup_id = 1;  /* Set flag for next dump to reuse */
-            
-            ValkeyModule_Log(module_ctx, "notice", "storageDumpFunction: calculated new backup_id=%s", backup_id_str);
-        }
-    }
+    generateOrReuseBackupId(module_ctx, backup_id, slot, timestamp, target_node_id,
+                            "storageDumpFunction", backup_id_str);
     
     /* Create directory for this server instance */
     char server_dir[2048];

@@ -278,6 +278,11 @@ proc tags_acceptable {tags err_return} {
         return 0
     }
 
+    if {$::valgrind && [lsearch -exact $tags "valgrind:skip"] >= 0} {
+        set err "Not supported when running under Valgrind"
+        return 0
+    }
+    
     return 1
 }
 

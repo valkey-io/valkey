@@ -1295,56 +1295,56 @@ static int filterLoadFunction(ValkeyModuleCtx *module_ctx,
         time_t current_time = time(NULL);
         int found_backup = 0;
         
-        for (int i = 0; i < 15 && !found_backup; i++) {
-            time_t t = current_time - i;
-            char prefix[256];
-            snprintf(prefix, sizeof(prefix), "backup_%d_%lld_", EXTERNAL_ALL_DBS, (long long)t);
+        /* For v0 format, we search for files starting with v0: prefix */
+        ValkeyModule_Log(module_ctx, "debug", "filterLoad: Searching for v0 format backups in dir=%s", source_dir);
             
-            ValkeyModule_Log(module_ctx, "debug", "filterLoad: Searching for backups with prefix=%s in dir=%s", prefix, source_dir);
-            
-            DIR *dir = opendir(source_dir);
-            if (dir) {
-                struct dirent *entry;
-                while ((entry = readdir(dir)) != NULL) {
-                    ValkeyModule_Log(module_ctx, "debug", "filterLoad: Found entry=%s", entry->d_name);
-                    if (strncmp(entry->d_name, "db", 2) == 0) {
-                        int entry_dbid = strtol(entry->d_name + 2, NULL, 10);
-                        ValkeyModule_Log(module_ctx, "debug", "filterLoad: entry_dbid=%d, target_dbid=%d", entry_dbid, dbid);
-                        if (entry_dbid == dbid) {
-                            /* Found a database directory, check for filter files matching prefix */
-                            char db_dir[2048];
-                            snprintf(db_dir, sizeof(db_dir), "%s/%s", source_dir, entry->d_name);
-                        
-                            ValkeyModule_Log(module_ctx, "debug", "filterLoad: Opening db_dir=%s for dbid=%d", db_dir, dbid);
-                            DIR *db_subdir = opendir(db_dir);
-                            if (db_subdir) {
-                                struct dirent *file_entry;
-                                int max_sequence = -1;
-                                char best_backup_id[256] = {0};
-                                
-                                while ((file_entry = readdir(db_subdir)) != NULL) {
-                                    /* Check if filename matches pattern: module_filter_backup_-1_<timestamp>_<seq>.dat */
-                                    char expected_prefix[512];
-                                    snprintf(expected_prefix, sizeof(expected_prefix), "%s_filter_%s", module_name, prefix);
-                                    ValkeyModule_Log(module_ctx, "debug", "filterLoad: Checking file=%s against prefix=%s",
-                                                   file_entry->d_name, expected_prefix);
-                                    if (strncmp(file_entry->d_name, expected_prefix, strlen(expected_prefix)) == 0 &&
-                                        strstr(file_entry->d_name, ".dat") != NULL) {
-                                        /* Extract the full backup_id from filename */
-                                        const char *backup_start = file_entry->d_name + strlen(module_name) + 8; /* +8 for "_filter_" */
-                                        const char *dat_pos = strstr(backup_start, ".dat");
-                                        if (dat_pos) {
-                                            size_t backup_len = dat_pos - backup_start;
-                                            char temp_backup_id[256];
-                                            snprintf(temp_backup_id, sizeof(temp_backup_id), "%.*s", (int)backup_len, backup_start);
-                                            
-                                            /* Extract sequence number from backup_id: backup_-1_<timestamp>_<seq> */
-                                            const char *last_underscore = strrchr(temp_backup_id, '_');
-                                            if (last_underscore) {
-                                                int seq = atoi(last_underscore + 1);
-                                                ValkeyModule_Log(module_ctx, "debug", "filterLoad: Found backup %s with sequence=%d", temp_backup_id, seq);
-                                                if (seq > max_sequence) {
-                                                    max_sequence = seq;
+        DIR *dir = opendir(source_dir);
+        if (dir) {
+            struct dirent *entry;
+            while ((entry = readdir(dir)) != NULL) {
+                ValkeyModule_Log(module_ctx, "debug", "filterLoad: Found entry=%s", entry->d_name);
+                if (strncmp(entry->d_name, "db", 2) == 0) {
+                    int entry_dbid = strtol(entry->d_name + 2, NULL, 10);
+                    ValkeyModule_Log(module_ctx, "debug", "filterLoad: entry_dbid=%d, target_dbid=%d", entry_dbid, dbid);
+                    if (entry_dbid == dbid) {
+                        /* Found a database directory, check for filter files with v0 format */
+                        char db_dir[2048];
+                        snprintf(db_dir, sizeof(db_dir), "%s/%s", source_dir, entry->d_name);
+                    
+                        ValkeyModule_Log(module_ctx, "debug", "filterLoad: Opening db_dir=%s for dbid=%d", db_dir, dbid);
+                        DIR *db_subdir = opendir(db_dir);
+                        if (db_subdir) {
+                            struct dirent *file_entry;
+                            long long max_timestamp = -1;
+                            char best_backup_id[256] = {0};
+                            
+                            while ((file_entry = readdir(db_subdir)) != NULL) {
+                                /* Check if filename matches pattern: module_filter_v0:*.dat */
+                                char expected_prefix[512];
+                                snprintf(expected_prefix, sizeof(expected_prefix), "%s_filter_v0:", module_name);
+                                ValkeyModule_Log(module_ctx, "debug", "filterLoad: Checking file=%s against prefix=%s",
+                                               file_entry->d_name, expected_prefix);
+                                if (strncmp(file_entry->d_name, expected_prefix, strlen(expected_prefix)) == 0 &&
+                                    strstr(file_entry->d_name, ".dat") != NULL) {
+                                    /* Extract the full backup_id from filename */
+                                    const char *backup_start = file_entry->d_name + strlen(module_name) + 8; /* +8 for "_filter_" */
+                                    const char *dat_pos = strstr(backup_start, ".dat");
+                                    if (dat_pos) {
+                                        size_t backup_len = dat_pos - backup_start;
+                                        char temp_backup_id[256];
+                                        snprintf(temp_backup_id, sizeof(temp_backup_id), "%.*s", (int)backup_len, backup_start);
+                                        
+                                        /* Parse v0 format to extract timestamp: v0:<slot>:<timestamp>:<node_id> */
+                                        int slot;
+                                        long long timestamp;
+                                        char node_id_buf[NODE_ID_MAX_LEN];
+                                        if (parseBackupIdV0(temp_backup_id, &slot, &timestamp, node_id_buf, sizeof(node_id_buf), NULL, 0) == EXTERNAL_SUCCESS) {
+                                            ValkeyModule_Log(module_ctx, "debug", "filterLoad: Found v0 backup %s with timestamp=%lld", temp_backup_id, timestamp);
+                                            /* Check if this backup is recent enough (within last 15 seconds)
+                                             * Special case: timestamp <= 0 means "all databases" backup, always accept it */
+                                            if (timestamp <= 0 || timestamp >= current_time - 15) {
+                                                if (timestamp > max_timestamp) {
+                                                    max_timestamp = timestamp;
                                                     size_t len = strlen(temp_backup_id);
                                                     if (len >= sizeof(best_backup_id)) len = sizeof(best_backup_id) - 1;
                                                     memcpy(best_backup_id, temp_backup_id, len);
@@ -1354,30 +1354,27 @@ static int filterLoadFunction(ValkeyModuleCtx *module_ctx,
                                         }
                                     }
                                 }
-                                closedir(db_subdir);
-                                
-                                if (max_sequence >= 0) {
-                                    found_backup = 1;
-                                    strncpy(backup_id_buf, best_backup_id, sizeof(backup_id_buf) - 1);
-                                    backup_id_buf[sizeof(backup_id_buf) - 1] = '\0';
-                                    backup_id_str = backup_id_buf;
-                                    backup_id_len = strlen(backup_id_buf);
-                                    ValkeyModule_Log(module_ctx, "notice", "Using most recent backup with highest sequence (new format): %s", backup_id_str);
-                                }
-                                
-                                if (found_backup) break;
-                            } else {
-                                ValkeyModule_Log(module_ctx, "warning", "filterLoad: Failed to open db_dir=%s", db_dir);
                             }
-                    }
-                    }
+                            closedir(db_subdir);
+                            
+                            if (max_timestamp >= 0) {
+                                found_backup = 1;
+                                strncpy(backup_id_buf, best_backup_id, sizeof(backup_id_buf) - 1);
+                                backup_id_buf[sizeof(backup_id_buf) - 1] = '\0';
+                                backup_id_str = backup_id_buf;
+                                backup_id_len = strlen(backup_id_buf);
+                                ValkeyModule_Log(module_ctx, "notice", "Using most recent v0 backup: %s", backup_id_str);
+                            }
+                        } else {
+                            ValkeyModule_Log(module_ctx, "warning", "filterLoad: Failed to open db_dir=%s", db_dir);
+                        }
+                        break;
                 }
-                closedir(dir);
-            } else {
-                ValkeyModule_Log(module_ctx, "warning", "filterLoad: Failed to open source_dir=%s", source_dir);
+                }
             }
-            
-            if (found_backup) break;
+            closedir(dir);
+        } else {
+            ValkeyModule_Log(module_ctx, "warning", "filterLoad: Failed to open source_dir=%s", source_dir);
         }
         
         if (!found_backup) {
@@ -1555,47 +1552,49 @@ static int storageLoadFunction(ValkeyModuleCtx *module_ctx,
         time_t current_time = time(NULL);
         int found_backup = 0;
         
-        for (int i = 0; i < 15 && !found_backup; i++) {
-            time_t t = current_time - i;
-            char prefix[256];
-            snprintf(prefix, sizeof(prefix), "backup_%d_%lld_", EXTERNAL_ALL_DBS, (long long)t);
-            
-            DIR *dir = opendir(source_dir);
-            if (dir) {
-                struct dirent *entry;
-                while ((entry = readdir(dir)) != NULL) {
-                    if (strncmp(entry->d_name, "db", 2) == 0 && strtol(entry->d_name + 2, NULL, 10) == dbid) {
-                        /* Found a database directory, check for storage files matching prefix */
-                        char db_dir[2048];
-                        snprintf(db_dir, sizeof(db_dir), "%s/%s", source_dir, entry->d_name);
+        /* For v0 format, we search for files starting with v0: prefix */
+        ValkeyModule_Log(module_ctx, "debug", "storageLoad: Searching for v0 format backups in dir=%s", source_dir);
+        
+        DIR *dir = opendir(source_dir);
+        if (dir) {
+            struct dirent *entry;
+            while ((entry = readdir(dir)) != NULL) {
+                if (strncmp(entry->d_name, "db", 2) == 0 && strtol(entry->d_name + 2, NULL, 10) == dbid) {
+                    /* Found a database directory, check for storage files with v0 format */
+                    char db_dir[2048];
+                    snprintf(db_dir, sizeof(db_dir), "%s/%s", source_dir, entry->d_name);
+                    
+                    DIR *db_subdir = opendir(db_dir);
+                    if (db_subdir) {
+                        struct dirent *file_entry;
+                        long long max_timestamp = -1;
+                        char best_backup_id[256] = {0};
                         
-                        DIR *db_subdir = opendir(db_dir);
-                        if (db_subdir) {
-                            struct dirent *file_entry;
-                            int max_sequence = -1;
-                            char best_backup_id[256] = {0};
-                            
-                            while ((file_entry = readdir(db_subdir)) != NULL) {
-                                /* Check if filename matches pattern: module_storage_backup_-1_<timestamp>_<seq>.dat */
-                                char expected_prefix[512];
-                                snprintf(expected_prefix, sizeof(expected_prefix), "%s_storage_%s", module_name, prefix);
-                                if (strncmp(file_entry->d_name, expected_prefix, strlen(expected_prefix)) == 0 &&
-                                    strstr(file_entry->d_name, ".dat") != NULL) {
-                                    /* Extract the full backup_id from filename */
-                                    const char *backup_start = file_entry->d_name + strlen(module_name) + 9; /* +9 for "_storage_" */
-                                    const char *dat_pos = strstr(backup_start, ".dat");
-                                    if (dat_pos) {
-                                        size_t backup_len = dat_pos - backup_start;
-                                        char temp_backup_id[256];
-                                        snprintf(temp_backup_id, sizeof(temp_backup_id), "%.*s", (int)backup_len, backup_start);
-                                        
-                                        /* Extract sequence number from backup_id: backup_-1_<timestamp>_<seq> */
-                                        const char *last_underscore = strrchr(temp_backup_id, '_');
-                                        if (last_underscore) {
-                                            int seq = atoi(last_underscore + 1);
-                                            ValkeyModule_Log(module_ctx, "debug", "storageLoad: Found backup %s with sequence=%d", temp_backup_id, seq);
-                                            if (seq > max_sequence) {
-                                                max_sequence = seq;
+                        while ((file_entry = readdir(db_subdir)) != NULL) {
+                            /* Check if filename matches pattern: module_storage_v0:*.dat */
+                            char expected_prefix[512];
+                            snprintf(expected_prefix, sizeof(expected_prefix), "%s_storage_v0:", module_name);
+                            if (strncmp(file_entry->d_name, expected_prefix, strlen(expected_prefix)) == 0 &&
+                                strstr(file_entry->d_name, ".dat") != NULL) {
+                                /* Extract the full backup_id from filename */
+                                const char *backup_start = file_entry->d_name + strlen(module_name) + 9; /* +9 for "_storage_" */
+                                const char *dat_pos = strstr(backup_start, ".dat");
+                                if (dat_pos) {
+                                    size_t backup_len = dat_pos - backup_start;
+                                    char temp_backup_id[256];
+                                    snprintf(temp_backup_id, sizeof(temp_backup_id), "%.*s", (int)backup_len, backup_start);
+                                    
+                                    /* Parse v0 format to extract timestamp: v0:<slot>:<timestamp>:<node_id> */
+                                    int slot;
+                                    long long timestamp;
+                                    char node_id_buf[NODE_ID_MAX_LEN];
+                                    if (parseBackupIdV0(temp_backup_id, &slot, &timestamp, node_id_buf, sizeof(node_id_buf), NULL, 0) == EXTERNAL_SUCCESS) {
+                                        ValkeyModule_Log(module_ctx, "debug", "storageLoad: Found v0 backup %s with timestamp=%lld", temp_backup_id, timestamp);
+                                        /* Check if this backup is recent enough (within last 15 seconds)
+                                         * Special case: timestamp <= 0 means "all databases" backup, always accept it */
+                                        if (timestamp <= 0 || timestamp >= current_time - 15) {
+                                            if (timestamp > max_timestamp) {
+                                                max_timestamp = timestamp;
                                                 size_t len = strlen(temp_backup_id);
                                                 if (len >= sizeof(best_backup_id)) len = sizeof(best_backup_id) - 1;
                                                 memcpy(best_backup_id, temp_backup_id, len);
@@ -1605,25 +1604,23 @@ static int storageLoadFunction(ValkeyModuleCtx *module_ctx,
                                     }
                                 }
                             }
-                            closedir(db_subdir);
-                            
-                            if (max_sequence >= 0) {
-                                found_backup = 1;
-                                strncpy(backup_id_buf, best_backup_id, sizeof(backup_id_buf) - 1);
-                                backup_id_buf[sizeof(backup_id_buf) - 1] = '\0';
-                                backup_id_str = backup_id_buf;
-                                backup_id_len = strlen(backup_id_buf);
-                                ValkeyModule_Log(module_ctx, "notice", "Using most recent backup with highest sequence (new format): %s", backup_id_str);
-                            }
-                            
-                            if (found_backup) break;
                         }
+                        closedir(db_subdir);
+                        
+                        if (max_timestamp >= 0) {
+                            found_backup = 1;
+                            strncpy(backup_id_buf, best_backup_id, sizeof(backup_id_buf) - 1);
+                            backup_id_buf[sizeof(backup_id_buf) - 1] = '\0';
+                            backup_id_str = backup_id_buf;
+                            backup_id_len = strlen(backup_id_buf);
+                            ValkeyModule_Log(module_ctx, "notice", "Using most recent v0 backup: %s", backup_id_str);
+                        }
+                        
+                        break;
                     }
                 }
-                closedir(dir);
             }
-            
-            if (found_backup) break;
+            closedir(dir);
         }
         
         if (!found_backup) {

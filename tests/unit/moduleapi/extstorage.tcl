@@ -3872,10 +3872,10 @@ start_server [list overrides [list "ext-data-mode" kv "ext-data-id" id56 "loglev
         set node_id [lindex $parts 3]
         
         # Verify node_id matches the configured ext-data-id
-        assert_equal "id1" $node_id
+        assert_equal "id56" $node_id
         
         cleanup_external_data_dump r
-    }}
+    }
     
     test "DUMP with explicit TARGET parameter (node_id)" {
         cleanup_external_data_dump r
@@ -3899,7 +3899,7 @@ start_server [list overrides [list "ext-data-mode" kv "ext-data-id" id56 "loglev
         assert_equal $node_id "node-target123"
         
         cleanup_external_data_dump r
-    }}
+    }
     
     test "DUMP with SLOT parameter" {
         cleanup_external_data_dump r
@@ -3926,5 +3926,5 @@ start_server [list overrides [list "ext-data-mode" kv "ext-data-id" id56 "loglev
         assert_equal $slot "12182"
         
         cleanup_external_data_dump r
-    }}
+    }
 }

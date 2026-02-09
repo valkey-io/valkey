@@ -854,13 +854,13 @@ typedef struct ValkeyModuleAtomicSlotMigrationInfo {
 
 #define VALKEYMODULE_COMMANDRESULTINFO_VERSION 1
 typedef struct ValkeyModuleCommandResultInfo {
-    uint64_t version;           /* Version of this structure for ABI compat. */
-    const char *command_name;   /* Command name (e.g., "SET", "GET"). */
-    long long duration_us;      /* Execution duration in microseconds. */
-    long long dirty;            /* Number of keys modified. */
-    uint64_t client_id;         /* Client ID that executed the command. */
-    int is_module_client;       /* 1 if command was from RM_Call, 0 otherwise. */
-    int argc;                   /* Number of command arguments. */
+    uint64_t version;          /* Version of this structure for ABI compat. */
+    const char *command_name;  /* Command name (e.g., "SET", "GET"). */
+    long long duration_us;     /* Execution duration in microseconds. */
+    long long dirty;           /* Number of keys modified. */
+    uint64_t client_id;        /* Client ID that executed the command. */
+    int is_module_client;      /* 1 if command was from RM_Call, 0 otherwise. */
+    int argc;                  /* Number of command arguments. */
     ValkeyModuleString **argv; /* Command arguments array (zero-copy). */
 } ValkeyModuleCommandResultInfoV1;
 

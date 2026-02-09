@@ -588,7 +588,7 @@ start_server {tags {"tls"}} {
             }
         }
 
-        test {TLS: INFO tls resets expiration countdown when TLS disabled/enabled} {
+        test {TLS: INFO tls clears expiration countdown when TLS disabled} {
             set host [srv 0 host]
             set tls_port [srv 0 port]
             set plain_port [srv 0 pport]
@@ -597,7 +597,29 @@ start_server {tags {"tls"}} {
                 fail "Plaintext port not available for TLS test harness"
             }
 
-            set tls_client [valkey $host $tls_port 0 1]
+            set plain_client [valkey $host $plain_port 0 0]
+
+            # Ensure the plaintext listener is active in case a prior test disabled it.
+            $plain_client CONFIG SET port $plain_port
+
+            $plain_client CONFIG SET tls-port $tls_port
+            $plain_client CONFIG SET tls-replication yes
+            $plain_client CONFIG SET tls-cluster yes
+            if {$::tls_module} {
+                # Force TLS module to refresh cert info after re-enable.
+                set cert [lindex [$plain_client config get tls-cert-file] 1]
+                set key [lindex [$plain_client config get tls-key-file] 1]
+                set cafile [lindex [$plain_client config get tls-ca-cert-file] 1]
+                $plain_client config set tls-cert-file $cert
+                $plain_client config set tls-key-file $key
+                $plain_client config set tls-ca-cert-file $cafile
+            }
+
+            wait_for_condition 50 100 {
+                [catch {set tls_client [valkey $host $tls_port 0 1]} err] == 0
+            } else {
+                fail "Timed out waiting for TLS listener to restart ($err)"
+            }
 
             set info_enabled [$tls_client info tls]
             if {![regexp {tls_server_cert_expires_in_seconds:(-?[0-9]+)} $info_enabled -> expire_enabled]} {
@@ -605,16 +627,22 @@ start_server {tags {"tls"}} {
             }
             assert_morethan $expire_enabled 0
 
-            # Ensure the plaintext listener is active in case a prior test disabled it.
-            $tls_client CONFIG SET port $plain_port
-
-            set plain_client [valkey $host $plain_port 0 0]
-
             $tls_client close
 
             $plain_client CONFIG SET tls-replication no
             $plain_client CONFIG SET tls-cluster no
             $plain_client CONFIG SET tls-port 0
+
+            wait_for_condition 50 100 {
+                [regexp {tls_server_cert_serial:none} [$plain_client info tls]] &&
+                [regexp {tls_client_cert_serial:none} [$plain_client info tls]] &&
+                [regexp {tls_ca_cert_serial:none} [$plain_client info tls]] &&
+                [regexp {tls_server_cert_expires_in_seconds:0} [$plain_client info tls]] &&
+                [regexp {tls_client_cert_expires_in_seconds:0} [$plain_client info tls]] &&
+                [regexp {tls_ca_cert_expires_in_seconds:0} [$plain_client info tls]]
+            } else {
+                fail "Timed out waiting for TLS to disable"
+            }
 
             set info_disabled [$plain_client info tls]
             foreach field {tls_server_cert_serial tls_client_cert_serial tls_ca_cert_serial} {
@@ -636,9 +664,50 @@ start_server {tags {"tls"}} {
                 assert_equal 0 $exp_value
             }
 
+            $plain_client close
+        }
+
+        test {TLS: INFO tls shows expiration countdown when TLS re-enabled} {
+            set host [srv 0 host]
+            set tls_port [srv 0 port]
+            set plain_port [srv 0 pport]
+
+            if {$plain_port == 0} {
+                fail "Plaintext port not available for TLS test harness"
+            }
+
+            set plain_client [valkey $host $plain_port 0 0]
+
+            # Ensure the plaintext listener is active in case a prior test disabled it.
+            $plain_client CONFIG SET port $plain_port
+
+            $plain_client CONFIG SET tls-replication no
+            $plain_client CONFIG SET tls-cluster no
+            $plain_client CONFIG SET tls-port 0
+
+            wait_for_condition 50 100 {
+                [regexp {tls_server_cert_serial:none} [$plain_client info tls]] &&
+                [regexp {tls_client_cert_serial:none} [$plain_client info tls]] &&
+                [regexp {tls_ca_cert_serial:none} [$plain_client info tls]] &&
+                [regexp {tls_server_cert_expires_in_seconds:0} [$plain_client info tls]] &&
+                [regexp {tls_client_cert_expires_in_seconds:0} [$plain_client info tls]] &&
+                [regexp {tls_ca_cert_expires_in_seconds:0} [$plain_client info tls]]
+            } else {
+                fail "Timed out waiting for TLS to disable"
+            }
+
             $plain_client CONFIG SET tls-port $tls_port
             $plain_client CONFIG SET tls-replication yes
             $plain_client CONFIG SET tls-cluster yes
+            if {$::tls_module} {
+                # Force TLS module to refresh cert info after re-enable.
+                set cert [lindex [$plain_client config get tls-cert-file] 1]
+                set key [lindex [$plain_client config get tls-key-file] 1]
+                set cafile [lindex [$plain_client config get tls-ca-cert-file] 1]
+                $plain_client config set tls-cert-file $cert
+                $plain_client config set tls-key-file $key
+                $plain_client config set tls-ca-cert-file $cafile
+            }
 
             wait_for_condition 50 100 {
                 [catch {set tls_client [valkey $host $tls_port 0 1]} err] == 0

@@ -1127,6 +1127,7 @@ void hdelCommand(client *c) {
     if ((o = lookupKeyWriteOrReply(c, c->argv[1], shared.czero)) == NULL || checkType(c, o, OBJ_HASH)) return;
 
     bool hash_volatile_items = hashTypeHasVolatileFields(o);
+    if (o->encoding == OBJ_ENCODING_HASHTABLE) hashtablePauseAutoShrink(objectGetVal(o));
     for (j = 2; j < c->argc; j++) {
         if (hashTypeDelete(o, objectGetVal(c->argv[j]))) {
             deleted++;
@@ -1138,6 +1139,7 @@ void hdelCommand(client *c) {
             }
         }
     }
+    if (!keyremoved && o->encoding == OBJ_ENCODING_HASHTABLE) hashtableResumeAutoShrink(objectGetVal(o));
     if (deleted) {
         if (!keyremoved && hash_volatile_items != hashTypeHasVolatileFields(o)) {
             dbUpdateObjectWithVolatileItemsTracking(c->db, o);

@@ -324,18 +324,18 @@ void getexCommand(client *c) {
         return;
     }
 
+    /* Validate the expiration time value first */
+    long long milliseconds = 0;
+    if (expire && getExpireMillisecondsOrReply(c, expire, flags, unit, &milliseconds) != C_OK) {
+        return;
+    }
+
     robj *o;
 
     if ((o = lookupKeyReadOrReply(c, c->argv[1], shared.null[c->resp])) == NULL)
         return;
 
     if (checkType(c, o, OBJ_STRING)) {
-        return;
-    }
-
-    /* Validate the expiration time value first */
-    long long milliseconds = 0;
-    if (expire && getExpireMillisecondsOrReply(c, expire, flags, unit, &milliseconds) != C_OK) {
         return;
     }
 

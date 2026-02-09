@@ -79,9 +79,7 @@ static unsigned int bio_job_to_worker[] = {
     [BIO_CLOSE_AOF] = 1,
     [BIO_LAZY_FREE] = 2,
     [BIO_RDB_SAVE] = 3,
-#if defined(USE_OPENSSL) && USE_OPENSSL == 1 /* BUILD_YES */
-    [BIO_TLS_RELOAD] = 4,
-#endif
+    [BIO_TLS_RELOAD] = 4, /* only used when BUILD_TLS=yes */
 };
 
 typedef struct {
@@ -95,9 +93,7 @@ static bio_worker_data bio_workers[] = {
     {"bio_aof"},
     {"bio_lazy_free"},
     {"bio_rdb_save"},
-#if defined(USE_OPENSSL) && USE_OPENSSL == 1 /* BUILD_YES */
-    {"bio_tls_reload"},
-#endif
+    {"bio_tls_reload"}, /* only used when BUILD_TLS=yes */
 };
 static const bio_worker_data *const bio_worker_end = bio_workers + (sizeof bio_workers / sizeof *bio_workers);
 

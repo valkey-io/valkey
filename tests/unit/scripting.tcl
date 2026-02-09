@@ -368,12 +368,6 @@ start_server {tags {"scripting"}} {
         set e
     } {*against a key*}
 
-    test {EVAL - JSON string encoding a string larger than 2GB} {
-        run_script {
-            local s = string.rep("a", 1024 * 1024 * 1024)
-            return #cjson.encode(s..s..s)
-        } 0
-    } {3221225474} {large-memory} ;# length includes two double quotes at both ends
 
     test {EVAL - JSON numeric decoding} {
         # We must return the table as a string because otherwise
@@ -1235,6 +1229,13 @@ start_server {tags {"scripting"}} {
 
 # start a new server to test the large-memory tests
 start_server {tags {"scripting external:skip large-memory"}} {
+    test {EVAL - JSON string encoding a string larger than 2GB} {
+        run_script {
+            local s = string.rep("a", 1024 * 1024 * 1024)
+            return #cjson.encode(s..s..s)
+        } 0
+    } {3221225474} ;# length includes two double quotes at both ends
+
     test {EVAL - Test long escape sequences for strings} {
         r eval {
             -- Generate 1gb '==...==' separator

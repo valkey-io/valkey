@@ -1933,6 +1933,7 @@ void zremCommand(client *c) {
 
     if ((zobj = lookupKeyWriteOrReply(c, key, shared.czero)) == NULL || checkType(c, zobj, OBJ_ZSET)) return;
 
+    if (zobj->encoding == OBJ_ENCODING_SKIPLIST) hashtablePauseAutoShrink(((zset *)objectGetVal(zobj))->ht);
     for (j = 2; j < c->argc; j++) {
         if (zsetDel(zobj, objectGetVal(c->argv[j]))) deleted++;
         if (zsetLength(zobj) == 0) {
@@ -1941,6 +1942,7 @@ void zremCommand(client *c) {
             break;
         }
     }
+    if (!keyremoved && zobj->encoding == OBJ_ENCODING_SKIPLIST) hashtableResumeAutoShrink(((zset *)objectGetVal(zobj))->ht);
 
     if (deleted) {
         notifyKeyspaceEvent(NOTIFY_ZSET, "zrem", key, c->db->id);

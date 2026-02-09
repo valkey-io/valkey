@@ -61,14 +61,14 @@ if {$backtrace_supported} {
     }
 }
 
-# Valgrind will complain that the process terminated by a signal, skip it.
-if {!$::valgrind} {
-    if {$backtrace_supported} {
-        set check_cb check_log_backtrace_for_debug
-    } else {
-        set check_cb check_crash_log
-    }
+if {$backtrace_supported} {
+    set check_cb check_log_backtrace_for_debug
+} else {
+    set check_cb check_crash_log
+}
 
+# Valgrind will complain that the process terminated by a signal, skip it.
+tags {"valgrind:skip"} {
     # test being killed by a SIGABRT from outside
     set server_path [tmpdir server1.log]
     start_server [list overrides [list dir $server_path crash-memcheck-enabled no]] {

@@ -93,13 +93,7 @@ jobs:
         run: |
           sudo apt-get install -y tcl8.6 tclx tcl-tls
           ./utils/gen-test-certs.sh
-          ln -sf $(pwd)/build-release/bin/valkey-server $(pwd)/src/valkey-server
-          ln -sf $(pwd)/build-release/bin/valkey-cli $(pwd)/src/valkey-cli
-          ln -sf $(pwd)/build-release/bin/valkey-benchmark $(pwd)/src/valkey-benchmark
-          ln -sf $(pwd)/build-release/bin/valkey-server $(pwd)/src/valkey-check-aof
-          ln -sf $(pwd)/build-release/bin/valkey-server $(pwd)/src/valkey-check-rdb
-          ln -sf $(pwd)/build-release/bin/valkey-server $(pwd)/src/valkey-sentinel
-          ./runtest --verbose --tags -slow --dump-logs --tls
+          ./build-release/runtest --verbose --tags -slow --dump-logs --tls
       - name: unit tests
         run: |
           ./build-release/bin/valkey-unit-tests

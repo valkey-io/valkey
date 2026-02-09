@@ -1405,6 +1405,8 @@ int VM_CreateCommand(ValkeyModuleCtx *ctx,
     serverAssert(hashtableAdd(server.commands, cp->serverCmd));
     serverAssert(hashtableAdd(server.orig_commands, cp->serverCmd));
     cp->serverCmd->id = ACLGetCommandID(declared_name); /* ID used for ACL. */
+    /* Invalidate COMMAND response cache since we added a new command */
+    invalidateCommandCache();
     return VALKEYMODULE_OK;
 }
 
@@ -3845,6 +3847,13 @@ int modulePopulateClientInfoStructure(void *ci, client *client, int structver) {
     if (client->flag.blocked) ci1->flags |= VALKEYMODULE_CLIENTINFO_FLAG_BLOCKED;
     if (client->conn->type == connectionTypeTls()) ci1->flags |= VALKEYMODULE_CLIENTINFO_FLAG_SSL;
     if (client->flag.readonly) ci1->flags |= VALKEYMODULE_CLIENTINFO_FLAG_READONLY;
+    if (client->flag.primary) ci1->flags |= VALKEYMODULE_CLIENTINFO_FLAG_PRIMARY;
+    if (client->flag.replica) ci1->flags |= VALKEYMODULE_CLIENTINFO_FLAG_REPLICA;
+    if (client->flag.monitor) ci1->flags |= VALKEYMODULE_CLIENTINFO_FLAG_MONITOR;
+    if (client->flag.module) ci1->flags |= VALKEYMODULE_CLIENTINFO_FLAG_MODULE;
+    if (client->flag.authenticated) ci1->flags |= VALKEYMODULE_CLIENTINFO_FLAG_AUTHENTICATED;
+    if (client->flag.ever_authenticated) ci1->flags |= VALKEYMODULE_CLIENTINFO_FLAG_EVER_AUTHENTICATED;
+    if (client->flag.fake) ci1->flags |= VALKEYMODULE_CLIENTINFO_FLAG_FAKE;
 
     int port;
     connAddrPeerName(client->conn, ci1->addr, sizeof(ci1->addr), &port);
@@ -3905,8 +3914,21 @@ int modulePopulateReplicationInfoStructure(void *ri, int structver) {
  *     VALKEYMODULE_CLIENTINFO_FLAG_UNIXSOCKET   Client using unix domain socket.
  *     VALKEYMODULE_CLIENTINFO_FLAG_MULTI        Client in MULTI state.
  *     VALKEYMODULE_CLIENTINFO_FLAG_READONLY     Client in ReadOnly state.
+ *     VALKEYMODULE_CLIENTINFO_FLAG_PRIMARY      Client is a fake client used
+ *                                               for applying replicated
+ *                                               commands from the primary.
+ *     VALKEYMODULE_CLIENTINFO_FLAG_MONITOR      Client in monitor mode.
+ *     VALKEYMODULE_CLIENTINFO_FLAG_MODULE       Client is a module.
+ *     VALKEYMODULE_CLIENTINFO_FLAG_AUTHENTICATED
+ *                                               Client has been authenticated.
+ *     VALKEYMODULE_CLIENTINFO_FLAG_EVER_AUTHENTICATED
+ *                                               Client has successfully been
+ *                                               authenticated in its lifetime.
+ *     VALKEYMODULE_CLIENTINFO_FLAG_FAKE         Fake clients are internal to valkey.
  *
- * However passing NULL is a way to just check if the client exists in case
+ * Note: The flags VALKEYMODULE_CLIENTINFO_FLAG_PRIMARY and below were added in Valkey 9.1.
+ *
+ * Passing NULL is a way to just check if the client exists in case
  * we are not interested in any additional information.
  *
  * This is the correct usage when we want the client info structure
@@ -5467,7 +5489,7 @@ int VM_HashSet(ValkeyModuleKey *key, int flags, ...) {
 
         robj *argv[2] = {field, value};
         hashTypeTryConversion(key->value, argv, 0, 1);
-        int updated = hashTypeSet(key->value, objectGetVal(field), objectGetVal(value), EXPIRY_NONE, low_flags);
+        int updated = hashTypeSet(key->value, objectGetVal(field), objectGetVal(value), EXPIRY_NONE, low_flags, NULL);
         count += (flags & VALKEYMODULE_HASH_COUNT_ALL) ? 1 : updated;
 
         /* If CFIELDS is active, SDS string ownership is now of hashTypeSet(),
@@ -6565,7 +6587,16 @@ ValkeyModuleCallReply *VM_Call(ValkeyModuleCtx *ctx, const char *cmdname, const 
             }
         }
 
+        /* Allow running any command even if OOM reached. */
         if (is_running_script && scriptAllowsOOM()) {
+            flags &= ~VALKEYMODULE_ARGV_RESPECT_DENY_OOM;
+        }
+
+        /* If we reached the memory limit configured via maxmemory, commands that
+         * could enlarge the memory usage are not allowed, but only if this is the
+         * first write in the context of this script, otherwise we can't stop
+         * in the middle. */
+        if (is_running_script && scriptIsWriteDirty()) {
             flags &= ~VALKEYMODULE_ARGV_RESPECT_DENY_OOM;
         }
     }
@@ -9534,8 +9565,13 @@ void VM_SetClusterFlags(ValkeyModuleCtx *ctx, uint64_t flags) {
 
 /* Returns the cluster slot of a key, similar to the `CLUSTER KEYSLOT` command.
  * This function works even if cluster mode is not enabled. */
+unsigned int VM_ClusterKeySlotC(const char *key, size_t keylen) {
+    return keyHashSlot(key, keylen);
+}
+
+/* Like VM_ClusterKeySlotC() but gets the key as a ValkeyModuleString. */
 unsigned int VM_ClusterKeySlot(ValkeyModuleString *key) {
-    return keyHashSlot(objectGetVal(key), sdslen(objectGetVal(key)));
+    return VM_ClusterKeySlotC(objectGetVal(key), sdslen(objectGetVal(key)));
 }
 
 /* Returns a short string that can be used as a key or as a hash tag in a key,
@@ -11248,8 +11284,10 @@ void moduleCallCommandFilters(client *c) {
 
     ValkeyModuleCommandFilterCtx filter = {.argv = c->argv, .argv_len = c->argv_len, .argc = c->argc, .c = c};
 
-    robj *tmp = c->argv[0];
-    incrRefCount(tmp);
+    robj *pre_filter_command = c->argv[0];
+    incrRefCount(pre_filter_command);
+    const int pre_filter_argc = c->argc;
+
     while ((ln = listNext(&li))) {
         ValkeyModuleCommandFilter *f = ln->value;
 
@@ -11262,15 +11300,21 @@ void moduleCallCommandFilters(client *c) {
         f->callback(&filter);
     }
 
+    /* Apply filter output */
     c->argv = filter.argv;
     c->argv_len = filter.argv_len;
     c->argc = filter.argc;
-    if (tmp != c->argv[0]) {
+
+    /* If filter changed the command or number of arguments, redo prepareCommand */
+    const bool command_changed = (c->argv[0] != pre_filter_command);
+    const bool argc_changed = (c->argc != pre_filter_argc);
+
+    if (command_changed || argc_changed) {
         /* Reset and lookup the command and cluster slot again. */
         unprepareCommand(c);
         prepareCommand(c);
     }
-    decrRefCount(tmp);
+    decrRefCount(pre_filter_command);
 }
 
 /* Return the number of arguments a filtered command has.  The number of
@@ -12657,6 +12701,12 @@ int moduleFreeCommand(struct ValkeyModule *module, struct serverCommand *cmd) {
         hdr_close(cmd->latency_histogram);
         cmd->latency_histogram = NULL;
     }
+    for (int i = 0; i < RESP_CACHE_INDEX_MAX; i++) {
+        if (cmd->info_cache[i]) {
+            sdsfree(cmd->info_cache[i]);
+            cmd->info_cache[i] = NULL;
+        }
+    }
     moduleFreeArgs(cmd->args, cmd->num_args);
     zfree(cp);
 
@@ -12698,6 +12748,8 @@ void moduleUnregisterCommands(struct ValkeyModule *module) {
         zfree(cmd);
     }
     hashtableCleanupIterator(&iter);
+    /* Invalidate COMMAND response cache since we removed commands */
+    invalidateCommandCache();
 }
 
 /* We parse argv to add sds "NAME VALUE" pairs to the server.module_configs_queue list of configs.
@@ -14603,6 +14655,7 @@ void moduleRegisterCoreAPI(void) {
     REGISTER_API(SetDisconnectCallback);
     REGISTER_API(GetBlockedClientHandle);
     REGISTER_API(SetClusterFlags);
+    REGISTER_API(ClusterKeySlotC);
     REGISTER_API(ClusterKeySlot);
     REGISTER_API(ClusterCanonicalKeyNameInSlot);
     REGISTER_API(CreateDict);

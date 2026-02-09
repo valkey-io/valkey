@@ -1432,11 +1432,16 @@ void replconfCommand(client *c) {
                 c->repl_data->replica_capa |= REPLICA_CAPA_EOF;
             else if (!strcasecmp(objectGetVal(c->argv[j + 1]), "psync2"))
                 c->repl_data->replica_capa |= REPLICA_CAPA_PSYNC2;
-            else if (!strcasecmp(objectGetVal(c->argv[j + 1]), "dual-channel") && server.dual_channel_replication &&
-                     server.repl_diskless_sync) {
+            else if (!strcasecmp(objectGetVal(c->argv[j + 1]), "dual-channel") && server.dual_channel_replication) {
                 /* If dual-channel is disable on this primary, treat this command as unrecognized
                  * replconf option. */
-                c->repl_data->replica_capa |= REPLICA_CAPA_DUAL_CHANNEL;
+                if (server.repl_diskless_sync) {
+                    c->repl_data->replica_capa |= REPLICA_CAPA_DUAL_CHANNEL;
+                } else {
+                    /* repl-diskless-sync is disabled, unable to use the dual channel replication,
+                     * print a log so that user will get to know that they are missing something. */
+                    serverLog(LL_NOTICE, "Dual channel capability ignored: repl-diskless-sync disabled");
+                }
             } else if (!strcasecmp(objectGetVal(c->argv[j + 1]), REPLICA_CAPA_SKIP_RDB_CHECKSUM_STR))
                 c->repl_data->replica_capa |= REPLICA_CAPA_SKIP_RDB_CHECKSUM;
         } else if (!strcasecmp(objectGetVal(c->argv[j]), "ack")) {
@@ -2910,7 +2915,7 @@ sds getReplicaPortString(void) {
 /* Replication: Replica side.
  * Free replica's local replication buffer */
 void freePendingReplDataBuf(void) {
-    listRelease(server.pending_repl_data.blocks);
+    if (server.pending_repl_data.blocks) freePendingReplDataBufAsync(server.pending_repl_data.blocks);
     server.pending_repl_data.blocks = NULL;
     server.pending_repl_data.len = 0;
 }

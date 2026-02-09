@@ -627,7 +627,8 @@ typedef enum {
 
 /* Sets log format */
 typedef enum { LOG_FORMAT_LEGACY = 0,
-               LOG_FORMAT_LOGFMT } log_format_type;
+               LOG_FORMAT_LOGFMT,
+               LOG_FORMAT_JSON } log_format_type;
 
 /* Sets log timestamp format */
 typedef enum { LOG_TIMESTAMP_LEGACY = 0,
@@ -1468,7 +1469,7 @@ struct sharedObjectsStruct {
         *bgsaveerr_variants[2],
         *execaborterr, *noautherr, *noreplicaserr, *busykeyerr, *oomerr, *plus, *messagebulk, *pmessagebulk,
         *subscribebulk, *unsubscribebulk, *psubscribebulk, *punsubscribebulk, *del, *unlink, *rpop, *lpop, *lpush, *zadd,
-        *rpoplpush, *lmove, *blmove, *zpopmin, *zpopmax, *emptyscan, *multi, *exec, *left, *right, *hset, *hdel, *hpexpireat, *hpersist, *srem,
+        *rpoplpush, *lmove, *blmove, *zpopmin, *zpopmax, *emptyscan, *multi, *exec, *left, *right, *hset, *hsetex, *hdel, *hpexpireat, *hpersist, *srem,
         *xgroup, *xclaim, *script, *replconf, *eval, *cluster, *syncslots, *persist, *set, *pexpireat, *pexpire, *time, *pxat, *absttl,
         *retrycount, *force, *justid, *entriesread, *lastid, *ping, *setid, *keepttl, *load, *createconsumer, *getack,
         *special_asterisk, *special_equals, *default_username, *redacted, *ssubscribebulk, *sunsubscribebulk, *fields,
@@ -1483,8 +1484,14 @@ struct sharedObjectsStruct {
 
 /* ZSETs use a specialized version of Skiplists */
 typedef struct zskiplistNode {
-    double score;
-    struct zskiplistNode *backward;
+    union {
+        double score;         /* Sorting score for node ordering. */
+        unsigned long length; /* Number of elements in the skiplist. */
+    };
+    union {
+        struct zskiplistNode *backward; /* Pointer to previous node for reverse traversal. */
+        struct zskiplistNode *tail;     /* Tail element of the skiplist. */
+    };
     struct zskiplistLevel {
         struct zskiplistNode *forward;
         /* At each level we keep the span, which is the number of elements which are on the "subtree"
@@ -1492,14 +1499,19 @@ typedef struct zskiplistNode {
          * One exception is the value at level 0. In level 0 the span can only be 1 or 0 (in case the last elements in the list)
          * So we use it in order to hold the height of the node, which is the number of levels. */
         unsigned long span;
-    } level[];
-    /* After the level[], sds header length (1 byte) and an embedded sds element are stored. */
+    } level[1]; /* Flexible array member - actual levels determined at node creation. */
+    /* For non-header nodes, after the level[], sds header length (1 byte) and an embedded sds element are stored. */
 } zskiplistNode;
 
+/* The header node does not store actual data (no score, no backward pointer,
+ * and its node height is fixed at ZSKIPLIST_MAXLEVEL).
+ * To save memory, we reuse the memory space of these fields in the header node to store:
+ *   - skiplist length (number of elements)
+ *   - tail pointer to the last element
+ *   - maximum current level of the skiplist
+ * For detailed memory layout, refer to the zskiplistNode struct definition. */
 typedef struct zskiplist {
-    struct zskiplistNode *header, *tail;
-    unsigned long length;
-    int level;
+    zskiplistNode header;
 } zskiplist;
 
 typedef struct zset {
@@ -1626,6 +1638,9 @@ struct malloc_stats {
 #define CACHE_CONN_TYPE_RESP3 (1 << 2)
 #define CACHE_CONN_TYPE_MAX (1 << 3)
 
+#define RESP_CACHE_INDEX_MAX 2                       /* [0]=RESP2, [1]=RESP3 */
+#define RESP_CACHE_INDEX(resp) ((resp) == 3 ? 1 : 0) /* Convert RESP version to cache array index */
+
 /*-----------------------------------------------------------------------------
  * TLS Context Configuration
  *----------------------------------------------------------------------------*/
@@ -1648,6 +1663,7 @@ typedef struct serverTLSContextConfig {
     int session_caching;
     int session_cache_size;
     int session_cache_timeout;
+    int auto_reload_interval;
 } serverTLSContextConfig;
 
 /*-----------------------------------------------------------------------------
@@ -1725,18 +1741,19 @@ typedef enum childInfoType {
 
 struct valkeyServer {
     /* General */
-    pid_t pid;                /* Main process pid. */
-    pthread_t main_thread_id; /* Main thread id */
-    char *configfile;         /* Absolute config file path, or NULL */
-    char *executable;         /* Absolute executable file path. */
-    char **exec_argv;         /* Executable argv vector (copy). */
-    mode_t umask;             /* The umask value of the process on startup */
-    int hz;                   /* serverCron() calls frequency in hertz */
-    int clients_hz;           /* clientsTimeProc() frequency in hertz */
-    int in_fork_child;        /* indication that this is a fork child */
-    serverDb **db;            /* each db created when it's first used */
-    hashtable *commands;      /* Command table */
-    hashtable *orig_commands; /* Command table before command renaming. */
+    pid_t pid;                                        /* Main process pid. */
+    pthread_t main_thread_id;                         /* Main thread id */
+    char *configfile;                                 /* Absolute config file path, or NULL */
+    char *executable;                                 /* Absolute executable file path. */
+    char **exec_argv;                                 /* Executable argv vector (copy). */
+    mode_t umask;                                     /* The umask value of the process on startup */
+    int hz;                                           /* serverCron() calls frequency in hertz */
+    int clients_hz;                                   /* clientsTimeProc() frequency in hertz */
+    int in_fork_child;                                /* indication that this is a fork child */
+    serverDb **db;                                    /* each db created when it's first used */
+    hashtable *commands;                              /* Command table */
+    hashtable *orig_commands;                         /* Command table before command renaming. */
+    sds command_response_cache[RESP_CACHE_INDEX_MAX]; /* Cached COMMAND response: [0]=RESP2, [1]=RESP3 */
     aeEventLoop *el;
     _Atomic AeIoState io_poll_state;     /* Indicates the state of the IO polling. */
     int io_ae_fired_events;              /* Number of poll events received by the IO thread. */
@@ -1925,6 +1942,9 @@ struct valkeyServer {
     long long stat_reply_buffer_shrinks; /* Total number of output buffer shrinks */
     long long stat_reply_buffer_expands; /* Total number of output buffer expands */
     monotime el_start;
+    /* Main thread utilization tracking */
+    monotime stat_active_time; /* Cumulative active time for main thread in microseconds */
+    bool el_iteration_active;  /* Tracks if any work was done in the current event loop iteration */
     /* The following two are used to record the max number of commands executed in one eventloop.
      * Note that commands in transactions are also counted. */
     long long el_cmd_cnt_start;
@@ -2183,8 +2203,6 @@ struct valkeyServer {
     int maxmemory_policy;                       /* Policy for key eviction */
     int maxmemory_samples;                      /* Precision of random sampling */
     int maxmemory_eviction_tenacity;            /* Aggressiveness of eviction processing */
-    int lfu_log_factor;                         /* LFU logarithmic counter factor. */
-    int lfu_decay_time;                         /* LFU counter decay factor. */
     long long proto_max_bulk_len;               /* Protocol bulk length maximum size. */
     int oom_score_adj_values[CONFIG_OOM_COUNT]; /* Linux oom_score_adj configuration */
     int oom_score_adj;                          /* If true, oom_score_adj is managed */
@@ -2328,6 +2346,12 @@ struct valkeyServer {
     int tls_replication;
     int tls_auth_clients;
     serverTLSContextConfig tls_ctx_config;
+    long long tls_server_cert_expire_time;
+    long long tls_client_cert_expire_time;
+    long long tls_ca_cert_expire_time;
+    sds tls_server_cert_serial;
+    sds tls_client_cert_serial;
+    sds tls_ca_cert_serial;
     serverUnixContextConfig unix_ctx_config;
     serverRdmaContextConfig rdma_ctx_config;
     /* cpu affinity */
@@ -2689,6 +2713,7 @@ struct serverCommand {
                                     * (not the fullname), and the value is the serverCommand structure pointer. */
     struct serverCommand *parent;
     struct ValkeyModuleCommand *module_cmd; /* A pointer to the module command data (NULL if native command) */
+    sds info_cache[RESP_CACHE_INDEX_MAX];   /* Cached COMMAND INFO response: [0]=RESP2, [1]=RESP3 */
 };
 
 struct serverError {
@@ -3344,6 +3369,12 @@ typedef struct {
 #define ERROR_COMMAND_FAILED (1 << 1)   /* Indicate to update the command failed stats */
 
 zskiplist *zslCreate(void);
+int zslGetHeight(const zskiplist *zsl);
+zskiplistNode *zslGetTail(const zskiplist *zsl);
+void zslSetTail(zskiplist *zsl, zskiplistNode *tail);
+unsigned long zslGetLength(const zskiplist *zsl);
+zskiplistNode *zslGetHeader(zskiplist *zsl);
+size_t zslGetAllocSize(void);
 void zslFree(zskiplist *zsl);
 zskiplistNode *zslInsert(zskiplist *zsl, double score, const_sds ele);
 zskiplistNode *zslNthInRange(zskiplist *zsl, zrangespec *range, long n, long *rank);
@@ -3460,6 +3491,7 @@ sds activeDefragSds(sds sdsptr);
 robj *activeDefragStringOb(robj *ob);
 void dismissSds(sds s);
 void dismissMemoryInChild(void);
+void tlsResetCertInfo(void);
 
 #define RESTART_SERVER_NONE 0
 #define RESTART_SERVER_GRACEFULLY (1 << 0)     /* Do proper shutdown. */
@@ -3526,7 +3558,7 @@ char *hashTypeCurrentFromHashTable(hashTypeIterator *hi, int what, size_t *len);
 sds hashTypeCurrentObjectNewSds(hashTypeIterator *hi, int what);
 robj *hashTypeLookupWriteOrCreate(client *c, robj *key);
 robj *hashTypeGetValueObject(robj *o, sds field);
-int hashTypeSet(robj *o, sds field, sds value, long long expiry, int flags);
+int hashTypeSet(robj *o, sds field, sds value, long long expiry, int flags, bool *expired_overwritten);
 robj *hashTypeDup(robj *o);
 bool hashTypeHasVolatileFields(robj *o);
 int hashTypeUpdateAsStringRef(robj *o, sds field, const char *buf, size_t len);
@@ -3646,6 +3678,7 @@ void deleteExpiredKeyAndPropagate(serverDb *db, robj *keyobj);
 void deleteExpiredKeyAndPropagateWithDictIndex(serverDb *db, robj *keyobj, int dict_index);
 void deleteExpiredKeyFromOverwriteAndPropagate(client *c, robj *keyobj);
 void propagateDeletion(serverDb *db, robj *key, int lazy, int slot);
+int propagateFieldsDeletion(serverDb *db, robj *o, size_t n_fields, robj *fields[], int slot);
 size_t dbReclaimExpiredFields(robj *o, serverDb *db, mstime_t now, unsigned long max_entries, int didx);
 int keyIsExpired(serverDb *db, robj *key);
 long long getExpire(serverDb *db, robj *key);
@@ -3708,6 +3741,7 @@ size_t lazyfreeGetFreedObjectsCount(void);
 void lazyfreeResetStats(void);
 void freeObjAsync(robj *key, robj *obj, int dbid);
 void freeReplicationBacklogRefMemAsync(list *blocks, rax *index);
+void freePendingReplDataBufAsync(list *pending_repl_data_blocks);
 void dbUntrackKeyWithVolatileItems(serverDb *db, robj *o);
 void dbTrackKeyWithVolatileItems(serverDb *db, robj *o);
 void dbUpdateObjectWithVolatileItemsTracking(serverDb *db, robj *o);
@@ -3850,6 +3884,7 @@ void commandCommand(client *c);
 void commandCountCommand(client *c);
 void commandListCommand(client *c);
 void commandInfoCommand(client *c);
+void invalidateCommandCache(void);
 void commandGetKeysCommand(client *c);
 void commandGetKeysAndFlagsCommand(client *c);
 void commandHelpCommand(client *c);
@@ -4040,6 +4075,7 @@ void sunsubscribeCommand(client *c);
 void watchCommand(client *c);
 void unwatchCommand(client *c);
 void clusterCommand(client *c);
+void clusterKeySlotCommand(client *c);
 void clusterFlushslotCommand(client *c);
 void clusterSlotStatsCommand(client *c);
 void restoreCommand(client *c);

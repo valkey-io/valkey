@@ -27,9 +27,14 @@ else ifeq ($(uname_S),DragonFly)
 	SHOBJ_LDFLAGS+= -lm
 endif
 
-LIBS= $(DEPS_DIR)/lua/src/liblua.a $(DEPS_DIR)/fpconv/libfpconv.a
+LIBS = \
+    $(DEPS_DIR)/lua/src/liblua.a \
+    $(DEPS_DIR)/fpconv/libfpconv.a
 SRCS= $(wildcard *.c)
-OBJS= $(SRCS:.c=.o) sha1.o rand.o
+OBJS = \
+    $(SRCS:.c=.o) \
+    sha1.o \
+    rand.o
 
 # OS X 11.x doesn't have /usr/lib/libSystem.dylib and needs an explicit setting.
 ifeq ($(uname_S),Darwin)

@@ -54,7 +54,7 @@
  * However, if the key contains the {...} pattern, only the part between
  * { and } is hashed. This may be useful in the future to force certain
  * keys to be in the same node (assuming no resharding is in progress). */
-unsigned int keyHashSlot(char *key, int keylen) {
+unsigned int keyHashSlot(const char *key, int keylen) {
     int s, e; /* start-end indexes of { and } */
 
     for (s = 0; s < keylen; s++)
@@ -871,6 +871,11 @@ void clusterCommandHelp(client *c) {
     addExtendedReplyHelp(c, help, clusterCommandExtendedHelp());
 }
 
+void clusterKeySlotCommand(client *c) {
+    sds key = objectGetVal(c->argv[2]);
+    addReplyLongLong(c, keyHashSlot(key, sdslen(key)));
+}
+
 void clusterCommand(client *c) {
     if (server.cluster_enabled == 0) {
         addReplyError(c, "This instance has cluster support disabled");
@@ -905,11 +910,6 @@ void clusterCommand(client *c) {
         /* Produce the reply protocol. */
         addReplyVerbatim(c, info, sdslen(info), "txt");
         sdsfree(info);
-    } else if (!strcasecmp(objectGetVal(c->argv[1]), "keyslot") && c->argc == 3) {
-        /* CLUSTER KEYSLOT <key> */
-        sds key = objectGetVal(c->argv[2]);
-
-        addReplyLongLong(c, keyHashSlot(key, sdslen(key)));
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "countkeysinslot") && c->argc == 3) {
         /* CLUSTER COUNTKEYSINSLOT <slot> */
         long long slot;
@@ -1523,6 +1523,8 @@ sds generateClusterSlotResponse(int resp) {
         }
     }
     setDeferredArrayLen(recording_client, slot_replylen, num_primaries);
+    /* For cluster slots, deferred length should put all data in reply list, not buffer */
+    serverAssert(recording_client->bufpos == 0);
     sds cluster_slot_response = aggregateClientOutputBuffer(recording_client);
     deleteCachedResponseClient(recording_client);
     return cluster_slot_response;

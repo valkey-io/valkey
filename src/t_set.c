@@ -625,6 +625,7 @@ void sremCommand(client *c) {
 
     if ((set = lookupKeyWriteOrReply(c, c->argv[1], shared.czero)) == NULL || checkType(c, set, OBJ_SET)) return;
 
+    if (set->encoding == OBJ_ENCODING_HASHTABLE) hashtablePauseAutoShrink(objectGetVal(set));
     for (j = 2; j < c->argc; j++) {
         if (setTypeRemove(set, objectGetVal(c->argv[j]))) {
             deleted++;
@@ -635,6 +636,8 @@ void sremCommand(client *c) {
             }
         }
     }
+    if (!keyremoved && set->encoding == OBJ_ENCODING_HASHTABLE) hashtableResumeAutoShrink(objectGetVal(set));
+
     if (deleted) {
         signalModifiedKey(c, c->db, c->argv[1]);
         notifyKeyspaceEvent(NOTIFY_SET, "srem", c->argv[1], c->db->id);

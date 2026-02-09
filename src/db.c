@@ -246,10 +246,10 @@ int getKeySlot(sds key) {
      * the key slot would fallback to keyHashSlot.
      *
      * Modules and scripts executed on the primary may get replicated as multi-execs that operate on multiple slots,
-     * so we must always recompute the slot for commands coming from the primary.
+     * so we must always recompute the slot for commands coming from the primary or AOF.
      */
     if (server.current_client && server.current_client->slot >= 0 && server.current_client->flag.executing_command &&
-        !isReplicatedClient(server.current_client)) {
+        !mustObeyClient(server.current_client)) {
         debugServerAssertWithInfo(server.current_client, NULL,
                                   (int)keyHashSlot(key, (int)sdslen(key)) == server.current_client->slot);
         return server.current_client->slot;
@@ -1986,12 +1986,15 @@ void propagateDeletion(serverDb *db, robj *key, int lazy, int slot) {
  *
  * This function builds and propagates a single HDEL command with multiple fields
  * for the given hash object `o`. It temporarily enables replication (if needed),
- * constructs the command using the field names, and sends it via alsoPropagate(). */
-static void propagateFieldsDeletion(serverDb *db, robj *o, size_t n_fields, robj *fields[], int didx) {
+ * constructs the command using the field names, and sends it via alsoPropagate().
+ * Returns how many fields where propagated */
+int propagateFieldsDeletion(serverDb *db, robj *o, size_t n_fields, robj *fields[], int didx) {
     int prev_replication_allowed = server.replication_allowed;
     server.replication_allowed = 1;
 
     robj *argv[EXPIRE_BULK_LIMIT + 2]; /* HDEL + key + fields */
+    if (n_fields > EXPIRE_BULK_LIMIT) n_fields = EXPIRE_BULK_LIMIT;
+
     int argc = 0;
     robj *keyobj = createStringObjectFromSds(objectGetKey(o));
     argv[argc++] = shared.hdel; // HDEL command
@@ -2006,6 +2009,7 @@ static void propagateFieldsDeletion(serverDb *db, robj *o, size_t n_fields, robj
     for (int i = 0; i < argc; i++) {
         decrRefCount(argv[i]);
     }
+    return n_fields;
 }
 
 /* Process expired fields for a hash delete them and propagate changes to replicas and AOF.

@@ -37,6 +37,7 @@
 #include "module.h"
 #include "cluster_migrateslots.h"
 #include "eval.h"
+#include "lrulfu.h"
 
 #include <fcntl.h>
 #include <sys/stat.h>
@@ -165,7 +166,7 @@ configEnum propagation_error_behavior_enum[] = {
     {"panic-on-replicas", PROPAGATION_ERR_BEHAVIOR_PANIC_ON_REPLICAS},
     {NULL, 0}};
 
-configEnum log_format_enum[] = {{"legacy", LOG_FORMAT_LEGACY}, {"logfmt", LOG_FORMAT_LOGFMT}, {NULL, 0}};
+configEnum log_format_enum[] = {{"legacy", LOG_FORMAT_LEGACY}, {"logfmt", LOG_FORMAT_LOGFMT}, {"json", LOG_FORMAT_JSON}, {NULL, 0}};
 
 configEnum log_timestamp_format_enum[] = {{"legacy", LOG_TIMESTAMP_LEGACY},
                                           {"iso8601", LOG_TIMESTAMP_ISO8601},
@@ -2746,6 +2747,7 @@ static int applyTlsCfg(const char **err) {
         *err = "Unable to update TLS configuration. Check server logs.";
         return 0;
     }
+    tlsResetCertInfo();
     return 1;
 }
 
@@ -2767,7 +2769,7 @@ static int applyTLSPort(const char **err) {
         *err = "Unable to listen on this port. Check server logs.";
         return 0;
     }
-
+    tlsResetCertInfo();
     return 1;
 }
 
@@ -3330,8 +3332,8 @@ standardConfig static_configs[] = {
     createIntConfig("active-defrag-threshold-lower", NULL, MODIFIABLE_CONFIG, 0, 1000, server.active_defrag_threshold_lower, 10, INTEGER_CONFIG, NULL, NULL),                       /* Default: don't defrag when fragmentation is below 10% */
     createIntConfig("active-defrag-threshold-upper", NULL, MODIFIABLE_CONFIG, 0, 1000, server.active_defrag_threshold_upper, 100, INTEGER_CONFIG, NULL, updateDefragConfiguration), /* Default: maximum defrag force at 100% fragmentation */
     createIntConfig("active-defrag-cycle-us", NULL, MODIFIABLE_CONFIG, 0, 100000, server.active_defrag_cycle_us, 500, INTEGER_CONFIG, NULL, updateDefragConfiguration),
-    createIntConfig("lfu-log-factor", NULL, MODIFIABLE_CONFIG, 0, INT_MAX, server.lfu_log_factor, 10, INTEGER_CONFIG, NULL, NULL),
-    createIntConfig("lfu-decay-time", NULL, MODIFIABLE_CONFIG, 0, INT_MAX, server.lfu_decay_time, 1, INTEGER_CONFIG, NULL, NULL),
+    createIntConfig("lfu-log-factor", NULL, MODIFIABLE_CONFIG, 0, INT_MAX, lfu_config_log_factor, 10, INTEGER_CONFIG, NULL, NULL),
+    createIntConfig("lfu-decay-time", NULL, MODIFIABLE_CONFIG, 0, INT_MAX, lfu_config_decay_time, 1, INTEGER_CONFIG, NULL, NULL),
     createIntConfig("replica-priority", "slave-priority", MODIFIABLE_CONFIG, 0, INT_MAX, server.replica_priority, 100, INTEGER_CONFIG, NULL, NULL),
     createIntConfig("repl-diskless-sync-delay", NULL, MODIFIABLE_CONFIG, 0, INT_MAX, server.repl_diskless_sync_delay, 5, INTEGER_CONFIG, NULL, NULL),
     createIntConfig("maxmemory-samples", NULL, MODIFIABLE_CONFIG, 1, 64, server.maxmemory_samples, 5, INTEGER_CONFIG, NULL, NULL),
@@ -3423,6 +3425,7 @@ standardConfig static_configs[] = {
     createIntConfig("tls-port", NULL, MODIFIABLE_CONFIG, 0, 65535, server.tls_port, 0, INTEGER_CONFIG, NULL, applyTLSPort), /* TCP port. */
     createIntConfig("tls-session-cache-size", NULL, MODIFIABLE_CONFIG, 0, INT_MAX, server.tls_ctx_config.session_cache_size, 20 * 1024, INTEGER_CONFIG, NULL, applyTlsCfg),
     createIntConfig("tls-session-cache-timeout", NULL, MODIFIABLE_CONFIG, 0, INT_MAX, server.tls_ctx_config.session_cache_timeout, 300, INTEGER_CONFIG, NULL, applyTlsCfg),
+    createIntConfig("tls-auto-reload-interval", NULL, MODIFIABLE_CONFIG, 0, INT_MAX, server.tls_ctx_config.auto_reload_interval, 0, INTEGER_CONFIG, NULL, applyTlsCfg),
     createBoolConfig("tls-cluster", NULL, MODIFIABLE_CONFIG, server.tls_cluster, 0, NULL, applyTlsCfg),
     createBoolConfig("tls-replication", NULL, MODIFIABLE_CONFIG, server.tls_replication, 0, NULL, applyTlsCfg),
     createEnumConfig("tls-auth-clients", NULL, MODIFIABLE_CONFIG, tls_auth_clients_enum, server.tls_auth_clients, TLS_CLIENT_AUTH_YES, NULL, NULL),

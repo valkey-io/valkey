@@ -3119,13 +3119,13 @@ int loadSnapshotAofFromRio(rio *r, char *eofmark, int usemark) {
                 fakeClient->argc = j;
                 freeClientArgv(fakeClient);
                 ret = AOF_FAILED;
-                break;
+                goto cleanup;
             }
             if (!rioReadLineTail(r, buf, sizeof(buf))) {
                 fakeClient->argc = j;
                 freeClientArgv(fakeClient);
                 ret = AOF_FAILED;
-                break;
+                goto cleanup;
             }
             unsigned long blen = strtoul(buf, NULL, 10);
             sds arg;
@@ -3133,7 +3133,7 @@ int loadSnapshotAofFromRio(rio *r, char *eofmark, int usemark) {
                 fakeClient->argc = j;
                 freeClientArgv(fakeClient);
                 ret = AOF_FAILED;
-                break;
+                goto cleanup;
             }
             argv[j] = createObject(OBJ_STRING, arg);
         }
@@ -3168,6 +3168,7 @@ int loadSnapshotAofFromRio(rio *r, char *eofmark, int usemark) {
         ret = AOF_FAILED;
     }
 
+cleanup:
     serverLog(LL_WARNING, "Done loading AOF for replication.");
     if (fakeClient) freeClient(fakeClient);
     server.current_client = old_cur_client;

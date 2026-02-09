@@ -7129,6 +7129,7 @@ void clusterCommandShards(client *c) {
 sds genClusterInfoString(sds info) {
     char *statestr[] = {"ok", "fail"};
     int slots_assigned = 0, slots_ok = 0, slots_pfail = 0, slots_fail = 0;
+    uint64_t my_epoch = myself ? nodeEpoch(myself) : 0;
 
     dictIterator *di = dictGetIterator(server.cluster->nodes);
     dictEntry *de;
@@ -7178,7 +7179,7 @@ sds genClusterInfoString(sds info) {
                      statestr[server.cluster->state], slots_assigned, slots_ok, slots_pfail, slots_fail,
                      nodes_pfail, nodes_fail, voting_nodes_pfail, voting_nodes_fail,
                      (unsigned long long)dictSize(server.cluster->nodes), server.cluster->size,
-                     (unsigned long long)server.cluster->currentEpoch, (unsigned long long)nodeEpoch(myself));
+                     (unsigned long long)server.cluster->currentEpoch, (unsigned long long)my_epoch);
 
     /* Show stats about messages sent and received. */
     long long tot_msg_sent = 0;

@@ -89,42 +89,20 @@ proc fix_cluster {addr} {
 # Check if cluster configuration is consistent.
 # All the nodes in the cluster should show same slots configuration and have health
 # state "online" to be considered as consistent.
-proc cluster_config_consistent {{ignored_idx {}}} {
-    set base_cfg "undefined"
-
-    set ignored_port -1
-    if {$ignored_idx ne {}} {
-        set ignored_port [srv $ignored_idx port]
-    }
-
+proc cluster_config_consistent {} {
     for {set j 0} {$j < [llength $::servers]} {incr j} {
-        if {$j == $ignored_idx} {
-            continue
-        }
-
-        # Ensure all nodes believe the cluster is ok
-        set state [CI $j cluster_state]
-        if {$state ne "ok"} {
-            return 0
-        }
-
-        # Check if all the nodes are online, except the one
-        # we optionally ignore.
+        # Check if all the nodes are online
         set shards_cfg [R $j CLUSTER SHARDS]
         foreach shard_cfg $shards_cfg {
             set nodes [dict get $shard_cfg nodes]
             foreach node $nodes {
-                set node_port [dict get $node port]
-                if {$node_port == $ignored_port} {
-                    continue
-                }
                 if {[dict get $node health] ne "online"} {
                     return 0
                 }
             }
         }
 
-        if {$base_cfg eq "undefined"} {
+        if {$j == 0} {
             set base_cfg [R $j cluster slots]
         } else {
             if {[R $j cluster slots] != $base_cfg} {
@@ -147,11 +125,9 @@ proc cluster_size_consistent {cluster_size} {
 }
 
 # Wait for cluster configuration to propagate and be consistent across nodes.
-# Optionally ignore a single node by passing its index. This is useful when we
-# deliberately stop a server and wait for the remaining nodes to converge.
-proc wait_for_cluster_propagation {{ignored_idx {}}} {
+proc wait_for_cluster_propagation {} {
     wait_for_condition 1000 50 {
-        [cluster_config_consistent $ignored_idx] eq 1
+        [cluster_config_consistent] eq 1
     } else {
         for {set j 0} {$j < [llength $::servers]} {incr j} {
             puts "R $j cluster slots output: [R $j cluster slots]"

@@ -104,9 +104,13 @@ The following compatibility and capability tags are currently used:
 | `needs:save`              | Uses `SAVE` or `BGSAVE` to create an RDB file. |
 | `needs:other-server`      | Requires `--other-server-path`. |
 | `singledb`                | Test runs as if `--singledb` was given. |
+| `valgrind:skip`           | Not compatible with `--valgrind`. |
 
 When using an external server (`--host` and `--port`), filtering using the
 `external:skip` tags is done automatically.
+
+When using `--valgrind`, filtering using the `valgrind:skip` tag is done
+automatically.
 
 When using `--cluster-mode`, filtering using the `cluster:skip` tag is done
 automatically.

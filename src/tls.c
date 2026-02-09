@@ -188,6 +188,7 @@ static void tlsInit(void) {
 static void tlsClearCertInfo(long long *expiry, sds *serial);
 static void tlsClearCACertInfo(void);
 static void tlsClearAllCertInfo(void);
+static void tlsRefreshAllCertInfo(void);
 
 static void tlsCleanup(void) {
     if (valkey_tls_ctx) {
@@ -257,7 +258,10 @@ static int tlsGetX509Expiry(X509 *cert, long long *expiry) {
 }
 
 void tlsResetCertInfo(void) {
-    if (server.tls_port || server.tls_replication || server.tls_cluster) return;
+    if (server.tls_port || server.tls_replication || server.tls_cluster) {
+        tlsRefreshAllCertInfo();
+        return;
+    }
     tlsClearAllCertInfo();
 }
 
@@ -1872,6 +1876,7 @@ int RedisRegisterConnectionTypeTLS(void) {
 static void tlsClearAllCertInfo(void);
 
 void tlsResetCertInfo(void) {
+    if (server.tls_port || server.tls_replication || server.tls_cluster) return;
     tlsClearAllCertInfo();
 }
 

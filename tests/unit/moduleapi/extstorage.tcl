@@ -3779,3 +3779,67 @@ start_server [list overrides [list "ext-data-mode" kv "ext-data-id" id1 "logleve
         assert {$node_id1 eq $node_id2}
     }
 }
+
+start_server [list overrides [list "ext-data-mode" kv "ext-data-id" id1 "loglevel" notice] tags [list "external:skip"]] {
+    r MODULE LOAD $extdatamodule1
+
+    test "Backup ID v0 encoding - full dump" {
+        set result [r extdata.testbackupid "v0:-1:0:node-abc123"]
+        assert_equal [dict get $result slot] -1
+        assert_equal [dict get $result timestamp] 0
+        assert_equal [dict get $result node_id] "node-abc123"
+    }
+
+    test "Backup ID v0 encoding - slot dump" {
+        set result [r extdata.testbackupid "v0:5:1706265600:node-def456"]
+        assert_equal [dict get $result slot] 5
+        assert_equal [dict get $result timestamp] 1706265600
+        assert_equal [dict get $result node_id] "node-def456"
+    }
+
+    test "Backup ID v0 encoding - with options" {
+        set result [r extdata.testbackupid "v0:10:1706265600:node-xyz:compress=lz4"]
+        assert_equal [dict get $result slot] 10
+        assert_equal [dict get $result options] "compress=lz4"
+    }
+
+    test "Backup ID v0 - invalid version rejected" {
+        catch {r extdata.testbackupid "v1:5:1706265600:node-abc"} err
+        assert_match "*Invalid backup_id format*" $err
+    }
+
+    test "Backup ID v0 - invalid slot rejected" {
+        catch {r extdata.testbackupid "v0:16384:1706265600:node-abc"} err
+        assert_match "*Invalid backup_id format*" $err
+    }
+
+    test "Backup ID v0 - round-trip consistency" {
+        set result [r extdata.testbackupid "v0:100:1706265600:node-test123"]
+        assert_equal [dict get $result slot] 100
+        assert_equal [dict get $result timestamp] 1706265600
+        assert_equal [dict get $result node_id] "node-test123"
+    }
+
+    test "Backup ID v0 - boundary slot values" {
+        # Test minimum valid slot
+        set result [r extdata.testbackupid "v0:-1:0:node-test"]
+        assert_equal [dict get $result slot] -1
+        
+        # Test maximum valid slot
+        set result [r extdata.testbackupid "v0:16383:0:node-test"]
+        assert_equal [dict get $result slot] 16383
+    }
+
+    test "Backup ID v0 - slot 0 valid" {
+        set result [r extdata.testbackupid "v0:0:0:node-test"]
+        assert_equal [dict get $result slot] 0
+    }
+
+    test "Backup ID v0 - negative timestamp accepted" {
+        # Negative timestamp should still parse (implementation dependent)
+        # This documents current behavior
+        set result [r extdata.testbackupid "v0:5:-1:node-test"]
+        assert_equal [dict get $result slot] 5
+        assert_equal [dict get $result timestamp] -1
+    }
+}

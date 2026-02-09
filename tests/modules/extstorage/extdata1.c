@@ -28,6 +28,14 @@ const char *module_name = "helloextdata1";
 /* Maximum length for backup identifiers (timestamp-based format YYYYMMDD_HHMMSS) */
 #define BACKUP_ID_MAX_LEN 256
 
+/* Maximum length for backup options string */
+#define OPTIONS_MAX_LEN 256
+
+/* Backup ID v0 format constants */
+#define BACKUP_ID_VERSION_0 0
+#define BACKUP_ID_MIN_SLOT -1
+#define BACKUP_ID_MAX_SLOT 16383
+
 static char node_id[NODE_ID_MAX_LEN] = {0};  /* Unique node identifier */
 
 
@@ -65,6 +73,72 @@ typedef struct QueuedCommand {
 } QueuedCommand;
 static QueuedCommand *command_queue_head = NULL;
 static QueuedCommand *command_queue_tail = NULL;
+/* Backup ID v0 format: v0:<slot>:<timestamp>:<node_id>[:<options>]
+ *
+ * Format components:
+ * - version: 0 (fixed)
+ * - slot: -1 for full dump, or 0-16383 for slot-specific dump
+ * - timestamp: Unix timestamp in seconds
+ * - node_id: Node identifier string (max 64 chars)
+ * - options: Optional configuration string (e.g., "compress=lz4")
+ */
+static char* encodeBackupIdV0(int slot, long long timestamp,
+                               const char *node_id_str, const char *options) {
+    static char backup_id[BACKUP_ID_MAX_LEN];
+    if (options && options[0]) {
+        snprintf(backup_id, sizeof(backup_id), "v%d:%d:%lld:%s:%s",
+                 BACKUP_ID_VERSION_0, slot, timestamp, node_id_str, options);
+    } else {
+        snprintf(backup_id, sizeof(backup_id), "v%d:%d:%lld:%s",
+                 BACKUP_ID_VERSION_0, slot, timestamp, node_id_str);
+    }
+    return backup_id;
+}
+
+static int parseBackupIdV0(const char *backup_id_str, int *slot,
+                           long long *timestamp, char *node_id_out,
+                           size_t node_id_size, char *options,
+                           size_t options_size) {
+    int version;
+    char node_id_buf[NODE_ID_MAX_LEN];
+    char options_buf[OPTIONS_MAX_LEN] = {0};
+    
+    /* Try parsing with options first */
+    int n = sscanf(backup_id_str, "v%d:%d:%lld:%63[^:]:%255[^\n]",
+                   &version, slot, timestamp, node_id_buf, options_buf);
+    
+    if (n < 4) {
+        /* Try parsing without options */
+        n = sscanf(backup_id_str, "v%d:%d:%lld:%63[^\n]",
+                   &version, slot, timestamp, node_id_buf);
+        if (n < 4) {
+            return EXTERNAL_ERROR;
+        }
+    }
+    
+    /* Validate version */
+    if (version != BACKUP_ID_VERSION_0) {
+        return EXTERNAL_ERROR;
+    }
+    
+    /* Validate slot range */
+    if (*slot < BACKUP_ID_MIN_SLOT || *slot > BACKUP_ID_MAX_SLOT) {
+        return EXTERNAL_ERROR;
+    }
+    
+    /* Copy node_id to output buffer */
+    strncpy(node_id_out, node_id_buf, node_id_size - 1);
+    node_id_out[node_id_size - 1] = '\0';
+    
+    /* Copy options to output buffer if provided */
+    if (options && options_size > 0) {
+        strncpy(options, options_buf, options_size - 1);
+        options[options_size - 1] = '\0';
+    }
+    
+    return EXTERNAL_SUCCESS;
+}
+
 
 /* Configuration callbacks for set_failure_percent */
 static long long getFailurePercentConfig(const char *name, void *privdata) {
@@ -2140,6 +2214,43 @@ static const char *find_node_id_by_address(ValkeyModuleCtx *ctx, const char *ip_
     
     return NULL;
 }
+/* Test command for backup ID parsing */
+int TestBackupIdCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    if (argc != 2) {
+        ValkeyModule_ReplyWithError(ctx, "Usage: extdata.testbackupid <backup_id>");
+        return VALKEYMODULE_OK;
+    }
+    
+    size_t len;
+    const char *backup_id_str = ValkeyModule_StringPtrLen(argv[1], &len);
+    
+    int slot;
+    long long timestamp;
+    char parsed_node_id[NODE_ID_MAX_LEN];
+    char options[OPTIONS_MAX_LEN];
+    
+    int result = parseBackupIdV0(backup_id_str, &slot, &timestamp,
+                                  parsed_node_id, sizeof(parsed_node_id),
+                                  options, sizeof(options));
+    
+    if (result == EXTERNAL_SUCCESS) {
+        ValkeyModule_ReplyWithArray(ctx, 8);
+        ValkeyModule_ReplyWithSimpleString(ctx, "slot");
+        ValkeyModule_ReplyWithLongLong(ctx, slot);
+        ValkeyModule_ReplyWithSimpleString(ctx, "timestamp");
+        ValkeyModule_ReplyWithLongLong(ctx, timestamp);
+        ValkeyModule_ReplyWithSimpleString(ctx, "node_id");
+        ValkeyModule_ReplyWithSimpleString(ctx, parsed_node_id);
+        ValkeyModule_ReplyWithSimpleString(ctx, "options");
+        ValkeyModule_ReplyWithSimpleString(ctx, options[0] ? options : "");
+    } else {
+        ValkeyModule_ReplyWithError(ctx, "Invalid backup_id format");
+    }
+    
+    return VALKEYMODULE_OK;
+}
+
+/* Module initialization */
 
 /* Module initialization */
 int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {   
@@ -2288,6 +2399,11 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
     if (ValkeyModule_CreateCommand(ctx, "helloextdata1.filter_getslot",
                                    FilterGetSlotCommand, "readonly", 0, 0, 0) == VALKEYMODULE_ERR) {
         ValkeyModule_Log(ctx, "warning", "=== ValkeyModule_CreateCommand filter_getslot FAILED for module: %s ===", module_name);
+        return VALKEYMODULE_ERR;
+    }
+    
+    if (ValkeyModule_CreateCommand(ctx, "extdata.testbackupid", TestBackupIdCommand,
+                                   "readonly", 0, 0, 0) == VALKEYMODULE_ERR) {
         return VALKEYMODULE_ERR;
     }
     

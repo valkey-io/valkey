@@ -157,16 +157,20 @@ void *mutexQueuePeek(mutexQueue *theQueue, bool blocking) {
     return value;
 }
 
-bool mutexQueueRemoveHead(mutexQueue *theQueue, void **value) {
+bool mutexQueueRemoveExpectedHead(mutexQueue *theQueue, void *expected, void **value) {
     mutexQueue *mq = theQueue;
     bool removed = false;
+    void *head = NULL;
 
     pthread_mutex_lock(&mq->mutex);
 
     if (fifoLength(mq->priority_fifo) > 0) {
-        removed = fifoPop(mq->priority_fifo, value);
-    } else if (fifoLength(mq->normal_fifo) > 0) {
-        removed = fifoPop(mq->normal_fifo, value);
+        fifoPeek(mq->priority_fifo, &head);
+        if (head == expected) removed = fifoPop(mq->priority_fifo, value);
+    }
+    if (!removed && fifoLength(mq->normal_fifo) > 0) {
+        fifoPeek(mq->normal_fifo, &head);
+        if (head == expected) removed = fifoPop(mq->normal_fifo, value);
     }
 
     pthread_mutex_unlock(&mq->mutex);

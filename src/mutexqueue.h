@@ -66,9 +66,9 @@ fifo *mutexQueuePopAll(mutexQueue *theQueue, bool blocking);
 /* Retrieves the first item without removing it (or NULL if mutexQueue is empty). */
 void *mutexQueuePeek(mutexQueue *theQueue, bool blocking);
 
-/* Removes the first item from the mutexQueue.
- * Returns true if an item was removed. If false, `value` is not updated. */
-bool mutexQueueRemoveHead(mutexQueue *theQueue, void **value);
+/* Removes `expected` from the head of either internal fifo.
+ * Returns true if `expected` was found at a fifo head and removed. If false, `value` is not updated. */
+bool mutexQueueRemoveExpectedHead(mutexQueue *theQueue, void *expected, void **value);
 
 
 #endif

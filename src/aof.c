@@ -3066,7 +3066,7 @@ int loadSnapshotAofFromRio(rio *r, char *eofmark, int usemark) {
         char first;
 
         if (rioRead(r, &first, 1) == 0) {
-            ret = AOF_OK;
+            ret = AOF_FAILED;
             break;
         }
 
@@ -3119,13 +3119,13 @@ int loadSnapshotAofFromRio(rio *r, char *eofmark, int usemark) {
                 fakeClient->argc = j;
                 freeClientArgv(fakeClient);
                 ret = AOF_FAILED;
-                goto cleanup;
+                break;
             }
             if (!rioReadLineTail(r, buf, sizeof(buf))) {
                 fakeClient->argc = j;
                 freeClientArgv(fakeClient);
                 ret = AOF_FAILED;
-                goto cleanup;
+                break;
             }
             unsigned long blen = strtoul(buf, NULL, 10);
             sds arg;
@@ -3133,7 +3133,7 @@ int loadSnapshotAofFromRio(rio *r, char *eofmark, int usemark) {
                 fakeClient->argc = j;
                 freeClientArgv(fakeClient);
                 ret = AOF_FAILED;
-                goto cleanup;
+                break;
             }
             argv[j] = createObject(OBJ_STRING, arg);
         }
@@ -3146,7 +3146,7 @@ int loadSnapshotAofFromRio(rio *r, char *eofmark, int usemark) {
             sdsfree(err);
             freeClientArgv(fakeClient);
             ret = AOF_FAILED;
-            goto cleanup;
+            break;
         }
 
         fakeClient->cmd = fakeClient->lastcmd = cmd;
@@ -3166,12 +3166,9 @@ int loadSnapshotAofFromRio(rio *r, char *eofmark, int usemark) {
 
     if (fakeClient->flag.multi) {
         ret = AOF_FAILED;
-        goto cleanup;
     }
 
     serverLog(LL_WARNING, "Done loading AOF for replication.");
-
-cleanup:
     if (fakeClient) freeClient(fakeClient);
     server.current_client = old_cur_client;
     server.executing_client = old_exec_client;
@@ -3317,9 +3314,9 @@ int loadSnapshotAofFromPath(const char *path) {
     }
 
     loadingIncrProgress(ftello(fp) - last_progress_report_size);
-    serverLog(LL_NOTICE, "Done loading AOF for replication.");
 
 cleanup:
+    serverLog(LL_NOTICE, "Done loading AOF for replication.");
     if (fakeClient) freeClient(fakeClient);
     server.current_client = old_cur_client;
     server.executing_client = old_exec_client;

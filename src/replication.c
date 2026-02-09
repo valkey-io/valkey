@@ -2765,7 +2765,7 @@ read_from_socket:
     replicaBeforeLoadPrimaryRDB(conn, 1);
     if (server.repl_transfer_format == REPL_SNAPSHOT_AOF) {
         if (replicaLoadPrimarySnapshotAOFFromSocket(conn, eofmark, &usemark) == C_ERR) {
-            serverLog(LL_WARNING, "Failed to load SNAPSHOT AOF");
+            serverLog(LL_WARNING, "Failed to load Snapshot AOF");
             cancelReplicationHandshake(1);
             return;
         }
@@ -4005,8 +4005,8 @@ int syncWithPrimaryHandleSendHandshakeState(connection *conn) {
 
     // we can ignore primary's conditions when sending capa (is_primary_stream_verified=1)
     int send_skip_rdb_checksum_capa = replicationSupportSkipRDBChecksum(conn, useDisklessLoad(), 1);
-    char *argv[9] = {"REPLCONF", "capa", "eof", "capa", "psync2", NULL, NULL, NULL, NULL};
-    size_t lens[9] = {8, 4, 3, 4, 6, 0, 0, 0, 0};
+    char *argv[11] = {"REPLCONF", "capa", "eof", "capa", "psync2", NULL, NULL, NULL, NULL, NULL, NULL};
+    size_t lens[11] = {8, 4, 3, 4, 6, 0, 0, 0, 0, 0, 0};
     int argc = 5;
     if (send_skip_rdb_checksum_capa) {
         argv[argc] = "capa";

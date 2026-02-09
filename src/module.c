@@ -421,6 +421,8 @@ typedef struct ValkeyModuleEventListener {
 } ValkeyModuleEventListener;
 
 list *ValkeyModule_EventListeners; /* Global list of all the active events. */
+static int commandResultSuccessListeners = 0; /* Count of modules listening for command result success. */
+static int commandResultFailureListeners = 0; /* Count of modules listening for command result failure. */
 
 /* Data structures related to the module users */
 
@@ -11684,9 +11686,14 @@ void moduleFireCommandResultEvent(client *c,
                                   int command_failed,
                                   long long duration,
                                   long long dirty) {
-    /* Fast path: skip if no modules are subscribed to any events.
-     * This avoids building the info struct when there are no listeners. */
-    if (listLength(ValkeyModule_EventListeners) == 0) return;
+    /* Fast path: skip if no modules are subscribed to the relevant command
+     * result event. This is an O(1) check using a dedicated counter, avoiding
+     * the cost of argv decoding and struct building when no one is listening. */
+    if (command_failed) {
+        if (commandResultFailureListeners == 0) return;
+    } else {
+        if (commandResultSuccessListeners == 0) return;
+    }
 
     /* Get argv - prefer original_argv if available (before any rewriting) */
     robj **argv = c->original_argv ? c->original_argv : c->argv;
@@ -12596,6 +12603,8 @@ int VM_SubscribeToServerEvent(ValkeyModuleCtx *ctx, ValkeyModuleEvent event, Val
         if (callback == NULL) {
             listDelNode(ValkeyModule_EventListeners, ln);
             zfree(el);
+            if (event.id == VALKEYMODULE_EVENT_COMMAND_RESULT_SUCCESS) commandResultSuccessListeners--;
+            else if (event.id == VALKEYMODULE_EVENT_COMMAND_RESULT_FAILURE) commandResultFailureListeners--;
         } else {
             el->callback = callback; /* Update the callback with the new one. */
         }
@@ -12608,6 +12617,8 @@ int VM_SubscribeToServerEvent(ValkeyModuleCtx *ctx, ValkeyModuleEvent event, Val
     el->event = event;
     el->callback = callback;
     listAddNodeTail(ValkeyModule_EventListeners, el);
+    if (event.id == VALKEYMODULE_EVENT_COMMAND_RESULT_SUCCESS) commandResultSuccessListeners++;
+    else if (event.id == VALKEYMODULE_EVENT_COMMAND_RESULT_FAILURE) commandResultFailureListeners++;
     return VALKEYMODULE_OK;
 }
 

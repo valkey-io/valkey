@@ -24,12 +24,6 @@
                 "type": "integer",
                 "token": "SLOT",
                 "optional": true
-            },
-            {
-                "name": "timestamp",
-                "type": "integer",
-                "token": "TIMESTAMP",
-                "optional": true
             }
         ],
         "reply_schema": {

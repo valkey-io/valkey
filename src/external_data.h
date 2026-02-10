@@ -42,7 +42,7 @@ int externalFilterCallDelFunc(externalDataModuleInstance *fi, int dbid, robj *ke
 int externalDataCallSetReadonlyFunc(externalDataModuleInstance *mi);
 int externalDataCallDropReadonlyFunc(externalDataModuleInstance *mi);
 int externalDataCallDumpFunc(externalDataModuleInstance *mi, int slot, long long timestamp, ValkeyModuleString *target, ValkeyModuleString **backup_id);
-int externalDataCallLoadFunc(externalDataModuleInstance *mi, ValkeyModuleString *backup_id, ValkeyModuleString *source);
+int externalDataCallLoadFunc(externalDataModuleInstance *mi, ValkeyModuleString *backup_id);
 int externalDataCallGetStateFunc(externalDataModuleInstance *mi, ValkeyModuleString *source, int **db_numbers, size_t *num_dbs);
 int externalDataDumpForFullSync(void);
 int externalDataDumpCheckComplete(ValkeyModuleString **backup_id);

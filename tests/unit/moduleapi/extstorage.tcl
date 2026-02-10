@@ -235,6 +235,57 @@ proc gen_data {size} {
     return $data
 }
 
+# Helper to setup a 2-node cluster (1 primary + 1 replica)
+proc setup_two_node_cluster {primary replica} {
+    set primary_port [$primary CONFIG GET port]
+    set primary_port [lindex $primary_port 1]
+    
+    # Get cluster node IDs
+    set primary_id [$primary CLUSTER MYID]
+    set replica_id [$replica CLUSTER MYID]
+    
+    # Set config epochs BEFORE meeting
+    $primary CLUSTER SET-CONFIG-EPOCH 1
+    $replica CLUSTER SET-CONFIG-EPOCH 2
+    
+    # Distribute slots: primary gets all slots
+    for {set slot 0} {$slot < 16384} {incr slot} {
+        $primary CLUSTER ADDSLOTS $slot
+    }
+    
+    # Form cluster: replica meets primary
+    $replica CLUSTER MEET 127.0.0.1 $primary_port
+    after 100
+    
+    # Set replica
+    $replica CLUSTER REPLICATE $primary_id
+    
+    # Wait for cluster to be ready
+    wait_for_condition 50 100 {
+        [catch {$primary CLUSTER INFO}] == 0 &&
+        [string match "*cluster_state:ok*" [$primary CLUSTER INFO]]
+    } else {
+        fail "Cluster primary did not become ready"
+    }
+    
+    wait_for_condition 50 100 {
+        [catch {$replica CLUSTER INFO}] == 0 &&
+        [string match "*cluster_state:ok*" [$replica CLUSTER INFO]]
+    } else {
+        fail "Cluster replica did not become ready"
+    }
+    
+    # Wait for initial replication to complete
+    wait_for_condition 50 100 {
+        [string match "*master_link_status:up*" [$replica INFO replication]]
+    } else {
+        fail "Replica did not connect to primary"
+    }
+    
+    cleanup_external_data_dump $primary
+    cleanup_external_data_dump $replica
+}
+
 start_server [list overrides [list "ext-data-mode" kv "ext-data-id" id67 "loglevel" debug] tags [list "external:skip" "singledb:skip"]] {
     test {Getting keys from storage works} {
         # init
@@ -1205,7 +1256,6 @@ start_server [list overrides [list "ext-data-mode" kv "ext-data-id" id17 "loglev
         # Insert a large number of keys into db0 external storage
         # Using 100,000 keys to demonstrate the O(n) performance issue
         set num_keys 100000
-        puts "Inserting $num_keys keys into db0 external storage..."
         
         set insert_start [clock milliseconds]
         for {set i 0} {$i < $num_keys} {incr i} {
@@ -1213,17 +1263,14 @@ start_server [list overrides [list "ext-data-mode" kv "ext-data-id" id17 "loglev
         }
         set insert_end [clock milliseconds]
         set insert_time [expr {$insert_end - $insert_start}]
-        puts "Insert time: ${insert_time}ms for $num_keys keys"
         
         # Before flushall create a backup
-        puts "Creating backup before flushall..."
         set backup_result [r external_data dump]
         assert {$backup_result != ""}
         
         # Insert just one key into db1 to see the difference
         r select 1
         assert_equal {OK} [r set single_key single_value ext]
-        puts "Inserted 1 key into db1 external storage"
         
         # Verify keys exist in both databases
         r select 0
@@ -1233,18 +1280,13 @@ start_server [list overrides [list "ext-data-mode" kv "ext-data-id" id17 "loglev
         assert_equal single_value [r get single_key ext]
         
         # Test DBSIZE with EXT flag performance
-        puts "Testing DBSIZE with EXT flag performance..."
         r select 0
         
         # Measure DBSIZE with EXT performance
-        puts "Executing DBSIZE EXT..."
         set dbsize_start [clock milliseconds]
         set dbsize_result [r dbsize ext]
         set dbsize_end [clock milliseconds]
         set dbsize_time [expr {$dbsize_end - $dbsize_start}]
-        
-        puts "DBSIZE EXT time: ${dbsize_time}ms for $num_keys keys"
-        puts "DBSIZE EXT result: $dbsize_result"
         
         # Verify DBSIZE EXT returns the correct count
         assert_equal $num_keys $dbsize_result
@@ -1254,17 +1296,11 @@ start_server [list overrides [list "ext-data-mode" kv "ext-data-id" id17 "loglev
             fail "DBSIZE EXT took ${dbsize_time}ms, expected < 500ms"
         }
         
-        # First test SWAPDB performance with large dataset
-        puts "Testing SWAPDB performance with large dataset..."
-        
         # Measure SWAPDB performance
-        puts "Executing SWAPDB..."
         set swap_start [clock milliseconds]
         assert_equal {OK} [r swapdb 0 1]
         set swap_end [clock milliseconds]
         set swap_time [expr {$swap_end - $swap_start}]
-        
-        puts "SWAPDB time: ${swap_time}ms for $num_keys keys"
         
         # Verify swap worked correctly
         r select 0
@@ -1281,17 +1317,13 @@ start_server [list overrides [list "ext-data-mode" kv "ext-data-id" id17 "loglev
         }
         
         # Now test FLUSHDB performance with the large dataset (now in db1)
-        puts "Testing FLUSHDB performance with large dataset..."
         r select 1
         
         # Measure FLUSHDB performance
-        puts "Executing FLUSHDB..."
         set flush_start [clock milliseconds]
         assert_equal {OK} [r flushdb]
         set flush_end [clock milliseconds]
         set flush_time [expr {$flush_end - $flush_start}]
-        
-        puts "FLUSHDB time: ${flush_time}ms for $num_keys keys"
         
         # Verify all keys are deleted
         assert_equal {} [r get perf_key_0 ext]
@@ -1309,14 +1341,12 @@ start_server [list overrides [list "ext-data-mode" kv "ext-data-id" id17 "loglev
         }
         
         # Action: After flushall restore from this backup
-        puts "Restoring from backup after flushall..."
         r select 0
         r external_data load $backup_result
         
         # Ensure that DBSIZE is the correct one without iterating through keys (too slow)
         set dbsize_after_restore [r dbsize ext]
         assert_equal $num_keys $dbsize_after_restore
-        puts "DBSIZE after restore: $dbsize_after_restore (expected: $num_keys)"
 
         cleanup_external_data_dump r
     }
@@ -1338,7 +1368,6 @@ start_cluster 1 0 [list overrides [list "ext-data-mode" kv "ext-data-id" id18 "l
         # Insert a large number of keys into db0 external storage
         # Using 100,000 keys to demonstrate the O(n) performance issue
         set num_keys 100000
-        puts "Inserting $num_keys keys into db0 external storage in cluster mode..."
         
         set insert_start [clock milliseconds]
         for {set i 0} {$i < $num_keys} {incr i} {
@@ -1346,17 +1375,14 @@ start_cluster 1 0 [list overrides [list "ext-data-mode" kv "ext-data-id" id18 "l
         }
         set insert_end [clock milliseconds]
         set insert_time [expr {$insert_end - $insert_start}]
-        puts "Insert time: ${insert_time}ms for $num_keys keys"
         
         # Before flushall create a backup
-        puts "Creating backup before flushall..."
         set backup_result [r external_data dump]
         assert {$backup_result != ""}
 
         # Insert just one key into db1 to see the difference
         r select 1
         assert_equal {OK} [r set single_key single_value ext]
-        puts "Inserted 1 key into db1 external storage"
         
         # Verify keys exist in both databases
         r select 0
@@ -1365,19 +1391,12 @@ start_cluster 1 0 [list overrides [list "ext-data-mode" kv "ext-data-id" id18 "l
         r select 1
         assert_equal single_value [r get single_key ext]
         
-        # Test DBSIZE with EXT flag performance in cluster mode
-        puts "Testing DBSIZE with EXT flag performance in cluster mode..."
-        r select 0
-        
         # Measure DBSIZE with EXT performance
-        puts "Executing DBSIZE EXT in cluster mode..."
+        r select 0
         set dbsize_start [clock milliseconds]
         set dbsize_result [r dbsize ext]
         set dbsize_end [clock milliseconds]
         set dbsize_time [expr {$dbsize_end - $dbsize_start}]
-        
-        puts "DBSIZE EXT time: ${dbsize_time}ms for $num_keys keys in cluster mode"
-        puts "DBSIZE EXT result: $dbsize_result"
         
         # Verify DBSIZE EXT returns the correct count
         assert_equal $num_keys $dbsize_result
@@ -1387,21 +1406,12 @@ start_cluster 1 0 [list overrides [list "ext-data-mode" kv "ext-data-id" id18 "l
             fail "DBSIZE EXT took ${dbsize_time}ms, expected < 500ms in cluster mode"
         }
         
-        # Note: SWAPDB is not allowed in cluster mode, so we skip that test
-        puts "SWAPDB is not allowed in cluster mode, skipping SWAPDB performance test"
-        
-        # Now test FLUSHDB performance with the large dataset (in db0)
-        puts "Testing FLUSHDB performance with large dataset in cluster mode..."
-        r select 0
-        
         # Measure FLUSHDB performance
-        puts "Executing FLUSHDB in cluster mode..."
+        r select 0
         set flush_start [clock milliseconds]
         assert_equal {OK} [r flushdb]
         set flush_end [clock milliseconds]
         set flush_time [expr {$flush_end - $flush_start}]
-        
-        puts "FLUSHDB time: ${flush_time}ms for $num_keys keys in cluster mode"
         
         # Verify all keys are deleted
         assert_equal {} [r get perf_key_0 ext]
@@ -1419,14 +1429,12 @@ start_cluster 1 0 [list overrides [list "ext-data-mode" kv "ext-data-id" id18 "l
         }
 
         # Action: After flushall restore from this backup
-        puts "Restoring from backup after flushall..."
         r select 0
         r external_data load $backup_result
         
         # Ensure that DBSIZE is the correct one without iterating through keys (too slow)
         set dbsize_after_restore [r dbsize ext]
         assert_equal $num_keys $dbsize_after_restore
-        puts "DBSIZE after restore: $dbsize_after_restore (expected: $num_keys)"
 
         cleanup_external_data_dump r
     }
@@ -2236,9 +2244,9 @@ test "SET with EXT flag is replicated to replica" {
     }
 }
 
-test "EXTERNAL_DATA DUMP and LOAD: Partial sync scenario" {
-    start_server [list overrides [list "ext-data-mode" kv "ext-data-id" id29 "loglevel" debug] tags [list "external:skip" "slow"]] {
-        start_server [list overrides [list "ext-data-mode" kv "ext-data-id" id2 "loglevel" debug]] {
+start_server [list overrides [list "ext-data-mode" kv "ext-data-id" id29 "loglevel" debug]] {
+    start_server [list overrides [list "ext-data-mode" kv "ext-data-id" id2 "loglevel" debug]] {
+        test "EXTERNAL_DATA DUMP and LOAD: Partial sync scenario" {
             set primary [srv -1 client]
             set primary_host [srv -1 host]
             set primary_port [srv -1 port]
@@ -2270,7 +2278,7 @@ test "EXTERNAL_DATA DUMP and LOAD: Partial sync scenario" {
                 fail "Replication not started."
             }
 
-            # Just load - no external data init for replica is needed - it's auto-replicated from primary
+            # Load module and initialize external storage on replica
             assert_equal {OK} [$replica module load $extdatamodule1]
             # Select database 0 on replica to match primary
             $replica select 0
@@ -2767,24 +2775,24 @@ start_cluster 1 0 [list overrides [list "ext-data-mode" kv "ext-data-id" id38 "l
     }
 }
 
-start_cluster 1 1 {tags {"external:skip"} overrides {"ext-data-mode" kv "ext-data-id" id39 "loglevel" debug}} {
-    test "EXTERNAL_DATA DUMP and LOAD: Partial sync scenario (cluster mode)" {
-        set extdatamodule1 [file normalize tests/modules/extstorage/extdata1.so]
-        
-        wait_for_cluster_state ok
-        wait_for_cluster_propagation
-        
-        # Get primary and replica nodes
-        set primary [srv 0 client]
-        set replica [srv -1 client]
-        set primary_host [srv 0 host]
-        set primary_port [srv 0 port]
+start_server [list overrides [list "cluster-enabled" yes "cluster-ping-interval" 100 "cluster-node-timeout" 3000 "cluster-databases" 16 "cluster-slot-stats-enabled" yes "ext-data-mode" kv "ext-data-id" id39_primary "loglevel" debug] tags [list "external:skip"]] {
+    start_server [list overrides [list "cluster-enabled" yes "cluster-ping-interval" 100 "cluster-node-timeout" 3000 "cluster-databases" 16 "cluster-slot-stats-enabled" yes "ext-data-mode" kv "ext-data-id" id39_replica "loglevel" debug] tags [list "external:skip"]] {
+        test "EXTERNAL_DATA DUMP and LOAD: Partial sync scenario (cluster mode)" {
+            set extdatamodule1 [file normalize tests/modules/extstorage/extdata1.so]
+            
+            set primary [srv -1 client]
+            set replica [srv 0 client]
+            set primary_host [srv -1 host]
+            set primary_port [srv -1 port]
 
         cleanup_external_data_dump $primary
-        cleanup_external_data_dump $replica
-        
-        # Load module and initialize external storage on primary
-        assert_equal {OK} [$primary module load $extdatamodule1]
+        cleanup_external_data_dump $replica            
+            setup_two_node_cluster $primary $replica
+            
+            wait_for_cluster_propagation
+            
+            # Load module and initialize external storage on primary
+            assert_equal {OK} [$primary module load $extdatamodule1]
         # We don't want to introduce some complex logic, so just create backup on every set here
         assert_equal {OK} [$primary config set helloextdata1.dump_every_write 1]
         assert_equal {OK} [$primary external_data INIT db0 helloextdata1]
@@ -2849,25 +2857,25 @@ start_cluster 1 1 {tags {"external:skip"} overrides {"ext-data-mode" kv "ext-dat
         # Verify cluster state is still ok
         wait_for_cluster_state ok
 
-        cleanup_external_data_dump $primary
-        cleanup_external_data_dump $replica
+            cleanup_external_data_dump $primary
+            cleanup_external_data_dump $replica
+        }
     }
 }
 
-start_cluster 1 1 {tags {"external:skip"} overrides {"ext-data-mode" kv "ext-data-id" id40 "loglevel" debug}} {
-    test "EXTERNAL_DATA DUMP and LOAD: replication (cluster mode)" {
-        set extdatamodule1 [file normalize tests/modules/extstorage/extdata1.so]
-        
-        wait_for_cluster_state ok
-        
-        # Get primary and replica nodes
-        set primary [srv 0 client]
-        set primary_host [srv 0 host]
-        set primary_port [srv 0 port]
-        set replica [srv -1 client]
+start_server [list overrides [list "cluster-enabled" yes "cluster-ping-interval" 100 "cluster-node-timeout" 3000 "cluster-databases" 16 "cluster-slot-stats-enabled" yes "ext-data-mode" kv "ext-data-id" id40_primary "loglevel" debug] tags [list "external:skip"]] {
+    start_server [list overrides [list "cluster-enabled" yes "cluster-ping-interval" 100 "cluster-node-timeout" 3000 "cluster-databases" 16 "cluster-slot-stats-enabled" yes "ext-data-mode" kv "ext-data-id" id40_replica "loglevel" debug] tags [list "external:skip"]] {
+        test "EXTERNAL_DATA DUMP and LOAD: replication (cluster mode)" {
+            set extdatamodule1 [file normalize tests/modules/extstorage/extdata1.so]
+            
+            set primary [srv -1 client]
+            set primary_host [srv -1 host]
+            set primary_port [srv -1 port]
+            set replica [srv 0 client]
 
         cleanup_external_data_dump $primary
         cleanup_external_data_dump $replica
+            setup_two_node_cluster $primary $replica
 
         # Load module and initialize external storage
         assert_equal {OK} [$primary module load $extdatamodule1]
@@ -2910,7 +2918,7 @@ start_cluster 1 1 {tags {"external:skip"} overrides {"ext-data-mode" kv "ext-dat
         assert_equal "yes" [lindex $config_result 1]
         
         # Check primary logs for async dump during replication
-        set primary_log [srv 0 stdout]
+        set primary_log [srv -1 stdout]
         set primary_log_content [exec cat $primary_log]
         assert_match "*External data dump started asynchronously*" $primary_log_content
         
@@ -2922,7 +2930,7 @@ start_cluster 1 1 {tags {"external:skip"} overrides {"ext-data-mode" kv "ext-dat
         }
         
         # Check replica logs for external data load
-        set replica_log [srv -1 stdout]
+        set replica_log [srv 0 stdout]
         set replica_log_content [exec cat $replica_log]
         assert_match "*External data async load initiated*" $replica_log_content
 
@@ -2951,6 +2959,7 @@ start_cluster 1 1 {tags {"external:skip"} overrides {"ext-data-mode" kv "ext-dat
 
         cleanup_external_data_dump $primary
         cleanup_external_data_dump $replica
+        }
     }
 }
 
@@ -3145,8 +3154,8 @@ start_cluster 1 0 [list overrides [list "ext-data-mode" kv "ext-data-id" id43 "l
 }
 
 # Test ext-data-async-load configuration
-start_server {tags {"external:skip"} overrides {"ext-data-mode" kv "ext-data-id" id44 "loglevel" debug "ext-data-async-load" no}} {
-    start_server [list overrides [list "ext-data-mode" kv "ext-data-id" id71 "loglevel" debug "ext-data-async-load" no]] {
+start_server {tags {"external:skip" "wip"} overrides {"ext-data-mode" kv "ext-data-id" id44 "loglevel" debug "ext-data-async-load" no}} {
+    start_server [list overrides [list "ext-data-mode" kv "ext-data-id" id71 "loglevel" debug "ext-data-async-load" no] tags [list "wip"]] {
         test "ext-data-async-load: Sync mode" {
             set primary [srv -1 client]
             set primary_host [srv -1 host]
@@ -3205,17 +3214,17 @@ start_server {tags {"external:skip"} overrides {"ext-data-mode" kv "ext-data-id"
     }
 }
 
-test "ext-data-async-load: Sync mode (cluster)" {
-    start_cluster 1 1 [list overrides [list "ext-data-mode" kv "ext-data-id" id45 "loglevel" debug "ext-data-async-load" no] tags [list "external:skip"]] {
-        set extdatamodule1 [file normalize tests/modules/extstorage/extdata1.so]
-        
-        wait_for_cluster_state ok
-        
-        set primary [srv 0 client]
-        set replica [srv -1 client]
+start_server [list overrides [list "cluster-enabled" yes "cluster-ping-interval" 100 "cluster-node-timeout" 3000 "cluster-databases" 16 "cluster-slot-stats-enabled" yes "ext-data-mode" kv "ext-data-id" id45_primary "loglevel" debug "ext-data-async-load" no] tags [list "external:skip" "wip"]] {
+    start_server [list overrides [list "cluster-enabled" yes "cluster-ping-interval" 100 "cluster-node-timeout" 3000 "cluster-databases" 16 "cluster-slot-stats-enabled" yes "ext-data-mode" kv "ext-data-id" id45_replica "loglevel" debug "ext-data-async-load" no] tags [list "external:skip" "wip"]] {
+        test "ext-data-async-load: Sync mode (cluster)" {
+            set extdatamodule1 [file normalize tests/modules/extstorage/extdata1.so]
+            
+            set primary [srv -1 client]
+            set replica [srv 0 client]
 
         cleanup_external_data_dump $primary
         cleanup_external_data_dump $replica
+            setup_two_node_cluster $primary $replica
         
         # Verify ext-data-async-load is disabled
         set config_result [$replica config get ext-data-async-load]
@@ -3250,12 +3259,13 @@ test "ext-data-async-load: Sync mode (cluster)" {
         }
         
         # Check replica logs for sync load message
-        set replica_log [srv -1 stdout]
+        set replica_log [srv 0 stdout]
         set replica_log_content [exec cat $replica_log]
         assert_match "*loaded synchronously*" $replica_log_content
 
         cleanup_external_data_dump $primary
         cleanup_external_data_dump $replica
+        }
     }
 }
 
@@ -3362,14 +3372,15 @@ start_server [list overrides [list "ext-data-mode" kv "ext-data-id" id47 "loglev
 }
 
 # Test cluster mode with simulated failures
-start_cluster 1 1 [list overrides [list "ext-data-mode" kv "ext-data-id" id48 "loglevel" debug] tags [list "external:skip"]] {
-    set extdatamodule1 [file normalize tests/modules/extstorage/extdata1.so]
-    
-    test "External storage with simulated failures - cluster mode" {
-        wait_for_cluster_state ok
+start_server [list overrides [list "cluster-enabled" yes "cluster-ping-interval" 100 "cluster-node-timeout" 3000 "cluster-databases" 16 "cluster-slot-stats-enabled" yes "ext-data-mode" kv "ext-data-id" id48_primary "loglevel" debug] tags [list "external:skip"]] {
+    start_server [list overrides [list "cluster-enabled" yes "cluster-ping-interval" 100 "cluster-node-timeout" 3000 "cluster-databases" 16 "cluster-slot-stats-enabled" yes "ext-data-mode" kv "ext-data-id" id48_replica "loglevel" debug] tags [list "external:skip"]] {
+        set extdatamodule1 [file normalize tests/modules/extstorage/extdata1.so]
         
-        set primary [srv 0 client]
-        set replica [srv -1 client]
+        test "External storage with simulated failures - cluster mode" {
+            set primary [srv -1 client]
+            set replica [srv 0 client]
+            
+            setup_two_node_cluster $primary $replica
 
         cleanup_external_data_dump $primary
         cleanup_external_data_dump $replica
@@ -3422,6 +3433,7 @@ start_cluster 1 1 [list overrides [list "ext-data-mode" kv "ext-data-id" id48 "l
 
         cleanup_external_data_dump $primary
         cleanup_external_data_dump $replica
+        }
     }
 }
 
@@ -3513,21 +3525,21 @@ start_server [list overrides [list "ext-data-mode" kv "ext-data-id" id49 "loglev
 }
 
 # Test cluster mode with 100% failure rate and replica restart
-start_cluster 1 1 [list overrides [list "ext-data-mode" kv "ext-data-id" id50 "loglevel" debug] tags [list "external:skip" "slow"]] {
-    set extdatamodule1 [file normalize tests/modules/extstorage/extdata1.so]
-    
-    test "External storage with 100% failures and restart - cluster mode" {
-        wait_for_cluster_state ok
-        
-        set primary_id 0
-        set replica_id -1
-        set primary [srv $primary_id client]
-        set primary_host [srv $primary_id host]
-        set primary_port [srv $primary_id port]
-        set replica [srv $replica_id client]
+start_server [list overrides [list "cluster-enabled" yes "cluster-ping-interval" 100 "cluster-node-timeout" 3000 "cluster-databases" 16 "cluster-slot-stats-enabled" yes "ext-data-mode" kv "ext-data-id" id50_primary "loglevel" debug] tags [list "external:skip" "slow"]] {
+    start_server [list overrides [list "cluster-enabled" yes "cluster-ping-interval" 100 "cluster-node-timeout" 3000 "cluster-databases" 16 "cluster-slot-stats-enabled" yes "ext-data-mode" kv "ext-data-id" id50_replica "loglevel" debug] tags [list "external:skip" "slow"]] {
+        set extdatamodule1 [file normalize tests/modules/extstorage/extdata1.so]
+
+        test "External storage with 100% failures and restart - cluster mode" {
+            set primary_id -1
+            set replica_id 0
+            set primary [srv $primary_id client]
+            set primary_host [srv $primary_id host]
+            set primary_port [srv $primary_id port]
+            set replica [srv $replica_id client]
 
         cleanup_external_data_dump $primary
         cleanup_external_data_dump $replica
+            setup_two_node_cluster $primary $replica
         
         # Load module on primary without failures
         assert_equal {OK} [$primary module load $extdatamodule1]
@@ -3600,6 +3612,7 @@ start_cluster 1 1 [list overrides [list "ext-data-mode" kv "ext-data-id" id50 "l
 
         cleanup_external_data_dump $primary
         cleanup_external_data_dump $replica
+        }
     }
 }
 
@@ -3728,6 +3741,8 @@ test {Cluster slot migration maintains node_id and data integrity} {
 
 start_server [list overrides [list "ext-data-mode" kv "ext-data-id" id52 "loglevel" notice] tags [list "external:skip"]] {
     test {Slot values in standalone mode} {
+        cleanup_external_data_dump r
+
         set extdatamodule1 [file normalize tests/modules/extstorage/extdata1.so]
         r MODULE LOAD $extdatamodule1
         r EXTERNAL_DATA INIT db0 helloextdata1
@@ -3746,6 +3761,8 @@ start_cluster 1 0 [list overrides [list "ext-data-mode" kv "ext-data-id" id53 "l
     set extdatamodule1 [file normalize tests/modules/extstorage/extdata1.so]
     
     test {Slot values in cluster mode} {
+        cleanup_external_data_dump r
+
         wait_for_cluster_state ok
         r MODULE LOAD $extdatamodule1
         r EXTERNAL_DATA INIT db0 helloextdata1
@@ -3784,37 +3801,37 @@ start_server [list overrides [list "ext-data-mode" kv "ext-data-id" id55 "loglev
     r MODULE LOAD $extdatamodule1
 
     test "Backup ID v0 encoding - full dump" {
-        set result [r extdata.testbackupid "v0:-1:0:node-abc123"]
+        set result [r extdata.testbackupid "v0:node-abc123:-1:0"]
         assert_equal [dict get $result slot] -1
         assert_equal [dict get $result timestamp] 0
         assert_equal [dict get $result node_id] "node-abc123"
     }
 
     test "Backup ID v0 encoding - slot dump" {
-        set result [r extdata.testbackupid "v0:5:1706265600:node-def456"]
+        set result [r extdata.testbackupid "v0:node-def456:5:1706265600"]
         assert_equal [dict get $result slot] 5
         assert_equal [dict get $result timestamp] 1706265600
         assert_equal [dict get $result node_id] "node-def456"
     }
 
     test "Backup ID v0 encoding - with options" {
-        set result [r extdata.testbackupid "v0:10:1706265600:node-xyz:compress=lz4"]
+        set result [r extdata.testbackupid "v0:node-xyz:10:1706265600:compress=lz4"]
         assert_equal [dict get $result slot] 10
         assert_equal [dict get $result options] "compress=lz4"
     }
 
     test "Backup ID v0 - invalid version rejected" {
-        catch {r extdata.testbackupid "v1:5:1706265600:node-abc"} err
+        catch {r extdata.testbackupid "v1:node-abc:5:1706265600"} err
         assert_match "*Invalid backup_id format*" $err
     }
 
     test "Backup ID v0 - invalid slot rejected" {
-        catch {r extdata.testbackupid "v0:16384:1706265600:node-abc"} err
+        catch {r extdata.testbackupid "v0:node-abc:16384:1706265600"} err
         assert_match "*Invalid backup_id format*" $err
     }
 
     test "Backup ID v0 - round-trip consistency" {
-        set result [r extdata.testbackupid "v0:100:1706265600:node-test123"]
+        set result [r extdata.testbackupid "v0:node-test123:100:1706265600"]
         assert_equal [dict get $result slot] 100
         assert_equal [dict get $result timestamp] 1706265600
         assert_equal [dict get $result node_id] "node-test123"
@@ -3822,23 +3839,23 @@ start_server [list overrides [list "ext-data-mode" kv "ext-data-id" id55 "loglev
 
     test "Backup ID v0 - boundary slot values" {
         # Test minimum valid slot
-        set result [r extdata.testbackupid "v0:-1:0:node-test"]
+        set result [r extdata.testbackupid "v0:node-test:-1:0"]
         assert_equal [dict get $result slot] -1
         
         # Test maximum valid slot
-        set result [r extdata.testbackupid "v0:16383:0:node-test"]
+        set result [r extdata.testbackupid "v0:node-test:16383:0"]
         assert_equal [dict get $result slot] 16383
     }
 
     test "Backup ID v0 - slot 0 valid" {
-        set result [r extdata.testbackupid "v0:0:0:node-test"]
+        set result [r extdata.testbackupid "v0:node-test:0:0"]
         assert_equal [dict get $result slot] 0
     }
 
     test "Backup ID v0 - negative timestamp accepted" {
         # Negative timestamp should still parse (implementation dependent)
         # This documents current behavior
-        set result [r extdata.testbackupid "v0:5:-1:node-test"]
+        set result [r extdata.testbackupid "v0:node-test:5:-1"]
         assert_equal [dict get $result slot] 5
         assert_equal [dict get $result timestamp] -1
     }
@@ -3861,15 +3878,15 @@ start_server [list overrides [list "ext-data-mode" kv "ext-data-id" id56 "loglev
         assert {$dump_result != ""}
         
         # Parse backup_id from the dump result
-        # Expected format: v0:slot:timestamp:node_id[:options]
+        # Expected format: v0:node_id:slot:timestamp[:options]
         set parts [split $dump_result ":"]
         assert {[llength $parts] >= 4}
         
         # Verify it's version 0
         assert_equal [lindex $parts 0] "v0"
         
-        # Extract node_id (4th field)
-        set node_id [lindex $parts 3]
+        # Extract node_id (2nd field)
+        set node_id [lindex $parts 1]
         
         # Verify node_id matches the configured ext-data-id
         assert_equal "id56" $node_id
@@ -3895,8 +3912,8 @@ start_server [list overrides [list "ext-data-mode" kv "ext-data-id" id56 "loglev
         # Verify it's version 0
         assert_equal [lindex $parts 0] "v0"
         
-        # Extract slot (2nd field)
-        set slot [lindex $parts 1]
+        # Extract slot (3rd field)
+        set slot [lindex $parts 2]
         
         # Verify backup_id contains the correct slot
         assert_equal $slot "12182"
@@ -4035,7 +4052,7 @@ start_cluster 1 0 [list overrides [list "ext-data-mode" kv "ext-data-id" test_no
     }
 }
 
-start_server [list overrides [list "ext-data-mode" kv "ext-data-id" id100 "loglevel" debug] tags [list "external:skip" "wip"]] {
+start_server [list overrides [list "ext-data-mode" kv "ext-data-id" id100 "loglevel" debug] tags [list "external:skip"]] {
     set testmodule [file normalize tests/modules/extstorage/extdata1.so]
     
     test "LOAD auto-extracts node_id from backup_id" {
@@ -4068,7 +4085,7 @@ start_server [list overrides [list "ext-data-mode" kv "ext-data-id" id100 "logle
     }
 }
 
-start_server [list overrides [list "ext-data-mode" kv "ext-data-id" id101 "loglevel" debug] tags [list "external:skip" "wip"]] {
+start_server [list overrides [list "ext-data-mode" kv "ext-data-id" id101 "loglevel" debug] tags [list "external:skip"]] {
     set testmodule [file normalize tests/modules/extstorage/extdata1.so]
     
     test "LOAD from cross-node backup via file copy" {
@@ -4094,8 +4111,14 @@ start_server [list overrides [list "ext-data-mode" kv "ext-data-id" id101 "logle
         set target_node_id "node-B"
         exec cp -r "/tmp/external_data/${source_node_id}" "/tmp/external_data/${target_node_id}"
         
+        # Rename files to use target node_id in filename
+        foreach file [glob -nocomplain "/tmp/external_data/${target_node_id}/db0/*_v0:${source_node_id}:*.dat"] {
+            set new_file [string map [list ":${source_node_id}:" ":${target_node_id}:"] $file]
+            exec mv $file $new_file
+        }
+        
         # Create new backup_id pointing to node-B
-        set cross_node_backup_id "v0:${slot}:${timestamp}:${target_node_id}"
+        set cross_node_backup_id "v0:${target_node_id}:${slot}:${timestamp}"
         
         # Clear local data
         r flushall
@@ -4110,7 +4133,7 @@ start_server [list overrides [list "ext-data-mode" kv "ext-data-id" id101 "logle
     }
 }
 
-start_server [list overrides [list "ext-data-mode" kv "ext-data-id" id102 "loglevel" debug] tags [list "external:skip" "wip"]] {
+start_server [list overrides [list "ext-data-mode" kv "ext-data-id" id102 "loglevel" debug] tags [list "external:skip"]] {
     set testmodule [file normalize tests/modules/extstorage/extdata1.so]
     
     test "LOAD fails with invalid backup_id format" {
@@ -4126,13 +4149,13 @@ start_server [list overrides [list "ext-data-mode" kv "ext-data-id" id102 "logle
         catch {r external_data load "invalid_format_123"} err
         
         # Assert error is thrown
-        assert_match "*invalid*" $err
+        assert_match "*Failed to load backup*" $err
         
         cleanup_external_data_dump r
     }
 }
 
-start_server [list overrides [list "ext-data-mode" kv "ext-data-id" id103 "loglevel" debug] tags [list "external:skip" "wip"]] {
+start_server [list overrides [list "ext-data-mode" kv "ext-data-id" id103 "loglevel" debug] tags [list "external:skip"]] {
     set testmodule [file normalize tests/modules/extstorage/extdata1.so]
     
     test "LOAD fails when source node directory missing" {

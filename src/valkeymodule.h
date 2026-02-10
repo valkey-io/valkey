@@ -1496,19 +1496,13 @@ typedef int (*ValkeyModuleExternalStorageDumpFunc)(
  *
  * - `backup_id`: the backup identifier to restore from (NULL for latest).
  *
- * - `source`: the source instance address/id to load from (NULL for local instance).
- *             When called from externalDataLoadCommand, this is NULL (loading from local).
- *             When called from bioExternalDataLoadForFullSync on a replica, this contains
- *             the primary's address/id. On primary, this should be NULL (error case).
- *
  * Returns VALKEYMODULE_OK on success, VALKEYMODULE_ERR on failure.
  */
 typedef int (*ValkeyModuleExternalStorageLoadFunc)(
     ValkeyModuleCtx *module_ctx,
     ValkeyModuleExternalStorageCtx *storage_ctx,
     int dbid,
-    ValkeyModuleString *backup_id,
-    ValkeyModuleString *source);
+    ValkeyModuleString *backup_id);
 
 /* The callback function called when `get_state` function is called in this storage.
  * This allows the module to report which databases should be initialized. */
@@ -1533,8 +1527,7 @@ typedef int (*ValkeyModuleExternalFilterLoadFunc)(
     ValkeyModuleCtx *module_ctx,
     ValkeyModuleExternalFilterCtx *filter_ctx,
     int dbid,
-    ValkeyModuleString *backup_id,
-    ValkeyModuleString *source);
+    ValkeyModuleString *backup_id);
 
 /* Current ABI version for external storage modules. */
 #define VALKEYMODULE_EXTERNAL_STORAGE_ABI_VERSION 1UL
@@ -1586,12 +1579,19 @@ typedef struct ValkeyModuleExternalStorageMethods {
 
     /* The callback function called to free a snapshot. */
     void (*free_snapshot)(ValkeyModuleCtx *module_ctx, ValkeyModuleExternalStorageCtx *storage_ctx, void *snapshot);
-
-    /* The callback function to get node_id by ip:port address.
-     * If ip_port is empty string "" or NULL, returns the node_id of the current node.
-     * Otherwise, looks up the node_id for the given ip:port address.
+    
+    /* Get backup_id for loading data from a specific address.
+     * Used by replicas to construct the correct backup_id format for loading
+     * from primary's backups.
+     *
+     * Parameters:
+     * - ctx: The module context
+     * - ip_port: The address in "ip:port" format
+     *
+     * Returns a backup_id string (e.g., "v0:-1:0:node_id") that can be used
+     * to load data from that address's backup directory.
      * Returns NULL if the address is not found in the mapping. */
-    const char *(*get_node_id_by_address)(ValkeyModuleCtx *ctx, const char *ip_port);
+    const char *(*get_backup_id)(ValkeyModuleCtx *ctx, const char *ip_port);
 } ValkeyModuleExternalStorageMethodsV1;
 
 #define ValkeyModuleExternalStorageMethods ValkeyModuleExternalStorageMethodsV1

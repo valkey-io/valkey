@@ -420,7 +420,7 @@ typedef struct ValkeyModuleEventListener {
     ValkeyModuleEventCallback callback;
 } ValkeyModuleEventListener;
 
-list *ValkeyModule_EventListeners; /* Global list of all the active events. */
+list *ValkeyModule_EventListeners;            /* Global list of all the active events. */
 static int commandResultSuccessListeners = 0; /* Count of modules listening for command result success. */
 static int commandResultFailureListeners = 0; /* Count of modules listening for command result failure. */
 
@@ -12603,8 +12603,10 @@ int VM_SubscribeToServerEvent(ValkeyModuleCtx *ctx, ValkeyModuleEvent event, Val
         if (callback == NULL) {
             listDelNode(ValkeyModule_EventListeners, ln);
             zfree(el);
-            if (event.id == VALKEYMODULE_EVENT_COMMAND_RESULT_SUCCESS) commandResultSuccessListeners--;
-            else if (event.id == VALKEYMODULE_EVENT_COMMAND_RESULT_FAILURE) commandResultFailureListeners--;
+            if (event.id == VALKEYMODULE_EVENT_COMMAND_RESULT_SUCCESS)
+                commandResultSuccessListeners--;
+            else if (event.id == VALKEYMODULE_EVENT_COMMAND_RESULT_FAILURE)
+                commandResultFailureListeners--;
         } else {
             el->callback = callback; /* Update the callback with the new one. */
         }
@@ -12617,8 +12619,10 @@ int VM_SubscribeToServerEvent(ValkeyModuleCtx *ctx, ValkeyModuleEvent event, Val
     el->event = event;
     el->callback = callback;
     listAddNodeTail(ValkeyModule_EventListeners, el);
-    if (event.id == VALKEYMODULE_EVENT_COMMAND_RESULT_SUCCESS) commandResultSuccessListeners++;
-    else if (event.id == VALKEYMODULE_EVENT_COMMAND_RESULT_FAILURE) commandResultFailureListeners++;
+    if (event.id == VALKEYMODULE_EVENT_COMMAND_RESULT_SUCCESS)
+        commandResultSuccessListeners++;
+    else if (event.id == VALKEYMODULE_EVENT_COMMAND_RESULT_FAILURE)
+        commandResultFailureListeners++;
     return VALKEYMODULE_OK;
 }
 

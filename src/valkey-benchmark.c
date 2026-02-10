@@ -583,6 +583,24 @@ static void resetClient(client c) {
     c->pending = config.pipeline * c->seqlen;
 }
 
+/* Scan buffer for {tag} placeholders and store positions */
+static void scanClusterTags(client c, char *buffer_start) {
+    if (!config.cluster_mode) return;
+
+    c->staglen = 0;
+    char *p = buffer_start;
+    while ((p = strstr(p, "{tag}")) != NULL) {
+        if (c->staglen >= c->stagfree) {
+            size_t new_size = c->stagfree ? c->stagfree * 2 : RANDPTR_INITIAL_SIZE;
+            c->stagptr = zrealloc(c->stagptr, new_size * sizeof(char *));
+            c->stagfree = new_size - c->staglen;
+        }
+        c->stagptr[c->staglen++] = p;
+        c->stagfree--;
+        p += 5;
+    }
+}
+
 static void setClusterKeyHashTag(client c) {
     assert(c->thread_id >= 0);
     clusterNode *node = c->cluster_node;
@@ -895,6 +913,11 @@ static void writeHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
                 c->obuf = sdscatlen(c->obuf, complete_cmd, sdslen(complete_cmd));
                 sdsfree(complete_cmd);
             }
+
+            /* Scan generated commands for {tag} in cluster mode */
+            if (config.cluster_mode && c->stagptr) {
+                scanClusterTags(c, c->obuf + c->prefixlen);
+            }
         } else {
             /* Standard mode */
             if (config.replace_placeholders) {
@@ -1084,20 +1107,9 @@ static client createClient(char *cmd, int len, int seqlen, client from, int thre
                 c->stagptr[j] += c->prefixlen - from->prefixlen;
             }
         } else {
-            char *p = c->obuf;
-
-            c->staglen = 0;
             c->stagfree = RANDPTR_INITIAL_SIZE;
             c->stagptr = zmalloc(sizeof(char *) * c->stagfree);
-            while ((p = strstr(p, "{tag}")) != NULL) {
-                if (c->stagfree == 0) {
-                    c->stagptr = zrealloc(c->stagptr, sizeof(char *) * c->staglen * 2);
-                    c->stagfree += c->staglen;
-                }
-                c->stagptr[c->staglen++] = p;
-                c->stagfree--;
-                p += 5; /* 5 is strlen("{tag}"). */
-            }
+            scanClusterTags(c, c->obuf);
         }
     }
     aeEventLoop *el = NULL;

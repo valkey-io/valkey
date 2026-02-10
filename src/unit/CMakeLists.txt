@@ -1,7 +1,7 @@
 project(valkey-unit-tests)
 
 file(GLOB UNIT_TEST_SRCS "${CMAKE_CURRENT_LIST_DIR}/*.c")
-set(UNIT_TEST_SRCS "${UNIT_TEST_SRCS}")
+list(APPEND UNIT_TEST_SRCS "${CMAKE_SOURCE_DIR}/src/valkey-benchmark-dataset.c")
 
 get_valkey_server_linker_option(VALKEY_SERVER_LDFLAGS)
 
@@ -23,7 +23,7 @@ add_library(valkeylib STATIC ${VALKEY_SERVER_SRCS})
 target_compile_options(valkeylib PRIVATE "${COMPILE_FLAGS}")
 target_compile_definitions(valkeylib PRIVATE "${COMPILE_DEFINITIONS}")
 
-add_executable(valkey-unit-tests ${UNIT_TEST_SRCS} ${BENCHMARK_DATASET_SRCS})
+add_executable(valkey-unit-tests ${UNIT_TEST_SRCS})
 target_compile_options(valkey-unit-tests PRIVATE "${COMPILE_FLAGS}")
 target_compile_definitions(valkey-unit-tests PRIVATE "${COMPILE_DEFINITIONS}")
 add_dependencies(valkey-unit-tests generate_test_files_h)

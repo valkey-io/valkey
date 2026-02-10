@@ -1927,6 +1927,7 @@ struct valkeyServer {
     long long stat_total_writes_processed;             /* Total number of write events processed */
     long long stat_client_qbuf_limit_disconnections;   /* Total number of clients reached query buf length limit */
     long long stat_client_outbuf_limit_disconnections; /* Total number of clients reached output buf length limit */
+    long long stat_proto_max_bulk_len_exceeded;        /* Total number of proto-max-bulk-len violations */
     long long stat_total_prefetch_entries;             /* Total number of prefetched dict entries */
     long long stat_total_prefetch_batches;             /* Total number of prefetched batches */
     /* The following two are used to track instantaneous metrics, like

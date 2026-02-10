@@ -49,6 +49,7 @@ static int checkStringLength(client *c, long long size, long long append) {
     /* Test configured max-bulk-len represending a limit of the biggest string object,
      * and also test for overflow. */
     if (total > server.proto_max_bulk_len || total < size || total < append) {
+        server.stat_proto_max_bulk_len_exceeded++;
         addReplyError(c, "string exceeds maximum allowed size (proto-max-bulk-len)");
         return C_ERR;
     }
@@ -762,6 +763,7 @@ void lcsCommand(client *c) {
     uint32_t *lcs = NULL;
     if (lcsalloc < SIZE_MAX && lcsalloc / lcssize == sizeof(uint32_t)) {
         if (lcsalloc > (size_t)server.proto_max_bulk_len) {
+            server.stat_proto_max_bulk_len_exceeded++;
             addReplyError(c, "Insufficient memory, transient memory for LCS exceeds proto-max-bulk-len");
             goto cleanup;
         }

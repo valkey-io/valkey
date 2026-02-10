@@ -3627,7 +3627,11 @@ static int parseMultibulk(client *c,
 
             size_t bulklen_slen = newline - (c->querybuf + c->qb_pos + 1);
             ok = string2ll(c->querybuf + c->qb_pos + 1, bulklen_slen, &ll);
-            if (!ok || ll < 0 || (!(is_replicated) && ll > server.proto_max_bulk_len)) {
+            if (!ok || ll < 0) {
+                return READ_FLAGS_ERROR_MBULK_INVALID_BULK_LEN;
+            }
+            if (!(is_replicated) && ll > server.proto_max_bulk_len) {
+                server.stat_proto_max_bulk_len_exceeded++;
                 return READ_FLAGS_ERROR_MBULK_INVALID_BULK_LEN;
             } else if (ll > 16384 && auth_required) {
                 return READ_FLAGS_ERROR_UNAUTHENTICATED_BULK_LEN;

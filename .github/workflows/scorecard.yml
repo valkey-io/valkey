@@ -1,4 +1,4 @@
-name: Scorecard supply-chain security
+name: OpenSSF Scorecard supply-chain security
 on:
   push:
     branches: [unstable]

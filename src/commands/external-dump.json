@@ -30,12 +30,6 @@
                 "type": "integer",
                 "token": "TIMESTAMP",
                 "optional": true
-            },
-            {
-                "name": "target",
-                "type": "string",
-                "token": "TARGET",
-                "optional": true
             }
         ],
         "reply_schema": {

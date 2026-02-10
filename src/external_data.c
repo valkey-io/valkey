@@ -1167,7 +1167,7 @@ void externalDataDebugCommand(client *c) {
 }
 
 /*
- * EXTERNAL_DATA DUMP [SLOT <slot>] [TIMESTAMP <timestamp>] [TARGET <target>]
+ * EXTERNAL_DATA DUMP [SLOT <slot>] [TIMESTAMP <timestamp>]
  *
  * Dumps external data for backup or replication (all databases at once)
  * Arguments can be specified in any order
@@ -1183,7 +1183,6 @@ void externalDataDumpCommand(client *c) {
     /* Parse optional arguments in any order */
     int slot = EXTERNAL_ALL_SLOTS;
     long long timestamp = 0;  /* 0 means full dump from beginning of time */
-    ValkeyModuleString *target = NULL;
 
     /* Parse arguments - they can appear in any order */
     for (int j = 2; j < c->argc; j++) {
@@ -1199,9 +1198,6 @@ void externalDataDumpCommand(client *c) {
             if (getLongLongFromObjectOrReply(c, c->argv[j+1], &timestamp, NULL) != C_OK) {
                 return;
             }
-            j++; /* Skip the value */
-        } else if (!strcasecmp(arg, "target") && remaining >= 1) {
-            target = c->argv[j+1];
             j++; /* Skip the value */
         } else {
             addReplyErrorFormat(c, "Unknown or incomplete argument: %s", arg);
@@ -1223,8 +1219,8 @@ void externalDataDumpCommand(client *c) {
     externalDbData *dbData = dictGetVal(de);
     ValkeyModuleString *backup_id = NULL;
 
-    /* Call the dump function - it will dump all databases */
-    int result = externalDataCallDumpFunc(dbData->module_instance, slot, timestamp, target, &backup_id);
+    /* Call the dump function - it will dump all databases, using local node_id */
+    int result = externalDataCallDumpFunc(dbData->module_instance, slot, timestamp, NULL, &backup_id);
 
     if (result != EXTERNAL_SUCCESS || backup_id == NULL) {
         addReplyError(c, "Failed to create backup");

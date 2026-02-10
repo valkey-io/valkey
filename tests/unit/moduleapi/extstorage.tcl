@@ -3877,30 +3877,6 @@ start_server [list overrides [list "ext-data-mode" kv "ext-data-id" id56 "loglev
         cleanup_external_data_dump r
     }
     
-    test "DUMP with explicit TARGET parameter (node_id)" {
-        cleanup_external_data_dump r
-        
-        # Set a key
-        r select 0
-        assert_equal {OK} [r set foo bar ext]
-        
-        # Execute EXTERNAL_DATA DUMP with TARGET parameter
-        set dump_result [r external_data dump TARGET "node-target123"]
-        assert {$dump_result != ""}
-        
-        # Parse backup_id from the dump result
-        set parts [split $dump_result ":"]
-        assert {[llength $parts] >= 4}
-        
-        # Extract node_id (4th field)
-        set node_id [lindex $parts 3]
-        
-        # Verify backup_id contains the target node_id
-        assert_equal $node_id "node-target123"
-        
-        cleanup_external_data_dump r
-    }
-    
     test "DUMP with SLOT parameter" {
         cleanup_external_data_dump r
         
@@ -3924,6 +3900,136 @@ start_server [list overrides [list "ext-data-mode" kv "ext-data-id" id56 "loglev
         
         # Verify backup_id contains the correct slot
         assert_equal $slot "12182"
+        
+        cleanup_external_data_dump r
+    }
+}
+
+start_cluster 1 0 [list overrides [list "ext-data-mode" kv "ext-data-id" test_node_123 "loglevel" debug] tags [list "external:skip"]] {
+    set extdatamodule1 [file normalize tests/modules/extstorage/extdata1.so]
+
+    test "DUMP command uses local node_id in backup_id" {
+        wait_for_cluster_state ok
+        cleanup_external_data_dump r
+        
+        # Load module and init
+        catch {r module load $extdatamodule1}
+        catch {r external_data INIT db0 helloextdata1}
+        r flushall
+        
+        # SET a key with external storage
+        r select 0
+        assert_equal {OK} [r set mykey "test_value" ext]
+        
+        # Execute DUMP
+        set backup_id [r external_data dump]
+        
+        # Verify backup_id is not empty
+        assert {$backup_id ne ""}
+        
+        # Parse backup_id using extdata.testbackupid
+        set parsed [r extdata.testbackupid $backup_id]
+        set backup_node_id [dict get $parsed node_id]
+        
+        # Get local node_id from STATS
+        set local_node_id [r external_data stats nodeid]
+        
+        # Verify the node_id in backup_id matches local node's ID
+        assert_equal $backup_node_id $local_node_id
+        
+        cleanup_external_data_dump r
+    }
+
+
+    test "DUMP creates files in local node directory" {
+        wait_for_cluster_state ok
+        cleanup_external_data_dump r
+        
+        # Ensure module is loaded and db initialized
+        catch {r module load $extdatamodule1}
+        catch {r external_data INIT db0 helloextdata1}
+        r flushall
+        
+        # Set a key
+        r select 0
+        assert_equal {OK} [r set mykey "test_value" ext]
+        
+        # Execute DUMP
+        set backup_id [r external_data dump]
+        
+        # Extract node_id from returned backup_id
+        set parsed [r extdata.testbackupid $backup_id]
+        set node_id [dict get $parsed node_id]
+        
+        # Verify files exist in /tmp/external_data/<node_id>/db0/*.dat
+        set file_path "/tmp/external_data/${node_id}/db0"
+        assert {[file exists $file_path]}
+        
+        # Check that .dat files exist
+        set dat_files [glob -nocomplain ${file_path}/*.dat]
+        assert {[llength $dat_files] > 0}
+        
+        cleanup_external_data_dump r
+    }
+
+
+    test "DUMP with SLOT parameter uses local node_id" {
+        wait_for_cluster_state ok
+        cleanup_external_data_dump r
+        
+        # Ensure module is loaded and db initialized
+        catch {r module load $extdatamodule1}
+        catch {r external_data INIT db0 helloextdata1}
+        r flushall
+        
+        # Set a key that hashes to slot 12182 (foo hashes to this slot)
+        r select 0
+        assert_equal {OK} [r set foo "test_value" ext]
+        
+        # Execute DUMP with SLOT parameter
+        set backup_id [r external_data dump SLOT 12182]
+        
+        # Parse backup_id
+        set parsed [r extdata.testbackupid $backup_id]
+        
+        # Verify backup_id contains correct slot (12182)
+        assert_equal [dict get $parsed slot] "12182"
+        
+        # Get local node_id from STATS
+        set local_node_id [r external_data stats nodeid]
+        
+        # Verify node_id is still the local node's ID
+        assert_equal [dict get $parsed node_id] $local_node_id
+        
+        cleanup_external_data_dump r
+    }
+
+
+    test "Multiple DUMPs to same node directory" {
+        wait_for_cluster_state ok
+        cleanup_external_data_dump r
+        
+        # Ensure module is loaded and db initialized
+        catch {r module load $extdatamodule1}
+        catch {r external_data INIT db0 helloextdata1}
+        r flushall
+        
+        # Create first backup with key1
+        r select 0
+        assert_equal {OK} [r set key1 "value1" ext]
+        set backup_id1 [r external_data dump]
+        set parsed1 [r extdata.testbackupid $backup_id1]
+        
+        # Create second backup with key2
+        assert_equal {OK} [r set key2 "value2" ext]
+        set backup_id2 [r external_data dump]
+        set parsed2 [r extdata.testbackupid $backup_id2]
+        
+        # Verify both backups use the same node_id (local node)
+        assert_equal [dict get $parsed1 node_id] [dict get $parsed2 node_id]
+        
+        # Note: timestamps may be the same if both DUMPs are from the same backup cycle
+        # This is expected behavior - same cycle = same timestamp = same data state
         
         cleanup_external_data_dump r
     }

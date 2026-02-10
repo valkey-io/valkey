@@ -31,6 +31,11 @@ const char *module_name = "helloextdata1";
 /* Maximum length for backup options string */
 #define OPTIONS_MAX_LEN 256
 
+/* Directory path buffer sizes */
+#define SERVER_DIR_MAX_LEN 2048
+#define DB_DIR_MAX_LEN 4096
+#define FILENAME_MAX_LEN 5120
+
 /* Backup ID v0 format constants */
 #define BACKUP_ID_VERSION_0 0
 #define BACKUP_ID_MIN_SLOT -1
@@ -1027,9 +1032,13 @@ static int filterDumpFunction(ValkeyModuleCtx *module_ctx,
         ValkeyModule_Log(module_ctx, "notice", "filterDumpFunction: using snapshot for dump of db%d", dbid);
     }
     
-    /* Extract node_id from target parameter if provided, otherwise use local node_id */
+    /* Always use local node_id for DUMP operations.
+     * This ensures backups are always created on the local node,
+     * simplifying the architecture and avoiding cross-node complexity.
+     * The TARGET parameter is intentionally not supported for dumps. */
     char target_node_id[NODE_ID_MAX_LEN];
-    resolve_node_id(module_ctx, target, node_id, target_node_id, sizeof(target_node_id), "filterDumpFunction");
+    snprintf(target_node_id, sizeof(target_node_id), "%s", node_id);
+    ValkeyModule_Log(module_ctx, "notice", "filterDumpFunction: using local node_id=%s", target_node_id);
     
     /* Handle backup_id: use passed value if initialized, otherwise calculate using current time */
     char backup_id_str[BACKUP_ID_MAX_LEN];
@@ -1037,7 +1046,7 @@ static int filterDumpFunction(ValkeyModuleCtx *module_ctx,
                             "filterDumpFunction", backup_id_str);
     
     /* Create directory for this server instance */
-    char server_dir[2048];
+    char server_dir[SERVER_DIR_MAX_LEN];
     snprintf(server_dir, sizeof(server_dir), "/tmp/external_data/%s", target_node_id);
     mkdir("/tmp/external_data", 0755);
     mkdir(server_dir, 0755);
@@ -1058,12 +1067,12 @@ static int filterDumpFunction(ValkeyModuleCtx *module_ctx,
         }
         
         /* Create database-specific directory */
-        char db_dir[4096];
+        char db_dir[DB_DIR_MAX_LEN];
         snprintf(db_dir, sizeof(db_dir), "%s/db%d", server_dir, dbid);
         mkdir(db_dir, 0755);
         
         /* Dump filter data to database-specific file */
-        char filter_filename[5120];
+        char filter_filename[FILENAME_MAX_LEN];
         snprintf(filter_filename, sizeof(filter_filename), "%s/%s_filter_%s.dat", db_dir, module_name, backup_id_str);
         
         FILE *filter_file = fopen(filter_filename, "w");
@@ -1143,9 +1152,13 @@ static int storageDumpFunction(ValkeyModuleCtx *module_ctx,
         ValkeyModule_Log(module_ctx, "notice", "storageDumpFunction: using snapshot for dump of db%d", dbid);
     }
     
-    /* Extract node_id from target parameter if provided, otherwise use local node_id */
+    /* Always use local node_id for DUMP operations.
+     * This ensures backups are always created on the local node,
+     * simplifying the architecture and avoiding cross-node complexity.
+     * The TARGET parameter is intentionally not supported for dumps. */
     char target_node_id[NODE_ID_MAX_LEN];
-    resolve_node_id(module_ctx, target, node_id, target_node_id, sizeof(target_node_id), "storageDumpFunction");
+    snprintf(target_node_id, sizeof(target_node_id), "%s", node_id);
+    ValkeyModule_Log(module_ctx, "notice", "storageDumpFunction: using local node_id=%s", target_node_id);
     
     /* Handle backup_id: use passed value if initialized, otherwise calculate using current time */
     char backup_id_str[BACKUP_ID_MAX_LEN];
@@ -1153,7 +1166,7 @@ static int storageDumpFunction(ValkeyModuleCtx *module_ctx,
                             "storageDumpFunction", backup_id_str);
     
     /* Create directory for this server instance */
-    char server_dir[2048];
+    char server_dir[SERVER_DIR_MAX_LEN];
     snprintf(server_dir, sizeof(server_dir), "/tmp/external_data/%s", target_node_id);
     mkdir("/tmp/external_data", 0755);
     mkdir(server_dir, 0755);
@@ -1174,12 +1187,12 @@ static int storageDumpFunction(ValkeyModuleCtx *module_ctx,
         }
         
         /* Create database-specific directory */
-        char db_dir[4096];
+        char db_dir[DB_DIR_MAX_LEN];
         snprintf(db_dir, sizeof(db_dir), "%s/db%d", server_dir, dbid);
         mkdir(db_dir, 0755);
         
         /* Dump storage data to database-specific file */
-        char storage_filename[5120];
+        char storage_filename[FILENAME_MAX_LEN];
         snprintf(storage_filename, sizeof(storage_filename), "%s/%s_storage_%s.dat", db_dir, module_name, backup_id_str);
         
         FILE *storage_file = fopen(storage_filename, "w");
@@ -1308,7 +1321,7 @@ static int filterLoadFunction(ValkeyModuleCtx *module_ctx,
                     ValkeyModule_Log(module_ctx, "debug", "filterLoad: entry_dbid=%d, target_dbid=%d", entry_dbid, dbid);
                     if (entry_dbid == dbid) {
                         /* Found a database directory, check for filter files with v0 format */
-                        char db_dir[2048];
+                        char db_dir[SERVER_DIR_MAX_LEN];
                         snprintf(db_dir, sizeof(db_dir), "%s/%s", source_dir, entry->d_name);
                     
                         ValkeyModule_Log(module_ctx, "debug", "filterLoad: Opening db_dir=%s for dbid=%d", db_dir, dbid);
@@ -1561,7 +1574,7 @@ static int storageLoadFunction(ValkeyModuleCtx *module_ctx,
             while ((entry = readdir(dir)) != NULL) {
                 if (strncmp(entry->d_name, "db", 2) == 0 && strtol(entry->d_name + 2, NULL, 10) == dbid) {
                     /* Found a database directory, check for storage files with v0 format */
-                    char db_dir[2048];
+                    char db_dir[SERVER_DIR_MAX_LEN];
                     snprintf(db_dir, sizeof(db_dir), "%s/%s", source_dir, entry->d_name);
                     
                     DIR *db_subdir = opendir(db_dir);
@@ -1818,7 +1831,7 @@ static int findDatabasesFromBackup(ValkeyModuleCtx *module_ctx, ValkeyModuleStri
             int db = atoi(entry->d_name + 2);
             if (db >= 0 && db < MAX_DB) {
                 /* Check if this database has any backup files */
-                char db_dir[2048];
+                char db_dir[SERVER_DIR_MAX_LEN];
                 snprintf(db_dir, sizeof(db_dir), "%s/%s", server_dir, entry->d_name);
                 
                 DIR *db_subdir = opendir(db_dir);

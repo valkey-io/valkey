@@ -1005,8 +1005,7 @@ int startGenerateSnapshotForReplication(int mincapa, int req, int rdbver) {
     fullsync_aof = mincapa & REPLICA_CAPA_FULLSYNC_AOF;
     socket_target = (mincapa & REPLICA_CAPA_EOF) && (server.repl_diskless_sync ||
                                                      (req & REPLICA_REQ_RDB_MASK) ||
-                                                     rdbver != RDB_VERSION ||
-                                                     fullsync_aof);
+                                                     rdbver != RDB_VERSION);
     /* `SYNC` should have failed with error if we don't support socket and require a filter, assert this here */
     serverAssert(socket_target || !(req & REPLICA_REQ_RDB_MASK));
 

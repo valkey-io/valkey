@@ -1288,9 +1288,41 @@ static int filterLoadFunction(ValkeyModuleCtx *module_ctx,
         return success ? EXTERNAL_SUCCESS : EXTERNAL_ERROR;
     }
 
-    /* Extract node_id from source parameter if provided, otherwise use local node_id */
     char source_node_id[NODE_ID_MAX_LEN];
-    resolve_node_id(module_ctx, source, node_id, source_node_id, sizeof(source_node_id), "filterLoadFunction");
+    
+    /* Extract node_id from backup_id if provided */
+    if (backup_id != NULL) {
+        size_t backup_id_len_temp;
+        const char *backup_id_str_temp = ValkeyModule_StringPtrLen(backup_id, &backup_id_len_temp);
+        
+        /* Parse the backup_id to extract node_id */
+        int parsed_slot;
+        long long parsed_timestamp;
+        char parsed_node_id[NODE_ID_MAX_LEN];
+        char parsed_options[OPTIONS_MAX_LEN];
+        
+        /* Use parseBackupIdV0 to extract components */
+        if (parseBackupIdV0(backup_id_str_temp, &parsed_slot, &parsed_timestamp,
+                            parsed_node_id, sizeof(parsed_node_id),
+                            parsed_options, sizeof(parsed_options)) == EXTERNAL_SUCCESS) {
+            /* Successfully parsed - use the extracted node_id */
+            snprintf(source_node_id, sizeof(source_node_id), "%s", parsed_node_id);
+            ValkeyModule_Log(module_ctx, "notice",
+                "filterLoad: extracted node_id=%s from backup_id=%.*s",
+                source_node_id, (int)backup_id_len_temp, backup_id_str_temp);
+        } else {
+            /* Failed to parse backup_id */
+            ValkeyModule_Log(module_ctx, "warning",
+                "filterLoad: failed to parse backup_id=%.*s",
+                (int)backup_id_len_temp, backup_id_str_temp);
+            return EXTERNAL_ERROR;
+        }
+    } else {
+        /* No backup_id provided - use local node_id for most recent backup */
+        snprintf(source_node_id, sizeof(source_node_id), "%s", node_id);
+        ValkeyModule_Log(module_ctx, "notice",
+            "filterLoad: no backup_id, using local node_id=%s", node_id);
+    }
     
     char backup_id_buf[BACKUP_ID_MAX_LEN];
     size_t backup_id_len;
@@ -1409,7 +1441,7 @@ static int filterLoadFunction(ValkeyModuleCtx *module_ctx,
     ValkeyModule_Log(module_ctx, "notice", "Trying to load filter from: %s", filter_filename);
     FILE *filter_file = fopen(filter_filename, "r");
     
-    /* If exact match fails, try prefix matching (for new backup_id format with microseconds) */
+    /* If exact match fails, try prefix matching (for v0 format with different node_id in filename) */
     if (!filter_file) {
         ValkeyModule_Log(module_ctx, "notice", "Exact match failed, trying prefix matching for: %.*s",
                         (int)backup_id_len, backup_id_str);
@@ -1418,46 +1450,39 @@ static int filterLoadFunction(ValkeyModuleCtx *module_ctx,
         if (dir) {
             struct dirent *entry;
             char best_match[1536] = {0};
-            long long best_microseconds = -1;
             
-            /* Create prefix pattern: backup_-1_<timestamp>_ (without microseconds) */
-            char prefix[256];
-            /* Find the last underscore in backup_id to extract timestamp only */
-            const char *last_underscore = strrchr(backup_id_str, '_');
-            size_t timestamp_len = backup_id_len;
-            if (last_underscore != NULL) {
-                /* Calculate length up to (and including) the timestamp part */
-                timestamp_len = last_underscore - backup_id_str;
-            }
-            /* Create prefix with trailing underscore to match pattern */
-            snprintf(prefix, sizeof(prefix), "%s_filter_%.*s_", module_name, (int)timestamp_len, backup_id_str);
+            /* For v0 format, parse backup_id to extract slot and timestamp for flexible matching */
+            int search_slot;
+            long long search_timestamp;
+            char search_node_id[NODE_ID_MAX_LEN];
+            char search_options[OPTIONS_MAX_LEN];
             
-            while ((entry = readdir(dir)) != NULL) {
-                /* Check if filename starts with our prefix */
-                if (strncmp(entry->d_name, prefix, strlen(prefix)) == 0 &&
-                    strstr(entry->d_name, ".dat") != NULL) {
-                    
-                    /* Extract microseconds from filename if present */
-                    const char *underscore = strrchr(entry->d_name, '_');
-                    if (underscore && underscore > entry->d_name + strlen(prefix)) {
-                        long long microseconds = atoll(underscore + 1);
-                        if (microseconds > best_microseconds) {
-                            best_microseconds = microseconds;
-                            snprintf(best_match, sizeof(best_match), "%s/%s", source_dir, entry->d_name);
-                            ValkeyModule_Log(module_ctx, "debug", "Found matching file: %s (microseconds=%lld)",
-                                           entry->d_name, microseconds);
-                        }
-                    } else {
-                        /* File without microseconds - use it if no better match found */
-                        if (best_microseconds < 0) {
-                            snprintf(best_match, sizeof(best_match), "%s/%s", source_dir, entry->d_name);
-                            ValkeyModule_Log(module_ctx, "debug", "Found matching file: %s (no microseconds)",
-                                           entry->d_name);
-                        }
+            if (parseBackupIdV0(backup_id_str, &search_slot, &search_timestamp,
+                                search_node_id, sizeof(search_node_id),
+                                search_options, sizeof(search_options)) == EXTERNAL_SUCCESS) {
+                /* Create prefix pattern matching slot and timestamp, ignoring node_id: v0:slot:timestamp: */
+                char prefix[256];
+                snprintf(prefix, sizeof(prefix), "%s_filter_v0:%d:%lld:", module_name, search_slot, search_timestamp);
+                
+                ValkeyModule_Log(module_ctx, "debug", "Searching for files with prefix: %s", prefix);
+                
+                while ((entry = readdir(dir)) != NULL) {
+                    /* Check if filename starts with our prefix (matches slot and timestamp) */
+                    if (strncmp(entry->d_name, prefix, strlen(prefix)) == 0 &&
+                        strstr(entry->d_name, ".dat") != NULL) {
+                        
+                        /* Found a matching file - use it */
+                        snprintf(best_match, sizeof(best_match), "%s/%s", source_dir, entry->d_name);
+                        ValkeyModule_Log(module_ctx, "debug", "Found matching file: %s", entry->d_name);
+                        break; /* Use first match since they should all have same slot/timestamp */
                     }
                 }
+                closedir(dir);
+            } else {
+                ValkeyModule_Log(module_ctx, "warning", "Failed to parse backup_id for prefix matching: %.*s",
+                               (int)backup_id_len, backup_id_str);
+                closedir(dir);
             }
-            closedir(dir);
             
             if (best_match[0] != '\0') {
                 ValkeyModule_Log(module_ctx, "notice", "Using prefix-matched file: %s", best_match);
@@ -1545,9 +1570,41 @@ static int storageLoadFunction(ValkeyModuleCtx *module_ctx,
         return success ? EXTERNAL_SUCCESS : EXTERNAL_ERROR;
     }
 
-    /* Extract node_id from source parameter if provided, otherwise use local node_id */
     char source_node_id[NODE_ID_MAX_LEN];
-    resolve_node_id(module_ctx, source, node_id, source_node_id, sizeof(source_node_id), "storageLoadFunction");
+    
+    /* Extract node_id from backup_id if provided */
+    if (backup_id != NULL) {
+        size_t backup_id_len_temp;
+        const char *backup_id_str_temp = ValkeyModule_StringPtrLen(backup_id, &backup_id_len_temp);
+        
+        /* Parse the backup_id to extract node_id */
+        int parsed_slot;
+        long long parsed_timestamp;
+        char parsed_node_id[NODE_ID_MAX_LEN];
+        char parsed_options[OPTIONS_MAX_LEN];
+        
+        /* Use parseBackupIdV0 to extract components */
+        if (parseBackupIdV0(backup_id_str_temp, &parsed_slot, &parsed_timestamp,
+                            parsed_node_id, sizeof(parsed_node_id),
+                            parsed_options, sizeof(parsed_options)) == EXTERNAL_SUCCESS) {
+            /* Successfully parsed - use the extracted node_id */
+            snprintf(source_node_id, sizeof(source_node_id), "%s", parsed_node_id);
+            ValkeyModule_Log(module_ctx, "notice",
+                "storageLoad: extracted node_id=%s from backup_id=%.*s",
+                source_node_id, (int)backup_id_len_temp, backup_id_str_temp);
+        } else {
+            /* Failed to parse backup_id */
+            ValkeyModule_Log(module_ctx, "warning",
+                "storageLoad: failed to parse backup_id=%.*s",
+                (int)backup_id_len_temp, backup_id_str_temp);
+            return EXTERNAL_ERROR;
+        }
+    } else {
+        /* No backup_id provided - use local node_id for most recent backup */
+        snprintf(source_node_id, sizeof(source_node_id), "%s", node_id);
+        ValkeyModule_Log(module_ctx, "notice",
+            "storageLoad: no backup_id, using local node_id=%s", node_id);
+    }
     
     char backup_id_buf[BACKUP_ID_MAX_LEN];
     size_t backup_id_len;
@@ -1669,7 +1726,7 @@ static int storageLoadFunction(ValkeyModuleCtx *module_ctx,
     ValkeyModule_Log(module_ctx, "notice", "Trying to load storage from: %s", storage_filename);
     FILE *storage_file = fopen(storage_filename, "r");
     
-    /* If exact match fails, try prefix matching (for new backup_id format with microseconds) */
+    /* If exact match fails, try prefix matching (for v0 format with different node_id in filename) */
     if (!storage_file) {
         ValkeyModule_Log(module_ctx, "notice", "Exact match failed, trying prefix matching for: %.*s",
                         (int)backup_id_len, backup_id_str);
@@ -1678,46 +1735,39 @@ static int storageLoadFunction(ValkeyModuleCtx *module_ctx,
         if (dir) {
             struct dirent *entry;
             char best_match[1536] = {0};
-            long long best_microseconds = -1;
             
-            /* Create prefix pattern: backup_-1_<timestamp>_ (without microseconds) */
-            char prefix[256];
-            /* Find the last underscore in backup_id to extract timestamp only */
-            const char *last_underscore = strrchr(backup_id_str, '_');
-            size_t timestamp_len = backup_id_len;
-            if (last_underscore != NULL) {
-                /* Calculate length up to (and including) the timestamp part */
-                timestamp_len = last_underscore - backup_id_str;
-            }
-            /* Create prefix with trailing underscore to match pattern */
-            snprintf(prefix, sizeof(prefix), "%s_storage_%.*s_", module_name, (int)timestamp_len, backup_id_str);
+            /* For v0 format, parse backup_id to extract slot and timestamp for flexible matching */
+            int search_slot;
+            long long search_timestamp;
+            char search_node_id[NODE_ID_MAX_LEN];
+            char search_options[OPTIONS_MAX_LEN];
             
-            while ((entry = readdir(dir)) != NULL) {
-                /* Check if filename starts with our prefix */
-                if (strncmp(entry->d_name, prefix, strlen(prefix)) == 0 &&
-                    strstr(entry->d_name, ".dat") != NULL) {
-                    
-                    /* Extract microseconds from filename if present */
-                    const char *underscore = strrchr(entry->d_name, '_');
-                    if (underscore && underscore > entry->d_name + strlen(prefix)) {
-                        long long microseconds = atoll(underscore + 1);
-                        if (microseconds > best_microseconds) {
-                            best_microseconds = microseconds;
-                            snprintf(best_match, sizeof(best_match), "%s/%s", source_dir, entry->d_name);
-                            ValkeyModule_Log(module_ctx, "debug", "Found matching file: %s (microseconds=%lld)",
-                                           entry->d_name, microseconds);
-                        }
-                    } else {
-                        /* File without microseconds - use it if no better match found */
-                        if (best_microseconds < 0) {
-                            snprintf(best_match, sizeof(best_match), "%s/%s", source_dir, entry->d_name);
-                            ValkeyModule_Log(module_ctx, "debug", "Found matching file: %s (no microseconds)",
-                                           entry->d_name);
-                        }
+            if (parseBackupIdV0(backup_id_str, &search_slot, &search_timestamp,
+                                search_node_id, sizeof(search_node_id),
+                                search_options, sizeof(search_options)) == EXTERNAL_SUCCESS) {
+                /* Create prefix pattern matching slot and timestamp, ignoring node_id: v0:slot:timestamp: */
+                char prefix[256];
+                snprintf(prefix, sizeof(prefix), "%s_storage_v0:%d:%lld:", module_name, search_slot, search_timestamp);
+                
+                ValkeyModule_Log(module_ctx, "debug", "Searching for files with prefix: %s", prefix);
+                
+                while ((entry = readdir(dir)) != NULL) {
+                    /* Check if filename starts with our prefix (matches slot and timestamp) */
+                    if (strncmp(entry->d_name, prefix, strlen(prefix)) == 0 &&
+                        strstr(entry->d_name, ".dat") != NULL) {
+                        
+                        /* Found a matching file - use it */
+                        snprintf(best_match, sizeof(best_match), "%s/%s", source_dir, entry->d_name);
+                        ValkeyModule_Log(module_ctx, "debug", "Found matching file: %s", entry->d_name);
+                        break; /* Use first match since they should all have same slot/timestamp */
                     }
                 }
+                closedir(dir);
+            } else {
+                ValkeyModule_Log(module_ctx, "warning", "Failed to parse backup_id for prefix matching: %.*s",
+                               (int)backup_id_len, backup_id_str);
+                closedir(dir);
             }
-            closedir(dir);
             
             if (best_match[0] != '\0') {
                 ValkeyModule_Log(module_ctx, "notice", "Using prefix-matched file: %s", best_match);

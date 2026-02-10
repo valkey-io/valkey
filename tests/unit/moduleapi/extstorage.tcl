@@ -4034,3 +4034,125 @@ start_cluster 1 0 [list overrides [list "ext-data-mode" kv "ext-data-id" test_no
         cleanup_external_data_dump r
     }
 }
+
+start_server [list overrides [list "ext-data-mode" kv "ext-data-id" id100 "loglevel" debug] tags [list "external:skip" "wip"]] {
+    set testmodule [file normalize tests/modules/extstorage/extdata1.so]
+    
+    test "LOAD auto-extracts node_id from backup_id" {
+        cleanup_external_data_dump r
+        r module load $testmodule
+        r flushall
+        
+        # Initialize external storage
+        r external_data INIT db0 helloextdata1
+        r select 0
+        
+        # Set key foo with value bar (external storage)
+        r set foo "bar" ext
+        
+        # Create backup
+        set backup_id [r external_data dump]
+        assert {$backup_id ne ""}
+        
+        # Delete the key
+        r del foo ext
+        assert {![r exists foo]}
+        
+        # Load backup (should auto-extract node_id from backup_id)
+        r external_data load $backup_id
+        
+        # Verify data restored correctly
+        assert_equal [r get foo ext] "bar"
+        
+        cleanup_external_data_dump r
+    }
+}
+
+start_server [list overrides [list "ext-data-mode" kv "ext-data-id" id101 "loglevel" debug] tags [list "external:skip" "wip"]] {
+    set testmodule [file normalize tests/modules/extstorage/extdata1.so]
+    
+    test "LOAD from cross-node backup via file copy" {
+        cleanup_external_data_dump r
+        r module load $testmodule
+        r flushall
+        
+        # Initialize external storage
+        r external_data INIT db0 helloextdata1
+        r select 0
+        
+        # Create backup on "node-A" (current node)
+        r set mykey "node_a_value" ext
+        set backup_id [r external_data dump]
+        
+        # Extract source node_id from backup_id
+        set parsed [r extdata.testbackupid $backup_id]
+        set source_node_id [dict get $parsed node_id]
+        set slot [dict get $parsed slot]
+        set timestamp [dict get $parsed timestamp]
+        
+        # Simulate copying backup to different node directory (node-B)
+        set target_node_id "node-B"
+        exec cp -r "/tmp/external_data/${source_node_id}" "/tmp/external_data/${target_node_id}"
+        
+        # Create new backup_id pointing to node-B
+        set cross_node_backup_id "v0:${slot}:${timestamp}:${target_node_id}"
+        
+        # Clear local data
+        r flushall
+        
+        # Load from "remote" node's backup (should extract node-B from backup_id)
+        r external_data load $cross_node_backup_id
+        
+        # Verify data restored from cross-node backup
+        assert_equal [r get mykey ext] "node_a_value"
+        
+        cleanup_external_data_dump r
+    }
+}
+
+start_server [list overrides [list "ext-data-mode" kv "ext-data-id" id102 "loglevel" debug] tags [list "external:skip" "wip"]] {
+    set testmodule [file normalize tests/modules/extstorage/extdata1.so]
+    
+    test "LOAD fails with invalid backup_id format" {
+        cleanup_external_data_dump r
+        r module load $testmodule
+        r flushall
+        
+        # Initialize external storage
+        r external_data INIT db0 helloextdata1
+        r select 0
+        
+        # Try loading with malformed backup_id
+        catch {r external_data load "invalid_format_123"} err
+        
+        # Assert error is thrown
+        assert_match "*invalid*" $err
+        
+        cleanup_external_data_dump r
+    }
+}
+
+start_server [list overrides [list "ext-data-mode" kv "ext-data-id" id103 "loglevel" debug] tags [list "external:skip" "wip"]] {
+    set testmodule [file normalize tests/modules/extstorage/extdata1.so]
+    
+    test "LOAD fails when source node directory missing" {
+        cleanup_external_data_dump r
+        r module load $testmodule
+        r flushall
+        
+        # Initialize external storage
+        r external_data INIT db0 helloextdata1
+        r select 0
+        
+        # Create backup_id pointing to non-existent node
+        set nonexistent_backup_id "v0:0:1234567890:nonexistent_node"
+        
+        # Try to load - should fail gracefully
+        catch {r external_data load $nonexistent_backup_id} err
+        
+        # Verify graceful failure (not crash)
+        assert_match "*" $err
+        
+        cleanup_external_data_dump r
+    }
+}

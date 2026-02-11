@@ -1356,6 +1356,9 @@ void freeClientReplicationData(client *c) {
  * the primary can accurately lists replicas and their listening ports in the
  * INFO output.
  *
+ * - client-name <name>
+ * Sets the client name for this replica connection (shown in CLIENT LIST).
+ *
  * - capa <eof|psync2|dual-channel|skip-rdb-checksum>
  * What is the capabilities of this instance.
  * eof: supports EOF-style RDB transfer for diskless replication.
@@ -1424,6 +1427,12 @@ void replconfCommand(client *c) {
                                     "REPLCONF ip-address provided by "
                                     "replica instance is too long: %zd bytes",
                                     sdslen(addr));
+                return;
+            }
+        } else if (!strcasecmp(objectGetVal(c->argv[j]), "client-name")) {
+            const char *err = NULL;
+            if (clientSetName(c, c->argv[j + 1], &err) == C_ERR) {
+                addReplyError(c, err);
                 return;
             }
         } else if (!strcasecmp(objectGetVal(c->argv[j]), "capa")) {
@@ -3024,8 +3033,13 @@ static int dualChannelReplHandleHandshake(connection *conn, sds *err) {
     }
     /* Send replica listening port to primary for clarification */
     sds portstr = getReplicaPortString();
-    *err = sendCommand(conn, "REPLCONF", "capa", "eof", "rdb-only", "1", "rdb-channel", "1", "listening-port", portstr,
-                       NULL);
+    if (server.replica_announce_name) {
+        *err = sendCommand(conn, "REPLCONF", "capa", "eof", "rdb-only", "1", "rdb-channel", "1", "listening-port",
+                           portstr, "client-name", server.replica_announce_name, NULL);
+    } else {
+        *err = sendCommand(conn, "REPLCONF", "capa", "eof", "rdb-only", "1", "rdb-channel", "1", "listening-port",
+                           portstr, NULL);
+    }
     sdsfree(portstr);
     if (*err) {
         dualChannelServerLog(LL_WARNING, "Sending command to primary in dual channel replication handshake: %s", *err);
@@ -3771,7 +3785,12 @@ int syncWithPrimaryHandleSendHandshakeState(connection *conn) {
      * replica listening port correctly. */
     {
         sds portstr = getReplicaPortString();
-        err = sendCommand(conn, "REPLCONF", "listening-port", portstr, NULL);
+        if (server.replica_announce_name) {
+            err = sendCommand(conn, "REPLCONF", "listening-port", portstr, "client-name", server.replica_announce_name,
+                              NULL);
+        } else {
+            err = sendCommand(conn, "REPLCONF", "listening-port", portstr, NULL);
+        }
         sdsfree(portstr);
         if (err) goto err;
     }

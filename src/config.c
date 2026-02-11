@@ -2438,6 +2438,15 @@ static int isValidAnnouncedHostname(char *val, const char **err) {
     return 1;
 }
 
+static int isValidReplicaAnnounceName(char *val, const char **err) {
+    if (val[0] == '\0') return 1;
+    if (validateClientAttr(val) == C_ERR) {
+        *err = "replica-announce-name contains invalid characters";
+        return 0;
+    }
+    return 1;
+}
+
 static int isValidIpV4(char *val, const char **err) {
     struct sockaddr_in sa;
     if (val[0] != '\0' && inet_pton(AF_INET, val, &(sa.sin_addr)) == 0) {
@@ -3259,6 +3268,7 @@ standardConfig static_configs[] = {
     createStringConfig("unixsocketgroup", NULL, IMMUTABLE_CONFIG, EMPTY_STRING_IS_NULL, server.unix_ctx_config.group, NULL, NULL, NULL),
     createStringConfig("pidfile", NULL, IMMUTABLE_CONFIG, EMPTY_STRING_IS_NULL, server.pidfile, NULL, NULL, NULL),
     createStringConfig("replica-announce-ip", "slave-announce-ip", MODIFIABLE_CONFIG, EMPTY_STRING_IS_NULL, server.replica_announce_ip, NULL, NULL, NULL),
+    createStringConfig("replica-announce-name", "slave-announce-name", MODIFIABLE_CONFIG, EMPTY_STRING_IS_NULL, server.replica_announce_name, NULL, isValidReplicaAnnounceName, NULL),
     createStringConfig("primaryuser", "masteruser", MODIFIABLE_CONFIG | SENSITIVE_CONFIG, EMPTY_STRING_IS_NULL, server.primary_user, NULL, NULL, NULL),
     createStringConfig("cluster-announce-ip", NULL, MODIFIABLE_CONFIG, EMPTY_STRING_IS_NULL, server.cluster_announce_ip, NULL, NULL, updateClusterIp),
     createStringConfig("cluster-announce-client-ipv4", NULL, MODIFIABLE_CONFIG, EMPTY_STRING_IS_NULL, server.cluster_announce_client_ipv4, NULL, isValidIpV4, updateClusterClientIpV4),

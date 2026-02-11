@@ -2174,6 +2174,7 @@ struct valkeyServer {
     int replica_announced;               /* If true, replica is announced by Sentinel */
     int replica_announce_port;           /* Give the primary this listening port. */
     char *replica_announce_ip;           /* Give the primary this ip address. */
+    char *replica_announce_name;         /* Give the primary this client name. */
     int propagation_error_behavior;      /* Configures the behavior of the replica
                                           * when it receives an error on the replication stream */
     int repl_ignore_disk_write_error;    /* Configures whether replicas panic when unable to
@@ -2945,6 +2946,7 @@ int isClientConnIpV6(client *c);
 sds catClientInfoString(sds s, client *client, int hide_user_data);
 sds catClientInfoShortString(sds s, client *client, int hide_user_data);
 sds getAllClientsInfoString(int type, int hide_user_data);
+int validateClientAttr(const char *val);
 int clientSetName(client *c, robj *name, const char **err);
 void rewriteClientCommandVector(client *c, int argc, ...);
 void rewriteClientCommandArgument(client *c, int i, robj *newval);

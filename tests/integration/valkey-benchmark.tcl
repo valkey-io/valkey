@@ -617,9 +617,9 @@ tags {"benchmark network external:skip cluster"} {
             set port [srv 0 port]
 
             # Run with --cluster, {tag}, and dataset
-            set cmd "src/valkey-benchmark -h $host -p $port --cluster \
+            set cmd [valkeybenchmark $host $port "--cluster \
                 --dataset $csv_file -n 2 -r 100 --sequential \
-                HSET doc:\{tag\}:__rand_int__ name __field:name__"
+                HSET doc:\{tag\}:__rand_int__ name __field:name__"]
             
             if {[catch { exec {*}$cmd } output]} {
                 if {![string match "*HSET*" $output]} {

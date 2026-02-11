@@ -2767,7 +2767,7 @@ start_server [list overrides [list save ""] tags {"zset needs:debug external:ski
         }
         assert_match "*number of entries: 1\n*" $htstats ;# ht0 has 1 entry
         assert_match "*rehashing index: 0\n*" $htstats   ;# ht0 rehash just started
-        assert_match "*rehashing target*" $htstats     ;# ht1 started rehashing
+        assert_match "*rehashing target*" $htstats       ;# ht1 started rehashing
         assert_match "*table size: 7\n*" $htstats        ;# ht1 table size is the minimal number
         assert_match "*number of entries: 0\n*" $htstats ;# ht1 has 0 entry
 
@@ -2832,7 +2832,7 @@ start_server [list overrides [list save ""] tags {"zset needs:debug external:ski
             }
             assert_match "*number of entries: 1\n*" $htstats ;# ht0 has 1 entry
             assert_match "*rehashing index: 0\n*" $htstats   ;# ht0 rehash just started
-            assert_match "*rehashing target*" $htstats     ;# ht1 started rehashing
+            assert_match "*rehashing target*" $htstats       ;# ht1 started rehashing
             assert_match "*table size: 7\n*" $htstats        ;# ht1 table size is the minimal number
             assert_match "*number of entries: 0\n*" $htstats ;# ht1 has 0 entry
 

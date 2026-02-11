@@ -600,3 +600,60 @@ tags {"benchmark network external:skip logreqres:skip"} {
         }
     }
 }
+
+# Cluster mode tests
+tags {"benchmark network external:skip cluster"} {
+    start_cluster 3 0 {tags {"external:skip"}} {
+        test "Cluster benchmark: dataset with {tag} validates replacement" {
+            # Create test CSV dataset
+            set csv_data "id,name\n1,Item1\n2,Item2"
+            set csv_file [tmpfile "cluster_ds.csv"]
+            set fd [open $csv_file w]
+            puts $fd $csv_data
+            close $fd
+
+            # Get cluster node
+            set host [srv 0 host]
+            set port [srv 0 port]
+
+            # Run with --cluster, {tag}, and dataset
+            set cmd "src/valkey-benchmark -h $host -p $port --cluster \
+                --dataset $csv_file -n 2 -r 100 --sequential \
+                HSET doc:\{tag\}:__rand_int__ name __field:name__"
+            
+            if {[catch { exec {*}$cmd } output]} {
+                if {![string match "*HSET*" $output]} {
+                    fail "Benchmark failed: $output"
+                }
+            }
+
+            # Collect all keys from all nodes
+            set all_keys {}
+            for {set id 0} {$id < 3} {incr id} {
+                set keys [R $id keys "doc:*"]
+                foreach key $keys {
+                    lappend all_keys [list $id $key]
+                }
+            }
+            
+            # Should have exactly 2 keys total
+            assert {[llength $all_keys] == 2}
+            
+            # Verify each key
+            foreach key_info $all_keys {
+                lassign $key_info node_id key
+                # {tag} replaced (not literal)
+                assert {![string match "*\{tag\}*" $key]}
+                # Has cluster hash tag format
+                assert {[string match "doc:\{*\}:*" $key]}
+                # __rand_int__ replaced with 12 digits
+                assert {[regexp {:\d{12}$} $key]}
+                # Dataset field inserted
+                set name [R $node_id hget $key name]
+                assert {$name in {Item1 Item2}}
+            }
+            
+            file delete $csv_file
+        }
+    }
+}

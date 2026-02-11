@@ -1177,10 +1177,6 @@ start_server [list overrides [list "dir" $server_path "acl-pubsub-default" "allc
         
         # Verify server is still running
         assert_equal [r PING] "PONG"
-        
-        # Cleanup
-        r ACL setuser removed-user on >password +@all ~* &*
-        r ACL save
     }
 }
 

@@ -23,7 +23,7 @@ jobs:
   test-ubuntu-latest:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - name: make
         # Fail build if there are warnings
         # build with TLS just for compilation coverage
@@ -54,7 +54,7 @@ jobs:
           - {version: "8.0.6", file: "valkey-8.0.6-noble-x86_64.tar.gz"}
           - {version: "8.1.4", file: "valkey-8.1.4-noble-x86_64.tar.gz"}
     steps:
-      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - name: make
         # Fail build if there are warnings
         # build with TLS just for compilation coverage
@@ -81,7 +81,7 @@ jobs:
   test-ubuntu-latest-cmake-tls:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - name: cmake and make
         run: |
           sudo apt-get install -y cmake libssl-dev
@@ -101,7 +101,7 @@ jobs:
   test-sanitizer-address:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - name: make
         # build with TLS module just for compilation coverage
         run: make -j4 all-with-unit-tests SANITIZER=address SERVER_CFLAGS='-Werror' BUILD_TLS=module
@@ -117,7 +117,7 @@ jobs:
   test-rdma:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - name: prepare-development-libraries
         run: sudo apt-get install librdmacm-dev libibverbs-dev
       - name: make-rdma-module
@@ -142,7 +142,7 @@ jobs:
     runs-on: ubuntu-latest
     container: debian:bullseye
     steps:
-      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - name: make
         run: |
           apt-get update && apt-get install -y build-essential
@@ -151,7 +151,7 @@ jobs:
   build-macos-latest:
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - name: make
         # Build with additional upcoming features
         run: make -j3 all-with-unit-tests SERVER_CFLAGS='-Werror' USE_FAST_FLOAT=yes
@@ -159,7 +159,7 @@ jobs:
   build-32bit:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - name: make
         # Fast float requires C++ 32-bit libraries to compile on 64-bit ubuntu
         # machine i.e. "-cross" suffixed version. Cross-compiling c++ to 32-bit
@@ -177,7 +177,7 @@ jobs:
   build-libc-malloc:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - name: make
         run: make -j4 SERVER_CFLAGS='-Werror' MALLOC=libc USE_FAST_FLOAT=yes
 
@@ -185,7 +185,7 @@ jobs:
     runs-on: ubuntu-latest
     container: almalinux:8
     steps:
-      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: make
         run: |
@@ -196,10 +196,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Set up Go
-        uses: actions/setup-go@cdcb36043654635271a94b9a6d1392de5bb323a7 # v5.0.1
+        uses: actions/setup-go@7a3fe6cf4cb3a834922a1244abfce67bcef6a0c5 # v6.2.0
         with:
           go-version: "1.22.4"
 

@@ -291,7 +291,7 @@ int test_shrink_rehashing_abort(int argc, char **argv, int flags) {
     size_t keep_bucket = 0;
 
     /* Populate and make sure there is no rehashing ongoing. */
-    for (j = 0; j < 2000; j++) {
+    for (j = 0; j < 20000; j++) {
         TEST_ASSERT(hashtableAdd(ht, (void *)j));
     }
     while (hashtableIsRehashing(ht)) {
@@ -301,7 +301,7 @@ int test_shrink_rehashing_abort(int argc, char **argv, int flags) {
     /* Keep the entry from the highest bucket index so shrink rehashing doesn't
      * complete too early with randomized hash seeds and start a second resize. */
     size_t mask = hashtableBuckets(ht) - 1;
-    for (j = 0; j < 2000; j++) {
+    for (j = 0; j < 20000; j++) {
         const void *key = (void *)j;
         uint64_t hash = hashtableGenHashFunction((const char *)&key, sizeof(key));
         size_t bucket_idx = hash & mask;
@@ -313,7 +313,7 @@ int test_shrink_rehashing_abort(int argc, char **argv, int flags) {
 
     /* Delete all elements except one so there are a lot of empty buckets. */
     hashtablePauseAutoShrink(ht);
-    for (j = 0; j < 2000; j++) {
+    for (j = 0; j < 20000; j++) {
         if (j == keep) continue;
         TEST_ASSERT(hashtableDelete(ht, (void *)j));
     }
@@ -324,12 +324,18 @@ int test_shrink_rehashing_abort(int argc, char **argv, int flags) {
     /* Add elements to reach MAX_FILL_PERCENT_HARD will trigger the shrink rehashing to abort. */
     long add = hashtableEntriesPerBucket() * 5;
     for (j = 0; j < add; j++) {
-        TEST_ASSERT(hashtableAdd(ht, (void *)(2000 + j)));
+        TEST_ASSERT(hashtableAdd(ht, (void *)(20000 + j)));
     }
 
     /* Check that we restart the rehashing. */
     TEST_ASSERT(hashtableSize(ht) == (size_t)(add + 1));
     TEST_ASSERT(hashtableGetRehashingIndex(ht) == 0);
+
+    /* Fuzzy test around normal add and delete to make sure we are ok. */
+    for (j = 0; j < 20000; j++) {
+        hashtableAdd(ht, (void *)j);
+        TEST_ASSERT(hashtableDelete(ht, (void *)j));
+    }
 
     hashtableRelease(ht);
     return 0;

@@ -3,7 +3,7 @@
         "summary": "Returns the per-bucket distribution of payload sizes for client commands.",
         "complexity": "O(V+B) where V is the number of configured views and B is the number of buckets in each view.",
         "group": "server",
-        "since": "8.2.0",
+        "since": "9.1.0",
         "arity": -2,
         "container": "PAYLOAD",
         "function": "payloadCommand",

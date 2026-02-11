@@ -2751,7 +2751,7 @@ start_server [list overrides [list save ""] tags {"zset needs:debug external:ski
         }
         r zadd myzset {*}$elements
         assert_equal 20000 [r zcard myzset]
-        assert_match {*top-level buckets: 4096*} [r debug htstats-key myzset full]
+        assert_match "*top-level buckets: 4096\n*" [r debug htstats-key myzset full]
 
         # We deleted all elements except for one so there are a lot of empty buckets.
         r zremrangebyrank myzset 1 -1
@@ -2765,11 +2765,11 @@ start_server [list overrides [list save ""] tags {"zset needs:debug external:ski
             puts "After deleting the elements:"
             puts $htstats
         }
-        assert_match {*number of entries: 1*} $htstats ;# ht0 has 1 entry
-        assert_match {*rehashing index: 0*} $htstats   ;# ht0 rehash just started
-        assert_match {*rehashing target*} $htstats     ;# ht1 started rehashing
-        assert_match {*table size: 7*} $htstats        ;# ht1 table size is the minimal number
-        assert_match {*number of entries: 0*} $htstats ;# ht1 has 0 entry
+        assert_match "*number of entries: 1\n*" $htstats ;# ht0 has 1 entry
+        assert_match "*rehashing index: 0\n*" $htstats   ;# ht0 rehash just started
+        assert_match "*rehashing target*" $htstats     ;# ht1 started rehashing
+        assert_match "*table size: 7\n*" $htstats        ;# ht1 table size is the minimal number
+        assert_match "*number of entries: 0\n*" $htstats ;# ht1 has 0 entry
 
         # Before, we just rehash one bucket chain regardless of empty or not, so
         # we were unable to finish the rehash within 2k requests.
@@ -2786,7 +2786,7 @@ start_server [list overrides [list save ""] tags {"zset needs:debug external:ski
             puts "After adding the elements:"
             puts $htstats
         }
-        assert_match {*rehashing index: -1*} [r debug htstats-key myzset full] ;# no rehash ongoing
+        assert_match "*rehashing index: -1\n*" [r debug htstats-key myzset full] ;# no rehash ongoing
 
         r debug hashtable-can-abort-shrink 1
     }
@@ -2816,7 +2816,7 @@ start_server [list overrides [list save ""] tags {"zset needs:debug external:ski
             }
             r zadd myzset {*}$elements
             assert_equal 20000 [r zcard myzset]
-            assert_match {*top-level buckets: 4096*} [r debug htstats-key myzset full]
+            assert_match "*top-level buckets: 4096\n*" [r debug htstats-key myzset full]
 
             # We deleted all elements except for one so there ht0 is quite empty.
             r zremrangebyrank myzset 1 -1
@@ -2830,11 +2830,11 @@ start_server [list overrides [list save ""] tags {"zset needs:debug external:ski
                 puts "After deleting the elements:"
                 puts $htstats
             }
-            assert_match {*number of entries: 1*} $htstats ;# ht0 has 1 entry
-            assert_match {*rehashing index: 0*} $htstats   ;# ht0 rehash just started
-            assert_match {*rehashing target*} $htstats     ;# ht1 started rehashing
-            assert_match {*table size: 7*} $htstats        ;# ht1 table size is the minimal number
-            assert_match {*number of entries: 0*} $htstats ;# ht1 has 0 entry
+            assert_match "*number of entries: 1\n*" $htstats ;# ht0 has 1 entry
+            assert_match "*rehashing index: 0\n*" $htstats   ;# ht0 rehash just started
+            assert_match "*rehashing target*" $htstats     ;# ht1 started rehashing
+            assert_match "*table size: 7\n*" $htstats        ;# ht1 table size is the minimal number
+            assert_match "*number of entries: 0\n*" $htstats ;# ht1 has 0 entry
 
             # Currently ENTRIES_PER_BUCKET is 7 and MAX_FILL_PERCENT_HARD is 500.
             # And ht0 is 1, we need to add 34 elements to make ht1 reach MAX_FILL_PERCENT_HARD.
@@ -2872,9 +2872,9 @@ start_server [list overrides [list save ""] tags {"zset needs:debug external:ski
             # chain length distribution:
             #   5: 1 (100.00%)
 
-            if {[string match {*number of entries: 34*} $htstats]} {
-                assert_match {*number of entries: 1*} $htstats  ;# ht0 has 1 entry
-                assert_match {*number of entries: 34*} $htstats ;# ht1 has 35 entries
+            if {[string match "*number of entries: 34\n*" $htstats]} {
+                assert_match "*number of entries: 1\n*" $htstats  ;# ht0 has 1 entry
+                assert_match "*number of entries: 34\n*" $htstats ;# ht1 has 35 entries
 
                 # Adding a new element to ht1, since we already reach MAX_FILL_PERCENT_HARD, in this add,
                 # we will abort the shrink.
@@ -2910,11 +2910,11 @@ start_server [list overrides [list save ""] tags {"zset needs:debug external:ski
                 # chain length distribution:
                 #   0: 4096 (100.00%)
 
-                if {[string match {*number of entries: 2*} $htstats]} {
-                    assert_match {*table size: 7*} $htstats         ;# ht0 table size is 7
-                    assert_match {*number of entries: 34*} $htstats ;# ht0 has 34 entries
-                    assert_match {*rehashing index: 0*} $htstats    ;# rehash index is back to 0
-                    assert_match {*number of entries: 2*} $htstats  ;# ht1 has 2 entries
+                if {[string match "*number of entries: 2\n*" $htstats]} {
+                    assert_match "*table size: 7\n*" $htstats         ;# ht0 table size is 7
+                    assert_match "*number of entries: 34\n*" $htstats ;# ht0 has 34 entries
+                    assert_match "*rehashing index: 0\n*" $htstats    ;# rehash index is back to 0
+                    assert_match "*number of entries: 2\n*" $htstats  ;# ht1 has 2 entries
 
                     set can_break 1
                 }

@@ -313,9 +313,7 @@ void *bioProcessBackgroundJobs(void *arg) {
         } else {
             serverPanic("Wrong job type in bioProcessBackgroundJobs().");
         }
-        /* Remove the exact processed job: priority inserts may have changed the global queue head. */
-        void *removed_job = NULL;
-        serverAssert(mutexQueueRemoveExpectedHead(bwd->bio_jobs, job, &removed_job));
+        void *removed_job = mutexQueuePop(bwd->bio_jobs, false);
         serverAssert(removed_job == job);
         zfree(job);
         atomic_fetch_sub(&bio_jobs_counter[job_type], 1);

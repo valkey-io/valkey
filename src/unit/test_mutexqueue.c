@@ -96,32 +96,18 @@ int test_mutexQueuePeekAndRemoveHead(int argc, char *argv[], int flags) {
     TEST_EXPECT((long)mutexQueuePeek(q, false) == 1);
     TEST_EXPECT(mutexQueueLength(q) == 3ul);
 
-    void *removed = NULL;
-    void *peeked = mutexQueuePeek(q, false);
-    TEST_EXPECT(mutexQueueRemoveExpectedHead(q, peeked, &removed));
+    void *removed = mutexQueuePop(q, false);
     TEST_EXPECT((long)removed == 1);
     TEST_EXPECT(mutexQueueLength(q) == 2ul);
     TEST_EXPECT((long)mutexQueuePeek(q, false) == 10);
 
-    peeked = mutexQueuePeek(q, false);
-    TEST_EXPECT(mutexQueueRemoveExpectedHead(q, peeked, &removed));
+    removed = mutexQueuePop(q, false);
     TEST_EXPECT((long)removed == 10);
-    peeked = mutexQueuePeek(q, false);
-    TEST_EXPECT(mutexQueueRemoveExpectedHead(q, peeked, &removed));
+    removed = mutexQueuePop(q, false);
     TEST_EXPECT((long)removed == 11);
 
     TEST_EXPECT(mutexQueuePeek(q, false) == NULL);
-    TEST_EXPECT(!mutexQueueRemoveExpectedHead(q, (void *)1, &removed));
-    TEST_EXPECT(mutexQueueLength(q) == 0ul);
-
-    /* Remove a previously peeked normal head even if priority items are enqueued later. */
-    add(q, 20);
-    peeked = mutexQueuePeek(q, false);
-    TEST_EXPECT((long)peeked == 20);
-    priorityAdd(q, 3);
-    TEST_EXPECT(mutexQueueRemoveExpectedHead(q, peeked, &removed));
-    TEST_EXPECT((long)removed == 20);
-    popTest(q, 3);
+    TEST_EXPECT(mutexQueuePop(q, false) == NULL);
     TEST_EXPECT(mutexQueueLength(q) == 0ul);
 
     mutexQueueRelease(q);

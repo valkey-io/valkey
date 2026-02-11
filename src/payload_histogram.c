@@ -84,7 +84,8 @@ static void payloadHistogramCommand(client *c) {
 static const char *payloadTrackingModeString(int mode) {
     if (mode == PAYLOAD_TRACKING_MODE_READ) return "read";
     if (mode == PAYLOAD_TRACKING_MODE_WRITE) return "write";
-    return "both";
+    if (mode == PAYLOAD_TRACKING_MODE_BOTH) return "both";
+    return "unknown";
 }
 
 static int payloadTrackingParseMode(const char *arg, int *mode) {

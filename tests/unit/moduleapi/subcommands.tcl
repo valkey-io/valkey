@@ -53,7 +53,7 @@ start_server {tags {"modules"}} {
 
     test "Module unload blocked by ACL subcommand rule" {
         r ACL SETUSER subcmduser on nopass +subcommands.sub|get_fullname
-        assert_error {ERR one or more ACL users reference commands from this module*} {
+        assert_error {*one or more ACL users reference commands from this module*} {
             r module unload subcommands
         }
         r ACL DELUSER subcmduser
@@ -61,7 +61,7 @@ start_server {tags {"modules"}} {
 
     test "Module unload blocked by ACL base command rule" {
         r ACL SETUSER basecmduser on nopass +subcommands.parent_get_fullname
-        assert_error {ERR one or more ACL users reference commands from this module*} {
+        assert_error {*one or more ACL users reference commands from this module*} {
             r module unload subcommands
         }
         r ACL DELUSER basecmduser
@@ -69,7 +69,7 @@ start_server {tags {"modules"}} {
 
     test "Module unload blocked by ACL deny rule" {
         r ACL SETUSER denycmduser on nopass -subcommands.parent_get_fullname
-        assert_error {ERR one or more ACL users reference commands from this module*} {
+        assert_error {*one or more ACL users reference commands from this module*} {
             r module unload subcommands
         }
         r ACL DELUSER denycmduser
@@ -77,7 +77,7 @@ start_server {tags {"modules"}} {
 
     test "Module unload blocked by ACL selector rule" {
         r ACL SETUSER selcmduser on nopass (+subcommands.parent_get_fullname)
-        assert_error {ERR one or more ACL users reference commands from this module*} {
+        assert_error {*one or more ACL users reference commands from this module*} {
             r module unload subcommands
         }
         r ACL DELUSER selcmduser

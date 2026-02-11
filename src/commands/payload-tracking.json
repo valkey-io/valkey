@@ -1,0 +1,49 @@
+{
+    "TRACKING": {
+        "summary": "Controls payload tracking.",
+        "complexity": "O(1)",
+        "group": "server",
+        "since": "8.2.0",
+        "arity": -2,
+        "container": "PAYLOAD",
+        "function": "payloadCommand",
+        "command_flags": [
+            "ADMIN",
+            "NOSCRIPT",
+            "LOADING",
+            "STALE"
+        ],
+        "arguments": [
+            {
+                "name": "action",
+                "type": "string"
+            },
+            {
+                "name": "seconds",
+                "type": "integer",
+                "optional": true
+            },
+            {
+                "name": "sample",
+                "type": "pure-token",
+                "token": "SAMPLE",
+                "optional": true
+            },
+            {
+                "name": "rate",
+                "type": "integer",
+                "optional": true
+            },
+            {
+                "name": "mode",
+                "type": "string",
+                "optional": true
+            }
+        ],
+        "acl_categories": [
+            "ADMIN",
+            "DANGEROUS",
+            "SLOW"
+        ]
+    }
+}

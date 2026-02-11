@@ -6809,11 +6809,6 @@ sds clusterGenNodeDescription(client *c, clusterNode *node, int tls_primary) {
             }
         }
     }
-
-    /* Append availability zone at the end for client output. */
-    if (c != NULL && sdslen(node->availability_zone) != 0) {
-        ci = sdscatfmt(ci, " %s", node->availability_zone);
-    }
     return ci;
 }
 
@@ -7069,6 +7064,12 @@ void addNodeDetailsToShardReply(client *c, clusterNode *node) {
     addReplyBulkCString(c, clusterNodePreferredEndpoint(node, c));
     reply_count++;
 
+    if (sdslen(node->hostname) != 0) {
+        addReplyBulkCString(c, "hostname");
+        addReplyBulkCBuffer(c, node->hostname, sdslen(node->hostname));
+        reply_count++;
+    }
+
     long long node_offset = getNodeReplicationOffset(node);
 
     addReplyBulkCString(c, "role");
@@ -7091,13 +7092,8 @@ void addNodeDetailsToShardReply(client *c, clusterNode *node) {
     addReplyBulkCString(c, health_msg);
     reply_count++;
 
-    if (sdslen(node->hostname) != 0) {
-        addReplyBulkCString(c, "hostname");
-        addReplyBulkCBuffer(c, node->hostname, sdslen(node->hostname));
-        reply_count++;
-    }
     if (sdslen(node->availability_zone) != 0) {
-        addReplyBulkCString(c, "availability_zone");
+        addReplyBulkCString(c, "availability-zone");
         addReplyBulkCBuffer(c, node->availability_zone, sdslen(node->availability_zone));
         reply_count++;
     }

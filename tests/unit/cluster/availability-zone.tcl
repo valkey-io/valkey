@@ -1,29 +1,63 @@
+proc slots_map_has_az_last {slots_resp} {
+    foreach entry $slots_resp {
+        foreach node [lrange $entry 2 end] {
+            set extra_map [lindex $node 3]
+            if {[llength $extra_map] == 0} {
+                return 0
+            }
+            if {[lindex $extra_map end-1] ne "availability-zone"} {
+                return 0
+            }
+        }
+    }
+    return 1
+}
+
+proc shards_map_has_az_last {shards_resp} {
+    foreach shard $shards_resp {
+        set nodes_index [lsearch -exact $shard "nodes"]
+        if {$nodes_index < 0} {
+            return 0
+        }
+        set nodes [lindex $shard [expr {$nodes_index + 1}]]
+        foreach node $nodes {
+            if {[lindex $node end-1] ne "availability-zone"} {
+                return 0
+            }
+        }
+    }
+    return 1
+}
+
 start_cluster 2 0 {tags {external:skip cluster} overrides {cluster-ping-interval 100}} {
-    test "Availability zone appears in CLUSTER NODES/SLOTS/SHARDS" {
+    test "Availability zone appears in SLOTS/SHARDS" {
         R 0 CONFIG SET availability-zone zone-a
         R 1 CONFIG SET availability-zone zone-b
 
         wait_for_condition 50 100 {
-            [string match "* zone-a*" [R 1 CLUSTER NODES]] &&
-            [string match "* zone-b*" [R 0 CLUSTER NODES]]
+            [slots_map_has_az_last [R 0 CLUSTER SLOTS]]
         } else {
-            fail "Availability zone was not propagated in CLUSTER NODES"
+            fail "Availability zone was not propagated in CLUSTER SLOTS"
         }
-
-        puts "CLUSTER NODES (after initial set):"
-        puts [R 0 CLUSTER NODES]
 
         set slots_resp [R 0 CLUSTER SLOTS]
         set slots_str [join $slots_resp " "]
+        assert_match "*availability-zone*" $slots_str
         assert_match "*zone-a*" $slots_str
         assert_match "*zone-b*" $slots_str
 
         puts "CLUSTER SLOTS (after initial set):"
         puts $slots_resp
 
+        wait_for_condition 50 100 {
+            [shards_map_has_az_last [R 0 CLUSTER SHARDS]]
+        } else {
+            fail "Availability zone was not propagated in CLUSTER SHARDS"
+        }
+
         set shards_resp [R 0 CLUSTER SHARDS]
         set shards_str [join $shards_resp " "]
-        assert_match "*availability_zone*" $shards_str
+        assert_match "*availability-zone*" $shards_str
         assert_match "*zone-a*" $shards_str
         assert_match "*zone-b*" $shards_str
 
@@ -33,32 +67,33 @@ start_cluster 2 0 {tags {external:skip cluster} overrides {cluster-ping-interval
 
     test "Availability zone updates at runtime" {
         R 0 CONFIG SET availability-zone zone-a
-        wait_for_condition 50 100 {
-            [string match "* zone-a*" [R 1 CLUSTER NODES]]
-        } else {
-            fail "Initial availability zone not propagated in CLUSTER NODES"
-        }
-
         R 0 CONFIG SET availability-zone zone-c
-        wait_for_condition 50 100 {
-            [string match "* zone-c*" [R 1 CLUSTER NODES]]
-        } else {
-            fail "Updated availability zone not propagated in CLUSTER NODES"
-        }
 
-        puts "CLUSTER NODES (after update to zone-c):"
-        puts [R 1 CLUSTER NODES]
+        wait_for_condition 50 100 {
+            [slots_map_has_az_last [R 1 CLUSTER SLOTS]] &&
+            [string match "*zone-c*" [join [R 1 CLUSTER SLOTS] " "]]
+        } else {
+            fail "Availability zone was not propagated in CLUSTER SLOTS"
+        }
 
         set slots_resp [R 1 CLUSTER SLOTS]
         set slots_str [join $slots_resp " "]
+        assert_match "*availability-zone*" $slots_str
         assert_match "*zone-c*" $slots_str
 
         puts "CLUSTER SLOTS (after update to zone-c):"
         puts $slots_resp
 
+        wait_for_condition 50 100 {
+            [shards_map_has_az_last [R 1 CLUSTER SHARDS]] &&
+            [string match "*zone-c*" [join [R 1 CLUSTER SHARDS] " "]]
+        } else {
+            fail "Availability zone was not propagated in CLUSTER SHARDS"
+        }
+
         set shards_resp [R 1 CLUSTER SHARDS]
         set shards_str [join $shards_resp " "]
-        assert_match "*availability_zone*" $shards_str
+        assert_match "*availability-zone*" $shards_str
         assert_match "*zone-c*" $shards_str
 
         puts "CLUSTER SHARDS (after update to zone-c):"
@@ -70,21 +105,15 @@ start_cluster 2 0 {tags {external:skip cluster} overrides {cluster-ping-interval
         R 1 CONFIG SET availability-zone ""
 
         wait_for_condition 50 100 {
-            ![string match "* zone-a*" [R 0 CLUSTER NODES]] &&
-            ![string match "* zone-b*" [R 0 CLUSTER NODES]] &&
-            ![string match "* zone-c*" [R 0 CLUSTER NODES]] &&
-            ![string match "* zone-a*" [R 1 CLUSTER NODES]] &&
-            ![string match "* zone-b*" [R 1 CLUSTER NODES]] &&
-            ![string match "* zone-c*" [R 1 CLUSTER NODES]]
+            ![string match "*availability-zone*" [join [R 0 CLUSTER SLOTS] " "]] &&
+            ![string match "*availability-zone*" [join [R 0 CLUSTER SHARDS] " "]]
         } else {
-            fail "Availability zone was not cleared from CLUSTER NODES"
+            fail "Availability zone was not cleared from CLUSTER SLOTS/SHARDS"
         }
-
-        puts "CLUSTER NODES (after clearing availability zone):"
-        puts [R 0 CLUSTER NODES]
 
         set slots_resp [R 0 CLUSTER SLOTS]
         set slots_str [join $slots_resp " "]
+        assert {[string match "*availability-zone*" $slots_str] == 0}
         assert {[string match "*zone-a*" $slots_str] == 0}
         assert {[string match "*zone-b*" $slots_str] == 0}
         assert {[string match "*zone-c*" $slots_str] == 0}
@@ -94,7 +123,7 @@ start_cluster 2 0 {tags {external:skip cluster} overrides {cluster-ping-interval
 
         set shards_resp [R 0 CLUSTER SHARDS]
         set shards_str [join $shards_resp " "]
-        assert {[string match "*availability_zone*" $shards_str] == 0}
+        assert {[string match "*availability-zone*" $shards_str] == 0}
 
         puts "CLUSTER SHARDS (after clearing availability zone):"
         puts $shards_resp

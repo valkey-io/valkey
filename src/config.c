@@ -2741,6 +2741,7 @@ int updateClusterHumanNodename(const char **err) {
 static int updateClusterAvailabilityZone(const char **err) {
     UNUSED(err);
     clusterUpdateMyselfAvailabilityZone();
+    invalidateClusterSlotsResp(err);
     return 1;
 }
 

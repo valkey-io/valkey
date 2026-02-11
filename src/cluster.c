@@ -1402,7 +1402,7 @@ int clusterRedirectBlockedClientIfNeeded(client *c) {
 
 void addNodeToNodeReply(client *c, clusterNode *node) {
     char *hostname = clusterNodeHostname(node);
-    addReplyArrayLen(c, 5);
+    addReplyArrayLen(c, 4);
     if (server.cluster_preferred_endpoint_type == CLUSTER_ENDPOINT_TYPE_IP) {
         addReplyBulkCString(c, clusterNodeIp(node, c));
     } else if (server.cluster_preferred_endpoint_type == CLUSTER_ENDPOINT_TYPE_HOSTNAME) {
@@ -1433,6 +1433,11 @@ void addNodeToNodeReply(client *c, clusterNode *node) {
         hostname[0] != '\0') {
         length++;
     }
+
+    if (sdslen(node->availability_zone) != 0) {
+        length++;
+    }
+
     addReplyMapLen(c, length);
 
     if (server.cluster_preferred_endpoint_type != CLUSTER_ENDPOINT_TYPE_IP) {
@@ -1446,13 +1451,14 @@ void addNodeToNodeReply(client *c, clusterNode *node) {
         addReplyBulkCString(c, hostname);
         length--;
     }
-    serverAssert(length == 0);
 
     if (sdslen(node->availability_zone) != 0) {
-        addReplyBulkCBuffer(c, node->availability_zone, sdslen(node->availability_zone));
-    } else {
-        addReplyNull(c);
+        addReplyBulkCString(c, "availability-zone");
+        addReplyBulkCString(c, node->availability_zone);
+        length--;
     }
+
+    serverAssert(length == 0);
 }
 
 /* Returns an indication if the node is fully available

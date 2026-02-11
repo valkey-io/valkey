@@ -3991,7 +3991,7 @@ void call(client *c, int flags) {
             if (server.payload_tracking_mode & PAYLOAD_TRACKING_MODE_WRITE)
                 updatePayloadHistogram(&server.payload_write_histogram, (int64_t)c->net_output_bytes_curr_cmd);
         }
-skip_payload_tracking:
+    skip_payload_tracking:
         clusterSlotStatsAddCpuDuration(c, c->duration);
     }
 

@@ -1998,8 +1998,8 @@ struct valkeyServer {
     int latency_tracking_enabled;              /* 1 if extended latency tracking is enabled, 0 otherwise. */
     double *latency_tracking_info_percentiles; /* Extended latency tracking info output percentile list configuration. */
     int latency_tracking_info_percentiles_len;
-    int payload_tracking_enabled;    /* 1 if payload histogram tracking is enabled, 0 otherwise. */
-    int payload_tracking_mode;       /* Payload tracking mode (read/write/both). */
+    int payload_tracking_enabled; /* 1 if payload histogram tracking is enabled, 0 otherwise. */
+    int payload_tracking_mode;    /* Payload tracking mode (read/write/both). */
     long long payload_tracking_sample_rate;
     unsigned long long payload_tracking_sample_counter;
     mstime_t payload_tracking_disable_at;

@@ -321,8 +321,8 @@ int test_shrink_rehashing_abort(int argc, char **argv, int flags) {
     TEST_ASSERT(hashtableSize(ht) == 1);
     TEST_ASSERT(hashtableGetRehashingIndex(ht) == 0);
 
-    /* Add elements to reach MAX_FILL_PERCENT_HARD and the extra 1 will trigger the shrink rehashing to abort. */
-    long add = hashtableEntriesPerBucket() * 5 + 1;
+    /* Add elements to reach MAX_FILL_PERCENT_HARD will trigger the shrink rehashing to abort. */
+    long add = hashtableEntriesPerBucket() * 5;
     for (j = 0; j < add; j++) {
         TEST_ASSERT(hashtableAdd(ht, (void *)(2000 + j)));
     }

@@ -395,7 +395,7 @@ static inline bool validateElementIfNeeded(hashtable *ht, void *elem) {
 }
 
 static bucket *findBucketForInsert(hashtable *ht, uint64_t hash, int *pos_in_bucket, int *table_index);
-static bool abortHashtableShrinkIfNeeded(hashtable *ht);
+static bool abortShrinkIfNeeded(hashtable *ht);
 
 static inline void freeEntry(hashtable *ht, void *entry) {
     if (ht->type->entryDestructor) ht->type->entryDestructor(entry);
@@ -775,6 +775,26 @@ static bool expand(hashtable *ht, size_t size, int *malloc_failed) {
     return resize(ht, size, malloc_failed);
 }
 
+/* This function swaps ht[0] and ht[1] in the hashtable. */
+static void swapTables(hashtable *ht) {
+    assert(hashtableIsRehashing(ht));
+
+    bucket *table_0 = ht->tables[0];
+    size_t used_0 = ht->used[0];
+    int8_t bucket_exp_0 = ht->bucket_exp[0];
+    size_t child_buckets_0 = ht->child_buckets[0];
+
+    ht->tables[0] = ht->tables[1];
+    ht->used[0] = ht->used[1];
+    ht->bucket_exp[0] = ht->bucket_exp[1];
+    ht->child_buckets[0] = ht->child_buckets[1];
+
+    ht->tables[1] = table_0;
+    ht->used[1] = used_0;
+    ht->bucket_exp[1] = bucket_exp_0;
+    ht->child_buckets[1] = child_buckets_0;
+}
+
 /* Checks if a candidate entry in a bucket matches the given key.
  *
  * This function examines a specific position in a bucket to determine if the
@@ -1047,7 +1067,6 @@ static bucket *findBucketForInsert(hashtable *ht, uint64_t hash, int *pos_in_buc
  * already exists. This must be ensured by the caller. */
 static void insert(hashtable *ht, uint64_t hash, void *entry) {
     hashtableExpandIfNeeded(ht);
-    abortHashtableShrinkIfNeeded(ht);
     rehashStepOnWriteIfNeeded(ht);
     int pos_in_bucket;
     int table_index;
@@ -1440,13 +1459,21 @@ bool hashtableTryExpand(hashtable *ht, size_t size) {
  * policy is set to AVOID and not at all if set to FORBID.
  * Returns true if expanding, false if not expanding. */
 bool hashtableExpandIfNeeded(hashtable *ht) {
-    /* Don't expand if rehashing is already in progress. */
     if (hashtableIsRehashing(ht)) {
-        return false;
+        if (ht->bucket_exp[1] >= ht->bucket_exp[0]) {
+            /* Expand already in progress. */
+            return false;
+        } else {
+            /* Shrink in progress, check the fill percent of ht[1] to see if
+             * we need to abort the shrink. */
+            return abortShrinkIfNeeded(ht);
+        }
     }
 
-    size_t min_capacity = ht->used[0] + ht->used[1] + 1;
-    size_t num_buckets = numBuckets(ht->bucket_exp[hashtableIsRehashing(ht) ? 1 : 0]);
+    /* There's no rehashing on going now, check the fill percent of ht[0] to
+     * see if we need to expand. */
+    size_t min_capacity = ht->used[0] + 1;
+    size_t num_buckets = numBuckets(ht->bucket_exp[0]);
     size_t current_capacity = num_buckets * ENTRIES_PER_BUCKET;
     unsigned max_fill_percent = resize_policy == HASHTABLE_RESIZE_ALLOW ? MAX_FILL_PERCENT_SOFT : MAX_FILL_PERCENT_HARD;
     if (min_capacity * 100 <= current_capacity * max_fill_percent) {
@@ -1471,12 +1498,16 @@ bool hashtableShrinkIfNeeded(hashtable *ht) {
     return resize(ht, ht->used[0], NULL);
 }
 
-/* Check if ht[1] is overloaded during shrink and abort if necessary.
- * Returns true if shrink was aborted, false otherwise.
+/* Check if ht[1] will overload during the shrink and abort if necessary.
  *
- * This function should be called before inserting new entries during shrink
- * rehashing to prevent ht[1] from becoming severely overloaded. */
-static bool abortHashtableShrinkIfNeeded(hashtable *ht) {
+ * This function should be called before inserting new entries during
+ * shrink rehashing to prevent ht[1] from becoming severely overloaded.
+ * Currently, it is called in hashtableExpandIfNeeded because we call
+ * it every time an insertion occurs, aborting shrink and switching it
+ * to expand is somehow expand-if-needed.
+ *
+ * Returns true if shrink was aborted, false otherwise. */
+static bool abortShrinkIfNeeded(hashtable *ht) {
     /* Not allow to abort. */
     if (!hashtable_can_abort_shrink) {
         return false;
@@ -1490,35 +1521,23 @@ static bool abortHashtableShrinkIfNeeded(hashtable *ht) {
         return false;
     }
 
-    /* Check ht[1] fill percent. */
-    size_t min_capacity = ht->used[1] + 1;
-    size_t num_buckets = numBuckets(ht->bucket_exp[1]);
-    size_t current_capacity = num_buckets * ENTRIES_PER_BUCKET;
-    unsigned max_fill_percent = MAX_FILL_PERCENT_HARD;
-    if (min_capacity * 100 <= current_capacity * max_fill_percent) {
+    /* Check if ht[1] can hold all elements when shrinking is complete. */
+    size_t num_elements = ht->used[0] + ht->used[1] + 1;
+    size_t ht1_capacity = numBuckets(ht->bucket_exp[1]) * ENTRIES_PER_BUCKET;
+    if (num_elements * 100 <= ht1_capacity * MAX_FILL_PERCENT_HARD) {
+        /* Don't abort shrinking. */
         return false;
     }
 
-    /* ht[1] is overloaded, swap the tables to abort the shrink. */
-    bucket *table_0 = ht->tables[0];
-    size_t used_0 = ht->used[0];
-    int8_t bucket_exp_0 = ht->bucket_exp[0];
-    size_t child_buckets_0 = ht->child_buckets[0];
-    ht->tables[0] = ht->tables[1];
-    ht->used[0] = ht->used[1];
-    ht->bucket_exp[0] = ht->bucket_exp[1];
-    ht->child_buckets[0] = ht->child_buckets[1];
-    ht->tables[1] = table_0;
-    ht->used[1] = used_0;
-    ht->bucket_exp[1] = bucket_exp_0;
-    ht->child_buckets[1] = child_buckets_0;
+    /* ht[1] will be overloaded, swap the tables to abort the shrink and
+     * switch it to expand. */
+    swapTables(ht);
 
-    /* Restart the rehash and set rehash_idx to 0. */
+    /* Set rehash_idx back to 0 and restart the rehashing. */
     ht->rehash_idx = 0;
 
     return true;
 }
-
 
 /* Resizes the hashtable to an optimal size, based on the current number of
  * entries. This is a convenience function that first tries to shrink the table

@@ -46,9 +46,6 @@ start_cluster 2 0 {tags {external:skip cluster} overrides {cluster-ping-interval
         assert_match "*zone-a*" $slots_str
         assert_match "*zone-b*" $slots_str
 
-        puts "CLUSTER SLOTS (after initial set):"
-        puts $slots_resp
-
         wait_for_condition 50 100 {
             [shards_map_has_az_last [R 0 CLUSTER SHARDS]]
         } else {
@@ -61,8 +58,6 @@ start_cluster 2 0 {tags {external:skip cluster} overrides {cluster-ping-interval
         assert_match "*zone-a*" $shards_str
         assert_match "*zone-b*" $shards_str
 
-        puts "CLUSTER SHARDS (after initial set):"
-        puts $shards_resp
     }
 
     test "Availability zone updates at runtime" {
@@ -81,9 +76,6 @@ start_cluster 2 0 {tags {external:skip cluster} overrides {cluster-ping-interval
         assert_match "*availability-zone*" $slots_str
         assert_match "*zone-c*" $slots_str
 
-        puts "CLUSTER SLOTS (after update to zone-c):"
-        puts $slots_resp
-
         wait_for_condition 50 100 {
             [shards_map_has_az_last [R 1 CLUSTER SHARDS]] &&
             [string match "*zone-c*" [join [R 1 CLUSTER SHARDS] " "]]
@@ -96,8 +88,6 @@ start_cluster 2 0 {tags {external:skip cluster} overrides {cluster-ping-interval
         assert_match "*availability-zone*" $shards_str
         assert_match "*zone-c*" $shards_str
 
-        puts "CLUSTER SHARDS (after update to zone-c):"
-        puts $shards_resp
     }
 
     test "Availability zone removed when set to empty string" {
@@ -118,14 +108,8 @@ start_cluster 2 0 {tags {external:skip cluster} overrides {cluster-ping-interval
         assert {[string match "*zone-b*" $slots_str] == 0}
         assert {[string match "*zone-c*" $slots_str] == 0}
 
-        puts "CLUSTER SLOTS (after clearing availability zone):"
-        puts $slots_resp
-
         set shards_resp [R 0 CLUSTER SHARDS]
         set shards_str [join $shards_resp " "]
         assert {[string match "*availability-zone*" $shards_str] == 0}
-
-        puts "CLUSTER SHARDS (after clearing availability zone):"
-        puts $shards_resp
     }
 }

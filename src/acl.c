@@ -488,22 +488,6 @@ static void ACLFreeUserVoid(void *u) {
     ACLFreeUser(u);
 }
 
-/* Helper function to free client.
- * We can't immediately free the current client because that would trigger assert
- * in prepareClientToWrite() when the server tries to write the response to the client.
- * So instead flag it for closure after the current command completes. */
-static inline void ACLFreeClientOrCloseLater(client *c, int async) {
-    if (c == server.current_client) {
-        c->flag.close_after_command = 1;
-    } else {
-        if (async) {
-            freeClientAsync(c);
-        } else {
-            freeClient(c);
-        }
-    }
-}
-
 /* When a user is deleted we need to cycle the active
  * connections in order to kill all the pending ones that
  * are authenticated with such user. */
@@ -523,7 +507,7 @@ void ACLFreeUserAndKillClients(user *u) {
             clientSetUser(c, DefaultUser, 0);
             /* We will write replies to this client later, so we can't
              * close it directly even if async. */
-            ACLFreeClientOrCloseLater(c, 1);
+            freeClientOrCloseLater(c, 1);
         }
     }
     ACLFreeUser(u);
@@ -2203,7 +2187,7 @@ static void ACLKillPubsubClientsIfNeeded(user *new, user *original) {
         client *c = listNodeValue(ln);
         if (c->user != original) continue;
         if (ACLShouldKillPubsubClient(c, channels)) {
-            ACLFreeClientOrCloseLater(c, 0);
+            freeClientOrCloseLater(c, 0);
         }
     }
 
@@ -2633,7 +2617,7 @@ static sds ACLLoadFromFile(const char *filename) {
             /* When the new channel list is NULL, it means the new user's channel list is a superset of the old user's
              * list. */
             if (!new_user || (channels && ACLShouldKillPubsubClient(c, channels))) {
-                ACLFreeClientOrCloseLater(c, 0);
+                freeClientOrCloseLater(c, 0);
                 continue;
             }
             c->user = new_user;

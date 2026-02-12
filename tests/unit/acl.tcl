@@ -1135,9 +1135,21 @@ start_server [list overrides [list "dir" $server_path "acl-pubsub-default" "allc
         set e
     } {*NOPERM*channel*}
 
+    test {Validate a user can remove their own channel permissions} {
+        reconnect
+        r ACL SETUSER removed_channels on nopass +@all &test
+        
+        # Create a RESP3 client will attempt to close itself by removing it's channel permissions
+        set resp3 [valkey_client]
+        $resp3 HELLO 3
+        $resp3 AUTH removed_channels blank
+        $resp3 SUBSCRIBE test
+        $resp3 ACL SETUSER removed_channels resetchannels
+        $resp3 close
+    }
+
     test {ACL LOAD does not crash server if current user is removed from ACL file} {
         # Setup
-        reconnect
         r ACL setuser removed-user on >password +@all ~* &*
         r ACL save
         

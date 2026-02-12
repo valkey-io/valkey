@@ -10005,11 +10005,7 @@ void revokeClientAuthentication(client *c) {
     clientSetUser(c, DefaultUser, 0);
     /* We will write replies to this client later, so we can't close it
      * directly even if async. */
-    if (c == server.current_client) {
-        c->flag.close_after_command = 1;
-    } else {
-        freeClientAsync(c);
-    }
+    freeClientOrCloseLater(c, 1);
 }
 
 /* Cleanup all clients that have been authenticated with this module. This

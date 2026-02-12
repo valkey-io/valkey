@@ -78,8 +78,9 @@ static robj *dbFindWithDictIndex(serverDb *db, sds key, int dict_index);
  * expired on replicas even if the primary is lagging expiring our key via DELs
  * in the replication link. */
 robj *lookupKey(serverDb *db, robj *key, int flags) {
-    int dict_index = getKVStoreIndexForKey(objectGetVal(key));
-    robj *val = dbFindWithDictIndex(db, objectGetVal(key), dict_index);
+    sds keyval = objectGetVal(key);
+    int dict_index = getKVStoreIndexForKey(keyval);
+    robj *val = dbFindWithDictIndex(db, keyval, dict_index);
     if (val) {
         /* Forcing deletion of expired keys on a replica makes the replica
          * inconsistent with the primary. We forbid it on readonly replicas, but
@@ -583,7 +584,8 @@ robj *dbUnshareStringValue(serverDb *db, robj *key, robj *o) {
     serverAssert(o->type == OBJ_STRING);
     if (o->refcount != 1 || o->encoding != OBJ_ENCODING_RAW) {
         robj *decoded = getDecodedObject(o);
-        o = createRawStringObject(objectGetVal(decoded), sdslen(objectGetVal(decoded)));
+        sds val = objectGetVal(decoded);
+        o = createRawStringObject(val, sdslen(val));
         decrRefCount(decoded);
         dbReplaceValue(db, key, &o);
     }
@@ -2118,7 +2120,8 @@ static keyStatus expireIfNeededWithDictIndex(serverDb *db, robj *key, robj *val,
     /* The key needs to be converted from static to heap before deleted */
     int static_key = key->refcount == OBJ_STATIC_REFCOUNT;
     if (static_key) {
-        key = createStringObject(objectGetVal(key), sdslen(objectGetVal(key)));
+        sds keyval = objectGetVal(key);
+        key = createStringObject(keyval, sdslen(keyval));
     }
     /* Delete the key */
     deleteExpiredKeyAndPropagateWithDictIndex(db, key, dict_index);

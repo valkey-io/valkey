@@ -53,18 +53,20 @@ static void listTypeTryConvertListpack(robj *o, robj **argv, int start, int end,
         add_length = end - start + 1;
     }
 
-    if (quicklistNodeExceedsLimit(server.list_max_listpack_size, lpBytes(objectGetVal(o)) + add_bytes,
-                                  lpLength(objectGetVal(o)) + add_length)) {
+    unsigned char *lp = objectGetVal(o);
+
+    if (quicklistNodeExceedsLimit(server.list_max_listpack_size, lpBytes(lp) + add_bytes,
+                                  lpLength(lp) + add_length)) {
         /* Invoke callback before conversion. */
         if (fn) fn(data);
 
         quicklist *ql = quicklistNew(server.list_max_listpack_size, server.list_compress_depth);
 
         /* Append listpack to quicklist if it's not empty, otherwise release it. */
-        if (lpLength(objectGetVal(o)))
-            quicklistAppendListpack(ql, objectGetVal(o));
+        if (lpLength(lp))
+            quicklistAppendListpack(ql, lp);
         else
-            lpFree(objectGetVal(o));
+            lpFree(lp);
         objectSetVal(o, ql);
         o->encoding = OBJ_ENCODING_QUICKLIST;
     }
@@ -161,16 +163,21 @@ void listTypePush(robj *subject, robj *value, int where) {
             ll2string(buf, 32, (long)objectGetVal(value));
             quicklistPush(objectGetVal(subject), buf, strlen(buf), pos);
         } else {
-            quicklistPush(objectGetVal(subject), objectGetVal(value), sdslen(objectGetVal(value)), pos);
+            sds valstr = objectGetVal(value);
+            quicklistPush(objectGetVal(subject), (unsigned char *)valstr, sdslen(valstr), pos);
         }
     } else if (subject->encoding == OBJ_ENCODING_LISTPACK) {
         unsigned char *new_val = NULL;
         if (value->encoding == OBJ_ENCODING_INT) {
-            new_val = (where == LIST_HEAD) ? lpPrependInteger(objectGetVal(subject), (long)objectGetVal(value))
-                                           : lpAppendInteger(objectGetVal(subject), (long)objectGetVal(value));
+            unsigned char *subj_val = (unsigned char *)objectGetVal(subject);
+            long val_int = (long)objectGetVal(value);
+            new_val = (where == LIST_HEAD) ? lpPrependInteger(subj_val, val_int)
+                                           : lpAppendInteger(subj_val, val_int);
         } else {
-            new_val = (where == LIST_HEAD) ? lpPrepend(objectGetVal(subject), objectGetVal(value), sdslen(objectGetVal(value)))
-                                           : lpAppend(objectGetVal(subject), objectGetVal(value), sdslen(objectGetVal(value)));
+            sds valstr = objectGetVal(value);
+            unsigned char *subj_val = (unsigned char *)objectGetVal(subject);
+            new_val = (where == LIST_HEAD) ? lpPrepend(subj_val, (unsigned char *)valstr, sdslen(valstr))
+                                           : lpAppend(subj_val, (unsigned char *)valstr, sdslen(valstr));
         }
         objectSetVal(subject, new_val);
     } else {
@@ -197,7 +204,8 @@ robj *listTypePop(robj *subject, int where) {
         int64_t vlen;
         unsigned char intbuf[LP_INTBUF_SIZE];
 
-        p = (where == LIST_HEAD) ? lpFirst(objectGetVal(subject)) : lpLast(objectGetVal(subject));
+        unsigned char *subj_val = (unsigned char *)objectGetVal(subject);
+        p = (where == LIST_HEAD) ? lpFirst(subj_val) : lpLast(subj_val);
         if (p) {
             vstr = lpGet(p, &vlen, intbuf);
             value = createStringObject((char *)vstr, vlen);
@@ -276,8 +284,9 @@ int listTypeNext(listTypeIterator *li, listTypeEntry *entry) {
     } else if (li->encoding == OBJ_ENCODING_LISTPACK) {
         entry->lpe = li->lpi;
         if (entry->lpe != NULL) {
+            unsigned char *lp = objectGetVal(li->subject);
             li->lpi =
-                (li->direction == LIST_TAIL) ? lpNext(objectGetVal(li->subject), li->lpi) : lpPrev(objectGetVal(li->subject), li->lpi);
+                (li->direction == LIST_TAIL) ? lpNext(lp, li->lpi) : lpPrev(lp, li->lpi);
             return 1;
         }
     } else {
@@ -391,10 +400,11 @@ int listTypeReplaceAtIndex(robj *o, int index, robj *value) {
 /* Compare the given object with the entry at the current position. */
 int listTypeEqual(listTypeEntry *entry, robj *o) {
     serverAssertWithInfo(NULL, o, sdsEncodedObject(o));
+    sds val = objectGetVal(o);
     if (entry->li->encoding == OBJ_ENCODING_QUICKLIST) {
-        return quicklistCompare(&entry->entry, objectGetVal(o), sdslen(objectGetVal(o)));
+        return quicklistCompare(&entry->entry, (unsigned char *)val, sdslen(val));
     } else if (entry->li->encoding == OBJ_ENCODING_LISTPACK) {
-        return lpCompare(entry->lpe, objectGetVal(o), sdslen(objectGetVal(o)));
+        return lpCompare(entry->lpe, (unsigned char *)val, sdslen(val));
     } else {
         serverPanic("Unknown list encoding");
     }
@@ -686,6 +696,7 @@ void addListListpackRangeReply(client *c, robj *o, int from, int rangelen, int r
     unsigned int vlen;
     long long lval;
 
+    unsigned char *lp = objectGetVal(o);
     while (rangelen--) {
         serverAssert(p); /* fail on corrupt data */
         vstr = lpGetValue(p, &vlen, &lval);
@@ -694,7 +705,7 @@ void addListListpackRangeReply(client *c, robj *o, int from, int rangelen, int r
         } else {
             addWritePreparedReplyBulkLongLong(wpc, lval);
         }
-        p = reverse ? lpPrev(objectGetVal(o), p) : lpNext(objectGetVal(o), p);
+        p = reverse ? lpPrev(lp, p) : lpNext(lp, p);
     }
 }
 

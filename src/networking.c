@@ -751,7 +751,8 @@ void addReply(client *c, robj *obj) {
     if (prepareClientToWrite(c) != C_OK) return;
 
     if (sdsEncodedObject(obj)) {
-        _addReplyToBufferOrList(c, objectGetVal(obj), sdslen(objectGetVal(obj)));
+        sds val = objectGetVal(obj);
+        _addReplyToBufferOrList(c, val, sdslen(val));
     } else if (obj->encoding == OBJ_ENCODING_INT) {
         /* For integer encoded strings we just convert it into a string
          * using our optimized function, and attach the resulting string
@@ -923,7 +924,8 @@ void afterErrorReply(client *c, const char *s, size_t len, int flags) {
  * Unlike addReplyErrorSds and others alike which rely on addReplyErrorLength. */
 void addReplyErrorObject(client *c, robj *err) {
     addReply(c, err);
-    afterErrorReply(c, objectGetVal(err), sdslen(objectGetVal(err)) - 2, 0); /* Ignore trailing \r\n */
+    sds errval = objectGetVal(err);
+    afterErrorReply(c, errval, sdslen(errval) - 2, 0); /* Ignore trailing \r\n */
 }
 
 /* Sends either a reply or an error reply by checking the first char.
@@ -3952,7 +3954,8 @@ static int addKeysToIncrFindBatch(client *c,
         int kvstore_idx = 0;
         if (server.cluster_enabled) {
             robj *first_key = argv[result.keys[0].pos];
-            kvstore_idx = keyHashSlot(objectGetVal(first_key), sdslen(objectGetVal(first_key)));
+            sds val = objectGetVal(first_key);
+            kvstore_idx = keyHashSlot(val, sdslen(val));
         }
         hashtable *ht = kvstoreGetHashtable(c->db->keys, kvstore_idx);
         if (ht != NULL) {
@@ -4537,7 +4540,8 @@ static int parseClientFiltersOrReply(client *c, int index, clientFilter *filter)
             /* Process all IDs until a non-numeric argument or end of args */
             while (index < c->argc) {
                 long long id;
-                if (!string2ll(objectGetVal(c->argv[index]), sdslen(objectGetVal(c->argv[index])), &id)) {
+                sds val = objectGetVal(c->argv[index]);
+                if (!string2ll(val, sdslen(val), &id)) {
                     break; /* Stop processing IDs if a non-numeric argument is encountered */
                 }
                 if (id < 1) {
@@ -4559,7 +4563,8 @@ static int parseClientFiltersOrReply(client *c, int index, clientFilter *filter)
             /* Process all NOT-IDs until a non-numeric argument or end of args */
             while (index < c->argc) {
                 long long not_id;
-                if (!string2ll(objectGetVal(c->argv[index]), sdslen(objectGetVal(c->argv[index])), &not_id)) {
+                sds val = objectGetVal(c->argv[index]);
+                if (!string2ll(val, sdslen(val), &not_id)) {
                     break; /* Stop processing NOT-IDs if a non-numeric argument is encountered */
                 }
                 if (not_id < 1) {
@@ -4611,14 +4616,16 @@ static int parseClientFiltersOrReply(client *c, int index, clientFilter *filter)
             filter->not_laddr = objectGetVal(c->argv[index + 1]);
             index += 2;
         } else if (!strcasecmp(objectGetVal(c->argv[index]), "user") && moreargs) {
-            filter->user = ACLGetUserByName(objectGetVal(c->argv[index + 1]), sdslen(objectGetVal(c->argv[index + 1])));
+            sds username = objectGetVal(c->argv[index + 1]);
+            filter->user = ACLGetUserByName(username, sdslen(username));
             if (filter->user == NULL) {
                 addReplyErrorFormat(c, "No such user '%s'", (char *)objectGetVal(c->argv[index + 1]));
                 return C_ERR;
             }
             index += 2;
         } else if (!strcasecmp(objectGetVal(c->argv[index]), "not-user") && moreargs) {
-            filter->not_user = ACLGetUserByName(objectGetVal(c->argv[index + 1]), sdslen(objectGetVal(c->argv[index + 1])));
+            sds notusername = objectGetVal(c->argv[index + 1]);
+            filter->not_user = ACLGetUserByName(notusername, sdslen(notusername));
             if (filter->not_user == NULL) {
                 addReplyErrorFormat(c, "No such user '%s'", (char *)objectGetVal(c->argv[index + 1]));
                 return C_ERR;

@@ -1516,7 +1516,8 @@ void ACLInit(void) {
  *  ENOENT: if the specified user does not exist at all.
  */
 int ACLCheckUserCredentials(robj *username, robj *password) {
-    user *u = ACLGetUserByName(objectGetVal(username), sdslen(objectGetVal(username)));
+    sds username_val = objectGetVal(username);
+    user *u = ACLGetUserByName(username_val, sdslen(username_val));
     if (u == NULL) {
         errno = ENOENT;
         return C_ERR;
@@ -1536,7 +1537,8 @@ int ACLCheckUserCredentials(robj *username, robj *password) {
     listIter li;
     listNode *ln;
     listRewind(u->passwords, &li);
-    sds hashed = ACLHashPassword(objectGetVal(password), sdslen(objectGetVal(password)));
+    sds password_val = objectGetVal(password);
+    sds hashed = ACLHashPassword((unsigned char *)password_val, sdslen(password_val));
     while ((ln = listNext(&li))) {
         sds thispass = listNodeValue(ln);
         if (!time_independent_strcmp(hashed, thispass, HASH_PASSWORD_LEN)) {
@@ -1576,7 +1578,8 @@ static int checkPasswordBasedAuth(client *c, robj *username, robj *password) {
     int result;
 
     if (ACLCheckUserCredentials(username, password) == C_OK) {
-        user *user = ACLGetUserByName(objectGetVal(username), sdslen(objectGetVal(username)));
+        sds username_val = objectGetVal(username);
+        user *user = ACLGetUserByName(username_val, sdslen(username_val));
         clientSetUser(c, user, 1);
         moduleNotifyUserChanged(c);
         result = AUTH_OK;
@@ -1880,7 +1883,8 @@ static int ACLSelectorCheckCmd(aclSelector *selector,
         keyReference *resultidx = result->keys;
         for (int j = 0; j < result->numkeys; j++) {
             int idx = resultidx[j].pos;
-            ret = ACLSelectorCheckKey(selector, objectGetVal(argv[idx]), sdslen(objectGetVal(argv[idx])), resultidx[j].flags, false);
+            sds val = objectGetVal(argv[idx]);
+            ret = ACLSelectorCheckKey(selector, val, sdslen(val), resultidx[j].flags, false);
             if (ret != ACL_OK) {
                 if (keyidxptr) *keyidxptr = resultidx[j].pos;
                 return ret;
@@ -1900,8 +1904,8 @@ static int ACLSelectorCheckCmd(aclSelector *selector,
             int idx = channelref[j].pos;
             if (!(channelref[j].flags & channel_flags)) continue;
             int is_pattern = channelref[j].flags & CMD_CHANNEL_PATTERN;
-            int ret =
-                ACLCheckChannelAgainstList(selector->channels, objectGetVal(argv[idx]), sdslen(objectGetVal(argv[idx])), is_pattern);
+            sds val = objectGetVal(argv[idx]);
+            int ret = ACLCheckChannelAgainstList(selector->channels, val, sdslen(val), is_pattern);
             if (ret != ACL_OK) {
                 if (keyidxptr) *keyidxptr = channelref[j].pos;
                 getKeysFreeResult(&channels);
@@ -2132,7 +2136,8 @@ static int ACLShouldKillPubsubClient(client *c, list *upcoming) {
         void *next;
         while (!kill && hashtableNext(&iter, &next)) {
             robj *o = next;
-            int res = ACLCheckChannelAgainstList(upcoming, objectGetVal(o), sdslen(objectGetVal(o)), 1);
+            sds val = objectGetVal(o);
+            int res = ACLCheckChannelAgainstList(upcoming, val, sdslen(val), 1);
             kill = (res == ACL_DENIED_CHANNEL);
         }
         hashtableCleanupIterator(&iter);
@@ -2145,7 +2150,8 @@ static int ACLShouldKillPubsubClient(client *c, list *upcoming) {
             void *next;
             while (!kill && hashtableNext(&iter, &next)) {
                 robj *o = next;
-                int res = ACLCheckChannelAgainstList(upcoming, objectGetVal(o), sdslen(objectGetVal(o)), 0);
+                sds val = objectGetVal(o);
+                int res = ACLCheckChannelAgainstList(upcoming, val, sdslen(val), 0);
                 kill = (res == ACL_DENIED_CHANNEL);
             }
             hashtableCleanupIterator(&iter);
@@ -2157,7 +2163,8 @@ static int ACLShouldKillPubsubClient(client *c, list *upcoming) {
             void *next;
             while (!kill && hashtableNext(&iter, &next)) {
                 robj *o = next;
-                int res = ACLCheckChannelAgainstList(upcoming, objectGetVal(o), sdslen(objectGetVal(o)), 0);
+                sds val = objectGetVal(o);
+                int res = ACLCheckChannelAgainstList(upcoming, val, sdslen(val), 0);
                 kill = (res == ACL_DENIED_CHANNEL);
             }
             hashtableCleanupIterator(&iter);
@@ -3116,7 +3123,8 @@ void aclCommand(client *c) {
         /* Redact the username to not leak any information about the user. */
         redactClientCommandArgument(c, 2);
 
-        user *u = ACLGetUserByName(objectGetVal(c->argv[2]), sdslen(objectGetVal(c->argv[2])));
+        sds username_val = objectGetVal(c->argv[2]);
+        user *u = ACLGetUserByName(username_val, sdslen(username_val));
         if (u == NULL) {
             addReplyNull(c);
             return;
@@ -3320,7 +3328,8 @@ void aclCommand(client *c) {
         }
     } else if (!strcasecmp(sub, "dryrun") && c->argc >= 4) {
         struct serverCommand *cmd;
-        user *u = ACLGetUserByName(objectGetVal(c->argv[2]), sdslen(objectGetVal(c->argv[2])));
+        sds username_val = objectGetVal(c->argv[2]);
+        user *u = ACLGetUserByName(username_val, sdslen(username_val));
         if (u == NULL) {
             addReplyErrorFormat(c, "User '%s' not found", (char *)objectGetVal(c->argv[2]));
             return;

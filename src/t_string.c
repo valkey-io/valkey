@@ -672,7 +672,9 @@ void appendCommand(client *c) {
 
         /* Append the value */
         o = dbUnshareStringValue(c->db, c->argv[1], o);
-        objectSetVal(o, sdscatlen(objectGetVal(o), objectGetVal(append), sdslen(objectGetVal(append))));
+        sds val = objectGetVal(o);
+        sds appendval = objectGetVal(append);
+        objectSetVal(o, sdscatlen(val, appendval, sdslen(appendval)));
         totlen = sdslen(objectGetVal(o));
     }
     signalModifiedKey(c, c->db, c->argv[1]);

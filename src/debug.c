@@ -1785,12 +1785,16 @@ static void symbolizeWithLibbacktrace(void **trace, int trace_size, int fd, int 
         /* Parent process - wait for child with timeout */
         int status;
         int waited = 0;
-        while (waitpid(pid, &status, WNOHANG) == 0 && waited < 50) {
+        pid_t ret;
+        while (waited < 50) {
+            ret = waitpid(pid, &status, WNOHANG);
+            if (ret > 0) break;                      /* Child exited */
+            if (ret == -1 && errno != EINTR) break;  /* Real error */
             usleep(10000); /* 10ms */
             waited++;
         }
-        if (waited >= 50) {
-            /* Child hung, kill it */
+        if (ret == 0 || (ret == -1 && errno == EINTR)) {
+            /* Timeout or still interrupted - kill child */
             kill(pid, SIGKILL);
             waitpid(pid, NULL, 0);
         }

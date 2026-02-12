@@ -7026,7 +7026,6 @@ const char *moduleNameFromCommand(struct serverCommand *cmd) {
     return cp->module->name;
 }
 
-/* Return the module from a module command. */
 ValkeyModule *moduleFromCommand(struct serverCommand *cmd) {
     serverAssert(cmd->proc == ValkeyModuleCommandDispatcher);
 

@@ -16,6 +16,12 @@ optin = "optin"
 ro = "ro"
 smove = "smove"
 
+[default]
+extend-ignore-re = [
+    "SELECTed",
+    "WATCHed",
+]
+
 [type.c]
 extend-ignore-re = [
     "BA3E2571", # sha1.c
@@ -56,6 +62,7 @@ arange = "arange"
 fo = "fo"
 frst = "frst"
 limite = "limite"
+pathc = "pathc"
 pn = "pn"
 seeked = "seeked"
 tre = "tre"

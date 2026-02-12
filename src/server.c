@@ -421,7 +421,8 @@ int dictObjKeyCompare(const void *key1, const void *key2) {
 
 uint64_t dictObjHash(const void *key) {
     const robj *o = key;
-    return dictGenHashFunction(objectGetVal(o), sdslen((sds)objectGetVal(o)));
+    sds val = objectGetVal(o);
+    return dictGenHashFunction(val, sdslen(val));
 }
 
 uint64_t dictSdsHash(const void *key) {
@@ -493,7 +494,8 @@ uint64_t dictEncObjHash(const void *key) {
     robj *o = (robj *)key;
 
     if (sdsEncodedObject(o)) {
-        return dictGenHashFunction(objectGetVal(o), sdslen((sds)objectGetVal(o)));
+        sds val = objectGetVal(o);
+        return dictGenHashFunction(val, sdslen(val));
     } else if (o->encoding == OBJ_ENCODING_INT) {
         char buf[32];
         int len;

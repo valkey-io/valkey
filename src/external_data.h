@@ -51,6 +51,7 @@ int externalDataLoadCheckComplete(void);
 void bioExternalDataDumpForFullSync(void);
 void bioExternalDataLoadForFullSync(void);
 void processExternalDataLoadForFullSync(void);
+void processDeferredInits(void);
 
 int externalFilterIsIn(int id, void *key);
 
@@ -81,5 +82,27 @@ sds getDBName(int db_num);
 
 /* Count external data keys for a specific database */
 unsigned long long externalDataCountKeys(int dbid);
+
+/* Deferred initialization entry */
+typedef struct DeferredInit {
+    sds db_name;              /* Database name that needs init */
+    mstime_t first_attempt;   /* When we first tried (for timeout) */
+    mstime_t next_retry;      /* When to retry next */
+    int attempts;             /* Number of retry attempts */
+} DeferredInit;
+
+/* Deferred initialization context */
+typedef struct ExternalDataDeferredCtx {
+    list *queue;              /* Queue of DeferredInit entries */
+    long max_defer_ms;   /* Max time to keep retrying */
+    /* Statistics */
+    long queued;         /* Total queued */
+    long retried;        /* Total retry attempts */
+    long succeeded;      /* Successful retries */
+    long expired;        /* Expired without success */
+} ExternalDataDeferredCtx;
+
+/* Get external data database by name */
+void *externalDataGetDatabase(const char *db_name);
 
 #endif /* __EXTERNAL_DATA_H_ */

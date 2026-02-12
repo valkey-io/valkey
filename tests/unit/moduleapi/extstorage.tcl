@@ -2775,8 +2775,8 @@ start_cluster 1 0 [list overrides [list "ext-data-mode" kv "ext-data-id" id38 "l
     }
 }
 
-start_server [list overrides [list "cluster-enabled" yes "cluster-ping-interval" 100 "cluster-node-timeout" 3000 "cluster-databases" 16 "cluster-slot-stats-enabled" yes "ext-data-mode" kv "ext-data-id" id39_primary "loglevel" debug] tags [list "external:skip"]] {
-    start_server [list overrides [list "cluster-enabled" yes "cluster-ping-interval" 100 "cluster-node-timeout" 3000 "cluster-databases" 16 "cluster-slot-stats-enabled" yes "ext-data-mode" kv "ext-data-id" id39_replica "loglevel" debug] tags [list "external:skip"]] {
+start_server [list overrides [list "cluster-enabled" yes "cluster-ping-interval" 50 "cluster-node-timeout" 1500 "cluster-databases" 16 "cluster-slot-stats-enabled" yes "ext-data-mode" kv "ext-data-id" id39_primary "loglevel" debug] tags [list "external:skip"]] {
+    start_server [list overrides [list "cluster-enabled" yes "cluster-ping-interval" 50 "cluster-node-timeout" 1500 "cluster-databases" 16 "cluster-slot-stats-enabled" yes "ext-data-mode" kv "ext-data-id" id39_replica "loglevel" debug] tags [list "external:skip"]] {
         test "EXTERNAL_DATA DUMP and LOAD: Partial sync scenario (cluster mode)" {
             set extdatamodule1 [file normalize tests/modules/extstorage/extdata1.so]
             
@@ -2863,8 +2863,8 @@ start_server [list overrides [list "cluster-enabled" yes "cluster-ping-interval"
     }
 }
 
-start_server [list overrides [list "cluster-enabled" yes "cluster-ping-interval" 100 "cluster-node-timeout" 3000 "cluster-databases" 16 "cluster-slot-stats-enabled" yes "ext-data-mode" kv "ext-data-id" id40_primary "loglevel" debug] tags [list "external:skip"]] {
-    start_server [list overrides [list "cluster-enabled" yes "cluster-ping-interval" 100 "cluster-node-timeout" 3000 "cluster-databases" 16 "cluster-slot-stats-enabled" yes "ext-data-mode" kv "ext-data-id" id40_replica "loglevel" debug] tags [list "external:skip"]] {
+start_server [list overrides [list "cluster-enabled" yes "cluster-ping-interval" 50 "cluster-node-timeout" 1500 "cluster-databases" 16 "cluster-slot-stats-enabled" yes "ext-data-mode" kv "ext-data-id" id40_primary "loglevel" debug] tags [list "external:skip"]] {
+    start_server [list overrides [list "cluster-enabled" yes "cluster-ping-interval" 50 "cluster-node-timeout" 1500 "cluster-databases" 16 "cluster-slot-stats-enabled" yes "ext-data-mode" kv "ext-data-id" id40_replica "loglevel" debug] tags [list "external:skip"]] {
         test "EXTERNAL_DATA DUMP and LOAD: replication (cluster mode)" {
             set extdatamodule1 [file normalize tests/modules/extstorage/extdata1.so]
             
@@ -3214,8 +3214,8 @@ start_server {tags {"external:skip" "wip"} overrides {"ext-data-mode" kv "ext-da
     }
 }
 
-start_server [list overrides [list "cluster-enabled" yes "cluster-ping-interval" 100 "cluster-node-timeout" 3000 "cluster-databases" 16 "cluster-slot-stats-enabled" yes "ext-data-mode" kv "ext-data-id" id45_primary "loglevel" debug "ext-data-async-load" no] tags [list "external:skip" "wip"]] {
-    start_server [list overrides [list "cluster-enabled" yes "cluster-ping-interval" 100 "cluster-node-timeout" 3000 "cluster-databases" 16 "cluster-slot-stats-enabled" yes "ext-data-mode" kv "ext-data-id" id45_replica "loglevel" debug "ext-data-async-load" no] tags [list "external:skip" "wip"]] {
+start_server [list overrides [list "cluster-enabled" yes "cluster-ping-interval" 50 "cluster-node-timeout" 1500 "cluster-databases" 16 "cluster-slot-stats-enabled" yes "ext-data-mode" kv "ext-data-id" id45_primary "loglevel" debug "ext-data-async-load" no] tags [list "external:skip" "wip"]] {
+    start_server [list overrides [list "cluster-enabled" yes "cluster-ping-interval" 50 "cluster-node-timeout" 1500 "cluster-databases" 16 "cluster-slot-stats-enabled" yes "ext-data-mode" kv "ext-data-id" id45_replica "loglevel" debug "ext-data-async-load" no] tags [list "external:skip" "wip"]] {
         test "ext-data-async-load: Sync mode (cluster)" {
             set extdatamodule1 [file normalize tests/modules/extstorage/extdata1.so]
             
@@ -3372,8 +3372,8 @@ start_server [list overrides [list "ext-data-mode" kv "ext-data-id" id47 "loglev
 }
 
 # Test cluster mode with simulated failures
-start_server [list overrides [list "cluster-enabled" yes "cluster-ping-interval" 100 "cluster-node-timeout" 3000 "cluster-databases" 16 "cluster-slot-stats-enabled" yes "ext-data-mode" kv "ext-data-id" id48_primary "loglevel" debug] tags [list "external:skip"]] {
-    start_server [list overrides [list "cluster-enabled" yes "cluster-ping-interval" 100 "cluster-node-timeout" 3000 "cluster-databases" 16 "cluster-slot-stats-enabled" yes "ext-data-mode" kv "ext-data-id" id48_replica "loglevel" debug] tags [list "external:skip"]] {
+start_server [list overrides [list "cluster-enabled" yes "cluster-ping-interval" 50 "cluster-node-timeout" 1500 "cluster-databases" 16 "cluster-slot-stats-enabled" yes "ext-data-mode" kv "ext-data-id" id48_primary "loglevel" debug] tags [list "external:skip"]] {
+    start_server [list overrides [list "cluster-enabled" yes "cluster-ping-interval" 50 "cluster-node-timeout" 1500 "cluster-databases" 16 "cluster-slot-stats-enabled" yes "ext-data-mode" kv "ext-data-id" id48_replica "loglevel" debug] tags [list "external:skip"]] {
         set extdatamodule1 [file normalize tests/modules/extstorage/extdata1.so]
         
         test "External storage with simulated failures - cluster mode" {
@@ -3525,8 +3525,8 @@ start_server [list overrides [list "ext-data-mode" kv "ext-data-id" id49 "loglev
 }
 
 # Test cluster mode with 100% failure rate and replica restart
-start_server [list overrides [list "cluster-enabled" yes "cluster-ping-interval" 100 "cluster-node-timeout" 3000 "cluster-databases" 16 "cluster-slot-stats-enabled" yes "ext-data-mode" kv "ext-data-id" id50_primary "loglevel" debug] tags [list "external:skip" "slow"]] {
-    start_server [list overrides [list "cluster-enabled" yes "cluster-ping-interval" 100 "cluster-node-timeout" 3000 "cluster-databases" 16 "cluster-slot-stats-enabled" yes "ext-data-mode" kv "ext-data-id" id50_replica "loglevel" debug] tags [list "external:skip" "slow"]] {
+start_server [list overrides [list "cluster-enabled" yes "cluster-ping-interval" 50 "cluster-node-timeout" 1500 "cluster-databases" 16 "cluster-slot-stats-enabled" yes "ext-data-mode" kv "ext-data-id" id50_primary "loglevel" debug] tags [list "external:skip" "slow"]] {
+    start_server [list overrides [list "cluster-enabled" yes "cluster-ping-interval" 50 "cluster-node-timeout" 1500 "cluster-databases" 16 "cluster-slot-stats-enabled" yes "ext-data-mode" kv "ext-data-id" id50_replica "loglevel" debug] tags [list "external:skip" "slow"]] {
         set extdatamodule1 [file normalize tests/modules/extstorage/extdata1.so]
 
         test "External storage with 100% failures and restart - cluster mode" {
@@ -3621,12 +3621,12 @@ test {Cluster slot migration maintains node_id and data integrity} {
     set extdatamodule1 [file normalize tests/modules/extstorage/extdata1.so]
     
     # Start first node with ext-data-id id1
-    start_server [list overrides [list "cluster-enabled" yes "cluster-ping-interval" 100 "cluster-node-timeout" 3000 "cluster-databases" 16 "cluster-slot-stats-enabled" yes "ext-data-mode" kv "ext-data-id" id51 "loglevel" notice] tags [list "external:skip"]] {
+    start_server [list overrides [list "cluster-enabled" yes "cluster-ping-interval" 50 "cluster-node-timeout" 1500 "cluster-databases" 16 "cluster-slot-stats-enabled" yes "ext-data-mode" kv "ext-data-id" id51 "loglevel" notice] tags [list "external:skip"]] {
         set node1_port [srv 0 port]
         set node1 [srv 0 client]
         
         # Start second node with ext-data-id id2
-        start_server [list overrides [list "cluster-enabled" yes "cluster-ping-interval" 100 "cluster-node-timeout" 3000 "cluster-databases" 16 "cluster-slot-stats-enabled" yes "ext-data-mode" kv "ext-data-id" id74 "loglevel" notice] tags [list "external:skip"]] {
+        start_server [list overrides [list "cluster-enabled" yes "cluster-ping-interval" 50 "cluster-node-timeout" 1500 "cluster-databases" 16 "cluster-slot-stats-enabled" yes "ext-data-mode" kv "ext-data-id" id74 "loglevel" notice] tags [list "external:skip"]] {
             set node2_port [srv 0 port]
             set node2 [srv 0 client]
             

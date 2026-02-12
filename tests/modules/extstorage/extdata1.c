@@ -1269,9 +1269,17 @@ static int storageDumpFunction(ValkeyModuleCtx *module_ctx,
 
 /* Helper function to find the latest backup_id in a directory
  * Returns EXTERNAL_SUCCESS and sets backup_id_out if found, EXTERNAL_NOT_FOUND otherwise */
-static int findLatestBackupId(ValkeyModuleCtx *module_ctx, const char *source_node_id, 
-                               int dbid, const char *file_type,
-                               char *backup_id_out, size_t backup_id_out_size) {
+/* Structure to hold multiple backup IDs */
+#define MAX_BACKUP_IDS 32
+typedef struct {
+    char backup_ids[MAX_BACKUP_IDS][BACKUP_ID_MAX_LEN];
+    int count;
+} BackupIdList;
+
+/* Find ALL backup IDs with the latest timestamp for a given file type */
+static int findAllLatestBackupIds(ValkeyModuleCtx *module_ctx, const char *source_node_id,
+                                   int dbid, const char *file_type,
+                                   BackupIdList *backup_list) {
     char db_dir[DB_DIR_MAX_LEN];
     snprintf(db_dir, sizeof(db_dir), "/tmp/external_data/%s/db%d", source_node_id, dbid);
     
@@ -1281,13 +1289,14 @@ static int findLatestBackupId(ValkeyModuleCtx *module_ctx, const char *source_no
         return EXTERNAL_NOT_FOUND;
     }
     
+    backup_list->count = 0;
     long long max_timestamp = -1;
-    char latest_backup_id[BACKUP_ID_MAX_LEN] = {0};
     
+    /* First pass: find the maximum timestamp */
     struct dirent *entry;
     while ((entry = readdir(dir)) != NULL) {
         /* Look for files matching pattern: helloextdata1_<file_type>_v0:<node_id>:<timestamp>.dat */
-        if (strstr(entry->d_name, file_type) != NULL && 
+        if (strstr(entry->d_name, file_type) != NULL &&
             strstr(entry->d_name, ".dat") != NULL &&
             strstr(entry->d_name, "v0:") != NULL) {
             
@@ -1316,10 +1325,59 @@ static int findLatestBackupId(ValkeyModuleCtx *module_ctx, const char *source_no
                                           &timestamp, temp_options, sizeof(temp_options)) == EXTERNAL_SUCCESS) {
                             if (timestamp > max_timestamp) {
                                 max_timestamp = timestamp;
-                                strncpy(latest_backup_id, current_backup_id, sizeof(latest_backup_id) - 1);
-                                ValkeyModule_Log(module_ctx, "debug", 
-                                               "Found backup: %s with timestamp %lld", 
-                                               current_backup_id, timestamp);
+                            }
+                        }
+                        ValkeyModule_FreeString(NULL, backup_str);
+                    }
+                }
+            }
+        }
+    }
+    
+    if (max_timestamp < 0) {
+        closedir(dir);
+        ValkeyModule_Log(module_ctx, "warning", "No backup files found in %s", db_dir);
+        return EXTERNAL_NOT_FOUND;
+    }
+    
+    /* Second pass: collect ALL backup_ids with the max timestamp */
+    rewinddir(dir);
+    while ((entry = readdir(dir)) != NULL && backup_list->count < MAX_BACKUP_IDS) {
+        if (strstr(entry->d_name, file_type) != NULL &&
+            strstr(entry->d_name, ".dat") != NULL &&
+            strstr(entry->d_name, "v0:") != NULL) {
+            
+            const char *backup_start = strstr(entry->d_name, "v0:");
+            if (backup_start) {
+                const char *backup_end = strstr(backup_start, ".dat");
+                if (backup_end) {
+                    size_t backup_len = backup_end - backup_start;
+                    if (backup_len < BACKUP_ID_MAX_LEN) {
+                        char current_backup_id[BACKUP_ID_MAX_LEN];
+                        memcpy(current_backup_id, backup_start, backup_len);
+                        current_backup_id[backup_len] = '\0';
+                        
+                        /* Parse to check timestamp */
+                        char temp_node_id[NODE_ID_MAX_LEN];
+                        int temp_slot;
+                        long long timestamp;
+                        char temp_options[OPTIONS_MAX_LEN];
+                        
+                        ValkeyModuleString *backup_str = ValkeyModule_CreateString(NULL, current_backup_id, backup_len);
+                        if (parseBackupIdV0(module_ctx, backup_str,
+                                          temp_node_id, sizeof(temp_node_id),
+                                          &temp_slot,
+                                          &timestamp, temp_options, sizeof(temp_options)) == EXTERNAL_SUCCESS) {
+                            /* Only collect backups with the max timestamp */
+                            if (timestamp == max_timestamp) {
+                                strncpy(backup_list->backup_ids[backup_list->count],
+                                       current_backup_id,
+                                       BACKUP_ID_MAX_LEN - 1);
+                                backup_list->backup_ids[backup_list->count][BACKUP_ID_MAX_LEN - 1] = '\0';
+                                ValkeyModule_Log(module_ctx, "notice",
+                                               "Discovered backup [%d]: %s (timestamp=%lld)",
+                                               backup_list->count, current_backup_id, timestamp);
+                                backup_list->count++;
                             }
                         }
                         ValkeyModule_FreeString(NULL, backup_str);
@@ -1330,16 +1388,29 @@ static int findLatestBackupId(ValkeyModuleCtx *module_ctx, const char *source_no
     }
     closedir(dir);
     
-    if (max_timestamp >= 0) {
-        strncpy(backup_id_out, latest_backup_id, backup_id_out_size - 1);
-        backup_id_out[backup_id_out_size - 1] = '\0';
-        ValkeyModule_Log(module_ctx, "notice", 
-                       "Latest backup for db%d: %s (timestamp=%lld)", 
-                       dbid, latest_backup_id, max_timestamp);
+    if (backup_list->count > 0) {
+        ValkeyModule_Log(module_ctx, "notice",
+                       "Found %d backup(s) for db%d with timestamp=%lld",
+                       backup_list->count, dbid, max_timestamp);
         return EXTERNAL_SUCCESS;
     }
     
-    ValkeyModule_Log(module_ctx, "warning", "No backup files found in %s", db_dir);
+    ValkeyModule_Log(module_ctx, "warning", "No backup files found with timestamp %lld", max_timestamp);
+    return EXTERNAL_NOT_FOUND;
+}
+
+/* Legacy function for single backup discovery - kept for backward compatibility */
+static int findLatestBackupId(ValkeyModuleCtx *module_ctx, const char *source_node_id,
+                               int dbid, const char *file_type,
+                               char *backup_id_out, size_t backup_id_out_size) {
+    BackupIdList backup_list;
+    if (findAllLatestBackupIds(module_ctx, source_node_id, dbid, file_type, &backup_list) == EXTERNAL_SUCCESS) {
+        if (backup_list.count > 0) {
+            strncpy(backup_id_out, backup_list.backup_ids[0], backup_id_out_size - 1);
+            backup_id_out[backup_id_out_size - 1] = '\0';
+            return EXTERNAL_SUCCESS;
+        }
+    }
     return EXTERNAL_NOT_FOUND;
 }
 
@@ -1394,132 +1465,230 @@ static int filterLoadFunction(ValkeyModuleCtx *module_ctx,
     }
     
     if (need_auto_discovery) {
-        /* Auto-discover latest backup */
+        /* Auto-discover ALL latest backups (for cluster mode with multiple slots) */
         const char *search_node_id = (backup_id == NULL) ? node_id : source_node_id;
-        if (findLatestBackupId(module_ctx, search_node_id, dbid, "filter",
-                              auto_backup_id, sizeof(auto_backup_id)) == EXTERNAL_SUCCESS) {
-            created_backup_id = ValkeyModule_CreateString(NULL, auto_backup_id, strlen(auto_backup_id));
-            backup_id_to_use = created_backup_id;
-            ValkeyModule_Log(module_ctx, "notice", "Auto-discovered latest filter backup: %s", auto_backup_id);
-            
-            /* Re-parse the discovered backup_id */
-            char parsed_options[OPTIONS_MAX_LEN];
-            size_t discovered_len;
-            const char *discovered_str = ValkeyModule_StringPtrLen(backup_id_to_use, &discovered_len);
-            
-            if (parseBackupIdV0(module_ctx, backup_id_to_use,
-                               source_node_id, sizeof(source_node_id),
-                               &parsed_slot,
-                               &parsed_timestamp,
-                               parsed_options, sizeof(parsed_options)) != EXTERNAL_SUCCESS) {
-                ValkeyModule_Log(module_ctx, "warning", "Invalid discovered backup_id format: %.*s",
-                               (int)discovered_len, discovered_str);
-                if (created_backup_id) ValkeyModule_FreeString(NULL, created_backup_id);
-                return EXTERNAL_ERROR;
-            }
-        } else {
+        BackupIdList backup_list;
+        
+        if (findAllLatestBackupIds(module_ctx, search_node_id, dbid, "filter", &backup_list) != EXTERNAL_SUCCESS) {
             ValkeyModule_Log(module_ctx, "warning", "No filter backup found for auto-load in node_id=%s directory", search_node_id);
             return EXTERNAL_NOT_FOUND;
         }
+        
+        /* Clear existing filter data once before loading all backups */
+        filterFlushFunction(module_ctx, filter_ctx, dbid);
+        
+        /* Mark that we're loading - this will cause incoming commands to be queued */
+        is_loading[dbid] = 1;
+        
+        int total_loaded = 0;
+        int success_count = 0;
+        
+        /* Load ALL discovered backups */
+        for (int i = 0; i < backup_list.count; i++) {
+            const char *current_backup_id = backup_list.backup_ids[i];
+            ValkeyModule_Log(module_ctx, "notice", "Loading filter backup [%d/%d]: %s",
+                           i + 1, backup_list.count, current_backup_id);
+            
+            /* Parse backup_id to get source_node_id and slot */
+            char current_source_node_id[NODE_ID_MAX_LEN];
+            int current_slot;
+            long long current_timestamp;
+            char current_options[OPTIONS_MAX_LEN];
+            
+            ValkeyModuleString *backup_str = ValkeyModule_CreateString(NULL, current_backup_id, strlen(current_backup_id));
+            if (parseBackupIdV0(module_ctx, backup_str,
+                               current_source_node_id, sizeof(current_source_node_id),
+                               &current_slot,
+                               &current_timestamp,
+                               current_options, sizeof(current_options)) != EXTERNAL_SUCCESS) {
+                ValkeyModule_Log(module_ctx, "warning", "Invalid backup_id format: %s", current_backup_id);
+                ValkeyModule_FreeString(NULL, backup_str);
+                continue;
+            }
+            ValkeyModule_FreeString(NULL, backup_str);
+            
+            /* Construct file path */
+            char file_path[FILENAME_MAX_LEN];
+            snprintf(file_path, sizeof(file_path),
+                     "/tmp/external_data/%s/db%d/%s_filter_%s.dat",
+                     current_source_node_id, dbid, module_name, current_backup_id);
+            
+            FILE *fp = fopen(file_path, "r");
+            if (!fp) {
+                ValkeyModule_Log(module_ctx, "warning", "Filter file not found: %s", file_path);
+                continue;
+            }
+            
+            /* Read and parse each line: <slot> <key_len> <key> */
+            char line[8192];
+            int loaded_count = 0;
+            while (fgets(line, sizeof(line), fp) != NULL) {
+                int line_slot;
+                size_t key_len;
+                
+                /* Parse metadata: <slot> <key_len> */
+                if (sscanf(line, "%d %zu", &line_slot, &key_len) != 2) {
+                    ValkeyModule_Log(module_ctx, "warning", "Invalid line format in %s", file_path);
+                    continue;
+                }
+                
+                /* Find position after "<slot> <key_len> " */
+                char *key_start = line;
+                for (int i = 0; i < 2; i++) {
+                    key_start = strchr(key_start, ' ');
+                    if (!key_start) break;
+                    key_start++;
+                }
+                
+                if (!key_start || strlen(key_start) < key_len) {
+                    ValkeyModule_Log(module_ctx, "warning", "Invalid key in line");
+                    continue;
+                }
+                
+                /* Read key (handle potential newline at end) */
+                char *key_buf = malloc(key_len + 1);
+                if (!key_buf) continue;
+                
+                memcpy(key_buf, key_start, key_len);
+                key_buf[key_len] = '\0';
+                
+                /* Store in memory pool */
+                ValkeyModuleString *key_str = ValkeyModule_CreateString(NULL, key_buf, key_len);
+                ValkeyModule_DictReplace(filter_mem_pool[dbid], key_str, "");
+                
+                /* Store slot information */
+                char slot_str[16];
+                snprintf(slot_str, sizeof(slot_str), "%d", line_slot);
+                ValkeyModuleString *slot_value = ValkeyModule_CreateString(NULL, slot_str, strlen(slot_str));
+                ValkeyModule_DictReplace(filter_slot_pool[dbid], key_str, slot_value);
+                ValkeyModule_RetainString(NULL, slot_value);
+                
+                ValkeyModule_FreeString(NULL, key_str);
+                free(key_buf);
+                loaded_count++;
+                
+                ValkeyModule_Log(module_ctx, "debug",
+                    "Loaded filter key: db=%d, slot=%d, key_len=%zu",
+                    dbid, line_slot, key_len);
+            }
+            
+            fclose(fp);
+            
+            if (loaded_count > 0) {
+                ValkeyModule_Log(module_ctx, "notice",
+                               "Loaded %d filter entries from slot:%d backup: %s",
+                               loaded_count, current_slot, current_backup_id);
+                total_loaded += loaded_count;
+                success_count++;
+            }
+        }
+        
+        /* Done loading - allow incoming commands to be processed */
+        is_loading[dbid] = 0;
+        
+        /* Drain queued commands that arrived during loading */
+        drainCommandQueue(module_ctx, dbid);
+        
+        if (success_count > 0) {
+            ValkeyModule_Log(module_ctx, "notice",
+                           "Successfully loaded %d filter entries from %d backup(s)",
+                           total_loaded, success_count);
+            return EXTERNAL_SUCCESS;
+        } else {
+            ValkeyModule_Log(module_ctx, "warning", "Failed to load any filter backups");
+            return EXTERNAL_ERROR;
+        }
     } else {
         backup_id_to_use = backup_id;
-    }
-    
-    /* At this point, we have a valid backup_id with real timestamp */
-    size_t backup_id_len;
-    const char *backup_id_str = ValkeyModule_StringPtrLen(backup_id_to_use, &backup_id_len);
-    
-    /* Construct file path for single filter file */
-    char file_path[FILENAME_MAX_LEN];
-    snprintf(file_path, sizeof(file_path),
-             "/tmp/external_data/%s/db%d/%s_filter_%.*s.dat",
-             source_node_id, dbid, module_name, (int)backup_id_len, backup_id_str);
-    
-    FILE *fp = fopen(file_path, "r");
-    if (!fp) {
-        ValkeyModule_Log(module_ctx, "warning", "Filter file not found: %s", file_path);
-        if (created_backup_id) {
-            ValkeyModule_FreeString(NULL, created_backup_id);
-        }
-        return EXTERNAL_NOT_FOUND;
-    }
-    
-    /* Clear existing filter data */
-    filterFlushFunction(module_ctx, filter_ctx, dbid);
-    
-    /* Mark that we're loading - this will cause incoming commands to be queued */
-    is_loading[dbid] = 1;
-    
-    int loaded_count = 0;
-    
-    /* Read and parse each line: <slot> <key_len> <key> */
-    char line[8192];
-    while (fgets(line, sizeof(line), fp) != NULL) {
-        int line_slot;
-        size_t key_len;
         
-        /* Parse metadata: <slot> <key_len> */
-        if (sscanf(line, "%d %zu", &line_slot, &key_len) != 2) {
-            ValkeyModule_Log(module_ctx, "warning", "Invalid line format in %s", file_path);
-            continue;
+        /* At this point, we have a valid backup_id with real timestamp */
+        size_t backup_id_len;
+        const char *backup_id_str = ValkeyModule_StringPtrLen(backup_id_to_use, &backup_id_len);
+        
+        /* Construct file path for single filter file */
+        char file_path[FILENAME_MAX_LEN];
+        snprintf(file_path, sizeof(file_path),
+                 "/tmp/external_data/%s/db%d/%s_filter_%.*s.dat",
+                 source_node_id, dbid, module_name, (int)backup_id_len, backup_id_str);
+        
+        FILE *fp = fopen(file_path, "r");
+        if (!fp) {
+            ValkeyModule_Log(module_ctx, "warning", "Filter file not found: %s", file_path);
+            return EXTERNAL_NOT_FOUND;
         }
         
-        /* Find position after "<slot> <key_len> " */
-        char *key_start = line;
-        for (int i = 0; i < 2; i++) {
-            key_start = strchr(key_start, ' ');
-            if (!key_start) break;
-            key_start++;
+        /* Clear existing filter data */
+        filterFlushFunction(module_ctx, filter_ctx, dbid);
+        
+        /* Mark that we're loading - this will cause incoming commands to be queued */
+        is_loading[dbid] = 1;
+        
+        int loaded_count = 0;
+        
+        /* Read and parse each line: <slot> <key_len> <key> */
+        char line[8192];
+        while (fgets(line, sizeof(line), fp) != NULL) {
+            int line_slot;
+            size_t key_len;
+            
+            /* Parse metadata: <slot> <key_len> */
+            if (sscanf(line, "%d %zu", &line_slot, &key_len) != 2) {
+                ValkeyModule_Log(module_ctx, "warning", "Invalid line format in %s", file_path);
+                continue;
+            }
+            
+            /* Find position after "<slot> <key_len> " */
+            char *key_start = line;
+            for (int i = 0; i < 2; i++) {
+                key_start = strchr(key_start, ' ');
+                if (!key_start) break;
+                key_start++;
+            }
+            
+            if (!key_start || strlen(key_start) < key_len) {
+                ValkeyModule_Log(module_ctx, "warning", "Invalid key in line");
+                continue;
+            }
+            
+            /* Read key (handle potential newline at end) */
+            char *key_buf = malloc(key_len + 1);
+            if (!key_buf) continue;
+            
+            memcpy(key_buf, key_start, key_len);
+            key_buf[key_len] = '\0';
+            
+            /* Store in memory pool */
+            ValkeyModuleString *key_str = ValkeyModule_CreateString(NULL, key_buf, key_len);
+            ValkeyModule_DictReplace(filter_mem_pool[dbid], key_str, "");
+            
+            /* Store slot information */
+            char slot_str[16];
+            snprintf(slot_str, sizeof(slot_str), "%d", line_slot);
+            ValkeyModuleString *slot_value = ValkeyModule_CreateString(NULL, slot_str, strlen(slot_str));
+            ValkeyModule_DictReplace(filter_slot_pool[dbid], key_str, slot_value);
+            ValkeyModule_RetainString(NULL, slot_value);
+            
+            ValkeyModule_FreeString(NULL, key_str);
+            free(key_buf);
+            loaded_count++;
+            
+            ValkeyModule_Log(module_ctx, "debug",
+                "Loaded filter key: db=%d, slot=%d, key_len=%zu",
+                dbid, line_slot, key_len);
         }
         
-        if (!key_start || strlen(key_start) < key_len) {
-            ValkeyModule_Log(module_ctx, "warning", "Invalid key in line");
-            continue;
-        }
+        fclose(fp);
         
-        /* Read key (handle potential newline at end) */
-        char *key_buf = malloc(key_len + 1);
-        if (!key_buf) continue;
+        ValkeyModule_Log(module_ctx, "notice", "Filter loaded from: %s (%d entries)", file_path, loaded_count);
         
-        memcpy(key_buf, key_start, key_len);
-        key_buf[key_len] = '\0';
+        /* Done loading - allow incoming commands to be processed */
+        is_loading[dbid] = 0;
         
-        /* Store in memory pool */
-        ValkeyModuleString *key_str = ValkeyModule_CreateString(NULL, key_buf, key_len);
-        ValkeyModule_DictReplace(filter_mem_pool[dbid], key_str, "");
+        /* Drain queued commands that arrived during loading */
+        drainCommandQueue(module_ctx, dbid);
         
-        /* Store slot information */
-        char slot_str[16];
-        snprintf(slot_str, sizeof(slot_str), "%d", line_slot);
-        ValkeyModuleString *slot_value = ValkeyModule_CreateString(NULL, slot_str, strlen(slot_str));
-        ValkeyModule_DictReplace(filter_slot_pool[dbid], key_str, slot_value);
-        ValkeyModule_RetainString(NULL, slot_value);
-        
-        ValkeyModule_FreeString(NULL, key_str);
-        free(key_buf);
-        loaded_count++;
-        
-        ValkeyModule_Log(module_ctx, "debug",
-            "Loaded filter key: db=%d, slot=%d, key_len=%zu",
-            dbid, line_slot, key_len);
+        return loaded_count > 0 ? EXTERNAL_SUCCESS : EXTERNAL_NOT_FOUND;
     }
-    
-    fclose(fp);
-    
-    /* Clean up created backup_id if we made one */
-    if (created_backup_id) {
-        ValkeyModule_FreeString(NULL, created_backup_id);
-    }
-    
-    ValkeyModule_Log(module_ctx, "notice", "Filter loaded from: %s (%d entries)", file_path, loaded_count);
-    
-    /* Done loading - allow incoming commands to be processed */
-    is_loading[dbid] = 0;
-    
-    /* Drain queued commands that arrived during loading */
-    drainCommandQueue(module_ctx, dbid);
-    
-    return loaded_count > 0 ? EXTERNAL_SUCCESS : EXTERNAL_NOT_FOUND;
 }
 
 static int storageLoadFunction(ValkeyModuleCtx *module_ctx,
@@ -1580,179 +1749,323 @@ static int storageLoadFunction(ValkeyModuleCtx *module_ctx,
     }
     
     if (need_auto_discovery) {
-        /* Auto-discover latest backup */
+        /* Auto-discover ALL latest backups (for cluster mode with multiple slots) */
         const char *search_node_id = (backup_id == NULL) ? node_id : source_node_id;
-        if (findLatestBackupId(module_ctx, search_node_id, dbid, "storage",
-                              auto_backup_id, sizeof(auto_backup_id)) == EXTERNAL_SUCCESS) {
-            created_backup_id = ValkeyModule_CreateString(NULL, auto_backup_id, strlen(auto_backup_id));
-            backup_id_to_use = created_backup_id;
-            ValkeyModule_Log(module_ctx, "warning", "DEBUG_SYNC: Auto-discovered latest storage backup: %s", auto_backup_id);
-            
-            /* Re-parse the discovered backup_id */
-            char parsed_options[OPTIONS_MAX_LEN];
-            size_t discovered_len;
-            const char *discovered_str = ValkeyModule_StringPtrLen(backup_id_to_use, &discovered_len);
-            
-            if (parseBackupIdV0(module_ctx, backup_id_to_use,
-                               source_node_id, sizeof(source_node_id),
-                               &parsed_slot,
-                               &parsed_timestamp,
-                               parsed_options, sizeof(parsed_options)) != EXTERNAL_SUCCESS) {
-                ValkeyModule_Log(module_ctx, "warning", "Invalid discovered backup_id format: %.*s",
-                               (int)discovered_len, discovered_str);
-                if (created_backup_id) ValkeyModule_FreeString(NULL, created_backup_id);
-                return EXTERNAL_ERROR;
-            }
-        } else {
+        BackupIdList backup_list;
+        
+        if (findAllLatestBackupIds(module_ctx, search_node_id, dbid, "storage", &backup_list) != EXTERNAL_SUCCESS) {
             ValkeyModule_Log(module_ctx, "warning", "DEBUG_SYNC: No storage backup found for auto-load in node_id=%s directory", search_node_id);
             return EXTERNAL_NOT_FOUND;
         }
+        
+        /* Clear existing storage data once before loading all backups */
+        storageFlushFunction(module_ctx, storage_ctx, dbid);
+        
+        /* Mark that we're loading - this will cause incoming commands to be queued */
+        is_loading[dbid] = 1;
+        
+        int total_loaded = 0;
+        int success_count = 0;
+        
+        /* Load ALL discovered backups */
+        for (int i = 0; i < backup_list.count; i++) {
+            const char *current_backup_id = backup_list.backup_ids[i];
+            ValkeyModule_Log(module_ctx, "warning", "DEBUG_SYNC: Loading storage backup [%d/%d]: %s",
+                           i + 1, backup_list.count, current_backup_id);
+            
+            /* Parse backup_id to get source_node_id and slot */
+            char current_source_node_id[NODE_ID_MAX_LEN];
+            int current_slot;
+            long long current_timestamp;
+            char current_options[OPTIONS_MAX_LEN];
+            
+            ValkeyModuleString *backup_str = ValkeyModule_CreateString(NULL, current_backup_id, strlen(current_backup_id));
+            if (parseBackupIdV0(module_ctx, backup_str,
+                               current_source_node_id, sizeof(current_source_node_id),
+                               &current_slot,
+                               &current_timestamp,
+                               current_options, sizeof(current_options)) != EXTERNAL_SUCCESS) {
+                ValkeyModule_Log(module_ctx, "warning", "Invalid backup_id format: %s", current_backup_id);
+                ValkeyModule_FreeString(NULL, backup_str);
+                continue;
+            }
+            ValkeyModule_FreeString(NULL, backup_str);
+            
+            /* Construct file path */
+            char file_path[FILENAME_MAX_LEN];
+            snprintf(file_path, sizeof(file_path),
+                     "/tmp/external_data/%s/db%d/%s_storage_%s.dat",
+                     current_source_node_id, dbid, module_name, current_backup_id);
+            
+            ValkeyModule_Log(module_ctx, "warning", "DEBUG_SYNC: Looking for storage file at: %s", file_path);
+            
+            FILE *fp = fopen(file_path, "r");
+            if (!fp) {
+                ValkeyModule_Log(module_ctx, "warning", "DEBUG_SYNC: Storage file not found: %s (errno=%d)", file_path, errno);
+                continue;
+            }
+            
+            ValkeyModule_Log(module_ctx, "warning", "DEBUG_SYNC: Successfully opened storage file: %s", file_path);
+            
+            /* Read and parse each line: <slot> <key_len> <key> <val_len> <val> */
+            char line[8192];
+            int loaded_count = 0;
+            while (fgets(line, sizeof(line), fp) != NULL) {
+                int line_slot;
+                size_t key_len, val_len;
+                
+                /* Parse metadata: <slot> <key_len> */
+                if (sscanf(line, "%d %zu", &line_slot, &key_len) != 2) {
+                    ValkeyModule_Log(module_ctx, "warning", "Invalid line format in %s", file_path);
+                    continue;
+                }
+                
+                /* Find position after "<slot> <key_len> " */
+                char *key_start = line;
+                for (int i = 0; i < 2; i++) {
+                    key_start = strchr(key_start, ' ');
+                    if (!key_start) break;
+                    key_start++;
+                }
+                
+                if (!key_start || strlen(key_start) < key_len) {
+                    ValkeyModule_Log(module_ctx, "warning", "Invalid key in line");
+                    continue;
+                }
+                
+                /* Read key */
+                char *key_buf = malloc(key_len + 1);
+                if (!key_buf) continue;
+                memcpy(key_buf, key_start, key_len);
+                key_buf[key_len] = '\0';
+                
+                /* Find value length position */
+                char *val_len_start = key_start + key_len;
+                if (*val_len_start != ' ') {
+                    free(key_buf);
+                    continue;
+                }
+                val_len_start++;
+                
+                if (sscanf(val_len_start, "%zu", &val_len) != 1) {
+                    free(key_buf);
+                    continue;
+                }
+                
+                /* Find value start */
+                char *val_start = strchr(val_len_start, ' ');
+                if (!val_start) {
+                    free(key_buf);
+                    continue;
+                }
+                val_start++;
+                
+                /* Read value (handle potential newline at end) */
+                char *val_buf = malloc(val_len + 1);
+                if (!val_buf) {
+                    free(key_buf);
+                    continue;
+                }
+                
+                size_t available = strlen(val_start);
+                if (available < val_len) {
+                    free(key_buf);
+                    free(val_buf);
+                    continue;
+                }
+                
+                memcpy(val_buf, val_start, val_len);
+                val_buf[val_len] = '\0';
+                
+                /* Store in memory pools */
+                ValkeyModuleString *key_str = ValkeyModule_CreateString(NULL, key_buf, key_len);
+                ValkeyModuleString *val_str = ValkeyModule_CreateString(NULL, val_buf, val_len);
+                
+                ValkeyModule_DictReplace(storage_mem_pool[dbid], key_str, val_str);
+                ValkeyModule_RetainString(NULL, val_str);
+                
+                /* Store slot information */
+                char slot_str[16];
+                snprintf(slot_str, sizeof(slot_str), "%d", line_slot);
+                ValkeyModuleString *slot_value = ValkeyModule_CreateString(NULL, slot_str, strlen(slot_str));
+                ValkeyModule_DictReplace(storage_slot_pool[dbid], key_str, slot_value);
+                ValkeyModule_RetainString(NULL, slot_value);
+                
+                ValkeyModule_FreeString(NULL, key_str);
+                free(key_buf);
+                free(val_buf);
+                loaded_count++;
+                
+                ValkeyModule_Log(module_ctx, "debug",
+                    "Loaded storage key: db=%d, slot=%d, key_len=%zu, val_len=%zu",
+                    dbid, line_slot, key_len, val_len);
+            }
+            
+            fclose(fp);
+            
+            if (loaded_count > 0) {
+                ValkeyModule_Log(module_ctx, "warning",
+                               "DEBUG_SYNC: Loaded %d storage entries from slot:%d backup: %s",
+                               loaded_count, current_slot, current_backup_id);
+                total_loaded += loaded_count;
+                success_count++;
+            }
+        }
+        
+        ValkeyModule_Log(module_ctx, "warning", "DEBUG_SYNC: Total storage entries loaded: %d from %d backup(s), storage_mem_pool[%d] size=%llu",
+                         total_loaded, success_count, dbid,
+                         (unsigned long long)ValkeyModule_DictSize(storage_mem_pool[dbid]));
+        
+        /* Done loading - allow incoming commands to be processed */
+        is_loading[dbid] = 0;
+        
+        /* Drain queued commands that arrived during loading */
+        drainCommandQueue(module_ctx, dbid);
+        
+        if (success_count > 0) {
+            return EXTERNAL_SUCCESS;
+        } else {
+            ValkeyModule_Log(module_ctx, "warning", "Failed to load any storage backups");
+            return EXTERNAL_ERROR;
+        }
     } else {
         backup_id_to_use = backup_id;
-    }
-    
-    /* At this point, we have a valid backup_id with real timestamp */
-    size_t backup_id_len;
-    const char *backup_id_str = ValkeyModule_StringPtrLen(backup_id_to_use, &backup_id_len);
-    
-    /* Construct file path for single storage file */
-    char file_path[FILENAME_MAX_LEN];
-    snprintf(file_path, sizeof(file_path),
-             "/tmp/external_data/%s/db%d/%s_storage_%.*s.dat",
-             source_node_id, dbid, module_name, (int)backup_id_len, backup_id_str);
-    
-    ValkeyModule_Log(module_ctx, "warning", "DEBUG_SYNC: Looking for storage file at: %s", file_path);
-    
-    FILE *fp = fopen(file_path, "r");
-    if (!fp) {
-        ValkeyModule_Log(module_ctx, "warning", "DEBUG_SYNC: Storage file not found: %s (errno=%d)", file_path, errno);
-        if (created_backup_id) {
-            ValkeyModule_FreeString(NULL, created_backup_id);
-        }
-        return EXTERNAL_NOT_FOUND;
-    }
-    
-    ValkeyModule_Log(module_ctx, "warning", "DEBUG_SYNC: Successfully opened storage file: %s", file_path);
-    
-    /* Clear existing storage data */
-    storageFlushFunction(module_ctx, storage_ctx, dbid);
-    
-    /* Mark that we're loading - this will cause incoming commands to be queued */
-    is_loading[dbid] = 1;
-    
-    int loaded_count = 0;
-    
-    /* Read and parse each line: <slot> <key_len> <key> <val_len> <val> */
-    char line[8192];
-    while (fgets(line, sizeof(line), fp) != NULL) {
-        int line_slot;
-        size_t key_len, val_len;
         
-        /* Parse metadata: <slot> <key_len> */
-        if (sscanf(line, "%d %zu", &line_slot, &key_len) != 2) {
-            ValkeyModule_Log(module_ctx, "warning", "Invalid line format in %s", file_path);
-            continue;
+        /* At this point, we have a valid backup_id with real timestamp */
+        size_t backup_id_len;
+        const char *backup_id_str = ValkeyModule_StringPtrLen(backup_id_to_use, &backup_id_len);
+        
+        /* Construct file path for single storage file */
+        char file_path[FILENAME_MAX_LEN];
+        snprintf(file_path, sizeof(file_path),
+                 "/tmp/external_data/%s/db%d/%s_storage_%.*s.dat",
+                 source_node_id, dbid, module_name, (int)backup_id_len, backup_id_str);
+        
+        ValkeyModule_Log(module_ctx, "warning", "DEBUG_SYNC: Looking for storage file at: %s", file_path);
+        
+        FILE *fp = fopen(file_path, "r");
+        if (!fp) {
+            ValkeyModule_Log(module_ctx, "warning", "DEBUG_SYNC: Storage file not found: %s (errno=%d)", file_path, errno);
+            return EXTERNAL_NOT_FOUND;
         }
         
-        /* Find position after "<slot> <key_len> " */
-        char *key_start = line;
-        for (int i = 0; i < 2; i++) {
-            key_start = strchr(key_start, ' ');
-            if (!key_start) break;
-            key_start++;
-        }
+        ValkeyModule_Log(module_ctx, "warning", "DEBUG_SYNC: Successfully opened storage file: %s", file_path);
         
-        if (!key_start || strlen(key_start) < key_len) {
-            ValkeyModule_Log(module_ctx, "warning", "Invalid key in line");
-            continue;
-        }
+        /* Clear existing storage data */
+        storageFlushFunction(module_ctx, storage_ctx, dbid);
         
-        /* Read key */
-        char *key_buf = malloc(key_len + 1);
-        if (!key_buf) continue;
-        memcpy(key_buf, key_start, key_len);
-        key_buf[key_len] = '\0';
+        /* Mark that we're loading - this will cause incoming commands to be queued */
+        is_loading[dbid] = 1;
         
-        /* Find value length position */
-        char *val_len_start = key_start + key_len;
-        if (*val_len_start != ' ') {
-            free(key_buf);
-            continue;
-        }
-        val_len_start++;
+        int loaded_count = 0;
         
-        if (sscanf(val_len_start, "%zu", &val_len) != 1) {
-            free(key_buf);
-            continue;
-        }
-        
-        /* Find value start */
-        char *val_start = strchr(val_len_start, ' ');
-        if (!val_start) {
-            free(key_buf);
-            continue;
-        }
-        val_start++;
-        
-        /* Read value (handle potential newline at end) */
-        char *val_buf = malloc(val_len + 1);
-        if (!val_buf) {
-            free(key_buf);
-            continue;
-        }
-        
-        size_t available = strlen(val_start);
-        if (available < val_len) {
+        /* Read and parse each line: <slot> <key_len> <key> <val_len> <val> */
+        char line[8192];
+        while (fgets(line, sizeof(line), fp) != NULL) {
+            int line_slot;
+            size_t key_len, val_len;
+            
+            /* Parse metadata: <slot> <key_len> */
+            if (sscanf(line, "%d %zu", &line_slot, &key_len) != 2) {
+                ValkeyModule_Log(module_ctx, "warning", "Invalid line format in %s", file_path);
+                continue;
+            }
+            
+            /* Find position after "<slot> <key_len> " */
+            char *key_start = line;
+            for (int i = 0; i < 2; i++) {
+                key_start = strchr(key_start, ' ');
+                if (!key_start) break;
+                key_start++;
+            }
+            
+            if (!key_start || strlen(key_start) < key_len) {
+                ValkeyModule_Log(module_ctx, "warning", "Invalid key in line");
+                continue;
+            }
+            
+            /* Read key */
+            char *key_buf = malloc(key_len + 1);
+            if (!key_buf) continue;
+            memcpy(key_buf, key_start, key_len);
+            key_buf[key_len] = '\0';
+            
+            /* Find value length position */
+            char *val_len_start = key_start + key_len;
+            if (*val_len_start != ' ') {
+                free(key_buf);
+                continue;
+            }
+            val_len_start++;
+            
+            if (sscanf(val_len_start, "%zu", &val_len) != 1) {
+                free(key_buf);
+                continue;
+            }
+            
+            /* Find value start */
+            char *val_start = strchr(val_len_start, ' ');
+            if (!val_start) {
+                free(key_buf);
+                continue;
+            }
+            val_start++;
+            
+            /* Read value (handle potential newline at end) */
+            char *val_buf = malloc(val_len + 1);
+            if (!val_buf) {
+                free(key_buf);
+                continue;
+            }
+            
+            size_t available = strlen(val_start);
+            if (available < val_len) {
+                free(key_buf);
+                free(val_buf);
+                continue;
+            }
+            
+            memcpy(val_buf, val_start, val_len);
+            val_buf[val_len] = '\0';
+            
+            /* Store in memory pools */
+            ValkeyModuleString *key_str = ValkeyModule_CreateString(NULL, key_buf, key_len);
+            ValkeyModuleString *val_str = ValkeyModule_CreateString(NULL, val_buf, val_len);
+            
+            ValkeyModule_DictReplace(storage_mem_pool[dbid], key_str, val_str);
+            ValkeyModule_RetainString(NULL, val_str);
+            
+            /* Store slot information */
+            char slot_str[16];
+            snprintf(slot_str, sizeof(slot_str), "%d", line_slot);
+            ValkeyModuleString *slot_value = ValkeyModule_CreateString(NULL, slot_str, strlen(slot_str));
+            ValkeyModule_DictReplace(storage_slot_pool[dbid], key_str, slot_value);
+            ValkeyModule_RetainString(NULL, slot_value);
+            
+            ValkeyModule_FreeString(NULL, key_str);
             free(key_buf);
             free(val_buf);
-            continue;
+            loaded_count++;
+            
+            ValkeyModule_Log(module_ctx, "debug",
+                "Loaded storage key: db=%d, slot=%d, key_len=%zu, val_len=%zu",
+                dbid, line_slot, key_len, val_len);
         }
         
-        memcpy(val_buf, val_start, val_len);
-        val_buf[val_len] = '\0';
+        fclose(fp);
         
-        /* Store in memory pools */
-        ValkeyModuleString *key_str = ValkeyModule_CreateString(NULL, key_buf, key_len);
-        ValkeyModuleString *val_str = ValkeyModule_CreateString(NULL, val_buf, val_len);
+        ValkeyModule_Log(module_ctx, "warning", "DEBUG_SYNC: Storage loaded from: %s (%d entries), storage_mem_pool[%d] size=%llu",
+                         file_path, loaded_count, dbid,
+                         (unsigned long long)ValkeyModule_DictSize(storage_mem_pool[dbid]));
         
-        ValkeyModule_DictReplace(storage_mem_pool[dbid], key_str, val_str);
-        ValkeyModule_RetainString(NULL, val_str);
+        /* Done loading - allow incoming commands to be processed */
+        is_loading[dbid] = 0;
         
-        /* Store slot information */
-        char slot_str[16];
-        snprintf(slot_str, sizeof(slot_str), "%d", line_slot);
-        ValkeyModuleString *slot_value = ValkeyModule_CreateString(NULL, slot_str, strlen(slot_str));
-        ValkeyModule_DictReplace(storage_slot_pool[dbid], key_str, slot_value);
-        ValkeyModule_RetainString(NULL, slot_value);
+        /* Drain queued commands that arrived during loading */
+        drainCommandQueue(module_ctx, dbid);
         
-        ValkeyModule_FreeString(NULL, key_str);
-        free(key_buf);
-        free(val_buf);
-        loaded_count++;
-        
-        ValkeyModule_Log(module_ctx, "debug",
-            "Loaded storage key: db=%d, slot=%d, key_len=%zu, val_len=%zu",
-            dbid, line_slot, key_len, val_len);
+        return loaded_count > 0 ? EXTERNAL_SUCCESS : EXTERNAL_NOT_FOUND;
     }
-    
-    fclose(fp);
-    
-    /* Clean up created backup_id if we made one */
-    if (created_backup_id) {
-        ValkeyModule_FreeString(NULL, created_backup_id);
-    }
-    
-    ValkeyModule_Log(module_ctx, "warning", "DEBUG_SYNC: Storage loaded from: %s (%d entries), storage_mem_pool[%d] size=%llu",
-                     file_path, loaded_count, dbid,
-                     (unsigned long long)ValkeyModule_DictSize(storage_mem_pool[dbid]));
-    
-    /* Done loading - allow incoming commands to be processed */
-    is_loading[dbid] = 0;
-    
-    /* Drain queued commands that arrived during loading */
-    drainCommandQueue(module_ctx, dbid);
-    
-    return loaded_count > 0 ? EXTERNAL_SUCCESS : EXTERNAL_NOT_FOUND;
 }
 
 /* Helper function to find databases from backup files - reused by get_state */

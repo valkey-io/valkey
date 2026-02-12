@@ -33,6 +33,8 @@ static void moduleStatsDispose(void *obj);
 static void externalDataAutoInitFromModule(externalDataModule *module);
 static int tryAutoInitFromModuleState(externalDataModule *module);
 static void setupModuleCtx(externalDataModuleInstance *mi);
+static void queueDeferredInit(const char *db_name, const char *reason);
+static int isDatabaseAlreadyInitialized(const char *db_name);
 
 /* Helper function to check if this node is a replica (standalone or cluster mode) */
 static inline int is_replica(void) {
@@ -101,6 +103,7 @@ struct externalDataCtx {
     dict *dbdata;        /* Database name -> Database data */
     size_t cache_memory; /* Overhead memory (structs, dictionaries, ..) used by all the modules */
     dict *modules_stats; /* Per module statistics */
+    ExternalDataDeferredCtx *deferred_ctx; /* Deferred initialization context */
 };
 
 typedef struct externalDataModule {
@@ -166,6 +169,16 @@ externalDataCtx *externalDataCtxCreate(void) {
     ret->dbdata = dictCreate(&dbdataDictType);
     ret->modules_stats = dictCreate(&moduleStatsDictType);
     ret->cache_memory = 0;
+    
+    /* Initialize deferred initialization context */
+    ret->deferred_ctx = zmalloc(sizeof(ExternalDataDeferredCtx));
+    ret->deferred_ctx->queue = listCreate();
+    ret->deferred_ctx->max_defer_ms = server.ext_data_defer_max_ms;
+    ret->deferred_ctx->queued = 0;
+    ret->deferred_ctx->retried = 0;
+    ret->deferred_ctx->succeeded = 0;
+    ret->deferred_ctx->expired = 0;
+    
     return ret;
 }
 
@@ -186,6 +199,9 @@ void processExternalDataLoadForFullSync(void) {
         return;
     }
 
+    /* Process any deferred inits first - handles previously queued attempts */
+    processDeferredInits();
+
     externalDataCtx *ctx = getCurrentExternalDataCtx();
     int db_count = ctx ? dictSize(ctx->dbdata) : 0;
     int is_repl = is_replica();
@@ -197,16 +213,70 @@ void processExternalDataLoadForFullSync(void) {
     if (ctx && db_count == 0 && is_repl) {
         serverLog(LL_NOTICE, "No databases initialized, attempting auto-initialization from modules");
         
-        /* Iterate through all registered modules and try auto-init */
-        dictIterator *di = dictGetIterator(ctx->modules);
-        dictEntry *de;
-        while ((de = dictNext(di))) {
-            externalDataModule *module = dictGetVal(de);
-            serverLog(LL_NOTICE, "Trying auto-init for module: %s", module->name);
-            int initialized = tryAutoInitFromModuleState(module);
-            serverLog(LL_NOTICE, "Auto-init for module %s: %s", module->name, initialized ? "SUCCESS" : "FAILED");
+        if (server.ext_data_async_load) {
+            /* Async mode: Try once, queue for deferred retry if it fails */
+            dictIterator *di = dictGetIterator(ctx->modules);
+            dictEntry *de;
+            while ((de = dictNext(di))) {
+                externalDataModule *module = dictGetVal(de);
+                serverLog(LL_NOTICE, "Trying auto-init for module: %s (async mode)", module->name);
+                int initialized = tryAutoInitFromModuleState(module);
+                serverLog(LL_NOTICE, "Auto-init for module %s: %s", module->name, initialized ? "SUCCESS" : "FAILED");
+            }
+            dictReleaseIterator(di);
+            
+        } else {
+            /* Sync mode: Retry with exponential backoff until timeout */
+            mstime_t start_time = mstime();
+            mstime_t timeout_ms = ctx->deferred_ctx->max_defer_ms;
+            int delay_ms = 100;
+            // mstime_t next_check = start_time + 100; /* Check every 100ms initially */
+            
+            serverLog(LL_NOTICE, "Sync mode: Starting auto-init with timeout %lld ms", timeout_ms);
+            
+            while ((mstime() - start_time) < timeout_ms) {
+                dictIterator *di = dictGetIterator(ctx->modules);
+                dictEntry *de;
+                int any_success = 0;
+                
+                while ((de = dictNext(di))) {
+                    externalDataModule *module = dictGetVal(de);
+                    if (tryAutoInitFromModuleState(module) == EXTERNAL_SUCCESS) {
+                        any_success = 1;
+                        serverLog(LL_NOTICE, "Auto-init for module %s succeeded (elapsed: %lld ms)",
+                                 module->name, mstime() - start_time);
+                    }
+                }
+                dictReleaseIterator(di);
+                
+                /* Check if init succeeded */
+                db_count = dictSize(ctx->dbdata);
+                if (db_count > 0 || any_success) {
+                    serverLog(LL_NOTICE, "Sync mode auto-init completed successfully (elapsed: %lld ms)",
+                             mstime() - start_time);
+                    break;
+                }
+                
+                /* Sleep with exponential backoff (capped at 1600ms) */
+                usleep(delay_ms * 1000);
+                delay_ms = (delay_ms < 1600) ? delay_ms * 2 : 1600;
+
+                // /* Process events while waiting - allows serverCron and deferred queue processing */
+                // while (mstime() < next_check) {
+                //     processEventsWhileBlocked();
+                // }
+                
+                // /* Exponential backoff for next check (100ms -> 200ms -> 400ms -> ... -> 1600ms) */
+                // mstime_t delay = next_check - start_time;
+                // delay = (delay < 1600) ? delay * 2 : 1600;
+                // next_check = mstime() + delay;
+            }
+            
+            if (db_count == 0) {
+                serverLog(LL_WARNING, "Sync mode auto-init timed out after %lld ms",
+                         mstime() - start_time);
+            }
         }
-        dictReleaseIterator(di);
         
         /* Re-check db_count after auto-init attempts */
         db_count = ctx ? dictSize(ctx->dbdata) : 0;
@@ -532,6 +602,114 @@ static int initializeDatabasesFromState(externalDataCtx *ctx, externalDataModule
     }
     
     return C_OK;
+}
+
+/* Helper function to get external database data by name
+ * Returns the externalDbData if found, NULL otherwise */
+void *externalDataGetDatabase(const char *db_name) {
+    externalDataCtx *ctx = getCurrentExternalDataCtx();
+    if (!ctx) return NULL;
+    
+    dictEntry *db = dictFind(ctx->dbdata, db_name);
+    if (!db) return NULL;
+    
+    return dictGetVal(db);
+}
+
+/* Check if database is already initialized or queued */
+static int isDatabaseAlreadyInitialized(const char *db_name) {
+    /* Check if already initialized */
+    if (externalDataGetDatabase(db_name) != NULL) return 1;
+    
+    /* Check if already in deferred queue */
+    externalDataCtx *ctx = getCurrentExternalDataCtx();
+    if (ctx && ctx->deferred_ctx) {
+        listIter li;
+        listNode *ln;
+        listRewind(ctx->deferred_ctx->queue, &li);
+        while ((ln = listNext(&li))) {
+            DeferredInit *entry = listNodeValue(ln);
+            if (strcmp(entry->db_name, db_name) == 0) return 1;
+        }
+    }
+    
+    return 0;
+}
+
+/* Queue a failed initialization for deferred retry */
+static void queueDeferredInit(const char *db_name, const char *reason) {
+    /* Check if already queued */
+    if (isDatabaseAlreadyInitialized(db_name)) return;
+    
+    externalDataCtx *ctx = getCurrentExternalDataCtx();
+    if (!ctx || !ctx->deferred_ctx) return;
+    
+    DeferredInit *entry = zmalloc(sizeof(*entry));
+    entry->db_name = sdsnew(db_name);
+    entry->first_attempt = commandTimeSnapshot();
+    entry->next_retry = entry->first_attempt + 100; /* First retry after 100ms */
+    entry->attempts = 1;
+    
+    listAddNodeTail(ctx->deferred_ctx->queue, entry);
+    ctx->deferred_ctx->queued++;
+    
+    serverLog(LL_NOTICE, "Deferred external data init for '%s': %s (will retry)",
+              db_name, reason);
+}
+
+/* Process deferred initialization queue with exponential backoff */
+void processDeferredInits(void) {
+    externalDataCtx *ext_ctx = getCurrentExternalDataCtx();
+    if (!ext_ctx || !ext_ctx->deferred_ctx) return;
+    
+    ExternalDataDeferredCtx *ctx = ext_ctx->deferred_ctx;
+    mstime_t now = commandTimeSnapshot();
+    listNode *node = listFirst(ctx->queue);
+    
+    serverLog(LL_DEBUG, "Processing deferred init queue (%lu entries)",
+              listLength(ctx->queue));
+    
+    while (node) {
+        DeferredInit *entry = listNodeValue(node);
+        listNode *next = listNextNode(node);
+        
+        /* Check if expired */
+        if ((now - entry->first_attempt) > ctx->max_defer_ms) {
+            serverLog(LL_WARNING,
+                      "Giving up on deferred init for '%s' after %lld ms",
+                      entry->db_name, now - entry->first_attempt);
+            ctx->expired++;
+            sdsfree(entry->db_name);
+            zfree(entry);
+            listDelNode(ctx->queue, node);
+            node = next;
+            continue;
+        }
+        
+        /* Check if it's time to retry */
+        if (now >= entry->next_retry) {
+            /* Try auto-init again */
+            ctx->retried++;
+            entry->attempts++;
+            
+            if (tryAutoInitFromModuleState(NULL) == C_OK) {
+                serverLog(LL_NOTICE,
+                          "Deferred init succeeded for '%s' on attempt %d",
+                          entry->db_name, entry->attempts);
+                ctx->succeeded++;
+                sdsfree(entry->db_name);
+                zfree(entry);
+                listDelNode(ctx->queue, node);
+            } else {
+                /* Schedule next retry with exponential backoff */
+                mstime_t backoff = 100 * (1 << (entry->attempts - 1)); /* 100, 200, 400, 800, ... */
+                if (backoff > 5000) backoff = 5000; /* Cap at 5 seconds */
+                entry->next_retry = now + backoff;
+            }
+        }
+        
+        node = next;
+    }
 }
 
 /*
@@ -2449,6 +2627,13 @@ void externalDataAutoInitFromModule(externalDataModule *module) {
     
     /* Try to auto-initialize from module state */
     int init_result = tryAutoInitFromModuleState(module);
+    
+    /* If auto-init failed, queue for deferred retry */
+    if (init_result != EXTERNAL_SUCCESS && is_repl) {
+        /* On failure, queue for deferred retry */
+        serverLog(LL_NOTICE, "Auto-init failed for module %s, queueing for deferred retry", module->name);
+        queueDeferredInit(module->name, "module not ready or missing state");
+    }
     
     if (server.initial_memory_usage == 0) {
         serverLog(LL_NOTICE, "Initial start detected, skipping load");

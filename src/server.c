@@ -1665,6 +1665,15 @@ long long serverCron(struct aeEventLoop *eventLoop, long long id, void *clientDa
         run_with_period(1000) replicationCron();
     }
 
+    /* Process deferred external data initializations.
+     * This runs periodically to handle cases where modules are loaded
+     * after replication sync has completed. */
+    run_with_period(1000) {
+        if (server.ext_data_mode) {
+            processDeferredInits();
+        }
+    }
+
     /* Run the Cluster cron. */
     if (server.cluster_enabled) {
         run_with_period(CLUSTER_CRON_PERIOD_MS) clusterCron();

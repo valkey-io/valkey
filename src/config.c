@@ -38,6 +38,7 @@
 #include "cluster_migrateslots.h"
 #include "eval.h"
 #include "lrulfu.h"
+#include "external_data.h"
 
 #include <fcntl.h>
 #include <sys/stat.h>
@@ -3420,6 +3421,7 @@ standardConfig static_configs[] = {
     createULongConfig("acllog-max-len", NULL, MODIFIABLE_CONFIG, 0, LONG_MAX, server.acllog_max_len, 128, INTEGER_CONFIG, NULL, NULL),
     createULongConfig("cluster-blacklist-ttl", NULL, MODIFIABLE_CONFIG, 0, ULONG_MAX, server.cluster_blacklist_ttl, 60, INTEGER_CONFIG, NULL, NULL),
     createULongConfig("cluster-slot-migration-log-max-len", NULL, MODIFIABLE_CONFIG, 0, LONG_MAX, server.cluster_slot_migration_log_max_len, 1000, INTEGER_CONFIG, NULL, NULL),
+    createULongConfig("ext-data-defer-max-ms", NULL, MODIFIABLE_CONFIG, 0, LLONG_MAX, server.ext_data_defer_max_ms, 30000, INTEGER_CONFIG, NULL, NULL),
 
     /* Long Long configs */
     createLongLongConfig("busy-reply-threshold", "lua-time-limit", MODIFIABLE_CONFIG, 0, LONG_MAX, server.busy_reply_threshold, 5000, INTEGER_CONFIG, NULL, NULL), /* milliseconds */

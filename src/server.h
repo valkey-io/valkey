@@ -2082,6 +2082,7 @@ struct valkeyServer {
     size_t ext_min_object_size_to_move;   /* Min size of k/v pair to move to external storage */
     unsigned long long ext_data_max_disk_size; /* Maximum disk space allowed to be used by external storage */
     unsigned long long ext_data_max_mem_size;  /* Maximum memory allowed to be used by external storage */
+    unsigned long ext_data_defer_max_ms;  /* Deferred external data module initialization max time */
     unsigned int ext_data_timeout;        /* Timeout for accessing external storage */
     unsigned int ext_data_store_by_size;  /* Size to exceed to store externally */
     int ext_data_async_load;              /* Load external data asynchronously on replica (1=async, 0=sync) */

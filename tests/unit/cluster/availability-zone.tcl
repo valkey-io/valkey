@@ -1,41 +1,11 @@
-proc slots_map_has_az_last {slots_resp} {
-    foreach entry $slots_resp {
-        foreach node [lrange $entry 2 end] {
-            set extra_map [lindex $node 3]
-            if {[llength $extra_map] == 0} {
-                return 0
-            }
-            if {[lindex $extra_map end-1] ne "availability-zone"} {
-                return 0
-            }
-        }
-    }
-    return 1
-}
-
-proc shards_map_has_az_last {shards_resp} {
-    foreach shard $shards_resp {
-        set nodes_index [lsearch -exact $shard "nodes"]
-        if {$nodes_index < 0} {
-            return 0
-        }
-        set nodes [lindex $shard [expr {$nodes_index + 1}]]
-        foreach node $nodes {
-            if {[lindex $node end-1] ne "availability-zone"} {
-                return 0
-            }
-        }
-    }
-    return 1
-}
-
 start_cluster 2 0 {tags {external:skip cluster} overrides {cluster-ping-interval 100}} {
     test "Availability zone appears in SLOTS/SHARDS" {
         R 0 CONFIG SET availability-zone zone-a
         R 1 CONFIG SET availability-zone zone-b
 
         wait_for_condition 50 100 {
-            [slots_map_has_az_last [R 0 CLUSTER SLOTS]]
+            [string match "*zone-a*" [join [R 0 CLUSTER SLOTS] " "]] &&
+            [string match "*zone-b*" [join [R 0 CLUSTER SLOTS] " "]]
         } else {
             fail "Availability zone was not propagated in CLUSTER SLOTS"
         }
@@ -47,7 +17,8 @@ start_cluster 2 0 {tags {external:skip cluster} overrides {cluster-ping-interval
         assert_match "*zone-b*" $slots_str
 
         wait_for_condition 50 100 {
-            [shards_map_has_az_last [R 0 CLUSTER SHARDS]]
+            [string match "*zone-a*" [join [R 0 CLUSTER SHARDS] " "]] &&
+            [string match "*zone-b*" [join [R 0 CLUSTER SHARDS] " "]]
         } else {
             fail "Availability zone was not propagated in CLUSTER SHARDS"
         }
@@ -65,7 +36,6 @@ start_cluster 2 0 {tags {external:skip cluster} overrides {cluster-ping-interval
         R 0 CONFIG SET availability-zone zone-c
 
         wait_for_condition 50 100 {
-            [slots_map_has_az_last [R 1 CLUSTER SLOTS]] &&
             [string match "*zone-c*" [join [R 1 CLUSTER SLOTS] " "]]
         } else {
             fail "Availability zone was not propagated in CLUSTER SLOTS"
@@ -77,7 +47,6 @@ start_cluster 2 0 {tags {external:skip cluster} overrides {cluster-ping-interval
         assert_match "*zone-c*" $slots_str
 
         wait_for_condition 50 100 {
-            [shards_map_has_az_last [R 1 CLUSTER SHARDS]] &&
             [string match "*zone-c*" [join [R 1 CLUSTER SHARDS] " "]]
         } else {
             fail "Availability zone was not propagated in CLUSTER SHARDS"

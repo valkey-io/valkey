@@ -2168,6 +2168,22 @@ void freeClientAsync(client *c) {
     debugServerAssertWithInfo(c, NULL, listSearchKey(server.clients_to_close, c) == NULL);
     listAddNodeTail(server.clients_to_close, c);
 }
+/* Helper function to free a client or flag it for closure after current command.
+ * We can't free the current client right now because that would trigger an
+ * assert in prepareClientToWrite() when the server tries to write the response.
+ * So instead flag it for closure after the current command completes. */
+void freeClientOrCloseLater(client *c, int async) {
+    if (c == server.current_client) {
+        c->flag.close_after_command = 1;
+    } else {
+        if (async) {
+            freeClientAsync(c);
+        } else {
+            freeClient(c);
+        }
+    }
+}
+
 
 /* Log errors for invalid use and free the client in async way.
  * We will add additional information about the client to the message. */

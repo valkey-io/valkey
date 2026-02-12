@@ -507,11 +507,7 @@ void ACLFreeUserAndKillClients(user *u) {
             clientSetUser(c, DefaultUser, 0);
             /* We will write replies to this client later, so we can't
              * close it directly even if async. */
-            if (c == server.current_client) {
-                c->flag.close_after_command = 1;
-            } else {
-                freeClientAsync(c);
-            }
+            freeClientOrCloseLater(c, 1);
         }
     }
     ACLFreeUser(u);
@@ -2190,7 +2186,9 @@ static void ACLKillPubsubClientsIfNeeded(user *new, user *original) {
     while ((ln = listNext(&li)) != NULL) {
         client *c = listNodeValue(ln);
         if (c->user != original) continue;
-        if (ACLShouldKillPubsubClient(c, channels)) freeClient(c);
+        if (ACLShouldKillPubsubClient(c, channels)) {
+            freeClientOrCloseLater(c, 0);
+        }
     }
 
     listRelease(channels);
@@ -2619,7 +2617,7 @@ static sds ACLLoadFromFile(const char *filename) {
             /* When the new channel list is NULL, it means the new user's channel list is a superset of the old user's
              * list. */
             if (!new_user || (channels && ACLShouldKillPubsubClient(c, channels))) {
-                freeClient(c);
+                freeClientOrCloseLater(c, 0);
                 continue;
             }
             c->user = new_user;

@@ -130,7 +130,7 @@ static void initializeEvalLuaState(lua_State *lua) {
 
     lua_setglobal(lua, "server");
 
-    /* Duplicate the function with __server__err__hanler and
+    /* Duplicate the function with __server__err__handler and
      * __redis__err_handler name for backwards compatibility. */
     lua_pushstring(lua, REGISTRY_ERROR_HANDLER_NAME);
     lua_gettable(lua, LUA_REGISTRYINDEX);

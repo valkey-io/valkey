@@ -110,6 +110,8 @@ static int parseBackupIdV0(ValkeyModuleCtx *module_ctx,
     size_t len;
     const char *backup_id_cstr = ValkeyModule_StringPtrLen(backup_id_str, &len);
     
+    /* Format width specifiers use NODE_ID_MAX_LEN - 1 (63) and OPTIONS_MAX_LEN - 1 (255)
+     * to match buffer sizes minus null terminator */
     /* Try parsing with options first: v0:<node_id>:<slot>:<timestamp>:<options> */
     int n = sscanf(backup_id_cstr, "v%d:%63[^:]:%d:%lld:%255[^\n]",
                    &version, node_id_buf, &slot_val, &ts, options_buf);
@@ -225,7 +227,8 @@ static int setFailurePercentConfig(const char *name, long long new_val, void *pr
     VALKEYMODULE_NOT_USED(privdata);
     ValkeyModule_Log(NULL, "notice", "DEBUG: setFailurePercentConfig called - set_failure_percent=%lld", new_val);
     if (new_val < 0 || new_val > 100) {
-        *err = ValkeyModule_CreateString(NULL, "set_failure_percent must be between 0 and 100", 47);
+        const char *msg = "set_failure_percent must be between 0 and 100";
+        *err = ValkeyModule_CreateString(NULL, msg, strlen(msg));
         return VALKEYMODULE_ERR;
     }
     set_failure_percent = new_val;
@@ -247,7 +250,8 @@ static int setDumpEveryWriteConfig(const char *name, long long new_val, void *pr
     ValkeyModule_Log(NULL, "debug", "DEBUG: setDumpEveryWriteConfig called - dump_every_write=%lld",
         new_val);
     if (new_val != 0 && new_val != 1) {
-        *err = ValkeyModule_CreateString(NULL, "dump_every_write must be 0 or 1", 36);
+        const char *msg = "dump_every_write must be 0 or 1";
+        *err = ValkeyModule_CreateString(NULL, msg, strlen(msg));
         return VALKEYMODULE_ERR;
     }
     dump_every_write = new_val;
@@ -1434,6 +1438,9 @@ static int filterLoadFunction(ValkeyModuleCtx *module_ctx,
     FILE *fp = fopen(file_path, "r");
     if (!fp) {
         ValkeyModule_Log(module_ctx, "warning", "Filter file not found: %s", file_path);
+        if (created_backup_id) {
+            ValkeyModule_FreeString(NULL, created_backup_id);
+        }
         return EXTERNAL_NOT_FOUND;
     }
     
@@ -1619,6 +1626,9 @@ static int storageLoadFunction(ValkeyModuleCtx *module_ctx,
     FILE *fp = fopen(file_path, "r");
     if (!fp) {
         ValkeyModule_Log(module_ctx, "warning", "DEBUG_SYNC: Storage file not found: %s (errno=%d)", file_path, errno);
+        if (created_backup_id) {
+            ValkeyModule_FreeString(NULL, created_backup_id);
+        }
         return EXTERNAL_NOT_FOUND;
     }
     

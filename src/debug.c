@@ -1788,9 +1788,9 @@ static void symbolizeWithLibbacktrace(void **trace, int trace_size, int fd, int 
         pid_t ret;
         while (waited < 50) {
             ret = waitpid(pid, &status, WNOHANG);
-            if (ret > 0) break;                      /* Child exited */
-            if (ret == -1 && errno != EINTR) break;  /* Real error */
-            usleep(10000); /* 10ms */
+            if (ret > 0) break;                     /* Child exited */
+            if (ret == -1 && errno != EINTR) break; /* Real error */
+            usleep(10000);                          /* 10ms */
             waited++;
         }
         if (ret == 0 || (ret == -1 && errno == EINTR)) {
@@ -1840,7 +1840,6 @@ __attribute__((noinline)) static void collect_stacktrace_data(void) {
     if (write(stacktrace_pipe[1], &trace_data, sizeof(trace_data)) == -1) { /* Avoid warning. */
     };
 }
-
 
 __attribute__((noinline)) static void writeStacktraces(int fd, int uplevel) {
     /* get the list of all the process's threads that don't block or ignore the THREADS_SIGNAL */

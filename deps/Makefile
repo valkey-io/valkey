@@ -128,4 +128,3 @@ fast_float_c_interface: .make-prerequisites
 	cd fast_float_c_interface && $(MAKE)
 
 .PHONY: fast_float_c_interface
-

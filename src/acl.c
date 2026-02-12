@@ -733,6 +733,10 @@ static int ACLSetSelectorCategory(aclSelector *selector, const char *category, i
     return C_OK;
 }
 
+/* Check if any ACL user has command rules referencing the specified module.
+ * If rule_out is not NULL, it will be set to a duplicate of the first matching
+ * rule.
+ * Returns 1 if any rules are found, 0 otherwise. */
 int ACLModuleHasCommandRules(const struct ValkeyModule *module, sds *rule_out) {
     raxIterator ri;
     raxStart(&ri, Users);

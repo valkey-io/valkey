@@ -1608,7 +1608,7 @@ long long ustime(void) {
     if (getMonotonicUs != NULL && monotonicGetType() == MONOTONIC_CLOCK_HW) {
         monotime mono_now = getMonotonicUs();
         monotime mono_since_gettimeofday = mono_now - mono_at_last_timeofday;
-        if (mono_since_gettimeofday < 100000) return ust + mono_since_gettimeofday;
+        if (mono_since_gettimeofday < 1000) return ust + mono_since_gettimeofday;
 
         /* Use time of day. */
         mono_at_last_timeofday = mono_now;

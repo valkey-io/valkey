@@ -571,7 +571,7 @@ void msetexCommand(client *c) {
 
     /* Parse the numkeys. */
     if (getRangeLongFromObjectOrReply(c, c->argv[1], 1, LONG_MAX, &numkeys,
-                                      "numkeys should be greater than 0") != C_OK) {
+                                      "invalid numkeys") != C_OK) {
         return;
     }
 

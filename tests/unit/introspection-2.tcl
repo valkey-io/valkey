@@ -181,6 +181,26 @@ start_server {tags {"introspection"}} {
         assert_equal $all_keys_with_target [r command getkeys ZUNIONSTORE target $numkeys {*}$all_keys]
     }
 
+    test {COMMAND GETKEYS MSETEX} {
+        assert_equal {key1{t}} [r command getkeys msetex 1 key1{t} val1]
+        assert_equal {key1{t} key2{t}} [r command getkeys msetex 2 key1{t} val1 key2{t} val2]
+        assert_equal {key1{t} key2{t} key3{t}} [r command getkeys msetex 3 key1{t} val1 key2{t} val2 key3{t} val3]
+
+        assert_equal {key1{t} key2{t}} [r command getkeys msetex 2 key1{t} val1 key2{t} val2 ex 10]
+        assert_equal {key1{t} key2{t}} [r command getkeys msetex 2 key1{t} val1 key2{t} val2 keepttl]
+        assert_equal {key1{t} key2{t}} [r command getkeys msetex 2 key1{t} val1 key2{t} val2 nx]
+    }
+
+    test {COMMAND GETKEYSANDFLAGS MSETEX} {
+        assert_equal {{key1{t} {OW update}}} [r command getkeysandflags msetex 1 key1{t} val1]
+        assert_equal {{key1{t} {OW update}} {key2{t} {OW update}}} [r command getkeysandflags msetex 2 key1{t} val1 key2{t} val2]
+        assert_equal {{key1{t} {OW update}} {key2{t} {OW update}} {key3{t} {OW update}}} [r command getkeysandflags msetex 3 key1{t} val1 key2{t} val2 key3{t} val2]
+
+        assert_equal {{key1{t} {OW update}} {key2{t} {OW update}}} [r command getkeysandflags msetex 2 key1{t} val1 key2{t} val2 ex 10]
+        assert_equal {{key1{t} {OW update}} {key2{t} {OW update}}} [r command getkeysandflags msetex 2 key1{t} val1 key2{t} val2 keepttl]
+        assert_equal {{key1{t} {OW update}} {key2{t} {OW update}}} [r command getkeysandflags msetex 2 key1{t} val1 key2{t} val2 nx]
+    }
+
     test "COMMAND LIST syntax error" {
         assert_error "ERR syntax error*" {r command list bad_arg}
         assert_error "ERR syntax error*" {r command list filterby bad_arg}

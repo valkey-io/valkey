@@ -81,7 +81,7 @@ jobs:
             contains(github.event.pull_request.labels.*.name, 'run-extra-tests')) &&
           (github.event.action != 'labeled' ||
             (github.event.pull_request.base.ref == 'unstable' && github.event.label.name == 'run-extra-tests'))
-        ) &&
+        )) &&
       !contains(github.event.inputs.skipjobs, 'ubuntu')
     timeout-minutes: 1440
     steps:
@@ -96,8 +96,8 @@ jobs:
           echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          repository: ${{ env.GITHUB_REPOSITORY || github.repository }}
-          ref: ${{ env.GITHUB_HEAD_REF || github.ref }}
+          repository: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name) || env.GITHUB_REPOSITORY || github.repository }}
+          ref: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.sha) || env.GITHUB_HEAD_REF || github.ref }}
       - name: make
         run: make all-with-unit-tests SERVER_CFLAGS='-Werror'
       - name: testprep
@@ -153,7 +153,7 @@ jobs:
             contains(github.event.pull_request.labels.*.name, 'run-extra-tests')) &&
           (github.event.action != 'labeled' ||
             (github.event.pull_request.base.ref == 'unstable' && github.event.label.name == 'run-extra-tests'))
-        ) &&
+        )) &&
       (!contains(github.event.inputs.skipjobs, 'ubuntu') || !contains(github.event.inputs.skipjobs, 'arm'))
     timeout-minutes: 14400
     steps:
@@ -168,8 +168,8 @@ jobs:
           echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          repository: ${{ env.GITHUB_REPOSITORY || github.repository }}
-          ref: ${{ env.GITHUB_HEAD_REF || github.ref }}
+          repository: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name) || env.GITHUB_REPOSITORY || github.repository }}
+          ref: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.sha) || env.GITHUB_HEAD_REF || github.ref }}
       - name: make
         run: make all-with-unit-tests SERVER_CFLAGS='-Werror'
       - name: testprep
@@ -199,7 +199,7 @@ jobs:
             contains(github.event.pull_request.labels.*.name, 'run-extra-tests')) &&
           (github.event.action != 'labeled' ||
             (github.event.pull_request.base.ref == 'unstable' && github.event.label.name == 'run-extra-tests'))
-        ) &&
+        )) &&
       !contains(github.event.inputs.skipjobs, 'fortify')
     container: ubuntu:plucky
     timeout-minutes: 1440
@@ -215,8 +215,8 @@ jobs:
           echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          repository: ${{ env.GITHUB_REPOSITORY || github.repository }}
-          ref: ${{ env.GITHUB_HEAD_REF || github.ref }}
+          repository: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name) || env.GITHUB_REPOSITORY || github.repository }}
+          ref: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.sha) || env.GITHUB_HEAD_REF || github.ref }}
       - name: make
         run: |
           apt-get update && apt-get install -y make gcc-13
@@ -249,7 +249,7 @@ jobs:
             contains(github.event.pull_request.labels.*.name, 'run-extra-tests')) &&
           (github.event.action != 'labeled' ||
             (github.event.pull_request.base.ref == 'unstable' && github.event.label.name == 'run-extra-tests'))
-        ) &&
+        )) &&
       !contains(github.event.inputs.skipjobs, 'malloc')
     timeout-minutes: 1440
     steps:
@@ -264,8 +264,8 @@ jobs:
           echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          repository: ${{ env.GITHUB_REPOSITORY || github.repository }}
-          ref: ${{ env.GITHUB_HEAD_REF || github.ref }}
+          repository: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name) || env.GITHUB_REPOSITORY || github.repository }}
+          ref: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.sha) || env.GITHUB_HEAD_REF || github.ref }}
       - name: make
         run: make MALLOC=libc SERVER_CFLAGS='-Werror'
       - name: testprep
@@ -292,7 +292,7 @@ jobs:
             contains(github.event.pull_request.labels.*.name, 'run-extra-tests')) &&
           (github.event.action != 'labeled' ||
             (github.event.pull_request.base.ref == 'unstable' && github.event.label.name == 'run-extra-tests'))
-        ) &&
+        )) &&
       !contains(github.event.inputs.skipjobs, 'malloc')
     timeout-minutes: 1440
     steps:
@@ -307,8 +307,8 @@ jobs:
           echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          repository: ${{ env.GITHUB_REPOSITORY || github.repository }}
-          ref: ${{ env.GITHUB_HEAD_REF || github.ref }}
+          repository: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name) || env.GITHUB_REPOSITORY || github.repository }}
+          ref: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.sha) || env.GITHUB_HEAD_REF || github.ref }}
       - name: make
         run: make MALLOC=libc CFLAGS=-DNO_MALLOC_USABLE_SIZE SERVER_CFLAGS='-Werror'
       - name: testprep
@@ -335,7 +335,7 @@ jobs:
             contains(github.event.pull_request.labels.*.name, 'run-extra-tests')) &&
           (github.event.action != 'labeled' ||
             (github.event.pull_request.base.ref == 'unstable' && github.event.label.name == 'run-extra-tests'))
-        ) &&
+        )) &&
       !contains(github.event.inputs.skipjobs, '32bit')
     timeout-minutes: 1440
     steps:
@@ -350,8 +350,8 @@ jobs:
           echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          repository: ${{ env.GITHUB_REPOSITORY || github.repository }}
-          ref: ${{ env.GITHUB_HEAD_REF || github.ref }}
+          repository: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name) || env.GITHUB_REPOSITORY || github.repository }}
+          ref: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.sha) || env.GITHUB_HEAD_REF || github.ref }}
       - name: make
         run: |
           sudo apt-get update && sudo apt-get install libc6-dev-i386
@@ -385,7 +385,7 @@ jobs:
             contains(github.event.pull_request.labels.*.name, 'run-extra-tests')) &&
           (github.event.action != 'labeled' ||
             (github.event.pull_request.base.ref == 'unstable' && github.event.label.name == 'run-extra-tests'))
-        ) &&
+        )) &&
       !contains(github.event.inputs.skipjobs, 'tls')
     timeout-minutes: 1440
     steps:
@@ -400,8 +400,8 @@ jobs:
           echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          repository: ${{ env.GITHUB_REPOSITORY || github.repository }}
-          ref: ${{ env.GITHUB_HEAD_REF || github.ref }}
+          repository: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name) || env.GITHUB_REPOSITORY || github.repository }}
+          ref: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.sha) || env.GITHUB_HEAD_REF || github.ref }}
       - name: make
         run: |
           make BUILD_TLS=yes SERVER_CFLAGS='-Werror'
@@ -435,7 +435,7 @@ jobs:
             contains(github.event.pull_request.labels.*.name, 'run-extra-tests')) &&
           (github.event.action != 'labeled' ||
             (github.event.pull_request.base.ref == 'unstable' && github.event.label.name == 'run-extra-tests'))
-        ) &&
+        )) &&
       !contains(github.event.inputs.skipjobs, 'tls')
     timeout-minutes: 1440
     steps:
@@ -450,8 +450,8 @@ jobs:
           echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          repository: ${{ env.GITHUB_REPOSITORY || github.repository }}
-          ref: ${{ env.GITHUB_HEAD_REF || github.ref }}
+          repository: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name) || env.GITHUB_REPOSITORY || github.repository }}
+          ref: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.sha) || env.GITHUB_HEAD_REF || github.ref }}
       - name: make
         run: |
           make BUILD_TLS=yes SERVER_CFLAGS='-Werror' USE_FAST_FLOAT=yes
@@ -485,7 +485,7 @@ jobs:
             contains(github.event.pull_request.labels.*.name, 'run-extra-tests')) &&
           (github.event.action != 'labeled' ||
             (github.event.pull_request.base.ref == 'unstable' && github.event.label.name == 'run-extra-tests'))
-        ) &&
+        )) &&
       !contains(github.event.inputs.skipjobs, 'iothreads')
     timeout-minutes: 1440
     steps:
@@ -500,8 +500,8 @@ jobs:
           echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          repository: ${{ env.GITHUB_REPOSITORY || github.repository }}
-          ref: ${{ env.GITHUB_HEAD_REF || github.ref }}
+          repository: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name) || env.GITHUB_REPOSITORY || github.repository }}
+          ref: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.sha) || env.GITHUB_HEAD_REF || github.ref }}
       - name: make
         run: |
           make SERVER_CFLAGS='-Werror'
@@ -523,7 +523,7 @@ jobs:
             contains(github.event.pull_request.labels.*.name, 'run-extra-tests')) &&
           (github.event.action != 'labeled' ||
             (github.event.pull_request.base.ref == 'unstable' && github.event.label.name == 'run-extra-tests'))
-        ) &&
+        )) &&
       !contains(github.event.inputs.skipjobs, 'tls') && !contains(github.event.inputs.skipjobs, 'iothreads')
     timeout-minutes: 1440
     steps:
@@ -538,8 +538,8 @@ jobs:
           echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          repository: ${{ env.GITHUB_REPOSITORY || github.repository }}
-          ref: ${{ env.GITHUB_HEAD_REF || github.ref }}
+          repository: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name) || env.GITHUB_REPOSITORY || github.repository }}
+          ref: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.sha) || env.GITHUB_HEAD_REF || github.ref }}
       - name: make
         run: |
           make BUILD_TLS=yes SERVER_CFLAGS='-Werror'
@@ -565,7 +565,7 @@ jobs:
             contains(github.event.pull_request.labels.*.name, 'run-extra-tests')) &&
           (github.event.action != 'labeled' ||
             (github.event.pull_request.base.ref == 'unstable' && github.event.label.name == 'run-extra-tests'))
-        ) &&
+        )) &&
       !contains(github.event.inputs.skipjobs, 'specific')
     timeout-minutes: 1440
     steps:
@@ -580,8 +580,8 @@ jobs:
           echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          repository: ${{ env.GITHUB_REPOSITORY || github.repository }}
-          ref: ${{ env.GITHUB_HEAD_REF || github.ref }}
+          repository: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name) || env.GITHUB_REPOSITORY || github.repository }}
+          ref: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.sha) || env.GITHUB_HEAD_REF || github.ref }}
       - name: make
         run: |
           make SERVER_CFLAGS='-Werror'
@@ -658,8 +658,8 @@ jobs:
           echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          repository: ${{ env.GITHUB_REPOSITORY || github.repository }}
-          ref: ${{ env.GITHUB_HEAD_REF || github.ref }}
+          repository: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name) || env.GITHUB_REPOSITORY || github.repository }}
+          ref: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.sha) || env.GITHUB_HEAD_REF || github.ref }}
       - name: make
         run: make valgrind SERVER_CFLAGS='-Werror'
       - name: testprep
@@ -689,8 +689,8 @@ jobs:
           echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          repository: ${{ env.GITHUB_REPOSITORY || github.repository }}
-          ref: ${{ env.GITHUB_HEAD_REF || github.ref }}
+          repository: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name) || env.GITHUB_REPOSITORY || github.repository }}
+          ref: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.sha) || env.GITHUB_HEAD_REF || github.ref }}
       - name: make
         run: make valgrind all-with-unit-tests SERVER_CFLAGS='-Werror'
       - name: testprep
@@ -725,8 +725,8 @@ jobs:
           echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          repository: ${{ env.GITHUB_REPOSITORY || github.repository }}
-          ref: ${{ env.GITHUB_HEAD_REF || github.ref }}
+          repository: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name) || env.GITHUB_REPOSITORY || github.repository }}
+          ref: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.sha) || env.GITHUB_HEAD_REF || github.ref }}
       - name: make
         run: make valgrind CFLAGS="-DNO_MALLOC_USABLE_SIZE" SERVER_CFLAGS='-Werror'
       - name: testprep
@@ -756,8 +756,8 @@ jobs:
           echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          repository: ${{ env.GITHUB_REPOSITORY || github.repository }}
-          ref: ${{ env.GITHUB_HEAD_REF || github.ref }}
+          repository: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name) || env.GITHUB_REPOSITORY || github.repository }}
+          ref: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.sha) || env.GITHUB_HEAD_REF || github.ref }}
       - name: make
         run: make valgrind all-with-unit-tests CFLAGS="-DNO_MALLOC_USABLE_SIZE" SERVER_CFLAGS='-Werror'
       - name: testprep
@@ -798,8 +798,8 @@ jobs:
           echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          repository: ${{ env.GITHUB_REPOSITORY || github.repository }}
-          ref: ${{ env.GITHUB_HEAD_REF || github.ref }}
+          repository: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name) || env.GITHUB_REPOSITORY || github.repository }}
+          ref: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.sha) || env.GITHUB_HEAD_REF || github.ref }}
       - name: make
         run: make all-with-unit-tests OPT=-O3 SANITIZER=address SERVER_CFLAGS='-Werror'
       - name: testprep
@@ -848,8 +848,8 @@ jobs:
           echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
       - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
         with:
-          repository: ${{ env.GITHUB_REPOSITORY || github.repository }}
-          ref: ${{ env.GITHUB_HEAD_REF || github.ref }}
+          repository: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name) || env.GITHUB_REPOSITORY || github.repository }}
+          ref: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.sha) || env.GITHUB_HEAD_REF || github.ref }}
       - name: make
         run: make all-with-unit-tests OPT=-O3 SANITIZER=address SERVER_CFLAGS='-Werror'
       - name: testprep
@@ -891,8 +891,8 @@ jobs:
           echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          repository: ${{ env.GITHUB_REPOSITORY || github.repository }}
-          ref: ${{ env.GITHUB_HEAD_REF || github.ref }}
+          repository: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name) || env.GITHUB_REPOSITORY || github.repository }}
+          ref: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.sha) || env.GITHUB_HEAD_REF || github.ref }}
       - name: make
         run: make all-with-unit-tests OPT=-O3 SANITIZER=undefined SERVER_CFLAGS='-Werror' LUA_DEBUG=yes # we (ab)use this flow to also check Lua C API violations
       - name: testprep
@@ -941,8 +941,8 @@ jobs:
           echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
       - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
         with:
-          repository: ${{ env.GITHUB_REPOSITORY || github.repository }}
-          ref: ${{ env.GITHUB_HEAD_REF || github.ref }}
+          repository: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name) || env.GITHUB_REPOSITORY || github.repository }}
+          ref: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.sha) || env.GITHUB_HEAD_REF || github.ref }}
       - name: make
         run: make all-with-unit-tests OPT=-O3 SANITIZER=undefined SERVER_CFLAGS='-Werror' LUA_DEBUG=yes
       - name: testprep
@@ -980,8 +980,8 @@ jobs:
           echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          repository: ${{ env.GITHUB_REPOSITORY || github.repository }}
-          ref: ${{ env.GITHUB_HEAD_REF || github.ref }}
+          repository: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name) || env.GITHUB_REPOSITORY || github.repository }}
+          ref: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.sha) || env.GITHUB_HEAD_REF || github.ref }}
       - name: make
         run: make all-with-unit-tests OPT=-O3 SANITIZER=address DEBUG_FORCE_DEFRAG=yes USE_JEMALLOC=no SERVER_CFLAGS='-Werror'
       - name: testprep
@@ -1013,7 +1013,7 @@ jobs:
             contains(github.event.pull_request.labels.*.name, 'run-extra-tests')) &&
           (github.event.action != 'labeled' ||
             (github.event.pull_request.base.ref == 'unstable' && github.event.label.name == 'run-extra-tests'))
-        ) &&
+        )) &&
       !contains(github.event.inputs.skipjobs, 'lttng')
     timeout-minutes: 1440
     steps:
@@ -1028,8 +1028,8 @@ jobs:
           echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          repository: ${{ env.GITHUB_REPOSITORY || github.repository }}
-          ref: ${{ env.GITHUB_HEAD_REF || github.ref }}
+          repository: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name) || env.GITHUB_REPOSITORY || github.repository }}
+          ref: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.sha) || env.GITHUB_HEAD_REF || github.ref }}
       - name: make
         run: |
           sudo apt-get update && sudo apt-get install lttng-tools lttng-modules-dkms liblttng-ust-dev
@@ -1057,7 +1057,7 @@ jobs:
             contains(github.event.pull_request.labels.*.name, 'run-extra-tests')) &&
           (github.event.action != 'labeled' ||
             (github.event.pull_request.base.ref == 'unstable' && github.event.label.name == 'run-extra-tests'))
-        ) &&
+        )) &&
       !contains(github.event.inputs.skipjobs, 'rpm-distros')
     strategy:
       fail-fast: false
@@ -1092,8 +1092,8 @@ jobs:
           echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          repository: ${{ env.GITHUB_REPOSITORY || github.repository }}
-          ref: ${{ env.GITHUB_HEAD_REF || github.ref }}
+          repository: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name) || env.GITHUB_REPOSITORY || github.repository }}
+          ref: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.sha) || env.GITHUB_HEAD_REF || github.ref }}
       - name: Install EPEL
         if: matrix.install_epel
         run: dnf -y install epel-release
@@ -1124,7 +1124,7 @@ jobs:
             contains(github.event.pull_request.labels.*.name, 'run-extra-tests')) &&
           (github.event.action != 'labeled' ||
             (github.event.pull_request.base.ref == 'unstable' && github.event.label.name == 'run-extra-tests'))
-        ) &&
+        )) &&
       !contains(github.event.inputs.skipjobs, 'tls')
     strategy:
       fail-fast: false
@@ -1159,8 +1159,8 @@ jobs:
           echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          repository: ${{ env.GITHUB_REPOSITORY || github.repository }}
-          ref: ${{ env.GITHUB_HEAD_REF || github.ref }}
+          repository: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name) || env.GITHUB_REPOSITORY || github.repository }}
+          ref: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.sha) || env.GITHUB_HEAD_REF || github.ref }}
       - name: Install EPEL
         if: matrix.install_epel
         run: dnf -y install epel-release
@@ -1227,8 +1227,8 @@ jobs:
           echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          repository: ${{ env.GITHUB_REPOSITORY || github.repository }}
-          ref: ${{ env.GITHUB_HEAD_REF || github.ref }}
+          repository: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name) || env.GITHUB_REPOSITORY || github.repository }}
+          ref: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.sha) || env.GITHUB_HEAD_REF || github.ref }}
       - name: Install EPEL
         if: matrix.install_epel
         run: dnf -y install epel-release
@@ -1266,7 +1266,7 @@ jobs:
             contains(github.event.pull_request.labels.*.name, 'run-extra-tests')) &&
           (github.event.action != 'labeled' ||
             (github.event.pull_request.base.ref == 'unstable' && github.event.label.name == 'run-extra-tests'))
-        ) &&
+        )) &&
       !contains(github.event.inputs.skipjobs, 'macos') && !(contains(github.event.inputs.skiptests, 'valkey') && contains(github.event.inputs.skiptests, 'modules'))
     timeout-minutes: 1440
     steps:
@@ -1281,8 +1281,8 @@ jobs:
           echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          repository: ${{ env.GITHUB_REPOSITORY || github.repository }}
-          ref: ${{ env.GITHUB_HEAD_REF || github.ref }}
+          repository: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name) || env.GITHUB_REPOSITORY || github.repository }}
+          ref: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.sha) || env.GITHUB_HEAD_REF || github.ref }}
       - name: make
         run: make SERVER_CFLAGS='-Werror'
       - name: test
@@ -1301,7 +1301,7 @@ jobs:
             contains(github.event.pull_request.labels.*.name, 'run-extra-tests')) &&
           (github.event.action != 'labeled' ||
             (github.event.pull_request.base.ref == 'unstable' && github.event.label.name == 'run-extra-tests'))
-        ) &&
+        )) &&
       !contains(github.event.inputs.skipjobs, 'macos') && !contains(github.event.inputs.skiptests, 'sentinel')
     timeout-minutes: 1440
     steps:
@@ -1316,8 +1316,8 @@ jobs:
           echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          repository: ${{ env.GITHUB_REPOSITORY || github.repository }}
-          ref: ${{ env.GITHUB_HEAD_REF || github.ref }}
+          repository: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name) || env.GITHUB_REPOSITORY || github.repository }}
+          ref: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.sha) || env.GITHUB_HEAD_REF || github.ref }}
       - name: make
         run: make SERVER_CFLAGS='-Werror'
       - name: sentinel tests
@@ -1333,7 +1333,7 @@ jobs:
             contains(github.event.pull_request.labels.*.name, 'run-extra-tests')) &&
           (github.event.action != 'labeled' ||
             (github.event.pull_request.base.ref == 'unstable' && github.event.label.name == 'run-extra-tests'))
-        ) &&
+        )) &&
       !contains(github.event.inputs.skipjobs, 'macos') && !contains(github.event.inputs.skiptests, 'cluster')
     timeout-minutes: 1440
     steps:
@@ -1348,8 +1348,8 @@ jobs:
           echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          repository: ${{ env.GITHUB_REPOSITORY || github.repository }}
-          ref: ${{ env.GITHUB_HEAD_REF || github.ref }}
+          repository: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name) || env.GITHUB_REPOSITORY || github.repository }}
+          ref: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.sha) || env.GITHUB_HEAD_REF || github.ref }}
       - name: make
         run: make SERVER_CFLAGS='-Werror'
       - name: cluster tests
@@ -1369,7 +1369,7 @@ jobs:
             contains(github.event.pull_request.labels.*.name, 'run-extra-tests')) &&
           (github.event.action != 'labeled' ||
             (github.event.pull_request.base.ref == 'unstable' && github.event.label.name == 'run-extra-tests'))
-        ) &&
+        )) &&
       !contains(github.event.inputs.skipjobs, 'macos')
     timeout-minutes: 1440
     steps:
@@ -1387,8 +1387,8 @@ jobs:
           echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          repository: ${{ env.GITHUB_REPOSITORY || github.repository }}
-          ref: ${{ env.GITHUB_HEAD_REF || github.ref }}
+          repository: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name) || env.GITHUB_REPOSITORY || github.repository }}
+          ref: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.sha) || env.GITHUB_HEAD_REF || github.ref }}
       - name: make
         run: make SERVER_CFLAGS='-Werror'
   test-freebsd:
@@ -1401,7 +1401,7 @@ jobs:
             contains(github.event.pull_request.labels.*.name, 'run-extra-tests')) &&
           (github.event.action != 'labeled' ||
             (github.event.pull_request.base.ref == 'unstable' && github.event.label.name == 'run-extra-tests'))
-        ) &&
+        )) &&
       !contains(github.event.inputs.skipjobs, 'freebsd')
     timeout-minutes: 1440
     steps:
@@ -1412,8 +1412,8 @@ jobs:
           echo "GITHUB_HEAD_REF=${{inputs.use_git_ref || github.event.inputs.use_git_ref}}" >> $GITHUB_ENV
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          repository: ${{ env.GITHUB_REPOSITORY || github.repository }}
-          ref: ${{ env.GITHUB_HEAD_REF || github.ref }}
+          repository: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name) || env.GITHUB_REPOSITORY || github.repository }}
+          ref: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.sha) || env.GITHUB_HEAD_REF || github.ref }}
       - name: test
         uses: cross-platform-actions/action@39a2a80642eca0947594ad03e4355dc3d28c617a # v0.32.0
         with:
@@ -1435,7 +1435,7 @@ jobs:
             contains(github.event.pull_request.labels.*.name, 'run-extra-tests')) &&
           (github.event.action != 'labeled' ||
             (github.event.pull_request.base.ref == 'unstable' && github.event.label.name == 'run-extra-tests'))
-        ) &&
+        )) &&
       !contains(github.event.inputs.skipjobs, 'alpine')
     container: alpine:latest
     steps:
@@ -1450,8 +1450,8 @@ jobs:
           echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          repository: ${{ env.GITHUB_REPOSITORY || github.repository }}
-          ref: ${{ env.GITHUB_HEAD_REF || github.ref }}
+          repository: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name) || env.GITHUB_REPOSITORY || github.repository }}
+          ref: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.sha) || env.GITHUB_HEAD_REF || github.ref }}
       - name: make
         run: |
           apk add build-base
@@ -1480,7 +1480,7 @@ jobs:
             contains(github.event.pull_request.labels.*.name, 'run-extra-tests')) &&
           (github.event.action != 'labeled' ||
             (github.event.pull_request.base.ref == 'unstable' && github.event.label.name == 'run-extra-tests'))
-        ) &&
+        )) &&
       !contains(github.event.inputs.skipjobs, 'alpine')
     container: alpine:latest
     steps:
@@ -1495,8 +1495,8 @@ jobs:
           echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          repository: ${{ env.GITHUB_REPOSITORY || github.repository }}
-          ref: ${{ env.GITHUB_HEAD_REF || github.ref }}
+          repository: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name) || env.GITHUB_REPOSITORY || github.repository }}
+          ref: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.sha) || env.GITHUB_HEAD_REF || github.ref }}
       - name: make
         run: |
           apk add build-base
@@ -1526,7 +1526,7 @@ jobs:
             contains(github.event.pull_request.labels.*.name, 'run-extra-tests')) &&
           (github.event.action != 'labeled' ||
             (github.event.pull_request.base.ref == 'unstable' && github.event.label.name == 'run-extra-tests'))
-        ) &&
+        )) &&
       !contains(github.event.inputs.skipjobs, 'reply-schema')
     steps:
       - name: prep
@@ -1540,8 +1540,8 @@ jobs:
           echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          repository: ${{ env.GITHUB_REPOSITORY || github.repository }}
-          ref: ${{ env.GITHUB_HEAD_REF || github.ref }}
+          repository: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name) || env.GITHUB_REPOSITORY || github.repository }}
+          ref: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.sha) || env.GITHUB_HEAD_REF || github.ref }}
       - name: make
         run: make SERVER_CFLAGS='-Werror -DLOG_REQ_RES'
       - name: testprep

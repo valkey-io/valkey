@@ -478,7 +478,6 @@ ENGINE_SERVER_OBJ = \
     debug.o \
     defrag.o \
     dict.o \
-    endianconv.o \
     entry.o \
     eval.o \
     evict.o \

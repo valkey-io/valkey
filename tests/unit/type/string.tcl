@@ -350,6 +350,20 @@ start_server {tags {"string"}} {
         assert_range [r pttl key2{t}] 5000 10000
     }
 
+    test {MSETEX with past EXAT/PXAT - key stored but logically expired} {
+        r debug set-active-expire 0
+        r flushall
+
+        assert_equal 1 [r msetex 1 key1{t} val1 exat [expr [clock seconds] - 100]]
+        assert_equal 1 [r msetex 1 key2{t} val2 pxat [expr [clock milliseconds] - 100000]]
+
+        assert_equal 2 [r dbsize]
+        assert_equal 0 [r exists key1{t} key2{t}]
+        assert_equal 0 [r dbsize]
+
+        assert_equal {OK} [r debug set-active-expire 1]
+    } {} {needs:debug}
+
     test {MSETEX lazy expire with all expiration options} {
         r debug set-active-expire 0
         r del key1{t} key2{t} key3{t} key4{t}

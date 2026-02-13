@@ -591,7 +591,9 @@ void msetexCommand(client *c) {
      *
      * If the `milliseconds` have expired, we can actually avoid setting the keys in the
      * database, just like we do when handling the SET command. Like we could rewrite it
-     * to DEL xxx xxx, but it will make the code more complicated and it seems excessive. */
+     * to DEL xxx xxx, but it will make the code more complicated and it seems excessive.
+     * Currently we will add it to the database and wait for either active expire or lazy
+     * expire to delete it. */
     if (expire && getExpireMillisecondsOrReply(c, expire, flags, unit, &milliseconds) != C_OK) {
         return;
     }

@@ -1,5 +1,20 @@
 start_cluster 2 0 {tags {external:skip cluster} overrides {cluster-ping-interval 100}} {
     test "Availability zone appears in SLOTS/SHARDS" {
+        set slots_resp [R 0 CLUSTER SLOTS]
+        set slots_str [join $slots_resp " "]
+
+        assert_no_match "*zone-a*" $slots_str
+        assert_no_match "*zone-b*" $slots_str
+        assert_no_match "*zone-c*" $slots_str
+
+        set shards_resp [R 0 CLUSTER SHARDS]
+        set shards_str [join $shards_resp " "]
+
+        assert_no_match "*zone-a*" $shards_str
+        assert_no_match "*zone-b*" $shards_str
+        assert_no_match "*zone-c*" $shards_str
+
+        # Empty AZ -> Non Empty AZ
         R 0 CONFIG SET availability-zone zone-a
         R 1 CONFIG SET availability-zone zone-b
 
@@ -29,10 +44,7 @@ start_cluster 2 0 {tags {external:skip cluster} overrides {cluster-ping-interval
         assert_match "*zone-a*" $shards_str
         assert_match "*zone-b*" $shards_str
 
-    }
-
-    test "Availability zone updates at runtime" {
-        R 0 CONFIG SET availability-zone zone-a
+        # Non Empty AZ -> Non Empty AZ
         R 0 CONFIG SET availability-zone zone-c
 
         wait_for_condition 50 100 {
@@ -56,7 +68,6 @@ start_cluster 2 0 {tags {external:skip cluster} overrides {cluster-ping-interval
         set shards_str [join $shards_resp " "]
         assert_match "*availability-zone*" $shards_str
         assert_match "*zone-c*" $shards_str
-
     }
 
     test "Availability zone removed when set to empty string" {
@@ -72,13 +83,13 @@ start_cluster 2 0 {tags {external:skip cluster} overrides {cluster-ping-interval
 
         set slots_resp [R 0 CLUSTER SLOTS]
         set slots_str [join $slots_resp " "]
-        assert {[string match "*availability-zone*" $slots_str] == 0}
-        assert {[string match "*zone-a*" $slots_str] == 0}
-        assert {[string match "*zone-b*" $slots_str] == 0}
-        assert {[string match "*zone-c*" $slots_str] == 0}
+        assert_no_match "*availability-zone*" $slots_str
+        assert_no_match "*zone-a*" $slots_str
+        assert_no_match "*zone-b*" $slots_str
+        assert_no_match "*zone-c*" $slots_str
 
         set shards_resp [R 0 CLUSTER SHARDS]
         set shards_str [join $shards_resp " "]
-        assert {[string match "*availability-zone*" $shards_str] == 0}
+        assert_no_match "*availability-zone*" $shards_str
     }
 }

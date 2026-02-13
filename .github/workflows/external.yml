@@ -29,7 +29,11 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - name: Build
-        run: make SERVER_CFLAGS=-Werror
+        run: |
+          git clone https://github.com/ianlancetaylor/libbacktrace.git /tmp/libbacktrace
+          cd /tmp/libbacktrace && ./configure && make && sudo make install
+          cd $GITHUB_WORKSPACE
+          make SERVER_CFLAGS=-Werror USE_LIBBACKTRACE=yes
       - name: Start valkey-server
         run: |
           ./src/valkey-server --daemonize yes --save "" --logfile external-server.log \
@@ -54,7 +58,11 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - name: Build
-        run: make SERVER_CFLAGS=-Werror
+        run: |
+          git clone https://github.com/ianlancetaylor/libbacktrace.git /tmp/libbacktrace
+          cd /tmp/libbacktrace && ./configure && make && sudo make install
+          cd $GITHUB_WORKSPACE
+          make SERVER_CFLAGS=-Werror USE_LIBBACKTRACE=yes
       - name: Start valkey-server
         run: |
           ./src/valkey-server --cluster-enabled yes --cluster-databases 16 --daemonize yes \
@@ -83,7 +91,11 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - name: Build
-        run: make SERVER_CFLAGS=-Werror
+        run: |
+          git clone https://github.com/ianlancetaylor/libbacktrace.git /tmp/libbacktrace
+          cd /tmp/libbacktrace && ./configure && make && sudo make install
+          cd $GITHUB_WORKSPACE
+          make SERVER_CFLAGS=-Werror USE_LIBBACKTRACE=yes
       - name: Start valkey-server
         run: |
           ./src/valkey-server --daemonize yes --save "" --logfile external-server.log

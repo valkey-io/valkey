@@ -27,7 +27,11 @@ jobs:
       - name: make
         # Fail build if there are warnings
         # build with TLS just for compilation coverage
-        run: make -j4 all-with-unit-tests SERVER_CFLAGS='-Werror' BUILD_TLS=yes USE_FAST_FLOAT=yes
+        run: |
+          git clone https://github.com/ianlancetaylor/libbacktrace.git /tmp/libbacktrace
+          cd /tmp/libbacktrace && ./configure && make && sudo make install
+          cd $GITHUB_WORKSPACE
+          make -j4 all-with-unit-tests SERVER_CFLAGS='-Werror' BUILD_TLS=yes USE_FAST_FLOAT=yes USE_LIBBACKTRACE=yes
       - name: test
         run: |
           sudo apt-get install tcl8.6 tclx
@@ -58,7 +62,11 @@ jobs:
       - name: make
         # Fail build if there are warnings
         # build with TLS just for compilation coverage
-        run: make -j4 all-with-unit-tests SERVER_CFLAGS='-Werror' BUILD_TLS=yes USE_FAST_FLOAT=yes
+        run: |
+          git clone https://github.com/ianlancetaylor/libbacktrace.git /tmp/libbacktrace
+          cd /tmp/libbacktrace && ./configure && make && sudo make install
+          cd $GITHUB_WORKSPACE
+          make -j4 all-with-unit-tests SERVER_CFLAGS='-Werror' BUILD_TLS=yes USE_FAST_FLOAT=yes USE_LIBBACKTRACE=yes
 
       - name: Install old server (${{ matrix.server.version }}) for compatibility testing
         run: |
@@ -104,7 +112,11 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - name: make
         # build with TLS module just for compilation coverage
-        run: make -j4 all-with-unit-tests SANITIZER=address SERVER_CFLAGS='-Werror' BUILD_TLS=module
+        run: |
+          git clone https://github.com/ianlancetaylor/libbacktrace.git /tmp/libbacktrace
+          cd /tmp/libbacktrace && ./configure && make && sudo make install
+          cd $GITHUB_WORKSPACE
+          make -j4 all-with-unit-tests SANITIZER=address SERVER_CFLAGS='-Werror' BUILD_TLS=module USE_LIBBACKTRACE=yes
       - name: testprep
         run: sudo apt-get install tcl8.6 tclx -y
       - name: test
@@ -119,13 +131,17 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - name: prepare-development-libraries
-        run: sudo apt-get install librdmacm-dev libibverbs-dev
+        run: |
+          sudo apt-get install librdmacm-dev libibverbs-dev
+          git clone https://github.com/ianlancetaylor/libbacktrace.git /tmp/libbacktrace
+          cd /tmp/libbacktrace && ./configure && make && sudo make install
+          cd $GITHUB_WORKSPACE
       - name: make-rdma-module
-        run: make -j4 BUILD_RDMA=module
+        run: make -j4 BUILD_RDMA=module USE_LIBBACKTRACE=yes
       - name: make-rdma-builtin
         run: |
           make distclean
-          make -j4 BUILD_RDMA=yes
+          make -j4 BUILD_RDMA=yes USE_LIBBACKTRACE=yes
       - name: clone-rxe-kmod
         run: |
           mkdir -p tests/rdma/rxe
@@ -145,8 +161,11 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - name: make
         run: |
-          apt-get update && apt-get install -y build-essential
-          make -j4 SERVER_CFLAGS='-Werror'
+          apt-get update && apt-get install -y build-essential git
+          git clone https://github.com/ianlancetaylor/libbacktrace.git /tmp/libbacktrace
+          cd /tmp/libbacktrace && ./configure && make && make install
+          cd $GITHUB_WORKSPACE
+          make -j4 SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes
 
   build-macos-latest:
     runs-on: macos-latest
@@ -154,7 +173,11 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - name: make
         # Build with additional upcoming features
-        run: make -j3 all-with-unit-tests SERVER_CFLAGS='-Werror' USE_FAST_FLOAT=yes
+        run: |
+          git clone https://github.com/ianlancetaylor/libbacktrace.git /tmp/libbacktrace
+          cd /tmp/libbacktrace && ./configure && make && sudo make install
+          cd $GITHUB_WORKSPACE
+          make -j3 all-with-unit-tests SERVER_CFLAGS='-Werror' USE_FAST_FLOAT=yes USE_LIBBACKTRACE=yes
 
   build-32bit:
     runs-on: ubuntu-latest
@@ -166,10 +189,14 @@ jobs:
         # also requires multilib support for g++ compiler i.e. "-multilib"
         # suffixed version of g++. g++-multilib generally includes libstdc++.
         # *cross version as well, but it is also added explicitly just in case.
+        # libbacktrace needs to be built from source for 32-bit.
         run: |
           sudo apt-get update
           sudo apt-get install libc6-dev-i386 libstdc++-11-dev-i386-cross gcc-multilib g++-multilib
-          make -j4 SERVER_CFLAGS='-Werror' 32bit USE_FAST_FLOAT=yes
+          git clone https://github.com/ianlancetaylor/libbacktrace.git /tmp/libbacktrace
+          cd /tmp/libbacktrace && ./configure CFLAGS="-m32" --prefix=/usr/local/libbacktrace32 && make && sudo make install
+          cd $GITHUB_WORKSPACE
+          make -j4 SERVER_CFLAGS='-Werror' 32bit USE_FAST_FLOAT=yes USE_LIBBACKTRACE=yes LIBBACKTRACE_PREFIX=/usr/local/libbacktrace32
       - name: unit tests
         run: |
           ./src/valkey-unit-tests
@@ -179,7 +206,11 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - name: make
-        run: make -j4 SERVER_CFLAGS='-Werror' MALLOC=libc USE_FAST_FLOAT=yes
+        run: |
+          git clone https://github.com/ianlancetaylor/libbacktrace.git /tmp/libbacktrace
+          cd /tmp/libbacktrace && ./configure && make && sudo make install
+          cd $GITHUB_WORKSPACE
+          make -j4 SERVER_CFLAGS='-Werror' MALLOC=libc USE_FAST_FLOAT=yes USE_LIBBACKTRACE=yes
 
   build-almalinux8-jemalloc:
     runs-on: ubuntu-latest
@@ -189,8 +220,11 @@ jobs:
 
       - name: make
         run: |
-          dnf -y install epel-release gcc gcc-c++ make procps-ng which
-          make -j4 SERVER_CFLAGS='-Werror' USE_FAST_FLOAT=yes
+          dnf -y install epel-release gcc gcc-c++ make procps-ng which git
+          git clone https://github.com/ianlancetaylor/libbacktrace.git /tmp/libbacktrace
+          cd /tmp/libbacktrace && ./configure && make && make install
+          cd $GITHUB_WORKSPACE
+          make -j4 SERVER_CFLAGS='-Werror' USE_FAST_FLOAT=yes USE_LIBBACKTRACE=yes
 
   format-yaml:
     runs-on: ubuntu-latest

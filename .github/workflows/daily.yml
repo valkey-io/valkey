@@ -96,12 +96,15 @@ jobs:
         with:
           repository: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name) || env.GITHUB_REPOSITORY || github.repository }}
           ref: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.sha) || env.GITHUB_HEAD_REF || github.ref }}
+      - name: Install libbacktrace
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: ianlancetaylor/libbacktrace
+          ref: b9e40069c0b47a722286b94eb5231f7f05c08713
+          path: libbacktrace
+      - run: cd libbacktrace && ./configure && make && sudo make install
       - name: make
-        run: |
-          git clone https://github.com/ianlancetaylor/libbacktrace.git /tmp/libbacktrace
-          cd /tmp/libbacktrace && ./configure && make && sudo make install
-          cd $GITHUB_WORKSPACE
-          make all-with-unit-tests SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes
+        run: make all-with-unit-tests SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes
       - name: testprep
         run: sudo apt-get install tcl8.6 tclx
       - name: test
@@ -168,12 +171,15 @@ jobs:
         with:
           repository: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name) || env.GITHUB_REPOSITORY || github.repository }}
           ref: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.sha) || env.GITHUB_HEAD_REF || github.ref }}
+      - name: Install libbacktrace
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: ianlancetaylor/libbacktrace
+          ref: b9e40069c0b47a722286b94eb5231f7f05c08713
+          path: libbacktrace
+      - run: cd libbacktrace && ./configure && make && sudo make install
       - name: make
-        run: |
-          git clone https://github.com/ianlancetaylor/libbacktrace.git /tmp/libbacktrace
-          cd /tmp/libbacktrace && ./configure && make && sudo make install
-          cd $GITHUB_WORKSPACE
-          make all-with-unit-tests SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes
+        run: make all-with-unit-tests SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes
       - name: testprep
         run: sudo apt-get install tcl8.6 tclx
       - name: test
@@ -215,14 +221,19 @@ jobs:
         with:
           repository: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name) || env.GITHUB_REPOSITORY || github.repository }}
           ref: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.sha) || env.GITHUB_HEAD_REF || github.ref }}
-      - name: make
+      - name: Install libbacktrace
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: ianlancetaylor/libbacktrace
+          ref: b9e40069c0b47a722286b94eb5231f7f05c08713
+          path: libbacktrace
+      - name: Build libbacktrace
         run: |
           apt-get update && apt-get install -y make gcc-13
           update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-13 100
-          git clone https://github.com/ianlancetaylor/libbacktrace.git /tmp/libbacktrace
-          cd /tmp/libbacktrace && ./configure && make && sudo make install
-          cd $GITHUB_WORKSPACE
-          make all-with-unit-tests CC=gcc OPT=-O3 SERVER_CFLAGS='-Werror -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=3' USE_LIBBACKTRACE=yes
+          cd libbacktrace && ./configure && make && make install
+      - name: make
+        run: make all-with-unit-tests CC=gcc OPT=-O3 SERVER_CFLAGS='-Werror -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=3' USE_LIBBACKTRACE=yes
       - name: testprep
         run: apt-get install -y tcl8.6 tclx procps
       - name: test
@@ -263,12 +274,15 @@ jobs:
         with:
           repository: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name) || env.GITHUB_REPOSITORY || github.repository }}
           ref: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.sha) || env.GITHUB_HEAD_REF || github.ref }}
+      - name: Install libbacktrace
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: ianlancetaylor/libbacktrace
+          ref: b9e40069c0b47a722286b94eb5231f7f05c08713
+          path: libbacktrace
+      - run: cd libbacktrace && ./configure && make && sudo make install
       - name: make
-        run: |
-          git clone https://github.com/ianlancetaylor/libbacktrace.git /tmp/libbacktrace
-          cd /tmp/libbacktrace && ./configure && make && sudo make install
-          cd $GITHUB_WORKSPACE
-          make MALLOC=libc SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes
+        run: make MALLOC=libc SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes
       - name: testprep
         run: sudo apt-get install tcl8.6 tclx
       - name: test
@@ -306,12 +320,15 @@ jobs:
         with:
           repository: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name) || env.GITHUB_REPOSITORY || github.repository }}
           ref: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.sha) || env.GITHUB_HEAD_REF || github.ref }}
+      - name: Install libbacktrace
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: ianlancetaylor/libbacktrace
+          ref: b9e40069c0b47a722286b94eb5231f7f05c08713
+          path: libbacktrace
+      - run: cd libbacktrace && ./configure && make && sudo make install
       - name: make
-        run: |
-          git clone https://github.com/ianlancetaylor/libbacktrace.git /tmp/libbacktrace
-          cd /tmp/libbacktrace && ./configure && make && sudo make install
-          cd $GITHUB_WORKSPACE
-          make MALLOC=libc CFLAGS=-DNO_MALLOC_USABLE_SIZE SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes
+        run: make MALLOC=libc CFLAGS=-DNO_MALLOC_USABLE_SIZE SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes
       - name: testprep
         run: sudo apt-get install tcl8.6 tclx
       - name: test
@@ -349,13 +366,18 @@ jobs:
         with:
           repository: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name) || env.GITHUB_REPOSITORY || github.repository }}
           ref: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.sha) || env.GITHUB_HEAD_REF || github.ref }}
-      - name: make
+      - name: Install libbacktrace
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: ianlancetaylor/libbacktrace
+          ref: b9e40069c0b47a722286b94eb5231f7f05c08713
+          path: libbacktrace
+      - name: Build libbacktrace
         run: |
           sudo apt-get update && sudo apt-get install libc6-dev-i386
-          git clone https://github.com/ianlancetaylor/libbacktrace.git /tmp/libbacktrace
-          cd /tmp/libbacktrace && ./configure && make && sudo make install
-          cd $GITHUB_WORKSPACE
-          make 32bit SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes
+          cd libbacktrace && ./configure && make && sudo make install
+      - name: make
+        run: make 32bit SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes
       - name: testprep
         run: sudo apt-get install tcl8.6 tclx
       - name: test
@@ -398,12 +420,15 @@ jobs:
         with:
           repository: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name) || env.GITHUB_REPOSITORY || github.repository }}
           ref: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.sha) || env.GITHUB_HEAD_REF || github.ref }}
+      - name: Install libbacktrace
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: ianlancetaylor/libbacktrace
+          ref: b9e40069c0b47a722286b94eb5231f7f05c08713
+          path: libbacktrace
+      - run: cd libbacktrace && ./configure && make && sudo make install
       - name: make
-        run: |
-          git clone https://github.com/ianlancetaylor/libbacktrace.git /tmp/libbacktrace
-          cd /tmp/libbacktrace && ./configure && make && sudo make install
-          cd $GITHUB_WORKSPACE
-          make BUILD_TLS=yes SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes
+        run: make BUILD_TLS=yes SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes
       - name: testprep
         run: |
           sudo apt-get install tcl8.6 tclx tcl-tls
@@ -447,12 +472,15 @@ jobs:
         with:
           repository: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name) || env.GITHUB_REPOSITORY || github.repository }}
           ref: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.sha) || env.GITHUB_HEAD_REF || github.ref }}
+      - name: Install libbacktrace
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: ianlancetaylor/libbacktrace
+          ref: b9e40069c0b47a722286b94eb5231f7f05c08713
+          path: libbacktrace
+      - run: cd libbacktrace && ./configure && make && sudo make install
       - name: make
-        run: |
-          git clone https://github.com/ianlancetaylor/libbacktrace.git /tmp/libbacktrace
-          cd /tmp/libbacktrace && ./configure && make && sudo make install
-          cd $GITHUB_WORKSPACE
-          make BUILD_TLS=yes SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes USE_FAST_FLOAT=yes
+        run: make BUILD_TLS=yes SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes USE_FAST_FLOAT=yes
       - name: testprep
         run: |
           sudo apt-get install tcl8.6 tclx tcl-tls
@@ -496,12 +524,15 @@ jobs:
         with:
           repository: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name) || env.GITHUB_REPOSITORY || github.repository }}
           ref: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.sha) || env.GITHUB_HEAD_REF || github.ref }}
+      - name: Install libbacktrace
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: ianlancetaylor/libbacktrace
+          ref: b9e40069c0b47a722286b94eb5231f7f05c08713
+          path: libbacktrace
+      - run: cd libbacktrace && ./configure && make && sudo make install
       - name: make
-        run: |
-          git clone https://github.com/ianlancetaylor/libbacktrace.git /tmp/libbacktrace
-          cd /tmp/libbacktrace && ./configure && make && sudo make install
-          cd $GITHUB_WORKSPACE
-          make SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes
+        run: make SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes
       - name: testprep
         run: sudo apt-get install tcl8.6 tclx
       - name: test
@@ -533,12 +564,15 @@ jobs:
         with:
           repository: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name) || env.GITHUB_REPOSITORY || github.repository }}
           ref: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.sha) || env.GITHUB_HEAD_REF || github.ref }}
+      - name: Install libbacktrace
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: ianlancetaylor/libbacktrace
+          ref: b9e40069c0b47a722286b94eb5231f7f05c08713
+          path: libbacktrace
+      - run: cd libbacktrace && ./configure && make && sudo make install
       - name: make
-        run: |
-          git clone https://github.com/ianlancetaylor/libbacktrace.git /tmp/libbacktrace
-          cd /tmp/libbacktrace && ./configure && make && sudo make install
-          cd $GITHUB_WORKSPACE
-          make BUILD_TLS=yes SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes
+        run: make BUILD_TLS=yes SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes
       - name: testprep
         run: |
           sudo apt-get install tcl8.6 tclx tcl-tls
@@ -574,12 +608,15 @@ jobs:
         with:
           repository: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name) || env.GITHUB_REPOSITORY || github.repository }}
           ref: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.sha) || env.GITHUB_HEAD_REF || github.ref }}
+      - name: Install libbacktrace
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: ianlancetaylor/libbacktrace
+          ref: b9e40069c0b47a722286b94eb5231f7f05c08713
+          path: libbacktrace
+      - run: cd libbacktrace && ./configure && make && sudo make install
       - name: make
-        run: |
-          git clone https://github.com/ianlancetaylor/libbacktrace.git /tmp/libbacktrace
-          cd /tmp/libbacktrace && ./configure && make && sudo make install
-          cd $GITHUB_WORKSPACE
-          make SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes
+        run: make SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes
       - name: testprep
         run: "sudo apt-get install vmtouch\nmkdir /tmp/master \nmkdir /tmp/slave\n"
       - name: warm up
@@ -655,12 +692,15 @@ jobs:
         with:
           repository: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name) || env.GITHUB_REPOSITORY || github.repository }}
           ref: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.sha) || env.GITHUB_HEAD_REF || github.ref }}
+      - name: Install libbacktrace
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: ianlancetaylor/libbacktrace
+          ref: b9e40069c0b47a722286b94eb5231f7f05c08713
+          path: libbacktrace
+      - run: cd libbacktrace && ./configure && make && sudo make install
       - name: make
-        run: |
-          git clone https://github.com/ianlancetaylor/libbacktrace.git /tmp/libbacktrace
-          cd /tmp/libbacktrace && ./configure && make && sudo make install
-          cd $GITHUB_WORKSPACE
-          make valgrind SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes
+        run: make valgrind SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes
       - name: testprep
         run: |
           sudo apt-get update
@@ -690,12 +730,15 @@ jobs:
         with:
           repository: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name) || env.GITHUB_REPOSITORY || github.repository }}
           ref: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.sha) || env.GITHUB_HEAD_REF || github.ref }}
+      - name: Install libbacktrace
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: ianlancetaylor/libbacktrace
+          ref: b9e40069c0b47a722286b94eb5231f7f05c08713
+          path: libbacktrace
+      - run: cd libbacktrace && ./configure && make && sudo make install
       - name: make
-        run: |
-          git clone https://github.com/ianlancetaylor/libbacktrace.git /tmp/libbacktrace
-          cd /tmp/libbacktrace && ./configure && make && sudo make install
-          cd $GITHUB_WORKSPACE
-          make valgrind all-with-unit-tests SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes
+        run: make valgrind all-with-unit-tests SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes
       - name: testprep
         run: |
           sudo apt-get update
@@ -730,12 +773,15 @@ jobs:
         with:
           repository: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name) || env.GITHUB_REPOSITORY || github.repository }}
           ref: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.sha) || env.GITHUB_HEAD_REF || github.ref }}
+      - name: Install libbacktrace
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: ianlancetaylor/libbacktrace
+          ref: b9e40069c0b47a722286b94eb5231f7f05c08713
+          path: libbacktrace
+      - run: cd libbacktrace && ./configure && make && sudo make install
       - name: make
-        run: |
-          git clone https://github.com/ianlancetaylor/libbacktrace.git /tmp/libbacktrace
-          cd /tmp/libbacktrace && ./configure && make && sudo make install
-          cd $GITHUB_WORKSPACE
-          make valgrind CFLAGS="-DNO_MALLOC_USABLE_SIZE" SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes
+        run: make valgrind CFLAGS="-DNO_MALLOC_USABLE_SIZE" SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes
       - name: testprep
         run: |
           sudo apt-get update
@@ -765,12 +811,15 @@ jobs:
         with:
           repository: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name) || env.GITHUB_REPOSITORY || github.repository }}
           ref: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.sha) || env.GITHUB_HEAD_REF || github.ref }}
+      - name: Install libbacktrace
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: ianlancetaylor/libbacktrace
+          ref: b9e40069c0b47a722286b94eb5231f7f05c08713
+          path: libbacktrace
+      - run: cd libbacktrace && ./configure && make && sudo make install
       - name: make
-        run: |
-          git clone https://github.com/ianlancetaylor/libbacktrace.git /tmp/libbacktrace
-          cd /tmp/libbacktrace && ./configure && make && sudo make install
-          cd $GITHUB_WORKSPACE
-          make valgrind all-with-unit-tests CFLAGS="-DNO_MALLOC_USABLE_SIZE" SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes
+        run: make valgrind all-with-unit-tests CFLAGS="-DNO_MALLOC_USABLE_SIZE" SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes
       - name: testprep
         run: |
           sudo apt-get update
@@ -811,12 +860,15 @@ jobs:
         with:
           repository: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name) || env.GITHUB_REPOSITORY || github.repository }}
           ref: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.sha) || env.GITHUB_HEAD_REF || github.ref }}
+      - name: Install libbacktrace
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: ianlancetaylor/libbacktrace
+          ref: b9e40069c0b47a722286b94eb5231f7f05c08713
+          path: libbacktrace
+      - run: cd libbacktrace && ./configure && make && sudo make install
       - name: make
-        run: |
-          git clone https://github.com/ianlancetaylor/libbacktrace.git /tmp/libbacktrace
-          cd /tmp/libbacktrace && ./configure && make && sudo make install
-          cd $GITHUB_WORKSPACE
-          make all-with-unit-tests OPT=-O3 SANITIZER=address SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes
+        run: make all-with-unit-tests OPT=-O3 SANITIZER=address SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes
       - name: testprep
         run: |
           sudo apt-get update
@@ -908,12 +960,15 @@ jobs:
         with:
           repository: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name) || env.GITHUB_REPOSITORY || github.repository }}
           ref: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.sha) || env.GITHUB_HEAD_REF || github.ref }}
+      - name: Install libbacktrace
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: ianlancetaylor/libbacktrace
+          ref: b9e40069c0b47a722286b94eb5231f7f05c08713
+          path: libbacktrace
+      - run: cd libbacktrace && ./configure && make && sudo make install
       - name: make
-        run: |
-          git clone https://github.com/ianlancetaylor/libbacktrace.git /tmp/libbacktrace
-          cd /tmp/libbacktrace && ./configure && make && sudo make install
-          cd $GITHUB_WORKSPACE
-          make all-with-unit-tests OPT=-O3 SANITIZER=undefined SERVER_CFLAGS='-Werror' LUA_DEBUG=yes USE_LIBBACKTRACE=yes # we (ab)use this flow to also check Lua C API violations
+        run: make all-with-unit-tests OPT=-O3 SANITIZER=undefined SERVER_CFLAGS='-Werror' LUA_DEBUG=yes USE_LIBBACKTRACE=yes # we (ab)use this flow to also check Lua C API violations
       - name: testprep
         run: |
           sudo apt-get update
@@ -1001,12 +1056,15 @@ jobs:
         with:
           repository: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name) || env.GITHUB_REPOSITORY || github.repository }}
           ref: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.sha) || env.GITHUB_HEAD_REF || github.ref }}
+      - name: Install libbacktrace
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: ianlancetaylor/libbacktrace
+          ref: b9e40069c0b47a722286b94eb5231f7f05c08713
+          path: libbacktrace
+      - run: cd libbacktrace && ./configure && make && sudo make install
       - name: make
-        run: |
-          git clone https://github.com/ianlancetaylor/libbacktrace.git /tmp/libbacktrace
-          cd /tmp/libbacktrace && ./configure && make && sudo make install
-          cd $GITHUB_WORKSPACE
-          make all-with-unit-tests OPT=-O3 SANITIZER=address DEBUG_FORCE_DEFRAG=yes USE_JEMALLOC=no SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes
+        run: make all-with-unit-tests OPT=-O3 SANITIZER=address DEBUG_FORCE_DEFRAG=yes USE_JEMALLOC=no SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes
       - name: testprep
         run: |
           sudo apt-get update
@@ -1049,13 +1107,18 @@ jobs:
         with:
           repository: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name) || env.GITHUB_REPOSITORY || github.repository }}
           ref: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.sha) || env.GITHUB_HEAD_REF || github.ref }}
-      - name: make
+      - name: Install libbacktrace
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: ianlancetaylor/libbacktrace
+          ref: b9e40069c0b47a722286b94eb5231f7f05c08713
+          path: libbacktrace
+      - name: Build libbacktrace
         run: |
           sudo apt-get update && sudo apt-get install lttng-tools lttng-modules-dkms liblttng-ust-dev
-          git clone https://github.com/ianlancetaylor/libbacktrace.git /tmp/libbacktrace
-          cd /tmp/libbacktrace && ./configure && make && sudo make install
-          cd $GITHUB_WORKSPACE
-                    make -j4 USE_LTTNG=yes USE_LIBBACKTRACE=yes
+          cd libbacktrace && ./configure && make && sudo make install
+      - name: make
+        run: make -j4 USE_LTTNG=yes USE_LIBBACKTRACE=yes
       - name: testprep
         run: sudo apt-get install tcl8.6 tclx
       - name: test
@@ -1115,13 +1178,18 @@ jobs:
       - name: Install EPEL
         if: matrix.install_epel
         run: dnf -y install epel-release
-      - name: make
+      - name: Install libbacktrace
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: ianlancetaylor/libbacktrace
+          ref: b9e40069c0b47a722286b94eb5231f7f05c08713
+          path: libbacktrace
+      - name: Build libbacktrace
         run: |
-          dnf -y install gcc make procps-ng which /usr/bin/kill /usr/bin/awk git
-          git clone https://github.com/ianlancetaylor/libbacktrace.git /tmp/libbacktrace
-          cd /tmp/libbacktrace && ./configure && make && make install
-          cd $GITHUB_WORKSPACE
-          make -j SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes
+          dnf -y install gcc make procps-ng which /usr/bin/kill /usr/bin/awk
+          cd libbacktrace && ./configure && make && make install
+      - name: make
+        run: make -j SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes
       - name: testprep
         run: dnf -y install tcl tcltls
       - name: test
@@ -1181,13 +1249,18 @@ jobs:
       - name: Install EPEL
         if: matrix.install_epel
         run: dnf -y install epel-release
-      - name: make
+      - name: Install libbacktrace
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: ianlancetaylor/libbacktrace
+          ref: b9e40069c0b47a722286b94eb5231f7f05c08713
+          path: libbacktrace
+      - name: Build libbacktrace
         run: |
-          dnf -y install make gcc openssl-devel openssl procps-ng which /usr/bin/kill /usr/bin/awk git
-          git clone https://github.com/ianlancetaylor/libbacktrace.git /tmp/libbacktrace
-          cd /tmp/libbacktrace && ./configure && make && make install
-          cd $GITHUB_WORKSPACE
-          make -j BUILD_TLS=module SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes
+          dnf -y install make gcc openssl-devel openssl procps-ng which /usr/bin/kill /usr/bin/awk
+          cd libbacktrace && ./configure && make && make install
+      - name: make
+        run: make -j BUILD_TLS=module SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes
       - name: testprep
         run: |
           dnf -y install tcl tcltls
@@ -1252,13 +1325,18 @@ jobs:
       - name: Install EPEL
         if: matrix.install_epel
         run: dnf -y install epel-release
-      - name: make
+      - name: Install libbacktrace
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: ianlancetaylor/libbacktrace
+          ref: b9e40069c0b47a722286b94eb5231f7f05c08713
+          path: libbacktrace
+      - name: Build libbacktrace
         run: |
-          dnf -y install make gcc openssl-devel openssl procps-ng which /usr/bin/kill /usr/bin/awk git
-          git clone https://github.com/ianlancetaylor/libbacktrace.git /tmp/libbacktrace
-          cd /tmp/libbacktrace && ./configure && make && make install
-          cd $GITHUB_WORKSPACE
-          make -j BUILD_TLS=module SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes
+          dnf -y install make gcc openssl-devel openssl procps-ng which /usr/bin/kill /usr/bin/awk
+          cd libbacktrace && ./configure && make && make install
+      - name: make
+        run: make -j BUILD_TLS=module SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes
       - name: testprep
         run: |
           dnf -y install tcl tcltls
@@ -1302,12 +1380,15 @@ jobs:
         with:
           repository: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name) || env.GITHUB_REPOSITORY || github.repository }}
           ref: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.sha) || env.GITHUB_HEAD_REF || github.ref }}
+      - name: Install libbacktrace
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: ianlancetaylor/libbacktrace
+          ref: b9e40069c0b47a722286b94eb5231f7f05c08713
+          path: libbacktrace
+      - run: cd libbacktrace && ./configure && make && sudo make install
       - name: make
-        run: |
-          git clone https://github.com/ianlancetaylor/libbacktrace.git /tmp/libbacktrace
-          cd /tmp/libbacktrace && ./configure && make && sudo make install
-          cd $GITHUB_WORKSPACE
-          make SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes
+        run: make SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes
       - name: test
         if: true && !contains(github.event.inputs.skiptests, 'valkey')
         run: ./runtest ${{ github.event_name != 'pull_request' && '--accurate' || '' }} --verbose --clients 1 --no-latency --dump-logs ${{github.event.inputs.test_args}}
@@ -1337,12 +1418,15 @@ jobs:
         with:
           repository: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name) || env.GITHUB_REPOSITORY || github.repository }}
           ref: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.sha) || env.GITHUB_HEAD_REF || github.ref }}
+      - name: Install libbacktrace
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: ianlancetaylor/libbacktrace
+          ref: b9e40069c0b47a722286b94eb5231f7f05c08713
+          path: libbacktrace
+      - run: cd libbacktrace && ./configure && make && sudo make install
       - name: make
-        run: |
-          git clone https://github.com/ianlancetaylor/libbacktrace.git /tmp/libbacktrace
-          cd /tmp/libbacktrace && ./configure && make && sudo make install
-          cd $GITHUB_WORKSPACE
-          make SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes
+        run: make SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes
       - name: sentinel tests
         if: true && !contains(github.event.inputs.skiptests, 'sentinel')
         run: ./runtest-sentinel ${{github.event.inputs.cluster_test_args}}
@@ -1369,12 +1453,15 @@ jobs:
         with:
           repository: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name) || env.GITHUB_REPOSITORY || github.repository }}
           ref: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.sha) || env.GITHUB_HEAD_REF || github.ref }}
+      - name: Install libbacktrace
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: ianlancetaylor/libbacktrace
+          ref: b9e40069c0b47a722286b94eb5231f7f05c08713
+          path: libbacktrace
+      - run: cd libbacktrace && ./configure && make && sudo make install
       - name: make
-        run: |
-          git clone https://github.com/ianlancetaylor/libbacktrace.git /tmp/libbacktrace
-          cd /tmp/libbacktrace && ./configure && make && sudo make install
-          cd $GITHUB_WORKSPACE
-          make SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes
+        run: make SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes
       - name: cluster tests
         if: true && !contains(github.event.inputs.skiptests, 'cluster')
         run: ./runtest-cluster ${{github.event.inputs.cluster_test_args}}
@@ -1408,12 +1495,15 @@ jobs:
         with:
           repository: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name) || env.GITHUB_REPOSITORY || github.repository }}
           ref: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.sha) || env.GITHUB_HEAD_REF || github.ref }}
+      - name: Install libbacktrace
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: ianlancetaylor/libbacktrace
+          ref: b9e40069c0b47a722286b94eb5231f7f05c08713
+          path: libbacktrace
+      - run: cd libbacktrace && ./configure && make && sudo make install
       - name: make
-        run: |
-          git clone https://github.com/ianlancetaylor/libbacktrace.git /tmp/libbacktrace
-          cd /tmp/libbacktrace && ./configure && make && sudo make install
-          cd $GITHUB_WORKSPACE
-          make SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes
+        run: make SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes
   test-freebsd:
     runs-on: ubuntu-latest
     if: |
@@ -1549,12 +1639,15 @@ jobs:
         with:
           repository: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name) || env.GITHUB_REPOSITORY || github.repository }}
           ref: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.sha) || env.GITHUB_HEAD_REF || github.ref }}
+      - name: Install libbacktrace
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: ianlancetaylor/libbacktrace
+          ref: b9e40069c0b47a722286b94eb5231f7f05c08713
+          path: libbacktrace
+      - run: cd libbacktrace && ./configure && make && sudo make install
       - name: make
-        run: |
-          git clone https://github.com/ianlancetaylor/libbacktrace.git /tmp/libbacktrace
-          cd /tmp/libbacktrace && ./configure && make && sudo make install
-          cd $GITHUB_WORKSPACE
-          make SERVER_CFLAGS='-Werror -DLOG_REQ_RES' USE_LIBBACKTRACE=yes
+        run: make SERVER_CFLAGS='-Werror -DLOG_REQ_RES' USE_LIBBACKTRACE=yes
       - name: testprep
         run: sudo apt-get install tcl8.6 tclx
       - name: test

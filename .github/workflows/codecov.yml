@@ -23,15 +23,18 @@ jobs:
     runs-on: ubuntu-22.04
 
     steps:
-      - name: Checkout repository
+      - name: Install libbacktrace
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-
+        with:
+          repository: ianlancetaylor/libbacktrace
+          ref: b9e40069c0b47a722286b94eb5231f7f05c08713
+          path: libbacktrace
+      - run: cd libbacktrace && ./configure && make && sudo make install
+      - name: Checkout Valkey
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - name: Install lcov and run test
         run: |
           sudo apt-get install lcov tclx
-          git clone https://github.com/ianlancetaylor/libbacktrace.git /tmp/libbacktrace
-          cd /tmp/libbacktrace && ./configure && make && sudo make install
-          cd $GITHUB_WORKSPACE
           make lcov USE_LIBBACKTRACE=yes
 
       - name: Upload code coverage

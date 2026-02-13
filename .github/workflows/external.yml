@@ -27,13 +27,17 @@ jobs:
     if: github.event_name != 'schedule' || github.repository == 'valkey-io/valkey'
     timeout-minutes: 1440
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Install libbacktrace
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: ianlancetaylor/libbacktrace
+          ref: b9e40069c0b47a722286b94eb5231f7f05c08713
+          path: libbacktrace
+      - run: cd libbacktrace && ./configure && make && sudo make install
+      - name: Checkout Valkey
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - name: Build
-        run: |
-          git clone https://github.com/ianlancetaylor/libbacktrace.git /tmp/libbacktrace
-          cd /tmp/libbacktrace && ./configure && make && sudo make install
-          cd $GITHUB_WORKSPACE
-          make SERVER_CFLAGS=-Werror USE_LIBBACKTRACE=yes
+        run: make SERVER_CFLAGS=-Werror USE_LIBBACKTRACE=yes
       - name: Start valkey-server
         run: |
           ./src/valkey-server --daemonize yes --save "" --logfile external-server.log \
@@ -56,13 +60,17 @@ jobs:
     if: github.event_name != 'schedule' || github.repository == 'valkey-io/valkey'
     timeout-minutes: 1440
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Install libbacktrace
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: ianlancetaylor/libbacktrace
+          ref: b9e40069c0b47a722286b94eb5231f7f05c08713
+          path: libbacktrace
+      - run: cd libbacktrace && ./configure && make && sudo make install
+      - name: Checkout Valkey
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - name: Build
-        run: |
-          git clone https://github.com/ianlancetaylor/libbacktrace.git /tmp/libbacktrace
-          cd /tmp/libbacktrace && ./configure && make && sudo make install
-          cd $GITHUB_WORKSPACE
-          make SERVER_CFLAGS=-Werror USE_LIBBACKTRACE=yes
+        run: make SERVER_CFLAGS=-Werror USE_LIBBACKTRACE=yes
       - name: Start valkey-server
         run: |
           ./src/valkey-server --cluster-enabled yes --cluster-databases 16 --daemonize yes \
@@ -89,13 +97,17 @@ jobs:
     if: github.event_name != 'schedule' || github.repository == 'valkey-io/valkey'
     timeout-minutes: 1440
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Install libbacktrace
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: ianlancetaylor/libbacktrace
+          ref: b9e40069c0b47a722286b94eb5231f7f05c08713
+          path: libbacktrace
+      - run: cd libbacktrace && ./configure && make && sudo make install
+      - name: Checkout Valkey
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - name: Build
-        run: |
-          git clone https://github.com/ianlancetaylor/libbacktrace.git /tmp/libbacktrace
-          cd /tmp/libbacktrace && ./configure && make && sudo make install
-          cd $GITHUB_WORKSPACE
-          make SERVER_CFLAGS=-Werror USE_LIBBACKTRACE=yes
+        run: make SERVER_CFLAGS=-Werror USE_LIBBACKTRACE=yes
       - name: Start valkey-server
         run: |
           ./src/valkey-server --daemonize yes --save "" --logfile external-server.log

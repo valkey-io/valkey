@@ -4545,7 +4545,7 @@ int processCommand(client *c) {
      * when replica-serve-stale-data is no and we are a replica with a broken
      * link with primary. */
     if (server.primary_host && server.repl_state != REPL_STATE_CONNECTED && server.repl_serve_stale_data == 0 &&
-        is_denystale_command) {
+        is_denystale_command && !(server.active_replica && server.multi_master && c->cmd->proc == syncCommand)) {
         rejectCommand(c, shared.primarydownerr);
         return C_OK;
     }

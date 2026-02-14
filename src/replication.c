@@ -747,6 +747,17 @@ void replicationApplyRdbConfiguredUpstreams(const rdbSaveInfo *rsi) {
     if (applied == 0 && server.primary_host != NULL) {
         refreshConfiguredUpstreamsFromPrimary();
     }
+
+    /* After restart, persisted multi-master upstream endpoints may exist even
+     * when no legacy primary_host was restored. Pick a deterministic upstream
+     * as current primary so replica role/connect logic and RREPLAY forwarding
+     * are re-activated automatically. */
+    if (applied > 0 && server.multi_master && server.primary_host == NULL) {
+        if (selectConfiguredUpstreamAsPrimary(0) == C_OK && server.repl_state == REPL_STATE_NONE) {
+            server.repl_state = REPL_STATE_CONNECT;
+        }
+    }
+
     syncUpstreamRuntimeWithConfigured();
 }
 
@@ -2267,8 +2278,10 @@ void syncCommand(client *c) {
     }
 
     /* Refuse SYNC requests if we are a replica but the link with our primary
-     * is not ok... */
-    if (server.primary_host && server.repl_state != REPL_STATE_CONNECTED) {
+     * is not ok, except in active-replica multi-master mode where peers may
+     * need to synchronize while another upstream link is temporarily down. */
+    if (!(server.active_replica && server.multi_master) && server.primary_host &&
+        server.repl_state != REPL_STATE_CONNECTED) {
         addReplyError(c, "-NOMASTERLINK Can't SYNC while not connected with my master");
         return;
     }
@@ -2877,39 +2890,53 @@ void rreplayCommand(client *c) {
 
     int outer_argc = c->argc;
     robj **outer_argv = c->argv;
-    struct serverCommand *outer_cmd = c->cmd;
-    struct serverCommand *outer_lastcmd = c->lastcmd;
-    struct serverCommand *outer_realcmd = c->realcmd;
-    int outer_slot = c->slot;
-    int outer_dbid = c->db->id;
 
-    if (dbid >= 0 && selectDb(c, (int)dbid) != C_OK) {
-        serverLog(LL_WARNING, "Invalid RREPLAY from primary: could not switch to dbid %lld", dbid);
+    /* Execute replay payload through a fake client so replication links do
+     * not generate direct command replies (which would disconnect replicas). */
+    client *exec_client = createClient(NULL);
+    if (exec_client == NULL) {
+        serverLog(LL_WARNING, "Invalid RREPLAY from primary: could not allocate execution client");
         freeClientAsync(c);
         return;
     }
-
-    c->argc = payload_argc;
-    c->argv = payload_argv;
-    c->cmd = payload_cmd;
-    c->lastcmd = payload_cmd;
-    c->realcmd = payload_cmd;
-    c->slot = -1;
+    exec_client->raw_flag = 0;
+    exec_client->flag.fake = 1;
+    exec_client->flag.deny_blocking = 1;
+    if (dbid >= 0) {
+        if (selectDb(exec_client, (int)dbid) != C_OK) {
+            serverLog(LL_WARNING, "Invalid RREPLAY from primary: could not switch to dbid %lld", dbid);
+            freeClient(exec_client);
+            freeClientAsync(c);
+            return;
+        }
+    } else {
+        selectDb(exec_client, c->db->id);
+    }
+    exec_client->argc = payload_argc;
+    exec_client->argv = payload_argv;
+    exec_client->argv_len = payload_argc;
+    exec_client->cmd = payload_cmd;
+    exec_client->lastcmd = payload_cmd;
+    exec_client->realcmd = payload_cmd;
+    exec_client->slot = -1;
 
     /* Keep AOF propagation behavior, but avoid direct command replication.
      * The raw RREPLAY frame is forwarded through the replication stream path. */
-    call(c, CMD_CALL_PROPAGATE_AOF);
+    call(exec_client, CMD_CALL_PROPAGATE_AOF);
     mvccStampCommandKeys(payload_cmd, payload_argv, payload_argc, dbid, mvcc_ts, replay_tie_break);
-
-    c->argc = outer_argc;
-    c->argv = outer_argv;
-    c->cmd = outer_cmd;
-    c->lastcmd = outer_lastcmd;
-    c->realcmd = outer_realcmd;
-    c->slot = outer_slot;
-    if (dbid >= 0 && c->db->id != outer_dbid) {
-        selectDb(c, outer_dbid);
+    if (exec_client->flag.blocked) {
+        serverLog(LL_WARNING, "Invalid RREPLAY from primary: payload command '%s' blocked", payload_cmd->fullname);
+        exec_client->argc = 0;
+        exec_client->argv = NULL;
+        exec_client->argv_len = 0;
+        freeClient(exec_client);
+        freeClientAsync(c);
+        return;
     }
+    exec_client->argc = 0;
+    exec_client->argv = NULL;
+    exec_client->argv_len = 0;
+    freeClient(exec_client);
 
     /* For commands received from a replica link (peer -> primary path), relay
      * the original RREPLAY frame to downstream replicas unless no-forward is set.
@@ -3695,8 +3722,11 @@ void replicaBeforeLoadPrimaryRDB(connection *conn, int use_diskless_load) {
 }
 
 void replicaAfterLoadPrimaryRDB(connection *conn, rdbSaveInfo *rsi) {
-    replicationApplyRdbConfiguredUpstreams(rsi);
-    replicationApplyRdbUpstreamRuntimeState(rsi);
+    /* The upstream endpoint list and its runtime state are node-local MM
+     * configuration/state. Do not import them from a remote primary RDB
+     * during FULLRESYNC, otherwise peers may inherit each other's upstream
+     * topology (including self-references). */
+    syncUpstreamRuntimeWithConfigured();
     replicationApplyRdbMVCCState(rsi);
     replicationApplyRdbRReplaySeen(rsi);
 

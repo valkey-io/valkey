@@ -144,6 +144,28 @@ start_server {tags {"repl external:skip"}} {
             }
 
             assert_equal 1 [s 0 configured_upstreams]
+            wait_for_condition 200 100 {
+                [s 0 master_host] eq $node0_host &&
+                [s 0 master_port] == $node0_port &&
+                [s 0 master_link_status] eq {up}
+            } else {
+                fail "Configured upstream was restored but active primary link was not re-established after restart"
+            }
+
+            $node0 set mm:rdb-reconnect from-node0
+            wait_for_condition 100 100 {
+                [$node1 get mm:rdb-reconnect] eq {from-node0}
+            } else {
+                fail "Replica did not receive upstream write after restart"
+            }
+
+            $node1 set mm:rdb-reconnect from-node1
+            wait_for_condition 100 100 {
+                [$node0 get mm:rdb-reconnect] eq {from-node1}
+            } else {
+                fail "Replica write was not forwarded upstream after restart"
+            }
+
             assert {[s 0 upstream_runtime_replay_tx_frames] >= $replay_tx_before}
             assert {[s 0 upstream_runtime_replay_ack_frames] >= $replay_ack_before}
             $node1 mvccrestore mm:mvcc-persist 0 $mvcc_payload 150 replace

@@ -89,6 +89,78 @@ start_server {overrides {save {}}} {
         }
     }
 
+    test {3-node full mesh survives churn and converges} {
+        foreach n [list $nodeA $nodeB $nodeC] {
+            $n replicaof no one
+            $n flushall
+            $n config set active-replica yes
+            $n config set multi-master yes
+            $n config set replica-read-only no
+        }
+
+        $nodeA replicaof add $nodeB_host $nodeB_port
+        $nodeA replicaof add $nodeC_host $nodeC_port
+        $nodeB replicaof add $nodeA_host $nodeA_port
+        $nodeB replicaof add $nodeC_host $nodeC_port
+        $nodeC replicaof add $nodeA_host $nodeA_port
+        $nodeC replicaof add $nodeB_host $nodeB_port
+
+        wait_for_condition 200 100 {
+            [s -2 configured_upstreams] == 2 &&
+            [s -1 configured_upstreams] == 2 &&
+            [s 0 configured_upstreams] == 2 &&
+            [s -2 active_upstream_runtime_links] >= 1 &&
+            [s -1 active_upstream_runtime_links] >= 1 &&
+            [s 0 active_upstream_runtime_links] >= 1
+        } else {
+            fail "full mesh did not establish concurrent upstream runtime links"
+        }
+
+        for {set i 1} {$i <= 8} {incr i} {
+            set key "mm:churn:$i"
+            set val "v$i"
+            if {$i % 3 == 1} {
+                $nodeA set $key $val
+            } elseif {$i % 3 == 2} {
+                $nodeB set $key $val
+            } else {
+                $nodeC set $key $val
+            }
+
+            if {$i % 2 == 0} {
+                $nodeB replicaof remove $nodeA_host $nodeA_port
+                after 25
+                $nodeB replicaof add $nodeA_host $nodeA_port
+            } else {
+                $nodeC replicaof remove $nodeB_host $nodeB_port
+                after 25
+                $nodeC replicaof add $nodeB_host $nodeB_port
+            }
+            after 50
+        }
+
+        wait_for_condition 300 100 {
+            [s -2 configured_upstreams] == 2 &&
+            [s -1 configured_upstreams] == 2 &&
+            [s 0 configured_upstreams] == 2 &&
+            [s -2 active_upstream_runtime_links] >= 1 &&
+            [s -1 active_upstream_runtime_links] >= 1 &&
+            [s 0 active_upstream_runtime_links] >= 1
+        } else {
+            fail "mesh did not recover runtime links after churn"
+        }
+
+        assert_equal 2 [s -2 configured_upstreams]
+        assert_equal 2 [s -1 configured_upstreams]
+        assert_equal 2 [s 0 configured_upstreams]
+        assert_equal 2 [s -2 upstream_runtime_entries]
+        assert_equal 2 [s -1 upstream_runtime_entries]
+        assert_equal 2 [s 0 upstream_runtime_entries]
+        assert {[s -2 active_upstream_runtime_links] >= 1}
+        assert {[s -1 active_upstream_runtime_links] >= 1}
+        assert {[s 0 active_upstream_runtime_links] >= 1}
+    }
+
 }
 }
 }

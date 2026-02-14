@@ -79,10 +79,23 @@ start_server {tags {"repl external:skip"}} {
         }
 
         test {INFO replication exposes multi-master scaffold state} {
+            wait_for_condition 100 50 {
+                [s 0 configured_upstreams] == 1 &&
+                [s 0 upstream_runtime_entries] == 1 &&
+                [s 0 active_upstream_runtime_links] == 1
+            } else {
+                fail "replication runtime scaffolding did not become active on node1"
+            }
+
             assert_equal 1 [s -1 active_replica]
             assert_equal 1 [s -1 multi_master]
             assert_equal 0 [s -1 configured_upstreams]
             assert_equal 1 [s 0 configured_upstreams]
+            assert_equal 0 [s -1 upstream_runtime_entries]
+            assert_equal 1 [s 0 upstream_runtime_entries]
+            assert_equal 1 [s 0 active_upstream_runtime_links]
+            assert {[s 0 upstream_runtime_replay_tx_frames] >= 1}
+            assert {[s 0 upstream_runtime_replay_backlog] >= 0}
             assert {[s -1 mvcc_clock] >= 1}
             assert {[s -1 mvcc_key_clock_entries] >= 1}
             assert {[s -1 rreplay_dedupe_entries] >= 1}
@@ -115,6 +128,8 @@ start_server {tags {"repl external:skip"}} {
         }
 
         test {RDB persists configured upstream metadata} {
+            set replay_tx_before [s 0 upstream_runtime_replay_tx_frames]
+            set replay_ack_before [s 0 upstream_runtime_replay_ack_frames]
             $node1 set mm:mvcc-persist seed
             set mvcc_payload [$node1 dump mm:mvcc-persist]
             $node1 mvccrestore mm:mvcc-persist 0 $mvcc_payload 200 replace
@@ -129,6 +144,8 @@ start_server {tags {"repl external:skip"}} {
             }
 
             assert_equal 1 [s 0 configured_upstreams]
+            assert {[s 0 upstream_runtime_replay_tx_frames] >= $replay_tx_before}
+            assert {[s 0 upstream_runtime_replay_ack_frames] >= $replay_ack_before}
             $node1 mvccrestore mm:mvcc-persist 0 $mvcc_payload 150 replace
             assert_equal "seed" [$node1 get mm:mvcc-persist]
         }

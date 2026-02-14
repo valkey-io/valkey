@@ -50,6 +50,7 @@
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <ctype.h>
+#include <errno.h>
 
 void cleanupTransferResources(void);
 void replicationAbortSyncTransfer(void);
@@ -86,9 +87,91 @@ static void freeUpstreamEndpoint(valkeyUpstream *upstream) {
     zfree(upstream);
 }
 
+static int upstreamRuntimeIsCurrentPrimary(const valkeyUpstreamRuntime *runtime) {
+    if (runtime == NULL || runtime->host == NULL || server.primary_host == NULL) return 0;
+    return !strcasecmp(runtime->host, server.primary_host) && runtime->port == server.primary_port;
+}
+
+static valkeyUpstreamRuntime *findUpstreamRuntimeByLinkClient(const client *link_client) {
+    if (server.upstream_runtime == NULL || link_client == NULL) return NULL;
+    listIter li;
+    listNode *ln;
+    listRewind(server.upstream_runtime, &li);
+    while ((ln = listNext(&li)) != NULL) {
+        valkeyUpstreamRuntime *runtime = listNodeValue(ln);
+        if (runtime && runtime->link_client == link_client) return runtime;
+    }
+    return NULL;
+}
+
+static void upstreamRuntimeTrackReplaySent(valkeyUpstreamRuntime *runtime, unsigned long long replay_id) {
+    if (runtime == NULL || replay_id == 0) return;
+    runtime->replay_tx_frames++;
+    if (replay_id > runtime->replay_last_sent_id) runtime->replay_last_sent_id = replay_id;
+    runtime->reploff = (long long)runtime->replay_last_sent_id;
+}
+
+static void upstreamRuntimeTrackReplayReceived(valkeyUpstreamRuntime *runtime, unsigned long long replay_id) {
+    if (runtime == NULL) return;
+    runtime->replay_rx_frames++;
+    if (replay_id > runtime->replay_last_acked_id) runtime->replay_last_acked_id = replay_id;
+    runtime->reploff = (long long)runtime->replay_last_acked_id;
+}
+
+static void upstreamRuntimeTrackReplayAck(valkeyUpstreamRuntime *runtime, unsigned long long replay_id) {
+    if (runtime == NULL || replay_id == 0) return;
+    runtime->replay_ack_frames++;
+    if (replay_id > runtime->replay_last_acked_id) runtime->replay_last_acked_id = replay_id;
+    runtime->reploff = (long long)runtime->replay_last_acked_id;
+}
+
+static void disconnectUpstreamForwardingLink(valkeyUpstreamRuntime *runtime, int async_free) {
+    if (runtime == NULL) return;
+
+    if (runtime->forward_conn) {
+        connClose(runtime->forward_conn);
+        runtime->forward_conn = NULL;
+    }
+
+    if (runtime->replybuf) {
+        sdsfree(runtime->replybuf);
+        runtime->replybuf = NULL;
+    }
+
+    if (runtime->link_client && runtime->link_client != server.primary) {
+        client *link_client = runtime->link_client;
+        runtime->link_client = NULL;
+        if (async_free)
+            freeClientAsync(link_client);
+        else
+            freeClient(link_client);
+    }
+
+    if (runtime->link_client == server.primary && !upstreamRuntimeIsCurrentPrimary(runtime)) {
+        runtime->link_client = NULL;
+    }
+
+    runtime->active_link = 0;
+    runtime->repl_state = REPL_STATE_NONE;
+    runtime->reploff = (long long)runtime->replay_last_sent_id;
+    runtime->last_io_sec = -1;
+}
+
+static void freeUpstreamRuntimeEntry(valkeyUpstreamRuntime *runtime) {
+    if (runtime == NULL) return;
+    disconnectUpstreamForwardingLink(runtime, 1);
+    sdsfree(runtime->host);
+    zfree(runtime);
+}
+
 static int upstreamEndpointMatches(const valkeyUpstream *upstream, const char *host, int port) {
     if (upstream == NULL || upstream->host == NULL || host == NULL) return 0;
     return port == upstream->port && !strcasecmp(upstream->host, host);
+}
+
+static int upstreamRuntimeMatches(const valkeyUpstreamRuntime *runtime, const char *host, int port) {
+    if (runtime == NULL || runtime->host == NULL || host == NULL) return 0;
+    return port == runtime->port && !strcasecmp(runtime->host, host);
 }
 
 static listNode *findConfiguredUpstreamNode(const char *host, int port) {
@@ -104,15 +187,392 @@ static listNode *findConfiguredUpstreamNode(const char *host, int port) {
     return NULL;
 }
 
+static listNode *findUpstreamRuntimeNode(const char *host, int port) {
+    if (server.upstream_runtime == NULL || host == NULL) return NULL;
+
+    listIter li;
+    listNode *ln;
+    listRewind(server.upstream_runtime, &li);
+    while ((ln = listNext(&li)) != NULL) {
+        valkeyUpstreamRuntime *runtime = listNodeValue(ln);
+        if (upstreamRuntimeMatches(runtime, host, port)) return ln;
+    }
+    return NULL;
+}
+
+static valkeyUpstreamRuntime *ensureUpstreamRuntimeEntry(const char *host, int port) {
+    if (server.upstream_runtime == NULL || host == NULL) return NULL;
+    if (port <= 0 || port > 65535) return NULL;
+
+    listNode *ln = findUpstreamRuntimeNode(host, port);
+    if (ln) return listNodeValue(ln);
+
+    valkeyUpstreamRuntime *runtime = zmalloc(sizeof(*runtime));
+    runtime->host = sdsnew(host);
+    runtime->port = port;
+    runtime->link_client = NULL;
+    runtime->forward_conn = NULL;
+    runtime->replybuf = NULL;
+    runtime->active_link = 0;
+    runtime->repl_state = REPL_STATE_NONE;
+    runtime->reploff = -1;
+    runtime->last_io_sec = -1;
+    runtime->last_connect_attempt_sec = -1;
+    runtime->replay_last_sent_id = 0;
+    runtime->replay_last_acked_id = 0;
+    runtime->replay_tx_frames = 0;
+    runtime->replay_rx_frames = 0;
+    runtime->replay_ack_frames = 0;
+    listAddNodeTail(server.upstream_runtime, runtime);
+    return runtime;
+}
+
+static void removeUpstreamRuntimeEntry(const char *host, int port) {
+    listNode *ln = findUpstreamRuntimeNode(host, port);
+    if (ln == NULL) return;
+    freeUpstreamRuntimeEntry(listNodeValue(ln));
+    listDelNode(server.upstream_runtime, ln);
+}
+
+static void clearUpstreamRuntimeEntries(void) {
+    if (server.upstream_runtime == NULL) return;
+    listIter li;
+    listNode *ln;
+    listRewind(server.upstream_runtime, &li);
+    while ((ln = listNext(&li)) != NULL) {
+        freeUpstreamRuntimeEntry(listNodeValue(ln));
+    }
+    listEmpty(server.upstream_runtime);
+}
+
+static void recomputeUpstreamRuntimeActiveState(void) {
+    if (server.upstream_runtime == NULL) return;
+
+    listIter li;
+    listNode *ln;
+    listRewind(server.upstream_runtime, &li);
+    while ((ln = listNext(&li)) != NULL) {
+        valkeyUpstreamRuntime *runtime = listNodeValue(ln);
+        if (runtime == NULL) continue;
+        runtime->active_link = 0;
+        runtime->repl_state = REPL_STATE_NONE;
+        runtime->reploff = (long long)runtime->replay_last_acked_id;
+        runtime->last_io_sec = -1;
+
+        if (upstreamRuntimeIsCurrentPrimary(runtime)) {
+            runtime->link_client = server.primary;
+            runtime->active_link = (server.primary != NULL);
+            runtime->repl_state = server.repl_state;
+            if (server.primary) {
+                runtime->reploff = server.primary->repl_data->reploff;
+                runtime->last_io_sec = server.unixtime - server.primary->last_interaction;
+            } else if (server.cached_primary) {
+                runtime->reploff = server.cached_primary->repl_data->reploff;
+                runtime->last_io_sec = server.repl_transfer_lastio > 0 ? server.unixtime - server.repl_transfer_lastio : -1;
+            } else if (server.repl_transfer_lastio > 0) {
+                runtime->last_io_sec = server.unixtime - server.repl_transfer_lastio;
+            }
+            continue;
+        }
+
+        if (runtime->link_client) {
+            if (runtime->link_client->conn && connGetState(runtime->link_client->conn) == CONN_STATE_CONNECTED) {
+                runtime->active_link = 1;
+                runtime->repl_state = REPL_STATE_CONNECTED;
+                runtime->reploff = (long long)runtime->replay_last_acked_id;
+                runtime->last_io_sec = server.unixtime - runtime->link_client->last_interaction;
+            } else {
+                disconnectUpstreamForwardingLink(runtime, 1);
+            }
+            continue;
+        }
+
+        if (runtime->forward_conn) {
+            runtime->repl_state = REPL_STATE_CONNECTING;
+            runtime->reploff = (long long)runtime->replay_last_acked_id;
+            runtime->last_io_sec =
+                runtime->last_connect_attempt_sec >= 0 ? server.unixtime - runtime->last_connect_attempt_sec : -1;
+        }
+    }
+}
+
+static void queueUpstreamForwardCommand(client *c, int argc, const char **argv, const size_t *argv_lens) {
+    if (c == NULL || argc <= 0 || argv == NULL) return;
+    addReplyArrayLen(c, argc);
+    for (int i = 0; i < argc; i++) {
+        size_t arglen = argv_lens ? argv_lens[i] : strlen(argv[i]);
+        addReplyBulkCBuffer(c, argv[i], arglen);
+    }
+}
+
+static void queueUpstreamForwardHandshake(client *c) {
+    if (c == NULL) return;
+
+    if (server.primary_auth) {
+        const char *auth_argv[3];
+        size_t auth_lens[3];
+        int auth_argc = 0;
+        auth_argv[auth_argc] = "AUTH";
+        auth_lens[auth_argc++] = 4;
+        if (server.primary_user) {
+            auth_argv[auth_argc] = server.primary_user;
+            auth_lens[auth_argc++] = strlen(server.primary_user);
+        }
+        auth_argv[auth_argc] = server.primary_auth;
+        auth_lens[auth_argc++] = sdslen(server.primary_auth);
+        queueUpstreamForwardCommand(c, auth_argc, auth_argv, auth_lens);
+    }
+
+    {
+        const char *capa_argv[] = {"REPLCONF", "capa", REPLICA_CAPA_RREPLAY_PEER_STR};
+        size_t capa_lens[] = {8, 4, strlen(REPLICA_CAPA_RREPLAY_PEER_STR)};
+        queueUpstreamForwardCommand(c, 3, capa_argv, capa_lens);
+    }
+    {
+        const char *uuid_argv[] = {"REPLCONF", "uuid", server.runid};
+        size_t uuid_lens[] = {8, 4, CONFIG_RUN_ID_SIZE};
+        queueUpstreamForwardCommand(c, 3, uuid_argv, uuid_lens);
+    }
+}
+
+static int processUpstreamForwardReplyBuffer(valkeyUpstreamRuntime *runtime) {
+    if (runtime == NULL || runtime->replybuf == NULL) return C_OK;
+
+    while (1) {
+        char *eol = strstr(runtime->replybuf, "\r\n");
+        if (eol == NULL) break;
+
+        size_t line_len = (size_t)(eol - runtime->replybuf);
+        int should_disconnect = 0;
+        if (line_len > 0) {
+            char prefix = runtime->replybuf[0];
+            if (prefix == ':') {
+                long long replay_id = 0;
+                if (line_len > 1 && string2ll(runtime->replybuf + 1, line_len - 1, &replay_id) &&
+                    replay_id > 0) {
+                    upstreamRuntimeTrackReplayAck(runtime, (unsigned long long)replay_id);
+                }
+            } else if (prefix == '-') {
+                serverLog(LL_WARNING, "Error reply on multi-master peer link %s:%d: %.*s",
+                          runtime->host ? runtime->host : "?", runtime->port, (int)line_len, runtime->replybuf);
+                should_disconnect = 1;
+            }
+        }
+
+        if (line_len + 2 >= sdslen(runtime->replybuf)) {
+            sdsclear(runtime->replybuf);
+        } else {
+            sdsrange(runtime->replybuf, line_len + 2, -1);
+        }
+
+        if (should_disconnect) return C_ERR;
+    }
+    return C_OK;
+}
+
+static void discardUpstreamForwardReplies(connection *conn) {
+    client *c = connGetPrivateData(conn);
+    if (c == NULL) {
+        connClose(conn);
+        return;
+    }
+
+    valkeyUpstreamRuntime *runtime = findUpstreamRuntimeByLinkClient(c);
+
+    char buf[PROTO_IOBUF_LEN];
+    while (1) {
+        int nread = connRead(conn, buf, sizeof(buf));
+        if (nread > 0) {
+            c->last_interaction = server.unixtime;
+            if (runtime) {
+                if (runtime->replybuf == NULL) runtime->replybuf = sdsempty();
+                runtime->replybuf = sdscatlen(runtime->replybuf, buf, nread);
+                if (sdslen(runtime->replybuf) > (1024 * 1024)) {
+                    serverLog(LL_WARNING,
+                              "Disconnecting multi-master peer link %s:%d due to oversized reply buffer",
+                              runtime->host ? runtime->host : "?", runtime->port);
+                    freeClientAsync(c);
+                    return;
+                }
+                if (processUpstreamForwardReplyBuffer(runtime) == C_ERR) {
+                    freeClientAsync(c);
+                    return;
+                }
+            }
+            continue;
+        }
+        if (nread == 0 || connGetState(conn) != CONN_STATE_CONNECTED) {
+            freeClientAsync(c);
+        }
+        return;
+    }
+}
+
+static void connectConfiguredUpstreamForwardLink(connection *conn) {
+    valkeyUpstreamRuntime *runtime = connGetPrivateData(conn);
+    if (runtime == NULL || runtime->forward_conn != conn) {
+        connClose(conn);
+        return;
+    }
+
+    runtime->forward_conn = NULL;
+    if (connGetState(conn) != CONN_STATE_CONNECTED) {
+        runtime->repl_state = REPL_STATE_NONE;
+        runtime->active_link = 0;
+        serverLog(LL_WARNING, "Error condition on multi-master peer link %s:%d: %s",
+                  runtime->host ? runtime->host : "?", runtime->port, connGetLastError(conn));
+        connClose(conn);
+        return;
+    }
+
+    if (runtime->link_client && runtime->link_client != server.primary) {
+        disconnectUpstreamForwardingLink(runtime, 1);
+    }
+
+    client *link_client = createClient(conn);
+    if (link_client == NULL) {
+        connClose(conn);
+        runtime->repl_state = REPL_STATE_NONE;
+        return;
+    }
+
+    runtime->link_client = link_client;
+    runtime->active_link = 1;
+    runtime->repl_state = REPL_STATE_CONNECTED;
+    runtime->reploff = -1;
+    runtime->last_io_sec = 0;
+
+    connSetReadHandler(conn, discardUpstreamForwardReplies);
+    queueUpstreamForwardHandshake(link_client);
+    serverLog(LL_NOTICE, "Connected multi-master peer forwarding link to %s:%d", runtime->host, runtime->port);
+}
+
+static void ensureUpstreamForwardLink(valkeyUpstreamRuntime *runtime) {
+    if (runtime == NULL || runtime->host == NULL) return;
+    if (runtime->link_client != NULL || runtime->forward_conn != NULL) return;
+    if (runtime->last_connect_attempt_sec >= 0 &&
+        (server.unixtime - runtime->last_connect_attempt_sec) < 1) {
+        return;
+    }
+
+    runtime->last_connect_attempt_sec = server.unixtime;
+    runtime->repl_state = REPL_STATE_CONNECTING;
+
+    connection *conn = connCreate(connTypeOfReplication());
+    if (conn == NULL) {
+        runtime->repl_state = REPL_STATE_NONE;
+        return;
+    }
+
+    runtime->forward_conn = conn;
+    connSetPrivateData(conn, runtime);
+    if (connConnect(conn, runtime->host, runtime->port, server.bind_source_addr, server.repl_mptcp,
+                    connectConfiguredUpstreamForwardLink) == C_ERR) {
+        runtime->forward_conn = NULL;
+        runtime->repl_state = REPL_STATE_NONE;
+        serverLog(LL_WARNING, "Unable to connect multi-master peer forwarding link to %s:%d: %s",
+                  runtime->host, runtime->port, connGetLastError(conn));
+        connClose(conn);
+    }
+}
+
+static void maintainUpstreamRuntimeLinks(void) {
+    if (server.upstream_runtime == NULL) return;
+
+    listIter li;
+    listNode *ln;
+    listRewind(server.upstream_runtime, &li);
+    while ((ln = listNext(&li)) != NULL) {
+        valkeyUpstreamRuntime *runtime = listNodeValue(ln);
+        if (runtime == NULL || runtime->host == NULL) continue;
+
+        if (upstreamRuntimeIsCurrentPrimary(runtime)) {
+            if (runtime->forward_conn) {
+                connClose(runtime->forward_conn);
+                runtime->forward_conn = NULL;
+            }
+            if (runtime->link_client && runtime->link_client != server.primary) {
+                disconnectUpstreamForwardingLink(runtime, 1);
+            }
+            runtime->link_client = server.primary;
+            continue;
+        }
+
+        if (!server.multi_master) {
+            disconnectUpstreamForwardingLink(runtime, 1);
+            continue;
+        }
+
+        if (runtime->link_client && runtime->link_client->conn &&
+            connGetState(runtime->link_client->conn) != CONN_STATE_CONNECTED) {
+            disconnectUpstreamForwardingLink(runtime, 1);
+        }
+
+        if (runtime->link_client == NULL && runtime->forward_conn == NULL) {
+            ensureUpstreamForwardLink(runtime);
+        }
+    }
+}
+
+static void syncUpstreamRuntimeWithConfigured(void) {
+    if (server.upstream_runtime == NULL) return;
+
+    if (server.upstreams == NULL || listLength(server.upstreams) == 0) {
+        clearUpstreamRuntimeEntries();
+        return;
+    }
+
+    listIter li;
+    listNode *ln;
+    listRewind(server.upstreams, &li);
+    while ((ln = listNext(&li)) != NULL) {
+        valkeyUpstream *upstream = listNodeValue(ln);
+        if (upstream == NULL || upstream->host == NULL) continue;
+        ensureUpstreamRuntimeEntry(upstream->host, upstream->port);
+    }
+
+    ln = listFirst(server.upstream_runtime);
+    while (ln != NULL) {
+        listNode *next = listNextNode(ln);
+        valkeyUpstreamRuntime *runtime = listNodeValue(ln);
+        if (runtime && runtime->host && findConfiguredUpstreamNode(runtime->host, runtime->port) == NULL) {
+            freeUpstreamRuntimeEntry(runtime);
+            listDelNode(server.upstream_runtime, ln);
+        }
+        ln = next;
+    }
+
+    maintainUpstreamRuntimeLinks();
+    recomputeUpstreamRuntimeActiveState();
+}
+
+void replicationDetachUpstreamRuntimeClient(client *c) {
+    valkeyUpstreamRuntime *runtime = findUpstreamRuntimeByLinkClient(c);
+    if (runtime == NULL) return;
+    if (runtime->replybuf) {
+        sdsfree(runtime->replybuf);
+        runtime->replybuf = NULL;
+    }
+    runtime->link_client = NULL;
+    runtime->active_link = 0;
+    runtime->repl_state = REPL_STATE_NONE;
+    runtime->reploff = (long long)runtime->replay_last_acked_id;
+    runtime->last_io_sec = -1;
+}
+
 static int addConfiguredUpstreamEndpoint(const char *host, int port) {
     if (server.upstreams == NULL || host == NULL) return C_ERR;
     if (port <= 0 || port > 65535) return C_ERR;
-    if (findConfiguredUpstreamNode(host, port) != NULL) return C_OK;
+    if (findConfiguredUpstreamNode(host, port) != NULL) {
+        syncUpstreamRuntimeWithConfigured();
+        return C_OK;
+    }
 
     valkeyUpstream *upstream = zmalloc(sizeof(*upstream));
     upstream->host = sdsnew(host);
     upstream->port = port;
     listAddNodeTail(server.upstreams, upstream);
+    syncUpstreamRuntimeWithConfigured();
     return C_OK;
 }
 
@@ -121,6 +581,8 @@ static int removeConfiguredUpstreamEndpoint(const char *host, int port) {
     if (ln == NULL) return C_ERR;
     freeUpstreamEndpoint(listNodeValue(ln));
     listDelNode(server.upstreams, ln);
+    removeUpstreamRuntimeEntry(host, port);
+    syncUpstreamRuntimeWithConfigured();
     return C_OK;
 }
 
@@ -150,12 +612,14 @@ static int selectConfiguredUpstreamAsPrimary(int rotate) {
 
     if (server.primary_host != NULL && !strcasecmp(server.primary_host, upstream->host) &&
         server.primary_port == upstream->port) {
+        recomputeUpstreamRuntimeActiveState();
         return C_OK;
     }
 
     sdsfree(server.primary_host);
     server.primary_host = sdsnew(upstream->host);
     server.primary_port = upstream->port;
+    syncUpstreamRuntimeWithConfigured();
     return C_OK;
 }
 
@@ -169,6 +633,7 @@ static void clearConfiguredUpstreams(void) {
         freeUpstreamEndpoint(listNodeValue(ln));
     }
     listEmpty(server.upstreams);
+    clearUpstreamRuntimeEntries();
 }
 
 /* Keep the new upstream list aligned with the legacy single-primary state.
@@ -179,11 +644,13 @@ static void refreshConfiguredUpstreamsFromPrimary(void) {
 
     if (server.multi_master) {
         addConfiguredUpstreamEndpoint(server.primary_host, server.primary_port);
+        syncUpstreamRuntimeWithConfigured();
         return;
     }
 
     clearConfiguredUpstreams();
     addConfiguredUpstreamEndpoint(server.primary_host, server.primary_port);
+    syncUpstreamRuntimeWithConfigured();
 }
 
 static int decodeRdbUpstream(sds encoded, sds *host, int *port) {
@@ -201,6 +668,60 @@ static int decodeRdbUpstream(sds encoded, sds *host, int *port) {
 
     *host = sdsnewlen(encoded, hostlen);
     *port = parsed_port;
+    return C_OK;
+}
+
+static int parseUnsignedLongLongField(const char *field, unsigned long long *out) {
+    if (field == NULL || out == NULL || field[0] == '\0') return C_ERR;
+    char *endptr = NULL;
+    errno = 0;
+    unsigned long long val = strtoull(field, &endptr, 10);
+    if (errno != 0 || endptr == field || *endptr != '\0') return C_ERR;
+    *out = val;
+    return C_OK;
+}
+
+static int decodeRdbUpstreamRuntime(sds encoded, sds *host, int *port,
+                                    unsigned long long *last_sent,
+                                    unsigned long long *last_acked,
+                                    unsigned long long *tx_frames,
+                                    unsigned long long *rx_frames,
+                                    unsigned long long *ack_frames) {
+    if (encoded == NULL || host == NULL || port == NULL || last_sent == NULL ||
+        last_acked == NULL || tx_frames == NULL || rx_frames == NULL || ack_frames == NULL) {
+        return C_ERR;
+    }
+
+    sds tmp = sdsdup(encoded);
+    char *fields[7] = {0};
+    char *p = tmp;
+    for (int i = 0; i < 7; i++) {
+        fields[i] = p;
+        if (i == 6) break;
+        char *sep = strchr(p, '|');
+        if (sep == NULL) {
+            sdsfree(tmp);
+            return C_ERR;
+        }
+        *sep = '\0';
+        p = sep + 1;
+    }
+
+    long long parsed_port = 0;
+    if (fields[0][0] == '\0' || string2ll(fields[1], strlen(fields[1]), &parsed_port) == 0 ||
+        parsed_port <= 0 || parsed_port > 65535 ||
+        parseUnsignedLongLongField(fields[2], last_sent) != C_OK ||
+        parseUnsignedLongLongField(fields[3], last_acked) != C_OK ||
+        parseUnsignedLongLongField(fields[4], tx_frames) != C_OK ||
+        parseUnsignedLongLongField(fields[5], rx_frames) != C_OK ||
+        parseUnsignedLongLongField(fields[6], ack_frames) != C_OK) {
+        sdsfree(tmp);
+        return C_ERR;
+    }
+
+    *host = sdsnew(fields[0]);
+    *port = (int)parsed_port;
+    sdsfree(tmp);
     return C_OK;
 }
 
@@ -226,6 +747,35 @@ void replicationApplyRdbConfiguredUpstreams(const rdbSaveInfo *rsi) {
     if (applied == 0 && server.primary_host != NULL) {
         refreshConfiguredUpstreamsFromPrimary();
     }
+    syncUpstreamRuntimeWithConfigured();
+}
+
+void replicationApplyRdbUpstreamRuntimeState(const rdbSaveInfo *rsi) {
+    if (rsi == NULL || rsi->repl_runtime_count <= 0 || rsi->repl_runtime_entries == NULL) return;
+    if (server.upstream_runtime == NULL) return;
+
+    for (int i = 0; i < rsi->repl_runtime_count; i++) {
+        sds host = NULL;
+        int port = 0;
+        unsigned long long last_sent = 0, last_acked = 0, tx_frames = 0, rx_frames = 0, ack_frames = 0;
+        if (decodeRdbUpstreamRuntime(rsi->repl_runtime_entries[i], &host, &port, &last_sent, &last_acked,
+                                     &tx_frames, &rx_frames, &ack_frames) != C_OK) {
+            continue;
+        }
+
+        listNode *ln = findUpstreamRuntimeNode(host, port);
+        valkeyUpstreamRuntime *runtime = ln ? listNodeValue(ln) : NULL;
+        if (runtime) {
+            runtime->replay_last_sent_id = last_sent;
+            runtime->replay_last_acked_id = last_acked > last_sent ? last_sent : last_acked;
+            runtime->replay_tx_frames = tx_frames;
+            runtime->replay_rx_frames = rx_frames;
+            runtime->replay_ack_frames = ack_frames;
+            runtime->reploff = (long long)runtime->replay_last_acked_id;
+        }
+        sdsfree(host);
+    }
+    syncUpstreamRuntimeWithConfigured();
 }
 
 void replicationApplyRdbMVCCState(const rdbSaveInfo *rsi) {
@@ -1124,13 +1674,81 @@ void replicationFeedReplicas(int dictid, robj **argv, int argc) {
     }
 }
 
+static int clientIsRReplayPeerLink(const client *c) {
+    return c && c->repl_data && (c->repl_data->replica_capa & REPLICA_CAPA_RREPLAY_PEER);
+}
+
+/* Collect upstream clients that should receive RREPLAY forwarding frames. */
+static int collectRReplayForwardTargets(client **targets, int max_targets, client *exclude) {
+    if (targets == NULL || max_targets <= 0) return 0;
+
+    int count = 0;
+    if (server.upstream_runtime && listLength(server.upstream_runtime) > 0) {
+        listIter li;
+        listNode *ln;
+        listRewind(server.upstream_runtime, &li);
+        while ((ln = listNext(&li)) != NULL && count < max_targets) {
+            valkeyUpstreamRuntime *runtime = listNodeValue(ln);
+            if (runtime == NULL || !runtime->active_link) continue;
+            if (runtime->repl_state != REPL_STATE_CONNECTED) continue;
+            if (runtime->link_client == NULL) continue;
+            if (runtime->link_client == exclude) continue;
+            int duplicate = 0;
+            for (int i = 0; i < count; i++) {
+                if (targets[i] == runtime->link_client) {
+                    duplicate = 1;
+                    break;
+                }
+            }
+            if (duplicate) continue;
+            targets[count++] = runtime->link_client;
+        }
+    }
+
+    /* Backward compatibility: if runtime scaffolding is not populated yet,
+     * fallback to the legacy single-active upstream link. */
+    if (count == 0 && server.primary && server.repl_state == REPL_STATE_CONNECTED && server.primary != exclude) {
+        targets[count++] = server.primary;
+    }
+    return count;
+}
+
+static void forwardRawRReplayFrameToUpstreams(robj **argv, int argc, client *exclude) {
+    client *targets[64];
+    int ntargets = collectRReplayForwardTargets(targets, 64, exclude);
+    unsigned long long replay_id = 0;
+    if (argc > 3) {
+        long long replay_id_ll = 0;
+        if (getLongLongFromObject(argv[3], &replay_id_ll) == C_OK && replay_id_ll > 0) {
+            replay_id = (unsigned long long)replay_id_ll;
+        }
+    }
+    for (int i = 0; i < ntargets; i++) {
+        client *target = targets[i];
+        if (target == NULL) continue;
+        target->flag.primary_force_reply = 1;
+        addReplyArrayLen(target, argc);
+        for (int j = 0; j < argc; j++) {
+            addReplyBulk(target, argv[j]);
+        }
+        target->flag.primary_force_reply = 0;
+        if (replay_id > 0) {
+            valkeyUpstreamRuntime *runtime = findUpstreamRuntimeByLinkClient(target);
+            if (runtime) upstreamRuntimeTrackReplaySent(runtime, replay_id);
+        }
+    }
+}
+
 /* Encapsulate a locally generated command and send it upstream to the
  * connected primary as an active-active replay frame.
  *
  * Format: RREPLAY <origin-uuid> <dbid> <replay-id> <mvcc-ts> <command> [arg ...] */
 void replicationFeedPrimaryWithRReplay(int dictid, robj **argv, int argc) {
-    if (server.primary == NULL || server.repl_state != REPL_STATE_CONNECTED) return;
     if (dictid < 0 || argv == NULL || argc <= 0) return;
+
+    client *targets[64];
+    int ntargets = collectRReplayForwardTargets(targets, 64, NULL);
+    if (ntargets == 0) return;
 
     struct serverCommand *payload_cmd = lookupCommand(argv, argc);
     const char *reason = NULL;
@@ -1147,18 +1765,23 @@ void replicationFeedPrimaryWithRReplay(int dictid, robj **argv, int argc) {
     snprintf(replay_tie_break, sizeof(replay_tie_break), "%s:%llu", server.runid, replay_id);
     mvccStampCommandKeys(payload_cmd, argv, argc, dictid, mvcc_ts, replay_tie_break);
 
-    client *c = server.primary;
-    c->flag.primary_force_reply = 1;
-    addReplyArrayLen(c, argc + 5);
-    addReplyBulkCString(c, "RREPLAY");
-    addReplyBulkCString(c, server.runid);
-    addReplyBulkLongLong(c, dictid);
-    addReplyBulkLongLong(c, replay_id);
-    addReplyBulkLongLong(c, (long long)mvcc_ts);
-    for (int j = 0; j < argc; j++) {
-        addReplyBulk(c, argv[j]);
+    for (int i = 0; i < ntargets; i++) {
+        client *c = targets[i];
+        if (c == NULL) continue;
+        c->flag.primary_force_reply = 1;
+        addReplyArrayLen(c, argc + 5);
+        addReplyBulkCString(c, "RREPLAY");
+        addReplyBulkCString(c, server.runid);
+        addReplyBulkLongLong(c, dictid);
+        addReplyBulkLongLong(c, replay_id);
+        addReplyBulkLongLong(c, (long long)mvcc_ts);
+        for (int j = 0; j < argc; j++) {
+            addReplyBulk(c, argv[j]);
+        }
+        c->flag.primary_force_reply = 0;
+        valkeyUpstreamRuntime *runtime = findUpstreamRuntimeByLinkClient(c);
+        if (runtime) upstreamRuntimeTrackReplaySent(runtime, replay_id);
     }
-    c->flag.primary_force_reply = 0;
 }
 
 /* This is a debugging function that gets called when we detect something
@@ -1990,6 +2613,8 @@ void replconfCommand(client *c) {
                 }
             } else if (!strcasecmp(objectGetVal(c->argv[j + 1]), REPLICA_CAPA_SKIP_RDB_CHECKSUM_STR))
                 c->repl_data->replica_capa |= REPLICA_CAPA_SKIP_RDB_CHECKSUM;
+            else if (!strcasecmp(objectGetVal(c->argv[j + 1]), REPLICA_CAPA_RREPLAY_PEER_STR))
+                c->repl_data->replica_capa |= REPLICA_CAPA_RREPLAY_PEER;
         } else if (!strcasecmp(objectGetVal(c->argv[j]), "ack")) {
             /* REPLCONF ACK is used by replica to inform the primary the amount
              * of replication stream that it processed so far. It is an
@@ -2120,12 +2745,16 @@ void replconfCommand(client *c) {
 /* RREPLAY <origin-uuid> <dbid> <replay-id> [<mvcc-ts>] <command> [arg ...]
  * Internal active-active replay wrapper.
  *
- * Accepted only from replication links (CLIENT_PRIMARY / CLIENT_REPLICA).
+ * Accepted from replication links and from internal multi-master peer links.
  * The command executes the payload command locally and relies on stream
  * forwarding of the original RREPLAY frame for downstream propagation. */
 void rreplayCommand(client *c) {
-    if (!c->flag.primary && !c->flag.replica) {
-        addReplyError(c, "RREPLAY is only accepted from a replication link");
+    int from_primary_link = c->flag.primary;
+    int from_replica_link = c->flag.replica;
+    int from_peer_link = clientIsRReplayPeerLink(c);
+    valkeyUpstreamRuntime *peer_runtime = from_peer_link ? findUpstreamRuntimeByLinkClient(c) : NULL;
+    if (!from_primary_link && !from_replica_link && !from_peer_link) {
+        addReplyError(c, "RREPLAY is only accepted from replication or peer-forward links");
         return;
     }
 
@@ -2144,16 +2773,8 @@ void rreplayCommand(client *c) {
 
     /* If no-forward is enabled, do not relay this frame to downstream replicas.
      * For primary links, relaying is done by stream proxying in commandProcessed(). */
-    if (server.multi_master_no_forward && c->flag.primary) {
+    if (server.multi_master_no_forward && from_primary_link) {
         c->flag.skip_repl_stream_propagation = 1;
-    }
-
-    /* Drop own-origin replay to avoid basic loops in multi-master topologies. */
-    if (!strcasecmp(origin_uuid, server.runid)) {
-        if (c->flag.primary) {
-            c->flag.skip_repl_stream_propagation = 1;
-        }
-        return;
     }
 
     long long dbid = -1;
@@ -2170,11 +2791,22 @@ void rreplayCommand(client *c) {
         return;
     }
     unsigned long long replay_id = replay_id_ll;
+    if (peer_runtime) upstreamRuntimeTrackReplayReceived(peer_runtime, replay_id);
 
-    if (rreplayFrameAlreadySeen(origin_uuid, replay_id)) {
-        if (c->flag.primary) {
+    /* Drop own-origin replay to avoid basic loops in multi-master topologies. */
+    if (!strcasecmp(origin_uuid, server.runid)) {
+        if (from_primary_link) {
             c->flag.skip_repl_stream_propagation = 1;
         }
+        if (from_peer_link) addReplyLongLong(c, replay_id_ll);
+        return;
+    }
+
+    if (rreplayFrameAlreadySeen(origin_uuid, replay_id)) {
+        if (from_primary_link) {
+            c->flag.skip_repl_stream_propagation = 1;
+        }
+        if (from_peer_link) addReplyLongLong(c, replay_id_ll);
         return;
     }
 
@@ -2236,9 +2868,10 @@ void rreplayCommand(client *c) {
     snprintf(replay_tie_break, sizeof(replay_tie_break), "%s:%llu", (char *)origin_uuid, replay_id);
 
     if (!mvccCommandIsFresh(payload_cmd, payload_argv, payload_argc, dbid, mvcc_ts, replay_tie_break)) {
-        if (c->flag.primary) {
+        if (from_primary_link) {
             c->flag.skip_repl_stream_propagation = 1;
         }
+        if (from_peer_link) addReplyLongLong(c, replay_id_ll);
         return;
     }
 
@@ -2282,9 +2915,12 @@ void rreplayCommand(client *c) {
      * the original RREPLAY frame to downstream replicas unless no-forward is set.
      * For primary links (primary -> replica path), commandProcessed() handles
      * relaying by proxying the already-applied stream bytes. */
-    if (c->flag.replica && !server.multi_master_no_forward) {
+    if (!server.multi_master_no_forward && (from_replica_link || from_peer_link)) {
         replicationFeedReplicas(-1, outer_argv, outer_argc);
+        forwardRawRReplayFrameToUpstreams(outer_argv, outer_argc, c);
     }
+
+    if (from_peer_link) addReplyLongLong(c, replay_id_ll);
 
     return;
 }
@@ -3060,6 +3696,7 @@ void replicaBeforeLoadPrimaryRDB(connection *conn, int use_diskless_load) {
 
 void replicaAfterLoadPrimaryRDB(connection *conn, rdbSaveInfo *rsi) {
     replicationApplyRdbConfiguredUpstreams(rsi);
+    replicationApplyRdbUpstreamRuntimeState(rsi);
     replicationApplyRdbMVCCState(rsi);
     replicationApplyRdbRReplaySeen(rsi);
 
@@ -5157,6 +5794,7 @@ void replicationSetPrimary(char *ip, int port, int full_sync_required, bool disc
     server.primary_host = sdsnew(ip);
     server.primary_port = port;
     refreshConfiguredUpstreamsFromPrimary();
+    syncUpstreamRuntimeWithConfigured();
 
     /* Clients blocked in primary, now replica.
      * Note that we need to set the new primary first
@@ -5210,6 +5848,7 @@ void replicationUnsetPrimary(void) {
     sdsfree(server.primary_host);
     server.primary_host = NULL;
     refreshConfiguredUpstreamsFromPrimary();
+    syncUpstreamRuntimeWithConfigured();
     if (server.primary) freeClient(server.primary);
     replicationDiscardCachedPrimary();
     cancelReplicationHandshake(0);
@@ -5224,6 +5863,7 @@ void replicationUnsetPrimary(void) {
      * a very fast reconnection. */
     disconnectReplicas();
     server.repl_state = REPL_STATE_NONE;
+    syncUpstreamRuntimeWithConfigured();
 
     /* We need to make sure the new primary will start the replication stream
      * with a SELECT statement. This is forced after a full resync, but
@@ -5265,6 +5905,7 @@ void replicationHandlePrimaryDisconnection(void) {
     server.primary = NULL;
     server.repl_state = REPL_STATE_CONNECT;
     server.repl_down_since = server.unixtime;
+    syncUpstreamRuntimeWithConfigured();
     /* We lost connection with our primary, don't disconnect replicas yet,
      * maybe we'll be able to PSYNC with our primary later. We'll disconnect
      * the replicas only if we'll have to do a full resync with our primary. */
@@ -5449,26 +6090,43 @@ void roleCommand(client *c) {
          * - one upstream: [active-replica|slave, host, port, state, offset]
          * - multiple upstreams: array of the above entries. */
         if (server.multi_master && server.upstreams && listLength(server.upstreams) > 0) {
-            unsigned long upstream_count = listLength(server.upstreams);
+            list *role_upstreams =
+                (server.upstream_runtime && listLength(server.upstream_runtime) > 0) ? server.upstream_runtime : server.upstreams;
+            unsigned long upstream_count = listLength(role_upstreams);
             if (upstream_count > 1) addReplyArrayLen(c, upstream_count);
 
             listIter li;
             listNode *ln;
-            listRewind(server.upstreams, &li);
+            listRewind(role_upstreams, &li);
             while ((ln = listNext(&li)) != NULL) {
-                valkeyUpstream *upstream = listNodeValue(ln);
-                if (upstream == NULL || upstream->host == NULL) continue;
-
-                int is_current =
-                    server.primary_host && !strcasecmp(server.primary_host, upstream->host) && server.primary_port == upstream->port;
+                const char *host = NULL;
+                int port = 0;
+                int is_current = 0;
                 const char *state = "none";
                 long long upstream_offset = -1;
+                valkeyUpstreamRuntime *runtime = NULL;
+
+                if (role_upstreams == server.upstream_runtime) {
+                    runtime = listNodeValue(ln);
+                    if (runtime == NULL || runtime->host == NULL) continue;
+                    host = runtime->host;
+                    port = runtime->port;
+                    is_current = runtime->active_link;
+                } else {
+                    valkeyUpstream *upstream = listNodeValue(ln);
+                    if (upstream == NULL || upstream->host == NULL) continue;
+                    host = upstream->host;
+                    port = upstream->port;
+                    is_current = server.primary_host && !strcasecmp(server.primary_host, upstream->host) &&
+                                 server.primary_port == upstream->port;
+                }
 
                 if (is_current) {
                     if (replicaIsInHandshakeState()) {
                         state = "handshake";
                     } else {
-                        switch (server.repl_state) {
+                        int repl_state = runtime ? runtime->repl_state : server.repl_state;
+                        switch (repl_state) {
                         case REPL_STATE_NONE: state = "none"; break;
                         case REPL_STATE_CONNECT: state = "connect"; break;
                         case REPL_STATE_CONNECTING: state = "connecting"; break;
@@ -5477,7 +6135,9 @@ void roleCommand(client *c) {
                         default: state = "unknown"; break;
                         }
                     }
-                    if (server.primary) {
+                    if (runtime && runtime->reploff >= 0) {
+                        upstream_offset = runtime->reploff;
+                    } else if (server.primary) {
                         upstream_offset = server.primary->repl_data->reploff;
                     } else if (server.cached_primary) {
                         upstream_offset = server.cached_primary->repl_data->reploff;
@@ -5486,8 +6146,8 @@ void roleCommand(client *c) {
 
                 addReplyArrayLen(c, 5);
                 addReplyBulkCString(c, server.active_replica ? "active-replica" : "slave");
-                addReplyBulkCString(c, upstream->host);
-                addReplyLongLong(c, upstream->port);
+                addReplyBulkCString(c, host);
+                addReplyLongLong(c, port);
                 addReplyBulkCString(c, state);
                 addReplyLongLong(c, upstream_offset);
             }
@@ -6070,6 +6730,7 @@ void replicationCron(void) {
     /* Check failover status first, to see if we need to start
      * handling the failover. */
     updateFailoverStatus();
+    syncUpstreamRuntimeWithConfigured();
 
     /* Non blocking connection timeout? */
     if (server.primary_host && (server.repl_state == REPL_STATE_CONNECTING || replicaIsInHandshakeState()) &&
@@ -6250,6 +6911,7 @@ void replicationCron(void) {
 
     /* Refresh the number of replicas with lag <= min-replicas-max-lag. */
     refreshGoodReplicasCount();
+    syncUpstreamRuntimeWithConfigured();
     replication_cron_loops++; /* Incremented with frequency 1 HZ. */
 }
 

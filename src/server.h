@@ -486,9 +486,11 @@ typedef enum {
 #define REPLICA_CAPA_PSYNC2 (1 << 1)            /* Supports PSYNC2 protocol. */
 #define REPLICA_CAPA_DUAL_CHANNEL (1 << 2)      /* Supports dual channel replication sync */
 #define REPLICA_CAPA_SKIP_RDB_CHECKSUM (1 << 3) /* Supports skipping RDB checksum for sync requests. */
+#define REPLICA_CAPA_RREPLAY_PEER (1 << 4)      /* Internal peer link for multi-master RREPLAY forwarding. */
 
 /* Replica capability strings */
 #define REPLICA_CAPA_SKIP_RDB_CHECKSUM_STR "skip-rdb-checksum" /* Supports skipping RDB checksum for sync requests. */
+#define REPLICA_CAPA_RREPLAY_PEER_STR "rreplay-peer"
 
 /* Replica requirements */
 #define REPLICA_REQ_NONE 0
@@ -1607,6 +1609,25 @@ typedef struct valkeyUpstream {
     int port;
 } valkeyUpstream;
 
+/* Runtime state holder for configured upstreams. */
+typedef struct valkeyUpstreamRuntime {
+    sds host;
+    int port;
+    client *link_client;  /* Forwarding connection client for this upstream, when available. */
+    connection *forward_conn; /* Pending outbound forwarding connection, when connecting. */
+    sds replybuf;         /* Small parser buffer for peer-forwarding command replies. */
+    int active_link;       /* 1 when this upstream is currently active at runtime. */
+    int repl_state;        /* Last known replication state for this upstream link. */
+    long long reploff;     /* Last known replication offset for this upstream link. */
+    long long last_io_sec; /* Last known I/O timestamp in unix seconds. */
+    long long last_connect_attempt_sec; /* Last outbound connect attempt timestamp. */
+    unsigned long long replay_last_sent_id;  /* Last replay-id sent to this peer. */
+    unsigned long long replay_last_acked_id; /* Last replay-id acked by this peer. */
+    unsigned long long replay_tx_frames;     /* Total replay frames sent to this peer. */
+    unsigned long long replay_rx_frames;     /* Total replay frames received from this peer. */
+    unsigned long long replay_ack_frames;    /* Total replay ACK replies received from this peer. */
+} valkeyUpstreamRuntime;
+
 /* This structure can be optionally passed to RDB save/load functions in
  * order to implement additional functionalities, by storing and loading
  * metadata to the RDB file.
@@ -1625,13 +1646,15 @@ typedef struct rdbSaveInfo {
     long long repl_offset;                /* Replication offset. */
     int repl_masters_count;               /* Number of configured upstreams persisted in RDB AUX. */
     sds *repl_masters;                    /* Upstreams encoded as "<host>|<port>". */
+    int repl_runtime_count;               /* Number of upstream runtime entries persisted in RDB AUX. */
+    sds *repl_runtime_entries;            /* Runtime entries encoded as "<host>|<port>|<sent>|<acked>|<tx>|<rx>|<ack>". */
     int rreplay_seen_count;               /* Number of persisted dedupe keys from RREPLAY. */
     sds *rreplay_seen_entries;            /* Dedupe keys encoded as "<origin-uuid>:<replay-id>". */
     uint64_t mvcc_clock;                  /* Global MVCC logical clock persisted in RDB AUX. */
     dict *mvcc_key_clock;                 /* Encoded key clock map loaded from RDB AUX. */
 } rdbSaveInfo;
 
-#define RDB_SAVE_INFO_INIT {-1, 0, "0000000000000000000000000000000000000000", -1, 0, NULL, 0, NULL, 0, NULL}
+#define RDB_SAVE_INFO_INIT {-1, 0, "0000000000000000000000000000000000000000", -1, 0, NULL, 0, NULL, 0, NULL, 0, NULL}
 
 struct malloc_stats {
     size_t zmalloc_used;
@@ -1823,6 +1846,7 @@ struct valkeyServer {
     list *clients_pending_io_write;        /* List of clients with pending write to be process by I/O threads. */
     list *replicas, *monitors;             /* List of replicas and MONITORs */
     list *upstreams;                       /* Configured upstream endpoints (multi-master scaffold). */
+    list *upstream_runtime;                /* Runtime state per configured upstream (Phase 7 scaffold). */
     rax *replicas_waiting_psync;           /* Radix tree for tracking replicas awaiting partial synchronization.
                                             * Key: RDB client ID
                                             * Value: RDB client object
@@ -3195,6 +3219,7 @@ int prepareReplicasToWrite(void);
 void replicationFeedReplicas(int dictid, robj **argv, int argc);
 void replicationFeedPrimaryWithRReplay(int dictid, robj **argv, int argc);
 void replicationFeedStreamFromPrimaryStream(char *buf, size_t buflen);
+void replicationDetachUpstreamRuntimeClient(client *c);
 void resetReplicationBuffer(void);
 void feedReplicationBuffer(char *buf, size_t len);
 void freeReplicaReferencedReplBuffer(client *replica);
@@ -3208,6 +3233,7 @@ void resizeReplicationBacklog(void);
 void replicationSetPrimary(char *ip, int port, int full_sync_required, bool disconnect_blocked);
 void replicationUnsetPrimary(void);
 void replicationApplyRdbConfiguredUpstreams(const rdbSaveInfo *rsi);
+void replicationApplyRdbUpstreamRuntimeState(const rdbSaveInfo *rsi);
 void replicationApplyRdbRReplaySeen(const rdbSaveInfo *rsi);
 void replicationApplyRdbMVCCState(const rdbSaveInfo *rsi);
 uint64_t replicationMVCCGetKeyClock(int dbid, robj *key);

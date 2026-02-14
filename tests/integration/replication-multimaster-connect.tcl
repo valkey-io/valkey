@@ -36,6 +36,44 @@ start_server {overrides {save {} active-replica yes multi-master yes replica-rea
         assert_equal 3 [s -3 configured_upstreams]
     }
 
+    test {Per-peer PSYNC reconnect failover stress in concurrent mode} {
+        set observed_ports {}
+        for {set i 0} {$i < 18} {incr i} {
+            catch {$replica client kill type master}
+            wait_for_condition 150 100 {
+                [s -3 master_link_status] eq {up}
+            } else {
+                fail "replica did not reconnect during failover stress loop #$i"
+            }
+
+            set active_port [s -3 master_port]
+            lappend observed_ports $active_port
+
+            set writer ""
+            if {$active_port == $p1_port} {
+                set writer $p1
+            } elseif {$active_port == $p2_port} {
+                set writer $p2
+            } elseif {$active_port == $p3_port} {
+                set writer $p3
+            } else {
+                fail "unexpected active upstream port $active_port"
+            }
+
+            set k "mmc:stress:$i"
+            set v "v$i"
+            $writer set $k $v
+            wait_for_condition 100 100 {
+                [$replica get $k] eq $v
+            } else {
+                fail "replica did not apply stress key $k from upstream port $active_port"
+            }
+        }
+
+        set uniq_ports [lsort -unique $observed_ports]
+        assert {[llength $uniq_ports] >= 2}
+    }
+
     test {Switch to second upstream and replicate} {
         $replica replicaof remove $p1_host $p1_port
         wait_for_condition 150 100 {

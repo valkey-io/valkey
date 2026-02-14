@@ -2069,6 +2069,10 @@ void freeClient(client *c) {
         listDelNode(server.clients_to_close, ln);
     }
 
+    /* Clear any multi-master runtime references to this client before
+     * replication-specific disconnection handling can early-return. */
+    replicationDetachUpstreamRuntimeClient(c);
+
     /* If it is our primary that's being disconnected we should make sure
      * to cache the state to try a partial resynchronization later.
      *

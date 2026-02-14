@@ -28,7 +28,13 @@ start_server {overrides {save {}}} {
 
     test {REPLICAOF ADD appends second upstream} {
         $replica replicaof add $p2_host $p2_port
-        assert_equal 2 [s -2 configured_upstreams]
+        wait_for_condition 200 100 {
+            [s -2 configured_upstreams] == 2 &&
+            [s -2 upstream_runtime_entries] == 2 &&
+            [s -2 active_upstream_runtime_links] == 2
+        } else {
+            fail "replica did not establish forwarding link for second upstream"
+        }
     }
 
     test {ROLE exposes multi-master upstream list} {
@@ -45,6 +51,16 @@ start_server {overrides {save {}}} {
             [$replica get mm:addremove] eq {first-upstream}
         } else {
             fail "replica did not receive write from first upstream"
+        }
+    }
+
+    test {Replica writes are forwarded to all configured upstream peers} {
+        $replica set mm:fanout from-replica
+        wait_for_condition 100 100 {
+            [$p1 get mm:fanout] eq {from-replica} &&
+            [$p2 get mm:fanout] eq {from-replica}
+        } else {
+            fail "replica write was not forwarded to all upstream peers"
         }
     }
 
@@ -65,20 +81,30 @@ start_server {overrides {save {}}} {
         } else {
             fail "replica did not receive write from second upstream"
         }
+        assert_equal 1 [s -2 upstream_runtime_entries]
+        assert_equal 1 [s -2 active_upstream_runtime_links]
     }
 
     test {INFO replication reports multi-master link fields} {
         assert_equal 1 [s -2 connected_masters]
         assert_equal up [s -2 master_global_link_status]
+        assert {[s -2 upstream_runtime_replay_tx_frames] >= 1}
+        assert {[s -2 upstream_runtime_replay_ack_frames] >= 1}
+        assert {[s -2 upstream_runtime_replay_backlog] >= 0}
         set m0 [s -2 master_0]
         assert {[string first "active=1" $m0] >= 0}
         assert {[regexp {offset=-?[0-9]+} $m0]}
         assert {[regexp {last_io_seconds_ago=-?[0-9]+} $m0]}
+        assert {[regexp {replay_last_sent=[0-9]+} $m0]}
+        assert {[regexp {replay_last_acked=[0-9]+} $m0]}
+        assert {[regexp {replay_backlog=[0-9]+} $m0]}
     }
 
     test {REPLICAOF NO ONE clears configured upstreams} {
         $replica replicaof no one
         assert_equal 0 [s -2 configured_upstreams]
+        assert_equal 0 [s -2 upstream_runtime_entries]
+        assert_equal 0 [s -2 active_upstream_runtime_links]
     }
 }
 }

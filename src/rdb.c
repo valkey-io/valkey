@@ -1253,6 +1253,7 @@ ssize_t rdbSaveAuxFieldStrInt(rio *rdb, char *key, long long val) {
 }
 
 #define RDB_REPL_MASTERS_MAX 1024
+#define RDB_REPL_RUNTIME_MAX 1024
 #define RDB_RREPLAY_SEEN_MAX_ENTRIES 10000
 #define RDB_MVCC_CLOCK_MAX_ENTRIES 200000
 
@@ -1282,6 +1283,19 @@ static int rdbSaveInfoEnsureRReplaySeenCapacity(rdbSaveInfo *rsi, int count) {
     return C_OK;
 }
 
+static int rdbSaveInfoEnsureRuntimeCapacity(rdbSaveInfo *rsi, int count) {
+    if (rsi == NULL || count < 0 || count > RDB_REPL_RUNTIME_MAX) return C_ERR;
+    if (count <= rsi->repl_runtime_count) return C_OK;
+
+    sds *entries = zrealloc(rsi->repl_runtime_entries, sizeof(sds) * count);
+    for (int i = rsi->repl_runtime_count; i < count; i++) {
+        entries[i] = NULL;
+    }
+    rsi->repl_runtime_entries = entries;
+    rsi->repl_runtime_count = count;
+    return C_OK;
+}
+
 void rdbFreeSaveInfo(rdbSaveInfo *rsi) {
     if (rsi == NULL) return;
 
@@ -1297,6 +1311,15 @@ void rdbFreeSaveInfo(rdbSaveInfo *rsi) {
     if (rsi->mvcc_key_clock) {
         dictRelease(rsi->mvcc_key_clock);
         rsi->mvcc_key_clock = NULL;
+    }
+
+    if (rsi->repl_runtime_entries) {
+        for (int i = 0; i < rsi->repl_runtime_count; i++) {
+            if (rsi->repl_runtime_entries[i]) sdsfree(rsi->repl_runtime_entries[i]);
+        }
+        zfree(rsi->repl_runtime_entries);
+        rsi->repl_runtime_entries = NULL;
+        rsi->repl_runtime_count = 0;
     }
 
     if (rsi->rreplay_seen_entries) {
@@ -1353,6 +1376,38 @@ int rdbSaveInfoAuxFields(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
                 sdsfree(auxval);
                 if (rc == -1) return -1;
                 upstream_id++;
+            }
+        }
+
+        unsigned long runtime_count = server.upstream_runtime ? listLength(server.upstream_runtime) : 0;
+        if (rdbSaveAuxFieldStrInt(rdb, "repl-runtime-count", runtime_count) == -1) return -1;
+        if (runtime_count) {
+            listIter li;
+            listNode *ln;
+            unsigned long runtime_id = 0;
+
+            listRewind(server.upstream_runtime, &li);
+            while ((ln = listNext(&li)) != NULL) {
+                if (runtime_id >= RDB_REPL_RUNTIME_MAX) break;
+                valkeyUpstreamRuntime *runtime = listNodeValue(ln);
+                if (runtime == NULL || runtime->host == NULL) continue;
+
+                sds auxkey = sdscatprintf(sdsempty(), "repl-runtime-%lu", runtime_id);
+                sds auxval = sdscatprintf(sdsempty(), "%s|%d|%llu|%llu|%llu|%llu|%llu",
+                                          runtime->host, runtime->port,
+                                          runtime->replay_last_sent_id, runtime->replay_last_acked_id,
+                                          runtime->replay_tx_frames, runtime->replay_rx_frames, runtime->replay_ack_frames);
+                int rc = rdbSaveAuxField(rdb, auxkey, sdslen(auxkey), auxval, sdslen(auxval));
+                sdsfree(auxkey);
+                sdsfree(auxval);
+                if (rc == -1) return -1;
+                runtime_id++;
+            }
+
+            if (runtime_count > RDB_REPL_RUNTIME_MAX) {
+                serverLog(LL_WARNING,
+                          "Truncated MM runtime persistence to %d entries (had %lu)",
+                          RDB_REPL_RUNTIME_MAX, runtime_count);
             }
         }
 
@@ -3420,6 +3475,13 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
                         rdbSaveInfoEnsureMastersCapacity(rsi, (int)count);
                     }
                 }
+            } else if (!strcasecmp(objectGetVal(auxkey), "repl-runtime-count")) {
+                if (rsi) {
+                    long long count = strtoll(objectGetVal(auxval), NULL, 10);
+                    if (count >= 0 && count <= RDB_REPL_RUNTIME_MAX) {
+                        rdbSaveInfoEnsureRuntimeCapacity(rsi, (int)count);
+                    }
+                }
             } else if (!strcasecmp(objectGetVal(auxkey), "mvcc-keys-count")) {
                 /* Size hint only; actual entries are loaded from mvcc-key-N AUX fields. */
             } else if (!strcasecmp(objectGetVal(auxkey), "rreplay-seen-count")) {
@@ -3439,6 +3501,18 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
                         rdbSaveInfoEnsureMastersCapacity(rsi, (int)index + 1) == C_OK) {
                         if (rsi->repl_masters[index]) sdsfree(rsi->repl_masters[index]);
                         rsi->repl_masters[index] = sdsdup(objectGetVal(auxval));
+                    }
+                }
+            } else if (!strncasecmp(objectGetVal(auxkey), "repl-runtime-", 13)) {
+                if (rsi) {
+                    char *suffix = (char *)objectGetVal(auxkey) + 13;
+                    char *endptr = NULL;
+                    long index = strtol(suffix, &endptr, 10);
+                    if (suffix[0] != '\0' && endptr && *endptr == '\0' &&
+                        index >= 0 && index < RDB_REPL_RUNTIME_MAX &&
+                        rdbSaveInfoEnsureRuntimeCapacity(rsi, (int)index + 1) == C_OK) {
+                        if (rsi->repl_runtime_entries[index]) sdsfree(rsi->repl_runtime_entries[index]);
+                        rsi->repl_runtime_entries[index] = sdsdup(objectGetVal(auxval));
                     }
                 }
             } else if (!strncasecmp(objectGetVal(auxkey), "rreplay-seen-", 13)) {

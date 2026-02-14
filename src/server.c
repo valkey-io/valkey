@@ -2364,6 +2364,7 @@ void initServerConfig(void) {
     server.primary = NULL;
     server.cached_primary = NULL;
     server.upstreams = NULL;
+    server.upstream_runtime = NULL;
     server.primary_initial_offset = -1;
     server.repl_state = REPL_STATE_NONE;
     server.repl_rdb_channel_state = REPL_DUAL_CHANNEL_STATE_NONE;
@@ -2924,6 +2925,7 @@ void initServer(void) {
     server.replicas = listCreate();
     server.monitors = listCreate();
     server.upstreams = listCreate();
+    server.upstream_runtime = listCreate();
     server.rreplay_seen = dictCreate(&sdsHashDictType);
     server.rreplay_seen_order = listCreate();
     server.mvcc_key_clock = dictCreate(&sdsKeyHeapPointerValueDictType);
@@ -6532,12 +6534,45 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
         }
 
         info = sdscatprintf(info, "connected_slaves:%lu\r\n", listLength(server.replicas));
-        int connected_masters = (server.primary_host && server.repl_state == REPL_STATE_CONNECTED) ? 1 : 0;
+        int connected_masters = 0;
+        if (server.upstream_runtime && listLength(server.upstream_runtime) > 0) {
+            listIter rtli;
+            listNode *rtln;
+            listRewind(server.upstream_runtime, &rtli);
+            while ((rtln = listNext(&rtli)) != NULL) {
+                valkeyUpstreamRuntime *rt = listNodeValue(rtln);
+                if (rt && rt->active_link && rt->repl_state == REPL_STATE_CONNECTED) connected_masters++;
+            }
+        } else {
+            connected_masters = (server.primary_host && server.repl_state == REPL_STATE_CONNECTED) ? 1 : 0;
+        }
         const char *master_global_link_status = "down";
         if ((server.upstreams == NULL || listLength(server.upstreams) == 0) && server.primary_host == NULL) {
             master_global_link_status = "none";
         } else if (connected_masters > 0) {
             master_global_link_status = "up";
+        }
+
+        unsigned long active_upstream_runtime_links = 0;
+        unsigned long long upstream_runtime_replay_tx_frames = 0;
+        unsigned long long upstream_runtime_replay_rx_frames = 0;
+        unsigned long long upstream_runtime_replay_ack_frames = 0;
+        unsigned long long upstream_runtime_replay_backlog_total = 0;
+        if (server.upstream_runtime) {
+            listIter rtli;
+            listNode *rtln;
+            listRewind(server.upstream_runtime, &rtli);
+            while ((rtln = listNext(&rtli)) != NULL) {
+                valkeyUpstreamRuntime *rt = listNodeValue(rtln);
+                if (rt == NULL) continue;
+                if (rt->active_link) active_upstream_runtime_links++;
+                upstream_runtime_replay_tx_frames += rt->replay_tx_frames;
+                upstream_runtime_replay_rx_frames += rt->replay_rx_frames;
+                upstream_runtime_replay_ack_frames += rt->replay_ack_frames;
+                if (rt->replay_last_sent_id > rt->replay_last_acked_id) {
+                    upstream_runtime_replay_backlog_total += (rt->replay_last_sent_id - rt->replay_last_acked_id);
+                }
+            }
         }
 
         info = sdscatprintf(
@@ -6549,25 +6584,67 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                 "master_global_link_status:%s\r\n", master_global_link_status,
                 "connected_masters:%d\r\n", connected_masters,
                 "configured_upstreams:%lu\r\n", server.upstreams ? listLength(server.upstreams) : 0,
+                "upstream_runtime_entries:%lu\r\n", server.upstream_runtime ? listLength(server.upstream_runtime) : 0,
+                "active_upstream_runtime_links:%lu\r\n", active_upstream_runtime_links,
+                "upstream_runtime_replay_tx_frames:%llu\r\n", upstream_runtime_replay_tx_frames,
+                "upstream_runtime_replay_rx_frames:%llu\r\n", upstream_runtime_replay_rx_frames,
+                "upstream_runtime_replay_ack_frames:%llu\r\n", upstream_runtime_replay_ack_frames,
+                "upstream_runtime_replay_backlog:%llu\r\n", upstream_runtime_replay_backlog_total,
                 "mvcc_clock:%llu\r\n", (unsigned long long)server.mvcc_clock,
                 "mvcc_key_clock_entries:%lu\r\n", server.mvcc_key_clock ? dictSize(server.mvcc_key_clock) : 0,
                 "mvcc_key_tie_break_entries:%lu\r\n", server.mvcc_key_tie_break ? dictSize(server.mvcc_key_tie_break) : 0,
                 "rreplay_dedupe_entries:%lu\r\n", server.rreplay_seen ? dictSize(server.rreplay_seen) : 0));
 
-        if (server.upstreams && listLength(server.upstreams)) {
+        list *info_upstreams =
+            (server.upstream_runtime && listLength(server.upstream_runtime) > 0) ? server.upstream_runtime : server.upstreams;
+        if (info_upstreams && listLength(info_upstreams)) {
             listIter upstream_li;
             listNode *upstream_ln;
             unsigned long upstream_id = 0;
 
-            listRewind(server.upstreams, &upstream_li);
+            listRewind(info_upstreams, &upstream_li);
             while ((upstream_ln = listNext(&upstream_li)) != NULL) {
-                valkeyUpstream *upstream = listNodeValue(upstream_ln);
-                int is_current = server.primary_host && upstream && upstream->host &&
-                                 !strcasecmp(server.primary_host, upstream->host) && server.primary_port == upstream->port;
+                const char *host = "?";
+                int port = 0;
+                int is_current = 0;
                 const char *upstream_state = "disconnected";
                 long long upstream_offset = -1;
                 int upstream_last_io = -1;
-                if (is_current) {
+                unsigned long long replay_last_sent_id = 0;
+                unsigned long long replay_last_acked_id = 0;
+                unsigned long long replay_tx_frames = 0;
+                unsigned long long replay_rx_frames = 0;
+                unsigned long long replay_ack_frames = 0;
+                unsigned long long replay_backlog = 0;
+                if (info_upstreams == server.upstream_runtime) {
+                    valkeyUpstreamRuntime *runtime = listNodeValue(upstream_ln);
+                    if (runtime && runtime->host) {
+                        host = runtime->host;
+                        port = runtime->port;
+                        is_current = runtime->active_link;
+                        if (runtime->repl_state == REPL_STATE_CONNECTED) upstream_state = "up";
+                        else if (runtime->repl_state != REPL_STATE_NONE) upstream_state = "down";
+                        if (runtime->reploff >= 0) upstream_offset = runtime->reploff;
+                        if (runtime->last_io_sec >= 0) upstream_last_io = (int)runtime->last_io_sec;
+                        replay_last_sent_id = runtime->replay_last_sent_id;
+                        replay_last_acked_id = runtime->replay_last_acked_id;
+                        replay_tx_frames = runtime->replay_tx_frames;
+                        replay_rx_frames = runtime->replay_rx_frames;
+                        replay_ack_frames = runtime->replay_ack_frames;
+                        if (replay_last_sent_id > replay_last_acked_id) {
+                            replay_backlog = replay_last_sent_id - replay_last_acked_id;
+                        }
+                    }
+                } else {
+                    valkeyUpstream *upstream = listNodeValue(upstream_ln);
+                    if (upstream && upstream->host) {
+                        host = upstream->host;
+                        port = upstream->port;
+                        is_current = server.primary_host && !strcasecmp(server.primary_host, upstream->host) &&
+                                     server.primary_port == upstream->port;
+                    }
+                }
+                if (is_current && upstream_last_io < 0) {
                     upstream_state = (server.repl_state == REPL_STATE_CONNECTED) ? "up" : "down";
                     if (server.primary) {
                         upstream_offset = server.primary->repl_data->reploff;
@@ -6580,17 +6657,17 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                     }
                 }
                 info = sdscatprintf(info,
-                                    "upstream%lu:host=%s,port=%d,state=%s,active=%d,offset=%lld,last_io_seconds_ago=%d\r\n",
-                                    upstream_id,
-                                    upstream && upstream->host ? upstream->host : "?",
-                                    upstream ? upstream->port : 0, upstream_state, is_current ? 1 : 0, upstream_offset,
-                                    upstream_last_io);
+                                    "upstream%lu:host=%s,port=%d,state=%s,active=%d,offset=%lld,last_io_seconds_ago=%d,replay_last_sent=%llu,replay_last_acked=%llu,replay_backlog=%llu,replay_tx_frames=%llu,replay_rx_frames=%llu,replay_ack_frames=%llu\r\n",
+                                    upstream_id, host, port, upstream_state, is_current ? 1 : 0, upstream_offset,
+                                    upstream_last_io,
+                                    replay_last_sent_id, replay_last_acked_id, replay_backlog,
+                                    replay_tx_frames, replay_rx_frames, replay_ack_frames);
                 info = sdscatprintf(info,
-                                    "master_%lu:host=%s,port=%d,state=%s,active=%d,offset=%lld,last_io_seconds_ago=%d\r\n",
-                                    upstream_id,
-                                    upstream && upstream->host ? upstream->host : "?",
-                                    upstream ? upstream->port : 0, upstream_state, is_current ? 1 : 0, upstream_offset,
-                                    upstream_last_io);
+                                    "master_%lu:host=%s,port=%d,state=%s,active=%d,offset=%lld,last_io_seconds_ago=%d,replay_last_sent=%llu,replay_last_acked=%llu,replay_backlog=%llu,replay_tx_frames=%llu,replay_rx_frames=%llu,replay_ack_frames=%llu\r\n",
+                                    upstream_id, host, port, upstream_state, is_current ? 1 : 0, upstream_offset,
+                                    upstream_last_io,
+                                    replay_last_sent_id, replay_last_acked_id, replay_backlog,
+                                    replay_tx_frames, replay_rx_frames, replay_ack_frames);
                 upstream_id++;
             }
         }
@@ -7272,6 +7349,7 @@ void loadDataFromDisk(void) {
 
             /* Restore multi-master upstream metadata persisted in AUX fields. */
             replicationApplyRdbConfiguredUpstreams(&rsi);
+            replicationApplyRdbUpstreamRuntimeState(&rsi);
             replicationApplyRdbMVCCState(&rsi);
             replicationApplyRdbRReplaySeen(&rsi);
 

@@ -431,6 +431,7 @@ typedef enum {
     REPL_STATE_RECEIVE_IP_REPLY,      /* Wait for REPLCONF reply */
     REPL_STATE_RECEIVE_CAPA_REPLY,    /* Wait for REPLCONF reply */
     REPL_STATE_RECEIVE_VERSION_REPLY, /* Wait for REPLCONF reply */
+    REPL_STATE_RECEIVE_UUID_REPLY,    /* Wait for REPLCONF reply */
     REPL_STATE_RECEIVE_NODEID_REPLY,  /* Wait for REPLCONF reply */
     REPL_STATE_SEND_PSYNC,            /* Send PSYNC */
     REPL_STATE_RECEIVE_PSYNC_REPLY,   /* Wait for PSYNC reply */
@@ -1199,6 +1200,7 @@ typedef struct ClientFlags {
     uint64_t module_prevent_repl_prop : 1; /* Module client do not want to propagate to replica */
     uint64_t reexecuting_command : 1;      /* The client is re-executing the command. */
     uint64_t replication_done : 1;         /* Indicate that replication has been done on the client */
+    uint64_t skip_repl_stream_propagation : 1; /* Skip one propagation from primary stream to downstream replicas. */
     uint64_t authenticated : 1;            /* Indicate a client has successfully authenticated */
     uint64_t ever_authenticated : 1;       /* Indicate a client was ever successfully authenticated during it's lifetime */
     uint64_t protected_rdb_channel : 1;    /* Dual channel replication sync: Protects the RDB client from premature \
@@ -1261,6 +1263,7 @@ typedef struct ClientReplicationData {
     char replid[CONFIG_RUN_ID_SIZE + 1]; /* primary replication ID (if primary). */
     int replica_listening_port;          /* As configured with: REPLCONF listening-port */
     char *replica_addr;                  /* Optionally given by REPLCONF ip-address */
+    sds replica_uuid;                    /* Optionally given by REPLCONF uuid */
     int replica_version;                 /* Version on the form 0xMMmmpp. */
     short replica_capa;                  /* Replica capabilities: REPLICA_CAPA_* bitwise OR. */
     short replica_req;                   /* Replica requirements: REPLICA_REQ_* */
@@ -1597,6 +1600,13 @@ typedef enum {
     PROPAGATION_ERR_BEHAVIOR_PANIC_ON_REPLICAS
 } replicationErrorBehavior;
 
+/* A configured upstream endpoint. For now this is a scaffold that mirrors
+ * the legacy single primary configuration. */
+typedef struct valkeyUpstream {
+    sds host;
+    int port;
+} valkeyUpstream;
+
 /* This structure can be optionally passed to RDB save/load functions in
  * order to implement additional functionalities, by storing and loading
  * metadata to the RDB file.
@@ -1613,9 +1623,15 @@ typedef struct rdbSaveInfo {
     int repl_id_is_set;                   /* True if repl_id field is set. */
     char repl_id[CONFIG_RUN_ID_SIZE + 1]; /* Replication ID. */
     long long repl_offset;                /* Replication offset. */
+    int repl_masters_count;               /* Number of configured upstreams persisted in RDB AUX. */
+    sds *repl_masters;                    /* Upstreams encoded as "<host>|<port>". */
+    int rreplay_seen_count;               /* Number of persisted dedupe keys from RREPLAY. */
+    sds *rreplay_seen_entries;            /* Dedupe keys encoded as "<origin-uuid>:<replay-id>". */
+    uint64_t mvcc_clock;                  /* Global MVCC logical clock persisted in RDB AUX. */
+    dict *mvcc_key_clock;                 /* Encoded key clock map loaded from RDB AUX. */
 } rdbSaveInfo;
 
-#define RDB_SAVE_INFO_INIT {-1, 0, "0000000000000000000000000000000000000000", -1}
+#define RDB_SAVE_INFO_INIT {-1, 0, "0000000000000000000000000000000000000000", -1, 0, NULL, 0, NULL, 0, NULL}
 
 struct malloc_stats {
     size_t zmalloc_used;
@@ -1806,6 +1822,7 @@ struct valkeyServer {
     list *clients_pending_io_read;         /* List of clients with pending read to be process by I/O threads. */
     list *clients_pending_io_write;        /* List of clients with pending write to be process by I/O threads. */
     list *replicas, *monitors;             /* List of replicas and MONITORs */
+    list *upstreams;                       /* Configured upstream endpoints (multi-master scaffold). */
     rax *replicas_waiting_psync;           /* Radix tree for tracking replicas awaiting partial synchronization.
                                             * Key: RDB client ID
                                             * Value: RDB client object
@@ -2141,6 +2158,15 @@ struct valkeyServer {
     list *repl_buffer_blocks;                  /* Replication buffers blocks list
                                                 * (serving replica clients and repl backlog) */
     /* Replication (replica) */
+    int active_replica;   /* If enabled, this node may accept writes while being a replica. */
+    int multi_master;     /* If enabled, allow multiple configured upstreams (scaffold). */
+    int multi_master_no_forward; /* If enabled, avoid forwarding replay traffic (scaffold). */
+    dict *rreplay_seen;   /* Recent replay frames for dedupe. Key: "<origin-uuid>:<replay-id>" */
+    list *rreplay_seen_order; /* FIFO order for replay dedupe eviction. Values are sds keys in rreplay_seen. */
+    unsigned long long rreplay_seq; /* Local replay sequence generator used for outbound RREPLAY. */
+    dict *mvcc_key_clock; /* Key-level LWW clock map. Key: binary(dbid)+key-bytes, Value: uint64_t*. */
+    dict *mvcc_key_tie_break; /* Deterministic tie-break map. Key: binary(dbid)+key-bytes, Value: zstrdup("<uuid>:<id>"). */
+    uint64_t mvcc_clock;  /* Monotonic local logical clock used by replay frames. */
     char *primary_user;     /* AUTH with this user and primary_auth with primary */
     sds primary_auth;       /* AUTH with this password with primary */
     char *primary_host;     /* Hostname of primary */
@@ -2792,6 +2818,7 @@ extern struct sharedObjectsStruct shared;
 extern dictType objectKeyPointerValueDictType;
 extern hashtableType objectHashtableType;
 extern dictType objectKeyHeapPointerValueDictType;
+extern dictType sdsKeyHeapPointerValueDictType;
 extern hashtableType setHashtableType;
 extern dictType BenchmarkDictType;
 extern hashtableType zsetHashtableType;
@@ -3166,6 +3193,7 @@ ssize_t syncReadLine(int fd, char *ptr, ssize_t size, long long timeout);
 /* Replication */
 int prepareReplicasToWrite(void);
 void replicationFeedReplicas(int dictid, robj **argv, int argc);
+void replicationFeedPrimaryWithRReplay(int dictid, robj **argv, int argc);
 void replicationFeedStreamFromPrimaryStream(char *buf, size_t buflen);
 void resetReplicationBuffer(void);
 void feedReplicationBuffer(char *buf, size_t len);
@@ -3179,6 +3207,11 @@ void replicationCachePrimary(client *c);
 void resizeReplicationBacklog(void);
 void replicationSetPrimary(char *ip, int port, int full_sync_required, bool disconnect_blocked);
 void replicationUnsetPrimary(void);
+void replicationApplyRdbConfiguredUpstreams(const rdbSaveInfo *rsi);
+void replicationApplyRdbRReplaySeen(const rdbSaveInfo *rsi);
+void replicationApplyRdbMVCCState(const rdbSaveInfo *rsi);
+uint64_t replicationMVCCGetKeyClock(int dbid, robj *key);
+void replicationMVCCSetKeyClock(int dbid, robj *key, uint64_t ts);
 void refreshGoodReplicasCount(void);
 int checkGoodReplicasStatus(void);
 void processClientsWaitingReplicas(void);
@@ -4078,6 +4111,7 @@ void clusterKeySlotCommand(client *c);
 void clusterFlushslotCommand(client *c);
 void clusterSlotStatsCommand(client *c);
 void restoreCommand(client *c);
+void mvccrestoreCommand(client *c);
 void migrateCommand(client *c);
 void askingCommand(client *c);
 void readonlyCommand(client *c);
@@ -4129,6 +4163,7 @@ void bitopCommand(client *c);
 void bitcountCommand(client *c);
 void bitposCommand(client *c);
 void replconfCommand(client *c);
+void rreplayCommand(client *c);
 void waitCommand(client *c);
 void waitaofCommand(client *c);
 void georadiusbymemberCommand(client *c);

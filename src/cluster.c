@@ -198,16 +198,34 @@ void dumpCommand(client *c) {
     return;
 }
 
-/* RESTORE key ttl serialized-value [REPLACE] [ABSTTL] [IDLETIME seconds] [FREQ frequency] */
-void restoreCommand(client *c) {
+static void restoreGenericCommand(client *c, int use_mvcc_ts) {
     long long ttl, lfu_freq = -1, lru_idle = -1;
     uint16_t rdbver = 0;
     rio payload;
     int j, type, replace = 0, absttl = 0;
+    uint64_t mvcc_ts = 0;
     robj *obj;
+    int options_start = 4;
+
+    if (use_mvcc_ts) {
+        long long mvcc_ts_ll = 0;
+        if (getLongLongFromObjectOrReply(c, c->argv[4], &mvcc_ts_ll, NULL) != C_OK) return;
+        if (mvcc_ts_ll <= 0) {
+            addReplyError(c, "Invalid MVCC timestamp, must be > 0");
+            return;
+        }
+        mvcc_ts = mvcc_ts_ll;
+        options_start = 5;
+
+        uint64_t current_clock = replicationMVCCGetKeyClock(c->db->id, c->argv[1]);
+        if (mvcc_ts < current_clock) {
+            addReply(c, shared.ok);
+            return;
+        }
+    }
 
     /* Parse additional options */
-    for (j = 4; j < c->argc; j++) {
+    for (j = options_start; j < c->argc; j++) {
         int additional = c->argc - j - 1;
         if (!strcasecmp(objectGetVal(c->argv[j]), "replace")) {
             replace = 1;
@@ -309,8 +327,22 @@ void restoreCommand(client *c) {
     objectSetLRUOrLFU(obj, lfu_freq, lru_idle);
     signalModifiedKey(c, c->db, key);
     notifyKeyspaceEvent(NOTIFY_GENERIC, "restore", key, c->db->id);
+    if (use_mvcc_ts) {
+        replicationMVCCSetKeyClock(c->db->id, key, mvcc_ts);
+    }
     addReply(c, shared.ok);
     server.dirty++;
+}
+
+/* RESTORE key ttl serialized-value [REPLACE] [ABSTTL] [IDLETIME seconds] [FREQ frequency] */
+void restoreCommand(client *c) {
+    restoreGenericCommand(c, 0);
+}
+
+/* MVCCRESTORE key ttl serialized-value mvcc-ts [REPLACE] [ABSTTL] [IDLETIME seconds] [FREQ frequency]
+ * Restore variant that updates key-level MVCC clock used by active-active LWW replay. */
+void mvccrestoreCommand(client *c) {
+    restoreGenericCommand(c, 1);
 }
 /* MIGRATE socket cache implementation.
  *

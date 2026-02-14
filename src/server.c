@@ -797,6 +797,16 @@ dictType sdsHashDictType = {
     NULL                   /* allow to expand */
 };
 
+/* Dict for binary-safe sds keys with heap values freed via zfree(). */
+dictType sdsKeyHeapPointerValueDictType = {
+    dictSdsHash,       /* hash function */
+    NULL,              /* key dup */
+    dictSdsKeyCompare, /* key compare */
+    dictSdsDestructor, /* key destructor */
+    dictVanillaFree,   /* val destructor */
+    NULL               /* allow to expand */
+};
+
 size_t clientHashtableTypeMetadataSize(void) {
     return sizeof(void *);
 }
@@ -2340,10 +2350,20 @@ void initServerConfig(void) {
     appendServerSaveParams(60, 10000);  /* save after 1 minute and 10000 changes */
 
     /* Replication related */
+    server.active_replica = 0;
+    server.multi_master = 0;
+    server.multi_master_no_forward = 0;
+    server.rreplay_seen = NULL;
+    server.rreplay_seen_order = NULL;
+    server.rreplay_seq = 0;
+    server.mvcc_key_clock = NULL;
+    server.mvcc_key_tie_break = NULL;
+    server.mvcc_clock = 0;
     server.primary_host = NULL;
     server.primary_port = 6379;
     server.primary = NULL;
     server.cached_primary = NULL;
+    server.upstreams = NULL;
     server.primary_initial_offset = -1;
     server.repl_state = REPL_STATE_NONE;
     server.repl_rdb_channel_state = REPL_DUAL_CHANNEL_STATE_NONE;
@@ -2903,6 +2923,11 @@ void initServer(void) {
     server.clients_to_close = listCreate();
     server.replicas = listCreate();
     server.monitors = listCreate();
+    server.upstreams = listCreate();
+    server.rreplay_seen = dictCreate(&sdsHashDictType);
+    server.rreplay_seen_order = listCreate();
+    server.mvcc_key_clock = dictCreate(&sdsKeyHeapPointerValueDictType);
+    server.mvcc_key_tie_break = dictCreate(&sdsKeyHeapPointerValueDictType);
     server.replicas_waiting_psync = raxNew();
     server.wait_before_rdb_client_free = DEFAULT_WAIT_BEFORE_RDB_CLIENT_FREE;
     server.clients_pending_write = listCreate();
@@ -3546,8 +3571,21 @@ bool clientSupportStandAloneRedirect(client *c) {
     return !server.cluster_enabled && server.primary_host && c->capa & CLIENT_CAPA_REDIRECT;
 }
 
+static int shouldForwardToPrimaryViaRReplay(int target) {
+    if (!(target & PROPAGATE_REPL)) return 0;
+    if (!server.active_replica || !server.multi_master) return 0;
+    if (server.primary_host == NULL || server.primary == NULL || server.repl_state != REPL_STATE_CONNECTED) return 0;
+    if (server.loading) return 0;
+    if (server.current_client == NULL) return 0;
+    if (isReplicatedClient(server.current_client)) return 0;
+    if (server.current_client->slot_migration_job) return 0;
+    return 1;
+}
+
 static int shouldPropagate(int target) {
-    if (!server.replication_allowed || target == PROPAGATE_NONE || server.loading) return 0;
+    if (!server.replication_allowed || target == PROPAGATE_NONE) return 0;
+    if (shouldForwardToPrimaryViaRReplay(target)) return 1;
+    if (server.loading) return 0;
 
     if (target & PROPAGATE_AOF) {
         if (server.aof_state != AOF_OFF) return 1;
@@ -3609,13 +3647,19 @@ static void propagateNow(int dbid, robj **argv, int argc, int target, int slot) 
      * when we have replicas. */
     int propagate_to_repl = target & PROPAGATE_REPL;
     if (propagate_to_repl && !propagate_to_aof) {
-        propagate_to_repl = server.primary_host == NULL && (server.repl_backlog || listLength(server.replicas) != 0);
+        if (server.active_replica && server.multi_master) {
+            propagate_to_repl = (server.repl_backlog || listLength(server.replicas) != 0);
+        } else {
+            propagate_to_repl = server.primary_host == NULL && (server.repl_backlog || listLength(server.replicas) != 0);
+        }
     }
     int propagate_to_slot_migration = target & PROPAGATE_REPL && clusterIsAnySlotExporting();
+    int propagate_to_primary = shouldForwardToPrimaryViaRReplay(target);
 
     if (propagate_to_aof) feedAppendOnlyFile(dbid, argv, argc);
     if (propagate_to_repl) replicationFeedReplicas(dbid, argv, argc);
     if (propagate_to_slot_migration) clusterFeedSlotExportJobs(dbid, argv, argc, slot);
+    if (propagate_to_primary) replicationFeedPrimaryWithRReplay(dbid, argv, argc);
 }
 
 /* Used inside commands to schedule the propagation of additional commands
@@ -6488,6 +6532,68 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
         }
 
         info = sdscatprintf(info, "connected_slaves:%lu\r\n", listLength(server.replicas));
+        int connected_masters = (server.primary_host && server.repl_state == REPL_STATE_CONNECTED) ? 1 : 0;
+        const char *master_global_link_status = "down";
+        if ((server.upstreams == NULL || listLength(server.upstreams) == 0) && server.primary_host == NULL) {
+            master_global_link_status = "none";
+        } else if (connected_masters > 0) {
+            master_global_link_status = "up";
+        }
+
+        info = sdscatprintf(
+            info,
+            FMTARGS(
+                "active_replica:%d\r\n", server.active_replica,
+                "multi_master:%d\r\n", server.multi_master,
+                "multi_master_no_forward:%d\r\n", server.multi_master_no_forward,
+                "master_global_link_status:%s\r\n", master_global_link_status,
+                "connected_masters:%d\r\n", connected_masters,
+                "configured_upstreams:%lu\r\n", server.upstreams ? listLength(server.upstreams) : 0,
+                "mvcc_clock:%llu\r\n", (unsigned long long)server.mvcc_clock,
+                "mvcc_key_clock_entries:%lu\r\n", server.mvcc_key_clock ? dictSize(server.mvcc_key_clock) : 0,
+                "mvcc_key_tie_break_entries:%lu\r\n", server.mvcc_key_tie_break ? dictSize(server.mvcc_key_tie_break) : 0,
+                "rreplay_dedupe_entries:%lu\r\n", server.rreplay_seen ? dictSize(server.rreplay_seen) : 0));
+
+        if (server.upstreams && listLength(server.upstreams)) {
+            listIter upstream_li;
+            listNode *upstream_ln;
+            unsigned long upstream_id = 0;
+
+            listRewind(server.upstreams, &upstream_li);
+            while ((upstream_ln = listNext(&upstream_li)) != NULL) {
+                valkeyUpstream *upstream = listNodeValue(upstream_ln);
+                int is_current = server.primary_host && upstream && upstream->host &&
+                                 !strcasecmp(server.primary_host, upstream->host) && server.primary_port == upstream->port;
+                const char *upstream_state = "disconnected";
+                long long upstream_offset = -1;
+                int upstream_last_io = -1;
+                if (is_current) {
+                    upstream_state = (server.repl_state == REPL_STATE_CONNECTED) ? "up" : "down";
+                    if (server.primary) {
+                        upstream_offset = server.primary->repl_data->reploff;
+                        upstream_last_io = (int)(server.unixtime - server.primary->last_interaction);
+                    } else if (server.cached_primary) {
+                        upstream_offset = server.cached_primary->repl_data->reploff;
+                    }
+                    if (upstream_last_io < 0 && server.repl_transfer_lastio > 0) {
+                        upstream_last_io = (int)(server.unixtime - server.repl_transfer_lastio);
+                    }
+                }
+                info = sdscatprintf(info,
+                                    "upstream%lu:host=%s,port=%d,state=%s,active=%d,offset=%lld,last_io_seconds_ago=%d\r\n",
+                                    upstream_id,
+                                    upstream && upstream->host ? upstream->host : "?",
+                                    upstream ? upstream->port : 0, upstream_state, is_current ? 1 : 0, upstream_offset,
+                                    upstream_last_io);
+                info = sdscatprintf(info,
+                                    "master_%lu:host=%s,port=%d,state=%s,active=%d,offset=%lld,last_io_seconds_ago=%d\r\n",
+                                    upstream_id,
+                                    upstream && upstream->host ? upstream->host : "?",
+                                    upstream ? upstream->port : 0, upstream_state, is_current ? 1 : 0, upstream_offset,
+                                    upstream_last_io);
+                upstream_id++;
+            }
+        }
 
         /* If min-replicas-to-write is active, write the number of replicas
          * currently considered 'good'. */
@@ -6512,17 +6618,19 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                     replica_ip = ip;
                 }
                 const char *state = replstateToString(replica->repl_data->repl_state);
+                const char *replica_uuid = replica->repl_data->replica_uuid ? replica->repl_data->replica_uuid : "-";
                 if (state[0] == '\0') continue;
                 if (replica->repl_data->repl_state == REPLICA_STATE_ONLINE) lag = time(NULL) - replica->repl_data->repl_ack_time;
 
                 info = sdscatprintf(info,
                                     "slave%d:ip=%s,port=%d,state=%s,"
-                                    "offset=%lld,lag=%ld,type=%s\r\n",
+                                    "offset=%lld,lag=%ld,type=%s,uuid=%s\r\n",
                                     replica_id, replica_ip, replica->repl_data->replica_listening_port, state,
                                     replica->repl_data->repl_ack_off, lag,
                                     replica->flag.repl_rdb_channel                                ? "rdb-channel"
                                     : replica->repl_data->repl_state == REPLICA_STATE_BG_RDB_LOAD ? "main-channel"
-                                                                                                  : "replica");
+                                                                                                  : "replica",
+                                    replica_uuid);
                 replica_id++;
             }
         }
@@ -7162,6 +7270,11 @@ void loadDataFromDisk(void) {
         if (rdb_load_ret == RDB_OK) {
             serverLog(LL_NOTICE, "DB loaded from disk: %.3f seconds", (float)(ustime() - start) / 1000000);
 
+            /* Restore multi-master upstream metadata persisted in AUX fields. */
+            replicationApplyRdbConfiguredUpstreams(&rsi);
+            replicationApplyRdbMVCCState(&rsi);
+            replicationApplyRdbRReplaySeen(&rsi);
+
             /* Restore the replication ID / offset from the RDB file. */
             if (rsi.repl_id_is_set && rsi.repl_offset != -1 &&
                 /* Note that older implementations may save a repl_stream_db
@@ -7202,6 +7315,7 @@ void loadDataFromDisk(void) {
          * possible to support partial resynchronization, to avoid extra memory
          * of replication backlog, we drop it. */
         if (!rsi_is_valid && server.repl_backlog) freeReplicationBacklog();
+        rdbFreeSaveInfo(&rsi);
     }
 }
 

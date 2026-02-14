@@ -8339,6 +8339,37 @@ struct COMMAND_STRUCT MODULE_Subcommands[] = {
 #define MONITOR_Keyspecs NULL
 #endif
 
+/********** MVCCRESTORE ********************/
+
+#ifndef SKIP_CMD_HISTORY_TABLE
+/* MVCCRESTORE history */
+#define MVCCRESTORE_History NULL
+#endif
+
+#ifndef SKIP_CMD_TIPS_TABLE
+/* MVCCRESTORE tips */
+#define MVCCRESTORE_Tips NULL
+#endif
+
+#ifndef SKIP_CMD_KEY_SPECS_TABLE
+/* MVCCRESTORE key specs */
+keySpec MVCCRESTORE_Keyspecs[1] = {
+{NULL,CMD_KEY_OW|CMD_KEY_UPDATE,KSPEC_BS_INDEX,.bs.index={1},KSPEC_FK_RANGE,.fk.range={0,1,0}}
+};
+#endif
+
+/* MVCCRESTORE argument table */
+struct COMMAND_ARG MVCCRESTORE_Args[] = {
+{MAKE_ARG("key",ARG_TYPE_KEY,0,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("ttl",ARG_TYPE_INTEGER,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("serialized-value",ARG_TYPE_STRING,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("mvcc-ts",ARG_TYPE_INTEGER,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("replace",ARG_TYPE_PURE_TOKEN,-1,"REPLACE",NULL,NULL,CMD_ARG_OPTIONAL,0,NULL)},
+{MAKE_ARG("absttl",ARG_TYPE_PURE_TOKEN,-1,"ABSTTL",NULL,NULL,CMD_ARG_OPTIONAL,0,NULL)},
+{MAKE_ARG("seconds",ARG_TYPE_INTEGER,-1,"IDLETIME",NULL,NULL,CMD_ARG_OPTIONAL,0,NULL)},
+{MAKE_ARG("frequency",ARG_TYPE_INTEGER,-1,"FREQ",NULL,NULL,CMD_ARG_OPTIONAL,0,NULL)},
+};
+
 /********** PSYNC ********************/
 
 #ifndef SKIP_CMD_HISTORY_TABLE
@@ -8402,6 +8433,20 @@ struct COMMAND_ARG REPLICAOF_args_host_port_Subargs[] = {
 {MAKE_ARG("port",ARG_TYPE_INTEGER,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
 };
 
+/* REPLICAOF args add_host_port argument table */
+struct COMMAND_ARG REPLICAOF_args_add_host_port_Subargs[] = {
+{MAKE_ARG("add",ARG_TYPE_PURE_TOKEN,-1,"ADD",NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("host",ARG_TYPE_STRING,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("port",ARG_TYPE_INTEGER,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+};
+
+/* REPLICAOF args remove_host_port argument table */
+struct COMMAND_ARG REPLICAOF_args_remove_host_port_Subargs[] = {
+{MAKE_ARG("remove",ARG_TYPE_PURE_TOKEN,-1,"REMOVE",NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("host",ARG_TYPE_STRING,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("port",ARG_TYPE_INTEGER,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+};
+
 /* REPLICAOF args no_one argument table */
 struct COMMAND_ARG REPLICAOF_args_no_one_Subargs[] = {
 {MAKE_ARG("no",ARG_TYPE_PURE_TOKEN,-1,"NO",NULL,NULL,CMD_ARG_NONE,0,NULL)},
@@ -8411,12 +8456,14 @@ struct COMMAND_ARG REPLICAOF_args_no_one_Subargs[] = {
 /* REPLICAOF args argument table */
 struct COMMAND_ARG REPLICAOF_args_Subargs[] = {
 {MAKE_ARG("host-port",ARG_TYPE_BLOCK,-1,NULL,NULL,NULL,CMD_ARG_NONE,2,NULL),.subargs=REPLICAOF_args_host_port_Subargs},
+{MAKE_ARG("add-host-port",ARG_TYPE_BLOCK,-1,NULL,NULL,NULL,CMD_ARG_NONE,3,NULL),.subargs=REPLICAOF_args_add_host_port_Subargs},
+{MAKE_ARG("remove-host-port",ARG_TYPE_BLOCK,-1,NULL,NULL,NULL,CMD_ARG_NONE,3,NULL),.subargs=REPLICAOF_args_remove_host_port_Subargs},
 {MAKE_ARG("no-one",ARG_TYPE_BLOCK,-1,NULL,NULL,NULL,CMD_ARG_NONE,2,NULL),.subargs=REPLICAOF_args_no_one_Subargs},
 };
 
 /* REPLICAOF argument table */
 struct COMMAND_ARG REPLICAOF_Args[] = {
-{MAKE_ARG("args",ARG_TYPE_ONEOF,-1,NULL,NULL,NULL,CMD_ARG_NONE,2,NULL),.subargs=REPLICAOF_args_Subargs},
+{MAKE_ARG("args",ARG_TYPE_ONEOF,-1,NULL,NULL,NULL,CMD_ARG_NONE,4,NULL),.subargs=REPLICAOF_args_Subargs},
 };
 
 /********** RESTORE_ASKING ********************/
@@ -8468,6 +8515,23 @@ struct COMMAND_ARG RESTORE_ASKING_Args[] = {
 #ifndef SKIP_CMD_KEY_SPECS_TABLE
 /* ROLE key specs */
 #define ROLE_Keyspecs NULL
+#endif
+
+/********** RREPLAY ********************/
+
+#ifndef SKIP_CMD_HISTORY_TABLE
+/* RREPLAY history */
+#define RREPLAY_History NULL
+#endif
+
+#ifndef SKIP_CMD_TIPS_TABLE
+/* RREPLAY tips */
+#define RREPLAY_Tips NULL
+#endif
+
+#ifndef SKIP_CMD_KEY_SPECS_TABLE
+/* RREPLAY key specs */
+#define RREPLAY_Keyspecs NULL
 #endif
 
 /********** SAVE ********************/
@@ -11923,11 +11987,13 @@ struct COMMAND_STRUCT serverCommandTable[] = {
 {MAKE_CMD("memory","A container for memory diagnostics commands.","Depends on subcommand.","4.0.0",CMD_DOC_NONE,NULL,NULL,"server",COMMAND_GROUP_SERVER,MEMORY_History,0,MEMORY_Tips,0,NULL,-2,0,ACL_CATEGORY_SLOW,NULL,MEMORY_Keyspecs,0,NULL,0),.subcommands=MEMORY_Subcommands},
 {MAKE_CMD("module","A container for module commands.","Depends on subcommand.","4.0.0",CMD_DOC_NONE,NULL,NULL,"server",COMMAND_GROUP_SERVER,MODULE_History,0,MODULE_Tips,0,NULL,-2,0,ACL_CATEGORY_SLOW,NULL,MODULE_Keyspecs,0,NULL,0),.subcommands=MODULE_Subcommands},
 {MAKE_CMD("monitor","Listens for all requests received by the server in real-time.",NULL,"1.0.0",CMD_DOC_NONE,NULL,NULL,"server",COMMAND_GROUP_SERVER,MONITOR_History,0,MONITOR_Tips,0,monitorCommand,1,CMD_ADMIN|CMD_NOSCRIPT|CMD_LOADING|CMD_STALE,ACL_CATEGORY_ADMIN|ACL_CATEGORY_DANGEROUS|ACL_CATEGORY_SLOW,NULL,MONITOR_Keyspecs,0,NULL,0)},
+{MAKE_CMD("mvccrestore","Restores a key from serialized payload with an explicit MVCC logical timestamp.","O(1) to create the new key and additional O(N*M) to reconstruct the serialized value, where N is the number of objects composing the value and M their average size.","255.255.255",CMD_DOC_SYSCMD,NULL,NULL,"server",COMMAND_GROUP_SERVER,MVCCRESTORE_History,0,MVCCRESTORE_Tips,0,mvccrestoreCommand,-5,CMD_WRITE|CMD_DENYOOM,ACL_CATEGORY_DANGEROUS|ACL_CATEGORY_KEYSPACE|ACL_CATEGORY_SLOW|ACL_CATEGORY_WRITE,NULL,MVCCRESTORE_Keyspecs,1,NULL,8),.args=MVCCRESTORE_Args},
 {MAKE_CMD("psync","An internal command used in replication.",NULL,"2.8.0",CMD_DOC_NONE,NULL,NULL,"server",COMMAND_GROUP_SERVER,PSYNC_History,0,PSYNC_Tips,0,syncCommand,-3,CMD_NO_ASYNC_LOADING|CMD_ADMIN|CMD_NO_MULTI|CMD_NOSCRIPT,ACL_CATEGORY_ADMIN|ACL_CATEGORY_DANGEROUS|ACL_CATEGORY_SLOW,NULL,PSYNC_Keyspecs,0,NULL,2),.args=PSYNC_Args},
 {MAKE_CMD("replconf","An internal command for configuring the replication stream.","O(1)","3.0.0",CMD_DOC_SYSCMD,NULL,NULL,"server",COMMAND_GROUP_SERVER,REPLCONF_History,0,REPLCONF_Tips,0,replconfCommand,-1,CMD_ADMIN|CMD_NOSCRIPT|CMD_LOADING|CMD_STALE|CMD_ALLOW_BUSY,ACL_CATEGORY_ADMIN|ACL_CATEGORY_DANGEROUS|ACL_CATEGORY_SLOW,NULL,REPLCONF_Keyspecs,0,NULL,0)},
-{MAKE_CMD("replicaof","Configures a server as replica of another, or promotes it to a primary.","O(1)","5.0.0",CMD_DOC_NONE,NULL,NULL,"server",COMMAND_GROUP_SERVER,REPLICAOF_History,0,REPLICAOF_Tips,0,replicaofCommand,3,CMD_NO_ASYNC_LOADING|CMD_ADMIN|CMD_NOSCRIPT|CMD_STALE,ACL_CATEGORY_ADMIN|ACL_CATEGORY_DANGEROUS|ACL_CATEGORY_SLOW,NULL,REPLICAOF_Keyspecs,0,NULL,1),.args=REPLICAOF_Args},
+{MAKE_CMD("replicaof","Configures a server as replica of another, or promotes it to a primary.","O(1)","5.0.0",CMD_DOC_NONE,NULL,NULL,"server",COMMAND_GROUP_SERVER,REPLICAOF_History,0,REPLICAOF_Tips,0,replicaofCommand,-3,CMD_NO_ASYNC_LOADING|CMD_ADMIN|CMD_NOSCRIPT|CMD_STALE,ACL_CATEGORY_ADMIN|ACL_CATEGORY_DANGEROUS|ACL_CATEGORY_SLOW,NULL,REPLICAOF_Keyspecs,0,NULL,1),.args=REPLICAOF_Args},
 {MAKE_CMD("restore-asking","An internal command for migrating keys in a cluster.","O(1) to create the new key and additional O(N*M) to reconstruct the serialized value, where N is the number of objects composing the value and M their average size. For small string values the time complexity is thus O(1)+O(1*M) where M is small, so simply O(1). However for sorted set values the complexity is O(N*M*log(N)) because inserting values into sorted sets is O(log(N)).","3.0.0",CMD_DOC_SYSCMD,NULL,NULL,"server",COMMAND_GROUP_SERVER,RESTORE_ASKING_History,3,RESTORE_ASKING_Tips,0,restoreCommand,-4,CMD_WRITE|CMD_DENYOOM|CMD_ASKING,ACL_CATEGORY_DANGEROUS|ACL_CATEGORY_KEYSPACE|ACL_CATEGORY_SLOW|ACL_CATEGORY_WRITE,NULL,RESTORE_ASKING_Keyspecs,1,NULL,7),.args=RESTORE_ASKING_Args},
 {MAKE_CMD("role","Returns the replication role.","O(1)","2.8.12",CMD_DOC_NONE,NULL,NULL,"server",COMMAND_GROUP_SERVER,ROLE_History,0,ROLE_Tips,0,roleCommand,1,CMD_NOSCRIPT|CMD_LOADING|CMD_STALE|CMD_FAST|CMD_SENTINEL,ACL_CATEGORY_ADMIN|ACL_CATEGORY_DANGEROUS|ACL_CATEGORY_FAST,NULL,ROLE_Keyspecs,0,NULL,0)},
+{MAKE_CMD("rreplay","Internal command used to replay active-active replication payloads.","O(1) plus payload command execution.","255.255.255",CMD_DOC_SYSCMD,NULL,NULL,"server",COMMAND_GROUP_SERVER,RREPLAY_History,0,RREPLAY_Tips,0,rreplayCommand,-5,CMD_ADMIN|CMD_NOSCRIPT|CMD_LOADING|CMD_STALE|CMD_ALLOW_BUSY,ACL_CATEGORY_ADMIN|ACL_CATEGORY_DANGEROUS|ACL_CATEGORY_SLOW,NULL,RREPLAY_Keyspecs,0,NULL,0)},
 {MAKE_CMD("save","Synchronously saves the database(s) to disk.","O(N) where N is the total number of keys in all databases","1.0.0",CMD_DOC_NONE,NULL,NULL,"server",COMMAND_GROUP_SERVER,SAVE_History,0,SAVE_Tips,0,saveCommand,1,CMD_NO_ASYNC_LOADING|CMD_ADMIN|CMD_NOSCRIPT|CMD_NO_MULTI,ACL_CATEGORY_ADMIN|ACL_CATEGORY_DANGEROUS|ACL_CATEGORY_SLOW,NULL,SAVE_Keyspecs,0,NULL,0)},
 {MAKE_CMD("shutdown","Synchronously saves the database(s) to disk and shuts down the server.","O(N) when saving, where N is the total number of keys in all databases when saving data, otherwise O(1)","1.0.0",CMD_DOC_NONE,NULL,NULL,"server",COMMAND_GROUP_SERVER,SHUTDOWN_History,2,SHUTDOWN_Tips,0,shutdownCommand,-1,CMD_ADMIN|CMD_NOSCRIPT|CMD_LOADING|CMD_STALE|CMD_NO_MULTI|CMD_SENTINEL|CMD_ALLOW_BUSY,ACL_CATEGORY_ADMIN|ACL_CATEGORY_DANGEROUS|ACL_CATEGORY_SLOW,NULL,SHUTDOWN_Keyspecs,0,NULL,1),.args=SHUTDOWN_Args},
 {MAKE_CMD("slaveof","Sets a server as a replica of another, or promotes it to being a primary.","O(1)","1.0.0",CMD_DOC_DEPRECATED,"`REPLICAOF`","5.0.0","server",COMMAND_GROUP_SERVER,SLAVEOF_History,0,SLAVEOF_Tips,0,replicaofCommand,3,CMD_NO_ASYNC_LOADING|CMD_ADMIN|CMD_NOSCRIPT|CMD_STALE,ACL_CATEGORY_ADMIN|ACL_CATEGORY_DANGEROUS|ACL_CATEGORY_SLOW,NULL,SLAVEOF_Keyspecs,0,NULL,1),.args=SLAVEOF_Args},

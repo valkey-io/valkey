@@ -3242,6 +3242,7 @@ void resetClient(client *c) {
     c->slot = -1;
     c->flag.executing_command = 0;
     c->flag.replication_done = 0;
+    c->flag.skip_repl_stream_propagation = 0;
     c->flag.buffered_reply = 0;
     c->flag.keyspace_notified = 0;
     c->net_output_bytes_curr_cmd = 0;
@@ -3770,8 +3771,13 @@ void commandProcessed(client *c) {
     if (isReplicatedClient(c)) {
         long long applied = c->repl_data->reploff - prev_offset;
         if (applied) {
-            replicationFeedStreamFromPrimaryStream(c->querybuf + c->repl_data->repl_applied, applied);
+            if (!c->flag.skip_repl_stream_propagation) {
+                replicationFeedStreamFromPrimaryStream(c->querybuf + c->repl_data->repl_applied, applied);
+            }
+            c->flag.skip_repl_stream_propagation = 0;
             c->repl_data->repl_applied += applied;
+        } else {
+            c->flag.skip_repl_stream_propagation = 0;
         }
     }
 }

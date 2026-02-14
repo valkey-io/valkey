@@ -4,14 +4,9 @@
         "complexity": "O(1)",
         "group": "server",
         "since": "5.0.0",
-        "arity": 3,
+        "arity": -3,
         "function": "replicaofCommand",
-        "command_flags": [
-            "NO_ASYNC_LOADING",
-            "ADMIN",
-            "NOSCRIPT",
-            "STALE"
-        ],
+        "command_flags": ["NO_ASYNC_LOADING", "ADMIN", "NOSCRIPT", "STALE"],
         "arguments": [
             {
                 "name": "args",
@@ -21,6 +16,44 @@
                         "name": "host-port",
                         "type": "block",
                         "arguments": [
+                            {
+                                "name": "host",
+                                "type": "string"
+                            },
+                            {
+                                "name": "port",
+                                "type": "integer"
+                            }
+                        ]
+                    },
+                    {
+                        "name": "add-host-port",
+                        "type": "block",
+                        "arguments": [
+                            {
+                                "name": "add",
+                                "type": "pure-token",
+                                "token": "ADD"
+                            },
+                            {
+                                "name": "host",
+                                "type": "string"
+                            },
+                            {
+                                "name": "port",
+                                "type": "integer"
+                            }
+                        ]
+                    },
+                    {
+                        "name": "remove-host-port",
+                        "type": "block",
+                        "arguments": [
+                            {
+                                "name": "remove",
+                                "type": "pure-token",
+                                "token": "REMOVE"
+                            },
                             {
                                 "name": "host",
                                 "type": "string"
@@ -55,10 +88,6 @@
             "type": "string",
             "pattern": "OK*"
         },
-        "acl_categories": [
-            "ADMIN",
-            "DANGEROUS",
-            "SLOW"
-        ]
+        "acl_categories": ["ADMIN", "DANGEROUS", "SLOW"]
     }
 }

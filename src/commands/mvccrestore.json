@@ -1,0 +1,89 @@
+{
+    "MVCCRESTORE": {
+        "summary": "Restores a key from serialized payload with an explicit MVCC logical timestamp.",
+        "complexity": "O(1) to create the new key and additional O(N*M) to reconstruct the serialized value, where N is the number of objects composing the value and M their average size.",
+        "group": "server",
+        "since": "255.255.255",
+        "arity": -5,
+        "function": "mvccrestoreCommand",
+        "doc_flags": [
+            "SYSCMD"
+        ],
+        "command_flags": [
+            "WRITE",
+            "DENYOOM"
+        ],
+        "acl_categories": [
+            "DANGEROUS",
+            "KEYSPACE",
+            "SLOW",
+            "WRITE"
+        ],
+        "key_specs": [
+            {
+                "flags": [
+                    "OW",
+                    "UPDATE"
+                ],
+                "begin_search": {
+                    "index": {
+                        "pos": 1
+                    }
+                },
+                "find_keys": {
+                    "range": {
+                        "lastkey": 0,
+                        "step": 1,
+                        "limit": 0
+                    }
+                }
+            }
+        ],
+        "arguments": [
+            {
+                "name": "key",
+                "type": "key",
+                "key_spec_index": 0
+            },
+            {
+                "name": "ttl",
+                "type": "integer"
+            },
+            {
+                "name": "serialized-value",
+                "type": "string"
+            },
+            {
+                "name": "mvcc-ts",
+                "type": "integer"
+            },
+            {
+                "name": "replace",
+                "token": "REPLACE",
+                "type": "pure-token",
+                "optional": true
+            },
+            {
+                "name": "absttl",
+                "token": "ABSTTL",
+                "type": "pure-token",
+                "optional": true
+            },
+            {
+                "token": "IDLETIME",
+                "name": "seconds",
+                "type": "integer",
+                "optional": true
+            },
+            {
+                "token": "FREQ",
+                "name": "frequency",
+                "type": "integer",
+                "optional": true
+            }
+        ],
+        "reply_schema": {
+            "const": "OK"
+        }
+    }
+}

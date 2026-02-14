@@ -1252,6 +1252,71 @@ ssize_t rdbSaveAuxFieldStrInt(rio *rdb, char *key, long long val) {
     return rdbSaveAuxField(rdb, key, strlen(key), buf, vlen);
 }
 
+#define RDB_REPL_MASTERS_MAX 1024
+#define RDB_RREPLAY_SEEN_MAX_ENTRIES 10000
+#define RDB_MVCC_CLOCK_MAX_ENTRIES 200000
+
+static int rdbSaveInfoEnsureMastersCapacity(rdbSaveInfo *rsi, int count) {
+    if (rsi == NULL || count < 0 || count > RDB_REPL_MASTERS_MAX) return C_ERR;
+    if (count <= rsi->repl_masters_count) return C_OK;
+
+    sds *masters = zrealloc(rsi->repl_masters, sizeof(sds) * count);
+    for (int i = rsi->repl_masters_count; i < count; i++) {
+        masters[i] = NULL;
+    }
+    rsi->repl_masters = masters;
+    rsi->repl_masters_count = count;
+    return C_OK;
+}
+
+static int rdbSaveInfoEnsureRReplaySeenCapacity(rdbSaveInfo *rsi, int count) {
+    if (rsi == NULL || count < 0 || count > RDB_RREPLAY_SEEN_MAX_ENTRIES) return C_ERR;
+    if (count <= rsi->rreplay_seen_count) return C_OK;
+
+    sds *entries = zrealloc(rsi->rreplay_seen_entries, sizeof(sds) * count);
+    for (int i = rsi->rreplay_seen_count; i < count; i++) {
+        entries[i] = NULL;
+    }
+    rsi->rreplay_seen_entries = entries;
+    rsi->rreplay_seen_count = count;
+    return C_OK;
+}
+
+void rdbFreeSaveInfo(rdbSaveInfo *rsi) {
+    if (rsi == NULL) return;
+
+    if (rsi->repl_masters) {
+        for (int i = 0; i < rsi->repl_masters_count; i++) {
+            if (rsi->repl_masters[i]) sdsfree(rsi->repl_masters[i]);
+        }
+        zfree(rsi->repl_masters);
+        rsi->repl_masters = NULL;
+        rsi->repl_masters_count = 0;
+    }
+
+    if (rsi->mvcc_key_clock) {
+        dictRelease(rsi->mvcc_key_clock);
+        rsi->mvcc_key_clock = NULL;
+    }
+
+    if (rsi->rreplay_seen_entries) {
+        for (int i = 0; i < rsi->rreplay_seen_count; i++) {
+            if (rsi->rreplay_seen_entries[i]) sdsfree(rsi->rreplay_seen_entries[i]);
+        }
+        zfree(rsi->rreplay_seen_entries);
+        rsi->rreplay_seen_entries = NULL;
+        rsi->rreplay_seen_count = 0;
+    }
+    rsi->mvcc_clock = 0;
+}
+
+static int rdbSaveInfoEnsureMVCCClockMap(rdbSaveInfo *rsi) {
+    if (rsi == NULL) return C_ERR;
+    if (rsi->mvcc_key_clock != NULL) return C_OK;
+    rsi->mvcc_key_clock = dictCreate(&sdsKeyHeapPointerValueDictType);
+    return rsi->mvcc_key_clock != NULL ? C_OK : C_ERR;
+}
+
 /* Save a few default AUX fields with information about the RDB generated. */
 int rdbSaveInfoAuxFields(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
     int redis_bits = (sizeof(void *) == 8) ? 64 : 32;
@@ -1268,6 +1333,89 @@ int rdbSaveInfoAuxFields(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
         if (rdbSaveAuxFieldStrInt(rdb, "repl-stream-db", rsi->repl_stream_db) == -1) return -1;
         if (rdbSaveAuxFieldStrStr(rdb, "repl-id", server.replid) == -1) return -1;
         if (rdbSaveAuxFieldStrInt(rdb, "repl-offset", server.primary_repl_offset) == -1) return -1;
+        if (rdbSaveAuxFieldStrInt(rdb, "mvcc-clock", server.mvcc_clock) == -1) return -1;
+        unsigned long upstream_count = server.upstreams ? listLength(server.upstreams) : 0;
+        if (rdbSaveAuxFieldStrInt(rdb, "repl-masters-count", upstream_count) == -1) return -1;
+        if (upstream_count) {
+            listIter li;
+            listNode *ln;
+            unsigned long upstream_id = 0;
+
+            listRewind(server.upstreams, &li);
+            while ((ln = listNext(&li)) != NULL) {
+                valkeyUpstream *upstream = listNodeValue(ln);
+                if (upstream == NULL || upstream->host == NULL) continue;
+
+                sds auxkey = sdscatprintf(sdsempty(), "repl-master-%lu", upstream_id);
+                sds auxval = sdscatprintf(sdsempty(), "%s|%d", upstream->host, upstream->port);
+                int rc = rdbSaveAuxField(rdb, auxkey, sdslen(auxkey), auxval, sdslen(auxval));
+                sdsfree(auxkey);
+                sdsfree(auxval);
+                if (rc == -1) return -1;
+                upstream_id++;
+            }
+        }
+
+        unsigned long mvcc_count = server.mvcc_key_clock ? dictSize(server.mvcc_key_clock) : 0;
+        if (rdbSaveAuxFieldStrInt(rdb, "mvcc-keys-count", mvcc_count) == -1) return -1;
+        if (mvcc_count) {
+            dictIterator di;
+            dictInitIterator(&di, server.mvcc_key_clock);
+            dictEntry *de;
+            unsigned long mvcc_id = 0;
+
+            while ((de = dictNext(&di)) != NULL) {
+                if (mvcc_id >= RDB_MVCC_CLOCK_MAX_ENTRIES) break;
+
+                sds mvcc_key = dictGetKey(de);
+                uint64_t *clockp = dictGetVal(de);
+                if (mvcc_key == NULL || clockp == NULL || *clockp == 0) continue;
+
+                uint64_t ts_be = htonu64(*clockp);
+                sds auxkey = sdscatprintf(sdsempty(), "mvcc-key-%lu", mvcc_id);
+                sds auxval = sdsnewlen(&ts_be, sizeof(ts_be));
+                auxval = sdscatlen(auxval, mvcc_key, sdslen(mvcc_key));
+                int rc = rdbSaveAuxField(rdb, auxkey, sdslen(auxkey), auxval, sdslen(auxval));
+                sdsfree(auxkey);
+                sdsfree(auxval);
+                if (rc == -1) return -1;
+                mvcc_id++;
+            }
+
+            if (mvcc_count > RDB_MVCC_CLOCK_MAX_ENTRIES) {
+                serverLog(LL_WARNING,
+                          "Truncated MVCC clock persistence to %d entries (had %lu)",
+                          RDB_MVCC_CLOCK_MAX_ENTRIES, mvcc_count);
+            }
+        }
+
+        unsigned long replay_seen_count = server.rreplay_seen_order ? listLength(server.rreplay_seen_order) : 0;
+        if (rdbSaveAuxFieldStrInt(rdb, "rreplay-seen-count", replay_seen_count) == -1) return -1;
+        if (replay_seen_count) {
+            listIter li;
+            listNode *ln;
+            unsigned long replay_seen_id = 0;
+
+            listRewind(server.rreplay_seen_order, &li);
+            while ((ln = listNext(&li)) != NULL) {
+                if (replay_seen_id >= RDB_RREPLAY_SEEN_MAX_ENTRIES) break;
+
+                sds dedup_key = listNodeValue(ln);
+                if (dedup_key == NULL || sdslen(dedup_key) == 0) continue;
+
+                sds auxkey = sdscatprintf(sdsempty(), "rreplay-seen-%lu", replay_seen_id);
+                int rc = rdbSaveAuxField(rdb, auxkey, sdslen(auxkey), dedup_key, sdslen(dedup_key));
+                sdsfree(auxkey);
+                if (rc == -1) return -1;
+                replay_seen_id++;
+            }
+
+            if (replay_seen_count > RDB_RREPLAY_SEEN_MAX_ENTRIES) {
+                serverLog(LL_WARNING,
+                          "Truncated RREPLAY dedupe persistence to %d entries (had %lu)",
+                          RDB_RREPLAY_SEEN_MAX_ENTRIES, replay_seen_count);
+            }
+        }
     }
     if (rdbSaveAuxFieldStrInt(rdb, "aof-base", aof_base) == -1) return -1;
 
@@ -3260,6 +3408,83 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
                 }
             } else if (!strcasecmp(objectGetVal(auxkey), "repl-offset")) {
                 if (rsi) rsi->repl_offset = strtoll(objectGetVal(auxval), NULL, 10);
+            } else if (!strcasecmp(objectGetVal(auxkey), "mvcc-clock")) {
+                if (rsi) {
+                    long long mvcc_clock_ll = strtoll(objectGetVal(auxval), NULL, 10);
+                    if (mvcc_clock_ll > 0) rsi->mvcc_clock = (uint64_t)mvcc_clock_ll;
+                }
+            } else if (!strcasecmp(objectGetVal(auxkey), "repl-masters-count")) {
+                if (rsi) {
+                    long long count = strtoll(objectGetVal(auxval), NULL, 10);
+                    if (count >= 0 && count <= RDB_REPL_MASTERS_MAX) {
+                        rdbSaveInfoEnsureMastersCapacity(rsi, (int)count);
+                    }
+                }
+            } else if (!strcasecmp(objectGetVal(auxkey), "mvcc-keys-count")) {
+                /* Size hint only; actual entries are loaded from mvcc-key-N AUX fields. */
+            } else if (!strcasecmp(objectGetVal(auxkey), "rreplay-seen-count")) {
+                if (rsi) {
+                    long long count = strtoll(objectGetVal(auxval), NULL, 10);
+                    if (count >= 0 && count <= RDB_RREPLAY_SEEN_MAX_ENTRIES) {
+                        rdbSaveInfoEnsureRReplaySeenCapacity(rsi, (int)count);
+                    }
+                }
+            } else if (!strncasecmp(objectGetVal(auxkey), "repl-master-", 12)) {
+                if (rsi) {
+                    char *suffix = (char *)objectGetVal(auxkey) + 12;
+                    char *endptr = NULL;
+                    long index = strtol(suffix, &endptr, 10);
+                    if (suffix[0] != '\0' && endptr && *endptr == '\0' &&
+                        index >= 0 && index < RDB_REPL_MASTERS_MAX &&
+                        rdbSaveInfoEnsureMastersCapacity(rsi, (int)index + 1) == C_OK) {
+                        if (rsi->repl_masters[index]) sdsfree(rsi->repl_masters[index]);
+                        rsi->repl_masters[index] = sdsdup(objectGetVal(auxval));
+                    }
+                }
+            } else if (!strncasecmp(objectGetVal(auxkey), "rreplay-seen-", 13)) {
+                if (rsi) {
+                    char *suffix = (char *)objectGetVal(auxkey) + 13;
+                    char *endptr = NULL;
+                    long index = strtol(suffix, &endptr, 10);
+                    if (suffix[0] != '\0' && endptr && *endptr == '\0' &&
+                        index >= 0 && index < RDB_RREPLAY_SEEN_MAX_ENTRIES &&
+                        rdbSaveInfoEnsureRReplaySeenCapacity(rsi, (int)index + 1) == C_OK) {
+                        if (rsi->rreplay_seen_entries[index]) sdsfree(rsi->rreplay_seen_entries[index]);
+                        rsi->rreplay_seen_entries[index] = sdsdup(objectGetVal(auxval));
+                    }
+                }
+            } else if (!strncasecmp(objectGetVal(auxkey), "mvcc-key-", 9)) {
+                if (rsi) {
+                    sds raw = objectGetVal(auxval);
+                    if (sdslen(raw) < sizeof(uint64_t)) {
+                        decrRefCount(auxkey);
+                        decrRefCount(auxval);
+                        goto eoferr;
+                    }
+                    if (rdbSaveInfoEnsureMVCCClockMap(rsi) != C_OK) {
+                        decrRefCount(auxkey);
+                        decrRefCount(auxval);
+                        goto eoferr;
+                    }
+
+                    uint64_t ts_be = 0;
+                    memcpy(&ts_be, raw, sizeof(ts_be));
+                    uint64_t ts = ntohu64(ts_be);
+                    if (ts > rsi->mvcc_clock) rsi->mvcc_clock = ts;
+
+                    sds mvcc_key = sdsnewlen(raw + sizeof(uint64_t), sdslen(raw) - sizeof(uint64_t));
+                    uint64_t *clockp = zmalloc(sizeof(*clockp));
+                    *clockp = ts;
+                    if (dictAdd(rsi->mvcc_key_clock, mvcc_key, clockp) != DICT_OK) {
+                        dictEntry *de = dictFind(rsi->mvcc_key_clock, mvcc_key);
+                        if (de) {
+                            uint64_t *existing = dictGetVal(de);
+                            if (existing && ts > *existing) *existing = ts;
+                        }
+                        sdsfree(mvcc_key);
+                        zfree(clockp);
+                    }
+                }
             } else if (!strcasecmp(objectGetVal(auxkey), "lua")) {
                 /* Won't load the script back in memory anymore. */
             } else if (!strcasecmp(objectGetVal(auxkey), "redis-ver")) {

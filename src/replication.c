@@ -80,6 +80,501 @@ ConnectionType *connTypeOfReplication(void) {
     return connectionTypeTcp();
 }
 
+static void freeUpstreamEndpoint(valkeyUpstream *upstream) {
+    if (upstream == NULL) return;
+    sdsfree(upstream->host);
+    zfree(upstream);
+}
+
+static int upstreamEndpointMatches(const valkeyUpstream *upstream, const char *host, int port) {
+    if (upstream == NULL || upstream->host == NULL || host == NULL) return 0;
+    return port == upstream->port && !strcasecmp(upstream->host, host);
+}
+
+static listNode *findConfiguredUpstreamNode(const char *host, int port) {
+    if (server.upstreams == NULL || host == NULL) return NULL;
+
+    listIter li;
+    listNode *ln;
+    listRewind(server.upstreams, &li);
+    while ((ln = listNext(&li)) != NULL) {
+        valkeyUpstream *upstream = listNodeValue(ln);
+        if (upstreamEndpointMatches(upstream, host, port)) return ln;
+    }
+    return NULL;
+}
+
+static int addConfiguredUpstreamEndpoint(const char *host, int port) {
+    if (server.upstreams == NULL || host == NULL) return C_ERR;
+    if (port <= 0 || port > 65535) return C_ERR;
+    if (findConfiguredUpstreamNode(host, port) != NULL) return C_OK;
+
+    valkeyUpstream *upstream = zmalloc(sizeof(*upstream));
+    upstream->host = sdsnew(host);
+    upstream->port = port;
+    listAddNodeTail(server.upstreams, upstream);
+    return C_OK;
+}
+
+static int removeConfiguredUpstreamEndpoint(const char *host, int port) {
+    listNode *ln = findConfiguredUpstreamNode(host, port);
+    if (ln == NULL) return C_ERR;
+    freeUpstreamEndpoint(listNodeValue(ln));
+    listDelNode(server.upstreams, ln);
+    return C_OK;
+}
+
+static int selectConfiguredUpstreamAsPrimary(int rotate) {
+    if (server.upstreams == NULL || listLength(server.upstreams) == 0) return C_ERR;
+
+    listNode *current = NULL;
+    listNode *target = NULL;
+    if (server.primary_host != NULL) {
+        current = findConfiguredUpstreamNode(server.primary_host, server.primary_port);
+    }
+
+    if (rotate) {
+        if (current != NULL) {
+            target = listNextNode(current);
+            if (target == NULL) target = listFirst(server.upstreams);
+        } else {
+            target = listFirst(server.upstreams);
+        }
+    } else {
+        target = current ? current : listFirst(server.upstreams);
+    }
+
+    if (target == NULL) return C_ERR;
+    valkeyUpstream *upstream = listNodeValue(target);
+    if (upstream == NULL || upstream->host == NULL) return C_ERR;
+
+    if (server.primary_host != NULL && !strcasecmp(server.primary_host, upstream->host) &&
+        server.primary_port == upstream->port) {
+        return C_OK;
+    }
+
+    sdsfree(server.primary_host);
+    server.primary_host = sdsnew(upstream->host);
+    server.primary_port = upstream->port;
+    return C_OK;
+}
+
+static void clearConfiguredUpstreams(void) {
+    if (server.upstreams == NULL) return;
+
+    listIter li;
+    listNode *ln;
+    listRewind(server.upstreams, &li);
+    while ((ln = listNext(&li)) != NULL) {
+        freeUpstreamEndpoint(listNodeValue(ln));
+    }
+    listEmpty(server.upstreams);
+}
+
+/* Keep the new upstream list aligned with the legacy single-primary state.
+ * This preserves current behavior while we incrementally introduce
+ * multi-upstream replication support. */
+static void refreshConfiguredUpstreamsFromPrimary(void) {
+    if (server.upstreams == NULL || server.primary_host == NULL) return;
+
+    if (server.multi_master) {
+        addConfiguredUpstreamEndpoint(server.primary_host, server.primary_port);
+        return;
+    }
+
+    clearConfiguredUpstreams();
+    addConfiguredUpstreamEndpoint(server.primary_host, server.primary_port);
+}
+
+static int decodeRdbUpstream(sds encoded, sds *host, int *port) {
+    if (encoded == NULL || host == NULL || port == NULL) return C_ERR;
+
+    char *sep = strrchr((char *)encoded, '|');
+    if (sep == NULL || sep == (char *)encoded || *(sep + 1) == '\0') return C_ERR;
+
+    long long parsed_port = 0;
+    if (string2ll(sep + 1, strlen(sep + 1), &parsed_port) == 0) return C_ERR;
+    if (parsed_port <= 0 || parsed_port > 65535) return C_ERR;
+
+    size_t hostlen = sep - (char *)encoded;
+    if (hostlen == 0) return C_ERR;
+
+    *host = sdsnewlen(encoded, hostlen);
+    *port = parsed_port;
+    return C_OK;
+}
+
+void replicationApplyRdbConfiguredUpstreams(const rdbSaveInfo *rsi) {
+    if (rsi == NULL || rsi->repl_masters_count <= 0 || rsi->repl_masters == NULL) return;
+    if (server.upstreams == NULL) return;
+
+    clearConfiguredUpstreams();
+
+    int applied = 0;
+    for (int i = 0; i < rsi->repl_masters_count; i++) {
+        sds host = NULL;
+        int port = 0;
+
+        if (decodeRdbUpstream(rsi->repl_masters[i], &host, &port) != C_OK) continue;
+
+        if (addConfiguredUpstreamEndpoint(host, port) == C_OK) {
+            applied++;
+        }
+        sdsfree(host);
+    }
+
+    if (applied == 0 && server.primary_host != NULL) {
+        refreshConfiguredUpstreamsFromPrimary();
+    }
+}
+
+void replicationApplyRdbMVCCState(const rdbSaveInfo *rsi) {
+    if (server.mvcc_key_clock == NULL) return;
+
+    dictEmpty(server.mvcc_key_clock, NULL);
+    if (server.mvcc_key_tie_break) dictEmpty(server.mvcc_key_tie_break, NULL);
+    server.mvcc_clock = 0;
+
+    if (rsi == NULL) return;
+    if (rsi->mvcc_clock > server.mvcc_clock) {
+        server.mvcc_clock = rsi->mvcc_clock;
+    }
+    if (rsi->mvcc_key_clock == NULL) return;
+
+    dictIterator di;
+    dictInitIterator(&di, rsi->mvcc_key_clock);
+    dictEntry *de = NULL;
+    while ((de = dictNext(&di)) != NULL) {
+        sds key = sdsdup(dictGetKey(de));
+        uint64_t *src_clock = dictGetVal(de);
+        if (src_clock == NULL || *src_clock == 0) {
+            sdsfree(key);
+            continue;
+        }
+        uint64_t *dst_clock = zmalloc(sizeof(*dst_clock));
+        *dst_clock = *src_clock;
+
+        if (dictAdd(server.mvcc_key_clock, key, dst_clock) != DICT_OK) {
+            dictEntry *existing = dictFind(server.mvcc_key_clock, key);
+            if (existing) {
+                uint64_t *existing_clock = dictGetVal(existing);
+                if (existing_clock && *dst_clock > *existing_clock) {
+                    *existing_clock = *dst_clock;
+                }
+            }
+            sdsfree(key);
+            zfree(dst_clock);
+            continue;
+        }
+        if (*dst_clock > server.mvcc_clock) server.mvcc_clock = *dst_clock;
+    }
+}
+
+static int isValidReplicationUUID(sds uuid) {
+    if (sdslen(uuid) != CONFIG_RUN_ID_SIZE) return 0;
+    for (size_t i = 0; i < sdslen(uuid); i++) {
+        if (!isxdigit((unsigned char)uuid[i])) return 0;
+    }
+    return 1;
+}
+
+#define RREPLAY_DEDUP_MAX_ENTRIES 10000
+static int rreplayFrameAlreadySeen(sds origin_uuid, unsigned long long replay_id) {
+    if (server.rreplay_seen == NULL || server.rreplay_seen_order == NULL) return 0;
+
+    sds key = sdscatprintf(sdsempty(), "%s:%llu", (char *)origin_uuid, replay_id);
+    if (dictFind(server.rreplay_seen, key) != NULL) {
+        sdsfree(key);
+        return 1;
+    }
+
+    if (dictAdd(server.rreplay_seen, key, NULL) != DICT_OK) {
+        sdsfree(key);
+        return 1;
+    }
+    listAddNodeTail(server.rreplay_seen_order, key);
+
+    while (listLength(server.rreplay_seen_order) > RREPLAY_DEDUP_MAX_ENTRIES) {
+        listNode *ln = listFirst(server.rreplay_seen_order);
+        sds oldkey = listNodeValue(ln);
+        dictDelete(server.rreplay_seen, oldkey);
+        listDelNode(server.rreplay_seen_order, ln);
+    }
+    return 0;
+}
+
+static int rreplayDedupKeyIsValid(sds dedup_key) {
+    if (dedup_key == NULL) return 0;
+
+    char *sep = strrchr((char *)dedup_key, ':');
+    if (sep == NULL || sep == (char *)dedup_key || *(sep + 1) == '\0') return 0;
+
+    size_t uuid_len = sep - (char *)dedup_key;
+    if (uuid_len != CONFIG_RUN_ID_SIZE) return 0;
+    for (size_t i = 0; i < uuid_len; i++) {
+        if (!isxdigit((unsigned char)dedup_key[i])) return 0;
+    }
+
+    long long replay_id = 0;
+    if (string2ll(sep + 1, strlen(sep + 1), &replay_id) == 0 || replay_id <= 0) return 0;
+    return 1;
+}
+
+void replicationApplyRdbRReplaySeen(const rdbSaveInfo *rsi) {
+    if (server.rreplay_seen == NULL || server.rreplay_seen_order == NULL) return;
+
+    dictEmpty(server.rreplay_seen, NULL);
+    listEmpty(server.rreplay_seen_order);
+
+    if (rsi == NULL || rsi->rreplay_seen_count <= 0 || rsi->rreplay_seen_entries == NULL) return;
+
+    for (int i = 0; i < rsi->rreplay_seen_count; i++) {
+        sds persisted_key = rsi->rreplay_seen_entries[i];
+        if (!rreplayDedupKeyIsValid(persisted_key)) continue;
+
+        sds key = sdsdup(persisted_key);
+        if (dictAdd(server.rreplay_seen, key, NULL) != DICT_OK) {
+            sdsfree(key);
+            continue;
+        }
+        listAddNodeTail(server.rreplay_seen_order, key);
+    }
+
+    while (listLength(server.rreplay_seen_order) > RREPLAY_DEDUP_MAX_ENTRIES) {
+        listNode *ln = listFirst(server.rreplay_seen_order);
+        if (ln == NULL) break;
+        sds key = listNodeValue(ln);
+        dictDelete(server.rreplay_seen, key);
+        listDelNode(server.rreplay_seen_order, ln);
+    }
+}
+
+static uint64_t mvccNextLocalClock(void) {
+    uint64_t now = ustime();
+    if (now <= server.mvcc_clock) {
+        now = server.mvcc_clock + 1;
+    }
+    server.mvcc_clock = now;
+    return now;
+}
+
+static sds mvccComposeKey(int dbid, robj *keyobj) {
+    uint64_t dbid_be = htonu64((uint64_t)(uint32_t)dbid);
+    sds key = sdsnewlen(&dbid_be, sizeof(dbid_be));
+    if (keyobj->encoding == OBJ_ENCODING_INT) {
+        char llbuf[LONG_STR_SIZE];
+        int len = ll2string(llbuf, sizeof(llbuf), (long long)objectGetVal(keyobj));
+        key = sdscatlen(key, llbuf, len);
+    } else {
+        sds raw = objectGetVal(keyobj);
+        key = sdscatlen(key, raw, sdslen(raw));
+    }
+    return key;
+}
+
+static uint64_t mvccGetKeyClock(int dbid, robj *keyobj) {
+    if (server.mvcc_key_clock == NULL || keyobj == NULL || dbid < 0) return 0;
+    sds key = mvccComposeKey(dbid, keyobj);
+    dictEntry *de = dictFind(server.mvcc_key_clock, key);
+    sdsfree(key);
+    if (de == NULL) return 0;
+    uint64_t *clockp = dictGetVal(de);
+    return clockp ? *clockp : 0;
+}
+
+static char *mvccGetKeyTieBreak(int dbid, robj *keyobj) {
+    if (server.mvcc_key_tie_break == NULL || keyobj == NULL || dbid < 0) return NULL;
+    sds key = mvccComposeKey(dbid, keyobj);
+    dictEntry *de = dictFind(server.mvcc_key_tie_break, key);
+    sdsfree(key);
+    if (de == NULL) return NULL;
+    return dictGetVal(de);
+}
+
+uint64_t replicationMVCCGetKeyClock(int dbid, robj *key) {
+    return mvccGetKeyClock(dbid, key);
+}
+
+static void mvccSetKeyTieBreak(int dbid, robj *keyobj, const char *tie_break) {
+    if (server.mvcc_key_tie_break == NULL || keyobj == NULL || dbid < 0) return;
+
+    sds key = mvccComposeKey(dbid, keyobj);
+    dictEntry *de = dictFind(server.mvcc_key_tie_break, key);
+    if (tie_break == NULL) {
+        if (de != NULL) dictDelete(server.mvcc_key_tie_break, key);
+        sdsfree(key);
+        return;
+    }
+
+    if (de != NULL) {
+        char *existing = dictGetVal(de);
+        if (existing) zfree(existing);
+        dictSetVal(server.mvcc_key_tie_break, de, zstrdup(tie_break));
+        sdsfree(key);
+        return;
+    }
+
+    char *payload = zstrdup(tie_break);
+    if (dictAdd(server.mvcc_key_tie_break, key, payload) != DICT_OK) {
+        sdsfree(key);
+        zfree(payload);
+    }
+}
+
+static void mvccSetKeyClock(int dbid, robj *keyobj, uint64_t ts) {
+    if (server.mvcc_key_clock == NULL || keyobj == NULL || dbid < 0 || ts == 0) return;
+
+    sds key = mvccComposeKey(dbid, keyobj);
+    dictEntry *de = dictFind(server.mvcc_key_clock, key);
+    if (de != NULL) {
+        uint64_t *clockp = dictGetVal(de);
+        if (clockp) *clockp = ts;
+        sdsfree(key);
+        return;
+    }
+
+    uint64_t *clockp = zmalloc(sizeof(*clockp));
+    *clockp = ts;
+    if (dictAdd(server.mvcc_key_clock, key, clockp) != DICT_OK) {
+        sdsfree(key);
+        zfree(clockp);
+    }
+}
+
+void replicationMVCCSetKeyClock(int dbid, robj *key, uint64_t ts) {
+    if (ts == 0) return;
+    uint64_t current = mvccGetKeyClock(dbid, key);
+    if (ts < current) ts = current;
+    if (ts > server.mvcc_clock) server.mvcc_clock = ts;
+    mvccSetKeyClock(dbid, key, ts);
+    mvccSetKeyTieBreak(dbid, key, NULL);
+}
+
+static int mvccCommandIsFresh(struct serverCommand *cmd, robj **argv, int argc, int dbid, uint64_t ts, const char *tie_break) {
+    if (ts == 0 || dbid < 0 || cmd == NULL) return 1;
+
+    getKeysResult result;
+    initGetKeysResult(&result);
+    int numkeys = getKeysFromCommand(cmd, argv, argc, &result);
+    if (numkeys <= 0) {
+        getKeysFreeResult(&result);
+        return 1;
+    }
+
+    int fresh = 1;
+    for (int i = 0; i < numkeys; i++) {
+        int pos = result.keys[i].pos;
+        if (pos < 0 || pos >= argc) continue;
+
+        uint64_t current = mvccGetKeyClock(dbid, argv[pos]);
+        if (ts < current) {
+            fresh = 0;
+            break;
+        }
+        if (tie_break != NULL && ts == current) {
+            char *current_tie_break = mvccGetKeyTieBreak(dbid, argv[pos]);
+            if (current_tie_break != NULL && strcmp(tie_break, current_tie_break) <= 0) {
+                fresh = 0;
+                break;
+            }
+        }
+    }
+
+    getKeysFreeResult(&result);
+    return fresh;
+}
+
+static void mvccStampCommandKeys(struct serverCommand *cmd, robj **argv, int argc, int dbid, uint64_t ts, const char *tie_break) {
+    if (ts == 0 || dbid < 0 || cmd == NULL) return;
+
+    getKeysResult result;
+    initGetKeysResult(&result);
+    int numkeys = getKeysFromCommand(cmd, argv, argc, &result);
+    if (numkeys <= 0) {
+        getKeysFreeResult(&result);
+        return;
+    }
+
+    for (int i = 0; i < numkeys; i++) {
+        int pos = result.keys[i].pos;
+        if (pos < 0 || pos >= argc) continue;
+        mvccSetKeyClock(dbid, argv[pos], ts);
+        mvccSetKeyTieBreak(dbid, argv[pos], tie_break);
+    }
+
+    getKeysFreeResult(&result);
+}
+
+static int rreplaySetUsesUnsupportedTtlOptions(robj **argv, int argc) {
+    /* SET key value [EX seconds|PX milliseconds|EXAT unix-sec|PXAT unix-ms|KEEPTTL] ...
+     * For now we reject relative/implicit TTL variants in replay traffic. */
+    if (argv == NULL || argc < 4) return 0;
+
+    for (int i = 3; i < argc; i++) {
+        if (!sdsEncodedObject(argv[i])) continue;
+        sds opt = objectGetVal(argv[i]);
+        if (!strcasecmp(opt, "EX") || !strcasecmp(opt, "PX") || !strcasecmp(opt, "KEEPTTL")) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static int rreplayCommandIsSupported(struct serverCommand *cmd, robj **argv, int argc, const char **reason) {
+    if (reason) *reason = "invalid";
+    if (cmd == NULL || argv == NULL || argc <= 0) return 0;
+
+    if (!(cmd->flags & CMD_WRITE)) {
+        if (reason) *reason = "command is not a write command";
+        return 0;
+    }
+
+    if (cmd->flags & (CMD_BLOCKING | CMD_ADMIN | CMD_PUBSUB | CMD_ALL_DBS | CMD_TOUCHES_ARBITRARY_KEYS)) {
+        if (reason) *reason = "command has unsupported flags";
+        return 0;
+    }
+
+    if (cmd->proc == rreplayCommand || cmd->proc == multiCommand || cmd->proc == execCommand ||
+        cmd->proc == discardCommand || cmd->proc == watchCommand || cmd->proc == unwatchCommand ||
+        cmd->proc == evalCommand || cmd->proc == evalShaCommand || cmd->proc == fcallCommand ||
+        cmd->proc == fcallroCommand || cmd->proc == flushdbCommand || cmd->proc == flushallCommand ||
+        cmd->proc == xgroupCommand || cmd->proc == xclaimCommand || cmd->proc == xautoclaimCommand ||
+        cmd->proc == xaddCommand || cmd->proc == xdelCommand || cmd->proc == xtrimCommand ||
+        cmd->proc == xsetidCommand || cmd->proc == xackCommand || cmd->proc == expireCommand ||
+        cmd->proc == pexpireCommand || cmd->proc == expireatCommand || cmd->proc == pexpireatCommand ||
+        cmd->proc == persistCommand || cmd->proc == setexCommand || cmd->proc == psetexCommand ||
+        cmd->proc == getexCommand || cmd->proc == hexpireCommand || cmd->proc == hpexpireCommand ||
+        cmd->proc == hexpireatCommand || cmd->proc == hpexpireatCommand || cmd->proc == hpersistCommand ||
+        cmd->proc == hsetexCommand || cmd->proc == hgetexCommand) {
+        if (reason) *reason = "command is explicitly unsupported in replay";
+        return 0;
+    }
+
+    if (cmd->proc == setCommand && rreplaySetUsesUnsupportedTtlOptions(argv, argc)) {
+        if (reason) *reason = "SET with relative TTL options is unsupported in replay";
+        return 0;
+    }
+
+    getKeysResult result;
+    initGetKeysResult(&result);
+    int numkeys = getKeysFromCommand(cmd, argv, argc, &result);
+    if (numkeys <= 0) {
+        getKeysFreeResult(&result);
+        if (reason) *reason = "command has no key metadata";
+        return 0;
+    }
+    for (int i = 0; i < numkeys; i++) {
+        int pos = result.keys[i].pos;
+        if (pos <= 0 || pos >= argc) {
+            getKeysFreeResult(&result);
+            if (reason) *reason = "command has invalid key position";
+            return 0;
+        }
+    }
+    getKeysFreeResult(&result);
+    return 1;
+}
+
 /* Return the pointer to a string representing the replica ip:listening_port
  * pair. Mostly useful for logging, since we want to log a replica using its
  * IP address and its listening port which is more clear for the user, for
@@ -627,6 +1122,43 @@ void replicationFeedReplicas(int dictid, robj **argv, int argc) {
         feedReplicationBufferWithObject(argv[j]);
         feedReplicationBuffer(aux + len + 1, 2);
     }
+}
+
+/* Encapsulate a locally generated command and send it upstream to the
+ * connected primary as an active-active replay frame.
+ *
+ * Format: RREPLAY <origin-uuid> <dbid> <replay-id> <mvcc-ts> <command> [arg ...] */
+void replicationFeedPrimaryWithRReplay(int dictid, robj **argv, int argc) {
+    if (server.primary == NULL || server.repl_state != REPL_STATE_CONNECTED) return;
+    if (dictid < 0 || argv == NULL || argc <= 0) return;
+
+    struct serverCommand *payload_cmd = lookupCommand(argv, argc);
+    const char *reason = NULL;
+    if (!rreplayCommandIsSupported(payload_cmd, argv, argc, &reason)) {
+        serverLog(LL_WARNING,
+                  "Skipping upstream RREPLAY forwarding for command '%s': %s",
+                  argv[0] ? (char *)objectGetVal(argv[0]) : "?", reason ? reason : "unsupported");
+        return;
+    }
+
+    unsigned long long replay_id = ++server.rreplay_seq;
+    uint64_t mvcc_ts = mvccNextLocalClock();
+    char replay_tie_break[CONFIG_RUN_ID_SIZE + 32];
+    snprintf(replay_tie_break, sizeof(replay_tie_break), "%s:%llu", server.runid, replay_id);
+    mvccStampCommandKeys(payload_cmd, argv, argc, dictid, mvcc_ts, replay_tie_break);
+
+    client *c = server.primary;
+    c->flag.primary_force_reply = 1;
+    addReplyArrayLen(c, argc + 5);
+    addReplyBulkCString(c, "RREPLAY");
+    addReplyBulkCString(c, server.runid);
+    addReplyBulkLongLong(c, dictid);
+    addReplyBulkLongLong(c, replay_id);
+    addReplyBulkLongLong(c, (long long)mvcc_ts);
+    for (int j = 0; j < argc; j++) {
+        addReplyBulk(c, argv[j]);
+    }
+    c->flag.primary_force_reply = 0;
 }
 
 /* This is a debugging function that gets called when we detect something
@@ -1337,6 +1869,7 @@ void freeClientReplicationData(client *c) {
     }
     if (c->flag.primary) replicationHandlePrimaryDisconnection();
     sdsfree(c->repl_data->replica_addr);
+    sdsfree(c->repl_data->replica_uuid);
     sdsfree(c->repl_data->replica_nodeid);
     zfree(c->repl_data);
     c->repl_data = NULL;
@@ -1355,6 +1888,9 @@ void freeClientReplicationData(client *c) {
  * What is the listening ip and port of the Replica instance, so that
  * the primary can accurately lists replicas and their listening ports in the
  * INFO output.
+ *
+ * - uuid <uuid>
+ * Replica identity used by active-active replication extensions.
  *
  * - capa <eof|psync2|dual-channel|skip-rdb-checksum>
  * What is the capabilities of this instance.
@@ -1426,6 +1962,16 @@ void replconfCommand(client *c) {
                                     sdslen(addr));
                 return;
             }
+        } else if (!strcasecmp(objectGetVal(c->argv[j]), "uuid")) {
+            sds uuid = objectGetVal(c->argv[j + 1]);
+            if (!isValidReplicationUUID(uuid)) {
+                addReplyErrorFormat(c,
+                                    "REPLCONF uuid must be %d hexadecimal bytes",
+                                    CONFIG_RUN_ID_SIZE);
+                return;
+            }
+            if (c->repl_data->replica_uuid) sdsfree(c->repl_data->replica_uuid);
+            c->repl_data->replica_uuid = sdsdup(uuid);
         } else if (!strcasecmp(objectGetVal(c->argv[j]), "capa")) {
             /* Ignore capabilities not understood by this primary. */
             if (!strcasecmp(objectGetVal(c->argv[j + 1]), "eof"))
@@ -1569,6 +2115,178 @@ void replconfCommand(client *c) {
         }
     }
     addReply(c, shared.ok);
+}
+
+/* RREPLAY <origin-uuid> <dbid> <replay-id> [<mvcc-ts>] <command> [arg ...]
+ * Internal active-active replay wrapper.
+ *
+ * Accepted only from replication links (CLIENT_PRIMARY / CLIENT_REPLICA).
+ * The command executes the payload command locally and relies on stream
+ * forwarding of the original RREPLAY frame for downstream propagation. */
+void rreplayCommand(client *c) {
+    if (!c->flag.primary && !c->flag.replica) {
+        addReplyError(c, "RREPLAY is only accepted from a replication link");
+        return;
+    }
+
+    if (c->argc < 5) {
+        serverLog(LL_WARNING, "Invalid RREPLAY from primary: missing payload command");
+        freeClientAsync(c);
+        return;
+    }
+
+    sds origin_uuid = objectGetVal(c->argv[1]);
+    if (!isValidReplicationUUID(origin_uuid)) {
+        serverLog(LL_WARNING, "Invalid RREPLAY from primary: bad origin uuid");
+        freeClientAsync(c);
+        return;
+    }
+
+    /* If no-forward is enabled, do not relay this frame to downstream replicas.
+     * For primary links, relaying is done by stream proxying in commandProcessed(). */
+    if (server.multi_master_no_forward && c->flag.primary) {
+        c->flag.skip_repl_stream_propagation = 1;
+    }
+
+    /* Drop own-origin replay to avoid basic loops in multi-master topologies. */
+    if (!strcasecmp(origin_uuid, server.runid)) {
+        if (c->flag.primary) {
+            c->flag.skip_repl_stream_propagation = 1;
+        }
+        return;
+    }
+
+    long long dbid = -1;
+    if (getLongLongFromObject(c->argv[2], &dbid) != C_OK || dbid < -1 || dbid >= server.dbnum) {
+        serverLog(LL_WARNING, "Invalid RREPLAY from primary: bad dbid");
+        freeClientAsync(c);
+        return;
+    }
+
+    long long replay_id_ll = 0;
+    if (getLongLongFromObject(c->argv[3], &replay_id_ll) != C_OK || replay_id_ll <= 0) {
+        serverLog(LL_WARNING, "Invalid RREPLAY from primary: bad replay id");
+        freeClientAsync(c);
+        return;
+    }
+    unsigned long long replay_id = replay_id_ll;
+
+    if (rreplayFrameAlreadySeen(origin_uuid, replay_id)) {
+        if (c->flag.primary) {
+            c->flag.skip_repl_stream_propagation = 1;
+        }
+        return;
+    }
+
+    int payload_start = 4;
+    uint64_t mvcc_ts = 0;
+    if (c->argc >= 6) {
+        long long parsed_ts = 0;
+        if (getLongLongFromObject(c->argv[4], &parsed_ts) == C_OK && parsed_ts > 0) {
+            mvcc_ts = (uint64_t)parsed_ts;
+            payload_start = 5;
+            if (mvcc_ts > server.mvcc_clock) server.mvcc_clock = mvcc_ts;
+        }
+    }
+
+    int payload_argc = c->argc - payload_start;
+    robj **payload_argv = c->argv + payload_start;
+    struct serverCommand *payload_cmd = lookupCommand(payload_argv, payload_argc);
+    if (!payload_cmd && payload_start == 5) {
+        /* Backward compatibility: accept older frame format without mvcc-ts. */
+        mvcc_ts = 0;
+        payload_start = 4;
+        payload_argc = c->argc - payload_start;
+        payload_argv = c->argv + payload_start;
+        payload_cmd = lookupCommand(payload_argv, payload_argc);
+    }
+    if (!payload_cmd) {
+        serverLog(LL_WARNING, "Invalid RREPLAY from primary: unknown command '%s'",
+                  (char *)objectGetVal(payload_argv[0]));
+        freeClientAsync(c);
+        return;
+    }
+
+    sds err = NULL;
+    if (!commandCheckArity(payload_cmd, payload_argc, &err)) {
+        serverLog(LL_WARNING, "Invalid RREPLAY from primary: %s", err ? err : "bad arity");
+        sdsfree(err);
+        freeClientAsync(c);
+        return;
+    }
+    sdsfree(err);
+
+    const char *unsupported_reason = NULL;
+    if (!rreplayCommandIsSupported(payload_cmd, payload_argv, payload_argc, &unsupported_reason)) {
+        serverLog(LL_WARNING, "Invalid RREPLAY from primary: command '%s' rejected: %s",
+                  payload_cmd->fullname, unsupported_reason ? unsupported_reason : "unsupported");
+        freeClientAsync(c);
+        return;
+    }
+
+    if (payload_cmd->proc == multiCommand || payload_cmd->proc == execCommand || payload_cmd->proc == discardCommand ||
+        payload_cmd->proc == watchCommand || payload_cmd->proc == unwatchCommand || payload_cmd->proc == evalCommand ||
+        payload_cmd->proc == evalShaCommand || payload_cmd->proc == fcallCommand || payload_cmd->proc == fcallroCommand) {
+        serverLog(LL_WARNING, "Invalid RREPLAY from primary: command '%s' is not supported in replay", payload_cmd->fullname);
+        freeClientAsync(c);
+        return;
+    }
+
+    char replay_tie_break[CONFIG_RUN_ID_SIZE + 32];
+    snprintf(replay_tie_break, sizeof(replay_tie_break), "%s:%llu", (char *)origin_uuid, replay_id);
+
+    if (!mvccCommandIsFresh(payload_cmd, payload_argv, payload_argc, dbid, mvcc_ts, replay_tie_break)) {
+        if (c->flag.primary) {
+            c->flag.skip_repl_stream_propagation = 1;
+        }
+        return;
+    }
+
+    int outer_argc = c->argc;
+    robj **outer_argv = c->argv;
+    struct serverCommand *outer_cmd = c->cmd;
+    struct serverCommand *outer_lastcmd = c->lastcmd;
+    struct serverCommand *outer_realcmd = c->realcmd;
+    int outer_slot = c->slot;
+    int outer_dbid = c->db->id;
+
+    if (dbid >= 0 && selectDb(c, (int)dbid) != C_OK) {
+        serverLog(LL_WARNING, "Invalid RREPLAY from primary: could not switch to dbid %lld", dbid);
+        freeClientAsync(c);
+        return;
+    }
+
+    c->argc = payload_argc;
+    c->argv = payload_argv;
+    c->cmd = payload_cmd;
+    c->lastcmd = payload_cmd;
+    c->realcmd = payload_cmd;
+    c->slot = -1;
+
+    /* Keep AOF propagation behavior, but avoid direct command replication.
+     * The raw RREPLAY frame is forwarded through the replication stream path. */
+    call(c, CMD_CALL_PROPAGATE_AOF);
+    mvccStampCommandKeys(payload_cmd, payload_argv, payload_argc, dbid, mvcc_ts, replay_tie_break);
+
+    c->argc = outer_argc;
+    c->argv = outer_argv;
+    c->cmd = outer_cmd;
+    c->lastcmd = outer_lastcmd;
+    c->realcmd = outer_realcmd;
+    c->slot = outer_slot;
+    if (dbid >= 0 && c->db->id != outer_dbid) {
+        selectDb(c, outer_dbid);
+    }
+
+    /* For commands received from a replica link (peer -> primary path), relay
+     * the original RREPLAY frame to downstream replicas unless no-forward is set.
+     * For primary links (primary -> replica path), commandProcessed() handles
+     * relaying by proxying the already-applied stream bytes. */
+    if (c->flag.replica && !server.multi_master_no_forward) {
+        replicationFeedReplicas(-1, outer_argv, outer_argc);
+    }
+
+    return;
 }
 
 /* This function puts a replica in the online state, and should be called just
@@ -2341,6 +3059,10 @@ void replicaBeforeLoadPrimaryRDB(connection *conn, int use_diskless_load) {
 }
 
 void replicaAfterLoadPrimaryRDB(connection *conn, rdbSaveInfo *rsi) {
+    replicationApplyRdbConfiguredUpstreams(rsi);
+    replicationApplyRdbMVCCState(rsi);
+    replicationApplyRdbRReplaySeen(rsi);
+
     /* Final setup of the connected replica <- primary link */
     if (conn == server.repl_rdb_transfer_s) {
         dualChannelSyncHandleRdbLoadCompletion();
@@ -2386,6 +3108,8 @@ void replicaAfterLoadPrimaryRDB(connection *conn, rdbSaveInfo *rsi) {
         connClose(conn);
         server.repl_rdb_transfer_s = NULL;
     }
+
+    rdbFreeSaveInfo(rsi);
 }
 
 int replicaLoadPrimaryRDBFromSocket(connection *conn, char *buf, char *eofmark, int *usemark, rdbSaveInfo *rsi) {
@@ -2476,6 +3200,7 @@ int replicaLoadPrimaryRDBFromSocket(connection *conn, char *buf, char *eofmark, 
         /* Note that there's no point in restarting the AOF on SYNC
          * failure, it'll be restarted when sync succeeds or the replica
          * gets promoted. */
+        rdbFreeSaveInfo(rsi);
         return C_ERR;
     }
 
@@ -2578,6 +3303,7 @@ int replicaLoadPrimaryRDBFromDisk(rdbSaveInfo *rsi) {
 
         /* Note that there's no point in restarting the AOF on sync failure,
          * it'll be restarted when sync succeeds or replica promoted. */
+        rdbFreeSaveInfo(rsi);
         return C_ERR;
     }
 
@@ -3824,6 +4550,10 @@ int syncWithPrimaryHandleSendHandshakeState(connection *conn) {
     err = sendCommand(conn, "REPLCONF", "version", VALKEY_VERSION, NULL);
     if (err) goto err;
 
+    /* Inform the primary of this replica identity for active-active extensions. */
+    err = sendCommand(conn, "REPLCONF", "uuid", server.runid, NULL);
+    if (err) goto err;
+
     /* Inform the primary of our (replica) node name. */
     if (server.cluster_enabled) {
         char *argv[] = {"REPLCONF", "SET-CLUSTER-NODE-ID", server.cluster->myself->name};
@@ -3909,6 +4639,20 @@ int syncWithPrimaryHandleReceiveVersionReplyState(connection *conn) {
         serverLog(LL_NOTICE,
                   "(Non critical) Primary does not understand "
                   "REPLCONF VERSION: %s",
+                  err);
+    }
+    sdsfree(err);
+    return C_OK;
+}
+
+int syncWithPrimaryHandleReceiveUUIDReplyState(connection *conn) {
+    sds err = receiveSynchronousResponse(conn);
+    if (err == NULL) return C_ERR;
+    /* Ignore the error if any. Old primaries will not understand this option. */
+    if (err[0] == '-') {
+        serverLog(LL_NOTICE,
+                  "(Non critical) Primary does not understand "
+                  "REPLCONF uuid: %s",
                   err);
     }
     sdsfree(err);
@@ -4109,6 +4853,14 @@ void syncWithPrimary(connection *conn) {
     /* Receive VERSION reply. */
     case REPL_STATE_RECEIVE_VERSION_REPLY:
         if (syncWithPrimaryHandleReceiveVersionReplyState(conn) == C_ERR) {
+            syncWithPrimaryHandleError(&conn);
+            return;
+        }
+        server.repl_state = REPL_STATE_RECEIVE_UUID_REPLY;
+        return;
+    /* Receive UUID reply. */
+    case REPL_STATE_RECEIVE_UUID_REPLY:
+        if (syncWithPrimaryHandleReceiveUUIDReplyState(conn) == C_ERR) {
             syncWithPrimaryHandleError(&conn);
             return;
         }
@@ -4369,10 +5121,16 @@ int cancelReplicationHandshake(int reconnect) {
 
     if (!reconnect) return 1;
 
+    if (server.multi_master && listLength(server.upstreams) > 1) {
+        selectConfiguredUpstreamAsPrimary(1);
+    }
+
     /* try to re-connect without waiting for replicationCron, this is needed
      * for the "diskless loading short read" test. */
-    serverLog(LL_NOTICE, "Reconnecting to PRIMARY %s:%d after failure", server.primary_host, server.primary_port);
-    connectWithPrimary();
+    if (server.primary_host) {
+        serverLog(LL_NOTICE, "Reconnecting to PRIMARY %s:%d after failure", server.primary_host, server.primary_port);
+        connectWithPrimary();
+    }
 
     return 1;
 }
@@ -4398,6 +5156,7 @@ void replicationSetPrimary(char *ip, int port, int full_sync_required, bool disc
      * directly from within that call. */
     server.primary_host = sdsnew(ip);
     server.primary_port = port;
+    refreshConfiguredUpstreamsFromPrimary();
 
     /* Clients blocked in primary, now replica.
      * Note that we need to set the new primary first
@@ -4450,6 +5209,7 @@ void replicationUnsetPrimary(void) {
      * replicationHandlePrimaryDisconnection which can attempt to re-connect. */
     sdsfree(server.primary_host);
     server.primary_host = NULL;
+    refreshConfiguredUpstreamsFromPrimary();
     if (server.primary) freeClient(server.primary);
     replicationDiscardCachedPrimary();
     cancelReplicationHandshake(0);
@@ -4512,6 +5272,9 @@ void replicationHandlePrimaryDisconnection(void) {
     /* Try to re-connect immediately rather than wait for replicationCron
      * waiting 1 second may risk backlog being recycled. */
     if (server.primary_host) {
+        if (server.multi_master && listLength(server.upstreams) > 1) {
+            selectConfiguredUpstreamAsPrimary(1);
+        }
         serverLog(LL_NOTICE, "Reconnecting to PRIMARY %s:%d", server.primary_host, server.primary_port);
         connectWithPrimary();
     }
@@ -4530,6 +5293,57 @@ void replicaofCommand(client *c) {
         return;
     }
 
+    if (c->argc == 4 && !strcasecmp(objectGetVal(c->argv[1]), "add")) {
+        long port;
+        if (!server.multi_master) {
+            addReplyError(c, "REPLICAOF ADD requires multi-master yes");
+            return;
+        }
+        if (c->flag.replica) {
+            addReplyError(c, "Command is not valid when client is a replica.");
+            return;
+        }
+        if (getRangeLongFromObjectOrReply(c, c->argv[3], 0, 65535, &port, "Invalid master port") != C_OK) return;
+        if (addConfiguredUpstreamEndpoint(objectGetVal(c->argv[2]), port) != C_OK) {
+            addReplyError(c, "Failed to add upstream endpoint");
+            return;
+        }
+        if (server.primary_host == NULL) {
+            replicationSetPrimary(objectGetVal(c->argv[2]), port, 0, true);
+        }
+        addReply(c, shared.ok);
+        return;
+    } else if (c->argc == 4 && !strcasecmp(objectGetVal(c->argv[1]), "remove")) {
+        long port;
+        if (!server.multi_master) {
+            addReplyError(c, "REPLICAOF REMOVE requires multi-master yes");
+            return;
+        }
+        if (getRangeLongFromObjectOrReply(c, c->argv[3], 0, 65535, &port, "Invalid master port") != C_OK) return;
+
+        int removing_current =
+            server.primary_host && !strcasecmp(server.primary_host, objectGetVal(c->argv[2])) && server.primary_port == port;
+        if (removeConfiguredUpstreamEndpoint(objectGetVal(c->argv[2]), port) != C_OK) {
+            addReplyError(c, "No such configured upstream");
+            return;
+        }
+
+        if (removing_current) {
+            if (listLength(server.upstreams) == 0) {
+                replicationUnsetPrimary();
+            } else {
+                listNode *ln = listFirst(server.upstreams);
+                valkeyUpstream *next = listNodeValue(ln);
+                if (next && next->host) replicationSetPrimary(next->host, next->port, 0, true);
+            }
+        }
+        addReply(c, shared.ok);
+        return;
+    } else if (c->argc != 3) {
+        addReplyErrorObject(c, shared.syntaxerr);
+        return;
+    }
+
     /* The special host/port combination "NO" "ONE" turns the instance
      * into a primary. Otherwise the new primary address is set. */
     if (!strcasecmp(objectGetVal(c->argv[1]), "no") && !strcasecmp(objectGetVal(c->argv[2]), "one")) {
@@ -4539,6 +5353,7 @@ void replicaofCommand(client *c) {
             serverLog(LL_NOTICE, "PRIMARY MODE enabled (user request from '%s')", client);
             sdsfree(client);
         }
+        clearConfiguredUpstreams();
     } else {
         long port;
 
@@ -4551,6 +5366,27 @@ void replicaofCommand(client *c) {
         }
 
         if (getRangeLongFromObjectOrReply(c, c->argv[2], 0, 65535, &port, "Invalid master port") != C_OK) return;
+
+        if (server.multi_master) {
+            if (addConfiguredUpstreamEndpoint(objectGetVal(c->argv[1]), port) != C_OK) {
+                addReplyError(c, "Failed to add upstream endpoint");
+                return;
+            }
+
+            if (server.primary_host == NULL) {
+                replicationSetPrimary(objectGetVal(c->argv[1]), port, 0, true);
+            } else if (server.primary_host && !strcasecmp(server.primary_host, objectGetVal(c->argv[1])) &&
+                       server.primary_port == port) {
+                serverLog(LL_NOTICE, "REPLICAOF would result into synchronization "
+                                     "with the primary we are already connected "
+                                     "with. No operation performed.");
+                addReplySds(c, sdsnew("+OK Already connected to specified "
+                                      "master\r\n"));
+                return;
+            }
+            addReply(c, shared.ok);
+            return;
+        }
 
         /* Check if we are already attached to the specified primary */
         if (server.primary_host && !strcasecmp(server.primary_host, objectGetVal(c->argv[1])) && server.primary_port == port) {
@@ -4609,8 +5445,56 @@ void roleCommand(client *c) {
         }
         setDeferredArrayLen(c, mbcount, replicas);
     } else {
-        char *replica_state = NULL;
+        /* KeyDB-compatible ROLE format in multi-master mode:
+         * - one upstream: [active-replica|slave, host, port, state, offset]
+         * - multiple upstreams: array of the above entries. */
+        if (server.multi_master && server.upstreams && listLength(server.upstreams) > 0) {
+            unsigned long upstream_count = listLength(server.upstreams);
+            if (upstream_count > 1) addReplyArrayLen(c, upstream_count);
 
+            listIter li;
+            listNode *ln;
+            listRewind(server.upstreams, &li);
+            while ((ln = listNext(&li)) != NULL) {
+                valkeyUpstream *upstream = listNodeValue(ln);
+                if (upstream == NULL || upstream->host == NULL) continue;
+
+                int is_current =
+                    server.primary_host && !strcasecmp(server.primary_host, upstream->host) && server.primary_port == upstream->port;
+                const char *state = "none";
+                long long upstream_offset = -1;
+
+                if (is_current) {
+                    if (replicaIsInHandshakeState()) {
+                        state = "handshake";
+                    } else {
+                        switch (server.repl_state) {
+                        case REPL_STATE_NONE: state = "none"; break;
+                        case REPL_STATE_CONNECT: state = "connect"; break;
+                        case REPL_STATE_CONNECTING: state = "connecting"; break;
+                        case REPL_STATE_TRANSFER: state = "sync"; break;
+                        case REPL_STATE_CONNECTED: state = "connected"; break;
+                        default: state = "unknown"; break;
+                        }
+                    }
+                    if (server.primary) {
+                        upstream_offset = server.primary->repl_data->reploff;
+                    } else if (server.cached_primary) {
+                        upstream_offset = server.cached_primary->repl_data->reploff;
+                    }
+                }
+
+                addReplyArrayLen(c, 5);
+                addReplyBulkCString(c, server.active_replica ? "active-replica" : "slave");
+                addReplyBulkCString(c, upstream->host);
+                addReplyLongLong(c, upstream->port);
+                addReplyBulkCString(c, state);
+                addReplyLongLong(c, upstream_offset);
+            }
+            return;
+        }
+
+        char *replica_state = NULL;
         addReplyArrayLen(c, 5);
         addReplyBulkCBuffer(c, "slave", 5);
         addReplyBulkCString(c, server.primary_host);
@@ -5210,7 +6094,11 @@ void replicationCron(void) {
     }
 
     /* Check if we should connect to a PRIMARY */
-    if (server.repl_state == REPL_STATE_CONNECT) {
+    if (server.repl_state == REPL_STATE_CONNECT && server.primary_host == NULL && server.multi_master &&
+        listLength(server.upstreams) > 0) {
+        selectConfiguredUpstreamAsPrimary(0);
+    }
+    if (server.repl_state == REPL_STATE_CONNECT && server.primary_host != NULL) {
         serverLog(LL_NOTICE, "Connecting to PRIMARY %s:%d", server.primary_host, server.primary_port);
         connectWithPrimary();
     }

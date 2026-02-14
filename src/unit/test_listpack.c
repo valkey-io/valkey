@@ -197,7 +197,7 @@ int test_listpackLpPrependInteger(int argc, char **argv, int flags) {
     return 0;
 }
 
-int test_listpackGetELementAtIndex(int argc, char **argv, int flags) {
+int test_listpackGetElementAtIndex(int argc, char **argv, int flags) {
     /* Get element at index */
     UNUSED(argc);
     UNUSED(argv);
@@ -237,7 +237,7 @@ int test_listpackPop(int argc, char **argv, int flags) {
     return 0;
 }
 
-int test_listpackGetELementAtIndex2(int argc, char **argv, int flags) {
+int test_listpackGetElementAtIndex2(int argc, char **argv, int flags) {
     /* Get element at index */
     UNUSED(argc);
     UNUSED(argv);

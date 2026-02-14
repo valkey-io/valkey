@@ -574,7 +574,7 @@ sds sdsfromlonglong(long long value) {
 
 /* Like sdscatprintf() but gets va_list instead of being variadic. */
 sds sdscatvprintf(sds s, const char *fmt, va_list ap) {
-    va_list cpy;
+    va_list copy;
     char staticbuf[1024], *buf = staticbuf, *t;
     size_t buflen = strlen(fmt) * 2;
     int bufstrlen;
@@ -591,9 +591,9 @@ sds sdscatvprintf(sds s, const char *fmt, va_list ap) {
     /* Alloc enough space for buffer and \0 after failing to
      * fit the string in the current buffer size. */
     while (1) {
-        va_copy(cpy, ap);
-        bufstrlen = vsnprintf(buf, buflen, fmt, cpy);
-        va_end(cpy);
+        va_copy(copy, ap);
+        bufstrlen = vsnprintf(buf, buflen, fmt, copy);
+        va_end(copy);
         if (bufstrlen < 0) {
             if (buf != staticbuf) s_free(buf);
             return NULL;

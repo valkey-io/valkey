@@ -92,12 +92,16 @@ jobs:
           echo "skiptests: ${{github.event.inputs.skiptests}}"
           echo "test_args: ${{github.event.inputs.test_args}}"
           echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
-      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           repository: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name) || env.GITHUB_REPOSITORY || github.repository }}
           ref: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.sha) || env.GITHUB_HEAD_REF || github.ref }}
       - name: make
-        run: make all-with-unit-tests SERVER_CFLAGS='-Werror'
+        run: |
+          git clone https://github.com/ianlancetaylor/libbacktrace.git /tmp/libbacktrace
+          cd /tmp/libbacktrace && ./configure && make && sudo make install
+          cd $GITHUB_WORKSPACE
+          make all-with-unit-tests SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes
       - name: testprep
         run: sudo apt-get install tcl8.6 tclx
       - name: test
@@ -160,12 +164,16 @@ jobs:
           echo "skiptests: ${{github.event.inputs.skiptests}}"
           echo "test_args: ${{github.event.inputs.test_args}}"
           echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
-      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           repository: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name) || env.GITHUB_REPOSITORY || github.repository }}
           ref: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.sha) || env.GITHUB_HEAD_REF || github.ref }}
       - name: make
-        run: make all-with-unit-tests SERVER_CFLAGS='-Werror'
+        run: |
+          git clone https://github.com/ianlancetaylor/libbacktrace.git /tmp/libbacktrace
+          cd /tmp/libbacktrace && ./configure && make && sudo make install
+          cd $GITHUB_WORKSPACE
+          make all-with-unit-tests SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes
       - name: testprep
         run: sudo apt-get install tcl8.6 tclx
       - name: test
@@ -203,7 +211,7 @@ jobs:
           echo "skiptests: ${{github.event.inputs.skiptests}}"
           echo "test_args: ${{github.event.inputs.test_args}}"
           echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
-      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           repository: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name) || env.GITHUB_REPOSITORY || github.repository }}
           ref: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.sha) || env.GITHUB_HEAD_REF || github.ref }}
@@ -211,7 +219,10 @@ jobs:
         run: |
           apt-get update && apt-get install -y make gcc-13
           update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-13 100
-          make all-with-unit-tests CC=gcc OPT=-O3 SERVER_CFLAGS='-Werror -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=3'
+          git clone https://github.com/ianlancetaylor/libbacktrace.git /tmp/libbacktrace
+          cd /tmp/libbacktrace && ./configure && make && sudo make install
+          cd $GITHUB_WORKSPACE
+          make all-with-unit-tests CC=gcc OPT=-O3 SERVER_CFLAGS='-Werror -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=3' USE_LIBBACKTRACE=yes
       - name: testprep
         run: apt-get install -y tcl8.6 tclx procps
       - name: test
@@ -248,12 +259,16 @@ jobs:
           echo "skiptests: ${{github.event.inputs.skiptests}}"
           echo "test_args: ${{github.event.inputs.test_args}}"
           echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
-      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           repository: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name) || env.GITHUB_REPOSITORY || github.repository }}
           ref: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.sha) || env.GITHUB_HEAD_REF || github.ref }}
       - name: make
-        run: make MALLOC=libc SERVER_CFLAGS='-Werror'
+        run: |
+          git clone https://github.com/ianlancetaylor/libbacktrace.git /tmp/libbacktrace
+          cd /tmp/libbacktrace && ./configure && make && sudo make install
+          cd $GITHUB_WORKSPACE
+          make MALLOC=libc SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes
       - name: testprep
         run: sudo apt-get install tcl8.6 tclx
       - name: test
@@ -287,12 +302,16 @@ jobs:
           echo "skiptests: ${{github.event.inputs.skiptests}}"
           echo "test_args: ${{github.event.inputs.test_args}}"
           echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
-      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           repository: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name) || env.GITHUB_REPOSITORY || github.repository }}
           ref: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.sha) || env.GITHUB_HEAD_REF || github.ref }}
       - name: make
-        run: make MALLOC=libc CFLAGS=-DNO_MALLOC_USABLE_SIZE SERVER_CFLAGS='-Werror'
+        run: |
+          git clone https://github.com/ianlancetaylor/libbacktrace.git /tmp/libbacktrace
+          cd /tmp/libbacktrace && ./configure && make && sudo make install
+          cd $GITHUB_WORKSPACE
+          make MALLOC=libc CFLAGS=-DNO_MALLOC_USABLE_SIZE SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes
       - name: testprep
         run: sudo apt-get install tcl8.6 tclx
       - name: test
@@ -326,14 +345,17 @@ jobs:
           echo "skiptests: ${{github.event.inputs.skiptests}}"
           echo "test_args: ${{github.event.inputs.test_args}}"
           echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
-      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           repository: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name) || env.GITHUB_REPOSITORY || github.repository }}
           ref: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.sha) || env.GITHUB_HEAD_REF || github.ref }}
       - name: make
         run: |
           sudo apt-get update && sudo apt-get install libc6-dev-i386
-          make 32bit SERVER_CFLAGS='-Werror'
+          git clone https://github.com/ianlancetaylor/libbacktrace.git /tmp/libbacktrace
+          cd /tmp/libbacktrace && ./configure && make && sudo make install
+          cd $GITHUB_WORKSPACE
+          make 32bit SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes
       - name: testprep
         run: sudo apt-get install tcl8.6 tclx
       - name: test
@@ -372,13 +394,16 @@ jobs:
           echo "skiptests: ${{github.event.inputs.skiptests}}"
           echo "test_args: ${{github.event.inputs.test_args}}"
           echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
-      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           repository: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name) || env.GITHUB_REPOSITORY || github.repository }}
           ref: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.sha) || env.GITHUB_HEAD_REF || github.ref }}
       - name: make
         run: |
-          make BUILD_TLS=yes SERVER_CFLAGS='-Werror'
+          git clone https://github.com/ianlancetaylor/libbacktrace.git /tmp/libbacktrace
+          cd /tmp/libbacktrace && ./configure && make && sudo make install
+          cd $GITHUB_WORKSPACE
+          make BUILD_TLS=yes SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes
       - name: testprep
         run: |
           sudo apt-get install tcl8.6 tclx tcl-tls
@@ -418,13 +443,16 @@ jobs:
           echo "skiptests: ${{github.event.inputs.skiptests}}"
           echo "test_args: ${{github.event.inputs.test_args}}"
           echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
-      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           repository: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name) || env.GITHUB_REPOSITORY || github.repository }}
           ref: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.sha) || env.GITHUB_HEAD_REF || github.ref }}
       - name: make
         run: |
-          make BUILD_TLS=yes SERVER_CFLAGS='-Werror' USE_FAST_FLOAT=yes
+          git clone https://github.com/ianlancetaylor/libbacktrace.git /tmp/libbacktrace
+          cd /tmp/libbacktrace && ./configure && make && sudo make install
+          cd $GITHUB_WORKSPACE
+          make BUILD_TLS=yes SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes USE_FAST_FLOAT=yes
       - name: testprep
         run: |
           sudo apt-get install tcl8.6 tclx tcl-tls
@@ -464,13 +492,16 @@ jobs:
           echo "skiptests: ${{github.event.inputs.skiptests}}"
           echo "test_args: ${{github.event.inputs.test_args}}"
           echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
-      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           repository: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name) || env.GITHUB_REPOSITORY || github.repository }}
           ref: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.sha) || env.GITHUB_HEAD_REF || github.ref }}
       - name: make
         run: |
-          make SERVER_CFLAGS='-Werror'
+          git clone https://github.com/ianlancetaylor/libbacktrace.git /tmp/libbacktrace
+          cd /tmp/libbacktrace && ./configure && make && sudo make install
+          cd $GITHUB_WORKSPACE
+          make SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes
       - name: testprep
         run: sudo apt-get install tcl8.6 tclx
       - name: test
@@ -498,13 +529,16 @@ jobs:
           echo "skiptests: ${{github.event.inputs.skiptests}}"
           echo "test_args: ${{github.event.inputs.test_args}}"
           echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
-      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           repository: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name) || env.GITHUB_REPOSITORY || github.repository }}
           ref: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.sha) || env.GITHUB_HEAD_REF || github.ref }}
       - name: make
         run: |
-          make BUILD_TLS=yes SERVER_CFLAGS='-Werror'
+          git clone https://github.com/ianlancetaylor/libbacktrace.git /tmp/libbacktrace
+          cd /tmp/libbacktrace && ./configure && make && sudo make install
+          cd $GITHUB_WORKSPACE
+          make BUILD_TLS=yes SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes
       - name: testprep
         run: |
           sudo apt-get install tcl8.6 tclx tcl-tls
@@ -536,13 +570,16 @@ jobs:
           echo "skiptests: ${{github.event.inputs.skiptests}}"
           echo "test_args: ${{github.event.inputs.test_args}}"
           echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
-      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           repository: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name) || env.GITHUB_REPOSITORY || github.repository }}
           ref: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.sha) || env.GITHUB_HEAD_REF || github.ref }}
       - name: make
         run: |
-          make SERVER_CFLAGS='-Werror'
+          git clone https://github.com/ianlancetaylor/libbacktrace.git /tmp/libbacktrace
+          cd /tmp/libbacktrace && ./configure && make && sudo make install
+          cd $GITHUB_WORKSPACE
+          make SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes
       - name: testprep
         run: "sudo apt-get install vmtouch\nmkdir /tmp/master \nmkdir /tmp/slave\n"
       - name: warm up
@@ -614,12 +651,16 @@ jobs:
           echo "skiptests: ${{github.event.inputs.skiptests}}"
           echo "test_args: ${{github.event.inputs.test_args}}"
           echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
-      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           repository: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name) || env.GITHUB_REPOSITORY || github.repository }}
           ref: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.sha) || env.GITHUB_HEAD_REF || github.ref }}
       - name: make
-        run: make valgrind SERVER_CFLAGS='-Werror'
+        run: |
+          git clone https://github.com/ianlancetaylor/libbacktrace.git /tmp/libbacktrace
+          cd /tmp/libbacktrace && ./configure && make && sudo make install
+          cd $GITHUB_WORKSPACE
+          make valgrind SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes
       - name: testprep
         run: |
           sudo apt-get update
@@ -645,12 +686,16 @@ jobs:
           echo "skiptests: ${{github.event.inputs.skiptests}}"
           echo "test_args: ${{github.event.inputs.test_args}}"
           echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
-      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           repository: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name) || env.GITHUB_REPOSITORY || github.repository }}
           ref: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.sha) || env.GITHUB_HEAD_REF || github.ref }}
       - name: make
-        run: make valgrind all-with-unit-tests SERVER_CFLAGS='-Werror'
+        run: |
+          git clone https://github.com/ianlancetaylor/libbacktrace.git /tmp/libbacktrace
+          cd /tmp/libbacktrace && ./configure && make && sudo make install
+          cd $GITHUB_WORKSPACE
+          make valgrind all-with-unit-tests SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes
       - name: testprep
         run: |
           sudo apt-get update
@@ -681,12 +726,16 @@ jobs:
           echo "skiptests: ${{github.event.inputs.skiptests}}"
           echo "test_args: ${{github.event.inputs.test_args}}"
           echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
-      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           repository: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name) || env.GITHUB_REPOSITORY || github.repository }}
           ref: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.sha) || env.GITHUB_HEAD_REF || github.ref }}
       - name: make
-        run: make valgrind CFLAGS="-DNO_MALLOC_USABLE_SIZE" SERVER_CFLAGS='-Werror'
+        run: |
+          git clone https://github.com/ianlancetaylor/libbacktrace.git /tmp/libbacktrace
+          cd /tmp/libbacktrace && ./configure && make && sudo make install
+          cd $GITHUB_WORKSPACE
+          make valgrind CFLAGS="-DNO_MALLOC_USABLE_SIZE" SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes
       - name: testprep
         run: |
           sudo apt-get update
@@ -712,12 +761,16 @@ jobs:
           echo "skiptests: ${{github.event.inputs.skiptests}}"
           echo "test_args: ${{github.event.inputs.test_args}}"
           echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
-      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           repository: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name) || env.GITHUB_REPOSITORY || github.repository }}
           ref: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.sha) || env.GITHUB_HEAD_REF || github.ref }}
       - name: make
-        run: make valgrind all-with-unit-tests CFLAGS="-DNO_MALLOC_USABLE_SIZE" SERVER_CFLAGS='-Werror'
+        run: |
+          git clone https://github.com/ianlancetaylor/libbacktrace.git /tmp/libbacktrace
+          cd /tmp/libbacktrace && ./configure && make && sudo make install
+          cd $GITHUB_WORKSPACE
+          make valgrind all-with-unit-tests CFLAGS="-DNO_MALLOC_USABLE_SIZE" SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes
       - name: testprep
         run: |
           sudo apt-get update
@@ -754,12 +807,16 @@ jobs:
           echo "skiptests: ${{github.event.inputs.skiptests}}"
           echo "test_args: ${{github.event.inputs.test_args}}"
           echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
-      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           repository: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name) || env.GITHUB_REPOSITORY || github.repository }}
           ref: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.sha) || env.GITHUB_HEAD_REF || github.ref }}
       - name: make
-        run: make all-with-unit-tests OPT=-O3 SANITIZER=address SERVER_CFLAGS='-Werror'
+        run: |
+          git clone https://github.com/ianlancetaylor/libbacktrace.git /tmp/libbacktrace
+          cd /tmp/libbacktrace && ./configure && make && sudo make install
+          cd $GITHUB_WORKSPACE
+          make all-with-unit-tests OPT=-O3 SANITIZER=address SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes
       - name: testprep
         run: |
           sudo apt-get update
@@ -778,13 +835,51 @@ jobs:
         run: ./runtest-cluster ${{github.event.inputs.cluster_test_args}}
       - name: unittest
         if: true && !contains(github.event.inputs.skiptests, 'unittest')
+        run: ./src/valkey-unit-tests
+  test-sanitizer-address-large-memory:
+    runs-on: ubuntu-latest
+    if: |
+      (github.event_name == 'workflow_call' || github.event_name == 'workflow_dispatch' ||
+        (github.event_name == 'schedule' && github.repository == 'valkey-io/valkey') ||
+        (github.event_name == 'pull_request' && github.event.pull_request.base.ref != 'unstable')) &&
+      !contains(github.event.inputs.skipjobs, 'sanitizer') &&
+      !contains(github.event.inputs.skiptests, 'large-memory')
+    timeout-minutes: 1440
+    strategy:
+      fail-fast: false
+      matrix:
+        compiler: [gcc, clang]
+    env:
+      CC: ${{ matrix.compiler }}
+    steps:
+      - name: prep
+        if: github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call'
+        run: |
+          echo "GITHUB_REPOSITORY=${{inputs.use_repo || github.event.inputs.use_repo}}" >> $GITHUB_ENV
+          echo "GITHUB_HEAD_REF=${{inputs.use_git_ref || github.event.inputs.use_git_ref}}" >> $GITHUB_ENV
+          echo "skipjobs: ${{github.event.inputs.skipjobs}}"
+          echo "skiptests: ${{github.event.inputs.skiptests}}"
+          echo "test_args: ${{github.event.inputs.test_args}}"
+          echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
+      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+        with:
+          repository: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name) || env.GITHUB_REPOSITORY || github.repository }}
+          ref: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.sha) || env.GITHUB_HEAD_REF || github.ref }}
+      - name: make
+        run: make all-with-unit-tests OPT=-O3 SANITIZER=address SERVER_CFLAGS='-Werror'
+      - name: testprep
+        run: |
+          sudo apt-get update
+          sudo apt-get install tcl8.6 tclx -y
+      - name: unittest
+        if: true && !contains(github.event.inputs.skiptests, 'unittest')
         run: ./src/valkey-unit-tests --large-memory
       - name: large memory tests
-        if: true && !contains(github.event.inputs.skiptests, 'valkey') && !contains(github.event.inputs.skiptests, 'large-memory')
-        run: ./runtest --accurate --verbose --dump-logs --large-memory --tags large-memory ${{github.event.inputs.test_args}}
+        if: true && !contains(github.event.inputs.skiptests, 'valkey')
+        run: ./runtest --accurate --verbose --dump-logs --clients 5 --large-memory --tags large-memory ${{github.event.inputs.test_args}}
       - name: large memory module api tests
-        if: true && !contains(github.event.inputs.skiptests, 'modules') && !contains(github.event.inputs.skiptests, 'large-memory')
-        run: CFLAGS='-Werror' ./runtest-moduleapi --verbose --dump-logs --large-memory --tags large-memory ${{github.event.inputs.test_args}}
+        if: true && !contains(github.event.inputs.skiptests, 'modules')
+        run: CFLAGS='-Werror' ./runtest-moduleapi --verbose --dump-logs --clients 5 --large-memory --tags large-memory ${{github.event.inputs.test_args}}
   test-sanitizer-undefined:
     runs-on: ubuntu-latest
     if: |
@@ -809,12 +904,16 @@ jobs:
           echo "skiptests: ${{github.event.inputs.skiptests}}"
           echo "test_args: ${{github.event.inputs.test_args}}"
           echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
-      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           repository: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name) || env.GITHUB_REPOSITORY || github.repository }}
           ref: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.sha) || env.GITHUB_HEAD_REF || github.ref }}
       - name: make
-        run: make all-with-unit-tests OPT=-O3 SANITIZER=undefined SERVER_CFLAGS='-Werror' LUA_DEBUG=yes # we (ab)use this flow to also check Lua C API violations
+        run: |
+          git clone https://github.com/ianlancetaylor/libbacktrace.git /tmp/libbacktrace
+          cd /tmp/libbacktrace && ./configure && make && sudo make install
+          cd $GITHUB_WORKSPACE
+          make all-with-unit-tests OPT=-O3 SANITIZER=undefined SERVER_CFLAGS='-Werror' LUA_DEBUG=yes USE_LIBBACKTRACE=yes # we (ab)use this flow to also check Lua C API violations
       - name: testprep
         run: |
           sudo apt-get update
@@ -833,13 +932,51 @@ jobs:
         run: ./runtest-cluster ${{github.event.inputs.cluster_test_args}}
       - name: unittest
         if: true && !contains(github.event.inputs.skiptests, 'unittest')
+        run: ./src/valkey-unit-tests --accurate
+  test-sanitizer-undefined-large-memory:
+    runs-on: ubuntu-latest
+    if: |
+      (github.event_name == 'workflow_call' || github.event_name == 'workflow_dispatch' ||
+        (github.event_name == 'schedule' && github.repository == 'valkey-io/valkey') ||
+        (github.event_name == 'pull_request' && github.event.pull_request.base.ref != 'unstable')) &&
+      !contains(github.event.inputs.skipjobs, 'sanitizer') &&
+      !contains(github.event.inputs.skiptests, 'large-memory')
+    timeout-minutes: 1440
+    strategy:
+      fail-fast: false
+      matrix:
+        compiler: [gcc, clang]
+    env:
+      CC: ${{ matrix.compiler }}
+    steps:
+      - name: prep
+        if: github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call'
+        run: |
+          echo "GITHUB_REPOSITORY=${{inputs.use_repo || github.event.inputs.use_repo}}" >> $GITHUB_ENV
+          echo "GITHUB_HEAD_REF=${{inputs.use_git_ref || github.event.inputs.use_git_ref}}" >> $GITHUB_ENV
+          echo "skipjobs: ${{github.event.inputs.skipjobs}}"
+          echo "skiptests: ${{github.event.inputs.skiptests}}"
+          echo "test_args: ${{github.event.inputs.test_args}}"
+          echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
+      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+        with:
+          repository: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name) || env.GITHUB_REPOSITORY || github.repository }}
+          ref: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.sha) || env.GITHUB_HEAD_REF || github.ref }}
+      - name: make
+        run: make all-with-unit-tests OPT=-O3 SANITIZER=undefined SERVER_CFLAGS='-Werror' LUA_DEBUG=yes
+      - name: testprep
+        run: |
+          sudo apt-get update
+          sudo apt-get install tcl8.6 tclx -y
+      - name: unittest
+        if: true && !contains(github.event.inputs.skiptests, 'unittest')
         run: ./src/valkey-unit-tests --accurate --large-memory
       - name: large memory tests
-        if: true && !contains(github.event.inputs.skiptests, 'valkey') && !contains(github.event.inputs.skiptests, 'large-memory')
-        run: ./runtest --accurate --verbose --dump-logs --large-memory --tags large-memory ${{github.event.inputs.test_args}}
+        if: true && !contains(github.event.inputs.skiptests, 'valkey')
+        run: ./runtest --accurate --verbose --dump-logs --clients 5 --large-memory --tags large-memory ${{github.event.inputs.test_args}}
       - name: large memory module api tests
-        if: true && !contains(github.event.inputs.skiptests, 'modules') && !contains(github.event.inputs.skiptests, 'large-memory')
-        run: CFLAGS='-Werror' ./runtest-moduleapi --verbose --dump-logs --large-memory --tags large-memory ${{github.event.inputs.test_args}}
+        if: true && !contains(github.event.inputs.skiptests, 'modules')
+        run: CFLAGS='-Werror' ./runtest-moduleapi --verbose --dump-logs --clients 5 --large-memory --tags large-memory ${{github.event.inputs.test_args}}
   test-sanitizer-force-defrag:
     runs-on: ubuntu-latest
     if: |
@@ -860,12 +997,16 @@ jobs:
           echo "skiptests: ${{github.event.inputs.skiptests}}"
           echo "test_args: ${{github.event.inputs.test_args}}"
           echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
-      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           repository: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name) || env.GITHUB_REPOSITORY || github.repository }}
           ref: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.sha) || env.GITHUB_HEAD_REF || github.ref }}
       - name: make
-        run: make all-with-unit-tests OPT=-O3 SANITIZER=address DEBUG_FORCE_DEFRAG=yes USE_JEMALLOC=no SERVER_CFLAGS='-Werror'
+        run: |
+          git clone https://github.com/ianlancetaylor/libbacktrace.git /tmp/libbacktrace
+          cd /tmp/libbacktrace && ./configure && make && sudo make install
+          cd $GITHUB_WORKSPACE
+          make all-with-unit-tests OPT=-O3 SANITIZER=address DEBUG_FORCE_DEFRAG=yes USE_JEMALLOC=no SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes
       - name: testprep
         run: |
           sudo apt-get update
@@ -904,14 +1045,17 @@ jobs:
           echo "skiptests: ${{github.event.inputs.skiptests}}"
           echo "test_args: ${{github.event.inputs.test_args}}"
           echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
-      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           repository: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name) || env.GITHUB_REPOSITORY || github.repository }}
           ref: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.sha) || env.GITHUB_HEAD_REF || github.ref }}
       - name: make
         run: |
           sudo apt-get update && sudo apt-get install lttng-tools lttng-modules-dkms liblttng-ust-dev
-          make -j4 USE_LTTNG=yes
+          git clone https://github.com/ianlancetaylor/libbacktrace.git /tmp/libbacktrace
+          cd /tmp/libbacktrace && ./configure && make && sudo make install
+          cd $GITHUB_WORKSPACE
+                    make -j4 USE_LTTNG=yes USE_LIBBACKTRACE=yes
       - name: testprep
         run: sudo apt-get install tcl8.6 tclx
       - name: test
@@ -964,7 +1108,7 @@ jobs:
           echo "skiptests: ${{github.event.inputs.skiptests}}"
           echo "test_args: ${{github.event.inputs.test_args}}"
           echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
-      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           repository: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name) || env.GITHUB_REPOSITORY || github.repository }}
           ref: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.sha) || env.GITHUB_HEAD_REF || github.ref }}
@@ -973,8 +1117,11 @@ jobs:
         run: dnf -y install epel-release
       - name: make
         run: |
-          dnf -y install gcc make procps-ng which /usr/bin/kill /usr/bin/awk
-          make -j SERVER_CFLAGS='-Werror'
+          dnf -y install gcc make procps-ng which /usr/bin/kill /usr/bin/awk git
+          git clone https://github.com/ianlancetaylor/libbacktrace.git /tmp/libbacktrace
+          cd /tmp/libbacktrace && ./configure && make && make install
+          cd $GITHUB_WORKSPACE
+          make -j SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes
       - name: testprep
         run: dnf -y install tcl tcltls
       - name: test
@@ -1027,7 +1174,7 @@ jobs:
           echo "skiptests: ${{github.event.inputs.skiptests}}"
           echo "test_args: ${{github.event.inputs.test_args}}"
           echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
-      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           repository: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name) || env.GITHUB_REPOSITORY || github.repository }}
           ref: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.sha) || env.GITHUB_HEAD_REF || github.ref }}
@@ -1036,8 +1183,11 @@ jobs:
         run: dnf -y install epel-release
       - name: make
         run: |
-          dnf -y install make gcc openssl-devel openssl procps-ng which /usr/bin/kill /usr/bin/awk
-          make -j BUILD_TLS=module SERVER_CFLAGS='-Werror'
+          dnf -y install make gcc openssl-devel openssl procps-ng which /usr/bin/kill /usr/bin/awk git
+          git clone https://github.com/ianlancetaylor/libbacktrace.git /tmp/libbacktrace
+          cd /tmp/libbacktrace && ./configure && make && make install
+          cd $GITHUB_WORKSPACE
+          make -j BUILD_TLS=module SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes
       - name: testprep
         run: |
           dnf -y install tcl tcltls
@@ -1095,7 +1245,7 @@ jobs:
           echo "skiptests: ${{github.event.inputs.skiptests}}"
           echo "test_args: ${{github.event.inputs.test_args}}"
           echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
-      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           repository: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name) || env.GITHUB_REPOSITORY || github.repository }}
           ref: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.sha) || env.GITHUB_HEAD_REF || github.ref }}
@@ -1104,8 +1254,11 @@ jobs:
         run: dnf -y install epel-release
       - name: make
         run: |
-          dnf -y install make gcc openssl-devel openssl procps-ng which /usr/bin/kill /usr/bin/awk
-          make -j BUILD_TLS=module SERVER_CFLAGS='-Werror'
+          dnf -y install make gcc openssl-devel openssl procps-ng which /usr/bin/kill /usr/bin/awk git
+          git clone https://github.com/ianlancetaylor/libbacktrace.git /tmp/libbacktrace
+          cd /tmp/libbacktrace && ./configure && make && make install
+          cd $GITHUB_WORKSPACE
+          make -j BUILD_TLS=module SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes
       - name: testprep
         run: |
           dnf -y install tcl tcltls
@@ -1145,12 +1298,16 @@ jobs:
           echo "skiptests: ${{github.event.inputs.skiptests}}"
           echo "test_args: ${{github.event.inputs.test_args}}"
           echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
-      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           repository: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name) || env.GITHUB_REPOSITORY || github.repository }}
           ref: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.sha) || env.GITHUB_HEAD_REF || github.ref }}
       - name: make
-        run: make SERVER_CFLAGS='-Werror'
+        run: |
+          git clone https://github.com/ianlancetaylor/libbacktrace.git /tmp/libbacktrace
+          cd /tmp/libbacktrace && ./configure && make && sudo make install
+          cd $GITHUB_WORKSPACE
+          make SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes
       - name: test
         if: true && !contains(github.event.inputs.skiptests, 'valkey')
         run: ./runtest ${{ github.event_name != 'pull_request' && '--accurate' || '' }} --verbose --clients 1 --no-latency --dump-logs ${{github.event.inputs.test_args}}
@@ -1176,12 +1333,16 @@ jobs:
           echo "skiptests: ${{github.event.inputs.skiptests}}"
           echo "test_args: ${{github.event.inputs.test_args}}"
           echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
-      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           repository: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name) || env.GITHUB_REPOSITORY || github.repository }}
           ref: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.sha) || env.GITHUB_HEAD_REF || github.ref }}
       - name: make
-        run: make SERVER_CFLAGS='-Werror'
+        run: |
+          git clone https://github.com/ianlancetaylor/libbacktrace.git /tmp/libbacktrace
+          cd /tmp/libbacktrace && ./configure && make && sudo make install
+          cd $GITHUB_WORKSPACE
+          make SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes
       - name: sentinel tests
         if: true && !contains(github.event.inputs.skiptests, 'sentinel')
         run: ./runtest-sentinel ${{github.event.inputs.cluster_test_args}}
@@ -1204,12 +1365,16 @@ jobs:
           echo "skiptests: ${{github.event.inputs.skiptests}}"
           echo "test_args: ${{github.event.inputs.test_args}}"
           echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
-      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           repository: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name) || env.GITHUB_REPOSITORY || github.repository }}
           ref: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.sha) || env.GITHUB_HEAD_REF || github.ref }}
       - name: make
-        run: make SERVER_CFLAGS='-Werror'
+        run: |
+          git clone https://github.com/ianlancetaylor/libbacktrace.git /tmp/libbacktrace
+          cd /tmp/libbacktrace && ./configure && make && sudo make install
+          cd $GITHUB_WORKSPACE
+          make SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes
       - name: cluster tests
         if: true && !contains(github.event.inputs.skiptests, 'cluster')
         run: ./runtest-cluster ${{github.event.inputs.cluster_test_args}}
@@ -1239,12 +1404,16 @@ jobs:
           echo "skiptests: ${{github.event.inputs.skiptests}}"
           echo "test_args: ${{github.event.inputs.test_args}}"
           echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
-      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           repository: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name) || env.GITHUB_REPOSITORY || github.repository }}
           ref: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.sha) || env.GITHUB_HEAD_REF || github.ref }}
       - name: make
-        run: make SERVER_CFLAGS='-Werror'
+        run: |
+          git clone https://github.com/ianlancetaylor/libbacktrace.git /tmp/libbacktrace
+          cd /tmp/libbacktrace && ./configure && make && sudo make install
+          cd $GITHUB_WORKSPACE
+          make SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes
   test-freebsd:
     runs-on: ubuntu-latest
     if: |
@@ -1260,12 +1429,12 @@ jobs:
         run: |
           echo "GITHUB_REPOSITORY=${{inputs.use_repo || github.event.inputs.use_repo}}" >> $GITHUB_ENV
           echo "GITHUB_HEAD_REF=${{inputs.use_git_ref || github.event.inputs.use_git_ref}}" >> $GITHUB_ENV
-      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           repository: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name) || env.GITHUB_REPOSITORY || github.repository }}
           ref: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.sha) || env.GITHUB_HEAD_REF || github.ref }}
       - name: test
-        uses: cross-platform-actions/action@46e8d7fb25520a8d6c64fd2b7a1192611da98eda # v0.30.0
+        uses: cross-platform-actions/action@39a2a80642eca0947594ad03e4355dc3d28c617a # v0.32.0
         with:
           operating_system: freebsd
           environment_variables: MAKE
@@ -1294,14 +1463,14 @@ jobs:
           echo "skiptests: ${{github.event.inputs.skiptests}}"
           echo "test_args: ${{github.event.inputs.test_args}}"
           echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
-      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           repository: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name) || env.GITHUB_REPOSITORY || github.repository }}
           ref: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.sha) || env.GITHUB_HEAD_REF || github.ref }}
       - name: make
         run: |
-          apk add build-base
-          make SERVER_CFLAGS='-Werror'
+          apk add build-base libbacktrace-dev
+          make SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes
       - name: testprep
         run: apk add tcl procps tclx
       - name: test
@@ -1335,14 +1504,14 @@ jobs:
           echo "skiptests: ${{github.event.inputs.skiptests}}"
           echo "test_args: ${{github.event.inputs.test_args}}"
           echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
-      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           repository: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name) || env.GITHUB_REPOSITORY || github.repository }}
           ref: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.sha) || env.GITHUB_HEAD_REF || github.ref }}
       - name: make
         run: |
-          apk add build-base
-          make SERVER_CFLAGS='-Werror' USE_JEMALLOC=no CFLAGS=-DUSE_MALLOC_USABLE_SIZE
+          apk add build-base libbacktrace-dev
+          make SERVER_CFLAGS='-Werror' USE_JEMALLOC=no CFLAGS=-DUSE_MALLOC_USABLE_SIZE USE_LIBBACKTRACE=yes
       - name: testprep
         run: apk add tcl procps tclx
       - name: test
@@ -1376,12 +1545,16 @@ jobs:
           echo "skiptests: ${{github.event.inputs.skiptests}}"
           echo "test_args: ${{github.event.inputs.test_args}}"
           echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
-      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           repository: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name) || env.GITHUB_REPOSITORY || github.repository }}
           ref: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.sha) || env.GITHUB_HEAD_REF || github.ref }}
       - name: make
-        run: make SERVER_CFLAGS='-Werror -DLOG_REQ_RES'
+        run: |
+          git clone https://github.com/ianlancetaylor/libbacktrace.git /tmp/libbacktrace
+          cd /tmp/libbacktrace && ./configure && make && sudo make install
+          cd $GITHUB_WORKSPACE
+          make SERVER_CFLAGS='-Werror -DLOG_REQ_RES' USE_LIBBACKTRACE=yes
       - name: testprep
         run: sudo apt-get install tcl8.6 tclx
       - name: test
@@ -1431,7 +1604,7 @@ jobs:
     if: always() && github.event_name == 'pull_request_target' && github.event.action == 'labeled' && github.event.label.name == 'run-extra-tests'
     steps:
       - name: Remove run-extra-tests label
-        uses: actions/github-script@5c56fde4671bc2d3592fb0f2c5b5bab9ddae03b1 # v7
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
@@ -1461,7 +1634,9 @@ jobs:
       - test-valgrind-no-malloc-usable-size-test
       - test-valgrind-no-malloc-usable-size-misc
       - test-sanitizer-address
+      - test-sanitizer-address-large-memory
       - test-sanitizer-undefined
+      - test-sanitizer-undefined-large-memory
       - test-sanitizer-force-defrag
       - test-ubuntu-lttng
       - test-rpm-distros-jemalloc
@@ -1495,7 +1670,7 @@ jobs:
             echo "STATUS=success" >> $GITHUB_ENV
           fi
       - name: Notify about results
-        uses: ravsamhq/notify-slack-action@v2
+        uses: ravsamhq/notify-slack-action@042f29088bb3bdbda5b4ff7b4818466a277fa8f7 # v2.5.0
         with:
           status: ${{ env.STATUS }}
           notify_when: "failure"

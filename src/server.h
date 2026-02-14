@@ -2877,6 +2877,7 @@ void dictVanillaFree(void *val);
 client *createClient(connection *conn);
 void freeClient(client *c);
 void freeClientAsync(client *c);
+void freeClientOrCloseLater(client *c, int async);
 void logInvalidUseAndFreeClientAsync(client *c, const char *fmt, ...);
 void beforeNextClient(client *c);
 void clearClientConnectionState(client *c);

@@ -1964,6 +1964,192 @@ test {CONFIG REWRITE handles alias config properly} {
     }
 } {} {external:skip}
 
+test {CONFIG REWRITE async basic - set value and rewrite persists} {
+    start_server {tags {"introspection"}} {
+        r config set maxmemory 10mb
+        assert_equal [r config rewrite] {OK}
+
+        # Verify config survives restart
+        restart_server 0 true false
+        wait_done_loading r
+        assert_equal [lindex [r config get maxmemory] 1] {10485760}
+    }
+} {} {external:skip}
+
+test {CONFIG REWRITE async concurrent - multiple clients all get replies} {
+    start_server {tags {"introspection"}} {
+        set num_clients 5
+        set clients {}
+
+        # Create deferring clients and send CONFIG REWRITE from each
+        for {set i 0} {$i < $num_clients} {incr i} {
+            set rd [valkey_deferring_client]
+            lappend clients $rd
+            r config set maxmemory [expr {10 + $i}]mb
+            $rd config rewrite
+        }
+
+        # All clients should get +OK replies
+        for {set i 0} {$i < $num_clients} {incr i} {
+            set rd [lindex $clients $i]
+            set reply [$rd read]
+            assert_equal $reply {OK}
+        }
+
+        # Cleanup
+        foreach rd $clients {
+            $rd close
+        }
+    }
+} {} {external:skip}
+
+test {CONFIG REWRITE async non-blocking - other clients not blocked} {
+    start_server {tags {"introspection"}} {
+        set rd [valkey_deferring_client]
+
+        # Issue CONFIG REWRITE on a deferring client
+        $rd config rewrite
+
+        # Meanwhile, other commands should still work on the main client
+        assert_equal [r ping] {PONG}
+        assert_equal [r set testkey testvalue] {OK}
+        assert_equal [r get testkey] {testvalue}
+
+        # The deferred client should eventually get OK
+        set reply [$rd read]
+        assert_equal $reply {OK}
+
+        $rd close
+    }
+} {} {external:skip}
+
+test {CONFIG REWRITE async error path - unwritable directory} {
+    start_server {tags {"introspection"}} {
+        set config_path [srv 0 config_file]
+        set config_dir [file dirname $config_path]
+
+        # Make the directory unwritable so mkstemp fails in the BIO thread.
+        # The config file itself is still readable for serialization.
+        file attributes $config_dir -permissions 00555
+
+        catch {r config rewrite} err
+
+        # Should get an error, not hang or crash
+        assert_match {*ERR*} $err
+
+        # Restore permissions
+        file attributes $config_dir -permissions 00755
+
+        # Verify server is still healthy
+        assert_equal [r ping] {PONG}
+    }
+} {} {external:skip}
+
+test {CONFIG REWRITE async pipelined - 20 rapid rewrites from one client} {
+    start_server {tags {"introspection"}} {
+        set rd [valkey_deferring_client]
+        set num_cmds 20
+
+        # Pipeline 20 CONFIG REWRITE commands
+        for {set i 0} {$i < $num_cmds} {incr i} {
+            $rd config rewrite
+        }
+
+        # All 20 should return OK
+        for {set i 0} {$i < $num_cmds} {incr i} {
+            set reply [$rd read]
+            assert_equal $reply {OK}
+        }
+
+        $rd close
+    }
+} {} {external:skip}
+
+test {CONFIG REWRITE async point-in-time snapshot semantics} {
+    start_server {tags {"introspection"}} {
+        # Set initial value and rewrite
+        r config set hz 15
+        assert_equal [r config rewrite] {OK}
+
+        # Set new value and rewrite again
+        r config set hz 20
+        assert_equal [r config rewrite] {OK}
+
+        # Read the config file - should contain the second rewrite's value
+        set config_path [srv 0 config_file]
+        set content [exec cat $config_path]
+        assert_match {*hz 20*} $content
+    }
+} {} {external:skip}
+
+test {CONFIG REWRITE async - server restart after rewrite} {
+    start_server {tags {"introspection"}} {
+        # Set a known value
+        r config set maxmemory 42mb
+
+        # Rewrite config
+        assert_equal [r config rewrite] {OK}
+
+        # Restart the server
+        restart_server 0 true false
+        wait_done_loading r
+
+        # Verify the value persisted
+        assert_equal [lindex [r config get maxmemory] 1] {44040192}
+    }
+} {} {external:skip}
+
+test {CONFIG REWRITE async - shutdown during pending rewrite no crash} {
+    start_server {tags {"introspection"}} {
+        # Issue a CONFIG REWRITE followed by immediate restart.
+        # This exercises bioDrainWorker() during shutdown.
+        r config set maxmemory 99mb
+        r config rewrite
+
+        # Restart (this invokes shutdown internally). If the server
+        # deadlocks or crashes, the test framework will catch it.
+        restart_server 0 true false
+        wait_done_loading r
+
+        # Server came back up — no crash/deadlock
+        assert_equal [r ping] {PONG}
+    }
+} {} {external:skip}
+
+test {CONFIG REWRITE async - INFO reflects rewrite status} {
+    start_server {tags {"introspection"}} {
+        # Successful rewrite
+        r config set maxmemory 10mb
+        assert_equal [r config rewrite] {OK}
+
+        # INFO should show ok
+        wait_for_condition 50 100 {
+            [string match {*config_rewrite_last_status:ok*} [r info server]]
+        } else {
+            fail "INFO config_rewrite_last_status not ok after successful rewrite"
+        }
+
+        # Trigger a failed rewrite by making directory unwritable
+        # so the BIO thread's mkstemp fails
+        set config_path [srv 0 config_file]
+        set config_dir [file dirname $config_path]
+        file attributes $config_dir -permissions 00555
+
+        catch {r config rewrite} err
+        assert_match {*ERR*} $err
+
+        # INFO should now show err
+        wait_for_condition 50 100 {
+            [string match {*config_rewrite_last_status:err*} [r info server]]
+        } else {
+            fail "INFO config_rewrite_last_status not err after failed rewrite"
+        }
+
+        # Restore permissions
+        file attributes $config_dir -permissions 00755
+    }
+} {} {external:skip}
+
 test {CONFIG hash-seed is immutable and settable at startup} {
     start_server {tags {"introspection"} overrides {hash-seed aabbccddeeffgghh}} {
         assert_error "ERR CONFIG SET failed (possibly related to argument 'hash-seed') - can't set immutable config*" {

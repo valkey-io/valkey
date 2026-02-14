@@ -228,6 +228,11 @@ void unblockClient(client *c, int queue_for_reprocessing) {
         c->bstate->postponed_list_node = NULL;
     } else if (c->bstate->btype == BLOCKED_SHUTDOWN) {
         /* No special cleanup. */
+    } else if (c->bstate->btype == BLOCKED_CONFIG_REWRITE) {
+        if (c->bstate->generic_blocked_list_node) {
+            listDelNode(server.clients_pending_config_rewrite, c->bstate->generic_blocked_list_node);
+            c->bstate->generic_blocked_list_node = NULL;
+        }
     } else {
         serverPanic("Unknown btype in unblockClient().");
     }
@@ -265,7 +270,8 @@ int blockedClientMayTimeout(client *c) {
     if (c->bstate->btype == BLOCKED_LIST ||
         c->bstate->btype == BLOCKED_ZSET ||
         c->bstate->btype == BLOCKED_STREAM ||
-        c->bstate->btype == BLOCKED_WAIT) {
+        c->bstate->btype == BLOCKED_WAIT ||
+        c->bstate->btype == BLOCKED_CONFIG_REWRITE) {
         return 1;
     }
     return 0;
@@ -292,6 +298,9 @@ void replyToBlockedClientTimedOut(client *c) {
         }
     } else if (c->bstate->btype == BLOCKED_MODULE) {
         moduleBlockedClientTimedOut(c, 0);
+    } else if (c->bstate->btype == BLOCKED_CONFIG_REWRITE) {
+        addReplyError(c, "CONFIG REWRITE timed out");
+        updateStatsOnUnblock(c, 0, 0, ERROR_COMMAND_FAILED);
     } else {
         serverPanic("Unknown btype in replyToBlockedClientTimedOut().");
     }
@@ -787,9 +796,42 @@ void unblockClientOnError(client *c, const char *err_str) {
     unblockClient(c, 1);
 }
 
+/* Check if any clients blocked on CONFIG REWRITE can be unblocked because
+ * the background I/O job has completed. */
+void processClientsWaitingConfigRewrite(void) {
+    unsigned long long completed =
+        atomic_load_explicit(&server.config_rewrite_bio_completed, memory_order_acquire);
+
+    listIter li;
+    listNode *ln;
+    listRewind(server.clients_pending_config_rewrite, &li);
+    while ((ln = listNext(&li))) {
+        client *c = ln->value;
+        unsigned long long wait_target = (unsigned long long)c->bstate->reploffset;
+
+        if (completed < wait_target) continue;
+
+        /* The BIO job for this client has finished. Reply based on status. */
+        int status = atomic_load_explicit(&server.config_rewrite_bio_status, memory_order_acquire);
+        if (status == C_OK) {
+            serverLog(LL_NOTICE, "CONFIG REWRITE executed with success.");
+            addReply(c, shared.ok);
+        } else {
+            int bio_errno = atomic_load_explicit(&server.config_rewrite_bio_errno, memory_order_relaxed);
+            serverLog(LL_WARNING, "CONFIG REWRITE failed: %s", strerror(bio_errno));
+            addReplyErrorFormat(c, "Rewriting config file: %s", strerror(bio_errno));
+        }
+        updateStatsOnUnblock(c, 0, 0, status == C_OK ? 0 : ERROR_COMMAND_FAILED);
+        unblockClient(c, 1);
+    }
+}
+
 void blockedBeforeSleep(void) {
     /* Handle precise timeouts of blocked clients. */
     handleBlockedClientsTimeout();
+
+    /* Unblock clients waiting for background CONFIG REWRITE to complete. */
+    if (listLength(server.clients_pending_config_rewrite)) processClientsWaitingConfigRewrite();
 
     /* Unblock all the clients blocked for synchronous replication
      * in WAIT or WAITAOF. */

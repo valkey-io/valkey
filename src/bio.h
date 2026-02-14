@@ -43,6 +43,7 @@ void bioCreateFsyncJob(int fd, long long offset, int need_reclaim_cache);
 void bioCreateLazyFreeJob(lazy_free_fn free_fn, int arg_count, ...);
 void bioCreateSaveRDBToDiskJob(connection *conn, int is_dual_channel);
 void bioCreateTlsReloadJob(void);
+void bioCreateConfigRewriteJob(sds content, char *configfile, mode_t perm);
 int inBioThread(void);
 
 /* Background job opcodes */
@@ -52,7 +53,8 @@ enum {
     BIO_LAZY_FREE,      /* Deferred objects freeing. */
     BIO_CLOSE_AOF,      /* Deferred close for AOF files. */
     BIO_RDB_SAVE,       /* Deferred save RDB to disk on replica */
-    BIO_TLS_RELOAD,     /* Deferred TLS reload. */
+    BIO_TLS_RELOAD,        /* Deferred TLS reload. */
+    BIO_CONFIG_REWRITE,    /* Deferred config file rewrite. */
     BIO_NUM_OPS
 };
 

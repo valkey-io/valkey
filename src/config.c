@@ -1696,7 +1696,7 @@ sds getConfigDebugInfo(void) {
  *
  * The function returns 0 on success, otherwise -1 is returned and errno
  * is set accordingly. */
-int rewriteConfigOverwriteFile(char *configfile, sds content) {
+int rewriteConfigOverwriteFile(char *configfile, sds content, mode_t perm) {
     int fd = -1;
     int retval = -1;
     char tmp_conffile[PATH_MAX];
@@ -1736,7 +1736,7 @@ int rewriteConfigOverwriteFile(char *configfile, sds content) {
 
     if (fsync(fd))
         serverLog(LL_WARNING, "Could not sync tmp config file to disk (%s)", strerror(errno));
-    else if (fchmod(fd, 0644 & ~server.umask) == -1)
+    else if (fchmod(fd, perm) == -1)
         serverLog(LL_WARNING, "Could not chmod config file (%s)", strerror(errno));
     else if (rename(tmp_conffile, configfile) == -1)
         serverLog(LL_WARNING, "Could not rename tmp config file (%s)", strerror(errno));
@@ -1755,23 +1755,18 @@ cleanup:
     return retval;
 }
 
-/* Rewrite the configuration file at "path".
- * If the configuration file already exists, we try at best to retain comments
- * and overall structure.
+/* Serialize the current server configuration to an sds string by reading
+ * the old config file (to preserve comments/structure) and updating all
+ * config values to match the current in-memory state.
  *
- * Configuration parameters that are at their default value, unless already
- * explicitly included in the old configuration file, are not rewritten.
- * The force_write flag overrides this behavior and forces everything to be
- * written. This is currently only used for testing purposes.
- *
- * On error -1 is returned and errno is set accordingly, otherwise 0. */
-int rewriteConfig(char *path, int force_write) {
+ * Returns the serialized config string on success, or NULL on error
+ * (errno is set accordingly). The caller takes ownership of the returned sds. */
+sds rewriteConfigSerialize(char *path, int force_write) {
     struct rewriteConfigState *state;
     sds newcontent;
-    int retval;
 
     /* Step 1: read the old config into our rewrite state. */
-    if ((state = rewriteConfigReadOldFile(path)) == NULL) return -1;
+    if ((state = rewriteConfigReadOldFile(path)) == NULL) return NULL;
     if (force_write) state->force_write = 1;
 
     /* Step 2: rewrite every single option, replacing or appending it inside
@@ -1799,13 +1794,29 @@ int rewriteConfig(char *path, int force_write) {
      * of multiple "save" options or duplicated options. */
     rewriteConfigRemoveOrphaned(state);
 
-    /* Step 4: generate a new configuration file from the modified state
-     * and write it into the original file. */
+    /* Step 4: generate a new configuration file from the modified state. */
     newcontent = rewriteConfigGetContentFromState(state);
-    retval = rewriteConfigOverwriteFile(server.configfile, newcontent);
-
-    sdsfree(newcontent);
     rewriteConfigReleaseState(state);
+    return newcontent;
+}
+
+/* Rewrite the configuration file at "path".
+ * If the configuration file already exists, we try at best to retain comments
+ * and overall structure.
+ *
+ * Configuration parameters that are at their default value, unless already
+ * explicitly included in the old configuration file, are not rewritten.
+ * The force_write flag overrides this behavior and forces everything to be
+ * written. This is currently only used for testing purposes.
+ *
+ * On error -1 is returned and errno is set accordingly, otherwise 0. */
+int rewriteConfig(char *path, int force_write) {
+    sds newcontent = rewriteConfigSerialize(path, force_write);
+    if (newcontent == NULL) return -1;
+
+    int retval = rewriteConfigOverwriteFile(server.configfile, newcontent,
+                                            0644 & ~server.umask);
+    sdsfree(newcontent);
     return retval;
 }
 
@@ -3610,13 +3621,36 @@ void configRewriteCommand(client *c) {
         addReplyError(c, "The server is running without a config file");
         return;
     }
-    if (rewriteConfig(server.configfile, 0) == -1) {
-        /* save errno in case of being tainted. */
+
+    /* Serialize config on the main thread (fast, in-memory). */
+    sds content = rewriteConfigSerialize(server.configfile, 0);
+    if (content == NULL) {
         int err = errno;
-        serverLog(LL_WARNING, "CONFIG REWRITE failed: %s", strerror(err));
+        serverLog(LL_WARNING, "CONFIG REWRITE serialization failed: %s", strerror(err));
         addReplyErrorFormat(c, "Rewriting config file: %s", strerror(err));
-    } else {
-        serverLog(LL_NOTICE, "CONFIG REWRITE executed with success.");
-        addReply(c, shared.ok);
+        return;
     }
+
+    /* Snapshot values needed by the BIO thread. */
+    char *configfile = zstrdup(server.configfile);
+    mode_t perm = 0644 & ~server.umask;
+
+    /* Record the completion target for this client before submitting the job.
+     * The BIO thread increments config_rewrite_bio_completed after each write,
+     * so we wait for it to exceed our snapshot of the counter + 1. */
+    unsigned long long wait_target =
+        atomic_load_explicit(&server.config_rewrite_bio_completed, memory_order_acquire) + 1;
+
+    /* Submit the disk I/O to the background thread. The BIO thread takes
+     * ownership of both 'content' and 'configfile'. */
+    bioCreateConfigRewriteJob(content, configfile, perm);
+
+    /* Block this client until the BIO thread signals completion. */
+    initClientBlockingState(c);
+    c->bstate->timeout = mstime() + 30000; /* 30 second timeout */
+    c->bstate->reploffset = (long long)wait_target; /* Reuse field as wait target */
+    blockClient(c, BLOCKED_CONFIG_REWRITE);
+    listAddNodeTail(server.clients_pending_config_rewrite, c);
+    serverAssert(c->bstate->generic_blocked_list_node == NULL);
+    c->bstate->generic_blocked_list_node = listLast(server.clients_pending_config_rewrite);
 }

@@ -379,9 +379,10 @@ typedef enum blocking_type {
     BLOCKED_STREAM,   /* XREAD. */
     BLOCKED_ZSET,     /* BZPOP et al. */
     BLOCKED_POSTPONE, /* Blocked by processCommand, re-try processing later. */
-    BLOCKED_SHUTDOWN, /* SHUTDOWN. */
-    BLOCKED_NUM,      /* Number of blocked states. */
-    BLOCKED_END       /* End of enumeration */
+    BLOCKED_SHUTDOWN,        /* SHUTDOWN. */
+    BLOCKED_CONFIG_REWRITE,  /* CONFIG REWRITE waiting for BIO completion. */
+    BLOCKED_NUM,             /* Number of blocked states. */
+    BLOCKED_END              /* End of enumeration */
 } blocking_type;
 
 /* Client request types */
@@ -1745,6 +1746,11 @@ struct valkeyServer {
     char *executable;                                 /* Absolute executable file path. */
     char **exec_argv;                                 /* Executable argv vector (copy). */
     mode_t umask;                                     /* The umask value of the process on startup */
+    /* Background config rewrite state */
+    _Atomic int config_rewrite_bio_status;            /* C_OK or C_ERR from last BIO config rewrite. */
+    _Atomic int config_rewrite_bio_errno;             /* errno from last failed BIO config rewrite. */
+    _Atomic unsigned long long config_rewrite_bio_completed; /* Monotonic counter of completed BIO config rewrites. */
+    list *clients_pending_config_rewrite;             /* Clients blocked on CONFIG REWRITE. */
     int hz;                                           /* serverCron() calls frequency in hertz */
     int clients_hz;                                   /* clientsTimeProc() frequency in hertz */
     int in_fork_child;                                /* indication that this is a fork child */
@@ -3632,6 +3638,9 @@ struct rewriteConfigState; /* Forward declaration to export API. */
 int rewriteConfigRewriteLine(struct rewriteConfigState *state, const char *option, sds line, int force);
 void rewriteConfigMarkAsProcessed(struct rewriteConfigState *state, const char *option);
 int rewriteConfig(char *path, int force_write);
+sds rewriteConfigSerialize(char *path, int force_write);
+int rewriteConfigOverwriteFile(char *configfile, sds content, mode_t perm);
+void processClientsWaitingConfigRewrite(void);
 void initConfigValues(void);
 void removeConfig(sds name);
 sds getConfigDebugInfo(void);

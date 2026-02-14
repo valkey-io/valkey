@@ -79,7 +79,8 @@ static unsigned int bio_job_to_worker[] = {
     [BIO_CLOSE_AOF] = 1,
     [BIO_LAZY_FREE] = 2,
     [BIO_RDB_SAVE] = 3,
-    [BIO_TLS_RELOAD] = 4, /* only used when BUILD_TLS=yes */
+    [BIO_TLS_RELOAD] = 4,        /* only used when BUILD_TLS=yes */
+    [BIO_CONFIG_REWRITE] = 5,
 };
 
 typedef struct {
@@ -93,7 +94,8 @@ static bio_worker_data bio_workers[] = {
     {"bio_aof"},
     {"bio_lazy_free"},
     {"bio_rdb_save"},
-    {"bio_tls_reload"}, /* only used when BUILD_TLS=yes */
+    {"bio_tls_reload"},        /* only used when BUILD_TLS=yes */
+    {"bio_config_rewrite"},
 };
 static const bio_worker_data *const bio_worker_end = bio_workers + (sizeof bio_workers / sizeof *bio_workers);
 
@@ -140,6 +142,13 @@ typedef union bio_job {
     struct {
         int type;
     } tls_reload_args;
+
+    struct {
+        int type;
+        sds content;       /* Serialized config file content. */
+        char *configfile;  /* Path to write config to. */
+        mode_t perm;       /* File permissions for the config file. */
+    } config_rewrite_args;
 } bio_job;
 
 void *bioProcessBackgroundJobs(void *arg);
@@ -239,6 +248,14 @@ void bioCreateTlsReloadJob(void) {
     bioSubmitJob(BIO_TLS_RELOAD, job);
 }
 
+void bioCreateConfigRewriteJob(sds content, char *configfile, mode_t perm) {
+    bio_job *job = zmalloc(sizeof(*job));
+    job->config_rewrite_args.content = content;
+    job->config_rewrite_args.configfile = configfile;
+    job->config_rewrite_args.perm = perm;
+    bioSubmitJob(BIO_CONFIG_REWRITE, job);
+}
+
 void *bioProcessBackgroundJobs(void *arg) {
     bio_worker_data *const bwd = arg;
     sigset_t sigset;
@@ -309,6 +326,20 @@ void *bioProcessBackgroundJobs(void *arg) {
 #else
             serverPanic("BIO_TLS_RELOAD job type requires built-in TLS (BUILD_TLS=yes).");
 #endif
+        } else if (job_type == BIO_CONFIG_REWRITE) {
+            int retval = rewriteConfigOverwriteFile(
+                job->config_rewrite_args.configfile,
+                job->config_rewrite_args.content,
+                job->config_rewrite_args.perm);
+            if (retval == -1) {
+                atomic_store_explicit(&server.config_rewrite_bio_errno, errno, memory_order_relaxed);
+                atomic_store_explicit(&server.config_rewrite_bio_status, C_ERR, memory_order_release);
+            } else {
+                atomic_store_explicit(&server.config_rewrite_bio_status, C_OK, memory_order_relaxed);
+            }
+            atomic_fetch_add_explicit(&server.config_rewrite_bio_completed, 1, memory_order_release);
+            sdsfree(job->config_rewrite_args.content);
+            zfree(job->config_rewrite_args.configfile);
         } else {
             serverPanic("Wrong job type in bioProcessBackgroundJobs().");
         }

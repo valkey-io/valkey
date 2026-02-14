@@ -2917,6 +2917,10 @@ void initServer(void) {
     server.pending_push_messages = listCreate();
     server.clients_waiting_acks = listCreate();
     server.get_ack_from_replicas = 0;
+    server.config_rewrite_bio_status = C_OK;
+    server.config_rewrite_bio_errno = 0;
+    server.config_rewrite_bio_completed = 0;
+    server.clients_pending_config_rewrite = listCreate();
     server.paused_actions = 0;
     memset(server.client_pause_per_purpose, 0, sizeof(server.client_pause_per_purpose));
     server.postponed_clients = listCreate();
@@ -6061,6 +6065,8 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                 "lru_clock:%u\r\n", server.unixtime & ((1 << LRULFU_BITS) - 1),
                 "executable:%s\r\n", server.executable ? server.executable : "",
                 "config_file:%s\r\n", server.configfile ? server.configfile : "",
+                "config_rewrite_last_status:%s\r\n",
+                    atomic_load_explicit(&server.config_rewrite_bio_status, memory_order_relaxed) == C_OK ? "ok" : "err",
                 "io_threads_active:%i\r\n", server.active_io_threads_num > 1,
                 "availability_zone:%s\r\n", server.availability_zone));
 

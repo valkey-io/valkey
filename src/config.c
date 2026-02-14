@@ -3662,8 +3662,8 @@ void configHelpCommand(client *c) {
                           "    Reset statistics reported by the INFO command.",
                           "REWRITE",
                           "    Rewrite the configuration file.",
-                          "HELP [<config>]",
-                          "    Show help about a specific config.",
+                          "HELP [<pattern> ...]",
+                          "    Show help about configs matching the glob-like <pattern>(s).",
                           NULL};
 
     addReplyHelp(c, help);

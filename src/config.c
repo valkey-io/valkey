@@ -1013,40 +1013,54 @@ static int configKeyCompare(const void *a, const void *b) {
     return strcmp(key_a, key_b);
 }
 
+/* Returns sorted array of configs from dict. Caller must free. */
+static standardConfig **getSortedConfigs(dict *matches, int *count) {
+    dictEntry *de;
+    dictIterator *di;
+    int n = dictSize(matches);
+    *count = n;
+
+    struct {
+        const char *key;
+        standardConfig *config;
+    } *sorted = zmalloc(sizeof(*sorted) * n);
+
+    di = dictGetIterator(matches);
+    int i = 0;
+    while ((de = dictNext(di)) != NULL) {
+        sorted[i].key = dictGetKey(de);
+        sorted[i].config = dictGetVal(de);
+        i++;
+    }
+    dictReleaseIterator(di);
+
+    qsort(sorted, n, sizeof(*sorted), configKeyCompare);
+
+    standardConfig **result = zmalloc(sizeof(standardConfig *) * n);
+    for (i = 0; i < n; i++) {
+        result[i] = sorted[i].config;
+    }
+    zfree(sorted);
+    return result;
+}
+
 /*-----------------------------------------------------------------------------
  * CONFIG GET implementation
  *----------------------------------------------------------------------------*/
 
 void configGetCommand(client *c) {
-    dictEntry *de;
-    dictIterator *di;
     dict *matches = matchPatternsToConfigs(c);
-
-    di = dictGetIterator(matches);
-    int n = dictSize(matches);
-    addReplyMapLen(c, n);
-
-    struct {
-        const char *key;
-        sds value;
-    } *sorted = zmalloc(sizeof(*sorted) * n);
-
-    int i = 0;
-    while ((de = dictNext(di)) != NULL) {
-        standardConfig *config = (standardConfig *)dictGetVal(de);
-        sorted[i].key = dictGetKey(de);
-        sorted[i].value = config->interface.get(config);
-        i++;
-    }
-    dictReleaseIterator(di);
+    int n;
+    standardConfig **configs = getSortedConfigs(matches, &n);
     dictRelease(matches);
 
-    qsort(sorted, n, sizeof(*sorted), configKeyCompare);
-    for (i = 0; i < n; i++) {
-        addReplyBulkCString(c, sorted[i].key);
-        addReplyBulkSds(c, sorted[i].value);
+    addReplyMapLen(c, n);
+    for (int i = 0; i < n; i++) {
+        addReplyBulkCString(c, configs[i]->name);
+        sds value = configs[i]->interface.get(configs[i]);
+        addReplyBulkSds(c, value);
     }
-    zfree(sorted);
+    zfree(configs);
 }
 
 /*-----------------------------------------------------------------------------
@@ -3637,20 +3651,16 @@ static void addConfigInfoReply(client *c, standardConfig *config) {
 
 void configHelpCommand(client *c) {
     if (c->argc >= 3) {
-        dictEntry *de;
-        dictIterator *di;
         dict *matches = matchPatternsToConfigs(c);
-
-        int n = dictSize(matches);
-        addReplyArrayLen(c, n);
-
-        di = dictGetIterator(matches);
-        while ((de = dictNext(di)) != NULL) {
-            standardConfig *config = dictGetVal(de);
-            addConfigInfoReply(c, config);
-        }
-        dictReleaseIterator(di);
+        int n;
+        standardConfig **configs = getSortedConfigs(matches, &n);
         dictRelease(matches);
+
+        addReplyArrayLen(c, n);
+        for (int i = 0; i < n; i++) {
+            addConfigInfoReply(c, configs[i]);
+        }
+        zfree(configs);
         return;
     }
 

@@ -66,6 +66,75 @@ start_server {tags {"other"}} {
         assert_equal [llength $result] 0
     }
 
+    test {CONFIG HELP with pattern matching multiple configs} {
+        set result [r CONFIG HELP max*]
+        assert {[llength $result] > 1}
+        set names [list]
+        foreach entry $result {
+            lappend names [dict get $entry name]
+        }
+        assert {[lsearch $names "maxmemory"] >= 0}
+        assert {[lsearch $names "maxclients"] >= 0}
+    }
+
+    test {CONFIG HELP with multiple patterns deduplicates results} {
+        set result [r CONFIG HELP max* maxmemory]
+        set names [list]
+        foreach entry $result {
+            lappend names [dict get $entry name]
+        }
+        # Count occurrences of maxmemory - should be exactly 1
+        set count 0
+        foreach name $names {
+            if {$name eq "maxmemory"} {
+                incr count
+            }
+        }
+        assert_equal $count 1
+    }
+
+    test {CONFIG HELP ordering is consistent across calls} {
+        # Get initial ordering
+        set help1 [r CONFIG HELP a*]
+        set get1 [r CONFIG GET a*]
+        
+        set help_names1 [list]
+        foreach entry $help1 {
+            lappend help_names1 [dict get $entry name]
+        }
+        
+        set get_names1 [dict keys $get1]
+        
+        # Do some operations and call again
+        r SET foo bar
+        r GET foo
+        
+        set help2 [r CONFIG HELP a*]
+        set help_names2 [list]
+        foreach entry $help2 {
+            lappend help_names2 [dict get $entry name]
+        }
+        
+        # Restart server
+        restart_server 0 true false
+        
+        set help3 [r CONFIG HELP a*]
+        set get3 [r CONFIG GET a*]
+        
+        set help_names3 [list]
+        foreach entry $help3 {
+            lappend help_names3 [dict get $entry name]
+        }
+        
+        set get_names3 [dict keys $get3]
+        
+        # All orderings should be identical
+        assert_equal $help_names1 $help_names2
+        assert_equal $help_names1 $help_names3
+        assert_equal $get_names1 $get_names3
+        assert_equal $help_names1 $get_names1
+    }
+
     test {Coverage: MEMORY MALLOC-STATS} {
         if {[string match {*jemalloc*} [s mem_allocator]]} {
             assert_match "*jemalloc*" [r memory malloc-stats]

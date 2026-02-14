@@ -2438,6 +2438,18 @@ static int isValidAnnouncedHostname(char *val, const char **err) {
     return 1;
 }
 
+static int isValidClusterAnnounceIp(char *val, const char **err) {
+    struct sockaddr_in sa4;
+    struct sockaddr_in6 sa6;
+
+    if (val[0] == '\0') return 1;
+    if (inet_pton(AF_INET, val, &(sa4.sin_addr)) == 1) return 1;
+    if (inet_pton(AF_INET6, val, &(sa6.sin6_addr)) == 1) return 1;
+
+    *err = "Invalid IP address";
+    return 0;
+}
+
 static int isValidIpV4(char *val, const char **err) {
     struct sockaddr_in sa;
     if (val[0] != '\0' && inet_pton(AF_INET, val, &(sa.sin_addr)) == 0) {
@@ -3261,7 +3273,7 @@ standardConfig static_configs[] = {
     createStringConfig("pidfile", NULL, IMMUTABLE_CONFIG, EMPTY_STRING_IS_NULL, server.pidfile, NULL, NULL, NULL),
     createStringConfig("replica-announce-ip", "slave-announce-ip", MODIFIABLE_CONFIG, EMPTY_STRING_IS_NULL, server.replica_announce_ip, NULL, NULL, NULL),
     createStringConfig("primaryuser", "masteruser", MODIFIABLE_CONFIG | SENSITIVE_CONFIG, EMPTY_STRING_IS_NULL, server.primary_user, NULL, NULL, NULL),
-    createStringConfig("cluster-announce-ip", NULL, MODIFIABLE_CONFIG, EMPTY_STRING_IS_NULL, server.cluster_announce_ip, NULL, NULL, updateClusterIp),
+    createStringConfig("cluster-announce-ip", NULL, MODIFIABLE_CONFIG, EMPTY_STRING_IS_NULL, server.cluster_announce_ip, NULL, isValidClusterAnnounceIp, updateClusterIp),
     createStringConfig("cluster-announce-client-ipv4", NULL, MODIFIABLE_CONFIG, EMPTY_STRING_IS_NULL, server.cluster_announce_client_ipv4, NULL, isValidIpV4, updateClusterClientIpV4),
     createStringConfig("cluster-announce-client-ipv6", NULL, MODIFIABLE_CONFIG, EMPTY_STRING_IS_NULL, server.cluster_announce_client_ipv6, NULL, isValidIpV6, updateClusterClientIpV6),
     createStringConfig("cluster-config-file", NULL, IMMUTABLE_CONFIG, ALLOW_EMPTY_STRING, server.cluster_configfile, "nodes.conf", isValidClusterConfigFile, NULL),

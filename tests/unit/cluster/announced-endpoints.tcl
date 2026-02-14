@@ -92,4 +92,17 @@ start_cluster 2 2 {tags {external:skip cluster}} {
             R 0 config set port $baseport
         }
     }
+
+    test "Test change cluster-announce-ip at runtime" {
+        assert_error "ERR CONFIG SET failed*" {
+            R 0 config set cluster-announce-ip 10.1.131.239:6380
+        }
+        assert_error "ERR CONFIG SET failed*" {
+            R 0 config set cluster-announce-ip NotIPv4NorIPv6
+        }
+        assert_equal OK [R 0 config set cluster-announce-ip 127.0.0.1]
+        assert_equal {cluster-announce-ip 127.0.0.1} [R 0 config get cluster-announce-ip]
+        assert_equal OK [R 0 config set cluster-announce-ip ""]
+        assert_equal {cluster-announce-ip {}} [R 0 config get cluster-announce-ip]
+    }
 }

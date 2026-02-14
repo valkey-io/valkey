@@ -1651,9 +1651,8 @@ void replicationFeedReplicas(int dictid, robj **argv, int argc) {
      * advertise the same replication ID as the primary (since it shares the
      * primary replication history and has the same backlog and offsets). */
     int is_rreplay = (argc > 0 && argv != NULL && argv[0] != NULL && !strcasecmp(objectGetVal(argv[0]), "RREPLAY"));
-    int is_ping = (argc > 0 && argv != NULL && argv[0] != NULL && !strcasecmp(objectGetVal(argv[0]), "PING"));
     if (server.primary_host != NULL &&
-        !(server.active_replica && server.multi_master && (is_rreplay || is_ping))) {
+        !(server.active_replica && server.multi_master && is_rreplay)) {
         return;
     }
 

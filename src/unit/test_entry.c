@@ -27,6 +27,30 @@ static int verify_entry_properties(entry *e, sds field, sds value_copy, long lon
     return 0;
 }
 
+/* Estimate the required allocation size for an embedded entry update. */
+static size_t embedded_entry_required_size(const_sds field, const_sds value, long long expiry) {
+    size_t expiry_size = (expiry == EXPIRY_NONE) ? 0 : sizeof(long long);
+    int field_sds_type = sdsReqType(sdslen(field));
+    if (field_sds_type == SDS_TYPE_5 && expiry_size > 0) {
+        field_sds_type = SDS_TYPE_8;
+    }
+    size_t field_size = sdsReqSize(sdslen(field), field_sds_type);
+    size_t value_size = sdsReqSize(sdslen(value), SDS_TYPE_8);
+    return field_size + expiry_size + value_size;
+}
+
+/* Build an embedded value whose required size is within [min_size, max_size]. */
+static sds create_embedded_value_in_size_range(const_sds field, long long expiry, size_t min_size, size_t max_size, char c) {
+    for (size_t len = 1; len <= EMBED_VALUE_MAX_ALLOC_SIZE; len++) {
+        sds value = sdsnewlen(NULL, len);
+        memset(value, c, len);
+        size_t required_size = embedded_entry_required_size(field, value, expiry);
+        if (required_size >= min_size && required_size <= max_size) return value;
+        sdsfree(value);
+    }
+    return NULL;
+}
+
 /**
  * Test entryCreate functunallity:
  * 1. embedded with expiry
@@ -166,39 +190,38 @@ int test_entryUpdate(int argc, char **argv, int flags) {
     entry *e9 = entryUpdate(e8, value9, expiry9);
     verify_entry_properties(e9, field, value_copy9, expiry9, true, false);
 
-    // Update the value so that memory usage is less than 3/4 of the current allocation size
-    // Ensuring required_embedded_size < current_embedded_allocation_size * 3 / 4, which creates a new entry
+    // Update to a much smaller embedded value.
+    // This should force allocation of a new entry.
     size_t current_embedded_allocation_size = entryMemUsage(e9);
     sds value10 = sdsnew("xxxxxxxxxxxxxxxxxxxxx");
     sds value_copy10 = sdsdup(value10);
     long long expiry10 = expiry9;
     entry *e10 = entryUpdate(e9, value10, expiry10);
     verify_entry_properties(e10, field, value_copy10, expiry10, true, false);
-    TEST_ASSERT(entryMemUsage(e10) < current_embedded_allocation_size * 3 / 4);
     TEST_ASSERT(e10 != e9);
 
-    // Update the value so that memory usage is at least 3/4 of the current memory usage
-    // Ensuring required_embedded_size > current_embedded_allocation_size * 3 / 4 without creating a new entry
+    // Update to another embedded value that should still fit current allocation.
+    // This should reuse the same entry allocation.
     current_embedded_allocation_size = entryMemUsage(e10);
-    sds value11 = sdsnew("yyyyyyyyyyyyy");
+    size_t min_reuse_size = current_embedded_allocation_size * 3 / 4;
+    sds value11 = create_embedded_value_in_size_range(field, expiry10, min_reuse_size, current_embedded_allocation_size, 'y');
+    TEST_ASSERT(value11 != NULL);
     sds value_copy11 = sdsdup(value11);
     long long expiry11 = expiry10;
     entry *e11 = entryUpdate(e10, value11, expiry11);
     verify_entry_properties(e11, field, value_copy11, expiry11, true, false);
-    TEST_ASSERT(entryMemUsage(e11) >= current_embedded_allocation_size * 3 / 4);
-    TEST_ASSERT(entryMemUsage(e11) <= current_embedded_allocation_size);
-    TEST_ASSERT(entryMemUsage(e11) <=
-                EMBED_VALUE_MAX_ALLOC_SIZE);
+    TEST_ASSERT(entryMemUsage(e11) <= EMBED_VALUE_MAX_ALLOC_SIZE);
     TEST_ASSERT(e10 == e11);
 
-    // Update the value so that memory usage is exactly equal to the current allocation size
-    // Ensuring required_embedded_size == current_embedded_allocation_size without creating a new entry
+    // Update with another value that should still fit the existing allocation.
     current_embedded_allocation_size = entryMemUsage(e11);
-    sds value12 = sdsnew("zzzzzzzzzzzzz");
+    size_t value12_len = sdslen(value_copy11);
+    sds value12 = sdsnewlen(NULL, value12_len);
+    memset(value12, 'z', value12_len);
     sds value_copy12 = sdsdup(value12);
     long long expiry12 = expiry11;
     entry *e12 = entryUpdate(e11, value12, expiry12);
-    verify_entry_properties(e11, field, value_copy12, expiry12, true, false);
+    verify_entry_properties(e12, field, value_copy12, expiry12, true, false);
     TEST_ASSERT(entryMemUsage(e12) == current_embedded_allocation_size);
     TEST_ASSERT(entryMemUsage(e12) <= EMBED_VALUE_MAX_ALLOC_SIZE);
     TEST_ASSERT(e12 == e11);

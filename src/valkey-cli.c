@@ -5766,11 +5766,11 @@ cleanup:
     return success;
 }
 
-/* Retrieves info about the cluster using argument 'node' as the starting
- * point. All nodes will be loaded inside the cluster_manager.nodes list.
- * Warning: if something goes wrong, it will free the starting node before
- * returning 0. */
-static int clusterManagerLoadInfoFromNode(clusterManagerNode *node) {
+/* Common helper function to load cluster info from the starting node.
+ * If include_unreachable is true, all nodes from gossip are added to the list.
+ * If include_unreachable is false, only healthy reachable nodes are added.
+ * Returns 1 on success, 0 on failure and frees the starting node. */
+static int clusterManagerLoadInfoCommon(clusterManagerNode *node, int include_unreachable) {
     if (node->context == NULL && !clusterManagerNodeConnect(node)) {
         freeClusterManagerNode(node);
         return 0;
@@ -5821,8 +5821,14 @@ static int clusterManagerLoadInfoFromNode(clusterManagerNode *node) {
             }
             continue;
         invalid_friend:
-            if (!(friend->flags & CLUSTER_MANAGER_FLAG_REPLICA)) cluster_manager.unreachable_primaries++;
-            freeClusterManagerNode(friend);
+            if (!(friend->flags & CLUSTER_MANAGER_FLAG_REPLICA)) {
+                cluster_manager.unreachable_primaries++;
+            }
+            if (include_unreachable) {
+                listAddNodeTail(cluster_manager.nodes, friend);
+            } else {
+                freeClusterManagerNode(friend);
+            }
         }
         listRelease(node->friends);
         node->friends = NULL;
@@ -5842,6 +5848,20 @@ static int clusterManagerLoadInfoFromNode(clusterManagerNode *node) {
         }
     }
     return 1;
+}
+
+/* Retrieves info about the cluster using argument 'node' as the starting
+ * point. Only reachable healthy nodes will be loaded.
+ * Returns 1 on success, 0 on failure. */
+static int clusterManagerLoadInfoFromNode(clusterManagerNode *node) {
+    return clusterManagerLoadInfoCommon(node, 0);
+}
+
+/* Retrieves info about the cluster using argument 'node' as the starting
+ * point. Loads all nodes from gossip regardless of their health status.
+ * Returns 1 on success, 0 on failure. */
+static int clusterManagerLoadAllInfoFromNode(clusterManagerNode *node) {
+    return clusterManagerLoadInfoCommon(node, 1);
 }
 
 /* Compare functions used by various sorting operations. */
@@ -7551,7 +7571,7 @@ static int clusterManagerCommandDeleteNode(int argc, char **argv) {
     clusterManagerNode *node = NULL;
 
     // Load cluster information
-    if (!clusterManagerLoadInfoFromNode(ref_node)) return 0;
+    if (!clusterManagerLoadAllInfoFromNode(ref_node)) return 0;
 
     // Check if the node exists and is not empty
     node = clusterManagerNodeByName(node_id);
@@ -7575,6 +7595,13 @@ static int clusterManagerCommandDeleteNode(int argc, char **argv) {
     while ((ln = listNext(&li)) != NULL) {
         clusterManagerNode *n = ln->value;
         if (n == node) continue;
+
+        /* Skip nodes without a valid connection. */
+        if (!n->context) {
+            clusterManagerLogInfo(">>> Skipping %s:%d (not connected)\n", n->ip, n->port);
+            continue;
+        }
+
         if (n->replicate && !strcasecmp(n->replicate, node_id)) {
             // Reconfigure the replica to replicate with some other node
             clusterManagerNode *primary = clusterManagerNodeWithLeastReplicas();
@@ -7591,12 +7618,19 @@ static int clusterManagerCommandDeleteNode(int argc, char **argv) {
         if (!success) return 0;
     }
 
-    /* Finally send CLUSTER RESET to the node. */
-    clusterManagerLogInfo(">>> Sending CLUSTER RESET SOFT to the "
-                          "deleted node.\n");
-    valkeyReply *r = valkeyCommand(node->context, "CLUSTER RESET %s", "SOFT");
-    success = clusterManagerCheckValkeyReply(node, r, NULL);
-    if (r) freeReplyObject(r);
+    /* Finally send CLUSTER RESET to the node if we have a connection. */
+    if (node->context != NULL) {
+        clusterManagerLogInfo(">>> Sending CLUSTER RESET SOFT to the "
+                              "deleted node.\n");
+        valkeyReply *r = valkeyCommand(node->context, "CLUSTER RESET %s", "SOFT");
+        success = clusterManagerCheckValkeyReply(node, r, NULL);
+        if (r) freeReplyObject(r);
+    } else {
+        clusterManagerLogWarn(">>> WARNING: Could not connect to node %s:%d, "
+                              "unable to send CLUSTER RESET.\n",
+                              node->ip ? node->ip : "(null)", node->port);
+    }
+    clusterManagerLogOk("[OK] Node %s removed from the cluster.\n", node_id);
     return success;
 invalid_args:
     fprintf(stderr, CLUSTER_MANAGER_INVALID_HOST_ARG);

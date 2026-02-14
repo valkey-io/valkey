@@ -92,6 +92,16 @@ static int upstreamRuntimeIsCurrentPrimary(const valkeyUpstreamRuntime *runtime)
     return !strcasecmp(runtime->host, server.primary_host) && runtime->port == server.primary_port;
 }
 
+static int upstreamEndpointIsSelf(const char *host, int port) {
+    if (host == NULL) return 0;
+    if (port != server.port && (server.tls_port == 0 || port != server.tls_port)) return 0;
+    if (!strcasecmp(host, "127.0.0.1") || !strcasecmp(host, "::1") || !strcasecmp(host, "localhost")) return 1;
+    for (int i = 0; i < server.bindaddr_count; i++) {
+        if (server.bindaddr[i] && !strcasecmp(host, server.bindaddr[i])) return 1;
+    }
+    return 0;
+}
+
 static valkeyUpstreamRuntime *findUpstreamRuntimeByLinkClient(const client *link_client) {
     if (server.upstream_runtime == NULL || link_client == NULL) return NULL;
     listIter li;
@@ -563,6 +573,7 @@ void replicationDetachUpstreamRuntimeClient(client *c) {
 static int addConfiguredUpstreamEndpoint(const char *host, int port) {
     if (server.upstreams == NULL || host == NULL) return C_ERR;
     if (port <= 0 || port > 65535) return C_ERR;
+    if (upstreamEndpointIsSelf(host, port)) return C_ERR;
     if (findConfiguredUpstreamNode(host, port) != NULL) {
         syncUpstreamRuntimeWithConfigured();
         return C_OK;
@@ -607,8 +618,15 @@ static int selectConfiguredUpstreamAsPrimary(int rotate) {
     }
 
     if (target == NULL) return C_ERR;
+    int scan = listLength(server.upstreams);
+    while (scan-- > 0) {
+        valkeyUpstream *candidate = listNodeValue(target);
+        if (candidate && candidate->host && !upstreamEndpointIsSelf(candidate->host, candidate->port)) break;
+        target = listNextNode(target);
+        if (target == NULL) target = listFirst(server.upstreams);
+    }
     valkeyUpstream *upstream = listNodeValue(target);
-    if (upstream == NULL || upstream->host == NULL) return C_ERR;
+    if (upstream == NULL || upstream->host == NULL || upstreamEndpointIsSelf(upstream->host, upstream->port)) return C_ERR;
 
     if (server.primary_host != NULL && !strcasecmp(server.primary_host, upstream->host) &&
         server.primary_port == upstream->port) {
@@ -752,7 +770,14 @@ void replicationApplyRdbConfiguredUpstreams(const rdbSaveInfo *rsi) {
      * when no legacy primary_host was restored. Pick a deterministic upstream
      * as current primary so replica role/connect logic and RREPLAY forwarding
      * are re-activated automatically. */
-    if (applied > 0 && server.multi_master && server.primary_host == NULL) {
+    int primary_invalid = server.primary_host == NULL ||
+                          upstreamEndpointIsSelf(server.primary_host, server.primary_port) ||
+                          findConfiguredUpstreamNode(server.primary_host, server.primary_port) == NULL;
+    if (applied > 0 && server.multi_master && primary_invalid) {
+        if (server.primary_host && upstreamEndpointIsSelf(server.primary_host, server.primary_port)) {
+            sdsfree(server.primary_host);
+            server.primary_host = NULL;
+        }
         if (selectConfiguredUpstreamAsPrimary(0) == C_OK && server.repl_state == REPL_STATE_NONE) {
             server.repl_state = REPL_STATE_CONNECT;
         }
@@ -1625,7 +1650,12 @@ void replicationFeedReplicas(int dictid, robj **argv, int argc) {
      * propagate *identical* replication stream. In this way this replica can
      * advertise the same replication ID as the primary (since it shares the
      * primary replication history and has the same backlog and offsets). */
-    if (server.primary_host != NULL) return;
+    int is_rreplay = (argc > 0 && argv != NULL && argv[0] != NULL && !strcasecmp(objectGetVal(argv[0]), "RREPLAY"));
+    int is_ping = (argc > 0 && argv != NULL && argv[0] != NULL && !strcasecmp(objectGetVal(argv[0]), "PING"));
+    if (server.primary_host != NULL &&
+        !(server.active_replica && server.multi_master && (is_rreplay || is_ping))) {
+        return;
+    }
 
     /* If there aren't replicas, and there is no backlog buffer to populate,
      * we can return ASAP. */
@@ -1759,7 +1789,6 @@ void replicationFeedPrimaryWithRReplay(int dictid, robj **argv, int argc) {
 
     client *targets[64];
     int ntargets = collectRReplayForwardTargets(targets, 64, NULL);
-    if (ntargets == 0) return;
 
     struct serverCommand *payload_cmd = lookupCommand(argv, argc);
     const char *reason = NULL;
@@ -1776,23 +1805,39 @@ void replicationFeedPrimaryWithRReplay(int dictid, robj **argv, int argc) {
     snprintf(replay_tie_break, sizeof(replay_tie_break), "%s:%llu", server.runid, replay_id);
     mvccStampCommandKeys(payload_cmd, argv, argc, dictid, mvcc_ts, replay_tie_break);
 
+    int frame_argc = argc + 5;
+    robj **frame_argv = zmalloc(sizeof(robj *) * frame_argc);
+    frame_argv[0] = createStringObject("RREPLAY", 7);
+    frame_argv[1] = createStringObject(server.runid, CONFIG_RUN_ID_SIZE);
+    frame_argv[2] = createStringObjectFromLongLong(dictid);
+    frame_argv[3] = createStringObjectFromLongLong((long long)replay_id);
+    frame_argv[4] = createStringObjectFromLongLong((long long)mvcc_ts);
+    for (int j = 0; j < argc; j++) {
+        frame_argv[j + 5] = argv[j];
+        incrRefCount(frame_argv[j + 5]);
+    }
+
+    /* In active-replica multi-master mode, RREPLAY frames must enter the local
+     * replication stream so reconnecting peers can PSYNC missed writes. */
+    replicationFeedReplicas(-1, frame_argv, frame_argc);
+
     for (int i = 0; i < ntargets; i++) {
         client *c = targets[i];
         if (c == NULL) continue;
         c->flag.primary_force_reply = 1;
-        addReplyArrayLen(c, argc + 5);
-        addReplyBulkCString(c, "RREPLAY");
-        addReplyBulkCString(c, server.runid);
-        addReplyBulkLongLong(c, dictid);
-        addReplyBulkLongLong(c, replay_id);
-        addReplyBulkLongLong(c, (long long)mvcc_ts);
-        for (int j = 0; j < argc; j++) {
-            addReplyBulk(c, argv[j]);
+        addReplyArrayLen(c, frame_argc);
+        for (int j = 0; j < frame_argc; j++) {
+            addReplyBulk(c, frame_argv[j]);
         }
         c->flag.primary_force_reply = 0;
         valkeyUpstreamRuntime *runtime = findUpstreamRuntimeByLinkClient(c);
         if (runtime) upstreamRuntimeTrackReplaySent(runtime, replay_id);
     }
+
+    for (int j = 0; j < frame_argc; j++) {
+        decrRefCount(frame_argv[j]);
+    }
+    zfree(frame_argv);
 }
 
 /* This is a debugging function that gets called when we detect something

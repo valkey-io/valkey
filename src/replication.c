@@ -72,6 +72,8 @@ void syncWithPrimary(connection *conn);
  * the instance is configured to have no persistence. */
 int RDBGeneratedByReplication = 0;
 
+#define MM_UPSTREAMS_STATE_FILENAME "repl-masters.local"
+
 /* --------------------------- Utility functions ---------------------------- */
 ConnectionType *connTypeOfReplication(void) {
     if (server.tls_replication) {
@@ -92,6 +94,9 @@ static int upstreamRuntimeIsCurrentPrimary(const valkeyUpstreamRuntime *runtime)
     return !strcasecmp(runtime->host, server.primary_host) && runtime->port == server.primary_port;
 }
 
+static int addConfiguredUpstreamEndpoint(const char *host, int port);
+static void clearConfiguredUpstreams(void);
+
 static int upstreamEndpointIsSelf(const char *host, int port) {
     if (host == NULL) return 0;
     if (port != server.port && (server.tls_port == 0 || port != server.tls_port)) return 0;
@@ -100,6 +105,113 @@ static int upstreamEndpointIsSelf(const char *host, int port) {
         if (server.bindaddr[i] && !strcasecmp(host, server.bindaddr[i])) return 1;
     }
     return 0;
+}
+
+static int mm_upstreams_state_io_in_progress = 0;
+
+static void persistConfiguredUpstreamsState(void) {
+    if (mm_upstreams_state_io_in_progress) return;
+
+    const char *state_file = MM_UPSTREAMS_STATE_FILENAME;
+    if (!server.multi_master || server.upstreams == NULL || listLength(server.upstreams) == 0) {
+        if (unlink(state_file) == -1 && errno != ENOENT) {
+            serverLog(LL_WARNING, "Unable to remove '%s': %s", state_file, strerror(errno));
+        }
+        return;
+    }
+
+    char tmp_file[128];
+    snprintf(tmp_file, sizeof(tmp_file), "%s.tmp", state_file);
+
+    FILE *fp = fopen(tmp_file, "w");
+    if (fp == NULL) {
+        serverLog(LL_WARNING, "Unable to open '%s' for writing: %s", tmp_file, strerror(errno));
+        return;
+    }
+
+    listIter li;
+    listNode *ln;
+    listRewind(server.upstreams, &li);
+    while ((ln = listNext(&li)) != NULL) {
+        valkeyUpstream *upstream = listNodeValue(ln);
+        if (upstream == NULL || upstream->host == NULL) continue;
+        if (upstreamEndpointIsSelf(upstream->host, upstream->port)) continue;
+        if (fprintf(fp, "%s|%d\n", upstream->host, upstream->port) < 0) {
+            serverLog(LL_WARNING, "Unable to write '%s': %s", tmp_file, strerror(errno));
+            fclose(fp);
+            unlink(tmp_file);
+            return;
+        }
+    }
+
+    if (fflush(fp) == EOF) {
+        serverLog(LL_WARNING, "Unable to flush '%s': %s", tmp_file, strerror(errno));
+        fclose(fp);
+        unlink(tmp_file);
+        return;
+    }
+    if (fsync(fileno(fp)) == -1) {
+        serverLog(LL_WARNING, "Unable to fsync '%s': %s", tmp_file, strerror(errno));
+        fclose(fp);
+        unlink(tmp_file);
+        return;
+    }
+    if (fclose(fp) == EOF) {
+        serverLog(LL_WARNING, "Unable to close '%s': %s", tmp_file, strerror(errno));
+        unlink(tmp_file);
+        return;
+    }
+    if (rename(tmp_file, state_file) == -1) {
+        serverLog(LL_WARNING, "Unable to rename '%s' to '%s': %s", tmp_file, state_file, strerror(errno));
+        unlink(tmp_file);
+        return;
+    }
+}
+
+static int loadConfiguredUpstreamsState(void) {
+    if (!server.multi_master) return 0;
+
+    const char *state_file = MM_UPSTREAMS_STATE_FILENAME;
+    FILE *fp = fopen(state_file, "r");
+    if (fp == NULL) {
+        if (errno != ENOENT) {
+            serverLog(LL_WARNING, "Unable to open '%s' for reading: %s", state_file, strerror(errno));
+        }
+        return 0;
+    }
+
+    mm_upstreams_state_io_in_progress = 1;
+    clearConfiguredUpstreams();
+
+    int loaded = 0;
+    char line[512];
+    while (fgets(line, sizeof(line), fp) != NULL) {
+        size_t linelen = strlen(line);
+        while (linelen > 0 && (line[linelen - 1] == '\n' || line[linelen - 1] == '\r')) {
+            line[--linelen] = '\0';
+        }
+        if (linelen == 0) continue;
+
+        char *sep = strrchr(line, '|');
+        if (sep == NULL || sep == line || *(sep + 1) == '\0') continue;
+        *sep = '\0';
+
+        long long port_ll = 0;
+        if (!string2ll(sep + 1, strlen(sep + 1), &port_ll) || port_ll <= 0 || port_ll > 65535) continue;
+        if (addConfiguredUpstreamEndpoint(line, (int)port_ll) == C_OK) {
+            loaded++;
+        }
+    }
+
+    if (fclose(fp) == EOF) {
+        serverLog(LL_WARNING, "Unable to close '%s': %s", state_file, strerror(errno));
+    }
+    mm_upstreams_state_io_in_progress = 0;
+
+    if (loaded == 0) {
+        clearConfiguredUpstreams();
+    }
+    return loaded;
 }
 
 static valkeyUpstreamRuntime *findUpstreamRuntimeByLinkClient(const client *link_client) {
@@ -584,6 +696,7 @@ static int addConfiguredUpstreamEndpoint(const char *host, int port) {
     upstream->port = port;
     listAddNodeTail(server.upstreams, upstream);
     syncUpstreamRuntimeWithConfigured();
+    persistConfiguredUpstreamsState();
     return C_OK;
 }
 
@@ -594,6 +707,7 @@ static int removeConfiguredUpstreamEndpoint(const char *host, int port) {
     listDelNode(server.upstreams, ln);
     removeUpstreamRuntimeEntry(host, port);
     syncUpstreamRuntimeWithConfigured();
+    persistConfiguredUpstreamsState();
     return C_OK;
 }
 
@@ -652,6 +766,7 @@ static void clearConfiguredUpstreams(void) {
     }
     listEmpty(server.upstreams);
     clearUpstreamRuntimeEntries();
+    persistConfiguredUpstreamsState();
 }
 
 /* Keep the new upstream list aligned with the legacy single-primary state.
@@ -744,8 +859,30 @@ static int decodeRdbUpstreamRuntime(sds encoded, sds *host, int *port,
 }
 
 void replicationApplyRdbConfiguredUpstreams(const rdbSaveInfo *rsi) {
-    if (rsi == NULL || rsi->repl_masters_count <= 0 || rsi->repl_masters == NULL) return;
     if (server.upstreams == NULL) return;
+
+    /* Prefer node-local upstream state persisted alongside RDB.
+     * A replica full-sync replaces dump.rdb with a peer-generated snapshot;
+     * that snapshot's repl-masters are peer-relative and can collapse the local
+     * endpoint set after restart. */
+    if (loadConfiguredUpstreamsState() > 0) {
+        int primary_invalid = server.primary_host == NULL ||
+                              upstreamEndpointIsSelf(server.primary_host, server.primary_port) ||
+                              findConfiguredUpstreamNode(server.primary_host, server.primary_port) == NULL;
+        if (server.multi_master && primary_invalid) {
+            if (server.primary_host && upstreamEndpointIsSelf(server.primary_host, server.primary_port)) {
+                sdsfree(server.primary_host);
+                server.primary_host = NULL;
+            }
+            if (selectConfiguredUpstreamAsPrimary(0) == C_OK && server.repl_state == REPL_STATE_NONE) {
+                server.repl_state = REPL_STATE_CONNECT;
+            }
+        }
+        syncUpstreamRuntimeWithConfigured();
+        return;
+    }
+
+    if (rsi == NULL || rsi->repl_masters_count <= 0 || rsi->repl_masters == NULL) return;
 
     /* During replica full-sync in multi-master mode, keep the local upstream
      * endpoint set. Importing repl-masters from a remote peer is topology-
@@ -791,6 +928,7 @@ void replicationApplyRdbConfiguredUpstreams(const rdbSaveInfo *rsi) {
     }
 
     syncUpstreamRuntimeWithConfigured();
+    persistConfiguredUpstreamsState();
 }
 
 void replicationApplyRdbUpstreamRuntimeState(const rdbSaveInfo *rsi) {

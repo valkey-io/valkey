@@ -1761,9 +1761,49 @@ static int collectRReplayForwardTargets(client **targets, int max_targets, clien
     return count;
 }
 
+/* Encode argv/argc as one RESP array frame for reuse across multiple targets. */
+static sds encodeRespCommandFromArgv(robj **argv, int argc) {
+    if (argv == NULL || argc <= 0) return NULL;
+
+    sds out = sdsempty();
+    char aux[LONG_STR_SIZE + 3];
+
+    aux[0] = '*';
+    int len = ll2string(aux + 1, sizeof(aux) - 1, argc);
+    aux[len + 1] = '\r';
+    aux[len + 2] = '\n';
+    out = sdscatlen(out, aux, len + 3);
+
+    for (int j = 0; j < argc; j++) {
+        long objlen = stringObjectLen(argv[j]);
+
+        aux[0] = '$';
+        len = ll2string(aux + 1, sizeof(aux) - 1, objlen);
+        aux[len + 1] = '\r';
+        aux[len + 2] = '\n';
+        out = sdscatlen(out, aux, len + 3);
+
+        if (argv[j]->encoding == OBJ_ENCODING_INT) {
+            char llstr[LONG_STR_SIZE];
+            size_t llen = ll2string(llstr, sizeof(llstr), (long)objectGetVal(argv[j]));
+            out = sdscatlen(out, llstr, llen);
+        } else {
+            out = sdscatlen(out, objectGetVal(argv[j]), sdslen(objectGetVal(argv[j])));
+        }
+        out = sdscatlen(out, "\r\n", 2);
+    }
+
+    return out;
+}
+
 static void forwardRawRReplayFrameToUpstreams(robj **argv, int argc, client *exclude) {
     client *targets[64];
     int ntargets = collectRReplayForwardTargets(targets, 64, exclude);
+    if (ntargets <= 0) return;
+
+    sds frame = encodeRespCommandFromArgv(argv, argc);
+    if (frame == NULL) return;
+
     unsigned long long replay_id = 0;
     if (argc > 3) {
         long long replay_id_ll = 0;
@@ -1775,16 +1815,14 @@ static void forwardRawRReplayFrameToUpstreams(robj **argv, int argc, client *exc
         client *target = targets[i];
         if (target == NULL) continue;
         target->flag.primary_force_reply = 1;
-        addReplyArrayLen(target, argc);
-        for (int j = 0; j < argc; j++) {
-            addReplyBulk(target, argv[j]);
-        }
+        addReplyProto(target, frame, sdslen(frame));
         target->flag.primary_force_reply = 0;
         if (replay_id > 0) {
             valkeyUpstreamRuntime *runtime = findUpstreamRuntimeByLinkClient(target);
             if (runtime) upstreamRuntimeTrackReplaySent(runtime, replay_id);
         }
     }
+    sdsfree(frame);
 }
 
 /* Encapsulate a locally generated command and send it upstream to the
@@ -1828,18 +1866,17 @@ void replicationFeedPrimaryWithRReplay(int dictid, robj **argv, int argc) {
      * replication stream so reconnecting peers can PSYNC missed writes. */
     replicationFeedReplicas(-1, frame_argv, frame_argc);
 
+    sds frame = encodeRespCommandFromArgv(frame_argv, frame_argc);
     for (int i = 0; i < ntargets; i++) {
         client *c = targets[i];
         if (c == NULL) continue;
         c->flag.primary_force_reply = 1;
-        addReplyArrayLen(c, frame_argc);
-        for (int j = 0; j < frame_argc; j++) {
-            addReplyBulk(c, frame_argv[j]);
-        }
+        if (frame) addReplyProto(c, frame, sdslen(frame));
         c->flag.primary_force_reply = 0;
         valkeyUpstreamRuntime *runtime = findUpstreamRuntimeByLinkClient(c);
         if (runtime) upstreamRuntimeTrackReplaySent(runtime, replay_id);
     }
+    if (frame) sdsfree(frame);
 
     for (int j = 0; j < frame_argc; j++) {
         decrRefCount(frame_argv[j]);

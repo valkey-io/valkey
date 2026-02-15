@@ -747,7 +747,14 @@ void replicationApplyRdbConfiguredUpstreams(const rdbSaveInfo *rsi) {
     if (rsi == NULL || rsi->repl_masters_count <= 0 || rsi->repl_masters == NULL) return;
     if (server.upstreams == NULL) return;
 
-    clearConfiguredUpstreams();
+    /* During replica full-sync in multi-master mode, keep the local upstream
+     * endpoint set. Importing repl-masters from a remote peer is topology-
+     * relative and can drop valid local peers (for example when one entry maps
+     * to self on this node). */
+    if (server.multi_master && server.primary != NULL) {
+        syncUpstreamRuntimeWithConfigured();
+        return;
+    }
 
     int applied = 0;
     for (int i = 0; i < rsi->repl_masters_count; i++) {
@@ -762,7 +769,7 @@ void replicationApplyRdbConfiguredUpstreams(const rdbSaveInfo *rsi) {
         sdsfree(host);
     }
 
-    if (applied == 0 && server.primary_host != NULL) {
+    if (applied == 0 && listLength(server.upstreams) == 0 && server.primary_host != NULL) {
         refreshConfiguredUpstreamsFromPrimary();
     }
 
@@ -909,9 +916,9 @@ static int rreplayDedupKeyIsValid(sds dedup_key) {
 void replicationApplyRdbRReplaySeen(const rdbSaveInfo *rsi) {
     if (server.rreplay_seen == NULL || server.rreplay_seen_order == NULL) return;
 
-    dictEmpty(server.rreplay_seen, NULL);
-    listEmpty(server.rreplay_seen_order);
-
+    /* Merge persisted dedupe keys on top of in-memory state instead of
+     * replacing it. During multi-master reconnect/full-sync churn, preserving
+     * recent in-memory keys avoids replay storms of already seen frames. */
     if (rsi == NULL || rsi->rreplay_seen_count <= 0 || rsi->rreplay_seen_entries == NULL) return;
 
     for (int i = 0; i < rsi->rreplay_seen_count; i++) {
@@ -1651,8 +1658,9 @@ void replicationFeedReplicas(int dictid, robj **argv, int argc) {
      * advertise the same replication ID as the primary (since it shares the
      * primary replication history and has the same backlog and offsets). */
     int is_rreplay = (argc > 0 && argv != NULL && argv[0] != NULL && !strcasecmp(objectGetVal(argv[0]), "RREPLAY"));
-    if (server.primary_host != NULL &&
-        !(server.active_replica && server.multi_master && is_rreplay)) {
+    int is_ping = (argc == 1 && argv != NULL && argv[0] != NULL && !strcasecmp(objectGetVal(argv[0]), "PING"));
+    int mm_allowed = (server.active_replica && server.multi_master && (is_rreplay || is_ping));
+    if (server.primary_host != NULL && !mm_allowed) {
         return;
     }
 
@@ -2007,6 +2015,28 @@ long long addReplyReplicationBacklog(client *c, long long offset) {
     return server.repl_backlog->histlen - skip;
 }
 
+/* Read one byte from the replication backlog at absolute replication offset.
+ * Returns C_OK if the byte exists in backlog history, else C_ERR. */
+static int replicationBacklogByteAtOffset(long long offset, unsigned char *out) {
+    if (out == NULL || server.repl_backlog == NULL) return C_ERR;
+    if (offset < server.repl_backlog->offset) return C_ERR;
+    if (offset >= server.repl_backlog->offset + server.repl_backlog->histlen) return C_ERR;
+
+    listNode *node = server.repl_backlog->ref_repl_buf_node;
+    while (node != NULL) {
+        replBufBlock *o = listNodeValue(node);
+        long long block_start = o->repl_offset;
+        long long block_end = o->repl_offset + (long long)o->used;
+        if (offset >= block_start && offset < block_end) {
+            long long pos = offset - block_start;
+            *out = (unsigned char)o->buf[pos];
+            return C_OK;
+        }
+        node = listNextNode(node);
+    }
+    return C_ERR;
+}
+
 /* Return the offset to provide as reply to the PSYNC command received
  * from the replica. The returned value is only valid immediately after
  * the BGSAVE process started and before executing any other command
@@ -2115,6 +2145,21 @@ int primaryTryPartialResynchronization(client *c, long long psync_offset) {
                       replicationGetReplicaName(c), psync_offset, server.primary_repl_offset);
         }
         goto need_full_resync;
+    }
+
+    /* Partial resync must start at a RESP command boundary. If requested
+     * offset points inside a command frame, sending backlog tail would
+     * desync replica parser immediately. */
+    long long backlog_end = server.repl_backlog->offset + server.repl_backlog->histlen;
+    if (psync_offset < backlog_end) {
+        unsigned char first_byte = 0;
+        if (replicationBacklogByteAtOffset(psync_offset, &first_byte) != C_OK || first_byte != '*') {
+            serverLog(LL_NOTICE,
+                      "Partial resynchronization not accepted: requested offset %lld is not at a command boundary "
+                      "(byte=0x%02x). Forcing full resync.",
+                      psync_offset, (unsigned int)first_byte);
+            goto need_full_resync;
+        }
     }
 
     /* There are two scenarios that lead to this point. One is that we are able
@@ -2810,10 +2855,15 @@ void rreplayCommand(client *c) {
     int from_replica_link = c->flag.replica;
     int from_peer_link = clientIsRReplayPeerLink(c);
     valkeyUpstreamRuntime *peer_runtime = from_peer_link ? findUpstreamRuntimeByLinkClient(c) : NULL;
+    int from_runtime_peer_link = (peer_runtime != NULL);
     if (!from_primary_link && !from_replica_link && !from_peer_link) {
         addReplyError(c, "RREPLAY is only accepted from replication or peer-forward links");
         return;
     }
+
+    /* RREPLAY handles fan-out explicitly below; avoid auto-propagating the
+     * wrapper command again via call() dirty accounting. */
+    preventCommandPropagation(c);
 
     if (c->argc < 5) {
         serverLog(LL_WARNING, "Invalid RREPLAY from primary: missing payload command");
@@ -2855,7 +2905,7 @@ void rreplayCommand(client *c) {
         if (from_primary_link) {
             c->flag.skip_repl_stream_propagation = 1;
         }
-        if (from_peer_link) addReplyLongLong(c, replay_id_ll);
+        if (from_runtime_peer_link) addReplyLongLong(c, replay_id_ll);
         return;
     }
 
@@ -2863,7 +2913,7 @@ void rreplayCommand(client *c) {
         if (from_primary_link) {
             c->flag.skip_repl_stream_propagation = 1;
         }
-        if (from_peer_link) addReplyLongLong(c, replay_id_ll);
+        if (from_runtime_peer_link) addReplyLongLong(c, replay_id_ll);
         return;
     }
 
@@ -2928,7 +2978,7 @@ void rreplayCommand(client *c) {
         if (from_primary_link) {
             c->flag.skip_repl_stream_propagation = 1;
         }
-        if (from_peer_link) addReplyLongLong(c, replay_id_ll);
+        if (from_runtime_peer_link) addReplyLongLong(c, replay_id_ll);
         return;
     }
 
@@ -2988,10 +3038,12 @@ void rreplayCommand(client *c) {
      * relaying by proxying the already-applied stream bytes. */
     if (!server.multi_master_no_forward && (from_replica_link || from_peer_link)) {
         replicationFeedReplicas(-1, outer_argv, outer_argc);
+    }
+    if (!server.multi_master_no_forward && (from_replica_link || from_peer_link)) {
         forwardRawRReplayFrameToUpstreams(outer_argv, outer_argc, c);
     }
 
-    if (from_peer_link) addReplyLongLong(c, replay_id_ll);
+    if (from_runtime_peer_link) addReplyLongLong(c, replay_id_ll);
 
     return;
 }

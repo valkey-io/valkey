@@ -170,6 +170,25 @@ jobs:
       - name: show-kernel-log
         run: sudo dmesg -c
 
+  test-tls-only:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: generate-test-certificates
+        run: ./utils/gen-test-certs.sh
+      - name: install-test-dependencies
+        run: sudo apt-get install -y tcl8.6 tclx tcl-tls
+      - name: make-tls-module
+        run: make -j4 BUILD_TLS=module SERVER_CFLAGS='-Werror'
+      - name: test-tls-module
+        run: ./runtest --verbose --single unit/tls --dump-logs --tls-module
+      - name: make-tls-builtin
+        run: |
+          make distclean
+          make -j4 BUILD_TLS=yes SERVER_CFLAGS='-Werror'
+      - name: test-tls-builtin
+        run: ./runtest --verbose --single unit/tls --dump-logs --tls
+
   build-debian-old:
     runs-on: ubuntu-latest
     container: debian:bullseye

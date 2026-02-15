@@ -3584,7 +3584,10 @@ static int shouldForwardToPrimaryViaRReplay(int target) {
     if (server.primary_host == NULL || server.primary == NULL || server.repl_state != REPL_STATE_CONNECTED) return 0;
     if (server.loading) return 0;
     if (server.current_client == NULL) return 0;
-    if (isReplicatedClient(server.current_client)) return 0;
+    /* Never re-wrap traffic that already arrived on replication links. In MM
+     * peer-forward mode, RREPLAY frames come from replica links (rreplay-peer),
+     * not only from the primary link. */
+    if (server.current_client->flag.primary || server.current_client->flag.replica) return 0;
     if (server.current_client->slot_migration_job) return 0;
     return 1;
 }

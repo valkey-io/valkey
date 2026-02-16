@@ -1640,10 +1640,18 @@ jobs:
         with:
           repository: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && env.GITHUB_REPOSITORY) || github.repository }}
           ref: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && env.GITHUB_HEAD_REF) || github.ref }}
-      - name: make
+      - name: Install libbacktrace
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: ianlancetaylor/libbacktrace
+          ref: b9e40069c0b47a722286b94eb5231f7f05c08713
+          path: libbacktrace
+      - name: Build libbacktrace
         run: |
-          apk add build-base libbacktrace-dev
-          make SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes
+          apk add build-base git
+          cd libbacktrace && ./configure && make && make install
+      - name: make
+        run: make SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes
       - name: testprep
         run: apk add tcl procps tclx
       - name: test
@@ -1685,10 +1693,18 @@ jobs:
         with:
           repository: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && env.GITHUB_REPOSITORY) || github.repository }}
           ref: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && env.GITHUB_HEAD_REF) || github.ref }}
-      - name: make
+      - name: Install libbacktrace
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: ianlancetaylor/libbacktrace
+          ref: b9e40069c0b47a722286b94eb5231f7f05c08713
+          path: libbacktrace
+      - name: Build libbacktrace
         run: |
-          apk add build-base libbacktrace-dev
-          make SERVER_CFLAGS='-Werror' USE_JEMALLOC=no CFLAGS=-DUSE_MALLOC_USABLE_SIZE USE_LIBBACKTRACE=yes
+          apk add build-base git
+          cd libbacktrace && ./configure && make && make install
+      - name: make
+        run: make SERVER_CFLAGS='-Werror' USE_JEMALLOC=no CFLAGS=-DUSE_MALLOC_USABLE_SIZE USE_LIBBACKTRACE=yes
       - name: testprep
         run: apk add tcl procps tclx
       - name: test

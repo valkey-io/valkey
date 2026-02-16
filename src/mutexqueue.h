@@ -63,4 +63,7 @@ void *mutexQueuePop(mutexQueue *theQueue, bool blocking);
 /* Retrieves all items from the mutexQueue as a fifo (or NULL if the mutexQueue is empty). */
 fifo *mutexQueuePopAll(mutexQueue *theQueue, bool blocking);
 
+/* Retrieves the first item without removing it (or NULL if mutexQueue is empty). */
+void *mutexQueuePeek(mutexQueue *theQueue, bool blocking);
+
 #endif

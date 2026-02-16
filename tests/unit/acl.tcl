@@ -1257,7 +1257,7 @@ start_server [list overrides [list "dir" $server_path "aclfile" "user.acl"] tags
 }
 
 set testmodule [file normalize tests/modules/subcommands.so]
-start_server {tags {acl external:skip}} {
+start_server {tags {acl modules external:skip}} {
     r module load $testmodule
 
     test {Module unload blocked by ACL subcommand rule} {

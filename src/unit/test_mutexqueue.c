@@ -82,8 +82,8 @@ int test_mutexQueuePriorityOrdering(int argc, char *argv[], int flags) {
     return 0;
 }
 
-/* Test: peekAndRemoveHead */
-int test_mutexQueuePeekAndRemoveHead(int argc, char *argv[], int flags) {
+/* Test: peek */
+int test_mutexQueuePeek(int argc, char *argv[], int flags) {
     UNUSED(argc);
     UNUSED(argv);
     UNUSED(flags);

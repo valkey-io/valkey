@@ -38,7 +38,6 @@ const char *module_name = "helloextdata1";
 
 /* Backup ID v0 format constants */
 #define BACKUP_ID_VERSION_0 0
-#define BACKUP_ID_MIN_SLOT -1
 #define BACKUP_ID_MAX_SLOT 16383
 
 static char node_id[NODE_ID_MAX_LEN] = {0};  /* Unique node identifier */
@@ -131,7 +130,7 @@ static int parseBackupIdV0(ValkeyModuleCtx *module_ctx,
     }
     
     /* Validate slot range */
-    if (slot_val < BACKUP_ID_MIN_SLOT || slot_val > BACKUP_ID_MAX_SLOT) {
+    if (slot_val < EXTERNAL_ALL_SLOTS || slot_val > BACKUP_ID_MAX_SLOT) {
         return EXTERNAL_ERROR;
     }
     
@@ -1436,7 +1435,7 @@ static int filterLoadFunction(ValkeyModuleCtx *module_ctx,
     ValkeyModuleString *backup_id_to_use = backup_id;
     ValkeyModuleString *created_backup_id = NULL;
     char source_node_id[NODE_ID_MAX_LEN];
-    int parsed_slot = -1;
+    int parsed_slot = EXTERNAL_ALL_SLOTS;
     long long parsed_timestamp = 0;
     
     /* First, check if we need auto-discovery */
@@ -1718,7 +1717,7 @@ static int storageLoadFunction(ValkeyModuleCtx *module_ctx,
     ValkeyModuleString *backup_id_to_use = backup_id;
     ValkeyModuleString *created_backup_id = NULL;
     char source_node_id[NODE_ID_MAX_LEN];
-    int parsed_slot = -1;
+    int parsed_slot = EXTERNAL_ALL_SLOTS;
     long long parsed_timestamp = 0;
     
     /* First, check if we need auto-discovery */
@@ -2500,13 +2499,14 @@ static const char *get_backup_id(ValkeyModuleCtx *ctx, const char *address) {
     /* Construct v0-format backup_id: v0:<node_id>:-1:0
      * -1 = all slots (standalone mode), 0 = find most recent timestamp */
     static char backup_id_buf[256];
-    snprintf(backup_id_buf, sizeof(backup_id_buf), "v0:%s:-1:0", node_id);
+    snprintf(backup_id_buf, sizeof(backup_id_buf), "v0:%s:%d:0", node_id, EXTERNAL_ALL_SLOTS);
     
     ValkeyModule_Log(ctx, "notice", "get_backup_id: address=%s -> backup_id=%s",
                      address, backup_id_buf);
     
     return backup_id_buf;
 }
+
 /* Test command for backup ID parsing */
 int TestBackupIdCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     if (argc != 2) {

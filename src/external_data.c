@@ -1449,9 +1449,8 @@ void externalDataLoadCommand(client *c) {
         return;
     }
 
-    /* Propagate to replicas and AOF so they also load the external data */
     server.dirty++;
-    forceCommandPropagation(c, PROPAGATE_REPL | PROPAGATE_AOF);
+    forceCommandPropagation(c, PROPAGATE_REPL);
 
     addReply(c, shared.ok);
 }

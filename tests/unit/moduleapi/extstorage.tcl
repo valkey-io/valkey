@@ -10,6 +10,122 @@ proc cleanup_external_data_dump {client} {
     exec sh -c {rm -rf /tmp/external_data}
 }
 
+proc scan_keys {cur type match {storage ""}} {
+    set keys {}
+    set k {}
+    while 1 {
+        if {$storage != ""} {
+            set res [r scan $cur type $type match $match $storage]
+        } else {
+            set res [r scan $cur type $type match $match]
+        }
+        set cur [lindex $res 0]
+        set k [lindex $res 1]
+        lappend keys {*}$k
+        if {$cur == 0} break
+    }
+    return $keys
+}
+
+proc gen_data {size} {
+    set data ""
+    for {set i 0} {$i < $size} {incr i} {
+        append data "a"
+    }
+    return $data
+}
+
+# Helper to setup a cluster with primaries and optional replicas
+# primaries: list of primary clients
+# replicas_dict: dict mapping replica client to primary index in the primaries list
+proc setup_ready_cluster {primaries replicas_dict} {
+    set num_primaries [llength $primaries]
+    
+    # Get all node IDs
+    set primary_ids {}
+    foreach primary $primaries {
+        lappend primary_ids [$primary CLUSTER MYID]
+    }
+    
+    # Set config epochs for all nodes (primaries first, then replicas)
+    set epoch 1
+    foreach primary $primaries {
+        $primary CLUSTER SET-CONFIG-EPOCH $epoch
+        incr epoch
+    }
+    dict for {replica primary_idx} $replicas_dict {
+        $replica CLUSTER SET-CONFIG-EPOCH $epoch
+        incr epoch
+    }
+    
+    # Distribute slots equally among primaries
+    set slots_per_primary [expr {16384 / $num_primaries}]
+    set slot 0
+    for {set i 0} {$i < $num_primaries} {incr i} {
+        set primary [lindex $primaries $i]
+        set end_slot [expr {($i == $num_primaries - 1) ? 16383 : ($slot + $slots_per_primary - 1)}]
+        $primary CLUSTER ADDSLOTSRANGE $slot $end_slot
+        set slot [expr {$end_slot + 1}]
+    }
+    
+    # Form cluster: all nodes meet the first primary
+    set first_primary [lindex $primaries 0]
+    set first_port [lindex [$first_primary CONFIG GET port] 1]
+    
+    for {set i 1} {$i < $num_primaries} {incr i} {
+        set primary [lindex $primaries $i]
+        $primary CLUSTER MEET 127.0.0.1 $first_port
+    }
+    
+    dict for {replica primary_idx} $replicas_dict {
+        $replica CLUSTER MEET 127.0.0.1 $first_port
+    }
+    
+    after 100
+    
+    # Set up replication relationships
+    dict for {replica primary_idx} $replicas_dict {
+        set primary_id [lindex $primary_ids $primary_idx]
+        $replica CLUSTER REPLICATE $primary_id
+    }
+    
+    # Wait for all nodes to be ready
+    foreach primary $primaries {
+        wait_for_condition 50 100 {
+            [catch {$primary CLUSTER INFO}] == 0 &&
+            [string match "*cluster_state:ok*" [$primary CLUSTER INFO]]
+        } else {
+            fail "Cluster primary did not become ready"
+        }
+    }
+    
+    dict for {replica primary_idx} $replicas_dict {
+        wait_for_condition 50 100 {
+            [catch {$replica CLUSTER INFO}] == 0 &&
+            [string match "*cluster_state:ok*" [$replica CLUSTER INFO]]
+        } else {
+            fail "Cluster replica did not become ready"
+        }
+    }
+    
+    # Wait for replicas to connect to primaries
+    dict for {replica primary_idx} $replicas_dict {
+        wait_for_condition 50 100 {
+            [string match "*master_link_status:up*" [$replica INFO replication]]
+        } else {
+            fail "Replica did not connect to primary"
+        }
+    }
+    
+    # Cleanup
+    foreach primary $primaries {
+        cleanup_external_data_dump $primary
+    }
+    dict for {replica primary_idx} $replicas_dict {
+        cleanup_external_data_dump $replica
+    }
+}
+
 start_server {tags {"external_data external:skip"}} {
     test {Running EXTERNAL_DATA commands with switched off external data fails} {
         assert_error $ext_data_off_err {r external_data init db0 helloextdata1}
@@ -208,82 +324,6 @@ start_server [list overrides [list "ext-data-mode" kv "ext-data-id" id5 "logleve
         assert_equal {} [r get k ext]
         assert_equal {OK} [r select 0]
     }
-}
-
-proc scan_keys {cur type match {storage ""}} {
-    set keys {}
-    set k {}
-    while 1 {
-        if {$storage != ""} {
-            set res [r scan $cur type $type match $match $storage]
-        } else {
-            set res [r scan $cur type $type match $match]
-        }
-        set cur [lindex $res 0]
-        set k [lindex $res 1]
-        lappend keys {*}$k
-        if {$cur == 0} break
-    }
-    return $keys
-}
-
-proc gen_data {size} {
-    set data ""
-    for {set i 0} {$i < $size} {incr i} {
-        append data "a"
-    }
-    return $data
-}
-
-# Helper to setup a 2-node cluster (1 primary + 1 replica)
-proc setup_two_node_cluster {primary replica} {
-    set primary_port [$primary CONFIG GET port]
-    set primary_port [lindex $primary_port 1]
-    
-    # Get cluster node IDs
-    set primary_id [$primary CLUSTER MYID]
-    set replica_id [$replica CLUSTER MYID]
-    
-    # Set config epochs BEFORE meeting
-    $primary CLUSTER SET-CONFIG-EPOCH 1
-    $replica CLUSTER SET-CONFIG-EPOCH 2
-    
-    # Distribute slots: primary gets all slots
-    for {set slot 0} {$slot < 16384} {incr slot} {
-        $primary CLUSTER ADDSLOTS $slot
-    }
-    
-    # Form cluster: replica meets primary
-    $replica CLUSTER MEET 127.0.0.1 $primary_port
-    after 100
-    
-    # Set replica
-    $replica CLUSTER REPLICATE $primary_id
-    
-    # Wait for cluster to be ready
-    wait_for_condition 50 100 {
-        [catch {$primary CLUSTER INFO}] == 0 &&
-        [string match "*cluster_state:ok*" [$primary CLUSTER INFO]]
-    } else {
-        fail "Cluster primary did not become ready"
-    }
-    
-    wait_for_condition 50 100 {
-        [catch {$replica CLUSTER INFO}] == 0 &&
-        [string match "*cluster_state:ok*" [$replica CLUSTER INFO]]
-    } else {
-        fail "Cluster replica did not become ready"
-    }
-    
-    # Wait for initial replication to complete
-    wait_for_condition 50 100 {
-        [string match "*master_link_status:up*" [$replica INFO replication]]
-    } else {
-        fail "Replica did not connect to primary"
-    }
-    
-    cleanup_external_data_dump $primary
-    cleanup_external_data_dump $replica
 }
 
 start_server [list overrides [list "ext-data-mode" kv "ext-data-id" id67 "loglevel" debug] tags [list "external:skip" "singledb:skip"]] {
@@ -2786,8 +2826,8 @@ start_server [list overrides [list "cluster-enabled" yes "cluster-ping-interval"
             set primary_port [srv -1 port]
 
         cleanup_external_data_dump $primary
-        cleanup_external_data_dump $replica            
-            setup_two_node_cluster $primary $replica
+        cleanup_external_data_dump $replica
+            setup_ready_cluster [list $primary] [dict create $replica 0]
             
             wait_for_cluster_propagation
             
@@ -2875,7 +2915,7 @@ start_server [list overrides [list "cluster-enabled" yes "cluster-ping-interval"
 
         cleanup_external_data_dump $primary
         cleanup_external_data_dump $replica
-            setup_two_node_cluster $primary $replica
+            setup_ready_cluster [list $primary] [dict create $replica 0]
 
         # Load module and initialize external storage
         assert_equal {OK} [$primary module load $extdatamodule1]
@@ -3224,7 +3264,7 @@ start_server [list overrides [list "cluster-enabled" yes "cluster-ping-interval"
 
         cleanup_external_data_dump $primary
         cleanup_external_data_dump $replica
-            setup_two_node_cluster $primary $replica
+            setup_ready_cluster [list $primary] [dict create $replica 0]
         
         # Verify ext-data-async-load is disabled
         set config_result [$replica config get ext-data-async-load]
@@ -3380,7 +3420,7 @@ start_server [list overrides [list "cluster-enabled" yes "cluster-ping-interval"
             set primary [srv -1 client]
             set replica [srv 0 client]
             
-            setup_two_node_cluster $primary $replica
+            setup_ready_cluster [list $primary] [dict create $replica 0]
 
         cleanup_external_data_dump $primary
         cleanup_external_data_dump $replica
@@ -3539,7 +3579,7 @@ start_server [list overrides [list "cluster-enabled" yes "cluster-ping-interval"
 
         cleanup_external_data_dump $primary
         cleanup_external_data_dump $replica
-            setup_two_node_cluster $primary $replica
+            setup_ready_cluster [list $primary] [dict create $replica 0]
         
         # Load module on primary without failures
         assert_equal {OK} [$primary module load $extdatamodule1]
@@ -3622,51 +3662,18 @@ test {Cluster slot migration maintains node_id and data integrity} {
     
     # Start first node with ext-data-id id1
     start_server [list overrides [list "cluster-enabled" yes "cluster-ping-interval" 50 "cluster-node-timeout" 1500 "cluster-databases" 16 "cluster-slot-stats-enabled" yes "ext-data-mode" kv "ext-data-id" id51 "loglevel" notice] tags [list "external:skip"]] {
-        set node1_port [srv 0 port]
         set node1 [srv 0 client]
         
         # Start second node with ext-data-id id2
         start_server [list overrides [list "cluster-enabled" yes "cluster-ping-interval" 50 "cluster-node-timeout" 1500 "cluster-databases" 16 "cluster-slot-stats-enabled" yes "ext-data-mode" kv "ext-data-id" id74 "loglevel" notice] tags [list "external:skip"]] {
-            set node2_port [srv 0 port]
             set node2 [srv 0 client]
             
-            # Get cluster node IDs
+            # Setup two-primary cluster with no replicas (slots distributed equally: 0-8191 to node1, 8192-16383 to node2)
+            setup_ready_cluster [list $node1 $node2] [dict create]
+            
+            # Get cluster node IDs after cluster setup
             set node1_id [$node1 CLUSTER MYID]
             set node2_id [$node2 CLUSTER MYID]
-            
-            # Set config epochs BEFORE meeting
-            $node1 CLUSTER SET-CONFIG-EPOCH 1
-            $node2 CLUSTER SET-CONFIG-EPOCH 2
-            
-            # Form cluster: meet nodes
-            $node1 CLUSTER MEET 127.0.0.1 $node2_port
-            after 100
-            
-            # Distribute slots: node1 gets 0-8191, node2 gets 8192-16383
-            for {set slot 0} {$slot < 8192} {incr slot} {
-                $node1 CLUSTER ADDSLOTS $slot
-            }
-            for {set slot 8192} {$slot < 16384} {incr slot} {
-                $node2 CLUSTER ADDSLOTS $slot
-            }
-            
-            # Wait for cluster to be ready
-            wait_for_condition 50 100 {
-                [catch {$node1 CLUSTER INFO}] == 0 &&
-                [string match "*cluster_state:ok*" [$node1 CLUSTER INFO]]
-            } else {
-                fail "Cluster node1 did not become ready"
-            }
-            
-            wait_for_condition 50 100 {
-                [catch {$node2 CLUSTER INFO}] == 0 &&
-                [string match "*cluster_state:ok*" [$node2 CLUSTER INFO]]
-            } else {
-                fail "Cluster node2 did not become ready"
-            }
-            
-            cleanup_external_data_dump $node1
-            cleanup_external_data_dump $node2
             
             # Load module on both nodes
             $node1 MODULE LOAD $extdatamodule1

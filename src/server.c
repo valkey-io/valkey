@@ -6571,6 +6571,7 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
         unsigned long long upstream_runtime_replay_backlog_total = 0;
         unsigned long long upstream_runtime_replay_pending_frames = 0;
         unsigned long long upstream_runtime_replay_pending_dropped = 0;
+        unsigned long long upstream_runtime_replay_fullsync_requests = 0;
         if (server.upstream_runtime) {
             listIter rtli;
             listNode *rtln;
@@ -6589,6 +6590,7 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                     upstream_runtime_replay_pending_frames += listLength(rt->replay_pending_frames);
                 }
                 upstream_runtime_replay_pending_dropped += rt->replay_pending_dropped;
+                upstream_runtime_replay_fullsync_requests += rt->replay_fullsync_requests;
             }
         }
 
@@ -6609,6 +6611,7 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                 "upstream_runtime_replay_backlog:%llu\r\n", upstream_runtime_replay_backlog_total,
                 "upstream_runtime_replay_pending_frames:%llu\r\n", upstream_runtime_replay_pending_frames,
                 "upstream_runtime_replay_pending_dropped:%llu\r\n", upstream_runtime_replay_pending_dropped,
+                "upstream_runtime_replay_fullsync_requests:%llu\r\n", upstream_runtime_replay_fullsync_requests,
                 "mvcc_clock:%llu\r\n", (unsigned long long)server.mvcc_clock,
                 "mvcc_key_clock_entries:%lu\r\n", server.mvcc_key_clock ? dictSize(server.mvcc_key_clock) : 0,
                 "mvcc_key_tie_break_entries:%lu\r\n", server.mvcc_key_tie_break ? dictSize(server.mvcc_key_tie_break) : 0,
@@ -6639,6 +6642,8 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                 unsigned long long replay_backlog = 0;
                 unsigned long long replay_pending_frames = 0;
                 unsigned long long replay_pending_dropped = 0;
+                unsigned long long replay_fullsync_requests = 0;
+                int replay_fullsync_required = 0;
                 if (info_upstreams == server.upstream_runtime) {
                     valkeyUpstreamRuntime *runtime = listNodeValue(upstream_ln);
                     if (runtime && runtime->host) {
@@ -6656,6 +6661,8 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                         replay_ack_frames = runtime->replay_ack_frames;
                         replay_pending_frames = runtime->replay_pending_frames ? listLength(runtime->replay_pending_frames) : 0;
                         replay_pending_dropped = runtime->replay_pending_dropped;
+                        replay_fullsync_requests = runtime->replay_fullsync_requests;
+                        replay_fullsync_required = runtime->replay_fullsync_required;
                         if (replay_last_sent_id > replay_last_acked_id) {
                             replay_backlog = replay_last_sent_id - replay_last_acked_id;
                         }
@@ -6682,19 +6689,21 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                     }
                 }
                 info = sdscatprintf(info,
-                                    "upstream%lu:host=%s,port=%d,state=%s,active=%d,offset=%lld,last_io_seconds_ago=%d,replay_last_sent=%llu,replay_last_acked=%llu,replay_backlog=%llu,replay_tx_frames=%llu,replay_rx_frames=%llu,replay_ack_frames=%llu,replay_pending_frames=%llu,replay_pending_dropped=%llu\r\n",
+                                    "upstream%lu:host=%s,port=%d,state=%s,active=%d,offset=%lld,last_io_seconds_ago=%d,replay_last_sent=%llu,replay_last_acked=%llu,replay_backlog=%llu,replay_tx_frames=%llu,replay_rx_frames=%llu,replay_ack_frames=%llu,replay_pending_frames=%llu,replay_pending_dropped=%llu,replay_fullsync_requests=%llu,replay_fullsync_required=%d\r\n",
                                     upstream_id, host, port, upstream_state, is_current ? 1 : 0, upstream_offset,
                                     upstream_last_io,
                                     replay_last_sent_id, replay_last_acked_id, replay_backlog,
                                     replay_tx_frames, replay_rx_frames, replay_ack_frames,
-                                    replay_pending_frames, replay_pending_dropped);
+                                    replay_pending_frames, replay_pending_dropped,
+                                    replay_fullsync_requests, replay_fullsync_required);
                 info = sdscatprintf(info,
-                                    "master_%lu:host=%s,port=%d,state=%s,active=%d,offset=%lld,last_io_seconds_ago=%d,replay_last_sent=%llu,replay_last_acked=%llu,replay_backlog=%llu,replay_tx_frames=%llu,replay_rx_frames=%llu,replay_ack_frames=%llu,replay_pending_frames=%llu,replay_pending_dropped=%llu\r\n",
+                                    "master_%lu:host=%s,port=%d,state=%s,active=%d,offset=%lld,last_io_seconds_ago=%d,replay_last_sent=%llu,replay_last_acked=%llu,replay_backlog=%llu,replay_tx_frames=%llu,replay_rx_frames=%llu,replay_ack_frames=%llu,replay_pending_frames=%llu,replay_pending_dropped=%llu,replay_fullsync_requests=%llu,replay_fullsync_required=%d\r\n",
                                     upstream_id, host, port, upstream_state, is_current ? 1 : 0, upstream_offset,
                                     upstream_last_io,
                                     replay_last_sent_id, replay_last_acked_id, replay_backlog,
                                     replay_tx_frames, replay_rx_frames, replay_ack_frames,
-                                    replay_pending_frames, replay_pending_dropped);
+                                    replay_pending_frames, replay_pending_dropped,
+                                    replay_fullsync_requests, replay_fullsync_required);
                 upstream_id++;
             }
         }

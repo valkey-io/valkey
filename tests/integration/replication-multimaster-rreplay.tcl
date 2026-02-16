@@ -65,18 +65,38 @@ start_server {tags {"repl external:skip"}} {
             assert {[$node1 ttl mm:ttl] > 0}
         }
 
-        test {RREPLAY blocks risky RMW commands} {
-            $node0 del mm:rmw:append mm:rmw:incr
-            $node1 del mm:rmw:append mm:rmw:incr
+        test {RREPLAY canonicalizes risky RMW commands and converges} {
+            $node0 del mm:rmw:append mm:rmw:incr mm:rmw:h
+            $node1 del mm:rmw:append mm:rmw:incr mm:rmw:h
+            $node0 zrem mm:rmw:z m1
+            $node1 zrem mm:rmw:z m1
 
             assert_equal 5 [$node1 append mm:rmw:append local]
             assert_equal 1 [$node1 incr mm:rmw:incr]
-            after 100
+            assert_equal 2 [$node1 hincrby mm:rmw:h f 2]
+            assert_equal 2 [$node1 zincrby mm:rmw:z 2 m1]
+
+            wait_for_condition 100 100 {
+                [$node0 get mm:rmw:append] eq {local} &&
+                [$node0 get mm:rmw:incr] eq {1} &&
+                [$node0 hget mm:rmw:h f] eq {2} &&
+                [expr {abs([$node0 zscore mm:rmw:z m1] - 2.0)}] < 0.0001
+            } else {
+                fail "RMW canonical replay did not converge"
+            }
 
             assert_equal "local" [$node1 get mm:rmw:append]
             assert_equal "1" [$node1 get mm:rmw:incr]
-            assert_equal {} [$node0 get mm:rmw:append]
-            assert_equal {} [$node0 get mm:rmw:incr]
+            assert_equal "2" [$node1 hget mm:rmw:h f]
+            assert {[expr {abs([$node1 zscore mm:rmw:z m1] - 2.0)}] < 0.0001}
+        }
+
+        test {RREPLAY still rejects risky raw replay frames} {
+            assert_equal OK [$node0 replconf capa rreplay-peer]
+            assert_equal OK [$node0 replconf uuid 1111111111111111111111111111111111111111]
+            set rc [catch {$node0 rreplay 2222222222222222222222222222222222222222 0 9010 100 append mm:rmw:raw x}]
+            assert {$rc != 0}
+            assert_equal {} [$node0 get mm:rmw:raw]
         }
 
         test {MVCCRESTORE enforces stale protection} {

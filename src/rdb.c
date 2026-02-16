@@ -1254,6 +1254,7 @@ ssize_t rdbSaveAuxFieldStrInt(rio *rdb, char *key, long long val) {
 
 #define RDB_REPL_MASTERS_MAX 1024
 #define RDB_REPL_RUNTIME_MAX 1024
+#define RDB_REPL_RUNTIME_PENDING_MAX 200000
 #define RDB_RREPLAY_SEEN_MAX_ENTRIES 10000
 
 typedef struct mvccPersistEntry {
@@ -1375,6 +1376,19 @@ static int rdbSaveInfoEnsureRuntimeCapacity(rdbSaveInfo *rsi, int count) {
     return C_OK;
 }
 
+static int rdbSaveInfoEnsureRuntimePendingCapacity(rdbSaveInfo *rsi, int count) {
+    if (rsi == NULL || count < 0 || count > RDB_REPL_RUNTIME_PENDING_MAX) return C_ERR;
+    if (count <= rsi->repl_runtime_pending_count) return C_OK;
+
+    sds *entries = zrealloc(rsi->repl_runtime_pending_entries, sizeof(sds) * count);
+    for (int i = rsi->repl_runtime_pending_count; i < count; i++) {
+        entries[i] = NULL;
+    }
+    rsi->repl_runtime_pending_entries = entries;
+    rsi->repl_runtime_pending_count = count;
+    return C_OK;
+}
+
 void rdbFreeSaveInfo(rdbSaveInfo *rsi) {
     if (rsi == NULL) return;
 
@@ -1399,6 +1413,15 @@ void rdbFreeSaveInfo(rdbSaveInfo *rsi) {
         zfree(rsi->repl_runtime_entries);
         rsi->repl_runtime_entries = NULL;
         rsi->repl_runtime_count = 0;
+    }
+
+    if (rsi->repl_runtime_pending_entries) {
+        for (int i = 0; i < rsi->repl_runtime_pending_count; i++) {
+            if (rsi->repl_runtime_pending_entries[i]) sdsfree(rsi->repl_runtime_pending_entries[i]);
+        }
+        zfree(rsi->repl_runtime_pending_entries);
+        rsi->repl_runtime_pending_entries = NULL;
+        rsi->repl_runtime_pending_count = 0;
     }
 
     if (rsi->rreplay_seen_entries) {
@@ -1460,6 +1483,8 @@ int rdbSaveInfoAuxFields(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
 
         unsigned long runtime_count = server.upstream_runtime ? listLength(server.upstream_runtime) : 0;
         if (rdbSaveAuxFieldStrInt(rdb, "repl-runtime-count", runtime_count) == -1) return -1;
+        unsigned long runtime_pending_count = 0;
+        int runtime_pending_truncated = 0;
         if (runtime_count) {
             listIter li;
             listNode *ln;
@@ -1480,6 +1505,32 @@ int rdbSaveInfoAuxFields(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
                 sdsfree(auxkey);
                 sdsfree(auxval);
                 if (rc == -1) return -1;
+
+                if (runtime->replay_pending_frames) {
+                    listIter pli;
+                    listNode *pln;
+                    listRewind(runtime->replay_pending_frames, &pli);
+                    while ((pln = listNext(&pli)) != NULL) {
+                        if (runtime_pending_count >= RDB_REPL_RUNTIME_PENDING_MAX) {
+                            runtime_pending_truncated = 1;
+                            break;
+                        }
+                        rreplayPendingFrame *pending = listNodeValue(pln);
+                        if (pending == NULL || pending->replay_id == 0 || pending->frame == NULL) continue;
+
+                        sds pending_key = sdscatprintf(sdsempty(), "repl-runtime-pending-%lu", runtime_pending_count);
+                        uint64_t runtime_idx_be = htonu64((uint64_t)runtime_id);
+                        uint64_t replay_id_be = htonu64((uint64_t)pending->replay_id);
+                        sds pending_val = sdsnewlen(&runtime_idx_be, sizeof(runtime_idx_be));
+                        pending_val = sdscatlen(pending_val, &replay_id_be, sizeof(replay_id_be));
+                        pending_val = sdscatlen(pending_val, pending->frame, sdslen(pending->frame));
+                        rc = rdbSaveAuxField(rdb, pending_key, sdslen(pending_key), pending_val, sdslen(pending_val));
+                        sdsfree(pending_key);
+                        sdsfree(pending_val);
+                        if (rc == -1) return -1;
+                        runtime_pending_count++;
+                    }
+                }
                 runtime_id++;
             }
 
@@ -1488,6 +1539,12 @@ int rdbSaveInfoAuxFields(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
                           "Truncated MM runtime persistence to %d entries (had %lu)",
                           RDB_REPL_RUNTIME_MAX, runtime_count);
             }
+        }
+        if (rdbSaveAuxFieldStrInt(rdb, "repl-runtime-pending-count", runtime_pending_count) == -1) return -1;
+        if (runtime_pending_truncated) {
+            serverLog(LL_WARNING,
+                      "Truncated MM runtime pending replay persistence to %d entries",
+                      RDB_REPL_RUNTIME_PENDING_MAX);
         }
 
         unsigned long mvcc_count = server.mvcc_key_clock ? dictSize(server.mvcc_key_clock) : 0;
@@ -3585,6 +3642,13 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
                         rdbSaveInfoEnsureRuntimeCapacity(rsi, (int)count);
                     }
                 }
+            } else if (!strcasecmp(objectGetVal(auxkey), "repl-runtime-pending-count")) {
+                if (rsi) {
+                    long long count = strtoll(objectGetVal(auxval), NULL, 10);
+                    if (count >= 0 && count <= RDB_REPL_RUNTIME_PENDING_MAX) {
+                        rdbSaveInfoEnsureRuntimePendingCapacity(rsi, (int)count);
+                    }
+                }
             } else if (!strcasecmp(objectGetVal(auxkey), "mvcc-keys-count")) {
                 /* Size hint only; actual entries are loaded from mvcc-key-N AUX fields. */
             } else if (!strcasecmp(objectGetVal(auxkey), "rreplay-seen-count")) {
@@ -3604,6 +3668,18 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
                         rdbSaveInfoEnsureMastersCapacity(rsi, (int)index + 1) == C_OK) {
                         if (rsi->repl_masters[index]) sdsfree(rsi->repl_masters[index]);
                         rsi->repl_masters[index] = sdsdup(objectGetVal(auxval));
+                    }
+                }
+            } else if (!strncasecmp(objectGetVal(auxkey), "repl-runtime-pending-", 21)) {
+                if (rsi) {
+                    char *suffix = (char *)objectGetVal(auxkey) + 21;
+                    char *endptr = NULL;
+                    long index = strtol(suffix, &endptr, 10);
+                    if (suffix[0] != '\0' && endptr && *endptr == '\0' &&
+                        index >= 0 && index < RDB_REPL_RUNTIME_PENDING_MAX &&
+                        rdbSaveInfoEnsureRuntimePendingCapacity(rsi, (int)index + 1) == C_OK) {
+                        if (rsi->repl_runtime_pending_entries[index]) sdsfree(rsi->repl_runtime_pending_entries[index]);
+                        rsi->repl_runtime_pending_entries[index] = sdsdup(objectGetVal(auxval));
                     }
                 }
             } else if (!strncasecmp(objectGetVal(auxkey), "repl-runtime-", 13)) {

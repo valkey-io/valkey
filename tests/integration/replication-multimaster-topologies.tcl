@@ -161,7 +161,7 @@ start_server {overrides {save {}}} {
         assert {[s 0 active_upstream_runtime_links] >= 1}
     }
 
-    test {3-node full mesh queues replay while peer is down and drains on reconnect} {
+    test {3-node queued replay drains after peer reconnect} {
         foreach n [list $nodeA $nodeB $nodeC] {
             $n replicaof no one
             $n flushall
@@ -172,45 +172,26 @@ start_server {overrides {save {}}} {
 
         $nodeA replicaof add $nodeB_host $nodeB_port
         $nodeA replicaof add $nodeC_host $nodeC_port
-        $nodeB replicaof add $nodeA_host $nodeA_port
-        $nodeB replicaof add $nodeC_host $nodeC_port
-        $nodeC replicaof add $nodeA_host $nodeA_port
-        $nodeC replicaof add $nodeB_host $nodeB_port
 
         wait_for_condition 300 100 {
-            [s -2 active_upstream_runtime_links] >= 1 &&
-            [s -1 active_upstream_runtime_links] >= 1 &&
-            [s 0 active_upstream_runtime_links] >= 1
+            [s -2 master_host] eq $nodeB_host &&
+            [s -2 master_link_status] eq {up} &&
+            [s -2 configured_upstreams] == 2 &&
+            [s -2 upstream_runtime_entries] == 2 &&
+            [s -2 active_upstream_runtime_links] == 2
         } else {
-            fail "full mesh did not establish before queue-down test"
+            fail "nodeA did not establish deterministic dual-upstream runtime before queue-down test"
         }
 
-        set nodeA_primary_port [s -2 master_port]
-        set down_level 0
-        if {$nodeA_primary_port == $nodeC_port} {
-            set down_level -1
-        }
-
-        if {$down_level == 0} {
-            catch {$nodeC shutdown nosave}
-        } else {
-            catch {$nodeB shutdown nosave}
-        }
+        catch {$nodeC shutdown nosave}
         wait_for_condition 200 50 {
-            ![is_alive [dict get [get_srv $down_level] pid]]
+            ![is_alive [dict get [get_srv 0] pid]]
         } else {
             fail "peer process did not stop before queue-down writes"
         }
 
-        set nodeA_client_info [$nodeA client info]
-        set nodeA_dbid 0
-        regexp {db=([0-9]+)} $nodeA_client_info _ nodeA_dbid
-        assert_equal OK [$nodeA replconf capa rreplay-peer]
-        assert_equal OK [$nodeA replconf uuid 1111111111111111111111111111111111111111]
         for {set i 1} {$i <= 30} {incr i} {
-            set replay_id [expr {10000 + $i}]
-            set replay_ts [expr {[s -2 mvcc_clock] + $i + 1}]
-            assert_equal $replay_id [$nodeA rreplay 2222222222222222222222222222222222222222 $nodeA_dbid $replay_id $replay_ts set "mm:queue:$i" "v$i"]
+            $nodeA set "mm:queue:$i" "v$i"
         }
 
         wait_for_condition 200 50 {
@@ -219,57 +200,112 @@ start_server {overrides {save {}}} {
             fail "nodeA did not accumulate pending replay frames while non-primary peer was down"
         }
 
-        restart_server $down_level true false
-        if {$down_level == 0} {
-            set nodeC [srv 0 client]
-            set nodeC_host [srv 0 host]
-            set nodeC_port [srv 0 port]
-            $nodeC config set active-replica yes
-            $nodeC config set multi-master yes
-            $nodeC config set replica-read-only no
-            catch {$nodeA replicaof add $nodeC_host $nodeC_port}
-            catch {$nodeB replicaof add $nodeC_host $nodeC_port}
-            catch {$nodeC replicaof add $nodeA_host $nodeA_port}
-            catch {$nodeC replicaof add $nodeB_host $nodeB_port}
+        $nodeA save
+        restart_server -2 true false
+        set nodeA [srv -2 client]
+        set nodeA_host [srv -2 host]
+        set nodeA_port [srv -2 port]
+        $nodeA config set active-replica yes
+        $nodeA config set multi-master yes
+        $nodeA config set replica-read-only no
+        wait_for_condition 200 50 {
+            [s -2 upstream_runtime_replay_pending_frames] > 0
         } else {
-            set nodeB [srv -1 client]
-            set nodeB_host [srv -1 host]
-            set nodeB_port [srv -1 port]
-            $nodeB config set active-replica yes
-            $nodeB config set multi-master yes
-            $nodeB config set replica-read-only no
-            catch {$nodeA replicaof add $nodeB_host $nodeB_port}
-            catch {$nodeC replicaof add $nodeB_host $nodeB_port}
-            catch {$nodeB replicaof add $nodeA_host $nodeA_port}
-            catch {$nodeB replicaof add $nodeC_host $nodeC_port}
+            fail "nodeA did not restore pending replay queue after restart"
+        }
+
+        restart_server 0 true false
+        set nodeC [srv 0 client]
+        set nodeC_host [srv 0 host]
+        set nodeC_port [srv 0 port]
+        $nodeC config set active-replica yes
+        $nodeC config set multi-master yes
+        $nodeC config set replica-read-only no
+
+        wait_for_condition 400 100 {
+            [s -2 active_upstream_runtime_links] == 2
+        } else {
+            fail "nodeA did not restore both upstream runtime links after peer restart"
         }
 
         wait_for_condition 400 100 {
-            [s -2 active_upstream_runtime_links] >= 1 &&
-            [s -1 active_upstream_runtime_links] >= 1 &&
-            [s 0 active_upstream_runtime_links] >= 1
+            [$nodeC get mm:queue:30] eq {v30}
         } else {
-            fail "full mesh did not recover after peer restart in queue-down test"
-        }
-
-        if {$down_level == 0} {
-            wait_for_condition 400 100 {
-                [$nodeC get mm:queue:30] eq {v30}
-            } else {
-                fail "nodeC did not receive queued replay updates after reconnect"
-            }
-        } else {
-            wait_for_condition 400 100 {
-                [$nodeB get mm:queue:30] eq {v30}
-            } else {
-                fail "nodeB did not receive queued replay updates after reconnect"
-            }
+            fail "nodeC did not receive queued replay updates after reconnect"
         }
 
         wait_for_condition 400 100 {
             [s -2 upstream_runtime_replay_pending_frames] == 0
         } else {
             fail "nodeA pending replay queue did not drain after reconnect"
+        }
+    }
+
+    test {3-node peer full sync after pending queue overflow} {
+        foreach n [list $nodeA $nodeB $nodeC] {
+            $n replicaof no one
+            $n flushall
+            $n config set active-replica yes
+            $n config set multi-master yes
+            $n config set replica-read-only no
+        }
+
+        $nodeA replicaof add $nodeB_host $nodeB_port
+        $nodeA replicaof add $nodeC_host $nodeC_port
+
+        wait_for_condition 300 100 {
+            [s -2 master_host] eq $nodeB_host &&
+            [s -2 master_link_status] eq {up} &&
+            [s -2 configured_upstreams] == 2 &&
+            [s -2 active_upstream_runtime_links] == 2
+        } else {
+            fail "nodeA did not establish deterministic dual-upstream runtime before overflow test"
+        }
+
+        $nodeA config set rreplay-pending-max-entries 5
+        catch {$nodeC shutdown nosave}
+        wait_for_condition 200 50 {
+            ![is_alive [dict get [get_srv 0] pid]]
+        } else {
+            fail "nodeC did not stop before overflow writes"
+        }
+
+        for {set i 1} {$i <= 40} {incr i} {
+            $nodeA set "mm:overflow:$i" "v$i"
+        }
+
+        wait_for_condition 200 50 {
+            [s -2 upstream_runtime_replay_pending_dropped] > 0
+        } else {
+            fail "nodeA did not drop pending replay frames under queue cap"
+        }
+
+        restart_server 0 true false
+        set nodeC [srv 0 client]
+        set nodeC_host [srv 0 host]
+        set nodeC_port [srv 0 port]
+        $nodeC config set active-replica yes
+        $nodeC config set multi-master yes
+        $nodeC config set replica-read-only no
+
+        wait_for_condition 400 100 {
+            [s -2 upstream_runtime_replay_fullsync_requests] > 0
+        } else {
+            fail "nodeA did not request peer full sync after overflow"
+        }
+
+        wait_for_condition 400 100 {
+            [s 0 master_host] eq $nodeA_host &&
+            [s 0 master_link_status] eq {up}
+        } else {
+            fail "nodeC did not switch to nodeA after full sync request"
+        }
+
+        wait_for_condition 400 100 {
+            [$nodeC get mm:overflow:1] eq {v1} &&
+            [$nodeC get mm:overflow:40] eq {v40}
+        } else {
+            fail "nodeC did not recover full dataset after overflow-triggered full sync"
         }
     }
 

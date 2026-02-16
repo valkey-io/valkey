@@ -1611,6 +1611,12 @@ typedef struct valkeyUpstream {
     int port;
 } valkeyUpstream;
 
+typedef struct rreplayPendingFrame {
+    unsigned long long replay_id;
+    sds frame;
+    int sent_once; /* 1 if the frame was sent on the current connection and is awaiting ACK. */
+} rreplayPendingFrame;
+
 /* Runtime state holder for configured upstreams. */
 typedef struct valkeyUpstreamRuntime {
     sds host;
@@ -1630,6 +1636,8 @@ typedef struct valkeyUpstreamRuntime {
     unsigned long long replay_rx_frames;     /* Total replay frames received from this peer. */
     unsigned long long replay_ack_frames;    /* Total replay ACK replies received from this peer. */
     unsigned long long replay_pending_dropped; /* Total pending replay frames dropped by queue cap. */
+    unsigned long long replay_fullsync_requests; /* Total peer full-sync requests sent after queue overflow. */
+    int replay_fullsync_required; /* 1 when queue overflow requires peer full-sync before incremental replay. */
     list *replay_pending_frames; /* Pending outbound replay frames awaiting ACK on peer-forward links. */
 } valkeyUpstreamRuntime;
 
@@ -1653,13 +1661,15 @@ typedef struct rdbSaveInfo {
     sds *repl_masters;                    /* Upstreams encoded as "<host>|<port>". */
     int repl_runtime_count;               /* Number of upstream runtime entries persisted in RDB AUX. */
     sds *repl_runtime_entries;            /* Runtime entries encoded as "<host>|<port>|<sent>|<acked>|<tx>|<rx>|<ack>". */
+    int repl_runtime_pending_count;       /* Number of pending replay queue entries persisted in RDB AUX. */
+    sds *repl_runtime_pending_entries;    /* Pending entries encoded as "<runtime-idx:u64><replay-id:u64><resp-frame-bytes...>". */
     int rreplay_seen_count;               /* Number of persisted dedupe keys from RREPLAY. */
     sds *rreplay_seen_entries;            /* Dedupe keys encoded as "<origin-uuid>:<replay-id>". */
     uint64_t mvcc_clock;                  /* Global MVCC logical clock persisted in RDB AUX. */
     dict *mvcc_key_clock;                 /* Encoded key clock map loaded from RDB AUX. */
 } rdbSaveInfo;
 
-#define RDB_SAVE_INFO_INIT {-1, 0, "0000000000000000000000000000000000000000", -1, 0, NULL, 0, NULL, 0, NULL, 0, NULL}
+#define RDB_SAVE_INFO_INIT {-1, 0, "0000000000000000000000000000000000000000", -1, 0, NULL, 0, NULL, 0, NULL, 0, NULL, 0, NULL}
 
 struct malloc_stats {
     size_t zmalloc_used;

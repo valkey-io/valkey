@@ -7598,7 +7598,7 @@ static int clusterManagerCommandDeleteNode(int argc, char **argv) {
 
         /* Skip nodes without a valid connection. */
         if (!n->context) {
-            clusterManagerLogInfo(">>> Skipping %s:%d (not connected)\n", n->ip, n->port);
+            clusterManagerLogWarn(">>> Skipping %s:%d (not connected)\n", n->ip, n->port);
             continue;
         }
 
@@ -7625,6 +7625,7 @@ static int clusterManagerCommandDeleteNode(int argc, char **argv) {
         valkeyReply *r = valkeyCommand(node->context, "CLUSTER RESET %s", "SOFT");
         success = clusterManagerCheckValkeyReply(node, r, NULL);
         if (r) freeReplyObject(r);
+        if (!success) return 0;
     } else {
         clusterManagerLogWarn(">>> WARNING: Could not connect to node %s:%d, "
                               "unable to send CLUSTER RESET.\n",

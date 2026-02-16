@@ -3731,7 +3731,7 @@ void discardTempDb(serverDb **tempDb);
 int selectDb(client *c, int id);
 void signalModifiedKey(client *c, serverDb *db, robj *key);
 void signalFlushedDb(int dbid, int async);
-void scanGenericCommand(client *c, robj *o, unsigned long long cursor);
+void scanGenericCommand(client *c, robj *o, unsigned long long cursor, int slot, sds cursor_prefix, sds finished_cursor_prefix);
 int parseScanCursorOrReply(client *c, sds buf, unsigned long long *cursor);
 int dbAsyncDelete(serverDb *db, robj *key);
 void emptyDbAsync(serverDb *db);
@@ -3777,6 +3777,7 @@ int zmpopGetKeys(struct serverCommand *cmd, robj **argv, int argc, getKeysResult
 int bzmpopGetKeys(struct serverCommand *cmd, robj **argv, int argc, getKeysResult *result);
 int setGetKeys(struct serverCommand *cmd, robj **argv, int argc, getKeysResult *result);
 int bitfieldGetKeys(struct serverCommand *cmd, robj **argv, int argc, getKeysResult *result);
+int clusterscanGetKeys(struct serverCommand *cmd, robj **argv, int argc, getKeysResult *result);
 
 unsigned short crc16(const char *buf, int len);
 
@@ -4077,6 +4078,7 @@ void clusterCommand(client *c);
 void clusterKeySlotCommand(client *c);
 void clusterFlushslotCommand(client *c);
 void clusterSlotStatsCommand(client *c);
+void clusterscanCommand(client *c);
 void restoreCommand(client *c);
 void migrateCommand(client *c);
 void askingCommand(client *c);

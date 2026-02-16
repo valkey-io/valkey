@@ -41,6 +41,7 @@
 #include "cluster.h"
 #include "cluster_slot_stats.h"
 #include "module.h"
+#include "crc16_slottable.h"
 
 #include <ctype.h>
 
@@ -1629,4 +1630,170 @@ void clusterCommandFlushslot(client *c) {
     }
     delKeysInSlot(slot, lazy, false, true);
     addReply(c, shared.ok);
+}
+
+/* -----------------------------------------------------------------------------
+ * CLUSTERSCAN Command
+ * -------------------------------------------------------------------------- */
+
+/* Compute a fingerprint for CLUSTERSCAN cursor validation.
+ *
+ * Fingerprint uniquely identifies the current memory layout by hashing
+ * relevant configuration bits. Currently this includes only the hash seed,
+ * but additional factors (e.g., hash table type) can be mixed in later.
+ *
+ * Returns a non zero 32-bit fingerprint. 0 is reserved for cross-node cursor */
+static uint32_t clusterScanFingerprint(void) {
+    uint8_t *seed = hashtableGetHashFunctionSeed();
+    uint64_t seed_low, seed_high;
+    memcpy(&seed_low, seed, 8);
+    memcpy(&seed_high, seed + 8, 8);
+    uint64_t hash = seed_low ^ seed_high;
+
+    /* Tomas Wang's 64 bit integer hash. */
+    hash = (~hash) + (hash << 21); /* hash = (hash << 21) - hash - 1; */
+    hash = hash ^ (hash >> 24);
+    hash = (hash + (hash << 3)) + (hash << 8); /* hash * 265 */
+    hash = hash ^ (hash >> 14);
+    hash = (hash + (hash << 2)) + (hash << 4); /* hash * 21 */
+    hash = hash ^ (hash >> 28);
+    hash = hash + (hash << 31);
+
+    /* Truncating to 32 bit instead of 64 bit */
+    uint32_t fp = (uint32_t)hash;
+
+    /* Ensure fingerprint is never 0, zero is reserved for cross node
+     * cursor where fingerprint validation would be skipped, scenarios
+     * include initial and end a given slots scan */
+    if (fp == 0) fp = 1;
+    return fp;
+}
+
+/* Parse the cursor for CLUSTERSCAN Command.
+ * The format is <fingerprint>-<hashtag>-<cursor>.
+ *
+ * Fingerprint identifies the node's memory layout. On mismatch, the scan
+ * restarts from cursor 0 rather than returning an error.
+ *
+ * Hashtag is used to route to the correct node.
+ *
+ * Cursor is the actual local scan cursor.
+ */
+static int parseClusterScanCursor(robj *o, unsigned int *fp, int *slot, unsigned long long *cursor) {
+    char *p = objectGetVal(o);
+    char *end = p + sdslen(p);
+    char *token;
+
+    /* Handle fingerprint */
+    token = strchr(p, '-');
+    if (!token) return C_ERR;
+
+    unsigned long long input_fp;
+    if (!string2ull(p, token - p, &input_fp)) return C_ERR;
+
+    p = token + 1;
+
+    /* Handle hashtag */
+    token = strchr(p, '-');
+    if (!token) return C_ERR;
+    int hashtag_len = token - p;
+
+    int hash_slot = keyHashSlot(p, hashtag_len);
+    *slot = hash_slot;
+    p = token + 1;
+
+    /* Handle the local cursor */
+    if (!string2ull(p, end - p, cursor)) return C_ERR;
+
+    /* Fingerprint is 0 when beginning to scan a slot so ignore the cursor value
+     * in that case. If fingerprint doesn't match the current node's fingerprint,
+     * restart the scan from cursor 0. */
+    *fp = clusterScanFingerprint();
+    if (input_fp == 0 || (uint32_t)input_fp != *fp) {
+        *cursor = 0;
+    }
+
+    return C_OK;
+}
+
+void clusterscanCommand(client *c) {
+    if (!server.cluster_enabled) {
+        addReplyError(c, "This instance has cluster support disabled");
+        return;
+    }
+
+    uint32_t fp;
+    int slot;
+    unsigned long long cursor;
+    int input_slot = -1;
+
+    /* Get the SLOT information if provided.*/
+    for (int i = 2; i < c->argc; i++) {
+        if (!strcasecmp(objectGetVal(c->argv[i]), "slot") && i + 1 < c->argc) {
+            if (input_slot != -1) {
+                addReplyError(c, "SLOT option can only be specified once");
+                return;
+            }
+            if ((input_slot = getSlotOrReply(c, c->argv[i + 1])) == -1) return;
+            i++;
+        }
+    }
+
+    /* Handle the cursor with 0 case. If slot information is provided we return the updated cursor
+    to scan input slot else updated cursor to scan the SLOT 0 */
+    if (strcmp(objectGetVal(c->argv[1]), "0") == 0) {
+        if (input_slot != -1) {
+            slot = input_slot;
+        } else {
+            slot = 0;
+        }
+
+        sds new_cursor = sdscatfmt(sdsempty(), "0-{%s}-0", clusterGetSlotHashtag(slot));
+
+        addReplyArrayLen(c, 2);
+        addReplyBulkSds(c, new_cursor);
+        addReplyArrayLen(c, 0);
+        return;
+    } else {
+        if (parseClusterScanCursor(c->argv[1], &fp, &slot, &cursor) == C_ERR) {
+            addReplyError(c, "Invalid cursor");
+            return;
+        }
+
+        if (input_slot != -1 && slot != input_slot) {
+            addReplyError(c, "Cursor slot mismatch with SLOT argument");
+            return;
+        }
+    }
+
+    /* Verify the slot ownership and redirect if needed */
+    if (server.cluster->slots[slot] == NULL) {
+        addReplyError(c, "-CLUSTERDOWN Hash slot not served");
+        return;
+    }
+
+    if (server.cluster->slots[slot] != getMyClusterNode()) {
+        clusterRedirectClient(c, server.cluster->slots[slot], slot, CLUSTER_REDIR_MOVED);
+        return;
+    }
+    /* Scan the slot using scanGenericCommand */
+    sds cursor_prefix = sdscatfmt(sdsempty(), "%u-{%s}-", fp, clusterGetSlotHashtag(slot));
+    sds finished_cursor_prefix = NULL;
+
+    /* If SLOT argument was provided, don't advance to next slot then return 0 cursor.
+     * Else, advance to next slot for full cluster scan */
+    if (input_slot != -1) {
+        finished_cursor_prefix = sdsnew("");
+    } else {
+        int next_slot = slot + 1;
+        if (next_slot >= CLUSTER_SLOTS) {
+            finished_cursor_prefix = sdsnew("");
+        } else {
+            finished_cursor_prefix = sdscatfmt(sdsempty(), "0-{%s}-", clusterGetSlotHashtag(next_slot));
+        }
+    }
+
+    scanGenericCommand(c, NULL, cursor, slot, cursor_prefix, finished_cursor_prefix);
+    sdsfree(cursor_prefix);
+    sdsfree(finished_cursor_prefix);
 }

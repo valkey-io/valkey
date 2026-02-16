@@ -1146,7 +1146,7 @@ char *getObjectTypeName(robj *o) {
     }
 }
 
-/* This command implements SCAN, HSCAN and SSCAN commands.
+/* This command implements SCAN, HSCAN, SSCAN and CLUSTERSCAN commands.
  * If object 'o' is passed, then it must be a Hash, Set or Zset object, otherwise
  * if 'o' is NULL the command will operate on the dictionary associated with
  * the current database.
@@ -1156,8 +1156,12 @@ char *getObjectTypeName(robj *o) {
  * in order to parse options.
  *
  * In the case of a Hash object the function returns both the field and value
- * of every element on the Hash. */
-void scanGenericCommand(client *c, robj *o, unsigned long long cursor) {
+ * of every element on the Hash.
+ *
+ * slot, cursor_prefix and finished_cursor_prefix are used during CLUSTERSCAN to scan
+ * a specific slot and to return the valid cursor to advance the scan.
+ */
+void scanGenericCommand(client *c, robj *o, unsigned long long cursor, int slot, sds cursor_prefix, sds finished_cursor_prefix) {
     int i, j;
     long count = DEFAULT_SCAN_COMMAND_COUNT;
     sds pat = NULL;
@@ -1219,6 +1223,13 @@ void scanGenericCommand(client *c, robj *o, unsigned long long cursor) {
             }
             only_keys = 1;
             i++;
+        } else if (!strcasecmp(objectGetVal(c->argv[i]), "slot") && j >= 2) {
+            /* SLOT is only valid for CLUSTERSCAN. */
+            if (slot == -1) {
+                addReplyError(c, "SLOT option is only valid for CLUSTERSCAN");
+                return;
+            }
+            i += 2;
         } else {
             addReplyErrorObject(c, shared.syntaxerr);
             return;
@@ -1286,9 +1297,11 @@ void scanGenericCommand(client *c, robj *o, unsigned long long cursor) {
             .only_keys = only_keys,
         };
 
-        /* A pattern may restrict all matching keys to one cluster slot. */
-        int onlydidx = -1;
-        if (o == NULL && use_pattern && server.cluster_enabled) {
+        /* Determine which slot to scan:
+         * - If slot >= 0, scan the specific slot (CLUSTERSCAN)
+         * - If slot == -1 try to derive from pattern; otherwise scan all */
+        int onlydidx = slot;
+        if (onlydidx == -1 && o == NULL && use_pattern && server.cluster_enabled) {
             onlydidx = patternHashSlot(pat, patlen);
         }
         do {
@@ -1352,7 +1365,17 @@ void scanGenericCommand(client *c, robj *o, unsigned long long cursor) {
 
     /* Step 3: Reply to the client. */
     addReplyArrayLen(c, 2);
-    addReplyBulkLongLong(c, cursor);
+
+    /* Handle CLUSTERSCAN prefixing */
+    if (cursor == 0 && finished_cursor_prefix) {
+        sds new_cursor = sdscatfmt(sdsempty(), "%S%U", finished_cursor_prefix, cursor);
+        addReplyBulkSds(c, new_cursor);
+    } else if (cursor_prefix) {
+        sds new_cursor = sdscatfmt(sdsempty(), "%S%U", cursor_prefix, cursor);
+        addReplyBulkSds(c, new_cursor);
+    } else {
+        addReplyBulkLongLong(c, cursor);
+    }
 
     addReplyArrayLen(c, vectorLen(&result));
     for (uint32_t i = 0; i < vectorLen(&result); i++) {
@@ -1370,7 +1393,7 @@ void scanGenericCommand(client *c, robj *o, unsigned long long cursor) {
 void scanCommand(client *c) {
     unsigned long long cursor;
     if (parseScanCursorOrReply(c, objectGetVal(c->argv[1]), &cursor) == C_ERR) return;
-    scanGenericCommand(c, NULL, cursor);
+    scanGenericCommand(c, NULL, cursor, -1, NULL, NULL);
 }
 
 void dbsizeCommand(client *c) {
@@ -3029,4 +3052,35 @@ int *copyDbIdArgs(robj **argv, int argc, int *count) {
     result[0] = (int)dbid;
     *count = 1;
     return result;
+}
+
+/* Helper function to extract keys from the CLUSTERSCAN command, which uses
+ * a cursor that encodes slot information for cluster routing. */
+int clusterscanGetKeys(struct serverCommand *cmd, robj **argv, int argc, getKeysResult *result) {
+    UNUSED(cmd);
+    UNUSED(argc);
+
+    sds cursor = objectGetVal(argv[1]);
+
+    /* Initial cursor "0" has no slot info, return no keys. */
+    if (sdslen(cursor) == 1 && cursor[0] == '0') {
+        result->numkeys = 0;
+        return 0;
+    }
+
+    /* Cursor format: "version-{hashtag}-localcursor". Return the cursor
+     * as the key so keyHashSlot() extracts the hashtag for routing. */
+    char *open_brace = strchr(cursor, '{');
+    char *close_brace = strchr(cursor, '}');
+
+    if (open_brace && close_brace && close_brace > open_brace) {
+        keyReference *keys = getKeysPrepareResult(result, 1);
+        keys[0].pos = 1;
+        keys[0].flags = CMD_KEY_NOT_KEY;
+        result->numkeys = 1;
+        return 1;
+    }
+
+    result->numkeys = 0;
+    return 0;
 }

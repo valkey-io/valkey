@@ -9578,7 +9578,7 @@ unsigned int VM_ClusterKeySlot(ValkeyModuleString *key) {
  * such that the key maps to the given cluster slot. Returns NULL if slot is not
  * a valid slot. */
 const char *VM_ClusterCanonicalKeyNameInSlot(unsigned int slot) {
-    return (slot < CLUSTER_SLOTS) ? crc16_slot_table[slot] : NULL;
+    return (slot < CLUSTER_SLOTS) ? clusterGetSlotHashtag(slot) : NULL;
 }
 
 /* --------------------------------------------------------------------------

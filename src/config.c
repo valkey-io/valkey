@@ -815,15 +815,14 @@ static dict *matchSinglePatternToConfigs(sds pattern) {
     return matches;
 }
 
-/* Match config patterns from client arguments. Returns a dict of all matched configs (deduplicated). */
-static dict *matchPatternsToConfigs(client *c) {
+/* Match config patterns from arguments. Returns a dict of all matched configs (deduplicated). */
+static dict *matchPatternsToConfigs(robj **patterns, int pattern_count) {
     dict *all_matches = dictCreate(&externalStringType);
     dictIterator *di;
     dictEntry *de;
 
-    for (int i = 2; i < c->argc; i++) {
-        robj *o = c->argv[i];
-        sds pattern = objectGetVal(o);
+    for (int i = 0; i < pattern_count; i++) {
+        sds pattern = objectGetVal(patterns[i]);
 
         dict *single_pattern_matches = matchSinglePatternToConfigs(pattern);
         di = dictGetIterator(single_pattern_matches);
@@ -1049,7 +1048,7 @@ static standardConfig **getSortedConfigs(dict *matches, int *count) {
  *----------------------------------------------------------------------------*/
 
 void configGetCommand(client *c) {
-    dict *matches = matchPatternsToConfigs(c);
+    dict *matches = matchPatternsToConfigs(c->argv + 2, c->argc - 2);
     int n;
     standardConfig **configs = getSortedConfigs(matches, &n);
     dictRelease(matches);
@@ -3651,7 +3650,7 @@ static void addConfigInfoReply(client *c, standardConfig *config) {
 
 void configHelpCommand(client *c) {
     if (c->argc >= 3) {
-        dict *matches = matchPatternsToConfigs(c);
+        dict *matches = matchPatternsToConfigs(c->argv + 2, c->argc - 2);
         int n;
         standardConfig **configs = getSortedConfigs(matches, &n);
         dictRelease(matches);

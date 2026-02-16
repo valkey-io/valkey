@@ -116,22 +116,26 @@ start_server {tags {"other"}} {
         }
         
         # Restart server
-        restart_server 0 true false
-        
-        set help3 [r CONFIG HELP a*]
-        set get3 [r CONFIG GET a*]
-        
-        set help_names3 [list]
-        foreach entry $help3 {
-            lappend help_names3 [dict get $entry name]
+        if {!$::external} {
+            restart_server 0 true false
+            
+            set help3 [r CONFIG HELP a*]
+            set get3 [r CONFIG GET a*]
+            
+            set help_names3 [list]
+            foreach entry $help3 {
+                lappend help_names3 [dict get $entry name]
+            }
+            
+            set get_names3 [dict keys $get3]
+            
+            # Verify ordering after restart
+            assert_equal $help_names1 $help_names3
+            assert_equal $get_names1 $get_names3
         }
-        
-        set get_names3 [dict keys $get3]
         
         # All orderings should be identical
         assert_equal $help_names1 $help_names2
-        assert_equal $help_names1 $help_names3
-        assert_equal $get_names1 $get_names3
         assert_equal $help_names1 $get_names1
     }
 

@@ -1235,7 +1235,9 @@ start_server {tags {"scripting external:skip large-memory"}} {
             return #cjson.encode(s..s..s)
         } 0
     } {3221225474} ;# length includes two double quotes at both ends
+}
 
+start_server {tags {"scripting external:skip large-memory"}} {
     test {EVAL - Test long escape sequences for strings} {
         r eval {
             -- Generate 1gb '==...==' separator
@@ -1254,7 +1256,9 @@ start_server {tags {"scripting external:skip large-memory"}} {
             return #func()
         } 0
     } {1}
+}
 
+start_server {tags {"scripting external:skip large-memory"}} {
     test {EVAL - Lua can parse string with too many new lines} {
         # Create a long string consisting only of newline characters. When Lua
         # fails to parse a string, it typically includes a snippet like

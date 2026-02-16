@@ -1255,7 +1255,86 @@ ssize_t rdbSaveAuxFieldStrInt(rio *rdb, char *key, long long val) {
 #define RDB_REPL_MASTERS_MAX 1024
 #define RDB_REPL_RUNTIME_MAX 1024
 #define RDB_RREPLAY_SEEN_MAX_ENTRIES 10000
-#define RDB_MVCC_CLOCK_MAX_ENTRIES 200000
+
+typedef struct mvccPersistEntry {
+    sds key;
+    uint64_t ts;
+} mvccPersistEntry;
+
+static int mvccPersistKeyCompare(sds a, sds b) {
+    size_t alen = sdslen(a);
+    size_t blen = sdslen(b);
+    size_t minlen = min(alen, blen);
+    int cmp = memcmp(a, b, minlen);
+    if (cmp != 0) return cmp;
+    if (alen < blen) return -1;
+    if (alen > blen) return 1;
+    return 0;
+}
+
+/* Comparison by recency: older < newer. */
+static int mvccPersistEntryCompare(const mvccPersistEntry *a, const mvccPersistEntry *b) {
+    if (a->ts < b->ts) return -1;
+    if (a->ts > b->ts) return 1;
+    return mvccPersistKeyCompare(a->key, b->key);
+}
+
+static void mvccPersistEntrySwap(mvccPersistEntry *a, mvccPersistEntry *b) {
+    mvccPersistEntry tmp = *a;
+    *a = *b;
+    *b = tmp;
+}
+
+/* Min-heap ordered by recency, so root is the oldest persisted candidate. */
+static void mvccPersistHeapSiftUp(mvccPersistEntry *heap, unsigned long idx) {
+    while (idx > 0) {
+        unsigned long parent = (idx - 1) / 2;
+        if (mvccPersistEntryCompare(&heap[idx], &heap[parent]) >= 0) break;
+        mvccPersistEntrySwap(&heap[idx], &heap[parent]);
+        idx = parent;
+    }
+}
+
+static void mvccPersistHeapSiftDown(mvccPersistEntry *heap, unsigned long size, unsigned long idx) {
+    while (1) {
+        unsigned long left = (2 * idx) + 1;
+        unsigned long right = left + 1;
+        unsigned long smallest = idx;
+        if (left < size && mvccPersistEntryCompare(&heap[left], &heap[smallest]) < 0) {
+            smallest = left;
+        }
+        if (right < size && mvccPersistEntryCompare(&heap[right], &heap[smallest]) < 0) {
+            smallest = right;
+        }
+        if (smallest == idx) break;
+        mvccPersistEntrySwap(&heap[idx], &heap[smallest]);
+        idx = smallest;
+    }
+}
+
+static void mvccPersistHeapPushOrReplace(mvccPersistEntry *heap, unsigned long *size, unsigned long cap,
+                                         mvccPersistEntry candidate) {
+    if (heap == NULL || size == NULL || cap == 0) return;
+    if (*size < cap) {
+        heap[*size] = candidate;
+        mvccPersistHeapSiftUp(heap, *size);
+        (*size)++;
+        return;
+    }
+    /* Replace root only if candidate is newer than the current oldest entry. */
+    if (mvccPersistEntryCompare(&candidate, &heap[0]) <= 0) return;
+    heap[0] = candidate;
+    mvccPersistHeapSiftDown(heap, *size, 0);
+}
+
+static int mvccPersistEntrySortDesc(const void *a, const void *b) {
+    const mvccPersistEntry *ea = a;
+    const mvccPersistEntry *eb = b;
+    int cmp = mvccPersistEntryCompare(ea, eb);
+    if (cmp < 0) return 1;
+    if (cmp > 0) return -1;
+    return 0;
+}
 
 static int rdbSaveInfoEnsureMastersCapacity(rdbSaveInfo *rsi, int count) {
     if (rsi == NULL || count < 0 || count > RDB_REPL_MASTERS_MAX) return C_ERR;
@@ -1413,35 +1492,59 @@ int rdbSaveInfoAuxFields(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
 
         unsigned long mvcc_count = server.mvcc_key_clock ? dictSize(server.mvcc_key_clock) : 0;
         if (rdbSaveAuxFieldStrInt(rdb, "mvcc-keys-count", mvcc_count) == -1) return -1;
+        server.mvcc_rdb_clock_entries_dropped_last_save = 0;
         if (mvcc_count) {
+            unsigned long cap = 0;
+            if (server.mvcc_rdb_clock_max_entries > 0) {
+                unsigned long long configured_cap = (unsigned long long)server.mvcc_rdb_clock_max_entries;
+                cap = configured_cap > ULONG_MAX ? ULONG_MAX : (unsigned long)configured_cap;
+            }
+
+            unsigned long heap_cap = min(cap, mvcc_count);
+            mvccPersistEntry *heap = heap_cap ? zmalloc(sizeof(*heap) * heap_cap) : NULL;
+            unsigned long heap_size = 0;
+            unsigned long valid_entries = 0;
+
             dictIterator di;
             dictInitIterator(&di, server.mvcc_key_clock);
             dictEntry *de;
-            unsigned long mvcc_id = 0;
 
             while ((de = dictNext(&di)) != NULL) {
-                if (mvcc_id >= RDB_MVCC_CLOCK_MAX_ENTRIES) break;
-
                 sds mvcc_key = dictGetKey(de);
                 uint64_t *clockp = dictGetVal(de);
                 if (mvcc_key == NULL || clockp == NULL || *clockp == 0) continue;
+                valid_entries++;
 
-                uint64_t ts_be = htonu64(*clockp);
+                mvccPersistEntry candidate = {
+                    .key = mvcc_key,
+                    .ts = *clockp,
+                };
+                mvccPersistHeapPushOrReplace(heap, &heap_size, heap_cap, candidate);
+            }
+
+            if (heap_size > 1) {
+                qsort(heap, heap_size, sizeof(*heap), mvccPersistEntrySortDesc);
+            }
+
+            for (unsigned long mvcc_id = 0; mvcc_id < heap_size; mvcc_id++) {
+                uint64_t ts_be = htonu64(heap[mvcc_id].ts);
                 sds auxkey = sdscatprintf(sdsempty(), "mvcc-key-%lu", mvcc_id);
                 sds auxval = sdsnewlen(&ts_be, sizeof(ts_be));
-                auxval = sdscatlen(auxval, mvcc_key, sdslen(mvcc_key));
+                auxval = sdscatlen(auxval, heap[mvcc_id].key, sdslen(heap[mvcc_id].key));
                 int rc = rdbSaveAuxField(rdb, auxkey, sdslen(auxkey), auxval, sdslen(auxval));
                 sdsfree(auxkey);
                 sdsfree(auxval);
                 if (rc == -1) return -1;
-                mvcc_id++;
             }
 
-            if (mvcc_count > RDB_MVCC_CLOCK_MAX_ENTRIES) {
+            if (valid_entries > heap_size) {
+                server.mvcc_rdb_clock_entries_dropped_last_save = valid_entries - heap_size;
                 serverLog(LL_WARNING,
-                          "Truncated MVCC clock persistence to %d entries (had %lu)",
-                          RDB_MVCC_CLOCK_MAX_ENTRIES, mvcc_count);
+                          "Truncated MVCC clock persistence to %lu entries (had %lu valid)",
+                          heap_size, valid_entries);
             }
+
+            if (heap) zfree(heap);
         }
 
         unsigned long replay_seen_count = server.rreplay_seen_order ? listLength(server.rreplay_seen_order) : 0;

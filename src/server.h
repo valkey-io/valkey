@@ -148,6 +148,8 @@ struct hdr_histogram;
 #define CONFIG_RUN_ID_SIZE 40
 #define RDB_EOF_MARK_SIZE 40
 #define CONFIG_REPL_BACKLOG_MIN_SIZE (1024 * 16) /* 16k */
+#define CONFIG_DEFAULT_MVCC_RDB_CLOCK_MAX_ENTRIES 200000
+#define CONFIG_DEFAULT_RREPLAY_PENDING_MAX_ENTRIES 50000
 #define CONFIG_BGSAVE_RETRY_DELAY 5              /* Wait a few secs before trying again. */
 #define CONFIG_DEFAULT_PID_FILE "/var/run/valkey.pid"
 #define CONFIG_DEFAULT_BINDADDR_COUNT 2
@@ -1623,9 +1625,12 @@ typedef struct valkeyUpstreamRuntime {
     long long last_connect_attempt_sec; /* Last outbound connect attempt timestamp. */
     unsigned long long replay_last_sent_id;  /* Last replay-id sent to this peer. */
     unsigned long long replay_last_acked_id; /* Last replay-id acked by this peer. */
+    unsigned long long replay_last_received_id; /* Last replay-id received from this peer. */
     unsigned long long replay_tx_frames;     /* Total replay frames sent to this peer. */
     unsigned long long replay_rx_frames;     /* Total replay frames received from this peer. */
     unsigned long long replay_ack_frames;    /* Total replay ACK replies received from this peer. */
+    unsigned long long replay_pending_dropped; /* Total pending replay frames dropped by queue cap. */
+    list *replay_pending_frames; /* Pending outbound replay frames awaiting ACK on peer-forward links. */
 } valkeyUpstreamRuntime;
 
 /* This structure can be optionally passed to RDB save/load functions in
@@ -2188,9 +2193,12 @@ struct valkeyServer {
     dict *rreplay_seen;   /* Recent replay frames for dedupe. Key: "<origin-uuid>:<replay-id>" */
     list *rreplay_seen_order; /* FIFO order for replay dedupe eviction. Values are sds keys in rreplay_seen. */
     unsigned long long rreplay_seq; /* Local replay sequence generator used for outbound RREPLAY. */
+    long long rreplay_pending_max_entries; /* Per-upstream pending replay frame queue cap. */
     dict *mvcc_key_clock; /* Key-level LWW clock map. Key: binary(dbid)+key-bytes, Value: uint64_t*. */
     dict *mvcc_key_tie_break; /* Deterministic tie-break map. Key: binary(dbid)+key-bytes, Value: zstrdup("<uuid>:<id>"). */
     uint64_t mvcc_clock;  /* Monotonic local logical clock used by replay frames. */
+    long long mvcc_rdb_clock_max_entries; /* Configurable cap for persisted MVCC key clocks in RDB AUX. */
+    unsigned long long mvcc_rdb_clock_entries_dropped_last_save; /* Last RDB save: valid MVCC entries omitted by cap. */
     char *primary_user;     /* AUTH with this user and primary_auth with primary */
     sds primary_auth;       /* AUTH with this password with primary */
     char *primary_host;     /* Hostname of primary */

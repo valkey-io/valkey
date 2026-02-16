@@ -3425,6 +3425,8 @@ standardConfig static_configs[] = {
     createLongLongConfig("proto-max-bulk-len", NULL, DEBUG_CONFIG | MODIFIABLE_CONFIG, 1024 * 1024, LONG_MAX, server.proto_max_bulk_len, 512ll * 1024 * 1024, MEMORY_CONFIG, NULL, NULL), /* Bulk request max size */
     createLongLongConfig("stream-node-max-entries", NULL, MODIFIABLE_CONFIG, 0, LLONG_MAX, server.stream_node_max_entries, 100, INTEGER_CONFIG, NULL, NULL),
     createLongLongConfig("repl-backlog-size", NULL, MODIFIABLE_CONFIG, 1, LLONG_MAX, server.repl_backlog_size, 10 * 1024 * 1024, MEMORY_CONFIG, NULL, updateReplBacklogSize), /* Default: 10mb */
+    createLongLongConfig("rreplay-pending-max-entries", NULL, MODIFIABLE_CONFIG, 0, LLONG_MAX, server.rreplay_pending_max_entries, CONFIG_DEFAULT_RREPLAY_PENDING_MAX_ENTRIES, INTEGER_CONFIG, NULL, NULL),
+    createLongLongConfig("mvcc-rdb-clock-max-entries", NULL, MODIFIABLE_CONFIG, 0, LLONG_MAX, server.mvcc_rdb_clock_max_entries, CONFIG_DEFAULT_MVCC_RDB_CLOCK_MAX_ENTRIES, INTEGER_CONFIG, NULL, NULL),
     createLongLongConfig("cluster-manual-failover-timeout", NULL, MODIFIABLE_CONFIG, 1, INT_MAX, server.cluster_mf_timeout, 5000, INTEGER_CONFIG, NULL, NULL),
 
     /* Unsigned Long Long configs */

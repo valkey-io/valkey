@@ -6,7 +6,7 @@ on:
 permissions:
   actions: read
   contents: read
-  pull-requests: write
+  pull-requests: read
 concurrency:
   group: weekly-release-tests
   cancel-in-progress: false
@@ -50,6 +50,10 @@ jobs:
   run-daily-for-release-branches:
     needs: determine-release-branches
     if: needs.determine-release-branches.outputs.has-branches == 'true' && github.repository == 'valkey-io/valkey'
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: read
     strategy:
       fail-fast: false
       matrix:

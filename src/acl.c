@@ -1834,10 +1834,11 @@ static int ACLSelectorCheckCmd(aclSelector *selector,
             zfree(dbids);
         }
     } else if ((cmd->flags & CMD_ALL_DBS) && !(selector->flags & SELECTOR_FLAG_ALLDBS)) {
-        /* Intset stores unique IDs, if the count doesn't equal dbnum,
-         * the selector doesn't have access to all databases. */
-        if (!selector->dbs || intsetLen(selector->dbs) != (uint32_t)server.dbnum) {
-            return ACL_DENIED_DB;
+        for (int i = 0; i < server.dbnum; i++) {
+            if (!ACLSelectorCanAccessDb(selector, i)) {
+                if (keyidxptr) *keyidxptr = 0;
+                return ACL_DENIED_DB;
+            }
         }
     } else if (shouldRestrictCmd(cmd) && !ACLSelectorCanAccessDb(selector, dbid)) {
         if (keyidxptr) *keyidxptr = 0;

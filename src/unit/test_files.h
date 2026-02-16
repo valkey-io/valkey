@@ -126,7 +126,7 @@ int test_listpackBenchmarkFree(int argc, char **argv, int flags);
 int test_mutexQueueSimplePushPop(int argc, char *argv[], int flags);
 int test_mutexQueueDoublePushPop(int argc, char *argv[], int flags);
 int test_mutexQueuePriorityOrdering(int argc, char *argv[], int flags);
-int test_mutexQueuePeekAndRemoveHead(int argc, char *argv[], int flags);
+int test_mutexQueuePeek(int argc, char *argv[], int flags);
 int test_mutexQueueFifoPopAll(int argc, char *argv[], int flags);
 int test_mutexQueueFifoAddMultiple(int argc, char *argv[], int flags);
 int test_mutexQueueSimpleThread(int argc, char *argv[], int flags);

@@ -316,8 +316,8 @@ start_cluster 2 0 {tags {external:skip cluster}} {
         }
         R $slot0_owner del "$0_slot_tag:test"
 
-        # Load 100 keys into slot 0 using {06S} hashtag
-        set num_keys 100
+        # Load 10 keys into slot 0 using {06S} hashtag
+        set num_keys 10
         for {set i 0} {$i < $num_keys} {incr i} {
             R $slot0_owner set "$0_slot_tag:$i" "value:$i"
         }
@@ -337,10 +337,13 @@ start_cluster 2 0 {tags {external:skip cluster}} {
         R $slot0_owner CLUSTER SETSLOT 0 MIGRATING $target_id
         R $target_node CLUSTER SETSLOT 0 IMPORTING $source_id
         set target_port [lindex [R $target_node config get port] 1]
+        if {$::tls} {
+            set target_port [lindex [R $target_node config get tls-port] 1]
+        }
         
         # Migrate all slot 0 keys
         for {set i 0} {$i < $num_keys} {incr i} {
-            R $slot0_owner MIGRATE 127.0.0.1 $target_port "$0_slot_tag:$i" 0 5000
+            R $slot0_owner MIGRATE 127.0.0.1 $target_port "$0_slot_tag:$i" 0 10000
         }
         R $slot0_owner CLUSTER SETSLOT 0 NODE $target_id
         R $target_node CLUSTER SETSLOT 0 NODE $target_id

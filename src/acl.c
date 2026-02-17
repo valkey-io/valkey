@@ -192,6 +192,7 @@ static void ACLResetFirstArgs(aclSelector *selector);
 static void ACLAddAllowedFirstArg(aclSelector *selector, unsigned long id, const char *sub);
 static void ACLFreeLogEntry(void *le);
 static int ACLSetSelector(aclSelector *selector, const char *op, size_t oplen);
+static struct serverCommand *ACLLookupCommand(const char *name);
 
 /* The length of the string representation of a hashed password. */
 #define HASH_PASSWORD_LEN (SHA256_BLOCK_SIZE * 2)
@@ -726,6 +727,57 @@ static int ACLSetSelectorCategory(aclSelector *selector, const char *category, i
     /* Set the actual command bits on the selector. */
     ACLSetSelectorCommandBitsForCategory(server.orig_commands, selector, cflag, allow);
     return C_OK;
+}
+
+/* Check if any ACL user has command rules referencing the specified module.
+ * If rule_out is not NULL, it will be set to a duplicate of the first matching
+ * rule.
+ * Returns 1 if any rules are found, 0 otherwise. */
+int ACLModuleHasCommandRules(const struct ValkeyModule *module, sds *rule_out) {
+    raxIterator ri;
+    raxStart(&ri, Users);
+    raxSeek(&ri, "^", NULL, 0);
+    while (raxNext(&ri)) {
+        user *u = ri.data;
+        listIter li;
+        listNode *ln;
+        listRewind(u->selectors, &li);
+        while ((ln = listNext(&li)) != NULL) {
+            aclSelector *selector = listNodeValue(ln);
+            if (sdslen(selector->command_rules) == 0) continue;
+
+            int argc = 0;
+            sds *argv = sdssplitargs(selector->command_rules, &argc);
+            if (!argv) continue;
+
+            for (int i = 0; i < argc; i++) {
+                sds rule = argv[i];
+                if (rule[0] != '+' && rule[0] != '-') continue;
+                if (rule[1] == '@') continue;
+
+                struct serverCommand *cmd = ACLLookupCommand(rule + 1);
+                if (!cmd) {
+                    const char *subsep = strchr(rule + 1, '|');
+                    if (subsep) {
+                        size_t base_len = (size_t)(subsep - (rule + 1));
+                        sds base = sdsnewlen(rule + 1, base_len);
+                        cmd = ACLLookupCommand(base);
+                        sdsfree(base);
+                    }
+                }
+                if (!cmd || !(cmd->flags & CMD_MODULE)) continue;
+                if (moduleFromCommand(cmd) != module) continue;
+
+                if (rule_out) *rule_out = sdsdup(rule);
+                sdsfreesplitres(argv, argc);
+                raxStop(&ri);
+                return 1;
+            }
+            sdsfreesplitres(argv, argc);
+        }
+    }
+    raxStop(&ri);
+    return 0;
 }
 
 /* This function returns an SDS string representing the specified selector ACL

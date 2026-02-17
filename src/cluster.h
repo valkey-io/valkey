@@ -151,7 +151,7 @@ void resetClusterStats(void);
 unsigned int delKeysInSlot(unsigned int hashslot, int lazy, bool propagate_del, bool send_del_event);
 
 void clusterUpdateState(void);
-int clusterSaveConfigFromBio(sds content, int do_fsync);
+int clusterSaveConfigFromBio(sds content, bool do_fsync);
 void clusterSaveConfigOrDie(void);
 int clusterDelSlot(int slot);
 int clusterAddSlot(clusterNode *n, int slot);

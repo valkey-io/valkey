@@ -1041,7 +1041,7 @@ sds clusterGenNodesConfContent(void) {
  * thread-safe.
  *
  * This function take ownership of the 'content' SDS string and will free it. */
-int clusterSaveConfigImpl(sds content, int from_bio, int do_fsync) {
+static int clusterSaveConfigImpl(sds content, bool from_bio, bool do_fsync) {
     sds tmpfilename;
     size_t content_size, offset = 0;
     ssize_t written_bytes;
@@ -1131,7 +1131,7 @@ cleanup:
  * This function writes the node config and returns C_OK, on error C_ERR
  * is returned. It is possible to use bio, which can move I/O latency into
  * the bio thread. If bio is used, it always returns C_OK. */
-int clusterSaveConfig(int bio, int do_fsync) {
+static int clusterSaveConfig(bool bio, bool do_fsync) {
     server.cluster->todo_before_sleep &= ~CLUSTER_TODO_SAVE_CONFIG;
     if (do_fsync) server.cluster->todo_before_sleep &= ~CLUSTER_TODO_FSYNC_CONFIG;
 
@@ -1142,28 +1142,28 @@ int clusterSaveConfig(int bio, int do_fsync) {
         bioCreateClusterConfigSaveJob(content, do_fsync);
         return C_OK;
     } else {
-        int res = clusterSaveConfigImpl(content, 0, do_fsync);
+        int res = clusterSaveConfigImpl(content, false, do_fsync);
         atomic_store_explicit(&server.cluster_config_bio_save_status, res, memory_order_relaxed);
         return res;
     }
 }
 
 /* Save the cluster file, it is called from the bio thread. */
-int clusterSaveConfigFromBio(sds content, int do_fsync) {
-    return clusterSaveConfigImpl(content, 1, do_fsync);
+int clusterSaveConfigFromBio(sds content, bool do_fsync) {
+    return clusterSaveConfigImpl(content, true, do_fsync);
 }
 
 /* Save the cluster configuration file. If the save fails, exit the process. */
 void clusterSaveConfigOrDie(void) {
-    if (clusterSaveConfig(0, 1) == C_ERR) {
+    if (clusterSaveConfig(false, true) == C_ERR) {
         serverLog(LL_WARNING, "Fatal: can't update cluster config file.");
         exit(1);
     }
 }
 
 /* Save the cluster configuration file in bio thread. */
-void clusterSaveConfigBackground(int do_fsync) {
-    int res = clusterSaveConfig(1, do_fsync);
+static void clusterSaveConfigBackground(bool do_fsync) {
+    int res = clusterSaveConfig(true, do_fsync);
     serverAssert(res == C_OK);
 }
 
@@ -1615,7 +1615,7 @@ void clusterHandleServerShutdown(bool auto_failover) {
     /* The error logs have been logged in the save function if the save fails. */
     serverLog(LL_NOTICE, "Saving the cluster configuration file before exiting.");
     bioDrainWorker(BIO_CLUSTER_SAVE);
-    clusterSaveConfig(0, 1);
+    clusterSaveConfig(false, true);
 
 #if !defined(__sun)
     /* Unlock the cluster config file before shutdown, see clusterLockConfig.
@@ -6213,7 +6213,7 @@ void clusterBeforeSleep(void) {
 
     /* Save the config, possibly using fsync. */
     if (flags & CLUSTER_TODO_SAVE_CONFIG) {
-        int fsync = flags & CLUSTER_TODO_FSYNC_CONFIG;
+        bool fsync = flags & CLUSTER_TODO_FSYNC_CONFIG;
         clusterSaveConfigBackground(fsync);
     }
 
@@ -7862,7 +7862,7 @@ int clusterCommandSpecial(client *c) {
         addReplySds(c, reply);
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "saveconfig") && c->argc == 2) {
         bioDrainWorker(BIO_CLUSTER_SAVE);
-        int retval = clusterSaveConfig(0, 1);
+        int retval = clusterSaveConfig(false, true);
 
         if (retval == C_OK)
             addReply(c, shared.ok);

@@ -57,6 +57,8 @@ proc remove_nodes_conf_folder {srv_idx} {
 
 start_cluster 1 1 {tags {external:skip cluster}} {
     test {Fail to save the cluster configuration file will not exit the process} {
+        set BIO_CLUSTER_SAVE 6
+
         assert_equal "ok" [getInfoProperty [R 0 cluster info] cluster_config_save_status]
         assert_equal "ok" [getInfoProperty [R 1 cluster info] cluster_config_save_status]
 
@@ -80,6 +82,7 @@ start_cluster 1 1 {tags {external:skip cluster}} {
         assert_equal 1 [process_is_alive [srv -1 pid]]
 
         # Make sure relevant logs are printed.
+        R 0 debug bio-drain $BIO_CLUSTER_SAVE
         verify_log_message 0 "*Could not rename tmp cluster config file*" 0
         verify_log_message -1 "*Could not rename tmp cluster config file*" 0
         verify_log_message 0 "*Cluster config updated even though writing the cluster config file to disk failed*" 0
@@ -94,6 +97,7 @@ start_cluster 1 1 {tags {external:skip cluster}} {
         } else {
             fail "The failover does not happen"
         }
+        R 0 debug bio-drain $BIO_CLUSTER_SAVE
         assert_morethan_equal [count_log_message 0 "Could not rename tmp cluster config file"] 2
         assert_equal [count_log_message 0 "Cluster config updated even though writing the cluster config file to disk failed"] 1
         assert_morethan_equal [count_log_message -1 "Could not rename tmp cluster config file"] 2

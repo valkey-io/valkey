@@ -523,6 +523,8 @@ void debugCommand(client *c) {
             "    When set to 1, slot migrations will be prevented from pausing on the source node.",
             "SLOTMIGRATION PREVENT-FAILOVER <0|1>",
             "    When set to 1, slot migrations will be prevented from performing the slot-level failover on the target node.",
+            "BIO-DRAIN <type>",
+            "    Wait for the specified bio job queue to become empty.",
             NULL};
         addExtendedReplyHelp(c, help, clusterDebugCommandExtendedHelp());
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "segfault")) {
@@ -1060,6 +1062,11 @@ void debugCommand(client *c) {
         addReply(c, shared.ok);
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "client-enforce-reply-list") && c->argc == 3) {
         server.debug_client_enforce_reply_list = atoi(objectGetVal(c->argv[2]));
+        addReply(c, shared.ok);
+    } else if (!strcasecmp(objectGetVal(c->argv[1]), "bio-drain") && c->argc == 3) {
+        long type;
+        if (getRangeLongFromObjectOrReply(c, c->argv[2], 0, BIO_NUM_OPS - 1, &type, NULL) != C_OK) return;
+        bioDrainWorker((int)type);
         addReply(c, shared.ok);
     } else if (!handleDebugClusterCommand(c)) {
         addReplySubcommandSyntaxError(c);

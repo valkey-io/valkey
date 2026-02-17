@@ -146,8 +146,8 @@ typedef union bio_job {
 
     struct {
         int type;
-        sds content;           /* Cluster config file content. */
-        unsigned do_fsync : 1; /* A flag to indicate that a fsync is required. */
+        sds content;   /* Cluster config file content. */
+        bool do_fsync; /* A flag to indicate that a fsync is required. */
     } cluster_save_args;
 } bio_job;
 
@@ -248,7 +248,7 @@ void bioCreateTlsReloadJob(void) {
     bioSubmitJob(BIO_TLS_RELOAD, job);
 }
 
-void bioCreateClusterConfigSaveJob(sds content, int do_fsync) {
+void bioCreateClusterConfigSaveJob(sds content, bool do_fsync) {
     bio_job *job = zmalloc(sizeof(*job));
     job->cluster_save_args.content = content;
     job->cluster_save_args.do_fsync = do_fsync;

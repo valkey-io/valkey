@@ -96,6 +96,8 @@ typedef struct serverObject robj;
 #include "crc64.h"
 
 struct hdr_histogram;
+struct ValkeyModule;
+
 
 /* helpers */
 #define numElements(x) (sizeof(x) / sizeof((x)[0]))
@@ -3027,6 +3029,7 @@ int isMutuallyExclusiveChildType(int type);
 extern rax *Users;
 extern user *DefaultUser;
 void ACLInit(void);
+int ACLModuleHasCommandRules(const struct ValkeyModule *module, sds *rule_out);
 /* Return values for ACLCheckAllPerm(). */
 #define ACL_OK 0
 #define ACL_DENIED_CMD 1

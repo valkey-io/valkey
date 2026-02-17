@@ -2146,11 +2146,12 @@ void hashtableCleanupIterator(hashtableIterator *iterator) {
     if (!(iter->index == -1 && iter->table == 0)) {
         if (isSafe(iter)) {
             hashtableResumeRehashing(iter->hashtable);
-            untrackSafeIterator(iter);
         } else {
             assert(iter->fingerprint == hashtableFingerprint(iter->hashtable));
         }
     }
+    if (isSafe(iter))
+        untrackSafeIterator(iter);
 }
 
 /* Allocates and initializes an iterator. */

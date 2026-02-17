@@ -1917,7 +1917,6 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
     if (server.aof_fsync != AOF_FSYNC_ALWAYS) {
         int io_responses_after = processIOThreadsReadDone();
         if (io_responses_after > 0) {
-
             /* Any responses that failed to enqueue to IO threads need to be handled now */
             handleClientsWithPendingWrites();
         }

@@ -1258,39 +1258,43 @@ start_server [list overrides [list "dir" $server_path "aclfile" "user.acl"] tags
 
 set testmodule [file normalize tests/modules/subcommands.so]
 start_server {tags {acl modules external:skip}} {
-    r module load $testmodule
+    if {[catch {r module load $testmodule} module_load_err]} {
+        test {Module unload ACL tests require subcommands module} {
+            skip "Module load failed: $module_load_err"
+        }
+    } else {
+        test {Module unload blocked by ACL subcommand rule} {
+            r ACL SETUSER subcmduser on nopass +subcommands.sub|get_fullname
+            catch {r module unload subcommands} e
+            assert_match {*one or more ACL users reference commands from this module*} $e
+            r ACL DELUSER subcmduser
+        }
 
-    test {Module unload blocked by ACL subcommand rule} {
-        r ACL SETUSER subcmduser on nopass +subcommands.sub|get_fullname
-        catch {r module unload subcommands} e
-        assert_match {*one or more ACL users reference commands from this module*} $e
-        r ACL DELUSER subcmduser
-    }
+        test {Module unload blocked by ACL base command rule} {
+            r ACL SETUSER basecmduser on nopass +subcommands.parent_get_fullname
+            catch {r module unload subcommands} e
+            assert_match {*one or more ACL users reference commands from this module*} $e
+            r ACL DELUSER basecmduser
+        }
 
-    test {Module unload blocked by ACL base command rule} {
-        r ACL SETUSER basecmduser on nopass +subcommands.parent_get_fullname
-        catch {r module unload subcommands} e
-        assert_match {*one or more ACL users reference commands from this module*} $e
-        r ACL DELUSER basecmduser
-    }
+        test {Module unload blocked by ACL deny rule} {
+            r ACL SETUSER denycmduser on nopass -subcommands.parent_get_fullname
+            catch {r module unload subcommands} e
+            assert_match {*one or more ACL users reference commands from this module*} $e
+            r ACL DELUSER denycmduser
+        }
 
-    test {Module unload blocked by ACL deny rule} {
-        r ACL SETUSER denycmduser on nopass -subcommands.parent_get_fullname
-        catch {r module unload subcommands} e
-        assert_match {*one or more ACL users reference commands from this module*} $e
-        r ACL DELUSER denycmduser
-    }
+        test {Module unload blocked by ACL selector rule} {
+            r ACL SETUSER selcmduser on nopass (+subcommands.parent_get_fullname)
+            catch {r module unload subcommands} e
+            assert_match {*one or more ACL users reference commands from this module*} $e
+            r ACL DELUSER selcmduser
+        }
 
-    test {Module unload blocked by ACL selector rule} {
-        r ACL SETUSER selcmduser on nopass (+subcommands.parent_get_fullname)
-        catch {r module unload subcommands} e
-        assert_match {*one or more ACL users reference commands from this module*} $e
-        r ACL DELUSER selcmduser
-    }
-
-    test {Unload the module - subcommands} {
-        r ACL DELUSER subcmduser basecmduser denycmduser selcmduser
-        assert_equal {OK} [r module unload subcommands]
+        test {Unload the module - subcommands} {
+            r ACL DELUSER subcmduser basecmduser denycmduser selcmduser
+            assert_equal {OK} [r module unload subcommands]
+        }
     }
 }
 

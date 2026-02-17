@@ -170,7 +170,7 @@ static uint32_t int2int(uint32_t input) {
 
 /* Turn an uint32_t integer into an alphanumerical key and return its
  * length. This function is used in order to generate keys that have
- * a large charset, so that the radix tree can be testsed with many
+ * a large charset, so that the radix tree can be tested with many
  * children per node. */
 static size_t int2alphakey(char *s, size_t maxlen, uint32_t i) {
     const char *set = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"

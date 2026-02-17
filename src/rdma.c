@@ -180,11 +180,11 @@ static int rdmaPostRecv(RdmaContext *ctx, struct rdma_cm_id *cm_id, ValkeyRdmaCm
         return C_ERR;
     }
 
-    sge.addr = (uint64_t)cmd;
+    sge.addr = (uint64_t)(uintptr_t)cmd;
     sge.length = length;
     sge.lkey = ctx->cmd_mr->lkey;
 
-    recv_wr.wr_id = (uint64_t)cmd;
+    recv_wr.wr_id = (uint64_t)(uintptr_t)cmd;
     recv_wr.sg_list = &sge;
     recv_wr.num_sge = 1;
     recv_wr.next = NULL;
@@ -451,13 +451,13 @@ static int rdmaSendCommand(RdmaContext *ctx, struct rdma_cm_id *cm_id, ValkeyRdm
     assert(i < 2 * VALKEY_RDMA_MAX_WQE);
 
     memcpy(_cmd, cmd, sizeof(ValkeyRdmaCmd));
-    sge.addr = (uint64_t)_cmd;
+    sge.addr = (uint64_t)(uintptr_t)_cmd;
     sge.length = sizeof(ValkeyRdmaCmd);
     sge.lkey = ctx->cmd_mr->lkey;
 
     send_wr.sg_list = &sge;
     send_wr.num_sge = 1;
-    send_wr.wr_id = (uint64_t)_cmd;
+    send_wr.wr_id = (uint64_t)(uintptr_t)_cmd;
     send_wr.opcode = IBV_WR_SEND;
     send_wr.send_flags = IBV_SEND_SIGNALED;
     send_wr.next = NULL;
@@ -474,7 +474,7 @@ static int connRdmaRegisterRx(RdmaContext *ctx, struct rdma_cm_id *cm_id) {
     ValkeyRdmaCmd cmd = {0};
 
     cmd.memory.opcode = htons(RegisterXferMemory);
-    cmd.memory.addr = htonu64((uint64_t)ctx->rx.addr);
+    cmd.memory.addr = htonu64((uint64_t)(uintptr_t)ctx->rx.addr);
     cmd.memory.length = htonl(ctx->rx.length);
     cmd.memory.key = htonl(ctx->rx.mr->rkey);
 
@@ -552,7 +552,7 @@ static int connRdmaHandleRecv(RdmaContext *ctx, struct rdma_cm_id *cm_id, Valkey
     case Keepalive: break;
 
     case RegisterXferMemory:
-        ctx->tx_addr = (char *)ntohu64(cmd->memory.addr);
+        ctx->tx_addr = (char *)(uintptr_t)ntohu64(cmd->memory.addr);
         ctx->tx.length = ntohl(cmd->memory.length);
         ctx->tx_key = ntohl(cmd->memory.key);
         ctx->tx.offset = 0;
@@ -632,14 +632,14 @@ pollcq:
 
     switch (wc.opcode) {
     case IBV_WC_RECV:
-        cmd = (ValkeyRdmaCmd *)wc.wr_id;
+        cmd = (ValkeyRdmaCmd *)(uintptr_t)wc.wr_id;
         if (connRdmaHandleRecv(ctx, cm_id, cmd, wc.byte_len) == C_ERR) {
             return C_ERR;
         }
         break;
 
     case IBV_WC_RECV_RDMA_WITH_IMM:
-        cmd = (ValkeyRdmaCmd *)wc.wr_id;
+        cmd = (ValkeyRdmaCmd *)(uintptr_t)wc.wr_id;
         if (connRdmaHandleRecvImm(ctx, cm_id, cmd, ntohl(wc.imm_data)) == C_ERR) {
             rdma_conn->c.state = CONN_STATE_ERROR;
             return C_ERR;
@@ -654,7 +654,7 @@ pollcq:
         break;
 
     case IBV_WC_SEND:
-        cmd = (ValkeyRdmaCmd *)wc.wr_id;
+        cmd = (ValkeyRdmaCmd *)(uintptr_t)wc.wr_id;
         if (connRdmaHandleSend(cmd) == C_ERR) {
             return C_ERR;
         }
@@ -1300,7 +1300,7 @@ static size_t connRdmaSend(connection *conn, const void *data, size_t data_len) 
 
     memcpy(addr, data, data_len);
 
-    sge.addr = (uint64_t)addr;
+    sge.addr = (uint64_t)(uintptr_t)addr;
     sge.lkey = ctx->tx.mr->lkey;
     sge.length = data_len;
 
@@ -1309,7 +1309,7 @@ static size_t connRdmaSend(connection *conn, const void *data, size_t data_len) 
     send_wr.opcode = IBV_WR_RDMA_WRITE_WITH_IMM;
     send_wr.send_flags = (++ctx->tx_ops % (VALKEY_RDMA_MAX_WQE / 2)) ? 0 : IBV_SEND_SIGNALED;
     send_wr.imm_data = htonl(data_len);
-    send_wr.wr.rdma.remote_addr = (uint64_t)remote_addr;
+    send_wr.wr.rdma.remote_addr = (uint64_t)(uintptr_t)remote_addr;
     send_wr.wr.rdma.rkey = ctx->tx_key;
     send_wr.wr_id = 0;
     send_wr.next = NULL;

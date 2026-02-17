@@ -119,7 +119,7 @@ test "Node #10 should eventually replicate node #5" {
 } ;# start_cluster
 
 # Create a cluster with 3 master and 15 slaves, so that we have 5
-# slaves for eatch master.
+# slaves for each master.
 start_cluster 3 15 {tags {external:skip cluster}} {
 
 test "Cluster is up" {

@@ -172,7 +172,7 @@ typedef struct ValkeyModuleStreamID {
 #define VALKEYMODULE_CTX_FLAGS_MULTI (1 << 1)
 /* The instance is a primary */
 #define VALKEYMODULE_CTX_FLAGS_PRIMARY (1 << 2)
-/* The instance is a replic */
+/* The instance is a replica */
 #define VALKEYMODULE_CTX_FLAGS_REPLICA (1 << 3)
 /* The instance is read-only (usually meaning it's a replica as well) */
 #define VALKEYMODULE_CTX_FLAGS_READONLY (1 << 4)
@@ -674,7 +674,8 @@ static const ValkeyModuleEvent ValkeyModuleEvent_ReplicationRoleChanged = {VALKE
 #define VALKEYMODULE_SUBEVENT_ATOMIC_SLOT_MIGRATION_EXPORT_COMPLETED 5
 #define _VALKEYMODULE_SUBEVENT_ATOMIC_SLOT_MIGRATION_NEXT 6
 
-/* ValkeyModuleClientInfo flags. */
+/* ValkeyModuleClientInfo flags.
+ * Note: flags VALKEYMODULE_CLIENTINFO_FLAG_PRIMARY and below were added in Valkey 9.1 */
 #define VALKEYMODULE_CLIENTINFO_FLAG_SSL (1 << 0)
 #define VALKEYMODULE_CLIENTINFO_FLAG_PUBSUB (1 << 1)
 #define VALKEYMODULE_CLIENTINFO_FLAG_BLOCKED (1 << 2)
@@ -682,6 +683,13 @@ static const ValkeyModuleEvent ValkeyModuleEvent_ReplicationRoleChanged = {VALKE
 #define VALKEYMODULE_CLIENTINFO_FLAG_UNIXSOCKET (1 << 4)
 #define VALKEYMODULE_CLIENTINFO_FLAG_MULTI (1 << 5)
 #define VALKEYMODULE_CLIENTINFO_FLAG_READONLY (1 << 6)
+#define VALKEYMODULE_CLIENTINFO_FLAG_PRIMARY (1 << 7)
+#define VALKEYMODULE_CLIENTINFO_FLAG_REPLICA (1 << 8)
+#define VALKEYMODULE_CLIENTINFO_FLAG_MONITOR (1 << 9)
+#define VALKEYMODULE_CLIENTINFO_FLAG_MODULE (1 << 10)
+#define VALKEYMODULE_CLIENTINFO_FLAG_AUTHENTICATED (1 << 11)
+#define VALKEYMODULE_CLIENTINFO_FLAG_EVER_AUTHENTICATED (1 << 12)
+#define VALKEYMODULE_CLIENTINFO_FLAG_FAKE (1 << 13)
 
 /* Here we take all the structures that the module pass to the core
  * and the other way around. Notably the list here contains the structures
@@ -1998,6 +2006,7 @@ VALKEYMODULE_API void (*ValkeyModule_GetRandomHexChars)(char *dst, size_t len) V
 VALKEYMODULE_API void (*ValkeyModule_SetDisconnectCallback)(ValkeyModuleBlockedClient *bc,
                                                             ValkeyModuleDisconnectFunc callback) VALKEYMODULE_ATTR;
 VALKEYMODULE_API void (*ValkeyModule_SetClusterFlags)(ValkeyModuleCtx *ctx, uint64_t flags) VALKEYMODULE_ATTR;
+VALKEYMODULE_API unsigned int (*ValkeyModule_ClusterKeySlotC)(const char *key, size_t keylen) VALKEYMODULE_ATTR;
 VALKEYMODULE_API unsigned int (*ValkeyModule_ClusterKeySlot)(ValkeyModuleString *key) VALKEYMODULE_ATTR;
 VALKEYMODULE_API const char *(*ValkeyModule_ClusterCanonicalKeyNameInSlot)(unsigned int slot)VALKEYMODULE_ATTR;
 VALKEYMODULE_API int (*ValkeyModule_ExportSharedAPI)(ValkeyModuleCtx *ctx,
@@ -2491,6 +2500,7 @@ static int ValkeyModule_Init(ValkeyModuleCtx *ctx, const char *name, int ver, in
     VALKEYMODULE_GET_API(GetRandomBytes);
     VALKEYMODULE_GET_API(GetRandomHexChars);
     VALKEYMODULE_GET_API(SetClusterFlags);
+    VALKEYMODULE_GET_API(ClusterKeySlotC);
     VALKEYMODULE_GET_API(ClusterKeySlot);
     VALKEYMODULE_GET_API(ClusterCanonicalKeyNameInSlot);
     VALKEYMODULE_GET_API(ExportSharedAPI);

@@ -4,6 +4,8 @@
 *.xo
 *.so
 *.d
+*.lo
+*.la
 *.log
 dump*.rdb
 *-benchmark

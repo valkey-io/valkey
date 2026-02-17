@@ -134,6 +134,28 @@ void *mutexQueuePop(mutexQueue *theQueue, bool blocking) {
     return value;
 }
 
+/* Note: If 'blocking' is true, this method will block until an item is available.  */
+void *mutexQueuePeek(mutexQueue *theQueue, bool blocking) {
+    mutexQueue *mq = theQueue;
+    void *value = NULL;
+
+    pthread_mutex_lock(&mq->mutex);
+
+    if (blocking) {
+        while (mutexQueueLengthInternal(mq) == 0) {
+            pthread_cond_wait(&mq->notify_cv, &mq->mutex);
+        }
+    }
+
+    if (fifoLength(mq->priority_fifo) > 0) {
+        fifoPeek(mq->priority_fifo, &value);
+    } else if (fifoLength(mq->normal_fifo) > 0) {
+        fifoPeek(mq->normal_fifo, &value);
+    }
+
+    pthread_mutex_unlock(&mq->mutex);
+    return value;
+}
 
 /* Note: If 'blocking' is true, this method will block until an item is available.  */
 fifo *mutexQueuePopAll(mutexQueue *theQueue, bool blocking) {

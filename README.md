@@ -59,6 +59,11 @@ C++ compiler and run:
 
     % make USE_FAST_FLOAT=yes
 
+To build with enhanced stack traces that include file names and line numbers
+for all functions (including static functions), use libbacktrace:
+
+    % make USE_LIBBACKTRACE=yes
+
 To build Valkey without the Lua engine:
 
     % make BUILD_LUA=no

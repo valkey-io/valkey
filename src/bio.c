@@ -260,8 +260,9 @@ void *bioProcessBackgroundJobs(void *arg) {
     bio_worker_num = bioWorkerNum(bwd);
 
     while (1) {
-        /* Get job - blocking until available */
-        bio_job *job = mutexQueuePop(bwd->bio_jobs, true);
+        /* Keep the job in the queue until it's fully processed so cancellation
+         * won't leave an untracked in-flight allocation. */
+        bio_job *job = mutexQueuePeek(bwd->bio_jobs, true);
 
         /* Process the job accordingly to its type. */
         int job_type = job->header.type;
@@ -312,6 +313,8 @@ void *bioProcessBackgroundJobs(void *arg) {
         } else {
             serverPanic("Wrong job type in bioProcessBackgroundJobs().");
         }
+        void *removed_job = mutexQueuePop(bwd->bio_jobs, false);
+        serverAssert(removed_job == job);
         zfree(job);
         atomic_fetch_sub(&bio_jobs_counter[job_type], 1);
     }

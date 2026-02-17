@@ -82,6 +82,39 @@ int test_mutexQueuePriorityOrdering(int argc, char *argv[], int flags) {
     return 0;
 }
 
+/* Test: peek */
+int test_mutexQueuePeek(int argc, char *argv[], int flags) {
+    UNUSED(argc);
+    UNUSED(argv);
+    UNUSED(flags);
+
+    mutexQueue *q = mutexQueueCreate();
+    add(q, 10);
+    priorityAdd(q, 1);
+    add(q, 11);
+
+    TEST_EXPECT((long)mutexQueuePeek(q, false) == 1);
+    TEST_EXPECT(mutexQueueLength(q) == 3ul);
+
+    void *removed = mutexQueuePop(q, false);
+    TEST_EXPECT((long)removed == 1);
+    TEST_EXPECT(mutexQueueLength(q) == 2ul);
+    TEST_EXPECT((long)mutexQueuePeek(q, false) == 10);
+
+    removed = mutexQueuePop(q, false);
+    TEST_EXPECT((long)removed == 10);
+    removed = mutexQueuePop(q, false);
+    TEST_EXPECT((long)removed == 11);
+
+    TEST_EXPECT(mutexQueuePeek(q, false) == NULL);
+    TEST_EXPECT(mutexQueuePop(q, false) == NULL);
+    TEST_EXPECT(mutexQueueLength(q) == 0ul);
+
+    mutexQueueRelease(q);
+    return 0;
+}
+
+
 /* Test: fifoPopAll */
 int test_mutexQueueFifoPopAll(int argc, char *argv[], int flags) {
     UNUSED(argc);

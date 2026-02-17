@@ -1,17 +1,15 @@
 name: Daily
 on:
   pull_request:
+    types: [opened, synchronize, reopened, labeled]
     branches:
       # any PR to a release branch.
       - "[0-9].[0-9]"
+      - "unstable"
     paths-ignore:
       - '**/*.md'
       - '**/00-RELEASENOTES'
       - '**/COPYING'
-  pull_request_target:
-    types: [labeled]
-    branches:
-      - "unstable"
   schedule:
     - cron: "0 0 * * *"
   workflow_dispatch:
@@ -68,18 +66,27 @@ on:
         default: "unstable"
 concurrency:
   group: daily-${{ github.head_ref || inputs.use_git_ref || github.event.inputs.use_git_ref || github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name != 'pull_request' || github.event.action != 'labeled' }}
 permissions:
   contents: read
-  pull-requests: write
+  pull-requests: read
 jobs:
   test-ubuntu-jemalloc:
     runs-on: ubuntu-latest
+    # pull_request gate breakdown:
+    # 1) (base != unstable) OR PR currently has run-extra-tests.
+    # 2) Exclude all labeled events, except unstable + newly added run-extra-tests.
+    # 3) release branches run on opened/reopened/synchronize, never label-only events.
+    # 4) unstable runs when run-extra-tests is added, and on later code updates while it remains.
     if: |
       (github.event_name == 'workflow_call' || github.event_name == 'workflow_dispatch' ||
         (github.event_name == 'schedule' && github.repository == 'valkey-io/valkey') ||
-        (github.event_name == 'pull_request' && github.event.pull_request.base.ref != 'unstable') ||
-        (github.event_name == 'pull_request_target' && github.event.label.name == 'run-extra-tests')) &&
+        (github.event_name == 'pull_request' &&
+          (github.event.pull_request.base.ref != 'unstable' ||
+            contains(github.event.pull_request.labels.*.name, 'run-extra-tests')) &&
+          (github.event.action != 'labeled' ||
+            (github.event.pull_request.base.ref == 'unstable' && github.event.label.name == 'run-extra-tests'))
+        )) &&
       !contains(github.event.inputs.skipjobs, 'ubuntu')
     timeout-minutes: 1440
     steps:
@@ -92,12 +99,19 @@ jobs:
           echo "skiptests: ${{github.event.inputs.skiptests}}"
           echo "test_args: ${{github.event.inputs.test_args}}"
           echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
-      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          repository: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name) || env.GITHUB_REPOSITORY || github.repository }}
-          ref: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.sha) || env.GITHUB_HEAD_REF || github.ref }}
+          repository: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && env.GITHUB_REPOSITORY) || github.repository }}
+          ref: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && env.GITHUB_HEAD_REF) || github.ref }}
+      - name: Install libbacktrace
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: ianlancetaylor/libbacktrace
+          ref: b9e40069c0b47a722286b94eb5231f7f05c08713
+          path: libbacktrace
+      - run: cd libbacktrace && ./configure && make && sudo make install
       - name: make
-        run: make all-with-unit-tests SERVER_CFLAGS='-Werror'
+        run: make all-with-unit-tests SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes
       - name: testprep
         run: sudo apt-get install tcl8.6 tclx
       - name: test
@@ -146,8 +160,12 @@ jobs:
     if: |
       (github.event_name == 'workflow_call' || github.event_name == 'workflow_dispatch' ||
         (github.event_name == 'schedule' && github.repository == 'valkey-io/valkey') ||
-        (github.event_name == 'pull_request' && github.event.pull_request.base.ref != 'unstable') ||
-        (github.event_name == 'pull_request_target' && github.event.label.name == 'run-extra-tests')) &&
+        (github.event_name == 'pull_request' &&
+          (github.event.pull_request.base.ref != 'unstable' ||
+            contains(github.event.pull_request.labels.*.name, 'run-extra-tests')) &&
+          (github.event.action != 'labeled' ||
+            (github.event.pull_request.base.ref == 'unstable' && github.event.label.name == 'run-extra-tests'))
+        )) &&
       (!contains(github.event.inputs.skipjobs, 'ubuntu') || !contains(github.event.inputs.skipjobs, 'arm'))
     timeout-minutes: 14400
     steps:
@@ -160,12 +178,19 @@ jobs:
           echo "skiptests: ${{github.event.inputs.skiptests}}"
           echo "test_args: ${{github.event.inputs.test_args}}"
           echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
-      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          repository: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name) || env.GITHUB_REPOSITORY || github.repository }}
-          ref: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.sha) || env.GITHUB_HEAD_REF || github.ref }}
+          repository: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && env.GITHUB_REPOSITORY) || github.repository }}
+          ref: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && env.GITHUB_HEAD_REF) || github.ref }}
+      - name: Install libbacktrace
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: ianlancetaylor/libbacktrace
+          ref: b9e40069c0b47a722286b94eb5231f7f05c08713
+          path: libbacktrace
+      - run: cd libbacktrace && ./configure && make && sudo make install
       - name: make
-        run: make all-with-unit-tests SERVER_CFLAGS='-Werror'
+        run: make all-with-unit-tests SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes
       - name: testprep
         run: sudo apt-get install tcl8.6 tclx
       - name: test
@@ -188,8 +213,12 @@ jobs:
     if: |
       (github.event_name == 'workflow_call' || github.event_name == 'workflow_dispatch' ||
         (github.event_name == 'schedule' && github.repository == 'valkey-io/valkey') ||
-        (github.event_name == 'pull_request' && github.event.pull_request.base.ref != 'unstable') ||
-        (github.event_name == 'pull_request_target' && github.event.label.name == 'run-extra-tests')) &&
+        (github.event_name == 'pull_request' &&
+          (github.event.pull_request.base.ref != 'unstable' ||
+            contains(github.event.pull_request.labels.*.name, 'run-extra-tests')) &&
+          (github.event.action != 'labeled' ||
+            (github.event.pull_request.base.ref == 'unstable' && github.event.label.name == 'run-extra-tests'))
+        )) &&
       !contains(github.event.inputs.skipjobs, 'fortify')
     container: ubuntu:plucky
     timeout-minutes: 1440
@@ -203,15 +232,23 @@ jobs:
           echo "skiptests: ${{github.event.inputs.skiptests}}"
           echo "test_args: ${{github.event.inputs.test_args}}"
           echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
-      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          repository: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name) || env.GITHUB_REPOSITORY || github.repository }}
-          ref: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.sha) || env.GITHUB_HEAD_REF || github.ref }}
-      - name: make
+          repository: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && env.GITHUB_REPOSITORY) || github.repository }}
+          ref: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && env.GITHUB_HEAD_REF) || github.ref }}
+      - name: Install libbacktrace
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: ianlancetaylor/libbacktrace
+          ref: b9e40069c0b47a722286b94eb5231f7f05c08713
+          path: libbacktrace
+      - name: Build libbacktrace
         run: |
           apt-get update && apt-get install -y make gcc-13 git cmake g++ python3
           update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-13 100
-          make all-with-unit-tests CC=gcc OPT=-O3 SERVER_CFLAGS='-Werror -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=3'
+          cd libbacktrace && ./configure && make && make install
+      - name: make
+        run: make all-with-unit-tests CC=gcc OPT=-O3 SERVER_CFLAGS='-Werror -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=3' USE_LIBBACKTRACE=yes
       - name: testprep
         run: apt-get install -y tcl8.6 tclx procps
       - name: test
@@ -234,8 +271,12 @@ jobs:
     if: |
       (github.event_name == 'workflow_call' || github.event_name == 'workflow_dispatch' ||
         (github.event_name == 'schedule' && github.repository == 'valkey-io/valkey') ||
-        (github.event_name == 'pull_request' && github.event.pull_request.base.ref != 'unstable') ||
-        (github.event_name == 'pull_request_target' && github.event.label.name == 'run-extra-tests')) &&
+        (github.event_name == 'pull_request' &&
+          (github.event.pull_request.base.ref != 'unstable' ||
+            contains(github.event.pull_request.labels.*.name, 'run-extra-tests')) &&
+          (github.event.action != 'labeled' ||
+            (github.event.pull_request.base.ref == 'unstable' && github.event.label.name == 'run-extra-tests'))
+        )) &&
       !contains(github.event.inputs.skipjobs, 'malloc')
     timeout-minutes: 1440
     steps:
@@ -248,12 +289,19 @@ jobs:
           echo "skiptests: ${{github.event.inputs.skiptests}}"
           echo "test_args: ${{github.event.inputs.test_args}}"
           echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
-      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          repository: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name) || env.GITHUB_REPOSITORY || github.repository }}
-          ref: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.sha) || env.GITHUB_HEAD_REF || github.ref }}
+          repository: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && env.GITHUB_REPOSITORY) || github.repository }}
+          ref: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && env.GITHUB_HEAD_REF) || github.ref }}
+      - name: Install libbacktrace
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: ianlancetaylor/libbacktrace
+          ref: b9e40069c0b47a722286b94eb5231f7f05c08713
+          path: libbacktrace
+      - run: cd libbacktrace && ./configure && make && sudo make install
       - name: make
-        run: make MALLOC=libc SERVER_CFLAGS='-Werror'
+        run: make MALLOC=libc SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes
       - name: testprep
         run: sudo apt-get install tcl8.6 tclx
       - name: test
@@ -273,8 +321,12 @@ jobs:
     if: |
       (github.event_name == 'workflow_call' || github.event_name == 'workflow_dispatch' ||
         (github.event_name == 'schedule' && github.repository == 'valkey-io/valkey') ||
-        (github.event_name == 'pull_request' && github.event.pull_request.base.ref != 'unstable') ||
-        (github.event_name == 'pull_request_target' && github.event.label.name == 'run-extra-tests')) &&
+        (github.event_name == 'pull_request' &&
+          (github.event.pull_request.base.ref != 'unstable' ||
+            contains(github.event.pull_request.labels.*.name, 'run-extra-tests')) &&
+          (github.event.action != 'labeled' ||
+            (github.event.pull_request.base.ref == 'unstable' && github.event.label.name == 'run-extra-tests'))
+        )) &&
       !contains(github.event.inputs.skipjobs, 'malloc')
     timeout-minutes: 1440
     steps:
@@ -287,12 +339,19 @@ jobs:
           echo "skiptests: ${{github.event.inputs.skiptests}}"
           echo "test_args: ${{github.event.inputs.test_args}}"
           echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
-      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          repository: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name) || env.GITHUB_REPOSITORY || github.repository }}
-          ref: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.sha) || env.GITHUB_HEAD_REF || github.ref }}
+          repository: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && env.GITHUB_REPOSITORY) || github.repository }}
+          ref: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && env.GITHUB_HEAD_REF) || github.ref }}
+      - name: Install libbacktrace
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: ianlancetaylor/libbacktrace
+          ref: b9e40069c0b47a722286b94eb5231f7f05c08713
+          path: libbacktrace
+      - run: cd libbacktrace && ./configure && make && sudo make install
       - name: make
-        run: make MALLOC=libc CFLAGS=-DNO_MALLOC_USABLE_SIZE SERVER_CFLAGS='-Werror'
+        run: make MALLOC=libc CFLAGS=-DNO_MALLOC_USABLE_SIZE SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes
       - name: testprep
         run: sudo apt-get install tcl8.6 tclx
       - name: test
@@ -312,8 +371,12 @@ jobs:
     if: |
       (github.event_name == 'workflow_call' || github.event_name == 'workflow_dispatch' ||
         (github.event_name == 'schedule' && github.repository == 'valkey-io/valkey') ||
-        (github.event_name == 'pull_request' && github.event.pull_request.base.ref != 'unstable') ||
-        (github.event_name == 'pull_request_target' && github.event.label.name == 'run-extra-tests')) &&
+        (github.event_name == 'pull_request' &&
+          (github.event.pull_request.base.ref != 'unstable' ||
+            contains(github.event.pull_request.labels.*.name, 'run-extra-tests')) &&
+          (github.event.action != 'labeled' ||
+            (github.event.pull_request.base.ref == 'unstable' && github.event.label.name == 'run-extra-tests'))
+        )) &&
       !contains(github.event.inputs.skipjobs, '32bit')
     timeout-minutes: 1440
     steps:
@@ -326,14 +389,22 @@ jobs:
           echo "skiptests: ${{github.event.inputs.skiptests}}"
           echo "test_args: ${{github.event.inputs.test_args}}"
           echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
-      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          repository: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name) || env.GITHUB_REPOSITORY || github.repository }}
-          ref: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.sha) || env.GITHUB_HEAD_REF || github.ref }}
-      - name: make
+          repository: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && env.GITHUB_REPOSITORY) || github.repository }}
+          ref: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && env.GITHUB_HEAD_REF) || github.ref }}
+      - name: Install libbacktrace
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: ianlancetaylor/libbacktrace
+          ref: b9e40069c0b47a722286b94eb5231f7f05c08713
+          path: libbacktrace
+      - name: Build libbacktrace
         run: |
           sudo apt-get update && sudo apt-get install libc6-dev-i386 g++-multilib
-          make 32bit SERVER_CFLAGS='-Werror'
+          cd libbacktrace && ./configure && make && sudo make install
+      - name: make
+        run: make 32bit SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes
       - name: testprep
         run: sudo apt-get install tcl8.6 tclx
       - name: test
@@ -358,8 +429,12 @@ jobs:
     if: |
       (github.event_name == 'workflow_call' || github.event_name == 'workflow_dispatch' ||
         (github.event_name == 'schedule' && github.repository == 'valkey-io/valkey') ||
-        (github.event_name == 'pull_request' && github.event.pull_request.base.ref != 'unstable') ||
-        (github.event_name == 'pull_request_target' && github.event.label.name == 'run-extra-tests')) &&
+        (github.event_name == 'pull_request' &&
+          (github.event.pull_request.base.ref != 'unstable' ||
+            contains(github.event.pull_request.labels.*.name, 'run-extra-tests')) &&
+          (github.event.action != 'labeled' ||
+            (github.event.pull_request.base.ref == 'unstable' && github.event.label.name == 'run-extra-tests'))
+        )) &&
       !contains(github.event.inputs.skipjobs, 'tls')
     timeout-minutes: 1440
     steps:
@@ -372,13 +447,19 @@ jobs:
           echo "skiptests: ${{github.event.inputs.skiptests}}"
           echo "test_args: ${{github.event.inputs.test_args}}"
           echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
-      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          repository: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name) || env.GITHUB_REPOSITORY || github.repository }}
-          ref: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.sha) || env.GITHUB_HEAD_REF || github.ref }}
+          repository: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && env.GITHUB_REPOSITORY) || github.repository }}
+          ref: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && env.GITHUB_HEAD_REF) || github.ref }}
+      - name: Install libbacktrace
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: ianlancetaylor/libbacktrace
+          ref: b9e40069c0b47a722286b94eb5231f7f05c08713
+          path: libbacktrace
+      - run: cd libbacktrace && ./configure && make && sudo make install
       - name: make
-        run: |
-          make BUILD_TLS=yes SERVER_CFLAGS='-Werror'
+        run: make BUILD_TLS=yes SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes
       - name: testprep
         run: |
           sudo apt-get install tcl8.6 tclx tcl-tls
@@ -404,8 +485,12 @@ jobs:
     if: |
       (github.event_name == 'workflow_call' || github.event_name == 'workflow_dispatch' ||
         (github.event_name == 'schedule' && github.repository == 'valkey-io/valkey') ||
-        (github.event_name == 'pull_request' && github.event.pull_request.base.ref != 'unstable') ||
-        (github.event_name == 'pull_request_target' && github.event.label.name == 'run-extra-tests')) &&
+        (github.event_name == 'pull_request' &&
+          (github.event.pull_request.base.ref != 'unstable' ||
+            contains(github.event.pull_request.labels.*.name, 'run-extra-tests')) &&
+          (github.event.action != 'labeled' ||
+            (github.event.pull_request.base.ref == 'unstable' && github.event.label.name == 'run-extra-tests'))
+        )) &&
       !contains(github.event.inputs.skipjobs, 'tls')
     timeout-minutes: 1440
     steps:
@@ -418,13 +503,19 @@ jobs:
           echo "skiptests: ${{github.event.inputs.skiptests}}"
           echo "test_args: ${{github.event.inputs.test_args}}"
           echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
-      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          repository: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name) || env.GITHUB_REPOSITORY || github.repository }}
-          ref: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.sha) || env.GITHUB_HEAD_REF || github.ref }}
+          repository: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && env.GITHUB_REPOSITORY) || github.repository }}
+          ref: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && env.GITHUB_HEAD_REF) || github.ref }}
+      - name: Install libbacktrace
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: ianlancetaylor/libbacktrace
+          ref: b9e40069c0b47a722286b94eb5231f7f05c08713
+          path: libbacktrace
+      - run: cd libbacktrace && ./configure && make && sudo make install
       - name: make
-        run: |
-          make BUILD_TLS=yes SERVER_CFLAGS='-Werror' USE_FAST_FLOAT=yes
+        run: make BUILD_TLS=yes SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes USE_FAST_FLOAT=yes
       - name: testprep
         run: |
           sudo apt-get install tcl8.6 tclx tcl-tls
@@ -450,8 +541,12 @@ jobs:
     if: |
       (github.event_name == 'workflow_call' || github.event_name == 'workflow_dispatch' ||
         (github.event_name == 'schedule' && github.repository == 'valkey-io/valkey') ||
-        (github.event_name == 'pull_request' && github.event.pull_request.base.ref != 'unstable') ||
-        (github.event_name == 'pull_request_target' && github.event.label.name == 'run-extra-tests')) &&
+        (github.event_name == 'pull_request' &&
+          (github.event.pull_request.base.ref != 'unstable' ||
+            contains(github.event.pull_request.labels.*.name, 'run-extra-tests')) &&
+          (github.event.action != 'labeled' ||
+            (github.event.pull_request.base.ref == 'unstable' && github.event.label.name == 'run-extra-tests'))
+        )) &&
       !contains(github.event.inputs.skipjobs, 'iothreads')
     timeout-minutes: 1440
     steps:
@@ -464,13 +559,19 @@ jobs:
           echo "skiptests: ${{github.event.inputs.skiptests}}"
           echo "test_args: ${{github.event.inputs.test_args}}"
           echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
-      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          repository: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name) || env.GITHUB_REPOSITORY || github.repository }}
-          ref: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.sha) || env.GITHUB_HEAD_REF || github.ref }}
+          repository: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && env.GITHUB_REPOSITORY) || github.repository }}
+          ref: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && env.GITHUB_HEAD_REF) || github.ref }}
+      - name: Install libbacktrace
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: ianlancetaylor/libbacktrace
+          ref: b9e40069c0b47a722286b94eb5231f7f05c08713
+          path: libbacktrace
+      - run: cd libbacktrace && ./configure && make && sudo make install
       - name: make
-        run: |
-          make SERVER_CFLAGS='-Werror'
+        run: make SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes
       - name: testprep
         run: sudo apt-get install tcl8.6 tclx
       - name: test
@@ -484,8 +585,12 @@ jobs:
     if: |
       (github.event_name == 'workflow_call' || github.event_name == 'workflow_dispatch' ||
         (github.event_name == 'schedule' && github.repository == 'valkey-io/valkey') ||
-        (github.event_name == 'pull_request' && github.event.pull_request.base.ref != 'unstable') ||
-        (github.event_name == 'pull_request_target' && github.event.label.name == 'run-extra-tests')) &&
+        (github.event_name == 'pull_request' &&
+          (github.event.pull_request.base.ref != 'unstable' ||
+            contains(github.event.pull_request.labels.*.name, 'run-extra-tests')) &&
+          (github.event.action != 'labeled' ||
+            (github.event.pull_request.base.ref == 'unstable' && github.event.label.name == 'run-extra-tests'))
+        )) &&
       !contains(github.event.inputs.skipjobs, 'tls') && !contains(github.event.inputs.skipjobs, 'iothreads')
     timeout-minutes: 1440
     steps:
@@ -498,13 +603,19 @@ jobs:
           echo "skiptests: ${{github.event.inputs.skiptests}}"
           echo "test_args: ${{github.event.inputs.test_args}}"
           echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
-      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          repository: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name) || env.GITHUB_REPOSITORY || github.repository }}
-          ref: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.sha) || env.GITHUB_HEAD_REF || github.ref }}
+          repository: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && env.GITHUB_REPOSITORY) || github.repository }}
+          ref: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && env.GITHUB_HEAD_REF) || github.ref }}
+      - name: Install libbacktrace
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: ianlancetaylor/libbacktrace
+          ref: b9e40069c0b47a722286b94eb5231f7f05c08713
+          path: libbacktrace
+      - run: cd libbacktrace && ./configure && make && sudo make install
       - name: make
-        run: |
-          make BUILD_TLS=yes SERVER_CFLAGS='-Werror'
+        run: make BUILD_TLS=yes SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes
       - name: testprep
         run: |
           sudo apt-get install tcl8.6 tclx tcl-tls
@@ -522,8 +633,12 @@ jobs:
     if: |
       (github.event_name == 'workflow_call' || github.event_name == 'workflow_dispatch' ||
         (github.event_name == 'schedule' && github.repository == 'valkey-io/valkey') ||
-        (github.event_name == 'pull_request' && github.event.pull_request.base.ref != 'unstable') ||
-        (github.event_name == 'pull_request_target' && github.event.label.name == 'run-extra-tests')) &&
+        (github.event_name == 'pull_request' &&
+          (github.event.pull_request.base.ref != 'unstable' ||
+            contains(github.event.pull_request.labels.*.name, 'run-extra-tests')) &&
+          (github.event.action != 'labeled' ||
+            (github.event.pull_request.base.ref == 'unstable' && github.event.label.name == 'run-extra-tests'))
+        )) &&
       !contains(github.event.inputs.skipjobs, 'specific')
     timeout-minutes: 1440
     steps:
@@ -536,13 +651,19 @@ jobs:
           echo "skiptests: ${{github.event.inputs.skiptests}}"
           echo "test_args: ${{github.event.inputs.test_args}}"
           echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
-      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          repository: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name) || env.GITHUB_REPOSITORY || github.repository }}
-          ref: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.sha) || env.GITHUB_HEAD_REF || github.ref }}
+          repository: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && env.GITHUB_REPOSITORY) || github.repository }}
+          ref: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && env.GITHUB_HEAD_REF) || github.ref }}
+      - name: Install libbacktrace
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: ianlancetaylor/libbacktrace
+          ref: b9e40069c0b47a722286b94eb5231f7f05c08713
+          path: libbacktrace
+      - run: cd libbacktrace && ./configure && make && sudo make install
       - name: make
-        run: |
-          make SERVER_CFLAGS='-Werror'
+        run: make SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes
       - name: testprep
         run: "sudo apt-get install vmtouch\nmkdir /tmp/master \nmkdir /tmp/slave\n"
       - name: warm up
@@ -601,7 +722,7 @@ jobs:
     if: |
       (github.event_name == 'workflow_call' || github.event_name == 'workflow_dispatch' ||
         (github.event_name == 'schedule' && github.repository == 'valkey-io/valkey') ||
-        (github.event_name == 'pull_request' && github.event.pull_request.base.ref != 'unstable')) &&
+        (github.event_name == 'pull_request' && github.event.pull_request.base.ref != 'unstable' && github.event.action != 'labeled')) &&
       !contains(github.event.inputs.skipjobs, 'valgrind') && !contains(github.event.inputs.skiptests, 'valkey')
     timeout-minutes: 1440
     steps:
@@ -614,12 +735,19 @@ jobs:
           echo "skiptests: ${{github.event.inputs.skiptests}}"
           echo "test_args: ${{github.event.inputs.test_args}}"
           echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
-      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          repository: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name) || env.GITHUB_REPOSITORY || github.repository }}
-          ref: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.sha) || env.GITHUB_HEAD_REF || github.ref }}
+          repository: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && env.GITHUB_REPOSITORY) || github.repository }}
+          ref: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && env.GITHUB_HEAD_REF) || github.ref }}
+      - name: Install libbacktrace
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: ianlancetaylor/libbacktrace
+          ref: b9e40069c0b47a722286b94eb5231f7f05c08713
+          path: libbacktrace
+      - run: cd libbacktrace && ./configure && make && sudo make install
       - name: make
-        run: make valgrind SERVER_CFLAGS='-Werror'
+        run: make valgrind SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes
       - name: testprep
         run: |
           sudo apt-get update
@@ -632,7 +760,7 @@ jobs:
     if: |
       (github.event_name == 'workflow_call' || github.event_name == 'workflow_dispatch' ||
         (github.event_name == 'schedule' && github.repository == 'valkey-io/valkey') ||
-        (github.event_name == 'pull_request' && github.event.pull_request.base.ref != 'unstable')) &&
+        (github.event_name == 'pull_request' && github.event.pull_request.base.ref != 'unstable' && github.event.action != 'labeled')) &&
       !contains(github.event.inputs.skipjobs, 'valgrind') && !(contains(github.event.inputs.skiptests, 'modules') && contains(github.event.inputs.skiptests, 'unittest'))
     timeout-minutes: 1440
     steps:
@@ -645,12 +773,19 @@ jobs:
           echo "skiptests: ${{github.event.inputs.skiptests}}"
           echo "test_args: ${{github.event.inputs.test_args}}"
           echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
-      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          repository: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name) || env.GITHUB_REPOSITORY || github.repository }}
-          ref: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.sha) || env.GITHUB_HEAD_REF || github.ref }}
+          repository: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && env.GITHUB_REPOSITORY) || github.repository }}
+          ref: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && env.GITHUB_HEAD_REF) || github.ref }}
+      - name: Install libbacktrace
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: ianlancetaylor/libbacktrace
+          ref: b9e40069c0b47a722286b94eb5231f7f05c08713
+          path: libbacktrace
+      - run: cd libbacktrace && ./configure && make && sudo make install
       - name: make
-        run: make valgrind all-with-unit-tests SERVER_CFLAGS='-Werror'
+        run: make valgrind all-with-unit-tests SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes
       - name: testprep
         run: |
           sudo apt-get update
@@ -668,7 +803,7 @@ jobs:
     if: |
       (github.event_name == 'workflow_call' || github.event_name == 'workflow_dispatch' ||
         (github.event_name == 'schedule' && github.repository == 'valkey-io/valkey') ||
-        (github.event_name == 'pull_request' && github.event.pull_request.base.ref != 'unstable')) &&
+        (github.event_name == 'pull_request' && github.event.pull_request.base.ref != 'unstable' && github.event.action != 'labeled')) &&
       !contains(github.event.inputs.skipjobs, 'valgrind') && !contains(github.event.inputs.skiptests, 'valkey')
     timeout-minutes: 1440
     steps:
@@ -681,12 +816,19 @@ jobs:
           echo "skiptests: ${{github.event.inputs.skiptests}}"
           echo "test_args: ${{github.event.inputs.test_args}}"
           echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
-      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          repository: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name) || env.GITHUB_REPOSITORY || github.repository }}
-          ref: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.sha) || env.GITHUB_HEAD_REF || github.ref }}
+          repository: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && env.GITHUB_REPOSITORY) || github.repository }}
+          ref: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && env.GITHUB_HEAD_REF) || github.ref }}
+      - name: Install libbacktrace
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: ianlancetaylor/libbacktrace
+          ref: b9e40069c0b47a722286b94eb5231f7f05c08713
+          path: libbacktrace
+      - run: cd libbacktrace && ./configure && make && sudo make install
       - name: make
-        run: make valgrind CFLAGS="-DNO_MALLOC_USABLE_SIZE" SERVER_CFLAGS='-Werror'
+        run: make valgrind CFLAGS="-DNO_MALLOC_USABLE_SIZE" SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes
       - name: testprep
         run: |
           sudo apt-get update
@@ -699,7 +841,7 @@ jobs:
     if: |
       (github.event_name == 'workflow_call' || github.event_name == 'workflow_dispatch' ||
         (github.event_name == 'schedule' && github.repository == 'valkey-io/valkey') ||
-        (github.event_name == 'pull_request' && github.event.pull_request.base.ref != 'unstable')) &&
+        (github.event_name == 'pull_request' && github.event.pull_request.base.ref != 'unstable' && github.event.action != 'labeled')) &&
       !contains(github.event.inputs.skipjobs, 'valgrind') && !(contains(github.event.inputs.skiptests, 'modules') && contains(github.event.inputs.skiptests, 'unittest'))
     timeout-minutes: 1440
     steps:
@@ -712,12 +854,19 @@ jobs:
           echo "skiptests: ${{github.event.inputs.skiptests}}"
           echo "test_args: ${{github.event.inputs.test_args}}"
           echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
-      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          repository: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name) || env.GITHUB_REPOSITORY || github.repository }}
-          ref: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.sha) || env.GITHUB_HEAD_REF || github.ref }}
+          repository: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && env.GITHUB_REPOSITORY) || github.repository }}
+          ref: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && env.GITHUB_HEAD_REF) || github.ref }}
+      - name: Install libbacktrace
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: ianlancetaylor/libbacktrace
+          ref: b9e40069c0b47a722286b94eb5231f7f05c08713
+          path: libbacktrace
+      - run: cd libbacktrace && ./configure && make && sudo make install
       - name: make
-        run: make valgrind all-with-unit-tests CFLAGS="-DNO_MALLOC_USABLE_SIZE" SERVER_CFLAGS='-Werror'
+        run: make valgrind all-with-unit-tests CFLAGS="-DNO_MALLOC_USABLE_SIZE" SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes
       - name: testprep
         run: |
           sudo apt-get update
@@ -735,8 +884,65 @@ jobs:
     if: |
       (github.event_name == 'workflow_call' || github.event_name == 'workflow_dispatch' ||
         (github.event_name == 'schedule' && github.repository == 'valkey-io/valkey') ||
-        (github.event_name == 'pull_request' && github.event.pull_request.base.ref != 'unstable')) &&
+        (github.event_name == 'pull_request' && github.event.pull_request.base.ref != 'unstable' && github.event.action != 'labeled')) &&
       !contains(github.event.inputs.skipjobs, 'sanitizer')
+    timeout-minutes: 1440
+    strategy:
+      fail-fast: false
+      matrix:
+        compiler: [gcc, clang]
+    env:
+      CC: ${{ matrix.compiler }}
+    steps:
+      - name: prep
+        if: github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call'
+        run: |
+          echo "GITHUB_REPOSITORY=${{inputs.use_repo || github.event.inputs.use_repo}}" >> $GITHUB_ENV
+          echo "GITHUB_HEAD_REF=${{inputs.use_git_ref || github.event.inputs.use_git_ref}}" >> $GITHUB_ENV
+          echo "skipjobs: ${{github.event.inputs.skipjobs}}"
+          echo "skiptests: ${{github.event.inputs.skiptests}}"
+          echo "test_args: ${{github.event.inputs.test_args}}"
+          echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && env.GITHUB_REPOSITORY) || github.repository }}
+          ref: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && env.GITHUB_HEAD_REF) || github.ref }}
+      - name: Install libbacktrace
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: ianlancetaylor/libbacktrace
+          ref: b9e40069c0b47a722286b94eb5231f7f05c08713
+          path: libbacktrace
+      - run: cd libbacktrace && ./configure && make && sudo make install
+      - name: make
+        run: make all-with-unit-tests OPT=-O3 SANITIZER=address SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes
+      - name: testprep
+        run: |
+          sudo apt-get update
+          sudo apt-get install tcl8.6 tclx -y
+      - name: test
+        if: true && !contains(github.event.inputs.skiptests, 'valkey')
+        run: ./runtest --accurate --verbose --dump-logs ${{github.event.inputs.test_args}}
+      - name: module api test
+        if: true && !contains(github.event.inputs.skiptests, 'modules')
+        run: CFLAGS='-Werror' ./runtest-moduleapi --verbose --dump-logs ${{github.event.inputs.test_args}}
+      - name: sentinel tests
+        if: true && !contains(github.event.inputs.skiptests, 'sentinel')
+        run: ./runtest-sentinel ${{github.event.inputs.cluster_test_args}}
+      - name: cluster tests
+        if: true && !contains(github.event.inputs.skiptests, 'cluster')
+        run: ./runtest-cluster ${{github.event.inputs.cluster_test_args}}
+      - name: unittest
+        if: true && !contains(github.event.inputs.skiptests, 'unittest')
+        run: ./src/valkey-unit-tests
+  test-sanitizer-address-large-memory:
+    runs-on: ubuntu-latest
+    if: |
+      (github.event_name == 'workflow_call' || github.event_name == 'workflow_dispatch' ||
+        (github.event_name == 'schedule' && github.repository == 'valkey-io/valkey') ||
+        (github.event_name == 'pull_request' && github.event.pull_request.base.ref != 'unstable' && github.event.action != 'labeled')) &&
+      !contains(github.event.inputs.skipjobs, 'sanitizer') &&
+      !contains(github.event.inputs.skiptests, 'large-memory')
     timeout-minutes: 1440
     strategy:
       fail-fast: false
@@ -756,14 +962,64 @@ jobs:
           echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
       - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
         with:
-          repository: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name) || env.GITHUB_REPOSITORY || github.repository }}
-          ref: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.sha) || env.GITHUB_HEAD_REF || github.ref }}
+          repository: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && env.GITHUB_REPOSITORY) || github.repository }}
+          ref: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && env.GITHUB_HEAD_REF) || github.ref }}
       - name: make
         run: make all-with-unit-tests OPT=-O3 SANITIZER=address SERVER_CFLAGS='-Werror'
       - name: testprep
         run: |
           sudo apt-get update
           sudo apt-get install tcl8.6 tclx -y
+      - name: unittest
+        if: true && !contains(github.event.inputs.skiptests, 'unittest')
+        run: ./src/valkey-unit-tests --large-memory
+      - name: large memory tests
+        if: true && !contains(github.event.inputs.skiptests, 'valkey')
+        run: ./runtest --accurate --verbose --dump-logs --clients 5 --large-memory --tags large-memory ${{github.event.inputs.test_args}}
+      - name: large memory module api tests
+        if: true && !contains(github.event.inputs.skiptests, 'modules')
+        run: CFLAGS='-Werror' ./runtest-moduleapi --verbose --dump-logs --clients 5 --large-memory --tags large-memory ${{github.event.inputs.test_args}}
+  test-sanitizer-undefined:
+    runs-on: ubuntu-latest
+    if: |
+      (github.event_name == 'workflow_call' || github.event_name == 'workflow_dispatch' ||
+        (github.event_name == 'schedule' && github.repository == 'valkey-io/valkey') ||
+        (github.event_name == 'pull_request' && github.event.pull_request.base.ref != 'unstable' && github.event.action != 'labeled')) &&
+      !contains(github.event.inputs.skipjobs, 'sanitizer')
+    timeout-minutes: 1440
+    strategy:
+      fail-fast: false
+      matrix:
+        compiler: [gcc, clang]
+    env:
+      CC: ${{ matrix.compiler }}
+    steps:
+      - name: prep
+        if: github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call'
+        run: |
+          echo "GITHUB_REPOSITORY=${{inputs.use_repo || github.event.inputs.use_repo}}" >> $GITHUB_ENV
+          echo "GITHUB_HEAD_REF=${{inputs.use_git_ref || github.event.inputs.use_git_ref}}" >> $GITHUB_ENV
+          echo "skipjobs: ${{github.event.inputs.skipjobs}}"
+          echo "skiptests: ${{github.event.inputs.skiptests}}"
+          echo "test_args: ${{github.event.inputs.test_args}}"
+          echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && env.GITHUB_REPOSITORY) || github.repository }}
+          ref: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && env.GITHUB_HEAD_REF) || github.ref }}
+      - name: Install libbacktrace
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: ianlancetaylor/libbacktrace
+          ref: b9e40069c0b47a722286b94eb5231f7f05c08713
+          path: libbacktrace
+      - run: cd libbacktrace && ./configure && make && sudo make install
+      - name: make
+        run: make all-with-unit-tests OPT=-O3 SANITIZER=undefined SERVER_CFLAGS='-Werror' LUA_DEBUG=yes USE_LIBBACKTRACE=yes # we (ab)use this flow to also check Lua C API violations
+      - name: testprep
+        run: |
+          sudo apt-get update
+          sudo apt-get install tcl8.6 tclx -y
       - name: test
         if: true && !contains(github.event.inputs.skiptests, 'valkey')
         run: ./runtest --accurate --verbose --dump-logs ${{github.event.inputs.test_args}}
@@ -778,20 +1034,15 @@ jobs:
         run: ./runtest-cluster ${{github.event.inputs.cluster_test_args}}
       - name: unittest
         if: true && !contains(github.event.inputs.skiptests, 'unittest')
-        run: ./src/valkey-unit-tests --large-memory
-      - name: large memory tests
-        if: true && !contains(github.event.inputs.skiptests, 'valkey') && !contains(github.event.inputs.skiptests, 'large-memory')
-        run: ./runtest --accurate --verbose --dump-logs --large-memory --tags large-memory ${{github.event.inputs.test_args}}
-      - name: large memory module api tests
-        if: true && !contains(github.event.inputs.skiptests, 'modules') && !contains(github.event.inputs.skiptests, 'large-memory')
-        run: CFLAGS='-Werror' ./runtest-moduleapi --verbose --dump-logs --large-memory --tags large-memory ${{github.event.inputs.test_args}}
-  test-sanitizer-undefined:
+        run: ./src/valkey-unit-tests --accurate
+  test-sanitizer-undefined-large-memory:
     runs-on: ubuntu-latest
     if: |
       (github.event_name == 'workflow_call' || github.event_name == 'workflow_dispatch' ||
         (github.event_name == 'schedule' && github.repository == 'valkey-io/valkey') ||
-        (github.event_name == 'pull_request' && github.event.pull_request.base.ref != 'unstable')) &&
-      !contains(github.event.inputs.skipjobs, 'sanitizer')
+        (github.event_name == 'pull_request' && github.event.pull_request.base.ref != 'unstable' && github.event.action != 'labeled')) &&
+      !contains(github.event.inputs.skipjobs, 'sanitizer') &&
+      !contains(github.event.inputs.skiptests, 'large-memory')
     timeout-minutes: 1440
     strategy:
       fail-fast: false
@@ -811,41 +1062,29 @@ jobs:
           echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
       - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
         with:
-          repository: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name) || env.GITHUB_REPOSITORY || github.repository }}
-          ref: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.sha) || env.GITHUB_HEAD_REF || github.ref }}
+          repository: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && env.GITHUB_REPOSITORY) || github.repository }}
+          ref: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && env.GITHUB_HEAD_REF) || github.ref }}
       - name: make
-        run: make all-with-unit-tests OPT=-O3 SANITIZER=undefined SERVER_CFLAGS='-Werror' LUA_DEBUG=yes # we (ab)use this flow to also check Lua C API violations
+        run: make all-with-unit-tests OPT=-O3 SANITIZER=undefined SERVER_CFLAGS='-Werror' LUA_DEBUG=yes
       - name: testprep
         run: |
           sudo apt-get update
           sudo apt-get install tcl8.6 tclx -y
-      - name: test
-        if: true && !contains(github.event.inputs.skiptests, 'valkey')
-        run: ./runtest --accurate --verbose --dump-logs ${{github.event.inputs.test_args}}
-      - name: module api test
-        if: true && !contains(github.event.inputs.skiptests, 'modules')
-        run: CFLAGS='-Werror' ./runtest-moduleapi --verbose --dump-logs ${{github.event.inputs.test_args}}
-      - name: sentinel tests
-        if: true && !contains(github.event.inputs.skiptests, 'sentinel')
-        run: ./runtest-sentinel ${{github.event.inputs.cluster_test_args}}
-      - name: cluster tests
-        if: true && !contains(github.event.inputs.skiptests, 'cluster')
-        run: ./runtest-cluster ${{github.event.inputs.cluster_test_args}}
       - name: unittest
         if: true && !contains(github.event.inputs.skiptests, 'unittest')
         run: ./src/valkey-unit-tests --accurate --large-memory
       - name: large memory tests
-        if: true && !contains(github.event.inputs.skiptests, 'valkey') && !contains(github.event.inputs.skiptests, 'large-memory')
-        run: ./runtest --accurate --verbose --dump-logs --large-memory --tags large-memory ${{github.event.inputs.test_args}}
+        if: true && !contains(github.event.inputs.skiptests, 'valkey')
+        run: ./runtest --accurate --verbose --dump-logs --clients 5 --large-memory --tags large-memory ${{github.event.inputs.test_args}}
       - name: large memory module api tests
-        if: true && !contains(github.event.inputs.skiptests, 'modules') && !contains(github.event.inputs.skiptests, 'large-memory')
-        run: CFLAGS='-Werror' ./runtest-moduleapi --verbose --dump-logs --large-memory --tags large-memory ${{github.event.inputs.test_args}}
+        if: true && !contains(github.event.inputs.skiptests, 'modules')
+        run: CFLAGS='-Werror' ./runtest-moduleapi --verbose --dump-logs --clients 5 --large-memory --tags large-memory ${{github.event.inputs.test_args}}
   test-sanitizer-force-defrag:
     runs-on: ubuntu-latest
     if: |
       (github.event_name == 'workflow_call' || github.event_name == 'workflow_dispatch' ||
         (github.event_name == 'schedule' && github.repository == 'valkey-io/valkey') ||
-        (github.event_name == 'pull_request' && github.event.pull_request.base.ref != 'unstable')) &&
+        (github.event_name == 'pull_request' && github.event.pull_request.base.ref != 'unstable' && github.event.action != 'labeled')) &&
       !contains(github.event.inputs.skipjobs, 'sanitizer')
     timeout-minutes: 1440
     strategy:
@@ -860,12 +1099,19 @@ jobs:
           echo "skiptests: ${{github.event.inputs.skiptests}}"
           echo "test_args: ${{github.event.inputs.test_args}}"
           echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
-      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          repository: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name) || env.GITHUB_REPOSITORY || github.repository }}
-          ref: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.sha) || env.GITHUB_HEAD_REF || github.ref }}
+          repository: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && env.GITHUB_REPOSITORY) || github.repository }}
+          ref: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && env.GITHUB_HEAD_REF) || github.ref }}
+      - name: Install libbacktrace
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: ianlancetaylor/libbacktrace
+          ref: b9e40069c0b47a722286b94eb5231f7f05c08713
+          path: libbacktrace
+      - run: cd libbacktrace && ./configure && make && sudo make install
       - name: make
-        run: make all-with-unit-tests OPT=-O3 SANITIZER=address DEBUG_FORCE_DEFRAG=yes USE_JEMALLOC=no SERVER_CFLAGS='-Werror'
+        run: make all-with-unit-tests OPT=-O3 SANITIZER=address DEBUG_FORCE_DEFRAG=yes USE_JEMALLOC=no SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes
       - name: testprep
         run: |
           sudo apt-get update
@@ -890,8 +1136,12 @@ jobs:
     if: |
       (github.event_name == 'workflow_call' || github.event_name == 'workflow_dispatch' ||
         (github.event_name == 'schedule' && github.repository == 'valkey-io/valkey') ||
-        (github.event_name == 'pull_request' && github.event.pull_request.base.ref != 'unstable') ||
-        (github.event_name == 'pull_request_target' && github.event.label.name == 'run-extra-tests')) &&
+        (github.event_name == 'pull_request' &&
+          (github.event.pull_request.base.ref != 'unstable' ||
+            contains(github.event.pull_request.labels.*.name, 'run-extra-tests')) &&
+          (github.event.action != 'labeled' ||
+            (github.event.pull_request.base.ref == 'unstable' && github.event.label.name == 'run-extra-tests'))
+        )) &&
       !contains(github.event.inputs.skipjobs, 'lttng')
     timeout-minutes: 1440
     steps:
@@ -904,14 +1154,22 @@ jobs:
           echo "skiptests: ${{github.event.inputs.skiptests}}"
           echo "test_args: ${{github.event.inputs.test_args}}"
           echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
-      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          repository: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name) || env.GITHUB_REPOSITORY || github.repository }}
-          ref: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.sha) || env.GITHUB_HEAD_REF || github.ref }}
-      - name: make
+          repository: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && env.GITHUB_REPOSITORY) || github.repository }}
+          ref: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && env.GITHUB_HEAD_REF) || github.ref }}
+      - name: Install libbacktrace
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: ianlancetaylor/libbacktrace
+          ref: b9e40069c0b47a722286b94eb5231f7f05c08713
+          path: libbacktrace
+      - name: Build libbacktrace
         run: |
           sudo apt-get update && sudo apt-get install lttng-tools lttng-modules-dkms liblttng-ust-dev
-          make -j4 USE_LTTNG=yes
+          cd libbacktrace && ./configure && make && sudo make install
+      - name: make
+        run: make -j4 USE_LTTNG=yes USE_LIBBACKTRACE=yes
       - name: testprep
         run: sudo apt-get install tcl8.6 tclx
       - name: test
@@ -930,8 +1188,12 @@ jobs:
     if: |
       (github.event_name == 'workflow_call' || github.event_name == 'workflow_dispatch' ||
         (github.event_name == 'schedule' && github.repository == 'valkey-io/valkey') ||
-        (github.event_name == 'pull_request' && github.event.pull_request.base.ref != 'unstable') ||
-        (github.event_name == 'pull_request_target' && github.event.label.name == 'run-extra-tests')) &&
+        (github.event_name == 'pull_request' &&
+          (github.event.pull_request.base.ref != 'unstable' ||
+            contains(github.event.pull_request.labels.*.name, 'run-extra-tests')) &&
+          (github.event.action != 'labeled' ||
+            (github.event.pull_request.base.ref == 'unstable' && github.event.label.name == 'run-extra-tests'))
+        )) &&
       !contains(github.event.inputs.skipjobs, 'rpm-distros')
     strategy:
       fail-fast: false
@@ -964,17 +1226,25 @@ jobs:
           echo "skiptests: ${{github.event.inputs.skiptests}}"
           echo "test_args: ${{github.event.inputs.test_args}}"
           echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
-      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          repository: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name) || env.GITHUB_REPOSITORY || github.repository }}
-          ref: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.sha) || env.GITHUB_HEAD_REF || github.ref }}
+          repository: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && env.GITHUB_REPOSITORY) || github.repository }}
+          ref: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && env.GITHUB_HEAD_REF) || github.ref }}
       - name: Install EPEL
         if: matrix.install_epel
         run: dnf -y install epel-release
-      - name: make
+      - name: Install libbacktrace
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: ianlancetaylor/libbacktrace
+          ref: b9e40069c0b47a722286b94eb5231f7f05c08713
+          path: libbacktrace
+      - name: Build libbacktrace
         run: |
           dnf -y install gcc make procps-ng which /usr/bin/kill /usr/bin/awk
-          make -j SERVER_CFLAGS='-Werror'
+          cd libbacktrace && ./configure && make && make install
+      - name: make
+        run: make -j SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes
       - name: testprep
         run: dnf -y install tcl tcltls
       - name: test
@@ -993,8 +1263,12 @@ jobs:
     if: |
       (github.event_name == 'workflow_call' || github.event_name == 'workflow_dispatch' ||
         (github.event_name == 'schedule' && github.repository == 'valkey-io/valkey') ||
-        (github.event_name == 'pull_request' && github.event.pull_request.base.ref != 'unstable') ||
-        (github.event_name == 'pull_request_target' && github.event.label.name == 'run-extra-tests')) &&
+        (github.event_name == 'pull_request' &&
+          (github.event.pull_request.base.ref != 'unstable' ||
+            contains(github.event.pull_request.labels.*.name, 'run-extra-tests')) &&
+          (github.event.action != 'labeled' ||
+            (github.event.pull_request.base.ref == 'unstable' && github.event.label.name == 'run-extra-tests'))
+        )) &&
       !contains(github.event.inputs.skipjobs, 'tls')
     strategy:
       fail-fast: false
@@ -1027,17 +1301,25 @@ jobs:
           echo "skiptests: ${{github.event.inputs.skiptests}}"
           echo "test_args: ${{github.event.inputs.test_args}}"
           echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
-      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          repository: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name) || env.GITHUB_REPOSITORY || github.repository }}
-          ref: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.sha) || env.GITHUB_HEAD_REF || github.ref }}
+          repository: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && env.GITHUB_REPOSITORY) || github.repository }}
+          ref: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && env.GITHUB_HEAD_REF) || github.ref }}
       - name: Install EPEL
         if: matrix.install_epel
         run: dnf -y install epel-release
-      - name: make
+      - name: Install libbacktrace
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: ianlancetaylor/libbacktrace
+          ref: b9e40069c0b47a722286b94eb5231f7f05c08713
+          path: libbacktrace
+      - name: Build libbacktrace
         run: |
           dnf -y install make gcc openssl-devel openssl procps-ng which /usr/bin/kill /usr/bin/awk
-          make -j BUILD_TLS=module SERVER_CFLAGS='-Werror'
+          cd libbacktrace && ./configure && make && make install
+      - name: make
+        run: make -j BUILD_TLS=module SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes
       - name: testprep
         run: |
           dnf -y install tcl tcltls
@@ -1062,7 +1344,7 @@ jobs:
     if: |
       (github.event_name == 'workflow_call' || github.event_name == 'workflow_dispatch' ||
         (github.event_name == 'schedule' && github.repository == 'valkey-io/valkey') ||
-        (github.event_name == 'pull_request' && github.event.pull_request.base.ref != 'unstable')) &&
+        (github.event_name == 'pull_request' && github.event.pull_request.base.ref != 'unstable' && github.event.action != 'labeled')) &&
       !contains(github.event.inputs.skipjobs, 'tls')
     strategy:
       fail-fast: false
@@ -1095,17 +1377,25 @@ jobs:
           echo "skiptests: ${{github.event.inputs.skiptests}}"
           echo "test_args: ${{github.event.inputs.test_args}}"
           echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
-      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          repository: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name) || env.GITHUB_REPOSITORY || github.repository }}
-          ref: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.sha) || env.GITHUB_HEAD_REF || github.ref }}
+          repository: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && env.GITHUB_REPOSITORY) || github.repository }}
+          ref: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && env.GITHUB_HEAD_REF) || github.ref }}
       - name: Install EPEL
         if: matrix.install_epel
         run: dnf -y install epel-release
-      - name: make
+      - name: Install libbacktrace
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: ianlancetaylor/libbacktrace
+          ref: b9e40069c0b47a722286b94eb5231f7f05c08713
+          path: libbacktrace
+      - name: Build libbacktrace
         run: |
           dnf -y install make gcc openssl-devel openssl procps-ng which /usr/bin/kill /usr/bin/awk
-          make -j BUILD_TLS=module SERVER_CFLAGS='-Werror'
+          cd libbacktrace && ./configure && make && make install
+      - name: make
+        run: make -j BUILD_TLS=module SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes
       - name: testprep
         run: |
           dnf -y install tcl tcltls
@@ -1131,8 +1421,12 @@ jobs:
     if: |
       (github.event_name == 'workflow_call' || github.event_name == 'workflow_dispatch' ||
         (github.event_name == 'schedule' && github.repository == 'valkey-io/valkey') ||
-        (github.event_name == 'pull_request' && github.event.pull_request.base.ref != 'unstable') ||
-        (github.event_name == 'pull_request_target' && github.event.label.name == 'run-extra-tests')) &&
+        (github.event_name == 'pull_request' &&
+          (github.event.pull_request.base.ref != 'unstable' ||
+            contains(github.event.pull_request.labels.*.name, 'run-extra-tests')) &&
+          (github.event.action != 'labeled' ||
+            (github.event.pull_request.base.ref == 'unstable' && github.event.label.name == 'run-extra-tests'))
+        )) &&
       !contains(github.event.inputs.skipjobs, 'macos') && !(contains(github.event.inputs.skiptests, 'valkey') && contains(github.event.inputs.skiptests, 'modules'))
     timeout-minutes: 1440
     steps:
@@ -1145,12 +1439,19 @@ jobs:
           echo "skiptests: ${{github.event.inputs.skiptests}}"
           echo "test_args: ${{github.event.inputs.test_args}}"
           echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
-      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          repository: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name) || env.GITHUB_REPOSITORY || github.repository }}
-          ref: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.sha) || env.GITHUB_HEAD_REF || github.ref }}
+          repository: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && env.GITHUB_REPOSITORY) || github.repository }}
+          ref: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && env.GITHUB_HEAD_REF) || github.ref }}
+      - name: Install libbacktrace
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: ianlancetaylor/libbacktrace
+          ref: b9e40069c0b47a722286b94eb5231f7f05c08713
+          path: libbacktrace
+      - run: cd libbacktrace && ./configure && make && sudo make install
       - name: make
-        run: make SERVER_CFLAGS='-Werror'
+        run: make SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes
       - name: test
         if: true && !contains(github.event.inputs.skiptests, 'valkey')
         run: ./runtest ${{ github.event_name != 'pull_request' && '--accurate' || '' }} --verbose --clients 1 --no-latency --dump-logs ${{github.event.inputs.test_args}}
@@ -1162,8 +1463,12 @@ jobs:
     if: |
       (github.event_name == 'workflow_call' || github.event_name == 'workflow_dispatch' ||
         (github.event_name == 'schedule' && github.repository == 'valkey-io/valkey') ||
-        (github.event_name == 'pull_request' && github.event.pull_request.base.ref != 'unstable') ||
-        (github.event_name == 'pull_request_target' && github.event.label.name == 'run-extra-tests')) &&
+        (github.event_name == 'pull_request' &&
+          (github.event.pull_request.base.ref != 'unstable' ||
+            contains(github.event.pull_request.labels.*.name, 'run-extra-tests')) &&
+          (github.event.action != 'labeled' ||
+            (github.event.pull_request.base.ref == 'unstable' && github.event.label.name == 'run-extra-tests'))
+        )) &&
       !contains(github.event.inputs.skipjobs, 'macos') && !contains(github.event.inputs.skiptests, 'sentinel')
     timeout-minutes: 1440
     steps:
@@ -1176,12 +1481,19 @@ jobs:
           echo "skiptests: ${{github.event.inputs.skiptests}}"
           echo "test_args: ${{github.event.inputs.test_args}}"
           echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
-      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          repository: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name) || env.GITHUB_REPOSITORY || github.repository }}
-          ref: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.sha) || env.GITHUB_HEAD_REF || github.ref }}
+          repository: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && env.GITHUB_REPOSITORY) || github.repository }}
+          ref: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && env.GITHUB_HEAD_REF) || github.ref }}
+      - name: Install libbacktrace
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: ianlancetaylor/libbacktrace
+          ref: b9e40069c0b47a722286b94eb5231f7f05c08713
+          path: libbacktrace
+      - run: cd libbacktrace && ./configure && make && sudo make install
       - name: make
-        run: make SERVER_CFLAGS='-Werror'
+        run: make SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes
       - name: sentinel tests
         if: true && !contains(github.event.inputs.skiptests, 'sentinel')
         run: ./runtest-sentinel ${{github.event.inputs.cluster_test_args}}
@@ -1190,8 +1502,12 @@ jobs:
     if: |
       (github.event_name == 'workflow_call' || github.event_name == 'workflow_dispatch' ||
         (github.event_name == 'schedule' && github.repository == 'valkey-io/valkey') ||
-        (github.event_name == 'pull_request' && github.event.pull_request.base.ref != 'unstable') ||
-        (github.event_name == 'pull_request_target' && github.event.label.name == 'run-extra-tests')) &&
+        (github.event_name == 'pull_request' &&
+          (github.event.pull_request.base.ref != 'unstable' ||
+            contains(github.event.pull_request.labels.*.name, 'run-extra-tests')) &&
+          (github.event.action != 'labeled' ||
+            (github.event.pull_request.base.ref == 'unstable' && github.event.label.name == 'run-extra-tests'))
+        )) &&
       !contains(github.event.inputs.skipjobs, 'macos') && !contains(github.event.inputs.skiptests, 'cluster')
     timeout-minutes: 1440
     steps:
@@ -1204,12 +1520,19 @@ jobs:
           echo "skiptests: ${{github.event.inputs.skiptests}}"
           echo "test_args: ${{github.event.inputs.test_args}}"
           echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
-      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          repository: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name) || env.GITHUB_REPOSITORY || github.repository }}
-          ref: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.sha) || env.GITHUB_HEAD_REF || github.ref }}
+          repository: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && env.GITHUB_REPOSITORY) || github.repository }}
+          ref: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && env.GITHUB_HEAD_REF) || github.ref }}
+      - name: Install libbacktrace
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: ianlancetaylor/libbacktrace
+          ref: b9e40069c0b47a722286b94eb5231f7f05c08713
+          path: libbacktrace
+      - run: cd libbacktrace && ./configure && make && sudo make install
       - name: make
-        run: make SERVER_CFLAGS='-Werror'
+        run: make SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes
       - name: cluster tests
         if: true && !contains(github.event.inputs.skiptests, 'cluster')
         run: ./runtest-cluster ${{github.event.inputs.cluster_test_args}}
@@ -1222,8 +1545,12 @@ jobs:
     if: |
       (github.event_name == 'workflow_call' || github.event_name == 'workflow_dispatch' ||
         (github.event_name == 'schedule' && github.repository == 'valkey-io/valkey') ||
-        (github.event_name == 'pull_request' && github.event.pull_request.base.ref != 'unstable') ||
-        (github.event_name == 'pull_request_target' && github.event.label.name == 'run-extra-tests')) &&
+        (github.event_name == 'pull_request' &&
+          (github.event.pull_request.base.ref != 'unstable' ||
+            contains(github.event.pull_request.labels.*.name, 'run-extra-tests')) &&
+          (github.event.action != 'labeled' ||
+            (github.event.pull_request.base.ref == 'unstable' && github.event.label.name == 'run-extra-tests'))
+        )) &&
       !contains(github.event.inputs.skipjobs, 'macos')
     timeout-minutes: 1440
     steps:
@@ -1239,19 +1566,30 @@ jobs:
           echo "skiptests: ${{github.event.inputs.skiptests}}"
           echo "test_args: ${{github.event.inputs.test_args}}"
           echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
-      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          repository: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name) || env.GITHUB_REPOSITORY || github.repository }}
-          ref: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.sha) || env.GITHUB_HEAD_REF || github.ref }}
+          repository: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && env.GITHUB_REPOSITORY) || github.repository }}
+          ref: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && env.GITHUB_HEAD_REF) || github.ref }}
+      - name: Install libbacktrace
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: ianlancetaylor/libbacktrace
+          ref: b9e40069c0b47a722286b94eb5231f7f05c08713
+          path: libbacktrace
+      - run: cd libbacktrace && ./configure && make && sudo make install
       - name: make
-        run: make SERVER_CFLAGS='-Werror'
+        run: make SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes
   test-freebsd:
     runs-on: ubuntu-latest
     if: |
       (github.event_name == 'workflow_call' || github.event_name == 'workflow_dispatch' ||
         (github.event_name == 'schedule' && github.repository == 'valkey-io/valkey') ||
-        (github.event_name == 'pull_request' && github.event.pull_request.base.ref != 'unstable') ||
-        (github.event_name == 'pull_request_target' && github.event.label.name == 'run-extra-tests')) &&
+        (github.event_name == 'pull_request' &&
+          (github.event.pull_request.base.ref != 'unstable' ||
+            contains(github.event.pull_request.labels.*.name, 'run-extra-tests')) &&
+          (github.event.action != 'labeled' ||
+            (github.event.pull_request.base.ref == 'unstable' && github.event.label.name == 'run-extra-tests'))
+        )) &&
       !contains(github.event.inputs.skipjobs, 'freebsd')
     timeout-minutes: 1440
     steps:
@@ -1260,12 +1598,12 @@ jobs:
         run: |
           echo "GITHUB_REPOSITORY=${{inputs.use_repo || github.event.inputs.use_repo}}" >> $GITHUB_ENV
           echo "GITHUB_HEAD_REF=${{inputs.use_git_ref || github.event.inputs.use_git_ref}}" >> $GITHUB_ENV
-      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          repository: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name) || env.GITHUB_REPOSITORY || github.repository }}
-          ref: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.sha) || env.GITHUB_HEAD_REF || github.ref }}
+          repository: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && env.GITHUB_REPOSITORY) || github.repository }}
+          ref: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && env.GITHUB_HEAD_REF) || github.ref }}
       - name: test
-        uses: cross-platform-actions/action@46e8d7fb25520a8d6c64fd2b7a1192611da98eda # v0.30.0
+        uses: cross-platform-actions/action@39a2a80642eca0947594ad03e4355dc3d28c617a # v0.32.0
         with:
           operating_system: freebsd
           environment_variables: MAKE
@@ -1280,8 +1618,12 @@ jobs:
     if: |
       (github.event_name == 'workflow_call' || github.event_name == 'workflow_dispatch' ||
         (github.event_name == 'schedule' && github.repository == 'valkey-io/valkey') ||
-        (github.event_name == 'pull_request' && github.event.pull_request.base.ref != 'unstable') ||
-        (github.event_name == 'pull_request_target' && github.event.label.name == 'run-extra-tests')) &&
+        (github.event_name == 'pull_request' &&
+          (github.event.pull_request.base.ref != 'unstable' ||
+            contains(github.event.pull_request.labels.*.name, 'run-extra-tests')) &&
+          (github.event.action != 'labeled' ||
+            (github.event.pull_request.base.ref == 'unstable' && github.event.label.name == 'run-extra-tests'))
+        )) &&
       !contains(github.event.inputs.skipjobs, 'alpine')
     container: alpine:latest
     steps:
@@ -1294,14 +1636,22 @@ jobs:
           echo "skiptests: ${{github.event.inputs.skiptests}}"
           echo "test_args: ${{github.event.inputs.test_args}}"
           echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
-      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          repository: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name) || env.GITHUB_REPOSITORY || github.repository }}
-          ref: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.sha) || env.GITHUB_HEAD_REF || github.ref }}
-      - name: make
+          repository: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && env.GITHUB_REPOSITORY) || github.repository }}
+          ref: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && env.GITHUB_HEAD_REF) || github.ref }}
+      - name: Install libbacktrace
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: ianlancetaylor/libbacktrace
+          ref: b9e40069c0b47a722286b94eb5231f7f05c08713
+          path: libbacktrace
+      - name: Build libbacktrace
         run: |
-          apk add build-base
-          make SERVER_CFLAGS='-Werror'
+          apk add build-base git
+          cd libbacktrace && ./configure && make && make install
+      - name: make
+        run: make SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes
       - name: testprep
         run: apk add tcl procps tclx
       - name: test
@@ -1321,8 +1671,12 @@ jobs:
     if: |
       (github.event_name == 'workflow_call' || github.event_name == 'workflow_dispatch' ||
         (github.event_name == 'schedule' && github.repository == 'valkey-io/valkey') ||
-        (github.event_name == 'pull_request' && github.event.pull_request.base.ref != 'unstable') ||
-        (github.event_name == 'pull_request_target' && github.event.label.name == 'run-extra-tests')) &&
+        (github.event_name == 'pull_request' &&
+          (github.event.pull_request.base.ref != 'unstable' ||
+            contains(github.event.pull_request.labels.*.name, 'run-extra-tests')) &&
+          (github.event.action != 'labeled' ||
+            (github.event.pull_request.base.ref == 'unstable' && github.event.label.name == 'run-extra-tests'))
+        )) &&
       !contains(github.event.inputs.skipjobs, 'alpine')
     container: alpine:latest
     steps:
@@ -1335,14 +1689,22 @@ jobs:
           echo "skiptests: ${{github.event.inputs.skiptests}}"
           echo "test_args: ${{github.event.inputs.test_args}}"
           echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
-      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          repository: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name) || env.GITHUB_REPOSITORY || github.repository }}
-          ref: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.sha) || env.GITHUB_HEAD_REF || github.ref }}
-      - name: make
+          repository: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && env.GITHUB_REPOSITORY) || github.repository }}
+          ref: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && env.GITHUB_HEAD_REF) || github.ref }}
+      - name: Install libbacktrace
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: ianlancetaylor/libbacktrace
+          ref: b9e40069c0b47a722286b94eb5231f7f05c08713
+          path: libbacktrace
+      - name: Build libbacktrace
         run: |
-          apk add build-base
-          make SERVER_CFLAGS='-Werror' USE_JEMALLOC=no CFLAGS=-DUSE_MALLOC_USABLE_SIZE
+          apk add build-base git
+          cd libbacktrace && ./configure && make && make install
+      - name: make
+        run: make SERVER_CFLAGS='-Werror' USE_JEMALLOC=no CFLAGS=-DUSE_MALLOC_USABLE_SIZE USE_LIBBACKTRACE=yes
       - name: testprep
         run: apk add tcl procps tclx
       - name: test
@@ -1363,8 +1725,12 @@ jobs:
     if: |
       (github.event_name == 'workflow_call' || github.event_name == 'workflow_dispatch' ||
         (github.event_name == 'schedule' && github.repository == 'valkey-io/valkey') ||
-        (github.event_name == 'pull_request' && github.event.pull_request.base.ref != 'unstable') ||
-        (github.event_name == 'pull_request_target' && github.event.label.name == 'run-extra-tests')) &&
+        (github.event_name == 'pull_request' &&
+          (github.event.pull_request.base.ref != 'unstable' ||
+            contains(github.event.pull_request.labels.*.name, 'run-extra-tests')) &&
+          (github.event.action != 'labeled' ||
+            (github.event.pull_request.base.ref == 'unstable' && github.event.label.name == 'run-extra-tests'))
+        )) &&
       !contains(github.event.inputs.skipjobs, 'reply-schema')
     steps:
       - name: prep
@@ -1376,12 +1742,19 @@ jobs:
           echo "skiptests: ${{github.event.inputs.skiptests}}"
           echo "test_args: ${{github.event.inputs.test_args}}"
           echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
-      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          repository: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name) || env.GITHUB_REPOSITORY || github.repository }}
-          ref: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.sha) || env.GITHUB_HEAD_REF || github.ref }}
+          repository: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && env.GITHUB_REPOSITORY) || github.repository }}
+          ref: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && env.GITHUB_HEAD_REF) || github.ref }}
+      - name: Install libbacktrace
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: ianlancetaylor/libbacktrace
+          ref: b9e40069c0b47a722286b94eb5231f7f05c08713
+          path: libbacktrace
+      - run: cd libbacktrace && ./configure && make && sudo make install
       - name: make
-        run: make SERVER_CFLAGS='-Werror -DLOG_REQ_RES'
+        run: make SERVER_CFLAGS='-Werror -DLOG_REQ_RES' USE_LIBBACKTRACE=yes
       - name: testprep
         run: sudo apt-get install tcl8.6 tclx
       - name: test
@@ -1402,45 +1775,6 @@ jobs:
           path: "./utils/req-res-validator/requirements.txt"
       - name: validator
         run: ./utils/req-res-log-validator.py --verbose --fail-missing-reply-schemas ${{ (!contains(github.event.inputs.skiptests, 'valkey') && !contains(github.event.inputs.skiptests, 'module') && !contains(github.event.inputs.skiptests, 'sentinel') && !contains(github.event.inputs.skiptests, 'cluster')) && (inputs.test_args || github.event.inputs.test_args || '') == '' && (inputs.cluster_test_args || github.event.inputs.cluster_test_args || '') == '' && '--fail-commands-not-all-hit' || '' }}
-  remove-run-extra-tests-label:
-    runs-on: ubuntu-latest
-    needs:
-      - test-ubuntu-jemalloc
-      - test-ubuntu-arm
-      - test-ubuntu-jemalloc-fortify
-      - test-ubuntu-libc-malloc
-      - test-ubuntu-no-malloc-usable-size
-      - test-ubuntu-32bit
-      - test-ubuntu-tls
-      - test-ubuntu-tls-no-tls
-      - test-ubuntu-io-threads
-      - test-ubuntu-tls-io-threads
-      - test-ubuntu-reclaim-cache
-      - test-ubuntu-lttng
-      - test-rpm-distros-jemalloc
-      - test-rpm-distros-tls-module
-      - test-rpm-distros-tls-module-no-tls
-      - test-macos-latest
-      - test-macos-latest-sentinel
-      - test-macos-latest-cluster
-      - build-old-macos-versions
-      - test-freebsd
-      - test-alpine-jemalloc
-      - test-alpine-libc-malloc
-      - reply-schemas-validator
-    if: always() && github.event_name == 'pull_request_target' && github.event.action == 'labeled' && github.event.label.name == 'run-extra-tests'
-    steps:
-      - name: Remove run-extra-tests label
-        uses: actions/github-script@5c56fde4671bc2d3592fb0f2c5b5bab9ddae03b1 # v7
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          script: |
-            await github.rest.issues.removeLabel({
-              issue_number: context.issue.number,
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              name: 'run-extra-tests'
-            }).catch(err => console.log('label not present', err.message));
   notify-about-job-results:
     runs-on: ubuntu-latest
     if: always() && github.event_name == 'schedule' && github.repository == 'valkey-io/valkey'
@@ -1461,7 +1795,9 @@ jobs:
       - test-valgrind-no-malloc-usable-size-test
       - test-valgrind-no-malloc-usable-size-misc
       - test-sanitizer-address
+      - test-sanitizer-address-large-memory
       - test-sanitizer-undefined
+      - test-sanitizer-undefined-large-memory
       - test-sanitizer-force-defrag
       - test-ubuntu-lttng
       - test-rpm-distros-jemalloc
@@ -1495,7 +1831,7 @@ jobs:
             echo "STATUS=success" >> $GITHUB_ENV
           fi
       - name: Notify about results
-        uses: ravsamhq/notify-slack-action@v2
+        uses: ravsamhq/notify-slack-action@042f29088bb3bdbda5b4ff7b4818466a277fa8f7 # v2.5.0
         with:
           status: ${{ env.STATUS }}
           notify_when: "failure"

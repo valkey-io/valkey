@@ -42,7 +42,7 @@ static int checkStringLength(client *c, long long size, long long append) {
         return C_OK;
     /* 'uint64_t' cast is there just to prevent undefined behavior on overflow */
     long long total = (uint64_t)size + append;
-    /* Test configured max-bulk-len represending a limit of the biggest string object,
+    /* Test configured max-bulk-len representing a limit of the biggest string object,
      * and also test for overflow. */
     if (total > server.proto_max_bulk_len || total < size || total < append) {
         addReplyError(c,"string exceeds maximum allowed size (proto-max-bulk-len)");

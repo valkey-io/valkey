@@ -876,24 +876,11 @@ static int storageDropReadonlyFunction(ValkeyModuleCtx *, ValkeyModuleExternalSt
     return EXTERNAL_SUCCESS;
 }
 
-static int storageFlushFunction(ValkeyModuleCtx *module_ctx,
-                                ValkeyModuleExternalStorageCtx *storage_ctx,
-                                int dbid) {
-    (void)storage_ctx; /* Unused */
+/* Helper function to flush all slots in storage pool */
+static int storageFlushAllSlots(ValkeyModuleCtx *module_ctx, int dbid) {
+    ValkeyModule_Log(module_ctx, "notice", "storageFlushFunction: flushing all slots for dbid=%d", dbid);
     
-    ValkeyModule_Log(module_ctx, "notice", "storageFlushFunction called for dbid=%d", dbid);
-    
-    if (dbid < 0 || dbid >= MAX_DB) {
-        return EXTERNAL_ERROR;
-    }
-    
-    if (storage_mem_pool[dbid] == NULL) {
-        return EXTERNAL_SUCCESS;
-    }
-
-    is_loading[dbid] = 1;
-    /* First, iterate through all keys and free the retained strings
-        * This prevents memory leaks from ValkeyModule_RetainString calls */
+    /* Iterate through all keys and free the retained strings */
     ValkeyModuleDictIter *iter = ValkeyModule_DictIteratorStartC(storage_mem_pool[dbid], "^", NULL, 0);
     ValkeyModuleString *key;
 
@@ -910,12 +897,139 @@ static int storageFlushFunction(ValkeyModuleCtx *module_ctx,
     }
     ValkeyModule_DictIteratorStop(iter);
     
-    /* Now free the entire dictionary */
+    /* Free the entire dictionary and recreate */
     ValkeyModule_FreeDict(NULL, storage_mem_pool[dbid]);
     storage_mem_pool[dbid] = ValkeyModule_CreateDict(NULL);
-    is_loading[dbid] = 0;
-
+    
+    /* Also clear the slot tracking pool */
+    if (storage_slot_pool[dbid] != NULL) {
+        ValkeyModule_FreeDict(NULL, storage_slot_pool[dbid]);
+        storage_slot_pool[dbid] = ValkeyModule_CreateDict(NULL);
+    }
+    
     return EXTERNAL_SUCCESS;
+}
+
+/* Helper function to flush a specific slot in storage pool */
+static int storageFlushSpecificSlot(ValkeyModuleCtx *module_ctx, int dbid, int slot) {
+    ValkeyModule_Log(module_ctx, "notice", "storageFlushFunction: flushing slot %d for dbid=%d", slot, dbid);
+    
+    /* Iterate through all keys and remove only those belonging to the specified slot */
+    ValkeyModuleDictIter *iter = ValkeyModule_DictIteratorStartC(storage_mem_pool[dbid], "^", NULL, 0);
+    ValkeyModuleString *key;
+    
+    while ((key = ValkeyModule_DictNext(NULL, iter, NULL)) != NULL) {
+        int key_slot;
+        
+        /* Get slot for this key from slot tracking pool */
+        ValkeyModuleString *slot_value = ValkeyModule_DictGet(storage_slot_pool[dbid], key, NULL);
+        if (slot_value != NULL) {
+            const char *slot_cstr = ValkeyModule_StringPtrLen(slot_value, NULL);
+            key_slot = atoi(slot_cstr);
+        } else {
+            /* If no slot info, calculate it */
+            key_slot = is_cluster_enabled ? ValkeyModule_ClusterKeySlot(key) : (unsigned int)EXTERNAL_ALL_SLOTS;
+        }
+        
+        /* If key belongs to target slot, remove it */
+        if (key_slot == slot) {
+            ValkeyModuleString *value = ValkeyModule_DictGet(storage_mem_pool[dbid], key, NULL);
+            
+            /* Remove from both pools */
+            ValkeyModule_DictDel(storage_mem_pool[dbid], key, NULL);
+            ValkeyModule_DictDel(storage_slot_pool[dbid], key, NULL);
+            
+            /* Free the value if it exists */
+            if (value != NULL) {
+                ValkeyModule_FreeString(NULL, value);
+            }
+        }
+        
+        /* Free the key string created by DictNext */
+        ValkeyModule_FreeString(NULL, key);
+    }
+    ValkeyModule_DictIteratorStop(iter);
+    
+    return EXTERNAL_SUCCESS;
+}
+
+/* Helper function to flush all slots in filter pool */
+static int filterFlushAllSlots(ValkeyModuleCtx *module_ctx, int dbid) {
+    ValkeyModule_Log(module_ctx, "notice", "filterFlushFunction: flushing all slots for dbid=%d", dbid);
+    
+    /* For filter, we don't retain strings with ValkeyModule_RetainString like storage does */
+    ValkeyModule_FreeDict(NULL, filter_mem_pool[dbid]);
+    filter_mem_pool[dbid] = ValkeyModule_CreateDict(NULL);
+    
+    /* Also clear the slot tracking pool */
+    if (filter_slot_pool[dbid] != NULL) {
+        ValkeyModule_FreeDict(NULL, filter_slot_pool[dbid]);
+        filter_slot_pool[dbid] = ValkeyModule_CreateDict(NULL);
+    }
+    
+    return EXTERNAL_SUCCESS;
+}
+
+/* Helper function to flush a specific slot in filter pool */
+static int filterFlushSpecificSlot(ValkeyModuleCtx *module_ctx, int dbid, int slot) {
+    ValkeyModule_Log(module_ctx, "notice", "filterFlushFunction: flushing slot %d for dbid=%d", slot, dbid);
+    
+    /* Iterate through all keys and remove only those belonging to the specified slot */
+    ValkeyModuleDictIter *iter = ValkeyModule_DictIteratorStartC(filter_mem_pool[dbid], "^", NULL, 0);
+    ValkeyModuleString *key;
+    
+    while ((key = ValkeyModule_DictNext(NULL, iter, NULL)) != NULL) {
+        int key_slot;
+        
+        /* Get slot for this key from slot tracking pool */
+        ValkeyModuleString *slot_value = ValkeyModule_DictGet(filter_slot_pool[dbid], key, NULL);
+        if (slot_value != NULL) {
+            const char *slot_cstr = ValkeyModule_StringPtrLen(slot_value, NULL);
+            key_slot = atoi(slot_cstr);
+        } else {
+            /* If no slot info, calculate it */
+            key_slot = is_cluster_enabled ? ValkeyModule_ClusterKeySlot(key) : (unsigned int)EXTERNAL_ALL_SLOTS;
+        }
+        
+        /* If key belongs to target slot, remove it */
+        if (key_slot == slot) {
+            /* Remove from both pools */
+            ValkeyModule_DictDel(filter_mem_pool[dbid], key, NULL);
+            ValkeyModule_DictDel(filter_slot_pool[dbid], key, NULL);
+        }
+        
+        /* Free the key string created by DictNext */
+        ValkeyModule_FreeString(NULL, key);
+    }
+    ValkeyModule_DictIteratorStop(iter);
+    
+    return EXTERNAL_SUCCESS;
+}
+
+static int storageFlushFunction(ValkeyModuleCtx *module_ctx,
+                                ValkeyModuleExternalStorageCtx *storage_ctx,
+                                int dbid,
+                                int slot) {
+    (void)storage_ctx; /* Unused */
+    
+    ValkeyModule_Log(module_ctx, "notice", "storageFlushFunction called for dbid=%d slot=%d", dbid, slot);
+    
+    if (dbid < 0 || dbid >= MAX_DB) {
+        return EXTERNAL_ERROR;
+    }
+    
+    if (storage_mem_pool[dbid] == NULL) {
+        return EXTERNAL_SUCCESS;
+    }
+    
+    int result;
+    if (slot == EXTERNAL_ALL_SLOTS) {
+        result = storageFlushAllSlots(module_ctx, dbid);
+    } else {
+        result = storageFlushSpecificSlot(module_ctx, dbid, slot);
+    }
+
+    return result;
 }
 
 static int filterSetReadonlyFunction(ValkeyModuleCtx *, ValkeyModuleExternalFilterCtx *) {
@@ -928,24 +1042,25 @@ static int filterDropReadonlyFunction(ValkeyModuleCtx *, ValkeyModuleExternalFil
 
 static int filterFlushFunction(ValkeyModuleCtx *module_ctx,
                                ValkeyModuleExternalFilterCtx *filter_ctx,
-                               int dbid) {
+                               int dbid,
+                               int slot) {
     (void)filter_ctx; /* Unused */
     
-    ValkeyModule_Log(module_ctx, "notice", "filterFlushFunction called for dbid=%d", dbid);
+    ValkeyModule_Log(module_ctx, "notice", "filterFlushFunction called for dbid=%d slot=%d", dbid, slot);
     
     if (dbid < 0 || dbid >= MAX_DB) {
         return EXTERNAL_ERROR;
     }
     
-    if (filter_mem_pool[dbid] != NULL) {
-        /* For filter, we don't retain strings with ValkeyModule_RetainString like storage does.
-         * We just use ValkeyModule_DictReplace directly, so we can free the dictionary directly
-         * without iterating through individual strings to avoid double-free issues. */
-        ValkeyModule_FreeDict(NULL, filter_mem_pool[dbid]);
+    if (filter_mem_pool[dbid] == NULL) {
+        return EXTERNAL_SUCCESS;
     }
-    filter_mem_pool[dbid] = ValkeyModule_CreateDict(NULL);
     
-    return EXTERNAL_SUCCESS;
+    if (slot == EXTERNAL_ALL_SLOTS) {
+        return filterFlushAllSlots(module_ctx, dbid);
+    } else {
+        return filterFlushSpecificSlot(module_ctx, dbid, slot);
+    }
 }
 
 static int storageSwapFunction(ValkeyModuleCtx *module_ctx,
@@ -1275,10 +1390,24 @@ typedef struct {
     int count;
 } BackupIdList;
 
-/* Find ALL backup IDs with the latest timestamp for a given file type */
+/* Forward declaration */
+static int findAllLatestBackupIdsWithFilter(ValkeyModuleCtx *module_ctx, const char *source_node_id,
+                                             int dbid, const char *file_type,
+                                             BackupIdList *backup_list, int filter_slot);
+
+/* Find ALL backup IDs with the latest timestamp for a given file type
+ * If filter_slot is not EXTERNAL_ALL_SLOTS, only finds backups for that specific slot */
 static int findAllLatestBackupIds(ValkeyModuleCtx *module_ctx, const char *source_node_id,
                                    int dbid, const char *file_type,
                                    BackupIdList *backup_list) {
+    return findAllLatestBackupIdsWithFilter(module_ctx, source_node_id, dbid, file_type,
+                                           backup_list, EXTERNAL_ALL_SLOTS);
+}
+
+/* Helper function that can filter by slot */
+static int findAllLatestBackupIdsWithFilter(ValkeyModuleCtx *module_ctx, const char *source_node_id,
+                                             int dbid, const char *file_type,
+                                             BackupIdList *backup_list, int filter_slot) {
     char db_dir[DB_DIR_MAX_LEN];
     snprintf(db_dir, sizeof(db_dir), "/tmp/external_data/%s/db%d", source_node_id, dbid);
     
@@ -1291,7 +1420,7 @@ static int findAllLatestBackupIds(ValkeyModuleCtx *module_ctx, const char *sourc
     backup_list->count = 0;
     long long max_timestamp = -1;
     
-    /* First pass: find the maximum timestamp */
+    /* First pass: find the maximum timestamp (filtered by slot if specified) */
     struct dirent *entry;
     while ((entry = readdir(dir)) != NULL) {
         /* Look for files matching pattern: helloextdata1_<file_type>_v0:<node_id>:<timestamp>.dat */
@@ -1322,8 +1451,11 @@ static int findAllLatestBackupIds(ValkeyModuleCtx *module_ctx, const char *sourc
                                           temp_node_id, sizeof(temp_node_id),
                                           &temp_slot,
                                           &timestamp, temp_options, sizeof(temp_options)) == EXTERNAL_SUCCESS) {
-                            if (timestamp > max_timestamp) {
-                                max_timestamp = timestamp;
+                            /* Only consider backups matching filter_slot (if specified) */
+                            if (filter_slot == EXTERNAL_ALL_SLOTS || temp_slot == filter_slot) {
+                                if (timestamp > max_timestamp) {
+                                    max_timestamp = timestamp;
+                                }
                             }
                         }
                         ValkeyModule_FreeString(NULL, backup_str);
@@ -1367,8 +1499,9 @@ static int findAllLatestBackupIds(ValkeyModuleCtx *module_ctx, const char *sourc
                                           temp_node_id, sizeof(temp_node_id),
                                           &temp_slot,
                                           &timestamp, temp_options, sizeof(temp_options)) == EXTERNAL_SUCCESS) {
-                            /* Only collect backups with the max timestamp */
-                            if (timestamp == max_timestamp) {
+                            /* Only collect backups with the max timestamp and matching filter_slot */
+                            if (timestamp == max_timestamp &&
+                                (filter_slot == EXTERNAL_ALL_SLOTS || temp_slot == filter_slot)) {
                                 strncpy(backup_list->backup_ids[backup_list->count],
                                        current_backup_id,
                                        BACKUP_ID_MAX_LEN - 1);
@@ -1468,13 +1601,17 @@ static int filterLoadFunction(ValkeyModuleCtx *module_ctx,
         const char *search_node_id = (backup_id == NULL) ? node_id : source_node_id;
         BackupIdList backup_list;
         
-        if (findAllLatestBackupIds(module_ctx, search_node_id, dbid, "filter", &backup_list) != EXTERNAL_SUCCESS) {
-            ValkeyModule_Log(module_ctx, "warning", "No filter backup found for auto-load in node_id=%s directory", search_node_id);
+        if (findAllLatestBackupIdsWithFilter(module_ctx, search_node_id, dbid, "filter",
+                                            &backup_list, parsed_slot) != EXTERNAL_SUCCESS) {
+            ValkeyModule_Log(module_ctx, "warning", "No filter backup found for auto-load in node_id=%s%s",
+                search_node_id,
+                (parsed_slot != EXTERNAL_ALL_SLOTS) ? " (filtered by slot)" : "");
             return EXTERNAL_NOT_FOUND;
         }
         
-        /* Clear existing filter data once before loading all backups */
-        filterFlushFunction(module_ctx, filter_ctx, dbid);
+        /* Clear existing filter data for the slot(s) being loaded */
+        int flush_slot = (parsed_slot != EXTERNAL_ALL_SLOTS) ? parsed_slot : EXTERNAL_ALL_SLOTS;
+        filterFlushFunction(module_ctx, filter_ctx, dbid, flush_slot);
         
         /* Mark that we're loading - this will cause incoming commands to be queued */
         is_loading[dbid] = 1;
@@ -1617,7 +1754,7 @@ static int filterLoadFunction(ValkeyModuleCtx *module_ctx,
         }
         
         /* Clear existing filter data */
-        filterFlushFunction(module_ctx, filter_ctx, dbid);
+        filterFlushFunction(module_ctx, filter_ctx, dbid, EXTERNAL_ALL_SLOTS);
         
         /* Mark that we're loading - this will cause incoming commands to be queued */
         is_loading[dbid] = 1;
@@ -1748,19 +1885,31 @@ static int storageLoadFunction(ValkeyModuleCtx *module_ctx,
     }
     
     if (need_auto_discovery) {
-        /* Auto-discover ALL latest backups (for cluster mode with multiple slots) */
+        /* Auto-discover latest backups (filtered by slot if specified) */
         const char *search_node_id = (backup_id == NULL) ? node_id : source_node_id;
         BackupIdList backup_list;
         
-        if (findAllLatestBackupIds(module_ctx, search_node_id, dbid, "storage", &backup_list) != EXTERNAL_SUCCESS) {
-            ValkeyModule_Log(module_ctx, "warning", "DEBUG_SYNC: No storage backup found for auto-load in node_id=%s directory", search_node_id);
+        if (findAllLatestBackupIdsWithFilter(module_ctx, search_node_id, dbid, "storage",
+                                            &backup_list, parsed_slot) != EXTERNAL_SUCCESS) {
+            ValkeyModule_Log(module_ctx, "warning", "DEBUG_SYNC: No storage backup found for auto-load in node_id=%s%s",
+                search_node_id,
+                (parsed_slot != EXTERNAL_ALL_SLOTS) ? " (filtered by slot)" : "");
             return EXTERNAL_NOT_FOUND;
         }
         
-        /* Clear existing storage data once before loading all backups */
-        storageFlushFunction(module_ctx, storage_ctx, dbid);
+        ValkeyModule_Log(module_ctx, "warning",
+            "DEBUG_SYNC: Found %d backup(s) for node_id=%s%s%d",
+            backup_list.count, search_node_id,
+            (parsed_slot != EXTERNAL_ALL_SLOTS) ? " slot=" : " all slots",
+            (parsed_slot != EXTERNAL_ALL_SLOTS) ? parsed_slot : 0);
         
-        /* Mark that we're loading - this will cause incoming commands to be queued */
+        /* Determine which slot(s) to flush */
+        int flush_slot = (parsed_slot != EXTERNAL_ALL_SLOTS) ? parsed_slot : EXTERNAL_ALL_SLOTS;
+        
+        /* Flush storage data for the specific slot(s) being loaded */
+        storageFlushFunction(module_ctx, storage_ctx, dbid, flush_slot);
+        
+        /* Now mark that we're loading - this will cause incoming commands to be queued */
         is_loading[dbid] = 1;
         
         int total_loaded = 0;
@@ -1951,7 +2100,7 @@ static int storageLoadFunction(ValkeyModuleCtx *module_ctx,
         ValkeyModule_Log(module_ctx, "warning", "DEBUG_SYNC: Successfully opened storage file: %s", file_path);
         
         /* Clear existing storage data */
-        storageFlushFunction(module_ctx, storage_ctx, dbid);
+        storageFlushFunction(module_ctx, storage_ctx, dbid, EXTERNAL_ALL_SLOTS);
         
         /* Mark that we're loading - this will cause incoming commands to be queued */
         is_loading[dbid] = 1;
@@ -2490,19 +2639,18 @@ static const char *find_node_id_by_address(ValkeyModuleCtx *ctx, const char *ip_
  * - slot: -1 (all slots for standalone mode)
  * - timestamp: 0 (find most recent)
  */
-static const char *get_backup_id(ValkeyModuleCtx *ctx, const char *address) {
+static const char *get_backup_id(ValkeyModuleCtx *ctx, const char *address, int slot) {
     const char *node_id = find_node_id_by_address(ctx, address);
     if (!node_id) {
         return NULL;
     }
     
-    /* Construct v0-format backup_id: v0:<node_id>:-1:0
-     * -1 = all slots (standalone mode), 0 = find most recent timestamp */
-    static char backup_id_buf[256];
-    snprintf(backup_id_buf, sizeof(backup_id_buf), "v0:%s:%d:0", node_id, EXTERNAL_ALL_SLOTS);
+    /* Construct v0-format backup_id using helper function */
+    static char backup_id_buf[BACKUP_ID_MAX_LEN];
+    encodeBackupIdV0(backup_id_buf, sizeof(backup_id_buf), node_id, slot, 0);
     
-    ValkeyModule_Log(ctx, "notice", "get_backup_id: address=%s -> backup_id=%s",
-                     address, backup_id_buf);
+    ValkeyModule_Log(ctx, "notice", "get_backup_id: address=%s slot=%d -> backup_id=%s",
+                     address, slot, backup_id_buf);
     
     return backup_id_buf;
 }
@@ -2551,6 +2699,8 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
     
     if (ValkeyModule_Init(ctx, module_name, 1, VALKEYMODULE_APIVER_1) == VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
+
+    ValkeyModule_SetModuleOptions(ctx, VALKEYMODULE_OPTIONS_HANDLE_ATOMIC_SLOT_MIGRATION);
 
     ValkeyModule_Log(ctx, "warning", "=== ValkeyModule_Init SUCCESS for module: %s ===", module_name);
 

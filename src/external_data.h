@@ -43,6 +43,7 @@ int externalDataCallSetReadonlyFunc(externalDataModuleInstance *mi);
 int externalDataCallDropReadonlyFunc(externalDataModuleInstance *mi);
 int externalDataCallDumpFunc(externalDataModuleInstance *mi, int slot, long long timestamp, ValkeyModuleString *target, ValkeyModuleString **backup_id);
 int externalDataCallLoadFunc(externalDataModuleInstance *mi, ValkeyModuleString *backup_id);
+externalDataModuleInstance *externalDataGetModuleInstance(int dbid);
 int externalDataCallGetStateFunc(externalDataModuleInstance *mi, ValkeyModuleString *source, int **db_numbers, size_t *num_dbs);
 int externalDataDumpForFullSync(void);
 int externalDataDumpCheckComplete(ValkeyModuleString **backup_id);
@@ -68,8 +69,11 @@ int externalStorageDeleteKey(int dbid, robj *key, robj **value);
 /* Delete a key from external filter for a specific database */
 int externalFilterDeleteKey(int dbid, robj *key, robj **value);
 
-/* Flush external data for a specific database */
-void externalDataFlushDb(int dbid);
+/* Flush external data for a specific database and slot */
+void externalDataFlushDb(int dbid, int slot);
+
+/* Helper function to get backup_id for a slot from a given address */
+sds externalDataGetBackupId(sds address, int slot);
 
 /* Flush external data for all databases */
 void externalDataFlushAll(void);

@@ -704,7 +704,7 @@ long long emptyData(int dbnum, int flags, void(callback)(hashtable *)) {
         if (dbnum == -1) {
             externalDataFlushAll();
         } else {
-            externalDataFlushDb(dbnum);
+            externalDataFlushDb(dbnum, EXTERNAL_ALL_SLOTS);
         }
     }
 

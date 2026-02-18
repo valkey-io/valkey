@@ -8,6 +8,7 @@
 #include "bio.h"
 #include "module.h"
 #include "functions.h"
+#include "external_data.h"
 
 #include <sys/wait.h>
 #include <fcntl.h>
@@ -666,6 +667,64 @@ void clusterCommandSyncSlotsSnapshotEof(client *c) {
               "Slot migration %s successfully received slot snapshot. "
               "Beginning incremental stream...",
               c->slot_migration_job->description);
+
+    /* Load external data for each imported slot */
+    if (isExtDataOn()) {
+        /* Get source node address */
+        clusterNode *source_node = clusterLookupNode(c->slot_migration_job->source_node_name, CLUSTER_NAMELEN);
+        if (source_node) {
+            char *source_ip = clusterNodeIp(source_node, NULL);
+            int source_port = getNodeDefaultReplicationPort(source_node);
+            char source_addr[256];
+            snprintf(source_addr, sizeof(source_addr), "%s:%d", source_ip, source_port);
+            
+            sds source_addr_sds = sdsnew(source_addr);
+            
+            /* Iterate through all databases */
+            for (int dbid = 0; dbid < server.dbnum; dbid++) {
+                externalDataModuleInstance *mi = externalDataGetModuleInstance(dbid);
+                if (!mi) {
+                    continue;
+                }
+                
+                /* Iterate through all slot ranges */
+                listIter li;
+                listNode *ln;
+                listRewind(c->slot_migration_job->slot_ranges, &li);
+                while ((ln = listNext(&li)) != NULL) {
+                    slotRange *range = ln->value;
+                    for (int slot = range->start_slot; slot <= range->end_slot; slot++) {
+                        /* Construct backup_id for this specific slot */
+                        sds backup_id_sds = externalDataGetBackupId(source_addr_sds, slot);
+                        
+                        if (backup_id_sds) {
+                            robj *backup_id_obj = createStringObject(backup_id_sds, sdslen(backup_id_sds));
+                            int result = externalDataCallLoadFunc(mi, (ValkeyModuleString *)backup_id_obj);
+                            
+                            if (result == EXTERNAL_SUCCESS) {
+                                serverLog(LL_NOTICE, "External data loaded for database %d slot %d from source %s",
+                                         dbid, slot, source_addr);
+                            } else {
+                                serverLog(LL_WARNING, "Failed to load external data for database %d slot %d from source %s",
+                                         dbid, slot, source_addr);
+                            }
+                            
+                            decrRefCount(backup_id_obj);
+                            sdsfree(backup_id_sds);
+                        } else {
+                            serverLog(LL_WARNING, "Failed to construct backup_id for database %d slot %d from source %s",
+                                     dbid, slot, source_addr);
+                        }
+                    }
+                }
+            }
+            
+            sdsfree(source_addr_sds);
+        } else {
+            serverLog(LL_WARNING, "Could not find source node for external data load");
+        }
+    }
+
     sendSyncSlotsMessage(c->slot_migration_job, "REQUEST-PAUSE");
     updateSlotMigrationJobState(c->slot_migration_job,
                                 SLOT_IMPORT_WAITING_FOR_PAUSED);
@@ -2065,6 +2124,59 @@ void proceedWithSlotMigration(slotMigrationJob *job) {
                                        "Failed to start snapshot");
                 return;
             }
+
+            /* Dump external data for each slot being migrated */
+            if (isExtDataOn()) {
+                /* Get target node address */
+                clusterNode *target_node = clusterLookupNode(job->target_node_name, CLUSTER_NAMELEN);
+                if (target_node) {
+                    char *target_ip = clusterNodeIp(target_node, NULL);
+                    int target_port = getNodeDefaultReplicationPort(target_node);
+                    char target_addr[256];
+                    snprintf(target_addr, sizeof(target_addr), "%s:%d", target_ip, target_port);
+                    
+                    robj *target_str = createStringObject(target_addr, strlen(target_addr));
+                    
+                    /* Iterate through all databases */
+                    for (int dbid = 0; dbid < server.dbnum; dbid++) {
+                        externalDataModuleInstance *mi = externalDataGetModuleInstance(dbid);
+                        if (!mi) {
+                            continue;
+                        }
+                        
+                        /* Iterate through all slot ranges */
+                        listIter li;
+                        listNode *ln;
+                        listRewind(job->slot_ranges, &li);
+                        while ((ln = listNext(&li)) != NULL) {
+                            slotRange *range = ln->value;
+                            for (int slot = range->start_slot; slot <= range->end_slot; slot++) {
+                                ValkeyModuleString *backup_id = NULL;
+                                
+                                int result = externalDataCallDumpFunc(mi, slot, mstime(),
+                                                                      (ValkeyModuleString *)target_str,
+                                                                      &backup_id);
+                                
+                                if (result == EXTERNAL_SUCCESS) {
+                                    /* ValkeyModuleString is internally robj*, extract string properly */
+                                    const char *backup_id_str = backup_id ? (char *)((robj *)backup_id)->ptr : "NULL";
+                                    serverLog(LL_NOTICE, "External data dumped for database %d slot %d, backup_id: %s",
+                                             dbid, slot, backup_id_str);
+                                    /* Free using proper object reference counting */
+                                    if (backup_id) decrRefCount((robj *)backup_id);
+                                } else {
+                                    serverLog(LL_WARNING, "Failed to dump external data for database %d slot %d", dbid, slot);
+                                }
+                            }
+                        }
+                    }
+                    
+                    decrRefCount(target_str);
+                } else {
+                    serverLog(LL_WARNING, "Could not find target node for external data dump");
+                }
+            }
+
             updateSlotMigrationJobState(job, SLOT_EXPORT_SNAPSHOTTING);
             return;
         case SLOT_EXPORT_SNAPSHOTTING:
@@ -2344,6 +2456,24 @@ void finishSlotMigrationJob(slotMigrationJob *job,
     if (job->type == SLOT_MIGRATION_EXPORT) {
         if (state == SLOT_MIGRATION_JOB_SUCCESS) {
             fireModuleSlotMigrationEvent(job, VALKEYMODULE_SUBEVENT_ATOMIC_SLOT_MIGRATION_EXPORT_COMPLETED);
+            
+            /* Clean up external data from source after successful export */
+            if (isExtDataOn()) {
+                listIter li;
+                listNode *ln;
+                listRewind(job->slot_ranges, &li);
+                while ((ln = listNext(&li)) != NULL) {
+                    slotRange *range = ln->value;
+                    for (int slot = range->start_slot; slot <= range->end_slot; slot++) {
+                        /* Flush external data for this specific slot on all databases */
+                        for (int dbid = 0; dbid < server.dbnum; dbid++) {
+                            externalDataFlushDb(dbid, slot);
+                        }
+                        
+                        serverLog(LL_NOTICE, "External data cleaned up for exported slot %d", slot);
+                    }
+                }
+            }
         } else {
             fireModuleSlotMigrationEvent(job, VALKEYMODULE_SUBEVENT_ATOMIC_SLOT_MIGRATION_EXPORT_ABORTED);
         }

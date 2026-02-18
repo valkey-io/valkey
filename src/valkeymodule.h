@@ -1433,7 +1433,8 @@ typedef int (*ValkeyModuleExternalStorageSetReadonlyFunc)(
 typedef int (*ValkeyModuleExternalStorageFlushFunc)(
     ValkeyModuleCtx *module_ctx,
     ValkeyModuleExternalStorageCtx *storage_ctx,
-    int dbid);
+    int dbid,
+    int slot);
 
 
 /* The callback function called when SWAPDB command is called.
@@ -1591,7 +1592,7 @@ typedef struct ValkeyModuleExternalStorageMethods {
      * Returns a backup_id string (e.g., "v0:-1:0:node_id") that can be used
      * to load data from that address's backup directory.
      * Returns NULL if the address is not found in the mapping. */
-    const char *(*get_backup_id)(ValkeyModuleCtx *ctx, const char *ip_port);
+    const char *(*get_backup_id)(ValkeyModuleCtx *ctx, const char *ip_port, int slot);
 } ValkeyModuleExternalStorageMethodsV1;
 
 #define ValkeyModuleExternalStorageMethods ValkeyModuleExternalStorageMethodsV1
@@ -1704,7 +1705,8 @@ typedef int (*ValkeyModuleExternalFilterSetReadonlyFunc)(
 typedef int (*ValkeyModuleExternalFilterFlushFunc)(
     ValkeyModuleCtx *module_ctx,
     ValkeyModuleExternalFilterCtx *filter_ctx,
-    int dbid);
+    int dbid,
+    int slot);
 
 /* The callback function called when SWAPDB command is called.
  * This allows the module to efficiently swap filter data between two databases

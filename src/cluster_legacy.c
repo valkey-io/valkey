@@ -7568,6 +7568,13 @@ void clusterCommandSetSlot(client *c) {
     mstime_t timeout_ms;
     clusterNode *n;
 
+    /* Block CLUSTER SETSLOT when external data is enabled to prevent data loss */
+    if (isExtDataOn()) {
+        addReplyError(c, "CLUSTER SETSLOT command is not supported with external storage. "
+                         "Use CLUSTER MIGRATESLOTS for slot migration.");
+        return;
+    }
+
     if (!clusterParseSetSlotCommand(c, &slot, &n, &timeout_ms)) return;
 
     /* Enhance cluster topology change resilience against primary failures by

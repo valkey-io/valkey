@@ -432,6 +432,7 @@ typedef enum {
     REPL_STATE_RECEIVE_CAPA_REPLY,    /* Wait for REPLCONF reply */
     REPL_STATE_RECEIVE_VERSION_REPLY, /* Wait for REPLCONF reply */
     REPL_STATE_RECEIVE_NODEID_REPLY,  /* Wait for REPLCONF reply */
+    REPL_STATE_RECEIVE_NAME_REPLY,    /* Wait for REPLCONF reply */
     REPL_STATE_SEND_PSYNC,            /* Send PSYNC */
     REPL_STATE_RECEIVE_PSYNC_REPLY,   /* Wait for PSYNC reply */
     /* --- End of handshake states --- */

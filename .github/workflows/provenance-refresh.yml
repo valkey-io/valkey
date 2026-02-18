@@ -1,0 +1,63 @@
+name: Refresh Provenance Data
+
+on:
+  schedule:
+    - cron: "0 2 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Refresh Fingerprints
+        uses: valkey-io/verify-provenance@d4bf163f8593527d444e62164c4e7972942811c4
+        with:
+          mode: "refresh"
+          source_repo: "redis/redis"
+          target_repo: "${{ github.repository }}"
+          branding_pairs: "Redis:Valkey"
+          source_brand: "Redis"
+          target_brand: "Valkey"
+          github_token: "${{ secrets.GITHUB_TOKEN }}"
+          db_branch: "provenance-guard-db"
+
+      - name: Commit Updated PR DB
+        env:
+          SSH_KEY: ${{ secrets.PROVENANCE_DB_PUSH_KEY }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          # Setup SSH if key is provided (to bypass branch protection)
+          if [ -n "$SSH_KEY" ]; then
+            mkdir -p ~/.ssh
+            echo "$SSH_KEY" > ~/.ssh/id_rsa
+            chmod 600 ~/.ssh/id_rsa
+            git remote set-url origin git@github.com:${{ github.repository }}.git
+          fi
+
+          # Switch to orphan branch
+          git fetch origin provenance-guard-db:provenance-guard-db
+          git checkout provenance-guard-db
+
+          # Overwrite with refreshed file (the action places it at .refreshed_pr_db.json.gz)
+          if [ -f .refreshed_pr_db.json.gz ]; then
+            mv .refreshed_pr_db.json.gz pr_fingerprints.json.gz
+            git add pr_fingerprints.json.gz
+            if ! git diff --cached --quiet; then
+              git commit -m "Automated PR fingerprint refresh [skip ci]"
+              git push origin provenance-guard-db
+            else
+              echo "No changes to PR database."
+            fi
+          else
+            echo "Error: Refreshed DB file not found."
+            exit 1
+          fi

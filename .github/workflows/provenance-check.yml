@@ -1,0 +1,25 @@
+name: Provenance Guard
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Run Provenance Check
+        uses: valkey-io/verify-provenance@d4bf163f8593527d444e62164c4e7972942811c4
+        with:
+          source_repo: "redis/redis"
+          target_repo: "${{ github.repository }}"
+          branding_pairs: "Redis:Valkey"
+          prefix_pairs: "RM_:VM_"
+          source_brand: "Redis"
+          target_brand: "Valkey"
+          github_token: "${{ secrets.GITHUB_TOKEN }}"
+          db_branch: "provenance-guard-db"

@@ -12,12 +12,12 @@ jobs:
   refresh:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           fetch-depth: 0
 
       - name: Refresh Fingerprints
-        uses: valkey-io/verify-provenance@d4bf163f8593527d444e62164c4e7972942811c4
+        uses: valkey-io/verify-provenance@fcf3a6b3f2bd0215f0bdce0e724d2483ce76a31e
         with:
           mode: "refresh"
           source_repo: "redis/redis"
@@ -32,6 +32,7 @@ jobs:
         env:
           SSH_KEY: ${{ secrets.PROVENANCE_DB_PUSH_KEY }}
         run: |
+          set -e
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 

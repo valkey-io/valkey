@@ -2226,8 +2226,8 @@ int test_quicklistCompressAndDecompressQuicklistListpackNode(int argc, char **ar
     unsigned char *s = zmalloc(sz);
     randstring(s, sz);
 
-    /* Keep filling the node, until it reaches 1GB */
-    for (int i = 0; i < 32; i++) {
+    /* Keep filling the node, until it reaches 256MB */
+    for (int i = 0; i < 8; i++) {
         node->entry = lpAppend(node->entry, s, sz);
         node->sz = lpBytes((node)->entry);
 

@@ -1080,7 +1080,7 @@ unsigned long long dictFingerprint(dict *d) {
     return hash;
 }
 
-/* Initiaize a normal iterator. This function should be called when initializing
+/* Initialize a normal iterator. This function should be called when initializing
  * an iterator on the stack. */
 void dictInitIterator(dictIterator *iter, dict *d) {
     iter->d = d;

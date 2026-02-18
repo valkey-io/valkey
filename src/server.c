@@ -1573,7 +1573,7 @@ static void sendGetackToReplicas(void) {
     robj *argv[3];
     argv[0] = shared.replconf;
     argv[1] = shared.getack;
-    argv[2] = shared.special_asterick; /* Not used argument. */
+    argv[2] = shared.special_asterisk; /* Not used argument. */
     replicationFeedReplicas(-1, argv, 3);
 }
 
@@ -1613,12 +1613,12 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
         processed += connTypeProcessPendingData();
         if (server.aof_state == AOF_ON || server.aof_state == AOF_WAIT_REWRITE) flushAppendOnlyFile(0);
         processed += handleClientsWithPendingWrites();
-        int last_procssed = 0;
+        int last_processed = 0;
         do {
             /* Try to process all the pending IO events. */
-            last_procssed = processIOThreadsReadDone() + processIOThreadsWriteDone();
-            processed += last_procssed;
-        } while (last_procssed != 0);
+            last_processed = processIOThreadsReadDone() + processIOThreadsWriteDone();
+            processed += last_processed;
+        } while (last_processed != 0);
         processed += freeClientsInAsyncFreeQueue();
         server.events_processed_while_blocked += processed;
         return;
@@ -1959,7 +1959,7 @@ void createSharedObjects(void) {
     shared.load = createStringObject("LOAD", 4);
     shared.createconsumer = createStringObject("CREATECONSUMER", 14);
     shared.getack = createStringObject("GETACK", 6);
-    shared.special_asterick = createStringObject("*", 1);
+    shared.special_asterisk = createStringObject("*", 1);
     shared.special_equals = createStringObject("=", 1);
     shared.redacted = makeObjectShared(createStringObject("(redacted)", 10));
 

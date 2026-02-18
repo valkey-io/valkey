@@ -822,7 +822,7 @@ void zlibc_trim(void) {
 /* For proc_pidinfo() used later in zmalloc_get_smap_bytes_by_field().
  * Note that this file cannot be included in zmalloc.h because it includes
  * a Darwin queue.h file where there is a "LIST_HEAD" macro (!) defined
- * conficting with user code. */
+ * conflicting with user code. */
 #include <libproc.h>
 #endif
 

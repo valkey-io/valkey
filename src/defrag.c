@@ -975,7 +975,7 @@ void activeDefragCycle(void) {
 
     if (hasActiveChildProcess()) return; /* Defragging memory while there's a fork will just do damage. */
 
-    /* Once a second, check if the fragmentation justfies starting a scan
+    /* Once a second, check if the fragmentation justifies starting a scan
      * or making it more aggressive. */
     run_with_period(1000) {
         computeDefragCycles();

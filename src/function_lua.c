@@ -156,7 +156,7 @@ done:
 }
 
 /*
- * Invole the give function with the given keys and args
+ * Invoke the give function with the given keys and args
  */
 static void luaEngineCall(scriptRunCtx *run_ctx,
                           void *engine_ctx,
@@ -181,7 +181,7 @@ static void luaEngineCall(scriptRunCtx *run_ctx,
     lua_pop(lua, 1); /* Pop error handler */
 }
 
-static size_t luaEngineGetUsedMemoy(void *engine_ctx) {
+static size_t luaEngineGetUsedMemory(void *engine_ctx) {
     luaEngineCtx *lua_engine_ctx = engine_ctx;
     return luaMemory(lua_engine_ctx->lua);
 }
@@ -501,7 +501,7 @@ int luaEngineInitEngine(void) {
         .engine_ctx = lua_engine_ctx,
         .create = luaEngineCreate,
         .call = luaEngineCall,
-        .get_used_memory = luaEngineGetUsedMemoy,
+        .get_used_memory = luaEngineGetUsedMemory,
         .get_function_memory_overhead = luaEngineFunctionMemoryOverhead,
         .get_engine_memory_overhead = luaEngineMemoryOverhead,
         .free_function = luaEngineFreeFunction,

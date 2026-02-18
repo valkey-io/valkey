@@ -391,8 +391,8 @@ start_server {tags {"dual-channel-replication external:skip"}} {
                 verify_replica_online $primary 0 500
                 verify_replica_online $primary 1 500
 
-                wait_for_value_to_propegate_to_replica $primary $replica1 "key1"
-                wait_for_value_to_propegate_to_replica $primary $replica2 "key1"
+                wait_for_value_to_propagate_to_replica $primary $replica1 "key1"
+                wait_for_value_to_propagate_to_replica $primary $replica2 "key1"
 
                 assert {[s 0 total_forks] eq "1" }       
             }
@@ -410,8 +410,8 @@ start_server {tags {"dual-channel-replication external:skip"}} {
                 $replica2 replicaof $primary_host $primary_port
                 verify_replica_online $primary 0 500
                 verify_replica_online $primary 1 500
-                wait_for_value_to_propegate_to_replica $primary $replica1 "key2"
-                wait_for_value_to_propegate_to_replica $primary $replica2 "key2"
+                wait_for_value_to_propagate_to_replica $primary $replica1 "key2"
+                wait_for_value_to_propagate_to_replica $primary $replica2 "key2"
                 wait_for_condition 50 1000 {
                     [status $replica1 master_link_status] == "up"
                 } else {
@@ -480,7 +480,7 @@ start_server {tags {"dual-channel-replication external:skip"}} {
                 } else {
                     fail "Replica is not synced"
                 }
-                wait_for_value_to_propegate_to_replica $primary $replica1 "key3"
+                wait_for_value_to_propagate_to_replica $primary $replica1 "key3"
 
                 # Verify that we did not use dual-channel-replication sync
                 assert {[status $primary sync_partial_ok] == $cur_psync}
@@ -519,7 +519,7 @@ start_server {tags {"dual-channel-replication external:skip"}} {
             } else {
                 fail "Replica is not synced"
             }
-            wait_for_value_to_propegate_to_replica $primary $replica "key1"
+            wait_for_value_to_propagate_to_replica $primary $replica "key1"
             # Confirm the occurrence of a race condition.
             wait_for_log_messages -1 {"*Dual channel sync - psync established after rdb load*"} 0 2000 1
         }

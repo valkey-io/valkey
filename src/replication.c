@@ -2588,7 +2588,7 @@ int sendCurrentOffsetToReplica(client *replica) {
  * This connection handler is used to initialize the RDB connection (dual-channel-replication).
  * Once a replica with dual-channel-replication enabled, denied from PSYNC with its primary,
  * fullSyncWithPrimary begins its role. The connection handler prepares server.repl_rdb_transfer_s
- * for a rdb stream, and server.repl_transfer_s for increamental replication data stream. */
+ * for a rdb stream, and server.repl_transfer_s for incremental replication data stream. */
 static void fullSyncWithPrimary(connection *conn) {
     char *err = NULL;
     serverAssert(conn == server.repl_rdb_transfer_s);
@@ -2883,7 +2883,7 @@ int streamReplDataBufToDb(client *c) {
 
 /* Replication: Replica side.
  * After done loading the snapshot using the rdb-channel prepare this replica for steady state by
- * initializing the primary client, amd stream local increamental buffer into memory. */
+ * initializing the primary client, amd stream local incremental buffer into memory. */
 void dualChannelSyncSuccess(void) {
     server.primary_initial_offset = server.repl_provisional_primary.reploff;
     replicationResurrectProvisionalPrimary();
@@ -3303,7 +3303,7 @@ error:
  *          │+OK                │ │  └───────┬───────────────┘           └─────┬─────────────┘   │
  * ┌────────▼──────────┐        │ │          │Done loading                     │                 │
  * │RECEIVE_CAPA_REPLY │        │ │  ┌───────▼───────────────┐                 │                 │
- * └────────┬──────────┘        │ │  │DUAL_CHANNEL_RDB_LOADE.│                 │                 │
+ * └────────┬──────────┘        │ │  │DUAL_CHANNEL_RDB_LOADED│                 │                 │
  *          │                   │ │  └───────┬───────────────┘                 │                 │
  * ┌────────▼───┐               │ │          │                                 │                 │
  * │SEND_PSYNC  │               │ │          │Replica loads local replication  │                 │

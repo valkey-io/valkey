@@ -323,6 +323,7 @@ proc cleanup {} {
     flush stdout
     catch {exec rm -rf {*}[glob tests/tmp/valkey.conf.*]}
     catch {exec rm -rf {*}[glob tests/tmp/redis.conf.*]}
+    catch {exec rm -rf {*}[glob tests/tmp/nodes.conf.*]}
     catch {exec rm -rf {*}[glob tests/tmp/server*.*]}
     catch {exec rm -rf {*}[glob tests/tmp/*.acl.*]}
     if {!$::quiet} {puts "OK"}

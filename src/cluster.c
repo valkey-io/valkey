@@ -95,6 +95,7 @@ unsigned int delKeysInSlot(unsigned int hashslot);
 void clusterAddNodeToShard(const char *shard_id, clusterNode *node);
 list *clusterLookupNodeListByShardId(const char *shard_id);
 void clusterRemoveNodeFromShard(clusterNode *node);
+void clusterSaveConfigOrDie(int do_fsync);
 int auxShardIdSetter(clusterNode *n, void *value, int length);
 sds auxShardIdGetter(clusterNode *n, sds s);
 int auxShardIdPresent(clusterNode *n);
@@ -252,16 +253,25 @@ int isValidAuxString(char *s, unsigned int length) {
     return 1;
 }
 
+static int shard_id_reconciled = 0;
+
 int auxShardIdSetter(clusterNode *n, void *value, int length) {
     if (verifyClusterNodeId(value, length) == C_ERR) {
         return C_ERR;
     }
     memcpy(n->shard_id, value, CLUSTER_NAMELEN);
     /* if n already has replicas, make sure they all agree
-     * on the shard id */
+     * on the shard id. If not, update them. */
     for (int i = 0; i < n->numslaves; i++) {
         if (memcmp(n->slaves[i]->shard_id, n->shard_id, CLUSTER_NAMELEN) != 0) {
-            return C_ERR;
+            serverLog(LL_NOTICE,
+                      "Node %.40s has a different shard id (%.40s) than its master's shard id %.40s (%.40s). "
+                      "Updating replica's shard id to match master's shard id.",
+                      n->slaves[i]->name, n->slaves[i]->shard_id, n->name, n->shard_id);
+            clusterRemoveNodeFromShard(n->slaves[i]);
+            memcpy(n->slaves[i]->shard_id, n->shard_id, CLUSTER_NAMELEN);
+            clusterAddNodeToShard(n->shard_id, n->slaves[i]);
+            shard_id_reconciled = 1;
         }
     }
     clusterAddNodeToShard(value, n);
@@ -367,6 +377,7 @@ int clusterLoadConfig(char *filename) {
     struct stat sb;
     char *line;
     int maxline, j;
+    int dirty = 0;
 
     if (fp == NULL) {
         if (errno == ENOENT) {
@@ -615,9 +626,17 @@ int clusterLoadConfig(char *filename) {
             } else if (clusterGetNodesInMyShard(master) != NULL &&
                        memcmp(master->shard_id, n->shard_id, CLUSTER_NAMELEN) != 0)
             {
-                /* If the primary has been added to a shard, make sure this
-                 * node has the same persisted shard id as the primary. */
-                goto fmterr;
+                /* If the master has been added to a shard and this replica has
+                 * a different shard id stored in nodes.conf, update it to match
+                 * the master instead of aborting the startup. */
+                serverLog(LL_NOTICE,
+                          "Node %.40s has a different shard id (%.40s) than its master %.40s (%.40s). "
+                          "Updating replica's shard id to match master's shard id.",
+                          n->name, n->shard_id, master->name, master->shard_id);
+                clusterRemoveNodeFromShard(n);
+                memcpy(n->shard_id, master->shard_id, CLUSTER_NAMELEN);
+                clusterAddNodeToShard(master->shard_id, n);
+                dirty = 1;
             }
             n->slaveof = master;
             clusterNodeAddSlave(master,n);
@@ -708,6 +727,8 @@ int clusterLoadConfig(char *filename) {
     if (clusterGetMaxEpoch() > server.cluster->currentEpoch) {
         server.cluster->currentEpoch = clusterGetMaxEpoch();
     }
+    if (dirty || shard_id_reconciled) clusterSaveConfigOrDie(1);
+    shard_id_reconciled = 0;
     return C_OK;
 
 fmterr:

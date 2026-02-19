@@ -1656,3 +1656,15 @@ sds escapeJsonString(sds s, const char *p, size_t len) {
     }
     return sdscatlen(s, "\"", 1);
 }
+
+/* Tomas Wang's 64 bit integer hash */
+uint64_t wangHash64(uint64_t hash) {
+    hash = (~hash) + (hash << 21); /* hash = (hash << 21) - hash - 1; */
+    hash = hash ^ (hash >> 24);
+    hash = (hash + (hash << 3)) + (hash << 8); /* hash * 265 */
+    hash = hash ^ (hash >> 14);
+    hash = (hash + (hash << 2)) + (hash << 4); /* hash * 21 */
+    hash = hash ^ (hash >> 28);
+    hash = hash + (hash << 31);
+    return hash;
+}

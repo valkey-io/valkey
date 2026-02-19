@@ -6,16 +6,16 @@ start_server {tags {external:skip} overrides {cluster-enabled no}} {
 
     test "SCAN, HSCAN, SSCAN, ZSCAN rejects SLOT argument" {
         # SLOT is only valid for CLUSTERSCAN
-        assert_error "*SLOT option is only valid for CLUSTERSCAN*" {r scan 0 SLOT 0}
+        assert_error "*syntax*" {r scan 0 SLOT 0}
 
         r hset myhash field value
-        assert_error "*SLOT option is only valid for CLUSTERSCAN*" {r hscan myhash 0 SLOT 0}
+        assert_error "*syntax*" {r hscan myhash 0 SLOT 0}
 
         r sadd myset member
-        assert_error "*SLOT option is only valid for CLUSTERSCAN*" {r sscan myset 0 SLOT 0}
+        assert_error "*syntax*" {r sscan myset 0 SLOT 0}
 
         r zadd myzset 1 member
-        assert_error "*SLOT option is only valid for CLUSTERSCAN*" {r zscan myzset 0 SLOT 0}
+        assert_error "*syntax*" {r zscan myzset 0 SLOT 0}
     }
 }
 
@@ -48,12 +48,14 @@ start_cluster 1 0 {tags {external:skip cluster}} {
         set cursor [lindex $res 0]
         
         # Continue scanning until exhausted
+        set max_loops 1000
         set iterations 0
-        while {$cursor ne "0" && $iterations < 1000} {
+        while {$cursor ne "0" && $iterations < $max_loops} {
             set res [R 0 clusterscan $cursor SLOT 0]
             set cursor [lindex $res 0]
             incr iterations
         }
+        assert {$iterations < $max_loops}
         
         assert_equal $cursor "0"
     }
@@ -81,10 +83,10 @@ start_cluster 3 0 {tags {external:skip cluster}} {
         # Run CLUSTERSCAN
         set cursor "0"
         set scanned_keys {}
-        set max_loops 20000 ;# Safety break
+        set max_loops 20000
 
         set iterations 0
-        while {$iterations < 20000} {
+        while {$iterations < $max_loops} {
             set res [$cluster clusterscan $cursor]
             set cursor [lindex $res 0]
             set keys [lindex $res 1]
@@ -97,6 +99,7 @@ start_cluster 3 0 {tags {external:skip cluster}} {
             
             incr iterations
         }
+        assert {$iterations < $max_loops}
         
         $cluster close
 
@@ -110,17 +113,17 @@ start_cluster 3 0 {tags {external:skip cluster}} {
 
         $cluster set "user:100" "val"
         $cluster set "user:200" "val"
-        $cluster set "product:100" "val"
-        $cluster set "product:100" "val"
+        $cluster set "slot{06S}:100" "val"
+        $cluster set "slot{06S}:200" "val"
         
 
         # Scan with MATCH pattern
         set cursor "0"
         set matched_keys {}
-        set max_loops 20000 ;# Safety break
+        set max_loops 20000 
         
         set iterations 0
-        while {$iterations < 20000} {
+        while {$iterations < $max_loops} {
             set res [$cluster clusterscan $cursor MATCH "user:*"]
             set cursor [lindex $res 0]
             set keys [lindex $res 1]
@@ -134,12 +137,24 @@ start_cluster 3 0 {tags {external:skip cluster}} {
             incr iterations
         }
 
+        assert {$iterations < $max_loops}
+
         # Verify only user:* keys matched
         set matched_keys [lsort -unique $matched_keys]
         foreach k $matched_keys {
             assert_match "user:*" $k
         }
-        assert {[llength $matched_keys] >= 2}
+        assert_equal [llength $matched_keys] 2
+
+        # Verify slot match does not affect slot param
+        set cursor 0-{06S}-0
+        set res [$cluster clusterscan $cursor MATCH "slot:*" slot 0]
+        set keys [lindex $res 1]
+
+        foreach k $keys {
+            assert_match "slot:*" $k
+        }
+
         $cluster close
     }
 
@@ -162,14 +177,18 @@ start_cluster 3 0 {tags {external:skip cluster}} {
         set cursor [lindex $res 0]
 
         # Assert to scan slot 0 only
-        while {$cursor ne "0"} {
+        set max_loops 1000
+        set iterations 0
+        while {$cursor ne "0" && $iterations < $max_loops} {
             set res [$cluster clusterscan $cursor COUNT 10 SLOT 0]
             set cursor [lindex $res 0]
             foreach k [lindex $res 1] {
                 # Assert that only slot 0 keys are returned
-                assert_match "$0_slot_tag:*" $k
+                assert {[string match "*$0_slot_tag*" $k]}
             }
+            incr iterations
         }
+        assert {$iterations < $max_loops}
 
         # Continue to scan the slot 1
         set res [$cluster clusterscan 0-$1_slot_tag-0 COUNT 30 SLOT 1]
@@ -192,15 +211,18 @@ start_cluster 3 0 {tags {external:skip cluster}} {
 
         # Scan for only string type
         set cursor "0-{06S}-0"
-
-        while {$cursor ne "0"} {
+        set max_loops 20000
+        set iterations 0
+        while {$cursor ne "0" && $iterations < $max_loops} {
             set res [$cluster clusterscan $cursor TYPE string]
             set cursor [lindex $res 0]
             foreach k [lindex $res 1] {
                 # Assert that only string keys are being matched
                 assert_match  [$cluster type $k] "string"
             }
+            incr iterations
         }
+        assert {$iterations < $max_loops}
 
         # Combine MATCH, COUNT, and TYPE
         for {set i 0} {$i < 100} {incr i} {
@@ -216,7 +238,7 @@ start_cluster 3 0 {tags {external:skip cluster}} {
         assert {[llength $keys] > 1}
         assert {[llength $keys] < 100}
 
-        foreach k [lindex $keys] {
+        foreach k $keys {
             # Assert that only string keys are being matched
             assert_match  [$cluster type $k] "string"
             assert_match "alternate*" $k
@@ -275,24 +297,29 @@ start_cluster 3 0 {tags {external:skip cluster}} {
         assert_match "0-*-*" $cursor
 
         # Assert to scan slot 0 only and assert that fp reset upon slot 1
+        set max_loops 10000
         set iterations 0
-        while {$cursor ne "0-{Qi}-0" && $iterations < 10000} {
+        while {$cursor ne "0-{Qi}-0" && $iterations < $max_loops} {
             set res [$cluster clusterscan $cursor]
             set cursor [lindex $res 0]
             incr iterations
         }
-        assert {$iterations < 10000} 
+        assert {$iterations < $max_loops} 
 
          # Ensure that local cursor is ignored when fp is 0
         set cursor "0-{Qi}-09393399393"
         set keys {}
-        while {$cursor ne "0"} {
+        set max_loops 10000
+        set iterations 0
+        while {$cursor ne "0" && $iterations < $max_loops} {
             set res [$cluster clusterscan $cursor slot 1]
             set cursor [lindex $res 0]
             foreach k [lindex $res 1] {
                lappend keys $k
             }
+            incr iterations
         }
+        assert {$iterations < $max_loops}
 
         assert {[llength $keys] > 1}
         assert {[llength $keys] < 300}
@@ -356,13 +383,17 @@ start_cluster 2 0 {tags {external:skip cluster}} {
         
         # Continue scan on new owner until complete
         set keys_after_move {}
-        while {$cursor ne "0"} {
+        set max_loops 1000
+        set iterations 0
+        while {$cursor ne "0" && $iterations < $max_loops} {
             set res [R $target_node clusterscan $cursor SLOT 0]
             set cursor [lindex $res 0]
             foreach k [lindex $res 1] {
                 lappend keys_after_move $k
             }
+            incr iterations
         }
+        assert {$iterations < $max_loops}
         
         # Verify continuity: all 100 keys found across both scans
         set all_keys [concat $keys_before_move $keys_after_move]
@@ -386,7 +417,9 @@ start_cluster 2 0 {tags {external:skip cluster}} {
 # CLUSTERSCAN CLUSTERDOWN test - separate cluster to test unassigned slots
 start_cluster 2 0 {tags {external:skip cluster}} {
     test "CLUSTERSCAN returns CLUSTERDOWN for unassigned slot" {
-        # This test covers the case when a slot is not served by any node
+        # This test covers the case when a slot is not served by any node.
+        # When a cursor pointing to that slot is used we would get -CLUSTERDOWN
+        # This helps with error handling rather than a crash or silent failure.
         set cursor_slot_0 ""
         set slot0_owner -1
         foreach n {0 1} {

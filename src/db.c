@@ -1223,12 +1223,8 @@ void scanGenericCommand(client *c, robj *o, unsigned long long cursor, int slot,
             }
             only_keys = 1;
             i++;
-        } else if (!strcasecmp(objectGetVal(c->argv[i]), "slot") && j >= 2) {
-            /* SLOT is only valid for CLUSTERSCAN. */
-            if (slot == -1) {
-                addReplyError(c, "SLOT option is only valid for CLUSTERSCAN");
-                return;
-            }
+        } else if (!strcasecmp(objectGetVal(c->argv[i]), "slot") && j >= 2 && slot >= 0) {
+            /* SLOT is already parsed by clusterscanCommand, we can skip it here. */
             i += 2;
         } else {
             addReplyErrorObject(c, shared.syntaxerr);

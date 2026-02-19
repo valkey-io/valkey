@@ -53,6 +53,7 @@
 #include "serverassert.h"
 #include "monotonic.h"
 #include "config.h"
+#include "util.h"
 
 #define UNUSED(V) ((void)V)
 
@@ -800,14 +801,7 @@ unsigned long long dictFingerprint(dict *d) {
      * to a different number. */
     for (j = 0; j < 6; j++) {
         hash += integers[j];
-        /* For the hashing step we use Tomas Wang's 64 bit integer hash. */
-        hash = (~hash) + (hash << 21); // hash = (hash << 21) - hash - 1;
-        hash = hash ^ (hash >> 24);
-        hash = (hash + (hash << 3)) + (hash << 8); // hash * 265
-        hash = hash ^ (hash >> 14);
-        hash = (hash + (hash << 2)) + (hash << 4); // hash * 21
-        hash = hash ^ (hash >> 28);
-        hash = hash + (hash << 31);
+        hash = wangHash64(hash);
     }
     return hash;
 }

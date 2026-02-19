@@ -71,3 +71,6 @@ ake = "ake"
 [type.tcl.extend-words]
 fo = "fo"
 tre = "tre"
+
+[type.cpp.extend-words]
+fo = "fo"

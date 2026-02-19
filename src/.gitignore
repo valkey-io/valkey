@@ -4,4 +4,4 @@
 valkey.info
 lcov-html
 generated_*
-gtest/wrapped/
+unit/wrapped/

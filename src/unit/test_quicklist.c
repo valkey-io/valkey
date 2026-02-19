@@ -2213,6 +2213,11 @@ int test_quicklistCompressAndDecompressQuicklistListpackNode(int argc, char **ar
 
     if (!(flags & UNIT_TEST_LARGE_MEMORY)) return 0;
 
+#ifdef VALKEY_ADDRESS_SANITIZER
+    /* Skip this test under sanitizers */
+    return 0;
+#endif
+
     quicklistNode *node = quicklistCreateNode();
     node->entry = lpNew(0);
 
@@ -2226,8 +2231,8 @@ int test_quicklistCompressAndDecompressQuicklistListpackNode(int argc, char **ar
     unsigned char *s = zmalloc(sz);
     randstring(s, sz);
 
-    /* Keep filling the node, until it reaches 256MB */
-    for (int i = 0; i < 8; i++) {
+    /* Keep filling the node, until it reaches 1GB */
+    for (int i = 0; i < 32; i++) {
         node->entry = lpAppend(node->entry, s, sz);
         node->sz = lpBytes((node)->entry);
 

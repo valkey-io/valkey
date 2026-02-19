@@ -52,8 +52,7 @@ jobs:
           if [[ ! -z "$dirty" ]]; then echo "$dirty"; exit 1; fi
       - name: unit tests
         run: |
-          ./src/valkey-unit-tests
-          ./src/gtest/valkey-unit-gtests
+          ./src/unit/valkey-unit-gtests
 
   test-ubuntu-latest-compatibility:
     runs-on: ubuntu-latest
@@ -65,6 +64,9 @@ jobs:
           - {version: "8.0.6", file: "valkey-8.0.6-noble-x86_64.tar.gz"}
           - {version: "8.1.4", file: "valkey-8.1.4-noble-x86_64.tar.gz"}
     steps:
+      - name: Install modern CMake and gtests
+        run: |
+          sudo apt-get install pkg-config libgtest-dev libgmock-dev
       - name: Install libbacktrace
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -74,8 +76,6 @@ jobs:
       - run: cd libbacktrace && ./configure && make && sudo make install
       - name: Checkout Valkey
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-      - name: Install gtest
-        run: sudo apt-get install pkg-config libgtest-dev libgmock-dev
       - name: make
         # Fail build if there are warnings
         # build with TLS just for compilation coverage
@@ -108,7 +108,7 @@ jobs:
           sudo apt-get install -y cmake libssl-dev
           mkdir -p build-release
           cd build-release
-          cmake -DCMAKE_BUILD_TYPE=Release .. -DBUILD_TLS=yes -DBUILD_UNIT_TESTS=yes -DBUILD_UNIT_GTESTS=yes
+          cmake -DCMAKE_BUILD_TYPE=Release .. -DBUILD_TLS=yes -DBUILD_UNIT_GTESTS=yes
           make -j$(nproc)
       - name: test
         run: |
@@ -117,7 +117,6 @@ jobs:
           ./build-release/runtest --verbose --tags -slow --dump-logs --tls
       - name: unit tests
         run: |
-          ./build-release/bin/valkey-unit-tests
           ./build-release/bin/valkey-unit-gtests
 
   test-sanitizer-address:
@@ -145,8 +144,7 @@ jobs:
         run: CFLAGS='-Werror' ./runtest-moduleapi --verbose --dump-logs
       - name: unit tests
         run: |
-          ./src/valkey-unit-tests
-          ./src/gtest/valkey-unit-gtests
+          ./src/unit/valkey-unit-gtests
 
   test-rdma:
     runs-on: ubuntu-latest
@@ -238,7 +236,7 @@ jobs:
           export PATH="/opt/homebrew/opt/llvm/bin:$PATH"
           export CC=/opt/homebrew/opt/llvm/bin/clang
           export CXX=/opt/homebrew/opt/llvm/bin/clang++
-          make -j3 all-with-unit-tests SERVER_CFLAGS='-Werror' USE_FAST_FLOAT=yes USE_LIBBACKTRACE=yes
+          make -j3 all-with-unit-tests SERVER_CFLAGS='-Werror' USE_FAST_FLOAT=yes USE_LIBBACKTRACE=yes LIBBACKTRACE_PREFIX=/usr/local
 
   build-32bit:
     runs-on: ubuntu-latest
@@ -263,6 +261,7 @@ jobs:
         # suffixed version of g++. g++-multilib generally includes libstdc++.
         # *cross version as well, but it is also added explicitly just in case.
         run: |
+          sudo apt-get update
           sudo apt-get install libc6-dev-i386 libstdc++-11-dev-i386-cross gcc-multilib g++-multilib libgtest-dev
           mkdir -p /tmp/gtest32
           cd /tmp/gtest32
@@ -280,8 +279,7 @@ jobs:
             GTEST_LIBS="/usr/lib32/libgtest.a /usr/lib32/libgmock.a"
       - name: unit tests
         run: |
-          ./src/valkey-unit-tests
-          ./src/gtest/valkey-unit-gtests
+          ./src/unit/valkey-unit-gtests
 
   build-libc-malloc:
     runs-on: ubuntu-latest

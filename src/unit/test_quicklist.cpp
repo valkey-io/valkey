@@ -1725,6 +1725,11 @@ TEST_F(QuicklistTest, quicklistBookmarkLimit) {
 TEST_F(QuicklistTest, quicklistCompressAndDecompressQuicklistListpackNode) {
     if (!large_memory) GTEST_SKIP() << "Skipping large memory test";
 
+#ifdef VALKEY_ADDRESS_SANITIZER
+    /* Skip this test under sanitizers to avoid OOM in github actions */
+    GTEST_SKIP() << "Skipping under address sanitizer";
+#endif
+
     quicklistNode *node = testOnlyQuicklistCreateNode();
     node->entry = lpNew(0);
 

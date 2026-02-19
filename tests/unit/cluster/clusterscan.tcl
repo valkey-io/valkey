@@ -247,23 +247,15 @@ start_cluster 3 0 {tags {external:skip cluster}} {
         $cluster close   
     }
 
-    test "CLUSTERSCAN cursor 0 returns valid cursor format" {
-        # Starting cursor "0" should return a formatted cursor
-        set res ""
-
-        # Ensure all the nodes return valid cursor
-        foreach node {0 1 2} {
-            set res [R $node clusterscan 0]
-            set cursor [lindex $res 0]
-            # Cursor should match format: 0-{hashtag}-number
-            assert_match "0-*-*" $cursor
-        }
-    }
-
     test "CLUSTERSCAN empty result still returns valid cursor" {
+        set cluster [valkey_cluster 127.0.0.1:[srv 0 port]]
+        set res [$cluster clusterscan 0]
+        set cursor [lindex $res 0]
+        # Cursor should match format: 0-{hashtag}-number
+        assert_match "0-*-*" $cursor
+
         # Scan with impossible pattern - should return empty but valid cursor
         set cursor "0-{06S}-0"
-        set cluster [valkey_cluster 127.0.0.1:[srv 0 port]]
         set res [$cluster clusterscan $cursor MATCH "impossible_pattern_xyz_*"]
         
         set new_cursor [lindex $res 0]
@@ -349,12 +341,28 @@ start_cluster 2 0 {tags {external:skip cluster}} {
             R $slot0_owner set "$0_slot_tag:$i" "value:$i"
         }
 
-        # Start scanning slot 0, collect some keys before migration
-        set cursor "0"
+        # Start scanning slot 0, collect some keys before migration.
+        # Use COUNT 1 to get a partial scan so cursor is not "0".
         set keys_before_move {}
-        set res [R $slot0_owner clusterscan 0 SLOT 0]
-        set cursor [lindex $res 0]
-        set keys_before_move [lindex $res 1]
+        set cursor "0-$0_slot_tag-0"
+        set max_loops 100
+        set iterations 0
+        while {$iterations < $max_loops} {
+            set res [R $slot0_owner clusterscan $cursor SLOT 0 COUNT 1]
+            set cursor [lindex $res 0]
+            foreach k [lindex $res 1] {
+                lappend keys_before_move $k
+            }
+            # Stop once we have some keys but scan is not finished
+            if {[llength $keys_before_move] > 0 && $cursor ne "0"} break
+            if {$cursor eq "0"} {
+                # Scan finished, restart
+                set cursor "0-$0_slot_tag-0"
+                set keys_before_move {}
+            }
+            incr iterations
+        }
+        assert {$cursor ne "0"}
         
         # Migrate slot 0 to the other node
         set target_node [expr {1 - $slot0_owner}]
@@ -402,15 +410,22 @@ start_cluster 2 0 {tags {external:skip cluster}} {
     }
 
     test "CLUSTERSCAN with SLOT argument error scenario" {
-        set cursor "0-{06S}-0"
-        # We moved only slot 0 in previous test
-        assert_error "*Cursor slot mismatch*" {R 1 clusterscan $cursor SLOT 1}
+        # After the previous test, slot 0 was moved to target_node.
+        # Find which node currently owns slot 0 for routing.
+        set slot0_node 0
+        if {[catch {R 0 clusterscan 0-{06S}-0 SLOT 0} res]} {
+            set slot0_node 1
+        }
 
-        # CLUSTERSCAN 0 SLOT <invalid_slot> -> should error
-        assert_error "*Invalid or out of range slot*" {R 1 clusterscan 0 SLOT 20000}
+        set cursor "0-{06S}-0"
+        # Cursor has {06S} (slot 0) but SLOT says 1 -> mismatch
+        assert_error "*Cursor slot mismatch*" {R $slot0_node clusterscan $cursor SLOT 1}
+
+        # CLUSTERSCAN with invalid slot number
+        assert_error "*Invalid or out of range slot*" {R $slot0_node clusterscan 0-{06S}-0 SLOT 20000}
 
         # CLUSTERSCAN with two SLOT option should result in error
-        assert_error "*SLOT option can only be specified once*" {R 1 clusterscan 0 SLOT 0 SLOT 0}
+        assert_error "*SLOT option can only be specified once*" {R $slot0_node clusterscan 0-{06S}-0 SLOT 0 SLOT 0}
     }
 }
 
@@ -423,7 +438,7 @@ start_cluster 2 0 {tags {external:skip cluster}} {
         set cursor_slot_0 ""
         set slot0_owner -1
         foreach n {0 1} {
-            if {[catch {R $n clusterscan 0 SLOT 0} res] == 0} {
+            if {[catch {R $n clusterscan 0-{06S}-0 SLOT 0} res] == 0} {
                 set cursor_slot_0 [lindex $res 0]
                 set slot0_owner $n
                 break
@@ -435,6 +450,6 @@ start_cluster 2 0 {tags {external:skip cluster}} {
         catch {R $other_node CLUSTER DELSLOTS 0}
 
         after 200
-        assert_error "*CLUSTERDOWN*Hash slot not served*" {R $slot0_owner clusterscan $cursor_slot_0}
+        assert_error "*CLUSTERDOWN*" {R $slot0_owner clusterscan $cursor_slot_0}
     }
 }

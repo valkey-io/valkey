@@ -1783,12 +1783,6 @@ void clusterscanCommand(client *c) {
         }
     }
 
-    /* Verify the slot ownership and redirect if needed */
-    if (server.cluster->slots[slot] == NULL) {
-        addReplyError(c, "-CLUSTERDOWN Hash slot not served");
-        return;
-    }
-
     if (server.cluster->slots[slot] != getMyClusterNode()) {
         clusterRedirectClient(c, server.cluster->slots[slot], slot, CLUSTER_REDIR_MOVED);
         return;

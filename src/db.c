@@ -3049,34 +3049,3 @@ int *copyDbIdArgs(robj **argv, int argc, int *count) {
     *count = 1;
     return result;
 }
-
-/* Helper function to extract keys from the CLUSTERSCAN command, which uses
- * a cursor that encodes slot information for cluster routing. */
-int clusterscanGetKeys(struct serverCommand *cmd, robj **argv, int argc, getKeysResult *result) {
-    UNUSED(cmd);
-    UNUSED(argc);
-
-    sds cursor = objectGetVal(argv[1]);
-
-    /* Initial cursor "0" has no slot info, return no keys. */
-    if (sdslen(cursor) == 1 && cursor[0] == '0') {
-        result->numkeys = 0;
-        return 0;
-    }
-
-    /* Cursor format: "version-{hashtag}-localcursor". Return the cursor
-     * as the key so keyHashSlot() extracts the hashtag for routing. */
-    char *open_brace = strchr(cursor, '{');
-    char *close_brace = strchr(cursor, '}');
-
-    if (open_brace && close_brace && close_brace > open_brace) {
-        keyReference *keys = getKeysPrepareResult(result, 1);
-        keys[0].pos = 1;
-        keys[0].flags = CMD_KEY_NOT_KEY;
-        result->numkeys = 1;
-        return 1;
-    }
-
-    result->numkeys = 0;
-    return 0;
-}

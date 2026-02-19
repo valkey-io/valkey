@@ -20,9 +20,6 @@ extern "C" {
 extern bool accurate;
 /* Function declarations from listpack.c */
 unsigned char *lpSkip(unsigned char *p);
-
-/* Additional function declarations needed for tests */
-void sdsfreeVoid(void *ptr);
 }
 
 #define LP_INTBUF_SIZE 21 /* 20 digits of -2^63 + 1 null term. */
@@ -1163,11 +1160,4 @@ TEST_F(ListpackBenchmark, DISABLED_listpackBenchmarkLpCompareWithNumber) {
         }
     }
     printf("Done. usec=%lld\n", usec() - start);
-}
-
-TEST_F(ListpackBenchmark, DISABLED_listpackBenchmarkFree) {
-    /* Free benchmark listpack - handled by TearDownTestSuite but included for parity with C tests */
-    // The actual cleanup is done in TearDownTestSuite, but we include this test
-    // to maintain the same test structure as test_listpack.c
-    ASSERT_NE(lp, nullptr);
 }

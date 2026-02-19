@@ -26,6 +26,7 @@
 
 #include "server.h"
 #include "connection.h"
+#include "shmem.h"
 
 static ConnectionType *connTypes[CONN_TYPE_MAX];
 
@@ -55,6 +56,9 @@ int connTypeInitialize(void) {
 
     /* may fail if without BUILD_RDMA=yes */
     RegisterConnectionTypeRdma();
+
+    /* shared memory connection type (userspace) */
+    valkeyRegisterShmemConnectionType();
 
     return C_OK;
 }

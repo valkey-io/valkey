@@ -35,7 +35,7 @@ proc activate_io_threads_and_wait {} {
     }
 }
 
-start_server {config "minimal.conf" tags {"external:skip"} overrides {enable-debug-command {yes} io-threads 5}} {
+start_server {config "minimal.conf" tags {"external:skip" "valgrind:skip"} overrides {enable-debug-command {yes} io-threads 5}} {
     # Skip if non io-threads mode - as it is relevant only for io-threads mode
     assert_equal {io-threads 5} [r config get io-threads]
     test {Force the use of IO threads and assert active IO thread usage} {

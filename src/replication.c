@@ -2915,7 +2915,7 @@ sds getReplicaPortString(void) {
 /* Replication: Replica side.
  * Free replica's local replication buffer */
 void freePendingReplDataBuf(void) {
-    listRelease(server.pending_repl_data.blocks);
+    if (server.pending_repl_data.blocks) freePendingReplDataBufAsync(server.pending_repl_data.blocks);
     server.pending_repl_data.blocks = NULL;
     server.pending_repl_data.len = 0;
 }

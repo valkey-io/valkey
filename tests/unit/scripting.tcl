@@ -368,12 +368,6 @@ start_server {tags {"scripting"}} {
         set e
     } {*against a key*}
 
-    test {EVAL - JSON string encoding a string larger than 2GB} {
-        run_script {
-            local s = string.rep("a", 1024 * 1024 * 1024)
-            return #cjson.encode(s..s..s)
-        } 0
-    } {3221225474} {large-memory} ;# length includes two double quotes at both ends
 
     test {EVAL - JSON numeric decoding} {
         # We must return the table as a string because otherwise
@@ -1233,7 +1227,15 @@ start_server {tags {"scripting"}} {
     } {*Script attempted to access nonexistent global variable 'print'*}
 }
 
-# start a new server to test the large-memory tests
+start_server {tags {"scripting external:skip large-memory"}} {
+    test {EVAL - JSON string encoding a string larger than 2GB} {
+        run_script {
+            local s = string.rep("a", 750 * 1024 * 1024)
+            return #cjson.encode(s..s..s)
+        } 0
+    } {2359296002} ;# length includes two double quotes at both ends
+}
+
 start_server {tags {"scripting external:skip large-memory"}} {
     test {EVAL - Test long escape sequences for strings} {
         r eval {
@@ -1253,7 +1255,9 @@ start_server {tags {"scripting external:skip large-memory"}} {
             return #func()
         } 0
     } {1}
+}
 
+start_server {tags {"scripting external:skip large-memory"}} {
     test {EVAL - Lua can parse string with too many new lines} {
         # Create a long string consisting only of newline characters. When Lua
         # fails to parse a string, it typically includes a snippet like

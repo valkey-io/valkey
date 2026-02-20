@@ -6,6 +6,8 @@
 #   tests/tls/ca-{expired,notyet}.crt            Self signed invalid CA certificates.
 #   tests/tls/ca-expired/                        Directory containing expired CA certificate.
 #   tests/tls/ca-notyet/                         Directory containing not-yet-valid CA certificate.
+#   tests/tls/ca-multi.crt                       CA bundle with multiple certs.
+#   tests/tls/ca-dir/                            CA directory with hashed links.
 #   tests/tls/valkey.{crt,key}                   A certificate with no key usage/policy restrictions.
 #   tests/tls/client.{crt,key}                   A certificate restricted for SSL client usage.
 #   tests/tls/client-{expired,notyet}.crt        Invalid certificates restricted for SSL client usage.
@@ -59,6 +61,21 @@ _END_
 generate_cert server "Server-only" "-extfile tests/tls/openssl.cnf -extensions server_cert"
 generate_cert client "Client-only" "-extfile tests/tls/openssl.cnf -extensions client_cert"
 generate_cert valkey "Generic-cert"
+
+# Create a CA bundle and hashed CA directory used by TLS tests.
+# (ca-multi.crt and ca-dir/)
+cat tests/tls/ca.crt tests/tls/server.crt > tests/tls/ca-multi.crt
+
+ca_dir="tests/tls/ca-dir"
+rm -rf "$ca_dir"
+mkdir -p "$ca_dir"
+cp tests/tls/ca.crt "$ca_dir/ca.crt"
+ca_hash=$(openssl x509 -hash -noout -in tests/tls/ca.crt)
+ca_hash_old=$(openssl x509 -subject_hash_old -noout -in tests/tls/ca.crt)
+ln -sf ca.crt "$ca_dir/${ca_hash}.0"
+if [ "$ca_hash_old" != "$ca_hash" ]; then
+    ln -sf ca.crt "$ca_dir/${ca_hash_old}.0"
+fi
 
 [ -f tests/tls/valkey.dh ] || openssl dhparam -out tests/tls/valkey.dh 2048
 

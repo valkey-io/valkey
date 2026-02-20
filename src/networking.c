@@ -466,17 +466,21 @@ int prepareClientToWrite(client *c) {
     return C_OK;
 }
 
-/* Returns everything in the client reply linked list in a SDS format.
+/* Returns everything in the client reply buffer and linked list in a SDS format.
  * This should only be used only with a caching client. */
 sds aggregateClientOutputBuffer(client *c) {
     sds cmd_response = sdsempty();
+
+    /* First, collect from the fixed buffer if any */
+    if (c->bufpos > 0) {
+        cmd_response = sdscatlen(cmd_response, c->buf, c->bufpos);
+    }
+
+    /* Then, collect from the reply list */
     listIter li;
     listNode *ln;
     clientReplyBlock *val_block;
     listRewind(c->reply, &li);
-
-    /* Here, c->buf is not used, thus we confirm c->bufpos remains 0. */
-    serverAssert(c->bufpos == 0);
     while ((ln = listNext(&li)) != NULL) {
         val_block = (clientReplyBlock *)listNodeValue(ln);
         cmd_response = sdscatlen(cmd_response, val_block->buf, val_block->used);
@@ -575,7 +579,7 @@ static size_t _addReplyPayloadToBuffer(client *c, const void *payload, size_t le
     size_t available = c->buf_usable_size - c->bufpos;
     size_t reply_len = min(available, len);
     if (c->flag.buf_encoded) {
-        int track_bytes = (server.commandlog[COMMANDLOG_TYPE_LARGE_REQUEST].threshold != -1);
+        int track_bytes = (server.commandlog[COMMANDLOG_TYPE_LARGE_REPLY].threshold != -1);
         reply_len = upsertPayloadHeader(c->buf, &c->bufpos, &c->last_header, payload_type, len, c->slot, track_bytes, available);
     }
     if (!reply_len) return 0;
@@ -626,7 +630,7 @@ static void _addReplyPayloadToList(client *c, list *reply_list, const char *payl
         size_t copy = avail >= len ? len : avail;
 
         if (tail->flag.buf_encoded) {
-            int track_bytes = (server.commandlog[COMMANDLOG_TYPE_LARGE_REQUEST].threshold != -1);
+            int track_bytes = (server.commandlog[COMMANDLOG_TYPE_LARGE_REPLY].threshold != -1);
             copy = upsertPayloadHeader(tail->buf, &tail->used, &tail->last_header, payload_type, len, c->slot, track_bytes, avail);
         } else if (encoded) {
             /* If encoded buffer is required but tail is unencoded then pretend nothing can be added to it
@@ -655,7 +659,7 @@ static void _addReplyPayloadToList(client *c, list *reply_list, const char *payl
         tail->flag.buf_encoded = encoded;
         tail->last_header = NULL;
         if (tail->flag.buf_encoded) {
-            int track_bytes = (server.commandlog[COMMANDLOG_TYPE_LARGE_REQUEST].threshold != -1);
+            int track_bytes = (server.commandlog[COMMANDLOG_TYPE_LARGE_REPLY].threshold != -1);
             upsertPayloadHeader(tail->buf, &tail->used, &tail->last_header, payload_type, len, c->slot, track_bytes, tail->size);
         }
         memcpy(tail->buf + tail->used, payload, len);
@@ -972,10 +976,10 @@ void addReplyErrorSdsSafe(client *c, sds err) {
 /* Internal function used by addReplyErrorFormat, addReplyErrorFormatEx and RM_ReplyWithErrorFormat.
  * Refer to afterErrorReply for more information about the flags. */
 void addReplyErrorFormatInternal(client *c, int flags, const char *fmt, va_list ap) {
-    va_list cpy;
-    va_copy(cpy, ap);
-    sds s = sdscatvprintf(sdsempty(), fmt, cpy);
-    va_end(cpy);
+    va_list copy;
+    va_copy(copy, ap);
+    sds s = sdscatvprintf(sdsempty(), fmt, copy);
+    va_end(copy);
     /* Trim any newlines at the end (ones will be added by addReplyErrorLength) */
     s = sdstrim(s, "\r\n");
     /* Make sure there are no newlines in the middle of the string, otherwise
@@ -1416,7 +1420,7 @@ void addReplyBulk(client *c, robj *obj) {
     if (tryAvoidBulkStrCopyToReply(c, obj) == C_OK) {
         /* If copy avoidance allowed, then we explicitly maintain net_output_bytes_curr_cmd.
          * We determine per-reply if tracking is enabled by checking the config in the main thread. */
-        if (server.commandlog[COMMANDLOG_TYPE_LARGE_REQUEST].threshold != -1) {
+        if (server.commandlog[COMMANDLOG_TYPE_LARGE_REPLY].threshold != -1) {
             serverAssert(obj->encoding == OBJ_ENCODING_RAW);
             size_t str_len = sdslen(objectGetVal(obj));
             uint32_t num_len = digits10(str_len);
@@ -2164,6 +2168,22 @@ void freeClientAsync(client *c) {
     debugServerAssertWithInfo(c, NULL, listSearchKey(server.clients_to_close, c) == NULL);
     listAddNodeTail(server.clients_to_close, c);
 }
+/* Helper function to free a client or flag it for closure after current command.
+ * We can't free the current client right now because that would trigger an
+ * assert in prepareClientToWrite() when the server tries to write the response.
+ * So instead flag it for closure after the current command completes. */
+void freeClientOrCloseLater(client *c, int async) {
+    if (c == server.current_client) {
+        c->flag.close_after_command = 1;
+    } else {
+        if (async) {
+            freeClientAsync(c);
+        } else {
+            freeClient(c);
+        }
+    }
+}
+
 
 /* Log errors for invalid use and free the client in async way.
  * We will add additional information about the client to the message. */
@@ -2783,7 +2803,7 @@ static void releaseBufReferences(char *buf, size_t bufpos) {
         ptr += sizeof(payloadHeader);
 
         if (header->payload_type == BULK_STR_REF) {
-            /* When net byte tracking was disabled in the main thread (commandlog-request-larger-than -1)
+            /* When net byte tracking was disabled in the main thread (commandlog-reply-larger-than -1)
              * at the time this reply was added, we account for cluster slot stats here in the IO thread
              * after writing the reply. When tracking was enabled, it's already accounted in the main thread
              * via afterCommand() -> clusterSlotStatsAddNetworkBytesOutForUserClient(). */

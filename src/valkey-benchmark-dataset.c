@@ -32,7 +32,7 @@ static sds formatBytes(size_t bytes);
 static bool csvDiscoverFields(dataset *ds);
 static bool scanXmlFieldsFromFile(dataset *ds, const char *xml_root_element);
 static bool scanXmlFields(const char *doc_start, const char *doc_end, dataset *ds, const char *start_root_tag, const char *end_root_tag);
-static bool loadXmlDataset(dataset *ds, const char *xml_root_element);
+static bool loadXmlDataset(dataset *ds, const char *xml_root_element, int verbose);
 static bool csvLoadDocuments(dataset *ds);
 static bool shouldStopLoading(dataset *ds);
 static int findFieldIndex(dataset *ds, const char *field_name, size_t field_name_len);
@@ -41,7 +41,19 @@ static sds replaceOccurrence(sds processed_arg, const char *pos, const char *rep
 static sds processFieldsInArg(dataset *ds, sds arg, int record_index);
 static sds processRandPlaceholdersForDataSet(sds cmd, _Atomic uint64_t *seq_key, int replace_placeholders, int keyspacelen, int sequential_replacement);
 
-dataset *datasetInit(const char *filename, const char *xml_root_element, int max_documents, int has_field_placeholders, sds *template_argv, int template_argc) {
+/* Streaming buffer context for XML document scanning */
+typedef struct xmlStreamBuffer {
+    char *buffer;
+    size_t capacity;
+    size_t used;
+} xmlStreamBuffer;
+
+static xmlStreamBuffer *createXmlStreamBuffer(void);
+static void freeXmlStreamBuffer(xmlStreamBuffer *sb);
+static bool growXmlStreamBuffer(xmlStreamBuffer *sb);
+static size_t readIntoXmlStreamBuffer(xmlStreamBuffer *sb, FILE *fp);
+
+dataset *datasetInit(const char *filename, const char *xml_root_element, int max_documents, int has_field_placeholders, sds *template_argv, int template_argc, int verbose) {
     if (!filename) return NULL;
 
     dataset *ds = zcalloc(sizeof(dataset));
@@ -89,7 +101,7 @@ dataset *datasetInit(const char *filename, const char *xml_root_element, int max
 
     /* Load data with correct field count */
     if (ds->format == DATASET_FORMAT_XML) {
-        if (!loadXmlDataset(ds, xml_root_element)) goto error;
+        if (!loadXmlDataset(ds, xml_root_element, verbose)) goto error;
     } else {
         if (!csvLoadDocuments(ds)) goto error;
     }
@@ -183,17 +195,6 @@ bool datasetBuildFieldMap(dataset *ds, sds *template_argv, int template_argc) {
     return true;
 }
 
-bool datasetLoad(dataset *ds, const char *xml_root_element) {
-    if (!ds) return false;
-    (void)xml_root_element; /* Use stored value in ds */
-
-    if (ds->format == DATASET_FORMAT_XML) {
-        return loadXmlDataset(ds, ds->xml_root_element);
-    } else {
-        return csvLoadDocuments(ds);
-    }
-}
-
 size_t datasetGetRecordCount(dataset *ds) {
     return ds ? ds->record_count : 0;
 }
@@ -208,7 +209,7 @@ void datasetReportMemory(dataset *ds) {
         }
     }
     sds size_str = formatBytes(total_memory);
-    printf("Dataset: %zu documents (%s)\n", ds->record_count, size_str);
+    fprintf(stderr, "Dataset: %zu documents (%s)\n", ds->record_count, size_str);
     sdsfree(size_str);
 }
 
@@ -220,8 +221,18 @@ sds datasetGenerateCommand(dataset *ds, int record_index, sds *template_argv, in
         processed_argv[i] = processFieldsInArg(ds, sdsdup(template_argv[i]), record_index);
     }
 
-    char *cmd;
+    char *cmd = NULL;
     int len = valkeyFormatCommandArgv(&cmd, template_argc, (const char **)processed_argv, NULL);
+    if (len == -1) {
+        for (int i = 0; i < template_argc; i++) {
+            sdsfree(processed_argv[i]);
+        }
+        zfree(processed_argv);
+        if (cmd) {
+            free(cmd);
+        }
+        return NULL;
+    }
     sds result = sdsnewlen(cmd, len);
     free(cmd);
 
@@ -234,6 +245,41 @@ sds datasetGenerateCommand(dataset *ds, int record_index, sds *template_argv, in
     zfree(processed_argv);
 
     return result;
+}
+
+/* XML streaming buffer helpers */
+static xmlStreamBuffer *createXmlStreamBuffer(void) {
+    xmlStreamBuffer *sb = zmalloc(sizeof(xmlStreamBuffer));
+    sb->capacity = 4 * 1024 * 1024;
+    sb->buffer = zmalloc(sb->capacity);
+    sb->used = 0;
+    return sb;
+}
+
+static void freeXmlStreamBuffer(xmlStreamBuffer *sb) {
+    if (!sb) return;
+    zfree(sb->buffer);
+    zfree(sb);
+}
+
+static bool growXmlStreamBuffer(xmlStreamBuffer *sb) {
+    size_t new_capacity = sb->capacity * 2;
+    char *new_buffer = zrealloc(sb->buffer, new_capacity);
+    if (!new_buffer) return false;
+    sb->buffer = new_buffer;
+    sb->capacity = new_capacity;
+    return true;
+}
+
+static size_t readIntoXmlStreamBuffer(xmlStreamBuffer *sb, FILE *fp) {
+    size_t space_available = sb->capacity - sb->used;
+    if (space_available == 0) {
+        if (!growXmlStreamBuffer(sb)) return 0;
+        space_available = sb->capacity - sb->used;
+    }
+    size_t bytes_read = fread(sb->buffer + sb->used, 1, space_available, fp);
+    sb->used += bytes_read;
+    return bytes_read;
 }
 
 static sds formatBytes(size_t bytes) {
@@ -425,40 +471,60 @@ static bool scanXmlFieldsFromFile(dataset *ds, const char *xml_root_element) {
     if (!fp) return false;
 
     char start_tag_prefix[MAX_FIELD_NAME_LEN + XML_TAG_OVERHEAD], start_tag[MAX_FIELD_NAME_LEN + XML_TAG_OVERHEAD], end_tag[MAX_FIELD_NAME_LEN + XML_TAG_OVERHEAD];
+    size_t end_tag_len;
     snprintf(start_tag_prefix, sizeof(start_tag_prefix), "<%s", xml_root_element);
     snprintf(start_tag, sizeof(start_tag), "<%s>", xml_root_element);
     snprintf(end_tag, sizeof(end_tag), "</%s>", xml_root_element);
+    end_tag_len = strlen(end_tag);
 
-    char buffer[1024];
-    sds current_doc = sdsempty();
+    xmlStreamBuffer *sb = createXmlStreamBuffer();
 
-    while (fgets(buffer, sizeof(buffer), fp)) {
-        current_doc = sdscat(current_doc, buffer);
+    while (1) {
+        size_t bytes_read = readIntoXmlStreamBuffer(sb, fp);
+        if (sb->used == 0) break;
 
-        const char *tag_prefix_pos = strstr(current_doc, start_tag_prefix);
-        if (!tag_prefix_pos) continue;
+        /* Search for complete first document */
+        const char *tag_prefix_pos = strstr(sb->buffer, start_tag_prefix);
+        if (!tag_prefix_pos) {
+            if (bytes_read == 0) break;
+            continue;
+        }
 
         const char *tag_end_pos = strchr(tag_prefix_pos, '>');
-        if (!tag_end_pos) continue;
+        if (!tag_end_pos || tag_end_pos >= sb->buffer + sb->used) {
+            if (bytes_read == 0) break;
+            continue;
+        }
 
         const char *doc_start = tag_prefix_pos;
-        const char *doc_end = strstr(tag_end_pos, end_tag);
-        if (!doc_end) continue;
+        const char *doc_end = NULL;
 
-        doc_end += strlen(end_tag);
+        /* Search for closing tag from current position onward */
+        for (size_t i = (tag_end_pos - sb->buffer); i + end_tag_len <= sb->used; i++) {
+            if (strncmp(sb->buffer + i, end_tag, end_tag_len) == 0) {
+                doc_end = sb->buffer + i + end_tag_len;
+                break;
+            }
+        }
 
+        if (!doc_end) {
+            if (bytes_read == 0) break;
+            continue;
+        }
+
+        /* Found complete first document - scan fields and exit */
         bool result = scanXmlFields(doc_start, doc_end, ds, start_tag, end_tag);
-        sdsfree(current_doc);
+        freeXmlStreamBuffer(sb);
         fclose(fp);
         return result;
     }
 
-    sdsfree(current_doc);
+    freeXmlStreamBuffer(sb);
     fclose(fp);
     return false;
 }
 
-static bool loadXmlDataset(dataset *ds, const char *xml_root_element) {
+static bool loadXmlDataset(dataset *ds, const char *xml_root_element, int verbose) {
     FILE *fp = fopen(ds->filename, "r");
     if (!fp) return false;
 
@@ -469,52 +535,43 @@ static bool loadXmlDataset(dataset *ds, const char *xml_root_element) {
     snprintf(end_tag, sizeof(end_tag), "</%s>", xml_root_element);
     end_tag_len = strlen(end_tag);
 
-    size_t buffer_capacity = 4 * 1024 * 1024;
-    char *buffer = zmalloc(buffer_capacity);
-    size_t buffer_used = 0;
+    xmlStreamBuffer *sb = createXmlStreamBuffer();
     bool fields_discovered = false;
     size_t capacity = 1000;
 
     ds->records = zmalloc(sizeof(datasetRecord) * capacity);
 
-    printf("Loading XML dataset from %s...\n", ds->filename);
+    if (verbose) {
+        fprintf(stderr, "Loading XML dataset from %s...\n", ds->filename);
+    }
 
     if (ds->field_names && ds->field_count > 0) {
         fields_discovered = true;
-        printf("Using %d fields: ", ds->field_count);
-        for (int i = 0; i < ds->field_count; i++) {
-            printf("%s%s", ds->field_names[i], (i < ds->field_count - 1) ? ", " : "\n");
+        if (verbose) {
+            fprintf(stderr, "Using %d fields: ", ds->field_count);
+            for (int i = 0; i < ds->field_count; i++) {
+                fprintf(stderr, "%s%s", ds->field_names[i], (i < ds->field_count - 1) ? ", " : "\n");
+            }
         }
     }
 
     while (!shouldStopLoading(ds)) {
-        size_t space_available = buffer_capacity - buffer_used;
-
-        if (space_available == 0) {
-            size_t new_capacity = buffer_capacity * 2;
-            buffer = zrealloc(buffer, new_capacity);
-            buffer_capacity = new_capacity;
-            space_available = buffer_capacity - buffer_used;
-        }
-
-        size_t bytes_read = fread(buffer + buffer_used, 1, space_available, fp);
-        buffer_used += bytes_read;
-
-        if (buffer_used == 0) break;
+        size_t bytes_read = readIntoXmlStreamBuffer(sb, fp);
+        if (sb->used == 0) break;
 
         size_t scan_pos = 0;
-        while (scan_pos < buffer_used) {
+        while (scan_pos < sb->used) {
             const char *doc_start = NULL;
             const char *tag_open_end = NULL;
 
-            for (size_t i = scan_pos; i < buffer_used; i++) {
-                if (buffer[i] == '<' && i + 1 < buffer_used &&
-                    strncmp(buffer + i, start_tag_prefix, strlen(start_tag_prefix)) == 0) {
-                    doc_start = buffer + i;
+            for (size_t i = scan_pos; i < sb->used; i++) {
+                if (sb->buffer[i] == '<' && i + 1 < sb->used &&
+                    strncmp(sb->buffer + i, start_tag_prefix, strlen(start_tag_prefix)) == 0) {
+                    doc_start = sb->buffer + i;
 
-                    for (size_t j = i + 1; j < buffer_used; j++) {
-                        if (buffer[j] == '>') {
-                            tag_open_end = buffer + j;
+                    for (size_t j = i + 1; j < sb->used; j++) {
+                        if (sb->buffer[j] == '>') {
+                            tag_open_end = sb->buffer + j;
                             break;
                         }
                     }
@@ -525,9 +582,9 @@ static bool loadXmlDataset(dataset *ds, const char *xml_root_element) {
             if (!doc_start || !tag_open_end) break;
 
             const char *doc_end = NULL;
-            for (size_t i = (tag_open_end - buffer); i + end_tag_len <= buffer_used; i++) {
-                if (strncmp(buffer + i, end_tag, end_tag_len) == 0) {
-                    doc_end = buffer + i + end_tag_len;
+            for (size_t i = (tag_open_end - sb->buffer); i + end_tag_len <= sb->used; i++) {
+                if (strncmp(sb->buffer + i, end_tag, end_tag_len) == 0) {
+                    doc_end = sb->buffer + i + end_tag_len;
                     break;
                 }
             }
@@ -539,15 +596,17 @@ static bool loadXmlDataset(dataset *ds, const char *xml_root_element) {
             if (!fields_discovered) {
                 if (!scanXmlFields(doc_start, doc_end, ds, start_tag, end_tag)) {
                     fprintf(stderr, "No XML fields discovered\n");
-                    zfree(buffer);
+                    freeXmlStreamBuffer(sb);
                     fclose(fp);
                     return false;
                 }
                 fields_discovered = true;
 
-                printf("Discovered %d fields: ", ds->field_count);
-                for (int i = 0; i < ds->field_count; i++) {
-                    printf("%s%s", ds->field_names[i], (i < ds->field_count - 1) ? ", " : "\n");
+                if (verbose) {
+                    fprintf(stderr, "Discovered %d fields: ", ds->field_count);
+                    for (int i = 0; i < ds->field_count; i++) {
+                        fprintf(stderr, "%s%s", ds->field_names[i], (i < ds->field_count - 1) ? ", " : "\n");
+                    }
                 }
             }
 
@@ -577,30 +636,32 @@ static bool loadXmlDataset(dataset *ds, const char *xml_root_element) {
 
             ds->record_count++;
 
-            if (ds->record_count % 1000 == 0) {
-                printf("\rLoaded %zu documents...", ds->record_count);
-                fflush(stdout);
+            if (verbose && ds->record_count % 1000 == 0) {
+                fprintf(stderr, "\rLoaded %zu documents...", ds->record_count);
+                fflush(stderr);
             }
 
-            scan_pos = doc_end - buffer;
+            scan_pos = doc_end - sb->buffer;
         }
 
-        if (scan_pos > 0 && scan_pos < buffer_used) {
-            size_t remaining = buffer_used - scan_pos;
-            memmove(buffer, buffer + scan_pos, remaining);
-            buffer_used = remaining;
-        } else if (scan_pos == buffer_used) {
-            buffer_used = 0;
+        if (scan_pos > 0 && scan_pos < sb->used) {
+            size_t remaining = sb->used - scan_pos;
+            memmove(sb->buffer, sb->buffer + scan_pos, remaining);
+            sb->used = remaining;
+        } else if (scan_pos == sb->used) {
+            sb->used = 0;
         }
 
-        if (bytes_read == 0 && (buffer_used == 0 || scan_pos == 0)) {
+        if (bytes_read == 0 && (sb->used == 0 || scan_pos == 0)) {
             break;
         }
     }
 
-    printf("\rLoaded %zu documents%*s\n", ds->record_count, 20, "");
+    if (verbose) {
+        fprintf(stderr, "\rLoaded %zu documents%*s\n", ds->record_count, 20, "");
+    }
 
-    zfree(buffer);
+    freeXmlStreamBuffer(sb);
     fclose(fp);
     return true;
 }

@@ -9,7 +9,7 @@ proc cmdstat {cmd} {
 proc common_bench_setup {cmd} {
     r config resetstat
     r flushall
-    if {[catch { exec {*}$cmd } output]} {
+    if {[catch { exec {*}$cmd 2>@1 } output]} {
         set first_line [lindex [split $output "\n"] 0]
         puts [colorstr red "valkey-benchmark non zero code, the output is: $output"]
         fail "valkey-benchmark non zero code. first line: $first_line"
@@ -439,6 +439,27 @@ tags {"benchmark network external:skip logreqres:skip"} {
             file delete $csv_file
         }
 
+        test {benchmark: dataset with --csv produces clean CSV only} {
+            # Create test CSV dataset
+            set csv_data "name,value\ntest1,val1\ntest2,val2"
+            set csv_file [tmpfile "csv_clean.csv"]
+            set fd [open $csv_file w]
+            puts $fd $csv_data
+            close $fd
+
+            set cmd [valkeybenchmark $master_host $master_port "--dataset $csv_file --csv -n 4 -r 10 -- SET item:__rand_int__ \"__field:value__\""]
+            set output [common_bench_setup $cmd]
+            
+            # Should NOT contain dataset diagnostic messages (those go to stderr)
+            assert_no_match "*Dataset:*documents*" $output
+            assert_no_match "*Loading*dataset*" $output
+            
+            # Should contain valid CSV format
+            assert_match "*\"*\",\"*\",\"*\",\"*\",\"*\",\"*\",\"*\",\"*\"*" $output
+            
+            file delete $csv_file
+        }
+
         test {benchmark: sequential zadd results in expected number of keys} {
             set cmd [valkeybenchmark $master_host $master_port "-r 50 -n 50 --sequential -t zadd"]
             common_bench_setup $cmd
@@ -621,7 +642,7 @@ tags {"benchmark network external:skip cluster"} {
                 --dataset $csv_file -n 2 -r 100 --sequential \
                 HSET doc:\{tag\}:__rand_int__ name __field:name__"]
             
-            if {[catch { exec {*}$cmd } output]} {
+            if {[catch { exec {*}$cmd 2>@1 } output]} {
                 if {![string match "*HSET*" $output]} {
                     fail "Benchmark failed: $output"
                 }

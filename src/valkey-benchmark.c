@@ -587,12 +587,17 @@ static void resetClient(client c) {
 static void scanClusterTags(client c, char *buffer_start) {
     if (!config.cluster_mode) return;
 
+    /* Preserve the total capacity across scans so we don't accidentally
+     * shrink the allocation when staglen is reset to zero. */
+    size_t total_cap = c->staglen + c->stagfree;
     c->staglen = 0;
+    c->stagfree = total_cap;
     char *p = buffer_start;
     while ((p = strstr(p, "{tag}")) != NULL) {
-        if (c->staglen >= c->stagfree) {
-            size_t new_size = c->stagfree ? c->stagfree * 2 : RANDPTR_INITIAL_SIZE;
+        if (c->stagfree == 0) {
+            size_t new_size = total_cap ? total_cap * 2 : RANDPTR_INITIAL_SIZE;
             c->stagptr = zrealloc(c->stagptr, new_size * sizeof(char *));
+            total_cap = new_size;
             c->stagfree = new_size - c->staglen;
         }
         c->stagptr[c->staglen++] = p;
@@ -2359,17 +2364,32 @@ int main(int argc, char **argv) {
             exit(1);
         }
 
+        /* Dataset mode requires at least one field placeholder in the command
+         * template. Without it, the dataset would be initialized and reported
+         * but never used for command generation. */
+        if (!config.has_field_placeholders) {
+            fprintf(stderr,
+                    "Error: Dataset mode requires at least one field placeholder\n");
+            fprintf(stderr,
+                    "Example: SET doc:__rand_int__ \"__field:content__\"\n");
+            exit(1);
+        }
+
         /* Initialize dataset - single call does everything atomically */
+        int verbose = !config.csv && !config.quiet;
         config.current_dataset = datasetInit(config.dataset_file, config.xml_root_element,
                                              config.max_documents,
                                              config.has_field_placeholders,
-                                             config.template_argv, config.template_argc);
+                                             config.template_argv, config.template_argc,
+                                             verbose);
         if (!config.current_dataset) {
             fprintf(stderr, "Failed to initialize dataset\n");
             exit(1);
         }
 
-        datasetReportMemory(config.current_dataset);
+        if (verbose) {
+            datasetReportMemory(config.current_dataset);
+        }
     }
     /* Set default for requests if not specified */
     if (config.requests < 0) config.requests = 100000;

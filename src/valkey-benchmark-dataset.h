@@ -48,7 +48,7 @@ typedef struct dataset {
 } dataset;
 
 /* Initialize dataset from file - returns NULL on error */
-dataset *datasetInit(const char *filename, const char *xml_root_element, int max_documents, int has_field_placeholders, sds *template_argv, int template_argc);
+dataset *datasetInit(const char *filename, const char *xml_root_element, int max_documents, int has_field_placeholders, sds *template_argv, int template_argc, int verbose);
 
 /* Free dataset and all memory */
 void datasetFree(dataset *ds);

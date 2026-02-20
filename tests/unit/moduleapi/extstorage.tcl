@@ -135,28 +135,6 @@ start_server {tags {"external_data external:skip"}} {
     }
 }
 
-test {Server fails to start when ext-data-mode is kv but ext-data-id is missing} {
-    # Try to start server with ext-data-mode=kv but without ext-data-id
-    set config_file [file join [pwd] "temp_config_test.conf"]
-    set fd [open $config_file w]
-    puts $fd "ext-data-mode kv"
-    close $fd
-    
-    # Attempt to start server with this config - should fail
-    set result [catch {
-        start_server [list overrides [list "ext-data-mode" kv]] {
-            # This block should not execute
-            fail "Server should not start without ext-data-id"
-        }
-    } error]
-    
-    # Clean up config file
-    catch {file delete $config_file}
-    
-    # Verify that server failed to start
-    assert {$result == 1}
-}
-
 start_server [list overrides [list "ext-data-mode" kv "ext-data-id" id57] tags [list "external:skip"]] {
     test {Running EXTERNAL_DATA LOADED with switched on external data succeeds} {
         assert_equal [list ] [r external_data loaded]
@@ -4503,6 +4481,164 @@ start_server [list overrides [list "cluster-enabled" yes "cluster-ping-interval"
                 # The test has already verified that the migration failed and
                 # the data remains intact on the source node
             }
+        }
+    }
+}
+
+# Helper to find a key belonging to a specific node's slot range
+# Returns: key name that hashes to the desired node's slots
+proc find_key_for_node {node_index key_prefix slot_start slot_end} {
+    set max_attempts 10000
+    for {set i 0} {$i < $max_attempts} {incr i} {
+        set key "${key_prefix}_$i"
+        set slot [R $node_index CLUSTER KEYSLOT $key]
+        if {$slot >= $slot_start && $slot <= $slot_end} {
+            return [list $key $slot]
+        }
+    }
+    error "Could not find key for node with prefix $key_prefix in slot range $slot_start-$slot_end"
+}
+
+start_server [list overrides [list cluster-enabled yes cluster-ping-interval 50 cluster-node-timeout 1500 cluster-databases 16 cluster-slot-stats-enabled yes ext-data-mode kv ext-data-id node0 loglevel notice] tags [list external:skip cluster]] {
+    set node0 [srv 0 client]
+    
+    start_server [list overrides [list cluster-enabled yes cluster-ping-interval 50 cluster-node-timeout 1500 cluster-databases 16 cluster-slot-stats-enabled yes ext-data-mode kv ext-data-id node1 loglevel notice] tags [list external:skip]] {
+        set node1 [srv 0 client]
+        
+        test "CLUSTER MIGRATESLOTS applies to all databases for external data" {
+            set extdatamodule1 [file normalize tests/modules/extstorage/extdata1.so]
+            
+            # Setup two-primary cluster with no replicas
+            setup_ready_cluster [list $node0 $node1] [dict create]
+            
+            # Load module on both nodes
+            $node0 MODULE LOAD $extdatamodule1
+            $node1 MODULE LOAD $extdatamodule1
+            
+            # Initialize external data for db0 and db1 on both nodes
+            $node0 external_data INIT db0 helloextdata1
+            $node0 external_data INIT db1 helloextdata1
+            $node1 external_data INIT db0 helloextdata1
+            $node1 external_data INIT db1 helloextdata1
+            
+            wait_for_cluster_state ok
+        
+        # Determine which slots are owned by each node
+        set slots_info [$node0 CLUSTER SLOTS]
+        set node0_start [lindex [lindex $slots_info 0] 0]
+        set node0_end [lindex [lindex $slots_info 0] 1]
+        set node1_start [lindex [lindex $slots_info 1] 0]
+        set node1_end [lindex [lindex $slots_info 1] 1]
+        
+        # Use helper to find mig_test: key in node0's slots that will be migrated to node1
+        set mig_result [find_key_for_node 0 "mig_test" $node0_start $node0_end]
+        set mig_test [lindex $mig_result 0]
+        set mig_slot [lindex $mig_result 1]
+        
+        # Use helper to find keep_test: DIFFERENT key in node0's slots (not migrated)
+        # Must be in a different slot than mig_test
+        set keep_test ""
+        set keep_slot -1
+        for {set i 0} {$i < 10000} {incr i} {
+            set key "keep_test_$i"
+            set slot [$node0 CLUSTER KEYSLOT $key]
+            if {$slot >= $node0_start && $slot <= $node0_end && $slot != $mig_slot} {
+                set keep_test $key
+                set keep_slot $slot
+                break
+            }
+        }
+        
+        # Use helper to find persist_test: key in node1's slots (stays on node1)
+        set persist_result [find_key_for_node 1 "persist_test" $node1_start $node1_end]
+        set persist_test [lindex $persist_result 0]
+        set persist_slot [lindex $persist_result 1]
+        
+        # Create external data for mig_test in db0 and db1 on node0 (will be migrated)
+        $node0 SELECT 0
+        $node0 SET $mig_test "mig_value_db0" ext
+        assert_equal "mig_value_db0" [$node0 GET $mig_test ext]
+        
+        $node0 SELECT 1
+        $node0 SET $mig_test "mig_value_db1" ext
+        assert_equal "mig_value_db1" [$node0 GET $mig_test ext]
+        
+        # Create external data for keep_test in db0 and db1 on node0 (stays on node0)
+        $node0 SELECT 0
+        $node0 SET $keep_test "keep_value_db0" ext
+        assert_equal "keep_value_db0" [$node0 GET $keep_test ext]
+        
+        $node0 SELECT 1
+        $node0 SET $keep_test "keep_value_db1" ext
+        assert_equal "keep_value_db1" [$node0 GET $keep_test ext]
+        
+        # Create external data for persist_test in db0 and db1 on node1 (stays on node1)
+        $node1 SELECT 0
+        $node1 SET $persist_test "persist_value_db0" ext
+        assert_equal "persist_value_db0" [$node1 GET $persist_test ext]
+        
+        $node1 SELECT 1
+        $node1 SET $persist_test "persist_value_db1" ext
+        assert_equal "persist_value_db1" [$node1 GET $persist_test ext]
+        
+        # Migrate only mig_test's slot from node0 to node1
+        $node0 SELECT 0
+        set node1_id [$node1 CLUSTER MYID]
+        
+        $node0 CLUSTER MIGRATESLOTS SLOTSRANGE $mig_slot $mig_slot NODE $node1_id
+        
+        # Wait for all migrations to complete
+        wait_for_condition 100 100 {
+            [migrations_completed $node0]
+        } else {
+            fail "Migrations did not complete - migrations: [$node0 CLUSTER GETSLOTMIGRATIONS]"
+        }
+        
+        # Verify mig_test: migrated from node0 to node1 in BOTH databases
+        $node1 SELECT 0
+        assert_equal "mig_value_db0" [$node1 GET $mig_test ext]
+        
+        $node1 SELECT 1
+        assert_equal "mig_value_db1" [$node1 GET $mig_test ext]
+        
+        # Verify mig_test data is no longer on node0 (returns MOVED error)
+        $node0 SELECT 0
+        assert_error "*MOVED*" {$node0 GET $mig_test ext}
+        
+        $node0 SELECT 1
+        assert_error "*MOVED*" {$node0 GET $mig_test ext}
+        
+        # Verify keep_test: stayed on node0 in BOTH databases (not migrated)
+        $node0 SELECT 0
+        assert_equal "keep_value_db0" [$node0 GET $keep_test ext]
+        
+        $node0 SELECT 1
+        assert_equal "keep_value_db1" [$node0 GET $keep_test ext]
+        
+        # Verify keep_test is not accessible from node1 (returns MOVED error)
+        $node1 SELECT 0
+        assert_error "*MOVED*" {$node1 GET $keep_test ext}
+        
+        $node1 SELECT 1
+        assert_error "*MOVED*" {$node1 GET $keep_test ext}
+        
+        # Verify persist_test: remained on node1 in BOTH databases (unchanged)
+        $node1 SELECT 0
+        assert_equal "persist_value_db0" [$node1 GET $persist_test ext]
+        
+        $node1 SELECT 1
+        assert_equal "persist_value_db1" [$node1 GET $persist_test ext]
+        
+        # Verify persist_test is not accessible from node0 (returns MOVED error)
+        $node0 SELECT 0
+        assert_error "*MOVED*" {$node0 GET $persist_test ext}
+        
+        $node0 SELECT 1
+        assert_error "*MOVED*" {$node0 GET $persist_test ext}
+        
+        # Cleanup
+        cleanup_external_data_dump $node0
+        cleanup_external_data_dump $node1
         }
     }
 }

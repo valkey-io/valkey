@@ -1482,7 +1482,6 @@ typedef int (*ValkeyModuleExternalStorageDumpFunc)(
     int dbid,
     int slot,
     long long timestamp,
-    ValkeyModuleString *target,
     ValkeyModuleString **backup_id);
 
 /* The callback function called when EXTERNAL_DATA LOAD command is called.
@@ -1521,7 +1520,6 @@ typedef int (*ValkeyModuleExternalFilterDumpFunc)(
     int dbid,
     int slot,
     long long timestamp,
-    ValkeyModuleString *target,
     ValkeyModuleString **backup_id);
 
 typedef int (*ValkeyModuleExternalFilterLoadFunc)(

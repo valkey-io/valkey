@@ -2130,13 +2130,6 @@ void proceedWithSlotMigration(slotMigrationJob *job) {
                 /* Get target node address */
                 clusterNode *target_node = clusterLookupNode(job->target_node_name, CLUSTER_NAMELEN);
                 if (target_node) {
-                    char *target_ip = clusterNodeIp(target_node, NULL);
-                    int target_port = getNodeDefaultReplicationPort(target_node);
-                    char target_addr[256];
-                    snprintf(target_addr, sizeof(target_addr), "%s:%d", target_ip, target_port);
-                    
-                    robj *target_str = createStringObject(target_addr, strlen(target_addr));
-                    
                     /* Iterate through all databases */
                     for (int dbid = 0; dbid < server.dbnum; dbid++) {
                         externalDataModuleInstance *mi = externalDataGetModuleInstance(dbid);
@@ -2153,9 +2146,8 @@ void proceedWithSlotMigration(slotMigrationJob *job) {
                             for (int slot = range->start_slot; slot <= range->end_slot; slot++) {
                                 ValkeyModuleString *backup_id = NULL;
                                 
-                                int result = externalDataCallDumpFunc(mi, slot, mstime(),
-                                                                      (ValkeyModuleString *)target_str,
-                                                                      &backup_id);
+                                /* Dump uses local node's ext-data-id, no target parameter needed */
+                                int result = externalDataCallDumpFunc(mi, slot, mstime(), &backup_id);
                                 
                                 if (result == EXTERNAL_SUCCESS) {
                                     /* ValkeyModuleString is internally robj*, extract string properly */
@@ -2171,7 +2163,6 @@ void proceedWithSlotMigration(slotMigrationJob *job) {
                         }
                     }
                     
-                    decrRefCount(target_str);
                 } else {
                     serverLog(LL_WARNING, "Could not find target node for external data dump");
                 }

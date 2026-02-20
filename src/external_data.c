@@ -1055,7 +1055,6 @@ int externalDataCallDropReadonlyFunc(externalDataModuleInstance *mi) {
 int externalDataCallDumpFunc(externalDataModuleInstance *mi,
                              int slot,
                              long long timestamp,
-                             ValkeyModuleString *target,
                              ValkeyModuleString **backup_id) {
     if (!mi || !mi->external_module || !mi->storage_ctx || !mi->module_ctx) {
         return EXTERNAL_ERROR;
@@ -1068,34 +1067,20 @@ int externalDataCallDumpFunc(externalDataModuleInstance *mi,
 
     setupModuleCtx(mi);
 
-    /* Use ext-data-id from config if target is NULL */
-    ValkeyModuleString *server_target = target;
-    if (target == NULL) {
-        /* Use configured ext-data-id */
-        server_target = (ValkeyModuleString *)createNodeIdStringObject();
-        
-        /* Check if string creation failed */
-        if (server_target == NULL) {
-            serverLog(LL_WARNING, "Failed to create server target string for external data dump");
-            return EXTERNAL_ERROR;
-        }
-    }
+    /* Dump always uses local node's ext-data-id (configured via ext-data-id).
+     * The module reads this from its config. */
 
-    /* Pass -1 as dbid to indicate all databases */
+    /* Pass negative one as dbid to indicate all databases */
     int result = mi->external_module->storage_methods.dump(
         mi->module_ctx,
         mi->storage_ctx,
         EXTERNAL_ALL_DBS,
         slot,
         timestamp,
-        server_target,
         backup_id);
 
     if (result != EXTERNAL_SUCCESS) {
         serverLog(LL_WARNING, "External data dump failed");
-        if (server_target) {
-            decrRefCount((robj *)server_target);
-        }
         return EXTERNAL_ERROR;
     }
 
@@ -1107,21 +1092,12 @@ int externalDataCallDumpFunc(externalDataModuleInstance *mi,
             EXTERNAL_ALL_DBS,
             slot,
             timestamp,
-            server_target,
             backup_id);
         
         if (filter_result != EXTERNAL_SUCCESS) {
-            /* If filter dump failed, log but don't fail the overall operation */
-            serverLog(LL_WARNING, "Filter dump failed");
-            if (server_target) {
-                decrRefCount((robj *)server_target);
-            }
+            serverLog(LL_WARNING, "External filter dump failed");
             return EXTERNAL_ERROR;
         }
-    }
-
-    if (server_target) {
-        decrRefCount((robj *)server_target);
     }
 
     teardownModuleCtx(mi);
@@ -1423,7 +1399,7 @@ void externalDataDumpCommand(client *c) {
     ValkeyModuleString *backup_id = NULL;
 
     /* Call the dump function - it will dump all databases, using local node_id */
-    int result = externalDataCallDumpFunc(dbData->module_instance, slot, mstime(), NULL, &backup_id);
+    int result = externalDataCallDumpFunc(dbData->module_instance, slot, mstime(), &backup_id);
 
     if (result != EXTERNAL_SUCCESS || backup_id == NULL) {
         addReplyError(c, "Failed to create backup");
@@ -2083,7 +2059,7 @@ void bioExternalDataDumpForFullSync(void) {
         ValkeyModuleString *backup_id = NULL;
         
         /* Call dump with timestamp 0 for full backup, -1 for all slots */
-        int result = externalDataCallDumpFunc(mi, EXTERNAL_ALL_SLOTS, 0, NULL, &backup_id);
+        int result = externalDataCallDumpFunc(mi, EXTERNAL_ALL_SLOTS, 0, &backup_id);
         
         if (result != EXTERNAL_SUCCESS) {
             serverLog(LL_WARNING, "Failed to dump external data for module %s",

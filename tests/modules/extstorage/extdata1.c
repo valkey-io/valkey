@@ -458,7 +458,6 @@ static int storageDumpFunction(ValkeyModuleCtx *module_ctx,
                                int dbid,
                                int slot,
                                long long timestamp,
-                               ValkeyModuleString *target,
                                ValkeyModuleString **backup_id);
 
 static int storageSetFunction(ValkeyModuleCtx *module_ctx,
@@ -564,8 +563,7 @@ static int storageSetFunction(ValkeyModuleCtx *module_ctx,
         ValkeyModuleString *backup_id = NULL;
         
         ValkeyModule_Log(module_ctx, "debug", "AUTO_DUMP: Calling storageDumpFunction with target=%s, slot=%d", node_id, slot);
-        ValkeyModuleString *node_id_str = ValkeyModule_CreateStringPrintf(NULL, "%s", node_id);
-        storageDumpFunction(module_ctx, storage_ctx, dbid, slot, 0, node_id_str, &backup_id);
+        storageDumpFunction(module_ctx, storage_ctx, dbid, slot, 0, &backup_id);
         ValkeyModule_Log(module_ctx, "debug", "AUTO_DUMP: storageDumpFunction completed");
         
         if (backup_id) {
@@ -704,7 +702,6 @@ static int filterDumpFunction(ValkeyModuleCtx *module_ctx,
                               int dbid,
                               int slot,
                               long long timestamp,
-                              ValkeyModuleString *target,
                               ValkeyModuleString **backup_id);
 
 static int filterSetFunction(ValkeyModuleCtx *module_ctx,
@@ -767,8 +764,7 @@ static int filterSetFunction(ValkeyModuleCtx *module_ctx,
     if (dump_every_write) {
         ValkeyModule_Log(module_ctx, "notice", "Auto-dumping filter data after SET operation (dump_every_write=1), slot=%d", slot);
         ValkeyModuleString *backup_id = NULL;
-        ValkeyModuleString *node_id_str = ValkeyModule_CreateStringPrintf(NULL, "%s", node_id);
-        filterDumpFunction(module_ctx, filter_ctx, dbid, slot, 0, node_id_str, &backup_id);
+        filterDumpFunction(module_ctx, filter_ctx, dbid, slot, 0, &backup_id);
         if (backup_id) {
             ValkeyModule_FreeString(NULL, backup_id);
         }
@@ -1106,7 +1102,6 @@ static int filterDumpFunction(ValkeyModuleCtx *module_ctx,
                               int dbid,
                               int slot,
                               long long timestamp,
-                              ValkeyModuleString *target,
                               ValkeyModuleString **backup_id) {
     VALKEYMODULE_NOT_USED(filter_ctx);
     ValkeyModule_AutoMemory(module_ctx);
@@ -1210,7 +1205,6 @@ static int filterDumpFunction(ValkeyModuleCtx *module_ctx,
                                    db,
                                    slot,
                                    0,
-                                   target,
                                    backup_id) == EXTERNAL_ERROR) {
                 ValkeyModule_Log(module_ctx, "warning", "Failed to dump filter data for database %d", db);
                 return EXTERNAL_ERROR;
@@ -1241,7 +1235,6 @@ static int storageDumpFunction(ValkeyModuleCtx *module_ctx,
                                int dbid,
                                int slot,
                                long long timestamp,
-                               ValkeyModuleString *target,
                                ValkeyModuleString **backup_id) {
     VALKEYMODULE_NOT_USED(storage_ctx);
     ValkeyModule_AutoMemory(module_ctx);
@@ -1355,7 +1348,6 @@ static int storageDumpFunction(ValkeyModuleCtx *module_ctx,
                                     db,
                                     slot,
                                     0,
-                                    target,
                                     backup_id) == EXTERNAL_ERROR) {
                 ValkeyModule_Log(module_ctx, "warning", "Failed to dump storage data for database %d", db);
                 return EXTERNAL_ERROR;
@@ -2729,6 +2721,12 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
     
     size_t len;
     const char *config_node_id = ValkeyModule_StringPtrLen(config_value, &len);
+    if (!config_node_id || len == 0 || config_node_id[0] == '\0') {
+        ValkeyModule_Log(ctx, "warning", "ext-data-id is empty or invalid");
+        ValkeyModule_FreeString(ctx, config_value);
+        return VALKEYMODULE_ERR;
+    }
+    
     strncpy(node_id, config_node_id, sizeof(node_id) - 1);
     node_id[sizeof(node_id) - 1] = '\0';
     ValkeyModule_FreeString(ctx, config_value);

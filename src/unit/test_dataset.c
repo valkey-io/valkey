@@ -39,7 +39,7 @@ int test_field_mapping_optimization(int argc, char **argv, int flags) {
     sds arg5 = sdsnew("f");
     sds arg6 = sdsnew("__field:f__");
     sds args[] = {arg1, arg2, arg3, arg4, arg5, arg6};
-    dataset *ds = datasetInit(file, NULL, 0, 1, args, 6);
+    dataset *ds = datasetInit(file, NULL, 0, 1, args, 6, 0);
 
     TEST_ASSERT_MESSAGE("Dataset initialized", ds != NULL);
     TEST_ASSERT_MESSAGE("Total fields discovered", ds->field_count == 8);
@@ -71,7 +71,7 @@ int test_csv_quoted_fields(int argc, char **argv, int flags) {
     sds arg1 = sdsnew("SET");
     sds arg2 = sdsnew("__field:title__");
     sds args[] = {arg1, arg2};
-    dataset *ds = datasetInit(file, NULL, 0, 1, args, 2);
+    dataset *ds = datasetInit(file, NULL, 0, 1, args, 2, 0);
 
     TEST_ASSERT_MESSAGE("Dataset initialized", ds != NULL);
     TEST_ASSERT_MESSAGE("Quoted comma preserved", !strcmp(ds->records[0].fields[0], "Book, Part 1"));
@@ -95,7 +95,7 @@ int test_field_count_correctness(int argc, char **argv, int flags) {
     sds arg1 = sdsnew("GET");
     sds arg2 = sdsnew("__field:title__");
     sds args[] = {arg1, arg2};
-    dataset *ds = datasetInit(file, NULL, 0, 1, args, 2);
+    dataset *ds = datasetInit(file, NULL, 0, 1, args, 2, 0);
 
     TEST_ASSERT_MESSAGE("Dataset initialized", ds != NULL);
     TEST_ASSERT_MESSAGE("Correct field count", ds->field_count == 3);
@@ -134,7 +134,7 @@ int test_excessive_field_name_length(int argc, char **argv, int flags) {
     TEST_ASSERT(file != NULL);
 
     /* Initialize dataset - only the valid field should be loaded */
-    dataset *ds = datasetInit(file, "doc", 1, 0, NULL, 0);
+    dataset *ds = datasetInit(file, "doc", 1, 0, NULL, 0, 0);
 
     TEST_ASSERT_MESSAGE("Dataset initialized", ds != NULL);
     TEST_ASSERT_MESSAGE("Only valid field loaded (513-char field rejected)", ds->field_count == 1);
@@ -162,7 +162,7 @@ int test_max_dataset_fields(int argc, char **argv, int flags) {
     sdsfree(xml);
     TEST_ASSERT(file != NULL);
 
-    dataset *ds = datasetInit(file, "doc", 1, 0, NULL, 0);
+    dataset *ds = datasetInit(file, "doc", 1, 0, NULL, 0, 0);
 
     TEST_ASSERT_MESSAGE("Dataset initialized", ds != NULL);
     TEST_ASSERT_MESSAGE("1000 fields accepted (at MAX_DATASET_FIELDS limit)", ds->field_count == 1000);
@@ -192,7 +192,7 @@ int test_excessive_dataset_fields(int argc, char **argv, int flags) {
     TEST_ASSERT(file != NULL);
 
     /* Initialize dataset - should fail when exceeding MAX_DATASET_FIELDS */
-    dataset *ds = datasetInit(file, "doc", 1, 0, NULL, 0);
+    dataset *ds = datasetInit(file, "doc", 1, 0, NULL, 0, 0);
 
     TEST_ASSERT_MESSAGE("Dataset initialization fails (1001 fields exceeds limit)", ds == NULL);
 

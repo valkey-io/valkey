@@ -189,6 +189,8 @@ typedef struct {
 
 static void ACLResetFirstArgsForCommand(aclSelector *selector, unsigned long id);
 static void ACLResetFirstArgs(aclSelector *selector);
+static void ACLChangeSelectorPerm(aclSelector *selector, struct serverCommand *cmd, int allow);
+static struct serverCommand *ACLLookupCommand(const char *name);
 static void ACLAddAllowedFirstArg(aclSelector *selector, unsigned long id, const char *sub);
 static void ACLFreeLogEntry(void *le);
 static int ACLSetSelector(aclSelector *selector, const char *op, size_t oplen);
@@ -370,6 +372,16 @@ static aclSelector *ACLCreateSelector(int flags) {
     listSetFreeMethod(selector->channels, sdsfreeVoid);
     listSetDupMethod(selector->channels, ACLListDupSds);
     memset(selector->allowed_commands, 0, sizeof(selector->allowed_commands));
+
+    /* Allow CMD_NO_AUTH commands (AUTH, HELLO, QUIT, RESET) by default.
+     * They can be explicitly denied with -auth, -hello, etc. */
+    if (server.orig_commands) {
+        const char *no_auth_cmds[] = {"AUTH", "HELLO", "QUIT", "RESET"};
+        for (int i = 0; i < 4; i++) {
+            struct serverCommand *cmd = ACLLookupCommand(no_auth_cmds[i]);
+            if (cmd) ACLChangeSelectorPerm(selector, cmd, 1);
+        }
+    }
 
     return selector;
 }
@@ -1179,6 +1191,13 @@ static int ACLSetSelector(aclSelector *selector, const char *op, size_t oplen) {
         selector->flags &= ~SELECTOR_FLAG_ALLCOMMANDS;
         sdsclear(selector->command_rules);
         ACLResetFirstArgs(selector);
+        /* Re-allow CMD_NO_AUTH commands by default. They can still be
+         * explicitly denied with -auth, -hello, etc. */
+        const char *no_auth_cmds[] = {"AUTH", "HELLO", "QUIT", "RESET"};
+        for (int i = 0; i < 4; i++) {
+            struct serverCommand *cmd = ACLLookupCommand(no_auth_cmds[i]);
+            if (cmd) ACLChangeSelectorPerm(selector, cmd, 1);
+        }
     } else if (op[0] == '~' || op[0] == '%') {
         if (selector->flags & SELECTOR_FLAG_ALLKEYS) {
             errno = EEXIST;
@@ -1897,7 +1916,7 @@ static int ACLSelectorCheckCmd(aclSelector *selector,
         return ACL_DENIED_DB;
     }
 
-    if (!(selector->flags & SELECTOR_FLAG_ALLCOMMANDS) && !(cmd->flags & CMD_NO_AUTH)) {
+    if (!(selector->flags & SELECTOR_FLAG_ALLCOMMANDS)) {
         /* If the bit is not set we have to check further, in case the
          * command is allowed just with that specific first argument. */
         if (ACLGetSelectorCommandBit(selector, id) == 0) {

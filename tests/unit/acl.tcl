@@ -889,6 +889,53 @@ start_server {tags {"acl external:skip"}} {
         assert {[r client getname] eq {client0}}
     }
 
+    test {ACL -auth denies AUTH command for authenticated user} {
+        r ACL setuser authdenied on >authpass +@all -auth ~* &*
+        r AUTH authdenied authpass
+        assert {[r ACL WHOAMI] eq {authdenied}}
+
+        # AUTH should be denied
+        catch {r AUTH default pwd} e
+        assert_match "*NOPERM*auth*" $e
+
+        # User is still authdenied
+        assert {[r ACL WHOAMI] eq {authdenied}}
+        r RESET
+        r ACL deluser authdenied
+    }
+
+    test {CMD_NO_AUTH commands are allowed by default without explicit +auth} {
+        r ACL setuser noauthuser on >napass +@all ~* &*
+        r AUTH noauthuser napass
+        assert {[r ACL WHOAMI] eq {noauthuser}}
+
+        # AUTH should work by default even without explicit +auth
+        r AUTH default pwd
+        assert {[r ACL WHOAMI] eq {default}}
+        r ACL deluser noauthuser
+    }
+
+    test {CMD_NO_AUTH commands survive -@all and are allowed by default} {
+        r ACL setuser minuser on >minpass -@all +acl +ping ~* &*
+        r AUTH minuser minpass
+        assert {[r PING] eq {PONG}}
+        # AUTH should still work since -@all preserves CMD_NO_AUTH commands
+        r AUTH default pwd
+        assert {[r ACL WHOAMI] eq {default}}
+        r ACL deluser minuser
+    }
+
+    test {Explicit -auth after -@all denies AUTH} {
+        r ACL setuser noauthmin on >namp -@all +acl +ping -auth ~* &*
+        r AUTH noauthmin namp
+        assert {[r PING] eq {PONG}}
+        # AUTH should be denied
+        catch {r AUTH default pwd} e
+        assert_match "*NOPERM*auth*" $e
+        r RESET
+        r ACL deluser noauthmin
+    }
+
     test {ACL HELP should not have unexpected options} {
         catch {r ACL help xxx} e
         assert_match "*wrong number of arguments for 'acl|help' command" $e

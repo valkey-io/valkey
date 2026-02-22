@@ -1061,6 +1061,13 @@ void debugCommand(client *c) {
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "client-enforce-reply-list") && c->argc == 3) {
         server.debug_client_enforce_reply_list = atoi(objectGetVal(c->argv[2]));
         addReply(c, shared.ok);
+    } else if (!strcasecmp(objectGetVal(c->argv[1]), "set-close-after-reply") && c->argc == 3) {
+        long long target_id;
+        if (getLongLongFromObjectOrReply(c, c->argv[2], &target_id, NULL) != C_OK) return;
+        client *target = lookupClientByID(target_id);
+        if (!target) { addReplyError(c, "No such client"); return; }
+        target->flag.close_after_reply = 1;
+        addReply(c, shared.ok);
     } else if (!handleDebugClusterCommand(c)) {
         addReplySubcommandSyntaxError(c);
         return;

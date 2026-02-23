@@ -1740,19 +1740,13 @@ void clientAcceptHandler(connection *conn) {
         }
     }
 
-    /* Auto-authenticate from cert_user field if set */
-    sds username = connGetPeerUsername(conn);
-    if (username != NULL) {
-        user *u = ACLGetUserByName(username, sdslen(username));
-        if (u && (u->flags & USER_FLAG_ENABLED)) {
-            clientSetUser(c, u, 1);
-            moduleNotifyUserChanged(c);
-            serverLog(LL_VERBOSE, "TLS: Auto-authenticated client as %s",
-                      server.hide_user_data_from_log ? "*redacted*" : u->name);
-        } else {
-            addACLLogEntry(c, ACL_INVALID_TLS_CERT_AUTH, ACL_LOG_CTX_TOPLEVEL, 0, username, NULL);
-        }
-        sdsfree(username);
+    /* Auto-authenticate from cert field if set */
+    user *u = connGetPeerUser(conn);
+    if (u) {
+        clientSetUser(c, u, 1);
+        moduleNotifyUserChanged(c);
+        serverLog(LL_VERBOSE, "TLS: Auto-authenticated client as %s",
+                  server.hide_user_data_from_log ? "*redacted*" : u->name);
     }
 
     server.stat_numconnections++;

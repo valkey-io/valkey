@@ -944,15 +944,15 @@ static int getCertSubjectFieldByName(X509 *cert, const char *field, char *out, s
     return X509_NAME_get_text_by_NID(subject, nid, out, outlen) > 0;
 }
 
-/* Extract URI from Subject Alternative Name extension and return the first URI
- * that matches an existing Valkey user. Returns NULL if no matching user found. */
-static sds getCertSanUri(X509 *cert) {
+/* Extract URI from Subject Alternative Name extension and return the first
+ * enabled Valkey user that matches a URI. Returns NULL if no match found. */
+static user *getCertSanUri(X509 *cert) {
     if (!cert) return NULL;
 
     GENERAL_NAMES *san_names = X509_get_ext_d2i(cert, NID_subject_alt_name, NULL, NULL);
     if (!san_names) return NULL;
 
-    sds result = NULL;
+    user *result = NULL;
     int num_names = sk_GENERAL_NAME_num(san_names);
 
     for (int i = 0; i < num_names; i++) {
@@ -970,7 +970,7 @@ static sds getCertSanUri(X509 *cert) {
 
             user *u = ACLGetUserByName((const char *)uri_data, uri_len);
             if (u && (u->flags & USER_FLAG_ENABLED)) {
-                result = sdsnewlen(uri_data, uri_len);
+                result = u;
                 break;
             }
         }
@@ -980,7 +980,7 @@ static sds getCertSanUri(X509 *cert) {
     return result;
 }
 
-sds tlsGetPeerUsername(connection *conn_) {
+user *tlsGetPeerUser(connection *conn_) {
     tls_connection *conn = (tls_connection *)conn_;
     if (!conn || !SSL_is_init_finished(conn->ssl)) return NULL;
 
@@ -994,7 +994,7 @@ sds tlsGetPeerUsername(connection *conn_) {
     X509 *cert = SSL_get0_peer_certificate(conn->ssl);
     if (!cert) return NULL;
 
-    sds result = NULL;
+    user *result = NULL;
 
     switch (server.tls_ctx_config.client_auth_user) {
     case TLS_CLIENT_FIELD_URI:
@@ -1007,7 +1007,11 @@ sds tlsGetPeerUsername(connection *conn_) {
     case TLS_CLIENT_FIELD_CN: {
         char field_value[256];
         if (getCertSubjectFieldByName(cert, "CN", field_value, sizeof(field_value))) {
-            result = sdsnew(field_value);
+            result = ACLGetUserByName(field_value, strlen(field_value));
+            if (!result || !(result->flags & USER_FLAG_ENABLED)) {
+                serverLog(LL_NOTICE, "TLS: No matching user found for certificate CN '%s'", field_value);
+                result = NULL;
+            }
         } else {
             serverLog(LL_NOTICE, "TLS: Failed to extract CN in certificate subject");
         }
@@ -1553,7 +1557,7 @@ static ConnectionType CT_TLS = {
 
     /* TLS specified methods */
     .get_peer_cert = connTLSGetPeerCert,
-    .get_peer_username = tlsGetPeerUsername,
+    .get_peer_user = tlsGetPeerUser,
 
     /* Miscellaneous */
     .connIntegrityChecked = connTLSIsIntegrityChecked,

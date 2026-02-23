@@ -1065,7 +1065,7 @@ typedef struct readyList {
 #define SELECTOR_FLAG_ALLDBS (1 << 4)      /* Allow all databases */
 
 
-typedef struct {
+typedef struct user {
     sds name;         /* The username as an SDS string. */
     uint32_t flags;   /* See USER_FLAG_* */
     list *passwords;  /* A list of SDS valid passwords for this user. */

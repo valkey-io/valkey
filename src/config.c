@@ -458,6 +458,7 @@ void loadServerConfigFromString(sds config) {
         {"lua-replicate-commands", 2, 2},
         {"io-threads-do-reads", 2, 2},
         {"dynamic-hz", 2, 2},
+        {"events-per-io-thread", 2, 2},
         {NULL, 0},
     };
     char buf[1024];

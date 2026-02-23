@@ -3,26 +3,25 @@
  * All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
- * IO Queues - Specialized queues for main thread <-> IO threads communication.
+ * Implements different types of queues
  *
- * 1. Main -> IO: Shared Queue (SPMC - Single Producer Multi Consumer)
- *    - Automatic load balancing: all IO threads pull from the same queue.
+ * 1. SPMC - Single Producer Multi Consumer
+ *    - Automatic load balancing:
  *      Busy threads take less work, idle threads take more.
  *    - Each ring buffer cell is cache-line padded to prevent consumer contention.
- *      Sequence numbers indicate empty/populated state for safe work claiming.
+ *    - Sequence numbers indicate empty/populated state for safe work claiming.
  *
- * 2. IO -> Main: Response Channel (MPSC - Multi Producer Single Consumer)
- *    - IO threads push completed jobs; main thread checks if queue is non-empty.
- *    - Threads reserve slots via atomic tail increment. If full, jobs are
- *      buffered locally until space is available.
+ * 2. Multi Producer Single Consumer
+ *    - Producer threads push jobs; consumer thread checks if queue is non-empty.
+ *    - Producer threads reserve slots via atomic tail increment.
+ *    - If full, jobs are buffered locally until space is available.
  *
- * 3. Main -> IO (Thread-Specific): Private Inbox (SPSC - Single Producer Single Consumer)
- *    - For tasks that must run on a specific thread.
- *    - IO threads check their private inbox before the shared queue.
+ * 3. SPSC - Single Producer Single Consumer
+ *    - Allows producer to batch jobs
  */
 
-#ifndef __IO_QUEUES_H__
-#define __IO_QUEUES_H__
+#ifndef __QUEUES_H__
+#define __QUEUES_H__
 
 #include <stdatomic.h>
 #include <stdint.h>
@@ -33,9 +32,6 @@
 
 /* ==========================================================================
  * MPSC QUEUE (Multi-Producer Single-Consumer)
- *
- * Producer: IO threads only.
- * Consumer: main thread only.
  * ========================================================================== */
 
 #define MPSC_QUEUE_SIZE 16384
@@ -84,14 +80,9 @@ static inline void mpscFree(mpscQueue *q) {
     q->tail_cache = 0;
 }
 
-/* Pushes an item into the queue.
- *
- * @param q      The queue instance.
- * @param data   Pointer to the data (cannot be NULL).
- * @param ticket State tracker for retries. Must be initialized to {0}.
- *               If the queue is full, this holds the reserved slot index.
- *               Subsequent calls must pass the same ticket to fill the reserved slot.
- * @return true if pushed, false if queue is full. */
+/* Pushes an item into the queue and returns true if the queue is not full. 
+ * Otherwise, a slot index is reserved and saved in the ticket, and returns false.
+ * Subsequent retries must pass the same ticket to fill the reserved slot, provided the queue is not full */
 static inline bool mpscEnqueue(mpscQueue *q, void *data, mpscTicket *ticket) {
     size_t tail;
     serverAssert(data);
@@ -163,9 +154,6 @@ static inline size_t mpscDequeueBatch(mpscQueue *q, void **jobs_out, size_t max_
 
 /* ==========================================================================
  * SPMC QUEUE (Single-Producer Multi-Consumer)
- *
- * Producer: main thread only.
- * Consumer: IO threads only.
  * ========================================================================== */
 
 #define SPMC_QUEUE_SIZE 4096
@@ -213,7 +201,6 @@ static inline void spmcFree(spmcQueue *q) {
 }
 
 static inline bool spmcIsEmpty(spmcQueue *q) {
-    debugServerAssert(inMainThread());
     /* Fast path: Check against cached consumer position */
     if (q->tail == q->head_cache) {
         return true;
@@ -232,7 +219,6 @@ static inline size_t spmcSize(spmcQueue *q) {
 }
 
 static inline bool spmcEnqueue(spmcQueue *q, void *data) {
-    debugServerAssert(inMainThread());
     spmcCell *cell = &q->buffer[q->tail & SPMC_QUEUE_MASK];
     size_t seq = atomic_load_explicit(&cell->sequence, memory_order_acquire);
 
@@ -253,7 +239,6 @@ static inline bool spmcEnqueue(spmcQueue *q, void *data) {
 }
 
 static inline void *spmcDequeue(spmcQueue *q) {
-    debugServerAssert(!inMainThread());
     size_t head = atomic_load_explicit(&q->head, memory_order_relaxed);
     spmcCell *cell;
     void *data;
@@ -287,9 +272,6 @@ static inline void *spmcDequeue(spmcQueue *q) {
 
 /* ==========================================================================
  * SPSC QUEUE (Single-Producer Single-Consumer)
- *
- * Producer: main thread only.
- * Consumer: IO thread only.
  * ========================================================================== */
 
 #define SPSC_QUEUE_SIZE 4096
@@ -333,7 +315,6 @@ static inline void spscFree(spscQueue *q) {
 }
 
 static inline bool spscIsFull(spscQueue *q) {
-    debugServerAssert(inMainThread());
     const size_t curr_tail = q->tail_local;
 
     if (curr_tail - q->head_cache >= SPSC_QUEUE_SIZE) {
@@ -351,10 +332,9 @@ static inline bool spscIsFull(spscQueue *q) {
 }
 
 /* Push data to the queue. Caller must ensure queue is not full via spscIsFull().
- * @param commit If true, the tail pointer is updated immediately (visible to consumer).
- *               If false, only local index is updated (batching). */
+ * If commit is true, the tail pointer is updated immediately (visible to consumer) else, 
+ * only local index is updated (batching). */
 static inline void spscEnqueue(spscQueue *q, void *data, bool commit) {
-    debugServerAssert(inMainThread());
     q->buffer[q->tail_local & SPSC_QUEUE_MASK] = data;
     q->tail_local++;
 
@@ -364,14 +344,12 @@ static inline void spscEnqueue(spscQueue *q, void *data, bool commit) {
 }
 
 static inline void spscCommit(spscQueue *q) {
-    debugServerAssert(inMainThread());
     size_t tail = atomic_load_explicit(&q->tail, memory_order_relaxed);
     if (q->tail_local == tail) return;
     atomic_store_explicit(&q->tail, q->tail_local, memory_order_release);
 }
 
 static inline size_t spscDequeueBatch(spscQueue *q, void **jobs_out, size_t num_jobs) {
-    debugServerAssert(!inMainThread());
     size_t curr_head = atomic_load_explicit(&q->head, memory_order_relaxed);
     size_t curr_tail_cache = q->tail_cache;
 
@@ -394,7 +372,6 @@ static inline size_t spscDequeueBatch(spscQueue *q, void **jobs_out, size_t num_
 
 /* Check if queue is empty from producer's perspective. */
 static inline bool spscIsEmpty(spscQueue *q) {
-    debugServerAssert(inMainThread());
     /* Fast path */
     if (q->tail_local == q->head_cache) {
         return true;
@@ -406,4 +383,4 @@ static inline bool spscIsEmpty(spscQueue *q) {
     return q->tail_local == curr_head;
 }
 
-#endif /* __IO_QUEUES_H__ */
+#endif /* __QUEUES_H__ */

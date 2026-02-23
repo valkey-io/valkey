@@ -3123,8 +3123,6 @@ void processClientIOWriteDone(client *c) {
     /* Don't post-process-writes to clients that are going to be closed anyway. */
     if (c->flag.close_asap) return;
 
-    /* Update processed count on server */
-    server.stat_io_writes_processed += 1;
 
     connSetPostponeUpdateState(c->conn, 0);
     connUpdateState(c->conn);
@@ -6447,8 +6445,7 @@ void evictClients(void) {
 
 /* IO threads functions */
 
-void ioThreadReadQueryFromClient(void *data) {
-    client *c = data;
+void ioThreadReadQueryFromClient(client *c) {
     serverAssert(c->io_read_state == CLIENT_PENDING_IO);
 
     /* Read */
@@ -6499,8 +6496,7 @@ done:
     sendToMainThread(c, JOB_RES_READ_CLIENT);
 }
 
-void ioThreadWriteToClient(void *data) {
-    client *c = data;
+void ioThreadWriteToClient(client *c) {
     serverAssert(c->io_write_state == CLIENT_PENDING_IO);
     c->nwritten = 0;
     if (c->write_flags & WRITE_FLAGS_IS_REPLICA) {

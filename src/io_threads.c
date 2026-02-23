@@ -5,7 +5,7 @@
  */
 
 #include "io_threads.h"
-#include "io_queues.h"
+#include "queues.h"
 #include <sys/resource.h>
 
 static _Thread_local int thread_id = 0;
@@ -15,9 +15,12 @@ static _Thread_local list *pending_io_responses = NULL;
 static pthread_t io_threads[IO_THREADS_MAX_NUM] = {0};
 static pthread_mutex_t io_threads_mutex[IO_THREADS_MAX_NUM];
 static int cur_epoll_thread = 0;
-static spmcQueue io_shared_inbox = {0};                      /* shared queue for all IO threads */
-static mpscQueue io_shared_outbox = {0};                     /* results back to main thread */
-static spscQueue io_private_inbox[IO_THREADS_MAX_NUM] = {0}; /* dedicated per-thread queues */
+// Main -> IO: Shared Queue (Single Producer Multi Consumer) where all IO threads pull jobs from
+static spmcQueue io_shared_inbox = {0};
+// IO -> Main: Response Channel (Multi Producer Single Consumer) used by IO threads to send results back to main-thread
+static mpscQueue io_shared_outbox = {0};
+// Main -> IO (Thread-Specific) for tasks that must run on specific IO thread where IO threads check their private inbox before the shared queue
+static spscQueue io_private_inbox[IO_THREADS_MAX_NUM] = {0};
 static size_t io_jobs_submitted;
 static atomic_size_t io_jobs_finished;
 static int io_threads_initialized = 0;
@@ -29,21 +32,21 @@ _Atomic long long used_active_time_io_thread[IO_THREADS_MAX_NUM] = {0};
 #define JOB_TAG_MASK 0x7
 #define JOB_PTR_MASK (~(uintptr_t)JOB_TAG_MASK)
 
-static inline void *pack_job(void *ptr, int type) {
+static inline void *tagJob(void *ptr, int type) {
     return (void *)((uintptr_t)ptr | type);
 }
 
-static inline void unpack_job(void *packed, void **ptr, int *type) {
-    *type = (int)((uintptr_t)packed & JOB_TAG_MASK);
-    *ptr = (void *)((uintptr_t)packed & JOB_PTR_MASK);
+static inline void untagJob(void *tagged_ptr, void **ptr, int *type) {
+    *type = (int)((uintptr_t)tagged_ptr & JOB_TAG_MASK);
+    *ptr = (void *)((uintptr_t)tagged_ptr & JOB_PTR_MASK);
 }
 
 /* Handler prototypes */
-void ioThreadReadQueryFromClient(void *data);
-void ioThreadWriteToClient(void *data);
-void IOThreadFreeArgv(void *data);
-void IOThreadPoll(void *data);
-static void ioThreadAccept(void *data);
+void ioThreadReadQueryFromClient(client *c);
+void ioThreadWriteToClient(client *c);
+void IOThreadFreeArgv(robj **argv);
+void IOThreadPoll(aeEventLoop *el);
+static void ioThreadAccept(client *c);
 
 int inMainThread(void) {
     return thread_id == 0;
@@ -108,6 +111,7 @@ void IOThreadsBeforeSleep(long long current_time) {
     UNUSED(current_time);
 #endif
     if (server.io_threads_num == 1) return;
+    serverAssert(inMainThread());
 
     commitIOJobs();
 
@@ -148,7 +152,7 @@ void IOThreadsBeforeSleep(long long current_time) {
 
 void IOThreadsAfterSleep(int numevents) {
     if (server.io_threads_num == 1) return;
-
+    serverAssert(inMainThread());
     /* Always Active Policy */
     if (server.io_threads_always_active) {
         if (numevents > 0 && server.active_io_threads_num < server.io_threads_num) {
@@ -160,7 +164,7 @@ void IOThreadsAfterSleep(int numevents) {
         return;
     }
 
-    long long now = server.mstime;
+    mstime_t now = server.mstime;
     static long long last_scale_time = 0;
 
     /* Ignition Policy */
@@ -184,7 +188,7 @@ void IOThreadsAfterSleep(int numevents) {
         return;
     }
 
-    static size_t last_sample_time = 0;
+    static mstime_t last_sample_time = 0;
     static size_t spmc_size_sum = 0;
     static size_t sample_count = 0;
 
@@ -238,8 +242,7 @@ void IOThreadsAfterSleep(int numevents) {
 
 /* This function performs polling on the given event loop and updates the server's
  * IO fired events count and poll state. */
-void IOThreadPoll(void *data) {
-    aeEventLoop *el = (aeEventLoop *)data;
+void IOThreadPoll(aeEventLoop *el) {
     struct timeval tvp = {0, 0};
     int num_events = aePoll(el, &tvp);
     server.io_ae_fired_events = num_events;
@@ -313,19 +316,20 @@ static void *IOThreadMain(void *myid) {
                                         work_start_time - prev_work_start_time,
                                         memory_order_relaxed);
         }
+        processed = 0;
         /* PRIORITY 1: Drain Private SPSC Queue (Batch Processing) */
         while ((batch_count = spscDequeueBatch(&io_private_inbox[id], batch_jobs, BATCH_SIZE)) > 0) {
             for (size_t i = 0; i < batch_count; i++) {
                 void *data;
                 int type;
-                unpack_job(batch_jobs[i], &data, &type);
+                untagJob(batch_jobs[i], &data, &type);
 
                 switch (type) {
                 case JOB_REQ_FREE_ARGV:
-                    IOThreadFreeArgv(data);
+                    IOThreadFreeArgv((robj **)data);
                     break;
                 case JOB_REQ_POLL:
-                    IOThreadPoll(data);
+                    IOThreadPoll((aeEventLoop *)data);
                     break;
                 default:
                     serverPanic("Invalid SPSC job type: %d", type);
@@ -338,27 +342,27 @@ static void *IOThreadMain(void *myid) {
          * PRIORITY 2: Shared Global Queue (SPMC)
          * Only checked after SPSC is drained.
          */
-        void *packed_job = spmcDequeue(&io_shared_inbox);
-        if (packed_job) {
+        void *tagged_job = spmcDequeue(&io_shared_inbox);
+        if (tagged_job) {
             void *data;
             int type;
-            unpack_job(packed_job, &data, &type);
+            untagJob(tagged_job, &data, &type);
 
             switch (type) {
             case JOB_REQ_READ_CLIENT:
-                ioThreadReadQueryFromClient(data);
+                ioThreadReadQueryFromClient((client *)data);
                 break;
             case JOB_REQ_WRITE_CLIENT:
-                ioThreadWriteToClient(data);
+                ioThreadWriteToClient((client *)data);
                 break;
             case JOB_REQ_FREE_OBJ:
                 sdsfreeVoid(data);
                 break;
             case JOB_REQ_ACCEPT:
-                ioThreadAccept(data);
+                ioThreadAccept((client *)data);
                 break;
             case JOB_REQ_POLL:
-                IOThreadPoll(data);
+                IOThreadPoll((aeEventLoop *)data);
                 break;
             default:
                 serverPanic("Invalid SPMC job type: %d", type);
@@ -527,7 +531,7 @@ int trySendReadToIOThreads(client *c) {
     c->io_read_state = CLIENT_PENDING_IO;
     connSetPostponeUpdateState(c->conn, 1);
 
-    if (unlikely(spmcEnqueue(&io_shared_inbox, pack_job(c, JOB_REQ_READ_CLIENT)) == false)) {
+    if (unlikely(spmcEnqueue(&io_shared_inbox, tagJob(c, JOB_REQ_READ_CLIENT)) == false)) {
         c->read_flags = 0;
         c->io_read_state = CLIENT_IDLE;
         connSetPostponeUpdateState(c->conn, 0);
@@ -584,7 +588,7 @@ int trySendWriteToIOThreads(client *c) {
     connSetPostponeUpdateState(c->conn, 1);
     c->write_flags = is_replica ? WRITE_FLAGS_IS_REPLICA : 0;
     c->io_write_state = CLIENT_PENDING_IO;
-    void *job = pack_job(c, JOB_REQ_WRITE_CLIENT);
+    void *job = tagJob(c, JOB_REQ_WRITE_CLIENT);
     if (unlikely(spmcEnqueue(&io_shared_inbox, job) == false)) {
         c->io_write_state = CLIENT_IDLE;
         connSetPostponeUpdateState(c->conn, 0);
@@ -605,8 +609,7 @@ int trySendWriteToIOThreads(client *c) {
 }
 
 /* Internal function to free the client's argv in an IO thread. */
-void IOThreadFreeArgv(void *data) {
-    robj **argv = (robj **)data;
+void IOThreadFreeArgv(robj **argv) {
     int last_arg = 0;
     for (int i = 0;; i++) {
         robj *o = argv[i];
@@ -670,7 +673,7 @@ int tryOffloadFreeArgvToIOThreads(client *c, int argc, robj **argv) {
      * this is the last argument to free. With this approach, we don't need to
      * send the argc to the IO thread and we can send just the argv ptr. */
     argv[last_arg_to_free]->refcount = 0;
-    void *job = pack_job(argv, JOB_REQ_FREE_ARGV);
+    void *job = tagJob(argv, JOB_REQ_FREE_ARGV);
     /* We pass false to enqueue the job without committing the queue index immediately.
      * This allows us to batch multiple free jobs together and
      * commit them in a single operation later in the event loop. This reduces the overhead
@@ -694,7 +697,7 @@ int tryOffloadFreeObjToIOThreads(robj *obj) {
 
     if (obj->encoding != OBJ_ENCODING_RAW || obj->type != OBJ_STRING) return C_ERR;
 
-    void *job = pack_job(objectGetVal(obj), JOB_REQ_FREE_OBJ);
+    void *job = tagJob(objectGetVal(obj), JOB_REQ_FREE_OBJ);
     if (unlikely(spmcEnqueue(&io_shared_inbox, job) == false)) return C_ERR;
     objectSetVal(obj, NULL);
     decrRefCount(obj);
@@ -739,7 +742,7 @@ void trySendPollJobToIOThreads(void) {
         return;
     }
 
-    void *job = pack_job(server.el, JOB_REQ_POLL);
+    void *job = tagJob(server.el, JOB_REQ_POLL);
 
     server.io_poll_state = AE_IO_STATE_POLL;
     aeSetPollProtect(server.el, 1);
@@ -769,7 +772,7 @@ void sendToMainThread(void *data, int type) {
     if (unlikely(pending_io_responses)) {
         flushPendingIOResponses(0);
     }
-    void *job = pack_job(data, type);
+    void *job = tagJob(data, type);
     if (unlikely(pending_io_responses || !mpscEnqueue(&io_shared_outbox, job, &io_thread_ticket))) {
         /* Failed to push new job: initialize list if needed and save job */
         if (pending_io_responses == NULL) {
@@ -779,8 +782,7 @@ void sendToMainThread(void *data, int type) {
     }
 }
 
-static void ioThreadAccept(void *data) {
-    client *c = (client *)data;
+static void ioThreadAccept(client *c) {
     connAccept(c->conn, NULL);
     atomic_thread_fence(memory_order_release);
     c->io_read_state = CLIENT_COMPLETED_IO;
@@ -820,7 +822,7 @@ int trySendAcceptToIOThreads(connection *conn) {
     c->flag.pending_read = 1;
     connSetPostponeUpdateState(c->conn, 1);
 
-    void *job = pack_job(c, JOB_REQ_ACCEPT);
+    void *job = tagJob(c, JOB_REQ_ACCEPT);
     if (unlikely(spmcEnqueue(&io_shared_inbox, job) == false)) {
         c->io_read_state = CLIENT_IDLE;
         c->flag.pending_read = 0;
@@ -895,9 +897,10 @@ int processIOThreadsResponses(void) {
             total_processed += dequeued_count;
 
             for (int i = 0; i < dequeued_count; i++) {
-                client *c;
+                void *data;
                 int job_type;
-                unpack_job(jobs[i], (void *)&c, &job_type);
+                untagJob(jobs[i], &data, &job_type);
+                client *c = (client *)data;
                 if (job_type == JOB_RES_READ_CLIENT) {
                     serverAssert(c->io_read_state == CLIENT_COMPLETED_IO);
                     read_jobs[read_count++] = c;

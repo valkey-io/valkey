@@ -10,6 +10,27 @@ SECURITY: There are security fixes in the release.
 --------------------------------------------------------------------------------
 
 ================================================================================
+Valkey 8.0.7  -  Released Mon 23 February 2026
+================================================================================
+
+Upgrade urgency SECURITY: This release includes security fixes we recommend you
+apply as soon as possible.
+
+Security fixes
+==============
+* (CVE-2026-21863) Remote DoS with malformed Valkey Cluster bus message
+* (CVE-2025-67733) RESP Protocol Injection via Lua error_reply
+
+Bug fixes
+=========
+* Fix ltrim should not call signalModifiedKey when no elements are removed (#2787)
+* Fix chained replica crash when doing dual channel replication (#2983)
+* Fix used_memory_dataset underflow due to miscalculated used_memory_overhead (#3005)
+* Avoids crash during MODULE UNLOAD when ACL rules reference a module command and subcommand (#3160)
+* Fix server assert on ACL LOAD and resetchannels (#3182)
+* Fix bug causing no response flush sometimes when IO threads are busy (#3205)
+
+================================================================================
 Valkey 8.0.6  -  Released Fri 03 October 2025
 ================================================================================
 

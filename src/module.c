@@ -10347,7 +10347,7 @@ ValkeyModuleServerInfoData *VM_GetServerInfo(ValkeyModuleCtx *ctx, const char *s
  * context instead of passing NULL. */
 void VM_FreeServerInfo(ValkeyModuleCtx *ctx, ValkeyModuleServerInfoData *data) {
     if (ctx != NULL) autoMemoryFreed(ctx,VALKEYMODULE_AM_INFO,data);
-    raxFreeWithCallback(data->rax, (void(*)(void*))sdsfree);
+    raxFreeWithCallback(data->rax, sdsfreeVoid);
     zfree(data);
 }
 

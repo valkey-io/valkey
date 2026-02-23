@@ -55,6 +55,7 @@
 
 void streamFreeCG(streamCG *cg);
 void streamFreeNACK(streamNACK *na);
+static void streamFreeCGVoid(void *cg);
 size_t streamReplyWithRangeFromConsumerPEL(client *c, stream *s, streamID *start, streamID *end, size_t count, streamConsumer *consumer);
 int streamParseStrictIDOrReply(client *c, robj *o, streamID *id, uint64_t missing_seq, int *seq_given);
 int streamParseIDOrReply(client *c, robj *o, streamID *id, uint64_t missing_seq);
@@ -81,9 +82,9 @@ stream *streamNew(void) {
 
 /* Free a stream, including the listpacks stored inside the radix tree. */
 void freeStream(stream *s) {
-    raxFreeWithCallback(s->rax,(void(*)(void*))lpFree);
+    raxFreeWithCallback(s->rax,lpFreeVoid);
     if (s->cgroups)
-        raxFreeWithCallback(s->cgroups,(void(*)(void*))streamFreeCG);
+        raxFreeWithCallback(s->cgroups,streamFreeCGVoid);
     zfree(s);
 }
 
@@ -2464,6 +2465,10 @@ void streamFreeNACK(streamNACK *na) {
     zfree(na);
 }
 
+static void streamFreeNACKVoid(void *na) {
+    streamFreeNACK(na);
+}
+
 /* Free a consumer and associated data structures. Note that this function
  * will not reassign the pending messages associated with this consumer
  * nor will delete them from the stream, so when this function is called
@@ -2474,6 +2479,10 @@ void streamFreeConsumer(streamConsumer *sc) {
                          between the consumer and the main stream PEL. */
     sdsfree(sc->name);
     zfree(sc);
+}
+
+static void streamFreeConsumerVoid(void *sc) {
+    streamFreeConsumer(sc);
 }
 
 /* Create a new consumer group in the context of the stream 's', having the
@@ -2496,9 +2505,13 @@ streamCG *streamCreateCG(stream *s, char *name, size_t namelen, streamID *id, lo
 
 /* Free a consumer group and all its associated data. */
 void streamFreeCG(streamCG *cg) {
-    raxFreeWithCallback(cg->pel,(void(*)(void*))streamFreeNACK);
-    raxFreeWithCallback(cg->consumers,(void(*)(void*))streamFreeConsumer);
+    raxFreeWithCallback(cg->pel,streamFreeNACKVoid);
+    raxFreeWithCallback(cg->consumers,streamFreeConsumerVoid);
     zfree(cg);
+}
+
+static void streamFreeCGVoid(void *cg) {
+    streamFreeCG(cg);
 }
 
 /* Lookup the consumer group in the specified stream and returns its

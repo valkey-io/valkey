@@ -253,6 +253,11 @@ void lpFree(unsigned char *lp) {
     lp_free(lp);
 }
 
+/* Same as lpFree, but with a void* argument for use as a callback. */
+void lpFreeVoid(void *lp) {
+    lp_free((unsigned char *)lp);
+}
+
 /* Shrink the memory to fit. */
 unsigned char* lpShrinkToFit(unsigned char *lp) {
     size_t size = lpGetTotalBytes(lp);

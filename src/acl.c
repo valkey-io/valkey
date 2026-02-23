@@ -489,10 +489,14 @@ void ACLCopyUser(user *dst, user *src) {
     }
 }
 
+static void ACLFreeUserAndKillClientsVoid(void *u) {
+    ACLFreeUserAndKillClients(u);
+}
+
 /* Free all the users registered in the radix tree 'users' and free the
  * radix tree itself. */
 void ACLFreeUsersSet(rax *users) {
-    raxFreeWithCallback(users,(void(*)(void*))ACLFreeUserAndKillClients);
+    raxFreeWithCallback(users,ACLFreeUserAndKillClientsVoid);
 }
 
 /* Given a command ID, this function set by reference 'word' and 'bit'

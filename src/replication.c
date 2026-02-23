@@ -3032,6 +3032,14 @@ static int dualChannelReplHandleHandshake(connection *conn, sds *err) {
         return C_ERR;
     }
 
+    if (server.replica_announce_ip) {
+        *err = sendCommand(conn, "REPLCONF", "ip-address", server.replica_announce_ip, NULL);
+        if (*err) {
+            dualChannelServerLog(LL_WARNING, "Sending command to primary in dual channel replication handshake: %s", *err);
+            return C_ERR;
+        }
+    }
+
     if (connSetReadHandler(conn, dualChannelFullSyncWithPrimary) == C_ERR) {
         char conninfo[CONN_INFO_LEN];
         dualChannelServerLog(LL_WARNING, "Can't create readable event for SYNC: %s (%s)", strerror(errno),
@@ -3067,6 +3075,22 @@ static int dualChannelReplHandleReplconfReply(connection *conn, sds *err) {
                              *err);
         return C_ERR;
     }
+
+    /* If replica-announce-ip is configured, we sent an additional REPLCONF ip-address command
+     * and need to read its response as well. */
+    if (server.replica_announce_ip) {
+        sdsfree(*err);
+        *err = receiveSynchronousResponse(conn);
+        if (*err == NULL) {
+            dualChannelServerLog(LL_WARNING, "Primary did not respond to REPLCONF ip-address command during SYNC handshake");
+            return C_ERR;
+        }
+        if ((*err)[0] == '-') {
+            dualChannelServerLog(LL_WARNING, "Primary rejected REPLCONF ip-address: %s", *err);
+            return C_ERR;
+        }
+    }
+
     if (connSyncWrite(conn, "SYNC\r\n", 6, server.repl_syncio_timeout * 1000) == -1) {
         dualChannelServerLog(LL_WARNING, "I/O error writing to Primary: %s", connGetLastError(conn));
         return C_ERR;

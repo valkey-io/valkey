@@ -1473,3 +1473,50 @@ test "Test dual-channel-replication replica can lazyfree the local buffer" {
         }
     }
 }
+
+start_server {tags {"dual-channel-replication external:skip"}} {
+    set replica [srv 0 client]
+    set replica_host [srv 0 host]
+    set replica_port [srv 0 port]
+    start_server {} {
+        set primary [srv 0 client]
+        set primary_host [srv 0 host]
+        set primary_port [srv 0 port]
+
+        # Configure primary with delayed sync to observe handshake state
+        $primary config set repl-diskless-sync yes
+        $primary config set repl-diskless-sync-delay 1000
+        $primary config set dual-channel-replication-enabled yes
+
+        # Configure replica with announced IP
+        $replica config set dual-channel-replication-enabled yes
+        $replica config set replica-announce-ip "5.5.5.5"
+
+        test "dual-channel-replication rdb-channel reports replica-announce-ip" {
+            $replica replicaof $primary_host $primary_port
+
+            # Wait for replica to enter wait_bgsave state (rdb-channel established)
+            wait_for_condition 50 1000 {
+                [string match *state=wait_bgsave* [$primary info replication]]
+            } else {
+                fail "Replica does not enter wait_bgsave state"
+            }
+
+            # Verify the rdb-channel shows the announced IP, not connection IP
+            set info [$primary info replication]
+            assert_match "*ip=5.5.5.5,*type=rdb-channel*" $info
+        }
+
+        # Allow sync to complete
+        $primary config set repl-diskless-sync-delay 0
+
+        test "dual-channel-replication sync completes with replica-announce-ip" {
+            verify_replica_online $primary 0 500
+            wait_for_condition 50 1000 {
+                [string match *connected_slaves:1* [$primary info]]
+            } else {
+                fail "Replica failed to sync"
+            }
+        }
+    }
+}

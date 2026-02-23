@@ -13,6 +13,8 @@ syncpid1=$!;
 timeout 5s ./simulated-valkey.pl -p 7401 -d --sigcont $syncpid1 <<'EOF' &
 # The initial slotmap is not covering all slots.
 EXPECT CONNECT
+EXPECT ["SELECT", "5"]
+SEND +OK
 EXPECT ["CLUSTER", "SLOTS"]
 SEND [[0, 1, ["127.0.0.1", 7401, "nodeid7401"]]]
 
@@ -36,7 +38,7 @@ server1=$!
 wait $syncpid1;
 
 # Run client
-timeout 3s "$clientprog" --events 127.0.0.1:7401 > "$testname.out" <<'EOF'
+timeout 3s "$clientprog" --events --connection-events  --select-db 5 127.0.0.1:7401 > "$testname.out" <<'EOF'
 GET foo1
 GET foo2
 EOF
@@ -56,7 +58,8 @@ if [ $clientexit -ne 0 ]; then
 fi
 
 # Check the output from clusterclient
-expected="Event: slotmap-updated
+expected="Event: connect to 127.0.0.1:7401
+Event: slotmap-updated
 Event: ready
 Event: slotmap-updated
 error: slot not served by any node

@@ -11,6 +11,24 @@ Upgrade urgency levels:
 | CRITICAL | There is a critical bug affecting MOST USERS. Upgrade ASAP.         |
 | SECURITY | There are security fixes in the release.                            |
 
+Valkey 9.0.3 - February 23, 2026
+------------------
+
+Upgrade urgency SECURITY: This release includes security fixes we recommend you
+apply as soon as possible.
+
+### Security fixes
+
+* (CVE-2025-67733) RESP Protocol Injection via Lua error_reply
+* (CVE-2026-21863) Remote DoS with malformed Valkey Cluster bus message
+* (CVE-2026-27623) Reset request type after handling empty requests
+
+### Bug fixes
+
+* Avoids crash during MODULE UNLOAD when ACL rules reference a module command and subcommand (#3160)
+* Fix server assert on ACL LOAD when current user loses permission to channels (#3182)
+* Fix bug causing no response flush sometimes when IO threads are busy (#3205)
+
 Valkey 9.0.2 - February 3, 2026
 -------------------------------
 

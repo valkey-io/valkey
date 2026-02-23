@@ -1786,7 +1786,7 @@ void luaCallFunction(scriptRunCtx* run_ctx, lua_State *lua, robj** keys, size_t 
                                       err_info.source,
                                       err_info.line);
             }
-            addReplyErrorSdsEx(c, final_msg, err_info.ignore_err_stats_update? ERR_REPLY_FLAG_NO_STATS_UPDATE : 0);
+            addReplyErrorSdsExSafe(c, final_msg, err_info.ignore_err_stats_update? ERR_REPLY_FLAG_NO_STATS_UPDATE : 0);
             luaErrorInformationDiscard(&err_info);
         }
         lua_pop(lua,1); /* Consume the Lua error */

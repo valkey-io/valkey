@@ -2523,6 +2523,24 @@ start_server {tags {"scripting"}} {
         assert_equal [errorrstat MY_ERR_CODE r] {} ;# error stats were not incremented
     }
 
+    test "LUA redis.error_reply API sanitation" {
+        r config resetstat
+        assert_error {ERR*} {
+            r eval {error(redis.error_reply("-ERR\r\n-ERR FAKE"))} 0
+        }
+        assert_equal PONG [r ping]
+        assert_equal [errorrstat ERR r] {count=1}
+    }
+
+    test "LUA error function API sanitation" {
+        r config resetstat
+        assert_error {ERR*} {
+            r eval {error("-ERR\r\n-ERR FAKE")} 0
+        }
+        assert_equal PONG [r ping]
+        assert_equal [errorrstat ERR r] {count=1}
+    }
+
     test "LUA test pcall" {
         assert_equal [
             r eval {local status, res = pcall(function() return 1 end); return 'status: ' .. tostring(status) .. ' result: ' .. res} 0

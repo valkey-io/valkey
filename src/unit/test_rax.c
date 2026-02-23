@@ -867,7 +867,7 @@ int test_raxBenchmark(int argc, char **argv, int flags) {
         for (int i = 0; i < 5000000; i++) {
             char buf[64];
             int len = int2key(buf, sizeof(buf), i, mode);
-            void *data;
+            void *data = NULL;
             if (!raxFind(t, (unsigned char *)buf, len, &data) || data != (void *)(long)i) {
                 printf("Issue with %s: %p instead of %p\n", buf, data, (void *)(long)i);
             }
@@ -879,7 +879,7 @@ int test_raxBenchmark(int argc, char **argv, int flags) {
             char buf[64];
             int r = genrand64_int64() % 5000000;
             int len = int2key(buf, sizeof(buf), r, mode);
-            void *data;
+            void *data = NULL;
             if (!raxFind(t, (unsigned char *)buf, len, &data) || data != (void *)(long)r) {
                 printf("Issue with %s: %p instead of %p\n", buf, data, (void *)(long)r);
             }

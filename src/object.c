@@ -33,6 +33,7 @@
 #include "serverassert.h"
 #include "functions.h"
 #include "intset.h" /* Compact integer set structure */
+#include "util.h"
 #include "vset.h"
 #include "zmalloc.h"
 #include "sds.h"
@@ -294,9 +295,9 @@ sds objectGetKey(const robj *o) {
     return NULL;
 }
 
-/* Return the expire time of the specified robj, or EXPIRY_NONE if no expire
+/* Return the expire time in ms of the specified robj, or EXPIRY_NONE if no expire
  * is associated with this robj (i.e. the robj is non volatile) */
-long long objectGetExpire(const robj *o) {
+mstime_t objectGetExpire(const robj *o) {
     if (o->hasexpire) {
         const unsigned char *data = objectEmbeddedData((robj *)o);
         return *(long long *)data;

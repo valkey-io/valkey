@@ -776,25 +776,20 @@ static bool expand(hashtable *ht, size_t size, int *malloc_failed) {
 }
 
 /* This function swaps ht[0] and ht[1] in the hashtable. */
+#define SWAP(a, b, type) do { \
+    type temp = (a); \
+    (a) = (b); \
+    (b) = temp; \
+} while(0)
+
 static void swapTables(hashtable *ht) {
     assert(hashtableIsRehashing(ht));
-
-    bucket *table_0 = ht->tables[0];
-    size_t used_0 = ht->used[0];
-    int8_t bucket_exp_0 = ht->bucket_exp[0];
-    size_t child_buckets_0 = ht->child_buckets[0];
-
-    ht->tables[0] = ht->tables[1];
-    ht->used[0] = ht->used[1];
-    ht->bucket_exp[0] = ht->bucket_exp[1];
-    ht->child_buckets[0] = ht->child_buckets[1];
-
-    ht->tables[1] = table_0;
-    ht->used[1] = used_0;
-    ht->bucket_exp[1] = bucket_exp_0;
-    ht->child_buckets[1] = child_buckets_0;
+    
+    SWAP(ht->tables[0], ht->tables[1], bucket *);
+    SWAP(ht->used[0], ht->used[1], size_t);
+    SWAP(ht->bucket_exp[0], ht->bucket_exp[1], int8_t);
+    SWAP(ht->child_buckets[0], ht->child_buckets[1], size_t);
 }
-
 /* Checks if a candidate entry in a bucket matches the given key.
  *
  * This function examines a specific position in a bucket to determine if the

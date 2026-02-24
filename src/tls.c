@@ -945,8 +945,9 @@ static int getCertSubjectFieldByName(X509 *cert, const char *field, char *out, s
 }
 
 /* Extract URI from Subject Alternative Name extension and return the first
- * enabled Valkey user that matches a URI. Returns NULL if no match found. */
-static user *getCertSanUri(X509 *cert) {
+ * enabled Valkey user that matches a URI. Returns NULL if no match found.
+ * If cert_username is non-NULL, it is set to the last URI checked. */
+static user *getValidUserFromCertSanUri(X509 *cert, sds *cert_username) {
     if (!cert) return NULL;
 
     GENERAL_NAMES *san_names = X509_get_ext_d2i(cert, NID_subject_alt_name, NULL, NULL);
@@ -968,6 +969,11 @@ static user *getCertSanUri(X509 *cert) {
                 continue;
             }
 
+            if (cert_username) {
+                sdsfree(*cert_username);
+                *cert_username = sdsnewlen(uri_data, uri_len);
+            }
+
             user *u = ACLGetUserByName((const char *)uri_data, uri_len);
             if (u && (u->flags & USER_FLAG_ENABLED)) {
                 result = u;
@@ -980,7 +986,7 @@ static user *getCertSanUri(X509 *cert) {
     return result;
 }
 
-user *tlsGetPeerUser(connection *conn_) {
+user *tlsGetPeerUser(connection *conn_, sds *cert_username) {
     tls_connection *conn = (tls_connection *)conn_;
     if (!conn || !SSL_is_init_finished(conn->ssl)) return NULL;
 
@@ -998,7 +1004,7 @@ user *tlsGetPeerUser(connection *conn_) {
 
     switch (server.tls_ctx_config.client_auth_user) {
     case TLS_CLIENT_FIELD_URI:
-        result = getCertSanUri(cert);
+        result = getValidUserFromCertSanUri(cert, cert_username);
         if (!result) {
             serverLog(LL_NOTICE, "TLS: No matching user found in certificate SAN URI fields");
         }
@@ -1007,6 +1013,7 @@ user *tlsGetPeerUser(connection *conn_) {
     case TLS_CLIENT_FIELD_CN: {
         char field_value[256];
         if (getCertSubjectFieldByName(cert, "CN", field_value, sizeof(field_value))) {
+            if (cert_username) *cert_username = sdsnew(field_value);
             result = ACLGetUserByName(field_value, strlen(field_value));
             if (!result || !(result->flags & USER_FLAG_ENABLED)) {
                 serverLog(LL_NOTICE, "TLS: No matching user found for certificate CN '%s'", field_value);

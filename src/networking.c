@@ -1740,14 +1740,18 @@ void clientAcceptHandler(connection *conn) {
         }
     }
 
-    /* Auto-authenticate from cert field if set */
-    user *u = connGetPeerUser(conn);
+    /* Auto-authenticate from cert user field if set */
+    sds cert_username = NULL;
+    user *u = connGetPeerUser(conn, &cert_username);
     if (u) {
         clientSetUser(c, u, 1);
         moduleNotifyUserChanged(c);
         serverLog(LL_VERBOSE, "TLS: Auto-authenticated client as %s",
                   server.hide_user_data_from_log ? "*redacted*" : u->name);
+    } else if (cert_username) {
+        addACLLogEntry(c, ACL_INVALID_TLS_CERT_AUTH, ACL_LOG_CTX_TOPLEVEL, 0, cert_username, NULL);
     }
+    sdsfree(cert_username);
 
     server.stat_numconnections++;
     moduleFireServerEvent(VALKEYMODULE_EVENT_CLIENT_CHANGE, VALKEYMODULE_SUBEVENT_CLIENT_CHANGE_CONNECTED, c);

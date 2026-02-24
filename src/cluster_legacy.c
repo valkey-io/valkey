@@ -1677,7 +1677,6 @@ void clusterReset(int hard) {
         clusterRemoveNodeFromShard(myself);
         getRandomHexChars(myself->shard_id, CLUSTER_NAMELEN);
         clusterAddNodeToShard(myself->shard_id, myself);
-
         serverLog(LL_NOTICE, "Moving myself to a new shard %.40s.", myself->shard_id);
     }
 

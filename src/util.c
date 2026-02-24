@@ -53,6 +53,7 @@
 #include "zmalloc.h"
 #include "serverassert.h"
 #include "valkey_strtod.h"
+#include "monotonic.h"
 
 #if HAVE_X86_SIMD
 #include <immintrin.h>
@@ -282,7 +283,7 @@ unsigned long long memtoull(const char *p, int *err) {
     char *endptr;
     errno = 0;
     val = strtoull(buf, &endptr, 10);
-    if ((val == 0 && errno == EINVAL) || *endptr != '\0') {
+    if ((errno == ERANGE) || (val == 0 && errno == EINVAL) || *endptr != '\0') {
         if (err) *err = 1;
         return 0;
     }
@@ -1599,9 +1600,21 @@ int snprintf_async_signal_safe(char *to, size_t n, const char *fmt, ...) {
 
 /* Return the UNIX time in microseconds */
 long long ustime(void) {
-    struct timeval tv;
-    long long ust;
+    static long long ust = 0;
+    static monotime mono_at_last_timeofday = 0;
 
+    /* Fast path. Only call gettimeofday() periodically and add monotonic delta.
+     * This avoids a syscall if we have a no-syscall monotonic clock. */
+    if (getMonotonicUs != NULL && monotonicGetType() == MONOTONIC_CLOCK_HW) {
+        monotime mono_now = getMonotonicUs();
+        monotime mono_since_gettimeofday = mono_now - mono_at_last_timeofday;
+        if (mono_since_gettimeofday < 1000) return ust + mono_since_gettimeofday;
+
+        /* Use time of day. */
+        mono_at_last_timeofday = mono_now;
+    }
+
+    struct timeval tv;
     gettimeofday(&tv, NULL);
     ust = ((long long)tv.tv_sec) * 1000000;
     ust += tv.tv_usec;

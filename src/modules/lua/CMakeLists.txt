@@ -11,12 +11,13 @@ set(LUA_ENGINE_SRCS
     script_lua.c
     function_lua.c
     debug_lua.c
-    list.c)
+    list.c
+    ../../sha1.c
+    ../../rand.c)
 
 add_library(valkeylua SHARED "${LUA_ENGINE_SRCS}")
 
-add_dependencies(valkeylua lualib)
-target_link_libraries(valkeylua PRIVATE lualib)
+target_link_libraries(valkeylua PRIVATE lualib fpconv)
 target_include_directories(valkeylua PRIVATE ../../../deps/lua/src)
 
 install(TARGETS valkeylua

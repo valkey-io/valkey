@@ -2734,3 +2734,47 @@ start_server {tags {"zset"}} {
         }
     }
 }
+
+start_server [list overrides [list save ""] tags {"zset needs:debug external:skip"}] {
+    test {ZSET resize test - rehash more empty buckets in shrinking case} {
+        if {[s arch_bits] != 64} {
+            skip "This is only for 64-bit platforms"
+        }
+        # We added elements to ensure we would have enough buckets.
+        # There should be 4096 buckets here.
+        r del myzset
+        set elements {}
+        for {set i 0} {$i < 20000} {incr i} {
+            lappend elements $i $i
+        }
+        r zadd myzset {*}$elements
+        assert_equal 20000 [r zcard myzset]
+        assert_equal 1 [string match {*top-level buckets: 4096*} [r debug htstats-key myzset full]]
+
+        # We deleted all elements except for one so there are a lot of empty buckets.
+        r zremrangebyrank myzset 1 -1
+        assert_equal 1 [r zcard myzset]
+        assert_encoding skiplist myzset
+
+        # Since we deleted the elements and only left one element, there is a resize operation.
+        # So ht0 will contain a large number of empty buckets, while ht1 will be a minimal hashtable.
+        set htstats [r debug htstats-key myzset full]
+        assert_equal 1 [string match {*number of entries: 1*} $htstats] ;# ht0 has 1 entry
+        assert_equal 1 [string match {*rehashing index: 0*} $htstats]   ;# ht0 rehash just started
+        assert_equal 1 [string match {*rehashing target*} $htstats]     ;# ht1 started rehashing
+        assert_equal 1 [string match {*table size: 7*} $htstats]        ;# ht1 table size is the minimal number
+
+        # Before, we just rehash one bucket chain regardless of empty or not, so
+        # we were unable to finish the rehash within 2k requests.
+        #
+        # Now, we will rehash one non-empty bucket chain or 10 empty buckets, so
+        # this time we can finish the rehash within 2k requests.
+        #
+        # Otherwise, during rehashing, ht1 will experience a very large number of
+        # hash collisions.
+        for {set i 0} {$i < 2000} {incr i} {
+            r zadd myzset $i $i
+        }
+        assert_equal 1 [string match {*rehashing index: -1*} [r debug htstats-key myzset full]] ;# no rehash ongoing
+    }
+}

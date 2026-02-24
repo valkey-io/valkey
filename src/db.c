@@ -2355,7 +2355,7 @@ int getKeysUsingKeySpecs(struct serverCommand *cmd, robj **argv, int argc, int s
             }
 
             first += spec->fk.keynum.firstkey;
-            last = first + (int)numkeys - 1;
+            last = first + ((int)numkeys - 1) * step;
         } else {
             /* unknown spec */
             goto invalid_spec;

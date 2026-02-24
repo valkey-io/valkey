@@ -471,6 +471,22 @@ static signed char nextBucketExp(size_t min_capacity) {
     return CHAR_BIT * sizeof(size_t) - __builtin_clzl(min_buckets - 1);
 }
 
+#define SWAP(a, b, type) do { \
+    type temp = (a); \
+    (a) = (b); \
+    (b) = temp; \
+} while(0)
+
+/* This function swaps ht[0] and ht[1] in the hashtable. */
+static void swapTables(hashtable *ht) {
+    assert(hashtableIsRehashing(ht));
+
+    SWAP(ht->tables[0], ht->tables[1], bucket *);
+    SWAP(ht->used[0], ht->used[1], size_t);
+    SWAP(ht->bucket_exp[0], ht->bucket_exp[1], int8_t);
+    SWAP(ht->child_buckets[0], ht->child_buckets[1], size_t);
+}
+
 /* Swaps the tables and frees the old table. */
 static void rehashingCompleted(hashtable *ht) {
     if (ht->type->rehashingCompleted) ht->type->rehashingCompleted(ht);
@@ -480,10 +496,8 @@ static void rehashingCompleted(hashtable *ht) {
             ht->type->trackMemUsage(ht, -sizeof(bucket) * numBuckets(ht->bucket_exp[0]));
         }
     }
-    ht->bucket_exp[0] = ht->bucket_exp[1];
-    ht->tables[0] = ht->tables[1];
-    ht->used[0] = ht->used[1];
-    ht->child_buckets[0] = ht->child_buckets[1];
+
+    swapTables(ht);
     resetTable(ht, 1);
     ht->rehash_idx = -1;
 }
@@ -775,21 +789,6 @@ static bool expand(hashtable *ht, size_t size, int *malloc_failed) {
     return resize(ht, size, malloc_failed);
 }
 
-/* This function swaps ht[0] and ht[1] in the hashtable. */
-#define SWAP(a, b, type) do { \
-    type temp = (a); \
-    (a) = (b); \
-    (b) = temp; \
-} while(0)
-
-static void swapTables(hashtable *ht) {
-    assert(hashtableIsRehashing(ht));
-    
-    SWAP(ht->tables[0], ht->tables[1], bucket *);
-    SWAP(ht->used[0], ht->used[1], size_t);
-    SWAP(ht->bucket_exp[0], ht->bucket_exp[1], int8_t);
-    SWAP(ht->child_buckets[0], ht->child_buckets[1], size_t);
-}
 /* Checks if a candidate entry in a bucket matches the given key.
  *
  * This function examines a specific position in a bucket to determine if the

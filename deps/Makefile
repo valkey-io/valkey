@@ -54,6 +54,9 @@ endif
 
 ifneq (,$(filter $(BUILD_RDMA),yes module))
     LIBVALKEY_MAKE_FLAGS += USE_RDMA=1
+	ifneq (,$(filter $(BUILD_RDMA),module))
+		LIBVALKEY_MAKE_FLAGS += USE_DLOPEN_RDMA=1
+	endif
 endif
 
 libvalkey: .make-prerequisites

@@ -244,6 +244,7 @@ TEST_F(HashtableTest, instant_rehashing) {
 TEST_F(HashtableTest, empty_buckets_rehashing) {
     hashtableType type = {};
     hashtable *ht = hashtableCreate(&type);
+    hashtableSetCanAbortShrink(false);
     long j;
     long keep = 0;
     size_t keep_bucket = 0;
@@ -286,6 +287,64 @@ TEST_F(HashtableTest, empty_buckets_rehashing) {
     ASSERT_EQ(hashtableSize(ht), 11u);
     /* Check that at least 90 buckets are rehashed or that rehashing is completed. */
     ASSERT_TRUE(hashtableGetRehashingIndex(ht) >= 90 || hashtableGetRehashingIndex(ht) == -1);
+
+    hashtableRelease(ht);
+}
+
+TEST_F(HashtableTest, shrink_rehashing_abort) {
+    hashtableType type = {0};
+    hashtable *ht = hashtableCreate(&type);
+    hashtableSetCanAbortShrink(true);
+    long j;
+    long keep = 0;
+    size_t keep_bucket = 0;
+
+    /* Populate and make sure there is no rehashing ongoing. */
+    for (j = 0; j < 20000; j++) {
+        ASSERT_TRUE(hashtableAdd(ht, (void *)j));
+    }
+    while (hashtableIsRehashing(ht)) {
+        ASSERT_FALSE(hashtableAdd(ht, (void *)0));
+    }
+
+    /* Keep the entry from the highest bucket index so shrink rehashing doesn't
+     * complete too early with randomized hash seeds and start a second resize. */
+    size_t mask = hashtableBuckets(ht) - 1;
+    for (j = 0; j < 20000; j++) {
+        const void *key = (void *)j;
+        uint64_t hash = hashtableGenHashFunction((const char *)&key, sizeof(key));
+        size_t bucket_idx = hash & mask;
+        if (bucket_idx > keep_bucket) {
+            keep_bucket = bucket_idx;
+            keep = j;
+        }
+    }
+
+    /* Delete all elements except one so there are a lot of empty buckets. */
+    hashtablePauseAutoShrink(ht);
+    for (j = 0; j < 20000; j++) {
+        if (j == keep) continue;
+        ASSERT_TRUE(hashtableDelete(ht, (void *)j));
+    }
+    hashtableResumeAutoShrink(ht);
+    ASSERT_EQ(hashtableSize(ht), 1u);
+    ASSERT_EQ(hashtableGetRehashingIndex(ht), 0);
+
+    /* Add elements to reach MAX_FILL_PERCENT_HARD will trigger the shrink rehashing to abort. */
+    long add = hashtableEntriesPerBucket() * 5;
+    for (j = 0; j < add; j++) {
+        ASSERT_TRUE(hashtableAdd(ht, (void *)(20000 + j)));
+    }
+
+    /* Check that we restart the rehashing. */
+    ASSERT_EQ(hashtableSize(ht), (size_t)(add + 1));
+    ASSERT_EQ(hashtableGetRehashingIndex(ht), 0);
+
+    /* Fuzzy test around normal add and delete to make sure we are ok. */
+    for (j = 0; j < 20000; j++) {
+        hashtableAdd(ht, (void *)j);
+        ASSERT_TRUE(hashtableDelete(ht, (void *)j));
+    }
 
     hashtableRelease(ht);
 }

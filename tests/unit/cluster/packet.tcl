@@ -99,7 +99,7 @@ start_cluster 1 0 {tags {external:skip cluster tls:skip}} {
         
         # Send the packet after configuring the socket to accept binary data
         set sock [socket 127.0.0.1 $cluster_port]
-        fconfigure $sock -translation binary -encoding binary -buffering none -blocking 1
+        fconfigure $sock -translation binary -buffering none -blocking 1
         puts -nonewline $sock $packet
         flush $sock
         close $sock

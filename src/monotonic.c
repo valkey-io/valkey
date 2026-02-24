@@ -17,10 +17,12 @@ static char monotonic_info_string[32];
  * generally safe on modern systems, this link provides additional information
  * about use of the x86 TSC: http://oliveryang.net/2015/09/pitfalls-of-TSC-usage
  *
- * To use the processor clock, either uncomment this line, or build with
- *   CFLAGS="-DUSE_PROCESSOR_CLOCK"
-#define USE_PROCESSOR_CLOCK
+ * The processor clock is now enabled by default. To disable it, build with
+ *   CFLAGS="-DNO_PROCESSOR_CLOCK"
  */
+#ifndef NO_PROCESSOR_CLOCK
+#define USE_PROCESSOR_CLOCK
+#endif
 
 
 #if defined(USE_PROCESSOR_CLOCK) && defined(__x86_64__) && defined(__linux__)
@@ -38,69 +40,51 @@ static monotime getMonotonicUs_x86(void) {
 static void monotonicInit_x86linux(void) {
     const int bufflen = 256;
     char buf[bufflen];
-    regex_t cpuGhzRegex, constTscRegex;
+    regex_t constTscRegex;
     const size_t nmatch = 2;
     regmatch_t pmatch[nmatch];
     int constantTsc = 0;
     int rc;
 
-    /* Determine the number of TSC ticks in a micro-second.  This is
-     * a constant value matching the standard speed of the processor.
-     * On modern processors, this speed remains constant even though
-     * the actual clock speed varies dynamically for each core.  */
-    rc = regcomp(&cpuGhzRegex, "^model name\\s+:.*@ ([0-9.]+)GHz", REG_EXTENDED);
-    assert(rc == 0);
+    /* Calibrate TSC ticks per microsecond against CLOCK_MONOTONIC.
+     * This determines the actual TSC frequency regardless of what
+     * the processor model name reports. */
+    for (int i = 0; i < TSC_CALIBRATION_ITERATIONS; ++i) {
+        /* Calibrate TSC against CLOCK_MONOTONIC */
+        struct timespec start, end;
+        uint64_t tsc_start, tsc_end;
 
-    /* Also check that the constant_tsc flag is present.  (It should be
-     * unless this is a really old CPU.  */
+        clock_gettime(CLOCK_MONOTONIC, &start);
+        tsc_start = __rdtsc();
+        usleep(10000); /* Sleep for 10ms */
+        tsc_end = __rdtsc();
+        clock_gettime(CLOCK_MONOTONIC, &end);
+
+        uint64_t elapsed_us = (end.tv_sec - start.tv_sec) * 1000000ULL + (end.tv_nsec - start.tv_nsec) / 1000;
+        uint64_t tsc_elapsed = tsc_end - tsc_start;
+        long sample_ticksPerMicrosecond = tsc_elapsed / elapsed_us;
+
+        /* Use the maximum out of TSC_CALIBRATION_ITERATIONS iterations for accuracy */
+        if (sample_ticksPerMicrosecond > mono_ticksPerMicrosecond) {
+            mono_ticksPerMicrosecond = sample_ticksPerMicrosecond;
+        }
+    }
+
+    /* Check that the constant_tsc flag is present.  (It should be
+     * unless this is a really old CPU.)  */
     rc = regcomp(&constTscRegex, "^flags\\s+:.* constant_tsc", REG_EXTENDED);
     assert(rc == 0);
 
     FILE *cpuinfo = fopen("/proc/cpuinfo", "r");
     if (cpuinfo != NULL) {
         while (fgets(buf, bufflen, cpuinfo) != NULL) {
-            if (regexec(&cpuGhzRegex, buf, nmatch, pmatch, 0) == 0) {
-                buf[pmatch[1].rm_eo] = '\0';
-                double ghz = atof(&buf[pmatch[1].rm_so]);
-                mono_ticksPerMicrosecond = (long)(ghz * 1000);
-                break;
-            }
-        }
-        /* Some CPUs may not contain clock speed in the model name */
-        if (mono_ticksPerMicrosecond == 0) {
-            for (int i = 0; i < TSC_CALIBRATION_ITERATIONS; ++i) {
-                /* Calibrate TSC against CLOCK_MONOTONIC */
-                struct timespec start, end;
-                uint64_t tsc_start, tsc_end;
-
-                clock_gettime(CLOCK_MONOTONIC, &start);
-                tsc_start = __rdtsc();
-                usleep(10000); /* Sleep for 10ms */
-                tsc_end = __rdtsc();
-                clock_gettime(CLOCK_MONOTONIC, &end);
-
-                uint64_t elapsed_us = (end.tv_sec - start.tv_sec) * 1000000ULL + (end.tv_nsec - start.tv_nsec) / 1000;
-                uint64_t tsc_elapsed = tsc_end - tsc_start;
-                long sample_ticksPerMicrosecond = tsc_elapsed / elapsed_us;
-
-                /* Use the maximum out of TSC_CALIBRATION_ITERATIONS iterations for accuracy */
-                if (sample_ticksPerMicrosecond > mono_ticksPerMicrosecond) {
-                    mono_ticksPerMicrosecond = sample_ticksPerMicrosecond;
-                }
-            }
-        }
-        /* Rewind file to search for constant_tsc flag */
-        rewind(cpuinfo);
-        while (fgets(buf, bufflen, cpuinfo) != NULL) {
             if (regexec(&constTscRegex, buf, nmatch, pmatch, 0) == 0) {
                 constantTsc = 1;
                 break;
             }
         }
-
         fclose(cpuinfo);
     }
-    regfree(&cpuGhzRegex);
     regfree(&constTscRegex);
 
     if (mono_ticksPerMicrosecond == 0) {

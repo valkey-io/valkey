@@ -23,11 +23,19 @@ jobs:
   test-ubuntu-latest:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+      - name: Install libbacktrace
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: ianlancetaylor/libbacktrace
+          ref: b9e40069c0b47a722286b94eb5231f7f05c08713
+          path: libbacktrace
+      - run: cd libbacktrace && ./configure && make && sudo make install
+      - name: Checkout Valkey
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - name: make
         # Fail build if there are warnings
         # build with TLS just for compilation coverage
-        run: make -j4 all-with-unit-tests SERVER_CFLAGS='-Werror' BUILD_TLS=yes USE_FAST_FLOAT=yes
+        run: make -j4 all-with-unit-tests SERVER_CFLAGS='-Werror' BUILD_TLS=yes USE_FAST_FLOAT=yes USE_LIBBACKTRACE=yes
       - name: test
         run: |
           sudo apt-get install tcl8.6 tclx
@@ -54,11 +62,19 @@ jobs:
           - {version: "8.0.6", file: "valkey-8.0.6-noble-x86_64.tar.gz"}
           - {version: "8.1.4", file: "valkey-8.1.4-noble-x86_64.tar.gz"}
     steps:
-      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+      - name: Install libbacktrace
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: ianlancetaylor/libbacktrace
+          ref: b9e40069c0b47a722286b94eb5231f7f05c08713
+          path: libbacktrace
+      - run: cd libbacktrace && ./configure && make && sudo make install
+      - name: Checkout Valkey
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - name: make
         # Fail build if there are warnings
         # build with TLS just for compilation coverage
-        run: make -j4 all-with-unit-tests SERVER_CFLAGS='-Werror' BUILD_TLS=yes USE_FAST_FLOAT=yes
+        run: make -j4 all-with-unit-tests SERVER_CFLAGS='-Werror' BUILD_TLS=yes USE_FAST_FLOAT=yes USE_LIBBACKTRACE=yes
 
       - name: Install old server (${{ matrix.server.version }}) for compatibility testing
         run: |
@@ -78,10 +94,10 @@ jobs:
           CFLAGS='-Werror' ./runtest-moduleapi --tags needs:other-server --verbose --dump-logs \
             --other-server-path tests/tmp/valkey-${{ matrix.server.version }}-noble-x86_64/bin/valkey-server
 
-  test-ubuntu-latest-cmake:
+  test-ubuntu-latest-cmake-tls:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - name: cmake and make
         run: |
           sudo apt-get install -y cmake libssl-dev
@@ -91,14 +107,9 @@ jobs:
           make -j$(nproc)
       - name: test
         run: |
-          sudo apt-get install -y tcl8.6 tclx
-          ln -sf $(pwd)/build-release/bin/valkey-server $(pwd)/src/valkey-server
-          ln -sf $(pwd)/build-release/bin/valkey-cli $(pwd)/src/valkey-cli
-          ln -sf $(pwd)/build-release/bin/valkey-benchmark $(pwd)/src/valkey-benchmark
-          ln -sf $(pwd)/build-release/bin/valkey-server $(pwd)/src/valkey-check-aof
-          ln -sf $(pwd)/build-release/bin/valkey-server $(pwd)/src/valkey-check-rdb
-          ln -sf $(pwd)/build-release/bin/valkey-server $(pwd)/src/valkey-sentinel
-          ./runtest --verbose --tags -slow --dump-logs
+          sudo apt-get install -y tcl8.6 tclx tcl-tls
+          ./utils/gen-test-certs.sh
+          ./build-release/runtest --verbose --tags -slow --dump-logs --tls
       - name: unit tests
         run: |
           ./build-release/bin/valkey-unit-tests
@@ -106,10 +117,18 @@ jobs:
   test-sanitizer-address:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+      - name: Install libbacktrace
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: ianlancetaylor/libbacktrace
+          ref: b9e40069c0b47a722286b94eb5231f7f05c08713
+          path: libbacktrace
+      - run: cd libbacktrace && ./configure && make && sudo make install
+      - name: Checkout Valkey
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - name: make
         # build with TLS module just for compilation coverage
-        run: make -j4 all-with-unit-tests SANITIZER=address SERVER_CFLAGS='-Werror' BUILD_TLS=module
+        run: make -j4 all-with-unit-tests SANITIZER=address SERVER_CFLAGS='-Werror' BUILD_TLS=module USE_LIBBACKTRACE=yes
       - name: testprep
         run: sudo apt-get install tcl8.6 tclx -y
       - name: test
@@ -122,15 +141,23 @@ jobs:
   test-rdma:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+      - name: Install libbacktrace
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: ianlancetaylor/libbacktrace
+          ref: b9e40069c0b47a722286b94eb5231f7f05c08713
+          path: libbacktrace
+      - run: cd libbacktrace && ./configure && make && sudo make install
+      - name: Checkout Valkey
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - name: prepare-development-libraries
         run: sudo apt-get install librdmacm-dev libibverbs-dev
       - name: make-rdma-module
-        run: make -j4 BUILD_RDMA=module
+        run: make -j4 BUILD_RDMA=module USE_LIBBACKTRACE=yes
       - name: make-rdma-builtin
         run: |
           make distclean
-          make -j4 BUILD_RDMA=yes
+          make -j4 BUILD_RDMA=yes USE_LIBBACKTRACE=yes
       - name: clone-rxe-kmod
         run: |
           mkdir -p tests/rdma/rxe
@@ -143,38 +170,83 @@ jobs:
       - name: show-kernel-log
         run: sudo dmesg -c
 
+  test-tls-only:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: generate-test-certificates
+        run: ./utils/gen-test-certs.sh
+      - name: install-test-dependencies
+        run: sudo apt-get install -y tcl8.6 tclx tcl-tls
+      - name: make-tls-module
+        run: make -j4 BUILD_TLS=module SERVER_CFLAGS='-Werror'
+      - name: test-tls-module
+        run: ./runtest --verbose --single unit/tls --dump-logs --tls-module
+      - name: make-tls-builtin
+        run: |
+          make distclean
+          make -j4 BUILD_TLS=yes SERVER_CFLAGS='-Werror'
+      - name: test-tls-builtin
+        run: ./runtest --verbose --single unit/tls --dump-logs --tls
+
   build-debian-old:
     runs-on: ubuntu-latest
     container: debian:bullseye
     steps:
-      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
-      - name: make
+      - name: Install libbacktrace
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: ianlancetaylor/libbacktrace
+          ref: b9e40069c0b47a722286b94eb5231f7f05c08713
+          path: libbacktrace
+      - name: Build libbacktrace
         run: |
           apt-get update && apt-get install -y build-essential
-          make -j4 SERVER_CFLAGS='-Werror'
+          cd libbacktrace && ./configure && make && make install
+      - name: Checkout Valkey
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: make
+        run: make -j4 SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes
 
   build-macos-latest:
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+      - name: Install libbacktrace
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: ianlancetaylor/libbacktrace
+          ref: b9e40069c0b47a722286b94eb5231f7f05c08713
+          path: libbacktrace
+      - run: cd libbacktrace && ./configure && make && sudo make install
+      - name: Checkout Valkey
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - name: make
         # Build with additional upcoming features
-        run: make -j3 all-with-unit-tests SERVER_CFLAGS='-Werror' USE_FAST_FLOAT=yes
+        run: make -j3 all-with-unit-tests SERVER_CFLAGS='-Werror' USE_FAST_FLOAT=yes USE_LIBBACKTRACE=yes
 
   build-32bit:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+      - name: Install libbacktrace
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: ianlancetaylor/libbacktrace
+          ref: b9e40069c0b47a722286b94eb5231f7f05c08713
+          path: libbacktrace
+      - name: Build libbacktrace (32-bit)
+        run: |
+          sudo apt-get update
+          sudo apt-get install libc6-dev-i386 libstdc++-11-dev-i386-cross gcc-multilib g++-multilib
+          cd libbacktrace && ./configure CFLAGS="-m32" --prefix=/usr/local/libbacktrace32 && make && sudo make install
+      - name: Checkout Valkey
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - name: make
         # Fast float requires C++ 32-bit libraries to compile on 64-bit ubuntu
         # machine i.e. "-cross" suffixed version. Cross-compiling c++ to 32-bit
         # also requires multilib support for g++ compiler i.e. "-multilib"
         # suffixed version of g++. g++-multilib generally includes libstdc++.
         # *cross version as well, but it is also added explicitly just in case.
-        run: |
-          sudo apt-get update
-          sudo apt-get install libc6-dev-i386 libstdc++-11-dev-i386-cross gcc-multilib g++-multilib
-          make -j4 SERVER_CFLAGS='-Werror' 32bit USE_FAST_FLOAT=yes
+        run: make -j4 SERVER_CFLAGS='-Werror' 32bit USE_FAST_FLOAT=yes USE_LIBBACKTRACE=yes LIBBACKTRACE_PREFIX=/usr/local/libbacktrace32
       - name: unit tests
         run: |
           ./src/valkey-unit-tests
@@ -182,29 +254,45 @@ jobs:
   build-libc-malloc:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+      - name: Install libbacktrace
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: ianlancetaylor/libbacktrace
+          ref: b9e40069c0b47a722286b94eb5231f7f05c08713
+          path: libbacktrace
+      - run: cd libbacktrace && ./configure && make && sudo make install
+      - name: Checkout Valkey
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - name: make
-        run: make -j4 SERVER_CFLAGS='-Werror' MALLOC=libc USE_FAST_FLOAT=yes
+        run: make -j4 SERVER_CFLAGS='-Werror' MALLOC=libc USE_FAST_FLOAT=yes USE_LIBBACKTRACE=yes
 
   build-almalinux8-jemalloc:
     runs-on: ubuntu-latest
     container: almalinux:8
     steps:
-      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
-
-      - name: make
+      - name: Install libbacktrace
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: ianlancetaylor/libbacktrace
+          ref: b9e40069c0b47a722286b94eb5231f7f05c08713
+          path: libbacktrace
+      - name: Build libbacktrace
         run: |
           dnf -y install epel-release gcc gcc-c++ make procps-ng which
-          make -j4 SERVER_CFLAGS='-Werror' USE_FAST_FLOAT=yes
+          cd libbacktrace && ./configure && make && make install
+      - name: Checkout Valkey
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: make
+        run: make -j4 SERVER_CFLAGS='-Werror' USE_FAST_FLOAT=yes USE_LIBBACKTRACE=yes
 
   format-yaml:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Set up Go
-        uses: actions/setup-go@cdcb36043654635271a94b9a6d1392de5bb323a7 # v5.0.1
+        uses: actions/setup-go@7a3fe6cf4cb3a834922a1244abfce67bcef6a0c5 # v6.2.0
         with:
           go-version: "1.22.4"
 

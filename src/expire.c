@@ -452,12 +452,14 @@ static long long activeExpireCycleJob(enum activeExpiryType jobType, int cycleTy
  * starvation of either mechanism. Since the memory reclaim pace and iteration
  * model of keys versus hash fields are different and unpredictable,
  * alternating naturally balances the overall expiry effort when both are
- * fully consuming their available time budget. */
-void activeExpireCycle(int type) {
+ * fully consuming their available time budget.
+ *
+ * Returns the time spend on active expiration in microseconds. */
+long long activeExpireCycle(int type) {
     /* If 'expire' action is paused, for whatever reason, then don't expire any key.
      * Typically, at the end of the pause we will properly expire the key OR we
      * will have failed over and the new primary will send us the expire. */
-    if (isPausedActionsWithUpdate(PAUSE_ACTION_EXPIRE)) return;
+    if (isPausedActionsWithUpdate(PAUSE_ACTION_EXPIRE)) return 0;
 
     /* Adjust the running parameters according to the configured expire
      * effort. The default effort is 1, and the maximum configurable effort
@@ -470,7 +472,7 @@ void activeExpireCycle(int type) {
          * as the fast cycle total duration itself. */
         static monotime last_fast_cycle_start_time; /* When last fast cycle ran. */
         monotime start = getMonotonicUs();
-        if (start < last_fast_cycle_start_time + config_cycle_fast_duration * 2) return;
+        if (start < last_fast_cycle_start_time + config_cycle_fast_duration * 2) return 0;
 
         last_fast_cycle_start_time = start;
         timelimit_us = config_cycle_fast_duration;
@@ -500,6 +502,7 @@ void activeExpireCycle(int type) {
     latencyAddSampleIfNeeded("expire-cycle", elapsed);
     latencyTraceIfNeeded(db, expire_cycle, elapsed);
     expireCycleStartWithFields = !expireCycleStartWithFields;
+    return elapsed;
 }
 
 /*-----------------------------------------------------------------------------
@@ -615,13 +618,13 @@ void rememberReplicaKeyWithExpire(serverDb *db, robj *key) {
     }
     if (db->id > 63) return;
 
-    dictEntry *de = dictAddOrFind(replicaKeysWithExpire, key->ptr);
+    dictEntry *de = dictAddOrFind(replicaKeysWithExpire, objectGetVal(key));
     /* If the entry was just created, set it to a copy of the SDS string
      * representing the key: we don't want to need to take those keys
      * in sync with the main DB. The keys will be removed by expireReplicaKeys()
      * as it scans to find keys to remove. */
-    if (dictGetKey(de) == key->ptr) {
-        dictSetKey(replicaKeysWithExpire, de, sdsdup(key->ptr));
+    if (dictGetKey(de) == objectGetVal(key)) {
+        dictSetKey(replicaKeysWithExpire, de, sdsdup(objectGetVal(key)));
         dictSetUnsignedIntegerVal(de, 0);
     }
 
@@ -685,7 +688,7 @@ int parseExtendedExpireArgumentsOrReply(client *c, int *flags, int max_args) {
 
     int j = 3;
     while (j < max_args) {
-        char *opt = c->argv[j]->ptr;
+        char *opt = objectGetVal(c->argv[j]);
         if (!strcasecmp(opt, "nx")) {
             *flags |= EXPIRE_NX;
             nx = 1;

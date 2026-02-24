@@ -325,6 +325,9 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster} overrides {cluste
         assert_equal [dict get $import_migration create_time] $import_create_time
         assert_equal [dict get $export_migration create_time] $export_create_time
 
+        assert_equal [dict get $export_migration remaining_repl_size] 0
+        assert_equal [dict get $import_migration remaining_repl_size] 0
+
         set_debug_prevent_pause 0
     }
 
@@ -2427,5 +2430,45 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster aofrw} overrides {
         assert_match "500" [R 5 CLUSTER COUNTKEYSINSLOT 16383]
         assert_equal $slots_start [R 0 CLUSTER SLOTS]
         assert_match "OK" [R 2 FLUSHDB SYNC]
+    }
+}
+
+start_cluster 3 0 {tags {logreqres:skip external:skip cluster} overrides {cluster-require-full-coverage no slot-migration-max-failover-repl-bytes 0}} {
+    test "Slot migration remaining_repl_size on the source node" {
+        set 16383_slot_tag "{6ZJ}"
+        set_debug_prevent_pause 1
+
+        # Move 16383 from R0 to R2
+        assert_match "OK" [R 2 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE [R 0 CLUSTER MYID]]
+        set jobname [get_job_name 2 16383]
+        wait_for_migration_field 2 $jobname state waiting-to-pause
+
+        # Check before the migration.
+        set import_migration [get_migration_by_name 0 $jobname]
+        set export_migration [get_migration_by_name 2 $jobname]
+        assert_equal [dict get $export_migration remaining_repl_size] 0
+        assert_equal [dict get $import_migration remaining_repl_size] 0
+
+        # Pause R0 and generate some data to populate the buffer.
+        pause_process [srv 0 pid]
+        set bigstr [string repeat x 1024000]
+        for {set j 0} {$j < 50} {incr j} {
+            R 2 set "$16383_slot_tag:key:" $bigstr
+        }
+
+        # Check R0 remaining repl size is OK.
+        set export_migration [get_migration_by_name 2 $jobname]
+        assert_morethan_equal [dict get $export_migration remaining_repl_size] [expr 1024000 * 25]
+
+        # Resume R0 and wait for R0 to finish the migration.
+        resume_process [srv 0 pid]
+        set_debug_prevent_pause 0
+        wait_for_migration 0 16383
+
+        # Check after the migration.
+        set import_migration [get_migration_by_name 0 $jobname]
+        set export_migration [get_migration_by_name 2 $jobname]
+        assert_equal [dict get $export_migration remaining_repl_size] 0
+        assert_equal [dict get $import_migration remaining_repl_size] 0
     }
 }

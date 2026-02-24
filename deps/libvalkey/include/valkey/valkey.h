@@ -50,8 +50,8 @@ typedef SSIZE_T ssize_t;
 #include <stdint.h> /* uintXX_t, etc */
 
 #define LIBVALKEY_VERSION_MAJOR 0
-#define LIBVALKEY_VERSION_MINOR 2
-#define LIBVALKEY_VERSION_PATCH 1
+#define LIBVALKEY_VERSION_MINOR 4
+#define LIBVALKEY_VERSION_PATCH 0
 
 /* Connection type can be blocking or non-blocking and is set in the
  * least significant bit of the flags field in valkeyContext. */
@@ -270,6 +270,12 @@ typedef struct valkeyContextFuncs {
      * these functions shall return a value < 0.  In the event of a
      * recoverable error, they should return 0. */
     ssize_t (*read)(struct valkeyContext *, char *, size_t);
+    /* ZC means zero copy, it provides underlay transport layer buffer directly,
+     * so it has better performance than generic read. After consuming the read
+     * buffer, it's necessary to notify the underlay transport to advance the
+     * read buffer by read_zc_done. */
+    ssize_t (*read_zc)(struct valkeyContext *, char **);
+    ssize_t (*read_zc_done)(struct valkeyContext *);
     ssize_t (*write)(struct valkeyContext *);
     int (*set_timeout)(struct valkeyContext *, const struct timeval);
 } valkeyContextFuncs;

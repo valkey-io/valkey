@@ -1086,8 +1086,14 @@ start_server {tags {"introspection"}} {
         wait_for_blocked_clients_count 0
         r lpush mylist 2
 
+        # we scan out all the info commands
+        set monitor_output [$rd read]
+        while { [string match {*"info"*} $monitor_output] } {
+            set monitor_output [$rd read]
+        }
+
         # we expect to see the blpop on the monitor first
-        assert_match {*"blpop"*"mylist"*"0"*} [$rd read]
+        assert_match {*"blpop"*"mylist"*"0"*} $monitor_output
 
         # we scan out all the info commands on the monitor
         set monitor_output [$rd read]
@@ -1373,7 +1379,7 @@ start_server {tags {"introspection"}} {
             lappend backups $c [lindex [r config get $c] 1]
         }
 
-        # multi config set and veirfy
+        # multi config set and verify
         assert_equal [eval "r config set $some_configs"] "OK"
         dict for {c val} $some_configs {
             assert_equal [lindex [r config get $c] 1] $val

@@ -68,6 +68,7 @@
 #include "ae.h"
 #include "connection.h"
 #include "cli_common.h"
+#include "util.h"
 #include "mt19937-64.h"
 #include "cli_commands.h"
 
@@ -315,20 +316,6 @@ size_t valkey_strlcpy(char *dst, const char *src, size_t dsize);
 static void cliPushHandler(void *, void *);
 
 uint16_t crc16(const char *buf, int len);
-
-static long long ustime(void) {
-    struct timeval tv;
-    long long ust;
-
-    gettimeofday(&tv, NULL);
-    ust = ((long long)tv.tv_sec) * 1000000;
-    ust += tv.tv_usec;
-    return ust;
-}
-
-static long long mstime(void) {
-    return ustime() / 1000;
-}
 
 static void cliRefreshPrompt(void) {
     if (config.eval_ldb) return;

@@ -471,11 +471,12 @@ static signed char nextBucketExp(size_t min_capacity) {
     return CHAR_BIT * sizeof(size_t) - __builtin_clzl(min_buckets - 1);
 }
 
-#define SWAP(a, b, type) do { \
-    type temp = (a); \
-    (a) = (b); \
-    (b) = temp; \
-} while(0)
+#define SWAP(a, b, type) \
+    do {                 \
+        type temp = (a); \
+        (a) = (b);       \
+        (b) = temp;      \
+    } while (0)
 
 /* This function swaps ht[0] and ht[1] in the hashtable. */
 static void swapTables(hashtable *ht) {

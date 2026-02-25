@@ -249,7 +249,8 @@ void restoreCommand(client *c) {
     }
 
     /* Verify RDB version and data checksum. */
-    if (verifyDumpPayload(objectGetVal(c->argv[3]), sdslen(objectGetVal(c->argv[3])), &rdbver) == C_ERR) {
+    sds payload_val = objectGetVal(c->argv[3]);
+    if (verifyDumpPayload((unsigned char *)payload_val, sdslen(payload_val), &rdbver) == C_ERR) {
         addReplyError(c, "DUMP payload version or checksum are wrong");
         return;
     }
@@ -344,9 +345,11 @@ migrateCachedSocket *migrateGetSocket(client *c, robj *host, robj *port, long ti
     migrateCachedSocket *cs;
 
     /* Check if we have an already cached socket for this ip:port pair. */
-    name = sdscatlen(name, objectGetVal(host), sdslen(objectGetVal(host)));
+    sds host_val = objectGetVal(host);
+    sds port_val = objectGetVal(port);
+    name = sdscatlen(name, host_val, sdslen(host_val));
     name = sdscatlen(name, ":", 1);
-    name = sdscatlen(name, objectGetVal(port), sdslen(objectGetVal(port)));
+    name = sdscatlen(name, port_val, sdslen(port_val));
     cs = dictFetchValue(server.migrate_cached_sockets, name);
     if (cs) {
         sdsfree(name);
@@ -366,7 +369,7 @@ migrateCachedSocket *migrateGetSocket(client *c, robj *host, robj *port, long ti
 
     /* Create the connection */
     conn = connCreate(connTypeOfCluster());
-    if (connBlockingConnect(conn, objectGetVal(host), atoi(objectGetVal(port)), timeout) != C_OK) {
+    if (connBlockingConnect(conn, host_val, atoi(port_val), timeout) != C_OK) {
         addReplyError(c, "-IOERR error or timeout connecting to the client");
         connClose(conn);
         sdsfree(name);
@@ -388,9 +391,11 @@ void migrateCloseSocket(robj *host, robj *port) {
     sds name = sdsempty();
     migrateCachedSocket *cs;
 
-    name = sdscatlen(name, objectGetVal(host), sdslen(objectGetVal(host)));
+    sds host_val = objectGetVal(host);
+    sds port_val = objectGetVal(port);
+    name = sdscatlen(name, host_val, sdslen(host_val));
     name = sdscatlen(name, ":", 1);
-    name = sdscatlen(name, objectGetVal(port), sdslen(objectGetVal(port)));
+    name = sdscatlen(name, port_val, sdslen(port_val));
     cs = dictFetchValue(server.migrate_cached_sockets, name);
     if (!cs) {
         sdsfree(name);
@@ -578,7 +583,8 @@ try_again:
         else
             serverAssertWithInfo(c, NULL, rioWriteBulkString(&cmd, "RESTORE", 7));
         serverAssertWithInfo(c, NULL, sdsEncodedObject(kv[j]));
-        serverAssertWithInfo(c, NULL, rioWriteBulkString(&cmd, objectGetVal(kv[j]), sdslen(objectGetVal(kv[j]))));
+        sds kv_val = objectGetVal(kv[j]);
+        serverAssertWithInfo(c, NULL, rioWriteBulkString(&cmd, kv_val, sdslen(kv_val)));
         serverAssertWithInfo(c, NULL, rioWriteBulkLongLong(&cmd, ttl));
 
         /* Emit the payload argument, that is the serialized object using
@@ -946,7 +952,8 @@ void clusterCommand(client *c) {
         kvstoreReleaseHashtableIterator(kvs_di);
     } else if ((!strcasecmp(objectGetVal(c->argv[1]), "slaves") || !strcasecmp(objectGetVal(c->argv[1]), "replicas")) && c->argc == 3) {
         /* CLUSTER REPLICAS <NODE ID> */
-        clusterNode *n = clusterLookupNode(objectGetVal(c->argv[2]), sdslen(objectGetVal(c->argv[2])));
+        sds node_id = objectGetVal(c->argv[2]);
+        clusterNode *n = clusterLookupNode(node_id, sdslen(node_id));
         int j;
 
         /* Lookup the specified node in our table. */
@@ -1371,7 +1378,8 @@ int clusterRedirectBlockedClientIfNeeded(client *c) {
         di = dictGetIterator(c->bstate->keys);
         if ((de = dictNext(di)) != NULL) {
             robj *key = dictGetKey(de);
-            int slot = keyHashSlot((char *)objectGetVal(key), sdslen(objectGetVal(key)));
+            sds key_val = objectGetVal(key);
+            int slot = keyHashSlot((char *)key_val, sdslen(key_val));
             serverAssert(slot == c->slot);
             clusterNode *node = getNodeBySlot(slot);
 

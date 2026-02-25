@@ -525,12 +525,15 @@ start_server {tags {"string"}} {
     test {MSETEX propagate as MSETEX with PXAT to replica} {
         r del key1{t} key2{t} key3{t} key4{t} key5{t} key6{t} key7{t} key8{t}
         set repl [attach_to_replication_stream]
+        r msetex 2 key1{t} val1 key2{t} val2
+        assert_equal 0 [r msetex 2 key1{t} val1 key2{t} val2 nx]
         r msetex 2 key1{t} val1 key2{t} val2 ex 100
         r msetex 2 key3{t} val3 key4{t} val4 exat [expr [clock seconds] + 100]
         r msetex 2 key5{t} val5 key6{t} val6 px 100000
         r msetex 2 key7{t} val7 key8{t} val8 pxat [expr [clock milliseconds] + 100000]
         assert_replication_stream $repl {
             {select *}
+            {msetex 2 key1{t} val1 key2{t} val2}
             {msetex 2 key1{t} val1 key2{t} val2 PXAT *}
             {msetex 2 key3{t} val3 key4{t} val4 PXAT *}
             {msetex 2 key5{t} val5 key6{t} val6 PXAT *}

@@ -144,12 +144,12 @@ typedef union bio_job {
     struct {
         int type;
     } tls_reload_args;
-    
+
     struct {
         int type;
         /* No additional args needed - will use global context */
     } extdata_dump_args;
-    
+
     struct {
         int type;
         /* No additional args needed - will use global context */

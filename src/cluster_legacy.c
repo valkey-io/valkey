@@ -6153,7 +6153,7 @@ void clusterCron(void) {
         serverLog(LL_NOTICE, "clusterCron: Establishing replication to primary %.40s (%s:%d)",
                   myself->replicaof->name, myself->replicaof->ip, getNodeDefaultReplicationPort(myself->replicaof));
         replicationSetPrimary(myself->replicaof->ip, getNodeDefaultReplicationPort(myself->replicaof), 0, false);
-        
+
         /* Trigger external data initialization for cluster replicas
          * Now that replication is being established, we can initialize external data */
         serverLog(LL_NOTICE, "clusterCron: Calling processExternalDataLoadForFullSync after replicationSetPrimary");

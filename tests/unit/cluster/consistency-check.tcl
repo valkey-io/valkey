@@ -12,6 +12,7 @@ proc find_non_empty_master {} {
     set master_id_no {}
 
     for {set id 0} {$id < [llength $::servers]} {incr id} {
+        R $id select 0
         if {[s -$id role] eq {master} && [R $id dbsize] > 0} {
             set master_id_no $id
             break
@@ -49,7 +50,9 @@ proc test_slave_load_expired_keys {aof} {
         set master_id [find_non_empty_master]
         set replica_id [get_one_of_my_replica $master_id]
 
+        R $master_id select 0
         set master_dbsize_0 [R $master_id dbsize]
+        R $replica_id select 0
         set replica_dbsize_0 [R $replica_id dbsize]
         assert_equal $master_dbsize_0 $replica_dbsize_0
 

@@ -1703,9 +1703,9 @@ sds getConfigValue(const char *name) {
     sds name_sds = sdsnew(name);
     standardConfig *config = lookupConfig(name_sds);
     sdsfree(name_sds);
-    
+
     if (!config) return NULL;
-    
+
     return config->interface.get(config);
 }
 

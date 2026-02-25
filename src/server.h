@@ -2077,17 +2077,17 @@ struct valkeyServer {
                                            * loading aof or rdb. (for testings). negative
                                            * value means fractions of microseconds (on average). */
     /* External storage options.  */
-    int ext_data_mode;                    /* External storage mode */
-    int ext_data_expire;                  /* Enable expiring keys to external storage for allkeys-* policies */
-    size_t ext_min_object_size_to_move;   /* Min size of k/v pair to move to external storage */
+    int ext_data_mode;                         /* External storage mode */
+    int ext_data_expire;                       /* Enable expiring keys to external storage for allkeys-* policies */
+    size_t ext_min_object_size_to_move;        /* Min size of k/v pair to move to external storage */
     unsigned long long ext_data_max_disk_size; /* Maximum disk space allowed to be used by external storage */
     unsigned long long ext_data_max_mem_size;  /* Maximum memory allowed to be used by external storage */
-    unsigned long ext_data_defer_max_ms;  /* Deferred external data module initialization max time */
-    unsigned int ext_data_timeout;        /* Timeout for accessing external storage */
-    unsigned int ext_data_store_by_size;  /* Size to exceed to store externally */
-    int ext_data_async_load;              /* Load external data asynchronously on replica (1=async, 0=sync) */
-    int ext_data_load_timeout_ms;         /* Timeout in milliseconds for sync external data load */
-    char *ext_data_id;                    /* Node ID for external data module */
+    unsigned long ext_data_defer_max_ms;       /* Deferred external data module initialization max time */
+    unsigned int ext_data_timeout;             /* Timeout for accessing external storage */
+    unsigned int ext_data_store_by_size;       /* Size to exceed to store externally */
+    int ext_data_async_load;                   /* Load external data asynchronously on replica (1=async, 0=sync) */
+    int ext_data_load_timeout_ms;              /* Timeout in milliseconds for sync external data load */
+    char *ext_data_id;                         /* Node ID for external data module */
     /* Pipe and data structures for child -> parent info sharing. */
     int child_info_pipe[2]; /* Pipe used to write the child_info_data. */
     int child_info_nread;   /* Num of bytes of the last read from pipe */

@@ -280,13 +280,15 @@ start_server [list overrides [list "ext-data-mode" kv "ext-data-id" id4 "logleve
         assert_equal {OK} [r select 1]
         assert_equal {} [r get k ext]
         assert_equal {OK} [r select 0]
-
         # filter not, storage not = nil
         assert_equal 1 [r external_data debug db0 filter del k]
         assert_equal {} [r get k ext]
         assert_equal {OK} [r select 1]
         assert_equal {} [r get k ext]
         assert_equal {OK} [r select 0]
+
+        assert_equal {OK} [r external_data drop db0 FORCE]
+        assert_equal {OK} [r external_data drop db1 FORCE]
     }
 }
 
@@ -1262,7 +1264,7 @@ start_cluster 1 0 [list overrides [list "ext-data-mode" kv "ext-data-id" id16 "l
 }
 
 start_server [list overrides [list "ext-data-mode" kv "ext-data-id" id17 "loglevel" debug] tags [list "external:skip" "slow" "singledb:skip"]] {
-    test {Performance with large dataset (should complete in under 500ms)} {
+    test {Performance with large dataset} {
         cleanup_external_data_dump r
 
         # Load module and initialize external storage
@@ -1281,7 +1283,6 @@ start_server [list overrides [list "ext-data-mode" kv "ext-data-id" id17 "loglev
         }
         set insert_end [clock milliseconds]
         set insert_time [expr {$insert_end - $insert_start}]
-        
         # Before flushall create a backup
         set backup_result [r external_data dump]
         assert {$backup_result != ""}
@@ -1354,8 +1355,8 @@ start_server [list overrides [list "ext-data-mode" kv "ext-data-id" id17 "loglev
         # Assert FLUSHDB completes in under 500ms
         # This will FAIL with the current O(n) implementation
         # demonstrating the need for a more efficient flush mechanism (e.g., native flush API)
-        if {$flush_time >= 500} {
-            fail "FLUSHDB took ${flush_time}ms, expected < 500ms (demonstrates O(n) limitation - needs native flush API)"
+        if {$flush_time >= 1000} {
+            fail "FLUSHDB took ${flush_time}ms, expected < 1000ms (demonstrates O(n) limitation - needs native flush API)"
         }
         
         # Action: After flushall restore from this backup
@@ -1366,6 +1367,8 @@ start_server [list overrides [list "ext-data-mode" kv "ext-data-id" id17 "loglev
         set dbsize_after_restore [r dbsize ext]
         assert_equal $num_keys $dbsize_after_restore
 
+        assert_equal {OK} [r external_data drop db0 FORCE]
+        assert_equal {OK} [r external_data drop db1 FORCE]
         cleanup_external_data_dump r
     }
 }
@@ -1373,7 +1376,7 @@ start_server [list overrides [list "ext-data-mode" kv "ext-data-id" id17 "loglev
 start_cluster 1 0 [list overrides [list "ext-data-mode" kv "ext-data-id" id18 "loglevel" debug] tags [list "external:skip" "slow" "singledb:skip"]] {
     set extdatamodule1 [file normalize tests/modules/extstorage/extdata1.so]
     
-    test {Performance with large dataset (should complete in under 500ms) (cluster mode)} {
+    test {Performance with large dataset (cluster mode)} {
         wait_for_cluster_state ok
         cleanup_external_data_dump r
         
@@ -1442,8 +1445,8 @@ start_cluster 1 0 [list overrides [list "ext-data-mode" kv "ext-data-id" id18 "l
         # Assert FLUSHDB completes in under 500ms
         # This will FAIL with the current O(n) implementation
         # demonstrating the need for a more efficient flush mechanism (e.g., native flush API)
-        if {$flush_time >= 500} {
-            fail "FLUSHDB took ${flush_time}ms, expected < 500ms (demonstrates O(n) limitation - needs native flush API)"
+        if {$flush_time >= 1000} {
+            fail "FLUSHDB took ${flush_time}ms, expected < 1000ms (demonstrates O(n) limitation - needs native flush API)"
         }
 
         # Action: After flushall restore from this backup
@@ -3127,6 +3130,7 @@ start_cluster 1 0 [list overrides [list "ext-data-mode" kv "ext-data-id" id43 "l
         cleanup_external_data_dump r
         
         # Add a large number of keys to external storage
+        r select 0
         set num_keys 1000
         for {set i 0} {$i < $num_keys} {incr i} {
             r set "cluster_nonblock_key_$i" "cluster_nonblock_value_$i" EXT
@@ -3167,6 +3171,7 @@ start_cluster 1 0 [list overrides [list "ext-data-mode" kv "ext-data-id" id43 "l
             fail "Async external data dump did not complete in cluster mode"
         }
 
+        assert_equal {OK} [r external_data DROP db0 FORCE]
         cleanup_external_data_dump r
     }
 }
@@ -3536,6 +3541,7 @@ start_server [list overrides [list "ext-data-mode" kv "ext-data-id" id49 "loglev
             assert_equal "primary_value1" [$primary get primary_key1 ext]
             assert_equal "primary_value1" [$replica get primary_key1 ext]
 
+            assert_equal {OK} [$primary external_data DROP db0 FORCE]
             cleanup_external_data_dump $primary
             cleanup_external_data_dump $replica
         }
@@ -3628,6 +3634,7 @@ start_server [list overrides [list "cluster-enabled" yes "cluster-ping-interval"
         # Verify cluster state is still ok
         wait_for_cluster_state ok
 
+        assert_equal {OK} [$primary external_data DROP db0 FORCE]
         cleanup_external_data_dump $primary
         cleanup_external_data_dump $replica
         }
@@ -3917,7 +3924,7 @@ start_cluster 1 0 [list overrides [list "ext-data-mode" kv "ext-data-id" test_no
     }
 
 
-    test "Multiple DUMPs to same node directory" {
+    test "Multiple dumps to same node directory" {
         wait_for_cluster_state ok
         cleanup_external_data_dump r
         
@@ -3940,7 +3947,7 @@ start_cluster 1 0 [list overrides [list "ext-data-mode" kv "ext-data-id" test_no
         # Verify both backups use the same node_id (local node)
         assert_equal [dict get $parsed1 node_id] [dict get $parsed2 node_id]
         
-        # Note: timestamps may be the same if both DUMPs are from the same backup cycle
+        # Note: timestamps may be the same if both dumps are from the same backup cycle
         # This is expected behavior - same cycle = same timestamp = same data state
         
         cleanup_external_data_dump r

@@ -25,7 +25,7 @@ typedef ValkeyModuleExternalFilterState filterState;
 
 /* New module registration functions */
 int externalDataModuleRegister(const char *name, ValkeyModule *module, storageMethods *storage_methods, filterMethods *filter_methods);
-int externalDataModuleUnregister(const char *name);
+int externalDataModuleUnregister(const char *name, int force_shutdown);
 
 /* Functions */
 int externalStorageCallSetFunc(externalDataModuleInstance *si, int dbid, robj *key, robj *value);
@@ -89,21 +89,21 @@ unsigned long long externalDataCountKeys(int dbid);
 
 /* Deferred initialization entry */
 typedef struct DeferredInit {
-    sds db_name;              /* Database name that needs init */
-    mstime_t first_attempt;   /* When we first tried (for timeout) */
-    mstime_t next_retry;      /* When to retry next */
-    int attempts;             /* Number of retry attempts */
+    sds db_name;            /* Database name that needs init */
+    mstime_t first_attempt; /* When we first tried (for timeout) */
+    mstime_t next_retry;    /* When to retry next */
+    int attempts;           /* Number of retry attempts */
 } DeferredInit;
 
 /* Deferred initialization context */
 typedef struct ExternalDataDeferredCtx {
-    list *queue;              /* Queue of DeferredInit entries */
-    long max_defer_ms;   /* Max time to keep retrying */
+    list *queue;       /* Queue of DeferredInit entries */
+    long max_defer_ms; /* Max time to keep retrying */
     /* Statistics */
-    long queued;         /* Total queued */
-    long retried;        /* Total retry attempts */
-    long succeeded;      /* Successful retries */
-    long expired;        /* Expired without success */
+    long queued;    /* Total queued */
+    long retried;   /* Total retry attempts */
+    long succeeded; /* Successful retries */
+    long expired;   /* Expired without success */
 } ExternalDataDeferredCtx;
 
 /* Get external data database by name */

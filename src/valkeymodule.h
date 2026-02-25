@@ -1578,7 +1578,7 @@ typedef struct ValkeyModuleExternalStorageMethods {
 
     /* The callback function called to free a snapshot. */
     void (*free_snapshot)(ValkeyModuleCtx *module_ctx, ValkeyModuleExternalStorageCtx *storage_ctx, void *snapshot);
-    
+
     /* Get backup_id for loading data from a specific address.
      * Used by replicas to construct the correct backup_id format for loading
      * from primary's backups.
@@ -2692,7 +2692,7 @@ VALKEYMODULE_API int (*ValkeyModule_RegisterEnumConfig)(ValkeyModuleCtx *ctx,
                                                         ValkeyModuleConfigApplyFunc applyfn,
                                                         void *privdata) VALKEYMODULE_ATTR;
 VALKEYMODULE_API int (*ValkeyModule_LoadConfigs)(ValkeyModuleCtx *ctx) VALKEYMODULE_ATTR;
-VALKEYMODULE_API ValkeyModuleString *(*ValkeyModule_GetConfigValue)(ValkeyModuleCtx *ctx, const char *name) VALKEYMODULE_ATTR;
+VALKEYMODULE_API ValkeyModuleString *(*ValkeyModule_GetConfigValue)(ValkeyModuleCtx *ctx, const char *name)VALKEYMODULE_ATTR;
 VALKEYMODULE_API ValkeyModuleRdbStream *(*ValkeyModule_RdbStreamCreateFromFile)(const char *filename)VALKEYMODULE_ATTR;
 VALKEYMODULE_API void (*ValkeyModule_RdbStreamFree)(ValkeyModuleRdbStream *stream) VALKEYMODULE_ATTR;
 VALKEYMODULE_API int (*ValkeyModule_RdbLoad)(ValkeyModuleCtx *ctx,

@@ -3963,7 +3963,7 @@ void bgsaveCommand(client *c) {
         }
     } else if (rdbSaveBackground(REPLICA_REQ_NONE, server.rdb_filename, rsiptr, RDBFLAGS_NONE) == C_OK) {
         addReplyStatus(c, "Background saving started");
-        
+
         /* Start async dump of external data if BGSAVE succeeded */
         if (isExtDataOn()) {
             if (externalDataDumpForFullSync() == EXTERNAL_SUCCESS) {

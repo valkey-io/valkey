@@ -1275,6 +1275,7 @@ start_server {tags {"introspection"}} {
             rdma-bind
             rdma-port
             ext-data-mode
+            ext-data-id
         }
 
         if {!$::tls} {

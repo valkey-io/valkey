@@ -1032,7 +1032,7 @@ int startBgsaveForReplication(int mincapa, int req, int rdbver) {
      * it would never be cleared: the file is not deleted. This way if
      * the user enables it later with CONFIG SET, we are fine. */
     if (retval == C_OK && !socket_target && server.rdb_del_sync_files) RDBGeneratedByReplication = 1;
-    
+
     /* Start async dump of external data for full sync if BGSAVE succeeded */
     if (retval == C_OK && isExtDataOn()) {
         if (externalDataDumpForFullSync() == EXTERNAL_SUCCESS) {
@@ -1977,7 +1977,7 @@ void updateReplicasWaitingBgsave(int bgsaveerr, int type) {
 
     /* Note: there's a chance we got here from within the REPLCONF ACK command
      * so we must avoid using freeClient, otherwise we'll crash on our way up. */
-    
+
     /* Check if external data dump completed and log result */
     if (isExtDataOn() && bgsaveerr == C_OK) {
         ValkeyModuleString *backup_id = NULL;

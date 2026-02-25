@@ -202,6 +202,7 @@ typedef struct ValkeyModuleCtx ValkeyModuleCtx;
 #define VALKEYMODULE_CTX_COMMAND (1 << 9)                /* Context created to serve a command from call() or AOF (which calls cmd->proc directly) */
 #define VALKEYMODULE_CTX_KEYSPACE_NOTIFICATION (1 << 10) /* Context created a keyspace notification event */
 #define VALKEYMODULE_CTX_SCRIPT_EXECUTION (1 << 11)      /* Context created to serve a scripting engine execution */
+#define VALKEYMODULE_CTX_FLAGS_SHUTDOWN (1 << 12)        /* Context created during server shutdown */
 
 /* This represents a key opened with VM_OpenKey(). */
 struct ValkeyModuleKey {
@@ -1088,7 +1089,7 @@ int moduleGetCommandChannelsViaAPI(struct serverCommand *cmd, robj **argv, int a
  */
 void moduleExternalStorageInitContext(ValkeyModuleCtx *out_ctx,
                                       ValkeyModule *module) {
-    moduleCreateContext(out_ctx, module, VALKEYMODULE_CTX_NONE);
+    moduleCreateContext(out_ctx, module, VALKEYMODULE_CTX_COMMAND);
 }
 
 /* Initialize a module context to be used by external filter callback
@@ -12932,7 +12933,7 @@ int moduleLoad(const char *path, void **module_argv, int module_argc, int is_loa
     return C_OK;
 }
 
-static int moduleUnloadInternal(struct ValkeyModule *module, const char **errmsg) {
+static int moduleUnloadInternal(struct ValkeyModule *module, const char **errmsg, int is_shutdown) {
     if (listLength(module->types)) {
         *errmsg = "the module exports one or more module-side data "
                   "types, can't unload";
@@ -12979,6 +12980,9 @@ static int moduleUnloadInternal(struct ValkeyModule *module, const char **errmsg
     if (onunload) {
         ValkeyModuleCtx ctx;
         moduleCreateContext(&ctx, module, VALKEYMODULE_CTX_TEMP_CLIENT);
+        if (is_shutdown) {
+            ctx.flags |= VALKEYMODULE_CTX_FLAGS_SHUTDOWN;
+        }
         int unload_status = onunload((void *)&ctx);
         moduleFreeContext(&ctx);
 
@@ -13023,7 +13027,7 @@ int moduleUnload(sds name, const char **errmsg) {
         return C_ERR;
     }
 
-    return moduleUnloadInternal(module, errmsg);
+    return moduleUnloadInternal(module, errmsg, 0);
 }
 
 /* Unload all loaded modules from the server.
@@ -13048,7 +13052,7 @@ void moduleUnloadAllModules(void) {
         struct ValkeyModule *module = dictGetVal(de);
 
         const char *errmsg = NULL;
-        if (moduleUnloadInternal(module, &errmsg) == C_ERR) {
+        if (moduleUnloadInternal(module, &errmsg, 1) == C_ERR) {
             serverLog(LL_WARNING, "Failed to unload module %s: %s", module->name, errmsg);
         }
     }
@@ -13628,10 +13632,10 @@ int VM_LoadConfigs(ValkeyModuleCtx *ctx) {
  * Returns NULL if the configuration key doesn't exist. */
 ValkeyModuleString *VM_GetConfigValue(ValkeyModuleCtx *ctx, const char *name) {
     VALKEYMODULE_NOT_USED(ctx);
-    
+
     sds config_val = getConfigValue(name);
     if (!config_val) return NULL;
-    
+
     ValkeyModuleString *ret = createStringObject(config_val, sdslen(config_val));
     sdsfree(config_val);
     return ret;
@@ -13957,8 +13961,10 @@ int VM_RegisterExternalDataModule(ValkeyModuleCtx *module_ctx,
  *
  */
 int VM_UnregisterExternalDataModule(ValkeyModuleCtx *ctx, const char *module_name) {
-    UNUSED(ctx);
-    if (externalDataModuleUnregister(module_name) != C_OK) {
+    /* Check if we're in shutdown via context flag */
+    int force_shutdown = (ctx && (ctx->flags & VALKEYMODULE_CTX_FLAGS_SHUTDOWN)) ? 1 : 0;
+
+    if (externalDataModuleUnregister(module_name, force_shutdown) != C_OK) {
         return VALKEYMODULE_ERR;
     }
     return VALKEYMODULE_OK;

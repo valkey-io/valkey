@@ -7564,7 +7564,7 @@ __attribute__((weak)) int main(int argc, char **argv) {
         if (server.sentinel_mode) loadSentinelConfigFromQueue();
         sdsfree(options);
     }
-    
+
     if (server.sentinel_mode) sentinelCheckConfigFile();
     if (server.hash_seed != NULL) {
         memset(hashseed, 0, sizeof(hashseed));
@@ -7659,7 +7659,7 @@ __attribute__((weak)) int main(int argc, char **argv) {
         serverLog(LL_NOTICE, "Server initialized");
         aofLoadManifestFromDisk();
         loadDataFromDisk();
-        
+
         /* Process external data loading after persistence data is loaded.
          * This handles auto-loading of external data backups when modules
          * are loaded at startup and have state to restore. */

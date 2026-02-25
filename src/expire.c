@@ -130,7 +130,7 @@ typedef struct {
     mstime_t now;
     unsigned long sampled; /* num keys checked */
     unsigned long expired; /* num keys expired */
-    mstime_t ttl_sum;     /* sum of ttl for key with ttl not yet expired */
+    mstime_t ttl_sum;      /* sum of ttl for key with ttl not yet expired */
     int ttl_samples;       /* num keys with ttl not yet expired */
 
     /* Entry-specific fields */

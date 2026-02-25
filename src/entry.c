@@ -194,7 +194,7 @@ static void entrySetValueSds(entry *e, sds value) {
 static void *entryGetAllocPtr(const entry *entry) {
     char *buf = sdsAllocPtr(entryGetField(entry));
     if (entryHasValuePtr(entry)) buf -= sizeof(void *);
-    if (entryHasExpiry(entry)) buf -= sizeof(mstime_t );
+    if (entryHasExpiry(entry)) buf -= sizeof(mstime_t);
     return buf;
 }
 
@@ -248,7 +248,7 @@ static inline size_t entryReqSize(size_t field_len,
                                   size_t *field_size,
                                   size_t *expiry_size,
                                   size_t *embedded_value_size) {
-    size_t expiry_alloc_size = (expiry == EXPIRY_NONE) ? 0 : sizeof(mstime_t );
+    size_t expiry_alloc_size = (expiry == EXPIRY_NONE) ? 0 : sizeof(mstime_t);
     int embedded_field_sds_type = sdsReqType(field_len);
     if (embedded_field_sds_type == SDS_TYPE_5 && (expiry_alloc_size > 0)) {
         embedded_field_sds_type = SDS_TYPE_8;

@@ -810,7 +810,7 @@ start_server {tags {"dual-channel-replication external:skip"}} {
             # Pause primary main process after fork
             $primary debug pause-after-fork 1
             $replica replicaof $primary_host $primary_port
-            wait_for_log_messages 0 {"*Done loading RDB*"} 0 1000 10
+            wait_for_log_messages 0 {"*Done loading RDB*"} 0 5000 10
 
             # At this point rdb is loaded but psync hasn't been established yet. 
             # Pause the replica so the primary main process will wake up while the
@@ -828,6 +828,9 @@ start_server {tags {"dual-channel-replication external:skip"}} {
             set res [wait_for_log_messages -1 {"*Unable to partial resync with replica * for lack of backlog*"} $loglines 2000 10]
             set loglines [lindex $res 1]
         }
+        # Waiting for the primary to enter the paused state, that is, make sure that bgsave is triggered.
+        wait_process_paused -1
+        wait_for_log_messages 0 {"*Done loading RDB*"} $replica_loglines 5000 10
         $replica replicaof no one
         wait_for_condition 500 1000 {
             [s -1 rdb_bgsave_in_progress] eq 0

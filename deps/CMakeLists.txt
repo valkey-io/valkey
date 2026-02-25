@@ -21,7 +21,7 @@ if (USE_RDMA) # Module or no module
     set(ENABLE_RDMA
         ON
         CACHE BOOL "If RDMA support should be compiled or not")
-    if (VALKEY_BUILD_RDMA_AS_MODULE)
+    if (USE_RDMA EQUAL 2) # Module
         set(ENABLE_DLOPEN_RDMA ON CACHE BOOL "Build valkey_rdma with dynamic loading")
     endif()
 endif ()

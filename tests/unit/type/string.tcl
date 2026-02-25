@@ -357,12 +357,23 @@ start_server {tags {"string"}} {
         assert_equal 1 [r msetex 1 key1{t} val1 exat [expr [clock seconds] - 100]]
         assert_equal 1 [r msetex 1 key2{t} val2 pxat [expr [clock milliseconds] - 100000]]
 
+        set repl [attach_to_replication_stream]
+
         assert_equal 2 [r dbsize]
         assert_equal 0 [r exists key1{t} key2{t}]
         assert_equal 0 [r dbsize]
 
+        assert_replication_stream $repl {
+            {multi}
+            {select *}
+            {unlink *}
+            {unlink *}
+            {exec}
+        }
+        close_replication_stream $repl
+
         assert_equal {OK} [r debug set-active-expire 1]
-    } {} {needs:debug}
+    } {} {needs:debug needs:repl}
 
     test {MSETEX lazy expire with all expiration options} {
         r debug set-active-expire 0
@@ -373,17 +384,32 @@ start_server {tags {"string"}} {
         r msetex 1 key3{t} val3 exat [expr [clock seconds] - 1]
         r msetex 1 key4{t} val4 pxat [expr [clock milliseconds] - 1]
 
+        set repl [attach_to_replication_stream]
+
         wait_for_condition 5 1000 {
-            [r exists key1{t} key2{t} key3{t} key4{t}] eq 0
+            [r exists key1{t}] eq 0 &&
+            [r exists key2{t}] eq 0 &&
+            [r exists key3{t}] eq 0 &&
+            [r exists key4{t}] eq 0
         } else {
             fail "Keys did not expire"
         }
+
+        assert_replication_stream $repl {
+            {select *}
+            {unlink *}
+            {unlink *}
+            {unlink *}
+            {unlink *}
+        }
+        close_replication_stream $repl
+
         assert_equal {OK} [r debug set-active-expire 1]
-    } {} {needs:debug}
+    } {} {needs:debug needs:repl}
 
     test {MSETEX active expire with all expiration options} {
-        r debug set-active-expire 1
-        r del key1{t} key2{t} key3{t} key4{t}
+        r debug set-active-expire 0
+        r flushall
         r config resetstat
 
         r msetex 1 key1{t} val1 ex 1
@@ -391,12 +417,24 @@ start_server {tags {"string"}} {
         r msetex 1 key3{t} val3 exat [expr [clock seconds] - 1]
         r msetex 1 key4{t} val4 pxat [expr [clock milliseconds] - 1]
 
+        set repl [attach_to_replication_stream]
+        r debug set-active-expire 1
+
         wait_for_condition 5 1000 {
             [s expired_keys] eq 4
         } else {
             fail "Keys did not expire"
         }
-    } {} {needs:debug}
+
+        assert_replication_stream $repl {
+            {select *}
+            {unlink *}
+            {unlink *}
+            {unlink *}
+            {unlink *}
+        }
+        close_replication_stream $repl
+    } {} {needs:debug needs:repl}
 
     test {MSETEX with KEEPTTL option - retain the time to live associated with the keys} {
         # TTL should be retained
@@ -495,8 +533,9 @@ start_server {tags {"string"}} {
         r del key1{t}
         r set key1{t} oldval px 1
         after 10
-        # Key should be logically expired, so XX should fail
+        # Key should be logically expired, so XX should fail and key deleted by the XX check
         assert_equal 0 [r msetex 1 key1{t} newval xx]
+        assert_error {ERR no such key} {r debug object key1{t}}
         assert_equal {OK} [r debug set-active-expire 1]
     } {} {needs:debug}
 

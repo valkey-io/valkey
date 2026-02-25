@@ -7701,7 +7701,7 @@ __attribute__((weak)) int main(int argc, char **argv) {
  * Common command extended options - EX/EXAT/PX/PXAT/KEEPTTL
  *
  * Function takes pointers to client, flags, unit, expire_idx, pointer to pointer of expire obj,
- * pointer to pointer of compare obj if needed to be determined and command_type which can be COMMAND_XXX.
+ * pointer to pointer of compare obj if needed to be determined and command_type which can be COMMAND_*.
  *
  * If there are any syntax violations C_ERR is returned else C_OK is returned.
  *

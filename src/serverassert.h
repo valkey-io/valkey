@@ -7,7 +7,7 @@
  *
  * ----------------------------------------------------------------------------
  *
- * Copyright (c) 2006-2012, Salvatore Sanfilippo <antirez at gmail dot com>
+ * Copyright (c) 2006-2012, Redis Ltd.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -53,10 +53,18 @@
 #define likely(x) (x)
 #endif
 
+#ifdef assert
+#undef assert
+#endif
+
 #define assert(_e) (likely((_e)) ? (void)0 : (_serverAssert(#_e, __FILE__, __LINE__), valkey_unreachable()))
 #define panic(...) _serverPanic(__FILE__, __LINE__, __VA_ARGS__), valkey_unreachable()
 
 void _serverAssert(const char *estr, const char *file, int line);
 void _serverPanic(const char *file, int line, const char *msg, ...);
+
+#ifndef static_assert
+#define static_assert _Static_assert
+#endif
 
 #endif

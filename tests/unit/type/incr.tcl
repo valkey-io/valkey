@@ -75,17 +75,6 @@ start_server {tags {"incr"}} {
         assert_equal {-1} [r decrby key_not_exist 1]
     }
 
-    test {INCR uses shared objects in the 0-9999 range} {
-        r set foo -1
-        r incr foo
-        assert_refcount_morethan foo 1
-        r set foo 9998
-        r incr foo
-        assert_refcount_morethan foo 1
-        r incr foo
-        assert_refcount 1 foo
-    }
-
     test {INCR can modify objects in-place} {
         r set foo 20000
         r incr foo
@@ -152,8 +141,7 @@ start_server {tags {"incr"}} {
     } {WRONGTYPE*}
 
     # On some platforms strtold("+inf") with valgrind returns a non-inf result
-    if {!$::valgrind} {
-        test {INCRBYFLOAT does not allow NaN or Infinity} {
+    test {INCRBYFLOAT does not allow NaN or Infinity} {
             r set foo 0
             set err {}
             catch {r incrbyfloat foo +inf} err
@@ -161,8 +149,7 @@ start_server {tags {"incr"}} {
             # p.s. no way I can force NaN to test it from the API because
             # there is no way to increment / decrement by infinity nor to
             # perform divisions.
-        } {ERR *would produce*}
-    }
+    } {ERR *would produce*} {valgrind:skip}
 
     test {INCRBYFLOAT decrement} {
         r set foo 1

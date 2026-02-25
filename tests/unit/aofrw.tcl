@@ -9,6 +9,9 @@ start_server {tags {"aofrw external:skip logreqres:skip"} overrides {save {}}} {
     foreach rdbpre {yes no} {
         r config set aof-use-rdb-preamble $rdbpre
         test "AOF rewrite during write load: RDB preamble=$rdbpre" {
+            # Start with an empty db
+            r flushall
+
             # Start a write load for 10 seconds
             set master [srv 0 client]
             set master_host [srv 0 host]

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009-2012, Salvatore Sanfilippo <antirez at gmail dot com>
+ * Copyright (c) 2009-2012, Redis Ltd.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -77,8 +77,8 @@
 #endif
 
 /* Test for backtrace() */
-#if defined(__APPLE__) || (defined(__linux__) && defined(__GLIBC__)) || defined(__FreeBSD__) ||                        \
-    ((defined(__OpenBSD__) || defined(__NetBSD__) || defined(__sun)) && defined(USE_BACKTRACE)) ||                     \
+#if defined(__APPLE__) || (defined(__linux__) && defined(__GLIBC__)) || defined(__FreeBSD__) ||    \
+    ((defined(__OpenBSD__) || defined(__NetBSD__) || defined(__sun)) && defined(USE_BACKTRACE)) || \
     defined(__DragonFly__) || (defined(__UCLIBC__) && defined(__UCLIBC_HAS_BACKTRACE__))
 #define HAVE_BACKTRACE 1
 #endif
@@ -98,21 +98,21 @@
 #endif
 
 /* Test for accept4() */
-#if defined(__linux__) || defined(__FreeBSD__) || defined(OpenBSD5_7) ||                                               \
-    (defined(__DragonFly__) && __DragonFly_version >= 400305) ||                                                       \
+#if defined(__linux__) || defined(__FreeBSD__) || defined(OpenBSD5_7) || \
+    (defined(__DragonFly__) && __DragonFly_version >= 400305) ||         \
     (defined(__NetBSD__) && (defined(NetBSD8_0) || __NetBSD_Version__ >= 800000000))
 #define HAVE_ACCEPT4 1
 #endif
 
 /* Detect for pipe2() */
-#if defined(__linux__) || defined(__FreeBSD__) || defined(OpenBSD5_7) ||                                               \
-    (defined(__DragonFly__) && __DragonFly_version >= 400106) ||                                                       \
+#if defined(__linux__) || defined(__FreeBSD__) || defined(OpenBSD5_7) || \
+    (defined(__DragonFly__) && __DragonFly_version >= 400106) ||         \
     (defined(__NetBSD__) && (defined(NetBSD6_0) || __NetBSD_Version__ >= 600000000))
 #define HAVE_PIPE2 1
 #endif
 
 /* Detect for kqueue */
-#if (defined(__APPLE__) && defined(MAC_OS_10_6_DETECTED)) || defined(__DragonFly__) || defined(__FreeBSD__) ||         \
+#if (defined(__APPLE__) && defined(MAC_OS_10_6_DETECTED)) || defined(__DragonFly__) || defined(__FreeBSD__) || \
     defined(__OpenBSD__) || defined(__NetBSD__)
 #define HAVE_KQUEUE 1
 #endif
@@ -172,11 +172,21 @@
 #define VALKEY_NO_SANITIZE(sanitizer)
 #endif
 
+#if defined(__SANITIZE_ADDRESS__)
+/* GCC */
+#define VALKEY_ADDRESS_SANITIZER 1
+#elif defined(__has_feature)
+#if __has_feature(address_sanitizer)
+/* Clang */
+#define VALKEY_ADDRESS_SANITIZER 1
+#endif
+#endif
+
 /* Define rdb_fsync_range to sync_file_range() on Linux, otherwise we use
  * the plain fsync() call. */
 #if (defined(__linux__) && defined(SYNC_FILE_RANGE_WAIT_BEFORE))
 #define HAVE_SYNC_FILE_RANGE 1
-#define rdb_fsync_range(fd, off, size)                                                                                 \
+#define rdb_fsync_range(fd, off, size) \
     sync_file_range(fd, off, size, SYNC_FILE_RANGE_WAIT_BEFORE | SYNC_FILE_RANGE_WRITE)
 #elif defined(__APPLE__)
 #define rdb_fsync_range(fd, off, size) fcntl(fd, F_FULLFSYNC)
@@ -186,7 +196,7 @@
 
 /* Check if we can use setproctitle().
  * BSD systems have support for it, we provide an implementation for
- * Linux and osx. */
+ * Linux and macOS. */
 #if (defined __NetBSD__ || defined __FreeBSD__ || defined __OpenBSD__)
 #define USE_SETPROCTITLE
 #endif
@@ -216,16 +226,16 @@ void setproctitle(const char *fmt, ...);
 #define BIG_ENDIAN 4321    /* most-significant byte first (IBM, net) */
 #define PDP_ENDIAN 3412    /* LSB first in word, MSW first in long (pdp)*/
 
-#if defined(__i386__) || defined(__x86_64__) || defined(__amd64__) || defined(vax) || defined(ns32000) ||              \
-    defined(sun386) || defined(MIPSEL) || defined(_MIPSEL) || defined(BIT_ZERO_ON_RIGHT) || defined(__alpha__) ||      \
+#if defined(__i386__) || defined(__x86_64__) || defined(__amd64__) || defined(vax) || defined(ns32000) ||         \
+    defined(sun386) || defined(MIPSEL) || defined(_MIPSEL) || defined(BIT_ZERO_ON_RIGHT) || defined(__alpha__) || \
     defined(__alpha)
 #define BYTE_ORDER LITTLE_ENDIAN
 #endif
 
-#if defined(sel) || defined(pyr) || defined(mc68000) || defined(sparc) || defined(is68k) || defined(tahoe) ||          \
-    defined(ibm032) || defined(ibm370) || defined(MIPSEB) || defined(_MIPSEB) || defined(_IBMR2) || defined(DGUX) ||   \
-    defined(apollo) || defined(__convex__) || defined(_CRAY) || defined(__hppa) || defined(__hp9000) ||                \
-    defined(__hp9000s300) || defined(__hp9000s700) || defined(BIT_ZERO_ON_LEFT) || defined(m68k) ||                    \
+#if defined(sel) || defined(pyr) || defined(mc68000) || defined(sparc) || defined(is68k) || defined(tahoe) ||        \
+    defined(ibm032) || defined(ibm370) || defined(MIPSEB) || defined(_MIPSEB) || defined(_IBMR2) || defined(DGUX) || \
+    defined(apollo) || defined(__convex__) || defined(_CRAY) || defined(__hppa) || defined(__hp9000) ||              \
+    defined(__hp9000s300) || defined(__hp9000s700) || defined(BIT_ZERO_ON_LEFT) || defined(m68k) ||                  \
     defined(__sparc) || (defined(__APPLE__) && defined(__POWERPC__))
 #define BYTE_ORDER BIG_ENDIAN
 #endif
@@ -273,7 +283,7 @@ void setproctitle(const char *fmt, ...);
 #endif /* __aarch64__ && __APPLE__ */
 #endif /* CACHE_LINE_SIZE */
 
-#if (__i386 || __amd64 || __powerpc__) && __GNUC__
+#if (defined(__i386) || defined(__amd64) || defined(__powerpc__)) && defined(__GNUC__)
 #define GNUC_VERSION (__GNUC__ * 10000 + __GNUC_MINOR__ * 100 + __GNUC_PATCHLEVEL__)
 #if defined(__clang__)
 #define HAVE_ATOMIC
@@ -338,7 +348,7 @@ void setcpuaffinity(const char *cpulist);
 #define HAVE_FADVISE
 #endif
 
-#define IO_THREADS_MAX_NUM 16
+#define IO_THREADS_MAX_NUM 256
 
 #ifndef CACHE_LINE_SIZE
 #if defined(__aarch64__) && defined(__APPLE__)
@@ -346,6 +356,52 @@ void setcpuaffinity(const char *cpulist);
 #else
 #define CACHE_LINE_SIZE 64
 #endif
+#endif
+
+/* Check for GCC version >= 4.9 */
+#if defined(__GNUC__) && (__GNUC__ > 4 || (__GNUC__ == 4 && __GNUC_MINOR__ >= 9))
+#define HAS_BUILTIN_PREFETCH 1
+/* Check for Clang version >= 3.6 */
+#elif defined(__clang__) && (__clang_major__ > 3 || (__clang_major__ == 3 && __clang_minor__ >= 6))
+#define HAS_BUILTIN_PREFETCH 1
+#else
+#define HAS_BUILTIN_PREFETCH 0
+#endif
+
+#if HAS_BUILTIN_PREFETCH
+#define valkey_prefetch(addr) __builtin_prefetch(addr)
+#else
+#define valkey_prefetch(addr) ((void)(addr))
+#endif
+
+/* Check if we can compile x86 SIMD code */
+#if defined(__x86_64__) && ((defined(__GNUC__) && __GNUC__ >= 5) || (defined(__clang__) && __clang_major__ >= 4)) && defined(__has_attribute) && __has_attribute(target)
+#define HAVE_X86_SIMD 1
+#else
+#define HAVE_X86_SIMD 0
+#endif
+
+#if HAVE_X86_SIMD
+#define ATTRIBUTE_TARGET_SSE2 __attribute__((target("sse2")))
+#define ATTRIBUTE_TARGET_AVX2 __attribute__((target("avx2")))
+#define ATTRIBUTE_TARGET_AVX512 __attribute__((target("avx512f,avx512bw,avx512vl")))
+#else
+#define ATTRIBUTE_TARGET_SSE2
+#define ATTRIBUTE_TARGET_AVX2
+#define ATTRIBUTE_TARGET_AVX512
+#endif
+
+/* Check if we can compile ARM SIMD code */
+#if defined(__aarch64__) && (defined(__ARM_NEON) || defined(__ARM_NEON__))
+#define HAVE_ARM_NEON 1
+#else
+#define HAVE_ARM_NEON 0
+#endif
+
+#if defined(__linux__) && defined(__GLIBC__) && (defined(__GNUC__) && (__GNUC__ > 4) || defined(__clang__) && (__clang_major__) > 5)
+#define HAVE_IFUNC 1
+#else
+#define HAVE_IFUNC 0
 #endif
 
 #endif

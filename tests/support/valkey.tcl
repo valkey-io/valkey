@@ -1,5 +1,5 @@
 # Tcl client library - used by the server test
-# Copyright (C) 2009-2014 Salvatore Sanfilippo
+# Copyright (c) 2009-2014 Redis Ltd.
 # Released under the BSD license like Redis itself
 #
 # Example usage:
@@ -25,7 +25,6 @@
 #
 # vwait forever
 
-package require Tcl 8.5
 package provide valkey 0.1
 
 source [file join [file dirname [info script]] "response_transformers.tcl"]

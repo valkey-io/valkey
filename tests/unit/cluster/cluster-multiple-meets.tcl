@@ -1,8 +1,4 @@
-# make sure the test infra won't use SELECT
-set old_singledb $::singledb
-set ::singledb 1
-
-tags {tls:skip external:skip cluster} {
+tags {tls:skip external:skip cluster singledb} {
     set base_conf [list cluster-enabled yes]
     start_multiple_servers 2 [list overrides $base_conf] {
         test "Cluster nodes are reachable" {
@@ -58,7 +54,7 @@ tags {tls:skip external:skip cluster} {
             } else {
                 fail "Node 1 recognizes node 0 even though it drops PONGs from node 0"
             }
-            assert {[llength [get_cluster_nodes 0 connected]] == 2}
+            assert {[llength [get_cluster_nodes 0]] == 2}
 
             # Drop incoming and outgoing links from/to 1
             R 0 DEBUG CLUSTERLINK KILL ALL [R 1 CLUSTER MYID]
@@ -77,6 +73,8 @@ tags {tls:skip external:skip cluster} {
             # Both a and b will turn to cluster state ok
             wait_for_condition 1000 50 {
                 [CI 1 cluster_state] eq {ok} && [CI 0 cluster_state] eq {ok} &&
+                [llength [get_cluster_nodes 0 connected]] == 2 &&
+                [llength [get_cluster_nodes 1 connected]] == 2 &&
                 [CI 1 cluster_stats_messages_meet_sent] == [CI 0 cluster_stats_messages_meet_received]
             } else {
                 fail "1 cluster_state:[CI 1 cluster_state], 0 cluster_state: [CI 0 cluster_state]"
@@ -84,6 +82,3 @@ tags {tls:skip external:skip cluster} {
         }
     } ;# stop servers
 } ;# tags
-
-set ::singledb $old_singledb
-

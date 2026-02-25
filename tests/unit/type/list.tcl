@@ -282,7 +282,7 @@ foreach type {listpack quicklist} {
 }
 
 run_solo {list-large-memory} {
-start_server [list overrides [list save ""] ] {
+start_server [list overrides [list save ""] tags {"large-memory"}] {
 
 # test if the server supports such large configs (avoid 32 bit builds)
 catch {
@@ -308,7 +308,7 @@ if {[lindex [r config get proto-max-bulk-len] 1] == 10000000000} {
         assert_equal [read_big_bulk {r rpop lst}] $str_length
         assert {[r llen lst] == 1}
         assert_equal [read_big_bulk {r rpop lst}] $str_length
-   } {} {large-memory}
+   }
 
    test {Test LINDEX and LINSERT on plain nodes over 4GB} {
        r flushdb
@@ -323,7 +323,7 @@ if {[lindex [r config get proto-max-bulk-len] 1] == 10000000000} {
        r write "*5\r\n\$7\r\nLINSERT\r\n\$3\r\nlst\r\n\$6\r\nBEFORE\r\n\$3\r\n\"9\"\r\n"
        write_big_bulk 10;
        assert_equal [read_big_bulk {r rpop lst}] $str_length
-   } {} {large-memory}
+   }
 
    test {Test LTRIM on plain nodes over 4GB} {
        r flushdb
@@ -335,7 +335,7 @@ if {[lindex [r config get proto-max-bulk-len] 1] == 10000000000} {
        assert_equal [r llen lst] 2
        assert_equal [r rpop lst] 9
        assert_equal [read_big_bulk {r rpop lst}] $str_length
-   } {} {large-memory}
+   }
 
    test {Test LREM on plain nodes over 4GB} {
        r flushdb
@@ -346,7 +346,7 @@ if {[lindex [r config get proto-max-bulk-len] 1] == 10000000000} {
        r LREM lst -2 "one"
        assert_equal [read_big_bulk {r rpop lst}] $str_length
        r llen lst
-   } {1} {large-memory}
+   } {1}
 
    test {Test LSET on plain nodes over 4GB} {
        r flushdb
@@ -358,7 +358,7 @@ if {[lindex [r config get proto-max-bulk-len] 1] == 10000000000} {
        assert_equal [r rpop lst] "cc"
        assert_equal [r rpop lst] "bb"
        assert_equal [read_big_bulk {r rpop lst}] $str_length
-   } {} {large-memory}
+   }
 
     test {Test LSET on plain nodes with large elements under packed_threshold over 4GB} {
         r flushdb
@@ -368,7 +368,7 @@ if {[lindex [r config get proto-max-bulk-len] 1] == 10000000000} {
             write_big_bulk 1000000000
         }
         r ping
-    } {PONG} {large-memory}
+    } {PONG}
 
     test {Test LSET splits a quicklist node, and then merge} {
         # Test when a quicklist node can't be inserted and is split, the split
@@ -389,7 +389,7 @@ if {[lindex [r config get proto-max-bulk-len] 1] == 10000000000} {
         }
         assert_equal "g" [r lindex lst 1]
         r ping
-    } {PONG} {large-memory}
+    } {PONG}
 
     test {Test LSET splits a LZF compressed quicklist node, and then merge} {
         # Test when a LZF compressed quicklist node can't be inserted and is split,
@@ -414,7 +414,7 @@ if {[lindex [r config get proto-max-bulk-len] 1] == 10000000000} {
         assert_equal "h" [r lindex lst 0]
         r config set list-compress-depth 0
         r ping
-    } {PONG} {large-memory}
+    } {PONG}
 
     test {Test LMOVE on plain nodes over 4GB} {
        r flushdb
@@ -432,7 +432,7 @@ if {[lindex [r config get proto-max-bulk-len] 1] == 10000000000} {
        assert_equal [r lpop lst2{t}] "cc"
        assert_equal [r lpop lst{t}] "dd"
        assert_equal [read_big_bulk {r rpop lst{t}}] $str_length
-   } {} {large-memory}
+   }
 
     # restore defaults
     r config set proto-max-bulk-len 536870912
@@ -1136,7 +1136,7 @@ foreach {pop} {BLPOP BLMPOP_LEFT} {
         wait_for_blocked_clients_count 1
         r swapdb 1 9
         $rd read
-    } {k hello} {singledb:skip}
+    } {k hello} {singledb:skip cluster:skip}
 
     test {SWAPDB wants to wake blocked client, but the key already expired} {
         set repl [attach_to_replication_stream]
@@ -1176,7 +1176,7 @@ foreach {pop} {BLPOP BLMPOP_LEFT} {
             {swapdb 1 9}
             {select 9}
             {set somekey1 someval1}
-            {del k}
+            {unlink k}
             {select 1}
             {set somekey2 someval2}
         }
@@ -1184,7 +1184,7 @@ foreach {pop} {BLPOP BLMPOP_LEFT} {
         r debug set-active-expire 1
         # Restore server and client state
         r select 9
-    } {OK} {singledb:skip needs:debug}
+    } {OK} {singledb:skip cluster:skip needs:debug}
 
     test {MULTI + LPUSH + EXPIRE + DEBUG SLEEP on blocked client, key already expired} {
         set repl [attach_to_replication_stream]
@@ -1220,7 +1220,7 @@ foreach {pop} {BLPOP BLMPOP_LEFT} {
             {rpush k hello}
             {pexpireat k *}
             {exec}
-            {del k}
+            {unlink k}
         }
         close_replication_stream $repl
         # Restore server and client state
@@ -2429,5 +2429,60 @@ foreach {pop} {BLPOP BLMPOP_RIGHT} {
 
         close_replication_stream $repl
     } {} {needs:repl}
+
+    test "Blocking timeout following PAUSE should honor the timeout" {
+        # cleanup first
+        r del mylist
+        
+        # create a test client
+        set rd [valkey_deferring_client]
+        
+        # first PAUSE all writes for a very long time
+        r client pause 10000000000000 write
+
+        # block a client on the list
+        $rd BLPOP mylist 1
+        wait_for_blocked_clients_count 1
+        
+        # now unpause the writes
+        r client unpause
+
+        # client should time-out
+        wait_for_blocked_clients_count 0
+        
+        $rd close
+    }
+
+    test "CLIENT NO-TOUCH with BRPOP and RPUSH regression test" {
+        # Test scenario:
+        # 1. Client 1: CLIENT NO-TOUCH on
+        # 2. Client 2: BRPOP mylist 0
+        # 3. Client 1: RPUSH mylist elem
+        
+        # cleanup first
+        r del mylist
+        
+        # Create two test clients
+        set rd1 [valkey_deferring_client]
+        set rd2 [valkey_deferring_client]
+        
+        # Client 1: Enable CLIENT NO-TOUCH
+        $rd1 client no-touch on
+        assert_equal {OK} [$rd1 read]
+        
+        # Client 2: Block waiting for elements in mylist
+        $rd2 brpop mylist 0
+        wait_for_blocked_client
+        
+        # Client 1: Push an element to mylist
+        $rd1 rpush mylist elem
+        assert_equal {1} [$rd1 read]
+
+        # Verify Client 2 received the element
+        assert_equal {mylist elem} [$rd2 read]
+
+        $rd1 close
+        $rd2 close
+    }
 
 } ;# stop servers

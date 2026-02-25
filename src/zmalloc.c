@@ -1,6 +1,6 @@
 /* zmalloc - total amount of allocated memory aware version of malloc()
  *
- * Copyright (c) 2009-2010, Salvatore Sanfilippo <antirez at gmail dot com>
+ * Copyright (c) 2009-2010, Redis Ltd.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -84,16 +84,11 @@ void zlibc_free(void *ptr) {
 #define calloc(count, size) je_calloc(count, size)
 #define realloc(ptr, size) je_realloc(ptr, size)
 #define free(ptr) je_free(ptr)
-#define mallocx(size, flags) je_mallocx(size, flags)
-#define dallocx(ptr, flags) je_dallocx(ptr, flags)
 #endif
 
-#if __STDC_NO_THREADS__
-#define thread_local __thread
-#else
-#include <threads.h>
-#endif
+#define thread_local _Thread_local
 
+#define PADDING_ELEMENT_NUM (CACHE_LINE_SIZE / sizeof(size_t) - 1)
 #define MAX_THREADS_NUM (IO_THREADS_MAX_NUM + 3 + 1)
 /* A thread-local storage which keep the current thread's index in the used_memory_thread array. */
 static thread_local int thread_index = -1;
@@ -103,11 +98,13 @@ static thread_local int thread_index = -1;
  * the reader will see the inconsistency memory on non x86 architecture potentially.
  * For the ARM and PowerPC platform, we can solve this issue by make the memory aligned.
  * For the other architecture, lets fall back to the atomic operation to keep safe. */
-#if defined(__i386__) || defined(__x86_64__) || defined(__amd64__) || defined(__POWERPC__) || defined(__arm__) ||      \
+#if defined(__i386__) || defined(__x86_64__) || defined(__amd64__) || defined(__POWERPC__) || defined(__arm__) || \
     defined(__arm64__)
-static __attribute__((aligned(sizeof(size_t)))) size_t used_memory_thread[MAX_THREADS_NUM];
+static __attribute__((aligned(CACHE_LINE_SIZE))) size_t used_memory_thread_padded[MAX_THREADS_NUM + PADDING_ELEMENT_NUM];
+static size_t *used_memory_thread = &used_memory_thread_padded[PADDING_ELEMENT_NUM];
 #else
-static _Atomic size_t used_memory_thread[MAX_THREADS_NUM];
+static __attribute__((aligned(CACHE_LINE_SIZE))) _Atomic size_t used_memory_thread_padded[MAX_THREADS_NUM + PADDING_ELEMENT_NUM];
+static _Atomic size_t *used_memory_thread = &used_memory_thread_padded[PADDING_ELEMENT_NUM];
 #endif
 static atomic_int total_active_threads = 0;
 /* This is a simple protection. It's used only if some modules create a lot of threads. */
@@ -208,25 +205,6 @@ void *zmalloc_usable(size_t size, size_t *usable) {
     if (usable) *usable = usable_size;
     return ptr;
 }
-
-/* Allocation and free functions that bypass the thread cache
- * and go straight to the allocator arena bins.
- * Currently implemented only for jemalloc. Used for online defragmentation. */
-#ifdef HAVE_DEFRAG
-void *zmalloc_no_tcache(size_t size) {
-    if (size >= SIZE_MAX / 2) zmalloc_oom_handler(size);
-    void *ptr = mallocx(size + PREFIX_SIZE, MALLOCX_TCACHE_NONE);
-    if (!ptr) zmalloc_oom_handler(size);
-    update_zmalloc_stat_alloc(zmalloc_size(ptr));
-    return ptr;
-}
-
-void zfree_no_tcache(void *ptr) {
-    if (ptr == NULL) return;
-    update_zmalloc_stat_free(zmalloc_size(ptr));
-    dallocx(ptr, MALLOCX_TCACHE_NONE);
-}
-#endif
 
 /* Try allocating memory and zero it, and return NULL if failed.
  * '*usable' is set to the usable size if non NULL. */
@@ -474,15 +452,25 @@ void zmalloc_set_oom_handler(void (*oom_handler)(size_t)) {
     zmalloc_oom_handler = oom_handler;
 }
 
-/* Use 'MADV_DONTNEED' to release memory to operating system quickly.
- * We do that in a fork child process to avoid CoW when the parent modifies
- * these shared pages. */
-void zmadvise_dontneed(void *ptr) {
+/* Try to release pages back to the OS directly using 'MADV_DONTNEED' (bypassing
+ * the allocator) in a fork child process to avoid CoW when the parent modifies
+ * those shared pages. For small allocations, we can't release any full page,
+ * so in an effort to avoid getting the size of the allocation from the
+ * allocator (malloc_size) when we already know it's small, we check the
+ * size_hint. If the size is not already known, passing a size_hint of 0 will
+ * lead the checking the real size of the allocation.
+ * Also please note that the size may be not accurate, so in order to make this
+ * solution effective, the judgement for releasing memory pages should not be
+ * too strict. */
+void zmadvise_dontneed(void *ptr, size_t size_hint) {
 #if defined(USE_JEMALLOC) && defined(__linux__)
+    if (ptr == NULL) return;
+
     static size_t page_size = 0;
     if (page_size == 0) page_size = sysconf(_SC_PAGESIZE);
     size_t page_size_mask = page_size - 1;
 
+    if (size_hint && size_hint / 2 < page_size) return;
     size_t real_size = zmalloc_size(ptr);
     if (real_size < page_size) return;
 
@@ -496,6 +484,7 @@ void zmadvise_dontneed(void *ptr) {
     }
 #else
     (void)(ptr);
+    (void)(size_hint);
 #endif
 }
 
@@ -685,52 +674,7 @@ size_t zmalloc_get_rss(void) {
 #define STRINGIFY_(x) #x
 #define STRINGIFY(x) STRINGIFY_(x)
 
-/* Compute the total memory wasted in fragmentation of inside small arena bins.
- * Done by summing the memory in unused regs in all slabs of all small bins. */
-size_t zmalloc_get_frag_smallbins(void) {
-    unsigned nbins;
-    size_t sz, frag = 0;
-    char buf[100];
-
-    sz = sizeof(unsigned);
-    assert(!je_mallctl("arenas.nbins", &nbins, &sz, NULL, 0));
-    for (unsigned j = 0; j < nbins; j++) {
-        size_t curregs, curslabs, reg_size;
-        uint32_t nregs;
-
-        /* The size of the current bin */
-        snprintf(buf, sizeof(buf), "arenas.bin.%d.size", j);
-        sz = sizeof(size_t);
-        assert(!je_mallctl(buf, &reg_size, &sz, NULL, 0));
-
-        /* Number of used regions in the bin */
-        snprintf(buf, sizeof(buf), "stats.arenas." STRINGIFY(MALLCTL_ARENAS_ALL) ".bins.%d.curregs", j);
-        sz = sizeof(size_t);
-        assert(!je_mallctl(buf, &curregs, &sz, NULL, 0));
-
-        /* Number of regions per slab */
-        snprintf(buf, sizeof(buf), "arenas.bin.%d.nregs", j);
-        sz = sizeof(uint32_t);
-        assert(!je_mallctl(buf, &nregs, &sz, NULL, 0));
-
-        /* Number of current slabs in the bin */
-        snprintf(buf, sizeof(buf), "stats.arenas." STRINGIFY(MALLCTL_ARENAS_ALL) ".bins.%d.curslabs", j);
-        sz = sizeof(size_t);
-        assert(!je_mallctl(buf, &curslabs, &sz, NULL, 0));
-
-        /* Calculate the fragmentation bytes for the current bin and add it to the total. */
-        frag += ((nregs * curslabs) - curregs) * reg_size;
-    }
-
-    return frag;
-}
-
-int zmalloc_get_allocator_info(size_t *allocated,
-                               size_t *active,
-                               size_t *resident,
-                               size_t *retained,
-                               size_t *muzzy,
-                               size_t *frag_smallbins_bytes) {
+int zmalloc_get_allocator_info(size_t *allocated, size_t *active, size_t *resident, size_t *retained, size_t *muzzy) {
     uint64_t epoch = 1;
     size_t sz;
     *allocated = *resident = *active = 0;
@@ -765,8 +709,6 @@ int zmalloc_get_allocator_info(size_t *allocated,
         *muzzy = pmuzzy * page;
     }
 
-    /* Total size of consumed meomry in unused regs in small bins (AKA external fragmentation). */
-    *frag_smallbins_bytes = zmalloc_get_frag_smallbins();
     return 1;
 }
 
@@ -791,13 +733,8 @@ int jemalloc_purge(void) {
 
 #else
 
-int zmalloc_get_allocator_info(size_t *allocated,
-                               size_t *active,
-                               size_t *resident,
-                               size_t *retained,
-                               size_t *muzzy,
-                               size_t *frag_smallbins_bytes) {
-    *allocated = *resident = *active = *frag_smallbins_bytes = 0;
+int zmalloc_get_allocator_info(size_t *allocated, size_t *active, size_t *resident, size_t *retained, size_t *muzzy) {
+    *allocated = *resident = *active = 0;
     if (retained) *retained = 0;
     if (muzzy) *muzzy = 0;
     return 1;
@@ -826,13 +763,13 @@ void zlibc_trim(void) {
 /* For proc_pidinfo() used later in zmalloc_get_smap_bytes_by_field().
  * Note that this file cannot be included in zmalloc.h because it includes
  * a Darwin queue.h file where there is a "LIST_HEAD" macro (!) defined
- * conficting with user code. */
+ * conflicting with user code. */
 #include <libproc.h>
 #endif
 
 /* Get the sum of the specified field (converted form kb to bytes) in
  * /proc/self/smaps. The field must be specified with trailing ":" as it
- * apperas in the smaps output.
+ * appears in the smaps output.
  *
  * If a pid is specified, the information is extracted for such a pid,
  * otherwise if pid is -1 the information is reported is about the
@@ -926,7 +863,7 @@ size_t zmalloc_get_memory_size(void) {
     int mib[2];
     mib[0] = CTL_HW;
 #if defined(HW_MEMSIZE)
-    mib[1] = HW_MEMSIZE; /* OSX. --------------------- */
+    mib[1] = HW_MEMSIZE; /* macOS. --------------------- */
 #elif defined(HW_PHYSMEM64)
     mib[1] = HW_PHYSMEM64; /* NetBSD, OpenBSD. --------- */
 #endif
@@ -940,7 +877,7 @@ size_t zmalloc_get_memory_size(void) {
     return (size_t)sysconf(_SC_PHYS_PAGES) * (size_t)sysconf(_SC_PAGESIZE);
 
 #elif defined(CTL_HW) && (defined(HW_PHYSMEM) || defined(HW_REALMEM))
-    /* DragonFly BSD, FreeBSD, NetBSD, OpenBSD, and OSX. -------- */
+    /* DragonFly BSD, FreeBSD, NetBSD, OpenBSD, and macOS. -------- */
     int mib[2];
     mib[0] = CTL_HW;
 #if defined(HW_REALMEM)

@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include "../fmacros.h"
 #include "../crc64.h"
 
 #include "test_help.h"

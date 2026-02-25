@@ -1,5 +1,15 @@
 set testmodule [file normalize tests/modules/moduleconfigs.so]
 set testmoduletwo [file normalize tests/modules/moduleconfigstwo.so]
+set testmoduleparameter [file normalize tests/modules/moduleparameter.so]
+
+proc module_get_args {mod} {
+    foreach line [r module list] {
+        if {[dict get $line name] eq $mod} {
+            return [dict get $line args]
+        }
+    }
+    throw error {module not found}
+}
 
 start_server {tags {"modules"}} {
     r module load $testmodule
@@ -221,15 +231,15 @@ start_server {tags {"modules"}} {
     }
     test {startup moduleconfigs} {
         # No loadmodule directive
-        catch {exec src/valkey-server --moduleconfigs.string "hello"} err
+        catch {exec $::VALKEY_SERVER_BIN --moduleconfigs.string "hello"} err
         assert_match {*Module Configuration detected without loadmodule directive or no ApplyConfig call: aborting*} $err
 
         # Bad config value
-        catch {exec src/valkey-server --loadmodule "$testmodule" --moduleconfigs.string "rejectisfreed"} err
+        catch {exec $::VALKEY_SERVER_BIN --loadmodule "$testmodule" --moduleconfigs.string "rejectisfreed"} err
         assert_match {*Issue during loading of configuration moduleconfigs.string : Cannot set string to 'rejectisfreed'*} $err
 
         # missing LoadConfigs call
-        catch {exec src/valkey-server --loadmodule "$testmodule" noload --moduleconfigs.string "hello"} err
+        catch {exec $::VALKEY_SERVER_BIN --loadmodule "$testmodule" noload --moduleconfigs.string "hello"} err
         assert_match {*Module Configurations were not set, likely a missing LoadConfigs call. Unloading the module.*} $err
 
         # successful
@@ -243,5 +253,14 @@ start_server {tags {"modules"}} {
             assert_equal [r config get moduleconfigs.memory_numeric] "moduleconfigs.memory_numeric 1024"
         }
     }
-}
+    test {Module Update Args} {
+        r module load $testmoduleparameter 10 20 30
 
+        set t [r module list]
+        set modulename [lmap x [r module list] {dict get $x name}]
+        assert_not_equal [lsearch $modulename moduleparameter] -1
+        assert_equal {10 20 30} [module_get_args moduleparameter]
+        assert_equal OK [r testmoduleparameter.update.parameter 40 50 60 70]
+        assert_equal {40 50 60 70} [module_get_args moduleparameter]
+    }
+}

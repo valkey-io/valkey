@@ -1,9 +1,24 @@
 tags {"rdb external:skip"} {
 
+# Helper function to start a server and kill it, just to check the error
+# logged.
+set defaults {}
+proc start_server_and_kill_it {overrides code} {
+    upvar defaults defaults srv srv server_path server_path
+    set config [concat $defaults $overrides]
+    set srv [start_server [list overrides $config keep_persistence true]]
+    uplevel 1 $code
+    kill_server $srv
+}
+
 set server_path [tmpdir "server.rdb-encoding-test"]
 
 # Copy RDB with different encodings in server path
 exec cp tests/assets/encodings.rdb $server_path
+exec cp tests/assets/encodings-rdb12.rdb $server_path
+exec cp tests/assets/encodings-rdb75-unknown-types.rdb $server_path
+exec cp tests/assets/encodings-rdb987.rdb $server_path
+exec cp tests/assets/encodings-rdb987-unknown-types.rdb $server_path
 exec cp tests/assets/list-quicklist.rdb $server_path
 
 start_server [list overrides [list "dir" $server_path "dbfilename" "list-quicklist.rdb" save ""]] {
@@ -15,11 +30,7 @@ start_server [list overrides [list "dir" $server_path "dbfilename" "list-quickli
     } {7}
 }
 
-start_server [list overrides [list "dir" $server_path "dbfilename" "encodings.rdb"]] {
-  test "RDB encoding loading test" {
-    r select 0
-    csvdump r
-  } {"0","compressible","string","aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+set csv_dump {"0","compressible","string","aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 "0","hash","hash","a","1","aa","10","aaa","100","b","2","bb","20","bbb","200","c","3","cc","30","ccc","300","ddd","400","eee","5000000000",
 "0","hash_zipped","hash","a","1","b","2","c","3",
 "0","list","list","1","2","3","a","b","c","100000","6000000000","1","2","3","a","b","c","100000","6000000000","1","2","3","a","b","c","100000","6000000000",
@@ -33,6 +44,68 @@ start_server [list overrides [list "dir" $server_path "dbfilename" "encodings.rd
 "0","zset","zset","a","1","b","2","c","3","aa","10","bb","20","cc","30","aaa","100","bbb","200","ccc","300","aaaa","1000","cccc","123456789","bbbb","5000000000",
 "0","zset_zipped","zset","a","1","b","2","c","3",
 }
+
+start_server [list overrides [list "dir" $server_path "dbfilename" "encodings.rdb"]] {
+  test "RDB encoding loading test" {
+    r select 0
+    csvdump r
+  } $csv_dump
+}
+
+start_server_and_kill_it [list "dir" $server_path "dbfilename" "encodings-rdb987.rdb"] {
+    test "RDB future version loading, strict version check" {
+        wait_for_condition 50 100 {
+            [string match {*Fatal error loading*} \
+                 [exec tail -1 < [dict get $srv stdout]]]
+        } else {
+            fail "Server started even though RDB version is unsupported"
+        }
+    }
+}
+
+start_server [list overrides [list "dir" $server_path \
+                                  "dbfilename" "encodings-rdb987.rdb" \
+                                  "rdb-version-check" "relaxed"]] {
+    test "RDB future version loading, relaxed version check" {
+        r select 0
+        csvdump r
+    } $csv_dump
+}
+
+start_server_and_kill_it [list dir $server_path \
+                              dbfilename "encodings-rdb987-unknown-types.rdb" \
+                              rdb-version-check relaxed] {
+    test "RDB future version loading with unknown types, relaxed version check" {
+        wait_for_condition 50 100 {
+            [string match {*Unknown type or opcode when loading DB. Unrecoverable error, aborting now.*} \
+                 [exec tail -2 < [dict get $srv stdout]]]
+        } else {
+            fail "Server started even though RDB contains unknown types"
+        }
+    }
+}
+
+start_server [list overrides [list dir $server_path \
+                                  dbfilename "encodings-rdb12.rdb" \
+                                  rdb-version-check relaxed]] {
+    test "RDB foreign version loading, relaxed version check" {
+        r select 0
+        assert_equal foo [r keys *]
+        assert_equal bar [r get foo]
+    }
+}
+
+start_server_and_kill_it [list dir $server_path \
+                              dbfilename "encodings-rdb75-unknown-types.rdb" \
+                              rdb-version-check relaxed] {
+    test "RDB foreign version loading with unknown types, relaxed version check" {
+        wait_for_condition 50 100 {
+            [string match {*Can't handle foreign type or opcode 150 in RDB with version 75*} \
+                 [exec tail -2 < [dict get $srv stdout]]]
+        } else {
+            fail "Server started even though RDB contains unknown types"
+        }
+    }
 }
 
 set server_path [tmpdir "server.rdb-startup-test"]
@@ -80,24 +153,44 @@ start_server [list overrides [list "dir" $server_path] keep_persistence true] {
     r del stream
 }
 
-# Helper function to start a server and kill it, just to check the error
-# logged.
-set defaults {}
-proc start_server_and_kill_it {overrides code} {
-    upvar defaults defaults srv srv server_path server_path
-    set config [concat $defaults $overrides]
-    set srv [start_server [list overrides $config keep_persistence true]]
-    uplevel 1 $code
-    kill_server $srv
+set dump_path [file join $server_path dump.rdb]
+
+# Prepare custom umask test scenario
+if {[catch {package require Tclx}]} {
+    if {$::verbose} {
+        puts "Skipping umask test. Package Tclx not installed."
+    }
+} else {
+    # We have umask from the Tclx package.
+    set old_umask [umask]
+    set old_perm [expr {666 - $old_umask}]
+    assert_equal [file attributes $dump_path -permissions] 00$old_perm
+
+    if {$old_umask == 22} {
+        set new_umask 2
+    } else {
+        set new_umask 22
+    }
+    set new_perm [expr {666 - $new_umask}]
+
+    umask $new_umask
+    start_server [list overrides [list "dir" $server_path] keep_persistence true] {
+        test {Test nondefault umask applied} {
+            r save
+            # Use numeric comparison for compatibility with Tcl 8 and 9.
+            assert_range [file attributes $dump_path -permissions] 00$new_perm 00$new_perm
+        }
+    }
+    umask $old_umask
 }
 
 # Make the RDB file unreadable
-file attributes [file join $server_path dump.rdb] -permissions 0222
+file attributes $dump_path -permissions 0222
 
 # Detect root account (it is able to read the file even with 002 perm)
 set isroot 0
 catch {
-    open [file join $server_path dump.rdb]
+    open $dump_path
     set isroot 1
 }
 
@@ -116,11 +209,11 @@ if {!$isroot} {
 }
 
 # Fix permissions of the RDB file.
-file attributes [file join $server_path dump.rdb] -permissions 0666
+file attributes $dump_path -permissions 0666
 
 # Corrupt its CRC64 checksum.
-set filesize [file size [file join $server_path dump.rdb]]
-set fd [open [file join $server_path dump.rdb] r+]
+set filesize [file size $dump_path]
+set fd [open $dump_path r+]
 fconfigure $fd -translation binary
 seek $fd -8 end
 puts -nonewline $fd "foobar00"; # Corrupt the checksum
@@ -170,6 +263,64 @@ start_server {} {
         }
         assert_equal [s rdb_changes_since_last_save] 0
     }
+
+    test {bgsave cancel aborts save} {
+        r config set save ""
+        # Generating RDB will take some 100 seconds
+        r config set rdb-key-save-delay 1000000
+        populate 100 "" 16
+
+        r bgsave
+        wait_for_condition 50 100 {
+            [s rdb_bgsave_in_progress] == 1
+        } else {
+            fail "bgsave did not start in time"
+        }
+        set fork_child_pid [get_child_pid 0]
+        
+        assert {[r bgsave cancel] eq {Background saving cancelled}}
+        set temp_rdb [file join [lindex [r config get dir] 1] temp-${fork_child_pid}.rdb]
+        # Temp rdb must be deleted
+        wait_for_condition 50 100 {
+            ![file exists $temp_rdb]
+        } else {
+            fail "bgsave temp file was not deleted after cancel"
+        }
+
+         # Make sure no save is running and that bgsave return an error
+         wait_for_condition 50 100 {
+            [s rdb_bgsave_in_progress] == 0
+        } else {
+            fail "bgsave is currently running"
+        }
+        assert_error "ERR Background saving is currently not in progress or scheduled" {r bgsave cancel}
+    }
+
+    test {bgsave cancel schedulled request} {
+        r config set save ""
+        # Generating RDB will take some 100 seconds
+        r config set rdb-key-save-delay 1000000
+        populate 100 "" 16
+
+        # start a long AOF child
+        r bgrewriteaof
+        wait_for_condition 50 100 {
+            [s aof_rewrite_in_progress] == 1
+        } else {
+            fail "aof not started"
+        }
+        
+        # Make sure cancel return valid status
+        assert {[r bgsave schedule] eq {Background saving scheduled}}
+
+        # Cancel the scheduled save
+        assert {[r bgsave cancel] eq {Scheduled background saving cancelled}}
+
+        # Make sure a second call to bgsave cancel return an error
+        assert_error "ERR Background saving is currently not in progress or scheduled" {r bgsave cancel}
+    }
+
+
 }
 
 test {client freed during loading} {
@@ -414,6 +565,34 @@ start_server {} {
         # server is writable again
         r set x y
     } {OK}
+}
+
+start_server {} {
+    test {RDB Load from incompatible version preserves data} {
+        # Set test keys
+        r set testkey1 "value1"
+        r set testkey2 "value2" 
+
+        # Use RDB with version 987. 
+        # This emulates a full sync from a server with a future version
+        set server_dir [lindex [r config get dir] 1]
+        set rdb_filename [lindex [r config get dbfilename] 1]
+        set rdb_path "$server_dir/$rdb_filename"
+        exec cp tests/assets/encodings-rdb987.rdb $rdb_path
+
+        # Reload will trigger the rdbLoad code path with the RDBFLAGS_EMPTY_DATA flag
+        catch {r debug reload nosave}
+        
+        # Check that version error appears in logs
+        verify_log_message 0 "*Can't handle RDB format version*" 0
+
+        # Verify we don't enter the flushing code path
+        verify_no_log_message 0 "*RDB signature and version check passed*" 0
+
+        # Verify our original data is not flushed
+        assert_equal [r get testkey1] "value1"
+        assert_equal [r get testkey2] "value2"
+    }
 }
 
 } ;# tags

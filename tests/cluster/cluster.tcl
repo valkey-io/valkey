@@ -1,6 +1,6 @@
 # Cluster-specific test functions.
 #
-# Copyright (C) 2014 Salvatore Sanfilippo antirez@gmail.com
+# Copyright (C) 2014 Redis Ltd.
 # This software is released under the BSD License. See the COPYING file for
 # more information.
 
@@ -215,6 +215,9 @@ proc wait_for_cluster_propagation {} {
     wait_for_condition 1000 50 {
         [cluster_config_consistent] eq 1
     } else {
+        for {set j 0} {$j < [llength $::servers]} {incr j} {
+            puts "R $j cluster slots output: [R $j cluster slots]"
+        }
         fail "cluster config did not reach a consistent state"
     }
 }

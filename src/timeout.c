@@ -1,4 +1,4 @@
-/* Copyright (c) 2009-2020, Salvatore Sanfilippo <antirez at gmail dot com>
+/* Copyright (c) 2009-2020, Redis Ltd.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -37,7 +37,7 @@
  * not blocked right now). If so send a reply, unblock it, and return 1.
  * Otherwise 0 is returned and no operation is performed. */
 int checkBlockedClientTimeout(client *c, mstime_t now) {
-    if (c->flag.blocked && c->bstate.timeout != 0 && c->bstate.timeout < now) {
+    if (c->flag.blocked && c->bstate->timeout != 0 && c->bstate->timeout < now) {
         /* Handle blocking operation specific timeout. */
         unblockClientOnTimeout(c);
         return 1;
@@ -89,29 +89,28 @@ int clientsCronHandleTimeout(client *c, mstime_t now_ms) {
 #define CLIENT_ST_KEYLEN 16 /* 8 bytes mstime + 8 bytes client ID. */
 
 /* Given client ID and timeout, write the resulting radix tree key in buf. */
-void encodeTimeoutKey(unsigned char *buf, uint64_t timeout, client *c) {
+void encodeTimeoutKey(client *c, uint64_t timeout, unsigned char *buf_out) {
     timeout = htonu64(timeout);
-    memcpy(buf, &timeout, sizeof(timeout));
-    memcpy(buf + 8, &c, sizeof(c));
-    if (sizeof(c) == 4) memset(buf + 12, 0, 4); /* Zero padding for 32bit target. */
+    memcpy(buf_out, &timeout, sizeof(timeout));
+    writePointerWithPadding(buf_out + sizeof(timeout), c);
 }
 
 /* Given a key encoded with encodeTimeoutKey(), resolve the fields and write
  * the timeout into *toptr and the client pointer into *cptr. */
-void decodeTimeoutKey(unsigned char *buf, uint64_t *toptr, client **cptr) {
-    memcpy(toptr, buf, sizeof(*toptr));
-    *toptr = ntohu64(*toptr);
-    memcpy(cptr, buf + 8, sizeof(*cptr));
+void decodeTimeoutKey(unsigned char *buf, uint64_t *timeout_ptr, client **client_ptr) {
+    memcpy(timeout_ptr, buf, sizeof(*timeout_ptr));
+    *timeout_ptr = ntohu64(*timeout_ptr);
+    memcpy(client_ptr, buf + sizeof(*timeout_ptr), sizeof(*client_ptr));
 }
 
 /* Add the specified client id / timeout as a key in the radix tree we use
  * to handle blocked clients timeouts. The client is not added to the list
  * if its timeout is zero (block forever). */
 void addClientToTimeoutTable(client *c) {
-    if (c->bstate.timeout == 0) return;
-    uint64_t timeout = c->bstate.timeout;
+    if (c->bstate->timeout == 0) return;
+    uint64_t timeout = c->bstate->timeout;
     unsigned char buf[CLIENT_ST_KEYLEN];
-    encodeTimeoutKey(buf, timeout, c);
+    encodeTimeoutKey(c, timeout, buf);
     if (raxTryInsert(server.clients_timeout_table, buf, sizeof(buf), NULL, NULL)) c->flag.in_to_table = 1;
 }
 
@@ -120,9 +119,9 @@ void addClientToTimeoutTable(client *c) {
 void removeClientFromTimeoutTable(client *c) {
     if (!c->flag.in_to_table) return;
     c->flag.in_to_table = 0;
-    uint64_t timeout = c->bstate.timeout;
+    uint64_t timeout = c->bstate->timeout;
     unsigned char buf[CLIENT_ST_KEYLEN];
-    encodeTimeoutKey(buf, timeout, c);
+    encodeTimeoutKey(c, timeout, buf);
     raxRemove(server.clients_timeout_table, buf, sizeof(buf), NULL);
 }
 
@@ -166,7 +165,7 @@ int getTimeoutFromObjectOrReply(client *c, robj *object, mstime_t *timeout, int 
             return C_ERR;
 
         ftval *= 1000.0; /* seconds => millisec */
-        if (ftval > LLONG_MAX) {
+        if (ftval > (long double)LLONG_MAX) {
             addReplyError(c, "timeout is out of range");
             return C_ERR;
         }

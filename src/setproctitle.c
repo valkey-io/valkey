@@ -2,7 +2,7 @@
  * setproctitle.c - Linux/Darwin setproctitle.
  * --------------------------------------------------------------------------
  * Copyright (C) 2010  William Ahern
- * Copyright (C) 2013  Salvatore Sanfilippo
+ * Copyright (C) 2013  Redis Ltd.
  * Copyright (C) 2013  Stam He
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -232,7 +232,7 @@ void spt_init(int argc, char *argv[]) {
 	if (!(SPT.arg0 = strdup(argv[0])))
 		goto syerr;
 
-#if __linux__
+#if defined __linux__
 	if (!(tmp = strdup(program_invocation_name)))
 		goto syerr;
 
@@ -242,7 +242,7 @@ void spt_init(int argc, char *argv[]) {
 		goto syerr;
 
 	program_invocation_short_name = tmp;
-#elif __APPLE__
+#elif defined __APPLE__
 	if (!(tmp = strdup(getprogname())))
 		goto syerr;
 

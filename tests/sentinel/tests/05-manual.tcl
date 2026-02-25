@@ -8,9 +8,15 @@ foreach_sentinel_id id {
     S $id sentinel debug publish-period 1000
 }
 
+set ::user "sentinel-user"
+set ::password "sentinel-password"
+
+
 test "Manual failover works" {
+    configure_sentinel_user_acl $::user $::password
+
     set old_port [RPort $master_id]
-    set addr [S 0 SENTINEL GET-MASTER-ADDR-BY-NAME mymaster]
+    set addr [S 0 SENTINEL GET-PRIMARY-ADDR-BY-NAME mymaster]
     assert {[lindex $addr 1] == $old_port}
 
     # Since we reduced the info-period (default 10000) above immediately,
@@ -29,12 +35,12 @@ test "Manual failover works" {
 
     foreach_sentinel_id id {
         wait_for_condition 1000 50 {
-            [lindex [S $id SENTINEL GET-MASTER-ADDR-BY-NAME mymaster] 1] != $old_port
+            [lindex [S $id SENTINEL GET-PRIMARY-ADDR-BY-NAME mymaster] 1] != $old_port
         } else {
             fail "At least one Sentinel did not receive failover info"
         }
     }
-    set addr [S 0 SENTINEL GET-MASTER-ADDR-BY-NAME mymaster]
+    set addr [S 0 SENTINEL GET-PRIMARY-ADDR-BY-NAME mymaster]
     set master_id [get_instance_id_by_port valkey [lindex $addr 1]]
 }
 
@@ -60,6 +66,7 @@ test "The old primary eventually gets reconfigured as a slave" {
     } else {
         fail "Old master not reconfigured as slave of new master"
     }
+    reset_sentinel_user_acl $::user
 }
 
 foreach flag {crash-after-election crash-after-promotion} {

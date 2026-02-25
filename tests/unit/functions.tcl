@@ -246,6 +246,8 @@ start_server {tags {"scripting"}} {
         r function kill
         after 200 ; # Give some time to Lua to call the hook again...
         assert_equal [r ping] "PONG"
+        assert_error {ERR Script killed by user with FUNCTION KILL*} {$rd read}
+        $rd close
     }
 
     test {FUNCTION - test script kill not working on function} {
@@ -261,6 +263,8 @@ start_server {tags {"scripting"}} {
         r function kill
         after 200 ; # Give some time to Lua to call the hook again...
         assert_equal [r ping] "PONG"
+        assert_error {ERR Script killed by user with FUNCTION KILL*} {$rd read}
+        $rd close
     }
 
     test {FUNCTION - test function kill not working on eval} {
@@ -275,6 +279,8 @@ start_server {tags {"scripting"}} {
         r script kill
         after 200 ; # Give some time to Lua to call the hook again...
         assert_equal [r ping] "PONG"
+        assert_error {ERR Script killed by user with SCRIPT KILL*} {$rd read}
+        $rd close
     }
 
     test {FUNCTION - test function flush} {
@@ -292,6 +298,41 @@ start_server {tags {"scripting"}} {
         assert_match {{library_name test engine LUA functions {{name test description {} flags {}}}}} [r function list]
         r function flush sync
         assert_match {} [r function list]
+    }
+
+    test {FUNCTION - test function flush will re-create the lua engine} {
+        for {set i 0} {$i < 60} {incr i} {
+            r function load [get_function_code lua test_$i test_$i {local a = 1 while true do a = a + 1 end}]
+        }
+        set before_flush_memory [s used_memory_vm_functions]
+        r function flush sync
+        set after_flush_memory [s used_memory_vm_functions]
+        assert_lessthan $after_flush_memory $before_flush_memory
+
+        for {set i 0} {$i < 100} {incr i} {
+            r function load [get_function_code lua test_$i test_$i {local a = 1 while true do a = a + 1 end}]
+        }
+        set before_flush_memory [s used_memory_vm_functions]
+        r function flush async
+        set after_flush_memory [s used_memory_vm_functions]
+        assert_lessthan $after_flush_memory $before_flush_memory
+    }
+
+    test {FUNCTION - test loading function during the flush async} {
+        for {set i 0} {$i < 10000} {incr i} {
+            r function load [get_function_code LUA test_$i test_$i {return 'hello'}]
+        }
+        r function flush sync
+
+        for {set i 0} {$i < 10000} {incr i} {
+            r function load [get_function_code LUA test_$i test_$i {return 'hello'}]
+        }
+        r function flush async
+
+        for {set i 0} {$i < 10000} {incr i} {
+            r function load [get_function_code LUA test_$i test_$i {return 'hello'}]
+        }
+        r function flush
     }
 
     test {FUNCTION - test function wrong argument} {
@@ -317,7 +358,7 @@ start_server {tags {"scripting repl external:skip"}} {
 
         test {FUNCTION - creation is replicated to replica} {
             r function load [get_no_writes_function_code LUA test test {return 'hello'}]
-            wait_for_condition 150 100 {    
+            wait_for_condition 150 100 {
                 [r -1 function list] eq {{library_name test engine LUA functions {{name test description {} flags no-writes}}}}
             } else {
                 fail "Failed waiting for function to replicate to replica"
@@ -598,7 +639,7 @@ start_server {tags {"scripting"}} {
             }
         } e
         set _ $e
-    } {*Library names can only contain letters, numbers, or underscores(_) and must be at least one character long*}
+    } {*Function names can only contain letters, numbers, or underscores(_) and must be at least one character long*}
 
     test {LIBRARIES - test registration with empty name} {
         catch {
@@ -607,7 +648,7 @@ start_server {tags {"scripting"}} {
             }
         } e
         set _ $e
-    } {*Library names can only contain letters, numbers, or underscores(_) and must be at least one character long*}
+    } {*Function names can only contain letters, numbers, or underscores(_) and must be at least one character long*}
 
     test {LIBRARIES - math.random from function load} {
         catch {
@@ -1056,7 +1097,7 @@ start_server {tags {"scripting"}} {
 
     test {FUNCTION - deny oom} {
         r FUNCTION load replace {#!lua name=test
-            server.register_function('f1', function() return redis.call('set', 'x', '1') end) 
+            server.register_function('f1', function() return redis.call('set', 'x', '1') end)
         }
 
         r config set maxmemory 1
@@ -1087,7 +1128,7 @@ start_server {tags {"scripting"}} {
             server.register_function{function_name='f3', callback=function() return redis.call('get', 'x') end, flags={'allow-stale', 'no-writes'}}
             server.register_function{function_name='f4', callback=function() return redis.call('info', 'server') end, flags={'allow-stale', 'no-writes'}}
         }
-        
+
         r config set replica-serve-stale-data no
         r replicaof 127.0.0.1 1
 
@@ -1160,7 +1201,7 @@ start_server {tags {"scripting"}} {
             server.register_function('f3', function() return 1 end)
         }} e
         assert_match "*Library 'test1' already exists*" $e
-        
+
 
         r function stats
     } {running_script {} engines {LUA {libraries_count 1 functions_count 2}}}
@@ -1208,7 +1249,7 @@ start_server {tags {"scripting"}} {
         r FUNCTION FLUSH
 
         r FUNCTION load {#!lua name=test1
-            server.register_function('f1', function() 
+            server.register_function('f1', function()
                 mt = getmetatable(_G)
                 original_globals = mt.__index
                 original_globals['redis'] = function() return 1 end

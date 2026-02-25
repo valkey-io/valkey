@@ -1,6 +1,6 @@
 /* adlist.c - A generic doubly linked list implementation
  *
- * Copyright (c) 2006-2010, Salvatore Sanfilippo <antirez at gmail dot com>
+ * Copyright (c) 2006-2010, Redis Ltd.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -31,6 +31,8 @@
 
 #include <stdlib.h>
 #include "adlist.h"
+
+#include "serverassert.h"
 #include "zmalloc.h"
 
 /* Create a new list. The created list can be freed with
@@ -53,6 +55,7 @@ list *listCreate(void) {
 
 /* Remove all the elements from the list without destroying the list itself. */
 void listEmpty(list *list) {
+    if (!list) return;
     unsigned long len;
     listNode *current, *next;
 
@@ -72,9 +75,14 @@ void listEmpty(list *list) {
  *
  * This function can't fail. */
 void listRelease(list *list) {
-    if (!list) return;
     listEmpty(list);
     zfree(list);
+}
+
+/* Just like listRelease, but takes the list as a (void *).
+ * Useful as generic free callback. */
+void listReleaseVoid(void *l) {
+    listRelease((list *)l);
 }
 
 /* Add a new node to the list, to head, containing the specified 'value'
@@ -181,14 +189,23 @@ void listDelNode(list *list, listNode *node) {
  * Remove the specified node from the list without freeing it.
  */
 void listUnlinkNode(list *list, listNode *node) {
-    if (node->prev)
+    assert(list->len > 0);
+
+    if (node->prev) {
+        assert(node->prev->next == node);
         node->prev->next = node->next;
-    else
+    } else {
+        assert(list->head == node);
         list->head = node->next;
-    if (node->next)
+    }
+
+    if (node->next) {
+        assert(node->next->prev == node);
         node->next->prev = node->prev;
-    else
+    } else {
+        assert(list->tail == node);
         list->tail = node->prev;
+    }
 
     node->next = NULL;
     node->prev = NULL;

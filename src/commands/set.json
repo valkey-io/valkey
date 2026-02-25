@@ -23,6 +23,10 @@
             [
                 "7.0.0",
                 "Allowed the `NX` and `GET` options to be used together."
+            ],
+            [
+                "8.1.0",
+                "Added the `IFEQ` option."
             ]
         ],
         "command_flags": [
@@ -30,7 +34,9 @@
             "DENYOOM"
         ],
         "acl_categories": [
-            "STRING"
+            "SLOW",
+            "STRING",
+            "WRITE"
         ],
         "key_specs": [
             {
@@ -56,7 +62,7 @@
             }
         ],
         "reply_schema": {
-            "anyOf":[
+            "anyOf": [
                 {
                     "description": "`GET` not given: Operation was aborted (conflict with one of the `XX`/`NX` options).",
                     "type": "null"
@@ -89,17 +95,25 @@
                 "name": "condition",
                 "type": "oneof",
                 "optional": true,
-                "since": "2.6.12",
                 "arguments": [
                     {
                         "name": "nx",
                         "type": "pure-token",
-                        "token": "NX"
+                        "token": "NX",
+                        "since": "2.6.12"
                     },
                     {
                         "name": "xx",
                         "type": "pure-token",
-                        "token": "XX"
+                        "token": "XX",
+                        "since": "2.6.12"
+                    },
+                    {
+                        "name": "comparison-value",
+                        "type": "string",
+                        "token": "IFEQ",
+                        "since": "8.1.0",
+                        "summary": "Sets the key's value only if the current value matches the specified comparison value."
                     }
                 ]
             },

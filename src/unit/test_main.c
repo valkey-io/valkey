@@ -1,13 +1,21 @@
 /*
- * Copyright Valkey contributors.
+ * Copyright (c) Valkey Contributors
  * All rights reserved.
- * SPDX-License-Identifier: BSD 3-Clause
+ * SPDX-License-Identifier: BSD-3-Clause
  */
 
 #include <strings.h>
+#include <string.h>
 #include <stdio.h>
 #include "test_files.h"
 #include "test_help.h"
+#include "../fmacros.h"
+#include "../util.h"
+#include "../mt19937-64.h"
+#include "../hashtable.h"
+#include "../zmalloc.h"
+
+int failed_expects;
 
 /* We override the default assertion mechanism, so that it prints out info and then dies. */
 void _serverAssert(const char *estr, const char *file, int line) {
@@ -19,17 +27,28 @@ void _serverAssert(const char *estr, const char *file, int line) {
 int runTestSuite(struct unitTestSuite *test, int argc, char **argv, int flags) {
     int test_num = 0;
     int failed_tests = 0;
+    size_t used_mem_before = zmalloc_used_memory();
     printf("[" KBLUE "START" KRESET "] - %s\n", test->filename);
 
     for (int id = 0; test->tests[id].proc != NULL; id++) {
         test_num++;
-        int test_result = (test->tests[id].proc(argc, argv, flags) != 0);
-        if (!test_result) {
+        failed_expects = 0;
+        int test_result = test->tests[id].proc(argc, argv, flags);
+        if (!test_result && !failed_expects) {
             printf("[" KGRN "ok" KRESET "] - %s:%s\n", test->filename, test->tests[id].name);
         } else {
             printf("[" KRED "fail" KRESET "] - %s:%s\n", test->filename, test->tests[id].name);
             failed_tests++;
         }
+    }
+
+    /* Check if the test suite has cleaned up all the memory used. */
+    test_num++;
+    if (zmalloc_used_memory() != used_mem_before) {
+        printf("[" KRED "%s" KRESET "] Memory leak detected of %lld bytes\n",
+               test->filename,
+               (long long)zmalloc_used_memory() - (long long)used_mem_before);
+        failed_tests++;
     }
 
     printf("[" KBLUE "END" KRESET "] - %s: ", test->filename);
@@ -40,6 +59,7 @@ int runTestSuite(struct unitTestSuite *test, int argc, char **argv, int flags) {
 int main(int argc, char **argv) {
     int flags = 0;
     char *file = NULL;
+    char *seed = NULL;
     for (int j = 1; j < argc; j++) {
         char *arg = argv[j];
         if (!strcasecmp(arg, "--accurate"))
@@ -49,13 +69,42 @@ int main(int argc, char **argv) {
         else if (!strcasecmp(arg, "--single") && (j + 1 < argc)) {
             flags |= UNIT_TEST_SINGLE;
             file = argv[j + 1];
+        } else if (!strcasecmp(arg, "--valgrind")) {
+            flags |= UNIT_TEST_VALGRIND;
+        } else if (!strcasecmp(arg, "--seed")) {
+            seed = argv[j + 1];
         }
     }
+
+    if (seed) {
+        setRandomSeedCString(seed, strlen(seed));
+    }
+
+    char seed_cstr[129];
+    getRandomSeedCString(seed_cstr, 129);
+
+    printf("Tests will run with seed=%s\n", seed_cstr);
+
+    unsigned long long genrandseed;
+    getRandomBytes((void *)&genrandseed, sizeof(genrandseed));
+
+    uint8_t hashseed[16];
+    getRandomBytes(hashseed, sizeof(hashseed));
+
 
     int numtests = sizeof(unitTestSuite) / sizeof(struct unitTestSuite);
     int failed_num = 0, suites_executed = 0;
     for (int j = 0; j < numtests; j++) {
         if (file && strcasecmp(file, unitTestSuite[j].filename)) continue;
+
+        /* We need to explicitly set the seed in the several random numbers
+         * generator that valkey server uses so that the unit tests reproduce
+         * the random values in a deterministic way. */
+        setRandomSeedCString(seed_cstr, strlen(seed_cstr));
+        init_genrand64(genrandseed);
+        srandom((unsigned)genrandseed);
+        hashtableSetHashFunctionSeed(hashseed);
+
         if (!runTestSuite(&unitTestSuite[j], argc, argv, flags)) {
             failed_num++;
         }

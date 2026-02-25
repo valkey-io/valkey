@@ -4,11 +4,13 @@ set server_path [tmpdir server.aof]
 set aof_dirname "appendonlydir"
 set aof_basename "appendonly.aof"
 set aof_dirpath "$server_path/$aof_dirname"
-set aof_base_file "$server_path/$aof_dirname/${aof_basename}.1$::base_aof_sufix$::aof_format_suffix"
-set aof_file "$server_path/$aof_dirname/${aof_basename}.1$::incr_aof_sufix$::aof_format_suffix"
+set aof_base_file "$server_path/$aof_dirname/${aof_basename}.1$::base_aof_suffix$::aof_format_suffix"
+set aof_file "$server_path/$aof_dirname/${aof_basename}.1$::incr_aof_suffix$::aof_format_suffix"
 set aof_manifest_file "$server_path/$aof_dirname/$aof_basename$::manifest_suffix"
 
-tags {"aof external:skip"} {
+tags {"aof external:skip logreqres:skip"} {
+    set db [expr {$::singledb ? 0 : 9}]
+
     # Server can start when aof-load-truncated is set to yes and AOF
     # is truncated, with an incomplete MULTI block.
     create_aof $aof_dirpath $aof_file {
@@ -107,7 +109,7 @@ tags {"aof external:skip"} {
     ## Test that valkey-check-aof indeed sees this AOF is not valid
     test "Short read: Utility should confirm the AOF is not valid" {
         catch {
-            exec src/valkey-check-aof $aof_manifest_file
+            exec $::VALKEY_CHECK_AOF_BIN $aof_manifest_file
         } result
         assert_match "*not valid*" $result
     }
@@ -119,13 +121,13 @@ tags {"aof external:skip"} {
         }
 
         catch {
-            exec src/valkey-check-aof $aof_manifest_file
+            exec $::VALKEY_CHECK_AOF_BIN $aof_manifest_file
         } result
         assert_match "*ok_up_to_line=8*" $result
     }
 
     test "Short read: Utility should be able to fix the AOF" {
-        set result [exec src/valkey-check-aof --fix $aof_manifest_file << "y\n"]
+        set result [exec $::VALKEY_CHECK_AOF_BIN --fix $aof_manifest_file << "y\n"]
         assert_match "*Successfully truncated AOF*" $result
     }
 
@@ -259,7 +261,7 @@ tags {"aof external:skip"} {
 
     start_server_aof_ex [list dir $server_path aof-load-truncated yes] [list wait_ready false] {
         test "Unknown command: Server should have logged an error" {
-            wait_for_log_messages 0 {"*Unknown command 'bla' reading the append only file*"} 0 10 1000
+            wait_for_log_messages 0 {"*unknown command 'bla'*"} 0 10 1000
         }
     }
 
@@ -397,7 +399,7 @@ tags {"aof external:skip"} {
 
     test {Truncate AOF to specific timestamp} {
         # truncate to timestamp 1628217473
-        exec src/valkey-check-aof --truncate-to-timestamp 1628217473 $aof_manifest_file
+        exec $::VALKEY_CHECK_AOF_BIN --truncate-to-timestamp 1628217473 $aof_manifest_file
         start_server_aof [list dir $server_path] {
             set c [valkey [srv host] [srv port] 0 $::tls]
             wait_done_loading $c
@@ -407,7 +409,7 @@ tags {"aof external:skip"} {
         }
 
         # truncate to timestamp 1628217471
-        exec src/valkey-check-aof --truncate-to-timestamp 1628217471 $aof_manifest_file
+        exec $::VALKEY_CHECK_AOF_BIN --truncate-to-timestamp 1628217471 $aof_manifest_file
         start_server_aof [list dir $server_path] {
             set c [valkey [srv host] [srv port] 0 $::tls]
             wait_done_loading $c
@@ -417,7 +419,7 @@ tags {"aof external:skip"} {
         }
 
         # truncate to timestamp 1628217470
-        exec src/valkey-check-aof --truncate-to-timestamp 1628217470 $aof_manifest_file
+        exec $::VALKEY_CHECK_AOF_BIN --truncate-to-timestamp 1628217470 $aof_manifest_file
         start_server_aof [list dir $server_path] {
             set c [valkey [srv host] [srv port] 0 $::tls]
             wait_done_loading $c
@@ -426,7 +428,7 @@ tags {"aof external:skip"} {
         }
 
         # truncate to timestamp 1628217469
-        catch {exec src/valkey-check-aof --truncate-to-timestamp 1628217469 $aof_manifest_file} e
+        catch {exec $::VALKEY_CHECK_AOF_BIN --truncate-to-timestamp 1628217469 $aof_manifest_file} e
         assert_match {*aborting*} $e
     }
 
@@ -435,7 +437,7 @@ tags {"aof external:skip"} {
             # generate a long running script that is propagated to the AOF as script
             # make sure that the script times out during loading
             create_aof $aof_dirpath $aof_file {
-                append_to_aof [formatCommand select 9]
+                append_to_aof [formatCommand select $db]
                 append_to_aof [formatCommand eval {redis.call('set',KEYS[1],'y'); for i=1,1500000 do redis.call('ping') end return 'ok'} 1 x]
             }
             set rd [valkey_deferring_client]
@@ -459,7 +461,7 @@ tags {"aof external:skip"} {
             append_to_manifest "file appendonly.aof.1.incr.aof seq 1 type i\n"
         }
         create_aof $aof_dirpath $aof_file {
-            append_to_aof [formatCommand select 9]
+            append_to_aof [formatCommand select $db]
             append_to_aof [formatCommand eval {redis.call("set",KEYS[1],"100")} 1 foo]
             append_to_aof [formatCommand eval {redis.call("incr",KEYS[1])} 1 foo]
             append_to_aof [formatCommand eval {redis.call("incr",KEYS[1])} 1 foo]
@@ -476,7 +478,7 @@ tags {"aof external:skip"} {
         }
 
         catch {
-            exec src/valkey-check-aof $aof_file
+            exec $::VALKEY_CHECK_AOF_BIN $aof_file
         } result
         assert_match "*Start checking Old-Style AOF*is valid*" $result
     }
@@ -488,14 +490,14 @@ tags {"aof external:skip"} {
         }
 
         catch {
-            exec src/valkey-check-aof $aof_file
+            exec $::VALKEY_CHECK_AOF_BIN $aof_file
         } result
         assert_match "*Start checking Old-Style AOF*is valid*" $result
     }
 
     test {Test valkey-check-aof for old style rdb-preamble AOF} {
         catch {
-            exec src/valkey-check-aof tests/assets/rdb-preamble.aof
+            exec $::VALKEY_CHECK_AOF_BIN tests/assets/rdb-preamble.aof
         } result
         assert_match "*Start checking Old-Style AOF*RDB preamble is OK, proceeding with AOF tail*is valid*" $result
     }
@@ -517,7 +519,7 @@ tags {"aof external:skip"} {
         }
 
         catch {
-            exec src/valkey-check-aof $aof_manifest_file
+            exec $::VALKEY_CHECK_AOF_BIN $aof_manifest_file
         } result
         assert_match "*Start checking Multi Part AOF*Start to check BASE AOF (RESP format)*BASE AOF*is valid*Start to check INCR files*INCR AOF*is valid*All AOF files and manifest are valid*" $result
     }
@@ -536,7 +538,7 @@ tags {"aof external:skip"} {
         }
 
         catch {
-            exec src/valkey-check-aof $aof_manifest_file
+            exec $::VALKEY_CHECK_AOF_BIN $aof_manifest_file
         } result
         assert_match "*Start checking Multi Part AOF*Start to check BASE AOF (RDB format)*DB preamble is OK, proceeding with AOF tail*BASE AOF*is valid*Start to check INCR files*INCR AOF*is valid*All AOF files and manifest are valid*" $result
     }
@@ -549,7 +551,7 @@ tags {"aof external:skip"} {
         }
 
         catch {
-            exec src/valkey-check-aof $aof_manifest_file
+            exec $::VALKEY_CHECK_AOF_BIN $aof_manifest_file
         } result
         assert_match "*Invalid AOF manifest file format*" $result
     }
@@ -572,12 +574,12 @@ tags {"aof external:skip"} {
         }
 
         catch {
-            exec src/valkey-check-aof $aof_manifest_file
+            exec $::VALKEY_CHECK_AOF_BIN $aof_manifest_file
         } result
         assert_match "*not valid*" $result
 
         catch {
-            exec src/valkey-check-aof --fix $aof_manifest_file
+            exec $::VALKEY_CHECK_AOF_BIN --fix $aof_manifest_file
         } result
         assert_match "*Failed to truncate AOF*because it is not the last file*" $result
     }
@@ -605,7 +607,7 @@ tags {"aof external:skip"} {
         }
 
         catch {
-            exec src/valkey-check-aof --truncate-to-timestamp 1628217473 $aof_manifest_file
+            exec $::VALKEY_CHECK_AOF_BIN --truncate-to-timestamp 1628217473 $aof_manifest_file
         } result
         assert_match "*Failed to truncate AOF*to timestamp*because it is not the last file*" $result
     }
@@ -671,5 +673,64 @@ tags {"aof external:skip"} {
             r config set appendonly yes
             r exec
         }
+    }
+}
+
+tags {"aof cluster external:skip singledb"} {
+    test {Test cluster slots / cluster shards in aof won't crash} {
+        create_aof $aof_dirpath $aof_file {
+            append_to_aof [formatCommand cluster slots]
+            append_to_aof [formatCommand cluster shards]
+        }
+
+        create_aof_manifest $aof_dirpath $aof_manifest_file {
+            append_to_manifest "file appendonly.aof.1.incr.aof seq 1 type i\n"
+        }
+
+        start_server_aof [list dir $server_path cluster-enabled yes cluster-port [find_available_port $::baseport $::portcount]] {
+            assert_equal [r ping] {PONG}
+        }
+        clean_aof_persistence $aof_dirpath
+    }
+
+    test {Test command check in aof won't crash} {
+        # cluster, wrong number of arguments for 'cluster' command
+        create_aof $aof_dirpath $aof_file { append_to_aof [formatCommand cluster] }
+        create_aof_manifest $aof_dirpath $aof_manifest_file { append_to_manifest "file appendonly.aof.1.incr.aof seq 1 type i\n" }
+        start_server_aof_ex [list dir $server_path] [list wait_ready false] {
+            wait_for_condition 100 50 {
+                ! [is_alive [srv pid]]
+            } else {
+                fail "AOF loading didn't fail"
+            }
+            assert_equal 1 [count_message_lines $server_path/stdout "wrong number of arguments for 'cluster' command"]
+        }
+        clean_aof_persistence $aof_dirpath
+
+        # cluster slots-xxx, unknown subcommand 'slots-xxx'
+        create_aof $aof_dirpath $aof_file { append_to_aof [formatCommand cluster slots-xxx] }
+        create_aof_manifest $aof_dirpath $aof_manifest_file { append_to_manifest "file appendonly.aof.1.incr.aof seq 1 type i\n" }
+        start_server_aof_ex [list dir $server_path] [list wait_ready false] {
+            wait_for_condition 100 50 {
+                ! [is_alive [srv pid]]
+            } else {
+                fail "AOF loading didn't fail"
+            }
+            assert_equal 1 [count_message_lines $server_path/stdout "unknown subcommand 'slots-xxx'"]
+        }
+        clean_aof_persistence $aof_dirpath
+
+        # cluster slots xxx, wrong number of arguments for 'cluster|slots' command
+        create_aof $aof_dirpath $aof_file { append_to_aof [formatCommand cluster slots xxx] }
+        create_aof_manifest $aof_dirpath $aof_manifest_file { append_to_manifest "file appendonly.aof.1.incr.aof seq 1 type i\n" }
+        start_server_aof_ex [list dir $server_path] [list wait_ready false] {
+            wait_for_condition 100 50 {
+                ![is_alive [srv pid]]
+            } else {
+                fail "AOF loading didn't fail"
+            }
+            assert_equal 1 [count_message_lines $server_path/stdout "wrong number of arguments for 'cluster|slots' command"]
+        }
+        clean_aof_persistence $aof_dirpath
     }
 }

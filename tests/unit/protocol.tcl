@@ -6,11 +6,25 @@ start_server {tags {"protocol network"}} {
         assert_equal "PONG" [r ping]
     }
 
+    test "Handle an empty query in pipeline" {
+        reconnect
+        r write "\r\n*1\r\n\$4\r\nping\r\n"
+        r flush
+        assert_equal PONG [r read]
+    }
+
     test "Negative multibulk length" {
         reconnect
         r write "*-10\r\n"
         r flush
         assert_equal PONG [r ping]
+    }
+
+    test "Negative multibulk length in pipeline" {
+        reconnect
+        r write "*-10\r\n*1\r\n\$4\r\nping\r\n"
+        r flush
+        assert_equal PONG [r read]
     }
 
     test "Out of range multibulk length" {
@@ -60,16 +74,89 @@ start_server {tags {"protocol network"}} {
         assert_error "*wrong*arguments*ping*" {r ping x y z}
     }
 
-    test "Unbalanced number of quotes" {
+    test "Mixing quoted and unquoted strings" {
         reconnect
-        r write "set \"\"\"test-key\"\"\" test-value\r\n"
+        r write "set \"\"\"tes\"t-'k'e\"y\" \"test\"'-'value\r\n"
+        r write "get test'-'key\r\n"
+        r flush
+        assert_equal "OK" [r read]
+        assert_equal "test-value" [r read]
+    }
+
+    test "Unbalanced single quotes" {
+        reconnect
+        r write "set foo 'b'a'r\r\n"
         r write "ping\r\n"
         r flush
         assert_error "*unbalanced*" {r read}
     }
 
+    test "Unbalanced double quotes" {
+        reconnect
+        r write "set foo \"b\"a\"r\r\n"
+        r write "ping\r\n"
+        r flush
+        assert_error "*unbalanced*" {r read}
+    }
+
+    test "Check CRLF when parsing the querybuf" {
+        # Command) SET key value
+        # RESP) *3\r\n$3\r\nSET\r\n$3\r\nkey\r\n$5\r\nvalue\r\n
+        # We need to strictly check these \r\n characters.
+        set proto "*3\r\n\$3\r\nSET\r\n\$3\r\nkey\r\n\$5\r\nvalue\r\n"
+        reconnect; r write $proto; r flush; assert_equal "OK" [r read]
+
+        # Check if multibulklen `*3\r\n` is followed by `\r\n`
+        set proto1 "*3x\n\$3\r\nSET\r\n\$3\r\nkey\r\n\$5\r\nvalue\r\n"
+        set proto2 "*3\rx\$3\r\nSET\r\n\$3\r\nkey\r\n\$5\r\nvalue\r\n"
+        set proto3 "*3xx\$3\r\nSET\r\n\$3\r\nkey\r\n\$5\r\nvalue\r\n"
+        r write $proto1; r flush; assert_error "*invalid multibulk length*" {r read}; reconnect
+        r write $proto2; r flush; assert_error "*invalid CRLF in request*" {r read}; reconnect
+        r write $proto3; r flush; assert_error "*invalid multibulk length*" {r read}; reconnect
+
+        # Check if bulklen `$3\r\n` is followed by `\r\n`
+        set proto1 "*3\r\n\$3x\nSET\r\n\$3\r\nkey\r\n\$5\r\nvalue\r\n"
+        set proto2 "*3\r\n\$3\rxSET\r\n\$3\r\nkey\r\n\$5\r\nvalue\r\n"
+        set proto3 "*3\r\n\$3xxSET\r\n\$3\r\nkey\r\n\$5\r\nvalue\r\n"
+        r write $proto1; r flush; assert_error "*invalid bulk length*" {r read}; reconnect
+        r write $proto2; r flush; assert_error "*invalid CRLF in request*" {r read}; reconnect
+        r write $proto3; r flush; assert_error "*invalid bulk length*" {r read}; reconnect
+
+        # Check if `SET\r\n` is followed by `\r\n`
+        set proto1 "*3\r\n\$3\r\nSET\rx\$3\r\nkey\r\n\$5\r\nvalue\r\n"
+        set proto2 "*3\r\n\$3\r\nSETx\n\$3\r\nkey\r\n\$5\r\nvalue\r\n"
+        set proto3 "*3\r\n\$3\r\nSETxx\$3\r\nkey\r\n\$5\r\nvalue\r\n"
+        r write $proto1; r flush; assert_error "*invalid CRLF in request*" {r read}; reconnect
+        r write $proto2; r flush; assert_error "*invalid CRLF in request*" {r read}; reconnect
+        r write $proto3; r flush; assert_error "*invalid CRLF in request*" {r read}; reconnect
+
+        # Check if `key\r\n` is followed by `\r\n`
+        set proto1 "*3\r\n\$3\r\nSET\r\n\$3\r\nkeyx\n\$5\r\nvalue\r\n"
+        set proto2 "*3\r\n\$3\r\nSET\r\n\$3\r\nkey\rx\$5\r\nvalue\r\n"
+        set proto3 "*3\r\n\$3\r\nSET\r\n\$3\r\nkeyxx\$5\r\nvalue\r\n"
+        r write $proto1; r flush; assert_error "*invalid CRLF in request*" {r read}; reconnect
+        r write $proto2; r flush; assert_error "*invalid CRLF in request*" {r read}; reconnect
+        r write $proto3; r flush; assert_error "*invalid CRLF in request*" {r read}; reconnect
+
+        # Check if bulklen `$5\r\n` is followed by `\r\n`
+        set proto1 "*3\r\n\$3\r\nSET\r\n\$3\r\nkey\r\n\$5x\nvalue\r\n"
+        set proto2 "*3\r\n\$3\r\nSET\r\n\$3\r\nkey\r\n\$5\rxvalue\r\n"
+        set proto3 "*3\r\n\$3\r\nSET\r\n\$3\r\nkey\r\n\$5xxvalue\r\n"
+        r write $proto1; r flush; assert_error "*invalid bulk length*" {r read}; reconnect
+        r write $proto2; r flush; assert_error "*invalid CRLF in request*" {r read}; reconnect
+        r write $proto3; r flush; assert_error "*invalid bulk length*" {r read}; reconnect
+
+        # Check if `value\r\n` is followed by `\r\n`
+        set proto1 "*3\r\n\$3\r\nSET\r\n\$3\r\nkey\r\n\$5\r\nvaluex\n"
+        set proto2 "*3\r\n\$3\r\nSET\r\n\$3\r\nkey\r\n\$5\r\nvalue\rx"
+        set proto3 "*3\r\n\$3\r\nSET\r\n\$3\r\nkey\r\n\$5\r\nvaluexx"
+        r write $proto1; r flush; assert_error "*invalid CRLF in request*" {r read}; reconnect
+        r write $proto2; r flush; assert_error "*invalid CRLF in request*" {r read}; reconnect
+        r write $proto3; r flush; assert_error "*invalid CRLF in request*" {r read}; reconnect
+    }
+
     set c 0
-    foreach seq [list "\x00" "*\x00" "$\x00"] {
+    foreach seq [list "\x00" "*\x00" "$\x00" "*1\r\n$\x00"] {
         incr c
         test "Protocol desync regression test #$c" {
             if {$::tls} {
@@ -77,29 +164,26 @@ start_server {tags {"protocol network"}} {
             } else {
                 set s [socket [srv 0 host] [srv 0 port]]
             }
+            fconfigure $s -translation binary
             puts -nonewline $s $seq
-            set payload [string repeat A 1024]"\n"
-            set test_start [clock seconds]
-            set test_time_limit 30
-            while 1 {
+            # PROTO_INLINE_MAX_SIZE is hardcoded in Valkey code to 64K. doing the same here 
+            # since we would like to validate it is enforced. 
+            set PROTO_INLINE_MAX_SIZE [expr 1024 * 64]
+            set payload [string repeat A 1024]
+            set payload_size 0
+            while {$payload_size <= $PROTO_INLINE_MAX_SIZE} {
                 if {[catch {
-                    puts -nonewline $s payload
-                    flush $s
                     incr payload_size [string length $payload]
+                    puts -nonewline $s $payload
+                    flush $s
                 }]} {
-                    set retval [gets $s]
-                    close $s
+                    assert_morethan $payload_size $PROTO_INLINE_MAX_SIZE
                     break
-                } else {
-                    set elapsed [expr {[clock seconds]-$test_start}]
-                    if {$elapsed > $test_time_limit} {
-                        close $s
-                        error "assertion:Valkey did not closed connection after protocol desync"
-                    }
                 }
             }
-            set retval
-        } {*Protocol error*}
+            assert_match {*Protocol error*} [gets $s]]
+            close $s
+        }
     }
     unset c
 
@@ -232,7 +316,48 @@ start_server {tags {"protocol network"}} {
 
 }
 
+start_server {tags {"protocol hello logreqres:skip"}} {
+    test {HELLO without protover} {
+        set reply [r HELLO 3]
+        assert_equal [dict get $reply proto] 3
+
+        set reply [r HELLO]
+        assert_equal [dict get $reply proto] 3
+
+        set reply [r HELLO 2]
+        assert_equal [dict get $reply proto] 2
+
+        set reply [r HELLO]
+        assert_equal [dict get $reply proto] 2
+    }
+
+    test {HELLO and availability-zone} {
+        r CONFIG SET availability-zone myzone
+
+        set reply [r HELLO 3]
+        assert_equal [dict get $reply availability_zone] myzone
+
+        set reply [r HELLO 2]
+        assert_equal [dict get $reply availability_zone] myzone
+
+        r CONFIG SET availability-zone ""
+
+        set reply [r HELLO 3]
+        assert_equal [dict exists $reply availability_zone] 0
+
+        set reply [r HELLO 2]
+        assert_equal [dict exists $reply availability_zone] 0
+    }
+}
+
 start_server {tags {"regression"}} {
+    test "Regression for a crash on zero-length multibulk" {
+        reconnect
+        r write "*0\r\nPING\r\n"
+        r flush
+        assert_equal "PONG" [r ping]
+    }
+
     test "Regression for a crash with blocking ops and pipelining" {
         set rd [valkey_deferring_client]
         set fd [r channel]

@@ -19,6 +19,10 @@
                 "type": "pattern",
                 "multiple": true
             }
+        ],
+        "acl_categories": [
+            "PUBSUB",
+            "SLOW"
         ]
     }
 }

@@ -439,6 +439,85 @@ start_server {tags {"hash"}} {
         r hgetall htest
     } {}
 
+    test {HGETDEL - single field} {
+        r del myhash
+        r hset myhash field1 value1
+        set rv {}
+        lappend rv [r hgetdel myhash FIELDS 1 field1]
+        lappend rv [r hexists myhash field1]
+        lappend rv [r exists myhash]
+        set _ $rv
+    } {value1 0 0}
+
+    test {HGETDEL - multiple fields} {
+        r del myhash
+        r hmset myhash field1 value1 field2 value2 field3 value3
+        set rv {}
+        lappend rv [r hgetdel myhash FIELDS 2 field1 field3]
+        lappend rv [r hexists myhash field1]
+        lappend rv [r hexists myhash field2]
+        lappend rv [r hexists myhash field3]
+        lappend rv [r hget myhash field2]
+        set _ $rv
+    } {{value1 value3} 0 1 0 value2}
+
+    test {HGETDEL - non-existing field} {
+        r del myhash
+        r hset myhash field1 value1
+        set rv {}
+        lappend rv [r hgetdel myhash FIELDS 1 nonexisting]
+        lappend rv [r hexists myhash field1]
+        set _ $rv
+    } {{{}} 1}
+
+    test {HGETDEL - non-existing key and hash after the key is deleted } {
+        r del myhash
+        r hset myhash field1 value1
+        assert_equal {value1 {}} [r hgetdel myhash FIELDS 2 field1 field2]
+    }
+
+    test {HGETDEL - non-existing key} {
+        r del myhash
+        assert_equal {{}} [r hgetdel myhash FIELDS 1 field1]
+    }
+
+    test {HGETDEL - mix of existing and non-existing fields} {
+        r del myhash
+        r hmset myhash a 1 b 2 c 3
+        set rv {}
+        lappend rv [r hgetdel myhash FIELDS 3 a nonexist b]
+        lappend rv [r hexists myhash a]
+        lappend rv [r hexists myhash b]
+        lappend rv [r hexists myhash c]
+        set _ $rv
+    } {{1 {} 2} 0 0 1}
+
+    test {HGETDEL - hash becomes empty after deletion} {
+        r del myhash
+        r hmset myhash a 1 b 2
+        set rv {}
+        lappend rv [r hgetdel myhash FIELDS 2 a b]
+        lappend rv [r exists myhash]
+        set _ $rv
+    } {{1 2} 0}
+
+    test {HGETDEL - wrong type} {
+        r del wrongtype
+        r set wrongtype somevalue
+        assert_error "*WRONGTYPE*" {r hgetdel wrongtype FIELDS 1 field1}
+    }
+
+    test {HGETDEL - wrong number of arguments} {
+        assert_error "*wrong number of arguments*" {r hgetdel myhash}
+    }
+
+    test {HGETDEL - check for syntax and type errors} {
+        assert_error "*value is not an integer or out of range" {r hgetdel myhash a b c}
+        assert_error "*value is not an integer or out of range" {r hgetdel myhash FIELDS a b c}
+        assert_error "*numfields should be greater than 0 and match the provided number of fields" {r hgetdel myhash FIELDS 2 a b c}
+        assert_error "*numfields should be greater than 0 and match the provided number of fields" {r hgetdel myhash FIELDS 4 a b c}
+    }
+
     test {HDEL and return value} {
         set rv {}
         lappend rv [r hdel smallhash nokey]
@@ -795,13 +874,13 @@ start_server {tags {"hash"}} {
     # 1.23 cannot be represented correctly with 64 bit doubles, so we skip
     # the test, since we are only testing pretty printing here and is not
     # a bug if the program outputs things like 1.299999...
-    if {!$::valgrind && [string match *x86_64* [exec uname -a]]} {
+    if {[string match *x86_64* [exec uname -a]]} {
         test {Test HINCRBYFLOAT for correct float representation (issue #2846)} {
             r del myhash
             assert {[r hincrbyfloat myhash float 1.23] eq {1.23}}
             assert {[r hincrbyfloat myhash float 0.77] eq {2}}
             assert {[r hincrbyfloat myhash float -0.1] eq {1.9}}
-        }
+        } {} {valgrind:skip}
     }
 
     test {Hash ziplist of various encodings} {
@@ -855,10 +934,8 @@ start_server {tags {"hash"}} {
     } {ZIP_INT_8B 127 ZIP_INT_16B 32767 ZIP_INT_32B 2147483647 ZIP_INT_64B 9223372036854775808 ZIP_INT_IMM_MIN 0 ZIP_INT_IMM_MAX 12}
 
     # On some platforms strtold("+inf") with valgrind returns a non-inf result
-    if {!$::valgrind} {
-        test {HINCRBYFLOAT does not allow NaN or Infinity} {
-            assert_error "*value is NaN or Infinity*" {r hincrbyfloat hfoo field +inf}
-            assert_equal 0 [r exists hfoo]
-        }
-    }
+    test {HINCRBYFLOAT does not allow NaN or Infinity} {
+        assert_error "*value is NaN or Infinity*" {r hincrbyfloat hfoo field +inf}
+        assert_equal 0 [r exists hfoo]
+    } {} {valgrind:skip}
 }

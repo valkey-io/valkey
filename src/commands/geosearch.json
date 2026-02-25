@@ -1,6 +1,6 @@
 {
     "GEOSEARCH": {
-        "summary": "Queries a geospatial index for members inside an area of a box or a circle.",
+        "summary": "Queries a geospatial index for members inside an area of a box, circle, or a polygon.",
         "complexity": "O(N+log(M)) where N is the number of elements in the grid-aligned bounding box area around the shape provided as the filter and M is the number of items inside the shape",
         "group": "geo",
         "since": "6.2.0",
@@ -10,13 +10,19 @@
             [
                 "7.0.0",
                 "Added support for uppercase unit names."
+            ],
+            [
+                "9.0.0",
+                "Added support for the BYPOLYGON option."
             ]
         ],
         "command_flags": [
             "READONLY"
         ],
         "acl_categories": [
-            "GEO"
+            "GEO",
+            "READ",
+            "SLOW"
         ],
         "key_specs": [
             {
@@ -47,6 +53,7 @@
             {
                 "name": "from",
                 "type": "oneof",
+                "optional": true,
                 "arguments": [
                     {
                         "token": "FROMMEMBER",
@@ -147,6 +154,33 @@
                                         "name": "mi",
                                         "type": "pure-token",
                                         "token": "mi"
+                                    }
+                                ]
+                            }
+                        ]
+                    },
+                    {
+                        "name": "polygon",
+                        "since": "9.0.0",
+                        "type": "block",
+                        "arguments": [
+                            {
+                                "token": "BYPOLYGON",
+                                "name": "num-vertices",
+                                "type": "integer"
+                            },
+                            {
+                                "name": "vertices",
+                                "type": "block",
+                                "multiple": true,
+                                "arguments": [
+                                    {
+                                        "name": "longitude",
+                                        "type": "double"
+                                    },
+                                    {
+                                        "name": "latitude",
+                                        "type": "double"
                                     }
                                 ]
                             }

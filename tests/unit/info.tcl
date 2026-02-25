@@ -10,7 +10,7 @@ proc latency_percentiles_usec {cmd} {
     return [latencyrstat_percentiles $cmd r]
 }
 
-start_server {tags {"info" "external:skip"}} {
+start_server {tags {"info" "external:skip" "debug_defrag:skip"}} {
     start_server {} {
 
         test {latencystats: disable/enable} {
@@ -269,7 +269,7 @@ start_server {tags {"info" "external:skip"}} {
             r client unblock $rd_id error
             assert_error {UNBLOCKED*} {$rd read}
             assert_match {*count=1*} [errorstat UNBLOCKED]
-            assert_match {*calls=1,*,rejected_calls=0,failed_calls=1} [cmdstat blpop]
+            assert_match {*calls=1,*,rejected_calls=1,failed_calls=0} [cmdstat blpop]
             assert_equal [s total_error_replies] 1
             $rd close
         }
@@ -308,51 +308,49 @@ start_server {tags {"info" "external:skip"}} {
             assert_equal "count=2" [errorstat ERR]
         }
 
-        # skip the following 2 tests if we are running with io-threads as the eventloop metrics are different in that case.
-        if {[r config get io-threads] eq 0} {
-            test {stats: eventloop metrics} {
-                set info1 [r info stats]
-                set cycle1 [getInfoProperty $info1 eventloop_cycles]
-                set el_sum1 [getInfoProperty $info1 eventloop_duration_sum]
-                set cmd_sum1 [getInfoProperty $info1 eventloop_duration_cmd_sum]
-                assert_morethan $cycle1 0
-                assert_morethan $el_sum1 0
-                assert_morethan $cmd_sum1 0
-                after 110 ;# default hz is 10, wait for a cron tick. 
-                set info2 [r info stats]
-                set cycle2 [getInfoProperty $info2 eventloop_cycles]
-                set el_sum2 [getInfoProperty $info2 eventloop_duration_sum]
-                set cmd_sum2 [getInfoProperty $info2 eventloop_duration_cmd_sum]
-                if {$::verbose} { puts "eventloop metrics cycle1: $cycle1, cycle2: $cycle2" }
-                assert_morethan $cycle2 $cycle1
-                assert_lessthan $cycle2 [expr $cycle1+10] ;# we expect 2 or 3 cycles here, but allow some tolerance
-                if {$::verbose} { puts "eventloop metrics el_sum1: $el_sum1, el_sum2: $el_sum2" }
-                assert_morethan $el_sum2 $el_sum1
-                assert_lessthan $el_sum2 [expr $el_sum1+30000] ;# we expect roughly 100ms here, but allow some tolerance
-                if {$::verbose} { puts "eventloop metrics cmd_sum1: $cmd_sum1, cmd_sum2: $cmd_sum2" }
-                assert_morethan $cmd_sum2 $cmd_sum1
-                assert_lessthan $cmd_sum2 [expr $cmd_sum1+15000] ;# we expect about tens of ms here, but allow some tolerance
-            }
-    
-            test {stats: instantaneous metrics} {
-                r config resetstat
-                set retries 0
-                for {set retries 1} {$retries < 4} {incr retries} {
-                    after 1600 ;# hz is 10, wait for 16 cron tick so that sample array is fulfilled
-                    set value [s instantaneous_eventloop_cycles_per_sec]
-                    if {$value > 0} break
-                }
-    
-                assert_lessthan $retries 4
-                if {$::verbose} { puts "instantaneous metrics instantaneous_eventloop_cycles_per_sec: $value" }
-                assert_morethan $value 0
-                assert_lessthan $value [expr $retries*15] ;# default hz is 10
-                set value [s instantaneous_eventloop_duration_usec]
-                if {$::verbose} { puts "instantaneous metrics instantaneous_eventloop_duration_usec: $value" }
-                assert_morethan $value 0
-                assert_lessthan $value [expr $retries*22000] ;# default hz is 10, so duration < 1000 / 10, allow some tolerance
-            }
-        }
+        test {stats: eventloop metrics} {
+            set info1 [r info stats]
+            set cycle1 [getInfoProperty $info1 eventloop_cycles]
+            set el_sum1 [getInfoProperty $info1 eventloop_duration_sum]
+            set cmd_sum1 [getInfoProperty $info1 eventloop_duration_cmd_sum]
+            assert_morethan $cycle1 0
+            assert_morethan $el_sum1 0
+            assert_morethan $cmd_sum1 0
+            after 110 ;# default hz is 10, wait for a cron tick. 
+            set info2 [r info stats]
+            set cycle2 [getInfoProperty $info2 eventloop_cycles]
+            set el_sum2 [getInfoProperty $info2 eventloop_duration_sum]
+            set cmd_sum2 [getInfoProperty $info2 eventloop_duration_cmd_sum]
+            if {$::verbose} { puts "eventloop metrics cycle1: $cycle1, cycle2: $cycle2" }
+            assert_morethan $cycle2 $cycle1
+            assert_lessthan $cycle2 [expr $cycle1+10] ;# we expect 2 or 3 cycles here, but allow some tolerance
+            if {$::verbose} { puts "eventloop metrics el_sum1: $el_sum1, el_sum2: $el_sum2" }
+            assert_morethan $el_sum2 $el_sum1
+            assert_lessthan $el_sum2 [expr $el_sum1+30000] ;# we expect roughly 100ms here, but allow some tolerance
+            if {$::verbose} { puts "eventloop metrics cmd_sum1: $cmd_sum1, cmd_sum2: $cmd_sum2" }
+            assert_morethan $cmd_sum2 $cmd_sum1
+            assert_lessthan $cmd_sum2 [expr $cmd_sum1+15000] ;# we expect about tens of ms here, but allow some tolerance
+        } {} {io-threads:skip} ; # skip with io-threads as the eventloop metrics are different in that case.
+
+        test {stats: instantaneous metrics} {
+            r config resetstat
+            r config set hz 100
+            after 2000 ;# Wait for at least 160 cron tick so that sample array is filled
+            set value [s instantaneous_eventloop_cycles_per_sec]
+
+            if {$::verbose} { puts "instantaneous metrics instantaneous_eventloop_cycles_per_sec: $value" }
+            assert_morethan $value 0
+            # Hz is configured to 100, so we expect a value around 200 since there will be 100 wakeups for
+            # both the server and the clients cron. In practice it will be lower because of imprecision in
+            # kernel wakeups.
+            assert_lessthan $value 200
+            set value [s instantaneous_eventloop_duration_usec]
+            r config set hz 10
+            if {$::verbose} { puts "instantaneous metrics instantaneous_eventloop_duration_usec: $value" }
+            assert_morethan $value 0
+            assert_lessthan $value 22000 ;# Sanity check to make sure the duration is within a couple of ms
+        } {} {io-threads:skip} ; # skip with io-threads as the eventloop metrics are different in that case.
+        
 
         test {stats: debug metrics} {
             # make sure debug info is hidden
@@ -386,6 +384,10 @@ start_server {tags {"info" "external:skip"}} {
         }
 
         test {stats: client input and output buffer limit disconnections} {
+            # Disable copy avoidance because it affects memory usage
+            set min_size [lindex [r config get min-string-size-avoid-copy-reply] 1]
+            r config set min-string-size-avoid-copy-reply 0
+
             r config resetstat
             set info [r info stats]
             assert_equal [getInfoProperty $info client_query_buffer_limit_disconnections] {0}
@@ -393,7 +395,13 @@ start_server {tags {"info" "external:skip"}} {
             # set qbuf limit to minimum to test stat
             set org_qbuf_limit [lindex [r config get client-query-buffer-limit] 1]
             r config set client-query-buffer-limit 1048576
-            catch {r set key [string repeat a 1048576]}
+            catch {r set key [string repeat a 2048576]} e
+            # We might get an error on the write path of the previous command, which won't be
+            # an I/O error based on how the client is designed. We will need to manually consume
+            # the secondary I/O error.
+            if {![string match "I/O error*" $e]} {
+                catch {r read}
+            }
             set info [r info stats]
             assert_equal [getInfoProperty $info client_query_buffer_limit_disconnections] {1}
             r config set client-query-buffer-limit $org_qbuf_limit
@@ -402,10 +410,14 @@ start_server {tags {"info" "external:skip"}} {
             r config set client-output-buffer-limit "normal 10 0 0"
             r set key [string repeat a 100000] ;# to trigger output buffer limit check this needs to be big
             catch {r get key}
+            r config set client-output-buffer-limit $org_outbuf_limit
+
+            # Restore copy avoidance configs
+            r config set min-string-size-avoid-copy-reply $min_size
+
             set info [r info stats]
             assert_equal [getInfoProperty $info client_output_buffer_limit_disconnections] {1}
-            r config set client-output-buffer-limit $org_outbuf_limit
-        } {OK} {logreqres:skip} ;# same as obuf-limits.tcl, skip logreqres
+        } {} {logreqres:skip} ;# same as obuf-limits.tcl, skip logreqres
 
         test {clients: pubsub clients} {
             set info [r info clients]
@@ -517,23 +529,43 @@ start_server {tags {"info" "external:skip"}} {
         set info_mem [r info memory]
         set mem_stats [r memory stats]
         assert_equal [getInfoProperty $info_mem mem_overhead_db_hashtable_rehashing] {0}
-        assert_range [dict get $mem_stats overhead.db.hashtable.lut] 1 64
+        # overhead.db.hashtable.lut = memory overhead of hashtable including hashtable struct and tables
+        set hashtable_overhead [dict get $mem_stats overhead.db.hashtable.lut]
+        if {$hashtable_overhead < 140} {
+            # 32-bit version (hashtable struct + 1 bucket of 64 bytes)
+            set bits 32
+        } else {
+            set bits 64
+        }
+        assert_range [dict get $mem_stats overhead.db.hashtable.lut] 1 256
         assert_equal [dict get $mem_stats overhead.db.hashtable.rehashing] {0}
         assert_equal [dict get $mem_stats db.dict.rehashing.count] {0}
-        # set 4 more keys to trigger rehashing
+        # set 7 more keys to trigger rehashing
         # get the info within a transaction to make sure the rehashing is not completed
-        r multi 
+        r multi
         r set b c
         r set c d
         r set d e
         r set e f
+        r set f g
+        r set g h
+        r set h i
+        if {$bits == 32} {
+            # In 32-bit mode, we have 12 elements per bucket. Insert five more
+            # to trigger rehashing.
+            r set aa aa
+            r set bb bb
+            r set cc cc
+            r set dd dd
+            r set ee ee
+        }
         r info memory
         r memory stats
         set res [r exec]
-        set info_mem [lindex $res 4]
-        set mem_stats [lindex $res 5]
+        set info_mem [lindex $res end-1]
+        set mem_stats [lindex $res end]
         assert_range [getInfoProperty $info_mem mem_overhead_db_hashtable_rehashing] 1 64
-        assert_range [dict get $mem_stats overhead.db.hashtable.lut] 1 192
+        assert_range [dict get $mem_stats overhead.db.hashtable.lut] 1 300
         assert_range [dict get $mem_stats overhead.db.hashtable.rehashing] 1 64
         assert_equal [dict get $mem_stats db.dict.rehashing.count] {1}
     }

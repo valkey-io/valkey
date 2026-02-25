@@ -6,7 +6,7 @@
         "since": "6.2.0",
         "arity": 2,
         "container": "CLIENT",
-        "function": "clientCommand",
+        "function": "clientTrackingInfoCommand",
         "command_flags": [
             "NOSCRIPT",
             "LOADING",
@@ -14,7 +14,8 @@
             "SENTINEL"
         ],
         "acl_categories": [
-            "CONNECTION"
+            "CONNECTION",
+            "SLOW"
         ],
         "reply_schema": {
             "type": "object",

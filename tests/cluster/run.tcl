@@ -1,6 +1,9 @@
-# Cluster test suite. Copyright (C) 2014 Salvatore Sanfilippo antirez@gmail.com
+# Cluster test suite. Copyright (C) 2014 Redis Ltd.
 # This software is released under the BSD License. See the COPYING file for
 # more information.
+
+# Set the executable paths at project root
+source tests/support/set_executable_path.tcl
 
 cd tests/cluster
 source cluster.tcl

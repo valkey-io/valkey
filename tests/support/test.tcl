@@ -10,6 +10,10 @@ proc fail {msg} {
     error "assertion:$msg"
 }
 
+proc skip {msg} {
+    error "skipped:$msg"
+}
+
 proc assert {condition} {
     if {![uplevel 1 [list expr $condition]]} {
         set context "(context: [info frame -1])"
@@ -124,14 +128,18 @@ proc assert_refcount_morethan {key ref} {
 
 # Wait for the specified condition to be true, with the specified number of
 # max retries and delay between retries. Otherwise the 'elsescript' is
-# executed.
-proc wait_for_condition {maxtries delay e _else_ elsescript} {
+# executed. If 'debugscript' is provided, it is executed after failure of
+# the confition (before the retry delay).
+proc wait_for_condition {maxtries delay e _else_ elsescript {_debug_ ""} {debugscript ""}} {
     while {[incr maxtries -1] >= 0} {
         set errcode [catch {uplevel 1 [list expr $e]} result]
         if {$errcode == 0} {
             if {$result} break
         } else {
             return -code $errcode $result
+        }
+        if {$_debug_ == "debug"} {
+            uplevel 1 $debugscript
         }
         after $delay
     }
@@ -160,12 +168,12 @@ proc verify_replica_online {master replica_idx max_retry} {
     } 
 }
 
-proc wait_for_value_to_propegate_to_replica {master replica key} {
+proc wait_for_value_to_propagate_to_replica {master replica key} {
     set val [$master get $key]
     wait_for_condition 50 500 {
                 ([$replica get $key] eq $val)
     } else {
-        error "Key $key did not propegate. Expected $val but got [$replica get $key]"
+        error "Key $key did not propagate. Expected $val but got [$replica get $key]"
     }
 }
 
@@ -206,6 +214,8 @@ proc test {name code {okpattern undefined} {tags {}}} {
         return
     }
 
+    set old_singledb $::singledb
+    check_subtags $tags
     set tags [concat $::tags $tags]
     if {![tags_acceptable $tags err]} {
         incr ::num_aborted
@@ -213,6 +223,9 @@ proc test {name code {okpattern undefined} {tags {}}} {
         return
     }
 
+    if {[lsearch $tags singledb] >= 0} {
+        set ::singledb 1
+    }
     incr ::num_tests
     set details {}
     lappend details "$name in $::curfile"
@@ -248,7 +261,12 @@ proc test {name code {okpattern undefined} {tags {}}} {
     set test_start_time [clock milliseconds]
     if {[catch {set retval [uplevel 1 $code]} error]} {
         set assertion [string match "assertion:*" $error]
-        if {$assertion || $::durable} {
+        set skip [string match "skipped:*" $error]
+        if {$skip} {
+            incr ::num_skipped
+            set msg [string range $error 8 end]
+            send_data_packet $::test_server_fd skip "$::cur_test: $msg"
+        } elseif {$assertion || $::durable} {
             # durable prevents the whole tcl test from exiting on an exception.
             # an assertion is handled gracefully anyway.
             set msg [string range $error 10 end]
@@ -296,5 +314,6 @@ proc test {name code {okpattern undefined} {tags {}}} {
             send_data_packet $::test_server_fd err "Detected a memory leak in test '$name': $output"
         }
     }
+    set ::singledb $old_singledb
     set ::cur_test $prev_test
 }

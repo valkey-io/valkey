@@ -6,15 +6,18 @@
         "since": "3.2.0",
         "arity": 3,
         "container": "CLIENT",
-        "function": "clientCommand",
+        "function": "clientReplyCommand",
         "command_flags": [
+            "ALLOW_BUSY",
             "NOSCRIPT",
+            "NO_MULTI",
             "LOADING",
             "STALE",
             "SENTINEL"
         ],
         "acl_categories": [
-            "CONNECTION"
+            "CONNECTION",
+            "SLOW"
         ],
         "reply_schema": {
             "const": "OK",

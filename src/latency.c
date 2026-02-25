@@ -5,7 +5,7 @@
  *
  * ----------------------------------------------------------------------------
  *
- * Copyright (c) 2014, Salvatore Sanfilippo <antirez at gmail dot com>
+ * Copyright (c) 2014, Redis Ltd.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -37,8 +37,7 @@
 #include "hdr_histogram.h"
 
 /* Dictionary type for latency events. */
-int dictStringKeyCompare(dict *d, const void *key1, const void *key2) {
-    UNUSED(d);
+int dictStringKeyCompare(const void *key1, const void *key2) {
     return strcmp(key1, key2) == 0;
 }
 
@@ -75,9 +74,10 @@ void latencyMonitorInit(void) {
 
 /* Add the specified sample to the specified time series "event".
  * This function is usually called via latencyAddSampleIfNeeded(), that
- * is a macro that only adds the sample if the latency is higher than
+ * is a macro that only adds the sample if the latency is above
  * server.latency_monitor_threshold. */
-void latencyAddSample(const char *event, mstime_t latency) {
+void latencyAddSample(const char *event, ustime_t latency_us) {
+    mstime_t latency = latency_us / 1000;
     struct latencyTimeSeries *ts = dictFetchValue(server.latency_events, event);
     time_t now = time(NULL);
     int prev;
@@ -87,11 +87,15 @@ void latencyAddSample(const char *event, mstime_t latency) {
         ts = zmalloc(sizeof(*ts));
         ts->idx = 0;
         ts->max = 0;
+        ts->sum = 0;
+        ts->cnt = 0;
         memset(ts->samples, 0, sizeof(ts->samples));
         dictAdd(server.latency_events, zstrdup(event), ts);
     }
 
     if (latency > ts->max) ts->max = latency;
+    ts->sum += latency;
+    ts->cnt++;
 
     /* If the previous sample is in the same second, we update our old sample
      * if this latency is > of the old one, or just return. */
@@ -267,10 +271,10 @@ sds createLatencyReport(void) {
 
         /* Potentially commands. */
         if (!strcasecmp(event, "command")) {
-            if (server.slowlog_log_slower_than < 0 || server.slowlog_max_len == 0) {
+            if (server.commandlog[COMMANDLOG_TYPE_SLOW].threshold < 0 || server.commandlog[COMMANDLOG_TYPE_SLOW].max_len == 0) {
                 advise_slowlog_enabled = 1;
                 advices++;
-            } else if (server.slowlog_log_slower_than / 1000 > server.latency_monitor_threshold) {
+            } else if (server.commandlog[COMMANDLOG_TYPE_SLOW].threshold / 1000 > server.latency_monitor_threshold) {
                 advise_slowlog_tuning = 1;
                 advices++;
             }
@@ -527,13 +531,12 @@ void fillCommandCDF(client *c, struct hdr_histogram *histogram) {
 
 /* latencyCommand() helper to produce for all commands,
  * a per command cumulative distribution of latencies. */
-void latencyAllCommandsFillCDF(client *c, dict *commands, int *command_with_data) {
-    dictIterator *di = dictGetSafeIterator(commands);
-    dictEntry *de;
-    struct serverCommand *cmd;
-
-    while ((de = dictNext(di)) != NULL) {
-        cmd = (struct serverCommand *)dictGetVal(de);
+void latencyAllCommandsFillCDF(client *c, hashtable *commands, int *command_with_data) {
+    hashtableIterator iter;
+    hashtableInitIterator(&iter, commands, HASHTABLE_ITER_SAFE);
+    void *next;
+    while (hashtableNext(&iter, &next)) {
+        struct serverCommand *cmd = next;
         if (cmd->latency_histogram) {
             addReplyBulkCBuffer(c, cmd->fullname, sdslen(cmd->fullname));
             fillCommandCDF(c, cmd->latency_histogram);
@@ -541,10 +544,10 @@ void latencyAllCommandsFillCDF(client *c, dict *commands, int *command_with_data
         }
 
         if (cmd->subcommands) {
-            latencyAllCommandsFillCDF(c, cmd->subcommands_dict, command_with_data);
+            latencyAllCommandsFillCDF(c, cmd->subcommands_ht, command_with_data);
         }
     }
-    dictReleaseIterator(di);
+    hashtableCleanupIterator(&iter);
 }
 
 /* latencyCommand() helper to produce for a specific command set,
@@ -553,7 +556,7 @@ void latencySpecificCommandsFillCDF(client *c) {
     void *replylen = addReplyDeferredLen(c);
     int command_with_data = 0;
     for (int j = 2; j < c->argc; j++) {
-        struct serverCommand *cmd = lookupCommandBySds(c->argv[j]->ptr);
+        struct serverCommand *cmd = lookupCommandBySds(objectGetVal(c->argv[j]));
         /* If the command does not exist we skip the reply */
         if (cmd == NULL) {
             continue;
@@ -565,19 +568,19 @@ void latencySpecificCommandsFillCDF(client *c) {
             command_with_data++;
         }
 
-        if (cmd->subcommands_dict) {
-            dictEntry *de;
-            dictIterator *di = dictGetSafeIterator(cmd->subcommands_dict);
-
-            while ((de = dictNext(di)) != NULL) {
-                struct serverCommand *sub = dictGetVal(de);
+        if (cmd->subcommands_ht) {
+            hashtableIterator iter;
+            hashtableInitIterator(&iter, cmd->subcommands_ht, HASHTABLE_ITER_SAFE);
+            void *next;
+            while (hashtableNext(&iter, &next)) {
+                struct serverCommand *sub = next;
                 if (sub->latency_histogram) {
                     addReplyBulkCBuffer(c, sub->fullname, sdslen(sub->fullname));
                     fillCommandCDF(c, sub->latency_histogram);
                     command_with_data++;
                 }
             }
-            dictReleaseIterator(di);
+            hashtableCleanupIterator(&iter);
         }
     }
     setDeferredMapLen(c, replylen, command_with_data);
@@ -614,11 +617,13 @@ void latencyCommandReplyWithLatestEvents(client *c) {
         struct latencyTimeSeries *ts = dictGetVal(de);
         int last = (ts->idx + LATENCY_TS_LEN - 1) % LATENCY_TS_LEN;
 
-        addReplyArrayLen(c, 4);
+        addReplyArrayLen(c, 6);
         addReplyBulkCString(c, event);
         addReplyLongLong(c, ts->samples[last].time);
         addReplyLongLong(c, ts->samples[last].latency);
         addReplyLongLong(c, ts->max);
+        addReplyLongLong(c, ts->sum);
+        addReplyLongLong(c, ts->cnt);
     }
     dictReleaseIterator(di);
 }
@@ -679,21 +684,21 @@ sds latencyCommandGenSparkeline(char *event, struct latencyTimeSeries *ts) {
 void latencyCommand(client *c) {
     struct latencyTimeSeries *ts;
 
-    if (!strcasecmp(c->argv[1]->ptr, "history") && c->argc == 3) {
+    if (!strcasecmp(objectGetVal(c->argv[1]), "history") && c->argc == 3) {
         /* LATENCY HISTORY <event> */
-        ts = dictFetchValue(server.latency_events, c->argv[2]->ptr);
+        ts = dictFetchValue(server.latency_events, objectGetVal(c->argv[2]));
         if (ts == NULL) {
             addReplyArrayLen(c, 0);
         } else {
             latencyCommandReplyWithSamples(c, ts);
         }
-    } else if (!strcasecmp(c->argv[1]->ptr, "graph") && c->argc == 3) {
+    } else if (!strcasecmp(objectGetVal(c->argv[1]), "graph") && c->argc == 3) {
         /* LATENCY GRAPH <event> */
         sds graph;
         dictEntry *de;
         char *event;
 
-        de = dictFind(server.latency_events, c->argv[2]->ptr);
+        de = dictFind(server.latency_events, objectGetVal(c->argv[2]));
         if (de == NULL) goto nodataerr;
         ts = dictGetVal(de);
         event = dictGetKey(de);
@@ -701,26 +706,26 @@ void latencyCommand(client *c) {
         graph = latencyCommandGenSparkeline(event, ts);
         addReplyVerbatim(c, graph, sdslen(graph), "txt");
         sdsfree(graph);
-    } else if (!strcasecmp(c->argv[1]->ptr, "latest") && c->argc == 2) {
+    } else if (!strcasecmp(objectGetVal(c->argv[1]), "latest") && c->argc == 2) {
         /* LATENCY LATEST */
         latencyCommandReplyWithLatestEvents(c);
-    } else if (!strcasecmp(c->argv[1]->ptr, "doctor") && c->argc == 2) {
+    } else if (!strcasecmp(objectGetVal(c->argv[1]), "doctor") && c->argc == 2) {
         /* LATENCY DOCTOR */
         sds report = createLatencyReport();
 
         addReplyVerbatim(c, report, sdslen(report), "txt");
         sdsfree(report);
-    } else if (!strcasecmp(c->argv[1]->ptr, "reset") && c->argc >= 2) {
+    } else if (!strcasecmp(objectGetVal(c->argv[1]), "reset") && c->argc >= 2) {
         /* LATENCY RESET */
         if (c->argc == 2) {
             addReplyLongLong(c, latencyResetEvent(NULL));
         } else {
             int j, resets = 0;
 
-            for (j = 2; j < c->argc; j++) resets += latencyResetEvent(c->argv[j]->ptr);
+            for (j = 2; j < c->argc; j++) resets += latencyResetEvent(objectGetVal(c->argv[j]));
             addReplyLongLong(c, resets);
         }
-    } else if (!strcasecmp(c->argv[1]->ptr, "histogram") && c->argc >= 2) {
+    } else if (!strcasecmp(objectGetVal(c->argv[1]), "histogram") && c->argc >= 2) {
         /* LATENCY HISTOGRAM*/
         if (c->argc == 2) {
             int command_with_data = 0;
@@ -730,26 +735,24 @@ void latencyCommand(client *c) {
         } else {
             latencySpecificCommandsFillCDF(c);
         }
-    } else if (!strcasecmp(c->argv[1]->ptr, "help") && c->argc == 2) {
-        /* clang-format off */
+    } else if (!strcasecmp(objectGetVal(c->argv[1]), "help") && c->argc == 2) {
         const char *help[] = {
-"DOCTOR",
-"    Return a human readable latency analysis report.",
-"GRAPH <event>",
-"    Return an ASCII latency graph for the <event> class.",
-"HISTORY <event>",
-"    Return time-latency samples for the <event> class.",
-"LATEST",
-"    Return the latest latency samples for all events.",
-"RESET [<event> ...]",
-"    Reset latency data of one or more <event> classes.",
-"    (default: reset all data for all event classes)",
-"HISTOGRAM [COMMAND ...]",
-"    Return a cumulative distribution of latencies in the format of a histogram for the specified command names.",
-"    If no commands are specified then all histograms are replied.",
-NULL
+            "DOCTOR",
+            "    Return a human readable latency analysis report.",
+            "GRAPH <event>",
+            "    Return an ASCII latency graph for the <event> class.",
+            "HISTORY <event>",
+            "    Return time-latency samples for the <event> class.",
+            "LATEST",
+            "    Return the latest latency samples for all events.",
+            "RESET [<event> ...]",
+            "    Reset latency data of one or more <event> classes.",
+            "    (default: reset all data for all event classes)",
+            "HISTOGRAM [COMMAND ...]",
+            "    Return a cumulative distribution of latencies in the format of a histogram for the specified command names.",
+            "    If no commands are specified then all histograms are replied.",
+            NULL,
         };
-        /* clang-format on */
         addReplyHelp(c, help);
     } else {
         addReplySubcommandSyntaxError(c);
@@ -759,7 +762,7 @@ NULL
 nodataerr:
     /* Common error when the user asks for an event we have no latency
      * information about. */
-    addReplyErrorFormat(c, "No samples available for event '%s'", (char *)c->argv[2]->ptr);
+    addReplyErrorFormat(c, "No samples available for event '%s'", (char *)objectGetVal(c->argv[2]));
 }
 
 void durationAddSample(int type, monotime duration) {

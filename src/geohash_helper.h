@@ -1,7 +1,7 @@
 /*
  * Copyright (c) 2013-2014, yinqiwen <yinqiwen@gmail.com>
  * Copyright (c) 2014, Matt Stancliff <matt@genges.com>.
- * Copyright (c) 2015, Salvatore Sanfilippo <antirez@gmail.com>.
+ * Copyright (c) 2015, Redis Ltd.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -61,5 +61,6 @@ int geohashGetDistanceIfInRectangle(double width_m,
                                     double x2,
                                     double y2,
                                     double *distance);
+int geohashGetDistanceIfInPolygon(double centroidLon, double centroidLat, double *point, double (*vertices)[2], int num_vertices, double *distance);
 
 #endif /* GEOHASH_HELPER_HPP_ */

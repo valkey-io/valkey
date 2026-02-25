@@ -1,6 +1,9 @@
-# Sentinel test suite. Copyright (C) 2014 Salvatore Sanfilippo antirez@gmail.com
+# Sentinel test suite. Copyright (C) 2014 Redis Ltd.
 # This software is released under the BSD License. See the COPYING file for
 # more information.
+
+# Set the executable paths at project root
+source tests/support/set_executable_path.tcl
 
 cd tests/sentinel
 source ../instances.tcl

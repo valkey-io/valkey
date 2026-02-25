@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009-2021, Redis Labs Ltd.
+ * Copyright (c) 2009-2021, Redis Ltd.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -56,5 +56,6 @@ int callReplyIsResp3(CallReply *rep);
 list *callReplyDeferredErrorList(CallReply *rep);
 void freeCallReply(CallReply *rep);
 CallReply *callReplyCreatePromise(void *private_data);
+void enableParseExactReplyTypeFlag(CallReply *rep);
 
 #endif /* SRC_CALL_REPLY_H_ */

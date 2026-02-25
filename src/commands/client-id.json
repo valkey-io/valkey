@@ -6,15 +6,17 @@
         "since": "5.0.0",
         "arity": 2,
         "container": "CLIENT",
-        "function": "clientCommand",
+        "function": "clientIDCommand",
         "command_flags": [
+            "ALLOW_BUSY",
             "NOSCRIPT",
             "LOADING",
             "STALE",
             "SENTINEL"
         ],
         "acl_categories": [
-            "CONNECTION"
+            "CONNECTION",
+            "SLOW"
         ],
         "reply_schema": {
             "type": "integer",

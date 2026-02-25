@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, Salvatore Sanfilippo <antirez at gmail dot com>
+ * Copyright (c) 2018, Redis Ltd.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -39,12 +39,13 @@
 
 void lolwut5Command(client *c);
 void lolwut6Command(client *c);
+void lolwut9Command(client *c);
 
 /* The default target for LOLWUT if no matching version was found.
  * This is what unstable versions of the server will display. */
 void lolwutUnstableCommand(client *c) {
-    sds rendered = sdsnew("Redis ver. ");
-    rendered = sdscat(rendered, VALKEY_VERSION);
+    sds rendered = sdscatprintf(sdsempty(), "%s ver.", server.extended_redis_compat ? "Redis" : "Valkey");
+    rendered = sdscat(rendered, server.extended_redis_compat ? REDIS_VERSION : VALKEY_VERSION);
     rendered = sdscatlen(rendered, "\n", 1);
     addReplyVerbatim(c, rendered, sdslen(rendered), "txt");
     sdsfree(rendered);
@@ -55,7 +56,7 @@ void lolwutCommand(client *c) {
     char *v = VALKEY_VERSION;
     char verstr[64];
 
-    if (c->argc >= 3 && !strcasecmp(c->argv[1]->ptr, "version")) {
+    if (c->argc >= 3 && !strcasecmp(objectGetVal(c->argv[1]), "version")) {
         long ver;
         if (getLongFromObjectOrReply(c, c->argv[2], &ver, NULL) != C_OK) return;
         snprintf(verstr, sizeof(verstr), "%u.0.0", (unsigned int)ver);
@@ -72,6 +73,8 @@ void lolwutCommand(client *c) {
         lolwut5Command(c);
     else if ((v[0] == '6' && v[1] == '.' && v[2] != '9') || (v[0] == '5' && v[1] == '.' && v[2] == '9'))
         lolwut6Command(c);
+    else if (v[0] == '9')
+        lolwut9Command(c);
     else
         lolwutUnstableCommand(c);
 

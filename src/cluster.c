@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009-2012, Salvatore Sanfilippo <antirez at gmail dot com>
+ * Copyright (c) 2009-2012, Redis Ltd.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -26,7 +26,11 @@
  * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
  * POSSIBILITY OF SUCH DAMAGE.
  */
-
+/*
+ * Copyright (c) Valkey Contributors
+ * All rights reserved.
+ * SPDX-License-Identifier: BSD-3-Clause
+ */
 /*
  * cluster.c contains the common parts of a clustering
  * implementation, the parts that are shared between
@@ -36,6 +40,7 @@
 #include "server.h"
 #include "cluster.h"
 #include "cluster_slot_stats.h"
+#include "module.h"
 
 #include <ctype.h>
 
@@ -49,7 +54,7 @@
  * However, if the key contains the {...} pattern, only the part between
  * { and } is hashed. This may be useful in the future to force certain
  * keys to be in the same node (assuming no resharding is in progress). */
-unsigned int keyHashSlot(char *key, int keylen) {
+unsigned int keyHashSlot(const char *key, int keylen) {
     int s, e; /* start-end indexes of { and } */
 
     for (s = 0; s < keylen; s++)
@@ -121,8 +126,10 @@ void createDumpPayload(rio *payload, robj *o, robj *key, int dbid) {
     /* Serialize the object in an RDB-like format. It consist of an object type
      * byte followed by the serialized object. This is understood by RESTORE. */
     rioInitWithBuffer(payload, sdsempty());
-    serverAssert(rdbSaveObjectType(payload, o));
-    serverAssert(rdbSaveObject(payload, o, key, dbid));
+    int rdbtype = rdbGetObjectType(o, RDB_VERSION);
+    serverAssert(rdbtype >= 0);
+    serverAssert(rdbSaveType(payload, rdbtype));
+    serverAssert(rdbSaveObject(payload, o, key, dbid, rdbtype));
 
     /* Write the footer, this is how it looks like:
      * ----------------+---------------------+---------------+
@@ -161,8 +168,7 @@ int verifyDumpPayload(unsigned char *p, size_t len, uint16_t *rdbver_ptr) {
     if (rdbver_ptr) {
         *rdbver_ptr = rdbver;
     }
-    if (rdbver > RDB_VERSION) return C_ERR;
-
+    if (!rdbIsVersionAccepted(rdbver, false, false)) return C_ERR;
     if (server.skip_checksum_validation) return C_OK;
 
     /* Verify CRC64 */
@@ -194,7 +200,8 @@ void dumpCommand(client *c) {
 
 /* RESTORE key ttl serialized-value [REPLACE] [ABSTTL] [IDLETIME seconds] [FREQ frequency] */
 void restoreCommand(client *c) {
-    long long ttl, lfu_freq = -1, lru_idle = -1, lru_clock = -1;
+    long long ttl, lfu_freq = -1, lru_idle = -1;
+    uint16_t rdbver = 0;
     rio payload;
     int j, type, replace = 0, absttl = 0;
     robj *obj;
@@ -202,19 +209,18 @@ void restoreCommand(client *c) {
     /* Parse additional options */
     for (j = 4; j < c->argc; j++) {
         int additional = c->argc - j - 1;
-        if (!strcasecmp(c->argv[j]->ptr, "replace")) {
+        if (!strcasecmp(objectGetVal(c->argv[j]), "replace")) {
             replace = 1;
-        } else if (!strcasecmp(c->argv[j]->ptr, "absttl")) {
+        } else if (!strcasecmp(objectGetVal(c->argv[j]), "absttl")) {
             absttl = 1;
-        } else if (!strcasecmp(c->argv[j]->ptr, "idletime") && additional >= 1 && lfu_freq == -1) {
+        } else if (!strcasecmp(objectGetVal(c->argv[j]), "idletime") && additional >= 1 && lfu_freq == -1) {
             if (getLongLongFromObjectOrReply(c, c->argv[j + 1], &lru_idle, NULL) != C_OK) return;
             if (lru_idle < 0) {
                 addReplyError(c, "Invalid IDLETIME value, must be >= 0");
                 return;
             }
-            lru_clock = LRU_CLOCK();
             j++; /* Consume additional arg. */
-        } else if (!strcasecmp(c->argv[j]->ptr, "freq") && additional >= 1 && lru_idle == -1) {
+        } else if (!strcasecmp(objectGetVal(c->argv[j]), "freq") && additional >= 1 && lru_idle == -1) {
             if (getLongLongFromObjectOrReply(c, c->argv[j + 1], &lfu_freq, NULL) != C_OK) return;
             if (lfu_freq < 0 || lfu_freq > 255) {
                 addReplyError(c, "Invalid FREQ value, must be >= 0 and <= 255");
@@ -243,14 +249,27 @@ void restoreCommand(client *c) {
     }
 
     /* Verify RDB version and data checksum. */
-    if (verifyDumpPayload(c->argv[3]->ptr, sdslen(c->argv[3]->ptr), NULL) == C_ERR) {
+    if (verifyDumpPayload(objectGetVal(c->argv[3]), sdslen(objectGetVal(c->argv[3])), &rdbver) == C_ERR) {
         addReplyError(c, "DUMP payload version or checksum are wrong");
         return;
     }
 
-    rioInitWithBuffer(&payload, c->argv[3]->ptr);
-    if (((type = rdbLoadObjectType(&payload)) == -1) ||
-        ((obj = rdbLoadObject(type, &payload, key->ptr, c->db->id, NULL)) == NULL)) {
+    rioInitWithBuffer(&payload, objectGetVal(c->argv[3]));
+    type = rdbLoadObjectType(&payload);
+    if (type == -1) {
+        addReplyError(c, "Bad data format");
+        return;
+    }
+
+    /* If it's a foreign RDB format, only accept old data types that we know
+     * existed in the past and that don't clash with new types added later. */
+    if (rdbIsForeignVersion(rdbver) && type >= RDB_FOREIGN_TYPE_MIN) {
+        addReplyErrorFormat(c, "Unsupported foreign data type: %d", type);
+        return;
+    }
+
+    obj = rdbLoadObject(type, &payload, objectGetVal(key), c->db->id, NULL, RDBFLAGS_NONE, 0);
+    if (obj == NULL) {
         addReplyError(c, "Bad data format");
         return;
     }
@@ -262,6 +281,8 @@ void restoreCommand(client *c) {
     if (ttl && !absttl) ttl += commandTimeSnapshot();
     if (ttl && checkAlreadyExpired(ttl)) {
         if (deleted) {
+            /* Here we don't use deleteExpiredKeyFromOverwriteAndPropagate because
+             * strictly speaking, the `delete` is triggered by the `replace`. */
             robj *aux = server.lazyfree_lazy_server_del ? shared.unlink : shared.del;
             rewriteClientCommandVector(c, 2, aux, key);
             signalModifiedKey(c, c->db, key);
@@ -274,9 +295,9 @@ void restoreCommand(client *c) {
     }
 
     /* Create the key and set the TTL if any */
-    dbAdd(c->db, key, obj);
+    dbAdd(c->db, key, &obj);
     if (ttl) {
-        setExpire(c, c->db, key, ttl);
+        obj = setExpire(c, c->db, key, ttl);
         if (!absttl) {
             /* Propagate TTL as absolute timestamp */
             robj *ttl_obj = createStringObjectFromLongLong(ttl);
@@ -285,7 +306,7 @@ void restoreCommand(client *c) {
             rewriteClientCommandArgument(c, c->argc, shared.absttl);
         }
     }
-    objectSetLRUOrLFU(obj, lfu_freq, lru_idle, lru_clock, 1000);
+    objectSetLRUOrLFU(obj, lfu_freq, lru_idle);
     signalModifiedKey(c, c->db, key);
     notifyKeyspaceEvent(NOTIFY_GENERIC, "restore", key, c->db->id);
     addReply(c, shared.ok);
@@ -323,9 +344,9 @@ migrateCachedSocket *migrateGetSocket(client *c, robj *host, robj *port, long ti
     migrateCachedSocket *cs;
 
     /* Check if we have an already cached socket for this ip:port pair. */
-    name = sdscatlen(name, host->ptr, sdslen(host->ptr));
+    name = sdscatlen(name, objectGetVal(host), sdslen(objectGetVal(host)));
     name = sdscatlen(name, ":", 1);
-    name = sdscatlen(name, port->ptr, sdslen(port->ptr));
+    name = sdscatlen(name, objectGetVal(port), sdslen(objectGetVal(port)));
     cs = dictFetchValue(server.migrate_cached_sockets, name);
     if (cs) {
         sdsfree(name);
@@ -345,13 +366,12 @@ migrateCachedSocket *migrateGetSocket(client *c, robj *host, robj *port, long ti
 
     /* Create the connection */
     conn = connCreate(connTypeOfCluster());
-    if (connBlockingConnect(conn, host->ptr, atoi(port->ptr), timeout) != C_OK) {
+    if (connBlockingConnect(conn, objectGetVal(host), atoi(objectGetVal(port)), timeout) != C_OK) {
         addReplyError(c, "-IOERR error or timeout connecting to the client");
         connClose(conn);
         sdsfree(name);
         return NULL;
     }
-    connEnableTcpNoDelay(conn);
 
     /* Add to the cache and return it to the caller. */
     cs = zmalloc(sizeof(*cs));
@@ -368,9 +388,9 @@ void migrateCloseSocket(robj *host, robj *port) {
     sds name = sdsempty();
     migrateCachedSocket *cs;
 
-    name = sdscatlen(name, host->ptr, sdslen(host->ptr));
+    name = sdscatlen(name, objectGetVal(host), sdslen(objectGetVal(host)));
     name = sdscatlen(name, ":", 1);
-    name = sdscatlen(name, port->ptr, sdslen(port->ptr));
+    name = sdscatlen(name, objectGetVal(port), sdslen(objectGetVal(port)));
     cs = dictFetchValue(server.migrate_cached_sockets, name);
     if (!cs) {
         sdsfree(name);
@@ -420,6 +440,7 @@ void migrateCommand(client *c) {
     int may_retry = 1;
     int write_error = 0;
     int argv_rewritten = 0;
+    int errno_copy = 0;
 
     /* To support the KEYS option we need the following additional state. */
     int first_key = 3; /* Argument index of the first key. */
@@ -428,29 +449,29 @@ void migrateCommand(client *c) {
     /* Parse additional options */
     for (j = 6; j < c->argc; j++) {
         int moreargs = (c->argc - 1) - j;
-        if (!strcasecmp(c->argv[j]->ptr, "copy")) {
+        if (!strcasecmp(objectGetVal(c->argv[j]), "copy")) {
             copy = 1;
-        } else if (!strcasecmp(c->argv[j]->ptr, "replace")) {
+        } else if (!strcasecmp(objectGetVal(c->argv[j]), "replace")) {
             replace = 1;
-        } else if (!strcasecmp(c->argv[j]->ptr, "auth")) {
+        } else if (!strcasecmp(objectGetVal(c->argv[j]), "auth")) {
             if (!moreargs) {
                 addReplyErrorObject(c, shared.syntaxerr);
                 return;
             }
             j++;
-            password = c->argv[j]->ptr;
+            password = objectGetVal(c->argv[j]);
             redactClientCommandArgument(c, j);
-        } else if (!strcasecmp(c->argv[j]->ptr, "auth2")) {
+        } else if (!strcasecmp(objectGetVal(c->argv[j]), "auth2")) {
             if (moreargs < 2) {
                 addReplyErrorObject(c, shared.syntaxerr);
                 return;
             }
-            username = c->argv[++j]->ptr;
+            username = objectGetVal(c->argv[++j]);
             redactClientCommandArgument(c, j);
-            password = c->argv[++j]->ptr;
+            password = objectGetVal(c->argv[++j]);
             redactClientCommandArgument(c, j);
-        } else if (!strcasecmp(c->argv[j]->ptr, "keys")) {
-            if (sdslen(c->argv[3]->ptr) != 0) {
+        } else if (!strcasecmp(objectGetVal(c->argv[j]), "keys")) {
+            if (sdslen(objectGetVal(c->argv[3])) != 0) {
                 addReplyError(c, "When using MIGRATE KEYS option, the key argument"
                                  " must be set to the empty string");
                 return;
@@ -534,7 +555,7 @@ try_again:
     /* Create RESTORE payload and generate the protocol to call the command. */
     for (j = 0; j < num_keys; j++) {
         long long ttl = 0;
-        long long expireat = getExpire(c->db, kv[j]);
+        long long expireat = objectGetExpire(ov[j]);
 
         if (expireat != -1) {
             ttl = expireat - commandTimeSnapshot();
@@ -557,7 +578,7 @@ try_again:
         else
             serverAssertWithInfo(c, NULL, rioWriteBulkString(&cmd, "RESTORE", 7));
         serverAssertWithInfo(c, NULL, sdsEncodedObject(kv[j]));
-        serverAssertWithInfo(c, NULL, rioWriteBulkString(&cmd, kv[j]->ptr, sdslen(kv[j]->ptr)));
+        serverAssertWithInfo(c, NULL, rioWriteBulkString(&cmd, objectGetVal(kv[j]), sdslen(objectGetVal(kv[j]))));
         serverAssertWithInfo(c, NULL, rioWriteBulkLongLong(&cmd, ttl));
 
         /* Emit the payload argument, that is the serialized object using
@@ -708,6 +729,10 @@ try_again:
      * It is very common for the cached socket to get closed, if just reopening
      * it works it's a shame to notify the error to the caller. */
 socket_err:
+    /* Take a copy of 'errno' prior cleanup as it can be overwritten and
+     * use copied variable for re-try check. */
+    errno_copy = errno;
+
     /* Cleanup we want to perform in both the retry and no retry case.
      * Note: Closing the migrate socket will also force SELECT next time. */
     sdsfree(cmd.io.buffer.ptr);
@@ -722,7 +747,7 @@ socket_err:
 
     /* Retry only if it's not a timeout and we never attempted a retry
      * (or the code jumping here did not set may_retry to zero). */
-    if (errno != ETIMEDOUT && may_retry) {
+    if (errno_copy != ETIMEDOUT && may_retry) {
         may_retry = 0;
         goto try_again;
     }
@@ -748,7 +773,16 @@ int verifyClusterNodeId(const char *name, int length) {
 }
 
 int isValidAuxChar(int c) {
-    return isalnum(c) || (strchr("!#$%&()*+.:;<>?@[]^{|}~", c) == NULL);
+    /* Return true if the character is alphanumeric */
+    if (isalnum(c)) {
+        return 1;
+    }
+
+    /* List of invalid characters */
+    static const char *invalid_charset = "!#$%&()*+;<>?@[]^{|}~";
+
+    /* Return true if the character is NOT in the invalid charset */
+    return strchr(invalid_charset, c) == NULL;
 }
 
 int isValidAuxString(char *s, unsigned int length) {
@@ -794,8 +828,16 @@ static int shouldReturnTlsInfo(void) {
     }
 }
 
+unsigned int countKeysInSlotForDb(unsigned int hashslot, serverDb *db) {
+    return kvstoreHashtableSize(db->keys, hashslot);
+}
+
 unsigned int countKeysInSlot(unsigned int slot) {
-    return kvstoreDictSize(server.db->keys, slot);
+    unsigned int result = 0;
+    for (int i = 0; i < server.dbnum; i++) {
+        result += server.db[i] ? countKeysInSlotForDb(slot, server.db[i]) : 0;
+    }
+    return result;
 }
 
 void clusterCommandHelp(client *c) {
@@ -820,11 +862,18 @@ void clusterCommandHelp(client *c) {
         "SLOTS",
         "    Return information about slots range mappings. Each range is made of:",
         "    start, end, primary and replicas IP addresses, ports and ids",
+        "SLOT-STATS",
+        "    Return an array of slot usage statistics for slots assigned to the current node.",
         "SHARDS",
         "    Return information about slot range mappings and the nodes associated with them.",
         NULL};
 
     addExtendedReplyHelp(c, help, clusterCommandExtendedHelp());
+}
+
+void clusterKeySlotCommand(client *c) {
+    sds key = objectGetVal(c->argv[2]);
+    addReplyLongLong(c, keyHashSlot(key, sdslen(key)));
 }
 
 void clusterCommand(client *c) {
@@ -833,40 +882,35 @@ void clusterCommand(client *c) {
         return;
     }
 
-    if (c->argc == 2 && !strcasecmp(c->argv[1]->ptr, "help")) {
+    if (c->argc == 2 && !strcasecmp(objectGetVal(c->argv[1]), "help")) {
         clusterCommandHelp(c);
-    } else if (!strcasecmp(c->argv[1]->ptr, "nodes") && c->argc == 2) {
+    } else if (!strcasecmp(objectGetVal(c->argv[1]), "nodes") && c->argc == 2) {
         /* CLUSTER NODES */
         /* Report TLS ports to TLS client, and report non-TLS port to non-TLS client. */
         sds nodes = clusterGenNodesDescription(c, 0, shouldReturnTlsInfo());
         addReplyVerbatim(c, nodes, sdslen(nodes), "txt");
         sdsfree(nodes);
-    } else if (!strcasecmp(c->argv[1]->ptr, "myid") && c->argc == 2) {
+    } else if (!strcasecmp(objectGetVal(c->argv[1]), "myid") && c->argc == 2) {
         /* CLUSTER MYID */
         clusterCommandMyId(c);
-    } else if (!strcasecmp(c->argv[1]->ptr, "myshardid") && c->argc == 2) {
+    } else if (!strcasecmp(objectGetVal(c->argv[1]), "myshardid") && c->argc == 2) {
         /* CLUSTER MYSHARDID */
         clusterCommandMyShardId(c);
-    } else if (!strcasecmp(c->argv[1]->ptr, "slots") && c->argc == 2) {
+    } else if (!strcasecmp(objectGetVal(c->argv[1]), "slots") && c->argc == 2) {
         /* CLUSTER SLOTS */
         clusterCommandSlots(c);
-    } else if (!strcasecmp(c->argv[1]->ptr, "shards") && c->argc == 2) {
+    } else if (!strcasecmp(objectGetVal(c->argv[1]), "shards") && c->argc == 2) {
         /* CLUSTER SHARDS */
         clusterCommandShards(c);
-    } else if (!strcasecmp(c->argv[1]->ptr, "info") && c->argc == 2) {
+    } else if (!strcasecmp(objectGetVal(c->argv[1]), "info") && c->argc == 2) {
         /* CLUSTER INFO */
 
-        sds info = genClusterInfoString();
+        sds info = genClusterInfoString(sdsempty());
 
         /* Produce the reply protocol. */
         addReplyVerbatim(c, info, sdslen(info), "txt");
         sdsfree(info);
-    } else if (!strcasecmp(c->argv[1]->ptr, "keyslot") && c->argc == 3) {
-        /* CLUSTER KEYSLOT <key> */
-        sds key = c->argv[2]->ptr;
-
-        addReplyLongLong(c, keyHashSlot(key, sdslen(key)));
-    } else if (!strcasecmp(c->argv[1]->ptr, "countkeysinslot") && c->argc == 3) {
+    } else if (!strcasecmp(objectGetVal(c->argv[1]), "countkeysinslot") && c->argc == 3) {
         /* CLUSTER COUNTKEYSINSLOT <slot> */
         long long slot;
 
@@ -875,8 +919,8 @@ void clusterCommand(client *c) {
             addReplyError(c, "Invalid slot");
             return;
         }
-        addReplyLongLong(c, countKeysInSlot(slot));
-    } else if (!strcasecmp(c->argv[1]->ptr, "getkeysinslot") && c->argc == 4) {
+        addReplyLongLong(c, countKeysInSlotForDb(slot, c->db));
+    } else if (!strcasecmp(objectGetVal(c->argv[1]), "getkeysinslot") && c->argc == 4) {
         /* CLUSTER GETKEYSINSLOT <slot> <count> */
         long long maxkeys, slot;
 
@@ -887,27 +931,27 @@ void clusterCommand(client *c) {
             return;
         }
 
-        unsigned int keys_in_slot = countKeysInSlot(slot);
+        unsigned int keys_in_slot = countKeysInSlotForDb(slot, c->db);
         unsigned int numkeys = maxkeys > keys_in_slot ? keys_in_slot : maxkeys;
         addReplyArrayLen(c, numkeys);
-        kvstoreDictIterator *kvs_di = NULL;
-        dictEntry *de = NULL;
-        kvs_di = kvstoreGetDictIterator(server.db->keys, slot);
+        kvstoreHashtableIterator *kvs_di = NULL;
+        kvs_di = kvstoreGetHashtableIterator(c->db->keys, slot, 0);
         for (unsigned int i = 0; i < numkeys; i++) {
-            de = kvstoreDictIteratorNext(kvs_di);
-            serverAssert(de != NULL);
-            sds sdskey = dictGetKey(de);
+            void *next;
+            serverAssert(kvstoreHashtableIteratorNext(kvs_di, &next));
+            robj *valkey = next;
+            sds sdskey = objectGetKey(valkey);
             addReplyBulkCBuffer(c, sdskey, sdslen(sdskey));
         }
-        kvstoreReleaseDictIterator(kvs_di);
-    } else if ((!strcasecmp(c->argv[1]->ptr, "slaves") || !strcasecmp(c->argv[1]->ptr, "replicas")) && c->argc == 3) {
+        kvstoreReleaseHashtableIterator(kvs_di);
+    } else if ((!strcasecmp(objectGetVal(c->argv[1]), "slaves") || !strcasecmp(objectGetVal(c->argv[1]), "replicas")) && c->argc == 3) {
         /* CLUSTER REPLICAS <NODE ID> */
-        clusterNode *n = clusterLookupNode(c->argv[2]->ptr, sdslen(c->argv[2]->ptr));
+        clusterNode *n = clusterLookupNode(objectGetVal(c->argv[2]), sdslen(objectGetVal(c->argv[2])));
         int j;
 
         /* Lookup the specified node in our table. */
         if (!n) {
-            addReplyErrorFormat(c, "Unknown node %s", (char *)c->argv[2]->ptr);
+            addReplyErrorFormat(c, "Unknown node %s", (char *)objectGetVal(c->argv[2]));
             return;
         }
 
@@ -929,12 +973,52 @@ void clusterCommand(client *c) {
     }
 }
 
+/* Compute cluster slot for the given command and arguments and detect cluster
+ * cross-slot errors. Returns the slot. If -1 is returned, one of the flags
+ * READ_FLAGS_NO_KEYS or READ_FLAGS_CROSSSLOT is set in `*read_flags` to
+ * indicate why the slot couldn't be determined. This function has no
+ * side-effects and can be called from I/O threads. */
+int clusterSlotByCommand(struct serverCommand *cmd, robj **argv, int argc, int *read_flags) {
+    getKeysResult result;
+    initGetKeysResult(&result);
+    int numkeys = getKeysFromCommand(cmd, argv, argc, &result);
+    int slot = -1;
+    if (numkeys == 0) *read_flags |= READ_FLAGS_NO_KEYS;
+    for (int i = 0; i < numkeys; i++) {
+        sds key = objectGetVal(argv[result.keys[i].pos]);
+        int keyslot = keyHashSlot(key, sdslen(key));
+        if (slot == -1) {
+            slot = keyslot;
+        } else if (keyslot != slot) {
+            slot = -1;
+            *read_flags |= READ_FLAGS_CROSSSLOT;
+            break;
+        }
+    }
+    getKeysFreeResult(&result);
+    return slot;
+}
+
 /* Return the pointer to the cluster node that is able to serve the command.
+ *
+ * Note that this function doesn't compute the slot for each key. The client's
+ * slot needs to be set before calling this function. If it's set to -1, the
+ * client's read flags should indicate if it's a cross-slot command or if the
+ * command has no keys. This is computed by clusterSlotByCommand(). The commands
+ * can be called together like this:
+ *
+ *     c->slot = clusterSlotByCommand(c->cmd, c->argv, c->argc, &c->read_flags);
+ *     node = getNodeByQuery(c, &error_code);
+ *
  * For the function to succeed the command should only target either:
  *
  * 1) A single key (even multiple times like RPOPLPUSH mylist mylist).
  * 2) Multiple keys in the same hash slot, while the slot is stable (no
  *    resharding in progress).
+ *
+ * The EXEC command is a special case. It takes no keys so the slot for this
+ * command is -1, but this function updates the client's slot to be the slot of
+ * the complete MULTI-EXEC transaction.
  *
  * On success the function returns the node that is able to serve the request.
  * If the node is not 'myself' a redirection must be performed. The kind of
@@ -961,15 +1045,17 @@ void clusterCommand(client *c) {
  *
  * CLUSTER_REDIR_DOWN_STATE and CLUSTER_REDIR_DOWN_RO_STATE if the cluster is
  * down but the user attempts to execute a command that addresses one or more keys. */
-clusterNode *
-getNodeByQuery(client *c, struct serverCommand *cmd, robj **argv, int argc, int *hashslot, int *error_code) {
+clusterNode *getNodeByQuery(client *c, int *error_code) {
     clusterNode *myself = getMyClusterNode();
     clusterNode *n = NULL;
     robj *firstkey = NULL;
     int multiple_keys = 0;
     multiState *ms, _ms;
     multiCmd mc;
-    int i, slot = 0, migrating_slot = 0, importing_slot = 0, missing_keys = 0, existing_keys = 0;
+    int i, migrating_slot = 0, importing_slot = 0, missing_keys = 0, existing_keys = 0;
+
+    /* Slot must be calculated in advance, or cross-slot or no keys detected. */
+    serverAssert(c->slot >= 0 || c->read_flags & (READ_FLAGS_NO_KEYS | READ_FLAGS_CROSSSLOT));
 
     /* Allow any key to be set if a module disabled cluster redirections. */
     if (server.cluster_module_flags & CLUSTER_MODULE_FLAG_NO_REDIRECTION) return myself;
@@ -981,13 +1067,73 @@ getNodeByQuery(client *c, struct serverCommand *cmd, robj **argv, int argc, int 
      * when writing a module that implements a completely different
      * distributed system. */
 
+    /* Determine transaction slot and return early on cross-slot. */
+    if (c->cmd->proc == execCommand && c->flag.multi) {
+        int slot = -1;
+        for (i = 0; i < c->mstate->count; i++) {
+            if (slot == -1) {
+                slot = c->mstate->commands[i].slot;
+            } else if (c->mstate->commands[i].slot != -1 && c->mstate->commands[i].slot != slot) {
+                if (error_code) *error_code = CLUSTER_REDIR_CROSS_SLOT;
+                return NULL;
+            }
+        }
+        /* EXEC will execute all queued commands in the transaction, so we
+         * overwrite the EXEC commands's slot with the transaction's slot. */
+        c->slot = slot;
+    } else if (c->read_flags & READ_FLAGS_CROSSSLOT) {
+        if (error_code) *error_code = CLUSTER_REDIR_CROSS_SLOT;
+        return NULL;
+    }
+
+    /* No key at all in command? then we can serve the request
+     * without redirections or errors in all the cases. */
+    if (c->slot == -1) return myself;
+
+    n = getNodeBySlot(c->slot);
+
+    /* If a slot is not served, we are in "cluster down" state.
+     * This check is done early to preserve historical behavior. */
+    if (n == NULL) {
+        if (error_code) *error_code = CLUSTER_REDIR_DOWN_UNBOUND;
+        return NULL;
+    }
+
+    /* If we are migrating or importing this slot, we need to check
+     * if we have all the keys in the request (the only way we
+     * can safely serve the request, otherwise we return a TRYAGAIN
+     * error). To do so we set the importing/migrating state and
+     * increment a counter for every missing key. */
+    if (clusterNodeIsPrimary(myself) || c->flag.readonly) {
+        if (n == clusterNodeGetPrimary(myself) && getMigratingSlotDest(c->slot) != NULL) {
+            migrating_slot = 1;
+        } else if (getImportingSlotSource(c->slot) != NULL) {
+            importing_slot = 1;
+        }
+    }
+
+    uint64_t cmd_flags = getCommandFlags(c);
+
+    /* Only valid for sharded pubsub as regular pubsub can operate on any node and bypasses this layer. */
+    int pubsubshard_included =
+        (cmd_flags & CMD_PUBSUB) || (c->cmd->proc == execCommand && (c->mstate->cmd_flags & CMD_PUBSUB));
+
+    /* If we're importing or migrating the slot, we need to do some more checks:
+     *
+     *   1. Go over all the keys to count existing keys and missing keys that we
+     *      need for TRYAGAIN and ASK redirects.
+     *   2. Check for some commands that are forbiddedn during slot migration.
+     *
+     * Skip this if we're not importing or migrating this slot. */
+    if (!migrating_slot && !importing_slot) goto after_checking_each_key;
+
     /* We handle all the cases as if they were EXEC commands, so we have
      * a common code path for everything */
-    if (cmd->proc == execCommand) {
+    if (c->cmd->proc == execCommand) {
         /* If CLIENT_MULTI flag is not set EXEC is just going to return an
          * error. */
         if (!c->flag.multi) return myself;
-        ms = &c->mstate;
+        ms = c->mstate;
     } else {
         /* In order to have a single codepath create a fake Multi State
          * structure if the client is not in MULTI/EXEC state, this way
@@ -995,19 +1141,15 @@ getNodeByQuery(client *c, struct serverCommand *cmd, robj **argv, int argc, int 
         ms = &_ms;
         _ms.commands = &mc;
         _ms.count = 1;
-        mc.argv = argv;
-        mc.argc = argc;
-        mc.cmd = cmd;
+        mc.argv = c->argv;
+        mc.argc = c->argc;
+        mc.cmd = c->cmd;
     }
 
-    uint64_t cmd_flags = getCommandFlags(c);
+    serverDb *origDb = c->db;
+    serverDb *currentDb = origDb;
 
-    /* Only valid for sharded pubsub as regular pubsub can operate on any node and bypasses this layer. */
-    int pubsubshard_included =
-        (cmd_flags & CMD_PUBSUB) || (c->cmd->proc == execCommand && (c->mstate.cmd_flags & CMD_PUBSUB));
-
-    /* Check that all the keys are in the same hash slot, and obtain this
-     * slot and the node associated. */
+    /* Check for multiple keys, existing keys, missing keys. */
     for (i = 0; i < ms->count; i++) {
         struct serverCommand *mcmd;
         robj **margv;
@@ -1023,48 +1165,24 @@ getNodeByQuery(client *c, struct serverCommand *cmd, robj **argv, int argc, int 
         numkeys = getKeysFromCommand(mcmd, margv, margc, &result);
         keyindex = result.keys;
 
+        if (mcmd->proc == selectCommand) {
+            /* Failed SELECT is ignored since it doesn't modify the database. */
+            long long id;
+            if (getLongLongFromObject(margv[1], &id) == C_OK && selectDb(c, id) == C_OK) {
+                currentDb = c->db;
+                selectDb(c, origDb->id);
+            }
+        }
+
         for (j = 0; j < numkeys; j++) {
             robj *thiskey = margv[keyindex[j].pos];
-            int thisslot = keyHashSlot((char *)thiskey->ptr, sdslen(thiskey->ptr));
 
             if (firstkey == NULL) {
-                /* This is the first key we see. Check what is the slot
-                 * and node. */
+                /* This is the first key we see. */
                 firstkey = thiskey;
-                slot = thisslot;
-                n = getNodeBySlot(slot);
-
-                /* Error: If a slot is not served, we are in "cluster down"
-                 * state. However the state is yet to be updated, so this was
-                 * not trapped earlier in processCommand(). Report the same
-                 * error to the client. */
-                if (n == NULL) {
-                    getKeysFreeResult(&result);
-                    if (error_code) *error_code = CLUSTER_REDIR_DOWN_UNBOUND;
-                    return NULL;
-                }
-
-                /* If we are migrating or importing this slot, we need to check
-                 * if we have all the keys in the request (the only way we
-                 * can safely serve the request, otherwise we return a TRYAGAIN
-                 * error). To do so we set the importing/migrating state and
-                 * increment a counter for every missing key. */
-                if (clusterNodeIsPrimary(myself) || c->flag.readonly) {
-                    if (n == clusterNodeGetPrimary(myself) && getMigratingSlotDest(slot) != NULL) {
-                        migrating_slot = 1;
-                    } else if (getImportingSlotSource(slot) != NULL) {
-                        importing_slot = 1;
-                    }
-                }
             } else {
                 /* If it is not the first key/channel, make sure it is exactly
                  * the same key/channel as the first we saw. */
-                if (slot != thisslot) {
-                    /* Error: multiple keys from different slots. */
-                    getKeysFreeResult(&result);
-                    if (error_code) *error_code = CLUSTER_REDIR_CROSS_SLOT;
-                    return NULL;
-                }
                 if (importing_slot && !multiple_keys && !equalStringObjects(firstkey, thiskey)) {
                     /* Flag this request as one with multiple different
                      * keys/channels when the slot is in importing state. */
@@ -1072,15 +1190,37 @@ getNodeByQuery(client *c, struct serverCommand *cmd, robj **argv, int argc, int 
                 }
             }
 
-            /* Migrating / Importing slot? Count keys we don't have.
+            /* Block MOVE command as the destination key is not expected to exist, and we don't know if it was migrated */
+            if (mcmd->proc == moveCommand) {
+                if (error_code) *error_code = CLUSTER_REDIR_UNSTABLE;
+                getKeysFreeResult(&result);
+                return NULL;
+            }
+
+            /* Block the COPY command if it's cross-DB to keep the code simple.
+             * Allowing cross-DB COPY is possible, but it would require looking up the second key in the target DB.
+             * The command should only be allowed if the key exists. We may revisit this decision in the future. */
+            if (mcmd->proc == copyCommand &&
+                margc >= 4 && !strcasecmp(objectGetVal(margv[3]), "db")) {
+                long long value;
+                if (getLongLongFromObject(margv[4], &value) != C_OK || value != currentDb->id) {
+                    if (error_code) *error_code = CLUSTER_REDIR_UNSTABLE;
+                    getKeysFreeResult(&result);
+                    return NULL;
+                }
+            }
+
+            /* Migrating / Importing slot? During exec we count keys we don't have.
              * If it is pubsubshard command, it isn't required to check
              * the channel being present or not in the node during the
              * slot migration, the channel will be served from the source
              * node until the migration completes with CLUSTER SETSLOT <slot>
              * NODE <node-id>. */
             int flags = LOOKUP_NOTOUCH | LOOKUP_NOSTATS | LOOKUP_NONOTIFY | LOOKUP_NOEXPIRE;
-            if ((migrating_slot || importing_slot) && !pubsubshard_included) {
-                if (lookupKeyReadWithFlags(&server.db[0], thiskey, flags) == NULL)
+            if (!pubsubshard_included &&
+                (!c->flag.multi || (c->flag.multi && c->cmd->proc == execCommand))) {
+                /* Multi/Exec validation happens on exec */
+                if (lookupKeyReadWithFlags(currentDb, thiskey, flags) == NULL)
                     missing_keys++;
                 else
                     existing_keys++;
@@ -1089,9 +1229,7 @@ getNodeByQuery(client *c, struct serverCommand *cmd, robj **argv, int argc, int 
         getKeysFreeResult(&result);
     }
 
-    /* No key at all in command? then we can serve the request
-     * without redirections or errors in all the cases. */
-    if (n == NULL) return myself;
+after_checking_each_key:
 
     /* Cluster is globally down but we got keys? We only serve the request
      * if it is a read command and when allow_reads_when_down is enabled. */
@@ -1117,13 +1255,10 @@ getNodeByQuery(client *c, struct serverCommand *cmd, robj **argv, int argc, int 
         }
     }
 
-    /* Return the hashslot by reference. */
-    if (hashslot) *hashslot = slot;
-
     /* MIGRATE always works in the context of the local node if the slot
      * is open (migrating or importing state). We need to be able to freely
      * move keys among instances in this case. */
-    if ((migrating_slot || importing_slot) && cmd->proc == migrateCommand && clusterNodeIsPrimary(myself)) {
+    if ((migrating_slot || importing_slot) && c->cmd->proc == migrateCommand && clusterNodeIsPrimary(myself)) {
         return myself;
     }
 
@@ -1136,7 +1271,7 @@ getNodeByQuery(client *c, struct serverCommand *cmd, robj **argv, int argc, int 
             return NULL;
         } else {
             if (error_code) *error_code = CLUSTER_REDIR_ASK;
-            return getMigratingSlotDest(slot);
+            return getMigratingSlotDest(c->slot);
         }
     }
 
@@ -1157,7 +1292,7 @@ getNodeByQuery(client *c, struct serverCommand *cmd, robj **argv, int argc, int 
      * node is a replica and the request is about a hash slot our primary
      * is serving, we can reply without redirection. */
     int is_write_command =
-        (cmd_flags & CMD_WRITE) || (c->cmd->proc == execCommand && (c->mstate.cmd_flags & CMD_WRITE));
+        (cmd_flags & CMD_WRITE) || (c->cmd->proc == execCommand && (c->mstate->cmd_flags & CMD_WRITE));
     if ((c->flag.readonly || pubsubshard_included) && !is_write_command && clusterNodeIsReplica(myself) &&
         clusterNodeGetPrimary(myself) == n) {
         return myself;
@@ -1192,7 +1327,7 @@ void clusterRedirectClient(client *c, clusterNode *n, int hashslot, int error_co
         addReplyError(c, "-CLUSTERDOWN Hash slot not served");
     } else if (error_code == CLUSTER_REDIR_MOVED || error_code == CLUSTER_REDIR_ASK) {
         /* Report TLS ports to TLS client, and report non-TLS port to non-TLS client. */
-        int port = clusterNodeClientPort(n, shouldReturnTlsInfo());
+        int port = clusterNodeClientPort(n, shouldReturnTlsInfo(), c);
         addReplyErrorSds(c,
                          sdscatprintf(sdsempty(), "-%s %d %s:%d", (error_code == CLUSTER_REDIR_ASK) ? "ASK" : "MOVED",
                                       hashslot, clusterNodePreferredEndpoint(n, c), port));
@@ -1214,14 +1349,14 @@ void clusterRedirectClient(client *c, clusterNode *n, int hashslot, int error_co
  * returns 1. Otherwise 0 is returned and no operation is performed. */
 int clusterRedirectBlockedClientIfNeeded(client *c) {
     clusterNode *myself = getMyClusterNode();
-    if (c->flag.blocked && (c->bstate.btype == BLOCKED_LIST || c->bstate.btype == BLOCKED_ZSET ||
-                            c->bstate.btype == BLOCKED_STREAM || c->bstate.btype == BLOCKED_MODULE)) {
+    if (c->flag.blocked && (c->bstate->btype == BLOCKED_LIST || c->bstate->btype == BLOCKED_ZSET ||
+                            c->bstate->btype == BLOCKED_STREAM || c->bstate->btype == BLOCKED_MODULE)) {
         dictEntry *de;
         dictIterator *di;
 
         /* If the client is blocked on module, but not on a specific key,
          * don't unblock it. */
-        if (c->bstate.btype == BLOCKED_MODULE && !moduleClientIsBlockedOnKeys(c)) return 0;
+        if (c->bstate->btype == BLOCKED_MODULE && !moduleClientIsBlockedOnKeys(c)) return 0;
 
         /* If the cluster is down, unblock the client with the right error.
          * If the cluster is configured to allow reads on cluster down, we
@@ -1233,10 +1368,11 @@ int clusterRedirectBlockedClientIfNeeded(client *c) {
         }
 
         /* All keys must belong to the same slot, so check first key only. */
-        di = dictGetIterator(c->bstate.keys);
+        di = dictGetIterator(c->bstate->keys);
         if ((de = dictNext(di)) != NULL) {
             robj *key = dictGetKey(de);
-            int slot = keyHashSlot((char *)key->ptr, sdslen(key->ptr));
+            int slot = keyHashSlot((char *)objectGetVal(key), sdslen(objectGetVal(key)));
+            serverAssert(slot == c->slot);
             clusterNode *node = getNodeBySlot(slot);
 
             /* if the client is read-only and attempting to access key that our
@@ -1248,7 +1384,7 @@ int clusterRedirectBlockedClientIfNeeded(client *c) {
 
             /* We send an error and unblock the client if:
              * 1) The slot is unassigned, emitting a cluster down error.
-             * 2) The slot is not handled by this node, nor being imported. */
+             * 2) The slot is neither handled by this node, nor being imported. */
             if (node != myself && getImportingSlotSource(slot) == NULL) {
                 if (node == NULL) {
                     clusterRedirectClient(c, NULL, 0, CLUSTER_REDIR_DOWN_UNBOUND);
@@ -1282,7 +1418,7 @@ void addNodeToNodeReply(client *c, clusterNode *node) {
     }
 
     /* Report TLS ports to TLS client, and report non-TLS port to non-TLS client. */
-    addReplyLongLong(c, clusterNodeClientPort(node, shouldReturnTlsInfo()));
+    addReplyLongLong(c, clusterNodeClientPort(node, shouldReturnTlsInfo(), c));
     addReplyBulkCBuffer(c, clusterNodeGetName(node), CLUSTER_NAMELEN);
 
     /* Add the additional endpoint information, this is all the known networking information
@@ -1319,16 +1455,15 @@ void addNodeToNodeReply(client *c, clusterNode *node) {
  * not finished their initial sync, in failed state, or are
  * otherwise considered not available to serve read commands. */
 int isNodeAvailable(clusterNode *node) {
+    /* We don't consider PFAIL here because it's not a reliable indicator
+     * for node available and we don't want clients to use it. */
     if (clusterNodeIsFailing(node)) {
         return 0;
     }
-    long long repl_offset = clusterNodeReplOffset(node);
-    if (clusterNodeIsMyself(node)) {
-        /* Nodes do not update their own information
-         * in the cluster node list. */
-        repl_offset = getNodeReplicationOffset(node);
-    }
-    return (repl_offset != 0);
+
+    /* Hide empty replicas in here, from a data-path POV, an empty replica
+     * is not available. */
+    return getNodeReplicationOffset(node) != 0;
 }
 
 void addNodeReplyForClusterSlot(client *c, clusterNode *node, int start_slot, int end_slot) {
@@ -1388,6 +1523,8 @@ sds generateClusterSlotResponse(int resp) {
         }
     }
     setDeferredArrayLen(recording_client, slot_replylen, num_primaries);
+    /* For cluster slots, deferred length should put all data in reply list, not buffer */
+    serverAssert(recording_client->bufpos == 0);
     sds cluster_slot_response = aggregateClientOutputBuffer(recording_client);
     deleteCachedResponseClient(recording_client);
     return cluster_slot_response;
@@ -1415,7 +1552,7 @@ void clusterCommandSlots(client *c) {
      *           ... continued until done
      */
     int conn_type = 0;
-    if (connIsTLS(c->conn)) conn_type |= CACHE_CONN_TYPE_TLS;
+    if (shouldReturnTlsInfo()) conn_type |= CACHE_CONN_TYPE_TLS;
     if (isClientConnIpV6(c)) conn_type |= CACHE_CONN_TYPE_IPv6;
     if (c->resp == 3) conn_type |= CACHE_CONN_TYPE_RESP3;
 
@@ -1470,4 +1607,26 @@ void resetClusterStats(void) {
     if (!server.cluster_enabled) return;
 
     clusterSlotStatResetAll();
+
+    memset(server.cluster->stats_bus_messages_sent, 0, sizeof(server.cluster->stats_bus_messages_sent));
+    memset(server.cluster->stats_bus_messages_received, 0, sizeof(server.cluster->stats_bus_messages_received));
+    server.cluster->stat_cluster_links_buffer_limit_exceeded = 0;
+}
+
+void clusterCommandFlushslot(client *c) {
+    int slot;
+    int lazy = server.lazyfree_lazy_user_flush;
+    if ((slot = getSlotOrReply(c, c->argv[2])) == -1) return;
+    if (c->argc == 4) {
+        if (!strcasecmp(objectGetVal(c->argv[3]), "async")) {
+            lazy = 1;
+        } else if (!strcasecmp(objectGetVal(c->argv[3]), "sync")) {
+            lazy = 0;
+        } else {
+            addReplyErrorObject(c, shared.syntaxerr);
+            return;
+        }
+    }
+    delKeysInSlot(slot, lazy, false, true);
+    addReply(c, shared.ok);
 }

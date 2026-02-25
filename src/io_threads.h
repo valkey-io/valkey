@@ -9,9 +9,12 @@ int inMainThread(void);
 int trySendReadToIOThreads(client *c);
 int trySendWriteToIOThreads(client *c);
 int tryOffloadFreeObjToIOThreads(robj *o);
-int tryOffloadFreeArgvToIOThreads(client *c);
+int tryOffloadFreeArgvToIOThreads(client *c, int argc, robj **argv);
 void adjustIOThreadsByEventLoad(int numevents, int increase_only);
 void drainIOThreadsQueue(void);
 void trySendPollJobToIOThreads(void);
+int trySendAcceptToIOThreads(connection *conn);
+int updateIOThreads(const char **err);
+long long getIOThreadActiveTimeMicroseconds(int id);
 
 #endif /* IO_THREADS_H */

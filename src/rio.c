@@ -16,7 +16,7 @@
  * ----------------------------------------------------------------------------
  *
  * Copyright (c) 2009-2012, Pieter Noordhuis <pcnoordhuis at gmail dot com>
- * Copyright (c) 2009-2012, Salvatore Sanfilippo <antirez at gmail dot com>
+ * Copyright (c) 2009-2012, Redis Ltd.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -131,7 +131,7 @@ static size_t rioFileWrite(rio *r, const void *buf, size_t len) {
             serverAssert(processed % r->io.file.autosync == 0);
             serverAssert(r->io.file.buffered == r->io.file.autosync);
 
-#if HAVE_SYNC_FILE_RANGE
+#if defined(HAVE_SYNC_FILE_RANGE) && HAVE_SYNC_FILE_RANGE
             /* Start writeout asynchronously. */
             if (sync_file_range(fileno(r->io.file.fp), processed - r->io.file.autosync, r->io.file.autosync,
                                 SYNC_FILE_RANGE_WRITE) == -1)
@@ -182,12 +182,16 @@ static int rioFileFlush(rio *r) {
 }
 
 static const rio rioFileIO = {
-    rioFileRead, rioFileWrite, rioFileTell, rioFileFlush, NULL, /* update_checksum */
-    0,                                                          /* current checksum */
-    0,                                                          /* flags */
-    0,                                                          /* bytes read or written */
-    0,                                                          /* read/write chunk size */
-    {{NULL, 0}}                                                 /* union for io-specific vars */
+    rioFileRead,
+    rioFileWrite,
+    rioFileTell,
+    rioFileFlush,
+    NULL,       /* update_checksum */
+    0,          /* current checksum */
+    0,          /* flags */
+    0,          /* bytes read or written */
+    0,          /* read/write chunk size */
+    {{NULL, 0}} /* union for io-specific vars */
 };
 
 void rioInitWithFile(rio *r, FILE *fp) {
@@ -276,12 +280,16 @@ static int rioConnFlush(rio *r) {
 }
 
 static const rio rioConnIO = {
-    rioConnRead, rioConnWrite, rioConnTell, rioConnFlush, NULL, /* update_checksum */
-    0,                                                          /* current checksum */
-    0,                                                          /* flags */
-    0,                                                          /* bytes read or written */
-    0,                                                          /* read/write chunk size */
-    {{NULL, 0}}                                                 /* union for io-specific vars */
+    rioConnRead,
+    rioConnWrite,
+    rioConnTell,
+    rioConnFlush,
+    NULL,       /* update_checksum */
+    0,          /* current checksum */
+    0,          /* flags */
+    0,          /* bytes read or written */
+    0,          /* read/write chunk size */
+    {{NULL, 0}} /* union for io-specific vars */
 };
 
 /* Create an RIO that implements a buffered read from an fd
@@ -388,12 +396,16 @@ static int rioFdFlush(rio *r) {
 }
 
 static const rio rioFdIO = {
-    rioFdRead,  rioFdWrite, rioFdTell, rioFdFlush, NULL, /* update_checksum */
-    0,                                                   /* current checksum */
-    0,                                                   /* flags */
-    0,                                                   /* bytes read or written */
-    0,                                                   /* read/write chunk size */
-    {{NULL, 0}}                                          /* union for io-specific vars */
+    rioFdRead,
+    rioFdWrite,
+    rioFdTell,
+    rioFdFlush,
+    NULL,       /* update_checksum */
+    0,          /* current checksum */
+    0,          /* flags */
+    0,          /* bytes read or written */
+    0,          /* read/write chunk size */
+    {{NULL, 0}} /* union for io-specific vars */
 };
 
 void rioInitWithFd(rio *r, int fd) {
@@ -413,6 +425,7 @@ void rioFreeFd(rio *r) {
 /* This function can be installed both in memory and file streams when checksum
  * computation is needed. */
 void rioGenericUpdateChecksum(rio *r, const void *buf, size_t len) {
+    if ((r->flags & RIO_FLAG_SKIP_RDB_CHECKSUM) != 0) return; // skip RDB checksum
     r->cksum = crc64(r->cksum, buf, len);
 }
 

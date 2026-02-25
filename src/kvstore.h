@@ -1,80 +1,98 @@
-#ifndef DICTARRAY_H_
-#define DICTARRAY_H_
+#ifndef KVSTORE_H
+#define KVSTORE_H
 
-#include "dict.h"
+#include "hashtable.h"
 #include "adlist.h"
 
 typedef struct _kvstore kvstore;
 typedef struct _kvstoreIterator kvstoreIterator;
-typedef struct _kvstoreDictIterator kvstoreDictIterator;
+typedef struct _kvstoreHashtableIterator kvstoreHashtableIterator;
 
-typedef int(kvstoreScanShouldSkipDict)(dict *d);
-typedef int(kvstoreExpandShouldSkipDictIndex)(int didx);
+/* Return 1 if we should skip the hashtable in scan. */
+typedef int(kvstoreScanShouldSkipHashtable)(hashtable *d);
+/* Return 1 if we should skip the hashtable in expand. */
+typedef int(kvstoreExpandShouldSkipHashtableIndex)(int didx);
+typedef void (*kvstoreScanFunction)(void *privdata, void *entry, int didx);
 
-#define KVSTORE_ALLOCATE_DICTS_ON_DEMAND (1 << 0)
-#define KVSTORE_FREE_EMPTY_DICTS (1 << 1)
-kvstore *kvstoreCreate(dictType *type, int num_dicts_bits, int flags);
-void kvstoreEmpty(kvstore *kvs, void(callback)(dict *));
+#define KVSTORE_ALLOCATE_HASHTABLES_ON_DEMAND (1 << 0)
+#define KVSTORE_FREE_EMPTY_HASHTABLES (1 << 1)
+
+#define KVSTORE_INDEX_NOT_FOUND (-1)
+
+kvstore *kvstoreCreate(hashtableType *type, int num_hashtables_bits, int flags);
+void kvstoreEmpty(kvstore *kvs, void(callback)(hashtable *));
 void kvstoreRelease(kvstore *kvs);
 unsigned long long kvstoreSize(kvstore *kvs);
+unsigned long long kvstoreImportingSize(kvstore *kvs);
 unsigned long kvstoreBuckets(kvstore *kvs);
 size_t kvstoreMemUsage(kvstore *kvs);
 unsigned long long kvstoreScan(kvstore *kvs,
                                unsigned long long cursor,
                                int onlydidx,
-                               dictScanFunction *scan_cb,
-                               kvstoreScanShouldSkipDict *skip_cb,
+                               kvstoreScanFunction scan_cb,
+                               kvstoreScanShouldSkipHashtable *skip_cb,
                                void *privdata);
-int kvstoreExpand(kvstore *kvs, uint64_t newsize, int try_expand, kvstoreExpandShouldSkipDictIndex *skip_cb);
-int kvstoreGetFairRandomDictIndex(kvstore *kvs);
+bool kvstoreExpand(kvstore *kvs, uint64_t newsize, int try_expand, kvstoreExpandShouldSkipHashtableIndex *skip_cb);
+int kvstoreGetFairRandomHashtableIndex(kvstore *kvs);
 void kvstoreGetStats(kvstore *kvs, char *buf, size_t bufsize, int full);
 
-int kvstoreFindDictIndexByKeyIndex(kvstore *kvs, unsigned long target);
-int kvstoreGetFirstNonEmptyDictIndex(kvstore *kvs);
-int kvstoreGetNextNonEmptyDictIndex(kvstore *kvs, int didx);
-int kvstoreNumNonEmptyDicts(kvstore *kvs);
-int kvstoreNumAllocatedDicts(kvstore *kvs);
-int kvstoreNumDicts(kvstore *kvs);
+int kvstoreFindHashtableIndexByKeyIndex(kvstore *kvs, unsigned long target);
+int kvstoreGetFirstNonEmptyHashtableIndex(kvstore *kvs);
+int kvstoreGetNextNonEmptyHashtableIndex(kvstore *kvs, int didx);
+int kvstoreNumNonEmptyHashtables(kvstore *kvs);
+int kvstoreNumAllocatedHashtables(kvstore *kvs);
+int kvstoreNumHashtables(kvstore *kvs);
 uint64_t kvstoreGetHash(kvstore *kvs, const void *key);
 
+void kvstoreHashtableRehashingStarted(hashtable *d);
+void kvstoreHashtableRehashingCompleted(hashtable *d);
+void kvstoreHashtableTrackMemUsage(hashtable *s, ssize_t delta);
+size_t kvstoreHashtableMetadataSize(void);
+
 /* kvstore iterator specific functions */
-kvstoreIterator *kvstoreIteratorInit(kvstore *kvs);
+kvstoreIterator *kvstoreIteratorInit(kvstore *kvs, uint8_t flags);
 void kvstoreIteratorRelease(kvstoreIterator *kvs_it);
-int kvstoreIteratorGetCurrentDictIndex(kvstoreIterator *kvs_it);
-dictEntry *kvstoreIteratorNext(kvstoreIterator *kvs_it);
+int kvstoreIteratorGetCurrentHashtableIndex(kvstoreIterator *kvs_it);
+bool kvstoreIteratorNext(kvstoreIterator *kvs_it, void **next);
 
 /* Rehashing */
-void kvstoreTryResizeDicts(kvstore *kvs, int limit);
+void kvstoreTryResizeHashtables(kvstore *kvs, int limit);
 uint64_t kvstoreIncrementallyRehash(kvstore *kvs, uint64_t threshold_us);
 size_t kvstoreOverheadHashtableLut(kvstore *kvs);
 size_t kvstoreOverheadHashtableRehashing(kvstore *kvs);
-unsigned long kvstoreDictRehashingCount(kvstore *kvs);
+unsigned long kvstoreHashtableRehashingCount(kvstore *kvs);
 
-/* Specific dict access by dict-index */
-unsigned long kvstoreDictSize(kvstore *kvs, int didx);
-kvstoreDictIterator *kvstoreGetDictIterator(kvstore *kvs, int didx);
-kvstoreDictIterator *kvstoreGetDictSafeIterator(kvstore *kvs, int didx);
-void kvstoreReleaseDictIterator(kvstoreDictIterator *kvs_id);
-dictEntry *kvstoreDictIteratorNext(kvstoreDictIterator *kvs_di);
-dictEntry *kvstoreDictGetRandomKey(kvstore *kvs, int didx);
-dictEntry *kvstoreDictGetFairRandomKey(kvstore *kvs, int didx);
-unsigned int kvstoreDictGetSomeKeys(kvstore *kvs, int didx, dictEntry **des, unsigned int count);
-int kvstoreDictExpand(kvstore *kvs, int didx, unsigned long size);
-unsigned long kvstoreDictScanDefrag(kvstore *kvs,
-                                    int didx,
-                                    unsigned long v,
-                                    dictScanFunction *fn,
-                                    dictDefragFunctions *defragfns,
-                                    void *privdata);
-typedef dict *(kvstoreDictLUTDefragFunction)(dict *d);
-void kvstoreDictLUTDefrag(kvstore *kvs, kvstoreDictLUTDefragFunction *defragfn);
-void *kvstoreDictFetchValue(kvstore *kvs, int didx, const void *key);
-dictEntry *kvstoreDictFind(kvstore *kvs, int didx, void *key);
-dictEntry *kvstoreDictAddRaw(kvstore *kvs, int didx, void *key, dictEntry **existing);
-void kvstoreDictSetKey(kvstore *kvs, int didx, dictEntry *de, void *key);
-void kvstoreDictSetVal(kvstore *kvs, int didx, dictEntry *de, void *val);
-dictEntry *kvstoreDictTwoPhaseUnlinkFind(kvstore *kvs, int didx, const void *key, dictEntry ***plink, int *table_index);
-void kvstoreDictTwoPhaseUnlinkFree(kvstore *kvs, int didx, dictEntry *he, dictEntry **plink, int table_index);
-int kvstoreDictDelete(kvstore *kvs, int didx, const void *key);
+/* Specific hashtable access by hashtable-index */
+unsigned long kvstoreHashtableSize(kvstore *kvs, int didx);
+unsigned long kvstoreHashtableBuckets(kvstore *kvs, int didx);
+kvstoreHashtableIterator *kvstoreGetHashtableIterator(kvstore *kvs, int didx, uint8_t flags);
+void kvstoreReleaseHashtableIterator(kvstoreHashtableIterator *kvs_id);
+bool kvstoreHashtableIteratorNext(kvstoreHashtableIterator *kvs_di, void **next);
+bool kvstoreHashtableRandomEntry(kvstore *kvs, int didx, void **found);
+bool kvstoreHashtableFairRandomEntry(kvstore *kvs, int didx, void **found);
+unsigned int kvstoreHashtableSampleEntries(kvstore *kvs, int didx, void **dst, unsigned int count);
+bool kvstoreHashtableExpand(kvstore *kvs, int didx, unsigned long size);
+bool kvstoreHashtableTryExpand(kvstore *kvs, int didx, unsigned long size);
+void kvstoreSetIsImporting(kvstore *kvs, int didx, int is_importing);
+unsigned long kvstoreHashtableScanDefrag(kvstore *kvs,
+                                         int didx,
+                                         unsigned long v,
+                                         hashtableScanFunction fn,
+                                         void *privdata,
+                                         void *(*defragfn)(void *),
+                                         int flags);
+unsigned long kvstoreHashtableDefragTables(kvstore *kvs, unsigned long cursor, void *(*defragfn)(void *));
+bool kvstoreHashtableFind(kvstore *kvs, int didx, void *key, void **found);
+void **kvstoreHashtableFindRef(kvstore *kvs, int didx, const void *key);
+bool kvstoreHashtableAdd(kvstore *kvs, int didx, void *entry);
 
-#endif /* DICTARRAY_H_ */
+bool kvstoreHashtableFindPositionForInsert(kvstore *kvs, int didx, void *key, hashtablePosition *position, void **existing);
+void kvstoreHashtableInsertAtPosition(kvstore *kvs, int didx, void *entry, void *position);
+
+void **kvstoreHashtableTwoPhasePopFindRef(kvstore *kvs, int didx, const void *key, void *position);
+void kvstoreHashtableTwoPhasePopDelete(kvstore *kvs, int didx, void *position);
+bool kvstoreHashtablePop(kvstore *kvs, int didx, const void *key, void **popped);
+bool kvstoreHashtableDelete(kvstore *kvs, int didx, const void *key);
+hashtable *kvstoreGetHashtable(kvstore *kvs, int didx);
+
+#endif /* KVSTORE_H */

@@ -1,4 +1,4 @@
-# redis-copy.rb - Copyright (C) 2009-2010 Salvatore Sanfilippo
+# redis-copy.rb - Copyright (C) 2009-2010 Redis Ltd.
 # BSD license, See the COPYING file for more information.
 #
 # Copy the whole dataset from one server instance to another one

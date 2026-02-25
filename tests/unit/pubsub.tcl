@@ -112,7 +112,6 @@ start_server {tags {"pubsub network"}} {
     test "UNSUBSCRIBE from non-subscribed channels" {
         set rd1 [valkey_deferring_client]
         assert_equal {0 0 0} [unsubscribe $rd1 {foo bar quux}]
-
         # clean up clients
         $rd1 close
     }
@@ -422,6 +421,17 @@ start_server {tags {"pubsub network"}} {
         set rd1 [valkey_deferring_client]
         assert_equal {1} [psubscribe $rd1 *]
         r psetex foo 100 1
+        assert_equal "pmessage * __keyevent@${db}__:expired foo" [$rd1 read]
+        $rd1 close
+    }
+
+    test "Keyspace notification: expired event (Expiration time is already expired)" {
+        r config set notify-keyspace-events Ex
+        r del foo
+        set rd1 [valkey_deferring_client]
+        assert_equal {1} [psubscribe $rd1 *]
+        r set foo 1
+        r expire foo -1
         assert_equal "pmessage * __keyevent@${db}__:expired foo" [$rd1 read]
         $rd1 close
     }

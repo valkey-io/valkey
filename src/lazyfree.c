@@ -2,6 +2,7 @@
 #include "bio.h"
 #include "functions.h"
 #include "cluster.h"
+#include "module.h"
 
 #include <stdatomic.h>
 
@@ -23,10 +24,12 @@ void lazyfreeFreeObject(void *args[]) {
 void lazyfreeFreeDatabase(void *args[]) {
     kvstore *da1 = args[0];
     kvstore *da2 = args[1];
+    kvstore *da3 = args[2];
 
     size_t numkeys = kvstoreSize(da1);
     kvstoreRelease(da1);
     kvstoreRelease(da2);
+    kvstoreRelease(da3);
     atomic_fetch_sub_explicit(&lazyfree_objects, numkeys, memory_order_relaxed);
     atomic_fetch_add_explicit(&lazyfreed_objects, numkeys, memory_order_relaxed);
 }
@@ -49,13 +52,13 @@ void lazyFreeErrors(void *args[]) {
     atomic_fetch_add_explicit(&lazyfreed_objects, len, memory_order_relaxed);
 }
 
-/* Release the lua_scripts dict. */
-void lazyFreeLuaScripts(void *args[]) {
-    dict *lua_scripts = args[0];
-    list *lua_scripts_lru_list = args[1];
-    lua_State *lua = args[2];
-    long long len = dictSize(lua_scripts);
-    freeLuaScriptsSync(lua_scripts, lua_scripts_lru_list, lua);
+/* Release the eval scripts data structures. */
+void lazyFreeEvalScripts(void *args[]) {
+    dict *scripts = args[0];
+    list *scripts_lru_list = args[1];
+    list *engine_callbacks = args[2];
+    long long len = dictSize(scripts);
+    freeEvalScripts(scripts, scripts_lru_list, engine_callbacks);
     atomic_fetch_sub_explicit(&lazyfree_objects, len, memory_order_relaxed);
     atomic_fetch_add_explicit(&lazyfreed_objects, len, memory_order_relaxed);
 }
@@ -63,8 +66,9 @@ void lazyFreeLuaScripts(void *args[]) {
 /* Release the functions ctx. */
 void lazyFreeFunctionsCtx(void *args[]) {
     functionsLibCtx *functions_lib_ctx = args[0];
+    list *engine_callbacks = args[1];
     size_t len = functionsLibCtxFunctionsLen(functions_lib_ctx);
-    functionsLibCtxFree(functions_lib_ctx);
+    functionsLibCtxFree(functions_lib_ctx, NULL, engine_callbacks);
     atomic_fetch_sub_explicit(&lazyfree_objects, len, memory_order_relaxed);
     atomic_fetch_add_explicit(&lazyfreed_objects, len, memory_order_relaxed);
 }
@@ -77,6 +81,24 @@ void lazyFreeReplicationBacklogRefMem(void *args[]) {
     len += raxSize(index);
     listRelease(blocks);
     raxFree(index);
+    atomic_fetch_sub_explicit(&lazyfree_objects, len, memory_order_relaxed);
+    atomic_fetch_add_explicit(&lazyfreed_objects, len, memory_order_relaxed);
+}
+
+/* Release the replicaKeysWithExpire dict. */
+void lazyFreeReplicaKeysWithExpire(void *args[]) {
+    dict *replica_keys_with_expire = args[0];
+    size_t len = dictSize(replica_keys_with_expire);
+    dictRelease(replica_keys_with_expire);
+    atomic_fetch_sub_explicit(&lazyfree_objects, len, memory_order_relaxed);
+    atomic_fetch_add_explicit(&lazyfreed_objects, len, memory_order_relaxed);
+}
+
+/* Release the pending_repl_data.blocks list. */
+void lazyfreePendingReplDataBuf(void *args[]) {
+    list *pending_repl_data_blocks = args[0];
+    size_t len = listLength(pending_repl_data_blocks);
+    listRelease(pending_repl_data_blocks);
     atomic_fetch_sub_explicit(&lazyfree_objects, len, memory_order_relaxed);
     atomic_fetch_add_explicit(&lazyfreed_objects, len, memory_order_relaxed);
 }
@@ -114,20 +136,20 @@ void lazyfreeResetStats(void) {
  * representing the list. */
 size_t lazyfreeGetFreeEffort(robj *key, robj *obj, int dbid) {
     if (obj->type == OBJ_LIST && obj->encoding == OBJ_ENCODING_QUICKLIST) {
-        quicklist *ql = obj->ptr;
+        quicklist *ql = objectGetVal(obj);
         return ql->len;
-    } else if (obj->type == OBJ_SET && obj->encoding == OBJ_ENCODING_HT) {
-        dict *ht = obj->ptr;
-        return dictSize(ht);
+    } else if (obj->type == OBJ_SET && obj->encoding == OBJ_ENCODING_HASHTABLE) {
+        hashtable *ht = objectGetVal(obj);
+        return hashtableSize(ht);
     } else if (obj->type == OBJ_ZSET && obj->encoding == OBJ_ENCODING_SKIPLIST) {
-        zset *zs = obj->ptr;
-        return zs->zsl->length;
-    } else if (obj->type == OBJ_HASH && obj->encoding == OBJ_ENCODING_HT) {
-        dict *ht = obj->ptr;
-        return dictSize(ht);
+        zset *zs = objectGetVal(obj);
+        return zslGetLength(zs->zsl);
+    } else if (obj->type == OBJ_HASH && obj->encoding == OBJ_ENCODING_HASHTABLE) {
+        hashtable *ht = objectGetVal(obj);
+        return hashtableSize(ht);
     } else if (obj->type == OBJ_STREAM) {
         size_t effort = 0;
-        stream *s = obj->ptr;
+        stream *s = objectGetVal(obj);
 
         /* Make a best effort estimate to maintain constant runtime. Every macro
          * node in the Stream is one allocation. */
@@ -186,16 +208,17 @@ void freeObjAsync(robj *key, robj *obj, int dbid) {
  * lazy freeing. */
 void emptyDbAsync(serverDb *db) {
     int slot_count_bits = 0;
-    int flags = KVSTORE_ALLOCATE_DICTS_ON_DEMAND;
+    int flags = KVSTORE_ALLOCATE_HASHTABLES_ON_DEMAND;
     if (server.cluster_enabled) {
         slot_count_bits = CLUSTER_SLOT_MASK_BITS;
-        flags |= KVSTORE_FREE_EMPTY_DICTS;
+        flags |= KVSTORE_FREE_EMPTY_HASHTABLES;
     }
-    kvstore *oldkeys = db->keys, *oldexpires = db->expires;
-    db->keys = kvstoreCreate(&dbDictType, slot_count_bits, flags);
-    db->expires = kvstoreCreate(&dbExpiresDictType, slot_count_bits, flags);
+    kvstore *oldkeys = db->keys, *oldexpires = db->expires, *oldkeyswithexpires = db->keys_with_volatile_items;
+    db->keys = kvstoreCreate(&kvstoreKeysHashtableType, slot_count_bits, flags);
+    db->expires = kvstoreCreate(&kvstoreExpiresHashtableType, slot_count_bits, flags);
+    db->keys_with_volatile_items = kvstoreCreate(&kvstoreExpiresHashtableType, slot_count_bits, flags);
     atomic_fetch_add_explicit(&lazyfree_objects, kvstoreSize(oldkeys), memory_order_relaxed);
-    bioCreateLazyFreeJob(lazyfreeFreeDatabase, 2, oldkeys, oldexpires);
+    bioCreateLazyFreeJob(lazyfreeFreeDatabase, 3, oldkeys, oldexpires, oldkeyswithexpires);
 }
 
 /* Free the key tracking table.
@@ -222,25 +245,26 @@ void freeErrorsRadixTreeAsync(rax *errors) {
     }
 }
 
-/* Free lua_scripts dict and lru list, if the dict is huge enough, free them in async way.
+/* Free scripts dict, and lru list, if the dict is huge enough, free them in
+ * async way.
  * Close lua interpreter, if there are a lot of lua scripts, close it in async way. */
-void freeLuaScriptsAsync(dict *lua_scripts, list *lua_scripts_lru_list, lua_State *lua) {
-    if (dictSize(lua_scripts) > LAZYFREE_THRESHOLD) {
-        atomic_fetch_add_explicit(&lazyfree_objects, dictSize(lua_scripts), memory_order_relaxed);
-        bioCreateLazyFreeJob(lazyFreeLuaScripts, 3, lua_scripts, lua_scripts_lru_list, lua);
+void freeEvalScriptsAsync(dict *scripts, list *scripts_lru_list, list *engine_callbacks) {
+    if (dictSize(scripts) > LAZYFREE_THRESHOLD) {
+        atomic_fetch_add_explicit(&lazyfree_objects, dictSize(scripts), memory_order_relaxed);
+        bioCreateLazyFreeJob(lazyFreeEvalScripts, 3, scripts, scripts_lru_list, engine_callbacks);
     } else {
-        freeLuaScriptsSync(lua_scripts, lua_scripts_lru_list, lua);
+        freeEvalScripts(scripts, scripts_lru_list, engine_callbacks);
     }
 }
 
 /* Free functions ctx, if the functions ctx contains enough functions, free it in async way. */
-void freeFunctionsAsync(functionsLibCtx *functions_lib_ctx) {
+void freeFunctionsAsync(functionsLibCtx *functions_lib_ctx, list *engine_callbacks) {
     if (functionsLibCtxFunctionsLen(functions_lib_ctx) > LAZYFREE_THRESHOLD) {
         atomic_fetch_add_explicit(&lazyfree_objects, functionsLibCtxFunctionsLen(functions_lib_ctx),
                                   memory_order_relaxed);
-        bioCreateLazyFreeJob(lazyFreeFunctionsCtx, 1, functions_lib_ctx);
+        bioCreateLazyFreeJob(lazyFreeFunctionsCtx, 2, functions_lib_ctx, engine_callbacks);
     } else {
-        functionsLibCtxFree(functions_lib_ctx);
+        functionsLibCtxFree(functions_lib_ctx, NULL, engine_callbacks);
     }
 }
 
@@ -252,5 +276,25 @@ void freeReplicationBacklogRefMemAsync(list *blocks, rax *index) {
     } else {
         listRelease(blocks);
         raxFree(index);
+    }
+}
+
+/* Free replicaKeysWithExpire dict, if the dict is huge enough, free it in async way. */
+void freeReplicaKeysWithExpireAsync(dict *replica_keys_with_expire) {
+    if (dictSize(replica_keys_with_expire) > LAZYFREE_THRESHOLD) {
+        atomic_fetch_add_explicit(&lazyfree_objects, dictSize(replica_keys_with_expire), memory_order_relaxed);
+        bioCreateLazyFreeJob(lazyFreeReplicaKeysWithExpire, 1, replica_keys_with_expire);
+    } else {
+        dictRelease(replica_keys_with_expire);
+    }
+}
+
+/* Free pending replication data buffer, if the buffer contains enough data, free it in async way. */
+void freePendingReplDataBufAsync(list *pending_repl_data_blocks) {
+    if (listLength(pending_repl_data_blocks) > LAZYFREE_THRESHOLD) {
+        atomic_fetch_add_explicit(&lazyfree_objects, listLength(pending_repl_data_blocks), memory_order_relaxed);
+        bioCreateLazyFreeJob(lazyfreePendingReplDataBuf, 1, pending_repl_data_blocks);
+    } else {
+        listRelease(pending_repl_data_blocks);
     }
 }

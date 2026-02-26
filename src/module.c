@@ -12825,10 +12825,10 @@ int moduleLoad(const char *path, void **module_argv, int module_argc, int is_loa
     }
 
     int dlopen_flags = RTLD_NOW | RTLD_LOCAL;
-#if (defined(__GLIBC__) || defined(__FreeBSD__)) && !defined(VALKEY_ADDRESS_SANITIZER) && __has_include(<dlfcn.h>)
+#if (defined(__GLIBC__) || defined(__FreeBSD__)) && !defined(VALKEY_ADDRESS_SANITIZER) && !defined(VALKEY_THREAD_SANITIZER) && __has_include(<dlfcn.h>)
     /* RTLD_DEEPBIND, which is required for loading modules that contains the
-     * same symbols, does not work with ASAN. Therefore, we exclude
-     * RTLD_DEEPBIND when doing test builds with ASAN.
+     * same symbols, does not work with ASAN or TSAN. Therefore, we exclude
+     * RTLD_DEEPBIND when doing test builds with sanitizers.
      * See https://github.com/google/sanitizers/issues/611 for more details.
      *
      * This flag is also currently only available in Linux and FreeBSD. */

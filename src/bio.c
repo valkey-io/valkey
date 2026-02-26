@@ -86,6 +86,8 @@ typedef struct {
     const char *const bio_worker_title;
     pthread_t bio_thread_id;
     mutexQueue *bio_jobs;
+    void *current_job; /* In-flight job pointer, kept here so it remains reachable from the
+                        * static bio_workers[] array for memcheck after thread cancellation. */
 } bio_worker_data;
 
 static bio_worker_data bio_workers[] = {
@@ -260,9 +262,8 @@ void *bioProcessBackgroundJobs(void *arg) {
     bio_worker_num = bioWorkerNum(bwd);
 
     while (1) {
-        /* Keep the job in the queue until it's fully processed so cancellation
-         * won't leave an untracked in-flight allocation. */
-        bio_job *job = mutexQueuePeek(bwd->bio_jobs, true);
+        bio_job *job = mutexQueuePop(bwd->bio_jobs, true);
+        bwd->current_job = job; /* Keep reachable from static bio_workers[] for memcheck. */
 
         /* Process the job accordingly to its type. */
         int job_type = job->header.type;
@@ -313,8 +314,7 @@ void *bioProcessBackgroundJobs(void *arg) {
         } else {
             serverPanic("Wrong job type in bioProcessBackgroundJobs().");
         }
-        void *removed_job = mutexQueuePop(bwd->bio_jobs, false);
-        serverAssert(removed_job == job);
+        bwd->current_job = NULL;
         zfree(job);
         atomic_fetch_sub(&bio_jobs_counter[job_type], 1);
     }

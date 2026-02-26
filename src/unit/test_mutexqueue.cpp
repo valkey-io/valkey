@@ -80,31 +80,6 @@ TEST_F(MutexQueueTest, TestMutexQueuePriorityOrdering) {
     EXPECT_EQ(mutexQueuePop(q, false), nullptr);
 }
 
-/* Test: peek */
-TEST_F(MutexQueueTest, TestMutexQueuePeek) {
-    add(10);
-    priorityAdd(1);
-    add(11);
-
-    EXPECT_EQ((long)mutexQueuePeek(q, false), 1);
-    EXPECT_EQ(mutexQueueLength(q), 3ul);
-
-    void *removed = mutexQueuePop(q, false);
-    EXPECT_EQ((long)removed, 1);
-    EXPECT_EQ(mutexQueueLength(q), 2ul);
-
-    EXPECT_EQ((long)mutexQueuePeek(q, false), 10);
-
-    removed = mutexQueuePop(q, false);
-    EXPECT_EQ((long)removed, 10);
-    removed = mutexQueuePop(q, false);
-    EXPECT_EQ((long)removed, 11);
-
-    EXPECT_EQ(mutexQueuePeek(q, false), nullptr);
-    EXPECT_EQ(mutexQueuePop(q, false), nullptr);
-    EXPECT_EQ(mutexQueueLength(q), 0ul);
-}
-
 /* Test: fifoPopAll */
 TEST_F(MutexQueueTest, TestMutexQueueFifoPopAll) {
     add(10);

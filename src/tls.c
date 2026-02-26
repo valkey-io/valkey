@@ -1006,7 +1006,7 @@ user *tlsGetPeerUser(connection *conn_, sds *cert_username) {
     case TLS_CLIENT_FIELD_URI:
         result = getValidUserFromCertSanUri(cert, cert_username);
         if (!result) {
-            serverLog(LL_NOTICE, "TLS: No matching user found in certificate SAN URI fields");
+            serverLog(LL_VERBOSE, "TLS: No matching user found in certificate SAN URI fields");
         }
         break;
 
@@ -1016,11 +1016,11 @@ user *tlsGetPeerUser(connection *conn_, sds *cert_username) {
             if (cert_username) *cert_username = sdsnew(field_value);
             result = ACLGetUserByName(field_value, strlen(field_value));
             if (!result || !(result->flags & USER_FLAG_ENABLED)) {
-                serverLog(LL_NOTICE, "TLS: No matching user found for certificate CN '%s'", field_value);
+                serverLog(LL_VERBOSE, "TLS: No matching user found for certificate CN '%s'", field_value);
                 result = NULL;
             }
         } else {
-            serverLog(LL_NOTICE, "TLS: Failed to extract CN in certificate subject");
+            serverLog(LL_DEBUG, "TLS: Failed to extract CN in certificate subject");
         }
         break;
     }

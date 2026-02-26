@@ -1,4 +1,4 @@
-[![codecov](https://codecov.io/gh/valkey-io/valkey/graph/badge.svg?token=KYYSJAYC5F)](https://codecov.io/gh/valkey-io/valkey)
+[![codecov](https://codecov.io/gh/valkey-io/valkey/graph/badge.svg?token=KYYSJAYC5F)](https://codecov.io/gh/valkey-io/valkey) [![Gurubase](https://img.shields.io/badge/Gurubase-Ask%20Valkey%20Guru-006BFF)](https://gurubase.io/g/valkey)
 
 This project was forked from the open source Redis project right before the transition to their new source available licenses.
 

@@ -570,8 +570,8 @@ void msetexCommand(client *c) {
     int setkey_flags = 0;
 
     /* Parse the numkeys. */
-    if (getRangeLongFromObjectOrReply(c, c->argv[1], 1, LONG_MAX, &numkeys,
-                                      "invalid numkeys") != C_OK) {
+    if (getRangeLongFromObjectOrReply(c, c->argv[1], 1, INT_MAX, &numkeys,
+                                      "invalid numkeys value or out of range") != C_OK) {
         return;
     }
 

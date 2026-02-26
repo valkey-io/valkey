@@ -316,6 +316,13 @@ start_server {tags {"string"}} {
 
         assert_error "ERR syntax error" {r msetex 1 key1{t} value ex 1 wrong_option}
         assert_error "ERR syntax error" {r msetex 1 key1{t} value ex 1 wrong_option 1}
+
+        # Test for (2 + numkeys * 2) overflow protection
+        assert_error "ERR syntax error" {r msetex 2147483646 key1{t} value}
+        assert_error "ERR syntax error" {r msetex 2147483647 key1{t} value}
+        assert_error "ERR invalid numkeys value or out of range" {r msetex 2147483648 key1{t} value}
+        assert_error "ERR syntax error" {r msetex 1073741822 key1{t} value}
+        assert_error "ERR syntax error" {r msetex 1073741823 key1{t} value}
     }
 
     test {MSETEX with EX option - set the specified expire time, in seconds} {

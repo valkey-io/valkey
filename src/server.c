@@ -1417,7 +1417,7 @@ void checkChildrenDone(void) {
             if (!bysignal && exitcode == 0) receiveChildInfo();
             if (server.child_type == CHILD_TYPE_RDB) {
                 backgroundSaveDoneHandler(exitcode, bysignal);
-            } else if (server.child_type == CHILD_TYPE_AOF) {
+            } else if (isAofRewriteInProgress()) {
                 backgroundRewriteDoneHandler(exitcode, bysignal);
             } else if (server.child_type == CHILD_TYPE_MODULE) {
                 ModuleForkDoneHandler(exitcode, bysignal);
@@ -1588,9 +1588,18 @@ long long serverCron(struct aeEventLoop *eventLoop, long long id, void *clientDa
     databasesCron();
 
     /* Start a scheduled AOF rewrite if this was requested by the user while
-     * a BGSAVE was in progress. */
-    if (!hasActiveChildProcess() && server.aof_rewrite_scheduled && !aofRewriteLimited()) {
-        rewriteAppendOnlyFileBackground();
+     * a BGSAVE was in progress. Also handle rewrites triggered by auto-aof-rewrite-max-size. */
+    if (!hasActiveChildProcess() && !aofRewriteLimited()) {
+        if (server.aof_rewrite_scheduled ||
+            (server.aof_current_size >= server.aof_rewrite_min_size &&
+             server.aof_current_size >= server.aof_rewrite_max_size &&
+             server.aof_rewrite_base_size < server.aof_rewrite_max_size)) {
+            /* user-initiated OR
+               (AOF is large enough AND
+               last rewrite success should be less than auto-aof-rewrite-max-size - or we might end up with eternal rewrites)
+            */
+            rewriteAppendOnlyFileBackground();
+        }
     }
 
     /* Check if a background saving or AOF rewrite in progress terminated. */
@@ -2694,6 +2703,10 @@ int createSocketAcceptHandler(connListener *sfd, aeFileProc *accept_handler) {
         }
     }
     return C_OK;
+}
+
+int isAofRewriteInProgress(void) {
+    return server.child_type == CHILD_TYPE_AOF;
 }
 
 /* Initialize a set of file descriptors to listen to the specified 'port'
@@ -4791,7 +4804,7 @@ int finishShutdown(void) {
 
     /* Kill the AOF saving child as the AOF we already have may be longer
      * but contains the full dataset anyway. */
-    if (server.child_type == CHILD_TYPE_AOF) {
+    if (isAofRewriteInProgress()) {
         /* If we have AOF enabled but haven't written the AOF yet, don't
          * shutdown or else the dataset will be lost. */
         if (server.aof_state == AOF_WAIT_REWRITE) {
@@ -6282,10 +6295,10 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                 "rdb_last_load_keys_expired:%lld\r\n", server.rdb_last_load_keys_expired,
                 "rdb_last_load_keys_loaded:%lld\r\n", server.rdb_last_load_keys_loaded,
                 "aof_enabled:%d\r\n", server.aof_state != AOF_OFF,
-                "aof_rewrite_in_progress:%d\r\n", server.child_type == CHILD_TYPE_AOF,
+                "aof_rewrite_in_progress:%d\r\n", isAofRewriteInProgress(),
                 "aof_rewrite_scheduled:%d\r\n", server.aof_rewrite_scheduled,
                 "aof_last_rewrite_time_sec:%jd\r\n", (intmax_t)server.aof_rewrite_time_last,
-                "aof_current_rewrite_time_sec:%jd\r\n", (intmax_t)((server.child_type != CHILD_TYPE_AOF) ? -1 : time(NULL) - server.aof_rewrite_time_start),
+                "aof_current_rewrite_time_sec:%jd\r\n", (intmax_t)((!isAofRewriteInProgress()) ? -1 : time(NULL) - server.aof_rewrite_time_start),
                 "aof_last_bgrewrite_status:%s\r\n", (server.aof_lastbgrewrite_status == C_OK ? "ok" : "err"),
                 "aof_rewrites:%lld\r\n", server.stat_aof_rewrites,
                 "aof_rewrites_consecutive_failures:%lld\r\n", server.stat_aofrw_consecutive_failures,
@@ -7679,6 +7692,14 @@ __attribute__((weak)) int main(int argc, char **argv) {
                   "WARNING: You specified a maxmemory value that is less than 1MB (current value is %llu bytes). Are "
                   "you sure this is what you really want?",
                   server.maxmemory);
+    }
+
+    /* Warning the user about suspicious auto-aof-rewrite-max-size setting. */
+    if (server.aof_rewrite_max_size > 0 && server.aof_rewrite_max_size < 1024 * 1024) {
+        serverLog(LL_WARNING,
+                  "WARNING: You specified a auto-aof-rewrite-max-size value that is less than 1MB (current value is %lld bytes). Are "
+                  "you sure this is what you really want?",
+                  (long long)server.aof_rewrite_max_size);
     }
 
     serverSetCpuAffinity(server.server_cpulist);

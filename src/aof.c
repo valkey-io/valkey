@@ -917,7 +917,7 @@ void aof_background_fsync_and_close(int fd) {
 void killAppendOnlyChild(void) {
     int statloc;
     /* No AOFRW child? return. */
-    if (server.child_type != CHILD_TYPE_AOF) return;
+    if (!isAofRewriteInProgress()) return;
     /* Kill AOFRW child, wait for child exit. */
     serverLog(LL_NOTICE, "Killing running AOF rewrite child: %ld", (long)server.child_pid);
     if (kill(server.child_pid, SIGUSR1) != -1) {
@@ -964,7 +964,7 @@ int startAppendOnly(void) {
     serverAssert(server.aof_state == AOF_OFF);
 
     server.aof_state = AOF_WAIT_REWRITE;
-    if (hasActiveChildProcess() && server.child_type != CHILD_TYPE_AOF) {
+    if (hasActiveChildProcess() && !isAofRewriteInProgress()) {
         server.aof_rewrite_scheduled = 1;
         serverLog(LL_NOTICE, "AOF was enabled but there is already another background operation. An AOF background was "
                              "scheduled to start when possible.");
@@ -976,7 +976,7 @@ int startAppendOnly(void) {
         /* If there is a pending AOF rewrite, we need to switch it off and
          * start a new one: the old one cannot be reused because it is not
          * accumulating the AOF buffer. */
-        if (server.child_type == CHILD_TYPE_AOF) {
+        if (isAofRewriteInProgress()) {
             serverLog(LL_NOTICE, "AOF was enabled but there is already an AOF rewriting in background. Stopping "
                                  "background AOF and starting a rewrite now.");
             killAppendOnlyChild();
@@ -1011,7 +1011,8 @@ int startAppendOnly(void) {
  * the first call is short, there is a end-of-space condition, so the next
  * is likely to fail. However apparently in modern systems this is no longer
  * true, and in general it looks just more resilient to retry the write. If
- * there is an actual error condition we'll get it at the next try. */
+ * there is an actual error condition we'll get it at the next try.
+ * We also run bgrewriteaof on auto-aof-rewrite-max-size exceeding here. */
 ssize_t aofWrite(int fd, const char *buf, size_t len) {
     ssize_t nwritten = 0, totwritten = 0;
 
@@ -1349,7 +1350,7 @@ void feedAppendOnlyFile(int dictid, robj **argv, int argc) {
     /* Append to the AOF buffer. This will be flushed on disk just before
      * of re-entering the event loop, so before the client will get a
      * positive reply about the operation performed. */
-    if (server.aof_state == AOF_ON || (server.aof_state == AOF_WAIT_REWRITE && server.child_type == CHILD_TYPE_AOF)) {
+    if (server.aof_state == AOF_ON || (server.aof_state == AOF_WAIT_REWRITE && isAofRewriteInProgress())) {
         server.aof_buf = sdscatlen(server.aof_buf, buf, sdslen(buf));
     }
 
@@ -2532,7 +2533,7 @@ int rewriteAppendOnlyFileBackground(void) {
 }
 
 void bgrewriteaofCommand(client *c) {
-    if (server.child_type == CHILD_TYPE_AOF) {
+    if (isAofRewriteInProgress()) {
         addReplyError(c, "Background append only file rewriting already in progress");
     } else if (hasActiveChildProcess() || server.in_exec) {
         server.aof_rewrite_scheduled = 1;

@@ -1801,6 +1801,58 @@ start_server {tags {"scripting external:skip"}} {
         }
         assert_equal {hello world} [r evalsha $sha 0]
     }
+
+    test {maxmemory-scripts set in runtime will trigger eviction} {
+        r script flush
+        r config resetstat
+
+        for {set j 1} {$j <= 50000} {incr j} {
+            set sha [r script load "return $j"]
+            assert_equal $j [r evalsha $sha 0]
+        }
+        assert_equal 50000 [s number_of_cached_scripts]
+
+        r config set maxmemory-scripts 1MB
+        wait_for_condition 1000 10 {
+            [s number_of_cached_scripts] < 50000
+        } else {
+            fail "scripts eviction did not start in time"
+        }
+        assert_morethan [s evicted_scripts] 0
+
+        r config set maxmemory-scripts 0
+    }
+
+    test {maxmemory-scripts will trigger eviction during the SCRIPT LOAD} {
+        r script flush
+        r config resetstat
+        r config set maxmemory-scripts 1MB
+
+        for {set j 1} {$j <= 50000} {incr j} {
+            set sha [r script load "return $j"]
+            assert_equal $j [r evalsha $sha 0]
+        }
+        assert_morethan [s evicted_scripts] 0
+        assert_lessthan [s number_of_cached_scripts] 50000
+
+        r config set maxmemory-scripts 0
+    }
+
+    test {maxmemory-scripts percentage value is not working if maxmemory is 0} {
+        r script flush
+        r config resetstat
+        r config set maxmemory 0
+        r config set maxmemory-scripts 1%
+
+        for {set j 1} {$j <= 50000} {incr j} {
+            set sha [r script load "return $j"]
+            assert_equal $j [r evalsha $sha 0]
+        }
+        assert_equal 50000 [s number_of_cached_scripts]
+        assert_equal 0 [s evicted_scripts]
+
+        r config set maxmemory-scripts 0
+    }
 }
 
 } ;# is_eval

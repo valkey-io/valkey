@@ -3190,6 +3190,12 @@ static int applyClientMaxMemoryUsage(const char **err) {
     return 1;
 }
 
+static int updateMaxmemoryScripts(const char **err) {
+    UNUSED(err);
+    startScriptsEvictionTimeProc();
+    return 1;
+}
+
 #define HASH_SEED_MAX_LEN 256
 static int isValidDbHashSeed(sds val, const char **err) {
     if (sdslen(val) > HASH_SEED_MAX_LEN) {
@@ -3414,6 +3420,7 @@ standardConfig static_configs[] = {
     createSizeTConfig("tracking-table-max-keys", NULL, MODIFIABLE_CONFIG, 0, LONG_MAX, server.tracking_table_max_keys, 1000000, INTEGER_CONFIG, NULL, NULL),                                      /* Default: 1 million keys max. */
     createSizeTConfig("client-query-buffer-limit", NULL, DEBUG_CONFIG | MODIFIABLE_CONFIG, 1024 * 1024, LONG_MAX, server.client_max_querybuf_len, 1024 * 1024 * 1024, MEMORY_CONFIG, NULL, NULL), /* Default: 1GB max query buffer. */
     createSSizeTConfig("maxmemory-clients", NULL, MODIFIABLE_CONFIG, -100, SSIZE_MAX, server.maxmemory_clients, 0, MEMORY_CONFIG | PERCENT_CONFIG, NULL, applyClientMaxMemoryUsage),
+    createSSizeTConfig("maxmemory-scripts", NULL, MODIFIABLE_CONFIG, -100, SSIZE_MAX, server.maxmemory_scripts, 0, MEMORY_CONFIG | PERCENT_CONFIG, NULL, updateMaxmemoryScripts),
     createSSizeTConfig("slot-migration-max-failover-repl-bytes", NULL, MODIFIABLE_CONFIG, -1, SSIZE_MAX, server.slot_migration_max_failover_repl_bytes, 0, MEMORY_CONFIG, NULL, NULL),
 
     /* Other configs */

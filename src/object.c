@@ -1356,6 +1356,163 @@ size_t objectComputeSize(robj *key, robj *o, size_t sample_size, int dbid) {
     return asize;
 }
 
+/* Same as objectComputeSize but uses tracked_size for quicklists instead of
+ * iterating through nodes. Used for testing tracked_size accuracy. */
+size_t objectComputeSizeWithTrackedSize(robj *key, robj *o, size_t sample_size, int dbid) {
+    size_t elesize = 0, samples = 0;
+    size_t asize = zmalloc_size((void *)o);
+
+    if (o->type == OBJ_STRING) {
+        if (o->encoding == OBJ_ENCODING_RAW) {
+            asize += sdsAllocSize(objectGetVal(o));
+        } else if (o->encoding != OBJ_ENCODING_INT && o->encoding != OBJ_ENCODING_EMBSTR) {
+            serverPanic("Unknown string encoding");
+        }
+    } else if (o->type == OBJ_LIST) {
+        if (o->encoding == OBJ_ENCODING_QUICKLIST) {
+            quicklist *ql = objectGetVal(o);
+            asize += ql->tracked_size;
+        } else if (o->encoding == OBJ_ENCODING_LISTPACK) {
+            asize += zmalloc_size(objectGetVal(o));
+        } else {
+            serverPanic("Unknown list encoding");
+        }
+    } else if (o->type == OBJ_SET) {
+        if (o->encoding == OBJ_ENCODING_HASHTABLE) {
+            hashtable *ht = objectGetVal(o);
+            asize += hashtableMemUsage(ht);
+
+            hashtableIterator iter;
+            hashtableInitIterator(&iter, ht, 0);
+            void *next;
+            while (hashtableNext(&iter, &next) && samples < sample_size) {
+                sds element = next;
+                elesize += sdsAllocSize(element);
+                samples++;
+            }
+            hashtableCleanupIterator(&iter);
+            if (samples) asize += (double)elesize / samples * hashtableSize(ht);
+        } else if (o->encoding == OBJ_ENCODING_INTSET) {
+            asize += zmalloc_size(objectGetVal(o));
+        } else if (o->encoding == OBJ_ENCODING_LISTPACK) {
+            asize += zmalloc_size(objectGetVal(o));
+        } else {
+            serverPanic("Unknown set encoding");
+        }
+    } else if (o->type == OBJ_ZSET) {
+        if (o->encoding == OBJ_ENCODING_LISTPACK) {
+            asize += zmalloc_size(objectGetVal(o));
+        } else if (o->encoding == OBJ_ENCODING_SKIPLIST) {
+            hashtable *ht = ((zset *)objectGetVal(o))->ht;
+            zskiplist *zsl = ((zset *)objectGetVal(o))->zsl;
+            zskiplistNode *zheader = zslGetHeader(zsl);
+            zskiplistNode *znode = zheader->level[0].forward;
+            asize += sizeof(zset) + zslGetAllocSize() + hashtableMemUsage(ht);
+            while (znode != NULL && samples < sample_size) {
+                elesize += zmalloc_size(znode);
+                samples++;
+                znode = znode->level[0].forward;
+            }
+            if (samples) asize += (double)elesize / samples * hashtableSize(ht);
+        } else {
+            serverPanic("Unknown sorted set encoding");
+        }
+    } else if (o->type == OBJ_HASH) {
+        if (o->encoding == OBJ_ENCODING_LISTPACK) {
+            asize += zmalloc_size(objectGetVal(o));
+        } else if (o->encoding == OBJ_ENCODING_HASHTABLE) {
+            hashtable *ht = objectGetVal(o);
+            hashtableIterator iter;
+            vset *volatile_fields = hashtableMetadata(ht);
+            hashtableInitIterator(&iter, ht, 0);
+            void *next;
+
+            asize += hashtableMemUsage(ht);
+            while (hashtableNext(&iter, &next) && samples < sample_size) {
+                elesize += entryMemUsage(next);
+                samples++;
+            }
+            hashtableCleanupIterator(&iter);
+            if (samples) asize += (double)elesize / samples * hashtableSize(ht);
+            if (vsetIsValid(volatile_fields)) asize += vsetMemUsage(volatile_fields);
+        } else {
+            serverPanic("Unknown hash encoding");
+        }
+    } else if (o->type == OBJ_STREAM) {
+        stream *s = objectGetVal(o);
+        asize += sizeof(*s) + raxAllocSize(s->rax);
+
+        /* Now we have to add the listpacks. The last listpack is often non
+         * complete, so we estimate the size of the first N listpacks, and
+         * use the average to compute the size of the first N-1 listpacks, and
+         * finally add the real size of the last node. */
+        raxIterator ri;
+        raxStart(&ri, s->rax);
+        raxSeek(&ri, "^", NULL, 0);
+        size_t lpsize = 0;
+        samples = 0;
+        while (samples < sample_size && raxNext(&ri)) {
+            unsigned char *lp = ri.data;
+            /* Use the allocated size, since we overprovision the node initially. */
+            lpsize += zmalloc_size(lp);
+            samples++;
+        }
+        if (s->rax->numele <= samples) {
+            asize += lpsize;
+        } else {
+            if (samples) lpsize /= samples; /* Compute the average. */
+            asize += lpsize * (s->rax->numele - 1);
+            /* No need to seek, we are already at the last element. */
+            asize += zmalloc_size(ri.data);
+        }
+        raxStop(&ri);
+
+        /* Consumer groups also have a non-trivial memory overhead if there
+         * are many consumers and many groups, let's count at least the
+         * overhead of the pending entries in the groups and consumers
+         * PELs. */
+        if (s->cgroups) {
+            raxStart(&ri, s->cgroups);
+            raxSeek(&ri, "^", NULL, 0);
+            samples = 0;
+            elesize = 0;
+            while (samples < sample_size && raxNext(&ri)) {
+                streamCG *cg = ri.data;
+                elesize += sizeof(*cg);
+                elesize += raxAllocSize(cg->pel);
+                elesize += sizeof(streamNACK) * raxSize(cg->pel);
+
+                /* For each consumer we also need to add the basic data
+                 * structures and the PEL memory usage. */
+                raxIterator cri;
+                raxStart(&cri, cg->consumers);
+                raxSeek(&cri, "^", NULL, 0);
+                size_t inner_samples = 0;
+                size_t inner_elesize = 0;
+                while (inner_samples < sample_size && raxNext(&cri)) {
+                    streamConsumer *consumer = cri.data;
+                    inner_elesize += sizeof(*consumer);
+                    inner_elesize += sdslen(consumer->name);
+                    inner_elesize += raxAllocSize(consumer->pel);
+                    /* Don't count NACKs again, they are shared with the
+                     * consumer group PEL. */
+                    inner_samples++;
+                }
+                raxStop(&cri);
+                if (inner_samples) elesize += (double)inner_elesize / inner_samples * raxSize(cg->consumers);
+                samples++;
+            }
+            raxStop(&ri);
+            if (samples) asize += (double)elesize / samples * raxSize(s->cgroups);
+        }
+    } else if (o->type == OBJ_MODULE) {
+        asize += moduleGetMemUsage(key, o, sample_size, dbid);
+    } else {
+        serverPanic("Unknown object type");
+    }
+    return asize;
+}
+
 /* Release data obtained with getMemoryOverheadData(). */
 void freeMemoryOverheadData(struct serverMemOverhead *mh) {
     zfree(mh->db);

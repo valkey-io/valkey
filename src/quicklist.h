@@ -109,6 +109,7 @@ typedef struct quicklist {
     quicklistNode *tail;
     unsigned long count;                  /* total count of all entries in all listpacks */
     unsigned long len;                    /* number of quicklistNodes */
+    size_t tracked_size;                  /* total memory allocated for this quicklist */
     signed int fill : QL_FILL_BITS;       /* fill factor for individual nodes */
     unsigned int compress : QL_COMP_BITS; /* depth of end nodes not to compress;0=off */
     unsigned int bookmark_count : QL_BM_BITS;
@@ -185,6 +186,7 @@ int quicklistPopCustom(quicklist *quicklist,
                        void *(*saver)(unsigned char *data, size_t sz));
 int quicklistPop(quicklist *quicklist, int where, unsigned char **data, size_t *sz, long long *slong);
 unsigned long quicklistCount(const quicklist *ql);
+size_t quicklistGetAllocatedSize(const quicklist *ql);
 int quicklistCompare(quicklistEntry *entry, unsigned char *p2, const size_t p2_len);
 size_t quicklistGetLzf(const quicklistNode *node, void **data);
 void quicklistNodeLimit(int fill, size_t *size, unsigned int *count);

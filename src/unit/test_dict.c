@@ -325,3 +325,73 @@ int test_dictBenchmark(int argc, char **argv, int flags) {
     dictRelease(dict);
     return 0;
 }
+
+/* Benchmark comparing the gossip-style random sampling approaches:
+ * 1) Calling dictGetRandomKey() in a loop (old approach)
+ * 2) Calling dictGetSomeKeys() once as a batch (new approach)
+ *
+ * Both simulate selecting `wanted` random entries from a dict of `count`
+ * entries, mirroring the gossip field population in cluster_legacy.c. */
+int test_dictBenchmarkGetRandomKeyVsGetSomeKeys(int argc, char **argv, int flags) {
+    long long start, elapsed;
+    int accurate = (flags & UNIT_TEST_ACCURATE);
+    long count = accurate ? 1000000 : 2000;
+    long iterations = accurate ? 1000 : 50000;
+
+    UNUSED(argc);
+    UNUSED(argv);
+
+    monotonicInit();
+
+    /* Build a dict with `count` entries. */
+    dict *d = dictCreate(&BenchmarkDictType);
+    for (long i = 0; i < count; i++) {
+        int retval = dictAdd(d, stringFromLongLong(i), (void *)i);
+        TEST_ASSERT(retval == DICT_OK);
+    }
+    while (dictIsRehashing(d)) dictRehashMicroseconds(d, 100 * 1000);
+
+    /* `wanted` is 10% of total nodes, matching the default gossip config. */
+    int wanted = (int)(count * 0.10);
+    if (wanted < 3) wanted = 3;
+
+    /* --- Approach 1: dictGetRandomKey() in a retry loop --- */
+    start_benchmark();
+    for (long iter = 0; iter < iterations; iter++) {
+        int gossipcount = 0;
+        int maxiterations_inner = wanted * 3;
+        while (gossipcount < wanted && maxiterations_inner--) {
+            dictEntry *de = dictGetRandomKey(d);
+            TEST_ASSERT(de != NULL);
+            /* In real code we'd filter here; just count to simulate the work. */
+            gossipcount++;
+        }
+        TEST_ASSERT(gossipcount == wanted);
+    }
+    end_benchmark("dictGetRandomKey loop");
+    long long elapsed_random_key = elapsed;
+
+    /* --- Approach 2: dictGetSomeKeys() batch --- */
+    int candidates_wanted = wanted + 2;
+    dictEntry **candidates = zmalloc(sizeof(dictEntry *) * candidates_wanted);
+
+    start_benchmark();
+    for (long iter = 0; iter < iterations; iter++) {
+        unsigned int ncandidates = dictGetSomeKeys(d, candidates, candidates_wanted);
+        TEST_ASSERT(ncandidates > 0);
+        int gossipcount = 0;
+        for (unsigned int i = 0; i < ncandidates && gossipcount < wanted; i++) {
+            TEST_ASSERT(candidates[i] != NULL);
+            gossipcount++;
+        }
+    }
+    end_benchmark("dictGetSomeKeys batch");
+    long long elapsed_some_keys = elapsed;
+
+    printf("Speedup: dictGetSomeKeys is %.2fx faster\n",
+           elapsed_some_keys > 0 ? (double)elapsed_random_key / (double)elapsed_some_keys : 0.0);
+
+    zfree(candidates);
+    dictRelease(d);
+    return 0;
+}

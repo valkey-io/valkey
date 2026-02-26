@@ -353,7 +353,6 @@ int test_dictBenchmarkGetRandomKeyVsGetSomeKeys(int argc, char **argv, int flags
 
     /* `wanted` is 10% of total nodes, matching the default gossip config. */
     int wanted = (int)(count * 0.10);
-    if (wanted < 3) wanted = 3;
 
     /* --- Approach 1: dictGetRandomKey() in a retry loop --- */
     start_benchmark();

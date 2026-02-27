@@ -33,7 +33,7 @@
  *                              |
  *     +--------------+---------V------------+----------------------------+
  *     | Expire (opt) |       Field          |      Value                 |
- *     |  mstime_t | sdshdr8 | "foo" \0   | sdshdr8 "bar" \0 (padding) |
+ *     |  mstime_t    | sdshdr8 | "foo" \0   | sdshdr8 "bar" \0 (padding) |
  *     +--------------+---------+------------+----------------------------+
  *
  *     Identified by: field sds type is SDS_TYPE_8  AND  has embedded value
@@ -49,7 +49,7 @@
  *                                               |
  *     +--------------+---------------+----------V----------+--------+
  *     | Expire (opt) |     Value     |        Field        | / / / /|
- *     |  mstime_t | sds (pointer) | sdshdr8+ | "foo" \0 |/ / / / |
+ *     |  mstime_t    | sds (pointer) | sdshdr8+ | "foo" \0 |/ / / / |
  *     +--------------+-------+-------+----------+----------+--------+
  *                            |
  *                            +-> sds value
@@ -69,7 +69,7 @@
  *                                                     |
  *     +--------------+---------------------+----------V----------+--------+
  *     | Expire (opt) |        Value        |        Field        | / / / /|
- *     |  mstime_t | stringRef (pointer) | sdshdr8+ | "foo" \0 |/ / / / |
+ *     |  mstime_t    | stringRef (pointer) | sdshdr8+ | "foo" \0 |/ / / / |
  *     +--------------+----------+----------+----------+----------+--------+
  *                               |
  *                               |

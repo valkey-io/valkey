@@ -64,7 +64,7 @@ jobs:
           - {version: "8.0.6", file: "valkey-8.0.6-noble-x86_64.tar.gz"}
           - {version: "8.1.4", file: "valkey-8.1.4-noble-x86_64.tar.gz"}
     steps:
-      - name: Install modern CMake and gtests
+      - name: Install gtest
         run: |
           sudo apt-get install pkg-config libgtest-dev libgmock-dev
       - name: Install libbacktrace
@@ -254,15 +254,10 @@ jobs:
           cd libbacktrace && ./configure CFLAGS="-m32" --prefix=/usr/local/libbacktrace32 && make && sudo make install
       - name: Checkout Valkey
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-      - name: make
-        # Fast float requires C++ 32-bit libraries to compile on 64-bit ubuntu
-        # machine i.e. "-cross" suffixed version. Cross-compiling c++ to 32-bit
-        # also requires multilib support for g++ compiler i.e. "-multilib"
-        # suffixed version of g++. g++-multilib generally includes libstdc++.
-        # *cross version as well, but it is also added explicitly just in case.
+      - name: Install gtest
         run: |
           sudo apt-get update
-          sudo apt-get install libc6-dev-i386 libstdc++-11-dev-i386-cross gcc-multilib g++-multilib libgtest-dev
+          sudo apt-get install libgtest-dev
           mkdir -p /tmp/gtest32
           cd /tmp/gtest32
           cmake -B build32 \
@@ -274,6 +269,13 @@ jobs:
           cmake --build build32 --parallel
           sudo cp build32/lib/*.a /usr/lib32/
           cd $GITHUB_WORKSPACE
+      - name: make
+        # Fast float requires C++ 32-bit libraries to compile on 64-bit ubuntu
+        # machine i.e. "-cross" suffixed version. Cross-compiling c++ to 32-bit
+        # also requires multilib support for g++ compiler i.e. "-multilib"
+        # suffixed version of g++. g++-multilib generally includes libstdc++.
+        # *cross version as well, but it is also added explicitly just in case.
+        run: |
           make -j4 SERVER_CFLAGS='-Werror' 32bit USE_FAST_FLOAT=yes USE_LIBBACKTRACE=yes LIBBACKTRACE_PREFIX=/usr/local/libbacktrace32 \
             GTEST_CFLAGS="-I/usr/src/googletest/googletest/include -I/usr/src/googletest/googlemock/include" \
             GTEST_LIBS="/usr/lib32/libgtest.a /usr/lib32/libgmock.a"

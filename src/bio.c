@@ -315,9 +315,8 @@ void *bioProcessBackgroundJobs(void *arg) {
         } else {
             serverPanic("Wrong job type in bioProcessBackgroundJobs().");
         }
+        zfree(job);
         bwd->current_job = NULL;
-zfree(job);
-bwd->current_job = NULL;
         atomic_fetch_sub(&bio_jobs_counter[job_type], 1);
     }
 }

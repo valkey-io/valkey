@@ -5168,6 +5168,8 @@ void clusterHandleReplicaFailover(void) {
         }
 
         if (server.cluster->mf_end == 0 && myselfIsBestRankedReplica()) {
+            /* If we find that myself is the best ranked replica, we can initiate the
+             * failover immediately. */
             server.cluster->failover_auth_time = now;
             serverLog(LL_NOTICE, "This is the best ranked replica and can initiate the election immediately.");
         }
@@ -5228,6 +5230,8 @@ void clusterHandleReplicaFailover(void) {
         }
 
         if (myselfIsBestRankedReplica()) {
+            /* If we find that myself is the best ranked replica, we can initiate the
+             * failover immediately. */
             server.cluster->failover_auth_time = now;
             serverLog(LL_NOTICE, "Myself become the best ranked replica, initiate the election immediately.");
         }

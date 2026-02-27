@@ -1,5 +1,8 @@
 name: Clang Format Check
 
+permissions:
+  contents: read
+
 on:
   push:
     paths-ignore:

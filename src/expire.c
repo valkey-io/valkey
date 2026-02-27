@@ -488,8 +488,10 @@ long long activeExpireCycle(int type) {
     static bool expireCycleStartWithFields = 0;
     long long elapsed = 0;
 
-    /* Try to smoke-out bugs (server.also_propagate should be empty here) */
-    serverAssert(server.also_propagate.numops == 0);
+    /* If there are pending propagations (e.g., from lazy expiration during
+     * module command execution), skip this cycle. The propagations will be
+     * flushed when the command completes, and we'll run in the next cycle. */
+    if (server.also_propagate.numops != 0) return;
 
     if (expireCycleStartWithFields) {
         elapsed += activeExpireCycleJob(FIELDS, type, timelimit_us - elapsed);

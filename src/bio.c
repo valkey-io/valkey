@@ -263,8 +263,8 @@ void *bioProcessBackgroundJobs(void *arg) {
     bio_worker_num = bioWorkerNum(bwd);
 
     while (1) {
-        bio_job *job = mutexQueuePop(bwd->bio_jobs, true);
-        bwd->current_job = job; /* Keep reachable from bio_workers[] for memcheck. */
+        bwd->current_job = mutexQueuePop(bwd->bio_jobs, true);
+        bio_job *job = bwd->current_job; /* Keep reachable from bio_workers[] for memcheck. */
 
         /* Process the job accordingly to its type. */
         int job_type = job->header.type;
@@ -315,7 +315,8 @@ void *bioProcessBackgroundJobs(void *arg) {
         } else {
             serverPanic("Wrong job type in bioProcessBackgroundJobs().");
         }
-        zfree(job);
+        zfree(bwd->current_job);
+        bwd->current_job = NULL;
         atomic_fetch_sub(&bio_jobs_counter[job_type], 1);
     }
 }

@@ -30,8 +30,8 @@ Committers listed in alphabetical order by their github ID.
 
 | Committer           | GitHub ID     | Affiliation |
 | ------------------- | ------------- | ----------- |
-| Ricardo Dias        | @rjd15372     | Percona     |
 | Jim Brunner         | @JimB123      | Amazon      |
+| Ricardo Dias        | @rjd15372     | Percona     |
 
 ## Former Maintainers and Committers 
 

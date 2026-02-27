@@ -86,11 +86,12 @@ typedef struct {
     const char *const bio_worker_title;
     pthread_t bio_thread_id;
     mutexQueue *bio_jobs;
-    void *current_job; /* In-flight job pointer, kept here so it remains reachable from the
-                        * static bio_workers[] array for memcheck after thread cancellation. */
+    void *volatile current_job; /* In-flight job pointer, kept here so it remains reachable from the
+                                 * bio_workers[] array for memcheck after thread cancellation.
+                                 * Volatile ensures the compiler doesn't optimize out the store. */
 } bio_worker_data;
 
-static bio_worker_data bio_workers[] = {
+bio_worker_data bio_workers[] = {
     {"bio_close_file"},
     {"bio_aof"},
     {"bio_lazy_free"},
@@ -263,7 +264,7 @@ void *bioProcessBackgroundJobs(void *arg) {
 
     while (1) {
         bio_job *job = mutexQueuePop(bwd->bio_jobs, true);
-        bwd->current_job = job; /* Keep reachable from static bio_workers[] for memcheck. */
+        bwd->current_job = job; /* Keep reachable from bio_workers[] for memcheck. */
 
         /* Process the job accordingly to its type. */
         int job_type = job->header.type;

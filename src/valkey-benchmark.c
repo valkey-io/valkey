@@ -163,7 +163,6 @@ static struct config {
     uint64_t time_per_token;
     uint64_t time_per_burst;
     FILE* output_file;
-    int output_err_to_file;
 } config;
 
 /* Locations of the placeholders __rand_int__, __rand_1st__,
@@ -313,10 +312,7 @@ static int bm_printf(outputType type, const char *format, ...) {
 
     switch (type) {
     case OUTPUT_ERR:
-        if (config.output_err_to_file)
-            stream = config.output_file ? config.output_file : stderr;
-        else
-            stream = stderr;
+        stream = stderr;
         break;
     case OUTPUT_INFO:
         stream = stdout;
@@ -1826,8 +1822,6 @@ int parseOptions(int argc, char **argv) {
                 bm_printf(OUTPUT_ERR, "Failed to open output file '%s': %s\n", output_filename, strerror(errno));
                 exitAndCloseOutputFile(1);
             }
-        } else if (!strcmp(argv[i], "--enable-output-err-to-file")) {
-            config.output_err_to_file = 1;
         } else if (!strcmp(argv[i], "--dbnum")) {
             if (lastarg) goto invalid;
             config.conn_info.input_dbnum = atoi(argv[++i]);
@@ -2263,7 +2257,6 @@ int main(int argc, char **argv) {
     config.num_keys_in_fcall = 1;
     config.resp3 = 0;
     config.output_file = NULL;
-    config.output_err_to_file = 0;
     resetPlaceholders();
 
     i = parseOptions(argc, argv);

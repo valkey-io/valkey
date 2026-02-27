@@ -1819,10 +1819,8 @@ int parseOptions(int argc, char **argv) {
             config.tests = sdscat(config.tests, ",");
             sdstolower(config.tests);
         } else if (!strcmp(argv[i], "-o")) {
-            const char *output_filename = "output";
-            if (!lastarg && argv[i+1][0] != '-') {
-                output_filename = argv[++i];
-            }
+            if (lastarg) goto invalid;
+            const char *output_filename = argv[++i];
             config.output_file = fopen(output_filename, "w");
             if (!config.output_file) {
                 bm_printf(OUTPUT_ERR, "Failed to open output file '%s': %s\n", output_filename, strerror(errno));

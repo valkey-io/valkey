@@ -125,12 +125,12 @@ int extractLongLatOrReply(client *c, robj **argv, double *xy) {
 int longLatFromMemberOrReply(client *c, robj *zobj, robj *member, double *xy) {
     double score = 0;
 
-    if (zsetScore(zobj, member->ptr, &score) == C_ERR) {
-        addReplyErrorFormat(c, "member %s does not exist", (char *)member->ptr);
+    if (zsetScore(zobj, objectGetVal(member), &score) == C_ERR) {
+        addReplyErrorFormat(c, "member %s does not exist", (char *)objectGetVal(member));
         return C_ERR;
     }
     if (!decodeGeohash(score, xy)) {
-        addReplyErrorFormat(c, "failed to decode, member %s is not a valid geohash", (char *)member->ptr);
+        addReplyErrorFormat(c, "failed to decode, member %s is not a valid geohash", (char *)objectGetVal(member));
         return C_ERR;
     }
     return C_OK;
@@ -143,7 +143,7 @@ int longLatFromMemberOrReply(client *c, robj *zobj, robj *member, double *xy) {
  * If the unit is not valid, an error is reported to the client, and a value
  * less than zero is returned. */
 double extractUnitOrReply(client *c, robj *unit) {
-    char *u = unit->ptr;
+    char *u = objectGetVal(unit);
 
     if (!strcasecmp(u, "m")) {
         return 1;
@@ -275,7 +275,7 @@ int geoGetPointsInRange(robj *zobj, double min, double max, GeoShape *shape, geo
     zrangespec range = {.min = min, .max = max, .minex = 0, .maxex = 1};
     size_t origincount = ga->used;
     if (zobj->encoding == OBJ_ENCODING_LISTPACK) {
-        unsigned char *zl = zobj->ptr;
+        unsigned char *zl = objectGetVal(zobj);
         unsigned char *eptr, *sptr;
         unsigned char *vstr = NULL;
         unsigned int vlen = 0;
@@ -306,7 +306,7 @@ int geoGetPointsInRange(robj *zobj, double min, double max, GeoShape *shape, geo
             zzlNext(zl, &eptr, &sptr);
         }
     } else if (zobj->encoding == OBJ_ENCODING_SKIPLIST) {
-        zset *zs = zobj->ptr;
+        zset *zs = objectGetVal(zobj);
         zskiplist *zsl = zs->zsl;
         zskiplistNode *ln;
 
@@ -322,7 +322,8 @@ int geoGetPointsInRange(robj *zobj, double min, double max, GeoShape *shape, geo
             if (!zslValueLteMax(ln->score, &range)) break;
             if (geoWithinShape(shape, ln->score, xy, &distance) == C_OK) {
                 /* Append the new element. */
-                geoArrayAppend(ga, xy, distance, ln->score, sdsdup(ln->ele));
+                sds ele = zslGetNodeElement(ln);
+                geoArrayAppend(ga, xy, distance, ln->score, sdsdup(ele));
             }
             if (ga->used && limit && ga->used >= limit) break;
             ln = ln->level[0].forward;
@@ -455,7 +456,7 @@ void geoaddCommand(client *c) {
     /* Parse options. At the end 'longidx' is set to the argument position
      * of the longitude of the first element. */
     while (longidx < c->argc) {
-        char *opt = c->argv[longidx]->ptr;
+        char *opt = objectGetVal(c->argv[longidx]);
         if (!strcasecmp(opt, "nx"))
             nx = 1;
         else if (!strcasecmp(opt, "xx"))
@@ -476,7 +477,7 @@ void geoaddCommand(client *c) {
     int elements = (c->argc - longidx) / 3;
     int argc = longidx + elements * 2; /* ZADD key [CH] [NX|XX] score ele ... */
     robj **argv = zcalloc(argc * sizeof(robj *));
-    argv[0] = createRawStringObject("zadd", 4);
+    argv[0] = shared.zadd;
     for (i = 1; i < longidx; i++) {
         argv[i] = c->argv[i];
         incrRefCount(argv[i]);
@@ -580,7 +581,7 @@ void georadiusGeneric(client *c, int srcKeyIndex, int flags) {
     if (c->argc > base_args) {
         int remaining = c->argc - base_args;
         for (int i = 0; i < remaining; i++) {
-            char *arg = c->argv[base_args + i]->ptr;
+            char *arg = objectGetVal(c->argv[base_args + i]);
             if (!strcasecmp(arg, "withdist")) {
                 withdist = 1;
             } else if (!strcasecmp(arg, "withhash")) {
@@ -684,13 +685,13 @@ void georadiusGeneric(client *c, int srcKeyIndex, int flags) {
 
     if ((flags & GEOSEARCH) && !(frommember || fromloc) && !bypolygon) {
         addReplyErrorFormat(c, "exactly one of FROMMEMBER or FROMLONLAT can be specified for %s",
-                            (char *)c->argv[0]->ptr);
+                            (char *)objectGetVal(c->argv[0]));
         geoPolygonPointsFree(&shape);
         return;
     }
 
     if ((flags & GEOSEARCH) && !(byradius || bybox || bypolygon)) {
-        addReplyErrorFormat(c, "exactly one of BYRADIUS, BYBOX and BYPOLYGON can be specified for %s", (char *)c->argv[0]->ptr);
+        addReplyErrorFormat(c, "exactly one of BYRADIUS, BYBOX and BYPOLYGON can be specified for %s", (char *)objectGetVal(c->argv[0]));
         geoPolygonPointsFree(&shape);
         return;
     }
@@ -811,7 +812,7 @@ void georadiusGeneric(client *c, int srcKeyIndex, int flags) {
 
         if (returned_items) {
             zobj = createZsetObject();
-            zs = zobj->ptr;
+            zs = objectGetVal(zobj);
         }
 
         for (i = 0; i < returned_items; i++) {
@@ -825,6 +826,7 @@ void georadiusGeneric(client *c, int srcKeyIndex, int flags) {
             totelelen += elelen;
             znode = zslInsert(zs->zsl, score, gp->member);
             serverAssert(hashtableAdd(zs->ht, znode));
+            sdsfree(gp->member);
             gp->member = NULL;
         }
 
@@ -890,7 +892,7 @@ void geohashCommand(client *c) {
     addReplyArrayLen(c, c->argc - 2);
     for (j = 2; j < c->argc; j++) {
         double score;
-        if (!zobj || zsetScore(zobj, c->argv[j]->ptr, &score) == C_ERR) {
+        if (!zobj || zsetScore(zobj, objectGetVal(c->argv[j]), &score) == C_ERR) {
             addReplyNull(c);
         } else {
             /* The internal format we use for geocoding is a bit different
@@ -951,7 +953,7 @@ void geoposCommand(client *c) {
     addReplyArrayLen(c, c->argc - 2);
     for (j = 2; j < c->argc; j++) {
         double score;
-        if (!zobj || zsetScore(zobj, c->argv[j]->ptr, &score) == C_ERR) {
+        if (!zobj || zsetScore(zobj, objectGetVal(c->argv[j]), &score) == C_ERR) {
             addReplyNullArray(c);
         } else {
             /* Decode... */
@@ -991,7 +993,7 @@ void geodistCommand(client *c) {
 
     /* Get the scores. We need both otherwise NULL is returned. */
     double score1, score2, xyxy[4];
-    if (zsetScore(zobj, c->argv[2]->ptr, &score1) == C_ERR || zsetScore(zobj, c->argv[3]->ptr, &score2) == C_ERR) {
+    if (zsetScore(zobj, objectGetVal(c->argv[2]), &score1) == C_ERR || zsetScore(zobj, objectGetVal(c->argv[3]), &score2) == C_ERR) {
         addReplyNull(c);
         return;
     }

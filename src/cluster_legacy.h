@@ -1,6 +1,7 @@
 #ifndef CLUSTER_LEGACY_H
 #define CLUSTER_LEGACY_H
 
+#include <stdint.h>
 #define CLUSTER_PORT_INCR 10000 /* Cluster port = baseport + PORT_INCR */
 
 /* The following defines are amount of time, sometimes expressed as
@@ -25,6 +26,7 @@
 #define CLUSTER_TODO_FSYNC_CONFIG (1 << 3)
 #define CLUSTER_TODO_HANDLE_MANUALFAILOVER (1 << 4)
 #define CLUSTER_TODO_BROADCAST_ALL (1 << 5)
+#define CLUSTER_TODO_HANDLE_SLOT_MIGRATION (1 << 6)
 
 /* clusterLink encapsulates everything needed to talk with a remote node. */
 typedef struct clusterLink {
@@ -38,7 +40,7 @@ typedef struct clusterLink {
     size_t rcvbuf_alloc;                   /* Allocated size of rcvbuf */
     clusterNode *node;                     /* Node related to this link. Initialized to NULL when unknown */
     int inbound;                           /* 1 if this link is an inbound link accepted from the related node */
-    int flags;                             /* We share CLUSTER_NODE_* with clusterNode->flags. */
+    int flags;                             /* CLUSTER_LINK_... */
 } clusterLink;
 
 /* Cluster link flags and macros. */
@@ -47,23 +49,26 @@ typedef struct clusterLink {
 #define linkSupportsExtension(link) ((link)->flags & CLUSTER_LINK_EXTENSIONS_SUPPORTED)
 
 /* Cluster node flags and macros. */
-#define CLUSTER_NODE_PRIMARY (1 << 0)                      /* The node is a primary */
-#define CLUSTER_NODE_REPLICA (1 << 1)                      /* The node is a replica */
-#define CLUSTER_NODE_PFAIL (1 << 2)                        /* Failure? Need acknowledge */
-#define CLUSTER_NODE_FAIL (1 << 3)                         /* The node is believed to be malfunctioning */
-#define CLUSTER_NODE_MYSELF (1 << 4)                       /* This node is myself */
-#define CLUSTER_NODE_HANDSHAKE (1 << 5)                    /* We have still to exchange the first ping */
-#define CLUSTER_NODE_NOADDR (1 << 6)                       /* We don't know the address of this node */
-#define CLUSTER_NODE_MEET (1 << 7)                         /* Send a MEET message to this node */
-#define CLUSTER_NODE_MIGRATE_TO (1 << 8)                   /* Primary eligible for replica migration. */
-#define CLUSTER_NODE_NOFAILOVER (1 << 9)                   /* Replica will not try to failover. */
-#define CLUSTER_NODE_EXTENSIONS_SUPPORTED (1 << 10)        /* This node supports extensions. */
-#define CLUSTER_NODE_LIGHT_HDR_PUBLISH_SUPPORTED (1 << 11) /* This node supports light message header for publish type. */
-#define CLUSTER_NODE_LIGHT_HDR_MODULE_SUPPORTED (1 << 12)  /* This node supports light message header for module type. */
-#define CLUSTER_NODE_MY_PRIMARY_FAIL (1 << 13)             /* myself is a replica and my primary is FAIL in my view. \
-                                                            * myself will gossip this flag to other replica in the   \
-                                                            * shard so that the replicas can make a better ranking   \
-                                                            * decisions to help with the failover. */
+#define CLUSTER_NODE_PRIMARY (1 << 0)                                             /* The node is a primary */
+#define CLUSTER_NODE_REPLICA (1 << 1)                                             /* The node is a replica */
+#define CLUSTER_NODE_PFAIL (1 << 2)                                               /* Failure? Need acknowledge */
+#define CLUSTER_NODE_FAIL (1 << 3)                                                /* The node is believed to be malfunctioning */
+#define CLUSTER_NODE_MYSELF (1 << 4)                                              /* This node is myself */
+#define CLUSTER_NODE_HANDSHAKE (1 << 5)                                           /* We have still to exchange the first ping */
+#define CLUSTER_NODE_NOADDR (1 << 6)                                              /* We don't know the address of this node */
+#define CLUSTER_NODE_MEET (1 << 7)                                                /* Send a MEET message to this node */
+#define CLUSTER_NODE_MIGRATE_TO (1 << 8)                                          /* Primary eligible for replica migration. */
+#define CLUSTER_NODE_NOFAILOVER (1 << 9)                                          /* Replica will not try to failover. */
+#define CLUSTER_NODE_EXTENSIONS_SUPPORTED (1 << 10)                               /* This node supports extensions. */
+#define CLUSTER_NODE_LIGHT_HDR_PUBLISH_SUPPORTED (1 << 11)                        /* This node supports light message header for publish type. */
+#define CLUSTER_NODE_LIGHT_HDR_MODULE_SUPPORTED (1 << 12)                         /* This node supports light message header for module type. */
+#define CLUSTER_NODE_MULTI_MEET_SUPPORTED CLUSTER_NODE_LIGHT_HDR_MODULE_SUPPORTED /* This node handles multi meet packet.                             \
+                                                                                     Light hdr for module and multi meet were both introduced in 8.1, \
+                                                                                     so we could reduce the same flag value. */
+#define CLUSTER_NODE_MY_PRIMARY_FAIL (1 << 13)                                    /* myself is a replica and my primary is FAIL in my view. \
+                                                                                   * myself will gossip this flag to other replica in the   \
+                                                                                   * shard so that the replicas can make a better ranking   \
+                                                                                   * decisions to help with the failover. */
 
 #define CLUSTER_NODE_NULL_NAME                                                                                         \
     "\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000" \
@@ -78,8 +83,7 @@ typedef struct clusterLink {
 #define nodeFailed(n) ((n)->flags & CLUSTER_NODE_FAIL)
 #define nodeCantFailover(n) ((n)->flags & CLUSTER_NODE_NOFAILOVER)
 #define nodeSupportsExtensions(n) ((n)->flags & CLUSTER_NODE_EXTENSIONS_SUPPORTED)
-#define nodeSupportsLightMsgHdrForPubSub(n) ((n)->flags & CLUSTER_NODE_LIGHT_HDR_PUBLISH_SUPPORTED)
-#define nodeSupportsLightMsgHdrForModule(n) ((n)->flags & CLUSTER_NODE_LIGHT_HDR_MODULE_SUPPORTED)
+#define nodeSupportsMultiMeet(n) ((n)->flags & CLUSTER_NODE_MULTI_MEET_SUPPORTED)
 #define nodeInNormalState(n) (!((n)->flags & (CLUSTER_NODE_HANDSHAKE | CLUSTER_NODE_MEET | CLUSTER_NODE_PFAIL | CLUSTER_NODE_FAIL)))
 #define nodePrimaryIsFail(n) ((n)->flags & CLUSTER_NODE_MY_PRIMARY_FAIL)
 
@@ -166,6 +170,8 @@ typedef enum {
     CLUSTERMSG_EXT_TYPE_SHARDID,
     CLUSTERMSG_EXT_TYPE_CLIENT_IPV4,
     CLUSTERMSG_EXT_TYPE_CLIENT_IPV6,
+    CLUSTERMSG_EXT_TYPE_CLIENT_PORT,
+    CLUSTERMSG_EXT_TYPE_CLIENT_TLS_PORT,
 } clusterMsgPingtypes;
 
 /* Helper function for making sure extensions are eight byte aligned. */
@@ -199,6 +205,14 @@ typedef struct {
 } clusterMsgPingExtClientIpV6;
 
 typedef struct {
+    uint16_t announce_client_port; /* Announced client port. */
+} clusterMsgPingExtClientPort;
+
+typedef struct {
+    uint16_t announce_client_tls_port; /* Announced client TLS port. */
+} clusterMsgPingExtClientTlsPort;
+
+typedef struct {
     uint32_t length; /* Total length of this extension message (including this header) */
     uint16_t type;   /* Type of this extension message (see clusterMsgPingtypes) */
     uint16_t unused; /* 16 bits of padding to make this structure 8 byte aligned. */
@@ -209,6 +223,8 @@ typedef struct {
         clusterMsgPingExtShardId shard_id;
         clusterMsgPingExtClientIpV4 announce_client_ipv4;
         clusterMsgPingExtClientIpV6 announce_client_ipv6;
+        clusterMsgPingExtClientPort announce_client_port;
+        clusterMsgPingExtClientTlsPort announce_client_tls_port;
     } ext[]; /* Actual extension information, formatted so that the data is 8
               * byte aligned, regardless of its content. */
 } clusterMsgPingExt;
@@ -334,6 +350,22 @@ static_assert(offsetof(clusterMsgLight, data) == 16, "unexpected field offset");
 
 #define CLUSTERMSG_LIGHT_MIN_LEN (sizeof(clusterMsgLight) - sizeof(union clusterMsgData))
 
+typedef struct {
+    char sig[4];       /* Signature "RCmb" (Cluster message bus). */
+    uint32_t totlen;   /* Total length of this message */
+    uint16_t ver;      /* Protocol version, currently set to CLUSTER_PROTO_VER. */
+    uint16_t notused1; /* full: port, light: notused1 */
+    uint16_t type;     /* Message type */
+    uint16_t notused2; /* full: count, light: notused2 */
+} clusterMsgHeader;
+
+static_assert(offsetof(clusterMsgHeader, sig) == offsetof(clusterMsg, sig), "unexpected field offset");
+static_assert(offsetof(clusterMsgHeader, totlen) == offsetof(clusterMsg, totlen), "unexpected field offset");
+static_assert(offsetof(clusterMsgHeader, ver) == offsetof(clusterMsg, ver), "unexpected field offset");
+static_assert(offsetof(clusterMsgHeader, type) == offsetof(clusterMsg, type), "unexpected field offset");
+static_assert(offsetof(clusterMsgHeader, notused1) == offsetof(clusterMsg, port), "unexpected field offset");
+static_assert(offsetof(clusterMsgHeader, notused2) == offsetof(clusterMsg, count), "unexpected field offset");
+
 struct _clusterNode {
     mstime_t ctime;                         /* Node object creation time. */
     char name[CLUSTER_NAMELEN];             /* Node name, hex string, sha1-size */
@@ -369,6 +401,8 @@ struct _clusterNode {
     int tcp_port;                           /* Latest known clients TCP port. */
     int tls_port;                           /* Latest known clients TLS port */
     int cport;                              /* Latest known cluster port of this node. */
+    int announce_client_tcp_port;           /* Port for clients only. */
+    int announce_client_tls_port;           /* TLS port for clients only. */
     clusterLink *link;                      /* TCP/IP link established toward this node */
     clusterLink *inbound_link;              /* TCP/IP link accepted from this node */
     rax *fail_reports;                      /* Radix tree for failure reports with sorted order by timestamp */
@@ -383,18 +417,27 @@ typedef struct slotStat {
     uint64_t network_bytes_out;
 } slotStat;
 
+typedef struct slotRange {
+    int start_slot;
+    int end_slot;
+} slotRange;
+
 struct clusterState {
     clusterNode *myself; /* This node */
     uint64_t currentEpoch;
     int state;              /* CLUSTER_OK, CLUSTER_FAIL, ... */
     int fail_reason;        /* Why the cluster state changes to fail. */
+    int safe_to_join;       /* Can the restarted node safely join the cluster? */
     int size;               /* Num of primary nodes with at least one slot */
     dict *nodes;            /* Hash table of name -> clusterNode structures */
     dict *shards;           /* Hash table of shard_id -> list (of nodes) structures */
     dict *nodes_black_list; /* Nodes we don't re-add for a few seconds. */
-    clusterNode *migrating_slots_to[CLUSTER_SLOTS];
-    clusterNode *importing_slots_from[CLUSTER_SLOTS];
+    dict *migrating_slots_to;
+    dict *importing_slots_from;
     clusterNode *slots[CLUSTER_SLOTS];
+    list *slot_migration_jobs; /* List storing all slot migration jobs. Stored
+                                * in order from most recent to least recently
+                                * created. */
     /* The following fields are used to take the replica state on elections. */
     mstime_t failover_auth_time;      /* Time of previous or next election. */
     int failover_auth_count;          /* Number of votes received so far. */

@@ -3,9 +3,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-int main(int argc, char **argv) {
-    UNUSED(argc);
-    UNUSED(argv);
+int main(void) {
     struct timeval timeout = {1, 500000}; // 1.5s
 
     valkeyClusterOptions options = {0};

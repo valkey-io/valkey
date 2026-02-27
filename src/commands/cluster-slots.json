@@ -126,6 +126,9 @@
                     ]
                 }
             }
-        }
+        },
+        "acl_categories": [
+            "SLOW"
+        ]
     }
 }

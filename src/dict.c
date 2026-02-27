@@ -54,10 +54,6 @@
 #include "monotonic.h"
 #include "config.h"
 
-#ifndef static_assert
-#define static_assert(expr, lit) _Static_assert(expr, lit)
-#endif
-
 #define UNUSED(V) ((void)V)
 
 /* Using dictSetResizeEnabled() we make possible to disable
@@ -1417,4 +1413,17 @@ void dictRehashingInfo(dict *d, unsigned long long *from_size, unsigned long lon
     assert(dictIsRehashing(d));
     *from_size = DICTHT_SIZE(d->ht_size_exp[0]);
     *to_size = DICTHT_SIZE(d->ht_size_exp[1]);
+}
+
+/* Wrapper functions for gtest to access static internals. */
+unsigned int testOnlyDictGetForceResizeRatio(void) {
+    return dict_force_resize_ratio;
+}
+
+signed char testOnlyDictNextExp(unsigned long size) {
+    return dictNextExp(size);
+}
+
+long long testOnlyTimeInMilliseconds(void) {
+    return timeInMilliseconds();
 }

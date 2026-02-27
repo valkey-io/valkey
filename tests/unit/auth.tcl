@@ -90,13 +90,43 @@ start_server {tags {"auth external:skip"} overrides {requirepass foobar}} {
         
         # Fill the output buffer without reading it and make
         # sure the client was NOT disconnected.
+
         $rr SET x 5
         catch {[$rr read]} e
         assert_match {*NOAUTH Authentication required*} $e
 
         # Reset the debug
         assert_match "OK" [r debug client-enforce-reply-list 0]
-    }  
+    }
+
+    test {Unauthenticated multibulk limit works in pipeline after AUTH} {
+        # Checks that the parser doesn't parse multiple commands when the client
+        # is unauthenticated but becomes authenticated within the same pipeline.
+
+        # To make sure the pipeline is received as a single packet, send it as a
+        # single packet in raw RESP form.
+
+        # AUTH foobar
+        set auth_proto "*2\r\n\$4\r\nAUTH\r\n\$6\r\nfoobar\r\n"
+
+        # SET A X
+        set set_proto "*3\r\n\$3\r\nSET\r\n\$1\r\nA\r\n\$1\r\nX\r\n"
+
+        # MGET A A A A A A A A A A (too many args for unauthenticated user)
+        set A "\$1\r\nA\r\n"
+        set mget_proto "*11\r\n\$4\r\nMGET\r\n$A$A$A$A$A$A$A$A$A$A"
+
+        set proto "$auth_proto$set_proto$mget_proto"
+        set rd [valkey [srv "host"] [srv "port"] 1 $::tls]
+        set fd [$rd channel]
+        puts -nonewline $fd $proto
+        flush $fd
+
+        assert_equal OK [$rd read]
+        assert_equal OK [$rd read]
+        assert_equal {X X X X X X X X X X} [$rd read]
+        $rd close
+    }
 }
 
 foreach dualchannel {yes no} {

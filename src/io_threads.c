@@ -6,7 +6,7 @@
 
 #include "io_threads.h"
 
-static __thread int thread_id = 0; /* Thread local var */
+static _Thread_local int thread_id = 0; /* Thread local var */
 static pthread_t io_threads[IO_THREADS_MAX_NUM] = {0};
 static pthread_mutex_t io_threads_mutex[IO_THREADS_MAX_NUM];
 
@@ -24,6 +24,7 @@ typedef struct IOJobQueue {
     _Atomic size_t tail __attribute__((aligned(CACHE_LINE_SIZE))); /* Next read index for consumer  (IO-thread) */
 } IOJobQueue;
 IOJobQueue io_jobs[IO_THREADS_MAX_NUM] = {0};
+_Atomic long long used_active_time_io_thread[IO_THREADS_MAX_NUM] = {0};
 
 /* Initialize the job queue with a specified number of items. */
 static void IOJobQueue_init(IOJobQueue *jq, size_t item_count) {
@@ -224,14 +225,26 @@ static void *IOThreadMain(void *myid) {
     thread_id = (int)id;
     size_t jobs_to_process = 0;
     IOJobQueue *jq = &io_jobs[id];
+    monotime work_start_time = 0;
     while (1) {
         /* Cancellation point so that pthread_cancel() from main thread is honored. */
         pthread_testcancel();
+        monotime prev_work_start_time = work_start_time;
+        work_start_time = getMonotonicUs();
+        if (jobs_to_process != 0) {
+            atomic_fetch_add_explicit(&used_active_time_io_thread[id],
+                                      work_start_time - prev_work_start_time,
+                                      memory_order_relaxed);
+        }
 
-        /* Wait for jobs */
-        for (int j = 0; j < 1000000; j++) {
-            jobs_to_process = IOJobQueue_availableJobs(jq);
-            if (jobs_to_process) break;
+        jobs_to_process = IOJobQueue_availableJobs(jq);
+        if (jobs_to_process == 0) {
+            /* Wait for jobs */
+            for (int j = 0; j < 1000000; j++) {
+                jobs_to_process = IOJobQueue_availableJobs(jq);
+                if (jobs_to_process) break;
+            }
+            work_start_time = getMonotonicUs();
         }
 
         /* Give the main thread a chance to stop this thread. */
@@ -260,6 +273,10 @@ static void *IOThreadMain(void *myid) {
     return NULL;
 }
 
+long long getIOThreadActiveTimeMicroseconds(int id) {
+    return atomic_load_explicit(&used_active_time_io_thread[id], memory_order_relaxed);
+}
+
 #define IO_JOB_QUEUE_SIZE 2048
 static void createIOThread(int id) {
     serverAssert(server.io_threads_num > 0);
@@ -269,8 +286,9 @@ static void createIOThread(int id) {
     pthread_mutex_init(&io_threads_mutex[id], NULL);
     IOJobQueue_init(&io_jobs[id], IO_JOB_QUEUE_SIZE);
     pthread_mutex_lock(&io_threads_mutex[id]); /* Thread will be stopped. */
-    if (pthread_create(&tid, NULL, IOThreadMain, (void *)(long)id) != 0) {
-        serverLog(LL_WARNING, "Fatal: Can't initialize IO thread, pthread_create failed with: %s", strerror(errno));
+    int err = pthread_create(&tid, NULL, IOThreadMain, (void *)(long)id);
+    if (err) {
+        serverLog(LL_WARNING, "Fatal: Can't initialize IO thread, pthread_create failed with: %s", strerror(err));
         exit(1);
     }
     io_threads[id] = tid;
@@ -284,6 +302,10 @@ static void shutdownIOThread(int id) {
     if (tid == pthread_self()) return;
     if (tid == 0) return;
 
+    /* Only unlock mutex for inactive threads. Active threads are already unlocked. */
+    if (id >= server.active_io_threads_num) {
+        pthread_mutex_unlock(&io_threads_mutex[id]);
+    }
     pthread_cancel(tid);
 
     if ((err = pthread_join(tid, NULL)) != 0) {
@@ -388,7 +410,7 @@ int trySendReadToIOThreads(client *c) {
     c->cur_tid = tid;
     c->read_flags = canParseCommand(c) ? 0 : READ_FLAGS_DONT_PARSE;
     c->read_flags |= authRequired(c) ? READ_FLAGS_AUTH_REQUIRED : 0;
-    c->read_flags |= c->flag.primary ? READ_FLAGS_PRIMARY : 0;
+    c->read_flags |= isReplicatedClient(c) ? READ_FLAGS_REPLICATED : 0;
 
     c->io_read_state = CLIENT_PENDING_IO;
     connSetPostponeUpdateState(c->conn, 1);
@@ -562,8 +584,8 @@ int tryOffloadFreeObjToIOThreads(robj *obj) {
 
     /* We offload only the free of the ptr that may be allocated by the I/O thread.
      * The object itself was allocated by the main thread and will be freed by the main thread. */
-    IOJobQueue_push(jq, sdsfreeVoid, obj->ptr);
-    obj->ptr = NULL;
+    IOJobQueue_push(jq, sdsfreeVoid, objectGetVal(obj));
+    objectSetVal(obj, NULL);
     decrRefCount(obj);
 
     server.stat_io_freed_objects++;

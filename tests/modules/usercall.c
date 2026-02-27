@@ -227,3 +227,14 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
 
     return VALKEYMODULE_OK;
 }
+
+int ValkeyModule_OnUnload(ValkeyModuleCtx *ctx) {
+    VALKEYMODULE_NOT_USED(ctx);
+
+    if (user != NULL) {
+        ValkeyModule_FreeModuleUser(user);
+        user = NULL;
+    }
+
+    return VALKEYMODULE_OK;
+}

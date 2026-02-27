@@ -1,33 +1,7 @@
-/* See endianconv.c top comments for more information
- *
- * ----------------------------------------------------------------------------
- *
- * Copyright (c) 2011-2012, Redis Ltd.
+/*
+ * Copyright Valkey Contributors.
  * All rights reserved.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- *   * Redistributions of source code must retain the above copyright notice,
- *     this list of conditions and the following disclaimer.
- *   * Redistributions in binary form must reproduce the above copyright
- *     notice, this list of conditions and the following disclaimer in the
- *     documentation and/or other materials provided with the distribution.
- *   * Neither the name of Redis nor the names of its contributors may be used
- *     to endorse or promote products derived from this software without
- *     specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
- * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
- * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
- * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
- * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
- * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
- * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD 3-Clause
  */
 
 #ifndef __ENDIANCONV_H
@@ -36,12 +10,52 @@
 #include "config.h"
 #include <stdint.h>
 
-void memrev16(void *p);
-void memrev32(void *p);
-void memrev64(void *p);
-uint16_t intrev16(uint16_t v);
-uint32_t intrev32(uint32_t v);
-uint64_t intrev64(uint64_t v);
+/* These bswap functions compile to a single bswap instruction. Verified for GCC
+ * and Clang with -O2 and -O3.
+ *
+ * bswap64:
+ *         mov     rax, rdi
+ *         bswap   rax
+ *         ret
+ */
+
+static inline uint16_t bswap16(uint16_t x) {
+    return ((x & 0xFF00U) >> 8) |
+           ((x & 0x00FFU) << 8);
+}
+
+static inline uint32_t bswap32(uint32_t x) {
+    return ((x & 0xFF000000U) >> 24) |
+           ((x & 0x00FF0000U) >> 8) |
+           ((x & 0x0000FF00U) << 8) |
+           ((x & 0x000000FFU) << 24);
+}
+
+static inline uint64_t bswap64(uint64_t x) {
+    return ((x & 0xFF00000000000000ULL) >> 56) |
+           ((x & 0x00FF000000000000ULL) >> 40) |
+           ((x & 0x0000FF0000000000ULL) >> 24) |
+           ((x & 0x000000FF00000000ULL) >> 8) |
+           ((x & 0x00000000FF000000ULL) << 8) |
+           ((x & 0x0000000000FF0000ULL) << 24) |
+           ((x & 0x000000000000FF00ULL) << 40) |
+           ((x & 0x00000000000000FFULL) << 56);
+}
+
+static inline void memrev16(void *p) {
+    uint16_t *u = (uint16_t *)p;
+    *u = bswap16(*u);
+}
+
+static inline void memrev32(void *p) {
+    uint32_t *u = (uint32_t *)p;
+    *u = bswap32(*u);
+}
+
+static inline void memrev64(void *p) {
+    uint64_t *u = (uint64_t *)p;
+    *u = bswap64(*u);
+}
 
 /* variants of the function doing the actual conversion only if the target
  * host is big endian */
@@ -56,9 +70,9 @@ uint64_t intrev64(uint64_t v);
 #define memrev16ifbe(p) memrev16(p)
 #define memrev32ifbe(p) memrev32(p)
 #define memrev64ifbe(p) memrev64(p)
-#define intrev16ifbe(v) intrev16(v)
-#define intrev32ifbe(v) intrev32(v)
-#define intrev64ifbe(v) intrev64(v)
+#define intrev16ifbe(v) bswap16(v)
+#define intrev32ifbe(v) bswap32(v)
+#define intrev64ifbe(v) bswap64(v)
 #endif
 
 /* The functions htonu64() and ntohu64() convert the specified value to
@@ -67,7 +81,7 @@ uint64_t intrev64(uint64_t v);
 #define htonu64(v) (v)
 #define ntohu64(v) (v)
 #else
-#define htonu64(v) intrev64(v)
-#define ntohu64(v) intrev64(v)
+#define htonu64(v) bswap64(v)
+#define ntohu64(v) bswap64(v)
 #endif
 #endif

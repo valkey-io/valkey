@@ -9,6 +9,7 @@ extend-exclude = [
 [type.c.extend-identifiers]
 clen = "clen"
 [type.c.extend-words]
+cpy = "cpy"
 fo = "fo" # Used in sds.c testcase.
 
 # Header files (sv = *.h)

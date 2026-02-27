@@ -140,8 +140,8 @@ tags {"needs:debug"} {
         # These numbers are taken from the "Test latency events logging" test.
         # (debug sleep 0.3) and (debug sleep 0.5), using range to prevent timing issue.
         regexp "command - high (.*?) ms, low (.*?) ms" $res -> high low
-        assert_morethan_equal $high 500
-        assert_morethan_equal $low 300
+        assert_range $high 450 550
+        assert_range $low 250 350
     }
 
     r config set latency-monitor-threshold $old_threshold_value
@@ -201,7 +201,7 @@ start_cluster 1 1 {tags {"latency-monitor cluster external:skip needs:latency"} 
         # We don't assert anything since we can't be sure whether it will be counted.
         R 0 cluster saveconfig
         R 1 cluster saveconfig
-        R 1 cluster failover force
+        R 1 cluster failover takeover
         R 0 latency latest
         R 1 latency latest
     }

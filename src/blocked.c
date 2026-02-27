@@ -104,8 +104,8 @@ void freeClientBlockingState(client *c) {
  * flag is set client query buffer is not longer processed, but accumulated,
  * and will be processed when the client is unblocked. */
 void blockClient(client *c, int btype) {
-    /* Primary client should never be blocked unless pause or module */
-    serverAssert(!(c->flag.primary && btype != BLOCKED_MODULE && btype != BLOCKED_POSTPONE));
+    /* Replicated clients should never be blocked unless pause or module */
+    serverAssert(!(isReplicatedClient(c) && btype != BLOCKED_MODULE && btype != BLOCKED_POSTPONE));
 
     initClientBlockingState(c);
 
@@ -318,9 +318,12 @@ void replyToClientsBlockedOnShutdown(void) {
  * in an instance which turns from primary to replica is unsafe, so this function
  * is called when a primary turns into a replica.
  *
- * The semantics is to send an -UNBLOCKED error to the client, disconnecting
- * it at the same time. */
-void disconnectAllBlockedClients(void) {
+ * The semantics are as follows:
+ * - If the client is read-only, and blocked by a read command we can handle, we do not unblock it.
+ * - Send a -MOVED to the client in cluster-enabled mode.
+ * - Send a -REDIRECT when the client has redirect capability in standalone mode.
+ * - Otherwise, send a -UNBLOCKED error to the client while disconnecting it at the same time. */
+void disconnectOrRedirectAllBlockedClients(void) {
     listNode *ln;
     listIter li;
 
@@ -335,9 +338,24 @@ void disconnectAllBlockedClients(void) {
              * which the command is already in progress in a way. */
             if (c->bstate->btype == BLOCKED_POSTPONE) continue;
 
-            unblockClientOnError(c, "-UNBLOCKED force unblock from blocking operation, "
-                                    "instance state changed (master -> replica?)");
-            c->flag.close_after_reply = 1;
+            if (server.cluster_enabled) {
+                if (clusterRedirectBlockedClientIfNeeded(c))
+                    unblockClientOnError(c, NULL);
+            } else {
+                /* if the client is read-only and blocked by a read command, we do not unblock it */
+                if (c->flag.readonly && !(c->lastcmd->flags & CMD_WRITE)) continue;
+                if (clientSupportStandAloneRedirect(c) && (c->bstate->btype == BLOCKED_LIST || c->bstate->btype == BLOCKED_ZSET ||
+                                                           c->bstate->btype == BLOCKED_STREAM || c->bstate->btype == BLOCKED_MODULE)) {
+                    if (c->bstate->btype == BLOCKED_MODULE && !moduleClientIsBlockedOnKeys(c)) continue;
+                    /* Client has redirect capability and blocked on keys */
+                    addReplyErrorSds(c, sdscatprintf(sdsempty(), "-REDIRECT %s:%d", server.primary_host, server.primary_port));
+                    unblockClientOnError(c, NULL);
+                } else {
+                    unblockClientOnError(c, "-UNBLOCKED force unblock from blocking operation, "
+                                            "instance state changed (master -> replica?)");
+                    c->flag.close_after_reply = 1;
+                }
+            }
         }
     }
 }

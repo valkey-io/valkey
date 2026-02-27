@@ -201,7 +201,7 @@ proc verify_log_message {srv_idx pattern from_line} {
     incr from_line
     set result [exec tail -n +$from_line < [srv $srv_idx stdout]]
     if {![string match $pattern $result]} {
-        fail "expected message not found in srv $srv_idx log file [srv $srv_idx stdout]: $pattern"
+        fail "expected pattern found in srv $srv_idx log file: $pattern, but instead got: $result"
     }
 }
 
@@ -210,7 +210,7 @@ proc verify_no_log_message {srv_idx pattern from_line} {
     incr from_line
     set result [exec tail -n +$from_line < [srv $srv_idx stdout]]
     if {[string match $pattern $result]} {
-        fail "expected message found in srv $srv_idx log file [srv $srv_idx stdout]: $pattern"
+        fail "expected pattern not found in srv $srv_idx log file: $pattern, but instead got: $result"
     }
 }
 
@@ -652,7 +652,12 @@ proc populate {num {prefix key:} {size 3} {idx 0} {prints false} {expires 0}} {
     set val [string repeat A $size]
     for {set j 0} {$j < $pipeline} {incr j} {
         if {$expires > 0} {
-            r $idx set $prefix$j $val ex $expires
+            if {$expires < 1} {
+                set pexpires [expr int($expires * 1000)]
+                r $idx set $prefix$j $val px $pexpires
+            } else {
+                r $idx set $prefix$j $val ex $expires
+            }
         } else {
             r $idx set $prefix$j $val
         }
@@ -660,7 +665,12 @@ proc populate {num {prefix key:} {size 3} {idx 0} {prints false} {expires 0}} {
     }
     for {} {$j < $num} {incr j} {
         if {$expires > 0} {
-            r $idx set $prefix$j $val ex $expires
+            if {$expires < 1} {
+                set pexpires [expr int($expires * 1000)]
+                r $idx set $prefix$j $val px $pexpires
+            } else {
+                r $idx set $prefix$j $val ex $expires
+            }
         } else {
             r $idx set $prefix$j $val
         }
@@ -1216,7 +1226,7 @@ proc system_backtrace_supported {} {
     # libmusl does not support backtrace. Also return 0 on
     # static binaries (ldd exit code 1) where we can't detect libmusl
     catch {
-        set ldd [exec ldd src/valkey-server]
+        set ldd [exec ldd $::VALKEY_SERVER_BIN]
         if {![string match {*libc.*musl*} $ldd]} {
             return 1
         }
@@ -1229,6 +1239,24 @@ proc generate_largevalue_test_array {} {
     set largevalue(listpack) "hello"
     set largevalue(quicklist) [string repeat "x" 8192]
     return [array get largevalue]
+}
+
+proc get_client_id_by_last_cmd {r cmd} {
+    set client_list [$r client list]
+    set client_id ""
+    set lines [split $client_list "\n"]
+    foreach line $lines {
+        if {[string match *cmd=$cmd* $line]} {
+            set parts [split $line " "]
+            foreach part $parts {
+                if {[string match id=* $part]} {
+                    set client_id [lindex [split $part "="] 1]
+                    return $client_id
+                }
+            }
+        }
+    }
+    return $client_id
 }
 
 # Breakpoint function, which invokes a minimal debugger.
@@ -1250,6 +1278,25 @@ proc bp {{s {}}} {
         if {$line=="i"} {set line "info locals"}
         catch {uplevel 1 $line} res
         puts $res
+    }
+}
+
+# Compares two version strings. Returns 1 if a >= b, 0 otherwise.
+proc version_greater_or_equal {a b} {
+    regexp {^([0-9]+)\.([0-9]+)\.([0-9]+)$} $a -> a_major a_minor a_patch
+    regexp {^([0-9]+)\.([0-9]+)\.([0-9]+)$} $b -> b_major b_minor b_patch
+    if {$a_major < $b_major} {
+        return 0
+    } elseif {$a_major > $b_major} {
+        return 1
+    } elseif {$a_minor < $b_minor} {
+        return 0
+    } elseif {$a_minor > $b_minor} {
+        return 1
+    } elseif {$a_patch < $b_patch} {
+        return 0
+    } else {
+        return 1
     }
 }
 

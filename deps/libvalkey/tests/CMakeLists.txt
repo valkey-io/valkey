@@ -58,53 +58,43 @@ endif()
 if(MSVC OR MINGW)
   find_library(LIBEVENT_LIBRARY Libevent)
 else()
-  # Use the Debug configuration when building tests (no -DNDEBUG)
-  set(CMAKE_BUILD_TYPE "Debug" CACHE STRING "" FORCE)
+  # Undefine any -DNDEBUG to make sure that tests can assert.
+  # CMake defines NDEBUG in Release and RelWithDebInfo.
+  add_compile_options("-UNDEBUG")
 endif()
 
-# Make sure ctest gives the output when tests fail
-list(APPEND CMAKE_CTEST_ARGUMENTS "--output-on-failure")
-
-# Add non-cluster tests
+# Add the non-cluster test binary.
+# Some tests are unit tests which require us to include private headers.
 add_executable(client_test client_test.c)
 target_include_directories(client_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
-if(TLS_LIBRARY)
+target_link_libraries(client_test valkey_unittest)
+add_test(NAME client_test COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/test.sh")
+if(ENABLE_TLS)
   target_compile_definitions(client_test PUBLIC VALKEY_TEST_TLS=1)
-  target_link_libraries(client_test ${TLS_LIBRARY})
+  set_property(TEST client_test APPEND PROPERTY ENVIRONMENT "TEST_TLS=1")
 endif()
 if(ENABLE_RDMA)
   target_compile_definitions(client_test PUBLIC VALKEY_TEST_RDMA=1)
-  target_link_libraries(client_test valkey_rdma)
+  set_property(TEST client_test APPEND PROPERTY ENVIRONMENT "TEST_RDMA=1")
 endif()
 if(LIBEVENT_LIBRARY)
   target_compile_definitions(client_test PUBLIC VALKEY_TEST_ASYNC=1)
   target_link_libraries(client_test ${LIBEVENT_LIBRARY})
+  set_property(TEST client_test APPEND PROPERTY ENVIRONMENT "TEST_CLUSTER=1")
 endif()
-target_link_libraries(client_test valkey)
-
-add_test(NAME client_test COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/test.sh")
 if(TEST_WITH_REDIS_VERSION)
   set_property(TEST client_test APPEND PROPERTY ENVIRONMENT "VALKEY_SERVER=redis-server")
-endif()
-if(TLS_LIBRARY)
-  set_property(TEST client_test APPEND PROPERTY ENVIRONMENT "TEST_TLS=1")
-endif()
-if(ENABLE_RDMA)
-  set_property(TEST client_test APPEND PROPERTY ENVIRONMENT "TEST_RDMA=1")
-endif()
-if(LIBEVENT_LIBRARY)
-  set_property(TEST client_test APPEND PROPERTY ENVIRONMENT "TEST_CLUSTER=1")
 endif()
 
 # Unit tests
 add_executable(ut_parse_cmd ut_parse_cmd.c test_utils.c)
 target_include_directories(ut_parse_cmd PRIVATE "${PROJECT_SOURCE_DIR}/src")
-target_link_libraries(ut_parse_cmd valkey)
+target_link_libraries(ut_parse_cmd valkey_unittest)
 add_test(NAME ut_parse_cmd COMMAND "$<TARGET_FILE:ut_parse_cmd>")
 
 add_executable(ut_slotmap_update ut_slotmap_update.c)
 target_include_directories(ut_slotmap_update PRIVATE "${PROJECT_SOURCE_DIR}/src")
-target_link_libraries(ut_slotmap_update valkey)
+target_link_libraries(ut_slotmap_update valkey_unittest)
 add_test(NAME ut_slotmap_update COMMAND "$<TARGET_FILE:ut_slotmap_update>")
 
 # Cluster tests

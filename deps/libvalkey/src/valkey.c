@@ -218,7 +218,7 @@ static void *createIntegerObject(const valkeyReadTask *task, long long value) {
 static void *createDoubleObject(const valkeyReadTask *task, double value, char *str, size_t len) {
     valkeyReply *r, *parent;
 
-    if (len == SIZE_MAX) // Prevents vk_malloc(0) if len equals to SIZE_MAX
+    if (len == SIZE_MAX) // Prevents vk_malloc(0) if len equals SIZE_MAX
         return NULL;
 
     r = createReplyObject(VALKEY_REPLY_DOUBLE);
@@ -235,7 +235,7 @@ static void *createDoubleObject(const valkeyReadTask *task, double value, char *
     /* The double reply also has the original protocol string representing a
      * double as a null terminated string. This way the caller does not need
      * to format back for string conversion, especially since Valkey does efforts
-     * to make the string more human readable avoiding the calssical double
+     * to make the string more human readable avoiding the classical double
      * decimal string conversion artifacts. */
     memcpy(r->str, str, len);
     r->str[len] = '\0';
@@ -1009,6 +1009,18 @@ int valkeyBufferRead(valkeyContext *c) {
     if (c->err)
         return VALKEY_ERR;
 
+    if (c->funcs->read_zc) {
+        char *zc_buf;
+        nread = c->funcs->read_zc(c, &zc_buf);
+        if (nread < 0) {
+            return VALKEY_ERR;
+        }
+        if (nread > 0 && valkeyReaderFeed(c->reader, zc_buf, nread) != VALKEY_OK) {
+            valkeySetError(c, c->reader->err, c->reader->errstr);
+            return VALKEY_ERR;
+        }
+        return c->funcs->read_zc_done(c);
+    }
     nread = c->funcs->read(c, buf, sizeof(buf));
     if (nread < 0) {
         return VALKEY_ERR;

@@ -17,6 +17,11 @@ tags {external:skip needs:other-server cluster singledb} {
             set primary_id [$primary cluster myid]
 
             start_server {config "minimal-cluster.conf" start-other-server 1 overrides {cluster-ping-interval 1000}} {
+                set version [dict get [r hello] version]
+                if {![version_greater_or_equal $version 8.1.0]} {
+                    skip "Requires Valkey 8.1 or above"
+                }
+                r config set rdb-version-check relaxed
                 # Add a replica of the old version to the cluster
                 r cluster meet $primary_host $primary_port
                 wait_for_cluster_propagation

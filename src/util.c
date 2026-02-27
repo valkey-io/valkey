@@ -52,14 +52,12 @@
 #include "config.h"
 #include "zmalloc.h"
 #include "serverassert.h"
-
 #include "valkey_strtod.h"
+#include "monotonic.h"
 
 #if HAVE_X86_SIMD
 #include <immintrin.h>
 #endif
-
-#define UNUSED(x) ((void)(x))
 
 /* Glob-style pattern matching. */
 static int stringmatchlen_impl(const char *pattern,
@@ -199,6 +197,20 @@ int stringmatch(const char *pattern, const char *string, int nocase) {
     return stringmatchlen(pattern, strlen(pattern), string, strlen(string), nocase);
 }
 
+int prefixmatchlen(const char *pattern, int patternLen, const char *string, int stringLen, int nocase) {
+    if (patternLen == 1 && pattern[0] == '*') {
+        /* Minor optimization: fast path: avoid calling "stringmatchlen" if the input pattern is exactly "*":
+         * We always return 1 in this case. */
+        return 1;
+    } else if (patternLen > 0 && pattern[patternLen - 1] != '*') {
+        /* Reject the pattern if it doesn't end with '*' */
+        return 0;
+    } else {
+        /* Call existing string match algorithm */
+        return stringmatchlen(pattern, patternLen, string, stringLen, nocase);
+    }
+}
+
 /* Fuzz stringmatchlen() trying to crash it with bad input. */
 int stringmatchlen_fuzz_test(void) {
     char str[32];
@@ -271,7 +283,7 @@ unsigned long long memtoull(const char *p, int *err) {
     char *endptr;
     errno = 0;
     val = strtoull(buf, &endptr, 10);
-    if ((val == 0 && errno == EINVAL) || *endptr != '\0') {
+    if ((errno == ERANGE) || (val == 0 && errno == EINVAL) || *endptr != '\0') {
         if (err) *err = 1;
         return 0;
     }
@@ -1040,6 +1052,21 @@ err:
     return 0;
 }
 
+/* Populate the provided seed array by hashing the provided string with SHA256
+ * and copying the first outlen bytes of the digest into the seed buffer. */
+void getHashSeedFromString(unsigned char *seed_array, size_t outlen, const char *value) {
+    SHA256_CTX ctx;
+    unsigned char digest[SHA256_BLOCK_SIZE];
+
+    sha256_init(&ctx);
+    sha256_update(&ctx, (const BYTE *)value, strlen(value));
+    sha256_final(&ctx, digest);
+
+    if (outlen > SHA256_BLOCK_SIZE) outlen = SHA256_BLOCK_SIZE;
+    memcpy(seed_array, digest, outlen);
+}
+
+
 /* Parses a version string on the form "major.minor.patch" and returns an
  * integer on the form 0xMMmmpp. Returns -1 on parse error. */
 int version2num(const char *version) {
@@ -1571,6 +1598,34 @@ int snprintf_async_signal_safe(char *to, size_t n, const char *fmt, ...) {
     return result;
 }
 
+/* Return the UNIX time in microseconds */
+long long ustime(void) {
+    static long long ust = 0;
+    static monotime mono_at_last_timeofday = 0;
+
+    /* Fast path. Only call gettimeofday() periodically and add monotonic delta.
+     * This avoids a syscall if we have a no-syscall monotonic clock. */
+    if (getMonotonicUs != NULL && monotonicGetType() == MONOTONIC_CLOCK_HW) {
+        monotime mono_now = getMonotonicUs();
+        monotime mono_since_gettimeofday = mono_now - mono_at_last_timeofday;
+        if (mono_since_gettimeofday < 1000) return ust + mono_since_gettimeofday;
+
+        /* Use time of day. */
+        mono_at_last_timeofday = mono_now;
+    }
+
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    ust = ((long long)tv.tv_sec) * 1000000;
+    ust += tv.tv_usec;
+    return ust;
+}
+
+/* Return the UNIX time in milliseconds */
+mstime_t mstime(void) {
+    return ustime() / 1000;
+}
+
 /* Writes a pointer into an 8 bytes field, padding with zeros on 32bit targets
  * to ensure a consistent fixed width encoding. */
 void writePointerWithPadding(unsigned char *buf, const void *ptr) {
@@ -1578,4 +1633,26 @@ void writePointerWithPadding(unsigned char *buf, const void *ptr) {
     memcpy(buf, &ptr, ptr_size);
     /* if it is 32-bit system, pad the remaining 4 bytes with zero */
     if (ptr_size == 4) memset(buf + ptr_size, 0, ptr_size);
+}
+
+/*
+ * Escape a Unicode string for JSON output, following RFC 7159:
+ * https://datatracker.ietf.org/doc/html/rfc7159#section-7
+ */
+sds escapeJsonString(sds s, const char *p, size_t len) {
+    s = sdscatlen(s, "\"", 1);
+    while (len--) {
+        switch (*p) {
+        case '\\':
+        case '"': s = sdscatprintf(s, "\\%c", *p); break;
+        case '\n': s = sdscatlen(s, "\\n", 2); break;
+        case '\f': s = sdscatlen(s, "\\f", 2); break;
+        case '\r': s = sdscatlen(s, "\\r", 2); break;
+        case '\t': s = sdscatlen(s, "\\t", 2); break;
+        case '\b': s = sdscatlen(s, "\\b", 2); break;
+        default: s = sdscatprintf(s, *(unsigned char *)p <= 0x1f ? "\\u%04x" : "%c", *p);
+        }
+        p++;
+    }
+    return sdscatlen(s, "\"", 1);
 }

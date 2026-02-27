@@ -40,6 +40,7 @@
 #include "functions.h"
 #include "connection.h"
 #include "module.h"
+#include "cluster_migrateslots.h"
 
 #include <memory.h>
 #include <sys/time.h>
@@ -71,7 +72,7 @@ void syncWithPrimary(connection *conn);
 int RDBGeneratedByReplication = 0;
 
 /* --------------------------- Utility functions ---------------------------- */
-static ConnectionType *connTypeOfReplication(void) {
+ConnectionType *connTypeOfReplication(void) {
     if (server.tls_replication) {
         return connectionTypeTls();
     }
@@ -214,6 +215,31 @@ static inline client *lookupRdbClientByID(uint64_t id) {
     return c;
 }
 
+/* Decide which RDB version to send to a replica. */
+int replicaRdbVersion(client *replica) {
+    if (!(replica->repl_data->replica_capa & REPLICA_CAPA_EOF)) {
+        /* The replica doesn't have CAPA EOF, so we need to use disk-based
+         * replication, but we don't want to write an old RDB version to disk,
+         * because it can be reused for disk-based full sync to other replicas,
+         * so we force the latest RDB version. */
+        return RDB_VERSION;
+    }
+    /* Search the version map backwards to select the highest RDB version the
+     * replica understands. */
+    const int n = sizeof(RDB_VERSION_MAP) / sizeof(RDB_VERSION_MAP[0]);
+    for (int i = n - 1; i >= 0; i--) {
+        if (replica->repl_data->replica_version >= RDB_VERSION_MAP[i][1]) {
+            return RDB_VERSION_MAP[i][0];
+        }
+    }
+    /* Fallback to RDB 11, which was introduced in 7.2.
+     *
+     * 7.2 and older don't report their version. If no version was provided, we
+     * assume it's 7.2. We don't currently produce RDB 10 (7.0) and RDB 9
+     * (5.0--6.2). */
+    return 11;
+}
+
 /* Replication: Primary side - connections association.
  * During dual channel sync, association is used to keep replication data
  * in the backlog until the replica requests PSYNC.
@@ -331,11 +357,11 @@ void feedReplicationBufferWithObject(robj *o) {
     size_t len;
 
     if (o->encoding == OBJ_ENCODING_INT) {
-        len = ll2string(llstr, sizeof(llstr), (long)o->ptr);
+        len = ll2string(llstr, sizeof(llstr), (long)objectGetVal(o));
         p = llstr;
     } else {
-        len = sdslen(o->ptr);
-        p = o->ptr;
+        len = sdslen(objectGetVal(o));
+        p = objectGetVal(o);
     }
     feedReplicationBuffer(p, len);
 }
@@ -533,7 +559,6 @@ void feedReplicationBuffer(char *s, size_t len) {
  * replicationFeedStreamFromPrimaryStream() */
 void replicationFeedReplicas(int dictid, robj **argv, int argc) {
     int j, len;
-    char llstr[LONG_STR_SIZE];
 
     /* In case we propagate a command that doesn't touch keys (PING, REPLCONF) we
      * pass dbid=-1 that indicate there is no need to replicate `select` command. */
@@ -565,27 +590,15 @@ void replicationFeedReplicas(int dictid, robj **argv, int argc) {
 
     /* Send SELECT command to every replica if needed. */
     if (dictid != -1 && server.replicas_eldb != dictid) {
-        robj *selectcmd;
-
-        /* For a few DBs we have pre-computed SELECT command. */
-        if (dictid >= 0 && dictid < PROTO_SHARED_SELECT_CMDS) {
-            selectcmd = shared.select[dictid];
-        } else {
-            int dictid_len;
-
-            dictid_len = ll2string(llstr, sizeof(llstr), dictid);
-            selectcmd = createObject(
-                OBJ_STRING, sdscatprintf(sdsempty(), "*2\r\n$6\r\nSELECT\r\n$%d\r\n%s\r\n", dictid_len, llstr));
-        }
-
+        robj *selectcmd = generateSelectCommand(dictid);
         feedReplicationBufferWithObject(selectcmd);
 
         /* Although the SELECT command is not associated with any slot,
          * its per-slot network-bytes-out accumulation is made by the above function call.
          * To cancel-out this accumulation, below adjustment is made. */
-        clusterSlotStatsDecrNetworkBytesOutForReplication(sdslen(selectcmd->ptr));
+        clusterSlotStatsDecrNetworkBytesOutForReplication(sdslen(objectGetVal(selectcmd)));
 
-        if (dictid < 0 || dictid >= PROTO_SHARED_SELECT_CMDS) decrRefCount(selectcmd);
+        decrRefCount(selectcmd);
 
         server.replicas_eldb = dictid;
     }
@@ -700,9 +713,9 @@ void replicationFeedMonitors(client *c, list *monitors, int dictid, robj **argv,
 
     for (j = 0; j < argc; j++) {
         if (argv[j]->encoding == OBJ_ENCODING_INT) {
-            cmdrepr = sdscatprintf(cmdrepr, "\"%ld\"", (long)argv[j]->ptr);
+            cmdrepr = sdscatprintf(cmdrepr, "\"%ld\"", (long)objectGetVal(argv[j]));
         } else {
-            cmdrepr = sdscatrepr(cmdrepr, (char *)argv[j]->ptr, sdslen(argv[j]->ptr));
+            cmdrepr = sdscatrepr(cmdrepr, (char *)objectGetVal(argv[j]), sdslen(objectGetVal(argv[j])));
         }
         if (j != argc - 1) cmdrepr = sdscatlen(cmdrepr, " ", 1);
     }
@@ -838,7 +851,7 @@ int replicationSetupReplicaForFullResync(client *replica, long long offset) {
  * with the usual full resync. */
 int primaryTryPartialResynchronization(client *c, long long psync_offset) {
     long long psync_len;
-    char *primary_replid = c->argv[1]->ptr;
+    char *primary_replid = objectGetVal(c->argv[1]);
     char buf[128];
     int buflen;
 
@@ -874,14 +887,22 @@ int primaryTryPartialResynchronization(client *c, long long psync_offset) {
     /* We still have the data our replica is asking for? */
     if (!server.repl_backlog || psync_offset < server.repl_backlog->offset ||
         psync_offset > (server.repl_backlog->offset + server.repl_backlog->histlen)) {
-        serverLog(LL_NOTICE,
-                  "Unable to partial resync with replica %s for lack of backlog (Replica request was: %lld).",
-                  replicationGetReplicaName(c), psync_offset);
+        if (!server.repl_backlog) {
+            serverLog(LL_NOTICE,
+                      "Unable to partial resync with replica %s for lack of backlog (Replica request was: %s:%lld).",
+                      replicationGetReplicaName(c), primary_replid, psync_offset);
+        } else {
+            serverLog(LL_NOTICE,
+                      "Unable to partial resync with replica %s for lack of backlog (Replica request was %s:%lld, "
+                      "and I can only reply with the range [%lld, %lld]).",
+                      replicationGetReplicaName(c), primary_replid, psync_offset, server.repl_backlog->offset,
+                      server.repl_backlog->offset + server.repl_backlog->histlen);
+        }
         if (psync_offset > server.primary_repl_offset) {
             serverLog(LL_WARNING,
-                      "Warning: replica %s tried to PSYNC with an offset that is greater than the primary replication "
-                      "offset.",
-                      replicationGetReplicaName(c));
+                      "Warning: replica %s tried to PSYNC with an offset (%lld) that is greater than "
+                      "the primary replication offset (%lld)",
+                      replicationGetReplicaName(c), psync_offset, server.primary_repl_offset);
         }
         goto need_full_resync;
     }
@@ -949,6 +970,9 @@ need_full_resync:
  * of the replicas waiting for this BGSAVE, so represents the replica capabilities
  * all the replicas support. Can be tested via REPLICA_CAPA_* macros.
  *
+ * The rdbver argument is the RDB version to use. It should be calculated based
+ * on what the replicas reported using REPLCONF VERSION.
+ *
  * Side effects, other than starting a BGSAVE:
  *
  * 1) Handle the replicas in WAIT_START state, by preparing them for a full
@@ -959,16 +983,23 @@ need_full_resync:
  *    started.
  *
  * Returns C_OK on success or C_ERR otherwise. */
-int startBgsaveForReplication(int mincapa, int req) {
+int startBgsaveForReplication(int mincapa, int req, int rdbver) {
     int retval;
     int socket_target = 0;
     listIter li;
     listNode *ln;
 
-    /* We use a socket target if replica can handle the EOF marker and we're configured to do diskless syncs.
-     * Note that in case we're creating a "filtered" RDB (functions-only, for example) we also force socket replication
-     * to avoid overwriting the snapshot RDB file with filtered data. */
-    socket_target = (server.repl_diskless_sync || req & REPLICA_REQ_RDB_MASK) && (mincapa & REPLICA_CAPA_EOF);
+    /* We use a socket target if replica can handle the EOF marker and we're
+     * configured to do diskless syncs.
+     *
+     * Note that in case we're creating a "filtered" RDB (functions-only, for
+     * example) or an older RDB version, we also force socket replication to
+     * avoid overwriting the snapshot RDB file, which needs to be usable by
+     * other replicas (not using filtered RDB or older versions) in disk-based
+     * full sync. */
+    socket_target = (mincapa & REPLICA_CAPA_EOF) && (server.repl_diskless_sync ||
+                                                     (req & REPLICA_REQ_RDB_MASK) ||
+                                                     rdbver != RDB_VERSION);
     /* `SYNC` should have failed with error if we don't support socket and require a filter, assert this here */
     serverAssert(socket_target || !(req & REPLICA_REQ_RDB_MASK));
 
@@ -982,7 +1013,7 @@ int startBgsaveForReplication(int mincapa, int req) {
      * otherwise replica will miss repl-stream-db. */
     if (rsiptr) {
         if (socket_target)
-            retval = rdbSaveToReplicasSockets(req, rsiptr);
+            retval = rdbSaveToReplicasSockets(req, rdbver, rsiptr);
         else {
             /* Keep the page cache since it'll get used soon */
             retval = rdbSaveBackground(req, server.rdb_filename, rsiptr, RDBFLAGS_REPLICATION | RDBFLAGS_KEEP_CACHE);
@@ -1031,6 +1062,7 @@ int startBgsaveForReplication(int mincapa, int req) {
             if (replica->repl_data->repl_state == REPLICA_STATE_WAIT_BGSAVE_START) {
                 /* Check replica has the exact requirements */
                 if (replica->repl_data->replica_req != req) continue;
+                if (replicaRdbVersion(replica) != rdbver) continue;
                 replicationSetupReplicaForFullResync(replica, getPsyncInitialOffset());
             }
         }
@@ -1051,14 +1083,14 @@ void syncCommand(client *c) {
 
     /* Check if this is a failover request to a replica with the same replid and
      * become a primary if so. */
-    if (c->argc > 3 && !strcasecmp(c->argv[0]->ptr, "psync") && !strcasecmp(c->argv[3]->ptr, "failover")) {
-        serverLog(LL_NOTICE, "Failover request received for replid %s.", (unsigned char *)c->argv[1]->ptr);
+    if (c->argc > 3 && !strcasecmp(objectGetVal(c->argv[0]), "psync") && !strcasecmp(objectGetVal(c->argv[3]), "failover")) {
+        serverLog(LL_NOTICE, "Failover request received for replid %s.", (unsigned char *)objectGetVal(c->argv[1]));
         if (!server.primary_host) {
             addReplyError(c, "PSYNC FAILOVER can't be sent to a master.");
             return;
         }
 
-        if (!strcasecmp(c->argv[1]->ptr, server.replid)) {
+        if (!strcasecmp(objectGetVal(c->argv[1]), server.replid)) {
             if (server.cluster_enabled) {
                 clusterPromoteSelfToPrimary();
             } else {
@@ -1114,7 +1146,7 @@ void syncCommand(client *c) {
      *
      * So the replica knows the new replid and offset to try a PSYNC later
      * if the connection with the primary is lost. */
-    if (!strcasecmp(c->argv[0]->ptr, "psync")) {
+    if (!strcasecmp(objectGetVal(c->argv[0]), "psync")) {
         long long psync_offset;
         if (getLongLongFromObjectOrReply(c, c->argv[2], &psync_offset, NULL) != C_OK) {
             serverLog(LL_WARNING, "Replica %s asks for synchronization but with a wrong offset",
@@ -1126,7 +1158,7 @@ void syncCommand(client *c) {
             server.stat_sync_partial_ok++;
             return; /* No full resync needed, return. */
         } else {
-            char *primary_replid = c->argv[1]->ptr;
+            char *primary_replid = objectGetVal(c->argv[1]);
 
             /* Increment stats for failed PSYNCs, but only if the
              * replid is not "?", as this is used by replicas to force a full
@@ -1231,7 +1263,9 @@ void syncCommand(client *c) {
             /* We don't have a BGSAVE in progress, let's start one. Diskless
              * or disk-based mode is determined by replica's capacity. */
             if (!hasActiveChildProcess()) {
-                startBgsaveForReplication(c->repl_data->replica_capa, c->repl_data->replica_req);
+                startBgsaveForReplication(c->repl_data->replica_capa,
+                                          c->repl_data->replica_req,
+                                          replicaRdbVersion(c));
             } else {
                 serverLog(LL_NOTICE, "No BGSAVE in progress, but another BG operation is active. "
                                      "BGSAVE for replication delayed");
@@ -1375,13 +1409,13 @@ void replconfCommand(client *c) {
 
     /* Process every option-value pair. */
     for (j = 1; j < c->argc; j += 2) {
-        if (!strcasecmp(c->argv[j]->ptr, "listening-port")) {
+        if (!strcasecmp(objectGetVal(c->argv[j]), "listening-port")) {
             long port;
 
             if ((getLongFromObjectOrReply(c, c->argv[j + 1], &port, NULL) != C_OK)) return;
             c->repl_data->replica_listening_port = port;
-        } else if (!strcasecmp(c->argv[j]->ptr, "ip-address")) {
-            sds addr = c->argv[j + 1]->ptr;
+        } else if (!strcasecmp(objectGetVal(c->argv[j]), "ip-address")) {
+            sds addr = objectGetVal(c->argv[j + 1]);
             if (sdslen(addr) < NET_HOST_STR_LEN) {
                 if (c->repl_data->replica_addr) sdsfree(c->repl_data->replica_addr);
                 c->repl_data->replica_addr = sdsdup(addr);
@@ -1392,20 +1426,25 @@ void replconfCommand(client *c) {
                                     sdslen(addr));
                 return;
             }
-        } else if (!strcasecmp(c->argv[j]->ptr, "capa")) {
+        } else if (!strcasecmp(objectGetVal(c->argv[j]), "capa")) {
             /* Ignore capabilities not understood by this primary. */
-            if (!strcasecmp(c->argv[j + 1]->ptr, "eof"))
+            if (!strcasecmp(objectGetVal(c->argv[j + 1]), "eof"))
                 c->repl_data->replica_capa |= REPLICA_CAPA_EOF;
-            else if (!strcasecmp(c->argv[j + 1]->ptr, "psync2"))
+            else if (!strcasecmp(objectGetVal(c->argv[j + 1]), "psync2"))
                 c->repl_data->replica_capa |= REPLICA_CAPA_PSYNC2;
-            else if (!strcasecmp(c->argv[j + 1]->ptr, "dual-channel") && server.dual_channel_replication &&
-                     server.repl_diskless_sync) {
+            else if (!strcasecmp(objectGetVal(c->argv[j + 1]), "dual-channel") && server.dual_channel_replication) {
                 /* If dual-channel is disable on this primary, treat this command as unrecognized
                  * replconf option. */
-                c->repl_data->replica_capa |= REPLICA_CAPA_DUAL_CHANNEL;
-            } else if (!strcasecmp(c->argv[j + 1]->ptr, REPLICA_CAPA_SKIP_RDB_CHECKSUM_STR))
+                if (server.repl_diskless_sync) {
+                    c->repl_data->replica_capa |= REPLICA_CAPA_DUAL_CHANNEL;
+                } else {
+                    /* repl-diskless-sync is disabled, unable to use the dual channel replication,
+                     * print a log so that user will get to know that they are missing something. */
+                    serverLog(LL_NOTICE, "Dual channel capability ignored: repl-diskless-sync disabled");
+                }
+            } else if (!strcasecmp(objectGetVal(c->argv[j + 1]), REPLICA_CAPA_SKIP_RDB_CHECKSUM_STR))
                 c->repl_data->replica_capa |= REPLICA_CAPA_SKIP_RDB_CHECKSUM;
-        } else if (!strcasecmp(c->argv[j]->ptr, "ack")) {
+        } else if (!strcasecmp(objectGetVal(c->argv[j]), "ack")) {
             /* REPLCONF ACK is used by replica to inform the primary the amount
              * of replication stream that it processed so far. It is an
              * internal only command that normal clients should never use. */
@@ -1414,7 +1453,7 @@ void replconfCommand(client *c) {
             if (!c->flag.replica) return;
             if ((getLongLongFromObject(c->argv[j + 1], &offset) != C_OK)) return;
             if (offset > c->repl_data->repl_ack_off) c->repl_data->repl_ack_off = offset;
-            if (c->argc > j + 3 && !strcasecmp(c->argv[j + 2]->ptr, "fack")) {
+            if (c->argc > j + 3 && !strcasecmp(objectGetVal(c->argv[j + 2]), "fack")) {
                 if ((getLongLongFromObject(c->argv[j + 3], &offset) != C_OK)) return;
                 if (offset > c->repl_data->repl_aof_off) c->repl_data->repl_aof_off = offset;
             }
@@ -1435,12 +1474,12 @@ void replconfCommand(client *c) {
             }
             /* Note: this command does not reply anything! */
             return;
-        } else if (!strcasecmp(c->argv[j]->ptr, "getack")) {
+        } else if (!strcasecmp(objectGetVal(c->argv[j]), "getack")) {
             /* REPLCONF GETACK is used in order to request an ACK ASAP
              * to the replica. */
             if (server.primary_host && server.primary) replicationSendAck();
             return;
-        } else if (!strcasecmp(c->argv[j]->ptr, "rdb-only")) {
+        } else if (!strcasecmp(objectGetVal(c->argv[j]), "rdb-only")) {
             /* REPLCONF RDB-ONLY is used to identify the client only wants
              * RDB snapshot without replication buffer. */
             long rdb_only = 0;
@@ -1449,7 +1488,7 @@ void replconfCommand(client *c) {
                 c->flag.repl_rdbonly = 1;
             else
                 c->flag.repl_rdbonly = 0;
-        } else if (!strcasecmp(c->argv[j]->ptr, "rdb-filter-only")) {
+        } else if (!strcasecmp(objectGetVal(c->argv[j]), "rdb-filter-only")) {
             /* REPLCONFG RDB-FILTER-ONLY is used to define "include" filters
              * for the RDB snapshot. Currently we only support a single
              * include filter: "functions". In the future we may want to add
@@ -1459,7 +1498,7 @@ void replconfCommand(client *c) {
              * filter out certain data. */
             int filter_count, i;
             sds *filters;
-            if (!(filters = sdssplitargs(c->argv[j + 1]->ptr, &filter_count))) {
+            if (!(filters = sdssplitargs(objectGetVal(c->argv[j + 1]), &filter_count))) {
                 addReplyError(c, "Missing rdb-filter-only values");
                 return;
             }
@@ -1476,16 +1515,16 @@ void replconfCommand(client *c) {
                 }
             }
             sdsfreesplitres(filters, filter_count);
-        } else if (!strcasecmp(c->argv[j]->ptr, "version")) {
+        } else if (!strcasecmp(objectGetVal(c->argv[j]), "version")) {
             /* REPLCONF VERSION x.y.z */
-            int version = version2num(c->argv[j + 1]->ptr);
+            int version = version2num(objectGetVal(c->argv[j + 1]));
             if (version >= 0) {
                 c->repl_data->replica_version = version;
             } else {
-                addReplyErrorFormat(c, "Unrecognized version format: %s", (char *)c->argv[j + 1]->ptr);
+                addReplyErrorFormat(c, "Unrecognized version format: %s", (char *)objectGetVal(c->argv[j + 1]));
                 return;
             }
-        } else if (!strcasecmp(c->argv[j]->ptr, "rdb-channel")) {
+        } else if (!strcasecmp(objectGetVal(c->argv[j]), "rdb-channel")) {
             long start_with_offset = 0;
             if (getRangeLongFromObjectOrReply(c, c->argv[j + 1], 0, 1, &start_with_offset, NULL) != C_OK) {
                 return;
@@ -1497,7 +1536,7 @@ void replconfCommand(client *c) {
                 c->flag.repl_rdb_channel = 0;
                 c->repl_data->replica_req &= ~REPLICA_REQ_RDB_CHANNEL;
             }
-        } else if (!strcasecmp(c->argv[j]->ptr, "set-rdb-client-id")) {
+        } else if (!strcasecmp(objectGetVal(c->argv[j]), "set-rdb-client-id")) {
             /* REPLCONF identify <client-id> is used to identify the current replica main channel with existing
              * rdb-connection with the given id. */
             long long client_id = 0;
@@ -1509,23 +1548,23 @@ void replconfCommand(client *c) {
                 return;
             }
             c->repl_data->associated_rdb_client_id = (uint64_t)client_id;
-        } else if (!strcasecmp(c->argv[j]->ptr, "set-cluster-node-id")) {
+        } else if (!strcasecmp(objectGetVal(c->argv[j]), "set-cluster-node-id")) {
             /* REPLCONF SET-CLUSTER-NODE-ID <node-id> */
             if (!server.cluster_enabled) {
                 addReplyError(c, "This instance has cluster support disabled");
                 return;
             }
 
-            clusterNode *n = clusterLookupNode(c->argv[j + 1]->ptr, sdslen(c->argv[j + 1]->ptr));
+            clusterNode *n = clusterLookupNode(objectGetVal(c->argv[j + 1]), sdslen(objectGetVal(c->argv[j + 1])));
             if (!n) {
-                addReplyErrorFormat(c, "Unknown node %s", (char *)c->argv[j + 1]->ptr);
+                addReplyErrorFormat(c, "Unknown node %s", (char *)objectGetVal(c->argv[j + 1]));
                 return;
             }
 
             if (c->repl_data->replica_nodeid) sdsfree(c->repl_data->replica_nodeid);
-            c->repl_data->replica_nodeid = sdsdup(c->argv[j + 1]->ptr);
+            c->repl_data->replica_nodeid = sdsdup(objectGetVal(c->argv[j + 1]));
         } else {
-            addReplyErrorFormat(c, "Unrecognized REPLCONF option: %s", (char *)c->argv[j]->ptr);
+            addReplyErrorFormat(c, "Unrecognized REPLCONF option: %s", (char *)objectGetVal(c->argv[j]));
             return;
         }
     }
@@ -1825,6 +1864,96 @@ void rdbPipeReadHandler(struct aeEventLoop *eventLoop, int fd, void *clientData,
     }
 }
 
+/* Called in slot migration source during transfer of data from the slot migration pipe, when
+ * the target becomes writable again. */
+void slotMigrationPipeWriteHandler(struct connection *conn) {
+    serverAssert(server.slot_migration_pipe_bufflen > 0);
+    client *target = connGetPrivateData(conn);
+    ssize_t nwritten;
+    if ((nwritten = connWrite(conn, server.slot_migration_pipe_buff + target->repl_data->repldboff,
+                              server.slot_migration_pipe_bufflen - target->repl_data->repldboff)) == -1) {
+        if (connGetState(conn) == CONN_STATE_CONNECTED) return; /* equivalent to EAGAIN */
+        serverLog(LL_WARNING, "Write error sending slot migration snapshot to target: %s", connGetLastError(conn));
+        freeClient(target);
+        return;
+    } else {
+        target->repl_data->repldboff += nwritten;
+        server.stat_net_cluster_slot_export_bytes += nwritten;
+        if (target->repl_data->repldboff < server.slot_migration_pipe_bufflen) {
+            target->repl_data->repl_last_partial_write = server.unixtime;
+            return; /* more data to write.. */
+        }
+    }
+
+    /* Remove the write handler and setup the pipe read handler. */
+    connSetWriteHandler(conn, NULL);
+    target->repl_data->repl_last_partial_write = 0;
+    if (aeCreateFileEvent(server.el, server.slot_migration_pipe_read, AE_READABLE, slotMigrationPipeReadHandler, NULL) == AE_ERR) {
+        serverPanic("Unrecoverable error creating server.slot_migration_pipe_read file event.");
+    }
+}
+
+/* Called in slot migration source, when there's data to read from the child's slot migration pipe. */
+void slotMigrationPipeReadHandler(struct aeEventLoop *eventLoop, int fd, void *clientData, int mask) {
+    UNUSED(mask);
+    UNUSED(clientData);
+    UNUSED(eventLoop);
+    if (!server.slot_migration_pipe_buff) server.slot_migration_pipe_buff = zmalloc(PROTO_IOBUF_LEN);
+
+    /* No work to do if our connection has been closed. */
+    if (!server.slot_migration_pipe_conn) return;
+
+    while (1) {
+        server.slot_migration_pipe_bufflen = read(fd, server.slot_migration_pipe_buff, PROTO_IOBUF_LEN);
+        if (server.slot_migration_pipe_bufflen < 0) {
+            if (errno == EAGAIN || errno == EWOULDBLOCK) return;
+            serverLog(LL_WARNING, "Slot migration, read error sending snapshot to target: %s", strerror(errno));
+            client *target = connGetPrivateData(server.slot_migration_pipe_conn);
+            freeClient(target); /* Free client will kill the slot migration child */
+            server.slot_migration_pipe_conn = NULL;
+            return;
+        }
+
+        if (server.slot_migration_pipe_bufflen == 0) {
+            /* EOF - write end was closed. */
+            aeDeleteFileEvent(server.el, server.slot_migration_pipe_read, AE_READABLE);
+            /* Now that the target have finished reading, notify the child that it's safe to exit.
+             * When the server detects the child has exited, it can mark the target as online, and
+             * start streaming the slot replication buffers. */
+            close(server.slot_migration_child_exit_pipe);
+            server.slot_migration_child_exit_pipe = -1;
+            return;
+        }
+
+        ssize_t nwritten;
+        connection *conn = server.slot_migration_pipe_conn;
+        client *target = connGetPrivateData(conn);
+        if ((nwritten = connWrite(conn, server.slot_migration_pipe_buff, server.slot_migration_pipe_bufflen)) == -1) {
+            if (connGetState(conn) != CONN_STATE_CONNECTED) {
+                serverLog(LL_WARNING, "Slot migration transfer, write error sending DB to target: %s",
+                          connGetLastError(conn));
+                freeClient(target); /* Free client will kill the slot migration child */
+                server.slot_migration_pipe_conn = NULL;
+                return;
+            }
+            /* An error and still in connected state, is equivalent to EAGAIN */
+            target->repl_data->repldboff = 0;
+        } else {
+            /* Note: when use diskless replication, 'repldboff' is the offset
+             * of 'slot_migration_pipe_buff' sent rather than the offset of entire snapshot. */
+            target->repl_data->repldboff = nwritten;
+            server.stat_net_cluster_slot_export_bytes += nwritten;
+        }
+        /* If we were unable to write all the data to the target,
+         * setup write handler and disable pipe read handler. */
+        if (nwritten != server.slot_migration_pipe_bufflen) {
+            connSetWriteHandler(conn, slotMigrationPipeWriteHandler);
+            aeDeleteFileEvent(server.el, server.slot_migration_pipe_read, AE_READABLE);
+            return;
+        }
+    }
+}
+
 /* This function is called at the end of every background saving.
  *
  * The argument bgsaveerr is C_OK if the background saving succeeded
@@ -1991,8 +2120,8 @@ void replicationSendNewlineToPrimary(void) {
 /* Callback used by emptyData() while flushing away old data to load
  * the new dataset received by the primary and by discardTempDb()
  * after loading succeeded or failed. */
-void replicationEmptyDbCallback(hashtable *d) {
-    UNUSED(d);
+void replicationEmptyDbCallback(hashtable *ht) {
+    UNUSED(ht);
     if (server.repl_state == REPL_STATE_TRANSFER) replicationSendNewlineToPrimary();
 }
 
@@ -2107,7 +2236,7 @@ functionsLibCtx *disklessLoadFunctionsLibCtxCreate(void) {
 /* Helper function to discard our temp function lib context
  * when the loading succeeded or failed. */
 void disklessLoadDiscardFunctionsLibCtx(functionsLibCtx *temp_functions_lib_ctx) {
-    freeFunctionsAsync(temp_functions_lib_ctx);
+    freeFunctionsAsync(temp_functions_lib_ctx, NULL);
 }
 
 /* If we know we got an entirely different data set from our primary
@@ -2119,6 +2248,9 @@ void replicationAttachToNewPrimary(void) {
      * primary structure. */
     serverAssert(server.primary == NULL);
     replicationDiscardCachedPrimary();
+
+    /* Cancel any in progress imports (we will now use the primary's) */
+    clusterCleanSlotImportsOnFullSync();
 
     disconnectReplicas();     /* Force our replicas to resync with us as well. */
     freeReplicationBacklog(); /* Don't allow our chained replicas to PSYNC. */
@@ -2285,11 +2417,6 @@ int replicaLoadPrimaryRDBFromSocket(connection *conn, char *buf, char *eofmark, 
         /* We will soon start loading the RDB from socket, the replication history is changed,
          * we must discard the cached primary structure and force resync of sub-replicas. */
         replicationAttachToNewPrimary();
-
-        /* Even though we are on-empty-db and the database is empty, we still call emptyData. */
-        serverLog(LL_NOTICE, "PRIMARY <-> REPLICA sync: Flushing old data");
-        emptyData(-1, empty_db_flags, replicationEmptyDbCallback);
-
         dbarray = server.db;
         functions_lib_ctx = functionsLibCtxGetCurrent();
     }
@@ -2306,7 +2433,11 @@ int replicaLoadPrimaryRDBFromSocket(connection *conn, char *buf, char *eofmark, 
     if (replicationSupportSkipRDBChecksum(conn, 1, *usemark)) rdb.flags |= RIO_FLAG_SKIP_RDB_CHECKSUM;
     int loadingFailed = 0;
     rdbLoadingCtx loadingCtx = {.dbarray = dbarray, .functions_lib_ctx = functions_lib_ctx};
-    if (rdbLoadRioWithLoadingCtxScopedRdb(&rdb, RDBFLAGS_REPLICATION, rsi, &loadingCtx) != C_OK) {
+    /* If we aren't using the swapdb method, then we want to empty the data before loading the rdb */
+    int flags = RDBFLAGS_REPLICATION;
+    if (server.repl_diskless_load != REPL_DISKLESS_LOAD_SWAPDB) flags |= RDBFLAGS_EMPTY_DATA;
+    int retval = rdbLoadRioWithLoadingCtxScopedRdb(&rdb, flags, rsi, &loadingCtx);
+    if (retval != RDB_OK) {
         /* RDB loading failed. */
         serverLog(LL_WARNING, "Failed trying to load the PRIMARY synchronization DB "
                               "from socket, check server logs.");
@@ -2332,9 +2463,14 @@ int replicaLoadPrimaryRDBFromSocket(connection *conn, char *buf, char *eofmark, 
             disklessLoadDiscardFunctionsLibCtx(temp_functions_lib_ctx);
             serverLog(LL_NOTICE, "PRIMARY <-> REPLICA sync: Discarding temporary DB in background");
         } else {
-            /* Remove the half-loaded data in case we started with an empty replica. */
-            serverLog(LL_NOTICE, "PRIMARY <-> REPLICA sync: Discarding the half-loaded data");
-            emptyData(-1, empty_db_flags, replicationEmptyDbCallback);
+            /* If we received RDB_INCOMPATIBLE, the old data was preserved */
+            if (retval == RDB_INCOMPATIBLE) {
+                serverLog(LL_NOTICE, "PRIMARY <-> REPLICA sync: RDB version or signature incompatible, old data preserved");
+            } else {
+                /* Remove the half-loaded data in case the load failed for other reasons. */
+                serverLog(LL_NOTICE, "PRIMARY <-> REPLICA sync: Discarding the half-loaded data");
+                emptyData(-1, empty_db_flags, replicationEmptyDbCallback);
+            }
         }
 
         /* Note that there's no point in restarting the AOF on SYNC
@@ -2415,14 +2551,12 @@ int replicaLoadPrimaryRDBFromDisk(rdbSaveInfo *rsi) {
      * we must discard the cached primary structure and force resync of sub-replicas. */
     replicationAttachToNewPrimary();
 
-    /* Empty the databases only after the RDB file is ok, that is, before the RDB file
-     * is actually loaded, in case we encounter an error and drop the replication stream
-     * and leave an empty database. */
-    serverLog(LL_NOTICE, "PRIMARY <-> REPLICA sync: Flushing old data");
-    emptyData(-1, empty_db_flags, replicationEmptyDbCallback);
-
+    /* We pass RDBFLAGS_EMPTY_DATA to call emptyData() after validating rdb compatibility
+     * and before loading the data from the RDB */
     serverLog(LL_NOTICE, "PRIMARY <-> REPLICA sync: Loading DB in memory");
-    if (rdbLoad(server.rdb_filename, rsi, RDBFLAGS_REPLICATION) != RDB_OK) {
+    int retval = rdbLoad(server.rdb_filename, rsi, RDBFLAGS_REPLICATION | RDBFLAGS_EMPTY_DATA);
+
+    if (retval != RDB_OK) {
         serverLog(LL_WARNING, "Failed trying to load the PRIMARY synchronization "
                               "DB from disk, check server logs.");
         if (server.rdb_del_sync_files && allPersistenceDisabled()) {
@@ -2432,9 +2566,15 @@ int replicaLoadPrimaryRDBFromDisk(rdbSaveInfo *rsi) {
             bg_unlink(server.rdb_filename);
         }
 
-        /* If disk-based RDB loading fails, remove the half-loaded dataset. */
-        serverLog(LL_NOTICE, "PRIMARY <-> REPLICA sync: Discarding the half-loaded data");
-        emptyData(-1, empty_db_flags, replicationEmptyDbCallback);
+        /* If RDB failed compatibility check, we did not load the new data set or flush our old data. */
+        if (retval == RDB_INCOMPATIBLE) {
+            serverLog(LL_NOTICE, "PRIMARY <-> REPLICA sync: Skipping flush, no new data was loaded.");
+        } else {
+            /* If disk-based RDB loading fails, remove the half-loaded dataset. */
+            serverLog(LL_NOTICE, "PRIMARY <-> REPLICA sync: Discarding the half-loaded data");
+            emptyData(-1, empty_db_flags, replicationEmptyDbCallback);
+        }
+
 
         /* Note that there's no point in restarting the AOF on sync failure,
          * it'll be restarted when sync succeeds or replica promoted. */
@@ -2670,7 +2810,7 @@ done:
     }
 }
 
-char *receiveSynchronousResponse(connection *conn) {
+sds receiveSynchronousResponse(connection *conn) {
     char buf[256];
     /* Read the reply from the server. */
     if (connSyncReadLine(conn, buf, sizeof(buf), server.repl_syncio_timeout * 1000) == -1) {
@@ -2682,7 +2822,7 @@ char *receiveSynchronousResponse(connection *conn) {
 }
 
 /* Send a pre-formatted multi-bulk command to the connection. */
-char *sendCommandRaw(connection *conn, sds cmd) {
+sds sendCommandRaw(connection *conn, sds cmd) {
     if (connSyncWrite(conn, cmd, sdslen(cmd), server.repl_syncio_timeout * 1000) == -1) {
         return sdscatprintf(sdsempty(), "-Writing to master: %s", connGetLastError(conn));
     }
@@ -2698,7 +2838,7 @@ char *sendCommandRaw(connection *conn, sds cmd) {
  * The command returns an sds string representing the result of the
  * operation. On error the first byte is a "-".
  */
-char *sendCommand(connection *conn, ...) {
+sds sendCommand(connection *conn, ...) {
     va_list ap;
     sds cmd = sdsempty();
     sds cmdargs = sdsempty();
@@ -2721,7 +2861,7 @@ char *sendCommand(connection *conn, ...) {
     sdsfree(cmdargs);
 
     va_end(ap);
-    char *err = sendCommandRaw(conn, cmd);
+    sds err = sendCommandRaw(conn, cmd);
     sdsfree(cmd);
     if (err) return err;
     return NULL;
@@ -2736,7 +2876,7 @@ char *sendCommand(connection *conn, ...) {
  * The command returns an sds string representing the result of the
  * operation. On error the first byte is a "-".
  */
-char *sendCommandArgv(connection *conn, int argc, char **argv, size_t *argv_lens) {
+sds sendCommandArgv(connection *conn, int argc, char **argv, size_t *argv_lens) {
     sds cmd = sdsempty();
     char *arg;
     int i;
@@ -2751,7 +2891,7 @@ char *sendCommandArgv(connection *conn, int argc, char **argv, size_t *argv_lens
         cmd = sdscatlen(cmd, arg, len);
         cmd = sdscatlen(cmd, "\r\n", 2);
     }
-    char *err = sendCommandRaw(conn, cmd);
+    sds err = sendCommandRaw(conn, cmd);
     sdsfree(cmd);
     if (err) return err;
     return NULL;
@@ -2775,7 +2915,7 @@ sds getReplicaPortString(void) {
 /* Replication: Replica side.
  * Free replica's local replication buffer */
 void freePendingReplDataBuf(void) {
-    listRelease(server.pending_repl_data.blocks);
+    if (server.pending_repl_data.blocks) freePendingReplDataBufAsync(server.pending_repl_data.blocks);
     server.pending_repl_data.blocks = NULL;
     server.pending_repl_data.len = 0;
 }
@@ -2845,22 +2985,38 @@ int sendCurrentOffsetToReplica(client *replica) {
     return C_OK;
 }
 
+sds replicationSendAuth(connection *conn) {
+    char *args[] = {"AUTH", NULL, NULL};
+    size_t lens[] = {4, 0, 0};
+    int argc = 1;
+    if (server.primary_user) {
+        args[argc] = server.primary_user;
+        lens[argc] = strlen(server.primary_user);
+        argc++;
+    }
+    args[argc] = server.primary_auth;
+    lens[argc] = sdslen(server.primary_auth);
+    argc++;
+    return sendCommandArgv(conn, argc, args, lens);
+}
+
+robj *generateSelectCommand(int dictid) {
+    /* For a few DBs we have pre-computed SELECT command. */
+    if (dictid >= 0 && dictid < PROTO_SHARED_SELECT_CMDS) {
+        return shared.select[dictid];
+    }
+    char llstr[LONG_STR_SIZE];
+    int dictid_len;
+    dictid_len = ll2string(llstr, sizeof(llstr), dictid);
+    return createObject(
+        OBJ_STRING, sdscatfmt(sdsempty(), "*2\r\n$6\r\nSELECT\r\n$%i\r\n%s\r\n", dictid_len, llstr));
+}
+
 static int dualChannelReplHandleHandshake(connection *conn, sds *err) {
     dualChannelServerLog(LL_DEBUG, "Received first reply from primary using rdb connection.");
     /* AUTH with the primary if required. */
     if (server.primary_auth) {
-        char *args[] = {"AUTH", NULL, NULL};
-        size_t lens[] = {4, 0, 0};
-        int argc = 1;
-        if (server.primary_user) {
-            args[argc] = server.primary_user;
-            lens[argc] = strlen(server.primary_user);
-            argc++;
-        }
-        args[argc] = server.primary_auth;
-        lens[argc] = sdslen(server.primary_auth);
-        argc++;
-        *err = sendCommandArgv(conn, argc, args, lens);
+        *err = replicationSendAuth(conn);
         if (*err) {
             dualChannelServerLog(LL_WARNING, "Sending command to primary in dual channel replication handshake: %s", *err);
             return C_ERR;
@@ -2874,6 +3030,14 @@ static int dualChannelReplHandleHandshake(connection *conn, sds *err) {
     if (*err) {
         dualChannelServerLog(LL_WARNING, "Sending command to primary in dual channel replication handshake: %s", *err);
         return C_ERR;
+    }
+
+    if (server.replica_announce_ip) {
+        *err = sendCommand(conn, "REPLCONF", "ip-address", server.replica_announce_ip, NULL);
+        if (*err) {
+            dualChannelServerLog(LL_WARNING, "Sending command to primary in dual channel replication handshake: %s", *err);
+            return C_ERR;
+        }
     }
 
     if (connSetReadHandler(conn, dualChannelFullSyncWithPrimary) == C_ERR) {
@@ -2911,6 +3075,22 @@ static int dualChannelReplHandleReplconfReply(connection *conn, sds *err) {
                              *err);
         return C_ERR;
     }
+
+    /* If replica-announce-ip is configured, we sent an additional REPLCONF ip-address command
+     * and need to read its response as well. */
+    if (server.replica_announce_ip) {
+        sdsfree(*err);
+        *err = receiveSynchronousResponse(conn);
+        if (*err == NULL) {
+            dualChannelServerLog(LL_WARNING, "Primary did not respond to REPLCONF ip-address command during SYNC handshake");
+            return C_ERR;
+        }
+        if ((*err)[0] == '-') {
+            dualChannelServerLog(LL_WARNING, "Primary rejected REPLCONF ip-address: %s", *err);
+            return C_ERR;
+        }
+    }
+
     if (connSyncWrite(conn, "SYNC\r\n", 6, server.repl_syncio_timeout * 1000) == -1) {
         dualChannelServerLog(LL_WARNING, "I/O error writing to Primary: %s", connGetLastError(conn));
         return C_ERR;
@@ -3106,7 +3286,10 @@ void bufferReplData(connection *conn) {
         if (readlen && remaining_bytes == 0) {
             if (server.client_obuf_limits[CLIENT_TYPE_REPLICA].hard_limit_bytes &&
                 server.pending_repl_data.len > server.client_obuf_limits[CLIENT_TYPE_REPLICA].hard_limit_bytes) {
-                dualChannelServerLog(LL_NOTICE, "Replication buffer limit reached, stopping buffering.");
+                dualChannelServerLog(LL_NOTICE,
+                                     "Replication buffer limit reached (%llu bytes), stopping buffering. "
+                                     "Further accumulation will occur on primary side.",
+                                     server.client_obuf_limits[CLIENT_TYPE_REPLICA].hard_limit_bytes);
                 /* Stop accumulating primary commands. */
                 connSetReadHandler(conn, NULL);
                 break;
@@ -3604,18 +3787,7 @@ int syncWithPrimaryHandleSendHandshakeState(connection *conn) {
     sds err;
     /* AUTH with the primary if required. */
     if (server.primary_auth) {
-        char *args[3] = {"AUTH", NULL, NULL};
-        size_t lens[3] = {4, 0, 0};
-        int argc = 1;
-        if (server.primary_user) {
-            args[argc] = server.primary_user;
-            lens[argc] = strlen(server.primary_user);
-            argc++;
-        }
-        args[argc] = server.primary_auth;
-        lens[argc] = sdslen(server.primary_auth);
-        argc++;
-        err = sendCommandArgv(conn, argc, args, lens);
+        err = replicationSendAuth(conn);
         if (err) goto err;
     }
 
@@ -4011,8 +4183,9 @@ void syncWithPrimary(connection *conn) {
      * but there is nothing technically wrong with a full resync which
      * could happen in edge cases. */
     if (server.failover_state == FAILOVER_IN_PROGRESS) {
-        if (psync_result == PSYNC_CONTINUE || psync_result == PSYNC_FULLRESYNC) {
-            clearFailoverState();
+        if (psync_result == PSYNC_CONTINUE || psync_result == PSYNC_FULLRESYNC ||
+            psync_result == PSYNC_FULLRESYNC_DUAL_CHANNEL) {
+            clearFailoverState(true);
         } else {
             abortFailover("Failover target rejected psync request");
             return;
@@ -4083,7 +4256,7 @@ void syncWithPrimary(connection *conn) {
         if (connConnect(server.repl_rdb_transfer_s, server.primary_host, server.primary_port, server.bind_source_addr,
                         server.repl_mptcp, dualChannelFullSyncWithPrimary) == C_ERR) {
             dualChannelServerLog(LL_WARNING, "Unable to connect to Primary: %s",
-                                 connGetLastError(server.repl_transfer_s));
+                                 connGetLastError(server.repl_rdb_transfer_s));
             connClose(server.repl_rdb_transfer_s);
             server.repl_rdb_transfer_s = NULL;
             syncWithPrimaryHandleError(&conn);
@@ -4229,7 +4402,7 @@ int cancelReplicationHandshake(int reconnect) {
 }
 
 /* Set replication to the specified primary address and port. */
-void replicationSetPrimary(char *ip, int port, int full_sync_required) {
+void replicationSetPrimary(char *ip, int port, int full_sync_required, bool disconnect_blocked) {
     int was_primary = server.primary_host == NULL;
 
     sdsfree(server.primary_host);
@@ -4243,13 +4416,18 @@ void replicationSetPrimary(char *ip, int port, int full_sync_required) {
         server.primary->flag.dont_cache_primary = full_sync_required;
         freeClient(server.primary);
     }
-    disconnectAllBlockedClients(); /* Clients blocked in primary, now replica. */
 
     /* Setting primary_host only after the call to freeClient since it calls
      * replicationHandlePrimaryDisconnection which can trigger a re-connect
      * directly from within that call. */
     server.primary_host = sdsnew(ip);
     server.primary_port = port;
+
+    /* Clients blocked in primary, now replica.
+     * Note that we need to set the new primary first
+     * since unblocking clients require redirecting to the new primary */
+    if (disconnect_blocked)
+        disconnectOrRedirectAllBlockedClients();
 
     /* Update oom_score_adj */
     setOOMScoreAdj(-1);
@@ -4336,6 +4514,9 @@ void replicationUnsetPrimary(void) {
     /* Restart the AOF subsystem in case we shut it down during a sync when
      * we were still a replica. */
     if (server.aof_enabled && server.aof_state == AOF_OFF) restartAOFAfterSYNC();
+
+    /* Cancel any ongoing atomic slot migrations */
+    clusterCleanSlotImportsOnPromotion();
 }
 
 /* This function is called when the replica lose the connection with the
@@ -4375,7 +4556,7 @@ void replicaofCommand(client *c) {
 
     /* The special host/port combination "NO" "ONE" turns the instance
      * into a primary. Otherwise the new primary address is set. */
-    if (!strcasecmp(c->argv[1]->ptr, "no") && !strcasecmp(c->argv[2]->ptr, "one")) {
+    if (!strcasecmp(objectGetVal(c->argv[1]), "no") && !strcasecmp(objectGetVal(c->argv[2]), "one")) {
         if (server.primary_host) {
             replicationUnsetPrimary();
             sds client = catClientInfoShortString(sdsempty(), c, server.hide_user_data_from_log);
@@ -4396,7 +4577,7 @@ void replicaofCommand(client *c) {
         if (getRangeLongFromObjectOrReply(c, c->argv[2], 0, 65535, &port, "Invalid master port") != C_OK) return;
 
         /* Check if we are already attached to the specified primary */
-        if (server.primary_host && !strcasecmp(server.primary_host, c->argv[1]->ptr) && server.primary_port == port) {
+        if (server.primary_host && !strcasecmp(server.primary_host, objectGetVal(c->argv[1])) && server.primary_port == port) {
             serverLog(LL_NOTICE, "REPLICAOF would result into synchronization "
                                  "with the primary we are already connected "
                                  "with. No operation performed.");
@@ -4406,7 +4587,7 @@ void replicaofCommand(client *c) {
         }
         /* There was no previous primary or the user specified a different one,
          * we can continue. */
-        replicationSetPrimary(c->argv[1]->ptr, port, 0);
+        replicationSetPrimary(objectGetVal(c->argv[1]), port, 0, true);
         sds client = catClientInfoShortString(sdsempty(), c, server.hide_user_data_from_log);
         serverLog(LL_NOTICE, "REPLICAOF %s:%d enabled (user request from '%s')", server.primary_host,
                   server.primary_port, client);
@@ -4543,6 +4724,10 @@ void replicationCachePrimary(client *c) {
     c->bufpos = 0;
     resetClient(c);
     resetClientIOState(c);
+    c->reqtype = 0;
+    c->multibulklen = 0;
+    c->bulklen = -1;
+    discardCommandQueue(c);
 
     /* Save the primary. Server.primary will be set to null later by
      * replicationHandlePrimaryDisconnection(). */
@@ -4747,9 +4932,6 @@ void replicationRequestAckFromReplicas(void) {
  * returns the actual client woff */
 long long getClientWriteOffset(client *c) {
     if (scriptIsRunning()) {
-        /* If a script is currently running, the client passed in is a fake
-         * client, and its woff is always 0. */
-        serverAssert(scriptGetClient() == c);
         c = scriptGetCaller();
     }
     return c->woff;
@@ -5207,7 +5389,7 @@ void replicationCron(void) {
     replication_cron_loops++; /* Incremented with frequency 1 HZ. */
 }
 
-int shouldStartChildReplication(int *mincapa_out, int *req_out) {
+int shouldStartChildReplication(int *mincapa_out, int *req_out, int *rdbver_out) {
     /* We should start a BGSAVE good for replication if we have replicas in
      * WAIT_BGSAVE_START state.
      *
@@ -5218,6 +5400,7 @@ int shouldStartChildReplication(int *mincapa_out, int *req_out) {
         time_t idle, max_idle = 0;
         int replicas_waiting = 0;
         int mincapa;
+        int rdbver;
         int req;
         int first = 1;
         listNode *ln;
@@ -5230,7 +5413,9 @@ int shouldStartChildReplication(int *mincapa_out, int *req_out) {
                 if (first) {
                     /* Get first replica's requirements */
                     req = replica->repl_data->replica_req;
-                } else if (req != replica->repl_data->replica_req) {
+                    rdbver = replicaRdbVersion(replica);
+                } else if (req != replica->repl_data->replica_req ||
+                           rdbver != replicaRdbVersion(replica)) {
                     /* Skip replicas that don't match */
                     continue;
                 }
@@ -5248,6 +5433,7 @@ int shouldStartChildReplication(int *mincapa_out, int *req_out) {
                                  max_idle >= server.repl_diskless_sync_delay)) {
             if (mincapa_out) *mincapa_out = mincapa;
             if (req_out) *req_out = req;
+            if (rdbver_out) *rdbver_out = rdbver;
             return 1;
         }
     }
@@ -5258,12 +5444,13 @@ int shouldStartChildReplication(int *mincapa_out, int *req_out) {
 void replicationStartPendingFork(void) {
     int mincapa = -1;
     int req = -1;
+    int rdbver = -1;
 
-    if (shouldStartChildReplication(&mincapa, &req)) {
+    if (shouldStartChildReplication(&mincapa, &req, &rdbver)) {
         /* Start the BGSAVE. The called function may start a
          * BGSAVE with socket target or disk target depending on the
          * configuration and replicas capabilities and requirements. */
-        startBgsaveForReplication(mincapa, req);
+        startBgsaveForReplication(mincapa, req, rdbver);
     }
 }
 
@@ -5301,13 +5488,14 @@ const char *getFailoverStateString(void) {
 /* Resets the internal failover configuration, this needs
  * to be called after a failover either succeeds or fails
  * as it includes the client unpause. */
-void clearFailoverState(void) {
+void clearFailoverState(bool success) {
     server.failover_end_time = 0;
     server.force_failover = 0;
     zfree(server.target_replica_host);
     server.target_replica_host = NULL;
     server.target_replica_port = 0;
     server.failover_state = NO_FAILOVER;
+    if (success) disconnectOrRedirectAllBlockedClients();
     unpauseActions(PAUSE_DURING_FAILOVER);
 }
 
@@ -5324,7 +5512,7 @@ void abortFailover(const char *err) {
     if (server.failover_state == FAILOVER_IN_PROGRESS) {
         replicationUnsetPrimary();
     }
-    clearFailoverState();
+    clearFailoverState(false);
 }
 
 /*
@@ -5360,7 +5548,7 @@ void failoverCommand(client *c) {
     }
 
     /* Handle special case for abort */
-    if ((c->argc == 2) && !strcasecmp(c->argv[1]->ptr, "abort")) {
+    if ((c->argc == 2) && !strcasecmp(objectGetVal(c->argv[1]), "abort")) {
         if (server.failover_state == NO_FAILOVER) {
             addReplyError(c, "No failover in progress.");
             return;
@@ -5378,18 +5566,18 @@ void failoverCommand(client *c) {
 
     /* Parse the command for syntax and arguments. */
     for (int j = 1; j < c->argc; j++) {
-        if (!strcasecmp(c->argv[j]->ptr, "timeout") && (j + 1 < c->argc) && timeout_in_ms == 0) {
+        if (!strcasecmp(objectGetVal(c->argv[j]), "timeout") && (j + 1 < c->argc) && timeout_in_ms == 0) {
             if (getLongFromObjectOrReply(c, c->argv[j + 1], &timeout_in_ms, NULL) != C_OK) return;
             if (timeout_in_ms <= 0) {
                 addReplyError(c, "FAILOVER timeout must be greater than 0");
                 return;
             }
             j++;
-        } else if (!strcasecmp(c->argv[j]->ptr, "to") && (j + 2 < c->argc) && !host) {
+        } else if (!strcasecmp(objectGetVal(c->argv[j]), "to") && (j + 2 < c->argc) && !host) {
             if (getLongFromObjectOrReply(c, c->argv[j + 2], &port, NULL) != C_OK) return;
-            host = c->argv[j + 1]->ptr;
+            host = objectGetVal(c->argv[j + 1]);
             j += 2;
-        } else if (!strcasecmp(c->argv[j]->ptr, "force") && !force_flag) {
+        } else if (!strcasecmp(objectGetVal(c->argv[j]), "force") && !force_flag) {
             force_flag = 1;
         } else {
             addReplyErrorObject(c, shared.syntaxerr);
@@ -5456,9 +5644,8 @@ void failoverCommand(client *c) {
 /* Failover cron function, checks coordinated failover state.
  *
  * Implementation note: The current implementation calls replicationSetPrimary()
- * to start the failover request, this has some unintended side effects if the
- * failover doesn't work like blocked clients will be unblocked and replicas will
- * be disconnected. This could be optimized further.
+ * to start the failover request, but blocked clients are no longer processed during
+ * failover. Instead, their handling is deferred and performed later in clearFailoverState().
  */
 void updateFailoverStatus(void) {
     if (server.failover_state != FAILOVER_WAIT_FOR_SYNC) return;
@@ -5471,7 +5658,7 @@ void updateFailoverStatus(void) {
                       server.target_replica_port);
             server.failover_state = FAILOVER_IN_PROGRESS;
             /* If timeout has expired force a failover if requested. */
-            replicationSetPrimary(server.target_replica_host, server.target_replica_port, 0);
+            replicationSetPrimary(server.target_replica_host, server.target_replica_port, 0, false);
             return;
         } else {
             /* Force was not requested, so timeout. */
@@ -5514,6 +5701,6 @@ void updateFailoverStatus(void) {
         serverLog(LL_NOTICE, "Failover target %s:%d is synced, failing over.", server.target_replica_host,
                   server.target_replica_port);
         /* Designated replica is caught up, failover to it. */
-        replicationSetPrimary(server.target_replica_host, server.target_replica_port, 0);
+        replicationSetPrimary(server.target_replica_host, server.target_replica_port, 0, false);
     }
 }

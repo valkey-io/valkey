@@ -349,16 +349,26 @@ unsigned long allocatorDefragGetFragSmallbins(void) {
  *    defragmentation is not necessary as moving regions is guaranteed not to change the fragmentation ratio.
  * 2. If the number of non-full slabs (bin_usage->curr_nonfull_slabs) is less than 2, defragmentation is not performed
  *    because there is no other slab to move regions to.
- * 3. If slab utilization < 'avg utilization'*1.125 [code 1.125 == (1000+UTILIZATION_THRESHOLD_FACTOR_MILLI)/1000]
+ * 3. Defrag if the slab is less than 1/8 full to ensure small slabs get defragmented even when average utilization is low.
+ *    This also handles the case when there are items that aren't defragmented skewing the average utilization. The 1/8
+ *    threshold (12.5%) was chosen to align with existing utilization threshold factor.
+ * 4. If slab utilization < 'avg utilization'*1.125 [code 1.125 == (1000+UTILIZATION_THRESHOLD_FACTOR_MILLI)/1000]
  *    than we should defrag. This is aligned with previous je_defrag_hint implementation.
  */
 static inline int makeDefragDecision(jeBinInfo *bin_info, jemallocBinUsageData *bin_usage, unsigned long nalloced) {
     unsigned long curr_full_slabs = bin_usage->curr_slabs - bin_usage->curr_nonfull_slabs;
     size_t allocated_nonfull = bin_usage->curr_regs - curr_full_slabs * bin_info->nregs;
-    if (bin_info->nregs == nalloced || bin_usage->curr_nonfull_slabs < 2 ||
-        1000 * nalloced * bin_usage->curr_nonfull_slabs > (1000 + UTILIZATION_THRESHOLD_FACTOR_MILLI) * allocated_nonfull) {
-        return 0;
-    }
+
+    /* Don't defrag if the slab is full or if there's only 1 nonfull slab */
+    if (bin_info->nregs == nalloced || bin_usage->curr_nonfull_slabs < 2) return 0;
+
+    /* Defrag if the slab is less than 1/8 full */
+    if (1000 * nalloced < bin_info->nregs * UTILIZATION_THRESHOLD_FACTOR_MILLI) return 1;
+
+    /* Don't defrag if the slab usage is greater than the average usage (+ 12.5%) */
+    if (1000 * nalloced * bin_usage->curr_nonfull_slabs > (1000 + UTILIZATION_THRESHOLD_FACTOR_MILLI) * allocated_nonfull) return 0;
+
+    /* Otherwise, defrag! */
     return 1;
 }
 

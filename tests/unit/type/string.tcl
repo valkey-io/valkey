@@ -285,10 +285,10 @@ start_server {tags {"string"}} {
         assert_error "ERR wrong number of arguments for 'msetex' command" {r msetex}
         assert_error "ERR wrong number of arguments for 'msetex' command" {r msetex key value}
 
-        assert_error "ERR invalid numkeys" {r msetex 0 key1{t} value}
-        assert_error "ERR invalid numkeys" {r msetex -1 key1{t} value}
-        assert_error "ERR invalid numkeys" {r msetex 1.5 key1{t} value}
-        assert_error "ERR invalid numkeys" {r msetex numkeys key1{t} value}
+        assert_error "ERR invalid numkeys value or out of range" {r msetex 0 key1{t} value}
+        assert_error "ERR invalid numkeys value or out of range" {r msetex -1 key1{t} value}
+        assert_error "ERR invalid numkeys value or out of range" {r msetex 1.5 key1{t} value}
+        assert_error "ERR invalid numkeys value or out of range" {r msetex numkeys key1{t} value}
 
         assert_error "ERR syntax error" {r msetex 2 key1{t} value}
         assert_error "ERR syntax error" {r msetex 2 key1{t} value key{2}}

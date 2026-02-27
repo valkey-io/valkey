@@ -18,6 +18,9 @@ concurrency:
   group: codecov-${{ github.head_ref || github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 jobs:
   code-coverage:
     runs-on: ubuntu-22.04

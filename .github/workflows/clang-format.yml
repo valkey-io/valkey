@@ -16,6 +16,9 @@ concurrency:
   group: clang-${{ github.head_ref || github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 jobs:
   clang-format-check:
     runs-on: ubuntu-latest

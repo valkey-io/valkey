@@ -16,6 +16,9 @@ on:
           - dev
           - prod
 
+permissions:
+  contents: read
+
 jobs:
   trigger:
     runs-on: ubuntu-latest

@@ -85,6 +85,7 @@
 #include "trace/trace.h"
 #include "entry.h"
 #include "lrulfu.h"
+#include "zskiplist.h"
 
 /*
  * Sanity check: we require large-file support. If include order caused
@@ -534,8 +535,7 @@ typedef enum {
 #define SUPERVISED_SYSTEMD 2
 #define SUPERVISED_UPSTART 3
 
-#define ZSKIPLIST_MAXLEVEL 32 /* Should be enough for 2^64 elements */
-#define ZSKIPLIST_MAX_SEARCH 10
+
 
 /* Append only defines */
 #define REPL_MAX_WRITTEN_BEFORE_FSYNC (1024 * 1024 * 8) /* 8 MB */
@@ -1483,38 +1483,6 @@ struct sharedObjectsStruct {
         *sethdr[OBJ_SHARED_BULKHDR_LEN];
     sds minstring, maxstring;
 };
-
-/* ZSETs use a specialized version of Skiplists */
-typedef struct zskiplistNode {
-    union {
-        double score;         /* Sorting score for node ordering. */
-        unsigned long length; /* Number of elements in the skiplist. */
-    };
-    union {
-        struct zskiplistNode *backward; /* Pointer to previous node for reverse traversal. */
-        struct zskiplistNode *tail;     /* Tail element of the skiplist. */
-    };
-    struct zskiplistLevel {
-        struct zskiplistNode *forward;
-        /* At each level we keep the span, which is the number of elements which are on the "subtree"
-         * from this node at this level to the next node at the same level.
-         * One exception is the value at level 0. In level 0 the span can only be 1 or 0 (in case the last elements in the list)
-         * So we use it in order to hold the height of the node, which is the number of levels. */
-        unsigned long span;
-    } level[1]; /* Flexible array member - actual levels determined at node creation. */
-    /* For non-header nodes, after the level[], sds header length (1 byte) and an embedded sds element are stored. */
-} zskiplistNode;
-
-/* The header node does not store actual data (no score, no backward pointer,
- * and its node height is fixed at ZSKIPLIST_MAXLEVEL).
- * To save memory, we reuse the memory space of these fields in the header node to store:
- *   - skiplist length (number of elements)
- *   - tail pointer to the last element
- *   - maximum current level of the skiplist
- * For detailed memory layout, refer to the zskiplistNode struct definition. */
-typedef struct zskiplist {
-    zskiplistNode header;
-} zskiplist;
 
 typedef struct zset {
     hashtable *ht;
@@ -3358,13 +3326,13 @@ void ACLRecomputeCommandBitsFromCommandRulesAllUsers(void);
 #define ZADD_OUT_UPDATED (1 << 3) /* The element already existed, score updated. */
 
 /* Struct to hold an inclusive/exclusive range spec by score comparison. */
-typedef struct {
+typedef struct zrangespec {
     double min, max;
     int minex, maxex; /* are min or max exclusive? */
 } zrangespec;
 
 /* Struct to hold an inclusive/exclusive range spec by lexicographic comparison. */
-typedef struct {
+typedef struct zlexrangespec {
     sds min, max;     /* May be set to shared.(minstring|maxstring) */
     int minex, maxex; /* are min or max exclusive? */
 } zlexrangespec;
@@ -3373,17 +3341,6 @@ typedef struct {
 #define ERROR_COMMAND_REJECTED (1 << 0) /* Indicate to update the command rejected stats */
 #define ERROR_COMMAND_FAILED (1 << 1)   /* Indicate to update the command failed stats */
 
-zskiplist *zslCreate(void);
-int zslGetHeight(const zskiplist *zsl);
-zskiplistNode *zslGetTail(const zskiplist *zsl);
-void zslSetTail(zskiplist *zsl, zskiplistNode *tail);
-unsigned long zslGetLength(const zskiplist *zsl);
-zskiplistNode *zslGetHeader(zskiplist *zsl);
-size_t zslGetAllocSize(void);
-void zslFree(zskiplist *zsl);
-zskiplistNode *zslInsert(zskiplist *zsl, double score, const_sds ele);
-zskiplistNode *zslNthInRange(zskiplist *zsl, zrangespec *range, long n, long *rank);
-sds zslGetNodeElement(const zskiplistNode *x);
 double zzlGetScore(unsigned char *sptr);
 void zzlNext(unsigned char *zl, unsigned char **eptr, unsigned char **sptr);
 void zzlPrev(unsigned char *zl, unsigned char **eptr, unsigned char **sptr);
@@ -3406,17 +3363,15 @@ void genericZpopCommand(client *c,
                         int reply_nil_when_empty,
                         int *deleted);
 sds lpGetObject(unsigned char *sptr);
-int zslValueGteMin(double value, zrangespec *spec);
-int zslValueLteMax(double value, zrangespec *spec);
 void zslFreeLexRange(zlexrangespec *spec);
 int zslParseLexRange(robj *min, robj *max, zlexrangespec *spec);
-unsigned char *zzlFirstInLexRange(unsigned char *zl, zlexrangespec *range);
-unsigned char *zzlLastInLexRange(unsigned char *zl, zlexrangespec *range);
 zskiplistNode *zslNthInLexRange(zskiplist *zsl, zlexrangespec *range, long n);
-int zzlLexValueGteMin(unsigned char *p, zlexrangespec *spec);
-int zzlLexValueLteMax(unsigned char *p, zlexrangespec *spec);
 int zslLexValueGteMin(sds value, zlexrangespec *spec);
 int zslLexValueLteMax(sds value, zlexrangespec *spec);
+unsigned char *zzlFirstInLexRange(unsigned char *zl, zlexrangespec *range);
+unsigned char *zzlLastInLexRange(unsigned char *zl, zlexrangespec *range);
+int zzlLexValueGteMin(unsigned char *p, zlexrangespec *spec);
+int zzlLexValueLteMax(unsigned char *p, zlexrangespec *spec);
 
 /* Core functions */
 int getMaxmemoryState(size_t *total, size_t *logical, size_t *tofree, float *level);

@@ -5056,7 +5056,7 @@ void zsetKeyReset(ValkeyModuleKey *key) {
 void VM_ZsetRangeStop(ValkeyModuleKey *key) {
     if (!key->value || key->value->type != OBJ_ZSET) return;
     /* Free resources if needed. */
-    if (key->u.zset.type == VALKEYMODULE_ZSET_RANGE_LEX) zslFreeLexRange(&key->u.zset.lrs);
+    if (key->u.zset.type == VALKEYMODULE_ZSET_RANGE_LEX) zsetFreeLexRange(&key->u.zset.lrs);
     /* Setup sensible values so that misused iteration API calls when an
      * iterator is not active will result into something more sensible
      * than crashing. */
@@ -5146,7 +5146,7 @@ int zsetInitLexRange(ValkeyModuleKey *key, ValkeyModuleString *min, ValkeyModule
     /* Setup the range structure used by the sorted set core implementation
      * in order to seek at the specified element. */
     zlexrangespec *zlrs = &key->u.zset.lrs;
-    if (zslParseLexRange(min, max, zlrs) == C_ERR) return VALKEYMODULE_ERR;
+    if (zsetParseLexRange(min, max, zlrs) == C_ERR) return VALKEYMODULE_ERR;
 
     /* Set the range type to lex only after successfully parsing the range,
      * otherwise we don't want the zlexrangespec to be freed. */

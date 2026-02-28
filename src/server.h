@@ -3408,8 +3408,8 @@ void genericZpopCommand(client *c,
 sds lpGetObject(unsigned char *sptr);
 int zslValueGteMin(double value, zrangespec *spec);
 int zslValueLteMax(double value, zrangespec *spec);
-void zslFreeLexRange(zlexrangespec *spec);
-int zslParseLexRange(robj *min, robj *max, zlexrangespec *spec);
+void zsetFreeLexRange(zlexrangespec *spec);
+int zsetParseLexRange(robj *min, robj *max, zlexrangespec *spec);
 unsigned char *zzlFirstInLexRange(unsigned char *zl, zlexrangespec *range);
 unsigned char *zzlLastInLexRange(unsigned char *zl, zlexrangespec *range);
 zskiplistNode *zslNthInLexRange(zskiplist *zsl, zlexrangespec *range, long n);

@@ -61,10 +61,27 @@
  * from tail to head, useful for ZREVRANGE. */
 
 #include "server.h"
+#include "zskiplist.h"
 #include "intset.h" /* Compact integer set structure */
 #include <math.h>
 
 #include "valkey_strtod.h"
+
+/*-----------------------------------------------------------------------------
+ * Zset hashtable type
+ *----------------------------------------------------------------------------*/
+
+static const void *zsetHashtableGetKey(const void *element) {
+    const zskiplistNode *node = element;
+    return zslGetNodeElement(node);
+}
+
+/* Sorted sets hash (note: a skiplist is used in addition to the hash table) */
+hashtableType zsetHashtableType = {
+    .hashFunction = dictSdsHash,
+    .entryGetKey = zsetHashtableGetKey,
+    .keyCompare = hashtableSdsKeyCompare,
+};
 
 /*-----------------------------------------------------------------------------
  * Skiplist implementation of the low level API

@@ -85,7 +85,6 @@
 #include "trace/trace.h"
 #include "entry.h"
 #include "lrulfu.h"
-#include "zskiplist.h"
 
 /*
  * Sanity check: we require large-file support. If include order caused
@@ -534,7 +533,6 @@ typedef enum {
 #define SUPERVISED_AUTODETECT 1
 #define SUPERVISED_SYSTEMD 2
 #define SUPERVISED_UPSTART 3
-
 
 
 /* Append only defines */
@@ -1484,6 +1482,7 @@ struct sharedObjectsStruct {
     sds minstring, maxstring;
 };
 
+typedef struct zskiplist zskiplist;
 typedef struct zset {
     hashtable *ht;
     zskiplist *zsl;
@@ -3365,7 +3364,6 @@ void genericZpopCommand(client *c,
 sds lpGetObject(unsigned char *sptr);
 void zslFreeLexRange(zlexrangespec *spec);
 int zslParseLexRange(robj *min, robj *max, zlexrangespec *spec);
-zskiplistNode *zslNthInLexRange(zskiplist *zsl, zlexrangespec *range, long n);
 int zslLexValueGteMin(sds value, zlexrangespec *spec);
 int zslLexValueLteMax(sds value, zlexrangespec *spec);
 unsigned char *zzlFirstInLexRange(unsigned char *zl, zlexrangespec *range);

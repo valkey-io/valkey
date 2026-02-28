@@ -29,6 +29,7 @@
  */
 
 #include "geo.h"
+#include "zskiplist.h"
 #include "geohash_helper.h"
 #include "debugmacro.h"
 #include "pqsort.h"

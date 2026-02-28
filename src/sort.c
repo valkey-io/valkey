@@ -30,6 +30,7 @@
 
 
 #include "server.h"
+#include "zskiplist.h"
 #include "pqsort.h" /* Partial qsort for SORT+LIMIT */
 #include <math.h>   /* isnan() */
 #include "cluster.h"

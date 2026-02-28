@@ -57,6 +57,7 @@
  * -------------------------------------------------------------------------- */
 
 #include "server.h"
+#include "zskiplist.h"
 #include "cluster.h"
 #include "commandlog.h"
 #include "rdb.h"

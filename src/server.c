@@ -569,18 +569,6 @@ hashtableType setHashtableType = {
     .keyCompare = hashtableSdsKeyCompare,
     .entryDestructor = dictSdsDestructor};
 
-const void *zsetHashtableGetKey(const void *element) {
-    const zskiplistNode *node = element;
-    return zslGetNodeElement(node);
-}
-
-/* Sorted sets hash (note: a skiplist is used in addition to the hash table) */
-hashtableType zsetHashtableType = {
-    .hashFunction = dictSdsHash,
-    .entryGetKey = zsetHashtableGetKey,
-    .keyCompare = hashtableSdsKeyCompare,
-};
-
 uint64_t hashtableSdsHash(const void *key) {
     return hashtableGenHashFunction((const char *)key, sdslen((char *)key));
 }

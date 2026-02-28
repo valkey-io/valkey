@@ -1,9 +1,10 @@
 /* Skiplist implementation for sorted sets.
- * 
+ *
  * This file contains the core skiplist data structure implementation.
  * Functions that depend on server types (robj, shared.*, hashtable) remain in t_zset.c.
  */
 
+#include "fmacros.h"
 #include "zskiplist.h"
 #include "server.h"
 #include "zmalloc.h"

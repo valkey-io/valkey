@@ -354,6 +354,12 @@ start_server {tags {"cli logreqres:skip"}} {
         assert_equal "foo\nbar" [run_cli lrange list 0 -1]
     }
 
+    test_nontty_cli "--eval should not crash valkey-cli" {
+        set scriptfile [write_tmpfile "return { 1 }"]
+        assert_equal "1" [run_cli --eval $scriptfile]
+        file delete $scriptfile
+    }
+
 if {!$::tls} { ;# fake_redis_node doesn't support TLS
     test_nontty_cli "ASK redirect test" {
         # Set up two fake nodes.

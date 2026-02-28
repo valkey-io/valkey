@@ -154,7 +154,15 @@ void setGenericCommand(client *c,
          * EX/PX/EXAT flag. */
         if (!(flags & ARGS_PXAT)) {
             robj *milliseconds_obj = createStringObjectFromLongLong(milliseconds);
-            rewriteClientCommandVector(c, 5, shared.set, key, val, shared.pxat, milliseconds_obj);
+            if (c->cmd->proc == setCommand && c->argc == 5) {
+                /* If the command is in the form of "SET key value EX/PX/EXAT ttl",
+                 * then we don't need to rewrite the entire command vector. */
+                serverAssert(flags & (ARGS_EX | ARGS_PX | ARGS_EXAT));
+                rewriteClientCommandArgument(c, 3, shared.pxat);
+                rewriteClientCommandArgument(c, 4, milliseconds_obj);
+            } else {
+                rewriteClientCommandVector(c, 5, shared.set, key, val, shared.pxat, milliseconds_obj);
+            }
             decrRefCount(milliseconds_obj);
         }
         notifyKeyspaceEvent(NOTIFY_GENERIC, "expire", key, c->db->id);

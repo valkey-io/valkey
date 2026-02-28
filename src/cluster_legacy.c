@@ -4055,6 +4055,9 @@ int clusterProcessPacket(clusterLink *link) {
          * what are the instances really competing. */
         if (sender) {
             int nofailover = flags & CLUSTER_NODE_NOFAILOVER;
+            if (nofailover != clusterNodeIsNoFailover(sender)) {
+                clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG);
+            }
             sender->flags &= ~CLUSTER_NODE_NOFAILOVER;
             sender->flags |= nofailover;
         }

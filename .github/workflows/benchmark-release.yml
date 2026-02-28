@@ -106,7 +106,7 @@ jobs:
               openssl-devel \
               bzip2-devel \
               libffi-devel
-          pip install -r requirements.txt
+          pip install --require-hashes -r requirements.txt
 
       - name: Build latest valkey_latest
         working-directory: valkey_latest

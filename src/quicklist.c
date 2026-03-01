@@ -389,17 +389,17 @@ static void __quicklistCompress(quicklist *quicklist, quicklistNode *node) {
  *
  * If the 'recompress' flag of the node is false, we check whether the node is
  * within the range of compress depth before compressing it. */
-#define quicklistCompress(_ql, _node)                \
-    do {                                             \
-        if ((_node)->recompress)                     \
-            quicklistCompressNode((_ql), (_node));   \
-        else                                         \
-            __quicklistCompress((_ql), (_node));     \
+#define quicklistCompress(_ql, _node)              \
+    do {                                           \
+        if ((_node)->recompress)                   \
+            quicklistCompressNode((_ql), (_node)); \
+        else                                       \
+            __quicklistCompress((_ql), (_node));   \
     } while (0)
 
 /* If we previously used quicklistDecompressNodeForUse(), just recompress. */
-#define quicklistRecompressOnly(_ql, _node)                              \
-    do {                                                                 \
+#define quicklistRecompressOnly(_ql, _node)                             \
+    do {                                                                \
         if ((_node)->recompress) quicklistCompressNode((_ql), (_node)); \
     } while (0)
 
@@ -1782,9 +1782,9 @@ quicklistNode *testOnlyQuicklistCreateNodeWithValue(int container, void *value, 
 }
 
 int testOnlyQuicklistCompressNode(quicklistNode *node) {
-    return __quicklistCompressNode(node);
+    return __quicklistCompressNode(NULL, node);
 }
 
 int testOnlyQuicklistDecompressNode(quicklistNode *node) {
-    return __quicklistDecompressNode(node);
+    return __quicklistDecompressNode(NULL, node);
 }

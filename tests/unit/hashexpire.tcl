@@ -2833,7 +2833,7 @@ tags {"aof external:skip"} {
                 set long_expire [expr {[clock seconds] + 1000000}]
                 # Create 10 fields with long expiry
                 for {set i 1} {$i <= 10} {incr i} {
-                    r HSETEX myhash EXAT $long_expire FIELDS 1 f$i v$i ;# 10 PX to aof
+                    r HSETEX myhash EXAT $long_expire FIELDS 1 f$i v$i ;# 10 PXAT to aof
                 }
 
                 # Create 10 fields with short expiry

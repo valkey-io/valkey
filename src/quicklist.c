@@ -119,30 +119,11 @@ static quicklistNode *_quicklistMergeNodes(quicklist *quicklist, quicklistNode *
         (iter)->zi = NULL;      \
     } while (0)
 
-/* Helper macros for tracking memory allocations.
- * Use quicklistTrackEntryBefore() before modifying node->entry,
- * and quicklistTrackEntryAfter() after the modification.
- * These macros handle NULL quicklist for standalone node operations (e.g., unit tests).
- *
- * The "After" macro reads lp_last_alloc_size which was set by the most recent
- * lp_malloc / lp_realloc inside the listpack operation that just modified
- * node->entry.  This avoids an expensive zmalloc_size() call. */
-#define quicklistTrackEntryBefore(ql, node) \
-    size_t _old_entry_sz = (node)->entry_alloc_sz
-
-#define quicklistTrackEntryAfter(ql, node)                                     \
-    do {                                                                       \
-        (node)->entry_alloc_sz = lp_last_alloc_size;                                 \
-        if (ql) (ql)->tracked_size += (node)->entry_alloc_sz - _old_entry_sz;        \
-    } while (0)
-
-/* Track node struct and entry deallocation.
- * Use sizeof(quicklistNode) instead of zmalloc_size(node) to match
- * the original objectComputeSize calculation. */
-#define quicklistTrackNodeFree(ql, node)                                               \
-    do {                                                                               \
-        if (ql) (ql)->tracked_size -= (node)->entry_alloc_sz + sizeof(quicklistNode);        \
-    } while (0)
+/* After a listpack operation that reallocates node->entry (e.g. lpPrepend,
+ * lpAppend, lpDelete, lpInsertString, lpReplace, lpDeleteRange), the
+ * lp_last_alloc_size thread-local holds the usable allocation size of the
+ * new entry buffer.  We use it to update node->entry_alloc_sz and
+ * quicklist->tracked_size without calling zmalloc_size(). */
 
 /* Create a new quicklist.
  * Free with quicklistRelease(). */
@@ -595,9 +576,10 @@ int quicklistPushHead(quicklist *quicklist, void *value, size_t sz) {
     }
 
     if (likely(_quicklistNodeAllowInsert(quicklist->head, quicklist->fill, sz))) {
-        quicklistTrackEntryBefore(quicklist, quicklist->head);
+        size_t old_sz = quicklist->head->entry_alloc_sz;
         quicklist->head->entry = lpPrepend(quicklist->head->entry, value, sz);
-        quicklistTrackEntryAfter(quicklist, quicklist->head);
+        quicklist->head->entry_alloc_sz = lp_last_alloc_size;
+        quicklist->tracked_size += quicklist->head->entry_alloc_sz - old_sz;
         quicklistNodeUpdateSz(quicklist->head);
     } else {
         quicklistNode *node = quicklistCreateNode();
@@ -624,9 +606,10 @@ int quicklistPushTail(quicklist *quicklist, void *value, size_t sz) {
     }
 
     if (likely(_quicklistNodeAllowInsert(quicklist->tail, quicklist->fill, sz))) {
-        quicklistTrackEntryBefore(quicklist, quicklist->tail);
+        size_t old_sz = quicklist->tail->entry_alloc_sz;
         quicklist->tail->entry = lpAppend(quicklist->tail->entry, value, sz);
-        quicklistTrackEntryAfter(quicklist, quicklist->tail);
+        quicklist->tail->entry_alloc_sz = lp_last_alloc_size;
+        quicklist->tracked_size += quicklist->tail->entry_alloc_sz - old_sz;
         quicklistNodeUpdateSz(quicklist->tail);
     } else {
         quicklistNode *node = quicklistCreateNode();
@@ -709,7 +692,7 @@ static void __quicklistDelNode(quicklist *quicklist, quicklistNode *node) {
      * now have compressed nodes needing to be decompressed. */
     __quicklistCompress(quicklist, NULL);
 
-    quicklistTrackNodeFree(quicklist, node);
+    quicklist->tracked_size -= node->entry_alloc_sz + sizeof(quicklistNode);
     zfree(node->entry);
     zfree(node);
 }
@@ -729,9 +712,10 @@ static int quicklistDelIndex(quicklist *quicklist, quicklistNode *node, unsigned
         __quicklistDelNode(quicklist, node);
         return 1;
     }
-    quicklistTrackEntryBefore(quicklist, node);
+    size_t old_sz = node->entry_alloc_sz;
     node->entry = lpDelete(node->entry, *p, p);
-    quicklistTrackEntryAfter(quicklist, node);
+    node->entry_alloc_sz = lp_last_alloc_size;
+    quicklist->tracked_size += node->entry_alloc_sz - old_sz;
     node->count--;
     if (node->count == 0) {
         gone = 1;
@@ -887,18 +871,19 @@ static quicklistNode *_quicklistListpackMerge(quicklist *quicklist, quicklistNod
         if (!a->entry) {
             nokeep = a;
             keep = b;
-            /* Update tracked size: a's entry was freed, b's entry was reallocated */
+            /* Update tracked size: b's entry was reallocated by lpMerge */
             keep->entry_alloc_sz = lp_last_alloc_size;
-            quicklist->tracked_size -= a_entry_sz;
             quicklist->tracked_size += keep->entry_alloc_sz - b_entry_sz;
         } else if (!b->entry) {
             nokeep = b;
             keep = a;
-            /* Update tracked size: b's entry was freed, a's entry was reallocated */
+            /* Update tracked size: a's entry was reallocated by lpMerge */
             keep->entry_alloc_sz = lp_last_alloc_size;
-            quicklist->tracked_size -= b_entry_sz;
             quicklist->tracked_size += keep->entry_alloc_sz - a_entry_sz;
         }
+        /* nokeep->entry was freed by lpMerge (entry is NULL), but we leave
+         * nokeep->entry_alloc_sz unchanged so __quicklistDelNode subtracts
+         * the correct amount (entry_alloc_sz + sizeof(node)). */
         keep->count = lpLength(keep->entry);
         quicklistNodeUpdateSz(keep);
         keep->recompress = 0; /* Prevent 'keep' from being recompressed if
@@ -1007,9 +992,10 @@ static quicklistNode *_quicklistSplitNode(quicklist *quicklist, quicklistNode *n
     D("After %d (%d); ranges: [%d, %d], [%d, %d]", after, offset, orig_start, orig_extent, new_start, new_extent);
 
     /* Track entry change for original node (new_node not in list yet) */
-    quicklistTrackEntryBefore(quicklist, node);
+    size_t old_sz = node->entry_alloc_sz;
     node->entry = lpDeleteRange(node->entry, orig_start, orig_extent);
-    quicklistTrackEntryAfter(quicklist, node);
+    node->entry_alloc_sz = lp_last_alloc_size;
+    if (quicklist) quicklist->tracked_size += node->entry_alloc_sz - old_sz;
     node->count = lpLength(node->entry);
     quicklistNodeUpdateSz(node);
 
@@ -1091,18 +1077,20 @@ static void _quicklistInsert(quicklistIter *iter, quicklistEntry *entry, void *v
     if (!full && after) {
         D("Not full, inserting after current position.");
         quicklistDecompressNodeForUse(quicklist, node);
-        quicklistTrackEntryBefore(quicklist, node);
+        size_t old_sz = node->entry_alloc_sz;
         node->entry = lpInsertString(node->entry, value, sz, entry->zi, LP_AFTER, NULL);
-        quicklistTrackEntryAfter(quicklist, node);
+        node->entry_alloc_sz = lp_last_alloc_size;
+        quicklist->tracked_size += node->entry_alloc_sz - old_sz;
         node->count++;
         quicklistNodeUpdateSz(node);
         quicklistRecompressOnly(quicklist, node);
     } else if (!full && !after) {
         D("Not full, inserting before current position.");
         quicklistDecompressNodeForUse(quicklist, node);
-        quicklistTrackEntryBefore(quicklist, node);
+        size_t old_sz = node->entry_alloc_sz;
         node->entry = lpInsertString(node->entry, value, sz, entry->zi, LP_BEFORE, NULL);
-        quicklistTrackEntryAfter(quicklist, node);
+        node->entry_alloc_sz = lp_last_alloc_size;
+        quicklist->tracked_size += node->entry_alloc_sz - old_sz;
         node->count++;
         quicklistNodeUpdateSz(node);
         quicklistRecompressOnly(quicklist, node);
@@ -1112,9 +1100,10 @@ static void _quicklistInsert(quicklistIter *iter, quicklistEntry *entry, void *v
         D("Full and tail, but next isn't full; inserting next node head");
         new_node = node->next;
         quicklistDecompressNodeForUse(quicklist, new_node);
-        quicklistTrackEntryBefore(quicklist, new_node);
+        size_t old_sz = new_node->entry_alloc_sz;
         new_node->entry = lpPrepend(new_node->entry, value, sz);
-        quicklistTrackEntryAfter(quicklist, new_node);
+        new_node->entry_alloc_sz = lp_last_alloc_size;
+        quicklist->tracked_size += new_node->entry_alloc_sz - old_sz;
         new_node->count++;
         quicklistNodeUpdateSz(new_node);
         quicklistRecompressOnly(quicklist, new_node);
@@ -1125,9 +1114,10 @@ static void _quicklistInsert(quicklistIter *iter, quicklistEntry *entry, void *v
         D("Full and head, but prev isn't full, inserting prev node tail");
         new_node = node->prev;
         quicklistDecompressNodeForUse(quicklist, new_node);
-        quicklistTrackEntryBefore(quicklist, new_node);
+        size_t old_sz = new_node->entry_alloc_sz;
         new_node->entry = lpAppend(new_node->entry, value, sz);
-        quicklistTrackEntryAfter(quicklist, new_node);
+        new_node->entry_alloc_sz = lp_last_alloc_size;
+        quicklist->tracked_size += new_node->entry_alloc_sz - old_sz;
         new_node->count++;
         quicklistNodeUpdateSz(new_node);
         quicklistRecompressOnly(quicklist, new_node);
@@ -1148,12 +1138,12 @@ static void _quicklistInsert(quicklistIter *iter, quicklistEntry *entry, void *v
         D("\tsplitting node...");
         quicklistDecompressNodeForUse(quicklist, node);
         new_node = _quicklistSplitNode(quicklist, node, entry->offset, after);
-        quicklistTrackEntryBefore(quicklist, new_node);
         if (after)
             new_node->entry = lpPrepend(new_node->entry, value, sz);
         else
             new_node->entry = lpAppend(new_node->entry, value, sz);
-        quicklistTrackEntryAfter(quicklist, new_node);
+        new_node->entry_alloc_sz = lp_last_alloc_size;
+        /* Don't track delta here; __quicklistInsertNode below adds the full entry_alloc_sz */
         new_node->count++;
         quicklistNodeUpdateSz(new_node);
         __quicklistInsertNode(quicklist, node, new_node, after);
@@ -1243,9 +1233,10 @@ int quicklistDelRange(quicklist *quicklist, const long start, const long count) 
             __quicklistDelNode(quicklist, node);
         } else {
             quicklistDecompressNodeForUse(quicklist, node);
-            quicklistTrackEntryBefore(quicklist, node);
+            size_t old_sz = node->entry_alloc_sz;
             node->entry = lpDeleteRange(node->entry, offset, del);
-            quicklistTrackEntryAfter(quicklist, node);
+            node->entry_alloc_sz = lp_last_alloc_size;
+            quicklist->tracked_size += node->entry_alloc_sz - old_sz;
             quicklistNodeUpdateSz(node);
             node->count -= del;
             quicklist->count -= del;

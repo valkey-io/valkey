@@ -1,5 +1,8 @@
 name: "Codecov"
 
+permissions:
+  contents: read
+
 # Enabling on each push is to display the coverage changes in every PR, 
 # where each PR needs to be compared against the coverage of the head commit
 on:

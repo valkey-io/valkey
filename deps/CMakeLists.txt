@@ -21,6 +21,9 @@ if (USE_RDMA) # Module or no module
     set(ENABLE_RDMA
         ON
         CACHE BOOL "If RDMA support should be compiled or not")
+    if (USE_RDMA EQUAL 2) # Module
+        set(ENABLE_DLOPEN_RDMA ON CACHE BOOL "Build valkey_rdma with dynamic loading")
+    endif()
 endif ()
 # Let libvalkey use sds and dict provided by valkey.
 set(DICT_INCLUDE_DIR ${CMAKE_SOURCE_DIR}/src)

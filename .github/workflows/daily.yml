@@ -110,6 +110,8 @@ jobs:
           ref: b9e40069c0b47a722286b94eb5231f7f05c08713
           path: libbacktrace
       - run: cd libbacktrace && ./configure && make && sudo make install
+      - name: Install gtest
+        run: sudo apt-get install pkg-config libgtest-dev libgmock-dev
       - name: make
         run: make all-with-unit-tests SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes
       - name: testprep
@@ -128,7 +130,7 @@ jobs:
         run: ./runtest-cluster ${{github.event.inputs.cluster_test_args}}
       - name: unittest
         if: true && !contains(github.event.inputs.skiptests, 'unittest')
-        run: ./src/valkey-unit-tests --accurate
+        run: ./src/unit/valkey-unit-gtests --accurate
       - name: install Redis OSS 6.2 server for compatibility testing
         run: |
           cd tests/tmp
@@ -189,6 +191,8 @@ jobs:
           ref: b9e40069c0b47a722286b94eb5231f7f05c08713
           path: libbacktrace
       - run: cd libbacktrace && ./configure && make && sudo make install
+      - name: Install gtest
+        run: sudo apt-get install pkg-config libgtest-dev libgmock-dev
       - name: make
         run: make all-with-unit-tests SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes
       - name: testprep
@@ -207,7 +211,7 @@ jobs:
         run: ./runtest-cluster ${{github.event.inputs.cluster_test_args}}
       - name: unittest
         if: true && !contains(github.event.inputs.skiptests, 'unittest')
-        run: ./src/valkey-unit-tests --accurate
+        run: ./src/unit/valkey-unit-gtests --accurate
   test-ubuntu-jemalloc-fortify:
     runs-on: ubuntu-latest
     if: |
@@ -244,9 +248,11 @@ jobs:
           path: libbacktrace
       - name: Build libbacktrace
         run: |
-          apt-get update && apt-get install -y make gcc-13
+          apt-get update && apt-get install -y make gcc-13 git cmake g++ python3
           update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-13 100
           cd libbacktrace && ./configure && make && make install
+      - name: Install gtest
+        run: apt-get install -y pkg-config libgtest-dev libgmock-dev
       - name: make
         run: make all-with-unit-tests CC=gcc OPT=-O3 SERVER_CFLAGS='-Werror -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=3' USE_LIBBACKTRACE=yes
       - name: testprep
@@ -265,7 +271,7 @@ jobs:
         run: ./runtest-cluster ${{github.event.inputs.cluster_test_args}}
       - name: unittest
         if: true && !contains(github.event.inputs.skiptests, 'unittest')
-        run: ./src/valkey-unit-tests --accurate
+        run: ./src/unit/valkey-unit-gtests --accurate
   test-ubuntu-libc-malloc:
     runs-on: ubuntu-latest
     if: |
@@ -401,10 +407,28 @@ jobs:
           path: libbacktrace
       - name: Build libbacktrace
         run: |
-          sudo apt-get update && sudo apt-get install libc6-dev-i386
+          sudo apt-get update && sudo apt-get install libc6-dev-i386 g++-multilib
           cd libbacktrace && ./configure && make && sudo make install
+      - name: Install gtest
+        run: |
+          sudo apt-get update
+          sudo apt-get install libgtest-dev
+          mkdir -p /tmp/gtest32
+          cd /tmp/gtest32
+          cmake -B build32 \
+              -DCMAKE_BUILD_TYPE=Release \
+              -DCMAKE_C_FLAGS="-m32" \
+              -DCMAKE_CXX_FLAGS="-m32" \
+              -DCMAKE_EXE_LINKER_FLAGS="-m32" \
+              /usr/src/googletest
+          cmake --build build32 --parallel
+          sudo cp build32/lib/*.a /usr/lib32/
+          cd $GITHUB_WORKSPACE
       - name: make
-        run: make 32bit SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes
+        run: |
+          make 32bit SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes \
+            GTEST_CFLAGS="-I/usr/src/googletest/googletest/include -I/usr/src/googletest/googlemock/include" \
+            GTEST_LIBS="/usr/lib32/libgtest.a /usr/lib32/libgmock.a"
       - name: testprep
         run: sudo apt-get install tcl8.6 tclx
       - name: test
@@ -423,7 +447,7 @@ jobs:
         run: ./runtest-cluster ${{github.event.inputs.cluster_test_args}}
       - name: unittest
         if: true && !contains(github.event.inputs.skiptests, 'unittest')
-        run: ./src/valkey-unit-tests --accurate
+        run: ./src/unit/valkey-unit-gtests --accurate
   test-ubuntu-tls:
     runs-on: ubuntu-latest
     if: |
@@ -784,6 +808,8 @@ jobs:
           ref: b9e40069c0b47a722286b94eb5231f7f05c08713
           path: libbacktrace
       - run: cd libbacktrace && ./configure && make && sudo make install
+      - name: Install gtest
+        run: sudo apt-get install pkg-config libgtest-dev libgmock-dev
       - name: make
         run: make valgrind all-with-unit-tests SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes
       - name: testprep
@@ -796,7 +822,7 @@ jobs:
       - name: unittest
         if: true && !contains(github.event.inputs.skiptests, 'unittest')
         run: |
-          valgrind --track-origins=yes --suppressions=./src/valgrind.sup --show-reachable=no --show-possibly-lost=no --leak-check=full --log-file=err.txt ./src/valkey-unit-tests --valgrind
+          valgrind --track-origins=yes --suppressions=./src/valgrind.sup --show-reachable=no --show-possibly-lost=no --leak-check=full --log-file=err.txt ./src/unit/valkey-unit-gtests --valgrind
           if grep -q 0x err.txt; then cat err.txt; exit 1; fi
   test-valgrind-no-malloc-usable-size-test:
     runs-on: ubuntu-latest
@@ -865,6 +891,8 @@ jobs:
           ref: b9e40069c0b47a722286b94eb5231f7f05c08713
           path: libbacktrace
       - run: cd libbacktrace && ./configure && make && sudo make install
+      - name: Install gtest
+        run: sudo apt-get install pkg-config libgtest-dev libgmock-dev
       - name: make
         run: make valgrind all-with-unit-tests CFLAGS="-DNO_MALLOC_USABLE_SIZE" SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes
       - name: testprep
@@ -877,7 +905,7 @@ jobs:
       - name: unittest
         if: true && !contains(github.event.inputs.skiptests, 'unittest')
         run: |
-          valgrind --track-origins=yes --suppressions=./src/valgrind.sup --show-reachable=no --show-possibly-lost=no --leak-check=full --log-file=err.txt ./src/valkey-unit-tests --valgrind
+          valgrind --track-origins=yes --suppressions=./src/valgrind.sup --show-reachable=no --show-possibly-lost=no --leak-check=full --log-file=err.txt ./src/unit/valkey-unit-gtests --valgrind
           if grep -q 0x err.txt; then cat err.txt; exit 1; fi
   test-sanitizer-address:
     runs-on: ubuntu-latest
@@ -914,6 +942,8 @@ jobs:
           ref: b9e40069c0b47a722286b94eb5231f7f05c08713
           path: libbacktrace
       - run: cd libbacktrace && ./configure && make && sudo make install
+      - name: Install gtest
+        run: sudo apt-get install pkg-config libgtest-dev libgmock-dev
       - name: make
         run: make all-with-unit-tests OPT=-O3 SANITIZER=address SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes
       - name: testprep
@@ -934,7 +964,7 @@ jobs:
         run: ./runtest-cluster ${{github.event.inputs.cluster_test_args}}
       - name: unittest
         if: true && !contains(github.event.inputs.skiptests, 'unittest')
-        run: ./src/valkey-unit-tests
+        run: ./src/unit/valkey-unit-gtests
   test-sanitizer-address-large-memory:
     runs-on: ubuntu-latest
     if: |
@@ -964,6 +994,8 @@ jobs:
         with:
           repository: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && env.GITHUB_REPOSITORY) || github.repository }}
           ref: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && env.GITHUB_HEAD_REF) || github.ref }}
+      - name: Install gtest
+        run: sudo apt-get install pkg-config libgtest-dev libgmock-dev
       - name: make
         run: make all-with-unit-tests OPT=-O3 SANITIZER=address SERVER_CFLAGS='-Werror'
       - name: testprep
@@ -972,7 +1004,7 @@ jobs:
           sudo apt-get install tcl8.6 tclx -y
       - name: unittest
         if: true && !contains(github.event.inputs.skiptests, 'unittest')
-        run: ./src/valkey-unit-tests --large-memory
+        run: ./src/unit/valkey-unit-gtests --large-memory
       - name: large memory tests
         if: true && !contains(github.event.inputs.skiptests, 'valkey')
         run: ./runtest --accurate --verbose --dump-logs --clients 5 --large-memory --tags large-memory ${{github.event.inputs.test_args}}
@@ -1014,6 +1046,8 @@ jobs:
           ref: b9e40069c0b47a722286b94eb5231f7f05c08713
           path: libbacktrace
       - run: cd libbacktrace && ./configure && make && sudo make install
+      - name: Install gtest
+        run: sudo apt-get install pkg-config libgtest-dev libgmock-dev
       - name: make
         run: make all-with-unit-tests OPT=-O3 SANITIZER=undefined SERVER_CFLAGS='-Werror' LUA_DEBUG=yes USE_LIBBACKTRACE=yes # we (ab)use this flow to also check Lua C API violations
       - name: testprep
@@ -1034,7 +1068,7 @@ jobs:
         run: ./runtest-cluster ${{github.event.inputs.cluster_test_args}}
       - name: unittest
         if: true && !contains(github.event.inputs.skiptests, 'unittest')
-        run: ./src/valkey-unit-tests --accurate
+        run: ./src/unit/valkey-unit-gtests --accurate
   test-sanitizer-undefined-large-memory:
     runs-on: ubuntu-latest
     if: |
@@ -1064,6 +1098,8 @@ jobs:
         with:
           repository: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && env.GITHUB_REPOSITORY) || github.repository }}
           ref: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && env.GITHUB_HEAD_REF) || github.ref }}
+      - name: Install gtest
+        run: sudo apt-get install pkg-config libgtest-dev libgmock-dev
       - name: make
         run: make all-with-unit-tests OPT=-O3 SANITIZER=undefined SERVER_CFLAGS='-Werror' LUA_DEBUG=yes
       - name: testprep
@@ -1072,7 +1108,7 @@ jobs:
           sudo apt-get install tcl8.6 tclx -y
       - name: unittest
         if: true && !contains(github.event.inputs.skiptests, 'unittest')
-        run: ./src/valkey-unit-tests --accurate --large-memory
+        run: ./src/unit/valkey-unit-gtests --accurate --large-memory
       - name: large memory tests
         if: true && !contains(github.event.inputs.skiptests, 'valkey')
         run: ./runtest --accurate --verbose --dump-logs --clients 5 --large-memory --tags large-memory ${{github.event.inputs.test_args}}
@@ -1110,6 +1146,8 @@ jobs:
           ref: b9e40069c0b47a722286b94eb5231f7f05c08713
           path: libbacktrace
       - run: cd libbacktrace && ./configure && make && sudo make install
+      - name: Install gtest
+        run: sudo apt-get install pkg-config libgtest-dev libgmock-dev
       - name: make
         run: make all-with-unit-tests OPT=-O3 SANITIZER=address DEBUG_FORCE_DEFRAG=yes USE_JEMALLOC=no SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes
       - name: testprep
@@ -1130,7 +1168,7 @@ jobs:
         run: ./runtest-cluster ${{github.event.inputs.cluster_test_args}}
       - name: unittest
         if: true && !contains(github.event.inputs.skiptests, 'unittest')
-        run: ./src/valkey-unit-tests
+        run: ./src/unit/valkey-unit-gtests
   test-ubuntu-lttng:
     runs-on: ubuntu-latest
     if: |

@@ -41,6 +41,8 @@
 
 #include "listpack.h"
 #include "listpack_malloc.h"
+
+__thread size_t lp_last_alloc_size = 0;
 #include "serverassert.h"
 #include "util.h"
 #include "config.h"

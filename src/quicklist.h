@@ -49,6 +49,7 @@ typedef struct quicklistNode {
     struct quicklistNode *next;
     unsigned char *entry;
     size_t sz;                           /* entry size in bytes */
+    size_t entry_alloc_sz;               /* usable allocation size of entry */
     unsigned int count : 16;             /* count of items in listpack */
     unsigned int encoding : 2;           /* RAW==1 or LZF==2 */
     unsigned int container : 2;          /* PLAIN==1 or PACKED==2 */

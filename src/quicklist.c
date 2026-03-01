@@ -35,6 +35,7 @@
 #include "zmalloc.h"
 #include "config.h"
 #include "listpack.h"
+#include "listpack_malloc.h"
 #include "util.h" /* for ll2string */
 #include "lzf.h"
 #include "serverassert.h"
@@ -121,21 +122,26 @@ static quicklistNode *_quicklistMergeNodes(quicklist *quicklist, quicklistNode *
 /* Helper macros for tracking memory allocations.
  * Use quicklistTrackEntryBefore() before modifying node->entry,
  * and quicklistTrackEntryAfter() after the modification.
- * These macros handle NULL quicklist for standalone node operations (e.g., unit tests). */
+ * These macros handle NULL quicklist for standalone node operations (e.g., unit tests).
+ *
+ * The "After" macro reads lp_last_alloc_size which was set by the most recent
+ * lp_malloc / lp_realloc inside the listpack operation that just modified
+ * node->entry.  This avoids an expensive zmalloc_size() call. */
 #define quicklistTrackEntryBefore(ql, node) \
-    size_t _old_entry_sz = (node)->entry ? zmalloc_size((node)->entry) : 0
+    size_t _old_entry_sz = (node)->entry_alloc_sz
 
-#define quicklistTrackEntryAfter(ql, node)                                          \
-    do {                                                                            \
-        if (ql) (ql)->tracked_size += zmalloc_size((node)->entry) - _old_entry_sz;  \
+#define quicklistTrackEntryAfter(ql, node)                                     \
+    do {                                                                       \
+        (node)->entry_alloc_sz = lp_last_alloc_size;                                 \
+        if (ql) (ql)->tracked_size += (node)->entry_alloc_sz - _old_entry_sz;        \
     } while (0)
 
 /* Track node struct and entry deallocation.
  * Use sizeof(quicklistNode) instead of zmalloc_size(node) to match
  * the original objectComputeSize calculation. */
-#define quicklistTrackNodeFree(ql, node)                                                     \
-    do {                                                                                     \
-        if (ql) (ql)->tracked_size -= zmalloc_size((node)->entry) + sizeof(quicklistNode);   \
+#define quicklistTrackNodeFree(ql, node)                                               \
+    do {                                                                               \
+        if (ql) (ql)->tracked_size -= (node)->entry_alloc_sz + sizeof(quicklistNode);        \
     } while (0)
 
 /* Create a new quicklist.
@@ -192,6 +198,7 @@ static quicklistNode *quicklistCreateNode(void) {
     node->entry = NULL;
     node->count = 0;
     node->sz = 0;
+    node->entry_alloc_sz = 0;
     node->next = node->prev = NULL;
     node->encoding = QUICKLIST_NODE_ENCODING_RAW;
     node->container = QUICKLIST_NODE_CONTAINER_PACKED;
@@ -251,11 +258,13 @@ static int __quicklistCompressNode(quicklist *quicklist, quicklistNode *node) {
         zfree(lzf);
         return 0;
     }
-    lzf = zrealloc(lzf, sizeof(*lzf) + lzf->sz);
-    quicklistTrackEntryBefore(quicklist, node);
+    size_t new_entry_alloc_sz;
+    lzf = zrealloc_usable(lzf, sizeof(*lzf) + lzf->sz, &new_entry_alloc_sz);
+    size_t old_entry_alloc_sz = node->entry_alloc_sz;
     zfree(node->entry);
     node->entry = (unsigned char *)lzf;
-    quicklistTrackEntryAfter(quicklist, node);
+    node->entry_alloc_sz = new_entry_alloc_sz;
+    if (quicklist) quicklist->tracked_size += new_entry_alloc_sz - old_entry_alloc_sz;
     node->encoding = QUICKLIST_NODE_ENCODING_LZF;
     return 1;
 }
@@ -274,17 +283,19 @@ static int __quicklistDecompressNode(quicklist *quicklist, quicklistNode *node) 
     node->attempted_compress = 0;
     node->recompress = 0;
 
-    void *decompressed = zmalloc(node->sz);
+    size_t new_entry_alloc_sz;
+    void *decompressed = zmalloc_usable(node->sz, &new_entry_alloc_sz);
     quicklistLZF *lzf = (quicklistLZF *)node->entry;
     if (lzf_decompress(lzf->compressed, lzf->sz, decompressed, node->sz) == 0) {
         /* Someone requested decompress, but we can't decompress.  Not good. */
         zfree(decompressed);
         return 0;
     }
-    quicklistTrackEntryBefore(quicklist, node);
+    size_t old_entry_alloc_sz = node->entry_alloc_sz;
     zfree(lzf);
     node->entry = decompressed;
-    quicklistTrackEntryAfter(quicklist, node);
+    node->entry_alloc_sz = new_entry_alloc_sz;
+    if (quicklist) quicklist->tracked_size += new_entry_alloc_sz - old_entry_alloc_sz;
     node->encoding = QUICKLIST_NODE_ENCODING_RAW;
     return 1;
 }
@@ -441,7 +452,7 @@ static void __quicklistInsertNode(quicklist *quicklist, quicklistNode *old_node,
     /* Track memory: node struct + entry.
      * Use sizeof(quicklistNode) to match original objectComputeSize calculation. */
     quicklist->tracked_size += sizeof(quicklistNode);
-    if (new_node->entry) quicklist->tracked_size += zmalloc_size(new_node->entry);
+    if (new_node->entry) quicklist->tracked_size += new_node->entry_alloc_sz;
 
     /* Update len first, so in __quicklistCompress we know exactly len */
     quicklist->len++;
@@ -553,10 +564,11 @@ static quicklistNode *__quicklistCreateNode(int container, void *value, size_t s
     quicklistNode *new_node = quicklistCreateNode();
     new_node->container = container;
     if (container == QUICKLIST_NODE_CONTAINER_PLAIN) {
-        new_node->entry = zmalloc(sz);
+        new_node->entry = zmalloc_usable(sz, &new_node->entry_alloc_sz);
         memcpy(new_node->entry, value, sz);
     } else {
         new_node->entry = lpPrepend(lpNew(0), value, sz);
+        new_node->entry_alloc_sz = lp_last_alloc_size;
     }
     new_node->sz = sz;
     new_node->count++;
@@ -590,6 +602,7 @@ int quicklistPushHead(quicklist *quicklist, void *value, size_t sz) {
     } else {
         quicklistNode *node = quicklistCreateNode();
         node->entry = lpPrepend(lpNew(0), value, sz);
+        node->entry_alloc_sz = lp_last_alloc_size;
 
         quicklistNodeUpdateSz(node);
         _quicklistInsertNodeBefore(quicklist, quicklist->head, node);
@@ -618,6 +631,7 @@ int quicklistPushTail(quicklist *quicklist, void *value, size_t sz) {
     } else {
         quicklistNode *node = quicklistCreateNode();
         node->entry = lpAppend(lpNew(0), value, sz);
+        node->entry_alloc_sz = lp_last_alloc_size;
 
         quicklistNodeUpdateSz(node);
         _quicklistInsertNodeAfter(quicklist, quicklist->tail, node);
@@ -636,6 +650,7 @@ void quicklistAppendListpack(quicklist *quicklist, unsigned char *zl) {
     node->entry = zl;
     node->count = lpLength(node->entry);
     node->sz = lpBytes(zl);
+    node->entry_alloc_sz = zmalloc_size(zl);
 
     _quicklistInsertNodeAfter(quicklist, quicklist->tail, node);
     quicklist->count += node->count;
@@ -651,6 +666,7 @@ void quicklistAppendPlainNode(quicklist *quicklist, unsigned char *data, size_t 
     node->entry = data;
     node->count = 1;
     node->sz = sz;
+    node->entry_alloc_sz = zmalloc_size(data);
     node->container = QUICKLIST_NODE_CONTAINER_PLAIN;
 
     _quicklistInsertNodeAfter(quicklist, quicklist->tail, node);
@@ -768,19 +784,20 @@ void quicklistReplaceEntry(quicklistIter *iter, quicklistEntry *entry, void *dat
     size_t _old_entry_sz = 0;
 
     if (likely(!QL_NODE_IS_PLAIN(entry->node) && !isLargeElement(sz, quicklist->fill) &&
-               (_old_entry_sz = zmalloc_size(entry->node->entry),
+               (_old_entry_sz = entry->node->entry_alloc_sz,
                 newentry = lpReplace(entry->node->entry, &entry->zi, data, sz)) != NULL)) {
         entry->node->entry = newentry;
-        quicklist->tracked_size += zmalloc_size(entry->node->entry) - _old_entry_sz;
+        entry->node->entry_alloc_sz = lp_last_alloc_size;
+        quicklist->tracked_size += entry->node->entry_alloc_sz - _old_entry_sz;
         quicklistNodeUpdateSz(entry->node);
         /* quicklistNext() and quicklistGetIteratorEntryAtIdx() provide an uncompressed node */
         quicklistCompress(quicklist, entry->node);
     } else if (QL_NODE_IS_PLAIN(entry->node)) {
         if (isLargeElement(sz, quicklist->fill)) {
-            quicklist->tracked_size -= zmalloc_size(entry->node->entry);
+            quicklist->tracked_size -= entry->node->entry_alloc_sz;
             zfree(entry->node->entry);
-            entry->node->entry = zmalloc(sz);
-            quicklist->tracked_size += zmalloc_size(entry->node->entry);
+            entry->node->entry = zmalloc_usable(sz, &entry->node->entry_alloc_sz);
+            quicklist->tracked_size += entry->node->entry_alloc_sz;
             entry->node->sz = sz;
             memcpy(entry->node->entry, data, sz);
             quicklistCompress(quicklist, entry->node);
@@ -862,8 +879,8 @@ static quicklistNode *_quicklistListpackMerge(quicklist *quicklist, quicklistNod
 
     quicklistDecompressNode(quicklist, a);
     quicklistDecompressNode(quicklist, b);
-    size_t a_entry_sz = zmalloc_size(a->entry);
-    size_t b_entry_sz = zmalloc_size(b->entry);
+    size_t a_entry_sz = a->entry_alloc_sz;
+    size_t b_entry_sz = b->entry_alloc_sz;
     if ((lpMerge(&a->entry, &b->entry))) {
         /* We merged listpacks! Now remove the unused quicklistNode. */
         quicklistNode *keep = NULL, *nokeep = NULL;
@@ -871,14 +888,16 @@ static quicklistNode *_quicklistListpackMerge(quicklist *quicklist, quicklistNod
             nokeep = a;
             keep = b;
             /* Update tracked size: a's entry was freed, b's entry was reallocated */
+            keep->entry_alloc_sz = lp_last_alloc_size;
             quicklist->tracked_size -= a_entry_sz;
-            quicklist->tracked_size += zmalloc_size(b->entry) - b_entry_sz;
+            quicklist->tracked_size += keep->entry_alloc_sz - b_entry_sz;
         } else if (!b->entry) {
             nokeep = b;
             keep = a;
             /* Update tracked size: b's entry was freed, a's entry was reallocated */
+            keep->entry_alloc_sz = lp_last_alloc_size;
             quicklist->tracked_size -= b_entry_sz;
-            quicklist->tracked_size += zmalloc_size(a->entry) - a_entry_sz;
+            quicklist->tracked_size += keep->entry_alloc_sz - a_entry_sz;
         }
         keep->count = lpLength(keep->entry);
         quicklistNodeUpdateSz(keep);
@@ -971,7 +990,7 @@ static quicklistNode *_quicklistSplitNode(quicklist *quicklist, quicklistNode *n
     size_t zl_sz = node->sz;
 
     quicklistNode *new_node = quicklistCreateNode();
-    new_node->entry = zmalloc(zl_sz);
+    new_node->entry = zmalloc_usable(zl_sz, &new_node->entry_alloc_sz);
 
     /* Copy original listpack so we can split it */
     memcpy(new_node->entry, node->entry, zl_sz);
@@ -995,6 +1014,7 @@ static quicklistNode *_quicklistSplitNode(quicklist *quicklist, quicklistNode *n
     quicklistNodeUpdateSz(node);
 
     new_node->entry = lpDeleteRange(new_node->entry, new_start, new_extent);
+    new_node->entry_alloc_sz = lp_last_alloc_size;
     new_node->count = lpLength(new_node->entry);
     quicklistNodeUpdateSz(new_node);
 
@@ -1022,6 +1042,7 @@ static void _quicklistInsert(quicklistIter *iter, quicklistEntry *entry, void *v
         }
         new_node = quicklistCreateNode();
         new_node->entry = lpPrepend(lpNew(0), value, sz);
+        new_node->entry_alloc_sz = lp_last_alloc_size;
         __quicklistInsertNode(quicklist, NULL, new_node, after);
         new_node->count++;
         quicklist->count++;
@@ -1117,6 +1138,7 @@ static void _quicklistInsert(quicklistIter *iter, quicklistEntry *entry, void *v
         D("\tprovisioning new node...");
         new_node = quicklistCreateNode();
         new_node->entry = lpPrepend(lpNew(0), value, sz);
+        new_node->entry_alloc_sz = lp_last_alloc_size;
         new_node->count++;
         quicklistNodeUpdateSz(new_node);
         __quicklistInsertNode(quicklist, node, new_node, after);
@@ -1451,10 +1473,10 @@ quicklist *quicklistDup(quicklist *orig) {
         if (current->encoding == QUICKLIST_NODE_ENCODING_LZF) {
             quicklistLZF *lzf = (quicklistLZF *)current->entry;
             size_t lzf_sz = sizeof(*lzf) + lzf->sz;
-            node->entry = zmalloc(lzf_sz);
+            node->entry = zmalloc_usable(lzf_sz, &node->entry_alloc_sz);
             memcpy(node->entry, current->entry, lzf_sz);
         } else if (current->encoding == QUICKLIST_NODE_ENCODING_RAW) {
-            node->entry = zmalloc(current->sz);
+            node->entry = zmalloc_usable(current->sz, &node->entry_alloc_sz);
             memcpy(node->entry, current->entry, current->sz);
         }
 

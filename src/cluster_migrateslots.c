@@ -1410,9 +1410,9 @@ sds generateSyncSlotsEstablishCommand(slotMigrationJob *job) {
     listRewind(job->slot_ranges, &li);
     while ((ln = listNext(&li))) {
         slotRange *range = (slotRange *)ln->value;
-        sdscatfmt(result, "$%i\r\n%i\r\n$%i\r\n%i\r\n",
-                  digits10(range->start_slot), range->start_slot,
-                  digits10(range->end_slot), range->end_slot);
+        result = sdscatfmt(result, "$%i\r\n%i\r\n$%i\r\n%i\r\n",
+                           digits10(range->start_slot), range->start_slot,
+                           digits10(range->end_slot), range->end_slot);
     }
     return result;
 }

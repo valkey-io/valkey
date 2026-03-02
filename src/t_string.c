@@ -138,13 +138,24 @@ void setGenericCommand(client *c,
     setkey_flags |= ((flags & ARGS_KEEPTTL) || expire) ? SETKEY_KEEPTTL : 0;
     setkey_flags |= found ? SETKEY_ALREADY_EXIST : SETKEY_DOESNT_EXIST;
 
+    if (c->flag.argv_borrowed) {
+        /* If the client does not own the argv, we need to create a copy of the value object to be set into the db. */
+        incrRefCount(val);
+    }
     setKey(c, c->db, key, &val, setkey_flags);
     if (expire) val = setExpire(c, c->db, key, milliseconds);
 
     /* By setting the reallocated value back into argv, we can avoid duplicating
-     * a large string value when adding it to the db. */
-    c->argv[(flags & ARGS_ARGV3) ? 3 : 2] = val;
-    incrRefCount(val);
+     * a large string value when adding it to the db.
+     * When the client does not own the argv array (VM_CallArgv borrowed it),
+     * we must go through rewriteClientCommandArgument to get a new owned copy
+     * instead of assigning directly into the borrowed array. */
+    if (c->flag.argv_borrowed) {
+        rewriteClientCommandArgument(c, (flags & ARGS_ARGV3) ? 3 : 2, val);
+    } else {
+        c->argv[(flags & ARGS_ARGV3) ? 3 : 2] = val;
+        incrRefCount(val);
+    }
 
     server.dirty++;
     notifyKeyspaceEvent(NOTIFY_STRING, "set", key, c->db->id);
@@ -238,22 +249,24 @@ void setCommand(client *c) {
         return;
     }
 
-    c->argv[2] = tryObjectEncoding(c->argv[2]);
+    if (!c->flag.argv_borrowed) {
+        c->argv[2] = tryObjectEncoding(c->argv[2]);
+    }
     setGenericCommand(c, flags, c->argv[1], c->argv[2], expire, unit, NULL, NULL, comparison);
 }
 
 void setnxCommand(client *c) {
-    c->argv[2] = tryObjectEncoding(c->argv[2]);
+    if (!c->flag.argv_borrowed) c->argv[2] = tryObjectEncoding(c->argv[2]);
     setGenericCommand(c, ARGS_SET_NX, c->argv[1], c->argv[2], NULL, 0, shared.cone, shared.czero, NULL);
 }
 
 void setexCommand(client *c) {
-    c->argv[3] = tryObjectEncoding(c->argv[3]);
+    if (!c->flag.argv_borrowed) c->argv[3] = tryObjectEncoding(c->argv[3]);
     setGenericCommand(c, ARGS_EX | ARGS_ARGV3, c->argv[1], c->argv[3], c->argv[2], UNIT_SECONDS, NULL, NULL, NULL);
 }
 
 void psetexCommand(client *c) {
-    c->argv[3] = tryObjectEncoding(c->argv[3]);
+    if (!c->flag.argv_borrowed) c->argv[3] = tryObjectEncoding(c->argv[3]);
     setGenericCommand(c, ARGS_PX | ARGS_ARGV3, c->argv[1], c->argv[3], c->argv[2], UNIT_MILLISECONDS, NULL, NULL, NULL);
 }
 
@@ -386,9 +399,16 @@ void getdelCommand(client *c) {
 void getsetCommand(client *c) {
     initDeferredReplyBuffer(c);
     if (getGenericCommand(c) == C_ERR) return;
-    c->argv[2] = tryObjectEncoding(c->argv[2]);
-    setKey(c, c->db, c->argv[1], &c->argv[2], 0);
-    incrRefCount(c->argv[2]);
+    if (c->flag.argv_borrowed) {
+        robj *val = c->argv[2];
+        incrRefCount(val);
+        setKey(c, c->db, c->argv[1], &val, 0);
+        rewriteClientCommandArgument(c, 2, val);
+    } else {
+        c->argv[2] = tryObjectEncoding(c->argv[2]);
+        setKey(c, c->db, c->argv[1], &c->argv[2], 0);
+        incrRefCount(c->argv[2]);
+    }
     notifyKeyspaceEvent(NOTIFY_STRING, "set", c->argv[1], c->db->id);
     server.dirty++;
 
@@ -534,10 +554,15 @@ void msetGenericCommand(client *c, int nx) {
 
     int setkey_flags = nx ? SETKEY_DOESNT_EXIST : 0;
     for (j = 1; j < c->argc; j += 2) {
-        robj *val = tryObjectEncoding(c->argv[j + 1]);
+        robj *val = c->flag.argv_borrowed ? c->argv[j + 1] : tryObjectEncoding(c->argv[j + 1]);
+        if (c->flag.argv_borrowed) incrRefCount(val);
         setKey(c, c->db, c->argv[j], &val, setkey_flags);
-        incrRefCount(val);
-        c->argv[j + 1] = val;
+        if (c->flag.argv_borrowed) {
+            rewriteClientCommandArgument(c, j + 1, val);
+        } else {
+            incrRefCount(val);
+            c->argv[j + 1] = val;
+        }
         notifyKeyspaceEvent(NOTIFY_STRING, "set", c->argv[j], c->db->id);
         /* In MSETNX, It could be that we're overriding the same key, we can't be sure it doesn't exist. */
         if (nx)
@@ -656,10 +681,18 @@ void appendCommand(client *c) {
     o = lookupKeyWrite(c->db, c->argv[1]);
     if (o == NULL) {
         /* Create the key */
-        c->argv[2] = tryObjectEncoding(c->argv[2]);
-        dbAdd(c->db, c->argv[1], &c->argv[2]);
-        incrRefCount(c->argv[2]);
-        totlen = stringObjectLen(c->argv[2]);
+        if (c->flag.argv_borrowed) {
+            robj *val = c->argv[2];
+            incrRefCount(val);
+            dbAdd(c->db, c->argv[1], &val);
+            rewriteClientCommandArgument(c, 2, val);
+            totlen = stringObjectLen(val);
+        } else {
+            c->argv[2] = tryObjectEncoding(c->argv[2]);
+            dbAdd(c->db, c->argv[1], &c->argv[2]);
+            incrRefCount(c->argv[2]);
+            totlen = stringObjectLen(c->argv[2]);
+        }
     } else {
         /* Key exists, check type */
         if (checkType(c, o, OBJ_STRING))

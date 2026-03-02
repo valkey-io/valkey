@@ -1230,6 +1230,7 @@ typedef struct ClientFlags {
                                               or client::buf. */
     uint64_t keyspace_notified : 1;        /* Indicates that a keyspace notification was triggered during the execution of the
                                               current command. */
+    uint64_t argv_borrowed : 1;            /* The argv array and its elements are borrowed from the caller (VM_CallArgv) and must not be freed. */
 } ClientFlags;
 
 typedef struct ClientPubSubData {
@@ -1373,7 +1374,10 @@ typedef struct client {
     robj **original_argv;       /* Arguments of original command if arguments were rewritten. */
     /* Client flags and state indicators */
     union {
-        uint64_t raw_flag;
+        struct {
+            uint64_t raw_flag1;
+            uint64_t raw_flag2;
+        };
         struct ClientFlags flag;
     };
     uint16_t write_flags;            /* Client Write flags - used to communicate the client write state. */

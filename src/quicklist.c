@@ -35,7 +35,6 @@
 #include "zmalloc.h"
 #include "config.h"
 #include "listpack.h"
-#include "listpack_malloc.h"
 #include "util.h" /* for ll2string */
 #include "lzf.h"
 #include "serverassert.h"
@@ -119,11 +118,14 @@ static quicklistNode *_quicklistMergeNodes(quicklist *quicklist, quicklistNode *
         (iter)->zi = NULL;      \
     } while (0)
 
-/* After a listpack operation that reallocates node->entry (e.g. lpPrepend,
- * lpAppend, lpDelete, lpInsertString, lpReplace, lpDeleteRange), the
- * lpLastAllocSize() returns the usable allocation size of the new entry
- * buffer.  We use it to update node->entry_alloc_sz and
- * quicklist->tracked_size without calling zmalloc_size(). */
+/* Update node->entry_alloc_sz from lpLastAllocSize() and adjust
+ * quicklist->tracked_size by the delta.  Use after any listpack operation
+ * that may reallocate node->entry, for nodes already linked in the list. */
+#define quicklistTrackEntryResize(ql, node, old_alloc_sz)                      \
+    do {                                                                       \
+        (node)->entry_alloc_sz = lpLastAllocSize();                            \
+        if (ql) (ql)->tracked_size += (node)->entry_alloc_sz - (old_alloc_sz); \
+    } while (0)
 
 /* Create a new quicklist.
  * Free with quicklistRelease(). */
@@ -578,8 +580,7 @@ int quicklistPushHead(quicklist *quicklist, void *value, size_t sz) {
     if (likely(_quicklistNodeAllowInsert(quicklist->head, quicklist->fill, sz))) {
         size_t old_sz = quicklist->head->entry_alloc_sz;
         quicklist->head->entry = lpPrepend(quicklist->head->entry, value, sz);
-        quicklist->head->entry_alloc_sz = lpLastAllocSize();
-        quicklist->tracked_size += quicklist->head->entry_alloc_sz - old_sz;
+        quicklistTrackEntryResize(quicklist, quicklist->head, old_sz);
         quicklistNodeUpdateSz(quicklist->head);
     } else {
         quicklistNode *node = quicklistCreateNode();
@@ -608,8 +609,7 @@ int quicklistPushTail(quicklist *quicklist, void *value, size_t sz) {
     if (likely(_quicklistNodeAllowInsert(quicklist->tail, quicklist->fill, sz))) {
         size_t old_sz = quicklist->tail->entry_alloc_sz;
         quicklist->tail->entry = lpAppend(quicklist->tail->entry, value, sz);
-        quicklist->tail->entry_alloc_sz = lpLastAllocSize();
-        quicklist->tracked_size += quicklist->tail->entry_alloc_sz - old_sz;
+        quicklistTrackEntryResize(quicklist, quicklist->tail, old_sz);
         quicklistNodeUpdateSz(quicklist->tail);
     } else {
         quicklistNode *node = quicklistCreateNode();
@@ -714,8 +714,7 @@ static int quicklistDelIndex(quicklist *quicklist, quicklistNode *node, unsigned
     }
     size_t old_sz = node->entry_alloc_sz;
     node->entry = lpDelete(node->entry, *p, p);
-    node->entry_alloc_sz = lpLastAllocSize();
-    quicklist->tracked_size += node->entry_alloc_sz - old_sz;
+    quicklistTrackEntryResize(quicklist, node, old_sz);
     node->count--;
     if (node->count == 0) {
         gone = 1;
@@ -771,8 +770,7 @@ void quicklistReplaceEntry(quicklistIter *iter, quicklistEntry *entry, void *dat
                (_old_entry_sz = entry->node->entry_alloc_sz,
                 newentry = lpReplace(entry->node->entry, &entry->zi, data, sz)) != NULL)) {
         entry->node->entry = newentry;
-        entry->node->entry_alloc_sz = lpLastAllocSize();
-        quicklist->tracked_size += entry->node->entry_alloc_sz - _old_entry_sz;
+        quicklistTrackEntryResize(quicklist, entry->node, _old_entry_sz);
         quicklistNodeUpdateSz(entry->node);
         /* quicklistNext() and quicklistGetIteratorEntryAtIdx() provide an uncompressed node */
         quicklistCompress(quicklist, entry->node);
@@ -872,14 +870,12 @@ static quicklistNode *_quicklistListpackMerge(quicklist *quicklist, quicklistNod
             nokeep = a;
             keep = b;
             /* Update tracked size: b's entry was reallocated by lpMerge */
-            keep->entry_alloc_sz = lpLastAllocSize();
-            quicklist->tracked_size += keep->entry_alloc_sz - b_entry_sz;
+            quicklistTrackEntryResize(quicklist, keep, b_entry_sz);
         } else if (!b->entry) {
             nokeep = b;
             keep = a;
             /* Update tracked size: a's entry was reallocated by lpMerge */
-            keep->entry_alloc_sz = lpLastAllocSize();
-            quicklist->tracked_size += keep->entry_alloc_sz - a_entry_sz;
+            quicklistTrackEntryResize(quicklist, keep, a_entry_sz);
         }
         /* nokeep->entry was freed by lpMerge (entry is NULL), but we leave
          * nokeep->entry_alloc_sz unchanged so __quicklistDelNode subtracts
@@ -994,8 +990,7 @@ static quicklistNode *_quicklistSplitNode(quicklist *quicklist, quicklistNode *n
     /* Track entry change for original node (new_node not in list yet) */
     size_t old_sz = node->entry_alloc_sz;
     node->entry = lpDeleteRange(node->entry, orig_start, orig_extent);
-    node->entry_alloc_sz = lpLastAllocSize();
-    if (quicklist) quicklist->tracked_size += node->entry_alloc_sz - old_sz;
+    quicklistTrackEntryResize(quicklist, node, old_sz);
     node->count = lpLength(node->entry);
     quicklistNodeUpdateSz(node);
 
@@ -1079,8 +1074,7 @@ static void _quicklistInsert(quicklistIter *iter, quicklistEntry *entry, void *v
         quicklistDecompressNodeForUse(quicklist, node);
         size_t old_sz = node->entry_alloc_sz;
         node->entry = lpInsertString(node->entry, value, sz, entry->zi, LP_AFTER, NULL);
-        node->entry_alloc_sz = lpLastAllocSize();
-        quicklist->tracked_size += node->entry_alloc_sz - old_sz;
+        quicklistTrackEntryResize(quicklist, node, old_sz);
         node->count++;
         quicklistNodeUpdateSz(node);
         quicklistRecompressOnly(quicklist, node);
@@ -1089,8 +1083,7 @@ static void _quicklistInsert(quicklistIter *iter, quicklistEntry *entry, void *v
         quicklistDecompressNodeForUse(quicklist, node);
         size_t old_sz = node->entry_alloc_sz;
         node->entry = lpInsertString(node->entry, value, sz, entry->zi, LP_BEFORE, NULL);
-        node->entry_alloc_sz = lpLastAllocSize();
-        quicklist->tracked_size += node->entry_alloc_sz - old_sz;
+        quicklistTrackEntryResize(quicklist, node, old_sz);
         node->count++;
         quicklistNodeUpdateSz(node);
         quicklistRecompressOnly(quicklist, node);
@@ -1102,8 +1095,7 @@ static void _quicklistInsert(quicklistIter *iter, quicklistEntry *entry, void *v
         quicklistDecompressNodeForUse(quicklist, new_node);
         size_t old_sz = new_node->entry_alloc_sz;
         new_node->entry = lpPrepend(new_node->entry, value, sz);
-        new_node->entry_alloc_sz = lpLastAllocSize();
-        quicklist->tracked_size += new_node->entry_alloc_sz - old_sz;
+        quicklistTrackEntryResize(quicklist, new_node, old_sz);
         new_node->count++;
         quicklistNodeUpdateSz(new_node);
         quicklistRecompressOnly(quicklist, new_node);
@@ -1116,8 +1108,7 @@ static void _quicklistInsert(quicklistIter *iter, quicklistEntry *entry, void *v
         quicklistDecompressNodeForUse(quicklist, new_node);
         size_t old_sz = new_node->entry_alloc_sz;
         new_node->entry = lpAppend(new_node->entry, value, sz);
-        new_node->entry_alloc_sz = lpLastAllocSize();
-        quicklist->tracked_size += new_node->entry_alloc_sz - old_sz;
+        quicklistTrackEntryResize(quicklist, new_node, old_sz);
         new_node->count++;
         quicklistNodeUpdateSz(new_node);
         quicklistRecompressOnly(quicklist, new_node);
@@ -1235,8 +1226,7 @@ int quicklistDelRange(quicklist *quicklist, const long start, const long count) 
             quicklistDecompressNodeForUse(quicklist, node);
             size_t old_sz = node->entry_alloc_sz;
             node->entry = lpDeleteRange(node->entry, offset, del);
-            node->entry_alloc_sz = lpLastAllocSize();
-            quicklist->tracked_size += node->entry_alloc_sz - old_sz;
+            quicklistTrackEntryResize(quicklist, node, old_sz);
             quicklistNodeUpdateSz(node);
             node->count -= del;
             quicklist->count -= del;

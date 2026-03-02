@@ -277,6 +277,59 @@ struct CallReply {
     struct CallReply *attribute; /* attribute reply, NULL if not exists */
 };
 
+typedef struct CallReplyFrame {
+    CallReply *rep;
+    int idx;
+    struct CallReplyFrame *prev;
+} CallReplyFrame;
+
+typedef struct CallReplyBuilderCtx {
+    CallReplyFrame *current;
+} CallReplyBuilderCtx;
+
+#define SCOPE_OBJ_CACHE_SIZE 8
+
+CallReplyFrame scope_obj_cache[SCOPE_OBJ_CACHE_SIZE] = {0};
+size_t scope_obj_cache_idx = 0;
+size_t scope_dynamic_alloc_count = 0;
+
+static inline CallReply *getCallReply(void *ctx) {
+    return ((CallReplyBuilderCtx *)ctx)->current->rep + ((CallReplyBuilderCtx *)ctx)->current->idx;
+}
+
+static inline CallReply *nextCallReply(void *ctx) {
+    return ((CallReplyBuilderCtx *)ctx)->current->rep + ++((CallReplyBuilderCtx *)ctx)->current->idx;
+}
+
+static inline void pushCallReplyFrame(CallReplyBuilderCtx *ctx, CallReply *array_rep) {
+    CallReplyFrame *new_scope = NULL;
+    if (scope_obj_cache_idx < SCOPE_OBJ_CACHE_SIZE) {
+        new_scope = &scope_obj_cache[scope_obj_cache_idx++];
+    } else {
+        scope_dynamic_alloc_count++;
+        new_scope = zmalloc(sizeof(CallReplyFrame));
+    }
+    new_scope->rep = array_rep;
+    new_scope->idx = -1;
+    new_scope->prev = ctx->current;
+    ctx->current = new_scope;
+}
+
+static inline void popCallReplyFrame(CallReplyBuilderCtx *ctx) {
+    CallReplyFrame *prev_scope = ctx->current->prev;
+    if (scope_dynamic_alloc_count > 0) {
+        zfree(ctx->current);
+        scope_dynamic_alloc_count--;
+    } else {
+        /* Just reset the current scope object and return it to the cache. */
+        ctx->current->rep = NULL;
+        ctx->current->idx = -1;
+        ctx->current->prev = NULL;
+        scope_obj_cache_idx--;
+    }
+    ctx->current = prev_scope;
+}
+
 static void callReplySetSharedData(CallReply *rep, int type, const char *proto, size_t proto_len, int extra_flags) {
     rep->type = type;
     rep->proto = proto;
@@ -284,39 +337,32 @@ static void callReplySetSharedData(CallReply *rep, int type, const char *proto, 
     rep->flags |= extra_flags;
 }
 
-static void callReplyNull(void *ctx, const char *proto, size_t proto_len) {
-    CallReply *rep = ctx;
+void callReplyNull(void *ctx, const char *proto, size_t proto_len) {
+    CallReply *rep = nextCallReply(ctx);
     callReplySetSharedData(rep, VALKEYMODULE_REPLY_NULL, proto, proto_len, REPLY_FLAG_RESP3);
 }
 
-static void callReplyNullBulkString(void *ctx, const char *proto, size_t proto_len) {
-    CallReply *rep = ctx;
+void callReplyNullBulkString(void *ctx, const char *proto, size_t proto_len) {
+    CallReply *rep = nextCallReply(ctx);
     callReplySetSharedData(rep, VALKEYMODULE_REPLY_NULL, proto, proto_len, 0);
 }
 
-static void callReplyNullArray(void *ctx, const char *proto, size_t proto_len) {
-    CallReply *rep = ctx;
+void callReplyNullArray(void *ctx, const char *proto, size_t proto_len) {
+    CallReply *rep = nextCallReply(ctx);
     int type = rep->flags & REPLY_FLAG_EXACT_TYPE ? VALKEYMODULE_REPLY_ARRAY_NULL
                                                   : VALKEYMODULE_REPLY_NULL;
     callReplySetSharedData(rep, type, proto, proto_len, 0);
 }
 
-static void callReplyBulkString(void *ctx, const char *str, size_t len, const char *proto, size_t proto_len) {
-    CallReply *rep = ctx;
+void callReplyBulkString(void *ctx, const char *str, size_t len, const char *proto, size_t proto_len) {
+    CallReply *rep = nextCallReply(ctx);
     callReplySetSharedData(rep, VALKEYMODULE_REPLY_STRING, proto, proto_len, 0);
     rep->len = len;
     rep->val.str = str;
 }
 
-static void callReplyError(void *ctx, const char *str, size_t len, const char *proto, size_t proto_len) {
-    CallReply *rep = ctx;
-    callReplySetSharedData(rep, VALKEYMODULE_REPLY_ERROR, proto, proto_len, 0);
-    rep->len = len;
-    rep->val.str = str;
-}
-
-static void callReplySimpleStr(void *ctx, const char *str, size_t len, const char *proto, size_t proto_len) {
-    CallReply *rep = ctx;
+void callReplySimpleString(void *ctx, const char *str, size_t len, const char *proto, size_t proto_len) {
+    CallReply *rep = nextCallReply(ctx);
     int type = rep->flags & REPLY_FLAG_EXACT_TYPE ? VALKEYMODULE_REPLY_SIMPLE_STRING
                                                   : VALKEYMODULE_REPLY_STRING;
     callReplySetSharedData(rep, type, proto, proto_len, 0);
@@ -324,110 +370,167 @@ static void callReplySimpleStr(void *ctx, const char *str, size_t len, const cha
     rep->val.str = str;
 }
 
-static void callReplyLong(void *ctx, long long val, const char *proto, size_t proto_len) {
-    CallReply *rep = ctx;
+void callReplyVerbatimString(void *ctx, const char *str, size_t len, const char *fmt, const char *proto, size_t proto_len) {
+    CallReply *rep = nextCallReply(ctx);
+    callReplySetSharedData(rep, VALKEYMODULE_REPLY_VERBATIM_STRING, proto, proto_len, REPLY_FLAG_RESP3);
+    rep->len = len;
+    rep->val.verbatim_str.str = str;
+    rep->val.verbatim_str.format = fmt;
+}
+
+void callReplyError(void *ctx, const char *str, size_t len, const char *proto, size_t proto_len) {
+    CallReply *rep = nextCallReply(ctx);
+    callReplySetSharedData(rep, VALKEYMODULE_REPLY_ERROR, proto, proto_len, 0);
+    rep->len = len;
+    rep->val.str = str;
+}
+
+void callReplyLong(void *ctx, long long val, const char *proto, size_t proto_len) {
+    CallReply *rep = nextCallReply(ctx);
     callReplySetSharedData(rep, VALKEYMODULE_REPLY_INTEGER, proto, proto_len, 0);
     rep->val.ll = val;
 }
 
-static void callReplyDouble(void *ctx, double val, const char *proto, size_t proto_len) {
-    CallReply *rep = ctx;
+void callReplyDouble(void *ctx, double val, const char *proto, size_t proto_len) {
+    CallReply *rep = nextCallReply(ctx);
     callReplySetSharedData(rep, VALKEYMODULE_REPLY_DOUBLE, proto, proto_len, REPLY_FLAG_RESP3);
     rep->val.d = val;
 }
 
-static void callReplyVerbatimString(void *ctx,
-                                    const char *format,
-                                    const char *str,
-                                    size_t len,
-                                    const char *proto,
-                                    size_t proto_len) {
-    CallReply *rep = ctx;
-    callReplySetSharedData(rep, VALKEYMODULE_REPLY_VERBATIM_STRING, proto, proto_len, REPLY_FLAG_RESP3);
-    rep->len = len;
-    rep->val.verbatim_str.str = str;
-    rep->val.verbatim_str.format = format;
-}
-
-static void callReplyBigNumber(void *ctx, const char *str, size_t len, const char *proto, size_t proto_len) {
-    CallReply *rep = ctx;
+void callReplyBigNumber(void *ctx, const char *str, size_t len, const char *proto, size_t proto_len) {
+    CallReply *rep = nextCallReply(ctx);
     callReplySetSharedData(rep, VALKEYMODULE_REPLY_BIG_NUMBER, proto, proto_len, REPLY_FLAG_RESP3);
     rep->len = len;
     rep->val.str = str;
 }
 
-static void callReplyBool(void *ctx, int val, const char *proto, size_t proto_len) {
-    CallReply *rep = ctx;
+void callReplyBool(void *ctx, int val, const char *proto, size_t proto_len) {
+    CallReply *rep = nextCallReply(ctx);
     callReplySetSharedData(rep, VALKEYMODULE_REPLY_BOOL, proto, proto_len, REPLY_FLAG_RESP3);
     rep->val.ll = val;
 }
 
-static void callReplyParseCollection(ReplyParser *parser,
-                                     CallReply *rep,
-                                     size_t len,
-                                     const char *proto,
-                                     size_t elements_per_entry) {
+void callReplyParseCollectionStart(void *ctx, size_t len, int type) {
+    CallReply *rep = nextCallReply(ctx);
+
+    if (type == VALKEYMODULE_REPLY_ATTRIBUTE) {
+        rep->attribute = zcalloc(sizeof(CallReply));
+        rep = rep->attribute;
+    }
+
+    int is_map = type == VALKEYMODULE_REPLY_MAP || type == VALKEYMODULE_REPLY_ATTRIBUTE;
+
+    rep->type = type;
     rep->len = len;
-    rep->val.array = zcalloc(elements_per_entry * len * sizeof(CallReply));
-    for (size_t i = 0; i < len * elements_per_entry; i += elements_per_entry) {
-        for (size_t j = 0; j < elements_per_entry; ++j) {
-            rep->val.array[i + j].private_data = rep->private_data;
-            parseReply(parser, rep->val.array + i + j);
-            rep->val.array[i + j].flags |= REPLY_FLAG_PARSED;
-            if (rep->val.array[i + j].flags & REPLY_FLAG_RESP3) {
-                /* If one of the sub-replies is RESP3, then the current reply is also RESP3. */
-                rep->flags |= REPLY_FLAG_RESP3;
-            }
+    size_t num_elements = is_map ? len * 2 : len;
+    rep->val.array = zcalloc(sizeof(CallReply) * num_elements);
+
+    for (size_t i = 0; i < num_elements; i++) {
+        rep->val.array[i].private_data = rep->private_data;
+    }
+
+    if (type != VALKEYMODULE_REPLY_ARRAY) {
+        rep->flags |= REPLY_FLAG_RESP3;
+    }
+
+    pushCallReplyFrame(ctx, rep->val.array);
+}
+
+void callReplyParseCollectionEnd(void *ctx, const char *proto, size_t proto_len, int type) {
+    int is_map = type == VALKEYMODULE_REPLY_MAP || type == VALKEYMODULE_REPLY_ATTRIBUTE;
+    CallReplyBuilderCtx *p_ctx = ctx;
+    /* idx is the index of the last added element, so we need to add 1 to get the number of added elements. */
+    size_t num_added_elements = p_ctx->current->idx + 1;
+
+    popCallReplyFrame(ctx);
+    CallReply *rep = getCallReply(ctx);
+
+    if (type == VALKEYMODULE_REPLY_ATTRIBUTE) {
+        rep = rep->attribute;
+    }
+
+    serverAssert(rep->type == type);
+    serverAssert(rep->len == (is_map ? num_added_elements / 2 : num_added_elements));
+    rep->flags |= REPLY_FLAG_PARSED;
+    rep->proto = proto;
+    rep->proto_len = proto_len;
+
+    size_t num_elements = is_map ? rep->len * 2 : rep->len;
+    for (size_t i = 0; i < num_elements; i++) {
+        rep->val.array[i].flags |= REPLY_FLAG_PARSED;
+        if (rep->val.array[i].flags & REPLY_FLAG_RESP3) {
+            rep->flags |= REPLY_FLAG_RESP3;
         }
     }
-    rep->proto = proto;
-    rep->proto_len = parser->curr_location - proto;
 }
 
-static void callReplyAttribute(ReplyParser *parser, void *ctx, size_t len, const char *proto) {
-    CallReply *rep = ctx;
-    rep->attribute = zcalloc(sizeof(CallReply));
-
-    /* Continue parsing the attribute reply */
-    rep->attribute->len = len;
-    rep->attribute->type = VALKEYMODULE_REPLY_ATTRIBUTE;
-    callReplyParseCollection(parser, rep->attribute, len, proto, 2);
-    rep->attribute->flags |= REPLY_FLAG_PARSED | REPLY_FLAG_RESP3;
-    rep->attribute->private_data = rep->private_data;
-
-    /* Continue parsing the reply */
-    parseReply(parser, rep);
-
-    /* In this case we need to fix the proto address and len, it should start from the attribute */
-    rep->proto = proto;
-    rep->proto_len = parser->curr_location - proto;
-    rep->flags |= REPLY_FLAG_RESP3;
+void callReplyArrayStart(void *ctx, size_t len) {
+    callReplyParseCollectionStart(ctx, len, VALKEYMODULE_REPLY_ARRAY);
 }
 
-static void callReplyArray(ReplyParser *parser, void *ctx, size_t len, const char *proto) {
-    CallReply *rep = ctx;
-    rep->type = VALKEYMODULE_REPLY_ARRAY;
-    callReplyParseCollection(parser, rep, len, proto, 1);
+void callReplyArrayEnd(void *ctx, const char *proto, size_t proto_len) {
+    callReplyParseCollectionEnd(ctx, proto, proto_len, VALKEYMODULE_REPLY_ARRAY);
 }
 
-static void callReplySet(ReplyParser *parser, void *ctx, size_t len, const char *proto) {
-    CallReply *rep = ctx;
-    rep->type = VALKEYMODULE_REPLY_SET;
-    callReplyParseCollection(parser, rep, len, proto, 1);
-    rep->flags |= REPLY_FLAG_RESP3;
+void callReplyMapStart(void *ctx, size_t len) {
+    callReplyParseCollectionStart(ctx, len, VALKEYMODULE_REPLY_MAP);
 }
 
-static void callReplyMap(ReplyParser *parser, void *ctx, size_t len, const char *proto) {
-    CallReply *rep = ctx;
-    rep->type = VALKEYMODULE_REPLY_MAP;
-    callReplyParseCollection(parser, rep, len, proto, 2);
-    rep->flags |= REPLY_FLAG_RESP3;
+void callReplyMapEnd(void *ctx, const char *proto, size_t proto_len) {
+    callReplyParseCollectionEnd(ctx, proto, proto_len, VALKEYMODULE_REPLY_MAP);
 }
 
-static void callReplyParseError(void *ctx) {
-    CallReply *rep = ctx;
+void callReplySetStart(void *ctx, size_t len) {
+    callReplyParseCollectionStart(ctx, len, VALKEYMODULE_REPLY_SET);
+}
+
+void callReplySetEnd(void *ctx, const char *proto, size_t proto_len) {
+    callReplyParseCollectionEnd(ctx, proto, proto_len, VALKEYMODULE_REPLY_SET);
+}
+
+void callReplyAttributeStart(void *ctx, size_t len) {
+    callReplyParseCollectionStart(ctx, len, VALKEYMODULE_REPLY_ATTRIBUTE);
+}
+
+void callReplyAttributeEnd(void *ctx, const char *proto, size_t proto_len) {
+    callReplyParseCollectionEnd(ctx, proto, proto_len, VALKEYMODULE_REPLY_ATTRIBUTE);
+    CallReplyBuilderCtx *p_ctx = ctx;
+    /* there should be at least one element in the attribute collection */
+    serverAssert(p_ctx->current->idx > -1);
+
+    /* attribute is not part of the root collection, so we need to decrease the idx
+     * to not count it as an element in the root collection */
+    p_ctx->current->idx--;
+}
+
+void callReplyParseError(void *ctx) {
+    CallReply *rep = nextCallReply(ctx);
     rep->type = VALKEYMODULE_REPLY_UNKNOWN;
 }
+
+RespHandlers callReplyParsingCtx = {
+    .null = callReplyNull,
+    .nullBulkString = callReplyNullBulkString,
+    .nullArray = callReplyNullArray,
+    .bulkString = callReplyBulkString,
+    .simpleString = callReplySimpleString,
+    .verbatimString = callReplyVerbatimString,
+    .error = callReplyError,
+    .integer = callReplyLong,
+    .doubleVal = callReplyDouble,
+    .bigNumber = callReplyBigNumber,
+    .boolVal = callReplyBool,
+    .attributeStart = callReplyAttributeStart,
+    .attributeEnd = callReplyAttributeEnd,
+    .arrayStart = callReplyArrayStart,
+    .arrayEnd = callReplyArrayEnd,
+    .mapStart = callReplyMapStart,
+    .mapEnd = callReplyMapEnd,
+    .setStart = callReplySetStart,
+    .setEnd = callReplySetEnd,
+    .replyParsingError = callReplyParseError,
+    .context = NULL,
+};
 
 /* Recursively free the current call reply and its sub-replies. */
 static void freeCallReplyInternal(CallReply *rep) {
@@ -482,25 +585,6 @@ CallReply *callReplyCreatePromise(void *private_data) {
     return res;
 }
 
-static const ReplyParserCallbacks DefaultParserCallbacks = {
-    .null_callback = callReplyNull,
-    .bulk_string_callback = callReplyBulkString,
-    .null_bulk_string_callback = callReplyNullBulkString,
-    .null_array_callback = callReplyNullArray,
-    .error_callback = callReplyError,
-    .simple_str_callback = callReplySimpleStr,
-    .long_callback = callReplyLong,
-    .array_callback = callReplyArray,
-    .set_callback = callReplySet,
-    .map_callback = callReplyMap,
-    .double_callback = callReplyDouble,
-    .bool_callback = callReplyBool,
-    .big_number_callback = callReplyBigNumber,
-    .verbatim_string_callback = callReplyVerbatimString,
-    .attribute_callback = callReplyAttribute,
-    .error = callReplyParseError,
-};
-
 /* Parse the buffer located in rep->original_proto and update the CallReply
  * structure to represent its contents. */
 static void callReplyParse(CallReply *rep) {
@@ -508,10 +592,16 @@ static void callReplyParse(CallReply *rep) {
         return;
     }
 
-    ReplyParser parser = {.curr_location = rep->proto, .callbacks = DefaultParserCallbacks};
+    CallReplyBuilderCtx builder_ctx = {.current = NULL};
+    pushCallReplyFrame(&builder_ctx, rep);
 
-    parseReply(&parser, rep);
+    callReplyParsingCtx.context = &builder_ctx;
+
+    ReplyParser parser = {.curr_location = rep->proto, .callbacks = RawReplyParserCallbacks};
+    parseReply(&parser, &callReplyParsingCtx);
     rep->flags |= REPLY_FLAG_PARSED;
+
+    popCallReplyFrame(&builder_ctx);
 }
 
 /* Return the call reply type (VALKEYMODULE_REPLY_...). */

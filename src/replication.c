@@ -2382,10 +2382,13 @@ void replicaAfterLoadPrimaryRDB(connection *conn, rdbSaveInfo *rsi, int disk_bas
      * directly, avoiding a redundant bgrewriteaof. Otherwise (diskless
      * sync or rdb-preamble disabled), fall back to bgrewriteaof. */
     if (server.aof_enabled) {
-        if (disk_based_sync && server.aof_use_rdb_preamble && server.aof_state == AOF_OFF) {
-            restartAOFWithSyncRdb();
+        if (disk_based_sync && server.aof_use_rdb_preamble) {
+            if (restartAOFWithSyncRdb() == C_ERR) {
+                restartAOFAfterSYNC();
+            }
+        } else {
+            restartAOFAfterSYNC();
         }
-        if (server.aof_state == AOF_OFF) restartAOFAfterSYNC();
     }
 
     /* In case of dual channel replication sync we want to close the RDB connection

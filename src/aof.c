@@ -1097,7 +1097,7 @@ int restartAOFWithSyncRdb(void) {
 
     serverLog(LL_NOTICE, "Reused RDB file from primary sync as AOF base file: %s", new_base_filename);
     ret = C_OK;
-    goto done;
+    return ret;
 
 cleanup:
     if (rdbfile_renamed) {
@@ -1127,8 +1127,6 @@ cleanup:
     }
     if (temp_am) aofManifestFree(temp_am);
     if (new_base_filepath) sdsfree(new_base_filepath);
-
-done:
     return ret;
 }
 

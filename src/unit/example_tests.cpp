@@ -4,6 +4,8 @@ extern "C" {
 #include "server.h"
 }
 
+extern bool valgrind;
+
 // Use a class name descriptive of your test unit
 class ExampleTest : public ::testing::Test {
     // standard boilerplate supporting mocked functions
@@ -27,6 +29,9 @@ using ExampleDeathTest = ExampleTest;
 
 // Example of a DeathTest, which passes only if the code crashes.
 TEST_F(ExampleDeathTest, TestSimpleDeath) {
+    if (valgrind) {
+        GTEST_SKIP() << "Skipping death test under valgrind";
+    }
     EXPECT_DEATH(
         {
             *((volatile char *)0) = 'x'; // SEGV

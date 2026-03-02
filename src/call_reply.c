@@ -35,6 +35,218 @@
 #define REPLY_FLAG_RESP3 (1 << 2)
 #define REPLY_FLAG_EXACT_TYPE (1 << 3)
 
+typedef ValkeyModuleReplyHandlers RespHandlers;
+
+static void callRawReplyNull(void *ctx, const char *proto, size_t proto_len) {
+    RespHandlers *h = (RespHandlers *)ctx;
+    if (!h->null) return;
+    h->null(h->context, proto, proto_len);
+}
+
+static void callRawReplyBulkString(void *ctx, const char *str, size_t len, const char *proto, size_t proto_len) {
+    RespHandlers *h = (RespHandlers *)ctx;
+    if (!h->bulkString) return;
+    h->bulkString(h->context, str, len, proto, proto_len);
+}
+
+static void callRawReplyNullBulkString(void *ctx, const char *proto, size_t proto_len) {
+    RespHandlers *h = (RespHandlers *)ctx;
+    if (!h->nullBulkString) return;
+    h->nullBulkString(h->context, proto, proto_len);
+}
+
+static void callRawReplyNullArray(void *ctx, const char *proto, size_t proto_len) {
+    RespHandlers *h = (RespHandlers *)ctx;
+    if (!h->nullArray) return;
+    h->nullArray(h->context, proto, proto_len);
+}
+
+static void callRawReplyError(void *ctx, const char *str, size_t len, const char *proto, size_t proto_len) {
+    RespHandlers *h = (RespHandlers *)ctx;
+    if (!h->error) return;
+    h->error(h->context, str, len, proto, proto_len);
+}
+
+static void callRawReplySimpleStr(void *ctx, const char *str, size_t len, const char *proto, size_t proto_len) {
+    RespHandlers *h = (RespHandlers *)ctx;
+    if (!h->simpleString) return;
+    h->simpleString(h->context, str, len, proto, proto_len);
+}
+
+static void callRawReplyLong(void *ctx, long long val, const char *proto, size_t proto_len) {
+    RespHandlers *h = (RespHandlers *)ctx;
+    if (!h->integer) return;
+    h->integer(h->context, val, proto, proto_len);
+}
+
+static void callRawReplyArray(ReplyParser *parser, void *ctx, size_t len, const char *proto) {
+    RespHandlers *h = (RespHandlers *)ctx;
+    if (!h->arrayStart) return;
+    h->arrayStart(h->context, len);
+    for (size_t i = 0; i < len; i++) {
+        parseReply(parser, ctx);
+    }
+    if (!h->arrayEnd) return;
+    h->arrayEnd(h->context, proto, parser->curr_location - proto);
+}
+
+static void callRawReplySet(ReplyParser *parser, void *ctx, size_t len, const char *proto) {
+    RespHandlers *h = (RespHandlers *)ctx;
+    if (!h->setStart) return;
+    h->setStart(h->context, len);
+    for (size_t i = 0; i < len; i++) {
+        parseReply(parser, ctx);
+    }
+    if (!h->setEnd) return;
+    h->setEnd(h->context, proto, parser->curr_location - proto);
+}
+
+static void callRawReplyMap(ReplyParser *parser, void *ctx, size_t len, const char *proto) {
+    RespHandlers *h = (RespHandlers *)ctx;
+    if (!h->mapStart) return;
+    h->mapStart(h->context, len);
+    for (size_t i = 0; i < len; i++) {
+        parseReply(parser, ctx);
+        parseReply(parser, ctx);
+    }
+    if (!h->mapEnd) return;
+    h->mapEnd(h->context, proto, parser->curr_location - proto);
+}
+
+static void callRawReplyDouble(void *ctx, double val, const char *proto, size_t proto_len) {
+    RespHandlers *h = (RespHandlers *)ctx;
+    if (!h->doubleVal) return;
+    h->doubleVal(h->context, val, proto, proto_len);
+}
+
+static void callRawReplyBool(void *ctx, int val, const char *proto, size_t proto_len) {
+    RespHandlers *h = (RespHandlers *)ctx;
+    if (!h->boolVal) return;
+    h->boolVal(h->context, val, proto, proto_len);
+}
+
+static void callRawReplyBigNumber(void *ctx, const char *str, size_t len, const char *proto, size_t proto_len) {
+    RespHandlers *h = (RespHandlers *)ctx;
+    if (!h->bigNumber) return;
+    h->bigNumber(h->context, str, len, proto, proto_len);
+}
+
+static void callRawReplyVerbatimString(void *ctx,
+                                       const char *format,
+                                       const char *str,
+                                       size_t len,
+                                       const char *proto,
+                                       size_t proto_len) {
+    RespHandlers *h = (RespHandlers *)ctx;
+    if (!h->verbatimString) return;
+    h->verbatimString(h->context, str, len, format, proto, proto_len);
+}
+
+static void callRawReplyAttribute(ReplyParser *parser, void *ctx, size_t len, const char *proto) {
+    RespHandlers *h = (RespHandlers *)ctx;
+    if (!h->attributeStart) return;
+    h->attributeStart(h->context, len);
+    for (size_t i = 0; i < len; i++) {
+        parseReply(parser, ctx);
+        parseReply(parser, ctx);
+    }
+    if (!h->attributeEnd) return;
+    h->attributeEnd(h->context, proto, parser->curr_location - proto);
+
+    parseReply(parser, ctx);
+}
+
+static void callRawReplyParseError(void *ctx) {
+    RespHandlers *h = (RespHandlers *)ctx;
+    if (!h->replyParsingError) return;
+    h->replyParsingError(h->context);
+}
+
+static const ReplyParserCallbacks RawReplyParserCallbacks = {
+    .null_callback = callRawReplyNull,
+    .bulk_string_callback = callRawReplyBulkString,
+    .null_bulk_string_callback = callRawReplyNullBulkString,
+    .null_array_callback = callRawReplyNullArray,
+    .error_callback = callRawReplyError,
+    .simple_str_callback = callRawReplySimpleStr,
+    .long_callback = callRawReplyLong,
+    .array_callback = callRawReplyArray,
+    .set_callback = callRawReplySet,
+    .map_callback = callRawReplyMap,
+    .double_callback = callRawReplyDouble,
+    .bool_callback = callRawReplyBool,
+    .big_number_callback = callRawReplyBigNumber,
+    .verbatim_string_callback = callRawReplyVerbatimString,
+    .attribute_callback = callRawReplyAttribute,
+    .error = callRawReplyParseError,
+};
+
+/* Parse the RESP reply accumulated in client `c`'s output buffer and deliver
+ * it to the handler callbacks in `handlers`.
+ *
+ * If `handlers->onAvailable` is set it is called first with the raw
+ * RESP bytes.  When it returns 0, per-type callbacks are skipped; when it
+ * returns 1 (or is NULL), the reply is walked recursively and each value is
+ * dispatched to the matching typed callback.
+ *
+ * The client's output buffer is consumed by this call (bufpos reset, reply
+ * list drained). */
+void invokeReplyHandlers(ValkeyModuleCtx *ctx, client *c, ValkeyModuleReplyHandlers *handlers) {
+    char *buf = NULL;
+    size_t buf_len = 0;
+    int free_buffer = 0;
+
+    serverAssert(!c->flag.blocked);
+
+    if (listLength(c->reply) == 0 && (size_t)c->bufpos < c->buf_usable_size) {
+        /* This is a fast path for the common case of a reply inside the
+         * client static buffer. Don't create an SDS string but just use
+         * the client buffer directly. */
+        c->buf[c->bufpos] = '\0';
+        buf = c->buf;
+        buf_len = c->bufpos;
+        c->bufpos = 0;
+    } else {
+        listIter iter;
+        listRewind(c->reply, &iter);
+        listNode *node;
+        size_t lensum = c->bufpos;
+        while ((node = listNext(&iter))) {
+            clientReplyBlock *o = listNodeValue(node);
+            lensum += o->used;
+        }
+        buf = zmalloc_usable(lensum + 1, NULL);
+        char *ptr = buf;
+        memcpy(ptr, c->buf, c->bufpos);
+        ptr += c->bufpos;
+        c->bufpos = 0;
+        while (listLength(c->reply)) {
+            clientReplyBlock *o = listNodeValue(listFirst(c->reply));
+            memcpy(ptr, o->buf, o->used);
+            ptr += o->used;
+            listDelNode(c->reply, listFirst(c->reply));
+        }
+        ptr[0] = '\0';
+        buf_len = lensum;
+        free_buffer = 1;
+    }
+
+    int continue_parsing = 1;
+
+    if (handlers->onAvailable) {
+        continue_parsing = handlers->onAvailable(handlers->context, ctx, buf, buf_len);
+    }
+
+    if (continue_parsing) {
+        ReplyParser parser = {.curr_location = buf, .callbacks = RawReplyParserCallbacks};
+        parseReply(&parser, handlers);
+    }
+
+    if (free_buffer) {
+        zfree(buf);
+    }
+}
+
 /* --------------------------------------------------------
  * An opaque struct used to parse a RESP protocol reply and
  * represent it. Used when parsing replies such as in RM_Call

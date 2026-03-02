@@ -863,12 +863,28 @@ typedef struct ValkeyModuleIO ValkeyModuleIO;
 typedef struct ValkeyModuleDigest ValkeyModuleDigest;
 typedef struct ValkeyModuleInfoCtx ValkeyModuleInfoCtx;
 typedef struct ValkeyModuleDefragCtx ValkeyModuleDefragCtx;
+typedef struct ValkeyModuleAsyncRMCallPromise ValkeyModuleCallArgvHandle;
 
 /* Function pointers needed by both the core and modules, these needs to be
  * exposed since you can't cast a function pointer to (void *). */
 typedef void (*ValkeyModuleInfoFunc)(ValkeyModuleInfoCtx *ctx, int for_crash_report);
 typedef void (*ValkeyModuleDefragFunc)(ValkeyModuleDefragCtx *ctx);
 typedef void (*ValkeyModuleUserChangedFunc)(uint64_t client_id, void *privdata);
+
+/* ValkeyModule_CallArgv Flags */
+#define VALKEYMODULE_CALL_ARGV_REPLICATE (1 << 0)
+#define VALKEYMODULE_CALL_ARGV_NO_AOF (1 << 1)
+#define VALKEYMODULE_CALL_ARGV_NO_REPLICAS (1 << 2)
+#define VALKEYMODULE_CALL_ARGV_RESP_3 (1 << 3)
+#define VALKEYMODULE_CALL_ARGV_RESP_AUTO (1 << 4)
+#define VALKEYMODULE_CALL_ARGV_RUN_AS_USER (1 << 5)
+#define VALKEYMODULE_CALL_ARGV_SCRIPT_MODE (1 << 6)
+#define VALKEYMODULE_CALL_ARGV_NO_WRITES (1 << 7)
+#define VALKEYMODULE_CALL_ARGV_ERRORS_AS_REPLIES (1 << 8)
+#define VALKEYMODULE_CALL_ARGV_RESPECT_DENY_OOM (1 << 9)
+#define VALKEYMODULE_CALL_ARGV_DRY_RUN (1 << 10)
+#define VALKEYMODULE_CALL_ARGV_ALLOW_BLOCK (1 << 11)
+#define VALKEYMODULE_CALL_ARGV_REPLY_EXACT (1 << 12)
 
 /* Type definitions for implementing scripting engines modules. */
 typedef void ValkeyModuleScriptingEngineCtx;
@@ -1298,6 +1314,51 @@ typedef struct ValkeyModuleScriptingEngineMethodsV4 {
 
 } ValkeyModuleScriptingEngineMethodsV4;
 
+/* Handler table for parsing RESP replies, used by ValkeyModule_CallArgv.
+ * Set the function pointers for the types you want to handle; leave unused ones as NULL.
+ * The `context` pointer is passed as the first argument to every callback.
+ * The `proto` and `proto_len` arguments point to the raw RESP bytes for the parsed value.
+ * For collection types (array, map, set, attribute), separate start and end callbacks are
+ * provided. The `proto` in the end callback covers the entire collection including all its
+ * elements.
+ */
+typedef struct ValkeyModuleReplyHandlers {
+    void (*null)(void *ctx, const char *proto, size_t proto_len);
+    void (*nullBulkString)(void *ctx, const char *proto, size_t proto_len);
+    void (*nullArray)(void *ctx, const char *proto, size_t proto_len);
+    void (*bulkString)(void *ctx, const char *str, size_t len, const char *proto, size_t proto_len);
+    void (*simpleString)(void *ctx, const char *str, size_t len, const char *proto, size_t proto_len);
+    void (*verbatimString)(void *ctx, const char *str, size_t len, const char *fmt, const char *proto, size_t proto_len);
+    void (*error)(void *ctx, const char *msg, size_t len, const char *proto, size_t proto_len);
+    void (*integer)(void *ctx, long long val, const char *proto, size_t proto_len);
+    void (*doubleVal)(void *ctx, double val, const char *proto, size_t proto_len);
+    void (*bigNumber)(void *ctx, const char *str, size_t len, const char *proto, size_t proto_len);
+    void (*boolVal)(void *ctx, int val, const char *proto, size_t proto_len);
+    void (*attributeStart)(void *ctx, size_t len);
+    void (*attributeEnd)(void *ctx, const char *proto, size_t proto_len);
+    void (*arrayStart)(void *ctx, size_t len);
+    void (*arrayEnd)(void *ctx, const char *proto, size_t proto_len);
+    void (*mapStart)(void *ctx, size_t len);
+    void (*mapEnd)(void *ctx, const char *proto, size_t proto_len);
+    void (*setStart)(void *ctx, size_t len);
+    void (*setEnd)(void *ctx, const char *proto, size_t proto_len);
+    void (*replyParsingError)(void *ctx);
+
+    /* This callback is invoked when the client is blocked waiting for a reply.
+     * `handle` can be passed to ValkeyModule_CallArgvAbort to cancel the
+     * pending call before a reply arrives. The handle is valid until either
+     * onAvailable is invoked or ValkeyModule_CallArgvAbort is called. */
+    void (*onBlocked)(void *ctx, ValkeyModuleCtx *module_ctx, ValkeyModuleCallArgvHandle *handle);
+
+    /* This callback is invoked when a RESP reply is available for processing.
+     * The callback should return 1 if parsing should continue, or 0 if parsing should stop.
+     * `proto` and `proto_len` provide the raw RESP bytes for the entire reply.
+     */
+    int (*onAvailable)(void *ctx, ValkeyModuleCtx *module_ctx, const char *proto, size_t proto_len);
+
+    void *context;
+} ValkeyModuleReplyHandlers;
+
 #define ValkeyModuleScriptingEngineMethods ValkeyModuleScriptingEngineMethodsV4
 
 /* ------------------------- End of common defines ------------------------ */
@@ -1500,6 +1561,12 @@ VALKEYMODULE_API ValkeyModuleCallReply *(*ValkeyModule_Call)(ValkeyModuleCtx *ct
                                                              const char *cmdname,
                                                              const char *fmt,
                                                              ...)VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_CallArgv)(ValkeyModuleCtx *ctx,
+                                              ValkeyModuleString **argv,
+                                              int argc,
+                                              int flags,
+                                              ValkeyModuleReplyHandlers *reply_parsing_ctx) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_CallArgvAbort)(ValkeyModuleCallArgvHandle *handle) VALKEYMODULE_ATTR;
 VALKEYMODULE_API const char *(*ValkeyModule_CallReplyProto)(ValkeyModuleCallReply *reply, size_t *len)VALKEYMODULE_ATTR;
 VALKEYMODULE_API void (*ValkeyModule_FreeCallReply)(ValkeyModuleCallReply *reply) VALKEYMODULE_ATTR;
 VALKEYMODULE_API int (*ValkeyModule_CallReplyType)(ValkeyModuleCallReply *reply) VALKEYMODULE_ATTR;
@@ -2268,6 +2335,8 @@ static int ValkeyModule_Init(ValkeyModuleCtx *ctx, const char *name, int ver, in
     VALKEYMODULE_GET_API(StringToLongDouble);
     VALKEYMODULE_GET_API(StringToStreamID);
     VALKEYMODULE_GET_API(Call);
+    VALKEYMODULE_GET_API(CallArgv);
+    VALKEYMODULE_GET_API(CallArgvAbort);
     VALKEYMODULE_GET_API(CallReplyProto);
     VALKEYMODULE_GET_API(FreeCallReply);
     VALKEYMODULE_GET_API(CallReplyInteger);

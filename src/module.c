@@ -65,6 +65,7 @@
 #include "call_reply.h"
 #include "hdr_histogram.h"
 #include "crc16_slottable.h"
+#include "util.h"
 #include "valkeymodule.h"
 #include "module.h"
 #include "io_threads.h"
@@ -401,21 +402,6 @@ typedef struct ValkeyModuleServerInfoData {
     rax *rax; /* parsed info data. */
 } ValkeyModuleServerInfoData;
 
-/* Flags for moduleCreateArgvFromUserFormat(). */
-#define VALKEYMODULE_ARGV_REPLICATE (1 << 0)
-#define VALKEYMODULE_ARGV_NO_AOF (1 << 1)
-#define VALKEYMODULE_ARGV_NO_REPLICAS (1 << 2)
-#define VALKEYMODULE_ARGV_RESP_3 (1 << 3)
-#define VALKEYMODULE_ARGV_RESP_AUTO (1 << 4)
-#define VALKEYMODULE_ARGV_RUN_AS_USER (1 << 5)
-#define VALKEYMODULE_ARGV_SCRIPT_MODE (1 << 6)
-#define VALKEYMODULE_ARGV_NO_WRITES (1 << 7)
-#define VALKEYMODULE_ARGV_CALL_REPLIES_AS_ERRORS (1 << 8)
-#define VALKEYMODULE_ARGV_RESPECT_DENY_OOM (1 << 9)
-#define VALKEYMODULE_ARGV_DRY_RUN (1 << 10)
-#define VALKEYMODULE_ARGV_ALLOW_BLOCK (1 << 11)
-#define VALKEYMODULE_ARGV_CALL_REPLY_EXACT (1 << 12)
-
 /* Determine whether the server should signalModifiedKey implicitly.
  * In case 'ctx' has no 'module' member (and therefore no module->options),
  * we assume default behavior, that is, the server signals.
@@ -503,7 +489,16 @@ typedef struct ValkeyModuleAsyncRMCallPromise {
     ValkeyModuleOnUnblocked on_unblocked;
     client *c;
     ValkeyModuleCtx *ctx;
+
+    /* Whether the promise was created from a call to VM_CallArgv or VM_Call. */
+    int from_call_argv;
+
+    /* RESP handlers to use when parsing the reply of the command called from the blocked context.
+     * Only used if 'from_call_argv' is true. */
+    ValkeyModuleReplyHandlers resp_handlers;
 } ValkeyModuleAsyncRMCallPromise;
+
+typedef struct ValkeyModuleAsyncRMCallPromise ValkeyModuleCallArgvHandle;
 
 /* --------------------------------------------------------------------------
  * Prototypes
@@ -924,19 +919,27 @@ void moduleCallCommandUnblockedHandler(client *c) {
     ValkeyModuleAsyncRMCallPromise *promise = c->bstate->async_rm_call_handle;
     serverAssert(promise);
     ValkeyModule *module = promise->module;
-    if (!promise->on_unblocked) {
+    if (!promise->from_call_argv && !promise->on_unblocked) {
         moduleReleaseTempClient(c);
         return; /* module did not set any unblock callback. */
     }
+
     moduleCreateContext(&ctx, module, VALKEYMODULE_CTX_TEMP_CLIENT);
     selectDb(ctx.client, c->db->id);
-
-    CallReply *reply = moduleParseReply(c, NULL);
     module->in_call++;
-    promise->on_unblocked(&ctx, reply, promise->private_data);
-    module->in_call--;
 
+    if (!promise->from_call_argv) {
+        CallReply *reply = moduleParseReply(c, NULL);
+        promise->on_unblocked(&ctx, reply, promise->private_data);
+
+    } else {
+        invokeReplyHandlers(&ctx, c, &promise->resp_handlers);
+    }
+
+    module->in_call--;
     moduleFreeContext(&ctx);
+
+
     moduleReleaseTempClient(c);
 }
 
@@ -3612,7 +3615,6 @@ int VM_ReplyWithCallReply(ValkeyModuleCtx *ctx, ValkeyModuleCallReply *reply) {
     return VALKEYMODULE_OK;
 }
 
-
 /* Forward raw RESP bytes directly to the client that issued the module command.
  *
  * This is intended to be called from a ValkeyModuleReplyHandlers.onAvailable
@@ -3758,8 +3760,8 @@ int VM_Replicate(ValkeyModuleCtx *ctx, const char *cmdname, const char *fmt, ...
      * the caller can exclude one or the other using the "A" or "R"
      * modifiers. */
     int target = 0;
-    if (!(flags & VALKEYMODULE_ARGV_NO_AOF)) target |= PROPAGATE_AOF;
-    if (!(flags & VALKEYMODULE_ARGV_NO_REPLICAS)) target |= PROPAGATE_REPL;
+    if (!(flags & VALKEYMODULE_CALL_ARGV_NO_AOF)) target |= PROPAGATE_AOF;
+    if (!(flags & VALKEYMODULE_CALL_ARGV_NO_REPLICAS)) target |= PROPAGATE_REPL;
 
     alsoPropagate(ctx->client->db->id, argv, argc, target, slot);
 
@@ -6097,6 +6099,7 @@ void VM_FreeCallReply(ValkeyModuleCallReply *reply) {
     ValkeyModuleCtx *ctx = NULL;
     if (callReplyType(reply) == VALKEYMODULE_REPLY_PROMISE) {
         ValkeyModuleAsyncRMCallPromise *promise = callReplyGetPrivateData(reply);
+        serverAssert(!promise->from_call_argv);
         ctx = promise->ctx;
         freeValkeyModuleAsyncRMCallPromise(promise);
     } else {
@@ -6221,6 +6224,7 @@ void VM_CallReplyPromiseSetUnblockHandler(ValkeyModuleCallReply *reply,
                                           ValkeyModuleOnUnblocked on_unblock,
                                           void *private_data) {
     ValkeyModuleAsyncRMCallPromise *promise = callReplyGetPrivateData(reply);
+    serverAssert(!promise->from_call_argv);
     promise->on_unblocked = on_unblock;
     promise->private_data = private_data;
 }
@@ -6238,6 +6242,7 @@ void VM_CallReplyPromiseSetUnblockHandler(ValkeyModuleCallReply *reply,
  * disconnect callback. For server-provided commands this can not happened.*/
 int VM_CallReplyPromiseAbort(ValkeyModuleCallReply *reply, void **private_data) {
     ValkeyModuleAsyncRMCallPromise *promise = callReplyGetPrivateData(reply);
+    serverAssert(!promise->from_call_argv);
     if (!promise->c)
         return VALKEYMODULE_ERR;                              /* Promise can not be aborted, either already aborted or already finished. */
     if (!(promise->c->flag.blocked)) return VALKEYMODULE_ERR; /* Client is not blocked anymore, can not abort it. */
@@ -6246,6 +6251,35 @@ int VM_CallReplyPromiseAbort(ValkeyModuleCallReply *reply, void **private_data) 
     if (private_data) *private_data = promise->private_data;
     promise->private_data = NULL;
     promise->on_unblocked = NULL;
+    unblockClient(promise->c, 0);
+    moduleReleaseTempClient(promise->c);
+    return VALKEYMODULE_OK;
+}
+
+/* Abort a pending ValkeyModule_CallArgv invocation that has been deferred
+ * (i.e. the underlying command is blocking and onBlocked was called).
+ * Returns VALKEYMODULE_OK if the abort succeeded, or VALKEYMODULE_ERR if the
+ * call has already completed and can no longer be aborted.
+ *
+ * If the abort succeeds it is guaranteed that neither onAvailable nor
+ * any other reply callback in ValkeyModuleReplyHandlers will be invoked for
+ * this call. The abort handle becomes invalid after this function returns.
+ * The abort handle also becomes invalid once onAvailable is called.
+ *
+ * Note: as with VM_CallReplyPromiseAbort, if the underlying blocking command
+ * belongs to a module that does not honour disconnect callbacks, the abort may
+ * succeed internally without the command actually stopping. */
+int VM_CallArgvAbort(ValkeyModuleCallArgvHandle *handle) {
+    ValkeyModuleAsyncRMCallPromise *promise = handle;
+    serverAssert(promise->from_call_argv);
+    if (!promise->c) return VALKEYMODULE_ERR;               /* Already finished or aborted. */
+    if (!promise->c->flag.blocked) return VALKEYMODULE_ERR; /* No longer blocked. */
+
+    /* Zero out the handlers so no callbacks are fired if the unblocked-client
+     * processing path is still reached (e.g. module blocking command that
+     * ignores disconnect). */
+    promise->resp_handlers = (ValkeyModuleReplyHandlers){0};
+
     unblockClient(promise->c, 0);
     moduleReleaseTempClient(promise->c);
     return VALKEYMODULE_OK;
@@ -6287,17 +6321,22 @@ void VM_SetContextUser(ValkeyModuleCtx *ctx, const ValkeyModuleUser *user) {
  * items (which equals to the length of the allocated argv).
  *
  * The integer pointed by 'flags' is populated with flags according
- * to special modifiers in "fmt".
+ * to special modifiers in "fmt". The supported modifiers map to
+ * VALKEYMODULE_CALL_ARGV_* macros as follows:
  *
- *     "!" -> VALKEYMODULE_ARGV_REPLICATE
- *     "A" -> VALKEYMODULE_ARGV_NO_AOF
- *     "R" -> VALKEYMODULE_ARGV_NO_REPLICAS
- *     "3" -> VALKEYMODULE_ARGV_RESP_3
- *     "0" -> VALKEYMODULE_ARGV_RESP_AUTO
- *     "C" -> VALKEYMODULE_ARGV_RUN_AS_USER
- *     "M" -> VALKEYMODULE_ARGV_RESPECT_DENY_OOM
- *     "K" -> VALKEYMODULE_ARGV_ALLOW_BLOCK
- *     "X" -> VALKEYMODULE_ARGV_CALL_REPLY_EXACT
+ *     "!" -> VALKEYMODULE_CALL_ARGV_REPLICATE
+ *     "A" -> VALKEYMODULE_CALL_ARGV_NO_AOF
+ *     "R" -> VALKEYMODULE_CALL_ARGV_NO_REPLICAS
+ *     "3" -> VALKEYMODULE_CALL_ARGV_RESP_3
+ *     "0" -> VALKEYMODULE_CALL_ARGV_RESP_AUTO
+ *     "C" -> VALKEYMODULE_CALL_ARGV_RUN_AS_USER
+ *     "S" -> VALKEYMODULE_CALL_ARGV_SCRIPT_MODE
+ *     "W" -> VALKEYMODULE_CALL_ARGV_NO_WRITES
+ *     "M" -> VALKEYMODULE_CALL_ARGV_RESPECT_DENY_OOM
+ *     "E" -> VALKEYMODULE_CALL_ARGV_ERRORS_AS_REPLIES
+ *     "D" -> VALKEYMODULE_CALL_ARGV_DRY_RUN (also implies VALKEYMODULE_CALL_ARGV_ERRORS_AS_REPLIES)
+ *     "K" -> VALKEYMODULE_CALL_ARGV_ALLOW_BLOCK
+ *     "X" -> VALKEYMODULE_CALL_ARGV_REPLY_EXACT
  *
  * On error (format specifier error) NULL is returned and nothing is
  * allocated. On success the argument vector is returned. */
@@ -6351,31 +6390,31 @@ robj **moduleCreateArgvFromUserFormat(const char *cmdname, const char *fmt, int 
                 argv[argc++] = v[i];
             }
         } else if (*p == '!') {
-            if (flags) (*flags) |= VALKEYMODULE_ARGV_REPLICATE;
+            if (flags) (*flags) |= VALKEYMODULE_CALL_ARGV_REPLICATE;
         } else if (*p == 'A') {
-            if (flags) (*flags) |= VALKEYMODULE_ARGV_NO_AOF;
+            if (flags) (*flags) |= VALKEYMODULE_CALL_ARGV_NO_AOF;
         } else if (*p == 'R') {
-            if (flags) (*flags) |= VALKEYMODULE_ARGV_NO_REPLICAS;
+            if (flags) (*flags) |= VALKEYMODULE_CALL_ARGV_NO_REPLICAS;
         } else if (*p == '3') {
-            if (flags) (*flags) |= VALKEYMODULE_ARGV_RESP_3;
+            if (flags) (*flags) |= VALKEYMODULE_CALL_ARGV_RESP_3;
         } else if (*p == '0') {
-            if (flags) (*flags) |= VALKEYMODULE_ARGV_RESP_AUTO;
+            if (flags) (*flags) |= VALKEYMODULE_CALL_ARGV_RESP_AUTO;
         } else if (*p == 'C') {
-            if (flags) (*flags) |= VALKEYMODULE_ARGV_RUN_AS_USER;
+            if (flags) (*flags) |= VALKEYMODULE_CALL_ARGV_RUN_AS_USER;
         } else if (*p == 'S') {
-            if (flags) (*flags) |= VALKEYMODULE_ARGV_SCRIPT_MODE;
+            if (flags) (*flags) |= VALKEYMODULE_CALL_ARGV_SCRIPT_MODE;
         } else if (*p == 'W') {
-            if (flags) (*flags) |= VALKEYMODULE_ARGV_NO_WRITES;
+            if (flags) (*flags) |= VALKEYMODULE_CALL_ARGV_NO_WRITES;
         } else if (*p == 'M') {
-            if (flags) (*flags) |= VALKEYMODULE_ARGV_RESPECT_DENY_OOM;
+            if (flags) (*flags) |= VALKEYMODULE_CALL_ARGV_RESPECT_DENY_OOM;
         } else if (*p == 'E') {
-            if (flags) (*flags) |= VALKEYMODULE_ARGV_CALL_REPLIES_AS_ERRORS;
+            if (flags) (*flags) |= VALKEYMODULE_CALL_ARGV_ERRORS_AS_REPLIES;
         } else if (*p == 'D') {
-            if (flags) (*flags) |= (VALKEYMODULE_ARGV_DRY_RUN | VALKEYMODULE_ARGV_CALL_REPLIES_AS_ERRORS);
+            if (flags) (*flags) |= (VALKEYMODULE_CALL_ARGV_DRY_RUN | VALKEYMODULE_CALL_ARGV_ERRORS_AS_REPLIES);
         } else if (*p == 'K') {
-            if (flags) (*flags) |= VALKEYMODULE_ARGV_ALLOW_BLOCK;
+            if (flags) (*flags) |= VALKEYMODULE_CALL_ARGV_ALLOW_BLOCK;
         } else if (*p == 'X') {
-            if (flags) (*flags) |= VALKEYMODULE_ARGV_CALL_REPLY_EXACT;
+            if (flags) (*flags) |= VALKEYMODULE_CALL_ARGV_REPLY_EXACT;
         } else {
             goto fmterr;
         }
@@ -6388,6 +6427,389 @@ fmterr:
     for (j = 0; j < argc; j++) decrRefCount(argv[j]);
     zfree(argv);
     return NULL;
+}
+
+/* Helper function that supports VM_Call and VM_CallArgv.
+ */
+void callCommandHelper(ValkeyModuleCtx *ctx, client *c, robj **argv, int argc, int flags, sds *error) {
+    sds reply_error_msg = NULL;
+    int replicate = 0;             /* Replicate this command? */
+    int error_as_call_replies = 0; /* return errors as ValkeyModuleCallReply object */
+    uint64_t cmd_flags;
+    errno = 0;
+
+    replicate = flags & VALKEYMODULE_CALL_ARGV_REPLICATE;
+    error_as_call_replies = flags & VALKEYMODULE_CALL_ARGV_ERRORS_AS_REPLIES;
+
+    int is_running_script = ctx->flags & VALKEYMODULE_CTX_SCRIPT_EXECUTION;
+
+    /* If we're calling a command with a script execution context, then a script
+     * execution runtime must exist.. */
+    serverAssert(!is_running_script || scriptIsRunning());
+
+    if (!(flags & VALKEYMODULE_CALL_ARGV_ALLOW_BLOCK)) {
+        /* We do not want to allow block, the module do not expect it */
+        c->flag.deny_blocking = 1;
+    }
+    c->db = ctx->client->db;
+    c->argv = argv;
+    /* We have to assign argv_len, which is equal to argc in that case
+     * because we may be calling a command that uses rewriteClientCommandArgument */
+    c->argc = c->argv_len = argc;
+
+    c->resp = 2;
+    if (flags & VALKEYMODULE_CALL_ARGV_RESP_3) {
+        c->resp = 3;
+    } else if (flags & VALKEYMODULE_CALL_ARGV_RESP_AUTO) {
+        serverAssert(ctx->client != NULL);
+        /* Auto mode means to take the same protocol as the ctx client. */
+        c->resp = ctx->client->resp;
+    }
+    if (ctx->module) ctx->module->in_call++;
+
+    if (flags & VALKEYMODULE_CALL_ARGV_SCRIPT_MODE && is_running_script) {
+        c->flag.module = 0;
+        c->flag.script = 1;
+
+        if (ctx->client->user) {
+            /* If there is a user attached to the client, run the command as that user */
+            flags |= VALKEYMODULE_CALL_ARGV_RUN_AS_USER;
+        }
+    }
+
+    user *user = NULL;
+    if (flags & VALKEYMODULE_CALL_ARGV_RUN_AS_USER) {
+        user = ctx->user ? ctx->user->user : ctx->client->user;
+        if (!user) {
+            errno = ENOTSUP;
+            if (error_as_call_replies) {
+                reply_error_msg = sdsnew("cannot run as user, no user directly attached to context or context's client");
+            }
+            goto cleanup;
+        }
+        c->user = user;
+    }
+
+    /* We handle the above format error only when the client is setup so that
+     * we can free it normally. */
+    if (argv == NULL) {
+        /* We do not return a call reply here this is an error that should only
+         * be catch by the module indicating wrong fmt was given, the module should
+         * handle this error and decide how to continue. It is not an error that
+         * should be propagated to the user. */
+        errno = EBADF;
+        goto cleanup;
+    }
+
+    /* Call command filters */
+    moduleCallCommandFilters(c);
+
+    /* Lookup command now, after filters had a chance to make modifications
+     * if necessary.
+     */
+    c->cmd = c->lastcmd = c->realcmd = lookupCommand(c->argv, c->argc);
+    if (!commandCheckExistence(c, error_as_call_replies ? &reply_error_msg : NULL)) {
+        errno = ENOENT;
+        goto cleanup;
+    }
+    if (!commandCheckArity(c->cmd, c->argc, error_as_call_replies ? &reply_error_msg : NULL)) {
+        errno = EINVAL;
+        goto cleanup;
+    }
+
+    cmd_flags = getCommandFlags(c);
+
+    if (flags & VALKEYMODULE_CALL_ARGV_SCRIPT_MODE) {
+        /* In script mode, commands with CMD_NOSCRIPT flag are normally forbidden.
+         * However, we allow them if both conditions are met:
+         * 1. We're running in the context of a scripting engine running a script
+         * 2. The configuration option server.script_disable_deny_script is enabled
+         * If either condition is false, we block the command. */
+        if ((cmd_flags & CMD_NOSCRIPT)) {
+            if (!is_running_script || !server.script_disable_deny_script) {
+                errno = ESPIPE;
+                if (error_as_call_replies) {
+                    reply_error_msg = sdscatfmt(sdsempty(), "command '%S' is not allowed on script mode", c->cmd->fullname);
+                }
+                goto cleanup;
+            }
+        }
+
+        /* Allow running any command even if OOM reached. */
+        if (is_running_script && scriptAllowsOOM()) {
+            flags &= ~VALKEYMODULE_CALL_ARGV_RESPECT_DENY_OOM;
+        }
+
+        /* If we reached the memory limit configured via maxmemory, commands that
+         * could enlarge the memory usage are not allowed, but only if this is the
+         * first write in the context of this script, otherwise we can't stop
+         * in the middle. */
+        if (is_running_script && scriptIsWriteDirty()) {
+            flags &= ~VALKEYMODULE_CALL_ARGV_RESPECT_DENY_OOM;
+        }
+    }
+
+    if (flags & VALKEYMODULE_CALL_ARGV_RESPECT_DENY_OOM && server.maxmemory) {
+        if (cmd_flags & CMD_DENYOOM) {
+            int oom_state;
+            if (ctx->flags & VALKEYMODULE_CTX_THREAD_SAFE) {
+                /* On background thread we can not count on server.pre_command_oom_state.
+                 * Because it is only set on the main thread, in such case we will check
+                 * the actual memory usage. */
+                oom_state = (getMaxmemoryState(NULL, NULL, NULL, NULL) == C_ERR);
+            } else {
+                oom_state = server.pre_command_oom_state;
+            }
+            if (oom_state) {
+                errno = ENOSPC;
+                if (error_as_call_replies) {
+                    reply_error_msg = sdsdup(objectGetVal(shared.oomerr));
+                }
+                goto cleanup;
+            }
+        }
+    } else {
+        /* if we aren't OOM checking in VM_Call, we want further executions from this client to also not fail on OOM */
+        c->flag.allow_oom = 1;
+    }
+
+    if (flags & VALKEYMODULE_CALL_ARGV_NO_WRITES) {
+        if (cmd_flags & CMD_WRITE) {
+            errno = ENOSPC;
+            if (error_as_call_replies) {
+                reply_error_msg = sdscatfmt(sdsempty(),
+                                            "Write command '%S' was "
+                                            "called while write is not allowed.",
+                                            c->cmd->fullname);
+            }
+            goto cleanup;
+        }
+    }
+
+    /* Check if the user can run this command according to the current
+     * ACLs.
+     *
+     * If VM_SetContextUser has set a user, that user is used, otherwise
+     * use the attached client's user. If there is no attached client user and no manually
+     * set user, an error will be returned */
+    if (flags & VALKEYMODULE_CALL_ARGV_RUN_AS_USER) {
+        int acl_errpos;
+        int acl_retval;
+
+        int dbid = (c->flag.multi) ? c->mstate->transaction_db_id : c->db->id;
+        acl_retval = ACLCheckAllUserCommandPerm(user, c->cmd, c->argv, c->argc, dbid, &acl_errpos);
+        if (acl_retval != ACL_OK) {
+            int context = scriptIsRunning() ? ACL_LOG_CTX_SCRIPT : ACL_LOG_CTX_MODULE;
+            sds object = (acl_retval == ACL_DENIED_CMD) ? sdsdup(c->cmd->fullname) : sdsdup(objectGetVal(c->argv[acl_errpos]));
+            addACLLogEntry(ctx->client, acl_retval, context, -1, c->user->name, object);
+            if (error_as_call_replies) {
+                /* verbosity should be same as processCommand() in server.c */
+                sds acl_msg = getAclErrorMessage(acl_retval, c->user, c->cmd, objectGetVal(c->argv[acl_errpos]), 0);
+                reply_error_msg = sdscatfmt(sdsempty(), "-NOPERM %S\r\n", acl_msg);
+                sdsfree(acl_msg);
+            }
+            errno = EACCES;
+            goto cleanup;
+        }
+    }
+
+    /* If this is a Cluster node, we need to make sure the module is not
+     * trying to access non-local keys, with the exception of commands
+     * received from our primary. */
+    if (server.cluster_enabled && !mustObeyClient(ctx->client)) {
+        int error_code;
+        /* Duplicate relevant flags in the module client. */
+        c->flag.readonly = ctx->client->flag.readonly;
+        c->flag.asking = ctx->client->flag.asking;
+        c->slot = clusterSlotByCommand(c->cmd, c->argv, c->argc, &c->read_flags);
+        if (getNodeByQuery(c, &error_code) != getMyClusterNode()) {
+            serverAssert(reply_error_msg == NULL);
+            if (error_code == CLUSTER_REDIR_DOWN_RO_STATE) {
+                if (error_as_call_replies) {
+                    reply_error_msg = sdscatfmt(sdsempty(),
+                                                "Can not execute a write command '%S' while the cluster is down and readonly",
+                                                c->cmd->fullname);
+                }
+                errno = EROFS;
+            } else if (error_code == CLUSTER_REDIR_DOWN_STATE) {
+                if (error_as_call_replies) {
+                    reply_error_msg = sdscatfmt(sdsempty(), "Can not execute a command '%S' while the cluster is down",
+                                                c->cmd->fullname);
+                }
+                errno = ENETDOWN;
+            } else {
+                if (error_as_call_replies) {
+                    reply_error_msg = sdsnew("Attempted to access a non local key in a cluster node");
+                }
+                errno = EPERM;
+            }
+            goto cleanup;
+        }
+    }
+
+    /* Script mode tests */
+    if (flags & VALKEYMODULE_CALL_ARGV_SCRIPT_MODE) {
+        /* A write command, on an RO command or an RO script is rejected ASAP.
+         * Note: For scripts, we consider may-replicate commands as write commands.
+         * This also makes it possible to allow read-only scripts to be run during
+         * CLIENT PAUSE WRITE. */
+        if (is_running_script && scriptIsReadOnly() && (cmd_flags & (CMD_WRITE | CMD_MAY_REPLICATE))) {
+            errno = ENOSPC;
+            reply_error_msg = sdsnew("Write commands are not allowed from read-only scripts.");
+            goto cleanup;
+        }
+
+        /* If the script already made a modification to the dataset, we can't
+         * fail it on unpredictable error state. */
+        if ((is_running_script && !scriptIsWriteDirty() && cmd_flags & CMD_WRITE) ||
+            (!is_running_script && cmd_flags & CMD_WRITE)) {
+            /* on script mode, if a command is a write command,
+             * We will not run it if we encounter disk error
+             * or we do not have enough replicas */
+
+            if (!checkGoodReplicasStatus()) {
+                errno = ESPIPE;
+                if (error_as_call_replies) {
+                    reply_error_msg = sdsdup(objectGetVal(shared.noreplicaserr));
+                }
+                goto cleanup;
+            }
+
+            int deny_write_type = writeCommandsDeniedByDiskError();
+            int obey_client = (server.current_client && mustObeyClient(server.current_client));
+
+            if (deny_write_type != DISK_ERROR_TYPE_NONE && !obey_client) {
+                errno = ESPIPE;
+                if (error_as_call_replies) {
+                    reply_error_msg = writeCommandsGetDiskErrorMessage(deny_write_type);
+                }
+                goto cleanup;
+            }
+
+            if (server.primary_host && server.repl_replica_ro && !obey_client) {
+                errno = ESPIPE;
+                if (error_as_call_replies) {
+                    reply_error_msg = sdsdup(objectGetVal(shared.roreplicaerr));
+                }
+                goto cleanup;
+            }
+
+            if (is_running_script) {
+                scriptSetWriteDirtyFlag();
+            }
+        }
+
+        if (server.primary_host && server.repl_state != REPL_STATE_CONNECTED && server.repl_serve_stale_data == 0 &&
+            !(cmd_flags & CMD_STALE)) {
+            errno = ESPIPE;
+            if (error_as_call_replies) {
+                if (is_running_script) {
+                    reply_error_msg = sdsnew("Can not execute the command on a stale replica");
+                } else {
+                    reply_error_msg = sdsdup(objectGetVal(shared.primarydownerr));
+                }
+            }
+            goto cleanup;
+        }
+
+        if (is_running_script && server.cluster_enabled && !mustObeyClient(ctx->client)) {
+            if (c->slot != -1 && !scriptAllowsCrossSlot()) {
+                if (scriptGetSlot() == -1) {
+                    scriptSetSlot(c->slot);
+                } else if (scriptGetSlot() != c->slot) {
+                    errno = ESPIPE;
+                    if (error_as_call_replies) {
+                        reply_error_msg = sdsnew("Script attempted to access keys that do not hash to the same slot");
+                    }
+                    goto cleanup;
+                }
+            }
+
+            scriptSetOriginalClientSlot(c->slot);
+        }
+    }
+
+    if (flags & VALKEYMODULE_CALL_ARGV_DRY_RUN) {
+        goto cleanup;
+    }
+
+    /* We need to use a global replication_allowed flag in order to prevent
+     * replication of nested VM_Calls. Example:
+     * 1. module1.foo does VM_Call of module2.bar without replication (i.e. no '!')
+     * 2. module2.bar internally calls VM_Call of INCR with '!'
+     * 3. at the end of module1.foo we call VM_ReplicateVerbatim
+     * We want the replica/AOF to see only module1.foo and not the INCR from module2.bar */
+    int prev_replication_allowed = server.replication_allowed;
+    server.replication_allowed = replicate && server.replication_allowed;
+
+    /* Run the command */
+    int call_flags = CMD_CALL_FROM_MODULE;
+    if (replicate) {
+        if (!(flags & VALKEYMODULE_CALL_ARGV_NO_AOF)) call_flags |= CMD_CALL_PROPAGATE_AOF;
+        if (!(flags & VALKEYMODULE_CALL_ARGV_NO_REPLICAS)) call_flags |= CMD_CALL_PROPAGATE_REPL;
+    }
+    call(c, call_flags);
+
+    /* Propagate database changes from the temporary client back to the context client
+     * when running in script mode to make next commands execute in the correct db */
+    if (c && (flags & VALKEYMODULE_CALL_ARGV_SCRIPT_MODE) && is_running_script && c->db != ctx->client->db) {
+        ctx->client->db = c->db;
+    }
+
+    /* We reset errno here because on macOS some system calls set errno even when
+     * they succeed. For instance, certain time-related syscalls may set errno
+     * to ETIMEDOUT on successful completion.
+     * Since system calls might be invoked during command execution, we need to
+     * ensure errno doesn't contain stale error values. Any errors from the
+     * command execution are communicated through RESP protocol responses, not
+     * through errno. This reset prevents false error detection in subsequent
+     * operations that check errno. */
+    errno = 0;
+
+    server.replication_allowed = prev_replication_allowed;
+
+    if (c->flag.blocked) {
+        /* Blocking commands are not allowed when calling commands in scripting engines. */
+        serverAssert(!is_running_script);
+        serverAssert(flags & VALKEYMODULE_CALL_ARGV_ALLOW_BLOCK);
+        serverAssert(ctx->module);
+        ValkeyModuleAsyncRMCallPromise *promise = zmalloc(sizeof(ValkeyModuleAsyncRMCallPromise));
+        *promise = (ValkeyModuleAsyncRMCallPromise){
+            /* We start with ref_count=1 for the blocked client.  VM_Call will
+             * increment this to 2 if it wraps the promise in a CallReply. */
+            .ref_count = 1,
+            .module = ctx->module,
+            .on_unblocked = NULL,
+            .private_data = NULL,
+            .c = c,
+            .ctx = (ctx->flags & VALKEYMODULE_CTX_AUTO_MEMORY) ? ctx : NULL,
+            .from_call_argv = 0,
+            .resp_handlers = {0},
+        };
+        c->bstate->async_rm_call_handle = promise;
+        if (!(call_flags & CMD_CALL_PROPAGATE_AOF)) {
+            /* No need for AOF propagation, set the relevant flags of the client */
+            c->flag.module_prevent_aof_prop = 1;
+        }
+        if (!(call_flags & CMD_CALL_PROPAGATE_REPL)) {
+            /* No need for replication propagation, set the relevant flags of the client */
+            c->flag.module_prevent_repl_prop = 1;
+        }
+    }
+
+cleanup:
+    if ((flags & VALKEYMODULE_CALL_ARGV_SCRIPT_MODE) && errno) {
+        afterErrorReply(c, reply_error_msg, sdslen(reply_error_msg), 0);
+        incrCommandStatsOnError(c->cmd, ERROR_COMMAND_REJECTED);
+    }
+    if (reply_error_msg != NULL && error != NULL) {
+        *error = reply_error_msg;
+    }
+
+    if (ctx->module) ctx->module->in_call--;
+    if (is_running_script) {
+        scriptClusterSlotStatsInvalidateSlotIfApplicable();
+    }
 }
 
 /* Exported API to call any command from modules.
@@ -6505,391 +6927,185 @@ ValkeyModuleCallReply *VM_Call(ValkeyModuleCtx *ctx, const char *cmdname, const 
     va_list ap;
     ValkeyModuleCallReply *reply = NULL;
     sds reply_error_msg = NULL;
-    int replicate = 0;             /* Replicate this command? */
-    int error_as_call_replies = 0; /* return errors as ValkeyModuleCallReply object */
-    uint64_t cmd_flags;
 
     /* Handle arguments. */
     va_start(ap, fmt);
     argv = moduleCreateArgvFromUserFormat(cmdname, fmt, &argc, &flags, ap);
-    replicate = flags & VALKEYMODULE_ARGV_REPLICATE;
-    error_as_call_replies = flags & VALKEYMODULE_ARGV_CALL_REPLIES_AS_ERRORS;
     va_end(ap);
 
-    int is_running_script = ctx->flags & VALKEYMODULE_CTX_SCRIPT_EXECUTION;
+    c = moduleAllocTempClient();
+    callCommandHelper(ctx, c, argv, argc, flags, &reply_error_msg);
 
-    /* If we're calling a command with a script execution context, then a script
-     * execution runtime must exist.. */
-    serverAssert(!is_running_script || scriptIsRunning());
+    if (errno == 0) {
+        if (!c->flag.blocked) {
+            reply = moduleParseReply(c, (ctx->flags & VALKEYMODULE_CTX_AUTO_MEMORY) ? ctx : NULL);
+            if (flags & VALKEYMODULE_CALL_ARGV_REPLY_EXACT) {
+                enableParseExactReplyTypeFlag(reply);
+            }
+        } else {
+            serverAssert(flags & VALKEYMODULE_CALL_ARGV_ALLOW_BLOCK);
+            serverAssert(c->bstate->async_rm_call_handle);
+            /* Acquire a reference for the CallReply we are about to create.
+             * The promise was initialized with ref_count=1 for the blocked client;
+             * this second reference keeps it alive until the caller frees the reply. */
+
+            ValkeyModuleAsyncRMCallPromise *promise = c->bstate->async_rm_call_handle;
+            promise->ref_count++;
+            reply = callReplyCreatePromise(promise);
+            c = NULL; /* Make sure not to free the client */
+        }
+    } else {
+        if (reply_error_msg != NULL) {
+            reply = callReplyCreateError(reply_error_msg, ctx);
+        }
+    }
+
+    if (reply) {
+        autoMemoryAdd(ctx, VALKEYMODULE_AM_REPLY, reply);
+    }
+
+    if (c) {
+        moduleReleaseTempClient(c);
+    }
+
+    return reply;
+}
+
+/* Low-level API to call any command from modules.
+ *
+ * This is an optimized version of VM_Call when the module already has the
+ * arguments prepared as an array of ValkeyModuleString pointers. Unlike
+ * VM_Call, this function does not allocate a CallReply object. Instead, the
+ * reply is delivered directly through the `resp_handlers` callbacks, enabling
+ * zero-copy pass-through and avoiding intermediate parsing overhead.
+ *
+ * The ownership of the `argv` array remains with the caller.
+ *
+ * * **argv**: The array of arguments.
+ * * **argc**: The length of the array of arguments.
+ * * **flags**: A combination of VALKEYMODULE_CALL_ARGV_* flags. The supported flags are:
+ *     VALKEYMODULE_CALL_ARGV_REPLICATE: Propagate the command to replicas and AOF
+ *         (format specifier: "!", used to mark operations that should be
+ *         replicated).
+ *     VALKEYMODULE_CALL_ARGV_NO_AOF: Do not propagate the command to the AOF
+ *         file (format specifier: "A").
+ *     VALKEYMODULE_CALL_ARGV_NO_REPLICAS: Do not propagate the command to
+ *         replicas (format specifier: "R").
+ *     VALKEYMODULE_CALL_ARGV_RESP_3: Request a RESP3 reply from the inner command
+ *         (format specifier: "3").
+ *     VALKEYMODULE_CALL_ARGV_RESP_AUTO: Use the same RESP version as the calling
+ *         client (format specifier: "0"). Recommended for pass-through use cases.
+ *     VALKEYMODULE_CALL_ARGV_RUN_AS_USER: Run the command with the given user for
+ *         ACL checks (format specifier: "C").
+ *     VALKEYMODULE_CALL_ARGV_SCRIPT_MODE: Mark the call as coming from script
+ *         execution (format specifier: "S").
+ *     VALKEYMODULE_CALL_ARGV_NO_WRITES: Disallow write commands in this call
+ *         (format specifier: "W").
+ *     VALKEYMODULE_CALL_ARGV_ERRORS_AS_REPLIES: Deliver error replies through
+ *         reply_handlers rather than setting errno on the module context
+ *         (format specifier: "E").
+ *     VALKEYMODULE_CALL_ARGV_RESPECT_DENY_OOM: Respect deny-oom policy when
+ *         executing the command (format specifier: "M").
+ *     VALKEYMODULE_CALL_ARGV_DRY_RUN: Execute in dry-run mode; implies
+ *         `VALKEYMODULE_CALL_ARGV_ERRORS_AS_REPLIES` (format specifier: "D").
+ *     VALKEYMODULE_CALL_ARGV_ALLOW_BLOCK: Allow blocking commands/calls (format
+ *         specifier: "K").
+ *     VALKEYMODULE_CALL_ARGV_REPLY_EXACT: Request exact reply parsing (do not
+ *         coerce reply types) (format specifier: "X").
+ * * **resp_handlers**: Struct of callbacks that receive the command reply. The
+ *     `onAvailable` callback is called first with the raw RESP bytes; if it
+ *     returns 0 the per-type callbacks are skipped. If the inner command blocks,
+ *     `onBlocked` is called instead.
+ *
+ * Returns VALKEYMODULE_OK on success. Returns VALKEYMODULE_ERR if an error
+ * occurred before invoking the command and errno is set to one of:
+ * * EBADF: wrong format specifier.
+ * * EINVAL: wrong command arity.
+ * * ENOENT: command does not exist.
+ * * EPERM: operation in Cluster instance with key in non local slot.
+ * * EROFS: operation in Cluster instance when a write command is sent
+ *          in a readonly state.
+ * * ENETDOWN: operation in Cluster instance when cluster is down.
+ * * ENOTSUP: No ACL user for the specified module context
+ * * EACCES: Command cannot be executed, according to ACL rules
+ * * ENOSPC: Write or deny-oom command is not allowed
+ * * ESPIPE: Command not allowed on script mode
+ */
+int VM_CallArgv(ValkeyModuleCtx *ctx,
+                ValkeyModuleString **argv,
+                int argc,
+                int flags,
+                ValkeyModuleReplyHandlers *resp_handlers) {
+    int ret = VALKEYMODULE_OK;
+    client *c = NULL;
+    sds reply_error_msg = NULL;
 
     c = moduleAllocTempClient();
+    c->flag.argv_borrowed = 1;
+    callCommandHelper(ctx, c, argv, argc, flags, &reply_error_msg);
 
-    if (!(flags & VALKEYMODULE_ARGV_ALLOW_BLOCK)) {
-        /* We do not want to allow block, the module do not expect it */
-        c->flag.deny_blocking = 1;
-    }
-    c->db = ctx->client->db;
-    c->argv = argv;
-    /* We have to assign argv_len, which is equal to argc in that case (VM_Call)
-     * because we may be calling a command that uses rewriteClientCommandArgument */
-    c->argc = c->argv_len = argc;
-    c->resp = 2;
-    if (flags & VALKEYMODULE_ARGV_RESP_3) {
-        c->resp = 3;
-    } else if (flags & VALKEYMODULE_ARGV_RESP_AUTO) {
-        serverAssert(ctx->client != NULL);
-        /* Auto mode means to take the same protocol as the ctx client. */
-        c->resp = ctx->client->resp;
-    }
-    if (ctx->module) ctx->module->in_call++;
-
-    if (flags & VALKEYMODULE_ARGV_SCRIPT_MODE && is_running_script) {
-        c->flag.module = 0;
-        c->flag.script = 1;
+    if (errno != 0 && !(flags & VALKEYMODULE_CALL_ARGV_ERRORS_AS_REPLIES)) {
+        /* Signal the caller that an error occurred */
+        ret = VALKEYMODULE_ERR;
     }
 
-    user *user = NULL;
-    if (flags & VALKEYMODULE_ARGV_RUN_AS_USER) {
-        user = ctx->user ? ctx->user->user : ctx->client->user;
-        if (!user) {
-            errno = ENOTSUP;
-            if (error_as_call_replies) {
-                reply_error_msg = sdsnew("cannot run as user, no user directly attached to context or context's client");
-            }
-            goto cleanup;
-        }
-        c->user = user;
-    }
-
-    /* We handle the above format error only when the client is setup so that
-     * we can free it normally. */
-    if (argv == NULL) {
-        /* We do not return a call reply here this is an error that should only
-         * be catch by the module indicating wrong fmt was given, the module should
-         * handle this error and decide how to continue. It is not an error that
-         * should be propagated to the user. */
-        errno = EBADF;
-        goto cleanup;
-    }
-
-    /* Call command filters */
-    moduleCallCommandFilters(c);
-
-    /* Lookup command now, after filters had a chance to make modifications
-     * if necessary.
-     */
-    c->cmd = c->lastcmd = c->realcmd = lookupCommand(c->argv, c->argc);
-    if (!commandCheckExistence(c, error_as_call_replies ? &reply_error_msg : NULL)) {
-        errno = ENOENT;
-        goto cleanup;
-    }
-    if (!commandCheckArity(c->cmd, c->argc, error_as_call_replies ? &reply_error_msg : NULL)) {
-        errno = EINVAL;
-        goto cleanup;
-    }
-
-    cmd_flags = getCommandFlags(c);
-
-    if (flags & VALKEYMODULE_ARGV_SCRIPT_MODE) {
-        /* In script mode, commands with CMD_NOSCRIPT flag are normally forbidden.
-         * However, we allow them if both conditions are met:
-         * 1. We're running in the context of a scripting engine running a script
-         * 2. The configuration option server.script_disable_deny_script is enabled
-         * If either condition is false, we block the command. */
-        if ((cmd_flags & CMD_NOSCRIPT)) {
-            if (!is_running_script || !server.script_disable_deny_script) {
-                errno = ESPIPE;
-                if (error_as_call_replies) {
-                    reply_error_msg = sdscatfmt(sdsempty(), "command '%S' is not allowed on script mode", c->cmd->fullname);
+    if (!c->flag.blocked) {
+        if (reply_error_msg) {
+            serverAssert(errno != 0);
+            if (resp_handlers) {
+                if (reply_error_msg[0] != '-') {
+                    sds err_buff = sdscatfmt(sdsempty(), "-ERR %S\r\n", reply_error_msg);
+                    sdsfree(reply_error_msg);
+                    reply_error_msg = err_buff;
                 }
-                goto cleanup;
+                addReplyProto(c, reply_error_msg, sdslen(reply_error_msg));
             }
+            sdsfree(reply_error_msg);
         }
 
-        /* Allow running any command even if OOM reached. */
-        if (is_running_script && scriptAllowsOOM()) {
-            flags &= ~VALKEYMODULE_ARGV_RESPECT_DENY_OOM;
-        }
-
-        /* If we reached the memory limit configured via maxmemory, commands that
-         * could enlarge the memory usage are not allowed, but only if this is the
-         * first write in the context of this script, otherwise we can't stop
-         * in the middle. */
-        if (is_running_script && scriptIsWriteDirty()) {
-            flags &= ~VALKEYMODULE_ARGV_RESPECT_DENY_OOM;
-        }
-    }
-
-    if (flags & VALKEYMODULE_ARGV_RESPECT_DENY_OOM && server.maxmemory) {
-        if (cmd_flags & CMD_DENYOOM) {
-            int oom_state;
-            if (ctx->flags & VALKEYMODULE_CTX_THREAD_SAFE) {
-                /* On background thread we can not count on server.pre_command_oom_state.
-                 * Because it is only set on the main thread, in such case we will check
-                 * the actual memory usage. */
-                oom_state = (getMaxmemoryState(NULL, NULL, NULL, NULL) == C_ERR);
-            } else {
-                oom_state = server.pre_command_oom_state;
-            }
-            if (oom_state) {
-                errno = ENOSPC;
-                if (error_as_call_replies) {
-                    reply_error_msg = sdsdup(objectGetVal(shared.oomerr));
-                }
-                goto cleanup;
-            }
+        if (resp_handlers) {
+            invokeReplyHandlers(ctx, c, resp_handlers);
         }
     } else {
-        /* if we aren't OOM checking in VM_Call, we want further executions from this client to also not fail on OOM */
-        c->flag.allow_oom = 1;
-    }
+        serverAssert(errno == 0);
+        serverAssert(reply_error_msg == NULL);
+        serverAssert(flags & VALKEYMODULE_CALL_ARGV_ALLOW_BLOCK);
+        serverAssert(c->bstate->async_rm_call_handle);
 
-    if (flags & VALKEYMODULE_ARGV_NO_WRITES) {
-        if (cmd_flags & CMD_WRITE) {
-            errno = ENOSPC;
-            if (error_as_call_replies) {
-                reply_error_msg = sdscatfmt(sdsempty(),
-                                            "Write command '%S' was "
-                                            "called while write is not allowed.",
-                                            c->cmd->fullname);
-            }
-            goto cleanup;
+        robj **argv_copy = zmalloc(sizeof(robj *) * argc);
+        for (int i = 0; i < argc; i++) {
+            incrRefCount(argv[i]);
+            argv_copy[i] = argv[i];
         }
-    }
+        c->argv = argv_copy;
+        c->flag.argv_borrowed = 0;
 
-    /* Check if the user can run this command according to the current
-     * ACLs.
-     *
-     * If VM_SetContextUser has set a user, that user is used, otherwise
-     * use the attached client's user. If there is no attached client user and no manually
-     * set user, an error will be returned */
-    if (flags & VALKEYMODULE_ARGV_RUN_AS_USER) {
-        int acl_errpos;
-        int acl_retval;
-
-        int dbid = (c->flag.multi) ? c->mstate->transaction_db_id : c->db->id;
-        acl_retval = ACLCheckAllUserCommandPerm(user, c->cmd, c->argv, c->argc, dbid, &acl_errpos);
-        if (acl_retval != ACL_OK) {
-            int context = scriptIsRunning() ? ACL_LOG_CTX_SCRIPT : ACL_LOG_CTX_MODULE;
-            sds object = (acl_retval == ACL_DENIED_CMD) ? sdsdup(c->cmd->fullname) : sdsdup(objectGetVal(c->argv[acl_errpos]));
-            addACLLogEntry(ctx->client, acl_retval, context, -1, c->user->name, object);
-            if (error_as_call_replies) {
-                /* verbosity should be same as processCommand() in server.c */
-                sds acl_msg = getAclErrorMessage(acl_retval, c->user, c->cmd, objectGetVal(c->argv[acl_errpos]), 0);
-                reply_error_msg = sdscatfmt(sdsempty(), "-NOPERM %S\r\n", acl_msg);
-                sdsfree(acl_msg);
-            }
-            errno = EACCES;
-            goto cleanup;
-        }
-    }
-
-    /* If this is a Cluster node, we need to make sure the module is not
-     * trying to access non-local keys, with the exception of commands
-     * received from our primary. */
-    if (server.cluster_enabled && !mustObeyClient(ctx->client)) {
-        int error_code;
-        /* Duplicate relevant flags in the module client. */
-        c->flag.readonly = ctx->client->flag.readonly;
-        c->flag.asking = ctx->client->flag.asking;
-        c->slot = clusterSlotByCommand(c->cmd, c->argv, c->argc, &c->read_flags);
-        if (getNodeByQuery(c, &error_code) != getMyClusterNode()) {
-            serverAssert(reply_error_msg == NULL);
-            if (error_code == CLUSTER_REDIR_DOWN_RO_STATE) {
-                if (error_as_call_replies) {
-                    reply_error_msg = sdscatfmt(sdsempty(),
-                                                "Can not execute a write command '%S' while the cluster is down and readonly",
-                                                c->cmd->fullname);
-                }
-                errno = EROFS;
-            } else if (error_code == CLUSTER_REDIR_DOWN_STATE) {
-                if (error_as_call_replies) {
-                    reply_error_msg = sdscatfmt(sdsempty(), "Can not execute a command '%S' while the cluster is down",
-                                                c->cmd->fullname);
-                }
-                errno = ENETDOWN;
-            } else {
-                if (error_as_call_replies) {
-                    reply_error_msg = sdsnew("Attempted to access a non local key in a cluster node");
-                }
-                errno = EPERM;
-            }
-            goto cleanup;
-        }
-    }
-
-    /* Script mode tests */
-    if (flags & VALKEYMODULE_ARGV_SCRIPT_MODE) {
-        /* A write command, on an RO command or an RO script is rejected ASAP.
-         * Note: For scripts, we consider may-replicate commands as write commands.
-         * This also makes it possible to allow read-only scripts to be run during
-         * CLIENT PAUSE WRITE. */
-        if (is_running_script && scriptIsReadOnly() && (cmd_flags & (CMD_WRITE | CMD_MAY_REPLICATE))) {
-            errno = ENOSPC;
-            reply_error_msg = sdsnew("Write commands are not allowed from read-only scripts.");
-            goto cleanup;
-        }
-
-        /* If the script already made a modification to the dataset, we can't
-         * fail it on unpredictable error state. */
-        if ((is_running_script && !scriptIsWriteDirty() && cmd_flags & CMD_WRITE) ||
-            (!is_running_script && cmd_flags & CMD_WRITE)) {
-            /* on script mode, if a command is a write command,
-             * We will not run it if we encounter disk error
-             * or we do not have enough replicas */
-
-            if (!checkGoodReplicasStatus()) {
-                errno = ESPIPE;
-                if (error_as_call_replies) {
-                    reply_error_msg = sdsdup(objectGetVal(shared.noreplicaserr));
-                }
-                goto cleanup;
-            }
-
-            int deny_write_type = writeCommandsDeniedByDiskError();
-            int obey_client = (server.current_client && mustObeyClient(server.current_client));
-
-            if (deny_write_type != DISK_ERROR_TYPE_NONE && !obey_client) {
-                errno = ESPIPE;
-                if (error_as_call_replies) {
-                    reply_error_msg = writeCommandsGetDiskErrorMessage(deny_write_type);
-                }
-                goto cleanup;
-            }
-
-            if (server.primary_host && server.repl_replica_ro && !obey_client) {
-                errno = ESPIPE;
-                if (error_as_call_replies) {
-                    reply_error_msg = sdsdup(objectGetVal(shared.roreplicaerr));
-                }
-                goto cleanup;
-            }
-
-            if (is_running_script) {
-                scriptSetWriteDirtyFlag();
-            }
-        }
-
-        if (server.primary_host && server.repl_state != REPL_STATE_CONNECTED && server.repl_serve_stale_data == 0 &&
-            !(cmd_flags & CMD_STALE)) {
-            errno = ESPIPE;
-            if (error_as_call_replies) {
-                if (is_running_script) {
-                    reply_error_msg = sdsnew("Can not execute the command on a stale replica");
-                } else {
-                    reply_error_msg = sdsdup(objectGetVal(shared.primarydownerr));
-                }
-            }
-            goto cleanup;
-        }
-
-        if (is_running_script && server.cluster_enabled && !mustObeyClient(ctx->client)) {
-            if (c->slot != -1 && !scriptAllowsCrossSlot()) {
-                if (scriptGetSlot() == -1) {
-                    scriptSetSlot(c->slot);
-                } else if (scriptGetSlot() != c->slot) {
-                    errno = ESPIPE;
-                    if (error_as_call_replies) {
-                        reply_error_msg = sdsnew("Script attempted to access keys that do not hash to the same slot");
-                    }
-                    goto cleanup;
-                }
-            }
-
-            scriptSetOriginalClientSlot(c->slot);
-        }
-    }
-
-    if (flags & VALKEYMODULE_ARGV_DRY_RUN) {
-        goto cleanup;
-    }
-
-    /* We need to use a global replication_allowed flag in order to prevent
-     * replication of nested VM_Calls. Example:
-     * 1. module1.foo does VM_Call of module2.bar without replication (i.e. no '!')
-     * 2. module2.bar internally calls VM_Call of INCR with '!'
-     * 3. at the end of module1.foo we call VM_ReplicateVerbatim
-     * We want the replica/AOF to see only module1.foo and not the INCR from module2.bar */
-    int prev_replication_allowed = server.replication_allowed;
-    server.replication_allowed = replicate && server.replication_allowed;
-
-    /* Run the command */
-    int call_flags = CMD_CALL_FROM_MODULE;
-    if (replicate) {
-        if (!(flags & VALKEYMODULE_ARGV_NO_AOF)) call_flags |= CMD_CALL_PROPAGATE_AOF;
-        if (!(flags & VALKEYMODULE_ARGV_NO_REPLICAS)) call_flags |= CMD_CALL_PROPAGATE_REPL;
-    }
-    call(c, call_flags);
-
-    /* Propagate database changes from the temporary client back to the context client
-     * when running in script mode to make next commands execute in the correct db */
-    if (c && (flags & VALKEYMODULE_ARGV_SCRIPT_MODE) && is_running_script && c->db != ctx->client->db) {
-        ctx->client->db = c->db;
-    }
-
-    /* We reset errno here because on macOS some system calls set errno even when
-     * they succeed. For instance, certain time-related syscalls may set errno
-     * to ETIMEDOUT on successful completion.
-     * Since system calls might be invoked during command execution, we need to
-     * ensure errno doesn't contain stale error values. Any errors from the
-     * command execution are communicated through RESP protocol responses, not
-     * through errno. This reset prevents false error detection in subsequent
-     * operations that check errno. */
-    errno = 0;
-
-    server.replication_allowed = prev_replication_allowed;
-
-    if (c->flag.blocked) {
-        /* Blocking commands are not allowed when calling commands in scripting engines. */
-        serverAssert(!is_running_script);
-        serverAssert(flags & VALKEYMODULE_ARGV_ALLOW_BLOCK);
-        serverAssert(ctx->module);
-        ValkeyModuleAsyncRMCallPromise *promise = zmalloc(sizeof(ValkeyModuleAsyncRMCallPromise));
-        *promise = (ValkeyModuleAsyncRMCallPromise){
-            /* We start with ref_count value of 2 because this object is held
-             * by the promise CallReply and the fake client that was used to execute the command. */
-            .ref_count = 2,
-            .module = ctx->module,
-            .on_unblocked = NULL,
-            .private_data = NULL,
-            .c = c,
-            .ctx = (ctx->flags & VALKEYMODULE_CTX_AUTO_MEMORY) ? ctx : NULL,
-        };
-        reply = callReplyCreatePromise(promise);
-        c->bstate->async_rm_call_handle = promise;
-        if (!(call_flags & CMD_CALL_PROPAGATE_AOF)) {
-            /* No need for AOF propagation, set the relevant flags of the client */
-            c->flag.module_prevent_aof_prop = 1;
-        }
-        if (!(call_flags & CMD_CALL_PROPAGATE_REPL)) {
-            /* No need for replication propagation, set the relevant flags of the client */
-            c->flag.module_prevent_repl_prop = 1;
+        ValkeyModuleAsyncRMCallPromise *promise = c->bstate->async_rm_call_handle;
+        /* The promise was initialized with ref_count=1 for the blocked client.
+         * VM_CallArgv never wraps the promise in a CallReply, so no additional
+         * reference is needed here.
+         *
+         * If `resp_handlers` is set the promise is passed to `onBlocked` as an
+         * abort handle, but that is a *borrowed* pointer, not a counted reference.
+         * Its validity is bounded by the client's lifetime: `onAvailable` is
+         * always invoked (inside `moduleCallCommandUnblockedHandler`) before
+         * `moduleReleaseTempClient` releases the client's reference and frees the
+         * promise, so the promise is guaranteed to be alive for the duration of the
+         * callback. The abort handle becomes invalid once `onAvailable` returns
+         * or `ValkeyModule_CallArgvAbort` is called, whichever comes first. */
+        if (resp_handlers) {
+            promise->from_call_argv = 1;
+            promise->resp_handlers = *resp_handlers;
+            resp_handlers->onBlocked(resp_handlers->context, ctx, promise);
         }
         c = NULL; /* Make sure not to free the client */
-    } else {
-        reply = moduleParseReply(c, (ctx->flags & VALKEYMODULE_CTX_AUTO_MEMORY) ? ctx : NULL);
-        if (flags & VALKEYMODULE_ARGV_CALL_REPLY_EXACT) {
-            enableParseExactReplyTypeFlag(reply);
-        }
     }
 
-cleanup:
-    if ((flags & VALKEYMODULE_ARGV_SCRIPT_MODE) && errno) {
-        afterErrorReply(c, reply_error_msg, sdslen(reply_error_msg), 0);
-        incrCommandStatsOnError(c->cmd, ERROR_COMMAND_REJECTED);
-    }
-    if (reply_error_msg != NULL) {
-        serverAssert(reply == NULL);
-        reply = callReplyCreateError(reply_error_msg, ctx);
+    if (c) {
+        moduleReleaseTempClient(c);
     }
 
-    if (reply) autoMemoryAdd(ctx, VALKEYMODULE_AM_REPLY, reply);
-    if (ctx->module) ctx->module->in_call--;
-    if (is_running_script) {
-        scriptClusterSlotStatsInvalidateSlotIfApplicable();
-    }
-    if (c) moduleReleaseTempClient(c);
-    return reply;
+    return ret;
 }
 
 /* Return a pointer, and a length, to the protocol returned by the command
@@ -14517,6 +14733,8 @@ void moduleRegisterCoreAPI(void) {
     REGISTER_API(StringToLongDouble);
     REGISTER_API(StringToStreamID);
     REGISTER_API(Call);
+    REGISTER_API(CallArgv);
+    REGISTER_API(CallArgvAbort);
     REGISTER_API(CallReplyProto);
     REGISTER_API(FreeCallReply);
     REGISTER_API(CallReplyInteger);

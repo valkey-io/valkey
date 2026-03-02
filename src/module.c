@@ -3612,6 +3612,24 @@ int VM_ReplyWithCallReply(ValkeyModuleCtx *ctx, ValkeyModuleCallReply *reply) {
     return VALKEYMODULE_OK;
 }
 
+
+/* Forward raw RESP bytes directly to the client that issued the module command.
+ *
+ * This is intended to be called from a ValkeyModuleReplyHandlers.onAvailable
+ * callback to implement zero-copy pass-through: instead of parsing and
+ * re-serialising the inner command's reply the module writes the raw wire
+ * bytes straight to the calling client's output buffer.
+ *
+ * `proto` must point to a valid, complete RESP-encoded reply of length
+ * `proto_len`.  Returns VALKEYMODULE_OK.  If there is no client context
+ * (script, timer, etc.) the call is a no-op and returns VALKEYMODULE_OK. */
+int VM_ReplyWithProto(ValkeyModuleCtx *ctx, const char *proto, size_t proto_len) {
+    client *c = moduleGetReplyClient(ctx);
+    if (c == NULL) return VALKEYMODULE_OK;
+    addReplyProto(c, proto, proto_len);
+    return VALKEYMODULE_OK;
+}
+
 /* Reply with a RESP3 Double type.
  * Visit https://valkey.io/topics/protocol for more info about RESP3.
  *
@@ -14475,6 +14493,7 @@ void moduleRegisterCoreAPI(void) {
     REGISTER_API(ReplyWithNull);
     REGISTER_API(ReplyWithBool);
     REGISTER_API(ReplyWithCallReply);
+    REGISTER_API(ReplyWithProto);
     REGISTER_API(ReplyWithDouble);
     REGISTER_API(ReplyWithBigNumber);
     REGISTER_API(ReplyWithLongDouble);

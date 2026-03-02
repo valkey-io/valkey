@@ -56,6 +56,41 @@ start_server {tags {"modules"}} {
         assert_match {*test * 2 2*} [r latency latest]
     }
 
+    test "Test CallArgv" {
+        set reply [r test.call_argv ping hello]
+        assert_equal hello $reply
+
+        set reply [r test.call_argv ping]
+        assert_equal PONG $reply
+
+        r set x hello
+        r set y world
+        set reply [r test.call_argv mget x y]
+        assert_equal [lindex $reply 0] hello
+        assert_equal [lindex $reply 1] world
+
+        assert_error "ERR Write command*" {r test.call_argv set mykey myvalue}
+    }
+
+    test "Test CallArgvRaw" {
+        set reply [r test.call_argv_raw ping hello]
+        assert_equal "\$5\r\nhello\r\n" $reply
+
+        set reply [r test.call_argv_raw ping]
+        assert_equal "+PONG\r\n" $reply
+
+        set reply [r test.call_argv_raw set mykey myvalue]
+        assert_match "-ERR Write command*" $reply
+    }
+
+    test "Test CallArgvScriptMode" {
+        # SCRIPT_MODE blocks dangerous administrative commands like SHUTDOWN
+        assert_error "ERR command 'shutdown' is not allowed on script mode" {r test.call_argv_s shutdown}
+
+        # SCRIPT_MODE alone does not block writes
+        assert_equal {OK} [r test.call_argv_s set x 1]
+    }
+
     test "Unload the module - basics" {
         assert_equal {OK} [r module unload test]
     }

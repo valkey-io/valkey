@@ -77,6 +77,83 @@ fail:
     return VALKEYMODULE_OK;
 }
 
+#define UNUSED(V) ((void)V)
+
+void handleSimpleString(void *ctx, const char *str, size_t len, const char *proto, size_t proto_len) {
+    UNUSED(proto);
+    UNUSED(proto_len);
+    ((char *)str)[len] = '\0'; /* temporarily null terminate */
+    ValkeyModule_ReplyWithSimpleString(ctx, str);
+}
+
+void handleBulkString(void *ctx, const char *str, size_t len, const char *proto, size_t proto_len) {
+    UNUSED(proto);
+    UNUSED(proto_len);
+    ValkeyModule_ReplyWithStringBuffer(ctx, str, len);
+}
+
+void handleArray(void *ctx, size_t len) {
+    ValkeyModule_ReplyWithArray(ctx, len);
+}
+
+void handleError(void *ctx, const char *str, size_t len, const char *proto, size_t proto_len) {
+    UNUSED(proto);
+    UNUSED(proto_len);
+    ((char *)str)[len] = '\0'; /* temporarily null terminate */
+    ValkeyModule_ReplyWithError(ctx, str);
+}
+
+ValkeyModuleReplyHandlers resp_handlers = {
+    .simpleString = handleSimpleString,
+    .bulkString = handleBulkString,
+    .arrayStart = handleArray,
+    .error = handleError,
+    .onAvailable = NULL,
+};
+
+/* TEST.CALL_ARGV -- Test CallArgv() API. */
+int TestCallArgv(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    ValkeyModule_AutoMemory(ctx);
+
+    int flags = VALKEYMODULE_CALL_ARGV_NO_WRITES | VALKEYMODULE_CALL_ARGV_ERRORS_AS_REPLIES;
+    resp_handlers.context = ctx;
+    ValkeyModule_CallArgv(ctx, argv + 1, argc - 1, flags, &resp_handlers);
+
+    return VALKEYMODULE_OK;
+}
+
+int replyWithRawRespString(void *ctx, ValkeyModuleCtx *mctx, const char *proto, size_t proto_len) {
+    UNUSED(ctx);
+    UNUSED(proto_len);
+    ValkeyModule_ReplyWithCString(mctx, proto);
+    return 0; /* continue parsing */
+}
+
+/* TEST.CALL_ARGV_RAW -- Test CallArgv() API. */
+int TestCallArgvRaw(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+
+    ValkeyModule_AutoMemory(ctx);
+
+    int flags = VALKEYMODULE_CALL_ARGV_NO_WRITES | VALKEYMODULE_CALL_ARGV_ERRORS_AS_REPLIES;
+
+    resp_handlers.context = NULL;
+    resp_handlers.onAvailable = replyWithRawRespString;
+    ValkeyModule_CallArgv(ctx, argv + 1, argc - 1, flags, &resp_handlers);
+    resp_handlers.onAvailable = NULL;
+    return VALKEYMODULE_OK;
+}
+
+/* TEST.CALL_ARGV_S -- Test CallArgv() API with SCRIPT_MODE flag. */
+int TestCallArgvScriptMode(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    ValkeyModule_AutoMemory(ctx);
+
+    int flags = VALKEYMODULE_CALL_ARGV_SCRIPT_MODE | VALKEYMODULE_CALL_ARGV_ERRORS_AS_REPLIES;
+    resp_handlers.context = ctx;
+    ValkeyModule_CallArgv(ctx, argv + 1, argc - 1, flags, &resp_handlers);
+
+    return VALKEYMODULE_OK;
+}
+
 int TestCallResp3Attribute(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     VALKEYMODULE_NOT_USED(argv);
     VALKEYMODULE_NOT_USED(argc);
@@ -511,7 +588,7 @@ int TestNestedCallReplyArrayElement(ValkeyModuleCtx *ctx, ValkeyModuleString **a
     ValkeyModuleCallReply *keys_reply = ValkeyModule_CallReplyArrayElement(scan_reply, 1);
     ValkeyModule_Assert(ValkeyModule_CallReplyType(keys_reply) == VALKEYMODULE_REPLY_ARRAY);
     ValkeyModule_Assert( ValkeyModule_CallReplyLength(keys_reply) == 1);
- 
+
     ValkeyModuleCallReply *key_reply = ValkeyModule_CallReplyArrayElement(keys_reply, 0);
     ValkeyModule_Assert(ValkeyModule_CallReplyType(key_reply) == VALKEYMODULE_REPLY_STRING);
     ValkeyModuleString *key = ValkeyModule_CreateStringFromCallReply(key_reply);
@@ -901,7 +978,7 @@ int TestBasics(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
 
     T("test.string.append.am","");
     if (!TestAssertStringReply(ctx,reply,"foobar",6)) goto fail;
-    
+
     T("test.string.trim","");
     if (!TestAssertStringReply(ctx,reply,"OK",2)) goto fail;
 
@@ -969,6 +1046,18 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
 
     if (ValkeyModule_CreateCommand(ctx,"test.call",
         TestCall,"write deny-oom",1,1,1) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
+
+    if (ValkeyModule_CreateCommand(ctx,"test.call_argv",
+        TestCallArgv,"write deny-oom",0,0,0) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
+
+    if (ValkeyModule_CreateCommand(ctx,"test.call_argv_raw",
+        TestCallArgvRaw,"write deny-oom",1,1,1) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
+
+    if (ValkeyModule_CreateCommand(ctx,"test.call_argv_s",
+        TestCallArgvScriptMode,"write deny-oom",0,0,0) == VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
 
     if (ValkeyModule_CreateCommand(ctx,"test.callresp3map",

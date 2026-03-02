@@ -413,6 +413,23 @@ int fsl_getall(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     return VALKEYMODULE_OK;
 }
 
+/* FSL.CLEAR <key> - Clear all elements from the list. */
+int fsl_clear(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    if (argc != 2)
+        return ValkeyModule_WrongArity(ctx);
+
+    fsl_t *fsl;
+    if (!get_fsl(ctx, argv[1], VALKEYMODULE_WRITE, 0, &fsl, 1))
+        return VALKEYMODULE_OK;
+
+    if (!fsl)
+        return ValkeyModule_ReplyWithArray(ctx, 0);
+
+    fsl->length = 0;
+    ValkeyModule_ReplyWithSimpleString(ctx, "OK");
+    return VALKEYMODULE_OK;
+}
+
 /* Callback for blockonkeys_popall */
 int blockonkeys_popall_reply_callback(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     VALKEYMODULE_NOT_USED(argc);
@@ -622,6 +639,9 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
     if (ValkeyModule_CreateCommand(ctx,"fsl.getall",fsl_getall,"",1,1,1) == VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
 
+    if (ValkeyModule_CreateCommand(ctx, "fsl.clear",fsl_clear,"write",1,1,1) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
+
     if (ValkeyModule_CreateCommand(ctx, "blockonkeys.popall", blockonkeys_popall,
                                   "write", 1, 1, 1) == VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
@@ -641,5 +661,6 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
     if (ValkeyModule_CreateCommand(ctx, "blockonkeys.blpopn_or_unblock", blockonkeys_blpopn,
                                       "write", 1, 1, 1) == VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
+
     return VALKEYMODULE_OK;
 }

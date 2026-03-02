@@ -658,3 +658,44 @@ TEST_F(QuicklistTrackingTest, ReplaceAtIndex) {
 
     decrRefCount(list);
 }
+
+/* 23. Same-size replacement: ensures lpLastAllocSize is not stale.
+ *     When lpReplace replaces an element with one of the exact same encoded
+ *     size, lpInsert may skip lp_realloc entirely, which used to leave
+ *     lp_last_alloc_size holding a value from a previous (different node)
+ *     operation.  This test creates two nodes, mutates node A (changing
+ *     lp_last_alloc_size), then does a same-size replace on node B to
+ *     verify that tracked_size remains accurate. */
+TEST_F(QuicklistTrackingTest, SameSizeReplaceNoStale) {
+    /* fill=4 to create multiple nodes quickly. */
+    robj *list = createQuicklistObject(4, 0);
+    quicklist *ql = (quicklist *)objectGetVal(list);
+
+    /* Fill two nodes: 4 entries of "aaaa" each. */
+    for (int i = 0; i < 8; i++) {
+        quicklistPushTail(ql, (void *)"aaaa", 4);
+    }
+    ASSERT_EQ(ql->len, 2ul);
+    ASSERT_TRACKED_SIZE_CORRECT(list);
+
+    /* Mutate node A (head) with a differently-sized value to change
+     * lpLastAllocSize to something different from node B's alloc size. */
+    quicklistReplaceAtIndex(ql, 0, (void *)"bbbbbbbbbbbbbbbb", 16);
+    ASSERT_TRACKED_SIZE_CORRECT(list);
+
+    /* Now do a same-size replace on node B (tail): replace "aaaa" with
+     * "cccc" (same 4 bytes).  lpInsert will compute new == old bytes
+     * and may skip lp_realloc.  If lp_last_alloc_size is stale from
+     * the head node's operation, tracked_size will become wrong. */
+    quicklistReplaceAtIndex(ql, 7, (void *)"cccc", 4);
+    ASSERT_TRACKED_SIZE_CORRECT(list);
+
+    /* Also test multiple same-size replacements in a row. */
+    quicklistReplaceAtIndex(ql, 5, (void *)"dddd", 4);
+    ASSERT_TRACKED_SIZE_CORRECT(list);
+
+    quicklistReplaceAtIndex(ql, 6, (void *)"eeee", 4);
+    ASSERT_TRACKED_SIZE_CORRECT(list);
+
+    decrRefCount(list);
+}

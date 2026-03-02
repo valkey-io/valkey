@@ -97,5 +97,6 @@ unsigned char *
 lpNextRandom(unsigned char *lp, unsigned char *p, unsigned int *index, unsigned int remaining, int even_only);
 int lpSafeToAdd(unsigned char *lp, size_t add);
 void lpRepr(unsigned char *lp);
+size_t lpLastAllocSize(void);
 
 #endif

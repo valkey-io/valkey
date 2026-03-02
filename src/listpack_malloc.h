@@ -40,10 +40,11 @@
 #define LISTPACK_ALLOC_H
 #include "zmalloc.h"
 
-/* Thread-local that captures the usable allocation size from the last
- * lp_malloc / lp_realloc call.  zrealloc_usable already computes this
- * internally; we just stop discarding it. */
-extern __thread size_t lp_last_alloc_size;
+/* File-local variable defined in listpack.c that captures the usable
+ * allocation size from the last lp_malloc / lp_realloc call.  zmalloc_usable
+ * and zrealloc_usable already compute this internally; we just stop
+ * discarding it.  Exposed to callers via lpLastAllocSize(). */
+static size_t lp_last_alloc_size = 0;
 
 /* We use zmalloc_usable/zrealloc_usable instead of zmalloc/zrealloc
  * to ensure the safe invocation of 'zmalloc_usable_size().

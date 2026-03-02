@@ -42,7 +42,13 @@
 #include "listpack.h"
 #include "listpack_malloc.h"
 
-__thread size_t lp_last_alloc_size = 0;
+/* lp_last_alloc_size is defined as a file-local static in listpack_malloc.h
+ * (included above).  This getter exposes it to other modules (e.g. quicklist)
+ * without leaking the variable as an extern global. */
+size_t lpLastAllocSize(void) {
+    return lp_last_alloc_size;
+}
+
 #include "serverassert.h"
 #include "util.h"
 #include "config.h"
@@ -177,9 +183,13 @@ void lpFreeVoid(void *lp) {
 /* Shrink the memory to fit. */
 unsigned char *lpShrinkToFit(unsigned char *lp) {
     size_t size = lpGetTotalBytes(lp);
-    if (size < lp_malloc_size(lp)) {
+    size_t alloc_size = lp_malloc_size(lp);
+    if (size < alloc_size) {
         return lp_realloc(lp, size);
     } else {
+        /* Already at minimum allocation — no realloc needed.
+         * Update lp_last_alloc_size so callers don't see a stale value. */
+        lp_last_alloc_size = alloc_size;
         return lp;
     }
 }
@@ -779,9 +789,20 @@ unsigned char *lpInsert(unsigned char *lp,
     unsigned char *dst = lp + poff; /* May be updated after reallocation. */
 
     /* Realloc before: we need more room. */
-    if (new_listpack_bytes > old_listpack_bytes && new_listpack_bytes > lp_malloc_size(lp)) {
-        if ((lp = lp_realloc(lp, new_listpack_bytes)) == NULL) return NULL;
-        dst = lp + poff;
+    if (new_listpack_bytes > old_listpack_bytes) {
+        size_t alloc_size = lp_malloc_size(lp);
+        if (new_listpack_bytes > alloc_size) {
+            if ((lp = lp_realloc(lp, new_listpack_bytes)) == NULL) return NULL;
+            dst = lp + poff;
+        } else {
+            /* Growth fits within jemalloc slack — no realloc needed.
+             * Update lp_last_alloc_size so callers see the current value. */
+            lp_last_alloc_size = alloc_size;
+        }
+    } else if (new_listpack_bytes == old_listpack_bytes) {
+        /* Same size (e.g. replace with same-length element) — no realloc.
+         * Update lp_last_alloc_size so callers don't see a stale value. */
+        lp_last_alloc_size = lp_malloc_size(lp);
     }
 
     /* Setup the listpack relocating the elements to make the exact room
@@ -929,7 +950,10 @@ unsigned char *lpDeleteRangeWithEntry(unsigned char *lp, unsigned char **p, unsi
     unsigned char *first, *tail;
     first = tail = *p;
 
-    if (num == 0) return lp; /* Nothing to delete, return ASAP. */
+    if (num == 0) { /* Nothing to delete, return ASAP. */
+        lp_last_alloc_size = lp_malloc_size(lp);
+        return lp;
+    }
 
     /* Find the next entry to the last entry that needs to be deleted.
      * lpLength may be unreliable due to corrupt data, so we cannot
@@ -968,8 +992,14 @@ unsigned char *lpDeleteRange(unsigned char *lp, long index, unsigned long num) {
     unsigned char *p;
     uint32_t numele = lpGetNumElements(lp);
 
-    if (num == 0) return lp; /* Nothing to delete, return ASAP. */
-    if ((p = lpSeek(lp, index)) == NULL) return lp;
+    if (num == 0) { /* Nothing to delete, return ASAP. */
+        lp_last_alloc_size = lp_malloc_size(lp);
+        return lp;
+    }
+    if ((p = lpSeek(lp, index)) == NULL) {
+        lp_last_alloc_size = lp_malloc_size(lp);
+        return lp;
+    }
 
     /* If we know we're gonna delete beyond the end of the listpack, we can just move
      * the EOF marker, and there's no need to iterate through the entries,

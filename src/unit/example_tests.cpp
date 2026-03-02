@@ -27,7 +27,7 @@ using ExampleDeathTest = ExampleTest;
 
 // Example of a DeathTest, which passes only if the code crashes.
 TEST_F(ExampleDeathTest, TestSimpleDeath) {
-    EXPECT_DEATH({ abort(); }, "");
+    EXPECT_DEATH({ serverAssert(false); }, "");
 }
 
 // Simple assertions test

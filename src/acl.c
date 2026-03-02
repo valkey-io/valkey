@@ -152,6 +152,7 @@ struct ACLUserFlag {
     {"nopass", USER_FLAG_NOPASS},
     {"skip-sanitize-payload", USER_FLAG_SANITIZE_PAYLOAD_SKIP},
     {"sanitize-payload", USER_FLAG_SANITIZE_PAYLOAD},
+    {"disable-auth", USER_FLAG_DISABLE_AUTH},
     {NULL, 0} /* Terminator. */
 };
 
@@ -1336,6 +1337,9 @@ static int ACLSetSelector(aclSelector *selector, const char *op, size_t oplen) {
  *              will still work.
  * skip-sanitize-payload    RESTORE dump-payload sanitization is skipped.
  * sanitize-payload         RESTORE dump-payload is sanitized (default).
+ * disable-auth  Prevent the user from using AUTH or HELLO AUTH to
+ *               re-authenticate as a different user.
+ * enable-auth   Allow the user to use AUTH (default).
  * ><password>  Add this password to the list of valid password for the user.
  *              For example >mypass will add "mypass" to the list.
  *              This directive clears the "nopass" flag (see later).
@@ -1418,6 +1422,10 @@ int ACLSetUser(user *u, const char *op, ssize_t oplen) {
     } else if (!strcasecmp(op, "sanitize-payload")) {
         u->flags &= ~USER_FLAG_SANITIZE_PAYLOAD_SKIP;
         u->flags |= USER_FLAG_SANITIZE_PAYLOAD;
+    } else if (!strcasecmp(op, "disable-auth")) {
+        u->flags |= USER_FLAG_DISABLE_AUTH;
+    } else if (!strcasecmp(op, "enable-auth")) {
+        u->flags &= ~USER_FLAG_DISABLE_AUTH;
     } else if (!strcasecmp(op, "nopass")) {
         u->flags |= USER_FLAG_NOPASS;
         listEmpty(u->passwords);
@@ -1490,6 +1498,7 @@ int ACLSetUser(user *u, const char *op, ssize_t oplen) {
         serverAssert(ACLSetUser(u, "alldbs", -1) == C_OK);
         serverAssert(ACLSetUser(u, "off", -1) == C_OK);
         serverAssert(ACLSetUser(u, "sanitize-payload", -1) == C_OK);
+        serverAssert(ACLSetUser(u, "enable-auth", -1) == C_OK);
         serverAssert(ACLSetUser(u, "clearselectors", -1) == C_OK);
         serverAssert(ACLSetUser(u, "-@all", -1) == C_OK);
     } else {
@@ -3456,6 +3465,12 @@ void authCommand(client *c) {
         addReplyErrorObject(c, shared.syntaxerr);
         return;
     }
+    /* If the user has the disable-auth flag, deny re-authentication. */
+    if (c->flag.authenticated && c->user && (c->user->flags & USER_FLAG_DISABLE_AUTH)) {
+        addReplyError(c, "-NOPERM AUTH command not allowed for this user");
+        return;
+    }
+
     /* Always redact the second argument */
     redactClientCommandArgument(c, 1);
 

@@ -889,6 +889,93 @@ start_server {tags {"acl external:skip"}} {
         assert {[r client getname] eq {client0}}
     }
 
+    test {disable-auth flag denies AUTH for authenticated user} {
+        r ACL setuser authdenied on >authpass disable-auth +@all ~* &*
+        r AUTH authdenied authpass
+        assert {[r ACL WHOAMI] eq {authdenied}}
+
+        # AUTH should be denied
+        catch {r AUTH default pwd} e
+        assert_match "*NOPERM*" $e
+
+        # User is still authdenied
+        assert {[r ACL WHOAMI] eq {authdenied}}
+        r RESET
+        r ACL deluser authdenied
+    }
+
+    test {disable-auth flag denies HELLO AUTH for authenticated user} {
+        r ACL setuser hellodenied on >hellopass disable-auth +@all ~* &*
+        r AUTH hellodenied hellopass
+        assert {[r ACL WHOAMI] eq {hellodenied}}
+
+        # HELLO with AUTH should be denied
+        catch {r HELLO 2 AUTH default pwd} e
+        assert_match "*NOPERM*" $e
+
+        # User is still hellodenied
+        assert {[r ACL WHOAMI] eq {hellodenied}}
+        r RESET
+        r ACL deluser hellodenied
+    }
+
+    test {disable-auth flag appears in ACL LIST and ACL GETUSER} {
+        r ACL setuser flaguser on >flagpass disable-auth +@all ~* &*
+
+        # Check ACL LIST
+        set users [r ACL LIST]
+        foreach user $users {
+            if {[string match "*flaguser*" $user]} {
+                assert_match "*disable-auth*" $user
+            }
+        }
+
+        # Check ACL GETUSER flags
+        set flags [dict get [r ACL GETUSER flaguser] flags]
+        assert {[lsearch -exact $flags disable-auth] >= 0}
+
+        r ACL deluser flaguser
+    }
+
+    test {enable-auth clears disable-auth flag} {
+        r ACL setuser toggleuser on >togglepass disable-auth +@all ~* &*
+        set flags [dict get [r ACL GETUSER toggleuser] flags]
+        assert {[lsearch -exact $flags disable-auth] >= 0}
+
+        r ACL setuser toggleuser enable-auth
+        set flags [dict get [r ACL GETUSER toggleuser] flags]
+        assert {[lsearch -exact $flags disable-auth] < 0}
+
+        r ACL deluser toggleuser
+    }
+
+    test {reset clears disable-auth flag} {
+        r ACL setuser resetuser on >resetpass disable-auth +@all ~* &*
+        set flags [dict get [r ACL GETUSER resetuser] flags]
+        assert {[lsearch -exact $flags disable-auth] >= 0}
+
+        r ACL setuser resetuser reset on >resetpass +@all ~* &*
+        set flags [dict get [r ACL GETUSER resetuser] flags]
+        assert {[lsearch -exact $flags disable-auth] < 0}
+
+        r ACL deluser resetuser
+    }
+
+    test {Unauthenticated client can AUTH to user with disable-auth} {
+        r ACL setuser dauser on >dapass disable-auth +@all ~* &*
+
+        # Initial login should succeed
+        r AUTH dauser dapass
+        assert {[r ACL WHOAMI] eq {dauser}}
+
+        # Re-auth should fail
+        catch {r AUTH default pwd} e
+        assert_match "*NOPERM*" $e
+
+        r RESET
+        r ACL deluser dauser
+    }
+
     test {ACL HELP should not have unexpected options} {
         catch {r ACL help xxx} e
         assert_match "*wrong number of arguments for 'acl|help' command" $e

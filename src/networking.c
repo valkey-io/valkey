@@ -5709,6 +5709,12 @@ void helloCommand(client *c) {
     }
 
     if (username && password) {
+        /* If the user has the disable-auth flag, deny re-authentication. */
+        if (c->flag.authenticated && c->user && (c->user->flags & USER_FLAG_DISABLE_AUTH)) {
+            addReplyError(c, "-NOPERM AUTH command not allowed for this user");
+            return;
+        }
+
         robj *err = NULL;
         int auth_result = ACLAuthenticateUser(c, username, password, &err);
         if (auth_result == AUTH_ERR) {

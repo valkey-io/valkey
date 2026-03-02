@@ -1058,6 +1058,9 @@ typedef struct readyList {
 #define USER_FLAG_SANITIZE_PAYLOAD_SKIP (1 << 4) /* The user should skip the     \
                                                   * deep sanitization of RESTORE \
                                                   * payload. */
+#define USER_FLAG_DISABLE_AUTH (1 << 5)          /* The user is not allowed to \
+                                                  * use AUTH or HELLO AUTH to  \
+                                                  * re-authenticate. */
 
 #define SELECTOR_FLAG_ROOT (1 << 0)        /* This is the root user permission \
                                             * selector. */

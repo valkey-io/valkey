@@ -44,13 +44,25 @@ LTTNG_UST_TRACEPOINT_ENUM(
 )
 
 LTTNG_UST_TRACEPOINT_EVENT(
-	/* Tracepoint provider name */
 	valkey_commands,
+	command_call_entry,
+	LTTNG_UST_TP_ARGS(
+		int, prot,
+		const char *, addr,
+		const char *, laddr,
+		const char *, name
+	),
+	LTTNG_UST_TP_FIELDS(
+		lttng_ust_field_enum(valkey_commands, valkey_conn_type_enum, int, enum_field, prot)
+		lttng_ust_field_string(addr, addr)
+		lttng_ust_field_string(laddr, laddr)
+		lttng_ust_field_string(name, name)
+	)
+)
 
-	/* Tracepoint name */
+LTTNG_UST_TRACEPOINT_EVENT(
+	valkey_commands,
 	command_call,
-
-	/* Input arguments */
 	LTTNG_UST_TP_ARGS(
 		int, prot,
 		const char *, addr,
@@ -58,8 +70,6 @@ LTTNG_UST_TRACEPOINT_EVENT(
 		const char *, name,
 		uint64_t, duration
 	),
-
-	/* Output event fields */
 	LTTNG_UST_TP_FIELDS(
 		lttng_ust_field_enum(valkey_commands, valkey_conn_type_enum, int, enum_field, prot)
 		lttng_ust_field_string(addr, addr)

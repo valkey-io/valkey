@@ -427,6 +427,7 @@ int performEvictions(void) {
     unsigned long eviction_time_limit_us = evictionTimeLimitUs();
 
     latencyStartMonitor(latency);
+    latencyTraceStart(db, eviction_cycle);
 
     monotime evictionTimer;
     elapsedStart(&evictionTimer);
@@ -560,10 +561,11 @@ int performEvictions(void) {
             enterExecutionUnit(1, 0);
             delta = (long long)zmalloc_used_memory();
             latencyStartMonitor(eviction_latency);
+            latencyTraceStart(db, eviction_del);
             dbGenericDelete(db, keyobj, server.lazyfree_lazy_eviction, DB_FLAG_KEY_EVICTED);
             latencyEndMonitor(eviction_latency);
+            latencyTraceEnd(db, eviction_del, eviction_latency);
             latencyAddSampleIfNeeded("eviction-del", eviction_latency);
-            latencyTraceIfNeeded(db, eviction_del, eviction_latency);
             delta -= (long long)zmalloc_used_memory();
             mem_freed += delta;
             server.stat_evictedkeys++;
@@ -618,6 +620,7 @@ cant_free:
          * short wait here if such jobs exist, but don't wait long.  */
         mstime_t lazyfree_latency;
         latencyStartMonitor(lazyfree_latency);
+        latencyTraceStart(db, eviction_lazyfree);
         while (bioPendingJobsOfType(BIO_LAZY_FREE) && elapsedUs(evictionTimer) < eviction_time_limit_us) {
             if (getMaxmemoryState(NULL, NULL, NULL, NULL) == C_OK) {
                 result = EVICT_OK;
@@ -626,13 +629,13 @@ cant_free:
             usleep(eviction_time_limit_us < 1000 ? eviction_time_limit_us : 1000);
         }
         latencyEndMonitor(lazyfree_latency);
+        latencyTraceEnd(db, eviction_lazyfree, lazyfree_latency);
         latencyAddSampleIfNeeded("eviction-lazyfree", lazyfree_latency);
-        latencyTraceIfNeeded(db, eviction_lazyfree, lazyfree_latency);
     }
 
     latencyEndMonitor(latency);
+    latencyTraceEnd(db, eviction_cycle, latency);
     latencyAddSampleIfNeeded("eviction-cycle", latency);
-    latencyTraceIfNeeded(db, eviction_cycle, latency);
 
 update_metrics:
     if (result == EVICT_RUNNING || result == EVICT_FAIL) {

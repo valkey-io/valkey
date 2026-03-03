@@ -28,40 +28,44 @@
 #include <lttng/tracepoint.h>
 
 LTTNG_UST_TRACEPOINT_EVENT_CLASS(
-    /* Tracepoint class provider name */
     valkey_rdb,
+    valkey_rdb_entry_class,
+    LTTNG_UST_TP_ARGS(),
+    LTTNG_UST_TP_FIELDS()
+)
 
-    /* Tracepoint class name */
+LTTNG_UST_TRACEPOINT_EVENT_CLASS(
+    valkey_rdb,
     valkey_rdb_class,
-
-    /* List of tracepoint arguments (input) */
     LTTNG_UST_TP_ARGS(
-      uint64_t, duration
+        uint64_t, duration
     ),
-
-    /* List of fields of eventual event (output) */
     LTTNG_UST_TP_FIELDS(
         lttng_ust_field_integer(uint64_t, duration, duration)
     )
 )
 
 LTTNG_UST_TRACEPOINT_EVENT_INSTANCE(
-    /* Name of the tracepoint class provider */
-    valkey_rdb, valkey_rdb_class, valkey_rdb, fork,
+    valkey_rdb, valkey_rdb_entry_class, valkey_rdb, fork_entry,
+    LTTNG_UST_TP_ARGS()
+)
 
-    /* List of tracepoint arguments (input) */
+LTTNG_UST_TRACEPOINT_EVENT_INSTANCE(
+    valkey_rdb, valkey_rdb_class, valkey_rdb, fork,
     LTTNG_UST_TP_ARGS(
-      uint64_t, duration
+        uint64_t, duration
     )
 )
 
 LTTNG_UST_TRACEPOINT_EVENT_INSTANCE(
-    /* Name of the tracepoint class provider */
-    valkey_rdb, valkey_rdb_class, valkey_rdb, rdb_unlink_temp_file,
+    valkey_rdb, valkey_rdb_entry_class, valkey_rdb, rdb_unlink_temp_file_entry,
+    LTTNG_UST_TP_ARGS()
+)
 
-    /* List of tracepoint arguments (input) */
+LTTNG_UST_TRACEPOINT_EVENT_INSTANCE(
+    valkey_rdb, valkey_rdb_class, valkey_rdb, rdb_unlink_temp_file,
     LTTNG_UST_TP_ARGS(
-      uint64_t, duration
+        uint64_t, duration
     )
 )
 

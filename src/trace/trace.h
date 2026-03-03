@@ -30,14 +30,22 @@
 #define LATENCY_TRACE_SWITCH 1
 pid_t do_fork(void);
 
-#define latencyTraceIfNeeded(type, event, var) \
-    valkey_##type##_trace(valkey_##type, event, (var));
+#define latencyTraceStart(type, event) \
+    valkey_##type##_trace(valkey_##type, event##_entry)
+
+#define latencyTraceEnd(type, event, dur) \
+    valkey_##type##_trace(valkey_##type, event, (dur))
 
 #else
 
-#define latencyTraceIfNeeded(type, event, var) \
-    do {                                       \
+#define latencyTraceStart(type, event) \
+    do {                               \
     } while (0)
+
+#define latencyTraceEnd(type, event, dur) \
+    do {                                  \
+    } while (0)
+
 #endif
 
 #endif /* __VALKEY_TRACE_H__ */

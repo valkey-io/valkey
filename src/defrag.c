@@ -1162,6 +1162,7 @@ static long long activeDefragTimeProc(struct aeEventLoop *eventLoop, long long i
 
     mstime_t latency;
     latencyStartMonitor(latency);
+    latencyTraceStart(db, active_defrag_cycle);
 
     do {
         if (!defrag.current_stage) {
@@ -1185,8 +1186,8 @@ static long long activeDefragTimeProc(struct aeEventLoop *eventLoop, long long i
     } while (haveMoreWork && getMonotonicUs() <= endtime - server.active_defrag_cycle_us);
 
     latencyEndMonitor(latency);
+    latencyTraceEnd(db, active_defrag_cycle, latency);
     latencyAddSampleIfNeeded("active-defrag-cycle", latency);
-    latencyTraceIfNeeded(db, active_defrag_cycle, latency);
     if (haveMoreWork) {
         return computeDelayMs(endtime);
     } else {

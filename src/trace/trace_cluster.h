@@ -28,100 +28,116 @@
 #include <lttng/tracepoint.h>
 
 LTTNG_UST_TRACEPOINT_EVENT_CLASS(
-    /* Tracepoint class provider name */
     valkey_cluster,
+    valkey_cluster_entry_class,
+    LTTNG_UST_TP_ARGS(),
+    LTTNG_UST_TP_FIELDS()
+)
 
-    /* Tracepoint class name */
+LTTNG_UST_TRACEPOINT_EVENT_CLASS(
+    valkey_cluster,
     valkey_cluster_class,
-
-    /* List of tracepoint arguments (input) */
     LTTNG_UST_TP_ARGS(
-      uint64_t, duration
+        uint64_t, duration
     ),
-
-    /* List of fields of eventual event (output) */
     LTTNG_UST_TP_FIELDS(
         lttng_ust_field_integer(uint64_t, duration, duration)
     )
 )
 
 LTTNG_UST_TRACEPOINT_EVENT_INSTANCE(
-    /* Name of the tracepoint class provider */
+    valkey_cluster, valkey_cluster_entry_class, valkey_cluster, cluster_config_open_entry,
+    LTTNG_UST_TP_ARGS()
+)
+
+LTTNG_UST_TRACEPOINT_EVENT_INSTANCE(
     valkey_cluster, valkey_cluster_class, valkey_cluster, cluster_config_open,
-
-    /* List of tracepoint arguments (input) */
     LTTNG_UST_TP_ARGS(
-      uint64_t, duration
+        uint64_t, duration
     )
 )
 
 LTTNG_UST_TRACEPOINT_EVENT_INSTANCE(
-    /* Name of the tracepoint class provider */
+    valkey_cluster, valkey_cluster_entry_class, valkey_cluster, cluster_config_write_entry,
+    LTTNG_UST_TP_ARGS()
+)
+
+LTTNG_UST_TRACEPOINT_EVENT_INSTANCE(
     valkey_cluster, valkey_cluster_class, valkey_cluster, cluster_config_write,
-
-    /* List of tracepoint arguments (input) */
     LTTNG_UST_TP_ARGS(
-      uint64_t, duration
+        uint64_t, duration
     )
 )
 
 LTTNG_UST_TRACEPOINT_EVENT_INSTANCE(
-    /* Name of the tracepoint class provider */
+    valkey_cluster, valkey_cluster_entry_class, valkey_cluster, cluster_config_fsync_entry,
+    LTTNG_UST_TP_ARGS()
+)
+
+LTTNG_UST_TRACEPOINT_EVENT_INSTANCE(
     valkey_cluster, valkey_cluster_class, valkey_cluster, cluster_config_fsync,
-
-    /* List of tracepoint arguments (input) */
     LTTNG_UST_TP_ARGS(
-      uint64_t, duration
+        uint64_t, duration
     )
 )
 
 LTTNG_UST_TRACEPOINT_EVENT_INSTANCE(
-    /* Name of the tracepoint class provider */
+    valkey_cluster, valkey_cluster_entry_class, valkey_cluster, cluster_config_rename_entry,
+    LTTNG_UST_TP_ARGS()
+)
+
+LTTNG_UST_TRACEPOINT_EVENT_INSTANCE(
     valkey_cluster, valkey_cluster_class, valkey_cluster, cluster_config_rename,
-
-    /* List of tracepoint arguments (input) */
     LTTNG_UST_TP_ARGS(
-      uint64_t, duration
+        uint64_t, duration
     )
 )
 
 LTTNG_UST_TRACEPOINT_EVENT_INSTANCE(
-    /* Name of the tracepoint class provider */
+    valkey_cluster, valkey_cluster_entry_class, valkey_cluster, cluster_config_dir_fsync_entry,
+    LTTNG_UST_TP_ARGS()
+)
+
+LTTNG_UST_TRACEPOINT_EVENT_INSTANCE(
     valkey_cluster, valkey_cluster_class, valkey_cluster, cluster_config_dir_fsync,
-
-    /* List of tracepoint arguments (input) */
     LTTNG_UST_TP_ARGS(
-      uint64_t, duration
+        uint64_t, duration
     )
 )
 
 LTTNG_UST_TRACEPOINT_EVENT_INSTANCE(
-    /* Name of the tracepoint class provider */
+    valkey_cluster, valkey_cluster_entry_class, valkey_cluster, cluster_config_close_entry,
+    LTTNG_UST_TP_ARGS()
+)
+
+LTTNG_UST_TRACEPOINT_EVENT_INSTANCE(
     valkey_cluster, valkey_cluster_class, valkey_cluster, cluster_config_close,
-
-    /* List of tracepoint arguments (input) */
     LTTNG_UST_TP_ARGS(
-      uint64_t, duration
+        uint64_t, duration
     )
 )
 
 LTTNG_UST_TRACEPOINT_EVENT_INSTANCE(
-    /* Name of the tracepoint class provider */
+    valkey_cluster, valkey_cluster_entry_class, valkey_cluster, cluster_config_unlink_entry,
+    LTTNG_UST_TP_ARGS()
+)
+
+LTTNG_UST_TRACEPOINT_EVENT_INSTANCE(
     valkey_cluster, valkey_cluster_class, valkey_cluster, cluster_config_unlink,
-
-    /* List of tracepoint arguments (input) */
     LTTNG_UST_TP_ARGS(
-      uint64_t, duration
+        uint64_t, duration
     )
 )
 
 LTTNG_UST_TRACEPOINT_EVENT_INSTANCE(
-    /* Name of the tracepoint class provider */
-    valkey_cluster, valkey_cluster_class, valkey_cluster, fork,
+    valkey_cluster, valkey_cluster_entry_class, valkey_cluster, fork_entry,
+    LTTNG_UST_TP_ARGS()
+)
 
-    /* List of tracepoint arguments (input) */
+LTTNG_UST_TRACEPOINT_EVENT_INSTANCE(
+    valkey_cluster, valkey_cluster_class, valkey_cluster, fork,
     LTTNG_UST_TP_ARGS(
-      uint64_t, duration
+        uint64_t, duration
     )
 )
 

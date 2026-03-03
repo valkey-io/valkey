@@ -1764,6 +1764,7 @@ void whileBlockedCron(void) {
 
     mstime_t latency;
     latencyStartMonitor(latency);
+    latencyTraceStart(server, while_blocked_cron);
 
     defragWhileBlocked();
 
@@ -1771,8 +1772,8 @@ void whileBlockedCron(void) {
     if (server.loading) cronUpdateMemoryStats();
 
     latencyEndMonitor(latency);
+    latencyTraceEnd(server, while_blocked_cron, latency);
     latencyAddSampleIfNeeded("while-blocked-cron", latency);
-    latencyTraceIfNeeded(server, while_blocked_cron, latency);
 
     /* We received a SIGTERM during loading, shutting down here in a safe way,
      * as it isn't ok doing so inside the signal handler. */
@@ -1866,6 +1867,7 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
      * tasks done by cron and beforeSleep, but excluding read, write and AOF, that are counted by other
      * sets of metrics. */
     monotime cron_start_time_before_aof = getMonotonicUs();
+    latencyTraceStart(server, eventloop_cron);
 
     /* Run a fast expire cycle (the called function will return
      * ASAP if a fast cycle is not needed). */
@@ -1914,6 +1916,7 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
     /* Record the fsync'd offset before flushAppendOnly */
     long long prev_fsynced_reploff = server.fsynced_reploff;
 
+    latencyTraceStart(aof, aof_flush);
     /* Write the AOF buffer on disk,
      * must be done before handleClientsWithPendingWrites,
      * in case of appendfsync=always. */
@@ -1921,8 +1924,8 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
 
     /* Record time consumption of AOF writing. */
     monotime aof_duration = getMonotonicUs() - aof_start_time;
+    latencyTraceEnd(aof, aof_flush, aof_duration);
     durationAddSample(EL_DURATION_TYPE_AOF, aof_duration);
-    latencyTraceIfNeeded(aof, aof_flush, aof_duration);
 
     /* Update the fsynced replica offset.
      * If an initial rewrite is in progress then not all data is guaranteed to have actually been
@@ -1974,7 +1977,7 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
     if (server.el_start > 0) {
         monotime el_duration = getMonotonicUs() - server.el_start;
         durationAddSample(EL_DURATION_TYPE_EL, el_duration);
-        latencyTraceIfNeeded(server, eventloop, el_duration);
+        latencyTraceEnd(server, eventloop, el_duration);
 
         /* Accumulate time only for active cycles */
         if (server.el_iteration_active) {
@@ -1986,7 +1989,7 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
     }
     server.el_cron_duration += duration_before_aof + duration_after_write;
     durationAddSample(EL_DURATION_TYPE_CRON, server.el_cron_duration);
-    latencyTraceIfNeeded(server, eventloop_cron, server.el_cron_duration);
+    latencyTraceEnd(server, eventloop_cron, server.el_cron_duration);
     server.el_cron_duration = 0;
     /* Record max command count per cycle. */
     if (server.stat_numcommands > server.el_cmd_cnt_start) {
@@ -2022,16 +2025,18 @@ void afterSleep(struct aeEventLoop *eventLoop, int numevents) {
         if (moduleCount()) {
             mstime_t latency;
             latencyStartMonitor(latency);
+            latencyTraceStart(server, module_acquire_gil);
             atomic_store_explicit(&server.module_gil_acquiring, 1, memory_order_relaxed);
             moduleAcquireGIL();
             atomic_store_explicit(&server.module_gil_acquiring, 0, memory_order_relaxed);
             moduleFireServerEvent(VALKEYMODULE_EVENT_EVENTLOOP, VALKEYMODULE_SUBEVENT_EVENTLOOP_AFTER_SLEEP, NULL);
             latencyEndMonitor(latency);
+            latencyTraceEnd(server, module_acquire_gil, latency);
             latencyAddSampleIfNeeded("module-acquire-GIL", latency);
-            latencyTraceIfNeeded(server, module_acquire_gil, latency);
         }
         /* Set the eventloop start time. */
         server.el_start = getMonotonicUs();
+        latencyTraceStart(server, eventloop);
         /* Reset iteration work flag */
         server.el_iteration_active = (numevents > 0);
         /* Set the eventloop command count at start. */
@@ -3880,6 +3885,13 @@ void call(client *c, int flags) {
     monotime monotonic_start = 0;
     if (monotonicGetType() == MONOTONIC_CLOCK_HW) monotonic_start = getMonotonicUs();
 
+    valkey_commands_trace(valkey_commands, command_call_entry, connGetType(c->conn), getClientPeerId(c), getClientSockname(c), real_cmd->declared_name);
+    if (real_cmd->flags & CMD_FAST) {
+        latencyTraceStart(server, fast_command);
+    } else {
+        latencyTraceStart(server, command);
+    }
+
     c->cmd->proc(c);
 
     exitExecutionUnit();
@@ -3896,7 +3908,13 @@ void call(client *c, int flags) {
     else
         duration = ustime() - call_timer;
 
+    if (real_cmd->flags & CMD_FAST) {
+        latencyTraceEnd(server, fast_command, duration);
+    } else {
+        latencyTraceEnd(server, command, duration);
+    }
     valkey_commands_trace(valkey_commands, command_call, connGetType(c->conn), getClientPeerId(c), getClientSockname(c), real_cmd->declared_name, duration);
+
     c->duration += duration;
     dirty = server.dirty - dirty;
     if (dirty < 0) dirty = 0;
@@ -3928,11 +3946,6 @@ void call(client *c, int flags) {
     if (update_command_stats) {
         char *latency_event = (real_cmd->flags & CMD_FAST) ? "fast-command" : "command";
         latencyAddSampleIfNeeded(latency_event, duration);
-        if (real_cmd->flags & CMD_FAST) {
-            latencyTraceIfNeeded(server, fast_command, duration);
-        } else {
-            latencyTraceIfNeeded(server, command, duration);
-        }
         if (server.execution_nesting == 0) durationAddSample(EL_DURATION_TYPE_CMD, duration);
     }
 
@@ -6999,6 +7012,13 @@ int serverFork(int purpose) {
 
     int childpid;
     long long start = ustime();
+    if (purpose == CHILD_TYPE_RDB) {
+        latencyTraceStart(rdb, fork);
+    } else if (purpose == CHILD_TYPE_AOF) {
+        latencyTraceStart(aof, fork);
+    } else if (purpose == CHILD_TYPE_SLOT_MIGRATION) {
+        latencyTraceStart(cluster, fork);
+    }
     if ((childpid = valkey_fork()) == 0) {
         /* Child.
          *
@@ -7031,11 +7051,11 @@ int serverFork(int purpose) {
             (double)zmalloc_used_memory() * 1000000 / server.stat_fork_time / (1024 * 1024 * 1024); /* GB per second. */
         latencyAddSampleIfNeeded("fork", server.stat_fork_time);
         if (purpose == CHILD_TYPE_RDB) {
-            latencyTraceIfNeeded(rdb, fork, server.stat_fork_time);
+            latencyTraceEnd(rdb, fork, server.stat_fork_time);
         } else if (purpose == CHILD_TYPE_AOF) {
-            latencyTraceIfNeeded(aof, fork, server.stat_fork_time);
+            latencyTraceEnd(aof, fork, server.stat_fork_time);
         } else if (purpose == CHILD_TYPE_SLOT_MIGRATION) {
-            latencyTraceIfNeeded(cluster, fork, server.stat_fork_time);
+            latencyTraceEnd(cluster, fork, server.stat_fork_time);
         }
 
         /* The child_pid and child_type are only for mutually exclusive children.

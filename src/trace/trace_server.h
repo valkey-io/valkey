@@ -41,7 +41,7 @@ LTTNG_UST_TRACEPOINT_EVENT_CLASS(
         uint64_t, duration
     ),
     LTTNG_UST_TP_FIELDS(
-        lttng_ust_field_integer(uint64_t, duration, duration)
+        lttng_ust_field_integer_nowrite(uint64_t, duration, duration)
     )
 )
 

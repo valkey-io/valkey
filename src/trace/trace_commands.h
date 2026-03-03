@@ -75,7 +75,7 @@ LTTNG_UST_TRACEPOINT_EVENT(
 		lttng_ust_field_string(addr, addr)
 		lttng_ust_field_string(laddr, laddr)
 		lttng_ust_field_string(name, name)
-		lttng_ust_field_integer(uint64_t, duration, duration)
+		lttng_ust_field_integer_nowrite(uint64_t, duration, duration)
 	)
 )
 

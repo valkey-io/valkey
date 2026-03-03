@@ -7,6 +7,32 @@
 #include "expire.h"
 #include "sds.h"
 
+/*================================= Durability Provider Interface ============ */
+
+/**
+ * Maximum number of durability providers that can be registered.
+ * Built-in providers: replica, aof. Future: raft, quorum, etc.
+ */
+#define MAX_DURABILITY_PROVIDERS 4
+
+/**
+ * A durability provider represents a source of durability acknowledgment.
+ * Each provider tracks progress independently and the overall durability
+ * consensus is the MIN (AND) of all enabled providers' acknowledged offsets.
+ *
+ * Examples: replica acknowledgments, AOF fsync, raft consensus.
+ */
+typedef struct durabilityProvider {
+    const char *name;                    /* Human-readable name, e.g. "replica", "aof" */
+    bool (*isEnabled)(void);             /* Is this provider currently active? */
+    long long (*getAckedOffset)(void);   /* What offset has this provider acknowledged? */
+} durabilityProvider;
+
+void registerDurabilityProvider(durabilityProvider *provider);
+void unregisterDurabilityProvider(durabilityProvider *provider);
+void notifyDurabilityProgress(void);
+bool anyDurabilityProviderEnabled(void);
+
 #define SYNC_REPL_ACCESSED_DATA_UNAVAILABLE "Accessed data unavailable to be served"
 /* Command filter codes that are used in pre execution stage of a command. */
 #define CMD_FILTER_ALLOW 0
@@ -68,6 +94,10 @@ typedef struct durable_t {
 
     /* Track the number of commands awaiting propagation prior to executing a single command in call() */
     int pre_call_num_ops_pending_propagation;
+    
+    /* Counters for debugging/monitoring */
+    long long stat_read_blocked_count;   /* Number of read commands that got blocked */
+    long long stat_write_blocked_count;  /* Number of write commands that got blocked */
 } durable_t;
 
 // Blocked response structure used by client to mark
@@ -130,6 +160,7 @@ int preCommandExec(client *c);
 char *preScriptCmd(client *c);
 void postCommandExec(client *c);
 void postReplicaAck(void);
+void postAofFsync(void);
 /**
     Utils
 */
@@ -139,6 +170,7 @@ long long syncReplicationPurgeAndGetUncommittedKeyOffset(sds key, serverDb *db);
 
 int isSyncReplicationEnabled(void);
 void clearUncommittedKeysAcknowledged(void);
+sds genSyncReplicationInfoString(sds info);
 void syncReplicationInitDatabase(serverDb *db);
 void handleUncommittedKeyForClient(const client *c, struct serverObject *key, serverDb *db);
 // TODO:

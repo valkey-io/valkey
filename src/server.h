@@ -2022,6 +2022,9 @@ struct valkeyServer {
     int aof_load_truncated;             /* Don't stop on unexpected AOF EOF. */
     int aof_use_rdb_preamble;           /* Specify base AOF to use RDB encoding on AOF rewrites. */
     int aof_rewrite_use_rdb_preamble;   /* Base AOF to use RDB encoding on AOF rewrites start. */
+    _Atomic int aof_io_flush_state;     /* AOF always-fsync IO-thread flush state. */
+    _Atomic int aof_io_flush_errno;     /* Errno of AOF always-fsync IO-thread flush. */
+    _Atomic off_t aof_io_flush_size;    /* Bytes written by the last IO-thread flush. */
     _Atomic int aof_bio_fsync_status;   /* Status of AOF fsync in bio job. */
     _Atomic int aof_bio_fsync_errno;    /* Errno of AOF fsync in bio job. */
     aofManifest *aof_manifest;          /* Used to track AOFs. */
@@ -3250,6 +3253,7 @@ void aofManifestFree(aofManifest *am);
 int aofDelHistoryFiles(void);
 int aofRewriteLimited(void);
 int rewriteSlotToAppendOnlyFileRio(rio *aof, int db_num, int hashslot, size_t *key_count);
+int aofIOFlushInProgress(void);
 
 /* Child info */
 void openChildInfoPipe(void);

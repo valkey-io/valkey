@@ -8,6 +8,15 @@
 
 void blockLastResponseIfExist(struct client *c, long long blocked_offset);
 
+/* Custom test provider for test_durabilityProviderSystem */
+static bool testCustomProviderIsEnabled(void) { return true; }
+static long long testCustomProviderGetAckedOffset(void) { return 50; }
+durabilityProvider testCustomProvider = {
+    .name = "custom-test",
+    .isEnabled = testCustomProviderIsEnabled,
+    .getAckedOffset = testCustomProviderGetAckedOffset,
+};
+
 static void initReplyBlockingTestEnv(void) {
     static char test_logfile[] = "";
     if (server.logfile == NULL) {
@@ -478,10 +487,16 @@ int test_exec_blocks_reply_and_tracks_dirty_keys(int argc, char **argv, int flag
     int old_cluster_enabled = server.cluster_enabled;
     long long old_primary_repl_offset = server.primary_repl_offset;
     int old_get_ack = server.get_ack_from_replicas;
+    list *old_replicas = server.replicas;
+    list *old_clients_pending_write = server.clients_pending_write;
+    int old_aof_state = server.aof_state;
+    int old_aof_fsync = server.aof_fsync;
+    long long old_fsynced_reploff = server.fsynced_reploff;
     durable_t old_durability = server.durability;
 
     server.cluster_enabled = 0;
     server.primary_host = NULL;
+    server.clients_pending_write = listCreate();
     server.dbnum = 1;
     server.db = zcalloc(sizeof(serverDb *));
     server.db[0] = zcalloc(sizeof(serverDb));
@@ -509,6 +524,15 @@ int test_exec_blocks_reply_and_tracks_dirty_keys(int argc, char **argv, int flag
     TEST_ASSERT(preCommandExec(c) == CMD_FILTER_ALLOW);
     TEST_ASSERT(c->clientDurabilityInfo.offset.recorded == true);
 
+    /* Enable AOF provider BEFORE postCommandExec so that blocking is triggered.
+     * The AOF provider (aof_state=ON, aof_fsync=ALWAYS) must be enabled for
+     * anyDurabilityProviderEnabled() to return true. */
+    server.replicas = listCreate();
+    server.aof_state = AOF_ON;
+    server.aof_fsync = AOF_FSYNC_ALWAYS;
+    atomic_store_explicit(&server.fsynced_reploff_pending, 0, memory_order_relaxed);
+    server.fsynced_reploff = 0;
+
     c->bufpos = 9;
     server.primary_repl_offset = 150;
     server.durability.previous_acked_offset = 0;
@@ -526,12 +550,38 @@ int test_exec_blocks_reply_and_tracks_dirty_keys(int argc, char **argv, int flag
     TEST_ASSERT(hashtableSize(server.db[0]->uncommitted_keys) == 1);
     TEST_ASSERT(syncReplicationPurgeAndGetUncommittedKeyOffset(objectGetVal(key_obj), server.db[0]) == 150);
 
+    client *replica = zcalloc(sizeof(client));
+    replica->repl_data = zcalloc(sizeof(ClientReplicationData));
+    replica->repl_data->repl_state = REPLICA_STATE_ONLINE;
+    replica->repl_data->repl_ack_off = 150;
+    listAddNodeTail(server.replicas, replica);
+
+    /* Use fsynced_reploff_pending since getDurabilityConsensusOffset() now
+     * reads from it directly to get the most up-to-date fsync progress. */
+    atomic_store_explicit(&server.fsynced_reploff_pending, 120, memory_order_relaxed);
+    server.fsynced_reploff = 120;
+    postReplicaAck();
+    TEST_ASSERT(server.durability.previous_acked_offset == 120);
+    TEST_ASSERT(listLength(c->clientDurabilityInfo.blocked_responses) == 1);
+    TEST_ASSERT(c->clientDurabilityInfo.durable_blocked_client == 1);
+
+    atomic_store_explicit(&server.fsynced_reploff_pending, 150, memory_order_relaxed);
+    server.fsynced_reploff = 150;
+    postAofFsync();
+    TEST_ASSERT(server.durability.previous_acked_offset == 150);
+    TEST_ASSERT(listLength(c->clientDurabilityInfo.blocked_responses) == 0);
+    TEST_ASSERT(c->clientDurabilityInfo.durable_blocked_client == 0);
+
     decrRefCount(key_obj);
     listRelease(c->reply);
     syncReplicationClientReset(c);
     zfree(c);
 
     syncReplicationCleanup();
+    listRelease(server.clients_pending_write);
+    zfree(replica->repl_data);
+    zfree(replica);
+    listRelease(server.replicas);
     hashtableRelease(server.db[0]->uncommitted_keys);
     zfree(server.db[0]);
     zfree(server.db);
@@ -542,6 +592,130 @@ int test_exec_blocks_reply_and_tracks_dirty_keys(int argc, char **argv, int flag
     server.cluster_enabled = old_cluster_enabled;
     server.primary_repl_offset = old_primary_repl_offset;
     server.get_ack_from_replicas = old_get_ack;
+    server.replicas = old_replicas;
+    server.clients_pending_write = old_clients_pending_write;
+    server.aof_state = old_aof_state;
+    server.aof_fsync = old_aof_fsync;
+    server.fsynced_reploff = old_fsynced_reploff;
+    server.durability = old_durability;
+
+    return 0;
+}
+
+/**
+ * Test the durability provider system: registration, enablement, and notifyDurabilityProgress.
+ */
+int test_durabilityProviderSystem(int argc, char **argv, int flags) {
+    UNUSED(argc);
+    UNUSED(argv);
+    UNUSED(flags);
+
+    initReplyBlockingTestEnv();
+
+    /* Save old state */
+    int old_aof_state = server.aof_state;
+    int old_aof_fsync = server.aof_fsync;
+    long long old_fsynced_reploff = server.fsynced_reploff;
+    list *old_replicas = server.replicas;
+    list *old_clients_pending_write = server.clients_pending_write;
+    char *old_primary_host = server.primary_host;
+    durable_t old_durability = server.durability;
+
+    server.primary_host = NULL;
+    server.clients_pending_write = listCreate();
+    server.replicas = listCreate();
+
+    /* -- Test 1: Built-in providers are registered after syncReplicationInit -- */
+    syncReplicationInit();
+
+    /* With AOF off and replicaAcksForConsensus()==0, no provider should be enabled */
+    server.aof_state = AOF_OFF;
+    server.aof_fsync = AOF_FSYNC_EVERYSEC;
+    TEST_ASSERT(anyDurabilityProviderEnabled() == false);
+
+    /* -- Test 2: AOF provider becomes enabled when AOF is on + always fsync -- */
+    server.aof_state = AOF_ON;
+    server.aof_fsync = AOF_FSYNC_ALWAYS;
+    TEST_ASSERT(anyDurabilityProviderEnabled() == true);
+
+    /* -- Test 3: notifyDurabilityProgress unblocks clients (same as postAofFsync) -- */
+    server.durability.sync_replication_enabled = 1;
+    server.durability.previous_acked_offset = 0;
+    server.primary_repl_offset = 200;
+    atomic_store_explicit(&server.fsynced_reploff_pending, 200, memory_order_relaxed);
+    server.fsynced_reploff = 200;
+
+    /* Set up a blocked client */
+    client *c = zcalloc(sizeof(client));
+    syncReplicationClientInit(c);
+    c->reply = listCreate();
+    listSetFreeMethod(c->reply, zfree);
+    c->bufpos = 5;
+    c->clientDurabilityInfo.offset.recorded = true;
+    c->clientDurabilityInfo.offset.reply_block = NULL;
+    c->clientDurabilityInfo.offset.byte_offset = 0;
+    blockLastResponseIfExist(c, 100);
+    TEST_ASSERT(listLength(c->clientDurabilityInfo.blocked_responses) == 1);
+    listAddNodeTail(server.durability.clients_waiting_replica_ack, c);
+    c->clientDurabilityInfo.durable_blocked_client = 1;
+
+    /* notifyDurabilityProgress should unblock the client */
+    notifyDurabilityProgress();
+    TEST_ASSERT(server.durability.previous_acked_offset == 200);
+    TEST_ASSERT(listLength(c->clientDurabilityInfo.blocked_responses) == 0);
+    TEST_ASSERT(c->clientDurabilityInfo.durable_blocked_client == 0);
+
+    /* -- Test 4: Custom provider can be registered and participates in consensus -- */
+    durabilityProvider *customProvider = &testCustomProvider;
+
+    registerDurabilityProvider(customProvider);
+    TEST_ASSERT(anyDurabilityProviderEnabled() == true);
+
+    /* Reset previous_acked_offset so we can test consensus again */
+    server.durability.previous_acked_offset = 0;
+    server.primary_repl_offset = 300;
+    atomic_store_explicit(&server.fsynced_reploff_pending, 300, memory_order_relaxed);
+    server.fsynced_reploff = 300;
+
+    /* Set up another blocked client at offset 50 */
+    client *c2 = zcalloc(sizeof(client));
+    syncReplicationClientInit(c2);
+    c2->reply = listCreate();
+    listSetFreeMethod(c2->reply, zfree);
+    c2->bufpos = 3;
+    c2->clientDurabilityInfo.offset.recorded = true;
+    c2->clientDurabilityInfo.offset.reply_block = NULL;
+    c2->clientDurabilityInfo.offset.byte_offset = 0;
+    blockLastResponseIfExist(c2, 50);
+    listAddNodeTail(server.durability.clients_waiting_replica_ack, c2);
+    c2->clientDurabilityInfo.durable_blocked_client = 1;
+
+    /* Consensus should be MIN(aof=300, custom=50) = 50, unblocking c2 */
+    notifyDurabilityProgress();
+    TEST_ASSERT(server.durability.previous_acked_offset == 50);
+    TEST_ASSERT(listLength(c2->clientDurabilityInfo.blocked_responses) == 0);
+
+    /* -- Test 5: Unregister custom provider -- */
+    unregisterDurabilityProvider(customProvider);
+
+    /* -- Cleanup -- */
+    listRelease(c->reply);
+    syncReplicationClientReset(c);
+    zfree(c);
+    listRelease(c2->reply);
+    syncReplicationClientReset(c2);
+    zfree(c2);
+
+    syncReplicationCleanup();
+    listRelease(server.clients_pending_write);
+    listRelease(server.replicas);
+
+    server.aof_state = old_aof_state;
+    server.aof_fsync = old_aof_fsync;
+    server.fsynced_reploff = old_fsynced_reploff;
+    server.replicas = old_replicas;
+    server.clients_pending_write = old_clients_pending_write;
+    server.primary_host = old_primary_host;
     server.durability = old_durability;
 
     return 0;

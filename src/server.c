@@ -1805,7 +1805,9 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
         processed += processIOThreadsReadDone();
         processed += connTypeProcessPendingData();
         if (server.aof_state == AOF_ON || server.aof_state == AOF_WAIT_REWRITE) flushAppendOnlyFile(0);
-        processed += handleClientsWithPendingWrites();
+        if (!(server.aof_fsync == AOF_FSYNC_ALWAYS && aofIOFlushInProgress())) {
+            processed += handleClientsWithPendingWrites();
+        }
         int last_processed = 0;
         do {
             /* Try to process all the pending IO events. */
@@ -1907,14 +1909,18 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
          * wake them up ASAP. */
         if (listLength(server.clients_waiting_acks) && prev_fsynced_reploff != server.fsynced_reploff) dont_sleep = 1;
     }
+    postAofFsync();
 
-    /* Handle writes with pending output buffers. */
+    /* Handle writes with pending output buffers.
+     * When using IO thread offloading for fsync, we can send responses
+     * while fsync is in progress - the sync_replication blocking logic
+     * handles which specific clients need to wait. */
     handleClientsWithPendingWrites();
 
-    /* Try to process more IO reads that are ready to be processed. */
-    if (server.aof_fsync != AOF_FSYNC_ALWAYS) {
-        processIOThreadsReadDone();
-    }
+    /* Try to process more IO reads that are ready to be processed.
+     * We always process reads - if fsync=always with IO thread offloading,
+     * reads should still complete while fsync happens in background. */
+    processIOThreadsReadDone();
 
     processIOThreadsWriteDone();
 
@@ -2002,7 +2008,11 @@ void afterSleep(struct aeEventLoop *eventLoop, int numevents) {
         server.cmd_time_snapshot = server.mstime;
     }
 
-    adjustIOThreadsByEventLoad(numevents, 0);
+    /* Check if AOF always-fsync needs IO threads for background work */
+    int aof_needs_io = (server.aof_state != AOF_OFF && 
+                        server.aof_fsync == AOF_FSYNC_ALWAYS && 
+                        sdslen(server.aof_buf) > 0);
+    adjustIOThreadsByEventLoad(numevents, 0, aof_needs_io);
 }
 
 /* =========================== Server initialization ======================== */
@@ -2251,6 +2261,9 @@ void initServerConfig(void) {
     server.aof_flush_sleep = 0;
     server.aof_last_fsync = time(NULL) * 1000;
     server.aof_cur_timestamp = 0;
+    atomic_store_explicit(&server.aof_io_flush_state, 0, memory_order_relaxed);
+    atomic_store_explicit(&server.aof_io_flush_errno, 0, memory_order_relaxed);
+    atomic_store_explicit(&server.aof_io_flush_size, 0, memory_order_relaxed);
     atomic_store_explicit(&server.aof_bio_fsync_status, C_OK, memory_order_relaxed);
     server.aof_rewrite_time_last = -1;
     server.aof_rewrite_time_start = -1;
@@ -6510,6 +6523,13 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                 "eventloop_duration_cron_sum:%llu\r\n", server.duration_stats[EL_DURATION_TYPE_CRON].sum,
                 "eventloop_duration_max:%llu\r\n", server.duration_stats[EL_DURATION_TYPE_EL].max,
                 "eventloop_cmd_per_cycle_max:%lld\r\n", server.el_cmd_cnt_max));
+    }
+
+    /* Sync replication / durability stats */
+    if (all_sections || (dictFind(section_dict, "sync_replication") != NULL)) {
+        if (sections++) info = sdscat(info, "\r\n");
+        info = sdscatprintf(info, "# Sync_replication\r\n");
+        info = genSyncReplicationInfoString(info);
     }
 
     return info;

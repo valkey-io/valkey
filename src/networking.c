@@ -3170,7 +3170,7 @@ int handleClientsWithPendingWrites(void) {
 
     /* Adjust the number of I/O threads based on the number of pending writes this is required in case pending_writes >
      * poll_events (for example in pubsub) */
-    adjustIOThreadsByEventLoad(pending_writes, 1);
+    adjustIOThreadsByEventLoad(pending_writes, 1, 0);
 
     listIter li;
     listNode *ln;

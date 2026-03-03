@@ -9,6 +9,7 @@
 static _Thread_local int thread_id = 0; /* Thread local var */
 static pthread_t io_threads[IO_THREADS_MAX_NUM] = {0};
 static pthread_mutex_t io_threads_mutex[IO_THREADS_MAX_NUM];
+static size_t next_generic_job_rr = 0; /* Main-thread round-robin counter for generic IO jobs. */
 
 /* IO jobs queue functions - Used to send jobs from the main-thread to the IO thread. */
 typedef void (*job_handler)(void *);
@@ -130,6 +131,25 @@ int inMainThread(void) {
     return thread_id == 0;
 }
 
+/* Attempts to offload a generic job to an IO thread.
+ * Returns C_OK if the job is enqueued, C_ERR otherwise. */
+int trySendJobToIOThreads(void (*handler)(void *), void *data) {
+    if (!inMainThread() || server.active_io_threads_num <= 1) return C_ERR;
+    size_t workers = (size_t)server.active_io_threads_num - 1;
+    size_t start = (next_generic_job_rr++ % workers) + 1;
+
+    /* Distribute jobs across active IO threads and fall back to any
+     * available queue if the preferred one is full. */
+    for (size_t i = 0; i < workers; i++) {
+        size_t tid = ((start - 1 + i) % workers) + 1;
+        IOJobQueue *jq = &io_jobs[tid];
+        if (IOJobQueue_isFull(jq)) continue;
+        IOJobQueue_push(jq, handler, data);
+        return C_OK;
+    }
+    return C_ERR;
+}
+
 int getIOThreadID(void) {
     return thread_id;
 }
@@ -166,13 +186,21 @@ void waitForClientIO(client *c) {
 }
 
 /** Adjusts the number of active I/O threads based on the current event load.
- * If increase_only is non-zero, only allows increasing the number of threads.*/
-void adjustIOThreadsByEventLoad(int numevents, int increase_only) {
+ * If increase_only is non-zero, only allows increasing the number of threads.
+ * If has_background_work is non-zero, ensures at least one IO thread is active
+ * for background jobs like AOF fsync. */
+void adjustIOThreadsByEventLoad(int numevents, int increase_only, int has_background_work) {
     if (server.io_threads_num == 1) return; /* All I/O is being done by the main thread. */
     debugServerAssertWithInfo(NULL, NULL, server.io_threads_num > 1);
     /* When events_per_io_thread is set to 0, we offload all events to the IO threads.
      * This is used mainly for testing purposes. */
     int target_threads = server.events_per_io_thread == 0 ? (numevents + 1) : numevents / server.events_per_io_thread;
+
+    /* If there's background work (like AOF fsync), ensure at least 2 threads are active
+     * so generic jobs can be offloaded to IO threads. */
+    if (has_background_work && target_threads < 2) {
+        target_threads = 2;
+    }
 
     target_threads = max(1, min(target_threads, server.io_threads_num));
 

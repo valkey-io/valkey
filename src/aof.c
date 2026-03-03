@@ -29,6 +29,7 @@
 
 #include "server.h"
 #include "bio.h"
+#include "io_threads.h"
 #include "rio.h"
 #include "functions.h"
 #include "module.h"
@@ -50,6 +51,23 @@ int rewriteAppendOnlyFile(char *filename);
 aofManifest *aofLoadManifestFromFile(sds am_filepath);
 void aofManifestFreeAndUpdate(aofManifest *am);
 void aof_background_fsync_and_close(int fd);
+
+enum {
+    AOF_IO_FLUSH_IDLE = 0,
+    AOF_IO_FLUSH_PENDING,
+    AOF_IO_FLUSH_DONE,
+    AOF_IO_FLUSH_ERR,
+};
+
+typedef struct aofIOFlushJob {
+    int fd;
+    sds buf;
+    size_t len;
+    long long reploff;
+} aofIOFlushJob;
+
+static void processAofIOThreadFlushResult(void);
+static int tryOffloadAofAlwaysFlushToIOThreads(void);
 
 /* ----------------------------------------------------------------------------
  * AOF Manifest file implementation.
@@ -952,6 +970,9 @@ void stopAppendOnly(void) {
     server.aof_last_incr_size = 0;
     server.aof_last_incr_fsync_offset = 0;
     server.fsynced_reploff = -1;
+    atomic_store_explicit(&server.aof_io_flush_state, AOF_IO_FLUSH_IDLE, memory_order_relaxed);
+    atomic_store_explicit(&server.aof_io_flush_errno, 0, memory_order_relaxed);
+    atomic_store_explicit(&server.aof_io_flush_size, 0, memory_order_relaxed);
     atomic_store_explicit(&server.fsynced_reploff_pending, 0, memory_order_relaxed);
     killAppendOnlyChild();
     sdsfree(server.aof_buf);
@@ -1002,6 +1023,9 @@ int startAppendOnly(void) {
         serverLog(LL_WARNING, "AOF reopen, just ignore the last error.");
         server.aof_last_write_status = C_OK;
     }
+    atomic_store_explicit(&server.aof_io_flush_state, AOF_IO_FLUSH_IDLE, memory_order_relaxed);
+    atomic_store_explicit(&server.aof_io_flush_errno, 0, memory_order_relaxed);
+    atomic_store_explicit(&server.aof_io_flush_size, 0, memory_order_relaxed);
     return C_OK;
 }
 
@@ -1031,6 +1055,113 @@ ssize_t aofWrite(int fd, const char *buf, size_t len) {
     return totwritten;
 }
 
+static void aofIOThreadFlushJobHandler(void *data) {
+    aofIOFlushJob *job = data;
+    int err = 0;
+    ssize_t nwritten = aofWrite(job->fd, job->buf, job->len);
+    if (nwritten != (ssize_t)job->len) {
+        err = (nwritten == -1) ? errno : ENOSPC;
+        goto done;
+    }
+
+    if (valkey_fsync(job->fd) == -1) {
+        err = errno;
+        goto done;
+    }
+
+    atomic_store_explicit(&server.fsynced_reploff_pending, job->reploff, memory_order_relaxed);
+    atomic_store_explicit(&server.aof_io_flush_size, job->len, memory_order_relaxed);
+    atomic_store_explicit(&server.aof_io_flush_state, AOF_IO_FLUSH_DONE, memory_order_release);
+    sdsfree(job->buf);
+    zfree(job);
+    return;
+
+done:
+    atomic_store_explicit(&server.aof_io_flush_errno, err, memory_order_relaxed);
+    atomic_store_explicit(&server.aof_io_flush_state, AOF_IO_FLUSH_ERR, memory_order_release);
+    sdsfree(job->buf);
+    zfree(job);
+}
+
+int aofIOFlushInProgress(void) {
+    return atomic_load_explicit(&server.aof_io_flush_state, memory_order_acquire) == AOF_IO_FLUSH_PENDING;
+}
+
+static void processAofIOThreadFlushResult(void) {
+    int state = atomic_load_explicit(&server.aof_io_flush_state, memory_order_acquire);
+    if (state == AOF_IO_FLUSH_IDLE || state == AOF_IO_FLUSH_PENDING) return;
+
+    if (state == AOF_IO_FLUSH_DONE) {
+        off_t nwritten = atomic_load_explicit(&server.aof_io_flush_size, memory_order_relaxed);
+        server.aof_current_size += nwritten;
+        server.aof_last_incr_size += nwritten;
+        server.aof_last_incr_fsync_offset = server.aof_last_incr_size;
+        server.aof_last_fsync = server.mstime;
+        if (server.aof_last_write_status == C_ERR) {
+            serverLog(LL_NOTICE, "AOF write error looks solved. The server can write again.");
+            server.aof_last_write_status = C_OK;
+        }
+        atomic_store_explicit(&server.aof_io_flush_state, AOF_IO_FLUSH_IDLE, memory_order_release);
+        
+        /* Notify sync replication that AOF fsync completed so blocked clients can be unblocked */
+        postAofFsync();
+        return;
+    }
+
+    int err = atomic_load_explicit(&server.aof_io_flush_errno, memory_order_relaxed);
+    server.aof_last_write_errno = err;
+    atomic_store_explicit(&server.aof_io_flush_state, AOF_IO_FLUSH_IDLE, memory_order_release);
+
+    if (server.aof_fsync == AOF_FSYNC_ALWAYS) {
+        serverLog(LL_WARNING,
+                  "Can't persist AOF from IO thread when the "
+                  "AOF fsync policy is 'always': %s. Exiting...",
+                  strerror(err));
+        exit(1);
+    }
+    server.aof_last_write_status = C_ERR;
+}
+
+static int tryOffloadAofAlwaysFlushToIOThreads(void) {
+    if (server.aof_fsync != AOF_FSYNC_ALWAYS || sdslen(server.aof_buf) == 0 || aofIOFlushInProgress()) {
+        return C_ERR;
+    }
+
+    /* If IO threads are configured but not active, we can't offload.
+     * Note: Thread activation based on AOF workload is handled by
+     * adjustIOThreadsByEventLoad() via the has_background_work parameter. */
+    if (server.io_threads_num <= 1 || server.active_io_threads_num <= 1) {
+        return C_ERR;
+    }
+
+    /* NOTE: With sync replication enabled, we still want to offload fsync to
+     * IO threads to avoid blocking the main thread. The postAofFsync() callback
+     * will be invoked in beforeSleep() when we check for completed IO thread
+     * jobs, which will then unblock waiting clients. This adds at most one
+     * event loop iteration of latency but keeps the main thread responsive. */
+
+    aofIOFlushJob *job = zmalloc(sizeof(*job));
+    job->fd = server.aof_fd;
+    job->buf = server.aof_buf;
+    job->len = sdslen(job->buf);
+    job->reploff = server.primary_repl_offset;
+
+    server.aof_buf = sdsempty();
+    atomic_store_explicit(&server.aof_io_flush_errno, 0, memory_order_relaxed);
+    atomic_store_explicit(&server.aof_io_flush_size, 0, memory_order_relaxed);
+    atomic_store_explicit(&server.aof_io_flush_state, AOF_IO_FLUSH_PENDING, memory_order_release);
+    if (trySendJobToIOThreads(aofIOThreadFlushJobHandler, job) == C_OK) {
+        server.aof_flush_postponed_start = 0;
+        return C_OK;
+    }
+
+    atomic_store_explicit(&server.aof_io_flush_state, AOF_IO_FLUSH_IDLE, memory_order_release);
+    sdsfree(server.aof_buf);
+    server.aof_buf = job->buf;
+    zfree(job);
+    return C_ERR;
+}
+
 /* Write the append only file buffer on disk.
  *
  * Since we are required to write the AOF before replying to the client,
@@ -1054,6 +1185,15 @@ void flushAppendOnlyFile(int force) {
     ssize_t nwritten;
     int sync_in_progress = 0;
     mstime_t latency;
+
+    processAofIOThreadFlushResult();
+    if (aofIOFlushInProgress()) {
+        if (!force) return;
+        while (aofIOFlushInProgress()) {
+            usleep(100);
+            processAofIOThreadFlushResult();
+        }
+    }
 
     if (sdslen(server.aof_buf) == 0) {
         /* Check if we need to do fsync even the aof buffer is empty,
@@ -1109,6 +1249,11 @@ void flushAppendOnlyFile(int force) {
                                  "without waiting for fsync to complete, this may slow down the server.");
         }
     }
+
+    if (server.aof_fsync == AOF_FSYNC_ALWAYS && !force && tryOffloadAofAlwaysFlushToIOThreads() == C_OK) {
+        return;
+    }
+
     /* We want to perform a single write. This should be guaranteed atomic
      * at least if the filesystem we are writing is a real physical one.
      * While this will save us against the server being killed I don't think

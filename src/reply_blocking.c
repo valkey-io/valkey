@@ -25,6 +25,12 @@ static int isBlockingNeededForOffset(const struct client *c, long long offset);
 static void blockClientAndMonitorsOnReplOffset(struct client *c, long long blockingReplOffset);
 static void populateReplicaOffsets(long long *offsets, const size_t numReplicas);
 static int offsetSorterDesc(const void *v1, const void *v2);
+static long long getDurabilityConsensusOffset(void);
+static void postDurabilityAck(void);
+static bool replicaProviderIsEnabled(void);
+static long long replicaProviderGetAckedOffset(void);
+static bool aofProviderIsEnabled(void);
+static long long aofProviderGetAckedOffset(void);
 static unsigned long long getNumberOfUncommittedKeys(void);
 static uint64_t uncommittedKeysHash(const void *key);
 static int uncommittedKeysKeyCompare(const void *key1, const void *key2);
@@ -118,7 +124,7 @@ int isPrimarySyncReplicationEnabled(void) {
  * Using 2 as default for POC.
  */
 static unsigned replicaAcksForConsensus(void) {
-    return 1;
+    return 0;
 }
 
 /**
@@ -238,6 +244,155 @@ long long getConsensusOffset(const unsigned long numAcksNeeded) {
 
     // get the Kth element
     return replica_offsets[numAcksNeeded - 1];
+}
+
+/**
+ * Returns true if local AOF fsync progress should be considered for durability.
+ */
+static bool isAofLocalAckRequired(void) {
+    return server.aof_state != AOF_OFF && server.aof_fsync == AOF_FSYNC_ALWAYS;
+}
+
+/*================================= Durability Provider System =============== */
+
+/* Provider registry: static array of registered providers */
+static durabilityProvider *durability_providers[MAX_DURABILITY_PROVIDERS];
+static int num_durability_providers = 0;
+
+/**
+ * Register a durability provider. Providers are checked in registration order.
+ * The overall durability consensus is the MIN (AND) of all enabled providers.
+ */
+void registerDurabilityProvider(durabilityProvider *provider) {
+    serverAssert(num_durability_providers < MAX_DURABILITY_PROVIDERS);
+    durability_providers[num_durability_providers++] = provider;
+    serverLog(LL_NOTICE, "Registered durability provider: %s", provider->name);
+}
+
+/**
+ * Unregister a durability provider by pointer.
+ */
+void unregisterDurabilityProvider(durabilityProvider *provider) {
+    for (int i = 0; i < num_durability_providers; i++) {
+        if (durability_providers[i] == provider) {
+            /* Shift remaining providers down */
+            for (int j = i; j < num_durability_providers - 1; j++) {
+                durability_providers[j] = durability_providers[j + 1];
+            }
+            num_durability_providers--;
+            serverLog(LL_NOTICE, "Unregistered durability provider: %s", provider->name);
+            return;
+        }
+    }
+}
+
+/**
+ * Returns true if any registered durability provider is currently enabled.
+ * This replaces the hardcoded check: replicaAcksForConsensus() == 0 && !isAofLocalAckRequired()
+ */
+bool anyDurabilityProviderEnabled(void) {
+    for (int i = 0; i < num_durability_providers; i++) {
+        if (durability_providers[i]->isEnabled()) return true;
+    }
+    return false;
+}
+
+/**
+ * Unified notification entry point called by any provider when its state changes.
+ * This replaces both postReplicaAck() and postAofFsync() as the single notification path.
+ */
+void notifyDurabilityProgress(void) {
+    postDurabilityAck();
+}
+
+/* ---- Built-in Replica Provider ---- */
+
+static bool replicaProviderIsEnabled(void) {
+    return replicaAcksForConsensus() > 0;
+}
+
+static long long replicaProviderGetAckedOffset(void) {
+    long long offset = getConsensusOffset(replicaAcksForConsensus());
+    /* If there are no connected replicas, return -1 to indicate
+     * this provider cannot make progress. */
+    return offset;
+}
+
+durabilityProvider builtinReplicaProvider = {
+    .name = "replica",
+    .isEnabled = replicaProviderIsEnabled,
+    .getAckedOffset = replicaProviderGetAckedOffset,
+};
+
+/* ---- Built-in AOF Provider ---- */
+
+static bool aofProviderIsEnabled(void) {
+    return isAofLocalAckRequired();
+}
+
+static long long aofProviderGetAckedOffset(void) {
+    /* Use fsynced_reploff_pending directly instead of fsynced_reploff.
+     * When async AOF flushing is used (IO threads), fsynced_reploff_pending
+     * is updated by the IO thread upon fsync completion, but fsynced_reploff
+     * is only updated in the next beforeSleep() iteration. Using the pending
+     * value ensures we see the most up-to-date fsync progress immediately. */
+    long long fsynced_offset = atomic_load_explicit(&server.fsynced_reploff_pending, memory_order_relaxed);
+    /* Handle the case where AOF is enabled but no data has been fsynced yet
+     * (fsynced_reploff_pending is 0 initially). In that case, use fsynced_reploff
+     * if it's been properly initialized. */
+    if (fsynced_offset == 0 && server.fsynced_reploff > 0) {
+        fsynced_offset = server.fsynced_reploff;
+    }
+    return fsynced_offset;
+}
+
+durabilityProvider builtinAofProvider = {
+    .name = "aof",
+    .isEnabled = aofProviderIsEnabled,
+    .getAckedOffset = aofProviderGetAckedOffset,
+};
+
+/**
+ * Register the built-in durability providers. Called from syncReplicationInit().
+ */
+static void registerBuiltinDurabilityProviders(void) {
+    /* Only register if not already registered (idempotent) */
+    if (num_durability_providers == 0) {
+        registerDurabilityProvider(&builtinReplicaProvider);
+        registerDurabilityProvider(&builtinAofProvider);
+    }
+}
+
+/**
+ * Returns the durability consensus offset by iterating all registered
+ * providers and returning the MIN of all enabled providers' acknowledged
+ * offsets (AND semantics: all must acknowledge).
+ */
+static long long getDurabilityConsensusOffset(void) {
+    long long consensus = server.primary_repl_offset;
+    bool any_enabled = false;
+
+    for (int i = 0; i < num_durability_providers; i++) {
+        durabilityProvider *p = durability_providers[i];
+        if (!p->isEnabled()) continue;
+        any_enabled = true;
+        long long offset = p->getAckedOffset();
+        /* Skip providers that return -1 (e.g. replica provider with insufficient replicas)
+         * only if there are no replicas connected at all  allow other providers to drive progress. */
+        if (offset == -1) {
+            /* For backward compat: if this is the replica provider and there are
+             * no replicas, skip it so other providers can drive durability. */
+            if (p == &builtinReplicaProvider && listLength(server.replicas) == 0) {
+                continue;
+            }
+            /* Otherwise, -1 means the provider can't make progress  use it as-is
+             * to block consensus advancement. */
+            return -1;
+        }
+        if (offset < consensus) consensus = offset;
+    }
+
+    return any_enabled ? consensus : server.primary_repl_offset;
 }
 
 /*================================= Client management ======================== */
@@ -450,8 +605,13 @@ static void unblockFirstResponse(const client *c) {
  * @return 0 if we don't need to block at the specified offset, and 1 if we do.
  */
 static int isBlockingNeededForOffset(const client *c, const long long offset) {
-    // If the blocking offset is -1 or no replica is needed to ACK, don't block.
-    if (offset == -1 || replicaAcksForConsensus() == 0) {
+    // If the blocking offset is -1, don't block.
+    if (offset == -1) {
+        return 0;
+    }
+    
+    // If no durability provider is enabled, don't block.
+    if (!anyDurabilityProviderEnabled()) {
         return 0;
     }
 
@@ -478,7 +638,14 @@ void blockClientOnReplOffset(client *c, const long long blockingReplOffset) {
     /* If needed, we block the client and put it into our list of clients
      * waiting for ack from slaves. */
     if (isBlockingNeededForOffset(c, blockingReplOffset)) {
-        serverLog(LL_DEBUG, "client should be blocked at offset %lld,", blockingReplOffset);
+        /* Track blocked command stats for debugging */
+        if (c->cmd->flags & CMD_WRITE) {
+            server.durability.stat_write_blocked_count++;
+        } else {
+            server.durability.stat_read_blocked_count++;
+        }
+        serverLog(LL_DEBUG, "client should be blocked at offset %lld, cmd=%s, is_write=%d", 
+                  blockingReplOffset, c->cmd->declared_name, (c->cmd->flags & CMD_WRITE) ? 1 : 0);
         blockLastResponseIfExist(c, blockingReplOffset);
         if (!c->clientDurabilityInfo.durable_blocked_client) {
             listAddNodeTail(server.durability.clients_waiting_replica_ack, c);
@@ -564,18 +731,13 @@ void unblockResponsesWithAckOffset(const durable_t *durability, const long long 
     }
 }
 
-/**
- * Checks if there are clients blocked that can be unblocked since
- * we received enough ACKs from replicas.
- */
-void postReplicaAck(void) {
-    serverLog(LL_DEBUG, "postReplicaAck hook entered");
+static void postDurabilityAck(void) {
     if (!isPrimarySyncReplicationEnabled()) {
         return;
     }
 
     durable_t *durability = &server.durability;
-    const long long consensus_ack_offset = getConsensusOffset(replicaAcksForConsensus());
+    const long long consensus_ack_offset = getDurabilityConsensusOffset();
     if (consensus_ack_offset <= durability->previous_acked_offset) {
         return;
     }
@@ -585,6 +747,25 @@ void postReplicaAck(void) {
 
     // Unblock responses and keyspace notifications with consensus acked offset
     unblockResponsesWithAckOffset(durability, consensus_ack_offset);
+}
+
+/**
+ * Checks if there are clients blocked that can be unblocked since
+ * we received enough ACKs from replicas.
+ */
+void postReplicaAck(void) {
+    postDurabilityAck();
+}
+
+/**
+ * Checks if there are clients blocked that can be unblocked since
+ * local AOF fsync progressed.
+ */
+void postAofFsync(void) {
+    if (!isPrimarySyncReplicationEnabled()) {
+        return;
+    }
+    postDurabilityAck();
 }
 
 /*================================= Key management ============================ */
@@ -662,7 +843,7 @@ long long syncReplicationPurgeAndGetUncommittedKeyOffset(const sds key, serverDb
  * @param key
  * @param db
  */
-void handleUncommittedKeyForClient(const client *c, const robj *key, const serverDb *db) {
+void handleUncommittedKeyForClient(const client *c, robj *key, serverDb *db) {
     // If we are in the context of a MULTI/EXEC transaction or a script, mark the dirty key
     // pending so it can be properly recorded later on with the final replication offset.
     if ((c != NULL) && ((c->flag.multi) || scriptIsRunning())) {
@@ -936,7 +1117,10 @@ static long long getSingleCommandBlockingOffsetForNonReplicatingCommand(client *
         return -1;
     }
     if (c->cmd->flags & (CMD_READONLY | CMD_WRITE)) {
-        serverLog(LL_DEBUG, "getSingleCommandBlockingOffsetForNonReplicatingCommand for command");
+        // Fast path: if there are no uncommitted keys in this DB and no dirty DB offset, skip
+        if (hashtableSize(c->db->uncommitted_keys) == 0 && c->db->dirty_repl_offset == -1) {
+            return -1;
+        }
         // For read/write commands that didn't generate replication data, we would block
         // on the highest offset of all accessed uncommitted keys and the valkey DBs itself.
         // Note some commands categorized as writes can perform read only operations
@@ -976,8 +1160,8 @@ static long long getSingleCommandBlockingOffsetForNonReplicatingCommand(client *
 static long long getSingleCommandBlockingOffsetForConsistentWrites(struct client *c) {
     serverAssert(isPrimarySyncReplicationEnabled());
 
-    // If no replicas are required for ACK, then return -1 (no need to block)
-    if (replicaAcksForConsensus() == 0)
+    // If no durability provider is enabled, return -1 (no need to block)
+    if (!anyDurabilityProviderEnabled())
         return -1;
 
     long long blocking_repl_offset = -1;
@@ -1150,18 +1334,26 @@ void postCommandExec(client *c) {
     // TODO CMD_MAY_REPLICATE
 
     // If the client ran a transaction or a script that included write commands, the
-    // blocking offset was not accurately set in amzPostCall() so we update it here.
+    // blocking offset was not accurately set in afterCommandTrackReplOffset() so we update it here.
     //
-    // There are 2 exceptions to this rule:
-    // 1. We exclude sync commands as the master replication offset will have increased
-    // despite no change to the primary's state occurring.
-    // 2. SHUTDOWN command may execute REPLCONF GETACK command if there is uncommitted data
-    // and this increments the master replication offset. However, the client is not eligible
-    // for blocking and the SHUTDOWN command should not be blocked.
+    // We only do this for:
+    // 1. Write commands (CMD_WRITE flag)
+    // 2. Transactions (EXEC command) or scripts that may contain writes
+    //
+    // We exclude certain commands that can increase the replication offset without
+    // actually modifying data:
+    // - syncCommand: replication protocol commands increase offset
+    // - clusterCommand: cluster management may increase offset
+    // - shutdownCommand: may execute REPLCONF GETACK which increases offset
+    //
+    // This check prevents read-only commands from being incorrectly blocked when
+    // the replication offset increases due to unrelated activity (like AOF fsync
+    // completing for a prior write).
     if (server.primary_repl_offset > server.durability.pre_command_replication_offset
+            && (c->cmd->flags & CMD_WRITE || isClientDoingTransaction(c))
             && c->cmd->proc != syncCommand && c->cmd->proc != clusterCommand && c->cmd->proc != shutdownCommand) {
         blocking_repl_offset = server.primary_repl_offset;
-            }
+    }
 
 
     // If the client needs to block, we need to enforce that it is eligible for response tracking.
@@ -1185,10 +1377,15 @@ void syncReplicationInit(void) {
     server.durability.previous_acked_offset = -1;
     server.durability.curr_db_scan_idx = 0;
     server.durability.clients_waiting_replica_ack = listCreate();
+    server.durability.stat_read_blocked_count = 0;
+    server.durability.stat_write_blocked_count = 0;
     if (pending_uncommitted_keys == NULL) {
         pending_uncommitted_keys = listCreate();
         listSetFreeMethod(pending_uncommitted_keys, pendingUncommittedKeyDestructor);
     }
+
+    /* Register built-in durability providers (replica + AOF) */
+    registerBuiltinDurabilityProviders();
 }
 
 /**
@@ -1207,6 +1404,9 @@ void syncReplicationCleanup(void) {
         listRelease(pending_uncommitted_keys);
         pending_uncommitted_keys = NULL;
     }
+
+    /* Reset the durability provider registry so it can be re-initialized */
+    num_durability_providers = 0;
 
     clearAllUncommittedKeys();
 }
@@ -1268,6 +1468,33 @@ void syncReplicationClearPrimaryState(void) {
     syncReplicationResetPrimaryState(true);
 }
 
+
+/**
+ * Generate INFO string for sync replication stats.
+ */
+sds genSyncReplicationInfoString(sds info) {
+    if (!isSyncReplicationEnabled()) {
+        info = sdscatprintf(info, "sync_replication_enabled:0\r\n");
+        return info;
+    }
+    
+    info = sdscatprintf(info,
+        "sync_replication_enabled:1\r\n"
+        "sync_repl_read_blocked_count:%lld\r\n"
+        "sync_repl_write_blocked_count:%lld\r\n"
+        "sync_repl_clients_waiting_ack:%lu\r\n"
+        "sync_repl_uncommitted_keys:%llu\r\n"
+        "sync_repl_previous_acked_offset:%lld\r\n"
+        "sync_repl_primary_repl_offset:%lld\r\n",
+        server.durability.stat_read_blocked_count,
+        server.durability.stat_write_blocked_count,
+        listLength(server.durability.clients_waiting_replica_ack),
+        getNumberOfUncommittedKeys(),
+        server.durability.previous_acked_offset,
+        server.primary_repl_offset);
+    
+    return info;
+}
 
 /**
  * Reset related resources when disabling synchronous replication

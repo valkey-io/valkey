@@ -6,11 +6,12 @@
 void initIOThreads(void);
 void killIOThreads(void);
 int inMainThread(void);
+int trySendJobToIOThreads(void (*handler)(void *), void *data);
 int trySendReadToIOThreads(client *c);
 int trySendWriteToIOThreads(client *c);
 int tryOffloadFreeObjToIOThreads(robj *o);
 int tryOffloadFreeArgvToIOThreads(client *c, int argc, robj **argv);
-void adjustIOThreadsByEventLoad(int numevents, int increase_only);
+void adjustIOThreadsByEventLoad(int numevents, int increase_only, int has_background_work);
 void drainIOThreadsQueue(void);
 void trySendPollJobToIOThreads(void);
 int trySendAcceptToIOThreads(connection *conn);

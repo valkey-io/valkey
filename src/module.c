@@ -420,9 +420,10 @@ typedef struct ValkeyModuleEventListener {
     ValkeyModuleEventCallback callback;
 } ValkeyModuleEventListener;
 
-list *ValkeyModule_EventListeners;            /* Global list of all the active events. */
-static int commandResultSuccessListeners = 0; /* Count of modules listening for command result success. */
-static int commandResultFailureListeners = 0; /* Count of modules listening for command result failure. */
+list *ValkeyModule_EventListeners;               /* Global list of all the active events. */
+static int commandResultSuccessListeners = 0;    /* Count of modules listening for command result success. */
+static int commandResultFailureListeners = 0;    /* Count of modules listening for command result failure. */
+static int commandResultACLDeniedListeners = 0;  /* Count of modules listening for command result ACL denied. */
 
 /* Data structures related to the module users */
 
@@ -11721,7 +11722,8 @@ void moduleFireCommandResultEvent(client *c,
         }
     }
 
-    /* Build the event data structure */
+    /* Build the event data structure. The ACL fields are zero/NULL for
+     * success and failure events — they are only populated for ACL_DENIED. */
     ValkeyModuleCommandResultInfoV1 info = {
         .version = VALKEYMODULE_COMMANDRESULTINFO_VERSION,
         .command_name = cmd ? cmd->fullname : NULL,
@@ -11731,6 +11733,8 @@ void moduleFireCommandResultEvent(client *c,
         .is_module_client = (c->flag.module ? 1 : 0),
         .argc = argc,
         .argv = (ValkeyModuleString **)decoded_argv,
+        .acl_deny_reason = 0,
+        .acl_object = NULL,
     };
 
     /* Fire the appropriate event based on success/failure */
@@ -11744,6 +11748,45 @@ void moduleFireCommandResultEvent(client *c,
         }
         zfree(decoded_argv);
     }
+}
+
+/* Fire command result ACL denied server event.
+ * Called from processCommand() when ACLCheckAllPerm() denies the command.
+ * acl_retval is ACL_DENIED_CMD, ACL_DENIED_KEY, ACL_DENIED_CHANNEL, etc.
+ * acl_errpos is the index into c->argv of the denied key or channel, used
+ * when acl_retval is ACL_DENIED_KEY or ACL_DENIED_CHANNEL. */
+void moduleFireCommandACLDeniedEvent(client *c, int acl_retval, int acl_errpos) {
+    if (commandResultACLDeniedListeners == 0) return;
+
+    /* For key/channel denials, extract the name from argv. Decode from
+     * OBJ_ENCODING_INT if needed, using a stack buffer to avoid allocation. */
+    char int_key_buf[LONG_STR_SIZE];
+    const char *acl_object = NULL;
+    if ((acl_retval == ACL_DENIED_KEY || acl_retval == ACL_DENIED_CHANNEL) &&
+        acl_errpos < c->argc) {
+        robj *key_obj = c->argv[acl_errpos];
+        if (key_obj->encoding == OBJ_ENCODING_INT) {
+            ll2string(int_key_buf, sizeof(int_key_buf), (long)objectGetVal(key_obj));
+            acl_object = int_key_buf;
+        } else {
+            acl_object = objectGetVal(key_obj);
+        }
+    }
+
+    ValkeyModuleCommandResultInfoV1 info = {
+        .version = VALKEYMODULE_COMMANDRESULTINFO_VERSION,
+        .command_name = c->cmd ? c->cmd->fullname : NULL,
+        .duration_us = 0,
+        .dirty = 0,
+        .client_id = c->id,
+        .is_module_client = (c->flag.module ? 1 : 0),
+        .argc = c->argc,
+        .argv = (ValkeyModuleString **)c->argv,
+        .acl_deny_reason = acl_retval,
+        .acl_object = acl_object,
+    };
+
+    moduleFireServerEvent(VALKEYMODULE_EVENT_COMMAND_RESULT_ACL_DENIED, 0, &info);
 }
 
 /* For a given pointer allocated via ValkeyModule_Alloc() or
@@ -12201,6 +12244,7 @@ static uint64_t moduleEventVersions[] = {
     VALKEYMODULE_ATOMICSLOTMIGRATION_INFO_VERSION, /* VALKEYMODULE_EVENT_ATOMIC_SLOT_MIGRATION */
     VALKEYMODULE_COMMANDRESULTINFO_VERSION,        /* VALKEYMODULE_EVENT_COMMAND_RESULT_SUCCESS */
     VALKEYMODULE_COMMANDRESULTINFO_VERSION,        /* VALKEYMODULE_EVENT_COMMAND_RESULT_FAILURE */
+    VALKEYMODULE_COMMANDRESULTINFO_VERSION,        /* VALKEYMODULE_EVENT_COMMAND_RESULT_ACL_DENIED */
 };
 
 /* Register to be notified, via a callback, when the specified server event
@@ -12577,6 +12621,23 @@ static uint64_t moduleEventVersions[] = {
  *     This event is useful for monitoring command failures without the overhead
  *     of receiving callbacks for all successful commands.
  *
+ * * ValkeyModuleEvent_CommandResultACLDenied
+ *
+ *     Called when a command is rejected by the ACL system (NOPERM error) before
+ *     execution. This event fires from processCommand() and therefore does not
+ *     carry duration or dirty-key information.
+ *
+ *     The data pointer can be casted to a ValkeyModuleCommandResultInfo
+ *     structure. In addition to the base fields (which have the same meaning as
+ *     for the success/failure events), two version-2 fields are populated:
+ *
+ *         int acl_deny_reason;        // ACL_DENIED_CMD, ACL_DENIED_KEY,
+ *                                     // ACL_DENIED_CHANNEL, or ACL_DENIED_AUTH
+ *         const char *acl_object;     // Denied resource: key or channel name for
+ *                                     // KEY/CHANNEL denials; NULL otherwise
+ *
+ *     The duration_us and dirty fields are 0 for this event.
+ *
  * The function returns VALKEYMODULE_OK if the module was successfully subscribed
  * for the specified event. If the API is called from a wrong context or unsupported event
  * is given then VALKEYMODULE_ERR is returned. */
@@ -12607,6 +12668,8 @@ int VM_SubscribeToServerEvent(ValkeyModuleCtx *ctx, ValkeyModuleEvent event, Val
                 commandResultSuccessListeners--;
             else if (event.id == VALKEYMODULE_EVENT_COMMAND_RESULT_FAILURE)
                 commandResultFailureListeners--;
+            else if (event.id == VALKEYMODULE_EVENT_COMMAND_RESULT_ACL_DENIED)
+                commandResultACLDeniedListeners--;
         } else {
             el->callback = callback; /* Update the callback with the new one. */
         }
@@ -12623,6 +12686,8 @@ int VM_SubscribeToServerEvent(ValkeyModuleCtx *ctx, ValkeyModuleEvent event, Val
         commandResultSuccessListeners++;
     else if (event.id == VALKEYMODULE_EVENT_COMMAND_RESULT_FAILURE)
         commandResultFailureListeners++;
+    else if (event.id == VALKEYMODULE_EVENT_COMMAND_RESULT_ACL_DENIED)
+        commandResultACLDeniedListeners++;
     return VALKEYMODULE_OK;
 }
 
@@ -12649,7 +12714,7 @@ int VM_IsSubEventSupported(ValkeyModuleEvent event, int64_t subevent) {
     case VALKEYMODULE_EVENT_EVENTLOOP: return subevent < _VALKEYMODULE_SUBEVENT_EVENTLOOP_NEXT;
     case VALKEYMODULE_EVENT_CONFIG: return subevent < _VALKEYMODULE_SUBEVENT_CONFIG_NEXT;
     case VALKEYMODULE_EVENT_KEY: return subevent < _VALKEYMODULE_SUBEVENT_KEY_NEXT;
-    /* VALKEYMODULE_EVENT_COMMAND_RESULT_SUCCESS and _FAILURE have no sub-events */
+    /* VALKEYMODULE_EVENT_COMMAND_RESULT_* events have no sub-events */
     default: break;
     }
     return 0;
@@ -12740,7 +12805,8 @@ void moduleFireServerEvent(uint64_t eid, int subid, void *data) {
             } else if (eid == VALKEYMODULE_EVENT_ATOMIC_SLOT_MIGRATION) {
                 moduledata = data;
             } else if (eid == VALKEYMODULE_EVENT_COMMAND_RESULT_SUCCESS ||
-                       eid == VALKEYMODULE_EVENT_COMMAND_RESULT_FAILURE) {
+                       eid == VALKEYMODULE_EVENT_COMMAND_RESULT_FAILURE ||
+                       eid == VALKEYMODULE_EVENT_COMMAND_RESULT_ACL_DENIED) {
                 moduledata = data;
             }
 

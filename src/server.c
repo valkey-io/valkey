@@ -4407,6 +4407,7 @@ int processCommand(client *c) {
         sds msg = getAclErrorMessage(acl_retval, c->user, c->cmd, objectGetVal(c->argv[acl_errpos]), 0);
         rejectCommandFormat(c, "-NOPERM %s", msg);
         sdsfree(msg);
+        moduleFireCommandACLDeniedEvent(c, acl_retval, acl_errpos);
         return C_OK;
     }
 

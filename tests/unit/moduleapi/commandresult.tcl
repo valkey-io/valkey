@@ -410,6 +410,132 @@ start_server {tags {"modules"}} {
         r cmdresult.unsubscribe
     }
 
+    test {Module commandresult - ACL denied: command not permitted (ACL_DENIED_CMD)} {
+        cleanup_callback
+        r cmdresult.register acl
+
+        # Create a user with no command permissions and authenticate
+        r acl setuser testuser_cmd on >testpass nocommands
+        set rd [valkey_deferring_client]
+        $rd auth testuser_cmd testpass
+        $rd read
+        $rd get somekey
+        catch {$rd read} e
+        $rd close
+
+        set stats [r cmdresult.stats]
+        assert {[dict get $stats acl_denied_count] >= 1}
+        assert_equal [dict get $stats success_count] 0
+        assert_equal [dict get $stats failure_count] 0
+
+        set log [r cmdresult.getlog 1]
+        set entry [lindex $log 0]
+        assert_equal [dict get $entry status] "acl_denied"
+        # ACL_DENIED_CMD = 2
+        assert_equal [dict get $entry acl_deny_reason] 2
+        assert_equal [dict get $entry acl_object] ""
+
+        r acl deluser testuser_cmd
+        r cmdresult.unsubscribe
+    }
+
+    test {Module commandresult - ACL denied: key pattern not permitted (ACL_DENIED_KEY)} {
+        cleanup_callback
+        r cmdresult.register acl
+
+        # Create a user allowed to run GET but only on keys matching "allowed:*"
+        r acl setuser testuser_key on >testpass allcommands ~allowed:* nopass
+        set rd [valkey_deferring_client]
+        $rd auth testuser_key testpass
+        $rd read
+        $rd get denied_key
+        catch {$rd read} e
+        $rd close
+
+        set stats [r cmdresult.stats]
+        assert {[dict get $stats acl_denied_count] >= 1}
+
+        set log [r cmdresult.getlog 1]
+        set entry [lindex $log 0]
+        assert_equal [dict get $entry status] "acl_denied"
+        # ACL_DENIED_KEY = 3
+        assert_equal [dict get $entry acl_deny_reason] 3
+        assert_equal [dict get $entry acl_object] "denied_key"
+
+        r acl deluser testuser_key
+        r cmdresult.unsubscribe
+    }
+
+    test {Module commandresult - ACL denied: channel not permitted (ACL_DENIED_CHANNEL)} {
+        cleanup_callback
+        r cmdresult.register acl
+
+        # Create a user with allcommands but no pub/sub channel access
+        r acl setuser testuser_chan on >testpass allcommands allkeys resetchannels nopass
+        set rd [valkey_deferring_client]
+        $rd auth testuser_chan testpass
+        $rd read
+        $rd subscribe secret_channel
+        catch {$rd read} e
+        $rd close
+
+        set stats [r cmdresult.stats]
+        assert {[dict get $stats acl_denied_count] >= 1}
+
+        set log [r cmdresult.getlog 1]
+        set entry [lindex $log 0]
+        assert_equal [dict get $entry status] "acl_denied"
+        # ACL_DENIED_CHANNEL = 5
+        assert_equal [dict get $entry acl_deny_reason] 5
+        assert_equal [dict get $entry acl_object] "secret_channel"
+
+        r acl deluser testuser_chan
+        r cmdresult.unsubscribe
+    }
+
+    test {Module commandresult - ACL denied events not fired when not subscribed} {
+        cleanup_callback
+        r cmdresult.register failure
+
+        r acl setuser testuser_nosub on >testpass nocommands nopass
+        set rd [valkey_deferring_client]
+        $rd auth testuser_nosub testpass
+        $rd read
+        $rd get somekey
+        catch {$rd read} e
+        $rd close
+
+        set stats [r cmdresult.stats]
+        assert_equal [dict get $stats acl_denied_count] 0
+
+        r acl deluser testuser_nosub
+        r cmdresult.unsubscribe
+    }
+
+    test {Module commandresult - Reset clears acl_denied_count} {
+        cleanup_callback
+        r cmdresult.register acl
+
+        r acl setuser testuser_reset on >testpass nocommands nopass
+        set rd [valkey_deferring_client]
+        $rd auth testuser_reset testpass
+        $rd read
+        $rd get somekey
+        catch {$rd read} e
+        $rd close
+
+        set stats [r cmdresult.stats]
+        assert {[dict get $stats acl_denied_count] >= 1}
+
+        r cmdresult.reset
+        set stats [r cmdresult.stats]
+        assert_equal [dict get $stats acl_denied_count] 0
+        assert_equal [dict get $stats total_callbacks] 0
+
+        r acl deluser testuser_reset
+        r cmdresult.unsubscribe
+    }
+
     test {Unload the module - commandresult} {
         catch {r cmdresult.unsubscribe}
         assert_equal {OK} [r module unload commandresult]

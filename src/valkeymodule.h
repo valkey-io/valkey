@@ -538,7 +538,8 @@ typedef void (*ValkeyModuleEventLoopOneShotFunc)(void *user_data);
 #define VALKEYMODULE_EVENT_ATOMIC_SLOT_MIGRATION 19
 #define VALKEYMODULE_EVENT_COMMAND_RESULT_SUCCESS 20
 #define VALKEYMODULE_EVENT_COMMAND_RESULT_FAILURE 21
-#define _VALKEYMODULE_EVENT_NEXT 22 /* Next event flag, should be updated if a new event added. */
+#define VALKEYMODULE_EVENT_COMMAND_RESULT_ACL_DENIED 22
+#define _VALKEYMODULE_EVENT_NEXT 23 /* Next event flag, should be updated if a new event added. */
 
 typedef struct ValkeyModuleEvent {
     uint64_t id;      /* VALKEYMODULE_EVENT_... defines. */
@@ -599,7 +600,9 @@ static const ValkeyModuleEvent ValkeyModuleEvent_ReplicationRoleChanged = {VALKE
                                ValkeyModuleEvent_AuthenticationAttempt = {VALKEYMODULE_EVENT_AUTHENTICATION_ATTEMPT, 1},
                                ValkeyModuleEvent_AtomicSlotMigration = {VALKEYMODULE_EVENT_ATOMIC_SLOT_MIGRATION, 1},
                                ValkeyModuleEvent_CommandResultSuccess = {VALKEYMODULE_EVENT_COMMAND_RESULT_SUCCESS, 1},
-                               ValkeyModuleEvent_CommandResultFailure = {VALKEYMODULE_EVENT_COMMAND_RESULT_FAILURE, 1};
+                               ValkeyModuleEvent_CommandResultFailure = {VALKEYMODULE_EVENT_COMMAND_RESULT_FAILURE, 1},
+                               ValkeyModuleEvent_CommandResultACLDenied = {VALKEYMODULE_EVENT_COMMAND_RESULT_ACL_DENIED,
+                                                                           1};
 
 /* Those are values that are used for the 'subevent' callback argument. */
 #define VALKEYMODULE_SUBEVENT_PERSISTENCE_RDB_START 0
@@ -854,14 +857,17 @@ typedef struct ValkeyModuleAtomicSlotMigrationInfo {
 
 #define VALKEYMODULE_COMMANDRESULTINFO_VERSION 1
 typedef struct ValkeyModuleCommandResultInfo {
-    uint64_t version;          /* Version of this structure for ABI compat. */
-    const char *command_name;  /* Command name (e.g., "SET", "GET"). */
-    long long duration_us;     /* Execution duration in microseconds. */
-    long long dirty;           /* Number of keys modified. */
-    uint64_t client_id;        /* Client ID that executed the command. */
-    int is_module_client;      /* 1 if command was from RM_Call, 0 otherwise. */
-    int argc;                  /* Number of command arguments. */
-    ValkeyModuleString **argv; /* Command arguments array (zero-copy). */
+    uint64_t version;           /* Version of this structure for ABI compat. */
+    const char *command_name;   /* Command name (e.g., "SET", "GET"). */
+    long long duration_us;      /* Execution duration in microseconds. */
+    long long dirty;            /* Number of keys modified. */
+    uint64_t client_id;         /* Client ID that executed the command. */
+    int is_module_client;       /* 1 if command was from RM_Call, 0 otherwise. */
+    int argc;                   /* Number of command arguments. */
+    ValkeyModuleString **argv;  /* Command arguments array (zero-copy). */
+    int acl_deny_reason;        /* ACL_DENIED_CMD/KEY/CHANNEL/AUTH; 0 for non-ACL events. */
+    const char *acl_object;     /* Denied resource name: key or channel for KEY/CHANNEL denials,
+                                 * NULL for CMD denials and non-ACL events. Mirrors ACL LOG "object". */
 } ValkeyModuleCommandResultInfoV1;
 
 #define ValkeyModuleCommandResultInfo ValkeyModuleCommandResultInfoV1

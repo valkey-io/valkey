@@ -157,6 +157,10 @@ static void cleanupSaveInfoAndEmitEndMetrics(forklessSaveInfo *saveInfo) {
     } else {
         serverLog(LL_WARNING, "forkless-save: forkless save failed. %lld seconds.", (long long)server.rdb_save_time_last);
     }
+
+    /* Notify replicas waiting for BGSAVE to complete */
+    updateReplicasWaitingBgsave(saveInfo->err_code, RDB_WRITE_TARGET_DISK);
+
     currentForklessSave = NULL;
     atomic_store_explicit(&server.stat_current_save_keys_processed, 0, memory_order_relaxed);
     atomic_store_explicit(&server.stat_current_save_keys_total, 0, memory_order_relaxed);

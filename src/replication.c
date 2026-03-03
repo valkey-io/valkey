@@ -44,6 +44,8 @@
 #include "cluster_migrateslots.h"
 #include "io_threads.h"
 #include "compression_stream.h"
+#include "bgiteration.h"
+#include "forkless.h"
 
 #include <memory.h>
 #include <stddef.h>
@@ -1232,32 +1234,45 @@ int startBgsaveForReplication(int mincapa, int req, int rdbver) {
     /* `SYNC` should have failed with error if we don't support socket and require a filter, assert this here */
     serverAssert(socket_target || !(req & REPLICA_REQ_RDB_MASK));
 
-    serverLog(LL_NOTICE, "Starting BGSAVE for SYNC with target: %s using: %s",
-              socket_target ? "replicas sockets" : "disk",
-              (req & REPLICA_REQ_RDB_CHANNEL) ? "dual-channel" : "normal sync");
+    int chosen_save_type = resolveBgsaveType();
 
-    rdbSaveInfo rsi, *rsiptr;
-    rsiptr = rdbPopulateSaveInfo(&rsi);
-    /* Only do rdbSave* when rsiptr is not NULL,
-     * otherwise replica will miss repl-stream-db. */
-    if (rsiptr) {
-        if (socket_target)
-            retval = rdbSaveToReplicasSockets(req, rdbver, rsiptr);
-        else {
-            /* mincapa is the trigger's own mask on the eager path but the group AND on the cron path, so a mixed group downgrades to plain. */
-            sync_compression_algo = replSelectFullSyncCompression(mincapa, false);
-            if (sync_compression_algo != ALGO_NONE)
-                serverLog(LL_NOTICE, "Disk-based full sync with compression: %s", compressionAlgoName(sync_compression_algo));
-            /* The forked child reads this global to pick the sync codec. */
-            server.rdb_child_sync_algo = sync_compression_algo;
-            /* Keep the page cache since it'll get used soon */
-            retval = rdbSaveBackground(req, server.rdb_filename, rsiptr, RDBFLAGS_REPLICATION | RDBFLAGS_KEEP_CACHE);
+    serverLog(LL_NOTICE, "Starting BGSAVE for SYNC with target: %s, using: %s, method: %s",
+              socket_target ? "replicas sockets" : "disk",
+              (req & REPLICA_REQ_RDB_CHANNEL) ? "dual-channel" : "normal sync",
+              chosen_save_type == RDB_BGSAVE_TYPE_FORKLESS ? "forkless" : "fork");
+
+    if (chosen_save_type == RDB_BGSAVE_TYPE_FORKLESS) {
+        if (socket_target) {
+            /* TODO: forklessSaveToSockets not yet implemented */
+            retval = C_ERR;
+        } else {
+            retval = forklessSaveToDisk(server.rdb_filename);
         }
         if (server.debug_pause_after_fork) debugPauseProcess();
     } else {
-        serverLog(LL_WARNING, "BGSAVE for replication: replication information not available, can't generate the RDB "
-                              "file right now. Try later.");
-        retval = C_ERR;
+        rdbSaveInfo rsi, *rsiptr;
+        rsiptr = rdbPopulateSaveInfo(&rsi);
+        /* Only do rdbSave* when rsiptr is not NULL,
+         * otherwise replica will miss repl-stream-db. */
+        if (rsiptr) {
+            if (socket_target) {
+                retval = rdbSaveToReplicasSockets(req, rdbver, rsiptr);
+            } else {
+                /* mincapa is the trigger's own mask on the eager path but the group AND on the cron path, so a mixed group downgrades to plain. */
+                sync_compression_algo = replSelectFullSyncCompression(mincapa, false);
+                if (sync_compression_algo != ALGO_NONE)
+                    serverLog(LL_NOTICE, "Disk-based full sync with compression: %s", compressionAlgoName(sync_compression_algo));
+                /* The forked child reads this global to pick the sync codec. */
+                server.rdb_child_sync_algo = sync_compression_algo;
+                /* Keep the page cache since it'll get used soon */
+                retval = rdbSaveBackground(req, server.rdb_filename, rsiptr, RDBFLAGS_REPLICATION | RDBFLAGS_KEEP_CACHE);
+            }
+            if (server.debug_pause_after_fork) debugPauseProcess();
+        } else {
+            serverLog(LL_WARNING, "BGSAVE for replication: replication information not available, can't generate the RDB "
+                                  "file right now. Try later.");
+            retval = C_ERR;
+        }
     }
 
     /* If we succeeded to start a BGSAVE with disk target, let's remember

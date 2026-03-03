@@ -679,9 +679,9 @@ int trySendWriteToIOThreads(client *c) {
      * ACKs on the same client's query buffer. */
     if (c->slot_migration_job && !clusterSlotMigrationShouldInstallWriteHandler(c)) return C_ERR;
 
-    int is_replica = getClientType(c) == CLIENT_TYPE_REPLICA;
+    int is_shared_buffer_replica = getClientType(c) == CLIENT_TYPE_REPLICA && !c->repl_data->using_cob;
     clientReplyBlock *block = NULL;
-    if (is_replica) {
+    if (is_shared_buffer_replica) {
         c->io_last_reply_block = listLast(server.repl_buffer_blocks);
         replBufBlock *o = listNodeValue(c->io_last_reply_block);
         c->io_last_bufpos = o->used;
@@ -697,12 +697,13 @@ int trySendWriteToIOThreads(client *c) {
         } else {
             c->io_last_bufpos = (size_t)c->bufpos;
         }
+        getClientWritePosition(c, &c->io_last_reply_block, &c->io_last_bufpos);
     }
 
-    serverAssert(c->bufpos > 0 || c->io_last_bufpos > 0 || is_replica);
+    serverAssert(c->bufpos > 0 || c->io_last_bufpos > 0 || is_shared_buffer_replica);
 
     /* The main-thread will update the client state after the I/O thread completes the write. */
-    c->write_flags = is_replica ? WRITE_FLAGS_IS_REPLICA : 0;
+    c->write_flags = is_shared_buffer_replica ? WRITE_FLAGS_IS_REPLICA : 0;
     c->io_write_state = CLIENT_PENDING_IO;
     connSetPostponeUpdateState(c->conn, clientConnPostponeMaskFromIOState(c));
     void *job = tagJob(c, JOB_REQ_WRITE_CLIENT);
@@ -718,7 +719,7 @@ int trySendWriteToIOThreads(client *c) {
     }
     /* Force new header after successful enqueue so the main thread doesn't
      * extend a header the I/O thread is currently reading. */
-    if (!is_replica) {
+    if (!is_shared_buffer_replica) {
         if (block) {
             if (block->flag.buf_encoded) block->last_header = NULL;
         } else {

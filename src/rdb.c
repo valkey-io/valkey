@@ -1382,6 +1382,14 @@ ssize_t rdbSaveAuxFieldStrInt(rio *rdb, char *key, long long val) {
 }
 
 /* Save a few default AUX fields with information about the RDB generated. */
+int rdbSaveInfoReplAuxFields(rio *rdb, rdbSaveInfo *rsi) {
+    serverAssert(rsi != NULL);
+    if (rdbSaveAuxFieldStrInt(rdb, "repl-stream-db", rsi->repl_stream_db) == -1) return -1;
+    if (rdbSaveAuxFieldStrStr(rdb, "repl-id", server.replid) == -1) return -1;
+    if (rdbSaveAuxFieldStrInt(rdb, "repl-offset", server.primary_repl_offset) == -1) return -1;
+    return 1;
+}
+
 int rdbSaveInfoAuxFields(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
     int redis_bits = (sizeof(void *) == 8) ? 64 : 32;
     int aof_base = (rdbflags & RDBFLAGS_AOF_PREAMBLE) != 0;
@@ -1613,22 +1621,38 @@ static void rdbCompressionFree(rio *rdb, streamWriter *writer);
  * While the suffix is the 40 bytes hex string we announced in the prefix.
  * This way processes receiving the payload can understand when it ends
  * without doing any processing of the content. */
+
+/* Generate a fresh diskless-replication EOF mark into eofmark (which must be
+ * RDB_EOF_MARK_SIZE bytes) and write the "$EOF:<mark>\r\n" prefix that precedes
+ * the RDB payload. The caller keeps eofmark to pass to rdbWriteEofMarkEnd. */
+int rdbWriteEofMarkStart(rio *rdb, char *eofmark) {
+    getRandomHexChars(eofmark, RDB_EOF_MARK_SIZE);
+    if (rioWrite(rdb, "$EOF:", 5) == 0) return C_ERR;
+    if (rioWrite(rdb, eofmark, RDB_EOF_MARK_SIZE) == 0) return C_ERR;
+    if (rioWrite(rdb, "\r\n", 2) == 0) return C_ERR;
+    return C_OK;
+}
+
+/* Write the diskless-replication EOF-mark that follows the RDB payload; it
+ * repeats the mark announced by rdbWriteEofMarkStart. */
+int rdbWriteEofMarkEnd(rio *rdb, const char *eofmark) {
+    if (rioWrite(rdb, eofmark, RDB_EOF_MARK_SIZE) == 0) return C_ERR;
+    return C_OK;
+}
+
 static int rdbSaveRioWithEOFMark(int req, int rdbver, rio *rdb, int *error, rdbSaveInfo *rsi, compressionAlgo compression_algo) {
     char eofmark[RDB_EOF_MARK_SIZE];
 
     startSaving(RDBFLAGS_REPLICATION);
-    getRandomHexChars(eofmark, RDB_EOF_MARK_SIZE);
     if (error) *error = 0;
-    if (rioWrite(rdb, "$EOF:", 5) == 0) goto werr;
-    if (rioWrite(rdb, eofmark, RDB_EOF_MARK_SIZE) == 0) goto werr;
-    if (rioWrite(rdb, "\r\n", 2) == 0) goto werr;
+    if (rdbWriteEofMarkStart(rdb, eofmark) == C_ERR) goto werr;
 
     /* Compress only the RDB body; the $EOF prefix/suffix stay plaintext. */
     if (rdbSaveRio(compression_algo, req, rdbver, rdb, error,
                    RDBFLAGS_REPLICATION, rsi) == C_ERR)
         goto werr;
 
-    if (rioWrite(rdb, eofmark, RDB_EOF_MARK_SIZE) == 0) goto werr;
+    if (rdbWriteEofMarkEnd(rdb, eofmark) == C_ERR) goto werr;
     stopSaving(1);
     return C_OK;
 
@@ -1892,7 +1916,7 @@ int rdbSaveBackground(int req, char *filename, rdbSaveInfo *rsi, int rdbflags) {
             return C_ERR;
         }
         serverLog(LL_NOTICE, "Background saving started by pid %ld", (long)childpid);
-        rdbRecordStartMetrics(RDB_BGSAVE_TYPE_FORK);
+        rdbRecordStartMetrics(RDB_BGSAVE_TYPE_FORK, RDB_WRITE_TARGET_DISK);
         return C_OK;
     }
     return C_OK; /* unreached */
@@ -3683,6 +3707,228 @@ done:
     return res;
 }
 
+/* Adapts rioRead to the read_fn signature used by parseRespCommandFromReader. */
+static size_t rdbRioReader(void *ctx, void *buf, size_t len) {
+    return rioRead((rio *)ctx, buf, len);
+}
+
+/* Read a RESP multi-bulk header (*<argc>\r\n) through read_fn and return the
+ * argument count in *argc_out.
+ *
+ * read_fn must read exactly len bytes into buf and return len on success or 0
+ * on failure (same contract as rioRead). ctx is passed back untouched so the
+ * source (rio, FILE, ...) is opaque to this parser.
+ *
+ * Returns RESP_PARSE_OK with *argc_out set, RESP_PARSE_EOF if the bytes could
+ * not be read, or RESP_PARSE_FMTERR if the header is malformed. */
+static respParseResult parseRespHeaderFromReader(size_t (*read_fn)(void *ctx, void *buf, size_t len), void *ctx, int *argc_out) {
+    char buf[128];
+
+    if (read_fn(ctx, buf, 1) == 0) return RESP_PARSE_EOF;
+    if (buf[0] != '*') return RESP_PARSE_FMTERR;
+    int pos = 0;
+    int found_newline = 0;
+    while (pos < (int)sizeof(buf) - 1) {
+        if (read_fn(ctx, buf + pos, 1) == 0) return RESP_PARSE_EOF;
+        if (buf[pos] == '\n') {
+            found_newline = 1;
+            break;
+        }
+        pos++;
+    }
+    if (!found_newline) return RESP_PARSE_FMTERR;
+    buf[pos] = '\0'; /* overwrite \n; buf may have a trailing \r */
+    char *endptr;
+    long argc = strtol(buf, &endptr, 10);
+    /* strtol leaves endptr at the start when it parsed no digits at all. */
+    int parsed_no_digits = (endptr == buf);
+    if (parsed_no_digits || argc < 1 || argc > INT_MAX) return RESP_PARSE_FMTERR;
+    *argc_out = (int)argc;
+    return RESP_PARSE_OK;
+}
+
+/* Read argc RESP arguments ($<len>\r\n<data>\r\n each) through read_fn into a
+ * freshly allocated argv, returned in *argv_out. The caller must already know
+ * argc (see parseRespHeaderFromReader) and owns argv and its objects on OK.
+ *
+ * read_fn has the same contract as in parseRespHeaderFromReader. Returns
+ * RESP_PARSE_OK, RESP_PARSE_EOF, or RESP_PARSE_FMTERR; on error any partial
+ * allocation is freed and *argv_out is left untouched. */
+respParseResult parseRespArgsFromReader(size_t (*read_fn)(void *ctx, void *buf, size_t len), void *ctx, int argc, robj ***argv_out) {
+    char buf[128];
+    int j;
+    respParseResult result;
+
+    robj **argv = ztrymalloc(sizeof(robj *) * argc);
+    /* argc is bounded by parseRespHeaderFromReader, but allocation can still fail
+     * under memory pressure; fail the load cleanly rather than crashing. */
+    if (argv == NULL) return RESP_PARSE_FMTERR;
+    for (j = 0; j < argc; j++) {
+        if (read_fn(ctx, buf, 1) == 0) {
+            result = RESP_PARSE_EOF;
+            goto err;
+        }
+        if (buf[0] != '$') {
+            result = RESP_PARSE_FMTERR;
+            goto err;
+        }
+        int pos = 0;
+        int found_newline = 0;
+        while (pos < (int)sizeof(buf) - 1) {
+            if (read_fn(ctx, buf + pos, 1) == 0) {
+                result = RESP_PARSE_EOF;
+                goto err;
+            }
+            if (buf[pos] == '\n') {
+                found_newline = 1;
+                break;
+            }
+            pos++;
+        }
+        /* An over-long bulk-length line is malformed and would desync the stream. */
+        if (!found_newline) {
+            result = RESP_PARSE_FMTERR;
+            goto err;
+        }
+        buf[pos] = '\0';
+        char *endptr;
+        long len = strtol(buf, &endptr, 10);
+        /* strtol leaves endptr at the start when it parsed no digits at all. */
+        int parsed_no_digits = (endptr == buf);
+        /* Reject non-numeric, negative, or oversized lengths before allocating:
+         * a negative len becomes a huge size_t and a positive one past
+         * proto-max-bulk-len would otherwise abort the process on allocation. */
+        if (parsed_no_digits || len < 0 || len > server.proto_max_bulk_len) {
+            result = RESP_PARSE_FMTERR;
+            goto err;
+        }
+
+        sds argsds = sdstrynewlen(SDS_NOINIT, len);
+        if (argsds == NULL) {
+            result = RESP_PARSE_FMTERR;
+            goto err;
+        }
+        if (len && read_fn(ctx, argsds, len) == 0) {
+            sdsfree(argsds);
+            result = RESP_PARSE_EOF;
+            goto err;
+        }
+        argv[j] = createObject(OBJ_STRING, argsds);
+
+        /* Discard the trailing \r\n, validating it is exactly \r\n. */
+        char crlf[2];
+        if (read_fn(ctx, crlf, 2) == 0) {
+            j++; /* argv[j] was assigned above; free it too. */
+            result = RESP_PARSE_EOF;
+            goto err;
+        }
+        if (crlf[0] != '\r' || crlf[1] != '\n') {
+            j++; /* argv[j] was assigned above; free it too. */
+            result = RESP_PARSE_FMTERR;
+            goto err;
+        }
+    }
+
+    *argv_out = argv;
+    return RESP_PARSE_OK;
+
+err:
+    for (int k = 0; k < j; k++) decrRefCount(argv[k]);
+    zfree(argv);
+    return result;
+}
+
+/* Run one command that has already been parsed into argv/argc, using a fake
+ * client. This is used when we replay commands while loading data. The fake
+ * client sends no reply and is never allowed to block.
+ *
+ * The fake client takes over argv. When this function returns, argv has
+ * already been freed (running the command can change argv, so we free the
+ * client's own argv, not the pointer that was passed in).
+ *
+ * If is_multi_start is not NULL, it is set to 1 when the command is a MULTI
+ * (the start of a transaction). If is_multi_start is NULL, the caller is
+ * replaying individual commands and MULTI/EXEC commands are skipped instead
+ * of run.
+ *
+ * Returns C_OK if the command ran. Returns C_ERR if the command name is not
+ * known, or the number of arguments is wrong. In that case *err is set to a
+ * short message that the caller must free. */
+int loadCommandFromArgv(client *fakeClient, robj **argv, int argc, int *is_multi_start, sds *err) {
+    struct serverCommand *cmd;
+
+    if (is_multi_start) *is_multi_start = 0;
+
+    fakeClient->argc = argc;
+    fakeClient->argv = argv;
+    fakeClient->argv_len = argc;
+
+    fakeClient->cmd = fakeClient->lastcmd = cmd = lookupCommand(argv, argc);
+    if ((!cmd && !commandCheckExistence(fakeClient, err)) || (cmd && !commandCheckArity(cmd, argc, err))) {
+        freeClientArgv(fakeClient);
+        return C_ERR;
+    }
+
+    if (is_multi_start && cmd->proc == multiCommand) *is_multi_start = 1;
+
+    /* A caller that does not track transactions (is_multi_start == NULL) is
+     * replaying individual commands. Skip MULTI/EXEC framing so each command
+     * applies immediately instead of being queued into a transaction. */
+    if (is_multi_start == NULL && (cmd->proc == multiCommand || cmd->proc == execCommand)) {
+        serverLog(LL_DEBUG, "Skipping %s command while replaying individual commands", cmd->fullname);
+        freeClientArgv(fakeClient);
+        return C_OK;
+    }
+
+    /* Run the command in the context of a fake client */
+    if (fakeClient->flag.multi && fakeClient->cmd->proc != execCommand) {
+        /* Note: we don't have to attempt calling evalGetCommandFlags,
+         * since this is a replay, the checks in processCommand are not made
+         * anyway.*/
+        queueMultiCommand(fakeClient, cmd->flags);
+    } else {
+        cmd->proc(fakeClient);
+    }
+
+    /* The fake client should not have a reply */
+    serverAssert(fakeClient->bufpos == 0 && listLength(fakeClient->reply) == 0);
+
+    /* The fake client should never get blocked */
+    serverAssert(fakeClient->flag.blocked == 0);
+
+    /* Clean up. Command code may have changed argv/argc so we use the
+     * argv/argc of the client instead of the local variables. */
+    freeClientArgv(fakeClient);
+    return C_OK;
+}
+
+/* SWAPDB replayed during a swapdb-mode diskless load must be applied to the
+ * databases being loaded, not the live server.db, so swap their data fields
+ * directly here. Returns 1 if this was a swapdb-mode SWAPDB and has been handled
+ * (argv is freed), or 0 otherwise (not swapdb mode or not a SWAPDB; the caller
+ * should replay argv normally and argv is left untouched). */
+static int tryHandleInlineSwapdbForTempLoad(rdbLoadingCtx *rdb_loading_ctx, robj **argv, int argc) {
+    /* Validate we are in swapdb mode: only that mode loads into a temporary
+     * database array (dbarray) distinct from the live server.db. */
+    if (rdb_loading_ctx->dbarray == server.db) return 0;
+
+    struct serverCommand *cmd = lookupCommand(argv, argc);
+    if (cmd->proc != swapdbCommand) return 0;
+
+    /* getParamsForSwapdb validates arity/range and returns false for a no-op
+     * (e.g. "swapdb 0 0"); in that case there is nothing to swap. */
+    int id1, id2;
+    if (getParamsForSwapdb(argc, argv, NULL, &id1, &id2)) {
+        if (rdb_loading_ctx->dbarray[id1] == NULL) rdb_loading_ctx->dbarray[id1] = createDatabase(id1);
+        if (rdb_loading_ctx->dbarray[id2] == NULL) rdb_loading_ctx->dbarray[id2] = createDatabase(id2);
+        dbSwapDataFields(rdb_loading_ctx->dbarray[id1], rdb_loading_ctx->dbarray[id2]);
+    }
+
+    for (int k = 0; k < argc; k++) decrRefCount(argv[k]);
+    zfree(argv);
+    return 1;
+}
+
 /* Load an RDB file from the rio stream 'rdb'. We return one of the following:
  * - RDB_OK On success
  * - RDB_INCOMPATIBLE If the RDB has an invalid signature or version
@@ -3700,6 +3946,7 @@ static int rdbLoadRioInternal(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadi
     long long empty_keys_skipped = 0;
     long long rdb_last_load_all_fields_expired = 0;
     bool is_valkey_magic = false, is_redis_magic = false;
+    int ret; /* set by each exit path, returned at the shared cleanup label */
 
     rdb->update_cksum = rdbLoadProgressCallback;
     rdb->max_processing_chunk = server.loading_process_events_interval_bytes;
@@ -3746,10 +3993,50 @@ static int rdbLoadRioInternal(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadi
         if ((type = rdbLoadType(rdb)) == -1) goto eoferr;
 
         /* Safeguard for unknown foreign opcode interpretations. */
-        if (is_redis_magic && type >= RDB_FOREIGN_TYPE_MIN && type <= RDB_FOREIGN_TYPE_MAX) {
+        if (is_redis_magic && type >= RDB_FOREIGN_TYPE_MIN && type <= RDB_FOREIGN_TYPE_MAX && type != RDB_OPCODE_UPDATE) {
             serverLog(LL_WARNING, "Can't handle foreign type or opcode %d in RDB with version %d",
                       type, rdbver);
-            return RDB_FAILED;
+            goto loaderr;
+        }
+
+        /* Inline replication commands run on load, so only honor them in a
+         * live inband-repl stream; reject in any other load. */
+        if (type == RDB_OPCODE_UPDATE) {
+            if (!(rdbflags & RDBFLAGS_INBAND_REPL)) {
+                serverLog(LL_WARNING, "Rejecting inline replication opcode %d in a non-replication RDB load",
+                          type);
+                goto loaderr;
+            }
+            robj **argv;
+            int argc;
+            if (parseRespHeaderFromReader(rdbRioReader, rdb, &argc) != RESP_PARSE_OK) goto eoferr;
+            if (parseRespArgsFromReader(rdbRioReader, rdb, argc, &argv) != RESP_PARSE_OK) goto eoferr;
+
+            /* Edge case: SWAPDB during a swapdb-mode load must be handled
+             * separately and not through the fake client. */
+            if (tryHandleInlineSwapdbForTempLoad(rdb_loading_ctx, argv, argc)) continue;
+
+            /* Create the fake client the first time we see an inline command,
+             * then reuse it. Most loads have no inline commands, so we avoid
+             * making one until it is actually needed. */
+            if (rdb_loading_ctx->update_client == NULL) {
+                rdb_loading_ctx->update_client = createAOFClient();
+            }
+            client *fakeClient = rdb_loading_ctx->update_client;
+            fakeClient->db = db;
+
+            /* On an unknown or invalid command, stop the load. Skipping it
+             * would leave this replica with different data than the primary. */
+            sds err = NULL;
+            if (loadCommandFromArgv(fakeClient, argv, argc, NULL, &err) == C_ERR) {
+                serverLog(LL_WARNING, "Error applying inline command from RDB stream: %s", err);
+                sdsfree(err);
+                /* loadCommandFromArgv already freed argv via the fake client. */
+                goto eoferr;
+            }
+            fakeClient->cmd = NULL;
+            /* argv was freed by loadCommandFromArgv (through the fake client). */
+            continue;
         }
 
         /* Handle special types. */
@@ -4039,7 +4326,7 @@ static int rdbLoadRioInternal(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadi
             } else if (error == RDB_LOAD_ERR_UNKNOWN_TYPE) {
                 sdsfree(key);
                 serverLog(LL_WARNING, "Unknown type or opcode when loading DB. Unrecoverable error, aborting now.");
-                return RDB_FAILED;
+                goto loaderr;
             } else if (error == RDB_LOAD_ERR_ALL_ITEMS_EXPIRED) {
                 rdb_last_load_all_fields_expired++;
                 sdsfree(key);
@@ -4132,7 +4419,7 @@ static int rdbLoadRioInternal(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadi
                           "got (%llx). Aborting now.",
                           (unsigned long long)expected, (unsigned long long)cksum);
                 rdbReportCorruptRDB("RDB CRC error");
-                return RDB_FAILED;
+                goto loaderr;
             }
         }
     }
@@ -4144,26 +4431,43 @@ static int rdbLoadRioInternal(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadi
         serverLog(LL_NOTICE, "Done loading RDB, keys loaded: %lld, keys expired: %lld, all fields expired hashes: %lld.",
                   server.rdb_last_load_keys_loaded, server.rdb_last_load_keys_expired, rdb_last_load_all_fields_expired);
     }
-    return RDB_OK;
+    ret = RDB_OK;
+    goto cleanup;
+
+    /* Common failure exit for direct failure paths, so none of them leak the
+     * inline-command fake client. Falls through to the shared cleanup below. */
+loaderr:
+    ret = RDB_FAILED;
+    goto cleanup;
 
     /* Unexpected end of file is handled here calling rdbReportReadError():
      * this will in turn either abort the server in most cases, or if we are loading
      * the RDB file from a socket during initial SYNC (diskless replica mode),
      * we'll report the error to the caller, so that we can retry. */
 eoferr:
+    ret = RDB_FAILED;
     if (rdbRioHasInternalStreamReaderError(rdb)) {
         serverLog(LL_WARNING, "Internal error while decoding streaming-compressed RDB input. Aborting now.");
         rdbReportReadError("Internal error decoding compressed RDB stream");
-        return RDB_FAILED;
+        goto cleanup;
     }
     if (rdbRioHasCorruptCompressedInput(rdb)) {
         serverLog(LL_WARNING, "Corrupt streaming-compressed RDB input. Unrecoverable error, aborting now.");
         rdbReportCorruptRDB("Corrupt compressed RDB stream");
-        return RDB_FAILED;
+        goto cleanup;
     }
     serverLog(LL_WARNING, "Short read or OOM loading DB. Unrecoverable error, aborting now.");
     rdbReportReadError("Unexpected EOF reading RDB file");
-    return RDB_FAILED;
+    /* fall through */
+
+cleanup:
+    /* Single exit: free the inline-command fake client (if one was created) and
+     * return the result code set by the path that jumped here. */
+    if (rdb_loading_ctx->update_client) {
+        freeClient(rdb_loading_ctx->update_client);
+        rdb_loading_ctx->update_client = NULL;
+    }
+    return ret;
 }
 
 /* Like rdbLoadRio() but takes a filename instead of a rio stream. The
@@ -4346,11 +4650,13 @@ int rdbSaveToReplicasSockets(int req, int rdbver, compressionAlgo compr, rdbSave
         server.rdb_pipe_numconns = 0;
         server.rdb_pipe_numconns_writing = 0;
     }
-    /* Filter replica connections pending full sync (ie. in WAIT_BGSAVE_START state). */
+    /* Filter replica connections pending full sync. The caller has already set them
+     * up for full resync (moving them to WAIT_BGSAVE_END); here we only wire each
+     * connection for transfer. */
     listRewind(server.replicas, &li);
     while ((ln = listNext(&li))) {
         client *replica = ln->value;
-        if (replica->repl_data->repl_state == REPLICA_STATE_WAIT_BGSAVE_START) {
+        if (replica->repl_data->repl_state == REPLICA_STATE_WAIT_BGSAVE_END) {
             /* Check replica has the exact requirements */
             if (!isReplicaInCohort(replica, req, rdbver, compr)) continue;
 
@@ -4367,7 +4673,6 @@ int rdbSaveToReplicasSockets(int req, int rdbver, compressionAlgo compr, rdbSave
             } else {
                 server.rdb_pipe_numconns++;
             }
-            replicationSetupReplicaForFullResync(replica, getPsyncInitialOffset());
         }
 
         // do not skip RDB checksum on the primary if connection doesn't have integrity check or if the replica doesn't support it
@@ -4702,11 +5007,11 @@ int rdbWriteFooter(rio *rdb, int req) {
 }
 
 /* Common state updates when a background save starts. */
-void rdbRecordStartMetrics(int bgsave_type) {
+void rdbRecordStartMetrics(int bgsave_type, int write_target) {
     server.dirty_before_bgsave = server.dirty;
     server.lastbgsave_try = time(NULL);
     server.rdb_save_time_start = time(NULL);
-    server.rdb_write_target = RDB_WRITE_TARGET_DISK;
+    server.rdb_write_target = write_target;
     server.cur_bgsave_type = bgsave_type;
 }
 

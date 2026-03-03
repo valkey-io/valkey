@@ -93,37 +93,6 @@ static bool getTargetDbIdForCopyCommand(int argc, robj **argv, int selected_dbid
     return true;
 }
 
-/* Get parameters for the SWAPDB command.
- * The optional permission_client allows for checking of a client's permission for swapdb.
- * Returns true if command would be executed. */
-static bool getParamsForSwapdb(int argc, robj **argv, client *permission_client, int *id1_p, int *id2_p) {
-    static struct serverCommand *swapdb_cmd = NULL;
-
-    // We don't need to check permissions in the replication phase
-    if (permission_client != NULL) {
-        if (swapdb_cmd == NULL) {
-            swapdb_cmd = lookupCommandByCString("swapdb");
-            serverAssert(swapdb_cmd != NULL);
-        }
-
-        int idxptr;
-        if (ACLCheckAllUserCommandPerm(permission_client->user, swapdb_cmd, argv, argc,
-                                       permission_client->db->id, &idxptr) != ACL_OK) return false;
-    }
-
-    long long dbid1, dbid2;
-    if (argc != 3) return false;
-    if (server.cluster_enabled) return false;
-    if (getLongLongFromObject(argv[1], &dbid1) != C_OK) return false;
-    if (getLongLongFromObject(argv[2], &dbid2) != C_OK) return false;
-    if (dbid1 < 0 || dbid1 >= server.dbnum) return false;
-    if (dbid2 < 0 || dbid2 >= server.dbnum) return false;
-    if (dbid1 == dbid2) return false; // Valid, but doesn't do anything
-
-    *id1_p = (int)dbid1;
-    *id2_p = (int)dbid2;
-    return true;
-}
 
 /* Get parameters for the SELECT command.
  * The optional permission_client allows for checking of a client's permission for select.

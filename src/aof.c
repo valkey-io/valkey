@@ -1529,6 +1529,11 @@ struct client *createAOFClient(void) {
  * AOF_NOT_EXIST: AOF file doesn't exist.
  * AOF_EMPTY: The AOF file is empty (nothing to load).
  * AOF_FAILED: Failed to load the AOF file. */
+/* Adapts fread to the read_fn signature used by parseRespArgsFromReader. */
+static size_t aofFileReader(void *ctx, void *buf, size_t len) {
+    return fread(buf, len, 1, (FILE *)ctx) == 1 ? len : 0;
+}
+
 int loadSingleAppendOnlyFile(char *filename) {
     struct client *fakeClient;
     struct valkey_stat sb;
@@ -1610,12 +1615,9 @@ int loadSingleAppendOnlyFile(char *filename) {
 
     /* Read the actual AOF file, in REPL format, command by command. */
     while (1) {
-        int argc, j;
-        unsigned long len;
+        int argc;
         robj **argv;
         char buf[AOF_ANNOTATION_LINE_MAX_LEN];
-        sds argsds;
-        struct serverCommand *cmd;
 
         /* Serve the clients from time to time */
         if (!(loops++ % 1024)) {
@@ -1639,76 +1641,22 @@ int loadSingleAppendOnlyFile(char *filename) {
         if (argc < 1) goto fmterr;
         if ((size_t)argc > SIZE_MAX / sizeof(robj *)) goto fmterr;
 
-        /* Load the next command in the AOF as our fake client
-         * argv. */
-        argv = zmalloc(sizeof(robj *) * argc);
-        fakeClient->argc = argc;
-        fakeClient->argv = argv;
-        fakeClient->argv_len = argc;
+        /* Read the argument list into the fake client's argv. */
+        respParseResult pr = parseRespArgsFromReader(aofFileReader, fp, argc, &argv);
+        if (pr == RESP_PARSE_EOF) goto readerr;
+        if (pr == RESP_PARSE_FMTERR) goto fmterr;
 
-        for (j = 0; j < argc; j++) {
-            /* Parse the argument len. */
-            char *readres = fgets(buf, sizeof(buf), fp);
-            if (readres == NULL || buf[0] != '$') {
-                fakeClient->argc = j; /* Free up to j-1. */
-                freeClientArgv(fakeClient);
-                if (readres == NULL)
-                    goto readerr;
-                else
-                    goto fmterr;
-            }
-            len = strtol(buf + 1, NULL, 10);
-
-            /* Read it into a string object. */
-            argsds = sdsnewlen(SDS_NOINIT, len);
-            if (len && fread(argsds, len, 1, fp) == 0) {
-                sdsfree(argsds);
-                fakeClient->argc = j; /* Free up to j-1. */
-                freeClientArgv(fakeClient);
-                goto readerr;
-            }
-            argv[j] = createObject(OBJ_STRING, argsds);
-
-            /* Discard CRLF. */
-            if (fread(buf, 2, 1, fp) == 0) {
-                fakeClient->argc = j + 1; /* Free up to j. */
-                freeClientArgv(fakeClient);
-                goto readerr;
-            }
-        }
-
-        /* Command lookup */
+        /* Command lookup, validation and execution. */
         sds err = NULL;
-        fakeClient->cmd = fakeClient->lastcmd = cmd = lookupCommand(argv, argc);
-        if ((!cmd && !commandCheckExistence(fakeClient, &err)) || (cmd && !commandCheckArity(cmd, argc, &err))) {
+        int is_multi_start = 0;
+        if (loadCommandFromArgv(fakeClient, argv, argc, &is_multi_start, &err) == C_ERR) {
             serverLog(LL_WARNING, "Error reading the append only file %s, error: %s", filename, err);
             sdsfree(err);
-            freeClientArgv(fakeClient);
             ret = AOF_FAILED;
             goto cleanup;
         }
+        if (is_multi_start) valid_before_multi = valid_up_to;
 
-        if (cmd->proc == multiCommand) valid_before_multi = valid_up_to;
-
-        /* Run the command in the context of a fake client */
-        if (fakeClient->flag.multi && fakeClient->cmd->proc != execCommand) {
-            /* Note: we don't have to attempt calling evalGetCommandFlags,
-             * since this is AOF, the checks in processCommand are not made
-             * anyway.*/
-            queueMultiCommand(fakeClient, cmd->flags);
-        } else {
-            cmd->proc(fakeClient);
-        }
-
-        /* The fake client should not have a reply */
-        serverAssert(fakeClient->bufpos == 0 && listLength(fakeClient->reply) == 0);
-
-        /* The fake client should never get blocked */
-        serverAssert(fakeClient->flag.blocked == 0);
-
-        /* Clean up. Command code may have changed argv/argc so we use the
-         * argv/argc of the client instead of the local variables. */
-        freeClientArgv(fakeClient);
         if (server.aof_load_truncated) valid_up_to = ftello(fp);
         if (server.key_load_delay) debugDelay(server.key_load_delay);
     }

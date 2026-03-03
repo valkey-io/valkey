@@ -469,6 +469,114 @@ void rioFreeFd(rio *r) {
     sdsfree(r->io.fd.buf);
 }
 
+/* ------------------- Client Output Buffer implementation ------------------- */
+
+/* Append a chunk from the staging buffer out to each replica's real COB.
+ * The staging buffer batches small writes; this is the actual fan-out to the replicas.
+ * Internal to the rio replica-COB functions; do not call elsewhere. */
+static size_t rioReplicaWriteToRealCOBs(rio *r, const void *buf, size_t len) {
+    UNUSED(r);
+
+    int retval = 0;
+    listNode *ln;
+    listIter li;
+    listRewind(server.replicas, &li);
+    while ((ln = listNext(&li))) {
+        client *slave = ln->value;
+        serverAssert(slave->repl_data);
+        if (slave->repl_data->repl_state == REPLICA_STATE_WAIT_BGSAVE_END) {
+            if (!(slave->flag.close_asap)) {
+                addReplyProto(slave, buf, len);
+            }
+            retval = 1;
+        }
+    }
+    return retval;
+}
+
+static size_t rioReplicaCOBWrite(rio *r, const void *buf, size_t len) {
+    size_t avail = RIO_REPLICA_COB_BUF_LEN - r->io.replicacob.pos;
+
+    if (avail >= len) { /* We have enough available space to perform the write */
+        memcpy(r->io.replicacob.buf + r->io.replicacob.pos, buf, len);
+        r->io.replicacob.pos += len;
+        if (r->io.replicacob.pos == RIO_REPLICA_COB_BUF_LEN) { /* In case we just filled up the staging buffer exactly,
+                                                                 flush the write to the real COB(s) */
+            if (rioReplicaWriteToRealCOBs(r, r->io.replicacob.buf, RIO_REPLICA_COB_BUF_LEN) == 0) return 0;
+            r->io.replicacob.pos = 0;
+        }
+    } else { /* Can't perform the full write, fill the buffer with what we can and flush to the real COB(s) */
+        memcpy(r->io.replicacob.buf + r->io.replicacob.pos, buf, avail);
+        if (rioReplicaWriteToRealCOBs(r, r->io.replicacob.buf, RIO_REPLICA_COB_BUF_LEN) == 0) return 0;
+        /* Reset the staging buffer because it was just flushed in full */
+        r->io.replicacob.pos = 0;
+        /* Update remaining bytes to write */
+        len -= avail;
+        /* Advance the buffer pointer */
+        buf = (char *)buf + avail;
+        if (len >= RIO_REPLICA_COB_BUF_LEN) { /* We have a lot left over to write,
+                                                don't bother staging it and just flush to real COB(s) */
+            if (rioReplicaWriteToRealCOBs(r, buf, len) == 0) return 0;
+        } else { /* Leftover is small, put it back in the staging
+                    buffer to batch with future writes */
+            memcpy(r->io.replicacob.buf, buf, len);
+            r->io.replicacob.pos += len;
+        }
+    }
+    return 1;
+}
+
+static size_t rioReplicaCOBRead(rio *r, void *buf, size_t len) {
+    UNUSED(r);
+    UNUSED(buf);
+    UNUSED(len);
+    serverAssert(0);
+    return 0;
+}
+
+static off_t rioReplicaCOBTell(rio *r) {
+    UNUSED(r);
+    serverAssert(0);
+    return 0;
+}
+
+static int rioReplicaCOBFlush(rio *r) {
+    /* Nothing staged to flush */
+    if (!r->io.replicacob.pos) return 1;
+
+    /* Flush the leftover staged bytes out to the replica COBs. */
+    if (rioReplicaWriteToRealCOBs(r, r->io.replicacob.buf, r->io.replicacob.pos) != 0) {
+        r->io.replicacob.pos = 0;
+        return 1;
+    }
+    return 0;
+}
+
+static const rio rioReplicaCOBIO = {
+    .read = rioReplicaCOBRead,
+    .write = rioReplicaCOBWrite,
+    .tell = rioReplicaCOBTell,
+    .flush = rioReplicaCOBFlush,
+    .read_some = NULL,
+    .update_cksum = NULL,
+    .cksum = 0,
+    .flags = 0,
+    .processed_bytes = 0,
+    .max_processing_chunk = 0,
+    .io = {{NULL, 0}},
+};
+
+void rioInitWithReplicaCOB(rio *r) {
+    *r = rioReplicaCOBIO;
+    r->io.replicacob.buf = (char *)zmalloc(sizeof(char) * RIO_REPLICA_COB_BUF_LEN);
+    r->io.replicacob.pos = 0;
+}
+
+void rioFreeReplicaCOB(rio *r) {
+    zfree(r->io.replicacob.buf);
+    r->io.replicacob.buf = NULL;
+}
+
 /* ---------------------------- Generic functions ---------------------------- */
 
 /* This function can be installed both in memory and file streams when checksum
@@ -759,8 +867,33 @@ uint8_t rioCheckType(rio *r) {
         return RIO_TYPE_BUFFER;
     } else if (r->read == rioConnRead) {
         return RIO_TYPE_CONN;
-    } else {
-        /* r->read == rioFdRead */
+    } else if (r->read == rioFdRead) {
         return RIO_TYPE_FD;
+    } else if (r->write == rioReplicaCOBWrite) {
+        return RIO_TYPE_REPLICACOB;
+    } else if (r->read == rioConnsetRead) {
+        return RIO_TYPE_CONNSET;
     }
+    return 0;
+}
+
+void rioFreeConnectionFromConnset(rio *r, connection *conn_to_free) {
+    for (int i = 0; i < r->io.connset.numconns; i++) {
+        if (r->io.connset.conns[i] == conn_to_free) {
+            int last = --r->io.connset.numconns;
+            r->io.connset.conns[i] = r->io.connset.conns[last];
+            r->io.connset.state[i] = r->io.connset.state[last];
+            /* The connset only borrows conns; the owning client frees them on
+             * the main thread. Don't touch refs or close here. */
+            return;
+        }
+    }
+}
+
+/* Return the connset error state (errno) for conn, or 0 if healthy/not found. */
+int rioConnsetConnErrno(rio *r, connection *conn) {
+    for (int i = 0; i < r->io.connset.numconns; i++) {
+        if (r->io.connset.conns[i] == conn) return r->io.connset.state[i];
+    }
+    return 0;
 }

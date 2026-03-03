@@ -1811,6 +1811,22 @@ static void copyDbExpiry(serverDb *target, const serverDb *source) {
     memcpy(target->expiry, source->expiry, sizeof(target->expiry));
 }
 
+/* Swap hash tables. Note that we don't swap blocking_keys, ready_keys and
+ * watched_keys, since we want clients to remain in the same DB they were. */
+void dbSwapDataFields(serverDb *db1, serverDb *db2) {
+    serverDb aux = *db1;
+
+    db1->keys = db2->keys;
+    db1->expires = db2->expires;
+    db1->keys_with_volatile_items = db2->keys_with_volatile_items;
+    copyDbExpiry(db1, db2);
+
+    db2->keys = aux.keys;
+    db2->expires = aux.expires;
+    db2->keys_with_volatile_items = aux.keys_with_volatile_items;
+    copyDbExpiry(db2, &aux);
+}
+
 /* Swap two databases at runtime so that all clients will magically see
  * the new database even if already connected. Note that the client
  * structure c->db points to a given DB, so we need to be smarter and
@@ -1824,7 +1840,6 @@ int dbSwapDatabases(int id1, int id2) {
     if (id1 == id2) return C_OK;
     serverDb *db1 = createDatabaseIfNeeded(id1);
     serverDb *db2 = createDatabaseIfNeeded(id2);
-    serverDb aux = *db1;
 
     /* Swapdb should make transaction fail if there is any
      * client watching keys */
@@ -1835,19 +1850,7 @@ int dbSwapDatabases(int id1, int id2) {
     scanDatabaseForDeletedKeys(db1, db2);
     scanDatabaseForDeletedKeys(db2, db1);
 
-    /* Swap hash tables. Note that we don't swap blocking_keys,
-     * ready_keys and watched_keys, since we want clients to
-     * remain in the same DB they were. */
-    db1->keys = db2->keys;
-    db1->expires = db2->expires;
-    db1->keys_with_volatile_items = db2->keys_with_volatile_items;
-    copyDbExpiry(db1, db2);
-
-
-    db2->keys = aux.keys;
-    db2->expires = aux.expires;
-    db2->keys_with_volatile_items = aux.keys_with_volatile_items;
-    copyDbExpiry(db2, &aux);
+    dbSwapDataFields(db1, db2);
 
     /* Now we need to handle clients blocked on lists: as an effect
      * of swapping the two DBs, a client that was waiting for list
@@ -1871,7 +1874,6 @@ void swapMainDbWithTempDb(serverDb **tempDb) {
         if (tempDb[i] == NULL && server.db[i] == NULL) continue;
         if (tempDb[i] == NULL) tempDb[i] = createDatabase(i);
         if (server.db[i] == NULL) server.db[i] = createDatabase(i);
-        serverDb aux = *server.db[i];
         serverDb *activedb = server.db[i], *newdb = tempDb[i];
 
         /* Swapping databases should make transaction fail if there is any
@@ -1881,18 +1883,7 @@ void swapMainDbWithTempDb(serverDb **tempDb) {
         /* Try to unblock any XREADGROUP clients if the key no longer exists. */
         scanDatabaseForDeletedKeys(activedb, newdb);
 
-        /* Swap hash tables. Note that we don't swap blocking_keys,
-         * ready_keys and watched_keys, since clients
-         * remain in the same DB they were. */
-        activedb->keys = newdb->keys;
-        activedb->expires = newdb->expires;
-        activedb->keys_with_volatile_items = newdb->keys_with_volatile_items;
-        copyDbExpiry(activedb, newdb);
-
-        newdb->keys = aux.keys;
-        newdb->expires = aux.expires;
-        newdb->keys_with_volatile_items = aux.keys_with_volatile_items;
-        copyDbExpiry(newdb, &aux);
+        dbSwapDataFields(activedb, newdb);
 
         /* Now we need to handle clients blocked on lists: as an effect
          * of swapping the two DBs, a client that was waiting for list
@@ -1908,6 +1899,38 @@ void swapMainDbWithTempDb(serverDb **tempDb) {
 
     trackingInvalidateKeysOnFlush(1);
     flushReplicaKeysWithExpireList(1);
+}
+
+/* Get parameters for the SWAPDB command.
+ * The optional permission_client allows for checking of a client's permission for swapdb.
+ * Returns true if command would be executed. */
+bool getParamsForSwapdb(int argc, robj **argv, client *permission_client, int *id1_p, int *id2_p) {
+    static struct serverCommand *swapdb_cmd = NULL;
+
+    // We don't need to check permissions in the replication phase
+    if (permission_client != NULL) {
+        if (swapdb_cmd == NULL) {
+            swapdb_cmd = lookupCommandByCString("swapdb");
+            serverAssert(swapdb_cmd != NULL);
+        }
+
+        int idxptr;
+        if (ACLCheckAllUserCommandPerm(permission_client->user, swapdb_cmd, argv, argc,
+                                       permission_client->db->id, &idxptr) != ACL_OK) return false;
+    }
+
+    long long dbid1, dbid2;
+    if (argc != 3) return false;
+    if (server.cluster_enabled) return false;
+    if (getLongLongFromObject(argv[1], &dbid1) != C_OK) return false;
+    if (getLongLongFromObject(argv[2], &dbid2) != C_OK) return false;
+    if (dbid1 < 0 || dbid1 >= server.dbnum) return false;
+    if (dbid2 < 0 || dbid2 >= server.dbnum) return false;
+    if (dbid1 == dbid2) return false; // Valid, but doesn't do anything
+
+    *id1_p = (int)dbid1;
+    *id2_p = (int)dbid2;
+    return true;
 }
 
 /* SWAPDB db1 db2 */

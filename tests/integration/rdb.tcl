@@ -1822,4 +1822,30 @@ test {Server starts with bgsave-default-method before forkless-infrastructure-en
     }
 }
 
+# The inline-replication opcode (RDB_OPCODE_UPDATE) runs a command on load, so
+# accepting it from an on-disk RDB would be command injection. It must only be
+# honored in a live replication stream, and rejected everywhere else.
+set inband_path [tmpdir "server.rdb-inband-opcode"]
+start_server [list overrides [list "dir" $inband_path] keep_persistence true] {
+    r set somekey someval
+    r save
+}
+set inband_dump [file join $inband_path dump.rdb]
+set fd [open $inband_dump r+]
+fconfigure $fd -translation binary
+seek $fd -9 end ;# the EOF opcode byte, just before the 8-byte CRC
+puts -nonewline $fd "\xF2" ;# RDB_OPCODE_UPDATE (242), the inline-replication opcode
+close $fd
+
+start_server_and_kill_it [list "dir" $inband_path "rdb-version-check" "relaxed"] {
+    test {Server rejects an on-disk RDB that carries the inline-replication opcode} {
+        wait_for_condition 50 100 {
+            [string match {*inline replication opcode*non-replication*} \
+                [exec tail -20 < [dict get $srv stdout]]]
+        } else {
+            fail "Server loaded an RDB carrying the inline-replication opcode"
+        }
+    }
+}
+
 } ;# tags

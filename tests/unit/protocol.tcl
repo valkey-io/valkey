@@ -366,3 +366,32 @@ start_server {tags {"regression"}} {
         $rd close
     }
 }
+
+start_server {tags {"regression"} overrides {io-threads 2 events-per-io-thread 0}} {
+
+    test "Stale argc with DONT_PARSE should not crash" {
+        set fd [socket [srv 0 host] [srv 0 port]]
+        fconfigure $fd -translation binary -buffering full
+
+        # Get client ID.
+        puts -nonewline $fd "CLIENT ID\r\n"
+        flush $fd
+        set cid [string trim [string range [gets $fd] 1 end]]
+
+        # Send PING + incomplete SET.
+        # IO thread parses PING, SET is incomplete → stale argc after consumeCommandQueue.
+        puts -nonewline $fd "PING\r\n*3\r\n\$3\r\nSET\r\n\$1\r\na\r\n\$10\r\nhello"
+        flush $fd
+        read $fd 7 ;# consume +PONG\r\n
+
+        # Simulate an event that marks the client for closure.
+        r DEBUG SET-CLOSE-AFTER-REPLY $cid
+
+        # Send more data → DONT_PARSE → stale argc > 0 → pending_command → crash.
+        puts -nonewline $fd "world\r\n"
+        flush $fd
+
+        assert_equal [r PING] PONG
+        catch {close $fd}
+    }
+}

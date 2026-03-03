@@ -367,7 +367,7 @@ start_server {tags {"regression"}} {
     }
 }
 
-start_server {tags {"regression"} overrides {io-threads 2 events-per-io-thread 0}} {
+start_server {tags {"regression needs:debug"} overrides {io-threads 2 events-per-io-thread 0}} {
 
     test "Stale argc with DONT_PARSE should not crash" {
         set fd [socket [srv 0 host] [srv 0 port]]

@@ -383,11 +383,12 @@ start_cluster 2 0 {tags {external:skip cluster}} {
         R $slot0_owner CLUSTER SETSLOT 0 NODE $target_id
         R $target_node CLUSTER SETSLOT 0 NODE $target_id
         
-        after 100
-        
         # Original owner should return MOVED
-        catch {R $slot0_owner clusterscan $cursor} res
-        assert_match "MOVED 0 *" $res
+        wait_for_condition 1000 50 {
+            [catch {R $slot0_owner clusterscan $cursor} res] && [string match "MOVED 0 *" $res]
+        } else {
+            fail "Expected MOVED error"
+        }
         
         # Continue scan on new owner until complete
         set keys_after_move {}
@@ -449,7 +450,10 @@ start_cluster 2 0 {tags {external:skip cluster}} {
         set other_node [expr {1 - $slot0_owner}]
         catch {R $other_node CLUSTER DELSLOTS 0}
 
-        after 200
-        assert_error "*CLUSTERDOWN*" {R $slot0_owner clusterscan $cursor_slot_0}
+        wait_for_condition 1000 50 {
+            [catch {R $slot0_owner clusterscan $cursor_slot_0} res] && [string match "*CLUSTERDOWN*" $res]
+        } else {
+            fail "Expected CLUSTERDOWN error"
+        }
     }
 }

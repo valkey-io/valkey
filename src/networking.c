@@ -131,6 +131,8 @@ typedef struct __attribute__((__packed__)) bulkStrRef {
 
 static void setProtocolError(const char *errstr, client *c);
 static void pauseClientsByClient(mstime_t end, int isPauseClientAll);
+static void trackBufReferences(char *buf, size_t bufpos, client *c);
+static void releaseBufReferences(char *buf, size_t bufpos, client *c);
 int postponeClientRead(client *c);
 char *getClientSockname(client *c);
 static int parseClientFiltersOrReply(client *c, int index, clientFilter *filter);
@@ -363,6 +365,7 @@ client *createClient(connection *conn) {
     c->net_input_bytes_curr_cmd = 0;
     c->net_output_bytes = 0;
     c->net_output_bytes_curr_cmd = 0;
+    c->io_tracked_reply_len = 0;
     c->commands_processed = 0;
     c->io_last_reply_block = NULL;
     c->io_last_bufpos = 0;
@@ -1435,9 +1438,14 @@ void addReplyBulk(client *c, robj *obj) {
             size_t str_len = sdslen(objectGetVal(obj));
             uint32_t num_len = digits10(str_len);
             /* RESP encodes bulk strings as $<length>\r\n<data>\r\n */
-            c->net_output_bytes_curr_cmd += (num_len + 3); /* $<length>\r\n */
-            c->net_output_bytes_curr_cmd += str_len;       /* <data> */
-            c->net_output_bytes_curr_cmd += 2;             /* \r\n */
+            size_t reply_len = (num_len + 3) + str_len + 2;
+            c->net_output_bytes_curr_cmd += reply_len;
+            
+            /* Store reply_len and track for COB accounting */
+            if (c->last_header) {
+                c->last_header->reply_len = reply_len;
+                atomic_fetch_add_explicit(&c->io_tracked_reply_len, reply_len, memory_order_relaxed);
+            }
         }
         return;
     }
@@ -2681,6 +2689,9 @@ static int writevToClient(client *c) {
     /* If the static reply buffer is not empty,
      * add it to the iov array for writev() as well. */
     if (bufpos > 0) {
+        if (c->flag.buf_encoded) {
+            trackBufReferences(c->buf, bufpos, c);
+        }
         addBufferToReplyIOV(c->flag.buf_encoded, c->buf, bufpos, &reply, &buf_metadata[bufcnt++]);
     }
 
@@ -2703,6 +2714,10 @@ static int writevToClient(client *c) {
                 continue;
             }
 
+            if (o->flag.buf_encoded) {
+                trackBufReferences(o->buf, used, c);
+            }
+            
             addBufferToReplyIOV(o->flag.buf_encoded, o->buf, used, &reply, &buf_metadata[bufcnt]);
             if (!buf_metadata[bufcnt].data_len) break;
             bufcnt++;
@@ -2803,14 +2818,52 @@ void resetLastWrittenBuf(client *c) {
     c->io_last_written.data_len = 0;
 }
 
+/* Track BULK_STR_REF sizes.
+ * Calculates reply_len for BULK_STR_REFs if not already set, and adds to client's tracking counter.
+ * This is called from I/O thread before writing to account for actual reply sizes. */
+static void trackBufReferences(char *buf, size_t bufpos, client *c) {
+    if (!c) return;
+    
+    char *ptr = buf;
+    while (ptr < buf + bufpos) {
+        payloadHeader *header = (payloadHeader *)ptr;
+        ptr += sizeof(payloadHeader);
+
+        if (header->payload_type == BULK_STR_REF && header->reply_len == 0) {
+            bulkStrRef *str_ref = (bulkStrRef *)ptr;
+            size_t len = header->payload_len;
+            size_t total_reply_len = 0;
+            while (len > 0) {
+                size_t str_len = sdslen(str_ref->str);
+                uint32_t num_len = digits10(str_len);
+                /* RESP encodes bulk strings as $<length>\r\n<data>\r\n */
+                total_reply_len += (num_len + 3) + str_len + 2;
+                str_ref++;
+                len -= sizeof(bulkStrRef);
+            }
+            header->reply_len = total_reply_len;
+            atomic_fetch_add_explicit(&c->io_tracked_reply_len, total_reply_len, memory_order_relaxed);
+        }
+
+        ptr += header->payload_len;
+    }
+    serverAssert(ptr == buf + bufpos);
+}
+
 /* Release references to string objects inside an encoded buffer */
-static void releaseBufReferences(char *buf, size_t bufpos) {
+static void releaseBufReferences(char *buf, size_t bufpos, client *c) {
     char *ptr = buf;
     while (ptr < buf + bufpos) {
         payloadHeader *header = (payloadHeader *)ptr;
         ptr += sizeof(payloadHeader);
 
         if (header->payload_type == BULK_STR_REF) {
+            /* Decrement tracked reply size only if it was previously calculated and tracked.
+             * reply_len may be 0 if client was evicted before trackBufReferences was called. */
+            if (c && header->reply_len > 0) {
+                atomic_fetch_sub_explicit(&c->io_tracked_reply_len, header->reply_len, memory_order_relaxed);
+            }
+
             /* When net byte tracking was disabled in the main thread (commandlog-reply-larger-than -1)
              * at the time this reply was added, we account for cluster slot stats here in the IO thread
              * after writing the reply. When tracking was enabled, it's already accounted in the main thread
@@ -2837,7 +2890,7 @@ static void releaseBufReferences(char *buf, size_t bufpos) {
 
 void releaseReplyReferences(client *c) {
     if (c->bufpos > 0 && c->flag.buf_encoded) {
-        releaseBufReferences(c->buf, c->bufpos);
+        releaseBufReferences(c->buf, c->bufpos, c);
     }
 
     listIter iter;
@@ -2846,7 +2899,7 @@ void releaseReplyReferences(client *c) {
     while ((next = listNext(&iter))) {
         clientReplyBlock *o = (clientReplyBlock *)listNodeValue(next);
         if (o->flag.buf_encoded) {
-            releaseBufReferences(o->buf, o->used);
+            releaseBufReferences(o->buf, o->used, c);
         }
     }
 }
@@ -2866,7 +2919,7 @@ static void _postWriteToClient(client *c) {
         /* If buffer is completely written */
         if (!last_written || c->bufpos == c->io_last_written.bufpos) {
             /* If encoded then release references to bulk string objects */
-            if (c->flag.buf_encoded) releaseBufReferences(c->buf, c->bufpos);
+            if (c->flag.buf_encoded) releaseBufReferences(c->buf, c->bufpos, c);
             /* Reset buffer metadata */
             c->bufpos = 0;
             c->flag.buf_encoded = 0;
@@ -2888,7 +2941,7 @@ static void _postWriteToClient(client *c) {
         if (!last_written || o->used == c->io_last_written.bufpos) {
             c->reply_bytes -= o->size;
             /* If encoded then release references to bulk string objects */
-            if (o->flag.buf_encoded) releaseBufReferences(o->buf, o->used);
+            if (o->flag.buf_encoded) releaseBufReferences(o->buf, o->used, c);
             listDelNode(c->reply, next);
             /* If completely written buffer is last written then reset last written state */
             if (last_written) resetLastWrittenBuf(c);
@@ -5956,6 +6009,9 @@ size_t getClientOutputBufferMemoryUsage(client *c) {
         usage += c->deferred_reply_bytes +
                  (list_item_size * listLength(c->deferred_reply));
     }
+
+    usage += atomic_load_explicit(&c->io_tracked_reply_len, memory_order_relaxed);
+
     return usage;
 }
 
@@ -6112,7 +6168,8 @@ int closeClientOnOutputBufferLimitReached(client *c, int async) {
     serverAssert(c->reply_bytes < SIZE_MAX - (1024 * 64));
     /* Note that c->reply_bytes is irrelevant for replica clients
      * (they use the global repl buffers). */
-    if ((c->reply_bytes == 0 && getClientType(c) != CLIENT_TYPE_REPLICA) ||
+    size_t tracked_len = atomic_load_explicit(&c->io_tracked_reply_len, memory_order_relaxed);
+    if ((c->reply_bytes == 0 && tracked_len == 0 && getClientType(c) != CLIENT_TYPE_REPLICA) ||
         (c->flag.close_asap && !(c->flag.protected_rdb_channel)))
         return 0;
     if (checkClientOutputBufferLimits(c)) {

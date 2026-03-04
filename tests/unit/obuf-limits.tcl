@@ -232,4 +232,162 @@ start_server {tags {"obuf-limits external:skip logreqres:skip"}} {
         assert_match "*I/O error*" $e
         reconnect
     }
+
+    test {Obuf hard limit with copy avoidance enabled} {
+        # Enable copy avoidance
+        r config set min-io-threads-avoid-copy-reply 1
+        r config set client-output-buffer-limit {normal 200000 0 0}
+        
+        # Create large value (1MB each)
+        set value [string repeat "x" [expr 1*1024*1024]]
+        r set bigkey $value
+        
+        set rd [valkey_deferring_client]
+        $rd client setname copy_avoid_hard
+        assert {[$rd read] eq "OK"}
+        
+        # Send GET commands without reading responses
+        # This fills the output buffer faster than socket can drain
+        set omem 0
+        while {1} {
+            $rd get bigkey
+            $rd flush
+            after 10
+            set clients [r client list]
+            set found 0
+            foreach client_info [split $clients "\r\n"] {
+                if {[string match "*name=copy_avoid_hard*" $client_info]} {
+                    regexp {omem=([0-9]+)} $client_info _ omem
+                    set found 1
+                    break
+                }
+            }
+            if {$omem >= 200000} break
+            if {!$found} break
+        }
+        
+        wait_for_condition 50 100 {
+            [lsearch [split [r client list] "\r\n"] *name=copy_avoid_hard*] == -1
+        } else {
+            fail "Client not disconnected despite omem=$omem >= 200000"
+        }
+    }
+
+    test {Obuf soft limit with copy avoidance enabled} {
+        r config set client-output-buffer-limit {normal 0 150000 2}
+        
+        # Use 500KB value
+        set value [string repeat "y" [expr 500*1024]]
+        r set mediumkey $value
+        
+        set rd [valkey_deferring_client]
+        $rd client setname copy_avoid_soft
+        assert {[$rd read] eq "OK"}
+        
+        # Send GETs to exceed soft limit and keep it there
+        set omem 0
+        while {1} {
+            $rd get mediumkey
+            $rd flush
+            after 10
+            set clients [r client list]
+            foreach client_info [split $clients "\r\n"] {
+                if {[string match "*name=copy_avoid_soft*" $client_info]} {
+                    regexp {omem=([0-9]+)} $client_info _ omem
+                    break
+                }
+            }
+            if {$omem >= 150000} break
+        }
+        
+        assert {[lsearch [split [r client list] "\r\n"] *name=copy_avoid_soft*] != -1}
+        
+        wait_for_condition 30 100 {
+            [lsearch [split [r client list] "\r\n"] *name=copy_avoid_soft*] == -1
+        } else {
+            fail "Client not disconnected after soft limit timeout"
+        }
+    }
+
+    test {Copy avoidance obuf tracking with commandlog enabled} {
+        r config set commandlog-reply-larger-than 100
+        r config set client-output-buffer-limit {normal 200000 0 0}
+        
+        # Use 1MB value
+        set value [string repeat "z" [expr 1*1024*1024]]
+        r set cmdlog_key $value
+        
+        set rd [valkey_deferring_client]
+        $rd client setname cmdlog_test
+        assert {[$rd read] eq "OK"}
+        
+        # Send multiple GETs without reading
+        set omem 0
+        while {1} {
+            $rd get cmdlog_key
+            $rd flush
+            after 10
+            set clients [r client list]
+            foreach client_info [split $clients "\r\n"] {
+                if {[string match "*name=cmdlog_test*" $client_info]} {
+                    regexp {omem=([0-9]+)} $client_info _ omem
+                    break
+                }
+            }
+            if {$omem >= 200000} break
+            if {[lsearch [split [r client list] "\r\n"] *name=cmdlog_test*] == -1} break
+        }
+        
+        wait_for_condition 50 100 {
+            [lsearch [split [r client list] "\r\n"] *name=cmdlog_test*] == -1
+        } else {
+            fail "Client not disconnected with commandlog enabled (omem=$omem)"
+        }
+        
+        # Cleanup
+        r config set commandlog-reply-larger-than -1
+    }
+
+    test {Copy avoidance obuf tracking with IO threads} {
+        # Enable copy avoidance and IO threads
+        r config set min-io-threads-avoid-copy-reply 1
+        r config set io-threads 4
+        r config set client-output-buffer-limit {normal 200000 0 0}
+        
+        # Use 1MB value
+        set value [string repeat "w" [expr 1*1024*1024]]
+        r set iothread_key $value
+        
+        set rd [valkey_deferring_client]
+        $rd client setname iothread_test
+        assert {[$rd read] eq "OK"}
+        
+        # Send multiple GETs without reading
+        set omem 0
+        while {1} {
+            $rd get iothread_key
+            $rd flush
+            after 10
+            set clients [r client list]
+            foreach client_info [split $clients "\r\n"] {
+                if {[string match "*name=iothread_test*" $client_info]} {
+                    regexp {omem=([0-9]+)} $client_info _ omem
+                    break
+                }
+            }
+            if {$omem >= 200000} break
+            if {[lsearch [split [r client list] "\r\n"] *name=iothread_test*] == -1} break
+        }
+        
+        # Wait for disconnection
+        wait_for_condition 50 100 {
+            [lsearch [split [r client list] "\r\n"] *name=iothread_test*] == -1
+        } else {
+            fail "Client not disconnected with IO threads (omem=$omem)"
+        }
+        
+        # Restore settings
+        r config set min-io-threads-avoid-copy-reply 0
+        r config set io-threads 1
+    }
 }

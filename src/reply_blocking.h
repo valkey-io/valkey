@@ -16,6 +16,17 @@
 #define MAX_DURABILITY_PROVIDERS 4
 
 /**
+ * Define the supported task types
+ */
+typedef enum {
+    AMZ_KEYSPACE_NOTIFY_TASK = 0, /* KEYSPACE NOTIFY task */
+    AMZ_REPLCONF_ACK_NOTIFY_TASK, /* Replconf ack task */
+    AMZ_KEY_INVALIDATION_TASK,    /* Key invalidation task for client side caching */
+    AMZ_FLUSH_INVALIDATION_TASK,  /* FLUSH invalidation task for client side caching */
+    AMZ_TASK_TYPE_MAX             /* Max task type */
+} amzDurableTaskType;
+
+/**
  * A durability provider represents a source of durability acknowledgment.
  * Each provider tracks progress independently and the overall durability
  * consensus is the MIN (AND) of all enabled providers' acknowledged offsets.
@@ -75,8 +86,25 @@ typedef struct durable_t {
     /* Number of replicas to ack for an update to be considered committed */
     long long num_replicas_to_ack;
 
-    /* clients waiting for offset ack/quorum*/
+    /* DKT: clients waiting for offset 
+     * acknowledgement from a set of replicas */
     struct list *clients_waiting_replica_ack;
+
+    /* Zero data loss: functions waiting for offset
+     * acknowledgement from a set of replicas */
+    //todo:merge NOTDONE
+    struct list *tasks_waiting_replica_ack[AMZ_TASK_TYPE_MAX];
+
+     /* Pending lists of tasks waiting for replica ACK. This list is populated
+     * when the current command is under execution but before we know about the
+     * updated master_repl_offset. After the command execution completes, the
+     * server.primary_repl_offset would get incremented and we need to update
+     * this list and move all the pending tasks to the official
+     * tasks_waiting_replica_ack list as part of the post-execution logic
+     */
+    //todo:merge NOTDONE
+    struct list *pending_tasks_waiting_replica_ack[AMZ_TASK_TYPE_MAX];
+
 
     /*  cached allocation of replica offsets to prevent allocation per cmd. */
     unsigned long replica_offsets_size;
@@ -95,9 +123,26 @@ typedef struct durable_t {
     /* Track the number of commands awaiting propagation prior to executing a single command in call() */
     int pre_call_num_ops_pending_propagation;
     
-    /* Counters for debugging/monitoring */
-    long long stat_read_blocked_count;   /* Number of read commands that got blocked */
-    long long stat_write_blocked_count;  /* Number of write commands that got blocked */
+    /* Counters for stats / info */
+
+    /* Counter of how many clients are blocked for synchronous write */
+    unsigned long long clients_blocked_on_sync_write;
+    /* Counter of how many clients are unblocked for synchronous write */
+    unsigned long long clients_unblocked_on_sync_write;
+    /* Counter of how many clients are disconnected before being unblocked for sync write */
+    unsigned long long clients_disconnected_before_unblocking_on_sync_write;
+    /* Counter of how many commands are blocked/unblocked for synchronous write */
+    unsigned long long read_responses_blocked_on_sync_write;
+    unsigned long long write_responses_blocked_on_sync_write;
+    unsigned long long other_responses_blocked_on_sync_write;
+    unsigned long long read_responses_unblocked_on_sync_write;
+    unsigned long long write_responses_unblocked_on_sync_write;
+    unsigned long long other_responses_unblocked_on_sync_write;
+
+    /* Cumulative Times for all the blocked commands */
+    unsigned long long read_responses_blocked_on_sync_write_cumulative_time_us;
+    unsigned long long write_responses_blocked_on_sync_write_cumulative_time_us;
+    unsigned long long other_responses_blocked_on_sync_write_cumulative_time_us;
 } durable_t;
 
 // Blocked response structure used by client to mark
@@ -137,8 +182,15 @@ typedef struct clientDurabilityInfo {
     // Replication offset to block this current command response
     long long current_command_repl_offset;
 
-    uint64_t durable_blocked_client : 1; /* This is a durable blocked client that is waiting for the server to
-                                          * acknowledge the write of the command that caused it to be blocked. */
+    // The list of async notification tasks that reference this client
+    // This task list is in FIFO order.
+    struct list *pending_notify_tasks;
+
+    // This is a durable blocked client that is waiting for the server to
+    // acknowledge the write of the command that caused it to be blocked. */
+    uint64_t durable_blocked_client : 1; 
+    // Modules can set the blocking offset for read cmds
+    long long module_cmd_blocking_offset;
 } clientDurableInfo;
 
 /**

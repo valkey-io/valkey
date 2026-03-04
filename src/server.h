@@ -1734,6 +1734,20 @@ typedef enum childInfoType {
     CHILD_INFO_TYPE_REPL_OUTPUT_BYTES
 } childInfoType;
 
+//TODO:merge NOTDONE
+//TODO:what is this?
+/* BEGIN AMZN */
+/* Modules */
+void moduleFreeContext(struct ValkeyModuleCtx *ctx);
+typedef enum {
+    MODULE_NOTIFY_STANDARD,  // Notify modules that did not opt-in for delayed notification
+    MODULE_NOTIFY_DELAYED,   // Notify modules that opt-in for delayed notification
+    MODULE_NOTIFY_ALL        // Notify all modules
+} ModuleNotificationType;
+int amzEqualObjects(robj *a, robj *b);
+int amzLoopAndExecuteCallbacks(list* lst, client *c);
+/* END AMZN */
+
 struct valkeyServer {
     durable_t durability;
     /* General */

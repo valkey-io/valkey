@@ -1,19 +1,12 @@
 #include "reply_blocking.h"
 #include "expire.h"
+#include "module.h"
 #include "server.h"
 #include "zmalloc.h"
 #include <assert.h>
 #include <math.h>
 
 #include "script.h"
-
-// TODO: handle PSYNC
-// TODO: remove debug logging
-// TODO: handle lua & multi
-// TODO: handle blocking commands
-// TODO: handle DB level commands (swap flushall etc)
-// TODO: handle monitors
-// TODO: telemetry
 
 /*============================ Internal prototypes ========================= */
 static void resetPreExecutionOffset(struct client *c);
@@ -66,6 +59,42 @@ static hashtableType uncommittedKeysHashtableType = {
     .keyCompare = uncommittedKeysKeyCompare,
     .entryDestructor = uncommittedKeyEntryDestructor,
 };
+
+
+bool amzCommands_isFunctionRWCommand(client *c) {
+    return (c->argc > 0 && (!strcasecmp(objectGetVal(c->argv[0]), "FUNCTION"))) && !(c->argc > 1 && !strcasecmp(objectGetVal(c->argv[1]), "HELP"));
+}
+
+bool amzCommands_isFunctionStoreRWCommand(client *c) {
+    return amzCommands_isFunctionRWCommand(c) || c->cmd->proc == fcallCommand || c->cmd->proc == fcallroCommand;
+}
+
+// Track the number of commands awaiting propagation prior to executing a single command in call()
+static int pre_call_num_ops_pending_propagation;
+
+/**
+ * Internal structure used to track replication offset and arguments needed in 
+ * executing task when offset has been acked by required number of replicas.
+ */
+typedef struct taskWaitingAck {
+    int type; // Task type
+    int64_t offset;
+    void **argv;
+} taskWaitingAck;
+
+/**
+ * Internal structure used to define all handlers for a task type
+ */
+typedef struct taskWaitingAckType {
+    taskWaitingAck* (*createTask)(va_list);
+    void (*destroyTask)(void *);
+    void (*executeTask)(const taskWaitingAck *);
+    // Callback method when the client initiated this task is destroyed
+    void (*onClientDestroy)(void *);
+} taskWaitingAckType;
+
+static taskWaitingAckType taskTypes[AMZ_TASK_TYPE_MAX];
+void initTaskTypes(void);
 
 /**
  * Below are the data structures used to buffer intermediate dirty keys/DBs for multi-command
@@ -193,6 +222,7 @@ unsigned long long getUncommittedKeysCleanupTimeLimit(unsigned long long num_unc
  * @offsets        The array that needs to be filled in. Function assumes that proper memory has been allocated for it.
  * @numReplicas    The size of the offsets array that needs to be filled in.
  */
+//TODO:merge DONE
 static void populateReplicaOffsets(long long *offsets, const size_t numReplicas) {
     memset(offsets, 0, sizeof(long long) * numReplicas);
 
@@ -220,8 +250,11 @@ static void populateReplicaOffsets(long long *offsets, const size_t numReplicas)
  *          In absence of required replicas, the primary offset is returned.
  *          If there is not enough number of replicas connected, return -1.
  */
+ //TODO:merge DONE
 long long getConsensusOffset(const unsigned long numAcksNeeded) {
     const unsigned long numReplicas = listLength(server.replicas);
+
+    //TODO:aof i need to change this to look at our durabilityProviders
     if (numAcksNeeded == 0) {
         // If no ack is needed, then the consensus offset is the one primary is at.
         return server.primary_repl_offset;
@@ -232,7 +265,7 @@ long long getConsensusOffset(const unsigned long numAcksNeeded) {
     if (numReplicas < numAcksNeeded) {
         return -1;
     }
-
+    // TODO:aof size stuff?
     long long replica_offsets[numReplicas];
 
     populateReplicaOffsets(replica_offsets, numReplicas);
@@ -286,10 +319,7 @@ void unregisterDurabilityProvider(durabilityProvider *provider) {
     }
 }
 
-/**
- * Returns true if any registered durability provider is currently enabled.
- * This replaces the hardcoded check: replicaAcksForConsensus() == 0 && !isAofLocalAckRequired()
- */
+
 bool anyDurabilityProviderEnabled(void) {
     for (int i = 0; i < num_durability_providers; i++) {
         if (durability_providers[i]->isEnabled()) return true;
@@ -297,10 +327,6 @@ bool anyDurabilityProviderEnabled(void) {
     return false;
 }
 
-/**
- * Unified notification entry point called by any provider when its state changes.
- * This replaces both postReplicaAck() and postAofFsync() as the single notification path.
- */
 void notifyDurabilityProgress(void) {
     postDurabilityAck();
 }
@@ -378,7 +404,7 @@ static long long getDurabilityConsensusOffset(void) {
         any_enabled = true;
         long long offset = p->getAckedOffset();
         /* Skip providers that return -1 (e.g. replica provider with insufficient replicas)
-         * only if there are no replicas connected at all  allow other providers to drive progress. */
+         * only if there are no replicas connected at allallow other providers to drive progress. */
         if (offset == -1) {
             /* For backward compat: if this is the replica provider and there are
              * no replicas, skip it so other providers can drive durability. */
@@ -400,6 +426,7 @@ static long long getDurabilityConsensusOffset(void) {
 /**
  * Reset the pre-execution offset fields.
  */
+//TODO:merge done
 static void resetPreExecutionOffset(struct client *c) {
     c->clientDurabilityInfo.offset.recorded = false;
     c->clientDurabilityInfo.offset.reply_block = NULL;
@@ -408,12 +435,13 @@ static void resetPreExecutionOffset(struct client *c) {
 
 /**
  * Utility function to track the pre-execution position in the client reply COB. The given client can be either
- * a normal client (or TODO: a monitor client)
+ * a normal client (or a monitor client)
  * For a normal client, this position is the byte position in the COB prior to command execution. The response
  * generated from executing the next valkey command comes after this position.
  * (For a monitor client, this position is the byte position in the COB prior to command replication. The command
  * will be replicated after this position.)
  */
+//TODO:merge done
 static void trackCommandPreExecutionPosition(struct client *c) {
     // There can be cases when the client gets blocked by other mechanisms such as slot migration
     // after we tracked the command's pre-execution position when the reply buffer is non-empty.
@@ -446,6 +474,7 @@ static void trackCommandPreExecutionPosition(struct client *c) {
  * @param c The client
  * @return 1 if the client is successfully marked unblocked, 0 otherwise
  */
+//TODO:merge done
 static int unblockClientWaitingReplicaAck(struct client *c) {
     if (c->clientDurabilityInfo.durable_blocked_client) {
         listNode *node = listSearchKey(server.durability.clients_waiting_replica_ack, c);
@@ -461,6 +490,7 @@ static int unblockClientWaitingReplicaAck(struct client *c) {
 /**
  * Initialize the sync replication client attributes when client is created
  */
+//TODO:merge done
 void syncReplicationClientInit(client *c) {
     if (!isSyncReplicationEnabled()) {
         return;
@@ -470,6 +500,8 @@ void syncReplicationClientInit(client *c) {
         listSetFreeMethod(c->clientDurabilityInfo.blocked_responses, zfree);
         resetPreExecutionOffset(c);
         c->clientDurabilityInfo.current_command_repl_offset = -1;
+        c->clientDurabilityInfo.module_cmd_blocking_offset = -1;
+        c->clientDurabilityInfo.pending_notify_tasks = listCreate();
     }
 }
 
@@ -477,24 +509,45 @@ void syncReplicationClientInit(client *c) {
  * Reset the client durable write attributes during a client clean-up.
  * This method is invoked when a client is freed.
  */
+//TODO:merge done
 void syncReplicationClientReset(client *c) {
     // Free this client from the clients_waiting_replica_ack list and emit a metric on
     // how many clients are disconnected before the response gets flushed/unblocked.
-    unblockClientWaitingReplicaAck(c);
+    if (unblockClientWaitingReplicaAck(c)) {
+        server.durability.clients_disconnected_before_unblocking_on_sync_write++;
+    }
 
     if (c->clientDurabilityInfo.blocked_responses != NULL) {
         listRelease(c->clientDurabilityInfo.blocked_responses);
         c->clientDurabilityInfo.blocked_responses = NULL;
     }
 
+     // Notify all pending tasks about the client's destruction
+    if (c->clientDurabilityInfo.pending_notify_tasks != NULL) {
+        listIter li;
+        listNode *ln;
+        listRewind(c->clientDurabilityInfo.pending_notify_tasks, &li);
+        while((ln = listNext(&li))) {
+            taskWaitingAck *task = (taskWaitingAck*)listNodeValue(ln);
+            if (task) {
+                taskTypes[task->type].onClientDestroy(task);
+            }
+        }
+        // Now we can safety release the entire list of pending notification tasks
+        listRelease(c->clientDurabilityInfo.pending_notify_tasks);
+        c->clientDurabilityInfo.pending_notify_tasks = NULL;
+    }
+
     resetPreExecutionOffset(c);
     c->clientDurabilityInfo.current_command_repl_offset = -1;
+    c->clientDurabilityInfo.module_cmd_blocking_offset = -1;
 }
 
 /**
  * Determines if a client is doing a transaction or not. This applies to either
  * MULTI/EXEC or scripts
  */
+//TODO:merge done
 static bool isClientDoingTransaction(client *c) {
     return c->cmd->proc == execCommand || IS_SCRIPT_CALL_CMD(c->cmd);
 }
@@ -503,27 +556,32 @@ static bool isClientDoingTransaction(client *c) {
  * Returns true if the client is eligible for keyspace tracking
  * on a primary node.
  */
+//TODO:merge NOTDONE
 static bool clientEligibleForResponseTracking(client *c) {
     serverAssert(iAmPrimary());
 
     if (c->cmd == NULL) return false;
 
-    // should we do info?
-    // i.e: keyspace, does it include dirty keys?
+    //TODO:aof deal with informational commands.
+    bool is_keyspace_informational_cmd = false;
+
     // Administrative commands that are not keyspace informational nor
     // write commands are not eligible for response tracking/blocking.
-    if (c->cmd->flags & CMD_ADMIN && !(c->cmd->flags & CMD_WRITE)) {
+    if ((c->cmd->flags & CMD_ADMIN) && !(c->cmd->flags & CMD_WRITE) && !is_keyspace_informational_cmd) {
         return false;
     }
 
-    return c->cmd->flags & (CMD_WRITE | CMD_READONLY)
-        || isClientDoingTransaction(c);// Read or write command // TODO: functions
+    return ((c->cmd->flags & (CMD_WRITE | CMD_READONLY)) // Read or write command
+        || isClientDoingTransaction(c) // Transaction command
+        || is_keyspace_informational_cmd // Informational command
+        || amzCommands_isFunctionStoreRWCommand(c));
 }
 
 /**
  * Check if we only allow client to receive up to a certain
  * position in the client reply buffer
  */
+//TODO:merge done
 inline bool isClientReplyBufferLimited(client *c) {
     return c->clientDurabilityInfo.blocked_responses != NULL &&
            listLength(c->clientDurabilityInfo.blocked_responses) > 0;
@@ -536,6 +594,7 @@ inline bool isClientReplyBufferLimited(client *c) {
  * @param c The client to block the last response in the COB
  * @param blocked_offset The replication offset to block on
  */
+//TODO:merge done
 void blockLastResponseIfExist(const client *c, const long long blocked_offset) {
     // We must have called the pre-hook to track COB position
     serverAssert(c->clientDurabilityInfo.offset.recorded);
@@ -587,13 +646,23 @@ void blockLastResponseIfExist(const client *c, const long long blocked_offset) {
 }
 
 /**
+ * Process the metrics of all commands blocked at a BlockedResponse while unblocking
+ * @param br The Node at which commands are blocked.
+ */
+static inline void processCmdMetrics(struct blockedResponse *br){
+    // TODO:merge NOTDONE
+}
+
+/**
  * Unblocks the first response in the client's blocked responses list
  * @param c the client to unblock the first response for.
  */
+//TODO:merge done
 static void unblockFirstResponse(const client *c) {
     serverAssert(c->clientDurabilityInfo.blocked_responses != NULL);
     if (listLength(c->clientDurabilityInfo.blocked_responses) > 0) {
         listNode *first = listFirst(c->clientDurabilityInfo.blocked_responses);
+        processCmdMetrics(listNodeValue(first));
         listDelNode(c->clientDurabilityInfo.blocked_responses, first);
     }
 }
@@ -604,14 +673,10 @@ static void unblockFirstResponse(const client *c) {
  * @param offset The replication offset we are checking
  * @return 0 if we don't need to block at the specified offset, and 1 if we do.
  */
+//TODO:merge done
 static int isBlockingNeededForOffset(const client *c, const long long offset) {
     // If the blocking offset is -1, don't block.
-    if (offset == -1) {
-        return 0;
-    }
-    
-    // If no durability provider is enabled, don't block.
-    if (!anyDurabilityProviderEnabled()) {
+    if (offset == -1 || anyDurabilityProviderEnabled() == 0) {
         return 0;
     }
 
@@ -632,6 +697,7 @@ static int isBlockingNeededForOffset(const client *c, const long long offset) {
  * @param c client whose response we will block.
  * @param blockingReplOffset The replication offset to block the client on
  */
+//TODO:merge NOTDONE
 void blockClientOnReplOffset(client *c, const long long blockingReplOffset) {
     serverAssert(isPrimarySyncReplicationEnabled());
 
@@ -639,18 +705,15 @@ void blockClientOnReplOffset(client *c, const long long blockingReplOffset) {
      * waiting for ack from slaves. */
     if (isBlockingNeededForOffset(c, blockingReplOffset)) {
         /* Track blocked command stats for debugging */
-        if (c->cmd->flags & CMD_WRITE) {
-            server.durability.stat_write_blocked_count++;
-        } else {
-            server.durability.stat_read_blocked_count++;
-        }
         serverLog(LL_DEBUG, "client should be blocked at offset %lld, cmd=%s, is_write=%d", 
                   blockingReplOffset, c->cmd->declared_name, (c->cmd->flags & CMD_WRITE) ? 1 : 0);
         blockLastResponseIfExist(c, blockingReplOffset);
         if (!c->clientDurabilityInfo.durable_blocked_client) {
             listAddNodeTail(server.durability.clients_waiting_replica_ack, c);
             c->clientDurabilityInfo.durable_blocked_client = 1;
+            server.durability.clients_blocked_on_sync_write++;
         }
+        //TODO:aof only request if we are waiting on replicas.
         replicationRequestAckFromReplicas();
     }
 
@@ -658,6 +721,15 @@ void blockClientOnReplOffset(client *c, const long long blockingReplOffset) {
     // we can reset the client durability attributes we are tracking for
     // the current command.
     resetPreExecutionOffset(c);
+}
+
+/**
+ * Utility function to determine whether a command should be replicated to the list of monitors.
+ * return       1 if the command is replicated, 0 otherwise.
+ */
+//TODO:merge done
+static inline int isCommandReplicatedToMonitors(void) {
+    return listLength(server.monitors) && !server.loading;
 }
 
 /**
@@ -669,11 +741,49 @@ void blockClientOnReplOffset(client *c, const long long blockingReplOffset) {
  * @param c Client
  * @param blockingReplOffset The replication offset to block the client and the monitors on
  */
+//TODO:merge done
 static void blockClientAndMonitorsOnReplOffset(client *c, long long blockingReplOffset) {
     // Block the client that issues the command on the replication offset
     blockClientOnReplOffset(c, blockingReplOffset);
 
-    // TODO: handle monitors
+    if (isCommandReplicatedToMonitors()) {
+        listNode *ln;
+        listIter li;
+        listRewind(server.monitors,&li);
+        while((ln = listNext(&li))) {
+            client *monitor = ln->value;
+            // Block each monitor client based on the replication offset
+            blockClientOnReplOffset(monitor, blockingReplOffset);
+        }
+    }
+}
+
+/**
+ * Find and execute the tasks when 'consensus_ack_offset' is acked by number 
+ * of replicas.
+ */
+//TODO:merge done
+static void executeTaskForReplicaAck(const long long consensus_ack_offset) {
+    listIter li;
+    listNode *ln;
+    struct durable_t *durability = &server.durability;
+
+    for(int i=0 ;i<AMZ_TASK_TYPE_MAX; i++) {
+        listRewind(durability->tasks_waiting_replica_ack[i], &li);
+        while((ln = listNext(&li))) {
+            taskWaitingAck *task = listNodeValue(ln);
+            if (task->offset <= consensus_ack_offset) {
+                // Execute the task and remove it from linkedlist.
+                taskTypes[i].executeTask(task);
+                listDelNode(durability->tasks_waiting_replica_ack[i], ln);
+            } else {
+                // Because the node in the linkedlist is sorted by offset
+                // from low to high, if the offset of current node is not
+                // acked, do not need to check the nodes after it.
+                break;
+            }
+        }
+    }
 }
 
 /**
@@ -685,12 +795,14 @@ static void blockClientAndMonitorsOnReplOffset(client *c, long long blockingRepl
  * @param durability Durability object of the current primary
  * @param consensus_ack_offset Repl offset that have been acked by the required number of replicas
  */
+//TODO:merge done
 void unblockResponsesWithAckOffset(const durable_t *durability, const long long consensus_ack_offset) {
     serverLog(LL_DEBUG, "unblocking clients for consensus offset %lld,", consensus_ack_offset);
     // Traverses through all the clients that wait for replica ack
-    listIter li;
-    listNode *ln;
+    listIter li, li_response;
+    listNode *ln, *ln_response;
     listRewind(durability->clients_waiting_replica_ack, &li);
+    blockedResponse *br = NULL;
     while ((ln = listNext(&li))) {
         client *c = ln->value;
 
@@ -699,16 +811,16 @@ void unblockResponsesWithAckOffset(const durable_t *durability, const long long 
         // ACK'ed by the required number of replicas
         // If the max repl offset is acked, all blocked responses will be unblocked
         serverAssert(c->clientDurabilityInfo.blocked_responses != NULL);
+        listRewind(c->clientDurabilityInfo.blocked_responses, &li_response);
         bool unblocked_responses = false;
-
-        // Keep deleting from the front while the first response can be unblocked
-        while (listLength(c->clientDurabilityInfo.blocked_responses) > 0) {
-            const listNode *first = listFirst(c->clientDurabilityInfo.blocked_responses);
-            const blockedResponse *br = listNodeValue(first);
-
-            if (br->primary_repl_offset <= consensus_ack_offset) {
+        
+        while((ln_response = listNext(&li_response))) {
+            br = listNodeValue(ln_response);
+            if(br->primary_repl_offset <= consensus_ack_offset) {
                 unblockFirstResponse(c);
-                unblocked_responses = true;
+                if (unblocked_responses == false) {
+                    unblocked_responses = true;
+                }
             } else {
                 // As soon as we encounter a client response that has the
                 // required reply offset greater than the replicas ACK'ed offset,
@@ -717,11 +829,12 @@ void unblockResponsesWithAckOffset(const durable_t *durability, const long long 
                 break;
             }
         }
-
         // If there are no more blocked responses for the client, we can safely
         // mark it unblocked entirely
         if (listLength(c->clientDurabilityInfo.blocked_responses) == 0) {
-            unblockClientWaitingReplicaAck(c);
+            if (unblockClientWaitingReplicaAck(c)) {
+                server.durability.clients_unblocked_on_sync_write++;
+            }
         }
         // Put client in pending write queue so responses can be flushed
         // to client if we have unblocked at least 1 response objects.
@@ -729,8 +842,14 @@ void unblockResponsesWithAckOffset(const durable_t *durability, const long long 
             putClientInPendingWriteQueue(c);
         }
     }
+    
+    // Find and execute the registered tasks when offset is acked.
+    executeTaskForReplicaAck(consensus_ack_offset);
 }
 
+//TODO:merge done
+//TODO:merge amzDurableProcessClientsWaitingReplicasAck
+//TODO:aof this looks weird
 static void postDurabilityAck(void) {
     if (!isPrimarySyncReplicationEnabled()) {
         return;
@@ -753,6 +872,7 @@ static void postDurabilityAck(void) {
  * Checks if there are clients blocked that can be unblocked since
  * we received enough ACKs from replicas.
  */
+//TODO:aof this looks weird
 void postReplicaAck(void) {
     postDurabilityAck();
 }
@@ -761,6 +881,7 @@ void postReplicaAck(void) {
  * Checks if there are clients blocked that can be unblocked since
  * local AOF fsync progressed.
  */
+//TODO:aof this looks weird
 void postAofFsync(void) {
     if (!isPrimarySyncReplicationEnabled()) {
         return;
@@ -777,6 +898,7 @@ void postAofFsync(void) {
  * @param offset The replication offset to wait on the uncommitted key
  * @param uncommittedKeys The set of uncommitted keys
  */
+//TODO:merge done
 static void addUncommittedKey(const sds key, const long long offset, hashtable *uncommittedKeys) {
     uncommittedKeyEntry *entry = zmalloc(sizeof(*entry));
     entry->key = sdsdup(key);
@@ -798,6 +920,7 @@ static void addUncommittedKey(const sds key, const long long offset, hashtable *
  * @param privdata
  * @param entry
  */
+//TODO:merge done
 static void uncommittedKeysCleanupScanCallback(void *privdata, void *entry) {
     uncommittedKeyCleanupCtx *ctx = privdata;
     uncommittedKeyEntry *uke = entry;
@@ -815,6 +938,7 @@ static void uncommittedKeysCleanupScanCallback(void *privdata, void *entry) {
  * @param db The serverDB object
  * @return the ACK offset of the key if key is uncommitted, returns -1 otherwise.
  */
+//TODO:merge done
 long long syncReplicationPurgeAndGetUncommittedKeyOffset(const sds key, serverDb *db) {
     serverAssert(iAmPrimary());
     uncommittedKeyEntry *entry = NULL;
@@ -843,6 +967,7 @@ long long syncReplicationPurgeAndGetUncommittedKeyOffset(const sds key, serverDb
  * @param key
  * @param db
  */
+//TODO:merge done
 void handleUncommittedKeyForClient(const client *c, robj *key, serverDb *db) {
     // If we are in the context of a MULTI/EXEC transaction or a script, mark the dirty key
     // pending so it can be properly recorded later on with the final replication offset.
@@ -865,8 +990,103 @@ void handleUncommittedKeyForClient(const client *c, robj *key, serverDb *db) {
     }
 }
 
+static inline void handleDirtyDatabase(client *c, serverDb *db) {
+    if ((c->flag.multi) || scriptIsRunning()) {
+        // For multi-commands transaction, queue up the uncommitted DB for later.
+        // If all the databases are already dirty, no need to do anything more
+        if (all_dbs_dirty_in_current_cmd) return;
+        if (db != NULL) {
+            // Current database is dirty
+            listAddNodeTail(pending_uncommitted_dbs, db);
+        } else {
+            // All databases are dirty.
+            all_dbs_dirty_in_current_cmd = true;
+            // Here we no longer need to track any dirty keys or databases as all DBs
+            // will be dirty on the final offset of the command block
+            listEmpty(pending_uncommitted_keys);
+            listEmpty(pending_uncommitted_dbs);
+        }
+    } else {
+        // For single command, simply mark the DB dirty at the current offset
+        if (db != NULL) {
+            db->dirty_repl_offset = server.primary_repl_offset;
+        } else {
+            // For FLUSHALL command, we track all the databases to be dirty
+            for (int i = 0; i < server.dbnum; i++) {
+                if (server.db[i] != NULL) {
+                    server.db[i]->dirty_repl_offset = server.primary_repl_offset;
+                }
+            }
+        }
+    }
+}
+
+struct serverCommand *lookupCommandOrOriginalBySds(sds s) {
+    struct serverCommand *cmd = lookupCommandBySdsLogic(server.commands, s);
+    if (!cmd) cmd = lookupCommandBySdsLogic(server.orig_commands, s);
+
+    return cmd;
+}
+/**
+ * Get parameters for the SWAPDB command.
+ * The optional permission_client allows for checking of a client's permission for swapdb.
+ * Returns true if command would be executed.
+ */
+//TODO:merge NOTDONE ACL stuff do i need it?
+bool amzSwapdbGetParams(robj **argv, int argc, int *id1_p, int *id2_p) {
+    long long dbid1, dbid2;
+    if (argc != 3) return false;
+    if (server.cluster_enabled) return false;
+    if (getLongLongFromObject(argv[1], &dbid1) != C_OK) return false;
+    if (getLongLongFromObject(argv[2], &dbid2) != C_OK) return false;
+    if (dbid1 < 0 || dbid1 >= server.dbnum) return false;
+    if (dbid2 < 0 || dbid2 >= server.dbnum) return false;
+    if (dbid1 == dbid2) return false;
+
+    *id1_p = (int)dbid1;
+    *id2_p = (int)dbid2;
+    return true;
+}
+
+/**
+ * Get parameters for the SELECT command.
+ * The optional permission_client allows for checking of a client's permission for select.
+ * Returns true if command would be executed.
+ */
+//TODO:merge NOTDONE ACL stuff do i need it?
+bool amzSelectGetParams(robj **argv, int argc, client *permission_client, int *dbid_p) {
+    int dbid;
+    if (argc != 2) return false;
+    if (getIntFromObject(argv[1], &dbid) != C_OK) return false;
+    if (dbid < 0 || dbid >= server.dbnum) return false;
+
+    *dbid_p = dbid;
+    return true;
+}
+
+/**
+ * Handle the client command which modifies entire redis databases by
+ * tracking the uncommitted replication offset on a serverDb level.
+ * This includes commands FLUSHDB, FLUSHALL, and SWAPDB
+ * @param c Client
+ */
+//TODO:merge done
+//TODO:aof ACL?
 static void handleDatabaseModification(client *c) {
-    UNUSED(c);
+    if (c->cmd->proc == swapdbCommand && server.cluster_enabled == 0) {
+        // For SWAPDB command, we track both the databases to be dirty
+        int id1, id2;
+        if (amzSwapdbGetParams(c->argv, c->argc, &id1, &id2)) {
+            handleDirtyDatabase(c, server.db[id1]);
+            handleDirtyDatabase(c, server.db[id2]);
+        }
+    } else if (c->cmd->proc == flushdbCommand) {
+        // For FLUSHDB command, we track the current database to be dirty
+        handleDirtyDatabase(c, c->db);
+    } else if (c->cmd->proc == flushallCommand) {
+        // For FLUSHALL command, we track all the databases to be dirty
+        handleDirtyDatabase(c, NULL);
+    }
 }
 
 /**
@@ -878,6 +1098,7 @@ static void handleDatabaseModification(client *c) {
  * removes keys that are acknowledged by sufficient number of replicas.
  * It is applicable only to primary.
  */
+//TODO:merge done
 void clearUncommittedKeysAcknowledged(void) {
     if (!isPrimarySyncReplicationEnabled()) {
         return;
@@ -950,22 +1171,25 @@ void clearUncommittedKeysAcknowledged(void) {
  * Initialize sync replication related fields for a database.
  * @param db database to initialize.
  */
+//TODO:merge done
 void syncReplicationInitDatabase(serverDb *db) {
     db->uncommitted_keys = hashtableCreate(&uncommittedKeysHashtableType);
     db->dirty_repl_offset = -1;
-    db->uncommitted_keys_cursor = 0;
+    db->uncommitted_keys_cursor = 0; //TODO:merge diverge
     db->scan_in_progress = 0;
 }
 
 /**
  * Utility function to clear all uncommitted keys for each database
  */
+//TODO:merge NOTDONE
 static void clearAllUncommittedKeys(void) {
     serverLog(LL_NOTICE, "Clearing all uncommitted keys for sync replication");
     for (int i = 0; i < server.dbnum; i++) {
         serverDb *db = server.db[i];
         if (db == NULL) continue;
         hashtableRelease(db->uncommitted_keys);
+        //TODO:stop iter?
         syncReplicationInitDatabase(db);
     }
     server.durability.curr_db_scan_idx = 0;
@@ -977,6 +1201,7 @@ static void clearAllUncommittedKeys(void) {
  * Determines if a single valkey command is trying to access an uncommitted key.
  * Returns 1 if so, 0 otherwise.
  */
+//TODO:merge done
 static int isSingleCommandAccessingUncommittedKeys(const serverDb *db, struct serverCommand *cmd, robj **argv, int argc) {
     // If the database has no uncommitted keys, return 0
     if (hashtableSize(db->uncommitted_keys) == 0) return 0;
@@ -1001,15 +1226,75 @@ static int isSingleCommandAccessingUncommittedKeys(const serverDb *db, struct se
 }
 
 /**
+ * Determine if there are uncommitted keys in the redis server or not
+ * Returns 1 if there are uncommitted keys, 0 otherwise.
+ */
+//TODO:merge done
+static inline int hasUncommittedKeys(void) {
+    for (int i = 0; i < server.dbnum; i++) {
+        if(server.db[i] && (hashtableSize(server.db[i]->uncommitted_keys) > 0))
+            return 1;
+    }
+    return 0;
+}
+
+//TODO:aof MOVE TO SERVER
+static long long func_store_blocking_offset = -1;
+
+//TODO:merge NOTDONE
+//TODO:merge RENAME
+bool amzDurableFunctions_isFunctionStoreUncommitted(void) {
+    return func_store_blocking_offset > server.durability.previous_acked_offset;
+}
+
+/**
  * Determine if a client is trying to access uncommitted keys.
  * Returns 1 if so, 0 otherwise.
  */
+//TODO:merge NOTDONE
 static int isAccessingUncommittedData(client *c) {
-    if (isSingleCommandAccessingUncommittedKeys(c->db, c->cmd, c->argv, c->argc)) {
+     // Informational command handling
+    //TODO: handle INFORMATIONAL
+
+    // Single command handling
+    if (isSingleCommandAccessingUncommittedKeys(c->db, c->cmd, c->argv, c->argc)
+        || (amzCommands_isFunctionStoreRWCommand(c) && amzDurableFunctions_isFunctionStoreUncommitted())) {
         return 1;
     }
-    // TODO: handle other commands
-    return 0;
+
+    int ret_val = 0;
+    // MULTI/EXEC transaction handling
+    if ((c->flag.multi) && c->cmd->proc == execCommand) {
+        // We need to track the current database the client is on
+        serverDb *cur_db = c->db;
+        // Check if the keys accessed are dirty or not
+        for (int i = 0; i < c->mstate->count; i++) {
+            multiCmd mc = c->mstate->commands[i];
+            // If the current command is SELECT, then we need to switch
+            // the database referenced by the client
+            if (mc.cmd->proc == selectCommand) {
+                int db_id;
+                if (amzSelectGetParams(mc.argv, mc.argc, c, &db_id)) {
+                    c->db = server.db[db_id];
+                    continue;
+                } else {
+                    discardTransaction(c);
+                    ret_val = 1;
+                    break;
+                }
+            }
+            if (isSingleCommandAccessingUncommittedKeys(c->db, mc.cmd, mc.argv, mc.argc)
+                || (amzCommands_isFunctionStoreRWCommand(c) && amzDurableFunctions_isFunctionStoreUncommitted())) {
+                discardTransaction(c);
+                ret_val = 1;
+                break;
+            }
+        }
+        // At the end of pre-processing the MULTI/EXEC, we need to
+        // restore the current database referenced by the client.
+        c->db = cur_db;
+    }
+    return ret_val;
 }
 
 /**
@@ -1022,6 +1307,9 @@ static int isAccessingUncommittedData(client *c) {
  * @param c
  * @return
  */
+//TODO:merge NOTDONE
+//TODO:keyspace informational
+//TODO:module replication?
 static bool shouldRejectCommandWithUncommittedData(client *c) {
     if (c->cmd == NULL // command is null
         || ((c->cmd->flags & CMD_ADMIN)) || c->flag.primary) {
@@ -1037,6 +1325,59 @@ static bool shouldRejectCommandWithUncommittedData(client *c) {
     return false;
 }
 
+//TODO:move to SERVER
+static bool processed_func_write_in_transaction = false;
+
+void amzDurableFunctions_handleUncommittedFunctionStore(void) {
+    if (server.execution_nesting) {
+        // The master replication offset isn't updated until the transaction completes
+        processed_func_write_in_transaction = true;
+    } else {
+        func_store_blocking_offset = server.primary_repl_offset;
+    }
+}
+
+/*
+ * Return true if the given command only modifies the first key.
+ */
+//TODO:MERGE NOT DONE
+bool commandModifiesFirstKeyOnly(struct serverCommand *cmd) {
+  //  return cmd->amz_info != NULL && cmd->amz_info->flags & REDIS_AMZ_CMD_FIRSTKEY_MOD && cmd->getkeys_proc == NULL;
+  return false;
+}
+
+bool amzGetDbIdFromRobj(robj *obj, int *db_id) {
+    if ((getIntFromObject(obj, db_id) != C_OK) || (*db_id < 0) || (*db_id >= server.dbnum)) {
+        return false;
+    }
+    return true;
+}
+
+bool amzGetTargetDbIdForCopyCommand(int argc, robj **argv, int selected_dbid, int *target_dbid) {
+    const int copy_command_optional_arg_start_index = 3;
+
+    *target_dbid = selected_dbid;
+
+    for (int j = copy_command_optional_arg_start_index; j < argc; j++) {
+        if (!strcasecmp(objectGetVal(argv[j]), "replace")) {
+            continue;
+        } else if (!strcasecmp(objectGetVal(argv[j]), "db") && (argc > j + 1)) {
+            /* Note the parsing here needs to perfectly match what we have in redis OSS for COPY.
+             * The following command is considered OK by Redis OSS 6.2 so we can't return here, but
+             * must continue to parse till the last db which is the one they effectivelly use.
+             * COPY key1 key2 db 1 db 2 db 3 (This will use db 3)
+             */
+            if (!amzGetDbIdFromRobj(argv[j + 1], target_dbid)) {
+                return false;   // parse failure
+            }
+            j++; // Consume additional argument
+        } else {
+            return false;   // parse failure
+        }
+    }
+    return true;
+}
+
 /*========================== Command offset calculation ===================== */
 
 /**
@@ -1046,6 +1387,7 @@ static bool shouldRejectCommandWithUncommittedData(client *c) {
  * @return The blocking replication offset or -1 if we're in a nested call and the replication
  *         offset has not been updated yet.
  */
+//TODO:merge done
 static long long getSingleCommandBlockingOffsetForReplicatingCommand(client *c) {
     /* We check the CMD_WRITE flag because there are three cases where the post-call replication offset can
     * be greater than the pre-call replication offset, but we don't consider the command to be replicating:
@@ -1064,42 +1406,66 @@ static long long getSingleCommandBlockingOffsetForReplicatingCommand(client *c) 
     }
 
     // If the command executed generated replication data, then this means the server data changed.
-    // We need to mark the modified data as dirty and block the response to the client until the
+    // We need to mark the modified data as dirty and block the response to the client until the 
     // replica's replication offset is caught up to the current global offset.
-    // TODO: handle functions
-    getKeysResult result;
-    initGetKeysResult(&result);
-    int numkeys = getKeysFromCommand(c->cmd, c->argv, c->argc, &result);
-    keyReference *keys = result.keys;
-    if (numkeys > 0) {
-        if (c->cmd->proc == moveCommand) {
-            // TODO: support MOVE command: we need to mark the key as dirty in the destination DB
-            // dont block for now
-            getKeysFreeResult(&result);
-            return -1;
-        } else if (c->cmd->proc == copyCommand) {
-            //  TODO: handle copy command
-            // handle the dirty keys in the destination db
-            // dont block for now
-            getKeysFreeResult(&result);
-            return -1;
-        }
+    if (amzCommands_isFunctionRWCommand(c)) {
+        // We mark the entire function store dirty if any FUNCTION write command occurs.
+        amzDurableFunctions_handleUncommittedFunctionStore();
+    } else if (commandModifiesFirstKeyOnly(c->cmd)) {
+        int first = c->cmd->legacy_range_key_spec.bs.index.pos;
+        handleUncommittedKeyForClient(c, c->argv[first], c->db);
+    } else {
+        getKeysResult result;
+        initGetKeysResult(&result);
+        int numkeys = getKeysFromCommand(c->cmd, c->argv, c->argc, &result);
+        keyReference *keys = result.keys;
+        if (numkeys > 0) {
+            // Support MOVE command: we need to mark the key as dirty in the destination DB
+            if (c->cmd->proc == moveCommand) {
+                // Track the destination DB ID for MOVE. Here we assume the command is properly
+                // formed and there is no need to validate destination database ID argument
+                // because it should have already been checked in moveCommand() method and
+                // made modifications to the redis data set before reaching this point in code
+                int dest_dbid = -1;
+                if (getIntFromObject(c->argv[2],&dest_dbid) == C_ERR) {
+                    // Unable to parse or invalid destination DB, simply don't block
+                    getKeysFreeResult(&result);
+                    return -1;
+                }
+                // handle MOVE command as it also need to mark the key in the destination DB as dirty
+                handleUncommittedKeyForClient(c, c->argv[keys[0].pos], server.db[dest_dbid]);
+            } else if (c->cmd->proc == copyCommand) {
+                int dest_dbid;
+                if (!amzGetTargetDbIdForCopyCommand(c->argc, c->argv, c->db->id, &dest_dbid)) {
+                    // Unable to parse or invalid destination DB, simply don't block
+                    getKeysFreeResult(&result);
+                    return -1;
+                }
+                if (dest_dbid != c->db->id) {
+                    handleUncommittedKeyForClient(c, c->argv[2], server.db[dest_dbid]);
+                }
+            }
 
-        // Mark all the keys updated by the current command as dirty in the current DB
-        for (int i = 0; i < numkeys; i++) {
-            handleUncommittedKeyForClient(c, c->argv[keys[i].pos], c->db);
+            // Mark all the keys updated by the current command as dirty in the current DB 
+            for (int i = 0; i < numkeys; i++) {
+                handleUncommittedKeyForClient(c, c->argv[keys[i].pos], c->db);
+            }
         }
+        getKeysFreeResult(&result);
     }
-    getKeysFreeResult(&result);
 
     // If we're in a nested call, we do not update the blocking replication offset yet because
     // the replication data is not propagated until after the transaction completes.
-    // Instead, the blocking repl offset will be finalized in postCommandTrackReplOffset
+    // Instead, the blocking repl offset will be finalized in amzDurablePostProcessCommand().
     if (!server.execution_nesting) {
         return server.primary_repl_offset;
     }
 
     return -1;
+}
+
+long long amzDurableFunctions_getBlockingOffset(void) {
+    return func_store_blocking_offset;
 }
 
 /**
@@ -1108,21 +1474,23 @@ static long long getSingleCommandBlockingOffsetForReplicatingCommand(client *c) 
  * @param c Client
  * @return The blocking replication offset or -1 if no blocking need.
  */
+//TODO:merge done
 static long long getSingleCommandBlockingOffsetForNonReplicatingCommand(client *c) {
-    long long blocking_repl_offset = -1;
-    // TODO: handle function, module, etc
-    if (IS_SCRIPT_CALL_READONLY_CMD(c->cmd)) {
+        long long blocking_repl_offset = -1;
+
+    if (amzCommands_isFunctionStoreRWCommand(c)) {
+        // We block any FUNCTION/FCALL commands accessing a dirty function store.
+        blocking_repl_offset = amzDurableFunctions_getBlockingOffset();
+    } else if (IS_SCRIPT_CALL_READONLY_CMD(c->cmd)) {
         // We don't need to indiscriminately block on dirty keys specified in read-only script run commands.
         // We only block on ones that are actually accessed which is handled during the nested calls.
         return -1;
-    }
-    if (c->cmd->flags & (CMD_READONLY | CMD_WRITE)) {
-        // Fast path: if there are no uncommitted keys in this DB and no dirty DB offset, skip
-        if (hashtableSize(c->db->uncommitted_keys) == 0 && c->db->dirty_repl_offset == -1) {
-            return -1;
-        }
+    } else if ((c->cmd->flags & CMD_MODULE) && (c->clientDurabilityInfo.module_cmd_blocking_offset != -1)) {
+        // If it is a module command that set a blocking offset, we use it.
+        blocking_repl_offset = c->clientDurabilityInfo.module_cmd_blocking_offset;
+    } else if (c->cmd->flags & (CMD_READONLY | CMD_WRITE)) {
         // For read/write commands that didn't generate replication data, we would block
-        // on the highest offset of all accessed uncommitted keys and the valkey DBs itself.
+        // on the highest offset of all accessed uncommitted keys and the redis DBs itself.
         // Note some commands categorized as writes can perform read only operations
         // therefore they should undergo the same checks as read-only commands.
         blocking_repl_offset = c->db->dirty_repl_offset;
@@ -1132,13 +1500,13 @@ static long long getSingleCommandBlockingOffsetForNonReplicatingCommand(client *
         keyReference *keys = result.keys;
 
         for (int i = 0; i < numkeys; i++) {
-            sds key = objectGetVal(c->argv[keys[i].pos]);
+            sds keystr = objectGetVal(c->argv[keys[i].pos]);
             // If we try to access an uncommitted key, then block the client
             // until all prior updates on this key have been acknowledged.
             // So here we essentially need to track the biggest offset amongst
             // all the uncommitted keys accessed by the command.
-            const long long offset = syncReplicationPurgeAndGetUncommittedKeyOffset(key, c->db);
-            if (offset > blocking_repl_offset) {
+            long long offset = syncReplicationPurgeAndGetUncommittedKeyOffset(keystr, c->db);
+            if(offset > blocking_repl_offset) {
                 blocking_repl_offset = offset;
             }
         }
@@ -1157,6 +1525,9 @@ static long long getSingleCommandBlockingOffsetForNonReplicatingCommand(client *
  *         behavior because if the primary has no replicas, and it is configured to require replica
  *         to ACK write, then it needs to block writes.
  */
+//TODO:merge getSingleCommandBlockingOffsetForZeroDataLoss
+//TODO:merge NOTDONE
+//TODO:merge handle keyspace
 static long long getSingleCommandBlockingOffsetForConsistentWrites(struct client *c) {
     serverAssert(isPrimarySyncReplicationEnabled());
 
@@ -1166,7 +1537,13 @@ static long long getSingleCommandBlockingOffsetForConsistentWrites(struct client
 
     long long blocking_repl_offset = -1;
 
-    if ((server.primary_repl_offset > server.durability.pre_call_replication_offset) || (server.also_propagate.numops > server.durability.pre_call_num_ops_pending_propagation)) {
+    if (//isAmazonKeySpaceInformationalCommand(c->cmd)
+        // && !isAdminClient(c)
+        (listLength(server.durability.clients_waiting_replica_ack) > 0 || hasUncommittedKeys() || amzDurableFunctions_isFunctionStoreUncommitted())) {
+        // Block keyspace informational command for non-admin client if
+        // has inflight commands
+        blocking_repl_offset = server.primary_repl_offset;
+    } else if ((server.primary_repl_offset > server.durability.pre_call_replication_offset) || (server.also_propagate.numops > pre_call_num_ops_pending_propagation)) {
         blocking_repl_offset = getSingleCommandBlockingOffsetForReplicatingCommand(c);
     } else {
         blocking_repl_offset = getSingleCommandBlockingOffsetForNonReplicatingCommand(c);
@@ -1192,8 +1569,13 @@ void beforeCommandTrackReplOffset(void) {
 
     server.durability.pre_call_replication_offset = server.primary_repl_offset;
     server.durability.pre_call_num_ops_pending_propagation = server.also_propagate.numops;
-    serverLog(LL_DEBUG, "beforeCommandTrackReplOffset hook: pre_call_replication_offset=%lld, pre_call_num_ops_pending_propagation=%d",
-              server.durability.pre_call_replication_offset, server.durability.pre_call_num_ops_pending_propagation);
+}
+
+static bool isClientBlockedByModule(struct client *c) {
+    return c->flag.blocked &&
+           c->bstate &&
+           c->bstate->btype == BLOCKED_MODULE &&
+           !moduleClientIsBlockedOnKeys(c);
 }
 
 /**
@@ -1208,10 +1590,11 @@ void beforeCommandTrackReplOffset(void) {
  *
  * @param c The client executing the valkey command
  */
+//TODO:merge done
 void afterCommandTrackReplOffset(client *c) {
     serverLog(LL_DEBUG, "afterCommandTrackReplOffset entered for command '%s'", c->cmd->declared_name);
     //TODO: blocked by module
-    if (!isPrimarySyncReplicationEnabled() || (c->flag.blocked))
+    if (!isPrimarySyncReplicationEnabled() || (c->flag.blocked && !isClientBlockedByModule(c)))
         return;
 
     // Determine the blocking replication offset for the current command
@@ -1231,6 +1614,8 @@ void afterCommandTrackReplOffset(client *c) {
     handleDatabaseModification(c);
 }
 
+//TODO:merge NOTDONE
+//TODO:merge diff between ALLOW and recover
 char *preScriptCmd(client *c) {
     if (!isSyncReplicationEnabled()) {
         return NULL;
@@ -1249,16 +1634,19 @@ char *preScriptCmd(client *c) {
  * For non-administrative commands that is either read or write, we will track the pre-execution positions
  * in the reply COB of the client and all the connected monitors.
  */
+ //TODO:merge NOTDONE zeroDataLossPreCommandExec
+ //TODO:Mmerge READONLYMASTER
+ //TODO:MERGE ADMINMONITORS
 int preCommandExec(client *c) {
-    serverLog(LL_DEBUG, "preCommandExec hook entered for command '%s'",
-              c->cmd ? c->cmd->declared_name : "NULL");
-    if (!isSyncReplicationEnabled()) {
-        serverLog(LL_DEBUG, "preCommandExec hook: durability not enabled, allowing");
-        return CMD_FILTER_ALLOW;
-    }
-
     // Reset the client current command replication offset
     c->clientDurabilityInfo.current_command_repl_offset = -1;
+     // Reset the client module cmd blocking offset
+    c->clientDurabilityInfo.module_cmd_blocking_offset = -1;
+
+    // If a read-only master, no writes should have been allowed to reach this point
+    //bool is_readonly_master = amzModuleReplication_getAndUpdateReadonlyMaster();
+    // serverAssert(!(is_readonly_master && (c->cmd->flags & CMD_WRITE)));
+
 
     if (shouldRejectCommandWithUncommittedData(c)) {
         serverAssert(!(c->cmd->flags & CMD_WRITE));
@@ -1273,7 +1661,17 @@ int preCommandExec(client *c) {
         // Track the pre-execution position in the client reply COB
         trackCommandPreExecutionPosition(c);
 
-        // todo: handle monitors
+       
+        if (isCommandReplicatedToMonitors()) {
+            // Track the byte position in each monitor's reply COB prior to command replication
+            listNode *ln;
+            listIter li;
+            listRewind(server.monitors,&li);
+            while((ln = listNext(&li))) {
+                client *monitor = ln->value;
+                trackCommandPreExecutionPosition(monitor);
+            }
+        }
     }
 
     server.durability.pre_command_replication_offset = server.primary_repl_offset;
@@ -1281,10 +1679,18 @@ int preCommandExec(client *c) {
 }
 
 
+void amzDurableFunctions_updateBlockingOffsetForWrite(long long blocking_repl_offset) {
+    if (processed_func_write_in_transaction) {
+        func_store_blocking_offset = blocking_repl_offset;
+        processed_func_write_in_transaction = false;
+    }
+}
+
 /**
  * Marks keys, databases, and the function store dirty at the current
  * replication offset if they were updated during a transaction.
  */
+//TODO:merge DONE
 static void processPendingUncommittedData(long long blocking_repl_offset) {
     // Process the dirty keys in the current command block if needed
     if (listLength(pending_uncommitted_keys) > 0) {
@@ -1298,10 +1704,69 @@ static void processPendingUncommittedData(long long blocking_repl_offset) {
         }
     }
 
+    // Process the dirty databases for the current command block if needed
+    if (all_dbs_dirty_in_current_cmd) {
+        for (int i = 0; i < server.dbnum; i++) {
+            if (server.db[i] != NULL) {
+                server.db[i]->dirty_repl_offset = blocking_repl_offset;
+            }
+        }
+        all_dbs_dirty_in_current_cmd = false;
+    } else if (listLength(pending_uncommitted_dbs) > 0) {
+        listIter li;
+        listNode *db_node;
+        listRewind(pending_uncommitted_dbs, &li);
+        while ((db_node = listNext(&li)) != NULL) {
+            serverDb *db = listNodeValue(db_node);
+            db->dirty_repl_offset = blocking_repl_offset;
+            listDelNode(pending_uncommitted_dbs, db_node);
+        }
+    }
+
     serverAssert(listLength(pending_uncommitted_keys) == 0);
+    serverAssert(listLength(pending_uncommitted_dbs) == 0);
     serverAssert(all_dbs_dirty_in_current_cmd == false);
+
+    // Mark the function store dirty at the current replication offset if a 
+    // Redis Functions write command occurred.
+    amzDurableFunctions_updateBlockingOffsetForWrite(blocking_repl_offset);
 }
 
+/**
+ * Helper method to update all pending tasks for replicas ACK. This will update each
+ * pending task with the current server.primary_repl_offset and putting them into
+ * the official tasks_waiting_replica_ack list.
+ */
+//TODO:merge not done, why delay?
+void updateAndCertifyPendingTasksForReplicasAck(void) {
+    listIter li;
+    listNode *ln;
+    for (int i = 0; i < AMZ_TASK_TYPE_MAX; i++) {
+        // Traverse the entire list of pending tasks and update them
+        listRewind(server.durability.pending_tasks_waiting_replica_ack[i], &li);
+        while ((ln = listNext(&li))) {
+            taskWaitingAck *task = listNodeValue(ln);
+            // Assert that the offset value is not initialized yet
+            serverAssert(task->offset == 0);
+            task->offset = server.primary_repl_offset;
+            // Send the module notifications for those modules that opted-in for notifications
+            // in ZDL via module option AMZN_VALKEYMODULE_OPTIONS_DELAY_KEYSPACE_NOTIFICATION_FOR_ZDL
+            if (task->type == AMZ_KEYSPACE_NOTIFY_TASK) {
+                moduleNotifyKeyspaceEvent(
+                  /*type*/  (intptr_t) task->argv[0],
+                  /*event*/ (char *)task->argv[1],
+                  /*key*/   (robj *)task->argv[2],
+                  /*dbid*/  (intptr_t) task->argv[3]);
+            }
+        }
+        // Append all elements in the pending tasks list at the tail of the regular
+        // tasks list, and empty all items in the pending tasks list
+        if (listLength(server.durability.pending_tasks_waiting_replica_ack[i]) > 0) {
+            listJoin(server.durability.tasks_waiting_replica_ack[i], server.durability.pending_tasks_waiting_replica_ack[i]);
+        }
+        serverAssert(listLength(server.durability.pending_tasks_waiting_replica_ack[i]) == 0);
+    }
+}
 
 /**
  * Perform post-processing after command execution for a given client.
@@ -1315,13 +1780,8 @@ static void processPendingUncommittedData(long long blocking_repl_offset) {
  *
  * @param c client
  */
+//TODO:merge DONE
 void postCommandExec(client *c) {
-    if (!isPrimarySyncReplicationEnabled()) {
-        return;
-    }
-    serverLog(LL_DEBUG, "postCommandExec hook entered for command '%s'",
-              c->cmd ? c->cmd->declared_name : "NULL");
-    // If the command is NULL or is in a MULTI/EXEC block, then we skip
     if(c->cmd == NULL || c->flag.multi) {
         return;
     }
@@ -1329,9 +1789,6 @@ void postCommandExec(client *c) {
     // Block the client (TODO:monitors) based on the required replication offset
     // for the current command.
     long long blocking_repl_offset = c->clientDurabilityInfo.current_command_repl_offset;
-
-
-    // TODO CMD_MAY_REPLICATE
 
     // If the client ran a transaction or a script that included write commands, the
     // blocking offset was not accurately set in afterCommandTrackReplOffset() so we update it here.
@@ -1368,47 +1825,54 @@ void postCommandExec(client *c) {
     processPendingUncommittedData(server.primary_repl_offset);
 
     blockClientAndMonitorsOnReplOffset(c, blocking_repl_offset);
+
+    // Update the pending replication ACK tasks and certify them
+    updateAndCertifyPendingTasksForReplicasAck();
 }
 
 /**
  * Function used to initialize the durability datastructures.
  */
+//TODO:merge DONE amzDurableInit
 void syncReplicationInit(void) {
+    serverLog(LL_DEBUG, "Initializing DKT");
+
+    // Initialize synchronous replication
+    pending_uncommitted_keys = listCreate();
+    listSetFreeMethod(pending_uncommitted_keys, pendingUncommittedKeyDestructor);
+    pending_uncommitted_dbs = listCreate();
+    all_dbs_dirty_in_current_cmd = false;
+
+    // Have to init the handlers before using them.
+    initTaskTypes();
+    server.durability.replica_offsets_size = 0;
+    server.durability.replica_offsets = NULL;
     server.durability.previous_acked_offset = -1;
     server.durability.curr_db_scan_idx = 0;
     server.durability.clients_waiting_replica_ack = listCreate();
-    server.durability.stat_read_blocked_count = 0;
-    server.durability.stat_write_blocked_count = 0;
-    if (pending_uncommitted_keys == NULL) {
-        pending_uncommitted_keys = listCreate();
-        listSetFreeMethod(pending_uncommitted_keys, pendingUncommittedKeyDestructor);
+    for (int i=0; i<AMZ_TASK_TYPE_MAX; i++) {
+        server.durability.tasks_waiting_replica_ack[i] = listCreate();
+        server.durability.pending_tasks_waiting_replica_ack[i] = listCreate();
+        listSetFreeMethod(server.durability.tasks_waiting_replica_ack[i],
+                taskTypes[i].destroyTask);
+        listSetFreeMethod(server.durability.pending_tasks_waiting_replica_ack[i],
+                taskTypes[i].destroyTask);
     }
+    server.durability.clients_blocked_on_sync_write = 0;
+    server.durability.clients_unblocked_on_sync_write = 0;
+    server.durability.clients_disconnected_before_unblocking_on_sync_write = 0;
+    server.durability.read_responses_blocked_on_sync_write = 0;
+    server.durability.write_responses_blocked_on_sync_write = 0;
+    server.durability.other_responses_blocked_on_sync_write = 0;
+    server.durability.read_responses_unblocked_on_sync_write = 0;
+    server.durability.write_responses_unblocked_on_sync_write = 0;
+    server.durability.other_responses_unblocked_on_sync_write = 0;
+    server.durability.read_responses_blocked_on_sync_write_cumulative_time_us = 0;
+    server.durability.write_responses_blocked_on_sync_write_cumulative_time_us = 0;
+    server.durability.other_responses_blocked_on_sync_write_cumulative_time_us = 0;
 
     /* Register built-in durability providers (replica + AOF) */
     registerBuiltinDurabilityProviders();
-}
-
-/**
- * Function used to clean up the sync replication datastructures on server shutdown.
- */
-void syncReplicationCleanup(void) {
-    serverLog(LL_DEBUG, "Cleanup reply blocking structures");
-    server.durability.replica_offsets_size = 0;
-    zfree(server.durability.replica_offsets);
-
-    if (server.durability.clients_waiting_replica_ack != NULL) {
-        listRelease(server.durability.clients_waiting_replica_ack);
-        server.durability.clients_waiting_replica_ack = NULL;
-    }
-    if (pending_uncommitted_keys != NULL) {
-        listRelease(pending_uncommitted_keys);
-        pending_uncommitted_keys = NULL;
-    }
-
-    /* Reset the durability provider registry so it can be re-initialized */
-    num_durability_providers = 0;
-
-    clearAllUncommittedKeys();
 }
 
 /**
@@ -1421,8 +1885,43 @@ static void releaseReplicaOffsetBuffer(void) {
 }
 
 /**
+ * Function used to clean up the sync replication datastructures on server shutdown.
+ */
+//TODO:merge NOTDONE
+//TODO: make sure the clean up is complete compare amzDurableCleanup
+void syncReplicationCleanup(void) { 
+    releaseReplicaOffsetBuffer();
+
+    if (server.durability.clients_waiting_replica_ack != NULL) {
+        listRelease(server.durability.clients_waiting_replica_ack);
+        server.durability.clients_waiting_replica_ack = NULL;
+    }
+    if (pending_uncommitted_keys != NULL) {
+        listRelease(pending_uncommitted_keys);
+        pending_uncommitted_keys = NULL;
+    }
+
+    // cleanup tasks waiting for replica ACK
+    for (int i=0; i<AMZ_TASK_TYPE_MAX; i++) {
+        listRelease(server.durability.tasks_waiting_replica_ack[i]);
+        server.durability.tasks_waiting_replica_ack[i] = NULL;
+        listRelease(server.durability.pending_tasks_waiting_replica_ack[i]);
+        server.durability.pending_tasks_waiting_replica_ack[i] = NULL;
+    }
+
+    
+    /* Reset the durability provider registry so it can be re-initialized */
+    num_durability_providers = 0;
+
+    clearAllUncommittedKeys();
+}
+
+
+
+/**
  * Utility function to disconnect and free clients waiting for replica ACK
  */
+//TODO:merge done
 static void freeClientsWaitingAck(const durable_t *durability) {
     listIter li;
     listNode *ln;
@@ -1441,6 +1940,7 @@ static void freeClientsWaitingAck(const durable_t *durability) {
  * clients waiting for replica ACK. If sync replication is disabled, all blocked responses and keyspace
  * notifications will be flushed for these clients, whose connections to primary will still be maintained.
  */
+//TODO:merge done
 static void syncReplicationResetPrimaryState(bool is_free_clients_needed) {
     // Release buffer we use for replica offsets
     releaseReplicaOffsetBuffer();
@@ -1455,12 +1955,18 @@ static void syncReplicationResetPrimaryState(bool is_free_clients_needed) {
         // Make sure there is no clients waiting for replica ACK
         serverAssert(listLength(server.durability.clients_waiting_replica_ack) == 0);
     }
+     // Empty all the lists for blocked tasks
+    for (int i=0; i<AMZ_TASK_TYPE_MAX; i++) {
+        listEmpty(server.durability.tasks_waiting_replica_ack[i]);
+        listEmpty(server.durability.pending_tasks_waiting_replica_ack[i]);
+    }
 }
 
 /**
  * Clear the sync replication attributes specific to the primary.
  * This method is invoked when a master node becomes a replica.
  */
+//TODO:merge done
 void syncReplicationClearPrimaryState(void) {
     if (!isSyncReplicationEnabled()) return;
 
@@ -1472,6 +1978,7 @@ void syncReplicationClearPrimaryState(void) {
 /**
  * Generate INFO string for sync replication stats.
  */
+//TODO:aof clean up
 sds genSyncReplicationInfoString(sds info) {
     if (!isSyncReplicationEnabled()) {
         info = sdscatprintf(info, "sync_replication_enabled:0\r\n");
@@ -1486,8 +1993,8 @@ sds genSyncReplicationInfoString(sds info) {
         "sync_repl_uncommitted_keys:%llu\r\n"
         "sync_repl_previous_acked_offset:%lld\r\n"
         "sync_repl_primary_repl_offset:%lld\r\n",
-        server.durability.stat_read_blocked_count,
-        server.durability.stat_write_blocked_count,
+        server.durability.read_responses_blocked_on_sync_write,
+        server.durability.write_responses_blocked_on_sync_write,
         listLength(server.durability.clients_waiting_replica_ack),
         getNumberOfUncommittedKeys(),
         server.durability.previous_acked_offset,
@@ -1500,6 +2007,7 @@ sds genSyncReplicationInfoString(sds info) {
  * Reset related resources when disabling synchronous replication
  * This method is invoked when user turns off durability via config set command
  */
+//TODO:merge DONE
 void syncReplicationReset(void) {
     if (isSyncReplicationEnabled()) {
         // To enable sync replication, we update the pre-command offset so that the CONFIG SET command

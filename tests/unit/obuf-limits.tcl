@@ -284,28 +284,37 @@ start_server {tags {"obuf-limits external:skip logreqres:skip"}} {
         $rd client setname copy_avoid_soft
         assert {[$rd read] eq "OK"}
         
-        # Send GETs to exceed soft limit and keep it there
+        # Send GETs to exceed soft limit
+        # With copy avoidance, tracking happens async in I/O threads
         set omem 0
+        set extra_sends 0
         while {1} {
             $rd get mediumkey
             $rd flush
             after 10
             set clients [r client list]
+            set found 0
             foreach client_info [split $clients "\r\n"] {
                 if {[string match "*name=copy_avoid_soft*" $client_info]} {
                     regexp {omem=([0-9]+)} $client_info _ omem
+                    set found 1
                     break
                 }
             }
-            if {$omem >= 150000} break
+            if {!$found} break
+            
+            if {$omem >= 150000} {
+                incr extra_sends
+                if {$extra_sends >= 5} break
+            }
         }
         
         assert {[lsearch [split [r client list] "\r\n"] *name=copy_avoid_soft*] != -1}
         
-        wait_for_condition 30 100 {
+        wait_for_condition 50 100 {
             [lsearch [split [r client list] "\r\n"] *name=copy_avoid_soft*] == -1
         } else {
-            fail "Client not disconnected after soft limit timeout"
+            fail "Client not disconnected after soft limit timeout (omem=$omem)"
         }
     }
 

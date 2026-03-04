@@ -80,6 +80,11 @@ int main(int argc, char **argv) {
     // The following line must be executed to initialize GoogleTest before running the tests.
     ::testing::InitGoogleMock(&argc, argv);
 
+    // Set death test style to threadsafe when running under Valgrind
+    if (valgrind) {
+        GTEST_FLAG_SET(death_test_style, "threadsafe");
+    }
+
     test_argc = argc;
     test_argv = argv;
     int result = RUN_ALL_TESTS();

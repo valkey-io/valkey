@@ -420,10 +420,10 @@ typedef struct ValkeyModuleEventListener {
     ValkeyModuleEventCallback callback;
 } ValkeyModuleEventListener;
 
-list *ValkeyModule_EventListeners;               /* Global list of all the active events. */
-static int commandResultSuccessListeners = 0;    /* Count of modules listening for command result success. */
-static int commandResultFailureListeners = 0;    /* Count of modules listening for command result failure. */
-static int commandResultACLDeniedListeners = 0;  /* Count of modules listening for command result ACL denied. */
+list *ValkeyModule_EventListeners;              /* Global list of all the active events. */
+static int commandResultSuccessListeners = 0;   /* Count of modules listening for command result success. */
+static int commandResultFailureListeners = 0;   /* Count of modules listening for command result failure. */
+static int commandResultACLDeniedListeners = 0; /* Count of modules listening for command result ACL denied. */
 
 /* Data structures related to the module users */
 

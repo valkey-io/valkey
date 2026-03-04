@@ -1440,7 +1440,7 @@ void addReplyBulk(client *c, robj *obj) {
             /* RESP encodes bulk strings as $<length>\r\n<data>\r\n */
             size_t reply_len = (num_len + 3) + str_len + 2;
             c->net_output_bytes_curr_cmd += reply_len;
-            
+
             /* Store reply_len and track for COB accounting */
             if (c->last_header) {
                 c->last_header->reply_len = reply_len;
@@ -2717,7 +2717,7 @@ static int writevToClient(client *c) {
             if (o->flag.buf_encoded) {
                 trackBufReferences(o->buf, used, c);
             }
-            
+
             addBufferToReplyIOV(o->flag.buf_encoded, o->buf, used, &reply, &buf_metadata[bufcnt]);
             if (!buf_metadata[bufcnt].data_len) break;
             bufcnt++;
@@ -2823,7 +2823,7 @@ void resetLastWrittenBuf(client *c) {
  * This is called from I/O thread before writing to account for actual reply sizes. */
 static void trackBufReferences(char *buf, size_t bufpos, client *c) {
     if (!c) return;
-    
+
     char *ptr = buf;
     while (ptr < buf + bufpos) {
         payloadHeader *header = (payloadHeader *)ptr;

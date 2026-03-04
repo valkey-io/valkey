@@ -1,6 +1,6 @@
 {
     "SRANDMEMBER": {
-        "summary": "Get one or multiple random members from a set",
+        "summary": "Gets one or multiple random members from a set.",
         "complexity": "Without the count argument O(1), otherwise O(N) where N is the absolute value of the passed count.",
         "group": "set",
         "since": "1.0.0",

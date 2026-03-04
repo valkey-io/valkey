@@ -1,6 +1,6 @@
 {
     "GETSLOTMIGRATIONS": {
-        "summary": "Get the status of ongoing and recently finished slot import and export operations.",
+        "summary": "Gets the status of ongoing and recently finished slot import and export operations.",
         "complexity": "O(N), where N is the number of active slot import and export jobs.",
         "group": "cluster",
         "since": "9.0.0",

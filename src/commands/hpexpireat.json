@@ -1,6 +1,6 @@
 {
     "HPEXPIREAT": {
-        "summary": "Set expiration time on hash field.",
+        "summary": "Sets expiration time on hash field.",
         "complexity": "O(N) where N is the number of specified fields.",
         "group": "hash",
         "since": "9.0.0",

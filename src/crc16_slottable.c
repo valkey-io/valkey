@@ -6,15 +6,13 @@
 
 #include "crc16_slottable.h"
 
-typedef char crc16_alphastring[4];
-
 /* A table of the shortest possible alphanumeric string that is mapped by crc16
  * to any given cluster slot.
  *
  * The array indexes are slot numbers, so that given a desired slot, this string
  * is guaranteed to make the cluster route a request to the shard holding this slot.
  */
-const crc16_alphastring crc16_slot_table[] = {
+const char crc16_slot_table[][4] = {
     "06S", "Qi", "5L5", "4Iu", "4gY", "460", "1Y7", "1LV", "0QG", "ru", "7Ok", "4ji", "4DE", "65n", "2JH", "I8", "F9", "SX", "7nF", "4KD",
     "4eh", "6PK", "2ke", "1Ng", "0Sv", "4L", "491", "4hX", "4Ft", "5C4", "2Hy", "09R", "021", "0cX", "4Xv", "6mU", "6Cy", "42R", "0Mt", "nF",
     "cv", "1Pe", "5kK", "6NI", "74L", "4UF", "0nh", "MZ", "2TJ", "0ai", "4ZG", "6od", "6AH", "40c", "0OE", "lw", "aG", "0Bu", "5iz", "6Lx",
@@ -835,7 +833,3 @@ const crc16_alphastring crc16_slot_table[] = {
     "0fX", "Ej", "5X6", "5MW", "4PF", "6ee", "HZ", "0kh", "0ED", "fv", "6KI", "5nK", "6UK", "54A", "1Kg", "xt", "VX", "C9", "4ND", "7kF",
     "5F4", "4Ct", "0xZ", "2My", "1L", "0Vv", "4mX", "4x9", "430", "4bY", "0Yw", "zE", "Ti", "03S", "4Lu", "5I5", "60n", "4AE", "L8", "YY",
     "wu", "0TG", "4oi", "6ZJ"};
-
-const char *clusterGetSlotHashtag(int slot) {
-    return crc16_slot_table[slot];
-}

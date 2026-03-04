@@ -1651,11 +1651,8 @@ static const char *clusterscanFingerprint(void) {
     static char cached_fp[7];
     if (cached_fp[0]) return cached_fp;
 
-    uint8_t *seed = hashtableGetHashFunctionSeed();
-    uint64_t seed_low, seed_high;
-    memcpy(&seed_low, seed, 8);
-    memcpy(&seed_high, seed + 8, 8);
-    uint64_t hash = wangHash64(seed_low ^ seed_high);
+    uint64_t *seed = (uint64_t *)hashtableGetHashFunctionSeed();
+    uint64_t hash = wangHash64(seed[0] ^ seed[1]);
 
     /* Truncating to 32 bit instead of 64 bit */
     uint32_t fp = (uint32_t)hash;
@@ -1765,7 +1762,7 @@ void clusterscanCommand(client *c) {
             slot = 0;
         }
 
-        sds new_cursor = sdscatfmt(sdsempty(), "0-{%s}-0", clusterGetSlotHashtag(slot));
+        sds new_cursor = sdscatfmt(sdsempty(), "0-{%s}-0", crc16_slot_table[slot]);
 
         addReplyArrayLen(c, 2);
         addReplyBulkSds(c, new_cursor);
@@ -1788,7 +1785,7 @@ void clusterscanCommand(client *c) {
         return;
     }
     /* Scan the slot using scanGenericCommand */
-    sds cursor_prefix = sdscatfmt(sdsempty(), "%s-{%s}-", clusterscanFingerprint(), clusterGetSlotHashtag(slot));
+    sds cursor_prefix = sdscatfmt(sdsempty(), "%s-{%s}-", clusterscanFingerprint(), crc16_slot_table[slot]);
     sds finished_cursor_prefix = NULL;
 
     /* If SLOT argument was provided, don't advance to next slot then return 0 cursor.
@@ -1800,7 +1797,7 @@ void clusterscanCommand(client *c) {
         if (next_slot >= CLUSTER_SLOTS) {
             finished_cursor_prefix = sdsnew("");
         } else {
-            finished_cursor_prefix = sdscatfmt(sdsempty(), "0-{%s}-", clusterGetSlotHashtag(next_slot));
+            finished_cursor_prefix = sdscatfmt(sdsempty(), "0-{%s}-", crc16_slot_table[next_slot]);
         }
     }
 

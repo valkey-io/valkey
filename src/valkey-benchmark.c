@@ -582,7 +582,7 @@ static void setClusterKeyHashTag(client c) {
      * the updated_slots_count array will be already NULL. */
     if (is_updating_slots) updateClusterSlotsConfiguration();
     int slot = node->slots[rand() % node->slots_count];
-    const char *tag = clusterGetSlotHashtag(slot);
+    const char *tag = crc16_slot_table[slot];
     int taglen = strlen(tag);
     size_t i;
     for (i = 0; i < c->staglen; i++) {

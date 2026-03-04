@@ -1350,7 +1350,11 @@ user *tlsGetPeerUser(connection *conn_, sds *cert_username) {
         return NULL;
     }
 
+#if OPENSSL_VERSION_NUMBER >= 0x30000000L
     X509 *cert = SSL_get0_peer_certificate(conn->ssl);
+#else
+    X509 *cert = SSL_get_peer_certificate(conn->ssl);
+#endif
     if (!cert) return NULL;
 
     user *result = NULL;
@@ -1381,6 +1385,10 @@ user *tlsGetPeerUser(connection *conn_, sds *cert_username) {
     default:
         break;
     }
+
+#if OPENSSL_VERSION_NUMBER < 0x30000000L
+    X509_free(cert);
+#endif
 
     return result;
 }

@@ -1,16 +1,20 @@
 #include "../fmacros.h"
 #include "../reply_blocking.h"
-#include "test_help.h"
 #include "../server.h"
-#include <stdio.h>
+#include "test_help.h"
 #include <limits.h>
+#include <stdio.h>
 #include <string.h>
 
 void blockLastResponseIfExist(struct client *c, long long blocked_offset);
 
 /* Custom test provider for test_durabilityProviderSystem */
-static bool testCustomProviderIsEnabled(void) { return true; }
-static long long testCustomProviderGetAckedOffset(void) { return 50; }
+static bool testCustomProviderIsEnabled(void) {
+    return true;
+}
+static long long testCustomProviderGetAckedOffset(void) {
+    return 50;
+}
 durabilityProvider testCustomProvider = {
     .name = "custom-test",
     .isEnabled = testCustomProviderIsEnabled,
@@ -628,7 +632,7 @@ int test_durabilityProviderSystem(int argc, char **argv, int flags) {
     /* -- Test 1: Built-in providers are registered after syncReplicationInit -- */
     syncReplicationInit();
 
-    /* With AOF off and replicaAcksForConsensus()==0, no provider should be enabled */
+    /* With AOF off, no built-in provider should be enabled */
     server.aof_state = AOF_OFF;
     server.aof_fsync = AOF_FSYNC_EVERYSEC;
     TEST_ASSERT(anyDurabilityProviderEnabled() == false);

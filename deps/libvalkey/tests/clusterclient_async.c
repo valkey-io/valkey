@@ -242,6 +242,7 @@ void disconnectCallback(const valkeyAsyncContext *ac, int status) {
 int main(int argc, char **argv) {
     int use_cluster_nodes = 0;
     int show_connection_events = 0;
+    int select_db = 0;
 
     int optind;
     for (optind = 1; optind < argc && argv[optind][0] == '-'; optind++) {
@@ -253,6 +254,13 @@ int main(int argc, char **argv) {
             show_connection_events = 1;
         } else if (strcmp(argv[optind], "--blocking-initial-update") == 0) {
             blocking_initial_update = 1;
+        } else if (strcmp(argv[optind], "--select-db") == 0) {
+            if (++optind < argc) /* Need an additional argument */
+                select_db = atoi(argv[optind]);
+            if (select_db == 0) {
+                fprintf(stderr, "Missing or faulty argument for --select-db\n");
+                exit(1);
+            }
         } else {
             fprintf(stderr, "Unknown argument: '%s'\n", argv[optind]);
         }
@@ -260,7 +268,8 @@ int main(int argc, char **argv) {
 
     if (optind >= argc) {
         fprintf(stderr,
-                "Usage: clusterclient_async [--use-cluster-nodes] HOST:PORT\n");
+                "Usage: clusterclient_async [--events] [--connection-events] "
+                "[--use-cluster-nodes] [--select-db NUM] HOST:PORT\n");
         exit(1);
     }
     const char *initnode = argv[optind];
@@ -282,6 +291,9 @@ int main(int argc, char **argv) {
     if (show_connection_events) {
         options.async_connect_callback = connectCallback;
         options.async_disconnect_callback = disconnectCallback;
+    }
+    if (select_db > 0) {
+        options.select_db = select_db;
     }
     valkeyClusterOptionsUseLibevent(&options, base);
 

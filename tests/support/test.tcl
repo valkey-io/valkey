@@ -215,6 +215,7 @@ proc test {name code {okpattern undefined} {tags {}}} {
     }
 
     set old_singledb $::singledb
+    check_subtags $tags
     set tags [concat $::tags $tags]
     if {![tags_acceptable $tags err]} {
         incr ::num_aborted

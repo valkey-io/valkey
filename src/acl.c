@@ -192,6 +192,7 @@ static void ACLResetFirstArgs(aclSelector *selector);
 static void ACLAddAllowedFirstArg(aclSelector *selector, unsigned long id, const char *sub);
 static void ACLFreeLogEntry(void *le);
 static int ACLSetSelector(aclSelector *selector, const char *op, size_t oplen);
+static struct serverCommand *ACLLookupCommand(const char *name);
 
 /* The length of the string representation of a hashed password. */
 #define HASH_PASSWORD_LEN (SHA256_BLOCK_SIZE * 2)
@@ -507,11 +508,7 @@ void ACLFreeUserAndKillClients(user *u) {
             clientSetUser(c, DefaultUser, 0);
             /* We will write replies to this client later, so we can't
              * close it directly even if async. */
-            if (c == server.current_client) {
-                c->flag.close_after_command = 1;
-            } else {
-                freeClientAsync(c);
-            }
+            freeClientOrCloseLater(c, 1);
         }
     }
     ACLFreeUser(u);
@@ -730,6 +727,57 @@ static int ACLSetSelectorCategory(aclSelector *selector, const char *category, i
     /* Set the actual command bits on the selector. */
     ACLSetSelectorCommandBitsForCategory(server.orig_commands, selector, cflag, allow);
     return C_OK;
+}
+
+/* Check if any ACL user has command rules referencing the specified module.
+ * If rule_out is not NULL, it will be set to a duplicate of the first matching
+ * rule.
+ * Returns 1 if any rules are found, 0 otherwise. */
+int ACLModuleHasCommandRules(const struct ValkeyModule *module, sds *rule_out) {
+    raxIterator ri;
+    raxStart(&ri, Users);
+    raxSeek(&ri, "^", NULL, 0);
+    while (raxNext(&ri)) {
+        user *u = ri.data;
+        listIter li;
+        listNode *ln;
+        listRewind(u->selectors, &li);
+        while ((ln = listNext(&li)) != NULL) {
+            aclSelector *selector = listNodeValue(ln);
+            if (sdslen(selector->command_rules) == 0) continue;
+
+            int argc = 0;
+            sds *argv = sdssplitargs(selector->command_rules, &argc);
+            if (!argv) continue;
+
+            for (int i = 0; i < argc; i++) {
+                sds rule = argv[i];
+                if (rule[0] != '+' && rule[0] != '-') continue;
+                if (rule[1] == '@') continue;
+
+                struct serverCommand *cmd = ACLLookupCommand(rule + 1);
+                if (!cmd) {
+                    const char *subsep = strchr(rule + 1, '|');
+                    if (subsep) {
+                        size_t base_len = (size_t)(subsep - (rule + 1));
+                        sds base = sdsnewlen(rule + 1, base_len);
+                        cmd = ACLLookupCommand(base);
+                        sdsfree(base);
+                    }
+                }
+                if (!cmd || !(cmd->flags & CMD_MODULE)) continue;
+                if (moduleFromCommand(cmd) != module) continue;
+
+                if (rule_out) *rule_out = sdsdup(rule);
+                sdsfreesplitres(argv, argc);
+                raxStop(&ri);
+                return 1;
+            }
+            sdsfreesplitres(argv, argc);
+        }
+    }
+    raxStop(&ri);
+    return 0;
 }
 
 /* This function returns an SDS string representing the specified selector ACL
@@ -1838,10 +1886,11 @@ static int ACLSelectorCheckCmd(aclSelector *selector,
             zfree(dbids);
         }
     } else if ((cmd->flags & CMD_ALL_DBS) && !(selector->flags & SELECTOR_FLAG_ALLDBS)) {
-        /* Intset stores unique IDs, if the count doesn't equal dbnum,
-         * the selector doesn't have access to all databases. */
-        if (!selector->dbs || intsetLen(selector->dbs) != (uint32_t)server.dbnum) {
-            return ACL_DENIED_DB;
+        for (int i = 0; i < server.dbnum; i++) {
+            if (!ACLSelectorCanAccessDb(selector, i)) {
+                if (keyidxptr) *keyidxptr = 0;
+                return ACL_DENIED_DB;
+            }
         }
     } else if (shouldRestrictCmd(cmd) && !ACLSelectorCanAccessDb(selector, dbid)) {
         if (keyidxptr) *keyidxptr = 0;
@@ -2190,7 +2239,9 @@ static void ACLKillPubsubClientsIfNeeded(user *new, user *original) {
     while ((ln = listNext(&li)) != NULL) {
         client *c = listNodeValue(ln);
         if (c->user != original) continue;
-        if (ACLShouldKillPubsubClient(c, channels)) freeClient(c);
+        if (ACLShouldKillPubsubClient(c, channels)) {
+            freeClientOrCloseLater(c, 0);
+        }
     }
 
     listRelease(channels);
@@ -2619,7 +2670,7 @@ static sds ACLLoadFromFile(const char *filename) {
             /* When the new channel list is NULL, it means the new user's channel list is a superset of the old user's
              * list. */
             if (!new_user || (channels && ACLShouldKillPubsubClient(c, channels))) {
-                freeClient(c);
+                freeClientOrCloseLater(c, 0);
                 continue;
             }
             c->user = new_user;

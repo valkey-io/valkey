@@ -351,6 +351,13 @@ start_server {tags {"protocol hello logreqres:skip"}} {
 }
 
 start_server {tags {"regression"}} {
+    test "Regression for a crash on zero-length multibulk" {
+        reconnect
+        r write "*0\r\nPING\r\n"
+        r flush
+        assert_equal "PONG" [r ping]
+    }
+
     test "Regression for a crash with blocking ops and pipelining" {
         set rd [valkey_deferring_client]
         set fd [r channel]

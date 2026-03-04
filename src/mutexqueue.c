@@ -134,7 +134,6 @@ void *mutexQueuePop(mutexQueue *theQueue, bool blocking) {
     return value;
 }
 
-
 /* Note: If 'blocking' is true, this method will block until an item is available.  */
 fifo *mutexQueuePopAll(mutexQueue *theQueue, bool blocking) {
     mutexQueue *mq = theQueue;

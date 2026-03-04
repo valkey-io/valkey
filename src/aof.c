@@ -1102,7 +1102,7 @@ static void processAofIOThreadFlushResult(void) {
             server.aof_last_write_status = C_OK;
         }
         atomic_store_explicit(&server.aof_io_flush_state, AOF_IO_FLUSH_IDLE, memory_order_release);
-        
+
         /* Notify sync replication that AOF fsync completed so blocked clients can be unblocked */
         postAofFsync();
         return;

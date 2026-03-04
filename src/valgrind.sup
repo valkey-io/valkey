@@ -24,3 +24,12 @@
    fun:ztrymalloc_usable
    fun:ztrymalloc
 }
+
+{
+   <bio_job_in_flight_at_exit>
+   Memcheck:Leak
+   match-leak-kinds: definite
+   fun:malloc
+   ...
+   fun:allocBioJob
+}

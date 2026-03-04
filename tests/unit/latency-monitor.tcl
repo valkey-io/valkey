@@ -140,8 +140,8 @@ tags {"needs:debug"} {
         # These numbers are taken from the "Test latency events logging" test.
         # (debug sleep 0.3) and (debug sleep 0.5), using range to prevent timing issue.
         regexp "command - high (.*?) ms, low (.*?) ms" $res -> high low
-        assert_morethan_equal $high 500
-        assert_morethan_equal $low 300
+        assert_range $high 450 550
+        assert_range $low 250 350
     }
 
     r config set latency-monitor-threshold $old_threshold_value

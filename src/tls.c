@@ -1350,7 +1350,11 @@ user *tlsGetPeerUser(connection *conn_, sds *cert_username) {
         return NULL;
     }
 
+#if OPENSSL_VERSION_NUMBER >= 0x30000000L
     X509 *cert = SSL_get0_peer_certificate(conn->ssl);
+#else
+    X509 *cert = SSL_get_peer_certificate(conn->ssl);
+#endif
     if (!cert) return NULL;
 
     user *result = NULL;
@@ -1381,6 +1385,10 @@ user *tlsGetPeerUser(connection *conn_, sds *cert_username) {
     default:
         break;
     }
+
+#if OPENSSL_VERSION_NUMBER < 0x30000000L
+    X509_free(cert);
+#endif
 
     return result;
 }
@@ -1853,12 +1861,19 @@ static sds connTLSGetPeerCert(connection *conn_) {
     tls_connection *conn = (tls_connection *)conn_;
     if ((conn_->type != connectionTypeTls()) || !conn->ssl) return NULL;
 
+#if OPENSSL_VERSION_NUMBER >= 0x30000000L
+    X509 *cert = SSL_get0_peer_certificate(conn->ssl);
+#else
     X509 *cert = SSL_get_peer_certificate(conn->ssl);
+#endif
     if (!cert) return NULL;
 
     BIO *bio = BIO_new(BIO_s_mem());
     if (bio == NULL || !PEM_write_bio_X509(bio, cert)) {
         if (bio != NULL) BIO_free(bio);
+#if OPENSSL_VERSION_NUMBER < 0x30000000L
+        X509_free(cert);
+#endif
         return NULL;
     }
 
@@ -1866,6 +1881,10 @@ static sds connTLSGetPeerCert(connection *conn_) {
     long long bio_len = BIO_get_mem_data(bio, &bio_ptr);
     sds cert_pem = sdsnewlen(bio_ptr, bio_len);
     BIO_free(bio);
+
+#if OPENSSL_VERSION_NUMBER < 0x30000000L
+    X509_free(cert);
+#endif
 
     return cert_pem;
 }

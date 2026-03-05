@@ -138,7 +138,7 @@ int clusterRedirectBlockedClientIfNeeded(client *c);
 void clusterRedirectClient(client *c, clusterNode *n, int hashslot, int error_code);
 void migrateCloseTimedoutSockets(void);
 unsigned int keyHashSlot(const char *key, int keylen);
-void getKeyHashPortion(const char *key, int keylen, const char **hash_ptr, int *hash_len);
+const char *getKeyHashPortion(const char *key, int keylen, int *hash_len);
 int patternHashSlot(char *pattern, int length);
 int isValidAuxString(char *s, unsigned int length);
 void migrateCommand(client *c);

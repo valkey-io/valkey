@@ -50,28 +50,32 @@
 
 /* Extract the hash tag portion of a key. Returns pointer to the portion
  * to hash and sets *len to its length. */
-void getKeyHashPortion(const char *key, int keylen, const char **hash_ptr, int *hash_len) {
-    int s, e;
+const char *getKeyHashPortion(const char *key, int keylen, int *hash_len) {
+    int s, e; /* start-end indexes of { and } */
 
     for (s = 0; s < keylen; s++)
         if (key[s] == '{') break;
 
+    /* No '{' ? Hash the whole key. This is the base case. */
     if (s == keylen) {
-        *hash_ptr = key;
         *hash_len = keylen;
-        return;
+        return key;
     }
 
+    /* '{' found? Check if we have the corresponding '}'. */
     for (e = s + 1; e < keylen; e++)
         if (key[e] == '}') break;
 
+    /* No '}' or nothing between {} ? Hash the whole key. */
     if (e == keylen || e == s + 1) {
-        *hash_ptr = key;
         *hash_len = keylen;
-    } else {
-        *hash_ptr = key + s + 1;
-        *hash_len = e - s - 1;
+        return key;
     }
+
+    /* If we are here there is both a { and a } on its right. Hash
+     * what is in the middle between { and }. */
+    *hash_len = e - s - 1;
+    return key + s + 1;
 }
 
 /* We have 16384 hash slots. The hash slot of a given key is obtained
@@ -81,9 +85,8 @@ void getKeyHashPortion(const char *key, int keylen, const char **hash_ptr, int *
  * { and } is hashed. This may be useful in the future to force certain
  * keys to be in the same node (assuming no resharding is in progress). */
 unsigned int keyHashSlot(const char *key, int keylen) {
-    const char *hash_ptr;
     int hash_len;
-    getKeyHashPortion(key, keylen, &hash_ptr, &hash_len);
+    const char *hash_ptr = getKeyHashPortion(key, keylen, &hash_len);
     return crc16(hash_ptr, hash_len) & 0x3FFF;
 }
 
@@ -1006,7 +1009,7 @@ int clusterSlotByCommand(struct serverCommand *cmd, robj **argv, int argc, int *
         /* Extract hash tag portions for all keys */
         for (int i = 0; i < numkeys; i++) {
             sds key = objectGetVal(argv[result.keys[i].pos]);
-            getKeyHashPortion(key, sdslen(key), &key_bufs[i], &key_lens[i]);
+            key_bufs[i] = getKeyHashPortion(key, sdslen(key), &key_lens[i]);
         }
 
         /* Compute all CRC16 values in parallel */

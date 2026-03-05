@@ -4258,7 +4258,7 @@ void prepareCommandQueue(client *c) {
     /* Current command keys */
     for (int j = 0; j < results[0].numkeys; j++) {
         sds key = objectGetVal(c->argv[results[0].keys[j].pos]);
-        getKeyHashPortion(key, sdslen(key), &key_bufs[key_idx], &key_lens[key_idx]);
+        key_bufs[key_idx] = getKeyHashPortion(key, sdslen(key), &key_lens[key_idx]);
         key_idx++;
     }
 
@@ -4267,7 +4267,7 @@ void prepareCommandQueue(client *c) {
         parsedCommand *p = &c->cmd_queue.cmds[c->cmd_queue.off + i - 1];
         for (int j = 0; j < results[i].numkeys; j++) {
             sds key = objectGetVal(p->argv[results[i].keys[j].pos]);
-            getKeyHashPortion(key, sdslen(key), &key_bufs[key_idx], &key_lens[key_idx]);
+            key_bufs[key_idx] = getKeyHashPortion(key, sdslen(key), &key_lens[key_idx]);
             key_idx++;
         }
     }

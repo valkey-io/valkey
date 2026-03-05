@@ -92,12 +92,12 @@ uint16_t crc16(const char *buf, int len) {
 void crc16_parallel(const char **bufs, int *lens, uint16_t *results, int count) {
     uint16_t crcs[count];
     int counters[count];
-    
+
     for (int i = 0; i < count; i++) {
         crcs[i] = 0;
         counters[i] = 0;
     }
-    
+
     int active = count;
     while (active > 0) {
         active = 0;
@@ -109,7 +109,7 @@ void crc16_parallel(const char **bufs, int *lens, uint16_t *results, int count) 
             }
         }
     }
-    
+
     for (int i = 0; i < count; i++) {
         results[i] = crcs[i];
     }

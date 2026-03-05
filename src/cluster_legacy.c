@@ -4764,14 +4764,27 @@ void clusterSendPing(clusterLink *link, int type) {
      *
      * Since we have non-voting replicas that lower the probability of an entry
      * to feature our node, we set the number of entries per packet as
-     * 10% of the total nodes we have. */
-    wanted = floor(dictSize(server.cluster->nodes) / 10);
+     * a configurable percentage (default 10%) of the total nodes we have,
+     * bounded by the actual number of known nodes. */
+    int total_nodes = dictSize(server.cluster->nodes);
+    wanted = (total_nodes * server.cluster_message_gossip_perc / 100);
     if (wanted < 3) wanted = 3;
-    if (wanted > freshnodes) wanted = freshnodes;
+    if (wanted > total_nodes) wanted = total_nodes;
 
-    /* Include all the nodes in PFAIL state, so that failure reports are
-     * faster to propagate to go from PFAIL to FAIL state. */
+    /* Prioritize pfail nodes over other nodes.
+     * Healthy nodes can communicate through direct ping/pong if required and failed node
+     * information would be broadcasted. */
     int pfail_wanted = server.cluster->stats_pfail_nodes;
+    if (pfail_wanted >= wanted) {
+        pfail_wanted = wanted;
+        wanted = 0;
+    } else {
+        wanted = wanted - pfail_wanted;
+    }
+
+    if (wanted > freshnodes) {
+        wanted = freshnodes;
+    }
 
     /* Compute the maximum estlen to allocate our buffer. We'll fix the estlen
      * later according to the number of gossip sections we really were able

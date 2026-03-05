@@ -2264,6 +2264,7 @@ struct valkeyServer {
     int cluster_port;                                      /* Set the cluster port for a node. */
     mstime_t cluster_node_timeout;                         /* Cluster node timeout. */
     mstime_t cluster_ping_interval;                        /* A debug configuration for setting how often cluster nodes send ping messages. */
+    int cluster_message_gossip_perc;                       /* A configuration for setting the percentage of peer nodes to be gossiped in ping/pong messages. */
     char *cluster_configfile;                              /* Cluster auto-generated config file name. */
     struct clusterState *cluster;                          /* State of the cluster */
     int cluster_migration_barrier;                         /* Cluster replicas migration barrier. */

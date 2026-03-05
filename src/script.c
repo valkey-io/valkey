@@ -83,7 +83,7 @@ int scriptInterrupt(scriptRunCtx *run_ctx) {
     if (server.busy_reply_threshold == 0) {
         return SCRIPT_CONTINUE;
     }
-    
+
     long long elapsed = elapsedMs(run_ctx->start_time);
     if (elapsed < server.busy_reply_threshold) {
         return SCRIPT_CONTINUE;

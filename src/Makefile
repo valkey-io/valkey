@@ -254,7 +254,12 @@ endif
 FINAL_CFLAGS+= -I../deps/libvalkey/include -I../deps/linenoise -I../deps/hdr_histogram -I../deps/fpconv
 
 # Lua scripting engine module
-LUA_MODULE_NAME:=modules/lua/libvalkeylua.so
+SO_EXT=so
+ifeq ($(uname_S),Darwin)
+	SO_EXT=dylib
+endif
+LUA_MODULE_NAME:=modules/lua/libvalkeylua.$(SO_EXT)
+
 ifeq ($(BUILD_LUA),no)
 	LUA_MODULE=
 	LUA_MODULE_INSTALL=
@@ -263,12 +268,12 @@ else
 	LUA_MODULE_INSTALL=install-lua-module
 
 	current_dir = $(shell pwd)
-	FINAL_CFLAGS+=-DLUA_ENABLED -DLUA_LIB=libvalkeylua.so
+	FINAL_CFLAGS+=-DLUA_ENABLED -DLUA_LIB=libvalkeylua.$(SO_EXT)
 ifeq ($(uname_S),Darwin)
 	FINAL_LDFLAGS+= -Wl,-rpath,$(PREFIX)/lib
 	FINAL_LDFLAGS+= -Wl,-rpath,$(current_dir)/modules/lua
 else
-	FINAL_LDFLAGS+= -Wl,-rpath,$(PREFIX)/lib:$(current_dir)/modules/lua -Wl,--disable-new-dtags
+	FINAL_LDFLAGS+= -Wl,-rpath,'$$ORIGIN/../lib':$(current_dir)/modules/lua -Wl,--disable-new-dtags
 endif
 endif
 
@@ -637,7 +642,7 @@ endif
 
 DEPENDENCY_TARGETS+= gtest-parallel
 
-ALL_BUILD_PREREQUISITES=$(SERVER_NAME) $(ENGINE_SENTINEL_NAME) $(ENGINE_CLI_NAME) $(ENGINE_BENCHMARK_NAME) $(ENGINE_CHECK_RDB_NAME) $(ENGINE_CHECK_AOF_NAME) $(TLS_MODULE) $(RDMA_MODULE) $(LUA_MODULE)
+ALL_BUILD_PREREQUISITES=$(SERVER_NAME) $(ENGINE_SENTINEL_NAME) $(ENGINE_CLI_NAME) $(ENGINE_BENCHMARK_NAME) $(ENGINE_CHECK_RDB_NAME) $(ENGINE_CHECK_AOF_NAME) $(TLS_MODULE) $(RDMA_MODULE)
 
 all: $(ALL_BUILD_PREREQUISITES)
 	@echo ""
@@ -694,8 +699,8 @@ ifneq ($(strip $(PREV_FINAL_LDFLAGS)), $(strip $(FINAL_LDFLAGS)))
 endif
 
 # valkey-server
-$(SERVER_NAME): $(ENGINE_SERVER_OBJ)
-	$(SERVER_LD) -o $@ $^ ../deps/libvalkey/lib/libvalkey.a ../deps/hdr_histogram/libhdrhistogram.a ../deps/fpconv/libfpconv.a $(FINAL_LIBS)
+$(SERVER_NAME): $(ENGINE_SERVER_OBJ) $(LUA_MODULE)
+	$(SERVER_LD) -o $@ $(ENGINE_SERVER_OBJ) ../deps/libvalkey/lib/libvalkey.a ../deps/hdr_histogram/libhdrhistogram.a ../deps/fpconv/libfpconv.a $(FINAL_LIBS)
 
 # Valkey static library, used to compile against for unit testing
 $(ENGINE_LIB_NAME): $(ENGINE_SERVER_OBJ)
@@ -722,7 +727,7 @@ $(RDMA_MODULE_NAME): $(SERVER_NAME)
 	$(QUIET_CC)$(CC) -o $@ rdma.c -shared -fPIC $(RDMA_MODULE_CFLAGS)
 
 # engine_lua.so
-$(LUA_MODULE_NAME): $(SERVER_NAME)
+$(LUA_MODULE):
 	cd modules/lua && $(MAKE) OPTIMIZATION="$(OPTIMIZATION)"
 
 # valkey-cli

@@ -4215,24 +4215,24 @@ void prepareCommandQueue(client *c) {
 
     /* In cluster mode, collect all keys from current command and queue, compute CRC16 in parallel */
     int num_cmds = 1 + (c->cmd_queue.len - c->cmd_queue.off);
-    
+
     /* First pass: lookup commands and get keys */
     getKeysResult results[num_cmds];
     int total_keys = 0;
-    
+
     /* Current command */
     initGetKeysResult(&results[0]);
     prepareCommandGenericNoSlot(c->argv, c->argc, &c->read_flags, &c->parsed_cmd);
     if (c->parsed_cmd && !(c->read_flags & (READ_FLAGS_COMMAND_NOT_FOUND | READ_FLAGS_BAD_ARITY))) {
         total_keys += getKeysFromCommand(c->parsed_cmd, c->argv, c->argc, &results[0]);
     }
-    
+
     /* Queue commands */
     for (int i = 1; i < num_cmds; i++) {
         parsedCommand *p = &c->cmd_queue.cmds[c->cmd_queue.off + i - 1];
         initGetKeysResult(&results[i]);
         prepareCommandGenericNoSlot(p->argv, p->argc, &p->read_flags, &p->cmd);
-        
+
         if (p->cmd && !(p->read_flags & (READ_FLAGS_COMMAND_NOT_FOUND | READ_FLAGS_BAD_ARITY))) {
             total_keys += getKeysFromCommand(p->cmd, p->argv, p->argc, &results[i]);
         }
@@ -4261,7 +4261,7 @@ void prepareCommandQueue(client *c) {
         getKeyHashPortion(key, sdslen(key), &key_bufs[key_idx], &key_lens[key_idx]);
         key_idx++;
     }
-    
+
     /* Queue command keys */
     for (int i = 1; i < num_cmds; i++) {
         parsedCommand *p = &c->cmd_queue.cmds[c->cmd_queue.off + i - 1];
@@ -4277,7 +4277,7 @@ void prepareCommandQueue(client *c) {
 
     /* Second pass: assign slots and check for cross-slot */
     key_idx = 0;
-    
+
     /* Current command */
     if (results[0].numkeys == 0) {
         if (c->parsed_cmd) c->read_flags |= READ_FLAGS_NO_KEYS;
@@ -4294,11 +4294,11 @@ void prepareCommandQueue(client *c) {
         key_idx += results[0].numkeys;
     }
     getKeysFreeResult(&results[0]);
-    
+
     /* Queue commands */
     for (int i = 1; i < num_cmds; i++) {
         parsedCommand *p = &c->cmd_queue.cmds[c->cmd_queue.off + i - 1];
-        
+
         if (results[i].numkeys == 0) {
             if (p->cmd) p->read_flags |= READ_FLAGS_NO_KEYS;
         } else {
@@ -4313,7 +4313,7 @@ void prepareCommandQueue(client *c) {
             }
             key_idx += results[i].numkeys;
         }
-        
+
         getKeysFreeResult(&results[i]);
     }
 }

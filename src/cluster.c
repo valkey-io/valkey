@@ -52,19 +52,19 @@
  * to hash and sets *len to its length. */
 void getKeyHashPortion(const char *key, int keylen, const char **hash_ptr, int *hash_len) {
     int s, e;
-    
+
     for (s = 0; s < keylen; s++)
         if (key[s] == '{') break;
-    
+
     if (s == keylen) {
         *hash_ptr = key;
         *hash_len = keylen;
         return;
     }
-    
+
     for (e = s + 1; e < keylen; e++)
         if (key[e] == '}') break;
-    
+
     if (e == keylen || e == s + 1) {
         *hash_ptr = key;
         *hash_len = keylen;
@@ -996,19 +996,23 @@ int clusterSlotByCommand(struct serverCommand *cmd, robj **argv, int argc, int *
     int numkeys = getKeysFromCommand(cmd, argv, argc, &result);
     int slot = -1;
     if (numkeys == 0) *read_flags |= READ_FLAGS_NO_KEYS;
-    
+
     if (numkeys > 1) {
+        /* Use parallel CRC16 computation for multiple keys */
         const char *key_bufs[numkeys];
         int key_lens[numkeys];
         uint16_t crcs[numkeys];
-        
+
+        /* Extract hash tag portions for all keys */
         for (int i = 0; i < numkeys; i++) {
             sds key = objectGetVal(argv[result.keys[i].pos]);
             getKeyHashPortion(key, sdslen(key), &key_bufs[i], &key_lens[i]);
         }
-        
+
+        /* Compute all CRC16 values in parallel */
         crc16_parallel(key_bufs, key_lens, crcs, numkeys);
-        
+
+        /* Check if all keys belong to same slot */
         slot = crcs[0] & 0x3FFF;
         for (int i = 1; i < numkeys; i++) {
             int keyslot = crcs[i] & 0x3FFF;
@@ -1022,7 +1026,7 @@ int clusterSlotByCommand(struct serverCommand *cmd, robj **argv, int argc, int *
         sds key = objectGetVal(argv[result.keys[0].pos]);
         slot = keyHashSlot(key, sdslen(key));
     }
-    
+
     getKeysFreeResult(&result);
     return slot;
 }

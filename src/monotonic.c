@@ -25,7 +25,15 @@ static char monotonic_info_string[32];
 #endif
 
 
-#if defined(USE_PROCESSOR_CLOCK) && defined(__x86_64__) && defined(__linux__)
+/* x86_64 TSC-based monotonic clock implementation.
+ *
+ * Requirements for enabling this optimized path:
+ *   USE_PROCESSOR_CLOCK: processor clock usage not explicitly disabled
+ *   __x86_64__: requires 64-bit x86 architecture (for rdtsc instruction and 128-bit arithmetic)
+ *   __linux__: needed to access /proc/cpuinfo for verifying 'constant_tsc' CPU flag
+ *   __SIZEOF_INT128__: requires compiler support for 128-bit integers to prevent wraparound
+ */
+#if defined(USE_PROCESSOR_CLOCK) && defined(__x86_64__) && defined(__linux__) && defined(__SIZEOF_INT128__)
 #include <regex.h>
 #include <x86intrin.h>
 
@@ -35,7 +43,7 @@ static char monotonic_info_string[32];
 static uint64_t mono_ticks_speed = 0; /* Fixed-point: (1 << MONO_FPMULT_SHIFT) / ticks_per_us */
 
 static monotime getMonotonicUs_x86(void) {
-    return (__rdtsc() * mono_ticks_speed) >> MONO_FPMULT_SHIFT;
+    return ((__uint128_t)__rdtsc() * mono_ticks_speed) >> MONO_FPMULT_SHIFT;
 }
 
 static void monotonicInit_x86linux(void) {
@@ -165,7 +173,7 @@ static void monotonicInit_posix(void) {
 
 
 const char *monotonicInit(void) {
-#if defined(USE_PROCESSOR_CLOCK) && defined(__x86_64__) && defined(__linux__)
+#if defined(USE_PROCESSOR_CLOCK) && defined(__x86_64__) && defined(__linux__) && defined(__SIZEOF_INT128__)
     if (getMonotonicUs == NULL) monotonicInit_x86linux();
 #endif
 

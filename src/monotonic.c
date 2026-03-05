@@ -30,11 +30,12 @@ static char monotonic_info_string[32];
 #include <x86intrin.h>
 
 #define TSC_CALIBRATION_ITERATIONS 3
+#define MONO_FPMULT_SHIFT 24
 
-static long mono_ticksPerMicrosecond = 0;
+static uint64_t mono_ticksPerMicrosecond = 0; /* Fixed-point: (2^MONO_FPMULT_SHIFT / ticksPerMicrosecond) */
 
 static monotime getMonotonicUs_x86(void) {
-    return __rdtsc() / mono_ticksPerMicrosecond;
+    return (__rdtsc() * mono_ticksPerMicrosecond) >> MONO_FPMULT_SHIFT;
 }
 
 static void monotonicInit_x86linux(void) {
@@ -62,11 +63,12 @@ static void monotonicInit_x86linux(void) {
 
         uint64_t elapsed_us = (end.tv_sec - start.tv_sec) * 1000000ULL + (end.tv_nsec - start.tv_nsec) / 1000;
         uint64_t tsc_elapsed = tsc_end - tsc_start;
-        long sample_ticksPerMicrosecond = tsc_elapsed / elapsed_us;
+        double sample_ticks_per_us = (double)tsc_elapsed / (double)elapsed_us;
+        uint64_t sample_mult = (uint64_t)((double)(1ULL << MONO_FPMULT_SHIFT) / sample_ticks_per_us);
 
         /* Use the maximum out of TSC_CALIBRATION_ITERATIONS iterations for accuracy */
-        if (sample_ticksPerMicrosecond > mono_ticksPerMicrosecond) {
-            mono_ticksPerMicrosecond = sample_ticksPerMicrosecond;
+        if (sample_mult > mono_ticksPerMicrosecond) {
+            mono_ticksPerMicrosecond = sample_mult;
         }
     }
 
@@ -96,7 +98,9 @@ static void monotonicInit_x86linux(void) {
         return;
     }
 
-    snprintf(monotonic_info_string, sizeof(monotonic_info_string), "X86 TSC @ %ld ticks/us", mono_ticksPerMicrosecond);
+    /* Convert back to ticks/us for human-readable display */
+    double ticks_per_us = (double)(1ULL << MONO_FPMULT_SHIFT) / (double)mono_ticksPerMicrosecond;
+    snprintf(monotonic_info_string, sizeof(monotonic_info_string), "X86 TSC @ %.2f ticks/us", ticks_per_us);
     getMonotonicUs = getMonotonicUs_x86;
 }
 #endif

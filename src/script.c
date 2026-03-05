@@ -80,8 +80,12 @@ int scriptInterrupt(scriptRunCtx *run_ctx) {
         return (run_ctx->flags & SCRIPT_KILLED) ? SCRIPT_KILL : SCRIPT_CONTINUE;
     }
 
+    if (server.busy_reply_threshold == 0) {
+        return SCRIPT_CONTINUE;
+    }
+    
     long long elapsed = elapsedMs(run_ctx->start_time);
-    if (server.busy_reply_threshold == 0 || elapsed < server.busy_reply_threshold) {
+    if (elapsed < server.busy_reply_threshold) {
         return SCRIPT_CONTINUE;
     }
 

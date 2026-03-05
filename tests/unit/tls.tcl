@@ -157,7 +157,7 @@ start_server {tags {"tls"}} {
 
         test {TLS: Auto-authenticate using tls-auth-clients-user (CN)} {
             # Create a user matching the CN in the client certificate (CN=Client-only)
-            r ACL SETUSER {Client-only} on >clientpass allcommands allkeys
+            r ACL SETUSER {Client-only} on allcommands allkeys
 
             # Enable the feature to auto-authenticate based on CN
             r CONFIG SET tls-auth-clients-user CN
@@ -179,8 +179,8 @@ start_server {tags {"tls"}} {
             r CONFIG SET tls-auth-clients-user URI
             
             # Create users matching the URI in the client certificate
-            r ACL SETUSER {urn:valkey:user:first} on >clientpass allcommands
-            r ACL SETUSER {urn:valkey:user:second} on >clientpass allcommands
+            r ACL SETUSER {urn:valkey:user:first} on allcommands
+            r ACL SETUSER {urn:valkey:user:second} on allcommands
 
             # With feature on, client should be auto-authenticated using the URI from SAN
             # Verify that the authenticated user matches the first URI
@@ -218,8 +218,8 @@ start_server {tags {"tls"}} {
 
         test {TLS: Verify CN and URI modes are mutually exclusive} {
             # Create both CN and URI users
-            r ACL SETUSER {Client-only} on >clientpass allcommands allkeys
-            r ACL SETUSER {urn:valkey:user:first} on >clientpass allcommands allkeys
+            r ACL SETUSER {Client-only} on allcommands allkeys
+            r ACL SETUSER {urn:valkey:user:first} on allcommands allkeys
 
             # Set to CN mode
             r CONFIG SET tls-auth-clients-user CN

@@ -24,6 +24,7 @@ A million repetitions of "a"
 #include <stdio.h>
 #include <string.h>
 #include <stdint.h>
+#include <stdlib.h>
 #include "solarisfixes.h"
 #include "sha1.h"
 #include "config.h"
@@ -107,7 +108,7 @@ void SHA1Transform(uint32_t state[5], const unsigned char buffer[64])
     /* Wipe variables */
     a = b = c = d = e = 0;
 #ifdef SHA1HANDSOFF
-    memset(block, '\0', sizeof(block));
+    memset_s(block, '\0', sizeof(block));
 #endif
 }
 

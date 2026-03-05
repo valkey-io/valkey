@@ -48,6 +48,32 @@
  * Key space handling
  * -------------------------------------------------------------------------- */
 
+/* Extract the hash tag portion of a key. Returns pointer to the portion
+ * to hash and sets *len to its length. */
+void getKeyHashPortion(const char *key, int keylen, const char **hash_ptr, int *hash_len) {
+    int s, e;
+    
+    for (s = 0; s < keylen; s++)
+        if (key[s] == '{') break;
+    
+    if (s == keylen) {
+        *hash_ptr = key;
+        *hash_len = keylen;
+        return;
+    }
+    
+    for (e = s + 1; e < keylen; e++)
+        if (key[e] == '}') break;
+    
+    if (e == keylen || e == s + 1) {
+        *hash_ptr = key;
+        *hash_len = keylen;
+    } else {
+        *hash_ptr = key + s + 1;
+        *hash_len = e - s - 1;
+    }
+}
+
 /* We have 16384 hash slots. The hash slot of a given key is obtained
  * as the least significant 14 bits of the crc16 of the key.
  *
@@ -55,24 +81,10 @@
  * { and } is hashed. This may be useful in the future to force certain
  * keys to be in the same node (assuming no resharding is in progress). */
 unsigned int keyHashSlot(const char *key, int keylen) {
-    int s, e; /* start-end indexes of { and } */
-
-    for (s = 0; s < keylen; s++)
-        if (key[s] == '{') break;
-
-    /* No '{' ? Hash the whole key. This is the base case. */
-    if (s == keylen) return crc16(key, keylen) & 0x3FFF;
-
-    /* '{' found? Check if we have the corresponding '}'. */
-    for (e = s + 1; e < keylen; e++)
-        if (key[e] == '}') break;
-
-    /* No '}' or nothing between {} ? Hash the whole key. */
-    if (e == keylen || e == s + 1) return crc16(key, keylen) & 0x3FFF;
-
-    /* If we are here there is both a { and a } on its right. Hash
-     * what is in the middle between { and }. */
-    return crc16(key + s + 1, e - s - 1) & 0x3FFF;
+    const char *hash_ptr;
+    int hash_len;
+    getKeyHashPortion(key, keylen, &hash_ptr, &hash_len);
+    return crc16(hash_ptr, hash_len) & 0x3FFF;
 }
 
 /* If it can be inferred that the given glob-style pattern, as implemented in
@@ -984,17 +996,33 @@ int clusterSlotByCommand(struct serverCommand *cmd, robj **argv, int argc, int *
     int numkeys = getKeysFromCommand(cmd, argv, argc, &result);
     int slot = -1;
     if (numkeys == 0) *read_flags |= READ_FLAGS_NO_KEYS;
-    for (int i = 0; i < numkeys; i++) {
-        sds key = objectGetVal(argv[result.keys[i].pos]);
-        int keyslot = keyHashSlot(key, sdslen(key));
-        if (slot == -1) {
-            slot = keyslot;
-        } else if (keyslot != slot) {
-            slot = -1;
-            *read_flags |= READ_FLAGS_CROSSSLOT;
-            break;
+    
+    if (numkeys > 1) {
+        const char *key_bufs[numkeys];
+        int key_lens[numkeys];
+        uint16_t crcs[numkeys];
+        
+        for (int i = 0; i < numkeys; i++) {
+            sds key = objectGetVal(argv[result.keys[i].pos]);
+            getKeyHashPortion(key, sdslen(key), &key_bufs[i], &key_lens[i]);
         }
+        
+        crc16_parallel(key_bufs, key_lens, crcs, numkeys);
+        
+        slot = crcs[0] & 0x3FFF;
+        for (int i = 1; i < numkeys; i++) {
+            int keyslot = crcs[i] & 0x3FFF;
+            if (keyslot != slot) {
+                slot = -1;
+                *read_flags |= READ_FLAGS_CROSSSLOT;
+                break;
+            }
+        }
+    } else if (numkeys == 1) {
+        sds key = objectGetVal(argv[result.keys[0].pos]);
+        slot = keyHashSlot(key, sdslen(key));
     }
+    
     getKeysFreeResult(&result);
     return slot;
 }

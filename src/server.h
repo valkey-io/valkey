@@ -3788,6 +3788,7 @@ int setGetKeys(struct serverCommand *cmd, robj **argv, int argc, getKeysResult *
 int bitfieldGetKeys(struct serverCommand *cmd, robj **argv, int argc, getKeysResult *result);
 
 unsigned short crc16(const char *buf, int len);
+void crc16_parallel(const char **bufs, int *lens, uint16_t *results, int count);
 
 /* Sentinel */
 void initSentinelConfig(void);

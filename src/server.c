@@ -4185,6 +4185,18 @@ static void prepareCommandGeneric(robj **argv, int argc, int *read_flags, struct
     }
 }
 
+/* Like prepareCommandGeneric but skips cluster slot calculation. */
+static void prepareCommandGenericNoSlot(robj **argv, int argc, int *read_flags, struct serverCommand **cmd) {
+    if (!(*read_flags & READ_FLAGS_PARSING_COMPLETED) || argc == 0) return;
+    debugServerAssert(*cmd == NULL && !(*read_flags & READ_FLAGS_COMMAND_NOT_FOUND));
+    *cmd = lookupCommand(argv, argc);
+    if (!*cmd) {
+        *read_flags |= READ_FLAGS_COMMAND_NOT_FOUND;
+    } else if (!commandCheckArity(*cmd, argc, NULL)) {
+        *read_flags |= READ_FLAGS_BAD_ARITY;
+    }
+}
+
 /* Prepare the client's current command. See prepareCommandGeneric(). */
 void prepareCommand(client *c) {
     prepareCommandGeneric(c->argv, c->argc, &c->read_flags, &c->parsed_cmd, &c->slot);
@@ -4192,13 +4204,117 @@ void prepareCommand(client *c) {
 
 /* Prepare all parsed commands in the client's queue. See prepareCommand(). */
 void prepareCommandQueue(client *c) {
-    /* First AKA current command (c->argv). */
-    prepareCommand(c);
+    if (!server.cluster_enabled) {
+        prepareCommand(c);
+        for (int i = c->cmd_queue.off; i < c->cmd_queue.len; i++) {
+            parsedCommand *p = &c->cmd_queue.cmds[i];
+            prepareCommandGeneric(p->argv, p->argc, &p->read_flags, &p->cmd, &p->slot);
+        }
+        return;
+    }
 
-    /* Commands in client's command queue. */
-    for (int i = c->cmd_queue.off; i < c->cmd_queue.len; i++) {
-        parsedCommand *p = &c->cmd_queue.cmds[i];
-        prepareCommandGeneric(p->argv, p->argc, &p->read_flags, &p->cmd, &p->slot);
+    /* In cluster mode, collect all keys from current command and queue, compute CRC16 in parallel */
+    int num_cmds = 1 + (c->cmd_queue.len - c->cmd_queue.off);
+    
+    /* First pass: lookup commands and get keys */
+    getKeysResult results[num_cmds];
+    int total_keys = 0;
+    
+    /* Current command */
+    initGetKeysResult(&results[0]);
+    prepareCommandGenericNoSlot(c->argv, c->argc, &c->read_flags, &c->parsed_cmd);
+    if (c->parsed_cmd && !(c->read_flags & (READ_FLAGS_COMMAND_NOT_FOUND | READ_FLAGS_BAD_ARITY))) {
+        total_keys += getKeysFromCommand(c->parsed_cmd, c->argv, c->argc, &results[0]);
+    }
+    
+    /* Queue commands */
+    for (int i = 1; i < num_cmds; i++) {
+        parsedCommand *p = &c->cmd_queue.cmds[c->cmd_queue.off + i - 1];
+        initGetKeysResult(&results[i]);
+        prepareCommandGenericNoSlot(p->argv, p->argc, &p->read_flags, &p->cmd);
+        
+        if (p->cmd && !(p->read_flags & (READ_FLAGS_COMMAND_NOT_FOUND | READ_FLAGS_BAD_ARITY))) {
+            total_keys += getKeysFromCommand(p->cmd, p->argv, p->argc, &results[i]);
+        }
+    }
+
+    if (total_keys == 0) {
+        if (results[0].numkeys == 0 && c->parsed_cmd) c->read_flags |= READ_FLAGS_NO_KEYS;
+        getKeysFreeResult(&results[0]);
+        for (int i = 1; i < num_cmds; i++) {
+            parsedCommand *p = &c->cmd_queue.cmds[c->cmd_queue.off + i - 1];
+            if (results[i].numkeys == 0 && p->cmd) p->read_flags |= READ_FLAGS_NO_KEYS;
+            getKeysFreeResult(&results[i]);
+        }
+        return;
+    }
+
+    /* Collect all key hash portions */
+    const char *key_bufs[total_keys];
+    int key_lens[total_keys];
+    uint16_t crcs[total_keys];
+    int key_idx = 0;
+
+    /* Current command keys */
+    for (int j = 0; j < results[0].numkeys; j++) {
+        sds key = objectGetVal(c->argv[results[0].keys[j].pos]);
+        getKeyHashPortion(key, sdslen(key), &key_bufs[key_idx], &key_lens[key_idx]);
+        key_idx++;
+    }
+    
+    /* Queue command keys */
+    for (int i = 1; i < num_cmds; i++) {
+        parsedCommand *p = &c->cmd_queue.cmds[c->cmd_queue.off + i - 1];
+        for (int j = 0; j < results[i].numkeys; j++) {
+            sds key = objectGetVal(p->argv[results[i].keys[j].pos]);
+            getKeyHashPortion(key, sdslen(key), &key_bufs[key_idx], &key_lens[key_idx]);
+            key_idx++;
+        }
+    }
+
+    /* Compute all CRC16 values in parallel */
+    crc16_parallel(key_bufs, key_lens, crcs, total_keys);
+
+    /* Second pass: assign slots and check for cross-slot */
+    key_idx = 0;
+    
+    /* Current command */
+    if (results[0].numkeys == 0) {
+        if (c->parsed_cmd) c->read_flags |= READ_FLAGS_NO_KEYS;
+    } else {
+        c->slot = crcs[key_idx] & 0x3FFF;
+        for (int j = 1; j < results[0].numkeys; j++) {
+            int keyslot = crcs[key_idx + j] & 0x3FFF;
+            if (keyslot != c->slot) {
+                c->slot = -1;
+                c->read_flags |= READ_FLAGS_CROSSSLOT;
+                break;
+            }
+        }
+        key_idx += results[0].numkeys;
+    }
+    getKeysFreeResult(&results[0]);
+    
+    /* Queue commands */
+    for (int i = 1; i < num_cmds; i++) {
+        parsedCommand *p = &c->cmd_queue.cmds[c->cmd_queue.off + i - 1];
+        
+        if (results[i].numkeys == 0) {
+            if (p->cmd) p->read_flags |= READ_FLAGS_NO_KEYS;
+        } else {
+            p->slot = crcs[key_idx] & 0x3FFF;
+            for (int j = 1; j < results[i].numkeys; j++) {
+                int keyslot = crcs[key_idx + j] & 0x3FFF;
+                if (keyslot != p->slot) {
+                    p->slot = -1;
+                    p->read_flags |= READ_FLAGS_CROSSSLOT;
+                    break;
+                }
+            }
+            key_idx += results[i].numkeys;
+        }
+        
+        getKeysFreeResult(&results[i]);
     }
 }
 

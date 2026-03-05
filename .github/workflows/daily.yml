@@ -247,7 +247,7 @@ jobs:
           githubToken: ${{ github.token }}
           run: |
             apt-get update
-            apt-get install -y build-essential
+            apt-get install -y build-essential pkg-config libgtest-dev libgmock-dev
             make all-with-unit-tests SERVER_CFLAGS='-Werror'
             ./src/unit/valkey-unit-gtests
   test-ubuntu-jemalloc-fortify:

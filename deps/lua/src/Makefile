@@ -18,9 +18,27 @@ MYCFLAGS=
 MYLDFLAGS=
 MYLIBS=
 
+# Pretty-printing setup
+CC_COLOR="\033[32m"
+LNK_COLOR="\033[36;1m"
+SCOPE_COLOR="\033[38:5:250m"
+SRC_COLOR="\033[33m"
+BIN_COLOR="\033[35m"
+RESET="\033[0m"
+
+ifndef V
+QUIET_CC = @printf '    %b %b(LUA Lib)%b %b\n' $(CC_COLOR)CC$(RESET) $(SCOPE_COLOR) $(RESET) $(SRC_COLOR)$<$(RESET) 1>&2;
+QUIET_LINK = @printf '    %b %b\n' $(LNK_COLOR)LINK$(RESET) $(BIN_COLOR)$@$(RESET) 1>&2;
+QUIET_AR = @printf '    %b %b\n' $(CC_COLOR)ARCHIVE$(RESET) $(BIN_COLOR)$@$(RESET) 1>&2;
+endif
+
 # == END OF USER SETTINGS. NO NEED TO CHANGE ANYTHING BELOW THIS LINE =========
 
 PLATS= aix ansi bsd freebsd generic linux macosx mingw posix solaris
+
+# Explicit pattern rule for building object files from C sources
+%.o: %.c
+	$(QUIET_CC)$(CC) $(CFLAGS) -c $< -o $@
 
 LUA_A=	liblua.a
 CORE_O=	lapi.o lcode.o ldebug.o ldo.o ldump.o lfunc.o lgc.o llex.o lmem.o \
@@ -49,14 +67,14 @@ o:	$(ALL_O)
 a:	$(ALL_A)
 
 $(LUA_A): $(CORE_O) $(LIB_O)
-	$(AR) $@ $(CORE_O) $(LIB_O)	# DLL needs all object files
-	$(RANLIB) $@
+	$(QUIET_AR)$(AR) $@ $(CORE_O) $(LIB_O)	# DLL needs all object files
+	$(QUIET_AR)$(RANLIB) $@
 
 $(LUA_T): $(LUA_O) $(LUA_A)
-	$(CC) -o $@ $(MYLDFLAGS) $(LUA_O) $(LUA_A) $(LIBS)
+	$(QUIET_LINK)$(CC) -o $@ $(MYLDFLAGS) $(LUA_O) $(LUA_A) $(LIBS)
 
 $(LUAC_T): $(LUAC_O) $(LUA_A)
-	$(CC) -o $@ $(MYLDFLAGS) $(LUAC_O) $(LUA_A) $(LIBS)
+	$(QUIET_LINK)$(CC) -o $@ $(MYLDFLAGS) $(LUAC_O) $(LUA_A) $(LIBS)
 
 clean:
 	$(RM) $(ALL_T) $(ALL_O)

@@ -1196,6 +1196,16 @@ void flushAppendOnlyFile(int force) {
                       "Can't recover from AOF write error when the AOF fsync policy is 'always'. Exiting...");
             exit(1);
         } else {
+            if (server.shutdown_on_aof_error) {
+                int flags = SHUTDOWN_RO | SHUTDOWN_FORCE | SHUTDOWN_FAILOVER;
+                if (prepareReplicasForShutdown(flags) == C_OK) {
+                    serverLog(LL_WARNING, "Can't recover from AOF write error with shutdown-on-aof-error=yes. Exiting...");
+                    exit(1);
+                } else {
+                    return; /* Shutdown gonna be processed in serverCron. */
+                }
+            }
+
             /* Recover from failed write leaving data into the buffer. However
              * set an error to stop accepting writes as long as the error
              * condition is not cleared. */

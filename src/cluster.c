@@ -1780,10 +1780,6 @@ void clusterscanCommand(client *c) {
         }
     }
 
-    if (server.cluster->slots[slot] != getMyClusterNode()) {
-        clusterRedirectClient(c, server.cluster->slots[slot], slot, CLUSTER_REDIR_MOVED);
-        return;
-    }
     /* Scan the slot using scanGenericCommand */
     sds cursor_prefix = sdscatfmt(sdsempty(), "%s-{%s}-", clusterscanFingerprint(), crc16_slot_table[slot]);
     sds finished_cursor_prefix = NULL;

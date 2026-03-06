@@ -211,3 +211,26 @@ TEST_F(IntsetTest, TestIntsetStressAddDelete) {
     ASSERT_EQ(checkConsistency(is), 1);
     zfree(is);
 }
+
+TEST_F(IntsetTest, TestIntsetRawByteLayout) {
+    intset *is = intsetNew();
+    is = intsetAdd(is, 0x0102, nullptr);
+    ASSERT_EQ(intrev32ifbe(is->encoding), INTSET_ENC_INT16);
+
+    /* Verify raw contents are stored as little-endian */
+    unsigned char *raw = (unsigned char *)is->contents;
+    ASSERT_EQ(raw[0], 0x02); /* Low byte first (LE) */
+    ASSERT_EQ(raw[1], 0x01); /* High byte second */
+    zfree(is);
+
+    /* Test INT32 encoding */
+    is = intsetNew();
+    is = intsetAdd(is, 0x01020304, nullptr);
+    ASSERT_EQ(intrev32ifbe(is->encoding), INTSET_ENC_INT32);
+    raw = (unsigned char *)is->contents;
+    ASSERT_EQ(raw[0], 0x04);
+    ASSERT_EQ(raw[1], 0x03);
+    ASSERT_EQ(raw[2], 0x02);
+    ASSERT_EQ(raw[3], 0x01);
+    zfree(is);
+}

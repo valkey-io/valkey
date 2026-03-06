@@ -4770,16 +4770,9 @@ void clusterSendPing(clusterLink *link, int type) {
     if (wanted < 3) wanted = 3;
     if (wanted > freshnodes) wanted = freshnodes;
 
-    /* Prioritize pfail nodes over other nodes.
-     * Healthy nodes can communicate through direct ping/pong if required and failed node
-     * information would be broadcasted. */
+    /* Include all the nodes in PFAIL state, so that failure reports are
+     * faster to propagate to go from PFAIL to FAIL state. */
     int pfail_wanted = server.cluster->stats_pfail_nodes;
-    if (pfail_wanted >= wanted) {
-        pfail_wanted = wanted;
-        wanted = 0;
-    } else {
-        wanted = wanted - pfail_wanted;
-    }
 
     /* Compute the maximum estlen to allocate our buffer. We'll fix the estlen
      * later according to the number of gossip sections we really were able

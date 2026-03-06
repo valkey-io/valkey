@@ -985,7 +985,7 @@ int startAppendOnly(void) {
             killAppendOnlyChild(false);
         }
 
-        if (rewriteAppendOnlyFileBackground(false, REPLICA_REQ_NONE) == C_ERR) {
+        if (rewriteAppendOnlyFileBackground() == C_ERR) {
             server.aof_state = AOF_OFF;
             serverLog(LL_WARNING, "The server needs to enable the AOF but can't trigger a background AOF rewrite "
                                   "operation. Check the above logs for more info about the error.");
@@ -2483,7 +2483,7 @@ werr:
  *    4d) persist AOF manifest file
  *    4e) Delete the history files use bio
  */
-int rewriteAppendOnlyFileBackground(bool for_replication, int req) {
+int rewriteAppendOnlyFileBackground(void) {
     pid_t childpid;
 
     if (hasActiveChildProcess()) return C_ERR;
@@ -2530,10 +2530,7 @@ int rewriteAppendOnlyFileBackground(bool for_replication, int req) {
         }
         serverSetCpuAffinity(server.aof_rewrite_cpulist);
         snprintf(tmpfile, 256, "temp-rewriteaof-bg-%d.aof", (int)getpid());
-
-        /* Do not use RDB format for fullsync-aof replication */
-        if (for_replication) server.aof_use_rdb_preamble = 0;
-        if (rewriteAppendOnlyFile(tmpfile, req) == C_OK) {
+        if (rewriteAppendOnlyFile(tmpfile, REPLICA_REQ_NONE) == C_OK) {
             serverLog(LL_NOTICE, "Successfully created the temporary AOF base file %s", tmpfile);
             sendChildCowInfo(CHILD_INFO_TYPE_AOF_COW_SIZE, "AOF rewrite");
             exitFromChild(0);
@@ -2550,8 +2547,73 @@ int rewriteAppendOnlyFileBackground(bool for_replication, int req) {
         serverLog(LL_NOTICE, "Background append only file rewriting started by pid %ld", (long)childpid);
         server.aof_rewrite_scheduled = 0;
         server.aof_rewrite_time_start = time(NULL);
-        server.aof_rewrite_use_rdb_preamble = for_replication ? 0 : server.aof_use_rdb_preamble;
+        server.aof_rewrite_use_rdb_preamble = server.aof_use_rdb_preamble;
+        return C_OK;
+    }
+    return C_OK; /* unreached */
+}
+
+/* Simplified AOF rewrite for replication only.
+ * Unlike rewriteAppendOnlyFileBackground(), this function does NOT modify the
+ * AOF manifest, create INCR AOFs, or change AOF state. It simply forks a child
+ * that writes the dataset as AOF commands into a temporary file using
+ * rewriteRioWithEOFMark(). The temp file is used to send data to replicas and
+ * then cleaned up. */
+int rewriteAofBackgroundForReplication(int req) {
+    pid_t childpid;
+
+    if (hasActiveChildProcess()) return C_ERR;
+
+    if ((childpid = serverFork(CHILD_TYPE_AOF)) == 0) {
+        /* Child */
+        char tmpfile[256];
+        rio aof;
+        FILE *fp;
+        int retval;
+
+        serverSetProcTitle("valkey-aof-for-replication");
+        serverSetCpuAffinity(server.aof_rewrite_cpulist);
+        snprintf(tmpfile, 256, "temp-rewriteaof-bg-%d.aof", (int)getpid());
+
+        fp = fopen(tmpfile, "w");
+        if (!fp) {
+            serverLog(LL_WARNING, "Opening the temp file for AOF replication: %s", strerror(errno));
+            exitFromChild(1);
+        }
+
+        server.aof_use_rdb_preamble = 0;
+        rioInitWithFile(&aof, fp);
+
+        if (server.aof_rewrite_incremental_fsync) {
+            rioSetAutoSync(&aof, REDIS_AUTOSYNC_BYTES);
+            rioSetReclaimCache(&aof, 1);
+        }
+
+        retval = rewriteRioWithEOFMark(&aof, req);
+
+        if (retval == C_OK && fflush(fp) == EOF) retval = C_ERR;
+        if (retval == C_OK && fsync(fileno(fp)) == -1) retval = C_ERR;
+        if (retval == C_OK) reclaimFilePageCache(fileno(fp), 0, 0);
+        if (fclose(fp) == EOF && retval == C_OK) retval = C_ERR;
+
+        if (retval == C_OK) {
+            serverLog(LL_NOTICE, "Successfully created the temporary AOF file %s for replication", tmpfile);
+            sendChildCowInfo(CHILD_INFO_TYPE_AOF_COW_SIZE, "AOF rewrite");
+            exitFromChild(0);
+        } else {
+            unlink(tmpfile);
+            exitFromChild(1);
+        }
+    } else {
+        /* Parent */
+        if (childpid == -1) {
+            serverLog(LL_WARNING, "Can't rewrite AOF for replication: fork: %s", strerror(errno));
+            return C_ERR;
+        }
+        serverLog(LL_NOTICE, "Background AOF for replication started by pid %ld", (long)childpid);
+        server.aof_rewrite_time_start = time(NULL);
         server.rdb_child_type = SNAPSHOT_CHILD_TYPE_DISK;
+        server.aof_rewrite_for_replication = 1;
         return C_OK;
     }
     return C_OK; /* unreached */
@@ -2681,7 +2743,7 @@ int rewriteAppendOnlyFileToReplicasSockets(int req) {
                       (long)childpid,
                       dual_channel ? "direct socket to replica" : "pipe through parent process");
 
-            server.rdb_save_time_start = time(NULL);
+            server.aof_rewrite_time_start = time(NULL);
             server.rdb_child_type = SNAPSHOT_CHILD_TYPE_SOCKET;
             if (dual_channel) {
                 zfree(conns);
@@ -2709,7 +2771,7 @@ void bgrewriteaofCommand(client *c) {
         server.stat_aofrw_consecutive_failures = 0;
         serverLog(LL_NOTICE, "Background append only file rewriting scheduled.");
         addReplyStatus(c, "Background append only file rewriting scheduled");
-    } else if (rewriteAppendOnlyFileBackground(false, REPLICA_REQ_NONE) == C_OK) {
+    } else if (rewriteAppendOnlyFileBackground() == C_OK) {
         addReplyStatus(c, "Background append only file rewriting started");
     } else {
         addReplyError(c, "Can't execute an AOF background rewriting. "
@@ -2841,6 +2903,18 @@ void backgroundRewriteDoneHandlerSocket(int exitcode, int bysignal) {
 void backgroundRewriteDoneHandlerDisk(int exitcode, int bysignal) {
     if (!bysignal && exitcode == 0) {
         char tmpfile[256];
+
+        snprintf(tmpfile, 256, "temp-rewriteaof-bg-%d.aof", (int)server.child_pid);
+
+        /* For replication, just record the temp file path.
+         * Don't touch AOF manifest or rename to base-aof. */
+        if (server.aof_rewrite_for_replication) {
+            sdsfree(server.repl_transfer_fullsync_aof_name);
+            server.repl_transfer_fullsync_aof_name = sdsnew(tmpfile);
+            serverLog(LL_NOTICE, "Background AOF for replication terminated with success");
+            return;
+        }
+
         long long now = ustime();
         sds new_base_filepath = NULL;
         sds new_incr_filepath = NULL;
@@ -2848,8 +2922,6 @@ void backgroundRewriteDoneHandlerDisk(int exitcode, int bysignal) {
         mstime_t latency;
 
         serverLog(LL_NOTICE, "Background AOF rewrite terminated with success");
-
-        snprintf(tmpfile, 256, "temp-rewriteaof-bg-%d.aof", (int)server.child_pid);
 
         serverAssert(server.aof_manifest != NULL);
 
@@ -2873,8 +2945,6 @@ void backgroundRewriteDoneHandlerDisk(int exitcode, int bysignal) {
             server.stat_aofrw_consecutive_failures++;
             return;
         }
-        sdsfree(server.repl_transfer_fullsync_aof_name);
-        server.repl_transfer_fullsync_aof_name = sdsdup(new_base_filepath);
         latencyEndMonitor(latency);
         latencyAddSampleIfNeeded("aof-rename", latency);
         latencyTraceIfNeeded(aof, aof_rename, latency);
@@ -2988,14 +3058,21 @@ void backgroundRewriteDoneHandler(int exitcode, int bysignal) {
     updateReplicasWaitingBgSnapshotGenerate((!bysignal && exitcode == 0) ? C_OK : C_ERR, server.rdb_child_type, true);
     server.rdb_child_type = SNAPSHOT_CHILD_TYPE_NONE;
     aofRemoveTempFile(server.child_pid, 0);
+
+    server.aof_rewrite_time_last = time(NULL) - server.aof_rewrite_time_start;
+    server.aof_rewrite_time_start = -1;
+    if (server.aof_rewrite_for_replication) {
+        /* Replication path: don't touch AOF state. Just clean up and return. */
+        server.aof_rewrite_for_replication = 0;
+        return;
+    }
+
     /* Clear AOF buffer and delete temp incr aof for next rewrite. */
     if (server.aof_state == AOF_WAIT_REWRITE) {
         sdsfree(server.aof_buf);
         server.aof_buf = sdsempty();
         aofDelTempIncrAofFile();
     }
-    server.aof_rewrite_time_last = time(NULL) - server.aof_rewrite_time_start;
-    server.aof_rewrite_time_start = -1;
     /* Schedule a new rewrite if we are waiting for it to switch the AOF ON. */
     if (server.aof_state == AOF_WAIT_REWRITE) server.aof_rewrite_scheduled = 1;
 }

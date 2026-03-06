@@ -1025,7 +1025,7 @@ int startGenerateSnapshotForReplication(int mincapa, int req, int rdbver) {
             if (socket_target) {
                 retval = rewriteAppendOnlyFileToReplicasSockets(req);
             } else {
-                retval = rewriteAppendOnlyFileBackground(true, req);
+                retval = rewriteAofBackgroundForReplication(req);
             }
         } else {
             if (socket_target)
@@ -1048,7 +1048,7 @@ int startGenerateSnapshotForReplication(int mincapa, int req, int rdbver) {
      * that we don't set the flag to 1 if the feature is disabled, otherwise
      * it would never be cleared: the file is not deleted. This way if
      * the user enables it later with CONFIG SET, we are fine. */
-    if (retval == C_OK && !socket_target && server.rdb_del_sync_files) SnapshotGeneratedByReplication = 1;
+    if (retval == C_OK && !socket_target && !fullsync_aof && server.rdb_del_sync_files) SnapshotGeneratedByReplication = 1;
 
     /* If we failed to BGSAVE, remove the replicas waiting for a full
      * resynchronization from the list of replicas, inform them with
@@ -1523,7 +1523,8 @@ void replconfCommand(client *c) {
                 c->flag.repl_rdbonly = 1;
             else
                 c->flag.repl_rdbonly = 0;
-        } else if (!strcasecmp(objectGetVal(c->argv[j]), "rdb-filter-only")) {
+        } else if (!strcasecmp(objectGetVal(c->argv[j]), "rdb-filter-only") ||
+                   !strcasecmp(objectGetVal(c->argv[j]), "snapshot-filter-only")) {
             /* REPLCONFG RDB-FILTER-ONLY is used to define "include" filters
              * for the RDB snapshot. Currently we only support a single
              * include filter: "functions". In the future we may want to add

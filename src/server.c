@@ -1590,7 +1590,7 @@ long long serverCron(struct aeEventLoop *eventLoop, long long id, void *clientDa
     /* Start a scheduled AOF rewrite if this was requested by the user while
      * a BGSAVE was in progress. */
     if (!hasActiveChildProcess() && server.aof_rewrite_scheduled && !aofRewriteLimited()) {
-        rewriteAppendOnlyFileBackground(false, REPLICA_REQ_NONE);
+        rewriteAppendOnlyFileBackground();
     }
 
     /* Check if a background saving or AOF rewrite in progress terminated. */
@@ -1625,7 +1625,7 @@ long long serverCron(struct aeEventLoop *eventLoop, long long id, void *clientDa
             long long growth = (server.aof_current_size * 100 / base) - 100;
             if (growth >= server.aof_rewrite_perc && !aofRewriteLimited()) {
                 serverLog(LL_NOTICE, "Starting automatic rewriting of AOF on %lld%% growth", growth);
-                rewriteAppendOnlyFileBackground(false, REPLICA_REQ_NONE);
+                rewriteAppendOnlyFileBackground();
             }
         }
     }

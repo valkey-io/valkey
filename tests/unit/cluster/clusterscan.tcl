@@ -1,5 +1,5 @@
 start_server {tags {external:skip} overrides {cluster-enabled no}} {
-    test "CLUSTERSCAN on CMD returns error" {
+    test "CLUSTERSCAN when not in cluster mode returns error" {
         # CLUSTERSCAN should not work when cluster mode disabled
         assert_error "*cluster support disabled*" {r clusterscan 0}
     }

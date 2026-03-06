@@ -22,12 +22,18 @@ typedef struct durabilityProvider {
     const char *name;                  /* Human-readable name, e.g. "replica", "aof" */
     bool (*isEnabled)(void);           /* Is this provider currently active? */
     long long (*getAckedOffset)(void); /* What offset has this provider acknowledged? */
+    bool paused;                       /* When true (via DEBUG), getAckedOffset() returns
+                                        * the offset captured at pause time to freeze
+                                        * consensus progress. Used for testing. */
+    long long pausedOffset;            /* Offset snapshot taken when provider is paused. */
 } durabilityProvider;
 
 /* Provider registry */
 void registerDurabilityProvider(durabilityProvider *provider);
 void unregisterDurabilityProvider(durabilityProvider *provider);
 bool anyDurabilityProviderEnabled(void);
+bool pauseDurabilityProvider(const char *name);
+bool resumeDurabilityProvider(const char *name);
 
 /**
  * Returns the durability consensus offset by iterating all registered

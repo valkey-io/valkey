@@ -39,6 +39,7 @@
 #include "io_threads.h"
 #include "sds.h"
 #include "module.h"
+#include "durability_provider.h"
 
 #include <arpa/inet.h>
 #include <signal.h>
@@ -1066,6 +1067,18 @@ void debugCommand(client *c) {
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "client-enforce-reply-list") && c->argc == 3) {
         server.debug_client_enforce_reply_list = atoi(objectGetVal(c->argv[2]));
         addReply(c, shared.ok);
+    } else if (!strcasecmp(objectGetVal(c->argv[1]), "durability-provider-pause") && c->argc == 3) {
+        if (pauseDurabilityProvider(objectGetVal(c->argv[2]))) {
+            addReply(c, shared.ok);
+        } else {
+            addReplyError(c, "No such durability provider");
+        }
+    } else if (!strcasecmp(objectGetVal(c->argv[1]), "durability-provider-resume") && c->argc == 3) {
+        if (resumeDurabilityProvider(objectGetVal(c->argv[2]))) {
+            addReply(c, shared.ok);
+        } else {
+            addReplyError(c, "No such durability provider");
+        }
     } else if (!handleDebugClusterCommand(c)) {
         addReplySubcommandSyntaxError(c);
         return;

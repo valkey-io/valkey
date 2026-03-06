@@ -38,7 +38,7 @@ static void initDurabilityForTest(void) {
     server.durability.previous_acked_offset = -1;
     server.durability.curr_db_scan_idx = 0;
     server.durability.clients_waiting_replica_ack = listCreate();
-    for (int i = 0; i < AMZ_TASK_TYPE_MAX; i++) {
+    for (int i = 0; i < DURABLE_TASK_TYPE_MAX; i++) {
         server.durability.tasks_waiting_replica_ack[i] = listCreate();
         server.durability.pending_tasks_waiting_replica_ack[i] = listCreate();
     }
@@ -71,7 +71,7 @@ static void cleanupDurabilityForTest(void) {
         server.durability.clients_waiting_replica_ack = nullptr;
     }
     uncommittedKeysCleanupPending();
-    for (int i = 0; i < AMZ_TASK_TYPE_MAX; i++) {
+    for (int i = 0; i < DURABLE_TASK_TYPE_MAX; i++) {
         if (server.durability.tasks_waiting_replica_ack[i]) {
             listRelease(server.durability.tasks_waiting_replica_ack[i]);
             server.durability.tasks_waiting_replica_ack[i] = nullptr;
@@ -365,7 +365,7 @@ TEST_F(SyncReplicationTest, BlockLastResponseNoNewResponse) {
 
 /* ========================= DurabilityProvider Tests ========================= */
 
-TEST_F(DurabilityProviderTest, BuiltinAofProviderDisabledByDefault) {
+TEST_F(DurabilityProviderTest, BuiltinAofProviderDisabledWhenAofOff) {
     initDurabilityForTest();
 
     server.aof_state = AOF_OFF;
@@ -375,22 +375,70 @@ TEST_F(DurabilityProviderTest, BuiltinAofProviderDisabledByDefault) {
     cleanupDurabilityForTest();
 }
 
-TEST_F(DurabilityProviderTest, AofProviderEnabledWhenAlwaysFsync) {
+TEST_F(DurabilityProviderTest, AofProviderEnabledWhenAofOn) {
     initDurabilityForTest();
 
+    /* AOF provider is enabled whenever AOF is on, regardless of fsync policy */
     server.aof_state = AOF_ON;
     server.aof_fsync = AOF_FSYNC_ALWAYS;
+    ASSERT_TRUE(anyDurabilityProviderEnabled());
+
+    server.aof_fsync = AOF_FSYNC_EVERYSEC;
+    ASSERT_TRUE(anyDurabilityProviderEnabled());
+
+    server.aof_fsync = AOF_FSYNC_NO;
     ASSERT_TRUE(anyDurabilityProviderEnabled());
 
     cleanupDurabilityForTest();
 }
 
-TEST_F(DurabilityProviderTest, AofProviderNotEnabledWithEverysecFsync) {
+TEST_F(DurabilityProviderTest, AofProviderPassThroughWhenNotAlwaysFsync) {
+    initDurabilityForTest();
+
+    /* When fsync != always, AOF provider returns primary_repl_offset (pass-through) */
+    server.aof_state = AOF_ON;
+    server.aof_fsync = AOF_FSYNC_EVERYSEC;
+    server.primary_repl_offset = 500;
+    ASSERT_EQ(getDurabilityConsensusOffset(), 500);
+
+    server.aof_fsync = AOF_FSYNC_NO;
+    server.primary_repl_offset = 700;
+    ASSERT_EQ(getDurabilityConsensusOffset(), 700);
+
+    cleanupDurabilityForTest();
+}
+
+TEST_F(DurabilityProviderTest, AofProviderPauseAndResume) {
     initDurabilityForTest();
 
     server.aof_state = AOF_ON;
-    server.aof_fsync = AOF_FSYNC_EVERYSEC;
-    ASSERT_FALSE(anyDurabilityProviderEnabled());
+    server.aof_fsync = AOF_FSYNC_ALWAYS;
+    server.primary_repl_offset = 300;
+    __atomic_store_n(&server.fsynced_reploff_pending, (long long)300, __ATOMIC_RELAXED);
+    server.fsynced_reploff = 300;
+
+    /* Before pause: consensus = 300 (fsynced) */
+    ASSERT_EQ(getDurabilityConsensusOffset(), 300);
+
+    /* Pause: consensus should be frozen at 300 (the offset at pause time).
+     * New writes that advance primary_repl_offset past 300 will block,
+     * but already-acknowledged data remains unblocked. */
+    ASSERT_TRUE(pauseDurabilityProvider("aof"));
+    ASSERT_EQ(getDurabilityConsensusOffset(), 300);
+
+    /* Advance primary_repl_offset — consensus stays frozen at 300 */
+    server.primary_repl_offset = 500;
+    ASSERT_EQ(getDurabilityConsensusOffset(), 300);
+
+    /* Resume: consensus should catch up to actual fsynced offset */
+    server.durability.sync_replication_enabled = 1;
+    server.durability.previous_acked_offset = -1;
+    ASSERT_TRUE(resumeDurabilityProvider("aof"));
+    ASSERT_EQ(getDurabilityConsensusOffset(), 300);
+
+    /* Nonexistent provider returns false */
+    ASSERT_FALSE(pauseDurabilityProvider("nonexistent"));
+    ASSERT_FALSE(resumeDurabilityProvider("nonexistent"));
 
     cleanupDurabilityForTest();
 }
@@ -691,18 +739,18 @@ TEST_F(SyncReplicationTest, FunctionStoreUncommittedTracking) {
     server.durability.previous_acked_offset = 0;
 
     /* Not uncommitted initially */
-    ASSERT_FALSE(amzDurableFunctions_isFunctionStoreUncommitted());
+    ASSERT_FALSE(isDurableFunctionStoreUncommitted());
 
     /* Mark uncommitted */
     server.execution_nesting = 0;
     server.primary_repl_offset = 100;
-    amzDurableFunctions_handleUncommittedFunctionStore();
-    ASSERT_TRUE(amzDurableFunctions_isFunctionStoreUncommitted());
-    ASSERT_EQ(amzDurableFunctions_getBlockingOffset(), 100);
+    handleUncommittedFunctionStore();
+    ASSERT_TRUE(isDurableFunctionStoreUncommitted());
+    ASSERT_EQ(getFuncStoreBlockingOffset(), 100);
 
     /* After acking, it should no longer be uncommitted */
     server.durability.previous_acked_offset = 100;
-    ASSERT_FALSE(amzDurableFunctions_isFunctionStoreUncommitted());
+    ASSERT_FALSE(isDurableFunctionStoreUncommitted());
 }
 
 /* ========================= INFO String Test ========================= */
@@ -748,17 +796,17 @@ TEST_F(SyncReplicationTest, AmzSwapdbGetParams) {
 
     server.cluster_enabled = 0;
     server.dbnum = 16;
-    ASSERT_TRUE(amzSwapdbGetParams(argv, 3, &id1, &id2));
+    ASSERT_TRUE(swapdbGetParams(argv, 3, &id1, &id2));
     ASSERT_EQ(id1, 0);
     ASSERT_EQ(id2, 1);
 
     /* Same DB should fail */
     decrRefCount(argv[2]);
     argv[2] = createStringObject("0", 1);
-    ASSERT_FALSE(amzSwapdbGetParams(argv, 3, &id1, &id2));
+    ASSERT_FALSE(swapdbGetParams(argv, 3, &id1, &id2));
 
     /* Wrong argc should fail */
-    ASSERT_FALSE(amzSwapdbGetParams(argv, 2, &id1, &id2));
+    ASSERT_FALSE(swapdbGetParams(argv, 2, &id1, &id2));
 
     decrRefCount(argv[0]);
     decrRefCount(argv[1]);
@@ -772,16 +820,16 @@ TEST_F(SyncReplicationTest, AmzSelectGetParams) {
     int dbid;
 
     server.dbnum = 16;
-    ASSERT_TRUE(amzSelectGetParams(argv, 2, nullptr, &dbid));
+    ASSERT_TRUE(selectGetParams(argv, 2, nullptr, &dbid));
     ASSERT_EQ(dbid, 5);
 
     /* Out of range */
     decrRefCount(argv[1]);
     argv[1] = createStringObject("99", 2);
-    ASSERT_FALSE(amzSelectGetParams(argv, 2, nullptr, &dbid));
+    ASSERT_FALSE(selectGetParams(argv, 2, nullptr, &dbid));
 
     /* Wrong argc */
-    ASSERT_FALSE(amzSelectGetParams(argv, 1, nullptr, &dbid));
+    ASSERT_FALSE(selectGetParams(argv, 1, nullptr, &dbid));
 
     decrRefCount(argv[0]);
     decrRefCount(argv[1]);
@@ -792,15 +840,15 @@ TEST_F(SyncReplicationTest, AmzGetDbIdFromRobj) {
     server.dbnum = 16;
 
     robj *valid = createStringObject("5", 1);
-    ASSERT_TRUE(amzGetDbIdFromRobj(valid, &db_id));
+    ASSERT_TRUE(getDbIdFromRobj(valid, &db_id));
     ASSERT_EQ(db_id, 5);
     decrRefCount(valid);
 
     robj *negative = createStringObject("-1", 2);
-    ASSERT_FALSE(amzGetDbIdFromRobj(negative, &db_id));
+    ASSERT_FALSE(getDbIdFromRobj(negative, &db_id));
     decrRefCount(negative);
 
     robj *too_big = createStringObject("99", 2);
-    ASSERT_FALSE(amzGetDbIdFromRobj(too_big, &db_id));
+    ASSERT_FALSE(getDbIdFromRobj(too_big, &db_id));
     decrRefCount(too_big);
 }

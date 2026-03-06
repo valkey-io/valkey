@@ -19,6 +19,7 @@ durabilityProvider testCustomProvider = {
     .name = "custom-test",
     .isEnabled = testCustomProviderIsEnabled,
     .getAckedOffset = testCustomProviderGetAckedOffset,
+    .paused = false,
 };
 
 static void initReplyBlockingTestEnv(void) {
@@ -637,10 +638,24 @@ int test_durabilityProviderSystem(int argc, char **argv, int flags) {
     server.aof_fsync = AOF_FSYNC_EVERYSEC;
     TEST_ASSERT(anyDurabilityProviderEnabled() == false);
 
-    /* -- Test 2: AOF provider becomes enabled when AOF is on + always fsync -- */
+    /* -- Test 2: AOF provider becomes enabled when AOF is on (regardless of fsync policy) -- */
     server.aof_state = AOF_ON;
     server.aof_fsync = AOF_FSYNC_ALWAYS;
     TEST_ASSERT(anyDurabilityProviderEnabled() == true);
+
+    /* AOF provider is also enabled with everysec or no fsync (pass-through mode) */
+    server.aof_fsync = AOF_FSYNC_EVERYSEC;
+    TEST_ASSERT(anyDurabilityProviderEnabled() == true);
+    server.aof_fsync = AOF_FSYNC_NO;
+    TEST_ASSERT(anyDurabilityProviderEnabled() == true);
+
+    /* -- Test 2b: AOF provider pass-through: getAckedOffset returns primary_repl_offset when fsync != always -- */
+    server.aof_state = AOF_ON;
+    server.aof_fsync = AOF_FSYNC_NO;
+    server.primary_repl_offset = 500;
+    TEST_ASSERT(getDurabilityConsensusOffset() == 500); /* pass-through */
+
+    server.aof_fsync = AOF_FSYNC_ALWAYS;
 
     /* -- Test 3: notifyDurabilityProgress unblocks clients (same as postAofFsync) -- */
     server.durability.sync_replication_enabled = 1;

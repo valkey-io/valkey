@@ -53,10 +53,19 @@ void resetDurabilityProviders(void) {
 /*================================= Built-in AOF Provider ==================== */
 
 static bool aofProviderIsEnabled(void) {
-    return server.aof_state != AOF_OFF && server.aof_fsync == AOF_FSYNC_ALWAYS;
+    return server.aof_state != AOF_OFF;
 }
 
 static long long aofProviderGetAckedOffset(void) {
+    /* If appendfsync is not "always", we cannot guarantee data is on disk
+     * after each write. Return primary_repl_offset to indicate "no constraint",
+     * effectively making this provider a transparent pass-through that doesn't
+     * block consensus. When appendfsync is switched to "always", the provider
+     * immediately starts returning the actual fsynced offset. */
+    if (server.aof_fsync != AOF_FSYNC_ALWAYS) {
+        return server.primary_repl_offset;
+    }
+
     /* Use fsynced_reploff_pending directly instead of fsynced_reploff.
      * When async AOF flushing is used (IO threads), fsynced_reploff_pending
      * is updated by the IO thread upon fsync completion, but fsynced_reploff
@@ -76,6 +85,8 @@ static durabilityProvider builtinAofProvider = {
     .name = "aof",
     .isEnabled = aofProviderIsEnabled,
     .getAckedOffset = aofProviderGetAckedOffset,
+    .paused = false,
+    .pausedOffset = 0,
 };
 
 /**
@@ -113,13 +124,63 @@ long long getDurabilityConsensusOffset(void) {
         durabilityProvider *p = durability_providers[i];
         if (!p->isEnabled()) continue;
         any_enabled = true;
-        long long offset = p->getAckedOffset();
+
+        long long offset;
+        if (p->paused) {
+            /* Paused provider (via DEBUG) returns the offset snapshot
+             * captured at pause time, freezing consensus at that point. */
+            offset = p->pausedOffset;
+        } else {
+            offset = p->getAckedOffset();
+        }
+
         if (offset == -1) {
-            /* Provider cannot make progress  block consensus. */
+            /* Provider cannot make progress — block consensus. */
             return -1;
         }
         if (offset < consensus) consensus = offset;
     }
 
     return any_enabled ? consensus : server.primary_repl_offset;
+}
+
+/**
+ * Pause a durability provider by name (via DEBUG command).
+ * When paused, the provider's current acknowledged offset is captured and
+ * frozen — any writes after the pause point will block until the provider
+ * is resumed and catches up.
+ * Returns true if provider was found, false otherwise.
+ */
+bool pauseDurabilityProvider(const char *name) {
+    for (int i = 0; i < num_durability_providers; i++) {
+        if (!strcasecmp(durability_providers[i]->name, name)) {
+            /* Snapshot the current acked offset before pausing so that
+             * writes already acknowledged remain unblocked. */
+            durability_providers[i]->pausedOffset = durability_providers[i]->getAckedOffset();
+            durability_providers[i]->paused = true;
+            serverLog(LL_NOTICE, "Paused durability provider: %s (frozen at offset %lld)",
+                       name, durability_providers[i]->pausedOffset);
+            return true;
+        }
+    }
+    return false;
+}
+
+/**
+ * Resume a durability provider by name (via DEBUG command).
+ * After resuming, triggers a durability progress check to unblock
+ * any clients that can now proceed.
+ * Returns true if provider was found, false otherwise.
+ */
+bool resumeDurabilityProvider(const char *name) {
+    for (int i = 0; i < num_durability_providers; i++) {
+        if (!strcasecmp(durability_providers[i]->name, name)) {
+            durability_providers[i]->paused = false;
+            /* Trigger a durability check to unblock any clients that can now proceed */
+            notifyDurabilityProgress();
+            serverLog(LL_NOTICE, "Resumed durability provider: %s", name);
+            return true;
+        }
+    }
+    return false;
 }

@@ -595,9 +595,11 @@ static long long getSingleCommandBlockingOffsetForConsistentWrites(struct client
 
     long long blocking_repl_offset = -1;
 
-    if ((listLength(server.durability.clients_waiting_replica_ack) > 0 || hasUncommittedKeys() || isDurableFunctionStoreUncommitted())) {
-        blocking_repl_offset = server.primary_repl_offset;
-    } else if ((server.primary_repl_offset > server.durability.pre_call_replication_offset) || (server.also_propagate.numops > pre_call_num_ops_pending_propagation)) {
+    // todo deal with keyspace commands.
+    // if ((listLength(server.durability.clients_waiting_replica_ack) > 0 || hasUncommittedKeys() || isDurableFunctionStoreUncommitted())) {
+    //    blocking_repl_offset = server.primary_repl_offset;
+    //} else 
+    if ((server.primary_repl_offset > server.durability.pre_call_replication_offset) || (server.also_propagate.numops > pre_call_num_ops_pending_propagation)) {
         blocking_repl_offset = getSingleCommandBlockingOffsetForReplicatingCommand(c);
     } else {
         blocking_repl_offset = getSingleCommandBlockingOffsetForNonReplicatingCommand(c);

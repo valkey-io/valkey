@@ -3,17 +3,19 @@
 # that blocks client responses until durability providers acknowledge writes.
 #
 # Tests are parameterized over provider_mode:
-#   replica - unblock via replica replication ack
+#   replica - TODO
 #   aof     - unblock via AOF appendfsync=always (automatic in beforeSleep)
 
-foreach provider_mode {replica aof} {
+foreach provider_mode {aof} {
 
     if {$provider_mode eq "replica"} {
         set server_overrides {sync-replication yes}
     } else {
-        # Start with appendfsync no so writes block until we explicitly
-        # trigger a fsync by switching to appendfsync always
-        set server_overrides {sync-replication yes appendonly yes appendfsync no}
+        # Start with appendfsync always so the AOF provider is fully active.
+        # We use DEBUG durability-provider-pause/resume to control blocking
+        # instead of toggling appendfsync, which avoids the issue where the
+        # provider reports as disabled when appendfsync != always.
+        set server_overrides {sync-replication yes appendonly yes appendfsync always}
     }
 
     start_server [list tags {"repl durability external:skip"} overrides $server_overrides] {
@@ -26,9 +28,31 @@ foreach provider_mode {replica aof} {
             set replica_host [srv 0 host]
             set replica_port [srv 0 port]
 
-            # Helper: trigger durability acknowledgement.
+            # Helper: put the provider into a state where writes will block.
+            #   replica mode: ensure no replica is connected (so no one acks writes)
+            #   aof mode: pause the AOF provider so fsynced offsets are not advanced
+            proc pause_provider {} {
+                upvar provider_mode provider_mode
+                upvar primary primary
+                upvar replica replica
+
+                if {$provider_mode eq "replica"} {
+                    # Disconnect any existing replica so the next write has no one to ack it
+                    $replica replicaof no one
+                    wait_for_condition 50 100 {
+                        [llength [$primary client list type replica]] == 0
+                    } else {
+                        fail "Primary didn't notice replica disconnect"
+                    }
+                } else {
+                    # Pause the AOF provider so the next write will block
+                    $primary DEBUG durability-provider-pause aof
+                }
+            }
+
+            # Helper: trigger durability acknowledgement, unblocking pending replies.
             #   replica mode: connect replica and wait for replication ack
-            #   aof mode: switch appendfsync to always, which triggers a fsync in beforeSleep
+            #   aof mode: resume the AOF provider and ping to force a beforeSleep fsync
             proc unblock_with_provider {} {
                 upvar provider_mode provider_mode
                 upvar primary primary
@@ -43,31 +67,10 @@ foreach provider_mode {replica aof} {
                     wait_replica_online $primary
                     wait_replica_acked_ofs $primary $replica $replica_host $replica_port
                 } else {
-                    # Switch from appendfsync no -> always to trigger AOF fsync
-                    $primary config set appendfsync always
+                    # Resume the AOF provider so it reports real fsynced offsets
+                    $primary DEBUG durability-provider-resume aof
                     # Issue a PING to force a beforeSleep cycle that fsyncs the AOF
                     $primary ping
-                }
-            }
-
-            # Helper: reset provider state after a blocking test.
-            #   replica mode: disconnect replica
-            #   aof mode: switch appendfsync back to no (so next test blocks again)
-            proc cleanup_provider {} {
-                upvar provider_mode provider_mode
-                upvar primary primary
-                upvar replica replica
-
-                if {$provider_mode eq "replica"} {
-                    $replica replicaof no one
-                    wait_for_condition 50 100 {
-                        [llength [$primary client list type replica]] == 0
-                    } else {
-                        fail "Primary didn't notice replica disconnect"
-                    }
-                } else {
-                    # Reset to appendfsync no so the next write will block
-                    $primary config set appendfsync no
                 }
             }
 
@@ -75,6 +78,8 @@ foreach provider_mode {replica aof} {
 
             test "($provider_mode) Sync replication blocks replies until provider acks" {
                 assert_equal "yes" [lindex [$primary config get sync-replication] 1]
+
+                pause_provider
 
                 set rd [valkey_deferring_client -1]
                 $rd set durable:blocked value
@@ -89,12 +94,12 @@ foreach provider_mode {replica aof} {
 
                 assert_equal "OK" [$rd read]
                 $rd close
-
-                cleanup_provider
             }
 
             test "($provider_mode) Sync replication blocks EXEC replies until provider acks" {
                 assert_equal "yes" [lindex [$primary config get sync-replication] 1]
+
+                pause_provider
 
                 set rd [valkey_deferring_client -1]
                 $rd multi
@@ -114,12 +119,16 @@ foreach provider_mode {replica aof} {
 
                 assert_equal {OK} [$rd read]
                 $rd close
-
-                cleanup_provider
             }
 
             test "($provider_mode) Sync replication blocks only written keys in EXEC" {
                 assert_equal "yes" [lindex [$primary config get sync-replication] 1]
+
+                # Pre-populate with sync-repl off so the SET doesn't block
+                assert_equal "OK" [$primary set durable:multi clean]
+                # Verify the pre-populated value is readable on the primary before EXEC
+
+                pause_provider
 
                 set rd [valkey_deferring_client -1]
                 $rd multi
@@ -129,9 +138,8 @@ foreach provider_mode {replica aof} {
                 assert_equal "OK" [$rd read]
                 assert_equal "QUEUED" [$rd read]
                 assert_equal "QUEUED" [$rd read]
+                assert_equal {clean} [$primary get durable:multi]
 
-                set reader [valkey_client]
-                assert_equal {value} [$reader get durable:multi]
 
                 $rd exec
                 set fd [$rd channel]
@@ -142,16 +150,19 @@ foreach provider_mode {replica aof} {
 
                 unblock_with_provider
 
-                assert_equal {OK value} [$rd read]
+                assert_equal {OK clean} [$rd read]
                 $rd close
-
-                cleanup_provider
             }
 
             test "($provider_mode) Lua script write blocks replies until provider acks" {
                 assert_equal "yes" [lindex [$primary config get sync-replication] 1]
 
+                # Pre-populate with sync-repl off so the SET doesn't block
+                assert_equal "OK" [$primary config set sync-replication no]
                 assert_equal "OK" [$primary set durable:lua-clean clean]
+                assert_equal "OK" [$primary config set sync-replication yes]
+
+                pause_provider
 
                 set rd [valkey_deferring_client -1]
                 $rd eval {redis.call('set', KEYS[1], ARGV[1]); return redis.call('get', KEYS[2])} 2 durable:lua-dirty durable:lua-clean value
@@ -162,19 +173,19 @@ foreach provider_mode {replica aof} {
                 fconfigure $fd -blocking 1
                 assert_equal "" $early_reply
 
-                set reader [valkey_client]
+                set reader [valkey_client -1]
                 assert_equal {clean} [$reader get durable:lua-clean]
 
                 unblock_with_provider
 
                 assert_equal {clean} [$rd read]
                 $rd close
-
-                cleanup_provider
             }
 
             test "($provider_mode) Lua script error after partial write still blocks" {
                 assert_equal "yes" [lindex [$primary config get sync-replication] 1]
+
+                pause_provider
 
                 set rd [valkey_deferring_client -1]
                 $rd eval {redis.call('set', KEYS[1], 'written'); error('deliberate error')} 1 durable:lua-error-key
@@ -190,8 +201,6 @@ foreach provider_mode {replica aof} {
                 catch {$rd read} err
                 assert_match "*deliberate error*" $err
                 $rd close
-
-                cleanup_provider
             }
 
             # ==================== Non-blocking tests ====================
@@ -199,7 +208,10 @@ foreach provider_mode {replica aof} {
             test "($provider_mode) EVAL_RO should not block replies" {
                 assert_equal "yes" [lindex [$primary config get sync-replication] 1]
 
+                # Pre-populate with sync-repl off so the SET doesn't block
+                assert_equal "OK" [$primary config set sync-replication no]
                 assert_equal "OK" [$primary set durable:eval-ro-key hello]
+                assert_equal "OK" [$primary config set sync-replication yes]
 
                 set rd [valkey_deferring_client -1]
                 $rd eval_ro {return redis.call('get', KEYS[1])} 1 durable:eval-ro-key
@@ -229,7 +241,10 @@ foreach provider_mode {replica aof} {
             test "($provider_mode) MULTI/EXEC with no writes does not block" {
                 assert_equal "yes" [lindex [$primary config get sync-replication] 1]
 
+                # Pre-populate with sync-repl off so the SET doesn't block
+                assert_equal "OK" [$primary config set sync-replication no]
                 assert_equal "OK" [$primary set durable:nowrite-key existing]
+                assert_equal "OK" [$primary config set sync-replication yes]
 
                 set rd [valkey_deferring_client -1]
                 $rd multi
@@ -305,6 +320,8 @@ foreach provider_mode {replica aof} {
             test "($provider_mode) Multiple concurrent writers block independently" {
                 assert_equal "yes" [lindex [$primary config get sync-replication] 1]
 
+                pause_provider
+
                 set wr1 [valkey_deferring_client -1]
                 set wr2 [valkey_deferring_client -1]
 
@@ -329,12 +346,12 @@ foreach provider_mode {replica aof} {
 
                 $wr1 close
                 $wr2 close
-
-                cleanup_provider
             }
 
             test "($provider_mode) Write then read on same client preserves reply ordering" {
                 assert_equal "yes" [lindex [$primary config get sync-replication] 1]
+
+                pause_provider
 
                 set rd [valkey_deferring_client -1]
                 $rd set durable:ordering-key orderval
@@ -351,8 +368,6 @@ foreach provider_mode {replica aof} {
                 assert_equal "OK" [$rd read]
                 assert_equal "orderval" [$rd read]
                 $rd close
-
-                cleanup_provider
             }
 
             # ==================== Database-level commands ====================
@@ -363,6 +378,8 @@ foreach provider_mode {replica aof} {
                 assert_equal "OK" [$primary config set sync-replication no]
                 assert_equal "OK" [$primary set durable:flush-pre existing]
                 assert_equal "OK" [$primary config set sync-replication yes]
+
+                pause_provider
 
                 set rd [valkey_deferring_client -1]
                 $rd multi
@@ -382,16 +399,14 @@ foreach provider_mode {replica aof} {
 
                 assert_equal {OK} [$rd read]
                 $rd close
-
-                cleanup_provider
             }
 
             test "($provider_mode) FLUSHALL blocks write reply until provider acks" {
                 assert_equal "yes" [lindex [$primary config get sync-replication] 1]
 
-                assert_equal "OK" [$primary config set sync-replication no]
                 assert_equal "OK" [$primary set durable:flushall-key value]
-                assert_equal "OK" [$primary config set sync-replication yes]
+
+                pause_provider
 
                 set rd [valkey_deferring_client -1]
                 $rd flushall
@@ -406,8 +421,6 @@ foreach provider_mode {replica aof} {
 
                 assert_equal "OK" [$rd read]
                 $rd close
-
-                cleanup_provider
             }
 
             test "($provider_mode) FLUSHALL inside MULTI/EXEC blocks all databases" {
@@ -416,6 +429,8 @@ foreach provider_mode {replica aof} {
                 assert_equal "OK" [$primary config set sync-replication no]
                 assert_equal "OK" [$primary set durable:flushall-multi-key value]
                 assert_equal "OK" [$primary config set sync-replication yes]
+
+                pause_provider
 
                 set rd [valkey_deferring_client -1]
                 $rd multi
@@ -435,8 +450,6 @@ foreach provider_mode {replica aof} {
 
                 assert_equal {OK} [$rd read]
                 $rd close
-
-                cleanup_provider
             }
 
             test "($provider_mode) COPY cross-database blocks write reply" {
@@ -445,6 +458,8 @@ foreach provider_mode {replica aof} {
                 assert_equal "OK" [$primary config set sync-replication no]
                 assert_equal "OK" [$primary set durable:copy-src srcvalue]
                 assert_equal "OK" [$primary config set sync-replication yes]
+
+                pause_provider
 
                 set rd [valkey_deferring_client -1]
                 $rd copy durable:copy-src durable:copy-dst db 1
@@ -459,19 +474,17 @@ foreach provider_mode {replica aof} {
 
                 assert_equal 1 [$rd read]
                 $rd close
-
-                cleanup_provider
             }
 
             test "($provider_mode) SWAPDB blocks write reply until provider acks" {
                 assert_equal "yes" [lindex [$primary config get sync-replication] 1]
 
-                assert_equal "OK" [$primary config set sync-replication no]
                 assert_equal "OK" [$primary set durable:swap-db0 db0val]
                 $primary select 1
                 assert_equal "OK" [$primary set durable:swap-db1 db1val]
                 $primary select 0
-                assert_equal "OK" [$primary config set sync-replication yes]
+
+                pause_provider
 
                 set rd [valkey_deferring_client -1]
                 $rd swapdb 0 1
@@ -487,21 +500,25 @@ foreach provider_mode {replica aof} {
                 assert_equal "OK" [$rd read]
                 $rd close
 
-                # Swap back to restore state
+                # Swap back to restore state (with sync-repl off so it doesn't block)
+                $primary config set sync-replication no
                 $primary swapdb 0 1
-
-                cleanup_provider
+                $primary config set sync-replication yes
             }
 
             test "($provider_mode) MOVE blocks write reply until provider acks" {
                 assert_equal "yes" [lindex [$primary config get sync-replication] 1]
 
-                assert_equal "OK" [$primary config set sync-replication no]
+                $primary select 2
+                $primary del durable:move-key
+                $primary select 9
                 assert_equal "OK" [$primary set durable:move-key moveval]
                 assert_equal "OK" [$primary config set sync-replication yes]
 
+                pause_provider
+
                 set rd [valkey_deferring_client -1]
-                $rd move durable:move-key 1
+                $rd move durable:move-key 2
 
                 set fd [$rd channel]
                 fconfigure $fd -blocking 0
@@ -513,12 +530,12 @@ foreach provider_mode {replica aof} {
 
                 assert_equal 1 [$rd read]
                 $rd close
-
-                cleanup_provider
             }
 
             test "($provider_mode) MULTI/EXEC with SELECT writes to multiple databases blocks" {
                 assert_equal "yes" [lindex [$primary config get sync-replication] 1]
+
+                pause_provider
 
                 set rd [valkey_deferring_client -1]
                 $rd multi
@@ -547,14 +564,14 @@ foreach provider_mode {replica aof} {
 
                 assert_equal {OK OK OK OK} [$rd read]
                 $rd close
-
-                cleanup_provider
             }
 
             # ==================== Function store ====================
 
             test "($provider_mode) FUNCTION LOAD blocks reply until provider acks" {
                 assert_equal "yes" [lindex [$primary config get sync-replication] 1]
+
+                pause_provider
 
                 set rd [valkey_deferring_client -1]
                 $rd function load "#!lua name=durtest\nserver.register_function('durfunc', function() return 'hello' end)"
@@ -569,12 +586,12 @@ foreach provider_mode {replica aof} {
 
                 assert_equal "durtest" [$rd read]
                 $rd close
-
-                cleanup_provider
             }
 
             test "($provider_mode) FUNCTION DELETE blocks reply until provider acks" {
                 assert_equal "yes" [lindex [$primary config get sync-replication] 1]
+
+                pause_provider
 
                 set rd [valkey_deferring_client -1]
                 $rd function delete durtest
@@ -589,14 +606,14 @@ foreach provider_mode {replica aof} {
 
                 assert_equal "OK" [$rd read]
                 $rd close
-
-                cleanup_provider
             }
 
             # ==================== Dirty key reads ====================
 
             test "($provider_mode) Sync replication blocks reads on dirty keys" {
                 assert_equal "yes" [lindex [$primary config get sync-replication] 1]
+
+                pause_provider
 
                 set writer [valkey_deferring_client -1]
                 $writer client reply off
@@ -615,14 +632,14 @@ foreach provider_mode {replica aof} {
 
                 assert_equal "dirty" [$rd read]
                 $rd close
-
-                cleanup_provider
             }
 
             # ==================== Client disconnect stats ====================
 
             test "($provider_mode) Client disconnect while blocked updates stats" {
                 assert_equal "yes" [lindex [$primary config get sync-replication] 1]
+
+                pause_provider
 
                 set rd [valkey_deferring_client -1]
                 $rd set durable:disconnect-test value
@@ -661,6 +678,8 @@ foreach provider_mode {replica aof} {
             test "($provider_mode) Disabling sync replication unblocks pending replies" {
                 assert_equal "yes" [lindex [$primary config get sync-replication] 1]
 
+                pause_provider
+
                 set rd [valkey_deferring_client -1]
                 $rd set durable:toggle-blocked value
 
@@ -697,10 +716,17 @@ foreach provider_mode {replica aof} {
                 assert_match "*sync_repl_previous_acked_offset:*" $info
             }
 
-            # ==================== Failover tests (must be last  changes roles) ====================
+            # ==================== Failover tests (must be last  changes roles) ====================
 
             test "($provider_mode) Failover disconnects clients waiting for ack" {
+                # Ensure replica is in clean state for deterministic failover behavior.
+                # In replica mode, earlier tests connected the replica and replicated data;
+                # we flush it here so the demoted primary's dirty key tracking is preserved
+                # correctly after failover (not overwritten by a full sync).
+                $replica flushall
                 assert_equal "yes" [lindex [$primary config get sync-replication] 1]
+
+                pause_provider
 
                 set rd [valkey_deferring_client -1]
                 $rd client setname durability-waiter

@@ -56,6 +56,7 @@
  * function names. For details, see the script src/modules/gendoc.rb.
  * -------------------------------------------------------------------------- */
 
+#include "reply_blocking.h"
 #include "server.h"
 #include "cluster.h"
 #include "commandlog.h"
@@ -6800,6 +6801,16 @@ ValkeyModuleCallReply *VM_Call(ValkeyModuleCtx *ctx, const char *cmdname, const 
         if (!(flags & VALKEYMODULE_ARGV_NO_AOF)) call_flags |= CMD_CALL_PROPAGATE_AOF;
         if (!(flags & VALKEYMODULE_ARGV_NO_REPLICAS)) call_flags |= CMD_CALL_PROPAGATE_REPL;
     }
+    
+    //check if we need to reject the execution due to access to dirty data
+    char *pre_script_err = preScriptCmd(c);
+    if (pre_script_err != NULL) {
+        if (error_as_call_replies) {
+            reply_error_msg = sdsnew(pre_script_err);
+        }
+        goto cleanup;
+    }
+    
     call(c, call_flags);
 
     /* Propagate database changes from the temporary client back to the context client

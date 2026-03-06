@@ -120,7 +120,10 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - name: make
         # Build with additional upcoming features
-        run: make -j3 all-with-unit-tests SERVER_CFLAGS='-Werror' USE_FAST_FLOAT=yes
+        run: |
+          export AR=/opt/homebrew/opt/llvm/bin/llvm-ar
+          export RANLIB=/opt/homebrew/opt/llvm/bin/llvm-ranlib
+          make -j3 all-with-unit-tests SERVER_CFLAGS='-Werror' USE_FAST_FLOAT=yes
 
   build-32bit:
     runs-on: ubuntu-latest

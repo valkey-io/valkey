@@ -52,11 +52,11 @@ start_server {tags {"dual-channel-replication external:skip"}} {
             }
         }
 
-        test "Test dual-channel-replication-enabled enters wait_bgsave" {
+        test "Test dual-channel-replication-enabled enters wait_bgsave/wait_bgrewrite" {
             wait_for_condition 50 1000 {
                 [string match *state=wait_bg* [$primary info replication]]
             } else {
-                fail "Replica does not enter wait_bgsave state"
+                fail "Replica does not enter wait_bgsave/wait_bgrewrite state"
             }
         }
 
@@ -1495,11 +1495,11 @@ start_server {tags {"dual-channel-replication external:skip"}} {
         test "dual-channel-replication rdb-channel reports replica-announce-ip" {
             $replica replicaof $primary_host $primary_port
 
-            # Wait for replica to enter wait_bgsave state (rdb-channel established)
+            # Wait for replica to enter wait_bgsave/wait_bgrewrite state (rdb-channel established)
             wait_for_condition 50 1000 {
-                [string match *state=wait_bgsave* [$primary info replication]]
+                [string match *state=wait_bg* [$primary info replication]]
             } else {
-                fail "Replica does not enter wait_bgsave state"
+                fail "Replica does not enter wait_bgsave/wait_bgrewrite state"
             }
 
             # Verify the rdb-channel shows the announced IP, not connection IP
@@ -1551,9 +1551,9 @@ test "Dual channel replication buffer memory fields" {
 
             # Ensure that all states meet our expectations.
             wait_for_condition 1000 50 {
-                [string match "*slave*,state=wait_bgsave*,type=rdb-channel*" [$primary info replication]] &&
+                [string match "*slave*,state=wait_bg*,type=rdb-channel*" [$primary info replication]] &&
                 [string match "*slave*,state=bg_transfer*,type=main-channel*" [$primary info replication]] &&
-                [s $primary_srv_id rdb_bgsave_in_progress] eq 1 &&
+                (([s -1 rdb_bgsave_in_progress] eq 1) || ([s -1 aof_rewrite_in_progress] eq 1)) &&
                 [s $replica_srv_id master_sync_in_progress] eq 1
             } else {
                 fail "replica didn't start a dual-channel sync session in time"

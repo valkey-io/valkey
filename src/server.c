@@ -2325,6 +2325,8 @@ void initServerConfig(void) {
     server.dict_resizing = 1;
     server.import_mode = 0;
     server.repl_stream_dbid = -1;
+    server.repl_replica_stream_dbid = -1;
+    server.repl_transfer_format = REPL_SNAPSHOT_RDB;
 
     server.latency_tracking_info_percentiles_len = 3;
     server.latency_tracking_info_percentiles = zmalloc(sizeof(double) * (server.latency_tracking_info_percentiles_len));

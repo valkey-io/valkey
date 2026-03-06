@@ -557,6 +557,10 @@ typedef enum {
 #define REPL_DISKLESS_LOAD_SWAPDB 2
 #define REPL_DISKLESS_LOAD_FLUSH_BEFORE_LOAD 3
 
+/* Replication fullsync format */
+#define REPL_FULLSYNC_RDB 0
+#define REPL_FULLSYNC_AOF 1
+
 /* TLS Client Authentication */
 #define TLS_CLIENT_AUTH_NO 0
 #define TLS_CLIENT_AUTH_YES 1
@@ -2043,7 +2047,6 @@ struct valkeyServer {
     int aof_load_truncated;             /* Don't stop on unexpected AOF EOF. */
     int aof_use_rdb_preamble;           /* Specify base AOF to use RDB encoding on AOF rewrites. */
     int aof_rewrite_use_rdb_preamble;   /* Base AOF to use RDB encoding on AOF rewrites start. */
-    int aof_rewrite_for_replication;    /* Current AOF child is for replication, not normal AOFRW. */
     _Atomic int aof_bio_fsync_status;   /* Status of AOF fsync in bio job. */
     _Atomic int aof_bio_fsync_errno;    /* Errno of AOF fsync in bio job. */
     aofManifest *aof_manifest;          /* Used to track AOFs. */
@@ -2119,6 +2122,7 @@ struct valkeyServer {
                                         fsynced_reploff only when AOF state is AOF_ON
                                         (not during the initial rewrite) */
     long long fsynced_reploff;                 /* Largest replication offset that has been confirmed to be fsynced */
+    int aof_rewrite_for_replication;           /* Current AOF child is for replication, not normal AOFRW. */
     int replicas_eldb;                         /* Last SELECTed DB in replication output */
     int repl_ping_replica_period;              /* Primary pings the replica every N seconds */
     replBacklog *repl_backlog;                 /* Replication backlog for partial syncs */
@@ -2139,7 +2143,7 @@ struct valkeyServer {
                                                 * delay (start sooner if they all connect). */
     int dual_channel_replication;              /* Config used to determine if the replica should
                                                 * use dual channel replication for full syncs. */
-    int fullsync_aof_replication;              /* Config used to determine if the primary should
+    int repl_fullsync_format;                  /* Config used to determine if the primary should
                                                 * use the base aof for full syncs. */
     _Atomic int replica_bio_disk_save_state;   /* Flag set by the bio thread to indicate that the
                                                 * RDB save to disk has completed, or failed */
@@ -2184,7 +2188,7 @@ struct valkeyServer {
     connection *repl_transfer_s;        /* Replica -> Primary SYNC connection */
     connection *repl_rdb_transfer_s;    /* Primary FULL SYNC connection (RDB download) */
     replSnapshotType repl_transfer_format;
-    sds repl_transfer_fullsync_aof_name;
+    char *fullsync_aof_name;
     int repl_stream_dbid;
     int repl_replica_stream_dbid;
     int repl_transfer_fd;                /* Replica -> Primary SYNC temp file descriptor */
@@ -3271,7 +3275,7 @@ void feedAppendOnlyFile(int dictid, robj **argv, int argc);
 void aofRemoveTempFile(pid_t childpid, int from_signal);
 int rewriteAppendOnlyFileToReplicasSockets(int req);
 int rewriteAppendOnlyFileBackground(void);
-int rewriteAofBackgroundForReplication(int req);
+int rewriteAofBackgroundForReplication(int req, int aofflags);
 int loadAppendOnlyFiles(aofManifest *am);
 void stopAppendOnly(void);
 int startAppendOnly(void);

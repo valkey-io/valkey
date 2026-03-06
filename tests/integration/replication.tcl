@@ -1221,7 +1221,7 @@ test {Kill rdb child process if its dumping RDB is not useful} {
                 $master config set rdb-key-save-delay 1000000
                 $master config set repl-diskless-sync no
                 $master config set save ""
-                $master config set fullsync-aof no
+                $master config set repl-fullsync-format RDB
 
                 $slave1 slaveof $master_host $master_port
                 $slave2 slaveof $master_host $master_port
@@ -1567,7 +1567,7 @@ start_server {tags {"repl external:skip"}} {
         set primary_host [srv 0 host]
         set primary_port [srv 0 port]
         $primary set primary_key primary_value
-        $primary config set fullsync-aof no
+        $primary config set repl-fullsync-format RDB
 
         test {Replica keep the old data if RDB file save fails in disk-based replication} {
             # Create a folder called 'dump.rdb' to trigger temp-rdb rename failure

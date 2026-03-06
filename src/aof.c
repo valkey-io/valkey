@@ -46,7 +46,7 @@ off_t getAppendOnlyFileSize(sds filename, int *status);
 off_t getBaseAndIncrAppendOnlyFilesSize(aofManifest *am, int *status);
 int getBaseAndIncrAppendOnlyFilesNum(aofManifest *am);
 int aofFileExist(char *filename);
-int rewriteAppendOnlyFile(char *filename, int req);
+int rewriteAppendOnlyFile(char *filename, int req, int aofflags);
 aofManifest *aofLoadManifestFromFile(sds am_filepath);
 void aofManifestFreeAndUpdate(aofManifest *am);
 void aof_background_fsync_and_close(int fd);
@@ -715,7 +715,7 @@ void aofOpenIfNeededOnServerStart(void) {
     if (!server.aof_manifest->base_aof_info && !incr_aof_len) {
         sds base_name = getNewBaseFileNameAndMarkPreAsHistory(server.aof_manifest, server.aof_use_rdb_preamble);
         sds base_filepath = makePath(server.aof_dirname, base_name);
-        if (rewriteAppendOnlyFile(base_filepath, REPLICA_REQ_NONE) != C_OK) {
+        if (rewriteAppendOnlyFile(base_filepath, REPLICA_REQ_NONE, RDBFLAGS_NONE) != C_OK) {
             exit(1);
         }
         sdsfree(base_filepath);
@@ -2400,7 +2400,7 @@ werr: /* Write error. */
  * log, the server uses variadic commands when possible, such as RPUSH, SADD
  * and ZADD. However at max AOF_REWRITE_ITEMS_PER_CMD items per time
  * are inserted using a single command. */
-int rewriteAppendOnlyFile(char *filename, int req) {
+int rewriteAppendOnlyFile(char *filename, int req, int aofflags) {
     rio aof;
     FILE *fp = NULL;
     char tmpfile[256];
@@ -2418,10 +2418,10 @@ int rewriteAppendOnlyFile(char *filename, int req) {
 
     if (server.aof_rewrite_incremental_fsync) {
         rioSetAutoSync(&aof, REDIS_AUTOSYNC_BYTES);
-        rioSetReclaimCache(&aof, 1);
+        if (!(aofflags & RDBFLAGS_KEEP_CACHE)) rioSetReclaimCache(&aof, 1);
     }
 
-    startSaving(RDBFLAGS_AOF_PREAMBLE);
+    startSaving(RDBFLAGS_AOF_PREAMBLE | aofflags);
 
     if (server.aof_use_rdb_preamble) {
         int error;
@@ -2436,7 +2436,7 @@ int rewriteAppendOnlyFile(char *filename, int req) {
     /* Make sure data will not remain on the OS's output buffers */
     if (fflush(fp)) goto werr;
     if (fsync(fileno(fp))) goto werr;
-    if (reclaimFilePageCache(fileno(fp), 0, 0) == -1) {
+    if (!(aofflags & RDBFLAGS_KEEP_CACHE) && reclaimFilePageCache(fileno(fp), 0, 0) == -1) {
         /* A minor error. Just log to know what happens */
         serverLog(LL_NOTICE, "Unable to reclaim page cache: %s", strerror(errno));
     }
@@ -2530,7 +2530,7 @@ int rewriteAppendOnlyFileBackground(void) {
         }
         serverSetCpuAffinity(server.aof_rewrite_cpulist);
         snprintf(tmpfile, 256, "temp-rewriteaof-bg-%d.aof", (int)getpid());
-        if (rewriteAppendOnlyFile(tmpfile, REPLICA_REQ_NONE) == C_OK) {
+        if (rewriteAppendOnlyFile(tmpfile, REPLICA_REQ_NONE, RDBFLAGS_NONE) == C_OK) {
             serverLog(LL_NOTICE, "Successfully created the temporary AOF base file %s", tmpfile);
             sendChildCowInfo(CHILD_INFO_TYPE_AOF_COW_SIZE, "AOF rewrite");
             exitFromChild(0);
@@ -2548,6 +2548,7 @@ int rewriteAppendOnlyFileBackground(void) {
         server.aof_rewrite_scheduled = 0;
         server.aof_rewrite_time_start = time(NULL);
         server.aof_rewrite_use_rdb_preamble = server.aof_use_rdb_preamble;
+        server.rdb_child_type = SNAPSHOT_CHILD_TYPE_DISK;
         return C_OK;
     }
     return C_OK; /* unreached */
@@ -2559,49 +2560,23 @@ int rewriteAppendOnlyFileBackground(void) {
  * that writes the dataset as AOF commands into a temporary file using
  * rewriteRioWithEOFMark(). The temp file is used to send data to replicas and
  * then cleaned up. */
-int rewriteAofBackgroundForReplication(int req) {
+int rewriteAofBackgroundForReplication(int req, int aofflags) {
     pid_t childpid;
 
     if (hasActiveChildProcess()) return C_ERR;
 
     if ((childpid = serverFork(CHILD_TYPE_AOF)) == 0) {
         /* Child */
-        char tmpfile[256];
-        rio aof;
-        FILE *fp;
-        int retval;
-
-        serverSetProcTitle("valkey-aof-for-replication");
+        serverSetProcTitle("valkey-aof-rewrite-for-replication");
         serverSetCpuAffinity(server.aof_rewrite_cpulist);
-        snprintf(tmpfile, 256, "temp-rewriteaof-bg-%d.aof", (int)getpid());
-
-        fp = fopen(tmpfile, "w");
-        if (!fp) {
-            serverLog(LL_WARNING, "Opening the temp file for AOF replication: %s", strerror(errno));
-            exitFromChild(1);
-        }
-
         server.aof_use_rdb_preamble = 0;
-        rioInitWithFile(&aof, fp);
+        server.aof_timestamp_enabled = 0;
 
-        if (server.aof_rewrite_incremental_fsync) {
-            rioSetAutoSync(&aof, REDIS_AUTOSYNC_BYTES);
-            rioSetReclaimCache(&aof, 1);
-        }
-
-        retval = rewriteRioWithEOFMark(&aof, req);
-
-        if (retval == C_OK && fflush(fp) == EOF) retval = C_ERR;
-        if (retval == C_OK && fsync(fileno(fp)) == -1) retval = C_ERR;
-        if (retval == C_OK) reclaimFilePageCache(fileno(fp), 0, 0);
-        if (fclose(fp) == EOF && retval == C_OK) retval = C_ERR;
-
-        if (retval == C_OK) {
-            serverLog(LL_NOTICE, "Successfully created the temporary AOF file %s for replication", tmpfile);
+        if (rewriteAppendOnlyFile(server.fullsync_aof_name, req, aofflags) == C_OK) {
+            serverLog(LL_NOTICE, "Successfully created the AOF base file %s for replication", server.fullsync_aof_name);
             sendChildCowInfo(CHILD_INFO_TYPE_AOF_COW_SIZE, "AOF rewrite");
             exitFromChild(0);
         } else {
-            unlink(tmpfile);
             exitFromChild(1);
         }
     } else {
@@ -2909,8 +2884,6 @@ void backgroundRewriteDoneHandlerDisk(int exitcode, int bysignal) {
         /* For replication, just record the temp file path.
          * Don't touch AOF manifest or rename to base-aof. */
         if (server.aof_rewrite_for_replication) {
-            sdsfree(server.repl_transfer_fullsync_aof_name);
-            server.repl_transfer_fullsync_aof_name = sdsnew(tmpfile);
             serverLog(LL_NOTICE, "Background AOF for replication terminated with success");
             return;
         }

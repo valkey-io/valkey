@@ -69,7 +69,7 @@ void syncWithPrimary(connection *conn);
 /* We take a global flag to remember if this instance generated an RDB
  * because of replication, so that we can remove the RDB file in case
  * the instance is configured to have no persistence. */
-int SnapshotGeneratedByReplication = 0;
+int RDBGeneratedByReplication = 0;
 
 /* --------------------------- Utility functions ---------------------------- */
 ConnectionType *connTypeOfReplication(void) {
@@ -1025,7 +1025,7 @@ int startGenerateSnapshotForReplication(int mincapa, int req, int rdbver) {
             if (socket_target) {
                 retval = rewriteAppendOnlyFileToReplicasSockets(req);
             } else {
-                retval = rewriteAofBackgroundForReplication(req);
+                retval = rewriteAofBackgroundForReplication(req, RDBFLAGS_REPLICATION | RDBFLAGS_KEEP_CACHE);
             }
         } else {
             if (socket_target)
@@ -1048,7 +1048,7 @@ int startGenerateSnapshotForReplication(int mincapa, int req, int rdbver) {
      * that we don't set the flag to 1 if the feature is disabled, otherwise
      * it would never be cleared: the file is not deleted. This way if
      * the user enables it later with CONFIG SET, we are fine. */
-    if (retval == C_OK && !socket_target && !fullsync_aof && server.rdb_del_sync_files) SnapshotGeneratedByReplication = 1;
+    if (retval == C_OK && !socket_target && !fullsync_aof && server.rdb_del_sync_files) RDBGeneratedByReplication = 1;
 
     /* If we failed to BGSAVE, remove the replicas waiting for a full
      * resynchronization from the list of replicas, inform them with
@@ -1473,7 +1473,7 @@ void replconfCommand(client *c) {
                 }
             } else if (!strcasecmp(objectGetVal(c->argv[j + 1]), "fullsync-aof")) {
                 /* AOF do not have aux field to support slot migration. */
-                if (server.fullsync_aof_replication && !(c->repl_data->replica_capa & REPLICA_CAPA_DUAL_CHANNEL) && !clusterIsAnySlotMoving()) {
+                if (server.repl_fullsync_format == REPL_FULLSYNC_AOF && !(c->repl_data->replica_capa & REPLICA_CAPA_DUAL_CHANNEL) && !clusterIsAnySlotMoving()) {
                     c->repl_data->replica_capa |= REPLICA_CAPA_FULLSYNC_AOF;
                 }
             } else if (!strcasecmp(objectGetVal(c->argv[j + 1]), REPLICA_CAPA_SKIP_RDB_CHECKSUM_STR))
@@ -1659,40 +1659,38 @@ void replicaStartCommandStream(client *replica) {
  * without any persistence. We don't want instances without persistence
  * to take RDB files around, this violates certain policies in certain
  * environments. */
-void removeSnapshotUsedToSyncReplicas(void) {
+void removeRDBUsedToSyncReplicas(void) {
     /* If the feature is disabled, return ASAP but also clear the
-     * SnapshotGeneratedByReplication flag in case it was set. Otherwise if the
+     * RDBGeneratedByReplication flag in case it was set. Otherwise if the
      * feature was enabled, but gets disabled later with CONFIG SET, the
      * flag may remain set to one: then next time the feature is re-enabled
      * via CONFIG SET we have it set even if no RDB was generated
      * because of replication recently. */
     if (!server.rdb_del_sync_files) {
-        SnapshotGeneratedByReplication = 0;
+        RDBGeneratedByReplication = 0;
         return;
     }
 
-    if (allPersistenceDisabled() && SnapshotGeneratedByReplication) {
+    if (allPersistenceDisabled() && RDBGeneratedByReplication) {
         client *replica;
         listNode *ln;
         listIter li;
 
-        int del_snapshot = 1;
+        int delrdb = 1;
         listRewind(server.replicas, &li);
         while ((ln = listNext(&li))) {
             replica = ln->value;
             if (replica->repl_data->repl_state == REPLICA_STATE_WAIT_BGSAVE_START ||
                 replica->repl_data->repl_state == REPLICA_STATE_WAIT_BGSAVE_END ||
-                replica->repl_data->repl_state == REPLICA_STATE_WAIT_BGREWRITE_START ||
-                replica->repl_data->repl_state == REPLICA_STATE_WAIT_BGREWRITE_END ||
                 replica->repl_data->repl_state == REPLICA_STATE_SEND_BULK) {
-                del_snapshot = 0;
+                delrdb = 0;
                 break; /* No need to check the other replicas. */
             }
         }
-        if (del_snapshot) {
+        if (delrdb) {
             struct stat sb;
             if (lstat(server.rdb_filename, &sb) != -1) {
-                SnapshotGeneratedByReplication = 0;
+                RDBGeneratedByReplication = 0;
                 serverLog(LL_NOTICE, "Removing the RDB file used to feed replicas "
                                      "in a persistence-less instance");
                 bg_unlink(server.rdb_filename);
@@ -2064,7 +2062,7 @@ void updateReplicasWaitingBgSnapshotGenerate(int bgerr, int type, bool use_aof) 
                 }
                 replica->repl_data->repl_start_cmd_stream_on_ack = 1;
             } else {
-                repldbfd = open(use_aof ? server.repl_transfer_fullsync_aof_name : server.rdb_filename, O_RDONLY);
+                repldbfd = open(use_aof ? server.fullsync_aof_name : server.rdb_filename, O_RDONLY);
                 if (repldbfd == -1) {
                     freeClientAsync(replica);
                     serverLog(LL_WARNING, "SYNC failed. Can't open DB after %s: %s", method, strerror(errno));
@@ -3161,7 +3159,7 @@ static int dualChannelReplHandleHandshake(connection *conn, sds *err) {
     }
     /* Send replica listening port to primary for clarification */
     sds portstr = getReplicaPortString();
-    if (server.fullsync_aof_replication && server.repl_diskless_load != REPL_DISKLESS_LOAD_SWAPDB) {
+    if (server.repl_fullsync_format == REPL_FULLSYNC_AOF && server.repl_diskless_load != REPL_DISKLESS_LOAD_SWAPDB) {
         *err = sendCommand(conn, "REPLCONF", "capa", "eof", "capa", "fullsync-aof", "rdb-only", "1", "rdb-channel", "1", "listening-port", portstr,
                            NULL);
     } else {
@@ -4025,7 +4023,7 @@ int syncWithPrimaryHandleSendHandshakeState(connection *conn) {
         argc++;
     }
     /* swapdb in fullsync-aof is not supported now . */
-    if (server.fullsync_aof_replication && server.repl_diskless_load != REPL_DISKLESS_LOAD_SWAPDB) {
+    if (server.repl_fullsync_format == REPL_FULLSYNC_AOF && server.repl_diskless_load != REPL_DISKLESS_LOAD_SWAPDB) {
         argv[argc] = "capa";
         lens[argc] = strlen("capa");
         argc++;
@@ -5563,7 +5561,7 @@ void replicationCron(void) {
 
     /* Remove the RDB file used for replication if the server is not running
      * with any persistence. */
-    removeSnapshotUsedToSyncReplicas();
+    removeRDBUsedToSyncReplicas();
 
     /* Sanity check replication buffer, the first block of replication buffer blocks
      * must be referenced by someone, since it will be freed when not referenced,

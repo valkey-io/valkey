@@ -177,6 +177,10 @@ configEnum rdb_version_check_enum[] = {{"strict", RDB_VERSION_CHECK_STRICT},
                                        {"relaxed", RDB_VERSION_CHECK_RELAXED},
                                        {NULL, 0}};
 
+configEnum repl_fullsync_format_enum[] = {{"RDB", REPL_FULLSYNC_RDB},
+                                          {"AOF", REPL_FULLSYNC_AOF},
+                                          {NULL, 0}};
+
 /* Output buffer limits presets. */
 clientBufferLimitsConfig clientBufferLimitsDefaults[CLIENT_TYPE_OBUF_COUNT] = {
     {0, 0, 0},                                 /* normal */
@@ -3253,7 +3257,6 @@ standardConfig static_configs[] = {
     createBoolConfig("hide-user-data-from-log", NULL, MODIFIABLE_CONFIG, server.hide_user_data_from_log, 1, NULL, NULL),
     createBoolConfig("lua-enable-insecure-api", "lua-enable-deprecated-api", MODIFIABLE_CONFIG | HIDDEN_CONFIG | PROTECTED_CONFIG, server.lua_enable_insecure_api, 0, NULL, updateLuaEnableInsecureApi),
     createBoolConfig("import-mode", NULL, DEBUG_CONFIG | MODIFIABLE_CONFIG, server.import_mode, 0, NULL, NULL),
-    createBoolConfig("fullsync-aof", NULL, DEBUG_CONFIG | MODIFIABLE_CONFIG, server.fullsync_aof_replication, 1, NULL, NULL),
 
     /* String Configs */
     createStringConfig("aclfile", NULL, IMMUTABLE_CONFIG, ALLOW_EMPTY_STRING, server.acl_filename, "", NULL, NULL),
@@ -3270,6 +3273,7 @@ standardConfig static_configs[] = {
     createStringConfig("cluster-announce-human-nodename", NULL, MODIFIABLE_CONFIG, EMPTY_STRING_IS_NULL, server.cluster_announce_human_nodename, NULL, isValidAnnouncedNodename, updateClusterHumanNodename),
     createStringConfig("syslog-ident", NULL, IMMUTABLE_CONFIG, ALLOW_EMPTY_STRING, server.syslog_ident, SERVER_NAME, NULL, NULL),
     createStringConfig("dbfilename", NULL, MODIFIABLE_CONFIG | PROTECTED_CONFIG, ALLOW_EMPTY_STRING, server.rdb_filename, "dump.rdb", isValidDBfilename, NULL),
+    createStringConfig("fullsync-aof-name", NULL, MODIFIABLE_CONFIG, ALLOW_EMPTY_STRING, server.fullsync_aof_name, "fullsync.aof", isValidAOFfilename, NULL),
     createStringConfig("appendfilename", NULL, IMMUTABLE_CONFIG, ALLOW_EMPTY_STRING, server.aof_filename, "appendonly.aof", isValidAOFfilename, NULL),
     createStringConfig("appenddirname", NULL, IMMUTABLE_CONFIG, ALLOW_EMPTY_STRING, server.aof_dirname, "appendonlydir", isValidAOFdirname, NULL),
     createStringConfig("server-cpulist", "server_cpulist", IMMUTABLE_CONFIG, EMPTY_STRING_IS_NULL, server.server_cpulist, NULL, NULL, NULL),
@@ -3312,6 +3316,7 @@ standardConfig static_configs[] = {
     createEnumConfig("log-format", NULL, MODIFIABLE_CONFIG, log_format_enum, server.log_format, LOG_FORMAT_LEGACY, NULL, NULL),
     createEnumConfig("log-timestamp-format", NULL, MODIFIABLE_CONFIG, log_timestamp_format_enum, server.log_timestamp_format, LOG_TIMESTAMP_LEGACY, NULL, NULL),
     createEnumConfig("rdb-version-check", NULL, MODIFIABLE_CONFIG, rdb_version_check_enum, server.rdb_version_check, RDB_VERSION_CHECK_STRICT, NULL, NULL),
+    createEnumConfig("repl-fullsync-format", NULL, MODIFIABLE_CONFIG, repl_fullsync_format_enum, server.repl_fullsync_format, REPL_FULLSYNC_AOF, NULL, NULL),
 
     /* Integer configs */
     createIntConfig("databases", NULL, IMMUTABLE_CONFIG, 1, INT_MAX, server.config_databases, 16, INTEGER_CONFIG, NULL, NULL),

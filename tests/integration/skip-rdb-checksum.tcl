@@ -31,7 +31,7 @@ start_server {tags {"repl tls cluster:skip external:skip"} overrides {save {}}} 
     set primary_host [srv 0 host]
     set primary_port [srv 0 port]
     set primary_skipped_rdb_checksum_counter 0
-    $primary config set fullsync-aof no
+    $primary config set repl-fullsync-format RDB
     if {$::tls} {
         foreach primary_diskless_sync {no yes} {
             foreach replica_diskless_load {disabled on-empty-db swapdb flush-before-load} {

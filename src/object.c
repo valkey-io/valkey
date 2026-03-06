@@ -273,7 +273,6 @@ void *objectGetVal(const robj *o) {
             data += 1 + hdr_size;                /* +1 for header size byte */
             data += sdslen((const_sds)data) + 1; /* +1 for null terminator */
         }
-        assert(o->encoding == OBJ_ENCODING_EMBSTR);
         return data + sdsHdrSize(SDS_TYPE_8);
     } else {
         return o->val_ptr;

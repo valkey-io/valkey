@@ -40,7 +40,7 @@ static char monotonic_info_string[32];
 #define TSC_CALIBRATION_ITERATIONS 3
 #define MONO_FPMULT_SHIFT 24
 
-static uint64_t mono_ticks_speed = 0; /* Fixed-point: (1 << MONO_FPMULT_SHIFT) / ticks_per_us */
+static uint64_t mono_ticks_speed = UINT64_MAX; /* Fixed-point: (1 << MONO_FPMULT_SHIFT) / ticks_per_us */
 
 static monotime getMonotonicUs_x86(void) {
     return ((__uint128_t)__rdtsc() * mono_ticks_speed) >> MONO_FPMULT_SHIFT;
@@ -74,8 +74,9 @@ static void monotonicInit_x86linux(void) {
         double sample_ticks_per_us = (double)tsc_elapsed / (double)elapsed_us;
         uint64_t sample_mult = (uint64_t)((double)(1ULL << MONO_FPMULT_SHIFT) / sample_ticks_per_us);
 
-        /* Use the maximum out of TSC_CALIBRATION_ITERATIONS iterations for accuracy */
-        if (sample_mult > mono_ticks_speed) {
+        /* Use the minimum out of TSC_CALIBRATION_ITERATIONS iterations for accuracy
+         * because mono_ticks_speed represents an inverse relationship of ticks_per_us. */
+        if (sample_mult < mono_ticks_speed) {
             mono_ticks_speed = sample_mult;
         }
     }
@@ -97,7 +98,7 @@ static void monotonicInit_x86linux(void) {
     }
     regfree(&constTscRegex);
 
-    if (mono_ticks_speed == 0) {
+    if (mono_ticks_speed == UINT64_MAX) {
         fprintf(stderr, "monotonic: x86 linux, unable to determine clock rate");
         return;
     }

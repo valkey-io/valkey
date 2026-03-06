@@ -4766,10 +4766,9 @@ void clusterSendPing(clusterLink *link, int type) {
      * to feature our node, we set the number of entries per packet as
      * a configurable percentage (default 10%) of the total nodes we have,
      * bounded by the actual number of known nodes. */
-    int total_nodes = dictSize(server.cluster->nodes);
-    wanted = (total_nodes * server.cluster_message_gossip_perc / 100);
+    wanted = (dictSize(server.cluster->nodes) * server.cluster_message_gossip_perc / 100);
     if (wanted < 3) wanted = 3;
-    if (wanted > total_nodes) wanted = total_nodes;
+    if (wanted > freshnodes) wanted = freshnodes;
 
     /* Prioritize pfail nodes over other nodes.
      * Healthy nodes can communicate through direct ping/pong if required and failed node
@@ -4780,10 +4779,6 @@ void clusterSendPing(clusterLink *link, int type) {
         wanted = 0;
     } else {
         wanted = wanted - pfail_wanted;
-    }
-
-    if (wanted > freshnodes) {
-        wanted = freshnodes;
     }
 
     /* Compute the maximum estlen to allocate our buffer. We'll fix the estlen

@@ -116,8 +116,8 @@ start_cluster 1 0 {tags {external:skip cluster tls:skip}} {
 }
 
 start_cluster 10 0 {tags {external:skip cluster tls:skip}} {
-    test "Gossip count scales with higher percentage of `cluster-message-gossip-size`" {
-        R 0 config set cluster-message-gossip-size 80
+    test "Gossip count scales with higher percentage of `cluster-message-gossip-perc`" {
+        R 0 config set cluster-message-gossip-perc 80
 
         set base_port [srv 0 port]
         set cluster_port [expr {$base_port + 10000}]

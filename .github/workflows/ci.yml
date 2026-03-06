@@ -236,6 +236,8 @@ jobs:
           export PATH="/opt/homebrew/opt/llvm/bin:$PATH"
           export CC=/opt/homebrew/opt/llvm/bin/clang
           export CXX=/opt/homebrew/opt/llvm/bin/clang++
+          export AR=/opt/homebrew/opt/llvm/bin/llvm-ar
+          export RANLIB=/opt/homebrew/opt/llvm/bin/llvm-ranlib
           make -j3 all-with-unit-tests SERVER_CFLAGS='-Werror' USE_FAST_FLOAT=yes USE_LIBBACKTRACE=yes LIBBACKTRACE_PREFIX=/usr/local
 
   build-32bit:

@@ -25,16 +25,25 @@ static char monotonic_info_string[32];
 #endif
 
 
-#if defined(USE_PROCESSOR_CLOCK) && defined(__x86_64__) && defined(__linux__)
+/* x86_64 TSC-based monotonic clock implementation.
+ *
+ * Requirements for enabling this optimized path:
+ *   USE_PROCESSOR_CLOCK: processor clock usage not explicitly disabled
+ *   __x86_64__: requires 64-bit x86 architecture (for rdtsc instruction and 128-bit arithmetic)
+ *   __linux__: needed to access /proc/cpuinfo for verifying 'constant_tsc' CPU flag
+ *   __SIZEOF_INT128__: requires compiler support for 128-bit integers to prevent wraparound
+ */
+#if defined(USE_PROCESSOR_CLOCK) && defined(__x86_64__) && defined(__linux__) && defined(__SIZEOF_INT128__)
 #include <regex.h>
 #include <x86intrin.h>
 
 #define TSC_CALIBRATION_ITERATIONS 3
+#define MONO_FPMULT_SHIFT 24
 
-static long mono_ticksPerMicrosecond = 0;
+static uint64_t mono_ticks_speed = UINT64_MAX; /* Fixed-point: (1 << MONO_FPMULT_SHIFT) / ticks_per_us */
 
 static monotime getMonotonicUs_x86(void) {
-    return __rdtsc() / mono_ticksPerMicrosecond;
+    return ((__uint128_t)__rdtsc() * mono_ticks_speed) >> MONO_FPMULT_SHIFT;
 }
 
 static void monotonicInit_x86linux(void) {
@@ -62,11 +71,13 @@ static void monotonicInit_x86linux(void) {
 
         uint64_t elapsed_us = (end.tv_sec - start.tv_sec) * 1000000ULL + (end.tv_nsec - start.tv_nsec) / 1000;
         uint64_t tsc_elapsed = tsc_end - tsc_start;
-        long sample_ticksPerMicrosecond = tsc_elapsed / elapsed_us;
+        double sample_ticks_per_us = (double)tsc_elapsed / (double)elapsed_us;
+        uint64_t sample_mult = (uint64_t)((double)(1ULL << MONO_FPMULT_SHIFT) / sample_ticks_per_us);
 
-        /* Use the maximum out of TSC_CALIBRATION_ITERATIONS iterations for accuracy */
-        if (sample_ticksPerMicrosecond > mono_ticksPerMicrosecond) {
-            mono_ticksPerMicrosecond = sample_ticksPerMicrosecond;
+        /* Use the minimum out of TSC_CALIBRATION_ITERATIONS iterations for accuracy
+         * because mono_ticks_speed represents an inverse relationship of ticks_per_us. */
+        if (sample_mult < mono_ticks_speed) {
+            mono_ticks_speed = sample_mult;
         }
     }
 
@@ -87,7 +98,7 @@ static void monotonicInit_x86linux(void) {
     }
     regfree(&constTscRegex);
 
-    if (mono_ticksPerMicrosecond == 0) {
+    if (mono_ticks_speed == UINT64_MAX) {
         fprintf(stderr, "monotonic: x86 linux, unable to determine clock rate");
         return;
     }
@@ -96,7 +107,9 @@ static void monotonicInit_x86linux(void) {
         return;
     }
 
-    snprintf(monotonic_info_string, sizeof(monotonic_info_string), "X86 TSC @ %ld ticks/us", mono_ticksPerMicrosecond);
+    /* Convert back to ticks/us for human-readable display */
+    double ticks_per_us = (double)(1ULL << MONO_FPMULT_SHIFT) / (double)mono_ticks_speed;
+    snprintf(monotonic_info_string, sizeof(monotonic_info_string), "X86 TSC @ %.2f ticks/us", ticks_per_us);
     getMonotonicUs = getMonotonicUs_x86;
 }
 #endif
@@ -161,7 +174,7 @@ static void monotonicInit_posix(void) {
 
 
 const char *monotonicInit(void) {
-#if defined(USE_PROCESSOR_CLOCK) && defined(__x86_64__) && defined(__linux__)
+#if defined(USE_PROCESSOR_CLOCK) && defined(__x86_64__) && defined(__linux__) && defined(__SIZEOF_INT128__)
     if (getMonotonicUs == NULL) monotonicInit_x86linux();
 #endif
 

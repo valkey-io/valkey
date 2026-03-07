@@ -43,6 +43,7 @@ distclean:
 	-(cd hdr_histogram && $(MAKE) clean) > /dev/null || true
 	-(cd fpconv && $(MAKE) clean) > /dev/null || true
 	-(cd fast_float_c_interface && $(MAKE) clean) > /dev/null || true
+	-(cd fast_float && rm -f *.o) > /dev/null || true
 	-(rm -f .make-*)
 
 .PHONY: distclean

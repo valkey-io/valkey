@@ -167,10 +167,8 @@ ifeq ($(USE_LIBBACKTRACE),yes)
     LD_LIBS += -lbacktrace
 endif
 
-# Add fast_float support if enabled
-ifeq ($(USE_FAST_FLOAT),yes)
-	LD_LIBS += $(FAST_FLOAT_LIB)
-endif
+# Add ffc-based fast_float_strtod
+LD_LIBS += $(FAST_FLOAT_LIB)
 
 # Add TLS libraries if enabled
 ifeq ($(BUILD_TLS),yes)

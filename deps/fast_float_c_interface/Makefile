@@ -2,18 +2,17 @@ CCCOLOR:="\033[34m"
 SRCCOLOR:="\033[33m"
 ENDCOLOR:="\033[0m"
 
-CXX?=c++
-# we need = instead of := so that $@ in QUIET_CXX gets evaluated in the rule and is assigned appropriate value.
-TEMP:=$(CXX)
-QUIET_CXX=@printf '    %b %b\n' $(CCCOLOR)C++$(ENDCOLOR) $(SRCCOLOR)$@$(ENDCOLOR) 1>&2;
-CXX=$(QUIET_CXX)$(TEMP)
+CC?=cc
+TEMP:=$(CC)
+QUIET_CC=@printf '    %b %b\n' $(CCCOLOR)CC$(ENDCOLOR) $(SRCCOLOR)$@$(ENDCOLOR) 1>&2;
+CC=$(QUIET_CC)$(TEMP)
 
 WARN=-Wall -W -Wno-missing-field-initializers
 
-STD=-pedantic -std=c++11
+STD=-pedantic -std=c99
 
 OPT?=-O3
-CLANG := $(findstring clang,$(shell sh -c '$(CC) --version | head -1'))
+CLANG := $(findstring clang,$(shell sh -c '$(TEMP) --version | head -1'))
 ifeq ($(OPT),-O3)
         ifeq (clang,$(CLANG))
                 OPT+=-flto
@@ -22,16 +21,14 @@ ifeq ($(OPT),-O3)
         endif
 endif
 
-# 1) Today src/Makefile passes -m32 flag for explicit 32-bit build on 64-bit machine, via CFLAGS. For 32-bit build on
-# 32-bit machine and 64-bit on 64-bit machine, CFLAGS are empty. No other flags are set that can conflict with C++,
-# therefore let's use CFLAGS without changes for now.
-# 2) FASTFLOAT_ALLOWS_LEADING_PLUS allows +inf to be parsed as inf, instead of error.
-CXXFLAGS=$(STD) $(OPT) $(WARN) -static -fPIC -fno-exceptions $(CFLAGS) -D FASTFLOAT_ALLOWS_LEADING_PLUS 
+CFLAGS_LOCAL=$(STD) $(OPT) $(WARN) -static -fPIC $(CFLAGS)
 
 .PHONY: all clean
 
 all: fast_float_strtod.o
 
+fast_float_strtod.o: fast_float_strtod.c ../fast_float/ffc.h
+	$(CC) $(CFLAGS_LOCAL) -c fast_float_strtod.c -o fast_float_strtod.o
+
 clean:
 	rm -f *.o || true;
-

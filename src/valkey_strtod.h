@@ -1,42 +1,31 @@
-#ifndef FAST_FLOAT_STRTOD_H
-#define FAST_FLOAT_STRTOD_H
+#ifndef VALKEY_STRTOD_H
+#define VALKEY_STRTOD_H
 
-#ifdef USE_FAST_FLOAT
-
-#include "errno.h"
+#include <errno.h>
+#include <stddef.h>
 
 /**
- * Converts a null-terminated byte string to a double using the fast_float library.
+ * Converts a string to a double using ffc.h (https://github.com/kolemannix/ffc.h),
+ * a C99 port of the fast_float library.
  *
- * This function provides a C-compatible wrapper around the fast_float library's string-to-double
- * conversion functionality. It aims to offer a faster alternative to the standard strtod function.
+ * fast_float_strtod: takes a null-terminated string.
+ * fast_float_strtod_n: takes a pointer and length, avoiding strlen.
  *
- * str: A pointer to the null-terminated byte string to be converted.
- * eptr: On success, stores char pointer pointing to '\0' at the end of the string.
- *       On failure, stores char pointer pointing to first invalid character in the string.
- * returns: On success, the function returns the converted double value.
- *          On failure, it returns 0.0 and stores error code in errno to ERANGE or EINVAL.
- *
- * note: This function uses the fast_float library (https://github.com/fastfloat/fast_float) for
- * the actual conversion, which can be significantly faster than standard library functions.
- * Refer to "../deps/fast_float_c_interface" for more details.
- * Refer to https://github.com/fastfloat/fast_float for more information on the underlying library.
+ * On success, returns the converted value and sets *endptr past the parsed characters.
+ * On failure, returns 0.0, sets errno to ERANGE or EINVAL, and sets *endptr to
+ * the first invalid character.
  */
-double fast_float_strtod(const char *str, char **endptr);
+double fast_float_strtod(const char *str, const char **endptr);
+double fast_float_strtod_n(const char *str, size_t len, const char **endptr);
 
 static inline double valkey_strtod(const char *str, char **endptr) {
     errno = 0;
-    return fast_float_strtod(str, endptr);
+    return fast_float_strtod(str, (const char **)endptr);
 }
 
-#else
-
-#include <stdlib.h>
-
-static inline double valkey_strtod(const char *str, char **endptr) {
-    return strtod(str, endptr);
+static inline double valkey_strtod_n(const char *str, size_t len, char **endptr) {
+    errno = 0;
+    return fast_float_strtod_n(str, len, (const char **)endptr);
 }
 
-#endif
-
-#endif // FAST_FLOAT_STRTOD_H
+#endif // VALKEY_STRTOD_H

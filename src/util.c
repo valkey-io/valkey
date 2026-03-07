@@ -768,7 +768,7 @@ int string2ld(const char *s, size_t slen, long double *dp) {
 int string2d(const char *s, size_t slen, double *dp) {
     errno = 0;
     char *eptr;
-    *dp = valkey_strtod(s, &eptr);
+    *dp = valkey_strtod_n(s, slen, &eptr);
     if (slen == 0 || isspace(((const char *)s)[0]) || (size_t)(eptr - (char *)s) != slen ||
         (errno == ERANGE && (*dp == HUGE_VAL || *dp == -HUGE_VAL || fpclassify(*dp) == FP_ZERO)) || isnan(*dp) || errno == EINVAL) {
         errno = 0;

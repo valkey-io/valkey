@@ -614,16 +614,10 @@ ENGINE_LIB_NAME=lib$(ENGINE_NAME).a
 ENGINE_UNIT_GTESTS:=$(ENGINE_NAME)-unit-gtests$(PROG_SUFFIX)
 ALL_SOURCES=$(sort $(patsubst %.o,%.c,$(ENGINE_SERVER_OBJ) $(ENGINE_CLI_OBJ) $(ENGINE_BENCHMARK_OBJ)))
 
-USE_FAST_FLOAT?=no
-ifeq ($(USE_FAST_FLOAT),yes)
-	# valkey_strtod.h uses this flag to switch valkey_strtod function to fast_float_strtod,
-	# therefore let's pass it to compiler for preprocessing.
-	FINAL_CFLAGS += -D USE_FAST_FLOAT
-	# next, let's build and add actual library containing fast_float_strtod function for linking.
-	DEPENDENCY_TARGETS += fast_float_c_interface
-	FAST_FLOAT_STRTOD_OBJECT := ../deps/fast_float_c_interface/fast_float_strtod.o
-	FINAL_LIBS += $(FAST_FLOAT_STRTOD_OBJECT)
-endif
+# Build ffc-based fast_float_strtod for linking.
+DEPENDENCY_TARGETS += fast_float_c_interface
+FAST_FLOAT_STRTOD_OBJECT := ../deps/fast_float_c_interface/fast_float_strtod.o
+FINAL_LIBS += $(FAST_FLOAT_STRTOD_OBJECT)
 
 USE_LIBBACKTRACE?=no
 ifeq ($(USE_LIBBACKTRACE),yes)
@@ -666,7 +660,6 @@ persist-settings: distclean
 	echo BUILD_RDMA=$(BUILD_RDMA) >> .make-settings
 	echo USE_SYSTEMD=$(USE_SYSTEMD) >> .make-settings
 	echo BUILD_LUA=$(BUILD_LUA) >> .make-settings
-	echo USE_FAST_FLOAT=$(USE_FAST_FLOAT) >> .make-settings
 	echo USE_LIBBACKTRACE=$(USE_LIBBACKTRACE) >> .make-settings
 	echo LIBBACKTRACE_PREFIX=$(LIBBACKTRACE_PREFIX) >> .make-settings
 	echo CFLAGS=$(CFLAGS) >> .make-settings

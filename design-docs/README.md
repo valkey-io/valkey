@@ -17,7 +17,7 @@ requirements. This issue will serve as the overall tracking for the feature.
    your change is wide reaching or requires major alignment, it is a good
    candidate for a design.
 2. To create a design document, create a new markdown file in this `design-docs`
-   directory. Use the [template](TEMPLATE.md) to structure your design document.
+   directory.
 3. The maintainers will review and approve the design document once feedback is
    addressed. Note that submitting a design document is not necessarily a
    binding commit to a certain design.
@@ -26,33 +26,43 @@ requirements. This issue will serve as the overall tracking for the feature.
    Changes to the design document can be committed alongside the code changes as
    the mid-level design details are implemented.
 
-Each file has one of the following statuses:
-
-- **Proposed**, design has been proposed, and if merged, accepted.
-- **Partially Implemented**, design has been accepted, and some changes have
-  been implemented.
-- **Implemented**, design has been accepted, and all changes have been
-  implemented.
-
-The core team can change the status and make changes. For larger changes, the PR
-making the change is mentioned too and can be referred to by their respective
-pull-request numbers.
-
 ## What's useful to include?
 
-Design documents are not a strict format, but should include the following
-sections unless they are unnecessary for the proposal you are submitting.
+**Design documents are not a strict format.** There is no template.
 
-- Status.
-- Abstract. A few sentences describing the feature.
-- Motivation. What the feature solves and why the existing functionality is not
-  enough.
-- Design considerations. A description of the design constraints and
-  requirements for the proposal. Comparisons with similar features in other
-  projects.
-- Specification. A more detailed description of the feature, including why
-  certain details in the design have been chosen.
-- Links to related material such as issues, pull requests, papers, or other
-  references.
+When writing a design, consider that it will be read by many people, including
+people who are not familiar with the feature. It should be self-contained and
+easy to understand.
 
-Here's a [design template](TEMPLATE.md) to get started.
+The following sections are not required, but give a high level overview of what
+could be included in a design document:
+
+- **High-level overview**: A brief summary of the feature and its purpose.
+- **Key design elements**: The following are generally useful to include:
+  - State machines
+  - Data structures
+  - Algorithms
+  - Interaction with other Valkey components (replication, persistence, cluster,
+    modules, etc.)
+- **Links to key issues/PRs**: Link to relevant issues/PRs for further reading.
+- **Links to relevant code**: Link to relevant code files for further reading.
+
+## What not to include?
+
+Overdocumentation often leads to stale design documents. A design document is
+not the best place for the following:
+
+- **API Details**: API details belong in the
+  [public Valkey documentation](https://valkey.io/commands/)
+- **Low-level Implementation Details**: Difficult or complex implementation
+  details should be documented in code comments, not design documents.
+- **Edge Cases**: Prefer to link to test cases or code locations that cover edge
+  cases, rather than documenting them in the design document.
+- **Alternatives/Rejected Designs**: Decision making should be documented in the
+  issue or PR where the decision was made.
+- **Overly Verbose Explanations**: Aim to use Mermaid or ASCII diagrams to
+  explain complex concepts rather than prose.
+- **Boilerplate**: Every document should be minimal and to the point. Avoid
+  unnecessary sections.
+- **Future work**: File issues for future work items so they can be tracked,
+  rather than including them in the design document.

@@ -243,7 +243,7 @@ jobs:
         uses: uraimo/run-on-arch-action@d94c13912ea685de38fccc1109385b83fd79427d # v3.0.1
         with:
           arch: s390x
-          distro: ubuntu22.04
+          distro: ubuntu_latest
           githubToken: ${{ github.token }}
           run: |
             apt-get update

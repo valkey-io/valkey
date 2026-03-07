@@ -1,41 +1,40 @@
 # Valkey Design Documents
 
-This folder is a collection of designs for Valkey. These designs are for
-features and changes that require more detail than just the text in a pull
-request or an issue.
+This folder collects designs for Valkey. These designs detail features and
+changes that require more detail than just the text in a pull request or an
+issue.
 
-Each feature or larger topic is described in a markdown file.
+A markdown file describes each feature or larger topic.
 
 ## Workflow
 
 **IMPORTANT: Before writing a design, start an issue for some early alignment.**
 This is the first step to find interested parties and collect initial
-requirements. This issue will serve as the overall tracking for the feature.
+requirements. This issue serves as the overall tracking for the feature.
 
-1. Once initial discussion on the issue finishes, determine if a design document
-   is needed or not. Designs are not required for small features or changes. If
-   your change is wide reaching or requires major alignment, it is a good
-   candidate for a design.
+1. After finishing initial discussion on the issue, determine the necessity of a
+   design document. Small features or changes do not require designs.
+   Wide-reaching changes or those requiring major alignment make good candidates
+   for a design.
 2. To create a design document, create a new markdown file in this `design-docs`
    directory.
-3. The maintainers will review and approve the design document once feedback is
-   addressed. Note that submitting a design document is not necessarily a
-   binding commit to a certain design.
-4. The design document is intended to be living documentation. As the feature is
-   developed, the design document is expected to capture key design aspects.
-   Changes to the design document can be committed alongside the code changes as
-   the mid-level design details are implemented.
+3. The maintainers review and approve the design document once authors address
+   feedback. Submitting a design document does not necessarily bind to a certain
+   design.
+4. The design document serves as living documentation. As developers build the
+   feature, the design document captures key design aspects. Commit changes to
+   the design document alongside the code changes as developers implement the
+   mid-level design details.
 
 ## What's useful to include?
 
-**Design documents are not a strict format.** There is no template.
+**Design documents do not follow a strict format.** There is no template.
 
-When writing a design, consider that it will be read by many people, including
-people who are not familiar with the feature. It should be self-contained and
-easy to understand.
+When writing a design, consider that many people, including those unfamiliar
+with the feature, read it. It should be self-contained and easy to understand.
 
-The following sections are not required, but give a high level overview of what
-could be included in a design document:
+The following sections are optional but provide a high-level overview of
+potential inclusions:
 
 - **High-level overview**: A brief summary of the feature and its purpose.
 - **Key design elements**: The following are generally useful to include:
@@ -54,15 +53,15 @@ not the best place for the following:
 
 - **API Details**: API details belong in the
   [public Valkey documentation](https://valkey.io/commands/)
-- **Low-level Implementation Details**: Difficult or complex implementation
-  details should be documented in code comments, not design documents.
+- **Low-level Implementation Details**: Document difficult or complex
+  implementation details in code comments, not design documents.
 - **Edge Cases**: Prefer to link to test cases or code locations that cover edge
   cases, rather than documenting them in the design document.
-- **Alternatives/Rejected Designs**: Decision making should be documented in the
-  issue or PR where the decision was made.
+- **Alternatives/Rejected Designs**: Document decision making in the issue or PR
+  where the contributors made the decision.
 - **Overly Verbose Explanations**: Aim to use Mermaid or ASCII diagrams to
   explain complex concepts rather than prose.
-- **Boilerplate**: Every document should be minimal and to the point. Avoid
+- **Boilerplate**: Keep every document minimal and to the point. Avoid
   unnecessary sections.
-- **Future work**: File issues for future work items so they can be tracked,
-  rather than including them in the design document.
+- **Future work**: File issues for future work items to track them, rather than
+  including them in the design document.

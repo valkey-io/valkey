@@ -3,57 +3,55 @@
 ## 1. Overview
 
 Atomic Slot Migration (ASM) provides a seamless, atomic method for migrating
-hash slots between nodes in a Valkey cluster. It provides an alternative
-mechanism to `CLUSTER SETSLOT IMPORTING/MIGRATING` and `MIGRATE` for migrating
-slots between nodes.
+hash slots between nodes in a Valkey cluster. This mechanism replaces
+`CLUSTER SETSLOT IMPORTING/MIGRATING` and `MIGRATE` for migrating slots between
+nodes.
 
 ## 2. Core Mechanics
 
-Rather than migrating data on a key-by-key basis, ASM operates at the slot level
-by adapting existing replication and failover primitives at the slot level:
+Rather than migrating data key-by-key, ASM operates at the slot level by
+adapting existing replication and failover primitives:
 
-- **Slot-Based Replication:** The physical data migration borrows from
-  Primary-Replica replication mechanisms, but is strictly scoped to the specific
+- **Slot-Based Replication:** Physical data migration borrows from
+  Primary-Replica replication mechanisms, but strictly scopes to the specific
   slots being moved.
-- **Atomic Ownership Transfer:** The final handover of slot ownership is
-  executed using a coordinated process similar to a Manual Failover, ensuring
-  the transfer is atomic.
+- **Atomic Ownership Transfer:** ASM executes the final handover of slot
+  ownership using a coordinated process similar to a Manual Failover, ensuring
+  an atomic transfer.
 - **Traffic Handling:** Throughout the migration process, the source node
-  retains the data and continues to actively serve business requests. Traffic is
-  cleanly cut over to the target node only once the atomic transfer is complete.
+  retains the data and continues to actively serve business requests. The system
+  cleanly cuts over traffic to the target node only after completing the atomic
+  transfer.
 
 ## 3. Implementation Details
 
 ### 3.1 High Level Overview
 
-1. **Snapshot Transfer:** The data transfer is performed by the source node to
-   the target node. A child process is forked on the source node to perform the
-   iteration and serialization of the slot's keys.
+1. **Snapshot Transfer:** The source node transfers data to the target node. The
+   source node forks a child process to iterate and serialize the slot's keys.
 
-   Data is transferred in "AOF" (Append Only File) format to the target node.
-   This means it is just a stream of commands. For this reason, they can be
-   replayed on both the target primary and the target replica to restore the
-   state of the slot.
+   The source transfers data in "AOF" (Append Only File) format to the target
+   node. This format consists of a stream of commands. Consequently, the target
+   primary and target replica replay these commands to restore the slot's state.
 
-2. **Incremental Updates:** While the initial snapshot is transferred, the
-   source node continues to serve business requests. Any changes to the slot's
-   keys during this time are recorded and sent to the target node as incremental
-   updates once the snapshot transfer is complete.
-3. **Pause:** Once the incremental updates are sent to the target node, the
-   source node is paused. This means that the source node does not accept any
-   more business requests. This is done to ensure that the target node has the
-   same state as the source node.
-4. **Failover:** Once the source node is paused, the target node is promoted to
-   the primary node for the slot.
-5. **Clean Up:** Once the target node is promoted to the primary node for the
-   slot, the source node hears about this over cluster gossip. The source node
-   then unpauses and removes the keys from the slot and the slot migration is
-   complete.
+2. **Incremental Updates:** While transferring the initial snapshot, the source
+   node serves business requests. The source node records any changes to the
+   slot's keys during this time and sends them to the target node as incremental
+   updates after completing the snapshot transfer.
+3. **Pause:** After sending the incremental updates, the source node pauses.
+   Consequently, the source node rejects any further business requests. This
+   pause ensures the target node maintains the same state as the source node.
+4. **Failover:** After the source node pauses, the target node becomes the
+   primary node for the slot.
+5. **Clean Up:** After the target node becomes the primary node for the slot,
+   the source node receives this information via cluster gossip. The source node
+   then unpauses, removes the keys from the slot, and completes the slot
+   migration.
 
 ### 3.2 CLUSTER SYNCSLOTS
 
-The `CLUSTER SYNCSLOTS` command is used between the source, target, and target
-replica to coordinate the state of the handover:
+The source, target, and target replica use the `CLUSTER SYNCSLOTS` command to
+coordinate the handover state:
 
 ```
      Source                                          Target                         Target Replica
@@ -90,16 +88,16 @@ detailed state machines.
 
 ### 3.3 Automatic Rollback
 
-Various scenarios may result in slot migration failure:
+Various scenarios cause slot migration failure:
 
-1. Link between source and target is destroyed or unresponsive
-2. Source or target node crash, halt, or are partitioned
+1. Link between source and target disconnects
+2. Source or target node crash, halt, or encounter a partition
 3. A failover occurs on the source or target node
 4. Out of memory error occurs on the target node
 5. Client output buffer on the source node grows too large
-6. `FLUSHDB` is executed on the source or target node
+6. An administrator executes `FLUSHDB` on the source or target node
 
-In such cases, the slot migration is automatically rolled back.
+In such cases, ASM automatically rolls back the migration.
 
 ```
      Source                                          Target                         Target Replica
@@ -120,45 +118,44 @@ In such cases, the slot migration is automatically rolled back.
 
 #### 3.3.1 Cleanup
 
-Slot migrations are automatically cleaned up when the slot migration is failed
-or cancelled. The primary is solely responsible for cleaning up unowned slots.
-Primaries that are demoted do not clean up previously active slot imports. The
-promoted replica is responsible for both cleaning up the slot and sending a
+The cluster automatically cleans up failed or cancelled slot migrations. The
+primary is solely responsible for cleaning up unowned slots. Primaries demoted
+during migration do not clean up previously active slot imports. The promoted
+replica is responsible for both cleaning up the slot and sending a
 `SYNCSLOTS FINISH`.
 
 ### 3.4 Key Containment
 
-Any keyed command that is executed on a node that is not the primary for that
-slot are rejected with `-MOVED` (e.g. `GET`, `SET`, `DEL`, `INCR`, etc).
+The system rejects any keyed command executed on a node that is not the primary
+for that slot with `-MOVED` (e.g. `GET`, `SET`, `DEL`, `INCR`, etc).
 
-Unkeyed read commands, like `SCAN` and `KEYS`, are filtered to avoid exposing
-importing slot data. Each node in the target shard tracks the state of the slot
-migration job and ensures writes to that slot are not shown to the end user
-until the slot migration is complete.
+Nodes filter unkeyed read commands, like `SCAN` and `KEYS`, to avoid exposing
+importing slot data. Each node in the target shard tracks the slot migration job
+state and hides writes to that slot from the end user until the migration
+completes.
 
 #### 3.4.1 Full Sync, Partial Sync, RDB
 
-In order to ensure replicas that resync during the import are still aware of the
-import, the slot import is serialized to an RDB aux field
-(`cluster-slot-imports`). The encoding includes the job name, the source node
-name, and the slot ranges being imported. Upon loading an RDB with the
-cluster-slot-imports aux field, replicas begin tracking the migration.
+To ensure replicas resyncing during the import remain aware of the import,
+Valkey serializes the slot import to an RDB aux field (`cluster-slot-imports`).
+The encoding includes the job name, the source node name, and the slot ranges
+being imported. Upon loading an RDB with the cluster-slot-imports aux field,
+replicas begin tracking the migration.
 
-Whenever we load an RDB file with the `cluster-slot-imports` aux field, even
-from disk, we add a new migration to track the import. If after loading the RDB,
-the Valkey node is a primary, it cancels the slot migration. We do not continue
-slot migrations that were in progress at the time of save.
+Whenever the system loads an RDB file with the `cluster-slot-imports` aux field,
+even from disk, it adds a new migration to track the import. If the Valkey node
+is a primary after loading the RDB, it cancels the slot migration.
 
-Having this tracking state loaded on primaries ensures that replicas partial
-syncing to a restarted primary still get their `SYNCSLOTS FINISH` message in the
+Loading this tracking state on primaries ensures that replicas partially syncing
+to a restarted primary still get their `SYNCSLOTS FINISH` message in the
 replication stream.
 
 #### 3.4.2 AOF
 
-We propagate the `ESTABLISH` and `FINISH` commands to the AOF, and ensure that
-they can be properly replayed on AOF load to get to the right state. Similar to
-RDB, if there are any pending `ESTABLISH` commands that don't have a `FINISH`
-afterwards upon becoming primary, we fail those after loading.
+Valkey propagates the `ESTABLISH` and `FINISH` commands to the AOF, ensuring
+they replay properly on AOF load. Similar to RDB, if any pending `ESTABLISH`
+commands lack a subsequent `FINISH` upon becoming primary, the system fails them
+after loading.
 
 ## 4. External References
 

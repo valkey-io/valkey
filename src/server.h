@@ -40,7 +40,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <stddef.h>
+#ifndef __cplusplus
 #include <stdatomic.h>
+#endif
 #include <string.h>
 #include <time.h>
 #include <limits.h>
@@ -57,7 +59,7 @@
 #include <systemd/sd-daemon.h>
 #endif
 
-#ifndef static_assert
+#if !defined(static_assert) && !defined(__cplusplus)
 #define static_assert _Static_assert
 #endif
 
@@ -552,9 +554,10 @@ typedef enum {
 #define TLS_CLIENT_AUTH_YES 1
 #define TLS_CLIENT_AUTH_OPTIONAL 2
 
-/* TLS Client Certfiicate Authentication */
+/* TLS Client Certificate Authentication */
 #define TLS_CLIENT_FIELD_OFF 0
 #define TLS_CLIENT_FIELD_CN 1
+#define TLS_CLIENT_FIELD_URI 2
 
 /* Sanitize dump payload */
 #define SANITIZE_DUMP_NO 0
@@ -1066,7 +1069,7 @@ typedef struct readyList {
 #define SELECTOR_FLAG_ALLDBS (1 << 4)      /* Allow all databases */
 
 
-typedef struct {
+typedef struct user {
     sds name;         /* The username as an SDS string. */
     uint32_t flags;   /* See USER_FLAG_* */
     list *passwords;  /* A list of SDS valid passwords for this user. */
@@ -1104,8 +1107,9 @@ typedef struct replBacklog {
 
 typedef struct replDataBuf {
     list *blocks; /* List of replDataBufBlock */
-    size_t len;   /* Number of bytes stored in all blocks */
-    size_t peak;
+    size_t mem;   /* Total allocated memory including buffer metadata and list nodes */
+    size_t len;   /* Total replication data bytes pending processing */
+    size_t peak;  /* Peak value of len during buffer lifetime */
 } replDataBuf;
 
 typedef struct {
@@ -1557,6 +1561,7 @@ struct serverMemOverhead {
     size_t total_allocated;
     size_t startup_allocated;
     size_t repl_backlog;
+    size_t replicas_repl_buffer;
     size_t clients_replicas;
     size_t clients_normal;
     size_t cluster_links;
@@ -2826,7 +2831,7 @@ uint64_t crc64(uint64_t crc, const unsigned char *s, uint64_t l);
 void exitFromChild(int retcode);
 long long serverPopcount(void *s, long count);
 int serverSetProcTitle(char *title);
-int validateProcTitleTemplate(const char *template);
+int validateProcTitleTemplate(const char *templ);
 int serverCommunicateSystemd(const char *sd_notify_msg);
 void serverSetCpuAffinity(const char *cpulist);
 void dictVanillaFree(void *val);
@@ -2971,7 +2976,7 @@ int freeClientsInAsyncFreeQueue(void);
 int closeClientOnOutputBufferLimitReached(client *c, int async);
 int getClientType(client *c);
 int getClientTypeByName(char *name);
-char *getClientTypeName(int class);
+char *getClientTypeName(int client_class);
 void flushReplicasOutputBuffers(void);
 void disconnectReplicas(void);
 void evictClients(void);
@@ -3406,8 +3411,8 @@ void genericZpopCommand(client *c,
 sds lpGetObject(unsigned char *sptr);
 int zslValueGteMin(double value, zrangespec *spec);
 int zslValueLteMax(double value, zrangespec *spec);
-void zslFreeLexRange(zlexrangespec *spec);
-int zslParseLexRange(robj *min, robj *max, zlexrangespec *spec);
+void zsetFreeLexRange(zlexrangespec *spec);
+int zsetParseLexRange(robj *min, robj *max, zlexrangespec *spec);
 unsigned char *zzlFirstInLexRange(unsigned char *zl, zlexrangespec *range);
 unsigned char *zzlLastInLexRange(unsigned char *zl, zlexrangespec *range);
 zskiplistNode *zslNthInLexRange(zskiplist *zsl, zlexrangespec *range, long n);

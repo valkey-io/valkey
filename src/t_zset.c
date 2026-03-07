@@ -696,9 +696,9 @@ static int zslParseLexRangeItem(robj *item, sds *dest, int *ex) {
     }
 }
 
-/* Free a lex range structure, must be called only after zslParseLexRange()
+/* Free a lex range structure, must be called only after zsetParseLexRange()
  * populated the structure with success (C_OK returned). */
-void zslFreeLexRange(zlexrangespec *spec) {
+void zsetFreeLexRange(zlexrangespec *spec) {
     if (spec->min != shared.minstring && spec->min != shared.maxstring) sdsfree(spec->min);
     if (spec->max != shared.minstring && spec->max != shared.maxstring) sdsfree(spec->max);
 }
@@ -706,9 +706,9 @@ void zslFreeLexRange(zlexrangespec *spec) {
 /* Populate the lex rangespec according to the objects min and max.
  *
  * Return C_OK on success. On error C_ERR is returned.
- * When OK is returned the structure must be freed with zslFreeLexRange(),
+ * When OK is returned the structure must be freed with zsetFreeLexRange(),
  * otherwise no release is needed. */
-int zslParseLexRange(robj *min, robj *max, zlexrangespec *spec) {
+int zsetParseLexRange(robj *min, robj *max, zlexrangespec *spec) {
     /* The range can't be valid if objects are integer encoded.
      * Every item must start with ( or [. */
     if (min->encoding == OBJ_ENCODING_INT || max->encoding == OBJ_ENCODING_INT) return C_ERR;
@@ -716,7 +716,7 @@ int zslParseLexRange(robj *min, robj *max, zlexrangespec *spec) {
     spec->min = spec->max = NULL;
     if (zslParseLexRangeItem(min, &spec->min, &spec->minex) == C_ERR ||
         zslParseLexRangeItem(max, &spec->max, &spec->maxex) == C_ERR) {
-        zslFreeLexRange(spec);
+        zsetFreeLexRange(spec);
         return C_ERR;
     } else {
         return C_OK;
@@ -1985,7 +1985,7 @@ void zremrangeGenericCommand(client *c, zrange_type rangetype) {
         }
     } else if (rangetype == ZRANGE_LEX) {
         notify_type = "zremrangebylex";
-        if (zslParseLexRange(c->argv[2], c->argv[3], &lexrange) != C_OK) {
+        if (zsetParseLexRange(c->argv[2], c->argv[3], &lexrange) != C_OK) {
             addReplyError(c, "min or max not valid string range item");
             return;
         }
@@ -2052,7 +2052,7 @@ void zremrangeGenericCommand(client *c, zrange_type rangetype) {
     addReplyLongLong(c, deleted);
 
 cleanup:
-    if (rangetype == ZRANGE_LEX) zslFreeLexRange(&lexrange);
+    if (rangetype == ZRANGE_LEX) zsetFreeLexRange(&lexrange);
 }
 
 void zremrangebyrankCommand(client *c) {
@@ -3392,14 +3392,14 @@ void zlexcountCommand(client *c) {
     unsigned long count = 0;
 
     /* Parse the range arguments */
-    if (zslParseLexRange(c->argv[2], c->argv[3], &range) != C_OK) {
+    if (zsetParseLexRange(c->argv[2], c->argv[3], &range) != C_OK) {
         addReplyError(c, "min or max not valid string range item");
         return;
     }
 
     /* Lookup the sorted set */
     if ((zobj = lookupKeyReadOrReply(c, key, shared.czero)) == NULL || checkType(c, zobj, OBJ_ZSET)) {
-        zslFreeLexRange(&range);
+        zsetFreeLexRange(&range);
         return;
     }
 
@@ -3412,7 +3412,7 @@ void zlexcountCommand(client *c) {
 
         /* No "first" element */
         if (eptr == NULL) {
-            zslFreeLexRange(&range);
+            zsetFreeLexRange(&range);
             addReply(c, shared.czero);
             return;
         }
@@ -3458,7 +3458,7 @@ void zlexcountCommand(client *c) {
         serverPanic("Unknown sorted set encoding");
     }
 
-    zslFreeLexRange(&range);
+    zsetFreeLexRange(&range);
     addReplyLongLong(c, count);
 }
 
@@ -3675,7 +3675,7 @@ void zrangeGenericCommand(zrange_result_handler *handler,
 
     case ZRANGE_LEX:
         /* Z[REV]RANGEBYLEX, ZRANGESTORE [REV]RANGEBYLEX */
-        if (zslParseLexRange(c->argv[minidx], c->argv[maxidx], &lexrange) != C_OK) {
+        if (zsetParseLexRange(c->argv[minidx], c->argv[maxidx], &lexrange) != C_OK) {
             addReplyError(c, "min or max not valid string range item");
             return;
         }
@@ -3724,7 +3724,7 @@ void zrangeGenericCommand(zrange_result_handler *handler,
 cleanup:
 
     if (rangetype == ZRANGE_LEX) {
-        zslFreeLexRange(&lexrange);
+        zsetFreeLexRange(&lexrange);
     }
 }
 

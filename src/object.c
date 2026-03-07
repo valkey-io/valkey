@@ -1404,7 +1404,9 @@ struct serverMemOverhead *getMemoryOverheadData(void) {
         mh->repl_backlog += server.repl_backlog->blocks_index->numnodes * sizeof(raxNode) +
                             raxSize(server.repl_backlog->blocks_index) * sizeof(void *);
     }
+    mh->replicas_repl_buffer = server.pending_repl_data.mem;
     mem_total += mh->repl_backlog;
+    mem_total += mh->replicas_repl_buffer;
     mem_total += mh->clients_replicas;
 
     /* Computing the memory used by the clients would be O(N) if done
@@ -1786,7 +1788,7 @@ void memoryCommand(client *c) {
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "stats") && c->argc == 2) {
         struct serverMemOverhead *mh = getMemoryOverheadData();
 
-        addReplyMapLen(c, 33 + mh->num_dbs);
+        addReplyMapLen(c, 34 + mh->num_dbs);
 
         addReplyBulkCString(c, "peak.allocated");
         addReplyLongLong(c, mh->peak_allocated);
@@ -1799,6 +1801,9 @@ void memoryCommand(client *c) {
 
         addReplyBulkCString(c, "replication.backlog");
         addReplyLongLong(c, mh->repl_backlog);
+
+        addReplyBulkCString(c, "replicas.repl.buffer");
+        addReplyLongLong(c, mh->replicas_repl_buffer);
 
         addReplyBulkCString(c, "clients.slaves");
         addReplyLongLong(c, mh->clients_replicas);

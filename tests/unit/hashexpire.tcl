@@ -2838,7 +2838,7 @@ tags {"aof external:skip"} {
 
                 # Create 10 fields with short expiry
                 for {set i 11} {$i <= 20} {incr i} {
-                    r HSETEX myhash PXAT [expr {[clock milliseconds] + 10}] FIELDS 1 f$i v$i ;# 10 PXAT to aof
+                    r HSETEX myhash PX 10 FIELDS 1 f$i v$i ;# 10 PXAT to aof
                 }
 
                 # Create 10 fields with expire 0

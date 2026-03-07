@@ -1,4 +1,5 @@
 [![codecov](https://codecov.io/gh/valkey-io/valkey/graph/badge.svg?token=KYYSJAYC5F)](https://codecov.io/gh/valkey-io/valkey)
+[![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/valkey-io/valkey/badge)](https://securityscorecards.dev/viewer/?uri=github.com/valkey-io/valkey)
 
 This project was forked from the open source Redis project right before the transition to their new source available licenses.
 
@@ -341,7 +342,7 @@ Other options supported by Valkey's `CMake` build system:
 - `-DBUILD_RDMA=<no|module>` enable RDMA module build (only module mode supported). Default: `no`
 - `-DBUILD_MALLOC=<libc|jemalloc|tcmalloc|tcmalloc_minimal>` choose the allocator to use. Default on Linux: `jemalloc`, for other OS: `libc`
 - `-DBUILD_SANITIZER=<address|thread|undefined>` build with address sanitizer enabled. Default: disabled (no sanitizer)
-- `-DBUILD_UNIT_TESTS=[yes|no]`  when set, the build will produce the executable `valkey-unit-tests`. Default: `no`
+- `-DBUILD_UNIT_GTESTS=[yes|no]`  when set, the build will produce unit tests executable `valkey-unit-gtests`. Default: `no`
 - `-DBUILD_TEST_MODULES=[yes|no]`  when set, the build will include the modules located under the `tests/modules` folder. Default: `no`
 - `-DBUILD_EXAMPLE_MODULES=[yes|no]`  when set, the build will include the example modules located under the `src/modules` folder. Default: `no`
 

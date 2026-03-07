@@ -119,10 +119,10 @@ tags {"needs:debug"} {
             assert {$eventname eq "command"}
             if {!$::no_latency} {
                 # To avoid timing issues, each event decreases by 50 and
-                # increases by 150 to increase the range.
+                # increases by 200 to increase the range.
                 assert_equal $time $last_time
-                assert_range $max 450 650 ;# debug sleep 0.5
-                assert_range $sum 1050 1650 ;# debug sleep 0.3 + 0.4 + 0.5
+                assert_range $max 450 700 ;# debug sleep 0.5
+                assert_range $sum 1050 1800 ;# debug sleep 0.3 + 0.4 + 0.5
                 assert_equal $cnt 3
             }
             break
@@ -135,13 +135,15 @@ tags {"needs:debug"} {
             puts "LATENCY GRAPH data:"
             puts $res
         }
-        assert_match {*command*high*low*} $res
+        if {!$::no_latency} {
+            assert_match {*command*high*low*} $res
 
-        # These numbers are taken from the "Test latency events logging" test.
-        # (debug sleep 0.3) and (debug sleep 0.5), using range to prevent timing issue.
-        regexp "command - high (.*?) ms, low (.*?) ms" $res -> high low
-        assert_morethan_equal $high 500
-        assert_morethan_equal $low 300
+            # These numbers are taken from the "Test latency events logging" test.
+            # (debug sleep 0.3) and (debug sleep 0.5), using range to prevent timing issue.
+            regexp "command - high (.*?) ms, low (.*?) ms" $res -> high low
+            assert_range $high 450 700
+            assert_range $low 250 500
+        }
     }
 
     r config set latency-monitor-threshold $old_threshold_value

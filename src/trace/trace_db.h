@@ -28,100 +28,116 @@
 #include <lttng/tracepoint.h>
 
 LTTNG_UST_TRACEPOINT_EVENT_CLASS(
-    /* Tracepoint class provider name */
     valkey_db,
+    valkey_db_entry_class,
+    LTTNG_UST_TP_ARGS(),
+    LTTNG_UST_TP_FIELDS()
+)
 
-    /* Tracepoint class name */
+LTTNG_UST_TRACEPOINT_EVENT_CLASS(
+    valkey_db,
     valkey_db_class,
-
-    /* List of tracepoint arguments (input) */
     LTTNG_UST_TP_ARGS(
-      uint64_t, duration
+        uint64_t, duration
     ),
-
-    /* List of fields of eventual event (output) */
     LTTNG_UST_TP_FIELDS(
-        lttng_ust_field_integer(uint64_t, duration, duration)
+        lttng_ust_field_integer_nowrite(uint64_t, duration, duration)
     )
 )
 
 LTTNG_UST_TRACEPOINT_EVENT_INSTANCE(
-    /* Name of the tracepoint class provider */
+    valkey_db, valkey_db_entry_class, valkey_db, expire_del_entry,
+    LTTNG_UST_TP_ARGS()
+)
+
+LTTNG_UST_TRACEPOINT_EVENT_INSTANCE(
     valkey_db, valkey_db_class, valkey_db, expire_del,
-
-    /* List of tracepoint arguments (input) */
     LTTNG_UST_TP_ARGS(
-      uint64_t, duration
+        uint64_t, duration
     )
 )
 
 LTTNG_UST_TRACEPOINT_EVENT_INSTANCE(
-    /* Name of the tracepoint class provider */
+    valkey_db, valkey_db_entry_class, valkey_db, active_defrag_cycle_entry,
+    LTTNG_UST_TP_ARGS()
+)
+
+LTTNG_UST_TRACEPOINT_EVENT_INSTANCE(
     valkey_db, valkey_db_class, valkey_db, active_defrag_cycle,
-
-    /* List of tracepoint arguments (input) */
     LTTNG_UST_TP_ARGS(
-      uint64_t, duration
+        uint64_t, duration
     )
 )
 
 LTTNG_UST_TRACEPOINT_EVENT_INSTANCE(
-    /* Name of the tracepoint class provider */
+    valkey_db, valkey_db_entry_class, valkey_db, eviction_del_entry,
+    LTTNG_UST_TP_ARGS()
+)
+
+LTTNG_UST_TRACEPOINT_EVENT_INSTANCE(
     valkey_db, valkey_db_class, valkey_db, eviction_del,
-
-    /* List of tracepoint arguments (input) */
     LTTNG_UST_TP_ARGS(
-      uint64_t, duration
+        uint64_t, duration
     )
 )
 
 LTTNG_UST_TRACEPOINT_EVENT_INSTANCE(
-    /* Name of the tracepoint class provider */
+    valkey_db, valkey_db_entry_class, valkey_db, eviction_lazyfree_entry,
+    LTTNG_UST_TP_ARGS()
+)
+
+LTTNG_UST_TRACEPOINT_EVENT_INSTANCE(
     valkey_db, valkey_db_class, valkey_db, eviction_lazyfree,
-
-    /* List of tracepoint arguments (input) */
     LTTNG_UST_TP_ARGS(
-      uint64_t, duration
+        uint64_t, duration
     )
 )
 
 LTTNG_UST_TRACEPOINT_EVENT_INSTANCE(
-    /* Name of the tracepoint class provider */
+    valkey_db, valkey_db_entry_class, valkey_db, eviction_cycle_entry,
+    LTTNG_UST_TP_ARGS()
+)
+
+LTTNG_UST_TRACEPOINT_EVENT_INSTANCE(
     valkey_db, valkey_db_class, valkey_db, eviction_cycle,
-
-    /* List of tracepoint arguments (input) */
     LTTNG_UST_TP_ARGS(
-      uint64_t, duration
+        uint64_t, duration
     )
 )
 
 LTTNG_UST_TRACEPOINT_EVENT_INSTANCE(
-    /* Name of the tracepoint class provider */
+    valkey_db, valkey_db_entry_class, valkey_db, expire_cycle_entry,
+    LTTNG_UST_TP_ARGS()
+)
+
+LTTNG_UST_TRACEPOINT_EVENT_INSTANCE(
     valkey_db, valkey_db_class, valkey_db, expire_cycle,
-
-    /* List of tracepoint arguments (input) */
     LTTNG_UST_TP_ARGS(
-      uint64_t, duration
+        uint64_t, duration
     )
 )
 
 LTTNG_UST_TRACEPOINT_EVENT_INSTANCE(
-    /* Name of the tracepoint class provider */
+    valkey_db, valkey_db_entry_class, valkey_db, expire_cycle_keys_entry,
+    LTTNG_UST_TP_ARGS()
+)
+
+LTTNG_UST_TRACEPOINT_EVENT_INSTANCE(
     valkey_db, valkey_db_class, valkey_db, expire_cycle_keys,
-
-    /* List of tracepoint arguments (input) */
     LTTNG_UST_TP_ARGS(
-      uint64_t, duration
+        uint64_t, duration
     )
 )
 
 LTTNG_UST_TRACEPOINT_EVENT_INSTANCE(
-    /* Name of the tracepoint class provider */
-    valkey_db, valkey_db_class, valkey_db, expire_cycle_fields,
+    valkey_db, valkey_db_entry_class, valkey_db, expire_cycle_fields_entry,
+    LTTNG_UST_TP_ARGS()
+)
 
-    /* List of tracepoint arguments (input) */
+LTTNG_UST_TRACEPOINT_EVENT_INSTANCE(
+    valkey_db, valkey_db_class, valkey_db, expire_cycle_fields,
     LTTNG_UST_TP_ARGS(
-      uint64_t, duration
+        uint64_t, duration
     )
 )
 

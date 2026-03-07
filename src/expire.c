@@ -221,6 +221,12 @@ static long long activeExpireCycleJob(enum activeExpiryType jobType, int cycleTy
     int time_check_mask; /* Check time limit when (i & mask) == 0, i.e. every (X+1)th of the loop. */
     monotime start = getMonotonicUs();
 
+    if (jobType == KEYS) {
+        latencyTraceStart(db, expire_cycle_keys);
+    } else if (jobType == FIELDS) {
+        latencyTraceStart(db, expire_cycle_fields);
+    }
+
     if (cycleType == ACTIVE_EXPIRE_CYCLE_FAST) {
         /* Don't start a fast cycle if the previous cycle did not exit
          * for time limit, unless the percentage of estimated stale keys is
@@ -410,9 +416,9 @@ static long long activeExpireCycleJob(enum activeExpiryType jobType, int cycleTy
 
     long long elapsed = (long long)elapsedUs(start);
     if (jobType == KEYS) {
-        latencyTraceIfNeeded(db, expire_cycle_keys, elapsed);
+        latencyTraceEnd(db, expire_cycle_keys, elapsed);
     } else if (jobType == FIELDS) {
-        latencyTraceIfNeeded(db, expire_cycle_fields, elapsed);
+        latencyTraceEnd(db, expire_cycle_fields, elapsed);
     }
 
     /* Update our estimate of keys existing but yet to be expired.
@@ -491,6 +497,7 @@ long long activeExpireCycle(int type) {
     /* Try to smoke-out bugs (server.also_propagate should be empty here) */
     serverAssert(server.also_propagate.numops == 0);
 
+    latencyTraceStart(db, expire_cycle);
     if (expireCycleStartWithFields) {
         elapsed += activeExpireCycleJob(FIELDS, type, timelimit_us - elapsed);
         elapsed += activeExpireCycleJob(KEYS, type, timelimit_us - elapsed);
@@ -498,9 +505,9 @@ long long activeExpireCycle(int type) {
         elapsed += activeExpireCycleJob(KEYS, type, timelimit_us - elapsed);
         elapsed += activeExpireCycleJob(FIELDS, type, timelimit_us - elapsed);
     }
+    latencyTraceEnd(db, expire_cycle, elapsed);
     server.stat_expire_cycle_time_used += elapsed;
     latencyAddSampleIfNeeded("expire-cycle", elapsed);
-    latencyTraceIfNeeded(db, expire_cycle, elapsed);
     expireCycleStartWithFields = !expireCycleStartWithFields;
     return elapsed;
 }

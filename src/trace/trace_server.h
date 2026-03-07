@@ -28,90 +28,104 @@
 #include <lttng/tracepoint.h>
 
 LTTNG_UST_TRACEPOINT_EVENT_CLASS(
-    /* Tracepoint class provider name */
     valkey_server,
+    valkey_server_entry_class,
+    LTTNG_UST_TP_ARGS(),
+    LTTNG_UST_TP_FIELDS()
+)
 
-    /* Tracepoint class name */
+LTTNG_UST_TRACEPOINT_EVENT_CLASS(
+    valkey_server,
     valkey_server_class,
-
-    /* List of tracepoint arguments (input) */
     LTTNG_UST_TP_ARGS(
-      uint64_t, duration
+        uint64_t, duration
     ),
-
-    /* List of fields of eventual event (output) */
     LTTNG_UST_TP_FIELDS(
-        lttng_ust_field_integer(uint64_t, duration, duration)
+        lttng_ust_field_integer_nowrite(uint64_t, duration, duration)
     )
 )
 
 LTTNG_UST_TRACEPOINT_EVENT_INSTANCE(
-    /* Name of the tracepoint class provider */
+    valkey_server, valkey_server_entry_class, valkey_server, command_unblocking_entry,
+    LTTNG_UST_TP_ARGS()
+)
+
+LTTNG_UST_TRACEPOINT_EVENT_INSTANCE(
     valkey_server, valkey_server_class, valkey_server, command_unblocking,
-
-    /* List of tracepoint arguments (input) */
     LTTNG_UST_TP_ARGS(
-      uint64_t, duration
+        uint64_t, duration
     )
 )
 
 LTTNG_UST_TRACEPOINT_EVENT_INSTANCE(
-    /* Name of the tracepoint class provider */
+    valkey_server, valkey_server_entry_class, valkey_server, while_blocked_cron_entry,
+    LTTNG_UST_TP_ARGS()
+)
+
+LTTNG_UST_TRACEPOINT_EVENT_INSTANCE(
     valkey_server, valkey_server_class, valkey_server, while_blocked_cron,
-
-    /* List of tracepoint arguments (input) */
     LTTNG_UST_TP_ARGS(
-      uint64_t, duration
+        uint64_t, duration
     )
 )
 
 LTTNG_UST_TRACEPOINT_EVENT_INSTANCE(
-    /* Name of the tracepoint class provider */
+    valkey_server, valkey_server_entry_class, valkey_server, eventloop_entry,
+    LTTNG_UST_TP_ARGS()
+)
+
+LTTNG_UST_TRACEPOINT_EVENT_INSTANCE(
     valkey_server, valkey_server_class, valkey_server, eventloop,
-
-    /* List of tracepoint arguments (input) */
     LTTNG_UST_TP_ARGS(
-      uint64_t, duration
+        uint64_t, duration
     )
 )
 
 LTTNG_UST_TRACEPOINT_EVENT_INSTANCE(
-    /* Name of the tracepoint class provider */
+    valkey_server, valkey_server_entry_class, valkey_server, eventloop_cron_entry,
+    LTTNG_UST_TP_ARGS()
+)
+
+LTTNG_UST_TRACEPOINT_EVENT_INSTANCE(
     valkey_server, valkey_server_class, valkey_server, eventloop_cron,
-
-    /* List of tracepoint arguments (input) */
     LTTNG_UST_TP_ARGS(
-      uint64_t, duration
+        uint64_t, duration
     )
 )
 
 LTTNG_UST_TRACEPOINT_EVENT_INSTANCE(
-    /* Name of the tracepoint class provider */
+    valkey_server, valkey_server_entry_class, valkey_server, module_acquire_gil_entry,
+    LTTNG_UST_TP_ARGS()
+)
+
+LTTNG_UST_TRACEPOINT_EVENT_INSTANCE(
     valkey_server, valkey_server_class, valkey_server, module_acquire_gil,
-
-    /* List of tracepoint arguments (input) */
     LTTNG_UST_TP_ARGS(
-      uint64_t, duration
+        uint64_t, duration
     )
 )
 
 LTTNG_UST_TRACEPOINT_EVENT_INSTANCE(
-    /* Name of the tracepoint class provider */
+    valkey_server, valkey_server_entry_class, valkey_server, command_entry,
+    LTTNG_UST_TP_ARGS()
+)
+
+LTTNG_UST_TRACEPOINT_EVENT_INSTANCE(
     valkey_server, valkey_server_class, valkey_server, command,
-
-    /* List of tracepoint arguments (input) */
     LTTNG_UST_TP_ARGS(
-      uint64_t, duration
+        uint64_t, duration
     )
 )
 
 LTTNG_UST_TRACEPOINT_EVENT_INSTANCE(
-    /* Name of the tracepoint class provider */
-    valkey_server, valkey_server_class, valkey_server, fast_command,
+    valkey_server, valkey_server_entry_class, valkey_server, fast_command_entry,
+    LTTNG_UST_TP_ARGS()
+)
 
-    /* List of tracepoint arguments (input) */
+LTTNG_UST_TRACEPOINT_EVENT_INSTANCE(
+    valkey_server, valkey_server_class, valkey_server, fast_command,
     LTTNG_UST_TP_ARGS(
-      uint64_t, duration
+        uint64_t, duration
     )
 )
 

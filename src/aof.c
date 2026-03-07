@@ -1119,9 +1119,20 @@ void flushAppendOnlyFile(int force) {
         usleep(server.aof_flush_sleep);
     }
 
+    /* Emit entry traces for write subcategories */
+    if (sync_in_progress) {
+        latencyTraceStart(aof, aof_write_pending_fsync);
+    } else if (hasActiveChildProcess()) {
+        latencyTraceStart(aof, aof_write_active_child);
+    } else {
+        latencyTraceStart(aof, aof_write_alone);
+    }
+
     latencyStartMonitor(latency);
+    latencyTraceStart(aof, aof_write);
     nwritten = aofWrite(server.aof_fd, server.aof_buf, sdslen(server.aof_buf));
     latencyEndMonitor(latency);
+    latencyTraceEnd(aof, aof_write, latency);
     /* We want to capture different events for delayed writes:
      * when the delay happens with a pending fsync, or with a saving child
      * active, and when the above two conditions are missing.
@@ -1129,16 +1140,15 @@ void flushAppendOnlyFile(int force) {
      * useful for graphing / monitoring purposes. */
     if (sync_in_progress) {
         latencyAddSampleIfNeeded("aof-write-pending-fsync", latency);
-        latencyTraceIfNeeded(aof, aof_write_pending_fsync, latency);
+        latencyTraceEnd(aof, aof_write_pending_fsync, latency);
     } else if (hasActiveChildProcess()) {
         latencyAddSampleIfNeeded("aof-write-active-child", latency);
-        latencyTraceIfNeeded(aof, aof_write_active_child, latency);
+        latencyTraceEnd(aof, aof_write_active_child, latency);
     } else {
         latencyAddSampleIfNeeded("aof-write-alone", latency);
-        latencyTraceIfNeeded(aof, aof_write_alone, latency);
+        latencyTraceEnd(aof, aof_write_alone, latency);
     }
     latencyAddSampleIfNeeded("aof-write", latency);
-    latencyTraceIfNeeded(aof, aof_write, latency);
 
     /* We performed the write so reset the postponed flush sentinel to zero. */
     server.aof_flush_postponed_start = 0;
@@ -1240,6 +1250,7 @@ try_fsync:
         /* valkey_fsync is defined as fdatasync() for Linux in order to avoid
          * flushing metadata. */
         latencyStartMonitor(latency);
+        latencyTraceStart(aof, aof_fsync_always);
         /* Let's try to get this data on the disk. To guarantee data safe when
          * the AOF fsync policy is 'always', we should exit if failed to fsync
          * AOF (see comment next to the exit(1) after write error above). */
@@ -1251,8 +1262,8 @@ try_fsync:
             exit(1);
         }
         latencyEndMonitor(latency);
+        latencyTraceEnd(aof, aof_fsync_always, latency);
         latencyAddSampleIfNeeded("aof-fsync-always", latency);
-        latencyTraceIfNeeded(aof, aof_fsync_always, latency);
 
         server.aof_last_incr_fsync_offset = server.aof_last_incr_size;
         server.aof_last_fsync = server.mstime;
@@ -2592,6 +2603,7 @@ off_t getAppendOnlyFileSize(sds filename, int *status) {
 
     sds aof_filepath = makePath(server.aof_dirname, filename);
     latencyStartMonitor(latency);
+    latencyTraceStart(aof, aof_fstat);
     if (valkey_stat(aof_filepath, &sb) == -1) {
         if (status) *status = errno == ENOENT ? AOF_NOT_EXIST : AOF_OPEN_ERR;
         serverLog(LL_WARNING, "Unable to obtain the AOF file %s length. stat: %s", filename, strerror(errno));
@@ -2601,8 +2613,8 @@ off_t getAppendOnlyFileSize(sds filename, int *status) {
         size = sb.st_size;
     }
     latencyEndMonitor(latency);
+    latencyTraceEnd(aof, aof_fstat, latency);
     latencyAddSampleIfNeeded("aof-fstat", latency);
-    latencyTraceIfNeeded(aof, aof_fstat, latency);
     sdsfree(aof_filepath);
     return size;
 }
@@ -2668,6 +2680,7 @@ void backgroundRewriteDoneHandler(int exitcode, int bysignal) {
 
         /* Rename the temporary aof file to 'new_base_filename'. */
         latencyStartMonitor(latency);
+        latencyTraceStart(aof, aof_rename);
         if (rename(tmpfile, new_base_filepath) == -1) {
             serverLog(LL_WARNING, "Error trying to rename the temporary AOF base file %s into %s: %s", tmpfile,
                       new_base_filepath, strerror(errno));
@@ -2678,8 +2691,8 @@ void backgroundRewriteDoneHandler(int exitcode, int bysignal) {
             goto cleanup;
         }
         latencyEndMonitor(latency);
+        latencyTraceEnd(aof, aof_rename, latency);
         latencyAddSampleIfNeeded("aof-rename", latency);
-        latencyTraceIfNeeded(aof, aof_rename, latency);
         serverLog(LL_NOTICE, "Successfully renamed the temporary AOF base file %s into %s", tmpfile, new_base_filename);
 
         /* Rename the temporary incr aof file to 'new_incr_filename'. */
@@ -2691,6 +2704,7 @@ void backgroundRewriteDoneHandler(int exitcode, int bysignal) {
             sds new_incr_filename = getNewIncrAofName(temp_am);
             new_incr_filepath = makePath(server.aof_dirname, new_incr_filename);
             latencyStartMonitor(latency);
+            latencyTraceStart(aof, aof_rename);
             if (rename(temp_incr_filepath, new_incr_filepath) == -1) {
                 serverLog(LL_WARNING, "Error trying to rename the temporary AOF incr file %s into %s: %s",
                           temp_incr_filepath, new_incr_filepath, strerror(errno));
@@ -2705,8 +2719,8 @@ void backgroundRewriteDoneHandler(int exitcode, int bysignal) {
                 goto cleanup;
             }
             latencyEndMonitor(latency);
+            latencyTraceEnd(aof, aof_rename, latency);
             latencyAddSampleIfNeeded("aof-rename", latency);
-            latencyTraceIfNeeded(aof, aof_rename, latency);
             serverLog(LL_NOTICE, "Successfully renamed the temporary AOF incr file %s into %s", temp_incr_aof_name,
                       new_incr_filename);
             sdsfree(temp_incr_filepath);

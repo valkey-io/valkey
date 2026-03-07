@@ -127,6 +127,7 @@ void blockClient(client *c, int btype) {
  * In case the command failed internally, ERROR_COMMAND_FAILED should be passed.
  * A value of zero indicate no error was reported after the command was unblocked  */
 void updateStatsOnUnblock(client *c, long blocked_us, long reply_us, int failed_or_rejected) {
+    latencyTraceStart(server, command_unblocking);
     c->duration += blocked_us + reply_us;
     c->lastcmd->microseconds += c->duration;
     clusterSlotStatsAddCpuDuration(c, c->duration);
@@ -149,7 +150,7 @@ void updateStatsOnUnblock(client *c, long blocked_us, long reply_us, int failed_
     c->duration = 0;
     /* Log the reply duration event. */
     latencyAddSampleIfNeeded("command-unblocking", reply_us);
-    latencyTraceIfNeeded(server, command_unblocking, reply_us);
+    latencyTraceEnd(server, command_unblocking, reply_us);
 }
 
 /* This function is called in the beforeSleep() function of the event loop

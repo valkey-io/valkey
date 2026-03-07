@@ -1044,14 +1044,16 @@ int clusterSaveConfig(int do_fsync) {
     /* Create a temp file with the new content. */
     tmpfilename = sdscatfmt(sdsempty(), "%s.tmp-%i-%I", server.cluster_configfile, (int)getpid(), mstime());
     latencyStartMonitor(latency);
+    latencyTraceStart(cluster, cluster_config_open);
     if ((fd = open(tmpfilename, O_WRONLY | O_CREAT, 0644)) == -1) {
         serverLog(LL_WARNING, "Could not open temp cluster config file: %s", strerror(errno));
         goto cleanup;
     }
     latencyEndMonitor(latency);
+    latencyTraceEnd(cluster, cluster_config_open, latency);
     latencyAddSampleIfNeeded("cluster-config-open", latency);
-    latencyTraceIfNeeded(cluster, cluster_config_open, latency);
     latencyStartMonitor(latency);
+    latencyTraceStart(cluster, cluster_config_write);
     while (offset < content_size) {
         written_bytes = write(fd, ci + offset, content_size - offset);
         if (written_bytes <= 0) {
@@ -1063,54 +1065,59 @@ int clusterSaveConfig(int do_fsync) {
         offset += written_bytes;
     }
     latencyEndMonitor(latency);
+    latencyTraceEnd(cluster, cluster_config_write, latency);
     latencyAddSampleIfNeeded("cluster-config-write", latency);
-    latencyTraceIfNeeded(cluster, cluster_config_write, latency);
     if (do_fsync) {
         latencyStartMonitor(latency);
+        latencyTraceStart(cluster, cluster_config_fsync);
         server.cluster->todo_before_sleep &= ~CLUSTER_TODO_FSYNC_CONFIG;
         if (valkey_fsync(fd) == -1) {
             serverLog(LL_WARNING, "Could not sync tmp cluster config file: %s", strerror(errno));
             goto cleanup;
         }
         latencyEndMonitor(latency);
+        latencyTraceEnd(cluster, cluster_config_fsync, latency);
         latencyAddSampleIfNeeded("cluster-config-fsync", latency);
-        latencyTraceIfNeeded(cluster, cluster_config_fsync, latency);
     }
 
     latencyStartMonitor(latency);
+    latencyTraceStart(cluster, cluster_config_rename);
     if (rename(tmpfilename, server.cluster_configfile) == -1) {
         serverLog(LL_WARNING, "Could not rename tmp cluster config file: %s", strerror(errno));
         goto cleanup;
     }
     latencyEndMonitor(latency);
+    latencyTraceEnd(cluster, cluster_config_rename, latency);
     latencyAddSampleIfNeeded("cluster-config-rename", latency);
-    latencyTraceIfNeeded(cluster, cluster_config_rename, latency);
     if (do_fsync) {
         latencyStartMonitor(latency);
+        latencyTraceStart(cluster, cluster_config_dir_fsync);
         if (fsyncFileDir(server.cluster_configfile) == -1) {
             serverLog(LL_WARNING, "Could not sync cluster config file dir: %s", strerror(errno));
             goto cleanup;
         }
         latencyEndMonitor(latency);
+        latencyTraceEnd(cluster, cluster_config_dir_fsync, latency);
         latencyAddSampleIfNeeded("cluster-config-dir-fsync", latency);
-        latencyTraceIfNeeded(cluster, cluster_config_dir_fsync, latency);
     }
     retval = C_OK; /* If we reached this point, everything is fine. */
 
 cleanup:
     if (fd != -1) {
         latencyStartMonitor(latency);
+        latencyTraceStart(cluster, cluster_config_close);
         close(fd);
         latencyEndMonitor(latency);
+        latencyTraceEnd(cluster, cluster_config_close, latency);
         latencyAddSampleIfNeeded("cluster-config-close", latency);
-        latencyTraceIfNeeded(cluster, cluster_config_close, latency);
     }
     if (retval == C_ERR) {
         latencyStartMonitor(latency);
+        latencyTraceStart(cluster, cluster_config_unlink);
         unlink(tmpfilename);
         latencyEndMonitor(latency);
+        latencyTraceEnd(cluster, cluster_config_unlink, latency);
         latencyAddSampleIfNeeded("cluster-config-unlink", latency);
-        latencyTraceIfNeeded(cluster, cluster_config_unlink, latency);
     }
     sdsfree(tmpfilename);
     sdsfree(ci);

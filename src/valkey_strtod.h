@@ -3,6 +3,7 @@
 
 #include <errno.h>
 #include <stddef.h>
+#include "sds.h"
 
 /**
  * Converts a string to a double using ffc.h (https://github.com/kolemannix/ffc.h),
@@ -18,14 +19,38 @@
 double fast_float_strtod(const char *str, const char **endptr);
 double fast_float_strtod_n(const char *str, size_t len, const char **endptr);
 
+/**
+ * Converts a null-terminated string to a double-precision floating-point number.
+ * On success, returns the converted value and sets *endptr to point past the
+ * last parsed character. On failure, returns 0.0 and sets errno appropriately.
+ */
 static inline double valkey_strtod(const char *str, char **endptr) {
     errno = 0;
     return fast_float_strtod(str, (const char **)endptr);
 }
 
+/**
+ * Converts a string of specified length to a double-precision floating-point number.
+ * Unlike valkey_strtod, this function does not require the string to be null-terminated,
+ * making it suitable for parsing substrings. On success, returns the converted value
+ * and sets *endptr to point past the last parsed character. On failure, returns 0.0
+ * and sets errno appropriately.
+ */
 static inline double valkey_strtod_n(const char *str, size_t len, char **endptr) {
     errno = 0;
     return fast_float_strtod_n(str, len, (const char **)endptr);
+}
+
+/**
+ * Converts an SDS string to a double-precision floating-point number.
+ * This is a convenience wrapper around valkey_strtod_n that automatically
+ * determines the string length using sdslen(). On success, returns the converted
+ * value and sets *endptr to point past the last parsed character. On failure,
+ * returns 0.0 and sets errno appropriately.
+ */
+static inline double valkey_strtod_sds(sds str, char **endptr) {
+    errno = 0;
+    return fast_float_strtod_n(str, sdslen(str), (const char **)endptr);
 }
 
 #endif // VALKEY_STRTOD_H

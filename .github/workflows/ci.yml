@@ -80,7 +80,8 @@ jobs:
         # Fail build if there are warnings
         # build with TLS just for compilation coverage
         run: make -j4 all-with-unit-tests SERVER_CFLAGS='-Werror' BUILD_TLS=yes USE_FAST_FLOAT=yes USE_LIBBACKTRACE=yes
-
+      - name: unit tests
+        run: ./src/unit/valkey-unit-gtests
       - name: Install old server (${{ matrix.server.version }}) for compatibility testing
         run: |
           mkdir -p tests/tmp
@@ -239,6 +240,8 @@ jobs:
           export AR=/opt/homebrew/opt/llvm/bin/llvm-ar
           export RANLIB=/opt/homebrew/opt/llvm/bin/llvm-ranlib
           make -j3 all-with-unit-tests SERVER_CFLAGS='-Werror' USE_FAST_FLOAT=yes USE_LIBBACKTRACE=yes LIBBACKTRACE_PREFIX=/usr/local
+      - name: unit tests
+        run: ./src/unit/valkey-unit-gtests
 
   build-32bit:
     runs-on: ubuntu-latest

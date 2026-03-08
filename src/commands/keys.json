@@ -4,7 +4,7 @@
         "complexity": "O(N) with N being the number of keys in the database, under the assumption that the key names in the database and the given pattern have limited length.",
         "group": "generic",
         "since": "1.0.0",
-        "arity": 2,
+        "arity": -2,
         "function": "keysCommand",
         "command_flags": [
             "READONLY"
@@ -23,6 +23,11 @@
             {
                 "name": "pattern",
                 "type": "pattern"
+            },
+            {
+                "token": "EXT",
+                "name": "ext",
+                "type": "pure-token"
             }
         ],
         "reply_schema": {

@@ -1,0 +1,36 @@
+{
+    "INIT": {
+        "summary": "Inits previously loaded external data modules.",
+        "complexity": "O(1)",
+        "group": "server",
+        "since": "8.0.2",
+        "arity": 4,
+        "container": "EXTERNAL_DATA",
+        "function": "externalDataInitCommand",
+        "command_flags": [
+            "FAST",
+            "READONLY"
+        ],
+        "acl_categories": [
+            "FAST",
+            "KEYSPACE",
+            "READ"
+        ],
+        "command_tips": [
+            "NONDETERMINISTIC_OUTPUT_ORDER"
+        ],
+        "arguments": [
+            {
+                "name": "db",
+                "type": "string"
+            },
+            {
+                "name": "module",
+                "type": "string"
+            }
+        ],
+        "reply_schema": {
+            "const": "OK"
+        }
+    }
+}

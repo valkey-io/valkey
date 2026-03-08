@@ -21,7 +21,15 @@ struct ValkeyModuleIO;
 struct ValkeyModuleDigest;
 struct ValkeyModuleCtx;
 struct moduleLoadQueueEntry;
-struct ValkeyModuleKeyOptCtx;
+/* This is a structure used to export some meta-information such as dbid to the module. */
+typedef struct ValkeyModuleKeyOptCtx {
+    struct serverObject *from_key, *to_key; /* Optional name of key processed, NULL when unknown.
+                                              In most cases, only 'from_key' is valid, but in callbacks
+                                              such as `copy2`, both 'from_key' and 'to_key' are valid. */
+    int from_dbid, to_dbid;                 /* The dbid of the key being processed, -1 when unknown.
+                                               In most cases, only 'from_dbid' is valid, but in callbacks such
+                                               as `copy2`, 'from_dbid' and 'to_dbid' are both valid. */
+} ValkeyModuleKeyOptCtx;
 struct ValkeyModuleCommand;
 struct clusterState;
 
@@ -163,6 +171,24 @@ typedef struct ValkeyModuleDigest {
     int dbid;            /* The dbid of the key being processed */
 } ValkeyModuleDigest;
 
+typedef struct ValkeyModuleExternalStorageCtx {
+    ValkeyModuleExternalStorageState state;
+    unsigned int ext_data_timeout;
+    atomic_uint last_iterator_id;     /* Last storage scan/keys iterator id used */
+    _Atomic int ext_data_dump_status; /* Status of external data dump in bio job */
+    sds ext_data_dump_backup_id;      /* Backup ID from last external data dump */
+    _Atomic int ext_data_load_status; /* Status of external data load in bio job */
+    void *snapshot;                   /* Snapshot of data for async dump */
+} ValkeyModuleExternalStorageCtx;
+
+typedef struct ValkeyModuleExternalFilterCtx {
+    ValkeyModuleExternalFilterState state;
+    unsigned int ext_data_timeout;
+    _Atomic int ext_data_dump_status; /* Status of external data dump in bio job */
+    _Atomic int ext_data_load_status; /* Status of external data load in bio job */
+    void *snapshot;                   /* Snapshot of data for async dump */
+} ValkeyModuleExternalFilterCtx;
+
 /* Just start with a digest composed of all zero bytes. */
 static inline void moduleInitDigestContext(ValkeyModuleDigest *mdvar) {
     memset(mdvar->o, 0, sizeof(mdvar->o));
@@ -187,6 +213,8 @@ void moduleUnloadAllModules(void);
 void moduleLoadFromQueue(void);
 int moduleGetCommandKeysViaAPI(struct serverCommand *cmd, robj **argv, int argc, getKeysResult *result);
 int moduleGetCommandChannelsViaAPI(struct serverCommand *cmd, robj **argv, int argc, getKeysResult *result);
+void moduleExternalStorageInitContext(ValkeyModuleCtx *out_ctx, ValkeyModule *module);
+void moduleExternalFilterInitContext(ValkeyModuleCtx *out_ctx, ValkeyModule *module);
 moduleType *moduleTypeLookupModuleByID(uint64_t id);
 moduleType *moduleTypeLookupModuleByName(const char *name);
 moduleType *moduleTypeLookupModuleByNameIgnoreCase(const char *name);

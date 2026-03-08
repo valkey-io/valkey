@@ -549,6 +549,10 @@ typedef enum {
 #define REPL_DISKLESS_LOAD_SWAPDB 2
 #define REPL_DISKLESS_LOAD_FLUSH_BEFORE_LOAD 3
 
+/* External data options */
+#define EXT_DATA_NONE 0
+#define EXT_DATA_KV 1
+
 /* TLS Client Authentication */
 #define TLS_CLIENT_AUTH_NO 0
 #define TLS_CLIENT_AUTH_YES 1
@@ -762,6 +766,7 @@ typedef enum {
                                 * at argv[2]. */
 #define ARGS_SET_FNX (1 << 11) /* Set if key item not exists. */
 #define ARGS_SET_FXX (1 << 12) /* Set if key item exists. */
+#define ARGS_SET_EXT (1 << 13) /* Set directly to external storage. */
 
 /* An Object, that is a type able to hold a string / list / set */
 
@@ -1622,7 +1627,8 @@ typedef struct rdbSaveInfo {
     long long repl_offset;                /* Replication offset. */
 } rdbSaveInfo;
 
-#define RDB_SAVE_INFO_INIT {-1, 0, "0000000000000000000000000000000000000000", -1}
+#define RDB_SAVE_INFO_INIT \
+    {-1, 0, "0000000000000000000000000000000000000000", -1}
 
 struct malloc_stats {
     size_t zmalloc_used;
@@ -2075,6 +2081,18 @@ struct valkeyServer {
     int key_load_delay;                   /* Delay in microseconds between keys while
                                            * loading aof or rdb. (for testings). negative
                                            * value means fractions of microseconds (on average). */
+    /* External storage options.  */
+    int ext_data_mode;                         /* External storage mode */
+    int ext_data_expire;                       /* Enable expiring keys to external storage for allkeys-* policies */
+    size_t ext_min_object_size_to_move;        /* Min size of k/v pair to move to external storage */
+    unsigned long long ext_data_max_disk_size; /* Maximum disk space allowed to be used by external storage */
+    unsigned long long ext_data_max_mem_size;  /* Maximum memory allowed to be used by external storage */
+    unsigned long ext_data_defer_max_ms;       /* Deferred external data module initialization max time */
+    unsigned int ext_data_timeout;             /* Timeout for accessing external storage */
+    unsigned int ext_data_store_by_size;       /* Size to exceed to store externally */
+    int ext_data_async_load;                   /* Load external data asynchronously on replica (1=async, 0=sync) */
+    int ext_data_load_timeout_ms;              /* Timeout in milliseconds for sync external data load */
+    char *ext_data_id;                         /* Node ID for external data module */
     /* Pipe and data structures for child -> parent info sharing. */
     int child_info_pipe[2]; /* Pipe used to write the child_info_data. */
     int child_info_nread;   /* Num of bytes of the last read from pipe */
@@ -3644,6 +3662,7 @@ int rewriteConfig(char *path, int force_write);
 void initConfigValues(void);
 void removeConfig(sds name);
 sds getConfigDebugInfo(void);
+sds getConfigValue(const char *name);
 int allowProtectedAction(int config, client *c);
 void updateSharedObjectsWithCompat(void);
 void initServerClientMemUsageBuckets(void);
@@ -3695,6 +3714,7 @@ int checkAlreadyExpired(long long when);
 robj *lookupKeyRead(serverDb *db, robj *key);
 robj *lookupKeyWrite(serverDb *db, robj *key);
 robj *lookupKeyReadOrReply(client *c, robj *key, robj *reply);
+robj *lookupExtKeyReadOrReply(client *c, robj *key, robj *reply);
 robj *lookupKeyWriteOrReply(client *c, robj *key, robj *reply);
 robj *lookupKeyReadWithFlags(serverDb *db, robj *key, int flags);
 robj *lookupKeyWriteWithFlags(serverDb *db, robj *key, int flags);
@@ -3707,6 +3727,7 @@ int objectSetLRUOrLFU(robj *val, long long lfu_freq, long long lru_idle_secs);
 #define LOOKUP_NOSTATS (1 << 2)  /* Don't update keyspace hits/misses counters. */
 #define LOOKUP_WRITE (1 << 3)    /* Delete expired keys even in replicas. */
 #define LOOKUP_NOEXPIRE (1 << 4) /* Avoid deleting lazy expired keys. */
+#define LOOKUP_EXTDATA (1 << 5)  /* Include searching external data. */
 #define LOOKUP_NOEFFECTS \
     (LOOKUP_NONOTIFY | LOOKUP_NOSTATS | LOOKUP_NOTOUCH | LOOKUP_NOEXPIRE) /* Avoid any effects from fetching the key */
 
@@ -3786,6 +3807,7 @@ int zmpopGetKeys(struct serverCommand *cmd, robj **argv, int argc, getKeysResult
 int bzmpopGetKeys(struct serverCommand *cmd, robj **argv, int argc, getKeysResult *result);
 int setGetKeys(struct serverCommand *cmd, robj **argv, int argc, getKeysResult *result);
 int bitfieldGetKeys(struct serverCommand *cmd, robj **argv, int argc, getKeysResult *result);
+int delGetKeys(struct serverCommand *cmd, robj **argv, int argc, getKeysResult *result);
 
 unsigned short crc16(const char *buf, int len);
 
@@ -4178,6 +4200,14 @@ void lcsCommand(client *c);
 void quitCommand(client *c);
 void resetCommand(client *c);
 void failoverCommand(client *c);
+void externalDataInitCommand(client *c);
+void externalDataLoadedCommand(client *c);
+void externalDataStatsCommand(client *c);
+void externalDataDropCommand(client *c);
+void externalDataDebugCommand(client *c);
+void externalDataDumpCommand(client *c);
+void externalDataLoadCommand(client *c);
+
 
 /* Helper functions for getting database id args from argv, argc */
 int *selectDbIdArgs(robj **argv, int argc, int *count);
@@ -4247,6 +4277,7 @@ void debugPauseProcess(void);
 #define serverDebugMark() printf("-- MARK %s:%d --\n", __FILE__, __LINE__)
 
 int iAmPrimary(void);
+int isExtDataOn(void);
 
 #define STRINGIFY_(x) #x
 #define STRINGIFY(x) STRINGIFY_(x)

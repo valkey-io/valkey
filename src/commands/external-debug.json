@@ -1,0 +1,173 @@
+{
+    "DEBUG": {
+        "summary": "Debug commands for manipulating persistent data for a certain db.",
+        "complexity": "O(1)",
+        "group": "server",
+        "since": "8.0.2",
+        "arity": -4,
+        "container": "EXTERNAL_DATA",
+        "function": "externalDataDebugCommand",
+        "command_flags": [
+            "ADMIN"
+        ],
+        "acl_categories": [
+            "ADMIN",
+            "DANGEROUS",
+            "SLOW"
+        ],
+        "command_tips": [
+            "NONDETERMINISTIC_OUTPUT_ORDER"
+        ],
+        "arguments": [
+            {
+                "name": "db",
+                "type": "string"
+            },
+            {
+                "name": "module",
+                "type": "oneof",
+                "arguments": [
+                    {
+                        "name": "storage",
+                        "type": "pure-token",
+                        "token": "STORAGE",
+                        "arguments": [
+                            {
+                                "name": "operation",
+                                "type": "oneof",
+                                "arguments": [
+                                    {
+                                        "name": "set",
+                                        "type": "pure-token",
+                                        "token": "SET",
+                                        "arguments": [
+                                            {
+                                                "name": "key",
+                                                "type": "string"
+                                            },
+                                            {
+                                                "name": "value",
+                                                "type": "string"
+                                            }
+                                        ]
+                                    },
+                                    {
+                                        "name": "get",
+                                        "type": "pure-token",
+                                        "token": "GET",
+                                        "arguments": [
+                                            {
+                                                "name": "key",
+                                                "type": "string"
+                                            }
+                                        ]
+                                    },
+                                    {
+                                        "name": "del",
+                                        "type": "pure-token",
+                                        "token": "DEL",
+                                        "arguments": [
+                                            {
+                                                "name": "key",
+                                                "type": "string"
+                                            }
+                                        ]
+                                    },
+                                    {
+                                        "name": "block",
+                                        "type": "pure-token",
+                                        "token": "BLOCK"
+                                    },
+                                    {
+                                        "name": "unblock",
+                                        "type": "pure-token",
+                                        "token": "UNBLOCK"
+                                    }
+                                ]
+                            }
+                        ]
+                    },
+                    {
+                        "name": "filter",
+                        "type": "pure-token",
+                        "token": "FILTER",
+                        "arguments": [
+                            {
+                                "name": "operation",
+                                "type": "oneof",
+                                "arguments": [
+                                    {
+                                        "name": "set",
+                                        "type": "pure-token",
+                                        "token": "SET",
+                                        "arguments": [
+                                            {
+                                                "name": "key",
+                                                "type": "string"
+                                            }
+                                        ]
+                                    },
+                                    {
+                                        "name": "get",
+                                        "type": "pure-token",
+                                        "token": "GET",
+                                        "arguments": [
+                                            {
+                                                "name": "key",
+                                                "type": "string"
+                                            }
+                                        ]
+                                    },
+                                    {
+                                        "name": "del",
+                                        "type": "pure-token",
+                                        "token": "DEL",
+                                        "arguments": [
+                                            {
+                                                "name": "key",
+                                                "type": "string"
+                                            }
+                                        ]
+                                    },
+                                    {
+                                        "name": "block",
+                                        "type": "pure-token",
+                                        "token": "BLOCK"
+                                    },
+                                    {
+                                        "name": "unblock",
+                                        "type": "pure-token",
+                                        "token": "UNBLOCK"
+                                    }
+                                ]
+                            }
+                        ]
+                    },
+                    {
+                        "name": "setro",
+                        "type": "pure-token",
+                        "token": "SETRO"
+                    },
+                    {
+                        "name": "dropro",
+                        "type": "pure-token",
+                        "token": "DROPRO"
+                    }
+                ]
+            }
+        ],
+        "reply_schema": {
+            "anyOf":[
+                {
+                    "description": "DEL: number of keys that were removed.",
+                    "type": "integer",
+                    "minimum": 0
+                },
+                {
+                    "description": "SET: key was set",
+                    "const": "OK"
+                }
+            ]
+        }
+    }
+}

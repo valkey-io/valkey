@@ -1,10 +1,10 @@
 {
     "DBSIZE": {
-        "summary": "Returns the number of keys in the database.",
+        "summary": "Returns the number of keys in the database. With the EXT option, returns the count of memory keys plus the count of external data keys.",
         "complexity": "O(1)",
         "group": "server",
         "since": "1.0.0",
-        "arity": 1,
+        "arity": -1,
         "function": "dbsizeCommand",
         "command_flags": [
             "READONLY",
@@ -21,7 +21,15 @@
         ],
         "reply_schema": {
             "type": "integer",
-            "description": "The number of keys in the currently-selected database."
-        }
+            "description": "The number of keys in the currently-selected database. With EXT option, includes external data keys."
+        },
+        "arguments": [
+            {
+                "name": "ext",
+                "type": "pure-token",
+                "token": "EXT",
+                "optional": true
+            }
+        ]
     }
 }

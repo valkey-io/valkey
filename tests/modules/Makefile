@@ -69,7 +69,9 @@ TEST_MODULES = \
     crash.so \
     cluster.so \
     helloscripting.so \
-    unsupported_features.so
+    unsupported_features.so \
+    extstorage/extdata1.so \
+    extstorage/extdata2.so
 
 .PHONY: all
 

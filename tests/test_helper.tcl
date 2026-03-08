@@ -223,7 +223,7 @@ proc reconnect {args} {
 
     # select the right db when we don't have to authenticate
     if {![dict exists $config "requirepass"] && !$::singledb} {
-        $client select 9
+        catch {$client select 9}
     }
 
     # re-set $srv in the servers list

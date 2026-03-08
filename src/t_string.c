@@ -1,3 +1,4 @@
+
 /*
  * Copyright (c) 2009-2012, Redis Ltd.
  * All rights reserved.
@@ -32,7 +33,10 @@
  * SPDX-License-Identifier: BSD-3-Clause
  */
 
+#include "external_data.h"
+#include "sds.h"
 #include "server.h"
+#include "valkeymodule.h"
 #include <math.h> /* isnan(), isinf() */
 
 /* Forward declarations */
@@ -57,6 +61,11 @@ static int checkStringLength(client *c, long long size, long long append) {
 
 /* Forward declaration */
 static int getExpireMillisecondsOrReply(client *c, robj *expire, int flags, int unit, long long *milliseconds);
+
+static int checkKVShouldBeExternallyStored(robj *key, robj *val, int flags) {
+    return (
+        isExtDataOn() && (flags & ARGS_SET_EXT || (server.ext_data_store_by_size && (sdslen(objectGetVal(key)) + sdslen(objectGetVal(val)) > server.ext_data_store_by_size))));
+}
 
 /* The setGenericCommand() function implements the SET operation with different
  * options and variants. This function is called in order to implement the
@@ -97,6 +106,54 @@ void setGenericCommand(client *c,
 
     robj *existing_value = lookupKeyWrite(c->db, key);
     found = existing_value != NULL;
+
+    int should_be_ext = checkKVShouldBeExternallyStored(key, val, flags);
+    if (should_be_ext) {
+        int result = externalDataWrite(c->db->id, key, val);
+        if (result == EXTERNAL_READONLY) {
+            blockPostponeClient(c);
+            return;
+        } else if (result == EXTERNAL_ERROR) {
+            /* Module returned error - send error reply to client */
+            /* Note: Module's detailed error message is lost due to teardownModuleCtx,
+             * so we send a generic error here */
+            if (!mustObeyClient(c)) {
+                addReplyError(c, "External storage operation failed");
+            }
+        } else {
+            // Success
+            if (found) dbDelete(c->db, key);
+
+            /* Only send OK reply to non-replicated clients.
+             * Replicated clients (from primary/AOF) should not receive replies. */
+            if (!mustObeyClient(c)) {
+                addReply(c, ok_reply ? ok_reply : shared.ok);
+            }
+
+            /* Propagate the SET command with EXT flag to replicas and AOF.
+             * This ensures replicas also store the data externally. */
+            server.dirty++;
+            notifyKeyspaceEvent(NOTIFY_STRING, "set", key, c->db->id);
+
+            /* Propagate the command to replicas and AOF */
+            int propagate_to_aof = server.aof_state != AOF_OFF;
+            int propagate_to_repl = listLength(server.replicas) > 0;
+            if (propagate_to_aof || propagate_to_repl) {
+                robj *ext_argv[4];
+                ext_argv[0] = shared.set;
+                ext_argv[1] = key;
+                ext_argv[2] = val;
+                ext_argv[3] = createStringObject("EXT", 3);
+
+                if (propagate_to_aof) feedAppendOnlyFile(c->db->id, ext_argv, 4);
+                if (propagate_to_repl) replicationFeedReplicas(c->db->id, ext_argv, 4);
+
+                /* Free the created EXT string object to avoid memory leak */
+                decrRefCount(ext_argv[3]);
+            }
+        }
+        goto cleanup;
+    }
 
     /* Handle the IFEQ conditional check */
     if (flags & ARGS_SET_IFEQ && found) {
@@ -280,8 +337,13 @@ void delifeqCommand(client *c) {
 int getGenericCommand(client *c) {
     robj *o;
 
-    if ((o = lookupKeyReadOrReply(c, c->argv[1], shared.null[c->resp])) == NULL)
-        return C_OK;
+    if (c->argc == 3 && !strcasecmp(objectGetVal(c->argv[2]), "ext")) {
+        if ((o = lookupExtKeyReadOrReply(c, c->argv[1], shared.null[c->resp])) == NULL)
+            return C_OK;
+    } else {
+        if ((o = lookupKeyReadOrReply(c, c->argv[1], shared.null[c->resp])) == NULL)
+            return C_OK;
+    }
 
     if (checkType(c, o, OBJ_STRING)) {
         return C_ERR;

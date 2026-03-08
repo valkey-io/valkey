@@ -49,6 +49,11 @@
                 "type": "string",
                 "optional": true,
                 "since": "6.0.0"
+            },
+            {
+                "token": "EXT",
+                "name": "ext",
+                "type": "pure-token"
             }
         ],
         "reply_schema": {

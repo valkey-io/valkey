@@ -25,6 +25,7 @@
 
 typedef struct ValkeyModuleString ValkeyModuleString;
 typedef struct ValkeyModuleKey ValkeyModuleKey;
+typedef struct ValkeyModuleDictIter ValkeyModuleDictIter;
 
 /* -------------- Defines NOT common between core and modules ------------- */
 
@@ -544,6 +545,8 @@ typedef struct ValkeyModuleEvent {
 
 struct ValkeyModuleCtx;
 struct ValkeyModuleDefragCtx;
+struct ValkeyModuleKeyOptCtx;
+typedef struct ValkeyModuleExternalFilterCtx ValkeyModuleExternalFilterCtx;
 typedef void (*ValkeyModuleEventCallback)(struct ValkeyModuleCtx *ctx,
                                           ValkeyModuleEvent eid,
                                           uint64_t subevent,
@@ -718,7 +721,8 @@ typedef struct ValkeyModuleClientInfo {
 
 #define ValkeyModuleClientInfo ValkeyModuleClientInfoV1
 
-#define VALKEYMODULE_CLIENTINFO_INITIALIZER_V1 {.version = 1}
+#define VALKEYMODULE_CLIENTINFO_INITIALIZER_V1 \
+    {.version = 1}
 
 #define VALKEYMODULE_REPLICATIONINFO_VERSION 1
 typedef struct ValkeyModuleReplicationInfo {
@@ -863,6 +867,7 @@ typedef struct ValkeyModuleIO ValkeyModuleIO;
 typedef struct ValkeyModuleDigest ValkeyModuleDigest;
 typedef struct ValkeyModuleInfoCtx ValkeyModuleInfoCtx;
 typedef struct ValkeyModuleDefragCtx ValkeyModuleDefragCtx;
+typedef struct ValkeyModuleKeyOptCtx ValkeyModuleKeyOptCtx;
 
 /* Function pointers needed by both the core and modules, these needs to be
  * exposed since you can't cast a function pointer to (void *). */
@@ -1061,6 +1066,7 @@ typedef size_t (*ValkeyModuleScriptingEngineGetFunctionMemoryOverheadFunc)(
  * - `async`: if has value 1 then the reset is done asynchronously through
  * the callback structure returned by this function.
  */
+
 typedef ValkeyModuleScriptingEngineCallableLazyEnvReset *(*ValkeyModuleScriptingEngineResetEvalFuncV2)(
     ValkeyModuleCtx *module_ctx,
     ValkeyModuleScriptingEngineCtx *engine_ctx,
@@ -1295,10 +1301,541 @@ typedef struct ValkeyModuleScriptingEngineMethodsV4 {
     /* Function callback to end the debugger on a particular script. */
     ValkeyModuleScriptingEngineDebuggerEndFunc debugger_end;
 
-
 } ValkeyModuleScriptingEngineMethodsV4;
 
 #define ValkeyModuleScriptingEngineMethods ValkeyModuleScriptingEngineMethodsV4
+
+/* Type definitions for implementing external storage modules. */
+typedef enum ValkeyModuleExternalStorageState {
+    VMES_STATE_READY,
+    VMES_STATE_READONLY,
+} ValkeyModuleExternalStorageState;
+
+/* External storage dump/load states for replication */
+typedef enum ValkeyModuleExternalStorageDumpState {
+    VMES_DUMP_STATE_NONE = 0,
+    VMES_DUMP_STATE_IN_PROGRESS,
+    VMES_DUMP_STATE_SUCCESS,
+    VMES_DUMP_STATE_FAILED,
+} ValkeyModuleExternalStorageDumpState;
+
+typedef enum ValkeyModuleExternalStorageLoadState {
+    VMES_LOAD_STATE_NONE = 0,
+    VMES_LOAD_STATE_IN_PROGRESS,
+    VMES_LOAD_STATE_SUCCESS,
+    VMES_LOAD_STATE_FAILED,
+} ValkeyModuleExternalStorageLoadState;
+typedef struct ValkeyModuleExternalStorageCtx ValkeyModuleExternalStorageCtx;
+
+/* The callback function called when `SET` command is called.
+ *
+ * - `module_ctx`: the module runtime context.
+ *
+ * - `storage_ctx`: the external storage context.
+ *
+ * - `key_ctx: key context
+ *
+ * - `value`: value string passed in the `SET` command.
+ *
+ */
+typedef int (*ValkeyModuleExternalStorageSetFunc)(
+    ValkeyModuleCtx *module_ctx,
+    ValkeyModuleExternalStorageCtx *storage_ctx,
+    ValkeyModuleKeyOptCtx *key_ctx,
+    ValkeyModuleString *value);
+
+/* The callback function called when `GET` command is called.
+ *
+ * - `module_ctx`: the module runtime context.
+ *
+ * - `storage_ctx`: the external storage context.
+ *
+ * - `key_ctx: key context
+ *
+ * - `found`: value string set in the `GET` command.
+ *
+ */
+typedef int (*ValkeyModuleExternalStorageGetFunc)(
+    ValkeyModuleCtx *module_ctx,
+    ValkeyModuleExternalStorageCtx *storage_ctx,
+    ValkeyModuleKeyOptCtx *key_ctx,
+    void **value);
+
+/* The callback function called when `DEL` command is called.
+ *
+ * - `module_ctx`: the module runtime context.
+ *
+ * - `storage_ctx`: the external storage context.
+ *
+ * - `key_ctx: key context
+ *
+ * - `value`: old value before deletion
+ *
+ */
+typedef int (*ValkeyModuleExternalStorageDelFunc)(
+    ValkeyModuleCtx *module_ctx,
+    ValkeyModuleExternalStorageCtx *storage_ctx,
+    ValkeyModuleKeyOptCtx *key_ctx,
+    ValkeyModuleString **value);
+
+/* The callback function called when `DROPRO` command is called.
+ *
+ * - `module_ctx`: the module runtime context.
+ *
+ * - `storage_ctx`: the external storage context.
+ *
+ */
+typedef int (*ValkeyModuleExternalStorageDropReadonlyFunc)(
+    ValkeyModuleCtx *module_ctx,
+    ValkeyModuleExternalStorageCtx *storage_ctx);
+
+/* The callback function called when `Iterate` function is called.
+ *
+ * - `module_ctx`: the module runtime context.
+ *
+ * - `match`: match pattern.
+ *
+ * - `type`: type of the key.
+ *
+ * - `next`: returning value.
+ *
+ */
+typedef int (*ValkeyModuleExternalStorageIterateFunc)(
+    ValkeyModuleCtx *module_ctx,
+    int dbid,
+    ValkeyModuleString *match,
+    long long *type,
+    ValkeyModuleString **next,
+    ValkeyModuleDictIter **iter);
+
+/* The callback function called when `SETRO` command is called.
+ *
+ * - `module_ctx`: the module runtime context.
+ *
+ * - `storage_ctx`: the external storage context.
+ *
+ */
+typedef int (*ValkeyModuleExternalStorageSetReadonlyFunc)(
+    ValkeyModuleCtx *module_ctx,
+    ValkeyModuleExternalStorageCtx *storage_ctx);
+
+/* The callback function called when FLUSHDB or FLUSHALL commands are called.
+ * This allows the module to efficiently clear all data for a specific database
+ * in O(1) time instead of iterating through all keys.
+ *
+ * - `module_ctx`: the module runtime context.
+ *
+ * - `storage_ctx`: the external storage context.
+ *
+ * - `dbid`: the database ID to flush.
+ *
+ */
+typedef int (*ValkeyModuleExternalStorageFlushFunc)(
+    ValkeyModuleCtx *module_ctx,
+    ValkeyModuleExternalStorageCtx *storage_ctx,
+    int dbid,
+    int slot);
+
+
+/* The callback function called when SWAPDB command is called.
+ * This allows the module to efficiently swap data between two databases
+ * in O(1) time instead of iterating through all keys.
+ *
+ * - `module_ctx`: the module runtime context.
+ *
+ * - `storage_ctx`: the external storage context.
+ *
+ * - `dbid1`: the first database ID.
+ *
+ * - `dbid2`: the second database ID.
+ *
+ */
+typedef int (*ValkeyModuleExternalStorageSwapFunc)(
+    ValkeyModuleCtx *module_ctx,
+    ValkeyModuleExternalStorageCtx *storage_ctx,
+    int dbid1,
+    int dbid2);
+
+/* The callback function called when EXTERNAL_DATA DUMP command is called.
+ * This allows the module to create a backup/snapshot of external data that can
+ * be used for replication or backup/restore operations.
+ *
+ * - `module_ctx`: the module runtime context.
+ *
+ * - `storage_ctx`: the external storage context.
+ *
+ * - `dbid`: the database ID to dump data from.
+ *
+ * - `slot`: optional slot number for cluster mode (use -1 for all slots).
+ *
+ * - `timestamp`: optional timestamp for point-in-time backup (use 0 for current).
+ *
+ * - `target`: optional target external data instance name (NULL for current instance).
+ *
+ * - `backup_id`: output parameter to store the backup identifier string.
+ *
+ * Returns VALKEYMODULE_OK on success, VALKEYMODULE_ERR on failure.
+ */
+typedef int (*ValkeyModuleExternalStorageDumpFunc)(
+    ValkeyModuleCtx *module_ctx,
+    ValkeyModuleExternalStorageCtx *storage_ctx,
+    int dbid,
+    int slot,
+    long long timestamp,
+    ValkeyModuleString **backup_id);
+
+/* The callback function called when EXTERNAL_DATA LOAD command is called.
+ * This allows the module to restore external data from a previously created
+ * backup/snapshot for replication or backup/restore operations.
+ *
+ * - `module_ctx`: the module runtime context.
+ *
+ * - `storage_ctx`: the external storage context.
+ *
+ * - `dbid`: the database ID to load data into.
+ *
+ * - `backup_id`: the backup identifier to restore from (NULL for latest).
+ *
+ * Returns VALKEYMODULE_OK on success, VALKEYMODULE_ERR on failure.
+ */
+typedef int (*ValkeyModuleExternalStorageLoadFunc)(
+    ValkeyModuleCtx *module_ctx,
+    ValkeyModuleExternalStorageCtx *storage_ctx,
+    int dbid,
+    ValkeyModuleString *backup_id);
+
+/* The callback function called when `get_state` function is called in this storage.
+ * This allows the module to report which databases should be initialized. */
+typedef int (*ValkeyModuleExternalStorageGetStateFunc)(
+    ValkeyModuleCtx *module_ctx,
+    ValkeyModuleExternalStorageCtx *storage_ctx,
+    ValkeyModuleString *source,
+    int **db_numbers,
+    size_t *num_dbs);
+
+/* Filter-specific dump and load function types */
+typedef int (*ValkeyModuleExternalFilterDumpFunc)(
+    ValkeyModuleCtx *module_ctx,
+    ValkeyModuleExternalFilterCtx *filter_ctx,
+    int dbid,
+    int slot,
+    long long timestamp,
+    ValkeyModuleString **backup_id);
+
+typedef int (*ValkeyModuleExternalFilterLoadFunc)(
+    ValkeyModuleCtx *module_ctx,
+    ValkeyModuleExternalFilterCtx *filter_ctx,
+    int dbid,
+    ValkeyModuleString *backup_id);
+
+/* Current ABI version for external storage modules. */
+#define VALKEYMODULE_EXTERNAL_STORAGE_ABI_VERSION 1UL
+
+typedef struct ValkeyModuleExternalStorageMethods {
+    uint64_t version; /* Version of this structure for ABI compat. */
+
+    /* The callback function called when `SET` command is called in this storage. */
+    ValkeyModuleExternalStorageSetFunc set;
+
+    /* The callback function called when `GET` command is called in this storage. */
+    ValkeyModuleExternalStorageGetFunc get;
+
+    /* The callback function called when `DEL` command is called in this storage. */
+    ValkeyModuleExternalStorageDelFunc del;
+
+    /* The callback function called when `SETRO` command is called in this storage. */
+    ValkeyModuleExternalStorageSetReadonlyFunc set_readonly;
+
+    /* The callback function called when `DROPRO` command is called in this storage. */
+    ValkeyModuleExternalStorageDropReadonlyFunc drop_readonly;
+
+    /* The callback function called when `Iterate` function is called in this storage. */
+    ValkeyModuleExternalStorageIterateFunc iterate;
+
+    /* The callback function called when `FLUSHDB` or `FLUSHALL` commands are called.
+     * This allows efficient O(1) flushing of all data for a specific database. */
+    ValkeyModuleExternalStorageFlushFunc flush;
+
+    /* The callback function called when `SWAPDB` command is called.
+     * This allows efficient O(1) swapping of all data between two databases. */
+    ValkeyModuleExternalStorageSwapFunc swap;
+
+    /* The callback function called when `EXTERNAL_DATA DUMP` command is called.
+     * This allows creating backups/snapshots for replication and backup/restore. */
+    ValkeyModuleExternalStorageDumpFunc dump;
+
+    /* The callback function called when `EXTERNAL_DATA LOAD` command is called.
+     * This allows restoring from backups/snapshots for replication and backup/restore. */
+    ValkeyModuleExternalStorageLoadFunc load;
+
+    /* The callback function called to get the current state from the storage.
+     * This allows the module to report which databases should be initialized. */
+    ValkeyModuleExternalStorageGetStateFunc get_state;
+
+    /* The callback function called to create a snapshot of the data for async dumping.
+     * Returns a pointer to the snapshot, or NULL if not supported/failed. */
+    void *(*snapshot)(ValkeyModuleCtx *module_ctx, ValkeyModuleExternalStorageCtx *storage_ctx, int dbid);
+
+    /* The callback function called to free a snapshot. */
+    void (*free_snapshot)(ValkeyModuleCtx *module_ctx, ValkeyModuleExternalStorageCtx *storage_ctx, void *snapshot);
+
+    /* Get backup_id for loading data from a specific address.
+     * Used by replicas to construct the correct backup_id format for loading
+     * from primary's backups.
+     *
+     * Parameters:
+     * - ctx: The module context
+     * - ip_port: The address in "ip:port" format
+     *
+     * Returns a backup_id string (e.g., "v0:-1:0:node_id") that can be used
+     * to load data from that address's backup directory.
+     * Returns NULL if the address is not found in the mapping. */
+    const char *(*get_backup_id)(ValkeyModuleCtx *ctx, const char *ip_port, int slot);
+} ValkeyModuleExternalStorageMethodsV1;
+
+#define ValkeyModuleExternalStorageMethods ValkeyModuleExternalStorageMethodsV1
+
+/* Type definitions for implementing external filter modules. */
+typedef enum ValkeyModuleExternalFilterState {
+    VMEF_STATE_READY,
+    VMEF_STATE_READONLY,
+} ValkeyModuleExternalFilterState;
+
+/* External filter dump/load states for replication */
+typedef enum ValkeyModuleExternalFilterDumpState {
+    VMEF_DUMP_STATE_NONE = 0,
+    VMEF_DUMP_STATE_IN_PROGRESS,
+    VMEF_DUMP_STATE_SUCCESS,
+    VMEF_DUMP_STATE_FAILED,
+} ValkeyModuleExternalFilterDumpState;
+
+typedef enum ValkeyModuleExternalFilterLoadState {
+    VMEF_LOAD_STATE_NONE = 0,
+    VMEF_LOAD_STATE_IN_PROGRESS,
+    VMEF_LOAD_STATE_SUCCESS,
+    VMEF_LOAD_STATE_FAILED,
+} ValkeyModuleExternalFilterLoadState;
+typedef struct ValkeyModuleExternalFilterCtx ValkeyModuleExternalFilterCtx;
+
+/* The callback function called when `SET` command is called.
+ *
+ * - `module_ctx`: the module runtime context.
+ *
+ * - `filter_ctx`: the external filter context.
+ *
+ * - `key_ctx: key context
+ *
+ * - `value`: value string passed in the `SET` command.
+ *
+ */
+typedef int (*ValkeyModuleExternalFilterSetFunc)(
+    ValkeyModuleCtx *module_ctx,
+    ValkeyModuleExternalFilterCtx *filter_ctx,
+    ValkeyModuleKeyOptCtx *key_ctx);
+
+/* The callback function called when `GET` command is called.
+ *
+ * - `module_ctx`: the module runtime context.
+ *
+ * - `filter_ctx`: the external filter context.
+ *
+ * - `key_ctx: key context
+ *
+ * - `found`: value string set in the `GET` command.
+ *
+ */
+typedef int (*ValkeyModuleExternalFilterGetFunc)(
+    ValkeyModuleCtx *module_ctx,
+    ValkeyModuleExternalFilterCtx *filter_ctx,
+    ValkeyModuleKeyOptCtx *key_ctx);
+
+/* The callback function called when `DEL` command is called.
+ *
+ * - `module_ctx`: the module runtime context.
+ *
+ * - `filter_ctx`: the external filter context.
+ *
+ * - `key_ctx: key context
+ *
+ * - `value`: old value before deletion
+ *
+ */
+typedef int (*ValkeyModuleExternalFilterDelFunc)(
+    ValkeyModuleCtx *module_ctx,
+    ValkeyModuleExternalFilterCtx *filter_ctx,
+    ValkeyModuleKeyOptCtx *key_ctx,
+    ValkeyModuleString **value);
+
+
+/* The callback function called when `DROPRO` command is called.
+ *
+ * - `module_ctx`: the module runtime context.
+ *
+ * - `filter_ctx`: the external filter context.
+ *
+ */
+typedef int (*ValkeyModuleExternalFilterDropReadonlyFunc)(
+    ValkeyModuleCtx *module_ctx,
+    ValkeyModuleExternalFilterCtx *filter_ctx);
+
+/* The callback function called when `SETRO` command is called.
+ *
+ * - `module_ctx`: the module runtime context.
+ *
+ * - `filter_ctx`: the external filter context.
+ *
+ */
+typedef int (*ValkeyModuleExternalFilterSetReadonlyFunc)(
+    ValkeyModuleCtx *module_ctx,
+    ValkeyModuleExternalFilterCtx *filter_ctx);
+
+/* The callback function called when FLUSHDB or FLUSHALL commands are called.
+ * This allows the module to efficiently clear all filter data for a specific database
+ * in O(1) time instead of iterating through all keys.
+ *
+ * - `module_ctx`: the module runtime context.
+ *
+ * - `filter_ctx`: the external filter context.
+ *
+ * - `dbid`: the database ID to flush.
+ *
+ */
+typedef int (*ValkeyModuleExternalFilterFlushFunc)(
+    ValkeyModuleCtx *module_ctx,
+    ValkeyModuleExternalFilterCtx *filter_ctx,
+    int dbid,
+    int slot);
+
+/* The callback function called when SWAPDB command is called.
+ * This allows the module to efficiently swap filter data between two databases
+ * in O(1) time instead of iterating through all keys.
+ *
+ * - `module_ctx`: the module runtime context.
+ *
+ * - `filter_ctx`: the external filter context.
+ *
+ * - `dbid1`: the first database ID.
+ *
+ * - `dbid2`: the second database ID.
+ *
+ */
+typedef int (*ValkeyModuleExternalFilterSwapFunc)(
+    ValkeyModuleCtx *module_ctx,
+    ValkeyModuleExternalFilterCtx *filter_ctx,
+    int dbid1,
+    int dbid2);
+
+/* The callback function called to count keys in this filter.
+ * This allows efficient O(1) counting of all keys for a specific database.
+ *
+ * - `module_ctx`: the module runtime context.
+ *
+ * - `filter_ctx`: the external filter context.
+ *
+ * - `dbid`: the database ID to count keys in.
+ *
+ * - `count`: pointer to store the count of keys.
+ *
+ */
+typedef int (*ValkeyModuleExternalFilterKeysCountFunc)(
+    ValkeyModuleCtx *module_ctx,
+    ValkeyModuleExternalFilterCtx *filter_ctx,
+    int dbid,
+    unsigned long long *count);
+
+/* The callback function called to get the current state from the filter.
+ * This allows the module to report which databases are currently initialized
+ * and should be restored when the module is loaded.
+ *
+ * - `module_ctx`: the module runtime context.
+ *
+ * - `filter_ctx`: the external filter context.
+ *
+ * - `source`: the source instance address/id to query state from (NULL for local instance).
+ *             When called on primary or standalone, this is NULL (query local state).
+ *             When called on replica, this contains the primary's address/id.
+ *
+ * - `db_numbers`: output parameter to store an array of database numbers that
+ *   are currently initialized (allocated by the module, freed by caller).
+ *
+ * - `num_dbs`: output parameter to store the number of databases in db_numbers array.
+ *
+ * Returns VALKEYMODULE_OK if state was retrieved, VALKEYMODULE_ERR otherwise.
+ */
+typedef int (*ValkeyModuleExternalFilterGetStateFunc)(
+    ValkeyModuleCtx *module_ctx,
+    ValkeyModuleExternalFilterCtx *filter_ctx,
+    ValkeyModuleString *source,
+    int **db_numbers,
+    size_t *num_dbs);
+
+/* Current ABI version for external filter modules. */
+#define VALKEYMODULE_EXTERNAL_FILTER_ABI_VERSION 1UL
+
+typedef struct ValkeyModuleExternalFilterMethods {
+    uint64_t version; /* Version of this structure for ABI compat. */
+
+    /* The callback function called when `SET` command is called in this filter. */
+    ValkeyModuleExternalFilterSetFunc set;
+
+    /* The callback function called when `GET` command is called in this filter. */
+    ValkeyModuleExternalFilterGetFunc get;
+
+    /* The callback function called when `DEL` command is called in this filter. */
+    ValkeyModuleExternalFilterDelFunc del;
+
+    /* The callback function called when `SETRO` command is called in this filter. */
+    ValkeyModuleExternalFilterSetReadonlyFunc set_readonly;
+
+    /* The callback function called when `DROPRO` command is called in this filter. */
+    ValkeyModuleExternalFilterDropReadonlyFunc drop_readonly;
+
+    /* The callback function called when `FLUSHDB` or `FLUSHALL` commands are called.
+     * This allows efficient O(1) flushing of all filter data for a specific database. */
+    ValkeyModuleExternalFilterFlushFunc flush;
+
+    /* The callback function called when `SWAPDB` command is called.
+     * This allows efficient O(1) swapping of all filter data between two databases. */
+    ValkeyModuleExternalFilterSwapFunc swap;
+
+    /* The callback function called to count keys in this filter.
+     * This allows efficient O(1) counting of all keys for a specific database. */
+    ValkeyModuleExternalFilterKeysCountFunc keys_count;
+
+    /* The callback function called to get the current state from the filter.
+     * This allows the module to report which databases should be initialized. */
+    ValkeyModuleExternalFilterGetStateFunc get_state;
+
+    /* The callback function called when `EXTERNAL_DATA DUMP` command is called for filter data.
+     * This allows creating backups/snapshots of filter data for replication and backup/restore. */
+    ValkeyModuleExternalFilterDumpFunc dump;
+
+    /* The callback function called when `EXTERNAL_DATA LOAD` command is called for filter data.
+     * This allows restoring filter data from backups/snapshots for replication and backup/restore. */
+    ValkeyModuleExternalFilterLoadFunc load;
+
+    /* The callback function called to create a snapshot of the filter data for async dumping.
+     * Returns a pointer to the snapshot, or NULL if not supported/failed. */
+    void *(*snapshot)(ValkeyModuleCtx *module_ctx, ValkeyModuleExternalFilterCtx *filter_ctx, int dbid);
+
+    /* The callback function called to free a snapshot. */
+    void (*free_snapshot)(ValkeyModuleCtx *module_ctx, ValkeyModuleExternalFilterCtx *filter_ctx, void *snapshot);
+} ValkeyModuleExternalFilterMethodsV1;
+
+#define ValkeyModuleExternalFilterMethods ValkeyModuleExternalFilterMethodsV1
+
+/* External data functions result codes */
+typedef enum ValkeyModuleExternalDataResult {
+    EXTERNAL_ERROR = 0,     /* Error during execution */
+    EXTERNAL_SUCCESS = 1,   /* Successful execution */
+    EXTERNAL_NOT_FOUND = 2, /* Key not found, nothing done */
+    EXTERNAL_READONLY = 3   /* Readonly storage */
+} ValkeyModuleExternalDataResult;
+
+/* External data default for all slots at once */
+#define EXTERNAL_ALL_SLOTS -1
+/* External data default for all databases at once */
+#define EXTERNAL_ALL_DBS -1
 
 /* ------------------------- End of common defines ------------------------ */
 
@@ -1344,7 +1881,6 @@ typedef struct ValkeyModuleCommandFilter ValkeyModuleCommandFilter;
 typedef struct ValkeyModuleServerInfoData ValkeyModuleServerInfoData;
 typedef struct ValkeyModuleScanCursor ValkeyModuleScanCursor;
 typedef struct ValkeyModuleUser ValkeyModuleUser;
-typedef struct ValkeyModuleKeyOptCtx ValkeyModuleKeyOptCtx;
 typedef struct ValkeyModuleRdbStream ValkeyModuleRdbStream;
 
 typedef int (*ValkeyModuleCmdFunc)(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc);
@@ -2156,6 +2692,7 @@ VALKEYMODULE_API int (*ValkeyModule_RegisterEnumConfig)(ValkeyModuleCtx *ctx,
                                                         ValkeyModuleConfigApplyFunc applyfn,
                                                         void *privdata) VALKEYMODULE_ATTR;
 VALKEYMODULE_API int (*ValkeyModule_LoadConfigs)(ValkeyModuleCtx *ctx) VALKEYMODULE_ATTR;
+VALKEYMODULE_API ValkeyModuleString *(*ValkeyModule_GetConfigValue)(ValkeyModuleCtx *ctx, const char *name)VALKEYMODULE_ATTR;
 VALKEYMODULE_API ValkeyModuleRdbStream *(*ValkeyModule_RdbStreamCreateFromFile)(const char *filename)VALKEYMODULE_ATTR;
 VALKEYMODULE_API void (*ValkeyModule_RdbStreamFree)(ValkeyModuleRdbStream *stream) VALKEYMODULE_ATTR;
 VALKEYMODULE_API int (*ValkeyModule_RdbLoad)(ValkeyModuleCtx *ctx,
@@ -2174,6 +2711,26 @@ VALKEYMODULE_API int (*ValkeyModule_UnregisterScriptingEngine)(ValkeyModuleCtx *
                                                                const char *engine_name) VALKEYMODULE_ATTR;
 
 VALKEYMODULE_API ValkeyModuleScriptingEngineExecutionState (*ValkeyModule_GetFunctionExecutionState)(ValkeyModuleScriptingEngineServerRuntimeCtx *server_ctx) VALKEYMODULE_ATTR;
+
+VALKEYMODULE_API int (*ValkeyModule_RegisterExternalDataModule)(ValkeyModuleCtx *module_ctx,
+                                                                const char *module_name,
+                                                                ValkeyModuleExternalStorageMethods *storage_methods,
+                                                                ValkeyModuleExternalFilterMethods *filter_methods) VALKEYMODULE_ATTR;
+
+VALKEYMODULE_API int (*ValkeyModule_UnregisterExternalDataModule)(ValkeyModuleCtx *module_ctx,
+                                                                  const char *module_name) VALKEYMODULE_ATTR;
+
+VALKEYMODULE_API ValkeyModuleExternalStorageState (*ValkeyModule_GetExternalStorageState)(ValkeyModuleExternalStorageCtx *storage_ctx) VALKEYMODULE_ATTR;
+
+VALKEYMODULE_API ValkeyModuleExternalStorageState (*ValkeyModule_SetExternalStorageState)(ValkeyModuleExternalStorageCtx *storage_ctx, ValkeyModuleExternalStorageState state) VALKEYMODULE_ATTR;
+
+VALKEYMODULE_API unsigned int (*ValkeyModule_GetExternalStorageTimeout)(ValkeyModuleExternalStorageCtx *storage_ctx) VALKEYMODULE_ATTR;
+
+VALKEYMODULE_API ValkeyModuleExternalFilterState (*ValkeyModule_GetExternalFilterState)(ValkeyModuleExternalFilterCtx *filter_ctx) VALKEYMODULE_ATTR;
+
+VALKEYMODULE_API ValkeyModuleExternalFilterState (*ValkeyModule_SetExternalFilterState)(ValkeyModuleExternalFilterCtx *filter_ctx, ValkeyModuleExternalFilterState state) VALKEYMODULE_ATTR;
+
+VALKEYMODULE_API unsigned int (*ValkeyModule_GetExternalFilterTimeout)(ValkeyModuleExternalFilterCtx *filter_ctx) VALKEYMODULE_ATTR;
 
 VALKEYMODULE_API void (*ValkeyModule_ScriptingEngineDebuggerLog)(ValkeyModuleString *msg,
                                                                  int truncate) VALKEYMODULE_ATTR;
@@ -2560,6 +3117,7 @@ static int ValkeyModule_Init(ValkeyModuleCtx *ctx, const char *name, int ver, in
     VALKEYMODULE_GET_API(RegisterStringConfig);
     VALKEYMODULE_GET_API(RegisterEnumConfig);
     VALKEYMODULE_GET_API(LoadConfigs);
+    VALKEYMODULE_GET_API(GetConfigValue);
     VALKEYMODULE_GET_API(RdbStreamCreateFromFile);
     VALKEYMODULE_GET_API(RdbStreamFree);
     VALKEYMODULE_GET_API(RdbLoad);
@@ -2567,6 +3125,14 @@ static int ValkeyModule_Init(ValkeyModuleCtx *ctx, const char *name, int ver, in
     VALKEYMODULE_GET_API(RegisterScriptingEngine);
     VALKEYMODULE_GET_API(UnregisterScriptingEngine);
     VALKEYMODULE_GET_API(GetFunctionExecutionState);
+    VALKEYMODULE_GET_API(RegisterExternalDataModule);
+    VALKEYMODULE_GET_API(UnregisterExternalDataModule);
+    VALKEYMODULE_GET_API(GetExternalStorageState);
+    VALKEYMODULE_GET_API(SetExternalStorageState);
+    VALKEYMODULE_GET_API(GetExternalStorageTimeout);
+    VALKEYMODULE_GET_API(GetExternalFilterState);
+    VALKEYMODULE_GET_API(SetExternalFilterState);
+    VALKEYMODULE_GET_API(GetExternalFilterTimeout);
     VALKEYMODULE_GET_API(ScriptingEngineDebuggerLog);
     VALKEYMODULE_GET_API(ScriptingEngineDebuggerLogRespReplyStr);
     VALKEYMODULE_GET_API(ScriptingEngineDebuggerLogRespReply);

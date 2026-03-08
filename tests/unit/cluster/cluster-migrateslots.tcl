@@ -56,6 +56,7 @@ proc wait_for_migration_field {node_idx jobname field value} {
 }
 
 proc wait_for_countkeysinslot {node_idx slot value} {
+    R $node_idx select 0
     wait_for_condition 100 100 {
         [R $node_idx CLUSTER COUNTKEYSINSLOT $slot] eq "$value"
     } else {
@@ -179,6 +180,9 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster} overrides {cluste
     set node1_id [R 1 CLUSTER MYID]
     set node2_id [R 2 CLUSTER MYID]
     set fake_jobname "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    foreach n {0 1 2 3 4 5} {
+        R $n select 0
+    }
 
     test "General command interface" {
         assert_error "*wrong number of arguments*" {R 0 CLUSTER MIGRATESLOTS}
@@ -2141,6 +2145,9 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster} overrides {cluste
 start_cluster 3 0 {tags {logreqres:skip external:skip cluster}} {
     set 16383_slot_tag "{6ZJ}"
     set node0_id [R 0 CLUSTER MYID]
+    foreach n {0 1 2} {
+        R $n select 0
+    }
 
     test "Import with default user having no permission" {
         # Configure ACLs on both source and target nodes
@@ -2178,6 +2185,9 @@ start_cluster 3 6 {tags {logreqres:skip external:skip cluster}} {
     set node0_id [R 0 CLUSTER MYID]
     set node1_id [R 1 CLUSTER MYID]
     set node2_id [R 2 CLUSTER MYID]
+    foreach n {0 1 2 3 4 5 6 7 8} {
+        R $n select 0
+    }
 
     set 16383_slot_tag "{6ZJ}"
 
@@ -2235,7 +2245,9 @@ start_cluster 3 0 {tags {logreqres:skip external:skip cluster}} {
     set node0_id [R 0 CLUSTER MYID]
     set node1_id [R 1 CLUSTER MYID]
     set node2_id [R 2 CLUSTER MYID]
-
+    foreach n {0 1 2} {
+        R $n select 0
+    }
     set 16383_slot_tag "{6ZJ}"
 
     test "Migration with no replicas" {
@@ -2299,7 +2311,9 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster aofrw} overrides {
     set node0_id [R 0 CLUSTER MYID]
     set node1_id [R 1 CLUSTER MYID]
     set node2_id [R 2 CLUSTER MYID]
-
+    foreach n {0 1 2 3 4 5} {
+        R $n select 0
+    }
     set 16383_slot_tag "{6ZJ}"
 
     test "Replica migration persisted through AOF" {
@@ -2446,6 +2460,10 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster aofrw} overrides {
 }
 
 start_cluster 3 0 {tags {logreqres:skip external:skip cluster} overrides {cluster-require-full-coverage no slot-migration-max-failover-repl-bytes 0}} {
+    foreach n {0 1 2} {
+        R $n select 0
+    }
+
     test "Slot migration remaining_repl_size on the source node" {
         set 16383_slot_tag "{6ZJ}"
         set_debug_prevent_pause 1

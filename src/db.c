@@ -27,6 +27,7 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
+#include "adlist.h"
 #include "server.h"
 #include "cluster.h"
 #include "cluster_migrateslots.h"
@@ -35,6 +36,8 @@
 #include "functions.h"
 #include "io_threads.h"
 #include "module.h"
+#include "external_data.h"
+
 #include "vector.h"
 #include "expire.h"
 
@@ -48,6 +51,7 @@ static int keyIsExpiredWithDictIndex(serverDb *db, robj *key, int dict_index);
 static int objectIsExpired(robj *val);
 static void dbSetValue(serverDb *db, robj *key, robj **valref, int overwrite, void **oldref);
 static robj *dbFindWithDictIndex(serverDb *db, sds key, int dict_index);
+static robj *dbFindExtData(serverDb *db, sds key);
 
 
 /* Lookup a key for read or write operations, or return NULL if the key is not
@@ -71,6 +75,7 @@ static robj *dbFindWithDictIndex(serverDb *db, sds key, int dict_index);
  *                replicas, use separate keyspace stats and events (TODO)).
  *  LOOKUP_NOEXPIRE: Perform expiration check, but avoid deleting the key,
  *                   so that we don't have to propagate the deletion.
+ *  LOOKUP_EXTDATA: Perform external data search if missing in-memory dict.
  *
  * Note: this function also returns NULL if the key is logically expired but
  * still existing, in case this is a replica and the LOOKUP_WRITE is not set.
@@ -119,6 +124,8 @@ robj *lookupKey(serverDb *db, robj *key, int flags) {
         if (!(flags & (LOOKUP_NONOTIFY | LOOKUP_WRITE))) notifyKeyspaceEvent(NOTIFY_KEY_MISS, "keymiss", key, db->id);
         if (!(flags & (LOOKUP_NOSTATS | LOOKUP_WRITE))) server.stat_keyspace_misses++;
         /* TODO: Use separate misses stats and notify event for WRITE */
+
+        if (flags & LOOKUP_EXTDATA) val = dbFindExtData(db, objectGetVal(key));
     }
 
     return val;
@@ -144,6 +151,11 @@ robj *lookupKeyRead(serverDb *db, robj *key) {
     return lookupKeyReadWithFlags(db, key, LOOKUP_NONE);
 }
 
+/* Lookup in-memory and external data, if available. */
+robj *lookupExtKeyRead(serverDb *db, robj *key) {
+    return lookupKeyReadWithFlags(db, key, LOOKUP_EXTDATA);
+}
+
 /* Lookup a key for write operations, and as a side effect, if needed, expires
  * the key if its TTL is reached. It's equivalent to lookupKey() with the
  * LOOKUP_WRITE flag added.
@@ -160,6 +172,12 @@ robj *lookupKeyWrite(serverDb *db, robj *key) {
 
 robj *lookupKeyReadOrReply(client *c, robj *key, robj *reply) {
     robj *o = lookupKeyRead(c->db, key);
+    if (!o) addReplyOrErrorObject(c, reply);
+    return o;
+}
+
+robj *lookupExtKeyReadOrReply(client *c, robj *key, robj *reply) {
+    robj *o = lookupExtKeyRead(c->db, key);
     if (!o) addReplyOrErrorObject(c, reply);
     return o;
 }
@@ -681,6 +699,15 @@ long long emptyData(int dbnum, int flags, void(callback)(hashtable *)) {
     /* Empty the database structure. */
     removed = emptyDbStructure(server.db, dbnum, async, callback);
 
+    /* Flush external data if enabled */
+    if (isExtDataOn()) {
+        if (dbnum == -1) {
+            externalDataFlushAll();
+        } else {
+            externalDataFlushDb(dbnum, EXTERNAL_ALL_SLOTS);
+        }
+    }
+
     if (dbnum == -1) flushReplicaKeysWithExpireList(async);
 
     if (with_functions) {
@@ -867,28 +894,71 @@ void flushallCommand(client *c) {
 }
 
 /* This command implements DEL and UNLINK. */
-void delGenericCommand(client *c, int lazy) {
+void delGenericCommand(client *c, int argc, int lazy, int ext) {
     int numdel = 0, j;
 
-    for (j = 1; j < c->argc; j++) {
+    for (j = 1; j < argc; j++) {
         if (expireIfNeeded(c->db, c->argv[j], NULL, 0) == KEY_DELETED) continue;
-        int deleted = lazy ? dbAsyncDelete(c->db, c->argv[j]) : dbSyncDelete(c->db, c->argv[j]);
-        if (deleted) {
+
+        int ext_deleted = 0;
+        robj *key = c->argv[j];
+
+        if (ext && isExtDataOn()) {
+            /* When EXT option is provided, always try to delete from external storage and filter */
+            /* Don't check externalDataFind first, as it requires both filter and storage to exist */
+            robj *value = NULL;
+            int storage_deleted = externalStorageDeleteKey(c->db->id, key, &value);
+            if (value) {
+                decrRefCount(value);
+            }
+
+            /* Also delete from external filter */
+            robj *filter_value = NULL;
+            int filter_deleted = externalFilterDeleteKey(c->db->id, key, &filter_value);
+            if (filter_value) {
+                decrRefCount(filter_value);
+            }
+
+            /* Consider external deletion successful if either storage or filter deletion succeeded */
+            ext_deleted = storage_deleted || filter_deleted;
+        }
+
+        /* Delete from memory using the standard deletion */
+        int mem_deleted = lazy ? dbAsyncDelete(c->db, key) : dbSyncDelete(c->db, key);
+
+        if (mem_deleted) {
             signalModifiedKey(c, c->db, c->argv[j]);
             notifyKeyspaceEvent(NOTIFY_GENERIC, "del", c->argv[j], c->db->id);
             server.dirty++;
-            numdel++;
+        }
+
+        /* Count as deleted if either memory or external deletion succeeded (when using EXT flag) */
+        if (ext) {
+            if (mem_deleted || ext_deleted) numdel++;
+        } else {
+            if (mem_deleted) numdel++;
         }
     }
     addReplyLongLong(c, numdel);
 }
 
 void delCommand(client *c) {
-    delGenericCommand(c, server.lazyfree_lazy_user_del);
+    int ext = 0;
+    int argc = c->argc;
+    /* Check if the last argument is "ext" flag */
+    if (c->argc > 1 && !strcasecmp(objectGetVal(c->argv[c->argc - 1]), "ext")) {
+        if (!isExtDataOn()) {
+            addReplyError(c, EXTDATAOFFERRMSG);
+            return;
+        }
+        ext = 1;
+        argc--;
+    }
+    delGenericCommand(c, argc, server.lazyfree_lazy_user_del, ext);
 }
 
 void unlinkCommand(client *c) {
-    delGenericCommand(c, 1);
+    delGenericCommand(c, c->argc, 1, 0);
 }
 
 /* EXISTS key1 key2 ... key_N.
@@ -967,6 +1037,25 @@ void keysCommand(client *c) {
     }
     if (kvs_di) kvstoreReleaseHashtableIterator(kvs_di);
     if (kvs_it) kvstoreIteratorRelease(kvs_it);
+
+    if (isExtDataOn() && c->argc >= 3 && !strcasecmp(objectGetVal(c->argv[2]), "ext")) {
+        robj *match = createStringObject(pattern, sdslen(pattern));
+        externalStorageInstanceIterator *esi_it = externalStorageInstanceIteratorInit(c->db->id, match, NULL);
+        if (esi_it != NULL) {
+            // there is external storage instance for this db
+            robj *next;
+            while (externalStorageInstanceIteratorNext(esi_it, &next)) {
+                if (externalFilterIsIn(c->db->id, next)) {
+                    addReplyBulkCBuffer(c, objectGetVal(next), sdslen(objectGetVal(next)));
+                    numkeys++;
+                }
+                decrRefCount(next);
+                if (c->flag.close_asap) break;
+            }
+            externalStorageInstanceIteratorRelease(esi_it);
+        }
+        decrRefCount(match);
+    }
     setDeferredArrayLen(c, replylen, numkeys);
 }
 
@@ -1163,8 +1252,8 @@ void scanGenericCommand(client *c, robj *o, unsigned long long cursor) {
     sds pat = NULL;
     sds typename = NULL;
     long long type = LLONG_MAX;
-    int patlen = 0, use_pattern = 0, only_keys = 0;
-    vector result;
+    int patlen = 0, use_pattern = 0, only_keys = 0, ext_storage = 0;
+    vector result, ext_result;
 
     /* Object must be NULL (to iterate keys names), or the type of the object
      * must be Set, Sorted Set, or Hash. */
@@ -1219,6 +1308,13 @@ void scanGenericCommand(client *c, robj *o, unsigned long long cursor) {
             }
             only_keys = 1;
             i++;
+        } else if (!strcasecmp(objectGetVal(c->argv[i++]), "ext")) {
+            if (!isExtDataOn()) {
+                addReplyError(c, EXTDATAOFFERRMSG);
+                return;
+            }
+
+            ext_storage = 1;
         } else {
             addReplyErrorObject(c, shared.syntaxerr);
             return;
@@ -1253,7 +1349,10 @@ void scanGenericCommand(client *c, robj *o, unsigned long long cursor) {
         /* scanning ZSET allocates temporary strings even though it's a dict */
         free_callback = sdsfree;
     }
+    /* Set a free callback for the contents of the collected external keys */
+    void (*free_ext_callback)(sds) = sdsfree;
     vectorInit(&result, SCAN_VECTOR_INITIAL_ALLOC, sizeof(stringRef));
+    vectorInit(&ext_result, SCAN_VECTOR_INITIAL_ALLOC, sizeof(stringRef));
 
     /* For main hash table scan or scannable data structure. */
     if (!o || ht) {
@@ -1300,6 +1399,31 @@ void scanGenericCommand(client *c, robj *o, unsigned long long cursor) {
                 cursor = hashtableScan(ht, cursor, hashtableScanCallback, &data);
             }
         } while (cursor && maxiterations-- && data.sampled < count);
+
+        int count_left = count - vectorLen(&ext_result);
+        if (ext_storage && count_left > 0) {
+            robj *match = NULL;
+            if (pat) {
+                match = createStringObject(pat, sdslen(pat));
+            }
+            externalStorageInstanceIterator *esi_it = externalStorageInstanceIteratorInit(c->db->id, match, &type);
+            if (esi_it != NULL) {
+                // there is external storage instance for this db
+                robj *next;
+                while (count_left-- && externalStorageInstanceIteratorNext(esi_it, &next)) {
+                    if (externalFilterIsIn(c->db->id, next)) {
+                        sds *item = vectorPush(&ext_result);
+                        *item = sdsnew(objectGetVal(next));
+                    }
+                    decrRefCount(next);
+                    if (c->flag.close_asap) break;
+                }
+                externalStorageInstanceIteratorRelease(esi_it);
+            }
+            if (match) {
+                decrRefCount(match);
+            }
+        }
     } else if (o->type == OBJ_SET) {
         char *str;
         char buf[LONG_STR_SIZE];
@@ -1354,7 +1478,7 @@ void scanGenericCommand(client *c, robj *o, unsigned long long cursor) {
     addReplyArrayLen(c, 2);
     addReplyBulkLongLong(c, cursor);
 
-    addReplyArrayLen(c, vectorLen(&result));
+    addReplyArrayLen(c, vectorLen(&result) + vectorLen(&ext_result));
     for (uint32_t i = 0; i < vectorLen(&result); i++) {
         stringRef *key = vectorGet(&result, i);
         addReplyBulkCBuffer(c, key->buf, key->len);
@@ -1364,6 +1488,16 @@ void scanGenericCommand(client *c, robj *o, unsigned long long cursor) {
     }
 
     vectorCleanup(&result);
+
+    for (uint32_t i = 0; i < vectorLen(&ext_result); i++) {
+        sds *key = vectorGet(&ext_result, i);
+        addReplyBulkCBuffer(c, *key, sdslen(*key));
+        if (free_ext_callback) {
+            free_ext_callback(*key);
+        }
+    }
+
+    vectorCleanup(&ext_result);
 }
 
 /* The SCAN command completely relies on scanGenericCommand. */
@@ -1374,7 +1508,27 @@ void scanCommand(client *c) {
 }
 
 void dbsizeCommand(client *c) {
-    addReplyLongLong(c, kvstoreSize(c->db->keys));
+    int ext = 0;
+
+    /* Check if the last argument is "EXT" flag */
+    if (c->argc > 1 && !strcasecmp(objectGetVal(c->argv[c->argc - 1]), "EXT")) {
+        if (!isExtDataOn()) {
+            addReplyError(c, EXTDATAOFFERRMSG);
+            return;
+        }
+        ext = 1;
+    }
+
+    /* Get the count of memory keys */
+    unsigned long long mem_keys = kvstoreSize(c->db->keys);
+
+    /* If EXT flag is provided, add external data keys count */
+    if (ext) {
+        unsigned long long ext_keys = externalDataCountKeys(c->db->id);
+        addReplyLongLong(c, mem_keys + ext_keys);
+    } else {
+        addReplyLongLong(c, mem_keys);
+    }
 }
 
 void lastsaveCommand(client *c) {
@@ -1747,6 +1901,11 @@ int dbSwapDatabases(int id1, int id2) {
     db2->keys_with_volatile_items = aux.keys_with_volatile_items;
     copyDbExpiry(db2, &aux);
 
+    /* Swap external data if enabled */
+    if (isExtDataOn()) {
+        externalDataSwapDb(id1, id2);
+    }
+
     /* Now we need to handle clients blocked on lists: as an effect
      * of swapping the two DBs, a client that was waiting for list
      * X in a given DB, may now actually be unblocked if X happens
@@ -1917,6 +2076,22 @@ long long getExpire(serverDb *db, robj *key) {
 void deleteExpiredKeyAndPropagateWithDictIndex(serverDb *db, robj *keyobj, int dict_index) {
     mstime_t expire_latency;
     latencyStartMonitor(expire_latency);
+
+    /* Check if we should move to external storage instead of just deleting.
+     * Similar to eviction logic, but for expired keys. */
+    if (server.ext_data_expire && isExtDataOn() &&
+        (server.maxmemory_policy & MAXMEMORY_FLAG_ALLKEYS)) {
+        /* Fetch the value directly from the database without expiration checks.
+         * We need the actual value to write to external storage before deletion. */
+        robj *val = dbFindWithDictIndex(db, objectGetVal(keyobj), dict_index);
+        if (val) {
+            serverLog(LL_WARNING, "DEBUG: Found value for key, writing to external storage");
+            externalDataWrite(db->id, keyobj, val);
+        } else {
+            serverLog(LL_WARNING, "DEBUG: Value not found for key %s", (char *)objectGetVal(keyobj));
+        }
+    }
+
     dbGenericDeleteWithDictIndex(db, keyobj, server.lazyfree_lazy_expire, DB_FLAG_KEY_EXPIRED, dict_index);
     latencyEndMonitor(expire_latency);
     latencyAddSampleIfNeeded("expire-del", expire_latency);
@@ -2212,13 +2387,29 @@ int dbExpandExpires(serverDb *db, uint64_t db_size, int try_expand) {
 
 static robj *dbFindWithDictIndex(serverDb *db, sds key, int dict_index) {
     void *existing = NULL;
-    kvstoreHashtableFind(db->keys, dict_index, key, &existing);
-    return existing;
+    if (kvstoreHashtableFind(db->keys, dict_index, key, &existing)) {
+        return existing;
+    }
+
+    return NULL;
 }
 
 robj *dbFind(serverDb *db, sds key) {
     int dict_index = getKVStoreIndexForKey(key);
     return dbFindWithDictIndex(db, key, dict_index);
+}
+
+static robj *dbFindExtData(serverDb *db, sds key) {
+    if (!isExtDataOn())
+        return NULL;
+
+    void *existing = NULL;
+    robj *rkey = createStringObject(key, sdslen(key));
+    int exists = externalDataFind(db->id, rkey, &existing);
+    decrRefCount(rkey);
+    if (exists) return existing;
+
+    return NULL;
 }
 
 robj *dbFindExpiresWithDictIndex(serverDb *db, sds key, int dict_index) {
@@ -3029,4 +3220,34 @@ int *copyDbIdArgs(robj **argv, int argc, int *count) {
     result[0] = (int)dbid;
     *count = 1;
     return result;
+}
+
+/* Helper function to extract keys from the DEL command.
+ *
+ * DEL key1 key2 ... keyN [EXT]
+ *
+ * This function excludes the "ext" or "EXT" argument from the keys list if it's
+ * the last argument. The DEL command already handles the EXT flag in delCommand,
+ * but we need to exclude it from key extraction for proper tracking and propagation. */
+int delGetKeys(struct serverCommand *cmd, robj **argv, int argc, getKeysResult *result) {
+    UNUSED(cmd);
+    keyReference *keys;
+    int actual_keys = argc - 1; /* Subtract 1 for the command name */
+
+    /* Check if the last argument is "ext" or "EXT" */
+    if (argc > 1 && !strcasecmp(objectGetVal(argv[argc - 1]), "ext")) {
+        actual_keys--; /* Exclude the EXT argument */
+    }
+
+    /* Prepare result structure */
+    keys = getKeysPrepareResult(result, actual_keys);
+
+    /* Add all key positions to keys[] */
+    for (int i = 0; i < actual_keys; i++) {
+        keys[i].pos = i + 1; /* +1 to skip the command name */
+        keys[i].flags = CMD_KEY_RW | CMD_KEY_ACCESS | CMD_KEY_DELETE;
+    }
+
+    result->numkeys = actual_keys;
+    return actual_keys;
 }

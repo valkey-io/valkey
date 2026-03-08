@@ -1,0 +1,30 @@
+{
+    "LOADED": {
+        "summary": "Lists previously loaded external data modules.",
+        "complexity": "O(1)",
+        "group": "server",
+        "since": "8.0.2",
+        "arity": 2,
+        "container": "EXTERNAL_DATA",
+        "function": "externalDataLoadedCommand",
+        "command_flags": [
+            "FAST",
+            "READONLY"
+        ],
+        "acl_categories": [
+            "FAST",
+            "KEYSPACE",
+            "READ"
+        ],
+        "command_tips": [
+            "NONDETERMINISTIC_OUTPUT_ORDER"
+        ],
+        "reply_schema": {
+            "type": "array",
+            "description": "A list of loaded modules",
+            "items": {
+                "type": "string"
+            }
+        }
+    }
+}

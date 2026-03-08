@@ -1,0 +1,38 @@
+{
+    "DROP": {
+        "summary": "Drops previously initialized external data modules for a certain db with data loss.",
+        "complexity": "O(1)",
+        "group": "server",
+        "since": "8.0.2",
+        "arity": -3,
+        "container": "EXTERNAL_DATA",
+        "function": "externalDataDropCommand",
+        "command_flags": [
+            "FAST",
+            "WRITE"
+        ],
+        "acl_categories": [
+            "FAST",
+            "KEYSPACE",
+            "WRITE"
+        ],
+        "command_tips": [
+            "NONDETERMINISTIC_OUTPUT_ORDER"
+        ],
+        "arguments": [
+            {
+                "name": "db",
+                "type": "string"
+            },
+            {
+                "name": "force",
+                "token": "FORCE",
+                "type": "pure-token",
+                "optional": true
+            }
+        ],
+        "reply_schema": {
+            "const": "OK"
+        }
+    }
+}

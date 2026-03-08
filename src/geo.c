@@ -32,6 +32,7 @@
 #include "geohash_helper.h"
 #include "debugmacro.h"
 #include "pqsort.h"
+#include "server.h"
 
 /* Things exported from t_zset.c only for geo.c, since it is the only other
  * part of the server that requires close zset introspection. */

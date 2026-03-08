@@ -1,0 +1,32 @@
+{
+    "LOAD": {
+        "summary": "Loads external data from backup for restore or replication.",
+        "complexity": "O(N) where N is the number of external data entries in the backup",
+        "group": "server",
+        "since": "8.0.2",
+        "arity": -2,
+        "container": "EXTERNAL_DATA",
+        "function": "externalDataLoadCommand",
+        "command_flags": [
+            "WRITE",
+            "DENYOOM"
+        ],
+        "acl_categories": [
+            "KEYSPACE",
+            "WRITE",
+            "SLOW"
+        ],
+        "arguments": [
+            {
+                "name": "backup-id",
+                "type": "string",
+                "optional": true,
+                "description": "Optional backup ID to load (defaults to last full backup)"
+            }
+        ],
+        "reply_schema": {
+            "description": "OK on success",
+            "type": "string"
+        }
+    }
+}

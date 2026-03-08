@@ -1,0 +1,34 @@
+{
+    "DUMP": {
+        "summary": "Dumps external data for backup or replication.",
+        "complexity": "O(N) where N is the number of external data entries",
+        "group": "server",
+        "since": "8.0.2",
+        "arity": -2,
+        "container": "EXTERNAL_DATA",
+        "function": "externalDataDumpCommand",
+        "command_flags": [
+            "READONLY"
+        ],
+        "acl_categories": [
+            "KEYSPACE",
+            "READ",
+            "SLOW"
+        ],
+        "command_tips": [
+            "NONDETERMINISTIC_OUTPUT_ORDER"
+        ],
+        "arguments": [
+            {
+                "name": "slot",
+                "type": "integer",
+                "token": "SLOT",
+                "optional": true
+            }
+        ],
+        "reply_schema": {
+            "description": "Backup ID string identifying the created backup",
+            "type": "string"
+        }
+    }
+}

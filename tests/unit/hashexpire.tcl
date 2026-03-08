@@ -388,6 +388,7 @@ start_server {tags {"hashexpire"}} {
     set hpersist_pattern "hpersist"
 
     r config set notify-keyspace-events KEA
+    r select $db
 
     ## HGETEX -> Keyspace notification tests ####
     foreach command {EX PX EXAT PXAT} {
@@ -2733,11 +2734,7 @@ start_cluster 3 0 {tags {"cluster mytest external:skip"} overrides {cluster-node
     for {set i 0} {$i < 3} {incr i} {
         R $i FLUSHALL
     }
-    if {$::singledb} {
-        set db 0
-    } else {
-        set db 9
-    }
+    set db 0
     set R0_id [R 0 CLUSTER MYID]
     set R1_id [R 1 CLUSTER MYID]
 
@@ -2746,7 +2743,9 @@ start_cluster 3 0 {tags {"cluster mytest external:skip"} overrides {cluster-node
 
     test {Hash with TTL fields migrates correctly between nodes} {
         R 0 DEBUG SET-ACTIVE-EXPIRE 0
+        R 0 SELECT $db
         R 1 DEBUG SET-ACTIVE-EXPIRE 0
+        R 1 SELECT $db
         # Create hash fields
         R 0 HSET $key f1 v1 f2 v2 f3 v3
 
@@ -3894,8 +3893,10 @@ start_cluster 3 0 {tags {"cluster mytest external:skip"} overrides {cluster-node
     test {Hash field TTL values and active expiry state preserved during cluster slot migration} {
         set initial_expired [info_field [R 0 info stats] expired_fields]
         
+        R 0 select 0
         R 0 HSET $key f1 v1 f2 v2 f3 v3
         assert_equal 3 [R 0 HLEN $key]
+        R 1 select 0
 
         set far_exp [expr {[clock seconds] + 30000}]
         R 0 HEXPIREAT $key $far_exp FIELDS 1 f1 ; # f1 with far expire
@@ -3972,8 +3973,10 @@ start_cluster 3 0 {tags {"cluster mytest external:skip"} overrides {cluster-node
         for {set i 1} {$i <= $num_fields} {incr i} {
             lappend pairs "f$i" "v$i"
         }
+        R 0 select 0
         R 0 HSET $key {*}$pairs
         assert_equal $num_fields [R 0 HLEN $key]
+        R 1 select 0
 
         set far_exp [expr {[clock seconds] + 30000}]
         # Set large TTL on 25 fields

@@ -80,6 +80,8 @@ static unsigned int bio_job_to_worker[] = {
     [BIO_LAZY_FREE] = 2,
     [BIO_RDB_SAVE] = 3,
     [BIO_TLS_RELOAD] = 4, /* only used when BUILD_TLS=yes */
+    [BIO_EXTDATA_DUMP] = 5,
+    [BIO_EXTDATA_LOAD] = 6,
 };
 
 typedef struct {
@@ -94,6 +96,8 @@ static bio_worker_data bio_workers[] = {
     {"bio_lazy_free"},
     {"bio_rdb_save"},
     {"bio_tls_reload"}, /* only used when BUILD_TLS=yes */
+    {"bio_extdata_dump"},
+    {"bio_extdata_load"},
 };
 static const bio_worker_data *const bio_worker_end = bio_workers + (sizeof bio_workers / sizeof *bio_workers);
 
@@ -140,6 +144,16 @@ typedef union bio_job {
     struct {
         int type;
     } tls_reload_args;
+
+    struct {
+        int type;
+        /* No additional args needed - will use global context */
+    } extdata_dump_args;
+
+    struct {
+        int type;
+        /* No additional args needed - will use global context */
+    } extdata_load_args;
 } bio_job;
 
 void *bioProcessBackgroundJobs(void *arg);
@@ -245,6 +259,16 @@ void bioCreateTlsReloadJob(void) {
     bioSubmitJob(BIO_TLS_RELOAD, job);
 }
 
+void bioCreateExtDataDumpJob(void) {
+    bio_job *job = zmalloc(sizeof(*job));
+    bioSubmitJob(BIO_EXTDATA_DUMP, job);
+}
+
+void bioCreateExtDataLoadJob(void) {
+    bio_job *job = zmalloc(sizeof(*job));
+    bioSubmitJob(BIO_EXTDATA_LOAD, job);
+}
+
 void *bioProcessBackgroundJobs(void *arg) {
     bio_worker_data *const bwd = arg;
     sigset_t sigset;
@@ -314,6 +338,16 @@ void *bioProcessBackgroundJobs(void *arg) {
 #else
             serverPanic("BIO_TLS_RELOAD job type requires built-in TLS (BUILD_TLS=yes).");
 #endif
+        } else if (job_type == BIO_EXTDATA_DUMP) {
+            /* External data dump will be handled by calling the function
+             * and storing result in atomic variables */
+            extern void bioExternalDataDumpForFullSync(void);
+            bioExternalDataDumpForFullSync();
+        } else if (job_type == BIO_EXTDATA_LOAD) {
+            /* External data load will be handled by calling the function
+             * and storing result in atomic variables */
+            extern void bioExternalDataLoadForFullSync(void);
+            bioExternalDataLoadForFullSync();
         } else {
             serverPanic("Wrong job type in bioProcessBackgroundJobs().");
         }

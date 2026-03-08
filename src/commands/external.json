@@ -1,0 +1,12 @@
+{
+    "EXTERNAL_DATA": {
+        "summary": "A container for external data commands.",
+        "complexity": "Depends on subcommand.",
+        "group": "server",
+        "since": "8.0.2",
+        "arity": -2,
+        "acl_categories": [
+            "SLOW"
+        ]
+    }
+}

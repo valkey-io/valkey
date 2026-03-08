@@ -56,7 +56,7 @@
  * function names. For details, see the script src/modules/gendoc.rb.
  * -------------------------------------------------------------------------- */
 
-#include "server.h"
+#include "external_data.h"
 #include "cluster.h"
 #include "commandlog.h"
 #include "rdb.h"
@@ -202,6 +202,7 @@ typedef struct ValkeyModuleCtx ValkeyModuleCtx;
 #define VALKEYMODULE_CTX_COMMAND (1 << 9)                /* Context created to serve a command from call() or AOF (which calls cmd->proc directly) */
 #define VALKEYMODULE_CTX_KEYSPACE_NOTIFICATION (1 << 10) /* Context created a keyspace notification event */
 #define VALKEYMODULE_CTX_SCRIPT_EXECUTION (1 << 11)      /* Context created to serve a scripting engine execution */
+#define VALKEYMODULE_CTX_FLAGS_SHUTDOWN (1 << 12)        /* Context created during server shutdown */
 
 /* This represents a key opened with VM_OpenKey(). */
 struct ValkeyModuleKey {
@@ -445,16 +446,6 @@ typedef struct ValkeyModuleUser {
     user *user;    /* Reference to the real user */
     int free_user; /* Indicates that user should also be freed when this object is freed */
 } ValkeyModuleUser;
-
-/* This is a structure used to export some meta-information such as dbid to the module. */
-typedef struct ValkeyModuleKeyOptCtx {
-    struct serverObject *from_key, *to_key; /* Optional name of key processed, NULL when unknown.
-                                              In most cases, only 'from_key' is valid, but in callbacks
-                                              such as `copy2`, both 'from_key' and 'to_key' are valid. */
-    int from_dbid, to_dbid;                 /* The dbid of the key being processed, -1 when unknown.
-                                               In most cases, only 'from_dbid' is valid, but in callbacks such
-                                               as `copy2`, 'from_dbid' and 'to_dbid' are both valid. */
-} ValkeyModuleKeyOptCtx;
 
 /* Data structures related to module configurations */
 /* The function signatures for module config get callbacks. These are identical to the ones exposed in valkeymodule.h. */
@@ -1091,6 +1082,22 @@ int moduleGetCommandChannelsViaAPI(struct serverCommand *cmd, robj **argv, int a
      * to optimize for the pre-allocated buffer. */
     moduleFreeContext(&ctx);
     return result->numkeys;
+}
+
+/* Initialize a module context to be used by external storage callback
+ * functions.
+ */
+void moduleExternalStorageInitContext(ValkeyModuleCtx *out_ctx,
+                                      ValkeyModule *module) {
+    moduleCreateContext(out_ctx, module, VALKEYMODULE_CTX_COMMAND);
+}
+
+/* Initialize a module context to be used by external filter callback
+ * functions.
+ */
+void moduleExternalFilterInitContext(ValkeyModuleCtx *out_ctx,
+                                     ValkeyModule *module) {
+    moduleCreateContext(out_ctx, module, VALKEYMODULE_CTX_NONE);
 }
 
 /* --------------------------------------------------------------------------
@@ -10597,6 +10604,7 @@ void *VM_DictGetC(ValkeyModuleDict *d, void *key, size_t keylen, int *nokey) {
 
 /* Like ValkeyModule_DictGetC() but takes the key as a ValkeyModuleString. */
 void *VM_DictGet(ValkeyModuleDict *d, ValkeyModuleString *key, int *nokey) {
+    serverAssert(d != NULL && key != NULL && objectGetVal(key) != NULL);
     return VM_DictGetC(d, objectGetVal(key), sdslen(objectGetVal(key)), nokey);
 }
 
@@ -12925,7 +12933,7 @@ int moduleLoad(const char *path, void **module_argv, int module_argc, int is_loa
     return C_OK;
 }
 
-static int moduleUnloadInternal(struct ValkeyModule *module, const char **errmsg) {
+static int moduleUnloadInternal(struct ValkeyModule *module, const char **errmsg, int is_shutdown) {
     if (listLength(module->types)) {
         *errmsg = "the module exports one or more module-side data "
                   "types, can't unload";
@@ -12972,6 +12980,9 @@ static int moduleUnloadInternal(struct ValkeyModule *module, const char **errmsg
     if (onunload) {
         ValkeyModuleCtx ctx;
         moduleCreateContext(&ctx, module, VALKEYMODULE_CTX_TEMP_CLIENT);
+        if (is_shutdown) {
+            ctx.flags |= VALKEYMODULE_CTX_FLAGS_SHUTDOWN;
+        }
         int unload_status = onunload((void *)&ctx);
         moduleFreeContext(&ctx);
 
@@ -13016,7 +13027,7 @@ int moduleUnload(sds name, const char **errmsg) {
         return C_ERR;
     }
 
-    return moduleUnloadInternal(module, errmsg);
+    return moduleUnloadInternal(module, errmsg, 0);
 }
 
 /* Unload all loaded modules from the server.
@@ -13041,7 +13052,7 @@ void moduleUnloadAllModules(void) {
         struct ValkeyModule *module = dictGetVal(de);
 
         const char *errmsg = NULL;
-        if (moduleUnloadInternal(module, &errmsg) == C_ERR) {
+        if (moduleUnloadInternal(module, &errmsg, 1) == C_ERR) {
             serverLog(LL_WARNING, "Failed to unload module %s: %s", module->name, errmsg);
         }
     }
@@ -13616,6 +13627,20 @@ int VM_LoadConfigs(ValkeyModuleCtx *ctx) {
     if (loadModuleConfigs(module)) return VALKEYMODULE_ERR;
     return VALKEYMODULE_OK;
 }
+/* Get a configuration value as a string.
+ * The returned string should be freed with ValkeyModule_FreeString().
+ * Returns NULL if the configuration key doesn't exist. */
+ValkeyModuleString *VM_GetConfigValue(ValkeyModuleCtx *ctx, const char *name) {
+    VALKEYMODULE_NOT_USED(ctx);
+
+    sds config_val = getConfigValue(name);
+    if (!config_val) return NULL;
+
+    ValkeyModuleString *ret = createStringObject(config_val, sdslen(config_val));
+    sdsfree(config_val);
+    return ret;
+}
+
 
 /* --------------------------------------------------------------------------
  * ## RDB load/save API
@@ -13883,6 +13908,101 @@ void VM_ScriptingEngineDebuggerProcessCommands(int *client_disconnected,
     scriptingEngineDebuggerProcessCommands(client_disconnected, err);
 }
 
+/* Registers a new external data module in the server.
+ *
+ * - `module_ctx`: the module context object.
+ *
+ * - `module_name`: the name of the external data module. This name will match
+ *   against the module name specified in the script header using a shebang.
+ *
+ * Returns VALKEYMODULE_OK if the storage is successfully registered, and
+ * VALKEYMODULE_ERR in case some failure occurs. In case of a failure, an error
+ * message is logged.
+ */
+int VM_RegisterExternalDataModule(ValkeyModuleCtx *module_ctx,
+                                  const char *module_name,
+                                  ValkeyModuleExternalStorageMethods *storage_methods,
+                                  ValkeyModuleExternalFilterMethods *filter_methods) {
+    serverLog(LL_DEBUG, "Registering a new external data module: %s", module_name);
+
+    if (storage_methods->version > VALKEYMODULE_EXTERNAL_STORAGE_ABI_VERSION) {
+        serverLog(LL_WARNING, "The storage implementation version is greater "
+                              "than what this server supports. Server ABI "
+                              "Version: %lu, Storage ABI version: %lu",
+                  VALKEYMODULE_EXTERNAL_STORAGE_ABI_VERSION,
+                  (unsigned long)storage_methods->version);
+        return VALKEYMODULE_ERR;
+    }
+
+    if (filter_methods->version > VALKEYMODULE_EXTERNAL_FILTER_ABI_VERSION) {
+        serverLog(LL_WARNING, "The filter implementation version is greater "
+                              "than what this server supports. Server ABI "
+                              "Version: %lu, Filter ABI version: %lu",
+                  VALKEYMODULE_EXTERNAL_FILTER_ABI_VERSION,
+                  (unsigned long)filter_methods->version);
+        return VALKEYMODULE_ERR;
+    }
+
+    if (externalDataModuleRegister(module_name,
+                                   module_ctx->module,
+                                   storage_methods,
+                                   filter_methods) != C_OK) {
+        return VALKEYMODULE_ERR;
+    }
+
+    return VALKEYMODULE_OK;
+}
+
+/* Removes the external storage from the server.
+ *
+ * `storage_name` is the name of the external storage.
+ *
+ * Returns VALKEYMODULE_OK.
+ *
+ */
+int VM_UnregisterExternalDataModule(ValkeyModuleCtx *ctx, const char *module_name) {
+    /* Check if we're in shutdown via context flag */
+    int force_shutdown = (ctx && (ctx->flags & VALKEYMODULE_CTX_FLAGS_SHUTDOWN)) ? 1 : 0;
+
+    if (externalDataModuleUnregister(module_name, force_shutdown) != C_OK) {
+        return VALKEYMODULE_ERR;
+    }
+    return VALKEYMODULE_OK;
+}
+
+/* Returns the state of the current external storage.
+ *
+ * `storage_ctx` is the storage context.
+ *
+ */
+ValkeyModuleExternalStorageState VM_GetExternalStorageState(
+    ValkeyModuleExternalStorageCtx *storage_ctx) {
+    return storage_ctx->state;
+}
+
+/* Sets the state of the current external storage.
+ *
+ * `storage_ctx` is the storage context.
+ *
+ */
+ValkeyModuleExternalStorageState VM_SetExternalStorageState(
+    ValkeyModuleExternalStorageCtx *storage_ctx,
+    ValkeyModuleExternalStorageState state) {
+    ValkeyModuleExternalStorageState oldState = storage_ctx->state;
+    storage_ctx->state = state;
+    return oldState;
+}
+
+/* Returns the timeout for the current external storage.
+ *
+ * `storage_ctx` is the storage context.
+ *
+ */
+unsigned int VM_GetExternalStorageTimeout(
+    ValkeyModuleExternalStorageCtx *storage_ctx) {
+    return storage_ctx->ext_data_timeout;
+}
+
 /* MODULE command.
  *
  * MODULE LIST
@@ -13951,6 +14071,39 @@ void moduleCommand(client *c) {
         addReplySubcommandSyntaxError(c);
         return;
     }
+}
+
+/* Returns the state of the current external filter.
+ *
+ * `filter_ctx` is the filter context.
+ *
+ */
+ValkeyModuleExternalFilterState VM_GetExternalFilterState(
+    ValkeyModuleExternalFilterCtx *filter_ctx) {
+    return filter_ctx->state;
+}
+
+/* Sets the state of the current external filter.
+ *
+ * `filter_ctx` is the filter context.
+ *
+ */
+ValkeyModuleExternalFilterState VM_SetExternalFilterState(
+    ValkeyModuleExternalFilterCtx *filter_ctx,
+    ValkeyModuleExternalFilterState state) {
+    ValkeyModuleExternalFilterState oldState = filter_ctx->state;
+    filter_ctx->state = state;
+    return oldState;
+}
+
+/* Returns the timeout for the current external filter.
+ *
+ * `filter_ctx` is the filter context.
+ *
+ */
+unsigned int VM_GetExternalFilterTimeout(
+    ValkeyModuleExternalFilterCtx *filter_ctx) {
+    return filter_ctx->ext_data_timeout;
 }
 
 /* Return the number of registered modules. */
@@ -14792,6 +14945,7 @@ void moduleRegisterCoreAPI(void) {
     REGISTER_API(RegisterStringConfig);
     REGISTER_API(RegisterEnumConfig);
     REGISTER_API(LoadConfigs);
+    REGISTER_API(GetConfigValue);
     REGISTER_API(RegisterAuthCallback);
     REGISTER_API(RdbStreamCreateFromFile);
     REGISTER_API(RdbStreamFree);
@@ -14805,5 +14959,13 @@ void moduleRegisterCoreAPI(void) {
     REGISTER_API(ScriptingEngineDebuggerLogRespReply);
     REGISTER_API(ScriptingEngineDebuggerFlushLogs);
     REGISTER_API(ScriptingEngineDebuggerProcessCommands);
+    REGISTER_API(RegisterExternalDataModule);
+    REGISTER_API(UnregisterExternalDataModule);
+    REGISTER_API(GetExternalStorageState);
+    REGISTER_API(SetExternalStorageState);
+    REGISTER_API(GetExternalStorageTimeout);
+    REGISTER_API(GetExternalFilterState);
+    REGISTER_API(SetExternalFilterState);
+    REGISTER_API(GetExternalFilterTimeout);
     REGISTER_API(ACLCheckKeyPrefixPermissions);
 }

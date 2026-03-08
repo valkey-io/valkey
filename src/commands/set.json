@@ -160,6 +160,11 @@
                         "since": "6.0.0"
                     }
                 ]
+            },
+            {
+                "name": "ext",
+                "type": "pure-token",
+                "token": "EXT"
             }
         ]
     }

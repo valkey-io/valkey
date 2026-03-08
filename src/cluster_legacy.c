@@ -44,6 +44,7 @@
 #include "endianconv.h"
 #include "connection.h"
 #include "module.h"
+#include "external_data.h"
 
 #include <stdlib.h>
 #include <sys/types.h>
@@ -6152,7 +6153,14 @@ void clusterCron(void) {
      * enable it if we know the address of our primary and it appears to
      * be up. */
     if (nodeIsReplica(myself) && server.primary_host == NULL && myself->replicaof && nodeHasAddr(myself->replicaof)) {
+        serverLog(LL_NOTICE, "clusterCron: Establishing replication to primary %.40s (%s:%d)",
+                  myself->replicaof->name, myself->replicaof->ip, getNodeDefaultReplicationPort(myself->replicaof));
         replicationSetPrimary(myself->replicaof->ip, getNodeDefaultReplicationPort(myself->replicaof), 0, false);
+
+        /* Trigger external data initialization for cluster replicas
+         * Now that replication is being established, we can initialize external data */
+        serverLog(LL_NOTICE, "clusterCron: Calling processExternalDataLoadForFullSync after replicationSetPrimary");
+        processExternalDataLoadForFullSync();
     }
 
     /* Abort a manual failover if the timeout is reached. */
@@ -7562,6 +7570,13 @@ void clusterCommandSetSlot(client *c) {
     int slot;
     mstime_t timeout_ms;
     clusterNode *n;
+
+    /* Block CLUSTER SETSLOT when external data is enabled to prevent data loss */
+    if (isExtDataOn()) {
+        addReplyError(c, "CLUSTER SETSLOT command is not supported with external storage. "
+                         "Use CLUSTER MIGRATESLOTS for slot migration.");
+        return;
+    }
 
     if (!clusterParseSetSlotCommand(c, &slot, &n, &timeout_ms)) return;
 

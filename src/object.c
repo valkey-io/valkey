@@ -261,23 +261,22 @@ static robj *createStringObjectWithKeyAndExpire(const char *ptr, size_t len, con
 }
 
 void *objectGetVal(const robj *o) {
-    if (o->hasembval) {
-        unsigned char *data = objectEmbeddedData(o);
-        if (o->hasexpire) {
-            /* Skip expire field */
-            data += sizeof(long long);
-        }
-        if (o->hasembkey) {
-            /* Skip embedded key */
-            uint8_t hdr_size = *(uint8_t *)data;
-            data += 1 + hdr_size;                /* +1 for header size byte */
-            data += sdslen((const_sds)data) + 1; /* +1 for null terminator */
-        }
-        assert(o->encoding == OBJ_ENCODING_EMBSTR);
-        return data + sdsHdrSize(SDS_TYPE_8);
-    } else {
+    if (likely(!o->hasembval)) {
         return o->val_ptr;
     }
+    unsigned char *data = objectEmbeddedData(o);
+    if (o->hasexpire) {
+        /* Skip expire field */
+        data += sizeof(long long);
+    }
+    if (o->hasembkey) {
+        /* Skip embedded key */
+        uint8_t hdr_size = *(uint8_t *)data;
+        data += 1 + hdr_size;                /* +1 for header size byte */
+        data += sdslen((const_sds)data) + 1; /* +1 for null terminator */
+    }
+    assert(o->encoding == OBJ_ENCODING_EMBSTR);
+    return data + sdsHdrSize(SDS_TYPE_8);
 }
 
 sds objectGetKey(const robj *o) {
@@ -626,7 +625,7 @@ void incrRefCount(robj *o) {
 
 void decrRefCount(robj *o) {
     if (o->refcount == 1) {
-        if (objectGetVal(o) != NULL) {
+        if (o->hasembval || o->val_ptr != NULL) {
             switch (o->type) {
             case OBJ_STRING: freeStringObject(o); break;
             case OBJ_LIST: freeListObject(o); break;

@@ -32,8 +32,9 @@
 #include <stdatomic.h>
 #include "serverassert.h"
 typedef _Atomic(void *) atomic_void_ptr;
-#else 
-typedef void * atomic_void_ptr;
+#else
+typedef void *atomic_void_ptr;
+typedef size_t atomic_size_t;
 #endif
 
 /* ==========================================================================

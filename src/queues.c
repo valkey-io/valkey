@@ -3,7 +3,7 @@
  * All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
- * Implementation of MPSC, SPMC, and SPSC queues 
+ * Implementation of MPSC, SPMC, and SPSC queues
  *
  */
 

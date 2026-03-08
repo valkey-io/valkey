@@ -6234,7 +6234,8 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                 "mem_fragmentation_bytes:%zd\r\n", mh->total_frag_bytes,
                 "mem_not_counted_for_evict:%zu\r\n", freeMemoryGetNotCountedMemory(),
                 "mem_replication_backlog:%zu\r\n", mh->repl_backlog,
-                "mem_total_replication_buffers:%zu\r\n", server.repl_buffer_mem,
+                "mem_total_replication_buffers:%zu\r\n", server.repl_buffer_mem + server.pending_repl_data.mem,
+                "mem_replicas_repl_buffer:%zu\r\n", server.pending_repl_data.mem,
                 "mem_clients_slaves:%zu\r\n", mh->clients_replicas,
                 "mem_clients_normal:%zu\r\n", mh->clients_normal,
                 "mem_cluster_links:%zu\r\n", mh->cluster_links,
@@ -7254,9 +7255,9 @@ static sds expandProcTitleTemplate(const char *template, const char *title) {
     return sdstrim(res, " ");
 }
 /* Validate the specified template, returns 1 if valid or 0 otherwise. */
-int validateProcTitleTemplate(const char *template) {
+int validateProcTitleTemplate(const char *templ) {
     int ok = 1;
-    sds res = expandProcTitleTemplate(template, "");
+    sds res = expandProcTitleTemplate(templ, "");
     if (!res) return 0;
     if (sdslen(res) == 0) ok = 0;
     sdsfree(res);

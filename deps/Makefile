@@ -54,6 +54,9 @@ endif
 
 ifneq (,$(filter $(BUILD_RDMA),yes module))
     LIBVALKEY_MAKE_FLAGS += USE_RDMA=1
+	ifneq (,$(filter $(BUILD_RDMA),module))
+		LIBVALKEY_MAKE_FLAGS += USE_DLOPEN_RDMA=1
+	endif
 endif
 
 libvalkey: .make-prerequisites
@@ -128,3 +131,11 @@ fast_float_c_interface: .make-prerequisites
 	cd fast_float_c_interface && $(MAKE)
 
 .PHONY: fast_float_c_interface
+
+gtest-parallel: .make-prerequisites
+	@printf '%b %b\n' $(MAKECOLOR)MAKE$(ENDCOLOR) $(BINCOLOR)$@$(ENDCOLOR)
+	@if [ ! -f gtest-parallel/gtest_parallel.py ]; then \
+		echo "Downloading gtest-parallel..."; \
+		rm -rf gtest-parallel; \
+		git clone --depth 1 https://github.com/google/gtest-parallel.git gtest-parallel; \
+	fi

@@ -16,11 +16,15 @@ syncpid1=$!;
 # Start simulated valkey node
 timeout 5s ./simulated-valkey.pl -p 7401 -d --sigcont $syncpid1 <<'EOF' &
 EXPECT CONNECT
+EXPECT ["SELECT", "2"]
+SEND +OK
 EXPECT ["CLUSTER", "SLOTS"]
 SEND [[0, 16383, ["127.0.0.1", 7401, "nodeid1"]]]
 EXPECT CLOSE
 
 EXPECT CONNECT
+EXPECT ["SELECT", "2"]
+SEND +OK
 EXPECT ["SET", "foo", "initial"]
 SEND +OK
 
@@ -35,7 +39,7 @@ server1=$!
 wait $syncpid1;
 
 # Run client
-timeout 4s "$clientprog" --blocking-initial-update --connection-events 127.0.0.1:7401 > "$testname.out" <<'EOF'
+timeout 4s "$clientprog" --blocking-initial-update --connection-events --select-db 2 127.0.0.1:7401 > "$testname.out" <<'EOF'
 SET foo initial
 
 # Send a command that is expected to be redirected just before

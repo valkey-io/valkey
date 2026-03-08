@@ -516,8 +516,10 @@ void debugCommand(client *c) {
             "    Grace period in seconds for replica main channel to establish psync.",
             "DICT-RESIZING <0|1>",
             "    Enable or disable the main dict and expire dict resizing.",
+            "HASHTABLE-CAN-ABORT-SHRINK <0|1>",
+            "    Enable or disable the hashtable shrink abort.",
             "CLIENT-ENFORCE-REPLY-LIST <0|1>",
-            "When set to 1, it enforces the use of the client reply list directly",
+            "    When set to 1, it enforces the use of the client reply list directly",
             "    and avoids using the client's static buffer.",
             "SLOTMIGRATION PREVENT-PAUSE <0|1>",
             "    When set to 1, slot migrations will be prevented from pausing on the source node.",
@@ -1057,6 +1059,9 @@ void debugCommand(client *c) {
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "dict-resizing") && c->argc == 3) {
         server.dict_resizing = atoi(objectGetVal(c->argv[2]));
         updateDictResizePolicy();
+        addReply(c, shared.ok);
+    } else if (!strcasecmp(objectGetVal(c->argv[1]), "hashtable-can-abort-shrink") && c->argc == 3) {
+        hashtableSetCanAbortShrink(atoi(objectGetVal(c->argv[2])));
         addReply(c, shared.ok);
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "client-enforce-reply-list") && c->argc == 3) {
         server.debug_client_enforce_reply_list = atoi(objectGetVal(c->argv[2]));
@@ -2365,7 +2370,7 @@ void printCrashReport(void) {
     logConfigDebugInfo();
 
     /* Run memory test in case the crash was triggered by memory corruption. */
-    // doFastMemoryTest();
+    doFastMemoryTest();
 }
 
 void bugReportEnd(int killViaSignal, int sig) {

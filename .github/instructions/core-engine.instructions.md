@@ -36,7 +36,7 @@ Apply these standards to core engine C code. Do NOT apply to `deps/` (vendored d
 - **PR Scope:** Separate refactoring from functional changes for easier backporting.
 
 ## 5. Testing & Documentation
-- **Unit Tests:** Required for data structures in `src/unit/`. Test files should follow `test_*.c` naming.
+- **Unit Tests:** Required for data structures in `src/unit/`. Test files should follow `test_*.cpp` naming.
 - **Integration Tests:** Required for commands in `tests/`.
 - **Command Changes:** New/modified commands need corresponding updates in `src/commands/*.json`.
 - **New C Files:** Remind to update `CMakeLists.txt` when adding new `.c` source files.

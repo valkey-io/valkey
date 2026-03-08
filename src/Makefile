@@ -373,7 +373,7 @@ RDMA_MODULE_NAME:=valkey-rdma$(PROG_SUFFIX).so
 RDMA_MODULE_CFLAGS:=$(FINAL_CFLAGS)
 ifeq ($(BUILD_RDMA),module)
 	FINAL_CFLAGS+=-DUSE_RDMA=$(BUILD_MODULE)
-	RDMA_CLIENT_LIBS = ../deps/libvalkey/lib/libvalkey_rdma.a $(RDMA_LIBS)
+	RDMA_CLIENT_LIBS = ../deps/libvalkey/lib/libvalkey_rdma.a
 	RDMA_MODULE=$(RDMA_MODULE_NAME)
 	RDMA_MODULE_CFLAGS+=-DUSE_RDMA=$(BUILD_MODULE) -DBUILD_RDMA_MODULE=$(BUILD_MODULE) $(RDMA_LIBS)
 endif
@@ -611,9 +611,7 @@ ENGINE_BENCHMARK_OBJ = \
 ENGINE_CHECK_RDB_NAME=$(ENGINE_NAME)-check-rdb$(PROG_SUFFIX)
 ENGINE_CHECK_AOF_NAME=$(ENGINE_NAME)-check-aof$(PROG_SUFFIX)
 ENGINE_LIB_NAME=lib$(ENGINE_NAME).a
-ENGINE_TEST_FILES:=$(wildcard unit/*.c)
-ENGINE_TEST_OBJ:=$(sort $(patsubst unit/%.c,unit/%.o,$(ENGINE_TEST_FILES)))
-ENGINE_UNIT_TESTS:=$(ENGINE_NAME)-unit-tests$(PROG_SUFFIX)
+ENGINE_UNIT_GTESTS:=$(ENGINE_NAME)-unit-gtests$(PROG_SUFFIX)
 ALL_SOURCES=$(sort $(patsubst %.o,%.c,$(ENGINE_SERVER_OBJ) $(ENGINE_CLI_OBJ) $(ENGINE_BENCHMARK_OBJ)))
 
 USE_FAST_FLOAT?=no
@@ -637,6 +635,8 @@ ifeq ($(USE_LIBBACKTRACE),yes)
 	FINAL_LIBS += -lbacktrace
 endif
 
+DEPENDENCY_TARGETS+= gtest-parallel
+
 ALL_BUILD_PREREQUISITES=$(SERVER_NAME) $(ENGINE_SENTINEL_NAME) $(ENGINE_CLI_NAME) $(ENGINE_BENCHMARK_NAME) $(ENGINE_CHECK_RDB_NAME) $(ENGINE_CHECK_AOF_NAME) $(TLS_MODULE) $(RDMA_MODULE) $(LUA_MODULE)
 
 all: $(ALL_BUILD_PREREQUISITES)
@@ -653,7 +653,7 @@ endif
 
 .PHONY: all
 
-all-with-unit-tests: all $(ENGINE_UNIT_TESTS)
+all-with-unit-tests: all $(ENGINE_UNIT_GTESTS)
 .PHONY: all
 
 persist-settings: distclean
@@ -668,12 +668,14 @@ persist-settings: distclean
 	echo BUILD_LUA=$(BUILD_LUA) >> .make-settings
 	echo USE_FAST_FLOAT=$(USE_FAST_FLOAT) >> .make-settings
 	echo USE_LIBBACKTRACE=$(USE_LIBBACKTRACE) >> .make-settings
+	echo LIBBACKTRACE_PREFIX=$(LIBBACKTRACE_PREFIX) >> .make-settings
 	echo CFLAGS=$(CFLAGS) >> .make-settings
 	echo LDFLAGS=$(LDFLAGS) >> .make-settings
 	echo SERVER_CFLAGS=$(SERVER_CFLAGS) >> .make-settings
 	echo SERVER_LDFLAGS=$(SERVER_LDFLAGS) >> .make-settings
 	echo PREV_FINAL_CFLAGS=$(FINAL_CFLAGS) >> .make-settings
 	echo PREV_FINAL_LDFLAGS=$(FINAL_LDFLAGS) >> .make-settings
+	echo ENGINE_SERVER_OBJ=$(ENGINE_SERVER_OBJ) >> .make-settings
 	-(cd ../deps && $(MAKE) $(DEPENDENCY_TARGETS))
 
 .PHONY: persist-settings
@@ -698,10 +700,6 @@ $(SERVER_NAME): $(ENGINE_SERVER_OBJ)
 # Valkey static library, used to compile against for unit testing
 $(ENGINE_LIB_NAME): $(ENGINE_SERVER_OBJ)
 	$(SERVER_AR) rcs $@ $^
-
-# valkey-unit-tests
-$(ENGINE_UNIT_TESTS): $(ENGINE_TEST_OBJ) $(ENGINE_LIB_NAME)
-	$(SERVER_LD) -o $@ $^ ../deps/libvalkey/lib/libvalkey.a ../deps/hdr_histogram/libhdrhistogram.a ../deps/fpconv/libfpconv.a $(FINAL_LIBS)
 
 # valkey-sentinel
 $(ENGINE_SENTINEL_NAME): $(SERVER_NAME)
@@ -747,9 +745,6 @@ DEP = $(ENGINE_SERVER_OBJ:%.o=%.d) $(ENGINE_CLI_OBJ:%.o=%.d) $(ENGINE_BENCHMARK_
 trace/%.o: trace/%.c .make-prerequisites
 	$(SERVER_CC) -Itrace -MMD -o $@ -c $<
 
-unit/%.o: unit/%.c .make-prerequisites
-	$(SERVER_CC) -MMD -o $@ -c $<
-
 # The following files are checked in and don't normally need to be rebuilt. They
 # are built only if python is available and their prereqs are modified.
 ifneq (,$(PYTHON))
@@ -760,17 +755,12 @@ fmtargs.h: ../utils/generate-fmtargs.py
 	$(QUITE_GEN)sed '/Everything below this line/,$$d' $@ > $@.tmp
 	$(QUITE_GEN)$(PYTHON) ../utils/generate-fmtargs.py >> $@.tmp
 	$(QUITE_GEN)mv $@.tmp $@
-
-unit/test_files.h: unit/*.c ../utils/generate-unit-test-header.py
-	$(QUIET_GEN)$(PYTHON) ../utils/generate-unit-test-header.py
-
-unit/test_main.o: unit/test_files.h
 endif
 
 commands.c: $(COMMANDS_DEF_FILENAME).def
 
 clean:
-	rm -rf $(SERVER_NAME) $(ENGINE_SENTINEL_NAME) $(ENGINE_CLI_NAME) $(ENGINE_BENCHMARK_NAME) $(ENGINE_CHECK_RDB_NAME) $(ENGINE_CHECK_AOF_NAME) $(ENGINE_UNIT_TESTS) $(ENGINE_LIB_NAME) unit/*.o unit/*.d trace/*.o trace/*.d *.o *.gcda *.gcno *.gcov valkey.info lcov-html Makefile.dep *.so
+	rm -rf $(SERVER_NAME) $(ENGINE_SENTINEL_NAME) $(ENGINE_CLI_NAME) $(ENGINE_BENCHMARK_NAME) $(ENGINE_CHECK_RDB_NAME) $(ENGINE_CHECK_AOF_NAME) $(ENGINE_UNIT_GTESTS) $(ENGINE_LIB_NAME) trace/*.o trace/*.d *.o *.gcda *.gcno *.gcov valkey.info lcov-html Makefile.dep *.so
 	rm -f $(DEP)
 	-(cd modules/lua && $(MAKE) clean)
 
@@ -780,15 +770,21 @@ distclean: clean
 	-(cd ../deps && $(MAKE) distclean)
 	-(cd modules && $(MAKE) clean)
 	-(cd ../tests/modules && $(MAKE) clean)
+	-(cd unit && $(MAKE) clean)
 	-(rm -f .make-*)
+	-(find unit -type d -name __pycache__ -exec rm -rf {} +)
 
 .PHONY: distclean
 
 test: $(ALL_BUILD_PREREQUISITES)
 	@(cd ..; VALKEY_PROG_SUFFIX="$(PROG_SUFFIX)" ./runtest)
 
-test-unit: $(ENGINE_UNIT_TESTS)
-	./$(ENGINE_UNIT_TESTS)
+test-unit:
+	@(cd unit && $(MAKE) test-unit)
+
+# valkey-unit-gtests
+$(ENGINE_UNIT_GTESTS): $(ENGINE_LIB_NAME)
+	@(cd unit && $(MAKE) $(ENGINE_UNIT_GTESTS))
 
 test-modules: $(SERVER_NAME)
 	@(cd ..; ./runtest-moduleapi)

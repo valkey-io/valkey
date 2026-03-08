@@ -1,6 +1,12 @@
 cmake_minimum_required(VERSION 3.7.0)
 project(examples LANGUAGES C)
 
+option(ENABLE_THREADS "Enable thread-safe initialization" ON)
+
+if(ENABLE_THREADS)
+  find_package(Threads REQUIRED)
+endif()
+
 if(CMAKE_SOURCE_DIR STREQUAL PROJECT_SOURCE_DIR)
   # This CMakeLists.txt is used standalone to build the examples.
   # Find required valkey package to get include paths.
@@ -47,23 +53,26 @@ if(LIBEV)
 endif()
 
 # Examples using libevent
-find_path(LIBEVENT event.h)
-if(LIBEVENT)
+find_path(LIBEVENT event2/event.h)
+find_library(LIBEVENT_LIBRARY event)
+if(LIBEVENT AND LIBEVENT_LIBRARY)
+  include_directories(${LIBEVENT})
+
   add_executable(example-async-libevent async-libevent.c)
-  target_link_libraries(example-async-libevent valkey::valkey event)
+  target_link_libraries(example-async-libevent valkey::valkey ${LIBEVENT_LIBRARY})
 
   add_executable(example-cluster-async cluster-async.c)
-  target_link_libraries(example-cluster-async valkey::valkey event)
+  target_link_libraries(example-cluster-async valkey::valkey ${LIBEVENT_LIBRARY})
 
   add_executable(example-cluster-clientside-caching-async cluster-clientside-caching-async.c)
-  target_link_libraries(example-cluster-clientside-caching-async valkey::valkey event)
+  target_link_libraries(example-cluster-clientside-caching-async valkey::valkey ${LIBEVENT_LIBRARY})
 
   if(ENABLE_TLS)
     add_executable(example-async-libevent-tls async-libevent-tls.c)
-    target_link_libraries(example-async-libevent-tls valkey::valkey valkey::valkey_tls event)
+    target_link_libraries(example-async-libevent-tls valkey::valkey valkey::valkey_tls ${LIBEVENT_LIBRARY})
 
     add_executable(example-cluster-async-tls cluster-async-tls.c)
-    target_link_libraries(example-cluster-async-tls valkey::valkey valkey::valkey_tls event)
+    target_link_libraries(example-cluster-async-tls valkey::valkey valkey::valkey_tls ${LIBEVENT_LIBRARY})
   endif()
 endif()
 
@@ -76,9 +85,11 @@ endif()
 
 # Examples using libuv
 find_path(LIBUV uv.h)
-if(LIBUV)
+find_library(LIBUV_LIBRARY uv)
+if(LIBUV AND LIBUV_LIBRARY)
+  include_directories(${LIBUV})
   add_executable(example-async-libuv async-libuv.c)
-  target_link_libraries(example-async-libuv valkey::valkey uv)
+  target_link_libraries(example-async-libuv valkey::valkey ${LIBUV_LIBRARY})
 endif()
 
 # Examples using libsystemd

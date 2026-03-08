@@ -48,27 +48,9 @@ static intset *createSet(int bits, int size) {
     return is;
 }
 
-/* Use memcpy to avoid strict aliasing violations and potential alignment issues. */
 static int checkConsistency(intset *is) {
     for (uint32_t i = 0; i < (intrev32ifbe(is->length) - 1); i++) {
-        uint32_t encoding = intrev32ifbe(is->encoding);
-
-        if (encoding == INTSET_ENC_INT16) {
-            int16_t v1, v2;
-            memcpy(&v1, is->contents + i * sizeof(int16_t), sizeof(int16_t));
-            memcpy(&v2, is->contents + (i + 1) * sizeof(int16_t), sizeof(int16_t));
-            if (v1 >= v2) return 0;
-        } else if (encoding == INTSET_ENC_INT32) {
-            int32_t v1, v2;
-            memcpy(&v1, is->contents + i * sizeof(int32_t), sizeof(int32_t));
-            memcpy(&v2, is->contents + (i + 1) * sizeof(int32_t), sizeof(int32_t));
-            if (v1 >= v2) return 0;
-        } else {
-            int64_t v1, v2;
-            memcpy(&v1, is->contents + i * sizeof(int64_t), sizeof(int64_t));
-            memcpy(&v2, is->contents + (i + 1) * sizeof(int64_t), sizeof(int64_t));
-            if (v1 >= v2) return 0;
-        }
+        if (testOnlyIntsetGet(is, i) >= testOnlyIntsetGet(is, i + 1)) return 0;
     }
     return 1;
 }

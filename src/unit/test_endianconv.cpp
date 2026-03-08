@@ -32,8 +32,8 @@ TEST_F(EndianconvTest, TestEndianconv) {
 }
 
 TEST_F(EndianconvTest, TestBswap) {
-    ASSERT_EQ(bswap16(0x0102), 0x0201);
-    ASSERT_EQ(bswap32(0x01020304), 0x04030201);
+    ASSERT_EQ(bswap16(0x0102U), 0x0201U);
+    ASSERT_EQ(bswap32(0x01020304U), 0x04030201U);
     ASSERT_EQ(bswap64(0x0102030405060708ULL), 0x0807060504030201ULL);
 }
 

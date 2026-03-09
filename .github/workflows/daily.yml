@@ -101,8 +101,8 @@ jobs:
           echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          repository: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && (inputs.use_repo || github.event.inputs.use_repo)) || github.repository }}
-          ref: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && (inputs.use_git_ref || github.event.inputs.use_git_ref)) || github.ref }}
+          repository: ${{ inputs.use_repo || github.event.inputs.use_repo || github.repository }}
+          ref: ${{ inputs.use_git_ref || github.event.inputs.use_git_ref || github.ref }}
       - name: Install libbacktrace
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -182,8 +182,8 @@ jobs:
           echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          repository: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && (inputs.use_repo || github.event.inputs.use_repo)) || github.repository }}
-          ref: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && (inputs.use_git_ref || github.event.inputs.use_git_ref)) || github.ref }}
+          repository: ${{ inputs.use_repo || github.event.inputs.use_repo || github.repository }}
+          ref: ${{ inputs.use_git_ref || github.event.inputs.use_git_ref || github.ref }}
       - name: Install libbacktrace
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -238,8 +238,8 @@ jobs:
           echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          repository: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && (inputs.use_repo || github.event.inputs.use_repo)) || github.repository }}
-          ref: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && (inputs.use_git_ref || github.event.inputs.use_git_ref)) || github.ref }}
+          repository: ${{ inputs.use_repo || github.event.inputs.use_repo || github.repository }}
+          ref: ${{ inputs.use_git_ref || github.event.inputs.use_git_ref || github.ref }}
       - name: Install libbacktrace
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -297,8 +297,8 @@ jobs:
           echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          repository: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && (inputs.use_repo || github.event.inputs.use_repo)) || github.repository }}
-          ref: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && (inputs.use_git_ref || github.event.inputs.use_git_ref)) || github.ref }}
+          repository: ${{ inputs.use_repo || github.event.inputs.use_repo || github.repository }}
+          ref: ${{ inputs.use_git_ref || github.event.inputs.use_git_ref || github.ref }}
       - name: Install libbacktrace
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -347,8 +347,8 @@ jobs:
           echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          repository: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && (inputs.use_repo || github.event.inputs.use_repo)) || github.repository }}
-          ref: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && (inputs.use_git_ref || github.event.inputs.use_git_ref)) || github.ref }}
+          repository: ${{ inputs.use_repo || github.event.inputs.use_repo || github.repository }}
+          ref: ${{ inputs.use_git_ref || github.event.inputs.use_git_ref || github.ref }}
       - name: Install libbacktrace
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -397,8 +397,8 @@ jobs:
           echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          repository: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && (inputs.use_repo || github.event.inputs.use_repo)) || github.repository }}
-          ref: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && (inputs.use_git_ref || github.event.inputs.use_git_ref)) || github.ref }}
+          repository: ${{ inputs.use_repo || github.event.inputs.use_repo || github.repository }}
+          ref: ${{ inputs.use_git_ref || github.event.inputs.use_git_ref || github.ref }}
       - name: Install libbacktrace
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -473,8 +473,8 @@ jobs:
           echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          repository: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && (inputs.use_repo || github.event.inputs.use_repo)) || github.repository }}
-          ref: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && (inputs.use_git_ref || github.event.inputs.use_git_ref)) || github.ref }}
+          repository: ${{ inputs.use_repo || github.event.inputs.use_repo || github.repository }}
+          ref: ${{ inputs.use_git_ref || github.event.inputs.use_git_ref || github.ref }}
       - name: Install libbacktrace
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -529,8 +529,8 @@ jobs:
           echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          repository: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && (inputs.use_repo || github.event.inputs.use_repo)) || github.repository }}
-          ref: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && (inputs.use_git_ref || github.event.inputs.use_git_ref)) || github.ref }}
+          repository: ${{ inputs.use_repo || github.event.inputs.use_repo || github.repository }}
+          ref: ${{ inputs.use_git_ref || github.event.inputs.use_git_ref || github.ref }}
       - name: Install libbacktrace
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -585,8 +585,8 @@ jobs:
           echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          repository: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && (inputs.use_repo || github.event.inputs.use_repo)) || github.repository }}
-          ref: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && (inputs.use_git_ref || github.event.inputs.use_git_ref)) || github.ref }}
+          repository: ${{ inputs.use_repo || github.event.inputs.use_repo || github.repository }}
+          ref: ${{ inputs.use_git_ref || github.event.inputs.use_git_ref || github.ref }}
       - name: Install libbacktrace
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -629,8 +629,8 @@ jobs:
           echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          repository: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && (inputs.use_repo || github.event.inputs.use_repo)) || github.repository }}
-          ref: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && (inputs.use_git_ref || github.event.inputs.use_git_ref)) || github.ref }}
+          repository: ${{ inputs.use_repo || github.event.inputs.use_repo || github.repository }}
+          ref: ${{ inputs.use_git_ref || github.event.inputs.use_git_ref || github.ref }}
       - name: Install libbacktrace
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -677,8 +677,8 @@ jobs:
           echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          repository: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && (inputs.use_repo || github.event.inputs.use_repo)) || github.repository }}
-          ref: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && (inputs.use_git_ref || github.event.inputs.use_git_ref)) || github.ref }}
+          repository: ${{ inputs.use_repo || github.event.inputs.use_repo || github.repository }}
+          ref: ${{ inputs.use_git_ref || github.event.inputs.use_git_ref || github.ref }}
       - name: Install libbacktrace
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -761,8 +761,8 @@ jobs:
           echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          repository: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && (inputs.use_repo || github.event.inputs.use_repo)) || github.repository }}
-          ref: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && (inputs.use_git_ref || github.event.inputs.use_git_ref)) || github.ref }}
+          repository: ${{ inputs.use_repo || github.event.inputs.use_repo || github.repository }}
+          ref: ${{ inputs.use_git_ref || github.event.inputs.use_git_ref || github.ref }}
       - name: Install libbacktrace
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -799,8 +799,8 @@ jobs:
           echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          repository: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && (inputs.use_repo || github.event.inputs.use_repo)) || github.repository }}
-          ref: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && (inputs.use_git_ref || github.event.inputs.use_git_ref)) || github.ref }}
+          repository: ${{ inputs.use_repo || github.event.inputs.use_repo || github.repository }}
+          ref: ${{ inputs.use_git_ref || github.event.inputs.use_git_ref || github.ref }}
       - name: Install libbacktrace
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -844,8 +844,8 @@ jobs:
           echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          repository: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && (inputs.use_repo || github.event.inputs.use_repo)) || github.repository }}
-          ref: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && (inputs.use_git_ref || github.event.inputs.use_git_ref)) || github.ref }}
+          repository: ${{ inputs.use_repo || github.event.inputs.use_repo || github.repository }}
+          ref: ${{ inputs.use_git_ref || github.event.inputs.use_git_ref || github.ref }}
       - name: Install libbacktrace
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -882,8 +882,8 @@ jobs:
           echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          repository: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && (inputs.use_repo || github.event.inputs.use_repo)) || github.repository }}
-          ref: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && (inputs.use_git_ref || github.event.inputs.use_git_ref)) || github.ref }}
+          repository: ${{ inputs.use_repo || github.event.inputs.use_repo || github.repository }}
+          ref: ${{ inputs.use_git_ref || github.event.inputs.use_git_ref || github.ref }}
       - name: Install libbacktrace
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -933,8 +933,8 @@ jobs:
           echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          repository: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && (inputs.use_repo || github.event.inputs.use_repo)) || github.repository }}
-          ref: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && (inputs.use_git_ref || github.event.inputs.use_git_ref)) || github.ref }}
+          repository: ${{ inputs.use_repo || github.event.inputs.use_repo || github.repository }}
+          ref: ${{ inputs.use_git_ref || github.event.inputs.use_git_ref || github.ref }}
       - name: Install libbacktrace
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -997,8 +997,8 @@ jobs:
         run: free -h
       - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
         with:
-          repository: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && (inputs.use_repo || github.event.inputs.use_repo)) || github.repository }}
-          ref: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && (inputs.use_git_ref || github.event.inputs.use_git_ref)) || github.ref }}
+          repository: ${{ inputs.use_repo || github.event.inputs.use_repo || github.repository }}
+          ref: ${{ inputs.use_git_ref || github.event.inputs.use_git_ref || github.ref }}
       - name: Install gtest
         run: sudo apt-get install pkg-config libgtest-dev libgmock-dev
       - name: make
@@ -1061,8 +1061,8 @@ jobs:
           echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          repository: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && (inputs.use_repo || github.event.inputs.use_repo)) || github.repository }}
-          ref: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && (inputs.use_git_ref || github.event.inputs.use_git_ref)) || github.ref }}
+          repository: ${{ inputs.use_repo || github.event.inputs.use_repo || github.repository }}
+          ref: ${{ inputs.use_git_ref || github.event.inputs.use_git_ref || github.ref }}
       - name: Install libbacktrace
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -1125,8 +1125,8 @@ jobs:
         run: free -h
       - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
         with:
-          repository: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && (inputs.use_repo || github.event.inputs.use_repo)) || github.repository }}
-          ref: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && (inputs.use_git_ref || github.event.inputs.use_git_ref)) || github.ref }}
+          repository: ${{ inputs.use_repo || github.event.inputs.use_repo || github.repository }}
+          ref: ${{ inputs.use_git_ref || github.event.inputs.use_git_ref || github.ref }}
       - name: Install gtest
         run: sudo apt-get install pkg-config libgtest-dev libgmock-dev
       - name: make
@@ -1185,8 +1185,8 @@ jobs:
           echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          repository: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && (inputs.use_repo || github.event.inputs.use_repo)) || github.repository }}
-          ref: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && (inputs.use_git_ref || github.event.inputs.use_git_ref)) || github.ref }}
+          repository: ${{ inputs.use_repo || github.event.inputs.use_repo || github.repository }}
+          ref: ${{ inputs.use_git_ref || github.event.inputs.use_git_ref || github.ref }}
       - name: Install libbacktrace
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -1242,8 +1242,8 @@ jobs:
           echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          repository: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && (inputs.use_repo || github.event.inputs.use_repo)) || github.repository }}
-          ref: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && (inputs.use_git_ref || github.event.inputs.use_git_ref)) || github.ref }}
+          repository: ${{ inputs.use_repo || github.event.inputs.use_repo || github.repository }}
+          ref: ${{ inputs.use_git_ref || github.event.inputs.use_git_ref || github.ref }}
       - name: Install libbacktrace
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -1314,8 +1314,8 @@ jobs:
           echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          repository: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && (inputs.use_repo || github.event.inputs.use_repo)) || github.repository }}
-          ref: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && (inputs.use_git_ref || github.event.inputs.use_git_ref)) || github.ref }}
+          repository: ${{ inputs.use_repo || github.event.inputs.use_repo || github.repository }}
+          ref: ${{ inputs.use_git_ref || github.event.inputs.use_git_ref || github.ref }}
       - name: Install EPEL
         if: matrix.install_epel
         run: dnf -y install epel-release
@@ -1389,8 +1389,8 @@ jobs:
           echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          repository: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && (inputs.use_repo || github.event.inputs.use_repo)) || github.repository }}
-          ref: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && (inputs.use_git_ref || github.event.inputs.use_git_ref)) || github.ref }}
+          repository: ${{ inputs.use_repo || github.event.inputs.use_repo || github.repository }}
+          ref: ${{ inputs.use_git_ref || github.event.inputs.use_git_ref || github.ref }}
       - name: Install EPEL
         if: matrix.install_epel
         run: dnf -y install epel-release
@@ -1465,8 +1465,8 @@ jobs:
           echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          repository: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && (inputs.use_repo || github.event.inputs.use_repo)) || github.repository }}
-          ref: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && (inputs.use_git_ref || github.event.inputs.use_git_ref)) || github.ref }}
+          repository: ${{ inputs.use_repo || github.event.inputs.use_repo || github.repository }}
+          ref: ${{ inputs.use_git_ref || github.event.inputs.use_git_ref || github.ref }}
       - name: Install EPEL
         if: matrix.install_epel
         run: dnf -y install epel-release
@@ -1527,8 +1527,8 @@ jobs:
           echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          repository: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && (inputs.use_repo || github.event.inputs.use_repo)) || github.repository }}
-          ref: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && (inputs.use_git_ref || github.event.inputs.use_git_ref)) || github.ref }}
+          repository: ${{ inputs.use_repo || github.event.inputs.use_repo || github.repository }}
+          ref: ${{ inputs.use_git_ref || github.event.inputs.use_git_ref || github.ref }}
       - name: Install libbacktrace
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -1569,8 +1569,8 @@ jobs:
           echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          repository: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && (inputs.use_repo || github.event.inputs.use_repo)) || github.repository }}
-          ref: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && (inputs.use_git_ref || github.event.inputs.use_git_ref)) || github.ref }}
+          repository: ${{ inputs.use_repo || github.event.inputs.use_repo || github.repository }}
+          ref: ${{ inputs.use_git_ref || github.event.inputs.use_git_ref || github.ref }}
       - name: Install libbacktrace
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -1608,8 +1608,8 @@ jobs:
           echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          repository: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && (inputs.use_repo || github.event.inputs.use_repo)) || github.repository }}
-          ref: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && (inputs.use_git_ref || github.event.inputs.use_git_ref)) || github.ref }}
+          repository: ${{ inputs.use_repo || github.event.inputs.use_repo || github.repository }}
+          ref: ${{ inputs.use_git_ref || github.event.inputs.use_git_ref || github.ref }}
       - name: Install libbacktrace
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -1654,8 +1654,8 @@ jobs:
           echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          repository: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && (inputs.use_repo || github.event.inputs.use_repo)) || github.repository }}
-          ref: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && (inputs.use_git_ref || github.event.inputs.use_git_ref)) || github.ref }}
+          repository: ${{ inputs.use_repo || github.event.inputs.use_repo || github.repository }}
+          ref: ${{ inputs.use_git_ref || github.event.inputs.use_git_ref || github.ref }}
       - name: Install libbacktrace
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -1686,8 +1686,8 @@ jobs:
           echo "GITHUB_HEAD_REF=${{inputs.use_git_ref || github.event.inputs.use_git_ref}}" >> $GITHUB_ENV
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          repository: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && (inputs.use_repo || github.event.inputs.use_repo)) || github.repository }}
-          ref: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && (inputs.use_git_ref || github.event.inputs.use_git_ref)) || github.ref }}
+          repository: ${{ inputs.use_repo || github.event.inputs.use_repo || github.repository }}
+          ref: ${{ inputs.use_git_ref || github.event.inputs.use_git_ref || github.ref }}
       - name: test
         uses: cross-platform-actions/action@39a2a80642eca0947594ad03e4355dc3d28c617a # v0.32.0
         with:
@@ -1724,8 +1724,8 @@ jobs:
           echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          repository: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && (inputs.use_repo || github.event.inputs.use_repo)) || github.repository }}
-          ref: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && (inputs.use_git_ref || github.event.inputs.use_git_ref)) || github.ref }}
+          repository: ${{ inputs.use_repo || github.event.inputs.use_repo || github.repository }}
+          ref: ${{ inputs.use_git_ref || github.event.inputs.use_git_ref || github.ref }}
       - name: Install libbacktrace
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -1777,8 +1777,8 @@ jobs:
           echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          repository: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && (inputs.use_repo || github.event.inputs.use_repo)) || github.repository }}
-          ref: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && (inputs.use_git_ref || github.event.inputs.use_git_ref)) || github.ref }}
+          repository: ${{ inputs.use_repo || github.event.inputs.use_repo || github.repository }}
+          ref: ${{ inputs.use_git_ref || github.event.inputs.use_git_ref || github.ref }}
       - name: Install libbacktrace
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -1830,8 +1830,8 @@ jobs:
           echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          repository: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && (inputs.use_repo || github.event.inputs.use_repo)) || github.repository }}
-          ref: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && (inputs.use_git_ref || github.event.inputs.use_git_ref)) || github.ref }}
+          repository: ${{ inputs.use_repo || github.event.inputs.use_repo || github.repository }}
+          ref: ${{ inputs.use_git_ref || github.event.inputs.use_git_ref || github.ref }}
       - name: Install libbacktrace
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:

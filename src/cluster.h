@@ -129,6 +129,7 @@ int getSlotOrReply(client *c, robj *o);
 int getNodeDefaultReplicationPort(clusterNode *node);
 bool isAnySlotInManualImportingState(void);
 bool isAnySlotInManualMigratingState(void);
+bool clusterIsAnySlotMoving(void);
 
 /* functions with shared implementations */
 int clusterNodeIsMyself(clusterNode *n);

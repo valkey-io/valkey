@@ -33,7 +33,7 @@ start_server {tags {"repl network external:skip"}} {
 
         test {Slave enters wait_bgsave} {
             wait_for_condition 50 1000 {
-                [string match *state=wait_bgsave* [$master info replication]]
+                [string match *state=wait_bg* [$master info replication]]
             } else {
                 fail "Replica does not enter wait_bgsave state"
             }
@@ -912,7 +912,7 @@ start_server {tags {"repl external:skip"} overrides {save ""}} {
                     # it's enough for just one replica to be slow, and have it's write handler enabled
                     # so that the whole rdb generation process is bound to that
                     set loglines [count_log_lines -2]
-                    [lindex $replicas 0] config set repl-diskless-load swapdb
+                    [lindex $replicas 0] config set repl-diskless-load flush-before-load
                     [lindex $replicas 0] config set key-load-delay 100 ;# 20k keys and 100 microseconds sleep means at least 2 seconds
                     [lindex $replicas 0] replicaof $master_host $master_port
                     [lindex $replicas 1] replicaof $master_host $master_port
@@ -952,7 +952,7 @@ start_server {tags {"repl external:skip"} overrides {save ""}} {
 
                     # wait for rdb child to exit
                     wait_for_condition 500 100 {
-                        [s -2 rdb_bgsave_in_progress] == 0
+                        (([s -2 rdb_bgsave_in_progress] == 0) && ([s -2 aof_rewrite_in_progress] == 0))
                     } else {
                         fail "rdb child didn't terminate"
                     }
@@ -1063,7 +1063,7 @@ test "diskless replication child being killed is collected" {
 
             # wait for the parent to notice the child have exited
             wait_for_condition 50 100 {
-                [s -1 rdb_bgsave_in_progress] == 0
+                (([s -1 rdb_bgsave_in_progress] == 0) && ([s -1 aof_rewrite_in_progress] == 0))
             } else {
                 fail "rdb child didn't terminate"
             }
@@ -1094,7 +1094,7 @@ foreach mdl {yes no} dualchannel {yes no} {
 
                 # wait for rdb child to start
                 wait_for_condition 5000 10 {
-                    [s -1 rdb_bgsave_in_progress] == 1
+                    (([s -1 rdb_bgsave_in_progress] == 1) || ([s -1 aof_rewrite_in_progress] == 1))
                 } else {
                     fail "rdb child didn't start"
                 }
@@ -1221,15 +1221,16 @@ test {Kill rdb child process if its dumping RDB is not useful} {
                 $master config set rdb-key-save-delay 1000000
                 $master config set repl-diskless-sync no
                 $master config set save ""
+                $master config set repl-fullsync-format RDB
 
                 $slave1 slaveof $master_host $master_port
                 $slave2 slaveof $master_host $master_port
 
                 # Wait for starting child
                 wait_for_condition 50 100 {
-                    ([s 0 rdb_bgsave_in_progress] == 1) &&
-                    ([string match "*wait_bgsave*" [s 0 slave0]]) &&
-                    ([string match "*wait_bgsave*" [s 0 slave1]])
+                    (([s 0 rdb_bgsave_in_progress] == 1) || ([s 0 aof_rewrite_in_progress] == 1)) &&
+                    ([string match "*wait_bg*" [s 0 slave0]]) &&
+                    ([string match "*wait_bg*" [s 0 slave1]])
                 } else {
                     fail "rdb child didn't start"
                 }
@@ -1238,13 +1239,13 @@ test {Kill rdb child process if its dumping RDB is not useful} {
                 $slave1 slaveof no one
                 # Shouldn't kill child since another slave wait for rdb
                 after 100
-                assert {[s 0 rdb_bgsave_in_progress] == 1}
+                assert {(([s 0 rdb_bgsave_in_progress] == 1) || ([s 0 aof_rewrite_in_progress] == 1))}
 
                 # Slave2 disconnect with master
                 $slave2 slaveof no one
                 # Should kill child
                 wait_for_condition 100 10 {
-                    [s 0 rdb_bgsave_in_progress] eq 0
+                    (([s 0 rdb_bgsave_in_progress] eq 0) && ([s 0 aof_rewrite_in_progress] eq 0))
                 } else {
                     fail "can't kill rdb child"
                 }
@@ -1254,16 +1255,16 @@ test {Kill rdb child process if its dumping RDB is not useful} {
                 $slave1 slaveof $master_host $master_port
                 $slave2 slaveof $master_host $master_port
                 wait_for_condition 50 100 {
-                    ([s 0 rdb_bgsave_in_progress] == 1) &&
-                    ([string match "*wait_bgsave*" [s 0 slave0]]) &&
-                    ([string match "*wait_bgsave*" [s 0 slave1]])
+                    (([s 0 rdb_bgsave_in_progress] == 1) || ([s 0 aof_rewrite_in_progress] == 1)) &&
+                    ([string match "*wait_bg*" [s 0 slave0]]) &&
+                    ([string match "*wait_bg*" [s 0 slave1]])
                 } else {
                     fail "rdb child didn't start"
                 }
                 $slave1 slaveof no one
                 $slave2 slaveof no one
                 after 200
-                assert {[s 0 rdb_bgsave_in_progress] == 1}
+                assert {(([s 0 rdb_bgsave_in_progress] == 1) || ([s 0 aof_rewrite_in_progress] == 1))}
                 catch {$master shutdown nosave}
             }
         }
@@ -1306,8 +1307,8 @@ foreach dualchannel {yes no} {
                     # Full sync with master2, and then kill master2 before finishing dumping RDB
                     r slaveof $master2_host $master2_port
                     wait_for_condition 50 100 {
-                        ([s -2 rdb_bgsave_in_progress] == 1) &&
-                        ([string match "*wait_bgsave*" [s -2 slave0]])
+                        (([s -2 rdb_bgsave_in_progress] == 1) || ([s -2 aof_rewrite_in_progress] == 1)) &&
+                        ([string match "*wait_bg*" [s -2 slave0]])
                     } else {
                         fail "full sync didn't start"
                     }
@@ -1566,6 +1567,7 @@ start_server {tags {"repl external:skip"}} {
         set primary_host [srv 0 host]
         set primary_port [srv 0 port]
         $primary set primary_key primary_value
+        $primary config set repl-fullsync-format RDB
 
         test {Replica keep the old data if RDB file save fails in disk-based replication} {
             # Create a folder called 'dump.rdb' to trigger temp-rdb rename failure

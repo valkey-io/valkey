@@ -105,6 +105,12 @@ proc test_migrated_replica {type} {
         # Make sure the key exists and is consistent.
         R 3 readonly
         R 7 readonly
+        wait_for_condition 50 1000 {
+            [getInfoProperty [R 3 info replication] master_link_status] eq "up" &&
+                [getInfoProperty [R 7 info replication] master_link_status] eq "up"
+        } else {
+            fail "Replica 1 is not synced"
+        }
         wait_for_condition 1000 50 {
             [R 3 get key_991803] == 1024 && [R 3 get key_977613] == 10240 &&
             [R 4 get key_991803] == 1024 && [R 4 get key_977613] == 10240 &&
@@ -200,6 +206,11 @@ proc test_nonempty_replica {type} {
 
         # Make sure the key exists and is consistent.
         R 7 readonly
+        wait_for_condition 50 1000 {
+            [getInfoProperty [R 7 info replication] master_link_status] eq "up"
+        } else {
+            fail "Replica 1 is not synced"
+        }
         wait_for_condition 1000 50 {
             [R 4 get key_991803] == 1024 &&
             [R 7 get key_991803] == 1024
@@ -324,6 +335,12 @@ proc test_sub_replica {type} {
         # Make sure the key exists and is consistent.
         R 3 readonly
         R 7 readonly
+        wait_for_condition 50 1000 {
+            [getInfoProperty [R 3 info replication] master_link_status] eq "up" &&
+                [getInfoProperty [R 7 info replication] master_link_status] eq "up"
+        } else {
+            fail "Replica 1 is not synced"
+        }
         wait_for_condition 1000 50 {
             [R 3 get key_991803] == 1024 && [R 3 get key_977613] == 10240 &&
             [R 4 get key_991803] == 1024 && [R 4 get key_977613] == 10240 &&

@@ -101,10 +101,11 @@ static thread_local int thread_index = -1;
 #if defined(__i386__) || defined(__x86_64__) || defined(__amd64__) || defined(__POWERPC__) || defined(__arm__) || \
     defined(__arm64__)
 static __attribute__((aligned(CACHE_LINE_SIZE))) size_t used_memory_thread_padded[MAX_THREADS_NUM + PADDING_ELEMENT_NUM];
+static size_t *used_memory_thread = &used_memory_thread_padded[PADDING_ELEMENT_NUM];
 #else
 static __attribute__((aligned(CACHE_LINE_SIZE))) _Atomic size_t used_memory_thread_padded[MAX_THREADS_NUM + PADDING_ELEMENT_NUM];
+static _Atomic size_t *used_memory_thread = &used_memory_thread_padded[PADDING_ELEMENT_NUM];
 #endif
-static size_t *used_memory_thread = &used_memory_thread_padded[PADDING_ELEMENT_NUM];
 static atomic_int total_active_threads = 0;
 /* This is a simple protection. It's used only if some modules create a lot of threads. */
 static atomic_size_t used_memory_for_additional_threads = 0;
@@ -768,7 +769,7 @@ void zlibc_trim(void) {
 
 /* Get the sum of the specified field (converted form kb to bytes) in
  * /proc/self/smaps. The field must be specified with trailing ":" as it
- * apperas in the smaps output.
+ * appears in the smaps output.
  *
  * If a pid is specified, the information is extracted for such a pid,
  * otherwise if pid is -1 the information is reported is about the
@@ -862,7 +863,7 @@ size_t zmalloc_get_memory_size(void) {
     int mib[2];
     mib[0] = CTL_HW;
 #if defined(HW_MEMSIZE)
-    mib[1] = HW_MEMSIZE; /* OSX. --------------------- */
+    mib[1] = HW_MEMSIZE; /* macOS. --------------------- */
 #elif defined(HW_PHYSMEM64)
     mib[1] = HW_PHYSMEM64; /* NetBSD, OpenBSD. --------- */
 #endif
@@ -876,7 +877,7 @@ size_t zmalloc_get_memory_size(void) {
     return (size_t)sysconf(_SC_PHYS_PAGES) * (size_t)sysconf(_SC_PAGESIZE);
 
 #elif defined(CTL_HW) && (defined(HW_PHYSMEM) || defined(HW_REALMEM))
-    /* DragonFly BSD, FreeBSD, NetBSD, OpenBSD, and OSX. -------- */
+    /* DragonFly BSD, FreeBSD, NetBSD, OpenBSD, and macOS. -------- */
     int mib[2];
     mib[0] = CTL_HW;
 #if defined(HW_REALMEM)

@@ -6,8 +6,9 @@
         "since": "7.0.0",
         "arity": 3,
         "container": "CLIENT",
-        "function": "clientCommand",
+        "function": "clientNoEvictCommand",
         "command_flags": [
+            "ALLOW_BUSY",
             "ADMIN",
             "NOSCRIPT",
             "LOADING",
@@ -15,7 +16,10 @@
             "SENTINEL"
         ],
         "acl_categories": [
-            "CONNECTION"
+            "ADMIN",
+            "CONNECTION",
+            "DANGEROUS",
+            "SLOW"
         ],
         "arguments": [
             {

@@ -113,12 +113,17 @@ tags {"needs:debug"} {
             puts $res
         }
 
+        # See the previous "Test latency events logging" test for each call.
         foreach event $res {
-            lassign $event eventname time latency max
+            lassign $event eventname time latency max sum cnt
             assert {$eventname eq "command"}
             if {!$::no_latency} {
-                assert {$max >= 450 & $max <= 650}
-                assert {$time == $last_time}
+                # To avoid timing issues, each event decreases by 50 and
+                # increases by 200 to increase the range.
+                assert_equal $time $last_time
+                assert_range $max 450 700 ;# debug sleep 0.5
+                assert_range $sum 1050 1800 ;# debug sleep 0.3 + 0.4 + 0.5
+                assert_equal $cnt 3
             }
             break
         }
@@ -130,20 +135,22 @@ tags {"needs:debug"} {
             puts "LATENCY GRAPH data:"
             puts $res
         }
-        assert_match {*command*high*low*} $res
+        if {!$::no_latency} {
+            assert_match {*command*high*low*} $res
 
-        # These numbers are taken from the "Test latency events logging" test.
-        # (debug sleep 0.3) and (debug sleep 0.5), using range to prevent timing issue.
-        regexp "command - high (.*?) ms, low (.*?) ms" $res -> high low
-        assert_morethan_equal $high 500
-        assert_morethan_equal $low 300
+            # These numbers are taken from the "Test latency events logging" test.
+            # (debug sleep 0.3) and (debug sleep 0.5), using range to prevent timing issue.
+            regexp "command - high (.*?) ms, low (.*?) ms" $res -> high low
+            assert_range $high 450 700
+            assert_range $low 250 500
+        }
     }
 
     r config set latency-monitor-threshold $old_threshold_value
 } ;# tag
 
     test {LATENCY of expire events are correctly collected} {
-        r config set latency-monitor-threshold 20
+        r config set latency-monitor-threshold 1
         r config set lazyfree-lazy-expire no
         r flushdb
         if {$::valgrind} {set count 100000} else {set count 1000000}
@@ -187,5 +194,17 @@ tags {"needs:debug"} {
     test {LATENCY HELP should not have unexpected options} {
         catch {r LATENCY help xxx} e
         assert_match "*wrong number of arguments for 'latency|help' command" $e
+    }
+}
+
+start_cluster 1 1 {tags {"latency-monitor cluster external:skip needs:latency"} overrides {latency-monitor-threshold 1}} {
+    test "Cluster config file latency" {
+        # This test just a sanity test so that we can make sure the code path is cover.
+        # We don't assert anything since we can't be sure whether it will be counted.
+        R 0 cluster saveconfig
+        R 1 cluster saveconfig
+        R 1 cluster failover takeover
+        R 0 latency latest
+        R 1 latency latest
     }
 }

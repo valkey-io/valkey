@@ -23,7 +23,9 @@ start_server {tags {"tracking network logreqres:skip"}} {
             # info which will not be consumed.
             r CLIENT TRACKING off
             $rd QUIT
+            $rd close
             $rd_redirection QUIT
+            $rd_redirection close
             set rd [valkey_deferring_client]
             set rd_redirection [valkey_deferring_client]
             $rd_redirection client id
@@ -34,6 +36,34 @@ start_server {tags {"tracking network logreqres:skip"}} {
             r HELLO 2
             r config set tracking-table-max-keys 1000000
         }
+    }
+
+    test {Client tracking prefixes memory overhead} {
+        r CLIENT TRACKING off
+        set tot_mem_before [get_field_in_client_info [r client info] "tot-mem"]
+
+        # We add multiple $i to prefix to avoid prefix conflicts, so in this
+        # args we will have about 20000 rax nodes.
+        set args {}
+        for {set i 0} {$i < 10240} {incr i} {
+            lappend args PREFIX
+            lappend args PREFIX-$i-$i-$i-$i-$i-$i-$i
+        }
+        r CLIENT TRACKING on BCAST {*}$args
+
+        set arch_bits [s arch_bits]
+        set tot_mem_after [get_field_in_client_info [r client info] "tot-mem"]
+        set diff [expr $tot_mem_after - $tot_mem_before]
+
+        # In 64 bits, before we would consume about 20000 * (4 * 8), that is 640000.
+        # And now we are 20000 * (4 + 8), that is 240000.
+        if {$arch_bits == 64} {
+            assert_lessthan $diff 300000
+        } elseif {$arch_bits == 32} {
+            assert_lessthan $diff 200000
+        }
+
+        r CLIENT TRACKING off
     }
 
     test {Clients are able to enable tracking and redirect it} {
@@ -236,20 +266,16 @@ start_server {tags {"tracking network logreqres:skip"}} {
     }
 
     test {RESP3 Client gets tracking-redir-broken push message after cached key changed when rediretion client is terminated} {
+        # make sure r is working resp 3
+        r HELLO 3
         r CLIENT TRACKING on REDIRECT $redir_id
+        set redir_error "tracking-redir-broken $redir_id"
         $rd_sg SET key1 1
         r GET key1
         $rd_redirection QUIT
         assert_equal OK [$rd_redirection read]
+        $rd_redirection close
         $rd_sg SET key1 2
-        set MAX_TRIES 100
-        set res -1
-        for {set i 0} {$i <= $MAX_TRIES && $res < 0} {incr i} {
-            set res [lsearch -exact [r PING] "tracking-redir-broken"]
-        }
-        assert {$res >= 0}
-        # Consume PING reply
-        assert_equal PONG [r read]
 
         # Reinstantiating after QUIT
         set rd_redirection [valkey_deferring_client]
@@ -257,6 +283,16 @@ start_server {tags {"tracking network logreqres:skip"}} {
         set redir_id [$rd_redirection read]
         $rd_redirection SUBSCRIBE __redis__:invalidate
         $rd_redirection read ; # Consume the SUBSCRIBE reply
+
+        # Wait to read the tracking-redir-broken
+        wait_for_condition 1000 50 {
+            [set response [r PING]] != "PONG"
+        } else {
+            fail "Failed to get redirect broken indication"
+        }
+        assert_equal $redir_error $response
+        # Consume PING reply
+        assert_equal PONG [r read]
     }
 
     test {Different clients can redirect to the same connection} {
@@ -862,6 +898,16 @@ start_server {tags {"tracking network logreqres:skip"}} {
 # Just some extra coverage for --log-req-res, because we do not
 # run the full tracking unit in that mode
 start_server {tags {"tracking network"}} {
+    test {CLIENT TRACKINGINFO when start} {
+        set res [r client trackinginfo]
+        set flags [dict get $res flags]
+        assert_equal {off} $flags
+        set redirect [dict get $res redirect]
+        assert_equal {-1} $redirect
+        set prefixes [dict get $res prefixes]
+        assert_equal {} $prefixes
+    }
+
     test {Coverage: Basic CLIENT CACHING} {
         set rd_redirection [valkey_deferring_client]
         $rd_redirection client id

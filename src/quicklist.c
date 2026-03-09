@@ -1175,7 +1175,7 @@ int quicklistDelRange(quicklist *quicklist, const long start, const long count) 
     return 1;
 }
 
-/* compare between a two entries */
+/* Compares two entries */
 int quicklistCompare(quicklistEntry *entry, unsigned char *p2, const size_t p2_len) {
     if (unlikely(QL_NODE_IS_PLAIN(entry->node))) {
         return ((entry->sz == p2_len) && (memcmp(entry->value, p2, p2_len) == 0));
@@ -1687,4 +1687,26 @@ void quicklistBookmarksClear(quicklist *ql) {
     while (ql->bookmark_count) zfree(ql->bookmarks[--ql->bookmark_count].name);
     /* NOTE: We do not shrink (realloc) the quick list. main use case for this
      * function is just before releasing the allocation. */
+}
+
+/* Wrapper functions for gtest to access static internals. */
+
+size_t testOnlyQuicklistNodeNegFillLimit(int fill) {
+    return quicklistNodeNegFillLimit(fill);
+}
+
+quicklistNode *testOnlyQuicklistCreateNode(void) {
+    return quicklistCreateNode();
+}
+
+quicklistNode *testOnlyQuicklistCreateNodeWithValue(int container, void *value, size_t sz) {
+    return __quicklistCreateNode(container, value, sz);
+}
+
+int testOnlyQuicklistCompressNode(quicklistNode *node) {
+    return __quicklistCompressNode(node);
+}
+
+int testOnlyQuicklistDecompressNode(quicklistNode *node) {
+    return __quicklistDecompressNode(node);
 }

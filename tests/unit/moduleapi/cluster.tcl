@@ -5,6 +5,40 @@ source tests/support/cli.tcl
 # cluster creation is complicated with TLS, and the current tests don't really need that coverage
 tags {tls:skip external:skip cluster modules} {
 
+set testmodule [file normalize tests/modules/cluster.so]
+set modules [list loadmodule $testmodule]
+start_cluster 3 0 [list config_lines $modules] {
+    set node1 [srv 0 client]
+    set node2 [srv -1 client]
+    set node3 [srv -2 client]
+
+    test "Cluster module send message API - VM_SendClusterMessage" {
+        assert_equal OK [$node1 test.pingall]
+        assert_equal 2 [CI 0 cluster_stats_messages_module_sent]
+        wait_for_condition 50 100 {
+            [CI 1 cluster_stats_messages_module_received] eq 1 &&
+            [CI 2 cluster_stats_messages_module_received] eq 1
+        } else {
+            fail "node 2 or node 3 didn't receive cluster module message"
+        }
+        verify_log_message -1 "*DING (type 1) RECEIVED*Hey*" 0
+        verify_log_message -2 "*DING (type 1) RECEIVED*Hey*" 0
+    }
+
+    test "Cluster module receive message API - VM_RegisterClusterMessageReceiver" {
+        wait_for_condition 50 100 {
+            [CI 0 cluster_stats_messages_module_received] eq 2
+        } else {
+            fail "node 1 didn't receive DONG messages"
+        }
+        wait_for_condition 50 100 {
+            [count_log_message 0 "* <cluster> DONG (type 2) RECEIVED*"] eq 2
+        } else {
+            fail "node 1 didn't log DONG message twice"
+        }
+    }
+}
+
 set testmodule_nokey [file normalize tests/modules/blockonbackground.so]
 set testmodule_blockedclient [file normalize tests/modules/blockedclient.so]
 set testmodule [file normalize tests/modules/blockonkeys.so]
@@ -44,7 +78,7 @@ start_cluster 3 0 [list config_lines $modules] {
 
 
     test "Perform a Resharding" {
-        exec src/valkey-cli --cluster-yes --cluster reshard 127.0.0.1:[srv -2 port] \
+        exec $::VALKEY_CLI_BIN --cluster-yes --cluster reshard 127.0.0.1:[srv -2 port] \
                            --cluster-to [$node1 cluster myid] \
                            --cluster-from [$node3 cluster myid] \
                            --cluster-slots 1
@@ -70,9 +104,9 @@ start_cluster 3 0 [list config_lines $modules] {
 
     test "Wait for cluster to be stable" {
         wait_for_condition 1000 50 {
-            [catch {exec src/valkey-cli --cluster check 127.0.0.1:[srv 0 port]}] == 0 &&
-            [catch {exec src/valkey-cli --cluster check 127.0.0.1:[srv -1 port]}] == 0 &&
-            [catch {exec src/valkey-cli --cluster check 127.0.0.1:[srv -2 port]}] == 0 &&
+            [catch {exec $::VALKEY_CLI_BIN --cluster check 127.0.0.1:[srv 0 port]}] == 0 &&
+            [catch {exec $::VALKEY_CLI_BIN --cluster check 127.0.0.1:[srv -1 port]}] == 0 &&
+            [catch {exec $::VALKEY_CLI_BIN --cluster check 127.0.0.1:[srv -2 port]}] == 0 &&
             [CI 0 cluster_state] eq {ok} &&
             [CI 1 cluster_state] eq {ok} &&
             [CI 2 cluster_state] eq {ok}
@@ -250,6 +284,18 @@ start_cluster 3 0 [list config_lines $modules] {
         assert_equal [lsort [$node1 cluster shards]] [lsort [$node1 test.cluster_shards]]
         assert_equal [lsort [$node2 cluster shards]] [lsort [$node2 test.cluster_shards]]
         assert_equal [lsort [$node3 cluster shards]] [lsort [$node3 test.cluster_shards]]
+    }
+
+    test "VM_CALL CLUSTER SLOTS from Module Timer" {
+        assert_equal {OK} [$node1 test.start_cluster_timer]
+        assert_equal {OK} [$node2 test.start_cluster_timer]
+        assert_equal {OK} [$node3 test.start_cluster_timer]
+
+        wait_for_condition 50 100 {
+            [count_log_message 0 "* <cluster> Timer: CLUSTER SLOTS success*"] >= 1
+        } else {
+            fail "Timer did not execute CLUSTER SLOTS or server crashed"
+        }
     }
 }
 

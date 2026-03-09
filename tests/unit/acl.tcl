@@ -179,7 +179,7 @@ start_server {tags {"acl external:skip"}} {
         set curruser "hpuser"
         foreach user [lshuffle $users] {
             if {[string first $curruser $user] != -1} {
-                assert_equal {user hpuser on nopass sanitize-payload resetchannels &foo +@all} $user
+                assert_equal {user hpuser on nopass sanitize-payload resetchannels &foo alldbs +@all} $user
             }
         }
 
@@ -737,6 +737,27 @@ start_server {tags {"acl external:skip"}} {
         assert {[dict get $entry object] eq {somechannelnotallowed}}
     }
 
+    test {ACL LOG is able to log database access violations} {
+        r ACL LOG RESET
+        r ACL SETUSER dbuser on nopass db=0 +@all ~*
+        r AUTH dbuser password
+        
+        catch {r SELECT 1}
+        catch {r SWAPDB 0 2}
+        catch {r FLUSHALL}
+        
+        set log [r ACL LOG]
+        set entry [lindex $log 0]
+        assert {[dict get $entry reason] eq {database}}
+        assert {[dict get $entry object] eq {flushall}}
+        set entry [lindex $log 1]
+        assert {[dict get $entry reason] eq {database}}
+        assert {[dict get $entry object] eq {2}}
+        set entry [lindex $log 2]
+        assert {[dict get $entry reason] eq {database}}
+        assert {[dict get $entry object] eq {1}}
+    }
+
     test {ACL LOG RESET is able to flush the entries in the log} {
         r ACL LOG RESET
         assert {[llength [r ACL LOG]] == 0}
@@ -1113,6 +1134,62 @@ start_server [list overrides [list "dir" $server_path "acl-pubsub-default" "allc
         r ACL deluser harry
         set e
     } {*NOPERM*channel*}
+
+    test {Validate a user can remove their own channel permissions} {
+        reconnect
+        r ACL SETUSER removed_channels on nopass +@all &test
+        
+        # Create a RESP3 client will attempt to close itself by removing it's channel permissions
+        set resp3 [valkey_client]
+        $resp3 HELLO 3
+        $resp3 AUTH removed_channels blank
+        $resp3 SUBSCRIBE test
+        $resp3 ACL SETUSER removed_channels resetchannels
+        $resp3 close
+    }
+
+    test {ACL LOAD does not crash server if current user is removed from ACL file} {
+        # Setup
+        r ACL setuser removed-user on >password +@all ~* &*
+        r ACL save
+        
+        set rd [valkey_deferring_client]
+        $rd AUTH removed-user password
+        assert_equal [$rd read] "OK"
+        
+        # Remove user from ACL file
+        set dir [lindex [r CONFIG GET dir] 1]
+        set aclfile [lindex [r CONFIG GET aclfile] 1]
+        set aclpath [file join $dir $aclfile]
+        
+        set fd [open $aclpath r]
+        set lines [split [read $fd] "\n"]
+        close $fd
+        
+        set filtered_lines [list]
+        foreach line $lines {
+            if {![string match "*removed-user*" $line]} {
+                lappend filtered_lines $line
+            }
+        }
+        
+        set fd [open $aclpath w]
+        puts $fd [join $filtered_lines "\n"]
+        close $fd
+        
+        # Execute ACL LOAD as the removed user, should return OK
+        $rd ACL LOAD
+        assert_equal [$rd read] "OK"
+        
+        # Client should be disconnected after the command completes
+        $rd PING
+        catch {$rd read} err
+        assert_match "*I/O error*" $err
+        $rd close
+        
+        # Verify server is still running
+        assert_equal [r PING] "PONG"
+    }
 }
 
 set server_path [tmpdir "resetchannels.acl"]
@@ -1227,10 +1304,10 @@ start_server [list overrides [list "dir" $server_path "aclfile" "user.acl"] tags
     }
     
     test {Test loading duplicate users in config on startup} {
-        catch {exec src/valkey-server --user foo --user foo} err
+        catch {exec $::VALKEY_SERVER_BIN --user foo --user foo} err
         assert_match {*Duplicate user*} $err
 
-        catch {exec src/valkey-server --user default --user default} err
+        catch {exec $::VALKEY_SERVER_BIN --user default --user default} err
         assert_match {*Duplicate user*} $err
     } {} {external:skip}
 }
@@ -1244,3 +1321,103 @@ start_server {overrides {user "default on nopass ~* +@all -flushdb"} tags {acl e
     }
 }
 
+tags {acl external:skip} {
+    set renames [list rename-command "PING RainWasHere" \
+                      rename-command "RainWasHere VPING" \
+                      rename-command "INCR VINCR" \
+                      rename-command "SET VSET" \
+                      rename-command "SADD VSADD" \
+                      rename-command "HGET VHGET" \
+                      rename-command "HSET VHSET" \
+                      rename-command "CONFIG VCONFIG" ]
+    start_server [list config_lines $renames ] {
+        test {ACL still denies individual renamed commands} {
+            r ACL setuser newuser on nopass ~* +acl -ping +incr
+            r AUTH newuser anypass
+            r VINCR mycounter ; # Should not raise an error
+            assert_error {*NOPERM*ping*} {r vping}
+        }
+
+        test {ACL command classes aren't affected by command renaming} {
+            r ACL setuser newuser -@all +@set +acl
+            r VSADD myset a b c; # Should not raise an error
+            r ACL setuser newuser +@all -@string
+            r VSADD myset a b c; # Again should not raise an error
+            # String commands instead should raise an error
+            assert_error {*NOPERM*set*} {r vset foo bar}
+            r ACL setuser newuser allcommands; # Undo commands ACL
+        }
+
+        test {ACL GETUSER provides correct results when commands renamed} {
+            r ACL SETUSER adv-test
+            r ACL SETUSER adv-test +@all -@hash -@slow +hget
+            assert_equal "+@all -@hash -@slow +hget" [dict get [r ACL getuser adv-test] commands]
+
+            # Categories are re-ordered if re-added
+            r ACL SETUSER adv-test -@hash
+            assert_equal "+@all -@slow +hget -@hash" [dict get [r ACL getuser adv-test] commands]
+
+            # Inverting categories removes existing categories
+            r ACL SETUSER adv-test +@hash
+            assert_equal "+@all -@slow +hget +@hash" [dict get [r ACL getuser adv-test] commands]
+
+            # Make sure categories are case insensitive
+            r ACL SETUSER adv-test -@all +@HASH +@hash +@HaSh
+            assert_equal "-@all +@hash" [dict get [r ACL getuser adv-test] commands]
+
+            # Make sure commands are case insensitive
+            r ACL SETUSER adv-test -@all +HGET +hget +hGeT
+            assert_equal "-@all +hget" [dict get [r ACL getuser adv-test] commands]
+
+            # Arbitrary category additions and removals are handled
+            r ACL SETUSER adv-test -@all +@hash +@slow +@set +@set +@slow +@hash
+            assert_equal "-@all +@set +@slow +@hash" [dict get [r ACL getuser adv-test] commands]
+
+            # Arbitrary command additions and removals are handled
+            r ACL SETUSER adv-test -@all +hget -hset +hset -hget
+            assert_equal "-@all +hset -hget" [dict get [r ACL getuser adv-test] commands]
+
+            # Arbitrary subcommands are compacted
+            r ACL SETUSER adv-test -@all +client|list +client|list +config|get +config +acl|list -acl
+            assert_equal "-@all +client|list +config -acl" [dict get [r ACL getuser adv-test] commands]
+        }
+    }
+}
+
+set server_path [tmpdir "server.acl"]
+exec cp -f tests/assets/user.acl $server_path
+start_server [list overrides [list "dir" $server_path "aclfile" "user.acl"] tags {"repl external:skip"}] {
+    set primary [srv 0 client]
+    set primary_host [srv 0 host]
+    set primary_port [srv 0 port]
+
+    test "Test ACL LOAD works on primary" {
+        exec cp -f tests/assets/user.acl $server_path
+        $primary ACL setuser harry on nopass resetchannels &test +@all ~*
+        $primary ACL save
+        $primary ACL load
+        $primary AUTH harry anything
+    }
+
+    start_server [list overrides [list "dir" $server_path "aclfile" "user.acl"]] {
+        set replica [srv 0 client]
+        $replica replicaof $primary_host $primary_port
+
+        test "Test ACL LOAD works on replica" {
+            # wait for replication to be in sync
+            wait_for_condition 50 100 {
+                [lindex [$replica role] 0] eq {slave} &&
+                [string match {*master_link_status:up*} [$replica info replication]]
+            } else {
+                fail "Can't turn the instance into a replica"
+            }
+
+            # Check ACL LOAD works as expected
+            exec cp -f tests/assets/user.acl $server_path
+            $replica ACL setuser joe on nopass resetchannels &test +@all ~*
+            $replica ACL save
+            $replica ACL load
+            $replica AUTH joe anything
+        }
+    }
+}

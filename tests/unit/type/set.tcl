@@ -1169,7 +1169,7 @@ foreach type {single multiple single_multiple} {
 }
 
 run_solo {set-large-memory} {
-start_server [list overrides [list save ""] ] {
+start_server [list overrides [list save ""] tags {"large-memory"}] {
 
 # test if the server supports such large configs (avoid 32 bit builds)
 catch {
@@ -1200,7 +1200,7 @@ if {[lindex [r config get proto-max-bulk-len] 1] == 10000000000} {
         r write "*3\r\n\$4\r\nSREM\r\n\$5\r\nmyset\r\n"
         assert_equal 1 [write_big_bulk $str_length "bbb"]
         assert_equal [read_big_bulk {r spop myset} yes "aaa"] $str_length
-    } {} {large-memory}
+    }
 
     # restore defaults
     r config set proto-max-bulk-len 536870912

@@ -1,0 +1,168 @@
+name: Other targets
+
+on: [push, pull_request]
+
+jobs:
+  almalinux8:
+    name: AlmaLinux 8
+    runs-on: ubuntu-latest
+    container: almalinux:8
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Install dependencies
+        run: |
+          dnf -y install epel-release
+          dnf -y install gcc make cmake3 openssl openssl-devel libevent-devel procps-ng valkey
+
+      - name: Build using cmake
+        env:
+          EXTRA_CMAKE_OPTS: -DENABLE_EXAMPLES:BOOL=ON -DENABLE_TLS:BOOL=ON
+        run: mkdir build && cd build && cmake3 .. && make
+
+      - name: Build using Makefile
+        run: USE_TLS=1 TEST_ASYNC=1 make
+
+      - name: Run tests
+        working-directory: tests
+        env:
+          SKIPS_AS_FAILS: 1
+          TEST_TLS: 1
+        run: ./test.sh
+
+  centos8:
+    name: RockyLinux 8
+    runs-on: ubuntu-latest
+    container: rockylinux:8
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Install dependencies
+        run: |
+          dnf -y upgrade --refresh
+          dnf -y install https://rpms.remirepo.net/enterprise/remi-release-8.rpm
+          dnf -y group install "Development Tools"
+          dnf -y install openssl-devel cmake libevent-devel valkey
+      - name: Build using CMake
+        env:
+          EXTRA_CMAKE_OPTS: -DENABLE_EXAMPLES:BOOL=ON -DENABLE_TLS:BOOL=ON
+        run: |
+          mkdir build && cd build && cmake .. && make
+          cpack -G RPM
+      - name: Build using Makefile
+        run: USE_TLS=1 TEST_ASYNC=1 make
+      - name: Run tests
+        working-directory: tests
+        env:
+          SKIPS_AS_FAILS: 1
+          TEST_TLS: 1
+        run: ./test.sh
+
+  freebsd:
+    runs-on: ubuntu-latest
+    name:  FreeBSD
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Build in FreeBSD
+        uses: vmactions/freebsd-vm@c9f815bc7aa0d34c9fdd0619b034a32d6ca7b57e # v1.4.2
+        with:
+          prepare: pkg install -y gmake cmake
+          run: |
+            gmake
+            mkdir build && cd build && cmake .. && gmake
+
+  solaris:
+    runs-on: ubuntu-latest
+    name:  Solaris
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Build on Solaris
+        uses: vmactions/solaris-vm@69d382b4a775b25ea5955e6c1730e9d05047ca0d # v1.3.1
+        with:
+          prepare: pkgutil -y -i gmake gcc5core openssl_utils
+          run: USE_TLS=1 gmake
+
+  solaris-developer-studio:
+     name: Oracle DeveloperStudio
+     runs-on: ubuntu-24.04
+     # Secrets containing certificates are not available in forks,
+     # or for PRs created by dependabot or externally.
+     if: |
+       github.repository == 'valkey-io/libvalkey' &&
+       github.actor != 'dependabot[bot]' &&
+       (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository)
+     env:
+       PKG_ORACLE_CERT: ${{ secrets.PKG_ORACLE_CERT }}
+       PKG_ORACLE_KEY: ${{ secrets.PKG_ORACLE_KEY }}
+
+     steps:
+       - name: Checkout
+         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+       - name: Transfer Oracle Studio certificates
+         run: |
+           set -e
+           printf '%s\n' "$PKG_ORACLE_CERT" \
+             > pkg.oracle.com.certificate.pem
+           printf '%s\n' "$PKG_ORACLE_KEY" \
+             > pkg.oracle.com.key.pem
+
+       - name: Build on Solaris
+         uses: vmactions/solaris-vm@69d382b4a775b25ea5955e6c1730e9d05047ca0d # v1.3.1
+         with:
+           usesh: true
+           prepare: |
+             set -e
+
+             cp "$GITHUB_WORKSPACE/pkg.oracle.com.key.pem" \
+               /root/pkg.oracle.com.key.pem
+             cp "$GITHUB_WORKSPACE/pkg.oracle.com.certificate.pem" \
+               /root/pkg.oracle.com.certificate.pem
+
+             sudo pkg set-publisher \
+               -k /root/pkg.oracle.com.key.pem \
+               -c /root/pkg.oracle.com.certificate.pem \
+               -G "*" \
+               -g https://pkg.oracle.com/solarisstudio/release \
+               solarisstudio
+
+             sudo pkg install --accept developerstudio-126/cc
+
+           run: |
+             set -e
+             PATH=/opt/developerstudio12.6/bin:"$PATH"
+             export PATH
+             gmake USE_THREADS=1 USE_TLS=1 -j"$(psrinfo -p)"
+
+  build-cross:
+    name: Cross-compile ${{ matrix.config.target }}
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        config:
+          - {target: arm,      host: arm-linux-gnueabi,       qemu: arm,      gccver: 12 }
+          - {target: armhf,    host: arm-linux-gnueabihf,     qemu: arm,      gccver: 12 }
+          - {target: aarch64,  host: aarch64-linux-gnu,       qemu: aarch64,  gccver: 12 }
+          - {target: riscv64,  host: riscv64-linux-gnu,       qemu: riscv64,  gccver: 12 }
+          - {target: ppc,      host: powerpc-linux-gnu,       qemu: ppc,      gccver: 12 }
+          - {target: ppc64,    host: powerpc64-linux-gnu,     qemu: ppc64,    gccver: 12 }
+          - {target: ppc64le,  host: powerpc64le-linux-gnu,   qemu: ppc64le,  gccver: 12 }
+          - {target: s390x,    host: s390x-linux-gnu,         qemu: s390x,    gccver: 12 }
+          - {target: mips,     host: mips-linux-gnu,          qemu: mips,     gccver: 10 }
+          - {target: mips64,   host: mips64-linux-gnuabi64,   qemu: mips64,   gccver: 10 }
+          - {target: mipsel,   host: mipsel-linux-gnu,        qemu: mipsel,   gccver: 10 }
+          - {target: mips64el, host: mips64el-linux-gnuabi64, qemu: mips64el, gccver: 10 }
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Prepare
+        uses: awalsh128/cache-apt-pkgs-action@acb598e5ddbc6f68a970c5da0688d2f3a9f04d05 # v1.6.0
+        with:
+          packages: gcc-${{ matrix.config.gccver }}-${{ matrix.config.host }}
+          version: ${{ matrix.config.target }}-1.0
+      - name: Build
+        env:
+          CC: ${{ matrix.config.host }}-gcc-${{ matrix.config.gccver }}
+          AR: ${{ matrix.config.host }}-ar
+        run: |
+          make

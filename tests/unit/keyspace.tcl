@@ -528,7 +528,7 @@ foreach {type large} [array get largevalue] {
        assert_error "ERR invalid first DB index*" {r swapdb a 55}
        assert_error "ERR invalid first DB index*" {r swapdb a b}
        assert_match "OK" [r swapdb 0 0]
-    } {} {singledb:skip}
+    } {} {singledb:skip cluster:skip}
 
     test {Coverage: SWAPDB and FLUSHDB} {
        # set a key in each db and swapdb one of 2 with different db
@@ -550,7 +550,7 @@ foreach {type large} [array get largevalue] {
        assert_no_match "*db0:keys=*" [r info keyspace]
        assert_no_match "*db2:keys=*" [r info keyspace]
        r flushall
-    } {OK} {singledb:skip}
+    } {OK} {singledb:skip cluster:skip}
 
     test {Regression for pattern matching very long nested loops} {
         r flushdb

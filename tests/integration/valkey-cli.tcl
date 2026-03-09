@@ -6,7 +6,7 @@ if {$::singledb} {
     set ::dbnum 9
 }
 
-start_server {tags {"cli"}} {
+start_server {tags {"cli logreqres:skip"}} {
     proc open_cli {{opts ""} {infile ""}} {
         if { $opts == "" } {
             set opts "-n $::dbnum"
@@ -184,12 +184,7 @@ start_server {tags {"cli"}} {
         assert_equal "\"bar\"" [r get key]
         assert_equal "OK" [run_command $fd "set key \"\tbar\t\""]
         assert_equal "\tbar\t" [r get key]
-
-        # invalid quotation
-        assert_equal "Invalid argument(s)" [run_command $fd "get \"\"key"]
-        assert_equal "Invalid argument(s)" [run_command $fd "get \"key\"x"]
-
-        # quotes after the argument are weird, but should be allowed
+        assert_equal "\"\\tbar\\t\"" [run_command $fd "get \"\"k'e'\"y\""]
         assert_equal "OK" [run_command $fd "set key\"\" bar"]
         assert_equal "bar" [r get key]
     }
@@ -357,6 +352,12 @@ start_server {tags {"cli"}} {
         r rpush list foo
         r rpush list bar
         assert_equal "foo\nbar" [run_cli lrange list 0 -1]
+    }
+
+    test_nontty_cli "--eval should not crash valkey-cli" {
+        set scriptfile [write_tmpfile "return { 1 }"]
+        assert_equal "1" [run_cli --eval $scriptfile]
+        file delete $scriptfile
     }
 
 if {!$::tls} { ;# fake_redis_node doesn't support TLS
@@ -833,6 +834,31 @@ if {!$::tls} { ;# fake_redis_node doesn't support TLS
         close_cli $fd
     }
 
+    test "valkey-cli make sure selected db survives connection drops" {    
+        set fd [open_cli]
+                
+        # Select the database        
+        assert_equal "OK" [run_command $fd "select $::dbnum"]
+
+        # Kill all normal clients, to disconnect valkey-cli client
+        r client kill type normal
+        after 10
+
+        # Trigger reconnect
+        write_cli $fd "ping"
+
+        assert_equal "OK" [run_command $fd "set x 1"]        
+        assert_equal "OK" [r select $::dbnum]        
+        assert_equal "1" [r get x]
+        
+        set client_info [run_command $fd "client info"]
+
+        regexp {db=(\d+)} $client_info _ actual_db        
+
+        # Validate that the selected DB matches the reported DB
+        assert_equal $::dbnum $actual_db
+    }
+
     test "Valid Connection Scheme: redis://" {
         set cmdline [valkeycliuri "redis://" [srv host] [srv port]]
         assert_equal {PONG} [exec {*}$cmdline PING]
@@ -853,5 +879,20 @@ if {!$::tls} { ;# fake_redis_node doesn't support TLS
             set cmdline [valkeycliuri "valkeys://" [srv host] [srv port]]
             assert_equal {PONG} [exec {*}$cmdline PING]
         }
+    }
+
+    test "valkey-cli command table hint will not leak memory when COMMAND fails due to auth" {
+        # Enable auth of server.
+        set fd [open_cli]
+        assert_equal "OK" [run_command $fd "CONFIG SET requirepass 12345"]
+
+        # Using another client to send a command (non-AUTH command), then closing the client.
+        set fd2 [open_cli]
+        assert_match "NOAUTH*" [run_command $fd2 "PING"]
+        close_cli $fd2
+
+        # Disable auth of server.
+        assert_equal "OK" [run_command $fd "CONFIG SET requirepass \"\""]
+        close_cli $fd
     }
 }

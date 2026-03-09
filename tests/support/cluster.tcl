@@ -9,7 +9,6 @@
 # $c get foo
 # $c close
 
-package require Tcl 8.5
 package provide valkey_cluster 0.1
 
 namespace eval valkey_cluster {}
@@ -34,7 +33,7 @@ set ::valkey_cluster::plain_commands {
     hgetall hexists hscan incrby decrby incrbyfloat getset move
     expire expireat pexpire pexpireat type ttl pttl persist restore
     dump bitcount bitpos pfadd pfcount cluster ssubscribe spublish
-    sunsubscribe
+    sunsubscribe clusterscan
 }
 
 # Create a cluster client. The nodes are given as a list of host:port. The TLS
@@ -364,4 +363,10 @@ proc ::valkey_cluster::get_slot_from_keys {keys} {
         }
     }
     return $slot
+}
+
+# Check if the server responds with "PONG"
+proc check_server_response {server_id} {
+    # Send a PING command and check if the response is "PONG"
+    return [expr {[catch {R $server_id PING} result] == 0 && $result eq "PONG"}]
 }

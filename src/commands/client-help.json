@@ -6,14 +6,15 @@
         "since": "5.0.0",
         "arity": 2,
         "container": "CLIENT",
-        "function": "clientCommand",
+        "function": "clientHelpCommand",
         "command_flags": [
             "LOADING",
             "STALE",
             "SENTINEL"
         ],
         "acl_categories": [
-            "CONNECTION"
+            "CONNECTION",
+            "SLOW"
         ],
         "reply_schema": {
             "type": "array",

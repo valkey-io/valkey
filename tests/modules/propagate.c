@@ -249,8 +249,8 @@ int propagateTestSimpleCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, 
     VALKEYMODULE_NOT_USED(argc);
 
     /* Replicate two commands to test MULTI/EXEC wrapping. */
-    ValkeyModule_Replicate(ctx,"INCR","c","counter-1");
-    ValkeyModule_Replicate(ctx,"INCR","c","counter-2");
+    ValkeyModule_Replicate(ctx, "INCR", "c", "counter-1");
+    ValkeyModule_Replicate(ctx, "INCR", "c", "counter-2");
     ValkeyModule_ReplyWithSimpleString(ctx,"OK");
     return VALKEYMODULE_OK;
 }
@@ -265,8 +265,8 @@ int propagateTestMixedCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, i
     reply = ValkeyModule_Call(ctx, "INCR", "c!", "using-call");
     ValkeyModule_FreeCallReply(reply);
 
-    ValkeyModule_Replicate(ctx,"INCR","c","counter-1");
-    ValkeyModule_Replicate(ctx,"INCR","c","counter-2");
+    ValkeyModule_Replicate(ctx, "INCR", "c", "counter-1");
+    ValkeyModule_Replicate(ctx, "INCR", "c", "counter-2");
 
     reply = ValkeyModule_Call(ctx, "INCR", "c!", "after-call");
     ValkeyModule_FreeCallReply(reply);
@@ -310,11 +310,26 @@ int propagateTestNestedCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, 
     return VALKEYMODULE_OK;
 }
 
+/* Counter to track "propagate-test.incr" commands which were obeyed (due to being replicated or processed from AOF). */
+static long long obeyed_cmds = 0;
+
+/* Handles the "propagate-test.obeyed" command to return the `obeyed_cmds` count. */
+int propagateTestObeyed(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    VALKEYMODULE_NOT_USED(argv);
+    VALKEYMODULE_NOT_USED(argc);
+    ValkeyModule_ReplyWithLongLong(ctx, obeyed_cmds);
+    return VALKEYMODULE_OK;
+}
+
 int propagateTestIncr(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc)
 {
     VALKEYMODULE_NOT_USED(argc);
     ValkeyModuleCallReply *reply;
 
+    /* Track the number of commands which are "obeyed". */
+    if (ValkeyModule_MustObeyClient(ctx)) {
+        obeyed_cmds += 1;
+    }
     /* This test propagates the module command, not the INCR it executes. */
     reply = ValkeyModule_Call(ctx, "INCR", "s", argv[1]);
     ValkeyModule_ReplyWithCallReply(ctx,reply);
@@ -331,6 +346,9 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
             == VALKEYMODULE_ERR) return VALKEYMODULE_ERR;
 
     detached_ctx = ValkeyModule_GetDetachedThreadSafeContext(ctx);
+
+    /* This option tests skip command validation for ValkeyModule_Replicate */
+    ValkeyModule_SetModuleOptions(ctx, VALKEYMODULE_OPTIONS_SKIP_COMMAND_VALIDATION);
 
     if (ValkeyModule_SubscribeToKeyspaceEvents(ctx, VALKEYMODULE_NOTIFY_ALL, KeySpace_NotificationGeneric) == VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
@@ -388,6 +406,11 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
     if (ValkeyModule_CreateCommand(ctx,"propagate-test.incr",
                 propagateTestIncr,
                 "write",1,1,1) == VALKEYMODULE_ERR)
+            return VALKEYMODULE_ERR;
+
+    if (ValkeyModule_CreateCommand(ctx,"propagate-test.obeyed",
+                propagateTestObeyed,
+                "",1,1,1) == VALKEYMODULE_ERR)
             return VALKEYMODULE_ERR;
 
     return VALKEYMODULE_OK;

@@ -703,6 +703,9 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
         return VALKEYMODULE_ERR;
     }
 
+    /* This option tests skip command validation for ValkeyModule_EmitAOF */
+    ValkeyModule_SetModuleOptions(ctx, VALKEYMODULE_OPTIONS_SKIP_COMMAND_VALIDATION);
+
     if (ValkeyModule_CreateCommand(ctx, "mem.alloc", MemAlloc_RedisCommand, "write deny-oom", 1, 1, 1) == VALKEYMODULE_ERR) {
         return VALKEYMODULE_ERR;
     }
@@ -734,6 +737,24 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
 
     ValkeyModule_SubscribeToServerEvent(ctx, ValkeyModuleEvent_FlushDB, flushdbCallback);
     ValkeyModule_SubscribeToServerEvent(ctx, ValkeyModuleEvent_SwapDB, swapDbCallback);
-  
+
+    return VALKEYMODULE_OK;
+}
+
+int ValkeyModule_OnUnload(ValkeyModuleCtx *ctx) {
+    VALKEYMODULE_NOT_USED(ctx);
+
+    for(int i = 0; i < MAX_DB; i++){
+        ValkeyModuleString *key;
+        void *tdata;
+        ValkeyModuleDictIter *iter = ValkeyModule_DictIteratorStartC(mem_pool[i], "^", NULL, 0);
+        while((key = ValkeyModule_DictNext(ctx, iter, &tdata)) != NULL) {
+            MemBlockFree((struct MemBlock *)tdata);
+            ValkeyModule_FreeString(ctx, key);
+        }
+        ValkeyModule_DictIteratorStop(iter);
+        ValkeyModule_FreeDict(NULL, mem_pool[i]);
+    }
+
     return VALKEYMODULE_OK;
 }

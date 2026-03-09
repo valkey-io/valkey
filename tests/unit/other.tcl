@@ -11,6 +11,7 @@ start_server {tags {"other"}} {
         assert_match "*MEMORY <subcommand> *" [r MEMORY HELP]
         assert_match "*PUBSUB <subcommand> *" [r PUBSUB HELP]
         assert_match "*SLOWLOG <subcommand> *" [r SLOWLOG HELP]
+        assert_match "*COMMANDLOG <subcommand> *" [r COMMANDLOG HELP]
         assert_match "*CLIENT <subcommand> *" [r CLIENT HELP]
         assert_match "*COMMAND <subcommand> *" [r COMMAND HELP]
         assert_match "*CONFIG <subcommand> *" [r CONFIG HELP]
@@ -28,6 +29,10 @@ start_server {tags {"other"}} {
         if {[string match {*jemalloc*} [s mem_allocator]]} {
             assert_equal {OK} [r memory purge]
         }
+    }
+
+    test {Coverage: ECHO} {
+        assert_equal bang [r ECHO bang]
     }
 
     test {SAVE - make sure there are all the types as values} {
@@ -211,7 +216,7 @@ start_server {tags {"other"}} {
             } else {
                 set fd2 [socket [srv host] [srv port]]
             }
-            fconfigure $fd2 -encoding binary -translation binary
+            fconfigure $fd2 -translation binary
             if {!$::singledb} {
                 puts -nonewline $fd2 "SELECT 9\r\n"
                 flush $fd2
@@ -359,19 +364,19 @@ start_server {tags {"other"}} {
         # effect in 9.x and be deleted in 10.0.
         set hello [r hello 3]
         set version [dict get $hello version]
-        if {[string match "10.*" $version]} {
+        if {[string match "11.*" $version]} {
             # Check that the config doesn't exist anymore.
             assert_error "ERR Unknown*" {r config set extended-redis-compatibility yes}
             error "We shall also delete this test case"
-        } elseif {[string match "9.*" $version]} {
-            # This config is scheduled for removal. In 9.x it should still
+        } elseif {[string match "10.*" $version]} {
+            # This config is scheduled for removal. In 10.x it should still
             # exists but have no effect.
             r config set extended-redis-compatibility yes
             set hello [r hello 3]
             assert_equal valkey [dict get $hello server]
             assert_equal $version [dict get $hello version]
             r config set extended-redis-compatibility no
-        } elseif {[string match "8.*" $version] || ($version eq "255.255.255")} {
+        } elseif {[string match "8.*" $version] || [string match "9.*" $version] || ($version eq "255.255.255")} {
             # In 8.x, the config shall work and affect HELLO server and version.
             r config set extended-redis-compatibility yes
             set hello [r hello 3]
@@ -380,6 +385,14 @@ start_server {tags {"other"}} {
             set info [r info server]
             assert_match "*redis_mode:*" $info
             assert_no_match "*server_mode:*" $info
+            set lolwut_output [r lolwut version 5]
+            assert_match {*Redis ver.*} $lolwut_output
+            set lolwut_output [r lolwut version 6]
+            assert_match {*Redis ver.*} $lolwut_output
+            set lolwut_output [r lolwut version 9]
+            assert_match {*Redis ver.*} $lolwut_output
+            set lolwut_output [r lolwut]
+            assert_match {*Redis ver.*} $lolwut_output
             r config set extended-redis-compatibility no
             set hello [r hello 3]
             assert_equal "valkey" [dict get $hello server]
@@ -387,6 +400,14 @@ start_server {tags {"other"}} {
             set info [r info server]
             assert_no_match "*redis_mode:*" $info
             assert_match "*server_mode:*" $info
+            set lolwut_output [r lolwut]
+            assert_match {*Valkey ver.*} $lolwut_output
+            set lolwut_output [r lolwut version 5]
+            assert_match {*Valkey ver.*} $lolwut_output
+            set lolwut_output [r lolwut version 6]
+            assert_match {*Valkey ver.*} $lolwut_output
+            set lolwut_output [r lolwut version 9]
+            assert_match {*Valkey ver.*} $lolwut_output
         }
     }
 }
@@ -450,7 +471,7 @@ start_server {tags {"other external:skip"}} {
 
             assert_equal "TEST" [lindex $cmdline 0]
             assert_match "*/valkey-server" [lindex $cmdline 1]
-            
+
             if {$::tls} {
                 set expect_port [srv 0 pport]
                 set expect_tls_port [srv 0 port]
@@ -475,7 +496,7 @@ start_server {tags {"other external:skip"}} {
 }
 
 start_cluster 1 0 {tags {"other external:skip cluster slow"}} {
-    r config set dynamic-hz no hz 500
+    r config set hz 500
     test "Server can trigger resizing" {
         r flushall
         # hashslot(foo) is 12182
@@ -534,6 +555,11 @@ start_cluster 1 0 {tags {"other external:skip cluster slow"}} {
             fail "hash tables weren't resize."
         }
     } {} {needs:debug}
+
+    test "CLUSTER FORGET with invalid node ID" {
+         catch {r cluster forget 1} err
+         set _ $err
+    } {*ERR Unknown node*}
 }
 
 start_server {tags {"other external:skip"}} {
@@ -553,7 +579,19 @@ start_server {tags {"other external:skip"}} {
             [dict get [r memory stats] db.$dbnum overhead.hashtable.main] < 400
         } else {
             fail "dict did not resize in time"
-        }   
+        }
+    }
+}
+
+start_server {tags {"other external:skip"}} {
+    test "test io-threads are runtime modifiable" {
+        # Randomly set the number of threads between 1 and 5
+        for {set i 0} {$i < 100} {incr i} {
+            set random_num [expr {int(rand() * 5) + 1}]
+            r config set io-threads $random_num
+            set thread_num [lindex [r config get io-threads] 1]
+            assert_equal $random_num $thread_num
+        }
     }
 }
 
@@ -564,7 +602,8 @@ if {$::verbose} {
 set tempFileId [open $tempFileName w]
 set group [dict get [file attributes $tempFileName] -group]
 if {$group != ""} {
-    start_server [list tags {"repl external:skip"} overrides [list unixsocketgroup $group unixsocketperm 744]] {
+    set escaped_group "\"[string map {"\\" "\\\\"} $group]\""
+    start_server [list tags {"repl external:skip"} overrides [list unixsocketgroup $escaped_group unixsocketperm 744]] {
         test {test unixsocket options are set correctly} {
             set socketpath [lindex [r config get unixsocket] 1]
             set attributes [file attributes $socketpath]

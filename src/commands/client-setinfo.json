@@ -8,17 +8,19 @@
         "container": "CLIENT",
         "function": "clientSetinfoCommand",
         "command_flags": [
+            "ALLOW_BUSY",
             "NOSCRIPT",
             "LOADING",
             "STALE",
             "SENTINEL"
         ],
         "command_tips": [
-          "REQUEST_POLICY:ALL_NODES",
-          "RESPONSE_POLICY:ALL_SUCCEEDED"
-        ],        
+            "REQUEST_POLICY:ALL_NODES",
+            "RESPONSE_POLICY:ALL_SUCCEEDED"
+        ],
         "acl_categories": [
-            "CONNECTION"
+            "CONNECTION",
+            "SLOW"
         ],
         "reply_schema": {
             "const": "OK"

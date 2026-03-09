@@ -161,8 +161,8 @@ void lolwut5Command(client *c) {
     /* Generate some computer art and reply. */
     lwCanvas *canvas = lwDrawSchotter(cols, squares_per_row, squares_per_col);
     sds rendered = renderCanvas(canvas);
-    rendered = sdscat(rendered, "\nGeorg Nees - schotter, plotter on paper, 1968. Redis ver. ");
-    rendered = sdscat(rendered, VALKEY_VERSION);
+    rendered = sdscatprintf(rendered, "\nGeorg Nees - schotter, plotter on paper, 1968. %s ver. ", server.extended_redis_compat ? "Redis" : "Valkey");
+    rendered = sdscat(rendered, server.extended_redis_compat ? REDIS_VERSION : VALKEY_VERSION);
     rendered = sdscatlen(rendered, "\n", 1);
     addReplyVerbatim(c, rendered, sdslen(rendered), "txt");
     sdsfree(rendered);

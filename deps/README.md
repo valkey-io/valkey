@@ -2,11 +2,12 @@ This directory contains all Valkey dependencies, except for the libc that
 should be provided by the operating system.
 
 * **Jemalloc** is our memory allocator, used as replacement for libc malloc on Linux by default. It has good performances and excellent fragmentation behavior. This component is upgraded from time to time.
-* **hiredis** is the official C client library for Redis. It is used by redis-cli, redis-benchmark and Redis Sentinel. It is part of the Redis official ecosystem but is developed externally from the Redis repository, so we just upgrade it as needed.
+* **libvalkey** is the official C client library for Valkey. It is used by valkey-cli, valkey-benchmark and Valkey Sentinel. It is managed in a separate project and updated as needed.
 * **linenoise** is a readline replacement. It is developed by the same authors of Valkey but is managed as a separated project and updated as needed.
 * **lua** is Lua 5.1 with minor changes for security and additional libraries.
 * **hdr_histogram** Used for per-command latency tracking histograms.
-* **fast_float** is a replacement for strtod to convert strings to floats efficiently. 
+* **fast_float** is a replacement for strtod to convert strings to floats efficiently.
+* **gtest-parallel** is a script for running googletest tests in parallel.
 
 How to upgrade the above dependencies
 ===
@@ -59,14 +60,15 @@ cd deps/jemalloc
 4. Update jemalloc's version in `deps/Makefile`: search for "`--with-version=<old-version-tag>-0-g0`" and update it accordingly.
 5. Commit the changes (VERSION,configure,Makefile).
 
-Hiredis
+Libvalkey
 ---
 
-Hiredis is used by Sentinel, `valkey-cli` and `valkey-benchmark`. Like Valkey, uses the SDS string library, but not necessarily the same version. In order to avoid conflicts, this version has all SDS identifiers prefixed by `hi`.
+Libvalkey is used by Sentinel, `valkey-cli` and `valkey-benchmark`.
+The library is built without its own version of the sds and dict type and uses the Valkey provided variant instead.
 
-1. `git subtree pull --prefix deps/hiredis https://github.com/redis/hiredis.git <version-tag> --squash`<br>
+1. `git subtree pull --prefix deps/libvalkey https://github.com/valkey-io/libvalkey.git <version-tag> --squash`<br>
 This should hopefully merge the local changes into the new version.
-2. Conflicts will arise (due to our changes) you'll need to resolve them and commit.
+2. Commit the changes.
 
 Linenoise
 ---
@@ -120,3 +122,39 @@ To upgrade the library,
 2. cd fast_float
 3. Invoke "python3 ./script/amalgamate.py --output fast_float.h"
 4. Copy fast_float.h file to "deps/fast_float/".
+
+gtest-parallel
+---
+
+The `deps/gtest-parallel` directory is imported from the upstream
+https://github.com/google/gtest-parallel repository as a subtree snapshot (not a real Git subtree).
+
+Current upstream version:
+- Upstream commit: `cd488bd` (from google/gtest-parallel)
+
+Updating gtest-parallel
+
+Run the following from the repository root.
+
+1. Add the remote and fetch upstream:
+   ```sh
+   git remote add gtest-parallel https://github.com/google/gtest-parallel.git
+   git fetch gtest-parallel master
+   ```
+
+2. Remove any previous import and commit (commit A):
+   ```sh
+   rm -rf deps/gtest-parallel
+   ```
+
+3. Update the subtree from upstream:
+   ```sh
+   git subtree add --prefix=deps/gtest-parallel gtest-parallel master --squash
+   ```
+
+4. Reset back to commit A with proper sign-off:
+   ```sh
+   git reset --soft <commit-A-hash>
+   ```
+
+5. Commit the changes.

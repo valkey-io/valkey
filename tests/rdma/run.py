@@ -27,7 +27,7 @@ def build_program():
     return 0
 
 
-# iterate /sys/class/infiniband, find any usable RDMA device, and return IPv4 address
+# iterate /sys/class/infiniband, find any usable RDMA device, and return IPv4/IPV6 address
 def find_rdma_dev():
     # Ex, /sys/class/infiniband/mlx5_0
     # Ex, /sys/class/infiniband/rxe_eth0
@@ -39,9 +39,12 @@ def find_rdma_dev():
             netdev = ibclass + dev + "/ports/1/gid_attrs/ndevs/0"
             with open(netdev) as fp:
                 addrs = netifaces.ifaddresses(fp.readline().strip("\n"))
-                if netifaces.AF_INET not in addrs:
+                if netifaces.AF_INET in addrs:
+                    ipaddr = addrs[netifaces.AF_INET][0]["addr"]
+                elif netifaces.AF_INET6 in addrs:
+                    ipaddr = addrs[netifaces.AF_INET6][0]["addr"]
+                else:
                     continue
-                ipaddr = addrs[netifaces.AF_INET][0]["addr"]
                 print("Valkey Over RDMA test prepare " + dev + " <" + ipaddr  + "> [OK]")
                 return ipaddr
     except os.error:

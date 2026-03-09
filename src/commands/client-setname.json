@@ -6,19 +6,21 @@
         "since": "2.6.9",
         "arity": 3,
         "container": "CLIENT",
-        "function": "clientCommand",
+        "function": "clientSetNameCommand",
         "command_flags": [
+            "ALLOW_BUSY",
             "NOSCRIPT",
             "LOADING",
             "STALE",
             "SENTINEL"
         ],
         "command_tips": [
-          "REQUEST_POLICY:ALL_NODES",
-          "RESPONSE_POLICY:ALL_SUCCEEDED"
-        ],        
+            "REQUEST_POLICY:ALL_NODES",
+            "RESPONSE_POLICY:ALL_SUCCEEDED"
+        ],
         "acl_categories": [
-            "CONNECTION"
+            "CONNECTION",
+            "SLOW"
         ],
         "arguments": [
             {

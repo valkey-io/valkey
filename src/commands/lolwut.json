@@ -20,6 +20,10 @@
                 "type": "integer",
                 "optional": true
             }
+        ],
+        "acl_categories": [
+            "FAST",
+            "READ"
         ]
     }
 }

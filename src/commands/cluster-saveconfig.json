@@ -14,6 +14,11 @@
         ],
         "reply_schema": {
             "const": "OK"
-        }
+        },
+        "acl_categories": [
+            "ADMIN",
+            "DANGEROUS",
+            "SLOW"
+        ]
     }
 }

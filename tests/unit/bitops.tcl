@@ -631,7 +631,7 @@ start_server {tags {"bitops"}} {
 }
 
 run_solo {bitops-large-memory} {
-start_server {tags {"bitops"}} {
+start_server {tags {"bitops large-memory"}} {
     test "BIT pos larger than UINT_MAX" {
         set bytes [expr (1 << 29) + 1]
         set bitpos [expr (1 << 32)]
@@ -656,7 +656,7 @@ start_server {tags {"bitops"}} {
         }
         r config set proto-max-bulk-len $oldval
         r del mykey
-    } {1} {large-memory}
+    } {1}
 
     test "SETBIT values larger than UINT32_MAX and lzf_compress/lzf_decompress correctly" {
         set bytes [expr (1 << 32) + 1]
@@ -670,6 +670,6 @@ start_server {tags {"bitops"}} {
         assert_equal 1 [r getbit mykey $bitpos]
         r config set proto-max-bulk-len $oldval
         r del mykey
-    } {1} {large-memory needs:debug}
+    } {1} {needs:debug}
 }
 } ;#run_solo

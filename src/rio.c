@@ -58,6 +58,9 @@
 #include "connhelpers.h"
 #include "compression_stream.h"
 
+/* Forward declarations for static functions */
+static size_t rioReplicaCOBWrite(rio *r, const void *buf, size_t len);
+
 /* ------------------------- Buffer I/O implementation ----------------------- */
 
 /* Returns 1 or 0 for success/failure. */
@@ -759,8 +762,144 @@ uint8_t rioCheckType(rio *r) {
         return RIO_TYPE_BUFFER;
     } else if (r->read == rioConnRead) {
         return RIO_TYPE_CONN;
-    } else {
-        /* r->read == rioFdRead */
+    } else if (r->read == rioFdRead) {
         return RIO_TYPE_FD;
+    } else if (r->write == rioReplicaCOBWrite) {
+        return RIO_TYPE_REPLICACOB;
+    } else if (r->read == rioConnsetRead) {
+        return RIO_TYPE_CONNSET;
+    }
+    return 0;
+}
+
+void rioFreeConnectionFromConnset(rio *r, connection *conn_to_free) {
+    for (int i = 0; i < r->io.connset.numconns; i++) {
+        connection *cur = r->io.connset.conns[i];
+        if (cur && cur->fd == conn_to_free->fd) {
+            r->io.connset.conns[i] = r->io.connset.conns[--r->io.connset.numconns];
+            connDecrRefs(conn_to_free);
+            callHandler(conn_to_free, NULL);
+            return;
+        }
     }
 }
+
+/* ------------------- Client Output Buffer implementation ------------------- */
+
+/* Returns the COB utilization for given rdb bytes */
+unsigned long long getCOBSizeForRDBBytes(unsigned long long rdb_bytes) {
+    unsigned long list_item_size = sizeof(listNode);
+    return (((double)rdb_bytes)/RIO_REPLICA_COB_BUF_LEN)*(NET_MAX_WRITES_PER_EVENT + list_item_size);
+}
+
+/* This method is used by rioReplicaCOBWrite only. Don't use it elsewhere */
+static size_t _rioReplicaCOBWrite(rio *r, const void *buf, size_t len) {
+    UNUSED(r);
+
+    int retVal = 0;
+    listNode *ln;
+    listIter li;
+    listRewind(server.replicas, &li);
+    while((ln = listNext(&li))) {
+        client *slave = ln->value;
+        serverAssert(slave->repl_data);
+        if (slave->repl_data->repl_state == REPLICA_STATE_WAIT_BGSAVE_END) {
+            if(!(slave->flag.close_asap)) {
+                addReplyProto(slave, buf, len);
+            }
+            retVal = 1;
+        }
+    }
+    return retVal;
+}
+
+static size_t rioReplicaCOBWrite(rio *r, const void *buf, size_t len) {
+    size_t avail = RIO_REPLICA_COB_BUF_LEN - r->io.replicacob.pos;
+
+    if(avail >= len)  {
+        memcpy(r->io.replicacob.buf + r->io.replicacob.pos, buf, len);
+        r->io.replicacob.pos += len;
+        if(r->io.replicacob.pos == RIO_REPLICA_COB_BUF_LEN) {
+            if(_rioReplicaCOBWrite(r, r->io.replicacob.buf, RIO_REPLICA_COB_BUF_LEN) == 0) return 0;
+            r->io.replicacob.pos = 0;
+        }
+    } else { 
+        memcpy(r->io.replicacob.buf + r->io.replicacob.pos, buf, avail);
+        if(_rioReplicaCOBWrite(r, r->io.replicacob.buf, RIO_REPLICA_COB_BUF_LEN) == 0) return 0;
+        r->io.replicacob.pos = 0;
+        len -= avail;
+        buf = (char*)buf + avail;
+        if(len >= RIO_REPLICA_COB_BUF_LEN) {
+            if(_rioReplicaCOBWrite(r, buf, len) == 0) return 0;
+        } else {
+            memcpy(r->io.replicacob.buf, buf, len);
+            r->io.replicacob.pos += len;
+        }
+    }
+    return 1;
+}
+
+static size_t rioReplicaCOBRead(rio *r, void *buf, size_t len) {
+    UNUSED(r);
+    UNUSED(buf);
+    UNUSED(len);
+    serverAssert(0);
+    return 0;
+}
+
+static off_t rioReplicaCOBTell(rio *r) {
+    UNUSED(r);
+    serverAssert(0);
+    return 0;
+}
+
+static int rioReplicaCOBFlush(rio *r) {
+    int retVal = 0;
+    if(r->io.replicacob.pos) {
+        if(_rioReplicaCOBWrite(r, r->io.replicacob.buf, r->io.replicacob.pos) != 0) {
+            r->io.replicacob.pos = 0; 
+            retVal = 2;
+        }
+    } else {
+        listNode *ln;
+        listIter li;
+        listRewind(server.replicas,&li);
+        while((ln = listNext(&li))) {
+            client *c = listNodeValue(ln);
+            serverAssert(c->repl_data);
+            if(c->repl_data->repl_state == REPLICA_STATE_WAIT_BGSAVE_END) {  
+                retVal = 1;
+                if(c->repl_data->tot_rdb_bytes_sent != r->processed_bytes) {
+                    retVal = 2;
+                    break;
+                }
+            }
+        }
+    }
+    return retVal;
+}
+
+static const rio rioReplicaCOBIO = {
+    rioReplicaCOBRead,
+    rioReplicaCOBWrite,
+    rioReplicaCOBTell,
+    rioReplicaCOBFlush,
+    NULL,
+    0,
+    0,
+    0,
+    0,
+    { { NULL, 0 } }
+};
+
+void rioInitWithReplicaCOB(rio *r) {
+    *r = rioReplicaCOBIO;
+    r->io.replicacob.buf = (char*)zmalloc(sizeof(char) * RIO_REPLICA_COB_BUF_LEN);
+    r->io.replicacob.pos = 0;
+}
+
+void rioFreeReplicaCOB(rio *r) {
+    zfree(r->io.replicacob.buf);
+    r->io.replicacob.buf = NULL;
+}
+

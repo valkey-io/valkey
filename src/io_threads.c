@@ -679,7 +679,7 @@ int trySendWriteToIOThreads(client *c) {
      * ACKs on the same client's query buffer. */
     if (c->slot_migration_job && !clusterSlotMigrationShouldInstallWriteHandler(c)) return C_ERR;
 
-    int is_replica = getClientType(c) == CLIENT_TYPE_REPLICA;
+    int is_replica = getClientType(c) == CLIENT_TYPE_REPLICA && !c->repl_data->using_cob;
     clientReplyBlock *block = NULL;
     if (is_replica) {
         c->io_last_reply_block = listLast(server.repl_buffer_blocks);
@@ -697,6 +697,7 @@ int trySendWriteToIOThreads(client *c) {
         } else {
             c->io_last_bufpos = (size_t)c->bufpos;
         }
+        getClientWritePosition(c, &c->io_last_reply_block, &c->io_last_bufpos);
     }
 
     serverAssert(c->bufpos > 0 || c->io_last_bufpos > 0 || is_replica);

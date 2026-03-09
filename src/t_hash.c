@@ -1821,7 +1821,7 @@ void hscanCommand(client *c) {
 
     if (parseScanCursorOrReply(c, objectGetVal(c->argv[2]), &cursor) == C_ERR) return;
     if ((o = lookupKeyReadOrReply(c, c->argv[1], shared.emptyscan)) == NULL || checkType(c, o, OBJ_HASH)) return;
-    scanGenericCommand(c, o, cursor);
+    scanGenericCommand(c, o, cursor, -1, NULL, NULL);
 }
 
 static void hrandfieldReplyWithListpack(writePreparedClient *wpc, unsigned int count, listpackEntry *fields, listpackEntry *vals) {

@@ -471,6 +471,7 @@ ENGINE_SERVER_OBJ = \
     config.o \
     connection.o \
     crc16.o \
+    crc16_slottable.o \
     crc64.o \
     crccombine.o \
     crcspeed.o \
@@ -591,6 +592,7 @@ ENGINE_BENCHMARK_OBJ = \
     anet.o \
     cli_common.o \
     crc16.o \
+    crc16_slottable.o \
     crc64.o \
     crccombine.o \
     crcspeed.o \

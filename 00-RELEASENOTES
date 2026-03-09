@@ -11,88 +11,66 @@ Upgrade urgency levels:
 | CRITICAL | There is a critical bug affecting MOST USERS. Upgrade ASAP.         |
 | SECURITY | There are security fixes in the release.                            |
 
-Valkey 9.1.0-rc1 - Released Mon Mar 09 00:00:00 2026
+Valkey 9.1.0-rc1 - Released Mon Mar 11 00:00:00 2026
 -------------------------------------
 
 Upgrade urgency LOW: This is the first release candidate of Valkey 9.1.0, with
 new features, performance improvements, and bug fixes.
 
-### New Features
+### New Features and enhanced behavior
 * Database-level access control by @dvkashapov (#2309)
-* Adds HGETDEL support to Valkey by @roshkhatri (#2851)
-* HSETEX: Support NX/XX flags by @hanxizh9910 (#2668)
-* Add prefix-aware ACL permission checks and new module API by @eifrah-aws (#2796)
-* New INFO section for scripting engines by @rjd15372 (#2738)
 * Move Lua scripting engine into a Valkey module by @rjd15372 (#2858)
-* Configurable DB hash seed for SCAN family commands consistency by @sarthakaggarwal97 (#2608)
-* Adding json support for log-format config by @jbergstroem (#1791)
-* Automatic TLS reload by @yang-z-o (#3020)
+* Support cross node consistency for `SCAN` commands through configurable DB hash seed by @sarthakaggarwal97 (#2608)
+* Support automatic TLS reload by @yang-z-o (#3020)
 * Support TLS authentication using SAN URI by @yang-z-o (#3078)
-* Add server side TLS certificate expiry tracking and INFO telemetry by @YiwenZhang12 (#2913)
 * Add option to use libbacktrace for backtraces in crash reports by @rainsupreme (#3034)
+* Prevent invalid TLS certificates from being loaded load by @yang-z-o (#2999)
+* Failing to save the cluster config file will no longer exit the process by @enjoy-binbin (#1032)
 
-### Commands
+### Command and API updates
 * Makes `CLUSTER KEYSLOT` available in standalone mode by @stockholmux (#3040)
-* HSETEX - Always issue keyspace notifications after validation by @ranshid (#3001)
+* Update HSETEX so that it always issue keyspace notifications after validation by @ranshid (#3001)
+* Adds HGETDEL command by @roshkhatri (#2851)
+* Support NX/XX flag in HSETEX command by @hanxizh9910 (#2668)
 
-### Performance/Efficiency
+### Performance and Efficiency improvements
 * Optimize zset memory usage by embedding element in skiplist by @chzhoo (#2508)
 * Remove internal server object pointer overhead in small strings by @rainsupreme (#2516)
 * Optimize skiplist query efficiency by embedding the skiplist header by @chzhoo (#2867)
 * Improve performance during rehashing by @chzhoo (#3073)
 * Optimize SREM/ZREM/HDEL to pause auto shrink when deleting multiple items by @enjoy-binbin (#3144)
 * Abort and swap the tables if ht1 is very full during the hashtable shrink rehashing by @enjoy-binbin (#3175)
-* Track net bytes only if commandlog-request-larger-than != -1 by @dvkashapov (#3086)
-* Enable HW clock by default by @dvkashapov (#3103)
+* Improve performance of copy avoidance when command reply tracking is disabled by @dvkashapov (#3086)
+* Enable hardware clock by default by @dvkashapov (#3103)
+* Improve `COMMAND` performance by caching responses by @ebarskiy (#2839)
+* Add support for asynchronous freeing of keyes on writable replicas by @Scut-Corgis (#2849)
 
-### Cluster and Replication
-* Fail to save the cluster config file will not exit the process by @enjoy-binbin (#1032)
-* Add support for Atomic Slot Migration to CLI by @murphyjacob4 (#2755)
-* Support whole cluster info for INFO command in cluster section by @soloestoy (#2876)
-* Replace info cluster info in a dedicated new section by @ranshid (#2964)
-* Add remaining_repl_size field in CLUSTER GETSLOTMIGRATIONS output by @enjoy-binbin (#3135)
-* Add logging helper function to print node's ip:port when nodename not explicitly set by @zhijun42 (#2777)
-* Dual-channel-replication announces itself at replica-announce-ip if configured by @jdheyburn (#2846)
-* Show replica dual-channel replication buffer memory in INFO MEMORY and MEMORY STATS by @enjoy-binbin (#2924)
-* Add rdb_transmitted to replstateToString so that we can see it in INFO by @enjoy-binbin (#2833)
-
-### Module API
+### Module API changes
 * Add ValkeyModule_ClusterKeySlotC by @bandalgomsu (#2984)
 * Add more client info flags to module API by @martinrvisser (#2868)
-* Block module unload when ACL references module subcommands by @sachinvmurthy (#3160)
+* Add prefix-aware ACL permission checks and new module API by @eifrah-aws (#2796)
 
-### Observability
+### Observability and logging
 * Cumulative metrics for active I/O threads usage by @deepakrn (#2463)
 * Cumulative metric for active main thread usage by @dvkashapov (#2931)
-
-### Bug Fixes
-* Restrict ttl from being negative and avoid crash in import-mode by @cjx-zar (#2944)
-* Avoid memory leak of new argv when hexpire commands target only non-existing fields by @ranshid (#2973)
-* Fix hincrby* update volatile key tracking by @ranshid (#2974)
-* Fix chained replica crash when doing dual channel replication by @enjoy-binbin (#2983)
-* Fix zero length hash creation with HSETEX by @madolson (#2998)
-* Fix HSETEX: replace strcmp with strcasecmp by @frostzt (#3000)
-* Fix hash: Untrack hash with volatile fields when it is overwritten by @frostzt (#3003)
-* Skip slot cache optimization for AOF client to prevent key duplication and data corruption by @AdityaTeltia (#3004)
-* Fix used_memory_dataset underflow due to miscalculated used_memory_overhead by @bpint (#3005)
-* HFE make zero a valid ttl during import mode and data loading by @cjx-zar (#3006)
-* Fix HRANDFIELD to return null response when no field could be found by @ranshid (#3022)
-* Fix HEXPIRE should not delete items when validation rules fail and expiration is in the past by @ranshid (#3048)
-* Fix how hash is handling overriding of expired fields overwrite by @ranshid (#3060)
-* Don't exit the process when locale-collate fails to be set from env during startup by @enjoy-binbin (#3067)
-* Fix use-after-free in generateSyncSlotsEstablishCommand by @twooster (#3283)
+* Support whole cluster info for INFO command in cluster_info section by @soloestoy, @ranshid (#2876, #2964)
+* Add remaining_repl_size field in `CLUSTER GETSLOTMIGRATIONS` output by @enjoy-binbin (#3135)
+* Add logging helper function to print node's ip:port when nodename not explicitly set by @zhijun42 (#2777)
+* Dual-channel-replication announces itself at replica-announce-ip if configured by @jdheyburn (#2846)
+* Show replica dual-channel replication buffer memory in `INFO MEMORY` and `MEMORY STATS` by @enjoy-binbin (#2924)
+* Add `rdb_transmitted` state to replica state in `INFO` INFO by @enjoy-binbin (#2833)
+* New INFO section for scripting engines by @rjd15372 (#2738)
+* Adding json support for log-format config by @jbergstroem (#1791)
+* Add server side TLS certificate expiry tracking and INFO telemetry by @YiwenZhang12 (#2913)
 
 ### Build and Tooling
 * Show RPS histogram in valkey-benchmark by @hanxizh9910 (#2471)
 * Add --warmup and --duration parameters to valkey-benchmark by @rainsupreme (#2581)
 * Lazy loading of RDMA libs in CLI/Benchmark when building as module by @Ada-Church-Closure (#3072)
-* Add cache for COMMAND by @ebarskiy (#2839)
+* Add support for atomic slot migration to valkey-cli by @murphyjacob4 (#2755)
 
-### Other
-* Perform data cleanup during RDB load on successful version/signature validation by @ChiliPaneer (#2600)
+### Bug Fixes
 * Strictly check CRLF when parsing querybuf by @enjoy-binbin (#2872)
-* Fail fast on invalid certificates at TLS config load by @yang-z-o (#2999)
-* Add support for asynchronous release to replicaKeysWithExpire on writable replica by @Scut-Corgis (#2849)
 
 ### Contributors
 * Adam Fowler @adam-fowler

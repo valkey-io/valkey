@@ -3501,12 +3501,9 @@ sds activeDefragSds(sds sdsptr);
 robj *activeDefragStringOb(robj *ob);
 void dismissSds(sds s);
 void dismissMemoryInChild(void);
-<<<<<<< HEAD
+void tlsResetCertInfo(void);
 void trackInstantaneousMetric(int metric, long long current_value, long long current_base, long long factor);
 long long getInstantaneousMetric(int metric);
-=======
-void tlsResetCertInfo(void);
->>>>>>> unstable
 
 #define RESTART_SERVER_NONE 0
 #define RESTART_SERVER_GRACEFULLY (1 << 0)     /* Do proper shutdown. */

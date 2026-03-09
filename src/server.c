@@ -1841,12 +1841,8 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
     }
 
     /* We should handle pending reads clients ASAP after event loop. */
-<<<<<<< HEAD
-    processIOThreadsResponses();
-=======
-    int io_responses = processIOThreadsReadDone();
+    int io_responses = processIOThreadsResponses();
     if (io_responses > 0) server.el_iteration_active = true;
->>>>>>> unstable
 
     /* Handle pending data(typical TLS). (must be done before flushAppendOnlyFile) */
     int conn_pending = connTypeProcessPendingData();
@@ -1946,24 +1942,9 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
 
     /* Try to process more IO reads that are ready to be processed. */
     if (server.aof_fsync != AOF_FSYNC_ALWAYS) {
-<<<<<<< HEAD
-        processIOThreadsResponses();
+        int io_responses_after = processIOThreadsResponses();
+        if (io_responses_after > 0) server.el_iteration_active = true;
     }
-
-=======
-        int io_responses_after = processIOThreadsReadDone();
-        if (io_responses_after > 0) {
-            server.el_iteration_active = true;
-
-            /* Any responses that failed to enqueue to IO threads need to be handled now */
-            handleClientsWithPendingWrites();
-        }
-    }
-
-    int io_writes = processIOThreadsWriteDone();
-    if (io_writes > 0) server.el_iteration_active = true;
-
->>>>>>> unstable
     /* Record cron time in beforeSleep. This does not include the time consumed by AOF writing and IO writing above. */
     monotime cron_start_time_after_write = getMonotonicUs();
 

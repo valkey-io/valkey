@@ -36,13 +36,10 @@ void drainIOThreadsQueue(void);
 void trySendPollJobToIOThreads(void);
 int trySendAcceptToIOThreads(connection *conn);
 int updateIOThreads(const char **err);
-<<<<<<< HEAD
+long long getIOThreadActiveTimeMicroseconds(int id);
 int clientHasPendingIO(struct client *c);
 int processIOThreadsResponses(void);
 int getCurTid(void);
 void sendToMainThread(void *data, int type);
-=======
-long long getIOThreadActiveTimeMicroseconds(int id);
->>>>>>> unstable
 
 #endif /* IO_THREADS_H */

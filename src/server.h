@@ -1157,6 +1157,7 @@ typedef struct ClientFlags {
     uint64_t dirty_cas : 1;                /* Watched keys modified. EXEC will fail. */
     uint64_t close_after_reply : 1;        /* Close after writing entire reply. */
     uint64_t unblocked : 1;                /* This client was unblocked and is stored in server.unblocked_clients */
+    uint64_t blockInuse_blocked : 1;       /* This client is blocked by blockInuse */
     uint64_t script : 1;                   /* This is a non connected client used by Lua */
     uint64_t asking : 1;                   /* Client issued the ASKING command */
     uint64_t close_asap : 1;               /* Close this client ASAP */

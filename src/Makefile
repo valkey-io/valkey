@@ -460,6 +460,7 @@ ENGINE_SERVER_OBJ = \
     bio.o \
     bitops.o \
     blocked.o \
+	blocked_inuse.o \
     call_reply.o \
     childinfo.o \
     cluster.o \

@@ -63,6 +63,7 @@ set(VALKEY_SERVER_SRCS
     ${CMAKE_SOURCE_DIR}/src/notify.c
     ${CMAKE_SOURCE_DIR}/src/setproctitle.c
     ${CMAKE_SOURCE_DIR}/src/blocked.c
+    ${CMAKE_SOURCE_DIR}/src/blocked_inuse.c
     ${CMAKE_SOURCE_DIR}/src/hyperloglog.c
     ${CMAKE_SOURCE_DIR}/src/latency.c
     ${CMAKE_SOURCE_DIR}/src/sparkline.c

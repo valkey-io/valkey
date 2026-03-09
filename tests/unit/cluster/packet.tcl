@@ -72,12 +72,6 @@ proc create_cluster_meet_packet {sender_name sender_port sender_cport {count 0} 
     # CLUSTERMSG_FLAG0_EXT_DATA = (1 << 2) = 4
     append packet [binary format ccc $mflags 0 0]
 
-    # Pad to minimum cluster message length.
-    set packet_len [string length $packet]
-    if {$packet_len < $CLUSTERMSG_MIN_LEN} {
-        append packet [string repeat "\x00" [expr {$CLUSTERMSG_MIN_LEN - $packet_len}]]
-    }
-
     # Update totlen
     set totlen [string length $packet]
     set packet [string replace $packet 4 7 [binary format I $totlen]]

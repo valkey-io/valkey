@@ -140,6 +140,7 @@ bool hashtableShrinkIfNeeded(hashtable *ht);
 bool hashtableRightsizeIfNeeded(hashtable *ht);
 hashtable *hashtableDefragTables(hashtable *ht, void *(*defragfn)(void *));
 void dismissHashtable(hashtable *ht);
+void hashtableSetCanAbortShrink(bool can_abort);
 
 /* Entries */
 bool hashtableFind(hashtable *ht, const void *key, void **found);

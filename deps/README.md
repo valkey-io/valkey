@@ -6,7 +6,8 @@ should be provided by the operating system.
 * **linenoise** is a readline replacement. It is developed by the same authors of Valkey but is managed as a separated project and updated as needed.
 * **lua** is Lua 5.1 with minor changes for security and additional libraries.
 * **hdr_histogram** Used for per-command latency tracking histograms.
-* **fast_float** is a replacement for strtod to convert strings to floats efficiently. 
+* **fast_float** is a replacement for strtod to convert strings to floats efficiently.
+* **gtest-parallel** is a script for running googletest tests in parallel.
 
 How to upgrade the above dependencies
 ===
@@ -121,3 +122,39 @@ To upgrade the library,
 2. cd fast_float
 3. Invoke "python3 ./script/amalgamate.py --output fast_float.h"
 4. Copy fast_float.h file to "deps/fast_float/".
+
+gtest-parallel
+---
+
+The `deps/gtest-parallel` directory is imported from the upstream
+https://github.com/google/gtest-parallel repository as a subtree snapshot (not a real Git subtree).
+
+Current upstream version:
+- Upstream commit: `cd488bd` (from google/gtest-parallel)
+
+Updating gtest-parallel
+
+Run the following from the repository root.
+
+1. Add the remote and fetch upstream:
+   ```sh
+   git remote add gtest-parallel https://github.com/google/gtest-parallel.git
+   git fetch gtest-parallel master
+   ```
+
+2. Remove any previous import and commit (commit A):
+   ```sh
+   rm -rf deps/gtest-parallel
+   ```
+
+3. Update the subtree from upstream:
+   ```sh
+   git subtree add --prefix=deps/gtest-parallel gtest-parallel master --squash
+   ```
+
+4. Reset back to commit A with proper sign-off:
+   ```sh
+   git reset --soft <commit-A-hash>
+   ```
+
+5. Commit the changes.

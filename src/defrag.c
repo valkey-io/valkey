@@ -268,15 +268,18 @@ static void activeDefragZsetNode(void *privdata, void *entry_ref) {
 
     /* find skiplist pointers that need to be updated if we end up moving the
      * skiplist node. */
+    sds ele = zslGetNodeElement(node);
     zskiplistNode *update[ZSKIPLIST_MAXLEVEL];
     zskiplistNode *x = zslGetHeader(zsl);
     for (int i = zslGetHeight(zsl) - 1; i >= 0; i--) {
         /* stop when we've reached the end of this level or the next node comes
-         * after our target in sorted order */
+         * after our target in sorted order. Even though defrag replacements does not impact the skip list order,
+         * when scores are equal, we MUST compare elements lexicographically to maintain correct skip list ordering.
+         * Otherwise we might miss locating the entry. */
         zskiplistNode *next = x->level[i].forward;
         while (next &&
                (next->score < score ||
-                (next->score == score && next != node))) {
+                (next->score == score && sdscmp(zslGetNodeElement(next), ele) < 0))) {
             x = next;
             next = x->level[i].forward;
         }

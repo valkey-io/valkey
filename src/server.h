@@ -40,7 +40,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <stddef.h>
+#ifndef __cplusplus
 #include <stdatomic.h>
+#endif
 #include <string.h>
 #include <time.h>
 #include <limits.h>
@@ -57,7 +59,7 @@
 #include <systemd/sd-daemon.h>
 #endif
 
-#ifndef static_assert
+#if !defined(static_assert) && !defined(__cplusplus)
 #define static_assert _Static_assert
 #endif
 
@@ -112,6 +114,8 @@ typedef struct serverObject robj;
 #include "crc64.h"
 
 struct hdr_histogram;
+struct ValkeyModule;
+
 
 /* helpers */
 #define numElements(x) (sizeof(x) / sizeof((x)[0]))
@@ -550,9 +554,10 @@ typedef enum {
 #define TLS_CLIENT_AUTH_YES 1
 #define TLS_CLIENT_AUTH_OPTIONAL 2
 
-/* TLS Client Certfiicate Authentication */
+/* TLS Client Certificate Authentication */
 #define TLS_CLIENT_FIELD_OFF 0
 #define TLS_CLIENT_FIELD_CN 1
+#define TLS_CLIENT_FIELD_URI 2
 
 /* Sanitize dump payload */
 #define SANITIZE_DUMP_NO 0
@@ -1064,7 +1069,7 @@ typedef struct readyList {
 #define SELECTOR_FLAG_ALLDBS (1 << 4)      /* Allow all databases */
 
 
-typedef struct {
+typedef struct user {
     sds name;         /* The username as an SDS string. */
     uint32_t flags;   /* See USER_FLAG_* */
     list *passwords;  /* A list of SDS valid passwords for this user. */
@@ -1102,8 +1107,9 @@ typedef struct replBacklog {
 
 typedef struct replDataBuf {
     list *blocks; /* List of replDataBufBlock */
-    size_t len;   /* Number of bytes stored in all blocks */
-    size_t peak;
+    size_t mem;   /* Total allocated memory including buffer metadata and list nodes */
+    size_t len;   /* Total replication data bytes pending processing */
+    size_t peak;  /* Peak value of len during buffer lifetime */
 } replDataBuf;
 
 typedef struct {
@@ -1555,6 +1561,7 @@ struct serverMemOverhead {
     size_t total_allocated;
     size_t startup_allocated;
     size_t repl_backlog;
+    size_t replicas_repl_buffer;
     size_t clients_replicas;
     size_t clients_normal;
     size_t cluster_links;
@@ -2824,7 +2831,7 @@ uint64_t crc64(uint64_t crc, const unsigned char *s, uint64_t l);
 void exitFromChild(int retcode);
 long long serverPopcount(void *s, long count);
 int serverSetProcTitle(char *title);
-int validateProcTitleTemplate(const char *template);
+int validateProcTitleTemplate(const char *templ);
 int serverCommunicateSystemd(const char *sd_notify_msg);
 void serverSetCpuAffinity(const char *cpulist);
 void dictVanillaFree(void *val);
@@ -2924,6 +2931,7 @@ void addReplyOrErrorObject(client *c, robj *reply);
 void afterErrorReply(client *c, const char *s, size_t len, int flags);
 void addReplyErrorFormatInternal(client *c, int flags, const char *fmt, va_list ap);
 void addReplyErrorSdsEx(client *c, sds err, int flags);
+void addReplyErrorSdsExSafe(client *c, sds err, int flags);
 void addReplyErrorSds(client *c, sds err);
 void addReplyErrorSdsSafe(client *c, sds err);
 void addReplyError(client *c, const char *err);
@@ -2968,7 +2976,7 @@ int freeClientsInAsyncFreeQueue(void);
 int closeClientOnOutputBufferLimitReached(client *c, int async);
 int getClientType(client *c);
 int getClientTypeByName(char *name);
-char *getClientTypeName(int class);
+char *getClientTypeName(int client_class);
 void flushReplicasOutputBuffers(void);
 void disconnectReplicas(void);
 void evictClients(void);
@@ -3153,7 +3161,7 @@ void objectSetVal(robj *o, void *val);
 void objectUnembedVal(robj *o);
 void *objectGetVal(const robj *o);
 sds objectGetKey(const robj *o);
-long long objectGetExpire(const robj *o);
+mstime_t objectGetExpire(const robj *o);
 uint8_t objectGetLFUFrequency(robj *o);
 uint32_t objectGetLRUIdleSecs(robj *o);
 uint32_t objectGetIdleness(robj *o);
@@ -3278,6 +3286,7 @@ int isMutuallyExclusiveChildType(int type);
 extern rax *Users;
 extern user *DefaultUser;
 void ACLInit(void);
+int ACLModuleHasCommandRules(const struct ValkeyModule *module, sds *rule_out);
 /* Return values for ACLCheckAllPerm(). */
 #define ACL_OK 0                    /* Permission granted */
 #define ACL_DENIED_DB 1             /* Database access denied */
@@ -3402,8 +3411,8 @@ void genericZpopCommand(client *c,
 sds lpGetObject(unsigned char *sptr);
 int zslValueGteMin(double value, zrangespec *spec);
 int zslValueLteMax(double value, zrangespec *spec);
-void zslFreeLexRange(zlexrangespec *spec);
-int zslParseLexRange(robj *min, robj *max, zlexrangespec *spec);
+void zsetFreeLexRange(zlexrangespec *spec);
+int zsetParseLexRange(robj *min, robj *max, zlexrangespec *spec);
 unsigned char *zzlFirstInLexRange(unsigned char *zl, zlexrangespec *range);
 unsigned char *zzlLastInLexRange(unsigned char *zl, zlexrangespec *range);
 zskiplistNode *zslNthInLexRange(zskiplist *zsl, zlexrangespec *range, long n);
@@ -3557,7 +3566,7 @@ char *hashTypeCurrentFromHashTable(hashTypeIterator *hi, int what, size_t *len);
 sds hashTypeCurrentObjectNewSds(hashTypeIterator *hi, int what);
 robj *hashTypeLookupWriteOrCreate(client *c, robj *key);
 robj *hashTypeGetValueObject(robj *o, sds field);
-int hashTypeSet(robj *o, sds field, sds value, long long expiry, int flags, bool *expired_overwritten);
+int hashTypeSet(robj *o, sds field, sds value, mstime_t expiry, int flags, bool *expired_overwritten);
 robj *hashTypeDup(robj *o);
 bool hashTypeHasVolatileFields(robj *o);
 int hashTypeUpdateAsStringRef(robj *o, sds field, const char *buf, size_t len);
@@ -3682,7 +3691,7 @@ size_t dbReclaimExpiredFields(robj *o, serverDb *db, mstime_t now, unsigned long
 int keyIsExpired(serverDb *db, robj *key);
 long long getExpire(serverDb *db, robj *key);
 robj *setExpire(client *c, serverDb *db, robj *key, long long when);
-int checkAlreadyExpired(long long when);
+int checkAlreadyExpired(mstime_t when);
 robj *lookupKeyRead(serverDb *db, robj *key);
 robj *lookupKeyWrite(serverDb *db, robj *key);
 robj *lookupKeyReadOrReply(client *c, robj *key, robj *reply);
@@ -3731,7 +3740,7 @@ void discardTempDb(serverDb **tempDb);
 int selectDb(client *c, int id);
 void signalModifiedKey(client *c, serverDb *db, robj *key);
 void signalFlushedDb(int dbid, int async);
-void scanGenericCommand(client *c, robj *o, unsigned long long cursor);
+void scanGenericCommand(client *c, robj *o, unsigned long long cursor, int slot, sds cursor_prefix, sds finished_cursor_prefix);
 int parseScanCursorOrReply(client *c, sds buf, unsigned long long *cursor);
 int dbAsyncDelete(serverDb *db, robj *key);
 void emptyDbAsync(serverDb *db);
@@ -4077,6 +4086,7 @@ void clusterCommand(client *c);
 void clusterKeySlotCommand(client *c);
 void clusterFlushslotCommand(client *c);
 void clusterSlotStatsCommand(client *c);
+void clusterscanCommand(client *c);
 void restoreCommand(client *c);
 void migrateCommand(client *c);
 void askingCommand(client *c);

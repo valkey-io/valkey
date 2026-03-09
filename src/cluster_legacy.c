@@ -101,7 +101,6 @@ const char *clusterGetMessageTypeString(int type);
 void removeChannelsInSlot(unsigned int slot);
 unsigned int countChannelsInSlot(unsigned int hashslot);
 void clusterAddNodeToShard(const char *shard_id, clusterNode *node);
-list *clusterLookupNodeListByShardId(const char *shard_id);
 void clusterRemoveNodeFromShard(clusterNode *node);
 int auxShardIdSetter(clusterNode *n, void *value, size_t length);
 sds auxShardIdGetter(clusterNode *n, sds s);
@@ -1613,18 +1612,13 @@ void clusterHandleServerShutdown(bool auto_failover) {
  * 4) Only for hard reset: a new Node ID is generated.
  * 5) Only for hard reset: currentEpoch and configEpoch are set to 0.
  * 6) The new configuration is saved and the cluster state updated.
- * 7) If the node was a replica, the whole data set is flushed away. */
+ * 7) If the node was a replica, the whole data set is flushed away.
+ * 8) If it is a hard reset or the node was a replica: a new Shard ID is generated. */
 void clusterReset(int hard) {
     dictIterator *di;
     dictEntry *de;
-    int j, was_replica = 0;
-
-    /* Turn into primary. */
-    if (nodeIsReplica(myself)) {
-        was_replica = 1;
-        clusterSetNodeAsPrimary(myself);
-        flushAllDataAndResetRDB(server.lazyfree_lazy_user_flush ? EMPTYDB_ASYNC : EMPTYDB_NO_FLAGS);
-    }
+    int j;
+    bool new_shard = false;
 
     /* Close slots, reset manual failover state. */
     clusterCloseAllSlots();
@@ -1664,22 +1658,34 @@ void clusterReset(int hard) {
 
         /* To change the Node ID we need to remove the old name from the
          * nodes table, change the ID, and re-add back with new name. */
+        new_shard = true;
         oldname = sdsnewlen(myself->name, CLUSTER_NAMELEN);
         dictDelete(server.cluster->nodes, oldname);
         sdsfree(oldname);
         getRandomHexChars(myself->name, CLUSTER_NAMELEN);
-        getRandomHexChars(myself->shard_id, CLUSTER_NAMELEN);
         clusterAddNode(myself);
         serverLog(LL_NOTICE, "Node hard reset, now I'm %.40s", myself->name);
     } else {
         /* If we were a replica, this means our shard_id is the shard_id of
          * the primary node, and since now we become a new empty primary, we
          * need to have our own shard_id. */
-        if (was_replica) getRandomHexChars(myself->shard_id, CLUSTER_NAMELEN);
+        new_shard = true;
     }
 
     /* Re-populate shards */
-    clusterAddNodeToShard(myself->shard_id, myself);
+    if (new_shard) {
+        clusterRemoveNodeFromShard(myself);
+        getRandomHexChars(myself->shard_id, CLUSTER_NAMELEN);
+        clusterAddNodeToShard(myself->shard_id, myself);
+        serverLog(LL_NOTICE, "Moving myself to a new shard %.40s.", myself->shard_id);
+    }
+
+    /* Turn into primary. clusterSetNodeAsPrimary prints the shard ID to the
+     * server logs, so calling it here we can print the new correct shard ID. */
+    if (nodeIsReplica(myself)) {
+        clusterSetNodeAsPrimary(myself);
+        flushAllDataAndResetRDB(server.lazyfree_lazy_user_flush ? EMPTYDB_ASYNC : EMPTYDB_NO_FLAGS);
+    }
 
     /* Make sure to persist the new config and update the state. */
     clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_UPDATE_STATE | CLUSTER_TODO_FSYNC_CONFIG);
@@ -3629,17 +3635,38 @@ int clusterIsValidPacket(clusterLink *link) {
         explen = sizeof(clusterMsg) - sizeof(union clusterMsgData);
         explen += (sizeof(clusterMsgDataGossip) * count);
 
+        /* Make sure that the number of gossip messages fit in the remaining
+         * space in the message. */
+        if (totlen < explen) {
+            serverLog(LL_WARNING,
+                      "Received invalid %s packet with gossip count %d that exceeds "
+                      "total packet length (%lld)",
+                      clusterGetMessageTypeString(type), count, (unsigned long long)totlen);
+            return 0;
+        }
+
         /* If there is extension data, which doesn't have a fixed length,
          * loop through them and validate the length of it now. */
         if (msg->mflags[0] & CLUSTERMSG_FLAG0_EXT_DATA) {
             clusterMsgPingExt *ext = getInitialPingExt(msg, count);
             while (extensions--) {
+                /* Make sure there is at least enough memory for the extension information so
+                 * we can parse it. */
+                if ((totlen - explen) < sizeof(clusterMsgPingExt)) {
+                    serverLog(LL_WARNING,
+                              "Received invalid %s packet with extension data that exceeds "
+                              "total packet length (%lld)",
+                              clusterGetMessageTypeString(type), (unsigned long long)totlen);
+                    return 0;
+                }
                 uint32_t extlen = getPingExtLength(ext);
                 if (extlen % 8 != 0) {
                     serverLog(LL_WARNING, "Received a %s packet without proper padding (%d bytes)",
                               clusterGetMessageTypeString(type), (int)extlen);
                     return 0;
                 }
+                /* Similar check to earlier, but we want to make sure the extension length is valid
+                 * this time. */
                 if ((totlen - explen) < extlen) {
                     serverLog(LL_WARNING,
                               "Received invalid %s packet with extension data that exceeds "
@@ -4028,6 +4055,9 @@ int clusterProcessPacket(clusterLink *link) {
          * what are the instances really competing. */
         if (sender) {
             int nofailover = flags & CLUSTER_NODE_NOFAILOVER;
+            if (nofailover != clusterNodeIsNoFailover(sender)) {
+                clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG);
+            }
             sender->flags &= ~CLUSTER_NODE_NOFAILOVER;
             sender->flags |= nofailover;
         }
@@ -7882,6 +7912,7 @@ int clusterCommandSpecial(client *c) {
             char new_shard_id[CLUSTER_NAMELEN];
             getRandomHexChars(new_shard_id, CLUSTER_NAMELEN);
             updateShardId(myself, new_shard_id);
+            serverLog(LL_NOTICE, "Moving myself to a new shard %.40s.", myself->shard_id);
 
             clusterDoBeforeSleep(CLUSTER_TODO_UPDATE_STATE | CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_BROADCAST_ALL);
             addReply(c, shared.ok);

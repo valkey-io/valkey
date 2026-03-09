@@ -358,6 +358,25 @@ error:
     return VALKEY_ERR;
 }
 
+/* Select a logical database by sending the SELECT command. */
+static int select_db(valkeyClusterContext *cc, valkeyContext *c) {
+    if (cc->select_db == 0)
+        return VALKEY_OK;
+
+    valkeyReply *reply = valkeyCommand(c, "SELECT %d", cc->select_db);
+    if (reply == NULL) {
+        valkeyClusterSetError(cc, VALKEY_ERR_OTHER, "Failed to select logical database");
+        return VALKEY_ERR;
+    }
+    if (reply->type == VALKEY_REPLY_ERROR) {
+        valkeyClusterSetError(cc, VALKEY_ERR_OTHER, reply->str);
+        freeReplyObject(reply);
+        return VALKEY_ERR;
+    }
+    freeReplyObject(reply);
+    return VALKEY_OK;
+}
+
 /**
  * Return a new node with the "cluster slots" command reply.
  */
@@ -902,7 +921,7 @@ static dict *parse_cluster_nodes(valkeyClusterContext *cc, valkeyContext *c, val
     int add_replicas = cc->flags & VALKEY_FLAG_PARSE_REPLICAS;
     dict *replicas = NULL;
 
-    if (reply->type != VALKEY_REPLY_STRING) {
+    if (reply->type != VALKEY_REPLY_STRING && reply->type != VALKEY_REPLY_VERB) {
         valkeyClusterSetError(cc, VALKEY_ERR_OTHER, "Unexpected reply type");
         goto error;
     }
@@ -1188,6 +1207,9 @@ static int valkeyClusterContextInit(valkeyClusterContext *cc,
         cc->max_retry_count = options->max_retry;
     } else {
         cc->max_retry_count = CLUSTER_DEFAULT_MAX_RETRY_COUNT;
+    }
+    if (options->select_db > 0) {
+        cc->select_db = options->select_db;
     }
     if (options->initial_nodes != NULL &&
         valkeyClusterSetOptionAddNodes(cc, options->initial_nodes) != VALKEY_OK) {
@@ -1563,8 +1585,10 @@ valkeyContext *valkeyClusterGetValkeyContext(valkeyClusterContext *cc,
             if (cc->tls && cc->tls_init_fn(c, cc->tls) != VALKEY_OK) {
                 valkeyClusterSetError(cc, c->err, c->errstr);
             }
-
-            authenticate(cc, c); // err and errstr handled in function
+            /* Authenticate and select a logical database when configured.
+             * cc->err and cc->errstr are set when failing. */
+            authenticate(cc, c);
+            select_db(cc, c);
         }
 
         return c;
@@ -1603,6 +1627,10 @@ valkeyContext *valkeyClusterGetValkeyContext(valkeyClusterContext *cc,
     }
 
     if (authenticate(cc, c) != VALKEY_OK) {
+        valkeyFree(c);
+        return NULL;
+    }
+    if (select_db(cc, c) != VALKEY_OK) {
         valkeyFree(c);
         return NULL;
     }
@@ -1951,8 +1979,6 @@ ask_retry:
             }
 
             goto moved_retry;
-
-            break;
         case CLUSTER_ERR_ASK:
             node = getNodeFromRedirectReply(cc, c, reply, NULL);
             if (node == NULL) {
@@ -1980,15 +2006,12 @@ ask_retry:
             reply = NULL;
 
             goto ask_retry;
-
-            break;
         case CLUSTER_ERR_TRYAGAIN:
         case CLUSTER_ERR_CLUSTERDOWN:
             freeReplyObject(reply);
             reply = NULL;
             goto retry;
 
-            break;
         default:
 
             break;
@@ -2582,6 +2605,18 @@ static void unlinkAsyncContextAndNode(void *data) {
     }
 }
 
+/* Reply callback function for SELECT */
+void selectReplyCallback(valkeyAsyncContext *ac, void *r, void *privdata) {
+    valkeyReply *reply = (valkeyReply *)r;
+    valkeyClusterAsyncContext *acc = (valkeyClusterAsyncContext *)privdata;
+
+    if (reply == NULL || reply->type == VALKEY_REPLY_ERROR) {
+        valkeyClusterAsyncSetError(acc, VALKEY_ERR_OTHER,
+                                   "Failed to select logical database");
+        valkeyAsyncDisconnect(ac);
+    }
+}
+
 valkeyAsyncContext *
 valkeyClusterGetValkeyAsyncContext(valkeyClusterAsyncContext *acc,
                                    valkeyClusterNode *node) {
@@ -2652,6 +2687,15 @@ valkeyClusterGetValkeyAsyncContext(valkeyClusterAsyncContext *acc,
                                      acc->cc.password);
         }
 
+        if (ret != VALKEY_OK) {
+            valkeyClusterAsyncSetError(acc, ac->c.err, ac->c.errstr);
+            valkeyAsyncFree(ac);
+            return NULL;
+        }
+    }
+    // Select logical database when needed
+    if (acc->cc.select_db > 0) {
+        ret = valkeyAsyncCommand(ac, selectReplyCallback, acc, "SELECT %d", acc->cc.select_db);
         if (ret != VALKEY_OK) {
             valkeyClusterAsyncSetError(acc, ac->c.err, ac->c.errstr);
             valkeyAsyncFree(ac);
@@ -2996,7 +3040,6 @@ static void valkeyClusterAsyncCallback(valkeyAsyncContext *ac, void *r,
         default:
 
             goto done;
-            break;
         }
 
         goto retry;

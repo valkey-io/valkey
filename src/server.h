@@ -2106,9 +2106,9 @@ struct valkeyServer {
     long long primary_repl_offset;              /* My current replication offset */
     long long second_replid_offset;             /* Accept offsets up to this for replid2. */
     _Atomic(long long) fsynced_reploff_pending; /* Largest replication offset to
-                         * potentially have been fsynced, applied to
-                           fsynced_reploff only when AOF state is AOF_ON
-                           (not during the initial rewrite) */
+                                                 * potentially have been fsynced, applied to
+                                                   fsynced_reploff only when AOF state is AOF_ON
+                                                   (not during the initial rewrite) */
     long long fsynced_reploff;                  /* Largest replication offset that has been confirmed to be fsynced */
     int replicas_eldb;                          /* Last SELECTed DB in replication output */
     int repl_ping_replica_period;               /* Primary pings the replica every N seconds */

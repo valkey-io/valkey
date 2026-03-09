@@ -172,8 +172,7 @@ jobs:
           fi
 
       - name: Remove ${{ github.event.label.name }} label
-        if: always() && 
-          (github.event.label.name == 'run-benchmark' || github.event.label.name == 'run-cluster-benchmark')
+        if: always() && (github.event.label.name == 'run-benchmark' || github.event.label.name == 'run-cluster-benchmark')
         uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}

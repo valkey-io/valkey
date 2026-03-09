@@ -48,7 +48,6 @@ set(VALKEY_SERVER_SRCS
     ${CMAKE_SOURCE_DIR}/src/cluster_legacy.c
     ${CMAKE_SOURCE_DIR}/src/cluster_slot_stats.c
     ${CMAKE_SOURCE_DIR}/src/crc16.c
-    ${CMAKE_SOURCE_DIR}/src/endianconv.c
     ${CMAKE_SOURCE_DIR}/src/commandlog.c
     ${CMAKE_SOURCE_DIR}/src/eval.c
     ${CMAKE_SOURCE_DIR}/src/bio.c
@@ -101,13 +100,9 @@ set(VALKEY_SERVER_SRCS
     ${CMAKE_SOURCE_DIR}/src/mt19937-64.c
     ${CMAKE_SOURCE_DIR}/src/resp_parser.c
     ${CMAKE_SOURCE_DIR}/src/call_reply.c
-    ${CMAKE_SOURCE_DIR}/src/lua/script_lua.c
     ${CMAKE_SOURCE_DIR}/src/script.c
     ${CMAKE_SOURCE_DIR}/src/functions.c
     ${CMAKE_SOURCE_DIR}/src/scripting_engine.c
-    ${CMAKE_SOURCE_DIR}/src/lua/function_lua.c
-    ${CMAKE_SOURCE_DIR}/src/lua/engine_lua.c
-    ${CMAKE_SOURCE_DIR}/src/lua/debug_lua.c
     ${CMAKE_SOURCE_DIR}/src/trace/trace.c
     ${CMAKE_SOURCE_DIR}/src/trace/trace_rdb.c
     ${CMAKE_SOURCE_DIR}/src/trace/trace_aof.c
@@ -122,7 +117,9 @@ set(VALKEY_SERVER_SRCS
     ${CMAKE_SOURCE_DIR}/src/server.c
     ${CMAKE_SOURCE_DIR}/src/logreqres.c
     ${CMAKE_SOURCE_DIR}/src/entry.c
-    ${CMAKE_SOURCE_DIR}/src/vset.c)
+    ${CMAKE_SOURCE_DIR}/src/vset.c
+    ${CMAKE_SOURCE_DIR}/src/fifo.c
+    ${CMAKE_SOURCE_DIR}/src/mutexqueue.c)
 
 
 # valkey-cli
@@ -170,7 +167,9 @@ set(VALKEY_BENCHMARK_SRCS
     ${CMAKE_SOURCE_DIR}/src/monotonic.c
     ${CMAKE_SOURCE_DIR}/src/cli_common.c
     ${CMAKE_SOURCE_DIR}/src/mt19937-64.c
-    ${CMAKE_SOURCE_DIR}/src/strl.c)
+    ${CMAKE_SOURCE_DIR}/src/strl.c
+    ${CMAKE_SOURCE_DIR}/src/fuzzer_client.c
+    ${CMAKE_SOURCE_DIR}/src/fuzzer_command_generator.c)
 
 # valkey-rdma module
 set(VALKEY_RDMA_MODULE_SRCS ${CMAKE_SOURCE_DIR}/src/rdma.c)

@@ -278,8 +278,8 @@ if (BUILD_SANITIZER)
 endif ()
 
 include_directories("${CMAKE_SOURCE_DIR}/deps/libvalkey/include")
+include_directories("${CMAKE_SOURCE_DIR}/src/modules/lua")
 include_directories("${CMAKE_SOURCE_DIR}/deps/linenoise")
-include_directories("${CMAKE_SOURCE_DIR}/deps/lua/src")
 include_directories("${CMAKE_SOURCE_DIR}/deps/hdr_histogram")
 include_directories("${CMAKE_SOURCE_DIR}/deps/fpconv")
 
@@ -292,6 +292,10 @@ endif ()
 
 # Common compiler flags
 add_valkey_server_compiler_options("-pedantic")
+
+if (NOT BUILD_LUA)
+    message(STATUS "Lua scripting engine is disabled")
+endif()
 
 # ----------------------------------------------------
 # Build options (allocator, tls, rdma et al) - end
@@ -326,22 +330,10 @@ if (PYTHON_EXE)
         COMMAND touch ${CMAKE_BINARY_DIR}/fmtargs_generated
         WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}/src")
     add_custom_target(generate_fmtargs_h DEPENDS ${CMAKE_BINARY_DIR}/fmtargs_generated)
-
-    # Rule for generating test_files.h
-    message(STATUS "Adding target generate_test_files_h")
-    file(GLOB UNIT_TEST_SRCS "${CMAKE_SOURCE_DIR}/src/unit/*.c")
-    add_custom_command(
-        OUTPUT ${CMAKE_BINARY_DIR}/test_files_generated
-        DEPENDS "${UNIT_TEST_SRCS};${CMAKE_SOURCE_DIR}/utils/generate-unit-test-header.py"
-        COMMAND ${PYTHON_EXE} ${CMAKE_SOURCE_DIR}/utils/generate-unit-test-header.py
-        COMMAND touch ${CMAKE_BINARY_DIR}/test_files_generated
-        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}/src")
-    add_custom_target(generate_test_files_h DEPENDS ${CMAKE_BINARY_DIR}/test_files_generated)
 else ()
     # Fake targets
     add_custom_target(generate_commands_def)
     add_custom_target(generate_fmtargs_h)
-    add_custom_target(generate_test_files_h)
 endif ()
 
 # Generate release.h file (always)

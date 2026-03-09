@@ -28,8 +28,27 @@ static int io_threads_initialized = 0;
 #define JOB_TAG_MASK 0x7
 #define JOB_PTR_MASK (~(uintptr_t)JOB_TAG_MASK)
 
+<<<<<<< HEAD
 static inline void *pack_job(void *ptr, int type) {
     return (void *)((uintptr_t)ptr | type);
+=======
+typedef struct IOJobQueue {
+    iojob *ring_buffer;
+    size_t size;
+    _Atomic size_t head __attribute__((aligned(CACHE_LINE_SIZE))); /* Next write index for producer (main-thread) */
+    _Atomic size_t tail __attribute__((aligned(CACHE_LINE_SIZE))); /* Next read index for consumer  (IO-thread) */
+} IOJobQueue;
+IOJobQueue io_jobs[IO_THREADS_MAX_NUM] = {0};
+_Atomic long long used_active_time_io_thread[IO_THREADS_MAX_NUM] = {0};
+
+/* Initialize the job queue with a specified number of items. */
+static void IOJobQueue_init(IOJobQueue *jq, size_t item_count) {
+    debugServerAssertWithInfo(NULL, NULL, inMainThread());
+    jq->ring_buffer = zcalloc(item_count * sizeof(iojob));
+    jq->size = item_count; /* Total number of items */
+    jq->head = 0;
+    jq->tail = 0;
+>>>>>>> unstable
 }
 
 static inline void unpack_job(void *packed, void **ptr, int *type) {
@@ -297,6 +316,7 @@ static void *IOThreadMain(void *myid) {
     pthread_cleanup_push(cleanupThreadResources, NULL);
 
     thread_id = (int)id;
+<<<<<<< HEAD
 
     const int BATCH_SIZE = 32;
     void *batch_jobs[BATCH_SIZE];
@@ -326,6 +346,30 @@ static void *IOThreadMain(void *myid) {
                 }
             }
             processed += batch_count;
+=======
+    size_t jobs_to_process = 0;
+    IOJobQueue *jq = &io_jobs[id];
+    monotime work_start_time = 0;
+    while (1) {
+        /* Cancellation point so that pthread_cancel() from main thread is honored. */
+        pthread_testcancel();
+        monotime prev_work_start_time = work_start_time;
+        work_start_time = getMonotonicUs();
+        if (jobs_to_process != 0) {
+            atomic_fetch_add_explicit(&used_active_time_io_thread[id],
+                                      work_start_time - prev_work_start_time,
+                                      memory_order_relaxed);
+        }
+
+        jobs_to_process = IOJobQueue_availableJobs(jq);
+        if (jobs_to_process == 0) {
+            /* Wait for jobs */
+            for (int j = 0; j < 1000000; j++) {
+                jobs_to_process = IOJobQueue_availableJobs(jq);
+                if (jobs_to_process) break;
+            }
+            work_start_time = getMonotonicUs();
+>>>>>>> unstable
         }
 
         /*
@@ -379,6 +423,14 @@ static void *IOThreadMain(void *myid) {
     return NULL;
 }
 
+<<<<<<< HEAD
+=======
+long long getIOThreadActiveTimeMicroseconds(int id) {
+    return atomic_load_explicit(&used_active_time_io_thread[id], memory_order_relaxed);
+}
+
+#define IO_JOB_QUEUE_SIZE 2048
+>>>>>>> unstable
 static void createIOThread(int id) {
     serverAssert(server.io_threads_num > 0);
     serverAssert(id > 0 && id < server.io_threads_num);
@@ -684,9 +736,26 @@ int tryOffloadFreeObjToIOThreads(robj *obj) {
 
     if (obj->encoding != OBJ_ENCODING_RAW || obj->type != OBJ_STRING) return C_ERR;
 
+<<<<<<< HEAD
     void *job = pack_job(obj, JOB_REQ_FREE_OBJ);
     if (unlikely(spmcEnqueue(&io_shared_inbox, job) == false)) return C_ERR;
     io_jobs_submitted++;
+=======
+    /* We select the thread ID in a round-robin fashion. */
+    size_t tid = (server.stat_io_freed_objects % (server.active_io_threads_num - 1)) + 1;
+
+    IOJobQueue *jq = &io_jobs[tid];
+    if (IOJobQueue_isFull(jq)) {
+        return C_ERR;
+    }
+
+    /* We offload only the free of the ptr that may be allocated by the I/O thread.
+     * The object itself was allocated by the main thread and will be freed by the main thread. */
+    IOJobQueue_push(jq, sdsfreeVoid, objectGetVal(obj));
+    objectSetVal(obj, NULL);
+    decrRefCount(obj);
+
+>>>>>>> unstable
     server.stat_io_freed_objects++;
     return C_OK;
 }

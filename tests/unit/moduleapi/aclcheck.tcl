@@ -92,6 +92,81 @@ start_server {tags {"modules acl"}} {
         assert {[dict get $entry reason] eq {command}}
     }
 
+    test {test module comprehensive ACL check} {
+        r acl setuser testuser on >testpass ~* &* +@all alldbs
+        assert_equal [r auth testuser testpass] OK
+
+        # Valid command with valid database
+        assert_equal [r aclcheck.check.permissions 0 set x 5] OK
+        assert_equal [r get x] 5
+
+        # Denied command
+        r acl setuser testuser -set
+        catch {r aclcheck.check.permissions 0 set y 10} e
+        assert_match {*NOPERM*} $e
+
+        # Check ACL log entry
+        set entry [lindex [r ACL LOG] 0]
+        assert {[dict get $entry username] eq {testuser}}
+        assert {[dict get $entry context] eq {module}}
+        assert {[dict get $entry object] eq {set}}
+        assert {[dict get $entry reason] eq {command}}
+        r ACL LOG RESET
+
+        # Denied key
+        r acl setuser testuser +set resetkeys ~allowed_*
+        assert_equal [r aclcheck.check.permissions 0 set allowed_key value] OK
+        catch {r aclcheck.check.permissions 0 set denied_key value} e
+        assert_match {*NOPERM*} $e
+        
+        set entry [lindex [r ACL LOG] 0]
+        assert {[dict get $entry username] eq {testuser}}
+        assert {[dict get $entry context] eq {module}}
+        assert {[dict get $entry reason] eq {key}}
+        r ACL LOG RESET
+
+        # Denied channel
+        r acl setuser testuser resetchannels &ch1
+        assert_equal [r aclcheck.check.permissions 0 publish ch1 msg] 0
+        catch {r aclcheck.check.permissions 0 publish ch2 msg} e
+        assert_match {*NOPERM*} $e
+        
+        set entry [lindex [r ACL LOG] 0]
+        assert {[dict get $entry username] eq {testuser}}
+        assert {[dict get $entry context] eq {module}}
+        assert {[dict get $entry reason] eq {channel}}
+        r ACL LOG RESET
+
+        # Denied db
+        r acl setuser testuser allkeys resetdbs db=0,1,2
+        assert_equal [r aclcheck.check.permissions 0 set testkey val] OK
+        assert_equal [r aclcheck.check.permissions 1 set testkey val] OK
+        catch {r aclcheck.check.permissions 3 set testkey val} e
+        assert_match {*NOPERM*} $e
+        
+        set entry [lindex [r ACL LOG] 0]
+        assert {[dict get $entry username] eq {testuser}}
+        assert {[dict get $entry context] eq {module}}
+        assert {[dict get $entry reason] eq {database}}
+        r ACL LOG RESET
+
+        # Invalid dbid
+        catch {r aclcheck.check.permissions -1 set x 5} e
+        assert_match {*invalid arguments*} $e
+
+        catch {r aclcheck.check.permissions 999 set x 5} e
+        assert_match {*invalid arguments*} $e
+
+        # Invalid command
+        catch {r aclcheck.check.permissions 0 nonexistentcmd arg1 arg2} e
+        assert_match {*invalid arguments*} $e
+
+        assert_equal [r auth default ""] OK
+        r acl deluser testuser
+        # Reset default user ACL to ensure clean state for next tests
+        r acl setuser default on nopass ~* &* +@all alldbs
+    }
+
     test {test blocking of Commands outside of OnLoad} {
         assert_equal [r block.commands.outside.onload] OK
     }
@@ -106,6 +181,44 @@ start_server {tags {"modules acl"}} {
 
     test {Unload the module - aclcheck} {
         assert_equal {OK} [r module unload aclcheck]
+    }
+}
+
+set subcommandsmodule [file normalize tests/modules/subcommands.so]
+start_server {tags {"modules acl"}} {
+    r module load $subcommandsmodule
+
+    test {Module unload blocked by ACL subcommand rule} {
+        r ACL SETUSER subcmduser on nopass +subcommands.sub|get_fullname
+        catch {r module unload subcommands} e
+        assert_match {*one or more ACL users reference commands from this module*} $e
+        r ACL DELUSER subcmduser
+    }
+
+    test {Module unload blocked by ACL base command rule} {
+        r ACL SETUSER basecmduser on nopass +subcommands.parent_get_fullname
+        catch {r module unload subcommands} e
+        assert_match {*one or more ACL users reference commands from this module*} $e
+        r ACL DELUSER basecmduser
+    }
+
+    test {Module unload blocked by ACL deny rule} {
+        r ACL SETUSER denycmduser on nopass -subcommands.parent_get_fullname
+        catch {r module unload subcommands} e
+        assert_match {*one or more ACL users reference commands from this module*} $e
+        r ACL DELUSER denycmduser
+    }
+
+    test {Module unload blocked by ACL selector rule} {
+        r ACL SETUSER selcmduser on nopass (+subcommands.parent_get_fullname)
+        catch {r module unload subcommands} e
+        assert_match {*one or more ACL users reference commands from this module*} $e
+        r ACL DELUSER selcmduser
+    }
+
+    test {Unload the module - subcommands} {
+        r ACL DELUSER subcmduser basecmduser denycmduser selcmduser
+        assert_equal {OK} [r module unload subcommands]
     }
 }
 

@@ -13,7 +13,8 @@ if (APPLE)
 endif ()
 
 # Options
-option(BUILD_UNIT_TESTS "Build valkey-unit-tests" OFF)
+option(BUILD_LUA "Build Valkey Lua scripting engine" ON)
+option(BUILD_UNIT_GTESTS "Build valkey-unit-gtests" OFF)
 option(BUILD_TEST_MODULES "Build all test modules" OFF)
 option(BUILD_EXAMPLE_MODULES "Build example modules" OFF)
 
@@ -33,12 +34,13 @@ add_subdirectory(tests)
 include(Packaging)
 
 # Clear cached variables from the cache
+unset(BUILD_LUA CACHE)
 unset(BUILD_TESTS CACHE)
 unset(CLANGPP CACHE)
 unset(CLANG CACHE)
 unset(BUILD_RDMA_MODULE CACHE)
 unset(BUILD_TLS_MODULE CACHE)
-unset(BUILD_UNIT_TESTS CACHE)
+unset(BUILD_UNIT_GTESTS CACHE)
 unset(BUILD_TEST_MODULES CACHE)
 unset(BUILD_EXAMPLE_MODULES CACHE)
 unset(USE_TLS CACHE)

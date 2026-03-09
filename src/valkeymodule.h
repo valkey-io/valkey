@@ -172,7 +172,7 @@ typedef struct ValkeyModuleStreamID {
 #define VALKEYMODULE_CTX_FLAGS_MULTI (1 << 1)
 /* The instance is a primary */
 #define VALKEYMODULE_CTX_FLAGS_PRIMARY (1 << 2)
-/* The instance is a replic */
+/* The instance is a replica */
 #define VALKEYMODULE_CTX_FLAGS_REPLICA (1 << 3)
 /* The instance is read-only (usually meaning it's a replica as well) */
 #define VALKEYMODULE_CTX_FLAGS_READONLY (1 << 4)
@@ -674,7 +674,8 @@ static const ValkeyModuleEvent ValkeyModuleEvent_ReplicationRoleChanged = {VALKE
 #define VALKEYMODULE_SUBEVENT_ATOMIC_SLOT_MIGRATION_EXPORT_COMPLETED 5
 #define _VALKEYMODULE_SUBEVENT_ATOMIC_SLOT_MIGRATION_NEXT 6
 
-/* ValkeyModuleClientInfo flags. */
+/* ValkeyModuleClientInfo flags.
+ * Note: flags VALKEYMODULE_CLIENTINFO_FLAG_PRIMARY and below were added in Valkey 9.1 */
 #define VALKEYMODULE_CLIENTINFO_FLAG_SSL (1 << 0)
 #define VALKEYMODULE_CLIENTINFO_FLAG_PUBSUB (1 << 1)
 #define VALKEYMODULE_CLIENTINFO_FLAG_BLOCKED (1 << 2)
@@ -682,6 +683,13 @@ static const ValkeyModuleEvent ValkeyModuleEvent_ReplicationRoleChanged = {VALKE
 #define VALKEYMODULE_CLIENTINFO_FLAG_UNIXSOCKET (1 << 4)
 #define VALKEYMODULE_CLIENTINFO_FLAG_MULTI (1 << 5)
 #define VALKEYMODULE_CLIENTINFO_FLAG_READONLY (1 << 6)
+#define VALKEYMODULE_CLIENTINFO_FLAG_PRIMARY (1 << 7)
+#define VALKEYMODULE_CLIENTINFO_FLAG_REPLICA (1 << 8)
+#define VALKEYMODULE_CLIENTINFO_FLAG_MONITOR (1 << 9)
+#define VALKEYMODULE_CLIENTINFO_FLAG_MODULE (1 << 10)
+#define VALKEYMODULE_CLIENTINFO_FLAG_AUTHENTICATED (1 << 11)
+#define VALKEYMODULE_CLIENTINFO_FLAG_EVER_AUTHENTICATED (1 << 12)
+#define VALKEYMODULE_CLIENTINFO_FLAG_FAKE (1 << 13)
 
 /* Here we take all the structures that the module pass to the core
  * and the other way around. Notably the list here contains the structures
@@ -845,7 +853,8 @@ typedef enum {
     VALKEYMODULE_ACL_LOG_AUTH = 0, /* Authentication failure */
     VALKEYMODULE_ACL_LOG_CMD,      /* Command authorization failure */
     VALKEYMODULE_ACL_LOG_KEY,      /* Key authorization failure */
-    VALKEYMODULE_ACL_LOG_CHANNEL   /* Channel authorization failure */
+    VALKEYMODULE_ACL_LOG_CHANNEL,  /* Channel authorization failure */
+    VALKEYMODULE_ACL_LOG_DB        /* Database authorization failure */
 } ValkeyModuleACLLogEntryReason;
 
 /* Incomplete structures needed by both the core and modules. */
@@ -1644,6 +1653,8 @@ VALKEYMODULE_API int (*ValkeyModule_ZsetRangePrev)(ValkeyModuleKey *key) VALKEYM
 VALKEYMODULE_API int (*ValkeyModule_ZsetRangeEndReached)(ValkeyModuleKey *key) VALKEYMODULE_ATTR;
 VALKEYMODULE_API int (*ValkeyModule_HashSet)(ValkeyModuleKey *key, int flags, ...) VALKEYMODULE_ATTR;
 VALKEYMODULE_API int (*ValkeyModule_HashGet)(ValkeyModuleKey *key, int flags, ...) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_HashSetStringRef)(ValkeyModuleKey *key, ValkeyModuleString *field, const char *buf, size_t len) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_HashHasStringRef)(ValkeyModuleKey *key, ValkeyModuleString *field) VALKEYMODULE_ATTR;
 VALKEYMODULE_API int (*ValkeyModule_StreamAdd)(ValkeyModuleKey *key,
                                                int flags,
                                                ValkeyModuleStreamID *id,
@@ -1995,6 +2006,7 @@ VALKEYMODULE_API void (*ValkeyModule_GetRandomHexChars)(char *dst, size_t len) V
 VALKEYMODULE_API void (*ValkeyModule_SetDisconnectCallback)(ValkeyModuleBlockedClient *bc,
                                                             ValkeyModuleDisconnectFunc callback) VALKEYMODULE_ATTR;
 VALKEYMODULE_API void (*ValkeyModule_SetClusterFlags)(ValkeyModuleCtx *ctx, uint64_t flags) VALKEYMODULE_ATTR;
+VALKEYMODULE_API unsigned int (*ValkeyModule_ClusterKeySlotC)(const char *key, size_t keylen) VALKEYMODULE_ATTR;
 VALKEYMODULE_API unsigned int (*ValkeyModule_ClusterKeySlot)(ValkeyModuleString *key) VALKEYMODULE_ATTR;
 VALKEYMODULE_API const char *(*ValkeyModule_ClusterCanonicalKeyNameInSlot)(unsigned int slot)VALKEYMODULE_ATTR;
 VALKEYMODULE_API int (*ValkeyModule_ExportSharedAPI)(ValkeyModuleCtx *ctx,
@@ -2049,6 +2061,11 @@ VALKEYMODULE_API int (*ValkeyModule_ACLCheckKeyPermissions)(ValkeyModuleUser *us
 VALKEYMODULE_API int (*ValkeyModule_ACLCheckChannelPermissions)(ValkeyModuleUser *user,
                                                                 ValkeyModuleString *ch,
                                                                 int literal) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_ACLCheckPermissions)(ValkeyModuleUser *user,
+                                                         ValkeyModuleString **argv,
+                                                         int argc,
+                                                         int dbid,
+                                                         ValkeyModuleACLLogEntryReason *denial_reason) VALKEYMODULE_ATTR;
 VALKEYMODULE_API void (*ValkeyModule_ACLAddLogEntry)(ValkeyModuleCtx *ctx,
                                                      ValkeyModuleUser *user,
                                                      ValkeyModuleString *object,
@@ -2305,6 +2322,8 @@ static int ValkeyModule_Init(ValkeyModuleCtx *ctx, const char *name, int ver, in
     VALKEYMODULE_GET_API(ZsetRangeEndReached);
     VALKEYMODULE_GET_API(HashSet);
     VALKEYMODULE_GET_API(HashGet);
+    VALKEYMODULE_GET_API(HashSetStringRef);
+    VALKEYMODULE_GET_API(HashHasStringRef);
     VALKEYMODULE_GET_API(StreamAdd);
     VALKEYMODULE_GET_API(StreamDelete);
     VALKEYMODULE_GET_API(StreamIteratorStart);
@@ -2481,6 +2500,7 @@ static int ValkeyModule_Init(ValkeyModuleCtx *ctx, const char *name, int ver, in
     VALKEYMODULE_GET_API(GetRandomBytes);
     VALKEYMODULE_GET_API(GetRandomHexChars);
     VALKEYMODULE_GET_API(SetClusterFlags);
+    VALKEYMODULE_GET_API(ClusterKeySlotC);
     VALKEYMODULE_GET_API(ClusterKeySlot);
     VALKEYMODULE_GET_API(ClusterCanonicalKeyNameInSlot);
     VALKEYMODULE_GET_API(ExportSharedAPI);
@@ -2513,6 +2533,7 @@ static int ValkeyModule_Init(ValkeyModuleCtx *ctx, const char *name, int ver, in
     VALKEYMODULE_GET_API(ACLCheckCommandPermissions);
     VALKEYMODULE_GET_API(ACLCheckKeyPermissions);
     VALKEYMODULE_GET_API(ACLCheckChannelPermissions);
+    VALKEYMODULE_GET_API(ACLCheckPermissions);
     VALKEYMODULE_GET_API(ACLAddLogEntry);
     VALKEYMODULE_GET_API(ACLAddLogEntryByUserName);
     VALKEYMODULE_GET_API(DeauthenticateAndCloseClient);

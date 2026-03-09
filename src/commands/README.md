@@ -54,6 +54,7 @@ following keys. To be safe, assume all of them are optional.
   the command. (Don't use it for anything else.)
 * `"command_flags"`: An array of flags represented as strings. Command flags:
   * `"ADMIN"`
+  * `"ALL_DBS"`
   * `"ALLOW_BUSY"`
   * `"ASKING"`
   * `"BLOCKING"`
@@ -93,6 +94,9 @@ following keys. To be safe, assume all of them are optional.
   * `"STREAM"`
   * `"STRING"`
   * `"TRANSACTION"`
+* `"get_dbid_args"`: The name of the C function in Valkey's source code
+  implementing retrieval of database ID arguments from commands that accept
+  database ID as an argument.
 * `"command_tips"`: Optional. A list of one or more of these strings:
   * `"NONDETERMINISTIC_OUTPUT"`
   * `"NONDETERMINISTIC_OUTPUT_ORDER"`

@@ -179,7 +179,7 @@ start_server {tags {"acl external:skip"}} {
         set curruser "hpuser"
         foreach user [lshuffle $users] {
             if {[string first $curruser $user] != -1} {
-                assert_equal {user hpuser on nopass sanitize-payload resetchannels &foo +@all} $user
+                assert_equal {user hpuser on nopass sanitize-payload resetchannels &foo alldbs +@all} $user
             }
         }
 
@@ -737,6 +737,27 @@ start_server {tags {"acl external:skip"}} {
         assert {[dict get $entry object] eq {somechannelnotallowed}}
     }
 
+    test {ACL LOG is able to log database access violations} {
+        r ACL LOG RESET
+        r ACL SETUSER dbuser on nopass db=0 +@all ~*
+        r AUTH dbuser password
+        
+        catch {r SELECT 1}
+        catch {r SWAPDB 0 2}
+        catch {r FLUSHALL}
+        
+        set log [r ACL LOG]
+        set entry [lindex $log 0]
+        assert {[dict get $entry reason] eq {database}}
+        assert {[dict get $entry object] eq {flushall}}
+        set entry [lindex $log 1]
+        assert {[dict get $entry reason] eq {database}}
+        assert {[dict get $entry object] eq {2}}
+        set entry [lindex $log 2]
+        assert {[dict get $entry reason] eq {database}}
+        assert {[dict get $entry object] eq {1}}
+    }
+
     test {ACL LOG RESET is able to flush the entries in the log} {
         r ACL LOG RESET
         assert {[llength [r ACL LOG]] == 0}
@@ -1113,6 +1134,62 @@ start_server [list overrides [list "dir" $server_path "acl-pubsub-default" "allc
         r ACL deluser harry
         set e
     } {*NOPERM*channel*}
+
+    test {Validate a user can remove their own channel permissions} {
+        reconnect
+        r ACL SETUSER removed_channels on nopass +@all &test
+        
+        # Create a RESP3 client will attempt to close itself by removing it's channel permissions
+        set resp3 [valkey_client]
+        $resp3 HELLO 3
+        $resp3 AUTH removed_channels blank
+        $resp3 SUBSCRIBE test
+        $resp3 ACL SETUSER removed_channels resetchannels
+        $resp3 close
+    }
+
+    test {ACL LOAD does not crash server if current user is removed from ACL file} {
+        # Setup
+        r ACL setuser removed-user on >password +@all ~* &*
+        r ACL save
+        
+        set rd [valkey_deferring_client]
+        $rd AUTH removed-user password
+        assert_equal [$rd read] "OK"
+        
+        # Remove user from ACL file
+        set dir [lindex [r CONFIG GET dir] 1]
+        set aclfile [lindex [r CONFIG GET aclfile] 1]
+        set aclpath [file join $dir $aclfile]
+        
+        set fd [open $aclpath r]
+        set lines [split [read $fd] "\n"]
+        close $fd
+        
+        set filtered_lines [list]
+        foreach line $lines {
+            if {![string match "*removed-user*" $line]} {
+                lappend filtered_lines $line
+            }
+        }
+        
+        set fd [open $aclpath w]
+        puts $fd [join $filtered_lines "\n"]
+        close $fd
+        
+        # Execute ACL LOAD as the removed user, should return OK
+        $rd ACL LOAD
+        assert_equal [$rd read] "OK"
+        
+        # Client should be disconnected after the command completes
+        $rd PING
+        catch {$rd read} err
+        assert_match "*I/O error*" $err
+        $rd close
+        
+        # Verify server is still running
+        assert_equal [r PING] "PONG"
+    }
 }
 
 set server_path [tmpdir "resetchannels.acl"]

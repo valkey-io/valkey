@@ -31,7 +31,7 @@ endif
 ifneq ($(OPTIMIZATION),-O0)
 	OPTIMIZATION+=-fno-omit-frame-pointer
 endif
-DEPENDENCY_TARGETS=libvalkey linenoise lua hdr_histogram fpconv
+DEPENDENCY_TARGETS=libvalkey linenoise hdr_histogram fpconv
 NODEPS:=clean distclean
 
 # Default settings
@@ -63,6 +63,7 @@ endif
 
 PREFIX?=/usr/local
 INSTALL_BIN=$(PREFIX)/bin
+INSTALL_LIB=$(PREFIX)/lib
 INSTALL=install
 PKG_CONFIG?=pkg-config
 
@@ -250,7 +251,26 @@ ifdef OPENSSL_PREFIX
 endif
 
 # Include paths to dependencies
-FINAL_CFLAGS+= -I../deps/libvalkey/include -I../deps/linenoise -I../deps/lua/src -I../deps/hdr_histogram -I../deps/fpconv
+FINAL_CFLAGS+= -I../deps/libvalkey/include -I../deps/linenoise -I../deps/hdr_histogram -I../deps/fpconv
+
+# Lua scripting engine module
+LUA_MODULE_NAME:=modules/lua/libvalkeylua.so
+ifeq ($(BUILD_LUA),no)
+	LUA_MODULE=
+	LUA_MODULE_INSTALL=
+else
+	LUA_MODULE=$(LUA_MODULE_NAME)
+	LUA_MODULE_INSTALL=install-lua-module
+
+	current_dir = $(shell pwd)
+	FINAL_CFLAGS+=-DLUA_ENABLED -DLUA_LIB=libvalkeylua.so
+ifeq ($(uname_S),Darwin)
+	FINAL_LDFLAGS+= -Wl,-rpath,$(PREFIX)/lib
+	FINAL_LDFLAGS+= -Wl,-rpath,$(current_dir)/modules/lua
+else
+	FINAL_LDFLAGS+= -Wl,-rpath,$(PREFIX)/lib:$(current_dir)/modules/lua -Wl,--disable-new-dtags
+endif
+endif
 
 # Determine systemd support and/or build preference (defaulting to auto-detection)
 BUILD_WITH_SYSTEMD=no
@@ -353,7 +373,7 @@ RDMA_MODULE_NAME:=valkey-rdma$(PROG_SUFFIX).so
 RDMA_MODULE_CFLAGS:=$(FINAL_CFLAGS)
 ifeq ($(BUILD_RDMA),module)
 	FINAL_CFLAGS+=-DUSE_RDMA=$(BUILD_MODULE)
-	RDMA_CLIENT_LIBS = ../deps/libvalkey/lib/libvalkey_rdma.a $(RDMA_LIBS)
+	RDMA_CLIENT_LIBS = ../deps/libvalkey/lib/libvalkey_rdma.a
 	RDMA_MODULE=$(RDMA_MODULE_NAME)
 	RDMA_MODULE_CFLAGS+=-DUSE_RDMA=$(BUILD_MODULE) -DBUILD_RDMA_MODULE=$(BUILD_MODULE) $(RDMA_LIBS)
 endif
@@ -422,19 +442,176 @@ endif
 ENGINE_NAME=valkey
 SERVER_NAME=$(ENGINE_NAME)-server$(PROG_SUFFIX)
 ENGINE_SENTINEL_NAME=$(ENGINE_NAME)-sentinel$(PROG_SUFFIX)
-ENGINE_TRACE_OBJ=trace/trace.o trace/trace_commands.o trace/trace_db.o trace/trace_cluster.o trace/trace_server.o trace/trace_rdb.o trace/trace_aof.o
-ENGINE_SERVER_OBJ=threads_mngr.o adlist.o vector.o quicklist.o ae.o anet.o dict.o hashtable.o kvstore.o server.o sds.o zmalloc.o lzf_c.o lzf_d.o pqsort.o zipmap.o sha1.o ziplist.o release.o memory_prefetch.o io_threads.o networking.o util.o object.o db.o replication.o rdb.o t_string.o t_list.o t_set.o t_zset.o t_hash.o config.o aof.o pubsub.o multi.o debug.o sort.o intset.o syncio.o cluster.o cluster_legacy.o cluster_slot_stats.o crc16.o cluster_migrateslots.o endianconv.o commandlog.o eval.o bio.o rio.o rand.o memtest.o syscheck.o crcspeed.o crccombine.o crc64.o bitops.o sentinel.o notify.o setproctitle.o blocked.o hyperloglog.o latency.o sparkline.o valkey-check-rdb.o valkey-check-aof.o geo.o lazyfree.o module.o lrulfu.o evict.o expire.o geohash.o geohash_helper.o childinfo.o allocator_defrag.o defrag.o siphash.o rax.o t_stream.o listpack.o localtime.o lolwut.o lolwut5.o lolwut6.o lolwut9.o acl.o tracking.o socket.o tls.o sha256.o timeout.o setcpuaffinity.o monotonic.o mt19937-64.o resp_parser.o call_reply.o script.o functions.o commands.o strl.o connection.o unix.o logreqres.o rdma.o scripting_engine.o entry.o vset.o lua/script_lua.o lua/function_lua.o lua/engine_lua.o lua/debug_lua.o
+ENGINE_TRACE_OBJ = \
+    trace/trace.o \
+    trace/trace_aof.o \
+    trace/trace_cluster.o \
+    trace/trace_commands.o \
+    trace/trace_db.o \
+    trace/trace_rdb.o \
+    trace/trace_server.o
+ENGINE_SERVER_OBJ = \
+    acl.o \
+    adlist.o \
+    ae.o \
+    allocator_defrag.o \
+    anet.o \
+    aof.o \
+    bio.o \
+    bitops.o \
+    blocked.o \
+    call_reply.o \
+    childinfo.o \
+    cluster.o \
+    cluster_legacy.o \
+    cluster_migrateslots.o \
+    cluster_slot_stats.o \
+    commandlog.o \
+    commands.o \
+    config.o \
+    connection.o \
+    crc16.o \
+    crc64.o \
+    crccombine.o \
+    crcspeed.o \
+    db.o \
+    debug.o \
+    defrag.o \
+    dict.o \
+    entry.o \
+    eval.o \
+    evict.o \
+    expire.o \
+    fifo.o \
+    functions.o \
+    geo.o \
+    geohash.o \
+    geohash_helper.o \
+    hashtable.o \
+    hyperloglog.o \
+    intset.o \
+    io_threads.o \
+    kvstore.o \
+    latency.o \
+    lazyfree.o \
+    listpack.o \
+    localtime.o \
+    logreqres.o \
+    lolwut.o \
+    lolwut5.o \
+    lolwut6.o \
+    lolwut9.o \
+    lrulfu.o \
+    lzf_c.o \
+    lzf_d.o \
+    memory_prefetch.o \
+    memtest.o \
+    module.o \
+    monotonic.o \
+    mt19937-64.o \
+    multi.o \
+    mutexqueue.o \
+    networking.o \
+    notify.o \
+    object.o \
+    pqsort.o \
+    pubsub.o \
+    quicklist.o \
+    rand.o \
+    rax.o \
+    rdb.o \
+    rdma.o \
+    release.o \
+    replication.o \
+    resp_parser.o \
+    rio.o \
+    script.o \
+    scripting_engine.o \
+    sds.o \
+    sentinel.o \
+    server.o \
+    setcpuaffinity.o \
+    setproctitle.o \
+    sha1.o \
+    sha256.o \
+    siphash.o \
+    socket.o \
+    sort.o \
+    sparkline.o \
+    strl.o \
+    syncio.o \
+    syscheck.o \
+    t_hash.o \
+    t_list.o \
+    t_set.o \
+    t_stream.o \
+    t_string.o \
+    t_zset.o \
+    threads_mngr.o \
+    timeout.o \
+    tls.o \
+    tracking.o \
+    unix.o \
+    util.o \
+    valkey-check-aof.o \
+    valkey-check-rdb.o \
+    vector.o \
+    vset.o \
+    ziplist.o \
+    zipmap.o \
+    zmalloc.o
 ENGINE_SERVER_OBJ+=$(ENGINE_TRACE_OBJ)
 ENGINE_CLI_NAME=$(ENGINE_NAME)-cli$(PROG_SUFFIX)
-ENGINE_CLI_OBJ=anet.o adlist.o dict.o valkey-cli.o zmalloc.o release.o ae.o serverassert.o crcspeed.o crccombine.o crc64.o siphash.o crc16.o monotonic.o cli_common.o mt19937-64.o strl.o cli_commands.o sds.o util.o sha256.o
+ENGINE_CLI_OBJ = \
+    adlist.o \
+    ae.o \
+    anet.o \
+    cli_commands.o \
+    cli_common.o \
+    crc16.o \
+    crc64.o \
+    crccombine.o \
+    crcspeed.o \
+    dict.o \
+    monotonic.o \
+    mt19937-64.o \
+    release.o \
+    sds.o \
+    serverassert.o \
+    sha256.o \
+    siphash.o \
+    strl.o \
+    util.o \
+    valkey-cli.o \
+    zmalloc.o
 ENGINE_BENCHMARK_NAME=$(ENGINE_NAME)-benchmark$(PROG_SUFFIX)
-ENGINE_BENCHMARK_OBJ=ae.o anet.o valkey-benchmark.o adlist.o dict.o zmalloc.o serverassert.o release.o crcspeed.o crccombine.o crc64.o siphash.o crc16.o monotonic.o cli_common.o mt19937-64.o strl.o sds.o util.o sha256.o
+ENGINE_BENCHMARK_OBJ = \
+    adlist.o \
+    ae.o \
+    anet.o \
+    cli_common.o \
+    crc16.o \
+    crc64.o \
+    crccombine.o \
+    crcspeed.o \
+    dict.o \
+    fuzzer_client.o \
+    fuzzer_command_generator.o \
+    monotonic.o \
+    mt19937-64.o \
+    release.o \
+    sds.o \
+    serverassert.o \
+    sha256.o \
+    siphash.o \
+    strl.o \
+    util.o \
+    valkey-benchmark.o \
+    zmalloc.o
 ENGINE_CHECK_RDB_NAME=$(ENGINE_NAME)-check-rdb$(PROG_SUFFIX)
 ENGINE_CHECK_AOF_NAME=$(ENGINE_NAME)-check-aof$(PROG_SUFFIX)
 ENGINE_LIB_NAME=lib$(ENGINE_NAME).a
-ENGINE_TEST_FILES:=$(wildcard unit/*.c)
-ENGINE_TEST_OBJ:=$(sort $(patsubst unit/%.c,unit/%.o,$(ENGINE_TEST_FILES)))
-ENGINE_UNIT_TESTS:=$(ENGINE_NAME)-unit-tests$(PROG_SUFFIX)
+ENGINE_UNIT_GTESTS:=$(ENGINE_NAME)-unit-gtests$(PROG_SUFFIX)
 ALL_SOURCES=$(sort $(patsubst %.o,%.c,$(ENGINE_SERVER_OBJ) $(ENGINE_CLI_OBJ) $(ENGINE_BENCHMARK_OBJ)))
 
 USE_FAST_FLOAT?=no
@@ -448,7 +625,21 @@ ifeq ($(USE_FAST_FLOAT),yes)
 	FINAL_LIBS += $(FAST_FLOAT_STRTOD_OBJECT)
 endif
 
-all: $(SERVER_NAME) $(ENGINE_SENTINEL_NAME) $(ENGINE_CLI_NAME) $(ENGINE_BENCHMARK_NAME) $(ENGINE_CHECK_RDB_NAME) $(ENGINE_CHECK_AOF_NAME) $(TLS_MODULE) $(RDMA_MODULE)
+USE_LIBBACKTRACE?=no
+ifeq ($(USE_LIBBACKTRACE),yes)
+	FINAL_CFLAGS += -DUSE_LIBBACKTRACE
+	ifdef LIBBACKTRACE_PREFIX
+		FINAL_CFLAGS += -I$(LIBBACKTRACE_PREFIX)/include
+		FINAL_LDFLAGS += -L$(LIBBACKTRACE_PREFIX)/lib
+	endif
+	FINAL_LIBS += -lbacktrace
+endif
+
+DEPENDENCY_TARGETS+= gtest-parallel
+
+ALL_BUILD_PREREQUISITES=$(SERVER_NAME) $(ENGINE_SENTINEL_NAME) $(ENGINE_CLI_NAME) $(ENGINE_BENCHMARK_NAME) $(ENGINE_CHECK_RDB_NAME) $(ENGINE_CHECK_AOF_NAME) $(TLS_MODULE) $(RDMA_MODULE) $(LUA_MODULE)
+
+all: $(ALL_BUILD_PREREQUISITES)
 	@echo ""
 	@echo "Hint: It's a good idea to run 'make test' ;)"
 	@echo ""
@@ -462,7 +653,7 @@ endif
 
 .PHONY: all
 
-all-with-unit-tests: all $(ENGINE_UNIT_TESTS)
+all-with-unit-tests: all $(ENGINE_UNIT_GTESTS)
 .PHONY: all
 
 persist-settings: distclean
@@ -474,13 +665,17 @@ persist-settings: distclean
 	echo BUILD_TLS=$(BUILD_TLS) >> .make-settings
 	echo BUILD_RDMA=$(BUILD_RDMA) >> .make-settings
 	echo USE_SYSTEMD=$(USE_SYSTEMD) >> .make-settings
+	echo BUILD_LUA=$(BUILD_LUA) >> .make-settings
 	echo USE_FAST_FLOAT=$(USE_FAST_FLOAT) >> .make-settings
+	echo USE_LIBBACKTRACE=$(USE_LIBBACKTRACE) >> .make-settings
+	echo LIBBACKTRACE_PREFIX=$(LIBBACKTRACE_PREFIX) >> .make-settings
 	echo CFLAGS=$(CFLAGS) >> .make-settings
 	echo LDFLAGS=$(LDFLAGS) >> .make-settings
 	echo SERVER_CFLAGS=$(SERVER_CFLAGS) >> .make-settings
 	echo SERVER_LDFLAGS=$(SERVER_LDFLAGS) >> .make-settings
 	echo PREV_FINAL_CFLAGS=$(FINAL_CFLAGS) >> .make-settings
 	echo PREV_FINAL_LDFLAGS=$(FINAL_LDFLAGS) >> .make-settings
+	echo ENGINE_SERVER_OBJ=$(ENGINE_SERVER_OBJ) >> .make-settings
 	-(cd ../deps && $(MAKE) $(DEPENDENCY_TARGETS))
 
 .PHONY: persist-settings
@@ -500,15 +695,11 @@ endif
 
 # valkey-server
 $(SERVER_NAME): $(ENGINE_SERVER_OBJ)
-	$(SERVER_LD) -o $@ $^ ../deps/libvalkey/lib/libvalkey.a ../deps/lua/src/liblua.a ../deps/hdr_histogram/libhdrhistogram.a ../deps/fpconv/libfpconv.a $(FINAL_LIBS)
+	$(SERVER_LD) -o $@ $^ ../deps/libvalkey/lib/libvalkey.a ../deps/hdr_histogram/libhdrhistogram.a ../deps/fpconv/libfpconv.a $(FINAL_LIBS)
 
 # Valkey static library, used to compile against for unit testing
 $(ENGINE_LIB_NAME): $(ENGINE_SERVER_OBJ)
 	$(SERVER_AR) rcs $@ $^
-
-# valkey-unit-tests
-$(ENGINE_UNIT_TESTS): $(ENGINE_TEST_OBJ) $(ENGINE_LIB_NAME)
-	$(SERVER_LD) -o $@ $^ ../deps/libvalkey/lib/libvalkey.a ../deps/lua/src/liblua.a ../deps/hdr_histogram/libhdrhistogram.a ../deps/fpconv/libfpconv.a $(FINAL_LIBS)
 
 # valkey-sentinel
 $(ENGINE_SENTINEL_NAME): $(SERVER_NAME)
@@ -530,6 +721,10 @@ $(TLS_MODULE_NAME): $(SERVER_NAME)
 $(RDMA_MODULE_NAME): $(SERVER_NAME)
 	$(QUIET_CC)$(CC) -o $@ rdma.c -shared -fPIC $(RDMA_MODULE_CFLAGS)
 
+# engine_lua.so
+$(LUA_MODULE_NAME): $(SERVER_NAME)
+	cd modules/lua && $(MAKE) OPTIMIZATION="$(OPTIMIZATION)"
+
 # valkey-cli
 $(ENGINE_CLI_NAME): $(ENGINE_CLI_OBJ)
 	$(SERVER_LD) -o $@ $^ ../deps/libvalkey/lib/libvalkey.a ../deps/linenoise/linenoise.o ../deps/fpconv/libfpconv.a $(FINAL_LIBS) $(TLS_CLIENT_LIBS) $(RDMA_CLIENT_LIBS)
@@ -547,14 +742,8 @@ DEP = $(ENGINE_SERVER_OBJ:%.o=%.d) $(ENGINE_CLI_OBJ:%.o=%.d) $(ENGINE_BENCHMARK_
 %.o: %.c .make-prerequisites
 	$(SERVER_CC) -MMD -o $@ -c $<
 
-lua/%.o: lua/%.c .make-prerequisites
-	$(SERVER_CC) -MMD -o $@ -c $<
-
 trace/%.o: trace/%.c .make-prerequisites
 	$(SERVER_CC) -Itrace -MMD -o $@ -c $<
-
-unit/%.o: unit/%.c .make-prerequisites
-	$(SERVER_CC) -MMD -o $@ -c $<
 
 # The following files are checked in and don't normally need to be rebuilt. They
 # are built only if python is available and their prereqs are modified.
@@ -566,18 +755,14 @@ fmtargs.h: ../utils/generate-fmtargs.py
 	$(QUITE_GEN)sed '/Everything below this line/,$$d' $@ > $@.tmp
 	$(QUITE_GEN)$(PYTHON) ../utils/generate-fmtargs.py >> $@.tmp
 	$(QUITE_GEN)mv $@.tmp $@
-
-unit/test_files.h: unit/*.c ../utils/generate-unit-test-header.py
-	$(QUIET_GEN)$(PYTHON) ../utils/generate-unit-test-header.py
-
-unit/test_main.o: unit/test_files.h
 endif
 
 commands.c: $(COMMANDS_DEF_FILENAME).def
 
 clean:
-	rm -rf $(SERVER_NAME) $(ENGINE_SENTINEL_NAME) $(ENGINE_CLI_NAME) $(ENGINE_BENCHMARK_NAME) $(ENGINE_CHECK_RDB_NAME) $(ENGINE_CHECK_AOF_NAME) $(ENGINE_UNIT_TESTS) $(ENGINE_LIB_NAME) unit/*.o unit/*.d lua/*.o lua/*.d trace/*.o trace/*.d *.o *.gcda *.gcno *.gcov valkey.info lcov-html Makefile.dep *.so
+	rm -rf $(SERVER_NAME) $(ENGINE_SENTINEL_NAME) $(ENGINE_CLI_NAME) $(ENGINE_BENCHMARK_NAME) $(ENGINE_CHECK_RDB_NAME) $(ENGINE_CHECK_AOF_NAME) $(ENGINE_UNIT_GTESTS) $(ENGINE_LIB_NAME) trace/*.o trace/*.d *.o *.gcda *.gcno *.gcov valkey.info lcov-html Makefile.dep *.so
 	rm -f $(DEP)
+	-(cd modules/lua && $(MAKE) clean)
 
 .PHONY: clean
 
@@ -585,15 +770,21 @@ distclean: clean
 	-(cd ../deps && $(MAKE) distclean)
 	-(cd modules && $(MAKE) clean)
 	-(cd ../tests/modules && $(MAKE) clean)
+	-(cd unit && $(MAKE) clean)
 	-(rm -f .make-*)
+	-(find unit -type d -name __pycache__ -exec rm -rf {} +)
 
 .PHONY: distclean
 
-test: $(SERVER_NAME) $(ENGINE_CHECK_AOF_NAME) $(ENGINE_CHECK_RDB_NAME) $(ENGINE_CLI_NAME) $(ENGINE_BENCHMARK_NAME)
+test: $(ALL_BUILD_PREREQUISITES)
 	@(cd ..; VALKEY_PROG_SUFFIX="$(PROG_SUFFIX)" ./runtest)
 
-test-unit: $(ENGINE_UNIT_TESTS)
-	./$(ENGINE_UNIT_TESTS)
+test-unit:
+	@(cd unit && $(MAKE) test-unit)
+
+# valkey-unit-gtests
+$(ENGINE_UNIT_GTESTS): $(ENGINE_LIB_NAME)
+	@(cd unit && $(MAKE) $(ENGINE_UNIT_GTESTS))
 
 test-modules: $(SERVER_NAME)
 	@(cd ..; ./runtest-moduleapi)
@@ -636,7 +827,7 @@ valgrind:
 helgrind:
 	$(MAKE) OPTIMIZATION="-O0" MALLOC="libc" CFLAGS="-D__ATOMIC_VAR_FORCE_SYNC_MACROS" SERVER_CFLAGS="-I/usr/local/include" SERVER_LDFLAGS="-L/usr/local/lib"
 
-install: all
+install: all $(LUA_MODULE_INSTALL)
 	@mkdir -p $(INSTALL_BIN)
 	$(call MAKE_INSTALL,$(SERVER_NAME),$(INSTALL_BIN))
 	$(call MAKE_INSTALL,$(ENGINE_BENCHMARK_NAME),$(INSTALL_BIN))
@@ -650,6 +841,10 @@ install: all
 	$(call MAYBE_INSTALL_REDIS_SYMLINK,$(ENGINE_CHECK_RDB_NAME),$(INSTALL_BIN))
 	$(call MAYBE_INSTALL_REDIS_SYMLINK,$(ENGINE_CHECK_AOF_NAME),$(INSTALL_BIN))
 	$(call MAYBE_INSTALL_REDIS_SYMLINK,$(ENGINE_SENTINEL_NAME),$(INSTALL_BIN))
+
+install-lua-module: $(LUA_MODULE)
+	@mkdir -p $(INSTALL_LIB)
+	$(call MAKE_INSTALL,$(LUA_MODULE),$(INSTALL_LIB))
 
 uninstall:
 	@rm -f $(INSTALL_BIN)/{$(SERVER_NAME),$(ENGINE_BENCHMARK_NAME),$(ENGINE_CLI_NAME),$(ENGINE_CHECK_RDB_NAME),$(ENGINE_CHECK_AOF_NAME),$(ENGINE_SENTINEL_NAME)}

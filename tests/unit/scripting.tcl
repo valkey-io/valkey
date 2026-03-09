@@ -368,12 +368,6 @@ start_server {tags {"scripting"}} {
         set e
     } {*against a key*}
 
-    test {EVAL - JSON string encoding a string larger than 2GB} {
-        run_script {
-            local s = string.rep("a", 1024 * 1024 * 1024)
-            return #cjson.encode(s..s..s)
-        } 0
-    } {3221225474} {large-memory} ;# length includes two double quotes at both ends
 
     test {EVAL - JSON numeric decoding} {
         # We must return the table as a string because otherwise
@@ -1233,7 +1227,15 @@ start_server {tags {"scripting"}} {
     } {*Script attempted to access nonexistent global variable 'print'*}
 }
 
-# start a new server to test the large-memory tests
+start_server {tags {"scripting external:skip large-memory"}} {
+    test {EVAL - JSON string encoding a string larger than 2GB} {
+        run_script {
+            local s = string.rep("a", 750 * 1024 * 1024)
+            return #cjson.encode(s..s..s)
+        } 0
+    } {2359296002} ;# length includes two double quotes at both ends
+}
+
 start_server {tags {"scripting external:skip large-memory"}} {
     test {EVAL - Test long escape sequences for strings} {
         r eval {
@@ -1253,7 +1255,9 @@ start_server {tags {"scripting external:skip large-memory"}} {
             return #func()
         } 0
     } {1}
+}
 
+start_server {tags {"scripting external:skip large-memory"}} {
     test {EVAL - Lua can parse string with too many new lines} {
         # Create a long string consisting only of newline characters. When Lua
         # fails to parse a string, it typically includes a snippet like
@@ -1320,7 +1324,7 @@ start_server {tags {"scripting"}} {
         set rd [valkey_deferring_client]
         r config set lua-time-limit 10
 
-        # senging (in a pipeline):
+        # sending (in a pipeline):
         # 1. eval "while 1 do redis.call('ping') end" 0
         # 2. ping
         if {$is_eval == 1} {
@@ -2523,6 +2527,24 @@ start_server {tags {"scripting"}} {
         assert_equal [errorrstat MY_ERR_CODE r] {} ;# error stats were not incremented
     }
 
+    test "LUA redis.error_reply API sanitation" {
+        r config resetstat
+        assert_error {ERR*} {
+            r eval {error(redis.error_reply("-ERR\r\n-ERR FAKE"))} 0
+        }
+        assert_equal PONG [r ping]
+        assert_equal [errorrstat ERR r] {count=1}
+    }
+
+    test "LUA error function API sanitation" {
+        r config resetstat
+        assert_error {ERR*} {
+            r eval {error("-ERR\r\n-ERR FAKE")} 0
+        }
+        assert_equal PONG [r ping]
+        assert_equal [errorrstat ERR r] {count=1}
+    }
+
     test "LUA test pcall" {
         assert_equal [
             r eval {local status, res = pcall(function() return 1 end); return 'status: ' .. tostring(status) .. ' result: ' .. res} 0
@@ -2597,5 +2619,64 @@ start_server {tags {"scripting"}} {
         assert_error {ERR unknown error script: *} {
             r eval "error({})" 0
         }
+    }
+
+    test {EVAL - SELECT inside script affects subsequent commands in same script} {
+        r select 0
+        r del testkey
+        r set testkey "db0_value"
+        
+        # Run script that:
+        # 1. Reads from DB 0
+        # 2. Switches to DB 1
+        # 3. Sets a key in DB 1
+        # 4. Returns the value from DB 1
+        set result [run_script {
+            local db0_val = server.call('get', 'testkey')
+            server.call('select', '1')
+            server.call('set', 'testkey', 'db1_value')
+            return server.call('get', 'testkey')
+        } 1 testkey]
+        
+        # Script returned the DB 1 value
+        assert_equal "db1_value" $result
+        
+        # Verify we're back in DB 0 after script
+        assert_equal "db0_value" [r get testkey]
+        
+        # Verify DB 1 has the new value that was set by the script
+        r select 1
+        assert_equal "db1_value" [r get testkey]
+        
+        # Cleanup
+        r del testkey
+        r select 0
+        r del testkey
+        set _ {}
+    } {} {singledb:skip}
+
+    test "Don't stop the dirty scripts when an OOM occurs midway through execution" {
+        r flushall
+        r config set maxmemory 1
+        r eval {
+            server.call('get', KEYS[1])
+            server.call('del', KEYS[1])
+            server.call('set', KEYS[1], ARGV[1])
+        } 1 foo bar
+       assert_equal bar [r get foo]
+       r config set maxmemory 0
+    }
+
+    test "Stop the non-dirty scripts when an OOM occurs midway through execution" {
+        r flushall
+        r config set maxmemory 1
+        assert_error {OOM *} {
+            r eval {
+                server.call('get', KEYS[1])
+                server.call('set', KEYS[1], ARGV[1])
+            } 1 foo bar
+        }
+       assert_equal {} [r get foo]
+       r config set maxmemory 0
     }
 }

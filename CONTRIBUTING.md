@@ -76,7 +76,7 @@ If you're contributing code to the Valkey project in any other form, including
 sending a code fragment or patch via private email or public discussion groups,
 you need to ensure that the contribution is in accordance with the DCO.
 
-# How to provide a patch or a new feature
+## How to provide a patch or a new feature
 
 1. If it is a major feature or a semantical change, please don't start coding
 straight away: if your feature is not a conceptual fit you'll lose a lot of
@@ -107,5 +107,25 @@ which includes documentation about various best practices for writing Valkey cod
 
 To link a pull request to an existing issue, please write "Fixes #xyz" somewhere
 in the pull request description, where xyz is the issue number.
+
+## Running the daily workflow on demand for your branch
+
+Use [`.github/workflows/daily.yml`](.github/workflows/daily.yml) with
+`workflow_dispatch` to run daily tests manually on any branch in your fork.
+
+1. Open your fork on GitHub and go to **Actions** -> **Daily**.
+2. Click **Run workflow**.
+3. In the **Branch** dropdown, select the branch that contains the workflow file you want to use.
+4. In the input fields, set:
+   * `use_repo` to your fork (for example, `your-user/valkey`)
+   * `use_git_ref` to your branch name (or a specific commit SHA)
+5. Optionally set `skipjobs`, `skiptests`, `test_args`, and `cluster_test_args`.
+6. Click **Run workflow**.
+
+Notes:
+* To run the full matrix, set `skipjobs` and `skiptests` to `none`.
+  Do not leave them empty, since the workflow input defaults may be applied.
+* The scheduled part of this workflow is gated to `valkey-io/valkey`, but manual
+  `workflow_dispatch` runs work for forks.
 
 Thanks!

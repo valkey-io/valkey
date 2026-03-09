@@ -46,7 +46,7 @@ static int checkStringLength(client *c, long long size, long long append) {
     if (mustObeyClient(c)) return C_OK;
     /* 'uint64_t' cast is there just to prevent undefined behavior on overflow */
     long long total = (uint64_t)size + append;
-    /* Test configured max-bulk-len represending a limit of the biggest string object,
+    /* Test configured max-bulk-len representing a limit of the biggest string object,
      * and also test for overflow. */
     if (total > server.proto_max_bulk_len || total < size || total < append) {
         addReplyError(c, "string exceeds maximum allowed size (proto-max-bulk-len)");
@@ -56,7 +56,7 @@ static int checkStringLength(client *c, long long size, long long append) {
 }
 
 /* Forward declaration */
-static int getExpireMillisecondsOrReply(client *c, robj *expire, int flags, int unit, long long *milliseconds);
+static int getExpireMillisecondsOrReply(client *c, robj *expire, int flags, int unit, mstime_t *milliseconds);
 
 /* The setGenericCommand() function implements the SET operation with different
  * options and variants. This function is called in order to implement the
@@ -82,7 +82,7 @@ void setGenericCommand(client *c,
                        robj *ok_reply,
                        robj *abort_reply,
                        robj *comparison) {
-    long long milliseconds = 0; /* initialized to avoid any harmness warning */
+    mstime_t milliseconds = 0; /* initialized to avoid any harmness warning */
     int found = 0;
     int setkey_flags = 0;
 
@@ -198,7 +198,7 @@ cleanup:
  * If return C_OK, "milliseconds" output argument will be set to the resulting absolute timestamp.
  * If return C_ERR, an error reply has been added to the given client.
  */
-static int getExpireMillisecondsOrReply(client *c, robj *expire, int flags, int unit, long long *milliseconds) {
+static int getExpireMillisecondsOrReply(client *c, robj *expire, int flags, int unit, mstime_t *milliseconds) {
     int ret = getLongLongFromObjectOrReply(c, expire, milliseconds, NULL);
     if (ret != C_OK) {
         return ret;
@@ -324,18 +324,18 @@ void getexCommand(client *c) {
         return;
     }
 
+    /* Validate the expiration time value first */
+    mstime_t milliseconds = 0;
+    if (expire && getExpireMillisecondsOrReply(c, expire, flags, unit, &milliseconds) != C_OK) {
+        return;
+    }
+
     robj *o;
 
     if ((o = lookupKeyReadOrReply(c, c->argv[1], shared.null[c->resp])) == NULL)
         return;
 
     if (checkType(c, o, OBJ_STRING)) {
-        return;
-    }
-
-    /* Validate the expiration time value first */
-    long long milliseconds = 0;
-    if (expire && getExpireMillisecondsOrReply(c, expire, flags, unit, &milliseconds) != C_OK) {
         return;
     }
 

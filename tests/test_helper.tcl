@@ -139,6 +139,8 @@ set ::numclients 16
 proc execute_test_file __testname {
     set path "tests/$__testname.tcl"
     set ::curfile $path
+    # Reset tags at the start of each test file
+    set ::tags {}
     source $path
     send_data_packet $::test_server_fd done "$__testname"
 }
@@ -150,6 +152,8 @@ proc execute_test_file __testname {
 # finished.
 proc execute_test_code {__testname filename code} {
     set ::curfile $filename
+    # Reset tags at the start of each test code execution
+    set ::tags {}
     eval $code
     send_data_packet $::test_server_fd done "$__testname"
 }
@@ -683,8 +687,9 @@ proc print_help_screen {} {
         "                   line). This option can be repeated."
         "--skiptest <test>  Test name or regexp pattern (if <test> starts with '/') to"
         "                   skip. This option can be repeated."
-        "--tags <tags>      Run only tests having specified tags or not having '-'"
-        "                   prefixed tags."
+        "--tags <tags>      Run only tests having specified tags (allow list) or, for '-'"
+        "                   prefixed tags, skip tests with the tag (deny list). Only"
+        "                   top-level-only tags are possible in the allow list."
         "--dont-clean       Don't delete valkey log files after the run."
         "--dont-pre-clean   Don't delete existing valkey log files before the run."
         "--no-latency       Skip latency measurements and validation by some tests."
@@ -727,6 +732,12 @@ for {set j 0} {$j < [llength $argv]} {incr j} {
             if {[string index $tag 0] eq "-"} {
                 lappend ::denytags [string range $tag 1 end]
             } else {
+                # Validate that allowtags only use top-level tags
+                if {[lsearch -exact $::toplevel_only_tags $tag] < 0} {
+                    puts "Error: --tags allowlist can only use top-level-only tags: large-memory, needs:other-server, compatible-redis, network"
+                    puts "Invalid tag: $tag"
+                    exit 1
+                }
                 lappend ::allowtags $tag
             }
         }

@@ -21,9 +21,12 @@ if (BUILD_LUA)
     add_subdirectory(modules/lua)
     add_dependencies(valkey-server valkeylua)
     target_compile_definitions(valkey-server PRIVATE LUA_ENABLED)
-    target_compile_definitions(valkey-server PRIVATE LUA_LIB=libvalkeylua.so)
-    target_link_options(valkey-server PRIVATE -Wl,--disable-new-dtags)
-
+    if (UNIX AND NOT APPLE)
+        target_compile_definitions(valkey-server PRIVATE LUA_LIB=libvalkeylua.so)
+        target_link_options(valkey-server PRIVATE -Wl,--disable-new-dtags)
+    else ()
+        target_compile_definitions(valkey-server PRIVATE LUA_LIB=libvalkeylua.dylib)
+    endif ()
     set(VALKEY_INSTALL_RPATH "")
     set_target_properties(valkey-server PROPERTIES
         INSTALL_RPATH "${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR};${CMAKE_LIBRARY_OUTPUT_DIRECTORY}"
@@ -106,7 +109,7 @@ if (BUILD_EXAMPLE_MODULES)
     add_subdirectory(modules)
 endif ()
 
-if (BUILD_UNIT_TESTS)
+if (BUILD_UNIT_GTESTS)
     add_subdirectory(unit)
 endif ()
 

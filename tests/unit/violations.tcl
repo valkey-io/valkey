@@ -12,7 +12,7 @@ start_server [list overrides [list save ""] tags {"large-memory"}] {
         } err
         assert_match {*too large*} $err
         r xlen S1
-    } {0} {large-memory}
+    } {0}
 }
 
 # One XADD with one huge (exactly nearly) 4GB field
@@ -29,7 +29,7 @@ start_server [list overrides [list save ""] tags {"large-memory"}] {
         } err
         assert_match {*too large*} $err
         r xlen S1
-    } {0} {large-memory}
+    } {0}
 }
 
 # Gradually add big stream fields using repeated XADD calls
@@ -41,7 +41,7 @@ start_server [list overrides [list save ""] tags {"large-memory"}] {
         }
         r ping
         r xlen stream
-    } {10} {large-memory}
+    } {10}
 }
 
 # Add over 4GB to a single stream listpack (one XADD command)
@@ -57,7 +57,7 @@ start_server [list overrides [list save ""] tags {"large-memory"}] {
         catch {r read} err
         assert_match {*too large*} $err
         r xlen S
-    } {0} {large-memory}
+    } {0}
 }
 
 # Gradually add big hash fields using repeated HSET calls
@@ -70,7 +70,7 @@ start_server [list overrides [list save ""] tags {"large-memory"}] {
             r hset h $j $::str500
         }
         r object encoding h
-    } {hashtable} {large-memory}
+    } {hashtable}
 }
 
 # Add over 4GB to a single hash field (one HSET command)
@@ -84,7 +84,7 @@ start_server [list overrides [list save ""] tags {"large-memory"}] {
         r write "\$1\r\nA\r\n"
         write_big_bulk 5000000000 ;#5gb
         r object encoding H1
-    } {hashtable} {large-memory}
+    } {hashtable}
 }
 } ;# run_solo
 

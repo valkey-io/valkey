@@ -1146,7 +1146,7 @@ char *getObjectTypeName(robj *o) {
     }
 }
 
-/* This command implements SCAN, HSCAN and SSCAN commands.
+/* This command implements SCAN, HSCAN, SSCAN and CLUSTERSCAN commands.
  * If object 'o' is passed, then it must be a Hash, Set or Zset object, otherwise
  * if 'o' is NULL the command will operate on the dictionary associated with
  * the current database.
@@ -1156,8 +1156,12 @@ char *getObjectTypeName(robj *o) {
  * in order to parse options.
  *
  * In the case of a Hash object the function returns both the field and value
- * of every element on the Hash. */
-void scanGenericCommand(client *c, robj *o, unsigned long long cursor) {
+ * of every element on the Hash.
+ *
+ * slot, cursor_prefix and finished_cursor_prefix are used during CLUSTERSCAN to scan
+ * a specific slot and to return the valid cursor to advance the scan.
+ */
+void scanGenericCommand(client *c, robj *o, unsigned long long cursor, int slot, sds cursor_prefix, sds finished_cursor_prefix) {
     int i, j;
     long count = DEFAULT_SCAN_COMMAND_COUNT;
     sds pat = NULL;
@@ -1219,6 +1223,9 @@ void scanGenericCommand(client *c, robj *o, unsigned long long cursor) {
             }
             only_keys = 1;
             i++;
+        } else if (!strcasecmp(objectGetVal(c->argv[i]), "slot") && j >= 2 && slot >= 0) {
+            /* SLOT is already parsed by clusterscanCommand, we can skip it here. */
+            i += 2;
         } else {
             addReplyErrorObject(c, shared.syntaxerr);
             return;
@@ -1286,9 +1293,11 @@ void scanGenericCommand(client *c, robj *o, unsigned long long cursor) {
             .only_keys = only_keys,
         };
 
-        /* A pattern may restrict all matching keys to one cluster slot. */
-        int onlydidx = -1;
-        if (o == NULL && use_pattern && server.cluster_enabled) {
+        /* Determine which slot to scan:
+         * - If slot >= 0, scan the specific slot (CLUSTERSCAN)
+         * - If slot == -1 try to derive from pattern; otherwise scan all */
+        int onlydidx = slot;
+        if (onlydidx == -1 && o == NULL && use_pattern && server.cluster_enabled) {
             onlydidx = patternHashSlot(pat, patlen);
         }
         do {
@@ -1352,7 +1361,17 @@ void scanGenericCommand(client *c, robj *o, unsigned long long cursor) {
 
     /* Step 3: Reply to the client. */
     addReplyArrayLen(c, 2);
-    addReplyBulkLongLong(c, cursor);
+
+    /* Handle CLUSTERSCAN prefixing */
+    if (cursor == 0 && finished_cursor_prefix) {
+        sds new_cursor = sdscatfmt(sdsempty(), "%S%U", finished_cursor_prefix, cursor);
+        addReplyBulkSds(c, new_cursor);
+    } else if (cursor_prefix) {
+        sds new_cursor = sdscatfmt(sdsempty(), "%S%U", cursor_prefix, cursor);
+        addReplyBulkSds(c, new_cursor);
+    } else {
+        addReplyBulkLongLong(c, cursor);
+    }
 
     addReplyArrayLen(c, vectorLen(&result));
     for (uint32_t i = 0; i < vectorLen(&result); i++) {
@@ -1370,7 +1389,7 @@ void scanGenericCommand(client *c, robj *o, unsigned long long cursor) {
 void scanCommand(client *c) {
     unsigned long long cursor;
     if (parseScanCursorOrReply(c, objectGetVal(c->argv[1]), &cursor) == C_ERR) return;
-    scanGenericCommand(c, NULL, cursor);
+    scanGenericCommand(c, NULL, cursor, -1, NULL, NULL);
 }
 
 void dbsizeCommand(client *c) {
@@ -1986,12 +2005,15 @@ void propagateDeletion(serverDb *db, robj *key, int lazy, int slot) {
  *
  * This function builds and propagates a single HDEL command with multiple fields
  * for the given hash object `o`. It temporarily enables replication (if needed),
- * constructs the command using the field names, and sends it via alsoPropagate(). */
-static void propagateFieldsDeletion(serverDb *db, robj *o, size_t n_fields, robj *fields[], int didx) {
+ * constructs the command using the field names, and sends it via alsoPropagate().
+ * Returns how many fields where propagated */
+int propagateFieldsDeletion(serverDb *db, robj *o, size_t n_fields, robj *fields[], int didx) {
     int prev_replication_allowed = server.replication_allowed;
     server.replication_allowed = 1;
 
     robj *argv[EXPIRE_BULK_LIMIT + 2]; /* HDEL + key + fields */
+    if (n_fields > EXPIRE_BULK_LIMIT) n_fields = EXPIRE_BULK_LIMIT;
+
     int argc = 0;
     robj *keyobj = createStringObjectFromSds(objectGetKey(o));
     argv[argc++] = shared.hdel; // HDEL command
@@ -2006,6 +2028,7 @@ static void propagateFieldsDeletion(serverDb *db, robj *o, size_t n_fields, robj
     for (int i = 0; i < argc; i++) {
         decrRefCount(argv[i]);
     }
+    return n_fields;
 }
 
 /* Process expired fields for a hash delete them and propagate changes to replicas and AOF.
@@ -2348,7 +2371,7 @@ int getKeysUsingKeySpecs(struct serverCommand *cmd, robj **argv, int argc, int s
             }
 
             first += spec->fk.keynum.firstkey;
-            last = first + (int)numkeys - 1;
+            last = first + ((int)numkeys - 1) * step;
         } else {
             /* unknown spec */
             goto invalid_spec;

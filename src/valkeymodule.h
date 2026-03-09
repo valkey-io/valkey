@@ -172,7 +172,7 @@ typedef struct ValkeyModuleStreamID {
 #define VALKEYMODULE_CTX_FLAGS_MULTI (1 << 1)
 /* The instance is a primary */
 #define VALKEYMODULE_CTX_FLAGS_PRIMARY (1 << 2)
-/* The instance is a replic */
+/* The instance is a replica */
 #define VALKEYMODULE_CTX_FLAGS_REPLICA (1 << 3)
 /* The instance is read-only (usually meaning it's a replica as well) */
 #define VALKEYMODULE_CTX_FLAGS_READONLY (1 << 4)
@@ -674,7 +674,8 @@ static const ValkeyModuleEvent ValkeyModuleEvent_ReplicationRoleChanged = {VALKE
 #define VALKEYMODULE_SUBEVENT_ATOMIC_SLOT_MIGRATION_EXPORT_COMPLETED 5
 #define _VALKEYMODULE_SUBEVENT_ATOMIC_SLOT_MIGRATION_NEXT 6
 
-/* ValkeyModuleClientInfo flags. */
+/* ValkeyModuleClientInfo flags.
+ * Note: flags VALKEYMODULE_CLIENTINFO_FLAG_PRIMARY and below were added in Valkey 9.1 */
 #define VALKEYMODULE_CLIENTINFO_FLAG_SSL (1 << 0)
 #define VALKEYMODULE_CLIENTINFO_FLAG_PUBSUB (1 << 1)
 #define VALKEYMODULE_CLIENTINFO_FLAG_BLOCKED (1 << 2)
@@ -682,6 +683,13 @@ static const ValkeyModuleEvent ValkeyModuleEvent_ReplicationRoleChanged = {VALKE
 #define VALKEYMODULE_CLIENTINFO_FLAG_UNIXSOCKET (1 << 4)
 #define VALKEYMODULE_CLIENTINFO_FLAG_MULTI (1 << 5)
 #define VALKEYMODULE_CLIENTINFO_FLAG_READONLY (1 << 6)
+#define VALKEYMODULE_CLIENTINFO_FLAG_PRIMARY (1 << 7)
+#define VALKEYMODULE_CLIENTINFO_FLAG_REPLICA (1 << 8)
+#define VALKEYMODULE_CLIENTINFO_FLAG_MONITOR (1 << 9)
+#define VALKEYMODULE_CLIENTINFO_FLAG_MODULE (1 << 10)
+#define VALKEYMODULE_CLIENTINFO_FLAG_AUTHENTICATED (1 << 11)
+#define VALKEYMODULE_CLIENTINFO_FLAG_EVER_AUTHENTICATED (1 << 12)
+#define VALKEYMODULE_CLIENTINFO_FLAG_FAKE (1 << 13)
 
 /* Here we take all the structures that the module pass to the core
  * and the other way around. Notably the list here contains the structures

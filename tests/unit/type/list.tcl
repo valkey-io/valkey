@@ -308,7 +308,7 @@ if {[lindex [r config get proto-max-bulk-len] 1] == 10000000000} {
         assert_equal [read_big_bulk {r rpop lst}] $str_length
         assert {[r llen lst] == 1}
         assert_equal [read_big_bulk {r rpop lst}] $str_length
-   } {} {large-memory}
+   }
 
    test {Test LINDEX and LINSERT on plain nodes over 4GB} {
        r flushdb
@@ -323,7 +323,7 @@ if {[lindex [r config get proto-max-bulk-len] 1] == 10000000000} {
        r write "*5\r\n\$7\r\nLINSERT\r\n\$3\r\nlst\r\n\$6\r\nBEFORE\r\n\$3\r\n\"9\"\r\n"
        write_big_bulk 10;
        assert_equal [read_big_bulk {r rpop lst}] $str_length
-   } {} {large-memory}
+   }
 
    test {Test LTRIM on plain nodes over 4GB} {
        r flushdb
@@ -335,7 +335,7 @@ if {[lindex [r config get proto-max-bulk-len] 1] == 10000000000} {
        assert_equal [r llen lst] 2
        assert_equal [r rpop lst] 9
        assert_equal [read_big_bulk {r rpop lst}] $str_length
-   } {} {large-memory}
+   }
 
    test {Test LREM on plain nodes over 4GB} {
        r flushdb
@@ -346,7 +346,7 @@ if {[lindex [r config get proto-max-bulk-len] 1] == 10000000000} {
        r LREM lst -2 "one"
        assert_equal [read_big_bulk {r rpop lst}] $str_length
        r llen lst
-   } {1} {large-memory}
+   } {1}
 
    test {Test LSET on plain nodes over 4GB} {
        r flushdb
@@ -358,7 +358,7 @@ if {[lindex [r config get proto-max-bulk-len] 1] == 10000000000} {
        assert_equal [r rpop lst] "cc"
        assert_equal [r rpop lst] "bb"
        assert_equal [read_big_bulk {r rpop lst}] $str_length
-   } {} {large-memory}
+   }
 
     test {Test LSET on plain nodes with large elements under packed_threshold over 4GB} {
         r flushdb
@@ -368,7 +368,7 @@ if {[lindex [r config get proto-max-bulk-len] 1] == 10000000000} {
             write_big_bulk 1000000000
         }
         r ping
-    } {PONG} {large-memory}
+    } {PONG}
 
     test {Test LSET splits a quicklist node, and then merge} {
         # Test when a quicklist node can't be inserted and is split, the split
@@ -389,7 +389,7 @@ if {[lindex [r config get proto-max-bulk-len] 1] == 10000000000} {
         }
         assert_equal "g" [r lindex lst 1]
         r ping
-    } {PONG} {large-memory}
+    } {PONG}
 
     test {Test LSET splits a LZF compressed quicklist node, and then merge} {
         # Test when a LZF compressed quicklist node can't be inserted and is split,
@@ -414,7 +414,7 @@ if {[lindex [r config get proto-max-bulk-len] 1] == 10000000000} {
         assert_equal "h" [r lindex lst 0]
         r config set list-compress-depth 0
         r ping
-    } {PONG} {large-memory}
+    } {PONG}
 
     test {Test LMOVE on plain nodes over 4GB} {
        r flushdb
@@ -432,7 +432,7 @@ if {[lindex [r config get proto-max-bulk-len] 1] == 10000000000} {
        assert_equal [r lpop lst2{t}] "cc"
        assert_equal [r lpop lst{t}] "dd"
        assert_equal [read_big_bulk {r rpop lst{t}}] $str_length
-   } {} {large-memory}
+   }
 
     # restore defaults
     r config set proto-max-bulk-len 536870912

@@ -762,6 +762,40 @@ start_server {tags {"acl external:skip"}} {
         assert_equal "OK" [$r2 flushdb]
     }
 
+    test {Test alldbs command with dbnum databases but wrong range} {
+        set dbnum [lindex [r config get databases] 1]
+        
+        # Create a user with dbnum databases, but with database IDs
+        # out of valid range for this server, so that this user
+        # would not have access to alldbs commands
+        set db_list ""
+        for {set i 1} {$i <= $dbnum} {incr i} {
+            if {$db_list ne ""} {
+                append db_list ","
+            }
+            append db_list $i
+        }
+        
+        r ACL SETUSER wrong-range on nopass +@all ~* db=$db_list
+        $r2 auth wrong-range password
+        
+        assert_equal "OK" [$r2 select 1]
+        $r2 set testkey value
+        
+        # FLUSHALL should fail because user doesn't have access to DB 0
+        catch {$r2 flushall} e
+        assert_match "*NOPERM*database*" $e
+        
+        assert_equal "value" [$r2 get testkey]
+        
+        assert_equal "OK" [$r2 flushdb]
+        assert_equal {} [$r2 get testkey]
+        
+        # cleanup
+        $r2 auth default password
+        $r2 select 0
+    }
+
     test {Test SWAPDB with database permissions} {
         r ACL SETUSER swapdb-user on nopass +@all ~* db=0,1
         $r2 auth swapdb-user password

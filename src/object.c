@@ -139,7 +139,9 @@ robj *createRawStringObject(const char *ptr, size_t len) {
     return createObject(OBJ_STRING, sdsnewlen(ptr, len));
 }
 
-/* Get beginning of embedded data, which may contain expire, key, and/or value. Embedded data flags must be accurate when called. */
+/* Get beginning of embedded data, which may contain valoff, expire, key, and/or value.
+ * When hasembval == 1, the first byte is the precomputed value offset (valoff).
+ * Embedded data flags must be accurate when called. */
 static unsigned char *objectEmbeddedData(const robj *o) {
     unsigned char *data = (void *)(o + 1);
     if (o->hasembval) data -= sizeof(void *);
@@ -164,6 +166,7 @@ static robj *createEmbeddedStringObjectWithKeyAndExpire(const char *val_ptr,
 
     /* We don't need 'val_ptr' when val is embedded, so we can overwrite `val_ptr` memory to reduce memory usage. */
     size_t min_size = sizeof(robj) - sizeof(void *);
+    min_size += 1; /* 1 byte for precomputed valoff */
     if (expire != EXPIRY_NONE) {
         min_size += sizeof(long long);
     }
@@ -193,10 +196,12 @@ static robj *createEmbeddedStringObjectWithKeyAndExpire(const char *val_ptr,
 
     /* The memory after the struct where we embedded data. */
     char *data = (char *)objectEmbeddedData(o);
+    char *valoff_ptr = data; /* Reserve first byte for valoff */
+    data += 1;
 
     /* Set the expire field. */
     if (o->hasexpire) {
-        *(long long *)data = expire;
+        memcpy(data, &expire, sizeof(long long));
         data += sizeof(long long);
     }
 
@@ -215,6 +220,11 @@ static robj *createEmbeddedStringObjectWithKeyAndExpire(const char *val_ptr,
     assert(remaining_size <= sdsTypeMaxSize(SDS_TYPE_8));
     sdswrite(data, remaining_size, SDS_TYPE_8, val_ptr, val_len);
 
+    /* Store the precomputed offset: distance from (valoff_ptr+1) to the SDS string data */
+    ptrdiff_t offset = data + sdsHdrSize(SDS_TYPE_8) - (valoff_ptr + 1);
+    serverAssert(offset >= 0 && offset <= UINT8_MAX);
+    *valoff_ptr = (uint8_t)offset;
+
     return o;
 }
 
@@ -226,10 +236,11 @@ static robj *createEmbeddedStringObject(const char *ptr, size_t len) {
 }
 
 static bool shouldEmbedStringObject(size_t val_len, const_sds key, long long expire) {
-    /* When to embed? Embed when the sum is up to 128 bytes. (2 cache lines on most systems) */
+    /* When to embed? Embed when the sum fits in 64 bytes (1 cache line). */
     if (val_len > sdsTypeMaxSize(SDS_TYPE_8)) return false;
 
     size_t size = sizeof(robj) - sizeof(void *); /* reusing 'ptr' memory when embedding */
+    size += 1; /* 1 byte for precomputed valoff */
     if (key) {
         size_t key_len = sdslen(key);
         size += sdsReqSize(key_len, sdsReqType(key_len)) + 1; /* 1 byte for prefixed sds hdr size */
@@ -261,26 +272,21 @@ static robj *createStringObjectWithKeyAndExpire(const char *ptr, size_t len, con
 }
 
 void *objectGetVal(const robj *o) {
-    if (likely(!o->hasembval)) {
+    if (o->hasembval) {
+        /* When hasembval == 1, data[0] is the precomputed offset
+         * from (data+1) to the value's SDS string (past the SDS header).
+         * This is set once at object creation time in
+         * createEmbeddedStringObjectWithKeyAndExpire(). */
+        unsigned char *data = objectEmbeddedData(o);
+        return data + 1 + data[0];
+    } else {
         return o->val_ptr;
     }
-    unsigned char *data = objectEmbeddedData(o);
-    if (o->hasexpire) {
-        /* Skip expire field */
-        data += sizeof(long long);
-    }
-    if (o->hasembkey) {
-        /* Skip embedded key */
-        uint8_t hdr_size = *(uint8_t *)data;
-        data += 1 + hdr_size;                /* +1 for header size byte */
-        data += sdslen((const_sds)data) + 1; /* +1 for null terminator */
-    }
-    assert(o->encoding == OBJ_ENCODING_EMBSTR);
-    return data + sdsHdrSize(SDS_TYPE_8);
 }
 
 sds objectGetKey(const robj *o) {
     const unsigned char *data = objectEmbeddedData((robj *)o);
+    if (o->hasembval) data += 1; /* Skip valoff byte */
     if (o->hasexpire) {
         /* Skip expire field */
         data += sizeof(long long);
@@ -298,7 +304,10 @@ sds objectGetKey(const robj *o) {
 long long objectGetExpire(const robj *o) {
     if (o->hasexpire) {
         const unsigned char *data = objectEmbeddedData((robj *)o);
-        return *(long long *)data;
+        if (o->hasembval) data += 1; /* Skip valoff byte */
+        long long expire;
+        memcpy(&expire, data, sizeof(long long));
+        return expire;
     } else {
         return EXPIRY_NONE;
     }
@@ -311,7 +320,8 @@ robj *objectSetExpire(robj *o, long long expire) {
     if (o->hasexpire) {
         /* Update existing expire field. */
         unsigned char *data = objectEmbeddedData(o);
-        *(long long *)data = expire;
+        if (o->hasembval) data += 1; /* Skip valoff byte */
+        memcpy(data, &expire, sizeof(long long));
         return o;
     } else if (expire == EXPIRY_NONE) {
         return o;
@@ -338,10 +348,15 @@ void objectUnembedVal(robj *o) {
 
     sds new_val = sdsnewlen(embedded_sds, sdslen(embedded_sds));
 
-    /* shift remaining embedded data out of val_ptr location */
+    /* Shift remaining embedded metadata (expire, key) out of the val_ptr
+     * location.  The valoff byte is no longer needed after unembedding, so
+     * we skip it and move only the expire/key portion. */
     ptrdiff_t embedded_data_size = (unsigned char *)embedded_sds - objectEmbeddedData(o);
     embedded_data_size -= sdsHdrSize(SDS_TYPE_8);
-    memmove(objectEmbeddedData(o) + sizeof(void *), objectEmbeddedData(o), embedded_data_size);
+    /* Skip the valoff byte (first byte of embedded data) */
+    unsigned char *src = objectEmbeddedData(o) + 1;
+    ptrdiff_t data_to_move = embedded_data_size - 1;
+    memmove(objectEmbeddedData(o) + sizeof(void *), src, data_to_move);
 
     o->hasembval = 0;
     o->encoding = OBJ_ENCODING_RAW;

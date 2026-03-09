@@ -222,6 +222,39 @@ start_server {tags {"repl external:skip"}} {
 }
 
 start_server {tags {"repl external:skip"}} {
+    set replica [srv 0 client]
+    set replica_host [srv 0 host]
+    set replica_port [srv 0 port]
+    start_server {} {
+        set primary [srv 0 client]
+        set primary_host [srv 0 host]
+        set primary_port [srv 0 port]
+        set repl_name "replica-1"
+
+        test {Replica announces client name via REPLCONF} {
+            $replica config set replica-announce-name $repl_name
+            $replica replicaof $primary_host $primary_port
+            wait_for_condition 50 100 {
+                [lindex [$replica role] 0] eq {slave} &&
+                [string match {*master_link_status:up*} [$replica info replication]]
+            } else {
+                fail "Can't turn the instance into a replica"
+            }
+
+            wait_for_condition 50 100 {
+                [string match "*name=$repl_name*" [$primary client list type replica]]
+            } else {
+                set client_list [$primary client list type replica]
+                puts "CLIENT LIST (replica): $client_list"
+                fail "Replica client name not found in CLIENT LIST: $client_list"
+            }
+            set client_list [$primary client list type replica]
+            puts "CLIENT LIST (replica): $client_list"
+        }
+    }
+}
+
+start_server {tags {"repl external:skip"}} {
     r set mykey foo
 
     start_server {} {

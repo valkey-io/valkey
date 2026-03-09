@@ -1356,6 +1356,9 @@ void freeClientReplicationData(client *c) {
  * the primary can accurately lists replicas and their listening ports in the
  * INFO output.
  *
+ * - client-name <name>
+ * Sets the client name for this replica connection (shown in CLIENT LIST).
+ *
  * - capa <eof|psync2|dual-channel|skip-rdb-checksum>
  * What is the capabilities of this instance.
  * eof: supports EOF-style RDB transfer for diskless replication.
@@ -1424,6 +1427,12 @@ void replconfCommand(client *c) {
                                     "REPLCONF ip-address provided by "
                                     "replica instance is too long: %zd bytes",
                                     sdslen(addr));
+                return;
+            }
+        } else if (!strcasecmp(objectGetVal(c->argv[j]), "client-name")) {
+            const char *err = NULL;
+            if (clientSetName(c, c->argv[j + 1], &err) == C_ERR) {
+                addReplyError(c, err);
                 return;
             }
         } else if (!strcasecmp(objectGetVal(c->argv[j]), "capa")) {
@@ -3025,8 +3034,8 @@ static int dualChannelReplHandleHandshake(connection *conn, sds *err) {
     }
     /* Send replica listening port to primary for clarification */
     sds portstr = getReplicaPortString();
-    *err = sendCommand(conn, "REPLCONF", "capa", "eof", "rdb-only", "1", "rdb-channel", "1", "listening-port", portstr,
-                       NULL);
+    *err = sendCommand(conn, "REPLCONF", "capa", "eof", "rdb-only", "1", "rdb-channel", "1", "listening-port",
+                       portstr, NULL);
     sdsfree(portstr);
     if (*err) {
         dualChannelServerLog(LL_WARNING, "Sending command to primary in dual channel replication handshake: %s", *err);
@@ -3860,6 +3869,13 @@ int syncWithPrimaryHandleSendHandshakeState(connection *conn) {
         if (err) goto err;
     }
 
+    /* Set the replica client name on the primary if requested.
+     * Keep this as the last REPLCONF in the main handshake for compatibility. */
+    if (server.replica_announce_name) {
+        err = sendCommand(conn, "REPLCONF", "client-name", server.replica_announce_name, NULL);
+        if (err) goto err;
+    }
+
     return C_OK;
 
 err:
@@ -3894,6 +3910,22 @@ int syncWithPrimaryHandleReceivePortReplyState(connection *conn) {
                   err);
     }
     sdsfree(err);
+    return C_OK;
+}
+
+int syncWithPrimaryHandleReceiveNameReplyState(connection *conn) {
+    if (server.replica_announce_name) {
+        sds err = receiveSynchronousResponse(conn);
+        if (err == NULL) return C_ERR;
+        /* Ignore the error if any, older primaries do not support this option. */
+        if (err[0] == '-') {
+            serverLog(LL_NOTICE,
+                      "(Non critical) Primary does not understand "
+                      "REPLCONF client-name: %s",
+                      err);
+        }
+        sdsfree(err);
+    }
     return C_OK;
 }
 
@@ -4143,13 +4175,29 @@ void syncWithPrimary(connection *conn) {
         if (server.cluster_enabled) {
             server.repl_state = REPL_STATE_RECEIVE_NODEID_REPLY;
             return;
-        } else {
-            server.repl_state = REPL_STATE_SEND_PSYNC;
-            goto case_send_psync;
         }
+        if (server.replica_announce_name) {
+            server.repl_state = REPL_STATE_RECEIVE_NAME_REPLY;
+            return;
+        }
+
+        server.repl_state = REPL_STATE_SEND_PSYNC;
+        goto case_send_psync;
     /* Receive REPLCONF SET-CLUSTER-NODE-ID reply. */
     case REPL_STATE_RECEIVE_NODEID_REPLY:
         if (syncWithPrimaryHandleReceiveNodeIDReplyState(conn) == C_ERR) {
+            syncWithPrimaryHandleError(&conn);
+            return;
+        }
+        if (server.replica_announce_name) {
+            server.repl_state = REPL_STATE_RECEIVE_NAME_REPLY;
+            return;
+        }
+        server.repl_state = REPL_STATE_SEND_PSYNC;
+        /* fall through */
+    /* Receive REPLCONF client-name reply. */
+    case REPL_STATE_RECEIVE_NAME_REPLY:
+        if (syncWithPrimaryHandleReceiveNameReplyState(conn) == C_ERR) {
             syncWithPrimaryHandleError(&conn);
             return;
         }

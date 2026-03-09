@@ -293,6 +293,24 @@ void setproctitle(const char *fmt, ...);
 #endif /* __aarch64__ && __APPLE__ */
 #endif /* CACHE_LINE_SIZE */
 
+/* Macro to declare atomic variables with consistent alignment across C and C++.
+ *
+ * On 32-bit platforms, C's _Atomic qualifier increases alignment of 64-bit types
+ * (e.g., _Atomic uint64_t gets 8-byte alignment for lock-free atomic operations).
+ * When server.h is included in C++ unit tests, _Atomic is stripped (wrappers.h
+ * defines it as empty), reducing alignment to the type's natural alignment (4 bytes
+ * for uint64_t on 32-bit). This causes struct layout mismatches between C-compiled
+ * code and C++ test code, leading to field offset differences and crashes.
+ *
+ * VALKEY_ATOMIC(type) resolves this by:
+ * - In C: expanding to _Atomic type (standard C11 atomic)
+ * - In C++: expanding to alignas(sizeof(type)) type (preserves alignment) */
+#ifdef __cplusplus
+#define VALKEY_ATOMIC(type) alignas(sizeof(type)) type
+#else
+#define VALKEY_ATOMIC(type) _Atomic type
+#endif
+
 #if (defined(__i386) || defined(__amd64) || defined(__powerpc__)) && defined(__GNUC__)
 #define GNUC_VERSION (__GNUC__ * 10000 + __GNUC_MINOR__ * 100 + __GNUC_PATCHLEVEL__)
 #if defined(__clang__)

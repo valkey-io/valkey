@@ -126,9 +126,9 @@ configEnum tls_auth_clients_enum[] = {
 
 configEnum tls_client_auth_user_enum[] = {
     {"CN", TLS_CLIENT_FIELD_CN},
+    {"URI", TLS_CLIENT_FIELD_URI},
     {"off", TLS_CLIENT_FIELD_OFF},
-    {NULL, 0} // terminator
-};
+    {NULL, 0}};
 
 configEnum oom_score_adj_enum[] = {
     {"no", OOM_SCORE_ADJ_NO},

@@ -1920,7 +1920,7 @@ int lpValidateIntegrityAndDups(unsigned char *lp, size_t size, int deep, int pai
  * On success a newly allocated object is returned, otherwise NULL.
  * When the function returns NULL and if 'error' is not NULL, the
  * integer pointed by 'error' is set to the type of error that occurred */
-robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error) {
+robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rdbflags, mstime_t now) {
     robj *o = NULL, *ele, *dec;
     uint64_t len;
     unsigned int i;
@@ -2244,6 +2244,26 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error) {
                 }
             }
 
+            /* If this is a non-preamble RDB being loaded on the primary, and this
+             * field is already expired relative to 'now', skip it. */
+            if (iAmPrimary() && !(rdbflags & RDBFLAGS_AOF_PREAMBLE) && now != 0 &&
+                itemexpiry != EXPIRY_NONE && itemexpiry < now) {
+                /* Emit HDEL to replicas. */
+                if ((rdbflags & RDBFLAGS_FEED_REPL) && server.repl_backlog) {
+                    robj keyobj, fieldobj;
+                    initStaticStringObject(keyobj, key);
+                    initStaticStringObject(fieldobj, field);
+                    robj *argv[3];
+                    argv[0] = shared.hdel;
+                    argv[1] = &keyobj;
+                    argv[2] = &fieldobj;
+                    replicationFeedReplicas(dbid, argv, 3);
+                }
+                sdsfree(field);
+                sdsfree(value);
+                continue;
+            }
+
             /* Add pair to hash table */
             entry *entry = entryCreate(field, value, itemexpiry);
             sdsfree(field);
@@ -2261,6 +2281,13 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error) {
 
         /* All pairs should be read by now */
         serverAssert(len == 0);
+
+        /* Check if hash became empty after skipping all expired fields */
+        if (hashTypeLength(o) == 0) {
+            decrRefCount(o);
+            if (error) *error = RDB_LOAD_ERR_ALL_ITEMS_EXPIRED;
+            return NULL;
+        }
     } else if (rdbtype == RDB_TYPE_LIST_QUICKLIST || rdbtype == RDB_TYPE_LIST_QUICKLIST_2) {
         if ((len = rdbLoadLen(rdb, NULL)) == RDB_LENERR) return NULL;
         if (len == 0) goto emptykey;
@@ -3112,6 +3139,7 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
     char buf[1024];
     int error;
     long long empty_keys_skipped = 0;
+    long long rdb_last_load_all_fields_expired = 0;
     bool is_valkey_magic = false, is_redis_magic = false;
 
     rdb->update_cksum = rdbLoadProgressCallback;
@@ -3425,7 +3453,7 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
         /* Read key */
         if ((key = rdbGenericLoadStringObject(rdb, RDB_LOAD_SDS, NULL)) == NULL) goto eoferr;
         /* Read value */
-        val = rdbLoadObject(type, rdb, key, db->id, &error);
+        val = rdbLoadObject(type, rdb, key, db->id, &error, rdbflags, now);
 
         /* Check if the key already expired. This function is used when loading
          * an RDB file from disk, either at startup, or when an RDB was
@@ -3447,6 +3475,9 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
                 sdsfree(key);
                 serverLog(LL_WARNING, "Unknown type or opcode when loading DB. Unrecoverable error, aborting now.");
                 return RDB_FAILED;
+            } else if (error == RDB_LOAD_ERR_ALL_ITEMS_EXPIRED) {
+                rdb_last_load_all_fields_expired++;
+                sdsfree(key);
             } else {
                 sdsfree(key);
                 goto eoferr;
@@ -3536,11 +3567,11 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
     }
 
     if (empty_keys_skipped) {
-        serverLog(LL_NOTICE, "Done loading RDB, keys loaded: %lld, keys expired: %lld, empty keys skipped: %lld.",
-                  server.rdb_last_load_keys_loaded, server.rdb_last_load_keys_expired, empty_keys_skipped);
+        serverLog(LL_NOTICE, "Done loading RDB, keys loaded: %lld, keys expired: %lld, empty keys skipped: %lld, all fields expired hashes: %lld.",
+                  server.rdb_last_load_keys_loaded, server.rdb_last_load_keys_expired, empty_keys_skipped, rdb_last_load_all_fields_expired);
     } else {
-        serverLog(LL_NOTICE, "Done loading RDB, keys loaded: %lld, keys expired: %lld.",
-                  server.rdb_last_load_keys_loaded, server.rdb_last_load_keys_expired);
+        serverLog(LL_NOTICE, "Done loading RDB, keys loaded: %lld, keys expired: %lld, all fields expired hashes: %lld.",
+                  server.rdb_last_load_keys_loaded, server.rdb_last_load_keys_expired, rdb_last_load_all_fields_expired);
     }
     return RDB_OK;
 

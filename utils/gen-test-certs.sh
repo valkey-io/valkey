@@ -56,6 +56,7 @@ nsCertType = server
 [ client_cert ]
 keyUsage = digitalSignature, keyEncipherment
 nsCertType = client
+subjectAltName = URI:urn:valkey:user:first, URI:urn:valkey:user:second
 _END_
 
 generate_cert server "Server-only" "-extfile tests/tls/openssl.cnf -extensions server_cert"

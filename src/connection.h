@@ -48,6 +48,7 @@
 #define NET_HOST_PORT_STR_LEN (NET_HOST_STR_LEN + 32) /* Must be enough for hostname:port */
 
 struct aeEventLoop;
+struct user;
 typedef struct connection connection;
 typedef struct connListener connListener;
 
@@ -147,8 +148,9 @@ typedef struct ConnectionType {
     /* TLS specified methods */
     sds (*get_peer_cert)(struct connection *conn);
 
-    /* Get peer username based on connection type */
-    sds (*get_peer_username)(connection *conn);
+    /* Get peer user based on connection type. If cert_username is non-NULL,
+     * it is set to the extracted certificate field value. */
+    struct user *(*get_peer_user)(connection *conn, sds *cert_username);
 
     /* Miscellaneous */
     int (*connIntegrityChecked)(void); // return 1 if connection type has built-in integrity checks
@@ -424,10 +426,11 @@ static inline sds connGetPeerCert(connection *conn) {
     return NULL;
 }
 
-/* Get Peer username based on connection type */
-static inline sds connGetPeerUsername(connection *conn) {
-    if (conn->type && conn->type->get_peer_username) {
-        return conn->type->get_peer_username(conn);
+/* Get peer user based on connection type. If cert_username is non-NULL,
+ * it is set to the extracted certificate field value. */
+static inline struct user *connGetPeerUser(connection *conn, sds *cert_username) {
+    if (conn->type && conn->type->get_peer_user) {
+        return conn->type->get_peer_user(conn, cert_username);
     }
     return NULL;
 }

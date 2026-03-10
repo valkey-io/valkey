@@ -1,5 +1,8 @@
 name: Clang Format Check
 
+permissions:
+  contents: read
+
 on:
   push:
     paths-ignore:
@@ -39,7 +42,7 @@ jobs:
           # Run clang-format and capture the diff
           cd src
           shopt -s globstar
-          clang-format-18 -i **/*.c **/*.h
+          clang-format-18 -i **/*.c **/*.h **/*.cpp **/*.hpp
           # Capture the diff output
           DIFF=$(git diff)
           if [ ! -z "$DIFF" ]; then

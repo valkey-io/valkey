@@ -14,13 +14,13 @@ typedef struct streamID {
 } streamID;
 
 typedef struct stream {
+    rax *cgroups;                  /* Consumer groups dictionary: name -> streamCG */
     rax *rax;                      /* The radix tree holding the stream. */
     uint64_t length;               /* Current number of elements inside this stream. */
     streamID last_id;              /* Zero if there are yet no items. */
     streamID first_id;             /* The first non-tombstone entry, zero if empty. */
     streamID max_deleted_entry_id; /* The maximal ID that was deleted. */
     uint64_t entries_added;        /* All time count of elements added. */
-    rax *cgroups;                  /* Consumer groups dictionary: name -> streamCG */
 } stream;
 
 /* We define an iterator to iterate stream items in an abstract way, without

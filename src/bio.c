@@ -144,6 +144,12 @@ typedef union bio_job {
 
 void *bioProcessBackgroundJobs(void *arg);
 
+/* Allocate a bio_job. Marked noinline so that it appears as a distinct frame in valgrind
+ * stack traces, allowing a targeted Valgrind suppression for BIO job leaks */
+__attribute__((noinline)) static bio_job *allocBioJob(size_t extra) {
+    return zmalloc(sizeof(bio_job) + extra);
+}
+
 /* Make sure we have enough stack to perform all the things we do in the
  * main thread. */
 #define VALKEY_THREAD_STACK_SIZE (1024 * 1024 * 4)
@@ -188,7 +194,7 @@ void bioCreateLazyFreeJob(lazy_free_fn free_fn, int arg_count, ...) {
     va_list valist;
     /* Allocate memory for the job structure and all required
      * arguments */
-    bio_job *job = zmalloc(sizeof(*job) + sizeof(void *) * (arg_count));
+    bio_job *job = allocBioJob(sizeof(void *) * (arg_count));
     job->free_args.free_fn = free_fn;
 
     va_start(valist, arg_count);
@@ -200,7 +206,7 @@ void bioCreateLazyFreeJob(lazy_free_fn free_fn, int arg_count, ...) {
 }
 
 void bioCreateCloseJob(int fd, int need_fsync, int need_reclaim_cache) {
-    bio_job *job = zmalloc(sizeof(*job));
+    bio_job *job = allocBioJob(0);
     job->fd_args.fd = fd;
     job->fd_args.need_fsync = need_fsync;
     job->fd_args.need_reclaim_cache = need_reclaim_cache;
@@ -209,7 +215,7 @@ void bioCreateCloseJob(int fd, int need_fsync, int need_reclaim_cache) {
 }
 
 void bioCreateCloseAofJob(int fd, long long offset, int need_reclaim_cache) {
-    bio_job *job = zmalloc(sizeof(*job));
+    bio_job *job = allocBioJob(0);
     job->fd_args.fd = fd;
     job->fd_args.offset = offset;
     job->fd_args.need_fsync = 1;
@@ -219,7 +225,7 @@ void bioCreateCloseAofJob(int fd, long long offset, int need_reclaim_cache) {
 }
 
 void bioCreateFsyncJob(int fd, long long offset, int need_reclaim_cache) {
-    bio_job *job = zmalloc(sizeof(*job));
+    bio_job *job = allocBioJob(0);
     job->fd_args.fd = fd;
     job->fd_args.offset = offset;
     job->fd_args.need_reclaim_cache = need_reclaim_cache;
@@ -228,14 +234,14 @@ void bioCreateFsyncJob(int fd, long long offset, int need_reclaim_cache) {
 }
 
 void bioCreateSaveRDBToDiskJob(connection *conn, int is_dual_channel) {
-    bio_job *job = zmalloc(sizeof(*job));
+    bio_job *job = allocBioJob(0);
     job->save_to_disk_args.conn = conn;
     job->save_to_disk_args.is_dual_channel = is_dual_channel;
     bioSubmitJob(BIO_RDB_SAVE, job);
 }
 
 void bioCreateTlsReloadJob(void) {
-    bio_job *job = zmalloc(sizeof(*job));
+    bio_job *job = allocBioJob(0);
     bioSubmitJob(BIO_TLS_RELOAD, job);
 }
 
@@ -260,9 +266,7 @@ void *bioProcessBackgroundJobs(void *arg) {
     bio_worker_num = bioWorkerNum(bwd);
 
     while (1) {
-        /* Keep the job in the queue until it's fully processed so cancellation
-         * won't leave an untracked in-flight allocation. */
-        bio_job *job = mutexQueuePeek(bwd->bio_jobs, true);
+        bio_job *job = mutexQueuePop(bwd->bio_jobs, true);
 
         /* Process the job accordingly to its type. */
         int job_type = job->header.type;
@@ -313,8 +317,6 @@ void *bioProcessBackgroundJobs(void *arg) {
         } else {
             serverPanic("Wrong job type in bioProcessBackgroundJobs().");
         }
-        void *removed_job = mutexQueuePop(bwd->bio_jobs, false);
-        serverAssert(removed_job == job);
         zfree(job);
         atomic_fetch_sub(&bio_jobs_counter[job_type], 1);
     }

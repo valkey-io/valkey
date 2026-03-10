@@ -6,6 +6,7 @@
 #include "fmacros.h"
 
 #include "sds.h"
+#include "util.h"
 #include <stdbool.h>
 
 /*-----------------------------------------------------------------------------
@@ -30,7 +31,7 @@ sds entryGetField(const entry *entry);
 char *entryGetValue(const entry *entry, size_t *len);
 
 /* Gets the expiration timestamp (UNIX time in milliseconds). */
-long long entryGetExpiry(const entry *entry);
+mstime_t entryGetExpiry(const entry *entry);
 
 /* Returns true if the entry has an expiration timestamp set. */
 bool entryHasExpiry(const entry *entry);
@@ -39,7 +40,7 @@ bool entryHasExpiry(const entry *entry);
 bool entryHasStringRef(const entry *entry);
 
 /* Sets the expiration timestamp. */
-entry *entrySetExpiry(entry *entry, long long expiry);
+entry *entrySetExpiry(entry *entry, mstime_t expiry);
 
 /* Returns true if the entry is expired compared to current system time (commandTimeSnapshot). */
 bool entryIsExpired(entry *entry);
@@ -48,16 +49,16 @@ bool entryIsExpired(entry *entry);
 void entryFree(entry *entry);
 
 /* Creates a new entry with the given field, value, and optional expiry. */
-entry *entryCreate(const_sds field, sds value, long long expiry);
+entry *entryCreate(const_sds field, sds value, mstime_t expiry);
 /* Sets the entry's value to a string reference object.
  * The reference points to the provided `buf` but does not assume ownership.
  * An external mechanism must handle the eventual memory deallocation of `buf`. */
-entry *entryUpdateAsStringRef(entry *entry, const char *buf, size_t len, long long expiry);
+entry *entryUpdateAsStringRef(entry *entry, const char *buf, size_t len, mstime_t expiry);
 
 /* Updates the value and/or expiry of an existing entry.
  * In case value is NULL, will use the existing entry value.
  * In case expiry is EXPIRE_NONE, will use the existing entry expiration time. */
-entry *entryUpdate(entry *entry, sds value, long long expiry);
+entry *entryUpdate(entry *entry, sds value, mstime_t expiry);
 
 /* Returns the total memory used by the entry (in bytes). */
 size_t entryMemUsage(entry *entry);

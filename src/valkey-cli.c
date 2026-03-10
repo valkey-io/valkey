@@ -5657,61 +5657,6 @@ static int clusterManagerNodeLoadInfo(clusterManagerNode *node, int opts, char *
             node->flags |= CLUSTER_MANAGER_FLAG_MYSELF;
             currentNode = node;
             clusterManagerNodeResetSlots(node);
-            if (i == 8) {
-                int remaining = strlen(line);
-                while (remaining > 0) {
-                    p = strchr(line, ' ');
-                    if (p == NULL) p = line + remaining;
-                    remaining -= (p - line);
-
-                    char *slotsdef = line;
-                    *p = '\0';
-                    if (remaining) {
-                        line = p + 1;
-                        remaining--;
-                    } else
-                        line = p;
-                    char *dash = NULL;
-                    if (slotsdef[0] == '[') {
-                        slotsdef++;
-                        if ((p = strstr(slotsdef, "->-"))) { // Migrating
-                            *p = '\0';
-                            p += 3;
-                            char *closing_bracket = strchr(p, ']');
-                            if (closing_bracket) *closing_bracket = '\0';
-                            sds slot = sdsnew(slotsdef);
-                            sds dst = sdsnew(p);
-                            node->migrating_count += 2;
-                            node->migrating = zrealloc(node->migrating, (node->migrating_count * sizeof(sds)));
-                            node->migrating[node->migrating_count - 2] = slot;
-                            node->migrating[node->migrating_count - 1] = dst;
-                        } else if ((p = strstr(slotsdef, "-<-"))) { // Importing
-                            *p = '\0';
-                            p += 3;
-                            char *closing_bracket = strchr(p, ']');
-                            if (closing_bracket) *closing_bracket = '\0';
-                            sds slot = sdsnew(slotsdef);
-                            sds src = sdsnew(p);
-                            node->importing_count += 2;
-                            node->importing = zrealloc(node->importing, (node->importing_count * sizeof(sds)));
-                            node->importing[node->importing_count - 2] = slot;
-                            node->importing[node->importing_count - 1] = src;
-                        }
-                    } else if ((dash = strchr(slotsdef, '-')) != NULL) {
-                        p = dash;
-                        int start, stop;
-                        *p = '\0';
-                        start = atoi(slotsdef);
-                        stop = atoi(p + 1);
-                        node->slots_count += (stop - (start - 1));
-                        while (start <= stop) node->slots[start++] = 1;
-                    } else if (p > slotsdef) {
-                        node->slots[atoi(slotsdef)] = 1;
-                        node->slots_count++;
-                    }
-                }
-            }
-            node->dirty = 0;
         } else if (!getfriends) {
             if (!(node->flags & CLUSTER_MANAGER_FLAG_MYSELF))
                 continue;
@@ -5723,6 +5668,68 @@ static int clusterManagerNodeLoadInfo(clusterManagerNode *node, int opts, char *
             if (node->friends == NULL) node->friends = listCreate();
             listAddNodeTail(node->friends, currentNode);
         }
+        /* Parse slot definitions for both myself and friend nodes.
+         * For unreachable friends, this gossip data is the only source
+         * of slot ownership info. For reachable friends, this will be
+         * overwritten when their own CLUSTER NODES is queried directly. */
+        if (i == 8) {
+            int remaining = strlen(line);
+            while (remaining > 0) {
+                p = strchr(line, ' ');
+                if (p == NULL) p = line + remaining;
+                remaining -= (p - line);
+
+                char *slotsdef = line;
+                *p = '\0';
+                if (remaining) {
+                    line = p + 1;
+                    remaining--;
+                } else
+                    line = p;
+                char *dash = NULL;
+                if (slotsdef[0] == '[') {
+                    /* Migrating/importing only applies to the local node. */
+                    if (myself) {
+                        slotsdef++;
+                        if ((p = strstr(slotsdef, "->-"))) {
+                            *p = '\0';
+                            p += 3;
+                            char *closing_bracket = strchr(p, ']');
+                            if (closing_bracket) *closing_bracket = '\0';
+                            sds slot = sdsnew(slotsdef);
+                            sds dst = sdsnew(p);
+                            node->migrating_count += 2;
+                            node->migrating = zrealloc(node->migrating, (node->migrating_count * sizeof(sds)));
+                            node->migrating[node->migrating_count - 2] = slot;
+                            node->migrating[node->migrating_count - 1] = dst;
+                        } else if ((p = strstr(slotsdef, "-<-"))) {
+                            *p = '\0';
+                            p += 3;
+                            char *closing_bracket = strchr(p, ']');
+                            if (closing_bracket) *closing_bracket = '\0';
+                            sds slot = sdsnew(slotsdef);
+                            sds src = sdsnew(p);
+                            node->importing_count += 2;
+                            node->importing = zrealloc(node->importing, (node->importing_count * sizeof(sds)));
+                            node->importing[node->importing_count - 2] = slot;
+                            node->importing[node->importing_count - 1] = src;
+                        }
+                    }
+                } else if ((dash = strchr(slotsdef, '-')) != NULL) {
+                    p = dash;
+                    int start, stop;
+                    *p = '\0';
+                    start = atoi(slotsdef);
+                    stop = atoi(p + 1);
+                    currentNode->slots_count += (stop - (start - 1));
+                    while (start <= stop) currentNode->slots[start++] = 1;
+                } else if (p > slotsdef) {
+                    currentNode->slots[atoi(slotsdef)] = 1;
+                    currentNode->slots_count++;
+                }
+            }
+        }
+        if (myself) node->dirty = 0;
         if (name != NULL) {
             if (currentNode->name) sdsfree(currentNode->name);
             currentNode->name = sdsnew(name);
@@ -6173,6 +6180,7 @@ static clusterManagerNode *clusterManagerNodeWithLeastReplicas(void) {
     while ((ln = listNext(&li)) != NULL) {
         clusterManagerNode *n = ln->value;
         if (n->flags & CLUSTER_MANAGER_FLAG_REPLICA) continue;
+        if (!n->context) continue; /* Skip unreachable primaries */
         if (node == NULL || n->replicas_count < lowest_count) {
             node = n;
             lowest_count = n->replicas_count;

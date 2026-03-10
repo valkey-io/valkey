@@ -656,4 +656,36 @@ start_multiple_servers 3 [list overrides $base_conf] {
     }
 } ;# stop servers
 
+set base_conf [list cluster-enabled yes cluster-node-timeout 1000]
+start_multiple_servers 3 [list overrides $base_conf] {
+
+    test "del-node: Cannot delete unreachable primary with slots" {
+        # Create cluster with 3 primaries, no replicas
+        exec $::VALKEY_CLI_BIN --cluster-yes --cluster create \
+                        127.0.0.1:[srv 0 port] \
+                        127.0.0.1:[srv -1 port] \
+                        127.0.0.1:[srv -2 port]
+
+        wait_for_cluster_state ok
+
+        set node3 [srv -2 client]
+        set node3_id [$node3 CLUSTER MYID]
+
+        # Shutdown node3 to make it unreachable
+        catch {$node3 SHUTDOWN NOSAVE}
+
+        # Wait for cluster to mark node3 as failed
+        wait_node_marked_fail 0 $node3_id
+
+        # Try to delete the unreachable primary that still owns slots
+        # This should fail with "not empty" error
+        catch {
+            exec $::VALKEY_CLI_BIN --cluster-yes --cluster del-node \
+                         127.0.0.1:[srv 0 port] \
+                         $node3_id
+        } e
+        assert_match {*not empty*} $e
+    }
+} ;# stop servers
+
 }

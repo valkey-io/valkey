@@ -1504,9 +1504,13 @@ void unlinkClient(client *c) {
         c->flags &= ~CLIENT_PENDING_WRITE;
     }
 
-    /* Remove from the list of pending reads if needed. */
-    serverAssert(io_threads_op == IO_THREADS_OP_IDLE);
+    /* Remove from the list of pending reads if needed.
+     * Detached module thread-safe contexts may free their fake clients from a
+     * background thread while IO threads are active. Those clients are never
+     * added to the pending read list, so only require idle IO threads when
+     * this client was actually queued for threaded reads. */
     if (c->pending_read_list_node != NULL) {
+        serverAssert(io_threads_op == IO_THREADS_OP_IDLE);
         listDelNode(server.clients_pending_read,c->pending_read_list_node);
         c->pending_read_list_node = NULL;
     }

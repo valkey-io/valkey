@@ -48,6 +48,7 @@ set(VALKEY_SERVER_SRCS
     ${CMAKE_SOURCE_DIR}/src/cluster_legacy.c
     ${CMAKE_SOURCE_DIR}/src/cluster_slot_stats.c
     ${CMAKE_SOURCE_DIR}/src/crc16.c
+    ${CMAKE_SOURCE_DIR}/src/crc16_slottable.c
     ${CMAKE_SOURCE_DIR}/src/commandlog.c
     ${CMAKE_SOURCE_DIR}/src/eval.c
     ${CMAKE_SOURCE_DIR}/src/bio.c
@@ -164,6 +165,7 @@ set(VALKEY_BENCHMARK_SRCS
     ${CMAKE_SOURCE_DIR}/src/crc64.c
     ${CMAKE_SOURCE_DIR}/src/siphash.c
     ${CMAKE_SOURCE_DIR}/src/crc16.c
+    ${CMAKE_SOURCE_DIR}/src/crc16_slottable.c
     ${CMAKE_SOURCE_DIR}/src/monotonic.c
     ${CMAKE_SOURCE_DIR}/src/cli_common.c
     ${CMAKE_SOURCE_DIR}/src/mt19937-64.c

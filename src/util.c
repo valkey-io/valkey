@@ -637,7 +637,7 @@ static int string2llScalar(const char *s, size_t slen, long long *value) {
 }
 
 #if HAVE_IFUNC && HAVE_X86_SIMD
-__attribute__((no_sanitize_address, used)) static int (*string2ll_resolver(void))(const char *, size_t, long long *) {
+__attribute__((no_sanitize_address, no_sanitize("thread"), used)) static int (*string2ll_resolver(void))(const char *, size_t, long long *) {
     /* Ifunc resolvers run before ASan initialization and before CPU detection
      * is initialized, so disable ASan and init CPU detection here. */
     __builtin_cpu_init();
@@ -1655,4 +1655,16 @@ sds escapeJsonString(sds s, const char *p, size_t len) {
         p++;
     }
     return sdscatlen(s, "\"", 1);
+}
+
+/* Tomas Wang's 64 bit integer hash */
+uint64_t wangHash64(uint64_t hash) {
+    hash = (~hash) + (hash << 21); /* hash = (hash << 21) - hash - 1; */
+    hash = hash ^ (hash >> 24);
+    hash = (hash + (hash << 3)) + (hash << 8); /* hash * 265 */
+    hash = hash ^ (hash >> 14);
+    hash = (hash + (hash << 2)) + (hash << 4); /* hash * 21 */
+    hash = hash ^ (hash >> 28);
+    hash = hash + (hash << 31);
+    return hash;
 }

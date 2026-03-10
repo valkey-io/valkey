@@ -717,11 +717,11 @@ $(ENGINE_CHECK_AOF_NAME): $(SERVER_NAME)
 
 # valkey-tls.so
 $(TLS_MODULE_NAME): $(SERVER_NAME)
-	$(QUIET_CC)$(CC) -o $@ tls.c -shared -fPIC $(TLS_MODULE_CFLAGS) $(TLS_CLIENT_LIBS)
+	$(QUIET_CC)$(CC) $(LDFLAGS) -o $@ tls.c -shared -fPIC $(TLS_MODULE_CFLAGS) $(TLS_CLIENT_LIBS)
 
 # valkey-rdma.so
 $(RDMA_MODULE_NAME): $(SERVER_NAME)
-	$(QUIET_CC)$(CC) -o $@ rdma.c -shared -fPIC $(RDMA_MODULE_CFLAGS)
+	$(QUIET_CC)$(CC) $(LDFLAGS) -o $@ rdma.c -shared -fPIC $(RDMA_MODULE_CFLAGS)
 
 # engine_lua.so
 $(LUA_MODULE_NAME): .make-prerequisites

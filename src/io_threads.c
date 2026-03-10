@@ -697,6 +697,8 @@ int tryOffloadFreeObjToIOThreads(robj *obj) {
 
     if (obj->encoding != OBJ_ENCODING_RAW || obj->type != OBJ_STRING) return C_ERR;
 
+    /* We offload only the free of the ptr that may be allocated by the I/O thread.
+     * The object itself was allocated by the main thread and will be freed by the main thread. */
     void *job = tagJob(objectGetVal(obj), JOB_REQ_FREE_OBJ);
     if (unlikely(spmcEnqueue(&io_shared_inbox, job) == false)) return C_ERR;
     objectSetVal(obj, NULL);
@@ -850,8 +852,6 @@ static void handleReadJobs(client **read_jobs, int read_count) {
     if (read_count) {
         server.stat_io_reads_processed += read_count;
         processClientsCommandsBatch();
-        /* Any responses that failed to enqueue to IO threads need to be handled now */
-        handleClientsWithPendingWrites();
     }
 }
 

@@ -1943,7 +1943,12 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
     /* Try to process more IO reads that are ready to be processed. */
     if (server.aof_fsync != AOF_FSYNC_ALWAYS) {
         int io_responses_after = processIOThreadsResponses();
-        if (io_responses_after > 0) server.el_iteration_active = true;
+        if (io_responses_after > 0) {
+            server.el_iteration_active = true;
+
+            /* Any responses that failed to enqueue to IO threads need to be handled now */
+            handleClientsWithPendingWrites();
+        }
     }
     /* Record cron time in beforeSleep. This does not include the time consumed by AOF writing and IO writing above. */
     monotime cron_start_time_after_write = getMonotonicUs();

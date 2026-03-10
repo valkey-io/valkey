@@ -577,7 +577,7 @@ void msetexCommand(client *c) {
 
     /* Parse the optional arguments that follow, our starting index is (2 + numkeys * 2),
      * that is skipping command name, numkeys token and all the key value pairs. */
-    long long args_start_idx = 2 + numkeys * 2;
+    long long args_start_idx = 2 + (long long)numkeys * 2;
     if (args_start_idx > c->argc) {
         addReplyErrorObject(c, shared.syntaxerr);
         return;

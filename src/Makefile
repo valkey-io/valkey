@@ -251,7 +251,7 @@ ifdef OPENSSL_PREFIX
 endif
 
 # Include paths to dependencies
-FINAL_CFLAGS+= -I../deps/libvalkey/include -I../deps/linenoise -I../deps/hdr_histogram -I../deps/fpconv
+FINAL_CFLAGS+= -I../deps/libvalkey/include -I../deps/linenoise -I../deps/hdr_histogram -I../deps/fpconv -I../deps/fast_float
 
 # Lua scripting engine module
 LUA_MODULE_NAME:=modules/lua/libvalkeylua.so
@@ -555,6 +555,7 @@ ENGINE_SERVER_OBJ = \
     util.o \
     valkey-check-aof.o \
     valkey-check-rdb.o \
+    valkey_strtod.o \
     vector.o \
     vset.o \
     ziplist.o \
@@ -583,6 +584,7 @@ ENGINE_CLI_OBJ = \
     strl.o \
     util.o \
     valkey-cli.o \
+    valkey_strtod.o \
     zmalloc.o
 ENGINE_BENCHMARK_NAME=$(ENGINE_NAME)-benchmark$(PROG_SUFFIX)
 ENGINE_BENCHMARK_OBJ = \
@@ -607,17 +609,13 @@ ENGINE_BENCHMARK_OBJ = \
     strl.o \
     util.o \
     valkey-benchmark.o \
+    valkey_strtod.o \
     zmalloc.o
 ENGINE_CHECK_RDB_NAME=$(ENGINE_NAME)-check-rdb$(PROG_SUFFIX)
 ENGINE_CHECK_AOF_NAME=$(ENGINE_NAME)-check-aof$(PROG_SUFFIX)
 ENGINE_LIB_NAME=lib$(ENGINE_NAME).a
 ENGINE_UNIT_GTESTS:=$(ENGINE_NAME)-unit-gtests$(PROG_SUFFIX)
 ALL_SOURCES=$(sort $(patsubst %.o,%.c,$(ENGINE_SERVER_OBJ) $(ENGINE_CLI_OBJ) $(ENGINE_BENCHMARK_OBJ)))
-
-# Build ffc-based fast_float_strtod for linking.
-DEPENDENCY_TARGETS += fast_float_c_interface
-FAST_FLOAT_STRTOD_OBJECT := ../deps/fast_float_c_interface/fast_float_strtod.o
-FINAL_LIBS += $(FAST_FLOAT_STRTOD_OBJECT)
 
 USE_LIBBACKTRACE?=no
 ifeq ($(USE_LIBBACKTRACE),yes)

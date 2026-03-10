@@ -2150,7 +2150,7 @@ void xlenCommand(client *c) {
  * on replicas, XREADGROUP is not. */
 #define XREAD_BLOCKED_DEFAULT_COUNT 1000
 void xreadCommand(client *c) {
-    long long timeout = -1; /* -1 means, no BLOCK argument given. */
+    mstime_t timeout = -1; /* -1 means, no BLOCK argument given. */
     long long count = 0;
     int streams_count = 0;
     int streams_arg = 0;

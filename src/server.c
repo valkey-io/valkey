@@ -1335,7 +1335,7 @@ void databasesCron(void) {
     }
 }
 
-static inline void updateCachedTimeWithUs(int update_daylight_info, const long long ustime) {
+static inline void updateCachedTimeWithUs(int update_daylight_info, const ustime_t ustime) {
     server.ustime = ustime;
     server.mstime = server.ustime / 1000;
     server.unixtime = server.mstime / 1000;
@@ -1365,7 +1365,7 @@ static inline void updateCachedTimeWithUs(int update_daylight_info, const long l
  * such info only when calling this function from serverCron() but not when
  * calling it from call(). */
 void updateCachedTime(int update_daylight_info) {
-    const long long us = ustime();
+    const ustime_t us = ustime();
     updateCachedTimeWithUs(update_daylight_info, us);
 }
 
@@ -1375,7 +1375,7 @@ void updateCachedTime(int update_daylight_info) {
  * the execution unit.
  * update_cached_time - if 0, will not update the cached time even if required.
  * us - if not zero, use this time for cached time, otherwise get current time. */
-void enterExecutionUnit(int update_cached_time, long long us) {
+void enterExecutionUnit(int update_cached_time, ustime_t us) {
     if (server.execution_nesting++ == 0 && update_cached_time) {
         if (us == 0) {
             us = ustime();
@@ -1869,7 +1869,7 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
 
     /* Run a fast expire cycle (the called function will return
      * ASAP if a fast cycle is not needed). */
-    long long expire_cycle_time = 0;
+    ustime_t expire_cycle_time = 0;
     if (server.active_expire_enabled && !server.import_mode && iAmPrimary()) {
         expire_cycle_time = activeExpireCycle(ACTIVE_EXPIRE_CYCLE_FAST);
     }
@@ -3865,7 +3865,7 @@ void call(client *c, int flags) {
     long long old_primary_repl_offset = server.primary_repl_offset;
     incrCommandStatsOnError(NULL, 0);
 
-    const long long call_timer = ustime();
+    const ustime_t call_timer = ustime();
     enterExecutionUnit(1, call_timer);
 
     /* setting the CLIENT_EXECUTING_COMMAND flag so we will avoid
@@ -6118,7 +6118,7 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
         pause_purpose purpose;
         char *paused_reason = "none";
         char *paused_actions = "none";
-        long long paused_timeout = 0;
+        mstime_t paused_timeout = 0;
         if (server.paused_actions & PAUSE_ACTION_CLIENT_ALL) {
             paused_actions = "all";
             paused_timeout = getPausedActionTimeout(PAUSE_ACTION_CLIENT_ALL, &purpose);
@@ -6346,10 +6346,10 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
 
     /* Stats */
     if (all_sections || (dictFind(section_dict, "stats") != NULL)) {
-        long long current_eviction_exceeded_time =
-            server.stat_last_eviction_exceeded_time ? (long long)elapsedUs(server.stat_last_eviction_exceeded_time) : 0;
-        long long current_active_defrag_time =
-            server.stat_last_active_defrag_time ? (long long)elapsedUs(server.stat_last_active_defrag_time) : 0;
+        ustime_t current_eviction_exceeded_time =
+            server.stat_last_eviction_exceeded_time ? (ustime_t)elapsedUs(server.stat_last_eviction_exceeded_time) : 0;
+        ustime_t current_active_defrag_time =
+            server.stat_last_active_defrag_time ? (ustime_t)elapsedUs(server.stat_last_active_defrag_time) : 0;
 
         if (sections++) info = sdscat(info, "\r\n");
         info = sdscatprintf(
@@ -6573,12 +6573,12 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                             (long)m_ru.ru_utime.tv_usec);
 #endif /* RUSAGE_THREAD */
         long long active_seconds = server.stat_active_time / 1000000;
-        long long active_microseconds = server.stat_active_time % 1000000;
+        ustime_t active_microseconds = server.stat_active_time % 1000000;
         info = sdscatprintf(info,
                             "used_active_time_main_thread:%lld.%06lld\r\n",
                             active_seconds, active_microseconds);
         for (int i = 1; i < server.io_threads_num; i++) {
-            long long used_active_time_io_thread = getIOThreadActiveTimeMicroseconds(i);
+            ustime_t used_active_time_io_thread = getIOThreadActiveTimeMicroseconds(i);
             info = sdscatprintf(info,
                                 "used_active_time_io_thread_%d:%lld.%06lld\r\n",
                                 i,
@@ -6998,7 +6998,7 @@ int serverFork(int purpose) {
     }
 
     int childpid;
-    long long start = ustime();
+    ustime_t start = ustime();
     if ((childpid = valkey_fork()) == 0) {
         /* Child.
          *
@@ -7147,7 +7147,7 @@ int checkForSentinelMode(int argc, char **argv, char *exec_name) {
 
 /* Function called at startup to load RDB or AOF file in memory. */
 void loadDataFromDisk(void) {
-    long long start = ustime();
+    ustime_t start = ustime();
     if (server.aof_state == AOF_ON) {
         int ret = loadAppendOnlyFiles(server.aof_manifest);
         if (ret == AOF_FAILED || ret == AOF_OPEN_ERR) exit(1);

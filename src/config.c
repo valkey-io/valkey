@@ -3363,6 +3363,7 @@ standardConfig static_configs[] = {
     createIntConfig("rdma-port", NULL, MODIFIABLE_CONFIG, 0, 65535, server.rdma_ctx_config.port, 0, INTEGER_CONFIG, NULL, updateRdmaPort),
     createIntConfig("rdma-rx-size", NULL, IMMUTABLE_CONFIG, 64 * 1024, 16 * 1024 * 1024, server.rdma_ctx_config.rx_size, 1024 * 1024, INTEGER_CONFIG, NULL, NULL),
     createIntConfig("rdma-completion-vector", NULL, IMMUTABLE_CONFIG, -1, 1024, server.rdma_ctx_config.completion_vector, -1, INTEGER_CONFIG, NULL, NULL),
+    createIntConfig("cluster-message-gossip-perc", NULL, MODIFIABLE_CONFIG | HIDDEN_CONFIG, 1, 100, server.cluster_message_gossip_perc, 10, INTEGER_CONFIG, NULL, NULL),
 
     /* Unsigned int configs */
     createUIntConfig("maxclients", NULL, MODIFIABLE_CONFIG, 1, UINT_MAX, server.maxclients, 10000, INTEGER_CONFIG, NULL, updateMaxclients),
@@ -3370,6 +3371,7 @@ standardConfig static_configs[] = {
     createUIntConfig("socket-mark-id", NULL, IMMUTABLE_CONFIG, 0, UINT_MAX, server.socket_mark_id, 0, INTEGER_CONFIG, NULL, NULL),
     createUIntConfig("max-new-connections-per-cycle", NULL, MODIFIABLE_CONFIG, 1, 1000, server.max_new_conns_per_cycle, 10, INTEGER_CONFIG, NULL, NULL),
     createUIntConfig("max-new-tls-connections-per-cycle", NULL, MODIFIABLE_CONFIG, 1, 1000, server.max_new_tls_conns_per_cycle, 1, INTEGER_CONFIG, NULL, NULL),
+
 #ifdef LOG_REQ_RES
     createUIntConfig("client-default-resp", NULL, IMMUTABLE_CONFIG | HIDDEN_CONFIG, 2, 3, server.client_default_resp, 2, INTEGER_CONFIG, NULL, NULL),
 #endif

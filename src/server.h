@@ -2265,6 +2265,7 @@ struct valkeyServer {
     int cluster_port;                                      /* Set the cluster port for a node. */
     mstime_t cluster_node_timeout;                         /* Cluster node timeout. */
     mstime_t cluster_ping_interval;                        /* A debug configuration for setting how often cluster nodes send ping messages. */
+    int cluster_message_gossip_perc;                       /* A configuration for setting the percentage of peer nodes to be gossiped in ping/pong messages. */
     char *cluster_configfile;                              /* Cluster auto-generated config file name. */
     struct clusterState *cluster;                          /* State of the cluster */
     int cluster_migration_barrier;                         /* Cluster replicas migration barrier. */
@@ -3162,7 +3163,7 @@ void objectSetVal(robj *o, void *val);
 void objectUnembedVal(robj *o);
 void *objectGetVal(const robj *o);
 sds objectGetKey(const robj *o);
-long long objectGetExpire(const robj *o);
+mstime_t objectGetExpire(const robj *o);
 uint8_t objectGetLFUFrequency(robj *o);
 uint32_t objectGetLRUIdleSecs(robj *o);
 uint32_t objectGetIdleness(robj *o);
@@ -3567,7 +3568,7 @@ char *hashTypeCurrentFromHashTable(hashTypeIterator *hi, int what, size_t *len);
 sds hashTypeCurrentObjectNewSds(hashTypeIterator *hi, int what);
 robj *hashTypeLookupWriteOrCreate(client *c, robj *key);
 robj *hashTypeGetValueObject(robj *o, sds field);
-int hashTypeSet(robj *o, sds field, sds value, long long expiry, int flags, bool *expired_overwritten);
+int hashTypeSet(robj *o, sds field, sds value, mstime_t expiry, int flags, bool *expired_overwritten);
 robj *hashTypeDup(robj *o);
 bool hashTypeHasVolatileFields(robj *o);
 int hashTypeUpdateAsStringRef(robj *o, sds field, const char *buf, size_t len);
@@ -3692,7 +3693,7 @@ size_t dbReclaimExpiredFields(robj *o, serverDb *db, mstime_t now, unsigned long
 int keyIsExpired(serverDb *db, robj *key);
 long long getExpire(serverDb *db, robj *key);
 robj *setExpire(client *c, serverDb *db, robj *key, long long when);
-int checkAlreadyExpired(long long when);
+int checkAlreadyExpired(mstime_t when);
 robj *lookupKeyRead(serverDb *db, robj *key);
 robj *lookupKeyWrite(serverDb *db, robj *key);
 robj *lookupKeyReadOrReply(client *c, robj *key, robj *reply);
@@ -3741,7 +3742,7 @@ void discardTempDb(serverDb **tempDb);
 int selectDb(client *c, int id);
 void signalModifiedKey(client *c, serverDb *db, robj *key);
 void signalFlushedDb(int dbid, int async);
-void scanGenericCommand(client *c, robj *o, unsigned long long cursor);
+void scanGenericCommand(client *c, robj *o, unsigned long long cursor, int slot, sds cursor_prefix, sds finished_cursor_prefix);
 int parseScanCursorOrReply(client *c, sds buf, unsigned long long *cursor);
 int dbAsyncDelete(serverDb *db, robj *key);
 void emptyDbAsync(serverDb *db);
@@ -4087,6 +4088,7 @@ void clusterCommand(client *c);
 void clusterKeySlotCommand(client *c);
 void clusterFlushslotCommand(client *c);
 void clusterSlotStatsCommand(client *c);
+void clusterscanCommand(client *c);
 void restoreCommand(client *c);
 void migrateCommand(client *c);
 void askingCommand(client *c);

@@ -439,8 +439,8 @@ run_solo {defrag} {
         }
     }
 
-    proc test_big_zset {type} {
-        set title "Active Defrag big zset: $type"
+    proc test_big_zset {type score} {
+        set title "Active Defrag big zset: $type $score-score"
         test $title {
             # number of total fields.  zsets are progressively increasing sizes.
             set n 200000
@@ -452,7 +452,8 @@ run_solo {defrag} {
                 set k 0
                 set f 0
                 for {set j 0} {$j < $n} {incr j} {
-                    $rd zadd k$k [expr rand()] $val$f
+                    set s [expr {$score eq "fixed" ? 0 : rand()}]
+                    $rd zadd k$k $s $val$f
                     lassign [next_exp_kf $k $f] k f
                     if {$j % 1000 == 999} {client_reply_off_wait_for_server $rd}
                 }
@@ -467,6 +468,14 @@ run_solo {defrag} {
                 $rd close
             }
         }
+    }
+
+    proc test_big_zset_random_score {type} {
+        test_big_zset $type random
+    }
+
+    proc test_big_zset_fixed_score {type} {
+        test_big_zset $type fixed
     }
 
     proc test_stream {type} {
@@ -579,7 +588,8 @@ run_solo {defrag} {
     lappend tests [list test_big_hash standalone $std_overrides]
     lappend tests [list test_big_list standalone $std_overrides]
     lappend tests [list test_big_set standalone $std_overrides]
-    lappend tests [list test_big_zset standalone $std_overrides]
+    lappend tests [list test_big_zset_random_score standalone $std_overrides]
+    lappend tests [list test_big_zset_fixed_score standalone $std_overrides]
     lappend tests [list test_stream standalone $std_overrides]
     lappend tests [list test_pubsub standalone $std_overrides]
 
@@ -588,7 +598,8 @@ run_solo {defrag} {
     lappend tests [list test_big_hash cluster $std_overrides]
     lappend tests [list test_big_list cluster $std_overrides]
     lappend tests [list test_big_set cluster $std_overrides]
-    lappend tests [list test_big_zset cluster $std_overrides]
+    lappend tests [list test_big_zset_random_score cluster $std_overrides]
+    lappend tests [list test_big_zset_fixed_score cluster $std_overrides]
     lappend tests [list test_stream cluster $std_overrides]
     lappend tests [list test_pubsub cluster $std_overrides]
 

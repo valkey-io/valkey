@@ -1241,7 +1241,7 @@ jobs:
             container: almalinux:8
             install_epel: true
           - name: test-almalinux9-jemalloc
-            container: almalinux:8
+            container: almalinux:9
             install_epel: true
           - name: test-centosstream9-jemalloc
             container: quay.io/centos/centos:stream9
@@ -1316,7 +1316,7 @@ jobs:
             container: almalinux:8
             install_epel: true
           - name: test-almalinux9-tls-module
-            container: almalinux:8
+            container: almalinux:9
             install_epel: true
           - name: test-centosstream9-tls-module
             container: quay.io/centos/centos:stream9
@@ -1392,7 +1392,7 @@ jobs:
             container: almalinux:8
             install_epel: true
           - name: test-almalinux9-tls-module-no-tls
-            container: almalinux:8
+            container: almalinux:9
             install_epel: true
           - name: test-centosstream9-tls-module-no-tls
             container: quay.io/centos/centos:stream9

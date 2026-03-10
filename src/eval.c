@@ -360,7 +360,7 @@ size_t getScriptsMemoryLimit(void) {
     if (server.maxmemory_scripts < 0 && server.maxmemory > 0) {
         /* Handle percentage of maxmemory (negative value represents percentage). */
         unsigned long long maxmemory_scripts_bytes =
-                (unsigned long long)((double)server.maxmemory * -(double)server.maxmemory_scripts / 100);
+            (unsigned long long)((double)server.maxmemory * -(double)server.maxmemory_scripts / 100);
         if (maxmemory_scripts_bytes <= SIZE_MAX) maxmemory_scripts_actual = maxmemory_scripts_bytes;
     } else if (server.maxmemory_scripts > 0) {
         /* Absolute value specified. */

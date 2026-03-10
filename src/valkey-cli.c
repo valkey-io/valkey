@@ -5691,7 +5691,7 @@ static int clusterManagerNodeLoadInfo(clusterManagerNode *node, int opts, char *
                     /* Migrating/importing only applies to the local node. */
                     if (myself) {
                         slotsdef++;
-                        if ((p = strstr(slotsdef, "->-"))) {
+                        if ((p = strstr(slotsdef, "->-"))) { // Migrating
                             *p = '\0';
                             p += 3;
                             char *closing_bracket = strchr(p, ']');
@@ -5702,7 +5702,7 @@ static int clusterManagerNodeLoadInfo(clusterManagerNode *node, int opts, char *
                             node->migrating = zrealloc(node->migrating, (node->migrating_count * sizeof(sds)));
                             node->migrating[node->migrating_count - 2] = slot;
                             node->migrating[node->migrating_count - 1] = dst;
-                        } else if ((p = strstr(slotsdef, "-<-"))) {
+                        } else if ((p = strstr(slotsdef, "-<-"))) { // Importing
                             *p = '\0';
                             p += 3;
                             char *closing_bracket = strchr(p, ']');

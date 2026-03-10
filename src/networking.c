@@ -635,7 +635,6 @@ static void _addReplyPayloadToList(client *c, list *reply_list, const char *payl
         if (tail->flag.buf_encoded) {
             int track_bytes = (server.commandlog[COMMANDLOG_TYPE_LARGE_REPLY].threshold != -1);
             copy = upsertPayloadHeader(tail->buf, &tail->used, &tail->last_header, payload_type, len, c->slot, track_bytes, avail);
-            if (copy && payload_type == BULK_STR_REF) c->last_header = tail->last_header;
         } else if (encoded) {
             /* If encoded buffer is required but tail is unencoded then pretend nothing can be added to it
              * and, as consequence, cause addition of a new tail */
@@ -665,7 +664,6 @@ static void _addReplyPayloadToList(client *c, list *reply_list, const char *payl
         if (tail->flag.buf_encoded) {
             int track_bytes = (server.commandlog[COMMANDLOG_TYPE_LARGE_REPLY].threshold != -1);
             upsertPayloadHeader(tail->buf, &tail->used, &tail->last_header, payload_type, len, c->slot, track_bytes, tail->size);
-            if (payload_type == BULK_STR_REF) c->last_header = tail->last_header;
         }
         memcpy(tail->buf + tail->used, payload, len);
         tail->used += len;
@@ -737,17 +735,21 @@ void _addReplyToBufferOrList(client *c, const char *s, size_t len) {
 }
 
 /* Increment reference to object and add pointer to object and
- * pointer to string itself to current reply buffer */
-static void _addBulkStrRefToBufferOrList(client *c, robj *obj) {
-    if (c->flag.close_after_reply) return;
+ * pointer to string itself to current reply buffer.
+ * Returns 1 if added to c->buf, 0 if added to c->reply list. */
+static int _addBulkStrRefToBufferOrList(client *c, robj *obj) {
+    if (c->flag.close_after_reply) return 0;
 
     /* Refcount will be decremented in write completion handler by the main thread */
     incrRefCount(obj);
 
     bulkStrRef str_ref = {.obj = obj, .str = objectGetVal(obj)};
-    if (!_addBulkStrRefToBuffer(c, (void *)&str_ref, sizeof(str_ref))) {
+    size_t added = _addBulkStrRefToBuffer(c, (void *)&str_ref, sizeof(str_ref));
+    if (!added) {
         _addBulkStrRefToToList(c, (void *)&str_ref, sizeof(str_ref));
+        return 0;
     }
+    return 1;
 }
 
 /* -----------------------------------------------------------------------------
@@ -1420,19 +1422,19 @@ void addReplyBulkLen(client *c, robj *obj) {
 }
 
 /* Try to avoid whole bulk string copy to a reply buffer
- * If copy avoidance allowed then only pointer to object and string will be copied to the buffer */
+ * If copy avoidance allowed then only pointer to object and string will be copied to the buffer.
+ * Returns 1 if added to c->buf, 0 if added to c->reply list, -1 if copy avoidance not possible */
 static int tryAvoidBulkStrCopyToReply(client *c, robj *obj) {
-    if (!isCopyAvoidPreferred(c, obj)) return C_ERR;
-    if (prepareClientToWrite(c) != C_OK) return C_ERR;
+    if (!isCopyAvoidPreferred(c, obj)) return -1;
+    if (prepareClientToWrite(c) != C_OK) return -1;
 
-    _addBulkStrRefToBufferOrList(c, obj);
-
-    return C_OK;
+    return _addBulkStrRefToBufferOrList(c, obj);
 }
 
 /* Add an Object as a bulk reply */
 void addReplyBulk(client *c, robj *obj) {
-    if (tryAvoidBulkStrCopyToReply(c, obj) == C_OK) {
+    int added_to_buf = tryAvoidBulkStrCopyToReply(c, obj);
+    if (added_to_buf >= 0) {
         /* If copy avoidance allowed, then we explicitly maintain net_output_bytes_curr_cmd.
          * We determine per-reply if tracking is enabled by checking the config in the main thread. */
         if (server.commandlog[COMMANDLOG_TYPE_LARGE_REPLY].threshold != -1) {
@@ -1443,8 +1445,10 @@ void addReplyBulk(client *c, robj *obj) {
             size_t reply_len = (num_len + 3) + str_len + 2;
             c->net_output_bytes_curr_cmd += reply_len;
 
-            /* Store reply_len and track for COB accounting */
-            if (c->last_header) {
+            /* Store reply_len and track for COB accounting only if content went to c->buf.
+             * If content spilled to c->reply list (added_to_buf == 0), tracking will be
+             * done by trackBufReferences() in IO thread instead. */
+            if (added_to_buf == 1 && c->last_header) {
                 c->last_header->reply_len += reply_len;
                 atomic_fetch_add_explicit(&c->io_tracked_reply_len, reply_len, memory_order_relaxed);
             }
@@ -2943,7 +2947,10 @@ static void _postWriteToClient(client *c) {
         if (!last_written || o->used == c->io_last_written.bufpos) {
             c->reply_bytes -= o->size;
             /* If encoded then release references to bulk string objects */
-            if (o->flag.buf_encoded) releaseBufReferences(o->buf, o->used, c);
+            if (o->flag.buf_encoded) {
+                releaseBufReferences(o->buf, o->used, c);
+                c->last_header = NULL;
+            }
             listDelNode(c->reply, next);
             /* If completely written buffer is last written then reset last written state */
             if (last_written) resetLastWrittenBuf(c);

@@ -635,6 +635,7 @@ static void _addReplyPayloadToList(client *c, list *reply_list, const char *payl
         if (tail->flag.buf_encoded) {
             int track_bytes = (server.commandlog[COMMANDLOG_TYPE_LARGE_REPLY].threshold != -1);
             copy = upsertPayloadHeader(tail->buf, &tail->used, &tail->last_header, payload_type, len, c->slot, track_bytes, avail);
+            if (copy && payload_type == BULK_STR_REF) c->last_header = tail->last_header;
         } else if (encoded) {
             /* If encoded buffer is required but tail is unencoded then pretend nothing can be added to it
              * and, as consequence, cause addition of a new tail */
@@ -664,6 +665,7 @@ static void _addReplyPayloadToList(client *c, list *reply_list, const char *payl
         if (tail->flag.buf_encoded) {
             int track_bytes = (server.commandlog[COMMANDLOG_TYPE_LARGE_REPLY].threshold != -1);
             upsertPayloadHeader(tail->buf, &tail->used, &tail->last_header, payload_type, len, c->slot, track_bytes, tail->size);
+            if (payload_type == BULK_STR_REF) c->last_header = tail->last_header;
         }
         memcpy(tail->buf + tail->used, payload, len);
         tail->used += len;
@@ -1443,7 +1445,7 @@ void addReplyBulk(client *c, robj *obj) {
 
             /* Store reply_len and track for COB accounting */
             if (c->last_header) {
-                c->last_header->reply_len = reply_len;
+                c->last_header->reply_len += reply_len;
                 atomic_fetch_add_explicit(&c->io_tracked_reply_len, reply_len, memory_order_relaxed);
             }
         }

@@ -4800,11 +4800,21 @@ void clusterSendPing(clusterLink *link, int type) {
             link->node->meet_sent = mstime();
     }
 
-    /* Populate the gossip fields */
-    int maxiterations = wanted * 3;
-    while (freshnodes > 0 && gossipcount < wanted && maxiterations--) {
-        dictEntry *de = dictGetRandomKey(server.cluster->nodes);
-        clusterNode *this = dictGetVal(de);
+    /* Populate the gossip fields.
+     * Use dictGetSomeKeys() to sample candidates in a single batch instead
+     * of calling dictGetRandomKey() in a retry loop. We over-allocate to
+     * have enough candidates after filtering out ineligible nodes.
+     * dictGetSomeKeys() picks a random starting point each call, so over
+     * many ping rounds all nodes get even coverage without needing an
+     * explicit shuffle. */
+    int candidates_wanted = wanted + 2; /* +2 for myself and link->node */
+    if (candidates_wanted > (int)dictSize(server.cluster->nodes))
+        candidates_wanted = dictSize(server.cluster->nodes);
+    dictEntry **candidates = zmalloc(sizeof(dictEntry *) * candidates_wanted);
+    unsigned int ncandidates = dictGetSomeKeys(server.cluster->nodes, candidates, candidates_wanted);
+
+    for (unsigned int i = 0; i < ncandidates && gossipcount < wanted; i++) {
+        clusterNode *this = dictGetVal(candidates[i]);
 
         /* Don't include this node: the whole packet header is about us
          * already, so we just gossip about other nodes.
@@ -4822,7 +4832,6 @@ void clusterSendPing(clusterLink *link, int type) {
          */
         if (this->flags & (CLUSTER_NODE_HANDSHAKE | CLUSTER_NODE_NOADDR) ||
             (this->link == NULL && this->numslots == 0)) {
-            freshnodes--; /* Technically not correct, but saves CPU. */
             continue;
         }
 
@@ -4832,9 +4841,9 @@ void clusterSendPing(clusterLink *link, int type) {
         /* Add it */
         clusterSetGossipEntry(hdr, gossipcount, this);
         this->last_in_ping_gossip = cluster_pings_sent;
-        freshnodes--;
         gossipcount++;
     }
+    zfree(candidates);
 
     /* If there are PFAIL nodes, add them at the end. */
     if (pfail_wanted) {

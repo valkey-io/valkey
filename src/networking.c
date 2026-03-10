@@ -2947,10 +2947,7 @@ static void _postWriteToClient(client *c) {
         if (!last_written || o->used == c->io_last_written.bufpos) {
             c->reply_bytes -= o->size;
             /* If encoded then release references to bulk string objects */
-            if (o->flag.buf_encoded) {
-                releaseBufReferences(o->buf, o->used, c);
-                c->last_header = NULL;
-            }
+            if (o->flag.buf_encoded) releaseBufReferences(o->buf, o->used, c);
             listDelNode(c->reply, next);
             /* If completely written buffer is last written then reset last written state */
             if (last_written) resetLastWrittenBuf(c);

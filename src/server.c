@@ -3340,6 +3340,27 @@ void commandAddSubcommand(struct serverCommand *parent, struct serverCommand *su
     serverAssert(hashtableAdd(parent->subcommands_ht, subcommand));
 }
 
+/* Automatically set CMD_WRITE_FIRSTKEY_ONLY for write commands where the first
+ * key is written, and other keys are read only. */
+void detectWriteFirstkeyOnlyCommand(struct serverCommand *c) {
+    c->flags &= ~CMD_WRITE_FIRSTKEY_ONLY; // Override if set elsewhere
+    if (!(c->flags & CMD_WRITE)) return;
+    if (c->key_specs_num < 2) return;
+    if (!(c->key_specs[0].flags & (CMD_KEY_OW | CMD_KEY_RW))) return;
+    if (c->key_specs[0].find_keys_type != KSPEC_FK_RANGE) return;
+    if (c->key_specs[0].fk.range.lastkey != 0) return;
+
+    bool write_first_key_only = true;
+    for (int i = 1; i < c->key_specs_num; i++) {
+        if (!(c->key_specs[i].flags & CMD_KEY_RO) || (c->key_specs[i].flags & (CMD_KEY_RW | CMD_KEY_OW | CMD_KEY_RM))) {
+            write_first_key_only = false;
+            break;
+        }
+    }
+
+    if (write_first_key_only) c->flags |= CMD_WRITE_FIRSTKEY_ONLY;
+}
+
 /* Recursively populate the command structure.
  *
  * On success, the function return C_OK. Otherwise C_ERR is returned and we won't
@@ -3362,6 +3383,8 @@ int populateCommandStructure(struct serverCommand *c) {
 
     /* Handle the legacy range spec and the "movablekeys" flag (must be done after populating all key specs). */
     populateCommandLegacyRangeSpec(c);
+
+    detectWriteFirstkeyOnlyCommand(c);
 
     /* Assign the ID used for ACL. */
     c->id = ACLGetCommandID(c->fullname);

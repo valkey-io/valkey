@@ -2631,6 +2631,9 @@ typedef int *commandDbIdArgs(robj **argv, int argc, int *count);
  *
  * CMD_ALL_DBS: The command works with all databases.
  *
+ * CMD_WRITE_FIRSTKEY_ONLY: The command must be CMD_WRITE.  It only modifies the first key.
+ *                          Other keys are read-only.  Example: SUNIONSTORE
+ *
  * The following additional flags are only used in order to put commands
  * in a specific ACL category. Commands can have multiple ACL categories.
  * See valkey.conf for the exact meaning of each.
@@ -2810,6 +2813,7 @@ extern dict *modules;
 
 /* Command metadata */
 void populateCommandLegacyRangeSpec(struct serverCommand *c);
+void detectWriteFirstkeyOnlyCommand(struct serverCommand *c);
 
 /* Utils */
 mstime_t commandTimeSnapshot(void);

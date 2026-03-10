@@ -139,7 +139,6 @@ target_link_libraries(
     fpconv
     lualib
     hdr_histogram
-    fast_float
     valkey::valkey
     GTest::gtest_main
     GTest::gmock

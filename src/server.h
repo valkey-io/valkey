@@ -42,6 +42,9 @@
 #include <stddef.h>
 #ifndef __cplusplus
 #include <stdatomic.h>
+#else
+#include <atomic>
+#define _Atomic(T) std::atomic<T>
 #endif
 #include <string.h>
 #include <time.h>

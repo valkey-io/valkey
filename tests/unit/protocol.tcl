@@ -316,7 +316,7 @@ start_server {tags {"protocol network"}} {
 
 }
 
-start_server {tags {"protocol hello logreqres:skip"}} {
+start_server {tags {"protocol hello"}} {
     test {HELLO without protover} {
         set reply [r HELLO 3]
         assert_equal [dict get $reply proto] 3

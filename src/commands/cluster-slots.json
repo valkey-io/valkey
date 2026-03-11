@@ -15,6 +15,10 @@
             [
                 "7.0.0",
                 "Added additional networking metadata field."
+            ],
+            [
+                "9.1.0",
+                "Added `availability-zone` field."
             ]
         ],
         "command_flags": [
@@ -77,6 +81,9 @@
                                     },
                                     "ip": {
                                         "type": "string"
+                                    },
+                                    "availability-zone": {
+                                        "type": "string"
                                     }
                                 }
                             }
@@ -119,6 +126,9 @@
                                     "type": "string"
                                 },
                                 "ip": {
+                                    "type": "string"
+                                },
+                                "availability-zone": {
                                     "type": "string"
                                 }
                             }

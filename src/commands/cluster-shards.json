@@ -11,6 +11,10 @@
             [
                 "9.1.0",
                 "Added shard id field to CLUSTER SHARDS response"
+            ],
+            [
+                "9.1.0",
+                "Added `availability-zone` field."
             ]
         ],
         "command_flags": [
@@ -84,6 +88,9 @@
                                             "const": "online"
                                         }
                                     ]
+                                },
+                                "availability-zone": {
+                                    "type": "string"
                                 }
                             }
                         }

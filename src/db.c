@@ -1874,7 +1874,10 @@ int removeExpire(serverDb *db, robj *key) {
 /* Set an expire to the specified key. If the expire is set in the context
  * of an user calling a command 'c' is the client, otherwise 'c' is set
  * to NULL. The 'when' parameter is the absolute unix time in milliseconds
- * after which the key will no longer be considered valid. */
+ * after which the key will no longer be considered valid.
+ *
+ * This functions may reallocate the value. The new allocation is returned and
+ * the old object's reference counter is decremented and possibly freed. */
 robj *setExpire(client *c, serverDb *db, robj *key, long long when) {
     /* TODO: Add val as a parameter to this function, to avoid looking it up. */
     robj *val;

@@ -1187,6 +1187,8 @@ static bool clientsCronTcpIsClosing(client *c) {
     socklen_t infolen = sizeof(info);
     if (getsockopt(c->conn->fd, IPPROTO_TCP, TCP_CONNECTION_INFO, &info, &infolen) != 0 || infolen < sizeof(info)) return false; // Cannot retrieve TCP info
     bool connection_is_closing = (info.tcpi_state == TCPS_CLOSE_WAIT || info.tcpi_state == TCPS_CLOSED);
+#else
+    return false;
 #endif
 
     if (connection_is_closing) {

@@ -68,7 +68,7 @@ int blockInuse_clientBlocked(client *c);
 /* Initialize blockInuse structures, must be called once during server startup. */
 void blockInuse_init(void);
 
-/* Free blockInuse data structures, no clients should be blocked by blockInuse at this time. */
+/* Free blockInuse data structures, unblocks all clients before cleanup. */
 void blockInuse_release(void);
 
 /* Return the number of clients currently blocked by blockInuse. */

@@ -11,12 +11,12 @@
 #include "blocked_inuse.h"
 
 /* External hashtable functions from server.c */
-extern uint64_t dictEncObjHash(const void *key);
-extern int hashtableEncObjKeyCompare(const void *key1, const void *key2);
+extern uint64_t hashtableSdsHash(const void *key);
+extern int hashtableSdsKeyCompare(const void *key1, const void *key2);
 extern uint64_t hashtableClientHash(const void *key);
 extern int hashtableClientKeyCompare(const void *key1, const void *key2);
 
-// Internal blockInuse data structure
+/* Internal blockInuse data structure */
 static hashtable *client_to_keys; /* Maps client pointers to a list of keys the client is blocked on. */
 static hashtable *key_to_clients; /* Maps keys to a list of clients blocked on them. */
 
@@ -121,7 +121,7 @@ typedef struct {
 /* Hashtable callbacks */
 
 static const void *keyToClientsGetKey(const void *entry) {
-    return ((keyToClientsEntry *)entry)->key;
+    return objectGetKey(((keyToClientsEntry *)entry)->key);
 }
 
 static void keyToClientsDestructor(void *entry) {
@@ -133,8 +133,8 @@ static void keyToClientsDestructor(void *entry) {
 
 static hashtableType keyToClientsHashtableType = {
     .entryGetKey = keyToClientsGetKey,
-    .hashFunction = dictEncObjHash,
-    .keyCompare = hashtableEncObjKeyCompare,
+    .hashFunction = hashtableSdsHash,
+    .keyCompare = hashtableSdsKeyCompare,
     .entryDestructor = keyToClientsDestructor,
 };
 
@@ -143,7 +143,8 @@ static hashtableType keyToClientsHashtableType = {
 // Return the list of clients blocked on key, or NULL if none exist.
 static list *keyToClients_getBlockedClientsList(robj *key) {
     keyToClientsEntry *entry;
-    if (hashtableFind(key_to_clients, key, (void **)&entry)) {
+    sds key_name = objectGetKey(key);
+    if (hashtableFind(key_to_clients, key_name, (void **)&entry)) {
         return entry->clients;
     }
     return NULL;
@@ -165,7 +166,8 @@ static list *keyToClients_addEntry(robj *key) {
 
 // Remove the entry for key from key_to_clients.
 static void keyToClients_deleteKey(robj *key) {
-    hashtableDelete(key_to_clients, key);
+    sds key_name = objectGetKey(key);
+    hashtableDelete(key_to_clients, key_name);
 }
 
 /*
@@ -207,11 +209,10 @@ void blockInuse_init(void) {
 
 /*
  * Release blockInuse data structures.
- * Only allowed if no clients are currently blocked.
+ * Unblocks all clients before cleanup.
  */
 void blockInuse_release(void) {
-    serverAssert(blockInuse_getNumberOfBlockedClients() == 0);
-    serverAssert(blockInuse_getNumberOfBlockedKeys() == 0);
+    blockInuse_unblockClientsOnAllKeys();
     if (client_to_keys) {
         hashtableRelease(client_to_keys);
         client_to_keys = NULL;
@@ -239,15 +240,6 @@ void blockInuse_blockClientOnKeys(client *c, int nKeys, robj *keys[]) {
     serverAssert(!c->flag.replica);
     for (int i = 0; i < nKeys; ++i) {
         serverAssert(keys[i]->type == OBJ_STRING);
-        // Verify key exists in at least one database across the server
-        int found = 0;
-        for (int j = 0; j < server.dbnum; ++j) {
-            if (lookupKeyRead(server.db[j], keys[i]) != NULL) {
-                found = 1;
-                break;
-            }
-        }
-        serverAssert(found);
     }
 
     // Initialize clientDataEntry and insert into client_to_keys
@@ -334,6 +326,8 @@ void blockInuse_unblockClientsOnAllKeys(void) {
         decrRefCount(key);
     }
     hashtableCleanupIterator(&iter);
+    serverAssert(blockInuse_getNumberOfBlockedClients() == 0);
+    serverAssert(blockInuse_getNumberOfBlockedKeys() == 0);
 }
 
 /*

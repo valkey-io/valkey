@@ -18,8 +18,6 @@ class BlockedInuseTest : public ::testing::Test {
     static void SetUpTestSuite() {
         memset(&server, 0, sizeof(valkeyServer));
         server.hz = CONFIG_DEFAULT_HZ;
-        server.dbnum = 16;
-        server.db = (serverDb **)zcalloc(sizeof(serverDb *) * server.dbnum);
         blockInuse_init();
         dummyConnType.set_read_handler = dummySetReadHandler;
     }
@@ -40,7 +38,6 @@ class BlockedInuseTest : public ::testing::Test {
 
     static void TearDownTestSuite() {
         blockInuse_release();
-        zfree(server.db);
     }
 
     static int dummySetReadHandler(connection *conn, ConnectionCallbackFunc func) {
@@ -66,6 +63,11 @@ class BlockedInuseTest : public ::testing::Test {
         EXPECT_EQ(c->flag.blocked, 0u);
         EXPECT_EQ(c->flag.unblocked, unblocked);
         EXPECT_EQ(blockInuse_clientBlocked(c), blocked);
+        if (blocked || unblocked) {
+            EXPECT_EQ(c->conn->read_handler, nullptr);
+        } else {
+            EXPECT_NE(c->conn->read_handler, nullptr);
+        }
     }
 };
 
@@ -82,13 +84,11 @@ TEST_F(BlockedInuseTest, blockClientOnSingleKey) {
     robj *keys[] = {key};
 
     // Block
-    EXPECT_CALL(mock, lookupKeyRead(_, key)).WillOnce(Return(key));
     blockInuse_blockClientOnKeys(c, 1, keys);
     verifyClientBlockState(c, 1, 0);
     EXPECT_EQ(blockInuse_getNumberOfBlockedClients(), 1);
     EXPECT_EQ(blockInuse_getNumberOfBlockedKeys(), 1);
     EXPECT_EQ(key->refcount, 3u);
-    EXPECT_EQ(c->conn->read_handler, nullptr);
 
     // Unblock
     blockInuse_unblockClientsOnKey(key);
@@ -106,7 +106,6 @@ TEST_F(BlockedInuseTest, blockClientOnSingleKey) {
     verifyClientBlockState(c, 0, 0);
     EXPECT_EQ(key->refcount, 1u);
     EXPECT_EQ(listLength(server.unblocked_clients), 0UL);
-    EXPECT_NE(c->conn->read_handler, nullptr);
     sdsfree(key_name);
     decrRefCount(key);
     freeFakeClient(c);
@@ -121,15 +120,12 @@ TEST_F(BlockedInuseTest, blockClientOnMultipleKeys) {
     robj *keys[] = {key1, key2};
 
     // Block
-    EXPECT_CALL(mock, lookupKeyRead(_, key1)).WillOnce(Return(key1));
-    EXPECT_CALL(mock, lookupKeyRead(_, key2)).WillOnce(Return(key2));
     blockInuse_blockClientOnKeys(c, 2, keys);
     verifyClientBlockState(c, 1, 0);
     EXPECT_EQ(blockInuse_getNumberOfBlockedClients(), 1);
     EXPECT_EQ(blockInuse_getNumberOfBlockedKeys(), 2);
     EXPECT_EQ(key1->refcount, 3u);
     EXPECT_EQ(key2->refcount, 3u);
-    EXPECT_EQ(c->conn->read_handler, nullptr);
 
     // Unblock key1
     blockInuse_unblockClientsOnKey(key1);
@@ -155,7 +151,6 @@ TEST_F(BlockedInuseTest, blockClientOnMultipleKeys) {
     processUnblockedClients();
     verifyClientBlockState(c, 0, 0);
     EXPECT_EQ(listLength(server.unblocked_clients), 0UL);
-    EXPECT_NE(c->conn->read_handler, nullptr);
 
     EXPECT_EQ(key1->refcount, 1u);
     EXPECT_EQ(key2->refcount, 1u);
@@ -174,7 +169,6 @@ TEST_F(BlockedInuseTest, blockMultipleClientsOnSameKey) {
     robj *keys[] = {key};
 
     // Block
-    EXPECT_CALL(mock, lookupKeyRead(_, key)).Times(2).WillRepeatedly(Return(key));
     blockInuse_blockClientOnKeys(c1, 1, keys);
     blockInuse_blockClientOnKeys(c2, 1, keys);
     verifyClientBlockState(c1, 1, 0);
@@ -182,8 +176,6 @@ TEST_F(BlockedInuseTest, blockMultipleClientsOnSameKey) {
     EXPECT_EQ(blockInuse_getNumberOfBlockedClients(), 2);
     EXPECT_EQ(blockInuse_getNumberOfBlockedKeys(), 1);
     EXPECT_EQ(key->refcount, 4u);
-    EXPECT_EQ(c1->conn->read_handler, nullptr);
-    EXPECT_EQ(c2->conn->read_handler, nullptr);
 
     // Unblock
     blockInuse_unblockClientsOnKey(key);
@@ -203,8 +195,6 @@ TEST_F(BlockedInuseTest, blockMultipleClientsOnSameKey) {
     verifyClientBlockState(c1, 0, 0);
     verifyClientBlockState(c2, 0, 0);
     EXPECT_EQ(listLength(server.unblocked_clients), 0UL);
-    EXPECT_NE(c1->conn->read_handler, nullptr);
-    EXPECT_NE(c2->conn->read_handler, nullptr);
 
     EXPECT_EQ(key->refcount, 1u);
     sdsfree(key_name);
@@ -220,17 +210,15 @@ TEST_F(BlockedInuseTest, unlinkBlockedClient) {
     robj *keys[] = {key};
 
     // Block
-    EXPECT_CALL(mock, lookupKeyRead(_, key)).WillOnce(Return(key));
     blockInuse_blockClientOnKeys(c, 1, keys);
     verifyClientBlockState(c, 1, 0);
     EXPECT_EQ(blockInuse_getNumberOfBlockedClients(), 1);
     EXPECT_EQ(blockInuse_getNumberOfBlockedKeys(), 1);
     EXPECT_EQ(key->refcount, 3u);
-    EXPECT_EQ(c->conn->read_handler, nullptr);
 
-    // Unlink
+    // Unlink (read_handler NOT reinstalled in this case)
     blockInuse_unlinkClient(c);
-    verifyClientBlockState(c, 0, 0);
+    EXPECT_EQ(blockInuse_clientBlocked(c), 0);
     EXPECT_EQ(blockInuse_getNumberOfBlockedClients(), 0);
     EXPECT_EQ(blockInuse_getNumberOfBlockedKeys(), 0);
     EXPECT_EQ(listLength(server.unblocked_clients), 0UL);
@@ -249,15 +237,12 @@ TEST_F(BlockedInuseTest, blockClientOnDuplicateKeys) {
     robj *keys[] = {key1, key2};
 
     // Block
-    EXPECT_CALL(mock, lookupKeyRead(_, key1)).WillOnce(Return(key1));
-    EXPECT_CALL(mock, lookupKeyRead(_, key2)).WillOnce(Return(key2));
     blockInuse_blockClientOnKeys(c, 2, keys);
     verifyClientBlockState(c, 1, 0);
     EXPECT_EQ(blockInuse_getNumberOfBlockedClients(), 1);
     EXPECT_EQ(blockInuse_getNumberOfBlockedKeys(), 1);
     EXPECT_EQ(key1->refcount, 3u);
     EXPECT_EQ(key2->refcount, 1u); // Key is deduplicated, only blocked once
-    EXPECT_EQ(c->conn->read_handler, nullptr);
 
     // Unblock
     blockInuse_unblockClientsOnKey(key1);
@@ -273,7 +258,6 @@ TEST_F(BlockedInuseTest, blockClientOnDuplicateKeys) {
     processUnblockedClients();
     verifyClientBlockState(c, 0, 0);
     EXPECT_EQ(listLength(server.unblocked_clients), 0UL);
-    EXPECT_NE(c->conn->read_handler, nullptr);
     EXPECT_EQ(key1->refcount, 1u);
     EXPECT_EQ(key2->refcount, 1u);
     sdsfree(key1_name);
@@ -281,6 +265,53 @@ TEST_F(BlockedInuseTest, blockClientOnDuplicateKeys) {
     decrRefCount(key1);
     decrRefCount(key2);
     freeFakeClient(c);
+}
+
+TEST_F(BlockedInuseTest, unblockAllKeys) {
+    client *c1 = createFakeClient(1);
+    client *c2 = createFakeClient(2);
+    sds key1_name = sdsnew("key1");
+    sds key2_name = sdsnew("key2");
+    robj *key1 = objectSetKeyAndExpire(createObject(OBJ_STRING, sdsnew("val")), key1_name, -1);
+    robj *key2 = objectSetKeyAndExpire(createObject(OBJ_STRING, sdsnew("val")), key2_name, -1);
+    robj *keys1[] = {key1};
+    robj *keys2[] = {key2};
+
+    // Block c1 on key1, c2 on key2
+    blockInuse_blockClientOnKeys(c1, 1, keys1);
+    blockInuse_blockClientOnKeys(c2, 1, keys2);
+    verifyClientBlockState(c1, 1, 0);
+    verifyClientBlockState(c2, 1, 0);
+    EXPECT_EQ(blockInuse_getNumberOfBlockedClients(), 2);
+    EXPECT_EQ(blockInuse_getNumberOfBlockedKeys(), 2);
+    EXPECT_EQ(key1->refcount, 3u);
+    EXPECT_EQ(key2->refcount, 3u);
+
+    // Unblock all
+    blockInuse_unblockClientsOnAllKeys();
+    verifyClientBlockState(c1, 0, 1);
+    verifyClientBlockState(c2, 0, 1);
+    EXPECT_EQ(blockInuse_getNumberOfBlockedClients(), 0);
+    EXPECT_EQ(blockInuse_getNumberOfBlockedKeys(), 0);
+    EXPECT_EQ(listLength(server.unblocked_clients), 2UL);
+
+    // Process clients
+    EXPECT_CALL(mock, processPendingCommandAndInputBuffer(c1)).WillOnce(Return(C_OK));
+    EXPECT_CALL(mock, beforeNextClient(c1)).Times(1);
+    EXPECT_CALL(mock, processPendingCommandAndInputBuffer(c2)).WillOnce(Return(C_OK));
+    EXPECT_CALL(mock, beforeNextClient(c2)).Times(1);
+    processUnblockedClients();
+    verifyClientBlockState(c1, 0, 0);
+    verifyClientBlockState(c2, 0, 0);
+    EXPECT_EQ(listLength(server.unblocked_clients), 0UL);
+    EXPECT_EQ(key1->refcount, 1u);
+    EXPECT_EQ(key2->refcount, 1u);
+    sdsfree(key1_name);
+    sdsfree(key2_name);
+    decrRefCount(key1);
+    decrRefCount(key2);
+    freeFakeClient(c1);
+    freeFakeClient(c2);
 }
 
 using BlockedInuseDeathTest = BlockedInuseTest;

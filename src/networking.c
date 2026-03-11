@@ -731,7 +731,12 @@ void _addReplyToBufferOrList(client *c, const char *s, size_t len) {
         return;
     }
     size_t reply_len = _addReplyToBuffer(c, s, len);
-    if (len > reply_len) _addReplyProtoToList(c, c->reply, s + reply_len, len - reply_len);
+    if (len > reply_len) {
+        /* Content spilled to reply list. Clear c->last_header to prevent
+         * reuse of stale pointer and avoid double-tracking. */
+        c->last_header = NULL;
+        _addReplyProtoToList(c, c->reply, s + reply_len, len - reply_len);
+    }
 }
 
 /* Increment reference to object and add pointer to object and

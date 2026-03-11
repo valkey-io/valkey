@@ -1434,6 +1434,11 @@ void addNodeToNodeReply(client *c, clusterNode *node) {
         hostname[0] != '\0') {
         length++;
     }
+
+    if (sdslen(node->availability_zone) != 0) {
+        length++;
+    }
+
     addReplyMapLen(c, length);
 
     if (server.cluster_preferred_endpoint_type != CLUSTER_ENDPOINT_TYPE_IP) {
@@ -1447,6 +1452,13 @@ void addNodeToNodeReply(client *c, clusterNode *node) {
         addReplyBulkCString(c, hostname);
         length--;
     }
+
+    if (sdslen(node->availability_zone) != 0) {
+        addReplyBulkCString(c, "availability-zone");
+        addReplyBulkCString(c, node->availability_zone);
+        length--;
+    }
+
     serverAssert(length == 0);
 }
 

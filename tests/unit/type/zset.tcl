@@ -1088,6 +1088,14 @@ start_server {tags {"zset"}} {
             assert_equal {a 1 e 5} [r zrange zsete{t} 0 -1 withscores]
         }
 
+        test "ZDIFF algorithm 2 empty result early - $encoding" {
+            r del zseta{t} zsetb{t} zsetc{t}
+            r zadd zseta{t} 1 a 2 b
+            r zadd zsetb{t} 1 a 2 b
+            assert_equal 0 [r zdiffstore zsetc{t} 2 zseta{t} zsetb{t}]
+            assert_equal {} [r zrange zsetc{t} 0 -1 withscores]
+        }
+
         test "ZDIFF fuzzing - $encoding" {
             for {set j 0} {$j < 100} {incr j} {
                 unset -nocomplain s

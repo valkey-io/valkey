@@ -290,6 +290,17 @@ start_server {tags {"expire"}} {
         set e
     } {ERR invalid expire time in 'getex' command}
 
+    test {GETEX with error expiration time} {
+        r del foo
+        assert_error {ERR value is not an integer or out of range} {r getex foo ex abcd}
+        r set foo bar
+        assert_error {ERR value is not an integer or out of range} {r getex foo px -abcd}
+        r del foo
+        r hset foo f v
+        assert_error {ERR value is not an integer or out of range} {r getex foo exat -abcd}
+        r del foo
+    }
+
     test {EXPIRE with big integer overflows when converted to milliseconds} {
         r set foo bar
 
@@ -963,6 +974,73 @@ start_server {tags {"expire"}} {
             [r dbsize] == 0
         } else {
             fail "key wasn't expired"
+        }
+    }
+
+    test {replicaKeysWithExpire memory leak verification and cleanup} {
+        # This test verifies the memory leak issue and cleanup mechanism for replicaKeysWithExpire
+        
+        # Set up a primary-replica relationship
+        start_server {tags {needs:repl external:skip}} {
+            # Set the outer layer server as primary
+            set primary [srv -1 client]
+            set primary_host [srv -1 host]
+            set primary_port [srv -1 port]
+            # Set this inner layer server as replica
+            set replica [srv 0 client]
+            set replica_host [srv 0 host]
+            set replica_port [srv 0 port]
+            
+            $replica replicaof $primary_host $primary_port
+            
+            # Wait for replication to sync
+            wait_for_sync $replica
+            
+            # Enable writable replica mode
+            $replica config set replica-read-only no
+            
+            # Disable the cleanup via debug command to simulate the memory leak scenario
+            $replica debug set-active-expire 0
+            
+            # Write a batch of keys with expiration directly to the replica
+            $replica flushall
+            set key_count 10
+            for {set i 0} {$i < $key_count} {incr i} {
+                $replica set "expire_key_$i" "value_from_replica_$i"
+                $replica expire "expire_key_$i" 1
+            }
+            
+            # Check the initial replicaKeysWithExpire count via info command
+            set replica_count_before [s 0 slave_expires_tracked_keys]
+            assert {$replica_count_before > 0}
+            
+            # Now perform failover from primary to this replica
+            $primary failover to $replica_host $replica_port
+            
+            # Verify the failover completed and this server is now primary
+            wait_for_condition 50 100 {
+                [s -1 master_failover_state] == "no-failover"
+            } else {
+                fail "Failover from primary to replica did not finish"
+            }
+            
+            # Verify that the count is the same - this demonstrates the memory leak
+            set primary_count_before_cleanup [s 0 slave_expires_tracked_keys]
+            assert {$primary_count_before_cleanup == $replica_count_before} 
+            
+            # Now enable the cleanup via debug command
+            $replica debug set-active-expire 1
+
+            # Check the replicaKeysWithExpire count after cleanup - should be 0
+            wait_for_condition 50 100 {
+                [s 0 slave_expires_tracked_keys] eq "0"
+            } else {
+                fail "Count should be 0 after cleanup"
+            }
+            
+            # Clean up
+            $replica flushall
+            assert_equal [$replica dbsize] 0
         }
     }
 }

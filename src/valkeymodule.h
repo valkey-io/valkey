@@ -148,6 +148,7 @@ typedef long long ustime_t;
 
 #define VALKEYMODULE_CONFIG_MEMORY (1ULL << 7)   /* Indicates if this value can be set as a memory value */
 #define VALKEYMODULE_CONFIG_BITFLAGS (1ULL << 8) /* Indicates if this value can be set as a multiple enum values */
+#define VALKEYMODULE_CONFIG_UNSIGNED (1ULL << 9)
 
 /* StreamID type. */
 typedef struct ValkeyModuleStreamID {
@@ -172,7 +173,7 @@ typedef struct ValkeyModuleStreamID {
 #define VALKEYMODULE_CTX_FLAGS_MULTI (1 << 1)
 /* The instance is a primary */
 #define VALKEYMODULE_CTX_FLAGS_PRIMARY (1 << 2)
-/* The instance is a replic */
+/* The instance is a replica */
 #define VALKEYMODULE_CTX_FLAGS_REPLICA (1 << 3)
 /* The instance is read-only (usually meaning it's a replica as well) */
 #define VALKEYMODULE_CTX_FLAGS_READONLY (1 << 4)
@@ -674,7 +675,8 @@ static const ValkeyModuleEvent ValkeyModuleEvent_ReplicationRoleChanged = {VALKE
 #define VALKEYMODULE_SUBEVENT_ATOMIC_SLOT_MIGRATION_EXPORT_COMPLETED 5
 #define _VALKEYMODULE_SUBEVENT_ATOMIC_SLOT_MIGRATION_NEXT 6
 
-/* ValkeyModuleClientInfo flags. */
+/* ValkeyModuleClientInfo flags.
+ * Note: flags VALKEYMODULE_CLIENTINFO_FLAG_PRIMARY and below were added in Valkey 9.1 */
 #define VALKEYMODULE_CLIENTINFO_FLAG_SSL (1 << 0)
 #define VALKEYMODULE_CLIENTINFO_FLAG_PUBSUB (1 << 1)
 #define VALKEYMODULE_CLIENTINFO_FLAG_BLOCKED (1 << 2)
@@ -682,6 +684,13 @@ static const ValkeyModuleEvent ValkeyModuleEvent_ReplicationRoleChanged = {VALKE
 #define VALKEYMODULE_CLIENTINFO_FLAG_UNIXSOCKET (1 << 4)
 #define VALKEYMODULE_CLIENTINFO_FLAG_MULTI (1 << 5)
 #define VALKEYMODULE_CLIENTINFO_FLAG_READONLY (1 << 6)
+#define VALKEYMODULE_CLIENTINFO_FLAG_PRIMARY (1 << 7)
+#define VALKEYMODULE_CLIENTINFO_FLAG_REPLICA (1 << 8)
+#define VALKEYMODULE_CLIENTINFO_FLAG_MONITOR (1 << 9)
+#define VALKEYMODULE_CLIENTINFO_FLAG_MODULE (1 << 10)
+#define VALKEYMODULE_CLIENTINFO_FLAG_AUTHENTICATED (1 << 11)
+#define VALKEYMODULE_CLIENTINFO_FLAG_EVER_AUTHENTICATED (1 << 12)
+#define VALKEYMODULE_CLIENTINFO_FLAG_FAKE (1 << 13)
 
 /* Here we take all the structures that the module pass to the core
  * and the other way around. Notably the list here contains the structures
@@ -1377,6 +1386,7 @@ typedef void (*ValkeyModuleScanKeyCB)(ValkeyModuleKey *key,
                                       void *privdata);
 typedef ValkeyModuleString *(*ValkeyModuleConfigGetStringFunc)(const char *name, void *privdata);
 typedef long long (*ValkeyModuleConfigGetNumericFunc)(const char *name, void *privdata);
+typedef unsigned long long (*ValkeyModuleConfigGetUnsignedNumericFunc)(const char *name, void *privdata);
 typedef int (*ValkeyModuleConfigGetBoolFunc)(const char *name, void *privdata);
 typedef int (*ValkeyModuleConfigGetEnumFunc)(const char *name, void *privdata);
 typedef int (*ValkeyModuleConfigSetStringFunc)(const char *name,
@@ -1387,6 +1397,10 @@ typedef int (*ValkeyModuleConfigSetNumericFunc)(const char *name,
                                                 long long val,
                                                 void *privdata,
                                                 ValkeyModuleString **err);
+typedef int (*ValkeyModuleConfigSetUnsignedNumericFunc)(const char *name,
+                                                        unsigned long long val,
+                                                        void *privdata,
+                                                        ValkeyModuleString **err);
 typedef int (*ValkeyModuleConfigSetBoolFunc)(const char *name, int val, void *privdata, ValkeyModuleString **err);
 typedef int (*ValkeyModuleConfigSetEnumFunc)(const char *name, int val, void *privdata, ValkeyModuleString **err);
 typedef int (*ValkeyModuleConfigApplyFunc)(ValkeyModuleCtx *ctx, void *privdata, ValkeyModuleString **err);
@@ -2128,6 +2142,16 @@ VALKEYMODULE_API int (*ValkeyModule_RegisterNumericConfig)(ValkeyModuleCtx *ctx,
                                                            ValkeyModuleConfigSetNumericFunc setfn,
                                                            ValkeyModuleConfigApplyFunc applyfn,
                                                            void *privdata) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_RegisterUnsignedNumericConfig)(ValkeyModuleCtx *ctx,
+                                                                   const char *name,
+                                                                   unsigned long long default_val,
+                                                                   unsigned int flags,
+                                                                   unsigned long long min,
+                                                                   unsigned long long max,
+                                                                   ValkeyModuleConfigGetUnsignedNumericFunc getfn,
+                                                                   ValkeyModuleConfigSetUnsignedNumericFunc setfn,
+                                                                   ValkeyModuleConfigApplyFunc applyfn,
+                                                                   void *privdata) VALKEYMODULE_ATTR;
 VALKEYMODULE_API int (*ValkeyModule_RegisterStringConfig)(ValkeyModuleCtx *ctx,
                                                           const char *name,
                                                           const char *default_val,
@@ -2549,6 +2573,7 @@ static int ValkeyModule_Init(ValkeyModuleCtx *ctx, const char *name, int ver, in
     VALKEYMODULE_GET_API(EventLoopAddOneShot);
     VALKEYMODULE_GET_API(RegisterBoolConfig);
     VALKEYMODULE_GET_API(RegisterNumericConfig);
+    VALKEYMODULE_GET_API(RegisterUnsignedNumericConfig);
     VALKEYMODULE_GET_API(RegisterStringConfig);
     VALKEYMODULE_GET_API(RegisterEnumConfig);
     VALKEYMODULE_GET_API(LoadConfigs);

@@ -555,7 +555,7 @@ start_server {tags {"hashexpire"}} {
     } {ERR *}
 
     foreach command {EX PX EXAT PXAT} {
-        test "HSETEX $command 0/past time works correctly with 1 field" {
+        test "HSETEX $command 0/past time works correctly with 2 fields" {
             r FLUSHALL
             r config resetstat
             # Create hash with field
@@ -566,16 +566,16 @@ start_server {tags {"hashexpire"}} {
             set rd [setup_single_keyspace_notification r]
             
             # Set field to expire immediately
-            assert_equal {1} [r HSETEX myhash $command [get_past_zero_expire_value $command] FIELDS 1 f1 v1]
+            assert_equal {1} [r HSETEX myhash $command [get_past_zero_expire_value $command] FIELDS 2 f1 v1 f2 v2]
 
             # Verify field and keys are deleted
-            assert_keyevent_patterns $rd myhash hexpired del
+            assert_keyevent_patterns $rd myhash hset hexpire hexpired del
             assert_equal -2 [r HTTL myhash FIELDS 1 f1]
             assert_equal 0 [r HLEN myhash]
             assert_equal 0 [r EXISTS myhash]
             assert_equal 0 [get_keys r]
             assert_equal 0 [get_keys_with_volatile_items r]
-            assert_equal 1 [info_field [r info stats] expired_fields]
+            assert_equal 2 [info_field [r info stats] expired_fields]
             $rd close
         }
     }
@@ -668,7 +668,7 @@ start_server {tags {"hashexpire"}} {
         assert_equal 0 [r HEXISTS myhash f1]
         assert_equal 0 [r HEXISTS myhash f2]
     }
-    
+
     ## FNX/FXX
 
     # hsetex throws ERR *, it shouldn't
@@ -938,7 +938,7 @@ start_server {tags {"hashexpire"}} {
         r FLUSHALL
         r HSET myhash f1 v1
         set rd [setup_single_keyspace_notification r]
-        
+
         r HEXPIRE myhash 1000 FIELDS 1 f2
         r HEXPIRE myhash 0 FIELDS 1 f2
         # Verify no notification (getting hset and not hexpire)
@@ -947,7 +947,7 @@ start_server {tags {"hashexpire"}} {
         assert_equal 0 [get_keys_with_volatile_items r]
         $rd close
     }
-
+    
     # Error Cases
     test {HEXPIRE - conflicting conditions error} {
         r FLUSHALL
@@ -2838,7 +2838,7 @@ tags {"aof external:skip"} {
 
                 # Create 10 fields with short expiry
                 for {set i 11} {$i <= 20} {incr i} {
-                    r HSETEX myhash PXAT [expr {[clock milliseconds] + 10}] FIELDS 1 f$i v$i ;# 10 PXAT to aof
+                    r HSETEX myhash PX 10 FIELDS 1 f$i v$i ;# 10 PXAT to aof
                 }
 
                 # Create 10 fields with expire 0
@@ -3070,7 +3070,7 @@ start_server {tags {"hashexpire external:skip"}} {
     }
 
     ##### HGETEX Active Expiry Keyspace Notifications #####
-    foreach command {EX PX} {
+    foreach command {EX PX EXAT PXAT} {
         test "HGETEX $command keyspace notifications for active expiry" {
             r FLUSHALL
             set initial_expired [info_field [r info stats] expired_fields]
@@ -3118,8 +3118,8 @@ start_server {tags {"hashexpire external:skip"}} {
         test "HSETEX $command single field expires leaving other fields intact" {
             r FLUSHALL
             set initial_expired [info_field [r info stats] expired_fields]
-            r HSET myhash f2 v2
-            assert_equal 1 [r HLEN myhash]
+            r HSET myhash f1 v1 f2 v2
+            assert_equal 2 [r HLEN myhash]
             assert_equal 0 [get_keys_with_volatile_items r]
             # Use HSETEX to set expiry
             r HSETEX myhash $command [get_short_expire_value $command] FIELDS 1 f1 v1
@@ -3192,7 +3192,7 @@ start_server {tags {"hashexpire external:skip"}} {
     }
 
     ##### HSETEX Active Expiry Keyspace Notifications #####
-    foreach command {EX PX} {
+    foreach command {EX PX EXAT PXAT} {
         test "HSETEX $command - keyspace notifications fired on field expiry" {
             r FLUSHALL
             set initial_expired [info_field [r info stats] expired_fields]
@@ -4770,7 +4770,7 @@ start_server {tags {"hash"}} {
        r flushall
        r hset myhash f1 v1
        assert_equal [r OBJECT ENCODING myhash] "listpack"
-       assert_equal [r hsetex myhash exat 0 fields 2 f2 v2 f3 v3] 0
+       assert_equal [r hsetex myhash exat 0 fields 2 f2 v2 f3 v3] 1
        assert_equal [r hlen myhash] 1
        assert_equal [r OBJECT ENCODING myhash] "listpack"
        r config set import-mode yes
@@ -4784,4 +4784,144 @@ start_server {tags {"hash"}} {
            fail "field wasn't expired"
        }
    }
+}
+
+start_server {tags {"hashexpire external:skip"}} {
+start_server {} {
+start_server {} {
+    # Setup - same pattern as psync2-master-restart.tcl
+    set primary [srv 0 client]
+    set primary_host [srv 0 host]
+    set primary_port [srv 0 port]
+
+    set replica [srv -1 client]
+    set replica_host [srv -1 host]
+    set replica_port [srv -1 port]
+
+    set sub_replica [srv -2 client]
+
+    # Build replication chain
+    $replica replicaof $primary_host $primary_port
+    $sub_replica replicaof $replica_host $replica_port
+
+    wait_for_condition 50 100 {
+        [status $replica master_link_status] eq {up} &&
+        [status $sub_replica master_link_status] eq {up}
+    } else {
+        fail "Replication not started."
+    }
+
+    test "PSYNC2: Primary reloading RDB will propagate expired hash fields deletion to replica" {
+        # Disable active expiration on primary
+        $primary debug set-active-expire 0
+        
+        # Create hash with expiring fields and one permanent field
+        $primary hsetex myhash PX 1 FIELDS 3 f1 v1 f2 v2 f3 v3
+        $primary hset myhash permanent permanent_value
+        
+        # Wait for replica to sync
+        wait_for_ofs_sync $primary $replica
+        
+        # Wait until all fields are expired
+        wait_for_condition 50 100 {
+            [$primary httl myhash FIELDS 3 f1 f2 f3] eq {-2 -2 -2}
+        } else {
+            fail "Hash fields did not expire"
+        }
+        
+        # Save RDB
+        $primary save
+        
+        # Restart primary - this will reload RDB and skip expired fields
+        catch {
+            restart_server 0 true false
+            set primary [srv 0 client]
+        }
+
+        $primary debug set-active-expire 0
+        
+        # Wait for replicas to reconnect
+        wait_for_condition 50 1000 {
+            [status $replica master_link_status] eq {up} &&
+            [status $sub_replica master_link_status] eq {up}
+        } else {
+            fail "Replicas didn't sync after master restart"
+        }
+        
+        # Verify primary has only the permanent field
+        assert_equal 1 [$primary hlen myhash]
+        assert_equal "permanent_value" [$primary hget myhash permanent]
+        
+        # Verify replicas also have only the permanent field (received HDEL)
+        wait_for_condition 50 100 {
+            [$replica hlen myhash] == 1 &&
+            [$sub_replica hlen myhash] == 1
+        } else {
+            fail "Replicas did not delete expired hash fields"
+        }
+        
+        assert_equal "permanent_value" [$replica hget myhash permanent]
+        assert_equal "permanent_value" [$sub_replica hget myhash permanent]
+
+        # Re-enable active expiration
+        $primary debug set-active-expire 1
+        
+    } {OK} {needs:debug}
+}}}
+
+start_server {tags {"hashexpire"}} {
+    test {Hash is skipped when all fields are expired during RDB load on primary} {
+        r FLUSHALL
+        
+        # Disable active expiration
+        r DEBUG SET-ACTIVE-EXPIRE 0
+        r HSETEX myhash PX 1 FIELDS 3 f1 v1 f2 v2 f3 v3
+        
+        # No permanent field - all fields will expire
+        
+        # Wait until all fields are expired
+        wait_for_condition 50 100 {
+            [r HTTL myhash FIELDS 3 f1 f2 f3] eq {-2 -2 -2}
+        } else {
+            fail "Hash fields did not expire"
+        }
+        
+        r SAVE
+        r FLUSHALL
+        r DEBUG RELOAD NOSAVE
+        
+        # Verify: key should not exist at all (empty hash skipped)
+        assert_equal 0 [r EXISTS myhash]
+        assert_equal 0 [r HLEN myhash]
+        
+        # Re-enable active expiration
+        r DEBUG SET-ACTIVE-EXPIRE 1
+    } {OK} {needs:debug}
+
+    test {RESTORE loads expired hash fields} {
+        r FLUSHALL
+        r DEBUG SET-ACTIVE-EXPIRE 0
+        
+        r HSETEX myhash PX 1 FIELDS 3 f1 v1 f2 v2 f3 v3
+        r HSET myhash permanent permanent_value
+        
+        set serialized [r DUMP myhash]
+        
+        # Wait until all fields are expired
+        wait_for_condition 50 100 {
+            [r HTTL myhash FIELDS 3 f1 f2 f3] eq {-2 -2 -2}
+        } else {
+            fail "Hash fields did not expire"
+        }
+        
+        r DEL myhash
+        r RESTORE myhash 0 $serialized
+        
+        # Verify ALL fields were loaded (including expired ones)
+        assert_equal 4 [r HLEN myhash]
+        assert_equal "permanent_value" [r HGET myhash permanent]
+
+        # Re-enable active expiration
+        r DEBUG SET-ACTIVE-EXPIRE 1
+    } {OK} {needs:debug}
 }

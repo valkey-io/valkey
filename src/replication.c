@@ -2340,7 +2340,7 @@ void replicaBeforeLoadPrimaryRDB(connection *conn, int use_diskless_load) {
     connSetReadHandler(conn, NULL);
 }
 
-void replicaAfterLoadPrimaryRDB(connection *conn, rdbSaveInfo *rsi) {
+void replicaAfterLoadPrimaryRDB(connection *conn, rdbSaveInfo *rsi, int disk_based_sync) {
     /* Final setup of the connected replica <- primary link */
     if (conn == server.repl_rdb_transfer_s) {
         dualChannelSyncHandleRdbLoadCompletion();
@@ -2375,10 +2375,21 @@ void replicaAfterLoadPrimaryRDB(connection *conn, rdbSaveInfo *rsi) {
                                  "in read-write mode.\n");
     }
 
-    /* Restart the AOF subsystem now that we finished the sync. This
-     * will trigger an AOF rewrite, and when done will start appending
-     * to the new file. */
-    if (server.aof_enabled) restartAOFAfterSYNC();
+    /* Restart the AOF subsystem now that we finished the sync.
+     *
+     * When disk-based sync was used and aof-use-rdb-preamble is enabled,
+     * reuse the RDB file received from the primary as the AOF base file
+     * directly, avoiding a redundant bgrewriteaof. Otherwise (diskless
+     * sync or rdb-preamble disabled), fall back to bgrewriteaof. */
+    if (server.aof_enabled) {
+        if (disk_based_sync && server.aof_use_rdb_preamble) {
+            if (restartAOFWithSyncRdb() == C_ERR) {
+                restartAOFAfterSYNC();
+            }
+        } else {
+            restartAOFAfterSYNC();
+        }
+    }
 
     /* In case of dual channel replication sync we want to close the RDB connection
      * once the connection is established */
@@ -2581,8 +2592,11 @@ int replicaLoadPrimaryRDBFromDisk(rdbSaveInfo *rsi) {
         return C_ERR;
     }
 
-    /* Cleanup. */
-    if (server.rdb_del_sync_files && allPersistenceDisabled()) {
+    /* Cleanup. When aof-use-rdb-preamble is enabled and AOF is on, keep the
+     * RDB file so it can be reused as the AOF base file, avoiding a redundant
+     * bgrewriteaof that would produce an almost identical snapshot. */
+    if (!(server.aof_enabled && server.aof_use_rdb_preamble) &&
+        server.rdb_del_sync_files && allPersistenceDisabled()) {
         serverLog(LL_NOTICE, "Removing the RDB file obtained from "
                              "the primary. This replica has persistence "
                              "disabled");
@@ -2642,7 +2656,7 @@ read_from_socket:
         cancelReplicationHandshake(1);
         return;
     }
-    replicaAfterLoadPrimaryRDB(conn, &rsi);
+    replicaAfterLoadPrimaryRDB(conn, &rsi, 0);
 }
 
 int tryReadBulkPayload(connection *conn, char *buf, int usemark, ssize_t *nread_out) {
@@ -2915,8 +2929,9 @@ sds getReplicaPortString(void) {
 /* Replication: Replica side.
  * Free replica's local replication buffer */
 void freePendingReplDataBuf(void) {
-    listRelease(server.pending_repl_data.blocks);
+    if (server.pending_repl_data.blocks) freePendingReplDataBufAsync(server.pending_repl_data.blocks);
     server.pending_repl_data.blocks = NULL;
+    server.pending_repl_data.mem = 0;
     server.pending_repl_data.len = 0;
 }
 
@@ -3032,6 +3047,14 @@ static int dualChannelReplHandleHandshake(connection *conn, sds *err) {
         return C_ERR;
     }
 
+    if (server.replica_announce_ip) {
+        *err = sendCommand(conn, "REPLCONF", "ip-address", server.replica_announce_ip, NULL);
+        if (*err) {
+            dualChannelServerLog(LL_WARNING, "Sending command to primary in dual channel replication handshake: %s", *err);
+            return C_ERR;
+        }
+    }
+
     if (connSetReadHandler(conn, dualChannelFullSyncWithPrimary) == C_ERR) {
         char conninfo[CONN_INFO_LEN];
         dualChannelServerLog(LL_WARNING, "Can't create readable event for SYNC: %s (%s)", strerror(errno),
@@ -3067,6 +3090,22 @@ static int dualChannelReplHandleReplconfReply(connection *conn, sds *err) {
                              *err);
         return C_ERR;
     }
+
+    /* If replica-announce-ip is configured, we sent an additional REPLCONF ip-address command
+     * and need to read its response as well. */
+    if (server.replica_announce_ip) {
+        sdsfree(*err);
+        *err = receiveSynchronousResponse(conn);
+        if (*err == NULL) {
+            dualChannelServerLog(LL_WARNING, "Primary did not respond to REPLCONF ip-address command during SYNC handshake");
+            return C_ERR;
+        }
+        if ((*err)[0] == '-') {
+            dualChannelServerLog(LL_WARNING, "Primary rejected REPLCONF ip-address: %s", *err);
+            return C_ERR;
+        }
+    }
+
     if (connSyncWrite(conn, "SYNC\r\n", 6, server.repl_syncio_timeout * 1000) == -1) {
         dualChannelServerLog(LL_WARNING, "I/O error writing to Primary: %s", connGetLastError(conn));
         return C_ERR;
@@ -3197,6 +3236,7 @@ error:
  * itself once we need it */
 void replDataBufInit(void) {
     serverAssert(server.pending_repl_data.blocks == NULL);
+    server.pending_repl_data.mem = 0;
     server.pending_repl_data.len = 0;
     server.pending_repl_data.peak = 0;
     server.pending_repl_data.blocks = listCreate();
@@ -3280,6 +3320,7 @@ void bufferReplData(connection *conn) {
             tail->size = usable_size - sizeof(replDataBufBlock);
             tail->used = 0;
             listAddNodeTail(server.pending_repl_data.blocks, tail);
+            server.pending_repl_data.mem += (usable_size + sizeof(listNode));
             server.pending_repl_data.len += tail->size;
             /* Update buffer's peak */
             if (server.pending_repl_data.peak < server.pending_repl_data.len)
@@ -3314,6 +3355,7 @@ int streamReplDataBufToDb(client *c) {
         c->querybuf = sdscatlen(c->querybuf, o->buf, used);
         c->repl_data->read_reploff += used;
         processInputBuffer(c);
+        server.pending_repl_data.mem -= (used + sizeof(replDataBufBlock) + sizeof(listNode));
         server.pending_repl_data.len -= used;
         offset += used;
         listDelNode(server.pending_repl_data.blocks, cur);
@@ -5172,7 +5214,7 @@ void handleBioThreadFinishedRDBDownload(void) {
         cancelReplicationHandshake(1);
         return;
     }
-    replicaAfterLoadPrimaryRDB(conn, &rsi);
+    replicaAfterLoadPrimaryRDB(conn, &rsi, 1);
     server.repl_transfer_size = bio_repl_transfer_size;
     server.repl_transfer_read = bio_repl_transfer_read;
 }

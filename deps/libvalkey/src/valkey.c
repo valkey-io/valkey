@@ -1009,6 +1009,18 @@ int valkeyBufferRead(valkeyContext *c) {
     if (c->err)
         return VALKEY_ERR;
 
+    if (c->funcs->read_zc) {
+        char *zc_buf;
+        nread = c->funcs->read_zc(c, &zc_buf);
+        if (nread < 0) {
+            return VALKEY_ERR;
+        }
+        if (nread > 0 && valkeyReaderFeed(c->reader, zc_buf, nread) != VALKEY_OK) {
+            valkeySetError(c, c->reader->err, c->reader->errstr);
+            return VALKEY_ERR;
+        }
+        return c->funcs->read_zc_done(c);
+    }
     nread = c->funcs->read(c, buf, sizeof(buf));
     if (nread < 0) {
         return VALKEY_ERR;

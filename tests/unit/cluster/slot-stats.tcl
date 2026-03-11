@@ -476,8 +476,8 @@ start_cluster 1 1 {tags {external:skip cluster} overrides {cluster-slot-stats-en
         set slot [R 0 cluster keyslot $channel]
         set primary [Rn 0]
         set replica [Rn 1]
-        set replica_subcriber [valkey_deferring_client -1]
-        $replica_subcriber SSUBSCRIBE $channel
+        set replica_subscriber [valkey_deferring_client -1]
+        $replica_subscriber SSUBSCRIBE $channel
         # *2\r\n$10\r\nssubscribe\r\n$7\r\nchannel\r\n --> 34 bytes.
         $primary SPUBLISH $channel hello
         # *3\r\n$8\r\nspublish\r\n$7\r\nchannel\r\n$5\r\nhello\r\n --> 42 bytes.
@@ -1009,7 +1009,7 @@ start_cluster 1 0 {tags {external:skip cluster} overrides {cluster-slot-stats-en
         R 0 config set min-string-size-avoid-copy-reply 1
         
         # Disable commandlog tracking
-        R 0 config set commandlog-request-larger-than -1
+        R 0 config set commandlog-reply-larger-than -1
         R 0 config resetstat
         
         set value [string repeat A 2048]
@@ -1033,7 +1033,7 @@ start_cluster 1 0 {tags {external:skip cluster} overrides {cluster-slot-stats-en
         assert_equal $network_bytes_out 2057
         
         # Re-enable commandlog
-        R 0 config set commandlog-request-larger-than 1024
+        R 0 config set commandlog-reply-larger-than 1024
         R 0 config resetstat
         
         # Get should still track correctly

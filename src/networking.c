@@ -466,17 +466,21 @@ int prepareClientToWrite(client *c) {
     return C_OK;
 }
 
-/* Returns everything in the client reply linked list in a SDS format.
+/* Returns everything in the client reply buffer and linked list in a SDS format.
  * This should only be used only with a caching client. */
 sds aggregateClientOutputBuffer(client *c) {
     sds cmd_response = sdsempty();
+
+    /* First, collect from the fixed buffer if any */
+    if (c->bufpos > 0) {
+        cmd_response = sdscatlen(cmd_response, c->buf, c->bufpos);
+    }
+
+    /* Then, collect from the reply list */
     listIter li;
     listNode *ln;
     clientReplyBlock *val_block;
     listRewind(c->reply, &li);
-
-    /* Here, c->buf is not used, thus we confirm c->bufpos remains 0. */
-    serverAssert(c->bufpos == 0);
     while ((ln = listNext(&li)) != NULL) {
         val_block = (clientReplyBlock *)listNodeValue(ln);
         cmd_response = sdscatlen(cmd_response, val_block->buf, val_block->used);
@@ -575,7 +579,7 @@ static size_t _addReplyPayloadToBuffer(client *c, const void *payload, size_t le
     size_t available = c->buf_usable_size - c->bufpos;
     size_t reply_len = min(available, len);
     if (c->flag.buf_encoded) {
-        int track_bytes = (server.commandlog[COMMANDLOG_TYPE_LARGE_REQUEST].threshold != -1);
+        int track_bytes = (server.commandlog[COMMANDLOG_TYPE_LARGE_REPLY].threshold != -1);
         reply_len = upsertPayloadHeader(c->buf, &c->bufpos, &c->last_header, payload_type, len, c->slot, track_bytes, available);
     }
     if (!reply_len) return 0;
@@ -626,7 +630,7 @@ static void _addReplyPayloadToList(client *c, list *reply_list, const char *payl
         size_t copy = avail >= len ? len : avail;
 
         if (tail->flag.buf_encoded) {
-            int track_bytes = (server.commandlog[COMMANDLOG_TYPE_LARGE_REQUEST].threshold != -1);
+            int track_bytes = (server.commandlog[COMMANDLOG_TYPE_LARGE_REPLY].threshold != -1);
             copy = upsertPayloadHeader(tail->buf, &tail->used, &tail->last_header, payload_type, len, c->slot, track_bytes, avail);
         } else if (encoded) {
             /* If encoded buffer is required but tail is unencoded then pretend nothing can be added to it
@@ -655,7 +659,7 @@ static void _addReplyPayloadToList(client *c, list *reply_list, const char *payl
         tail->flag.buf_encoded = encoded;
         tail->last_header = NULL;
         if (tail->flag.buf_encoded) {
-            int track_bytes = (server.commandlog[COMMANDLOG_TYPE_LARGE_REQUEST].threshold != -1);
+            int track_bytes = (server.commandlog[COMMANDLOG_TYPE_LARGE_REPLY].threshold != -1);
             upsertPayloadHeader(tail->buf, &tail->used, &tail->last_header, payload_type, len, c->slot, track_bytes, tail->size);
         }
         memcpy(tail->buf + tail->used, payload, len);
@@ -971,13 +975,23 @@ void addReplyErrorSdsSafe(client *c, sds err) {
     addReplyErrorSdsEx(c, err, 0);
 }
 
+/* Add error reply to the given client.
+ * Supported flags:
+ * ERR_REPLY_FLAG_NO_STATS_UPDATE - indicate not to perform any error stats updates
+ * As a side effect the SDS string is freed. */
+void addReplyErrorSdsExSafe(client *c, sds err, int flags) {
+    err = sdstrim(err, "\r\n");
+    err = sdsmapchars(err, "\r\n", "  ", 2);
+    addReplyErrorSdsEx(c, err, flags);
+}
+
 /* Internal function used by addReplyErrorFormat, addReplyErrorFormatEx and RM_ReplyWithErrorFormat.
  * Refer to afterErrorReply for more information about the flags. */
 void addReplyErrorFormatInternal(client *c, int flags, const char *fmt, va_list ap) {
-    va_list cpy;
-    va_copy(cpy, ap);
-    sds s = sdscatvprintf(sdsempty(), fmt, cpy);
-    va_end(cpy);
+    va_list copy;
+    va_copy(copy, ap);
+    sds s = sdscatvprintf(sdsempty(), fmt, copy);
+    va_end(copy);
     /* Trim any newlines at the end (ones will be added by addReplyErrorLength) */
     s = sdstrim(s, "\r\n");
     /* Make sure there are no newlines in the middle of the string, otherwise
@@ -1418,7 +1432,7 @@ void addReplyBulk(client *c, robj *obj) {
     if (tryAvoidBulkStrCopyToReply(c, obj) == C_OK) {
         /* If copy avoidance allowed, then we explicitly maintain net_output_bytes_curr_cmd.
          * We determine per-reply if tracking is enabled by checking the config in the main thread. */
-        if (server.commandlog[COMMANDLOG_TYPE_LARGE_REQUEST].threshold != -1) {
+        if (server.commandlog[COMMANDLOG_TYPE_LARGE_REPLY].threshold != -1) {
             serverAssert(obj->encoding == OBJ_ENCODING_RAW);
             size_t str_len = sdslen(objectGetVal(obj));
             uint32_t num_len = digits10(str_len);
@@ -1760,20 +1774,18 @@ void clientAcceptHandler(connection *conn) {
         }
     }
 
-    /* Auto-authenticate from cert_user field if set */
-    sds username = connGetPeerUsername(conn);
-    if (username != NULL) {
-        user *u = ACLGetUserByName(username, sdslen(username));
-        if (u && (u->flags & USER_FLAG_ENABLED)) {
-            clientSetUser(c, u, 1);
-            moduleNotifyUserChanged(c);
-            serverLog(LL_VERBOSE, "TLS: Auto-authenticated client as %s",
-                      server.hide_user_data_from_log ? "*redacted*" : u->name);
-        } else {
-            addACLLogEntry(c, ACL_INVALID_TLS_CERT_AUTH, ACL_LOG_CTX_TOPLEVEL, 0, username, NULL);
-        }
-        sdsfree(username);
+    /* Auto-authenticate from cert user field if set */
+    sds cert_username = NULL;
+    user *u = connGetPeerUser(conn, &cert_username);
+    if (u) {
+        clientSetUser(c, u, 1);
+        moduleNotifyUserChanged(c);
+        serverLog(LL_VERBOSE, "TLS: Auto-authenticated client as %s",
+                  server.hide_user_data_from_log ? "*redacted*" : u->name);
+    } else if (cert_username) {
+        addACLLogEntry(c, ACL_INVALID_TLS_CERT_AUTH, ACL_LOG_CTX_TOPLEVEL, 0, cert_username, NULL);
     }
+    sdsfree(cert_username);
 
     server.stat_numconnections++;
     moduleFireServerEvent(VALKEYMODULE_EVENT_CLIENT_CHANGE, VALKEYMODULE_SUBEVENT_CLIENT_CHANGE_CONNECTED, c);
@@ -2166,6 +2178,22 @@ void freeClientAsync(client *c) {
     debugServerAssertWithInfo(c, NULL, listSearchKey(server.clients_to_close, c) == NULL);
     listAddNodeTail(server.clients_to_close, c);
 }
+/* Helper function to free a client or flag it for closure after current command.
+ * We can't free the current client right now because that would trigger an
+ * assert in prepareClientToWrite() when the server tries to write the response.
+ * So instead flag it for closure after the current command completes. */
+void freeClientOrCloseLater(client *c, int async) {
+    if (c == server.current_client) {
+        c->flag.close_after_command = 1;
+    } else {
+        if (async) {
+            freeClientAsync(c);
+        } else {
+            freeClient(c);
+        }
+    }
+}
+
 
 /* Log errors for invalid use and free the client in async way.
  * We will add additional information about the client to the message. */
@@ -2785,7 +2813,7 @@ static void releaseBufReferences(char *buf, size_t bufpos) {
         ptr += sizeof(payloadHeader);
 
         if (header->payload_type == BULK_STR_REF) {
-            /* When net byte tracking was disabled in the main thread (commandlog-request-larger-than -1)
+            /* When net byte tracking was disabled in the main thread (commandlog-reply-larger-than -1)
              * at the time this reply was added, we account for cluster slot stats here in the IO thread
              * after writing the reply. When tracking was enabled, it's already accounted in the main thread
              * via afterCommand() -> clusterSlotStatsAddNetworkBytesOutForUserClient(). */
@@ -3079,12 +3107,14 @@ parseResult handleParseResults(client *c) {
         /* in case the client's query was an empty line we will ignore it and proceed to process the rest of the buffer
          * if any */
         resetClient(c);
+        c->reqtype = 0;
         return PARSE_OK;
     }
 
     if (c->read_flags & READ_FLAGS_PARSING_NEGATIVE_MBULK_LEN) {
         /* Multibulk processing could see a <= 0 length. */
         resetClient(c);
+        c->reqtype = 0;
         return PARSE_OK;
     }
 
@@ -5998,8 +6028,8 @@ int getClientTypeByName(char *name) {
         return -1;
 }
 
-char *getClientTypeName(int class) {
-    switch (class) {
+char *getClientTypeName(int client_class) {
+    switch (client_class) {
     case CLIENT_TYPE_NORMAL: return "normal";
     case CLIENT_TYPE_REPLICA: return "slave";
     case CLIENT_TYPE_PUBSUB: return "pubsub";
@@ -6543,4 +6573,72 @@ void ioThreadWriteToClient(void *data) {
 
     atomic_thread_fence(memory_order_release);
     c->io_write_state = CLIENT_COMPLETED_IO;
+}
+
+/* ========================== Wrapper Functions for Testing ========================== */
+/* These wrapper functions expose static functions for use in GoogleTest unit tests.
+ * They are non-static wrappers that simply call the corresponding static functions. */
+
+void testOnlyPostWriteToReplica(client *c) {
+    postWriteToReplica(c);
+}
+
+void testOnlyWriteToReplica(client *c) {
+    writeToReplica(c);
+}
+
+void testOnlyBackupAndUpdateClientArgv(client *c, int new_argc, robj **new_argv) {
+    backupAndUpdateClientArgv(c, new_argc, new_argv);
+}
+
+size_t testOnlyUpsertPayloadHeader(char *buf, size_t *bufpos, payloadHeader **last_header, uint8_t type, size_t len, int slot, size_t available) {
+    return upsertPayloadHeader(buf, bufpos, last_header, type, len, slot, 0, available);
+}
+
+int testOnlyIsCopyAvoidPreferred(client *c, robj *obj) {
+    return isCopyAvoidPreferred(c, obj);
+}
+
+size_t testOnlyAddReplyPayloadToBuffer(client *c, const void *payload, size_t len, uint8_t payload_type) {
+    return _addReplyPayloadToBuffer(c, payload, len, payload_type);
+}
+
+size_t testOnlyAddBulkStrRefToBuffer(client *c, const void *payload, size_t len) {
+    return _addBulkStrRefToBuffer(c, payload, len);
+}
+
+void testOnlyAddReplyPayloadToList(client *c, list *reply_list, const char *payload, size_t len, uint8_t payload_type) {
+    _addReplyPayloadToList(c, reply_list, payload, len, payload_type);
+}
+
+void testOnlyAddBulkStrRefToToList(client *c, const void *payload, size_t len) {
+    _addBulkStrRefToToList(c, payload, len);
+}
+
+void testOnlyAddBulkStrRefToBufferOrList(client *c, robj *obj) {
+    _addBulkStrRefToBufferOrList(c, obj);
+}
+
+void testOnlyInitReplyIOV(client *c, int iovsize, struct iovec *iov_arr, char (*prefixes)[BULK_STR_LEN_PREFIX_MAX_SIZE], char *crlf, replyIOV *reply) {
+    initReplyIOV(c, iovsize, iov_arr, prefixes, crlf, reply);
+}
+
+void testOnlyAddPlainBufferToReplyIOV(char *buf, size_t buf_len, replyIOV *reply, bufWriteMetadata *metadata) {
+    addPlainBufferToReplyIOV(buf, buf_len, reply, metadata);
+}
+
+void testOnlyAddBulkStringToReplyIOV(char *buf, size_t buf_len, replyIOV *reply, bufWriteMetadata *metadata) {
+    addBulkStringToReplyIOV(buf, buf_len, reply, metadata);
+}
+
+void testOnlyAddEncodedBufferToReplyIOV(char *buf, size_t bufpos, replyIOV *reply, bufWriteMetadata *metadata) {
+    addEncodedBufferToReplyIOV(buf, bufpos, reply, metadata);
+}
+
+void testOnlyAddBufferToReplyIOV(int encoded, char *buf, size_t bufpos, replyIOV *reply, bufWriteMetadata *metadata) {
+    addBufferToReplyIOV(encoded, buf, bufpos, reply, metadata);
+}
+
+void testOnlySaveLastWrittenBuf(client *c, bufWriteMetadata *metadata, int bufcnt, size_t totlen, size_t totwritten) {
+    saveLastWrittenBuf(c, metadata, bufcnt, totlen, totwritten);
 }

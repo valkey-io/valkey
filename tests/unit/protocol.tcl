@@ -325,10 +325,18 @@ start_server {tags {"protocol hello"}} {
         assert_equal [dict get $reply proto] 3
 
         set reply [r HELLO 2]
-        assert_equal [dict get $reply proto] 2
+        if {$::force_resp3} {
+            assert_equal [dict get $reply proto] 3
+        } else {
+            assert_equal [dict get $reply proto] 2
+        }
 
         set reply [r HELLO]
-        assert_equal [dict get $reply proto] 2
+        if {$::force_resp3} {
+            assert_equal [dict get $reply proto] 3
+        } else {
+            assert_equal [dict get $reply proto] 2
+        }
     }
 
     test {HELLO and availability-zone} {

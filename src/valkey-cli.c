@@ -7606,7 +7606,10 @@ static int clusterManagerCommandDeleteNode(int argc, char **argv) {
 
         /* Skip nodes without a valid connection. */
         if (!n->context) {
-            clusterManagerLogWarn(">>> Skipping %s:%d (not connected)\n", n->ip, n->port);
+            clusterManagerLogWarn(">>> Skipping unreachable node %s:%d. "
+                                  "It may need manual reconfiguration "
+                                  "when it comes back online.\n",
+                                  n->ip, n->port);
             continue;
         }
 

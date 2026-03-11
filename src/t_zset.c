@@ -2481,8 +2481,11 @@ static void zdiffAlgorithm2(zsetopsrc *src, long setnum, zset *dstzset, size_t *
             }
 
             /* Exit if result set is empty as any additional removal
-                * of elements will have no effect. */
-            if (cardinality == 0) break;
+             * of elements will have no effect. */
+            if (cardinality == 0) {
+                zuiDiscardDirtyValue(&zval);
+                break;
+            }
         }
         zuiClearIterator(&src[j]);
 

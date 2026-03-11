@@ -746,6 +746,9 @@ static int _addBulkStrRefToBufferOrList(client *c, robj *obj) {
     bulkStrRef str_ref = {.obj = obj, .str = objectGetVal(obj)};
     size_t added = _addBulkStrRefToBuffer(c, (void *)&str_ref, sizeof(str_ref));
     if (!added) {
+        /* Content spilled to reply list. Clear c->last_header since 
+         * it points into c->buf and should not be reused. */
+        c->last_header = NULL;
         _addBulkStrRefToToList(c, (void *)&str_ref, sizeof(str_ref));
         return 0;
     }

@@ -1449,8 +1449,9 @@ void addReplyBulk(client *c, robj *obj) {
             size_t str_len = sdslen(objectGetVal(obj));
             uint32_t num_len = digits10(str_len);
             /* RESP encodes bulk strings as $<length>\r\n<data>\r\n */
-            size_t reply_len = (num_len + 3) + str_len + 2;
-            c->net_output_bytes_curr_cmd += reply_len;
+            c->net_output_bytes_curr_cmd += (num_len + 3); /* $<length>\r\n */
+            c->net_output_bytes_curr_cmd += str_len;       /* <data> */
+            c->net_output_bytes_curr_cmd += 2;             /* \r\n */
         }
         return;
     }

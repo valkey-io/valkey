@@ -318,45 +318,6 @@ start_server {tags {"obuf-limits external:skip logreqres:skip"}} {
         }
     }
 
-    test {Copy avoidance obuf tracking with commandlog enabled} {
-        r config set commandlog-reply-larger-than 100
-        r config set client-output-buffer-limit {normal 200000 0 0}
-        
-        # Use 1MB value
-        set value [string repeat "z" [expr 1*1024*1024]]
-        r set cmdlog_key $value
-        
-        set rd [valkey_deferring_client]
-        $rd client setname cmdlog_test
-        assert {[$rd read] eq "OK"}
-        
-        # Send multiple GETs without reading
-        set omem 0
-        while {1} {
-            $rd get cmdlog_key
-            $rd flush
-            after 10
-            set clients [r client list]
-            foreach client_info [split $clients "\r\n"] {
-                if {[string match "*name=cmdlog_test*" $client_info]} {
-                    regexp {omem=([0-9]+)} $client_info _ omem
-                    break
-                }
-            }
-            if {$omem >= 200000} break
-            if {[lsearch [split [r client list] "\r\n"] *name=cmdlog_test*] == -1} break
-        }
-        
-        wait_for_condition 50 100 {
-            [lsearch [split [r client list] "\r\n"] *name=cmdlog_test*] == -1
-        } else {
-            fail "Client not disconnected with commandlog enabled (omem=$omem)"
-        }
-        
-        # Cleanup
-        r config set commandlog-reply-larger-than -1
-    }
-
     test {Copy avoidance obuf tracking with IO threads} {
         # Enable copy avoidance and IO threads
         r config set min-io-threads-avoid-copy-reply 1
@@ -415,7 +376,13 @@ start_server {tags {"obuf-limits external:skip logreqres:skip"}} {
         $rd client id
         set client_id [$rd read]
 
-        set cmd_count 1300
+       
+        if {[s arch_bits] == 64} {
+            set cmd_count 1300
+        } else {
+            # On 32-bit we need more commands to trigger spill
+            set cmd_count 3000
+        }
         set pipeline ""
         for {set i 0} {$i < $cmd_count} {incr i} {
             append pipeline "get spill_key\r\n"

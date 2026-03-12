@@ -291,7 +291,9 @@ catch {
 }
 if {[lindex [r config get proto-max-bulk-len] 1] == 10000000000} {
 
-    set str_length 5000000000
+    # Reduced from 5GB to fit in 16GB CI runners with ASAN overhead
+    # Must exceed 2^32 (4294967296) to test >4GiB (32-bit boundary) behavior
+    set str_length 4300000000
 
     # repeating all the plain nodes basic checks with 5gb values
     test {Test LPUSH and LPOP on plain nodes over 4GB} {

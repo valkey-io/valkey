@@ -541,7 +541,8 @@ static size_t upsertPayloadHeader(char *buf,
 
     /* Try to add payload to last chunk if possible */
     if (*last_header != NULL && (*last_header)->payload_type == type && (*last_header)->slot == slot &&
-        (*last_header)->track_bytes == track_bytes) {
+        (*last_header)->track_bytes == track_bytes &&
+        !atomic_load_explicit(&(*last_header)->tracked_for_cob, memory_order_acquire)) {
         (*last_header)->payload_len += allowed_len;
         return allowed_len;
     }

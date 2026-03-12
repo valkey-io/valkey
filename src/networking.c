@@ -114,11 +114,11 @@ typedef enum {
  * The packed attribute is specified because buffer is accessed at arbitrary offsets,
  * so no benefit in data structure padding and applying packed saves the space in the buffer  */
 typedef struct __attribute__((__packed__)) payloadHeader {
-    size_t payload_len;       /* payload length in a reply buffer */
-    size_t reply_len;         /* actual reply length for non-plain payloads */
-    int16_t slot;             /* to report network-bytes-out for BULK_STR_REF chunks */
-    uint8_t payload_type : 1; /* one of payloadType */
-    uint8_t track_bytes : 1;  /* 1 if net bytes tracking was enabled when reply was added */
+    size_t payload_len;          /* payload length in a reply buffer */
+    size_t reply_len;            /* actual reply length for non-plain payloads */
+    int16_t slot;                /* to report network-bytes-out for BULK_STR_REF chunks */
+    uint8_t payload_type : 1;    /* one of payloadType */
+    uint8_t track_bytes : 1;     /* 1 if net bytes tracking was enabled when reply was added */
     uint8_t tracked_for_cob : 1; /* 1 if this header's reply_len has been tracked in io_tracked_reply_len */
     uint8_t reserved : 5;
 } payloadHeader;

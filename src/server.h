@@ -974,18 +974,21 @@ typedef struct multiCmd {
 } multiCmd;
 
 typedef struct multiState {
-    multiCmd *commands;   /* Array of MULTI commands */
-    int count;            /* Total number of MULTI commands */
-    int cmd_flags;        /* The accumulated command flags OR-ed together.
-                             So if at least a command has a given flag, it
-                             will be set in this field. */
-    int cmd_inv_flags;    /* Same as cmd_flags, OR-ing the ~flags. so that it
-                             is possible to know if all the commands have a
-                             certain flag. */
-    size_t argv_len_sums; /* mem used by all commands arguments */
-    int alloc_count;      /* total number of multiCmd struct memory reserved. */
-    list watched_keys;
-    int transaction_db_id; /* Currently SELECTed DB id in transaction context */
+    multiCmd *commands;        /* Array of MULTI commands */
+    int count;                 /* Total number of MULTI commands */
+    int cmd_flags;             /* The accumulated command flags OR-ed together.
+                                  So if at least a command has a given flag, it
+                                  will be set in this field. */
+    int cmd_inv_flags;         /* Same as cmd_flags, OR-ing the ~flags. so that it
+                                  is possible to know if all the commands have a
+                                  certain flag. */
+    size_t argv_len_sums;      /* mem used by all commands arguments */
+    int alloc_count;           /* total number of multiCmd struct memory reserved. */
+    list watched_keys;         /* List of watchedKey for iteration and cleanup. */
+    dict **watched_keys_by_db; /* Per-db dict for O(1) watched key lookup.
+                                  Array of size server.dbnum, lazily allocated.
+                                  Each dict maps key -> watchedKey*. */
+    int transaction_db_id;     /* Currently SELECTed DB id in transaction context */
 } multiState;
 
 /* This structure holds the blocking operation state for a client.
@@ -2802,7 +2805,6 @@ extern dictType objectKeyPointerValueDictType;
 extern hashtableType objectHashtableType;
 extern dictType objectKeyHeapPointerValueDictType;
 extern hashtableType setHashtableType;
-extern dictType BenchmarkDictType;
 extern hashtableType zsetHashtableType;
 extern hashtableType kvstoreKeysHashtableType;
 extern hashtableType kvstoreExpiresHashtableType;
@@ -2813,11 +2815,11 @@ extern dictType stringSetDictType;
 extern dictType externalStringType;
 extern dictType sdsHashDictType;
 extern hashtableType clientHashtableType;
-extern dictType objToDictDictType;
 extern hashtableType kvstoreChannelHashtableType;
 extern dictType modulesDictType;
 extern hashtableType sdsReplyHashtableType;
 extern dictType keylistDictType;
+extern dictType watchedKeysDictType;
 extern dict *modules;
 
 /*-----------------------------------------------------------------------------

@@ -714,6 +714,18 @@ dictType objToHashtableDictType = {
     NULL                     /* allow to expand */
 };
 
+/* Dict type for client's per-db watched keys lookup.
+ * Keys are robj* (borrowed, not owned), values are watchedKey* (also borrowed).
+ * No destructors needed since the actual memory is managed by the watched_keys list. */
+dictType watchedKeysDictType = {
+    dictObjHash,       /* hash function */
+    NULL,              /* key dup */
+    dictObjKeyCompare, /* key compare */
+    NULL,              /* key destructor - key is borrowed from watchedKey->key */
+    NULL,              /* val destructor - val is borrowed watchedKey pointer */
+    NULL               /* allow to expand */
+};
+
 /* Callback used for hash tables where the entries are dicts and the key
  * (channel name) is stored in each dict's metadata. */
 const void *hashtableChannelsGetKey(const void *entry) {
@@ -728,7 +740,7 @@ void hashtableChannelsDestructor(void *entry) {
     hashtableRelease(ht);
 }
 
-/* Similar to objToDictDictType, but changed to hashtable and added some kvstore
+/* Similar to objToHashtableDictType, but changed to hashtable and added some kvstore
  * callbacks, it's used for PUBSUB command to track clients subscribing the
  * channels. The elements are dicts where the keys are clients. The metadata in
  * each dict stores a pointer to the channel name. */

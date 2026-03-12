@@ -51,12 +51,26 @@ void freeClientMultiStateCmds(client *c) {
     c->mstate->commands = NULL;
 }
 
+void freeClientMultiWatchedKeysByDB(client *c) {
+    if (!c->mstate || !c->mstate->watched_keys_by_db) return;
+
+    for (int i = 0; i < server.dbnum; i++) {
+        if (c->mstate->watched_keys_by_db[i]) {
+            dictRelease(c->mstate->watched_keys_by_db[i]);
+            c->mstate->watched_keys_by_db[i] = NULL;
+        }
+    }
+    zfree(c->mstate->watched_keys_by_db);
+    c->mstate->watched_keys_by_db = NULL;
+}
+
 /* Release all the resources associated with MULTI/EXEC state */
 void freeClientMultiState(client *c) {
     if (!c->mstate) return;
 
     freeClientMultiStateCmds(c);
     unwatchAllKeys(c);
+    freeClientMultiWatchedKeysByDB(c);
     zfree(c->mstate);
     c->mstate = NULL;
 }
@@ -325,18 +339,25 @@ static inline listNode *watchedKeyGetClientNode(watchedKey *wk) {
 /* Watch for the specified key */
 void watchForKey(client *c, robj *key) {
     list *clients = NULL;
-    listIter li;
-    listNode *ln;
     watchedKey *wk;
 
     if (listLength(&c->mstate->watched_keys) == 0) server.watching_clients++;
 
-    /* Check if we are already watching for this key */
-    listRewind(&c->mstate->watched_keys, &li);
-    while ((ln = listNext(&li))) {
-        wk = listNodeValue(ln);
-        if (wk->db == c->db && equalStringObjects(key, wk->key)) return; /* Key already watched */
+    /* Lazily allocate the per-db dict array. */
+    if (c->mstate->watched_keys_by_db == NULL) {
+        c->mstate->watched_keys_by_db = zcalloc(sizeof(dict *) * server.dbnum);
     }
+
+    /* Lazily allocate the dict for this specific db. */
+    if (c->mstate->watched_keys_by_db[c->db->id] == NULL) {
+        c->mstate->watched_keys_by_db[c->db->id] = dictCreate(&watchedKeysDictType);
+    }
+
+    /* Check if we are already watching for this key */
+    if (dictFind(c->mstate->watched_keys_by_db[c->db->id], key) != NULL) {
+        return; /* Key already watched */
+    }
+
     /* This key is not already watched in this DB. Let's add it */
     clients = dictFetchValue(c->db->watched_keys, key);
     if (!clients) {
@@ -344,6 +365,7 @@ void watchForKey(client *c, robj *key) {
         dictAdd(c->db->watched_keys, key, clients);
         incrRefCount(key);
     }
+
     /* Add the new key to the list of keys watched by this client */
     wk = zmalloc(sizeof(*wk));
     wk->key = key;
@@ -353,6 +375,9 @@ void watchForKey(client *c, robj *key) {
     incrRefCount(key);
     listAddNodeTail(&c->mstate->watched_keys, wk);
     watchedKeyLinkToClients(clients, wk);
+
+    /* Add to the per-db dict for O(1) lookup. Key is borrowed from wk->key. */
+    dictAdd(c->mstate->watched_keys_by_db[c->db->id], wk->key, wk);
 }
 
 /* Unwatch all the keys watched by this client. To clean the EXEC dirty
@@ -379,6 +404,16 @@ void unwatchAllKeys(client *c) {
         decrRefCount(wk->key);
         zfree(wk);
     }
+
+    /* Empty the per-db dicts as we have unwatched all keys. */
+    if (c->mstate->watched_keys_by_db) {
+        for (int i = 0; i < server.dbnum; i++) {
+            if (c->mstate->watched_keys_by_db[i]) {
+                dictEmpty(c->mstate->watched_keys_by_db[i], NULL);
+            }
+        }
+    }
+
     server.watching_clients--;
 }
 
@@ -518,6 +553,15 @@ size_t multiStateMemOverhead(client *c) {
     /* Add watched keys overhead, Note: this doesn't take into account the watched keys themselves, because they aren't
      * managed per-client. */
     mem += listLength(&c->mstate->watched_keys) * (sizeof(listNode) + sizeof(c->mstate->watched_keys));
+    /* Add per-db watched keys dict overhead. */
+    if (c->mstate->watched_keys_by_db) {
+        mem += sizeof(dict *) * server.dbnum;
+        for (int i = 0; i < server.dbnum; i++) {
+            if (c->mstate->watched_keys_by_db[i]) {
+                mem += dictMemUsage(c->mstate->watched_keys_by_db[i]);
+            }
+        }
+    }
     /* Reserved memory for queued multi commands. */
     mem += c->mstate->alloc_count * sizeof(multiCmd);
     return mem;

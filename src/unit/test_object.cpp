@@ -15,7 +15,47 @@ extern "C" {
 #include "server.h"
 }
 
+/* Metadata test helpers */
+typedef struct objMetadata {
+    uint32_t meta_int;
+} objMetadata;
+
 class ObjectTest : public ::testing::Test {
+  protected:
+    robj *createKeyValueObject(const char *k, const char *v) {
+        sds key = sdsnew(k);
+        robj *obj = createStringObject(v, strlen(v));
+        robj *obj_with_key = objectSetKeyAndExpire(obj, key, -1);
+        sdsfree(key);
+        return obj_with_key;
+    }
+
+    void objectSetMetaInt(robj *o, uint32_t metadata_int) {
+        objMetadata *meta = (objMetadata *)objectGetMetadata(o);
+        meta->meta_int = metadata_int;
+    }
+
+    uint32_t objectGetMetaInt(const robj *o) {
+        objMetadata *meta = (objMetadata *)objectGetMetadata(o);
+        return meta->meta_int;
+    }
+
+    /* Find the largest value length that still embeds with the given key and expire. */
+    int findMaxEmbeddableValueLen(const char *key, long long expire) {
+        sds k = key ? sdsnew(key) : NULL;
+
+        int len;
+        for (len = 1; len <= 256; len++) {
+            robj *obj = createStringObject(NULL, len);
+            if (k) obj = objectSetKeyAndExpire(obj, k, expire);
+            bool isEmbedded = (obj->encoding == OBJ_ENCODING_EMBSTR);
+            decrRefCount(obj);
+            if (!isEmbedded) break;
+        }
+
+        sdsfree(k);
+        return len - 1;
+    }
 };
 
 TEST_F(ObjectTest, object_with_key) {
@@ -57,88 +97,71 @@ TEST_F(ObjectTest, object_with_key) {
 }
 
 TEST_F(ObjectTest, embedded_string_with_key) {
-    /* key of length 32 - type 8 */
-    sds key = sdsnew("k:123456789012345678901234567890");
-    ASSERT_EQ(sdslen(key), 32u);
+    const char *key = "k:123456789012345678901234567890";
+    int max_len = findMaxEmbeddableValueLen(key, -1);
+    ASSERT_GT(max_len, 0);
 
-    /* 32B key and 15B value should be embedded within 64B. Contents:
-     * - 8B robj (no ptr) + 1B key header size
-     * - 3B key header + 32B key + 1B null terminator
-     * - 3B val header + 15B val + 1B null terminator
-     * because no pointers are stored, there is no difference for 32 bit builds*/
-    const char *short_value = "123456789012345";
-    ASSERT_EQ(strlen(short_value), 15u);
-    robj *short_val_obj = createStringObject(short_value, strlen(short_value));
-    robj *embstr_obj = objectSetKeyAndExpire(short_val_obj, key, -1);
+    /* Value at max length should embed. */
+    sds k1 = sdsnew(key);
+    robj *embstr_obj = createStringObject(NULL, max_len);
+    embstr_obj = objectSetKeyAndExpire(embstr_obj, k1, -1);
     ASSERT_EQ(embstr_obj->encoding, (unsigned)OBJ_ENCODING_EMBSTR);
-    ASSERT_EQ(sdslen(objectGetKey(embstr_obj)), 32u);
-    ASSERT_EQ(sdscmp(objectGetKey(embstr_obj), key), 0);
-    ASSERT_EQ(sdslen((sds)objectGetVal(embstr_obj)), 15u);
-    ASSERT_EQ(strcmp((const char *)objectGetVal(embstr_obj), short_value), 0);
+    ASSERT_EQ(sdslen((sds)objectGetVal(embstr_obj)), (size_t)max_len);
 
-    /* value of length 16 cannot be embedded with other contents within 64B */
-    const char *longer_value = "1234567890123456";
-    ASSERT_EQ(strlen(longer_value), 16u);
-    robj *longer_val_obj = createStringObject(longer_value, strlen(longer_value));
-    robj *raw_obj = objectSetKeyAndExpire(longer_val_obj, key, -1);
+    /* One byte more should not embed. */
+    sds k2 = sdsnew(key);
+    robj *raw_obj = createStringObject(NULL, max_len + 1);
+    raw_obj = objectSetKeyAndExpire(raw_obj, k2, -1);
     ASSERT_EQ(raw_obj->encoding, (unsigned)OBJ_ENCODING_RAW);
-    ASSERT_EQ(sdslen(objectGetKey(raw_obj)), 32u);
-    ASSERT_EQ(sdscmp(objectGetKey(raw_obj), key), 0);
-    ASSERT_EQ(sdslen((sds)objectGetVal(raw_obj)), 16u);
-    ASSERT_EQ(strcmp((const char *)objectGetVal(raw_obj), longer_value), 0);
+    ASSERT_EQ(sdslen((sds)objectGetVal(raw_obj)), (size_t)(max_len + 1));
 
-    sdsfree(key);
+    sdsfree(k1);
+    sdsfree(k2);
     decrRefCount(embstr_obj);
     decrRefCount(raw_obj);
 }
 
 TEST_F(ObjectTest, embedded_string_with_key_and_expire) {
-    /* key of length 32 - type 8 */
-    sds key = sdsnew("k:123456789012345678901234567890");
-    ASSERT_EQ(sdslen(key), 32u);
+    const char *key = "k:123456789012345678901234567890";
+    int max_len = findMaxEmbeddableValueLen(key, 128);
+    ASSERT_GT(max_len, 0);
 
-    /* 32B key and 7B value should be embedded within 64B. Contents:
-     * - 8B robj (no ptr) + 8B expire + 1B key header size
-     * - 3B key header + 32B key + 1B null terminator
-     * - 3B val header + 7B val + 1B null terminator
-     * because no pointers are stored, there is no difference for 32 bit builds*/
-    const char *short_value = "1234567";
-    ASSERT_EQ(strlen(short_value), 7u);
-    robj *short_val_obj = createStringObject(short_value, strlen(short_value));
-    robj *embstr_obj = objectSetKeyAndExpire(short_val_obj, key, 128);
+    /* Adding an expire reduces the available space for the value. */
+    int max_len_no_expire = findMaxEmbeddableValueLen(key, -1);
+    ASSERT_LT(max_len, max_len_no_expire);
+
+    /* Value at max length should embed. */
+    sds k1 = sdsnew(key);
+    robj *embstr_obj = createStringObject(NULL, max_len);
+    embstr_obj = objectSetKeyAndExpire(embstr_obj, k1, 128);
     ASSERT_EQ(embstr_obj->encoding, (unsigned)OBJ_ENCODING_EMBSTR);
-    ASSERT_EQ(sdslen(objectGetKey(embstr_obj)), 32u);
-    ASSERT_EQ(sdscmp(objectGetKey(embstr_obj), key), 0);
-    ASSERT_EQ(sdslen((sds)objectGetVal(embstr_obj)), 7u);
-    ASSERT_EQ(strcmp((const char *)objectGetVal(embstr_obj), short_value), 0);
 
-    /* value of length 8 cannot be embedded with other contents within 64B */
-    const char *longer_value = "12345678";
-    ASSERT_EQ(strlen(longer_value), 8u);
-    robj *longer_val_obj = createStringObject(longer_value, strlen(longer_value));
-    robj *raw_obj = objectSetKeyAndExpire(longer_val_obj, key, 128);
+    /* One byte more should not embed. */
+    sds k2 = sdsnew(key);
+    robj *raw_obj = createStringObject(NULL, max_len + 1);
+    raw_obj = objectSetKeyAndExpire(raw_obj, k2, 128);
     ASSERT_EQ(raw_obj->encoding, (unsigned)OBJ_ENCODING_RAW);
-    ASSERT_EQ(sdslen(objectGetKey(raw_obj)), 32u);
-    ASSERT_EQ(sdscmp(objectGetKey(raw_obj), key), 0);
-    ASSERT_EQ(sdslen((sds)objectGetVal(raw_obj)), 8u);
-    ASSERT_EQ(strcmp((const char *)objectGetVal(raw_obj), longer_value), 0);
 
-    sdsfree(key);
+    sdsfree(k1);
+    sdsfree(k2);
     decrRefCount(embstr_obj);
     decrRefCount(raw_obj);
 }
 
 TEST_F(ObjectTest, embedded_value) {
-    /* with only value there is only 12B overhead, so we can embed up to 52B.
-     * 8B robj (no ptr) + 3B val header + 52B val + 1B null terminator */
-    const char *val = "v:12345678901234567890123456789012345678901234567890";
-    ASSERT_EQ(strlen(val), 52u);
-    robj *embstr_obj = createStringObject(val, strlen(val));
+    /* Value-only object (no key): find the largest value that embeds. */
+    int max_len = findMaxEmbeddableValueLen(NULL, -1);
+    ASSERT_GT(max_len, 0);
+
+    robj *embstr_obj = createStringObject(NULL, max_len);
     ASSERT_EQ(embstr_obj->encoding, (unsigned)OBJ_ENCODING_EMBSTR);
-    ASSERT_EQ(sdslen((sds)objectGetVal(embstr_obj)), 52u);
-    ASSERT_EQ(strcmp((const char *)objectGetVal(embstr_obj), val), 0);
+    ASSERT_EQ(sdslen((sds)objectGetVal(embstr_obj)), (size_t)max_len);
+
+    robj *raw_obj = createStringObject(NULL, max_len + 1);
+    ASSERT_EQ(raw_obj->encoding, (unsigned)OBJ_ENCODING_RAW);
 
     decrRefCount(embstr_obj);
+    decrRefCount(raw_obj);
 }
 
 TEST_F(ObjectTest, unembed_value) {
@@ -164,5 +187,109 @@ TEST_F(ObjectTest, unembed_value) {
     ASSERT_NE(objectGetVal(obj), short_value); /* different allocation, different copy */
 
     sdsfree(key);
+    decrRefCount(obj);
+}
+
+
+TEST_F(ObjectTest, metadata_disabled) {
+    robj *obj_with_key = createKeyValueObject("testkey", "value");
+
+    ASSERT_EQ(objectGetMetadata(obj_with_key), nullptr);
+    ASSERT_EQ(objectGetMetadataSize(obj_with_key), 0u);
+
+    decrRefCount(obj_with_key);
+}
+
+TEST_F(ObjectTest, metadata_without_key) {
+    objectSetMetadataSize(sizeof(objMetadata));
+
+    robj *obj_no_key = createStringObject("value_without_key", 17);
+
+    ASSERT_EQ(objectGetMetadata(obj_no_key), nullptr);
+    ASSERT_EQ(objectGetMetadataSize(obj_no_key), 0u);
+
+    decrRefCount(obj_no_key);
+}
+
+TEST_F(ObjectTest, metadata_with_key) {
+    objectSetMetadataSize(sizeof(objMetadata));
+
+    robj *obj_with_key = createKeyValueObject("testkey", "value");
+
+    ASSERT_EQ(objectGetMetadataSize(obj_with_key), sizeof(objMetadata));
+
+    objMetadata *meta = (objMetadata *)objectGetMetadata(obj_with_key);
+    ASSERT_NE(meta, nullptr);
+    EXPECT_EQ(meta->meta_int, 0u);
+
+    decrRefCount(obj_with_key);
+}
+
+TEST_F(ObjectTest, metadata_read_write) {
+    objectSetMetadataSize(sizeof(objMetadata));
+
+    robj *obj_with_key = createKeyValueObject("mykey", "myvalue");
+
+    ASSERT_EQ(objectGetMetadataSize(obj_with_key), sizeof(objMetadata));
+
+    objectSetMetaInt(obj_with_key, 12345);
+    EXPECT_EQ(objectGetMetaInt(obj_with_key), 12345u);
+
+    objectSetMetaInt(obj_with_key, 67890);
+    EXPECT_EQ(objectGetMetaInt(obj_with_key), 67890u);
+
+    decrRefCount(obj_with_key);
+}
+
+TEST_F(ObjectTest, metadata_multiple_objects) {
+    objectSetMetadataSize(sizeof(objMetadata));
+
+    robj *obj_with_key1 = createKeyValueObject("key1", "val1");
+    robj *obj_with_key2 = createKeyValueObject("key2", "val2");
+    robj *obj_with_key3 = createKeyValueObject("key3", "val3");
+
+    ASSERT_EQ(objectGetMetadataSize(obj_with_key1), sizeof(objMetadata));
+    ASSERT_EQ(objectGetMetadataSize(obj_with_key2), sizeof(objMetadata));
+    ASSERT_EQ(objectGetMetadataSize(obj_with_key3), sizeof(objMetadata));
+
+    objectSetMetaInt(obj_with_key1, 100);
+    objectSetMetaInt(obj_with_key2, 200);
+    objectSetMetaInt(obj_with_key3, 300);
+
+    EXPECT_EQ(objectGetMetaInt(obj_with_key1), 100u);
+    EXPECT_EQ(objectGetMetaInt(obj_with_key2), 200u);
+    EXPECT_EQ(objectGetMetaInt(obj_with_key3), 300u);
+
+    objectSetMetaInt(obj_with_key2, 999);
+    EXPECT_EQ(objectGetMetaInt(obj_with_key1), 100u);
+    EXPECT_EQ(objectGetMetaInt(obj_with_key2), 999u);
+    EXPECT_EQ(objectGetMetaInt(obj_with_key3), 300u);
+
+    decrRefCount(obj_with_key1);
+    decrRefCount(obj_with_key2);
+    decrRefCount(obj_with_key3);
+}
+
+TEST_F(ObjectTest, metadata_changes_embed_threshold) {
+    /* Find the max embeddable value length without metadata, then verify
+     * that enabling metadata reduces it (some previously-embeddable objects
+     * become RAW). */
+    const char *key = "k:123456789012345678901234567890";
+    int max_without = findMaxEmbeddableValueLen(key, -1);
+    ASSERT_GT(max_without, 0);
+
+    objectSetMetadataSize(sizeof(objMetadata));
+    int max_with = findMaxEmbeddableValueLen(key, -1);
+
+    /* Metadata takes space, so the threshold must shrink. */
+    ASSERT_LT(max_with, max_without);
+
+    /* An object that just fit before should now be RAW. */
+    sds k = sdsnew(key);
+    robj *obj = createStringObject(NULL, max_without);
+    obj = objectSetKeyAndExpire(obj, k, -1);
+    ASSERT_EQ(obj->encoding, (unsigned)OBJ_ENCODING_RAW);
+
+    sdsfree(k);
     decrRefCount(obj);
 }

@@ -826,25 +826,27 @@ typedef struct ValkeyModuleType moduleType;
  * The optional variable-sized embedded data has 2 possible layouts. If value is embedded (hasembval == 1)
  *  the `val_ptr` pointer is not used - instead the val data is embedded:
  *
- *    +------+----------+-----+------------+----------+--------+-----------------+---------+------------+
- *    | type | encoding | lru | has* flags | refcount | expire | key_header_size | key sds | value data |
- *    +------+----------+-----+------------+----------+--------+-----------------+---------+------------+
- *                                                      ^        ^                 ^         ^
- *                                                      |        |                 |         |
- *                                                      |        |                 |         +--- present because hasembval == 1
- *                                                      |        |                 |
- *                                                      |        +-----------------+--- present if hasembkey == 1
+ *    +------+----------+-----+------------+----------+--------+----------+-----------------+---------+------------+
+ *    | type | encoding | lru | has* flags | refcount | expire | metadata | key_header_size | key sds | value data |
+ *    +------+----------+-----+------------+----------+--------+----------+-----------------+---------+------------+
+ *                                                      ^        ^          ^                 ^         ^
+ *                                                      |        |          |                 |         |
+ *                                                      |        |          |                 |         +--- present because hasembval == 1
+ *                                                      |        |          |                 |
+ *                                                      |        +----------+-----------------+--- present if hasembkey == 1
+ *                                                      |
  *                                                      |
  *                                                      +--- present if hasexpire == 1
  *
  * Otherwise value is not embedded and we use the `val_ptr` pointer:
  *
- *    +------+----------+-----+------------+----------+---------+--------+-----------------+---------+
- *    | type | encoding | lru | has* flags | refcount | val_ptr | expire | key_header_size | key sds |
- *    +------+----------+-----+------------+----------+---------+--------+-----------------+---------+
- *                                                      ^         ^        ^                 ^
- *                                                      |         |        |                 |
- *                                                      |         |        +-----------------+--- present if hasembkey == 1
+ *    +------+----------+-----+------------+----------+---------+--------+----------+-----------------+---------+
+ *    | type | encoding | lru | has* flags | refcount | val_ptr | expire | metadata | key_header_size | key sds |
+ *    +------+----------+-----+------------+----------+---------+--------+----------+-----------------+---------+
+ *                                                      ^         ^        ^          ^                 ^
+ *                                                      |         |        |          |                 |
+ *                                                      |         |        +----------+-----------------+--- present if hasembkey == 1
+ *                                                      |         |
  *                                                      |         |
  *                                                      |         +--- present if hasexpire == 1
  *                                                      |
@@ -2079,6 +2081,7 @@ struct valkeyServer {
     int rdb_checksum;                     /* Use RDB checksum? */
     int rdb_del_sync_files;               /* Remove RDB files used only for SYNC if
                                              the instance does not use persistence. */
+    int forkless_options_supported;       /* Enable forkless options support. */
     time_t lastsave;                      /* Unix time of last successful save */
     time_t lastbgsave_try;                /* Unix time of last attempted bgsave */
     time_t rdb_save_time_last;            /* Time used by last RDB save run. */
@@ -3195,6 +3198,11 @@ mstime_t objectGetExpire(const robj *o);
 uint8_t objectGetLFUFrequency(robj *o);
 uint32_t objectGetLRUIdleSecs(robj *o);
 uint32_t objectGetIdleness(robj *o);
+
+/* Object metadata management */
+void objectSetMetadataSize(size_t size);
+size_t objectGetMetadataSize(const robj *o);
+void *objectGetMetadata(const robj *o);
 
 /* Synchronous I/O with timeout */
 ssize_t syncWrite(int fd, char *ptr, ssize_t size, long long timeout);

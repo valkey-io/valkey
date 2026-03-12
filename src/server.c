@@ -2336,6 +2336,7 @@ void initServerConfig(void) {
     for (j = 0; j < CONFIG_DEFAULT_BINDADDR_COUNT; j++) server.bindaddr[j] = zstrdup(default_bindaddr[j]);
     memset(server.listeners, 0x00, sizeof(server.listeners));
     server.active_expire_enabled = 1;
+    server.forkless_options_supported = 0;
     server.lazy_expire_disabled = 0;
     server.skip_checksum_validation = 0;
     server.loading = 0;
@@ -3015,6 +3016,13 @@ void initServer(void) {
 
     server.dbnum = server.cluster_enabled ? server.config_databases_cluster : server.config_databases;
     server.db = zcalloc(sizeof(serverDb *) * server.dbnum);
+
+    /* Set object metadata size before creating any database key objects */
+    if (server.forkless_options_supported) {
+        objectSetMetadataSize(sizeof(uint32_t)); /* This is a placeholder until Threadsave defines a metadata structure */
+                                                 /* 4 bytes for iterator_epoch for now*/
+    }
+
     createDatabaseIfNeeded(0); /* The default database should always exist */
 
     evictionPoolAlloc(); /* Initialize the LRU keys pool. */

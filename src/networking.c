@@ -114,13 +114,13 @@ typedef enum {
  * The packed attribute is specified because buffer is accessed at arbitrary offsets,
  * so no benefit in data structure padding and applying packed saves the space in the buffer  */
 typedef struct __attribute__((__packed__)) payloadHeader {
-    size_t payload_len;          /* payload length in a reply buffer */
-    size_t reply_len;            /* actual reply length for non-plain payloads */
-    int16_t slot;                /* to report network-bytes-out for BULK_STR_REF chunks */
-    uint8_t payload_type : 1;    /* one of payloadType */
-    uint8_t track_bytes : 1;     /* 1 if net bytes tracking was enabled when reply was added */
-    uint8_t tracked_for_cob : 1; /* 1 if this header's reply_len has been tracked in io_tracked_reply_len */
-    uint8_t reserved : 5;
+    size_t payload_len;               /* payload length in a reply buffer */
+    size_t reply_len;                 /* actual reply length for non-plain payloads */
+    int16_t slot;                     /* to report network-bytes-out for BULK_STR_REF chunks */
+    uint8_t payload_type : 1;         /* one of payloadType */
+    uint8_t track_bytes : 1;          /* 1 if net bytes tracking was enabled when reply was added */
+    uint8_t reserved : 6;             /* reserved */
+    _Atomic(uint8_t) tracked_for_cob; /* 1 if this header's reply_len has been tracked in io_tracked_reply_len */
 } payloadHeader;
 
 /* To avoid copy of whole string in reply buffer
@@ -2833,21 +2833,25 @@ static void trackBufReferences(char *buf, size_t bufpos, client *c) {
         payloadHeader *header = (payloadHeader *)ptr;
         ptr += sizeof(payloadHeader);
 
-        if (header->payload_type == BULK_STR_REF && !header->tracked_for_cob) {
-            bulkStrRef *str_ref = (bulkStrRef *)ptr;
-            size_t len = header->payload_len;
-            size_t total_reply_len = 0;
-            while (len > 0) {
-                size_t str_len = sdslen(str_ref->str);
-                uint32_t num_len = digits10(str_len);
-                /* RESP encodes bulk strings as $<length>\r\n<data>\r\n */
-                total_reply_len += (num_len + 3) + str_len + 2;
-                str_ref++;
-                len -= sizeof(bulkStrRef);
+        if (header->payload_type == BULK_STR_REF) {
+            uint8_t expected = 0;
+            if (atomic_compare_exchange_strong_explicit(&header->tracked_for_cob, &expected, 1,
+                                                        memory_order_acq_rel, memory_order_acquire)) {
+                /* We claimed tracking rights */
+                bulkStrRef *str_ref = (bulkStrRef *)ptr;
+                size_t len = header->payload_len;
+                size_t total_reply_len = 0;
+                while (len > 0) {
+                    size_t str_len = sdslen(str_ref->str);
+                    uint32_t num_len = digits10(str_len);
+                    /* RESP encodes bulk strings as $<length>\r\n<data>\r\n */
+                    total_reply_len += (num_len + 3) + str_len + 2;
+                    str_ref++;
+                    len -= sizeof(bulkStrRef);
+                }
+                header->reply_len = total_reply_len;
+                atomic_fetch_add_explicit(&c->io_tracked_reply_len, total_reply_len, memory_order_relaxed);
             }
-            header->reply_len = total_reply_len;
-            header->tracked_for_cob = 1;
-            atomic_fetch_add_explicit(&c->io_tracked_reply_len, total_reply_len, memory_order_relaxed);
         }
 
         ptr += header->payload_len;
@@ -2863,10 +2867,10 @@ static void releaseBufReferences(char *buf, size_t bufpos, client *c) {
         ptr += sizeof(payloadHeader);
 
         if (header->payload_type == BULK_STR_REF) {
-            /* Decrement tracked reply size only if it was previously tracked. */
-            if (c && header->tracked_for_cob) {
+            /* Decrement tracked reply size only if it was previously tracked.
+             * Use atomic exchange to ensure we only decrement once. */
+            if (c && atomic_exchange_explicit(&header->tracked_for_cob, 0, memory_order_acq_rel)) {
                 atomic_fetch_sub_explicit(&c->io_tracked_reply_len, header->reply_len, memory_order_relaxed);
-                header->tracked_for_cob = 0;
             }
 
             /* When net byte tracking was disabled in the main thread (commandlog-reply-larger-than -1)

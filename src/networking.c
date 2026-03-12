@@ -119,7 +119,8 @@ typedef struct __attribute__((__packed__)) payloadHeader {
     int16_t slot;             /* to report network-bytes-out for BULK_STR_REF chunks */
     uint8_t payload_type : 1; /* one of payloadType */
     uint8_t track_bytes : 1;  /* 1 if net bytes tracking was enabled when reply was added */
-    uint8_t reserved : 6;
+    uint8_t tracked_for_cob : 1; /* 1 if this header's reply_len has been tracked in io_tracked_reply_len */
+    uint8_t reserved : 5;
 } payloadHeader;
 
 /* To avoid copy of whole string in reply buffer
@@ -558,6 +559,7 @@ static size_t upsertPayloadHeader(char *buf,
     (*last_header)->slot = slot;
     (*last_header)->reply_len = 0;
     (*last_header)->track_bytes = track_bytes;
+    (*last_header)->tracked_for_cob = 0;
     (*last_header)->reserved = 0;
 
     *bufpos += sizeof(payloadHeader);
@@ -740,24 +742,20 @@ void _addReplyToBufferOrList(client *c, const char *s, size_t len) {
 }
 
 /* Increment reference to object and add pointer to object and
- * pointer to string itself to current reply buffer.
- * Returns 1 if added to c->buf, 0 if added to c->reply list. */
-static int _addBulkStrRefToBufferOrList(client *c, robj *obj) {
-    if (c->flag.close_after_reply) return 0;
+ * pointer to string itself to current reply buffer */
+static void _addBulkStrRefToBufferOrList(client *c, robj *obj) {
+    if (c->flag.close_after_reply) return;
 
     /* Refcount will be decremented in write completion handler by the main thread */
     incrRefCount(obj);
 
     bulkStrRef str_ref = {.obj = obj, .str = objectGetVal(obj)};
-    size_t added = _addBulkStrRefToBuffer(c, (void *)&str_ref, sizeof(str_ref));
-    if (!added) {
+    if (!_addBulkStrRefToBuffer(c, (void *)&str_ref, sizeof(str_ref))) {
         /* Content spilled to reply list. Clear c->last_header since
          * it points into c->buf and should not be reused. */
         c->last_header = NULL;
         _addBulkStrRefToToList(c, (void *)&str_ref, sizeof(str_ref));
-        return 0;
     }
-    return 1;
 }
 
 /* -----------------------------------------------------------------------------
@@ -1430,19 +1428,19 @@ void addReplyBulkLen(client *c, robj *obj) {
 }
 
 /* Try to avoid whole bulk string copy to a reply buffer
- * If copy avoidance allowed then only pointer to object and string will be copied to the buffer.
- * Returns 1 if added to c->buf, 0 if added to c->reply list, -1 if copy avoidance not possible */
+ * If copy avoidance allowed then only pointer to object and string will be copied to the buffer */
 static int tryAvoidBulkStrCopyToReply(client *c, robj *obj) {
-    if (!isCopyAvoidPreferred(c, obj)) return -1;
-    if (prepareClientToWrite(c) != C_OK) return -1;
+    if (!isCopyAvoidPreferred(c, obj)) return C_ERR;
+    if (prepareClientToWrite(c) != C_OK) return C_ERR;
 
-    return _addBulkStrRefToBufferOrList(c, obj);
+    _addBulkStrRefToBufferOrList(c, obj);
+
+    return C_OK;
 }
 
 /* Add an Object as a bulk reply */
 void addReplyBulk(client *c, robj *obj) {
-    int added_to_buf = tryAvoidBulkStrCopyToReply(c, obj);
-    if (added_to_buf >= 0) {
+    if (tryAvoidBulkStrCopyToReply(c, obj) == C_OK) {
         /* If copy avoidance allowed, then we explicitly maintain net_output_bytes_curr_cmd.
          * We determine per-reply if tracking is enabled by checking the config in the main thread. */
         if (server.commandlog[COMMANDLOG_TYPE_LARGE_REPLY].threshold != -1) {
@@ -1452,14 +1450,6 @@ void addReplyBulk(client *c, robj *obj) {
             /* RESP encodes bulk strings as $<length>\r\n<data>\r\n */
             size_t reply_len = (num_len + 3) + str_len + 2;
             c->net_output_bytes_curr_cmd += reply_len;
-
-            /* Store reply_len and track for COB accounting only if content went to c->buf.
-             * If content spilled to c->reply list (added_to_buf == 0), tracking will be
-             * done by trackBufReferences() in IO thread instead. */
-            if (added_to_buf == 1 && c->last_header) {
-                c->last_header->reply_len += reply_len;
-                atomic_fetch_add_explicit(&c->io_tracked_reply_len, reply_len, memory_order_relaxed);
-            }
         }
         return;
     }
@@ -2843,7 +2833,7 @@ static void trackBufReferences(char *buf, size_t bufpos, client *c) {
         payloadHeader *header = (payloadHeader *)ptr;
         ptr += sizeof(payloadHeader);
 
-        if (header->payload_type == BULK_STR_REF && header->reply_len == 0) {
+        if (header->payload_type == BULK_STR_REF && !header->tracked_for_cob) {
             bulkStrRef *str_ref = (bulkStrRef *)ptr;
             size_t len = header->payload_len;
             size_t total_reply_len = 0;
@@ -2856,6 +2846,7 @@ static void trackBufReferences(char *buf, size_t bufpos, client *c) {
                 len -= sizeof(bulkStrRef);
             }
             header->reply_len = total_reply_len;
+            header->tracked_for_cob = 1;
             atomic_fetch_add_explicit(&c->io_tracked_reply_len, total_reply_len, memory_order_relaxed);
         }
 
@@ -2872,10 +2863,10 @@ static void releaseBufReferences(char *buf, size_t bufpos, client *c) {
         ptr += sizeof(payloadHeader);
 
         if (header->payload_type == BULK_STR_REF) {
-            /* Decrement tracked reply size only if it was previously calculated and tracked.
-             * reply_len may be 0 if client was evicted before trackBufReferences was called. */
-            if (c && header->reply_len > 0) {
+            /* Decrement tracked reply size only if it was previously tracked. */
+            if (c && header->tracked_for_cob) {
                 atomic_fetch_sub_explicit(&c->io_tracked_reply_len, header->reply_len, memory_order_relaxed);
+                header->tracked_for_cob = 0;
             }
 
             /* When net byte tracking was disabled in the main thread (commandlog-reply-larger-than -1)
@@ -2940,6 +2931,8 @@ static void _postWriteToClient(client *c) {
             c->last_header = NULL;
             /* If completely written buffer is last written then reset last written state */
             if (last_written) resetLastWrittenBuf(c);
+        } else {
+            c->last_header = NULL;
         }
         if (last_written) return;
     }

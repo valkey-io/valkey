@@ -751,6 +751,9 @@ jobs:
       - name: unittest
         if: true && !contains(github.event.inputs.skiptests, 'unittest')
         run: ./src/valkey-unit-tests
+  # Large-memory tests with sanitizers require 10-14GB RAM due to ASAN/UBSAN overhead.
+  # GitHub-hosted runners for public repos provide 16GB (ubuntu-latest).
+  # These tests are borderline - monitoring memory usage to determine if they can run reliably.
   test-sanitizer-address-large-memory:
     runs-on: ubuntu-latest
     if: |
@@ -776,6 +779,8 @@ jobs:
           echo "skiptests: ${{github.event.inputs.skiptests}}"
           echo "test_args: ${{github.event.inputs.test_args}}"
           echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
+      - name: Log runner memory
+        run: free -h
       - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
         with:
           repository: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name) || env.GITHUB_REPOSITORY || github.repository }}
@@ -786,15 +791,34 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install tcl8.6 tclx -y
+      - name: Start memory monitor
+        run: |
+          # Track minimum free memory to detect OOM risk
+          (while true; do
+            FREE=$(awk '/MemAvailable/ {print $2}' /proc/meminfo)
+            echo "$FREE" >> /tmp/memfree.log
+            sleep 5
+          done) &
+          echo $! > /tmp/memmon.pid
       - name: unittest
         if: true && !contains(github.event.inputs.skiptests, 'unittest')
         run: ./src/valkey-unit-tests --large-memory
       - name: large memory tests
         if: true && !contains(github.event.inputs.skiptests, 'valkey')
-        run: ./runtest --accurate --verbose --dump-logs --clients 5 --large-memory --tags large-memory ${{github.event.inputs.test_args}}
+        run: ./runtest --accurate --verbose --dump-logs --clients 1 --large-memory --tags large-memory ${{github.event.inputs.test_args}}
       - name: large memory module api tests
         if: true && !contains(github.event.inputs.skiptests, 'modules')
-        run: CFLAGS='-Werror' ./runtest-moduleapi --verbose --dump-logs --clients 5 --large-memory --tags large-memory ${{github.event.inputs.test_args}}
+        run: CFLAGS='-Werror' ./runtest-moduleapi --verbose --dump-logs --clients 1 --large-memory --tags large-memory ${{github.event.inputs.test_args}}
+      - name: Memory usage summary
+        if: always()
+        run: |
+          kill $(cat /tmp/memmon.pid) 2>/dev/null || true
+          echo "=== Memory Summary ==="
+          printf "Total RAM: %.1fGB\n" $(awk '/MemTotal/ {print $2/1024/1024}' /proc/meminfo)
+          if [ -f /tmp/memfree.log ]; then
+            MIN_FREE=$(sort -n /tmp/memfree.log | head -1)
+            printf "Minimum free memory: %.1fGB\n" $(echo "$MIN_FREE/1024/1024" | bc -l)
+          fi
   test-sanitizer-undefined:
     runs-on: ubuntu-latest
     if: |
@@ -844,6 +868,9 @@ jobs:
       - name: unittest
         if: true && !contains(github.event.inputs.skiptests, 'unittest')
         run: ./src/valkey-unit-tests --accurate
+  # Large-memory tests with sanitizers require 10-14GB RAM due to ASAN/UBSAN overhead.
+  # GitHub-hosted runners for public repos provide 16GB (ubuntu-latest).
+  # These tests are borderline - monitoring memory usage to determine if they can run reliably.
   test-sanitizer-undefined-large-memory:
     runs-on: ubuntu-latest
     if: |
@@ -869,6 +896,8 @@ jobs:
           echo "skiptests: ${{github.event.inputs.skiptests}}"
           echo "test_args: ${{github.event.inputs.test_args}}"
           echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
+      - name: Log runner memory
+        run: free -h
       - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
         with:
           repository: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name) || env.GITHUB_REPOSITORY || github.repository }}
@@ -879,15 +908,34 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install tcl8.6 tclx -y
+      - name: Start memory monitor
+        run: |
+          # Track minimum free memory to detect OOM risk
+          (while true; do
+            FREE=$(awk '/MemAvailable/ {print $2}' /proc/meminfo)
+            echo "$FREE" >> /tmp/memfree.log
+            sleep 5
+          done) &
+          echo $! > /tmp/memmon.pid
       - name: unittest
         if: true && !contains(github.event.inputs.skiptests, 'unittest')
         run: ./src/valkey-unit-tests --accurate --large-memory
       - name: large memory tests
         if: true && !contains(github.event.inputs.skiptests, 'valkey')
-        run: ./runtest --accurate --verbose --dump-logs --clients 5 --large-memory --tags large-memory ${{github.event.inputs.test_args}}
+        run: ./runtest --accurate --verbose --dump-logs --clients 1 --large-memory --tags large-memory ${{github.event.inputs.test_args}}
       - name: large memory module api tests
         if: true && !contains(github.event.inputs.skiptests, 'modules')
-        run: CFLAGS='-Werror' ./runtest-moduleapi --verbose --dump-logs --clients 5 --large-memory --tags large-memory ${{github.event.inputs.test_args}}
+        run: CFLAGS='-Werror' ./runtest-moduleapi --verbose --dump-logs --clients 1 --large-memory --tags large-memory ${{github.event.inputs.test_args}}
+      - name: Memory usage summary
+        if: always()
+        run: |
+          kill $(cat /tmp/memmon.pid) 2>/dev/null || true
+          echo "=== Memory Summary ==="
+          printf "Total RAM: %.1fGB\n" $(awk '/MemTotal/ {print $2/1024/1024}' /proc/meminfo)
+          if [ -f /tmp/memfree.log ]; then
+            MIN_FREE=$(sort -n /tmp/memfree.log | head -1)
+            printf "Minimum free memory: %.1fGB\n" $(echo "$MIN_FREE/1024/1024" | bc -l)
+          fi
   test-sanitizer-force-defrag:
     runs-on: ubuntu-latest
     if: |

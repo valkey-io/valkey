@@ -411,8 +411,7 @@ int ull2string(char *dst, size_t dstlen, unsigned long long value) {
     while (value >= 100) {
         int const i = (value % 100) * 2;
         value /= 100;
-        dst[next] = digits[i + 1];
-        dst[next - 1] = digits[i];
+        memcpy(dst + next - 1, digits + i, 2);
         next -= 2;
     }
 
@@ -421,8 +420,7 @@ int ull2string(char *dst, size_t dstlen, unsigned long long value) {
         dst[next] = '0' + (uint32_t)value;
     } else {
         int i = (uint32_t)value * 2;
-        dst[next] = digits[i + 1];
-        dst[next - 1] = digits[i];
+        memcpy(dst + next - 1, digits + i, 2);
     }
     return length;
 err:

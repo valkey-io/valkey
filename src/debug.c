@@ -880,7 +880,7 @@ void debugCommand(client *c) {
                              "string|integer|double|bignum|null|array|set|map|attrib|push|verbatim|true|false");
         }
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "sleep") && c->argc == 3) {
-        double dtime = valkey_strtod(objectGetVal(c->argv[2]), NULL);
+        double dtime = valkey_strtod_sds(objectGetVal(c->argv[2]), NULL);
         long long utime = dtime * 1000000;
         struct timespec tv;
 

@@ -10,6 +10,18 @@ else
 	SHOBJ_CFLAGS= -I. -I$(DEPS_DIR)/lua/src -I$(DEPS_DIR)/fpconv -fPIC -W -Wall -fno-common $(OPTIMIZATION) -std=gnu11 -D_GNU_SOURCE $(CFLAGS)
 	SHOBJ_LDFLAGS= -shared $(LDFLAGS)
 
+# Pretty-printing setup for module build
+CC_COLOR="\033[32m"
+LINKCOLOR_MOD="\033[36;1m"
+SRC_COLOR="\033[33m"
+SCOPE_COLOR="\033[38:5:250m"
+BINCOLOR_MOD="\033[35m"
+RESET="\033[0m"
+
+ifndef V
+QUIET_CC_MOD = @printf '    %b %b(LUA Module)%b %b\n' $(CC_COLOR)CC$(RESET) $(SCOPE_COLOR) $(RESET) $(SRC_COLOR)$<$(RESET) 1>&2;
+QUIET_LINK_MOD = @printf '    %b %b\n' $(LINKCOLOR_MOD)LINK$(RESET) $(BINCOLOR_MOD)$@$(RESET) 1>&2;
+endif
 ifeq (clang,$(CLANG))
 	SHOBJ_LDFLAGS+= -fuse-ld=lld
 endif
@@ -46,16 +58,16 @@ endif
 all: libvalkeylua.so
 
 libvalkeylua.so: $(OBJS) $(LIBS)
-	$(CC) -o $@ $(SHOBJ_LDFLAGS) $^
+	$(QUIET_LINK_MOD)$(CC) -o $@ $(SHOBJ_LDFLAGS) $^
 
 sha1.o: ../../sha1.c
-	$(CC) $(SHOBJ_CFLAGS) -c $< -o $@
+	$(QUIET_CC_MOD)$(CC) $(SHOBJ_CFLAGS) -c $< -o $@
 
 rand.o: ../../rand.c
-	$(CC) $(SHOBJ_CFLAGS) -c $< -o $@
+	$(QUIET_CC_MOD)$(CC) $(SHOBJ_CFLAGS) -c $< -o $@
 
 %.o: %.c
-	$(CC) $(SHOBJ_CFLAGS) -c $< -o $@
+	$(QUIET_CC_MOD)$(CC) $(SHOBJ_CFLAGS) -c $< -o $@
 
 $(DEPS_DIR)/lua/src/liblua.a:
 	cd $(DEPS_DIR) && $(MAKE) lua

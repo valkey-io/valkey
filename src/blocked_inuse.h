@@ -21,7 +21,7 @@
  *
  * Workflow:
  *   1. blockInuse_blockClientOnKeys() -
- *      The client is marked as blockInuse_blocked.
+ *      The client is marked as blocked_in_use.
  *      Two mappings are updated:
  *        - client -> keys: record all keys this client is waiting on.
  *        - key -> clients: for each key, add this client to the key’s
@@ -38,7 +38,7 @@
  *      any remaining keys (i.e., its client -> keys set becomes empty),
  *      the client is:
  *        - fully removed from the blocking mappings,
- *        - the blockInuse_blocked flag is cleared,
+ *        - the blocked_in_use flag is cleared,
  *        - added to the server unblocked list,
  *        - and the unblocked flag is set.
  *
@@ -63,7 +63,7 @@
 struct client; // defined in server.h
 
 /* Check if client is blocked by blockInuse */
-int blockInuse_clientBlocked(client *c);
+bool blockInuse_isClientBlocked(client *c);
 
 /* Initialize blockInuse structures, must be called once during server startup. */
 void blockInuse_init(void);
@@ -78,7 +78,9 @@ int blockInuse_getNumberOfBlockedClients(void);
 int blockInuse_getNumberOfBlockedKeys(void);
 
 /*
- * Block a client on a list of keys. Duplicate keys are allowed and handled.
+ * Block a client on a list of keys. Duplicate keys are deduplicated: a key is
+ * skipped if the client is already the last entry in that key's blocked-clients
+ * list.
  */
 void blockInuse_blockClientOnKeys(client *c, int nKeys, robj *keys[]);
 
@@ -92,10 +94,15 @@ void blockInuse_blockClientOnKeys(client *c, int nKeys, robj *keys[]);
 void blockInuse_unblockClientsOnKey(robj *key);
 
 /*
- * Unblock all clients blocked by blockInuse on all keys.
+ * Unblock all clients that are currently blocked by blockInuse, across all
+ * keys they are waiting on.
  *
- * Clients that become unblocked are added to the server.unblocked_clients
- * list and resumed later during processUnblockedClients().
+ * Iterates the key_to_clients hashtable (which only contains keys with at
+ * least one blocked client) and unblocks every client on each such key.
+ * Unblocked clients are queued for reprocessing via queueClientForReprocessing()
+ * and will be resumed during processUnblockedClients().
+ *
+ * After this call, no clients remain blocked by blockInuse.
  */
 void blockInuse_unblockClientsOnAllKeys(void);
 

@@ -51,6 +51,7 @@ class BlockedInuseTest : public ::testing::Test {
         c->conn = (connection *)zcalloc(sizeof(connection));
         c->conn->type = &dummyConnType;
         c->conn->read_handler = (ConnectionCallbackFunc)1;
+        c->flag.pending_command = 1;
         return c;
     }
 
@@ -62,7 +63,7 @@ class BlockedInuseTest : public ::testing::Test {
     void verifyClientBlockState(client *c, bool blocked, bool unblocked) {
         EXPECT_EQ(c->flag.blocked, 0u);
         EXPECT_EQ(c->flag.unblocked, unblocked);
-        EXPECT_EQ(blockInuse_clientBlocked(c), blocked);
+        EXPECT_EQ(blockInuse_isClientBlocked(c), blocked);
         if (blocked || unblocked) {
             EXPECT_EQ(c->conn->read_handler, nullptr);
         } else {
@@ -79,8 +80,7 @@ TEST_F(BlockedInuseTest, blockInitialState) {
 
 TEST_F(BlockedInuseTest, blockClientOnSingleKey) {
     client *c = createFakeClient(1);
-    sds key_name = sdsnew("foo");
-    robj *key = objectSetKeyAndExpire(createObject(OBJ_STRING, sdsnew("bar")), key_name, -1);
+    robj *key = createObject(OBJ_STRING, sdsnew("foo"));
     robj *keys[] = {key};
 
     // Block
@@ -106,17 +106,14 @@ TEST_F(BlockedInuseTest, blockClientOnSingleKey) {
     verifyClientBlockState(c, 0, 0);
     EXPECT_EQ(key->refcount, 1u);
     EXPECT_EQ(listLength(server.unblocked_clients), 0UL);
-    sdsfree(key_name);
     decrRefCount(key);
     freeFakeClient(c);
 }
 
 TEST_F(BlockedInuseTest, blockClientOnMultipleKeys) {
     client *c = createFakeClient(1);
-    sds key1_name = sdsnew("key1");
-    sds key2_name = sdsnew("key2");
-    robj *key1 = objectSetKeyAndExpire(createObject(OBJ_STRING, sdsnew("val1")), key1_name, -1);
-    robj *key2 = objectSetKeyAndExpire(createObject(OBJ_STRING, sdsnew("val2")), key2_name, -1);
+    robj *key1 = createObject(OBJ_STRING, sdsnew("key1"));
+    robj *key2 = createObject(OBJ_STRING, sdsnew("key2"));
     robj *keys[] = {key1, key2};
 
     // Block
@@ -154,8 +151,6 @@ TEST_F(BlockedInuseTest, blockClientOnMultipleKeys) {
 
     EXPECT_EQ(key1->refcount, 1u);
     EXPECT_EQ(key2->refcount, 1u);
-    sdsfree(key1_name);
-    sdsfree(key2_name);
     decrRefCount(key1);
     decrRefCount(key2);
     freeFakeClient(c);
@@ -164,8 +159,7 @@ TEST_F(BlockedInuseTest, blockClientOnMultipleKeys) {
 TEST_F(BlockedInuseTest, blockMultipleClientsOnSameKey) {
     client *c1 = createFakeClient(1);
     client *c2 = createFakeClient(2);
-    sds key_name = sdsnew("foo");
-    robj *key = objectSetKeyAndExpire(createObject(OBJ_STRING, sdsnew("bar")), key_name, -1);
+    robj *key = createObject(OBJ_STRING, sdsnew("foo"));
     robj *keys[] = {key};
 
     // Block
@@ -197,7 +191,6 @@ TEST_F(BlockedInuseTest, blockMultipleClientsOnSameKey) {
     EXPECT_EQ(listLength(server.unblocked_clients), 0UL);
 
     EXPECT_EQ(key->refcount, 1u);
-    sdsfree(key_name);
     decrRefCount(key);
     freeFakeClient(c1);
     freeFakeClient(c2);
@@ -205,8 +198,7 @@ TEST_F(BlockedInuseTest, blockMultipleClientsOnSameKey) {
 
 TEST_F(BlockedInuseTest, unlinkBlockedClient) {
     client *c = createFakeClient(1);
-    sds key_name = sdsnew("foo");
-    robj *key = objectSetKeyAndExpire(createObject(OBJ_STRING, sdsnew("bar")), key_name, -1);
+    robj *key = createObject(OBJ_STRING, sdsnew("foo"));
     robj *keys[] = {key};
 
     // Block
@@ -218,22 +210,19 @@ TEST_F(BlockedInuseTest, unlinkBlockedClient) {
 
     // Unlink (read_handler NOT reinstalled in this case)
     blockInuse_unlinkClient(c);
-    EXPECT_EQ(blockInuse_clientBlocked(c), 0);
+    EXPECT_EQ(blockInuse_isClientBlocked(c), 0);
     EXPECT_EQ(blockInuse_getNumberOfBlockedClients(), 0);
     EXPECT_EQ(blockInuse_getNumberOfBlockedKeys(), 0);
     EXPECT_EQ(listLength(server.unblocked_clients), 0UL);
     EXPECT_EQ(key->refcount, 1u);
-    sdsfree(key_name);
     decrRefCount(key);
     freeFakeClient(c);
 }
 
 TEST_F(BlockedInuseTest, blockClientOnDuplicateKeys) {
     client *c = createFakeClient(1);
-    sds key1_name = sdsnew("foo");
-    sds key2_name = sdsnew("foo");
-    robj *key1 = objectSetKeyAndExpire(createObject(OBJ_STRING, sdsnew("bar")), key1_name, -1);
-    robj *key2 = objectSetKeyAndExpire(createObject(OBJ_STRING, sdsnew("bar")), key2_name, -1);
+    robj *key1 = createObject(OBJ_STRING, sdsnew("foo"));
+    robj *key2 = createObject(OBJ_STRING, sdsnew("foo"));
     robj *keys[] = {key1, key2};
 
     // Block
@@ -260,8 +249,6 @@ TEST_F(BlockedInuseTest, blockClientOnDuplicateKeys) {
     EXPECT_EQ(listLength(server.unblocked_clients), 0UL);
     EXPECT_EQ(key1->refcount, 1u);
     EXPECT_EQ(key2->refcount, 1u);
-    sdsfree(key1_name);
-    sdsfree(key2_name);
     decrRefCount(key1);
     decrRefCount(key2);
     freeFakeClient(c);
@@ -270,10 +257,8 @@ TEST_F(BlockedInuseTest, blockClientOnDuplicateKeys) {
 TEST_F(BlockedInuseTest, unblockAllKeys) {
     client *c1 = createFakeClient(1);
     client *c2 = createFakeClient(2);
-    sds key1_name = sdsnew("key1");
-    sds key2_name = sdsnew("key2");
-    robj *key1 = objectSetKeyAndExpire(createObject(OBJ_STRING, sdsnew("val")), key1_name, -1);
-    robj *key2 = objectSetKeyAndExpire(createObject(OBJ_STRING, sdsnew("val")), key2_name, -1);
+    robj *key1 = createObject(OBJ_STRING, sdsnew("key1"));
+    robj *key2 = createObject(OBJ_STRING, sdsnew("key2"));
     robj *keys1[] = {key1};
     robj *keys2[] = {key2};
 
@@ -306,8 +291,6 @@ TEST_F(BlockedInuseTest, unblockAllKeys) {
     EXPECT_EQ(listLength(server.unblocked_clients), 0UL);
     EXPECT_EQ(key1->refcount, 1u);
     EXPECT_EQ(key2->refcount, 1u);
-    sdsfree(key1_name);
-    sdsfree(key2_name);
     decrRefCount(key1);
     decrRefCount(key2);
     freeFakeClient(c1);
@@ -322,39 +305,33 @@ TEST_F(BlockedInuseDeathTest, initCalledTwice) {
 
 TEST_F(BlockedInuseDeathTest, blockingOnKeysReplicaClient) {
     client *c = createFakeClient(1);
-    sds key_name = sdsnew("foo");
-    robj *key = objectSetKeyAndExpire(createObject(OBJ_STRING, sdsnew("bar")), key_name, -1);
+    robj *key = createObject(OBJ_STRING, sdsnew("foo"));
     robj *keys[] = {key};
 
     c->flag.replica = 1;
     EXPECT_DEATH({ blockInuse_blockClientOnKeys(c, 1, keys); }, "");
-    sdsfree(key_name);
     decrRefCount(key);
     freeFakeClient(c);
 }
 
 TEST_F(BlockedInuseDeathTest, blockingOnKeysNonStringType) {
     client *c = createFakeClient(1);
-    sds key_name = sdsnew("foo");
-    robj *key = objectSetKeyAndExpire(createObject(OBJ_STRING, sdsnew("bar")), key_name, -1);
+    robj *key = createObject(OBJ_STRING, sdsnew("foo"));
     robj *keys[] = {key};
 
     keys[0]->type = OBJ_LIST;
     EXPECT_DEATH({ blockInuse_blockClientOnKeys(c, 1, keys); }, "");
     keys[0]->type = OBJ_STRING;
-    sdsfree(key_name);
     decrRefCount(key);
     freeFakeClient(c);
 }
 
 TEST_F(BlockedInuseDeathTest, blockingOnKeysZeroKeys) {
     client *c = createFakeClient(1);
-    sds key_name = sdsnew("foo");
-    robj *key = objectSetKeyAndExpire(createObject(OBJ_STRING, sdsnew("bar")), key_name, -1);
+    robj *key = createObject(OBJ_STRING, sdsnew("foo"));
     robj *keys[] = {key};
 
     EXPECT_DEATH({ blockInuse_blockClientOnKeys(c, 0, keys); }, "");
-    sdsfree(key_name);
     decrRefCount(key);
     freeFakeClient(c);
 }

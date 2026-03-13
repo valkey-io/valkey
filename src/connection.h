@@ -153,7 +153,8 @@ typedef struct ConnectionType {
     struct user *(*get_peer_user)(connection *conn, sds *cert_username);
 
     /* Miscellaneous */
-    int (*connIntegrityChecked)(void); // return 1 if connection type has built-in integrity checks
+    int (*connIntegrityChecked)(void);   // return 1 if connection type has built-in integrity checks
+    int (*is_closing)(connection *conn); // return 1 if connection is closed
 } ConnectionType;
 
 struct connection {

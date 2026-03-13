@@ -30,6 +30,10 @@
 #include "server.h"
 #include "connhelpers.h"
 #include "io_threads.h"
+#include <netinet/tcp.h>
+#ifdef __APPLE__
+#include <netinet/tcp_fsm.h>
+#endif
 
 /* The connections module provides a lean abstraction of network connections
  * to avoid direct socket and async event management across the server code base.
@@ -405,6 +409,23 @@ static int connSocketGetType(void) {
     return CONN_TYPE_SOCKET;
 }
 
+int connSocketIsClosing(connection *conn) {
+#if defined(__linux__)
+    struct tcp_info info;
+    socklen_t infolen = sizeof(info);
+    if (getsockopt(conn->fd, IPPROTO_TCP, TCP_INFO, &info, &infolen) != 0 || infolen < sizeof(info)) return false; // Cannot retrieve TCP info
+    return (info.tcpi_state == TCP_CLOSE_WAIT || info.tcpi_state == TCP_CLOSE);
+#elif defined(__APPLE__)
+    struct tcp_connection_info info;
+    socklen_t infolen = sizeof(info);
+    if (getsockopt(conn->fd, IPPROTO_TCP, TCP_CONNECTION_INFO, &info, &infolen) != 0 || infolen < sizeof(info)) return false; // Cannot retrieve TCP info
+    return (info.tcpi_state == TCPS_CLOSE_WAIT || info.tcpi_state == TCPS_CLOSED);
+#else
+    UNUSED(conn);
+    return false;
+#endif
+}
+
 static ConnectionType CT_Socket = {
     /* connection type */
     .get_type = connSocketGetType,
@@ -452,6 +473,7 @@ static ConnectionType CT_Socket = {
 
     /* Miscellaneous */
     .connIntegrityChecked = NULL,
+    .is_closing = connSocketIsClosing,
 };
 
 int connBlock(connection *conn) {

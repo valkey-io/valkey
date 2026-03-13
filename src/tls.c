@@ -1889,6 +1889,8 @@ static sds connTLSGetPeerCert(connection *conn_) {
     return cert_pem;
 }
 
+extern int connSocketIsClosing(connection *conn);
+
 static ConnectionType CT_TLS = {
     /* connection type */
     .get_type = connTLSGetType,
@@ -1940,6 +1942,7 @@ static ConnectionType CT_TLS = {
 
     /* Miscellaneous */
     .connIntegrityChecked = connTLSIsIntegrityChecked,
+    .is_closing = connSocketIsClosing,
 
 };
 

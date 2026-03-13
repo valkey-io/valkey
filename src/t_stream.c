@@ -1358,11 +1358,23 @@ void streamLastValidID(stream *s, streamID *maxid) {
  * allocator's 48 bytes bin. */
 #define STREAM_ID_STR_LEN 44
 
+/* Write a stream ID into a buffer.
+ * The buffer must be pre-allocated with at least STREAM_ID_STR_LEN bytes.
+ * It is much faster than:
+ * sdscatfmt(sds,"%U-%U", id->ms,id->seq);
+ */
+int streamID2string(char *s, streamID *id) {
+    char *p = s;
+    p += ull2string(p, LONG_STR_SIZE, id->ms);
+    *p++ = '-';
+    p += ull2string(p, LONG_STR_SIZE, id->seq);
+    return p - s;
+}
+
 sds createStreamIDString(streamID *id) {
-    /* Optimization: pre-allocate a big enough buffer to avoid reallocs. */
-    sds str = sdsnewlen(SDS_NOINIT, STREAM_ID_STR_LEN);
-    sdssetlen(str, 0);
-    return sdscatfmt(str, "%U-%U", id->ms, id->seq);
+    char buf[STREAM_ID_STR_LEN];
+    int len = streamID2string(buf, id);
+    return sdsnewlen(buf, len);
 }
 
 /* Emit a reply in the client output buffer by formatting a Stream ID
@@ -1679,6 +1691,8 @@ size_t streamReplyWithRange(client *c,
         return streamReplyWithRangeFromConsumerPEL(c, s, start, end, count, consumer);
     }
 
+    char replyid[STREAM_ID_STR_LEN];
+
     if (!(flags & STREAM_RWR_RAWENTRIES)) arraylen_ptr = addReplyDeferredLen(c);
     streamIteratorStart(&si, s, start, end, rev);
     while (streamIteratorGetID(&si, &id, &numfields)) {
@@ -1705,7 +1719,8 @@ size_t streamReplyWithRange(client *c,
         /* Emit a two elements array for each item. The first is
          * the ID, the second is an array of field-value pairs. */
         addReplyArrayLen(c, 2);
-        addReplyStreamID(c, &id);
+        int idlen = streamID2string(replyid, &id);
+        addReplyBulkCBuffer(c, replyid, idlen);
 
         addReplyArrayLen(c, numfields * 2);
 

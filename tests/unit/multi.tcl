@@ -420,7 +420,7 @@ start_server {tags {"multi"}} {
     test {WATCH with large number of keys} {
         set elements {}
         for {set i 0} {$i < 50000} {incr i} {
-            lappend elements key-$i
+            lappend elements key{t}-$i
         }
         r watch {*}$elements
         r watch {*}$elements

@@ -7694,23 +7694,27 @@ __attribute__((weak)) int main(int argc, char **argv) {
  * The parseExtendedCommandArgumentsOrReply() function performs the common validation for extended
  * command arguments used in STRING and HASH commands.
  *
- * Get specific command extended options - PERSIST/DEL
- * Set specific command extended options - XX/NX/GET/IFEQ
- * HSET specific command extended options - FXX/FNX
+ * GET specific command extended options - PERSIST
+ * SET specific command extended options - XX/NX/GET/IFEQ
+ * MSET specific command extended options - XX/NX
+ * HGET specific command extended options - PERSIST
+ * HSET specific command extended options - NX/XX/FXX/FNX
  * Common command extended options - EX/EXAT/PX/PXAT/KEEPTTL
  *
- * Function takes pointers to client, flags, unit, pointer to pointer of expire obj if needed
- * to be determined and command_type which can be COMMAND_GET or COMMAND_SET.
+ * Function takes pointers to client, flags, unit, expire_idx, pointer to pointer of expire obj,
+ * pointer to pointer of compare obj if needed to be determined and command_type which can be COMMAND_*.
  *
  * If there are any syntax violations C_ERR is returned else C_OK is returned.
  *
- * Input flags are updated upon parsing the arguments. Unit and expire are updated if there are any
+ * Input flags are updated upon parsing the arguments. Unit, expire_idx and expire are updated if there are any
  * EX/EXAT/PX/PXAT arguments. Unit is updated to millisecond if PX/PXAT is set.
  *
+ * start_idx provides a way to start scanning from a specific index.
  * max_args provides a way to limit the scan to a specific range of arguments.
  */
-int parseExtendedCommandArgumentsOrReply(client *c, int *flags, int *unit, robj **expire, robj **compare_val, int command_type, int max_args) {
-    int j = command_type == COMMAND_SET ? 3 : 2;
+int parseExtendedCommandArgumentsOrReply(client *c, int command_type, int start_idx, int max_args, int *flags, int *unit, int *expire_idx, robj **expire, robj **compare_val) {
+    int j = start_idx;
+    if (expire_idx) *expire_idx = -1;
     for (; j < max_args; j++) {
         char *opt = objectGetVal(c->argv[j]);
         robj *next = (j == max_args - 1) ? NULL : c->argv[j + 1];
@@ -7718,12 +7722,14 @@ int parseExtendedCommandArgumentsOrReply(client *c, int *flags, int *unit, robj 
         /* clang-format off */
         if ((opt[0] == 'n' || opt[0] == 'N') &&
             (opt[1] == 'x' || opt[1] == 'X') && opt[2] == '\0' &&
-            !(*flags & ARGS_SET_XX || *flags & ARGS_SET_IFEQ) && (command_type == COMMAND_SET || command_type == COMMAND_HSET))
+            !(*flags & ARGS_SET_XX || *flags & ARGS_SET_IFEQ) &&
+            (command_type == COMMAND_SET || command_type == COMMAND_HSET || command_type == COMMAND_MSET))
         {
             *flags |= ARGS_SET_NX;
         } else if ((opt[0] == 'x' || opt[0] == 'X') &&
                    (opt[1] == 'x' || opt[1] == 'X') && opt[2] == '\0' &&
-                   !(*flags & ARGS_SET_NX || *flags & ARGS_SET_IFEQ) && (command_type == COMMAND_SET || command_type == COMMAND_HSET))
+                   !(*flags & ARGS_SET_NX || *flags & ARGS_SET_IFEQ) &&
+                   (command_type == COMMAND_SET || command_type == COMMAND_HSET || command_type == COMMAND_MSET))
         {
             *flags |= ARGS_SET_XX;
         } else if ((opt[0] == 'f' || opt[0] == 'F') &&
@@ -7756,7 +7762,8 @@ int parseExtendedCommandArgumentsOrReply(client *c, int *flags, int *unit, robj 
             *flags |= ARGS_SET_GET;
         } else if (!strcasecmp(opt, "KEEPTTL") && !(*flags & ARGS_PERSIST) &&
                    !(*flags & ARGS_EX) && !(*flags & ARGS_EXAT) &&
-                   !(*flags & ARGS_PX) && !(*flags & ARGS_PXAT) && (command_type == COMMAND_SET || command_type == COMMAND_HSET))
+                   !(*flags & ARGS_PX) && !(*flags & ARGS_PXAT) &&
+                   (command_type == COMMAND_SET || command_type == COMMAND_HSET || command_type == COMMAND_MSET))
         {
             *flags |= ARGS_KEEPTTL;
         } else if (!strcasecmp(opt,"PERSIST") && (command_type == COMMAND_GET || command_type == COMMAND_HGET) &&
@@ -7773,6 +7780,7 @@ int parseExtendedCommandArgumentsOrReply(client *c, int *flags, int *unit, robj 
         {
             *flags |= ARGS_EX;
             *expire = next;
+            if (expire_idx) *expire_idx = j;
             j++;
         } else if ((opt[0] == 'p' || opt[0] == 'P') &&
                    (opt[1] == 'x' || opt[1] == 'X') && opt[2] == '\0' &&
@@ -7783,6 +7791,7 @@ int parseExtendedCommandArgumentsOrReply(client *c, int *flags, int *unit, robj 
             *flags |= ARGS_PX;
             *unit = UNIT_MILLISECONDS;
             *expire = next;
+            if (expire_idx) *expire_idx = j;
             j++;
         } else if ((opt[0] == 'e' || opt[0] == 'E') &&
                    (opt[1] == 'x' || opt[1] == 'X') &&
@@ -7794,6 +7803,7 @@ int parseExtendedCommandArgumentsOrReply(client *c, int *flags, int *unit, robj 
         {
             *flags |= ARGS_EXAT;
             *expire = next;
+            if (expire_idx) *expire_idx = j;
             j++;
         } else if ((opt[0] == 'p' || opt[0] == 'P') &&
                    (opt[1] == 'x' || opt[1] == 'X') &&
@@ -7806,9 +7816,10 @@ int parseExtendedCommandArgumentsOrReply(client *c, int *flags, int *unit, robj 
             *flags |= ARGS_PXAT;
             *unit = UNIT_MILLISECONDS;
             *expire = next;
+            if (expire_idx) *expire_idx = j;
             j++;
         } else {
-            addReplyErrorObject(c,shared.syntaxerr);
+            addReplyErrorObject(c, shared.syntaxerr);
             return C_ERR;
         }
         /* clang-format on */

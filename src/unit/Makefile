@@ -105,7 +105,6 @@ endif
 ifeq ($(strip $(GTEST_LIBS)),)
     $(error googletest not found. Install gtest or set GTEST_CFLAGS/GTEST_LIBS explicitly)
 endif
-FAST_FLOAT_LIB := ../../deps/fast_float_c_interface/fast_float_strtod.o
 
 # On Darwin (macOS), the linker does not support -Wl,--wrap,
 # so we manually define __wrap_* and __real_* for each function in wrappers.h.
@@ -165,11 +164,6 @@ ifeq ($(USE_LIBBACKTRACE),yes)
         LDFLAGS += -L$(LIBBACKTRACE_PREFIX)/lib
     endif
     LD_LIBS += -lbacktrace
-endif
-
-# Add fast_float support if enabled
-ifeq ($(USE_FAST_FLOAT),yes)
-	LD_LIBS += $(FAST_FLOAT_LIB)
 endif
 
 # Add TLS libraries if enabled

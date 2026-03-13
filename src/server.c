@@ -4534,10 +4534,9 @@ int processCommand(client *c) {
             rejectCommandFormat(c, "-BUSY %s", server.busy_module_yield_reply);
         } else if (server.busy_module_yield_flags) {
             rejectCommand(c, shared.slowmoduleerr);
-        } else if (scriptIsEval()) {
-            rejectCommand(c, shared.slowevalerr);
         } else {
-            rejectCommand(c, shared.slowscripterr);
+            /* For long-running scripts, defer command execution instead of rejecting */
+            blockPostponeClient(c);
         }
         return C_OK;
     }

@@ -261,6 +261,7 @@ void initClientPubSubData(client *c) {
     c->pubsub_data->pubsub_channels = hashtableCreate(&objectHashtableType);
     c->pubsub_data->pubsub_patterns = hashtableCreate(&objectHashtableType);
     c->pubsub_data->pubsubshard_channels = hashtableCreate(&objectHashtableType);
+    c->pubsub_data->pubsub_object_mem = 0;
     c->pubsub_data->client_tracking_redirection = 0;
     c->pubsub_data->client_tracking_prefixes = NULL;
 }
@@ -321,6 +322,7 @@ int pubsubSubscribeChannel(client *c, robj *channel, pubsubtype type) {
         serverAssert(hashtableAdd(clients, c));
         hashtableInsertAtPosition(type.clientPubSubChannels(c), channel, &position);
         incrRefCount(channel);
+        c->pubsub_data->pubsub_object_mem += sizeof(robj) + sdsAllocSize(objectGetVal(channel));
     }
     /* Notify the client */
     addReplyPubsubSubscribed(c, channel, type);
@@ -356,6 +358,7 @@ int pubsubUnsubscribeChannel(client *c, robj *channel, int notify, pubsubtype ty
              * PUBSUB creating millions of channels. */
             kvstoreHashtableDelete(*type.serverPubSubChannels, slot, channel);
         }
+        c->pubsub_data->pubsub_object_mem -= sizeof(robj) + sdsAllocSize(objectGetVal(channel));
     }
     /* Notify the client */
     if (notify) {
@@ -413,6 +416,7 @@ bool pubsubSubscribePattern(client *c, robj *pattern) {
             clients = dictGetVal(de);
         }
         serverAssert(hashtableAdd(clients, c));
+        c->pubsub_data->pubsub_object_mem += sizeof(robj) + sdsAllocSize(objectGetVal(pattern));
     }
     /* Notify the client */
     addReplyPubsubPatSubscribed(c, pattern);
@@ -436,6 +440,7 @@ int pubsubUnsubscribePattern(client *c, robj *pattern, int notify) {
             /* Free the clients hashtable if this was the last client. */
             dictDelete(server.pubsub_patterns, pattern);
         }
+        c->pubsub_data->pubsub_object_mem -= sizeof(robj) + sdsAllocSize(objectGetVal(pattern));
     }
     /* Notify the client */
     if (notify) addReplyPubsubPatUnsubscribed(c, pattern);
@@ -787,6 +792,9 @@ size_t pubsubMemOverhead(client *c) {
     mem += hashtableMemUsage(c->pubsub_data->pubsub_channels);
     /* Sharded PubSub channels */
     mem += hashtableMemUsage(c->pubsub_data->pubsubshard_channels);
+    /* We take into account the channel/pattern name themselvesm, because each
+     * client has its own copy, it is a client level memory usage. */
+    mem += c->pubsub_data->pubsub_object_mem;
     return mem;
 }
 

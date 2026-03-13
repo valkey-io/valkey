@@ -353,6 +353,7 @@ void watchForKey(client *c, robj *key) {
     incrRefCount(key);
     listAddNodeTail(&c->mstate->watched_keys, wk);
     watchedKeyLinkToClients(clients, wk);
+    c->mstate->watched_keys_mem += sizeof(robj) + sdsAllocSize(objectGetVal(key));
 }
 
 /* Unwatch all the keys watched by this client. To clean the EXEC dirty
@@ -376,6 +377,7 @@ void unwatchAllKeys(client *c) {
         if (listLength(clients) == 0) dictDelete(wk->db->watched_keys, wk->key);
         /* Remove this watched key from the client->watched list */
         listDelNode(&c->mstate->watched_keys, ln);
+        c->mstate->watched_keys_mem -= sizeof(robj) + sdsAllocSize(objectGetVal(wk->key));
         decrRefCount(wk->key);
         zfree(wk);
     }
@@ -515,9 +517,10 @@ void unwatchCommand(client *c) {
 size_t multiStateMemOverhead(client *c) {
     if (!c->mstate) return 0;
     size_t mem = c->mstate->argv_len_sums;
-    /* Add watched keys overhead, Note: this doesn't take into account the watched keys themselves, because they aren't
-     * managed per-client. */
-    mem += listLength(&c->mstate->watched_keys) * (sizeof(listNode) + sizeof(c->mstate->watched_keys));
+    /* Add watched keys overhead. We take into account the watched keys themselves,
+     * because each client has its own copy, it is a client level memory usage. */
+    mem += listLength(&c->mstate->watched_keys) * (sizeof(listNode) + sizeof(watchedKey));
+    mem += c->mstate->watched_keys_mem;
     /* Reserved memory for queued multi commands. */
     mem += c->mstate->alloc_count * sizeof(multiCmd);
     return mem;

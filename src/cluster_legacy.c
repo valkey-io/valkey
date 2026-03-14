@@ -725,6 +725,8 @@ int clusterLoadConfig(char *filename) {
                     server.cluster->currentEpoch = strtoull(argv[j + 1], NULL, 10);
                 } else if (strcasecmp(argv[j], "lastVoteEpoch") == 0) {
                     server.cluster->lastVoteEpoch = strtoull(argv[j + 1], NULL, 10);
+                } else if (strcasecmp(argv[j], "topologyVersion") == 0) {
+                    server.cluster->topologyVersion = strtoull(argv[j + 1], NULL, 10);
                 } else {
                     serverLog(LL_NOTICE, "Skipping unknown cluster config variable '%s'", argv[j]);
                 }
@@ -1020,6 +1022,23 @@ int clusterLoadConfig(char *filename) {
 
     serverLog(LL_NOTICE, "Node configuration loaded, I'm %.40s", myself->name);
 
+#ifdef ENABLE_CLUSTERX_FEATURE
+    {
+        dictIterator di;
+        dictEntry *de;
+
+        server.cluster->size = 0;
+        dictInitSafeIterator(&di, server.cluster->nodes);
+        while ((de = dictNext(&di)) != NULL) {
+            clusterNode *node = dictGetVal(de);
+            if (clusterNodeIsPrimary(node) && node->numslots) {
+                server.cluster->size++;
+            }
+        }
+        dictResetIterator(&di);
+    }
+#endif
+
     /* Something that should never happen: currentEpoch smaller than
      * the max epoch found in the nodes configuration. However we handle this
      * as some form of protection against manual editing of critical files. */
@@ -1057,9 +1076,10 @@ int clusterSaveConfig(int do_fsync) {
     /* Get the nodes description and concatenate our "vars" directive to
      * save currentEpoch and lastVoteEpoch. */
     ci = clusterGenNodesDescription(NULL, CLUSTER_NODE_HANDSHAKE, 0);
-    ci = sdscatfmt(ci, "vars currentEpoch %U lastVoteEpoch %U\n",
+    ci = sdscatfmt(ci, "vars currentEpoch %U lastVoteEpoch %U topologyVersion %U\n",
                    (unsigned long long)server.cluster->currentEpoch,
-                   (unsigned long long)server.cluster->lastVoteEpoch);
+                   (unsigned long long)server.cluster->lastVoteEpoch,
+                   (unsigned long long)server.cluster->topologyVersion);
     content_size = sdslen(ci);
 
     /* Create a temp file with the new content. */
@@ -1431,9 +1451,14 @@ void clusterInit(void) {
     int saveconf = 0;
 
     server.cluster = zmalloc(sizeof(struct clusterState));
+    server.cluster->topologyVersion = 0;
     server.cluster->myself = NULL;
     server.cluster->currentEpoch = 0;
+#ifdef ENABLE_CLUSTERX_FEATURE
+    server.cluster->state = CLUSTER_OK;
+#else
     server.cluster->state = CLUSTER_FAIL;
+#endif
     server.cluster->fail_reason = CLUSTER_FAIL_NONE;
     server.cluster->safe_to_join = 0;
     server.cluster->size = 0;
@@ -1930,6 +1955,7 @@ clusterNode *createClusterNode(char *nodename, int flags) {
     else
         getRandomHexChars(node->name, CLUSTER_NAMELEN);
     getRandomHexChars(node->shard_id, CLUSTER_NAMELEN);
+    memset(node->master_id, 0, CLUSTER_NAMELEN);
     node->ctime = mstime();
     node->configEpoch = 0;
     node->flags = flags;
@@ -3787,6 +3813,10 @@ static inline int clusterExtractSlotFromWord(uint64_t *slot_word, size_t slot_wo
  * processing lead to some inconsistency error (for instance a PONG
  * received from the wrong sender ID). */
 int clusterProcessPacket(clusterLink *link) {
+#ifdef ENABLE_CLUSTERX_FEATURE
+    return 1;
+#endif
+
     /* Validate that the packet is well-formed */
     if (!clusterIsValidPacket(link)) {
         clusterMsgHeader *hdr = (clusterMsgHeader *)link->rcvbuf;
@@ -5526,6 +5556,10 @@ void clusterFailoverReplaceYourPrimary(void) {
  * 3) Perform the failover informing all the other nodes.
  */
 void clusterHandleReplicaFailover(void) {
+#ifdef ENABLE_CLUSTERX_FEATURE
+    return;
+#endif
+
     mstime_t now = mstime();
     mstime_t data_age;
     mstime_t auth_age = now - server.cluster->failover_auth_time;
@@ -5901,6 +5935,10 @@ void manualFailoverCheckTimeout(void) {
 /* This function is called from clusterCron or clusterBeforeSleep in order to go
  * forward with a manual failover state machine. */
 void clusterHandleManualFailover(void) {
+#ifdef ENABLE_CLUSTERX_FEATURE
+    return;
+#endif
+
     /* Return ASAP if no manual failover is in progress. */
     if (server.cluster->mf_end == 0) return;
 
@@ -6047,6 +6085,16 @@ static long long maxConnectionAttemptsPerCron(void) {
 
 /* This is executed 10 times every second */
 void clusterCron(void) {
+#ifdef ENABLE_CLUSTERX_FEATURE
+    /* If we are a replica node but the replication is still turned off,
+     * enable it if we know the address of our primary and it appears to
+     * be up. */
+    if (nodeIsReplica(myself) && server.primary_host == NULL && myself->replicaof && nodeHasAddr(myself->replicaof)) {
+        replicationSetPrimary(myself->replicaof->ip, getNodeDefaultReplicationPort(myself->replicaof), 0, false);
+    }
+    return;
+#endif
+
     dictIterator *di;
     dictEntry *de;
     int update_state = 0;
@@ -6496,6 +6544,10 @@ void clusterLogFailReason(int reason) {
 #define CLUSTER_WRITABLE_DELAY 2000
 
 void clusterUpdateState(void) {
+#ifdef ENABLE_CLUSTERX_FEATURE
+    return;
+#endif
+
     int j, new_state, new_reason;
     int reachable_primaries = 0;
     static mstime_t among_minority_time;
@@ -6823,9 +6875,14 @@ sds clusterGenNodeDescription(client *c, clusterNode *node, int tls_primary) {
     else
         ci = sdscatlen(ci, "-", 1);
 
-    /* Latency from the POV of this node, config epoch, link status */
+        /* Latency from the POV of this node, config epoch, link status */
+#ifdef ENABLE_CLUSTERX_FEATURE
+    ci = sdscatfmt(ci, " %I %I %U %s", (long long)node->ping_sent, (long long)node->pong_received,
+                   server.cluster->topologyVersion, "connected");
+#else
     ci = sdscatfmt(ci, " %I %I %U %s", (long long)node->ping_sent, (long long)node->pong_received, nodeEpoch(node),
                    (node->link || node->flags & CLUSTER_NODE_MYSELF) ? "connected" : "disconnected");
+#endif
 
     /* Slots served by this instance. If we already have slots info,
      * append it directly, otherwise, generate slots only if it has. */
@@ -7268,6 +7325,10 @@ sds genClusterInfoString(sds info) {
                      nodes_pfail, nodes_fail, voting_nodes_pfail, voting_nodes_fail,
                      (unsigned long long)dictSize(server.cluster->nodes), server.cluster->size,
                      (unsigned long long)server.cluster->currentEpoch, (unsigned long long)my_epoch);
+
+#ifdef ENABLE_CLUSTERX_FEATURE
+    info = sdscatfmt(info, "cluster_topology_version:%U\r\n", (unsigned long long)server.cluster->topologyVersion);
+#endif
 
     /* Show stats about messages sent and received. */
     long long tot_msg_sent = 0;
@@ -8381,4 +8442,311 @@ bool isAnySlotInManualImportingState(void) {
 /* Returns if any slot has been put in MIGRATING state via SETSLOT command. */
 bool isAnySlotInManualMigratingState(void) {
     return dictSize(server.cluster->migrating_slots_to) > 0;
+}
+
+static void freeNodeMemory(clusterNode *n) {
+    if (n == NULL) return;
+
+    if (n->slot_info_pairs) {
+        zfree(n->slot_info_pairs);
+        n->slot_info_pairs = NULL;
+    }
+
+    if (n->replicas) {
+        zfree(n->replicas);
+        n->replicas = NULL;
+    }
+
+    if (n->hostname) {
+        sdsfree(n->hostname);
+        n->hostname = NULL;
+    }
+
+    if (n->human_nodename) {
+        sdsfree(n->human_nodename);
+        n->human_nodename = NULL;
+    }
+
+    if (n->fail_reports) {
+        raxFree(n->fail_reports);
+        n->fail_reports = NULL;
+    }
+
+    n->link = NULL;
+    n->inbound_link = NULL;
+    n->replicaof = NULL;
+
+    zfree(n);
+}
+
+static void freeClusterNodesMemory(dict *nodes) {
+    dictIterator *di = dictGetSafeIterator(nodes);
+    dictEntry *de;
+
+    while ((de = dictNext(di)) != NULL) {
+        clusterNode *node = dictGetVal(de);
+        freeNodeMemory(node);
+    }
+    dictReleaseIterator(di);
+    dictRelease(nodes);
+}
+
+/* clusterx setnodes $all_nodes_info $version $force
+ * one line of $all_nodes_info: $node_id $host $port $role $master_node_id $slot_range */
+int setClusterNodes(client *c, const char *nodes_str, long long version) {
+    char slots_nodes[CLUSTER_SLOTS][CLUSTER_NAMELEN];
+    memset(slots_nodes, 0, sizeof(slots_nodes));
+    dict *new_nodes = dictCreate(&clusterNodesDictType);
+
+    int result = parseClusterNodes(c, nodes_str, new_nodes, slots_nodes);
+    if (result == C_ERR) {
+        freeClusterNodesMemory(new_nodes);
+        return C_ERR;
+    }
+
+    /* find myself node_id */
+    char node_id[CLUSTER_NAMELEN];
+    memset(node_id, 0, CLUSTER_NAMELEN);
+    int local_ip_count = 0;
+    sds *local_ips = getLocalIPAddresses(&local_ip_count);
+    {
+        dictIterator *di = dictGetSafeIterator(new_nodes);
+        dictEntry *de;
+        while ((de = dictNext(di)) != NULL) {
+            clusterNode *node = dictGetVal(de);
+            if (node->tcp_port == server.port && matchListeningIP(server.bindaddr, server.bindaddr_count, node->ip, local_ips, local_ip_count)) {
+                memcpy(node_id, node->name, CLUSTER_NAMELEN);
+                break;
+            }
+        }
+        dictReleaseIterator(di);
+    }
+
+    /* must find node_id in new_nodes */
+    sds s = sdsnewlen(node_id, CLUSTER_NAMELEN);
+    dictEntry *dex = dictFind(new_nodes, s);
+    sdsfree(s);
+    if (dex == NULL) {
+        freeClusterNodesMemory(new_nodes);
+        addReplyError(c, "Invalid cluster nodes info");
+        return C_ERR;
+    }
+
+    /* update version and cluster topology */
+    dict *old_nodes = server.cluster->nodes;
+    server.cluster->nodes = new_nodes;
+    clusterNode *n = clusterLookupNode(node_id, CLUSTER_NAMELEN);
+    if (n) {
+        myself = server.cluster->myself = n;
+        n->flags |= CLUSTER_NODE_MYSELF;
+    } else {
+        server.cluster->nodes = old_nodes;
+        freeClusterNodesMemory(new_nodes);
+        addReplyError(c, "Invalid cluster nodes info");
+        return C_ERR;
+    }
+    server.cluster->topologyVersion = version;
+    server.cluster->size = 0;
+    if (old_nodes) {
+        freeClusterNodesMemory(old_nodes);
+    }
+
+    /* Recreate shards dict */
+    dictEmpty(server.cluster->shards, NULL);
+
+    /* update replicas info and size */
+    {
+        dictIterator *di = dictGetSafeIterator(server.cluster->nodes);
+        dictEntry *de;
+        while ((de = dictNext(di)) != NULL) {
+            clusterNode *node = dictGetVal(de);
+            if (nodeIsPrimary(node) && node->numslots) {
+                server.cluster->size++;
+            }
+            if (nodeIsReplica(node) && node->master_id[0] != '\0') {
+                clusterNode *master = clusterLookupNode(node->master_id, CLUSTER_NAMELEN);
+                if (master) {
+                    node->replicaof = master;
+                    memcpy(node->shard_id, master->shard_id, CLUSTER_NAMELEN);
+                    clusterNodeAddReplica(master, node);
+                }
+                clusterAddNodeToShard(node->shard_id, node);
+            }
+        }
+        dictReleaseIterator(di);
+    }
+
+    /* update slots to nodes */
+    for (int i = 0; i < CLUSTER_SLOTS; i++) {
+        server.cluster->slots[i] = clusterLookupNode(slots_nodes[i], CLUSTER_NAMELEN);
+    }
+
+    if (iAmPrimary()) {
+        replicationUnsetPrimary();
+    } else {
+        if (myself->replicaof) {
+            replicationSetPrimary(myself->replicaof->ip, getNodeDefaultReplicationPort(myself->replicaof), 0, false);
+        }
+    }
+
+    clusterCloseAllSlots();
+    clusterSaveConfigOrDie(1);
+    return C_OK;
+}
+
+int parseClusterNodes(client *c, const char *nodes_str, dict *new_nodes, char slots_nodes[][CLUSTER_NAMELEN]) {
+    int totlines = 0;
+    sds *lines = sdssplitlen(nodes_str, sdslen(nodes_str), "\n", 1, &totlines);
+    if (totlines == 0) {
+        addReplyError(c, "Invalid cluster nodes info");
+        return C_ERR;
+    }
+
+    for (int i = 0; i < totlines; i++) {
+        int argc;
+        sds *argv;
+        printf("line %d = %s\n", i, lines[i]);
+
+        /* Skip blank lines */
+        if (lines[i][0] == '\n' || lines[i][0] == '\0') continue;
+        argv = sdssplitargs(lines[i], &argc);
+        if (argv == NULL) {
+            addReplyError(c, "Invalid cluster nodes info");
+            goto checkerr;
+        }
+        /* Regular config lines have at least five fields */
+        if (argc < 5) {
+            sdsfreesplitres(argv, argc);
+            addReplyErrorFormat(c, "Invalid cluster nodes info, line %d, one line must have at least five fields", i);
+            goto checkerr;
+        }
+
+        /* Create this node if it does not exist */
+        printf("argv[0] = %s\n", argv[0]);
+        if (verifyClusterNodeId(argv[0], sdslen(argv[0])) == C_ERR) {
+            sdsfreesplitres(argv, argc);
+            addReplyErrorFormat(c, "Invalid cluster nodes info, line %d, id '%s'", i, argv[0]);
+            goto checkerr;
+        }
+        clusterNode *node;
+        dictEntry *de = dictFind(new_nodes, argv[0]);
+        if (de == NULL) {
+            node = createClusterNode(argv[0], 0);
+            int retval = dictAdd(new_nodes, sdsnewlen(node->name, CLUSTER_NAMELEN), node);
+            serverAssert(retval == DICT_OK);
+        } else {
+            node = dictGetVal(de);
+        }
+
+        /* host ip */
+        printf("argv[1] = %s\n", argv[1]);
+        size_t iplen = sdslen(argv[1]);
+        if (iplen >= sizeof(node->ip)) iplen = sizeof(node->ip) - 1;
+        memcpy(node->ip, argv[1], iplen);
+        node->ip[iplen] = '\0';
+
+        /* host port */
+        printf("argv[2] = %s\n", argv[2]);
+        long port;
+        if (string2l(argv[2], sdslen(argv[2]), &port) == 0 || port <= 0 || port > 65535) {
+            sdsfreesplitres(argv, argc);
+            addReplyErrorFormat(c, "Invalid cluster nodes info, line %d, port '%s'", i, argv[2]);
+            goto checkerr;
+        }
+        node->tcp_port = port;
+        node->cport = node->tcp_port + CLUSTER_PORT_INCR;
+
+        /* role */
+        printf("argv[3] = %s\n", argv[3]);
+        if (!strcasecmp(argv[3], "master")) {
+            node->flags |= CLUSTER_NODE_PRIMARY;
+            memcpy(node->shard_id, node->name, CLUSTER_NAMELEN);
+        } else if (!strcasecmp(argv[3], "slave")) {
+            if (argc != 5) {
+                sdsfreesplitres(argv, argc);
+                addReplyErrorFormat(c, "Invalid cluster nodes info, line %d", i);
+                goto checkerr;
+            }
+            node->flags |= CLUSTER_NODE_REPLICA;
+        } else {
+            sdsfreesplitres(argv, argc);
+            addReplyErrorFormat(c, "Invalid cluster nodes role, line %d, role '%s'", i, argv[3]);
+            goto checkerr;
+        }
+
+        /* master id */
+        printf("argv[4] = %s\n", argv[4]);
+        if ((nodeIsPrimary(node) && argv[4][0] != '-') || (nodeIsReplica(node) && verifyClusterNodeId(argv[4], sdslen(argv[4])) == C_ERR)) {
+            sdsfreesplitres(argv, argc);
+            addReplyErrorFormat(c, "Invalid cluster nodes info, line %d, id '%s'", i, argv[4]);
+            goto checkerr;
+        }
+        if (nodeIsReplica(node)) {
+            memcpy(node->master_id, argv[4], CLUSTER_NAMELEN);
+        }
+
+        /* populate hash slots */
+        for (int j = 5; j < argc; j++) {
+            printf("slots: %s\n", argv[j]);
+            int start, stop;
+            char *p;
+
+            if ((p = strchr(argv[j], '-')) != NULL) {
+                start = atoi(argv[j]);
+                stop = atoi(p + 1);
+            } else {
+                start = stop = atoi(argv[j]);
+            }
+            if (start < 0 || start >= CLUSTER_SLOTS || stop < 0 || stop >= CLUSTER_SLOTS) {
+                sdsfreesplitres(argv, argc);
+                addReplyErrorFormat(c, "Slot is out of range, line %d", i);
+                goto checkerr;
+            }
+            for (int s = start; s <= stop; s++) {
+                if (slots_nodes[s][0] != '\0') {
+                    sdsfreesplitres(argv, argc);
+                    addReplyErrorFormat(c, "Slot distribution is overlapped, line %d", i);
+                    goto checkerr;
+                }
+            }
+            while (start <= stop) {
+                memcpy(slots_nodes[start], argv[0], CLUSTER_NAMELEN);
+                clusterNodeSetSlotBit(node, start++);
+            }
+        }
+        sdsfreesplitres(argv, argc);
+    }
+    sdsfreesplitres(lines, totlines);
+
+    /* slave node's master_id must map to an exist master node */
+    {
+        dictIterator *di = dictGetSafeIterator(new_nodes);
+        dictEntry *de;
+        while ((de = dictNext(di)) != NULL) {
+            clusterNode *node = dictGetVal(de);
+            if (nodeIsReplica(node)) {
+                sds master_id = sdsnewlen(node->master_id, CLUSTER_NAMELEN);
+                dictEntry *n = dictFind(new_nodes, master_id);
+                if (!n) {
+                    addReplyErrorFormat(c, "Invalid cluster nodes info, node of master_id '%s' is not exist", master_id);
+                    dictReleaseIterator(di);
+                    sdsfree(master_id);
+                    return C_ERR;
+                }
+                clusterNode *master_node = dictGetVal(n);
+                if (!nodeIsPrimary(master_node)) {
+                    addReplyErrorFormat(c, "Invalid cluster nodes info, node of master_id '%s' is not a master", master_id);
+                    dictReleaseIterator(di);
+                    sdsfree(master_id);
+                    return C_ERR;
+                }
+            }
+        }
+        dictReleaseIterator(di);
+    }
+    return C_OK;
+
+checkerr:
+    sdsfreesplitres(lines, totlines);
+    return C_ERR;
 }

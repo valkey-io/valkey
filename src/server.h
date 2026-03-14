@@ -4121,6 +4121,7 @@ void sunsubscribeCommand(client *c);
 void watchCommand(client *c);
 void unwatchCommand(client *c);
 void clusterCommand(client *c);
+void clusterxCommand(client *c);
 void clusterKeySlotCommand(client *c);
 void clusterFlushslotCommand(client *c);
 void clusterSlotStatsCommand(client *c);

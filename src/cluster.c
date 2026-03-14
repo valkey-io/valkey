@@ -39,6 +39,7 @@
 
 #include "server.h"
 #include "cluster.h"
+#include "cluster_legacy.h"
 #include "cluster_slot_stats.h"
 #include "module.h"
 #include "crc16_slottable.h"
@@ -1812,4 +1813,68 @@ void clusterscanCommand(client *c) {
     scanGenericCommand(c, NULL, cursor, slot, cursor_prefix, finished_cursor_prefix);
     sdsfree(cursor_prefix);
     sdsfree(finished_cursor_prefix);
+}
+
+void clusterxCommand(client *c) {
+    if (server.cluster_enabled == 0) {
+        addReplyError(c, "This instance has cluster support disabled");
+        return;
+    }
+
+#ifndef ENABLE_CLUSTERX_FEATURE
+    addReplyError(c, "This instance has clusterx feature support disabled");
+    return;
+#endif
+
+    if (c->argc == 2 && !strcasecmp(objectGetVal(c->argv[1]), "help")) {
+        const char *help[] = {
+            "SETNODES <cluster-topology-string> <version> [force]",
+            "    Setup the cluster topology.",
+            "VERSION",
+            "    Show cluster topology version.",
+            NULL};
+        addReplyHelp(c, help);
+    } else if (!strcasecmp(objectGetVal(c->argv[1]), "version") && c->argc == 2) {
+        addReplyLongLong(c, server.cluster->topologyVersion);
+    } else if (!strcasecmp(objectGetVal(c->argv[1]), "setnodes") && (c->argc == 4 || c->argc == 5)) {
+        long long version;
+        if (getLongLongFromObjectOrReply(c, c->argv[3], &version, NULL) != C_OK)
+            return;
+        if (version < 0) {
+            addReplyError(c, "Invalid cluster version");
+            return;
+        }
+
+        int force = 0;
+        if (c->argc == 5) {
+            if (!strcasecmp(objectGetVal(c->argv[4]), "force")) {
+                force = 1;
+            } else {
+                addReplyErrorObject(c, shared.syntaxerr);
+                return;
+            }
+        }
+
+        if (!force) {
+            /* Low version wants to reset current version */
+            if (server.cluster->topologyVersion > version) {
+                addReplyError(c, "Invalid cluster version");
+                return;
+            }
+            /* The same version, it is not needed to update */
+            if (server.cluster->topologyVersion == version) {
+                addReply(c, shared.ok);
+                return;
+            }
+        }
+
+        int result = setClusterNodes(c, objectGetVal(c->argv[2]), version);
+        if (result != C_OK) {
+            return;
+        }
+        addReply(c, shared.ok);
+    } else {
+        addReplySubcommandSyntaxError(c);
+        return;
+    }
 }

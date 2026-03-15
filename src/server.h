@@ -3907,12 +3907,16 @@ void startEvictionTimeProc(void);
 /* Keys hashing/comparison functions for dict.c and hashtable.c hash tables. */
 uint64_t dictSdsHash(const void *key);
 uint64_t dictSdsCaseHash(const void *key);
+uint64_t dictCStrHash(const void *key);
+uint64_t dictCStrCaseHash(const void *key);
 int dictSdsKeyCompare(const void *key1, const void *key2);
-int hashtableSdsKeyCompare(const void *key1, const void *key2);
 int dictSdsKeyCaseCompare(const void *key1, const void *key2);
+int dictCStrKeyCompare(const void *key1, const void *key2);
+int dictCStrKeyCaseCompare(const void *key1, const void *key2);
 void dictSdsDestructor(void *val);
 void dictListDestructor(void *val);
-void *dictSdsDup(const void *key);
+void dictEntryDestructorSdsKey(void *entry);
+void dictEntryDestructorSdsKeyListValue(void *entry);
 
 /* Git SHA1 */
 char *serverGitSHA1(void);

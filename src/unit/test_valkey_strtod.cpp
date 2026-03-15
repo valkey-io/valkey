@@ -33,3 +33,22 @@ TEST_F(ValkeyStrtodTest, TestValkeyStrtod) {
     ASSERT_TRUE(isinf(value));
     ASSERT_EQ(errno, 0);
 }
+
+TEST_F(ValkeyStrtodTest, TestValkeyStrtodN) {
+    errno = 0;
+    double value = valkey_strtod_n("231.2341234", 11, NULL);
+    ASSERT_DOUBLE_EQ(value, 231.2341234);
+    ASSERT_EQ(errno, 0);
+
+    value = valkey_strtod_n("+inf", 4, NULL);
+    ASSERT_TRUE(isinf(value));
+    ASSERT_EQ(errno, 0);
+
+    value = valkey_strtod_n("-inf", 4, NULL);
+    ASSERT_TRUE(isinf(value));
+    ASSERT_EQ(errno, 0);
+
+    value = valkey_strtod_n("inf", 3, NULL);
+    ASSERT_TRUE(isinf(value));
+    ASSERT_EQ(errno, 0);
+}

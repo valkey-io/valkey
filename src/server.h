@@ -235,6 +235,7 @@ extern int configOOMScoreAdjValuesDefaults[CONFIG_OOM_COUNT];
 #define COMMAND_SET 1
 #define COMMAND_HGET 2
 #define COMMAND_HSET 3
+#define COMMAND_MSET 4
 
 /* Command flags. Please check the definition of struct serverCommand in this file
  * for more information about the meaning of every flag. */
@@ -1352,12 +1353,11 @@ typedef struct client {
     time_t last_interaction;          /* Time of the last interaction, used for timeout */
     serverDb *db;                     /* Pointer to currently SELECTed DB. */
     /* Client state structs. */
-    ClientPubSubData *pubsub_data;        /* Required for: pubsub commands and tracking. lazily initialized when first needed */
-    ClientReplicationData *repl_data;     /* Required for Replication operations. lazily initialized when first needed */
-    ClientModuleData *module_data;        /* Required for Module operations. lazily initialized when first needed */
-    multiState *mstate;                   /* MULTI/EXEC state, lazily initialized when first needed */
-    blockingState *bstate;                /* Blocking state, lazily initialized when first needed */
-    slotMigrationJob *slot_migration_job; /* Pointer to the slot migration job, or NULL. */
+    ClientPubSubData *pubsub_data;    /* Required for: pubsub commands and tracking. lazily initialized when first needed */
+    ClientReplicationData *repl_data; /* Required for Replication operations. lazily initialized when first needed */
+    ClientModuleData *module_data;    /* Required for Module operations. lazily initialized when first needed */
+    multiState *mstate;               /* MULTI/EXEC state, lazily initialized when first needed */
+    blockingState *bstate;            /* Blocking state, lazily initialized when first needed */
     /* Output buffer and reply handling */
     long duration;                       /* Current command duration. Used for measuring latency of blocking/non-blocking cmds */
     char *buf;                           /* Output buffer */
@@ -1377,11 +1377,13 @@ typedef struct client {
         uint64_t raw_flag;
         struct ClientFlags flag;
     };
-    uint16_t write_flags;            /* Client Write flags - used to communicate the client write state. */
-    volatile uint8_t io_read_state;  /* Indicate the IO read state of the client */
-    volatile uint8_t io_write_state; /* Indicate the IO write state of the client */
-    uint8_t resp;                    /* RESP protocol version. Can be 2 or 3. */
-    uint8_t cur_tid;                 /* ID of IO thread currently performing IO for this client */
+    /* Cache Locality: Grouped with 'flag' for getClientType() hot path. */
+    slotMigrationJob *slot_migration_job; /* Pointer to the slot migration job, or NULL. */
+    uint16_t write_flags;                 /* Client Write flags - used to communicate the client write state. */
+    volatile uint8_t io_read_state;       /* Indicate the IO read state of the client */
+    volatile uint8_t io_write_state;      /* Indicate the IO write state of the client */
+    uint8_t resp;                         /* RESP protocol version. Can be 2 or 3. */
+    uint8_t cur_tid;                      /* ID of IO thread currently performing IO for this client */
     /* In updateClientMemoryUsage() we track the memory usage of
      * each client and add it to the sum of all the clients of a given type,
      * however we need to remember what was the old contribution of each
@@ -1430,6 +1432,28 @@ typedef struct client {
     clientReqResInfo reqres;
 #endif
 } client;
+
+/* Forward declaration */
+bool isImportSlotMigrationJob(slotMigrationJob *job);
+
+/* Get the class of a client, used in order to enforce limits to different
+ * classes of clients.
+ *
+ * The function will return one of the following:
+ * CLIENT_TYPE_NORMAL -> Normal client, including MONITOR
+ * CLIENT_TYPE_REPLICA  -> replica
+ * CLIENT_TYPE_PUBSUB -> Client subscribed to Pub/Sub channels
+ * CLIENT_TYPE_PRIMARY -> The client representing our replication primary.
+ */
+static inline int getClientType(client *c) {
+    if (unlikely(c->flag.primary)) return CLIENT_TYPE_PRIMARY;
+    /* Even though MONITOR clients are marked as replicas, we
+     * want the expose them as normal clients. */
+    if (unlikely(c->flag.replica) && !c->flag.monitor) return CLIENT_TYPE_REPLICA;
+    if (c->flag.pubsub) return CLIENT_TYPE_PUBSUB;
+    if (unlikely(c->slot_migration_job)) return isImportSlotMigrationJob(c->slot_migration_job) ? CLIENT_TYPE_SLOT_IMPORT : CLIENT_TYPE_SLOT_EXPORT;
+    return CLIENT_TYPE_NORMAL;
+}
 
 /* When a command generates a lot of discrete elements to the client output buffer, it is much faster to
  * skip certain types of initialization. This type is used to indicate a client that has been initialized
@@ -1760,7 +1784,7 @@ struct valkeyServer {
     hashtable *orig_commands;                         /* Command table before command renaming. */
     sds command_response_cache[RESP_CACHE_INDEX_MAX]; /* Cached COMMAND response: [0]=RESP2, [1]=RESP3 */
     aeEventLoop *el;
-    _Atomic AeIoState io_poll_state;     /* Indicates the state of the IO polling. */
+    _Atomic(AeIoState) io_poll_state;    /* Indicates the state of the IO polling. */
     int io_ae_fired_events;              /* Number of poll events received by the IO thread. */
     rax *errors;                         /* Errors table */
     volatile sig_atomic_t shutdown_asap; /* Shutdown ordered by signal handler. */
@@ -1785,16 +1809,16 @@ struct valkeyServer {
     int thp_enabled;                     /* If true, THP is enabled. */
     size_t page_size;                    /* The page size of OS. */
     /* Modules */
-    dict *moduleapi;                  /* Exported core APIs dictionary for modules. */
-    dict *sharedapi;                  /* Like moduleapi but containing the APIs that
-                                         modules share with each other. */
-    dict *module_configs_queue;       /* Dict that stores module configurations from .conf file until after modules are loaded
-                                         during startup or arguments to loadex. */
-    list *loadmodule_queue;           /* List of modules to load at startup. */
-    int module_pipe[2];               /* Pipe used to awake the event loop by module threads. */
-    pid_t child_pid;                  /* PID of current child */
-    int child_type;                   /* Type of current child */
-    _Atomic int module_gil_acquiring; /* Indicates whether the GIL is being acquiring by the main thread. */
+    dict *moduleapi;                   /* Exported core APIs dictionary for modules. */
+    dict *sharedapi;                   /* Like moduleapi but containing the APIs that
+                                          modules share with each other. */
+    dict *module_configs_queue;        /* Dict that stores module configurations from .conf file until after modules are loaded
+                                          during startup or arguments to loadex. */
+    list *loadmodule_queue;            /* List of modules to load at startup. */
+    int module_pipe[2];                /* Pipe used to awake the event loop by module threads. */
+    pid_t child_pid;                   /* PID of current child */
+    int child_type;                    /* Type of current child */
+    _Atomic(int) module_gil_acquiring; /* Indicates whether the GIL is being acquiring by the main thread. */
     /* Networking */
     int port;                              /* TCP listening port */
     int tls_port;                          /* TLS listening port */
@@ -1840,7 +1864,7 @@ struct valkeyServer {
     pause_event client_pause_per_purpose[NUM_PAUSE_PURPOSES];
     char neterr[ANET_ERR_LEN];                /* Error buffer for anet.c */
     dict *migrate_cached_sockets;             /* MIGRATE cached sockets */
-    _Atomic uint64_t next_client_id;          /* Next client unique ID. Incremental. */
+    _Atomic(uint64_t) next_client_id;         /* Next client unique ID. Incremental. */
     int protected_mode;                       /* Don't accept external connections. */
     int io_threads_num;                       /* Number of IO threads to use. */
     int active_io_threads_num;                /* Current number of active IO threads, includes main thread. */
@@ -2035,8 +2059,8 @@ struct valkeyServer {
     int aof_load_truncated;             /* Don't stop on unexpected AOF EOF. */
     int aof_use_rdb_preamble;           /* Specify base AOF to use RDB encoding on AOF rewrites. */
     int aof_rewrite_use_rdb_preamble;   /* Base AOF to use RDB encoding on AOF rewrites start. */
-    _Atomic int aof_bio_fsync_status;   /* Status of AOF fsync in bio job. */
-    _Atomic int aof_bio_fsync_errno;    /* Errno of AOF fsync in bio job. */
+    _Atomic(int) aof_bio_fsync_status;  /* Status of AOF fsync in bio job. */
+    _Atomic(int) aof_bio_fsync_errno;   /* Errno of AOF fsync in bio job. */
     aofManifest *aof_manifest;          /* Used to track AOFs. */
     int aof_disable_auto_gc;            /* If disable automatically deleting HISTORY type AOFs?
                                            default no. (for testings). */
@@ -2101,52 +2125,52 @@ struct valkeyServer {
     int shutdown_on_sigterm; /* Shutdown flags configured for SIGTERM. */
 
     /* Replication (primary) */
-    char replid[CONFIG_RUN_ID_SIZE + 1];       /* My current replication ID. */
-    char replid2[CONFIG_RUN_ID_SIZE + 1];      /* replid inherited from primary*/
-    long long primary_repl_offset;             /* My current replication offset */
-    long long second_replid_offset;            /* Accept offsets up to this for replid2. */
-    _Atomic long long fsynced_reploff_pending; /* Largest replication offset to
-                                      * potentially have been fsynced, applied to
-                                        fsynced_reploff only when AOF state is AOF_ON
-                                        (not during the initial rewrite) */
-    long long fsynced_reploff;                 /* Largest replication offset that has been confirmed to be fsynced */
-    int replicas_eldb;                         /* Last SELECTed DB in replication output */
-    int repl_ping_replica_period;              /* Primary pings the replica every N seconds */
-    replBacklog *repl_backlog;                 /* Replication backlog for partial syncs */
-    long long repl_backlog_size;               /* Backlog circular buffer size */
-    replDataBuf pending_repl_data;             /* Replication data buffer for dual-channel-replication */
-    time_t repl_backlog_time_limit;            /* Time without replicas after the backlog
-                                                  gets released. */
-    time_t repl_no_replicas_since;             /* We have no replicas since that time.
-                                                Only valid if server.replicas len is 0. */
-    int repl_min_replicas_to_write;            /* Min number of replicas to write. */
-    int repl_min_replicas_max_lag;             /* Max lag of <count> replicas to write. */
-    int repl_good_replicas_count;              /* Number of replicas with lag <= max_lag. */
-    int repl_diskless_sync;                    /* Primary send RDB to replicas sockets directly. */
-    int repl_diskless_load;                    /* Replica parse RDB directly from the socket.
-                                                * see REPL_DISKLESS_LOAD_* enum */
-    int repl_diskless_sync_delay;              /* Delay to start a diskless repl BGSAVE. */
-    int repl_diskless_sync_max_replicas;       /* Max replicas for diskless repl BGSAVE
-                                                * delay (start sooner if they all connect). */
-    int dual_channel_replication;              /* Config used to determine if the replica should
-                                                * use dual channel replication for full syncs. */
-    _Atomic int replica_bio_disk_save_state;   /* Flag set by the bio thread to indicate that the
-                                                * RDB save to disk has completed, or failed */
-    _Atomic bool replica_bio_abort_save;       /* Flag set by main thread, used to signal to replica's
-                                                * disk-saving bio thread to abort the save */
-    long long bio_stat_net_repl_input_bytes;   /* Used to calculate stat_net_repl_input_bytes on the
-                                                * replica's bio thread without touching main thread vars */
-    off_t bio_repl_transfer_size;              /* Used to calculate bio_repl_transfer_size on the
-                                                * replica's bio thread without touching main thread vars */
-    off_t bio_repl_transfer_read;              /* Used to calculate bio_repl_transfer_read on the
-                                                * replica's bio thread without touching main thread vars */
-    int wait_before_rdb_client_free;           /* Grace period in seconds for replica main channel
-                                                * to establish psync. */
-    int debug_pause_after_fork;                /* Debug param that pauses the main process
-                                                * after a replication fork() (for bgsave). */
-    size_t repl_buffer_mem;                    /* The memory of replication buffer. */
-    list *repl_buffer_blocks;                  /* Replication buffers blocks list
-                                                * (serving replica clients and repl backlog) */
+    char replid[CONFIG_RUN_ID_SIZE + 1];        /* My current replication ID. */
+    char replid2[CONFIG_RUN_ID_SIZE + 1];       /* replid inherited from primary*/
+    long long primary_repl_offset;              /* My current replication offset */
+    long long second_replid_offset;             /* Accept offsets up to this for replid2. */
+    _Atomic(long long) fsynced_reploff_pending; /* Largest replication offset to
+                                                 * potentially have been fsynced, applied to
+                                                   fsynced_reploff only when AOF state is AOF_ON
+                                                   (not during the initial rewrite) */
+    long long fsynced_reploff;                  /* Largest replication offset that has been confirmed to be fsynced */
+    int replicas_eldb;                          /* Last SELECTed DB in replication output */
+    int repl_ping_replica_period;               /* Primary pings the replica every N seconds */
+    replBacklog *repl_backlog;                  /* Replication backlog for partial syncs */
+    long long repl_backlog_size;                /* Backlog circular buffer size */
+    replDataBuf pending_repl_data;              /* Replication data buffer for dual-channel-replication */
+    time_t repl_backlog_time_limit;             /* Time without replicas after the backlog
+                                                   gets released. */
+    time_t repl_no_replicas_since;              /* We have no replicas since that time.
+                                                 Only valid if server.replicas len is 0. */
+    int repl_min_replicas_to_write;             /* Min number of replicas to write. */
+    int repl_min_replicas_max_lag;              /* Max lag of <count> replicas to write. */
+    int repl_good_replicas_count;               /* Number of replicas with lag <= max_lag. */
+    int repl_diskless_sync;                     /* Primary send RDB to replicas sockets directly. */
+    int repl_diskless_load;                     /* Replica parse RDB directly from the socket.
+                                                 * see REPL_DISKLESS_LOAD_* enum */
+    int repl_diskless_sync_delay;               /* Delay to start a diskless repl BGSAVE. */
+    int repl_diskless_sync_max_replicas;        /* Max replicas for diskless repl BGSAVE
+                                                 * delay (start sooner if they all connect). */
+    int dual_channel_replication;               /* Config used to determine if the replica should
+                                                 * use dual channel replication for full syncs. */
+    _Atomic(int) replica_bio_disk_save_state;   /* Flag set by the bio thread to indicate that the
+                                                 * RDB save to disk has completed, or failed */
+    _Atomic(bool) replica_bio_abort_save;       /* Flag set by main thread, used to signal to replica's
+                                                 * disk-saving bio thread to abort the save */
+    long long bio_stat_net_repl_input_bytes;    /* Used to calculate stat_net_repl_input_bytes on the
+                                                 * replica's bio thread without touching main thread vars */
+    off_t bio_repl_transfer_size;               /* Used to calculate bio_repl_transfer_size on the
+                                                 * replica's bio thread without touching main thread vars */
+    off_t bio_repl_transfer_read;               /* Used to calculate bio_repl_transfer_read on the
+                                                 * replica's bio thread without touching main thread vars */
+    int wait_before_rdb_client_free;            /* Grace period in seconds for replica main channel
+                                                 * to establish psync. */
+    int debug_pause_after_fork;                 /* Debug param that pauses the main process
+                                                 * after a replication fork() (for bgsave). */
+    size_t repl_buffer_mem;                     /* The memory of replication buffer. */
+    list *repl_buffer_blocks;                   /* Replication buffers blocks list
+                                                 * (serving replica clients and repl backlog) */
     /* Replication (replica) */
     char *primary_user;     /* AUTH with this user and primary_auth with primary */
     sds primary_auth;       /* AUTH with this password with primary */
@@ -2162,33 +2186,33 @@ struct valkeyServer {
         long long read_reploff;
         int dbid;
     } repl_provisional_primary;
-    client *cached_primary;              /* Cached primary to be reused for PSYNC. */
-    rio *loading_rio;                    /* Pointer to the rio object currently used for loading data. */
-    int repl_syncio_timeout;             /* Timeout for synchronous I/O calls */
-    int repl_state;                      /* Replication status if the instance is a replica */
-    int repl_rdb_channel_state;          /* State of the replica's rdb channel during dual-channel-replication */
-    off_t repl_transfer_size;            /* Size of RDB to read from primary during sync. */
-    off_t repl_transfer_read;            /* Amount of RDB read from primary during sync. */
-    off_t repl_transfer_last_fsync_off;  /* Offset when we fsync-ed last time. */
-    connection *repl_transfer_s;         /* Replica -> Primary SYNC connection */
-    connection *repl_rdb_transfer_s;     /* Primary FULL SYNC connection (RDB download) */
-    int repl_transfer_fd;                /* Replica -> Primary SYNC temp file descriptor */
-    char *repl_transfer_tmpfile;         /* Replica-> Primary SYNC temp file name */
-    _Atomic time_t repl_transfer_lastio; /* Unix time of the latest read, for timeout */
-    int repl_serve_stale_data;           /* Serve stale data when link is down? */
-    int repl_replica_ro;                 /* Replica is read only? */
-    int repl_replica_ignore_maxmemory;   /* If true replicas do not evict. */
-    time_t repl_down_since;              /* Unix time at which link with primary went down */
-    int repl_disable_tcp_nodelay;        /* Disable TCP_NODELAY after SYNC? */
-    int repl_mptcp;                      /* Use Multipath TCP for replica on client side */
-    int replica_priority;                /* Reported in INFO and used by Sentinel. */
-    int replica_announced;               /* If true, replica is announced by Sentinel */
-    int replica_announce_port;           /* Give the primary this listening port. */
-    char *replica_announce_ip;           /* Give the primary this ip address. */
-    int propagation_error_behavior;      /* Configures the behavior of the replica
-                                          * when it receives an error on the replication stream */
-    int repl_ignore_disk_write_error;    /* Configures whether replicas panic when unable to
-                                          * persist writes to AOF. */
+    client *cached_primary;               /* Cached primary to be reused for PSYNC. */
+    rio *loading_rio;                     /* Pointer to the rio object currently used for loading data. */
+    int repl_syncio_timeout;              /* Timeout for synchronous I/O calls */
+    int repl_state;                       /* Replication status if the instance is a replica */
+    int repl_rdb_channel_state;           /* State of the replica's rdb channel during dual-channel-replication */
+    off_t repl_transfer_size;             /* Size of RDB to read from primary during sync. */
+    off_t repl_transfer_read;             /* Amount of RDB read from primary during sync. */
+    off_t repl_transfer_last_fsync_off;   /* Offset when we fsync-ed last time. */
+    connection *repl_transfer_s;          /* Replica -> Primary SYNC connection */
+    connection *repl_rdb_transfer_s;      /* Primary FULL SYNC connection (RDB download) */
+    int repl_transfer_fd;                 /* Replica -> Primary SYNC temp file descriptor */
+    char *repl_transfer_tmpfile;          /* Replica-> Primary SYNC temp file name */
+    _Atomic(time_t) repl_transfer_lastio; /* Unix time of the latest read, for timeout */
+    int repl_serve_stale_data;            /* Serve stale data when link is down? */
+    int repl_replica_ro;                  /* Replica is read only? */
+    int repl_replica_ignore_maxmemory;    /* If true replicas do not evict. */
+    time_t repl_down_since;               /* Unix time at which link with primary went down */
+    int repl_disable_tcp_nodelay;         /* Disable TCP_NODELAY after SYNC? */
+    int repl_mptcp;                       /* Use Multipath TCP for replica on client side */
+    int replica_priority;                 /* Reported in INFO and used by Sentinel. */
+    int replica_announced;                /* If true, replica is announced by Sentinel */
+    int replica_announce_port;            /* Give the primary this listening port. */
+    char *replica_announce_ip;            /* Give the primary this ip address. */
+    int propagation_error_behavior;       /* Configures the behavior of the replica
+                                           * when it receives an error on the replication stream */
+    int repl_ignore_disk_write_error;     /* Configures whether replicas panic when unable to
+                                           * persist writes to AOF. */
 
     /* The following two fields is where we store primary PSYNC replid/offset
      * while the PSYNC is in progress. At the end we'll copy the fields into
@@ -2243,14 +2267,14 @@ struct valkeyServer {
     int list_max_listpack_size;
     int list_compress_depth;
     /* time cache */
-    _Atomic time_t unixtime;     /* Unix time sampled every cron cycle. */
-    time_t timezone;             /* Cached timezone. As set by tzset(). */
-    _Atomic int daylight_active; /* Currently in daylight saving time. */
-    mstime_t mstime;             /* 'unixtime' in milliseconds. */
-    ustime_t ustime;             /* 'unixtime' in microseconds. */
-    mstime_t cmd_time_snapshot;  /* Time snapshot of the root execution nesting. */
-    size_t blocking_op_nesting;  /* Nesting level of blocking operation, used to reset blocked_last_cron. */
-    long long blocked_last_cron; /* Indicate the mstime of the last time we did cron jobs from a blocking operation */
+    _Atomic(time_t) unixtime;     /* Unix time sampled every cron cycle. */
+    time_t timezone;              /* Cached timezone. As set by tzset(). */
+    _Atomic(int) daylight_active; /* Currently in daylight saving time. */
+    mstime_t mstime;              /* 'unixtime' in milliseconds. */
+    ustime_t ustime;              /* 'unixtime' in microseconds. */
+    mstime_t cmd_time_snapshot;   /* Time snapshot of the root execution nesting. */
+    size_t blocking_op_nesting;   /* Nesting level of blocking operation, used to reset blocked_last_cron. */
+    long long blocked_last_cron;  /* Indicate the mstime of the last time we did cron jobs from a blocking operation */
     /* Pubsub */
     kvstore *pubsub_channels;      /* Map channels to list of subscribed clients */
     dict *pubsub_patterns;         /* A dict of pubsub_patterns */
@@ -2264,6 +2288,7 @@ struct valkeyServer {
     int cluster_port;                                      /* Set the cluster port for a node. */
     mstime_t cluster_node_timeout;                         /* Cluster node timeout. */
     mstime_t cluster_ping_interval;                        /* A debug configuration for setting how often cluster nodes send ping messages. */
+    int cluster_message_gossip_perc;                       /* A configuration for setting the percentage of peer nodes to be gossiped in ping/pong messages. */
     char *cluster_configfile;                              /* Cluster auto-generated config file name. */
     struct clusterState *cluster;                          /* State of the cluster */
     int cluster_migration_barrier;                         /* Cluster replicas migration barrier. */
@@ -3022,7 +3047,7 @@ int processIOThreadsWriteDone(void);
 void releaseReplyReferences(client *c);
 void resetLastWrittenBuf(client *c);
 
-int parseExtendedCommandArgumentsOrReply(client *c, int *flags, int *unit, robj **expire, robj **compare_val, int command_type, int max_args);
+int parseExtendedCommandArgumentsOrReply(client *c, int command_type, int start_idx, int max_args, int *flags, int *unit, int *expire_idx, robj **expire, robj **compare_val);
 
 /* logreqres.c - logging of requests and responses */
 void reqresReset(client *c, int free_buf);
@@ -3161,7 +3186,7 @@ void objectSetVal(robj *o, void *val);
 void objectUnembedVal(robj *o);
 void *objectGetVal(const robj *o);
 sds objectGetKey(const robj *o);
-long long objectGetExpire(const robj *o);
+mstime_t objectGetExpire(const robj *o);
 uint8_t objectGetLFUFrequency(robj *o);
 uint32_t objectGetLRUIdleSecs(robj *o);
 uint32_t objectGetIdleness(robj *o);
@@ -3258,6 +3283,7 @@ int rewriteAppendOnlyFileBackground(void);
 int loadAppendOnlyFiles(aofManifest *am);
 void stopAppendOnly(void);
 int startAppendOnly(void);
+int restartAOFWithSyncRdb(void);
 void backgroundRewriteDoneHandler(int exitcode, int bysignal);
 void killAppendOnlyChild(void);
 void restartAOFAfterSYNC(void);
@@ -3566,7 +3592,7 @@ char *hashTypeCurrentFromHashTable(hashTypeIterator *hi, int what, size_t *len);
 sds hashTypeCurrentObjectNewSds(hashTypeIterator *hi, int what);
 robj *hashTypeLookupWriteOrCreate(client *c, robj *key);
 robj *hashTypeGetValueObject(robj *o, sds field);
-int hashTypeSet(robj *o, sds field, sds value, long long expiry, int flags, bool *expired_overwritten);
+int hashTypeSet(robj *o, sds field, sds value, mstime_t expiry, int flags, bool *expired_overwritten);
 robj *hashTypeDup(robj *o);
 bool hashTypeHasVolatileFields(robj *o);
 int hashTypeUpdateAsStringRef(robj *o, sds field, const char *buf, size_t len);
@@ -3613,10 +3639,11 @@ sds keyspaceEventsFlagsToString(int flags);
                                          * to apply the configuration change even if the new config value is the same as    \
                                          * the old. */
 
-#define INTEGER_CONFIG 0        /* No flags means a simple integer configuration */
-#define MEMORY_CONFIG (1 << 0)  /* Indicates if this value can be loaded as a memory value */
-#define PERCENT_CONFIG (1 << 1) /* Indicates if this value can be loaded as a percent (and stored as a negative int) */
-#define OCTAL_CONFIG (1 << 2)   /* This value uses octal representation */
+#define INTEGER_CONFIG 0         /* No flags means a simple integer configuration */
+#define MEMORY_CONFIG (1 << 0)   /* Indicates if this value can be loaded as a memory value */
+#define PERCENT_CONFIG (1 << 1)  /* Indicates if this value can be loaded as a percent (and stored as a negative int) */
+#define OCTAL_CONFIG (1 << 2)    /* This value uses octal representation */
+#define UNSIGNED_CONFIG (1 << 3) /* This value uses unsigned representation */
 
 /* Enum Configs contain an array of configEnum objects that match a string with an integer. */
 typedef struct configEnum {
@@ -3669,6 +3696,14 @@ void addModuleNumericConfig(const char *module_name,
                             int conf_flags,
                             long long lower,
                             long long upper);
+void addModuleUnsignedNumericConfig(const char *module_name,
+                                    const char *name,
+                                    int flags,
+                                    void *privdata,
+                                    unsigned long long default_val,
+                                    int conf_flags,
+                                    unsigned long long lower,
+                                    unsigned long long upper);
 void addModuleConfigApply(list *module_configs, ModuleConfig *module_config);
 int moduleConfigApplyConfig(list *module_configs, const char **err, const char **err_arg_name);
 int getModuleBoolConfig(ModuleConfig *module_config);
@@ -3679,6 +3714,8 @@ int getModuleEnumConfig(ModuleConfig *module_config);
 int setModuleEnumConfig(ModuleConfig *config, int val, const char **err);
 long long getModuleNumericConfig(ModuleConfig *module_config);
 int setModuleNumericConfig(ModuleConfig *config, long long val, const char **err);
+unsigned long long getModuleUnsignedNumericConfig(ModuleConfig *module_config);
+int setModuleUnsignedNumericConfig(ModuleConfig *config, unsigned long long val, const char **err);
 
 /* db.c -- Keyspace access API */
 int removeExpire(serverDb *db, robj *key);
@@ -3691,7 +3728,7 @@ size_t dbReclaimExpiredFields(robj *o, serverDb *db, mstime_t now, unsigned long
 int keyIsExpired(serverDb *db, robj *key);
 long long getExpire(serverDb *db, robj *key);
 robj *setExpire(client *c, serverDb *db, robj *key, long long when);
-int checkAlreadyExpired(long long when);
+int checkAlreadyExpired(mstime_t when);
 robj *lookupKeyRead(serverDb *db, robj *key);
 robj *lookupKeyWrite(serverDb *db, robj *key);
 robj *lookupKeyReadOrReply(client *c, robj *key, robj *reply);
@@ -3740,7 +3777,7 @@ void discardTempDb(serverDb **tempDb);
 int selectDb(client *c, int id);
 void signalModifiedKey(client *c, serverDb *db, robj *key);
 void signalFlushedDb(int dbid, int async);
-void scanGenericCommand(client *c, robj *o, unsigned long long cursor);
+void scanGenericCommand(client *c, robj *o, unsigned long long cursor, int slot, sds cursor_prefix, sds finished_cursor_prefix);
 int parseScanCursorOrReply(client *c, sds buf, unsigned long long *cursor);
 int dbAsyncDelete(serverDb *db, robj *key);
 void emptyDbAsync(serverDb *db);
@@ -3994,6 +4031,7 @@ void roleCommand(client *c);
 void debugCommand(client *c);
 void msetCommand(client *c);
 void msetnxCommand(client *c);
+void msetexCommand(client *c);
 void zaddCommand(client *c);
 void zincrbyCommand(client *c);
 void zrangeCommand(client *c);
@@ -4086,6 +4124,7 @@ void clusterCommand(client *c);
 void clusterKeySlotCommand(client *c);
 void clusterFlushslotCommand(client *c);
 void clusterSlotStatsCommand(client *c);
+void clusterscanCommand(client *c);
 void restoreCommand(client *c);
 void migrateCommand(client *c);
 void askingCommand(client *c);

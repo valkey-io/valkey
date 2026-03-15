@@ -630,24 +630,28 @@ static int zslParseRange(robj *min, robj *max, zrangespec *spec) {
     if (min->encoding == OBJ_ENCODING_INT) {
         spec->min = (long)objectGetVal(min);
     } else {
-        if (((char *)objectGetVal(min))[0] == '(') {
-            spec->min = valkey_strtod((char *)objectGetVal(min) + 1, &eptr);
+        char *s = objectGetVal(min);
+        size_t len = sdslen(s);
+        if (s[0] == '(') {
+            spec->min = valkey_strtod_n(s + 1, len - 1, &eptr);
             if (eptr[0] != '\0' || isnan(spec->min)) return C_ERR;
             spec->minex = 1;
         } else {
-            spec->min = valkey_strtod((char *)objectGetVal(min), &eptr);
+            spec->min = valkey_strtod_n(s, len, &eptr);
             if (eptr[0] != '\0' || isnan(spec->min)) return C_ERR;
         }
     }
     if (max->encoding == OBJ_ENCODING_INT) {
         spec->max = (long)objectGetVal(max);
     } else {
-        if (((char *)objectGetVal(max))[0] == '(') {
-            spec->max = valkey_strtod((char *)objectGetVal(max) + 1, &eptr);
+        char *s = objectGetVal(max);
+        size_t len = sdslen(s);
+        if (s[0] == '(') {
+            spec->max = valkey_strtod_n(s + 1, len - 1, &eptr);
             if (eptr[0] != '\0' || isnan(spec->max)) return C_ERR;
             spec->maxex = 1;
         } else {
-            spec->max = valkey_strtod((char *)objectGetVal(max), &eptr);
+            spec->max = valkey_strtod_n(s, len, &eptr);
             if (eptr[0] != '\0' || isnan(spec->max)) return C_ERR;
         }
     }
@@ -841,11 +845,7 @@ zskiplistNode *zslNthInLexRange(zskiplist *zsl, zlexrangespec *range, long n) {
  *----------------------------------------------------------------------------*/
 
 static double zzlStrtod(unsigned char *vstr, unsigned int vlen) {
-    char buf[128];
-    if (vlen > sizeof(buf) - 1) vlen = sizeof(buf) - 1;
-    memcpy(buf, vstr, vlen);
-    buf[vlen] = '\0';
-    return valkey_strtod(buf, NULL);
+    return valkey_strtod_n((const char *)vstr, vlen, NULL);
 }
 
 double zzlGetScore(unsigned char *sptr) {
@@ -2507,7 +2507,10 @@ static void zdiffAlgorithm2(zsetopsrc *src, long setnum, zset *dstzset, size_t *
 
             /* Exit if result set is empty as any additional removal
              * of elements will have no effect. */
-            if (cardinality == 0) break;
+            if (cardinality == 0) {
+                zuiDiscardDirtyValue(&zval);
+                break;
+            }
         }
         zuiClearIterator(&src[j]);
 
@@ -3827,7 +3830,7 @@ void zscanCommand(client *c) {
 
     if (parseScanCursorOrReply(c, objectGetVal(c->argv[2]), &cursor) == C_ERR) return;
     if ((o = lookupKeyReadOrReply(c, c->argv[1], shared.emptyscan)) == NULL || checkType(c, o, OBJ_ZSET)) return;
-    scanGenericCommand(c, o, cursor);
+    scanGenericCommand(c, o, cursor, -1, NULL, NULL);
 }
 
 void addZpopInitialReply(client *c, int emitkey, int use_nested_array, long rangelen, robj *key) {

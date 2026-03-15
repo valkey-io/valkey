@@ -166,6 +166,7 @@ typedef enum {
     CLUSTERMSG_EXT_TYPE_CLIENT_IPV6,
     CLUSTERMSG_EXT_TYPE_CLIENT_PORT,
     CLUSTERMSG_EXT_TYPE_CLIENT_TLS_PORT,
+    CLUSTERMSG_EXT_TYPE_AVAILABILITY_ZONE,
 } clusterMsgPingtypes;
 
 /* Helper function for making sure extensions are eight byte aligned. */
@@ -178,6 +179,10 @@ typedef struct {
 typedef struct {
     char human_nodename[1]; /* The announced nodename, ends with \0. */
 } clusterMsgPingExtHumanNodename;
+
+typedef struct {
+    char availability_zone[1]; /* The availability zone, ends with \0. */
+} clusterMsgPingExtAvailabilityZone;
 
 typedef struct {
     char name[CLUSTER_NAMELEN]; /* Node name. */
@@ -219,6 +224,7 @@ typedef struct {
         clusterMsgPingExtClientIpV6 announce_client_ipv6;
         clusterMsgPingExtClientPort announce_client_port;
         clusterMsgPingExtClientTlsPort announce_client_tls_port;
+        clusterMsgPingExtAvailabilityZone availability_zone;
     } ext[]; /* Actual extension information, formatted so that the data is 8
               * byte aligned, regardless of its content. */
 } clusterMsgPingExt;
@@ -392,6 +398,7 @@ struct _clusterNode {
     sds announce_client_ipv6;               /* IPv6 for clients only. */
     sds hostname;                           /* The known hostname for this node */
     sds human_nodename;                     /* The known human readable nodename for this node */
+    sds availability_zone;                  /* The known availability zone for this node */
     int tcp_port;                           /* Latest known clients TCP port. */
     int tls_port;                           /* Latest known clients TLS port */
     int cport;                              /* Latest known cluster port of this node. */

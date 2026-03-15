@@ -29,24 +29,19 @@ jobs:
           db_branch: "provenance-guard-db"
 
       - name: Commit Updated PR DB
-        env:
-          SSH_KEY: ${{ secrets.PROVENANCE_DB_PUSH_KEY }}
         run: |
-          set -e
+          set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-          # Setup SSH if key is provided (to bypass branch protection)
-          if [ -n "$SSH_KEY" ]; then
-            mkdir -p ~/.ssh
-            echo "$SSH_KEY" > ~/.ssh/id_rsa
-            chmod 600 ~/.ssh/id_rsa
-            git remote set-url origin git@github.com:${{ github.repository }}.git
+          # Create the DB branch on first run, otherwise reuse it.
+          if git ls-remote --exit-code --heads origin provenance-guard-db >/dev/null 2>&1; then
+            git fetch origin provenance-guard-db:provenance-guard-db
+            git checkout provenance-guard-db
+          else
+            git checkout --orphan provenance-guard-db
+            git rm -rf . >/dev/null 2>&1 || true
           fi
-
-          # Switch to orphan branch
-          git fetch origin provenance-guard-db:provenance-guard-db
-          git checkout provenance-guard-db
 
           # Overwrite with refreshed file (the action places it at .refreshed_pr_db.json.gz)
           if [ -f .refreshed_pr_db.json.gz ]; then

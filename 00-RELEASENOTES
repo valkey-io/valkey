@@ -23,7 +23,6 @@ new features, performance improvements, and bug fixes.
 * Support cross node consistency for `SCAN` commands through configurable DB hash seed by @sarthakaggarwal97 (#2608)
 * Support automatic TLS reload by @yang-z-o (#3020)
 * Support TLS authentication using SAN URI by @yang-z-o (#3078)
-* Add option to use libbacktrace for backtraces in crash reports by @rainsupreme (#3034)
 * Prevent invalid TLS certificates from being loaded by @yang-z-o (#2999)
 * Failing to save the cluster config file will no longer exit the process by @enjoy-binbin (#1032)
 
@@ -68,6 +67,7 @@ new features, performance improvements, and bug fixes.
 * New INFO section for scripting engines by @rjd15372 (#2738)
 * Adding json support for log-format config by @jbergstroem (#1791)
 * Add server side TLS certificate expiry tracking and INFO telemetry by @YiwenZhang12 (#2913)
+* Add option to use libbacktrace for backtraces in crash reports by @rainsupreme (#3034)
 
 ### Build and Tooling
 * Show RPS histogram in valkey-benchmark by @hanxizh9910 (#2471)

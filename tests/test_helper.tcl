@@ -55,6 +55,7 @@ set ::durable 0
 set ::tls 0
 set ::io_threads 0
 set ::tls_module 0
+set ::leaks 0
 set ::stack_logging 0
 set ::verbose 0
 set ::quiet 0
@@ -664,9 +665,10 @@ proc print_help_screen {} {
         "                   with all tests."
         "--moduleapi        Run the module API tests, this option should only be used in"
         "                   runtest-moduleapi which will build the test module."
+        "--leaks            Enable macOS leaks verification."
         "--valgrind         Run the test over valgrind."
         "--durable          suppress test crashes and keep running"
-        "--stack-logging    Enable macOS leaks/malloc stack logging."
+        "--stack-logging    Enable macOS leaks/malloc stack logging (implies --leaks)."
         "--accurate         Run slow randomized tests for more iterations."
         "--quiet            Don't show individual tests."
         "--single <unit>    Just execute the specified unit (see next option). This"
@@ -764,10 +766,13 @@ for {set j 0} {$j < [llength $argv]} {incr j} {
     } elseif {$opt eq {--skiptest}} {
         lappend ::skiptests $arg
         incr j
+    } elseif {$opt eq {--leaks}} {
+        set ::leaks 1
     } elseif {$opt eq {--valgrind}} {
         set ::valgrind 1
     } elseif {$opt eq {--stack-logging}} {
         if {[string match {*Darwin*} [exec uname -a]]} {
+            set ::leaks 1
             set ::stack_logging 1
         }
     } elseif {$opt eq {--quiet}} {

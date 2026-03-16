@@ -32,21 +32,24 @@ adapting existing replication and failover primitives:
 
    The source transfers data in "AOF" (Append Only File) format to the target
    node. This format consists of a stream of commands. Consequently, the target
-   primary and target replica replay these commands to restore the slot's state.
+   primary and target replicas replay these commands to restore the slot's
+   state.
 
 2. **Incremental Updates:** While transferring the initial snapshot, the source
    node serves business requests. The source node records any changes to the
    slot's keys during this time and sends them to the target node as incremental
    updates after completing the snapshot transfer.
-3. **Pause:** After sending the incremental updates, the source node pauses.
-   Consequently, the source node rejects any further business requests. This
-   pause ensures the target node maintains the same state as the source node.
-4. **Failover:** After the source node pauses, the target node becomes the
-   primary node for the slot.
+3. **Pause:** After sending the incremental updates, the source node pauses
+   writes to the migrating slots. Consequently, the source node rejects any
+   further business requests for those slots. This pause ensures the target node
+   maintains the same state as the source node.
+4. **Failover:** After the source node pauses, the target node performs a
+   takeover and becomes the primary node for the slot.
 5. **Clean Up:** After the target node becomes the primary node for the slot,
-   the source node receives this information via cluster gossip. The source node
-   then unpauses, removes the keys from the slot, and completes the slot
-   migration.
+   the source node receives this information via cluster topology updates. The
+   source node then unpauses and completes the slot migration. Failed migrations
+   on the target side are cleaned up by deleting keys that are no longer owned
+   by the node.
 
 ### 3.2 CLUSTER SYNCSLOTS
 
@@ -59,6 +62,8 @@ coordinate the handover state:
        |------------ SYNCSLOTS ESTABLISH -------------->|                                 |
        |                                                |----- SYNCSLOTS ESTABLISH ------>|
        |<-------------------- +OK ----------------------|                                 |
+       |                                                |                                 |
+       |---------------- SYNCSLOTS ACK ---------------->|                                 |
        |                                                |                                 |
        |~~~~~~~~~~~~~~ snapshot as AOF ~~~~~~~~~~~~~~~~>|                                 |
        |                                                |~~~~~~ forward snapshot ~~~~~~~~>|
@@ -82,6 +87,11 @@ coordinate the handover state:
   change & marks migration done)                        |                                 |
        |                                                |                                 |
 ```
+
+Throughout the migration, both the source and target nodes exchange periodic
+`SYNCSLOTS ACK` messages to monitor the health and progress of the operation.
+If a node fails to receive an acknowledgment within the replication timeout,
+the migration is aborted.
 
 See code comments in [cluster_migrateslots.c](../src/cluster_migrateslots.c) for
 detailed state machines.

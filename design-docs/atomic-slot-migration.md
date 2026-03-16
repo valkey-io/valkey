@@ -136,15 +136,16 @@ completes.
 
 #### 3.4.1 Full Sync, Partial Sync, RDB
 
-To ensure replicas resyncing during the import remain aware of the import,
-Valkey serializes the slot import to an RDB aux field (`cluster-slot-imports`).
-The encoding includes the job name, the source node name, and the slot ranges
-being imported. Upon loading an RDB with the cluster-slot-imports aux field,
-replicas begin tracking the migration.
+To ensure that replicas resyncing during an import remain aware of it, Valkey
+serializes each in-progress slot import into an RDB section defined by a new
+opcode. The encoding includes the job name and the slot ranges being imported.
+Whenever the system loads an RDB file containing a slot import section, whether
+from disk or during a primary sync, it adds a new migration to track the import.
+If the Valkey node becomes a primary after loading the RDB, it cancels the slot
+migration.
 
-Whenever the system loads an RDB file with the `cluster-slot-imports` aux field,
-even from disk, it adds a new migration to track the import. If the Valkey node
-is a primary after loading the RDB, it cancels the slot migration.
+Failure to load the opcode results in consistency problems, so the opcode is
+mandatory. If the opcode is not recognized, the RDB load will fail.
 
 Loading this tracking state on primaries ensures that replicas partially syncing
 to a restarted primary still get their `SYNCSLOTS FINISH` message in the

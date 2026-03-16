@@ -38,8 +38,8 @@ typedef struct streamIterator {
     int entry_flags;                     /* Flags of entry we are emitting. */
     int rev;                             /* True if iterating end to start (reverse). */
     int skip_tombstones;                 /* True if not emitting tombstone entries. */
-    uint64_t start_key[2];               /* Start key as 128 bit big endian. */
-    uint64_t end_key[2];                 /* End key as 128 bit big endian. */
+    streamID start_id;                   /* Start id for the range */
+    streamID end_id;                     /* End id for the range */
     raxIterator ri;                      /* Rax iterator. */
     unsigned char *lp;                   /* Current listpack. */
     unsigned char *lp_ele;               /* Current listpack cursor. */

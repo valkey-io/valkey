@@ -6,7 +6,7 @@ should be provided by the operating system.
 * **linenoise** is a readline replacement. It is developed by the same authors of Valkey but is managed as a separated project and updated as needed.
 * **lua** is Lua 5.1 with minor changes for security and additional libraries.
 * **hdr_histogram** Used for per-command latency tracking histograms.
-* **fast_float** is a replacement for strtod to convert strings to floats efficiently.
+* **ffc.h** is a C99 port of the fast_float library, used as a replacement for strtod to convert strings to floats efficiently.
 * **gtest-parallel** is a script for running googletest tests in parallel.
 
 How to upgrade the above dependencies
@@ -108,20 +108,14 @@ We use a customized version based on master branch commit e4448cf6d1cd08fff51981
 2. Copy updated files from newer version onto files in /hdr_histogram.
 3. Apply the changes from 1 above to the updated files.
 
-fast_float
+ffc.h
 ---
-The fast_float library provides fast header-only implementations for the C++ from_chars functions for `float` and `double` types as well as integer types.  These functions convert ASCII strings representing decimal values (e.g., `1.3e10`) into binary types. The functions are much faster than comparable number-parsing functions from existing C++ standard libraries.
-
-Specifically, `fast_float` provides the following function to parse floating-point numbers with a C++17-like syntax (the library itself only requires C++11):
-
-    template <typename T, typename UC = char, typename = FASTFLOAT_ENABLE_IF(is_supported_float_type<T>())>
-    from_chars_result_t<UC> from_chars(UC const *first, UC const *last, T &value, chars_format fmt = chars_format::general);
+ffc.h is a pure C99 port of the fast_float library, providing fast string-to-double
+conversion without requiring a C++ compiler.
 
 To upgrade the library,
-1. Check out https://github.com/fastfloat/fast_float/tree/main
-2. cd fast_float
-3. Invoke "python3 ./script/amalgamate.py --output fast_float.h"
-4. Copy fast_float.h file to "deps/fast_float/".
+1. Download the latest ffc.h from https://github.com/kolemannix/ffc.h/releases
+2. Copy ffc.h to "deps/fast_float/".
 
 gtest-parallel
 ---

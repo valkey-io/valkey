@@ -37,7 +37,7 @@ jobs:
         # build with TLS just for compilation coverage
         run: |
           sudo apt-get install pkg-config libgtest-dev libgmock-dev
-          make -j4 all-with-unit-tests SERVER_CFLAGS='-Werror' BUILD_TLS=yes USE_FAST_FLOAT=yes USE_LIBBACKTRACE=yes
+          make -j4 all-with-unit-tests SERVER_CFLAGS='-Werror' BUILD_TLS=yes USE_LIBBACKTRACE=yes
       - name: test
         run: |
           sudo apt-get install tcl8.6 tclx
@@ -79,7 +79,7 @@ jobs:
       - name: make
         # Fail build if there are warnings
         # build with TLS just for compilation coverage
-        run: make -j4 all-with-unit-tests SERVER_CFLAGS='-Werror' BUILD_TLS=yes USE_FAST_FLOAT=yes USE_LIBBACKTRACE=yes
+        run: make -j4 all-with-unit-tests SERVER_CFLAGS='-Werror' BUILD_TLS=yes USE_LIBBACKTRACE=yes
 
       - name: Install old server (${{ matrix.server.version }}) for compatibility testing
         run: |
@@ -236,7 +236,9 @@ jobs:
           export PATH="/opt/homebrew/opt/llvm/bin:$PATH"
           export CC=/opt/homebrew/opt/llvm/bin/clang
           export CXX=/opt/homebrew/opt/llvm/bin/clang++
-          make -j3 all-with-unit-tests SERVER_CFLAGS='-Werror' USE_FAST_FLOAT=yes USE_LIBBACKTRACE=yes LIBBACKTRACE_PREFIX=/usr/local
+          export AR=/opt/homebrew/opt/llvm/bin/llvm-ar
+          export RANLIB=/opt/homebrew/opt/llvm/bin/llvm-ranlib
+          make -j3 all-with-unit-tests SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes LIBBACKTRACE_PREFIX=/usr/local
 
   build-32bit:
     runs-on: ubuntu-latest
@@ -276,7 +278,7 @@ jobs:
         # suffixed version of g++. g++-multilib generally includes libstdc++.
         # *cross version as well, but it is also added explicitly just in case.
         run: |
-          make -j4 SERVER_CFLAGS='-Werror' 32bit USE_FAST_FLOAT=yes USE_LIBBACKTRACE=yes LIBBACKTRACE_PREFIX=/usr/local/libbacktrace32 \
+          make -j4 SERVER_CFLAGS='-Werror' 32bit USE_LIBBACKTRACE=yes LIBBACKTRACE_PREFIX=/usr/local/libbacktrace32 \
             GTEST_CFLAGS="-I/usr/src/googletest/googletest/include -I/usr/src/googletest/googlemock/include" \
             GTEST_LIBS="/usr/lib32/libgtest.a /usr/lib32/libgmock.a"
       - name: unit tests
@@ -296,7 +298,7 @@ jobs:
       - name: Checkout Valkey
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - name: make
-        run: make -j4 SERVER_CFLAGS='-Werror' MALLOC=libc USE_FAST_FLOAT=yes USE_LIBBACKTRACE=yes
+        run: make -j4 SERVER_CFLAGS='-Werror' MALLOC=libc USE_LIBBACKTRACE=yes
 
   build-almalinux8-jemalloc:
     runs-on: ubuntu-latest
@@ -315,7 +317,7 @@ jobs:
       - name: Checkout Valkey
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - name: make
-        run: make -j4 SERVER_CFLAGS='-Werror' USE_FAST_FLOAT=yes USE_LIBBACKTRACE=yes
+        run: make -j4 SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes
 
   format-yaml:
     runs-on: ubuntu-latest

@@ -43,6 +43,7 @@ add_library(valkeylib-gtest STATIC ${VALKEY_SERVER_SRCS})
 target_compile_options(valkeylib-gtest PRIVATE -Og -g -fno-lto)
 target_compile_definitions(valkeylib-gtest PRIVATE "${COMPILE_DEFINITIONS}")
 target_include_directories(valkeylib-gtest PRIVATE ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/deps)
+target_link_libraries(valkeylib-gtest ffc)
 
 # Generate wrapper files from wrappers.h
 set(GENERATED_WRAPPERS_DIR ${CMAKE_BINARY_DIR}/gtest_generated)

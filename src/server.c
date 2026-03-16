@@ -429,6 +429,25 @@ uint64_t dictSdsHash(const void *key) {
     return dictGenHashFunction((unsigned char *)key, sdslen((char *)key));
 }
 
+/* Hash function using a configurable seed (set via hash-seed config).
+ * Used for data hashtables (keys, sets, zsets, hashes) where deterministic
+ * iteration order across cluster nodes is needed. */
+static uint8_t configurable_hash_seed[16];
+
+extern uint64_t siphash(const uint8_t *in, const size_t inlen, const uint8_t *k);
+
+void setConfigurableHashSeed(uint8_t *seed) {
+    memcpy(configurable_hash_seed, seed, sizeof(configurable_hash_seed));
+}
+
+uint64_t genHashFunctionConfigurableSeed(const char *buf, size_t len) {
+    return siphash((const uint8_t *)buf, len, configurable_hash_seed);
+}
+
+uint64_t sdsHashConfigurableSeed(const void *key) {
+    return genHashFunctionConfigurableSeed(key, sdslen(key));
+}
+
 uint64_t dictSdsCaseHash(const void *key) {
     return dictGenCaseHashFunction((unsigned char *)key, sdslen((char *)key));
 }
@@ -565,7 +584,7 @@ hashtableType objectHashtableType = {
 
 /* Set hashtable type. Items are SDS strings */
 hashtableType setHashtableType = {
-    .hashFunction = dictSdsHash,
+    .hashFunction = sdsHashConfigurableSeed,
     .keyCompare = hashtableSdsKeyCompare,
     .entryDestructor = dictSdsDestructor};
 
@@ -576,7 +595,7 @@ const void *zsetHashtableGetKey(const void *element) {
 
 /* Sorted sets hash (note: a skiplist is used in addition to the hash table) */
 hashtableType zsetHashtableType = {
-    .hashFunction = dictSdsHash,
+    .hashFunction = sdsHashConfigurableSeed,
     .entryGetKey = zsetHashtableGetKey,
     .keyCompare = hashtableSdsKeyCompare,
 };
@@ -612,7 +631,7 @@ void hashtableObjectDestructor(void *val) {
 hashtableType kvstoreKeysHashtableType = {
     .entryPrefetchValue = hashtableObjectPrefetchValue,
     .entryGetKey = hashtableObjectGetKey,
-    .hashFunction = hashtableSdsHash,
+    .hashFunction = sdsHashConfigurableSeed,
     .keyCompare = hashtableSdsKeyCompare,
     .entryDestructor = hashtableObjectDestructor,
     .resizeAllowed = hashtableResizeAllowed,
@@ -626,7 +645,7 @@ hashtableType kvstoreKeysHashtableType = {
 hashtableType kvstoreExpiresHashtableType = {
     .entryPrefetchValue = hashtableObjectPrefetchValue,
     .entryGetKey = hashtableObjectGetKey,
-    .hashFunction = hashtableSdsHash,
+    .hashFunction = sdsHashConfigurableSeed,
     .keyCompare = hashtableSdsKeyCompare,
     .entryDestructor = NULL, /* shared with keyspace table */
     .resizeAllowed = hashtableResizeAllowed,
@@ -670,7 +689,7 @@ size_t hashHashtableTypeMetadataSize(void) {
 extern bool hashHashtableTypeValidate(hashtable *ht, void *entry);
 
 hashtableType hashHashtableType = {
-    .hashFunction = dictSdsHash,
+    .hashFunction = sdsHashConfigurableSeed,
     .entryGetKey = hashHashtableTypeGetKey,
     .keyCompare = hashtableSdsKeyCompare,
     .entryDestructor = hashHashtableTypeDestructor,
@@ -678,7 +697,7 @@ hashtableType hashHashtableType = {
 };
 
 hashtableType hashWithVolatileItemsHashtableType = {
-    .hashFunction = dictSdsHash,
+    .hashFunction = sdsHashConfigurableSeed,
     .entryGetKey = hashHashtableTypeGetKey,
     .keyCompare = hashtableSdsKeyCompare,
     .entryDestructor = hashHashtableTypeDestructor,
@@ -7551,10 +7570,15 @@ __attribute__((weak)) int main(int argc, char **argv) {
         sdsfree(options);
     }
     if (server.sentinel_mode) sentinelCheckConfigFile();
-    if (server.hash_seed != NULL) {
-        memset(hashseed, 0, sizeof(hashseed));
-        getHashSeedFromString(hashseed, sizeof(hashseed), server.hash_seed);
-        hashtableSetHashFunctionSeed(hashseed);
+
+    /* Set the configured hash seed used by data hashtables (keys, sets, zsets,
+     * hashes) or use the random seed if not configured. */
+    if (server.hash_seed) {
+        uint8_t seed[16] = {0};
+        getHashSeedFromString(seed, sizeof(seed), server.hash_seed);
+        setConfigurableHashSeed(seed);
+    } else {
+        setConfigurableHashSeed(hashtableGetHashFunctionSeed());
     }
 
     /* Do system checks */

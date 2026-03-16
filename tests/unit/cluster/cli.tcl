@@ -290,10 +290,10 @@ test {Migrate the last slot away from a node using valkey-cli} {
         # waiting for cluster_state to be okay is an independent check that all the
         # nodes actually believe each other are healthy, prevent cluster down error.
         wait_for_condition 1000 50 {
-            [catch {exec src/valkey-cli --cluster check 127.0.0.1:[srv 0 port]}] == 0 &&
-            [catch {exec src/valkey-cli --cluster check 127.0.0.1:[srv -1 port]}] == 0 &&
-            [catch {exec src/valkey-cli --cluster check 127.0.0.1:[srv -2 port]}] == 0 &&
-            [catch {exec src/valkey-cli --cluster check 127.0.0.1:[srv -3 port]}] == 0 &&
+            [catch {exec $::VALKEY_CLI_BIN --cluster check 127.0.0.1:[srv 0 port]}] == 0 &&
+            [catch {exec $::VALKEY_CLI_BIN --cluster check 127.0.0.1:[srv -1 port]}] == 0 &&
+            [catch {exec $::VALKEY_CLI_BIN --cluster check 127.0.0.1:[srv -2 port]}] == 0 &&
+            [catch {exec $::VALKEY_CLI_BIN --cluster check 127.0.0.1:[srv -3 port]}] == 0 &&
             [CI 0 cluster_state] eq {ok} &&
             [CI 1 cluster_state] eq {ok} &&
             [CI 2 cluster_state] eq {ok} &&
@@ -502,7 +502,7 @@ start_multiple_servers 3 [list overrides $base_conf] {
         # 4 batches to migrate 100 keys
         for {set i 0} {$i < 4} {incr i} {
             if {$use_atomic_slot_migration} {
-                exec src/valkey-cli --cluster-yes --cluster reshard 127.0.0.1:[srv 0 port] \
+                exec $::VALKEY_CLI_BIN --cluster-yes --cluster reshard 127.0.0.1:[srv 0 port] \
                                     --cluster-to [$node3 cluster myid] \
                                     --cluster-from [$node1 cluster myid] \
                                     --cluster-pipeline 25 \

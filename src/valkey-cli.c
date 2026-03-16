@@ -3566,7 +3566,7 @@ static int evalMode(int argc, char **argv) {
         for (j = 0; j < argc + 3 - got_comma; j++) {
             sdsfree(argv2[j]);
         }
-        free(argv2);
+        zfree(argv2);
 
         if (eval_ldb) {
             if (!config.eval_ldb) {

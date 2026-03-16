@@ -476,8 +476,8 @@ start_cluster 1 1 {tags {external:skip cluster} overrides {cluster-slot-stats-en
         set slot [R 0 cluster keyslot $channel]
         set primary [Rn 0]
         set replica [Rn 1]
-        set replica_subcriber [valkey_deferring_client -1]
-        $replica_subcriber SSUBSCRIBE $channel
+        set replica_subscriber [valkey_deferring_client -1]
+        $replica_subscriber SSUBSCRIBE $channel
         # *2\r\n$10\r\nssubscribe\r\n$7\r\nchannel\r\n --> 34 bytes.
         $primary SPUBLISH $channel hello
         # *3\r\n$8\r\nspublish\r\n$7\r\nchannel\r\n$5\r\nhello\r\n --> 42 bytes.
@@ -997,4 +997,56 @@ start_cluster 1 1 {tags {external:skip cluster} overrides {cluster-slot-stats-en
     }
     R 0 CONFIG RESETSTAT
     R 1 CONFIG RESETSTAT
+}
+
+start_cluster 1 0 {tags {external:skip cluster} overrides {cluster-slot-stats-enabled yes}} {
+    set key "testslotbytes"
+    set key_slot [R 0 cluster keyslot $key]
+    set metrics_to_assert [list network-bytes-out]
+
+    test "CLUSTER SLOT-STATS network-bytes-out with copy avoidance and commandlog disabled" {
+        set copy_avoid [lindex [R 0 config get min-string-size-avoid-copy-reply] 1]
+        R 0 config set min-string-size-avoid-copy-reply 1
+        
+        # Disable commandlog tracking
+        R 0 config set commandlog-reply-larger-than -1
+        R 0 config resetstat
+        
+        set value [string repeat A 2048]
+        R 0 set $key $value
+        
+        # Reset stats after SET to only measure GET reply
+        R 0 config resetstat
+        
+        # Get should use copy avoidance path
+        R 0 get $key
+        
+        # Verify cluster slot stats tracked the bytes correctly
+        # Even though commandlog tracking is disabled, cluster slot stats should work
+        # via IO thread accounting in releaseBufReferences()
+        set slot_stats [R 0 CLUSTER SLOT-STATS SLOTSRANGE 0 16383]
+        set slot_stats [convert_array_into_dict $slot_stats]
+        
+        set network_bytes_out [dict get $slot_stats $key_slot network-bytes-out]
+        
+        # For 2048 bytes: $2048\r\n<data>\r\n = 2057 bytes
+        assert_equal $network_bytes_out 2057
+        
+        # Re-enable commandlog
+        R 0 config set commandlog-reply-larger-than 1024
+        R 0 config resetstat
+        
+        # Get should still track correctly
+        R 0 get $key
+        
+        set slot_stats [R 0 CLUSTER SLOT-STATS SLOTSRANGE 0 16383]
+        set slot_stats [convert_array_into_dict $slot_stats]
+        set network_bytes_out [dict get $slot_stats $key_slot network-bytes-out]
+        
+        assert_equal $network_bytes_out 2057
+        
+        # Cleanup
+        R 0 del $key
+        R 0 config set min-string-size-avoid-copy-reply $copy_avoid
+    }
 }

@@ -14,13 +14,13 @@ typedef struct streamID {
 } streamID;
 
 typedef struct stream {
+    rax *cgroups;                  /* Consumer groups dictionary: name -> streamCG */
     rax *rax;                      /* The radix tree holding the stream. */
     uint64_t length;               /* Current number of elements inside this stream. */
     streamID last_id;              /* Zero if there are yet no items. */
     streamID first_id;             /* The first non-tombstone entry, zero if empty. */
     streamID max_deleted_entry_id; /* The maximal ID that was deleted. */
     uint64_t entries_added;        /* All time count of elements added. */
-    rax *cgroups;                  /* Consumer groups dictionary: name -> streamCG */
 } stream;
 
 /* We define an iterator to iterate stream items in an abstract way, without
@@ -38,8 +38,8 @@ typedef struct streamIterator {
     int entry_flags;                     /* Flags of entry we are emitting. */
     int rev;                             /* True if iterating end to start (reverse). */
     int skip_tombstones;                 /* True if not emitting tombstone entries. */
-    uint64_t start_key[2];               /* Start key as 128 bit big endian. */
-    uint64_t end_key[2];                 /* End key as 128 bit big endian. */
+    streamID start_id;                   /* Start id for the range */
+    streamID end_id;                     /* End id for the range */
     raxIterator ri;                      /* Rax iterator. */
     unsigned char *lp;                   /* Current listpack. */
     unsigned char *lp_ele;               /* Current listpack cursor. */

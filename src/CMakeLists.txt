@@ -10,6 +10,7 @@ message(STATUS "CFLAGS: ${CMAKE_C_FLAGS}")
 get_valkey_server_linker_option(VALKEY_SERVER_LDFLAGS)
 list(APPEND SERVER_LIBS "fpconv")
 list(APPEND SERVER_LIBS "hdr_histogram")
+list(APPEND SERVER_LIBS "ffc")
 valkey_build_and_install_bin(valkey-server "${VALKEY_SERVER_SRCS}" "${VALKEY_SERVER_LDFLAGS}" "${SERVER_LIBS}"
                              "redis-server")
 add_dependencies(valkey-server generate_commands_def)
@@ -21,9 +22,12 @@ if (BUILD_LUA)
     add_subdirectory(modules/lua)
     add_dependencies(valkey-server valkeylua)
     target_compile_definitions(valkey-server PRIVATE LUA_ENABLED)
-    target_compile_definitions(valkey-server PRIVATE LUA_LIB=libvalkeylua.so)
-    target_link_options(valkey-server PRIVATE -Wl,--disable-new-dtags)
-
+    if (UNIX AND NOT APPLE)
+        target_compile_definitions(valkey-server PRIVATE LUA_LIB=libvalkeylua.so)
+        target_link_options(valkey-server PRIVATE -Wl,--disable-new-dtags)
+    else ()
+        target_compile_definitions(valkey-server PRIVATE LUA_LIB=libvalkeylua.dylib)
+    endif ()
     set(VALKEY_INSTALL_RPATH "")
     set_target_properties(valkey-server PROPERTIES
         INSTALL_RPATH "${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR};${CMAKE_LIBRARY_OUTPUT_DIRECTORY}"
@@ -57,6 +61,7 @@ unset(BUILD_SANITIZER CACHE)
 # Target: valkey-cli
 list(APPEND CLI_LIBS "fpconv")
 list(APPEND CLI_LIBS "linenoise")
+list(APPEND CLI_LIBS "ffc")
 valkey_build_and_install_bin(valkey-cli "${VALKEY_CLI_SRCS}" "${VALKEY_SERVER_LDFLAGS}" "${CLI_LIBS}" "redis-cli")
 add_dependencies(valkey-cli generate_commands_def)
 add_dependencies(valkey-cli generate_fmtargs_h)
@@ -64,6 +69,7 @@ add_dependencies(valkey-cli generate_fmtargs_h)
 # Target: valkey-benchmark
 list(APPEND BENCH_LIBS "fpconv")
 list(APPEND BENCH_LIBS "hdr_histogram")
+list(APPEND BENCH_LIBS "ffc")
 valkey_build_and_install_bin(valkey-benchmark "${VALKEY_BENCHMARK_SRCS}" "${VALKEY_SERVER_LDFLAGS}" "${BENCH_LIBS}"
                              "redis-benchmark")
 add_dependencies(valkey-benchmark generate_commands_def)
@@ -106,7 +112,7 @@ if (BUILD_EXAMPLE_MODULES)
     add_subdirectory(modules)
 endif ()
 
-if (BUILD_UNIT_TESTS)
+if (BUILD_UNIT_GTESTS)
     add_subdirectory(unit)
 endif ()
 

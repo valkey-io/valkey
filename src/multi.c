@@ -568,7 +568,7 @@ size_t multiStateMemOverhead(client *c) {
     size_t mem = c->mstate->argv_len_sums;
     /* Add watched keys overhead, Note: this doesn't take into account the watched keys themselves, because they aren't
      * managed per-client. */
-    mem += listLength(&c->mstate->watched_keys) * (sizeof(listNode) + sizeof(c->mstate->watched_keys));
+    mem += listLength(&c->mstate->watched_keys) * (sizeof(listNode) + sizeof(watchedKey));
     /* Add per-db watched keys hashtable overhead. */
     if (c->mstate->watched_keys_by_db) {
         mem += sizeof(hashtable *) * server.dbnum;

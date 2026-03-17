@@ -5987,25 +5987,6 @@ size_t getClientMemoryUsage(client *c, size_t *output_buffer_mem_usage) {
     return mem;
 }
 
-/* Get the class of a client, used in order to enforce limits to different
- * classes of clients.
- *
- * The function will return one of the following:
- * CLIENT_TYPE_NORMAL -> Normal client, including MONITOR
- * CLIENT_TYPE_REPLICA  -> replica
- * CLIENT_TYPE_PUBSUB -> Client subscribed to Pub/Sub channels
- * CLIENT_TYPE_PRIMARY -> The client representing our replication primary.
- */
-int getClientType(client *c) {
-    if (c->flag.primary) return CLIENT_TYPE_PRIMARY;
-    /* Even though MONITOR clients are marked as replicas, we
-     * want the expose them as normal clients. */
-    if (c->flag.replica && !c->flag.monitor) return CLIENT_TYPE_REPLICA;
-    if (c->flag.pubsub) return CLIENT_TYPE_PUBSUB;
-    if (c->slot_migration_job) return isImportSlotMigrationJob(c->slot_migration_job) ? CLIENT_TYPE_SLOT_IMPORT : CLIENT_TYPE_SLOT_EXPORT;
-    return CLIENT_TYPE_NORMAL;
-}
-
 int getClientTypeByName(char *name) {
     if (!strcasecmp(name, "normal"))
         return CLIENT_TYPE_NORMAL;

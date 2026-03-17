@@ -677,6 +677,12 @@ typedef enum {
     CLUSTER_ENDPOINT_TYPE_UNKNOWN_ENDPOINT /* Show NULL or empty */
 } cluster_endpoint_type;
 
+/* Cluster persist config mode. */
+typedef enum {
+    CLUSTER_PERSIST_CONFIG_SYNC = 0,   /* Exit the process if saving fails. */
+    CLUSTER_PERSIST_CONFIG_BEST_EFFORT /* Log if saving fails. */
+} cluster_persist_config_mode;
+
 /* RDB active child save type. */
 #define RDB_CHILD_TYPE_NONE 0
 #define RDB_CHILD_TYPE_DISK 1   /* RDB is written to disk. */
@@ -2290,6 +2296,7 @@ struct valkeyServer {
     mstime_t cluster_ping_interval;                        /* A debug configuration for setting how often cluster nodes send ping messages. */
     int cluster_message_gossip_perc;                       /* A configuration for setting the percentage of peer nodes to be gossiped in ping/pong messages. */
     char *cluster_configfile;                              /* Cluster auto-generated config file name. */
+    int cluster_persist_config;                            /* Cluster config persist mode. */
     struct clusterState *cluster;                          /* State of the cluster */
     int cluster_migration_barrier;                         /* Cluster replicas migration barrier. */
     int cluster_allow_replica_migration;                   /* Automatic replica migrations to orphaned primaries and from empty primaries */

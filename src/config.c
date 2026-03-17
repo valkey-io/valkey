@@ -160,6 +160,11 @@ configEnum cluster_preferred_endpoint_type_enum[] = {
     {"unknown-endpoint", CLUSTER_ENDPOINT_TYPE_UNKNOWN_ENDPOINT},
     {NULL, 0}};
 
+configEnum cluster_persist_config_enum[] = {
+    {"sync", CLUSTER_PERSIST_CONFIG_SYNC},
+    {"best-effort", CLUSTER_PERSIST_CONFIG_BEST_EFFORT},
+    {NULL, 0}};
+
 configEnum propagation_error_behavior_enum[] = {
     {"ignore", PROPAGATION_ERR_BEHAVIOR_IGNORE},
     {"panic", PROPAGATION_ERR_BEHAVIOR_PANIC},
@@ -3345,6 +3350,7 @@ standardConfig static_configs[] = {
     createEnumConfig("enable-debug-command", NULL, IMMUTABLE_CONFIG, protected_action_enum, server.enable_debug_cmd, PROTECTED_ACTION_ALLOWED_NO, NULL, NULL),
     createEnumConfig("enable-module-command", NULL, IMMUTABLE_CONFIG, protected_action_enum, server.enable_module_cmd, PROTECTED_ACTION_ALLOWED_NO, NULL, NULL),
     createEnumConfig("cluster-preferred-endpoint-type", NULL, MODIFIABLE_CONFIG, cluster_preferred_endpoint_type_enum, server.cluster_preferred_endpoint_type, CLUSTER_ENDPOINT_TYPE_IP, NULL, invalidateClusterSlotsResp),
+    createEnumConfig("cluster-persist-config", NULL, MODIFIABLE_CONFIG, cluster_persist_config_enum, server.cluster_persist_config, CLUSTER_PERSIST_CONFIG_SYNC, NULL, NULL),
     createEnumConfig("propagation-error-behavior", NULL, MODIFIABLE_CONFIG, propagation_error_behavior_enum, server.propagation_error_behavior, PROPAGATION_ERR_BEHAVIOR_IGNORE, NULL, NULL),
     createEnumConfig("shutdown-on-sigint", NULL, MODIFIABLE_CONFIG | MULTI_ARG_CONFIG, shutdown_on_sig_enum, server.shutdown_on_sigint, 0, isValidShutdownOnSigFlags, NULL),
     createEnumConfig("shutdown-on-sigterm", NULL, MODIFIABLE_CONFIG | MULTI_ARG_CONFIG, shutdown_on_sig_enum, server.shutdown_on_sigterm, 0, isValidShutdownOnSigFlags, NULL),

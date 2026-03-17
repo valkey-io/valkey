@@ -15,11 +15,24 @@
 - Match the style of the surrounding code instead of introducing new patterns.
 - Avoid unrelated refactors in the same change.
 
-## Build and test
+## Build
 - Default build: `make`
 - Clean rebuild when build settings or bundled deps change: `make distclean && make`
-- Main test suite: `make test`
-- Example targeted test file run: `./runtest --single <path/to/test.tcl>`
+
+## Unit tests
+- Unit tests live under `src/unit/` and use GoogleTest (gtest/gmock).
+- Build and run all unit tests: `make -C src test-unit`
+- Unit tests cover data-structure and low-level logic changes.
+- A single test filter can be run with: `make -C src test-unit && ./src/unit/valkey-unit-gtests --gtest_filter='<TestSuite>.<TestName>'`
+
+## Integration tests
+- Integration tests live under `tests/` and are written in Tcl.
+- Run the full integration suite: `make test` (from the repo root).
+- Run a single test file: `./runtest --single <path/to/test.tcl>`
+- Additional specialized suites:
+  - Cluster tests: `./runtest-cluster`
+  - Sentinel tests: `./runtest-sentinel`
+  - Module API tests: `./runtest-moduleapi`
 - For targeted validation, run the smallest relevant test scope first before broader suites.
 
 ## Code style
@@ -31,8 +44,8 @@
 
 ## Tests
 - Code changes should include relevant tests when the repo already has a matching test location.
-- Data-structure and low-level logic changes usually belong in `src/unit`.
-- End-to-end behavior changes usually belong in `tests/`.
+- Data-structure and low-level logic changes usually belong in `src/unit/` (C++ gtest).
+- End-to-end behavior changes usually belong in `tests/` (Tcl integration tests).
 - If behavior or commands change, check whether related documentation also needs updating.
 
 ## Files to avoid touching unless required

@@ -56,7 +56,7 @@ void freeClientMultiWatchedKeysByDB(client *c) {
 
     for (int i = 0; i < server.dbnum; i++) {
         if (c->mstate->watched_keys_by_db[i]) {
-            dictRelease(c->mstate->watched_keys_by_db[i]);
+            hashtableRelease(c->mstate->watched_keys_by_db[i]);
             c->mstate->watched_keys_by_db[i] = NULL;
         }
     }
@@ -319,6 +319,22 @@ typedef struct watchedKey {
     unsigned expired : 1; /* Flag that we're watching an already expired key. */
 } watchedKey;
 
+/* Callback used for watchedKeysHashtableType where the entries are watchedKey *
+ * and it already contains the key. */
+static const void *watchedKeyGetKey(const void *entry) {
+    const watchedKey *wk = entry;
+    return wk->key;
+}
+
+/* Hashtable type for client's per-db watched keys lookup.
+ * Entries are watchedKey* stored directly, no destructor needed since the
+ * actual memory is managed by the multiState->watched_keys list. */
+hashtableType watchedKeysHashtableType = {
+    .entryGetKey = watchedKeyGetKey,
+    .hashFunction = dictEncObjHash,
+    .keyCompare = hashtableEncObjKeyCompare,
+};
+
 /* Attach a watchedKey to the list of clients watching that key. */
 static inline void watchedKeyLinkToClients(list *clients, watchedKey *wk) {
     wk->node.value = clients;             /* Point the value back to the list */
@@ -343,18 +359,18 @@ void watchForKey(client *c, robj *key) {
 
     if (listLength(&c->mstate->watched_keys) == 0) server.watching_clients++;
 
-    /* Lazily allocate the per-db dict array. */
+    /* Lazily allocate the per-db hashtable array. */
     if (c->mstate->watched_keys_by_db == NULL) {
-        c->mstate->watched_keys_by_db = zcalloc(sizeof(dict *) * server.dbnum);
+        c->mstate->watched_keys_by_db = zcalloc(sizeof(hashtable *) * server.dbnum);
     }
 
-    /* Lazily allocate the dict for this specific db. */
+    /* Lazily allocate the hashtable for this specific db. */
     if (c->mstate->watched_keys_by_db[c->db->id] == NULL) {
-        c->mstate->watched_keys_by_db[c->db->id] = dictCreate(&watchedKeysDictType);
+        c->mstate->watched_keys_by_db[c->db->id] = hashtableCreate(&watchedKeysHashtableType);
     }
 
     /* Check if we are already watching for this key */
-    if (dictFind(c->mstate->watched_keys_by_db[c->db->id], key) != NULL) {
+    if (hashtableFind(c->mstate->watched_keys_by_db[c->db->id], key, NULL)) {
         return; /* Key already watched */
     }
 
@@ -376,8 +392,8 @@ void watchForKey(client *c, robj *key) {
     listAddNodeTail(&c->mstate->watched_keys, wk);
     watchedKeyLinkToClients(clients, wk);
 
-    /* Add to the per-db dict for O(1) lookup. Key is borrowed from wk->key. */
-    dictAdd(c->mstate->watched_keys_by_db[c->db->id], wk->key, wk);
+    /* Add the new key to the per-db hashtable for O(1) lookup. */
+    hashtableAdd(c->mstate->watched_keys_by_db[c->db->id], wk);
 }
 
 /* Unwatch all the keys watched by this client. To clean the EXEC dirty
@@ -405,11 +421,11 @@ void unwatchAllKeys(client *c) {
         zfree(wk);
     }
 
-    /* Empty the per-db dicts as we have unwatched all keys. */
+    /* Empty the per-db hashtables as we have unwatched all keys. */
     if (c->mstate->watched_keys_by_db) {
         for (int i = 0; i < server.dbnum; i++) {
             if (c->mstate->watched_keys_by_db[i]) {
-                dictEmpty(c->mstate->watched_keys_by_db[i], NULL);
+                hashtableEmpty(c->mstate->watched_keys_by_db[i], NULL);
             }
         }
     }
@@ -553,12 +569,12 @@ size_t multiStateMemOverhead(client *c) {
     /* Add watched keys overhead, Note: this doesn't take into account the watched keys themselves, because they aren't
      * managed per-client. */
     mem += listLength(&c->mstate->watched_keys) * (sizeof(listNode) + sizeof(c->mstate->watched_keys));
-    /* Add per-db watched keys dict overhead. */
+    /* Add per-db watched keys hashtable overhead. */
     if (c->mstate->watched_keys_by_db) {
-        mem += sizeof(dict *) * server.dbnum;
+        mem += sizeof(hashtable *) * server.dbnum;
         for (int i = 0; i < server.dbnum; i++) {
             if (c->mstate->watched_keys_by_db[i]) {
-                mem += dictMemUsage(c->mstate->watched_keys_by_db[i]);
+                mem += hashtableMemUsage(c->mstate->watched_keys_by_db[i]);
             }
         }
     }

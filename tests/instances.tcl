@@ -19,7 +19,7 @@ set ::valgrind 0
 set ::tls 0
 set ::tls_module 0
 set ::io_threads 0
-set ::leaks 0
+set ::leaks 1
 set ::pause_on_error 0
 set ::dont_clean 0
 set ::simulate_error 0
@@ -286,8 +286,8 @@ proc parse_options {} {
             set ::dont_clean 1
         } elseif {$opt eq "--fail"} {
             set ::simulate_error 1
-        } elseif {$opt eq {--leaks}} {
-            set ::leaks 1
+        } elseif {$opt eq {--no-leaks}} {
+            set ::leaks 0
         } elseif {$opt eq {--valgrind}} {
             set ::valgrind 1
         } elseif {$opt eq {--host}} {
@@ -324,7 +324,7 @@ proc parse_options {} {
             puts "--dont-clean            Keep log files on exit."
             puts "--pause-on-error        Pause for manual inspection on error."
             puts "--fail                  Simulate a test failure."
-            puts "--leaks                 Enable macOS leaks verification."
+            puts "--no-leaks              Disable macOS leaks verification."
             puts "--valgrind              Run with valgrind."
             puts "--tls                   Run tests in TLS mode."
             puts "--tls-module            Run tests in TLS mode with Valkey module."

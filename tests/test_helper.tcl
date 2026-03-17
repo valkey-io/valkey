@@ -665,7 +665,7 @@ proc print_help_screen {} {
         "                   with all tests."
         "--moduleapi        Run the module API tests, this option should only be used in"
         "                   runtest-moduleapi which will build the test module."
-        "--no-leaks         Disable macOS leaks verification."
+        "--skip-leaks       Disable macOS leaks verification."
         "--valgrind         Run the test over valgrind."
         "--durable          suppress test crashes and keep running"
         "--stack-logging    Enable macOS leaks/malloc stack logging."
@@ -766,7 +766,7 @@ for {set j 0} {$j < [llength $argv]} {incr j} {
     } elseif {$opt eq {--skiptest}} {
         lappend ::skiptests $arg
         incr j
-    } elseif {$opt eq {--no-leaks}} {
+    } elseif {$opt eq {--skip-leaks}} {
         set ::leaks 0
     } elseif {$opt eq {--valgrind}} {
         set ::valgrind 1

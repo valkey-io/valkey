@@ -78,8 +78,8 @@ static robj *dbFindWithDictIndex(serverDb *db, sds key, int dict_index);
  * expired on replicas even if the primary is lagging expiring our key via DELs
  * in the replication link. */
 robj *lookupKey(serverDb *db, robj *key, int flags) {
-    int dict_index = getKVStoreIndexForKey(objectGetVal(key));
-    robj *val = dbFindWithDictIndex(db, objectGetVal(key), dict_index);
+    int dict_index = getKVStoreIndexForKey(key->ptr);
+    robj *val = dbFindWithDictIndex(db, key->ptr, dict_index);
     if (val) {
         /* Forcing deletion of expired keys on a replica makes the replica
          * inconsistent with the primary. We forbid it on readonly replicas, but
@@ -199,21 +199,21 @@ void dbUpdateObjectWithVolatileItemsTracking(serverDb *db, robj *o) {
  * If the update_if_existing argument is false, the program is aborted
  * if the key already exists, otherwise, it can fall back to dbOverwrite. */
 static void dbAddInternal(serverDb *db, robj *key, robj **valref, int update_if_existing) {
-    int dict_index = getKVStoreIndexForKey(objectGetVal(key));
+    int dict_index = getKVStoreIndexForKey(key->ptr);
     void **oldref = NULL;
     if (update_if_existing) {
-        oldref = kvstoreHashtableFindRef(db->keys, dict_index, objectGetVal(key));
+        oldref = kvstoreHashtableFindRef(db->keys, dict_index, key->ptr);
         if (oldref != NULL) {
             dbSetValue(db, key, valref, 1, oldref);
             return;
         }
     } else {
-        debugServerAssertWithInfo(NULL, key, kvstoreHashtableFindRef(db->keys, dict_index, objectGetVal(key)) == NULL);
+        debugServerAssertWithInfo(NULL, key, kvstoreHashtableFindRef(db->keys, dict_index, key->ptr) == NULL);
     }
 
     /* Not existing. Convert val to valkey object and insert. */
     robj *val = *valref;
-    val = objectSetKeyAndExpire(val, objectGetVal(key), -1);
+    val = objectSetKeyAndExpire(val, key->ptr, -1);
     /* Track hash object if it has volatile fields (for active expiry).
      * For example, this is needed when a hash is moved to a new DB (e.g. MOVE). */
     dbTrackKeyWithVolatileItems(db, val);
@@ -318,8 +318,8 @@ int dbAddRDBLoad(serverDb *db, sds key, robj **valref) {
 static void dbSetValue(serverDb *db, robj *key, robj **valref, int overwrite, void **oldref) {
     robj *val = *valref;
     if (oldref == NULL) {
-        int dict_index = getKVStoreIndexForKey(objectGetVal(key));
-        oldref = kvstoreHashtableFindRef(db->keys, dict_index, objectGetVal(key));
+        int dict_index = getKVStoreIndexForKey(key->ptr);
+        oldref = kvstoreHashtableFindRef(db->keys, dict_index, key->ptr);
     }
     serverAssertWithInfo(NULL, key, oldref != NULL);
     robj *old = *oldref;
@@ -346,13 +346,13 @@ static void dbSetValue(serverDb *db, robj *key, robj **valref, int overwrite, vo
          * encoding with the content of val. */
         int tmp_type = old->type;
         int tmp_encoding = old->encoding;
-        void *tmp_ptr = objectGetVal(old);
+        void *tmp_ptr = old->ptr;
         old->type = val->type;
         old->encoding = val->encoding;
-        objectSetVal(old, objectGetVal(val));
+        old->ptr = val->ptr;
         val->type = tmp_type;
         val->encoding = tmp_encoding;
-        objectSetVal(val, tmp_ptr);
+        val->ptr = tmp_ptr;
         /* Set new to old to keep the old object. Set old to val to be freed below. */
         new = old;
         old = val;
@@ -360,12 +360,12 @@ static void dbSetValue(serverDb *db, robj *key, robj **valref, int overwrite, vo
         /* Replace the old value at its location in the key space. */
         val->lru = old->lru;
         long long expire = objectGetExpire(old);
-        new = objectSetKeyAndExpire(val, objectGetVal(key), expire);
+        new = objectSetKeyAndExpire(val, key->ptr, expire);
         *oldref = new;
         /* Replace the old value at its location in the expire space. */
         if (expire >= 0) {
-            int dict_index = getKVStoreIndexForKey(objectGetVal(key));
-            void **expireref = kvstoreHashtableFindRef(db->expires, dict_index, objectGetVal(key));
+            int dict_index = getKVStoreIndexForKey(key->ptr);
+            void **expireref = kvstoreHashtableFindRef(db->expires, dict_index, key->ptr);
             serverAssert(expireref != NULL);
             *expireref = new;
         }
@@ -473,7 +473,7 @@ robj *dbRandomKey(serverDb *db) {
 
 int dbGenericDeleteWithDictIndex(serverDb *db, robj *key, int async, int flags, int dict_index) {
     hashtablePosition pos;
-    void **ref = kvstoreHashtableTwoPhasePopFindRef(db->keys, dict_index, objectGetVal(key), &pos);
+    void **ref = kvstoreHashtableTwoPhasePopFindRef(db->keys, dict_index, key->ptr, &pos);
     if (ref != NULL) {
         robj *val = *ref;
         /* VM_StringDMA may call dbUnshareStringValue which may free val, so we
@@ -492,10 +492,10 @@ int dbGenericDeleteWithDictIndex(serverDb *db, robj *key, int async, int flags, 
          * (The expires table has no destructor callback.) */
         kvstoreHashtableTwoPhasePopDelete(db->keys, dict_index, &pos);
         if (objectGetExpire(val) != -1) {
-            bool deleted = kvstoreHashtableDelete(db->expires, dict_index, objectGetVal(key));
+            bool deleted = kvstoreHashtableDelete(db->expires, dict_index, key->ptr);
             serverAssert(deleted);
         } else {
-            debugServerAssert(!kvstoreHashtableDelete(db->expires, dict_index, objectGetVal(key)));
+            debugServerAssert(!kvstoreHashtableDelete(db->expires, dict_index, key->ptr));
         }
 
         /* If deleting a hash object, un-track it from the volatile items tracking if it contains volatile items.*/
@@ -517,7 +517,7 @@ int dbGenericDeleteWithDictIndex(serverDb *db, robj *key, int async, int flags, 
 
 /* Helper for sync and async delete. */
 int dbGenericDelete(serverDb *db, robj *key, int async, int flags) {
-    int dict_index = getKVStoreIndexForKey(objectGetVal(key));
+    int dict_index = getKVStoreIndexForKey(key->ptr);
     return dbGenericDeleteWithDictIndex(db, key, async, flags, dict_index);
 }
 
@@ -583,7 +583,7 @@ robj *dbUnshareStringValue(serverDb *db, robj *key, robj *o) {
     serverAssert(o->type == OBJ_STRING);
     if (o->refcount != 1 || o->encoding != OBJ_ENCODING_RAW) {
         robj *decoded = getDecodedObject(o);
-        o = createRawStringObject(objectGetVal(decoded), sdslen(objectGetVal(decoded)));
+        o = createRawStringObject(decoded->ptr, sdslen(decoded->ptr));
         decrRefCount(decoded);
         dbReplaceValue(db, key, &o);
     }
@@ -792,9 +792,9 @@ void signalFlushedDb(int dbid, int async) {
  * C_ERR is returned and the function sends an error to the client. */
 int getFlushCommandFlags(client *c, int *flags) {
     /* Parse the optional ASYNC option. */
-    if (c->argc == 2 && !strcasecmp(objectGetVal(c->argv[1]), "sync")) {
+    if (c->argc == 2 && !strcasecmp(c->argv[1]->ptr, "sync")) {
         *flags = EMPTYDB_NO_FLAGS;
-    } else if (c->argc == 2 && !strcasecmp(objectGetVal(c->argv[1]), "async")) {
+    } else if (c->argc == 2 && !strcasecmp(c->argv[1]->ptr, "async")) {
         *flags = EMPTYDB_ASYNC;
     } else if (c->argc == 1) {
         *flags = server.lazyfree_lazy_user_flush ? EMPTYDB_ASYNC : EMPTYDB_NO_FLAGS;
@@ -933,7 +933,7 @@ void randomkeyCommand(client *c) {
 }
 
 void keysCommand(client *c) {
-    sds pattern = objectGetVal(c->argv[1]);
+    sds pattern = c->argv[1]->ptr;
     int plen = sdslen(pattern), allkeys, pslot = -1;
     unsigned long numkeys = 0;
     void *replylen = addReplyDeferredLen(c);
@@ -998,7 +998,7 @@ int objectTypeCompare(robj *o, long long target) {
             return 1;
     }
     /* module type compare */
-    long long mt = (long long)VALKEYMODULE_TYPE_SIGN(((moduleValue *)objectGetVal(o))->type->id);
+    long long mt = (long long)VALKEYMODULE_TYPE_SIGN(((moduleValue *)o->ptr)->type->id);
     if (target != -mt)
         return 0;
     else
@@ -1139,7 +1139,7 @@ char *getObjectTypeName(robj *o) {
     serverAssert(o->type >= 0 && o->type < OBJ_TYPE_MAX);
 
     if (o->type == OBJ_MODULE) {
-        moduleValue *mv = objectGetVal(o);
+        moduleValue *mv = o->ptr;
         return mv->type->name;
     } else {
         return obj_type_name[o->type];
@@ -1180,7 +1180,7 @@ void scanGenericCommand(client *c, robj *o, unsigned long long cursor, int slot,
     /* Step 1: Parse options. */
     while (i < c->argc) {
         j = c->argc - i;
-        if (!strcasecmp(objectGetVal(c->argv[i]), "count") && j >= 2) {
+        if (!strcasecmp(c->argv[i]->ptr, "count") && j >= 2) {
             if (getLongFromObjectOrReply(c, c->argv[i + 1], &count, NULL) != C_OK) {
                 return;
             }
@@ -1191,8 +1191,8 @@ void scanGenericCommand(client *c, robj *o, unsigned long long cursor, int slot,
             }
 
             i += 2;
-        } else if (!strcasecmp(objectGetVal(c->argv[i]), "match") && j >= 2) {
-            pat = objectGetVal(c->argv[i + 1]);
+        } else if (!strcasecmp(c->argv[i]->ptr, "match") && j >= 2) {
+            pat = c->argv[i + 1]->ptr;
             patlen = sdslen(pat);
 
             /* The pattern always matches if it is exactly "*", so it is
@@ -1200,30 +1200,30 @@ void scanGenericCommand(client *c, robj *o, unsigned long long cursor, int slot,
             use_pattern = !(patlen == 1 && pat[0] == '*');
 
             i += 2;
-        } else if (!strcasecmp(objectGetVal(c->argv[i]), "type") && o == NULL && j >= 2) {
+        } else if (!strcasecmp(c->argv[i]->ptr, "type") && o == NULL && j >= 2) {
             /* SCAN for a particular type only applies to the db dict */
-            typename = objectGetVal(c->argv[i + 1]);
+            typename = c->argv[i + 1]->ptr;
             type = getObjectTypeByName(typename);
             if (type == LLONG_MAX) {
                 addReplyErrorFormat(c, "unknown type name '%s'", typename);
                 return;
             }
             i += 2;
-        } else if (!strcasecmp(objectGetVal(c->argv[i]), "novalues")) {
+        } else if (!strcasecmp(c->argv[i]->ptr, "novalues")) {
             if (!o || o->type != OBJ_HASH) {
                 addReplyError(c, "NOVALUES option can only be used in HSCAN");
                 return;
             }
             only_keys = 1;
             i++;
-        } else if (!strcasecmp(objectGetVal(c->argv[i]), "noscores")) {
+        } else if (!strcasecmp(c->argv[i]->ptr, "noscores")) {
             if (!o || o->type != OBJ_ZSET) {
                 addReplyError(c, "NOSCORES option can only be used in ZSCAN");
                 return;
             }
             only_keys = 1;
             i++;
-        } else if (!strcasecmp(objectGetVal(c->argv[i]), "slot") && j >= 2 && slot >= 0) {
+        } else if (!strcasecmp(c->argv[i]->ptr, "slot") && j >= 2 && slot >= 0) {
             /* SLOT is already parsed by clusterscanCommand, we can skip it here. */
             i += 2;
         } else {
@@ -1249,13 +1249,13 @@ void scanGenericCommand(client *c, robj *o, unsigned long long cursor, int slot,
     if (o == NULL) {
         free_callback = NULL;
     } else if (o->type == OBJ_SET && o->encoding == OBJ_ENCODING_HASHTABLE) {
-        ht = objectGetVal(o);
+        ht = o->ptr;
         free_callback = NULL;
     } else if (o->type == OBJ_HASH && o->encoding == OBJ_ENCODING_HASHTABLE) {
-        ht = objectGetVal(o);
+        ht = o->ptr;
         free_callback = NULL;
     } else if (o->type == OBJ_ZSET && o->encoding == OBJ_ENCODING_SKIPLIST) {
-        zset *zs = objectGetVal(o);
+        zset *zs = o->ptr;
         ht = zs->ht;
         /* scanning ZSET allocates temporary strings even though it's a dict */
         free_callback = sdsfree;
@@ -1329,7 +1329,7 @@ void scanGenericCommand(client *c, robj *o, unsigned long long cursor, int slot,
         setTypeReleaseIterator(si);
         cursor = 0;
     } else if ((o->type == OBJ_HASH || o->type == OBJ_ZSET) && o->encoding == OBJ_ENCODING_LISTPACK) {
-        unsigned char *p = lpFirst(objectGetVal(o));
+        unsigned char *p = lpFirst(o->ptr);
         unsigned char *str;
         int64_t len;
         unsigned char intbuf[LP_INTBUF_SIZE];
@@ -1337,10 +1337,10 @@ void scanGenericCommand(client *c, robj *o, unsigned long long cursor, int slot,
         while (p) {
             str = lpGet(p, &len, intbuf);
             /* point to the value */
-            p = lpNext(objectGetVal(o), p);
+            p = lpNext(o->ptr, p);
             if (use_pattern && !stringmatchlen(pat, sdslen(pat), (char *)str, len, 0)) {
                 /* jump to the next key/val pair */
-                p = lpNext(objectGetVal(o), p);
+                p = lpNext(o->ptr, p);
                 continue;
             }
             /* add key object */
@@ -1352,7 +1352,7 @@ void scanGenericCommand(client *c, robj *o, unsigned long long cursor, int slot,
                 item = sdsnewlen(str, len);
                 addScanDataItem(&result, (const char *)item, sdslen(item));
             }
-            p = lpNext(objectGetVal(o), p);
+            p = lpNext(o->ptr, p);
         }
         cursor = 0;
     } else {
@@ -1388,7 +1388,7 @@ void scanGenericCommand(client *c, robj *o, unsigned long long cursor, int slot,
 /* The SCAN command completely relies on scanGenericCommand. */
 void scanCommand(client *c) {
     unsigned long long cursor;
-    if (parseScanCursorOrReply(c, objectGetVal(c->argv[1]), &cursor) == C_ERR) return;
+    if (parseScanCursorOrReply(c, c->argv[1]->ptr, &cursor) == C_ERR) return;
     scanGenericCommand(c, NULL, cursor, -1, NULL, NULL);
 }
 
@@ -1411,19 +1411,19 @@ void shutdownCommand(client *c) {
     int flags = SHUTDOWN_NOFLAGS;
     int abort = 0;
     for (int i = 1; i < c->argc; i++) {
-        if (!strcasecmp(objectGetVal(c->argv[i]), "nosave")) {
+        if (!strcasecmp(c->argv[i]->ptr, "nosave")) {
             flags |= SHUTDOWN_NOSAVE;
-        } else if (!strcasecmp(objectGetVal(c->argv[i]), "save")) {
+        } else if (!strcasecmp(c->argv[i]->ptr, "save")) {
             flags |= SHUTDOWN_SAVE;
-        } else if (!strcasecmp(objectGetVal(c->argv[i]), "now")) {
+        } else if (!strcasecmp(c->argv[i]->ptr, "now")) {
             flags |= SHUTDOWN_NOW;
-        } else if (!strcasecmp(objectGetVal(c->argv[i]), "force")) {
+        } else if (!strcasecmp(c->argv[i]->ptr, "force")) {
             flags |= SHUTDOWN_FORCE;
-        } else if (!strcasecmp(objectGetVal(c->argv[i]), "abort")) {
+        } else if (!strcasecmp(c->argv[i]->ptr, "abort")) {
             abort = 1;
-        } else if (!strcasecmp(objectGetVal(c->argv[i]), "safe")) {
+        } else if (!strcasecmp(c->argv[i]->ptr, "safe")) {
             flags |= SHUTDOWN_SAFE;
-        } else if (!strcasecmp(objectGetVal(c->argv[i]), "failover")) {
+        } else if (!strcasecmp(c->argv[i]->ptr, "failover")) {
             flags |= SHUTDOWN_FAILOVER;
         } else {
             addReplyErrorObject(c, shared.syntaxerr);
@@ -1482,7 +1482,7 @@ void renameGenericCommand(client *c, int nx) {
 
     /* When source and dest key is the same, no operation is performed,
      * if the key exists, however we still return an error on unexisting key. */
-    if (sdscmp(objectGetVal(c->argv[1]), objectGetVal(c->argv[2])) == 0) samekey = 1;
+    if (sdscmp(c->argv[1]->ptr, c->argv[2]->ptr) == 0) samekey = 1;
 
     if ((o = lookupKeyWriteOrReply(c, c->argv[1], shared.nokeyerr)) == NULL) return;
 
@@ -1594,9 +1594,9 @@ void copyCommand(client *c) {
     dbid = c->db->id;
     for (j = 3; j < c->argc; j++) {
         int additional = c->argc - j - 1;
-        if (!strcasecmp(objectGetVal(c->argv[j]), "replace")) {
+        if (!strcasecmp(c->argv[j]->ptr, "replace")) {
             replace = 1;
-        } else if (!strcasecmp(objectGetVal(c->argv[j]), "db") && additional >= 1) {
+        } else if (!strcasecmp(c->argv[j]->ptr, "db") && additional >= 1) {
             if (getIntFromObjectOrReply(c, c->argv[j + 1], &dbid, NULL) != C_OK) return;
 
             if (selectDb(c, dbid) == C_ERR) {
@@ -1617,7 +1617,7 @@ void copyCommand(client *c) {
      * it is probably an error. */
     robj *key = c->argv[1];
     robj *newkey = c->argv[2];
-    if (src == dst && (sdscmp(objectGetVal(key), objectGetVal(newkey)) == 0)) {
+    if (src == dst && (sdscmp(key->ptr, newkey->ptr) == 0)) {
         addReplyErrorObject(c, shared.sameobjecterr);
         return;
     }
@@ -1681,7 +1681,7 @@ void scanDatabaseForReadyKeys(serverDb *db) {
     dictIterator *di = dictGetSafeIterator(db->blocking_keys);
     while ((de = dictNext(di)) != NULL) {
         robj *key = dictGetKey(de);
-        robj *value = dbFind(db, objectGetVal(key));
+        robj *value = dbFind(db, key->ptr);
         if (value) {
             signalKeyAsReady(db, key, value->type);
         }
@@ -1700,14 +1700,14 @@ void scanDatabaseForDeletedKeys(serverDb *emptied, serverDb *replaced_with) {
         int existed = 0, exists = 0;
         int original_type = -1, curr_type = -1;
 
-        robj *value = dbFind(emptied, objectGetVal(key));
+        robj *value = dbFind(emptied, key->ptr);
         if (value) {
             original_type = value->type;
             existed = 1;
         }
 
         if (replaced_with) {
-            value = dbFind(replaced_with, objectGetVal(key));
+            value = dbFind(replaced_with, key->ptr);
             if (value) {
                 curr_type = value->type;
                 exists = 1;
@@ -1859,9 +1859,9 @@ void swapdbCommand(client *c) {
  *----------------------------------------------------------------------------*/
 
 int removeExpire(serverDb *db, robj *key) {
-    int dict_index = getKVStoreIndexForKey(objectGetVal(key));
+    int dict_index = getKVStoreIndexForKey(key->ptr);
     void *popped;
-    if (kvstoreHashtablePop(db->expires, dict_index, objectGetVal(key), &popped)) {
+    if (kvstoreHashtablePop(db->expires, dict_index, key->ptr, &popped)) {
         robj *val = popped;
         robj *newval = objectSetExpire(val, -1);
         serverAssert(newval == val);
@@ -1885,8 +1885,8 @@ robj *setExpire(client *c, serverDb *db, robj *key, long long when) {
     /* Reuse the object from the main dict in the expire dict. When setting
      * expire in an robj, it's potentially reallocated. We need to updates the
      * pointer(s) to it. */
-    int dict_index = getKVStoreIndexForKey(objectGetVal(key));
-    void **valref = kvstoreHashtableFindRef(db->keys, dict_index, objectGetVal(key));
+    int dict_index = getKVStoreIndexForKey(key->ptr);
+    void **valref = kvstoreHashtableFindRef(db->keys, dict_index, key->ptr);
     serverAssertWithInfo(NULL, key, valref != NULL);
     val = *valref;
     long long old_when = objectGetExpire(val);
@@ -1924,7 +1924,7 @@ robj *setExpire(client *c, serverDb *db, robj *key, long long when) {
 long long getExpireWithDictIndex(serverDb *db, robj *key, int dict_index) {
     robj *val;
 
-    if ((val = dbFindExpiresWithDictIndex(db, objectGetVal(key), dict_index)) == NULL) return -1;
+    if ((val = dbFindExpiresWithDictIndex(db, key->ptr, dict_index)) == NULL) return -1;
 
     return objectGetExpire(val);
 }
@@ -1932,7 +1932,7 @@ long long getExpireWithDictIndex(serverDb *db, robj *key, int dict_index) {
 /* Return the expire time of the specified key, or -1 if no expire
  * is associated with this key (i.e. the key is non volatile) */
 long long getExpire(serverDb *db, robj *key) {
-    int dict_index = getKVStoreIndexForKey(objectGetVal(key));
+    int dict_index = getKVStoreIndexForKey(key->ptr);
     return getExpireWithDictIndex(db, key, dict_index);
 }
 
@@ -1951,7 +1951,7 @@ void deleteExpiredKeyAndPropagateWithDictIndex(serverDb *db, robj *keyobj, int d
 
 /* Delete the specified expired key and propagate expire. */
 void deleteExpiredKeyAndPropagate(serverDb *db, robj *keyobj) {
-    int dict_index = getKVStoreIndexForKey(objectGetVal(keyobj));
+    int dict_index = getKVStoreIndexForKey(keyobj->ptr);
     deleteExpiredKeyAndPropagateWithDictIndex(db, keyobj, dict_index);
 }
 
@@ -2119,7 +2119,7 @@ static int keyIsExpiredWithDictIndex(serverDb *db, robj *key, int dict_index) {
 
 /* Check if the key is expired. */
 int keyIsExpired(serverDb *db, robj *key) {
-    int dict_index = getKVStoreIndexForKey(objectGetVal(key));
+    int dict_index = getKVStoreIndexForKey(key->ptr);
     return keyIsExpiredWithDictIndex(db, key, dict_index);
 }
 
@@ -2140,7 +2140,7 @@ static keyStatus expireIfNeededWithDictIndex(serverDb *db, robj *key, robj *val,
     /* The key needs to be converted from static to heap before deleted */
     int static_key = key->refcount == OBJ_STATIC_REFCOUNT;
     if (static_key) {
-        key = createStringObject(objectGetVal(key), sdslen(objectGetVal(key)));
+        key = createStringObject(key->ptr, sdslen(key->ptr));
     }
     /* Delete the key */
     deleteExpiredKeyAndPropagateWithDictIndex(db, key, dict_index);
@@ -2186,7 +2186,7 @@ static keyStatus expireIfNeededWithDictIndex(serverDb *db, robj *key, robj *val,
  * or returns KEY_DELETED if the key is expired and deleted. */
 static keyStatus expireIfNeeded(serverDb *db, robj *key, robj *val, int flags) {
     if (val != NULL && !objectIsExpired(val)) return KEY_VALID; /* shortcut */
-    int dict_index = getKVStoreIndexForKey(objectGetVal(key));
+    int dict_index = getKVStoreIndexForKey(key->ptr);
     return expireIfNeededWithDictIndex(db, key, val, flags, dict_index);
 }
 
@@ -2336,7 +2336,7 @@ int getKeysUsingKeySpecs(struct serverCommand *cmd, robj **argv, int argc, int s
             int end_index = spec->bs.keyword.startfrom > 0 ? argc - 1 : 1;
             for (i = start_index; i != end_index; i = start_index <= end_index ? i + 1 : i - 1) {
                 if (i >= argc || i < 1) break;
-                if (!strcasecmp((char *)objectGetVal(argv[i]), spec->bs.keyword.keyword)) {
+                if (!strcasecmp((char *)argv[i]->ptr, spec->bs.keyword.keyword)) {
                     first = i + 1;
                     break;
                 }
@@ -2367,7 +2367,7 @@ int getKeysUsingKeySpecs(struct serverCommand *cmd, robj **argv, int argc, int s
             long long numkeys;
             if (spec->fk.keynum.keynumidx >= argc) goto invalid_spec;
 
-            sds keynum_str = objectGetVal(argv[first + spec->fk.keynum.keynumidx]);
+            sds keynum_str = argv[first + spec->fk.keynum.keynumidx]->ptr;
             if (!string2ll(keynum_str, sdslen(keynum_str), &numkeys) || numkeys < 0) {
                 /* Unable to parse the numkeys argument or it was invalid */
                 goto invalid_spec;
@@ -2656,7 +2656,7 @@ int genericGetKeys(int storeKeyOfs,
     int i, num;
     keyReference *keys;
 
-    num = atoi(objectGetVal(argv[keyCountOfs]));
+    num = atoi(argv[keyCountOfs]->ptr);
     /* Sanity check. Don't return any key if the command is going to
      * reply with syntax error. (no input keys). */
     if (num < 1 || num > (argc - firstKeyOfs) / keyStep) {
@@ -2781,10 +2781,10 @@ int sortGetKeys(struct serverCommand *cmd, robj **argv, int argc, getKeysResult 
 
     for (i = 2; i < argc; i++) {
         for (j = 0; skiplist[j].name != NULL; j++) {
-            if (!strcasecmp(objectGetVal(argv[i]), skiplist[j].name)) {
+            if (!strcasecmp(argv[i]->ptr, skiplist[j].name)) {
                 i += skiplist[j].skip;
                 break;
-            } else if (!strcasecmp(objectGetVal(argv[i]), "store") && i + 1 < argc) {
+            } else if (!strcasecmp(argv[i]->ptr, "store") && i + 1 < argc) {
                 /* Note: we don't increment "num" here and continue the loop
                  * to be sure to process the *last* "STORE" option if multiple
                  * ones are provided. This is same behavior as SORT. */
@@ -2816,8 +2816,8 @@ int migrateGetKeys(struct serverCommand *cmd, robj **argv, int argc, getKeysResu
     } skip_keywords[] = {{"copy", 0}, {"replace", 0}, {"auth", 1}, {"auth2", 2}, {NULL, 0}};
     if (argc > 6) {
         for (i = 6; i < argc; i++) {
-            if (!strcasecmp(objectGetVal(argv[i]), "keys")) {
-                if (sdslen(objectGetVal(argv[3])) > 0) {
+            if (!strcasecmp(argv[i]->ptr, "keys")) {
+                if (sdslen(argv[3]->ptr) > 0) {
                     /* This is a syntax error. So ignore the keys and leave
                      * the syntax error to be handled by migrateCommand. */
                     num = 0;
@@ -2828,7 +2828,7 @@ int migrateGetKeys(struct serverCommand *cmd, robj **argv, int argc, getKeysResu
                 break;
             }
             for (j = 0; skip_keywords[j].name != NULL; j++) {
-                if (!strcasecmp(objectGetVal(argv[i]), skip_keywords[j].name)) {
+                if (!strcasecmp(argv[i]->ptr, skip_keywords[j].name)) {
                     i += skip_keywords[j].skip;
                     break;
                 }
@@ -2859,7 +2859,7 @@ int georadiusGetKeys(struct serverCommand *cmd, robj **argv, int argc, getKeysRe
     /* Check for the presence of the stored key in the command */
     int stored_key = -1;
     for (i = 5; i < argc; i++) {
-        char *arg = objectGetVal(argv[i]);
+        char *arg = argv[i]->ptr;
         /* For the case when user specifies both "store" and "storedist" options, the
          * second key specified would override the first key. This behavior is kept
          * the same as in georadiusCommand method.
@@ -2903,7 +2903,7 @@ int xreadGetKeys(struct serverCommand *cmd, robj **argv, int argc, getKeysResult
      * name of the stream key. */
     int streams_pos = -1;
     for (i = 1; i < argc; i++) {
-        char *arg = objectGetVal(argv[i]);
+        char *arg = argv[i]->ptr;
         if (!strcasecmp(arg, "block")) {
             i++; /* Skip option argument. */
         } else if (!strcasecmp(arg, "count")) {
@@ -2949,7 +2949,7 @@ int setGetKeys(struct serverCommand *cmd, robj **argv, int argc, getKeysResult *
     result->numkeys = 1;
 
     for (int i = 3; i < argc; i++) {
-        char *arg = objectGetVal(argv[i]);
+        char *arg = argv[i]->ptr;
         if ((arg[0] == 'g' || arg[0] == 'G') && (arg[1] == 'e' || arg[1] == 'E') && (arg[2] == 't' || arg[2] == 'T') &&
             arg[3] == '\0') {
             keys[0].flags = CMD_KEY_RW | CMD_KEY_ACCESS | CMD_KEY_UPDATE;
@@ -2974,7 +2974,7 @@ int bitfieldGetKeys(struct serverCommand *cmd, robj **argv, int argc, getKeysRes
 
     for (int i = 2; i < argc; i++) {
         int remargs = argc - i - 1; /* Remaining args other than current. */
-        char *arg = objectGetVal(argv[i]);
+        char *arg = argv[i]->ptr;
         if (!strcasecmp(arg, "get") && remargs >= 2) {
             i += 2;
         } else if ((!strcasecmp(arg, "set") || !strcasecmp(arg, "incrby")) && remargs >= 3) {
@@ -3041,7 +3041,7 @@ int *moveDbIdArgs(robj **argv, int argc, int *count) {
 int *copyDbIdArgs(robj **argv, int argc, int *count) {
     if (argc < 5) return NULL;
 
-    if (strcasecmp(objectGetVal(argv[3]), "db") != 0) return NULL;
+    if (strcasecmp(argv[3]->ptr, "db") != 0) return NULL;
 
     long long dbid;
     if (getLongLongFromObject(argv[4], &dbid) != C_OK) return NULL;

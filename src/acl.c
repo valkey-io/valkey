@@ -1564,7 +1564,7 @@ void ACLInit(void) {
  *  ENOENT: if the specified user does not exist at all.
  */
 int ACLCheckUserCredentials(robj *username, robj *password) {
-    user *u = ACLGetUserByName(objectGetVal(username), sdslen(objectGetVal(username)));
+    user *u = ACLGetUserByName(username->ptr, sdslen(username->ptr));
     if (u == NULL) {
         errno = ENOENT;
         return C_ERR;
@@ -1584,7 +1584,7 @@ int ACLCheckUserCredentials(robj *username, robj *password) {
     listIter li;
     listNode *ln;
     listRewind(u->passwords, &li);
-    sds hashed = ACLHashPassword(objectGetVal(password), sdslen(objectGetVal(password)));
+    sds hashed = ACLHashPassword(password->ptr, sdslen(password->ptr));
     while ((ln = listNext(&li))) {
         sds thispass = listNodeValue(ln);
         if (!time_independent_strcmp(hashed, thispass, HASH_PASSWORD_LEN)) {
@@ -1612,7 +1612,7 @@ void addAuthErrReply(client *c, robj *err) {
         addReplyError(c, "-WRONGPASS invalid username-password pair or user is disabled.");
         return;
     }
-    addReplyError(c, objectGetVal(err));
+    addReplyError(c, err->ptr);
 }
 
 /* This is like ACLCheckUserCredentials(), however if the user/pass
@@ -1624,18 +1624,18 @@ static int checkPasswordBasedAuth(client *c, robj *username, robj *password) {
     int result;
 
     if (ACLCheckUserCredentials(username, password) == C_OK) {
-        user *user = ACLGetUserByName(objectGetVal(username), sdslen(objectGetVal(username)));
+        user *user = ACLGetUserByName(username->ptr, sdslen(username->ptr));
         clientSetUser(c, user, 1);
         moduleNotifyUserChanged(c);
         result = AUTH_OK;
     } else {
-        addACLLogEntry(c, ACL_DENIED_AUTH, (c->flag.multi) ? ACL_LOG_CTX_MULTI : ACL_LOG_CTX_TOPLEVEL, 0, objectGetVal(username),
+        addACLLogEntry(c, ACL_DENIED_AUTH, (c->flag.multi) ? ACL_LOG_CTX_MULTI : ACL_LOG_CTX_TOPLEVEL, 0, username->ptr,
                        NULL);
         result = AUTH_ERR;
     }
 
     moduleFireAuthenticationEvent(c->id,
-                                  objectGetVal(username),
+                                  username->ptr,
                                   NULL,
                                   result == AUTH_OK);
 
@@ -1910,7 +1910,7 @@ static int ACLSelectorCheckCmd(aclSelector *selector,
             while (1) {
                 if (selector->allowed_firstargs[id][subid] == NULL) return ACL_DENIED_CMD;
                 int idx = cmd->parent ? 2 : 1;
-                if (!strcasecmp(objectGetVal(argv[idx]), selector->allowed_firstargs[id][subid]))
+                if (!strcasecmp(argv[idx]->ptr, selector->allowed_firstargs[id][subid]))
                     break; /* First argument match found. Stop here. */
                 subid++;
             }
@@ -1929,7 +1929,7 @@ static int ACLSelectorCheckCmd(aclSelector *selector,
         keyReference *resultidx = result->keys;
         for (int j = 0; j < result->numkeys; j++) {
             int idx = resultidx[j].pos;
-            ret = ACLSelectorCheckKey(selector, objectGetVal(argv[idx]), sdslen(objectGetVal(argv[idx])), resultidx[j].flags, false);
+            ret = ACLSelectorCheckKey(selector, argv[idx]->ptr, sdslen(argv[idx]->ptr), resultidx[j].flags, false);
             if (ret != ACL_OK) {
                 if (keyidxptr) *keyidxptr = resultidx[j].pos;
                 return ret;
@@ -1950,7 +1950,7 @@ static int ACLSelectorCheckCmd(aclSelector *selector,
             if (!(channelref[j].flags & channel_flags)) continue;
             int is_pattern = channelref[j].flags & CMD_CHANNEL_PATTERN;
             int ret =
-                ACLCheckChannelAgainstList(selector->channels, objectGetVal(argv[idx]), sdslen(objectGetVal(argv[idx])), is_pattern);
+                ACLCheckChannelAgainstList(selector->channels, argv[idx]->ptr, sdslen(argv[idx]->ptr), is_pattern);
             if (ret != ACL_OK) {
                 if (keyidxptr) *keyidxptr = channelref[j].pos;
                 getKeysFreeResult(&channels);
@@ -2181,7 +2181,7 @@ static int ACLShouldKillPubsubClient(client *c, list *upcoming) {
         void *next;
         while (!kill && hashtableNext(&iter, &next)) {
             robj *o = next;
-            int res = ACLCheckChannelAgainstList(upcoming, objectGetVal(o), sdslen(objectGetVal(o)), 1);
+            int res = ACLCheckChannelAgainstList(upcoming, o->ptr, sdslen(o->ptr), 1);
             kill = (res == ACL_DENIED_CHANNEL);
         }
         hashtableCleanupIterator(&iter);
@@ -2194,7 +2194,7 @@ static int ACLShouldKillPubsubClient(client *c, list *upcoming) {
             void *next;
             while (!kill && hashtableNext(&iter, &next)) {
                 robj *o = next;
-                int res = ACLCheckChannelAgainstList(upcoming, objectGetVal(o), sdslen(objectGetVal(o)), 0);
+                int res = ACLCheckChannelAgainstList(upcoming, o->ptr, sdslen(o->ptr), 0);
                 kill = (res == ACL_DENIED_CHANNEL);
             }
             hashtableCleanupIterator(&iter);
@@ -2206,7 +2206,7 @@ static int ACLShouldKillPubsubClient(client *c, list *upcoming) {
             void *next;
             while (!kill && hashtableNext(&iter, &next)) {
                 robj *o = next;
-                int res = ACLCheckChannelAgainstList(upcoming, objectGetVal(o), sdslen(objectGetVal(o)), 0);
+                int res = ACLCheckChannelAgainstList(upcoming, o->ptr, sdslen(o->ptr), 0);
                 kill = (res == ACL_DENIED_CHANNEL);
             }
             hashtableCleanupIterator(&iter);
@@ -2710,7 +2710,7 @@ static int ACLSaveToFile(const char *filename) {
         user = sdscatsds(user, u->name);
         user = sdscatlen(user, " ", 1);
         robj *descr = ACLDescribeUser(u);
-        user = sdscatsds(user, objectGetVal(descr));
+        user = sdscatsds(user, descr->ptr);
         decrRefCount(descr);
         acl = sdscatsds(acl, user);
         acl = sdscatlen(acl, "\n", 1);
@@ -2906,10 +2906,10 @@ void addACLLogEntry(client *c, int reason, int context, int argpos, sds username
     } else {
         switch (reason) {
         case ACL_DENIED_CMD: le->object = sdsdup(c->cmd->fullname); break;
-        case ACL_DENIED_KEY: le->object = sdsdup(objectGetVal(c->argv[argpos])); break;
-        case ACL_DENIED_CHANNEL: le->object = sdsdup(objectGetVal(c->argv[argpos])); break;
-        case ACL_DENIED_DB: le->object = argpos ? sdsdup(objectGetVal(c->argv[argpos])) : sdsdup(c->cmd->fullname); break;
-        case ACL_DENIED_AUTH: le->object = sdsdup(objectGetVal(c->argv[0])); break;
+        case ACL_DENIED_KEY: le->object = sdsdup(c->argv[argpos]->ptr); break;
+        case ACL_DENIED_CHANNEL: le->object = sdsdup(c->argv[argpos]->ptr); break;
+        case ACL_DENIED_DB: le->object = argpos ? sdsdup(c->argv[argpos]->ptr) : sdsdup(c->cmd->fullname); break;
+        case ACL_DENIED_AUTH: le->object = sdsdup(c->argv[0]->ptr); break;
         default: le->object = sdsempty();
         }
     }
@@ -3112,7 +3112,7 @@ static int aclAddReplySelectorDescription(client *c, aclSelector *s) {
  * ACL LOG [<count> | RESET]
  */
 void aclCommand(client *c) {
-    char *sub = objectGetVal(c->argv[1]);
+    char *sub = c->argv[1]->ptr;
     if (!strcasecmp(sub, "setuser") && c->argc >= 3) {
         /* Initially redact all of the arguments to not leak any information
          * about the user. */
@@ -3120,7 +3120,7 @@ void aclCommand(client *c) {
             redactClientCommandArgument(c, j);
         }
 
-        sds username = objectGetVal(c->argv[2]);
+        sds username = c->argv[2]->ptr;
         /* Check username validity. */
         if (ACLStringHasSpaces(username, sdslen(username))) {
             addReplyError(c, "Usernames can't contain spaces or null characters");
@@ -3130,7 +3130,7 @@ void aclCommand(client *c) {
         user *u = ACLGetUserByName(username, sdslen(username));
 
         sds *temp_argv = zmalloc(c->argc * sizeof(sds));
-        for (int i = 3; i < c->argc; i++) temp_argv[i - 3] = objectGetVal(c->argv[i]);
+        for (int i = 3; i < c->argc; i++) temp_argv[i - 3] = c->argv[i]->ptr;
 
         sds error = ACLStringSetUser(u, username, temp_argv, c->argc - 3);
         zfree(temp_argv);
@@ -3147,7 +3147,7 @@ void aclCommand(client *c) {
 
         int deleted = 0;
         for (int j = 2; j < c->argc; j++) {
-            sds username = objectGetVal(c->argv[j]);
+            sds username = c->argv[j]->ptr;
             if (!strcmp(username, "default")) {
                 addReplyError(c, "The 'default' user cannot be removed");
                 return;
@@ -3155,7 +3155,7 @@ void aclCommand(client *c) {
         }
 
         for (int j = 2; j < c->argc; j++) {
-            sds username = objectGetVal(c->argv[j]);
+            sds username = c->argv[j]->ptr;
             user *u;
             if (raxRemove(Users, (unsigned char *)username, sdslen(username), (void **)&u)) {
                 ACLFreeUserAndKillClients(u);
@@ -3167,7 +3167,7 @@ void aclCommand(client *c) {
         /* Redact the username to not leak any information about the user. */
         redactClientCommandArgument(c, 2);
 
-        user *u = ACLGetUserByName(objectGetVal(c->argv[2]), sdslen(objectGetVal(c->argv[2])));
+        user *u = ACLGetUserByName(c->argv[2]->ptr, sdslen(c->argv[2]->ptr));
         if (u == NULL) {
             addReplyNull(c);
             return;
@@ -3228,7 +3228,7 @@ void aclCommand(client *c) {
                 config = sdscatsds(config, u->name);
                 config = sdscatlen(config, " ", 1);
                 robj *descr = ACLDescribeUser(u);
-                config = sdscatsds(config, objectGetVal(descr));
+                config = sdscatsds(config, descr->ptr);
                 decrRefCount(descr);
                 addReplyBulkSds(c, config);
             }
@@ -3267,9 +3267,9 @@ void aclCommand(client *c) {
         for (j = 0; ACLCommandCategories[j].flag != 0; j++) addReplyBulkCString(c, ACLCommandCategories[j].name);
         setDeferredArrayLen(c, dl, j);
     } else if (!strcasecmp(sub, "cat") && c->argc == 3) {
-        uint64_t cflag = ACLGetCommandCategoryFlagByName(objectGetVal(c->argv[2]));
+        uint64_t cflag = ACLGetCommandCategoryFlagByName(c->argv[2]->ptr);
         if (cflag == 0) {
-            addReplyErrorFormat(c, "Unknown category '%.128s'", (char *)objectGetVal(c->argv[2]));
+            addReplyErrorFormat(c, "Unknown category '%.128s'", (char *)c->argv[2]->ptr);
             return;
         }
         int arraylen = 0;
@@ -3302,7 +3302,7 @@ void aclCommand(client *c) {
          * the number of entries the user wants to display, or alternatively
          * the "RESET" command in order to flush the old entries. */
         if (c->argc == 3) {
-            if (!strcasecmp(objectGetVal(c->argv[2]), "reset")) {
+            if (!strcasecmp(c->argv[2]->ptr, "reset")) {
                 listSetFreeMethod(ACLLog, ACLFreeLogEntry);
                 listEmpty(ACLLog);
                 listSetFreeMethod(ACLLog, NULL);
@@ -3371,14 +3371,14 @@ void aclCommand(client *c) {
         }
     } else if (!strcasecmp(sub, "dryrun") && c->argc >= 4) {
         struct serverCommand *cmd;
-        user *u = ACLGetUserByName(objectGetVal(c->argv[2]), sdslen(objectGetVal(c->argv[2])));
+        user *u = ACLGetUserByName(c->argv[2]->ptr, sdslen(c->argv[2]->ptr));
         if (u == NULL) {
-            addReplyErrorFormat(c, "User '%s' not found", (char *)objectGetVal(c->argv[2]));
+            addReplyErrorFormat(c, "User '%s' not found", (char *)c->argv[2]->ptr);
             return;
         }
 
         if ((cmd = lookupCommand(c->argv + 3, c->argc - 3)) == NULL) {
-            addReplyErrorFormat(c, "Command '%s' not found", (char *)objectGetVal(c->argv[3]));
+            addReplyErrorFormat(c, "Command '%s' not found", (char *)c->argv[3]->ptr);
             return;
         }
 
@@ -3391,7 +3391,7 @@ void aclCommand(client *c) {
         int dbid = (c->flag.multi) ? c->mstate->transaction_db_id : c->db->id;
         int result = ACLCheckAllUserCommandPerm(u, cmd, c->argv + 3, c->argc - 3, dbid, &idx);
         if (result != ACL_OK) {
-            sds err = getAclErrorMessage(result, u, cmd, objectGetVal(c->argv[idx + 3]), 1);
+            sds err = getAclErrorMessage(result, u, cmd, c->argv[idx + 3]->ptr, 1);
             addReplyBulkSds(c, err);
             return;
         }

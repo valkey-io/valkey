@@ -1405,11 +1405,11 @@ sds catAppendOnlyGenericCommand(sds dst, int argc, robj **argv) {
     for (j = 0; j < argc; j++) {
         o = getDecodedObject(argv[j]);
         buf[0] = '$';
-        len = 1 + ll2string(buf + 1, sizeof(buf) - 1, sdslen(objectGetVal(o)));
+        len = 1 + ll2string(buf + 1, sizeof(buf) - 1, sdslen(o->ptr));
         buf[len++] = '\r';
         buf[len++] = '\n';
         dst = sdscatlen(dst, buf, len);
-        dst = sdscatlen(dst, objectGetVal(o), sdslen(objectGetVal(o)));
+        dst = sdscatlen(dst, o->ptr, sdslen(o->ptr));
         dst = sdscatlen(dst, "\r\n", 2);
         decrRefCount(o);
     }
@@ -1903,9 +1903,9 @@ int rioWriteBulkObject(rio *r, robj *obj) {
     /* Avoid using getDecodedObject to help copy-on-write (we are often
      * in a child process when this function is called). */
     if (obj->encoding == OBJ_ENCODING_INT) {
-        return rioWriteBulkLongLong(r, (long)objectGetVal(obj));
+        return rioWriteBulkLongLong(r, (long)obj->ptr);
     } else if (sdsEncodedObject(obj)) {
-        return rioWriteBulkString(r, objectGetVal(obj), sdslen(objectGetVal(obj)));
+        return rioWriteBulkString(r, obj->ptr, sdslen(obj->ptr));
     } else {
         serverPanic("Unknown string encoding");
     }
@@ -1985,7 +1985,7 @@ int rewriteSortedSetObject(rio *r, robj *key, robj *o) {
     long long count = 0, items = zsetLength(o);
 
     if (o->encoding == OBJ_ENCODING_LISTPACK) {
-        unsigned char *zl = objectGetVal(o);
+        unsigned char *zl = o->ptr;
         unsigned char *eptr, *sptr;
         unsigned char *vstr;
         unsigned int vlen;
@@ -2020,7 +2020,7 @@ int rewriteSortedSetObject(rio *r, robj *key, robj *o) {
             items--;
         }
     } else if (o->encoding == OBJ_ENCODING_SKIPLIST) {
-        zset *zs = objectGetVal(o);
+        zset *zs = o->ptr;
         hashtableIterator iter;
         hashtableInitIterator(&iter, zs->ht, 0);
         void *next;
@@ -2194,7 +2194,7 @@ int rioWriteStreamEmptyConsumer(rio *r,
 /* Emit the commands needed to rebuild a stream object.
  * The function returns 0 on error, 1 on success. */
 int rewriteStreamObject(rio *r, robj *key, robj *o) {
-    stream *s = objectGetVal(o);
+    stream *s = o->ptr;
     streamIterator si;
     streamIteratorStart(&si, s, NULL, NULL, 0);
     streamID id;
@@ -2315,7 +2315,7 @@ int rewriteStreamObject(rio *r, robj *key, robj *o) {
  * The function returns 0 on error, 1 on success. */
 int rewriteModuleObject(rio *r, robj *key, robj *o, int dbid) {
     ValkeyModuleIO io;
-    moduleValue *mv = objectGetVal(o);
+    moduleValue *mv = o->ptr;
     moduleType *mt = mv->type;
     moduleInitIOContext(&io, mt, r, key, dbid);
     mt->aof_rewrite(&io, key, mv->value);

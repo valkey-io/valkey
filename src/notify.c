@@ -27,6 +27,8 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
+#include "durable_task.h"
+#include "reply_blocking.h"
 #include "server.h"
 #include "module.h"
 
@@ -117,15 +119,37 @@ void notifyKeyspaceEvent(int type, char *event, robj *key, int dbid) {
                       c->flag.keyspace_notified == 1 ||
                       c->id == UINT64_MAX || // AOF client
                       getClientType(c) != CLIENT_TYPE_NORMAL);
-    /* If any modules are interested in events, notify the module system now.
-     * This bypasses the notifications configuration, but the module engine
-     * will only call event subscribers if the event type matches the types
-     * they are interested in. */
-    moduleNotifyKeyspaceEvent(type, event, key, dbid);
-    if (c) {
-        c->flag.keyspace_notified = 1;
-        commitDeferredReplyBuffer(c, 1);
+
+    if (!(type & NOTIFY_IN_DURABLE_TASK)) {
+        if (isPrimaryDurabilityEnabled()) {
+            bool shouldSendDelayedNotificationToClients = (server.notify_keyspace_events & type);
+
+            /* Defer client notifications until durability providers acknowledge the write. */
+            if (shouldSendDelayedNotificationToClients) {
+                type = type | NOTIFY_IN_DURABLE_TASK;
+                /* Register deferred task, executed when offset is acknowledged
+                 * by durability providers */
+                durabilityRegisterDeferredTask(
+                    DURABLE_KEYSPACE_NOTIFY_TASK,
+                    (void *)(long)type,
+                    (void *)event,
+                    (void *)key,
+                    (void *)(long)dbid);
+            }
+
+            // At this point (ZDL branch), we have notified modules, or queued a task.  For clients,
+            //  there is never a direct notification (either queue the notification or nothing).
+            return;
+        }
+        moduleNotifyKeyspaceEvent(type, event, key, dbid);
+    } else {
+        if (c) {
+            c->flag.keyspace_notified = 1;
+            commitDeferredReplyBuffer(c, 1);
+        }
     }
+
+    type = type & ~NOTIFY_IN_DURABLE_TASK;
 
     /* If notifications for this class of events are off, return ASAP. */
     if (!(server.notify_keyspace_events & type)) return;

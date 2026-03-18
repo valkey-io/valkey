@@ -36,7 +36,9 @@
 #include "rio.h"
 #include "commands.h"
 #include "allocator_defrag.h"
+#include "reply_blocking.h"
 
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <stddef.h>
@@ -946,6 +948,14 @@ typedef struct serverDb {
         long long avg_ttl;    /* Average TTL, just for stats */
         unsigned long cursor; /* Cursor of the active expire cycle. */
     } expiry[ACTIVE_EXPIRY_TYPE_COUNT];
+
+    /* fields related to dirty key tracking
+     * for consistent writes with durability */
+    hashtable *uncommitted_keys;    /* Map of dirty keys to the offset required by replica acknowledgement */
+    long long dirty_repl_offset;    /* Replication offset for a dirty DB */
+    size_t uncommitted_keys_cursor; /* Cursor for incremental cleanup scans */
+    int scan_in_progress;           /* Flag of showing whether db is in scan or not */
+    rax *reply_duration;            /* Radix tree tracking reply durations for durable blocked clients */
 } serverDb;
 
 /* forward declaration for functions ctx */
@@ -1232,6 +1242,8 @@ typedef struct ClientFlags {
                                               or client::buf. */
     uint64_t keyspace_notified : 1;        /* Indicates that a keyspace notification was triggered during the execution of the
                                               current command. */
+    uint64_t durable_blocked_client : 1;   /* This is a durable blocked client that is waiting for the server to
+                                            * acknowledge the write of the command that caused it to be blocked. */
 } ClientFlags;
 
 typedef struct ClientPubSubData {
@@ -1431,6 +1443,7 @@ typedef struct client {
 #ifdef LOG_REQ_RES
     clientReqResInfo reqres;
 #endif
+    struct clientDurabilityInfo clientDurabilityInfo;
 } client;
 
 /* Forward declaration */
@@ -1442,7 +1455,7 @@ bool isImportSlotMigrationJob(slotMigrationJob *job);
  * The function will return one of the following:
  * CLIENT_TYPE_NORMAL -> Normal client, including MONITOR
  * CLIENT_TYPE_REPLICA  -> replica
- * CLIENT_TYPE_PUBSUB -> Client subscribed to Pub/Sub channels
+ * CLIENT_TYPE_PUBSUB -> Client subscribed to Pub\/Sub channels
  * CLIENT_TYPE_PRIMARY -> The client representing our replication primary.
  */
 static inline int getClientType(client *c) {
@@ -1454,6 +1467,7 @@ static inline int getClientType(client *c) {
     if (unlikely(c->slot_migration_job)) return isImportSlotMigrationJob(c->slot_migration_job) ? CLIENT_TYPE_SLOT_IMPORT : CLIENT_TYPE_SLOT_EXPORT;
     return CLIENT_TYPE_NORMAL;
 }
+
 
 /* When a command generates a lot of discrete elements to the client output buffer, it is much faster to
  * skip certain types of initialization. This type is used to indicate a client that has been initialized
@@ -1769,6 +1783,7 @@ typedef enum childInfoType {
 } childInfoType;
 
 struct valkeyServer {
+    durable_t durability;
     /* General */
     pid_t pid;                                        /* Main process pid. */
     pthread_t main_thread_id;                         /* Main thread id */
@@ -2059,6 +2074,9 @@ struct valkeyServer {
     int aof_load_truncated;             /* Don't stop on unexpected AOF EOF. */
     int aof_use_rdb_preamble;           /* Specify base AOF to use RDB encoding on AOF rewrites. */
     int aof_rewrite_use_rdb_preamble;   /* Base AOF to use RDB encoding on AOF rewrites start. */
+    _Atomic int aof_io_flush_state;     /* AOF always-fsync IO-thread flush state. */
+    _Atomic int aof_io_flush_errno;     /* Errno of AOF always-fsync IO-thread flush. */
+    _Atomic off_t aof_io_flush_size;    /* Bytes written by the last IO-thread flush. */
     _Atomic(int) aof_bio_fsync_status;  /* Status of AOF fsync in bio job. */
     _Atomic(int) aof_bio_fsync_errno;   /* Errno of AOF fsync in bio job. */
     aofManifest *aof_manifest;          /* Used to track AOFs. */
@@ -2999,7 +3017,6 @@ size_t getClientOutputBufferMemoryUsage(client *c);
 size_t getClientMemoryUsage(client *c, size_t *output_buffer_mem_usage);
 int freeClientsInAsyncFreeQueue(void);
 int closeClientOnOutputBufferLimitReached(client *c, int async);
-int getClientType(client *c);
 int getClientTypeByName(char *name);
 char *getClientTypeName(int client_class);
 void flushReplicasOutputBuffers(void);
@@ -3046,6 +3063,8 @@ int processIOThreadsReadDone(void);
 int processIOThreadsWriteDone(void);
 void releaseReplyReferences(client *c);
 void resetLastWrittenBuf(client *c);
+
+int getIntFromObject(robj *o, int *target);
 
 int parseExtendedCommandArgumentsOrReply(client *c, int command_type, int start_idx, int max_args, int *flags, int *unit, int *expire_idx, robj **expire, robj **compare_val);
 
@@ -3293,6 +3312,7 @@ void aofManifestFree(aofManifest *am);
 int aofDelHistoryFiles(void);
 int aofRewriteLimited(void);
 int rewriteSlotToAppendOnlyFileRio(rio *aof, int db_num, int hashslot, size_t *key_count);
+int aofIOFlushInProgress(void);
 
 /* Child info */
 void openChildInfoPipe(void);

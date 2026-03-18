@@ -1472,6 +1472,7 @@ void replconfCommand(client *c) {
             if (c->repl_data->repl_state == REPLICA_STATE_BG_RDB_LOAD) {
                 replicaPutOnline(c);
             }
+
             /* Note: this command does not reply anything! */
             return;
         } else if (!strcasecmp(objectGetVal(c->argv[j]), "getack")) {
@@ -4435,6 +4436,7 @@ void replicationSetPrimary(char *ip, int port, int full_sync_required, bool disc
         freeClient(server.primary);
     }
 
+    durabilityClearPrimaryState();
     /* Setting primary_host only after the call to freeClient since it calls
      * replicationHandlePrimaryDisconnection which can trigger a re-connect
      * directly from within that call. */

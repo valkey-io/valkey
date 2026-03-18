@@ -1713,6 +1713,7 @@ long long serverCron(struct aeEventLoop *eventLoop, long long id, void *clientDa
         run_with_period(100) modulesCron();
     }
 
+    run_with_period(1000) clearUncommittedKeysAcknowledged();
     /* Fire the cron loop modules event. */
     ValkeyModuleCronLoopV1 ei = {VALKEYMODULE_CRON_LOOP_VERSION, server.hz};
     moduleFireServerEvent(VALKEYMODULE_EVENT_CRON_LOOP, 0, &ei);
@@ -1828,7 +1829,9 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
         processed += processIOThreadsReadDone();
         processed += connTypeProcessPendingData();
         if (server.aof_state == AOF_ON || server.aof_state == AOF_WAIT_REWRITE) flushAppendOnlyFile(0);
-        processed += handleClientsWithPendingWrites();
+        if (!(server.aof_fsync == AOF_FSYNC_ALWAYS && aofIOFlushInProgress())) {
+            processed += handleClientsWithPendingWrites();
+        }
         int last_processed = 0;
         do {
             /* Try to process all the pending IO events. */
@@ -1935,6 +1938,7 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
          * wake them up ASAP. */
         if (listLength(server.clients_waiting_acks) && prev_fsynced_reploff != server.fsynced_reploff) dont_sleep = 1;
     }
+    notifyDurabilityProgress();
 
     /* Handle writes with pending output buffers. */
     int client_writes = handleClientsWithPendingWrites();
@@ -2048,7 +2052,11 @@ void afterSleep(struct aeEventLoop *eventLoop, int numevents) {
         server.cmd_time_snapshot = server.mstime;
     }
 
-    adjustIOThreadsByEventLoad(numevents, 0);
+    /* Check if AOF always-fsync needs IO threads for background work */
+    int aof_needs_io = (server.aof_state != AOF_OFF &&
+                        server.aof_fsync == AOF_FSYNC_ALWAYS &&
+                        sdslen(server.aof_buf) > 0);
+    adjustIOThreadsByEventLoad(numevents, 0, aof_needs_io);
 }
 
 /* =========================== Server initialization ======================== */
@@ -2297,6 +2305,9 @@ void initServerConfig(void) {
     server.aof_flush_sleep = 0;
     server.aof_last_fsync = time(NULL) * 1000;
     server.aof_cur_timestamp = 0;
+    atomic_store_explicit(&server.aof_io_flush_state, 0, memory_order_relaxed);
+    atomic_store_explicit(&server.aof_io_flush_errno, 0, memory_order_relaxed);
+    atomic_store_explicit(&server.aof_io_flush_size, 0, memory_order_relaxed);
     atomic_store_explicit(&server.aof_bio_fsync_status, C_OK, memory_order_relaxed);
     server.aof_rewrite_time_last = -1;
     server.aof_rewrite_time_start = -1;
@@ -2868,6 +2879,8 @@ serverDb *createDatabase(int id) {
     db->ready_keys = dictCreate(&objectKeyPointerValueDictType);
     db->watched_keys = dictCreate(&keylistDictType);
     db->id = id;
+
+    durabilityInitDatabase(db);
     resetDbExpiryState(db);
     return db;
 }
@@ -3095,6 +3108,8 @@ void initServer(void) {
 
     /* Initialize the EVAL scripting component. */
     evalInit();
+
+    durabilityInit();
 
     applyWatchdogPeriod();
 
@@ -3833,6 +3848,7 @@ void call(client *c, int flags) {
     struct ClientFlags client_old_flags = c->flag;
 
     struct serverCommand *real_cmd = c->realcmd;
+    beforeCommandTrackReplOffset(c);
     client *prev_client = server.executing_client;
     server.executing_client = c;
 
@@ -4030,7 +4046,9 @@ void call(client *c, int flags) {
     if (zmalloc_used > server.stat_peak_memory) server.stat_peak_memory = zmalloc_used;
 
     /* Do some maintenance job and cleanup */
+    // TODO: should blocking postCall could be moved into afterCommand?
     afterCommand(c);
+    afterCommandTrackReplOffset(c);
 
     /* Remember the replication offset of the client, right after its last
      * command that resulted in propagation. */
@@ -4564,8 +4582,12 @@ int processCommand(client *c) {
         queueMultiCommand(c, cmd_flags);
         addReply(c, shared.queued);
     } else {
+        if (preCommandExec(c) == CMD_FILTER_REJECT) {
+            return C_OK;
+        }
         int flags = CMD_CALL_FULL;
         call(c, flags);
+        postCommandExec(c);
         if (listLength(server.ready_keys) && !isInsideYieldingLongCommand()) handleClientsBlockedOnKeys();
     }
     return C_OK;
@@ -4851,6 +4873,9 @@ int finishShutdown(void) {
 
     /* Fire the shutdown modules event. */
     moduleFireServerEvent(VALKEYMODULE_EVENT_SHUTDOWN, 0, NULL);
+
+    /* Cleanup durability tracking resources. */
+    durabilityCleanup();
 
     /* Remove the pid file if possible and needed. */
     if (server.daemonize || server.pidfile) {
@@ -6691,6 +6716,13 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                 "eventloop_duration_cron_sum:%llu\r\n", server.duration_stats[EL_DURATION_TYPE_CRON].sum,
                 "eventloop_duration_max:%llu\r\n", server.duration_stats[EL_DURATION_TYPE_EL].max,
                 "eventloop_cmd_per_cycle_max:%lld\r\n", server.el_cmd_cnt_max));
+    }
+
+    /* Sync replication / durability stats */
+    if (all_sections || (dictFind(section_dict, "durability") != NULL)) {
+        if (sections++) info = sdscat(info, "\r\n");
+        info = sdscatprintf(info, "# Durability\r\n");
+        info = genDurabilityInfoString(info);
     }
 
     return info;

@@ -936,12 +936,19 @@ static client createClient(char *cmd, int len, int seqlen, client from, int thre
         port = config.conn_info.hostport;
     } else {
         int node_idx = 0;
+        int node_count = config.cluster_node_count;
+        clusterNode **nodes = config.cluster_nodes;
+        if (strcmp(config.title, "function_load")) {
+            node_count = config.primary_node_count;
+            nodes = config.primary_nodes;
+        }
         if (config.num_threads < config.cluster_node_count)
-            node_idx = config.liveclients % config.cluster_node_count;
+            node_idx = config.liveclients % node_count;
         else
-            node_idx = thread_id % config.cluster_node_count;
-        clusterNode *node = config.cluster_nodes[node_idx];
+            node_idx = thread_id % node_count;
+        clusterNode *node = nodes[node_idx];
         assert(node != NULL);
+        if (strcmp(config.title, "function_load")) assert(node->replicate == NULL);
         ip = (const char *)node->ip;
         port = node->port;
         c->cluster_node = node;

@@ -85,8 +85,11 @@ target_compile_options(valkey-unit-gtests PRIVATE -Og -g)
 target_compile_options(valkey-unit-gtests PRIVATE
     -Wno-deprecated-declarations
     -Wno-write-strings
-    -fno-var-tracking-assignments
 )
+# -fno-var-tracking-assignments is GCC-only, skip on clang
+if (NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    target_compile_options(valkey-unit-gtests PRIVATE -fno-var-tracking-assignments)
+endif()
 
 # Include directories for C++ compilation
 target_include_directories(valkey-unit-gtests PRIVATE

@@ -524,6 +524,10 @@ ENGINE_SERVER_OBJ = \
     rdma.o \
     release.o \
     replication.o \
+	reply_blocking.o \
+	durable_task.o \
+	durability_provider.o \
+	uncommitted_keys.o \
     resp_parser.o \
     rio.o \
     script.o \

@@ -267,8 +267,9 @@ else
 ifeq ($(uname_S),Darwin)
 	FINAL_LDFLAGS+= -Wl,-rpath,$(PREFIX)/lib
 	FINAL_LDFLAGS+= -Wl,-rpath,$(current_dir)/modules/lua
+	FINAL_LDFLAGS+= -Wl,-rpath,@loader_path/../lib
 else
-	FINAL_LDFLAGS+= -Wl,-rpath,$(PREFIX)/lib:$(current_dir)/modules/lua -Wl,--disable-new-dtags
+	FINAL_LDFLAGS+= -Wl,-rpath,$(PREFIX)/lib:$(current_dir)/modules/lua:$$ORIGIN/../lib -Wl,--disable-new-dtags
 endif
 endif
 

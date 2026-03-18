@@ -2607,17 +2607,17 @@ int main(int argc, char **argv) {
         if (test_is_selected("fcall")) {
             char *script = generateFunctionScript(1, config.num_keys_in_fcall > 0);
 
-            valkeyContext *ctx = getValkeyContext(config.ct, config.conn_info.hostip, config.conn_info.hostport);
-            if (ctx == NULL) {
-                exit(1);
+            for (int i = 0; i < config.primary_node_count; i++) {
+                valkeyContext *ctx = getValkeyContext(config.ct, config.primary_nodes[i]->ip, config.primary_nodes[i]->port);
+                if (ctx == NULL) {
+                    exit(1);
+                }
+                assert(ctx != NULL && ctx->err == 0);
+                void *reply = valkeyCommand(ctx, "FUNCTION LOAD REPLACE %s", script);
+                assert(reply != NULL);
+                freeReplyObject(reply);
+                valkeyFree(ctx);
             }
-
-            assert(ctx != NULL && ctx->err == 0);
-            void *reply = valkeyCommand(ctx, "FUNCTION LOAD REPLACE %s", script);
-
-            assert(reply != NULL);
-            freeReplyObject(reply);
-            valkeyFree(ctx);
             zfree(script);
 
             char **cmd_argv = zmalloc(sizeof(char *) * (config.num_keys_in_fcall + 3));
@@ -2628,7 +2628,7 @@ int main(int argc, char **argv) {
             ret = asprintf(&(cmd_argv[2]), "%d", config.num_keys_in_fcall);
             UNUSED(ret);
             for (int i = 0; i < config.num_keys_in_fcall; i++) {
-                ret = asprintf(&(cmd_argv[3 + i]), "key%d", i + 1);
+                ret = asprintf(&(cmd_argv[3 + i]), "key%s%d", tag, i + 1);
                 UNUSED(ret);
             }
             len = valkeyFormatCommandArgv(&cmd, config.num_keys_in_fcall + 3, (const char **)cmd_argv, NULL);
@@ -2636,7 +2636,6 @@ int main(int argc, char **argv) {
                 free(cmd_argv[i]);
             }
             zfree(cmd_argv);
-
             benchmark("FCALL", cmd, len);
             free(cmd);
         }

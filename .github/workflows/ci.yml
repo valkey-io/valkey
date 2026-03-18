@@ -52,7 +52,7 @@ jobs:
           if [[ ! -z "$dirty" ]]; then echo "$dirty"; exit 1; fi
       - name: unit tests
         run: |
-          ./src/unit/valkey-unit-gtests
+          make test-unit
 
   test-ubuntu-latest-compatibility:
     runs-on: ubuntu-latest
@@ -116,8 +116,7 @@ jobs:
           ./utils/gen-test-certs.sh
           ./build-release/runtest --verbose --tags -slow --dump-logs --tls
       - name: unit tests
-        run: |
-          ./build-release/bin/valkey-unit-gtests
+        run: make -C build-release test-unit
 
   test-sanitizer-address:
     runs-on: ubuntu-latest
@@ -144,7 +143,7 @@ jobs:
         run: CFLAGS='-Werror' ./runtest-moduleapi --verbose --dump-logs
       - name: unit tests
         run: |
-          ./src/unit/valkey-unit-gtests
+          make test-unit
 
   test-rdma:
     runs-on: ubuntu-latest
@@ -283,7 +282,9 @@ jobs:
             GTEST_LIBS="/usr/lib32/libgtest.a /usr/lib32/libgmock.a"
       - name: unit tests
         run: |
-          ./src/unit/valkey-unit-gtests
+          make test-unit \
+            GTEST_CFLAGS="-I/usr/src/googletest/googletest/include -I/usr/src/googletest/googlemock/include" \
+            GTEST_LIBS="/usr/lib32/libgtest.a /usr/lib32/libgmock.a"
 
   build-libc-malloc:
     runs-on: ubuntu-latest

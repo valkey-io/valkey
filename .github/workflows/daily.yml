@@ -132,7 +132,7 @@ jobs:
         if: true && !contains(github.event.inputs.skiptests, 'unittest')
         run: |
           if [ -f ./src/unit/valkey-unit-gtests ]; then
-            ./src/unit/valkey-unit-gtests --accurate
+            make test-unit accurate=1
           elif [ -f ./src/valkey-unit-tests ]; then
             ./src/valkey-unit-tests --accurate
           fi
@@ -218,7 +218,7 @@ jobs:
         if: true && !contains(github.event.inputs.skiptests, 'unittest')
         run: |
           if [ -f ./src/unit/valkey-unit-gtests ]; then
-            ./src/unit/valkey-unit-gtests --accurate
+            make test-unit accurate=1
           elif [ -f ./src/valkey-unit-tests ]; then
             ./src/valkey-unit-tests --accurate
           fi
@@ -283,7 +283,7 @@ jobs:
         if: true && !contains(github.event.inputs.skiptests, 'unittest')
         run: |
           if [ -f ./src/unit/valkey-unit-gtests ]; then
-            ./src/unit/valkey-unit-gtests --accurate
+            make test-unit accurate=1
           elif [ -f ./src/valkey-unit-tests ]; then
             ./src/valkey-unit-tests --accurate
           fi
@@ -464,7 +464,9 @@ jobs:
         if: true && !contains(github.event.inputs.skiptests, 'unittest')
         run: |
           if [ -f ./src/unit/valkey-unit-gtests ]; then
-            ./src/unit/valkey-unit-gtests --accurate
+            make test-unit accurate=1 \
+              GTEST_CFLAGS="-I/usr/src/googletest/googletest/include -I/usr/src/googletest/googlemock/include" \
+              GTEST_LIBS="/usr/lib32/libgtest.a /usr/lib32/libgmock.a"
           elif [ -f ./src/valkey-unit-tests ]; then
             ./src/valkey-unit-tests --accurate
           fi
@@ -843,8 +845,8 @@ jobs:
         if: true && !contains(github.event.inputs.skiptests, 'unittest')
         run: |
           if [ -f ./src/unit/valkey-unit-gtests ]; then
-            valgrind --track-origins=yes --suppressions=./src/valgrind.sup --show-reachable=no --show-possibly-lost=no --leak-check=full --log-file=err.txt ./src/unit/valkey-unit-gtests --valgrind
-            if grep -q 0x err.txt; then cat err.txt; exit 1; fi
+            ./deps/gtest-parallel/gtest-parallel valgrind -- --track-origins=yes --suppressions=./src/valgrind.sup --show-reachable=no --show-possibly-lost=no --leak-check=full --log-file=err.%p.txt ./src/unit/valkey-unit-gtests --valgrind
+            if grep -qlE '0x[0-9A-Fa-f]+:' err.*.txt 2>/dev/null; then grep -lE '0x[0-9A-Fa-f]+:' err.*.txt | xargs cat; exit 1; fi
           elif [ -f ./src/valkey-unit-tests ]; then
             valgrind --track-origins=yes --suppressions=./src/valgrind.sup --show-reachable=no --show-possibly-lost=no --leak-check=full --log-file=err.txt ./src/valkey-unit-tests --valgrind
             if grep -q 0x err.txt; then cat err.txt; exit 1; fi
@@ -931,8 +933,8 @@ jobs:
         if: true && !contains(github.event.inputs.skiptests, 'unittest')
         run: |
           if [ -f ./src/unit/valkey-unit-gtests ]; then
-            valgrind --track-origins=yes --suppressions=./src/valgrind.sup --show-reachable=no --show-possibly-lost=no --leak-check=full --log-file=err.txt ./src/unit/valkey-unit-gtests --valgrind
-            if grep -q 0x err.txt; then cat err.txt; exit 1; fi
+            ./deps/gtest-parallel/gtest-parallel valgrind -- --track-origins=yes --suppressions=./src/valgrind.sup --show-reachable=no --show-possibly-lost=no --leak-check=full --log-file=err.%p.txt ./src/unit/valkey-unit-gtests --valgrind
+            if grep -qlE '0x[0-9A-Fa-f]+:' err.*.txt 2>/dev/null; then grep -lE '0x[0-9A-Fa-f]+:' err.*.txt | xargs cat; exit 1; fi
           elif [ -f ./src/valkey-unit-tests ]; then
             valgrind --track-origins=yes --suppressions=./src/valgrind.sup --show-reachable=no --show-possibly-lost=no --leak-check=full --log-file=err.txt ./src/valkey-unit-tests --valgrind
             if grep -q 0x err.txt; then cat err.txt; exit 1; fi
@@ -996,7 +998,7 @@ jobs:
         if: true && !contains(github.event.inputs.skiptests, 'unittest')
         run: |
           if [ -f ./src/unit/valkey-unit-gtests ]; then
-            ./src/unit/valkey-unit-gtests
+            make test-unit
           elif [ -f ./src/valkey-unit-tests ]; then
             ./src/valkey-unit-tests
           fi
@@ -1055,7 +1057,7 @@ jobs:
         if: true && !contains(github.event.inputs.skiptests, 'unittest')
         run: |
           if [ -f ./src/unit/valkey-unit-gtests ]; then
-            ./src/unit/valkey-unit-gtests --large-memory
+            make test-unit large_memory=1
           elif [ -f ./src/valkey-unit-tests ]; then
             ./src/valkey-unit-tests --large-memory
           fi
@@ -1134,7 +1136,7 @@ jobs:
         if: true && !contains(github.event.inputs.skiptests, 'unittest')
         run: |
           if [ -f ./src/unit/valkey-unit-gtests ]; then
-            ./src/unit/valkey-unit-gtests --accurate
+            make test-unit accurate=1
           elif [ -f ./src/valkey-unit-tests ]; then
             ./src/valkey-unit-tests --accurate
           fi
@@ -1193,7 +1195,7 @@ jobs:
         if: true && !contains(github.event.inputs.skiptests, 'unittest')
         run: |
           if [ -f ./src/unit/valkey-unit-gtests ]; then
-            ./src/unit/valkey-unit-gtests --accurate --large-memory
+            make test-unit accurate=1 large_memory=1
           elif [ -f ./src/valkey-unit-tests ]; then
             ./src/valkey-unit-tests --accurate --large-memory
           fi
@@ -1268,7 +1270,7 @@ jobs:
         if: true && !contains(github.event.inputs.skiptests, 'unittest')
         run: |
           if [ -f ./src/unit/valkey-unit-gtests ]; then
-            ./src/unit/valkey-unit-gtests
+            make test-unit
           elif [ -f ./src/valkey-unit-tests ]; then
             ./src/valkey-unit-tests
           fi

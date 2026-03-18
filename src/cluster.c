@@ -1741,6 +1741,8 @@ void clusterscanCommand(client *c) {
     int slot;
     unsigned long long cursor;
     int input_slot = -1;
+    int match_slot = -1;
+    int skip_scan = 0;
 
     /* Parse all arguments together so that values of MATCH/COUNT/SLOT/TYPE are
      * not mistaken for the option names.*/
@@ -1755,9 +1757,12 @@ void clusterscanCommand(client *c) {
             }
             if ((input_slot = getSlotOrReply(c, c->argv[i + 1])) == -1) return;
             i++;
-        } else if ((!strcasecmp(opt, "count") || !strcasecmp(opt, "match") ||
-                    !strcasecmp(opt, "type")) &&
-                   remaining >= 2) {
+        } else if (!strcasecmp(opt, "match") && remaining >= 2) {
+            sds pat = objectGetVal(c->argv[i + 1]);
+            int patlen = sdslen(pat);
+            match_slot = (patlen == 1 && pat[0] == '*') ? -1 : patternHashSlot(pat, patlen);
+            i++;
+        } else if ((!strcasecmp(opt, "count") || !strcasecmp(opt, "type")) && remaining >= 2) {
             i++; /* Let scanGenericCommand parse this */
         } else {
             addReplyErrorObject(c, shared.syntaxerr);
@@ -1765,19 +1770,27 @@ void clusterscanCommand(client *c) {
         }
     }
 
+    /* SLOT and single slot MATCH target different slots hence conclude the scan */
+    skip_scan = input_slot != -1 && match_slot != -1 && input_slot != match_slot;
+
     /* Handle cursor "0" case. If slot information is provided we return
      * the updated cursor to scan input slot, else scan from slot 0. */
     if (strcmp(objectGetVal(c->argv[1]), "0") == 0) {
         if (input_slot != -1) {
             slot = input_slot;
+        } else if (match_slot != -1) {
+            slot = match_slot; /* If match maps to a particular slot, start scan from there */
         } else {
             slot = 0;
         }
 
-        sds new_cursor = sdscatfmt(sdsempty(), "0-{%s}-0", crc16_slot_table[slot]);
-
         addReplyArrayLen(c, 2);
-        addReplyBulkSds(c, new_cursor);
+        if (skip_scan) {
+            addReplyBulkCString(c, "0");
+        } else {
+            sds new_cursor = sdscatfmt(sdsempty(), "0-{%s}-0", crc16_slot_table[slot]);
+            addReplyBulkSds(c, new_cursor);
+        }
         addReplyArrayLen(c, 0);
         return;
     } else {
@@ -1790,15 +1803,28 @@ void clusterscanCommand(client *c) {
             addReplyError(c, "Cursor slot mismatch with SLOT argument");
             return;
         }
+
+        if (match_slot != -1 && slot != match_slot) {
+            /* Advance cursor to the slot matched by MATCH if required but do not go back. */
+            addReplyArrayLen(c, 2);
+            if (!skip_scan && match_slot > slot) {
+                sds new_cursor = sdscatfmt(sdsempty(), "0-{%s}-0", crc16_slot_table[match_slot]);
+                addReplyBulkSds(c, new_cursor);
+            } else {
+                addReplyBulkCString(c, "0");
+            }
+            addReplyArrayLen(c, 0);
+            return;
+        }
     }
 
     /* Scan the slot using scanGenericCommand */
     sds cursor_prefix = sdscatfmt(sdsempty(), "%s-{%s}-", clusterscanFingerprint(), crc16_slot_table[slot]);
     sds finished_cursor_prefix = NULL;
 
-    /* If SLOT argument was provided, don't advance to next slot then return 0 cursor.
+    /* If SLOT argument was provided or implied by MATCH, don't advance to next slot then return 0 cursor.
      * Else, advance to next slot for full cluster scan */
-    if (input_slot != -1) {
+    if (input_slot != -1 || match_slot != -1) {
         finished_cursor_prefix = sdsnew("");
     } else {
         int next_slot = slot + 1;

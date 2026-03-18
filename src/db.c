@@ -752,6 +752,9 @@ long long dbTotalServerKeyCount(void) {
  * a context of a client. */
 void signalModifiedKey(client *c, serverDb *db, robj *key) {
     touchWatchedKey(db, key);
+    if (durabilitySignalModifiedKey(c, db, key)) {
+        return;
+    }
     trackingInvalidateKey(c, key, 1);
 }
 
@@ -768,6 +771,10 @@ void signalFlushedDb(int dbid, int async) {
         if (server.db[j] == NULL) continue;
         scanDatabaseForDeletedKeys(server.db[j], NULL);
         touchAllWatchedKeysInDb(server.db[j], NULL);
+    }
+
+    if (durabilitySignalFlushedDb(dbid)) {
+        return;
     }
 
     trackingInvalidateKeysOnFlush(async);

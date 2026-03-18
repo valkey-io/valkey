@@ -142,7 +142,9 @@ static struct config {
     int fuzz_flags; /* Bit flags for fuzzing modes */
     readFromReplica read_from_replica;
     int cluster_node_count;
+    int primary_node_count;
     struct clusterNode **cluster_nodes;
+    struct clusterNode **primary_nodes;
     struct serverConfig *server_config;
     struct hdr_histogram *latency_histogram;
     struct hdr_histogram *current_sec_latency_histogram;
@@ -1402,6 +1404,11 @@ static clusterNode **addClusterNode(clusterNode *node) {
     config.cluster_nodes = zrealloc(config.cluster_nodes, count * sizeof(*node));
     if (!config.cluster_nodes) return NULL;
     config.cluster_nodes[config.cluster_node_count++] = node;
+    if (node->replicate == NULL) {
+        config.primary_node_count++;
+        config.primary_nodes = zrealloc(config.primary_nodes, config.primary_node_count * sizeof(node));
+        config.primary_nodes[config.primary_node_count - 1] = node;
+    }
     return config.cluster_nodes;
 }
 

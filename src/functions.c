@@ -69,33 +69,19 @@ typedef struct functionsLibMetaData {
     sds code;
 } functionsLibMetaData;
 
-static void dictEntryDestructorSdsKeyEngineStatsValue(void *entry) {
-    dictEntry *de = entry;
-    dictSdsDestructor(dictGetKey(de));
-    engineStatsDispose(dictGetVal(de));
-    zfree(de);
-}
-
-static void dictEntryDestructorSdsKeyEngineFunctionValue(void *entry) {
-    dictEntry *de = entry;
-    dictSdsDestructor(dictGetKey(de));
-    engineFunctionDispose(dictGetVal(de));
-    zfree(de);
-}
-
-static void dictEntryDestructorSdsKeyEngineLibraryValue(void *entry) {
-    dictEntry *de = entry;
-    dictSdsDestructor(dictGetKey(de));
-    engineLibraryDispose(dictGetVal(de));
-    zfree(de);
-}
-
 dictType functionDictType = {
     .entryGetKey = dictEntryGetKey,
     .hashFunction = dictCStrCaseHash,
     .keyCompare = dictSdsKeyCaseCompare,
     .entryDestructor = dictEntryDestructorSdsKey,
 };
+
+static void dictEntryDestructorSdsKeyEngineStatsValue(void *entry) {
+    dictEntry *de = entry;
+    dictSdsDestructor(dictGetKey(de));
+    engineStatsDispose(dictGetVal(de));
+    zfree(de);
+}
 
 dictType engineStatsDictType = {
     .entryGetKey = dictEntryGetKey,
@@ -104,12 +90,26 @@ dictType engineStatsDictType = {
     .entryDestructor = dictEntryDestructorSdsKeyEngineStatsValue,
 };
 
+static void dictEntryDestructorSdsKeyEngineFunctionValue(void *entry) {
+    dictEntry *de = entry;
+    dictSdsDestructor(dictGetKey(de));
+    engineFunctionDispose(dictGetVal(de));
+    zfree(de);
+}
+
 dictType libraryFunctionDictType = {
     .entryGetKey = dictEntryGetKey,
     .hashFunction = dictSdsHash,
     .keyCompare = dictSdsKeyCompare,
     .entryDestructor = dictEntryDestructorSdsKeyEngineFunctionValue,
 };
+
+static void dictEntryDestructorSdsKeyEngineLibraryValue(void *entry) {
+    dictEntry *de = entry;
+    dictSdsDestructor(dictGetKey(de));
+    engineLibraryDispose(dictGetVal(de));
+    zfree(de);
+}
 
 dictType librariesDictType = {
     .entryGetKey = dictEntryGetKey,

@@ -468,13 +468,15 @@ pVector *pvInsertAt(pVector *pv, void *elem, uint32_t idx) {
  *
  * Returns:
  *   The index if found; otherwise, the index where scalar search should continue. */
-static inline uint32_t pvFindSIMD_NEON64(void **data, uint32_t len, void *elem) {
-    uint64x2_t target = vdupq_n_u64((uint64_t)elem);
+static inline uint32_t pvFindSIMD_NEON64(void *const *data, uint32_t len, const void *elem) {
+    uint64x2_t target = vdupq_n_u64((uintptr_t)elem);
     uint32_t i = 0;
 
     for (; i + 4 <= len; i += 4) {
-        uint64x2_t chunk0 = vld1q_u64((const uint64_t*)&data[i]);
-        uint64x2_t chunk1 = vld1q_u64((const uint64_t*)&data[i + 2]);
+        uint64_t tmp[4];
+        memcpy(tmp, &data[i], 4 * sizeof(uint64_t));
+        uint64x2_t chunk0 = vld1q_u64(&tmp[0]);
+        uint64x2_t chunk1 = vld1q_u64(&tmp[2]);
 
         uint64x2_t cmp0 = vceqq_u64(chunk0, target);
         uint64x2_t cmp1 = vceqq_u64(chunk1, target);
@@ -485,10 +487,14 @@ static inline uint32_t pvFindSIMD_NEON64(void **data, uint32_t len, void *elem) 
         uint64_t m3 = vgetq_lane_u64(cmp1, 1);
 
         if (m0 | m1 | m2 | m3) {
-            if (m0)      return i;
-            else if (m1) return i + 1;
-            else if (m2) return i + 2;
-            else         return i + 3;
+            if (m0)
+                return i;
+            else if (m1)
+                return i + 1;
+            else if (m2)
+                return i + 2;
+            else
+                return i + 3;
         }
     }
     return i;
@@ -508,11 +514,11 @@ static inline uint32_t pvFindSIMD_NEON64(void **data, uint32_t len, void *elem) 
  *   - If pv is NULL or empty, returns 0 as a safe fallback.
  *   - Return value being equal to pv->len can be used to check for absence.
  *   - Uses NEON SIMD acceleration on ARM64 when available. */
-uint32_t pvFind(pVector *pv, void *elem) {
+uint32_t pvFind(const pVector *pv, const void *elem) {
     if (!pv || pv->len == 0) return 0;
 
     uint32_t len = pv->len;
-    void **data = pv->data;
+    void *const *data = pv->data;
     uint32_t i = 0;
 
 #if HAVE_ARM_NEON

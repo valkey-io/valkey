@@ -3720,10 +3720,23 @@ static void addConfigInfoReply(client *c, standardConfig *config) {
             addReplyBulkCString(c, enumNode[i].name);
         }
     } else if (config->type == NUMERIC_CONFIG) {
+        int is_unsigned = config->data.numeric.flags & UNSIGNED_CONFIG ||
+                          config->data.numeric.numeric_type == NUMERIC_TYPE_UINT ||
+                          config->data.numeric.numeric_type == NUMERIC_TYPE_ULONG ||
+                          config->data.numeric.numeric_type == NUMERIC_TYPE_ULONG_LONG ||
+                          config->data.numeric.numeric_type == NUMERIC_TYPE_SIZE_T;
         addReplyBulkCString(c, "range");
         addReplyArrayLen(c, 2);
-        addReplyLongLong(c, config->data.numeric.lower_bound);
-        addReplyLongLong(c, config->data.numeric.upper_bound);
+        if (is_unsigned) {
+            char buf[LONG_STR_SIZE];
+            ull2string(buf, sizeof(buf), (unsigned long long)config->data.numeric.lower_bound);
+            addReplyBulkCString(c, buf);
+            ull2string(buf, sizeof(buf), (unsigned long long)config->data.numeric.upper_bound);
+            addReplyBulkCString(c, buf);
+        } else {
+            addReplyLongLong(c, config->data.numeric.lower_bound);
+            addReplyLongLong(c, config->data.numeric.upper_bound);
+        }
     }
 }
 

@@ -938,7 +938,7 @@ static client createClient(char *cmd, int len, int seqlen, client from, int thre
         int node_idx = 0;
         int node_count = config.cluster_node_count;
         clusterNode **nodes = config.cluster_nodes;
-        if (strcmp(config.title, "function_load")) {
+        if (!strcmp(config.title, "FUNCTION LOAD")) {
             node_count = config.primary_node_count;
             nodes = config.primary_nodes;
         }
@@ -948,7 +948,7 @@ static client createClient(char *cmd, int len, int seqlen, client from, int thre
             node_idx = thread_id % node_count;
         clusterNode *node = nodes[node_idx];
         assert(node != NULL);
-        if (strcmp(config.title, "function_load")) assert(node->replicate == NULL);
+        if (!strcmp(config.title, "FUNCTION LOAD")) assert(node->replicate == NULL);
         ip = (const char *)node->ip;
         port = node->port;
         c->cluster_node = node;

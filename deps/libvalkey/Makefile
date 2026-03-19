@@ -86,7 +86,7 @@ DYLIB_MAJOR_NAME=$(LIBNAME).$(DYLIBSUFFIX).$(LIBVALKEY_MAJOR)
 DYLIB_ROOT_NAME=$(LIBNAME).$(DYLIBSUFFIX)
 DYLIBNAME=$(LIB_DIR)/$(DYLIB_ROOT_NAME)
 
-DYLIB_MAKE_CMD=$(CC) $(OPTIMIZATION) $(PLATFORM_FLAGS) -shared -Wl,-soname,$(DYLIB_MAJOR_NAME)
+DYLIB_MAKE_CMD=$(CC) $(PLATFORM_FLAGS) -shared -Wl,-soname,$(DYLIB_MAJOR_NAME)
 STLIBNAME=$(LIB_DIR)/$(LIBNAME).$(STLIBSUFFIX)
 STLIB_MAKE_CMD=$(AR) rcs
 
@@ -99,7 +99,7 @@ TLS_DYLIB_MAJOR_NAME=$(TLS_LIBNAME).$(DYLIBSUFFIX).$(LIBVALKEY_MAJOR)
 TLS_DYLIB_ROOT_NAME=$(TLS_LIBNAME).$(DYLIBSUFFIX)
 TLS_DYLIBNAME=$(LIB_DIR)/$(TLS_LIBNAME).$(DYLIBSUFFIX)
 TLS_STLIBNAME=$(LIB_DIR)/$(TLS_LIBNAME).$(STLIBSUFFIX)
-TLS_DYLIB_MAKE_CMD=$(CC) $(OPTIMIZATION) $(PLATFORM_FLAGS) -shared -Wl,-soname,$(TLS_DYLIB_MAJOR_NAME)
+TLS_DYLIB_MAKE_CMD=$(CC) $(PLATFORM_FLAGS) -shared -Wl,-soname,$(TLS_DYLIB_MAJOR_NAME)
 
 USE_TLS?=0
 
@@ -130,14 +130,20 @@ RDMA_DYLIB_MAJOR_NAME=$(RDMA_LIBNAME).$(DYLIBSUFFIX).$(LIBVALKEY_MAJOR)
 RDMA_DYLIB_ROOT_NAME=$(RDMA_LIBNAME).$(DYLIBSUFFIX)
 RDMA_DYLIBNAME=$(LIB_DIR)/$(RDMA_LIBNAME).$(DYLIBSUFFIX)
 RDMA_STLIBNAME=$(LIB_DIR)/$(RDMA_LIBNAME).$(STLIBSUFFIX)
-RDMA_DYLIB_MAKE_CMD=$(CC) $(OPTIMIZATION) $(PLATFORM_FLAGS) -shared -Wl,-soname,$(RDMA_DYLIB_MAJOR_NAME)
+RDMA_DYLIB_MAKE_CMD=$(CC) $(PLATFORM_FLAGS) -shared -Wl,-soname,$(RDMA_DYLIB_MAJOR_NAME)
 
 USE_RDMA?=0
+USE_DLOPEN_RDMA?=0
 
 ifeq ($(USE_RDMA),1)
   RDMA_SOURCES=$(SRC_DIR)/rdma.c
   RDMA_OBJS=$(patsubst $(SRC_DIR)/%.c,$(OBJ_DIR)/%.o,$(RDMA_SOURCES))
-  RDMA_LDFLAGS=-lrdmacm -libverbs
+  ifeq ($(USE_DLOPEN_RDMA),1)
+      CFLAGS += -DDLOPEN_RDMA
+      RDMA_LDFLAGS=
+  else
+      RDMA_LDFLAGS=-lrdmacm -libverbs
+  endif
   # This is required for test.c only
   CFLAGS+=-DVALKEY_TEST_RDMA
   RDMA_STLIB=$(RDMA_STLIBNAME)
@@ -182,27 +188,62 @@ ifeq ($(USE_TLS),1)
   TLS_LDFLAGS+=-lssl -lcrypto
 endif
 
-ifeq ($(uname_S),FreeBSD)
-  LDFLAGS += -lm
-else ifeq ($(UNAME_S),SunOS)
-  ifeq ($(shell $(CC) -V 2>&1 | grep -iq 'sun\|studio' && echo true),true)
+USE_THREADS?=1
+ifeq ($(USE_THREADS),1)
+  CFLAGS+=-DVALKEY_USE_THREADS
+endif
+
+PTHREAD_FLAGS :=
+
+ifeq ($(uname_S),Linux)
+  ifeq ($(USE_THREADS),1)
+    PTHREAD_FLAGS += -pthread
+  endif
+else ifeq ($(uname_S),FreeBSD)
+  REAL_LDFLAGS += -lm
+  ifeq ($(USE_THREADS),1)
+    PTHREAD_FLAGS += -pthread
+  endif
+else ifeq ($(uname_S),SunOS)
+  # Solaris' default grep doesn't have -E so we need two checks
+  CC_VERSION := $(shell $(CC) -V 2>&1 || echo unknown)
+  ifneq (,$(findstring Sun C,$(CC_VERSION)))
+    HAVE_SUN_CC := 1
+  else ifneq (,$(findstring Studio,$(CC_VERSION)))
+    HAVE_SUN_CC := 1
+  endif
+
+  ifeq ($(HAVE_SUN_CC),1)
     SUN_SHARED_FLAG = -G
+    REAL_CFLAGS    += -mt
+    ifeq ($(USE_THREADS),1)
+      PTHREAD_FLAGS  += -mt
+    endif
   else
     SUN_SHARED_FLAG = -shared
+    ifeq ($(USE_THREADS),1)
+      PTHREAD_FLAGS  += -pthread
+    endif
   endif
   REAL_LDFLAGS += -ldl -lnsl -lsocket
-  DYLIB_MAKE_CMD = $(CC) $(OPTIMIZATION) $(SUN_SHARED_FLAG) -o $(DYLIBNAME) -h $(DYLIB_PATCH_NAME) $(LDFLAGS)
-  TLS_DYLIB_MAKE_CMD = $(CC) $(SUN_SHARED_FLAG) -o $(TLS_DYLIBNAME) -h $(TLS_DYLIB_PATCH_NAME) $(LDFLAGS) $(TLS_LDFLAGS)
+  DYLIB_MAKE_CMD = $(CC) $(SUN_SHARED_FLAG) -h $(DYLIB_PATCH_NAME)
+  TLS_DYLIB_MAKE_CMD = $(CC) $(SUN_SHARED_FLAG) -h $(TLS_DYLIB_PATCH_NAME)
 else ifeq ($(uname_S),Darwin)
+  ifeq ($(USE_THREADS),1)
+    PTHREAD_FLAGS += -pthread
+  endif
   DYLIBSUFFIX=dylib
   DYLIB_PATCH_NAME=$(LIBNAME).$(LIBVALKEY_MAJOR).$(LIBVALKEY_MINOR).$(LIBVALKEY_PATCH).$(DYLIBSUFFIX)
   DYLIB_MAJOR_NAME=$(LIBNAME).$(LIBVALKEY_MAJOR).$(DYLIBSUFFIX)
-  DYLIB_MAKE_CMD=$(CC) -dynamiclib -Wl,-install_name,$(PREFIX)/$(LIBRARY_PATH)/$(DYLIB_PATCH_NAME) -o $(DYLIBNAME) $(LDFLAGS)
+  DYLIB_MAKE_CMD=$(CC) -dynamiclib \
+    -Wl,-install_name,$(PREFIX)/$(LIBRARY_PATH)/$(DYLIB_PATCH_NAME)
   TLS_DYLIB_PATCH_NAME=$(TLS_LIBNAME).$(LIBVALKEY_MAJOR).$(LIBVALKEY_MINOR).$(LIBVALKEY_PATCH).$(DYLIBSUFFIX)
   TLS_DYLIB_MAJOR_NAME=$(TLS_LIBNAME).$(LIBVALKEY_MAJOR).$(DYLIBSUFFIX)
-  TLS_DYLIB_MAKE_CMD=$(CC) -dynamiclib -Wl,-install_name,$(PREFIX)/$(LIBRARY_PATH)/$(TLS_DYLIB_PATCH_NAME) -o $(TLS_DYLIBNAME) $(LDFLAGS) $(TLS_LDFLAGS)
-  DYLIB_PLUGIN=-Wl,-undefined -Wl,dynamic_lookup
+  TLS_DYLIB_MAKE_CMD=$(CC) -dynamiclib \
+    -Wl,-install_name,$(PREFIX)/$(LIBRARY_PATH)/$(TLS_DYLIB_PATCH_NAME)
 endif
+
+REAL_LDFLAGS += $(PTHREAD_FLAGS)
 
 all: dynamic static pkgconfig tests
 
@@ -212,14 +253,16 @@ $(DYLIBNAME): $(OBJS) | $(LIB_DIR)
 $(STLIBNAME): $(OBJS) | $(LIB_DIR)
 	$(STLIB_MAKE_CMD) $(STLIBNAME) $(OBJS)
 
-$(TLS_DYLIBNAME): $(TLS_OBJS)
-	$(TLS_DYLIB_MAKE_CMD) $(DYLIB_PLUGIN) -o $(TLS_DYLIBNAME) $(TLS_OBJS) $(REAL_LDFLAGS) $(LDFLAGS) $(TLS_LDFLAGS)
+$(TLS_DYLIBNAME): $(TLS_OBJS) $(DYLIBNAME) | $(LIB_DIR)
+	$(TLS_DYLIB_MAKE_CMD) -o $(TLS_DYLIBNAME) \
+	    $(TLS_OBJS) $(REAL_LDFLAGS) $(DYLIBNAME) $(TLS_LDFLAGS)
 
 $(TLS_STLIBNAME): $(TLS_OBJS)
 	$(STLIB_MAKE_CMD) $(TLS_STLIBNAME) $(TLS_OBJS)
 
-$(RDMA_DYLIBNAME): $(RDMA_OBJS)
-	$(RDMA_DYLIB_MAKE_CMD) $(DYLIB_PLUGIN) -o $(RDMA_DYLIBNAME) $(RDMA_OBJS) $(REAL_LDFLAGS) $(LDFLAGS) $(RDMA_LDFLAGS)
+$(RDMA_DYLIBNAME): $(RDMA_OBJS) $(DYLIBNAME) | $(LIB_DIR)
+	$(RDMA_DYLIB_MAKE_CMD) -o $(RDMA_DYLIBNAME) \
+	    $(RDMA_OBJS) $(REAL_LDFLAGS) $(DYLIBNAME) $(RDMA_LDFLAGS)
 
 $(RDMA_STLIBNAME): $(RDMA_OBJS)
 	$(STLIB_MAKE_CMD) $(RDMA_STLIBNAME) $(RDMA_OBJS)
@@ -230,8 +273,8 @@ $(OBJ_DIR)/%.o: $(SRC_DIR)/%.c | $(OBJ_DIR)
 $(OBJ_DIR)/%.o: $(TEST_DIR)/%.c | $(OBJ_DIR)
 	$(CC) -std=c99 -pedantic $(REAL_CFLAGS) -I$(INCLUDE_DIR) -I$(SDS_INCLUDE_DIR) -I$(DICT_INCLUDE_DIR) -I$(SRC_DIR) -MMD -MP -c $< -o $@
 
-$(TEST_DIR)/%: $(OBJ_DIR)/%.o $(STLIBNAME)
-	$(CC) -o $@ $< $(RDMA_STLIB) $(STLIBNAME) $(TLS_STLIB) $(LDFLAGS) $(TEST_LDFLAGS)
+$(TEST_DIR)/%: $(OBJ_DIR)/%.o $(STLIBNAME) $(TLS_STLIB)
+	$(CC) -o $@ $< $(RDMA_STLIB) $(STLIBNAME) $(TLS_STLIB) $(REAL_LDFLAGS) $(TEST_LDFLAGS)
 
 $(OBJ_DIR):
 	mkdir -p $(OBJ_DIR)
@@ -249,7 +292,12 @@ pkgconfig: $(PKGCONFNAME) $(TLS_PKGCONF) $(RDMA_PKGCONF)
 
 TEST_LDFLAGS = $(TLS_LDFLAGS) $(RDMA_LDFLAGS)
 ifeq ($(USE_TLS),1)
-  TEST_LDFLAGS += -pthread
+  # Tests need pthreads if TLS is enabled, but only add it once
+  ifeq ($(HAVE_SUN_CC),1)
+    TEST_LDFLAGS += -mt
+  else ifeq (,$(findstring -pthread,$(REAL_LDFLAGS) $(TEST_LDFLAGS)))
+    TEST_LDFLAGS += -pthread
+  endif
 endif
 ifeq ($(TEST_ASYNC),1)
     TEST_LDFLAGS += -levent

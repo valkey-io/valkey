@@ -11,7 +11,9 @@
 #include "sds.h"
 #include <stdbool.h>
 #include <stddef.h>
+#ifndef __cplusplus
 #include <stdatomic.h>
+#endif
 
 /* Dataset constants */
 #define MAX_DATASET_FIELDS 1000
@@ -59,7 +61,9 @@ size_t datasetGetRecordCount(dataset *ds);
 /* Report memory usage */
 void datasetReportMemory(dataset *ds);
 
+#ifndef __cplusplus
 /* Generate complete command for given record index (caller must sdsfree) */
 sds datasetGenerateCommand(dataset *ds, int record_index, sds *template_argv, int template_argc, _Atomic uint64_t *seq_key, int replace_placeholders, int keyspacelen, int sequential_replacement);
+#endif
 
 #endif /* VALKEY_BENCHMARK_DATASET_H */

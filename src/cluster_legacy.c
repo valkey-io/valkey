@@ -101,7 +101,6 @@ const char *clusterGetMessageTypeString(int type);
 void removeChannelsInSlot(unsigned int slot);
 unsigned int countChannelsInSlot(unsigned int hashslot);
 void clusterAddNodeToShard(const char *shard_id, clusterNode *node);
-list *clusterLookupNodeListByShardId(const char *shard_id);
 void clusterRemoveNodeFromShard(clusterNode *node);
 int auxShardIdSetter(clusterNode *n, void *value, size_t length);
 sds auxShardIdGetter(clusterNode *n, sds s);
@@ -109,6 +108,9 @@ int auxShardIdPresent(clusterNode *n);
 int auxHumanNodenameSetter(clusterNode *n, void *value, size_t length);
 sds auxHumanNodenameGetter(clusterNode *n, sds s);
 int auxHumanNodenamePresent(clusterNode *n);
+int auxAvailabilityZoneSetter(clusterNode *n, void *value, size_t length);
+sds auxAvailabilityZoneGetter(clusterNode *n, sds s);
+int auxAvailabilityZonePresent(clusterNode *n);
 int auxAnnounceClientIpV4Setter(clusterNode *n, void *value, size_t length);
 sds auxAnnounceClientIpV4Getter(clusterNode *n, sds s);
 int auxAnnounceClientIpV4Present(clusterNode *n);
@@ -421,6 +423,7 @@ typedef enum {
     af_announce_client_ipv6,
     af_announce_client_tcp_port,
     af_announce_client_tls_port,
+    af_availability_zone,
     af_count, /* must be the last field */
 } auxFieldIndex;
 
@@ -437,6 +440,7 @@ auxFieldHandler auxFieldHandlers[] = {
     {"client-ipv6", auxAnnounceClientIpV6Setter, auxAnnounceClientIpV6Getter, auxAnnounceClientIpV6Present},
     {"client-tcp-port", auxAnnounceClientTcpPortSetter, auxAnnounceClientTcpPortGetter, auxAnnounceClientTcpPortPresent},
     {"client-tls-port", auxAnnounceClientTlsPortSetter, auxAnnounceClientTlsPortGetter, auxAnnounceClientTlsPortPresent},
+    {"availability-zone", auxAvailabilityZoneSetter, auxAvailabilityZoneGetter, auxAvailabilityZonePresent},
 };
 
 int auxShardIdSetter(clusterNode *n, void *value, size_t length) {
@@ -484,6 +488,22 @@ sds auxHumanNodenameGetter(clusterNode *n, sds s) {
 
 int auxHumanNodenamePresent(clusterNode *n) {
     return sdslen(n->human_nodename);
+}
+
+int auxAvailabilityZoneSetter(clusterNode *n, void *value, size_t length) {
+    if (sdslen(n->availability_zone) == length && !strncmp(value, n->availability_zone, length)) {
+        return C_OK;
+    }
+    n->availability_zone = sdscpylen(n->availability_zone, value, length);
+    return C_OK;
+}
+
+sds auxAvailabilityZoneGetter(clusterNode *n, sds s) {
+    return sdscat(s, n->availability_zone);
+}
+
+int auxAvailabilityZonePresent(clusterNode *n) {
+    return sdslen(n->availability_zone);
 }
 
 int auxAnnounceClientIpV4Setter(clusterNode *n, void *value, size_t length) {
@@ -1303,6 +1323,10 @@ static void updateAnnouncedHumanNodename(clusterNode *node, char *value) {
     updateSdsExtensionField(&node->human_nodename, value);
 }
 
+static void updateAvailabilityZone(clusterNode *node, char *value) {
+    updateSdsExtensionField(&node->availability_zone, value);
+}
+
 static void updateAnnouncedClientIpV4(clusterNode *node, char *value) {
     updateSdsExtensionField(&node->announce_client_ipv4, value);
 }
@@ -1386,6 +1410,11 @@ void clusterUpdateMyselfHostname(void) {
 void clusterUpdateMyselfHumanNodename(void) {
     if (!myself) return;
     updateAnnouncedHumanNodename(myself, server.cluster_announce_human_nodename);
+}
+
+void clusterUpdateMyselfAvailabilityZone(void) {
+    if (!myself) return;
+    updateAvailabilityZone(myself, server.availability_zone);
 }
 
 void clusterUpdateMyselfClientIpV4(void) {
@@ -1495,6 +1524,7 @@ void clusterInit(void) {
     clusterUpdateMyselfClientIpV6();
     clusterUpdateMyselfHostname();
     clusterUpdateMyselfHumanNodename();
+    clusterUpdateMyselfAvailabilityZone();
     resetClusterStats();
 }
 
@@ -1613,18 +1643,13 @@ void clusterHandleServerShutdown(bool auto_failover) {
  * 4) Only for hard reset: a new Node ID is generated.
  * 5) Only for hard reset: currentEpoch and configEpoch are set to 0.
  * 6) The new configuration is saved and the cluster state updated.
- * 7) If the node was a replica, the whole data set is flushed away. */
+ * 7) If the node was a replica, the whole data set is flushed away.
+ * 8) If it is a hard reset or the node was a replica: a new Shard ID is generated. */
 void clusterReset(int hard) {
     dictIterator *di;
     dictEntry *de;
-    int j, was_replica = 0;
-
-    /* Turn into primary. */
-    if (nodeIsReplica(myself)) {
-        was_replica = 1;
-        clusterSetNodeAsPrimary(myself);
-        flushAllDataAndResetRDB(server.lazyfree_lazy_user_flush ? EMPTYDB_ASYNC : EMPTYDB_NO_FLAGS);
-    }
+    int j;
+    bool new_shard = false;
 
     /* Close slots, reset manual failover state. */
     clusterCloseAllSlots();
@@ -1664,22 +1689,34 @@ void clusterReset(int hard) {
 
         /* To change the Node ID we need to remove the old name from the
          * nodes table, change the ID, and re-add back with new name. */
+        new_shard = true;
         oldname = sdsnewlen(myself->name, CLUSTER_NAMELEN);
         dictDelete(server.cluster->nodes, oldname);
         sdsfree(oldname);
         getRandomHexChars(myself->name, CLUSTER_NAMELEN);
-        getRandomHexChars(myself->shard_id, CLUSTER_NAMELEN);
         clusterAddNode(myself);
         serverLog(LL_NOTICE, "Node hard reset, now I'm %.40s", myself->name);
     } else {
         /* If we were a replica, this means our shard_id is the shard_id of
          * the primary node, and since now we become a new empty primary, we
          * need to have our own shard_id. */
-        if (was_replica) getRandomHexChars(myself->shard_id, CLUSTER_NAMELEN);
+        new_shard = true;
     }
 
     /* Re-populate shards */
-    clusterAddNodeToShard(myself->shard_id, myself);
+    if (new_shard) {
+        clusterRemoveNodeFromShard(myself);
+        getRandomHexChars(myself->shard_id, CLUSTER_NAMELEN);
+        clusterAddNodeToShard(myself->shard_id, myself);
+        serverLog(LL_NOTICE, "Moving myself to a new shard %.40s.", myself->shard_id);
+    }
+
+    /* Turn into primary. clusterSetNodeAsPrimary prints the shard ID to the
+     * server logs, so calling it here we can print the new correct shard ID. */
+    if (nodeIsReplica(myself)) {
+        clusterSetNodeAsPrimary(myself);
+        flushAllDataAndResetRDB(server.lazyfree_lazy_user_flush ? EMPTYDB_ASYNC : EMPTYDB_NO_FLAGS);
+    }
 
     /* Make sure to persist the new config and update the state. */
     clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_UPDATE_STATE | CLUSTER_TODO_FSYNC_CONFIG);
@@ -1917,6 +1954,7 @@ clusterNode *createClusterNode(char *nodename, int flags) {
     node->announce_client_ipv6 = sdsempty();
     node->hostname = sdsempty();
     node->human_nodename = sdsempty();
+    node->availability_zone = sdsempty();
     node->tcp_port = 0;
     node->cport = 0;
     node->tls_port = 0;
@@ -2155,6 +2193,7 @@ void freeClusterNode(clusterNode *n) {
     /* Free these members after links are freed, as freeClusterLink may access them. */
     sdsfree(n->hostname);
     sdsfree(n->human_nodename);
+    sdsfree(n->availability_zone);
     sdsfree(n->announce_client_ipv4);
     sdsfree(n->announce_client_ipv6);
     raxFree(n->fail_reports);
@@ -3381,6 +3420,9 @@ static uint32_t writePingExtensions(clusterMsg *hdr, int gossipcount) {
         writePortPingExtIfNonzero(&totlen, &cursor, CLUSTERMSG_EXT_TYPE_CLIENT_PORT, myself->announce_client_tcp_port);
     extensions +=
         writePortPingExtIfNonzero(&totlen, &cursor, CLUSTERMSG_EXT_TYPE_CLIENT_TLS_PORT, myself->announce_client_tls_port);
+    extensions +=
+        writeSdsPingExtIfNonempty(&totlen, &cursor, CLUSTERMSG_EXT_TYPE_AVAILABILITY_ZONE, myself->availability_zone);
+
 
     /* Gossip forgotten nodes */
     if (dictSize(server.cluster->nodes_black_list) > 0) {
@@ -3430,6 +3472,7 @@ void clusterProcessPingExtensions(clusterMsg *hdr, clusterLink *link) {
     clusterNode *sender = link->node ? link->node : clusterLookupNode(hdr->sender, CLUSTER_NAMELEN);
     char *ext_hostname = NULL;
     char *ext_humannodename = NULL;
+    char *ext_availability_zone = NULL;
     char *ext_clientipv4 = NULL;
     char *ext_clientipv6 = NULL;
     int ext_clientport = 0;
@@ -3481,6 +3524,10 @@ void clusterProcessPingExtensions(clusterMsg *hdr, clusterLink *link) {
         } else if (type == CLUSTERMSG_EXT_TYPE_SHARDID) {
             clusterMsgPingExtShardId *shardid_ext = (clusterMsgPingExtShardId *)&(ext->ext[0].shard_id);
             ext_shardid = shardid_ext->shard_id;
+        } else if (type == CLUSTERMSG_EXT_TYPE_AVAILABILITY_ZONE) {
+            clusterMsgPingExtAvailabilityZone *availability_zone_ext =
+                (clusterMsgPingExtAvailabilityZone *)&(ext->ext[0].availability_zone);
+            ext_availability_zone = availability_zone_ext->availability_zone;
         } else {
             /* Unknown type, we will ignore it but log what happened. */
             serverLog(LL_WARNING, "Received unknown extension type %d", type);
@@ -3499,6 +3546,7 @@ void clusterProcessPingExtensions(clusterMsg *hdr, clusterLink *link) {
     updateAnnouncedClientIpV6(sender, ext_clientipv6);
     updateAnnouncedClientPort(sender, ext_clientport);
     updateAnnouncedClientTlsPort(sender, ext_clienttlsport);
+    updateAvailabilityZone(sender, ext_availability_zone);
     /* If the node did not send us a shard-id extension, it means the sender
      * does not support it (old version), node->shard_id is randomly generated.
      * A cluster-wide consensus for the node's shard_id is not necessary.
@@ -3629,17 +3677,38 @@ int clusterIsValidPacket(clusterLink *link) {
         explen = sizeof(clusterMsg) - sizeof(union clusterMsgData);
         explen += (sizeof(clusterMsgDataGossip) * count);
 
+        /* Make sure that the number of gossip messages fit in the remaining
+         * space in the message. */
+        if (totlen < explen) {
+            serverLog(LL_WARNING,
+                      "Received invalid %s packet with gossip count %d that exceeds "
+                      "total packet length (%lld)",
+                      clusterGetMessageTypeString(type), count, (unsigned long long)totlen);
+            return 0;
+        }
+
         /* If there is extension data, which doesn't have a fixed length,
          * loop through them and validate the length of it now. */
         if (msg->mflags[0] & CLUSTERMSG_FLAG0_EXT_DATA) {
             clusterMsgPingExt *ext = getInitialPingExt(msg, count);
             while (extensions--) {
+                /* Make sure there is at least enough memory for the extension information so
+                 * we can parse it. */
+                if ((totlen - explen) < sizeof(clusterMsgPingExt)) {
+                    serverLog(LL_WARNING,
+                              "Received invalid %s packet with extension data that exceeds "
+                              "total packet length (%lld)",
+                              clusterGetMessageTypeString(type), (unsigned long long)totlen);
+                    return 0;
+                }
                 uint32_t extlen = getPingExtLength(ext);
                 if (extlen % 8 != 0) {
                     serverLog(LL_WARNING, "Received a %s packet without proper padding (%d bytes)",
                               clusterGetMessageTypeString(type), (int)extlen);
                     return 0;
                 }
+                /* Similar check to earlier, but we want to make sure the extension length is valid
+                 * this time. */
                 if ((totlen - explen) < extlen) {
                     serverLog(LL_WARNING,
                               "Received invalid %s packet with extension data that exceeds "
@@ -4028,6 +4097,9 @@ int clusterProcessPacket(clusterLink *link) {
          * what are the instances really competing. */
         if (sender) {
             int nofailover = flags & CLUSTER_NODE_NOFAILOVER;
+            if (nofailover != clusterNodeIsNoFailover(sender)) {
+                clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG);
+            }
             sender->flags &= ~CLUSTER_NODE_NOFAILOVER;
             sender->flags |= nofailover;
         }
@@ -4737,8 +4809,9 @@ void clusterSendPing(clusterLink *link, int type) {
      *
      * Since we have non-voting replicas that lower the probability of an entry
      * to feature our node, we set the number of entries per packet as
-     * 10% of the total nodes we have. */
-    wanted = floor(dictSize(server.cluster->nodes) / 10);
+     * a configurable percentage (default 10%) of the total nodes we have,
+     * bounded by the actual number of known nodes. */
+    wanted = (dictSize(server.cluster->nodes) * server.cluster_message_gossip_perc / 100);
     if (wanted < 3) wanted = 3;
     if (wanted > freshnodes) wanted = freshnodes;
 
@@ -4769,11 +4842,21 @@ void clusterSendPing(clusterLink *link, int type) {
             link->node->meet_sent = mstime();
     }
 
-    /* Populate the gossip fields */
-    int maxiterations = wanted * 3;
-    while (freshnodes > 0 && gossipcount < wanted && maxiterations--) {
-        dictEntry *de = dictGetRandomKey(server.cluster->nodes);
-        clusterNode *this = dictGetVal(de);
+    /* Populate the gossip fields.
+     * Use dictGetSomeKeys() to sample candidates in a single batch instead
+     * of calling dictGetRandomKey() in a retry loop. We over-allocate to
+     * have enough candidates after filtering out ineligible nodes.
+     * dictGetSomeKeys() picks a random starting point each call, so over
+     * many ping rounds all nodes get even coverage without needing an
+     * explicit shuffle. */
+    int candidates_wanted = wanted + 2; /* +2 for myself and link->node */
+    if (candidates_wanted > (int)dictSize(server.cluster->nodes))
+        candidates_wanted = dictSize(server.cluster->nodes);
+    dictEntry **candidates = zmalloc(sizeof(dictEntry *) * candidates_wanted);
+    unsigned int ncandidates = dictGetSomeKeys(server.cluster->nodes, candidates, candidates_wanted);
+
+    for (unsigned int i = 0; i < ncandidates && gossipcount < wanted; i++) {
+        clusterNode *this = dictGetVal(candidates[i]);
 
         /* Don't include this node: the whole packet header is about us
          * already, so we just gossip about other nodes.
@@ -4791,7 +4874,6 @@ void clusterSendPing(clusterLink *link, int type) {
          */
         if (this->flags & (CLUSTER_NODE_HANDSHAKE | CLUSTER_NODE_NOADDR) ||
             (this->link == NULL && this->numslots == 0)) {
-            freshnodes--; /* Technically not correct, but saves CPU. */
             continue;
         }
 
@@ -4801,9 +4883,9 @@ void clusterSendPing(clusterLink *link, int type) {
         /* Add it */
         clusterSetGossipEntry(hdr, gossipcount, this);
         this->last_in_ping_gossip = cluster_pings_sent;
-        freshnodes--;
         gossipcount++;
     }
+    zfree(candidates);
 
     /* If there are PFAIL nodes, add them at the end. */
     if (pfail_wanted) {
@@ -7071,6 +7153,12 @@ void addNodeDetailsToShardReply(client *c, clusterNode *node) {
     addReplyBulkCString(c, health_msg);
     reply_count++;
 
+    if (sdslen(node->availability_zone) != 0) {
+        addReplyBulkCString(c, "availability-zone");
+        addReplyBulkCBuffer(c, node->availability_zone, sdslen(node->availability_zone));
+        reply_count++;
+    }
+
     setDeferredMapLen(c, node_replylen, reply_count);
 }
 
@@ -7882,6 +7970,7 @@ int clusterCommandSpecial(client *c) {
             char new_shard_id[CLUSTER_NAMELEN];
             getRandomHexChars(new_shard_id, CLUSTER_NAMELEN);
             updateShardId(myself, new_shard_id);
+            serverLog(LL_NOTICE, "Moving myself to a new shard %.40s.", myself->shard_id);
 
             clusterDoBeforeSleep(CLUSTER_TODO_UPDATE_STATE | CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_BROADCAST_ALL);
             addReply(c, shared.ok);

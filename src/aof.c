@@ -1005,6 +1005,131 @@ int startAppendOnly(void) {
     return C_OK;
 }
 
+/* Try to restart AOF after replica full sync by adopting `server.rdb_filename`
+ * as the new BASE file (RDB preamble mode), avoiding a redundant AOFRW.
+ * Returns C_OK on success; on C_ERR caller should fallback to
+ * restartAOFAfterSYNC(). */
+int restartAOFWithSyncRdb(void) {
+    serverAssert(server.aof_state == AOF_OFF);
+
+    int ret = C_ERR;
+    int newfd = -1, rdbfile_renamed = 0;
+    sds new_base_filename = NULL;
+    sds new_base_filepath = NULL;
+    sds new_incr_filename = NULL;
+    sds new_incr_filepath = NULL;
+    aofManifest *temp_am = NULL;
+
+    if (dirCreateIfMissing(server.aof_dirname) == -1) {
+        serverLog(LL_WARNING, "Can't open or create append-only dir %s: %s", server.aof_dirname, strerror(errno));
+        goto cleanup;
+    }
+
+    serverAssert(server.aof_manifest != NULL);
+    temp_am = aofManifestDup(server.aof_manifest);
+
+    new_base_filename = getNewBaseFileNameAndMarkPreAsHistory(temp_am, server.aof_use_rdb_preamble);
+    serverAssert(new_base_filename != NULL);
+    new_base_filepath = makePath(server.aof_dirname, new_base_filename);
+
+    if (rename(server.rdb_filename, new_base_filepath) == -1) {
+        serverLog(LL_WARNING, "Error trying to rename the RDB file %s into %s: %s", server.rdb_filename,
+                  new_base_filepath, strerror(errno));
+        goto cleanup;
+    }
+    rdbfile_renamed = 1;
+
+    /* Mark existing incr AOF files as history BEFORE creating the new one,
+     * so the new incr entry is not inadvertently moved to history. */
+    markRewrittenIncrAofAsHistory(temp_am);
+
+    new_incr_filename = getNewIncrAofName(temp_am);
+    new_incr_filepath = makePath(server.aof_dirname, new_incr_filename);
+    newfd = open(new_incr_filepath, O_WRONLY | O_TRUNC | O_CREAT, 0666);
+    if (newfd == -1) {
+        serverLog(LL_WARNING, "Can't open the append-only file %s: %s", new_incr_filename, strerror(errno));
+        goto cleanup;
+    }
+
+    if (persistAofManifest(temp_am) == C_ERR) {
+        goto cleanup;
+    }
+
+    aofManifestFreeAndUpdate(temp_am);
+    temp_am = NULL;
+
+    aofDelHistoryFiles();
+
+    sdsfree(new_base_filepath);
+    new_base_filepath = NULL;
+    sdsfree(new_incr_filepath);
+    new_incr_filepath = NULL;
+
+    /* Drain pending fsync jobs from the previous AOF before publishing the new
+     * fsynced offset to avoid races on fsynced_reploff_pending. */
+    bioDrainWorker(BIO_AOF_FSYNC);
+    atomic_store_explicit(&server.fsynced_reploff_pending, server.primary_repl_offset, memory_order_relaxed);
+    server.fsynced_reploff =
+        atomic_load_explicit(&server.fsynced_reploff_pending, memory_order_relaxed);
+
+    int aof_bio_fsync_status = atomic_load_explicit(&server.aof_bio_fsync_status, memory_order_relaxed);
+    if (aof_bio_fsync_status == C_ERR) {
+        serverLog(LL_WARNING, "AOF reopen, just ignore the AOF fsync error in bio job");
+        atomic_store_explicit(&server.aof_bio_fsync_status, C_OK, memory_order_relaxed);
+    }
+
+    if (server.aof_last_write_status == C_ERR) {
+        serverLog(LL_WARNING, "AOF reopen, just ignore the last error.");
+        server.aof_last_write_status = C_OK;
+    }
+
+    server.aof_lastbgrewrite_status = C_OK;
+    server.stat_aofrw_consecutive_failures = 0;
+
+    server.aof_last_fsync = server.mstime;
+    server.aof_last_incr_size = 0;
+    server.aof_last_incr_fsync_offset = 0;
+    server.aof_rewrite_base_size = getAppendOnlyFileSize(new_base_filename, NULL);
+    server.aof_current_size = server.aof_rewrite_base_size;
+
+    server.aof_fd = newfd;
+    server.aof_state = AOF_ON;
+
+    serverLog(LL_NOTICE, "Reused RDB file from primary sync as AOF base file: %s", new_base_filename);
+    ret = C_OK;
+    return ret;
+
+cleanup:
+    if (rdbfile_renamed) {
+        if (rename(new_base_filepath, server.rdb_filename) == -1) {
+            serverLog(LL_WARNING,
+                      "Failed to rename AOF base back to RDB file %s: %s. "
+                      "Orphan file may remain at %s",
+                      server.rdb_filename, strerror(errno), new_base_filepath);
+        } else {
+            rdbfile_renamed = 0;
+        }
+    }
+    if (server.rdb_del_sync_files && allPersistenceDisabled()) {
+        serverLog(LL_NOTICE, "Removing the RDB file obtained from "
+                             "the primary. This replica has persistence "
+                             "disabled");
+        if (rdbfile_renamed) {
+            bg_unlink(new_base_filepath);
+        } else {
+            bg_unlink(server.rdb_filename);
+        }
+    }
+    if (newfd != -1) close(newfd);
+    if (new_incr_filepath) {
+        bg_unlink(new_incr_filepath);
+        sdsfree(new_incr_filepath);
+    }
+    if (temp_am) aofManifestFree(temp_am);
+    if (new_base_filepath) sdsfree(new_base_filepath);
+    return ret;
+}
+
 /* This is a wrapper to the write syscall in order to retry on short writes
  * or if the syscall gets interrupted. It could look strange that we retry
  * on short writes given that we are writing to a block device: normally if

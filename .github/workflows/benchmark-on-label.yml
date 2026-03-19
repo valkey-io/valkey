@@ -20,7 +20,8 @@ permissions:
 jobs:
   benchmark:
     if: |
-      github.event.action == 'labeled' && github.event.label.name == 'run-benchmark' &&
+      github.event.action == 'labeled' &&
+      (github.event.label.name == 'run-benchmark' || github.event.label.name == 'run-cluster-benchmark') &&
       github.repository == 'valkey-io/valkey'
 
     runs-on: ["self-hosted", "ec2-al-2023-pr-benchmarking-arm64"]
@@ -86,6 +87,15 @@ jobs:
           echo "VALKEY_BENCHMARK_PATH=$VALKEY_BENCHMARK_PATH" >> $GITHUB_ENV
           echo "Latest valkey-benchmark path: $VALKEY_BENCHMARK_PATH"
 
+      - name: Enable cluster mode in benchmark config
+        working-directory: valkey-perf-benchmark
+        if: github.event.label.name == 'run-cluster-benchmark'
+        run: |
+          CONFIG_FILE="../valkey/.github/benchmark_configs/benchmark-config-arm.json"
+          sed -i 's/"cluster_mode": false/"cluster_mode": true/g' "$CONFIG_FILE"
+          echo "Updated config for cluster mode:"
+          cat "$CONFIG_FILE"
+
       - name: Run benchmarks
         working-directory: valkey-perf-benchmark
         run: |
@@ -120,7 +130,7 @@ jobs:
         continue-on-error: true
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
-          name: benchmark-results
+          name: ${{ github.event.label.name }}-results
           path: |
             ./valkey-perf-benchmark/results/${{ github.event.pull_request.merge_commit_sha }}/metrics.json
             ./valkey-perf-benchmark/results/${{ github.event.pull_request.base.ref }}/metrics.json
@@ -137,11 +147,13 @@ jobs:
             const sha = '${{ github.event.pull_request.head.sha }}';
             const short = sha.slice(0,7);
             const link = `[\`${short}\`](https://github.com/${owner}/${repo}/commit/${sha})`
+            const label = '${{ github.event.label.name }}';
+            const prefix = label === 'run-cluster-benchmark' ? 'Cluster Benchmark' : 'Benchmark';
             await github.rest.issues.createComment({
               issue_number: context.issue.number,
               owner,
               repo,
-              body: `**Benchmark ran on this commit:** ${link}\n\n${body}`
+              body: `**${prefix} ran on this commit:** ${link}\n\n${body}`
             });
 
       - name: Cleanup any running valkey processes
@@ -160,7 +172,7 @@ jobs:
           fi
 
       - name: Remove ${{ github.event.label.name }} label
-        if: always() && github.event.label.name == 'run-benchmark'
+        if: always() && (github.event.label.name == 'run-benchmark' || github.event.label.name == 'run-cluster-benchmark')
         uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}

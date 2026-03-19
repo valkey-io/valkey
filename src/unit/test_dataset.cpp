@@ -7,14 +7,14 @@
 #include <gtest/gtest.h>
 
 extern "C" {
-#include <stdio.h>
-#include <string.h>
-#include <stdlib.h>
-#include <unistd.h>
-#include <stdatomic.h>
 #include "sds.h"
-#include "zmalloc.h"
 #include "valkey-benchmark-dataset.h"
+#include "zmalloc.h"
+#include <stdatomic.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
 }
 
 static char *create_test_file(const char *suffix, const char *content) {
@@ -46,8 +46,8 @@ TEST(DatasetTest, field_mapping_optimization) {
     dataset *ds = datasetInit(file, nullptr, 0, 1, args, 6, 0);
 
     ASSERT_NE(ds, nullptr) << "Dataset initialized";
-    ASSERT_EQ(ds->field_count, 8u) << "Total fields discovered";
-    ASSERT_EQ(ds->used_field_count, 2u) << "Only used fields loaded";
+    ASSERT_EQ((unsigned)ds->field_count, 8u) << "Total fields discovered";
+    ASSERT_EQ((unsigned)ds->used_field_count, 2u) << "Only used fields loaded";
     ASSERT_STREQ(ds->records[0].fields[0], "2") << "Correct values loaded";
     ASSERT_STREQ(ds->records[0].fields[1], "6") << "Correct values loaded";
 
@@ -92,8 +92,8 @@ TEST(DatasetTest, field_count_correctness) {
     dataset *ds = datasetInit(file, nullptr, 0, 1, args, 2, 0);
 
     ASSERT_NE(ds, nullptr) << "Dataset initialized";
-    ASSERT_EQ(ds->field_count, 3u) << "Correct field count";
-    ASSERT_EQ(datasetGetRecordCount(ds), 1u) << "Correct record count";
+    ASSERT_EQ((unsigned)ds->field_count, 3u) << "Correct field count";
+    ASSERT_EQ((unsigned)datasetGetRecordCount(ds), 1u) << "Correct record count";
 
     datasetFree(ds);
     sdsfree(arg1);
@@ -126,7 +126,7 @@ TEST(DatasetTest, excessive_field_name_length) {
     dataset *ds = datasetInit(file, "doc", 1, 0, nullptr, 0, 0);
 
     ASSERT_NE(ds, nullptr) << "Dataset initialized";
-    ASSERT_EQ(ds->field_count, 1u) << "Only valid field loaded (513-char field rejected)";
+    ASSERT_EQ((unsigned)ds->field_count, 1u) << "Only valid field loaded (513-char field rejected)";
     ASSERT_STREQ(ds->field_names[0], "title") << "Valid field is 'title'";
 
     datasetFree(ds);
@@ -149,7 +149,7 @@ TEST(DatasetTest, max_dataset_fields) {
     dataset *ds = datasetInit(file, "doc", 1, 0, nullptr, 0, 0);
 
     ASSERT_NE(ds, nullptr) << "Dataset initialized";
-    ASSERT_EQ(ds->field_count, 1000u) << "1000 fields accepted (at MAX_DATASET_FIELDS limit)";
+    ASSERT_EQ((unsigned)ds->field_count, 1000u) << "1000 fields accepted (at MAX_DATASET_FIELDS limit)";
     ASSERT_STREQ(ds->field_names[0], "field0") << "First field correct";
     ASSERT_STREQ(ds->field_names[999], "field999") << "Last field correct";
 

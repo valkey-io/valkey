@@ -1658,9 +1658,11 @@ start_server {tags {"scripting repl external:skip"}} {
 
 if {$is_eval eq 1 && $script_compatibility_api == "redis"} {
 start_server {tags {"scripting external:skip"}} {
-    r script debug sync
-    r eval {return 'hello'} 0
-    r eval {return 'hello'} 0
+    test {Test scripting debug smoke} {
+        r script debug sync
+        r eval {return 'hello'} 0
+        r eval {return 'hello'} 0
+    }
 }
 
 start_server {tags {"scripting needs:debug external:skip"}} {

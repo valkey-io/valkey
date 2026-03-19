@@ -19,8 +19,8 @@ start_server {tags {"other"}} {
         assert_match "*MODULE <subcommand> *" [r MODULE HELP]
     }
 
-    test {CONFIG HELP with config name - enum type} {
-        set result [r CONFIG HELP repl-diskless-load]
+    test {CONFIG INFO with config name - enum type} {
+        set result [r CONFIG INFO repl-diskless-load]
         assert_equal [llength $result] 1
         set info [lindex $result 0]
         assert_equal [dict get $info name] "repl-diskless-load"
@@ -28,8 +28,8 @@ start_server {tags {"other"}} {
         assert_match "*disabled*" [dict get $info values]
     }
 
-    test {CONFIG HELP with config name - numeric type} {
-        set result [r CONFIG HELP maxmemory]
+    test {CONFIG INFO with config name - numeric type} {
+        set result [r CONFIG INFO maxmemory]
         assert_equal [llength $result] 1
         set info [lindex $result 0]
         assert_equal [dict get $info name] "maxmemory"
@@ -37,37 +37,37 @@ start_server {tags {"other"}} {
         assert_equal [llength [dict get $info range]] 2
     }
 
-    test {CONFIG HELP with config name - bool type} {
-        set result [r CONFIG HELP activerehashing]
+    test {CONFIG INFO with config name - bool type} {
+        set result [r CONFIG INFO activerehashing]
         assert_equal [llength $result] 1
         set info [lindex $result 0]
         assert_equal [dict get $info name] "activerehashing"
         assert_equal [dict get $info type] "bool"
     }
 
-    test {CONFIG HELP with config name - string type} {
-        set result [r CONFIG HELP dbfilename]
+    test {CONFIG INFO with config name - string type} {
+        set result [r CONFIG INFO dbfilename]
         assert_equal [llength $result] 1
         set info [lindex $result 0]
         assert_equal [dict get $info name] "dbfilename"
         assert_equal [dict get $info type] "string"
     }
 
-    test {CONFIG HELP with config name - special type} {
-        set result [r CONFIG HELP save]
+    test {CONFIG INFO with config name - special type} {
+        set result [r CONFIG INFO save]
         assert_equal [llength $result] 1
         set info [lindex $result 0]
         assert_equal [dict get $info name] "save"
         assert_equal [dict get $info type] "special"
     }
 
-    test {CONFIG HELP with non-existent config} {
-        set result [r CONFIG HELP nonexistent]
+    test {CONFIG INFO with non-existent config} {
+        set result [r CONFIG INFO nonexistent]
         assert_equal [llength $result] 0
     }
 
-    test {CONFIG HELP with pattern matching multiple configs} {
-        set result [r CONFIG HELP max*]
+    test {CONFIG INFO with pattern matching multiple configs} {
+        set result [r CONFIG INFO max*]
         assert {[llength $result] > 1}
         set names [list]
         foreach entry $result {
@@ -77,8 +77,8 @@ start_server {tags {"other"}} {
         assert {[lsearch $names "maxclients"] >= 0}
     }
 
-    test {CONFIG HELP with multiple patterns deduplicates results} {
-        set result [r CONFIG HELP max* maxmemory]
+    test {CONFIG INFO with multiple patterns deduplicates results} {
+        set result [r CONFIG INFO max* maxmemory]
         set names [list]
         foreach entry $result {
             lappend names [dict get $entry name]
@@ -93,14 +93,14 @@ start_server {tags {"other"}} {
         assert_equal $count 1
     }
 
-    test {CONFIG HELP ordering is consistent across calls} {
+    test {CONFIG INFO ordering is consistent across calls} {
         # Get initial ordering
-        set help1 [r CONFIG HELP a*]
+        set info1 [r CONFIG INFO a*]
         set get1 [r CONFIG GET a*]
         
-        set help_names1 [list]
-        foreach entry $help1 {
-            lappend help_names1 [dict get $entry name]
+        set info_names1 [list]
+        foreach entry $info1 {
+            lappend info_names1 [dict get $entry name]
         }
         
         set get_names1 [dict keys $get1]
@@ -109,34 +109,34 @@ start_server {tags {"other"}} {
         r SET foo bar
         r GET foo
         
-        set help2 [r CONFIG HELP a*]
-        set help_names2 [list]
-        foreach entry $help2 {
-            lappend help_names2 [dict get $entry name]
+        set info2 [r CONFIG INFO a*]
+        set info_names2 [list]
+        foreach entry $info2 {
+            lappend info_names2 [dict get $entry name]
         }
         
         # Restart server
         if {!$::external} {
             restart_server 0 true false
             
-            set help3 [r CONFIG HELP a*]
+            set info3 [r CONFIG INFO a*]
             set get3 [r CONFIG GET a*]
             
-            set help_names3 [list]
-            foreach entry $help3 {
-                lappend help_names3 [dict get $entry name]
+            set info_names3 [list]
+            foreach entry $info3 {
+                lappend info_names3 [dict get $entry name]
             }
             
             set get_names3 [dict keys $get3]
             
             # Verify ordering after restart
-            assert_equal $help_names1 $help_names3
+            assert_equal $info_names1 $info_names3
             assert_equal $get_names1 $get_names3
         }
         
         # All orderings should be identical
-        assert_equal $help_names1 $help_names2
-        assert_equal $help_names1 $get_names1
+        assert_equal $info_names1 $info_names2
+        assert_equal $info_names1 $get_names1
     }
 
     test {Coverage: MEMORY MALLOC-STATS} {

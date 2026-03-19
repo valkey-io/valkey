@@ -3670,6 +3670,26 @@ void addModuleUnsignedNumericConfig(const char *module_name,
  * CONFIG HELP
  *----------------------------------------------------------------------------*/
 
+void configHelpCommand(client *c) {
+    const char *help[] = {"GET <pattern>",
+                          "    Return parameters matching the glob-like <pattern> and their values.",
+                          "SET <directive> <value>",
+                          "    Set the configuration <directive> to <value>.",
+                          "RESETSTAT",
+                          "    Reset statistics reported by the INFO command.",
+                          "REWRITE",
+                          "    Rewrite the configuration file.",
+                          "INFO <pattern> [<pattern> ...]",
+                          "    Return information about configs matching the glob-like <pattern>(s).",
+                          NULL};
+
+    addReplyHelp(c, help);
+}
+
+/*-----------------------------------------------------------------------------
+ * CONFIG INFO
+ *----------------------------------------------------------------------------*/
+
 static void addConfigInfoReply(client *c, standardConfig *config) {
     int fields = 2; /* name and type */
     if (config->type == ENUM_CONFIG || config->type == NUMERIC_CONFIG) fields++;
@@ -3707,34 +3727,17 @@ static void addConfigInfoReply(client *c, standardConfig *config) {
     }
 }
 
-void configHelpCommand(client *c) {
-    if (c->argc >= 3) {
-        dict *matches = matchPatternsToConfigs(c->argv + 2, c->argc - 2);
-        int n;
-        standardConfig **configs = getSortedConfigs(matches, &n);
-        dictRelease(matches);
+void configInfoCommand(client *c) {
+    dict *matches = matchPatternsToConfigs(c->argv + 2, c->argc - 2);
+    int n;
+    standardConfig **configs = getSortedConfigs(matches, &n);
+    dictRelease(matches);
 
-        addReplyArrayLen(c, n);
-        for (int i = 0; i < n; i++) {
-            addConfigInfoReply(c, configs[i]);
-        }
-        zfree(configs);
-        return;
+    addReplyArrayLen(c, n);
+    for (int i = 0; i < n; i++) {
+        addConfigInfoReply(c, configs[i]);
     }
-
-    const char *help[] = {"GET <pattern>",
-                          "    Return parameters matching the glob-like <pattern> and their values.",
-                          "SET <directive> <value>",
-                          "    Set the configuration <directive> to <value>.",
-                          "RESETSTAT",
-                          "    Reset statistics reported by the INFO command.",
-                          "REWRITE",
-                          "    Rewrite the configuration file.",
-                          "HELP [<pattern> ...]",
-                          "    Show help about configs matching the glob-like <pattern>(s).",
-                          NULL};
-
-    addReplyHelp(c, help);
+    zfree(configs);
 }
 
 /*-----------------------------------------------------------------------------

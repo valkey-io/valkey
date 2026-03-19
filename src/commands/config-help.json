@@ -1,10 +1,10 @@
 {
     "HELP": {
         "summary": "Returns helpful text about the different subcommands.",
-        "complexity": "O(N) when N is the number of configuration parameters provided",
+        "complexity": "O(1)",
         "group": "server",
         "since": "5.0.0",
-        "arity": -2,
+        "arity": 2,
         "container": "CONFIG",
         "function": "configHelpCommand",
         "command_flags": [

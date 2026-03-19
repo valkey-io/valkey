@@ -91,7 +91,7 @@ int patternHashSlot(char *pattern, int length) {
              * implemented. We would need a temp buffer. */
             return -1;
         } else if (s == -1 && pattern[i] == '{') {
-            /* Opening brace '{' found. */
+            /* Opening brace '{' found, looking for matching '}'. */
             s = i;
         } else if (s >= 0 && pattern[i] == '}' && i == s + 1) {
             /* Empty tag '{}' found. The whole key is hashed. Ignore braces. */

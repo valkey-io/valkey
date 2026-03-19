@@ -794,6 +794,7 @@ lcov:
 	@lcov --version
 	$(MAKE) gcov
 	@(set -e; cd ..; ./runtest)
+	$(MAKE) test-unit COVERAGE=1 COVERAGE_CFLAGS="-fprofile-arcs -ftest-coverage"
 	@geninfo -o valkey.info .
 	@genhtml --legend -o lcov-html valkey.info
 

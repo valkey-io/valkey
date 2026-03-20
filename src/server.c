@@ -4341,6 +4341,7 @@ int processCommand(client *c) {
              * non-authenticated state. */
             if (!c->cmd || !(c->cmd->flags & CMD_NO_AUTH)) {
                 rejectCommand(c, shared.noautherr);
+                moduleFireCommandACLDeniedEvent(c, ACL_DENIED_AUTH, 0);
                 return C_OK;
             }
         }

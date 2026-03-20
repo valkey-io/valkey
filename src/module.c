@@ -12623,20 +12623,29 @@ static uint64_t moduleEventVersions[] = {
  *
  * * ValkeyModuleEvent_CommandResultACLDenied
  *
- *     Called when a command is rejected by the ACL system (NOPERM error) before
- *     execution. This event fires from processCommand() and therefore does not
- *     carry duration or dirty-key information.
+ *     Called when a command is rejected before execution due to an ACL or
+ *     authentication check. Two cases fire this event:
+ *
+ *       1. ACL permission denied (NOPERM): the client is authenticated but
+ *          the ACL rules forbid the command, key, or channel.
+ *       2. Not authenticated (NOAUTH): the client has not yet authenticated
+ *          and attempted to run a command that requires authentication. This
+ *          is useful for auditing unauthenticated probes. For the outcome
+ *          of AUTH/HELLO commands themselves, see ValkeyModuleEvent_AuthenticationAttempt.
+ *
+ *     Because this event fires before execution, duration_us and dirty are 0.
  *
  *     The data pointer can be casted to a ValkeyModuleCommandResultInfo
- *     structure. In addition to the base fields (which have the same meaning as
- *     for the success/failure events), two version-2 fields are populated:
+ *     structure with the following additional fields populated:
  *
- *         int acl_deny_reason;        // ACL_DENIED_CMD, ACL_DENIED_KEY,
- *                                     // ACL_DENIED_CHANNEL, or ACL_DENIED_AUTH
- *         const char *acl_object;     // Denied resource: key or channel name for
- *                                     // KEY/CHANNEL denials; NULL otherwise
+ *         int acl_deny_reason;    // ACL_DENIED_CMD, ACL_DENIED_KEY,
+ *                                 // ACL_DENIED_CHANNEL, or ACL_DENIED_AUTH
+ *         const char *acl_object; // Denied resource: key or channel name for
+ *                                 // KEY/CHANNEL denials; NULL otherwise
  *
- *     The duration_us and dirty fields are 0 for this event.
+ * Coverage note: only ACL/auth rejections fire these events. Other pre-execution
+ * rejections (unknown command, wrong arity, cluster redirect, OOM, etc.) do not
+ * currently generate command result events.
  *
  * The function returns VALKEYMODULE_OK if the module was successfully subscribed
  * for the specified event. If the API is called from a wrong context or unsupported event
@@ -12714,7 +12723,6 @@ int VM_IsSubEventSupported(ValkeyModuleEvent event, int64_t subevent) {
     case VALKEYMODULE_EVENT_EVENTLOOP: return subevent < _VALKEYMODULE_SUBEVENT_EVENTLOOP_NEXT;
     case VALKEYMODULE_EVENT_CONFIG: return subevent < _VALKEYMODULE_SUBEVENT_CONFIG_NEXT;
     case VALKEYMODULE_EVENT_KEY: return subevent < _VALKEYMODULE_SUBEVENT_KEY_NEXT;
-    /* VALKEYMODULE_EVENT_COMMAND_RESULT_* events have no sub-events */
     default: break;
     }
     return 0;

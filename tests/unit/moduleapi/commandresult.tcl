@@ -512,6 +512,35 @@ start_server {tags {"modules"}} {
         r cmdresult.unsubscribe
     }
 
+    test {Module commandresult - ACL denied: unauthenticated command (ACL_DENIED_AUTH)} {
+        cleanup_callback
+        r cmdresult.register acl
+
+        # Enable password so new connections require authentication
+        r config set requirepass testpass
+
+        # Open a raw unauthenticated connection and send a command without AUTH
+        set rd [valkey_deferring_client_by_addr [srv 0 host] [srv 0 port]]
+        $rd get somekey
+        catch {$rd read} e
+        $rd close
+
+        # Restore: the existing r session stays authenticated; just clear the password
+        r config set requirepass ""
+
+        set stats [r cmdresult.stats]
+        assert {[dict get $stats acl_denied_count] >= 1}
+
+        set log [r cmdresult.getlog 1]
+        set entry [lindex $log 0]
+        assert_equal [dict get $entry status] "acl_denied"
+        # ACL_DENIED_AUTH = 4
+        assert_equal [dict get $entry acl_deny_reason] 4
+        assert_equal [dict get $entry acl_object] ""
+
+        r cmdresult.unsubscribe
+    }
+
     test {Module commandresult - Reset clears acl_denied_count} {
         cleanup_callback
         r cmdresult.register acl

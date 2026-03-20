@@ -68,6 +68,7 @@ TEST_MODULES = \
     rdbloadsave.so \
     crash.so \
     cluster.so \
+    hellovalkey.so \
     helloscripting.so \
     unsupported_features.so
 
@@ -83,6 +84,13 @@ all: $(TEST_MODULES)
 
 %.so: %.xo
 	$(LD) -o $@ $^ $(SHOBJ_LDFLAGS) $(LDFLAGS) $(LIBS)
+
+hellovalkey.so: hellovalkey.xo hellovalkey.version
+ifeq ($(uname_S),Linux)
+	$(LD) -o $@ hellovalkey.xo $(SHOBJ_LDFLAGS) $(LDFLAGS) $(LIBS) -Wl,--version-script=hellovalkey.version
+else
+	$(LD) -o $@ hellovalkey.xo $(SHOBJ_LDFLAGS) $(LDFLAGS) $(LIBS)
+endif
 
 .PHONY: clean
 

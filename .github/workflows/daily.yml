@@ -101,8 +101,8 @@ jobs:
           echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          repository: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && (inputs.use_repo || github.event.inputs.use_repo)) || github.repository }}
-          ref: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && (inputs.use_git_ref || github.event.inputs.use_git_ref)) || github.ref }}
+          repository: ${{ inputs.use_repo || github.event.inputs.use_repo || github.repository }}
+          ref: ${{ inputs.use_git_ref || github.event.inputs.use_git_ref || github.ref }}
       - name: Install libbacktrace
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -130,7 +130,12 @@ jobs:
         run: ./runtest-cluster ${{github.event.inputs.cluster_test_args}}
       - name: unittest
         if: true && !contains(github.event.inputs.skiptests, 'unittest')
-        run: ./src/unit/valkey-unit-gtests --accurate
+        run: |
+          if [ -f ./src/unit/valkey-unit-gtests ]; then
+            make test-unit accurate=1
+          elif [ -f ./src/valkey-unit-tests ]; then
+            ./src/valkey-unit-tests --accurate
+          fi
       - name: install Redis OSS 6.2 server for compatibility testing
         run: |
           cd tests/tmp
@@ -182,8 +187,8 @@ jobs:
           echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          repository: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && (inputs.use_repo || github.event.inputs.use_repo)) || github.repository }}
-          ref: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && (inputs.use_git_ref || github.event.inputs.use_git_ref)) || github.ref }}
+          repository: ${{ inputs.use_repo || github.event.inputs.use_repo || github.repository }}
+          ref: ${{ inputs.use_git_ref || github.event.inputs.use_git_ref || github.ref }}
       - name: Install libbacktrace
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -211,7 +216,12 @@ jobs:
         run: ./runtest-cluster ${{github.event.inputs.cluster_test_args}}
       - name: unittest
         if: true && !contains(github.event.inputs.skiptests, 'unittest')
-        run: ./src/unit/valkey-unit-gtests --accurate
+        run: |
+          if [ -f ./src/unit/valkey-unit-gtests ]; then
+            make test-unit accurate=1
+          elif [ -f ./src/valkey-unit-tests ]; then
+            ./src/valkey-unit-tests --accurate
+          fi
   test-ubuntu-jemalloc-fortify:
     runs-on: ubuntu-latest
     if: |
@@ -238,8 +248,8 @@ jobs:
           echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          repository: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && (inputs.use_repo || github.event.inputs.use_repo)) || github.repository }}
-          ref: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && (inputs.use_git_ref || github.event.inputs.use_git_ref)) || github.ref }}
+          repository: ${{ inputs.use_repo || github.event.inputs.use_repo || github.repository }}
+          ref: ${{ inputs.use_git_ref || github.event.inputs.use_git_ref || github.ref }}
       - name: Install libbacktrace
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -271,7 +281,12 @@ jobs:
         run: ./runtest-cluster ${{github.event.inputs.cluster_test_args}}
       - name: unittest
         if: true && !contains(github.event.inputs.skiptests, 'unittest')
-        run: ./src/unit/valkey-unit-gtests --accurate
+        run: |
+          if [ -f ./src/unit/valkey-unit-gtests ]; then
+            make test-unit accurate=1
+          elif [ -f ./src/valkey-unit-tests ]; then
+            ./src/valkey-unit-tests --accurate
+          fi
   test-ubuntu-libc-malloc:
     runs-on: ubuntu-latest
     if: |
@@ -297,8 +312,8 @@ jobs:
           echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          repository: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && (inputs.use_repo || github.event.inputs.use_repo)) || github.repository }}
-          ref: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && (inputs.use_git_ref || github.event.inputs.use_git_ref)) || github.ref }}
+          repository: ${{ inputs.use_repo || github.event.inputs.use_repo || github.repository }}
+          ref: ${{ inputs.use_git_ref || github.event.inputs.use_git_ref || github.ref }}
       - name: Install libbacktrace
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -347,8 +362,8 @@ jobs:
           echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          repository: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && (inputs.use_repo || github.event.inputs.use_repo)) || github.repository }}
-          ref: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && (inputs.use_git_ref || github.event.inputs.use_git_ref)) || github.ref }}
+          repository: ${{ inputs.use_repo || github.event.inputs.use_repo || github.repository }}
+          ref: ${{ inputs.use_git_ref || github.event.inputs.use_git_ref || github.ref }}
       - name: Install libbacktrace
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -397,8 +412,8 @@ jobs:
           echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          repository: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && (inputs.use_repo || github.event.inputs.use_repo)) || github.repository }}
-          ref: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && (inputs.use_git_ref || github.event.inputs.use_git_ref)) || github.ref }}
+          repository: ${{ inputs.use_repo || github.event.inputs.use_repo || github.repository }}
+          ref: ${{ inputs.use_git_ref || github.event.inputs.use_git_ref || github.ref }}
       - name: Install libbacktrace
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -447,7 +462,14 @@ jobs:
         run: ./runtest-cluster ${{github.event.inputs.cluster_test_args}}
       - name: unittest
         if: true && !contains(github.event.inputs.skiptests, 'unittest')
-        run: ./src/unit/valkey-unit-gtests --accurate
+        run: |
+          if [ -f ./src/unit/valkey-unit-gtests ]; then
+            make test-unit accurate=1 \
+              GTEST_CFLAGS="-I/usr/src/googletest/googletest/include -I/usr/src/googletest/googlemock/include" \
+              GTEST_LIBS="/usr/lib32/libgtest.a /usr/lib32/libgmock.a"
+          elif [ -f ./src/valkey-unit-tests ]; then
+            ./src/valkey-unit-tests --accurate
+          fi
   test-ubuntu-tls:
     runs-on: ubuntu-latest
     if: |
@@ -473,8 +495,8 @@ jobs:
           echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          repository: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && (inputs.use_repo || github.event.inputs.use_repo)) || github.repository }}
-          ref: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && (inputs.use_git_ref || github.event.inputs.use_git_ref)) || github.ref }}
+          repository: ${{ inputs.use_repo || github.event.inputs.use_repo || github.repository }}
+          ref: ${{ inputs.use_git_ref || github.event.inputs.use_git_ref || github.ref }}
       - name: Install libbacktrace
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -529,8 +551,8 @@ jobs:
           echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          repository: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && (inputs.use_repo || github.event.inputs.use_repo)) || github.repository }}
-          ref: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && (inputs.use_git_ref || github.event.inputs.use_git_ref)) || github.ref }}
+          repository: ${{ inputs.use_repo || github.event.inputs.use_repo || github.repository }}
+          ref: ${{ inputs.use_git_ref || github.event.inputs.use_git_ref || github.ref }}
       - name: Install libbacktrace
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -539,7 +561,7 @@ jobs:
           path: libbacktrace
       - run: cd libbacktrace && ./configure && make && sudo make install
       - name: make
-        run: make BUILD_TLS=yes SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes USE_FAST_FLOAT=yes
+        run: make BUILD_TLS=yes SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes
       - name: testprep
         run: |
           sudo apt-get install tcl8.6 tclx tcl-tls
@@ -585,8 +607,8 @@ jobs:
           echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          repository: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && (inputs.use_repo || github.event.inputs.use_repo)) || github.repository }}
-          ref: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && (inputs.use_git_ref || github.event.inputs.use_git_ref)) || github.ref }}
+          repository: ${{ inputs.use_repo || github.event.inputs.use_repo || github.repository }}
+          ref: ${{ inputs.use_git_ref || github.event.inputs.use_git_ref || github.ref }}
       - name: Install libbacktrace
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -629,8 +651,8 @@ jobs:
           echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          repository: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && (inputs.use_repo || github.event.inputs.use_repo)) || github.repository }}
-          ref: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && (inputs.use_git_ref || github.event.inputs.use_git_ref)) || github.ref }}
+          repository: ${{ inputs.use_repo || github.event.inputs.use_repo || github.repository }}
+          ref: ${{ inputs.use_git_ref || github.event.inputs.use_git_ref || github.ref }}
       - name: Install libbacktrace
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -677,8 +699,8 @@ jobs:
           echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          repository: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && (inputs.use_repo || github.event.inputs.use_repo)) || github.repository }}
-          ref: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && (inputs.use_git_ref || github.event.inputs.use_git_ref)) || github.ref }}
+          repository: ${{ inputs.use_repo || github.event.inputs.use_repo || github.repository }}
+          ref: ${{ inputs.use_git_ref || github.event.inputs.use_git_ref || github.ref }}
       - name: Install libbacktrace
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -761,8 +783,8 @@ jobs:
           echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          repository: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && (inputs.use_repo || github.event.inputs.use_repo)) || github.repository }}
-          ref: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && (inputs.use_git_ref || github.event.inputs.use_git_ref)) || github.ref }}
+          repository: ${{ inputs.use_repo || github.event.inputs.use_repo || github.repository }}
+          ref: ${{ inputs.use_git_ref || github.event.inputs.use_git_ref || github.ref }}
       - name: Install libbacktrace
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -799,8 +821,8 @@ jobs:
           echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          repository: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && (inputs.use_repo || github.event.inputs.use_repo)) || github.repository }}
-          ref: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && (inputs.use_git_ref || github.event.inputs.use_git_ref)) || github.ref }}
+          repository: ${{ inputs.use_repo || github.event.inputs.use_repo || github.repository }}
+          ref: ${{ inputs.use_git_ref || github.event.inputs.use_git_ref || github.ref }}
       - name: Install libbacktrace
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -822,8 +844,13 @@ jobs:
       - name: unittest
         if: true && !contains(github.event.inputs.skiptests, 'unittest')
         run: |
-          valgrind --track-origins=yes --suppressions=./src/valgrind.sup --show-reachable=no --show-possibly-lost=no --leak-check=full --log-file=err.txt ./src/unit/valkey-unit-gtests --valgrind
-          if grep -q 0x err.txt; then cat err.txt; exit 1; fi
+          if [ -f ./src/unit/valkey-unit-gtests ]; then
+            ./deps/gtest-parallel/gtest-parallel valgrind -- --track-origins=yes --suppressions=./src/valgrind.sup --show-reachable=no --show-possibly-lost=no --leak-check=full --log-file=err.%p.txt ./src/unit/valkey-unit-gtests --valgrind
+            if grep -qlE '0x[0-9A-Fa-f]+:' err.*.txt 2>/dev/null; then grep -lE '0x[0-9A-Fa-f]+:' err.*.txt | xargs cat; exit 1; fi
+          elif [ -f ./src/valkey-unit-tests ]; then
+            valgrind --track-origins=yes --suppressions=./src/valgrind.sup --show-reachable=no --show-possibly-lost=no --leak-check=full --log-file=err.txt ./src/valkey-unit-tests --valgrind
+            if grep -q 0x err.txt; then cat err.txt; exit 1; fi
+          fi
   test-valgrind-no-malloc-usable-size-test:
     runs-on: ubuntu-latest
     if: |
@@ -844,8 +871,8 @@ jobs:
           echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          repository: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && (inputs.use_repo || github.event.inputs.use_repo)) || github.repository }}
-          ref: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && (inputs.use_git_ref || github.event.inputs.use_git_ref)) || github.ref }}
+          repository: ${{ inputs.use_repo || github.event.inputs.use_repo || github.repository }}
+          ref: ${{ inputs.use_git_ref || github.event.inputs.use_git_ref || github.ref }}
       - name: Install libbacktrace
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -882,8 +909,8 @@ jobs:
           echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          repository: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && (inputs.use_repo || github.event.inputs.use_repo)) || github.repository }}
-          ref: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && (inputs.use_git_ref || github.event.inputs.use_git_ref)) || github.ref }}
+          repository: ${{ inputs.use_repo || github.event.inputs.use_repo || github.repository }}
+          ref: ${{ inputs.use_git_ref || github.event.inputs.use_git_ref || github.ref }}
       - name: Install libbacktrace
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -905,8 +932,13 @@ jobs:
       - name: unittest
         if: true && !contains(github.event.inputs.skiptests, 'unittest')
         run: |
-          valgrind --track-origins=yes --suppressions=./src/valgrind.sup --show-reachable=no --show-possibly-lost=no --leak-check=full --log-file=err.txt ./src/unit/valkey-unit-gtests --valgrind
-          if grep -q 0x err.txt; then cat err.txt; exit 1; fi
+          if [ -f ./src/unit/valkey-unit-gtests ]; then
+            ./deps/gtest-parallel/gtest-parallel valgrind -- --track-origins=yes --suppressions=./src/valgrind.sup --show-reachable=no --show-possibly-lost=no --leak-check=full --log-file=err.%p.txt ./src/unit/valkey-unit-gtests --valgrind
+            if grep -qlE '0x[0-9A-Fa-f]+:' err.*.txt 2>/dev/null; then grep -lE '0x[0-9A-Fa-f]+:' err.*.txt | xargs cat; exit 1; fi
+          elif [ -f ./src/valkey-unit-tests ]; then
+            valgrind --track-origins=yes --suppressions=./src/valgrind.sup --show-reachable=no --show-possibly-lost=no --leak-check=full --log-file=err.txt ./src/valkey-unit-tests --valgrind
+            if grep -q 0x err.txt; then cat err.txt; exit 1; fi
+          fi
   test-sanitizer-address:
     runs-on: ubuntu-latest
     if: |
@@ -933,8 +965,8 @@ jobs:
           echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          repository: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && (inputs.use_repo || github.event.inputs.use_repo)) || github.repository }}
-          ref: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && (inputs.use_git_ref || github.event.inputs.use_git_ref)) || github.ref }}
+          repository: ${{ inputs.use_repo || github.event.inputs.use_repo || github.repository }}
+          ref: ${{ inputs.use_git_ref || github.event.inputs.use_git_ref || github.ref }}
       - name: Install libbacktrace
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -964,7 +996,15 @@ jobs:
         run: ./runtest-cluster ${{github.event.inputs.cluster_test_args}}
       - name: unittest
         if: true && !contains(github.event.inputs.skiptests, 'unittest')
-        run: ./src/unit/valkey-unit-gtests
+        run: |
+          if [ -f ./src/unit/valkey-unit-gtests ]; then
+            make test-unit
+          elif [ -f ./src/valkey-unit-tests ]; then
+            ./src/valkey-unit-tests
+          fi
+  # Large-memory tests with sanitizers require 10-14GB RAM due to ASAN/UBSAN overhead.
+  # GitHub-hosted runners for public repos provide 16GB (ubuntu-latest).
+  # These tests are borderline - monitoring memory usage to determine if they can run reliably.
   test-sanitizer-address-large-memory:
     runs-on: ubuntu-latest
     if: |
@@ -990,10 +1030,12 @@ jobs:
           echo "skiptests: ${{github.event.inputs.skiptests}}"
           echo "test_args: ${{github.event.inputs.test_args}}"
           echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
+      - name: Log runner memory
+        run: free -h
       - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
         with:
-          repository: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && (inputs.use_repo || github.event.inputs.use_repo)) || github.repository }}
-          ref: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && (inputs.use_git_ref || github.event.inputs.use_git_ref)) || github.ref }}
+          repository: ${{ inputs.use_repo || github.event.inputs.use_repo || github.repository }}
+          ref: ${{ inputs.use_git_ref || github.event.inputs.use_git_ref || github.ref }}
       - name: Install gtest
         run: sudo apt-get install pkg-config libgtest-dev libgmock-dev
       - name: make
@@ -1002,15 +1044,39 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install tcl8.6 tclx -y
+      - name: Start memory monitor
+        run: |
+          # Track minimum free memory to detect OOM risk
+          (while true; do
+            FREE=$(awk '/MemAvailable/ {print $2}' /proc/meminfo)
+            echo "$FREE" >> /tmp/memfree.log
+            sleep 5
+          done) &
+          echo $! > /tmp/memmon.pid
       - name: unittest
         if: true && !contains(github.event.inputs.skiptests, 'unittest')
-        run: ./src/unit/valkey-unit-gtests --large-memory
+        run: |
+          if [ -f ./src/unit/valkey-unit-gtests ]; then
+            make test-unit large_memory=1
+          elif [ -f ./src/valkey-unit-tests ]; then
+            ./src/valkey-unit-tests --large-memory
+          fi
       - name: large memory tests
         if: true && !contains(github.event.inputs.skiptests, 'valkey')
-        run: ./runtest --accurate --verbose --dump-logs --clients 5 --large-memory --tags large-memory ${{github.event.inputs.test_args}}
+        run: ./runtest --accurate --verbose --dump-logs --clients 1 --large-memory --tags large-memory ${{github.event.inputs.test_args}}
       - name: large memory module api tests
         if: true && !contains(github.event.inputs.skiptests, 'modules')
-        run: CFLAGS='-Werror' ./runtest-moduleapi --verbose --dump-logs --clients 5 --large-memory --tags large-memory ${{github.event.inputs.test_args}}
+        run: CFLAGS='-Werror' ./runtest-moduleapi --verbose --dump-logs --clients 1 --large-memory --tags large-memory ${{github.event.inputs.test_args}}
+      - name: Memory usage summary
+        if: always()
+        run: |
+          kill $(cat /tmp/memmon.pid) 2>/dev/null || true
+          echo "=== Memory Summary ==="
+          printf "Total RAM: %.1fGB\n" $(awk '/MemTotal/ {print $2/1024/1024}' /proc/meminfo)
+          if [ -f /tmp/memfree.log ]; then
+            MIN_FREE=$(sort -n /tmp/memfree.log | head -1)
+            printf "Minimum free memory: %.1fGB\n" $(echo "$MIN_FREE/1024/1024" | bc -l)
+          fi
   test-sanitizer-undefined:
     runs-on: ubuntu-latest
     if: |
@@ -1037,8 +1103,8 @@ jobs:
           echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          repository: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && (inputs.use_repo || github.event.inputs.use_repo)) || github.repository }}
-          ref: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && (inputs.use_git_ref || github.event.inputs.use_git_ref)) || github.ref }}
+          repository: ${{ inputs.use_repo || github.event.inputs.use_repo || github.repository }}
+          ref: ${{ inputs.use_git_ref || github.event.inputs.use_git_ref || github.ref }}
       - name: Install libbacktrace
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -1068,7 +1134,15 @@ jobs:
         run: ./runtest-cluster ${{github.event.inputs.cluster_test_args}}
       - name: unittest
         if: true && !contains(github.event.inputs.skiptests, 'unittest')
-        run: ./src/unit/valkey-unit-gtests --accurate
+        run: |
+          if [ -f ./src/unit/valkey-unit-gtests ]; then
+            make test-unit accurate=1
+          elif [ -f ./src/valkey-unit-tests ]; then
+            ./src/valkey-unit-tests --accurate
+          fi
+  # Large-memory tests with sanitizers require 10-14GB RAM due to ASAN/UBSAN overhead.
+  # GitHub-hosted runners for public repos provide 16GB (ubuntu-latest).
+  # These tests are borderline - monitoring memory usage to determine if they can run reliably.
   test-sanitizer-undefined-large-memory:
     runs-on: ubuntu-latest
     if: |
@@ -1094,10 +1168,12 @@ jobs:
           echo "skiptests: ${{github.event.inputs.skiptests}}"
           echo "test_args: ${{github.event.inputs.test_args}}"
           echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
+      - name: Log runner memory
+        run: free -h
       - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
         with:
-          repository: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && (inputs.use_repo || github.event.inputs.use_repo)) || github.repository }}
-          ref: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && (inputs.use_git_ref || github.event.inputs.use_git_ref)) || github.ref }}
+          repository: ${{ inputs.use_repo || github.event.inputs.use_repo || github.repository }}
+          ref: ${{ inputs.use_git_ref || github.event.inputs.use_git_ref || github.ref }}
       - name: Install gtest
         run: sudo apt-get install pkg-config libgtest-dev libgmock-dev
       - name: make
@@ -1106,15 +1182,39 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install tcl8.6 tclx -y
+      - name: Start memory monitor
+        run: |
+          # Track minimum free memory to detect OOM risk
+          (while true; do
+            FREE=$(awk '/MemAvailable/ {print $2}' /proc/meminfo)
+            echo "$FREE" >> /tmp/memfree.log
+            sleep 5
+          done) &
+          echo $! > /tmp/memmon.pid
       - name: unittest
         if: true && !contains(github.event.inputs.skiptests, 'unittest')
-        run: ./src/unit/valkey-unit-gtests --accurate --large-memory
+        run: |
+          if [ -f ./src/unit/valkey-unit-gtests ]; then
+            make test-unit accurate=1 large_memory=1
+          elif [ -f ./src/valkey-unit-tests ]; then
+            ./src/valkey-unit-tests --accurate --large-memory
+          fi
       - name: large memory tests
         if: true && !contains(github.event.inputs.skiptests, 'valkey')
-        run: ./runtest --accurate --verbose --dump-logs --clients 5 --large-memory --tags large-memory ${{github.event.inputs.test_args}}
+        run: ./runtest --accurate --verbose --dump-logs --clients 1 --large-memory --tags large-memory ${{github.event.inputs.test_args}}
       - name: large memory module api tests
         if: true && !contains(github.event.inputs.skiptests, 'modules')
-        run: CFLAGS='-Werror' ./runtest-moduleapi --verbose --dump-logs --clients 5 --large-memory --tags large-memory ${{github.event.inputs.test_args}}
+        run: CFLAGS='-Werror' ./runtest-moduleapi --verbose --dump-logs --clients 1 --large-memory --tags large-memory ${{github.event.inputs.test_args}}
+      - name: Memory usage summary
+        if: always()
+        run: |
+          kill $(cat /tmp/memmon.pid) 2>/dev/null || true
+          echo "=== Memory Summary ==="
+          printf "Total RAM: %.1fGB\n" $(awk '/MemTotal/ {print $2/1024/1024}' /proc/meminfo)
+          if [ -f /tmp/memfree.log ]; then
+            MIN_FREE=$(sort -n /tmp/memfree.log | head -1)
+            printf "Minimum free memory: %.1fGB\n" $(echo "$MIN_FREE/1024/1024" | bc -l)
+          fi
   test-sanitizer-force-defrag:
     runs-on: ubuntu-latest
     if: |
@@ -1137,8 +1237,8 @@ jobs:
           echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          repository: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && (inputs.use_repo || github.event.inputs.use_repo)) || github.repository }}
-          ref: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && (inputs.use_git_ref || github.event.inputs.use_git_ref)) || github.ref }}
+          repository: ${{ inputs.use_repo || github.event.inputs.use_repo || github.repository }}
+          ref: ${{ inputs.use_git_ref || github.event.inputs.use_git_ref || github.ref }}
       - name: Install libbacktrace
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -1168,7 +1268,12 @@ jobs:
         run: ./runtest-cluster ${{github.event.inputs.cluster_test_args}}
       - name: unittest
         if: true && !contains(github.event.inputs.skiptests, 'unittest')
-        run: ./src/unit/valkey-unit-gtests
+        run: |
+          if [ -f ./src/unit/valkey-unit-gtests ]; then
+            make test-unit
+          elif [ -f ./src/valkey-unit-tests ]; then
+            ./src/valkey-unit-tests
+          fi
   test-ubuntu-lttng:
     runs-on: ubuntu-latest
     if: |
@@ -1194,8 +1299,8 @@ jobs:
           echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          repository: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && (inputs.use_repo || github.event.inputs.use_repo)) || github.repository }}
-          ref: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && (inputs.use_git_ref || github.event.inputs.use_git_ref)) || github.ref }}
+          repository: ${{ inputs.use_repo || github.event.inputs.use_repo || github.repository }}
+          ref: ${{ inputs.use_git_ref || github.event.inputs.use_git_ref || github.ref }}
       - name: Install libbacktrace
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -1266,8 +1371,8 @@ jobs:
           echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          repository: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && (inputs.use_repo || github.event.inputs.use_repo)) || github.repository }}
-          ref: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && (inputs.use_git_ref || github.event.inputs.use_git_ref)) || github.ref }}
+          repository: ${{ inputs.use_repo || github.event.inputs.use_repo || github.repository }}
+          ref: ${{ inputs.use_git_ref || github.event.inputs.use_git_ref || github.ref }}
       - name: Install EPEL
         if: matrix.install_epel
         run: dnf -y install epel-release
@@ -1341,8 +1446,8 @@ jobs:
           echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          repository: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && (inputs.use_repo || github.event.inputs.use_repo)) || github.repository }}
-          ref: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && (inputs.use_git_ref || github.event.inputs.use_git_ref)) || github.ref }}
+          repository: ${{ inputs.use_repo || github.event.inputs.use_repo || github.repository }}
+          ref: ${{ inputs.use_git_ref || github.event.inputs.use_git_ref || github.ref }}
       - name: Install EPEL
         if: matrix.install_epel
         run: dnf -y install epel-release
@@ -1417,8 +1522,8 @@ jobs:
           echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          repository: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && (inputs.use_repo || github.event.inputs.use_repo)) || github.repository }}
-          ref: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && (inputs.use_git_ref || github.event.inputs.use_git_ref)) || github.ref }}
+          repository: ${{ inputs.use_repo || github.event.inputs.use_repo || github.repository }}
+          ref: ${{ inputs.use_git_ref || github.event.inputs.use_git_ref || github.ref }}
       - name: Install EPEL
         if: matrix.install_epel
         run: dnf -y install epel-release
@@ -1479,8 +1584,8 @@ jobs:
           echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          repository: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && (inputs.use_repo || github.event.inputs.use_repo)) || github.repository }}
-          ref: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && (inputs.use_git_ref || github.event.inputs.use_git_ref)) || github.ref }}
+          repository: ${{ inputs.use_repo || github.event.inputs.use_repo || github.repository }}
+          ref: ${{ inputs.use_git_ref || github.event.inputs.use_git_ref || github.ref }}
       - name: Install libbacktrace
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -1521,8 +1626,8 @@ jobs:
           echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          repository: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && (inputs.use_repo || github.event.inputs.use_repo)) || github.repository }}
-          ref: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && (inputs.use_git_ref || github.event.inputs.use_git_ref)) || github.ref }}
+          repository: ${{ inputs.use_repo || github.event.inputs.use_repo || github.repository }}
+          ref: ${{ inputs.use_git_ref || github.event.inputs.use_git_ref || github.ref }}
       - name: Install libbacktrace
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -1560,8 +1665,8 @@ jobs:
           echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          repository: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && (inputs.use_repo || github.event.inputs.use_repo)) || github.repository }}
-          ref: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && (inputs.use_git_ref || github.event.inputs.use_git_ref)) || github.ref }}
+          repository: ${{ inputs.use_repo || github.event.inputs.use_repo || github.repository }}
+          ref: ${{ inputs.use_git_ref || github.event.inputs.use_git_ref || github.ref }}
       - name: Install libbacktrace
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -1606,8 +1711,8 @@ jobs:
           echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          repository: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && (inputs.use_repo || github.event.inputs.use_repo)) || github.repository }}
-          ref: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && (inputs.use_git_ref || github.event.inputs.use_git_ref)) || github.ref }}
+          repository: ${{ inputs.use_repo || github.event.inputs.use_repo || github.repository }}
+          ref: ${{ inputs.use_git_ref || github.event.inputs.use_git_ref || github.ref }}
       - name: Install libbacktrace
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -1638,8 +1743,8 @@ jobs:
           echo "GITHUB_HEAD_REF=${{inputs.use_git_ref || github.event.inputs.use_git_ref}}" >> $GITHUB_ENV
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          repository: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && (inputs.use_repo || github.event.inputs.use_repo)) || github.repository }}
-          ref: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && (inputs.use_git_ref || github.event.inputs.use_git_ref)) || github.ref }}
+          repository: ${{ inputs.use_repo || github.event.inputs.use_repo || github.repository }}
+          ref: ${{ inputs.use_git_ref || github.event.inputs.use_git_ref || github.ref }}
       - name: test
         uses: cross-platform-actions/action@39a2a80642eca0947594ad03e4355dc3d28c617a # v0.32.0
         with:
@@ -1676,8 +1781,8 @@ jobs:
           echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          repository: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && (inputs.use_repo || github.event.inputs.use_repo)) || github.repository }}
-          ref: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && (inputs.use_git_ref || github.event.inputs.use_git_ref)) || github.ref }}
+          repository: ${{ inputs.use_repo || github.event.inputs.use_repo || github.repository }}
+          ref: ${{ inputs.use_git_ref || github.event.inputs.use_git_ref || github.ref }}
       - name: Install libbacktrace
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -1729,8 +1834,8 @@ jobs:
           echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          repository: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && (inputs.use_repo || github.event.inputs.use_repo)) || github.repository }}
-          ref: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && (inputs.use_git_ref || github.event.inputs.use_git_ref)) || github.ref }}
+          repository: ${{ inputs.use_repo || github.event.inputs.use_repo || github.repository }}
+          ref: ${{ inputs.use_git_ref || github.event.inputs.use_git_ref || github.ref }}
       - name: Install libbacktrace
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -1782,8 +1887,8 @@ jobs:
           echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          repository: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && (inputs.use_repo || github.event.inputs.use_repo)) || github.repository }}
-          ref: ${{ ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && (inputs.use_git_ref || github.event.inputs.use_git_ref)) || github.ref }}
+          repository: ${{ inputs.use_repo || github.event.inputs.use_repo || github.repository }}
+          ref: ${{ inputs.use_git_ref || github.event.inputs.use_git_ref || github.ref }}
       - name: Install libbacktrace
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:

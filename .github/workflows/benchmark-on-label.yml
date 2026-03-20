@@ -5,8 +5,8 @@ on:
     types: [labeled]
 
 concurrency:
-  group: ec2-al-2023-pr-benchmarking-arm64
-  cancel-in-progress: false
+  group: benchmark-${{ github.event.pull_request.number }}-${{ github.event.label.name }}
+  cancel-in-progress: true
 
 defaults:
   run:
@@ -110,7 +110,7 @@ jobs:
             --target-ip ${{ secrets.EC2_ARM64_IP }}
             --valkey-path "../valkey"
             --results-dir "results"
-            --runs 5
+            --runs 3
           )
 
           # Run benchmark

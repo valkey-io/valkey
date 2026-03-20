@@ -7444,7 +7444,10 @@ static int clusterManagerCommandAddNode(int argc, char **argv) {
             }
         } else {
             primary_node = clusterManagerNodeWithLeastReplicas();
-            assert(primary_node != NULL);
+            if (primary_node == NULL) {
+                clusterManagerLogErr("[ERR] Could not find a reachable primary node.\n");
+                return 0;
+            }
             printf("Automatically selected primary %s:%d\n", primary_node->ip, primary_node->port);
         }
     }
@@ -7616,7 +7619,11 @@ static int clusterManagerCommandDeleteNode(int argc, char **argv) {
         if (n->replicate && !strcasecmp(n->replicate, node_id)) {
             // Reconfigure the replica to replicate with some other node
             clusterManagerNode *primary = clusterManagerNodeWithLeastReplicas();
-            assert(primary != NULL);
+            if (primary == NULL) {
+                clusterManagerLogErr("[ERR] Could not find a reachable primary node "
+                                     "to reassign replica %s:%d.\n", n->ip, n->port);
+                return 0;
+            }
             clusterManagerLogInfo(">>> %s:%d as replica of %s:%d\n", n->ip, n->port, primary->ip, primary->port);
             valkeyReply *r = CLUSTER_MANAGER_COMMAND(n, "CLUSTER REPLICATE %s", primary->name);
             success = clusterManagerCheckValkeyReply(n, r, NULL);

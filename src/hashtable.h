@@ -130,6 +130,7 @@ void hashtablePauseAutoShrink(hashtable *ht);
 void hashtableResumeAutoShrink(hashtable *ht);
 bool hashtableIsRehashing(hashtable *ht);
 bool hashtableIsRehashingPaused(hashtable *ht);
+ssize_t hashtableGetRehashingIndex(hashtable *ht);
 void hashtableRehashingInfo(hashtable *ht, size_t *from_size, size_t *to_size);
 int hashtableRehashMicroseconds(hashtable *ht, uint64_t us);
 bool hashtableExpand(hashtable *ht, size_t size);
@@ -139,6 +140,7 @@ bool hashtableShrinkIfNeeded(hashtable *ht);
 bool hashtableRightsizeIfNeeded(hashtable *ht);
 hashtable *hashtableDefragTables(hashtable *ht, void *(*defragfn)(void *));
 void dismissHashtable(hashtable *ht);
+void hashtableSetCanAbortShrink(bool can_abort);
 
 /* Entries */
 bool hashtableFind(hashtable *ht, const void *key, void **found);

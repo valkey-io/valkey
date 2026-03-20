@@ -75,9 +75,13 @@ client *scriptGetCaller(void) {
 int scriptInterrupt(scriptRunCtx *run_ctx) {
     if (run_ctx->flags & SCRIPT_TIMEDOUT) {
         /* script already timedout
-           we just need to precess some events and return */
+           we just need to process some events and return */
         processEventsWhileBlocked();
         return (run_ctx->flags & SCRIPT_KILLED) ? SCRIPT_KILL : SCRIPT_CONTINUE;
+    }
+
+    if (server.busy_reply_threshold == 0) {
+        return SCRIPT_CONTINUE;
     }
 
     long long elapsed = elapsedMs(run_ctx->start_time);

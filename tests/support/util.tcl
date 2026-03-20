@@ -201,7 +201,7 @@ proc verify_log_message {srv_idx pattern from_line} {
     incr from_line
     set result [exec tail -n +$from_line < [srv $srv_idx stdout]]
     if {![string match $pattern $result]} {
-        fail "expected message not found in log file: $pattern"
+        fail "expected pattern found in log file: $pattern, but instead got: $result"
     }
 }
 

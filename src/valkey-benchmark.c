@@ -2060,9 +2060,14 @@ long long showThroughput(struct aeEventLoop *eventLoop, long long id, void *clie
             atomic_store_explicit(&config.previous_requests_finished, 0, memory_order_relaxed);
             hdr_reset(config.latency_histogram);
         }
-    } else if (config.num_threads && isBenchmarkFinished(requests_finished)) {
+    } else if (isBenchmarkFinished(requests_finished)) {
         aeStop(eventLoop);
-        return AE_NOMORE;
+        /* In multi-threaded mode, return AE_NOMORE to delete the timer since
+         * the thread's event loop will be destroyed. In single-threaded mode,
+         * we must keep the timer alive for subsequent benchmark tests */
+        if (config.num_threads) {
+            return AE_NOMORE;
+        }
     }
     if (config.csv) return SHOW_THROUGHPUT_INTERVAL;
     /* only first thread output throughput */

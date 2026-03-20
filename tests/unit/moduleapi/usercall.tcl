@@ -8,7 +8,7 @@ set test_script_get "#!lua
 redis.call('get','x')
 return 1"
 
-start_server {tags {"modules usercall"}} {
+start_server {tags {"modules usercall network"}} {
     r module load $testmodule
 
     # baseline test that module isn't doing anything weird
@@ -134,7 +134,7 @@ start_server {tags {"modules usercall"}} {
         assert_match {*cmd=usercall.call_with_user_flag*} [dict get $entry client-info]
     }
 
-    start_server {tags {"wait aof network external:skip"}} {
+    start_server {tags {"wait aof external:skip"}} {
         set slave [srv 0 client]
         set slave_host [srv 0 host]
         set slave_port [srv 0 port]

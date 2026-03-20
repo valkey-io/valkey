@@ -47,6 +47,7 @@
 #include "threads_mngr.h"
 #include "fmtargs.h"
 #include "io_threads.h"
+#include "tls.h"
 #include "sds.h"
 #include "module.h"
 #include "scripting_engine.h"
@@ -110,6 +111,7 @@ static inline int isShutdownInitiated(void);
 int isReadyToShutdown(void);
 int finishShutdown(void);
 const char *replstateToString(int replstate);
+void addReplyCommandInfo(client *c, struct serverCommand *cmd);
 
 /*============================ Utility functions ============================ */
 
@@ -1271,8 +1273,18 @@ void databasesCron(void) {
     if (server.active_expire_enabled) {
         if (!iAmPrimary()) {
             expireReplicaKeys();
-        } else if (!server.import_mode) {
-            activeExpireCycle(ACTIVE_EXPIRE_CYCLE_SLOW);
+        } else {
+            if (!server.import_mode) {
+                activeExpireCycle(ACTIVE_EXPIRE_CYCLE_SLOW);
+            }
+            /* If this node was previously a writable replica
+             * and replicaKeysWithExpire is not empty,
+             * it needs to be cleaned up;
+             * otherwise, it may lead to memory leaks. */
+            size_t replica_key_count = getReplicaKeyWithExpireCount();
+            if (replica_key_count > 0) {
+                flushReplicaKeysWithExpireList(1);
+            }
         }
     }
 
@@ -1323,10 +1335,11 @@ void databasesCron(void) {
     }
 }
 
-static inline void updateCachedTimeWithUs(int update_daylight_info, const long long ustime) {
+static inline void updateCachedTimeWithUs(int update_daylight_info, const ustime_t ustime) {
     server.ustime = ustime;
     server.mstime = server.ustime / 1000;
     server.unixtime = server.mstime / 1000;
+    lrulfu_updateClockAndPolicy(server.mstime, (server.maxmemory_policy & MAXMEMORY_FLAG_LFU) != 0);
 
     /* To get information about daylight saving time, we need to call
      * localtime_r and cache the result. However calling localtime_r in this
@@ -1352,7 +1365,7 @@ static inline void updateCachedTimeWithUs(int update_daylight_info, const long l
  * such info only when calling this function from serverCron() but not when
  * calling it from call(). */
 void updateCachedTime(int update_daylight_info) {
-    const long long us = ustime();
+    const ustime_t us = ustime();
     updateCachedTimeWithUs(update_daylight_info, us);
 }
 
@@ -1362,7 +1375,7 @@ void updateCachedTime(int update_daylight_info) {
  * the execution unit.
  * update_cached_time - if 0, will not update the cached time even if required.
  * us - if not zero, use this time for cached time, otherwise get current time. */
-void enterExecutionUnit(int update_cached_time, long long us) {
+void enterExecutionUnit(int update_cached_time, ustime_t us) {
     if (server.execution_nesting++ == 0 && update_cached_time) {
         if (us == 0) {
             us = ustime();
@@ -1685,6 +1698,17 @@ long long serverCron(struct aeEventLoop *eventLoop, long long id, void *clientDa
             server.rdb_bgsave_scheduled = 0;
     }
 
+    /* TLS auto-reload if enabled (only when TLS is built-in). */
+#if defined(USE_OPENSSL) && USE_OPENSSL == 1 /* BUILD_YES */
+    if ((server.tls_port || server.tls_replication || server.tls_cluster) &&
+        server.tls_ctx_config.auto_reload_interval > 0) {
+        run_with_period(1000) {
+            tlsReconfigureIfNeeded();
+            tlsApplyPendingReload();
+        }
+    }
+#endif
+
     if (moduleCount()) {
         run_with_period(100) modulesCron();
     }
@@ -1817,10 +1841,12 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
     }
 
     /* We should handle pending reads clients ASAP after event loop. */
-    processIOThreadsReadDone();
+    int io_responses = processIOThreadsReadDone();
+    if (io_responses > 0) server.el_iteration_active = true;
 
     /* Handle pending data(typical TLS). (must be done before flushAppendOnlyFile) */
-    connTypeProcessPendingData();
+    int conn_pending = connTypeProcessPendingData();
+    if (conn_pending > 0) server.el_iteration_active = true;
 
     /* If any connection type(typical TLS) still has pending unread data don't sleep at all. */
     int dont_sleep = connTypeHasPendingData();
@@ -1843,7 +1869,10 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
 
     /* Run a fast expire cycle (the called function will return
      * ASAP if a fast cycle is not needed). */
-    if (server.active_expire_enabled && !server.import_mode && iAmPrimary()) activeExpireCycle(ACTIVE_EXPIRE_CYCLE_FAST);
+    ustime_t expire_cycle_time = 0;
+    if (server.active_expire_enabled && !server.import_mode && iAmPrimary()) {
+        expire_cycle_time = activeExpireCycle(ACTIVE_EXPIRE_CYCLE_FAST);
+    }
 
     if (moduleCount()) {
         moduleFireServerEvent(VALKEYMODULE_EVENT_EVENTLOOP, VALKEYMODULE_SUBEVENT_EVENTLOOP_BEFORE_SLEEP, NULL);
@@ -1908,14 +1937,22 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
     }
 
     /* Handle writes with pending output buffers. */
-    handleClientsWithPendingWrites();
+    int client_writes = handleClientsWithPendingWrites();
+    if (client_writes > 0) server.el_iteration_active = true;
 
     /* Try to process more IO reads that are ready to be processed. */
     if (server.aof_fsync != AOF_FSYNC_ALWAYS) {
-        processIOThreadsReadDone();
+        int io_responses_after = processIOThreadsReadDone();
+        if (io_responses_after > 0) {
+            server.el_iteration_active = true;
+
+            /* Any responses that failed to enqueue to IO threads need to be handled now */
+            handleClientsWithPendingWrites();
+        }
     }
 
-    processIOThreadsWriteDone();
+    int io_writes = processIOThreadsWriteDone();
+    if (io_writes > 0) server.el_iteration_active = true;
 
     /* Record cron time in beforeSleep. This does not include the time consumed by AOF writing and IO writing above. */
     monotime cron_start_time_after_write = getMonotonicUs();
@@ -1938,6 +1975,14 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
         monotime el_duration = getMonotonicUs() - server.el_start;
         durationAddSample(EL_DURATION_TYPE_EL, el_duration);
         latencyTraceIfNeeded(server, eventloop, el_duration);
+
+        /* Accumulate time only for active cycles */
+        if (server.el_iteration_active) {
+            server.stat_active_time += el_duration;
+        } else {
+            /* Count expiration time as active CPU time for all event loops. */
+            server.stat_active_time += expire_cycle_time;
+        }
     }
     server.el_cron_duration += duration_before_aof + duration_after_write;
     durationAddSample(EL_DURATION_TYPE_CRON, server.el_cron_duration);
@@ -1987,6 +2032,8 @@ void afterSleep(struct aeEventLoop *eventLoop, int numevents) {
         }
         /* Set the eventloop start time. */
         server.el_start = getMonotonicUs();
+        /* Reset iteration work flag */
+        server.el_iteration_active = (numevents > 0);
         /* Set the eventloop command count at start. */
         server.el_cmd_cnt_start = server.stat_numcommands;
     }
@@ -2135,6 +2182,7 @@ void createSharedObjects(void) {
     shared.multi = createSharedString("MULTI");
     shared.exec = createSharedString("EXEC");
     shared.hset = createSharedString("HSET");
+    shared.hsetex = createSharedString("HSETEX");
     shared.hdel = createSharedString("HDEL");
     shared.hpexpireat = createSharedString("HPEXPIREAT");
     shared.hpersist = createSharedString("HPERSIST");
@@ -2183,7 +2231,6 @@ void createSharedObjects(void) {
 
     for (j = 0; j < OBJ_SHARED_INTEGERS; j++) {
         shared.integers[j] = makeObjectShared(createObject(OBJ_STRING, (void *)(long)j));
-        shared.integers[j]->encoding = OBJ_ENCODING_INT;
         shared.integers[j]->encoding = OBJ_ENCODING_INT;
     }
     for (j = 0; j < OBJ_SHARED_BULKHDR_LEN; j++) {
@@ -2283,6 +2330,13 @@ void initServerConfig(void) {
     server.latency_tracking_info_percentiles[1] = 99.0; /* p99 */
     server.latency_tracking_info_percentiles[2] = 99.9; /* p999 */
 
+    server.tls_server_cert_expire_time = 0;
+    server.tls_client_cert_expire_time = 0;
+    server.tls_ca_cert_expire_time = 0;
+    server.tls_server_cert_serial = NULL;
+    server.tls_client_cert_serial = NULL;
+    server.tls_ca_cert_serial = NULL;
+
     resetServerSaveParams();
 
     appendServerSaveParams(60 * 60, 1); /* save after 1 hour and 1 change */
@@ -2336,6 +2390,9 @@ void initServerConfig(void) {
      * valkey.conf using the rename-command directive. */
     server.commands = hashtableCreate(&commandSetType);
     server.orig_commands = hashtableCreate(&originalCommandSetType);
+    for (int i = 0; i < RESP_CACHE_INDEX_MAX; i++) {
+        server.command_response_cache[i] = NULL;
+    }
     populateCommandTable();
 
     /* Debugging */
@@ -2765,6 +2822,8 @@ void resetServerStats(void) {
     server.stat_reply_buffer_expands = 0;
     memset(server.duration_stats, 0, sizeof(durationStats) * EL_DURATION_TYPE_NUM);
     server.el_cmd_cnt_max = 0;
+    server.stat_active_time = 0;
+    server.el_iteration_active = false;
     lazyfreeResetStats();
 }
 
@@ -2881,8 +2940,17 @@ void initServer(void) {
 
     /* Make sure the locale is set on startup based on the config file. */
     if (setlocale(LC_COLLATE, server.locale_collate) == NULL) {
-        serverLog(LL_WARNING, "Failed to configure LOCALE for invalid locale name.");
-        exit(1);
+        if (server.locale_collate[0] == '\0') {
+            /* If we fail to set the locale_collate through environment variables, we maintain
+             * backward compatibility and do not exit. */
+            serverLog(LL_WARNING,
+                      "Warning: Failed to configure LOCALE derived from the environment variables, "
+                      "using the default locale '%s'.",
+                      setlocale(LC_COLLATE, NULL));
+        } else {
+            serverLog(LL_WARNING, "Failed to configure LOCALE for invalid locale name: '%s'.", server.locale_collate);
+            exit(1);
+        }
     }
 
     createSharedObjects();
@@ -3122,7 +3190,13 @@ void InitServerLast(void) {
     bioInit();
     initIOThreads();
     set_jemalloc_bg_thread(server.jemalloc_bg_thread);
-    server.initial_memory_usage = zmalloc_used_memory();
+
+    /* First set initial_memory_usage to zero as baseline for getMemoryOverheadData(). */
+    server.initial_memory_usage = 0;
+    struct serverMemOverhead *mh = getMemoryOverheadData();
+    /* Exclude current overhead memory to avoid double counting in the future. */
+    server.initial_memory_usage = zmalloc_used_memory() - mh->overhead_total;
+    freeMemoryOverheadData(mh);
 }
 
 /* The purpose of this function is to try to "glue" consecutive range
@@ -3250,6 +3324,11 @@ int populateCommandStructure(struct serverCommand *c) {
     /* We start with an unallocated histogram and only allocate memory when a command
      * has been issued for the first time */
     c->latency_histogram = NULL;
+
+    /* Initialize command info cache */
+    for (int i = 0; i < RESP_CACHE_INDEX_MAX; i++) {
+        c->info_cache[i] = NULL;
+    }
 
     /* Handle the legacy range spec and the "movablekeys" flag (must be done after populating all key specs). */
     populateCommandLegacyRangeSpec(c);
@@ -3785,7 +3864,7 @@ void call(client *c, int flags) {
     long long old_primary_repl_offset = server.primary_repl_offset;
     incrCommandStatsOnError(NULL, 0);
 
-    const long long call_timer = ustime();
+    const ustime_t call_timer = ustime();
     enterExecutionUnit(1, call_timer);
 
     /* setting the CLIENT_EXECUTING_COMMAND flag so we will avoid
@@ -5193,30 +5272,62 @@ void addReplyCommandSubCommands(client *c,
     hashtableCleanupIterator(&iter);
 }
 
+/* Generate and cache the command info response for a given protocol version */
+static sds generateCommandInfoResponse(struct serverCommand *cmd, int resp) {
+    client *caching_client = createCachedResponseClient(resp);
+
+    int firstkey = 0, lastkey = 0, keystep = 0;
+    if (cmd->legacy_range_key_spec.begin_search_type != KSPEC_BS_INVALID) {
+        firstkey = cmd->legacy_range_key_spec.bs.index.pos;
+        lastkey = cmd->legacy_range_key_spec.fk.range.lastkey;
+        if (lastkey >= 0) lastkey += firstkey;
+        keystep = cmd->legacy_range_key_spec.fk.range.keystep;
+    }
+
+    addReplyArrayLen(caching_client, 10);
+    addReplyBulkCBuffer(caching_client, cmd->fullname, sdslen(cmd->fullname));
+    addReplyLongLong(caching_client, cmd->arity);
+    addReplyFlagsForCommand(caching_client, cmd);
+    addReplyLongLong(caching_client, firstkey);
+    addReplyLongLong(caching_client, lastkey);
+    addReplyLongLong(caching_client, keystep);
+    addReplyCommandCategories(caching_client, cmd);
+    addReplyCommandTips(caching_client, cmd);
+    addReplyCommandKeySpecs(caching_client, cmd);
+    addReplyCommandSubCommands(caching_client, cmd, addReplyCommandInfo, 0);
+
+    sds command_info_response = aggregateClientOutputBuffer(caching_client);
+    deleteCachedResponseClient(caching_client);
+    return command_info_response;
+}
+
+int verifyCachedCommandInfoResponse(struct serverCommand *cmd, sds cached_response, int resp) {
+    sds generated_response = generateCommandInfoResponse(cmd, resp);
+    int is_equal = !sdscmp(generated_response, cached_response);
+    /* Here, we use LL_WARNING so this gets printed when debug assertions are enabled and the system is about to crash. */
+    if (!is_equal)
+        serverLog(LL_WARNING, "\ngenerated_response:\n%s\n\ncached_response:\n%s", generated_response, cached_response);
+    sdsfree(generated_response);
+    return is_equal;
+}
+
 /* Output the representation of a server command. Used by the COMMAND command and COMMAND INFO. */
 void addReplyCommandInfo(client *c, struct serverCommand *cmd) {
     if (!cmd) {
         addReplyNull(c);
     } else {
-        int firstkey = 0, lastkey = 0, keystep = 0;
-        if (cmd->legacy_range_key_spec.begin_search_type != KSPEC_BS_INVALID) {
-            firstkey = cmd->legacy_range_key_spec.bs.index.pos;
-            lastkey = cmd->legacy_range_key_spec.fk.range.lastkey;
-            if (lastkey >= 0) lastkey += firstkey;
-            keystep = cmd->legacy_range_key_spec.fk.range.keystep;
+        /* Use cached response if available for the client's protocol version */
+        int cache_idx = RESP_CACHE_INDEX(c->resp);
+        sds cache = cmd->info_cache[cache_idx];
+
+        if (cache == NULL) {
+            cache = generateCommandInfoResponse(cmd, c->resp);
+            cmd->info_cache[cache_idx] = cache;
+        } else {
+            debugServerAssertWithInfo(c, NULL, verifyCachedCommandInfoResponse(cmd, cache, c->resp));
         }
 
-        addReplyArrayLen(c, 10);
-        addReplyBulkCBuffer(c, cmd->fullname, sdslen(cmd->fullname));
-        addReplyLongLong(c, cmd->arity);
-        addReplyFlagsForCommand(c, cmd);
-        addReplyLongLong(c, firstkey);
-        addReplyLongLong(c, lastkey);
-        addReplyLongLong(c, keystep);
-        addReplyCommandCategories(c, cmd);
-        addReplyCommandTips(c, cmd);
-        addReplyCommandKeySpecs(c, cmd);
-        addReplyCommandSubCommands(c, cmd, addReplyCommandInfo, 0);
+        addReplyProto(c, cache, sdslen(cache));
     }
 }
 
@@ -5341,17 +5452,59 @@ void getKeysSubcommand(client *c) {
     getKeysSubcommandImpl(c, 0);
 }
 
-/* COMMAND (no args) */
-void commandCommand(client *c) {
+/* Invalidate the cached COMMAND response when command table changes */
+void invalidateCommandCache(void) {
+    for (int i = 0; i < RESP_CACHE_INDEX_MAX; i++) {
+        if (server.command_response_cache[i]) {
+            sdsfree(server.command_response_cache[i]);
+            server.command_response_cache[i] = NULL;
+        }
+    }
+}
+
+/* Generate the full COMMAND response */
+static sds generateCommandResponse(int resp) {
+    client *caching_client = createCachedResponseClient(resp);
+
     hashtableIterator iter;
     void *next;
-    addReplyArrayLen(c, hashtableSize(server.commands));
+    addReplyArrayLen(caching_client, hashtableSize(server.commands));
     hashtableInitIterator(&iter, server.commands, 0);
     while (hashtableNext(&iter, &next)) {
         struct serverCommand *cmd = next;
-        addReplyCommandInfo(c, cmd);
+        addReplyCommandInfo(caching_client, cmd);
     }
     hashtableCleanupIterator(&iter);
+
+    sds command_response = aggregateClientOutputBuffer(caching_client);
+    deleteCachedResponseClient(caching_client);
+    return command_response;
+}
+
+int verifyCachedCommandResponse(sds cached_response, int resp) {
+    sds generated_response = generateCommandResponse(resp);
+    int is_equal = !sdscmp(generated_response, cached_response);
+    /* Here, we use LL_WARNING so this gets printed when debug assertions are enabled and the system is about to crash. */
+    if (!is_equal)
+        serverLog(LL_WARNING, "\ngenerated_response:\n%s\n\ncached_response:\n%s", generated_response, cached_response);
+    sdsfree(generated_response);
+    return is_equal;
+}
+
+/* COMMAND (no args) */
+void commandCommand(client *c) {
+    /* Use cached response if available for the client's protocol version */
+    int cache_idx = RESP_CACHE_INDEX(c->resp);
+    sds cache = server.command_response_cache[cache_idx];
+
+    if (!cache) {
+        cache = generateCommandResponse(c->resp);
+        server.command_response_cache[cache_idx] = cache;
+    } else {
+        debugServerAssertWithInfo(c, NULL, verifyCachedCommandResponse(cache, c->resp));
+    }
+
+    addReplyProto(c, cache, sdslen(cache));
 }
 
 /* COMMAND COUNT */
@@ -5925,6 +6078,35 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
         info = getListensInfoString(info);
     }
 
+    /* TLS */
+    if (all_sections || (dictFind(section_dict, "tls") != NULL)) {
+        if (sections++) info = sdscat(info, "\r\n");
+        long long tls_server_seconds_remaining = 0;
+        if (server.tls_server_cert_expire_time > 0) {
+            tls_server_seconds_remaining = server.tls_server_cert_expire_time - (long long)server.unixtime;
+            if (tls_server_seconds_remaining < 0) tls_server_seconds_remaining = 0;
+        }
+        long long tls_client_seconds_remaining = 0;
+        if (server.tls_client_cert_expire_time > 0) {
+            tls_client_seconds_remaining = server.tls_client_cert_expire_time - (long long)server.unixtime;
+            if (tls_client_seconds_remaining < 0) tls_client_seconds_remaining = 0;
+        }
+        long long tls_ca_seconds_remaining = 0;
+        if (server.tls_ca_cert_expire_time > 0) {
+            tls_ca_seconds_remaining = server.tls_ca_cert_expire_time - (long long)server.unixtime;
+            if (tls_ca_seconds_remaining < 0) tls_ca_seconds_remaining = 0;
+        }
+        info = sdscatprintf(
+            info,
+            "# TLS\r\n" FMTARGS(
+                "tls_server_cert_serial:%s\r\n", server.tls_server_cert_serial ? server.tls_server_cert_serial : "none",
+                "tls_server_cert_expires_in_seconds:%lld\r\n", tls_server_seconds_remaining,
+                "tls_client_cert_serial:%s\r\n", server.tls_client_cert_serial ? server.tls_client_cert_serial : "none",
+                "tls_client_cert_expires_in_seconds:%lld\r\n", tls_client_seconds_remaining,
+                "tls_ca_cert_serial:%s\r\n", server.tls_ca_cert_serial ? server.tls_ca_cert_serial : "none",
+                "tls_ca_cert_expires_in_seconds:%lld\r\n", tls_ca_seconds_remaining));
+    }
+
     /* Clients */
     if (all_sections || (dictFind(section_dict, "clients") != NULL)) {
         size_t maxin, maxout;
@@ -5935,7 +6117,7 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
         pause_purpose purpose;
         char *paused_reason = "none";
         char *paused_actions = "none";
-        long long paused_timeout = 0;
+        mstime_t paused_timeout = 0;
         if (server.paused_actions & PAUSE_ACTION_CLIENT_ALL) {
             paused_actions = "all";
             paused_timeout = getPausedActionTimeout(PAUSE_ACTION_CLIENT_ALL, &purpose);
@@ -6051,7 +6233,8 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                 "mem_fragmentation_bytes:%zd\r\n", mh->total_frag_bytes,
                 "mem_not_counted_for_evict:%zu\r\n", freeMemoryGetNotCountedMemory(),
                 "mem_replication_backlog:%zu\r\n", mh->repl_backlog,
-                "mem_total_replication_buffers:%zu\r\n", server.repl_buffer_mem,
+                "mem_total_replication_buffers:%zu\r\n", server.repl_buffer_mem + server.pending_repl_data.mem,
+                "mem_replicas_repl_buffer:%zu\r\n", server.pending_repl_data.mem,
                 "mem_clients_slaves:%zu\r\n", mh->clients_replicas,
                 "mem_clients_normal:%zu\r\n", mh->clients_normal,
                 "mem_cluster_links:%zu\r\n", mh->cluster_links,
@@ -6162,10 +6345,10 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
 
     /* Stats */
     if (all_sections || (dictFind(section_dict, "stats") != NULL)) {
-        long long current_eviction_exceeded_time =
-            server.stat_last_eviction_exceeded_time ? (long long)elapsedUs(server.stat_last_eviction_exceeded_time) : 0;
-        long long current_active_defrag_time =
-            server.stat_last_active_defrag_time ? (long long)elapsedUs(server.stat_last_active_defrag_time) : 0;
+        ustime_t current_eviction_exceeded_time =
+            server.stat_last_eviction_exceeded_time ? (ustime_t)elapsedUs(server.stat_last_eviction_exceeded_time) : 0;
+        ustime_t current_active_defrag_time =
+            server.stat_last_active_defrag_time ? (ustime_t)elapsedUs(server.stat_last_active_defrag_time) : 0;
 
         if (sections++) info = sdscat(info, "\r\n");
         info = sdscatprintf(
@@ -6388,6 +6571,19 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                             (long)m_ru.ru_stime.tv_sec, (long)m_ru.ru_stime.tv_usec, (long)m_ru.ru_utime.tv_sec,
                             (long)m_ru.ru_utime.tv_usec);
 #endif /* RUSAGE_THREAD */
+        long long active_seconds = server.stat_active_time / 1000000;
+        ustime_t active_microseconds = server.stat_active_time % 1000000;
+        info = sdscatprintf(info,
+                            "used_active_time_main_thread:%lld.%06lld\r\n",
+                            active_seconds, active_microseconds);
+        for (int i = 1; i < server.io_threads_num; i++) {
+            ustime_t used_active_time_io_thread = getIOThreadActiveTimeMicroseconds(i);
+            info = sdscatprintf(info,
+                                "used_active_time_io_thread_%d:%lld.%06lld\r\n",
+                                i,
+                                used_active_time_io_thread / 1000000,
+                                used_active_time_io_thread % 1000000);
+        }
     }
 
     /* Modules */
@@ -6801,7 +6997,7 @@ int serverFork(int purpose) {
     }
 
     int childpid;
-    long long start = ustime();
+    ustime_t start = ustime();
     if ((childpid = valkey_fork()) == 0) {
         /* Child.
          *
@@ -6950,7 +7146,7 @@ int checkForSentinelMode(int argc, char **argv, char *exec_name) {
 
 /* Function called at startup to load RDB or AOF file in memory. */
 void loadDataFromDisk(void) {
-    long long start = ustime();
+    ustime_t start = ustime();
     if (server.aof_state == AOF_ON) {
         int ret = loadAppendOnlyFiles(server.aof_manifest);
         if (ret == AOF_FAILED || ret == AOF_OPEN_ERR) exit(1);
@@ -7058,9 +7254,9 @@ static sds expandProcTitleTemplate(const char *template, const char *title) {
     return sdstrim(res, " ");
 }
 /* Validate the specified template, returns 1 if valid or 0 otherwise. */
-int validateProcTitleTemplate(const char *template) {
+int validateProcTitleTemplate(const char *templ) {
     int ok = 1;
-    sds res = expandProcTitleTemplate(template, "");
+    sds res = expandProcTitleTemplate(templ, "");
     if (!res) return 0;
     if (sdslen(res) == 0) ok = 0;
     sdsfree(res);
@@ -7404,7 +7600,7 @@ __attribute__((weak)) int main(int argc, char **argv) {
 
     if (argc == 1) {
         serverLog(LL_WARNING,
-                  "Warning: no config file specified, using the default config. In order to specify a config file use "
+                  "Warning: No config file specified, using the default config. In order to specify a config file use "
                   "%s /path/to/valkey.conf",
                   argv[0]);
     } else {
@@ -7497,23 +7693,27 @@ __attribute__((weak)) int main(int argc, char **argv) {
  * The parseExtendedCommandArgumentsOrReply() function performs the common validation for extended
  * command arguments used in STRING and HASH commands.
  *
- * Get specific command extended options - PERSIST/DEL
- * Set specific command extended options - XX/NX/GET/IFEQ
- * HSET specific command extended options - FXX/FNX
+ * GET specific command extended options - PERSIST
+ * SET specific command extended options - XX/NX/GET/IFEQ
+ * MSET specific command extended options - XX/NX
+ * HGET specific command extended options - PERSIST
+ * HSET specific command extended options - NX/XX/FXX/FNX
  * Common command extended options - EX/EXAT/PX/PXAT/KEEPTTL
  *
- * Function takes pointers to client, flags, unit, pointer to pointer of expire obj if needed
- * to be determined and command_type which can be COMMAND_GET or COMMAND_SET.
+ * Function takes pointers to client, flags, unit, expire_idx, pointer to pointer of expire obj,
+ * pointer to pointer of compare obj if needed to be determined and command_type which can be COMMAND_*.
  *
  * If there are any syntax violations C_ERR is returned else C_OK is returned.
  *
- * Input flags are updated upon parsing the arguments. Unit and expire are updated if there are any
+ * Input flags are updated upon parsing the arguments. Unit, expire_idx and expire are updated if there are any
  * EX/EXAT/PX/PXAT arguments. Unit is updated to millisecond if PX/PXAT is set.
  *
+ * start_idx provides a way to start scanning from a specific index.
  * max_args provides a way to limit the scan to a specific range of arguments.
  */
-int parseExtendedCommandArgumentsOrReply(client *c, int *flags, int *unit, robj **expire, robj **compare_val, int command_type, int max_args) {
-    int j = command_type == COMMAND_SET ? 3 : 2;
+int parseExtendedCommandArgumentsOrReply(client *c, int command_type, int start_idx, int max_args, int *flags, int *unit, int *expire_idx, robj **expire, robj **compare_val) {
+    int j = start_idx;
+    if (expire_idx) *expire_idx = -1;
     for (; j < max_args; j++) {
         char *opt = objectGetVal(c->argv[j]);
         robj *next = (j == max_args - 1) ? NULL : c->argv[j + 1];
@@ -7521,12 +7721,14 @@ int parseExtendedCommandArgumentsOrReply(client *c, int *flags, int *unit, robj 
         /* clang-format off */
         if ((opt[0] == 'n' || opt[0] == 'N') &&
             (opt[1] == 'x' || opt[1] == 'X') && opt[2] == '\0' &&
-            !(*flags & ARGS_SET_XX || *flags & ARGS_SET_IFEQ) && (command_type == COMMAND_SET || command_type == COMMAND_HSET))
+            !(*flags & ARGS_SET_XX || *flags & ARGS_SET_IFEQ) &&
+            (command_type == COMMAND_SET || command_type == COMMAND_HSET || command_type == COMMAND_MSET))
         {
             *flags |= ARGS_SET_NX;
         } else if ((opt[0] == 'x' || opt[0] == 'X') &&
                    (opt[1] == 'x' || opt[1] == 'X') && opt[2] == '\0' &&
-                   !(*flags & ARGS_SET_NX || *flags & ARGS_SET_IFEQ) && (command_type == COMMAND_SET || command_type == COMMAND_HSET))
+                   !(*flags & ARGS_SET_NX || *flags & ARGS_SET_IFEQ) &&
+                   (command_type == COMMAND_SET || command_type == COMMAND_HSET || command_type == COMMAND_MSET))
         {
             *flags |= ARGS_SET_XX;
         } else if ((opt[0] == 'f' || opt[0] == 'F') &&
@@ -7559,7 +7761,8 @@ int parseExtendedCommandArgumentsOrReply(client *c, int *flags, int *unit, robj 
             *flags |= ARGS_SET_GET;
         } else if (!strcasecmp(opt, "KEEPTTL") && !(*flags & ARGS_PERSIST) &&
                    !(*flags & ARGS_EX) && !(*flags & ARGS_EXAT) &&
-                   !(*flags & ARGS_PX) && !(*flags & ARGS_PXAT) && (command_type == COMMAND_SET || command_type == COMMAND_HSET))
+                   !(*flags & ARGS_PX) && !(*flags & ARGS_PXAT) &&
+                   (command_type == COMMAND_SET || command_type == COMMAND_HSET || command_type == COMMAND_MSET))
         {
             *flags |= ARGS_KEEPTTL;
         } else if (!strcasecmp(opt,"PERSIST") && (command_type == COMMAND_GET || command_type == COMMAND_HGET) &&
@@ -7576,6 +7779,7 @@ int parseExtendedCommandArgumentsOrReply(client *c, int *flags, int *unit, robj 
         {
             *flags |= ARGS_EX;
             *expire = next;
+            if (expire_idx) *expire_idx = j;
             j++;
         } else if ((opt[0] == 'p' || opt[0] == 'P') &&
                    (opt[1] == 'x' || opt[1] == 'X') && opt[2] == '\0' &&
@@ -7586,6 +7790,7 @@ int parseExtendedCommandArgumentsOrReply(client *c, int *flags, int *unit, robj 
             *flags |= ARGS_PX;
             *unit = UNIT_MILLISECONDS;
             *expire = next;
+            if (expire_idx) *expire_idx = j;
             j++;
         } else if ((opt[0] == 'e' || opt[0] == 'E') &&
                    (opt[1] == 'x' || opt[1] == 'X') &&
@@ -7597,6 +7802,7 @@ int parseExtendedCommandArgumentsOrReply(client *c, int *flags, int *unit, robj 
         {
             *flags |= ARGS_EXAT;
             *expire = next;
+            if (expire_idx) *expire_idx = j;
             j++;
         } else if ((opt[0] == 'p' || opt[0] == 'P') &&
                    (opt[1] == 'x' || opt[1] == 'X') &&
@@ -7609,9 +7815,10 @@ int parseExtendedCommandArgumentsOrReply(client *c, int *flags, int *unit, robj 
             *flags |= ARGS_PXAT;
             *unit = UNIT_MILLISECONDS;
             *expire = next;
+            if (expire_idx) *expire_idx = j;
             j++;
         } else {
-            addReplyErrorObject(c,shared.syntaxerr);
+            addReplyErrorObject(c, shared.syntaxerr);
             return C_ERR;
         }
         /* clang-format on */

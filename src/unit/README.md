@@ -62,8 +62,7 @@ gtest unit tests that you can filter/play with:
    expected test class name
 
    ```bash
-   make valkey-unit-gtests
-   ./src/unit/valkey-unit-gtests --gtest_filter='TEST_CLASS_NAME.*'
+   make test-unit UNIT_TEST_PATTERN='TEST_CLASS_NAME.*'
    ```
 
 4. Running a subset of gtest unit tests in the test class, replace
@@ -71,8 +70,7 @@ gtest unit tests that you can filter/play with:
    with test name
 
    ```bash
-   make valkey-unit-gtests
-   ./src/unit/valkey-unit-gtests --gtest_filter='TEST_CLASS_NAME.TEST_NAME_PREFIX*'
+   make test-unit UNIT_TEST_PATTERN='TEST_CLASS_NAME.TEST_NAME_PREFIX*'
    ```
 
 5. Building and running with CMake
@@ -80,8 +78,7 @@ gtest unit tests that you can filter/play with:
    ```bash
    mkdir build-release && cd $_
    cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/opt/valkey -DBUILD_UNIT_GTESTS=yes
-   make valkey-unit-gtests
-   ./bin/valkey-unit-gtests
+   make test-unit
    ```
 
 6. Running disabled tests
@@ -99,13 +96,13 @@ gtest unit tests that you can filter/play with:
 
 The gtest framework supports several command-line flags to control test behavior:
 
-* `--accurate`: Indicates the test should use extra computation to more accurately validate the tests.
-* `--large-memory`: Indicates whether tests should use more than 100mb of memory.
-* `--valgrind`: A hint passed to tests to indicate that we are running under valgrind.
-* `--seed <number>`: Sets a specific random seed for reproducible test runs. All `rand()` calls will produce the same sequence with the same seed.
+* `accurate=1`: Indicates the test should use extra computation to more accurately validate the tests.
+* `large_memory=1`: Indicates whether tests should use more than 100mb of memory.
+* `valgrind=1`: A hint passed to tests to indicate that we are running under valgrind.
+* `seed=<number>`: Sets a specific random seed for reproducible test runs. All `rand()` calls will produce the same sequence with the same seed.
 
 Example usage:
 
 ```bash
-./src/unit/valkey-unit-gtests --accurate --large-memory --seed 12345
+make test-unit accurate=1 large_memory=1 seed=12345
 ```

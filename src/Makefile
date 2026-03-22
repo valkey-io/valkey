@@ -272,6 +272,19 @@ else
 endif
 endif
 
+# Build Lua module as static library instead of shared
+ifeq ($(STATIC_LUA),yes)
+	FINAL_CFLAGS+=-DSTATIC_LUA=1
+	ifeq ($(uname_S),Darwin)
+		LUA_LDFLAGS=-Wl,-export_dynamic -Wl,-force_load,$(current_dir)/modules/lua/libvalkeylua.a ../deps/lua/src/liblua.a
+	else
+		LUA_LDFLAGS=-Wl,--whole-archive $(current_dir)/modules/lua/libvalkeylua.a -Wl,--no-whole-archive ../deps/lua/src/liblua.a
+	endif
+else
+	FINAL_CFLAGS+=-DSTATIC_LUA=0
+	LUA_LDFLAGS=
+endif
+
 # Determine systemd support and/or build preference (defaulting to auto-detection)
 BUILD_WITH_SYSTEMD=no
 LIBSYSTEMD_LIBS=-lsystemd
@@ -688,7 +701,7 @@ endif
 
 # valkey-server
 $(SERVER_NAME): $(ENGINE_SERVER_OBJ) $(LUA_MODULE)
-	$(SERVER_LD) -o $@ $(ENGINE_SERVER_OBJ) ../deps/libvalkey/lib/libvalkey.a ../deps/hdr_histogram/libhdrhistogram.a ../deps/fpconv/libfpconv.a $(FINAL_LIBS)
+	$(SERVER_LD) -o $@ $(ENGINE_SERVER_OBJ) ../deps/libvalkey/lib/libvalkey.a ../deps/hdr_histogram/libhdrhistogram.a ../deps/fpconv/libfpconv.a $(FINAL_LIBS) $(LUA_LDFLAGS)
 
 # Valkey static library, used to compile against for unit testing
 $(ENGINE_LIB_NAME): $(ENGINE_SERVER_OBJ)
@@ -716,7 +729,7 @@ $(RDMA_MODULE_NAME): $(SERVER_NAME)
 
 # engine_lua.so
 $(LUA_MODULE_NAME): .make-prerequisites
-	cd modules/lua && $(MAKE) OPTIMIZATION="$(OPTIMIZATION)"
+	$(MAKE) -C modules/lua OPTIMIZATION="$(OPTIMIZATION)" STATIC_LUA="$(STATIC_LUA)"
 
 # valkey-cli
 $(ENGINE_CLI_NAME): $(ENGINE_CLI_OBJ)

@@ -3,11 +3,17 @@ CLANG := $(findstring clang,$(shell sh -c '$(CC) --version | head -1'))
 
 DEPS_DIR=../../../deps
 
+ifeq ($(STATIC_LUA),yes)
+	STATIC_LUA_FLAG=-DSTATIC_LUA=1
+else
+	STATIC_LUA_FLAG=-DSTATIC_LUA=0
+endif
+
 ifeq ($(uname_S),Darwin)
-	SHOBJ_CFLAGS= -I. -I$(DEPS_DIR)/lua/src -I$(DEPS_DIR)/fpconv -fPIC -W -Wall -dynamic -fno-common $(OPTIMIZATION) -std=gnu11 -D_GNU_SOURCE $(CFLAGS)
+	SHOBJ_CFLAGS= -I. -I$(DEPS_DIR)/lua/src -I$(DEPS_DIR)/fpconv -fPIC -W -Wall -dynamic -fno-common $(OPTIMIZATION) -std=gnu11 -D_GNU_SOURCE $(STATIC_LUA_FLAG) $(CFLAGS)
 	SHOBJ_LDFLAGS= -bundle -undefined dynamic_lookup $(LDFLAGS)
 else
-	SHOBJ_CFLAGS= -I. -I$(DEPS_DIR)/lua/src -I$(DEPS_DIR)/fpconv -fPIC -W -Wall -fno-common $(OPTIMIZATION) -std=gnu11 -D_GNU_SOURCE $(CFLAGS)
+	SHOBJ_CFLAGS= -I. -I$(DEPS_DIR)/lua/src -I$(DEPS_DIR)/fpconv -fPIC -W -Wall -fno-common $(OPTIMIZATION) -std=gnu11 -D_GNU_SOURCE $(STATIC_LUA_FLAG) $(CFLAGS)
 	SHOBJ_LDFLAGS= -shared $(LDFLAGS)
 
 # Pretty-printing setup for module build
@@ -43,10 +49,15 @@ LIBS = \
     $(DEPS_DIR)/lua/src/liblua.a \
     $(DEPS_DIR)/fpconv/libfpconv.a
 SRCS= $(wildcard *.c)
+
+ifeq ($(STATIC_LUA),yes)
+OBJS = $(SRCS:.c=.o)
+else
 OBJS = \
     $(SRCS:.c=.o) \
     sha1.o \
     rand.o
+endif
 
 # OS X 11.x doesn't have /usr/lib/libSystem.dylib and needs an explicit setting.
 ifeq ($(uname_S),Darwin)
@@ -55,10 +66,17 @@ ifeq ("$(wildcard /usr/lib/libSystem.dylib)","")
 endif
 endif
 
+ifeq ($(STATIC_LUA),yes)
+all: libvalkeylua.a
+
+libvalkeylua.a: $(OBJS) $(LIBS)
+	$(QUIET_LINK_MOD)$(AR) rcs $@ $(OBJS)
+else
 all: libvalkeylua.so
 
 libvalkeylua.so: $(OBJS) $(LIBS)
 	$(QUIET_LINK_MOD)$(CC) -o $@ $(SHOBJ_LDFLAGS) $^
+endif
 
 sha1.o: ../../sha1.c
 	$(QUIET_CC_MOD)$(CC) $(SHOBJ_CFLAGS) -c $< -o $@
@@ -76,4 +94,4 @@ $(DEPS_DIR)/fpconv/libfpconv.a:
 	cd $(DEPS_DIR) && $(MAKE) fpconv
 
 clean:
-	rm -f *.so $(OBJS)
+	rm -f *.so *.a $(OBJS)

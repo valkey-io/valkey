@@ -7627,12 +7627,20 @@ __attribute__((weak)) int main(int argc, char **argv) {
 
     /* Initialize the LUA scripting engine. */
 #ifdef LUA_ENABLED
+#if STATIC_LUA
+    if (scriptingEngineManagerFind("lua") == NULL) {
+        if (moduleLoadStatic("lua", NULL, 0, 0) != C_OK) {
+            serverPanic("Lua engine initialization failed, check the server logs.");
+        }
+    }
+#else
 #define LUA_LIB_STR STRINGIFY(LUA_LIB)
     if (scriptingEngineManagerFind("lua") == NULL) {
         if (moduleLoad(LUA_LIB_STR, NULL, 0, 0) != C_OK) {
             serverPanic("Lua engine initialization failed, check the server logs.");
         }
     }
+#endif
 #endif
 
 

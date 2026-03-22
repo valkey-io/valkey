@@ -1824,24 +1824,18 @@ void clusterscanCommand(client *c) {
         }
     }
 
-    /* Scan the slot using scanGenericCommand */
-    sds cursor_prefix = sdscatfmt(sdsempty(), "%s-{%s}-", clusterscanFingerprint(), crc16_slot_table[slot]);
-    sds finished_cursor_prefix = NULL;
-
     /* If SLOT argument was provided or implied by MATCH, don't advance to next slot then return 0 cursor.
-     * Else, advance to next slot for full cluster scan */
+     * Else, scan continuous range of slots owned by this node */
+    int final_slot;
     if (input_slot != -1 || match_slot != -1) {
-        finished_cursor_prefix = sdsnew("");
+        final_slot = -1; /* Single slot scan */
     } else {
-        int next_slot = slot + 1;
-        if (next_slot >= CLUSTER_SLOTS) {
-            finished_cursor_prefix = sdsnew("");
-        } else {
-            finished_cursor_prefix = sdscatfmt(sdsempty(), "0-{%s}-", crc16_slot_table[next_slot]);
+        clusterNode *owner = getNodeBySlot(slot);
+        final_slot = slot;
+        while (final_slot + 1 < CLUSTER_SLOTS && getNodeBySlot(final_slot + 1) == owner) {
+            final_slot++;
         }
     }
 
-    scanGenericCommand(c, NULL, cursor, slot, cursor_prefix, finished_cursor_prefix);
-    sdsfree(cursor_prefix);
-    sdsfree(finished_cursor_prefix);
+    scanGenericCommand(c, NULL, cursor, slot, final_slot, clusterscanFingerprint());
 }

@@ -408,12 +408,15 @@ void hashtableScanToKvstoreScanCallback(void *privdata, void *entry) {
  * 3. If the hashtable is entirely scanned i.e. the cursor has reached 0, the next non empty hashtable is discovered.
  *    The hashtable information is embedded into the cursor and returned.
  *
- * To restrict the scan to a single hashtable, pass a valid hashtable index as
- * 'onlydidx', otherwise pass -1.
+ * Scanning modes controlled by onlydidx and finaldidx:
+ * 1. onlydidx == -1 and finaldidx == -1: scan all hashtables.
+ * 2. onlydidx >= 0 and finaldidx == -1: scan only onlydidx.
+ * 3. onlydidx >= 0 and finaldidx >= 0: scan range [onlydidx, finaldidx].
  */
 unsigned long long kvstoreScan(kvstore *kvs,
                                unsigned long long cursor,
                                int onlydidx,
+                               int finaldidx,
                                kvstoreScanFunction scan_cb,
                                kvstoreScanShouldSkipHashtable *skip_cb,
                                void *privdata) {
@@ -429,8 +432,11 @@ unsigned long long kvstoreScan(kvstore *kvs,
             assert(onlydidx < kvs->num_hashtables);
             didx = onlydidx;
             cursor = 0;
-        } else if (didx > onlydidx) {
-            /* The cursor is already past onlydidx. */
+        } else if (finaldidx < 0 && didx > onlydidx) {
+            /* The cursor is already past onlydidx in single slot mode. */
+            return 0;
+        } else if (finaldidx >= 0 && didx > finaldidx) {
+            /* The cursor is already past finaldidx in range slot mode. */
             return 0;
         }
     }
@@ -446,8 +452,18 @@ unsigned long long kvstoreScan(kvstore *kvs,
     }
     /* scanning done for the current hash table or if the scanning wasn't possible, move to the next hashtable index. */
     if (next_cursor == 0 || skip) {
-        if (onlydidx >= 0) return 0;
-        didx = kvstoreGetNextNonEmptyHashtableIndex(kvs, didx);
+        if (onlydidx >= 0 && finaldidx < 0) {
+            /* Single slot scan mode. */
+            return 0;
+        }
+        int nextdidx = kvstoreGetNextNonEmptyHashtableIndex(kvs, didx);
+        if (onlydidx >= 0 && finaldidx >= 0) {
+            if (nextdidx == KVSTORE_INDEX_NOT_FOUND || nextdidx > finaldidx) {
+                /* Range exhausted. */
+                return 0;
+            }
+        }
+        didx = nextdidx;
     }
     if (didx == KVSTORE_INDEX_NOT_FOUND) {
         return 0;

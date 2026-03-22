@@ -29,6 +29,7 @@ size_t kvstoreMemUsage(kvstore *kvs);
 unsigned long long kvstoreScan(kvstore *kvs,
                                unsigned long long cursor,
                                int onlydidx,
+                               int finaldidx,
                                kvstoreScanFunction scan_cb,
                                kvstoreScanShouldSkipHashtable *skip_cb,
                                void *privdata);

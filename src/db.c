@@ -37,6 +37,7 @@
 #include "module.h"
 #include "vector.h"
 #include "expire.h"
+#include "crc16_slottable.h"
 
 /*-----------------------------------------------------------------------------
  * C-level DB API
@@ -1158,10 +1159,10 @@ char *getObjectTypeName(robj *o) {
  * In the case of a Hash object the function returns both the field and value
  * of every element on the Hash.
  *
- * slot, cursor_prefix and finished_cursor_prefix are used during CLUSTERSCAN to scan
- * a specific slot and to return the valid cursor to advance the scan.
+ * slot, final_slot and fingerprint 'fp' are used during CLUSTERSCAN to scan
+ * a specific slot or range of slots and to return the valid cursor to advance the scan.
  */
-void scanGenericCommand(client *c, robj *o, unsigned long long cursor, int slot, sds cursor_prefix, sds finished_cursor_prefix) {
+void scanGenericCommand(client *c, robj *o, unsigned long long cursor, int slot, int final_slot, const char *fp) {
     int i, j;
     long count = DEFAULT_SCAN_COMMAND_COUNT;
     sds pat = NULL;
@@ -1304,7 +1305,7 @@ void scanGenericCommand(client *c, robj *o, unsigned long long cursor, int slot,
             /* In cluster mode there is a separate dictionary for each slot.
              * If cursor is empty, we should try exploring next non-empty slot. */
             if (o == NULL) {
-                cursor = kvstoreScan(c->db->keys, cursor, onlydidx, keysScanCallback, NULL, &data);
+                cursor = kvstoreScan(c->db->keys, cursor, onlydidx, final_slot, keysScanCallback, NULL, &data);
             } else {
                 cursor = hashtableScan(ht, cursor, hashtableScanCallback, &data);
             }
@@ -1363,11 +1364,15 @@ void scanGenericCommand(client *c, robj *o, unsigned long long cursor, int slot,
     addReplyArrayLen(c, 2);
 
     /* Handle CLUSTERSCAN prefixing */
-    if (cursor == 0 && finished_cursor_prefix) {
-        sds new_cursor = sdscatfmt(sdsempty(), "%S%U", finished_cursor_prefix, cursor);
+    if (cursor == 0 && fp && final_slot >= 0 && final_slot + 1 < CLUSTER_SLOTS) {
+        /* Range mode: advance to next slot outside the current node's range. */
+        sds new_cursor = sdscatfmt(sdsempty(), "0-{%s}-0", crc16_slot_table[final_slot + 1]);
         addReplyBulkSds(c, new_cursor);
-    } else if (cursor_prefix) {
-        sds new_cursor = sdscatfmt(sdsempty(), "%S%U", cursor_prefix, cursor);
+    } else if (fp && cursor != 0) {
+        /* Derive hashtag from the cursor's actual slot for resharding safety.
+         * Works for single slot mode as well. */
+        int actual_slot = (int)(cursor & (CLUSTER_SLOTS - 1));
+        sds new_cursor = sdscatfmt(sdsempty(), "%s-{%s}-%U", fp, crc16_slot_table[actual_slot], cursor);
         addReplyBulkSds(c, new_cursor);
     } else {
         addReplyBulkLongLong(c, cursor);
@@ -1389,7 +1394,7 @@ void scanGenericCommand(client *c, robj *o, unsigned long long cursor, int slot,
 void scanCommand(client *c) {
     unsigned long long cursor;
     if (parseScanCursorOrReply(c, objectGetVal(c->argv[1]), &cursor) == C_ERR) return;
-    scanGenericCommand(c, NULL, cursor, -1, NULL, NULL);
+    scanGenericCommand(c, NULL, cursor, -1, -1, NULL);
 }
 
 void dbsizeCommand(client *c) {
@@ -2259,7 +2264,7 @@ unsigned long long dbSize(serverDb *db) {
 }
 
 unsigned long long dbScan(serverDb *db, unsigned long long cursor, kvstoreScanFunction scan_cb, void *privdata) {
-    return kvstoreScan(db->keys, cursor, -1, scan_cb, NULL, privdata);
+    return kvstoreScan(db->keys, cursor, -1, -1, scan_cb, NULL, privdata);
 }
 
 /* -----------------------------------------------------------------------------

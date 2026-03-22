@@ -675,17 +675,11 @@ persist-settings: distclean
 .PHONY: persist-settings
 
 # Prerequisites target
-.make-prerequisites:
+# Marker file to track that dependencies have been built
+# Use order-only prerequisite to avoid unnecessary rebuilds
+.make-deps-built:
+	@(cd ../deps && $(MAKE) $(DEPENDENCY_TARGETS))
 	@touch $@
-
-# Clean everything, persist settings and build dependencies if anything changed
-ifneq ($(strip $(PREV_FINAL_CFLAGS)), $(strip $(FINAL_CFLAGS)))
-.make-prerequisites: persist-settings
-endif
-
-ifneq ($(strip $(PREV_FINAL_LDFLAGS)), $(strip $(FINAL_LDFLAGS)))
-.make-prerequisites: persist-settings
-endif
 
 # valkey-server
 $(SERVER_NAME): $(ENGINE_SERVER_OBJ) $(LUA_MODULE)
@@ -716,7 +710,7 @@ $(RDMA_MODULE_NAME): $(SERVER_NAME)
 	$(QUIET_CC)$(CC) $(LDFLAGS) -o $@ rdma.c -shared -fPIC $(RDMA_MODULE_CFLAGS)
 
 # engine_lua.so
-$(LUA_MODULE_NAME): .make-prerequisites
+$(LUA_MODULE_NAME): | .make-deps-built
 	cd modules/lua && $(MAKE) OPTIMIZATION="$(OPTIMIZATION)"
 
 # valkey-cli
@@ -733,10 +727,11 @@ DEP = $(ENGINE_SERVER_OBJ:%.o=%.d) $(ENGINE_CLI_OBJ:%.o=%.d) $(ENGINE_BENCHMARK_
 # Because the jemalloc.h header is generated as a part of the jemalloc build,
 # building it should complete before building any other object. Instead of
 # depending on a single artifact, build all dependencies first.
-%.o: %.c .make-prerequisites
+# Use order-only prerequisite (|) so marker timestamp doesn't trigger rebuilds
+%.o: %.c | .make-deps-built
 	$(SERVER_CC) -MMD -o $@ -c $<
 
-trace/%.o: trace/%.c .make-prerequisites
+trace/%.o: trace/%.c | .make-deps-built
 	$(SERVER_CC) -Itrace -MMD -o $@ -c $<
 
 # The following files are checked in and don't normally need to be rebuilt. They

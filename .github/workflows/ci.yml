@@ -333,7 +333,7 @@ jobs:
 
       - name: Setup YAML formatter
         run: |
-          go install github.com/google/yamlfmt/cmd/yamlfmt@latest
+          go install github.com/google/yamlfmt/cmd/yamlfmt@v0.21.0
 
       - name: Run yamlfmt
         id: yamlfmt

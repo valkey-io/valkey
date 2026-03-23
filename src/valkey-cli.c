@@ -7621,7 +7621,8 @@ static int clusterManagerCommandDeleteNode(int argc, char **argv) {
             clusterManagerNode *primary = clusterManagerNodeWithLeastReplicas();
             if (primary == NULL) {
                 clusterManagerLogErr("[ERR] Could not find a reachable primary node "
-                                     "to reassign replica %s:%d.\n", n->ip, n->port);
+                                     "to reassign replica %s:%d.\n",
+                                     n->ip, n->port);
                 return 0;
             }
             clusterManagerLogInfo(">>> %s:%d as replica of %s:%d\n", n->ip, n->port, primary->ip, primary->port);

@@ -99,6 +99,9 @@ ifeq ($(USE_JEMALLOC),no)
 	MALLOC=libc
 endif
 
+# Export MALLOC so sub-makes (like unit tests) can see it
+export MALLOC
+
 ifdef SANITIZER
 ifeq ($(SANITIZER),address)
 	MALLOC=libc

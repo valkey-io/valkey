@@ -135,13 +135,13 @@ $(VALKEY_SERVER_WRAP_LIB): $(VALKEY_SERVER_LIB) $(ENGINE_SERVER_WRAP_OBJ) genera
 endif
 
 # Ensure Valkey server library is built
-$(VALKEY_SERVER_LIB): make-prerequisites
+$(VALKEY_SERVER_LIB): make-deps-built
 	cd .. && $(MAKE) libvalkey.a
 
-# Ensure parent prerequisites are built
-.PHONY: make-prerequisites
-make-prerequisites:
-	cd .. && $(MAKE) .make-prerequisites
+# Ensure parent dependencies are built
+.PHONY: make-deps-built
+make-deps-built:
+	cd .. && $(MAKE) .make-deps-built
 
 # Read MALLOC / USE_JEMALLOC setting from parent Makefile
 JEMALLOC_CFLAGS := -DUSE_JEMALLOC -isystem../../deps/jemalloc/include
@@ -191,7 +191,7 @@ else
 endif
 
 # Generate a new set of wrappers every time our header changes.
-generated_wrappers.cpp: make-prerequisites wrappers.h generate-wrappers.py
+generated_wrappers.cpp: make-deps-built wrappers.h generate-wrappers.py
 	./generate-wrappers.py
 
 generated_wrappers.o: generated_wrappers.cpp

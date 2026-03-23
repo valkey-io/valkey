@@ -5379,21 +5379,38 @@ static int clusterManagerNodeLoadInfo(clusterManagerNode *node, int opts,
             node->flags |= CLUSTER_MANAGER_FLAG_MYSELF;
             currentNode = node;
             clusterManagerNodeResetSlots(node);
-            if (i == 8) {
-                int remaining = strlen(line);
-                while (remaining > 0) {
-                    p = strchr(line, ' ');
-                    if (p == NULL) p = line + remaining;
-                    remaining -= (p - line);
+        } else if (!getfriends) {
+            if (!(node->flags & CLUSTER_MANAGER_FLAG_MYSELF))
+                continue;
+            else
+                break;
+        } else {
+            currentNode = clusterManagerNewNode(sdsnew(ip), port, bus_port);
+            currentNode->flags |= CLUSTER_MANAGER_FLAG_FRIEND;
+            if (node->friends == NULL) node->friends = listCreate();
+            listAddNodeTail(node->friends, currentNode);
+        }
+        /* Parse slot definitions for both myself and friend nodes.
+         * For unreachable friends, this gossip data is the only source
+         * of slot ownership info. For reachable friends, this will be
+         * overwritten when their own CLUSTER NODES is queried directly. */
+        if (i == 8) {
+            int remaining = strlen(line);
+            while (remaining > 0) {
+                p = strchr(line, ' ');
+                if (p == NULL) p = line + remaining;
+                remaining -= (p - line);
 
-                    char *slotsdef = line;
-                    *p = '\0';
-                    if (remaining) {
-                        line = p + 1;
-                        remaining--;
-                    } else line = p;
-                    char *dash = NULL;
-                    if (slotsdef[0] == '[') {
+                char *slotsdef = line;
+                *p = '\0';
+                if (remaining) {
+                    line = p + 1;
+                    remaining--;
+                } else line = p;
+                char *dash = NULL;
+                if (slotsdef[0] == '[') {
+                    /* Migrating/importing only applies to the local node. */
+                    if (myself) {
                         slotsdef++;
                         if ((p = strstr(slotsdef, "->-"))) { // Migrating
                             *p = '\0';
@@ -5424,30 +5441,22 @@ static int clusterManagerNodeLoadInfo(clusterManagerNode *node, int opts,
                             node->importing[node->importing_count - 1] =
                                 src;
                         }
-                    } else if ((dash = strchr(slotsdef, '-')) != NULL) {
-                        p = dash;
-                        int start, stop;
-                        *p = '\0';
-                        start = atoi(slotsdef);
-                        stop = atoi(p + 1);
-                        node->slots_count += (stop - (start - 1));
-                        while (start <= stop) node->slots[start++] = 1;
-                    } else if (p > slotsdef) {
-                        node->slots[atoi(slotsdef)] = 1;
-                        node->slots_count++;
                     }
+                } else if ((dash = strchr(slotsdef, '-')) != NULL) {
+                    p = dash;
+                    int start, stop;
+                    *p = '\0';
+                    start = atoi(slotsdef);
+                    stop = atoi(p + 1);
+                    currentNode->slots_count += (stop - (start - 1));
+                    while (start <= stop) currentNode->slots[start++] = 1;
+                } else if (p > slotsdef) {
+                    currentNode->slots[atoi(slotsdef)] = 1;
+                    currentNode->slots_count++;
                 }
             }
-            node->dirty = 0;
-        } else if (!getfriends) {
-            if (!(node->flags & CLUSTER_MANAGER_FLAG_MYSELF)) continue;
-            else break;
-        } else {
-            currentNode = clusterManagerNewNode(sdsnew(ip), port, bus_port);
-            currentNode->flags |= CLUSTER_MANAGER_FLAG_FRIEND;
-            if (node->friends == NULL) node->friends = listCreate();
-            listAddNodeTail(node->friends, currentNode);
         }
+        if (myself) node->dirty = 0;
         if (name != NULL) {
             if (currentNode->name) sdsfree(currentNode->name);
             currentNode->name = sdsnew(name);
@@ -5493,11 +5502,11 @@ cleanup:
     return success;
 }
 
-/* Retrieves info about the cluster using argument 'node' as the starting
- * point. All nodes will be loaded inside the cluster_manager.nodes list.
- * Warning: if something goes wrong, it will free the starting node before
- * returning 0. */
-static int clusterManagerLoadInfoFromNode(clusterManagerNode *node) {
+/* Common helper function to load cluster info from the starting node.
+ * If include_unreachable is true, all nodes from gossip are added to the list.
+ * If include_unreachable is false, only healthy reachable nodes are added.
+ * Returns 1 on success, 0 on failure and frees the starting node. */
+static int clusterManagerLoadInfoCommon(clusterManagerNode *node, int include_unreachable) {
     if (node->context == NULL && !clusterManagerNodeConnect(node)) {
         freeClusterManagerNode(node);
         return 0;
@@ -5554,7 +5563,11 @@ static int clusterManagerLoadInfoFromNode(clusterManagerNode *node) {
 invalid_friend:
             if (!(friend->flags & CLUSTER_MANAGER_FLAG_SLAVE))
                 cluster_manager.unreachable_masters++;
-            freeClusterManagerNode(friend);
+            if (include_unreachable) {
+                listAddNodeTail(cluster_manager.nodes, friend);
+            } else {
+                freeClusterManagerNode(friend);
+            }
         }
         listRelease(node->friends);
         node->friends = NULL;
@@ -5573,6 +5586,20 @@ invalid_friend:
         }
     }
     return 1;
+}
+
+/* Retrieves info about the cluster using argument 'node' as the starting
+ * point. Only reachable healthy nodes will be loaded.
+ * Returns 1 on success, 0 on failure. */
+static int clusterManagerLoadInfoFromNode(clusterManagerNode *node) {
+    return clusterManagerLoadInfoCommon(node, 0);
+}
+
+/* Retrieves info about the cluster using argument 'node' as the starting
+ * point. Loads all nodes from gossip regardless of their health status.
+ * Returns 1 on success, 0 on failure. */
+static int clusterManagerLoadAllInfoFromNode(clusterManagerNode *node) {
+    return clusterManagerLoadInfoCommon(node, 1);
 }
 
 /* Compare functions used by various sorting operations. */
@@ -5890,6 +5917,7 @@ static clusterManagerNode *clusterManagerNodeWithLeastReplicas(void) {
     while ((ln = listNext(&li)) != NULL) {
         clusterManagerNode *n = ln->value;
         if (n->flags & CLUSTER_MANAGER_FLAG_SLAVE) continue;
+        if (!n->context) continue; /* Skip unreachable masters */
         if (node == NULL || n->replicas_count < lowest_count) {
             node = n;
             lowest_count = n->replicas_count;
@@ -7176,7 +7204,10 @@ static int clusterManagerCommandAddNode(int argc, char **argv) {
             }
         } else {
             master_node = clusterManagerNodeWithLeastReplicas();
-            assert(master_node != NULL);
+            if (master_node == NULL) {
+                clusterManagerLogErr("[ERR] Could not find a reachable master node.\n");
+                return 0;
+            }
             printf("Automatically selected master %s:%d\n", master_node->ip,
                    master_node->port);
         }
@@ -7313,7 +7344,7 @@ static int clusterManagerCommandDeleteNode(int argc, char **argv) {
     clusterManagerNode *node = NULL;
 
     // Load cluster information
-    if (!clusterManagerLoadInfoFromNode(ref_node)) return 0;
+    if (!clusterManagerLoadAllInfoFromNode(ref_node)) return 0;
 
     // Check if the node exists and is not empty
     node = clusterManagerNodeByName(node_id);
@@ -7336,10 +7367,25 @@ static int clusterManagerCommandDeleteNode(int argc, char **argv) {
     while ((ln = listNext(&li)) != NULL) {
         clusterManagerNode *n = ln->value;
         if (n == node) continue;
+
+        /* Skip nodes without a valid connection. */
+        if (!n->context) {
+            clusterManagerLogWarn(">>> Skipping unreachable node %s:%d. "
+                                  "It may need manual reconfiguration "
+                                  "when it comes back online.\n",
+                                  n->ip, n->port);
+            continue;
+        }
+
         if (n->replicate && !strcasecmp(n->replicate, node_id)) {
             // Reconfigure the slave to replicate with some other node
             clusterManagerNode *master = clusterManagerNodeWithLeastReplicas();
-            assert(master != NULL);
+            if (master == NULL) {
+                clusterManagerLogErr("[ERR] Could not find a reachable master node "
+                                     "to reassign replica %s:%d.\n",
+                                     n->ip, n->port);
+                return 0;
+            }
             clusterManagerLogInfo(">>> %s:%d as replica of %s:%d\n",
                                   n->ip, n->port, master->ip, master->port);
             redisReply *r = CLUSTER_MANAGER_COMMAND(n, "CLUSTER REPLICATE %s",
@@ -7355,12 +7401,20 @@ static int clusterManagerCommandDeleteNode(int argc, char **argv) {
         if (!success) return 0;
     }
 
-    /* Finally send CLUSTER RESET to the node. */
-    clusterManagerLogInfo(">>> Sending CLUSTER RESET SOFT to the "
-                          "deleted node.\n");
-    redisReply *r = redisCommand(node->context, "CLUSTER RESET %s", "SOFT");
-    success = clusterManagerCheckRedisReply(node, r, NULL);
-    if (r) freeReplyObject(r);
+    /* Finally send CLUSTER RESET to the node if we have a connection. */
+    if (node->context != NULL) {
+        clusterManagerLogInfo(">>> Sending CLUSTER RESET SOFT to the "
+                              "deleted node.\n");
+        redisReply *r = redisCommand(node->context, "CLUSTER RESET %s", "SOFT");
+        success = clusterManagerCheckRedisReply(node, r, NULL);
+        if (r) freeReplyObject(r);
+        if (!success) return 0;
+    } else {
+        clusterManagerLogWarn(">>> WARNING: Could not connect to node %s:%d, "
+                              "unable to send CLUSTER RESET.\n",
+                              node->ip ? node->ip : "(null)", node->port);
+    }
+    clusterManagerLogOk("[OK] Node %s removed from the cluster.\n", node_id);
     return success;
 invalid_args:
     fprintf(stderr, CLUSTER_MANAGER_INVALID_HOST_ARG);

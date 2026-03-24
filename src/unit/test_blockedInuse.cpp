@@ -13,8 +13,8 @@ class BlockedInuseTest : public ::testing::Test {
   protected:
     MockValkey mock;
     RealValkey real;
+    static inline ConnectionType dummyConnType = {0};
 
-    static ConnectionType dummyConnType;
     static void SetUpTestSuite() {
         memset(&server, 0, sizeof(valkeyServer));
         server.hz = CONFIG_DEFAULT_HZ;
@@ -72,7 +72,7 @@ class BlockedInuseTest : public ::testing::Test {
     }
 };
 
-ConnectionType BlockedInuseTest::dummyConnType = {0};
+using BlockedInuseDeathTest = BlockedInuseTest;
 
 
 TEST_F(BlockedInuseTest, blockInitialState) {
@@ -297,10 +297,8 @@ TEST_F(BlockedInuseTest, unblockAllKeys) {
     freeFakeClient(c2);
 }
 
-using BlockedInuseDeathTest = BlockedInuseTest;
-
 TEST_F(BlockedInuseDeathTest, initCalledTwice) {
-    EXPECT_DEATH({ blockInuse_init(); }, ""); // second call is not allowed
+    EXPECT_DEATH(blockInuse_init(), ""); // second call is not allowed
 }
 
 TEST_F(BlockedInuseDeathTest, blockingOnKeysReplicaClient) {
@@ -309,7 +307,7 @@ TEST_F(BlockedInuseDeathTest, blockingOnKeysReplicaClient) {
     robj *keys[] = {key};
 
     c->flag.replica = 1;
-    EXPECT_DEATH({ blockInuse_blockClientOnKeys(c, 1, keys); }, "");
+    EXPECT_DEATH(blockInuse_blockClientOnKeys(c, 1, keys), "");
     decrRefCount(key);
     freeFakeClient(c);
 }
@@ -320,7 +318,7 @@ TEST_F(BlockedInuseDeathTest, blockingOnKeysNonStringType) {
     robj *keys[] = {key};
 
     keys[0]->type = OBJ_LIST;
-    EXPECT_DEATH({ blockInuse_blockClientOnKeys(c, 1, keys); }, "");
+    EXPECT_DEATH(blockInuse_blockClientOnKeys(c, 1, keys), "");
     keys[0]->type = OBJ_STRING;
     decrRefCount(key);
     freeFakeClient(c);
@@ -331,7 +329,7 @@ TEST_F(BlockedInuseDeathTest, blockingOnKeysZeroKeys) {
     robj *key = createObject(OBJ_STRING, sdsnew("foo"));
     robj *keys[] = {key};
 
-    EXPECT_DEATH({ blockInuse_blockClientOnKeys(c, 0, keys); }, "");
+    EXPECT_DEATH(blockInuse_blockClientOnKeys(c, 0, keys), "");
     decrRefCount(key);
     freeFakeClient(c);
 }

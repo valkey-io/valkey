@@ -58,9 +58,6 @@ void datasetFree(dataset *ds);
 /* Get number of records */
 size_t datasetGetRecordCount(dataset *ds);
 
-/* Report memory usage */
-void datasetReportMemory(dataset *ds);
-
 #ifndef __cplusplus
 /* Generate complete command for given record index (caller must sdsfree) */
 sds datasetGenerateCommand(dataset *ds, int record_index, sds *template_argv, int template_argc, _Atomic uint64_t *seq_key, int replace_placeholders, int keyspacelen, int sequential_replacement);

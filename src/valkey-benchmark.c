@@ -2386,10 +2386,6 @@ int main(int argc, char **argv) {
             fprintf(stderr, "Failed to initialize dataset\n");
             exit(1);
         }
-
-        if (verbose) {
-            datasetReportMemory(config.current_dataset);
-        }
     }
     /* Set default for requests if not specified */
     if (config.requests < 0) config.requests = 100000;

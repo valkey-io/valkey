@@ -28,7 +28,6 @@ static const char *PLACEHOLDERS[PLACEHOLDER_COUNT] = {
 static bool datasetBuildFieldMap(dataset *ds, sds *template_argv, int template_argc);
 static sds getFieldValue(const char *row, int column_index, char delimiter);
 static sds getXmlFieldValue(const char *xml_doc, const char *field_name);
-static sds formatBytes(size_t bytes);
 static bool csvDiscoverFields(dataset *ds);
 static bool scanXmlFieldsFromFile(dataset *ds, const char *xml_root_element);
 static bool scanXmlFields(const char *doc_start, const char *doc_end, dataset *ds, const char *start_root_tag, const char *end_root_tag);
@@ -199,20 +198,6 @@ size_t datasetGetRecordCount(dataset *ds) {
     return ds ? ds->record_count : 0;
 }
 
-void datasetReportMemory(dataset *ds) {
-    if (!ds) return;
-
-    size_t total_memory = 0;
-    for (size_t i = 0; i < ds->record_count; i++) {
-        for (int j = 0; j < ds->used_field_count; j++) {
-            total_memory += sdslen(ds->records[i].fields[j]);
-        }
-    }
-    sds size_str = formatBytes(total_memory);
-    fprintf(stderr, "Dataset: %zu documents (%s)\n", ds->record_count, size_str);
-    sdsfree(size_str);
-}
-
 sds datasetGenerateCommand(dataset *ds, int record_index, sds *template_argv, int template_argc, _Atomic uint64_t *seq_key, int replace_placeholders, int keyspacelen, int sequential_replacement) {
     if (!ds || !template_argv) return NULL;
 
@@ -280,18 +265,6 @@ static size_t readIntoXmlStreamBuffer(xmlStreamBuffer *sb, FILE *fp) {
     size_t bytes_read = fread(sb->buffer + sb->used, 1, space_available, fp);
     sb->used += bytes_read;
     return bytes_read;
-}
-
-static sds formatBytes(size_t bytes) {
-    if (bytes < 1024) {
-        return sdscatprintf(sdsempty(), "%zu bytes", bytes);
-    } else if (bytes < 1024 * 1024) {
-        return sdscatprintf(sdsempty(), "%.2f KB", bytes / 1024.0);
-    } else if (bytes < 1024 * 1024 * 1024) {
-        return sdscatprintf(sdsempty(), "%.2f MB", bytes / (1024.0 * 1024.0));
-    } else {
-        return sdscatprintf(sdsempty(), "%.2f GB", bytes / (1024.0 * 1024.0 * 1024.0));
-    }
 }
 
 static bool shouldStopLoading(dataset *ds) {

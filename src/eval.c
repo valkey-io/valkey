@@ -156,6 +156,12 @@ void freeEvalScripts(dict *scripts, list *scripts_lru_list, list *engine_callbac
     }
 }
 
+void freeCachedScriptsForEngine(scriptingEngine *engine) {
+    if (engine == NULL) {
+        return;
+    }
+}
+
 static void resetEngineEvalEnvCallback(scriptingEngine *engine, void *context) {
     int async = context != NULL;
     callableLazyEnvReset *callback = scriptingEngineCallResetEnvFunc(engine, VMSE_EVAL, async);
@@ -179,6 +185,31 @@ void evalRelease(int async) {
     }
 }
 
+
+/* Remove all cached eval scripts associated with the given scripting engine.
+ * Called when a scripting engine is unregistered to avoid dangling engine
+ * pointers in the eval script cache. */
+void evalRemoveScriptsOfEngine(scriptingEngine *engine, const char *engine_name) {
+    dictIterator *iter = dictGetSafeIterator(evalCtx.scripts);
+    dictEntry *entry;
+    size_t scripts_removed = 0;
+    while ((entry = dictNext(iter))) {
+        evalScript *es = dictGetVal(entry);
+        if (es->engine == engine) {
+            sds sha = dictGetKey(entry);
+            evalCtx.scripts_mem -= sdsAllocSize(sha) + getStringObjectSdsUsedMemory(es->body);
+            if (es->node) {
+                listDelNode(evalCtx.scripts_lru_list, es->node);
+            }
+            dictDelete(evalCtx.scripts, sha);
+            ++scripts_removed;
+        }
+    }
+    dictReleaseIterator(iter);
+    serverLog(LL_NOTICE,
+              "Successfully removed %zu cached scripts associated with engine '%s'",
+              scripts_removed, engine_name);
+}
 
 void evalReset(int async) {
     evalRelease(async);

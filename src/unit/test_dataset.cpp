@@ -10,7 +10,6 @@ extern "C" {
 #include "sds.h"
 #include "valkey-benchmark-dataset.h"
 #include "zmalloc.h"
-#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

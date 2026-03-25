@@ -226,21 +226,22 @@ tags "modules" {
                     $master debug populate 1000 master 100000
                     $master config set rdbcompression no
 
-                    # Force the replica to try another full sync (this time it will have matching master replid)
-                    $master multi
-                    $master client kill type replica
-                    # Fill replication backlog with new content
-                    $master config set repl-backlog-size 16384
-                    for {set keyid 0} {$keyid < 10} {incr keyid} {
-                        $master set "$keyid string_$keyid" [string repeat A 16384]
-                    }
-                    $master exec
-
                     switch $testType {
                         "Aborted" {
                             # Set master with a slow rdb generation, so that we can easily intercept loading
                             # 10ms per key, with 1000 keys is 10 seconds
                             $master config set rdb-key-save-delay 10000
+
+                            # Force the replica to try another full sync (this time it will have matching master replid)
+                            # This must be done AFTER setting rdb-key-save-delay to ensure the slow RDB is in effect
+                            $master multi
+                            $master client kill type replica
+                            # Fill replication backlog with new content
+                            $master config set repl-backlog-size 16384
+                            for {set keyid 0} {$keyid < 10} {incr keyid} {
+                                $master set "$keyid string_$keyid" [string repeat A 16384]
+                            }
+                            $master exec
 
                             test {Diskless load swapdb RedisModuleEvent_ReplAsyncLoad handling: during loading, can keep module variable same as before} {
                                 # Wait for the replica to start reading the rdb and module for acknowledgement
@@ -277,6 +278,16 @@ tags "modules" {
                             $master config set rdb-key-save-delay 0
                         }
                         "Successful" {
+                            # Force the replica to try another full sync (this time it will have matching master replid)
+                            $master multi
+                            $master client kill type replica
+                            # Fill replication backlog with new content
+                            $master config set repl-backlog-size 16384
+                            for {set keyid 0} {$keyid < 10} {incr keyid} {
+                                $master set "$keyid string_$keyid" [string repeat A 16384]
+                            }
+                            $master exec
+
                             # Let replica finish sync with master
                             wait_for_condition 100 100 {
                                 [s -1 master_link_status] eq "up"

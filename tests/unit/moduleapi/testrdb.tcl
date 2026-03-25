@@ -233,7 +233,6 @@ tags "modules" {
                             $master config set rdb-key-save-delay 10000
 
                             # Force the replica to try another full sync (this time it will have matching master replid)
-                            # This must be done AFTER setting rdb-key-save-delay to ensure the slow RDB is in effect
                             $master multi
                             $master client kill type replica
                             # Fill replication backlog with new content

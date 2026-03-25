@@ -4329,6 +4329,7 @@ int clusterProcessPacket(clusterLink *link) {
             for (size_t w = 0; w < CLUSTER_SLOT_WORDS && !found_new_owner; w++) {
                 uint64_t word;
                 memcpy(&word, msg->myslots + SLOT_WORD_OFFSET(w), sizeof(word));
+                memrev64ifbe(&word);
                 while (word) {
                     const int slot = clusterExtractSlotFromWord(&word, w);
 
@@ -5321,6 +5322,7 @@ void clusterSendFailoverAuthIfNeeded(clusterNode *node, clusterMsg *request) {
     for (size_t w = 0; w < CLUSTER_SLOT_WORDS; w++) {
         uint64_t word;
         memcpy(&word, claimed_slots + SLOT_WORD_OFFSET(w), sizeof(word));
+        memrev64ifbe(&word);
         while (word) {
             slot = clusterExtractSlotFromWord(&word, w);
 

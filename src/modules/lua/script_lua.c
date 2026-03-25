@@ -172,7 +172,11 @@ static void _serverPanic(const char *file, int line, const char *msg, ...) {
 
 typedef uint64_t monotime;
 
-monotime getMonotonicMicroseconds(void) {
+#if STATIC_LUA
+/* Use the engine's version */
+extern monotime getMonotonicUs(void);
+#else
+monotime getMonotonicUs(void) {
     /* clock_gettime() is specified in POSIX.1b (1993).  Even so, some systems
      * did not support this until much later.  CLOCK_MONOTONIC is technically
      * optional and may not be supported - but it appears to be universal.
@@ -181,9 +185,10 @@ monotime getMonotonicMicroseconds(void) {
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return ((uint64_t)ts.tv_sec) * 1000000 + ts.tv_nsec / 1000;
 }
+#endif
 
 inline uint64_t elapsedUs(monotime start_time) {
-    return getMonotonicMicroseconds() - start_time;
+    return getMonotonicUs() - start_time;
 }
 
 inline uint64_t elapsedMs(monotime start_time) {

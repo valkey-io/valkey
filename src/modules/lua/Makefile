@@ -3,10 +3,10 @@ CLANG := $(findstring clang,$(shell sh -c '$(CC) --version | head -1'))
 
 DEPS_DIR=../../../deps
 
-ifeq ($(STATIC_LUA),yes)
-	STATIC_LUA_FLAG=-DSTATIC_LUA=1
-else
+ifeq ($(BUILD_LUA),module)
 	STATIC_LUA_FLAG=-DSTATIC_LUA=0
+else
+	STATIC_LUA_FLAG=-DSTATIC_LUA=1
 endif
 
 ifeq ($(uname_S),Darwin)
@@ -50,13 +50,13 @@ LIBS = \
     $(DEPS_DIR)/fpconv/libfpconv.a
 SRCS= $(wildcard *.c)
 
-ifeq ($(STATIC_LUA),yes)
-OBJS = $(SRCS:.c=.o)
-else
+ifeq ($(BUILD_LUA),module)
 OBJS = \
-    $(SRCS:.c=.o) \
-    sha1.o \
-    rand.o
+	$(SRCS:.c=.o) \
+	sha1.o \
+	rand.o
+else
+OBJS = $(SRCS:.c=.o)
 endif
 
 # OS X 11.x doesn't have /usr/lib/libSystem.dylib and needs an explicit setting.
@@ -66,16 +66,16 @@ ifeq ("$(wildcard /usr/lib/libSystem.dylib)","")
 endif
 endif
 
-ifeq ($(STATIC_LUA),yes)
-all: libvalkeylua.a
-
-libvalkeylua.a: $(OBJS) $(LIBS)
-	$(QUIET_LINK_MOD)$(AR) rcs $@ $(OBJS)
-else
+ifeq ($(BUILD_LUA),module)
 all: libvalkeylua.so
 
 libvalkeylua.so: $(OBJS) $(LIBS)
 	$(QUIET_LINK_MOD)$(CC) -o $@ $(SHOBJ_LDFLAGS) $^
+else
+all: libvalkeylua.a
+
+libvalkeylua.a: $(OBJS) $(LIBS)
+	$(QUIET_LINK_MOD)$(AR) rcs $@ $(OBJS)
 endif
 
 sha1.o: ../../sha1.c

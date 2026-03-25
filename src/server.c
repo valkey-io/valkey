@@ -7625,24 +7625,14 @@ __attribute__((weak)) int main(int argc, char **argv) {
         clusterInitLast();
     }
 
-    /* Initialize the LUA scripting engine. */
-#ifdef LUA_ENABLED
-#if STATIC_LUA
+#if defined(LUA_ENABLED) && STATIC_LUA
+    /* Initialize the LUA scripting engine on-startup only when LUA is built statically */
     if (scriptingEngineManagerFind("lua") == NULL) {
         if (moduleLoadStatic("lua", NULL, 0, 0) != C_OK) {
             serverPanic("Lua engine initialization failed, check the server logs.");
         }
     }
-#else
-#define LUA_LIB_STR STRINGIFY(LUA_LIB)
-    if (scriptingEngineManagerFind("lua") == NULL) {
-        if (moduleLoad(LUA_LIB_STR, NULL, 0, 0) != C_OK) {
-            serverPanic("Lua engine initialization failed, check the server logs.");
-        }
-    }
 #endif
-#endif
-
 
     InitServerLast();
 

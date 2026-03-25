@@ -13,12 +13,12 @@ set(LUA_ENGINE_SRCS
     debug_lua.c
     list.c)
 
-if (NOT BUILD_STATIC_LUA)
+if (BUILD_LUA STREQUAL "module")
     list(APPEND LUA_ENGINE_SRCS ../../sha1.c)
     list(APPEND LUA_ENGINE_SRCS ../../rand.c)
 endif ()
 
-if (BUILD_STATIC_LUA)
+if (BUILD_LUA STREQUAL "static")
     message(STATUS "Building STATIC LUA module")
     add_library(valkeylua STATIC "${LUA_ENGINE_SRCS}")
     target_link_libraries(valkeylua PUBLIC lualib fpconv)

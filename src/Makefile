@@ -258,31 +258,29 @@ LUA_MODULE_NAME:=modules/lua/libvalkeylua.so
 ifeq ($(BUILD_LUA),no)
 	LUA_MODULE=
 	LUA_MODULE_INSTALL=
-else
+	FINAL_CFLAGS+=-DSTATIC_LUA=0
+else ifeq ($(BUILD_LUA),module)
 	LUA_MODULE=$(LUA_MODULE_NAME)
 	LUA_MODULE_INSTALL=install-lua-module
 
 	current_dir = $(shell pwd)
-	FINAL_CFLAGS+=-DLUA_ENABLED -DLUA_LIB=libvalkeylua.so
-ifeq ($(uname_S),Darwin)
-	FINAL_LDFLAGS+= -Wl,-rpath,$(PREFIX)/lib
-	FINAL_LDFLAGS+= -Wl,-rpath,$(current_dir)/modules/lua
+	FINAL_CFLAGS+=-DLUA_ENABLED -DLUA_LIB=libvalkeylua.so -DSTATIC_LUA=0
+	ifeq ($(uname_S),Darwin)
+		FINAL_LDFLAGS+= -Wl,-rpath,$(PREFIX)/lib
+		FINAL_LDFLAGS+= -Wl,-rpath,$(current_dir)/modules/lua
+	else
+		FINAL_LDFLAGS+= -Wl,-rpath,$(PREFIX)/lib:$(current_dir)/modules/lua -Wl,--disable-new-dtags
+	endif
 else
-	FINAL_LDFLAGS+= -Wl,-rpath,$(PREFIX)/lib:$(current_dir)/modules/lua -Wl,--disable-new-dtags
-endif
-endif
-
-# Build Lua module as static library instead of shared
-ifeq ($(STATIC_LUA),yes)
-	FINAL_CFLAGS+=-DSTATIC_LUA=1
+	# The default: building Lua as a static module.
+	LUA_MODULE=$(LUA_MODULE_NAME)
+	current_dir = $(shell pwd)
+	FINAL_CFLAGS+=-DLUA_ENABLED -DSTATIC_LUA=1
 	ifeq ($(uname_S),Darwin)
 		LUA_LDFLAGS=-Wl,-export_dynamic -Wl,-force_load,$(current_dir)/modules/lua/libvalkeylua.a ../deps/lua/src/liblua.a
 	else
 		LUA_LDFLAGS=-Wl,--whole-archive $(current_dir)/modules/lua/libvalkeylua.a -Wl,--no-whole-archive ../deps/lua/src/liblua.a
 	endif
-else
-	FINAL_CFLAGS+=-DSTATIC_LUA=0
-	LUA_LDFLAGS=
 endif
 
 # Determine systemd support and/or build preference (defaulting to auto-detection)

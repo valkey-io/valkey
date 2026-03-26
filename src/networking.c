@@ -1772,20 +1772,18 @@ void clientAcceptHandler(connection *conn) {
         }
     }
 
-    /* Auto-authenticate from cert_user field if set */
-    sds username = connGetPeerUsername(conn);
-    if (username != NULL) {
-        user *u = ACLGetUserByName(username, sdslen(username));
-        if (u && (u->flags & USER_FLAG_ENABLED)) {
-            clientSetUser(c, u, 1);
-            moduleNotifyUserChanged(c);
-            serverLog(LL_VERBOSE, "TLS: Auto-authenticated client as %s",
-                      server.hide_user_data_from_log ? "*redacted*" : u->name);
-        } else {
-            addACLLogEntry(c, ACL_INVALID_TLS_CERT_AUTH, ACL_LOG_CTX_TOPLEVEL, 0, username, NULL);
-        }
-        sdsfree(username);
+    /* Auto-authenticate from cert user field if set */
+    sds cert_username = NULL;
+    user *u = connGetPeerUser(conn, &cert_username);
+    if (u) {
+        clientSetUser(c, u, 1);
+        moduleNotifyUserChanged(c);
+        serverLog(LL_VERBOSE, "TLS: Auto-authenticated client as %s",
+                  server.hide_user_data_from_log ? "*redacted*" : u->name);
+    } else if (cert_username) {
+        addACLLogEntry(c, ACL_INVALID_TLS_CERT_AUTH, ACL_LOG_CTX_TOPLEVEL, 0, cert_username, NULL);
     }
+    sdsfree(cert_username);
 
     server.stat_numconnections++;
     moduleFireServerEvent(VALKEYMODULE_EVENT_CLIENT_CHANGE, VALKEYMODULE_SUBEVENT_CLIENT_CHANGE_CONNECTED, c);
@@ -5987,25 +5985,6 @@ size_t getClientMemoryUsage(client *c, size_t *output_buffer_mem_usage) {
         mem += c->pubsub_data->client_tracking_prefixes->numnodes * (sizeof(raxNode) + sizeof(raxNode *));
 
     return mem;
-}
-
-/* Get the class of a client, used in order to enforce limits to different
- * classes of clients.
- *
- * The function will return one of the following:
- * CLIENT_TYPE_NORMAL -> Normal client, including MONITOR
- * CLIENT_TYPE_REPLICA  -> replica
- * CLIENT_TYPE_PUBSUB -> Client subscribed to Pub/Sub channels
- * CLIENT_TYPE_PRIMARY -> The client representing our replication primary.
- */
-int getClientType(client *c) {
-    if (c->flag.primary) return CLIENT_TYPE_PRIMARY;
-    /* Even though MONITOR clients are marked as replicas, we
-     * want the expose them as normal clients. */
-    if (c->flag.replica && !c->flag.monitor) return CLIENT_TYPE_REPLICA;
-    if (c->flag.pubsub) return CLIENT_TYPE_PUBSUB;
-    if (c->slot_migration_job) return isImportSlotMigrationJob(c->slot_migration_job) ? CLIENT_TYPE_SLOT_IMPORT : CLIENT_TYPE_SLOT_EXPORT;
-    return CLIENT_TYPE_NORMAL;
 }
 
 int getClientTypeByName(char *name) {

@@ -74,6 +74,9 @@
                             }
                         }
                     }
+                },
+                "availability_zone": {
+                    "type": "string"
                 }
             }
         },

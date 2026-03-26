@@ -43,6 +43,7 @@
 #include <openssl/conf.h>
 #include <openssl/ssl.h>
 #include <openssl/x509.h>
+#include <openssl/x509v3.h>
 #include <openssl/err.h>
 #include <openssl/rand.h>
 #include <openssl/pem.h>
@@ -1277,7 +1278,7 @@ static void updateSSLState(connection *conn_) {
     updatePendingData(conn);
 }
 
-static int getCertFieldByName(X509 *cert, const char *field, char *out, size_t outlen) {
+static int getCertSubjectFieldByName(X509 *cert, const char *field, char *out, size_t outlen) {
     if (!cert || !field || !out) return 0;
 
     int nid = -1;
@@ -1296,35 +1297,99 @@ static int getCertFieldByName(X509 *cert, const char *field, char *out, size_t o
     return X509_NAME_get_text_by_NID(subject, nid, out, outlen) > 0;
 }
 
-sds tlsGetPeerUsername(connection *conn_) {
+/* Extract URI from Subject Alternative Name extension and return the first
+ * enabled Valkey user that matches a URI. Returns NULL if no match found.
+ * If cert_username is non-NULL, it is set to the last URI checked. */
+static user *getValidUserFromCertSanUri(X509 *cert, sds *cert_username) {
+    if (!cert) return NULL;
+
+    GENERAL_NAMES *san_names = X509_get_ext_d2i(cert, NID_subject_alt_name, NULL, NULL);
+    if (!san_names) return NULL;
+
+    user *result = NULL;
+    int num_names = sk_GENERAL_NAME_num(san_names);
+
+    for (int i = 0; i < num_names; i++) {
+        GENERAL_NAME *name = sk_GENERAL_NAME_value(san_names, i);
+
+        if (name->type == GEN_URI) {
+            ASN1_STRING *uri_asn1 = name->d.uniformResourceIdentifier;
+            const unsigned char *uri_data = ASN1_STRING_get0_data(uri_asn1);
+            int uri_len = ASN1_STRING_length(uri_asn1);
+
+            if (!uri_data || uri_len <= 0 || memchr(uri_data, '\0', uri_len)) {
+                serverLog(LL_DEBUG, "TLS: Invalid or malformed SAN URI in certificate");
+                continue;
+            }
+
+            if (cert_username) {
+                sdsfree(*cert_username);
+                *cert_username = sdsnewlen(uri_data, uri_len);
+            }
+
+            user *u = ACLGetUserByName((const char *)uri_data, uri_len);
+            if (u && (u->flags & USER_FLAG_ENABLED)) {
+                result = u;
+                break;
+            }
+        }
+    }
+
+    GENERAL_NAMES_free(san_names);
+    return result;
+}
+
+user *tlsGetPeerUser(connection *conn_, sds *cert_username) {
     tls_connection *conn = (tls_connection *)conn_;
     if (!conn || !SSL_is_init_finished(conn->ssl)) return NULL;
 
-    /* Find the corresponding field name from the enum mapping */
-    const char *field = NULL;
-    switch (server.tls_ctx_config.client_auth_user) {
-    case TLS_CLIENT_FIELD_CN:
-        field = "CN";
-        break;
-    default:
+    long verify_result = SSL_get_verify_result(conn->ssl);
+    if (verify_result != X509_V_OK) {
+        serverLog(LL_DEBUG, "TLS: Client certificate verification failed: %s",
+                  X509_verify_cert_error_string(verify_result));
         return NULL;
     }
 
-    if (!field) return NULL;
-
+#if OPENSSL_VERSION_NUMBER >= 0x30000000L
+    X509 *cert = SSL_get0_peer_certificate(conn->ssl);
+#else
     X509 *cert = SSL_get_peer_certificate(conn->ssl);
+#endif
     if (!cert) return NULL;
 
-    char field_value[256];
-    sds result = NULL;
+    user *result = NULL;
 
-    if (getCertFieldByName(cert, field, field_value, sizeof(field_value))) {
-        result = sdsnew(field_value);
-    } else {
-        serverLog(LL_NOTICE, "TLS: Failed to extract field '%s' from certificate", field);
+    switch (server.tls_ctx_config.client_auth_user) {
+    case TLS_CLIENT_FIELD_URI:
+        result = getValidUserFromCertSanUri(cert, cert_username);
+        if (!result) {
+            serverLog(LL_VERBOSE, "TLS: No matching user found in certificate SAN URI fields");
+        }
+        break;
+
+    case TLS_CLIENT_FIELD_CN: {
+        char field_value[256];
+        if (getCertSubjectFieldByName(cert, "CN", field_value, sizeof(field_value))) {
+            if (cert_username) *cert_username = sdsnew(field_value);
+            result = ACLGetUserByName(field_value, strlen(field_value));
+            if (!result || !(result->flags & USER_FLAG_ENABLED)) {
+                serverLog(LL_VERBOSE, "TLS: No matching user found for certificate CN '%s'", field_value);
+                result = NULL;
+            }
+        } else {
+            serverLog(LL_DEBUG, "TLS: Failed to extract CN in certificate subject");
+        }
+        break;
     }
 
+    default:
+        break;
+    }
+
+#if OPENSSL_VERSION_NUMBER < 0x30000000L
     X509_free(cert);
+#endif
+
     return result;
 }
 
@@ -1796,12 +1861,19 @@ static sds connTLSGetPeerCert(connection *conn_) {
     tls_connection *conn = (tls_connection *)conn_;
     if ((conn_->type != connectionTypeTls()) || !conn->ssl) return NULL;
 
+#if OPENSSL_VERSION_NUMBER >= 0x30000000L
+    X509 *cert = SSL_get0_peer_certificate(conn->ssl);
+#else
     X509 *cert = SSL_get_peer_certificate(conn->ssl);
+#endif
     if (!cert) return NULL;
 
     BIO *bio = BIO_new(BIO_s_mem());
     if (bio == NULL || !PEM_write_bio_X509(bio, cert)) {
         if (bio != NULL) BIO_free(bio);
+#if OPENSSL_VERSION_NUMBER < 0x30000000L
+        X509_free(cert);
+#endif
         return NULL;
     }
 
@@ -1809,6 +1881,10 @@ static sds connTLSGetPeerCert(connection *conn_) {
     long long bio_len = BIO_get_mem_data(bio, &bio_ptr);
     sds cert_pem = sdsnewlen(bio_ptr, bio_len);
     BIO_free(bio);
+
+#if OPENSSL_VERSION_NUMBER < 0x30000000L
+    X509_free(cert);
+#endif
 
     return cert_pem;
 }
@@ -1860,7 +1936,7 @@ static ConnectionType CT_TLS = {
 
     /* TLS specified methods */
     .get_peer_cert = connTLSGetPeerCert,
-    .get_peer_username = tlsGetPeerUsername,
+    .get_peer_user = tlsGetPeerUser,
 
     /* Miscellaneous */
     .connIntegrityChecked = connTLSIsIntegrityChecked,

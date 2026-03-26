@@ -1616,15 +1616,7 @@ void readwriteCommand(client *c) {
 /* Resets transient cluster stats that we expose via INFO or other means that we want
  * to reset via CONFIG RESETSTAT. The function is also used in order to
  * initialize these fields in clusterInit() at server startup. */
-void resetClusterStats(void) {
-    if (!server.cluster_enabled) return;
-
-    clusterSlotStatResetAll();
-
-    memset(server.cluster->stats_bus_messages_sent, 0, sizeof(server.cluster->stats_bus_messages_sent));
-    memset(server.cluster->stats_bus_messages_received, 0, sizeof(server.cluster->stats_bus_messages_received));
-    server.cluster->stat_cluster_links_buffer_limit_exceeded = 0;
-}
+/* resetClusterStats has moved to cluster_legacy.c */
 
 void clusterCommandFlushslot(client *c) {
     int slot;

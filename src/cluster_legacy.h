@@ -434,22 +434,11 @@ typedef struct slotRange {
     int end_slot;
 } slotRange;
 
-struct clusterState {
-    clusterNode *myself; /* This node */
+/* Legacy protocol-specific state, stored in clusterState.protocol_data. */
+typedef struct clusterLegacyState {
     uint64_t currentEpoch;
-    int state;              /* CLUSTER_OK, CLUSTER_FAIL, ... */
-    int fail_reason;        /* Why the cluster state changes to fail. */
     int safe_to_join;       /* Can the restarted node safely join the cluster? */
-    int size;               /* Num of primary nodes with at least one slot */
-    dict *nodes;            /* Hash table of name -> clusterNode structures */
-    dict *shards;           /* Hash table of shard_id -> list (of nodes) structures */
     dict *nodes_black_list; /* Nodes we don't re-add for a few seconds. */
-    dict *migrating_slots_to;
-    dict *importing_slots_from;
-    clusterNode *slots[CLUSTER_SLOTS];
-    list *slot_migration_jobs; /* List storing all slot migration jobs. Stored
-                                * in order from most recent to least recently
-                                * created. */
     /* The following fields are used to take the replica state on elections. */
     mstime_t failover_auth_time;      /* Time of previous or next election. */
     int failover_auth_count;          /* Number of votes received so far. */
@@ -473,22 +462,28 @@ struct clusterState {
     uint64_t lastVoteEpoch; /* Epoch of the last vote granted. */
     int todo_before_sleep;  /* Things to do in clusterBeforeSleep(). */
     /* Stats */
-    /* Messages received and sent by type. */
     long long stats_bus_messages_sent[CLUSTERMSG_TYPE_COUNT];
     long long stats_bus_messages_received[CLUSTERMSG_TYPE_COUNT];
     long long stats_pfail_nodes;                                 /* Number of nodes in PFAIL status,
                                                                     excluding nodes without address. */
-    unsigned long long stat_cluster_links_buffer_limit_exceeded; /* Total number of cluster links freed due to exceeding
-                                                                    buffer limit */
-
-    /* Bit map for slots that are no longer claimed by the owner in cluster PING
-     * messages. During slot migration, the owner will stop claiming the slot after
-     * the ownership transfer. Set the bit corresponding to the slot when a node
-     * stops claiming the slot. This prevents spreading incorrect information (that
-     * source still owns the slot) using UPDATE messages. */
+    unsigned long long stat_cluster_links_buffer_limit_exceeded; /* Total number of cluster links freed due to
+                                                                    exceeding buffer limit */
     unsigned char owner_not_claiming_slot[CLUSTER_SLOTS / 8];
-    /* Struct used for storing slot statistics, for all slots owned by the current shard. */
+} clusterLegacyState;
+
+struct clusterState {
+    clusterNode *myself; /* This node */
+    int state;           /* CLUSTER_OK, CLUSTER_FAIL, ... */
+    int fail_reason;     /* Why the cluster state changes to fail. */
+    int size;            /* Num of primary nodes with at least one slot */
+    dict *nodes;         /* Hash table of name -> clusterNode structures */
+    dict *shards;        /* Hash table of shard_id -> list (of nodes) structures */
+    dict *migrating_slots_to;
+    dict *importing_slots_from;
+    clusterNode *slots[CLUSTER_SLOTS];
+    list *slot_migration_jobs; /* List storing all slot migration jobs. */
     slotStat slot_stats[CLUSTER_SLOTS];
+    void *protocol_data; /* Protocol-specific state (e.g. clusterLegacyState) */
 };
 
 #endif // CLUSTER_LEGACY_H

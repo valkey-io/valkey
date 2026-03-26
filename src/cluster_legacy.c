@@ -49,6 +49,9 @@
 /* Access legacy protocol-specific data from a clusterNode. */
 #define LEGACY_DATA(n) ((clusterNodeLegacyData *)(n)->protocol_data)
 
+/* Access legacy protocol-specific state from the cluster. */
+#define LEGACY_STATE() ((clusterLegacyState *)server.cluster->protocol_data)
+
 #include <stdlib.h>
 #include <sys/types.h>
 #include <sys/socket.h>
@@ -158,10 +161,10 @@ static inline clusterMsgLight *toClusterMsgLight(void *buf) {
 /* Returns if myself is the best ranked replica in an automatic failover process.
  * To avoid newly added empty replica from affecting the ranking, we will skip it. */
 static inline int myselfIsBestRankedReplica(void) {
-    return (server.cluster->mf_end == 0 &&
+    return (LEGACY_STATE()->mf_end == 0 &&
             getNodeReplicationOffset(myself) != 0 &&
-            server.cluster->failover_auth_rank == 0 &&
-            server.cluster->failover_failed_primary_rank == 0 &&
+            LEGACY_STATE()->failover_auth_rank == 0 &&
+            LEGACY_STATE()->failover_failed_primary_rank == 0 &&
             clusterAllReplicasThinkPrimaryIsFail());
 }
 
@@ -183,7 +186,7 @@ static inline char *clusterLinkGetHumanNodeName(clusterLink *link) {
 }
 
 #define isSlotUnclaimed(slot) \
-    (server.cluster->slots[slot] == NULL || bitmapTestBit(server.cluster->owner_not_claiming_slot, slot))
+    (server.cluster->slots[slot] == NULL || bitmapTestBit(LEGACY_STATE()->owner_not_claiming_slot, slot))
 /* Treating slot bitmaps as 8-byte words to speedup iteration */
 #define CLUSTER_SLOT_WORDS (CLUSTER_SLOTS / 64)
 #define SLOT_WORD_OFFSET(w) ((w) << 3)
@@ -674,9 +677,9 @@ int clusterLoadConfig(char *filename) {
             if (!(argc % 2)) goto fmterr;
             for (j = 1; j < argc; j += 2) {
                 if (strcasecmp(argv[j], "currentEpoch") == 0) {
-                    server.cluster->currentEpoch = strtoull(argv[j + 1], NULL, 10);
+                    LEGACY_STATE()->currentEpoch = strtoull(argv[j + 1], NULL, 10);
                 } else if (strcasecmp(argv[j], "lastVoteEpoch") == 0) {
-                    server.cluster->lastVoteEpoch = strtoull(argv[j + 1], NULL, 10);
+                    LEGACY_STATE()->lastVoteEpoch = strtoull(argv[j + 1], NULL, 10);
                 } else {
                     serverLog(LL_NOTICE, "Skipping unknown cluster config variable '%s'", argv[j]);
                 }
@@ -975,8 +978,8 @@ int clusterLoadConfig(char *filename) {
     /* Something that should never happen: currentEpoch smaller than
      * the max epoch found in the nodes configuration. However we handle this
      * as some form of protection against manual editing of critical files. */
-    if (clusterGetMaxEpoch() > server.cluster->currentEpoch) {
-        server.cluster->currentEpoch = clusterGetMaxEpoch();
+    if (clusterGetMaxEpoch() > LEGACY_STATE()->currentEpoch) {
+        LEGACY_STATE()->currentEpoch = clusterGetMaxEpoch();
     }
     return C_OK;
 
@@ -1004,14 +1007,14 @@ int clusterSaveConfig(int do_fsync) {
     int retval = C_ERR;
     mstime_t latency;
 
-    server.cluster->todo_before_sleep &= ~CLUSTER_TODO_SAVE_CONFIG;
+    LEGACY_STATE()->todo_before_sleep &= ~CLUSTER_TODO_SAVE_CONFIG;
 
     /* Get the nodes description and concatenate our "vars" directive to
      * save currentEpoch and lastVoteEpoch. */
     ci = clusterGenNodesDescription(NULL, CLUSTER_NODE_HANDSHAKE, 0);
     ci = sdscatfmt(ci, "vars currentEpoch %U lastVoteEpoch %U\n",
-                   (unsigned long long)server.cluster->currentEpoch,
-                   (unsigned long long)server.cluster->lastVoteEpoch);
+                   (unsigned long long)LEGACY_STATE()->currentEpoch,
+                   (unsigned long long)LEGACY_STATE()->lastVoteEpoch);
     content_size = sdslen(ci);
 
     /* Create a temp file with the new content. */
@@ -1040,7 +1043,7 @@ int clusterSaveConfig(int do_fsync) {
     latencyTraceIfNeeded(cluster, cluster_config_write, latency);
     if (do_fsync) {
         latencyStartMonitor(latency);
-        server.cluster->todo_before_sleep &= ~CLUSTER_TODO_FSYNC_CONFIG;
+        LEGACY_STATE()->todo_before_sleep &= ~CLUSTER_TODO_FSYNC_CONFIG;
         if (valkey_fsync(fd) == -1) {
             serverLog(LL_WARNING, "Could not sync tmp cluster config file: %s", strerror(errno));
             goto cleanup;
@@ -1383,39 +1386,40 @@ void clusterInit(void) {
     int saveconf = 0;
 
     server.cluster = zmalloc(sizeof(struct clusterState));
+    server.cluster->protocol_data = zmalloc(sizeof(clusterLegacyState));
     server.cluster->myself = NULL;
-    server.cluster->currentEpoch = 0;
+    LEGACY_STATE()->currentEpoch = 0;
     server.cluster->state = CLUSTER_FAIL;
     server.cluster->fail_reason = CLUSTER_FAIL_NONE;
-    server.cluster->safe_to_join = 0;
+    LEGACY_STATE()->safe_to_join = 0;
     server.cluster->size = 0;
-    server.cluster->todo_before_sleep = 0;
+    LEGACY_STATE()->todo_before_sleep = 0;
     server.cluster->nodes = dictCreate(&clusterNodesDictType);
     server.cluster->shards = dictCreate(&clusterSdsToListType);
-    server.cluster->nodes_black_list = dictCreate(&clusterNodesBlackListDictType);
+    LEGACY_STATE()->nodes_black_list = dictCreate(&clusterNodesBlackListDictType);
     server.cluster->migrating_slots_to = dictCreate(&clusterSlotDictType);
     server.cluster->importing_slots_from = dictCreate(&clusterSlotDictType);
-    server.cluster->failover_auth_time = 0;
-    server.cluster->failover_auth_count = 0;
-    server.cluster->failover_auth_rank = 0;
-    server.cluster->failover_auth_sent = 0;
-    server.cluster->failover_failed_primary_rank = 0;
-    server.cluster->failover_auth_epoch = 0;
-    server.cluster->cant_failover_reason = CLUSTER_CANT_FAILOVER_NONE;
-    server.cluster->lastVoteEpoch = 0;
+    LEGACY_STATE()->failover_auth_time = 0;
+    LEGACY_STATE()->failover_auth_count = 0;
+    LEGACY_STATE()->failover_auth_rank = 0;
+    LEGACY_STATE()->failover_auth_sent = 0;
+    LEGACY_STATE()->failover_failed_primary_rank = 0;
+    LEGACY_STATE()->failover_auth_epoch = 0;
+    LEGACY_STATE()->cant_failover_reason = CLUSTER_CANT_FAILOVER_NONE;
+    LEGACY_STATE()->lastVoteEpoch = 0;
 
     /* Initialize stats */
     for (int i = 0; i < CLUSTERMSG_TYPE_COUNT; i++) {
-        server.cluster->stats_bus_messages_sent[i] = 0;
-        server.cluster->stats_bus_messages_received[i] = 0;
+        LEGACY_STATE()->stats_bus_messages_sent[i] = 0;
+        LEGACY_STATE()->stats_bus_messages_received[i] = 0;
     }
-    server.cluster->stats_pfail_nodes = 0;
-    server.cluster->stat_cluster_links_buffer_limit_exceeded = 0;
+    LEGACY_STATE()->stats_pfail_nodes = 0;
+    LEGACY_STATE()->stat_cluster_links_buffer_limit_exceeded = 0;
 
     memset(server.cluster->slots, 0, sizeof(server.cluster->slots));
     clusterCloseAllSlots();
 
-    memset(server.cluster->owner_not_claiming_slot, 0, sizeof(server.cluster->owner_not_claiming_slot));
+    memset(LEGACY_STATE()->owner_not_claiming_slot, 0, sizeof(LEGACY_STATE()->owner_not_claiming_slot));
 
     /* Lock the cluster config file to make sure every node uses
      * its own nodes.conf. */
@@ -1464,8 +1468,8 @@ void clusterInit(void) {
     deriveAnnouncedPorts(&myself->tcp_port, &myself->tls_port, &myself->cport,
                          &myself->announce_client_tcp_port, &myself->announce_client_tls_port);
 
-    server.cluster->mf_end = 0;
-    server.cluster->mf_replica = NULL;
+    LEGACY_STATE()->mf_end = 0;
+    LEGACY_STATE()->mf_replica = NULL;
     for (int conn_type = 0; conn_type < CACHE_CONN_TYPE_MAX; conn_type++) {
         server.cached_cluster_slot_info[conn_type] = NULL;
     }
@@ -1478,6 +1482,14 @@ void clusterInit(void) {
     clusterUpdateMyselfHumanNodename();
     clusterUpdateMyselfAvailabilityZone();
     resetClusterStats();
+}
+
+void resetClusterStats(void) {
+    if (!server.cluster_enabled) return;
+    clusterSlotStatResetAll();
+    memset(LEGACY_STATE()->stats_bus_messages_sent, 0, sizeof(LEGACY_STATE()->stats_bus_messages_sent));
+    memset(LEGACY_STATE()->stats_bus_messages_received, 0, sizeof(LEGACY_STATE()->stats_bus_messages_received));
+    LEGACY_STATE()->stat_cluster_links_buffer_limit_exceeded = 0;
 }
 
 void clusterInitLast(void) {
@@ -1624,7 +1636,7 @@ void clusterReset(int hard) {
     dictReleaseIterator(di);
 
     /* Empty the nodes blacklist. */
-    dictEmpty(server.cluster->nodes_black_list, NULL);
+    dictEmpty(LEGACY_STATE()->nodes_black_list, NULL);
 
     /* Drop all incoming and outgoing links for slot import. */
     clusterUpdateSlotExportsOnOwnershipChange();
@@ -1634,8 +1646,8 @@ void clusterReset(int hard) {
     if (hard) {
         sds oldname;
 
-        server.cluster->currentEpoch = 0;
-        server.cluster->lastVoteEpoch = 0;
+        LEGACY_STATE()->currentEpoch = 0;
+        LEGACY_STATE()->lastVoteEpoch = 0;
         LEGACY_DATA(myself)->configEpoch = 0;
         serverLog(LL_NOTICE, "configEpoch set to 0 via CLUSTER RESET HARD");
 
@@ -2236,7 +2248,7 @@ uint64_t clusterGetMaxEpoch(void) {
         if (LEGACY_DATA(node)->configEpoch > max) max = LEGACY_DATA(node)->configEpoch;
     }
     dictReleaseIterator(di);
-    if (max < server.cluster->currentEpoch) max = server.cluster->currentEpoch;
+    if (max < LEGACY_STATE()->currentEpoch) max = LEGACY_STATE()->currentEpoch;
     return max;
 }
 
@@ -2273,8 +2285,8 @@ int clusterBumpConfigEpochWithoutConsensus(void) {
     uint64_t maxEpoch = clusterGetMaxEpoch();
 
     if (LEGACY_DATA(myself)->configEpoch == 0 || LEGACY_DATA(myself)->configEpoch != maxEpoch) {
-        server.cluster->currentEpoch++;
-        LEGACY_DATA(myself)->configEpoch = server.cluster->currentEpoch;
+        LEGACY_STATE()->currentEpoch++;
+        LEGACY_DATA(myself)->configEpoch = LEGACY_STATE()->currentEpoch;
         clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_FSYNC_CONFIG | CLUSTER_TODO_BROADCAST_ALL);
         serverLog(LL_NOTICE, "New configEpoch set to %llu", (unsigned long long)LEGACY_DATA(myself)->configEpoch);
         return C_OK;
@@ -2336,8 +2348,8 @@ void clusterHandleConfigEpochCollision(clusterNode *sender) {
     /* Don't act if the colliding node has a smaller Node ID. */
     if (memcmp(sender->name, myself->name, CLUSTER_NAMELEN) <= 0) return;
     /* Get the next ID available at the best of this node knowledge. */
-    server.cluster->currentEpoch++;
-    LEGACY_DATA(myself)->configEpoch = server.cluster->currentEpoch;
+    LEGACY_STATE()->currentEpoch++;
+    LEGACY_DATA(myself)->configEpoch = LEGACY_STATE()->currentEpoch;
     clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_FSYNC_CONFIG | CLUSTER_TODO_BROADCAST_ALL);
     serverLog(LL_NOTICE, "configEpoch collision with node %.40s (%s). configEpoch set to %llu", sender->name,
               humanNodename(sender), (unsigned long long)LEGACY_DATA(myself)->configEpoch);
@@ -2375,11 +2387,11 @@ void clusterBlacklistCleanup(void) {
     dictIterator *di;
     dictEntry *de;
 
-    di = dictGetSafeIterator(server.cluster->nodes_black_list);
+    di = dictGetSafeIterator(LEGACY_STATE()->nodes_black_list);
     while ((de = dictNext(di)) != NULL) {
         int64_t expire = dictGetUnsignedIntegerVal(de);
 
-        if (expire < server.unixtime) dictDelete(server.cluster->nodes_black_list, dictGetKey(de));
+        if (expire < server.unixtime) dictDelete(LEGACY_STATE()->nodes_black_list, dictGetKey(de));
     }
     dictReleaseIterator(di);
 }
@@ -2390,12 +2402,12 @@ void clusterBlacklistAddNode(clusterNode *node) {
     sds id = sdsnewlen(node->name, CLUSTER_NAMELEN);
 
     clusterBlacklistCleanup();
-    if (dictAdd(server.cluster->nodes_black_list, id, NULL) == DICT_OK) {
+    if (dictAdd(LEGACY_STATE()->nodes_black_list, id, NULL) == DICT_OK) {
         /* If the key was added, duplicate the sds string representation of
          * the key for the next lookup. We'll free it at the end. */
         id = sdsdup(id);
     }
-    de = dictFind(server.cluster->nodes_black_list, id);
+    de = dictFind(LEGACY_STATE()->nodes_black_list, id);
     dictSetUnsignedIntegerVal(de, time(NULL) + server.cluster_blacklist_ttl);
     sdsfree(id);
 }
@@ -2409,7 +2421,7 @@ int clusterBlacklistExists(char *nodeid, size_t len) {
 
     clusterBlacklistCleanup();
 
-    retval = dictFind(server.cluster->nodes_black_list, id) != NULL;
+    retval = dictFind(LEGACY_STATE()->nodes_black_list, id) != NULL;
     sdsfree(id);
     return retval;
 }
@@ -2944,7 +2956,7 @@ void clusterUpdateSlotsConfigWith(clusterNode *sender, uint64_t senderConfigEpoc
 
             /* The slot is already bound to the sender of this message. */
             if (server.cluster->slots[j] == sender) {
-                bitmapClearBit(server.cluster->owner_not_claiming_slot, j);
+                bitmapClearBit(LEGACY_STATE()->owner_not_claiming_slot, j);
                 continue;
             }
 
@@ -3037,7 +3049,7 @@ void clusterUpdateSlotsConfigWith(clusterNode *sender, uint64_t senderConfigEpoc
 
                 clusterDelSlot(j);
                 clusterAddSlot(sender, j);
-                bitmapClearBit(server.cluster->owner_not_claiming_slot, j);
+                bitmapClearBit(LEGACY_STATE()->owner_not_claiming_slot, j);
                 clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_UPDATE_STATE | CLUSTER_TODO_FSYNC_CONFIG);
             }
         } else {
@@ -3049,7 +3061,7 @@ void clusterUpdateSlotsConfigWith(clusterNode *sender, uint64_t senderConfigEpoc
                  * any errors. We will keep track of the uncertainty in ownership to avoid
                  * propagating misinformation about this slot's ownership using UPDATE
                  * messages. */
-                bitmapSetBit(server.cluster->owner_not_claiming_slot, j);
+                bitmapSetBit(LEGACY_STATE()->owner_not_claiming_slot, j);
             }
 
             /* If the sender doesn't claim the slot, check if we are migrating
@@ -3325,8 +3337,8 @@ static uint32_t writePingExtensions(clusterMsg *hdr, int gossipcount) {
 
 
     /* Gossip forgotten nodes */
-    if (dictSize(server.cluster->nodes_black_list) > 0) {
-        dictIterator *di = dictGetIterator(server.cluster->nodes_black_list);
+    if (dictSize(LEGACY_STATE()->nodes_black_list) > 0) {
+        dictIterator *di = dictGetIterator(LEGACY_STATE()->nodes_black_list);
         dictEntry *de;
         while ((de = dictNext(di)) != NULL) {
             if (cursor != NULL) {
@@ -3411,7 +3423,7 @@ void clusterProcessPingExtensions(clusterMsg *hdr, clusterLink *link) {
             clusterNode *n = clusterLookupNode(forgotten_node_ext->name, CLUSTER_NAMELEN);
             if (n && n != myself && !(nodeIsReplica(myself) && myself->replicaof == n)) {
                 sds id = sdsnewlen(forgotten_node_ext->name, CLUSTER_NAMELEN);
-                dictEntry *de = dictAddOrFind(server.cluster->nodes_black_list, id);
+                dictEntry *de = dictAddOrFind(LEGACY_STATE()->nodes_black_list, id);
                 if (dictGetKey(de) != id) {
                     /* The dict did not take ownership of the id string, so we need to free it. */
                     sdsfree(id);
@@ -3547,7 +3559,7 @@ int clusterIsValidPacket(clusterLink *link) {
         return 0;
     }
 
-    if (type < CLUSTERMSG_TYPE_COUNT) server.cluster->stats_bus_messages_received[type]++;
+    if (type < CLUSTERMSG_TYPE_COUNT) LEGACY_STATE()->stats_bus_messages_received[type]++;
 
     serverLog(LL_DEBUG, "--- Processing packet of type %s, %lu bytes", clusterGetMessageTypeString(type),
               (unsigned long)totlen);
@@ -3782,25 +3794,25 @@ int clusterProcessPacket(clusterLink *link) {
         /* Update our currentEpoch if we see a newer epoch in the cluster. */
         sender_claimed_current_epoch = ntohu64(msg->currentEpoch);
         sender_claimed_config_epoch = ntohu64(msg->configEpoch);
-        if (sender_claimed_current_epoch > server.cluster->currentEpoch)
-            server.cluster->currentEpoch = sender_claimed_current_epoch;
+        if (sender_claimed_current_epoch > LEGACY_STATE()->currentEpoch)
+            LEGACY_STATE()->currentEpoch = sender_claimed_current_epoch;
         /* Update the sender configEpoch if it is a primary publishing a newer one. */
         if (sender_claims_to_be_primary && sender_claimed_config_epoch > LEGACY_DATA(sender)->configEpoch) {
             LEGACY_DATA(sender)->configEpoch = sender_claimed_config_epoch;
             clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_FSYNC_CONFIG);
 
-            if (server.cluster->failover_auth_time && server.cluster->failover_auth_sent &&
-                LEGACY_DATA(sender)->configEpoch >= server.cluster->failover_auth_epoch) {
+            if (LEGACY_STATE()->failover_auth_time && LEGACY_STATE()->failover_auth_sent &&
+                LEGACY_DATA(sender)->configEpoch >= LEGACY_STATE()->failover_auth_epoch) {
                 /* Another node has claimed an epoch greater than or equal to ours.
                  * If we have an ongoing election, reset it because we cannot win
                  * with an epoch smaller than or equal to the incoming claim. This
                  * allows us to start a new election as soon as possible. */
-                server.cluster->failover_auth_time = 0;
+                LEGACY_STATE()->failover_auth_time = 0;
                 serverLog(LL_WARNING,
                           "Failover election in progress for epoch %llu, but received a claim from "
                           "node %.40s (%s) with an equal or higher epoch %llu. Resetting the election "
                           "since we cannot win an election in the past.",
-                          (unsigned long long)server.cluster->failover_auth_epoch,
+                          (unsigned long long)LEGACY_STATE()->failover_auth_epoch,
                           sender->name, humanNodename(sender),
                           (unsigned long long)LEGACY_DATA(sender)->configEpoch);
                 /* Maybe we could start a new election, set a flag here to make sure
@@ -3812,14 +3824,14 @@ int clusterProcessPacket(clusterLink *link) {
         sender->repl_offset = ntohu64(msg->offset);
         /* If we are a replica performing a manual failover and our primary
          * sent its offset while already paused, populate the MF state. */
-        if (server.cluster->mf_end && nodeIsReplica(myself) && myself->replicaof == sender &&
-            msg->mflags[0] & CLUSTERMSG_FLAG0_PAUSED && server.cluster->mf_primary_offset == -1) {
-            server.cluster->mf_primary_offset = sender->repl_offset;
+        if (LEGACY_STATE()->mf_end && nodeIsReplica(myself) && myself->replicaof == sender &&
+            msg->mflags[0] & CLUSTERMSG_FLAG0_PAUSED && LEGACY_STATE()->mf_primary_offset == -1) {
+            LEGACY_STATE()->mf_primary_offset = sender->repl_offset;
             clusterDoBeforeSleep(CLUSTER_TODO_HANDLE_MANUALFAILOVER);
             serverLog(LL_NOTICE,
                       "Received replication offset for paused "
                       "primary manual failover: %lld",
-                      server.cluster->mf_primary_offset);
+                      LEGACY_STATE()->mf_primary_offset);
         }
     }
 
@@ -4279,8 +4291,8 @@ int clusterProcessPacket(clusterLink *link) {
         /* We consider this vote only if the sender is a primary serving
          * a non zero number of slots, and its currentEpoch is greater or
          * equal to epoch where this node started the election. */
-        if (clusterNodeIsVotingPrimary(sender) && sender_claimed_current_epoch >= server.cluster->failover_auth_epoch) {
-            server.cluster->failover_auth_count++;
+        if (clusterNodeIsVotingPrimary(sender) && sender_claimed_current_epoch >= LEGACY_STATE()->failover_auth_epoch) {
+            LEGACY_STATE()->failover_auth_count++;
             /* Maybe we reached a quorum here, set a flag to make sure
              * we check ASAP. */
             clusterDoBeforeSleep(CLUSTER_TODO_HANDLE_FAILOVER);
@@ -4292,15 +4304,15 @@ int clusterProcessPacket(clusterLink *link) {
         /* Manual failover requested from replicas. Initialize the state
          * accordingly. */
         resetManualFailover();
-        server.cluster->mf_end = now + server.cluster_mf_timeout;
-        server.cluster->mf_replica = sender;
+        LEGACY_STATE()->mf_end = now + server.cluster_mf_timeout;
+        LEGACY_STATE()->mf_replica = sender;
         pauseActions(PAUSE_DURING_FAILOVER, now + (server.cluster_mf_timeout * CLUSTER_MF_PAUSE_MULT),
                      PAUSE_ACTIONS_CLIENT_WRITE_SET);
         serverLog(LL_NOTICE, "Manual failover requested by replica %.40s (%s).", sender->name, humanNodename(sender));
         /* We need to send a ping message to the replica, as it would carry
-         * `server.cluster->mf_primary_offset`, which means the primary paused clients
-         * at offset `server.cluster->mf_primary_offset`, so that the replica would
-         * know that it is safe to set its `server.cluster->mf_can_start` to 1 so as
+         * `LEGACY_STATE()->mf_primary_offset`, which means the primary paused clients
+         * at offset `LEGACY_STATE()->mf_primary_offset`, so that the replica would
+         * know that it is safe to set its `LEGACY_STATE()->mf_can_start` to 1 so as
          * to complete failover as quickly as possible. */
         clusterSendPing(link, CLUSTERMSG_TYPE_PING);
     } else if (type == CLUSTERMSG_TYPE_UPDATE) {
@@ -4552,7 +4564,7 @@ void clusterSendMessage(clusterLink *link, clusterMsgSendBlock *msgblock) {
 
     /* Populate sent messages stats. */
     uint16_t type = ntohs(getMessageFromSendBlock(msgblock)->type) & ~CLUSTERMSG_MODIFIER_MASK;
-    if (type < CLUSTERMSG_TYPE_COUNT) server.cluster->stats_bus_messages_sent[type]++;
+    if (type < CLUSTERMSG_TYPE_COUNT) LEGACY_STATE()->stats_bus_messages_sent[type]++;
 }
 
 /* Send a message to all the nodes that are part of the cluster having
@@ -4634,7 +4646,7 @@ static void clusterBuildMessageHdr(clusterMsg *hdr, int type, size_t msglen) {
     hdr->state = server.cluster->state;
 
     /* Set the currentEpoch and configEpochs. */
-    hdr->currentEpoch = htonu64(server.cluster->currentEpoch);
+    hdr->currentEpoch = htonu64(LEGACY_STATE()->currentEpoch);
     hdr->configEpoch = htonu64(LEGACY_DATA(primary)->configEpoch);
 
     /* Set the replication offset. */
@@ -4645,7 +4657,7 @@ static void clusterBuildMessageHdr(clusterMsg *hdr, int type, size_t msglen) {
     hdr->offset = htonu64(offset);
 
     /* Set the message flags. */
-    if (clusterNodeIsPrimary(myself) && server.cluster->mf_end) hdr->mflags[0] |= CLUSTERMSG_FLAG0_PAUSED;
+    if (clusterNodeIsPrimary(myself) && LEGACY_STATE()->mf_end) hdr->mflags[0] |= CLUSTERMSG_FLAG0_PAUSED;
 
     hdr->totlen = htonl(msglen);
 }
@@ -4724,7 +4736,7 @@ void clusterSendPing(clusterLink *link, int type) {
 
     /* Include all the nodes in PFAIL state, so that failure reports are
      * faster to propagate to go from PFAIL to FAIL state. */
-    int pfail_wanted = server.cluster->stats_pfail_nodes;
+    int pfail_wanted = LEGACY_STATE()->stats_pfail_nodes;
 
     /* Compute the maximum estlen to allocate our buffer. We'll fix the estlen
      * later according to the number of gossip sections we really were able
@@ -4948,7 +4960,7 @@ void clusterSendUpdate(clusterLink *link, clusterNode *node) {
     for (unsigned int i = 0; i < sizeof(node->slots); i++) {
         /* Don't advertise slots that the node stopped claiming */
         hdr->data.update.nodecfg.slots[i] =
-            hdr->data.update.nodecfg.slots[i] & (~server.cluster->owner_not_claiming_slot[i]);
+            hdr->data.update.nodecfg.slots[i] & (~LEGACY_STATE()->owner_not_claiming_slot[i]);
     }
 
     clusterSendMessage(link, msgblock);
@@ -5110,14 +5122,14 @@ void clusterRequestFailoverAuth(void) {
     /* If this is a manual failover, set the CLUSTERMSG_FLAG0_FORCEACK bit
      * in the header to communicate the nodes receiving the message that
      * they should authorized the failover even if the primary is working. */
-    if (server.cluster->mf_end) msgblock->data[0].msg.mflags[0] |= CLUSTERMSG_FLAG0_FORCEACK;
+    if (LEGACY_STATE()->mf_end) msgblock->data[0].msg.mflags[0] |= CLUSTERMSG_FLAG0_FORCEACK;
 
     /* If this is an automatic failover and if myself is the best ranked replica,
      * set the CLUSTERMSG_FLAG0_FORCEACK bit in the header as well.
      *
      * In this case, we hope that other primary nodes will not refuse to vote because
      * they did not receive the FAIL message in time. */
-    if (server.cluster->mf_end == 0 && myselfIsBestRankedReplica()) {
+    if (LEGACY_STATE()->mf_end == 0 && myselfIsBestRankedReplica()) {
         msgblock->data[0].msg.mflags[0] |= CLUSTERMSG_FLAG0_FORCEACK;
     }
 
@@ -5163,7 +5175,7 @@ void clusterSendFailoverAuthIfNeeded(clusterNode *node, clusterMsg *request) {
      * size + 1 */
     if (!clusterNodeIsVotingPrimary(myself)) return;
 
-    if (!server.cluster->safe_to_join) {
+    if (!LEGACY_STATE()->safe_to_join) {
         serverLog(LL_WARNING, "Failover auth denied to %.40s (%s): it is not safe to vote in this moment)",
                   node->name, humanNodename(node));
         return;
@@ -5173,17 +5185,17 @@ void clusterSendFailoverAuthIfNeeded(clusterNode *node, clusterMsg *request) {
      * Note that it is impossible for it to actually be greater since
      * our currentEpoch was updated as a side effect of receiving this
      * request, if the request epoch was greater. */
-    if (requestCurrentEpoch < server.cluster->currentEpoch) {
+    if (requestCurrentEpoch < LEGACY_STATE()->currentEpoch) {
         serverLog(LL_WARNING, "Failover auth denied to %.40s (%s): reqEpoch (%llu) < curEpoch(%llu)", node->name,
                   humanNodename(node), (unsigned long long)requestCurrentEpoch,
-                  (unsigned long long)server.cluster->currentEpoch);
+                  (unsigned long long)LEGACY_STATE()->currentEpoch);
         return;
     }
 
     /* I already voted for this epoch? Return ASAP. */
-    if (server.cluster->lastVoteEpoch == server.cluster->currentEpoch) {
+    if (LEGACY_STATE()->lastVoteEpoch == LEGACY_STATE()->currentEpoch) {
         serverLog(LL_WARNING, "Failover auth denied to %.40s (%s): already voted for epoch %llu", node->name,
-                  humanNodename(node), (unsigned long long)server.cluster->currentEpoch);
+                  humanNodename(node), (unsigned long long)LEGACY_STATE()->currentEpoch);
         return;
     }
 
@@ -5239,11 +5251,11 @@ void clusterSendFailoverAuthIfNeeded(clusterNode *node, clusterMsg *request) {
     }
 
     /* We can vote for this replica. */
-    server.cluster->lastVoteEpoch = server.cluster->currentEpoch;
+    LEGACY_STATE()->lastVoteEpoch = LEGACY_STATE()->currentEpoch;
     clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_FSYNC_CONFIG);
     clusterSendFailoverAuth(node);
     serverLog(LL_NOTICE, "Failover auth granted to %.40s (%s) for epoch %llu", node->name, humanNodename(node),
-              (unsigned long long)server.cluster->currentEpoch);
+              (unsigned long long)LEGACY_STATE()->currentEpoch);
 }
 
 /* This function returns the "rank" of this instance, a replica, in the context
@@ -5373,17 +5385,17 @@ void clusterLogCantFailover(int reason) {
     time_t now = time(NULL);
 
     /* General logging suppression if the same reason has occurred recently. */
-    if (reason == server.cluster->cant_failover_reason && now - lastlog_time < CLUSTER_CANT_FAILOVER_RELOG_PERIOD) {
+    if (reason == LEGACY_STATE()->cant_failover_reason && now - lastlog_time < CLUSTER_CANT_FAILOVER_RELOG_PERIOD) {
         return;
     }
 
     /* Special case: If the failure reason is due to data age, log 10 times less frequently. */
-    if (reason == server.cluster->cant_failover_reason && reason == CLUSTER_CANT_FAILOVER_DATA_AGE &&
+    if (reason == LEGACY_STATE()->cant_failover_reason && reason == CLUSTER_CANT_FAILOVER_DATA_AGE &&
         now - lastlog_time < 10 * CLUSTER_CANT_FAILOVER_RELOG_PERIOD) {
         return;
     }
 
-    server.cluster->cant_failover_reason = reason;
+    LEGACY_STATE()->cant_failover_reason = reason;
 
     switch (reason) {
     case CLUSTER_CANT_FAILOVER_DATA_AGE:
@@ -5399,7 +5411,7 @@ void clusterLogCantFailover(int reason) {
     lastlog_time = time(NULL);
     serverLog(LL_NOTICE, "Currently unable to failover: %s", msg);
 
-    int cur_vote = server.cluster->failover_auth_count;
+    int cur_vote = LEGACY_STATE()->failover_auth_count;
     int cur_quorum = (server.cluster->size / 2) + 1;
     /* Emits a log when an election is in progress and waiting for votes or when the failover attempt expired. */
     if (reason == CLUSTER_CANT_FAILOVER_WAITING_VOTES || reason == CLUSTER_CANT_FAILOVER_EXPIRED) {
@@ -5454,7 +5466,7 @@ void clusterFailoverReplaceYourPrimary(void) {
 
     /* Since we have became a new primary node, we may rely on auth_time to
      * determine whether a failover is in progress, so it is best to reset it. */
-    server.cluster->failover_auth_time = 0;
+    LEGACY_STATE()->failover_auth_time = 0;
 }
 
 /* This function is called if we are a replica node and our primary serving
@@ -5468,12 +5480,12 @@ void clusterFailoverReplaceYourPrimary(void) {
 void clusterHandleReplicaFailover(void) {
     mstime_t now = mstime();
     mstime_t data_age;
-    mstime_t auth_age = now - server.cluster->failover_auth_time;
+    mstime_t auth_age = now - LEGACY_STATE()->failover_auth_time;
     int needed_quorum = (server.cluster->size / 2) + 1;
-    int manual_failover = server.cluster->mf_end != 0 && server.cluster->mf_can_start;
+    int manual_failover = LEGACY_STATE()->mf_end != 0 && LEGACY_STATE()->mf_can_start;
     mstime_t auth_timeout, auth_retry_time;
 
-    server.cluster->todo_before_sleep &= ~CLUSTER_TODO_HANDLE_FAILOVER;
+    LEGACY_STATE()->todo_before_sleep &= ~CLUSTER_TODO_HANDLE_FAILOVER;
 
     /* Compute the failover timeout (the max time we have to send votes
      * and wait for replies), and the failover retry time (the time to wait
@@ -5501,7 +5513,7 @@ void clusterHandleReplicaFailover(void) {
         (server.cluster_replica_no_failover && !manual_failover)) {
         /* There are no reasons to failover, so we set the reason why we
          * are returning without failing over to NONE. */
-        server.cluster->cant_failover_reason = CLUSTER_CANT_FAILOVER_NONE;
+        LEGACY_STATE()->cant_failover_reason = CLUSTER_CANT_FAILOVER_NONE;
         return;
     }
 
@@ -5534,43 +5546,43 @@ void clusterHandleReplicaFailover(void) {
     /* If the previous failover attempt timeout and the retry time has
      * elapsed, we can setup a new one. */
     if (auth_age > auth_retry_time) {
-        server.cluster->failover_auth_time = now +
+        LEGACY_STATE()->failover_auth_time = now +
                                              delay +           /* Fixed delay to let FAIL msg propagate. */
                                              random() % delay; /* Random delay between 0 and the fixed delay. */
-        server.cluster->failover_auth_count = 0;
-        server.cluster->failover_auth_sent = 0;
-        server.cluster->failover_auth_rank = clusterGetReplicaRank();
+        LEGACY_STATE()->failover_auth_count = 0;
+        LEGACY_STATE()->failover_auth_sent = 0;
+        LEGACY_STATE()->failover_auth_rank = clusterGetReplicaRank();
         /* We add another delay that is proportional to the replica rank.
          * By default, 1 second * rank. This way replicas that have a probably
          * less updated replication offset, are penalized. */
-        server.cluster->failover_auth_time += server.cluster->failover_auth_rank * (delay * 2);
+        LEGACY_STATE()->failover_auth_time += LEGACY_STATE()->failover_auth_rank * (delay * 2);
         /* If this is a newly added replica, there is a risk it doesn't know
          * about other replicas yet, so it may think it's the best replica even
          * if there are others with a better replication offsets. Add an extra
          * delay to make it less likely to will win the failover. */
         if (getNodeReplicationOffset(myself) == 0) {
-            server.cluster->failover_auth_time += 500;
+            LEGACY_STATE()->failover_auth_time += 500;
         }
         /* We add another delay that is proportional to the failed primary rank.
          * By default, 0.5 second * rank. This way those failed primaries will be
          * elected in rank to avoid the vote conflicts. */
-        server.cluster->failover_failed_primary_rank = clusterGetFailedPrimaryRank();
-        server.cluster->failover_auth_time += server.cluster->failover_failed_primary_rank * delay;
+        LEGACY_STATE()->failover_failed_primary_rank = clusterGetFailedPrimaryRank();
+        LEGACY_STATE()->failover_auth_time += LEGACY_STATE()->failover_failed_primary_rank * delay;
         /* However if this is a manual failover, no delay is needed. */
-        if (server.cluster->mf_end) {
-            server.cluster->failover_auth_time = now;
-            server.cluster->failover_auth_rank = 0;
-            server.cluster->failover_failed_primary_rank = 0;
+        if (LEGACY_STATE()->mf_end) {
+            LEGACY_STATE()->failover_auth_time = now;
+            LEGACY_STATE()->failover_auth_rank = 0;
+            LEGACY_STATE()->failover_failed_primary_rank = 0;
         }
 
-        if (server.cluster->mf_end == 0 && myselfIsBestRankedReplica()) {
+        if (LEGACY_STATE()->mf_end == 0 && myselfIsBestRankedReplica()) {
             /* If we find that myself is the best ranked replica, we can initiate the
              * failover immediately. */
-            server.cluster->failover_auth_time = now;
+            LEGACY_STATE()->failover_auth_time = now;
             serverLog(LL_NOTICE, "This is the best ranked replica and can initiate the election immediately.");
         }
 
-        if (server.cluster->failover_auth_time == now) {
+        if (LEGACY_STATE()->failover_auth_time == now) {
             /* If we happen to initiate a failover (automatic or manual) immediately.
              * Reset auth_age since it is outdated now and we can bypass the auth_timeout
              * check in the next state and start the election ASAP. */
@@ -5580,8 +5592,8 @@ void clusterHandleReplicaFailover(void) {
         serverLog(LL_NOTICE,
                   "Start of election delayed for %lld milliseconds "
                   "(rank #%d, primary rank #%d, offset %lld).",
-                  server.cluster->failover_auth_time - now, server.cluster->failover_auth_rank,
-                  server.cluster->failover_failed_primary_rank, replicationGetReplicaOffset());
+                  LEGACY_STATE()->failover_auth_time - now, LEGACY_STATE()->failover_auth_rank,
+                  LEGACY_STATE()->failover_failed_primary_rank, replicationGetReplicaOffset());
         /* Now that we have a scheduled election, broadcast our offset
          * to all the other replicas so that they'll update their offsets
          * if our offset is better. */
@@ -5590,7 +5602,7 @@ void clusterHandleReplicaFailover(void) {
         /* Return ASAP if we can't start the election now. In a manual failover,
          * we can start the election immediately, so in this case we continue to
          * the next state without waiting for the next beforeSleep. */
-        if (now < server.cluster->failover_auth_time) return;
+        if (now < LEGACY_STATE()->failover_auth_time) return;
     }
 
     /* It is possible that we received more updated offsets from other
@@ -5605,22 +5617,22 @@ void clusterHandleReplicaFailover(void) {
      * the election immediately.
      *
      * Not performed if this is a manual failover. */
-    if (server.cluster->failover_auth_sent == 0 && server.cluster->mf_end == 0 &&
-        server.cluster->failover_auth_time != now) {
+    if (LEGACY_STATE()->failover_auth_sent == 0 && LEGACY_STATE()->mf_end == 0 &&
+        LEGACY_STATE()->failover_auth_time != now) {
         int newrank = clusterGetReplicaRank();
-        if (newrank != server.cluster->failover_auth_rank) {
-            long long added_delay = (newrank - server.cluster->failover_auth_rank) * (delay * 2);
-            server.cluster->failover_auth_time += added_delay;
-            server.cluster->failover_auth_rank = newrank;
+        if (newrank != LEGACY_STATE()->failover_auth_rank) {
+            long long added_delay = (newrank - LEGACY_STATE()->failover_auth_rank) * (delay * 2);
+            LEGACY_STATE()->failover_auth_time += added_delay;
+            LEGACY_STATE()->failover_auth_rank = newrank;
             serverLog(LL_NOTICE, "Replica rank updated to #%d, added %lld milliseconds of delay.", newrank,
                       added_delay);
         }
 
         int new_failed_primary_rank = clusterGetFailedPrimaryRank();
-        if (new_failed_primary_rank != server.cluster->failover_failed_primary_rank) {
-            long long added_delay = (new_failed_primary_rank - server.cluster->failover_failed_primary_rank) * delay;
-            server.cluster->failover_auth_time += added_delay;
-            server.cluster->failover_failed_primary_rank = new_failed_primary_rank;
+        if (new_failed_primary_rank != LEGACY_STATE()->failover_failed_primary_rank) {
+            long long added_delay = (new_failed_primary_rank - LEGACY_STATE()->failover_failed_primary_rank) * delay;
+            LEGACY_STATE()->failover_auth_time += added_delay;
+            LEGACY_STATE()->failover_failed_primary_rank = new_failed_primary_rank;
             serverLog(LL_NOTICE, "Failed primary rank updated to #%d, added %lld milliseconds of delay.",
                       new_failed_primary_rank, added_delay);
         }
@@ -5634,7 +5646,7 @@ void clusterHandleReplicaFailover(void) {
     }
 
     /* Return ASAP if we can't still start the election. */
-    if (now < server.cluster->failover_auth_time) {
+    if (now < LEGACY_STATE()->failover_auth_time) {
         clusterLogCantFailover(CLUSTER_CANT_FAILOVER_WAITING_DELAY);
         return;
     }
@@ -5646,26 +5658,26 @@ void clusterHandleReplicaFailover(void) {
     }
 
     /* Ask for votes if needed. */
-    if (server.cluster->failover_auth_sent == 0) {
-        server.cluster->currentEpoch++;
-        server.cluster->failover_auth_epoch = server.cluster->currentEpoch;
+    if (LEGACY_STATE()->failover_auth_sent == 0) {
+        LEGACY_STATE()->currentEpoch++;
+        LEGACY_STATE()->failover_auth_epoch = LEGACY_STATE()->currentEpoch;
         serverLog(LL_NOTICE, "Starting a failover election for epoch %llu, node config epoch is %llu",
-                  (unsigned long long)server.cluster->currentEpoch, (unsigned long long)nodeEpoch(myself));
+                  (unsigned long long)LEGACY_STATE()->currentEpoch, (unsigned long long)nodeEpoch(myself));
         clusterRequestFailoverAuth();
-        server.cluster->failover_auth_sent = 1;
+        LEGACY_STATE()->failover_auth_sent = 1;
         clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_UPDATE_STATE | CLUSTER_TODO_FSYNC_CONFIG);
         return; /* Wait for replies. */
     }
 
     /* Check if we reached the quorum. */
-    if (server.cluster->failover_auth_count >= needed_quorum) {
+    if (LEGACY_STATE()->failover_auth_count >= needed_quorum) {
         /* We have the quorum, we can finally failover the primary. */
 
         serverLog(LL_NOTICE, "Failover election won: I'm the new primary.");
 
         /* Update my configEpoch to the epoch of the election. */
-        if (LEGACY_DATA(myself)->configEpoch < server.cluster->failover_auth_epoch) {
-            LEGACY_DATA(myself)->configEpoch = server.cluster->failover_auth_epoch;
+        if (LEGACY_DATA(myself)->configEpoch < LEGACY_STATE()->failover_auth_epoch) {
+            LEGACY_DATA(myself)->configEpoch = LEGACY_STATE()->failover_auth_epoch;
             clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_FSYNC_CONFIG | CLUSTER_TODO_BROADCAST_ALL);
             serverLog(LL_NOTICE, "configEpoch set to %llu after successful failover",
                       (unsigned long long)LEGACY_DATA(myself)->configEpoch);
@@ -5817,9 +5829,9 @@ void clusterHandleReplicaMigration(int max_replicas) {
  * -------------------------------------------------------------------------- */
 
 void manualFailoverCanStart(void) {
-    serverAssert(server.cluster->mf_can_start == 0);
+    serverAssert(LEGACY_STATE()->mf_can_start == 0);
 
-    if (server.cluster->failover_auth_time) {
+    if (LEGACY_STATE()->failover_auth_time) {
         /* There is another manual failover requested by the user.
          * If we have an ongoing election, reset it because the user may initiate
          * manual failover again when the previous manual failover timed out.
@@ -5827,14 +5839,14 @@ void manualFailoverCanStart(void) {
          * before the next retry (see auth_retry_time), the new manual failover
          * will pause the primary and replica can not do anything to advance the
          * manual failover, and then the manual failover eventually times out. */
-        server.cluster->failover_auth_time = 0;
+        LEGACY_STATE()->failover_auth_time = 0;
         serverLog(LL_WARNING,
                   "Failover election in progress for epoch %llu, but received a new manual failover. "
                   "Resetting the election.",
-                  (unsigned long long)server.cluster->failover_auth_epoch);
+                  (unsigned long long)LEGACY_STATE()->failover_auth_epoch);
     }
 
-    server.cluster->mf_can_start = 1;
+    LEGACY_STATE()->mf_can_start = 1;
 }
 
 /* Reset the manual failover state. This works for both primaries and replicas
@@ -5843,20 +5855,20 @@ void manualFailoverCanStart(void) {
  * The function can be used both to initialize the manual failover state at
  * startup or to abort a manual failover in progress. */
 void resetManualFailover(void) {
-    if (server.cluster->mf_replica) {
+    if (LEGACY_STATE()->mf_replica) {
         /* We were a primary failing over, so we paused clients and related actions.
          * Regardless of the outcome we unpause now to allow traffic again. */
         unpauseActions(PAUSE_DURING_FAILOVER);
     }
-    server.cluster->mf_end = 0; /* No manual failover in progress. */
-    server.cluster->mf_can_start = 0;
-    server.cluster->mf_replica = NULL;
-    server.cluster->mf_primary_offset = -1;
+    LEGACY_STATE()->mf_end = 0; /* No manual failover in progress. */
+    LEGACY_STATE()->mf_can_start = 0;
+    LEGACY_STATE()->mf_replica = NULL;
+    LEGACY_STATE()->mf_primary_offset = -1;
 }
 
 /* If a manual failover timed out, abort it. */
 void manualFailoverCheckTimeout(void) {
-    if (server.cluster->mf_end && server.cluster->mf_end < mstime()) {
+    if (LEGACY_STATE()->mf_end && LEGACY_STATE()->mf_end < mstime()) {
         serverLog(LL_WARNING, "Manual failover timed out.");
         resetManualFailover();
     }
@@ -5866,15 +5878,15 @@ void manualFailoverCheckTimeout(void) {
  * forward with a manual failover state machine. */
 void clusterHandleManualFailover(void) {
     /* Return ASAP if no manual failover is in progress. */
-    if (server.cluster->mf_end == 0) return;
+    if (LEGACY_STATE()->mf_end == 0) return;
 
     /* If mf_can_start is non-zero, the failover was already triggered so the
      * next steps are performed by clusterHandleReplicaFailover(). */
-    if (server.cluster->mf_can_start) return;
+    if (LEGACY_STATE()->mf_can_start) return;
 
-    if (server.cluster->mf_primary_offset == -1) return; /* Wait for offset... */
+    if (LEGACY_STATE()->mf_primary_offset == -1) return; /* Wait for offset... */
 
-    if (server.cluster->mf_primary_offset == replicationGetReplicaOffset()) {
+    if (LEGACY_STATE()->mf_primary_offset == replicationGetReplicaOffset()) {
         /* Our replication offset matches the primary replication offset
          * announced after clients were paused. We can start the failover. */
         manualFailoverCanStart();
@@ -5912,7 +5924,7 @@ static int clusterNodeCronHandleReconnect(clusterNode *node, mstime_t now, long 
      * for which we have no address. */
     if (node->flags & (CLUSTER_NODE_MYSELF | CLUSTER_NODE_NOADDR)) return 1;
 
-    if (node->flags & CLUSTER_NODE_PFAIL) server.cluster->stats_pfail_nodes++;
+    if (node->flags & CLUSTER_NODE_PFAIL) LEGACY_STATE()->stats_pfail_nodes++;
 
     /* A Node in HANDSHAKE state has a limited lifespan equal to the
      * configured node timeout. */
@@ -5983,7 +5995,7 @@ static void freeClusterLinkOnBufferLimitReached(clusterLink *link) {
                   "exceeding send buffer memory limit.",
                   link->inbound ? "from" : "to", clusterLinkGetNodeName(link), clusterLinkGetHumanNodeName(link), mem_link);
         freeClusterLink(link);
-        server.cluster->stat_cluster_links_buffer_limit_exceeded++;
+        LEGACY_STATE()->stat_cluster_links_buffer_limit_exceeded++;
     }
 }
 
@@ -6028,7 +6040,7 @@ void clusterCron(void) {
     clusterSlotMigrationCron();
 
     /* Clear so clusterNodeCronHandleReconnect can count the number of nodes in PFAIL. */
-    server.cluster->stats_pfail_nodes = 0;
+    LEGACY_STATE()->stats_pfail_nodes = 0;
     /* Run through some of the operations we want to do on each cluster node. */
     di = dictGetSafeIterator(server.cluster->nodes);
     long long cluster_node_conn_attempts = maxConnectionAttemptsPerCron();
@@ -6129,7 +6141,7 @@ void clusterCron(void) {
 
         /* If we are a primary and one of the replicas requested a manual
          * failover, ping it continuously. */
-        if (server.cluster->mf_end && clusterNodeIsPrimary(myself) && server.cluster->mf_replica == node &&
+        if (LEGACY_STATE()->mf_end && clusterNodeIsPrimary(myself) && LEGACY_STATE()->mf_replica == node &&
             node->link) {
             clusterSendPing(node->link, CLUSTERMSG_TYPE_PING);
             continue;
@@ -6196,11 +6208,11 @@ void clusterCron(void) {
  * handlers, or to perform potentially expansive tasks that we need to do
  * a single time before replying to clients. */
 void clusterBeforeSleep(void) {
-    int flags = server.cluster->todo_before_sleep;
+    int flags = LEGACY_STATE()->todo_before_sleep;
 
     /* Reset our flags (not strictly needed since every single function
      * called for flags set should be able to clear its flag). */
-    server.cluster->todo_before_sleep = 0;
+    LEGACY_STATE()->todo_before_sleep = 0;
 
     /* Update the cluster state. We handle this flag first so that if we happen
      * to also have a failover flag, we can check the state first (and log the
@@ -6247,7 +6259,7 @@ void clusterDoBeforeSleep(int flags) {
     /* Clear the cache if there are config changes here. */
     if (flags & CLUSTER_TODO_SAVE_CONFIG) clearCachedClusterSlotsResponse();
 
-    server.cluster->todo_before_sleep |= flags;
+    LEGACY_STATE()->todo_before_sleep |= flags;
 }
 
 /* -----------------------------------------------------------------------------
@@ -6311,7 +6323,7 @@ int clusterAddSlot(clusterNode *n, int slot) {
     if (server.cluster->slots[slot]) return C_ERR;
     clusterNodeSetSlotBit(n, slot);
     server.cluster->slots[slot] = n;
-    bitmapClearBit(server.cluster->owner_not_claiming_slot, slot);
+    bitmapClearBit(LEGACY_STATE()->owner_not_claiming_slot, slot);
     clusterSlotStatReset(slot);
     return C_OK;
 }
@@ -6330,7 +6342,7 @@ int clusterDelSlot(int slot) {
     serverAssert(clusterNodeClearSlotBit(n, slot) == 1);
     server.cluster->slots[slot] = NULL;
     /* Make owner_not_claiming_slot flag consistent with slot ownership information. */
-    bitmapClearBit(server.cluster->owner_not_claiming_slot, slot);
+    bitmapClearBit(LEGACY_STATE()->owner_not_claiming_slot, slot);
     clusterSlotStatReset(slot);
     return C_OK;
 }
@@ -6440,7 +6452,7 @@ void clusterUpdateState(void) {
     static mstime_t among_minority_time;
     static mstime_t first_call_time = 0;
 
-    server.cluster->todo_before_sleep &= ~CLUSTER_TODO_UPDATE_STATE;
+    LEGACY_STATE()->todo_before_sleep &= ~CLUSTER_TODO_UPDATE_STATE;
 
     /* If this is a primary node, wait some time before turning the state
      * into OK, since it is not a good idea to rejoin the cluster as a writable
@@ -6451,10 +6463,10 @@ void clusterUpdateState(void) {
     if (first_call_time == 0) first_call_time = mstime();
     if (clusterNodeIsPrimary(myself) && server.cluster->state == CLUSTER_FAIL &&
         mstime() - first_call_time < CLUSTER_WRITABLE_DELAY) {
-        server.cluster->safe_to_join = 0;
+        LEGACY_STATE()->safe_to_join = 0;
         return;
     } else {
-        server.cluster->safe_to_join = 1;
+        LEGACY_STATE()->safe_to_join = 1;
     }
 
     /* Start assuming the state is OK. We'll turn it into FAIL if there
@@ -6657,11 +6669,11 @@ static void clusterSetPrimary(clusterNode *n, int closeSlots, int full_sync_requ
     clusterUpdateSlotExportsOnOwnershipChange();
     clusterUpdateSlotImportsOnOwnershipChange();
 
-    if (server.cluster->failover_auth_time) {
+    if (LEGACY_STATE()->failover_auth_time) {
         /* Since we have changed to a new primary node, the previously set
          * failover_auth_time should no longer be used, whether it is in
          * progress or timed out. */
-        server.cluster->failover_auth_time = 0;
+        LEGACY_STATE()->failover_auth_time = 0;
     }
 }
 
@@ -7195,30 +7207,30 @@ sds genClusterInfoString(sds info) {
                      statestr[server.cluster->state], slots_assigned, slots_ok, slots_pfail, slots_fail,
                      nodes_pfail, nodes_fail, voting_nodes_pfail, voting_nodes_fail,
                      (unsigned long long)dictSize(server.cluster->nodes), server.cluster->size,
-                     (unsigned long long)server.cluster->currentEpoch, (unsigned long long)my_epoch);
+                     (unsigned long long)LEGACY_STATE()->currentEpoch, (unsigned long long)my_epoch);
 
     /* Show stats about messages sent and received. */
     long long tot_msg_sent = 0;
     long long tot_msg_received = 0;
 
     for (int i = 0; i < CLUSTERMSG_TYPE_COUNT; i++) {
-        if (server.cluster->stats_bus_messages_sent[i] == 0) continue;
-        tot_msg_sent += server.cluster->stats_bus_messages_sent[i];
+        if (LEGACY_STATE()->stats_bus_messages_sent[i] == 0) continue;
+        tot_msg_sent += LEGACY_STATE()->stats_bus_messages_sent[i];
         info = sdscatfmt(info, "cluster_stats_messages_%s_sent:%I\r\n", clusterGetMessageTypeString(i),
-                         (long long)server.cluster->stats_bus_messages_sent[i]);
+                         (long long)LEGACY_STATE()->stats_bus_messages_sent[i]);
     }
     info = sdscatfmt(info, "cluster_stats_messages_sent:%I\r\n", tot_msg_sent);
 
     for (int i = 0; i < CLUSTERMSG_TYPE_COUNT; i++) {
-        if (server.cluster->stats_bus_messages_received[i] == 0) continue;
-        tot_msg_received += server.cluster->stats_bus_messages_received[i];
+        if (LEGACY_STATE()->stats_bus_messages_received[i] == 0) continue;
+        tot_msg_received += LEGACY_STATE()->stats_bus_messages_received[i];
         info = sdscatfmt(info, "cluster_stats_messages_%s_received:%I\r\n", clusterGetMessageTypeString(i),
-                         (long long)server.cluster->stats_bus_messages_received[i]);
+                         (long long)LEGACY_STATE()->stats_bus_messages_received[i]);
     }
     info = sdscatfmt(info, "cluster_stats_messages_received:%I\r\n", tot_msg_received);
 
     info = sdscatfmt(info, "total_cluster_links_buffer_limit_exceeded:%U\r\n",
-                     (unsigned long long)server.cluster->stat_cluster_links_buffer_limit_exceeded);
+                     (unsigned long long)LEGACY_STATE()->stat_cluster_links_buffer_limit_exceeded);
 
     return info;
 }
@@ -7289,7 +7301,7 @@ unsigned int countChannelsInSlot(unsigned int hashslot) {
 }
 
 mstime_t clusterManualFailoverTimeLimit(void) {
-    return server.cluster->mf_end;
+    return LEGACY_STATE()->mf_end;
 }
 
 int handleDebugClusterCommand(client *c) {
@@ -7907,7 +7919,7 @@ int clusterCommandSpecial(client *c) {
             return 1;
         }
         resetManualFailover();
-        server.cluster->mf_end = mstime() + server.cluster_mf_timeout;
+        LEGACY_STATE()->mf_end = mstime() + server.cluster_mf_timeout;
         sds client = catClientInfoShortString(sdsempty(), c, server.hide_user_data_from_log);
 
         if (takeover) {
@@ -7961,7 +7973,7 @@ int clusterCommandSpecial(client *c) {
             serverLog(LL_NOTICE, "configEpoch set to %llu via CLUSTER SET-CONFIG-EPOCH",
                       (unsigned long long)LEGACY_DATA(myself)->configEpoch);
 
-            if (server.cluster->currentEpoch < (uint64_t)epoch) server.cluster->currentEpoch = epoch;
+            if (LEGACY_STATE()->currentEpoch < (uint64_t)epoch) LEGACY_STATE()->currentEpoch = epoch;
             /* No need to fsync the config here since in the unlucky event
              * of a failure to persist the config, the conflict resolution code
              * will assign a unique config to this node. */

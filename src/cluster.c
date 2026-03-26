@@ -114,6 +114,9 @@ mstime_t clusterManualFailoverTimeLimit(void) {
 unsigned long getClusterConnectionsCount(void) {
     return clusterCurrentBus->getConnectionsCount();
 }
+/* Resets transient cluster stats that we expose via INFO or other means that we want
+ * to reset via CONFIG RESETSTAT. The function is also used in order to
+ * initialize these fields in clusterInit() at server startup. */
 void resetClusterStats(void) {
     clusterCurrentBus->resetStats();
 }
@@ -1700,10 +1703,6 @@ void readwriteCommand(client *c) {
     c->flag.readonly = 0;
     addReply(c, shared.ok);
 }
-
-/* Resets transient cluster stats that we expose via INFO or other means that we want
- * to reset via CONFIG RESETSTAT. The function is also used in order to
- * initialize these fields in clusterInit() at server startup. */
 
 void clusterCommandFlushslot(client *c) {
     int slot;

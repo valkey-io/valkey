@@ -6637,6 +6637,22 @@ void clusterDoBeforeSleep(int flags) {
     LEGACY_STATE()->todo_before_sleep |= flags;
 }
 
+void clusterScheduleHandleSlotMigration(void) {
+    clusterDoBeforeSleep(CLUSTER_TODO_HANDLE_SLOT_MIGRATION);
+}
+
+void clusterScheduleSaveAndFsyncConfig(void) {
+    clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_FSYNC_CONFIG);
+}
+
+void clusterScheduleBroadcastAll(void) {
+    clusterDoBeforeSleep(CLUSTER_TODO_BROADCAST_ALL);
+}
+
+mstime_t clusterComputeMfPauseEnd(void) {
+    return mstime() + server.cluster_mf_timeout * CLUSTER_MF_PAUSE_MULT;
+}
+
 /* -----------------------------------------------------------------------------
  * Slots management
  * -------------------------------------------------------------------------- */

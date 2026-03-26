@@ -159,5 +159,13 @@ int clusterDelSlot(int slot);
 int clusterAddSlot(clusterNode *n, int slot);
 int clusterBumpConfigEpochWithoutConsensus(void);
 void clusterDoBeforeSleep(int flags);
+/* TODO: The following functions wrap legacy protocol details (CLUSTER_TODO_*
+ * flags, manual failover timing). They should be replaced with protocol-agnostic
+ * abstractions or moved behind the clusterBusType vtable when slot migration
+ * is refactored to support alternative cluster bus implementations. */
+void clusterScheduleHandleSlotMigration(void);
+void clusterScheduleSaveAndFsyncConfig(void);
+void clusterScheduleBroadcastAll(void);
+mstime_t clusterComputeMfPauseEnd(void);
 
 #endif /* __CLUSTER_H */

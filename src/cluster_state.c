@@ -14,7 +14,7 @@
 
 #include "server.h"
 #include "cluster.h"
-#include "cluster_legacy.h"
+#include "cluster_state.h"
 
 /* -----------------------------------------------------------------------------
  * Bitmap helpers

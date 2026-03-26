@@ -631,7 +631,7 @@ void clusterCommandSyncSlotsEstablish(client *c) {
     fireModuleSlotMigrationEvent(job, VALKEYMODULE_SUBEVENT_ATOMIC_SLOT_MIGRATION_IMPORT_STARTED);
     listAddNodeHead(server.cluster->slot_migration_jobs, job);
 
-    clusterDoBeforeSleep(CLUSTER_TODO_HANDLE_SLOT_MIGRATION);
+    clusterScheduleHandleSlotMigration();
     forceCommandPropagation(c, PROPAGATE_REPL | PROPAGATE_AOF);
     addReply(c, shared.ok);
     if (job->client) job->client->flag.reply_off = 1;
@@ -715,7 +715,7 @@ void clusterCommandSyncSlotsFailoverGranted(client *c) {
     }
     updateSlotMigrationJobState(c->slot_migration_job,
                                 SLOT_IMPORT_FAILOVER_GRANTED);
-    clusterDoBeforeSleep(CLUSTER_TODO_HANDLE_SLOT_MIGRATION);
+    clusterScheduleHandleSlotMigration();
 }
 
 /* Sent by a target primary to a replica in its shard to inform that an ongoing
@@ -864,11 +864,11 @@ void performSlotImportJobFailover(slotMigrationJob *job) {
     /* 3) Update state and save config. */
     clearCachedClusterSlotsResponse();
     clusterUpdateState();
-    clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_FSYNC_CONFIG);
+    clusterScheduleSaveAndFsyncConfig();
 
     /* 4) Pong all the other nodes so that they can update the state accordingly
      *    and detect that we have taken over the slots. */
-    clusterDoBeforeSleep(CLUSTER_TODO_BROADCAST_ALL);
+    clusterScheduleBroadcastAll();
 }
 
 bool clusterIsAnySlotImporting(void) {
@@ -1450,7 +1450,7 @@ int slotExportTryDoPause(slotMigrationJob *job) {
     serverLog(LL_NOTICE,
               "Pausing writes to allow slot migration %s to finalize failover.",
               job->description);
-    job->mf_end = mstime() + server.cluster_mf_timeout * CLUSTER_MF_PAUSE_MULT;
+    job->mf_end = clusterComputeMfPauseEnd();
     pauseActions(PAUSE_DURING_SLOT_MIGRATION, job->mf_end,
                  PAUSE_ACTIONS_CLIENT_WRITE_SET);
     sendSyncSlotsMessage(job, "PAUSED");
@@ -1925,7 +1925,7 @@ void slotMigrationJobReadEstablishResponse(connection *conn) {
 
     updateSlotMigrationJobState(job, SLOT_EXPORT_WAITING_TO_SNAPSHOT);
     connSetReadHandler(conn, readQueryFromClient);
-    clusterDoBeforeSleep(CLUSTER_TODO_HANDLE_SLOT_MIGRATION);
+    clusterScheduleHandleSlotMigration();
 
     /* We need to send an ACK to take the import out of WAIT_ACK state. This
      * will kickstart the health checks, effectively taking the job online. */
@@ -2281,7 +2281,7 @@ void clusterHandleSlotMigrationClientClose(slotMigrationJob *job) {
                                    "more information.");
         }
     }
-    clusterDoBeforeSleep(CLUSTER_TODO_HANDLE_SLOT_MIGRATION);
+    clusterScheduleHandleSlotMigration();
 }
 
 /* Callback triggered when a slot migration client is unable to apply a mutation
@@ -2323,7 +2323,7 @@ void finishSlotMigrationJob(slotMigrationJob *job,
         /* Defer cleanup until beforeSleep. */
         job->post_cleanup_state = state;
         state = SLOT_IMPORT_FINISHED_CLEANING_UP;
-        clusterDoBeforeSleep(CLUSTER_TODO_HANDLE_SLOT_MIGRATION);
+        clusterScheduleHandleSlotMigration();
     }
     updateSlotMigrationJobState(job, state);
     resetSlotMigrationJob(job);

@@ -141,6 +141,7 @@ void migrateCloseTimedoutSockets(void);
 unsigned int keyHashSlot(const char *key, int keylen);
 int patternHashSlot(char *pattern, int length);
 int isValidAuxString(char *s, unsigned int length);
+int verifyClusterNodeId(const char *name, int length);
 void migrateCommand(client *c);
 void clusterCommand(client *c);
 void clusterKeySlotCommand(client *c);

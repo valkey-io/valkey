@@ -372,12 +372,23 @@ static_assert(offsetof(clusterMsgHeader, type) == offsetof(clusterMsg, type), "u
 static_assert(offsetof(clusterMsgHeader, notused1) == offsetof(clusterMsg, port), "unexpected field offset");
 static_assert(offsetof(clusterMsgHeader, notused2) == offsetof(clusterMsg, count), "unexpected field offset");
 
+/* Legacy protocol-specific data, stored in clusterNode.protocol_data. */
+typedef struct clusterNodeLegacyData {
+    uint64_t configEpoch;                   /* Last configEpoch observed for this node */
+    unsigned long long last_in_ping_gossip; /* The number of the last carried in the ping gossip section */
+    mstime_t ping_sent;                     /* Unix time we sent latest ping */
+    mstime_t pong_received;                 /* Unix time we received the pong */
+    mstime_t meet_sent;                     /* Unix time we sent latest meet packet */
+    mstime_t fail_time;                     /* Unix time when FAIL flag was set */
+    mstime_t orphaned_time;                 /* Starting time of orphaned primary condition */
+    rax *fail_reports;                      /* Radix tree for failure reports with sorted order by timestamp */
+} clusterNodeLegacyData;
+
 struct _clusterNode {
     mstime_t ctime;                         /* Node object creation time. */
     char name[CLUSTER_NAMELEN];             /* Node name, hex string, sha1-size */
     char shard_id[CLUSTER_NAMELEN];         /* shard id, hex string, sha1-size */
     int flags;                              /* CLUSTER_NODE_... */
-    uint64_t configEpoch;                   /* Last configEpoch observed for this node */
     unsigned char slots[CLUSTER_SLOTS / 8]; /* slots handled by this node */
     uint16_t *slot_info_pairs;              /* Slots info represented as (start/end) pair (consecutive index). */
     int slot_info_pairs_count;              /* Used number of slots in slot_info_pairs */
@@ -388,13 +399,7 @@ struct _clusterNode {
                                              may be NULL even if the node is a replica
                                              if we don't have the primary node in our
                                              tables. */
-    unsigned long long last_in_ping_gossip; /* The number of the last carried in the ping gossip section */
-    mstime_t ping_sent;                     /* Unix time we sent latest ping */
-    mstime_t pong_received;                 /* Unix time we received the pong */
     mstime_t data_received;                 /* Unix time we received any data */
-    mstime_t meet_sent;                     /* Unix time we sent latest meet packet */
-    mstime_t fail_time;                     /* Unix time when FAIL flag was set */
-    mstime_t orphaned_time;                 /* Starting time of orphaned primary condition */
     mstime_t outbound_link_attempt_time;    /* Unix time we last tried to establish an outgoing link */
     mstime_t inbound_link_freed_time;       /* Last time we freed the inbound link for this node.
                                                If it was never freed, it is the same as ctime */
@@ -412,9 +417,9 @@ struct _clusterNode {
     int announce_client_tls_port;           /* TLS port for clients only. */
     clusterLink *link;                      /* TCP/IP link established toward this node */
     clusterLink *inbound_link;              /* TCP/IP link accepted from this node */
-    rax *fail_reports;                      /* Radix tree for failure reports with sorted order by timestamp */
     int is_node_healthy;                    /* Boolean indicating the cached node health.
                                                Update with updateAndCountChangedNodeHealth(). */
+    void *protocol_data;                    /* Protocol-specific data (e.g. clusterNodeLegacyData) */
 };
 
 /* Struct used for storing slot statistics. */

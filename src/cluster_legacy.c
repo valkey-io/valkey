@@ -54,6 +54,314 @@
 /* Access legacy protocol-specific state from the cluster. */
 #define LEGACY_STATE() ((clusterLegacyState *)server.cluster->protocol_data)
 
+/* Wire protocol structs (private to legacy implementation). */
+/* clusterLink encapsulates everything needed to talk with a remote node. */
+typedef struct clusterLink {
+    mstime_t ctime;                        /* Link creation time */
+    connection *conn;                      /* Connection to remote node */
+    list *send_msg_queue;                  /* List of messages to be sent */
+    size_t head_msg_send_offset;           /* Number of bytes already sent of message at head of queue */
+    unsigned long long send_msg_queue_mem; /* Memory in bytes used by message queue */
+    char *rcvbuf;                          /* Packet reception buffer */
+    size_t rcvbuf_len;                     /* Used size of rcvbuf */
+    size_t rcvbuf_alloc;                   /* Allocated size of rcvbuf */
+    clusterNode *node;                     /* Node related to this link. Initialized to NULL when unknown */
+    int inbound;                           /* 1 if this link is an inbound link accepted from the related node */
+    int flags;                             /* CLUSTER_LINK_... */
+} clusterLink;
+
+/* Cluster link flags and macros. */
+#define CLUSTER_LINK_EXTENSIONS_SUPPORTED (1 << 0) /* This link supports extensions. */
+
+#define linkSupportsExtension(link) ((link)->flags & CLUSTER_LINK_EXTENSIONS_SUPPORTED)
+
+
+/* Cluster messages header */
+
+/* Message types.
+ *
+ * Note that the PING, PONG and MEET messages are actually the same exact
+ * kind of packet. PONG is the reply to ping, in the exact format as a PING,
+ * while MEET is a special PING that forces the receiver to add the sender
+ * as a node (if it is not already in the list). */
+#define CLUSTERMSG_TYPE_PING 0                  /* Ping */
+#define CLUSTERMSG_TYPE_PONG 1                  /* Pong (reply to Ping) */
+#define CLUSTERMSG_TYPE_MEET 2                  /* Meet "let's join" message */
+#define CLUSTERMSG_TYPE_FAIL 3                  /* Mark node xxx as failing */
+#define CLUSTERMSG_TYPE_PUBLISH 4               /* Pub/Sub Publish propagation */
+#define CLUSTERMSG_TYPE_FAILOVER_AUTH_REQUEST 5 /* May I failover? */
+#define CLUSTERMSG_TYPE_FAILOVER_AUTH_ACK 6     /* Yes, you have my vote */
+#define CLUSTERMSG_TYPE_UPDATE 7                /* Another node slots configuration */
+#define CLUSTERMSG_TYPE_MFSTART 8               /* Pause clients for manual failover */
+#define CLUSTERMSG_TYPE_MODULE 9                /* Module cluster API message. */
+#define CLUSTERMSG_TYPE_PUBLISHSHARD 10         /* Pub/Sub Publish shard propagation */
+#define CLUSTERMSG_TYPE_COUNT 11                /* Total number of message types. */
+
+#define CLUSTERMSG_LIGHT 0x8000 /* Modifier bit for message types that support light header */
+
+#define CLUSTERMSG_MODIFIER_MASK (CLUSTERMSG_LIGHT) /* Modifier mask for header types. (if we add more in the future) */
+
+/* We check for the modifier bit to determine if the message is sent using light header.*/
+#define IS_LIGHT_MESSAGE(type) ((type) & CLUSTERMSG_LIGHT)
+
+/* Types of header supported over the cluster bus. */
+typedef enum {
+    CLUSTERMSG_HDR_NORMAL = 0, /* This corresponds to `clusterMsg` struct. */
+    CLUSTERMSG_HDR_LIGHT,      /* This corresponds to `clusterMsgLight` struct. */
+    CLUSTERMSG_HDR_NUM,        /* Overall count of header type supported. */
+} clusterMsgHdrType;
+
+/* Initially we don't know our "name", but we'll find it once we connect
+ * to the first node, using the getsockname() function. Then we'll use this
+ * address for all the next messages. */
+typedef struct {
+    char nodename[CLUSTER_NAMELEN];
+    uint32_t ping_sent;
+    uint32_t pong_received;
+    char ip[NET_IP_STR_LEN]; /* IP address last time it was seen */
+    uint16_t port;           /* primary port last time it was seen */
+    uint16_t cport;          /* cluster port last time it was seen */
+    uint16_t flags;          /* node->flags copy */
+    uint16_t pport;          /* secondary port last time it was seen */
+    uint16_t notused1;
+} clusterMsgDataGossip;
+
+typedef struct {
+    char nodename[CLUSTER_NAMELEN];
+} clusterMsgDataFail;
+
+typedef struct {
+    uint32_t channel_len;
+    uint32_t message_len;
+    unsigned char bulk_data[8]; /* 8 bytes just as placeholder. */
+} clusterMsgDataPublish;
+
+typedef struct {
+    uint64_t configEpoch;                   /* Config epoch of the specified instance. */
+    char nodename[CLUSTER_NAMELEN];         /* Name of the slots owner. */
+    unsigned char slots[CLUSTER_SLOTS / 8]; /* Slots bitmap. */
+} clusterMsgDataUpdate;
+
+typedef struct {
+    uint64_t module_id;         /* ID of the sender module. */
+    uint32_t len;               /* ID of the sender module. */
+    uint8_t type;               /* Type from 0 to 255. */
+    unsigned char bulk_data[3]; /* 3 bytes just as placeholder. */
+} clusterMsgModule;
+
+/* The cluster supports optional extension messages that can be sent
+ * along with ping/pong/meet messages to give additional info in a
+ * consistent manner. */
+typedef enum {
+    CLUSTERMSG_EXT_TYPE_HOSTNAME,
+    CLUSTERMSG_EXT_TYPE_HUMAN_NODENAME,
+    CLUSTERMSG_EXT_TYPE_FORGOTTEN_NODE,
+    CLUSTERMSG_EXT_TYPE_SHARDID,
+    CLUSTERMSG_EXT_TYPE_CLIENT_IPV4,
+    CLUSTERMSG_EXT_TYPE_CLIENT_IPV6,
+    CLUSTERMSG_EXT_TYPE_CLIENT_PORT,
+    CLUSTERMSG_EXT_TYPE_CLIENT_TLS_PORT,
+    CLUSTERMSG_EXT_TYPE_AVAILABILITY_ZONE,
+} clusterMsgPingtypes;
+
+/* Helper function for making sure extensions are eight byte aligned. */
+#define EIGHT_BYTE_ALIGN(size) ((((size) + 7) / 8) * 8)
+
+typedef struct {
+    char hostname[1]; /* The announced hostname, ends with \0. */
+} clusterMsgPingExtHostname;
+
+typedef struct {
+    char human_nodename[1]; /* The announced nodename, ends with \0. */
+} clusterMsgPingExtHumanNodename;
+
+typedef struct {
+    char availability_zone[1]; /* The availability zone, ends with \0. */
+} clusterMsgPingExtAvailabilityZone;
+
+typedef struct {
+    char name[CLUSTER_NAMELEN]; /* Node name. */
+    uint64_t ttl;               /* Remaining time to blacklist the node, in seconds. */
+} clusterMsgPingExtForgottenNode;
+
+static_assert(sizeof(clusterMsgPingExtForgottenNode) % 8 == 0, "");
+
+typedef struct {
+    char shard_id[CLUSTER_NAMELEN]; /* The shard_id, 40 bytes fixed. */
+} clusterMsgPingExtShardId;
+
+typedef struct {
+    char announce_client_ipv4[1]; /* Announced client IPv4, ends with \0. */
+} clusterMsgPingExtClientIpV4;
+
+typedef struct {
+    char announce_client_ipv6[1]; /* Announced client IPv6, ends with \0. */
+} clusterMsgPingExtClientIpV6;
+
+typedef struct {
+    uint16_t announce_client_port; /* Announced client port. */
+} clusterMsgPingExtClientPort;
+
+typedef struct {
+    uint16_t announce_client_tls_port; /* Announced client TLS port. */
+} clusterMsgPingExtClientTlsPort;
+
+typedef struct {
+    uint32_t length; /* Total length of this extension message (including this header) */
+    uint16_t type;   /* Type of this extension message (see clusterMsgPingtypes) */
+    uint16_t unused; /* 16 bits of padding to make this structure 8 byte aligned. */
+    union {
+        clusterMsgPingExtHostname hostname;
+        clusterMsgPingExtHumanNodename human_nodename;
+        clusterMsgPingExtForgottenNode forgotten_node;
+        clusterMsgPingExtShardId shard_id;
+        clusterMsgPingExtClientIpV4 announce_client_ipv4;
+        clusterMsgPingExtClientIpV6 announce_client_ipv6;
+        clusterMsgPingExtClientPort announce_client_port;
+        clusterMsgPingExtClientTlsPort announce_client_tls_port;
+        clusterMsgPingExtAvailabilityZone availability_zone;
+    } ext[]; /* Actual extension information, formatted so that the data is 8
+              * byte aligned, regardless of its content. */
+} clusterMsgPingExt;
+
+union clusterMsgData {
+    /* PING, MEET and PONG */
+    struct {
+        /* Array of N clusterMsgDataGossip structures */
+        clusterMsgDataGossip gossip[1];
+        /* Extension data that can optionally be sent for ping/meet/pong
+         * messages. We can't explicitly define them here though, since
+         * the gossip array isn't the real length of the gossip data. */
+    } ping;
+
+    /* FAIL */
+    struct {
+        clusterMsgDataFail about;
+    } fail;
+
+    /* PUBLISH */
+    struct {
+        clusterMsgDataPublish msg;
+    } publish;
+
+    /* UPDATE */
+    struct {
+        clusterMsgDataUpdate nodecfg;
+    } update;
+
+    /* MODULE */
+    struct {
+        clusterMsgModule msg;
+    } module;
+};
+
+#define CLUSTER_PROTO_VER 1 /* Cluster bus protocol version. */
+
+typedef struct {
+    char sig[4];                  /* Signature "RCmb" (Cluster message bus). */
+    uint32_t totlen;              /* Total length of this message */
+    uint16_t ver;                 /* Protocol version, currently set to CLUSTER_PROTO_VER. */
+    uint16_t port;                /* Primary port number (TCP or TLS). */
+    uint16_t type;                /* Message type */
+    uint16_t count;               /* Number of gossip sections. */
+    uint64_t currentEpoch;        /* The epoch accordingly to the sending node. */
+    uint64_t configEpoch;         /* The config epoch if it's a primary, or the last
+                                     epoch advertised by its primary if it is a
+                                     replica. */
+    uint64_t offset;              /* Primary replication offset if node is a primary or
+                                     processed replication offset if node is a replica. */
+    char sender[CLUSTER_NAMELEN]; /* Name of the sender node */
+    unsigned char myslots[CLUSTER_SLOTS / 8];
+    char replicaof[CLUSTER_NAMELEN];
+    char myip[NET_IP_STR_LEN]; /* Sender IP, if not all zeroed. */
+    uint16_t extensions;       /* Number of extensions sent along with this packet. */
+    char notused1[30];         /* 30 bytes reserved for future usage. */
+    uint16_t pport;            /* Secondary port number: if primary port is TCP port, this is
+                                  TLS port, and if primary port is TLS port, this is TCP port.*/
+    uint16_t cport;            /* Sender TCP cluster bus port */
+    uint16_t flags;            /* Sender node flags */
+    unsigned char state;       /* Cluster state from the POV of the sender */
+    unsigned char mflags[3];   /* Message flags: CLUSTERMSG_FLAG[012]_... */
+    union clusterMsgData data;
+} clusterMsg;
+
+/* clusterMsg defines the gossip wire protocol exchanged among cluster
+ * members, which can be running different versions of server bits,
+ * especially during cluster rolling upgrades.
+ *
+ * Therefore, fields in this struct should remain at the same offset from
+ * release to release. The static asserts below ensures that incompatible
+ * changes in clusterMsg be caught at compile time.
+ */
+
+static_assert(offsetof(clusterMsg, sig) == 0, "unexpected field offset");
+static_assert(offsetof(clusterMsg, totlen) == 4, "unexpected field offset");
+static_assert(offsetof(clusterMsg, ver) == 8, "unexpected field offset");
+static_assert(offsetof(clusterMsg, port) == 10, "unexpected field offset");
+static_assert(offsetof(clusterMsg, type) == 12, "unexpected field offset");
+static_assert(offsetof(clusterMsg, count) == 14, "unexpected field offset");
+static_assert(offsetof(clusterMsg, currentEpoch) == 16, "unexpected field offset");
+static_assert(offsetof(clusterMsg, configEpoch) == 24, "unexpected field offset");
+static_assert(offsetof(clusterMsg, offset) == 32, "unexpected field offset");
+static_assert(offsetof(clusterMsg, sender) == 40, "unexpected field offset");
+static_assert(offsetof(clusterMsg, myslots) == 80, "unexpected field offset");
+static_assert(offsetof(clusterMsg, replicaof) == 2128, "unexpected field offset");
+static_assert(offsetof(clusterMsg, myip) == 2168, "unexpected field offset");
+static_assert(offsetof(clusterMsg, extensions) == 2214, "unexpected field offset");
+static_assert(offsetof(clusterMsg, notused1) == 2216, "unexpected field offset");
+static_assert(offsetof(clusterMsg, pport) == 2246, "unexpected field offset");
+static_assert(offsetof(clusterMsg, cport) == 2248, "unexpected field offset");
+static_assert(offsetof(clusterMsg, flags) == 2250, "unexpected field offset");
+static_assert(offsetof(clusterMsg, state) == 2252, "unexpected field offset");
+static_assert(offsetof(clusterMsg, mflags) == 2253, "unexpected field offset");
+static_assert(offsetof(clusterMsg, data) == 2256, "unexpected field offset");
+
+#define CLUSTERMSG_MIN_LEN (sizeof(clusterMsg) - sizeof(union clusterMsgData))
+
+/* Message flags better specify the packet content or are used to
+ * provide some information about the node state. */
+#define CLUSTERMSG_FLAG0_PAUSED (1 << 0)   /* Primary paused for manual failover. */
+#define CLUSTERMSG_FLAG0_FORCEACK (1 << 1) /* Give ACK to AUTH_REQUEST even if \
+                                              primary is up. */
+#define CLUSTERMSG_FLAG0_EXT_DATA (1 << 2) /* Message contains extension data */
+
+typedef struct {
+    char sig[4];     /* Signature "RCmb" (Cluster message bus). */
+    uint32_t totlen; /* Total length of this message */
+    uint16_t ver;    /* Protocol version, currently set to CLUSTER_PROTO_VER. */
+    uint16_t notused1;
+    uint16_t type; /* Message type */
+    uint16_t notused2;
+    union clusterMsgData data;
+} clusterMsgLight;
+
+static_assert(offsetof(clusterMsgLight, sig) == offsetof(clusterMsg, sig), "unexpected field offset");
+static_assert(offsetof(clusterMsgLight, totlen) == offsetof(clusterMsg, totlen), "unexpected field offset");
+static_assert(offsetof(clusterMsgLight, ver) == offsetof(clusterMsg, ver), "unexpected field offset");
+static_assert(offsetof(clusterMsgLight, notused1) == offsetof(clusterMsg, port), "unexpected field offset");
+static_assert(offsetof(clusterMsgLight, type) == offsetof(clusterMsg, type), "unexpected field offset");
+static_assert(offsetof(clusterMsgLight, notused2) == offsetof(clusterMsg, count), "unexpected field offset");
+static_assert(offsetof(clusterMsgLight, data) == 16, "unexpected field offset");
+
+#define CLUSTERMSG_LIGHT_MIN_LEN (sizeof(clusterMsgLight) - sizeof(union clusterMsgData))
+
+typedef struct {
+    char sig[4];       /* Signature "RCmb" (Cluster message bus). */
+    uint32_t totlen;   /* Total length of this message */
+    uint16_t ver;      /* Protocol version, currently set to CLUSTER_PROTO_VER. */
+    uint16_t notused1; /* full: port, light: notused1 */
+    uint16_t type;     /* Message type */
+    uint16_t notused2; /* full: count, light: notused2 */
+} clusterMsgHeader;
+
+static_assert(offsetof(clusterMsgHeader, sig) == offsetof(clusterMsg, sig), "unexpected field offset");
+static_assert(offsetof(clusterMsgHeader, totlen) == offsetof(clusterMsg, totlen), "unexpected field offset");
+static_assert(offsetof(clusterMsgHeader, ver) == offsetof(clusterMsg, ver), "unexpected field offset");
+static_assert(offsetof(clusterMsgHeader, type) == offsetof(clusterMsg, type), "unexpected field offset");
+static_assert(offsetof(clusterMsgHeader, notused1) == offsetof(clusterMsg, port), "unexpected field offset");
+static_assert(offsetof(clusterMsgHeader, notused2) == offsetof(clusterMsg, count), "unexpected field offset");
+
+
 #include <stdlib.h>
 #include <sys/types.h>
 #include <sys/socket.h>

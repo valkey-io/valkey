@@ -138,6 +138,7 @@ sds clusterEncodeOpenSlotsAuxField(int rdbflags);
 int clusterDecodeOpenSlotsAuxField(int rdbflags, sds s);
 static int nodeExceedsHandshakeTimeout(clusterNode *node, mstime_t now);
 void clusterCommandFlushslot(client *c);
+int clusterAllReplicasThinkPrimaryIsFail(void);
 
 static inline clusterMsg *toClusterMsg(void *buf) {
     clusterMsgHeader *hdr = (clusterMsgHeader *)buf;
@@ -155,6 +156,16 @@ static inline clusterMsgLight *toClusterMsgLight(void *buf) {
  * Returns 1 if the node has voting rights, otherwise returns 0. */
 int clusterNodeIsVotingPrimary(clusterNode *n) {
     return (n->flags & CLUSTER_NODE_PRIMARY) && n->numslots;
+}
+
+/* Returns if myself is the best ranked replica in an automatic failover process.
+ * To avoid newly added empty replica from affecting the ranking, we will skip it. */
+static inline int myselfIsBestRankedReplica(void) {
+    return (server.cluster->mf_end == 0 &&
+            getNodeReplicationOffset(myself) != 0 &&
+            server.cluster->failover_auth_rank == 0 &&
+            server.cluster->failover_failed_primary_rank == 0 &&
+            clusterAllReplicasThinkPrimaryIsFail());
 }
 
 int getNodeDefaultClientPort(clusterNode *n) {
@@ -2535,6 +2546,10 @@ void markNodeAsFailing(clusterNode *node) {
 
     /* Immediately check if the failing node is our primary node. */
     if (nodeIsReplica(myself) && myself->replicaof == node) {
+        /* Mark my primary is FAIL so that we can bring out flags during gossip,
+         * so that other nodes know that my primary node has failed, so that other
+         * nodes know that my offset will no longer be updated. */
+        myself->flags |= CLUSTER_NODE_MY_PRIMARY_FAIL;
         /* We can start an automatic failover as soon as possible, setting a flag
          * here so that we don't need to waiting for the cron to kick in. */
         clusterDoBeforeSleep(CLUSTER_TODO_HANDLE_FAILOVER);
@@ -2603,6 +2618,7 @@ void clearNodeFailureIfNeeded(clusterNode *node) {
         serverLog(LL_NOTICE, "Clear FAIL state for node %.40s (%s): %s is reachable again.", node->name,
                   humanNodename(node), nodeIsReplica(node) ? "replica" : "primary without slots");
         node->flags &= ~CLUSTER_NODE_FAIL;
+        if (nodeIsReplica(myself) && myself->replicaof == node) node->flags &= ~CLUSTER_NODE_MY_PRIMARY_FAIL;
         clusterDoBeforeSleep(CLUSTER_TODO_UPDATE_STATE | CLUSTER_TODO_SAVE_CONFIG);
     }
 
@@ -2617,6 +2633,7 @@ void clearNodeFailureIfNeeded(clusterNode *node) {
             "Clear FAIL state for node %.40s (%s): is reachable again and nobody is serving its slots after some time.",
             node->name, humanNodename(node));
         node->flags &= ~CLUSTER_NODE_FAIL;
+        if (nodeIsReplica(myself) && myself->replicaof == node) node->flags &= ~CLUSTER_NODE_MY_PRIMARY_FAIL;
         clusterDoBeforeSleep(CLUSTER_TODO_UPDATE_STATE | CLUSTER_TODO_SAVE_CONFIG);
     }
 }
@@ -3862,6 +3879,13 @@ int clusterProcessPacket(clusterLink *link) {
             sender->flags |= CLUSTER_NODE_MULTI_MEET_SUPPORTED;
         } else {
             sender->flags &= ~CLUSTER_NODE_MULTI_MEET_SUPPORTED;
+        }
+
+        /* Check if the sender has marked its primary node as FAIL. */
+        if (flags & CLUSTER_NODE_MY_PRIMARY_FAIL) {
+            sender->flags |= CLUSTER_NODE_MY_PRIMARY_FAIL;
+        } else {
+            sender->flags &= ~CLUSTER_NODE_MY_PRIMARY_FAIL;
         }
     }
 
@@ -5204,6 +5228,16 @@ void clusterRequestFailoverAuth(void) {
      * in the header to communicate the nodes receiving the message that
      * they should authorized the failover even if the primary is working. */
     if (server.cluster->mf_end) msgblock->data[0].msg.mflags[0] |= CLUSTERMSG_FLAG0_FORCEACK;
+
+    /* If this is an automatic failover and if myself is the best ranked replica,
+     * set the CLUSTERMSG_FLAG0_FORCEACK bit in the header as well.
+     *
+     * In this case, we hope that other primary nodes will not refuse to vote because
+     * they did not receive the FAIL message in time. */
+    if (server.cluster->mf_end == 0 && myselfIsBestRankedReplica()) {
+        msgblock->data[0].msg.mflags[0] |= CLUSTERMSG_FLAG0_FORCEACK;
+    }
+
     clusterBroadcastMessage(msgblock);
     clusterMsgSendBlockDecrRefCount(msgblock);
 }
@@ -5406,6 +5440,29 @@ int clusterGetFailedPrimaryRank(void) {
     dictReleaseIterator(di);
 
     return rank;
+}
+
+
+/* Returns 1 if all replicas under my primary think the primary is in FAIL state.
+ *
+ * This is useful in automatic failover. For example, from my perspective,
+ * if all other replicas, including myself, both mark the primary node as FAIL,
+ * which means that myself and other replicas have exchanged new gossip information
+ * after the primary node went down, and we know the latest replication offset of
+ * the replicas. If a replica finds that its ranking is optimal in all cases, then
+ * the replica can initiate an election immediately in automatic failover without
+ * waiting for the delay. */
+int clusterAllReplicasThinkPrimaryIsFail(void) {
+    serverAssert(nodeIsReplica(myself));
+    serverAssert(myself->replicaof);
+
+    clusterNode *primary = myself->replicaof;
+    for (int i = 0; i < primary->num_replicas; i++) {
+        if (!nodePrimaryIsFail(primary->replicas[i])) {
+            return 0;
+        }
+    }
+    return 1;
 }
 
 /* This function is called by clusterHandleReplicaFailover() in order to
@@ -5621,10 +5678,22 @@ void clusterHandleReplicaFailover(void) {
             server.cluster->failover_auth_time = now;
             server.cluster->failover_auth_rank = 0;
             server.cluster->failover_failed_primary_rank = 0;
-            /* Reset auth_age since it is outdated now and we can bypass the auth_timeout
+        }
+
+        if (server.cluster->mf_end == 0 && myselfIsBestRankedReplica()) {
+            /* If we find that myself is the best ranked replica, we can initiate the
+             * failover immediately. */
+            server.cluster->failover_auth_time = now;
+            serverLog(LL_NOTICE, "This is the best ranked replica and can initiate the election immediately.");
+        }
+
+        if (server.cluster->failover_auth_time == now) {
+            /* If we happen to initiate a failover (automatic or manual) immediately.
+             * Reset auth_age since it is outdated now and we can bypass the auth_timeout
              * check in the next state and start the election ASAP. */
             auth_age = 0;
         }
+
         serverLog(LL_NOTICE,
                   "Start of election delayed for %lld milliseconds "
                   "(rank #%d, primary rank #%d, offset %lld).",
@@ -5648,8 +5717,13 @@ void clusterHandleReplicaFailover(void) {
      * It is also possible that we received the message that telling a
      * shard is up. Update the delay if our failed_primary_rank changed.
      *
+     * It is also possible that we received more message and then we figure
+     * out myself is the best ranked replica, in this case, we can initiate
+     * the election immediately.
+     *
      * Not performed if this is a manual failover. */
-    if (server.cluster->failover_auth_sent == 0 && server.cluster->mf_end == 0) {
+    if (server.cluster->failover_auth_sent == 0 && server.cluster->mf_end == 0 &&
+        server.cluster->failover_auth_time != now) {
         int newrank = clusterGetReplicaRank();
         if (newrank != server.cluster->failover_auth_rank) {
             long long added_delay = (newrank - server.cluster->failover_auth_rank) * (delay * 2);
@@ -5666,6 +5740,13 @@ void clusterHandleReplicaFailover(void) {
             server.cluster->failover_failed_primary_rank = new_failed_primary_rank;
             serverLog(LL_NOTICE, "Failed primary rank updated to #%d, added %lld milliseconds of delay.",
                       new_failed_primary_rank, added_delay);
+        }
+
+        if (myselfIsBestRankedReplica()) {
+            /* If we find that myself is the best ranked replica, we can initiate the
+             * failover immediately. */
+            server.cluster->failover_auth_time = now;
+            serverLog(LL_NOTICE, "Myself become the best ranked replica, initiate the election immediately.");
         }
     }
 

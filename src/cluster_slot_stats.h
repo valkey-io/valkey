@@ -1,6 +1,6 @@
 #include "server.h"
 #include "cluster.h"
-#include "cluster_legacy.h"
+#include "cluster_state.h"
 
 /* General use-cases. */
 void clusterSlotStatReset(int slot);

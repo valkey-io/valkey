@@ -31,7 +31,7 @@
 /* Fixed timeout value for cluster operations (milliseconds) */
 #define CLUSTER_OPERATION_TIMEOUT 2000
 
-typedef struct _clusterNode clusterNode;
+typedef struct clusterNode clusterNode;
 struct clusterState;
 
 /* Flags that a module can set in order to prevent certain Cluster

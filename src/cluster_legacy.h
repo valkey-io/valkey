@@ -2,6 +2,8 @@
 #define CLUSTER_LEGACY_H
 
 #include <stdint.h>
+#include "cluster_state.h"
+
 #define CLUSTER_PORT_INCR 10000 /* Cluster port = baseport + PORT_INCR */
 
 /* The following defines are amount of time, sometimes expressed as
@@ -28,17 +30,7 @@
 #define CLUSTER_TODO_BROADCAST_ALL (1 << 5)
 #define CLUSTER_TODO_HANDLE_SLOT_MIGRATION (1 << 6)
 
-/* Cluster node flags and macros. */
-#define CLUSTER_NODE_PRIMARY (1 << 0)                                             /* The node is a primary */
-#define CLUSTER_NODE_REPLICA (1 << 1)                                             /* The node is a replica */
-#define CLUSTER_NODE_PFAIL (1 << 2)                                               /* Failure? Need acknowledge */
-#define CLUSTER_NODE_FAIL (1 << 3)                                                /* The node is believed to be malfunctioning */
-#define CLUSTER_NODE_MYSELF (1 << 4)                                              /* This node is myself */
-#define CLUSTER_NODE_HANDSHAKE (1 << 5)                                           /* We have still to exchange the first ping */
-#define CLUSTER_NODE_NOADDR (1 << 6)                                              /* We don't know the address of this node */
-#define CLUSTER_NODE_MEET (1 << 7)                                                /* Send a MEET message to this node */
-#define CLUSTER_NODE_MIGRATE_TO (1 << 8)                                          /* Primary eligible for replica migration. */
-#define CLUSTER_NODE_NOFAILOVER (1 << 9)                                          /* Replica will not try to failover. */
+/* Legacy-specific node flags (in addition to common flags in cluster_state.h). */
 #define CLUSTER_NODE_EXTENSIONS_SUPPORTED (1 << 10)                               /* This node supports extensions. */
 #define CLUSTER_NODE_LIGHT_HDR_PUBLISH_SUPPORTED (1 << 11)                        /* This node supports light message header for publish type. */
 #define CLUSTER_NODE_LIGHT_HDR_MODULE_SUPPORTED (1 << 12)                         /* This node supports light message header for module type. */
@@ -54,21 +46,11 @@
     "\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000" \
     "\000\000\000\000\000\000\000\000\000\000\000\000"
 
-#define nodeIsPrimary(n) ((n)->flags & CLUSTER_NODE_PRIMARY)
-#define nodeIsReplica(n) ((n)->flags & CLUSTER_NODE_REPLICA)
-#define nodeInHandshake(n) ((n)->flags & CLUSTER_NODE_HANDSHAKE)
 #define nodeInMeetState(n) ((n)->flags & CLUSTER_NODE_MEET)
-#define nodeHasAddr(n) (!((n)->flags & CLUSTER_NODE_NOADDR))
-#define nodeTimedOut(n) ((n)->flags & CLUSTER_NODE_PFAIL)
-#define nodeFailed(n) ((n)->flags & CLUSTER_NODE_FAIL)
-#define nodeCantFailover(n) ((n)->flags & CLUSTER_NODE_NOFAILOVER)
 #define nodeSupportsExtensions(n) ((n)->flags & CLUSTER_NODE_EXTENSIONS_SUPPORTED)
 #define nodeSupportsMultiMeet(n) ((n)->flags & CLUSTER_NODE_MULTI_MEET_SUPPORTED)
 #define nodeInNormalState(n) (!((n)->flags & (CLUSTER_NODE_HANDSHAKE | CLUSTER_NODE_MEET | CLUSTER_NODE_PFAIL | CLUSTER_NODE_FAIL)))
 #define nodePrimaryIsFail(n) ((n)->flags & CLUSTER_NODE_MY_PRIMARY_FAIL)
-
-/* Forward declaration for clusterNode. Full definition in cluster_legacy.c. */
-typedef struct clusterLink clusterLink;
 
 #define CLUSTERMSG_TYPE_COUNT 11 /* Total number of message types. */
 
@@ -83,56 +65,6 @@ typedef struct clusterNodeLegacyData {
     mstime_t orphaned_time;                 /* Starting time of orphaned primary condition */
     rax *fail_reports;                      /* Radix tree for failure reports with sorted order by timestamp */
 } clusterNodeLegacyData;
-
-struct _clusterNode {
-    mstime_t ctime;                         /* Node object creation time. */
-    char name[CLUSTER_NAMELEN];             /* Node name, hex string, sha1-size */
-    char shard_id[CLUSTER_NAMELEN];         /* shard id, hex string, sha1-size */
-    int flags;                              /* CLUSTER_NODE_... */
-    unsigned char slots[CLUSTER_SLOTS / 8]; /* slots handled by this node */
-    uint16_t *slot_info_pairs;              /* Slots info represented as (start/end) pair (consecutive index). */
-    int slot_info_pairs_count;              /* Used number of slots in slot_info_pairs */
-    int numslots;                           /* Number of slots handled by this node */
-    int num_replicas;                       /* Number of replica nodes, if this is a primary */
-    clusterNode **replicas;                 /* pointers to replica nodes */
-    clusterNode *replicaof;                 /* pointer to the primary node. Note that it
-                                             may be NULL even if the node is a replica
-                                             if we don't have the primary node in our
-                                             tables. */
-    mstime_t data_received;                 /* Unix time we received any data */
-    mstime_t outbound_link_attempt_time;    /* Unix time we last tried to establish an outgoing link */
-    mstime_t inbound_link_freed_time;       /* Last time we freed the inbound link for this node.
-                                               If it was never freed, it is the same as ctime */
-    long long repl_offset;                  /* Last known repl offset for this node. */
-    char ip[NET_IP_STR_LEN];                /* Latest known IP address of this node */
-    sds announce_client_ipv4;               /* IPv4 for clients only. */
-    sds announce_client_ipv6;               /* IPv6 for clients only. */
-    sds hostname;                           /* The known hostname for this node */
-    sds human_nodename;                     /* The known human readable nodename for this node */
-    sds availability_zone;                  /* The known availability zone for this node */
-    int tcp_port;                           /* Latest known clients TCP port. */
-    int tls_port;                           /* Latest known clients TLS port */
-    int cport;                              /* Latest known cluster port of this node. */
-    int announce_client_tcp_port;           /* Port for clients only. */
-    int announce_client_tls_port;           /* TLS port for clients only. */
-    clusterLink *link;                      /* TCP/IP link established toward this node */
-    clusterLink *inbound_link;              /* TCP/IP link accepted from this node */
-    int is_node_healthy;                    /* Boolean indicating the cached node health.
-                                               Update with updateAndCountChangedNodeHealth(). */
-    void *protocol_data;                    /* Protocol-specific data (e.g. clusterNodeLegacyData) */
-};
-
-/* Struct used for storing slot statistics. */
-typedef struct slotStat {
-    uint64_t cpu_usec;
-    uint64_t network_bytes_in;
-    uint64_t network_bytes_out;
-} slotStat;
-
-typedef struct slotRange {
-    int start_slot;
-    int end_slot;
-} slotRange;
 
 /* Legacy protocol-specific state, stored in clusterState.protocol_data. */
 typedef struct clusterLegacyState {
@@ -170,20 +102,5 @@ typedef struct clusterLegacyState {
                                                                     exceeding buffer limit */
     unsigned char owner_not_claiming_slot[CLUSTER_SLOTS / 8];
 } clusterLegacyState;
-
-struct clusterState {
-    clusterNode *myself; /* This node */
-    int state;           /* CLUSTER_OK, CLUSTER_FAIL, ... */
-    int fail_reason;     /* Why the cluster state changes to fail. */
-    int size;            /* Num of primary nodes with at least one slot */
-    dict *nodes;         /* Hash table of name -> clusterNode structures */
-    dict *shards;        /* Hash table of shard_id -> list (of nodes) structures */
-    dict *migrating_slots_to;
-    dict *importing_slots_from;
-    clusterNode *slots[CLUSTER_SLOTS];
-    list *slot_migration_jobs; /* List storing all slot migration jobs. */
-    slotStat slot_stats[CLUSTER_SLOTS];
-    void *protocol_data; /* Protocol-specific state (e.g. clusterLegacyState) */
-};
 
 #endif // CLUSTER_LEGACY_H

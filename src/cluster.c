@@ -39,11 +39,99 @@
 
 #include "server.h"
 #include "cluster.h"
+#include "cluster_bus.h"
 #include "cluster_slot_stats.h"
 #include "module.h"
 #include "crc16_slottable.h"
 
 #include <ctype.h>
+
+/* The active cluster bus protocol implementation. */
+extern clusterBusType clusterLegacyBus;
+clusterBusType *clusterCurrentBus = &clusterLegacyBus;
+
+/* -----------------------------------------------------------------------------
+ * Cluster bus dispatchers
+ * -------------------------------------------------------------------------- */
+
+void clusterInit(void) {
+    clusterCurrentBus->init();
+}
+void clusterInitLast(void) {
+    clusterCurrentBus->initLast();
+}
+void clusterCron(void) {
+    clusterCurrentBus->cron();
+}
+void clusterBeforeSleep(void) {
+    clusterCurrentBus->beforeSleep();
+}
+void clusterHandleServerShutdown(bool auto_failover) {
+    clusterCurrentBus->handleServerShutdown(auto_failover);
+}
+void clusterUpdateMyselfFlags(void) {
+    clusterCurrentBus->updateMyselfFlags();
+}
+void clusterUpdateMyselfIp(void) {
+    clusterCurrentBus->updateMyselfIp();
+}
+void clusterUpdateMyselfHostname(void) {
+    clusterCurrentBus->updateMyselfHostname();
+}
+void clusterUpdateMyselfAnnouncedPorts(void) {
+    clusterCurrentBus->updateMyselfAnnouncedPorts();
+}
+void clusterUpdateMyselfHumanNodename(void) {
+    clusterCurrentBus->updateMyselfHumanNodename();
+}
+void clusterUpdateMyselfClientIpV4(void) {
+    clusterCurrentBus->updateMyselfClientIpV4();
+}
+void clusterUpdateMyselfClientIpV6(void) {
+    clusterCurrentBus->updateMyselfClientIpV6();
+}
+void clusterUpdateMyselfAvailabilityZone(void) {
+    clusterCurrentBus->updateMyselfAvailabilityZone();
+}
+
+void clusterPropagatePublish(robj *channel, robj *message, int sharded) {
+    clusterCurrentBus->propagatePublish(channel, message, sharded);
+}
+
+int clusterSendModuleMessageToTarget(const char *target, uint64_t module_id, uint8_t type, const char *payload, uint32_t len) {
+    return clusterCurrentBus->sendModuleMessage(target, module_id, type, payload, len);
+}
+
+int clusterAllowFailoverCmd(client *c) {
+    return clusterCurrentBus->allowFailoverCmd(c);
+}
+void clusterPromoteSelfToPrimary(void) {
+    clusterCurrentBus->promoteSelfToPrimary();
+}
+mstime_t clusterManualFailoverTimeLimit(void) {
+    return clusterCurrentBus->manualFailoverTimeLimit();
+}
+unsigned long getClusterConnectionsCount(void) {
+    return clusterCurrentBus->getConnectionsCount();
+}
+void resetClusterStats(void) {
+    clusterCurrentBus->resetStats();
+}
+sds genClusterInfoString(sds info) {
+    return clusterCurrentBus->appendInfoFields(info);
+}
+int clusterCommandSpecial(client *c) {
+    return clusterCurrentBus->handleSpecialCommand(c);
+}
+int handleDebugClusterCommand(client *c) {
+    return clusterCurrentBus->handleDebugCommand(c);
+}
+const char **clusterCommandExtendedHelp(void) {
+    return clusterCurrentBus->extendedHelp();
+}
+const char **clusterDebugCommandExtendedHelp(void) {
+    return clusterCurrentBus->debugExtendedHelp();
+}
 
 /* -----------------------------------------------------------------------------
  * Key space handling
@@ -1616,7 +1704,6 @@ void readwriteCommand(client *c) {
 /* Resets transient cluster stats that we expose via INFO or other means that we want
  * to reset via CONFIG RESETSTAT. The function is also used in order to
  * initialize these fields in clusterInit() at server startup. */
-/* resetClusterStats has moved to cluster_legacy.c */
 
 void clusterCommandFlushslot(client *c) {
     int slot;

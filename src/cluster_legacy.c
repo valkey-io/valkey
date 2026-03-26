@@ -46,6 +46,8 @@
 #include "connection.h"
 #include "module.h"
 
+#include "cluster_bus.h"
+
 /* Access legacy protocol-specific data from a clusterNode. */
 #define LEGACY_DATA(n) ((clusterNodeLegacyData *)(n)->protocol_data)
 
@@ -96,6 +98,7 @@ void clusterSetNodeAsPrimary(clusterNode *n);
 void clusterDelNode(clusterNode *delnode);
 sds representClusterNodeFlags(sds ci, uint16_t flags);
 sds representSlotInfo(sds ci, uint16_t *slot_info_pairs, int slot_info_pairs_count);
+static void clusterLegacyResetStats(void);
 void clusterFreeNodesSlotsInfo(clusterNode *n);
 uint64_t clusterGetMaxEpoch(void);
 int clusterBumpConfigEpochWithoutConsensus(void);
@@ -1196,7 +1199,7 @@ void deriveAnnouncedPorts(int *announced_tcp_port,
  * in the "myself" node based on the current configuration of the node,
  * that may change at runtime via CONFIG SET. This function changes the
  * set of flags in myself->flags accordingly. */
-void clusterUpdateMyselfFlags(void) {
+static void clusterLegacyUpdateMyselfFlags(void) {
     if (!myself) return;
     int oldflags = myself->flags;
     int nofailover = server.cluster_replica_no_failover ? CLUSTER_NODE_NOFAILOVER : 0;
@@ -1215,7 +1218,7 @@ void clusterUpdateMyselfFlags(void) {
 /* We want to take myself->port/cport/pport in sync with the
  * cluster-announce-port/cluster-announce-bus-port/cluster-announce-tls-port option.
  * The option can be set at runtime via CONFIG SET. */
-void clusterUpdateMyselfAnnouncedPorts(void) {
+static void clusterLegacyUpdateMyselfAnnouncedPorts(void) {
     if (!myself) return;
     deriveAnnouncedPorts(&myself->tcp_port, &myself->tls_port, &myself->cport,
                          &myself->announce_client_tcp_port, &myself->announce_client_tls_port);
@@ -1224,7 +1227,7 @@ void clusterUpdateMyselfAnnouncedPorts(void) {
 
 /* We want to take myself->ip in sync with the cluster-announce-ip option.
  * The option can be set at runtime via CONFIG SET. */
-void clusterUpdateMyselfIp(void) {
+static void clusterLegacyUpdateMyselfIp(void) {
     if (!myself) return;
     static char *prev_ip = NULL;
     char *curr_ip = server.cluster_announce_ip;
@@ -1357,32 +1360,32 @@ static inline uint64_t nodeEpoch(clusterNode *n) {
 }
 
 /* Update my hostname based on server configuration values */
-void clusterUpdateMyselfHostname(void) {
+static void clusterLegacyUpdateMyselfHostname(void) {
     if (!myself) return;
     updateAnnouncedHostname(myself, server.cluster_announce_hostname);
 }
 
-void clusterUpdateMyselfHumanNodename(void) {
+static void clusterLegacyUpdateMyselfHumanNodename(void) {
     if (!myself) return;
     updateAnnouncedHumanNodename(myself, server.cluster_announce_human_nodename);
 }
 
-void clusterUpdateMyselfAvailabilityZone(void) {
+static void clusterLegacyUpdateMyselfAvailabilityZone(void) {
     if (!myself) return;
     updateAvailabilityZone(myself, server.availability_zone);
 }
 
-void clusterUpdateMyselfClientIpV4(void) {
+static void clusterLegacyUpdateMyselfClientIpV4(void) {
     if (!myself) return;
     updateAnnouncedClientIpV4(myself, server.cluster_announce_client_ipv4);
 }
 
-void clusterUpdateMyselfClientIpV6(void) {
+static void clusterLegacyUpdateMyselfClientIpV6(void) {
     if (!myself) return;
     updateAnnouncedClientIpV6(myself, server.cluster_announce_client_ipv6);
 }
 
-void clusterInit(void) {
+static void clusterLegacyInit(void) {
     int saveconf = 0;
 
     server.cluster = zmalloc(sizeof(struct clusterState));
@@ -1474,17 +1477,17 @@ void clusterInit(void) {
         server.cached_cluster_slot_info[conn_type] = NULL;
     }
     resetManualFailover();
-    clusterUpdateMyselfFlags();
-    clusterUpdateMyselfIp();
-    clusterUpdateMyselfClientIpV4();
-    clusterUpdateMyselfClientIpV6();
-    clusterUpdateMyselfHostname();
-    clusterUpdateMyselfHumanNodename();
-    clusterUpdateMyselfAvailabilityZone();
-    resetClusterStats();
+    clusterLegacyUpdateMyselfFlags();
+    clusterLegacyUpdateMyselfIp();
+    clusterLegacyUpdateMyselfClientIpV4();
+    clusterLegacyUpdateMyselfClientIpV6();
+    clusterLegacyUpdateMyselfHostname();
+    clusterLegacyUpdateMyselfHumanNodename();
+    clusterLegacyUpdateMyselfAvailabilityZone();
+    clusterLegacyResetStats();
 }
 
-void resetClusterStats(void) {
+static void clusterLegacyResetStats(void) {
     if (!server.cluster_enabled) return;
     clusterSlotStatResetAll();
     memset(LEGACY_STATE()->stats_bus_messages_sent, 0, sizeof(LEGACY_STATE()->stats_bus_messages_sent));
@@ -1492,7 +1495,7 @@ void resetClusterStats(void) {
     LEGACY_STATE()->stat_cluster_links_buffer_limit_exceeded = 0;
 }
 
-void clusterInitLast(void) {
+static void clusterLegacyInitLast(void) {
     if (!connectionByType(connTypeOfCluster()->get_type())) {
         serverLog(LL_WARNING, "Missing connection type %s, but it is required for the Cluster bus.",
                   getConnectionTypeName(connTypeOfCluster()->get_type()));
@@ -1575,7 +1578,7 @@ void clusterAutoFailoverOnShutdown(void) {
 }
 
 /* Called when a cluster node receives SHUTDOWN. */
-void clusterHandleServerShutdown(bool auto_failover) {
+static void clusterLegacyHandleServerShutdown(bool auto_failover) {
     /* Check if we are able to do the auto failover on shutdown. */
     if (auto_failover) clusterAutoFailoverOnShutdown();
 
@@ -1868,7 +1871,7 @@ void clusterAcceptHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
 
 /* Return the approximated number of sockets we are using in order to
  * take the cluster bus connections. */
-unsigned long getClusterConnectionsCount(void) {
+static unsigned long clusterLegacyGetConnectionsCount(void) {
     /* We decrement the number of nodes by one, since there is the
      * "myself" node too in the list. Each node uses two file descriptors,
      * one incoming and one outgoing, thus the multiplication by 2. */
@@ -5050,11 +5053,11 @@ void clusterSendModule(clusterLink *link, uint64_t module_id, uint8_t type, cons
  *
  * The function returns C_OK if the target is valid, otherwise C_ERR is
  * returned. */
-int clusterSendModuleMessageToTarget(const char *target,
-                                     uint64_t module_id,
-                                     uint8_t type,
-                                     const char *payload,
-                                     uint32_t len) {
+static int clusterLegacySendModuleMessageToTarget(const char *target,
+                                                  uint64_t module_id,
+                                                  uint8_t type,
+                                                  const char *payload,
+                                                  uint32_t len) {
     clusterNode *node = NULL;
 
     if (target != NULL) {
@@ -5076,7 +5079,7 @@ int clusterSendModuleMessageToTarget(const char *target,
  * Otherwise:
  * Publish this message across the slot (primary/replica).
  * -------------------------------------------------------------------------- */
-void clusterPropagatePublish(robj *channel, robj *message, int sharded) {
+static void clusterLegacyPropagatePublish(robj *channel, robj *message, int sharded) {
     clusterMsgSendBlock *msgblock, *msgblock_light;
     msgblock_light = clusterCreatePublishMsgBlock(channel, message, 1, sharded);
     /* We will only create msgblock with normal hdr if there are any nodes that do not support light hdr */
@@ -5699,7 +5702,7 @@ void clusterHandleReplicaFailover(void) {
  * ------------------------------------------------------------------------- */
 
 /* This function is responsible to decide if this replica should be migrated
- * to a different (orphaned) primary. It is called by the clusterCron() function
+ * to a different (orphaned) primary. It is called by the clusterLegacyCron() function
  * only if:
  *
  * 1) We are a replica node.
@@ -5874,7 +5877,7 @@ void manualFailoverCheckTimeout(void) {
     }
 }
 
-/* This function is called from clusterCron or clusterBeforeSleep in order to go
+/* This function is called from clusterLegacyCron or clusterLegacyBeforeSleep in order to go
  * forward with a manual failover state machine. */
 void clusterHandleManualFailover(void) {
     /* Return ASAP if no manual failover is in progress. */
@@ -6005,7 +6008,7 @@ static void clusterNodeCronFreeLinkOnBufferLimitReached(clusterNode *node) {
     freeClusterLinkOnBufferLimitReached(node->inbound_link);
 }
 
-/* Compute the maximum number of connection attempts the clusterCron
+/* Compute the maximum number of connection attempts the clusterLegacyCron
  * loop should schedule in a single cron.
  *
  * We want to guarantee that every node is contacted 10 times within node timeout. */
@@ -6022,7 +6025,7 @@ static long long maxConnectionAttemptsPerCron(void) {
 }
 
 /* This is executed 10 times every second */
-void clusterCron(void) {
+static void clusterLegacyCron(void) {
     dictIterator *di;
     dictEntry *de;
     int update_state = 0;
@@ -6034,7 +6037,7 @@ void clusterCron(void) {
     static unsigned long long iteration = 0;
     iteration++; /* Number of times this function was called so far. */
 
-    clusterUpdateMyselfHostname();
+    clusterLegacyUpdateMyselfHostname();
 
     /* Drive in progress slot import/export links. */
     clusterSlotMigrationCron();
@@ -6207,7 +6210,7 @@ void clusterCron(void) {
  * reaction to events fired but that are not safe to perform inside event
  * handlers, or to perform potentially expansive tasks that we need to do
  * a single time before replying to clients. */
-void clusterBeforeSleep(void) {
+static void clusterLegacyBeforeSleep(void) {
     int flags = LEGACY_STATE()->todo_before_sleep;
 
     /* Reset our flags (not strictly needed since every single function
@@ -6221,14 +6224,14 @@ void clusterBeforeSleep(void) {
 
     if (flags & CLUSTER_TODO_HANDLE_MANUALFAILOVER) {
         /* Handle manual failover as soon as possible so that won't have a 100ms
-         * as it was handled only in clusterCron */
+         * as it was handled only in clusterLegacyCron */
         if (nodeIsReplica(myself)) {
             clusterHandleManualFailover();
             if (!(server.cluster_module_flags & CLUSTER_MODULE_FLAG_NO_FAILOVER)) clusterHandleReplicaFailover();
         }
     } else if (flags & CLUSTER_TODO_HANDLE_FAILOVER) {
         /* Handle failover as soon as possible so that won't have a 100ms
-         * as it was handled only in clusterCron. This is needed when it
+         * as it was handled only in clusterLegacyCron. This is needed when it
          * is likely that we can start the election or there is already
          * the quorum from primaries in order to react fast. */
         if (nodeIsReplica(myself) &&
@@ -7154,7 +7157,7 @@ void clusterCommandShards(client *c) {
     dictReleaseIterator(di);
 }
 
-sds genClusterInfoString(sds info) {
+static sds clusterLegacyAppendInfoFields(sds info) {
     char *statestr[] = {"ok", "fail"};
     int slots_assigned = 0, slots_ok = 0, slots_pfail = 0, slots_fail = 0;
     uint64_t my_epoch = myself ? nodeEpoch(myself) : 0;
@@ -7300,11 +7303,11 @@ unsigned int countChannelsInSlot(unsigned int hashslot) {
     return kvstoreHashtableSize(server.pubsubshard_channels, hashslot);
 }
 
-mstime_t clusterManualFailoverTimeLimit(void) {
+static mstime_t clusterLegacyManualFailoverTimeLimit(void) {
     return LEGACY_STATE()->mf_end;
 }
 
-int handleDebugClusterCommand(client *c) {
+static int clusterLegacyHandleDebugCommand(client *c) {
     if (c->argc != 5 || strcasecmp(objectGetVal(c->argv[1]), "CLUSTERLINK") || strcasecmp(objectGetVal(c->argv[2]), "KILL")) {
         return 0;
     }
@@ -7342,7 +7345,7 @@ int handleDebugClusterCommand(client *c) {
 }
 
 
-const char **clusterDebugCommandExtendedHelp(void) {
+static const char **clusterLegacyDebugExtendedHelp(void) {
     static const char *help[] = {"CLUSTERLINK KILL <to|from|all> <node-id>",
                                  "    Kills the link based on the direction to/from (both) with the provided node.",
                                  NULL};
@@ -7635,7 +7638,7 @@ void clusterCommandSetSlot(client *c) {
     addReply(c, shared.ok);
 }
 
-int clusterCommandSpecial(client *c) {
+static int clusterLegacyHandleSpecialCommand(client *c) {
     if (!strcasecmp(objectGetVal(c->argv[1]), "meet") && (c->argc == 4 || c->argc == 5)) {
         /* CLUSTER MEET <ip> <port> [cport] */
         long long port, cport;
@@ -8033,7 +8036,7 @@ int clusterCommandSpecial(client *c) {
     return 1;
 }
 
-const char **clusterCommandExtendedHelp(void) {
+static const char **clusterLegacyExtendedHelp(void) {
     static const char *help[] = {
         "ADDSLOTS <slot> [<slot> ...]",
         "    Assign slots to current node.",
@@ -8079,7 +8082,7 @@ const char **clusterCommandExtendedHelp(void) {
     return help;
 }
 
-int clusterAllowFailoverCmd(client *c) {
+static int clusterLegacyAllowFailoverCmd(client *c) {
     if (!server.cluster_enabled) {
         return 1;
     }
@@ -8088,7 +8091,7 @@ int clusterAllowFailoverCmd(client *c) {
     return 0;
 }
 
-void clusterPromoteSelfToPrimary(void) {
+static void clusterLegacyPromoteSelfToPrimary(void) {
     replicationUnsetPrimary();
     /* Upon becoming primary, we need to ensure that data is deleted in unowned slots. */
     verifyClusterConfigWithData();
@@ -8199,3 +8202,31 @@ bool isAnySlotInManualImportingState(void) {
 bool isAnySlotInManualMigratingState(void) {
     return dictSize(server.cluster->migrating_slots_to) > 0;
 }
+
+clusterBusType clusterLegacyBus = {
+    .init = clusterLegacyInit,
+    .initLast = clusterLegacyInitLast,
+    .cron = clusterLegacyCron,
+    .beforeSleep = clusterLegacyBeforeSleep,
+    .handleServerShutdown = clusterLegacyHandleServerShutdown,
+    .updateMyselfFlags = clusterLegacyUpdateMyselfFlags,
+    .updateMyselfIp = clusterLegacyUpdateMyselfIp,
+    .updateMyselfHostname = clusterLegacyUpdateMyselfHostname,
+    .updateMyselfAnnouncedPorts = clusterLegacyUpdateMyselfAnnouncedPorts,
+    .updateMyselfHumanNodename = clusterLegacyUpdateMyselfHumanNodename,
+    .updateMyselfClientIpV4 = clusterLegacyUpdateMyselfClientIpV4,
+    .updateMyselfClientIpV6 = clusterLegacyUpdateMyselfClientIpV6,
+    .updateMyselfAvailabilityZone = clusterLegacyUpdateMyselfAvailabilityZone,
+    .propagatePublish = clusterLegacyPropagatePublish,
+    .sendModuleMessage = clusterLegacySendModuleMessageToTarget,
+    .allowFailoverCmd = clusterLegacyAllowFailoverCmd,
+    .promoteSelfToPrimary = clusterLegacyPromoteSelfToPrimary,
+    .manualFailoverTimeLimit = clusterLegacyManualFailoverTimeLimit,
+    .getConnectionsCount = clusterLegacyGetConnectionsCount,
+    .resetStats = clusterLegacyResetStats,
+    .appendInfoFields = clusterLegacyAppendInfoFields,
+    .handleSpecialCommand = clusterLegacyHandleSpecialCommand,
+    .handleDebugCommand = clusterLegacyHandleDebugCommand,
+    .extendedHelp = clusterLegacyExtendedHelp,
+    .debugExtendedHelp = clusterLegacyDebugExtendedHelp,
+};

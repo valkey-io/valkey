@@ -54,6 +54,70 @@
 /* Access legacy protocol-specific state from the cluster. */
 #define LEGACY_STATE() ((clusterLegacyState *)server.cluster->protocol_data)
 
+/* Legacy-specific defines. */
+#define CLUSTER_FAIL_REPORT_VALIDITY_MULT 2  /* Fail report validity. */
+#define CLUSTER_FAIL_UNDO_TIME_MULT 2        /* Undo fail if primary is back. */
+#define CLUSTER_REPLICA_MIGRATION_DELAY 5000 /* Delay for replica migration. */
+#define CLUSTER_CANT_FAILOVER_NONE 0
+#define CLUSTER_CANT_FAILOVER_DATA_AGE 1
+#define CLUSTER_CANT_FAILOVER_WAITING_DELAY 2
+#define CLUSTER_CANT_FAILOVER_EXPIRED 3
+#define CLUSTER_CANT_FAILOVER_WAITING_VOTES 4
+#define CLUSTER_CANT_FAILOVER_RELOG_PERIOD 1                                      /* seconds. */
+#define CLUSTER_NODE_EXTENSIONS_SUPPORTED (1 << 10)                               /* This node supports extensions. */
+#define CLUSTER_NODE_LIGHT_HDR_PUBLISH_SUPPORTED (1 << 11)                        /* This node supports light message header for publish type. */
+#define CLUSTER_NODE_LIGHT_HDR_MODULE_SUPPORTED (1 << 12)                         /* This node supports light message header for module type. */
+#define CLUSTER_NODE_MULTI_MEET_SUPPORTED CLUSTER_NODE_LIGHT_HDR_MODULE_SUPPORTED /* This node handles multi meet packet.                             \
+                                                                                     Light hdr for module and multi meet were both introduced in 8.1, \
+                                                                                     so we could reduce the same flag value. */
+#define CLUSTER_NODE_MY_PRIMARY_FAIL (1 << 13)                                    /* myself is a replica and my primary is FAIL in my view. */
+#define CLUSTER_NODE_NULL_NAME                                                                                         \
+    "\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000" \
+    "\000\000\000\000\000\000\000\000\000\000\000\000"
+#define nodeInMeetState(n) ((n)->flags & CLUSTER_NODE_MEET)
+#define nodeSupportsExtensions(n) ((n)->flags & CLUSTER_NODE_EXTENSIONS_SUPPORTED)
+#define nodeSupportsMultiMeet(n) ((n)->flags & CLUSTER_NODE_MULTI_MEET_SUPPORTED)
+#define nodeInNormalState(n) (!((n)->flags & (CLUSTER_NODE_HANDSHAKE | CLUSTER_NODE_MEET | CLUSTER_NODE_PFAIL | CLUSTER_NODE_FAIL)))
+#define nodePrimaryIsFail(n) ((n)->flags & CLUSTER_NODE_MY_PRIMARY_FAIL)
+#define CLUSTERMSG_TYPE_COUNT 11 /* Total number of message types. */
+
+/* Legacy protocol-specific data, stored in clusterNode.protocol_data. */
+typedef struct clusterNodeLegacyData {
+    uint64_t configEpoch;                   /* Last configEpoch observed for this node */
+    unsigned long long last_in_ping_gossip; /* The number of the last carried in the ping gossip section */
+    mstime_t ping_sent;                     /* Unix time we sent latest ping */
+    mstime_t pong_received;                 /* Unix time we received the pong */
+    mstime_t meet_sent;                     /* Unix time we sent latest meet packet */
+    mstime_t fail_time;                     /* Unix time when FAIL flag was set */
+    mstime_t orphaned_time;                 /* Starting time of orphaned primary condition */
+    rax *fail_reports;                      /* Radix tree for failure reports with sorted order by timestamp */
+} clusterNodeLegacyData;
+
+/* Legacy protocol-specific state, stored in clusterState.protocol_data. */
+typedef struct clusterLegacyState {
+    uint64_t currentEpoch;
+    int safe_to_join;
+    dict *nodes_black_list;
+    mstime_t failover_auth_time;
+    int failover_auth_count;
+    int failover_auth_sent;
+    int failover_auth_rank;
+    int failover_failed_primary_rank;
+    uint64_t failover_auth_epoch;
+    int cant_failover_reason;
+    mstime_t mf_end;
+    clusterNode *mf_replica;
+    long long mf_primary_offset;
+    int mf_can_start;
+    uint64_t lastVoteEpoch;
+    int todo_before_sleep;
+    long long stats_bus_messages_sent[CLUSTERMSG_TYPE_COUNT];
+    long long stats_bus_messages_received[CLUSTERMSG_TYPE_COUNT];
+    long long stats_pfail_nodes;
+    unsigned long long stat_cluster_links_buffer_limit_exceeded;
+    unsigned char owner_not_claiming_slot[CLUSTER_SLOTS / 8];
+} clusterLegacyState;
+
 /* Wire protocol structs (private to legacy implementation). */
 /* clusterLink encapsulates everything needed to talk with a remote node. */
 typedef struct clusterLink {
@@ -5951,7 +6015,7 @@ void clusterHandleReplicaFailover(void) {
         if (myselfIsBestRankedReplica()) {
             /* If we find that myself is the best ranked replica, we can initiate the
              * failover immediately. */
-            server.cluster->failover_auth_time = now;
+            LEGACY_STATE()->failover_auth_time = now;
             serverLog(LL_NOTICE, "Myself become the best ranked replica, initiate the election immediately.");
         }
     }

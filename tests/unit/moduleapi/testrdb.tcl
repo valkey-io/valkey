@@ -225,8 +225,10 @@ tags "modules" {
                     $replica debug populate 200 slave 10
                     $master debug populate 1000 master 100000
                     $master config set rdbcompression no
-
+                    
                     if {$testType eq "Aborted"} {
+                        # Set master with a slow rdb generation, so that we can easily intercept loading
+                        # 10ms per key, with 1000 keys is 10 seconds
                         $master config set rdb-key-save-delay 10000
                     }
 

@@ -940,6 +940,27 @@ TEST_F(ListpackTest, listpackLpFind) {
     lpFree(lp);
 }
 
+TEST_F(ListpackTest, listpackLpFindInteger) {
+    unsigned char *lp = lpNew(0);
+    lp = lpAppendInteger(lp, 42);
+    lp = lpAppendInteger(lp, -100);
+    lp = lpAppend(lp, (unsigned char *)"hello", 5);
+    lp = lpAppendInteger(lp, 1024);
+
+    /* Should find existing integers */
+    ASSERT_NE(lpFindInteger(lp, lpFirst(lp), 42, 0), nullptr);
+    ASSERT_NE(lpFindInteger(lp, lpFirst(lp), -100, 0), nullptr);
+    ASSERT_NE(lpFindInteger(lp, lpFirst(lp), 1024, 0), nullptr);
+
+    /* Should not find non-existent integer */
+    ASSERT_EQ(lpFindInteger(lp, lpFirst(lp), 999, 0), nullptr);
+
+    /* String entry "hello" should not match any integer search */
+    ASSERT_EQ(lpFindInteger(lp, lpFirst(lp), 0, 0), nullptr);
+
+    lpFree(lp);
+}
+
 TEST_F(ListpackTest, listpackLpValidateIntegrity) {
     /* Test lpValidateIntegrity */
     unsigned char *lp;

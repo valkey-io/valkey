@@ -178,7 +178,7 @@ int testrdb_aux_load(ValkeyModuleIO *rdb, int encver, int when) {
 }
 
 void testrdb_aux_save_aof(ValkeyModuleIO *aof, int when) {
-    if (when == VALKEYMODULE_AUX_BEFORE_RDB) {
+    if (when == VALKEYMODULE_AUX_BEFORE_AOF) {
         if (before_str) {
             ValkeyModule_SaveSigned(aof, 1);
             ValkeyModule_SaveString(aof, before_str);
@@ -196,7 +196,7 @@ void testrdb_aux_save_aof(ValkeyModuleIO *aof, int when) {
 int testrdb_aux_load_aof(ValkeyModuleIO *aof, int encver, int when) {
     assert(encver == 1);
     ValkeyModuleCtx *ctx = ValkeyModule_GetContextFromIO(aof);
-    if (when == VALKEYMODULE_AUX_BEFORE_RDB) {
+    if (when == VALKEYMODULE_AUX_BEFORE_AOF) {
         if (before_str)
             ValkeyModule_FreeString(ctx, before_str);
         before_str = NULL;
@@ -398,6 +398,9 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
         if (conf_aux_count & CONF_AUX_OPTION_AOF) {
             datatype_methods.aux_save_aof = testrdb_aux_save_aof;
             datatype_methods.aux_load_aof = testrdb_aux_load_aof;
+            datatype_methods.aux_save_aof_triggers =
+                ((conf_aux_count & CONF_AUX_OPTION_BEFORE_KEYSPACE) ? VALKEYMODULE_AUX_BEFORE_AOF : 0) |
+                ((conf_aux_count & CONF_AUX_OPTION_AFTER_KEYSPACE) ? VALKEYMODULE_AUX_AFTER_AOF : 0);
         }
 
         testrdb_type = ValkeyModule_CreateDataType(ctx, "test__rdb", 1, &datatype_methods);

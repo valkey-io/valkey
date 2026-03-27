@@ -74,6 +74,7 @@ typedef struct ValkeyModuleType {
     moduleTypeAuxSaveFunc aux_save_aof;
     moduleTypeAuxLoadFunc aux_load_aof;
     int aux_save_triggers;
+    int aux_save_aof_triggers;
     char name[10]; /* 9 bytes name + null term. Charset: A-Z a-z 0-9 _- */
 } moduleType;
 

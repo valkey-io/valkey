@@ -298,6 +298,10 @@ This flag should not be used directly by the module.
 #define VALKEYMODULE_AUX_BEFORE_RDB (1 << 0)
 #define VALKEYMODULE_AUX_AFTER_RDB (1 << 1)
 
+/* Bit flags for aux_save_aof_triggers and the aux_load_aof and aux_save_aof callbacks */
+#define VALKEYMODULE_AUX_BEFORE_AOF (1 << 0)
+#define VALKEYMODULE_AUX_AFTER_AOF (1 << 1)
+
 /* RM_Yield flags */
 #define VALKEYMODULE_YIELD_FLAG_NONE (1 << 0)
 #define VALKEYMODULE_YIELD_FLAG_CLIENTS (1 << 1)
@@ -1432,6 +1436,7 @@ typedef struct ValkeyModuleTypeMethods {
     ValkeyModuleTypeAuxSaveFunc aux_save2;
     ValkeyModuleTypeAuxSaveFunc aux_save_aof;
     ValkeyModuleTypeAuxLoadFunc aux_load_aof;
+    int aux_save_aof_triggers;
 } ValkeyModuleTypeMethods;
 
 #define VALKEYMODULE_GET_API(name) ValkeyModule_GetApi("ValkeyModule_" #name, ((void **)&ValkeyModule_##name))

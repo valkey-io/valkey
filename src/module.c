@@ -7246,6 +7246,7 @@ moduleType *VM_CreateDataType(ValkeyModuleCtx *ctx, const char *name, int encver
         struct {
             moduleTypeAuxSaveFunc aux_save_aof;
             moduleTypeAuxLoadFunc aux_load_aof;
+            int aux_save_aof_triggers;
         } v6;
     } *tms = (struct typemethods *)typemethods_ptr;
 
@@ -7281,6 +7282,7 @@ moduleType *VM_CreateDataType(ValkeyModuleCtx *ctx, const char *name, int encver
     if (tms->version >= 6) {
         mt->aux_save_aof = tms->v6.aux_save_aof;
         mt->aux_load_aof = tms->v6.aux_load_aof;
+        mt->aux_save_aof_triggers = tms->v6.aux_save_aof_triggers;
     }
     memcpy(mt->name, name, sizeof(mt->name));
     listAddNodeTail(ctx->module->types, mt);
@@ -7696,7 +7698,7 @@ int aofRewriteModulesAux(rio *aof, int when) {
         listRewind(module->types, &li);
         while ((ln = listNext(&li))) {
             moduleType *mt = ln->value;
-            if (!mt->aux_save_aof || !(mt->aux_save_triggers & when)) continue;
+            if (!mt->aux_save_aof || !(mt->aux_save_aof_triggers & when)) continue;
 
             /* Create a buffer rio for the module to serialize aux data into. */
             rio bufrio;

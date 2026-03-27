@@ -27,6 +27,7 @@ TEST_MODULES = \
     commandfilter.so \
     basics.so \
     testrdb.so \
+    testaof.so \
     fork.so \
     infotest.so \
     propagate.so \

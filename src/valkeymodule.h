@@ -59,7 +59,7 @@ typedef long long ustime_t;
 
 /* Version of the ValkeyModuleTypeMethods structure. Once the ValkeyModuleTypeMethods
  * structure is changed, this version number needs to be changed synchronistically. */
-#define VALKEYMODULE_TYPE_METHOD_VERSION 5
+#define VALKEYMODULE_TYPE_METHOD_VERSION 6
 
 /* API flags and constants */
 #define VALKEYMODULE_READ (1 << 0)
@@ -1430,6 +1430,8 @@ typedef struct ValkeyModuleTypeMethods {
     ValkeyModuleTypeUnlinkFunc2 unlink2;
     ValkeyModuleTypeCopyFunc2 copy2;
     ValkeyModuleTypeAuxSaveFunc aux_save2;
+    ValkeyModuleTypeAuxSaveFunc aux_save_aof;
+    ValkeyModuleTypeAuxLoadFunc aux_load_aof;
 } ValkeyModuleTypeMethods;
 
 #define VALKEYMODULE_GET_API(name) ValkeyModule_GetApi("ValkeyModule_" #name, ((void **)&ValkeyModule_##name))

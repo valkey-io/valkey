@@ -9,6 +9,7 @@
 #define CONF_AUX_OPTION_BEFORE_KEYSPACE  1 << 1
 #define CONF_AUX_OPTION_AFTER_KEYSPACE   1 << 2
 #define CONF_AUX_OPTION_NO_DATA          1 << 3
+#define CONF_AUX_OPTION_AOF              1 << 4
 long long conf_aux_count = 0;
 
 /* Registered type */
@@ -172,6 +173,50 @@ int testrdb_aux_load(ValkeyModuleIO *rdb, int encver, int when) {
     }
 
     if (ValkeyModule_IsIOError(rdb))
+        return VALKEYMODULE_ERR;
+    return VALKEYMODULE_OK;
+}
+
+void testrdb_aux_save_aof(ValkeyModuleIO *aof, int when) {
+    if (when == VALKEYMODULE_AUX_BEFORE_RDB) {
+        if (before_str) {
+            ValkeyModule_SaveSigned(aof, 1);
+            ValkeyModule_SaveString(aof, before_str);
+        }
+        /* Unlike RDB aux_save, AOF aux_save_aof can just write nothing
+         * if there's no data, and the entry will be skipped. */
+    } else {
+        if (after_str) {
+            ValkeyModule_SaveSigned(aof, 1);
+            ValkeyModule_SaveString(aof, after_str);
+        }
+    }
+}
+
+int testrdb_aux_load_aof(ValkeyModuleIO *aof, int encver, int when) {
+    assert(encver == 1);
+    ValkeyModuleCtx *ctx = ValkeyModule_GetContextFromIO(aof);
+    if (when == VALKEYMODULE_AUX_BEFORE_RDB) {
+        if (before_str)
+            ValkeyModule_FreeString(ctx, before_str);
+        before_str = NULL;
+        int count = ValkeyModule_LoadSigned(aof);
+        if (ValkeyModule_IsIOError(aof))
+            return VALKEYMODULE_ERR;
+        if (count)
+            before_str = ValkeyModule_LoadString(aof);
+    } else {
+        if (after_str)
+            ValkeyModule_FreeString(ctx, after_str);
+        after_str = NULL;
+        int count = ValkeyModule_LoadSigned(aof);
+        if (ValkeyModule_IsIOError(aof))
+            return VALKEYMODULE_ERR;
+        if (count)
+            after_str = ValkeyModule_LoadString(aof);
+    }
+
+    if (ValkeyModule_IsIOError(aof))
         return VALKEYMODULE_ERR;
     return VALKEYMODULE_OK;
 }
@@ -348,6 +393,11 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
 
         if (conf_aux_count & CONF_AUX_OPTION_SAVE2) {
             datatype_methods.aux_save2 = testrdb_aux_save;
+        }
+
+        if (conf_aux_count & CONF_AUX_OPTION_AOF) {
+            datatype_methods.aux_save_aof = testrdb_aux_save_aof;
+            datatype_methods.aux_load_aof = testrdb_aux_load_aof;
         }
 
         testrdb_type = ValkeyModule_CreateDataType(ctx, "test__rdb", 1, &datatype_methods);

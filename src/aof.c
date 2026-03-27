@@ -2461,6 +2461,8 @@ int rewriteAppendOnlyFileRio(rio *aof) {
 
     if (rewriteFunctions(aof) == C_ERR) goto werr;
 
+    if (aofRewriteModulesAux(aof, VALKEYMODULE_AUX_BEFORE_RDB) == C_ERR) goto werr;
+
     for (j = 0; j < server.dbnum; j++) {
         if (dbHasNoKeys(j)) continue;
         serverDb *db = server.db[j];
@@ -2489,6 +2491,9 @@ int rewriteAppendOnlyFileRio(rio *aof) {
         }
         kvstoreIteratorRelease(kvs_it);
     }
+
+    if (aofRewriteModulesAux(aof, VALKEYMODULE_AUX_AFTER_RDB) == C_ERR) goto werr;
+
     return C_OK;
 
 werr:

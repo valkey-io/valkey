@@ -3,7 +3,7 @@
         "summary": "Loads module auxiliary data. This is an internal command used by AOF.",
         "complexity": "O(N) where N is the size of the auxiliary data.",
         "group": "server",
-        "since": "8.1.0",
+        "since": "9.1.0",
         "arity": 6,
         "container": "MODULE",
         "function": "moduleCommand",

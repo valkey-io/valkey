@@ -45,6 +45,18 @@ typedef struct clusterBusType {
     void (*resetStats)(void);
     sds (*appendInfoFields)(sds info);
 
+    /* Slot ownership changes — called from cluster commands and slot migration.
+     * Assigns or unassigns slots specified by an array of slot ranges. If
+     * target is non-NULL, slots are assigned to target. If target is NULL,
+     * slots are unassigned. If the target is myself and the slots were being
+     * imported, the implementation handles finalization (e.g. epoch bump and
+     * broadcast in the legacy protocol). The ctx pointer is passed through
+     * to the callback, which is called when the change is applied.
+     * TODO: When the callback is asynchronous, the caller must block the
+     * client so the server can continue processing other clients while
+     * waiting for the consensus commit. */
+    void (*slotChange)(slotRange *ranges, int numranges, clusterNode *target, void *ctx, void (*callback)(void *ctx, int success));
+
     /* Protocol-specific command handling — called from cluster.c, debug.c */
     int (*handleSpecialCommand)(struct client *c);
     int (*handleDebugCommand)(struct client *c);

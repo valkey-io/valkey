@@ -71,11 +71,6 @@ typedef struct slotStat {
     uint64_t network_bytes_out;
 } slotStat;
 
-typedef struct slotRange {
-    int start_slot;
-    int end_slot;
-} slotRange;
-
 struct clusterState {
     clusterNode *myself; /* This node */
     int state;           /* CLUSTER_OK, CLUSTER_FAIL, ... */
@@ -93,5 +88,10 @@ struct clusterState {
 
 /* Node accessor used by protocol implementations and description generation. */
 char *humanNodename(clusterNode *node);
+
+/* Bitmap helpers for slot bitmaps. */
+int bitmapTestBit(unsigned char *bitmap, int pos);
+void bitmapSetBit(unsigned char *bitmap, int pos);
+void bitmapClearBit(unsigned char *bitmap, int pos);
 
 #endif /* CLUSTER_STATE_H */

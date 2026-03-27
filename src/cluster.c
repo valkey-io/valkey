@@ -40,6 +40,7 @@
 #include "server.h"
 #include "cluster.h"
 #include "cluster_bus.h"
+#include "cluster_state.h"
 #include "cluster_slot_stats.h"
 #include "module.h"
 #include "crc16_slottable.h"
@@ -134,6 +135,12 @@ const char **clusterCommandExtendedHelp(void) {
 }
 const char **clusterDebugCommandExtendedHelp(void) {
     return clusterCurrentBus->debugExtendedHelp();
+}
+
+/* Change slot ownerships. */
+void clusterSlotChange(slotRange *ranges, int numranges, clusterNode *target, void *ctx, void (*callback)(void *ctx, int success)) {
+    clusterCurrentBus->slotChange(ranges, numranges,
+                                  target, ctx, callback);
 }
 
 /* -----------------------------------------------------------------------------
@@ -968,6 +975,51 @@ void clusterKeySlotCommand(client *c) {
     addReplyLongLong(c, keyHashSlot(key, sdslen(key)));
 }
 
+/* Callback for CLUSTER ADDSLOTS/DELSLOTS/ADDSLOTSRANGE/DELSLOTSRANGE.
+ * Called after the slot change is applied. This may be called inline
+ * or asynchronously if the change goes through cluster consensus. */
+static void clusterAddDelSlotsCallback(void *ctx, int success) {
+    client *c = (client *)ctx;
+    if (!success) {
+        addReplyError(c, "Slot change proposal failed");
+        return;
+    }
+    addReply(c, shared.ok);
+}
+
+/* Validate slot assignments for ADDSLOTS/DELSLOTS commands.
+ * Checks that slots in the given ranges are not already in the desired state
+ * (busy for add, unassigned for del) and not specified multiple times.
+ * Returns C_OK on success, C_ERR if validation fails (error reply sent). */
+static int checkSlotAssignmentsOrReply(client *c, slotRange *ranges, int numranges, int del) {
+    unsigned char seen[CLUSTER_SLOTS / 8];
+    memset(seen, 0, sizeof(seen));
+    for (int i = 0; i < numranges; i++) {
+        for (int s = ranges[i].start_slot; s <= ranges[i].end_slot; s++) {
+            if (del && getNodeBySlot(s) == NULL) {
+                addReplyErrorFormat(c, "Slot %d is already unassigned", s);
+                return C_ERR;
+            } else if (!del && getNodeBySlot(s) != NULL) {
+                addReplyErrorFormat(c, "Slot %d is already busy", s);
+                return C_ERR;
+            }
+            if (bitmapTestBit(seen, s)) {
+                addReplyErrorFormat(c, "Slot %d specified multiple times", s);
+                return C_ERR;
+            }
+            bitmapSetBit(seen, s);
+        }
+    }
+    return C_OK;
+}
+
+void clusterSlotChange(slotRange *ranges, int numranges,
+                       clusterNode *target, void *ctx,
+                       void (*callback)(void *ctx, int success)) {
+    clusterCurrentBus->slotChange(ranges, numranges,
+                                  target, ctx, callback);
+}
+
 void clusterCommand(client *c) {
     if (server.cluster_enabled == 0) {
         addReplyError(c, "This instance has cluster support disabled");
@@ -1058,6 +1110,113 @@ void clusterCommand(client *c) {
             sds ni = clusterGenNodeDescription(c, clusterNodeGetReplica(n, j), shouldReturnTlsInfo());
             addReplyBulkCString(c, ni);
             sdsfree(ni);
+        }
+    } else if ((!strcasecmp(objectGetVal(c->argv[1]), "addslots") || !strcasecmp(objectGetVal(c->argv[1]), "delslots")) &&
+               c->argc >= 3) {
+        /* CLUSTER ADDSLOTS <slot> [slot] ... */
+        /* CLUSTER DELSLOTS <slot> [slot] ... */
+        int j, slot;
+        int del = !strcasecmp(objectGetVal(c->argv[1]), "delslots");
+        int numslots = c->argc - 2;
+        slotRange *ranges = zmalloc(sizeof(slotRange) * numslots);
+
+        for (j = 0; j < numslots; j++) {
+            if ((slot = getSlotOrReply(c, c->argv[j + 2])) == -1) {
+                zfree(ranges);
+                return;
+            }
+            ranges[j].start_slot = slot;
+            ranges[j].end_slot = slot;
+        }
+        if (checkSlotAssignmentsOrReply(c, ranges, numslots, del) == C_ERR) {
+            zfree(ranges);
+            return;
+        }
+        /* Propose the slot change. The reply is deferred to the callback,
+         * which is called after the change is applied.
+         * TODO: If the callback is not called immediately (e.g. when the
+         * change goes through cluster consensus), the client needs to be
+         * put in a blocked state so the server can continue processing
+         * other clients while waiting for the commit. */
+        clusterSlotChange(ranges, numslots,
+                          del ? NULL : getMyClusterNode(),
+                          c, clusterAddDelSlotsCallback);
+        zfree(ranges);
+    } else if ((!strcasecmp(objectGetVal(c->argv[1]), "addslotsrange") || !strcasecmp(objectGetVal(c->argv[1]), "delslotsrange")) &&
+               c->argc >= 4) {
+        if (c->argc % 2 == 1) {
+            addReplyErrorArity(c);
+            return;
+        }
+        /* CLUSTER ADDSLOTSRANGE <start slot> <end slot> [<start slot> <end slot> ...] */
+        /* CLUSTER DELSLOTSRANGE <start slot> <end slot> [<start slot> <end slot> ...] */
+        int j, startslot, endslot;
+        int del = !strcasecmp(objectGetVal(c->argv[1]), "delslotsrange");
+        int numranges = (c->argc - 2) / 2;
+        slotRange *ranges = zmalloc(sizeof(slotRange) * numranges);
+
+        for (j = 0; j < numranges; j++) {
+            if ((startslot = getSlotOrReply(c, c->argv[2 + j * 2])) == -1) {
+                zfree(ranges);
+                return;
+            }
+            if ((endslot = getSlotOrReply(c, c->argv[3 + j * 2])) == -1) {
+                zfree(ranges);
+                return;
+            }
+            if (startslot > endslot) {
+                addReplyErrorFormat(c,
+                                    "start slot number %d is greater than end slot number %d",
+                                    startslot, endslot);
+                zfree(ranges);
+                return;
+            }
+            ranges[j].start_slot = startslot;
+            ranges[j].end_slot = endslot;
+        }
+        if (checkSlotAssignmentsOrReply(c, ranges, numranges, del) == C_ERR) {
+            zfree(ranges);
+            return;
+        }
+        /* Propose the slot change. The reply is deferred to the callback,
+         * which is called after the change is applied.
+         * TODO: If the callback is not called immediately (e.g. when the
+         * change goes through cluster consensus), the client needs to be
+         * put in a blocked state so the server can continue processing
+         * other clients while waiting for the commit. */
+        clusterSlotChange(ranges, numranges,
+                          del ? NULL : getMyClusterNode(),
+                          c, clusterAddDelSlotsCallback);
+        zfree(ranges);
+    } else if (!strcasecmp(objectGetVal(c->argv[1]), "flushslots") && c->argc == 2) {
+        /* CLUSTER FLUSHSLOTS */
+        if (!dbsHaveNoKeys()) {
+            addReplyError(c, "DB must be empty to perform CLUSTER FLUSHSLOTS.");
+            return;
+        }
+        clusterNode *myself = getMyClusterNode();
+        if (myself->numslots == 0) {
+            addReply(c, shared.ok);
+        } else {
+            /* Build ranges from all slots owned by myself. */
+            slotRange *ranges = zmalloc(sizeof(slotRange) * myself->numslots);
+            int numranges = 0, in_range = 0;
+            for (int j = 0; j < CLUSTER_SLOTS; j++) {
+                if (clusterNodeCoversSlot(myself, j)) {
+                    if (!in_range) {
+                        ranges[numranges].start_slot = j;
+                        in_range = 1;
+                    }
+                    ranges[numranges].end_slot = j;
+                } else if (in_range) {
+                    numranges++;
+                    in_range = 0;
+                }
+            }
+            if (in_range) numranges++;
+            clusterSlotChange(ranges, numranges, NULL,
+                              c, clusterAddDelSlotsCallback);
+            zfree(ranges);
         }
     } else if (!clusterCommandSpecial(c)) {
         addReplySubcommandSyntaxError(c);

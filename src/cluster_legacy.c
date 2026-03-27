@@ -6661,6 +6661,40 @@ void clusterScheduleBroadcastAll(void) {
     clusterDoBeforeSleep(CLUSTER_TODO_BROADCAST_ALL);
 }
 
+static void clusterLegacySlotChange(slotRange *ranges, int numranges, clusterNode *target, void *ctx, void (*callback)(void *ctx, int success)) {
+    /* If we're claiming slots owned by someone else, bump the epoch to
+     * propagate the ownership change authoritatively. Callers never mix
+     * claimed and unclaimed slots, so checking the first slot suffices. */
+    int claiming = (target == myself &&
+                    server.cluster->slots[ranges[0].start_slot] &&
+                    server.cluster->slots[ranges[0].start_slot] != myself);
+
+    if (claiming) clusterBumpConfigEpochWithoutConsensus();
+
+    for (int i = 0; i < numranges; i++) {
+        for (int j = ranges[i].start_slot; j <= ranges[i].end_slot; j++) {
+            if (target) {
+                if (server.cluster->slots[j]) clusterDelSlot(j);
+                clusterAddSlot(target, j);
+            } else {
+                clusterDelSlot(j);
+            }
+        }
+    }
+
+    if (claiming) {
+        clearCachedClusterSlotsResponse();
+        clusterUpdateState();
+        clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG |
+                             CLUSTER_TODO_FSYNC_CONFIG |
+                             CLUSTER_TODO_BROADCAST_ALL);
+    } else {
+        clusterDoBeforeSleep(CLUSTER_TODO_UPDATE_STATE |
+                             CLUSTER_TODO_SAVE_CONFIG);
+    }
+    if (callback) callback(ctx, 1);
+}
+
 mstime_t clusterComputeMfPauseEnd(void) {
     return mstime() + server.cluster_mf_timeout * CLUSTER_MF_PAUSE_MULT;
 }
@@ -7405,41 +7439,6 @@ int getSlotOrReply(client *c, robj *o) {
     return (int)slot;
 }
 
-int checkSlotAssignmentsOrReply(client *c, unsigned char *slots, int del, int start_slot, int end_slot) {
-    int slot;
-    for (slot = start_slot; slot <= end_slot; slot++) {
-        if (del && server.cluster->slots[slot] == NULL) {
-            addReplyErrorFormat(c, "Slot %d is already unassigned", slot);
-            return C_ERR;
-        } else if (!del && server.cluster->slots[slot]) {
-            addReplyErrorFormat(c, "Slot %d is already busy", slot);
-            return C_ERR;
-        }
-        if (slots[slot]++ == 1) {
-            addReplyErrorFormat(c, "Slot %d specified multiple times", slot);
-            return C_ERR;
-        }
-    }
-    return C_OK;
-}
-
-void clusterUpdateSlots(client *c, unsigned char *slots, int del) {
-    int j;
-    for (j = 0; j < CLUSTER_SLOTS; j++) {
-        if (slots[j]) {
-            int retval;
-
-            /* If this slot was set as importing we can clear this
-             * state as now we are the real owner of the slot. */
-            if (getImportingSlotSource(j)) setImportingSlotSource(j, NULL);
-
-            retval = del ? clusterDelSlot(j) : clusterAddSlot(myself, j);
-            serverAssertWithInfo(c, NULL, retval == C_OK);
-        }
-    }
-}
-
-
 /* Add detailed information of a node to the output buffer of the given client. */
 void addNodeDetailsToShardReply(client *c, clusterNode *node) {
     int reply_count = 0;
@@ -8076,81 +8075,6 @@ static int clusterLegacyHandleSpecialCommand(client *c) {
             sdsfree(client);
             addReply(c, shared.ok);
         }
-    } else if (!strcasecmp(objectGetVal(c->argv[1]), "flushslots") && c->argc == 2) {
-        /* CLUSTER FLUSHSLOTS */
-        if (!dbsHaveNoKeys()) {
-            addReplyError(c, "DB must be empty to perform CLUSTER FLUSHSLOTS.");
-            return 1;
-        }
-        clusterDelNodeSlots(myself);
-        clusterDoBeforeSleep(CLUSTER_TODO_UPDATE_STATE | CLUSTER_TODO_SAVE_CONFIG);
-        addReply(c, shared.ok);
-    } else if ((!strcasecmp(objectGetVal(c->argv[1]), "addslots") || !strcasecmp(objectGetVal(c->argv[1]), "delslots")) && c->argc >= 3) {
-        /* CLUSTER ADDSLOTS <slot> [slot] ... */
-        /* CLUSTER DELSLOTS <slot> [slot] ... */
-        int j, slot;
-        unsigned char *slots = zmalloc(CLUSTER_SLOTS);
-        int del = !strcasecmp(objectGetVal(c->argv[1]), "delslots");
-
-        memset(slots, 0, CLUSTER_SLOTS);
-        /* Check that all the arguments are parseable.*/
-        for (j = 2; j < c->argc; j++) {
-            if ((slot = getSlotOrReply(c, c->argv[j])) == -1) {
-                zfree(slots);
-                return 1;
-            }
-        }
-        /* Check that the slots are not already busy. */
-        for (j = 2; j < c->argc; j++) {
-            slot = getSlotOrReply(c, c->argv[j]);
-            if (checkSlotAssignmentsOrReply(c, slots, del, slot, slot) == C_ERR) {
-                zfree(slots);
-                return 1;
-            }
-        }
-        clusterUpdateSlots(c, slots, del);
-        zfree(slots);
-        clusterDoBeforeSleep(CLUSTER_TODO_UPDATE_STATE | CLUSTER_TODO_SAVE_CONFIG);
-        addReply(c, shared.ok);
-    } else if ((!strcasecmp(objectGetVal(c->argv[1]), "addslotsrange") || !strcasecmp(objectGetVal(c->argv[1]), "delslotsrange")) &&
-               c->argc >= 4) {
-        if (c->argc % 2 == 1) {
-            addReplyErrorArity(c);
-            return 1;
-        }
-        /* CLUSTER ADDSLOTSRANGE <start slot> <end slot> [<start slot> <end slot> ...] */
-        /* CLUSTER DELSLOTSRANGE <start slot> <end slot> [<start slot> <end slot> ...] */
-        int j, startslot, endslot;
-        unsigned char *slots = zmalloc(CLUSTER_SLOTS);
-        int del = !strcasecmp(objectGetVal(c->argv[1]), "delslotsrange");
-
-        memset(slots, 0, CLUSTER_SLOTS);
-        /* Check that all the arguments are parseable and that all the
-         * slots are not already busy. */
-        for (j = 2; j < c->argc; j += 2) {
-            if ((startslot = getSlotOrReply(c, c->argv[j])) == -1) {
-                zfree(slots);
-                return 1;
-            }
-            if ((endslot = getSlotOrReply(c, c->argv[j + 1])) == -1) {
-                zfree(slots);
-                return 1;
-            }
-            if (startslot > endslot) {
-                addReplyErrorFormat(c, "start slot number %d is greater than end slot number %d", startslot, endslot);
-                zfree(slots);
-                return 1;
-            }
-
-            if (checkSlotAssignmentsOrReply(c, slots, del, startslot, endslot) == C_ERR) {
-                zfree(slots);
-                return 1;
-            }
-        }
-        clusterUpdateSlots(c, slots, del);
-        zfree(slots);
-        clusterDoBeforeSleep(CLUSTER_TODO_UPDATE_STATE | CLUSTER_TODO_SAVE_CONFIG);
-        addReply(c, shared.ok);
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "setslot") && c->argc >= 4) {
         /* SETSLOT 10 MIGRATING <node ID> */
         /* SETSLOT 10 IMPORTING <node ID> */
@@ -8629,4 +8553,5 @@ clusterBusType clusterLegacyBus = {
     .handleDebugCommand = clusterLegacyHandleDebugCommand,
     .extendedHelp = clusterLegacyExtendedHelp,
     .debugExtendedHelp = clusterLegacyDebugExtendedHelp,
+    .slotChange = clusterLegacySlotChange,
 };

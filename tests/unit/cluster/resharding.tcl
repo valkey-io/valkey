@@ -1,36 +1,6 @@
-# Failover stress test.
-# In this test a different node is killed in a loop for N
-# iterations. The test checks that certain properties
-# are preserved across iterations.
-
-source "../tests/includes/init-tests.tcl"
-source "../../../tests/support/cli.tcl"
-
-test "Create a 5 nodes cluster" {
-    create_cluster 5 5
-}
-
-test "Cluster is up" {
-    assert_cluster_state ok
-}
-
-test "Enable AOF in all the instances" {
-    foreach_valkey_id id {
-        R $id config set appendonly yes
-        # We use "appendfsync no" because it's fast but also guarantees that
-        # write(2) is performed before replying to client.
-        R $id config set appendfsync no
-    }
-
-    foreach_valkey_id id {
-        wait_for_condition 1000 500 {
-            [RI $id aof_rewrite_in_progress] == 0 &&
-            [RI $id aof_enabled] == 1
-        } else {
-            fail "Failed to enable AOF on instance #$id"
-        }
-    }
-}
+# Resharding test.
+# In this test a live resharding is performed and the test checks
+# that certain properties are preserved across the operation.
 
 # Return non-zero if the specified PID is about a process still in execution,
 # otherwise 0 is returned.
@@ -39,6 +9,30 @@ proc process_is_running {pid} {
     # and catch will return non-zero. We want to return non-zero if
     # the PID exists, so we invert the return value with expr not operator.
     expr {![catch {exec ps -p $pid}]}
+}
+
+start_cluster 5 5 {tags {external:skip cluster}} {
+
+test "Cluster is up" {
+    wait_for_cluster_state ok
+}
+
+test "Enable AOF in all the instances" {
+    for {set id 0} {$id < [llength $::servers]} {incr id} {
+        R $id config set appendonly yes
+        # We use "appendfsync no" because it's fast but also guarantees that
+        # write(2) is performed before replying to client.
+        R $id config set appendfsync no
+    }
+
+    for {set id 0} {$id < [llength $::servers]} {incr id} {
+        wait_for_condition 1000 500 {
+            [s [expr -1*$id] aof_rewrite_in_progress] == 0 &&
+            [s [expr -1*$id] aof_enabled] == 1
+        } else {
+            fail "Failed to enable AOF on instance #$id"
+        }
+    }
 }
 
 # Our resharding test performs the following actions:
@@ -54,11 +48,11 @@ proc process_is_running {pid} {
 
 set numkeys 50000
 set numops 200000
-set start_node_port [get_instance_attrib valkey 0 port]
+set start_node_port [srv 0 port]
 set cluster [valkey_cluster 127.0.0.1:$start_node_port]
 if {$::tls} {
     # setup a non-TLS cluster client to the TLS cluster
-    set plaintext_port [get_instance_attrib valkey 0 plaintext-port]
+    set plaintext_port [srv 0 pport]
     set cluster_plaintext [valkey_cluster 127.0.0.1:$plaintext_port 0]
     puts "Testing TLS cluster on start node 127.0.0.1:$start_node_port, plaintext port $plaintext_port"
 } else {
@@ -82,17 +76,17 @@ test "Cluster consistency during live resharding" {
         if {$j >= $numops/2 && $tribpid eq {}} {
             puts -nonewline "...Starting resharding..."
             flush stdout
-            set target [dict get [get_myself [randomInt 5]] id]
+            set target [dict get [cluster_get_myself [randomInt 5]] id]
             set tribpid [lindex [exec \
                 $::VALKEY_CLI_BIN --cluster reshard \
-                127.0.0.1:[get_instance_attrib valkey 0 port] \
+                127.0.0.1:[srv 0 port] \
                 --cluster-from all \
                 --cluster-to $target \
                 --cluster-slots 100 \
                 --cluster-yes \
-                {*}[valkeycli_tls_config "../../../tests"] \
+                {*}[valkeycli_tls_config "./tests"] \
                 | [info nameofexecutable] \
-                ../tests/helpers/onlydots.tcl \
+                tests/helpers/onlydots.tcl \
                 &] 0]
         }
 
@@ -138,16 +132,21 @@ test "Verify $numkeys keys for consistency with logical content" {
 }
 
 test "Terminate and restart all the instances" {
-    foreach_valkey_id id {
+    for {set id 0} {$id < [llength $::servers]} {incr id} {
         # Stop AOF so that an initial AOFRW won't prevent the instance from terminating
         R $id config set appendonly no
-        kill_instance valkey $id
-        restart_instance valkey $id
+        R $id bgsave
+        wait_for_condition 1000 50 {
+            [s [expr -1*$id] rdb_bgsave_in_progress] == 0
+        } else {
+            fail "bgsave didn't finish for instance #$id"
+        }
+        restart_server [expr -1*$id] true false
     }
 }
 
 test "Cluster should eventually be up again" {
-    assert_cluster_state ok
+    wait_for_cluster_state ok
 }
 
 test "Verify $numkeys keys after the restart" {
@@ -160,20 +159,20 @@ test "Verify $numkeys keys after the restart" {
 }
 
 test "Disable AOF in all the instances" {
-    foreach_valkey_id id {
+    for {set id 0} {$id < [llength $::servers]} {incr id} {
         R $id config set appendonly no
     }
 }
 
 test "Verify slaves consistency" {
     set verified_masters 0
-    foreach_valkey_id id {
+    for {set id 0} {$id < [llength $::servers]} {incr id} {
         set role [R $id role]
         lassign $role myrole myoffset slaves
         if {$myrole eq {slave}} continue
-        set masterport [get_instance_attrib valkey $id port]
+        set masterport [srv [expr -1*$id] port]
         set masterdigest [R $id debug digest]
-        foreach_valkey_id sid {
+        for {set sid 0} {$sid < [llength $::servers]} {incr sid} {
             set srole [R $sid role]
             if {[lindex $srole 0] eq {master}} continue
             if {[lindex $srole 2] != $masterport} continue
@@ -189,8 +188,9 @@ test "Verify slaves consistency" {
 }
 
 test "Dump sanitization was skipped for migrations" {
-    set verified_masters 0
-    foreach_valkey_id id {
-        assert {[RI $id dump_payload_sanitizations] == 0}
+    for {set id 0} {$id < [llength $::servers]} {incr id} {
+        assert {[s [expr -1*$id] dump_payload_sanitizations] == 0}
     }
 }
+
+} ;# start_cluster

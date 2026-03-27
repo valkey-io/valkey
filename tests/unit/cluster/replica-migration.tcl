@@ -433,3 +433,94 @@ start_cluster 3 0 {tags {external:skip cluster} overrides {cluster-node-timeout 
         assert_equal [R 2 dbsize] 0
     }
 } my_slot_allocation cluster_allocate_replicas ;# start_cluster
+# Replica migration test.
+# Check that orphaned masters are joined by replicas of masters having
+# multiple replicas attached, according to the migration barrier settings.
+
+start_cluster 5 10 {tags {external:skip cluster}} {
+
+test "Cluster is up" {
+    wait_for_cluster_state ok
+}
+
+test "Each master should have two replicas attached" {
+    for {set id 0} {$id < 5} {incr id} {
+        wait_for_condition 1000 50 {
+            [llength [lindex [R $id role] 2]] == 2
+        } else {
+            fail "Master #$id does not have 2 slaves as expected"
+        }
+    }
+}
+
+test "Killing all the slaves of master #0 and #1" {
+    pause_process [srv -5 pid]
+    pause_process [srv -10 pid]
+    pause_process [srv -6 pid]
+    pause_process [srv -11 pid]
+    after 4000
+}
+
+for {set id 0} {$id < 5} {incr id} {
+    test "Master #$id should have at least one replica" {
+        wait_for_condition 1000 50 {
+            [llength [lindex [R $id role] 2]] >= 1
+        } else {
+            fail "Master #$id has no replicas"
+        }
+    }
+}
+
+} ;# start_cluster
+
+# Now test the migration to a master which used to be a slave, after
+# a failover.
+
+start_cluster 5 10 {tags {external:skip cluster}} {
+
+test "Cluster is up" {
+    wait_for_cluster_state ok
+}
+
+test "Kill slave #7 of master #2. Only slave left is #12 now" {
+    pause_process [srv -7 pid]
+}
+
+set current_epoch [CI 1 cluster_current_epoch]
+
+test "Killing master node #2, #12 should failover" {
+    pause_process [srv -2 pid]
+}
+
+test "Wait for failover" {
+    wait_for_condition 1000 50 {
+        [CI 1 cluster_current_epoch] > $current_epoch
+    } else {
+        fail "No failover detected"
+    }
+}
+
+test "Cluster should eventually be up again" {
+    wait_for_cluster_state ok
+}
+
+test "Cluster is writable" {
+    cluster_write_test [srv -1 port]
+}
+
+test "Instance 12 is now a master without slaves" {
+    assert {[s -12 role] eq {master}}
+}
+
+# The remaining instance is now without slaves. Some other slave
+# should migrate to it.
+
+test "Master #12 should get at least one migrated replica" {
+    wait_for_condition 1000 50 {
+        [llength [lindex [R 12 role] 2]] >= 1
+    } else {
+        fail "Master #12 has no replicas"
+    }
+}
+
+} ;# start_cluster

@@ -1552,6 +1552,9 @@ void clusterCommand(client *c) {
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "cancelslotmigrations") && c->argc == 2) {
         /* CLUSTER CANCELSLOTMIGRATIONS */
         clusterCommandCancelSlotMigrations(c);
+    } else if (!strcasecmp(objectGetVal(c->argv[1]), "syncslots") && c->argc > 2) {
+        /* CLUSTER SYNCSLOTS <subcommand> */
+        clusterCommandSyncSlots(c);
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "count-failure-reports") && c->argc == 3) {
         /* CLUSTER COUNT-FAILURE-REPORTS <NODE ID> */
         clusterNode *n = clusterLookupNode(objectGetVal(c->argv[2]),

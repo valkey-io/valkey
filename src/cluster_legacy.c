@@ -7818,9 +7818,6 @@ static int clusterLegacyHandleSpecialCommand(client *c) {
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "links") && c->argc == 2) {
         /* CLUSTER LINKS */
         addReplyClusterLinksDescription(c);
-    } else if (!strcasecmp(objectGetVal(c->argv[1]), "syncslots") && c->argc > 2) {
-        /* CLUSTER SYNCSLOTS <subcommand> */
-        clusterCommandSyncSlots(c);
     } else {
         return 0;
     }

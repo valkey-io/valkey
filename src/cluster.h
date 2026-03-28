@@ -160,6 +160,7 @@ unsigned int delKeysInSlot(unsigned int hashslot, int lazy, bool propagate_del, 
 unsigned int propagateSlotDeletionByKeys(unsigned int hashslot);
 void clusterUpdateState(void);
 void clusterSaveConfigOrDie(int do_fsync);
+int clusterSaveConfig(int do_fsync);
 int clusterDelSlot(int slot);
 int clusterAddSlot(clusterNode *n, int slot);
 int clusterBumpConfigEpochWithoutConsensus(void);

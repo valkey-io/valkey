@@ -527,7 +527,6 @@ void freeClusterLink(clusterLink *link);
 sds clusterEncodeOpenSlotsAuxField(int rdbflags);
 int clusterDecodeOpenSlotsAuxField(int rdbflags, sds s);
 static int nodeExceedsHandshakeTimeout(clusterNode *node, mstime_t now);
-void clusterCommandFlushslot(client *c);
 int clusterAllReplicasThinkPrimaryIsFail(void);
 
 static inline clusterMsg *toClusterMsg(void *buf) {
@@ -7718,13 +7717,6 @@ static int clusterLegacyHandleSpecialCommand(client *c) {
         sds reply = sdscatfmt(sdsempty(), "+%s %U\r\n", (retval == C_OK) ? "BUMPED" : "STILL",
                               (unsigned long long)LEGACY_DATA(myself)->configEpoch);
         addReplySds(c, reply);
-    } else if (!strcasecmp(objectGetVal(c->argv[1]), "saveconfig") && c->argc == 2) {
-        int retval = clusterSaveConfig(1);
-
-        if (retval == C_OK)
-            addReply(c, shared.ok);
-        else
-            addReplyErrorFormat(c, "error saving the cluster node config: %s", strerror(errno));
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "forget") && c->argc == 3) {
         /* CLUSTER FORGET <NODE ID> */
         clusterNode *n = clusterLookupNode(objectGetVal(c->argv[2]), sdslen(objectGetVal(c->argv[2])));
@@ -7969,20 +7961,8 @@ static int clusterLegacyHandleSpecialCommand(client *c) {
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "links") && c->argc == 2) {
         /* CLUSTER LINKS */
         addReplyClusterLinksDescription(c);
-    } else if (!strcasecmp(objectGetVal(c->argv[1]), "flushslot") && (c->argc == 3 || c->argc == 4)) {
-        /* CLUSTER FLUSHSLOT <slot> [ASYNC|SYNC] */
-        clusterCommandFlushslot(c);
-    } else if (!strcasecmp(objectGetVal(c->argv[1]), "migrateslots") && c->argc > 3) {
-        /* CLUSTER MIGRATESLOTS SLOTSRANGE <start slot> <end slot> [<start slot> <end slot> ...] NODE <node> [SLOTSRANGE ... NODE ...] */
-        clusterCommandMigrateSlots(c);
-    } else if (!strcasecmp(objectGetVal(c->argv[1]), "getslotmigrations") && c->argc == 2) {
-        /* CLUSTER GETSLOTMIGRATIONS */
-        clusterCommandGetSlotMigrations(c);
-    } else if (!strcasecmp(objectGetVal(c->argv[1]), "cancelslotmigrations") && c->argc == 2) {
-        /* CLUSTER CANCELSLOTMIGRATIONS */
-        clusterCommandCancelSlotMigrations(c);
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "syncslots") && c->argc > 2) {
-        /* CLUSTER SYNCSLOTS <subcommand>*/
+        /* CLUSTER SYNCSLOTS <subcommand> */
         clusterCommandSyncSlots(c);
     } else {
         return 0;

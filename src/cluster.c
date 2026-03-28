@@ -52,6 +52,8 @@
 extern clusterBusType clusterLegacyBus;
 clusterBusType *clusterCurrentBus = &clusterLegacyBus;
 
+static void clusterCommandFlushslot(client *c);
+
 /* -----------------------------------------------------------------------------
  * Cluster bus dispatchers
  * -------------------------------------------------------------------------- */
@@ -1530,6 +1532,26 @@ void clusterCommand(client *c) {
         /* CLUSTER SETSLOT <slot> MIGRATING|IMPORTING|NODE <node-id>
          * CLUSTER SETSLOT <slot> STABLE */
         clusterCommandSetSlot(c);
+    } else if (!strcasecmp(objectGetVal(c->argv[1]), "saveconfig") && c->argc == 2) {
+        /* CLUSTER SAVECONFIG */
+        int retval = clusterSaveConfig(1);
+        if (retval == C_OK)
+            addReply(c, shared.ok);
+        else
+            addReplyErrorFormat(c, "error saving the cluster node config: %s",
+                                strerror(errno));
+    } else if (!strcasecmp(objectGetVal(c->argv[1]), "flushslot") && (c->argc == 3 || c->argc == 4)) {
+        /* CLUSTER FLUSHSLOT <slot> [ASYNC|SYNC] */
+        clusterCommandFlushslot(c);
+    } else if (!strcasecmp(objectGetVal(c->argv[1]), "migrateslots") && c->argc > 3) {
+        /* CLUSTER MIGRATESLOTS SLOTSRANGE <start slot> <end slot> ... NODE <node> ... */
+        clusterCommandMigrateSlots(c);
+    } else if (!strcasecmp(objectGetVal(c->argv[1]), "getslotmigrations") && c->argc == 2) {
+        /* CLUSTER GETSLOTMIGRATIONS */
+        clusterCommandGetSlotMigrations(c);
+    } else if (!strcasecmp(objectGetVal(c->argv[1]), "cancelslotmigrations") && c->argc == 2) {
+        /* CLUSTER CANCELSLOTMIGRATIONS */
+        clusterCommandCancelSlotMigrations(c);
     } else if (!clusterCommandSpecial(c)) {
         addReplySubcommandSyntaxError(c);
         return;
@@ -2175,7 +2197,7 @@ void readwriteCommand(client *c) {
     addReply(c, shared.ok);
 }
 
-void clusterCommandFlushslot(client *c) {
+static void clusterCommandFlushslot(client *c) {
     int slot;
     int lazy = server.lazyfree_lazy_user_flush;
     if ((slot = getSlotOrReply(c, c->argv[2])) == -1) return;

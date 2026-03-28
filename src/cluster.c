@@ -1555,6 +1555,18 @@ void clusterCommand(client *c) {
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "syncslots") && c->argc > 2) {
         /* CLUSTER SYNCSLOTS <subcommand> */
         clusterCommandSyncSlots(c);
+    } else if (!strcasecmp(objectGetVal(c->argv[1]), "meet") && (c->argc == 4 || c->argc == 5)) {
+        /* CLUSTER MEET <ip> <port> [cport] */
+        clusterCurrentBus->meet(c);
+    } else if (!strcasecmp(objectGetVal(c->argv[1]), "bumpepoch") && c->argc == 2) {
+        /* CLUSTER BUMPEPOCH */
+        clusterCurrentBus->bumpEpoch(c);
+    } else if (!strcasecmp(objectGetVal(c->argv[1]), "set-config-epoch") && c->argc == 3) {
+        /* CLUSTER SET-CONFIG-EPOCH <epoch> */
+        clusterCurrentBus->setConfigEpoch(c);
+    } else if (!strcasecmp(objectGetVal(c->argv[1]), "reset") && (c->argc == 2 || c->argc == 3)) {
+        /* CLUSTER RESET [SOFT|HARD] */
+        clusterCurrentBus->resetCluster(c);
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "count-failure-reports") && c->argc == 3) {
         /* CLUSTER COUNT-FAILURE-REPORTS <NODE ID> */
         clusterNode *n = clusterLookupNode(objectGetVal(c->argv[2]),

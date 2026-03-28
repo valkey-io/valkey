@@ -62,6 +62,12 @@ typedef struct clusterBusType {
      * role changes and any in-progress failover state is no longer relevant. */
     void (*cleanupFailoverState)(void);
 
+    /* Node management — called from cluster commands */
+    void (*meet)(client *c);
+    void (*bumpEpoch)(client *c);
+    void (*setConfigEpoch)(client *c);
+    void (*resetCluster)(client *c);
+
     /* Protocol-specific command handling — called from cluster.c, debug.c */
     int (*handleSpecialCommand)(struct client *c);
     int (*handleDebugCommand)(struct client *c);

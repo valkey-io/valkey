@@ -7540,51 +7540,103 @@ static const char **clusterLegacyDebugExtendedHelp(void) {
     return help;
 }
 
+static void clusterLegacyMeet(client *c) {
+    /* CLUSTER MEET <ip> <port> [cport] */
+    long long port, cport;
+
+    if (getLongLongFromObject(c->argv[3], &port) != C_OK) {
+        addReplyErrorFormat(c, "Invalid base port specified: %s", (char *)objectGetVal(c->argv[3]));
+        return;
+    }
+    if (port <= 0 || port > 65535) {
+        addReplyErrorFormat(c, "Port number is out of range");
+        return;
+    }
+
+    if (c->argc == 5) {
+        if (getLongLongFromObject(c->argv[4], &cport) != C_OK) {
+            addReplyErrorFormat(c, "Invalid bus port specified: %s", (char *)objectGetVal(c->argv[4]));
+            return;
+        }
+    } else {
+        cport = port + CLUSTER_PORT_INCR;
+    }
+
+    if (cport <= 0 || cport > 65535) {
+        addReplyErrorFormat(c, "Cluster bus port number is out of range");
+        return;
+    }
+
+    if (clusterStartHandshake(objectGetVal(c->argv[2]), port, cport) == 0 && errno == EINVAL) {
+        addReplyErrorFormat(c, "Invalid node address specified: %s:%s",
+                            (char *)objectGetVal(c->argv[2]),
+                            (char *)objectGetVal(c->argv[3]));
+    } else {
+        sds cl = catClientInfoShortString(sdsempty(), c, server.hide_user_data_from_log);
+        serverLog(LL_NOTICE, "Cluster meet %s:%lld (user request from '%s').",
+                  (char *)objectGetVal(c->argv[2]), port, cl);
+        sdsfree(cl);
+        addReply(c, shared.ok);
+    }
+}
+
+static void clusterLegacyBumpEpoch(client *c) {
+    int retval = clusterBumpConfigEpochWithoutConsensus();
+    sds reply = sdscatfmt(sdsempty(), "+%s %U\r\n",
+                          (retval == C_OK) ? "BUMPED" : "STILL",
+                          (unsigned long long)LEGACY_DATA(myself)->configEpoch);
+    addReplySds(c, reply);
+}
+
+static void clusterLegacySetConfigEpoch(client *c) {
+    long long epoch;
+    if (getLongLongFromObjectOrReply(c, c->argv[2], &epoch, NULL) != C_OK) return;
+
+    if (epoch < 0) {
+        addReplyErrorFormat(c, "Invalid config epoch specified: %lld", epoch);
+    } else if (dictSize(server.cluster->nodes) > 1) {
+        addReplyError(c, "The user can assign a config epoch only when the "
+                         "node does not know any other node.");
+    } else if (LEGACY_DATA(myself)->configEpoch != 0) {
+        addReplyError(c, "Node config epoch is already non-zero");
+    } else {
+        LEGACY_DATA(myself)->configEpoch = epoch;
+        serverLog(LL_NOTICE,
+                  "configEpoch set to %llu via CLUSTER SET-CONFIG-EPOCH",
+                  (unsigned long long)LEGACY_DATA(myself)->configEpoch);
+        if (LEGACY_STATE()->currentEpoch < (uint64_t)epoch)
+            LEGACY_STATE()->currentEpoch = epoch;
+        clusterDoBeforeSleep(CLUSTER_TODO_UPDATE_STATE | CLUSTER_TODO_SAVE_CONFIG);
+        addReply(c, shared.ok);
+    }
+}
+
+static void clusterLegacyResetCluster(client *c) {
+    int hard = 0;
+    if (c->argc == 3) {
+        if (!strcasecmp(objectGetVal(c->argv[2]), "hard")) {
+            hard = 1;
+        } else if (!strcasecmp(objectGetVal(c->argv[2]), "soft")) {
+            hard = 0;
+        } else {
+            addReplyErrorObject(c, shared.syntaxerr);
+            return;
+        }
+    }
+    if (clusterNodeIsPrimary(myself) && !dbsHaveNoKeys()) {
+        addReplyError(c, "CLUSTER RESET can't be called with "
+                         "master nodes containing keys");
+        return;
+    }
+    sds cl = catClientInfoShortString(sdsempty(), c, server.hide_user_data_from_log);
+    serverLog(LL_NOTICE, "Cluster reset (user request from '%s').", cl);
+    sdsfree(cl);
+    clusterReset(hard);
+    addReply(c, shared.ok);
+}
+
 static int clusterLegacyHandleSpecialCommand(client *c) {
-    if (!strcasecmp(objectGetVal(c->argv[1]), "meet") && (c->argc == 4 || c->argc == 5)) {
-        /* CLUSTER MEET <ip> <port> [cport] */
-        long long port, cport;
-
-        if (getLongLongFromObject(c->argv[3], &port) != C_OK) {
-            addReplyErrorFormat(c, "Invalid base port specified: %s", (char *)objectGetVal(c->argv[3]));
-            return 1;
-        }
-        if (port <= 0 || port > 65535) {
-            addReplyErrorFormat(c, "Port number is out of range");
-            return 1;
-        }
-
-        if (c->argc == 5) {
-            if (getLongLongFromObject(c->argv[4], &cport) != C_OK) {
-                addReplyErrorFormat(c, "Invalid bus port specified: %s", (char *)objectGetVal(c->argv[4]));
-                return 1;
-            }
-        } else {
-            cport = port + CLUSTER_PORT_INCR;
-        }
-
-        if (cport <= 0 || cport > 65535) {
-            addReplyErrorFormat(c, "Cluster bus port number is out of range");
-            return 1;
-        }
-
-        if (clusterStartHandshake(objectGetVal(c->argv[2]), port, cport) == 0 && errno == EINVAL) {
-            addReplyErrorFormat(c, "Invalid node address specified: %s:%s", (char *)objectGetVal(c->argv[2]),
-                                (char *)objectGetVal(c->argv[3]));
-        } else {
-            sds client = catClientInfoShortString(sdsempty(), c, server.hide_user_data_from_log);
-            serverLog(LL_NOTICE, "Cluster meet %s:%lld (user request from '%s').", (char *)objectGetVal(c->argv[2]), port,
-                      client);
-            sdsfree(client);
-            addReply(c, shared.ok);
-        }
-    } else if (!strcasecmp(objectGetVal(c->argv[1]), "bumpepoch") && c->argc == 2) {
-        /* CLUSTER BUMPEPOCH */
-        int retval = clusterBumpConfigEpochWithoutConsensus();
-        sds reply = sdscatfmt(sdsempty(), "+%s %U\r\n", (retval == C_OK) ? "BUMPED" : "STILL",
-                              (unsigned long long)LEGACY_DATA(myself)->configEpoch);
-        addReplySds(c, reply);
-    } else if (!strcasecmp(objectGetVal(c->argv[1]), "forget") && c->argc == 3) {
+    if (!strcasecmp(objectGetVal(c->argv[1]), "forget") && c->argc == 3) {
         /* CLUSTER FORGET <NODE ID> */
         clusterNode *n = clusterLookupNode(objectGetVal(c->argv[2]), sdslen(objectGetVal(c->argv[2])));
         if (!n) {
@@ -7755,65 +7807,6 @@ static int clusterLegacyHandleSpecialCommand(client *c) {
             clusterSendMFStart(myself->replicaof);
         }
         sdsfree(client);
-        addReply(c, shared.ok);
-    } else if (!strcasecmp(objectGetVal(c->argv[1]), "set-config-epoch") && c->argc == 3) {
-        /* CLUSTER SET-CONFIG-EPOCH <epoch>
-         *
-         * The user is allowed to set the config epoch only when a node is
-         * totally fresh: no config epoch, no other known node, and so forth.
-         * This happens at cluster creation time to start with a cluster where
-         * every node has a different node ID, without to rely on the conflicts
-         * resolution system which is too slow when a big cluster is created. */
-        long long epoch;
-
-        if (getLongLongFromObjectOrReply(c, c->argv[2], &epoch, NULL) != C_OK) return 1;
-
-        if (epoch < 0) {
-            addReplyErrorFormat(c, "Invalid config epoch specified: %lld", epoch);
-        } else if (dictSize(server.cluster->nodes) > 1) {
-            addReplyError(c, "The user can assign a config epoch only when the "
-                             "node does not know any other node.");
-        } else if (LEGACY_DATA(myself)->configEpoch != 0) {
-            addReplyError(c, "Node config epoch is already non-zero");
-        } else {
-            LEGACY_DATA(myself)->configEpoch = epoch;
-            serverLog(LL_NOTICE, "configEpoch set to %llu via CLUSTER SET-CONFIG-EPOCH",
-                      (unsigned long long)LEGACY_DATA(myself)->configEpoch);
-
-            if (LEGACY_STATE()->currentEpoch < (uint64_t)epoch) LEGACY_STATE()->currentEpoch = epoch;
-            /* No need to fsync the config here since in the unlucky event
-             * of a failure to persist the config, the conflict resolution code
-             * will assign a unique config to this node. */
-            clusterDoBeforeSleep(CLUSTER_TODO_UPDATE_STATE | CLUSTER_TODO_SAVE_CONFIG);
-            addReply(c, shared.ok);
-        }
-    } else if (!strcasecmp(objectGetVal(c->argv[1]), "reset") && (c->argc == 2 || c->argc == 3)) {
-        /* CLUSTER RESET [SOFT|HARD] */
-        int hard = 0;
-
-        /* Parse soft/hard argument. Default is soft. */
-        if (c->argc == 3) {
-            if (!strcasecmp(objectGetVal(c->argv[2]), "hard")) {
-                hard = 1;
-            } else if (!strcasecmp(objectGetVal(c->argv[2]), "soft")) {
-                hard = 0;
-            } else {
-                addReplyErrorObject(c, shared.syntaxerr);
-                return 1;
-            }
-        }
-
-        /* Replicas can be reset while containing data, but not primary nodes
-         * that must be empty. */
-        if (clusterNodeIsPrimary(myself) && !dbsHaveNoKeys()) {
-            addReplyError(c, "CLUSTER RESET can't be called with "
-                             "master nodes containing keys");
-            return 1;
-        }
-        sds client = catClientInfoShortString(sdsempty(), c, server.hide_user_data_from_log);
-        serverLog(LL_NOTICE, "Cluster reset (user request from '%s').", client);
-        sdsfree(client);
-        clusterReset(hard);
         addReply(c, shared.ok);
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "links") && c->argc == 2) {
         /* CLUSTER LINKS */
@@ -8021,4 +8014,8 @@ clusterBusType clusterLegacyBus = {
     .debugExtendedHelp = clusterLegacyDebugExtendedHelp,
     .slotChange = clusterLegacySlotChange,
     .cleanupFailoverState = resetManualFailover,
+    .meet = clusterLegacyMeet,
+    .bumpEpoch = clusterLegacyBumpEpoch,
+    .setConfigEpoch = clusterLegacySetConfigEpoch,
+    .resetCluster = clusterLegacyResetCluster,
 };

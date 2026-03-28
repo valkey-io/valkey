@@ -7683,16 +7683,6 @@ static int clusterLegacyHandleSpecialCommand(client *c) {
         clusterSetPrimary(n, 1, 1);
         clusterDoBeforeSleep(CLUSTER_TODO_UPDATE_STATE | CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_BROADCAST_ALL);
         addReply(c, shared.ok);
-    } else if (!strcasecmp(objectGetVal(c->argv[1]), "count-failure-reports") && c->argc == 3) {
-        /* CLUSTER COUNT-FAILURE-REPORTS <NODE ID> */
-        clusterNode *n = clusterLookupNode(objectGetVal(c->argv[2]), sdslen(objectGetVal(c->argv[2])));
-
-        if (!n) {
-            addReplyErrorFormat(c, "Unknown node %s", (char *)objectGetVal(c->argv[2]));
-            return 1;
-        } else {
-            addReplyLongLong(c, clusterNodeFailureReportsCount(n));
-        }
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "failover") && (c->argc >= 2)) {
         /* CLUSTER FAILOVER [FORCE|TAKEOVER] [REPLICAID <NODE ID>]
          * REPLICAID is currently available only for internal so we won't
@@ -8027,6 +8017,7 @@ clusterBusType clusterLegacyBus = {
     .getConnectionsCount = clusterLegacyGetConnectionsCount,
     .resetStats = clusterLegacyResetStats,
     .appendInfoFields = clusterLegacyAppendInfoFields,
+    .getFailureReportsCount = clusterNodeFailureReportsCount,
     .handleSpecialCommand = clusterLegacyHandleSpecialCommand,
     .handleDebugCommand = clusterLegacyHandleDebugCommand,
     .extendedHelp = clusterLegacyExtendedHelp,

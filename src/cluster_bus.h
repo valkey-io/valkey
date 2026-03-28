@@ -44,6 +44,7 @@ typedef struct clusterBusType {
     unsigned long (*getConnectionsCount)(void);
     void (*resetStats)(void);
     sds (*appendInfoFields)(sds info);
+    int (*getFailureReportsCount)(clusterNode *node);
 
     /* Slot ownership changes — called from cluster commands and slot migration.
      * Assigns or unassigns slots specified by an array of slot ranges. If

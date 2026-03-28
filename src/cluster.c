@@ -1552,6 +1552,16 @@ void clusterCommand(client *c) {
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "cancelslotmigrations") && c->argc == 2) {
         /* CLUSTER CANCELSLOTMIGRATIONS */
         clusterCommandCancelSlotMigrations(c);
+    } else if (!strcasecmp(objectGetVal(c->argv[1]), "count-failure-reports") && c->argc == 3) {
+        /* CLUSTER COUNT-FAILURE-REPORTS <NODE ID> */
+        clusterNode *n = clusterLookupNode(objectGetVal(c->argv[2]),
+                                           sdslen(objectGetVal(c->argv[2])));
+        if (!n) {
+            addReplyErrorFormat(c, "Unknown node %s",
+                                (char *)objectGetVal(c->argv[2]));
+            return;
+        }
+        addReplyLongLong(c, clusterCurrentBus->getFailureReportsCount(n));
     } else if (!clusterCommandSpecial(c)) {
         addReplySubcommandSyntaxError(c);
         return;

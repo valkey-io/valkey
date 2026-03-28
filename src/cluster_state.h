@@ -98,10 +98,11 @@ void bitmapClearBit(unsigned char *bitmap, int pos);
 void setMigratingSlotDest(int slot, clusterNode *node);
 void setImportingSlotSource(int slot, clusterNode *node);
 void clusterCloseAllSlots(void);
-void removeAllNotOwnedShardChannelSubscriptions(void);
-void removeChannelsInSlot(unsigned int slot);
 int clusterNodeRemoveReplica(clusterNode *primary, clusterNode *replica);
 int clusterNodeAddReplica(clusterNode *primary, clusterNode *replica);
+int clusterCountNonFailingReplicas(clusterNode *n);
+int clusterPrimariesHaveReplicas(void);
+int clusterNodeClearSlotBit(clusterNode *n, int slot);
 void clusterRemoveNodeFromShard(clusterNode *node);
 void clusterAddNodeToShard(const char *shard_id, clusterNode *node);
 

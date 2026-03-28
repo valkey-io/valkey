@@ -2197,6 +2197,83 @@ void readwriteCommand(client *c) {
     addReply(c, shared.ok);
 }
 
+/* Remove all the keys in the specified hash slot.
+ * The number of removed items is returned. */
+/* Get the count of the channels for a given slot. */
+
+
+void removeChannelsInSlot(unsigned int slot) {
+    if (countChannelsInSlot(slot) == 0) return;
+
+    pubsubShardUnsubscribeAllChannelsInSlot(slot);
+}
+/* Remove all shard channel subscriptions not owned by the current shard. */
+void removeAllNotOwnedShardChannelSubscriptions(void) {
+    if (!kvstoreSize(server.pubsubshard_channels)) return;
+    clusterNode *myself = getMyClusterNode();
+    clusterNode *cur_primary = clusterNodeIsPrimary(myself) ? myself : myself->replicaof;
+    for (int j = 0; j < CLUSTER_SLOTS; j++) {
+        if (server.cluster->slots[j] != cur_primary) {
+            removeChannelsInSlot(j);
+        }
+    }
+}
+
+unsigned int countChannelsInSlot(unsigned int hashslot) {
+    return kvstoreHashtableSize(server.pubsubshard_channels, hashslot);
+}
+
+unsigned int delKeysInSlot(unsigned int hashslot, int lazy, bool propagate_del, bool send_del_event) {
+    if (!countKeysInSlot(hashslot)) return 0;
+
+    /* We may lose a slot during the pause. We need to track this
+     * state so that we don't assert in propagateNow(). */
+    server.server_del_keys_in_slot = 1;
+    unsigned int j = 0;
+    int before_execution_nesting = server.execution_nesting;
+
+    for (int i = 0; i < server.dbnum; i++) {
+        kvstoreHashtableIterator *kvs_di = NULL;
+        void *next;
+        serverDb *db = server.db[i];
+        if (db == NULL) continue;
+        kvs_di = kvstoreGetHashtableIterator(db->keys, hashslot, HASHTABLE_ITER_SAFE);
+        while (kvstoreHashtableIteratorNext(kvs_di, &next)) {
+            robj *valkey = next;
+            enterExecutionUnit(1, 0);
+            sds sdskey = objectGetKey(valkey);
+            robj *key = createStringObject(sdskey, sdslen(sdskey));
+            if (lazy) {
+                dbAsyncDelete(db, key);
+            } else {
+                dbSyncDelete(db, key);
+            }
+            // if is command, skip del propagate
+            if (propagate_del) propagateDeletion(db, key, lazy, hashslot);
+            signalModifiedKey(NULL, db, key);
+            if (send_del_event) {
+                /* In the `cluster flushslot` scenario, the keys are actually deleted so notify everyone. */
+                notifyKeyspaceEvent(NOTIFY_GENERIC, "del", key, db->id);
+            } else {
+                /* The keys are not actually logically deleted from the database, just moved to another node.
+                 * The modules needs to know that these keys are no longer available locally, so just send the
+                 * keyspace notification to the modules, but not to clients. */
+                moduleNotifyKeyspaceEvent(NOTIFY_GENERIC, "del", key, db->id);
+            }
+            exitExecutionUnit();
+            postExecutionUnitOperations();
+            decrRefCount(key);
+            j++;
+            server.dirty++;
+        }
+        kvstoreReleaseHashtableIterator(kvs_di);
+    }
+
+    server.server_del_keys_in_slot = 0;
+    serverAssert(server.execution_nesting == before_execution_nesting);
+    return j;
+}
+
 static void clusterCommandFlushslot(client *c) {
     int slot;
     int lazy = server.lazyfree_lazy_user_flush;

@@ -131,6 +131,9 @@ void deleteCachedResponseClient(client *recording_client);
 void clearCachedClusterSlotsResponse(void);
 unsigned int countKeysInSlotForDb(unsigned int hashslot, serverDb *db);
 unsigned int countKeysInSlot(unsigned int hashslot);
+unsigned int countChannelsInSlot(unsigned int hashslot);
+void removeChannelsInSlot(unsigned int slot);
+void removeAllNotOwnedShardChannelSubscriptions(void);
 int getSlotOrReply(client *c, robj *o);
 int getNodeDefaultReplicationPort(clusterNode *node);
 bool isAnySlotInManualImportingState(void);
@@ -161,8 +164,6 @@ unsigned int propagateSlotDeletionByKeys(unsigned int hashslot);
 void clusterUpdateState(void);
 void clusterSaveConfigOrDie(int do_fsync);
 int clusterSaveConfig(int do_fsync);
-int clusterDelSlot(int slot);
-int clusterAddSlot(clusterNode *n, int slot);
 int clusterBumpConfigEpochWithoutConsensus(void);
 void clusterDoBeforeSleep(int flags);
 

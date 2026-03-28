@@ -2447,49 +2447,6 @@ int clusterNodeFailureReportsCount(clusterNode *node) {
     return raxSize(LEGACY_DATA(node)->fail_reports);
 }
 
-static int clusterNodeNameComparator(const void *node1, const void *node2) {
-    return strncasecmp((*(clusterNode **)node1)->name, (*(clusterNode **)node2)->name, CLUSTER_NAMELEN);
-}
-
-int clusterNodeRemoveReplica(clusterNode *primary, clusterNode *replica) {
-    int j;
-
-    for (j = 0; j < primary->num_replicas; j++) {
-        if (primary->replicas[j] == replica) {
-            if ((j + 1) < primary->num_replicas) {
-                int remaining_replicas = (primary->num_replicas - j) - 1;
-                memmove(primary->replicas + j, primary->replicas + (j + 1),
-                        (sizeof(*primary->replicas) * remaining_replicas));
-            }
-            primary->num_replicas--;
-            if (primary->num_replicas == 0) primary->flags &= ~CLUSTER_NODE_MIGRATE_TO;
-            return C_OK;
-        }
-    }
-    return C_ERR;
-}
-
-int clusterNodeAddReplica(clusterNode *primary, clusterNode *replica) {
-    int j;
-
-    /* If it's already a replica, don't add it again. */
-    for (j = 0; j < primary->num_replicas; j++)
-        if (primary->replicas[j] == replica) return C_ERR;
-    primary->replicas = zrealloc(primary->replicas, sizeof(clusterNode *) * (primary->num_replicas + 1));
-    primary->replicas[primary->num_replicas] = replica;
-    primary->num_replicas++;
-    qsort(primary->replicas, primary->num_replicas, sizeof(clusterNode *), clusterNodeNameComparator);
-    primary->flags |= CLUSTER_NODE_MIGRATE_TO;
-    return C_OK;
-}
-
-int clusterCountNonFailingReplicas(clusterNode *n) {
-    int j, ok_replicas = 0;
-
-    for (j = 0; j < n->num_replicas; j++)
-        if (!nodeFailed(n->replicas[j])) ok_replicas++;
-    return ok_replicas;
-}
 
 /* Low level cleanup of the node structure. Only called by clusterDelNode(). */
 void freeClusterNode(clusterNode *n) {
@@ -6675,22 +6632,6 @@ mstime_t clusterComputeMfPauseEnd(void) {
  * -------------------------------------------------------------------------- */
 
 
-/* Return non-zero if there is at least one primary with replicas in the cluster.
- * Otherwise zero is returned. Used by clusterNodeSetSlotBit() to set the
- * MIGRATE_TO flag the when a primary gets the first slot. */
-int clusterPrimariesHaveReplicas(void) {
-    dictIterator di;
-    dictInitIterator(&di, server.cluster->nodes);
-    dictEntry *de;
-    while ((de = dictNext(&di)) != NULL) {
-        clusterNode *node = dictGetVal(de);
-
-        if (nodeIsReplica(node)) continue;
-        if (node->num_replicas) return 1;
-    }
-    return 0;
-}
-
 void clusterNodeSetSlotBit(clusterNode *n, int slot) {
     if (!bitmapTestBit(n->slots, slot)) {
         bitmapSetBit(n->slots, slot);
@@ -6710,16 +6651,6 @@ void clusterNodeSetSlotBit(clusterNode *n, int slot) {
          * See https://github.com/redis/redis/issues/3043 for more info. */
         if (n->numslots == 1 && clusterPrimariesHaveReplicas()) n->flags |= CLUSTER_NODE_MIGRATE_TO;
     }
-}
-
-/* Clear the slot bit and return the old value. */
-int clusterNodeClearSlotBit(clusterNode *n, int slot) {
-    int old = bitmapTestBit(n->slots, slot);
-    if (old) {
-        bitmapClearBit(n->slots, slot);
-        n->numslots--;
-    }
-    return old;
 }
 
 
@@ -7558,70 +7489,6 @@ static sds clusterLegacyAppendInfoFields(sds info) {
     return info;
 }
 
-
-void removeChannelsInSlot(unsigned int slot) {
-    if (countChannelsInSlot(slot) == 0) return;
-
-    pubsubShardUnsubscribeAllChannelsInSlot(slot);
-}
-
-/* Remove all the keys in the specified hash slot.
- * The number of removed items is returned. */
-unsigned int delKeysInSlot(unsigned int hashslot, int lazy, bool propagate_del, bool send_del_event) {
-    if (!countKeysInSlot(hashslot)) return 0;
-
-    /* We may lose a slot during the pause. We need to track this
-     * state so that we don't assert in propagateNow(). */
-    server.server_del_keys_in_slot = 1;
-    unsigned int j = 0;
-    int before_execution_nesting = server.execution_nesting;
-
-    for (int i = 0; i < server.dbnum; i++) {
-        kvstoreHashtableIterator *kvs_di = NULL;
-        void *next;
-        serverDb *db = server.db[i];
-        if (db == NULL) continue;
-        kvs_di = kvstoreGetHashtableIterator(db->keys, hashslot, HASHTABLE_ITER_SAFE);
-        while (kvstoreHashtableIteratorNext(kvs_di, &next)) {
-            robj *valkey = next;
-            enterExecutionUnit(1, 0);
-            sds sdskey = objectGetKey(valkey);
-            robj *key = createStringObject(sdskey, sdslen(sdskey));
-            if (lazy) {
-                dbAsyncDelete(db, key);
-            } else {
-                dbSyncDelete(db, key);
-            }
-            // if is command, skip del propagate
-            if (propagate_del) propagateDeletion(db, key, lazy, hashslot);
-            signalModifiedKey(NULL, db, key);
-            if (send_del_event) {
-                /* In the `cluster flushslot` scenario, the keys are actually deleted so notify everyone. */
-                notifyKeyspaceEvent(NOTIFY_GENERIC, "del", key, db->id);
-            } else {
-                /* The keys are not actually logically deleted from the database, just moved to another node.
-                 * The modules needs to know that these keys are no longer available locally, so just send the
-                 * keyspace notification to the modules, but not to clients. */
-                moduleNotifyKeyspaceEvent(NOTIFY_GENERIC, "del", key, db->id);
-            }
-            exitExecutionUnit();
-            postExecutionUnitOperations();
-            decrRefCount(key);
-            j++;
-            server.dirty++;
-        }
-        kvstoreReleaseHashtableIterator(kvs_di);
-    }
-
-    server.server_del_keys_in_slot = 0;
-    serverAssert(server.execution_nesting == before_execution_nesting);
-    return j;
-}
-
-/* Get the count of the channels for a given slot. */
-unsigned int countChannelsInSlot(unsigned int hashslot) {
-    return kvstoreHashtableSize(server.pubsubshard_channels, hashslot);
-}
 
 static mstime_t clusterLegacyManualFailoverTimeLimit(void) {
     return LEGACY_STATE()->mf_end;

@@ -343,14 +343,72 @@ void clusterCloseAllSlots(void) {
     dictEmpty(server.cluster->importing_slots_from, NULL);
 }
 
-/* Remove all shard channel subscriptions not owned by the current shard. */
-void removeAllNotOwnedShardChannelSubscriptions(void) {
-    if (!kvstoreSize(server.pubsubshard_channels)) return;
-    clusterNode *myself = getMyClusterNode();
-    clusterNode *cur_primary = clusterNodeIsPrimary(myself) ? myself : myself->replicaof;
-    for (int j = 0; j < CLUSTER_SLOTS; j++) {
-        if (server.cluster->slots[j] != cur_primary) {
-            removeChannelsInSlot(j);
+int clusterNodeNameComparator(const void *node1, const void *node2) {
+    return strncasecmp((*(clusterNode **)node1)->name, (*(clusterNode **)node2)->name, CLUSTER_NAMELEN);
+}
+
+int clusterNodeRemoveReplica(clusterNode *primary, clusterNode *replica) {
+    int j;
+
+    for (j = 0; j < primary->num_replicas; j++) {
+        if (primary->replicas[j] == replica) {
+            if ((j + 1) < primary->num_replicas) {
+                int remaining_replicas = (primary->num_replicas - j) - 1;
+                memmove(primary->replicas + j, primary->replicas + (j + 1),
+                        (sizeof(*primary->replicas) * remaining_replicas));
+            }
+            primary->num_replicas--;
+            if (primary->num_replicas == 0) primary->flags &= ~CLUSTER_NODE_MIGRATE_TO;
+            return C_OK;
         }
     }
+    return C_ERR;
+}
+
+int clusterNodeAddReplica(clusterNode *primary, clusterNode *replica) {
+    int j;
+
+    /* If it's already a replica, don't add it again. */
+    for (j = 0; j < primary->num_replicas; j++)
+        if (primary->replicas[j] == replica) return C_ERR;
+    primary->replicas = zrealloc(primary->replicas, sizeof(clusterNode *) * (primary->num_replicas + 1));
+    primary->replicas[primary->num_replicas] = replica;
+    primary->num_replicas++;
+    qsort(primary->replicas, primary->num_replicas, sizeof(clusterNode *), clusterNodeNameComparator);
+    primary->flags |= CLUSTER_NODE_MIGRATE_TO;
+    return C_OK;
+}
+
+int clusterCountNonFailingReplicas(clusterNode *n) {
+    int j, ok_replicas = 0;
+
+    for (j = 0; j < n->num_replicas; j++)
+        if (!nodeFailed(n->replicas[j])) ok_replicas++;
+    return ok_replicas;
+}
+
+/* Return non-zero if there is at least one primary with replicas in the cluster.
+ * Otherwise zero is returned. Used by clusterNodeSetSlotBit() to set the
+ * MIGRATE_TO flag the when a primary gets the first slot. */
+int clusterPrimariesHaveReplicas(void) {
+    dictIterator di;
+    dictInitIterator(&di, server.cluster->nodes);
+    dictEntry *de;
+    while ((de = dictNext(&di)) != NULL) {
+        clusterNode *node = dictGetVal(de);
+
+        if (nodeIsReplica(node)) continue;
+        if (node->num_replicas) return 1;
+    }
+    return 0;
+}
+
+/* Clear the slot bit and return the old value. */
+int clusterNodeClearSlotBit(clusterNode *n, int slot) {
+    int old = bitmapTestBit(n->slots, slot);
+    if (old) {
+        bitmapClearBit(n->slots, slot);
+        n->numslots--;
+    }
+    return old;
 }

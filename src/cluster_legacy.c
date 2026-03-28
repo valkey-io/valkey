@@ -491,7 +491,6 @@ void moduleCallClusterReceivers(const char *sender_id,
                                 const unsigned char *payload,
                                 uint32_t len);
 const char *clusterGetMessageTypeString(int type);
-void removeChannelsInSlot(unsigned int slot);
 unsigned int countChannelsInSlot(unsigned int hashslot);
 void clusterAddNodeToShard(const char *shard_id, clusterNode *node);
 void clusterRemoveNodeFromShard(clusterNode *node);
@@ -7032,17 +7031,6 @@ int verifyClusterConfigWithData(void) {
     }
     if (update_config) clusterSaveConfigOrDie(1);
     return C_OK;
-}
-
-/* Remove all the shard channel related information not owned by the current shard. */
-static inline void removeAllNotOwnedShardChannelSubscriptions(void) {
-    if (!kvstoreSize(server.pubsubshard_channels)) return;
-    clusterNode *cur_primary = clusterNodeIsPrimary(myself) ? myself : myself->replicaof;
-    for (int j = 0; j < CLUSTER_SLOTS; j++) {
-        if (server.cluster->slots[j] != cur_primary) {
-            removeChannelsInSlot(j);
-        }
-    }
 }
 
 /* -----------------------------------------------------------------------------

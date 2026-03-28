@@ -342,3 +342,15 @@ void clusterCloseAllSlots(void) {
     dictEmpty(server.cluster->migrating_slots_to, NULL);
     dictEmpty(server.cluster->importing_slots_from, NULL);
 }
+
+/* Remove all shard channel subscriptions not owned by the current shard. */
+void removeAllNotOwnedShardChannelSubscriptions(void) {
+    if (!kvstoreSize(server.pubsubshard_channels)) return;
+    clusterNode *myself = getMyClusterNode();
+    clusterNode *cur_primary = clusterNodeIsPrimary(myself) ? myself : myself->replicaof;
+    for (int j = 0; j < CLUSTER_SLOTS; j++) {
+        if (server.cluster->slots[j] != cur_primary) {
+            removeChannelsInSlot(j);
+        }
+    }
+}

@@ -98,5 +98,7 @@ void bitmapClearBit(unsigned char *bitmap, int pos);
 void setMigratingSlotDest(int slot, clusterNode *node);
 void setImportingSlotSource(int slot, clusterNode *node);
 void clusterCloseAllSlots(void);
+void removeAllNotOwnedShardChannelSubscriptions(void);
+void removeChannelsInSlot(unsigned int slot);
 
 #endif /* CLUSTER_STATE_H */

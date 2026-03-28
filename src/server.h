@@ -54,6 +54,7 @@
 #include <netinet/in.h>
 #include <sys/socket.h>
 #include <signal.h>
+#include <sys/resource.h>
 
 #ifdef HAVE_LIBSYSTEMD
 #include <systemd/sd-daemon.h>

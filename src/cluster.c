@@ -148,6 +148,42 @@ void clusterCleanupFailoverState(void) {
     clusterCurrentBus->cleanupFailoverState();
 }
 
+/* Set the specified node 'n' as primary for this node.
+ * If this node is currently a primary, it is turned into a replica.
+ * This function does not persist or propagate the change. Callers are
+ * responsible for saving the config and notifying the cluster (e.g. via
+ * clusterDoBeforeSleep or the cluster bus protocol). */
+void clusterSetPrimary(clusterNode *n, int closeSlots, int full_sync_required) {
+    clusterNode *myself = getMyClusterNode();
+    serverAssert(n != myself);
+    serverAssert(myself->numslots == 0);
+
+    if (clusterNodeIsPrimary(myself)) {
+        myself->flags &= ~(CLUSTER_NODE_PRIMARY | CLUSTER_NODE_MIGRATE_TO);
+        myself->flags |= CLUSTER_NODE_REPLICA;
+    } else {
+        if (myself->replicaof) clusterNodeRemoveReplica(myself->replicaof, myself);
+    }
+    if (closeSlots) clusterCloseAllSlots();
+    myself->replicaof = n;
+
+    /* Adopt the new primary's shard ID. */
+    if (memcmp(myself->shard_id, n->shard_id, CLUSTER_NAMELEN) != 0) {
+        clusterRemoveNodeFromShard(myself);
+        memcpy(myself->shard_id, n->shard_id, CLUSTER_NAMELEN);
+        clusterAddNodeToShard(n->shard_id, myself);
+    }
+
+    clusterNodeAddReplica(n, myself);
+    replicationSetPrimary(n->ip, getNodeDefaultReplicationPort(n), full_sync_required, true);
+    removeAllNotOwnedShardChannelSubscriptions();
+    clusterCleanupFailoverState();
+
+    /* Perform needed slot migration state transitions */
+    clusterUpdateSlotExportsOnOwnershipChange();
+    clusterUpdateSlotImportsOnOwnershipChange();
+}
+
 /* -----------------------------------------------------------------------------
  * Key space handling
  * -------------------------------------------------------------------------- */

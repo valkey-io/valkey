@@ -468,7 +468,6 @@ int clusterDelSlot(int slot);
 int clusterDelNodeSlots(clusterNode *node);
 void clusterMoveNodeSlots(clusterNode *from_node, clusterNode *to_node, int *slots, int *importing_slots, int *migrating_slots);
 void clusterNodeSetSlotBit(clusterNode *n, int slot);
-void clusterSetPrimary(clusterNode *n, int closeSlots, int full_sync_required);
 void clusterHandleReplicaFailover(void);
 void clusterHandleReplicaMigration(int max_replicas);
 int bitmapTestBit(unsigned char *bitmap, int pos);
@@ -7036,31 +7035,6 @@ int verifyClusterConfigWithData(void) {
 /* -----------------------------------------------------------------------------
  * REPLICA nodes handling
  * -------------------------------------------------------------------------- */
-
-/* Set the specified node 'n' as primary for this node.
- * If this node is currently a primary, it is turned into a replica. */
-void clusterSetPrimary(clusterNode *n, int closeSlots, int full_sync_required) {
-    serverAssert(n != myself);
-    serverAssert(myself->numslots == 0);
-
-    if (clusterNodeIsPrimary(myself)) {
-        myself->flags &= ~(CLUSTER_NODE_PRIMARY | CLUSTER_NODE_MIGRATE_TO);
-        myself->flags |= CLUSTER_NODE_REPLICA;
-    } else {
-        if (myself->replicaof) clusterNodeRemoveReplica(myself->replicaof, myself);
-    }
-    if (closeSlots) clusterCloseAllSlots();
-    myself->replicaof = n;
-    updateShardId(myself, n->shard_id);
-    clusterNodeAddReplica(n, myself);
-    replicationSetPrimary(n->ip, getNodeDefaultReplicationPort(n), full_sync_required, true);
-    removeAllNotOwnedShardChannelSubscriptions();
-    resetManualFailover();
-
-    /* Perform needed slot migration state transitions */
-    clusterUpdateSlotExportsOnOwnershipChange();
-    clusterUpdateSlotImportsOnOwnershipChange();
-}
 
 /* -----------------------------------------------------------------------------
  * Nodes to string representation functions.

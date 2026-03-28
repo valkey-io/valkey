@@ -57,6 +57,10 @@ typedef struct clusterBusType {
      * waiting for the consensus commit. */
     void (*slotChange)(slotRange *ranges, int numranges, clusterNode *target, void *ctx, void (*callback)(void *ctx, int success));
 
+    /* Clean up any protocol-specific failover state. Called when the node's
+     * role changes and any in-progress failover state is no longer relevant. */
+    void (*cleanupFailoverState)(void);
+
     /* Protocol-specific command handling — called from cluster.c, debug.c */
     int (*handleSpecialCommand)(struct client *c);
     int (*handleDebugCommand)(struct client *c);

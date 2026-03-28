@@ -6241,6 +6241,7 @@ void manualFailoverCanStart(void) {
  *
  * The function can be used both to initialize the manual failover state at
  * startup or to abort a manual failover in progress. */
+/* Reset manual and automatic failover state. */
 void resetManualFailover(void) {
     if (LEGACY_STATE()->mf_replica) {
         /* We were a primary failing over, so we paused clients and related actions.
@@ -6251,6 +6252,7 @@ void resetManualFailover(void) {
     LEGACY_STATE()->mf_can_start = 0;
     LEGACY_STATE()->mf_replica = NULL;
     LEGACY_STATE()->mf_primary_offset = -1;
+    LEGACY_STATE()->failover_auth_time = 0; /* Also reset automatic failover. */
 }
 
 /* If a manual failover timed out, abort it. */
@@ -7105,13 +7107,6 @@ static void clusterSetPrimary(clusterNode *n, int closeSlots, int full_sync_requ
     /* Perform needed slot migration state transitions */
     clusterUpdateSlotExportsOnOwnershipChange();
     clusterUpdateSlotImportsOnOwnershipChange();
-
-    if (LEGACY_STATE()->failover_auth_time) {
-        /* Since we have changed to a new primary node, the previously set
-         * failover_auth_time should no longer be used, whether it is in
-         * progress or timed out. */
-        LEGACY_STATE()->failover_auth_time = 0;
-    }
 }
 
 /* -----------------------------------------------------------------------------
@@ -8554,4 +8549,5 @@ clusterBusType clusterLegacyBus = {
     .extendedHelp = clusterLegacyExtendedHelp,
     .debugExtendedHelp = clusterLegacyDebugExtendedHelp,
     .slotChange = clusterLegacySlotChange,
+    .cleanupFailoverState = resetManualFailover,
 };

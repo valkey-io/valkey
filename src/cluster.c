@@ -143,6 +143,10 @@ void clusterSlotChange(slotRange *ranges, int numranges, clusterNode *target, vo
                                   target, ctx, callback);
 }
 
+void clusterCleanupFailoverState(void) {
+    clusterCurrentBus->cleanupFailoverState();
+}
+
 /* -----------------------------------------------------------------------------
  * Key space handling
  * -------------------------------------------------------------------------- */

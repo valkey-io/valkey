@@ -168,6 +168,7 @@ void clusterDoBeforeSleep(int flags);
 /* Change slot ownerships. See clusterBusType.slotChange. */
 void clusterSlotChange(slotRange *ranges, int numranges, clusterNode *target,
                        void *ctx, void (*callback)(void *ctx, int success));
+void clusterCleanupFailoverState(void);
 /* TODO: The following functions wrap legacy protocol details (CLUSTER_TODO_*
  * flags, manual failover timing). They should be replaced with protocol-agnostic
  * abstractions or moved behind the clusterBusType vtable when slot migration

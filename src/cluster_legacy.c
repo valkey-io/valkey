@@ -468,7 +468,7 @@ int clusterDelSlot(int slot);
 int clusterDelNodeSlots(clusterNode *node);
 void clusterMoveNodeSlots(clusterNode *from_node, clusterNode *to_node, int *slots, int *importing_slots, int *migrating_slots);
 void clusterNodeSetSlotBit(clusterNode *n, int slot);
-static void clusterSetPrimary(clusterNode *n, int closeSlots, int full_sync_required);
+void clusterSetPrimary(clusterNode *n, int closeSlots, int full_sync_required);
 void clusterHandleReplicaFailover(void);
 void clusterHandleReplicaMigration(int max_replicas);
 int bitmapTestBit(unsigned char *bitmap, int pos);
@@ -477,7 +477,6 @@ void bitmapClearBit(unsigned char *bitmap, int pos);
 void clusterDoBeforeSleep(int flags);
 void clusterSendUpdate(clusterLink *link, clusterNode *node);
 void resetManualFailover(void);
-void clusterCloseAllSlots(void);
 void clusterSetNodeAsPrimary(clusterNode *n);
 void clusterDelNode(clusterNode *delnode);
 sds representClusterNodeFlags(sds ci, uint16_t flags);
@@ -700,33 +699,6 @@ static void clusterNodeIterReset(ClusterNodeIterator *iter) {
         dictResetIterator(&iter->di);
     } else if (iter->type == ITER_NODE) {
         iter->node = NULL;
-    }
-}
-
-
-static void setMigratingSlotDest(int slot, clusterNode *node) {
-    dictEntry *de = dictFind(server.cluster->migrating_slots_to, (void *)(intptr_t)slot);
-    if (node == NULL) {
-        if (de) dictDelete(server.cluster->migrating_slots_to, (void *)(intptr_t)slot);
-        return;
-    }
-    if (de) {
-        dictSetVal(server.cluster->migrating_slots_to, de, node);
-    } else {
-        dictAdd(server.cluster->migrating_slots_to, (void *)(intptr_t)slot, node);
-    }
-}
-
-static void setImportingSlotSource(int slot, clusterNode *node) {
-    dictEntry *de = dictFind(server.cluster->importing_slots_from, (void *)(intptr_t)slot);
-    if (node == NULL) {
-        if (de) dictDelete(server.cluster->importing_slots_from, (void *)(intptr_t)slot);
-        return;
-    }
-    if (de) {
-        dictSetVal(server.cluster->importing_slots_from, de, node);
-    } else {
-        dictAdd(server.cluster->importing_slots_from, (void *)(intptr_t)slot, node);
     }
 }
 
@@ -6849,13 +6821,6 @@ void clusterMoveNodeSlots(clusterNode *from_node, clusterNode *to_node, int *slo
     if (migrating_slots) *migrating_slots = migrating_processed;
 }
 
-/* Clear the migrating / importing state for all the slots.
- * This is useful at initialization and when turning a primary into replica. */
-void clusterCloseAllSlots(void) {
-    dictEmpty(server.cluster->migrating_slots_to, NULL);
-    dictEmpty(server.cluster->importing_slots_from, NULL);
-}
-
 /* -----------------------------------------------------------------------------
  * Cluster state evaluation function
  * -------------------------------------------------------------------------- */
@@ -7086,7 +7051,7 @@ static inline void removeAllNotOwnedShardChannelSubscriptions(void) {
 
 /* Set the specified node 'n' as primary for this node.
  * If this node is currently a primary, it is turned into a replica. */
-static void clusterSetPrimary(clusterNode *n, int closeSlots, int full_sync_required) {
+void clusterSetPrimary(clusterNode *n, int closeSlots, int full_sync_required) {
     serverAssert(n != myself);
     serverAssert(myself->numslots == 0);
 
@@ -7747,291 +7712,6 @@ static const char **clusterLegacyDebugExtendedHelp(void) {
     return help;
 }
 
-/* clusterParseSetSlotCommand validates the arguments of the CLUSTER SETSLOT command,
- * extracts the target slot number (slot_out), and determines the target node (node_out)
- * if applicable. It also calculates a timeout value (timeout_out) based on an optional
- * timeout argument. If provided, the timeout is added to the current time to obtain an
- * absolute timestamp; if omitted, the default timeout CLUSTER_OPERATION_TIMEOUT is used;
- * if set to 0, it indicates no timeout. The function returns 1 if successful, and 0
- * otherwise, after sending an error message to the client. */
-int clusterParseSetSlotCommand(client *c, int *slot_out, clusterNode **node_out, mstime_t *timeout_out) {
-    int slot = -1;
-    clusterNode *n = NULL;
-    mstime_t timeout = commandTimeSnapshot() + CLUSTER_OPERATION_TIMEOUT;
-    int optarg_pos = 0;
-
-    /* Allow primaries to replicate "CLUSTER SETSLOT" */
-    if (!c->flag.primary && nodeIsReplica(myself)) {
-        addReplyError(c, "Please use SETSLOT only with masters.");
-        return 0;
-    }
-
-    if (clusterIsAnySlotImporting()) {
-        addReplyError(c, "Slot import in progress.");
-        return 0;
-    }
-    if (clusterIsAnySlotExporting()) {
-        addReplyError(c, "Slot export in progress.");
-        return 0;
-    }
-
-    /* If 'myself' is a replica, 'c' must be the primary client. */
-    serverAssert(!nodeIsReplica(myself) || c == server.primary);
-
-    if ((slot = getSlotOrReply(c, c->argv[2])) == -1) return 0;
-
-    if (!strcasecmp(objectGetVal(c->argv[3]), "migrating") && c->argc >= 5) {
-        /* CLUSTER SETSLOT <SLOT> MIGRATING <NODE> */
-        if (nodeIsPrimary(myself) && server.cluster->slots[slot] != myself) {
-            addReplyErrorFormat(c, "I'm not the owner of hash slot %u", slot);
-            return 0;
-        }
-        n = clusterLookupNode(objectGetVal(c->argv[4]), sdslen(objectGetVal(c->argv[4])));
-        if (n == NULL) {
-            addReplyErrorFormat(c, "I don't know about node %s", (char *)objectGetVal(c->argv[4]));
-            return 0;
-        }
-        if (nodeIsReplica(n)) {
-            addReplyError(c, "Target node is not a master");
-            return 0;
-        }
-        if (c->argc > 5) optarg_pos = 5;
-    } else if (!strcasecmp(objectGetVal(c->argv[3]), "importing") && c->argc >= 5) {
-        /* CLUSTER SETSLOT <SLOT> IMPORTING <NODE> */
-        if (server.cluster->slots[slot] == myself) {
-            addReplyErrorFormat(c, "I'm already the owner of hash slot %u", slot);
-            return 0;
-        }
-        n = clusterLookupNode(objectGetVal(c->argv[4]), sdslen(objectGetVal(c->argv[4])));
-        if (n == NULL) {
-            addReplyErrorFormat(c, "I don't know about node %s", (char *)objectGetVal(c->argv[4]));
-            return 0;
-        }
-        if (nodeIsReplica(n)) {
-            addReplyError(c, "Target node is not a master");
-            return 0;
-        }
-        if (c->argc > 5) optarg_pos = 5;
-    } else if (!strcasecmp(objectGetVal(c->argv[3]), "stable") && c->argc >= 4) {
-        /* CLUSTER SETSLOT <SLOT> STABLE */
-        if (c->argc > 4) optarg_pos = 4;
-    } else if (!strcasecmp(objectGetVal(c->argv[3]), "node") && c->argc >= 5) {
-        /* CLUSTER SETSLOT <SLOT> NODE <NODE ID> */
-        n = clusterLookupNode(objectGetVal(c->argv[4]), sdslen(objectGetVal(c->argv[4])));
-        if (!n) {
-            addReplyErrorFormat(c, "Unknown node %s", (char *)objectGetVal(c->argv[4]));
-            return 0;
-        }
-        if (nodeIsReplica(n)) {
-            addReplyError(c, "Target node is not a master");
-            return 0;
-        }
-        /* If this hash slot was served by 'myself' before to switch
-         * make sure there are no longer local keys for this hash slot. */
-        if (server.cluster->slots[slot] == myself && n != myself) {
-            if (countKeysInSlot(slot) != 0) {
-                addReplyErrorFormat(c,
-                                    "Can't assign hashslot %d to a different node "
-                                    "while I still hold keys for this hash slot.",
-                                    slot);
-                return 0;
-            }
-        }
-        if (c->argc > 5) optarg_pos = 5;
-    } else {
-        addReplyError(c, "Invalid CLUSTER SETSLOT action or number of arguments. Try CLUSTER HELP");
-        return 0;
-    }
-
-    /* Process optional arguments */
-    for (int i = optarg_pos; i < c->argc; i++) {
-        if (!strcasecmp(objectGetVal(c->argv[i]), "timeout")) {
-            if (i + 1 >= c->argc) {
-                addReplyError(c, "Missing timeout value");
-                return 0;
-            }
-            if (getTimeoutFromObjectOrReply(c, c->argv[i + 1], &timeout, UNIT_MILLISECONDS) != C_OK) return 0;
-        }
-    }
-
-    *slot_out = slot;
-    *node_out = n;
-    *timeout_out = timeout;
-    return 1;
-}
-
-void clusterCommandSetSlot(client *c) {
-    int slot;
-    mstime_t timeout_ms;
-    clusterNode *n;
-
-    if (!clusterParseSetSlotCommand(c, &slot, &n, &timeout_ms)) return;
-
-    /* Enhance cluster topology change resilience against primary failures by
-     * replicating SETSLOT before execution.
-     *
-     * Cluster topology changes such slot ownership and migrating states must
-     * be replicated to replicas before applying them to the primary. This
-     * guarantees that after a command is successfully executed, the new state
-     * won't be lost due to a primary node failure. The following example
-     * illustrates how a cluster state can be lost during slot ownership
-     * finalization:
-     *
-     * When finalizing the slot, the target primary node B might send a cluster
-     * PONG to the source primary node A before the SETSLOT command is replicated
-     * to replica node B'. If primary node B crashes at this point, B' will be in
-     * the importing state and the slot will have no owner.
-     *
-     * To mitigate this issue, the following order needs to be enforced for slot
-     * migration finalization such that the replicas finalize the slot ownership
-     * before the primary:
-     *
-     * 1. Client C issues SETSLOT n NODE B against node B.
-     * 2. Primary B replicates `SETSLOT n NODE B` to all of its replicas (e.g., B', B'').
-     * 3. Upon replication completion, primary B executes `SETSLOT n NODE B` and
-     *    returns success to client C.
-     * 4. The following steps can happen in parallel:
-     *   a. Client C issues `SETSLOT n NODE B` against primary A.
-     *   b. Primary B gossips its new slot ownership to the cluster (including A, A', etc.).
-     *
-     * This ensures that all replicas have the latest topology information, enabling
-     * a reliable slot ownership transfer even if the primary node went down during
-     * the process. */
-    if (nodeIsPrimary(myself) && myself->num_replicas != 0 && !c->flag.replication_done) {
-        /* Iterate through the list of replicas to check if there are any running
-         * version 7.2 or older. Replicas running on these versions do
-         * not support the CLUSTER SETSLOT command on replicas. If such a replica
-         * is found, we should skip the replication and fall back to the old
-         * non-replicated behavior.*/
-        listIter li;
-        listNode *ln;
-        int num_eligible_replicas = 0;
-        listRewind(server.replicas, &li);
-        while ((ln = listNext(&li))) {
-            client *r = ln->value;
-
-            /* We think that when the command comes in, the primary only needs to
-             * wait for the online replicas. The admin can easily check if there
-             * are replicas that are down for an extended period of time. If they
-             * decide to move forward anyways, we should not block it. If a replica
-             * failed right before the replication and was not included in the
-             * replication, it would also unlikely win the election.
-             *
-             * And 0x702ff is 7.2.255, we only support new versions in this case. */
-            if (r->repl_data->repl_state == REPLICA_STATE_ONLINE && r->repl_data->replica_version > 0x702ff) {
-                num_eligible_replicas++;
-            }
-        }
-
-        if (num_eligible_replicas != 0) {
-            forceCommandPropagation(c, PROPAGATE_REPL);
-            /* We are a primary and this is the first time we see this `SETSLOT`
-             * command. Force-replicate the command to all of our replicas
-             * first and only on success will we handle the command.
-             * Note that
-             * 1. All replicas are expected to ack the replication within the given timeout
-             * 2. The repl offset target is set to the primary's current repl offset + 1.
-             *    There is no concern of partial replication because replicas always
-             *    ack the repl offset at the command boundary. */
-            blockClientForReplicaAck(c, timeout_ms, server.primary_repl_offset + 1, num_eligible_replicas, 0);
-            /* Mark client as pending command for execution after replication to replicas. */
-            c->flag.pending_command = 1;
-            replicationRequestAckFromReplicas();
-            return;
-        }
-    }
-
-    /* Slot states have been updated on the compatible replicas (if any).
-     * Now execute the command on the primary. */
-    if (!strcasecmp(objectGetVal(c->argv[3]), "migrating")) {
-        serverLog(LL_NOTICE, "Migrating slot %d to node %.40s (%s)", slot, n->name, humanNodename(n));
-        setMigratingSlotDest(slot, n);
-    } else if (!strcasecmp(objectGetVal(c->argv[3]), "importing")) {
-        serverLog(LL_NOTICE, "Importing slot %d from node %.40s (%s)", slot, n->name, humanNodename(n));
-        setImportingSlotSource(slot, n);
-    } else if (!strcasecmp(objectGetVal(c->argv[3]), "stable")) {
-        /* CLUSTER SETSLOT <SLOT> STABLE */
-        serverLog(LL_NOTICE, "Marking slot %d stable", slot);
-        setImportingSlotSource(slot, NULL);
-        setMigratingSlotDest(slot, NULL);
-    } else if (!strcasecmp(objectGetVal(c->argv[3]), "node")) {
-        /* CLUSTER SETSLOT <SLOT> NODE <NODE ID> */
-        serverLog(LL_NOTICE, "Assigning slot %d to node %.40s (%s) in shard %.40s", slot, n->name, humanNodename(n),
-                  n->shard_id);
-
-        /* If this slot is in migrating status but we have no keys
-         * for it assigning the slot to another node will clear
-         * the migrating status. */
-        if (countKeysInSlot(slot) == 0 && getMigratingSlotDest(slot)) {
-            setMigratingSlotDest(slot, NULL);
-        }
-
-        clusterNode *my_primary = clusterNodeGetPrimary(myself);
-        int slot_was_mine = server.cluster->slots[slot] == my_primary;
-        clusterDelSlot(slot);
-        clusterAddSlot(n, slot);
-        int shard_is_empty = my_primary->numslots == 0;
-
-        /* If replica migration is allowed, check if the primary of this shard
-         * loses its last slot and the shard becomes empty. In this case, we
-         * should turn into a replica of the new primary. */
-        if (server.cluster_allow_replica_migration && slot_was_mine && shard_is_empty) {
-            serverAssert(n != my_primary);
-            serverLog(LL_NOTICE,
-                      "Lost my last slot during slot migration. Reconfiguring myself "
-                      "as a replica of %.40s (%s) in shard %.40s",
-                      n->name, humanNodename(n), n->shard_id);
-            /* `c` is the primary client if `myself` is a replica, prevent it
-             * from being freed by clusterSetPrimary. */
-            if (nodeIsReplica(myself)) protectClient(c);
-            /* We are migrating to a different shard that has a completely different
-             * replication history, so a full sync is required. */
-            clusterSetPrimary(n, 1, 1);
-            if (nodeIsReplica(myself)) unprotectClient(c);
-            clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_UPDATE_STATE | CLUSTER_TODO_FSYNC_CONFIG |
-                                 CLUSTER_TODO_BROADCAST_ALL);
-        }
-
-        /* If replica migration is not allowed, check if the primary of this shard
-         * loses its last slot and the shard becomes empty. In this case, we will
-         * print the exact same log as during the gossip process. */
-        if (!server.cluster_allow_replica_migration && nodeIsPrimary(myself) && slot_was_mine && shard_is_empty) {
-            serverAssert(n != my_primary);
-            serverLog(LL_NOTICE,
-                      "My last slot was migrated to node %.40s (%s) in shard %.40s. I am now an empty primary.",
-                      n->name, humanNodename(n), n->shard_id);
-        }
-
-        /* If this node or this node's primary was importing this slot,
-         * assigning the slot to itself also clears the importing status. */
-        if ((n == myself || n == myself->replicaof) && getImportingSlotSource(slot)) {
-            setImportingSlotSource(slot, NULL);
-
-            /* Only primary broadcasts the updates */
-            if (n == myself) {
-                /* This slot was manually migrated, set this node configEpoch
-                 * to a new epoch so that the new version can be propagated
-                 * by the cluster.
-                 *
-                 * Note that if this ever results in a collision with another
-                 * node getting the same configEpoch, for example because a
-                 * failover happens at the same time we close the slot, the
-                 * configEpoch collision resolution will fix it assigning
-                 * a different epoch to each node. */
-                if (clusterBumpConfigEpochWithoutConsensus() == C_OK) {
-                    serverLog(LL_NOTICE, "ConfigEpoch updated after importing slot %d", slot);
-                }
-                /* After importing this slot, let the other nodes know as
-                 * soon as possible. */
-                clusterDoBeforeSleep(CLUSTER_TODO_BROADCAST_ALL);
-            }
-        }
-    }
-
-    clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_UPDATE_STATE);
-    addReply(c, shared.ok);
-}
-
 static int clusterLegacyHandleSpecialCommand(client *c) {
     if (!strcasecmp(objectGetVal(c->argv[1]), "meet") && (c->argc == 4 || c->argc == 5)) {
         /* CLUSTER MEET <ip> <port> [cport] */
@@ -8070,12 +7750,6 @@ static int clusterLegacyHandleSpecialCommand(client *c) {
             sdsfree(client);
             addReply(c, shared.ok);
         }
-    } else if (!strcasecmp(objectGetVal(c->argv[1]), "setslot") && c->argc >= 4) {
-        /* SETSLOT 10 MIGRATING <node ID> */
-        /* SETSLOT 10 IMPORTING <node ID> */
-        /* SETSLOT 10 STABLE */
-        /* SETSLOT 10 NODE <node ID> */
-        clusterCommandSetSlot(c);
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "bumpepoch") && c->argc == 2) {
         /* CLUSTER BUMPEPOCH */
         int retval = clusterBumpConfigEpochWithoutConsensus();

@@ -301,3 +301,44 @@ void clusterRemoveNodeFromShard(clusterNode *node) {
     }
     sdsfree(s);
 }
+
+/* -----------------------------------------------------------------------------
+ * Slot migration state
+ * -------------------------------------------------------------------------- */
+
+void setMigratingSlotDest(int slot, clusterNode *node) {
+    dictEntry *de = dictFind(server.cluster->migrating_slots_to,
+                             (void *)(intptr_t)slot);
+    if (node == NULL) {
+        if (de) dictDelete(server.cluster->migrating_slots_to,
+                           (void *)(intptr_t)slot);
+        return;
+    }
+    if (de) {
+        dictSetVal(server.cluster->migrating_slots_to, de, node);
+    } else {
+        dictAdd(server.cluster->migrating_slots_to,
+                (void *)(intptr_t)slot, node);
+    }
+}
+
+void setImportingSlotSource(int slot, clusterNode *node) {
+    dictEntry *de = dictFind(server.cluster->importing_slots_from,
+                             (void *)(intptr_t)slot);
+    if (node == NULL) {
+        if (de) dictDelete(server.cluster->importing_slots_from,
+                           (void *)(intptr_t)slot);
+        return;
+    }
+    if (de) {
+        dictSetVal(server.cluster->importing_slots_from, de, node);
+    } else {
+        dictAdd(server.cluster->importing_slots_from,
+                (void *)(intptr_t)slot, node);
+    }
+}
+
+void clusterCloseAllSlots(void) {
+    dictEmpty(server.cluster->migrating_slots_to, NULL);
+    dictEmpty(server.cluster->importing_slots_from, NULL);
+}

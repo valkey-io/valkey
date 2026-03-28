@@ -94,4 +94,9 @@ int bitmapTestBit(unsigned char *bitmap, int pos);
 void bitmapSetBit(unsigned char *bitmap, int pos);
 void bitmapClearBit(unsigned char *bitmap, int pos);
 
+/* Slot migration state. */
+void setMigratingSlotDest(int slot, clusterNode *node);
+void setImportingSlotSource(int slot, clusterNode *node);
+void clusterCloseAllSlots(void);
+
 #endif /* CLUSTER_STATE_H */

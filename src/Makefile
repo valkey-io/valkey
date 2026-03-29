@@ -390,6 +390,9 @@ all: $(REDIS_SERVER_NAME) $(REDIS_SENTINEL_NAME) $(REDIS_CLI_NAME) $(REDIS_BENCH
 	@echo "Hint: It's a good idea to run 'make test' ;)"
 	@echo ""
 
+all-with-unit-tests: all
+.PHONY: all-with-unit-tests
+
 Makefile.dep:
 	-$(REDIS_CC) -MM $(ALL_SOURCES) > Makefile.dep 2> /dev/null || true
 

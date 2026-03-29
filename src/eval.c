@@ -190,9 +190,9 @@ void evalRelease(int async) {
  * Called when a scripting engine is unregistered to avoid dangling engine
  * pointers in the eval script cache. */
 void evalRemoveScriptsOfEngine(scriptingEngine *engine, const char *engine_name) {
+    UNUSED(engine_name);
     dictIterator *iter = dictGetSafeIterator(evalCtx.scripts);
     dictEntry *entry;
-    size_t scripts_removed = 0;
     while ((entry = dictNext(iter))) {
         evalScript *es = dictGetVal(entry);
         if (es->engine == engine) {
@@ -202,13 +202,9 @@ void evalRemoveScriptsOfEngine(scriptingEngine *engine, const char *engine_name)
                 listDelNode(evalCtx.scripts_lru_list, es->node);
             }
             dictDelete(evalCtx.scripts, sha);
-            ++scripts_removed;
         }
     }
     dictReleaseIterator(iter);
-    serverLog(LL_NOTICE,
-              "Successfully removed %zu cached scripts associated with engine '%s'",
-              scripts_removed, engine_name);
 }
 
 void evalReset(int async) {

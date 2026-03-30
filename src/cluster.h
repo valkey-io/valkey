@@ -89,7 +89,6 @@ const char **clusterDebugCommandExtendedHelp(void);
 int clusterCommandSpecial(client *c);
 
 int clusterAllowFailoverCmd(client *c);
-void clusterPromoteSelfToPrimary(void);
 mstime_t clusterManualFailoverTimeLimit(void);
 
 void clusterCommandSlots(client *c);

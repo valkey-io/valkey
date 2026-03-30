@@ -7716,12 +7716,6 @@ static int clusterLegacyHandleSpecialCommand(client *c) {
     return 1;
 }
 
-static void clusterLegacyPromoteSelfToPrimary(void) {
-    replicationUnsetPrimary();
-    /* Upon becoming primary, we need to ensure that data is deleted in unowned slots. */
-    verifyClusterConfigWithData();
-}
-
 int detectAndUpdateCachedNodeHealth(void) {
     dictIterator di;
     dictInitIterator(&di, server.cluster->nodes);
@@ -7844,7 +7838,6 @@ clusterBusType clusterLegacyBus = {
     .updateMyselfAvailabilityZone = clusterLegacyUpdateMyselfAvailabilityZone,
     .propagatePublish = clusterLegacyPropagatePublish,
     .sendModuleMessage = clusterLegacySendModuleMessageToTarget,
-    .promoteSelfToPrimary = clusterLegacyPromoteSelfToPrimary,
     .manualFailoverTimeLimit = clusterLegacyManualFailoverTimeLimit,
     .getConnectionsCount = clusterLegacyGetConnectionsCount,
     .resetStats = clusterLegacyResetStats,

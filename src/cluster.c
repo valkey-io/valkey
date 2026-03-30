@@ -112,9 +112,6 @@ int clusterAllowFailoverCmd(client *c) {
                      "Use CLUSTER FAILOVER command instead.");
     return 0;
 }
-void clusterPromoteSelfToPrimary(void) {
-    clusterCurrentBus->promoteSelfToPrimary();
-}
 mstime_t clusterManualFailoverTimeLimit(void) {
     return clusterCurrentBus->manualFailoverTimeLimit();
 }

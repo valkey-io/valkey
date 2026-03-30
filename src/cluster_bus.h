@@ -36,7 +36,6 @@ typedef struct clusterBusType {
     int (*sendModuleMessage)(const char *target, uint64_t module_id, uint8_t type, const char *payload, uint32_t len);
 
     /* Failover — called from replication.c */
-    void (*promoteSelfToPrimary)(void);
     long long (*manualFailoverTimeLimit)(void);
 
     /* Info and stats — called from server.c, networking.c, config.c */

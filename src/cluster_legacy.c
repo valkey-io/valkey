@@ -39,6 +39,7 @@
 #include "server.h"
 #include "cluster.h"
 #include "cluster_state.h"
+#include "cluster_link.h"
 
 #define CLUSTER_PORT_INCR 10000 /* Cluster port = baseport + PORT_INCR */
 #define CLUSTER_MF_PAUSE_MULT 2 /* Primary pause manual failover mult. */
@@ -131,27 +132,6 @@ typedef struct clusterLegacyState {
 } clusterLegacyState;
 
 /* Wire protocol structs (private to legacy implementation). */
-/* clusterLink encapsulates everything needed to talk with a remote node. */
-typedef struct clusterLink {
-    mstime_t ctime;                        /* Link creation time */
-    connection *conn;                      /* Connection to remote node */
-    list *send_msg_queue;                  /* List of messages to be sent */
-    size_t head_msg_send_offset;           /* Number of bytes already sent of message at head of queue */
-    unsigned long long send_msg_queue_mem; /* Memory in bytes used by message queue */
-    char *rcvbuf;                          /* Packet reception buffer */
-    size_t rcvbuf_len;                     /* Used size of rcvbuf */
-    size_t rcvbuf_alloc;                   /* Allocated size of rcvbuf */
-    clusterNode *node;                     /* Node related to this link. Initialized to NULL when unknown */
-    int inbound;                           /* 1 if this link is an inbound link accepted from the related node */
-    int flags;                             /* CLUSTER_LINK_... */
-} clusterLink;
-
-/* Cluster link flags and macros. */
-#define CLUSTER_LINK_EXTENSIONS_SUPPORTED (1 << 0) /* This link supports extensions. */
-
-#define linkSupportsExtension(link) ((link)->flags & CLUSTER_LINK_EXTENSIONS_SUPPORTED)
-
-
 /* Cluster messages header */
 
 /* Message types.
@@ -523,10 +503,10 @@ int auxAnnounceClientTlsPortPresent(clusterNode *n);
 int auxAnnounceClientTlsPortPresent(clusterNode *n);
 static void clusterBuildMessageHdrLight(clusterMsgLight *hdr, int type, size_t msglen);
 static void clusterBuildMessageHdr(clusterMsg *hdr, int type, size_t msglen);
-void freeClusterLink(clusterLink *link);
 sds clusterEncodeOpenSlotsAuxField(int rdbflags);
 int clusterDecodeOpenSlotsAuxField(int rdbflags, sds s);
 static int nodeExceedsHandshakeTimeout(clusterNode *node, mstime_t now);
+void clusterCommandFlushslot(client *c);
 int clusterAllReplicasThinkPrimaryIsFail(void);
 
 static inline clusterMsg *toClusterMsg(void *buf) {
@@ -557,16 +537,10 @@ static inline int defaultClientPort(void) {
 
 /* Return node name if the link has the node associated to it
  * or else return "<unknown>". */
-static inline char *clusterLinkGetNodeName(clusterLink *link) {
-    return link->node ? link->node->name : "<unknown>";
-}
 
 
 /* Return human assigned node name if the link has the node associated to it
  * or else return "<unknown>". */
-static inline char *clusterLinkGetHumanNodeName(clusterLink *link) {
-    return link->node ? humanNodename(link->node) : "<unknown>";
-}
 
 #define isSlotUnclaimed(slot) \
     (server.cluster->slots[slot] == NULL || bitmapTestBit(LEGACY_STATE()->owner_not_claiming_slot, slot))
@@ -574,7 +548,6 @@ static inline char *clusterLinkGetHumanNodeName(clusterLink *link) {
 #define CLUSTER_SLOT_WORDS (CLUSTER_SLOTS / 64)
 #define SLOT_WORD_OFFSET(w) ((w) << 3)
 
-#define RCVBUF_INIT_LEN 1024
 #define RCVBUF_MIN_READ_LEN 14
 static_assert(offsetof(clusterMsg, type) + sizeof(uint16_t) == RCVBUF_MIN_READ_LEN,
               "Incorrect length to read to identify type");
@@ -945,24 +918,14 @@ int auxAnnounceClientTlsPortPresent(clusterNode *n) {
     return n->announce_client_tls_port > 0 && n->announce_client_tls_port < 65536;
 }
 
-/* clusterLink send queue blocks */
-typedef struct {
-    size_t totlen; /* Total length of this block including the message */
-    int refcount;  /* Number of cluster link send msg queues containing the message */
-    union {
-        clusterMsg msg;
-        clusterMsgLight msg_light;
-    } data[];
-} clusterMsgSendBlock;
-
 /* Helper function to extract a normal message from a send block. */
-static clusterMsgLight *getLightMessageFromSendBlock(clusterMsgSendBlock *msgblock) {
-    return &msgblock->data[0].msg_light;
+static clusterMsgLight *getLightMessageFromSendBlock(clusterMsgSendBlock *block) {
+    return (clusterMsgLight *)block->data;
 }
 
 /* Helper function to extract a light message from a send block. */
-static clusterMsg *getMessageFromSendBlock(clusterMsgSendBlock *msgblock) {
-    return &msgblock->data[0].msg;
+static clusterMsg *getMessageFromSendBlock(clusterMsgSendBlock *block) {
+    return (clusterMsg *)block->data;
 }
 
 /* -----------------------------------------------------------------------------
@@ -2046,10 +2009,11 @@ void clusterReset(int hard) {
  * CLUSTER communication link
  * -------------------------------------------------------------------------- */
 clusterMsgSendBlock *createClusterMsgSendBlock(int type, uint32_t msglen) {
-    uint32_t blocklen = msglen + offsetof(clusterMsgSendBlock, data);
+    uint32_t blocklen = sizeof(clusterMsgSendBlock) + msglen;
     clusterMsgSendBlock *msgblock = zcalloc(blocklen);
     msgblock->refcount = 1;
     msgblock->totlen = blocklen;
+    msgblock->len = msglen;
     server.stat_cluster_links_memory += blocklen;
     if (IS_LIGHT_MESSAGE(type)) {
         clusterBuildMessageHdrLight(getLightMessageFromSendBlock(msgblock), type, msglen);
@@ -2059,98 +2023,6 @@ clusterMsgSendBlock *createClusterMsgSendBlock(int type, uint32_t msglen) {
     return msgblock;
 }
 
-static void clusterMsgSendBlockDecrRefCount(void *node) {
-    clusterMsgSendBlock *msgblock = (clusterMsgSendBlock *)node;
-    msgblock->refcount--;
-    serverAssert(msgblock->refcount >= 0);
-    if (msgblock->refcount == 0) {
-        server.stat_cluster_links_memory -= msgblock->totlen;
-        zfree(msgblock);
-    }
-}
-
-clusterLink *createClusterLink(clusterNode *node) {
-    clusterLink *link = zmalloc(sizeof(*link));
-    link->ctime = mstime();
-    link->send_msg_queue = listCreate();
-    listSetFreeMethod(link->send_msg_queue, clusterMsgSendBlockDecrRefCount);
-    link->head_msg_send_offset = 0;
-    link->send_msg_queue_mem = sizeof(list);
-    link->rcvbuf = zmalloc(link->rcvbuf_alloc = RCVBUF_INIT_LEN);
-    link->rcvbuf_len = 0;
-    server.stat_cluster_links_memory += link->rcvbuf_alloc + link->send_msg_queue_mem;
-    link->conn = NULL;
-    link->node = node;
-    /* Related node can only possibly be known at link creation time if this is an outbound link */
-    link->inbound = (node == NULL);
-    if (!link->inbound) {
-        node->link = link;
-    }
-    link->flags = 0;
-    return link;
-}
-
-/* Free a cluster link, but does not free the associated node of course.
- * This function will just make sure that the original node associated
- * with this link will have the 'link' field set to NULL. */
-void freeClusterLink(clusterLink *link) {
-    serverAssert(link != NULL);
-    serverLog(LL_DEBUG, "Freeing cluster link for node: %.40s:%s (%s)",
-              clusterLinkGetNodeName(link),
-              link->inbound ? "inbound" : "outbound",
-              clusterLinkGetHumanNodeName(link));
-
-    if (link->conn) {
-        connClose(link->conn);
-        link->conn = NULL;
-    }
-    server.stat_cluster_links_memory -= sizeof(list) + listLength(link->send_msg_queue) * sizeof(listNode);
-    listRelease(link->send_msg_queue);
-    server.stat_cluster_links_memory -= link->rcvbuf_alloc;
-    zfree(link->rcvbuf);
-    if (link->node) {
-        if (link->node->link == link) {
-            serverAssert(!link->inbound);
-            link->node->link = NULL;
-        } else if (link->node->inbound_link == link) {
-            serverAssert(link->inbound);
-            link->node->inbound_link = NULL;
-            link->node->inbound_link_freed_time = mstime();
-        }
-    }
-    zfree(link);
-}
-
-void setClusterNodeToInboundClusterLink(clusterNode *node, clusterLink *link) {
-    serverAssert(!link->node);
-    serverAssert(link->inbound);
-    if (node->inbound_link) {
-        /* A peer may disconnect and then reconnect with us, and it's not guaranteed that
-         * we would always process the disconnection of the existing inbound link before
-         * accepting a new existing inbound link. Therefore, it's possible to have more than
-         * one inbound link from the same node at the same time. Our cleanup logic assumes
-         * a one to one relationship between nodes and inbound links, so we need to kill
-         * one of the links. The existing link is more likely the outdated one, but it's
-         * possible the other node may need to open another link. */
-        serverLog(LL_DEBUG, "Replacing inbound link fd %d from node %.40s with fd %d", node->inbound_link->conn->fd,
-                  node->name, link->conn->fd);
-        freeClusterLink(node->inbound_link);
-    }
-    serverAssert(!node->inbound_link);
-    node->inbound_link = link;
-    link->node = node;
-    if (server.verbosity <= LL_VERBOSE) {
-        char ip[NET_IP_STR_LEN];
-        int port;
-        if (connAddrPeerName(link->conn, ip, sizeof(ip), &port) != -1) {
-            serverLog(LL_VERBOSE, "Bound cluster node %.40s (%s) to connection of client %s:%d",
-                      node->name, humanNodename(node), ip, port);
-        } else {
-            serverLog(LL_VERBOSE, "Error resolving the inbound connection address of node %.40s (%s)",
-                      node->name, humanNodename(node));
-        }
-    }
-}
 
 static void clusterConnAcceptHandler(connection *conn) {
     clusterLink *link;
@@ -4666,50 +4538,8 @@ int clusterProcessPacket(clusterLink *link) {
 
    Instead if the node is a temporary node used to accept a query, we
    completely free the node on error. */
-void handleLinkIOError(clusterLink *link) {
-    freeClusterLink(link);
-}
 
 /* Send the messages queued for the link. */
-void clusterWriteHandler(connection *conn) {
-    clusterLink *link = connGetPrivateData(conn);
-    ssize_t nwritten;
-    size_t totwritten = 0;
-
-    while (totwritten < NET_MAX_WRITES_PER_EVENT && listLength(link->send_msg_queue) > 0) {
-        listNode *head = listFirst(link->send_msg_queue);
-        clusterMsgSendBlock *msgblock = (clusterMsgSendBlock *)head->value;
-        clusterMsg *msg = getMessageFromSendBlock(msgblock);
-        size_t msg_offset = link->head_msg_send_offset;
-        size_t msg_len = ntohl(msg->totlen);
-
-        nwritten = connWrite(conn, (char *)msg + msg_offset, msg_len - msg_offset);
-        if (nwritten <= 0) {
-            serverLog(LL_DEBUG, "I/O error writing to node link: %s",
-                      (nwritten == -1) ? connGetLastError(conn) : "short write");
-            handleLinkIOError(link);
-            return;
-        }
-        if (msg_offset + nwritten < msg_len) {
-            /* If full message wasn't written, record the offset
-             * and continue sending from this point next time */
-            link->head_msg_send_offset += nwritten;
-            return;
-        }
-        serverAssert((msg_offset + nwritten) == msg_len);
-        link->head_msg_send_offset = 0;
-
-        /* Delete the node and update our memory tracking */
-        uint32_t blocklen = msgblock->totlen;
-        listDelNode(link->send_msg_queue, head);
-        server.stat_cluster_links_memory -= sizeof(listNode);
-        link->send_msg_queue_mem -= sizeof(listNode) + blocklen;
-
-        totwritten += nwritten;
-    }
-
-    if (listLength(link->send_msg_queue) == 0) connSetWriteHandler(link->conn, NULL);
-}
 
 /* A connect handler that gets called when a connection to another node
  * gets established.
@@ -4802,7 +4632,7 @@ void clusterReadHandler(connection *conn) {
                                   "on the Cluster bus from %s:%d",
                                   ip, port);
                     }
-                    handleLinkIOError(link);
+                    freeClusterLink(link);
                     return;
                 }
             }
@@ -4820,7 +4650,7 @@ void clusterReadHandler(connection *conn) {
                       link->inbound ? "inbound" : "outbound",
                       clusterLinkGetHumanNodeName(link),
                       (nread == 0) ? "connection closed" : connGetLastError(conn));
-            handleLinkIOError(link);
+            freeClusterLink(link);
             return;
         } else {
             /* Read data and recast the pointer to the new buffer. */
@@ -4867,6 +4697,10 @@ void clusterSendMessage(clusterLink *link, clusterMsgSendBlock *msgblock) {
     }
     if (listLength(link->send_msg_queue) == 0 && getMessageFromSendBlock(msgblock)->totlen != 0)
         connSetWriteHandlerWithBarrier(link->conn, clusterWriteHandler, 1);
+
+    /* Update the send block data length to the actual message length, which
+     * may be smaller than the initially allocated size. */
+    msgblock->len = ntohl(getMessageFromSendBlock(msgblock)->totlen);
 
     listAddNodeTail(link->send_msg_queue, msgblock);
     msgblock->refcount++;
@@ -5435,7 +5269,7 @@ void clusterRequestFailoverAuth(void) {
     /* If this is a manual failover, set the CLUSTERMSG_FLAG0_FORCEACK bit
      * in the header to communicate the nodes receiving the message that
      * they should authorized the failover even if the primary is working. */
-    if (LEGACY_STATE()->mf_end) msgblock->data[0].msg.mflags[0] |= CLUSTERMSG_FLAG0_FORCEACK;
+    if (LEGACY_STATE()->mf_end) getMessageFromSendBlock(msgblock)->mflags[0] |= CLUSTERMSG_FLAG0_FORCEACK;
 
     /* If this is an automatic failover and if myself is the best ranked replica,
      * set the CLUSTERMSG_FLAG0_FORCEACK bit in the header as well.
@@ -5443,7 +5277,7 @@ void clusterRequestFailoverAuth(void) {
      * In this case, we hope that other primary nodes will not refuse to vote because
      * they did not receive the FAIL message in time. */
     if (LEGACY_STATE()->mf_end == 0 && myselfIsBestRankedReplica()) {
-        msgblock->data[0].msg.mflags[0] |= CLUSTERMSG_FLAG0_FORCEACK;
+        getMessageFromSendBlock(msgblock)->mflags[0] |= CLUSTERMSG_FLAG0_FORCEACK;
     }
 
     clusterBroadcastMessage(msgblock);
@@ -7196,67 +7030,9 @@ sds clusterGenNodesDescription(client *c, int filter, int tls_primary) {
 
 /* Add to the output buffer of the given client the description of the given cluster link.
  * The description is a map with each entry being an attribute of the link. */
-void addReplyClusterLinkDescription(client *c, clusterLink *link) {
-    addReplyMapLen(c, 6);
-
-    addReplyBulkCString(c, "direction");
-    addReplyBulkCString(c, link->inbound ? "from" : "to");
-
-    /* addReplyClusterLinkDescription is only called for links that have been
-     * associated with nodes. The association is always bi-directional, so
-     * in addReplyClusterLinkDescription, link->node should never be NULL. */
-    serverAssert(link->node);
-    sds node_name = sdsnewlen(link->node->name, CLUSTER_NAMELEN);
-    addReplyBulkCString(c, "node");
-    addReplyBulkCString(c, node_name);
-    sdsfree(node_name);
-
-    addReplyBulkCString(c, "create-time");
-    addReplyLongLong(c, link->ctime);
-
-    char events[3], *p;
-    p = events;
-    if (link->conn) {
-        if (connHasReadHandler(link->conn)) *p++ = 'r';
-        if (connHasWriteHandler(link->conn)) *p++ = 'w';
-    }
-    *p = '\0';
-    addReplyBulkCString(c, "events");
-    addReplyBulkCString(c, events);
-
-    addReplyBulkCString(c, "send-buffer-allocated");
-    addReplyLongLong(c, link->send_msg_queue_mem);
-
-    addReplyBulkCString(c, "send-buffer-used");
-    addReplyLongLong(c, link->send_msg_queue_mem);
-}
 
 /* Add to the output buffer of the given client an array of cluster link descriptions,
  * with array entry being a description of a single current cluster link. */
-void addReplyClusterLinksDescription(client *c) {
-    dictIterator *di;
-    dictEntry *de;
-    void *arraylen_ptr = NULL;
-    int num_links = 0;
-
-    arraylen_ptr = addReplyDeferredLen(c);
-
-    di = dictGetSafeIterator(server.cluster->nodes);
-    while ((de = dictNext(di)) != NULL) {
-        clusterNode *node = dictGetVal(de);
-        if (node->link) {
-            num_links++;
-            addReplyClusterLinkDescription(c, node->link);
-        }
-        if (node->inbound_link) {
-            num_links++;
-            addReplyClusterLinkDescription(c, node->inbound_link);
-        }
-    }
-    dictReleaseIterator(di);
-
-    setDeferredArrayLen(c, arraylen_ptr, num_links);
-}
 
 /* -----------------------------------------------------------------------------
  * CLUSTER command

@@ -4477,6 +4477,7 @@ void clusterWriteHandler(connection *conn) {
 
         nwritten = connWrite(conn, (char *)msg + msg_offset, msg_len - msg_offset);
         if (nwritten <= 0) {
+            if (nwritten == -1 && connGetState(conn) == CONN_STATE_CONNECTED) return; /* equivalent to EAGAIN */
             serverLog(LL_DEBUG, "I/O error writing to node link: %s",
                       (nwritten == -1) ? connGetLastError(conn) : "short write");
             handleLinkIOError(link);

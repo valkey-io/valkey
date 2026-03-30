@@ -41,6 +41,7 @@
 #include "cluster.h"
 #include "cluster_bus.h"
 #include "cluster_state.h"
+#include "cluster_link.h"
 #include "cluster_slot_stats.h"
 #include "cluster_migrateslots.h"
 #include "module.h"
@@ -127,14 +128,11 @@ void resetClusterStats(void) {
 sds genClusterInfoString(sds info) {
     return clusterCurrentBus->appendInfoFields(info);
 }
-int clusterCommandSpecial(client *c) {
-    return clusterCurrentBus->handleSpecialCommand(c);
-}
 int handleDebugClusterCommand(client *c) {
-    return clusterCurrentBus->handleDebugCommand(c);
+    return clusterLinkDebugCommand(c);
 }
 const char **clusterDebugCommandExtendedHelp(void) {
-    return clusterCurrentBus->debugExtendedHelp();
+    return clusterLinkDebugHelp();
 }
 
 /* Change slot ownerships. */
@@ -1739,7 +1737,10 @@ void clusterCommand(client *c) {
             return;
         }
         addReplyLongLong(c, clusterCurrentBus->getFailureReportsCount(n));
-    } else if (!clusterCommandSpecial(c)) {
+    } else if (!strcasecmp(objectGetVal(c->argv[1]), "links") && c->argc == 2) {
+        /* CLUSTER LINKS */
+        clusterCommandLinks(c);
+    } else {
         addReplySubcommandSyntaxError(c);
         return;
     }

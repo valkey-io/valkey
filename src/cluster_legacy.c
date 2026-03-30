@@ -7270,51 +7270,6 @@ static mstime_t clusterLegacyManualFailoverTimeLimit(void) {
     return LEGACY_STATE()->mf_end;
 }
 
-static int clusterLegacyHandleDebugCommand(client *c) {
-    if (c->argc != 5 || strcasecmp(objectGetVal(c->argv[1]), "CLUSTERLINK") || strcasecmp(objectGetVal(c->argv[2]), "KILL")) {
-        return 0;
-    }
-
-    if (!server.cluster_enabled) {
-        addReplyError(c, "Debug option only available for cluster mode enabled setup!");
-        return 1;
-    }
-
-    /* Find the node. */
-    clusterNode *n = clusterLookupNode(objectGetVal(c->argv[4]), sdslen(objectGetVal(c->argv[4])));
-    if (!n) {
-        addReplyErrorFormat(c, "Unknown node %s", (char *)objectGetVal(c->argv[4]));
-        return 1;
-    }
-    if (n == server.cluster->myself) {
-        addReplyErrorFormat(c, "Cannot free cluster link(s) to myself");
-        return 1;
-    }
-
-    /* Terminate the link based on the direction or all. */
-    if (!strcasecmp(objectGetVal(c->argv[3]), "from")) {
-        if (n->inbound_link) freeClusterLink(n->inbound_link);
-    } else if (!strcasecmp(objectGetVal(c->argv[3]), "to")) {
-        if (n->link) freeClusterLink(n->link);
-    } else if (!strcasecmp(objectGetVal(c->argv[3]), "all")) {
-        if (n->link) freeClusterLink(n->link);
-        if (n->inbound_link) freeClusterLink(n->inbound_link);
-    } else {
-        addReplyErrorFormat(c, "Unknown direction %s", (char *)objectGetVal(c->argv[3]));
-    }
-    addReply(c, shared.ok);
-
-    return 1;
-}
-
-
-static const char **clusterLegacyDebugExtendedHelp(void) {
-    static const char *help[] = {"CLUSTERLINK KILL <to|from|all> <node-id>",
-                                 "    Kills the link based on the direction to/from (both) with the provided node.",
-                                 NULL};
-
-    return help;
-}
 
 static void clusterLegacySetReplicaOf(clusterNode *primary) {
     if (primary) {
@@ -7481,16 +7436,6 @@ static void clusterLegacyFailover(client *c, int force, int takeover) {
     addReply(c, shared.ok);
 }
 
-static int clusterLegacyHandleSpecialCommand(client *c) {
-    if (!strcasecmp(objectGetVal(c->argv[1]), "links") && c->argc == 2) {
-        /* CLUSTER LINKS */
-        addReplyClusterLinksDescription(c);
-    } else {
-        return 0;
-    }
-
-    return 1;
-}
 
 int detectAndUpdateCachedNodeHealth(void) {
     dictIterator di;
@@ -7610,9 +7555,6 @@ clusterBusType clusterLegacyBus = {
     .resetStats = clusterLegacyResetStats,
     .appendInfoFields = clusterLegacyAppendInfoFields,
     .getFailureReportsCount = clusterNodeFailureReportsCount,
-    .handleSpecialCommand = clusterLegacyHandleSpecialCommand,
-    .handleDebugCommand = clusterLegacyHandleDebugCommand,
-    .debugExtendedHelp = clusterLegacyDebugExtendedHelp,
     .slotChange = clusterLegacySlotChange,
     .cleanupFailoverState = resetManualFailover,
     .forgetNode = clusterLegacyForgetNode,

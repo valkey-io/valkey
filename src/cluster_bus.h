@@ -68,11 +68,6 @@ typedef struct clusterBusType {
     void (*bumpEpoch)(client *c);
     void (*setConfigEpoch)(client *c);
     void (*resetCluster)(client *c);
-
-    /* Protocol-specific command handling — called from cluster.c, debug.c */
-    int (*handleSpecialCommand)(struct client *c);
-    int (*handleDebugCommand)(struct client *c);
-    const char **(*debugExtendedHelp)(void);
 } clusterBusType;
 
 extern clusterBusType *clusterCurrentBus;

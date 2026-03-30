@@ -47,6 +47,8 @@ char *clusterLinkGetNodeName(clusterLink *link);
 char *clusterLinkGetHumanNodeName(clusterLink *link);
 
 struct client;
-void addReplyClusterLinksDescription(struct client *c);
+void clusterCommandLinks(struct client *c);
+int clusterLinkDebugCommand(struct client *c);
+const char **clusterLinkDebugHelp(void);
 
 #endif /* CLUSTER_LINK_H */

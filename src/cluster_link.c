@@ -186,7 +186,7 @@ static void addReplyClusterLinkDescription(client *c, clusterLink *link) {
     addReplyLongLong(c, link->send_msg_queue_mem);
 }
 
-void addReplyClusterLinksDescription(client *c) {
+static void addReplyClusterLinksDescription(client *c) {
     dictIterator *di;
     dictEntry *de;
     void *arraylen_ptr = NULL;
@@ -209,4 +209,58 @@ void addReplyClusterLinksDescription(client *c) {
     dictReleaseIterator(di);
 
     setDeferredArrayLen(c, arraylen_ptr, num_links);
+}
+
+void clusterCommandLinks(client *c) {
+    addReplyClusterLinksDescription(c);
+}
+
+int clusterLinkDebugCommand(client *c) {
+    if (c->argc != 5 ||
+        strcasecmp(objectGetVal(c->argv[1]), "CLUSTERLINK") ||
+        strcasecmp(objectGetVal(c->argv[2]), "KILL")) {
+        return 0;
+    }
+
+    if (!server.cluster_enabled) {
+        addReplyError(c,
+                      "Debug option only available for cluster mode "
+                      "enabled setup!");
+        return 1;
+    }
+
+    clusterNode *n = clusterLookupNode(objectGetVal(c->argv[4]),
+                                       sdslen(objectGetVal(c->argv[4])));
+    if (!n) {
+        addReplyErrorFormat(c, "Unknown node %s",
+                            (char *)objectGetVal(c->argv[4]));
+        return 1;
+    }
+    if (n == server.cluster->myself) {
+        addReplyErrorFormat(c, "Cannot free cluster link(s) to myself");
+        return 1;
+    }
+
+    if (!strcasecmp(objectGetVal(c->argv[3]), "from")) {
+        if (n->inbound_link) freeClusterLink(n->inbound_link);
+    } else if (!strcasecmp(objectGetVal(c->argv[3]), "to")) {
+        if (n->link) freeClusterLink(n->link);
+    } else if (!strcasecmp(objectGetVal(c->argv[3]), "all")) {
+        if (n->link) freeClusterLink(n->link);
+        if (n->inbound_link) freeClusterLink(n->inbound_link);
+    } else {
+        addReplyErrorFormat(c, "Unknown direction %s",
+                            (char *)objectGetVal(c->argv[3]));
+    }
+    addReply(c, shared.ok);
+    return 1;
+}
+
+const char **clusterLinkDebugHelp(void) {
+    static const char *help[] = {
+        "CLUSTERLINK KILL <to|from|all> <node-id>",
+        "    Kills the link based on the direction to/from (both) "
+        "with the provided node.",
+        NULL};
+    return help;
 }

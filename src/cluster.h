@@ -85,8 +85,6 @@ sds genClusterInfoString(sds info);
 /* handle implementation specific debug cluster commands. Return 1 if handled, 0 otherwise. */
 int handleDebugClusterCommand(client *c);
 const char **clusterDebugCommandExtendedHelp(void);
-/* handle implementation specific cluster commands. Return 1 if handled, 0 otherwise. */
-int clusterCommandSpecial(client *c);
 
 int clusterAllowFailoverCmd(client *c);
 mstime_t clusterManualFailoverTimeLimit(void);

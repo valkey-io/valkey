@@ -1445,7 +1445,7 @@ bool isImportSlotMigrationJob(slotMigrationJob *job);
  * CLIENT_TYPE_PUBSUB -> Client subscribed to Pub/Sub channels
  * CLIENT_TYPE_PRIMARY -> The client representing our replication primary.
  */
-static inline int getClientType(client *c) {
+static inline __attribute__((always_inline)) int getClientType(client *c) {
     if (unlikely(c->flag.primary)) return CLIENT_TYPE_PRIMARY;
     /* Even though MONITOR clients are marked as replicas, we
      * want the expose them as normal clients. */

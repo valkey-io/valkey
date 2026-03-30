@@ -97,7 +97,7 @@ TEST_F(EntryTest, entryCreate) {
 }
 
 /**
- * Test entryUpdate with various combinations of value and expiry changes:
+ * Test entryUpdate with various combinations of value and expiry changes (Test will only run when jemalloc is used):
  * 1. Update only the value (keeping embedded)
  * 2. Update only the expiry (keeping embedded)
  * 3. Update both value and expiry (keeping embedded)
@@ -110,6 +110,9 @@ TEST_F(EntryTest, entryCreate) {
  * 10. Update entry to exactly the same allocation size
  */
 TEST_F(EntryTest, entryUpdate) {
+#ifndef USE_JEMALLOC
+    GTEST_SKIP() << "Test requires jemalloc";
+#endif
     // Create embedded entry
     sds value1 = sdsnew(SHORT_VALUE);
     sds field = sdsnew(SHORT_FIELD);

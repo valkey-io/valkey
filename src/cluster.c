@@ -1567,6 +1567,30 @@ void clusterCommand(client *c) {
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "reset") && (c->argc == 2 || c->argc == 3)) {
         /* CLUSTER RESET [SOFT|HARD] */
         clusterCurrentBus->resetCluster(c);
+    } else if (!strcasecmp(objectGetVal(c->argv[1]), "forget") && c->argc == 3) {
+        /* CLUSTER FORGET <NODE ID> */
+        const char *node_id = objectGetVal(c->argv[2]);
+        size_t id_len = sdslen(objectGetVal(c->argv[2]));
+        clusterNode *n = clusterLookupNode(node_id, id_len);
+        clusterNode *myself = getMyClusterNode();
+        if (n == myself) {
+            addReplyError(c, "I tried hard but I can't forget myself...");
+            return;
+        }
+        if (n && nodeIsReplica(myself) && myself->replicaof == n) {
+            addReplyError(c, "Can't forget my master!");
+            return;
+        }
+        if (!clusterCurrentBus->forgetNode(node_id, id_len)) {
+            addReplyErrorFormat(c, "Unknown node %s", node_id);
+            return;
+        }
+        sds cl = catClientInfoShortString(sdsempty(), c,
+                                          server.hide_user_data_from_log);
+        serverLog(LL_NOTICE, "Cluster forget %s (user request from '%s').",
+                  node_id, cl);
+        sdsfree(cl);
+        addReply(c, shared.ok);
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "count-failure-reports") && c->argc == 3) {
         /* CLUSTER COUNT-FAILURE-REPORTS <NODE ID> */
         clusterNode *n = clusterLookupNode(objectGetVal(c->argv[2]),

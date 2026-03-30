@@ -7540,6 +7540,19 @@ static const char **clusterLegacyDebugExtendedHelp(void) {
     return help;
 }
 
+static int clusterLegacyForgetNode(const char *node_id, size_t id_len) {
+    clusterNode *n = clusterLookupNode(node_id, id_len);
+    if (!n) {
+        if (clusterBlacklistExists((char *)node_id, id_len))
+            return 1; /* Already forgotten. */
+        return 0;     /* Unknown node. */
+    }
+    clusterBlacklistAddNode(n);
+    clusterDelNode(n);
+    clusterDoBeforeSleep(CLUSTER_TODO_UPDATE_STATE | CLUSTER_TODO_SAVE_CONFIG);
+    return 1;
+}
+
 static void clusterLegacyMeet(client *c) {
     /* CLUSTER MEET <ip> <port> [cport] */
     long long port, cport;
@@ -7636,32 +7649,7 @@ static void clusterLegacyResetCluster(client *c) {
 }
 
 static int clusterLegacyHandleSpecialCommand(client *c) {
-    if (!strcasecmp(objectGetVal(c->argv[1]), "forget") && c->argc == 3) {
-        /* CLUSTER FORGET <NODE ID> */
-        clusterNode *n = clusterLookupNode(objectGetVal(c->argv[2]), sdslen(objectGetVal(c->argv[2])));
-        if (!n) {
-            if (clusterBlacklistExists((char *)objectGetVal(c->argv[2]), sdslen(objectGetVal(c->argv[2]))))
-                /* Already forgotten. The deletion may have been gossipped by
-                 * another node, so we pretend it succeeded. */
-                addReply(c, shared.ok);
-            else
-                addReplyErrorFormat(c, "Unknown node %s", (char *)objectGetVal(c->argv[2]));
-            return 1;
-        } else if (n == myself) {
-            addReplyError(c, "I tried hard but I can't forget myself...");
-            return 1;
-        } else if (nodeIsReplica(myself) && myself->replicaof == n) {
-            addReplyError(c, "Can't forget my master!");
-            return 1;
-        }
-        sds client = catClientInfoShortString(sdsempty(), c, server.hide_user_data_from_log);
-        serverLog(LL_NOTICE, "Cluster forget %s (user request from '%s').", (char *)objectGetVal(c->argv[2]), client);
-        sdsfree(client);
-        clusterBlacklistAddNode(n);
-        clusterDelNode(n);
-        clusterDoBeforeSleep(CLUSTER_TODO_UPDATE_STATE | CLUSTER_TODO_SAVE_CONFIG);
-        addReply(c, shared.ok);
-    } else if (!strcasecmp(objectGetVal(c->argv[1]), "replicate") && (c->argc == 3 || c->argc == 4)) {
+    if (!strcasecmp(objectGetVal(c->argv[1]), "replicate") && (c->argc == 3 || c->argc == 4)) {
         /* CLUSTER REPLICATE (<NODE ID> | NO ONE)*/
         if (c->argc == 4) {
             /* CLUSTER REPLICATE NO ONE */
@@ -8014,6 +8002,7 @@ clusterBusType clusterLegacyBus = {
     .debugExtendedHelp = clusterLegacyDebugExtendedHelp,
     .slotChange = clusterLegacySlotChange,
     .cleanupFailoverState = resetManualFailover,
+    .forgetNode = clusterLegacyForgetNode,
     .meet = clusterLegacyMeet,
     .bumpEpoch = clusterLegacyBumpEpoch,
     .setConfigEpoch = clusterLegacySetConfigEpoch,

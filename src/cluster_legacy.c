@@ -7716,52 +7716,6 @@ static int clusterLegacyHandleSpecialCommand(client *c) {
     return 1;
 }
 
-static const char **clusterLegacyExtendedHelp(void) {
-    static const char *help[] = {
-        "ADDSLOTS <slot> [<slot> ...]",
-        "    Assign slots to current node.",
-        "ADDSLOTSRANGE <start slot> <end slot> [<start slot> <end slot> ...]",
-        "    Assign slots which are between <start-slot> and <end-slot> to current node.",
-        "BUMPEPOCH",
-        "    Advance the cluster config epoch.",
-        "COUNT-FAILURE-REPORTS <node-id>",
-        "    Return number of failure reports for <node-id>.",
-        "DELSLOTS <slot> [<slot> ...]",
-        "    Delete slots information from current node.",
-        "DELSLOTSRANGE <start slot> <end slot> [<start slot> <end slot> ...]",
-        "    Delete slots information which are between <start-slot> and <end-slot> from current node.",
-        "FAILOVER [FORCE|TAKEOVER]",
-        "    Promote current replica node to being a master.",
-        "FORGET <node-id>",
-        "    Remove a node from the cluster.",
-        "FLUSHSLOTS",
-        "    Delete current node own slots information.",
-        "MEET <ip> <port> [<bus-port>]",
-        "    Connect nodes into a working cluster.",
-        "REPLICATE <node-id>",
-        "    Configure current node as replica to <node-id>.",
-        "RESET [HARD|SOFT]",
-        "    Reset current node (default: soft).",
-        "SET-CONFIG-EPOCH <epoch>",
-        "    Set config epoch of current node.",
-        "SETSLOT <slot> (IMPORTING <node-id>|MIGRATING <node-id>|STABLE|NODE <node-id>)",
-        "    Set slot state.",
-        "SAVECONFIG",
-        "    Force saving cluster configuration on disk.",
-        "LINKS",
-        "    Return information about all network links between this node and its peers.",
-        "    Output format is an array where each array element is a map containing attributes of a link",
-        "MIGRATESLOTS SLOTSRANGE start-slot end-slot [start-slot end-slot ...] NODE node-id [SLOTSRANGE start-slot end-slot [start-slot end-slot ...] NODE node-id ...]",
-        "    Migrate the specified slot ranges from this node to the specified node.",
-        "CANCELSLOTMIGRATIONS ALL",
-        "    Cancel all migrations.",
-        "GETSLOTMIGRATIONS",
-        "    Get information about ongoing and recently finished slot imports and exports.",
-        NULL};
-
-    return help;
-}
-
 static int clusterLegacyAllowFailoverCmd(client *c) {
     if (!server.cluster_enabled) {
         return 1;
@@ -7908,7 +7862,6 @@ clusterBusType clusterLegacyBus = {
     .getFailureReportsCount = clusterNodeFailureReportsCount,
     .handleSpecialCommand = clusterLegacyHandleSpecialCommand,
     .handleDebugCommand = clusterLegacyHandleDebugCommand,
-    .extendedHelp = clusterLegacyExtendedHelp,
     .debugExtendedHelp = clusterLegacyDebugExtendedHelp,
     .slotChange = clusterLegacySlotChange,
     .cleanupFailoverState = resetManualFailover,

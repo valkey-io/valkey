@@ -133,9 +133,6 @@ int clusterCommandSpecial(client *c) {
 int handleDebugClusterCommand(client *c) {
     return clusterCurrentBus->handleDebugCommand(c);
 }
-const char **clusterCommandExtendedHelp(void) {
-    return clusterCurrentBus->extendedHelp();
-}
 const char **clusterDebugCommandExtendedHelp(void) {
     return clusterCurrentBus->debugExtendedHelp();
 }
@@ -984,14 +981,43 @@ unsigned int countKeysInSlot(unsigned int slot) {
 
 void clusterCommandHelp(client *c) {
     const char *help[] = {
+        "ADDSLOTS <slot> [<slot> ...]",
+        "    Assign slots to current node.",
+        "ADDSLOTSRANGE <start slot> <end slot> [<start slot> <end slot> ...]",
+        "    Assign slots which are between <start-slot> and <end-slot> to current node.",
+        "BUMPEPOCH",
+        "    Advance the cluster config epoch.",
+        "CANCELSLOTMIGRATIONS ALL",
+        "    Cancel all migrations.",
+        "COUNT-FAILURE-REPORTS <node-id>",
+        "    Return number of failure reports for <node-id>.",
         "COUNTKEYSINSLOT <slot>",
         "    Return the number of keys in <slot>.",
+        "DELSLOTS <slot> [<slot> ...]",
+        "    Delete slots information from current node.",
+        "DELSLOTSRANGE <start slot> <end slot> [<start slot> <end slot> ...]",
+        "    Delete slots information which are between <start-slot> and <end-slot> from current node.",
+        "FAILOVER [FORCE|TAKEOVER]",
+        "    Promote current replica node to being a master.",
+        "FLUSHSLOTS",
+        "    Delete current node own slots information.",
+        "FORGET <node-id>",
+        "    Remove a node from the cluster.",
         "GETKEYSINSLOT <slot> <count>",
         "    Return key names stored by current node in a slot.",
+        "GETSLOTMIGRATIONS",
+        "    Get information about ongoing and recently finished slot imports and exports.",
         "INFO",
         "    Return information about the cluster.",
         "KEYSLOT <key>",
         "    Return the hash slot for <key>.",
+        "LINKS",
+        "    Return information about all network links between this node and its peers.",
+        "    Output format is an array where each array element is a map containing attributes of a link",
+        "MEET <ip> <port> [<bus-port>]",
+        "    Connect nodes into a working cluster.",
+        "MIGRATESLOTS SLOTSRANGE start-slot end-slot [start-slot end-slot ...] NODE node-id [SLOTSRANGE start-slot end-slot [start-slot end-slot ...] NODE node-id ...]",
+        "    Migrate the specified slot ranges from this node to the specified node.",
         "MYID",
         "    Return the node id.",
         "MYSHARDID",
@@ -1001,16 +1027,26 @@ void clusterCommandHelp(client *c) {
         "    <id> <ip:port@bus-port[,hostname]> <flags> <primary> <pings> <pongs> <epoch> <link> <slot> ...",
         "REPLICAS <node-id>",
         "    Return <node-id> replicas.",
+        "REPLICATE <node-id>",
+        "    Configure current node as replica to <node-id>.",
+        "RESET [HARD|SOFT]",
+        "    Reset current node (default: soft).",
+        "SAVECONFIG",
+        "    Force saving cluster configuration on disk.",
+        "SET-CONFIG-EPOCH <epoch>",
+        "    Set config epoch of current node.",
+        "SETSLOT <slot> (IMPORTING <node-id>|MIGRATING <node-id>|STABLE|NODE <node-id>)",
+        "    Set slot state.",
+        "SHARDS",
+        "    Return information about slot range mappings and the nodes associated with them.",
         "SLOTS",
         "    Return information about slots range mappings. Each range is made of:",
         "    start, end, primary and replicas IP addresses, ports and ids",
         "SLOT-STATS",
         "    Return an array of slot usage statistics for slots assigned to the current node.",
-        "SHARDS",
-        "    Return information about slot range mappings and the nodes associated with them.",
         NULL};
 
-    addExtendedReplyHelp(c, help, clusterCommandExtendedHelp());
+    addReplyHelp(c, help);
 }
 
 void clusterKeySlotCommand(client *c) {

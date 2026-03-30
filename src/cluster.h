@@ -87,7 +87,6 @@ int handleDebugClusterCommand(client *c);
 const char **clusterDebugCommandExtendedHelp(void);
 /* handle implementation specific cluster commands. Return 1 if handled, 0 otherwise. */
 int clusterCommandSpecial(client *c);
-const char **clusterCommandExtendedHelp(void);
 
 int clusterAllowFailoverCmd(client *c);
 void clusterPromoteSelfToPrimary(void);
@@ -168,8 +167,7 @@ int clusterBumpConfigEpochWithoutConsensus(void);
 void clusterDoBeforeSleep(int flags);
 
 /* Change slot ownerships. See clusterBusType.slotChange. */
-void clusterSlotChange(slotRange *ranges, int numranges, clusterNode *target,
-                       void *ctx, void (*callback)(void *ctx, int success));
+void clusterSlotChange(slotRange *ranges, int numranges, clusterNode *target, void *ctx, void (*callback)(void *ctx, int success));
 void clusterCleanupFailoverState(void);
 void clusterSetPrimary(clusterNode *n, int closeSlots, int full_sync_required);
 /* TODO: The following functions wrap legacy protocol details (CLUSTER_TODO_*

@@ -74,7 +74,6 @@ typedef struct clusterBusType {
     /* Protocol-specific command handling — called from cluster.c, debug.c */
     int (*handleSpecialCommand)(struct client *c);
     int (*handleDebugCommand)(struct client *c);
-    const char **(*extendedHelp)(void);
     const char **(*debugExtendedHelp)(void);
 } clusterBusType;
 

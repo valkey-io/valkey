@@ -254,12 +254,13 @@ endif
 FINAL_CFLAGS+= -I../deps/libvalkey/include -I../deps/linenoise -I../deps/hdr_histogram -I../deps/fpconv -I../deps/fast_float
 
 # Lua scripting engine module
-LUA_MODULE_NAME:=modules/lua/libvalkeylua.so
 ifeq ($(BUILD_LUA),no)
+	LUA_MODULE_NAME=
 	LUA_MODULE=
 	LUA_MODULE_INSTALL=
 	FINAL_CFLAGS+=-DSTATIC_LUA=0
 else ifeq ($(BUILD_LUA),module)
+	LUA_MODULE_NAME=modules/lua/libvalkeylua.so
 	LUA_MODULE=$(LUA_MODULE_NAME)
 	LUA_MODULE_INSTALL=install-lua-module
 
@@ -273,6 +274,7 @@ else ifeq ($(BUILD_LUA),module)
 	endif
 else
 	# The default: building Lua as a static module.
+	LUA_MODULE_NAME=modules/lua/libvalkeylua.a
 	LUA_MODULE=$(LUA_MODULE_NAME)
 	current_dir = $(shell pwd)
 	FINAL_CFLAGS+=-DLUA_ENABLED -DSTATIC_LUA=1

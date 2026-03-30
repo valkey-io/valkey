@@ -412,3 +412,11 @@ int clusterNodeClearSlotBit(clusterNode *n, int slot) {
     }
     return old;
 }
+
+bool isAnySlotInManualImportingState(void) {
+    return dictSize(server.cluster->importing_slots_from) > 0;
+}
+
+bool isAnySlotInManualMigratingState(void) {
+    return dictSize(server.cluster->migrating_slots_to) > 0;
+}

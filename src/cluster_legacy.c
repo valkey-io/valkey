@@ -7813,15 +7813,6 @@ int clusterDecodeOpenSlotsAuxField(int rdbflags, sds s) {
 
 
 /* Returns if any slot has been put in IMPORTING state via SETSLOT command. */
-bool isAnySlotInManualImportingState(void) {
-    return dictSize(server.cluster->importing_slots_from) > 0;
-}
-
-/* Returns if any slot has been put in MIGRATING state via SETSLOT command. */
-bool isAnySlotInManualMigratingState(void) {
-    return dictSize(server.cluster->migrating_slots_to) > 0;
-}
-
 clusterBusType clusterLegacyBus = {
     .init = clusterLegacyInit,
     .initLast = clusterLegacyInitLast,

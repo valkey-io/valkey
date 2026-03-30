@@ -134,8 +134,6 @@ void removeChannelsInSlot(unsigned int slot);
 void removeAllNotOwnedShardChannelSubscriptions(void);
 int getSlotOrReply(client *c, robj *o);
 int getNodeDefaultReplicationPort(clusterNode *node);
-bool isAnySlotInManualImportingState(void);
-bool isAnySlotInManualMigratingState(void);
 
 /* functions with shared implementations */
 int clusterNodeIsMyself(clusterNode *n);

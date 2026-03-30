@@ -107,3 +107,6 @@ void clusterRemoveNodeFromShard(clusterNode *node);
 void clusterAddNodeToShard(const char *shard_id, clusterNode *node);
 
 #endif /* CLUSTER_STATE_H */
+
+bool isAnySlotInManualImportingState(void);
+bool isAnySlotInManualMigratingState(void);

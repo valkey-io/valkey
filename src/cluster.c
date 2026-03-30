@@ -107,7 +107,10 @@ int clusterSendModuleMessageToTarget(const char *target, uint64_t module_id, uin
 }
 
 int clusterAllowFailoverCmd(client *c) {
-    return clusterCurrentBus->allowFailoverCmd(c);
+    if (!server.cluster_enabled) return 1;
+    addReplyError(c, "FAILOVER not allowed in cluster mode. "
+                     "Use CLUSTER FAILOVER command instead.");
+    return 0;
 }
 void clusterPromoteSelfToPrimary(void) {
     clusterCurrentBus->promoteSelfToPrimary();

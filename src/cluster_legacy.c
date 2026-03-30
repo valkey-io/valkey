@@ -7716,15 +7716,6 @@ static int clusterLegacyHandleSpecialCommand(client *c) {
     return 1;
 }
 
-static int clusterLegacyAllowFailoverCmd(client *c) {
-    if (!server.cluster_enabled) {
-        return 1;
-    }
-    addReplyError(c, "FAILOVER not allowed in cluster mode. "
-                     "Use CLUSTER FAILOVER command instead.");
-    return 0;
-}
-
 static void clusterLegacyPromoteSelfToPrimary(void) {
     replicationUnsetPrimary();
     /* Upon becoming primary, we need to ensure that data is deleted in unowned slots. */
@@ -7853,7 +7844,6 @@ clusterBusType clusterLegacyBus = {
     .updateMyselfAvailabilityZone = clusterLegacyUpdateMyselfAvailabilityZone,
     .propagatePublish = clusterLegacyPropagatePublish,
     .sendModuleMessage = clusterLegacySendModuleMessageToTarget,
-    .allowFailoverCmd = clusterLegacyAllowFailoverCmd,
     .promoteSelfToPrimary = clusterLegacyPromoteSelfToPrimary,
     .manualFailoverTimeLimit = clusterLegacyManualFailoverTimeLimit,
     .getConnectionsCount = clusterLegacyGetConnectionsCount,

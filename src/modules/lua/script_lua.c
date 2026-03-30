@@ -172,7 +172,11 @@ static void _serverPanic(const char *file, int line, const char *msg, ...) {
 
 typedef uint64_t monotime;
 
-__attribute__((weak)) monotime getMonotonicUs(void) {
+#if STATIC_LUA
+/* Use the engine's version */
+extern monotime getMonotonicUs(void);
+#else
+monotime getMonotonicUs(void) {
     /* clock_gettime() is specified in POSIX.1b (1993).  Even so, some systems
      * did not support this until much later.  CLOCK_MONOTONIC is technically
      * optional and may not be supported - but it appears to be universal.
@@ -181,12 +185,13 @@ __attribute__((weak)) monotime getMonotonicUs(void) {
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return ((uint64_t)ts.tv_sec) * 1000000 + ts.tv_nsec / 1000;
 }
+#endif
 
-__attribute__((always_inline)) monotime elapsedUs(monotime start_time) {
+inline uint64_t elapsedUs(monotime start_time) {
     return getMonotonicUs() - start_time;
 }
 
-__attribute__((always_inline)) monotime elapsedMs(monotime start_time) {
+inline uint64_t elapsedMs(monotime start_time) {
     return elapsedUs(start_time) / 1000;
 }
 
@@ -1162,7 +1167,7 @@ static int luaRedisPCallCommand(lua_State *lua) {
  *
  * 'digest' should point to a 41 bytes buffer: 40 for SHA1 converted into an
  * hexadecimal number, plus 1 byte for null term. */
-__attribute__((weak)) void sha1hex(char *digest, char *script, size_t len) {
+__attribute((weak)) void sha1hex(char *digest, char *script, size_t len) {
     SHA1_CTX ctx;
     unsigned char hash[20];
     char *cset = "0123456789abcdef";

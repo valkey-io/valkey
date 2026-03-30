@@ -55,10 +55,23 @@
 
 typedef uint64_t monotime;
 
-// Defined in script_lua.c
-extern monotime getMonotonicUs(void);
-extern monotime elapsedUs(monotime start_time);
-extern monotime elapsedMs(monotime start_time);
+static monotime getMonotonicUs(void) {
+    /* clock_gettime() is specified in POSIX.1b (1993).  Even so, some systems
+     * did not support this until much later.  CLOCK_MONOTONIC is technically
+     * optional and may not be supported - but it appears to be universal.
+     * If this is not supported, provide a system-specific alternate version.  */
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return ((uint64_t)ts.tv_sec) * 1000000 + ts.tv_nsec / 1000;
+}
+
+static inline uint64_t elapsedUs(monotime start_time) {
+    return getMonotonicUs() - start_time;
+}
+
+static inline uint64_t elapsedMs(monotime start_time) {
+    return elapsedUs(start_time) / 1000;
+}
 
 typedef struct loadCtx {
     List *functions;

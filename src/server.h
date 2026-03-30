@@ -54,7 +54,6 @@
 #include <netinet/in.h>
 #include <sys/socket.h>
 #include <signal.h>
-#include <sys/resource.h>
 
 #ifdef HAVE_LIBSYSTEMD
 #include <systemd/sd-daemon.h>
@@ -1927,8 +1926,6 @@ struct valkeyServer {
     long long stat_sync_partial_err;               /* Number of unaccepted PSYNC requests. */
     commandlog commandlog[COMMANDLOG_TYPE_NUM];    /* Logs of commands. */
     struct malloc_stats cron_malloc_stats;         /* sampled in serverCron(). */
-    struct rusage cron_rusage_self;                /* sampled in serverCron(). */
-    struct rusage cron_rusage_children;            /* sampled in serverCron(). */
     long long stat_net_input_bytes;                /* Bytes read from network. */
     long long stat_net_output_bytes;               /* Bytes written to network. */
     long long stat_net_repl_input_bytes;           /* Bytes read during replication, added to stat_net_input_bytes in 'info'. */

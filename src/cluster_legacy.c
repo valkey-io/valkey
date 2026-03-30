@@ -7664,81 +7664,49 @@ static void clusterLegacyResetCluster(client *c) {
     addReply(c, shared.ok);
 }
 
-static int clusterLegacyHandleSpecialCommand(client *c) {
-    if (!strcasecmp(objectGetVal(c->argv[1]), "failover") && (c->argc >= 2)) {
-        /* CLUSTER FAILOVER [FORCE|TAKEOVER] [REPLICAID <NODE ID>]
-         * REPLICAID is currently available only for internal so we won't
-         * put it into the JSON file. */
-        int force = 0, takeover = 0;
-        robj *replicaid = NULL;
-
-        for (int j = 2; j < c->argc; j++) {
-            int moreargs = (c->argc - 1) - j;
-            if (!strcasecmp(objectGetVal(c->argv[j]), "force")) {
-                force = 1;
-            } else if (!strcasecmp(objectGetVal(c->argv[j]), "takeover")) {
-                takeover = 1;
-                force = 1; /* Takeover also implies force. */
-            } else if (c == server.primary && !strcasecmp(objectGetVal(c->argv[j]), "replicaid") && moreargs) {
-                /* This option is currently available only for primary. */
-                j++;
-                replicaid = c->argv[j];
-            } else {
-                addReplyErrorObject(c, shared.syntaxerr);
-                return 1;
-            }
-        }
-
-        /* Check if it should be executed by myself. */
-        if (replicaid != NULL && memcmp(objectGetVal(replicaid), myself->name, CLUSTER_NAMELEN) != 0) {
-            /* Ignore this command, including the sanity check and the process. */
-            addReply(c, shared.ok);
-            return 1;
-        }
-
-        /* Check preconditions. */
-        if (clusterNodeIsPrimary(myself)) {
-            addReplyError(c, "You should send CLUSTER FAILOVER to a replica");
-            return 1;
-        } else if (myself->replicaof == NULL) {
-            addReplyError(c, "I'm a replica but my master is unknown to me");
-            return 1;
-        } else if (!force && (nodeFailed(myself->replicaof) || myself->replicaof->link == NULL)) {
-            addReplyError(c, "Master is down or failed, please use CLUSTER FAILOVER FORCE");
-            return 1;
-        }
-        resetManualFailover();
-        LEGACY_STATE()->mf_end = mstime() + server.cluster_mf_timeout;
-        sds client = catClientInfoShortString(sdsempty(), c, server.hide_user_data_from_log);
-
-        if (takeover) {
-            /* A takeover does not perform any initial check. It just
-             * generates a new configuration epoch for this node without
-             * consensus, claims the primary's slots, and broadcast the new
-             * configuration. */
-            serverLog(LL_NOTICE, "Taking over the primary (user request from '%s').", client);
-            clusterBumpConfigEpochWithoutConsensus();
-            clusterFailoverReplaceYourPrimary();
-        } else if (force) {
-            /* If this is a forced failover, we don't need to talk with our
-             * primary to agree about the offset. We just failover taking over
-             * it without coordination. */
-            if (c == server.primary) {
-                serverLog(LL_NOTICE, "Forced failover primary request accepted (primary request from '%s').", client);
-            } else {
-                serverLog(LL_NOTICE, "Forced failover user request accepted (user request from '%s').", client);
-            }
-            manualFailoverCanStart();
-            /* We can start a manual failover as soon as possible, setting a flag
-             * here so that we don't need to waiting for the cron to kick in. */
-            clusterDoBeforeSleep(CLUSTER_TODO_HANDLE_MANUALFAILOVER);
+static void clusterLegacyFailover(client *c, int force, int takeover) {
+    if (!force && (nodeFailed(myself->replicaof) ||
+                   myself->replicaof->link == NULL)) {
+        addReplyError(c, "Master is down or failed, "
+                         "please use CLUSTER FAILOVER FORCE");
+        return;
+    }
+    resetManualFailover();
+    LEGACY_STATE()->mf_end = mstime() + server.cluster_mf_timeout;
+    sds cl = catClientInfoShortString(sdsempty(), c,
+                                      server.hide_user_data_from_log);
+    if (takeover) {
+        serverLog(LL_NOTICE,
+                  "Taking over the primary (user request from '%s').", cl);
+        clusterBumpConfigEpochWithoutConsensus();
+        clusterFailoverReplaceYourPrimary();
+    } else if (force) {
+        if (c == server.primary) {
+            serverLog(LL_NOTICE,
+                      "Forced failover primary request accepted "
+                      "(primary request from '%s').",
+                      cl);
         } else {
-            serverLog(LL_NOTICE, "Manual failover user request accepted (user request from '%s').", client);
-            clusterSendMFStart(myself->replicaof);
+            serverLog(LL_NOTICE,
+                      "Forced failover user request accepted "
+                      "(user request from '%s').",
+                      cl);
         }
-        sdsfree(client);
-        addReply(c, shared.ok);
-    } else if (!strcasecmp(objectGetVal(c->argv[1]), "links") && c->argc == 2) {
+        manualFailoverCanStart();
+        clusterDoBeforeSleep(CLUSTER_TODO_HANDLE_MANUALFAILOVER);
+    } else {
+        serverLog(LL_NOTICE,
+                  "Manual failover user request accepted "
+                  "(user request from '%s').",
+                  cl);
+        clusterSendMFStart(myself->replicaof);
+    }
+    sdsfree(cl);
+    addReply(c, shared.ok);
+}
+
+static int clusterLegacyHandleSpecialCommand(client *c) {
+    if (!strcasecmp(objectGetVal(c->argv[1]), "links") && c->argc == 2) {
         /* CLUSTER LINKS */
         addReplyClusterLinksDescription(c);
     } else {
@@ -7946,6 +7914,7 @@ clusterBusType clusterLegacyBus = {
     .cleanupFailoverState = resetManualFailover,
     .forgetNode = clusterLegacyForgetNode,
     .setReplicaOf = clusterLegacySetReplicaOf,
+    .failover = clusterLegacyFailover,
     .meet = clusterLegacyMeet,
     .bumpEpoch = clusterLegacyBumpEpoch,
     .setConfigEpoch = clusterLegacySetConfigEpoch,

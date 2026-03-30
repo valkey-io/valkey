@@ -1567,6 +1567,48 @@ void clusterCommand(client *c) {
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "reset") && (c->argc == 2 || c->argc == 3)) {
         /* CLUSTER RESET [SOFT|HARD] */
         clusterCurrentBus->resetCluster(c);
+    } else if (!strcasecmp(objectGetVal(c->argv[1]), "failover") &&
+               c->argc >= 2) {
+        /* CLUSTER FAILOVER [FORCE|TAKEOVER] [REPLICAID <NODE ID>] */
+        clusterNode *myself = getMyClusterNode();
+        int force = 0, takeover = 0;
+        robj *replicaid = NULL;
+
+        for (int j = 2; j < c->argc; j++) {
+            int moreargs = (c->argc - 1) - j;
+            if (!strcasecmp(objectGetVal(c->argv[j]), "force")) {
+                force = 1;
+            } else if (!strcasecmp(objectGetVal(c->argv[j]), "takeover")) {
+                takeover = 1;
+                force = 1;
+            } else if (c == server.primary &&
+                       !strcasecmp(objectGetVal(c->argv[j]), "replicaid") &&
+                       moreargs) {
+                j++;
+                replicaid = c->argv[j];
+            } else {
+                addReplyErrorObject(c, shared.syntaxerr);
+                return;
+            }
+        }
+
+        /* If targeted at a specific replica, ignore if not me. */
+        if (replicaid != NULL &&
+            memcmp(objectGetVal(replicaid), myself->name,
+                   CLUSTER_NAMELEN) != 0) {
+            addReply(c, shared.ok);
+            return;
+        }
+
+        if (clusterNodeIsPrimary(myself)) {
+            addReplyError(c, "You should send CLUSTER FAILOVER to a replica");
+            return;
+        }
+        if (myself->replicaof == NULL) {
+            addReplyError(c, "I'm a replica but my master is unknown to me");
+            return;
+        }
+        clusterCurrentBus->failover(c, force, takeover);
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "replicate") &&
                (c->argc == 3 || c->argc == 4)) {
         /* CLUSTER REPLICATE (<NODE ID> | NO ONE) */

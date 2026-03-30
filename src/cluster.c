@@ -1567,6 +1567,66 @@ void clusterCommand(client *c) {
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "reset") && (c->argc == 2 || c->argc == 3)) {
         /* CLUSTER RESET [SOFT|HARD] */
         clusterCurrentBus->resetCluster(c);
+    } else if (!strcasecmp(objectGetVal(c->argv[1]), "replicate") &&
+               (c->argc == 3 || c->argc == 4)) {
+        /* CLUSTER REPLICATE (<NODE ID> | NO ONE) */
+        clusterNode *myself = getMyClusterNode();
+        if (c->argc == 4) {
+            /* CLUSTER REPLICATE NO ONE */
+            if (strcasecmp(objectGetVal(c->argv[2]), "NO") != 0 ||
+                strcasecmp(objectGetVal(c->argv[3]), "ONE") != 0) {
+                addReplySubcommandSyntaxError(c);
+                return;
+            }
+            if (nodeIsPrimary(myself)) {
+                addReply(c, shared.ok);
+                return;
+            }
+            sds cl = catClientInfoShortString(sdsempty(), c,
+                                              server.hide_user_data_from_log);
+            serverLog(LL_NOTICE,
+                      "Stop replication and turning myself into empty "
+                      "primary (request from '%s').",
+                      cl);
+            sdsfree(cl);
+            clusterCurrentBus->setReplicaOf(NULL);
+            flushAllDataAndResetRDB(server.repl_replica_lazy_flush
+                                        ? EMPTYDB_ASYNC
+                                        : EMPTYDB_NO_FLAGS);
+            verifyClusterConfigWithData();
+            clusterCloseAllSlots();
+            clusterCleanupFailoverState();
+            addReply(c, shared.ok);
+            return;
+        }
+        /* CLUSTER REPLICATE <NODE ID> */
+        clusterNode *n = clusterLookupNode(objectGetVal(c->argv[2]),
+                                           sdslen(objectGetVal(c->argv[2])));
+        if (!n) {
+            addReplyErrorFormat(c, "Unknown node %s",
+                                (char *)objectGetVal(c->argv[2]));
+            return;
+        }
+        if (n == myself) {
+            addReplyError(c, "Can't replicate myself");
+            return;
+        }
+        if (nodeIsReplica(n)) {
+            addReplyError(c, "I can only replicate a master, not a replica.");
+            return;
+        }
+        if (clusterNodeIsPrimary(myself) &&
+            (myself->numslots != 0 || !dbsHaveNoKeys())) {
+            addReplyError(c, "To set a master the node must be empty and "
+                             "without assigned slots.");
+            return;
+        }
+        if (myself->replicaof == n) {
+            addReply(c, shared.ok);
+            return;
+        }
+        clusterCurrentBus->setReplicaOf(n);
+        addReply(c, shared.ok);
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "forget") && c->argc == 3) {
         /* CLUSTER FORGET <NODE ID> */
         const char *node_id = objectGetVal(c->argv[2]);

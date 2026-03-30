@@ -64,6 +64,7 @@ typedef struct clusterBusType {
 
     /* Node management — called from cluster commands */
     int (*forgetNode)(const char *node_id, size_t id_len);
+    void (*setReplicaOf)(clusterNode *primary);
     void (*meet)(client *c);
     void (*bumpEpoch)(client *c);
     void (*setConfigEpoch)(client *c);

@@ -7540,6 +7540,22 @@ static const char **clusterLegacyDebugExtendedHelp(void) {
     return help;
 }
 
+static void clusterLegacySetReplicaOf(clusterNode *primary) {
+    if (primary) {
+        clusterSetPrimary(primary, 1, 1);
+    } else {
+        clusterSetNodeAsPrimary(myself);
+        char new_shard_id[CLUSTER_NAMELEN];
+        getRandomHexChars(new_shard_id, CLUSTER_NAMELEN);
+        updateShardId(myself, new_shard_id);
+        serverLog(LL_NOTICE, "Moving myself to a new shard %.40s.",
+                  myself->shard_id);
+    }
+    clusterDoBeforeSleep(CLUSTER_TODO_UPDATE_STATE |
+                         CLUSTER_TODO_SAVE_CONFIG |
+                         CLUSTER_TODO_BROADCAST_ALL);
+}
+
 static int clusterLegacyForgetNode(const char *node_id, size_t id_len) {
     clusterNode *n = clusterLookupNode(node_id, id_len);
     if (!n) {
@@ -7649,81 +7665,7 @@ static void clusterLegacyResetCluster(client *c) {
 }
 
 static int clusterLegacyHandleSpecialCommand(client *c) {
-    if (!strcasecmp(objectGetVal(c->argv[1]), "replicate") && (c->argc == 3 || c->argc == 4)) {
-        /* CLUSTER REPLICATE (<NODE ID> | NO ONE)*/
-        if (c->argc == 4) {
-            /* CLUSTER REPLICATE NO ONE */
-            if (strcasecmp(objectGetVal(c->argv[2]), "NO") != 0 || strcasecmp(objectGetVal(c->argv[3]), "ONE") != 0) {
-                addReplySubcommandSyntaxError(c);
-                return 1;
-            }
-            if (nodeIsPrimary(myself)) {
-                addReply(c, shared.ok);
-                return 1;
-            }
-            sds client = catClientInfoShortString(sdsempty(), c, server.hide_user_data_from_log);
-            serverLog(LL_NOTICE, "Stop replication and turning myself into empty primary (request from '%s').", client);
-            sdsfree(client);
-            clusterSetNodeAsPrimary(myself);
-            flushAllDataAndResetRDB(server.repl_replica_lazy_flush ? EMPTYDB_ASYNC : EMPTYDB_NO_FLAGS);
-            verifyClusterConfigWithData();
-            clusterCloseAllSlots();
-            resetManualFailover();
-
-            /* Moving new primary to its own shard. */
-            char new_shard_id[CLUSTER_NAMELEN];
-            getRandomHexChars(new_shard_id, CLUSTER_NAMELEN);
-            updateShardId(myself, new_shard_id);
-            serverLog(LL_NOTICE, "Moving myself to a new shard %.40s.", myself->shard_id);
-
-            clusterDoBeforeSleep(CLUSTER_TODO_UPDATE_STATE | CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_BROADCAST_ALL);
-            addReply(c, shared.ok);
-            return 1;
-        }
-        /* CLUSTER REPLICATE <NODE ID> */
-        /* Lookup the specified node in our table. */
-        clusterNode *n = clusterLookupNode(objectGetVal(c->argv[2]), sdslen(objectGetVal(c->argv[2])));
-        if (!n) {
-            addReplyErrorFormat(c, "Unknown node %s", (char *)objectGetVal(c->argv[2]));
-            return 1;
-        }
-
-        /* I can't replicate myself. */
-        if (n == myself) {
-            addReplyError(c, "Can't replicate myself");
-            return 1;
-        }
-
-        /* Can't replicate a replica. */
-        if (nodeIsReplica(n)) {
-            addReplyError(c, "I can only replicate a master, not a replica.");
-            return 1;
-        }
-
-        /* If the instance is currently a primary, it should have no assigned
-         * slots nor keys to accept to replicate some other node.
-         * Replicas can switch to another primary without issues. */
-        if (clusterNodeIsPrimary(myself) && (myself->numslots != 0 || !dbsHaveNoKeys())) {
-            addReplyError(c, "To set a master the node must be empty and "
-                             "without assigned slots.");
-            return 1;
-        }
-
-        /* If `n` is already my primary, there is no need to re-establish the
-         * replication connection. */
-        if (myself->replicaof == n) {
-            addReply(c, shared.ok);
-            return 1;
-        }
-
-        /* Set the primary.
-         * If the instance is a primary, it is an empty primary.
-         * If the instance is a replica, it had a totally different replication history.
-         * In these both cases, myself as a replica has to do a full sync. */
-        clusterSetPrimary(n, 1, 1);
-        clusterDoBeforeSleep(CLUSTER_TODO_UPDATE_STATE | CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_BROADCAST_ALL);
-        addReply(c, shared.ok);
-    } else if (!strcasecmp(objectGetVal(c->argv[1]), "failover") && (c->argc >= 2)) {
+    if (!strcasecmp(objectGetVal(c->argv[1]), "failover") && (c->argc >= 2)) {
         /* CLUSTER FAILOVER [FORCE|TAKEOVER] [REPLICAID <NODE ID>]
          * REPLICAID is currently available only for internal so we won't
          * put it into the JSON file. */
@@ -8003,6 +7945,7 @@ clusterBusType clusterLegacyBus = {
     .slotChange = clusterLegacySlotChange,
     .cleanupFailoverState = resetManualFailover,
     .forgetNode = clusterLegacyForgetNode,
+    .setReplicaOf = clusterLegacySetReplicaOf,
     .meet = clusterLegacyMeet,
     .bumpEpoch = clusterLegacyBumpEpoch,
     .setConfigEpoch = clusterLegacySetConfigEpoch,

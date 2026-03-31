@@ -116,8 +116,7 @@ int TestCallArgv(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     ValkeyModule_AutoMemory(ctx);
 
     int flags = VALKEYMODULE_CALL_ARGV_NO_WRITES | VALKEYMODULE_CALL_ARGV_ERRORS_AS_REPLIES;
-    resp_handlers.context = ctx;
-    ValkeyModule_CallArgv(ctx, argv + 1, argc - 1, flags, &resp_handlers);
+    ValkeyModule_CallArgv(ctx, argv + 1, argc - 1, flags, &resp_handlers, ctx);
 
     return VALKEYMODULE_OK;
 }
@@ -136,9 +135,8 @@ int TestCallArgvRaw(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
 
     int flags = VALKEYMODULE_CALL_ARGV_NO_WRITES | VALKEYMODULE_CALL_ARGV_ERRORS_AS_REPLIES;
 
-    resp_handlers.context = NULL;
     resp_handlers.onAvailable = replyWithRawRespString;
-    ValkeyModule_CallArgv(ctx, argv + 1, argc - 1, flags, &resp_handlers);
+    ValkeyModule_CallArgv(ctx, argv + 1, argc - 1, flags, &resp_handlers, NULL);
     resp_handlers.onAvailable = NULL;
     return VALKEYMODULE_OK;
 }
@@ -148,8 +146,7 @@ int TestCallArgvScriptMode(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int 
     ValkeyModule_AutoMemory(ctx);
 
     int flags = VALKEYMODULE_CALL_ARGV_SCRIPT_MODE | VALKEYMODULE_CALL_ARGV_ERRORS_AS_REPLIES;
-    resp_handlers.context = ctx;
-    ValkeyModule_CallArgv(ctx, argv + 1, argc - 1, flags, &resp_handlers);
+    ValkeyModule_CallArgv(ctx, argv + 1, argc - 1, flags, &resp_handlers, ctx);
 
     return VALKEYMODULE_OK;
 }

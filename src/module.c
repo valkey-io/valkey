@@ -493,9 +493,10 @@ typedef struct ValkeyModuleAsyncRMCallPromise {
     /* Whether the promise was created from a call to VM_CallArgv or VM_Call. */
     int from_call_argv;
 
-    /* RESP handlers to use when parsing the reply of the command called from the blocked context.
-     * Only used if 'from_call_argv' is true. */
+    /* RESP handlers and caller context used when parsing the reply of the command called from
+     * the blocked context. Only used if 'from_call_argv' is true. */
     ValkeyModuleReplyHandlers resp_handlers;
+    void *resp_handlers_ctx;
 } ValkeyModuleAsyncRMCallPromise;
 
 typedef struct ValkeyModuleAsyncRMCallPromise ValkeyModuleCallArgvHandle;
@@ -933,7 +934,7 @@ void moduleCallCommandUnblockedHandler(client *c) {
         promise->on_unblocked(&ctx, reply, promise->private_data);
 
     } else {
-        invokeReplyHandlers(&ctx, c, &promise->resp_handlers);
+        invokeReplyHandlers(&ctx, c, &promise->resp_handlers, promise->resp_handlers_ctx);
     }
 
     module->in_call--;
@@ -6279,6 +6280,7 @@ int VM_CallArgvAbort(ValkeyModuleCallArgvHandle *handle) {
      * processing path is still reached (e.g. module blocking command that
      * ignores disconnect). */
     promise->resp_handlers = (ValkeyModuleReplyHandlers){0};
+    promise->resp_handlers_ctx = NULL;
 
     unblockClient(promise->c, 0);
     moduleReleaseTempClient(promise->c);
@@ -7035,7 +7037,8 @@ int VM_CallArgv(ValkeyModuleCtx *ctx,
                 ValkeyModuleString **argv,
                 int argc,
                 int flags,
-                ValkeyModuleReplyHandlers *resp_handlers) {
+                const ValkeyModuleReplyHandlers *resp_handlers,
+                void *reply_ctx) {
     int ret = VALKEYMODULE_OK;
     client *c = NULL;
     sds reply_error_msg = NULL;
@@ -7064,7 +7067,7 @@ int VM_CallArgv(ValkeyModuleCtx *ctx,
         }
 
         if (resp_handlers) {
-            invokeReplyHandlers(ctx, c, resp_handlers);
+            invokeReplyHandlers(ctx, c, resp_handlers, reply_ctx);
         }
     } else {
         serverAssert(errno == 0);
@@ -7096,7 +7099,8 @@ int VM_CallArgv(ValkeyModuleCtx *ctx,
         if (resp_handlers) {
             promise->from_call_argv = 1;
             promise->resp_handlers = *resp_handlers;
-            resp_handlers->onBlocked(resp_handlers->context, ctx, promise);
+            promise->resp_handlers_ctx = reply_ctx;
+            resp_handlers->onBlocked(reply_ctx, ctx, promise);
         }
         c = NULL; /* Make sure not to free the client */
     }

@@ -1355,8 +1355,6 @@ typedef struct ValkeyModuleReplyHandlers {
      * `proto` and `proto_len` provide the raw RESP bytes for the entire reply.
      */
     int (*onAvailable)(void *ctx, ValkeyModuleCtx *module_ctx, const char *proto, size_t proto_len);
-
-    void *context;
 } ValkeyModuleReplyHandlers;
 
 #define ValkeyModuleScriptingEngineMethods ValkeyModuleScriptingEngineMethodsV4
@@ -1565,7 +1563,8 @@ VALKEYMODULE_API int (*ValkeyModule_CallArgv)(ValkeyModuleCtx *ctx,
                                               ValkeyModuleString **argv,
                                               int argc,
                                               int flags,
-                                              ValkeyModuleReplyHandlers *reply_parsing_ctx) VALKEYMODULE_ATTR;
+                                              const ValkeyModuleReplyHandlers *reply_handlers,
+                                              void *reply_ctx) VALKEYMODULE_ATTR;
 VALKEYMODULE_API int (*ValkeyModule_CallArgvAbort)(ValkeyModuleCallArgvHandle *handle) VALKEYMODULE_ATTR;
 VALKEYMODULE_API const char *(*ValkeyModule_CallReplyProto)(ValkeyModuleCallReply *reply, size_t *len)VALKEYMODULE_ATTR;
 VALKEYMODULE_API void (*ValkeyModule_FreeCallReply)(ValkeyModuleCallReply *reply) VALKEYMODULE_ATTR;

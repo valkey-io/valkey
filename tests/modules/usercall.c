@@ -215,7 +215,7 @@ int call_without_user_argv(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int 
         .onAvailable = usercall_argv_reply_handler,
     };
 
-    if (ValkeyModule_CallArgv(ctx, argv + 1, (size_t)argc - 1, 0, &handlers) == VALKEYMODULE_ERR) {
+    if (ValkeyModule_CallArgv(ctx, argv + 1, (size_t)argc - 1, 0, &handlers, NULL) == VALKEYMODULE_ERR) {
         ValkeyModule_ReplyWithError(ctx, "NULL reply returned");
     }
     return VALKEYMODULE_OK;
@@ -243,7 +243,7 @@ int call_with_user_flag_argv(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, in
     };
 
     /* argv[2] is the command; pass argv+2 so it becomes argv[0] of the call */
-    if (ValkeyModule_CallArgv(ctx, argv + 2, (size_t)argc - 2, flags, &handlers) == VALKEYMODULE_ERR) {
+    if (ValkeyModule_CallArgv(ctx, argv + 2, (size_t)argc - 2, flags, &handlers, NULL) == VALKEYMODULE_ERR) {
         ValkeyModule_ReplyWithError(ctx, "NULL reply returned");
     }
     return VALKEYMODULE_OK;

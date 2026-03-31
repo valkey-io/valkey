@@ -167,6 +167,7 @@ jobs:
           make -j4 BUILD_RDMA=yes USE_LIBBACKTRACE=yes
       - name: clone-rxe-kmod
         run: |
+          uname -a
           mkdir -p tests/rdma/rxe
           git clone https://github.com/pizhenwei/rxe.git tests/rdma/rxe
           make -C tests/rdma/rxe
@@ -333,7 +334,7 @@ jobs:
 
       - name: Setup YAML formatter
         run: |
-          go install github.com/google/yamlfmt/cmd/yamlfmt@latest
+          go install github.com/google/yamlfmt/cmd/yamlfmt@v0.21.0
 
       - name: Run yamlfmt
         id: yamlfmt

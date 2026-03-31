@@ -144,9 +144,10 @@ void clusterWriteHandler(connection *conn) {
         serverAssert((offset + nwritten) == block->len);
         link->head_msg_send_offset = 0;
 
+        uint32_t blocklen = block->totlen;
         listDelNode(link->send_msg_queue, head);
         server.stat_cluster_links_memory -= sizeof(listNode);
-        link->send_msg_queue_mem -= sizeof(listNode) + block->totlen;
+        link->send_msg_queue_mem -= sizeof(listNode) + blocklen;
 
         totwritten += nwritten;
     }

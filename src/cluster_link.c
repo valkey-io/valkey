@@ -155,10 +155,14 @@ void clusterWriteHandler(connection *conn) {
         connSetWriteHandler(link->conn, NULL);
 }
 
+/* Return node name if the link has the node associated to it
+ * or else return "<unknown>". */
 char *clusterLinkGetNodeName(clusterLink *link) {
     return link->node ? link->node->name : "<unknown>";
 }
 
+/* Return human assigned node name if the link has the node associated to it
+ * or else return "<unknown>". */
 char *clusterLinkGetHumanNodeName(clusterLink *link) {
     return link->node ? humanNodename(link->node) : "<unknown>";
 }

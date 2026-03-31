@@ -535,13 +535,6 @@ static inline int defaultClientPort(void) {
     return server.tls_cluster ? server.tls_port : server.port;
 }
 
-/* Return node name if the link has the node associated to it
- * or else return "<unknown>". */
-
-
-/* Return human assigned node name if the link has the node associated to it
- * or else return "<unknown>". */
-
 #define isSlotUnclaimed(slot) \
     (server.cluster->slots[slot] == NULL || bitmapTestBit(LEGACY_STATE()->owner_not_claiming_slot, slot))
 /* Treating slot bitmaps as 8-byte words to speedup iteration */
@@ -4531,15 +4524,6 @@ int clusterProcessPacket(clusterLink *link) {
     }
     return 1;
 }
-
-/* This function is called when we detect the link with this node is lost.
-   We set the node as no longer connected. The Cluster Cron will detect
-   this connection and will try to get it connected again.
-
-   Instead if the node is a temporary node used to accept a query, we
-   completely free the node on error. */
-
-/* Send the messages queued for the link. */
 
 /* A connect handler that gets called when a connection to another node
  * gets established.

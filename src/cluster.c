@@ -2416,6 +2416,8 @@ unsigned int countChannelsInSlot(unsigned int hashslot) {
     return kvstoreHashtableSize(server.pubsubshard_channels, hashslot);
 }
 
+/* Remove all the keys in the specified hash slot.
+ * The number of removed items is returned. */
 unsigned int delKeysInSlot(unsigned int hashslot, int lazy, bool propagate_del, bool send_del_event) {
     if (!countKeysInSlot(hashslot)) return 0;
 

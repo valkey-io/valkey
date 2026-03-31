@@ -158,6 +158,13 @@ long long getNodeReplicationOffset(clusterNode *node) {
     }
 }
 
+/* By default, a server doesn't have a human-readable nodename unless explicitly
+ * assigned by CONFIG SET cluster-announce-human-nodename command or config file
+ * edit, so we simply fall back to using the node's IP and port as the nodename.
+ *
+ * WARNING: THIS IS ONLY USED FOR LOGGING PURPOSE.
+ *
+ * Returns either the SDS field or a pointer to a thread-local scratch buffer. */
 char *humanNodename(clusterNode *node) {
     if (sdslen(node->human_nodename) > 0) {
         return node->human_nodename;
@@ -244,6 +251,7 @@ char **getClusterNodesList(size_t *numnodes) {
  * Node registry
  * -------------------------------------------------------------------------- */
 
+/* Node lookup by name */
 clusterNode *clusterLookupNode(const char *name, int length) {
     if (verifyClusterNodeId(name, length) != C_OK) return NULL;
     sds s = sdsnewlen(name, length);
@@ -338,6 +346,8 @@ void setImportingSlotSource(int slot, clusterNode *node) {
     }
 }
 
+/* Clear the migrating / importing state for all the slots.
+ * This is useful at initialization and when turning a primary into replica. */
 void clusterCloseAllSlots(void) {
     dictEmpty(server.cluster->migrating_slots_to, NULL);
     dictEmpty(server.cluster->importing_slots_from, NULL);

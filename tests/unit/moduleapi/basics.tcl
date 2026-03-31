@@ -83,6 +83,16 @@ start_server {tags {"modules"}} {
         assert_match "-ERR Write command*" $reply
     }
 
+    test "Test CallArgv with null arrayStart still consumes children" {
+        r set k1 v1
+        r set k2 v2
+        # The module calls MGET k1 k2 with arrayStart=NULL and counts how many
+        # bulkString callbacks fired. Before the parser-desync fix the array
+        # body was skipped entirely (result 0); with the fix children are always
+        # consumed and bulkString fires once per element (result 2).
+        assert_equal 2 [r test.call_argv_null_array_start k1 k2]
+    }
+
     test "Test CallArgvScriptMode" {
         # SCRIPT_MODE blocks dangerous administrative commands like SHUTDOWN
         assert_error "ERR command 'shutdown' is not allowed on script mode" {r test.call_argv_s shutdown}

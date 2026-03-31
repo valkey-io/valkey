@@ -151,6 +151,50 @@ int TestCallArgvScriptMode(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int 
     return VALKEYMODULE_OK;
 }
 
+/* Increment an int counter passed as ctx. Used to verify that typed callbacks
+ * are invoked even when the collection start/end callbacks are NULL. */
+static void countBulkString(void *ctx, const char *str, size_t len,
+                             const char *proto, size_t proto_len) {
+    UNUSED(str);
+    UNUSED(len);
+    UNUSED(proto);
+    UNUSED(proto_len);
+    (*(int *)ctx)++;
+}
+
+/* TEST.CALL_ARGV_NULL_ARRAY_START key1 key2
+ *
+ * Calls MGET key1 key2 via VM_CallArgv with a handler table that has
+ * arrayStart=NULL (and arrayEnd=NULL). Returns the number of bulkString
+ * callbacks that fired.
+ *
+ * Before the parser-desync fix, callRawReplyArray() returned early on a NULL
+ * arrayStart, skipping the child-element loop entirely — bulkString never
+ * fired and the result was 0. After the fix the children are always consumed,
+ * bulkString fires once per element, and the result is 2. */
+int TestCallArgvNullArrayStart(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    if (argc < 3) return ValkeyModule_WrongArity(ctx);
+    ValkeyModule_AutoMemory(ctx);
+
+    int count = 0;
+    ValkeyModuleReplyHandlers handlers = {
+        /* arrayStart intentionally NULL — the parser must still consume
+         * the array children to stay in sync. */
+        .bulkString = countBulkString,
+    };
+
+    ValkeyModuleString *mget_argv[3];
+    mget_argv[0] = ValkeyModule_CreateString(ctx, "MGET", 4);
+    mget_argv[1] = argv[1];
+    mget_argv[2] = argv[2];
+
+    int flags = VALKEYMODULE_CALL_ARGV_NO_WRITES | VALKEYMODULE_CALL_ARGV_ERRORS_AS_REPLIES;
+    ValkeyModule_CallArgv(ctx, mget_argv, 3, flags, &handlers, &count);
+
+    ValkeyModule_ReplyWithLongLong(ctx, count);
+    return VALKEYMODULE_OK;
+}
+
 int TestCallResp3Attribute(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     VALKEYMODULE_NOT_USED(argv);
     VALKEYMODULE_NOT_USED(argc);
@@ -1055,6 +1099,10 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
 
     if (ValkeyModule_CreateCommand(ctx,"test.call_argv_s",
         TestCallArgvScriptMode,"write deny-oom",0,0,0) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
+
+    if (ValkeyModule_CreateCommand(ctx,"test.call_argv_null_array_start",
+        TestCallArgvNullArrayStart,"write deny-oom",0,0,0) == VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
 
     if (ValkeyModule_CreateCommand(ctx,"test.callresp3map",

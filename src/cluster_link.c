@@ -105,6 +105,16 @@ void setClusterNodeToInboundClusterLink(clusterNode *node, clusterLink *link) {
     }
 }
 
+/* This function is called when we detect the link with this node is lost.
+   We set the node as no longer connected. The Cluster Cron will detect
+   this connection and will try to get it connected again.
+
+   Instead if the node is a temporary node used to accept a query, we
+   completely free the node on error. */
+static void handleLinkIOError(clusterLink *link) {
+    freeClusterLink(link);
+}
+
 /* Send the messages queued for the link. */
 void clusterWriteHandler(connection *conn) {
     clusterLink *link = connGetPrivateData(conn);
@@ -120,10 +130,11 @@ void clusterWriteHandler(connection *conn) {
         nwritten = connWrite(conn, (char *)block->data + offset,
                              block->len - offset);
         if (nwritten <= 0) {
+            if (nwritten == -1 && connGetState(conn) == CONN_STATE_CONNECTED) return; /* equivalent to EAGAIN */
             serverLog(LL_DEBUG, "I/O error writing to node link: %s",
                       (nwritten == -1) ? connGetLastError(conn)
                                        : "short write");
-            freeClusterLink(link);
+            handleLinkIOError(link);
             return;
         }
         if (offset + nwritten < block->len) {

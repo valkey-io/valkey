@@ -6007,7 +6007,7 @@ static void clusterLegacyResetManualFailover(void) {
          * Regardless of the outcome we unpause now to allow traffic again. */
         unpauseActions(PAUSE_DURING_FAILOVER);
     }
-    LEGACY_STATE()->mf_end = clusterLegacyResetManualFailover0; /* No manual failover in progress. */
+    LEGACY_STATE()->mf_end = 0; /* No manual failover in progress. */
     LEGACY_STATE()->mf_can_start = 0;
     LEGACY_STATE()->mf_replica = NULL;
     LEGACY_STATE()->mf_primary_offset = -1;

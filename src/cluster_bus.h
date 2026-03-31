@@ -56,9 +56,14 @@ typedef struct clusterBusType {
      * waiting for the consensus commit. */
     void (*slotChange)(slotRange *ranges, int numranges, clusterNode *target, void *ctx, void (*callback)(void *ctx, int success));
 
-    /* Clean up any protocol-specific failover state. Called when the node's
-     * role changes and any in-progress failover state is no longer relevant. */
-    void (*cleanupFailoverState)(void);
+    /* Clean up any protocol-specific manual failover state. Called when the
+     * node's role changes and any in-progress manual failover state is no
+     * longer relevant. */
+    void (*resetManualFailoverState)(void);
+
+    /* Reset automatic failover election state. Called when the node switches
+     * to a new primary, since any previous election state is stale. */
+    void (*resetAutomaticFailoverState)(void);
 
     /* Node management — called from cluster commands */
     int (*forgetNode)(const char *node_id, size_t id_len);

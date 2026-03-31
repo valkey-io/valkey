@@ -142,7 +142,7 @@ void clusterSlotChange(slotRange *ranges, int numranges, clusterNode *target, vo
 }
 
 void clusterCleanupFailoverState(void) {
-    clusterCurrentBus->cleanupFailoverState();
+    clusterCurrentBus->resetManualFailoverState();
 }
 
 /* Set the specified node 'n' as primary for this node.
@@ -175,6 +175,11 @@ void clusterSetPrimary(clusterNode *n, int closeSlots, int full_sync_required) {
     replicationSetPrimary(n->ip, getNodeDefaultReplicationPort(n), full_sync_required, true);
     removeAllNotOwnedShardChannelSubscriptions();
     clusterCleanupFailoverState();
+
+    /* Since we have changed to a new primary node, the previously set
+     * election state should no longer be used, whether it is in progress
+     * or timed out. */
+    clusterCurrentBus->resetAutomaticFailoverState();
 
     /* Perform needed slot migration state transitions */
     clusterUpdateSlotExportsOnOwnershipChange();

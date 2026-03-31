@@ -455,7 +455,7 @@ void bitmapSetBit(unsigned char *bitmap, int pos);
 void bitmapClearBit(unsigned char *bitmap, int pos);
 void clusterDoBeforeSleep(int flags);
 void clusterSendUpdate(clusterLink *link, clusterNode *node);
-void resetManualFailover(void);
+static void clusterLegacyResetManualFailover(void);
 void clusterSetNodeAsPrimary(clusterNode *n);
 void clusterDelNode(clusterNode *delnode);
 sds representClusterNodeFlags(sds ci, uint16_t flags);
@@ -1792,7 +1792,7 @@ static void clusterLegacyInit(void) {
     for (int conn_type = 0; conn_type < CACHE_CONN_TYPE_MAX; conn_type++) {
         server.cached_cluster_slot_info[conn_type] = NULL;
     }
-    resetManualFailover();
+    clusterLegacyResetManualFailover();
     clusterLegacyUpdateMyselfFlags();
     clusterLegacyUpdateMyselfIp();
     clusterLegacyUpdateMyselfClientIpV4();
@@ -1936,7 +1936,7 @@ void clusterReset(int hard) {
 
     /* Close slots, reset manual failover state. */
     clusterCloseAllSlots();
-    resetManualFailover();
+    clusterLegacyResetManualFailover();
 
     /* Unassign all the slots. */
     for (j = 0; j < CLUSTER_SLOTS; j++) clusterDelSlot(j);
@@ -4488,7 +4488,7 @@ int clusterProcessPacket(clusterLink *link) {
         if (!sender || sender->replicaof != myself) return 1;
         /* Manual failover requested from replicas. Initialize the state
          * accordingly. */
-        resetManualFailover();
+        clusterLegacyResetManualFailover();
         LEGACY_STATE()->mf_end = now + server.cluster_mf_timeout;
         LEGACY_STATE()->mf_replica = sender;
         pauseActions(PAUSE_DURING_FAILOVER, now + (server.cluster_mf_timeout * CLUSTER_MF_PAUSE_MULT),
@@ -5606,7 +5606,7 @@ void clusterFailoverReplaceYourPrimary(void) {
     clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_FSYNC_CONFIG | CLUSTER_TODO_BROADCAST_ALL);
 
     /* 5) If there was a manual failover in progress, clear the state. */
-    resetManualFailover();
+    clusterLegacyResetManualFailover();
 
     /* 6) Upon becoming primary, we need to ensure that data is deleted in unowned slots. */
     verifyClusterConfigWithData();
@@ -6001,25 +6001,28 @@ void manualFailoverCanStart(void) {
  *
  * The function can be used both to initialize the manual failover state at
  * startup or to abort a manual failover in progress. */
-/* Reset manual and automatic failover state. */
-void resetManualFailover(void) {
+static void clusterLegacyResetManualFailover(void) {
     if (LEGACY_STATE()->mf_replica) {
         /* We were a primary failing over, so we paused clients and related actions.
          * Regardless of the outcome we unpause now to allow traffic again. */
         unpauseActions(PAUSE_DURING_FAILOVER);
     }
-    LEGACY_STATE()->mf_end = 0; /* No manual failover in progress. */
+    LEGACY_STATE()->mf_end = clusterLegacyResetManualFailover0; /* No manual failover in progress. */
     LEGACY_STATE()->mf_can_start = 0;
     LEGACY_STATE()->mf_replica = NULL;
     LEGACY_STATE()->mf_primary_offset = -1;
-    LEGACY_STATE()->failover_auth_time = 0; /* Also reset automatic failover. */
+}
+
+/* Reset automatic failover election state. */
+static void clusterLegacyResetAutomaticFailover(void) {
+    LEGACY_STATE()->failover_auth_time = 0;
 }
 
 /* If a manual failover timed out, abort it. */
 void manualFailoverCheckTimeout(void) {
     if (LEGACY_STATE()->mf_end && LEGACY_STATE()->mf_end < mstime()) {
         serverLog(LL_WARNING, "Manual failover timed out.");
-        resetManualFailover();
+        clusterLegacyResetManualFailover();
     }
 }
 
@@ -7402,7 +7405,7 @@ static void clusterLegacyFailover(client *c, int force, int takeover) {
                          "please use CLUSTER FAILOVER FORCE");
         return;
     }
-    resetManualFailover();
+    clusterLegacyResetManualFailover();
     LEGACY_STATE()->mf_end = mstime() + server.cluster_mf_timeout;
     sds cl = catClientInfoShortString(sdsempty(), c,
                                       server.hide_user_data_from_log);
@@ -7556,7 +7559,8 @@ clusterBusType clusterLegacyBus = {
     .appendInfoFields = clusterLegacyAppendInfoFields,
     .getFailureReportsCount = clusterNodeFailureReportsCount,
     .slotChange = clusterLegacySlotChange,
-    .cleanupFailoverState = resetManualFailover,
+    .resetManualFailoverState = clusterLegacyResetManualFailover,
+    .resetAutomaticFailoverState = clusterLegacyResetAutomaticFailover,
     .forgetNode = clusterLegacyForgetNode,
     .setReplicaOf = clusterLegacySetReplicaOf,
     .failover = clusterLegacyFailover,

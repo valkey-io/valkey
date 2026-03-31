@@ -6423,6 +6423,10 @@ static void clusterLegacySlotChange(slotRange *ranges, int numranges, clusterNod
     for (int i = 0; i < numranges; i++) {
         for (int j = ranges[i].start_slot; j <= ranges[i].end_slot; j++) {
             if (target) {
+                /* If this slot was set as importing we can clear this
+                 * state as now we are the real owner of the slot. */
+                if (target == myself && getImportingSlotSource(j))
+                    setImportingSlotSource(j, NULL);
                 if (server.cluster->slots[j]) clusterDelSlot(j);
                 clusterAddSlot(target, j);
             } else {

@@ -496,7 +496,7 @@ typedef struct ValkeyModuleAsyncRMCallPromise {
     /* RESP handlers and caller context used when parsing the reply of the command called from
      * the blocked context. Only used if 'from_call_argv' is true. */
     ValkeyModuleReplyHandlers resp_handlers;
-    void *resp_handlers_ctx;
+    ValkeyModuleCallReplyCtx *resp_handlers_ctx;
 } ValkeyModuleAsyncRMCallPromise;
 
 typedef struct ValkeyModuleAsyncRMCallPromise ValkeyModuleCallArgvHandle;
@@ -7038,7 +7038,7 @@ int VM_CallArgv(ValkeyModuleCtx *ctx,
                 int argc,
                 int flags,
                 const ValkeyModuleReplyHandlers *resp_handlers,
-                void *reply_ctx) {
+                ValkeyModuleCallReplyCtx *reply_ctx) {
     int ret = VALKEYMODULE_OK;
     client *c = NULL;
     sds reply_error_msg = NULL;

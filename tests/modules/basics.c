@@ -79,22 +79,22 @@ fail:
 
 #define UNUSED(V) ((void)V)
 
-void handleSimpleString(void *ctx, const char *str, size_t len) {
+void handleSimpleString(ValkeyModuleCallReplyCtx *ctx, const char *str, size_t len) {
     ((char *)str)[len] = '\0'; /* temporarily null terminate */
-    ValkeyModule_ReplyWithSimpleString(ctx, str);
+    ValkeyModule_ReplyWithSimpleString((ValkeyModuleCtx *)ctx, str);
 }
 
-void handleBulkString(void *ctx, const char *str, size_t len) {
-    ValkeyModule_ReplyWithStringBuffer(ctx, str, len);
+void handleBulkString(ValkeyModuleCallReplyCtx *ctx, const char *str, size_t len) {
+    ValkeyModule_ReplyWithStringBuffer((ValkeyModuleCtx *)ctx, str, len);
 }
 
-void handleArray(void *ctx, size_t len) {
-    ValkeyModule_ReplyWithArray(ctx, len);
+void handleArray(ValkeyModuleCallReplyCtx *ctx, size_t len) {
+    ValkeyModule_ReplyWithArray((ValkeyModuleCtx *)ctx, len);
 }
 
-void handleError(void *ctx, const char *str, size_t len) {
+void handleError(ValkeyModuleCallReplyCtx *ctx, const char *str, size_t len) {
     ((char *)str)[len] = '\0'; /* temporarily null terminate */
-    ValkeyModule_ReplyWithError(ctx, str);
+    ValkeyModule_ReplyWithError((ValkeyModuleCtx *)ctx, str);
 }
 
 ValkeyModuleReplyHandlers resp_handlers = {
@@ -110,12 +110,12 @@ int TestCallArgv(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     ValkeyModule_AutoMemory(ctx);
 
     int flags = VALKEYMODULE_CALL_ARGV_NO_WRITES | VALKEYMODULE_CALL_ARGV_ERRORS_AS_REPLIES;
-    ValkeyModule_CallArgv(ctx, argv + 1, argc - 1, flags, &resp_handlers, ctx);
+    ValkeyModule_CallArgv(ctx, argv + 1, argc - 1, flags, &resp_handlers, (ValkeyModuleCallReplyCtx *)ctx);
 
     return VALKEYMODULE_OK;
 }
 
-int replyWithRawRespString(void *ctx, ValkeyModuleCtx *mctx, const char *proto, size_t proto_len) {
+int replyWithRawRespString(ValkeyModuleCallReplyCtx *ctx, ValkeyModuleCtx *mctx, const char *proto, size_t proto_len) {
     UNUSED(ctx);
     UNUSED(proto_len);
     ValkeyModule_ReplyWithCString(mctx, proto);
@@ -140,17 +140,17 @@ int TestCallArgvScriptMode(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int 
     ValkeyModule_AutoMemory(ctx);
 
     int flags = VALKEYMODULE_CALL_ARGV_SCRIPT_MODE | VALKEYMODULE_CALL_ARGV_ERRORS_AS_REPLIES;
-    ValkeyModule_CallArgv(ctx, argv + 1, argc - 1, flags, &resp_handlers, ctx);
+    ValkeyModule_CallArgv(ctx, argv + 1, argc - 1, flags, &resp_handlers, (ValkeyModuleCallReplyCtx *)ctx);
 
     return VALKEYMODULE_OK;
 }
 
 /* Increment an int counter passed as ctx. Used to verify that typed callbacks
  * are invoked even when the collection start/end callbacks are NULL. */
-static void countBulkString(void *ctx, const char *str, size_t len) {
+static void countBulkString(ValkeyModuleCallReplyCtx *ctx, const char *str, size_t len) {
     UNUSED(str);
     UNUSED(len);
-    (*(int *)ctx)++;
+    (*(int *)(void *)ctx)++;
 }
 
 /* TEST.CALL_ARGV_NULL_ARRAY_START key1 key2
@@ -180,7 +180,7 @@ int TestCallArgvNullArrayStart(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, 
     mget_argv[2] = argv[2];
 
     int flags = VALKEYMODULE_CALL_ARGV_NO_WRITES | VALKEYMODULE_CALL_ARGV_ERRORS_AS_REPLIES;
-    ValkeyModule_CallArgv(ctx, mget_argv, 3, flags, &handlers, &count);
+    ValkeyModule_CallArgv(ctx, mget_argv, 3, flags, &handlers, (ValkeyModuleCallReplyCtx *)&count);
 
     ValkeyModule_ReplyWithLongLong(ctx, count);
     return VALKEYMODULE_OK;

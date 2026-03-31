@@ -534,10 +534,10 @@ struct CallArgvAsyncContext {
     ValkeyModuleBlockedClient *bc;
 };
 
-static int call_argv_raw_resp_handler(void *ctx, ValkeyModuleCtx *mctx, const char *proto, size_t proto_len) {
+static int call_argv_raw_resp_handler(ValkeyModuleCallReplyCtx *ctx, ValkeyModuleCtx *mctx, const char *proto, size_t proto_len) {
     UNUSED(proto_len);
 
-    struct CallArgvAsyncContext *actx = ctx;
+    struct CallArgvAsyncContext *actx = (struct CallArgvAsyncContext *)(void *)ctx;
 
     if (actx->bc) {
         ValkeyModuleCtx *bctx = ValkeyModule_GetThreadSafeContext(actx->bc);
@@ -564,9 +564,9 @@ static void do_vm_call_argv_async_disconnect(ValkeyModuleCtx *ctx, struct Valkey
     ValkeyModule_Free(actx);
 }
 
-static void call_argv_deferred_reply_handle(void *ctx, ValkeyModuleCtx *mctx,
+static void call_argv_deferred_reply_handle(ValkeyModuleCallReplyCtx *ctx, ValkeyModuleCtx *mctx,
                                              ValkeyModuleCallArgvHandle *abort_handle) {
-    struct CallArgvAsyncContext *actx = ctx;
+    struct CallArgvAsyncContext *actx = (struct CallArgvAsyncContext *)(void *)ctx;
     actx->is_async = 1;
     actx->abort_handle = abort_handle;
 
@@ -595,7 +595,7 @@ int do_vm_call_argv_async_aux(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, i
         .onAvailable = call_argv_raw_resp_handler,
     };
 
-     ValkeyModule_CallArgv(ctx, argv, (size_t)argc, flags, &resp_handlers, actx);
+     ValkeyModule_CallArgv(ctx, argv, (size_t)argc, flags, &resp_handlers, (ValkeyModuleCallReplyCtx *)actx);
      return VALKEYMODULE_OK;
 }
 
@@ -630,14 +630,14 @@ int do_vm_call_argv_async(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int a
     return do_vm_call_argv_async_aux(ctx, argv + 1, argc - 1, flags, NULL);
 }
 
-int do_vm_call_argv_async_script_mode_available_reply_handle(void *ctx, ValkeyModuleCtx *mctx,
+int do_vm_call_argv_async_script_mode_available_reply_handle(ValkeyModuleCallReplyCtx *ctx, ValkeyModuleCtx *mctx,
                                                              const char *proto, size_t proto_len) {
     UNUSED(ctx);
     ValkeyModule_ReplyRaw(mctx, proto, proto_len);
     return 0; /* continue parsing */
 }
 
-void do_vm_call_argv_async_script_mode_deferred_reply_handle(void *ctx, ValkeyModuleCtx *mctx,
+void do_vm_call_argv_async_script_mode_deferred_reply_handle(ValkeyModuleCallReplyCtx *ctx, ValkeyModuleCtx *mctx,
                                                              ValkeyModuleCallArgvHandle *abort_handle) {
     UNUSED(ctx);
     UNUSED(abort_handle);
@@ -679,10 +679,10 @@ void *send_call_argv_async_reply(void *arg) {
     return NULL;
 }
 
-static int call_argv_async_on_thread_available_handler(void *ctx, ValkeyModuleCtx *mctx, const char *proto, size_t proto_len) {
+static int call_argv_async_on_thread_available_handler(ValkeyModuleCallReplyCtx *ctx, ValkeyModuleCtx *mctx, const char *proto, size_t proto_len) {
     UNUSED(proto_len);
 
-    struct CallArgvAsyncContext *actx = ctx;
+    struct CallArgvAsyncContext *actx = (struct CallArgvAsyncContext *)(void *)ctx;
 
     if (actx->bc) {
         ThreadedAsyncCallArgvCtx *ta_call_ctx = ValkeyModule_Alloc(sizeof(*ta_call_ctx));
@@ -723,7 +723,7 @@ int do_vm_call_argv_async_on_thread(ValkeyModuleCtx *ctx, ValkeyModuleString **a
         .onAvailable = call_argv_async_on_thread_available_handler,
     };
 
-    ValkeyModule_CallArgv(ctx, argv + 1, (size_t)argc - 1, flags, &resp_handlers, actx);
+    ValkeyModule_CallArgv(ctx, argv + 1, (size_t)argc - 1, flags, &resp_handlers, (ValkeyModuleCallReplyCtx *)actx);
     return VALKEYMODULE_OK;
 }
 
@@ -734,8 +734,8 @@ struct WaitAndCallArgvAsyncContext {
     int argc;
 };
 
-int wait_and_call_argv_raw_resp_handler(void *ctx, ValkeyModuleCtx *mctx, const char *proto, size_t proto_len) {
-    struct WaitAndCallArgvAsyncContext *actx = ctx;
+int wait_and_call_argv_raw_resp_handler(ValkeyModuleCallReplyCtx *ctx, ValkeyModuleCtx *mctx, const char *proto, size_t proto_len) {
+    struct WaitAndCallArgvAsyncContext *actx = (struct WaitAndCallArgvAsyncContext *)(void *)ctx;
 
     if (actx->is_async) {
         int flags = VALKEYMODULE_CALL_ARGV_ALLOW_BLOCK |
@@ -750,10 +750,10 @@ int wait_and_call_argv_raw_resp_handler(void *ctx, ValkeyModuleCtx *mctx, const 
     return 0; /* stop parsing */
 }
 
-void wait_and_call_argv_deferred_reply_handle(void *ctx, ValkeyModuleCtx *mctx,
+void wait_and_call_argv_deferred_reply_handle(ValkeyModuleCallReplyCtx *ctx, ValkeyModuleCtx *mctx,
                                                ValkeyModuleCallArgvHandle *abort_handle) {
     UNUSED(abort_handle);
-    struct WaitAndCallArgvAsyncContext *actx = ctx;
+    struct WaitAndCallArgvAsyncContext *actx = (struct WaitAndCallArgvAsyncContext *)(void *)ctx;
     ValkeyModuleBlockedClient *bc = ValkeyModule_BlockClient(mctx, NULL, NULL, NULL, 0);
     actx->is_async = 1;
     actx->bc = bc;
@@ -775,7 +775,7 @@ static void forward_call_to_unblock_handler(ValkeyModuleCtx *ctx,
         .argc = fw_argc,
     };
 
-    ValkeyModule_CallArgv(ctx, argv, argc, flags, resp_handlers, actx);
+    ValkeyModule_CallArgv(ctx, argv, argc, flags, resp_handlers, (ValkeyModuleCallReplyCtx *)actx);
 }
 
 int wait_and_do_vm_call_argv_async(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
@@ -812,8 +812,8 @@ int wait_and_do_vm_call_argv_async(ValkeyModuleCtx *ctx, ValkeyModuleString **ar
     return VALKEYMODULE_OK;
 }
 
-static int blpop_and_set_multiple_keys_on_available(void *ctx, ValkeyModuleCtx *mctx, const char *proto, size_t proto_len) {
-    struct WaitAndCallArgvAsyncContext *actx = ctx;
+static int blpop_and_set_multiple_keys_on_available(ValkeyModuleCallReplyCtx *ctx, ValkeyModuleCtx *mctx, const char *proto, size_t proto_len) {
+    struct WaitAndCallArgvAsyncContext *actx = (struct WaitAndCallArgvAsyncContext *)(void *)ctx;
 
     if (actx->is_async) {
         int flags = VALKEYMODULE_CALL_ARGV_REPLICATE;

@@ -26,8 +26,7 @@
 /* Dataset format types */
 typedef enum datasetFormat {
     DATASET_FORMAT_CSV = 0,
-    DATASET_FORMAT_TSV,
-    DATASET_FORMAT_XML
+    DATASET_FORMAT_TSV
 } datasetFormat;
 
 /* Dataset structures */
@@ -45,12 +44,11 @@ typedef struct dataset {
     datasetRecord *records;
     size_t record_count;
     const char *filename;
-    const char *xml_root_element;
     int max_documents;
 } dataset;
 
 /* Initialize dataset from file - returns NULL on error */
-dataset *datasetInit(const char *filename, const char *xml_root_element, int max_documents, int has_field_placeholders, sds *template_argv, int template_argc, int verbose);
+dataset *datasetInit(const char *filename, int max_documents, int has_field_placeholders, sds *template_argv, int template_argc, int verbose);
 
 /* Free dataset and all memory */
 void datasetFree(dataset *ds);

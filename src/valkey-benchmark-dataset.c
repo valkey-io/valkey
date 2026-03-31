@@ -18,7 +18,6 @@
 /* Internal constants */
 #define PLACEHOLDER_COUNT 10
 #define PLACEHOLDER_LEN 12
-#define XML_TAG_OVERHEAD 16 /* Space for XML tag syntax ("<", ">", "</", ">") and null terminator */
 
 static const char *PLACEHOLDERS[PLACEHOLDER_COUNT] = {
     "__rand_int__", "__rand_1st__", "__rand_2nd__", "__rand_3rd__", "__rand_4th__",
@@ -27,12 +26,8 @@ static const char *PLACEHOLDERS[PLACEHOLDER_COUNT] = {
 /* Forward declarations */
 static bool datasetBuildFieldMap(dataset *ds, sds *template_argv, int template_argc);
 static sds getFieldValue(const char *row, int column_index, char delimiter);
-static sds getXmlFieldValue(const char *xml_doc, const char *field_name);
 static bool csvDiscoverFields(dataset *ds);
-static bool scanXmlFieldsFromFile(dataset *ds, const char *xml_root_element);
-static bool scanXmlFields(const char *doc_start, const char *doc_end, dataset *ds, const char *start_root_tag, const char *end_root_tag);
-static bool loadXmlDataset(dataset *ds, const char *xml_root_element, int verbose);
-static bool csvLoadDocuments(dataset *ds);
+static bool csvLoadDocuments(dataset *ds, int verbose);
 static bool shouldStopLoading(dataset *ds);
 static int findFieldIndex(dataset *ds, const char *field_name, size_t field_name_len);
 static const char *extractDatasetFieldValue(dataset *ds, int field_idx, int record_index);
@@ -40,34 +35,14 @@ static sds replaceOccurrence(sds processed_arg, const char *pos, const char *rep
 static sds processFieldsInArg(dataset *ds, sds arg, int record_index);
 static sds processRandPlaceholdersForDataSet(sds cmd, _Atomic uint64_t *seq_key, int replace_placeholders, int keyspacelen, int sequential_replacement);
 
-/* Streaming buffer context for XML document scanning */
-typedef struct xmlStreamBuffer {
-    char *buffer;
-    size_t capacity;
-    size_t used;
-} xmlStreamBuffer;
-
-static xmlStreamBuffer *createXmlStreamBuffer(void);
-static void freeXmlStreamBuffer(xmlStreamBuffer *sb);
-static bool growXmlStreamBuffer(xmlStreamBuffer *sb);
-static size_t readIntoXmlStreamBuffer(xmlStreamBuffer *sb, FILE *fp);
-
-dataset *datasetInit(const char *filename, const char *xml_root_element, int max_documents, int has_field_placeholders, sds *template_argv, int template_argc, int verbose) {
+dataset *datasetInit(const char *filename, int max_documents, int has_field_placeholders, sds *template_argv, int template_argc, int verbose) {
     if (!filename) return NULL;
 
     dataset *ds = zcalloc(sizeof(dataset));
     if (!ds) return NULL;
 
     ds->filename = filename;
-    ds->xml_root_element = xml_root_element;
     ds->max_documents = max_documents;
-
-    /* Validate XML parameters */
-    if (strstr(filename, ".xml") && !xml_root_element) {
-        fprintf(stderr, "Error: XML dataset requires --xml-root-element parameter\n");
-        zfree(ds);
-        return NULL;
-    }
 
     /* Detect format */
     if (strstr(filename, ".csv")) {
@@ -76,20 +51,12 @@ dataset *datasetInit(const char *filename, const char *xml_root_element, int max
     } else if (strstr(filename, ".tsv")) {
         ds->format = DATASET_FORMAT_TSV;
         ds->delimiter = '\t';
-    } else if (strstr(filename, ".xml")) {
-        ds->format = DATASET_FORMAT_XML;
-        ds->delimiter = 0;
     } else {
         ds->format = DATASET_FORMAT_CSV;
         ds->delimiter = ',';
     }
 
-    /* Discover fields */
-    if (ds->format == DATASET_FORMAT_XML) {
-        if (!scanXmlFieldsFromFile(ds, xml_root_element)) goto error;
-    } else {
-        if (!csvDiscoverFields(ds)) goto error;
-    }
+    if (!csvDiscoverFields(ds)) goto error;
 
     /* Build field map if needed (BEFORE loading) */
     if (has_field_placeholders && template_argv && template_argc > 0) {
@@ -98,12 +65,7 @@ dataset *datasetInit(const char *filename, const char *xml_root_element, int max
         ds->used_field_count = ds->field_count;
     }
 
-    /* Load data with correct field count */
-    if (ds->format == DATASET_FORMAT_XML) {
-        if (!loadXmlDataset(ds, xml_root_element, verbose)) goto error;
-    } else {
-        if (!csvLoadDocuments(ds)) goto error;
-    }
+    if (!csvLoadDocuments(ds, verbose)) goto error;
 
     return ds;
 
@@ -232,41 +194,6 @@ sds datasetGenerateCommand(dataset *ds, int record_index, sds *template_argv, in
     return result;
 }
 
-/* XML streaming buffer helpers */
-static xmlStreamBuffer *createXmlStreamBuffer(void) {
-    xmlStreamBuffer *sb = zmalloc(sizeof(xmlStreamBuffer));
-    sb->capacity = 4 * 1024 * 1024;
-    sb->buffer = zmalloc(sb->capacity);
-    sb->used = 0;
-    return sb;
-}
-
-static void freeXmlStreamBuffer(xmlStreamBuffer *sb) {
-    if (!sb) return;
-    zfree(sb->buffer);
-    zfree(sb);
-}
-
-static bool growXmlStreamBuffer(xmlStreamBuffer *sb) {
-    size_t new_capacity = sb->capacity * 2;
-    char *new_buffer = zrealloc(sb->buffer, new_capacity);
-    if (!new_buffer) return false;
-    sb->buffer = new_buffer;
-    sb->capacity = new_capacity;
-    return true;
-}
-
-static size_t readIntoXmlStreamBuffer(xmlStreamBuffer *sb, FILE *fp) {
-    size_t space_available = sb->capacity - sb->used;
-    if (space_available == 0) {
-        if (!growXmlStreamBuffer(sb)) return 0;
-        space_available = sb->capacity - sb->used;
-    }
-    size_t bytes_read = fread(sb->buffer + sb->used, 1, space_available, fp);
-    sb->used += bytes_read;
-    return bytes_read;
-}
-
 static bool shouldStopLoading(dataset *ds) {
     if (ds->max_documents > 0 && (int)ds->record_count >= ds->max_documents) {
         return true;
@@ -310,34 +237,6 @@ static sds getFieldValue(const char *row, int column_index, char delimiter) {
     return sdsempty();
 }
 
-static sds getXmlFieldValue(const char *xml_doc, const char *field_name) {
-    size_t field_len = strlen(field_name);
-    if (field_len > MAX_FIELD_NAME_LEN) {
-        return sdsempty();
-    }
-
-    char start_tag_prefix[MAX_FIELD_NAME_LEN + XML_TAG_OVERHEAD], end_tag[MAX_FIELD_NAME_LEN + XML_TAG_OVERHEAD];
-    snprintf(start_tag_prefix, sizeof(start_tag_prefix), "<%s", field_name);
-    snprintf(end_tag, sizeof(end_tag), "</%s>", field_name);
-
-    const char *tag_start = strstr(xml_doc, start_tag_prefix);
-    if (!tag_start) return sdsempty();
-
-    const char *tag_end = strchr(tag_start, '>');
-    if (!tag_end) return sdsempty();
-
-    if (tag_end > tag_start && tag_end[-1] == '/') {
-        return sdsempty();
-    }
-
-    const char *content_start = tag_end + 1;
-    const char *closing_tag = strstr(content_start, end_tag);
-    if (!closing_tag) return sdsempty();
-
-    size_t content_len = closing_tag - content_start;
-    return sdsnewlen(content_start, content_len);
-}
-
 static bool csvDiscoverFields(dataset *ds) {
     FILE *fp = fopen(ds->filename, "r");
     if (!fp) {
@@ -374,272 +273,7 @@ static bool csvDiscoverFields(dataset *ds) {
     return true;
 }
 
-static bool scanXmlFields(const char *doc_start, const char *doc_end, dataset *ds, const char *start_root_tag, const char *end_root_tag) {
-    char field_names[MAX_DATASET_FIELDS][MAX_FIELD_NAME_LEN + 1];
-    int field_count = 0;
-    int root_start_tag_len = strlen(start_root_tag);
-    int root_end_tag_len = strlen(end_root_tag);
-
-    const char *current_pos = doc_start;
-    while ((current_pos = strchr(current_pos, '<')) != NULL && current_pos < doc_end) {
-        if (current_pos[1] == '/' || current_pos[1] == '!' ||
-            !strncmp(current_pos, start_root_tag, root_start_tag_len) ||
-            !strncmp(current_pos, end_root_tag, root_end_tag_len)) {
-            current_pos++;
-            continue;
-        }
-
-        const char *tag_end = strchr(current_pos, '>');
-        if (!tag_end || tag_end >= doc_end) break;
-
-        const char *field_start = current_pos + 1;
-        const char *field_name_end = field_start;
-
-        while (field_name_end < tag_end && *field_name_end != ' ' && *field_name_end != '\t') {
-            field_name_end++;
-        }
-
-        size_t field_name_len = field_name_end - field_start;
-
-        if (field_name_len == 0 || field_name_len > MAX_FIELD_NAME_LEN) {
-            current_pos = tag_end + 1;
-            continue;
-        }
-
-        int is_duplicate = 0;
-        for (int i = 0; i < field_count; i++) {
-            if (strlen(field_names[i]) == field_name_len &&
-                !memcmp(field_names[i], field_start, field_name_len)) {
-                is_duplicate = 1;
-                break;
-            }
-        }
-
-        if (!is_duplicate) {
-            if (field_count >= MAX_DATASET_FIELDS) {
-                fprintf(stderr, "Error: Dataset contains more than %d fields (limit exceeded)\n", MAX_DATASET_FIELDS);
-                return false;
-            }
-            memcpy(field_names[field_count], field_start, field_name_len);
-            field_names[field_count][field_name_len] = '\0';
-            field_count++;
-        }
-
-        current_pos = tag_end + 1;
-    }
-
-    if (field_count == 0) return false;
-
-    ds->field_names = zmalloc(field_count * sizeof(sds));
-    for (int i = 0; i < field_count; i++) {
-        ds->field_names[i] = sdsnew(field_names[i]);
-    }
-    ds->field_count = field_count;
-
-    return true;
-}
-
-static bool scanXmlFieldsFromFile(dataset *ds, const char *xml_root_element) {
-    FILE *fp = fopen(ds->filename, "r");
-    if (!fp) return false;
-
-    char start_tag_prefix[MAX_FIELD_NAME_LEN + XML_TAG_OVERHEAD], start_tag[MAX_FIELD_NAME_LEN + XML_TAG_OVERHEAD], end_tag[MAX_FIELD_NAME_LEN + XML_TAG_OVERHEAD];
-    size_t end_tag_len;
-    snprintf(start_tag_prefix, sizeof(start_tag_prefix), "<%s", xml_root_element);
-    snprintf(start_tag, sizeof(start_tag), "<%s>", xml_root_element);
-    snprintf(end_tag, sizeof(end_tag), "</%s>", xml_root_element);
-    end_tag_len = strlen(end_tag);
-
-    xmlStreamBuffer *sb = createXmlStreamBuffer();
-
-    while (1) {
-        size_t bytes_read = readIntoXmlStreamBuffer(sb, fp);
-        if (sb->used == 0) break;
-
-        /* Search for complete first document */
-        const char *tag_prefix_pos = strstr(sb->buffer, start_tag_prefix);
-        if (!tag_prefix_pos) {
-            if (bytes_read == 0) break;
-            continue;
-        }
-
-        const char *tag_end_pos = strchr(tag_prefix_pos, '>');
-        if (!tag_end_pos || tag_end_pos >= sb->buffer + sb->used) {
-            if (bytes_read == 0) break;
-            continue;
-        }
-
-        const char *doc_start = tag_prefix_pos;
-        const char *doc_end = NULL;
-
-        /* Search for closing tag from current position onward */
-        for (size_t i = (tag_end_pos - sb->buffer); i + end_tag_len <= sb->used; i++) {
-            if (strncmp(sb->buffer + i, end_tag, end_tag_len) == 0) {
-                doc_end = sb->buffer + i + end_tag_len;
-                break;
-            }
-        }
-
-        if (!doc_end) {
-            if (bytes_read == 0) break;
-            continue;
-        }
-
-        /* Found complete first document - scan fields and exit */
-        bool result = scanXmlFields(doc_start, doc_end, ds, start_tag, end_tag);
-        freeXmlStreamBuffer(sb);
-        fclose(fp);
-        return result;
-    }
-
-    freeXmlStreamBuffer(sb);
-    fclose(fp);
-    return false;
-}
-
-static bool loadXmlDataset(dataset *ds, const char *xml_root_element, int verbose) {
-    FILE *fp = fopen(ds->filename, "r");
-    if (!fp) return false;
-
-    char start_tag_prefix[MAX_FIELD_NAME_LEN + XML_TAG_OVERHEAD], start_tag[MAX_FIELD_NAME_LEN + XML_TAG_OVERHEAD], end_tag[MAX_FIELD_NAME_LEN + XML_TAG_OVERHEAD];
-    size_t end_tag_len;
-    snprintf(start_tag_prefix, sizeof(start_tag_prefix), "<%s", xml_root_element);
-    snprintf(start_tag, sizeof(start_tag), "<%s>", xml_root_element);
-    snprintf(end_tag, sizeof(end_tag), "</%s>", xml_root_element);
-    end_tag_len = strlen(end_tag);
-
-    xmlStreamBuffer *sb = createXmlStreamBuffer();
-    bool fields_discovered = false;
-    size_t capacity = 1000;
-
-    ds->records = zmalloc(sizeof(datasetRecord) * capacity);
-
-    if (verbose) {
-        fprintf(stderr, "Loading XML dataset from %s...\n", ds->filename);
-    }
-
-    if (ds->field_names && ds->field_count > 0) {
-        fields_discovered = true;
-        if (verbose) {
-            fprintf(stderr, "Using %d fields: ", ds->field_count);
-            for (int i = 0; i < ds->field_count; i++) {
-                fprintf(stderr, "%s%s", ds->field_names[i], (i < ds->field_count - 1) ? ", " : "\n");
-            }
-        }
-    }
-
-    while (!shouldStopLoading(ds)) {
-        size_t bytes_read = readIntoXmlStreamBuffer(sb, fp);
-        if (sb->used == 0) break;
-
-        size_t scan_pos = 0;
-        while (scan_pos < sb->used) {
-            const char *doc_start = NULL;
-            const char *tag_open_end = NULL;
-
-            for (size_t i = scan_pos; i < sb->used; i++) {
-                if (sb->buffer[i] == '<' && i + 1 < sb->used &&
-                    strncmp(sb->buffer + i, start_tag_prefix, strlen(start_tag_prefix)) == 0) {
-                    doc_start = sb->buffer + i;
-
-                    for (size_t j = i + 1; j < sb->used; j++) {
-                        if (sb->buffer[j] == '>') {
-                            tag_open_end = sb->buffer + j;
-                            break;
-                        }
-                    }
-                    break;
-                }
-            }
-
-            if (!doc_start || !tag_open_end) break;
-
-            const char *doc_end = NULL;
-            for (size_t i = (tag_open_end - sb->buffer); i + end_tag_len <= sb->used; i++) {
-                if (strncmp(sb->buffer + i, end_tag, end_tag_len) == 0) {
-                    doc_end = sb->buffer + i + end_tag_len;
-                    break;
-                }
-            }
-
-            if (!doc_end) break;
-
-            size_t doc_len = doc_end - doc_start;
-
-            if (!fields_discovered) {
-                if (!scanXmlFields(doc_start, doc_end, ds, start_tag, end_tag)) {
-                    fprintf(stderr, "No XML fields discovered\n");
-                    freeXmlStreamBuffer(sb);
-                    fclose(fp);
-                    return false;
-                }
-                fields_discovered = true;
-
-                if (verbose) {
-                    fprintf(stderr, "Discovered %d fields: ", ds->field_count);
-                    for (int i = 0; i < ds->field_count; i++) {
-                        fprintf(stderr, "%s%s", ds->field_names[i], (i < ds->field_count - 1) ? ", " : "\n");
-                    }
-                }
-            }
-
-            if (ds->record_count >= capacity) {
-                capacity *= 2;
-                ds->records = zrealloc(ds->records, sizeof(datasetRecord) * capacity);
-            }
-
-            datasetRecord *record = &ds->records[ds->record_count];
-            record->fields = zmalloc(sizeof(sds) * ds->used_field_count);
-
-            sds doc_str = sdsnewlen(doc_start, doc_len);
-            if (ds->field_map) {
-                /* With field mapping - only load used fields */
-                for (int i = 0; i < ds->field_count; i++) {
-                    if (ds->field_map[i] >= 0) {
-                        record->fields[ds->field_map[i]] = getXmlFieldValue(doc_str, ds->field_names[i]);
-                    }
-                }
-            } else {
-                /* No field mapping - load all fields directly */
-                for (int i = 0; i < ds->field_count; i++) {
-                    record->fields[i] = getXmlFieldValue(doc_str, ds->field_names[i]);
-                }
-            }
-            sdsfree(doc_str);
-
-            ds->record_count++;
-
-            if (verbose && ds->record_count % 1000 == 0) {
-                fprintf(stderr, "\rLoaded %zu documents...", ds->record_count);
-                fflush(stderr);
-            }
-
-            scan_pos = doc_end - sb->buffer;
-        }
-
-        if (scan_pos > 0 && scan_pos < sb->used) {
-            size_t remaining = sb->used - scan_pos;
-            memmove(sb->buffer, sb->buffer + scan_pos, remaining);
-            sb->used = remaining;
-        } else if (scan_pos == sb->used) {
-            sb->used = 0;
-        }
-
-        if (bytes_read == 0 && (sb->used == 0 || scan_pos == 0)) {
-            break;
-        }
-    }
-
-    if (verbose) {
-        fprintf(stderr, "\rLoaded %zu documents%*s\n", ds->record_count, 20, "");
-    }
-
-    freeXmlStreamBuffer(sb);
-    fclose(fp);
-    return true;
-}
-
-static bool csvLoadDocuments(dataset *ds) {
+static bool csvLoadDocuments(dataset *ds, int verbose) {
     FILE *fp = fopen(ds->filename, "r");
     if (!fp) return false;
 
@@ -655,9 +289,9 @@ static bool csvLoadDocuments(dataset *ds) {
     size_t capacity = 1000;
     ds->records = zmalloc(sizeof(datasetRecord) * capacity);
 
-    const char *format_name = (ds->format == DATASET_FORMAT_CSV) ? "csv" : (ds->format == DATASET_FORMAT_TSV) ? "tsv"
-                                                                                                              : "xml";
-    (void)format_name; /* Suppress output in unit tests */
+    if (verbose) {
+        fprintf(stderr, "Loading dataset from %s...\n", ds->filename);
+    }
 
     int *load_indices = NULL;
     int load_count = 0;
@@ -698,6 +332,15 @@ static bool csvLoadDocuments(dataset *ds) {
         }
 
         ds->record_count++;
+
+        if (verbose && ds->record_count % 1000 == 0) {
+            fprintf(stderr, "\rLoaded %zu documents...", ds->record_count);
+            fflush(stderr);
+        }
+    }
+
+    if (verbose) {
+        fprintf(stderr, "\rLoaded %zu documents%*s\n", ds->record_count, 20, "");
     }
 
     if (load_indices) zfree(load_indices);

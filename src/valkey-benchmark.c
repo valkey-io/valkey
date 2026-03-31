@@ -164,7 +164,6 @@ static struct config {
     /* Dataset support */
     sds dataset_file;
     int max_documents;        /* Maximum documents to load from dataset */
-    sds xml_root_element;     /* XML root element name */
     dataset *current_dataset; /* Current loaded dataset */
     /* Command template for dataset mode */
     int template_argc;
@@ -1894,9 +1893,6 @@ int parseOptions(int argc, char **argv) {
             if (lastarg) goto invalid;
             config.max_documents = atoi(argv[++i]);
             if (config.max_documents <= 0) config.max_documents = -1;
-        } else if (!strcmp(argv[i], "--xml-root-element")) {
-            if (lastarg) goto invalid;
-            config.xml_root_element = sdsnew(argv[++i]);
         } else if (!strcmp(argv[i], "--help")) {
             exit_status = 0;
             goto usage;
@@ -2115,12 +2111,10 @@ usage:
         " --num-keys-in-fcall <num>\n"
         "                    Sets the number of keys passed to FCALL command when running\n"
         "                    the 'fcall' test. (default 1)\n"
-        " --dataset <file>   Path to CSV/TSV/XML dataset file for field placeholder replacement.\n"
+        " --dataset <file>   Path to CSV/TSV dataset file for field placeholder replacement.\n"
         "                    All fields auto-detected with natural content lengths.\n"
         " --maxdocs <num>    Maximum number of documents to load from dataset file.\n"
-        "                    Default: unlimited.\n"
-        " --xml-root-element <name>\n"
-        "                    Root element name for XML dataset parsing. Required for XML files.\n",
+        "                    Default: unlimited.\n",
         tls_usage,
         rdma_usage,
         " --mptcp            Enable an MPTCP connection.\n"
@@ -2340,7 +2334,6 @@ int main(int argc, char **argv) {
     config.resp3 = 0;
     config.dataset_file = NULL;
     config.max_documents = -1; /* -1 = unlimited */
-    config.xml_root_element = NULL;
     config.current_dataset = NULL;
     config.template_argc = 0;
     config.template_argv = NULL;
@@ -2377,7 +2370,7 @@ int main(int argc, char **argv) {
 
         /* Initialize dataset - single call does everything atomically */
         int verbose = !config.csv && !config.quiet;
-        config.current_dataset = datasetInit(config.dataset_file, config.xml_root_element,
+        config.current_dataset = datasetInit(config.dataset_file,
                                              config.max_documents,
                                              config.has_field_placeholders,
                                              config.template_argv, config.template_argc,

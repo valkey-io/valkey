@@ -138,10 +138,6 @@ endif
 $(VALKEY_SERVER_LIB): make-prerequisites
 	cd .. && $(MAKE) libvalkey.a
 
-# Dataset tests need valkey-benchmark-dataset.o compiled by parent with proper flags
-../valkey-benchmark-dataset.o: ../valkey-benchmark-dataset.c
-	cd .. && $(MAKE) valkey-benchmark-dataset.o
-
 # Ensure parent prerequisites are built
 .PHONY: make-prerequisites
 make-prerequisites:
@@ -209,7 +205,7 @@ valkey-unit-gtests: $(ALL_OBJECTS) generated_wrappers.o $(VALKEY_SERVER_WRAP_LIB
 		-o $@ $^ $(LD_LIBS) \
 		-lm -pthread -ldl
 else
-valkey-unit-gtests: $(ALL_OBJECTS) generated_wrappers.o $(VALKEY_SERVER_LIB) $(FINAL_LIBS) ../valkey-benchmark-dataset.o
+valkey-unit-gtests: $(ALL_OBJECTS) generated_wrappers.o $(VALKEY_SERVER_LIB) $(FINAL_LIBS)
 	$(CXX) -g $(LDFLAGS) -fno-lto \
 		$(OVERRIDES) \
 		-Wall -Wno-deprecated-declarations \

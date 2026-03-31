@@ -199,6 +199,27 @@ tags {"benchmark network external:skip logreqres:skip"} {
             assert {$different_count > 0}
         }
 
+        test {benchmark: dataset CSV with quoted field values containing commas} {
+            # A value with an embedded comma must be quoted and parse correctly
+            set csv_data "id,title\n1,\"Book, Part 1\"\n"
+            set csv_file [tmpfile "quoted.csv"]
+            set fd [open $csv_file w]
+            puts $fd $csv_data
+            close $fd
+
+            set cmd [valkeybenchmark $master_host $master_port \
+                "--dataset $csv_file -n 2 -r 10 -- SET doc:__rand_int__ \"__field:title__\""]
+            common_bench_setup $cmd
+
+            # Verify the quoted comma-containing value was stored intact
+            set keys [r keys "doc:*"]
+            assert {[llength $keys] > 0}
+            foreach key $keys {
+                assert_equal "Book, Part 1" [r get $key]
+            }
+            file delete $csv_file
+        }
+
         test {benchmark: dataset CSV with field placeholders} {
             # Create test CSV dataset
             set csv_data "title,content,author\nTest Title 1,Test Content 1,Author 1\nTest Title 2,Test Content 2,Author 2"
@@ -221,52 +242,6 @@ tags {"benchmark network external:skip logreqres:skip"} {
             assert {$content eq "Test Content 1" || $content eq "Test Content 2"}
             
             file delete $csv_file
-        }
-
-        test {benchmark: dataset XML with field placeholders} {
-            # Create test XML dataset matching Wikipedia structure
-            set xml_data "
-            <doc>
-                <title>XML Title 1</title>
-                <abstract>XML Abstract 1</abstract>
-                <url>http://example1.com</url>
-                <links>
-                    <sublink>
-                        <anchor>test1</anchor>
-                        <link>http://test1.com</link>
-                    </sublink>
-                </links>
-            </doc>
-            <doc>
-                <title>XML Title 2</title>
-                <abstract>XML Abstract 2</abstract>
-                <url>http://example2.com</url>
-                <links>
-                    <sublink>
-                        <anchor>test2</anchor>
-                        <link>http://test2.com</link>
-                    </sublink>
-                </links>
-            </doc>"
-            set xml_file [tmpfile "dataset.xml"]
-            set fd [open $xml_file w]
-            puts $fd $xml_data
-            close $fd
-
-            set cmd [valkeybenchmark $master_host $master_port "--dataset $xml_file --xml-root-element doc -n 4 -r 10 -- HSET xml_doc:__rand_int__ title \"__field:title__\" abstract \"__field:abstract__\""]
-            common_bench_setup $cmd
-            assert_match  {*calls=4,*} [cmdstat hset]
-            
-            # Verify XML field data was inserted correctly
-            set keys [r keys "xml_doc:*"]
-            assert {[llength $keys] > 0}
-            set sample_key [lindex $keys 0]
-            set title [r hget $sample_key title]
-            set abstract [r hget $sample_key abstract]
-            assert {$title eq "XML Title 1" || $title eq "XML Title 2"}
-            assert {$abstract eq "XML Abstract 1" || $abstract eq "XML Abstract 2"}
-            
-            file delete $xml_file
         }
 
         test {benchmark: dataset with maxdocs limit} {
@@ -341,26 +316,6 @@ tags {"benchmark network external:skip logreqres:skip"} {
             assert {$count eq "100" || $count eq "200"}
             
             file delete $tsv_file
-        }
-
-        test {benchmark: XML dataset missing root element error} {
-            # Create test XML dataset
-            set xml_data "<doc><title>XML Title 1</title><abstract>XML Abstract 1</abstract></doc>"
-            set xml_file [tmpfile "dataset.xml"]
-            set fd [open $xml_file w]
-            puts $fd $xml_data
-            close $fd
-
-            # Should fail without --xml-root-element parameter
-            set cmd [valkeybenchmark $master_host $master_port "--dataset $xml_file -n 1 -- SET xml:__rand_int__ \"__field:title__\""]
-            
-            if {[catch { exec {*}$cmd } error]} {
-                assert_match "*XML dataset requires --xml-root-element parameter*" $error
-            } else {
-                fail "Expected error for XML dataset without --xml-root-element"
-            }
-            
-            file delete $xml_file
         }
 
         test {benchmark: dataset with maxdocs larger than available documents} {

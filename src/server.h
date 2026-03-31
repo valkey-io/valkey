@@ -1232,6 +1232,10 @@ typedef struct ClientFlags {
                                               current command. */
     uint64_t argv_borrowed : 1;            /* The argv array and its elements are borrowed from the caller (VM_CallArgv) and must not be freed. */
 } ClientFlags;
+/* Ensure ClientFlags never silently grows beyond two uint64_t words.
+ * If this fires, move a flag to a separate field or widen the limit. */
+static_assert(sizeof(ClientFlags) <= sizeof(uint64_t) * 2,
+              "ClientFlags exceeds 128 bits; add a new word or remove a flag");
 
 typedef struct ClientPubSubData {
     hashtable *pubsub_channels;      /* channels a client is interested in (SUBSCRIBE) */

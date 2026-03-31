@@ -88,36 +88,32 @@ static void callRawReplyLong(void *ctx, long long val, const char *proto, size_t
 
 static void callRawReplyArray(ReplyParser *parser, void *ctx, size_t len, const char *proto) {
     RespHandlersCtx *w = (RespHandlersCtx *)ctx;
-    if (!w->handlers->arrayStart) return;
-    w->handlers->arrayStart(w->context, len);
+    if (w->handlers->arrayStart) w->handlers->arrayStart(w->context, len);
+    /* Always consume all child elements to keep the parser in sync,
+     * regardless of whether the start/end callbacks are set. */
     for (size_t i = 0; i < len; i++) {
         parseReply(parser, ctx);
     }
-    if (!w->handlers->arrayEnd) return;
-    w->handlers->arrayEnd(w->context, proto, parser->curr_location - proto);
+    if (w->handlers->arrayEnd) w->handlers->arrayEnd(w->context, proto, parser->curr_location - proto);
 }
 
 static void callRawReplySet(ReplyParser *parser, void *ctx, size_t len, const char *proto) {
     RespHandlersCtx *w = (RespHandlersCtx *)ctx;
-    if (!w->handlers->setStart) return;
-    w->handlers->setStart(w->context, len);
+    if (w->handlers->setStart) w->handlers->setStart(w->context, len);
     for (size_t i = 0; i < len; i++) {
         parseReply(parser, ctx);
     }
-    if (!w->handlers->setEnd) return;
-    w->handlers->setEnd(w->context, proto, parser->curr_location - proto);
+    if (w->handlers->setEnd) w->handlers->setEnd(w->context, proto, parser->curr_location - proto);
 }
 
 static void callRawReplyMap(ReplyParser *parser, void *ctx, size_t len, const char *proto) {
     RespHandlersCtx *w = (RespHandlersCtx *)ctx;
-    if (!w->handlers->mapStart) return;
-    w->handlers->mapStart(w->context, len);
+    if (w->handlers->mapStart) w->handlers->mapStart(w->context, len);
     for (size_t i = 0; i < len; i++) {
         parseReply(parser, ctx);
         parseReply(parser, ctx);
     }
-    if (!w->handlers->mapEnd) return;
-    w->handlers->mapEnd(w->context, proto, parser->curr_location - proto);
+    if (w->handlers->mapEnd) w->handlers->mapEnd(w->context, proto, parser->curr_location - proto);
 }
 
 static void callRawReplyDouble(void *ctx, double val, const char *proto, size_t proto_len) {
@@ -151,15 +147,13 @@ static void callRawReplyVerbatimString(void *ctx,
 
 static void callRawReplyAttribute(ReplyParser *parser, void *ctx, size_t len, const char *proto) {
     RespHandlersCtx *w = (RespHandlersCtx *)ctx;
-    if (!w->handlers->attributeStart) return;
-    w->handlers->attributeStart(w->context, len);
+    if (w->handlers->attributeStart) w->handlers->attributeStart(w->context, len);
     for (size_t i = 0; i < len; i++) {
         parseReply(parser, ctx);
         parseReply(parser, ctx);
     }
-    if (!w->handlers->attributeEnd) return;
-    w->handlers->attributeEnd(w->context, proto, parser->curr_location - proto);
-
+    if (w->handlers->attributeEnd) w->handlers->attributeEnd(w->context, proto, parser->curr_location - proto);
+    /* Always parse the element that follows the attribute section. */
     parseReply(parser, ctx);
 }
 

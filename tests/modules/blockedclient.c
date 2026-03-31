@@ -541,11 +541,11 @@ static int call_argv_raw_resp_handler(void *ctx, ValkeyModuleCtx *mctx, const ch
 
     if (actx->bc) {
         ValkeyModuleCtx *bctx = ValkeyModule_GetThreadSafeContext(actx->bc);
-        ValkeyModule_ReplyWithProto(bctx, proto, proto_len);
+        ValkeyModule_ReplyRaw(bctx, proto, proto_len);
         ValkeyModule_FreeThreadSafeContext(bctx);
         ValkeyModule_UnblockClient(actx->bc, ValkeyModule_BlockClientGetPrivateData(actx->bc));
     } else if (!actx->is_async) {
-        ValkeyModule_ReplyWithProto(mctx, proto, proto_len);
+        ValkeyModule_ReplyRaw(mctx, proto, proto_len);
     } else {
         /* The client disconnected */
     }
@@ -633,7 +633,7 @@ int do_vm_call_argv_async(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int a
 int do_vm_call_argv_async_script_mode_available_reply_handle(void *ctx, ValkeyModuleCtx *mctx,
                                                              const char *proto, size_t proto_len) {
     UNUSED(ctx);
-    ValkeyModule_ReplyWithProto(mctx, proto, proto_len);
+    ValkeyModule_ReplyRaw(mctx, proto, proto_len);
     return 0; /* continue parsing */
 }
 
@@ -671,7 +671,7 @@ typedef struct ThreadedAsyncCallArgvCtx{
 void *send_call_argv_async_reply(void *arg) {
     ThreadedAsyncCallArgvCtx *ta_call_ctx = arg;
     ValkeyModuleCtx *bctx = ValkeyModule_GetThreadSafeContext(ta_call_ctx->bc);
-    ValkeyModule_ReplyWithProto(bctx, ta_call_ctx->proto, ta_call_ctx->proto_len);
+    ValkeyModule_ReplyRaw(bctx, ta_call_ctx->proto, ta_call_ctx->proto_len);
     ValkeyModule_FreeThreadSafeContext(bctx);
     ValkeyModule_UnblockClient(ta_call_ctx->bc, ValkeyModule_BlockClientGetPrivateData(ta_call_ctx->bc));
     ValkeyModule_Free(ta_call_ctx->proto);
@@ -694,7 +694,7 @@ static int call_argv_async_on_thread_available_handler(void *ctx, ValkeyModuleCt
         int res = pthread_create(&tid, NULL, send_call_argv_async_reply, ta_call_ctx);
         assert(res == 0);
     } else if (!actx->is_async) {
-        ValkeyModule_ReplyWithProto(mctx, proto, proto_len);
+        ValkeyModule_ReplyRaw(mctx, proto, proto_len);
     } else {
         /* The client disconnected */
     }
@@ -743,7 +743,7 @@ int wait_and_call_argv_raw_resp_handler(void *ctx, ValkeyModuleCtx *mctx, const 
             VALKEYMODULE_CALL_ARGV_REPLICATE;
         do_vm_call_argv_async_aux(mctx, actx->argv, actx->argc, flags, actx->bc);
     } else {
-        ValkeyModule_ReplyWithProto(mctx, proto, proto_len);
+        ValkeyModule_ReplyRaw(mctx, proto, proto_len);
     }
 
     ValkeyModule_Free(actx);
@@ -835,7 +835,7 @@ static int blpop_and_set_multiple_keys_on_available(void *ctx, ValkeyModuleCtx *
         ValkeyModule_UnblockClient(actx->bc, NULL);
 
     } else {
-        ValkeyModule_ReplyWithProto(mctx, proto, proto_len);
+        ValkeyModule_ReplyRaw(mctx, proto, proto_len);
     }
 
     for (int i = 0 ; i < actx->argc ; i++) {

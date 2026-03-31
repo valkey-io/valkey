@@ -1654,7 +1654,7 @@ VALKEYMODULE_API int (*ValkeyModule_ReplyWithBigNumber)(ValkeyModuleCtx *ctx,
                                                         size_t len) VALKEYMODULE_ATTR;
 VALKEYMODULE_API int (*ValkeyModule_ReplyWithCallReply)(ValkeyModuleCtx *ctx,
                                                         ValkeyModuleCallReply *reply) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*ValkeyModule_ReplyWithProto)(ValkeyModuleCtx *ctx,
+VALKEYMODULE_API int (*ValkeyModule_ReplyRaw)(ValkeyModuleCtx *ctx,
                                                     const char *proto,
                                                     size_t proto_len) VALKEYMODULE_ATTR;
 VALKEYMODULE_API int (*ValkeyModule_StringToLongLong)(const ValkeyModuleString *str, long long *ll) VALKEYMODULE_ATTR;
@@ -2310,7 +2310,7 @@ static int ValkeyModule_Init(ValkeyModuleCtx *ctx, const char *name, int ver, in
     VALKEYMODULE_GET_API(ReplyWithNull);
     VALKEYMODULE_GET_API(ReplyWithBool);
     VALKEYMODULE_GET_API(ReplyWithCallReply);
-    VALKEYMODULE_GET_API(ReplyWithProto);
+    VALKEYMODULE_GET_API(ReplyRaw);
     VALKEYMODULE_GET_API(ReplyWithDouble);
     VALKEYMODULE_GET_API(ReplyWithBigNumber);
     VALKEYMODULE_GET_API(ReplyWithLongDouble);

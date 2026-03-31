@@ -461,7 +461,7 @@ static int misc_call_argv_reply_handler(void *ctx, ValkeyModuleCtx *mctx, const 
         ValkeyModule_ReplyWithError(mctx, "NULL reply returned");
         return 1;
     }
-    ValkeyModule_ReplyWithProto(mctx, proto, proto_len);
+    ValkeyModule_ReplyRaw(mctx, proto, proto_len);
     return 0;
 }
 

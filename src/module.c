@@ -3626,7 +3626,7 @@ int VM_ReplyWithCallReply(ValkeyModuleCtx *ctx, ValkeyModuleCallReply *reply) {
  * `proto` must point to a valid, complete RESP-encoded reply of length
  * `proto_len`.  Returns VALKEYMODULE_OK.  If there is no client context
  * (script, timer, etc.) the call is a no-op and returns VALKEYMODULE_OK. */
-int VM_ReplyWithProto(ValkeyModuleCtx *ctx, const char *proto, size_t proto_len) {
+int VM_ReplyRaw(ValkeyModuleCtx *ctx, const char *proto, size_t proto_len) {
     client *c = moduleGetReplyClient(ctx);
     if (c == NULL) return VALKEYMODULE_OK;
     addReplyProto(c, proto, proto_len);
@@ -14713,7 +14713,7 @@ void moduleRegisterCoreAPI(void) {
     REGISTER_API(ReplyWithNull);
     REGISTER_API(ReplyWithBool);
     REGISTER_API(ReplyWithCallReply);
-    REGISTER_API(ReplyWithProto);
+    REGISTER_API(ReplyRaw);
     REGISTER_API(ReplyWithDouble);
     REGISTER_API(ReplyWithBigNumber);
     REGISTER_API(ReplyWithLongDouble);

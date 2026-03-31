@@ -97,7 +97,7 @@ TEST_F(EntryTest, entryCreate) {
 }
 
 /**
- * Test entryUpdate with various combinations of value and expiry changes:
+ * Test entryUpdate with various combinations of value and expiry changes (Test will only run when jemalloc is used):
  * 1. Update only the value (keeping embedded)
  * 2. Update only the expiry (keeping embedded)
  * 3. Update both value and expiry (keeping embedded)
@@ -110,6 +110,9 @@ TEST_F(EntryTest, entryCreate) {
  * 10. Update entry to exactly the same allocation size
  */
 TEST_F(EntryTest, entryUpdate) {
+#ifndef USE_JEMALLOC
+    GTEST_SKIP() << "Test requires jemalloc";
+#endif
     // Create embedded entry
     sds value1 = sdsnew(SHORT_VALUE);
     sds field = sdsnew(SHORT_FIELD);
@@ -182,7 +185,7 @@ TEST_F(EntryTest, entryUpdate) {
     // Update the value so that memory usage is at least 3/4 of the current memory usage
     // Ensuring required_embedded_size > current_embedded_allocation_size * 3 / 4 without creating a new entry
     current_embedded_allocation_size = entryMemUsage(e10);
-    sds value11 = sdsnew("yyyyyy");
+    sds value11 = sdsnew("yyyyyyyyyyyy");
     sds value_copy11 = sdsdup(value11);
     long long expiry11 = expiry10;
     entry *e11 = entryUpdate(e10, value11, expiry11);
@@ -195,7 +198,7 @@ TEST_F(EntryTest, entryUpdate) {
     // Update the value so that memory usage is exactly equal to the current allocation size
     // Ensuring required_embedded_size == current_embedded_allocation_size without creating a new entry
     current_embedded_allocation_size = entryMemUsage(e11);
-    sds value12 = sdsnew("zzzzzz");
+    sds value12 = sdsnew("zzzzzzzzzzzz");
     sds value_copy12 = sdsdup(value12);
     long long expiry12 = expiry11;
     entry *e12 = entryUpdate(e11, value12, expiry12);

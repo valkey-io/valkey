@@ -35,6 +35,39 @@
 #define REPLY_FLAG_RESP3 (1 << 2)
 #define REPLY_FLAG_EXACT_TYPE (1 << 3)
 
+/* ============================================================
+ * Two-level callback architecture
+ * ============================================================
+ *
+ * There are two distinct sets of callbacks used in this file:
+ *
+ * Level 1 – ReplyParserCallbacks (resp_parser.h)
+ *   The low-level, recursive-descent parser in resp_parser.c calls these
+ *   during a single pass over a raw RESP buffer.  Collection callbacks
+ *   (array, set, map, attribute) receive a `ReplyParser *` so they can
+ *   recurse into child elements by calling parseReply() themselves.
+ *   Scalar callbacks receive the raw wire bytes (proto/proto_len) in
+ *   addition to the parsed value.  Two separate Level-1 callback tables
+ *   are defined below:
+ *
+ *     callReplyParserCallbacks – wires the callReply* tree-builder
+ *       functions directly; used by callReplyParse() to build a
+ *       CallReply node tree from a captured RESP buffer.
+ *
+ *     RawReplyParserCallbacks – wires the callRawReply* adapter
+ *       functions; used by invokeReplyHandlers() to dispatch a live
+ *       reply to the ValkeyModuleReplyHandlers provided by the module.
+ *
+ * Level 2 – ValkeyModuleReplyHandlers (valkeymodule.h)
+ *   The public module API.  These user-supplied callbacks receive only
+ *   clean, parsed values (no raw RESP bytes, no ReplyParser pointer).
+ *   Collection callbacks come in matched Start/End pairs so the module
+ *   does not need to drive the parser itself.  The callRawReply*
+ *   adapters bridge Level 1 → Level 2: they accept Level-1 arguments,
+ *   strip the parser internals, and call the corresponding
+ *   ValkeyModuleReplyHandlers callback with just the value arguments.
+ * ============================================================ */
+
 /* Internal pairing of a const callback table with its associated context.
  * Created on the stack by callers so the public ValkeyModuleReplyHandlers
  * struct remains immutable (no context field). The recursive-descent parser

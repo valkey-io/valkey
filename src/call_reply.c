@@ -283,15 +283,19 @@ typedef struct CallReplyFrame {
     struct CallReplyFrame *prev;
 } CallReplyFrame;
 
-typedef struct CallReplyBuilderCtx {
-    CallReplyFrame *current;
-} CallReplyBuilderCtx;
-
+/* SCOPE_OBJ_CACHE_SIZE small frames are kept inside CallReplyBuilderCtx to
+ * avoid per-level zmalloc calls for shallow replies. Deeper nesting falls back
+ * to zmalloc. Keeping this inside the struct (rather than as globals) makes
+ * callReplyParse() reentrant: a module that calls VM_Call from inside a
+ * VM_CallArgv parsing callback will get its own independent cache. */
 #define SCOPE_OBJ_CACHE_SIZE 8
 
-CallReplyFrame scope_obj_cache[SCOPE_OBJ_CACHE_SIZE] = {0};
-size_t scope_obj_cache_idx = 0;
-size_t scope_dynamic_alloc_count = 0;
+typedef struct CallReplyBuilderCtx {
+    CallReplyFrame *current;
+    CallReplyFrame scope_obj_cache[SCOPE_OBJ_CACHE_SIZE];
+    size_t scope_obj_cache_idx;
+    size_t scope_dynamic_alloc_count;
+} CallReplyBuilderCtx;
 
 static inline CallReply *getCallReply(void *ctx) {
     return ((CallReplyBuilderCtx *)ctx)->current->rep + ((CallReplyBuilderCtx *)ctx)->current->idx;
@@ -303,10 +307,10 @@ static inline CallReply *nextCallReply(void *ctx) {
 
 static inline void pushCallReplyFrame(CallReplyBuilderCtx *ctx, CallReply *array_rep) {
     CallReplyFrame *new_scope = NULL;
-    if (scope_obj_cache_idx < SCOPE_OBJ_CACHE_SIZE) {
-        new_scope = &scope_obj_cache[scope_obj_cache_idx++];
+    if (ctx->scope_obj_cache_idx < SCOPE_OBJ_CACHE_SIZE) {
+        new_scope = &ctx->scope_obj_cache[ctx->scope_obj_cache_idx++];
     } else {
-        scope_dynamic_alloc_count++;
+        ctx->scope_dynamic_alloc_count++;
         new_scope = zmalloc(sizeof(CallReplyFrame));
     }
     new_scope->rep = array_rep;
@@ -317,15 +321,15 @@ static inline void pushCallReplyFrame(CallReplyBuilderCtx *ctx, CallReply *array
 
 static inline void popCallReplyFrame(CallReplyBuilderCtx *ctx) {
     CallReplyFrame *prev_scope = ctx->current->prev;
-    if (scope_dynamic_alloc_count > 0) {
+    if (ctx->scope_dynamic_alloc_count > 0) {
         zfree(ctx->current);
-        scope_dynamic_alloc_count--;
+        ctx->scope_dynamic_alloc_count--;
     } else {
         /* Just reset the current scope object and return it to the cache. */
         ctx->current->rep = NULL;
         ctx->current->idx = -1;
         ctx->current->prev = NULL;
-        scope_obj_cache_idx--;
+        ctx->scope_obj_cache_idx--;
     }
     ctx->current = prev_scope;
 }
@@ -508,7 +512,12 @@ void callReplyParseError(void *ctx) {
     rep->type = VALKEYMODULE_REPLY_UNKNOWN;
 }
 
-RespHandlers callReplyParsingCtx = {
+/* Callback table for building a CallReply tree from a RESP buffer. The
+ * .context field is intentionally absent here; each callReplyParse() call
+ * makes a stack-local copy and fills in its own context pointer so that
+ * nested calls (e.g. a module invoking VM_Call from inside a VM_CallArgv
+ * parsing callback) each operate on independent state. */
+static const RespHandlers callReplyHandlers = {
     .null = callReplyNull,
     .nullBulkString = callReplyNullBulkString,
     .nullArray = callReplyNullArray,
@@ -529,7 +538,6 @@ RespHandlers callReplyParsingCtx = {
     .setStart = callReplySetStart,
     .setEnd = callReplySetEnd,
     .replyParsingError = callReplyParseError,
-    .context = NULL,
 };
 
 /* Recursively free the current call reply and its sub-replies. */
@@ -595,10 +603,15 @@ static void callReplyParse(CallReply *rep) {
     CallReplyBuilderCtx builder_ctx = {.current = NULL};
     pushCallReplyFrame(&builder_ctx, rep);
 
-    callReplyParsingCtx.context = &builder_ctx;
+    /* Make a stack-local copy of the handler table and point it at this
+     * invocation's builder context. This ensures callReplyParse() is
+     * reentrant: a module that calls VM_Call from inside a VM_CallArgv
+     * parsing callback gets its own independent copy. */
+    RespHandlers parsing_ctx = callReplyHandlers;
+    parsing_ctx.context = &builder_ctx;
 
     ReplyParser parser = {.curr_location = rep->proto, .callbacks = RawReplyParserCallbacks};
-    parseReply(&parser, &callReplyParsingCtx);
+    parseReply(&parser, &parsing_ctx);
     rep->flags |= REPLY_FLAG_PARSED;
 
     popCallReplyFrame(&builder_ctx);

@@ -79,16 +79,12 @@ fail:
 
 #define UNUSED(V) ((void)V)
 
-void handleSimpleString(void *ctx, const char *str, size_t len, const char *proto, size_t proto_len) {
-    UNUSED(proto);
-    UNUSED(proto_len);
+void handleSimpleString(void *ctx, const char *str, size_t len) {
     ((char *)str)[len] = '\0'; /* temporarily null terminate */
     ValkeyModule_ReplyWithSimpleString(ctx, str);
 }
 
-void handleBulkString(void *ctx, const char *str, size_t len, const char *proto, size_t proto_len) {
-    UNUSED(proto);
-    UNUSED(proto_len);
+void handleBulkString(void *ctx, const char *str, size_t len) {
     ValkeyModule_ReplyWithStringBuffer(ctx, str, len);
 }
 
@@ -96,9 +92,7 @@ void handleArray(void *ctx, size_t len) {
     ValkeyModule_ReplyWithArray(ctx, len);
 }
 
-void handleError(void *ctx, const char *str, size_t len, const char *proto, size_t proto_len) {
-    UNUSED(proto);
-    UNUSED(proto_len);
+void handleError(void *ctx, const char *str, size_t len) {
     ((char *)str)[len] = '\0'; /* temporarily null terminate */
     ValkeyModule_ReplyWithError(ctx, str);
 }
@@ -153,12 +147,9 @@ int TestCallArgvScriptMode(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int 
 
 /* Increment an int counter passed as ctx. Used to verify that typed callbacks
  * are invoked even when the collection start/end callbacks are NULL. */
-static void countBulkString(void *ctx, const char *str, size_t len,
-                             const char *proto, size_t proto_len) {
+static void countBulkString(void *ctx, const char *str, size_t len) {
     UNUSED(str);
     UNUSED(len);
-    UNUSED(proto);
-    UNUSED(proto_len);
     (*(int *)ctx)++;
 }
 

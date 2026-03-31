@@ -1323,25 +1323,25 @@ typedef struct ValkeyModuleScriptingEngineMethodsV4 {
  * elements.
  */
 typedef struct ValkeyModuleReplyHandlers {
-    void (*null)(void *ctx, const char *proto, size_t proto_len);
-    void (*nullBulkString)(void *ctx, const char *proto, size_t proto_len);
-    void (*nullArray)(void *ctx, const char *proto, size_t proto_len);
-    void (*bulkString)(void *ctx, const char *str, size_t len, const char *proto, size_t proto_len);
-    void (*simpleString)(void *ctx, const char *str, size_t len, const char *proto, size_t proto_len);
-    void (*verbatimString)(void *ctx, const char *str, size_t len, const char *fmt, const char *proto, size_t proto_len);
-    void (*error)(void *ctx, const char *msg, size_t len, const char *proto, size_t proto_len);
-    void (*integer)(void *ctx, long long val, const char *proto, size_t proto_len);
-    void (*doubleVal)(void *ctx, double val, const char *proto, size_t proto_len);
-    void (*bigNumber)(void *ctx, const char *str, size_t len, const char *proto, size_t proto_len);
-    void (*boolVal)(void *ctx, int val, const char *proto, size_t proto_len);
+    void (*null)(void *ctx);
+    void (*nullBulkString)(void *ctx);
+    void (*nullArray)(void *ctx);
+    void (*bulkString)(void *ctx, const char *str, size_t len);
+    void (*simpleString)(void *ctx, const char *str, size_t len);
+    void (*verbatimString)(void *ctx, const char *str, size_t len, const char *fmt);
+    void (*error)(void *ctx, const char *msg, size_t len);
+    void (*integer)(void *ctx, long long val);
+    void (*doubleVal)(void *ctx, double val);
+    void (*bigNumber)(void *ctx, const char *str, size_t len);
+    void (*boolVal)(void *ctx, int val);
     void (*attributeStart)(void *ctx, size_t len);
-    void (*attributeEnd)(void *ctx, const char *proto, size_t proto_len);
+    void (*attributeEnd)(void *ctx);
     void (*arrayStart)(void *ctx, size_t len);
-    void (*arrayEnd)(void *ctx, const char *proto, size_t proto_len);
+    void (*arrayEnd)(void *ctx);
     void (*mapStart)(void *ctx, size_t len);
-    void (*mapEnd)(void *ctx, const char *proto, size_t proto_len);
+    void (*mapEnd)(void *ctx);
     void (*setStart)(void *ctx, size_t len);
-    void (*setEnd)(void *ctx, const char *proto, size_t proto_len);
+    void (*setEnd)(void *ctx);
     void (*replyParsingError)(void *ctx);
 
     /* This callback is invoked when the client is blocked waiting for a reply.

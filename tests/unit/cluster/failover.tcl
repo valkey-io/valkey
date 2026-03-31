@@ -142,15 +142,13 @@ start_cluster 3 6 {tags {external:skip cluster}} {
 # We need memrev64ifbe after memcpy so ctzll returns the right bit positions
 # on big-endian hosts, otherwise this test will fail early if there is no failover consensus.
 start_cluster 3 1 {tags {external:skip cluster}} {
-
-test "Failover succeeds with non 64 bit aligned slot boundaries" {
-    R 3 cluster failover
-    wait_for_condition 1000 50 {
-        [s -3 role] eq {master} &&
-        [s 0 role] eq {slave}
-    } else {
-        fail "Failover did not happen"
+    test "Failover succeeds with non 64 bit aligned slot boundaries" {
+        R 3 cluster failover
+        wait_for_condition 1000 50 {
+            [s -3 role] eq {master} &&
+            [s 0 role] eq {slave}
+        } else {
+            fail "Failover did not happen"
+        }
     }
-}
-
 } ;# start_cluster

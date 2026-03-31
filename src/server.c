@@ -728,7 +728,7 @@ void hashtableChannelsDestructor(void *entry) {
     hashtableRelease(ht);
 }
 
-/* Similar to objToDictDictType, but changed to hashtable and added some kvstore
+/* Similar to objToHashtableDictType, but changed to hashtable and added some kvstore
  * callbacks, it's used for PUBSUB command to track clients subscribing the
  * channels. The elements are dicts where the keys are clients. The metadata in
  * each dict stores a pointer to the channel name. */

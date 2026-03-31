@@ -3652,7 +3652,9 @@ static inline int messageTypeSupportsLightHdr(uint16_t type) {
 }
 
 static void clusterBusAddNetworkBytesByType(uint16_t type, uint64_t bytes, bool sent) {
-    uint64_t *counter;
+    uint64_t *counter = sent ? &server.cluster->stats_bus_bytes_sent : &server.cluster->stats_bus_bytes_received;
+
+    *counter += bytes;
 
     if (type == CLUSTERMSG_TYPE_PUBLISH || type == CLUSTERMSG_TYPE_PUBLISHSHARD) {
         counter = sent ? &server.cluster->stats_bus_pubsub_bytes_sent
@@ -3661,8 +3663,7 @@ static void clusterBusAddNetworkBytesByType(uint16_t type, uint64_t bytes, bool 
         counter = sent ? &server.cluster->stats_bus_module_bytes_sent
                        : &server.cluster->stats_bus_module_bytes_received;
     } else {
-        counter = sent ? &server.cluster->stats_bus_admin_bytes_sent
-                       : &server.cluster->stats_bus_admin_bytes_received;
+        return;
     }
     *counter += bytes;
 }
@@ -7390,14 +7391,14 @@ sds genClusterInfoString(sds info) {
     }
     info = sdscatfmt(info, "cluster_stats_messages_received:%I\r\n", tot_msg_received);
     info = sdscatfmt(info,
-                     "cluster_stats_admin_bytes_sent:%U\r\n"
-                     "cluster_stats_admin_bytes_received:%U\r\n"
+                     "cluster_stats_bytes_sent:%U\r\n"
+                     "cluster_stats_bytes_received:%U\r\n"
                      "cluster_stats_pubsub_bytes_sent:%U\r\n"
                      "cluster_stats_pubsub_bytes_received:%U\r\n"
                      "cluster_stats_module_bytes_sent:%U\r\n"
                      "cluster_stats_module_bytes_received:%U\r\n",
-                     (unsigned long long)server.cluster->stats_bus_admin_bytes_sent,
-                     (unsigned long long)server.cluster->stats_bus_admin_bytes_received,
+                     (unsigned long long)server.cluster->stats_bus_bytes_sent,
+                     (unsigned long long)server.cluster->stats_bus_bytes_received,
                      (unsigned long long)server.cluster->stats_bus_pubsub_bytes_sent,
                      (unsigned long long)server.cluster->stats_bus_pubsub_bytes_received,
                      (unsigned long long)server.cluster->stats_bus_module_bytes_sent,

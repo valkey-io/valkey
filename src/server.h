@@ -974,19 +974,22 @@ typedef struct multiCmd {
 } multiCmd;
 
 typedef struct multiState {
-    multiCmd *commands;   /* Array of MULTI commands */
-    int count;            /* Total number of MULTI commands */
-    int cmd_flags;        /* The accumulated command flags OR-ed together.
-                             So if at least a command has a given flag, it
-                             will be set in this field. */
-    int cmd_inv_flags;    /* Same as cmd_flags, OR-ing the ~flags. so that it
-                             is possible to know if all the commands have a
-                             certain flag. */
-    size_t argv_len_sums; /* mem used by all commands arguments */
-    int alloc_count;      /* total number of multiCmd struct memory reserved. */
-    list watched_keys;
-    size_t watched_keys_mem; /* Memory used by watched key robj objects.*/
-    int transaction_db_id;   /* Currently SELECTed DB id in transaction context */
+    multiCmd *commands;             /* Array of MULTI commands */
+    int count;                      /* Total number of MULTI commands */
+    int cmd_flags;                  /* The accumulated command flags OR-ed together.
+                                       So if at least a command has a given flag, it
+                                       will be set in this field. */
+    int cmd_inv_flags;              /* Same as cmd_flags, OR-ing the ~flags. so that it
+                                       is possible to know if all the commands have a
+                                       certain flag. */
+    size_t argv_len_sums;           /* mem used by all commands arguments */
+    int alloc_count;                /* total number of multiCmd struct memory reserved. */
+    list watched_keys;              /* List of watchedKey for iteration and cleanup. */
+    size_t watched_keys_mem;        /* Memory used by watched key robj objects. */
+    hashtable **watched_keys_by_db; /* Per-db hashtable for O(1) watched key lookup.
+                                       Array of size server.dbnum, lazily allocated.
+                                       Each hashtable stores watchedKey* directly. */
+    int transaction_db_id;          /* Currently SELECTed DB id in transaction context */
 } multiState;
 
 /* This structure holds the blocking operation state for a client.
@@ -1355,12 +1358,11 @@ typedef struct client {
     time_t last_interaction;          /* Time of the last interaction, used for timeout */
     serverDb *db;                     /* Pointer to currently SELECTed DB. */
     /* Client state structs. */
-    ClientPubSubData *pubsub_data;        /* Required for: pubsub commands and tracking. lazily initialized when first needed */
-    ClientReplicationData *repl_data;     /* Required for Replication operations. lazily initialized when first needed */
-    ClientModuleData *module_data;        /* Required for Module operations. lazily initialized when first needed */
-    multiState *mstate;                   /* MULTI/EXEC state, lazily initialized when first needed */
-    blockingState *bstate;                /* Blocking state, lazily initialized when first needed */
-    slotMigrationJob *slot_migration_job; /* Pointer to the slot migration job, or NULL. */
+    ClientPubSubData *pubsub_data;    /* Required for: pubsub commands and tracking. lazily initialized when first needed */
+    ClientReplicationData *repl_data; /* Required for Replication operations. lazily initialized when first needed */
+    ClientModuleData *module_data;    /* Required for Module operations. lazily initialized when first needed */
+    multiState *mstate;               /* MULTI/EXEC state, lazily initialized when first needed */
+    blockingState *bstate;            /* Blocking state, lazily initialized when first needed */
     /* Output buffer and reply handling */
     long duration;                       /* Current command duration. Used for measuring latency of blocking/non-blocking cmds */
     char *buf;                           /* Output buffer */
@@ -1380,11 +1382,13 @@ typedef struct client {
         uint64_t raw_flag;
         struct ClientFlags flag;
     };
-    uint16_t write_flags;            /* Client Write flags - used to communicate the client write state. */
-    volatile uint8_t io_read_state;  /* Indicate the IO read state of the client */
-    volatile uint8_t io_write_state; /* Indicate the IO write state of the client */
-    uint8_t resp;                    /* RESP protocol version. Can be 2 or 3. */
-    uint8_t cur_tid;                 /* ID of IO thread currently performing IO for this client */
+    /* Cache Locality: Grouped with 'flag' for getClientType() hot path. */
+    slotMigrationJob *slot_migration_job; /* Pointer to the slot migration job, or NULL. */
+    uint16_t write_flags;                 /* Client Write flags - used to communicate the client write state. */
+    volatile uint8_t io_read_state;       /* Indicate the IO read state of the client */
+    volatile uint8_t io_write_state;      /* Indicate the IO write state of the client */
+    uint8_t resp;                         /* RESP protocol version. Can be 2 or 3. */
+    uint8_t cur_tid;                      /* ID of IO thread currently performing IO for this client */
     /* In updateClientMemoryUsage() we track the memory usage of
      * each client and add it to the sum of all the clients of a given type,
      * however we need to remember what was the old contribution of each
@@ -1433,6 +1437,28 @@ typedef struct client {
     clientReqResInfo reqres;
 #endif
 } client;
+
+/* Forward declaration */
+bool isImportSlotMigrationJob(slotMigrationJob *job);
+
+/* Get the class of a client, used in order to enforce limits to different
+ * classes of clients.
+ *
+ * The function will return one of the following:
+ * CLIENT_TYPE_NORMAL -> Normal client, including MONITOR
+ * CLIENT_TYPE_REPLICA  -> replica
+ * CLIENT_TYPE_PUBSUB -> Client subscribed to Pub/Sub channels
+ * CLIENT_TYPE_PRIMARY -> The client representing our replication primary.
+ */
+static inline int getClientType(client *c) {
+    if (unlikely(c->flag.primary)) return CLIENT_TYPE_PRIMARY;
+    /* Even though MONITOR clients are marked as replicas, we
+     * want the expose them as normal clients. */
+    if (unlikely(c->flag.replica) && !c->flag.monitor) return CLIENT_TYPE_REPLICA;
+    if (c->flag.pubsub) return CLIENT_TYPE_PUBSUB;
+    if (unlikely(c->slot_migration_job)) return isImportSlotMigrationJob(c->slot_migration_job) ? CLIENT_TYPE_SLOT_IMPORT : CLIENT_TYPE_SLOT_EXPORT;
+    return CLIENT_TYPE_NORMAL;
+}
 
 /* When a command generates a lot of discrete elements to the client output buffer, it is much faster to
  * skip certain types of initialization. This type is used to indicate a client that has been initialized
@@ -2804,7 +2830,6 @@ extern dictType objectKeyPointerValueDictType;
 extern hashtableType objectHashtableType;
 extern dictType objectKeyHeapPointerValueDictType;
 extern hashtableType setHashtableType;
-extern dictType BenchmarkDictType;
 extern hashtableType zsetHashtableType;
 extern hashtableType kvstoreKeysHashtableType;
 extern hashtableType kvstoreExpiresHashtableType;
@@ -2815,7 +2840,6 @@ extern dictType stringSetDictType;
 extern dictType externalStringType;
 extern dictType sdsHashDictType;
 extern hashtableType clientHashtableType;
-extern dictType objToDictDictType;
 extern hashtableType kvstoreChannelHashtableType;
 extern dictType modulesDictType;
 extern hashtableType sdsReplyHashtableType;
@@ -3886,8 +3910,10 @@ void startEvictionTimeProc(void);
 /* Keys hashing/comparison functions for dict.c and hashtable.c hash tables. */
 uint64_t dictSdsHash(const void *key);
 uint64_t dictSdsCaseHash(const void *key);
+uint64_t dictEncObjHash(const void *key);
 int dictSdsKeyCompare(const void *key1, const void *key2);
 int hashtableSdsKeyCompare(const void *key1, const void *key2);
+int hashtableEncObjKeyCompare(const void *key1, const void *key2);
 int dictSdsKeyCaseCompare(const void *key1, const void *key2);
 void dictSdsDestructor(void *val);
 void dictListDestructor(void *val);

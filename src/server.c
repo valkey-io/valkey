@@ -728,7 +728,7 @@ void hashtableChannelsDestructor(void *entry) {
     hashtableRelease(ht);
 }
 
-/* Similar to objToDictDictType, but changed to hashtable and added some kvstore
+/* Similar to objToHashtableDictType, but changed to hashtable and added some kvstore
  * callbacks, it's used for PUBSUB command to track clients subscribing the
  * channels. The elements are dicts where the keys are clients. The metadata in
  * each dict stores a pointer to the channel name. */
@@ -2231,7 +2231,6 @@ void createSharedObjects(void) {
 
     for (j = 0; j < OBJ_SHARED_INTEGERS; j++) {
         shared.integers[j] = makeObjectShared(createObject(OBJ_STRING, (void *)(long)j));
-        shared.integers[j]->encoding = OBJ_ENCODING_INT;
         shared.integers[j]->encoding = OBJ_ENCODING_INT;
     }
     for (j = 0; j < OBJ_SHARED_BULKHDR_LEN; j++) {

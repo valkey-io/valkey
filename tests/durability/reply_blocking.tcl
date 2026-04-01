@@ -635,6 +635,39 @@ foreach provider_mode {aof} {
                 $rd close
             }
 
+            test "($provider_mode) Pipelined non-blocking then blocking command does not leak blocked reply" {
+                assert_equal "always" [lindex [$primary config get appendfsync] 1]
+
+                pause_provider
+
+                # Pipeline a non-blocking command (PING) followed by a blocking write (SET).
+                # The PING reply is allowed to be sent, but the SET reply must be held.
+                # Without proper write boundary capping, _writeToClient would send
+                # both replies since they share the same c->buf.
+                set rd [valkey_deferring_client -1]
+                $rd ping
+                $rd set pipe:boundary-key val1
+
+                # Give the server time to process both commands and attempt the write
+                after 100
+
+                # Read whatever the server has sent — should be ONLY the PING reply
+                set fd [$rd channel]
+                fconfigure $fd -blocking 0
+                set partial [read $fd]
+                fconfigure $fd -blocking 1
+
+                # PING reply should be "+PONG\r\n" — no "+OK\r\n" from SET
+                assert_match "*PONG*" $partial
+                assert {![string match "*OK*" $partial]}
+
+                unblock_with_provider
+
+                # Now the SET reply should arrive
+                assert_equal "OK" [$rd read]
+                $rd close
+            }
+
             # ==================== Client disconnect stats ====================
 
             test "($provider_mode) Client disconnect while blocked updates stats" {

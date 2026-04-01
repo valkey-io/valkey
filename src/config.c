@@ -2605,6 +2605,9 @@ static int updateAppendOnly(const char **err) {
             return 0;
         }
     }
+    /* Durability is implied by appendfsync always + AOF on, so toggling
+     * appendonly may enable or disable it. */
+    durabilityReset();
     return 1;
 }
 
@@ -2694,11 +2697,8 @@ int updateAppendFsync(const char **err) {
          * worker thread. */
         bioDrainWorker(BIO_AOF_FSYNC);
     }
-    return 1;
-}
-
-static int updateDurabilityEnabled(const char **err) {
-    UNUSED(err);
+    /* Durability is implied by appendfsync always + AOF on, so toggling
+     * appendfsync may enable or disable it. */
     durabilityReset();
     return 1;
 }
@@ -3299,7 +3299,6 @@ standardConfig static_configs[] = {
     createBoolConfig("hide-user-data-from-log", NULL, MODIFIABLE_CONFIG, server.hide_user_data_from_log, 1, NULL, NULL),
     createBoolConfig("lua-enable-insecure-api", "lua-enable-deprecated-api", MODIFIABLE_CONFIG | HIDDEN_CONFIG | PROTECTED_CONFIG, server.lua_enable_insecure_api, 0, NULL, updateLuaEnableInsecureApi),
     createBoolConfig("import-mode", NULL, DEBUG_CONFIG | MODIFIABLE_CONFIG, server.import_mode, 0, NULL, NULL),
-    createBoolConfig("durability", "sync-replication", MODIFIABLE_CONFIG, server.durability.enabled, 0, NULL, updateDurabilityEnabled),
 
     /* String Configs */
     createStringConfig("aclfile", NULL, IMMUTABLE_CONFIG, ALLOW_EMPTY_STRING, server.acl_filename, "", NULL, NULL),

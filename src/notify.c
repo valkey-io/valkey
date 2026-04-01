@@ -27,8 +27,6 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include "durable_task.h"
-#include "reply_blocking.h"
 #include "server.h"
 #include "module.h"
 

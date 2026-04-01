@@ -56,7 +56,6 @@
  * function names. For details, see the script src/modules/gendoc.rb.
  * -------------------------------------------------------------------------- */
 
-#include "reply_blocking.h"
 #include "server.h"
 #include "cluster.h"
 #include "commandlog.h"

@@ -851,6 +851,41 @@ TEST_F(SyncReplicationTest, NotifyDurabilityProgressNoOpWhenReplica) {
 }
 
 
+/* Test that keyspace notify task copies the event string so it doesn't
+ * become a dangling pointer when the caller frees the original. */
+TEST_F(FullDurabilityTest, KeyspaceNotifyTaskCopiesEventString) {
+    /* Create a mutable event string that we'll free after registering the task */
+    char *event = (char *)zmalloc(16);
+    strcpy(event, "set");
+
+    robj *key_obj = createStringObject("mykey", 5);
+
+    /* Register the task — this should copy the event string */
+    server.current_client = nullptr; /* simulate background task */
+    server.primary_repl_offset = 100;
+    bool registered = durabilityRegisterDeferredTask(
+        DURABLE_KEYSPACE_NOTIFY_TASK,
+        (void *)(long long)0,   /* type */
+        (void *)event,          /* event string — will be freed below */
+        (void *)key_obj,        /* key */
+        (void *)(long long)0    /* dbid */
+    );
+    ASSERT_TRUE(registered);
+
+    /* Free the original event string — this would cause a dangling pointer
+     * if the task didn't copy it */
+    zfree(event);
+
+    /* The task should still be valid and executable without crash.
+     * Execute all tasks at offset 100 — the event string inside the task
+     * should be an independent copy that's still valid. */
+    ASSERT_EQ(listLength(server.durability.tasks_waiting_ack[DURABLE_KEYSPACE_NOTIFY_TASK]), 1u);
+    executeDeferredTasksForAck(100);
+    ASSERT_EQ(listLength(server.durability.tasks_waiting_ack[DURABLE_KEYSPACE_NOTIFY_TASK]), 0u);
+
+    decrRefCount(key_obj);
+}
+
 /* Test durabilityClientInit is idempotent */
 TEST_F(SyncReplicationTest, ClientInitIdempotent) {
     server.aof_state = AOF_ON; server.aof_fsync = AOF_FSYNC_ALWAYS;

@@ -46,6 +46,13 @@ static taskWaitingAck *createKeyspaceNotifyTask(va_list ap) {
         task->argv[i] = va_arg(ap, void *);
     }
 
+    /* Copy the event string (argv[1]) because the caller (especially modules)
+     * may free the original string after this function returns. */
+    char *event = (char *)task->argv[1];
+    if (event) {
+        task->argv[1] = zstrdup(event);
+    }
+
     // Increase reference count to avoid the key from being deleted
     robj *key = (robj *)task->argv[2];
     if (key) {
@@ -59,6 +66,10 @@ static taskWaitingAck *createKeyspaceNotifyTask(va_list ap) {
  */
 static void destroyKeyspaceNotifyTask(void *ptr) {
     taskWaitingAck *task = (taskWaitingAck *)ptr;
+    /* Free the copied event string (argv[1]) */
+    if (task->argv[1]) {
+        zfree(task->argv[1]);
+    }
     if (task->argv[2]) {
         robj *key = (robj *)task->argv[2];
         decrRefCount(key);

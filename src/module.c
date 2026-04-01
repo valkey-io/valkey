@@ -12493,13 +12493,6 @@ void moduleRegisterCoreAPI(void);
 void moduleInitModulesSystemLast(void) {
 }
 
-static void dictEntryDestructorSdsKeyValue(void *entry) {
-    dictEntry *de = entry;
-    dictSdsDestructor(dictGetKey(de));
-    dictSdsDestructor(dictGetVal(de));
-    zfree(de);
-}
-
 dictType sdsKeyValueHashDictType = {
     .entryGetKey = dictEntryGetKey,
     .hashFunction = dictSdsCaseHash,

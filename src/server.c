@@ -529,7 +529,6 @@ const void *hashtableSubcommandGetKey(const void *element) {
     return command->declared_name;
 }
 
-/* Helper function to get key from dictEntry - used as entryGetKey callback */
 /* Entry destructor that frees object key and the dictEntry itself */
 void dictEntryDestructorObjectKey(void *entry) {
     dictEntry *de = entry;
@@ -565,6 +564,13 @@ void dictEntryDestructorObjectKeyHashtableValue(void *entry) {
 void dictEntryDestructorSdsKey(void *entry) {
     dictEntry *de = entry;
     dictSdsDestructor(dictGetKey(de));
+    zfree(de);
+}
+
+void dictEntryDestructorSdsKeyValue(void *entry) {
+    dictEntry *de = entry;
+    dictSdsDestructor(dictGetKey(de));
+    dictSdsDestructor(dictGetVal(de));
     zfree(de);
 }
 

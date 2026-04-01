@@ -57,6 +57,8 @@ typedef struct dictEntry {
     } v;
 } dictEntry;
 
+#define UNUSED(V) ((void)V)
+
 #define dictSize(d) hashtableSize(d)
 #define dictIsEmpty(d) (hashtableSize(d) == 0)
 #define dictIsRehashing(d) hashtableIsRehashing(d)
@@ -83,12 +85,12 @@ static inline int dictExpand(dict *d, unsigned long size) {
 
 /* Entry accessor functions */
 static inline void dictSetKey(dict *d, dictEntry *de, void *key) {
-    (void)d;
+    UNUSED(d);
     de->key = key;
 }
 
 static inline void dictSetVal(dict *d, dictEntry *de, void *val) {
-    (void)d;
+    UNUSED(d);
     de->v.val = val;
 }
 

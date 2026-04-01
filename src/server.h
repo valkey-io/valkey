@@ -3919,6 +3919,7 @@ int dictEncObjKeyCompare(const void *key1, const void *key2);
 void dictSdsDestructor(void *val);
 void dictListDestructor(void *val);
 void dictEntryDestructorSdsKey(void *entry);
+void dictEntryDestructorSdsKeyValue(void *entry);
 void dictEntryDestructorSdsKeyListValue(void *entry);
 
 /* Git SHA1 */

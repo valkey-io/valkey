@@ -446,13 +446,6 @@ static void dictEntryDestructorInstancesValue(void *entry) {
     zfree(de);
 }
 
-static void dictEntryDestructorSdsKeyValue(void *entry) {
-    dictEntry *de = entry;
-    dictSdsDestructor(dictGetKey(de));
-    dictSdsDestructor(dictGetVal(de));
-    zfree(de);
-}
-
 dictType instancesDictType = {
     .entryGetKey = dictEntryGetKey,
     .hashFunction = dictSdsHash,

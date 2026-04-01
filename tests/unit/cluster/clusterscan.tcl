@@ -158,6 +158,81 @@ start_cluster 3 0 {tags {external:skip cluster}} {
         $cluster close
     }
 
+    test "CLUSTERSCAN with single slot MATCH bypasses cluster walk" {
+        set cluster [valkey_cluster 127.0.0.1:[srv 0 port]]
+
+        for {set i 0} {$i < 100} {incr i} {
+            $cluster set "{5L5}-$i" "test"
+        }
+
+        set res [$cluster clusterscan 0 MATCH "{5L5}-*"]
+        set cursor [lindex $res 0]
+        set keys [lindex $res 1]
+
+        assert_equal [llength $keys] 0
+        assert_match "0-{5L5}-0" $cursor
+
+        set found_keys {}
+        set max_loops 1000
+        set iterations 0
+        while {$cursor ne "0" && $iterations < $max_loops} {
+            # Assert cursor is in the slot matching the Match Pattern.
+            assert_match "*-{5L5}-*" $cursor
+
+            set res [$cluster clusterscan $cursor MATCH "{5L5}-*" COUNT 20]
+            set cursor [lindex $res 0]
+            foreach key [lindex $res 1] {
+                lappend found_keys $key
+            }
+
+            incr iterations
+        }
+
+        assert {$iterations < $max_loops}
+
+        set found_keys [lsort -unique $found_keys]
+        assert_equal [llength $found_keys] 100
+        foreach key $found_keys {
+            assert_match "{5L5}-*" $key
+        }
+
+        $cluster close
+    }
+
+    test "CLUSTERSCAN Match slot redirects tests" {
+        set cluster [valkey_cluster 127.0.0.1:[srv 0 port]]
+        # Test start from slot matching the Match Pattern
+        set res [$cluster clusterscan "0" MATCH "{Qi}-*"]
+        assert_equal [lindex $res 0] "0-{Qi}-0"
+        assert_equal [llength [lindex $res 1]] 0
+
+        # Test cursor is before the slot matching the Match Pattern
+        set res [$cluster clusterscan "0-{06S}-0" MATCH "{Qi}-*"]
+        assert_equal [lindex $res 0] "0-{Qi}-0"
+        assert_equal [llength [lindex $res 1]] 0
+
+        # Test cursor is past the slot matching the Match Pattern
+        set res [$cluster clusterscan "0-{Qi}-0" MATCH "{06S}-*"]
+        assert_equal [lindex $res 0] "0"
+        assert_equal [llength [lindex $res 1]] 0
+
+        $cluster close
+    }
+
+    test "CLUSTERSCAN concludes when SLOT and single slot MATCH mismatch" {
+        set cluster [valkey_cluster 127.0.0.1:[srv 0 port]]
+
+        set res [$cluster clusterscan "0" SLOT 0 MATCH "{Qi}-*"]
+        assert_equal [lindex $res 0] "0"
+        assert_equal [llength [lindex $res 1]] 0
+
+        set res [$cluster clusterscan "0-{06S}-0" SLOT 0 MATCH "{Qi}-*"]
+        assert_equal [lindex $res 0] "0"
+        assert_equal [llength [lindex $res 1]] 0
+
+        $cluster close
+    }
+
     test "CLUSTERSCAN with COUNT option" {
         set cluster [valkey_cluster 127.0.0.1:[srv 0 port]]
         # COUNT is a hint, not a guarantee, but we can test it doesn't error

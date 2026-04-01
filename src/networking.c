@@ -27,7 +27,6 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include "reply_blocking.h"
 #include "server.h"
 #include "cluster.h"
 #include "cluster_slot_stats.h"

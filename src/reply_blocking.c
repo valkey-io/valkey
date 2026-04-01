@@ -30,12 +30,12 @@ static void durabilityResetPrimaryState(bool is_free_clients_needed);
 
 /**
  * Utility function to determine whether durability is enabled.
- * Durability is implied when AOF is on and appendfsync is set to "always".
- * There is no separate config knob — the combination of appendonly + appendfsync
- * always is sufficient.
+ * Durability is enabled when any registered durability provider reports
+ * itself as enabled (e.g. the built-in AOF provider enables when
+ * appendonly + appendfsync always).
  */
 int isDurabilityEnabled(void) {
-    return server.aof_state != AOF_OFF && server.aof_fsync == AOF_FSYNC_ALWAYS;
+    return anyDurabilityProviderEnabled();
 }
 
 /**

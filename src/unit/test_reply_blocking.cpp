@@ -158,8 +158,11 @@ class UncommittedKeysTest : public ::testing::Test {
 
 /* ========================= Durability Tests ========================= */
 
-TEST_F(SyncReplicationTest, IsDurabilityEnabled) {
-    /* Durability is implied by AOF on + appendfsync always */
+TEST_F(DurabilityProviderTest, IsDurabilityEnabled) {
+    initDurabilityForTest();
+
+    /* Durability delegates to anyDurabilityProviderEnabled().
+     * The built-in AOF provider enables when AOF on + appendfsync always. */
     server.aof_state = AOF_OFF;
     server.aof_fsync = AOF_FSYNC_EVERYSEC;
     ASSERT_EQ(isDurabilityEnabled(), 0);
@@ -175,6 +178,8 @@ TEST_F(SyncReplicationTest, IsDurabilityEnabled) {
     server.aof_state = AOF_OFF;
     server.aof_fsync = AOF_FSYNC_ALWAYS;
     ASSERT_EQ(isDurabilityEnabled(), 0);
+
+    cleanupDurabilityForTest();
 }
 
 TEST_F(SyncReplicationTest, IsPrimaryDurabilityEnabled) {

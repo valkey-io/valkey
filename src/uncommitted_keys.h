@@ -21,6 +21,7 @@ void durabilityInitDatabase(struct serverDb *db);
 
 /**
  * Handle a dirty key for a given client.
+ * Marks the key as dirty immediately in db->uncommitted_keys.
  * @param c The calling client. NULL if the key becomes dirty outside a client command (i.e. expiry/eviction)
  * @param key The key object
  * @param db The database
@@ -35,10 +36,11 @@ void handleUncommittedKeyForClient(const struct client *c, struct serverObject *
 long long durabilityPurgeAndGetUncommittedKeyOffset(sds key, struct serverDb *db);
 
 /**
- * Clears all uncommitted DBs and keys that are properly acknowledged by
- * sufficient number of replicas.
+ * Drain committed entries from the offset tracker queue, removing keys
+ * from uncommitted_keys when their offset has been durably committed.
+ * Called from beforeSleep / notifyDurabilityProgress.
  */
-void clearUncommittedKeysAcknowledged(void);
+void drainCommittedKeys(long long committed_offset);
 
 /**
  * Clear all uncommitted keys for each database.
@@ -50,11 +52,6 @@ void clearAllUncommittedKeys(void);
  */
 unsigned long long getNumberOfUncommittedKeys(void);
 
-/**
- * Calculate cleanup time limit based on number of uncommitted keys.
- */
-unsigned long long getUncommittedKeysCleanupTimeLimit(unsigned long long num_uncommitted_keys);
-
 /*================================= Database Modification Tracking =========== */
 
 /**
@@ -63,8 +60,10 @@ unsigned long long getUncommittedKeysCleanupTimeLimit(unsigned long long num_unc
 void handleDatabaseModification(struct client *c);
 
 /**
- * Process pending uncommitted data (keys, databases, function store)
- * after a transaction completes.
+ * Commit pending uncommitted data (keys, databases, function store)
+ * after a transaction completes. Sets the real replication offset on
+ * keys that were dirtied during the transaction and enqueues them for
+ * cleanup tracking.
  */
 void processPendingUncommittedData(long long blocking_repl_offset);
 

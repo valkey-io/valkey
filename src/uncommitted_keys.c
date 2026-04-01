@@ -11,36 +11,50 @@ typedef struct uncommittedKeyEntry {
     long long offset;
 } uncommittedKeyEntry;
 
-typedef struct uncommittedKeyCleanupCtx {
-    hashtable *ht;
-    long long acked_offset;
-    unsigned long long *scan_count;
-} uncommittedKeyCleanupCtx;
+/**
+ * An entry in the offset tracker queue.  When a key is dirtied we add it to
+ * this FIFO queue.  When the durability system reports a new committed offset
+ * we drain the head of the queue and remove the keys whose offset has been
+ * committed from the per-DB uncommitted_keys hashtable.
+ */
+typedef struct offsetTrackerEntry {
+    sds key;            /* owned copy of the key string */
+    long long offset;   /* replication offset this key must reach */
+    hashtable *ht;      /* pointer to db->uncommitted_keys that owns the key */
+} offsetTrackerEntry;
 
 /**
- * Below are the data structures used to buffer intermediate dirty keys/DBs for multi-command
- * blocks including MULTI/EXEC and Lua script. As we execute the individual commands in the
- * transaction, we don't know the final replication offset so we store the updated keys and DBs
- * in afterCommandTrackReplOffset(), and process them in postCommandExec() after the entire transaction is
- * propagated to the replication buffer.
+ * Pending key reference used during multi-command blocks (MULTI/EXEC, Lua).
+ * We mark keys dirty immediately but don't yet know the final replication
+ * offset, so we keep a reference to update the offset and enqueue for
+ * cleanup tracking after the transaction completes.
  */
 typedef struct pendingUncommittedKey {
     robj *key;
     hashtable *uncommitted_keys;
 } pendingUncommittedKey;
 
-// Track the list of pending uncommitted keys for an ongoing multi-command block
+/* Offset tracker queue — FIFO list of offsetTrackerEntry.
+ * Entries are appended when keys are dirtied (or when a transaction completes
+ * and we learn the real offset for keys dirtied during the transaction).
+ * Entries are drained from the head when the committed offset advances. */
+static list *offset_tracker_queue;
+
+/* Pending keys buffered during MULTI/EXEC or Lua scripts.  These are keys
+ * that have already been marked dirty in uncommitted_keys (with LLONG_MAX
+ * as a placeholder offset) but whose real offset is not yet known. */
 static list *pending_uncommitted_keys;
 
-// Track the list of pending uncommitted databases for an ongoing multi-command block
+/* Pending databases dirtied during a multi-command block. */
 static list *pending_uncommitted_dbs;
 
 
 /*================================= Internal Prototypes ====================== */
 
 static void addUncommittedKey(sds key, long long offset, hashtable *uncommittedKeys);
-static void uncommittedKeysCleanupScanCallback(void *privdata, void *entry);
+static void enqueueOffsetTracker(sds key, long long offset, hashtable *ht);
 static void pendingUncommittedKeyDestructor(void *entry);
+static void offsetTrackerEntryDestructor(void *entry);
 static uint64_t uncommittedKeysHash(const void *key);
 static int uncommittedKeysKeyCompare(const void *key1, const void *key2);
 static const void *uncommittedKeyEntryGetKey(const void *entry);
@@ -68,6 +82,13 @@ static void pendingUncommittedKeyDestructor(void *entry) {
     pendingUncommittedKey *uk = entry;
     if (uk->key != NULL) decrRefCount(uk->key);
     zfree(uk);
+}
+
+static void offsetTrackerEntryDestructor(void *entry) {
+    if (entry == NULL) return;
+    offsetTrackerEntry *ote = entry;
+    sdsfree(ote->key);
+    zfree(ote);
 }
 
 static uint64_t uncommittedKeysHash(const void *key) {
@@ -102,18 +123,11 @@ unsigned long long getNumberOfUncommittedKeys(void) {
     return num_uncommitted_keys;
 }
 
-unsigned long long getUncommittedKeysCleanupTimeLimit(unsigned long long num_uncommitted_keys) {
-    unsigned long long time_limit_ms = 1;
-    if (num_uncommitted_keys > 0) {
-        time_limit_ms = ceil(server.durability.keys_cleanup_time_limit_ms * MIN(1, (double)(num_uncommitted_keys / 1000000.0)));
-    }
-    return time_limit_ms;
-}
-
 /*================================= Key Tracking ============================= */
 
 /**
  * Mark a key as uncommitted at a particular replication offset.
+ * If the key already exists in the hashtable, update its offset.
  */
 static void addUncommittedKey(const sds key, const long long offset, hashtable *uncommittedKeys) {
     uncommittedKeyEntry *entry = zmalloc(sizeof(*entry));
@@ -122,9 +136,10 @@ static void addUncommittedKey(const sds key, const long long offset, hashtable *
 
     void *existing = NULL;
     if (hashtableAddOrFind(uncommittedKeys, entry, &existing)) {
-        return;
+        return; /* newly added */
     }
 
+    /* Key already tracked — update to the latest offset */
     uncommittedKeyEntry *existing_entry = existing;
     existing_entry->offset = offset;
     sdsfree(entry->key);
@@ -132,15 +147,14 @@ static void addUncommittedKey(const sds key, const long long offset, hashtable *
 }
 
 /**
- * Callback for hashtableScan for cleaning up uncommitted keys.
+ * Enqueue a key into the offset tracker queue for later cleanup.
  */
-static void uncommittedKeysCleanupScanCallback(void *privdata, void *entry) {
-    uncommittedKeyCleanupCtx *ctx = privdata;
-    uncommittedKeyEntry *uke = entry;
-    if (uke->offset <= ctx->acked_offset) {
-        hashtableDelete(ctx->ht, uke->key);
-    }
-    (*ctx->scan_count)++;
+static void enqueueOffsetTracker(sds key, long long offset, hashtable *ht) {
+    offsetTrackerEntry *ote = zmalloc(sizeof(*ote));
+    ote->key = sdsdup(key);
+    ote->offset = offset;
+    ote->ht = ht;
+    listAddNodeTail(offset_tracker_queue, ote);
 }
 
 /**
@@ -166,21 +180,39 @@ long long durabilityPurgeAndGetUncommittedKeyOffset(const sds key, serverDb *db)
 
 /**
  * Handle a dirty key for a given client.
+ *
+ * Keys are marked dirty immediately in db->uncommitted_keys.  For single
+ * commands outside a transaction the real replication offset is known so we
+ * also enqueue the key in the offset tracker right away.
+ *
+ * Inside a MULTI/EXEC or Lua script we use LLONG_MAX as a placeholder
+ * offset (so reads are blocked immediately) and buffer a reference in
+ * pending_uncommitted_keys.  processPendingUncommittedData() will later
+ * update the offset and enqueue for cleanup once the transaction completes.
  */
 void handleUncommittedKeyForClient(const client *c, robj *key, serverDb *db) {
+    sds keystr = objectGetVal(key);
+
     if ((c != NULL) && ((c->flag.multi) || scriptIsRunning())) {
         if (server.durability.all_dbs_dirty_in_current_cmd) return;
+
+        /* Mark dirty immediately with placeholder offset */
+        addUncommittedKey(keystr, LLONG_MAX, db->uncommitted_keys);
+
+        /* Buffer a reference so we can update offset + enqueue later */
         if (pending_uncommitted_keys == NULL) {
             pending_uncommitted_keys = listCreate();
             listSetFreeMethod(pending_uncommitted_keys, pendingUncommittedKeyDestructor);
         }
-        pendingUncommittedKey *dirty_key = (pendingUncommittedKey *)zmalloc(sizeof(pendingUncommittedKey));
+        pendingUncommittedKey *dirty_key = zmalloc(sizeof(pendingUncommittedKey));
         incrRefCount(key);
         dirty_key->key = key;
         dirty_key->uncommitted_keys = db->uncommitted_keys;
         listAddNodeTail(pending_uncommitted_keys, dirty_key);
     } else {
-        addUncommittedKey(objectGetVal(key), server.primary_repl_offset, db->uncommitted_keys);
+        /* Single command: mark dirty with real offset and enqueue immediately */
+        addUncommittedKey(keystr, server.primary_repl_offset, db->uncommitted_keys);
+        enqueueOffsetTracker(keystr, server.primary_repl_offset, db->uncommitted_keys);
     }
 }
 
@@ -278,68 +310,42 @@ bool getTargetDbIdForCopyCommand(int argc, robj **argv, int selected_dbid, int *
     return true;
 }
 
-/*================================= Cleanup ================================== */
+/*================================= Drain / Cleanup ========================== */
 
 /**
- * Clears all uncommitted DBs and keys that are properly acknowledged.
+ * Drain committed entries from the offset tracker queue, removing keys
+ * from their per-DB uncommitted_keys hashtable when their offset has been
+ * durably committed.
+ *
+ * Only removes a key from the hashtable if the key's current offset in the
+ * hashtable matches the queued offset (so a re-dirtied key at a higher
+ * offset is not prematurely removed).
  */
-void clearUncommittedKeysAcknowledged(void) {
-    if (!isPrimaryDurabilityEnabled()) {
-        return;
-    }
+void drainCommittedKeys(long long committed_offset) {
+    while (listLength(offset_tracker_queue) > 0) {
+        listNode *head = listFirst(offset_tracker_queue);
+        offsetTrackerEntry *ote = listNodeValue(head);
 
-    durable_t *durability = &server.durability;
-    const int TIME_CHECK_INTERVAL = 100;
-    unsigned long long scan_count = 0;
+        if (ote->offset > committed_offset) break;
 
-    unsigned long long num_uncommitted_keys = getNumberOfUncommittedKeys();
-    if (num_uncommitted_keys == 0) return;
-
-    unsigned long long time_limit_ms = getUncommittedKeysCleanupTimeLimit(num_uncommitted_keys);
-    unsigned long long start_time_ms = mstime();
-    unsigned long long next_time_check = TIME_CHECK_INTERVAL;
-    while (durability->curr_db_scan_idx < server.dbnum) {
-        serverDb *db = server.db[durability->curr_db_scan_idx];
-        if (db != NULL) {
-            if (db->dirty_repl_offset <= server.durability.previous_acked_offset) {
-                db->dirty_repl_offset = -1;
-            }
-
-            if (hashtableSize(db->uncommitted_keys) > 0) {
-                uncommittedKeyCleanupCtx ctx = {
-                    .ht = db->uncommitted_keys,
-                    .acked_offset = server.durability.previous_acked_offset,
-                    .scan_count = &scan_count,
-                };
-
-                if (!db->scan_in_progress) {
-                    db->uncommitted_keys_cursor = 0;
-                    db->scan_in_progress = 1;
-                }
-
-                do {
-                    db->uncommitted_keys_cursor =
-                        hashtableScan(db->uncommitted_keys, db->uncommitted_keys_cursor, uncommittedKeysCleanupScanCallback, &ctx);
-
-                    if (time_limit_ms > 0 && scan_count >= next_time_check) {
-                        const unsigned long long cur_time_ms = mstime();
-                        if (cur_time_ms - start_time_ms > time_limit_ms) {
-                            return;
-                        }
-                        next_time_check += TIME_CHECK_INTERVAL;
-                    }
-                } while (db->uncommitted_keys_cursor != 0);
-            }
-
-            if (db->scan_in_progress) {
-                db->scan_in_progress = 0;
+        /* Check if key still exists with this offset — a later write may
+         * have updated it to a higher offset. */
+        uncommittedKeyEntry *entry = NULL;
+        if (hashtableFind(ote->ht, ote->key, (void **)&entry)) {
+            if (entry->offset <= committed_offset) {
+                hashtableDelete(ote->ht, ote->key);
             }
         }
-        durability->curr_db_scan_idx++;
+
+        listDelNode(offset_tracker_queue, head);
     }
 
-    if (durability->curr_db_scan_idx == server.dbnum) {
-        durability->curr_db_scan_idx = 0;
+    /* Also clear dirty DB offsets */
+    for (int i = 0; i < server.dbnum; i++) {
+        serverDb *db = server.db[i];
+        if (db != NULL && db->dirty_repl_offset <= committed_offset) {
+            db->dirty_repl_offset = -1;
+        }
     }
 }
 
@@ -364,7 +370,10 @@ void clearAllUncommittedKeys(void) {
         hashtableRelease(db->uncommitted_keys);
         durabilityInitDatabase(db);
     }
-    server.durability.curr_db_scan_idx = 0;
+    /* Also clear the offset tracker queue */
+    if (offset_tracker_queue != NULL) {
+        listEmpty(offset_tracker_queue);
+    }
 }
 
 /*================================= Access Validation ======================== */
@@ -465,6 +474,8 @@ void uncommittedKeysInitPending(void) {
     pending_uncommitted_keys = listCreate();
     listSetFreeMethod(pending_uncommitted_keys, pendingUncommittedKeyDestructor);
     pending_uncommitted_dbs = listCreate();
+    offset_tracker_queue = listCreate();
+    listSetFreeMethod(offset_tracker_queue, offsetTrackerEntryDestructor);
     server.durability.all_dbs_dirty_in_current_cmd = false;
 }
 
@@ -477,11 +488,16 @@ void uncommittedKeysCleanupPending(void) {
         listRelease(pending_uncommitted_dbs);
         pending_uncommitted_dbs = NULL;
     }
+    if (offset_tracker_queue != NULL) {
+        listRelease(offset_tracker_queue);
+        offset_tracker_queue = NULL;
+    }
 }
 
 /**
- * Marks keys, databases, and the function store dirty at the current
- * replication offset if they were updated during a transaction.
+ * After a transaction completes, update the placeholder offsets on keys
+ * that were dirtied during the transaction to the real replication offset,
+ * and enqueue them in the offset tracker for cleanup.
  */
 void processPendingUncommittedData(long long blocking_repl_offset) {
     if (listLength(pending_uncommitted_keys) > 0) {
@@ -490,7 +506,19 @@ void processPendingUncommittedData(long long blocking_repl_offset) {
         listRewind(pending_uncommitted_keys, &li);
         while ((key_node = listNext(&li)) != NULL) {
             const pendingUncommittedKey *uk = listNodeValue(key_node);
-            addUncommittedKey(objectGetVal(uk->key), blocking_repl_offset, uk->uncommitted_keys);
+            sds keystr = objectGetVal(uk->key);
+
+            /* Update the placeholder offset to the real one */
+            uncommittedKeyEntry *entry = NULL;
+            if (hashtableFind(uk->uncommitted_keys, keystr, (void **)&entry)) {
+                /* Only update if still at placeholder or our offset is newer */
+                if (entry->offset == LLONG_MAX || entry->offset < blocking_repl_offset) {
+                    entry->offset = blocking_repl_offset;
+                }
+            }
+
+            /* Enqueue for cleanup tracking */
+            enqueueOffsetTracker(keystr, blocking_repl_offset, uk->uncommitted_keys);
             listDelNode(pending_uncommitted_keys, key_node);
         }
     }

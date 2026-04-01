@@ -1713,7 +1713,6 @@ long long serverCron(struct aeEventLoop *eventLoop, long long id, void *clientDa
         run_with_period(100) modulesCron();
     }
 
-    run_with_period(1000) clearUncommittedKeysAcknowledged();
     /* Fire the cron loop modules event. */
     ValkeyModuleCronLoopV1 ei = {VALKEYMODULE_CRON_LOOP_VERSION, server.hz};
     moduleFireServerEvent(VALKEYMODULE_EVENT_CRON_LOOP, 0, &ei);

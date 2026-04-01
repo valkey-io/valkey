@@ -132,8 +132,7 @@ jobs:
         with:
           name: ${{ github.event.label.name }}-results
           path: |
-            ./valkey-perf-benchmark/results/${{ github.event.pull_request.merge_commit_sha }}/metrics.json
-            ./valkey-perf-benchmark/results/${{ github.event.pull_request.base.ref }}/metrics.json
+            ./valkey-perf-benchmark/results/
             comparison.md
 
       - name: Comment PR with results

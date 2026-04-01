@@ -35,6 +35,12 @@ jobs:
       - run: cd libbacktrace && ./configure && make && sudo make install
       - name: Checkout Valkey
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Install gtest
+        run: |
+          git clone --depth 1 -b v1.17.x https://github.com/google/googletest.git
+          cmake -S googletest -B googletest/build
+          cmake --build googletest/build -- -j$(nproc)
+          sudo cmake --install googletest/build
       - name: Install lcov and run test
         run: |
           sudo apt-get install lcov tclx

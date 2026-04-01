@@ -62,6 +62,12 @@ long long __wrap_aeCreateTimeEvent(aeEventLoop *eventLoop, long long millisecond
 robj *__wrap_lookupKeyRead(serverDb *db, robj *key);
 int __wrap_processPendingCommandAndInputBuffer(client *c);
 void __wrap_beforeNextClient(client *c);
+
+void __wrap_blockInuse_blockClientOnKeys(client *c, int nKeys, robj **keys);
+void __wrap_blockInuse_unblockClientsOnKey(robj *key);
+
+int __wrap_ACLCheckAllUserCommandPerm(user *u, struct serverCommand *cmd, robj **argv, int argc, int dbid, int *idxptr);
+
 #undef protected
 #undef _Bool
 #undef typename

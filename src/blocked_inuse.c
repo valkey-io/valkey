@@ -96,9 +96,9 @@ static clientDataEntry *clientToKeys_removeKey(client *c, robj *key) {
     clientDataEntry *entry = clientToKeys_getClientDataEntry(c);
     if (entry == NULL) return NULL;
 
-    sds key_sds = objectGetKey(key);
+    sds key_sds = objectGetVal(key);
     for (int i = 0; i < entry->n_keys; ++i) {
-        sds curr_key = objectGetKey(entry->keys[i]);
+        sds curr_key = objectGetVal(entry->keys[i]);
         if (sdscmp(curr_key, key_sds) == 0) {
             decrRefCount(entry->keys[i]);
             entry->keys[i] = entry->keys[entry->n_keys - 1];
@@ -239,15 +239,6 @@ void blockInuse_blockClientOnKeys(client *c, int nKeys, robj *keys[]) {
     serverAssert(!c->flag.replica);
     for (int i = 0; i < nKeys; ++i) {
         serverAssert(keys[i]->type == OBJ_STRING);
-        // Verify key exists in at least one database across the server
-        int found = 0;
-        for (int j = 0; j < server.dbnum; ++j) {
-            if (lookupKeyRead(server.db[j], keys[i]) != NULL) {
-                found = 1;
-                break;
-            }
-        }
-        serverAssert(found);
     }
 
     // Initialize clientDataEntry and insert into client_to_keys

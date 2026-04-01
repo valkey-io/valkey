@@ -3805,7 +3805,7 @@ int processCommandAndResetClient(client *c) {
     client *old_client = server.current_client;
     server.current_client = c;
     if (processCommand(c) == C_OK) {
-        commandProcessed(c);
+        if (!blockInuse_clientBlocked(c)) commandProcessed(c);
         /* Update the client's memory to include output buffer growth following the
          * processed command. */
         if (c->conn) updateClientMemUsageAndBucket(c);

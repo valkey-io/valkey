@@ -50,13 +50,6 @@ typedef long long mstime_t;
  * Durability container to house all the durability related fields.
  */
 typedef struct durable_t {
-    /* Flag to enable/disable durability (response blocking until providers ack) */
-    int enabled;
-    /* Uncommitted keys cleanup configuration time limit in milliseconds */
-    unsigned int keys_cleanup_time_limit_ms;
-    /* The current scanning database index, starting from 0 */
-    int curr_db_scan_idx;
-
     /* Clients waiting for offset acknowledgement from durability providers */
     struct list *clients_waiting_ack;
 

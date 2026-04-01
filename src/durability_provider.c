@@ -53,19 +53,10 @@ void resetDurabilityProviders(void) {
 /*================================= Built-in AOF Provider ==================== */
 
 static bool aofProviderIsEnabled(void) {
-    return server.aof_state != AOF_OFF;
+    return server.aof_state != AOF_OFF && server.aof_fsync == AOF_FSYNC_ALWAYS;
 }
 
 static long long aofProviderGetAckedOffset(void) {
-    /* If appendfsync is not "always", we cannot guarantee data is on disk
-     * after each write. Return primary_repl_offset to indicate "no constraint",
-     * effectively making this provider a transparent pass-through that doesn't
-     * block consensus. When appendfsync is switched to "always", the provider
-     * immediately starts returning the actual fsynced offset. */
-    if (server.aof_fsync != AOF_FSYNC_ALWAYS) {
-        return server.primary_repl_offset;
-    }
-
     /* Use fsynced_reploff_pending directly instead of fsynced_reploff.
      * When async AOF flushing is used (IO threads), fsynced_reploff_pending
      * is updated by the IO thread upon fsync completion, but fsynced_reploff

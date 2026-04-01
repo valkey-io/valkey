@@ -9,13 +9,13 @@
 foreach provider_mode {aof} {
 
     if {$provider_mode eq "replica"} {
-        set server_overrides {durability yes}
+        set server_overrides {appendonly yes appendfsync always}
     } else {
-        # Start with appendfsync always so the AOF provider is fully active.
+        # Durability is implied by appendonly + appendfsync always.
         # We use DEBUG durability-provider-pause/resume to control blocking
         # instead of toggling appendfsync, which avoids the issue where the
         # provider reports as disabled when appendfsync != always.
-        set server_overrides {durability yes appendonly yes appendfsync always}
+        set server_overrides {appendonly yes appendfsync always}
     }
 
     start_server [list tags {"repl durability external:skip"} overrides $server_overrides] {
@@ -77,7 +77,7 @@ foreach provider_mode {aof} {
             # ==================== Write blocking tests ====================
 
             test "($provider_mode) Sync replication blocks replies until provider acks" {
-                assert_equal "yes" [lindex [$primary config get durability] 1]
+                assert_equal "always" [lindex [$primary config get appendfsync] 1]
                 puts "durability blocks"
                 pause_provider
 
@@ -97,7 +97,7 @@ foreach provider_mode {aof} {
             }
 
             test "($provider_mode) Sync replication blocks EXEC replies until provider acks" {
-                assert_equal "yes" [lindex [$primary config get durability] 1]
+                assert_equal "always" [lindex [$primary config get appendfsync] 1]
                 puts "durability blocks"
 
                 pause_provider
@@ -122,7 +122,7 @@ foreach provider_mode {aof} {
             }
 
             test "($provider_mode) Sync replication blocks only written keys in EXEC" {
-                assert_equal "yes" [lindex [$primary config get durability] 1]
+                assert_equal "always" [lindex [$primary config get appendfsync] 1]
                 puts "durability only written keys in EXEC"
 
                 # Pre-populate with durability off so the SET doesn't block
@@ -156,12 +156,12 @@ foreach provider_mode {aof} {
             }
 
             test "($provider_mode) Lua script write blocks replies until provider acks" {
-                assert_equal "yes" [lindex [$primary config get sync-replication] 1]
+                assert_equal "always" [lindex [$primary config get appendfsync] 1]
 
                 # Pre-populate with sync-repl off so the SET doesn't block
-                assert_equal "OK" [$primary config set sync-replication no]
+                assert_equal "OK" [$primary config set appendfsync everysec]
                 assert_equal "OK" [$primary set durable:lua-clean clean]
-                assert_equal "OK" [$primary config set sync-replication yes]
+                assert_equal "OK" [$primary config set appendfsync always]
 
                 pause_provider
 
@@ -184,7 +184,7 @@ foreach provider_mode {aof} {
             }
 
             test "($provider_mode) Lua script error after partial write still blocks" {
-                assert_equal "yes" [lindex [$primary config get sync-replication] 1]
+                assert_equal "always" [lindex [$primary config get appendfsync] 1]
 
                 pause_provider
 
@@ -207,12 +207,12 @@ foreach provider_mode {aof} {
             # ==================== Non-blocking tests ====================
 
             test "($provider_mode) EVAL_RO should not block replies" {
-                assert_equal "yes" [lindex [$primary config get sync-replication] 1]
+                assert_equal "always" [lindex [$primary config get appendfsync] 1]
 
                 # Pre-populate with sync-repl off so the SET doesn't block
-                assert_equal "OK" [$primary config set sync-replication no]
+                assert_equal "OK" [$primary config set appendfsync everysec]
                 assert_equal "OK" [$primary set durable:eval-ro-key hello]
-                assert_equal "OK" [$primary config set sync-replication yes]
+                assert_equal "OK" [$primary config set appendfsync always]
 
                 set rd [valkey_deferring_client -1]
                 $rd eval_ro {return redis.call('get', KEYS[1])} 1 durable:eval-ro-key
@@ -222,7 +222,7 @@ foreach provider_mode {aof} {
             }
 
             test "($provider_mode) MULTI/EXEC with DISCARD does not block" {
-                assert_equal "yes" [lindex [$primary config get sync-replication] 1]
+                assert_equal "always" [lindex [$primary config get appendfsync] 1]
 
                 set rd [valkey_deferring_client -1]
                 $rd multi
@@ -240,12 +240,12 @@ foreach provider_mode {aof} {
             }
 
             test "($provider_mode) MULTI/EXEC with no writes does not block" {
-                assert_equal "yes" [lindex [$primary config get sync-replication] 1]
+                assert_equal "always" [lindex [$primary config get appendfsync] 1]
 
                 # Pre-populate with sync-repl off so the SET doesn't block
-                assert_equal "OK" [$primary config set sync-replication no]
+                assert_equal "OK" [$primary config set appendfsync everysec]
                 assert_equal "OK" [$primary set durable:nowrite-key existing]
-                assert_equal "OK" [$primary config set sync-replication yes]
+                assert_equal "OK" [$primary config set appendfsync always]
 
                 set rd [valkey_deferring_client -1]
                 $rd multi
@@ -263,7 +263,7 @@ foreach provider_mode {aof} {
             }
 
             test "($provider_mode) Admin commands are never blocked" {
-                assert_equal "yes" [lindex [$primary config get sync-replication] 1]
+                assert_equal "always" [lindex [$primary config get appendfsync] 1]
 
                 set rd [valkey_deferring_client -1]
 
@@ -282,11 +282,11 @@ foreach provider_mode {aof} {
             }
 
             test "($provider_mode) Read-only commands on clean keys are not blocked" {
-                assert_equal "yes" [lindex [$primary config get sync-replication] 1]
+                assert_equal "always" [lindex [$primary config get appendfsync] 1]
 
-                assert_equal "OK" [$primary config set sync-replication no]
+                assert_equal "OK" [$primary config set appendfsync everysec]
                 assert_equal "OK" [$primary set durable:clean-key cleanvalue]
-                assert_equal "OK" [$primary config set sync-replication yes]
+                assert_equal "OK" [$primary config set appendfsync always]
 
                 set rd [valkey_deferring_client -1]
                 $rd get durable:clean-key
@@ -295,8 +295,8 @@ foreach provider_mode {aof} {
             }
 
             test "($provider_mode) Sync replication disabled - writes return immediately (regression)" {
-                assert_equal "OK" [$primary config set sync-replication no]
-                assert_equal "no" [lindex [$primary config get sync-replication] 1]
+                assert_equal "OK" [$primary config set appendfsync everysec]
+                assert_equal "everysec" [lindex [$primary config get appendfsync] 1]
 
                 set rd [valkey_deferring_client -1]
                 $rd set durable:norep-key value
@@ -313,13 +313,13 @@ foreach provider_mode {aof} {
                 assert_equal {OK} [$rd read]
 
                 $rd close
-                assert_equal "OK" [$primary config set sync-replication yes]
+                assert_equal "OK" [$primary config set appendfsync always]
             }
 
             # ==================== Multiple clients ====================
 
             test "($provider_mode) Multiple concurrent writers block independently" {
-                assert_equal "yes" [lindex [$primary config get sync-replication] 1]
+                assert_equal "always" [lindex [$primary config get appendfsync] 1]
 
                 pause_provider
 
@@ -350,7 +350,7 @@ foreach provider_mode {aof} {
             }
 
             test "($provider_mode) Write then read on same client preserves reply ordering" {
-                assert_equal "yes" [lindex [$primary config get sync-replication] 1]
+                assert_equal "always" [lindex [$primary config get appendfsync] 1]
 
                 pause_provider
 
@@ -374,11 +374,11 @@ foreach provider_mode {aof} {
             # ==================== Database-level commands ====================
 
             test "($provider_mode) FLUSHDB inside MULTI/EXEC blocks entire database" {
-                assert_equal "yes" [lindex [$primary config get sync-replication] 1]
+                assert_equal "always" [lindex [$primary config get appendfsync] 1]
 
-                assert_equal "OK" [$primary config set sync-replication no]
+                assert_equal "OK" [$primary config set appendfsync everysec]
                 assert_equal "OK" [$primary set durable:flush-pre existing]
-                assert_equal "OK" [$primary config set sync-replication yes]
+                assert_equal "OK" [$primary config set appendfsync always]
 
                 pause_provider
 
@@ -403,7 +403,7 @@ foreach provider_mode {aof} {
             }
 
             test "($provider_mode) FLUSHALL blocks write reply until provider acks" {
-                assert_equal "yes" [lindex [$primary config get sync-replication] 1]
+                assert_equal "always" [lindex [$primary config get appendfsync] 1]
 
                 assert_equal "OK" [$primary set durable:flushall-key value]
 
@@ -425,11 +425,11 @@ foreach provider_mode {aof} {
             }
 
             test "($provider_mode) FLUSHALL inside MULTI/EXEC blocks all databases" {
-                assert_equal "yes" [lindex [$primary config get sync-replication] 1]
+                assert_equal "always" [lindex [$primary config get appendfsync] 1]
 
-                assert_equal "OK" [$primary config set sync-replication no]
+                assert_equal "OK" [$primary config set appendfsync everysec]
                 assert_equal "OK" [$primary set durable:flushall-multi-key value]
-                assert_equal "OK" [$primary config set sync-replication yes]
+                assert_equal "OK" [$primary config set appendfsync always]
 
                 pause_provider
 
@@ -454,11 +454,11 @@ foreach provider_mode {aof} {
             }
 
             test "($provider_mode) COPY cross-database blocks write reply" {
-                assert_equal "yes" [lindex [$primary config get sync-replication] 1]
+                assert_equal "always" [lindex [$primary config get appendfsync] 1]
 
-                assert_equal "OK" [$primary config set sync-replication no]
+                assert_equal "OK" [$primary config set appendfsync everysec]
                 assert_equal "OK" [$primary set durable:copy-src srcvalue]
-                assert_equal "OK" [$primary config set sync-replication yes]
+                assert_equal "OK" [$primary config set appendfsync always]
 
                 pause_provider
 
@@ -478,7 +478,7 @@ foreach provider_mode {aof} {
             }
 
             test "($provider_mode) SWAPDB blocks write reply until provider acks" {
-                assert_equal "yes" [lindex [$primary config get sync-replication] 1]
+                assert_equal "always" [lindex [$primary config get appendfsync] 1]
 
                 assert_equal "OK" [$primary set durable:swap-db0 db0val]
                 $primary select 1
@@ -502,19 +502,19 @@ foreach provider_mode {aof} {
                 $rd close
 
                 # Swap back to restore state (with sync-repl off so it doesn't block)
-                $primary config set sync-replication no
+                $primary config set appendfsync everysec
                 $primary swapdb 0 1
-                $primary config set sync-replication yes
+                $primary config set appendfsync always
             }
 
             test "($provider_mode) MOVE blocks write reply until provider acks" {
-                assert_equal "yes" [lindex [$primary config get sync-replication] 1]
+                assert_equal "always" [lindex [$primary config get appendfsync] 1]
 
                 $primary select 2
                 $primary del durable:move-key
                 $primary select 9
                 assert_equal "OK" [$primary set durable:move-key moveval]
-                assert_equal "OK" [$primary config set sync-replication yes]
+                assert_equal "OK" [$primary config set appendfsync always]
 
                 pause_provider
 
@@ -534,7 +534,7 @@ foreach provider_mode {aof} {
             }
 
             test "($provider_mode) MULTI/EXEC with SELECT writes to multiple databases blocks" {
-                assert_equal "yes" [lindex [$primary config get sync-replication] 1]
+                assert_equal "always" [lindex [$primary config get appendfsync] 1]
 
                 pause_provider
 
@@ -570,7 +570,7 @@ foreach provider_mode {aof} {
             # ==================== Function store ====================
 
             test "($provider_mode) FUNCTION LOAD blocks reply until provider acks" {
-                assert_equal "yes" [lindex [$primary config get sync-replication] 1]
+                assert_equal "always" [lindex [$primary config get appendfsync] 1]
 
                 pause_provider
 
@@ -590,7 +590,7 @@ foreach provider_mode {aof} {
             }
 
             test "($provider_mode) FUNCTION DELETE blocks reply until provider acks" {
-                assert_equal "yes" [lindex [$primary config get sync-replication] 1]
+                assert_equal "always" [lindex [$primary config get appendfsync] 1]
 
                 pause_provider
 
@@ -612,7 +612,7 @@ foreach provider_mode {aof} {
             # ==================== Dirty key reads ====================
 
             test "($provider_mode) Sync replication blocks reads on dirty keys" {
-                assert_equal "yes" [lindex [$primary config get sync-replication] 1]
+                assert_equal "always" [lindex [$primary config get appendfsync] 1]
 
                 pause_provider
 
@@ -638,7 +638,7 @@ foreach provider_mode {aof} {
             # ==================== Client disconnect stats ====================
 
             test "($provider_mode) Client disconnect while blocked updates stats" {
-                assert_equal "yes" [lindex [$primary config get sync-replication] 1]
+                assert_equal "always" [lindex [$primary config get appendfsync] 1]
 
                 pause_provider
 
@@ -664,8 +664,8 @@ foreach provider_mode {aof} {
             # ==================== Toggle / config changes ====================
 
             test "($provider_mode) Sync replication toggling disables reply blocking" {
-                assert_equal "OK" [$primary config set sync-replication no]
-                assert_equal "no" [lindex [$primary config get sync-replication] 1]
+                assert_equal "OK" [$primary config set appendfsync everysec]
+                assert_equal "everysec" [lindex [$primary config get appendfsync] 1]
 
                 set writer [valkey_deferring_client -1]
                 $writer client reply off
@@ -676,11 +676,11 @@ foreach provider_mode {aof} {
                 assert_equal "value" [$rd read]
 
                 $rd close
-                assert_equal "OK" [$primary config set sync-replication yes]
+                assert_equal "OK" [$primary config set appendfsync always]
             }
 
             test "($provider_mode) Disabling sync replication unblocks pending replies" {
-                assert_equal "yes" [lindex [$primary config get sync-replication] 1]
+                assert_equal "always" [lindex [$primary config get appendfsync] 1]
 
                 pause_provider
 
@@ -692,7 +692,7 @@ foreach provider_mode {aof} {
                 set early_reply [read $fd]
                 assert_equal "" $early_reply
 
-                assert_equal "OK" [$primary config set sync-replication no]
+                assert_equal "OK" [$primary config set appendfsync everysec]
 
                 set raw_reply ""
                 set got_reply 0
@@ -714,7 +714,7 @@ foreach provider_mode {aof} {
                 # (disabling sync-replication unblocked the client but didn't resume the provider)
                 $primary DEBUG durability-provider-resume aof
 
-                assert_equal "OK" [$primary config set sync-replication yes]
+                assert_equal "OK" [$primary config set appendfsync always]
             }
 
             test "($provider_mode) INFO reports sync replication stats" {
@@ -727,7 +727,7 @@ foreach provider_mode {aof} {
             # ==================== Client tracking invalidation (deferred tasks) ====================
 
             test "($provider_mode) Key invalidation is deferred until provider acks - signalModifiedKey" {
-                assert_equal "yes" [lindex [$primary config get sync-replication] 1]
+                assert_equal "always" [lindex [$primary config get appendfsync] 1]
                 puts "running key invalidation"
                 # Set up a RESP3 tracking client that will receive invalidation messages
                 set tracker [valkey_deferring_client -1]
@@ -737,9 +737,9 @@ foreach provider_mode {aof} {
                 $tracker read ;# consume TRACKING reply
 
                 # Populate a key and cache it via GET on the tracking client
-                $primary config set sync-replication no
+                $primary config set appendfsync everysec
                 $primary set durable:track-key original
-                $primary config set sync-replication yes
+                $primary config set appendfsync always
 
                 $tracker GET durable:track-key
                 $tracker read ;# consume "original" — key is now tracked
@@ -778,7 +778,7 @@ foreach provider_mode {aof} {
             }
 
             test "($provider_mode) Flush invalidation is deferred until provider acks - signalFlushedDb" {
-                assert_equal "yes" [lindex [$primary config get sync-replication] 1]
+                assert_equal "always" [lindex [$primary config get appendfsync] 1]
                 puts "running flush invalidation"
 
                 # Set up a RESP3 BCAST tracking client to catch FLUSHDB invalidations
@@ -789,10 +789,10 @@ foreach provider_mode {aof} {
                 $tracker read ;# consume TRACKING reply
 
                 # Populate some keys so there's something to flush
-                $primary config set sync-replication no
+                $primary config set appendfsync everysec
                 $primary set durable:flush-track-a val_a
                 $primary set durable:flush-track-b val_b
-                $primary config set sync-replication yes
+                $primary config set appendfsync always
 
                 # Drain any invalidation messages from the SETs above
                 # (BCAST mode sends invalidations for all writes)
@@ -851,7 +851,7 @@ foreach provider_mode {aof} {
             # ==================== Keyspace notification deferral (deferred tasks) ====================
 
             test "($provider_mode) Keyspace notification is deferred until provider acks" {
-                assert_equal "yes" [lindex [$primary config get sync-replication] 1]
+                assert_equal "always" [lindex [$primary config get appendfsync] 1]
 
                 # Enable keyspace notifications for all events
                 $primary config set notify-keyspace-events KA
@@ -893,7 +893,7 @@ foreach provider_mode {aof} {
 
             test "($provider_mode) Keyspace notification fires immediately when sync replication disabled" {
                 # Verify that without sync replication, keyspace events are NOT deferred
-                $primary config set sync-replication no
+                $primary config set appendfsync everysec
                 $primary config set notify-keyspace-events KA
 
                 set rd1 [valkey_deferring_client]
@@ -903,14 +903,14 @@ foreach provider_mode {aof} {
                 $rd1 close
 
                 $primary config set notify-keyspace-events ""
-                $primary config set sync-replication yes
+                $primary config set appendfsync always
             }
 
             # ==================== Client tracking invalidation (existing) ====================
 
             test "($provider_mode) Key invalidation fires immediately when sync replication disabled" {
                 # Verify that without sync replication, invalidations are NOT deferred
-                $primary config set sync-replication no
+                $primary config set appendfsync everysec
 
                 set tracker [valkey_deferring_client -1]
                 $tracker HELLO 3
@@ -934,7 +934,7 @@ foreach provider_mode {aof} {
                 $tracker read ;# consume reply
                 $tracker close
 
-                $primary config set sync-replication yes
+                $primary config set appendfsync always
             }
 
             # ==================== Durability provider edge cases ====================
@@ -950,7 +950,7 @@ foreach provider_mode {aof} {
             }
 
             test "($provider_mode) Double pause is idempotent - writes still block" {
-                assert_equal "yes" [lindex [$primary config get sync-replication] 1]
+                assert_equal "always" [lindex [$primary config get appendfsync] 1]
 
                 # Pause twice
                 $primary DEBUG durability-provider-pause aof
@@ -975,7 +975,7 @@ foreach provider_mode {aof} {
             }
 
             test "($provider_mode) Resume while not paused is harmless" {
-                assert_equal "yes" [lindex [$primary config get sync-replication] 1]
+                assert_equal "always" [lindex [$primary config get appendfsync] 1]
 
                 # Resume when not paused should succeed without issue
                 assert_equal "OK" [$primary DEBUG durability-provider-resume aof]
@@ -988,7 +988,7 @@ foreach provider_mode {aof} {
             }
 
             test "($provider_mode) Multiple writes while paused all unblock on resume" {
-                assert_equal "yes" [lindex [$primary config get sync-replication] 1]
+                assert_equal "always" [lindex [$primary config get appendfsync] 1]
 
                 pause_provider
 
@@ -1020,7 +1020,7 @@ foreach provider_mode {aof} {
                 # we flush it here so the demoted primary's dirty key tracking is preserved
                 # correctly after failover (not overwritten by a full sync).
                 $replica flushall
-                assert_equal "yes" [lindex [$primary config get sync-replication] 1]
+                assert_equal "always" [lindex [$primary config get appendfsync] 1]
 
                 pause_provider
 

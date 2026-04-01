@@ -37,7 +37,6 @@ static void initDurabilityForTest(void) {
     uncommittedKeysInitPending();
     initTaskTypes();
     server.durability.previous_acked_offset = -1;
-    server.durability.curr_db_scan_idx = 0;
     server.durability.clients_waiting_ack = listCreate();
     durableTaskInitLists();
     server.durability.clients_blocked = 0;
@@ -160,17 +159,27 @@ class UncommittedKeysTest : public ::testing::Test {
 /* ========================= Durability Tests ========================= */
 
 TEST_F(SyncReplicationTest, IsDurabilityEnabled) {
-    server.durability.enabled = 0;
+    /* Durability is implied by AOF on + appendfsync always */
+    server.aof_state = AOF_OFF;
+    server.aof_fsync = AOF_FSYNC_EVERYSEC;
     ASSERT_EQ(isDurabilityEnabled(), 0);
 
-    server.durability.enabled = 1;
+    server.aof_state = AOF_ON;
+    server.aof_fsync = AOF_FSYNC_EVERYSEC;
+    ASSERT_EQ(isDurabilityEnabled(), 0);
+
+    server.aof_state = AOF_ON;
+    server.aof_fsync = AOF_FSYNC_ALWAYS;
     ASSERT_EQ(isDurabilityEnabled(), 1);
 
-    server.durability.enabled = 0;
+    server.aof_state = AOF_OFF;
+    server.aof_fsync = AOF_FSYNC_ALWAYS;
+    ASSERT_EQ(isDurabilityEnabled(), 0);
 }
 
 TEST_F(SyncReplicationTest, IsPrimaryDurabilityEnabled) {
-    server.durability.enabled = 1;
+    server.aof_state = AOF_ON;
+    server.aof_fsync = AOF_FSYNC_ALWAYS;
 
     /* Primary (not a replica) */
     server.primary_host = nullptr;
@@ -181,8 +190,8 @@ TEST_F(SyncReplicationTest, IsPrimaryDurabilityEnabled) {
     ASSERT_EQ(isPrimaryDurabilityEnabled(), 0);
     sdsfree(server.primary_host);
 
-    /* Disabled + primary */
-    server.durability.enabled = 0;
+    /* Disabled (appendfsync != always) + primary */
+    server.aof_fsync = AOF_FSYNC_EVERYSEC;
     server.primary_host = nullptr;
     ASSERT_EQ(isPrimaryDurabilityEnabled(), 0);
 }
@@ -194,12 +203,12 @@ TEST_F(SyncReplicationTest, ClientInitAndReset) {
     c->clientDurabilityInfo.current_command_repl_offset = 0;
 
     /* Disabled — should be a no-op */
-    server.durability.enabled = 0;
+    server.aof_state = AOF_OFF; server.aof_fsync = AOF_FSYNC_EVERYSEC;
     durabilityClientInit(c);
     ASSERT_EQ(c->clientDurabilityInfo.blocked_responses, nullptr);
 
     /* Enabled — should initialize */
-    server.durability.enabled = 1;
+    server.aof_state = AOF_ON; server.aof_fsync = AOF_FSYNC_ALWAYS;
     durabilityClientInit(c);
     ASSERT_NE(c->clientDurabilityInfo.blocked_responses, nullptr);
     ASSERT_EQ(listLength(c->clientDurabilityInfo.blocked_responses), 0u);
@@ -214,7 +223,7 @@ TEST_F(SyncReplicationTest, ClientInitAndReset) {
     ASSERT_FALSE(c->clientDurabilityInfo.offset.recorded);
     ASSERT_EQ(c->clientDurabilityInfo.current_command_repl_offset, -1);
 
-    server.durability.enabled = 0;
+    server.aof_state = AOF_OFF; server.aof_fsync = AOF_FSYNC_EVERYSEC;
     zfree(c);
 }
 
@@ -254,27 +263,28 @@ TEST_F(DurabilityProviderTest, BuiltinAofProviderDisabledWhenAofOff) {
     cleanupDurabilityForTest();
 }
 
-TEST_F(DurabilityProviderTest, AofProviderEnabledWhenAofOn) {
+TEST_F(DurabilityProviderTest, AofProviderEnabledOnlyWhenAlwaysFsync) {
     initDurabilityForTest();
 
-    /* AOF provider is enabled whenever AOF is on, regardless of fsync policy */
+    /* AOF provider is only enabled when AOF is on AND appendfsync is always */
     server.aof_state = AOF_ON;
     server.aof_fsync = AOF_FSYNC_ALWAYS;
     ASSERT_TRUE(anyDurabilityProviderEnabled());
 
+    /* Not enabled with other fsync policies */
     server.aof_fsync = AOF_FSYNC_EVERYSEC;
-    ASSERT_TRUE(anyDurabilityProviderEnabled());
+    ASSERT_FALSE(anyDurabilityProviderEnabled());
 
     server.aof_fsync = AOF_FSYNC_NO;
-    ASSERT_TRUE(anyDurabilityProviderEnabled());
+    ASSERT_FALSE(anyDurabilityProviderEnabled());
 
     cleanupDurabilityForTest();
 }
 
-TEST_F(DurabilityProviderTest, AofProviderPassThroughWhenNotAlwaysFsync) {
+TEST_F(DurabilityProviderTest, NoProviderEnabledWhenNotAlwaysFsync) {
     initDurabilityForTest();
 
-    /* When fsync != always, AOF provider returns primary_repl_offset (pass-through) */
+    /* When fsync != always, no provider is enabled so consensus = primary_repl_offset */
     server.aof_state = AOF_ON;
     server.aof_fsync = AOF_FSYNC_EVERYSEC;
     server.primary_repl_offset = 500;
@@ -310,7 +320,7 @@ TEST_F(DurabilityProviderTest, AofProviderPauseAndResume) {
     ASSERT_EQ(getDurabilityConsensusOffset(), 300);
 
     /* Resume: consensus should catch up to actual fsynced offset */
-    server.durability.enabled = 1;
+    server.aof_state = AOF_ON; server.aof_fsync = AOF_FSYNC_ALWAYS;
     server.durability.previous_acked_offset = -1;
     ASSERT_TRUE(resumeDurabilityProvider("aof"));
     ASSERT_EQ(getDurabilityConsensusOffset(), 300);
@@ -519,25 +529,6 @@ TEST_F(UncommittedKeysTest, GetNumberOfUncommittedKeys) {
     decrRefCount(k3);
 }
 
-TEST_F(UncommittedKeysTest, CleanupTimeLimitScalesWithKeyCount) {
-    /* Set the cleanup time limit config (normally set by server init) */
-    server.durability.keys_cleanup_time_limit_ms = 100;
-
-    /* 0 keys => 1ms */
-    ASSERT_EQ(getUncommittedKeysCleanupTimeLimit(0), 1u);
-
-    /* Small count => small limit */
-    unsigned long long small_limit = getUncommittedKeysCleanupTimeLimit(100);
-    ASSERT_GE(small_limit, 1u);
-
-    /* Larger count => larger limit (monotonically increasing) */
-    unsigned long long larger = getUncommittedKeysCleanupTimeLimit(500000);
-    ASSERT_GE(larger, small_limit);
-
-    /* At 1 million keys, should hit the configured max */
-    unsigned long long at_max = getUncommittedKeysCleanupTimeLimit(1000000);
-    ASSERT_EQ(at_max, 100u);
-}
 
 /* ========================= Function Store Tests ========================= */
 
@@ -562,7 +553,7 @@ TEST_F(SyncReplicationTest, FunctionStoreUncommittedTracking) {
 /* ========================= INFO String Test ========================= */
 
 TEST_F(SyncReplicationTest, GenInfoStringDisabled) {
-    server.durability.enabled = 0;
+    server.aof_state = AOF_OFF; server.aof_fsync = AOF_FSYNC_EVERYSEC;
     sds info = sdsempty();
     info = genDurabilityInfoString(info);
     ASSERT_NE(strstr(info, "durability_enabled:0"), nullptr);
@@ -570,7 +561,7 @@ TEST_F(SyncReplicationTest, GenInfoStringDisabled) {
 }
 
 TEST_F(SyncReplicationTest, GenInfoStringEnabled) {
-    server.durability.enabled = 1;
+    server.aof_state = AOF_ON; server.aof_fsync = AOF_FSYNC_ALWAYS;
     server.durability.clients_waiting_ack = listCreate();
     server.durability.read_responses_blocked = 5;
     server.durability.write_responses_blocked = 3;
@@ -588,7 +579,7 @@ TEST_F(SyncReplicationTest, GenInfoStringEnabled) {
     sdsfree(info);
     listRelease(server.durability.clients_waiting_ack);
     server.durability.clients_waiting_ack = nullptr;
-    server.durability.enabled = 0;
+    server.aof_state = AOF_OFF; server.aof_fsync = AOF_FSYNC_EVERYSEC;
 }
 
 /* ========================= Migrated from C tests ========================= */
@@ -638,7 +629,7 @@ class FullDurabilityTest : public ::testing::Test {
         server.db[0] = (serverDb *)zcalloc(sizeof(serverDb));
         durabilityInitDatabase(server.db[0]);
 
-        server.durability.enabled = 1;
+        server.aof_state = AOF_ON; server.aof_fsync = AOF_FSYNC_ALWAYS;
         durabilityInit();
     }
 
@@ -674,7 +665,6 @@ TEST_F(SyncReplicationTest, SyncReplicationInitSetsDefaults) {
     ASSERT_NE(server.durability.clients_waiting_ack, nullptr);
     ASSERT_EQ(listLength(server.durability.clients_waiting_ack), 0u);
     ASSERT_EQ(server.durability.previous_acked_offset, -1);
-    ASSERT_EQ(server.durability.curr_db_scan_idx, 0);
     ASSERT_EQ(server.durability.clients_blocked, 0u);
     ASSERT_EQ(server.durability.clients_unblocked, 0u);
     ASSERT_EQ(server.durability.clients_disconnected_before_unblocking, 0u);
@@ -714,7 +704,7 @@ TEST_F(SyncReplicationTest, PreCommandExecDurabilityDisabled) {
     client *c = (client *)zcalloc(sizeof(client));
     c->cmd = &readonly_cmd;
     c->clientDurabilityInfo.current_command_repl_offset = 123;
-    server.durability.enabled = 0;
+    server.aof_state = AOF_OFF; server.aof_fsync = AOF_FSYNC_EVERYSEC;
     server.primary_repl_offset = 555;
 
     ASSERT_EQ(preCommandExec(c), CMD_FILTER_ALLOW);
@@ -760,12 +750,13 @@ TEST_F(FullDurabilityTest, MultiExecDefersDirtyKeys) {
     c->reply = listCreate();
     listSetFreeMethod(c->reply, zfree);
 
-    /* Inside a MULTI — dirty key tracking should be deferred */
+    /* Inside a MULTI — key is marked dirty immediately with placeholder offset */
     c->flag.multi = 1;
     robj *key_obj = createStringObject("multi-key", 9);
     handleUncommittedKeyForClient(c, key_obj, server.db[0]);
-    /* Key should NOT be committed yet while inside MULTI */
-    ASSERT_EQ(hashtableSize(server.db[0]->uncommitted_keys), 0u);
+    /* Key should be in uncommitted set immediately (with LLONG_MAX placeholder) */
+    ASSERT_EQ(hashtableSize(server.db[0]->uncommitted_keys), 1u);
+    ASSERT_EQ(durabilityPurgeAndGetUncommittedKeyOffset((sds)objectGetVal(key_obj), server.db[0]), LLONG_MAX);
 
     /* After EXEC completes: postCommandExec commits deferred keys */
     c->flag.multi = 0;
@@ -834,7 +825,7 @@ TEST_F(SyncReplicationTest, HandleUncommittedFunctionStoreInsideTransaction) {
 
 /* Test notifyDurabilityProgress when sync replication is disabled */
 TEST_F(SyncReplicationTest, NotifyDurabilityProgressNoOpWhenDisabled) {
-    server.durability.enabled = 0;
+    server.aof_state = AOF_OFF; server.aof_fsync = AOF_FSYNC_EVERYSEC;
     server.primary_host = nullptr;
     long long old_offset = server.durability.previous_acked_offset;
     notifyDurabilityProgress();
@@ -844,20 +835,20 @@ TEST_F(SyncReplicationTest, NotifyDurabilityProgressNoOpWhenDisabled) {
 
 /* Test notifyDurabilityProgress when server is a replica */
 TEST_F(SyncReplicationTest, NotifyDurabilityProgressNoOpWhenReplica) {
-    server.durability.enabled = 1;
+    server.aof_state = AOF_ON; server.aof_fsync = AOF_FSYNC_ALWAYS;
     server.primary_host = sdsnew("127.0.0.1");
     long long old_offset = server.durability.previous_acked_offset;
     notifyDurabilityProgress();
     ASSERT_EQ(server.durability.previous_acked_offset, old_offset);
     sdsfree(server.primary_host);
     server.primary_host = nullptr;
-    server.durability.enabled = 0;
+    server.aof_state = AOF_OFF; server.aof_fsync = AOF_FSYNC_EVERYSEC;
 }
 
 
 /* Test durabilityClientInit is idempotent */
 TEST_F(SyncReplicationTest, ClientInitIdempotent) {
-    server.durability.enabled = 1;
+    server.aof_state = AOF_ON; server.aof_fsync = AOF_FSYNC_ALWAYS;
 
     client *c = (client *)zcalloc(sizeof(client));
     c->clientDurabilityInfo.blocked_responses = nullptr;
@@ -871,6 +862,6 @@ TEST_F(SyncReplicationTest, ClientInitIdempotent) {
     ASSERT_EQ(c->clientDurabilityInfo.blocked_responses, first_list);
 
     durabilityClientReset(c);
-    server.durability.enabled = 0;
+    server.aof_state = AOF_OFF; server.aof_fsync = AOF_FSYNC_EVERYSEC;
     zfree(c);
 }

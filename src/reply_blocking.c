@@ -29,10 +29,13 @@ static void durabilityResetPrimaryState(bool is_free_clients_needed);
 /*================================= Utility functions ======================== */
 
 /**
- * Utility function to determine whether the durability flag has been enabled.
+ * Utility function to determine whether durability is enabled.
+ * Durability is implied when AOF is on and appendfsync is set to "always".
+ * There is no separate config knob — the combination of appendonly + appendfsync
+ * always is sufficient.
  */
 int isDurabilityEnabled(void) {
-    return server.durability.enabled;
+    return server.aof_state != AOF_OFF && server.aof_fsync == AOF_FSYNC_ALWAYS;
 }
 
 /**
@@ -384,6 +387,7 @@ void notifyDurabilityProgress(void) {
     }
 
     durability->previous_acked_offset = consensus_ack_offset;
+    drainCommittedKeys(consensus_ack_offset);
     unblockResponsesWithAckOffset(durability, consensus_ack_offset);
 }
 
@@ -666,7 +670,6 @@ void durabilityInit(void) {
     /* Have to init the handlers before using them. */
     initTaskTypes();
     server.durability.previous_acked_offset = -1;
-    server.durability.curr_db_scan_idx = 0;
     server.durability.clients_waiting_ack = listCreate();
     durableTaskInitLists();
     server.durability.clients_blocked = 0;

@@ -46,7 +46,7 @@ set(valkey_sources
     src/command.c
     src/conn.c
     src/crc16.c
-    src/net.c
+    ${CMAKE_BINARY_DIR}/patched/deps/libvalkey/src/net.c
     src/read.c
     src/sockcompat.c
     src/valkey.c
@@ -103,6 +103,7 @@ if(valkey_compile_definitions)
 endif()
 
 TARGET_INCLUDE_DIRECTORIES(valkey
+    PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src
     PUBLIC
         $<INSTALL_INTERFACE:include>
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include/valkey>
@@ -143,7 +144,7 @@ set(CPACK_RPM_PACKAGE_LICENSE "BSD-3-Clause")
 include(CPack)
 
 INSTALL(TARGETS valkey
-    EXPORT valkey-targets
+    
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
     ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR})
@@ -169,9 +170,7 @@ endif()
 INSTALL(FILES ${CMAKE_CURRENT_BINARY_DIR}/valkey.pc
     DESTINATION ${CMAKE_INSTALL_LIBDIR}/pkgconfig)
 
-export(EXPORT valkey-targets
-    FILE "${CMAKE_CURRENT_BINARY_DIR}/valkey-targets.cmake"
-    NAMESPACE valkey::)
+
 
 if(WIN32)
     SET(CMAKE_CONF_INSTALL_DIR share/valkey)
@@ -186,10 +185,7 @@ configure_package_config_file(valkey-config.cmake.in ${CMAKE_CURRENT_BINARY_DIR}
                               INSTALL_DESTINATION ${CMAKE_CONF_INSTALL_DIR}
                               PATH_VARS INCLUDE_INSTALL_DIR)
 
-INSTALL(EXPORT valkey-targets
-        FILE valkey-targets.cmake
-        NAMESPACE valkey::
-        DESTINATION ${CMAKE_CONF_INSTALL_DIR})
+
 
 INSTALL(FILES ${CMAKE_CURRENT_BINARY_DIR}/valkey-config.cmake
               ${CMAKE_CURRENT_BINARY_DIR}/valkey-config-version.cmake
@@ -229,7 +225,7 @@ IF(ENABLE_TLS)
     CONFIGURE_FILE(valkey_tls.pc.in valkey_tls.pc @ONLY)
 
     INSTALL(TARGETS valkey_tls
-        EXPORT valkey_tls-targets
+        
         RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
         LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
         ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR})
@@ -248,9 +244,7 @@ IF(ENABLE_TLS)
     INSTALL(FILES ${CMAKE_CURRENT_BINARY_DIR}/valkey_tls.pc
         DESTINATION ${CMAKE_INSTALL_LIBDIR}/pkgconfig)
 
-    export(EXPORT valkey_tls-targets
-           FILE "${CMAKE_CURRENT_BINARY_DIR}/valkey_tls-targets.cmake"
-           NAMESPACE valkey::)
+    
 
     if(WIN32)
         SET(CMAKE_CONF_INSTALL_DIR share/valkey_tls)
@@ -261,10 +255,7 @@ IF(ENABLE_TLS)
                                   INSTALL_DESTINATION ${CMAKE_CONF_INSTALL_DIR}
                                   PATH_VARS INCLUDE_INSTALL_DIR)
 
-    INSTALL(EXPORT valkey_tls-targets
-        FILE valkey_tls-targets.cmake
-        NAMESPACE valkey::
-        DESTINATION ${CMAKE_CONF_INSTALL_DIR})
+    
 
     INSTALL(FILES ${CMAKE_CURRENT_BINARY_DIR}/valkey_tls-config.cmake
         DESTINATION ${CMAKE_CONF_INSTALL_DIR})
@@ -301,7 +292,7 @@ if(ENABLE_RDMA)
     configure_file(valkey_rdma.pc.in valkey_rdma.pc @ONLY)
 
     install(TARGETS valkey_rdma
-        EXPORT valkey_rdma-targets
+        
         RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
         LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
         ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR})
@@ -313,19 +304,14 @@ if(ENABLE_RDMA)
     install(FILES ${CMAKE_CURRENT_BINARY_DIR}/valkey_rdma.pc
         DESTINATION ${CMAKE_INSTALL_LIBDIR}/pkgconfig)
 
-    export(EXPORT valkey_rdma-targets
-           FILE "${CMAKE_CURRENT_BINARY_DIR}/valkey_rdma-targets.cmake"
-           NAMESPACE valkey::)
+    
 
     set(CMAKE_CONF_INSTALL_DIR ${CMAKE_INSTALL_LIBDIR}/cmake/valkey_rdma)
     configure_package_config_file(valkey_rdma-config.cmake.in ${CMAKE_CURRENT_BINARY_DIR}/valkey_rdma-config.cmake
                                   INSTALL_DESTINATION ${CMAKE_CONF_INSTALL_DIR}
                                   PATH_VARS INCLUDE_INSTALL_DIR)
 
-    install(EXPORT valkey_rdma-targets
-        FILE valkey_rdma-targets.cmake
-        NAMESPACE valkey::
-        DESTINATION ${CMAKE_CONF_INSTALL_DIR})
+    
 
     install(FILES ${CMAKE_CURRENT_BINARY_DIR}/valkey_rdma-config.cmake
         DESTINATION ${CMAKE_CONF_INSTALL_DIR})

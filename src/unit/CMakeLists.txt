@@ -40,7 +40,9 @@ FetchContent_MakeAvailable(googletest)
 
 # Build Valkey sources as a static library for the test (C code compiled with C compiler)
 add_library(valkeylib-gtest STATIC ${VALKEY_SERVER_SRCS})
+if(NOT MSVC)
 target_compile_options(valkeylib-gtest PRIVATE -Og -g -fno-lto)
+endif()
 target_compile_definitions(valkeylib-gtest PRIVATE "${COMPILE_DEFINITIONS}")
 target_include_directories(valkeylib-gtest PRIVATE ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/deps)
 target_link_libraries(valkeylib-gtest ffc)
@@ -50,7 +52,7 @@ set(GENERATED_WRAPPERS_DIR ${CMAKE_BINARY_DIR}/gtest_generated)
 file(MAKE_DIRECTORY ${GENERATED_WRAPPERS_DIR})
 add_custom_command(
     OUTPUT ${GENERATED_WRAPPERS_DIR}/generated_wrappers.cpp ${GENERATED_WRAPPERS_DIR}/generated_wrappers.hpp
-    COMMAND python3 ${CMAKE_CURRENT_LIST_DIR}/generate-wrappers.py ${GENERATED_WRAPPERS_DIR}
+    COMMAND python ${CMAKE_CURRENT_LIST_DIR}/generate-wrappers.py ${GENERATED_WRAPPERS_DIR}
     DEPENDS ${CMAKE_CURRENT_LIST_DIR}/wrappers.h ${CMAKE_CURRENT_LIST_DIR}/generate-wrappers.py
     WORKING_DIRECTORY ${CMAKE_CURRENT_LIST_DIR}
     COMMENT "Generating wrapper files from wrappers.h"
@@ -60,10 +62,15 @@ add_custom_command(
 add_custom_target(generate_wrappers DEPENDS ${GENERATED_WRAPPERS_DIR}/generated_wrappers.cpp ${GENERATED_WRAPPERS_DIR}/generated_wrappers.hpp)
 
 # Collect C++ test source files (excluding generated ones for now)
+
 file(GLOB GTEST_SRCS "${CMAKE_CURRENT_LIST_DIR}/*.cpp")
+list(TRANSFORM GTEST_SRCS REPLACE "${CMAKE_CURRENT_LIST_DIR}/" "${CMAKE_BINARY_DIR}/patched/src/unit/")
+
 list(REMOVE_ITEM GTEST_SRCS "${GENERATED_WRAPPERS_DIR}/generated_wrappers.cpp")
 
 # Create GoogleTest executable (C++ code compiled with C++ compiler)
+include_directories(BEFORE "${CMAKE_BINARY_DIR}/patched/src")
+include_directories(BEFORE "${CMAKE_BINARY_DIR}/patched/src/unit")
 add_executable(valkey-unit-gtests ${GTEST_SRCS} ${GENERATED_WRAPPERS_DIR}/generated_wrappers.cpp)
 
 # Make sure generated files are created before building
@@ -79,14 +86,19 @@ set_target_properties(valkey-unit-gtests PROPERTIES
 target_compile_definitions(valkey-unit-gtests PRIVATE "${COMPILE_DEFINITIONS}")
 
 # Allow C-style void pointer conversions in C++
-target_compile_options(valkey-unit-gtests PRIVATE -Og -g)
-
+if(NOT MSVC)
+    target_compile_options(valkey-unit-gtests PRIVATE -Og -g)
+else()
+    target_compile_options(valkey-unit-gtests PRIVATE "/std:c++20")
+endif()
 # Disable warnings
+if(NOT MSVC)
 target_compile_options(valkey-unit-gtests PRIVATE
     -Wno-deprecated-declarations
     -Wno-write-strings
     -fno-var-tracking-assignments
 )
+endif()
 
 # Include directories for C++ compilation
 target_include_directories(valkey-unit-gtests PRIVATE
@@ -102,7 +114,7 @@ if (UNIX AND NOT APPLE)
 
     # Extract all wrapped function names from wrappers.h and add --wrap linker flags
     execute_process(
-        COMMAND python3 -c "
+        COMMAND python -c "
 import re
 import sys
 with open('${CMAKE_CURRENT_LIST_DIR}/wrappers.h', 'r') as f:
@@ -162,7 +174,7 @@ add_custom_target(test-unit
         [ -n \"$large_memory\" ] && TEST_ARGS=\"$TEST_ARGS --large-memory\"; \
         [ -n \"$valgrind\" ] && TEST_ARGS=\"$TEST_ARGS --valgrind\"; \
         [ -n \"$seed\" ] && TEST_ARGS=\"$TEST_ARGS --seed $seed\"; \
-        python3 ${CMAKE_SOURCE_DIR}/deps/gtest-parallel/gtest_parallel.py $<TARGET_FILE:valkey-unit-gtests> --gtest_filter=\"$UNIT_TEST_PATTERN\"* -- $TEST_ARGS"
+        python ${CMAKE_SOURCE_DIR}/deps/gtest-parallel/gtest_parallel.py $<TARGET_FILE:valkey-unit-gtests> --gtest_filter=\"$UNIT_TEST_PATTERN\"* -- $TEST_ARGS"
     DEPENDS valkey-unit-gtests
     WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
     COMMENT "Running tests with gtest-parallel"

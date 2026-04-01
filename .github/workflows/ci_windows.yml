@@ -1,0 +1,25 @@
+name: Windows Native CI
+
+on:
+  push:
+    branches: [ "*" ]
+  pull_request:
+    branches: [ "*" ]
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout Valkey
+        uses: actions/checkout@v4
+      - name: Checkout auto-win-msvc
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/auto-win-msvc
+          path: ../auto-win-msvc
+      - name: Configure CMake
+        run: cmake -S . -B build_msvc2026 -G "Visual Studio 18 2026"
+      - name: Build
+        run: cmake --build build_msvc2026 --config Release
+      - name: Test Memory
+        run: .\build_msvc2026\bin\Release\valkey-server.exe --test-memory 10

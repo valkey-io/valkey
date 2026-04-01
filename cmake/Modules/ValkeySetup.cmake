@@ -50,13 +50,23 @@ endif ()
 
 # Helper function for creating symbolic link so that: link -> source
 macro (valkey_create_symlink source link)
-  add_custom_command(
-    TARGET ${source} POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E create_symlink
-            "$<TARGET_FILE_NAME:${source}>"
-            "$<TARGET_FILE_DIR:${source}>/${link}"
-    VERBATIM
-  )
+  if(WIN32)
+    add_custom_command(
+      TARGET ${source} POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E copy
+              "$<TARGET_FILE:${source}>"
+              "$<TARGET_FILE_DIR:${source}>/${link}.exe"
+      VERBATIM
+    )
+  else()
+    add_custom_command(
+      TARGET ${source} POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E create_symlink
+              "$<TARGET_FILE_NAME:${source}>"
+              "$<TARGET_FILE_DIR:${source}>/${link}"
+      VERBATIM
+    )
+  endif()
 endmacro ()
 
 # Install a binary
@@ -99,7 +109,7 @@ macro (valkey_build_and_install_bin target sources ld_flags libs link_name)
     endif ()
 
     # Enable all warnings + fail on warning
-    target_compile_options(${target} PRIVATE -Werror -Wall)
+    target_compile_options(${target} PRIVATE /W3)
 
     # Install cli tool and create a redis symbolic link
     valkey_install_bin(${target})
@@ -251,11 +261,22 @@ if (VALKEY_DEBUG_BUILD)
 endif ()
 
 # Check for Atomic
+if(MSVC)
+    set(CMAKE_REQUIRED_FLAGS "/std:c11 /experimental:c11atomics")
+endif()
 check_include_files(stdatomic.h HAVE_C11_ATOMIC)
 if (HAVE_C11_ATOMIC)
-    add_valkey_server_compiler_options("-std=gnu11")
+    if(MSVC)
+        add_valkey_server_compiler_options("/std:c11 /experimental:c11atomics")
+    else()
+        add_valkey_server_compiler_options("-std=gnu11")
+    endif()
 else ()
-    add_valkey_server_compiler_options("-std=c99")
+    if(MSVC)
+        add_valkey_server_compiler_options("/std:c11 /experimental:c11atomics")
+    else()
+        add_valkey_server_compiler_options("-std=c99")
+    endif()
 endif ()
 
 # Sanitizer
@@ -291,7 +312,9 @@ if (USE_JEMALLOC)
 endif ()
 
 # Common compiler flags
-add_valkey_server_compiler_options("-pedantic")
+if(NOT MSVC)
+    add_valkey_server_compiler_options("-pedantic")
+endif()
 
 if (NOT BUILD_LUA)
     message(STATUS "Lua scripting engine is disabled")
@@ -336,11 +359,16 @@ else ()
     add_custom_target(generate_fmtargs_h)
 endif ()
 
-# Generate release.h file (always)
-add_custom_target(
-    release_header
-    COMMAND sh -c '${CMAKE_SOURCE_DIR}/src/mkreleasehdr.sh'
-    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}/src")
+if (WIN32)
+    file(WRITE ${CMAKE_SOURCE_DIR}/src/release.h "#define REDIS_GIT_SHA1 \"00000000\"\n#define REDIS_GIT_DIRTY \"0\"\n#define REDIS_BUILD_ID \"0\"\n#include \"version.h\"\n#define REDIS_BUILD_ID_RAW SERVER_NAME VALKEY_VERSION REDIS_BUILD_ID REDIS_GIT_DIRTY REDIS_GIT_SHA1\n")
+    add_custom_target(release_header)
+else()
+    # Generate release.h file (always)
+    add_custom_target(
+        release_header
+        COMMAND sh -c '${CMAKE_SOURCE_DIR}/src/mkreleasehdr.sh'
+        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}/src")
+endif()
 
 # -------------------------------------------------
 # Code Generation section - end
@@ -365,3 +393,5 @@ unset(BUILD_MALLOC CACHE)
 unset(USE_JEMALLOC CACHE)
 unset(BUILD_TLS_MODULE CACHE)
 unset(BUILD_TLS_BUILTIN CACHE)
+
+

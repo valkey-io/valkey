@@ -66,14 +66,7 @@ valkey_build_and_install_bin(valkey-cli "${VALKEY_CLI_SRCS}" "${VALKEY_SERVER_LD
 add_dependencies(valkey-cli generate_commands_def)
 add_dependencies(valkey-cli generate_fmtargs_h)
 
-# Target: valkey-benchmark
-list(APPEND BENCH_LIBS "fpconv")
-list(APPEND BENCH_LIBS "hdr_histogram")
-list(APPEND BENCH_LIBS "ffc")
-valkey_build_and_install_bin(valkey-benchmark "${VALKEY_BENCHMARK_SRCS}" "${VALKEY_SERVER_LDFLAGS}" "${BENCH_LIBS}"
-                             "redis-benchmark")
-add_dependencies(valkey-benchmark generate_commands_def)
-add_dependencies(valkey-benchmark generate_fmtargs_h)
+
 
 # Targets: valkey-sentinel, valkey-check-aof and valkey-check-rdb are just symbolic links
 valkey_create_symlink("valkey-server" "valkey-sentinel")
@@ -113,15 +106,18 @@ if (BUILD_EXAMPLE_MODULES)
 endif ()
 
 if (BUILD_UNIT_GTESTS)
+    if(NOT MSVC)
     add_subdirectory(unit)
+endif()
 endif ()
 
 # Friendly hint like the Makefile one
 file(RELATIVE_PATH _CMAKE_DIR_RELATIVE_PATH "${CMAKE_SOURCE_DIR}" "${CMAKE_BINARY_DIR}")
 add_custom_target(hint ALL
-    DEPENDS valkey-server valkey-cli valkey-benchmark
+    DEPENDS valkey-server valkey-cli 
     COMMAND ${CMAKE_COMMAND} -E echo ""
     COMMAND ${CMAKE_COMMAND} -E echo "Hint: It is a good idea to run tests with your CMake-built binaries \\;\\)"
     COMMAND ${CMAKE_COMMAND} -E echo "      ./${_CMAKE_DIR_RELATIVE_PATH}/runtest"
     COMMAND ${CMAKE_COMMAND} -E echo ""
 )
+

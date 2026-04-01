@@ -20,13 +20,409 @@ option(BUILD_EXAMPLE_MODULES "Build example modules" OFF)
 
 set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${CMAKE_SOURCE_DIR}/cmake/Modules/")
 project("valkey")
-add_compile_options(-Wundef)
+
+include(FetchContent)
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../auto-win-msvc")
+    FetchContent_Declare(
+        auto_win_msvc
+        SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../auto-win-msvc"
+    )
+else()
+    FetchContent_Declare(
+        auto_win_msvc
+        GIT_REPOSITORY https://github.com/SamuelMarks/auto-win-msvc.git
+        GIT_TAG        master
+    )
+endif()
+FetchContent_MakeAvailable(auto_win_msvc)
+set(INSTALL_GTEST OFF CACHE BOOL "Disable GTest installation" FORCE)
+if(MSVC)
+    link_libraries(auto-win-msvc)
+endif()
+if(NOT MSVC)
+    add_compile_options(-Wundef)
+else()
+    file(WRITE "${CMAKE_BINARY_DIR}/msvc_compat.h" "
+#ifndef MSVC_COMPAT_H
+#define MSVC_COMPAT_H
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#define NOMINMAX
+#define NOUSER
+#define NOGDI
+#define __attribute__(...)
+#define __attribute(...)
+#undef LoadString
+#undef ERROR
+#undef WORD
+#define _OFF_T_DEFINED
+#define _off_t __int64
+#define off_t __int64
+#define pthread_self() win_pthread_self()
+#define F_GETFL 3
+#define F_SETFL 4
+#define F_GETFD 1
+#define F_SETFD 2
+#define O_NONBLOCK 0x4000
+#define FD_CLOEXEC 1
+#define O_CLOEXEC 0x80000
+#define AF_LOCAL 1
+#define SIGPIPE 13
+#define IOV_MAX 1024
+#define PATH_MAX 4096
+#include <stdint.h>
+#include <posix-time.h>
+#include <malloc.h>
+#include <posix-stat.h>
+#include <posix-types.h>
+#include <strings.h>
+#include <posix-core.h>
+#include <posix-signal.h>
+#include <posix-sockets.h>
+#include <posix-syslog.h>
+#include <posix-dlfcn.h>
+#include <posix-arpa-inet.h>
+#include <posix-dirent.h>
+#include <posix-signal-ext.h>
+#ifdef __cplusplus
+#include <atomic>
+#include <cstdio>
+#include <cstdlib>
+#include <cstddef>
+#include <cstring>
+#include <ctime>
+#include <climits>
+#include <cmath>
+#endif
+#ifndef _SC_PAGESIZE
+#define _SC_PAGESIZE 1
+#endif
+#ifndef ESOCKTNOSUPPORT
+#define ESOCKTNOSUPPORT 121
+#endif
+#ifndef EPFNOSUPPORT
+#define EPFNOSUPPORT 122
+#endif
+#ifndef SIGHUP
+#define SIGHUP 1
+#endif
+#ifndef SIGSTOP
+#define SIGSTOP 19
+#endif
+#ifndef SIGUSR1
+#define SIGUSR1 10
+#endif
+#ifndef SIGTRAP
+#define SIGTRAP 5
+#endif
+#ifndef SIG_BLOCK
+#define SIG_BLOCK 0
+#endif
+#ifndef SIGKILL
+#define SIGKILL 9
+#endif
+#ifndef SIGBUS
+#define SIGBUS 10
+#endif
+#ifndef SI_USER
+#define SI_USER 0
+#endif
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
+#ifndef SHUT_RDWR
+#define SHUT_RDWR 2
+#endif
+
+#ifndef SSIZE_MAX
+#ifdef _WIN64
+#define SSIZE_MAX 9223372036854775807LL
+#else
+#define SSIZE_MAX 2147483647
+#endif
+#endif
+#ifndef BYTE_ORDER
+#define LITTLE_ENDIAN 1234
+#define BIG_ENDIAN 4321
+#define BYTE_ORDER LITTLE_ENDIAN
+#endif
+#undef LoadString
+#undef ERROR
+#undef WORD
+#endif
+")
+    
+    # Generate missing POSIX headers as stubs mapping to auto-win-msvc
+    set(POSIX_STUBS_DIR "${CMAKE_BINARY_DIR}/posix_stubs")
+    file(MAKE_DIRECTORY "${POSIX_STUBS_DIR}" "${POSIX_STUBS_DIR}/sys" "${POSIX_STUBS_DIR}/netinet")
+    file(WRITE "${POSIX_STUBS_DIR}/netinet/in.h" "#include <posix-netinet-in.h>\n")
+    file(WRITE "${POSIX_STUBS_DIR}/netinet/tcp.h" "#include <posix-netinet-tcp.h>\n")
+    file(WRITE "${POSIX_STUBS_DIR}/sys/param.h" "#include <bsd-sys-param.h>\n")
+    file(WRITE "${POSIX_STUBS_DIR}/termios.h" "#include <posix-termios.h>\n")
+    file(WRITE "${POSIX_STUBS_DIR}/strings.h" "#include <posix-strings.h>\n")
+    file(WRITE "${POSIX_STUBS_DIR}/sys/time.h" "#include <posix-time.h>
+#include <malloc.h>\n")
+    # time.h stub removed
+    file(WRITE "${POSIX_STUBS_DIR}/endian.h" "#include <bsd-sys-endian.h>\n")
+    file(WRITE "${POSIX_STUBS_DIR}/sys/socket.h" "#include <posix-sockets.h>\n")
+    file(WRITE "${POSIX_STUBS_DIR}/poll.h" "#include <posix-poll.h>\n")
+    file(WRITE "${POSIX_STUBS_DIR}/sys/un.h" "#include <posix-sys-un.h>\n")
+    file(MAKE_DIRECTORY "${POSIX_STUBS_DIR}/arpa")
+    file(WRITE "${POSIX_STUBS_DIR}/arpa/inet.h" "#include <posix-arpa-inet.h>\n")
+    file(WRITE "${POSIX_STUBS_DIR}/netdb.h" "#include <posix-netdb.h>\n")
+    file(WRITE "${POSIX_STUBS_DIR}/sys/resource.h" "#include <posix-sys-resource.h>\n")
+    file(WRITE "${POSIX_STUBS_DIR}/pthread.h" "#include <posix-pthread.h>\n")
+    file(WRITE "${POSIX_STUBS_DIR}/dlfcn.h" "#include <posix-dlfcn.h>\n")
+    file(WRITE "${POSIX_STUBS_DIR}/sys/socket.h" "#include <posix-sockets.h>\n")
+    file(WRITE "${POSIX_STUBS_DIR}/poll.h" "#include <posix-poll.h>\n")
+    file(WRITE "${POSIX_STUBS_DIR}/sys/un.h" "#include <posix-sys-un.h>\n")
+    file(MAKE_DIRECTORY "${POSIX_STUBS_DIR}/arpa")
+    file(WRITE "${POSIX_STUBS_DIR}/arpa/inet.h" "#include <posix-arpa-inet.h>\n")
+    file(WRITE "${POSIX_STUBS_DIR}/sys/resource.h" "#include <posix-sys-resource.h>\n")
+    file(WRITE "${POSIX_STUBS_DIR}/pthread.h" "#include <posix-pthread.h>\n")
+    file(WRITE "${POSIX_STUBS_DIR}/dlfcn.h" "#include <posix-dlfcn.h>\n")
+    file(WRITE "${POSIX_STUBS_DIR}/pwd.h" "#include <posix-pwdgrp.h>\n")
+    file(WRITE "${POSIX_STUBS_DIR}/grp.h" "#include <posix-pwdgrp.h>\n")
+    file(WRITE "${POSIX_STUBS_DIR}/dirent.h" "#include <posix-dirent.h>\n")
+    file(WRITE "${POSIX_STUBS_DIR}/libgen.h" "#include <posix-libgen.h>\n")
+    file(WRITE "${POSIX_STUBS_DIR}/sys/file.h" "#include <bsd-sys-file.h>\n")
+    file(WRITE "${POSIX_STUBS_DIR}/regex.h" "#include <posix-regex.h>\n")
+    file(WRITE "${POSIX_STUBS_DIR}/sys/mman.h" "#include <posix-mman.h>\n")
+    file(WRITE "${POSIX_STUBS_DIR}/glob.h" "#include <posix-glob.h>\n")
+    file(WRITE "${POSIX_STUBS_DIR}/sys/ioctl.h" "
+#include <posix-sys-ioctl.h>
+#ifndef _WINSIZE_DEFINED
+#define _WINSIZE_DEFINED
+struct winsize {
+    unsigned short ws_row;
+    unsigned short ws_col;
+    unsigned short ws_xpixel;
+    unsigned short ws_ypixel;
+};
+#define TIOCGWINSZ 0x5413
+#endif
+")
+    file(WRITE "${POSIX_STUBS_DIR}/sys/uio.h" "#include <posix-sys-uio.h>\n")
+    file(WRITE "${POSIX_STUBS_DIR}/sys/wait.h" "#include <posix-wait.h>\n")
+    file(WRITE "${POSIX_STUBS_DIR}/sys/utsname.h" "#include <posix-utsname.h>\n")
+    file(WRITE "${POSIX_STUBS_DIR}/syslog.h" "#include <posix-syslog.h>\n")
+    file(WRITE "${POSIX_STUBS_DIR}/unistd.h" "
+#include <io.h>
+#include <process.h>
+#ifndef F_OK
+#define F_OK 0
+#define W_OK 2
+#define R_OK 4
+#define X_OK 4
+#endif
+#define STDIN_FILENO 0
+#define STDOUT_FILENO 1
+#define STDERR_FILENO 2
+")
+    file(WRITE "${POSIX_STUBS_DIR}/sched.h" "#include <posix-sched.h>\n")
+    include_directories(BEFORE "${POSIX_STUBS_DIR}")
+    
+    file(APPEND "${CMAKE_BINARY_DIR}/msvc_compat.h" "
+#undef _S_IEXEC
+#define _S_IEXEC 00100
+#undef _S_IREAD
+#define _S_IREAD 00400
+#undef _S_IWRITE
+#define _S_IWRITE 00200
+
+#include <stdlib.h>
+#include <intrin.h>
+#include <fcntl.h>
+static inline int __builtin_clz(unsigned int x) { unsigned long r; if (_BitScanReverse(&r, x)) return 31 - r; return 32; }
+static inline int __builtin_clzll(unsigned long long x) { unsigned long r; if (_BitScanReverse64(&r, x)) return 63 - r; return 64; }
+#define __builtin_clzl __builtin_clzll
+static inline int __builtin_ctz(unsigned int x) { unsigned long r; if (_BitScanForward(&r, x)) return r; return 32; }
+static inline int __builtin_ctzll(unsigned long long x) { unsigned long r; if (_BitScanForward64(&r, x)) return r; return 64; }
+#define __builtin_ctzl __builtin_ctzll
+static inline int __builtin_popcount(unsigned int x) { return __popcnt(x); }
+static inline uint64_t __builtin_bswap64(uint64_t x) { return _byteswap_uint64(x); }
+#define random rand
+#define srandom srand
+static inline char* strndup(const char *s, size_t n) {
+    size_t len = 0;
+    while (len < n && s[len] != '\\0') len++;
+    char *new_s = (char*)malloc(len + 1);
+    if (new_s == NULL) return NULL;
+    memcpy(new_s, s, len);
+    new_s[len] = '\\0';
+    return new_s;
+}
+static inline int mkstemp(char *tmpl) {
+    if (_mktemp_s(tmpl, strlen(tmpl) + 1) != 0) return -1;
+    return _open(tmpl, _O_RDWR | _O_CREAT | _O_EXCL, _S_IREAD | _S_IWRITE);
+}
+#define ftello _ftelli64
+static inline char *ctime_r(const time_t *timep, char *buf) {
+    ctime_s(buf, 26, timep);
+    return buf;
+}
+static inline int unsetenv(const char *name) {
+    return _putenv_s(name, \"\");
+}
+#undef pthread_self
+")
+    
+    # Extract include directories from auto-win-msvc
+    get_target_property(MEGA_INCLUDES auto-win-msvc INTERFACE_INCLUDE_DIRECTORIES)
+    get_filename_component(AUTO_WIN_MSVC_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../auto-win-msvc" ABSOLUTE)
+    file(GLOB POSIX_EXTRA_DIRS "${AUTO_WIN_MSVC_DIR}/posix-*/include" "${AUTO_WIN_MSVC_DIR}/bsd-*/include" "${AUTO_WIN_MSVC_DIR}/linux-*/include")
+    list(FILTER POSIX_EXTRA_DIRS EXCLUDE REGEX "posix-stdatomic")
+    message(WARNING "POSIX_EXTRA_DIRS = ${POSIX_EXTRA_DIRS}")
+    if(MEGA_INCLUDES)
+        include_directories(${MEGA_INCLUDES} ${POSIX_EXTRA_DIRS} ${CMAKE_BINARY_DIR}/include)
+    else()
+        include_directories(${POSIX_EXTRA_DIRS})
+    endif()
+
+    add_compile_options("/FIposix-types.h")
+    add_compile_options("/FI${CMAKE_BINARY_DIR}/msvc_compat.h")
+    add_compile_options("/D__x86_64__" "/DHAVE_PIPE2=1" "/DHAVE_EPOLL=1" "/DHAVE_EPOLL_CREATE=1" "/DHAVE_EPOLL_WAIT=1" "/DHAVE_EPOLL=1" "/DHAVE_EPOLL_CREATE=1" "/DHAVE_EPOLL_WAIT=1" "/wd4273" "/wd4005" "/wd4067" "/D_CRT_SECURE_NO_WARNINGS" "/D_CRT_NONSTDC_NO_WARNINGS" "/D_WINSOCK_DEPRECATED_NO_WARNINGS")
+    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} /std:c11 /experimental:c11atomics")
+endif()
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_C_EXTENSIONS ON)
 
+file(READ src/server.c CONTENT)
+string(REPLACE "robj objects[argc];" "robj *objects = _alloca(sizeof(robj) * argc);" CONTENT "${CONTENT}")
+string(REPLACE "robj *argv[argc];" "robj **argv = _alloca(sizeof(robj*) * argc);" CONTENT "${CONTENT}")
+string(REPLACE "server.page_size = sysconf(_SC_PAGESIZE);" "server.page_size = 4096;" CONTENT "${CONTENT}")
+file(WRITE "${CMAKE_BINARY_DIR}/patched/src/server.c" "${CONTENT}")
+
+file(READ src/hashtable.c CONTENT)
+string(REPLACE "void *samples[num_samples];" "void **samples = _alloca(sizeof(void*) * num_samples);" CONTENT "${CONTENT}")
+string(REPLACE "bucket *buckets[size];" "bucket **buckets = _alloca(sizeof(bucket*) * size);" CONTENT "${CONTENT}")
+file(WRITE "${CMAKE_BINARY_DIR}/patched/src/hashtable.c" "${CONTENT}")
+file(READ src/valkey-benchmark.c CONTENT)
+string(REPLACE "char data[config.datasize];" "char *data = _alloca(config.datasize);" CONTENT "${CONTENT}")
+file(WRITE "${CMAKE_BINARY_DIR}/patched/src/valkey-benchmark.c" "${CONTENT}")
+file(READ src/networking.c CONTENT)
+string(REPLACE "struct iovec iov_arr[IOV_MAX];" "struct iovec *iov_arr = _alloca(sizeof(struct iovec) * IOV_MAX);" CONTENT "${CONTENT}")
+string(REPLACE "struct iovec iov_arr[iovmax];" "struct iovec *iov_arr = _alloca(sizeof(struct iovec) * iovmax);" CONTENT "${CONTENT}")
+string(REPLACE "char prefixes[iovmax / NUM_OF_IOV_PER_BULK_STR + 1][BULK_STR_LEN_PREFIX_MAX_SIZE];" "char (*prefixes)[BULK_STR_LEN_PREFIX_MAX_SIZE] = _alloca((iovmax / NUM_OF_IOV_PER_BULK_STR + 1) * BULK_STR_LEN_PREFIX_MAX_SIZE);" CONTENT "${CONTENT}")
+string(REPLACE "bufWriteMetadata buf_metadata[replyLen];" "bufWriteMetadata *buf_metadata = _alloca(sizeof(bufWriteMetadata) * replyLen);" CONTENT "${CONTENT}")
+string(REPLACE "hashtableIncrementalFindState key_incr_states[max_keys];" "hashtableIncrementalFindState *key_incr_states = _alloca(sizeof(hashtableIncrementalFindState) * max_keys);" CONTENT "${CONTENT}")
+file(WRITE "${CMAKE_BINARY_DIR}/patched/src/networking.c" "${CONTENT}")
+
+file(READ deps/libvalkey/src/net.c CONTENT)
+string(REPLACE ".connect =" ".posix_connect =" CONTENT "${CONTENT}")
+string(REPLACE ".close =" ".posix_close =" CONTENT "${CONTENT}")
+string(REPLACE ".read =" ".posix_read =" CONTENT "${CONTENT}")
+string(REPLACE ".write =" ".posix_write =" CONTENT "${CONTENT}")
+file(WRITE "${CMAKE_BINARY_DIR}/patched/deps/libvalkey/src/net.c" "${CONTENT}")
+
+file(READ src/sha256.h CONTENT)
+string(REPLACE "WORD" "VALKEY_WORD" CONTENT "${CONTENT}")
+file(WRITE "${CMAKE_BINARY_DIR}/patched/src/sha256.h" "${CONTENT}")
+
+file(READ src/sha256.c CONTENT)
+string(REPLACE "WORD" "VALKEY_WORD" CONTENT "${CONTENT}")
+file(WRITE "${CMAKE_BINARY_DIR}/patched/src/sha256.c" "${CONTENT}")
+
+file(READ src/cluster_migrateslots.c CONTENT)
+string(REPLACE "robj *argv[argc];" "robj **argv = _alloca(sizeof(robj*) * argc);" CONTENT "${CONTENT}")
+file(WRITE "${CMAKE_BINARY_DIR}/patched/src/cluster_migrateslots.c" "${CONTENT}")
+
+file(READ src/cluster_legacy.c CONTENT)
+string(REPLACE "char buf[length + 1];" "char *buf = _alloca(length + 1);" CONTENT "${CONTENT}")
+string(REPLACE "char buf[128];" "char *buf = _alloca(128);" CONTENT "${CONTENT}")
+file(WRITE "${CMAKE_BINARY_DIR}/patched/src/cluster_legacy.c" "${CONTENT}")
+
+file(READ src/valkeymodule.h CONTENT)
+string(REPLACE "(unsigned long)getapifuncptr" "(size_t)getapifuncptr" CONTENT "${CONTENT}")
+file(WRITE "${CMAKE_BINARY_DIR}/patched/src/valkeymodule.h" "${CONTENT}")
+
+file(READ src/module.c CONTENT)
+string(REPLACE "char hyphenfmt[len];" "char *hyphenfmt = _alloca(len);" CONTENT "${CONTENT}")
+string(REPLACE "(unsigned long)VM_" "(size_t)VM_" CONTENT "${CONTENT}")
+string(REPLACE "(unsigned long)&VM_" "(size_t)&VM_" CONTENT "${CONTENT}")
+string(REPLACE "(unsigned long)dlsym" "(size_t)dlsym" CONTENT "${CONTENT}")
+file(WRITE "${CMAKE_BINARY_DIR}/patched/src/module.c" "${CONTENT}")
+
+file(READ src/evict.c CONTENT)
+string(REPLACE "void *samples[server.maxmemory_samples];" "void **samples = _alloca(sizeof(void*) * server.maxmemory_samples);" CONTENT "${CONTENT}")
+file(WRITE "${CMAKE_BINARY_DIR}/patched/src/evict.c" "${CONTENT}")
+
+file(READ src/logreqres.c CONTENT)
+string(REPLACE "\ninline " "\n" CONTENT "${CONTENT}")
+file(WRITE "${CMAKE_BINARY_DIR}/patched/src/logreqres.c" "${CONTENT}")
+
+file(READ src/t_zset.c CONTENT)
+string(REPLACE "_sptr" "_sp" CONTENT "${CONTENT}")
+file(WRITE "${CMAKE_BINARY_DIR}/patched/src/t_zset.c" "${CONTENT}")
+
+file(READ src/util.c CONTENT)
+string(REPLACE "char full_path[PATH_MAX];" "char *full_path = _alloca(4096);" CONTENT "${CONTENT}")
+string(REPLACE "char temp_filename[PATH_MAX];" "char *temp_filename = _alloca(4096);" CONTENT "${CONTENT}")
+file(WRITE "${CMAKE_BINARY_DIR}/patched/src/util.c" "${CONTENT}")
+
+
+include_directories(BEFORE "${CMAKE_BINARY_DIR}/patched/src")
+include_directories(BEFORE "${CMAKE_BINARY_DIR}/patched/deps/libvalkey/src")
+
+
+file(READ deps/linenoise/linenoise.c CONTENT)
+string(REPLACE "const int seqBufferMaxLength = 8;" "#define seqBufferMaxLength 8" CONTENT "${CONTENT}")
+file(WRITE "${CMAKE_BINARY_DIR}/patched/deps/linenoise/linenoise.c" "${CONTENT}")
+
+
+file(COPY src/acl.c DESTINATION "${CMAKE_BINARY_DIR}/patched/src")
+file(COPY src/unit DESTINATION "${CMAKE_BINARY_DIR}/patched/src")
+
+file(READ src/unit/wrappers.h CONTENT)
+string(REPLACE "#define typename _typename" "// removed define typename" CONTENT "${CONTENT}")
+string(REPLACE "#undef typename" "// removed undef typename" CONTENT "${CONTENT}")
+file(WRITE "${CMAKE_BINARY_DIR}/patched/src/unit/wrappers.h" "${CONTENT}")
+
+set(PATCHED_FILES
+    "src/acl.c"
+    "src/unit/main.cpp"
+    "src/unit/test_sha256.cpp"
+    "deps/linenoise/linenoise.c"
+    "src/server.c"
+    "src/hashtable.c"
+    "src/valkey-benchmark.c"
+    "src/networking.c"
+    "src/sha256.h"
+    "src/sha256.c"
+    "src/cluster_migrateslots.c"
+    "src/cluster_legacy.c"
+    "src/valkeymodule.h"
+      "src/module.c"
+    "src/evict.c"
+    "src/logreqres.c"
+    "src/t_zset.c"
+    "src/util.c"
+)
+
 include(ValkeySetup)
+
+foreach(F IN LISTS PATCHED_FILES)
+    if(DEFINED VALKEY_SERVER_SRCS)
+        string(REPLACE "${CMAKE_SOURCE_DIR}/${F}" "${CMAKE_BINARY_DIR}/patched/${F}" VALKEY_SERVER_SRCS "${VALKEY_SERVER_SRCS}")
+    endif()
+    if(DEFINED VALKEY_CLI_SRCS)
+        string(REPLACE "${CMAKE_SOURCE_DIR}/${F}" "${CMAKE_BINARY_DIR}/patched/${F}" VALKEY_CLI_SRCS "${VALKEY_CLI_SRCS}")
+    endif()
+    if(DEFINED VALKEY_BENCHMARK_SRCS)
+        string(REPLACE "${CMAKE_SOURCE_DIR}/${F}" "${CMAKE_BINARY_DIR}/patched/${F}" VALKEY_BENCHMARK_SRCS "${VALKEY_BENCHMARK_SRCS}")
+    endif()
+    if(DEFINED VALKEY_CHECK_RDB_SRCS)
+        string(REPLACE "${CMAKE_SOURCE_DIR}/${F}" "${CMAKE_BINARY_DIR}/patched/${F}" VALKEY_CHECK_RDB_SRCS "${VALKEY_CHECK_RDB_SRCS}")
+    endif()
+    if(DEFINED VALKEY_CHECK_AOF_SRCS)
+        string(REPLACE "${CMAKE_SOURCE_DIR}/${F}" "${CMAKE_BINARY_DIR}/patched/${F}" VALKEY_CHECK_AOF_SRCS "${VALKEY_CHECK_AOF_SRCS}")
+    endif()
+endforeach()
+
+include_directories("${CMAKE_SOURCE_DIR}/src")
 add_subdirectory(src)
 add_subdirectory(tests)
 
@@ -34,17 +430,6 @@ add_subdirectory(tests)
 include(Packaging)
 
 # Clear cached variables from the cache
-unset(BUILD_LUA CACHE)
-unset(BUILD_TESTS CACHE)
-unset(CLANGPP CACHE)
-unset(CLANG CACHE)
-unset(BUILD_RDMA_MODULE CACHE)
-unset(BUILD_TLS_MODULE CACHE)
-unset(BUILD_UNIT_GTESTS CACHE)
-unset(BUILD_TEST_MODULES CACHE)
-unset(BUILD_EXAMPLE_MODULES CACHE)
-unset(USE_TLS CACHE)
-unset(DEBUG_FORCE_DEFRAG CACHE)
 
 # Helper to copy runtest scripts to allow running tests with CMake built binaries
 function(copy_runtest_script script_name)
@@ -76,3 +461,52 @@ copy_runtest_script("runtest-cluster")
 copy_runtest_script("runtest-moduleapi")
 copy_runtest_script("runtest-rdma")
 copy_runtest_script("runtest-sentinel")
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+file(APPEND "${CMAKE_BINARY_DIR}/msvc_compat.h" "#define read posix_read
+#define write posix_write
+int posix_read(int fd, void *buf, unsigned int count);
+int posix_write(int fd, const void *buf, unsigned int count);
+")
+
+file(APPEND "${CMAKE_BINARY_DIR}/msvc_compat.h" "#define _read posix_read
+#define _write posix_write
+int posix_read(int fd, void *buf, unsigned int count);
+int posix_write(int fd, const void *buf, unsigned int count);
+")
+file(APPEND "${CMAKE_BINARY_DIR}/msvc_compat.h" "\n#define close posix_close\n#define _close posix_close\n#define connect posix_connect\nint posix_close(int fd);\n")

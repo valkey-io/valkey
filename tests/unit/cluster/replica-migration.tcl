@@ -117,6 +117,8 @@ proc test_migrated_replica {type} {
         }
 
         if {$type == "sigstop"} {
+            assert_equal 0 [count_log_message -7 "I'm a sub-replica"]
+
             resume_process $primary0_pid
 
             # Wait for the old primary to go online and become a replica.

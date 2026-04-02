@@ -13,7 +13,8 @@
             "STALE"
         ],
         "acl_categories": [
-            "CONNECTION"
+            "CONNECTION",
+            "SLOW"
         ],
         "reply_schema": {
             "const": "OK"

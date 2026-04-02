@@ -29,8 +29,10 @@
             "ASKING"
         ],
         "acl_categories": [
+            "DANGEROUS",
             "KEYSPACE",
-            "DANGEROUS"
+            "SLOW",
+            "WRITE"
         ],
         "key_specs": [
             {

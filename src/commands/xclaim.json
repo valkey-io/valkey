@@ -11,7 +11,9 @@
             "FAST"
         ],
         "acl_categories": [
-            "STREAM"
+            "FAST",
+            "STREAM",
+            "WRITE"
         ],
         "command_tips": [
             "NONDETERMINISTIC_OUTPUT"

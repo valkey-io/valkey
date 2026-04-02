@@ -175,6 +175,7 @@ sds moduleLoadQueueEntryToLoadmoduleOptionStr(ValkeyModule *module,
 ValkeyModuleCtx *moduleAllocateContext(void);
 void moduleScriptingEngineInitContext(ValkeyModuleCtx *out_ctx,
                                       ValkeyModule *module,
+                                      int add_script_execution_flag,
                                       client *client);
 void moduleFreeContext(ValkeyModuleCtx *ctx);
 void moduleInitModulesSystem(void);
@@ -182,6 +183,7 @@ void moduleInitModulesSystemLast(void);
 void modulesCron(void);
 int moduleLoad(const char *path, void **argv, int argc, int is_loadex);
 int moduleUnload(sds name, const char **errmsg);
+void moduleUnloadAllModules(void);
 void moduleLoadFromQueue(void);
 int moduleGetCommandKeysViaAPI(struct serverCommand *cmd, robj **argv, int argc, getKeysResult *result);
 int moduleGetCommandChannelsViaAPI(struct serverCommand *cmd, robj **argv, int argc, getKeysResult *result);
@@ -191,6 +193,7 @@ moduleType *moduleTypeLookupModuleByNameIgnoreCase(const char *name);
 void moduleTypeNameByID(char *name, uint64_t moduleid);
 const char *moduleTypeModuleName(moduleType *mt);
 const char *moduleNameFromCommand(struct serverCommand *cmd);
+ValkeyModule *moduleFromCommand(struct serverCommand *cmd);
 void moduleCallCommandUnblockedHandler(client *c);
 int isModuleClientUnblocked(client *c);
 void unblockClientFromModule(client *c);

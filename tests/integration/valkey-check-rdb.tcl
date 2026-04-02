@@ -5,14 +5,14 @@ proc get_function_code {args} {
 tags {"check-rdb external:skip logreqres:skip"} {
     test {Check old valid RDB} {
         catch {
-            exec src/valkey-check-rdb tests/assets/encodings.rdb
+            exec $::VALKEY_CHECK_RDB_BIN tests/assets/encodings.rdb
         } result
         assert_match {*\[offset ???\] \\o/ RDB looks OK! \\o/*} $result
     }
 
     test {Check foreign RDB without unknown data} {
         catch {
-            exec src/valkey-check-rdb tests/assets/encodings-rdb12.rdb
+            exec $::VALKEY_CHECK_RDB_BIN tests/assets/encodings-rdb12.rdb
         } result
         assert_match {*\[offset ?\] Foreign RDB version 12 detected*} $result
         assert_match {*\[offset ???\] \\o/ RDB looks OK, but loading requires config 'rdb-version-check relaxed'*} $result
@@ -20,7 +20,7 @@ tags {"check-rdb external:skip logreqres:skip"} {
 
     test {Check foreign RDB with unknown data} {
         catch {
-            exec src/valkey-check-rdb tests/assets/encodings-rdb75-unknown-types.rdb
+            exec $::VALKEY_CHECK_RDB_BIN tests/assets/encodings-rdb75-unknown-types.rdb
         } result
         assert_match {*\[offset ?\] Foreign RDB version 75 detected*} $result
         assert_match {*--- RDB ERROR DETECTED ---*} $result
@@ -30,7 +30,7 @@ tags {"check-rdb external:skip logreqres:skip"} {
 
     test {Check future RDB without unknown data} {
         catch {
-            exec src/valkey-check-rdb tests/assets/encodings-rdb987.rdb
+            exec $::VALKEY_CHECK_RDB_BIN tests/assets/encodings-rdb987.rdb
         } result
         assert_match {*\[offset ?\] Future RDB version 987 detected*} $result
         assert_match {*\[offset ???\] \\o/ RDB looks OK, but loading requires config 'rdb-version-check relaxed'*} $result
@@ -38,7 +38,7 @@ tags {"check-rdb external:skip logreqres:skip"} {
 
     test {Check future RDB with unknown data} {
         catch {
-            exec src/valkey-check-rdb tests/assets/encodings-rdb987-unknown-types.rdb
+            exec $::VALKEY_CHECK_RDB_BIN tests/assets/encodings-rdb987-unknown-types.rdb
         } result
         assert_match {*\[offset ?\] Future RDB version 987 detected*} $result
         assert_match {*--- RDB ERROR DETECTED ---*} $result
@@ -54,7 +54,7 @@ tags {"check-rdb network external:skip logreqres:skip"} {
             r save
             set dump_rdb [file join [lindex [r config get dir] 1] dump.rdb]
             catch {
-                exec src/valkey-check-rdb $dump_rdb --stats --format info
+                exec $::VALKEY_CHECK_RDB_BIN $dump_rdb --stats --format info
             } result
             assert_match "*db.0.type.string.keys.total:0*" $result
             assert_match "*db.0.type.list.keys.total:0*" $result
@@ -73,7 +73,7 @@ tags {"check-rdb network external:skip logreqres:skip"} {
             
             set dump_rdb [file join [lindex [r config get dir] 1] dump.rdb]
             catch {
-                exec src/valkey-check-rdb $dump_rdb
+                exec $::VALKEY_CHECK_RDB_BIN $dump_rdb
             } result
             assert_match "*$function_num functions*" $result
         }
@@ -130,7 +130,7 @@ tags {"check-rdb network external:skip logreqres:skip"} {
             
             set dump_rdb [file join [lindex [r config get dir] 1] dump.rdb]
             catch {
-                exec src/valkey-check-rdb $dump_rdb --stats --format info
+                exec $::VALKEY_CHECK_RDB_BIN $dump_rdb --stats --format info
             } result
 
             assert_match "*db.0.type.string.keys.total:10*" $result

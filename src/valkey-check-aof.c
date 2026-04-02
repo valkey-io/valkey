@@ -63,7 +63,7 @@ static long long line = 1;
 static time_t to_timestamp = 0;
 
 int consumeNewline(char *buf) {
-    if (strncmp(buf, "\r\n", 2) != 0) {
+    if (buf[0] != '\r' || buf[1] != '\n') {
         ERROR("Expected \\r\\n, got: %02x%02x", buf[0], buf[1]);
         return 0;
     }
@@ -477,10 +477,10 @@ void checkMultiPartAof(char *dirpath, char *manifest_filepath, int fix) {
         sds aof_filename = am->base_aof_info->file_name;
         sds aof_filepath = makePath(dirpath, aof_filename);
         last_file = ++aof_num == total_num;
-        int aof_preable = fileIsRDB(aof_filepath);
+        int aof_preamble = fileIsRDB(aof_filepath);
 
-        printf("Start to check BASE AOF (%s format).\n", aof_preable ? "RDB" : "RESP");
-        ret = checkSingleAof(aof_filename, aof_filepath, last_file, fix, aof_preable);
+        printf("Start to check BASE AOF (%s format).\n", aof_preamble ? "RDB" : "RESP");
+        ret = checkSingleAof(aof_filename, aof_filepath, last_file, fix, aof_preamble);
         printAofStyle(ret, aof_filename, (char *)"BASE AOF");
         sdsfree(aof_filepath);
     }

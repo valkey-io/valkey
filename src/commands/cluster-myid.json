@@ -14,6 +14,9 @@
         "reply_schema": {
             "description": "The node id.",
             "type": "string"
-        }
+        },
+        "acl_categories": [
+            "SLOW"
+        ]
     }
 }

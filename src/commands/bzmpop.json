@@ -12,7 +12,10 @@
             "BLOCKING"
         ],
         "acl_categories": [
-            "SORTEDSET"
+            "BLOCKING",
+            "SLOW",
+            "SORTEDSET",
+            "WRITE"
         ],
         "key_specs": [
             {

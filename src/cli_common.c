@@ -331,7 +331,7 @@ void parseUri(const char *uri, const char *tool_name, cliConnInfo *connInfo, int
         !strncasecmp(redisTlsscheme, curr, strlen(redisTlsscheme))) {
 #ifdef USE_OPENSSL
         *tls_flag = 1;
-        char *del = strstr(curr, "://");
+        const char *del = strstr(curr, "://");
         curr += (del - curr) + 3;
 #else
         char *copy = strdup(curr);
@@ -341,7 +341,7 @@ void parseUri(const char *uri, const char *tool_name, cliConnInfo *connInfo, int
         exit(1);
 #endif
     } else if (!strncasecmp(scheme, curr, strlen(scheme)) || !strncasecmp(redisScheme, curr, strlen(redisScheme))) {
-        char *del = strstr(curr, "://");
+        const char *del = strstr(curr, "://");
         curr += (del - curr) + 3;
     } else {
         fprintf(stderr, "Invalid URI scheme\n");
@@ -393,28 +393,6 @@ void freeCliConnInfo(cliConnInfo connInfo) {
     if (connInfo.hostip) sdsfree(connInfo.hostip);
     if (connInfo.auth) sdsfree(connInfo.auth);
     if (connInfo.user) sdsfree(connInfo.user);
-}
-
-/*
- * Escape a Unicode string for JSON output (--json), following RFC 7159:
- * https://datatracker.ietf.org/doc/html/rfc7159#section-7
- */
-sds escapeJsonString(sds s, const char *p, size_t len) {
-    s = sdscatlen(s, "\"", 1);
-    while (len--) {
-        switch (*p) {
-        case '\\':
-        case '"': s = sdscatprintf(s, "\\%c", *p); break;
-        case '\n': s = sdscatlen(s, "\\n", 2); break;
-        case '\f': s = sdscatlen(s, "\\f", 2); break;
-        case '\r': s = sdscatlen(s, "\\r", 2); break;
-        case '\t': s = sdscatlen(s, "\\t", 2); break;
-        case '\b': s = sdscatlen(s, "\\b", 2); break;
-        default: s = sdscatprintf(s, *(unsigned char *)p <= 0x1f ? "\\u%04x" : "%c", *p);
-        }
-        p++;
-    }
-    return sdscatlen(s, "\"", 1);
 }
 
 sds cliVersion(void) {

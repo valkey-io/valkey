@@ -67,6 +67,7 @@ void clusterUpdateMyselfClientIpV6(void);
 void clusterUpdateMyselfHostname(void);
 void clusterUpdateMyselfAnnouncedPorts(void);
 void clusterUpdateMyselfHumanNodename(void);
+void clusterUpdateMyselfAvailabilityZone(void);
 
 void clusterPropagatePublish(robj *channel, robj *message, int sharded);
 void clusterBroadcastPong(int target);
@@ -75,7 +76,7 @@ unsigned long getClusterConnectionsCount(void);
 int isClusterHealthy(void);
 
 sds clusterGenNodesDescription(client *c, int filter, int tls_primary);
-sds genClusterInfoString(void);
+sds genClusterInfoString(sds info);
 /* handle implementation specific debug cluster commands. Return 1 if handled, 0 otherwise. */
 int handleDebugClusterCommand(client *c);
 const char **clusterDebugCommandExtendedHelp(void);
@@ -137,11 +138,12 @@ clusterNode *getNodeByQuery(client *c, int *error_code);
 int clusterRedirectBlockedClientIfNeeded(client *c);
 void clusterRedirectClient(client *c, clusterNode *n, int hashslot, int error_code);
 void migrateCloseTimedoutSockets(void);
-unsigned int keyHashSlot(char *key, int keylen);
+unsigned int keyHashSlot(const char *key, int keylen);
 int patternHashSlot(char *pattern, int length);
 int isValidAuxString(char *s, unsigned int length);
 void migrateCommand(client *c);
 void clusterCommand(client *c);
+void clusterKeySlotCommand(client *c);
 ConnectionType *connTypeOfCluster(void);
 int isNodeAvailable(clusterNode *node);
 long long getNodeReplicationOffset(clusterNode *node);

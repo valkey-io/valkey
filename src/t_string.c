@@ -46,7 +46,7 @@ static int checkStringLength(client *c, long long size, long long append) {
     if (mustObeyClient(c)) return C_OK;
     /* 'uint64_t' cast is there just to prevent undefined behavior on overflow */
     long long total = (uint64_t)size + append;
-    /* Test configured max-bulk-len represending a limit of the biggest string object,
+    /* Test configured max-bulk-len representing a limit of the biggest string object,
      * and also test for overflow. */
     if (total > server.proto_max_bulk_len || total < size || total < append) {
         addReplyError(c, "string exceeds maximum allowed size (proto-max-bulk-len)");
@@ -56,7 +56,7 @@ static int checkStringLength(client *c, long long size, long long append) {
 }
 
 /* Forward declaration */
-static int getExpireMillisecondsOrReply(client *c, robj *expire, int flags, int unit, long long *milliseconds);
+static int getExpireMillisecondsOrReply(client *c, robj *expire, int flags, int unit, mstime_t *milliseconds);
 
 /* The setGenericCommand() function implements the SET operation with different
  * options and variants. This function is called in order to implement the
@@ -82,7 +82,7 @@ void setGenericCommand(client *c,
                        robj *ok_reply,
                        robj *abort_reply,
                        robj *comparison) {
-    long long milliseconds = 0; /* initialized to avoid any harmness warning */
+    mstime_t milliseconds = 0; /* initialized to avoid any harmness warning */
     int found = 0;
     int setkey_flags = 0;
 
@@ -154,7 +154,15 @@ void setGenericCommand(client *c,
          * EX/PX/EXAT flag. */
         if (!(flags & ARGS_PXAT)) {
             robj *milliseconds_obj = createStringObjectFromLongLong(milliseconds);
-            rewriteClientCommandVector(c, 5, shared.set, key, val, shared.pxat, milliseconds_obj);
+            if (c->cmd->proc == setCommand && c->argc == 5) {
+                /* If the command is in the form of "SET key value EX/PX/EXAT ttl",
+                 * then we don't need to rewrite the entire command vector. */
+                serverAssert(flags & (ARGS_EX | ARGS_PX | ARGS_EXAT));
+                rewriteClientCommandArgument(c, 3, shared.pxat);
+                rewriteClientCommandArgument(c, 4, milliseconds_obj);
+            } else {
+                rewriteClientCommandVector(c, 5, shared.set, key, val, shared.pxat, milliseconds_obj);
+            }
             decrRefCount(milliseconds_obj);
         }
         notifyKeyspaceEvent(NOTIFY_GENERIC, "expire", key, c->db->id);
@@ -171,7 +179,7 @@ void setGenericCommand(client *c,
         int j;
         robj **argv = zmalloc((c->argc - 1) * sizeof(robj *));
         for (j = 0; j < c->argc; j++) {
-            char *a = c->argv[j]->ptr;
+            char *a = objectGetVal(c->argv[j]);
             /* Skip GET which may be repeated multiple times. */
             if (j >= 3 && (a[0] == 'g' || a[0] == 'G') && (a[1] == 'e' || a[1] == 'E') &&
                 (a[2] == 't' || a[2] == 'T') && a[3] == '\0')
@@ -198,7 +206,7 @@ cleanup:
  * If return C_OK, "milliseconds" output argument will be set to the resulting absolute timestamp.
  * If return C_ERR, an error reply has been added to the given client.
  */
-static int getExpireMillisecondsOrReply(client *c, robj *expire, int flags, int unit, long long *milliseconds) {
+static int getExpireMillisecondsOrReply(client *c, robj *expire, int flags, int unit, mstime_t *milliseconds) {
     int ret = getLongLongFromObjectOrReply(c, expire, milliseconds, NULL);
     if (ret != C_OK) {
         return ret;
@@ -234,7 +242,7 @@ void setCommand(client *c) {
     int unit = UNIT_SECONDS;
     int flags = ARGS_NO_FLAGS;
 
-    if (parseExtendedCommandArgumentsOrReply(c, &flags, &unit, &expire, &comparison, COMMAND_SET, c->argc) != C_OK) {
+    if (parseExtendedCommandArgumentsOrReply(c, COMMAND_SET, 3, c->argc, &flags, &unit, NULL, &expire, &comparison) != C_OK) {
         return;
     }
 
@@ -320,7 +328,13 @@ void getexCommand(client *c) {
     int unit = UNIT_SECONDS;
     int flags = ARGS_NO_FLAGS;
 
-    if (parseExtendedCommandArgumentsOrReply(c, &flags, &unit, &expire, NULL, COMMAND_GET, c->argc) != C_OK) {
+    if (parseExtendedCommandArgumentsOrReply(c, COMMAND_GET, 2, c->argc, &flags, &unit, NULL, &expire, NULL) != C_OK) {
+        return;
+    }
+
+    /* Validate the expiration time value first */
+    mstime_t milliseconds = 0;
+    if (expire && getExpireMillisecondsOrReply(c, expire, flags, unit, &milliseconds) != C_OK) {
         return;
     }
 
@@ -330,12 +344,6 @@ void getexCommand(client *c) {
         return;
 
     if (checkType(c, o, OBJ_STRING)) {
-        return;
-    }
-
-    /* Validate the expiration time value first */
-    long long milliseconds = 0;
-    if (expire && getExpireMillisecondsOrReply(c, expire, flags, unit, &milliseconds) != C_OK) {
         return;
     }
 
@@ -400,7 +408,7 @@ void getsetCommand(client *c) {
 void setrangeCommand(client *c) {
     robj *o;
     long offset;
-    sds value = c->argv[3]->ptr;
+    sds value = objectGetVal(c->argv[3]);
 
     if (getLongFromObjectOrReply(c, c->argv[2], &offset, NULL) != C_OK)
         return;
@@ -446,12 +454,12 @@ void setrangeCommand(client *c) {
         o = dbUnshareStringValue(c->db, c->argv[1], o);
     }
 
-    o->ptr = sdsgrowzero(o->ptr, offset + sdslen(value));
-    memcpy((char *)o->ptr + offset, value, sdslen(value));
+    objectSetVal(o, sdsgrowzero(objectGetVal(o), offset + sdslen(value)));
+    memcpy((char *)objectGetVal(o) + offset, value, sdslen(value));
     signalModifiedKey(c, c->db, c->argv[1]);
     notifyKeyspaceEvent(NOTIFY_STRING, "setrange", c->argv[1], c->db->id);
     server.dirty++;
-    addReplyLongLong(c, sdslen(o->ptr));
+    addReplyLongLong(c, sdslen(objectGetVal(o)));
 }
 
 void getrangeCommand(client *c) {
@@ -469,9 +477,9 @@ void getrangeCommand(client *c) {
 
     if (o->encoding == OBJ_ENCODING_INT) {
         str = llbuf;
-        strlen = ll2string(llbuf, sizeof(llbuf), (long)o->ptr);
+        strlen = ll2string(llbuf, sizeof(llbuf), (long)objectGetVal(o));
     } else {
-        str = o->ptr;
+        str = objectGetVal(o);
         strlen = sdslen(str);
     }
 
@@ -547,12 +555,100 @@ void msetGenericCommand(client *c, int nx) {
     addReply(c, nx ? shared.cone : shared.ok);
 }
 
+/* MSET key value [key value ...] */
 void msetCommand(client *c) {
     msetGenericCommand(c, 0);
 }
 
+/* MSETNX key value [key value ...] */
 void msetnxCommand(client *c) {
     msetGenericCommand(c, 1);
+}
+
+/* MSETEX numkeys key value [key value ...] [NX | XX]
+ *     [EX seconds | PX milliseconds |
+ *      EXAT seconds-timestamp | PXAT milliseconds-timestamp | KEEPTTL] */
+void msetexCommand(client *c) {
+    long numkeys = 0;
+    int unit = UNIT_SECONDS;
+    int expire_idx = -1;
+    robj *expire = NULL;
+    long long milliseconds = 0;
+    int flags = ARGS_NO_FLAGS;
+    int setkey_flags = 0;
+
+    /* Parse the numkeys. */
+    if (getRangeLongFromObjectOrReply(c, c->argv[1], 1, INT_MAX, &numkeys,
+                                      "invalid numkeys value or out of range") != C_OK) {
+        return;
+    }
+
+    /* Parse the optional arguments that follow, our starting index is (2 + numkeys * 2),
+     * that is skipping command name, numkeys token and all the key value pairs. */
+    long long args_start_idx = 2 + (long long)numkeys * 2;
+    if (args_start_idx > c->argc) {
+        addReplyErrorObject(c, shared.syntaxerr);
+        return;
+    }
+    if (parseExtendedCommandArgumentsOrReply(c, COMMAND_MSET, (int)args_start_idx, c->argc,
+                                             &flags, &unit, &expire_idx, &expire, NULL) != C_OK) {
+        return;
+    }
+
+    /* Parse the expiration time and validate the expiration time value first.
+     *
+     * If the `milliseconds` have expired, we can actually avoid setting the keys in the
+     * database, just like we do when handling the SET command. Like we could rewrite it
+     * to DEL xxx xxx, but it will make the code more complicated and it seems excessive.
+     * Currently we will add it to the database and wait for either active expire or lazy
+     * expire to delete it. */
+    if (expire && getExpireMillisecondsOrReply(c, expire, flags, unit, &milliseconds) != C_OK) {
+        return;
+    }
+
+    /* Check NX/XX key-level conditions before setting the keys.
+     * All key-value pairs are located within the range [2, args_start_idx). */
+    if (flags & (ARGS_SET_NX | ARGS_SET_XX)) {
+        for (int j = 2; j < args_start_idx; j += 2) {
+            robj *o = lookupKeyWrite(c->db, c->argv[j]);
+            if (((flags & ARGS_SET_NX) && o != NULL) ||
+                ((flags & ARGS_SET_XX) && o == NULL)) {
+                addReply(c, shared.czero);
+                return;
+            }
+        }
+    }
+
+    /* Setting KEEPTTL flag.
+     *
+     * When expire is not NULL, we avoid deleting the TTL so it can be updated
+     * later instead of being deleted and then created again. */
+    setkey_flags |= (flags & ARGS_KEEPTTL || expire) ? SETKEY_KEEPTTL : 0;
+
+    /* MSET all the keys. */
+    for (int j = 2; j < 2 + numkeys * 2; j += 2) {
+        robj *key = c->argv[j];
+        robj *val = tryObjectEncoding(c->argv[j + 1]);
+        setKey(c, c->db, key, &val, setkey_flags);
+        if (expire) val = setExpire(c, c->db, key, milliseconds);
+        c->argv[j + 1] = val;
+        incrRefCount(val);
+        server.dirty++;
+        notifyKeyspaceEvent(NOTIFY_STRING, "set", key, c->db->id);
+        if (expire) notifyKeyspaceEvent(NOTIFY_GENERIC, "expire", key, c->db->id);
+    }
+
+    /* Propagate as MSETEX numkeys key value PXAT millisecond-timestamp if there is
+     * EX/PX/EXAT flag. */
+    if (expire && !(flags & ARGS_PXAT)) {
+        serverAssert(expire_idx != -1);
+        robj *milliseconds_obj = createStringObjectFromLongLong(milliseconds);
+        rewriteClientCommandArgument(c, expire_idx, shared.pxat);
+        rewriteClientCommandArgument(c, expire_idx + 1, milliseconds_obj);
+        decrRefCount(milliseconds_obj);
+    }
+
+    addReply(c, shared.cone);
 }
 
 void incrDecrCommand(client *c, long long incr) {
@@ -574,7 +670,7 @@ void incrDecrCommand(client *c, long long incr) {
     if (o && o->refcount == 1 && o->encoding == OBJ_ENCODING_INT &&
         value >= LONG_MIN && value <= LONG_MAX) {
         new = o;
-        o->ptr = (void *)((long)value);
+        objectSetVal(o, (void *)((long)value));
     } else {
         new = createStringObjectFromLongLongForValue(value);
         if (o) {
@@ -667,13 +763,13 @@ void appendCommand(client *c) {
 
         /* "append" is an argument, so always an sds */
         append = c->argv[2];
-        if (checkStringLength(c, stringObjectLen(o), sdslen(append->ptr)) != C_OK)
+        if (checkStringLength(c, stringObjectLen(o), sdslen(objectGetVal(append))) != C_OK)
             return;
 
         /* Append the value */
         o = dbUnshareStringValue(c->db, c->argv[1], o);
-        o->ptr = sdscatlen(o->ptr, append->ptr, sdslen(append->ptr));
-        totlen = sdslen(o->ptr);
+        objectSetVal(o, sdscatlen(objectGetVal(o), objectGetVal(append), sdslen(objectGetVal(append))));
+        totlen = sdslen(objectGetVal(o));
     }
     signalModifiedKey(c, c->db, c->argv[1]);
     notifyKeyspaceEvent(NOTIFY_STRING, "append", c->argv[1], c->db->id);
@@ -710,11 +806,11 @@ void lcsCommand(client *c) {
     }
     obja = obja ? getDecodedObject(obja) : createStringObject("", 0);
     objb = objb ? getDecodedObject(objb) : createStringObject("", 0);
-    a = obja->ptr;
-    b = objb->ptr;
+    a = objectGetVal(obja);
+    b = objectGetVal(objb);
 
     for (j = 3; j < (uint32_t)c->argc; j++) {
-        char *opt = c->argv[j]->ptr;
+        char *opt = objectGetVal(c->argv[j]);
         int moreargs = (c->argc - 1) - j;
 
         if (!strcasecmp(opt, "IDX")) {

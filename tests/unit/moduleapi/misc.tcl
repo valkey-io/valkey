@@ -97,31 +97,72 @@ start_server {overrides {save {900 1}} tags {"modules"}} {
         assert { $was_set == 0 }
     }
 
+    proc parse_client_flags {flags} {
+        set flag_list [split $flags ":"]
+        set parsed_flags {}
+        
+        # Just collect all non-empty flags
+        foreach flag $flag_list {
+            if {$flag ne ""} {
+                lappend parsed_flags $flag
+            }
+        }
+        
+        return $parsed_flags
+    }
+
     test {test module clientinfo api} {
         # Test basic sanity and SSL flag
         set info [r test.clientinfo]
-        set ssl_flag [expr $::tls ? {"ssl:"} : {":"}]
-
         assert { [dict get $info db] == 9 }
-        assert { [dict get $info flags] == "${ssl_flag}:::::" }
+        
+        set flags [parse_client_flags [dict get $info flags]]
+        
+        # Check initial state - should have auth flags, maybe SSL
+        if {$::tls} {
+            assert { "ssl" in $flags }
+        }
+        assert { "authenticated" in $flags }
+        assert { "ever_authenticated" in $flags }
+        assert { "multi" ni $flags }
+        assert { "tracking" ni $flags }
+        assert { "readonly" ni $flags }
 
         # Test MULTI flag
         r multi
         r test.clientinfo
         set info [lindex [r exec] 0]
-        assert { [dict get $info flags] == "${ssl_flag}::::multi:" }
+        set flags [parse_client_flags [dict get $info flags]]
+        assert { "multi" in $flags }
+        assert { "authenticated" in $flags }
+        assert { "ever_authenticated" in $flags }
 
         # Test TRACKING flag
         r client tracking on
         set info [r test.clientinfo]
-        assert { [dict get $info flags] == "${ssl_flag}::tracking:::" }
+        set flags [parse_client_flags [dict get $info flags]]
+        assert { "tracking" in $flags }
+        assert { "multi" ni $flags }
+        assert { "authenticated" in $flags }
+        assert { "ever_authenticated" in $flags }
         r CLIENT TRACKING off
+
+        # Test READONLY flag
         r readonly
         set info [r test.clientinfo]
-        assert { [dict get $info flags] == "${ssl_flag}:::::readonly" }
+        set flags [parse_client_flags [dict get $info flags]]
+        assert { "readonly" in $flags }
+        assert { "tracking" ni $flags }
+        assert { "multi" ni $flags }
+        assert { "authenticated" in $flags }
+        assert { "ever_authenticated" in $flags }
+        
         r readwrite
         set info [r test.clientinfo]
-        assert { [dict get $info flags] == "${ssl_flag}:::::" }
+        set flags [parse_client_flags [dict get $info flags]]
+        assert { "readonly" ni $flags }
+        assert { "authenticated" in $flags }
+        assert { "ever_authenticated" in $flags }
     }
 
     test {tracking with rm_call sanity} {

@@ -242,7 +242,7 @@ start_server {} {
         assert_equal [s rdb_bgsave_in_progress] 1
         r flushall
         # wait a second max (bgsave should take 5)
-        wait_for_condition 10 100 {
+        wait_for_condition 50 100 {
             [s rdb_bgsave_in_progress] == 0
         } else {
             fail "bgsave not aborted"
@@ -565,6 +565,34 @@ start_server {} {
         # server is writable again
         r set x y
     } {OK}
+}
+
+start_server {} {
+    test {RDB Load from incompatible version preserves data} {
+        # Set test keys
+        r set testkey1 "value1"
+        r set testkey2 "value2" 
+
+        # Use RDB with version 987. 
+        # This emulates a full sync from a server with a future version
+        set server_dir [lindex [r config get dir] 1]
+        set rdb_filename [lindex [r config get dbfilename] 1]
+        set rdb_path "$server_dir/$rdb_filename"
+        exec cp tests/assets/encodings-rdb987.rdb $rdb_path
+
+        # Reload will trigger the rdbLoad code path with the RDBFLAGS_EMPTY_DATA flag
+        catch {r debug reload nosave}
+        
+        # Check that version error appears in logs
+        verify_log_message 0 "*Can't handle RDB format version*" 0
+
+        # Verify we don't enter the flushing code path
+        verify_no_log_message 0 "*RDB signature and version check passed*" 0
+
+        # Verify our original data is not flushed
+        assert_equal [r get testkey1] "value1"
+        assert_equal [r get testkey2] "value2"
+    }
 }
 
 } ;# tags

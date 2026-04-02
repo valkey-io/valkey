@@ -63,38 +63,27 @@ else()
   add_compile_options("-UNDEBUG")
 endif()
 
-# Make sure ctest gives the output when tests fail
-list(APPEND CMAKE_CTEST_ARGUMENTS "--output-on-failure")
-
-# Add non-cluster tests
+# Add the non-cluster test binary.
+# Some tests are unit tests which require us to include private headers.
 add_executable(client_test client_test.c)
 target_include_directories(client_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
 target_link_libraries(client_test valkey_unittest)
-if(TLS_LIBRARY)
+add_test(NAME client_test COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/test.sh")
+if(ENABLE_TLS)
   target_compile_definitions(client_test PUBLIC VALKEY_TEST_TLS=1)
-  target_link_libraries(client_test ${TLS_LIBRARY})
+  set_property(TEST client_test APPEND PROPERTY ENVIRONMENT "TEST_TLS=1")
 endif()
 if(ENABLE_RDMA)
   target_compile_definitions(client_test PUBLIC VALKEY_TEST_RDMA=1)
-  target_link_libraries(client_test valkey_rdma)
+  set_property(TEST client_test APPEND PROPERTY ENVIRONMENT "TEST_RDMA=1")
 endif()
 if(LIBEVENT_LIBRARY)
   target_compile_definitions(client_test PUBLIC VALKEY_TEST_ASYNC=1)
   target_link_libraries(client_test ${LIBEVENT_LIBRARY})
+  set_property(TEST client_test APPEND PROPERTY ENVIRONMENT "TEST_CLUSTER=1")
 endif()
-
-add_test(NAME client_test COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/test.sh")
 if(TEST_WITH_REDIS_VERSION)
   set_property(TEST client_test APPEND PROPERTY ENVIRONMENT "VALKEY_SERVER=redis-server")
-endif()
-if(TLS_LIBRARY)
-  set_property(TEST client_test APPEND PROPERTY ENVIRONMENT "TEST_TLS=1")
-endif()
-if(ENABLE_RDMA)
-  set_property(TEST client_test APPEND PROPERTY ENVIRONMENT "TEST_RDMA=1")
-endif()
-if(LIBEVENT_LIBRARY)
-  set_property(TEST client_test APPEND PROPERTY ENVIRONMENT "TEST_CLUSTER=1")
 endif()
 
 # Unit tests

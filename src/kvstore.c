@@ -628,7 +628,7 @@ kvstoreIterator *kvstoreIteratorInit(kvstore *kvs, uint8_t flags) {
 /* Free the kvs_it returned by kvstoreIteratorInit. */
 void kvstoreIteratorRelease(kvstoreIterator *kvs_it) {
     hashtableIterator *iter = &kvs_it->di;
-    hashtableResetIterator(iter);
+    hashtableCleanupIterator(iter);
     /* In the safe iterator context, we may delete entries. */
     if (kvs_it->didx != KVSTORE_INDEX_NOT_FOUND) {
         freeHashtableIfNeeded(kvs_it->kvs, kvs_it->didx);
@@ -672,7 +672,7 @@ static hashtable *kvstoreIteratorNextHashtable(kvstoreIterator *kvs_it) {
     if (kvs_it->didx != KVSTORE_INDEX_NOT_FOUND && kvstoreGetHashtable(kvs_it->kvs, kvs_it->didx)) {
         /* Before we move to the next hashtable, reset the iter of the previous hashtable. */
         hashtableIterator *iter = &kvs_it->di;
-        hashtableResetIterator(iter);
+        hashtableCleanupIterator(iter);
         /* In the safe iterator context, we may delete entries. */
         freeHashtableIfNeeded(kvs_it->kvs, kvs_it->didx);
     }
@@ -697,7 +697,7 @@ bool kvstoreIteratorNext(kvstoreIterator *kvs_it, void **next) {
         /* No current hashtable or reached the end of the hash table. */
         hashtable *ht = kvstoreIteratorNextHashtable(kvs_it);
         if (!ht) return false;
-        hashtableReinitIterator(&kvs_it->di, ht);
+        hashtableRetargetIterator(&kvs_it->di, ht);
         return hashtableNext(&kvs_it->di, next);
     }
 }
@@ -779,7 +779,7 @@ kvstoreHashtableIterator *kvstoreGetHashtableIterator(kvstore *kvs, int didx, ui
 void kvstoreReleaseHashtableIterator(kvstoreHashtableIterator *kvs_di) {
     /* The hashtable may be deleted during the iteration process, so here need to check for NULL. */
     if (kvstoreGetHashtable(kvs_di->kvs, kvs_di->didx)) {
-        hashtableResetIterator(&kvs_di->di);
+        hashtableCleanupIterator(&kvs_di->di);
         /* In the safe iterator context, we may delete entries. */
         freeHashtableIfNeeded(kvs_di->kvs, kvs_di->didx);
     }
@@ -949,10 +949,10 @@ void kvstoreSetIsImporting(kvstore *kvs, int didx, int is_importing) {
         return;
     }
 
-    hashtableDelete(kvs->importing, (void *)(intptr_t)didx);
     /* Once we mark a hashtable as not importing, we need to begin tracking in
      * the kvstore metadata */
-    if (ht && hashtableSize(ht) != 0) {
+    if (hashtableDelete(kvs->importing, (void *)(intptr_t)didx) && ht && hashtableSize(ht) != 0) {
         cumulativeKeyCountAdd(kvs, didx, hashtableSize(ht));
+        kvs->importing_key_count -= hashtableSize(ht);
     }
 }

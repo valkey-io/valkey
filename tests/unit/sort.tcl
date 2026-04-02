@@ -204,6 +204,11 @@ foreach command {SORT SORT_RO} {
         assert_equal [lsort -real $floats] [r sort mylist]
     }
 
+    test "SORT returns an empty array if the list is empty" {
+        r flushdb
+        r sort mylist
+    } {}
+
     test "SORT with STORE returns zero if result is empty (github issue 224)" {
         r flushdb
         r sort foo{t} store bar{t}

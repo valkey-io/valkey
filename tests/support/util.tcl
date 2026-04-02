@@ -201,7 +201,7 @@ proc verify_log_message {srv_idx pattern from_line} {
     incr from_line
     set result [exec tail -n +$from_line < [srv $srv_idx stdout]]
     if {![string match $pattern $result]} {
-        fail "expected message not found in log file: $pattern"
+        fail "expected pattern found in srv $srv_idx log file: $pattern, but instead got: $result"
     }
 }
 
@@ -210,7 +210,7 @@ proc verify_no_log_message {srv_idx pattern from_line} {
     incr from_line
     set result [exec tail -n +$from_line < [srv $srv_idx stdout]]
     if {[string match $pattern $result]} {
-        fail "expected message found in log file: $pattern"
+        fail "expected pattern not found in srv $srv_idx log file: $pattern, but instead got: $result"
     }
 }
 
@@ -1226,7 +1226,7 @@ proc system_backtrace_supported {} {
     # libmusl does not support backtrace. Also return 0 on
     # static binaries (ldd exit code 1) where we can't detect libmusl
     catch {
-        set ldd [exec ldd src/valkey-server]
+        set ldd [exec ldd $::VALKEY_SERVER_BIN]
         if {![string match {*libc.*musl*} $ldd]} {
             return 1
         }
@@ -1279,4 +1279,38 @@ proc bp {{s {}}} {
         catch {uplevel 1 $line} res
         puts $res
     }
+}
+
+# Compares two version strings. Returns 1 if a >= b, 0 otherwise.
+proc version_greater_or_equal {a b} {
+    regexp {^([0-9]+)\.([0-9]+)\.([0-9]+)$} $a -> a_major a_minor a_patch
+    regexp {^([0-9]+)\.([0-9]+)\.([0-9]+)$} $b -> b_major b_minor b_patch
+    if {$a_major < $b_major} {
+        return 0
+    } elseif {$a_major > $b_major} {
+        return 1
+    } elseif {$a_minor < $b_minor} {
+        return 0
+    } elseif {$a_minor > $b_minor} {
+        return 1
+    } elseif {$a_patch < $b_patch} {
+        return 0
+    } else {
+        return 1
+    }
+}
+
+proc memcmp {string1 string2} {
+    set len1 [string length $string1]
+    set len2 [string length $string2]
+    set minLen [expr min($len1, $len2)]
+
+    for {set i 0} {$i < $minLen} {incr i} {
+        set char1 [scan [string index $string1 $i] %c]
+        set char2 [scan [string index $string2 $i] %c]
+        if {$char1 != $char2} {
+            return [expr {$char1 - $char2}]
+        }
+    }
+    return [expr {$len1 - $len2}]
 }

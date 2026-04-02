@@ -92,6 +92,10 @@ typedef enum readFromReplica {
     FROM_ALL
 } readFromReplica;
 
+/* Fuzz mode flags */
+#define FUZZ_MODE_MALFORMED_COMMANDS (1 << 0)
+#define FUZZ_MODE_CONFIG_COMMANDS (1 << 1)
+
 static struct config {
     aeEventLoop *el;
     enum valkeyConnectionType ct;
@@ -102,6 +106,9 @@ static struct config {
     int numclients;
     _Atomic int liveclients;
     int requests;
+    int duration;
+    int warmup_duration;
+    _Atomic int current_warmup_duration;
     _Atomic int requests_issued;
     _Atomic int requests_finished;
     _Atomic int previous_requests_finished;
@@ -130,12 +137,16 @@ static struct config {
     int num_threads;
     struct benchmarkThread **threads;
     int cluster_mode;
+    int fuzz_mode; /* Boolean flag to enable fuzzing */
+    const char *fuzz_log_level;
+    int fuzz_flags; /* Bit flags for fuzzing modes */
     readFromReplica read_from_replica;
     int cluster_node_count;
     struct clusterNode **cluster_nodes;
     struct serverConfig *server_config;
     struct hdr_histogram *latency_histogram;
     struct hdr_histogram *current_sec_latency_histogram;
+    struct hdr_histogram *rps_histogram;
     _Atomic int is_fetching_slots;
     _Atomic int is_updating_slots;
     _Atomic int slots_last_update;
@@ -225,6 +236,7 @@ static void freeServerConfig(serverConfig *cfg);
 static int fetchClusterSlotsConfiguration(client c);
 static void updateClusterSlotsConfiguration(void);
 static long long showThroughput(struct aeEventLoop *eventLoop, long long id, void *clientData);
+int runFuzzerClients(const char *host, int port, int max_commands, int parallel_clients, int cluster_mode, int num_keys, cliSSLconfig *ssl_config, const char *log_level, int fuzz_flags);
 
 /* Dict callbacks */
 static uint64_t dictSdsHash(const void *key);
@@ -249,6 +261,21 @@ static long long nstime(void) {
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return (long long)ts.tv_sec * 1000000000LL + ts.tv_nsec;
+}
+
+static bool isBenchmarkFinished(int request_count) {
+    /* don't end in warmup period */
+    int warmup_duration = atomic_load_explicit(&config.current_warmup_duration, memory_order_relaxed);
+    if (warmup_duration > 0) return false;
+
+    if (config.duration > 0) {
+        /* end after the specified duration */
+        if ((mstime() - config.start) >= (config.duration * 1000LL)) return true;
+    } else {
+        /* end after the specified number of requests */
+        if (request_count >= config.requests) return true;
+    }
+    return false;
 }
 
 static uint64_t dictSdsHash(const void *key) {
@@ -502,7 +529,7 @@ static void freeClient(client c) {
     aeDeleteFileEvent(el, c->context->fd, AE_READABLE);
     if (c->thread_id >= 0) {
         int requests_finished = atomic_load_explicit(&config.requests_finished, memory_order_relaxed);
-        if (requests_finished >= config.requests) {
+        if (isBenchmarkFinished(requests_finished)) {
             aeStop(el);
         }
     }
@@ -626,7 +653,7 @@ static long long acquireTokenOrWait(int tokens) {
 
 static void clientDone(client c) {
     int requests_finished = atomic_load_explicit(&config.requests_finished, memory_order_relaxed);
-    if (requests_finished >= config.requests) {
+    if (isBenchmarkFinished(requests_finished)) {
         freeClient(c);
         if (!config.num_threads && config.el) aeStop(config.el);
         return;
@@ -717,7 +744,7 @@ static void readHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
                     continue;
                 }
                 int requests_finished = atomic_fetch_add_explicit(&config.requests_finished, 1, memory_order_relaxed);
-                if (requests_finished < config.requests) {
+                if (!isBenchmarkFinished(requests_finished)) {
                     if (config.num_threads == 0) {
                         hdr_record_value(config.latency_histogram, // Histogram to record to
                                          (long)c->latency <= CONFIG_LATENCY_HISTOGRAM_MAX_VALUE
@@ -835,7 +862,7 @@ static void writeHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
         int requests_issued = atomic_fetch_add_explicit(&config.requests_issued,
                                                         config.pipeline * c->seqlen,
                                                         memory_order_relaxed);
-        if (requests_issued >= config.requests) {
+        if (isBenchmarkFinished(requests_issued)) {
             return;
         }
 
@@ -1076,7 +1103,27 @@ static void createMissingClients(client c) {
     }
 }
 
-static void showLatencyReport(void) {
+static void showRPSReport(void) {
+    if (config.rps_histogram && config.rps_histogram->total_count > 0) {
+        const float target_rps = (float)config.rps;
+
+        const float avg_rps = hdr_mean(config.rps_histogram);
+        const float p0 = (float)hdr_min(config.rps_histogram);
+        const float p50 = (float)hdr_value_at_percentile(config.rps_histogram, 50.0);
+        const float p95 = (float)hdr_value_at_percentile(config.rps_histogram, 95.0);
+        const float p99 = (float)hdr_value_at_percentile(config.rps_histogram, 99.0);
+        const float p100 = (float)hdr_max(config.rps_histogram);
+
+        printf("\n");
+        printf("RPS Summary:\n");
+        printf("  target RPS: %.2f\n", target_rps);
+        printf("  RPS distribution (reqs/sec):\n");
+        printf("    %9s %9s %9s %9s %9s %9s\n", "avg", "min", "p50", "p95", "p99", "max");
+        printf("    %9.3f %9.3f %9.3f %9.3f %9.3f %9.3f\n", avg_rps, p0, p50, p95, p99, p100);
+    }
+}
+
+static void showReport(void) {
     const float reqpersec = (float)config.requests_finished / ((float)config.totlatency / 1000.0f);
     const float p0 = ((float)hdr_min(config.latency_histogram)) / 1000.0f;
     const float p50 = hdr_value_at_percentile(config.latency_histogram, 50.0) / 1000.0f;
@@ -1119,7 +1166,8 @@ static void showLatencyReport(void) {
         }
         printf("  multi-thread: %s\n", (config.num_threads ? "yes" : "no"));
         if (config.num_threads) printf("  threads: %d\n", config.num_threads);
-
+        /* Show the RPS Report */
+        showRPSReport();
         printf("\n");
         printf("Latency by percentile distribution:\n");
         struct hdr_iter iter;
@@ -1215,6 +1263,7 @@ static void benchmarkSequence(const char *title, char *cmd, int len, int seqlen)
     config.requests_finished = 0;
     config.previous_requests_finished = 0;
     config.last_printed_bytes = 0;
+    config.current_warmup_duration = config.warmup_duration;
     hdr_init(CONFIG_LATENCY_HISTOGRAM_MIN_VALUE,         // Minimum value
              CONFIG_LATENCY_HISTOGRAM_MAX_VALUE,         // Maximum value
              config.precision,                           // Number of significant figures
@@ -1223,6 +1272,13 @@ static void benchmarkSequence(const char *title, char *cmd, int len, int seqlen)
              CONFIG_LATENCY_HISTOGRAM_INSTANT_MAX_VALUE, // Maximum value
              config.precision,                           // Number of significant figures
              &config.current_sec_latency_histogram);     // Pointer to initialise
+
+    if (config.rps > 0) {
+        hdr_init(1,
+                 config.rps * 2,
+                 config.precision,
+                 &config.rps_histogram);
+    }
 
     initPlaceholders(cmd, len);
     if (config.num_threads) initBenchmarkThreads();
@@ -1248,12 +1304,12 @@ static void benchmarkSequence(const char *title, char *cmd, int len, int seqlen)
     } else
         startBenchmarkThreads();
     config.totlatency = mstime() - config.start;
-
-    showLatencyReport();
+    showReport();
     freeAllClients();
     if (config.threads) freeBenchmarkThreads();
     if (config.current_sec_latency_histogram) hdr_close(config.current_sec_latency_histogram);
     if (config.latency_histogram) hdr_close(config.latency_histogram);
+    if (config.rps_histogram) hdr_close(config.rps_histogram);
 }
 
 /* Benchmark a single RESP-encoded command of length len. */
@@ -1590,7 +1646,22 @@ int parseOptions(int argc, char **argv) {
             exit(0);
         } else if (!strcmp(argv[i], "-n")) {
             if (lastarg) goto invalid;
+            if (config.duration > 0) {
+                fprintf(stderr, "Options -n and --duration are mutually exclusive.\n");
+                exit(1);
+            }
             config.requests = atoi(argv[++i]);
+        } else if (!strcmp(argv[i], "--duration")) {
+            if (lastarg) goto invalid;
+            if (config.requests > 0) {
+                fprintf(stderr, "Options -n and --duration are mutually exclusive.\n");
+                exit(1);
+            }
+            config.duration = atoi(argv[++i]);
+        } else if (!strcmp(argv[i], "--warmup")) {
+            if (lastarg) goto invalid;
+            config.warmup_duration = atoi(argv[++i]);
+
         } else if (!strcmp(argv[i], "-k")) {
             if (lastarg) goto invalid;
             config.keepalive = atoi(argv[++i]);
@@ -1756,6 +1827,28 @@ int parseOptions(int argc, char **argv) {
             }
             config.ct = VALKEY_CONN_RDMA;
 #endif
+        } else if (!strcmp(argv[i], "--fuzz")) {
+            config.fuzz_mode = 1;
+        } else if (!strcmp(argv[i], "--fuzz-loglevel")) {
+            if (lastarg) goto invalid;
+            config.fuzz_log_level = argv[++i];
+        } else if (!strcmp(argv[i], "--fuzz-mode")) {
+            if (lastarg) goto invalid;
+            int count = 0;
+            const char *modes_arg = argv[++i];
+            sds *modes = sdssplitlen(modes_arg, strlen(modes_arg), ",", 1, &count);
+            for (int j = 0; j < count; j++) {
+                if (!strcmp(modes[j], "malformed-commands"))
+                    config.fuzz_flags |= FUZZ_MODE_MALFORMED_COMMANDS;
+                else if (!strcmp(modes[j], "config-commands"))
+                    config.fuzz_flags |= FUZZ_MODE_CONFIG_COMMANDS;
+                else {
+                    fprintf(stderr, "Invalid fuzz mode: %s\n", modes[j]);
+                    sdsfreesplitres(modes, count);
+                    exit(1);
+                }
+            }
+            sdsfreesplitres(modes, count);
         } else if (!strcmp(argv[i], "--mptcp")) {
             config.mptcp = 1;
         } else if (!strcmp(argv[i], "--")) {
@@ -1788,13 +1881,15 @@ usage:
         " --cert <file>      Client certificate to authenticate with.\n"
         " --key <file>       Private key file to authenticate with.\n"
         " --tls-ciphers <list> Sets the list of preferred ciphers (TLSv1.2 and below)\n"
-        "                    in order of preference from highest to lowest separated by colon (\":\").\n"
-        "                    See the ciphers(1ssl) manpage for more information about the syntax of this string.\n"
+        "                    in order of preference from highest to lowest separated by\n"
+        "                    colon (\":\"). See the ciphers(1ssl) manpage for more\n"
+        "                    information about the syntax of this string.\n"
 #ifdef TLS1_3_VERSION
         " --tls-ciphersuites <list> Sets the list of preferred ciphersuites (TLSv1.3)\n"
-        "                    in order of preference from highest to lowest separated by colon (\":\").\n"
-        "                    See the ciphers(1ssl) manpage for more information about the syntax of this string,\n"
-        "                    and specifically for TLSv1.3 ciphersuites.\n"
+        "                    in order of preference from highest to lowest separated by\n"
+        "                    colon (\":\"). See the ciphers(1ssl) manpage for more\n"
+        "                    information about the syntax of this string, and\n"
+        "                    specifically for TLSv1.3 ciphersuites.\n"
 #endif
 #endif
         "";
@@ -1841,6 +1936,11 @@ usage:
         "                    Note: If --cluster is used then number of clients has to be\n"
         "                    the same or higher than the number of nodes.\n"
         " -n <requests>      Total number of requests (default 100000)\n"
+        " --duration <seconds>\n"
+        "                    Run benchmark for specified number of seconds\n"
+        "                    (mutually exclusive with -n)\n"
+        " --warmup <seconds> Run benchmark for specified warmup period before\n"
+        "                    recording data\n"
         " -d <size>          Data size of SET/GET value in bytes (default 3)\n"
         " --dbnum <db>       SELECT the specified db number (default 0)\n"
         " -3                 Start session in RESP3 protocol mode.\n"
@@ -1872,9 +1972,9 @@ usage:
         "                    use the same key.\n"
         " --sequential       Modifies the -r argument to replace the string __rand_int__\n"
         "                    with 12 digit numbers sequentially instead of randomly.\n"
-        "                    __rand_1st__ through __rand_9th__ are available with independent\n"
-        "                    counters. Used to create expected number of elements with multiple\n"
-        "                    replacements.\n"
+        "                    __rand_1st__ through __rand_9th__ are available with\n"
+        "                    independent counters. Used to create expected number of\n"
+        "                    elements with multiple replacements.\n"
         "                    example: ZADD myzset __rand_int__ element:__rand_1st__\n"
         " -P <numreq>        Pipeline <numreq> requests. That is, send multiple requests\n"
         "                    before waiting for the replies. Default 1 (no pipeline).\n"
@@ -1883,7 +1983,8 @@ usage:
         "                    the number of times the command sequence is sent in each\n"
         "                    pipeline.\n",
         " -q                 Quiet. Just show query/sec values\n"
-        " --precision        Number of decimal places to display in latency output (default 0)\n"
+        " --precision        Number of decimal places to display in latency output\n"
+        "                    (default 0)\n"
         " --csv              Output in CSV format\n"
         " -l                 Loop. Run the tests forever\n"
         " -t <tests>         Only run the comma separated list of tests. The test\n"
@@ -1892,8 +1993,10 @@ usage:
         "                    on the command line.\n"
         " -I                 Idle mode. Just open N idle connections and wait.\n"
         " -x                 Read last argument from STDIN.\n"
-        " --rps <requests>   Limit the total number of requests per second. Default 0 (no limit)\n"
-        " --seed <num>       Set the seed for random number generator. Default seed is based on time.\n"
+        " --rps <requests>   Limit the total number of requests per second.\n"
+        "                    Default 0 (no limit)\n"
+        " --seed <num>       Set the seed for random number generator.\n"
+        "                    Default seed is based on time.\n"
         " --num-functions <num>\n"
         "                    Sets the number of functions present in the Lua lib that is\n"
         "                    loaded when running the 'function_load' test. (default 10).\n"
@@ -1903,6 +2006,14 @@ usage:
         tls_usage,
         rdma_usage,
         " --mptcp            Enable an MPTCP connection.\n"
+        " --fuzz             Enable fuzzy mode to generate random commands. WARNING: Recommended for testing only, not for use with production data.\n"
+        " --fuzz-mode <modes> Set fuzzing modes (comma-separated): malformed-commands, config-commands.\n"
+        "                    malformed-commands: Generates also malformed commands.\n"
+        "                    config-commands: Allows CONFIG SET commands.\n"
+        "                    Default: valid commands only.\n"
+        " --fuzz-loglevel <level>\n"
+        "                    Set log level for fuzzer (none, error, info, debug).\n"
+        "                    Default is 'info'.\n"
         " --help             Output this help and exit.\n"
         " --version          Output version and exit.\n\n"
         "Examples:\n\n"
@@ -1928,18 +2039,35 @@ long long showThroughput(struct aeEventLoop *eventLoop, long long id, void *clie
     UNUSED(eventLoop);
     UNUSED(id);
     benchmarkThread *thread = (benchmarkThread *)clientData;
-    int liveclients = atomic_load_explicit(&config.liveclients, memory_order_relaxed);
     int requests_finished = atomic_load_explicit(&config.requests_finished, memory_order_relaxed);
     int previous_requests_finished = atomic_load_explicit(&config.previous_requests_finished, memory_order_relaxed);
     long long current_tick = mstime();
 
-    if (liveclients == 0 && requests_finished != config.requests) {
+    int liveclients = atomic_load_explicit(&config.liveclients, memory_order_relaxed);
+    if (liveclients == 0 && !isBenchmarkFinished(requests_finished)) {
         fprintf(stderr, "All clients disconnected... aborting.\n");
         exit(1);
     }
-    if (config.num_threads && requests_finished >= config.requests) {
+    int warmup_duration = atomic_load_explicit(&config.current_warmup_duration, memory_order_relaxed);
+    if (warmup_duration > 0) {
+        if ((current_tick - config.start) >= (warmup_duration * 1000LL)) {
+            /* exit the warmup period, clear all stats */
+            atomic_store_explicit(&config.current_warmup_duration, 0, memory_order_relaxed);
+
+            config.start = current_tick;
+            atomic_store_explicit(&config.requests_finished, 0, memory_order_relaxed);
+            atomic_store_explicit(&config.requests_issued, 0, memory_order_relaxed);
+            atomic_store_explicit(&config.previous_requests_finished, 0, memory_order_relaxed);
+            hdr_reset(config.latency_histogram);
+        }
+    } else if (isBenchmarkFinished(requests_finished)) {
         aeStop(eventLoop);
-        return AE_NOMORE;
+        /* In multi-threaded mode, return AE_NOMORE to delete the timer since
+         * the thread's event loop will be destroyed. In single-threaded mode,
+         * we must keep the timer alive for subsequent benchmark tests */
+        if (config.num_threads) {
+            return AE_NOMORE;
+        }
     }
     if (config.csv) return SHOW_THROUGHPUT_INTERVAL;
     /* only first thread output throughput */
@@ -1955,13 +2083,28 @@ long long showThroughput(struct aeEventLoop *eventLoop, long long id, void *clie
     const float rps = (float)requests_finished / dt;
     const float instantaneous_dt = (float)(current_tick - config.previous_tick) / 1000.0;
     const float instantaneous_rps = (float)(requests_finished - previous_requests_finished) / instantaneous_dt;
+
+    if (config.rps_histogram) {
+        hdr_record_value(config.rps_histogram, (int64_t)instantaneous_rps);
+    }
+
     config.previous_tick = current_tick;
     atomic_store_explicit(&config.previous_requests_finished, requests_finished, memory_order_relaxed);
+
     printf("%*s\r", config.last_printed_bytes, " "); /* ensure there is a clean line */
-    int printed_bytes =
-        printf("%s: rps=%.1f (overall: %.1f) avg_msec=%.3f (overall: %.3f)\r", config.title, instantaneous_rps, rps,
+    config.last_printed_bytes = 0;
+    if (warmup_duration > 0) {
+        config.last_printed_bytes += printf("Warming up ");
+    }
+    config.last_printed_bytes +=
+        printf("%s: rps=%.1f (overall: %.1f) avg_msec=%.3f (overall: %.3f)", config.title, instantaneous_rps, rps,
                hdr_mean(config.current_sec_latency_histogram) / 1000.0f, hdr_mean(config.latency_histogram) / 1000.0f);
-    config.last_printed_bytes = printed_bytes;
+    if (warmup_duration > 0 || config.duration > 0) {
+        config.last_printed_bytes += printf(" %.1f seconds\r", dt);
+    } else {
+        config.last_printed_bytes += printf(" %d requests\r", requests_finished);
+    }
+
     hdr_reset(config.current_sec_latency_histogram);
     fflush(stdout);
     return SHOW_THROUGHPUT_INTERVAL;
@@ -2033,7 +2176,10 @@ int main(int argc, char **argv) {
     memset(&config.sslconfig, 0, sizeof(config.sslconfig));
     config.ct = VALKEY_CONN_TCP;
     config.numclients = 50;
-    config.requests = 100000;
+    config.requests = -1;
+    config.duration = -1;
+    config.warmup_duration = -1;
+    config.current_warmup_duration = -1;
     config.liveclients = 0;
     config.el = aeCreateEventLoop(1024 * 10);
     aeCreateTimeEvent(config.el, 1, showThroughput, NULL, NULL);
@@ -2059,6 +2205,9 @@ int main(int argc, char **argv) {
     config.num_threads = 0;
     config.threads = NULL;
     config.cluster_mode = 0;
+    config.fuzz_mode = 0;
+    config.fuzz_log_level = "info";
+    config.fuzz_flags = 0;
     config.rps = 0;
     config.read_from_replica = FROM_PRIMARY_ONLY;
     config.cluster_node_count = 0;
@@ -2077,6 +2226,9 @@ int main(int argc, char **argv) {
     argc -= i;
     argv += i;
 
+    /* Set default for requests if not specified */
+    if (config.requests < 0) config.requests = 100000;
+
     tag = "";
 
 #ifdef USE_OPENSSL
@@ -2090,7 +2242,7 @@ int main(int argc, char **argv) {
         exit(1);
     }
 
-    if (config.cluster_mode) {
+    if (config.cluster_mode && !config.fuzz_mode) {
         // We only include the slot placeholder {tag} if cluster mode is enabled
         tag = ":{tag}";
 
@@ -2182,6 +2334,20 @@ int main(int argc, char **argv) {
         printf("\"test\",\"rps\",\"avg_latency_ms\",\"min_latency_ms\",\"p50_latency_ms\",\"p95_latency_ms\",\"p99_"
                "latency_ms\",\"max_latency_ms\"\n");
     }
+
+    if (config.fuzz_mode) {
+        return runFuzzerClients(
+            config.conn_info.hostip,
+            config.conn_info.hostport,
+            config.requests,
+            config.numclients,
+            config.cluster_mode,
+            config.keyspacelen,
+            config.tls ? &config.sslconfig : NULL,
+            config.fuzz_log_level,
+            config.fuzz_flags);
+    }
+
     /* Run benchmark with command in the remainder of the arguments. */
     if (argc) {
         sds title = sdsnew(argv[0]);

@@ -1005,6 +1005,131 @@ int startAppendOnly(void) {
     return C_OK;
 }
 
+/* Try to restart AOF after replica full sync by adopting `server.rdb_filename`
+ * as the new BASE file (RDB preamble mode), avoiding a redundant AOFRW.
+ * Returns C_OK on success; on C_ERR caller should fallback to
+ * restartAOFAfterSYNC(). */
+int restartAOFWithSyncRdb(void) {
+    serverAssert(server.aof_state == AOF_OFF);
+
+    int ret = C_ERR;
+    int newfd = -1, rdbfile_renamed = 0;
+    sds new_base_filename = NULL;
+    sds new_base_filepath = NULL;
+    sds new_incr_filename = NULL;
+    sds new_incr_filepath = NULL;
+    aofManifest *temp_am = NULL;
+
+    if (dirCreateIfMissing(server.aof_dirname) == -1) {
+        serverLog(LL_WARNING, "Can't open or create append-only dir %s: %s", server.aof_dirname, strerror(errno));
+        goto cleanup;
+    }
+
+    serverAssert(server.aof_manifest != NULL);
+    temp_am = aofManifestDup(server.aof_manifest);
+
+    new_base_filename = getNewBaseFileNameAndMarkPreAsHistory(temp_am, server.aof_use_rdb_preamble);
+    serverAssert(new_base_filename != NULL);
+    new_base_filepath = makePath(server.aof_dirname, new_base_filename);
+
+    if (rename(server.rdb_filename, new_base_filepath) == -1) {
+        serverLog(LL_WARNING, "Error trying to rename the RDB file %s into %s: %s", server.rdb_filename,
+                  new_base_filepath, strerror(errno));
+        goto cleanup;
+    }
+    rdbfile_renamed = 1;
+
+    /* Mark existing incr AOF files as history BEFORE creating the new one,
+     * so the new incr entry is not inadvertently moved to history. */
+    markRewrittenIncrAofAsHistory(temp_am);
+
+    new_incr_filename = getNewIncrAofName(temp_am);
+    new_incr_filepath = makePath(server.aof_dirname, new_incr_filename);
+    newfd = open(new_incr_filepath, O_WRONLY | O_TRUNC | O_CREAT, 0666);
+    if (newfd == -1) {
+        serverLog(LL_WARNING, "Can't open the append-only file %s: %s", new_incr_filename, strerror(errno));
+        goto cleanup;
+    }
+
+    if (persistAofManifest(temp_am) == C_ERR) {
+        goto cleanup;
+    }
+
+    aofManifestFreeAndUpdate(temp_am);
+    temp_am = NULL;
+
+    aofDelHistoryFiles();
+
+    sdsfree(new_base_filepath);
+    new_base_filepath = NULL;
+    sdsfree(new_incr_filepath);
+    new_incr_filepath = NULL;
+
+    /* Drain pending fsync jobs from the previous AOF before publishing the new
+     * fsynced offset to avoid races on fsynced_reploff_pending. */
+    bioDrainWorker(BIO_AOF_FSYNC);
+    atomic_store_explicit(&server.fsynced_reploff_pending, server.primary_repl_offset, memory_order_relaxed);
+    server.fsynced_reploff =
+        atomic_load_explicit(&server.fsynced_reploff_pending, memory_order_relaxed);
+
+    int aof_bio_fsync_status = atomic_load_explicit(&server.aof_bio_fsync_status, memory_order_relaxed);
+    if (aof_bio_fsync_status == C_ERR) {
+        serverLog(LL_WARNING, "AOF reopen, just ignore the AOF fsync error in bio job");
+        atomic_store_explicit(&server.aof_bio_fsync_status, C_OK, memory_order_relaxed);
+    }
+
+    if (server.aof_last_write_status == C_ERR) {
+        serverLog(LL_WARNING, "AOF reopen, just ignore the last error.");
+        server.aof_last_write_status = C_OK;
+    }
+
+    server.aof_lastbgrewrite_status = C_OK;
+    server.stat_aofrw_consecutive_failures = 0;
+
+    server.aof_last_fsync = server.mstime;
+    server.aof_last_incr_size = 0;
+    server.aof_last_incr_fsync_offset = 0;
+    server.aof_rewrite_base_size = getAppendOnlyFileSize(new_base_filename, NULL);
+    server.aof_current_size = server.aof_rewrite_base_size;
+
+    server.aof_fd = newfd;
+    server.aof_state = AOF_ON;
+
+    serverLog(LL_NOTICE, "Reused RDB file from primary sync as AOF base file: %s", new_base_filename);
+    ret = C_OK;
+    return ret;
+
+cleanup:
+    if (rdbfile_renamed) {
+        if (rename(new_base_filepath, server.rdb_filename) == -1) {
+            serverLog(LL_WARNING,
+                      "Failed to rename AOF base back to RDB file %s: %s. "
+                      "Orphan file may remain at %s",
+                      server.rdb_filename, strerror(errno), new_base_filepath);
+        } else {
+            rdbfile_renamed = 0;
+        }
+    }
+    if (server.rdb_del_sync_files && allPersistenceDisabled()) {
+        serverLog(LL_NOTICE, "Removing the RDB file obtained from "
+                             "the primary. This replica has persistence "
+                             "disabled");
+        if (rdbfile_renamed) {
+            bg_unlink(new_base_filepath);
+        } else {
+            bg_unlink(server.rdb_filename);
+        }
+    }
+    if (newfd != -1) close(newfd);
+    if (new_incr_filepath) {
+        bg_unlink(new_incr_filepath);
+        sdsfree(new_incr_filepath);
+    }
+    if (temp_am) aofManifestFree(temp_am);
+    if (new_base_filepath) sdsfree(new_base_filepath);
+    return ret;
+}
+
 /* This is a wrapper to the write syscall in order to retry on short writes
  * or if the syscall gets interrupted. It could look strange that we retry
  * on short writes given that we are writing to a block device: normally if
@@ -1280,11 +1405,11 @@ sds catAppendOnlyGenericCommand(sds dst, int argc, robj **argv) {
     for (j = 0; j < argc; j++) {
         o = getDecodedObject(argv[j]);
         buf[0] = '$';
-        len = 1 + ll2string(buf + 1, sizeof(buf) - 1, sdslen(o->ptr));
+        len = 1 + ll2string(buf + 1, sizeof(buf) - 1, sdslen(objectGetVal(o)));
         buf[len++] = '\r';
         buf[len++] = '\n';
         dst = sdscatlen(dst, buf, len);
-        dst = sdscatlen(dst, o->ptr, sdslen(o->ptr));
+        dst = sdscatlen(dst, objectGetVal(o), sdslen(objectGetVal(o)));
         dst = sdscatlen(dst, "\r\n", 2);
         decrRefCount(o);
     }
@@ -1452,7 +1577,7 @@ int loadSingleAppendOnlyFile(char *filename) {
 
         if (fseek(fp, 0, SEEK_SET) == -1) goto readerr;
         rioInitWithFile(&rdb, fp);
-        if (rdbLoadRio(&rdb, RDBFLAGS_AOF_PREAMBLE, NULL) != C_OK) {
+        if (rdbLoadRio(&rdb, RDBFLAGS_AOF_PREAMBLE, NULL) != RDB_OK) {
             if (old_style)
                 serverLog(LL_WARNING, "Error reading the RDB preamble of the AOF file %s, AOF loading aborted",
                           filename);
@@ -1778,9 +1903,9 @@ int rioWriteBulkObject(rio *r, robj *obj) {
     /* Avoid using getDecodedObject to help copy-on-write (we are often
      * in a child process when this function is called). */
     if (obj->encoding == OBJ_ENCODING_INT) {
-        return rioWriteBulkLongLong(r, (long)obj->ptr);
+        return rioWriteBulkLongLong(r, (long)objectGetVal(obj));
     } else if (sdsEncodedObject(obj)) {
-        return rioWriteBulkString(r, obj->ptr, sdslen(obj->ptr));
+        return rioWriteBulkString(r, objectGetVal(obj), sdslen(objectGetVal(obj)));
     } else {
         serverPanic("Unknown string encoding");
     }
@@ -1860,7 +1985,7 @@ int rewriteSortedSetObject(rio *r, robj *key, robj *o) {
     long long count = 0, items = zsetLength(o);
 
     if (o->encoding == OBJ_ENCODING_LISTPACK) {
-        unsigned char *zl = o->ptr;
+        unsigned char *zl = objectGetVal(o);
         unsigned char *eptr, *sptr;
         unsigned char *vstr;
         unsigned int vlen;
@@ -1895,7 +2020,7 @@ int rewriteSortedSetObject(rio *r, robj *key, robj *o) {
             items--;
         }
     } else if (o->encoding == OBJ_ENCODING_SKIPLIST) {
-        zset *zs = o->ptr;
+        zset *zs = objectGetVal(o);
         hashtableIterator iter;
         hashtableInitIterator(&iter, zs->ht, 0);
         void *next;
@@ -1906,19 +2031,19 @@ int rewriteSortedSetObject(rio *r, robj *key, robj *o) {
 
                 if (!rioWriteBulkCount(r, '*', 2 + cmd_items * 2) || !rioWriteBulkString(r, "ZADD", 4) ||
                     !rioWriteBulkObject(r, key)) {
-                    hashtableResetIterator(&iter);
+                    hashtableCleanupIterator(&iter);
                     return 0;
                 }
             }
-            sds ele = node->ele;
+            sds ele = zslGetNodeElement(node);
             if (!rioWriteBulkDouble(r, node->score) || !rioWriteBulkString(r, ele, sdslen(ele))) {
-                hashtableResetIterator(&iter);
+                hashtableCleanupIterator(&iter);
                 return 0;
             }
             if (++count == AOF_REWRITE_ITEMS_PER_CMD) count = 0;
             items--;
         }
-        hashtableResetIterator(&iter);
+        hashtableCleanupIterator(&iter);
     } else {
         serverPanic("Unknown sorted zset encoding");
     }
@@ -1943,8 +2068,9 @@ static int rioWriteHashIteratorCursor(rio *r, hashTypeIterator *hi, int what) {
         else
             return rioWriteBulkLongLong(r, vll);
     } else if (hi->encoding == OBJ_ENCODING_HASHTABLE) {
-        sds value = hashTypeCurrentFromHashTable(hi, what);
-        return rioWriteBulkString(r, value, sdslen(value));
+        size_t len;
+        char *value = hashTypeCurrentFromHashTable(hi, what, &len);
+        return rioWriteBulkString(r, value, len);
     }
 
     serverPanic("Unknown hash encoding");
@@ -1962,7 +2088,8 @@ int rewriteHashObject(rio *r, robj *key, robj *o) {
         while (hashTypeNext(&hi) != C_ERR) {
             long long expiry = entryGetExpiry(hi.next);
             sds field = entryGetField(hi.next);
-            sds value = entryGetValue(hi.next);
+            size_t value_len;
+            char *value = entryGetValue(hi.next, &value_len);
             if (rioWriteBulkCount(r, '*', 8) == 0) return 0;
             if (rioWriteBulkString(r, "HSETEX", 6) == 0) return 0;
             if (rioWriteBulkObject(r, key) == 0) return 0;
@@ -1971,7 +2098,7 @@ int rewriteHashObject(rio *r, robj *key, robj *o) {
             if (rioWriteBulkString(r, "FIELDS", 6) == 0) return 0;
             if (rioWriteBulkLongLong(r, 1) == 0) return 0;
             if (rioWriteBulkString(r, field, sdslen(field)) == 0) return 0;
-            if (rioWriteBulkString(r, value, sdslen(value)) == 0) return 0;
+            if (rioWriteBulkString(r, value, value_len) == 0) return 0;
             volatile_items++;
         }
         hashTypeResetIterator(&hi);
@@ -2067,7 +2194,7 @@ int rioWriteStreamEmptyConsumer(rio *r,
 /* Emit the commands needed to rebuild a stream object.
  * The function returns 0 on error, 1 on success. */
 int rewriteStreamObject(rio *r, robj *key, robj *o) {
-    stream *s = o->ptr;
+    stream *s = objectGetVal(o);
     streamIterator si;
     streamIteratorStart(&si, s, NULL, NULL, 0);
     streamID id;
@@ -2188,7 +2315,7 @@ int rewriteStreamObject(rio *r, robj *key, robj *o) {
  * The function returns 0 on error, 1 on success. */
 int rewriteModuleObject(rio *r, robj *key, robj *o, int dbid) {
     ValkeyModuleIO io;
-    moduleValue *mv = o->ptr;
+    moduleValue *mv = objectGetVal(o);
     moduleType *mt = mv->type;
     moduleInitIOContext(&io, mt, r, key, dbid);
     mt->aof_rewrite(&io, key, mv->value);
@@ -2401,7 +2528,7 @@ int rewriteAppendOnlyFile(char *filename) {
 
     if (server.aof_use_rdb_preamble) {
         int error;
-        if (rdbSaveRio(REPLICA_REQ_NONE, &aof, &error, RDBFLAGS_AOF_PREAMBLE, NULL) == C_ERR) {
+        if (rdbSaveRio(REPLICA_REQ_NONE, RDB_VERSION, &aof, &error, RDBFLAGS_AOF_PREAMBLE, NULL) == C_ERR) {
             errno = error;
             goto werr;
         }

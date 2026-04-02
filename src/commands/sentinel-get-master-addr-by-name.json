@@ -12,7 +12,6 @@
         "doc_flags": [
             "DEPRECATED"
         ],
-
         "command_flags": [
             "ADMIN",
             "SENTINEL",
@@ -39,6 +38,11 @@
                 "name": "primary-name",
                 "type": "string"
             }
+        ],
+        "acl_categories": [
+            "ADMIN",
+            "DANGEROUS",
+            "SLOW"
         ]
     }
 }

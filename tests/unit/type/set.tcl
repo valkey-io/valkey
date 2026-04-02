@@ -1178,7 +1178,9 @@ catch {
 }
 if {[lindex [r config get proto-max-bulk-len] 1] == 10000000000} {
 
-    set str_length 4400000000 ;#~4.4GB
+    # Reduced from 4.4GB to fit in 16GB CI runners with ASAN overhead
+    # Must exceed 2^32 (4294967296) to test >4GiB (32-bit boundary) behavior
+    set str_length 4300000000 ;#~4GiB, >2^32
 
     test {SADD, SCARD, SISMEMBER - large data} {
         r flushdb
@@ -1200,7 +1202,7 @@ if {[lindex [r config get proto-max-bulk-len] 1] == 10000000000} {
         r write "*3\r\n\$4\r\nSREM\r\n\$5\r\nmyset\r\n"
         assert_equal 1 [write_big_bulk $str_length "bbb"]
         assert_equal [read_big_bulk {r spop myset} yes "aaa"] $str_length
-    } {} {large-memory}
+    }
 
     # restore defaults
     r config set proto-max-bulk-len 536870912

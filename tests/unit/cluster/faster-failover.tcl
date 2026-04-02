@@ -31,7 +31,7 @@ proc my_slot_allocation {primaries replicas} {
 # that there will not have failover timeout.
 #
 # Needs to run in the body of
-# start_cluster 5 7 {tags {external:skip cluster} overrides {cluster-ping-interval 1000 cluster-node-timeout 5000}} {
+# start_cluster 5 7 {tags {external:skip cluster} overrides {cluster-ping-interval 1000 cluster-node-timeout <timeout>}} {
 proc test_best_ranked_replica {} {
     test "The best replica can initiate an election immediately in an automatic failover" {
         # We calculate their rankings so that we can make rank judgments later.
@@ -144,7 +144,16 @@ proc test_best_ranked_replica {} {
 
 # This change and test is quite important, so we want to run it a few more times.
 for {set i 0} {$i < 5} {incr i} {
-    start_cluster 5 7 {tags {external:skip cluster} overrides {cluster-ping-interval 1000 cluster-node-timeout 5000}} {
+    # Use a larger cluster-node-timeout under Valgrind. The "best ranked replica"
+    # optimization (myselfIsBestRankedReplica) requires that sibling replicas have
+    # exchanged gossip confirming they both marked the primary as FAIL
+    # (clusterAllReplicasThinkPrimaryIsFail). The election delay that creates the
+    # window for this gossip round-trip is derived from the node timeout:
+    # delay = min(timeout/30, 500). With timeout 5000 the delay is only 166-332ms,
+    # which under Valgrind can expire before the gossip completes, causing the
+    # optimization to never trigger. A timeout of 15000 gives a 500-1000ms window.
+    set node_timeout [expr {$::valgrind ? 15000 : 5000}]
+    start_cluster 5 7 [list tags {external:skip cluster} overrides [list cluster-ping-interval 1000 cluster-node-timeout $node_timeout]] {
         test_best_ranked_replica
     } my_slot_allocation cluster_allocate_replicas ;# start_cluster
 }

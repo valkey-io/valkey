@@ -190,8 +190,6 @@ static struct termios orig_termios; /* To restore terminal at exit.*/
 /* Dict Helpers */
 static uint64_t dictSdsHash(const void *key);
 static int dictSdsKeyCompare(const void *key1, const void *key2);
-static void dictSdsDestructor(void *val);
-static void dictListDestructor(void *val);
 
 /* Cluster Manager Command Info */
 typedef struct clusterManagerCommand {
@@ -379,7 +377,7 @@ static sds getDotfilePath(char *envoverride, char *envoverride_old, char *dotfil
 }
 
 static uint64_t dictSdsHash(const void *key) {
-    return dictGenHashFunction((unsigned char *)key, sdslen((char *)key));
+    return dictGenHashFunction(key, sdslen(key));
 }
 
 static int dictSdsKeyCompare(const void *key1, const void *key2) {
@@ -390,12 +388,23 @@ static int dictSdsKeyCompare(const void *key1, const void *key2) {
     return memcmp(key1, key2, l1) == 0;
 }
 
-static void dictSdsDestructor(void *val) {
-    sdsfree(val);
+static void dictEntryDestructorSdsKeyNoVal(void *entry) {
+    dictEntry *de = entry;
+    sdsfree(dictGetKey(de));
+    zfree(de);
 }
 
-void dictListDestructor(void *val) {
-    listRelease((list *)val);
+static void dictEntryDestructorSdsVal(void *entry) {
+    dictEntry *de = entry;
+    sdsfree(dictGetVal(de));
+    zfree(de);
+}
+
+static void dictEntryDestructorSdsKeyListVal(void *entry) {
+    dictEntry *de = entry;
+    sdsfree(dictGetKey(de));
+    listRelease(dictGetVal(de));
+    zfree(de);
 }
 
 /*------------------------------------------------------------------------------
@@ -890,12 +899,10 @@ static void cliLegacyInitHelp(dict *groups) {
 static void cliInitHelp(void) {
     /* Dict type for a set of strings, used to collect names of command groups. */
     dictType groupsdt = {
-        dictSdsHash,       /* hash function */
-        NULL,              /* key dup */
-        dictSdsKeyCompare, /* key compare */
-        dictSdsDestructor, /* key destructor */
-        NULL,              /* val destructor */
-        NULL               /* allow to expand */
+        .entryGetKey = dictEntryGetKey,
+        .hashFunction = dictSdsHash,
+        .keyCompare = dictSdsKeyCompare,
+        .entryDestructor = dictEntryDestructorSdsKeyNoVal,
     };
     valkeyReply *commandTable;
     dict *groups;
@@ -3661,21 +3668,17 @@ typedef struct clusterManagerLink {
 } clusterManagerLink;
 
 static dictType clusterManagerDictType = {
-    dictSdsHash,       /* hash function */
-    NULL,              /* key dup */
-    dictSdsKeyCompare, /* key compare */
-    NULL,              /* key destructor */
-    dictSdsDestructor, /* val destructor */
-    NULL               /* allow to expand */
+    .entryGetKey = dictEntryGetKey,
+    .hashFunction = dictSdsHash,
+    .keyCompare = dictSdsKeyCompare,
+    .entryDestructor = dictEntryDestructorSdsVal,
 };
 
 static dictType clusterManagerLinkDictType = {
-    dictSdsHash,        /* hash function */
-    NULL,               /* key dup */
-    dictSdsKeyCompare,  /* key compare */
-    dictSdsDestructor,  /* key destructor */
-    dictListDestructor, /* val destructor */
-    NULL                /* allow to expand */
+    .entryGetKey = dictEntryGetKey,
+    .hashFunction = dictSdsHash,
+    .keyCompare = dictSdsKeyCompare,
+    .entryDestructor = dictEntryDestructorSdsKeyListVal,
 };
 
 typedef int clusterManagerCommandProc(int argc, char **argv);
@@ -9217,13 +9220,17 @@ void type_free(void *val) {
     zfree(info);
 }
 
+static void dictEntryDestructorTypeinfoVal(void *entry) {
+    dictEntry *de = entry;
+    type_free(dictGetVal(de));
+    zfree(de);
+}
+
 static dictType typeinfoDictType = {
-    dictSdsHash,       /* hash function */
-    NULL,              /* key dup */
-    dictSdsKeyCompare, /* key compare */
-    NULL,              /* key destructor (owned by the value)*/
-    type_free,         /* val destructor */
-    NULL               /* allow to expand */
+    .entryGetKey = dictEntryGetKey,
+    .hashFunction = dictSdsHash,
+    .keyCompare = dictSdsKeyCompare,
+    .entryDestructor = dictEntryDestructorTypeinfoVal,
 };
 
 static void getKeyTypes(dict *types_dict, valkeyReply *keys, typeinfo **types) {

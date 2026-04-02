@@ -203,11 +203,13 @@ proc test_nonempty_replica {type} {
         # Make sure the key exists and is consistent.
         R 7 readonly
         wait_for_condition 1000 50 {
-            [R 4 get key_991803] == 1024 &&
-            [R 7 get key_991803] == 1024
+            [catch {expr {
+                [R 4 get key_991803] == 1024 &&
+                [R 7 get key_991803] == 1024
+            }} result] == 0 && $result
         } else {
-            puts "R 4: [R 4 get key_991803]"
-            puts "R 7: [R 7 get key_991803]"
+            catch {puts "R 4: [R 4 get key_991803]"}
+            catch {puts "R 7: [R 7 get key_991803]"}
             fail "Key not consistent"
         }
 

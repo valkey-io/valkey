@@ -360,6 +360,7 @@ typedef struct {
     hashtable *hashtable;
     bucket *bucket;
     const void *key;
+    size_t key_len;
     uint64_t hash;
 } incrementalFind;
 
@@ -402,25 +403,26 @@ static inline void freeEntry(hashtable *ht, void *entry) {
     if (ht->type->entryDestructor) ht->type->entryDestructor(entry);
 }
 
-static inline int compareKeys(hashtable *ht, const void *key1, const void *key2) {
+static inline int compareKeys(hashtable *ht, const void *lookup_key, size_t lookup_key_len, const void *entry_key, size_t entry_key_len) {
     if (ht->type->keyCompare != NULL) {
-        return ht->type->keyCompare(key1, key2);
+        return ht->type->keyCompare(lookup_key, lookup_key_len, entry_key, entry_key_len);
     } else {
-        return key1 == key2;
+        return lookup_key != entry_key;
     }
 }
 
-static inline const void *entryGetKey(hashtable *ht, const void *entry) {
+static inline const void *entryGetKey(hashtable *ht, const void *entry, size_t *len) {
     if (ht->type->entryGetKey != NULL) {
-        return ht->type->entryGetKey(entry);
+        return ht->type->entryGetKey(entry, len);
     } else {
+        *len = 0;
         return entry;
     }
 }
 
-static inline uint64_t hashKey(hashtable *ht, const void *key) {
+static inline uint64_t hashKey(hashtable *ht, const void *key, size_t key_len) {
     if (ht->type->hashFunction != NULL) {
-        return ht->type->hashFunction(key);
+        return ht->type->hashFunction(key, key_len);
     } else {
         return hashtableGenHashFunction((const char *)&key, sizeof(key));
     }
@@ -615,6 +617,7 @@ static bucket *fetchEntriesForExpand(bucket *b, void *buf[], int *size, int max_
 static void rehashStepExpand(hashtable *ht) {
     void *entry_buf[FETCH_ENTRY_BUFFER_SIZE_WHEN_EXPAND];
     const void *key_buf[FETCH_ENTRY_BUFFER_SIZE_WHEN_EXPAND];
+    size_t key_len_buf[FETCH_ENTRY_BUFFER_SIZE_WHEN_EXPAND];
     size_t idx = ht->rehash_idx;
     bucket *b = ht->tables[0] + idx;
     int size = 0;
@@ -624,11 +627,11 @@ static void rehashStepExpand(hashtable *ht) {
         /* Key optimization: no loop-carried dependency enables concurrent memory access,
          * reducing CPU stall cycles. */
         for (int i = 0; i < size; i++) {
-            key_buf[i] = entryGetKey(ht, entry_buf[i]);
+            key_buf[i] = entryGetKey(ht, entry_buf[i], &key_len_buf[i]);
         }
 
         for (int i = 0; i < size; i++) {
-            uint64_t hash = hashKey(ht, key_buf[i]);
+            uint64_t hash = hashKey(ht, key_buf[i], key_len_buf[i]);
             rehashEntry(ht, entry_buf[i], hash, highBits(hash));
         }
     }
@@ -797,11 +800,12 @@ static bool expand(hashtable *ht, size_t size, int *malloc_failed) {
  * entry at that position matches the provided key. If a match is found, it
  * updates the position and table index pointers and returns 1. Otherwise,
  * it returns 0. */
-static inline int checkCandidateInBucket(hashtable *ht, bucket *b, int pos, const void *key, int table, int *pos_in_bucket, int *table_index) {
+static inline int checkCandidateInBucket(hashtable *ht, bucket *b, int pos, const void *key, size_t key_len, int table, int *pos_in_bucket, int *table_index) {
     /* It's a candidate. */
     void *entry = b->entries[pos];
-    const void *elem_key = entryGetKey(ht, entry);
-    if (compareKeys(ht, key, elem_key)) {
+    size_t entry_key_len;
+    const void *elem_key = entryGetKey(ht, entry, &entry_key_len);
+    if (compareKeys(ht, key, key_len, elem_key, entry_key_len) == 0) {
         /* It's a match. */
         assert(pos_in_bucket != NULL);
         if (!validateElementIfNeeded(ht, entry)) {
@@ -816,7 +820,7 @@ static inline int checkCandidateInBucket(hashtable *ht, bucket *b, int pos, cons
 
 #if HAVE_X86_SIMD
 ATTRIBUTE_TARGET_SSE2
-static int findKeyInBucketSSE2(hashtable *ht, bucket *b, uint8_t h2, const void *key, int table, int *pos_in_bucket, int *table_index) {
+static int findKeyInBucketSSE2(hashtable *ht, bucket *b, uint8_t h2, const void *key, size_t key_len, int table, int *pos_in_bucket, int *table_index) {
     /* Get the bucket's presence mask - indicates which positions are filled. */
     BUCKET_BITS_TYPE presence_mask = b->presence & ((1 << ENTRIES_PER_BUCKET) - 1);
     __m128i hash_vector = _mm_loadu_si128((__m128i *)b->hashes);
@@ -831,7 +835,7 @@ static int findKeyInBucketSSE2(hashtable *ht, bucket *b, uint8_t h2, const void 
     newmask &= presence_mask;
     while (newmask > 0) {
         int pos = __builtin_ctz(newmask);
-        if (checkCandidateInBucket(ht, b, pos, key, table, pos_in_bucket, table_index)) return 1;
+        if (checkCandidateInBucket(ht, b, pos, key, key_len, table, pos_in_bucket, table_index)) return 1;
         /* Clear the processed bit and continue with next match. */
         newmask &= ~(1 << pos);
     }
@@ -851,7 +855,7 @@ static inline int popMatchBitmask(uint64_t *mask) {
     return pos;
 }
 
-static int findKeyInBucketNeon(hashtable *ht, bucket *b, uint8_t h2, const void *key, int table, int *pos_in_bucket, int *table_index) {
+static int findKeyInBucketNeon(hashtable *ht, bucket *b, uint8_t h2, const void *key, size_t key_len, int table, int *pos_in_bucket, int *table_index) {
     const uint8x8_t hash_vector = vld1_u8(b->hashes);             /* simple load */
     const uint8x8_t h2_vector = vdup_n_u8(h2);                    /* duplicated into every byte */
     const uint8x8_t equal_mask = vceq_u8(hash_vector, h2_vector); /* compare: 8 bits per item, 0xFF or 0x00 */
@@ -864,7 +868,7 @@ static int findKeyInBucketNeon(hashtable *ht, bucket *b, uint8_t h2, const void 
     while (matches) {
         int pos = popMatchBitmask(&matches);
         if ((b->presence & (1 << pos)) &&
-            checkCandidateInBucket(ht, b, pos, key, table, pos_in_bucket, table_index))
+            checkCandidateInBucket(ht, b, pos, key, key_len, table, pos_in_bucket, table_index))
             return 1;
     }
     return 0; /* No match */
@@ -877,7 +881,7 @@ static int findKeyInBucketNeon(hashtable *ht, bucket *b, uint8_t h2, const void 
  *
  * If 'table_index' is provided, it is set to the index of the table (0 or 1)
  * the returned bucket belongs to. */
-static bucket *findBucket(hashtable *ht, uint64_t hash, const void *key, int *pos_in_bucket, int *table_index) {
+static bucket *findBucket(hashtable *ht, uint64_t hash, const void *key, size_t key_len, int *pos_in_bucket, int *table_index) {
     if (hashtableSize(ht) == 0) return 0;
     uint8_t h2 = highBits(hash);
     int table;
@@ -897,14 +901,14 @@ static bucket *findBucket(hashtable *ht, uint64_t hash, const void *key, int *po
         do {
 #if HAVE_X86_SIMD
             /* All x86-64 CPUs have SSE2. */
-            if (findKeyInBucketSSE2(ht, b, h2, key, table, pos_in_bucket, table_index)) return b;
+            if (findKeyInBucketSSE2(ht, b, h2, key, key_len, table, pos_in_bucket, table_index)) return b;
 #elif HAVE_ARM_NEON && ENTRIES_PER_BUCKET <= 8
-            if (findKeyInBucketNeon(ht, b, h2, key, table, pos_in_bucket, table_index)) return b;
+            if (findKeyInBucketNeon(ht, b, h2, key, key_len, table, pos_in_bucket, table_index)) return b;
 #else
             /* Find candidate entries with presence flag set and matching h2 hash. */
             for (int pos = 0; pos < numBucketPositions(b); pos++) {
                 if (isPositionFilled(b, pos) && b->hashes[pos] == h2 &&
-                    checkCandidateInBucket(ht, b, pos, key, table, pos_in_bucket, table_index)) return b;
+                    checkCandidateInBucket(ht, b, pos, key, key_len, table, pos_in_bucket, table_index)) return b;
             }
 #endif
             b = getChildBucket(b);
@@ -1574,11 +1578,11 @@ void dismissHashtable(hashtable *ht) {
 
 /* Returns true if an entry was found matching the key. Also points *found to it,
  * if found is provided. Returns false if no matching entry was found. */
-bool hashtableFind(hashtable *ht, const void *key, void **found) {
+bool hashtableFind(hashtable *ht, const void *key, size_t key_len, void **found) {
     if (hashtableSize(ht) == 0) return false;
-    uint64_t hash = hashKey(ht, key);
+    uint64_t hash = hashKey(ht, key, key_len);
     int pos_in_bucket = 0;
-    bucket *b = findBucket(ht, hash, key, &pos_in_bucket, NULL);
+    bucket *b = findBucket(ht, hash, key, key_len, &pos_in_bucket, NULL);
     if (b) {
         if (found) *found = b->entries[pos_in_bucket];
         return true;
@@ -1591,11 +1595,11 @@ bool hashtableFind(hashtable *ht, const void *key, void **found) {
  * pointer can be used to replace the entry with an equivalent entry (same
  * key, same hash value), but note that the pointer may be invalidated by future
  * accesses to the hash table due to incermental rehashing, so use with care. */
-void **hashtableFindRef(hashtable *ht, const void *key) {
+void **hashtableFindRef(hashtable *ht, const void *key, size_t key_len) {
     if (hashtableSize(ht) == 0) return NULL;
-    uint64_t hash = hashKey(ht, key);
+    uint64_t hash = hashKey(ht, key, key_len);
     int pos_in_bucket = 0;
-    bucket *b = findBucket(ht, hash, key, &pos_in_bucket, NULL);
+    bucket *b = findBucket(ht, hash, key, key_len, &pos_in_bucket, NULL);
     return b ? &b->entries[pos_in_bucket] : NULL;
 }
 
@@ -1609,10 +1613,11 @@ bool hashtableAdd(hashtable *ht, void *entry) {
  * entry with the same key and, if an 'existing' pointer is provided, it is
  * pointed to the existing entry. */
 bool hashtableAddOrFind(hashtable *ht, void *entry, void **existing) {
-    const void *key = entryGetKey(ht, entry);
-    uint64_t hash = hashKey(ht, key);
+    size_t key_len;
+    const void *key = entryGetKey(ht, entry, &key_len);
+    uint64_t hash = hashKey(ht, key, key_len);
     int pos_in_bucket = 0;
-    bucket *b = findBucket(ht, hash, key, &pos_in_bucket, NULL);
+    bucket *b = findBucket(ht, hash, key, key_len, &pos_in_bucket, NULL);
     if (b != NULL) {
         if (existing) *existing = b->entries[pos_in_bucket];
         return false;
@@ -1650,11 +1655,11 @@ bool hashtableAddOrFind(hashtable *ht, void *entry, void **existing) {
  *         doSomethingWithExistingEntry(existing);
  *     }
  */
-bool hashtableFindPositionForInsert(hashtable *ht, void *key, hashtablePosition *pos, void **existing) {
+bool hashtableFindPositionForInsert(hashtable *ht, void *key, size_t key_len, hashtablePosition *pos, void **existing) {
     position *p = positionFromOpaque(pos);
-    uint64_t hash = hashKey(ht, key);
+    uint64_t hash = hashKey(ht, key, key_len);
     int pos_in_bucket, table_index;
-    bucket *b = findBucket(ht, hash, key, &pos_in_bucket, NULL);
+    bucket *b = findBucket(ht, hash, key, key_len, &pos_in_bucket, NULL);
     if (b != NULL) {
         if (existing) *existing = b->entries[pos_in_bucket];
         return false;
@@ -1696,12 +1701,12 @@ void hashtableInsertAtPosition(hashtable *ht, void *entry, hashtablePosition *po
 /* Removes the entry with the matching key and returns it. The entry
  * destructor is not called. Returns true and points 'popped' to the entry if a
  * matching entry was found. Returns false if no matching entry was found. */
-bool hashtablePop(hashtable *ht, const void *key, void **popped) {
+bool hashtablePop(hashtable *ht, const void *key, size_t key_len, void **popped) {
     if (hashtableSize(ht) == 0) return false;
-    uint64_t hash = hashKey(ht, key);
+    uint64_t hash = hashKey(ht, key, key_len);
     int pos_in_bucket = 0;
     int table_index = 0;
-    bucket *b = findBucket(ht, hash, key, &pos_in_bucket, &table_index);
+    bucket *b = findBucket(ht, hash, key, key_len, &pos_in_bucket, &table_index);
     if (b) {
         if (popped) *popped = b->entries[pos_in_bucket];
         b->presence &= ~(1 << pos_in_bucket);
@@ -1720,9 +1725,9 @@ bool hashtablePop(hashtable *ht, const void *key, void **popped) {
 
 /* Deletes the entry with the matching key. Returns true if an entry was
  * deleted, false if no matching entry was found. */
-bool hashtableDelete(hashtable *ht, const void *key) {
+bool hashtableDelete(hashtable *ht, const void *key, size_t key_len) {
     void *entry;
-    if (hashtablePop(ht, key, &entry)) {
+    if (hashtablePop(ht, key, key_len, &entry)) {
         freeEntry(ht, entry);
         return true;
     }
@@ -1735,8 +1740,9 @@ bool hashtableDelete(hashtable *ht, const void *key) {
  * replacing it with the new entry. Returns true if the entry was replaced and false if
  * the entry wasn't found. */
 bool hashtableReplaceReallocatedEntry(hashtable *ht, const void *old_entry, void *new_entry) {
-    const void *key = entryGetKey(ht, new_entry);
-    uint64_t hash = hashKey(ht, key);
+    size_t key_len;
+    const void *key = entryGetKey(ht, new_entry, &key_len);
+    uint64_t hash = hashKey(ht, key, key_len);
     uint8_t h2 = highBits(hash);
     for (int table = 0; table <= 1; table++) {
         if (ht->used[table] == 0) continue;
@@ -1797,13 +1803,13 @@ bool hashtableReplaceReallocatedEntry(hashtable *ht, const void *old_entry, void
  * argument is populated with a representation of where the entry is stored.
  * This must be provided to hashtableTwoPhasePopDelete to complete the
  * operation. */
-void **hashtableTwoPhasePopFindRef(hashtable *ht, const void *key, hashtablePosition *pos) {
+void **hashtableTwoPhasePopFindRef(hashtable *ht, const void *key, size_t key_len, hashtablePosition *pos) {
     position *p = positionFromOpaque(pos);
     if (hashtableSize(ht) == 0) return NULL;
-    uint64_t hash = hashKey(ht, key);
+    uint64_t hash = hashKey(ht, key, key_len);
     int pos_in_bucket = 0;
     int table_index = 0;
-    bucket *b = findBucket(ht, hash, key, &pos_in_bucket, &table_index);
+    bucket *b = findBucket(ht, hash, key, key_len, &pos_in_bucket, &table_index);
     if (b) {
         hashtablePauseRehashing(ht);
 
@@ -1854,7 +1860,7 @@ void hashtableTwoPhasePopDelete(hashtable *ht, hashtablePosition *pos) {
  * hashtableIncrementalFindStep on them in a round-robin order until all of them
  * are complete. Finally, if necessary, call hashtableIncrementalFindGetResult.
  */
-void hashtableIncrementalFindInit(hashtableIncrementalFindState *state, hashtable *ht, const void *key) {
+void hashtableIncrementalFindInit(hashtableIncrementalFindState *state, hashtable *ht, const void *key, size_t key_len) {
     incrementalFind *data = incrementalFindFromOpaque(state);
     if (hashtableSize(ht) == 0) {
         data->state = HASHTABLE_NOT_FOUND;
@@ -1863,7 +1869,8 @@ void hashtableIncrementalFindInit(hashtableIncrementalFindState *state, hashtabl
         data->bucket = NULL;
         data->hashtable = ht;
         data->key = key;
-        data->hash = hashKey(ht, key);
+        data->key_len = key_len;
+        data->hash = hashKey(ht, key, key_len);
     }
 }
 
@@ -1878,8 +1885,9 @@ bool hashtableIncrementalFindStep(hashtableIncrementalFindState *state) {
         {
             hashtable *ht = data->hashtable;
             void *entry = data->bucket->entries[data->pos];
-            const void *elem_key = entryGetKey(ht, entry);
-            if (compareKeys(ht, data->key, elem_key)) {
+            size_t entry_key_len;
+            const void *elem_key = entryGetKey(ht, entry, &entry_key_len);
+            if (compareKeys(ht, data->key, data->key_len, elem_key, entry_key_len) == 0) {
                 /* It's a match. */
                 data->state = HASHTABLE_FOUND;
                 return false;
@@ -2496,8 +2504,9 @@ void hashtableDump(hashtable *ht) {
                 printf("  Bucket %d:%zu level:%d\n", table, idx, level);
                 for (int pos = 0; pos < ENTRIES_PER_BUCKET; pos++) {
                     if (isPositionFilled(b, pos)) {
+                        size_t dump_key_len;
                         printf("    %d h2 %02x, key \"%s\"\n", pos, b->hashes[pos],
-                               (const char *)entryGetKey(ht, b->entries[pos]));
+                               (const char *)entryGetKey(ht, b->entries[pos], &dump_key_len));
                     }
                 }
                 b = getChildBucket(b);

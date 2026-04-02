@@ -296,7 +296,7 @@ int pubsubSubscribeChannel(client *c, robj *channel, pubsubtype type) {
 
     /* Add the channel to the client -> channels hash table */
     hashtablePosition position;
-    if (hashtableFindPositionForInsert(type.clientPubSubChannels(c), channel, &position, NULL)) {
+    if (hashtableFindPositionForInsert(type.clientPubSubChannels(c), channel, 0, &position, NULL)) {
         /* Not yet subscribed to this channel */
         retval = 1;
         /* Add the client to the channel -> list of clients hash table */
@@ -306,7 +306,7 @@ int pubsubSubscribeChannel(client *c, robj *channel, pubsubtype type) {
 
         hashtablePosition pos;
         void *existing;
-        if (!kvstoreHashtableFindPositionForInsert(*type.serverPubSubChannels, slot, channel, &pos, &existing)) {
+        if (!kvstoreHashtableFindPositionForInsert(*type.serverPubSubChannels, slot, channel, 0, &pos, &existing)) {
             clients = existing;
             channel = *(robj **)hashtableMetadata(clients);
         } else {
@@ -337,7 +337,7 @@ int pubsubUnsubscribeChannel(client *c, robj *channel, int notify, pubsubtype ty
     /* Remove the channel from the client -> channels hash table */
     incrRefCount(channel); /* channel may be just a pointer to the same object
                             we have in the hash tables. Protect it... */
-    if (hashtableDelete(type.clientPubSubChannels(c), channel)) {
+    if (hashtableDelete(type.clientPubSubChannels(c), channel, 0)) {
         retval = 1;
         /* Remove the client from the channel -> clients list hash table */
         if (server.cluster_enabled && type.shard) {
@@ -346,15 +346,15 @@ int pubsubUnsubscribeChannel(client *c, robj *channel, int notify, pubsubtype ty
             slot = keyHashSlot(objectGetVal(channel), (int)sdslen(objectGetVal(channel)));
         }
         void *found = NULL;
-        kvstoreHashtableFind(*type.serverPubSubChannels, slot, channel, &found);
+        kvstoreHashtableFind(*type.serverPubSubChannels, slot, channel, 0, &found);
         serverAssertWithInfo(c, NULL, found);
         clients = found;
-        serverAssertWithInfo(c, NULL, hashtableDelete(clients, c));
+        serverAssertWithInfo(c, NULL, hashtableDelete(clients, c, 0));
         if (hashtableSize(clients) == 0) {
             /* Free the dict and associated hash entry at all if this was
              * the latest client, so that it will be possible to abuse
              * PUBSUB creating millions of channels. */
-            kvstoreHashtableDelete(*type.serverPubSubChannels, slot, channel);
+            kvstoreHashtableDelete(*type.serverPubSubChannels, slot, channel, 0);
         }
     }
     /* Notify the client */
@@ -380,7 +380,7 @@ void pubsubShardUnsubscribeAllChannelsInSlot(unsigned int slot) {
         void *next_client;
         while (hashtableNext(&client_iter, &next_client)) {
             client *c = next_client;
-            int retval = hashtableDelete(c->pubsub_data->pubsubshard_channels, channel);
+            int retval = hashtableDelete(c->pubsub_data->pubsubshard_channels, channel, 0);
             serverAssertWithInfo(c, channel, retval);
             addReplyPubsubUnsubscribed(c, channel, pubSubShardType);
             /* If the client has no other pubsub subscription,
@@ -390,7 +390,7 @@ void pubsubShardUnsubscribeAllChannelsInSlot(unsigned int slot) {
             }
         }
         hashtableCleanupIterator(&client_iter);
-        kvstoreHashtableDelete(server.pubsubshard_channels, slot, channel);
+        kvstoreHashtableDelete(server.pubsubshard_channels, slot, channel, 0);
     }
     kvstoreReleaseHashtableIterator(kvs_di);
 }
@@ -425,13 +425,13 @@ int pubsubUnsubscribePattern(client *c, robj *pattern, int notify) {
     if (!c->pubsub_data) initClientPubSubData(c);
 
     incrRefCount(pattern); /* Protect the object. May be the same we remove */
-    int pattern_deleted = hashtableDelete(c->pubsub_data->pubsub_patterns, pattern);
+    int pattern_deleted = hashtableDelete(c->pubsub_data->pubsub_patterns, pattern, 0);
     if (pattern_deleted) {
         /* Remove the client from the pattern -> clients list hash table */
         dictEntry *de = dictFind(server.pubsub_patterns, pattern);
         serverAssertWithInfo(c, NULL, de != NULL);
         hashtable *clients = dictGetVal(de);
-        serverAssertWithInfo(c, NULL, hashtableDelete(clients, c));
+        serverAssertWithInfo(c, NULL, hashtableDelete(clients, c, 0));
         if (hashtableSize(clients) == 0) {
             /* Free the clients hashtable if this was the last client. */
             dictDelete(server.pubsub_patterns, pattern);
@@ -516,7 +516,7 @@ int pubsubPublishMessageInternal(robj *channel, robj *message, pubsubtype type) 
     if (server.cluster_enabled && type.shard) {
         slot = keyHashSlot(objectGetVal(channel), sdslen(objectGetVal(channel)));
     }
-    if (kvstoreHashtableFind(*type.serverPubSubChannels, (slot == -1) ? 0 : slot, channel, &element)) {
+    if (kvstoreHashtableFind(*type.serverPubSubChannels, (slot == -1) ? 0 : slot, channel, 0, &element)) {
         hashtable *clients = element;
         hashtableIterator iter;
         hashtableInitIterator(&iter, clients, 0);
@@ -686,7 +686,7 @@ void pubsubCommand(client *c) {
         addReplyArrayLen(c, (c->argc - 2) * 2);
         for (j = 2; j < c->argc; j++) {
             void *found = NULL;
-            kvstoreHashtableFind(server.pubsub_channels, 0, c->argv[j], &found);
+            kvstoreHashtableFind(server.pubsub_channels, 0, c->argv[j], 0, &found);
             dict *d = found;
             addReplyBulk(c, c->argv[j]);
             addReplyLongLong(c, d ? dictSize(d) : 0);
@@ -706,7 +706,7 @@ void pubsubCommand(client *c) {
             sds key = objectGetVal(c->argv[j]);
             unsigned int slot = server.cluster_enabled ? keyHashSlot(key, (int)sdslen(key)) : 0;
             void *found = NULL;
-            kvstoreHashtableFind(server.pubsubshard_channels, slot, c->argv[j], &found);
+            kvstoreHashtableFind(server.pubsubshard_channels, slot, c->argv[j], 0, &found);
             hashtable *clients = found;
             addReplyBulk(c, c->argv[j]);
             addReplyLongLong(c, clients ? hashtableSize(clients) : 0);

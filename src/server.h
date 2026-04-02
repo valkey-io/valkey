@@ -3509,11 +3509,11 @@ unsigned long long dbScan(serverDb *db, unsigned long long cursor, kvstoreScanFu
 /* Set data type */
 robj *setTypeCreate(sds value, size_t size_hint);
 int setTypeAdd(robj *subject, sds value);
-int setTypeAddAux(robj *set, char *str, size_t len, int64_t llval, int str_is_sds);
+int setTypeAddAux(robj *set, char *str, size_t len, int64_t llval);
 int setTypeRemove(robj *subject, sds value);
-int setTypeRemoveAux(robj *set, char *str, size_t len, int64_t llval, int str_is_sds);
+int setTypeRemoveAux(robj *set, char *str, size_t len, int64_t llval);
 int setTypeIsMember(robj *subject, sds value);
-int setTypeIsMemberAux(robj *set, char *str, size_t len, int64_t llval, int str_is_sds);
+int setTypeIsMemberAux(robj *set, char *str, size_t len, int64_t llval);
 setTypeIterator *setTypeInitIterator(robj *subject);
 void setTypeReleaseIterator(setTypeIterator *si);
 int setTypeNext(setTypeIterator *si, char **str, size_t *len, int64_t *llele);
@@ -3869,21 +3869,36 @@ int performEvictions(void);
 void startEvictionTimeProc(void);
 
 /* Keys hashing/comparison functions for dict.c and hashtable.c hash tables. */
-uint64_t dictSdsHash(const void *key);
-uint64_t dictSdsCaseHash(const void *key);
-uint64_t dictCStrHash(const void *key);
-uint64_t dictCStrCaseHash(const void *key);
-uint64_t dictEncObjHash(const void *key);
-int dictSdsKeyCompare(const void *key1, const void *key2);
-int dictSdsKeyCaseCompare(const void *key1, const void *key2);
-int dictCStrKeyCompare(const void *key1, const void *key2);
-int dictCStrKeyCaseCompare(const void *key1, const void *key2);
-int dictEncObjKeyCompare(const void *key1, const void *key2);
+uint64_t dictSdsHash(const void *key, size_t key_len);
+uint64_t dictSdsCaseHash(const void *key, size_t key_len);
+uint64_t dictCStrHash(const void *key, size_t key_len);
+uint64_t dictCStrCaseHash(const void *key, size_t key_len);
+int dictSdsKeyCompare(const void *key1, size_t key1_len, const void *key2, size_t key2_len);
+int dictSdsKeyCaseCompare(const void *key1, size_t key1_len, const void *key2, size_t key2_len);
+int dictCStrKeyCompare(const void *key1, size_t key1_len, const void *key2, size_t key2_len);
+int dictCStrKeyCaseCompare(const void *key1, size_t key1_len, const void *key2, size_t key2_len);
 void dictSdsDestructor(void *val);
 void dictListDestructor(void *val);
 void dictEntryDestructorSdsKey(void *entry);
 void dictEntryDestructorSdsKeyValue(void *entry);
 void dictEntryDestructorSdsKeyListValue(void *entry);
+
+/* Hashtable-specific hash functions */
+uint64_t hashtableStringHash(const void *key, size_t key_len);
+uint64_t hashtableStringCaseHash(const void *key, size_t key_len);
+uint64_t hashtableEncObjHash(const void *key, size_t key_len);
+uint64_t hashtableObjHash(const void *key, size_t key_len);
+uint64_t hashtableClientHash(const void *key, size_t key_len);
+
+/* Hashtable-specific key compare functions */
+int hashtableRawKeyCompare(const void *lookup_key, size_t lookup_key_len, const void *entry_key, size_t entry_key_len);
+int hashtableStringCaseCompare(const void *lookup_key, size_t lookup_key_len, const void *entry_key, size_t entry_key_len);
+int hashtableEncObjKeyCompare(const void *lookup_key, size_t lookup_key_len, const void *entry_key, size_t entry_key_len);
+int hashtableObjKeyCompare(const void *lookup_key, size_t lookup_key_len, const void *entry_key, size_t entry_key_len);
+int hashtableClientKeyCompare(const void *lookup_key, size_t lookup_key_len, const void *entry_key, size_t entry_key_len);
+
+/* Hashtable-specific entryGetKey callbacks */
+const void *hashtableSdsGetKey(const void *entry, size_t *len);
 
 /* Git SHA1 */
 char *serverGitSHA1(void);

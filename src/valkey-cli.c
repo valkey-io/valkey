@@ -188,8 +188,8 @@ static int orig_termios_saved = 0;
 static struct termios orig_termios; /* To restore terminal at exit.*/
 
 /* Dict Helpers */
-static uint64_t dictSdsHash(const void *key);
-static int dictSdsKeyCompare(const void *key1, const void *key2);
+static uint64_t dictSdsHash(const void *key, size_t key_len);
+static int dictSdsKeyCompare(const void *key1, size_t key1_len, const void *key2, size_t key2_len);
 
 /* Cluster Manager Command Info */
 typedef struct clusterManagerCommand {
@@ -376,16 +376,19 @@ static sds getDotfilePath(char *envoverride, char *envoverride_old, char *dotfil
     return dotPath;
 }
 
-static uint64_t dictSdsHash(const void *key) {
+static uint64_t dictSdsHash(const void *key, size_t key_len) {
+    UNUSED(key_len);
     return dictGenHashFunction(key, sdslen(key));
 }
 
-static int dictSdsKeyCompare(const void *key1, const void *key2) {
+static int dictSdsKeyCompare(const void *key1, size_t key1_len, const void *key2, size_t key2_len) {
+    UNUSED(key1_len);
+    UNUSED(key2_len);
     int l1, l2;
     l1 = sdslen((sds)key1);
     l2 = sdslen((sds)key2);
-    if (l1 != l2) return 0;
-    return memcmp(key1, key2, l1) == 0;
+    if (l1 != l2) return 1;
+    return memcmp(key1, key2, l1);
 }
 
 static void dictEntryDestructorSdsKeyNoVal(void *entry) {

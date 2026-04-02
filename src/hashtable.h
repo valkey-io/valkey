@@ -41,7 +41,7 @@ typedef struct hashtableStats hashtableStats;
 /* Can types that can be stack allocated. */
 typedef uint64_t hashtableIterator[6];
 typedef uint64_t hashtablePosition[2];
-typedef uint64_t hashtableIncrementalFindState[5];
+typedef uint64_t hashtableIncrementalFindState[6];
 
 /* --- Non-opaque types --- */
 
@@ -50,14 +50,20 @@ typedef uint64_t hashtableIncrementalFindState[5];
  * pointer-sized integers. */
 typedef struct {
     /* If the type of an entry is not the same as the type of a key used for
-     * lookup, this callback needs to return the key within an entry. */
-    const void *(*entryGetKey)(const void *entry);
-    /* Hash function. Defaults to hashing the bits in the pointer, effectively
-     * treating the pointer as an integer. */
-    uint64_t (*hashFunction)(const void *key);
-    /* Compare function, returns 0 if the keys are equal. Defaults to just
-     * comparing the pointers for equality. */
-    int (*keyCompare)(const void *key1, const void *key2);
+     * lookup, this callback needs to return the key within an entry. The key
+     * length is returned via the 'len' output parameter. When this callback is
+     * NULL, the entry itself is used as the key and *len is set to 0. */
+    const void *(*entryGetKey)(const void *entry, size_t *len);
+    /* Hash function. The key_len is the length of the key as returned by
+     * entryGetKey, or as passed by the caller for lookup functions. Defaults to
+     * hashing the bits in the pointer, effectively treating the pointer as an
+     * integer (ignoring key_len). */
+    uint64_t (*hashFunction)(const void *key, size_t key_len);
+    /* Compare function, returns 0 if the keys are equal. The lookup_key and
+     * lookup_key_len are from the caller; entry_key and entry_key_len are from
+     * entryGetKey on a stored entry. Defaults to just comparing the pointers
+     * for equality (ignoring lengths). */
+    int (*keyCompare)(const void *lookup_key, size_t lookup_key_len, const void *entry_key, size_t entry_key_len);
     /* Check for entry access should be masked or not. Masked access will just treat the entry as not-exist. */
     bool (*validateEntry)(hashtable *ht, void *entry);
     /* Callback to free an entry when it's overwritten or deleted.
@@ -143,18 +149,18 @@ void dismissHashtable(hashtable *ht);
 void hashtableSetCanAbortShrink(bool can_abort);
 
 /* Entries */
-bool hashtableFind(hashtable *ht, const void *key, void **found);
-void **hashtableFindRef(hashtable *ht, const void *key);
+bool hashtableFind(hashtable *ht, const void *key, size_t key_len, void **found);
+void **hashtableFindRef(hashtable *ht, const void *key, size_t key_len);
 bool hashtableAdd(hashtable *ht, void *entry);
 bool hashtableAddOrFind(hashtable *ht, void *entry, void **existing);
-bool hashtableFindPositionForInsert(hashtable *ht, void *key, hashtablePosition *position, void **existing);
+bool hashtableFindPositionForInsert(hashtable *ht, void *key, size_t key_len, hashtablePosition *position, void **existing);
 void hashtableInsertAtPosition(hashtable *ht, void *entry, hashtablePosition *position);
-bool hashtablePop(hashtable *ht, const void *key, void **popped);
-bool hashtableDelete(hashtable *ht, const void *key);
-void **hashtableTwoPhasePopFindRef(hashtable *ht, const void *key, hashtablePosition *position);
+bool hashtablePop(hashtable *ht, const void *key, size_t key_len, void **popped);
+bool hashtableDelete(hashtable *ht, const void *key, size_t key_len);
+void **hashtableTwoPhasePopFindRef(hashtable *ht, const void *key, size_t key_len, hashtablePosition *position);
 void hashtableTwoPhasePopDelete(hashtable *ht, hashtablePosition *position);
 bool hashtableReplaceReallocatedEntry(hashtable *ht, const void *old_entry, void *new_entry);
-void hashtableIncrementalFindInit(hashtableIncrementalFindState *state, hashtable *ht, const void *key);
+void hashtableIncrementalFindInit(hashtableIncrementalFindState *state, hashtable *ht, const void *key, size_t key_len);
 bool hashtableIncrementalFindStep(hashtableIncrementalFindState *state);
 bool hashtableIncrementalFindGetResult(hashtableIncrementalFindState *state, void **found);
 

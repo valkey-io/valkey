@@ -42,7 +42,7 @@ int kvstoreGetNextNonEmptyHashtableIndex(kvstore *kvs, int didx);
 int kvstoreNumNonEmptyHashtables(kvstore *kvs);
 int kvstoreNumAllocatedHashtables(kvstore *kvs);
 int kvstoreNumHashtables(kvstore *kvs);
-uint64_t kvstoreGetHash(kvstore *kvs, const void *key);
+uint64_t kvstoreGetHash(kvstore *kvs, const void *key, size_t key_len);
 
 void kvstoreHashtableRehashingStarted(hashtable *d);
 void kvstoreHashtableRehashingCompleted(hashtable *d);
@@ -82,17 +82,17 @@ unsigned long kvstoreHashtableScanDefrag(kvstore *kvs,
                                          void *(*defragfn)(void *),
                                          int flags);
 unsigned long kvstoreHashtableDefragTables(kvstore *kvs, unsigned long cursor, void *(*defragfn)(void *));
-bool kvstoreHashtableFind(kvstore *kvs, int didx, void *key, void **found);
-void **kvstoreHashtableFindRef(kvstore *kvs, int didx, const void *key);
+bool kvstoreHashtableFind(kvstore *kvs, int didx, void *key, size_t key_len, void **found);
+void **kvstoreHashtableFindRef(kvstore *kvs, int didx, const void *key, size_t key_len);
 bool kvstoreHashtableAdd(kvstore *kvs, int didx, void *entry);
 
-bool kvstoreHashtableFindPositionForInsert(kvstore *kvs, int didx, void *key, hashtablePosition *position, void **existing);
+bool kvstoreHashtableFindPositionForInsert(kvstore *kvs, int didx, void *key, size_t key_len, hashtablePosition *position, void **existing);
 void kvstoreHashtableInsertAtPosition(kvstore *kvs, int didx, void *entry, void *position);
 
-void **kvstoreHashtableTwoPhasePopFindRef(kvstore *kvs, int didx, const void *key, void *position);
+void **kvstoreHashtableTwoPhasePopFindRef(kvstore *kvs, int didx, const void *key, size_t key_len, void *position);
 void kvstoreHashtableTwoPhasePopDelete(kvstore *kvs, int didx, void *position);
-bool kvstoreHashtablePop(kvstore *kvs, int didx, const void *key, void **popped);
-bool kvstoreHashtableDelete(kvstore *kvs, int didx, const void *key);
+bool kvstoreHashtablePop(kvstore *kvs, int didx, const void *key, size_t key_len, void **popped);
+bool kvstoreHashtableDelete(kvstore *kvs, int didx, const void *key, size_t key_len);
 hashtable *kvstoreGetHashtable(kvstore *kvs, int didx);
 
 #endif /* KVSTORE_H */

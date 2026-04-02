@@ -240,7 +240,7 @@ int hashTypeGetValue(robj *o, sds field, unsigned char **vstr, unsigned int *vle
         }
     } else if (o->encoding == OBJ_ENCODING_HASHTABLE) {
         void *entry = NULL;
-        hashtableFind(objectGetVal(o), field, &entry);
+        hashtableFind(objectGetVal(o), field, sdslen(field), &entry);
         if (entry) {
             size_t len = 0;
             char *value = entryGetValue(entry, &len);
@@ -268,7 +268,7 @@ int hashTypeGetExpiry(robj *o, sds field, mstime_t *expiry) {
         }
     } else if (o->encoding == OBJ_ENCODING_HASHTABLE) {
         void *found_element = NULL;
-        if (hashtableFind(objectGetVal(o), field, &found_element)) {
+        if (hashtableFind(objectGetVal(o), field, sdslen(field), &found_element)) {
             if (expiry) *expiry = entryGetExpiry(found_element);
             return C_OK;
         }
@@ -321,7 +321,7 @@ int hashTypeExists(robj *o, sds field) {
 bool hashTypeHasStringRef(robj *o, sds field) {
     if (o->encoding == OBJ_ENCODING_LISTPACK) return false;
     hashtable *ht = objectGetVal(o);
-    void **entry_ref = hashtableFindRef(ht, field);
+    void **entry_ref = hashtableFindRef(ht, field, sdslen(field));
     return (entryHasStringRef(*entry_ref));
 }
 
@@ -337,7 +337,7 @@ int hashTypeUpdateAsStringRef(robj *o, sds field, const char *buf, size_t len) {
     if (o->encoding == OBJ_ENCODING_LISTPACK) hashTypeConvert(o, OBJ_ENCODING_HASHTABLE);
 
     hashtable *ht = objectGetVal(o);
-    void **entry_ref = hashtableFindRef(ht, field);
+    void **entry_ref = hashtableFindRef(ht, field, sdslen(field));
     entry *entry = *entry_ref;
     mstime_t expiry = entryGetExpiry(entry);
     void *new_entry = entryUpdateAsStringRef(entry, buf, len, expiry);
@@ -419,7 +419,7 @@ int hashTypeSet(robj *o, sds field, sds value, mstime_t expiry, int flags, bool 
         hashTypeIgnoreTTL(o, true);
         hashtablePosition position;
         void *existing;
-        if (hashtableFindPositionForInsert(ht, field, &position, &existing)) {
+        if (hashtableFindPositionForInsert(ht, field, sdslen(field), &position, &existing)) {
             /* does not exist yet */
             entry *entry = entryCreate(field, v, expiry);
             hashtableInsertAtPosition(ht, entry, &position);
@@ -501,7 +501,7 @@ static expiryModificationResult hashTypeSetExpire(robj *o, sds field, mstime_t e
 
     hashtable *ht = objectGetVal(o);
     void **entry_ref = NULL;
-    if ((entry_ref = hashtableFindRef(ht, field))) {
+    if ((entry_ref = hashtableFindRef(ht, field, sdslen(field)))) {
         entry *current_entry = *entry_ref;
         mstime_t current_expire = entryGetExpiry(current_entry);
         if (flag) {
@@ -565,7 +565,7 @@ static expiryModificationResult hashTypePersist(robj *o, sds field) {
 
     hashtable *ht = objectGetVal(o);
     void **entry_ref = NULL;
-    if ((entry_ref = hashtableFindRef(ht, field))) {
+    if ((entry_ref = hashtableFindRef(ht, field, sdslen(field)))) {
         entry *current_entry = *entry_ref;
         mstime_t current_expire = entryGetExpiry(current_entry);
         if (current_expire != EXPIRY_NONE) {
@@ -600,7 +600,7 @@ bool hashTypeDelete(robj *o, sds field) {
     } else if (o->encoding == OBJ_ENCODING_HASHTABLE) {
         hashtable *ht = objectGetVal(o);
         void *entry = NULL;
-        deleted = hashtablePop(ht, field, &entry);
+        deleted = hashtablePop(ht, field, sdslen(field), &entry);
         if (deleted) {
             hashTypeUntrackEntry(o, entry);
             entryFree(entry);
@@ -2267,7 +2267,7 @@ void hrandfieldWithCountCommand(client *c, long l, int withvalues) {
         while (reply_size > count) {
             void *element;
             hashtableFairRandomEntry(ht, &element);
-            hashtableDelete(ht, element);
+            hashtableDelete(ht, element, sdslen((sds)element));
             reply_size--;
         }
 
@@ -2382,7 +2382,7 @@ static int hashTypeExpireEntry(void *entry, void *c) {
     serverAssert(o->encoding == OBJ_ENCODING_HASHTABLE && hashtableSize(objectGetVal(o)) > 0);
     hashtable *ht = objectGetVal(o);
     void *entry_ptr = NULL;
-    bool deleted = hashtablePop(ht, entry, &entry_ptr);
+    bool deleted = hashtablePop(ht, entry, sdslen((sds)entry), &entry_ptr);
     if (deleted) {
         if (ctx->fields)
             ctx->fields[ctx->n_fields++] = createStringObjectFromSds(entryGetField(entry));

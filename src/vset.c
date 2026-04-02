@@ -1041,7 +1041,8 @@ static uint32_t findSplitPosition(vsetGetExpiryFunc getExpiry, vsetBucket *bucke
  *
  * Returns:
  *   A 64-bit hash value derived from the input pointer. */
-static uint64_t hash_pointer(const void *ptr) {
+static uint64_t hash_pointer(const void *ptr, size_t key_len) {
+    UNUSED(key_len);
     uintptr_t x = (uintptr_t)ptr;
 #if UINTPTR_MAX == 0xFFFFFFFF
     // 32-bit platform
@@ -1346,7 +1347,7 @@ static inline vsetBucket *removeFromBucket_HASHTABLE(vsetGetExpiryFunc getExpiry
     bool success = false;
     vsetBucket *new_bucket = bucket;
     hashtable *ht = vsetBucketHashtable(bucket);
-    if (hashtableDelete(ht, entry)) {
+    if (hashtableDelete(ht, entry, 0)) {
         success = true;
         assert(hashtableSize(ht) > 0);
         if (hashtableSize(ht) == 1) {
@@ -1499,7 +1500,7 @@ static inline size_t vsetBucketRemoveExpired_HASHTABLE(vsetBucket **bucket, vset
     size_t count = 0;
     hashtableInitIterator(&it, ht, HASHTABLE_ITER_SAFE);
     while (count < max_count && hashtableNext(&it, &entry)) {
-        assert(hashtableDelete(ht, entry));
+        assert(hashtableDelete(ht, entry, 0));
         expiryFunc(entry, ctx);
         count++;
     }
@@ -1910,7 +1911,7 @@ static inline vsetBucket *vsetBucketUpdateEntry_HASHTABLE(vsetBucket *bucket, vs
         return bucket;
 
     hashtable *ht = vsetBucketHashtable(bucket);
-    hashtableDelete(ht, old_entry);
+    hashtableDelete(ht, old_entry, 0);
     assert(hashtableAdd(ht, new_entry));
     return bucket;
 }

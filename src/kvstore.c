@@ -148,7 +148,7 @@ static int getAndClearHashtableIndexFromCursor(kvstore *kvs, unsigned long long 
 
 int kvstoreIsImporting(kvstore *kvs, int didx) {
     assert(didx < kvs->num_hashtables);
-    return hashtableFind(kvs->importing, (void *)(intptr_t)didx, NULL);
+    return hashtableFind(kvs->importing, (void *)(intptr_t)didx, 0, NULL);
 }
 
 /* Updates binary index tree (also known as Fenwick tree), increasing key count for a given hashtable.
@@ -863,20 +863,20 @@ unsigned long kvstoreHashtableDefragTables(kvstore *kvs, unsigned long cursor, v
     return 0;
 }
 
-uint64_t kvstoreGetHash(kvstore *kvs, const void *key) {
-    return kvs->dtype->hashFunction(key);
+uint64_t kvstoreGetHash(kvstore *kvs, const void *key, size_t key_len) {
+    return kvs->dtype->hashFunction(key, key_len);
 }
 
-bool kvstoreHashtableFind(kvstore *kvs, int didx, void *key, void **found) {
+bool kvstoreHashtableFind(kvstore *kvs, int didx, void *key, size_t key_len, void **found) {
     hashtable *ht = kvstoreGetHashtable(kvs, didx);
     if (!ht) return false;
-    return hashtableFind(ht, key, found);
+    return hashtableFind(ht, key, key_len, found);
 }
 
-void **kvstoreHashtableFindRef(kvstore *kvs, int didx, const void *key) {
+void **kvstoreHashtableFindRef(kvstore *kvs, int didx, const void *key, size_t key_len) {
     hashtable *ht = kvstoreGetHashtable(kvs, didx);
     if (!ht) return NULL;
-    return hashtableFindRef(ht, key);
+    return hashtableFindRef(ht, key, key_len);
 }
 
 bool kvstoreHashtableAdd(kvstore *kvs, int didx, void *entry) {
@@ -886,9 +886,9 @@ bool kvstoreHashtableAdd(kvstore *kvs, int didx, void *entry) {
     return ret;
 }
 
-bool kvstoreHashtableFindPositionForInsert(kvstore *kvs, int didx, void *key, hashtablePosition *position, void **existing) {
+bool kvstoreHashtableFindPositionForInsert(kvstore *kvs, int didx, void *key, size_t key_len, hashtablePosition *position, void **existing) {
     hashtable *ht = createHashtableIfNeeded(kvs, didx);
-    return hashtableFindPositionForInsert(ht, key, position, existing);
+    return hashtableFindPositionForInsert(ht, key, key_len, position, existing);
 }
 
 /* Must be used together with kvstoreHashtableFindPositionForInsert, with returned
@@ -899,10 +899,10 @@ void kvstoreHashtableInsertAtPosition(kvstore *kvs, int didx, void *entry, void 
     cumulativeKeyCountAdd(kvs, didx, 1);
 }
 
-void **kvstoreHashtableTwoPhasePopFindRef(kvstore *kvs, int didx, const void *key, void *position) {
+void **kvstoreHashtableTwoPhasePopFindRef(kvstore *kvs, int didx, const void *key, size_t key_len, void *position) {
     hashtable *ht = kvstoreGetHashtable(kvs, didx);
     if (!ht) return NULL;
-    return hashtableTwoPhasePopFindRef(ht, key, position);
+    return hashtableTwoPhasePopFindRef(ht, key, key_len, position);
 }
 
 void kvstoreHashtableTwoPhasePopDelete(kvstore *kvs, int didx, void *position) {
@@ -912,10 +912,10 @@ void kvstoreHashtableTwoPhasePopDelete(kvstore *kvs, int didx, void *position) {
     freeHashtableIfNeeded(kvs, didx);
 }
 
-bool kvstoreHashtablePop(kvstore *kvs, int didx, const void *key, void **popped) {
+bool kvstoreHashtablePop(kvstore *kvs, int didx, const void *key, size_t key_len, void **popped) {
     hashtable *ht = kvstoreGetHashtable(kvs, didx);
     if (!ht) return false;
-    bool ret = hashtablePop(ht, key, popped);
+    bool ret = hashtablePop(ht, key, key_len, popped);
     if (ret) {
         cumulativeKeyCountAdd(kvs, didx, -1);
         freeHashtableIfNeeded(kvs, didx);
@@ -923,10 +923,10 @@ bool kvstoreHashtablePop(kvstore *kvs, int didx, const void *key, void **popped)
     return ret;
 }
 
-bool kvstoreHashtableDelete(kvstore *kvs, int didx, const void *key) {
+bool kvstoreHashtableDelete(kvstore *kvs, int didx, const void *key, size_t key_len) {
     hashtable *ht = kvstoreGetHashtable(kvs, didx);
     if (!ht) return false;
-    bool ret = hashtableDelete(ht, key);
+    bool ret = hashtableDelete(ht, key, key_len);
     if (ret) {
         cumulativeKeyCountAdd(kvs, didx, -1);
         freeHashtableIfNeeded(kvs, didx);
@@ -951,7 +951,7 @@ void kvstoreSetIsImporting(kvstore *kvs, int didx, int is_importing) {
 
     /* Once we mark a hashtable as not importing, we need to begin tracking in
      * the kvstore metadata */
-    if (hashtableDelete(kvs->importing, (void *)(intptr_t)didx) && ht && hashtableSize(ht) != 0) {
+    if (hashtableDelete(kvs->importing, (void *)(intptr_t)didx, 0) && ht && hashtableSize(ht) != 0) {
         cumulativeKeyCountAdd(kvs, didx, hashtableSize(ht));
         kvs->importing_key_count -= hashtableSize(ht);
     }

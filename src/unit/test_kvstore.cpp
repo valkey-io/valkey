@@ -10,21 +10,28 @@ extern "C" {
 #include "kvstore.h"
 }
 
-uint64_t hashTestCallback(const void *key) {
-    return hashtableGenHashFunction((const char *)key, strlen((const char *)key));
+uint64_t hashTestCallback(const void *key, size_t key_len) {
+    return hashtableGenHashFunction((const char *)key, key_len);
 }
 
-uint64_t hashConflictTestCallback(const void *key) {
+uint64_t hashConflictTestCallback(const void *key, size_t key_len) {
     UNUSED(key);
+    UNUSED(key_len);
     return 0;
 }
 
-int cmpTestCallback(const void *k1, const void *k2) {
-    return strcmp((const char *)k1, (const char *)k2) == 0;
+int cmpTestCallback(const void *lookup_key, size_t lookup_key_len, const void *entry_key, size_t entry_key_len) {
+    if (lookup_key_len != entry_key_len) return 1;
+    return memcmp(lookup_key, entry_key, lookup_key_len);
 }
 
 void freeTestCallback(void *val) {
     zfree(val);
+}
+
+const void *entryGetKeyTestCallback(const void *entry, size_t *len) {
+    if (len) *len = strlen((const char *)entry);
+    return entry;
 }
 
 /* Hashtable types used for tests - initialized in SetUpTestSuite */
@@ -49,6 +56,7 @@ class KvstoreTest : public ::testing::Test {
         /* Initialize KvstoreHashtableTestType explicitly by field name to avoid
          * dependency on field order (designated initializers require C++20). */
         memset(&KvstoreHashtableTestType, 0, sizeof(KvstoreHashtableTestType));
+        KvstoreHashtableTestType.entryGetKey = entryGetKeyTestCallback;
         KvstoreHashtableTestType.hashFunction = hashTestCallback;
         KvstoreHashtableTestType.keyCompare = cmpTestCallback;
         KvstoreHashtableTestType.entryDestructor = freeTestCallback;
@@ -59,6 +67,7 @@ class KvstoreTest : public ::testing::Test {
 
         /* Initialize KvstoreConflictHashtableTestType */
         memset(&KvstoreConflictHashtableTestType, 0, sizeof(KvstoreConflictHashtableTestType));
+        KvstoreConflictHashtableTestType.entryGetKey = entryGetKeyTestCallback;
         KvstoreConflictHashtableTestType.hashFunction = hashConflictTestCallback;
         KvstoreConflictHashtableTestType.keyCompare = cmpTestCallback;
         KvstoreConflictHashtableTestType.entryDestructor = freeTestCallback;
@@ -120,7 +129,7 @@ TEST_F(KvstoreTest, kvstoreIteratorRemoveAllKeysNoDeleteEmptyHashtable) {
         kvs_it = kvstoreIteratorInit(kvs1, HASHTABLE_ITER_SAFE);
         while (kvstoreIteratorNext(kvs_it, &key)) {
             curr_slot = kvstoreIteratorGetCurrentHashtableIndex(kvs_it);
-            ASSERT_TRUE(kvstoreHashtableDelete(kvs1, curr_slot, key));
+            ASSERT_TRUE(kvstoreHashtableDelete(kvs1, curr_slot, key, strlen((const char *)key)));
         }
         kvstoreIteratorRelease(kvs_it);
 
@@ -149,7 +158,7 @@ TEST_F(KvstoreTest, kvstoreIteratorRemoveAllKeysDeleteEmptyHashtable) {
     kvs_it = kvstoreIteratorInit(kvs2, HASHTABLE_ITER_SAFE);
     while (kvstoreIteratorNext(kvs_it, &key)) {
         curr_slot = kvstoreIteratorGetCurrentHashtableIndex(kvs_it);
-        ASSERT_TRUE(kvstoreHashtableDelete(kvs2, curr_slot, key));
+        ASSERT_TRUE(kvstoreHashtableDelete(kvs2, curr_slot, key, strlen((const char *)key)));
     }
     kvstoreIteratorRelease(kvs_it);
 
@@ -179,7 +188,7 @@ TEST_F(KvstoreTest, kvstoreHashtableIteratorRemoveAllKeysNoDeleteEmptyHashtable)
 
     kvs_di = kvstoreGetHashtableIterator(kvs1, didx, HASHTABLE_ITER_SAFE);
     while (kvstoreHashtableIteratorNext(kvs_di, &key)) {
-        ASSERT_TRUE(kvstoreHashtableDelete(kvs1, didx, key));
+        ASSERT_TRUE(kvstoreHashtableDelete(kvs1, didx, key, strlen((const char *)key)));
     }
     kvstoreReleaseHashtableIterator(kvs_di);
 
@@ -205,7 +214,7 @@ TEST_F(KvstoreTest, kvstoreHashtableIteratorRemoveAllKeysDeleteEmptyHashtable) {
 
     kvs_di = kvstoreGetHashtableIterator(kvs2, didx, HASHTABLE_ITER_SAFE);
     while (kvstoreHashtableIteratorNext(kvs_di, &key)) {
-        ASSERT_TRUE(kvstoreHashtableDelete(kvs2, didx, key));
+        ASSERT_TRUE(kvstoreHashtableDelete(kvs2, didx, key, strlen((const char *)key)));
     }
     kvstoreReleaseHashtableIterator(kvs_di);
 

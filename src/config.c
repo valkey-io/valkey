@@ -552,7 +552,7 @@ void loadServerConfigFromString(sds config) {
 
             /* If the target command name is the empty string we just
              * remove it from the command table. */
-            serverAssert(hashtableDelete(server.commands, argv[1]));
+            serverAssert(hashtableDelete(server.commands, argv[1], sdslen(argv[1])));
 
             /* Otherwise we re-add the command under a different name. */
             if (sdslen(argv[2]) != 0) {

@@ -3991,7 +3991,8 @@ static int addKeysToIncrFindBatch(client *c,
             for (int i = 0; i < numkeys && num < max; i++) {
                 hashtableIncrementalFindState *incr_state = &incr_states[num++];
                 robj *keyobj = argv[result.keys[i].pos];
-                hashtableIncrementalFindInit(incr_state, ht, objectGetVal(keyobj));
+                sds key = objectGetVal(keyobj);
+                hashtableIncrementalFindInit(incr_state, ht, key, sdslen(key));
             }
         }
     }

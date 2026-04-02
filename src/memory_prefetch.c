@@ -115,7 +115,7 @@ static void initBatchInfo(hashtable **tables) {
             continue;
         }
         info->state = PREFETCH_ENTRY;
-        hashtableIncrementalFindInit(&info->hashtab_state, tables[i], batch->keys[i]);
+        hashtableIncrementalFindInit(&info->hashtab_state, tables[i], batch->keys[i], sdslen(batch->keys[i]));
     }
 }
 

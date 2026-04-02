@@ -855,7 +855,7 @@ static doneStatus defragLaterStep(monotime endtime, void *privdata) {
         listNode *head = listFirst(defrag_later);
         sds key = head->value;
         void *found = NULL;
-        kvstoreHashtableFind(ctx->kvstate.kvs, ctx->kvstate.slot, key, &found);
+        kvstoreHashtableFind(ctx->kvstate.kvs, ctx->kvstate.slot, key, sdslen(key), &found);
         robj *ob = found;
 
         long long key_defragged = server.stat_active_defrag_hits;

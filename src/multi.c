@@ -321,8 +321,9 @@ typedef struct watchedKey {
 
 /* Callback used for watchedKeysHashtableType where the entries are watchedKey *
  * and it already contains the key. */
-static const void *watchedKeyGetKey(const void *entry) {
+static const void *watchedKeyGetKey(const void *entry, size_t *len) {
     const watchedKey *wk = entry;
+    if (len) *len = 0;
     return wk->key;
 }
 
@@ -331,8 +332,8 @@ static const void *watchedKeyGetKey(const void *entry) {
  * actual memory is managed by the multiState->watched_keys list. */
 hashtableType watchedKeysHashtableType = {
     .entryGetKey = watchedKeyGetKey,
-    .hashFunction = dictEncObjHash,
-    .keyCompare = dictEncObjKeyCompare,
+    .hashFunction = hashtableEncObjHash,
+    .keyCompare = hashtableEncObjKeyCompare,
 };
 
 /* Attach a watchedKey to the list of clients watching that key. */
@@ -370,7 +371,7 @@ void watchForKey(client *c, robj *key) {
     }
 
     /* Check if we are already watching for this key */
-    if (hashtableFind(c->mstate->watched_keys_by_db[c->db->id], key, NULL)) {
+    if (hashtableFind(c->mstate->watched_keys_by_db[c->db->id], key, 0, NULL)) {
         return; /* Key already watched */
     }
 

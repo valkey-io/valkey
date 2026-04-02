@@ -57,8 +57,9 @@ static keyval *create_keyval(const char *key, const char *val) {
     return e;
 }
 
-static const void *getkey(const void *entry) {
+static const void *getkey(const void *entry, size_t *len) {
     const keyval *e = (const keyval *)entry;
+    *len = e->keysize - 1; /* exclude null terminator */
     return e->data;
 }
 
@@ -67,12 +68,13 @@ static const void *getval(const void *entry) {
     return e->data + e->keysize;
 }
 
-static uint64_t hashfunc(const void *key) {
-    return hashtableGenHashFunction((const char *)key, strlen((const char *)key));
+static uint64_t hashfunc(const void *key, size_t key_len) {
+    return hashtableGenHashFunction((const char *)key, key_len);
 }
 
-static int keycmp(const void *key1, const void *key2) {
-    return strcmp((const char *)key1, (const char *)key2) == 0;
+static int keycmp(const void *lookup_key, size_t lookup_key_len, const void *entry_key, size_t entry_key_len) {
+    if (lookup_key_len != entry_key_len) return 1;
+    return memcmp(lookup_key, entry_key, lookup_key_len);
 }
 
 static void freekeyval(void *keyval) {
@@ -169,7 +171,7 @@ static void add_find_delete_test_helper() {
         snprintf(key, sizeof(key), "%d", j);
         snprintf(val, sizeof(val), "%d", count - j + 42);
         void *found;
-        ASSERT_TRUE(hashtableFind(ht, key, &found));
+        ASSERT_TRUE(hashtableFind(ht, key, strlen(key), &found));
         keyval *e = (keyval *)found;
         ASSERT_EQ(strcmp((const char *)getval(e), val), 0);
     }
@@ -183,12 +185,12 @@ static void add_find_delete_test_helper() {
             char val[32];
             snprintf(val, sizeof(val), "%d", count - j + 42);
             void *popped;
-            ASSERT_TRUE(hashtablePop(ht, key, &popped));
+            ASSERT_TRUE(hashtablePop(ht, key, strlen(key), &popped));
             keyval *e = (keyval *)popped;
             ASSERT_EQ(strcmp((const char *)getval(e), val), 0);
             free(e);
         } else {
-            ASSERT_TRUE(hashtableDelete(ht, key));
+            ASSERT_TRUE(hashtableDelete(ht, key, strlen(key)));
         }
     }
     ASSERT_EQ(hashtableMemUsage(ht), mem_usage);
@@ -234,7 +236,7 @@ TEST_F(HashtableTest, instant_rehashing) {
 
     /* Delete and check that rehashing is never ongoing. */
     for (j = 0; j < count; j++) {
-        ASSERT_TRUE(hashtableDelete(ht, (void *)j));
+        ASSERT_TRUE(hashtableDelete(ht, (void *)j, 0));
         ASSERT_FALSE(hashtableIsRehashing(ht));
     }
 
@@ -274,7 +276,7 @@ TEST_F(HashtableTest, empty_buckets_rehashing) {
     hashtablePauseAutoShrink(ht);
     for (j = 0; j < 1000; j++) {
         if (j == keep) continue;
-        ASSERT_TRUE(hashtableDelete(ht, (void *)j));
+        ASSERT_TRUE(hashtableDelete(ht, (void *)j, 0));
     }
     hashtableResumeAutoShrink(ht);
     ASSERT_EQ(hashtableSize(ht), 1u);
@@ -324,7 +326,7 @@ TEST_F(HashtableTest, shrink_rehashing_abort) {
     hashtablePauseAutoShrink(ht);
     for (j = 0; j < 20000; j++) {
         if (j == keep) continue;
-        ASSERT_TRUE(hashtableDelete(ht, (void *)j));
+        ASSERT_TRUE(hashtableDelete(ht, (void *)j, 0));
     }
     hashtableResumeAutoShrink(ht);
     ASSERT_EQ(hashtableSize(ht), 1u);
@@ -343,7 +345,7 @@ TEST_F(HashtableTest, shrink_rehashing_abort) {
     /* Fuzzy test around normal add and delete to make sure we are ok. */
     for (j = 0; j < 20000; j++) {
         hashtableAdd(ht, (void *)j);
-        ASSERT_TRUE(hashtableDelete(ht, (void *)j));
+        ASSERT_TRUE(hashtableDelete(ht, (void *)j, 0));
     }
 
     hashtableRelease(ht);
@@ -393,7 +395,7 @@ TEST_F(HashtableTest, two_phase_insert_and_pop) {
         snprintf(key, sizeof(key), "%d", j);
         snprintf(val, sizeof(val), "%d", count - j + 42);
         hashtablePosition position;
-        bool ret = hashtableFindPositionForInsert(ht, key, &position, nullptr);
+        bool ret = hashtableFindPositionForInsert(ht, key, strlen(key), &position, nullptr);
         ASSERT_TRUE(ret);
         keyval *e = create_keyval(key, val);
         hashtableInsertAtPosition(ht, e, &position);
@@ -409,7 +411,7 @@ TEST_F(HashtableTest, two_phase_insert_and_pop) {
         snprintf(key, sizeof(key), "%d", j);
         snprintf(val, sizeof(val), "%d", count - j + 42);
         void *found;
-        ASSERT_TRUE(hashtableFind(ht, key, &found));
+        ASSERT_TRUE(hashtableFind(ht, key, strlen(key), &found));
         keyval *e = (keyval *)found;
         ASSERT_EQ(strcmp((const char *)getval(e), val), 0);
     }
@@ -421,7 +423,7 @@ TEST_F(HashtableTest, two_phase_insert_and_pop) {
         snprintf(val, sizeof(val), "%d", count - j + 42);
         hashtablePosition position;
         size_t size_before_find = hashtableSize(ht);
-        void **ref = hashtableTwoPhasePopFindRef(ht, key, &position);
+        void **ref = hashtableTwoPhasePopFindRef(ht, key, strlen(key), &position);
         ASSERT_NE(ref, nullptr);
         keyval *e = *(keyval **)ref;
         ASSERT_EQ(strcmp((const char *)getval(e), val), 0);
@@ -456,9 +458,10 @@ TEST_F(HashtableTest, replace_reallocated_entry) {
         snprintf(key, sizeof(key), "%d", j);
         snprintf(val, sizeof(val), "%d", count - j + 42);
         void *found;
-        ASSERT_TRUE(hashtableFind(ht, key, &found));
+        ASSERT_TRUE(hashtableFind(ht, key, strlen(key), &found));
         keyval *old = (keyval *)found;
-        ASSERT_EQ(strcmp((const char *)getkey(old), key), 0);
+        size_t old_key_len;
+        ASSERT_EQ(strcmp((const char *)getkey(old, &old_key_len), key), 0);
         ASSERT_EQ(strcmp((const char *)getval(old), val), 0);
         snprintf(val, sizeof(val), "%d", j + 1234);
         keyval *new_entry = create_keyval(key, val);
@@ -477,7 +480,7 @@ TEST_F(HashtableTest, replace_reallocated_entry) {
         snprintf(key, sizeof(key), "%d", j);
         snprintf(val, sizeof(val), "%d", j + 1234);
         void *found;
-        ASSERT_TRUE(hashtableFind(ht, key, &found));
+        ASSERT_TRUE(hashtableFind(ht, key, strlen(key), &found));
         keyval *e = (keyval *)found;
         ASSERT_EQ(strcmp((const char *)getval(e), val), 0);
     }
@@ -507,7 +510,7 @@ TEST_F(HashtableTest, incremental_find) {
     for (size_t i = 0; i < count; i++) {
         uint8_t *key = &element_array[i];
         void *found;
-        ASSERT_EQ(hashtableFind(ht, key, &found), 1);
+        ASSERT_EQ(hashtableFind(ht, key, 0, &found), 1);
         ASSERT_EQ(found, key);
     }
     uint64_t us2 = elapsedUs(timer);
@@ -522,7 +525,7 @@ TEST_F(HashtableTest, incremental_find) {
             hashtableIncrementalFindState *states = (hashtableIncrementalFindState *)malloc(sizeof(hashtableIncrementalFindState) * batch_size);
             for (size_t i = 0; i < batch_size; i++) {
                 void *key = &element_array[batch * batch_size + i];
-                hashtableIncrementalFindInit(&states[i], ht, key);
+                hashtableIncrementalFindInit(&states[i], ht, key, 0);
             }
             /* Work on batches in round-robin order until all are done. */
             size_t num_left;
@@ -633,9 +636,10 @@ static mock_hash_entry *mock_hash_entry_create(uint64_t value, uint64_t hash) {
     return entry;
 }
 
-static uint64_t mock_hash_entry_get_hash(const void *entry) {
-    if (entry == nullptr) return 0UL;
-    const mock_hash_entry *mock = (const mock_hash_entry *)entry;
+static uint64_t mock_hash_entry_hash(const void *key, size_t key_len) {
+    UNUSED(key_len);
+    if (key == nullptr) return 0UL;
+    const mock_hash_entry *mock = (const mock_hash_entry *)key;
     return (mock->hash != 0) ? mock->hash : mock->value;
 }
 
@@ -706,7 +710,7 @@ TEST_F(HashtableTest, safe_iterator) {
         /* increment entry at this position as a counter */
         (*entry)++;
         if (index % 4 == 0) {
-            ASSERT_TRUE(hashtableDelete(ht, entry));
+            ASSERT_TRUE(hashtableDelete(ht, entry, 0));
         }
         /* Add new item each time we see one of the original items */
         if (index < count) {
@@ -766,7 +770,7 @@ TEST_F(HashtableTest, compact_bucket_chain) {
         ASSERT_EQ(hashtableChainedBuckets(ht, 0), num_chained_buckets);
         num_returned++;
         if (num_returned % 2 == 0) {
-            ASSERT_TRUE(hashtableDelete(ht, entry));
+            ASSERT_TRUE(hashtableDelete(ht, entry, 0));
         }
         if (num_returned == count) {
             printf("Last iteration. Half of them have been deleted.\n");
@@ -921,7 +925,7 @@ TEST_F(HashtableTest, random_entry_with_long_chain) {
     const size_t num_samples = (size_t)n + 1;
 
     hashtableType type = {};
-    type.hashFunction = mock_hash_entry_get_hash;
+    type.hashFunction = mock_hash_entry_hash;
     type.entryDestructor = freekeyval;
 
     hashtable *ht = hashtableCreate(&type);
@@ -970,7 +974,7 @@ TEST_F(HashtableTest, random_entry_with_long_chain) {
 /* Helper function for scan tests */
 static void deleteScanFn(void *privdata, void *entry) {
     hashtable *ht = (hashtable *)privdata;
-    hashtableDelete(ht, entry);
+    hashtableDelete(ht, entry, 0);
 }
 
 /* This is a test for random entry selection in sparse hashtables.

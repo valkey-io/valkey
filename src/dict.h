@@ -126,7 +126,8 @@ static inline void *dictGetKey(const dictEntry *de) {
 }
 
 /* Callback for dictType.entryGetKey, which expects void pointers. */
-static inline const void *dictEntryGetKey(const void *entry) {
+static inline const void *dictEntryGetKey(const void *entry, size_t *len) {
+    if (len) *len = 0;
     return dictGetKey((const dictEntry *)entry);
 }
 
@@ -162,7 +163,7 @@ static inline size_t dictMemUsage(const dict *d) {
  * or NULL if the key doesn't exist. */
 static inline dictEntry *dictFind(dict *d, const void *key) {
     void *found = NULL;
-    return hashtableFind(d, key, &found) ? (dictEntry *)found : NULL;
+    return hashtableFind(d, key, 0, &found) ? (dictEntry *)found : NULL;
 }
 
 /* Fetch the value associated with a key. Returns the value if the key exists,
@@ -175,7 +176,7 @@ static inline void *dictFetchValue(dict *d, const void *key) {
 /* Remove a key from the dictionary. Returns DICT_OK if the key was found
  * and removed, DICT_ERR if the key was not found. */
 static inline int dictDelete(dict *d, const void *key) {
-    return hashtableDelete(d, key) ? DICT_OK : DICT_ERR;
+    return hashtableDelete(d, key, 0) ? DICT_OK : DICT_ERR;
 }
 
 /* Free an entry that was previously unlinked with dictUnlink().
@@ -210,7 +211,7 @@ static inline dictEntry *dictGetFairRandomKey(dict *d) {
  * Without this function the pattern would require two lookups. */
 static inline dictEntry *dictUnlink(dict *d, const void *key) {
     void *entry = NULL;
-    return hashtablePop(d, key, &entry) ? (dictEntry *)entry : NULL;
+    return hashtablePop(d, key, 0, &entry) ? (dictEntry *)entry : NULL;
 }
 
 /* Add an entry to the dictionary. */
@@ -218,7 +219,7 @@ static inline int dictAdd(dict *d, void *key, void *val) {
     hashtablePosition pos;
     void *existing = NULL;
 
-    if (!hashtableFindPositionForInsert(d, key, &pos, &existing)) {
+    if (!hashtableFindPositionForInsert(d, key, 0, &pos, &existing)) {
         return DICT_ERR; /* Key already exists */
     }
 
@@ -240,7 +241,7 @@ static inline dictEntry *dictAddRaw(dict *d, void *key, dictEntry **existing) {
     hashtablePosition pos;
     void *existing_entry = NULL;
 
-    if (!hashtableFindPositionForInsert(d, key, &pos, &existing_entry)) {
+    if (!hashtableFindPositionForInsert(d, key, 0, &pos, &existing_entry)) {
         if (existing) *existing = (dictEntry *)existing_entry;
         return NULL;
     }

@@ -271,13 +271,16 @@ dictType clusterSdsToListType = {
     .entryDestructor = dictEntryDestructorSdsKeyListValue,
 };
 
-static uint64_t dictPtrHash(const void *key) {
+static uint64_t dictPtrHash(const void *key, size_t key_len) {
+    UNUSED(key_len);
     /* We hash the pointer value itself. */
     return dictGenHashFunction((const char *)&key, sizeof(key));
 }
 
-static int dictPtrCompare(const void *key1, const void *key2) {
-    return key1 == key2;
+static int dictPtrCompare(const void *key1, size_t key1_len, const void *key2, size_t key2_len) {
+    UNUSED(key1_len);
+    UNUSED(key2_len);
+    return key1 != key2;
 }
 
 /* Dictionary type for mapping hash slots to cluster nodes.

@@ -1079,6 +1079,25 @@ void debugCommand(client *c) {
         } else {
             addReplyError(c, "No such durability provider");
         }
+    } else if (!strcasecmp(objectGetVal(c->argv[1]), "set-io-last-written") && c->argc == 5) {
+        /* DEBUG set-io-last-written <client-id> <bufpos> <data_len>
+         * Simulate a partial write state on a target client for testing.
+         * Sets io_last_written.buf to target->buf, bufpos and data_len to the given values.
+         * This allows injecting the post-partial-write state that triggers the
+         * data_len vs bufpos divergence with copy avoidance. */
+        long long client_id, bufpos_val, data_len_val;
+        if (getLongLongFromObjectOrReply(c, c->argv[2], &client_id, NULL) != C_OK) return;
+        if (getLongLongFromObjectOrReply(c, c->argv[3], &bufpos_val, NULL) != C_OK) return;
+        if (getLongLongFromObjectOrReply(c, c->argv[4], &data_len_val, NULL) != C_OK) return;
+        client *target = lookupClientByID((uint64_t)client_id);
+        if (target == NULL) {
+            addReplyError(c, "No such client");
+            return;
+        }
+        target->io_last_written.buf = target->buf;
+        target->io_last_written.bufpos = (size_t)bufpos_val;
+        target->io_last_written.data_len = (size_t)data_len_val;
+        addReply(c, shared.ok);
     } else if (!handleDebugClusterCommand(c)) {
         addReplySubcommandSyntaxError(c);
         return;

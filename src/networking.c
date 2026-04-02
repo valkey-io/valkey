@@ -1723,7 +1723,7 @@ int clientHasPendingReplies(client *c) {
             (c->bufpos == 0 && n->disallowed_reply_block != NULL && listFirst(c->reply) == n->disallowed_reply_block)) {
             // Both positions are pointing both at the initial 16KB buffer or the
             // first reply block, compare the sentlen with the last allowed byte offset
-            return c->io_last_written.data_len < n->disallowed_byte_offset;
+            return c->io_last_written.bufpos < n->disallowed_byte_offset;
         }
     }
 

@@ -1045,6 +1045,66 @@ foreach provider_mode {aof} {
                 $rd close
             }
 
+            # ==================== Copy avoidance compatibility ====================
+
+            test "($provider_mode) Blocked reply not released when io_last_written.data_len exceeds encoded boundary" {
+                assert_equal "always" [lindex [$primary config get appendfsync] 1]
+
+                pause_provider
+
+                # Write a dirty key (fire-and-forget) so the next GET is blocked
+                set writer [valkey_deferring_client -1]
+                $writer client reply off
+                $writer set durable:inject-key value
+
+                # Reader: issue GET on the dirty key — reply will be blocked
+                set rd [valkey_deferring_client -1]
+
+                # Get the reader's client ID for the DEBUG command
+                $rd client id
+                set reader_id [$rd read]
+
+                $rd get durable:inject-key
+
+                # Give server time to process and block the reply
+                after 100
+
+                # Inject the post-partial-write state using DEBUG.
+                # This simulates what happens after IO threads write an
+                # encoded (copy-avoided) buffer: data_len (decoded RESP bytes)
+                # is much larger than bufpos (encoded buffer position).
+                # bufpos=0 means "buffer not fully consumed" (incomplete write).
+                # data_len=999999 is a large decoded byte count.
+                #
+                # The disallowed_byte_offset for the blocked reply is a small
+                # number in encoded-buffer coordinates (~30 bytes).
+                #
+                # Bug (data_len):  999999 < ~30 → false → "no pending" →
+                #   server thinks all data sent, removes write handler,
+                #   reply leaks through!
+                # Fix (bufpos):    0 < ~30 → true → "still pending" →
+                #   reply stays blocked.
+                $primary DEBUG set-io-last-written $reader_id 0 999999
+
+                # Check: the reply must NOT leak through
+                set fd [$rd channel]
+                fconfigure $fd -blocking 0
+                after 200
+                set early_reply [read $fd]
+                fconfigure $fd -blocking 1
+                assert_equal "" $early_reply
+
+                # Reset the injected state so normal writes work after unblock
+                $primary DEBUG set-io-last-written $reader_id 0 0
+
+                unblock_with_provider
+
+                # Now the reply should come through
+                assert_equal "value" [$rd read]
+                $rd close
+                $writer close
+            }
+
             # ==================== Failover tests (must be last  changes roles) ====================
 
             test "($provider_mode) Failover disconnects clients waiting for ack" {

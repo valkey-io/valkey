@@ -1,4 +1,3 @@
-#include "durability_provider.h"
 #include "server.h"
 #include <assert.h>
 #include <stdatomic.h>

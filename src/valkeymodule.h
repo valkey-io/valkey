@@ -538,7 +538,7 @@ typedef void (*ValkeyModuleEventLoopOneShotFunc)(void *user_data);
 #define VALKEYMODULE_EVENT_ATOMIC_SLOT_MIGRATION 19
 #define VALKEYMODULE_EVENT_COMMAND_RESULT_SUCCESS 20
 #define VALKEYMODULE_EVENT_COMMAND_RESULT_FAILURE 21
-#define VALKEYMODULE_EVENT_COMMAND_RESULT_ACL_DENIED 22
+#define VALKEYMODULE_EVENT_COMMAND_RESULT_REJECTED 22
 #define _VALKEYMODULE_EVENT_NEXT 23 /* Next event flag, should be updated if a new event added. */
 
 typedef struct ValkeyModuleEvent {
@@ -601,8 +601,7 @@ static const ValkeyModuleEvent ValkeyModuleEvent_ReplicationRoleChanged = {VALKE
                                ValkeyModuleEvent_AtomicSlotMigration = {VALKEYMODULE_EVENT_ATOMIC_SLOT_MIGRATION, 1},
                                ValkeyModuleEvent_CommandResultSuccess = {VALKEYMODULE_EVENT_COMMAND_RESULT_SUCCESS, 1},
                                ValkeyModuleEvent_CommandResultFailure = {VALKEYMODULE_EVENT_COMMAND_RESULT_FAILURE, 1},
-                               ValkeyModuleEvent_CommandResultACLDenied = {VALKEYMODULE_EVENT_COMMAND_RESULT_ACL_DENIED,
-                                                                           1};
+                               ValkeyModuleEvent_CommandResultRejected = {VALKEYMODULE_EVENT_COMMAND_RESULT_REJECTED, 1};
 
 /* Those are values that are used for the 'subevent' callback argument. */
 #define VALKEYMODULE_SUBEVENT_PERSISTENCE_RDB_START 0
@@ -865,9 +864,9 @@ typedef struct ValkeyModuleCommandResultInfo {
     int is_module_client;      /* 1 if command was from RM_Call, 0 otherwise. */
     int argc;                  /* Number of command arguments. */
     ValkeyModuleString **argv; /* Command arguments array (zero-copy). */
-    int acl_deny_reason;       /* ACL_DENIED_CMD/KEY/CHANNEL/AUTH; 0 for non-ACL events. */
-    const char *acl_object;    /* Denied resource name: key or channel for KEY/CHANNEL denials,
-                                * NULL for CMD denials and non-ACL events. Mirrors ACL LOG "object". */
+    const char *object;        /* Rejection context: ACL_KEY/ACL_CHANNEL=denied key or channel,
+                                * UNKNOWN_CMD=attempted command string, CLUSTER/REDIRECT=target
+                                * address (host:port); NULL for all other subevents. */
 } ValkeyModuleCommandResultInfoV1;
 
 #define ValkeyModuleCommandResultInfo ValkeyModuleCommandResultInfoV1

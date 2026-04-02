@@ -2,11 +2,11 @@
  *
  * This module tests the VALKEYMODULE_EVENT_COMMAND_RESULT_SUCCESS,
  * VALKEYMODULE_EVENT_COMMAND_RESULT_FAILURE, and
- * VALKEYMODULE_EVENT_COMMAND_RESULT_ACL_DENIED server events.
+ * VALKEYMODULE_EVENT_COMMAND_RESULT_REJECTED server events.
  *
  * Commands provided:
  * - CMDRESULT.REGISTER <mode> - Register event subscription
- * (success/failure/acl/all)
+ * (success/failure/rejected/all)
  * - CMDRESULT.UNSUBSCRIBE - Unsubscribe from the event
  * - CMDRESULT.STATS - Get statistics about event invocations
  * - CMDRESULT.RESET - Reset statistics
@@ -25,7 +25,7 @@ static struct {
   long long total_callbacks;
   long long success_count;
   long long failure_count;
-  long long acl_denied_count;
+  long long rejected_count;
   long long total_duration_us;
   long long total_dirty;
 } stats = {0};
@@ -37,15 +37,15 @@ static struct {
 
 typedef struct {
   char command_name[64];
-  int status; /* 0 = success, 1 = failure, 2 = acl_denied */
+  int status; /* 0 = success, 1 = failure, 2 = rejected */
+  uint64_t subevent;
   long long duration;
   long long dirty;
   unsigned long long client_id;
   int is_module_client;
   int argc;
   char argv[MAX_ARGV_LOG][MAX_ARG_LEN];
-  int acl_deny_reason;
-  char acl_object[MAX_ARG_LEN];
+  char object[MAX_ARG_LEN];
 } ResultLogEntry;
 
 static ResultLogEntry result_log[MAX_LOG_ENTRIES];
@@ -53,33 +53,33 @@ static int log_head = 0;
 static int log_count = 0;
 
 /* Track subscription mode bitmask:
- * bit 0 = success, bit 1 = failure, bit 2 = acl_denied */
+ * bit 0 = success, bit 1 = failure, bit 2 = rejected */
 #define MODE_SUCCESS 0x1
 #define MODE_FAILURE 0x2
-#define MODE_ACL_DENIED 0x4
+#define MODE_REJECTED 0x4
 static int subscription_mode = 0;
 
 /* Add entry to circular log */
-void LogResult(const char *cmd_name, int status, long long duration,
-               long long dirty, unsigned long long client_id,
-               int is_module_client, ValkeyModuleString **argv, int argc,
-               int acl_deny_reason, const char *acl_object) {
+void LogResult(const char *cmd_name, int status, uint64_t subevent,
+               long long duration, long long dirty,
+               unsigned long long client_id, int is_module_client,
+               ValkeyModuleString **argv, int argc, const char *object) {
   ResultLogEntry *entry = &result_log[log_head];
 
   strncpy(entry->command_name, cmd_name, sizeof(entry->command_name) - 1);
   entry->command_name[sizeof(entry->command_name) - 1] = '\0';
   entry->status = status;
+  entry->subevent = subevent;
   entry->duration = duration;
   entry->dirty = dirty;
   entry->client_id = client_id;
   entry->is_module_client = is_module_client;
-  entry->acl_deny_reason = acl_deny_reason;
 
-  if (acl_object) {
-    strncpy(entry->acl_object, acl_object, sizeof(entry->acl_object) - 1);
-    entry->acl_object[sizeof(entry->acl_object) - 1] = '\0';
+  if (object) {
+    strncpy(entry->object, object, sizeof(entry->object) - 1);
+    entry->object[sizeof(entry->object) - 1] = '\0';
   } else {
-    entry->acl_object[0] = '\0';
+    entry->object[0] = '\0';
   }
 
   /* Store argv */
@@ -109,12 +109,11 @@ void LogResult(const char *cmd_name, int status, long long duration,
     log_count++;
 }
 
-/* Command result event callback — handles success, failure, and ACL denied
+/* Command result event callback — handles success, failure, and rejected
  * events */
 void CommandResultEventCallback(ValkeyModuleCtx *ctx, ValkeyModuleEvent eid,
                                 uint64_t subevent, void *data) {
   VALKEYMODULE_NOT_USED(ctx);
-  VALKEYMODULE_NOT_USED(subevent);
 
   ValkeyModuleCommandResultInfo *info = (ValkeyModuleCommandResultInfo *)data;
 
@@ -124,9 +123,9 @@ void CommandResultEventCallback(ValkeyModuleCtx *ctx, ValkeyModuleEvent eid,
   stats.total_callbacks++;
 
   int status;
-  if (eid.id == VALKEYMODULE_EVENT_COMMAND_RESULT_ACL_DENIED) {
+  if (eid.id == VALKEYMODULE_EVENT_COMMAND_RESULT_REJECTED) {
     status = 2;
-    stats.acl_denied_count++;
+    stats.rejected_count++;
   } else if (eid.id == VALKEYMODULE_EVENT_COMMAND_RESULT_FAILURE) {
     status = 1;
     stats.failure_count++;
@@ -139,13 +138,12 @@ void CommandResultEventCallback(ValkeyModuleCtx *ctx, ValkeyModuleEvent eid,
   stats.total_dirty += info->dirty;
 
   LogResult(info->command_name ? info->command_name : "unknown", status,
-            info->duration_us, info->dirty, info->client_id,
-            info->is_module_client, info->argv, info->argc,
-            info->acl_deny_reason, info->acl_object);
+            subevent, info->duration_us, info->dirty, info->client_id,
+            info->is_module_client, info->argv, info->argc, info->object);
 }
 
 /* CMDRESULT.REGISTER <mode>
- * Mode can be: "all", "success", "failure", "acl"
+ * Mode can be: "all", "success", "failure", "rejected"
  */
 int CmdResultRegister_ValkeyCommand(ValkeyModuleCtx *ctx,
                                     ValkeyModuleString **argv, int argc) {
@@ -163,16 +161,16 @@ int CmdResultRegister_ValkeyCommand(ValkeyModuleCtx *ctx,
 
   int new_mode = 0;
   if (strcmp(mode_str, "all") == 0) {
-    new_mode = MODE_SUCCESS | MODE_FAILURE | MODE_ACL_DENIED;
+    new_mode = MODE_SUCCESS | MODE_FAILURE | MODE_REJECTED;
   } else if (strcmp(mode_str, "success") == 0) {
     new_mode = MODE_SUCCESS;
   } else if (strcmp(mode_str, "failure") == 0) {
     new_mode = MODE_FAILURE;
-  } else if (strcmp(mode_str, "acl") == 0) {
-    new_mode = MODE_ACL_DENIED;
+  } else if (strcmp(mode_str, "rejected") == 0) {
+    new_mode = MODE_REJECTED;
   } else {
     return ValkeyModule_ReplyWithError(
-        ctx, "ERR invalid mode. Use: all, success, failure, or acl");
+        ctx, "ERR invalid mode. Use: all, success, failure, or rejected");
   }
 
   if ((new_mode & MODE_SUCCESS) &&
@@ -194,9 +192,9 @@ int CmdResultRegister_ValkeyCommand(ValkeyModuleCtx *ctx,
         ctx, "ERR failed to subscribe to failure event");
   }
 
-  if ((new_mode & MODE_ACL_DENIED) &&
+  if ((new_mode & MODE_REJECTED) &&
       ValkeyModule_SubscribeToServerEvent(
-          ctx, ValkeyModuleEvent_CommandResultACLDenied,
+          ctx, ValkeyModuleEvent_CommandResultRejected,
           CommandResultEventCallback) == VALKEYMODULE_ERR) {
     if (new_mode & MODE_SUCCESS)
       ValkeyModule_SubscribeToServerEvent(
@@ -205,7 +203,7 @@ int CmdResultRegister_ValkeyCommand(ValkeyModuleCtx *ctx,
       ValkeyModule_SubscribeToServerEvent(
           ctx, ValkeyModuleEvent_CommandResultFailure, NULL);
     return ValkeyModule_ReplyWithError(
-        ctx, "ERR failed to subscribe to ACL denied event");
+        ctx, "ERR failed to subscribe to rejected event");
   }
 
   subscription_mode = new_mode;
@@ -232,16 +230,16 @@ int CmdResultUnsubscribe_ValkeyCommand(ValkeyModuleCtx *ctx,
   if (subscription_mode & MODE_FAILURE)
     ValkeyModule_SubscribeToServerEvent(
         ctx, ValkeyModuleEvent_CommandResultFailure, NULL);
-  if (subscription_mode & MODE_ACL_DENIED)
+  if (subscription_mode & MODE_REJECTED)
     ValkeyModule_SubscribeToServerEvent(
-        ctx, ValkeyModuleEvent_CommandResultACLDenied, NULL);
+        ctx, ValkeyModuleEvent_CommandResultRejected, NULL);
 
   subscription_mode = 0;
   return ValkeyModule_ReplyWithSimpleString(ctx, "OK");
 }
 
 /* CMDRESULT.STATS
- * Returns: total_callbacks, success_count, failure_count, acl_denied_count,
+ * Returns: total_callbacks, success_count, failure_count, rejected_count,
  *          total_duration_us, total_dirty
  */
 int CmdResultStats_ValkeyCommand(ValkeyModuleCtx *ctx,
@@ -259,8 +257,8 @@ int CmdResultStats_ValkeyCommand(ValkeyModuleCtx *ctx,
   ValkeyModule_ReplyWithLongLong(ctx, stats.success_count);
   ValkeyModule_ReplyWithSimpleString(ctx, "failure_count");
   ValkeyModule_ReplyWithLongLong(ctx, stats.failure_count);
-  ValkeyModule_ReplyWithSimpleString(ctx, "acl_denied_count");
-  ValkeyModule_ReplyWithLongLong(ctx, stats.acl_denied_count);
+  ValkeyModule_ReplyWithSimpleString(ctx, "rejected_count");
+  ValkeyModule_ReplyWithLongLong(ctx, stats.rejected_count);
   ValkeyModule_ReplyWithSimpleString(ctx, "total_duration_us");
   ValkeyModule_ReplyWithLongLong(ctx, stats.total_duration_us);
   ValkeyModule_ReplyWithSimpleString(ctx, "total_dirty");
@@ -281,7 +279,7 @@ int CmdResultReset_ValkeyCommand(ValkeyModuleCtx *ctx,
   stats.total_callbacks = 0;
   stats.success_count = 0;
   stats.failure_count = 0;
-  stats.acl_denied_count = 0;
+  stats.rejected_count = 0;
   stats.total_duration_us = 0;
   stats.total_dirty = 0;
 
@@ -320,7 +318,7 @@ int CmdResultGetLog_ValkeyCommand(ValkeyModuleCtx *ctx,
 
     const char *status_str;
     if (entry->status == 2)
-      status_str = "acl_denied";
+      status_str = "rejected";
     else if (entry->status == 1)
       status_str = "failure";
     else
@@ -339,10 +337,10 @@ int CmdResultGetLog_ValkeyCommand(ValkeyModuleCtx *ctx,
     ValkeyModule_ReplyWithLongLong(ctx, entry->client_id);
     ValkeyModule_ReplyWithSimpleString(ctx, "is_module_client");
     ValkeyModule_ReplyWithLongLong(ctx, entry->is_module_client);
-    ValkeyModule_ReplyWithSimpleString(ctx, "acl_deny_reason");
-    ValkeyModule_ReplyWithLongLong(ctx, entry->acl_deny_reason);
-    ValkeyModule_ReplyWithSimpleString(ctx, "acl_object");
-    ValkeyModule_ReplyWithCString(ctx, entry->acl_object);
+    ValkeyModule_ReplyWithSimpleString(ctx, "subevent");
+    ValkeyModule_ReplyWithLongLong(ctx, entry->subevent);
+    ValkeyModule_ReplyWithSimpleString(ctx, "object");
+    ValkeyModule_ReplyWithCString(ctx, entry->object);
     ValkeyModule_ReplyWithSimpleString(ctx, "argv");
     ValkeyModule_ReplyWithArray(ctx, entry->argc);
     for (int j = 0; j < entry->argc; j++) {

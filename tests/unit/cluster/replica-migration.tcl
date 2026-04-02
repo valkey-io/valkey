@@ -107,9 +107,11 @@ proc test_migrated_replica {type} {
         R 3 readonly
         R 7 readonly
         wait_for_condition 1000 50 {
-            [R 3 get key_991803] eq $small_value && [R 3 get key_977613] eq $large_value &&
-            [R 4 get key_991803] eq $small_value && [R 4 get key_977613] eq $large_value &&
-            [R 7 get key_991803] eq $small_value && [R 7 get key_977613] eq $large_value
+            [catch {expr {
+                [R 3 get key_991803] eq $small_value && [R 3 get key_977613] eq $large_value &&
+                [R 4 get key_991803] eq $small_value && [R 4 get key_977613] eq $large_value &&
+                [R 7 get key_991803] eq $small_value && [R 7 get key_977613] eq $large_value
+            }} result] == 0 && $result
         } else {
             catch {puts "R 3: [R 3 keys *]"}
             catch {puts "R 4: [R 4 keys *]"}
@@ -200,8 +202,10 @@ proc test_nonempty_replica {type} {
         # Make sure the key exists and is consistent.
         R 7 readonly
         wait_for_condition 1000 50 {
-            [R 4 get key_991803] eq $small_value &&
-            [R 7 get key_991803] eq $small_value
+            [catch {expr {
+                [R 4 get key_991803] eq $small_value &&
+                [R 7 get key_991803] eq $small_value
+            }} result] == 0 && $result
         } else {
             catch {puts "R 4: [R 4 get key_991803]"}
             catch {puts "R 7: [R 7 get key_991803]"}
@@ -322,9 +326,11 @@ proc test_sub_replica {type} {
         R 3 readonly
         R 7 readonly
         wait_for_condition 1000 50 {
-            [R 3 get key_991803] eq $small_value && [R 3 get key_977613] eq $large_value &&
-            [R 4 get key_991803] eq $small_value && [R 4 get key_977613] eq $large_value &&
-            [R 7 get key_991803] eq $small_value && [R 7 get key_977613] eq $large_value
+            [catch {expr {
+                [R 3 get key_991803] eq $small_value && [R 3 get key_977613] eq $large_value &&
+                [R 4 get key_991803] eq $small_value && [R 4 get key_977613] eq $large_value &&
+                [R 7 get key_991803] eq $small_value && [R 7 get key_977613] eq $large_value
+            }} result] == 0 && $result
         } else {
             catch {puts "R 3: [R 3 keys *]"}
             catch {puts "R 4: [R 4 keys *]"}

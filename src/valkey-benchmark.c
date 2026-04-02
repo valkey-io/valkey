@@ -292,7 +292,7 @@ static bool isBenchmarkFinished(int request_count) {
 }
 
 static uint64_t dictSdsHash(const void *key) {
-    return dictGenHashFunction((unsigned char *)key, sdslen((char *)key));
+    return dictGenHashFunction(key, sdslen(key));
 }
 
 static int dictSdsKeyCompare(const void *key1, const void *key2) {
@@ -304,12 +304,10 @@ static int dictSdsKeyCompare(const void *key1, const void *key2) {
 }
 
 static dictType dtype = {
-    dictSdsHash,       /* hash function */
-    NULL,              /* key dup */
-    dictSdsKeyCompare, /* key compare */
-    NULL,              /* key destructor */
-    NULL,              /* val destructor */
-    NULL               /* allow to expand */
+    .entryGetKey = dictEntryGetKey,
+    .hashFunction = dictSdsHash,
+    .keyCompare = dictSdsKeyCompare,
+    .entryDestructor = zfree,
 };
 
 static valkeyContext *getValkeyContext(enum valkeyConnectionType ct, const char *ip_or_path, int port) {

@@ -332,7 +332,7 @@ static const void *watchedKeyGetKey(const void *entry) {
 hashtableType watchedKeysHashtableType = {
     .entryGetKey = watchedKeyGetKey,
     .hashFunction = dictEncObjHash,
-    .keyCompare = hashtableEncObjKeyCompare,
+    .keyCompare = dictEncObjKeyCompare,
 };
 
 /* Attach a watchedKey to the list of clients watching that key. */

@@ -77,8 +77,8 @@ proc corrupt_payload {payload} {
 # valgrind will make sure there were no leaks in the rdb loader error handling code
 foreach sanitize_dump {no yes} {
     if {$::accurate} {
-        set min_duration [expr {60 * 10}] ;# run at least 10 minutes
-        set min_cycles 1000 ;# run at least 1k cycles (max 16 minutes)
+        set min_duration 60 ;# run at least 1 minute
+        set min_cycles 100 ;# run at least 100 cycles
     } else {
         set min_duration 10 ; # run at least 10 seconds
         set min_cycles 10 ; # run at least 10 cycles

@@ -439,13 +439,18 @@ void dictInstancesValDestructor(void *obj) {
  *
  * also used for: sentinelValkeyInstance->sentinels dictionary that maps
  * sentinels ip:port to last seen time in Pub/Sub hello message. */
+
+static void dictEntryDestructorInstancesValue(void *entry) {
+    dictEntry *de = entry;
+    dictInstancesValDestructor(dictGetVal(de));
+    zfree(de);
+}
+
 dictType instancesDictType = {
-    dictSdsHash,                /* hash function */
-    NULL,                       /* key dup */
-    dictSdsKeyCompare,          /* key compare */
-    NULL,                       /* key destructor */
-    dictInstancesValDestructor, /* val destructor */
-    NULL                        /* allow to expand */
+    .entryGetKey = dictEntryGetKey,
+    .hashFunction = dictSdsHash,
+    .keyCompare = dictSdsKeyCompare,
+    .entryDestructor = dictEntryDestructorInstancesValue,
 };
 
 /* Instance runid (sds) -> votes (long casted to void*)
@@ -453,22 +458,18 @@ dictType instancesDictType = {
  * This is useful into sentinelGetObjectiveLeader() function in order to
  * count the votes and understand who is the leader. */
 dictType leaderVotesDictType = {
-    dictSdsHash,       /* hash function */
-    NULL,              /* key dup */
-    dictSdsKeyCompare, /* key compare */
-    NULL,              /* key destructor */
-    NULL,              /* val destructor */
-    NULL               /* allow to expand */
+    .entryGetKey = dictEntryGetKey,
+    .hashFunction = dictSdsHash,
+    .keyCompare = dictSdsKeyCompare,
+    .entryDestructor = zfree,
 };
 
 /* Instance renamed commands table. */
 dictType renamedCommandsDictType = {
-    dictSdsCaseHash,       /* hash function */
-    NULL,                  /* key dup */
-    dictSdsKeyCaseCompare, /* key compare */
-    dictSdsDestructor,     /* key destructor */
-    dictSdsDestructor,     /* val destructor */
-    NULL                   /* allow to expand */
+    .entryGetKey = dictEntryGetKey,
+    .hashFunction = dictSdsCaseHash,
+    .keyCompare = dictSdsKeyCaseCompare,
+    .entryDestructor = dictEntryDestructorSdsKeyValue,
 };
 
 /* =========================== Initialization =============================== */
@@ -4024,7 +4025,7 @@ void sentinelCommand(client *c) {
          * a dictionary composed of just the primary groups the user
          * requested. */
         dictType copy_keeper = instancesDictType;
-        copy_keeper.valDestructor = NULL;
+        copy_keeper.entryDestructor = zfree;
         dict *primaries_local = sentinel.primaries;
         if (c->argc > 2) {
             primaries_local = dictCreate(&copy_keeper);
@@ -4164,7 +4165,7 @@ void sentinelInfoCommand(client *c) {
         if (sdslen(info) != 0) info = sdscat(info, "\r\n");
         info = sdscatprintf(info,
                             "# Sentinel\r\n"
-                            "sentinel_masters:%lu\r\n"
+                            "sentinel_masters:%zu\r\n"
                             "sentinel_tilt:%d\r\n"
                             "sentinel_tilt_since_seconds:%jd\r\n"
                             "sentinel_total_tilt:%d\r\n"
@@ -4187,7 +4188,7 @@ void sentinelInfoCommand(client *c) {
                 status = "sdown";
             info = sdscatprintf(info,
                                 "master%d:name=%s,status=%s,address=%s:%d,"
-                                "slaves=%lu,sentinels=%lu\r\n",
+                                "slaves=%zu,sentinels=%zu\r\n",
                                 primary_id++, ri->name, status, announceSentinelAddr(ri->addr), ri->addr->port,
                                 dictSize(ri->replicas), dictSize(ri->sentinels) + 1);
         }

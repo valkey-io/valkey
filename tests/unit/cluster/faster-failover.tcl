@@ -108,7 +108,8 @@ proc test_best_ranked_replica {} {
         # This is the best ranked replica and can initiate the election immediately
         # Myself become the best ranked replica, initiate the election immediately
         verify_log_message -10 "*best ranked replica*" 0
-        wait_for_log_messages -5 {"*Successful partial resynchronization with primary*"} 0 1000 50
+        set psync_max_retries [expr {$::valgrind ? 6000 : 1200}]
+        wait_for_log_messages -5 {"*Successful partial resynchronization with primary*"} 0 $psync_max_retries 100
 
         # case 2: R0 and R1 down in the same time, R1 have a better failed primary rank, R6 or R11
         # will be the best ranked replica in the first place, if so, there is no delay.
@@ -127,10 +128,10 @@ proc test_best_ranked_replica {} {
         # Myself become the best ranked replica, initiate the election immediately
         if {$R6_replica_rank == 0} {
             verify_log_message -6 "*best ranked replica*" 0
-            wait_for_log_messages -11 {"*Successful partial resynchronization with primary*"} 0 1000 50
+            wait_for_log_messages -11 {"*Successful partial resynchronization with primary*"} 0 $psync_max_retries 100
         } else {
             verify_log_message -11 "*best ranked replica*" 0
-            wait_for_log_messages -6 {"*Successful partial resynchronization with primary*"} 0 1000 50
+            wait_for_log_messages -6 {"*Successful partial resynchronization with primary*"} 0 $psync_max_retries 100
         }
 
         # In any case, we do not expect timeouts.

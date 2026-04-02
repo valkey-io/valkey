@@ -144,13 +144,18 @@ typedef struct {
     rdbAuxFieldDecoder decoder;
 } rdbAuxFieldCodec;
 
+static void dictEntryDestructorSdsKeyHeapValue(void *entry) {
+    dictEntry *de = entry;
+    dictSdsDestructor(dictGetKey(de));
+    dictVanillaFree(dictGetVal(de));
+    zfree(de);
+}
+
 dictType rdbAuxFieldDictType = {
-    dictSdsCaseHash,       /* hash function */
-    NULL,                  /* key dup */
-    dictSdsKeyCaseCompare, /* key compare */
-    dictSdsDestructor,     /* key destructor */
-    dictVanillaFree,       /* val destructor */
-    NULL                   /* allow to expand */
+    .entryGetKey = dictEntryGetKey,
+    .hashFunction = dictSdsCaseHash,
+    .keyCompare = dictSdsKeyCaseCompare,
+    .entryDestructor = dictEntryDestructorSdsKeyHeapValue,
 };
 
 dict *rdbAuxFields = NULL;

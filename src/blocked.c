@@ -161,17 +161,11 @@ void processUnblockedClients(void) {
     client *c;
 
     while (listLength(server.unblocked_clients)) {
-        /* Under a full client pause (PAUSE_ACTIONS_CLIENT_ALL_SET), no commands
-         * should be processed, so bail out early and leave remaining clients in
-         * unblocked_clients to be retried in a future processUnblockedClients().
-         * Under PAUSE_ACTIONS_CLIENT_WRITE_SET, reads are still allowed, so we
-         * let the loop continue; processCommand will postpone-block writes. */
-        if (isPausedActionsWithUpdate(PAUSE_ACTIONS_CLIENT_ALL_SET)) return;
         ln = listFirst(server.unblocked_clients);
         serverAssert(ln != NULL);
         c = ln->value;
         listDelNode(server.unblocked_clients, ln);
-        serverAssert(!blockInuse_isClientBlocked(c));
+        serverAssert(!blockInUse_isClientBlocked(c));
         c->flag.unblocked = 0;
 
         if (c->flag.module) {
@@ -182,7 +176,6 @@ void processUnblockedClients(void) {
         }
 
         if (c->conn && !connHasReadHandler(c->conn)) {
-            // If it fails because epoll_ctl failed then freeClient.
             if (connSetReadHandler(c->conn, readQueryFromClient) == C_ERR) {
                 freeClient(c);
                 return;
@@ -740,7 +733,7 @@ static void unblockClientOnKey(client *c, robj *key) {
         server.current_client = c;
         enterExecutionUnit(1, 0);
         processCommandAndResetClient(c);
-        if (!c->flag.blocked && !blockInuse_isClientBlocked(c)) {
+        if (!c->flag.blocked && !blockInUse_isClientBlocked(c)) {
             if (c->flag.module) {
                 moduleCallCommandUnblockedHandler(c);
             } else {

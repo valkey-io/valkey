@@ -3118,7 +3118,7 @@ void initServer(void) {
 
     commandlogInit();
     latencyMonitorInit();
-    blockInuse_init();
+    blockInUse_init();
     initSharedQueryBuf();
 
     /* Initialize ACL default password if it exists */
@@ -4256,7 +4256,7 @@ void unprepareCommand(client *c) {
  * other operations can be performed by the caller. Otherwise
  * if C_ERR is returned the client was destroyed (i.e. after QUIT). */
 int processCommand(client *c) {
-    serverAssert(!(blockInuse_isClientBlocked(c) || c->flag.unblocked == 1 || c->flag.blocked == 1));
+    serverAssert(!(blockInUse_isClientBlocked(c) || c->flag.unblocked == 1 || c->flag.blocked == 1));
 
     if (!scriptIsTimedout()) {
         /* Both EXEC and scripts call call() directly so there should be
@@ -4906,7 +4906,7 @@ int finishShutdown(void) {
     /* Close the listening sockets. Apparently this allows faster restarts. */
     closeListeningSockets(1);
 
-    blockInuse_release();
+    blockInUse_release();
 
     moduleUnloadAllModules();
 

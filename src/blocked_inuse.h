@@ -4,13 +4,14 @@
  * SPDX-License-Identifier: BSD-3-Clause
  *
  *
- * Client blocking mechanism for keys currently in use by other operations.
+ * Client blocking mechanism for keys currently being processed by a
+ * background thread.
  *
  * This module provides a specialized blocking system that prevents concurrent
- * access to keys that are actively being modified or processed. Unlike the
- * generic blocking operations in blocked.c, this mechanism blocks clients when
- * they attempt to access keys that are marked as "in use" by internal
- * operations such as bgIteration.
+ * access to keys that are actively being modified or processed by a background
+ * thread. Unlike the generic blocking operations in blocked.c, this mechanism
+ * blocks clients when they attempt to access keys that are marked as "in use"
+ * by background operations such as bgIteration.
  *
  * Key features:
  *   - Blocks clients on multiple keys simultaneously
@@ -20,14 +21,14 @@
  *   - Integrates with the server's event loop via processUnblockedClients()
  *
  * Workflow:
- *   1. blockInuse_blockClientOnKeys() -
+ *   1. blockInUse_blockClientOnKeys() -
  *      The client is marked as blocked_in_use.
  *      Two mappings are updated:
  *        - client -> keys: record all keys this client is waiting on.
  *        - key -> clients: for each key, add this client to the key’s
  *          blocking client list.
  *
- *   2. Keys are unblocked individually via blockInuse_unblockClientsOnKey().
+ *   2. Keys are unblocked individually via blockInUse_unblockClientsOnKey().
  *      For each key:
  *        - all clients are removed from that key’s blocking list
  *          (key -> clients),
@@ -62,27 +63,32 @@
 
 struct client; // defined in server.h
 
-/* Check if client is blocked by blockInuse */
-bool blockInuse_isClientBlocked(client *c);
+/* Check if client is blocked by blockInUse */
+bool blockInUse_isClientBlocked(client *c);
 
-/* Initialize blockInuse structures, must be called once during server startup. */
-void blockInuse_init(void);
+/* Initialize blockInUse structures, must be called once during server startup. */
+void blockInUse_init(void);
 
-/* Free blockInuse data structures, unblocks all clients before cleanup. */
-void blockInuse_release(void);
+/* Free blockInUse data structures, unblocks all clients before cleanup. */
+void blockInUse_release(void);
 
-/* Return the number of clients currently blocked by blockInuse. */
-int blockInuse_getNumberOfBlockedClients(void);
+/* Return the number of clients currently blocked by blockInUse. */
+int blockInUse_getNumberOfBlockedClients(void);
 
-/* Return the number of keys currently blocked by blockInuse. */
-int blockInuse_getNumberOfBlockedKeys(void);
+/* Return the number of keys currently blocked by blockInUse. */
+int blockInUse_getNumberOfBlockedKeys(void);
 
 /*
  * Block a client on a list of keys. Duplicate keys are deduplicated: a key is
  * skipped if the client is already the last entry in that key's blocked-clients
  * list.
+ *
+ * The caller MUST set c->flag.pending_command = 1 before calling this function.
+ * This ensures the pending command is executed when the client is later
+ * unblocked via processPendingCommandAndInputBuffer().
+ * The caller should then return without executing the command.
  */
-void blockInuse_blockClientOnKeys(client *c, int nKeys, robj *keys[]);
+void blockInUse_blockClientOnKeys(client *c, int num_keys, robj *keys[]);
 
 /*
  * Unblock clients blocked on the given key.
@@ -91,10 +97,10 @@ void blockInuse_blockClientOnKeys(client *c, int nKeys, robj *keys[]);
  * blocked keys. Such clients are added to the server.unblocked_clients list and
  * resumed later during processUnblockedClients() in blocked.c.
  */
-void blockInuse_unblockClientsOnKey(robj *key);
+void blockInUse_unblockClientsOnKey(robj *key);
 
 /*
- * Unblock all clients that are currently blocked by blockInuse, across all
+ * Unblock all clients that are currently blocked by blockInUse, across all
  * keys they are waiting on.
  *
  * Iterates the key_to_clients hashtable (which only contains keys with at
@@ -102,16 +108,16 @@ void blockInuse_unblockClientsOnKey(robj *key);
  * Unblocked clients are queued for reprocessing via queueClientForReprocessing()
  * and will be resumed during processUnblockedClients().
  *
- * After this call, no clients remain blocked by blockInuse.
+ * After this call, no clients remain blocked by blockInUse.
  */
-void blockInuse_unblockClientsOnAllKeys(void);
+void blockInUse_unblockClientsOnAllKeys(void);
 
 /*
- * Unlink a client currently blocked by blockInuse. Typically used when
+ * Unlink a client currently blocked by blockInUse. Typically used when
  * a client is being freed while still blocked (e.g., client-initiated disconnect).
  *
- * This function removes the client from all blockInuse data structures.
+ * This function removes the client from all blockInUse data structures.
  */
-void blockInuse_unlinkClient(client *c);
+void blockInUse_unlinkClient(client *c);
 
 #endif

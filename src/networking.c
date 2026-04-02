@@ -1913,7 +1913,7 @@ void unlinkClient(client *c) {
     /* If this is marked as current client unset it. */
     if (c->conn && server.current_client == c) server.current_client = NULL;
 
-    if (blockInuse_isClientBlocked(c)) blockInuse_unlinkClient(c);
+    if (blockInUse_isClientBlocked(c)) blockInUse_unlinkClient(c);
 
     /* Certain operations must be done only if the client has an active connection.
      * If the client was already unlinked or if it's a "fake client" the
@@ -1999,8 +1999,8 @@ void unlinkClient(client *c) {
     /* Clear the tracking status. */
     if (c->flag.tracking) disableTracking(c);
 
-    // Client must never be in unblocked or blockInuse blocked state.
-    serverAssert(!(blockInuse_isClientBlocked(c) || (c)->flag.unblocked));
+    // Client must never be in unblocked or blockInUse blocked state.
+    serverAssert(!(blockInUse_isClientBlocked(c) || (c)->flag.unblocked));
 }
 
 /* Clear the client state to resemble a newly connected client. */
@@ -3763,7 +3763,7 @@ void commandProcessed(client *c) {
      *    The client will be reset in unblockClient().
      * 2. Don't update replication offset or propagate commands to replicas,
      *    since we have not applied the command. */
-    if (c->flag.blocked || blockInuse_isClientBlocked(c)) return;
+    if (c->flag.blocked || blockInUse_isClientBlocked(c)) return;
 
     reqresAppendResponse(c);
     clusterSlotStatsAddNetworkBytesInForUserClient(c);
@@ -3805,12 +3805,10 @@ int processCommandAndResetClient(client *c) {
     client *old_client = server.current_client;
     server.current_client = c;
     if (processCommand(c) == C_OK) {
-        if (!blockInuse_isClientBlocked(c)) {
-            commandProcessed(c);
-            /* Update the client's memory to include output buffer growth following the
-             * processed command. */
-            if (c->conn) updateClientMemUsageAndBucket(c);
-        }
+        commandProcessed(c);
+        /* Update the client's memory to include output buffer growth following the
+         * processed command. */
+        if (c->conn) updateClientMemUsageAndBucket(c);
     }
 
     if (server.current_client == NULL) deadclient = 1;
@@ -3844,7 +3842,7 @@ int processPendingCommandAndInputBuffer(client *c) {
             return C_ERR;
         }
     }
-    if (blockInuse_isClientBlocked(c)) return C_OK;
+    if (blockInUse_isClientBlocked(c)) return C_OK;
 
     /* Now process client if it has more commands queued and/or more data in
      * it's buffer.
@@ -3915,7 +3913,7 @@ int canParseCommand(client *c) {
     if (c->cmd != NULL) return 0;
 
     /* Don't parse a command if the client is in the middle of something. */
-    if (c->flag.blocked || c->flag.unblocked || blockInuse_isClientBlocked(c)) return 0;
+    if (c->flag.blocked || c->flag.unblocked || blockInUse_isClientBlocked(c)) return 0;
 
     /* Don't process more buffers from clients that have already pending
      * commands to execute in c->argv. */
@@ -4311,7 +4309,7 @@ sds catClientInfoString(sds s, client *client, int hide_user_data) {
     if (client->flag.pubsub) *p++ = 'P';
     if (client->flag.multi) *p++ = 'x';
     if (client->flag.blocked) *p++ = 'b';
-    if (blockInuse_isClientBlocked(client)) *p++ = 'X';
+    if (blockInUse_isClientBlocked(client)) *p++ = 'X';
     if (client->flag.tracking) *p++ = 't';
     if (client->flag.tracking_broken_redir) *p++ = 'R';
     if (client->flag.tracking_bcast) *p++ = 'B';

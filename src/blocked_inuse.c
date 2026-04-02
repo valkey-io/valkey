@@ -4,19 +4,13 @@
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * BlockInuse - Client blocking mechanism for keys that are currently
- * in use by other operations.
+ * being processed by a background thread.
  */
 
 #include "server.h"
 #include "blocked_inuse.h"
 
-/* External hashtable functions from server.c */
-extern uint64_t dictEncObjHash(const void *key);
-extern int hashtableEncObjKeyCompare(const void *key1, const void *key2);
-extern uint64_t hashtableClientHash(const void *key);
-extern int hashtableClientKeyCompare(const void *key1, const void *key2);
-
-/* Internal blockInuse data structure */
+/* Internal blockInUse data structure */
 static hashtable *client_to_keys; /* Maps client pointers to a list of keys the client is blocked on. */
 static hashtable *key_to_clients; /* Maps keys to a list of clients blocked on them. */
 
@@ -30,7 +24,7 @@ static void markClientBlocked(client *c) {
 /* Entry for client_to_keys hashtable */
 typedef struct {
     client *c;
-    int n_keys;          /* Number of keys in the array */
+    int num_keys;        /* Number of keys in the array */
     robj **keys;         /* Array of keys the client is blocked on */
     mstime_t blocked_at; /* Timestamp when client was blocked (from server.mstime) */
 } clientDataEntry;
@@ -43,7 +37,7 @@ static const void *clientDataEntryGetClient(const void *entry) {
 static void clientDataEntryDestructor(void *entry) {
     clientDataEntry *e = entry;
     if (e->keys) {
-        serverAssert(e->n_keys == 0); // All key refcounts must be decremented before destruction
+        serverAssert(e->num_keys == 0); // All key refcounts must be decremented before destruction
         zfree(e->keys);
     }
     zfree(e);
@@ -59,13 +53,13 @@ static hashtableType clientDataHashtableType = {
 /* Utility functions for client_to_keys hashtable */
 
 // Create a new clientDataEntry for client and add it to client_to_keys.
-static clientDataEntry *clientToKeys_addClientDataEntry(client *c, int nKeys, robj **keys) {
+static clientDataEntry *clientToKeys_addClientDataEntry(client *c, int num_keys, robj **keys) {
     serverAssert(!hashtableFind(client_to_keys, c, NULL)); // client must not already exist in the client_to_keys
-    serverAssert(nKeys > 0);
+    serverAssert(num_keys > 0);
 
     clientDataEntry *entry = zcalloc(sizeof(clientDataEntry));
     entry->c = c;
-    entry->n_keys = nKeys;
+    entry->num_keys = num_keys;
     entry->blocked_at = server.mstime;
     entry->keys = keys;
     hashtableAdd(client_to_keys, entry);
@@ -85,13 +79,13 @@ static clientDataEntry *clientToKeys_removeKey(client *c, robj *key) {
     if (!hashtableFind(client_to_keys, c, (void **)&entry)) return NULL;
 
     sds key_sds = objectGetVal(key);
-    for (int i = 0; i < entry->n_keys; ++i) {
+    for (int i = 0; i < entry->num_keys; ++i) {
         sds curr_key = objectGetVal(entry->keys[i]);
         if (sdscmp(curr_key, key_sds) == 0) {
             decrRefCount(entry->keys[i]);
-            entry->keys[i] = entry->keys[entry->n_keys - 1];
-            entry->keys[entry->n_keys - 1] = NULL;
-            entry->n_keys--;
+            entry->keys[i] = entry->keys[entry->num_keys - 1];
+            entry->keys[entry->num_keys - 1] = NULL;
+            entry->num_keys--;
             return entry;
         }
     }
@@ -162,7 +156,7 @@ static void keyToClients_unlinkClient(client *c) {
     clientDataEntry *entry;
     if (!hashtableFind(client_to_keys, c, (void **)&entry)) return;
 
-    for (int i = 0; i < entry->n_keys; ++i) {
+    for (int i = 0; i < entry->num_keys; ++i) {
         robj *key = entry->keys[i];
         list *clientList = keyToClients_getBlockedClientsList(key);
         serverAssert(clientList != NULL);
@@ -171,21 +165,21 @@ static void keyToClients_unlinkClient(client *c) {
         decrRefCount(key);
         entry->keys[i] = NULL;
     }
-    entry->n_keys = 0;
+    entry->num_keys = 0;
 }
 
 
 /* ----------------------------- API implementation ------------------------- */
 
-/* Check if client is blocked by blockInuse */
-bool blockInuse_isClientBlocked(client *c) {
+/* Check if client is blocked by blockInUse */
+bool blockInUse_isClientBlocked(client *c) {
     return c->flag.blocked_in_use;
 }
 
 /*
- * Initialize blockInuse data structures.
+ * Initialize blockInUse data structures.
  */
-void blockInuse_init(void) {
+void blockInUse_init(void) {
     serverAssert(!client_to_keys);
     serverAssert(!key_to_clients);
     client_to_keys = hashtableCreate(&clientDataHashtableType);
@@ -193,11 +187,11 @@ void blockInuse_init(void) {
 }
 
 /*
- * Release blockInuse data structures.
+ * Release blockInUse data structures.
  * Unblocks all clients before cleanup.
  */
-void blockInuse_release(void) {
-    blockInuse_unblockClientsOnAllKeys();
+void blockInUse_release(void) {
+    blockInUse_unblockClientsOnAllKeys();
     if (client_to_keys) {
         hashtableRelease(client_to_keys);
         client_to_keys = NULL;
@@ -208,30 +202,31 @@ void blockInuse_release(void) {
     }
 }
 
-/* Get the current number of clients blocked by blockInuse. */
-int blockInuse_getNumberOfBlockedClients(void) {
+/* Get the current number of clients blocked by blockInUse. */
+int blockInUse_getNumberOfBlockedClients(void) {
     return hashtableSize(client_to_keys);
 }
 
-/* Get the current number of blocked keys by blockInuse. */
-int blockInuse_getNumberOfBlockedKeys(void) {
+/* Get the current number of blocked keys by blockInUse. */
+int blockInUse_getNumberOfBlockedKeys(void) {
     return hashtableSize(key_to_clients);
 }
 
 /* Block a client on a set of keys. */
-void blockInuse_blockClientOnKeys(client *c, int nKeys, robj *keys[]) {
-    serverAssert(!(blockInuse_isClientBlocked(c) || (c)->flag.unblocked || (c)->flag.blocked));
-    serverAssert(nKeys > 0);
+void blockInUse_blockClientOnKeys(client *c, int num_keys, robj *keys[]) {
+    /* Client must not be in any blocked state. A blocked client has active
+     * bstate and is owned by the unblock machinery in blocked.c; setting
+     * blocked_in_use on top of that would cause conflicting unblock paths.
+     * Similarly, an unblocked client is already queued for resumption. */
+    serverAssert(!blockInUse_isClientBlocked(c) && !c->flag.unblocked && !c->flag.blocked);
+    serverAssert(num_keys > 0);
     serverAssert(!c->flag.replica);
-    for (int i = 0; i < nKeys; ++i) {
-        serverAssert(keys[i]->type == OBJ_STRING);
-    }
+    robj **entry_keys = zcalloc(sizeof(robj *) * num_keys);
+    int num_entry_keys = 0;
 
-    robj **entry_keys = zcalloc(sizeof(robj *) * nKeys);
-    int n_entry_keys = 0;
-
-    for (int i = 0; i < nKeys; ++i) {
+    for (int i = 0; i < num_keys; ++i) {
         robj *key = keys[i];
+        serverAssert(key->type == OBJ_STRING);
 
         list *blockedClientsList = keyToClients_getBlockedClientsList(key);
         if (!blockedClientsList) blockedClientsList = keyToClients_addEntry(key);
@@ -241,11 +236,11 @@ void blockInuse_blockClientOnKeys(client *c, int nKeys, robj *keys[]) {
         if (last_client == NULL || last_client->value != c) {
             listAddNodeTail(blockedClientsList, c);
             incrRefCount(key);
-            entry_keys[n_entry_keys++] = key;
+            entry_keys[num_entry_keys++] = key;
         }
     }
 
-    clientToKeys_addClientDataEntry(c, n_entry_keys, entry_keys);
+    clientToKeys_addClientDataEntry(c, num_entry_keys, entry_keys);
     markClientBlocked(c);
 
     // Disable client’s Read Handler to prevent reading commands while blocked
@@ -261,7 +256,7 @@ void blockInuse_blockClientOnKeys(client *c, int nKeys, robj *keys[]) {
  * - Clients that become fully unblocked are added to server.unblocked_clients
  *   and will be resumed later in processUnblockedClients().
  */
-void blockInuse_unblockClientsOnKey(robj *key) {
+void blockInUse_unblockClientsOnKey(robj *key) {
     list *blockedClientsList = keyToClients_getBlockedClientsList(key);
     if (blockedClientsList == NULL) return;
 
@@ -274,8 +269,8 @@ void blockInuse_unblockClientsOnKey(robj *key) {
         listDelNode(blockedClientsList, ln);
         clientDataEntry *entry = clientToKeys_removeKey(c, key);
 
-        if (entry->n_keys == 0) {
-            serverAssert(blockInuse_isClientBlocked(c) && c->flag.unblocked == 0);
+        if (entry->num_keys == 0) {
+            serverAssert(blockInUse_isClientBlocked(c) && c->flag.unblocked == 0);
             c->flag.blocked_in_use = 0;
             queueClientForReprocessing(c);
 
@@ -289,28 +284,28 @@ void blockInuse_unblockClientsOnKey(robj *key) {
 /*
  * Unblock all clients on all keys.
  */
-void blockInuse_unblockClientsOnAllKeys(void) {
+void blockInUse_unblockClientsOnAllKeys(void) {
     hashtableIterator iter;
     hashtableInitIterator(&iter, key_to_clients, HASHTABLE_ITER_SAFE);
     void *entry;
     while (hashtableNext(&iter, &entry)) {
         keyToClientsEntry *e = entry;
         robj *key = e->key;
-        blockInuse_unblockClientsOnKey(key);
+        blockInUse_unblockClientsOnKey(key);
     }
     hashtableCleanupIterator(&iter);
-    serverAssert(blockInuse_getNumberOfBlockedClients() == 0);
-    serverAssert(blockInuse_getNumberOfBlockedKeys() == 0);
+    serverAssert(blockInUse_getNumberOfBlockedClients() == 0);
+    serverAssert(blockInUse_getNumberOfBlockedKeys() == 0);
 }
 
 /*
- * Unlink a blocked client from the blockInuse mapping, the client must be blocked by blockInuse.
+ * Unlink a blocked client from the blockInUse mapping, the client must be blocked by blockInUse.
  */
-void blockInuse_unlinkClient(client *c) {
+void blockInUse_unlinkClient(client *c) {
     clientDataEntry *entry;
     if (!hashtableFind(client_to_keys, c, (void **)&entry)) return;
 
-    serverAssert(blockInuse_isClientBlocked(c) && c->flag.unblocked == 0 && c->flag.blocked == 0);
+    serverAssert(blockInUse_isClientBlocked(c) && c->flag.unblocked == 0 && c->flag.blocked == 0);
 
     keyToClients_unlinkClient(c);
     c->flag.blocked_in_use = 0;

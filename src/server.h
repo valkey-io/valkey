@@ -1158,7 +1158,7 @@ typedef struct ClientFlags {
     uint64_t dirty_cas : 1;                /* Watched keys modified. EXEC will fail. */
     uint64_t close_after_reply : 1;        /* Close after writing entire reply. */
     uint64_t unblocked : 1;                /* This client was unblocked and is stored in server.unblocked_clients */
-    uint64_t blocked_in_use : 1;           /* This client is blocked by blockInuse */
+    uint64_t blocked_in_use : 1;           /* This client is blocked by blockInUse */
     uint64_t script : 1;                   /* This is a non connected client used by Lua */
     uint64_t asking : 1;                   /* Client issued the ASKING command */
     uint64_t close_asap : 1;               /* Close this client ASAP */
@@ -3914,6 +3914,10 @@ int dictSdsKeyCaseCompare(const void *key1, const void *key2);
 void dictSdsDestructor(void *val);
 void dictListDestructor(void *val);
 void *dictSdsDup(const void *key);
+uint64_t dictEncObjHash(const void *key);
+int hashtableEncObjKeyCompare(const void *key1, const void *key2);
+uint64_t hashtableClientHash(const void *key);
+int hashtableClientKeyCompare(const void *key1, const void *key2);
 
 /* Git SHA1 */
 char *serverGitSHA1(void);

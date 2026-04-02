@@ -256,6 +256,66 @@ TEST_F(SyncReplicationTest, IsClientReplyBufferLimited) {
     zfree(c);
 }
 
+/* Verify that clientHasPendingReplies uses bufpos (not data_len) when
+ * comparing against the blocked response's disallowed_byte_offset.
+ *
+ * With copy avoidance, encoded reply buffers contain payload headers +
+ * bulk-string references.  The io_last_written.data_len tracks the total
+ * *decoded* data written to the socket (i.e. RESP bytes on the wire)
+ * which can be larger than the encoded buffer position (bufpos).
+ * Using data_len for the comparison would cause the response to appear
+ * "fully written" prematurely, releasing the blocked reply before the
+ * durability provider acknowledges the write. */
+TEST_F(SyncReplicationTest, ClientHasPendingRepliesUsesBufposNotDataLen) {
+    client *c = (client *)zcalloc(sizeof(client));
+    c->reply = listCreate();
+    c->repl_data = nullptr;
+    c->slot_migration_job = nullptr;
+    c->raw_flag = 0;
+
+    /* Set up a blocked response at offset 100 in c->buf (no reply block) */
+    c->clientDurabilityInfo.blocked_responses = listCreate();
+    listSetFreeMethod(c->clientDurabilityInfo.blocked_responses, zfree);
+
+    blockedResponse *br = (blockedResponse *)zcalloc(sizeof(blockedResponse));
+    br->primary_repl_offset = 500;
+    br->disallowed_byte_offset = 100;
+    br->disallowed_reply_block = nullptr;
+    listAddNodeTail(c->clientDurabilityInfo.blocked_responses, br);
+
+    /* Simulate: 200 bytes in the static buffer, no reply list entries */
+    c->bufpos = 200;
+
+    /* Case 1: bufpos < disallowed_byte_offset  =>  has pending replies
+     * (the write hasn't reached the blocked boundary yet) */
+    c->io_last_written.buf = nullptr;
+    c->io_last_written.bufpos = 50;
+    c->io_last_written.data_len = 50;
+    ASSERT_TRUE(clientHasPendingReplies(c));
+
+    /* Case 2: bufpos == disallowed_byte_offset  =>  no pending replies
+     * (the write has exactly reached the blocked boundary) */
+    c->io_last_written.bufpos = 100;
+    c->io_last_written.data_len = 100;
+    ASSERT_FALSE(clientHasPendingReplies(c));
+
+    /* Case 3: The critical copy-avoidance scenario.
+     * bufpos is still below the boundary (e.g. 80, because encoded buffer
+     * is compact), but data_len is above it (e.g. 120, because decoded
+     * RESP on the wire is larger than the encoded buffer).
+     *
+     * With the old bug (using data_len), this would return false (no pending)
+     * causing the response to be released prematurely.
+     * With the fix (using bufpos), this correctly returns true (still pending). */
+    c->io_last_written.bufpos = 80;
+    c->io_last_written.data_len = 120;
+    ASSERT_TRUE(clientHasPendingReplies(c));
+
+    listRelease(c->clientDurabilityInfo.blocked_responses);
+    listRelease(c->reply);
+    zfree(c);
+}
+
 /* ========================= DurabilityProvider Tests ========================= */
 
 TEST_F(DurabilityProviderTest, BuiltinAofProviderDisabledWhenAofOff) {

@@ -1,4 +1,3 @@
-#include "uncommitted_keys.h"
 #include "server.h"
 #include "zmalloc.h"
 #include "script.h"

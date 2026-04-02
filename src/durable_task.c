@@ -1,5 +1,3 @@
-#include "durable_task.h"
-#include "durability_provider.h"
 #include "server.h"
 #include "zmalloc.h"
 #include <assert.h>
@@ -82,11 +80,10 @@ static void destroyKeyspaceNotifyTask(void *ptr) {
  * Execute the keyspace notify task.
  */
 static void executeKeyspaceNotifyTask(const taskWaitingAck *task) {
-    static_assert(sizeof(long long) == sizeof(void *), "void* is not the same size as long long");
-    notifyKeyspaceEvent((int)(long long)task->argv[0],
+    notifyKeyspaceEvent((int)(intptr_t)task->argv[0],
                         (char *)task->argv[1],
                         (robj *)task->argv[2],
-                        (int)(long long)task->argv[3]);
+                        (int)(intptr_t)task->argv[3]);
 }
 
 /*================================= Key Invalidation Task ==================== */

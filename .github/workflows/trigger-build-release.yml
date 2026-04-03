@@ -1,5 +1,8 @@
 name: Trigger Build Release
 
+permissions:
+  contents: read
+
 on:
   release:
     types: [published]

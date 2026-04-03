@@ -10,7 +10,9 @@
 #include <string.h>
 #include <stdint.h>
 #include <stdlib.h>
-
+#if HAVE_ARM_NEON
+#include <arm_neon.h>
+#endif
 /*
  *-----------------------------------------------------------------------------
  * Volatile Set - Adaptive, Expiry-aware Set Structure
@@ -457,7 +459,47 @@ pVector *pvInsertAt(pVector *pv, void *elem, uint32_t idx) {
     pv->len++;
     return pv;
 }
+/* SIMD support for pvFind */
+#if HAVE_ARM_NEON
 
+/* Finds the index of the given element using NEON SIMD instructions.
+ *
+ * This is an internal helper that processes 4 pointers per iteration.
+ *
+ * Returns:
+ *   The index if found; otherwise, the index where scalar search should continue. */
+static inline uint32_t pvFindSIMD_NEON64(void *const *data, uint32_t len, const void *elem) {
+    uint64x2_t target = vdupq_n_u64((uintptr_t)elem);
+    uint32_t i = 0;
+
+    for (; i + 4 <= len; i += 4) {
+        uint64_t tmp[4];
+        memcpy(tmp, &data[i], 4 * sizeof(uint64_t));
+        uint64x2_t chunk0 = vld1q_u64(&tmp[0]);
+        uint64x2_t chunk1 = vld1q_u64(&tmp[2]);
+
+        uint64x2_t cmp0 = vceqq_u64(chunk0, target);
+        uint64x2_t cmp1 = vceqq_u64(chunk1, target);
+
+        uint64_t m0 = vgetq_lane_u64(cmp0, 0);
+        uint64_t m1 = vgetq_lane_u64(cmp0, 1);
+        uint64_t m2 = vgetq_lane_u64(cmp1, 0);
+        uint64_t m3 = vgetq_lane_u64(cmp1, 1);
+
+        if (m0 | m1 | m2 | m3) {
+            if (m0)
+                return i;
+            else if (m1)
+                return i + 1;
+            else if (m2)
+                return i + 2;
+            else
+                return i + 3;
+        }
+    }
+    return i;
+}
+#endif
 /* Finds the index of the given element in the pVector.
  *
  * Parameters:
@@ -470,16 +512,27 @@ pVector *pvInsertAt(pVector *pv, void *elem, uint32_t idx) {
  * Notes:
  *   - This compares elements using raw pointer equality (`==`).
  *   - If pv is NULL or empty, returns 0 as a safe fallback.
- *   - Return value being equal to pv->len can be used to check for absence. */
-uint32_t pvFind(pVector *pv, void *elem) {
+ *   - Return value being equal to pv->len can be used to check for absence.
+ *   - Uses NEON SIMD acceleration on ARM64 when available. */
+uint32_t pvFind(const pVector *pv, const void *elem) {
     if (!pv || pv->len == 0) return 0;
 
-    for (uint32_t i = 0; i < pv->len; i++) {
-        if (pv->data[i] == elem) {
-            return i;
-        }
+    uint32_t len = pv->len;
+    void *const *data = pv->data;
+    uint32_t i = 0;
+
+#if HAVE_ARM_NEON
+    if (len >= 8) {
+        i = pvFindSIMD_NEON64(data, len, elem);
+        if (i < len && data[i] == elem) return i;
     }
-    return pv->len;
+#endif
+
+    for (; i < len; i++) {
+        if (data[i] == elem) return i;
+    }
+
+    return len;
 }
 
 

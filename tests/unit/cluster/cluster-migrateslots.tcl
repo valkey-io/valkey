@@ -2092,7 +2092,11 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster} overrides {cluste
                 wait_for_countkeysinslot $owning_repl 16381 0
                 wait_for_countkeysinslot $owning_repl 16383 0
                 assert_equal "0" [R $owning_prim DBSIZE]
-                assert_equal "0" [R $owning_repl DBSIZE]
+                wait_for_condition 50 1000 {
+                    [R $owning_repl DBSIZE] == 0
+                } else {
+                    fail "owning_repl DBSIZE expected 0, got [R $owning_repl DBSIZE]"
+                }
             } else {
                 assert_match "333" [R $owning_prim CLUSTER COUNTKEYSINSLOT 16379]
                 assert_match "333" [R $owning_prim CLUSTER COUNTKEYSINSLOT 16381]
@@ -2101,7 +2105,11 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster} overrides {cluste
                 wait_for_countkeysinslot $owning_repl 16381 333
                 wait_for_countkeysinslot $owning_repl 16383 334
                 assert_equal "1000" [R $owning_prim DBSIZE]
-                assert_equal "1000" [R $owning_repl DBSIZE]
+                wait_for_condition 50 1000 {
+                    [R $owning_repl DBSIZE] == 1000
+                } else {
+                    fail "owning_repl DBSIZE expected 1000, got [R $owning_repl DBSIZE]"
+                }
             }
             assert_match "0" [R $not_owning_prim CLUSTER COUNTKEYSINSLOT 16379]
             assert_match "0" [R $not_owning_prim CLUSTER COUNTKEYSINSLOT 16381]
@@ -2109,8 +2117,12 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster} overrides {cluste
             wait_for_countkeysinslot $not_owning_repl 16379 0
             wait_for_countkeysinslot $not_owning_repl 16381 0
             wait_for_countkeysinslot $not_owning_repl 16383 0
-            assert_equal "0" [R $not_owning_repl DBSIZE]
-            assert_equal "0" [R $not_owning_repl DBSIZE]
+            assert_equal "0" [R $not_owning_prim DBSIZE]
+            wait_for_condition 50 1000 {
+                [R $not_owning_repl DBSIZE] == 0
+            } else {
+                fail "not_owning_repl DBSIZE expected 0, got [R $not_owning_repl DBSIZE]"
+            }
 
             # Cleanup for the next test
             assert_match "OK" [R $owning_prim FLUSHDB SYNC]

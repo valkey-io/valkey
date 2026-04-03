@@ -71,18 +71,20 @@ static void dictScriptDestructor(void *val) {
     zfree(es);
 }
 
-static uint64_t dictStrCaseHash(const void *key) {
-    return dictGenCaseHashFunction((unsigned char *)key, strlen((char *)key));
+/* Helper functions for eval.c */
+static void dictEntryDestructorSdsKeyScriptValue(void *entry) {
+    dictEntry *de = entry;
+    dictSdsDestructor(dictGetKey(de));
+    dictScriptDestructor(dictGetVal(de));
+    zfree(de);
 }
 
 /* evalCtx.scripts sha (as sds string) -> scripts (as evalScript) cache. */
 dictType shaScriptObjectDictType = {
-    dictStrCaseHash,       /* hash function */
-    NULL,                  /* key dup */
-    dictSdsKeyCaseCompare, /* key compare */
-    dictSdsDestructor,     /* key destructor */
-    dictScriptDestructor,  /* val destructor */
-    NULL                   /* allow to expand */
+    .entryGetKey = dictEntryGetKey,
+    .hashFunction = dictCStrCaseHash,
+    .keyCompare = dictSdsKeyCaseCompare,
+    .entryDestructor = dictEntryDestructorSdsKeyScriptValue,
 };
 
 /* Eval context */

@@ -77,7 +77,7 @@ proc kill_server config {
     }
 
     # check for leaks
-    if {![dict exists $config "skipleaks"]} {
+    if {$::leaks && ![dict exists $config "skipleaks"]} {
         catch {
             if {[string match {*Darwin*} [exec uname -a]]} {
                 tags {"leaks"} {

@@ -16,6 +16,44 @@
 #include "cluster.h"
 #include "cluster_state.h"
 
+/* -------------------------------------------------------------------------
+ * Dict types for common cluster state
+ * ------------------------------------------------------------------------- */
+
+/* Cluster nodes hash table, mapping nodes addresses 1.2.3.4:6379 to
+ * clusterNode structures. */
+dictType clusterNodesDictType = {
+    .entryGetKey = dictEntryGetKey,
+    .hashFunction = dictSdsHash,
+    .keyCompare = dictSdsKeyCompare,
+    .entryDestructor = dictEntryDestructorSdsKey,
+};
+
+/* Cluster shards table, mapping shard id to list of nodes. */
+dictType clusterSdsToListType = {
+    .entryGetKey = dictEntryGetKey,
+    .hashFunction = dictSdsHash,
+    .keyCompare = dictSdsKeyCompare,
+    .entryDestructor = dictEntryDestructorSdsKeyListValue,
+};
+
+static uint64_t dictPtrHash(const void *key) {
+    return dictGenHashFunction((const char *)&key, sizeof(key));
+}
+
+static int dictPtrCompare(const void *key1, const void *key2) {
+    return key1 == key2;
+}
+
+/* Dictionary type for mapping hash slots to cluster nodes.
+ * Keys are slot numbers encoded directly as pointer values, values are clusterNode pointers. */
+dictType clusterSlotDictType = {
+    .entryGetKey = dictEntryGetKey,
+    .hashFunction = dictPtrHash,
+    .keyCompare = dictPtrCompare,
+    .entryDestructor = zfree,
+};
+
 /* -----------------------------------------------------------------------------
  * Bitmap helpers
  * -------------------------------------------------------------------------- */

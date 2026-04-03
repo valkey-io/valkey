@@ -2,9 +2,15 @@
 #define CLUSTER_STATE_H
 
 #include "cluster.h"
+#include "dict.h"
 
 /* Forward declaration. Full definition is in the protocol implementation. */
 typedef struct clusterLink clusterLink;
+
+/* Dict types for common cluster state (nodes, shards, slots). */
+extern dictType clusterNodesDictType;
+extern dictType clusterSdsToListType;
+extern dictType clusterSlotDictType;
 
 /* Cluster node flags and macros. */
 #define CLUSTER_NODE_PRIMARY (1 << 0)    /* The node is a primary */

@@ -3873,10 +3873,10 @@ uint64_t dictSdsHash(const void *key, size_t key_len);
 uint64_t dictSdsCaseHash(const void *key, size_t key_len);
 uint64_t dictCStrHash(const void *key, size_t key_len);
 uint64_t dictCStrCaseHash(const void *key, size_t key_len);
-int dictSdsKeyCompare(const void *key1, size_t key1_len, const void *key2, size_t key2_len);
-int dictSdsKeyCaseCompare(const void *key1, size_t key1_len, const void *key2, size_t key2_len);
-int dictCStrKeyCompare(const void *key1, size_t key1_len, const void *key2, size_t key2_len);
-int dictCStrKeyCaseCompare(const void *key1, size_t key1_len, const void *key2, size_t key2_len);
+bool dictSdsKeysEqual(const void *key1, size_t key1_len, const void *key2, size_t key2_len);
+bool dictSdsKeyCaseEqual(const void *key1, size_t key1_len, const void *key2, size_t key2_len);
+bool dictCStrKeysEqual(const void *key1, size_t key1_len, const void *key2, size_t key2_len);
+bool dictCStrKeyCaseEqual(const void *key1, size_t key1_len, const void *key2, size_t key2_len);
 void dictSdsDestructor(void *val);
 void dictListDestructor(void *val);
 void dictEntryDestructorSdsKey(void *entry);
@@ -3890,12 +3890,12 @@ uint64_t hashtableEncObjHash(const void *key, size_t key_len);
 uint64_t hashtableObjHash(const void *key, size_t key_len);
 uint64_t hashtableClientHash(const void *key, size_t key_len);
 
-/* Hashtable-specific key compare functions */
-int hashtableRawKeyCompare(const void *lookup_key, size_t lookup_key_len, const void *entry_key, size_t entry_key_len);
-int hashtableStringCaseCompare(const void *lookup_key, size_t lookup_key_len, const void *entry_key, size_t entry_key_len);
-int hashtableEncObjKeyCompare(const void *lookup_key, size_t lookup_key_len, const void *entry_key, size_t entry_key_len);
-int hashtableObjKeyCompare(const void *lookup_key, size_t lookup_key_len, const void *entry_key, size_t entry_key_len);
-int hashtableClientKeyCompare(const void *lookup_key, size_t lookup_key_len, const void *entry_key, size_t entry_key_len);
+/* Hashtable-specific key equality functions */
+bool hashtableRawKeysEqual(const void *lookup_key, size_t lookup_key_len, const void *entry_key, size_t entry_key_len);
+bool hashtableStringCaseEqual(const void *lookup_key, size_t lookup_key_len, const void *entry_key, size_t entry_key_len);
+bool hashtableEncObjKeysEqual(const void *lookup_key, size_t lookup_key_len, const void *entry_key, size_t entry_key_len);
+bool hashtableObjKeysEqual(const void *lookup_key, size_t lookup_key_len, const void *entry_key, size_t entry_key_len);
+bool hashtableClientKeysEqual(const void *lookup_key, size_t lookup_key_len, const void *entry_key, size_t entry_key_len);
 
 /* Hashtable-specific entryGetKey callbacks */
 const void *hashtableSdsGetKey(const void *entry, size_t *len);

@@ -240,7 +240,7 @@ int runFuzzerClients(const char *host, int port, int max_commands, int parallel_
 
 /* Dict callbacks */
 static uint64_t dictSdsHash(const void *key, size_t key_len);
-static int dictSdsKeyCompare(const void *key1, size_t key1_len, const void *key2, size_t key2_len);
+static bool dictSdsKeysEqual(const void *key1, size_t key1_len, const void *key2, size_t key2_len);
 
 /* Implementation */
 static long long ustime(void) {
@@ -283,20 +283,20 @@ static uint64_t dictSdsHash(const void *key, size_t key_len) {
     return dictGenHashFunction(key, sdslen(key));
 }
 
-static int dictSdsKeyCompare(const void *key1, size_t key1_len, const void *key2, size_t key2_len) {
+static bool dictSdsKeysEqual(const void *key1, size_t key1_len, const void *key2, size_t key2_len) {
     UNUSED(key1_len);
     UNUSED(key2_len);
     int l1, l2;
     l1 = sdslen((sds)key1);
     l2 = sdslen((sds)key2);
-    if (l1 != l2) return 1;
-    return memcmp(key1, key2, l1);
+    if (l1 != l2) return false;
+    return memcmp(key1, key2, l1) == 0;
 }
 
 static dictType dtype = {
     .entryGetKey = dictEntryGetKey,
     .hashFunction = dictSdsHash,
-    .keyCompare = dictSdsKeyCompare,
+    .keysEqual = dictSdsKeysEqual,
     .entryDestructor = zfree,
 };
 

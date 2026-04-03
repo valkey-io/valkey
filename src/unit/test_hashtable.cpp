@@ -72,9 +72,9 @@ static uint64_t hashfunc(const void *key, size_t key_len) {
     return hashtableGenHashFunction((const char *)key, key_len);
 }
 
-static int keycmp(const void *lookup_key, size_t lookup_key_len, const void *entry_key, size_t entry_key_len) {
-    if (lookup_key_len != entry_key_len) return 1;
-    return memcmp(lookup_key, entry_key, lookup_key_len);
+static bool keycmp(const void *lookup_key, size_t lookup_key_len, const void *entry_key, size_t entry_key_len) {
+    if (lookup_key_len != entry_key_len) return false;
+    return memcmp(lookup_key, entry_key, lookup_key_len) == 0;
 }
 
 static void freekeyval(void *keyval) {
@@ -114,7 +114,7 @@ class HashtableTest : public ::testing::Test {
         memset(&keyval_type, 0, sizeof(keyval_type));
         keyval_type.entryGetKey = getkey;
         keyval_type.hashFunction = hashfunc;
-        keyval_type.keyCompare = keycmp;
+        keyval_type.keysEqual = keycmp;
         keyval_type.entryDestructor = freekeyval;
         keyval_type.trackMemUsage = trackmemusage;
     }

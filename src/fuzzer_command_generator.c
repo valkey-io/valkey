@@ -287,14 +287,14 @@ void configDictValDestructor(void *val) {
     zfree(entry);
 }
 
-static int sdsKeyCompare(const void *key1, size_t key1_len, const void *key2, size_t key2_len) {
+static bool sdsKeysEqual(const void *key1, size_t key1_len, const void *key2, size_t key2_len) {
     UNUSED(key1_len);
     UNUSED(key2_len);
     int l1, l2;
     l1 = sdslen((sds)key1);
     l2 = sdslen((sds)key2);
-    if (l1 != l2) return 1;
-    return memcmp(key1, key2, l1);
+    if (l1 != l2) return false;
+    return memcmp(key1, key2, l1) == 0;
 }
 
 static uint64_t sdsHash(const void *key, size_t key_len) {
@@ -313,7 +313,7 @@ static void dictEntryDestructorSdsKeyConfigVal(void *entry) {
 static dictType configDictType = {
     .entryGetKey = dictEntryGetKey,
     .hashFunction = sdsHash,
-    .keyCompare = sdsKeyCompare,
+    .keysEqual = sdsKeysEqual,
     .entryDestructor = dictEntryDestructorSdsKeyConfigVal,
 };
 

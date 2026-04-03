@@ -83,7 +83,7 @@ static void dictEntryDestructorSdsKeyScriptValue(void *entry) {
 dictType shaScriptObjectDictType = {
     .entryGetKey = dictEntryGetKey,
     .hashFunction = dictCStrCaseHash,
-    .keyCompare = dictSdsKeyCaseCompare,
+    .keysEqual = dictSdsKeyCaseEqual,
     .entryDestructor = dictEntryDestructorSdsKeyScriptValue,
 };
 

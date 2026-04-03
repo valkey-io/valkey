@@ -449,7 +449,7 @@ static void dictEntryDestructorInstancesValue(void *entry) {
 dictType instancesDictType = {
     .entryGetKey = dictEntryGetKey,
     .hashFunction = dictSdsHash,
-    .keyCompare = dictSdsKeyCompare,
+    .keysEqual = dictSdsKeysEqual,
     .entryDestructor = dictEntryDestructorInstancesValue,
 };
 
@@ -460,7 +460,7 @@ dictType instancesDictType = {
 dictType leaderVotesDictType = {
     .entryGetKey = dictEntryGetKey,
     .hashFunction = dictSdsHash,
-    .keyCompare = dictSdsKeyCompare,
+    .keysEqual = dictSdsKeysEqual,
     .entryDestructor = zfree,
 };
 
@@ -468,7 +468,7 @@ dictType leaderVotesDictType = {
 dictType renamedCommandsDictType = {
     .entryGetKey = dictEntryGetKey,
     .hashFunction = dictSdsCaseHash,
-    .keyCompare = dictSdsKeyCaseCompare,
+    .keysEqual = dictSdsKeyCaseEqual,
     .entryDestructor = dictEntryDestructorSdsKeyValue,
 };
 
@@ -4337,7 +4337,7 @@ void sentinelSetCommand(client *c) {
 
             /* If the target name is the same as the source name there
              * is no need to add an entry mapping to itself. */
-            if (dictSdsKeyCaseCompare(oldname, 0, newname, 0)) {
+            if (!dictSdsKeyCaseEqual(oldname, 0, newname, 0)) {
                 oldname = sdsdup(oldname);
                 newname = sdsdup(newname);
                 dictAdd(ri->renamed_commands, oldname, newname);

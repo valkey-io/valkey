@@ -59,11 +59,11 @@ typedef struct {
      * hashing the bits in the pointer, effectively treating the pointer as an
      * integer (ignoring key_len). */
     uint64_t (*hashFunction)(const void *key, size_t key_len);
-    /* Compare function, returns 0 if the keys are equal. The lookup_key and
-     * lookup_key_len are from the caller; entry_key and entry_key_len are from
-     * entryGetKey on a stored entry. Defaults to just comparing the pointers
-     * for equality (ignoring lengths). */
-    int (*keyCompare)(const void *lookup_key, size_t lookup_key_len, const void *entry_key, size_t entry_key_len);
+    /* Key equality function, returns true if the keys are equal. The lookup_key
+     * and lookup_key_len are from the caller; entry_key and entry_key_len are
+     * from entryGetKey on a stored entry. Defaults to just comparing the
+     * pointers for equality (ignoring lengths). */
+    bool (*keysEqual)(const void *lookup_key, size_t lookup_key_len, const void *entry_key, size_t entry_key_len);
     /* Check for entry access should be masked or not. Masked access will just treat the entry as not-exist. */
     bool (*validateEntry)(hashtable *ht, void *entry);
     /* Callback to free an entry when it's overwritten or deleted.

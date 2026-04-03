@@ -249,7 +249,7 @@ static_assert(offsetof(clusterMsg, type) + sizeof(uint16_t) == RCVBUF_MIN_READ_L
 dictType clusterNodesDictType = {
     .entryGetKey = dictEntryGetKey,
     .hashFunction = dictSdsHash,
-    .keyCompare = dictSdsKeyCompare,
+    .keysEqual = dictSdsKeysEqual,
     .entryDestructor = dictEntryDestructorSdsKey,
 };
 
@@ -259,7 +259,7 @@ dictType clusterNodesDictType = {
 dictType clusterNodesBlackListDictType = {
     .entryGetKey = dictEntryGetKey,
     .hashFunction = dictSdsCaseHash,
-    .keyCompare = dictSdsKeyCaseCompare,
+    .keysEqual = dictSdsKeyCaseEqual,
     .entryDestructor = dictEntryDestructorSdsKey,
 };
 
@@ -267,7 +267,7 @@ dictType clusterNodesBlackListDictType = {
 dictType clusterSdsToListType = {
     .entryGetKey = dictEntryGetKey,
     .hashFunction = dictSdsHash,
-    .keyCompare = dictSdsKeyCompare,
+    .keysEqual = dictSdsKeysEqual,
     .entryDestructor = dictEntryDestructorSdsKeyListValue,
 };
 
@@ -277,10 +277,10 @@ static uint64_t dictPtrHash(const void *key, size_t key_len) {
     return dictGenHashFunction((const char *)&key, sizeof(key));
 }
 
-static int dictPtrCompare(const void *key1, size_t key1_len, const void *key2, size_t key2_len) {
+static bool dictPtrKeysEqual(const void *key1, size_t key1_len, const void *key2, size_t key2_len) {
     UNUSED(key1_len);
     UNUSED(key2_len);
-    return key1 != key2;
+    return key1 == key2;
 }
 
 /* Dictionary type for mapping hash slots to cluster nodes.
@@ -288,7 +288,7 @@ static int dictPtrCompare(const void *key1, size_t key1_len, const void *key2, s
 dictType clusterSlotDictType = {
     .entryGetKey = dictEntryGetKey,
     .hashFunction = dictPtrHash,
-    .keyCompare = dictPtrCompare,
+    .keysEqual = dictPtrKeysEqual,
     .entryDestructor = zfree,
 };
 

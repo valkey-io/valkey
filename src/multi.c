@@ -333,7 +333,7 @@ static const void *watchedKeyGetKey(const void *entry, size_t *len) {
 hashtableType watchedKeysHashtableType = {
     .entryGetKey = watchedKeyGetKey,
     .hashFunction = hashtableEncObjHash,
-    .keyCompare = hashtableEncObjKeyCompare,
+    .keysEqual = hashtableEncObjKeysEqual,
 };
 
 /* Attach a watchedKey to the list of clients watching that key. */

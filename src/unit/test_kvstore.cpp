@@ -20,9 +20,9 @@ uint64_t hashConflictTestCallback(const void *key, size_t key_len) {
     return 0;
 }
 
-int cmpTestCallback(const void *lookup_key, size_t lookup_key_len, const void *entry_key, size_t entry_key_len) {
-    if (lookup_key_len != entry_key_len) return 1;
-    return memcmp(lookup_key, entry_key, lookup_key_len);
+bool cmpTestCallback(const void *lookup_key, size_t lookup_key_len, const void *entry_key, size_t entry_key_len) {
+    if (lookup_key_len != entry_key_len) return false;
+    return memcmp(lookup_key, entry_key, lookup_key_len) == 0;
 }
 
 void freeTestCallback(void *val) {
@@ -58,7 +58,7 @@ class KvstoreTest : public ::testing::Test {
         memset(&KvstoreHashtableTestType, 0, sizeof(KvstoreHashtableTestType));
         KvstoreHashtableTestType.entryGetKey = entryGetKeyTestCallback;
         KvstoreHashtableTestType.hashFunction = hashTestCallback;
-        KvstoreHashtableTestType.keyCompare = cmpTestCallback;
+        KvstoreHashtableTestType.keysEqual = cmpTestCallback;
         KvstoreHashtableTestType.entryDestructor = freeTestCallback;
         KvstoreHashtableTestType.rehashingStarted = kvstoreHashtableRehashingStarted;
         KvstoreHashtableTestType.rehashingCompleted = kvstoreHashtableRehashingCompleted;
@@ -69,7 +69,7 @@ class KvstoreTest : public ::testing::Test {
         memset(&KvstoreConflictHashtableTestType, 0, sizeof(KvstoreConflictHashtableTestType));
         KvstoreConflictHashtableTestType.entryGetKey = entryGetKeyTestCallback;
         KvstoreConflictHashtableTestType.hashFunction = hashConflictTestCallback;
-        KvstoreConflictHashtableTestType.keyCompare = cmpTestCallback;
+        KvstoreConflictHashtableTestType.keysEqual = cmpTestCallback;
         KvstoreConflictHashtableTestType.entryDestructor = freeTestCallback;
         KvstoreConflictHashtableTestType.rehashingStarted = kvstoreHashtableRehashingStarted;
         KvstoreConflictHashtableTestType.rehashingCompleted = kvstoreHashtableRehashingCompleted;

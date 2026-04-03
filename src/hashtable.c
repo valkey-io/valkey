@@ -403,11 +403,11 @@ static inline void freeEntry(hashtable *ht, void *entry) {
     if (ht->type->entryDestructor) ht->type->entryDestructor(entry);
 }
 
-static inline int compareKeys(hashtable *ht, const void *lookup_key, size_t lookup_key_len, const void *entry_key, size_t entry_key_len) {
-    if (ht->type->keyCompare != NULL) {
-        return ht->type->keyCompare(lookup_key, lookup_key_len, entry_key, entry_key_len);
+static inline bool keysEqual(hashtable *ht, const void *lookup_key, size_t lookup_key_len, const void *entry_key, size_t entry_key_len) {
+    if (ht->type->keysEqual != NULL) {
+        return ht->type->keysEqual(lookup_key, lookup_key_len, entry_key, entry_key_len);
     } else {
-        return lookup_key != entry_key;
+        return lookup_key == entry_key;
     }
 }
 
@@ -805,7 +805,7 @@ static inline int checkCandidateInBucket(hashtable *ht, bucket *b, int pos, cons
     void *entry = b->entries[pos];
     size_t entry_key_len;
     const void *elem_key = entryGetKey(ht, entry, &entry_key_len);
-    if (compareKeys(ht, key, key_len, elem_key, entry_key_len) == 0) {
+    if (keysEqual(ht, key, key_len, elem_key, entry_key_len)) {
         /* It's a match. */
         assert(pos_in_bucket != NULL);
         if (!validateElementIfNeeded(ht, entry)) {
@@ -1887,7 +1887,7 @@ bool hashtableIncrementalFindStep(hashtableIncrementalFindState *state) {
             void *entry = data->bucket->entries[data->pos];
             size_t entry_key_len;
             const void *elem_key = entryGetKey(ht, entry, &entry_key_len);
-            if (compareKeys(ht, data->key, data->key_len, elem_key, entry_key_len) == 0) {
+            if (keysEqual(ht, data->key, data->key_len, elem_key, entry_key_len)) {
                 /* It's a match. */
                 data->state = HASHTABLE_FOUND;
                 return false;

@@ -72,7 +72,7 @@ typedef struct functionsLibMetaData {
 dictType functionDictType = {
     .entryGetKey = dictEntryGetKey,
     .hashFunction = dictCStrCaseHash,
-    .keyCompare = dictSdsKeyCaseCompare,
+    .keysEqual = dictSdsKeyCaseEqual,
     .entryDestructor = dictEntryDestructorSdsKey,
 };
 
@@ -86,7 +86,7 @@ static void dictEntryDestructorSdsKeyEngineStatsValue(void *entry) {
 dictType engineStatsDictType = {
     .entryGetKey = dictEntryGetKey,
     .hashFunction = dictSdsCaseHash,
-    .keyCompare = dictSdsKeyCaseCompare,
+    .keysEqual = dictSdsKeyCaseEqual,
     .entryDestructor = dictEntryDestructorSdsKeyEngineStatsValue,
 };
 
@@ -100,7 +100,7 @@ static void dictEntryDestructorSdsKeyEngineFunctionValue(void *entry) {
 dictType libraryFunctionDictType = {
     .entryGetKey = dictEntryGetKey,
     .hashFunction = dictSdsHash,
-    .keyCompare = dictSdsKeyCompare,
+    .keysEqual = dictSdsKeysEqual,
     .entryDestructor = dictEntryDestructorSdsKeyEngineFunctionValue,
 };
 
@@ -114,7 +114,7 @@ static void dictEntryDestructorSdsKeyEngineLibraryValue(void *entry) {
 dictType librariesDictType = {
     .entryGetKey = dictEntryGetKey,
     .hashFunction = dictSdsHash,
-    .keyCompare = dictSdsKeyCompare,
+    .keysEqual = dictSdsKeysEqual,
     .entryDestructor = dictEntryDestructorSdsKeyEngineLibraryValue,
 };
 

@@ -248,6 +248,37 @@ char **getClusterNodesList(size_t *numnodes) {
 }
 
 /* -----------------------------------------------------------------------------
+ * Server port configuration
+ * -------------------------------------------------------------------------- */
+
+/* Returns the default client-facing port (TLS port if TLS cluster, else TCP). */
+int defaultClientPort(void) {
+    return server.tls_cluster ? server.tls_port : server.port;
+}
+
+/* Derives our ports to be announced in the cluster bus. */
+void deriveAnnouncedPorts(int *announced_tcp_port,
+                          int *announced_tls_port,
+                          int *announced_cport,
+                          int *announced_client_tcp_port,
+                          int *announced_client_tls_port) {
+    /* Config overriding announced ports. */
+    *announced_tcp_port = server.cluster_announce_port ? server.cluster_announce_port : server.port;
+    *announced_tls_port = server.cluster_announce_tls_port ? server.cluster_announce_tls_port : server.tls_port;
+    /* Derive cluster bus port. */
+    if (server.cluster_announce_bus_port) {
+        *announced_cport = server.cluster_announce_bus_port;
+    } else if (server.cluster_port) {
+        *announced_cport = server.cluster_port;
+    } else {
+        *announced_cport = defaultClientPort() + CLUSTER_PORT_INCR;
+    }
+
+    *announced_client_tcp_port = server.cluster_announce_client_port;
+    *announced_client_tls_port = server.cluster_announce_client_tls_port;
+}
+
+/* -----------------------------------------------------------------------------
  * Node registry
  * -------------------------------------------------------------------------- */
 

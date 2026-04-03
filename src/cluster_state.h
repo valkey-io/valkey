@@ -86,6 +86,16 @@ struct clusterState {
     void *protocol_data; /* Protocol-specific state (e.g. clusterLegacyState) */
 };
 
+/* Default cluster bus port offset from the client port. */
+#define CLUSTER_PORT_INCR 10000
+
+/* Returns the default client-facing port (TLS port if TLS cluster, else TCP). */
+int defaultClientPort(void);
+
+/* Derive announced ports from server configuration. */
+void deriveAnnouncedPorts(int *announced_tcp_port, int *announced_tls_port, int *announced_cport,
+                          int *announced_client_tcp_port, int *announced_client_tls_port);
+
 /* Node accessor used by protocol implementations and description generation. */
 char *humanNodename(clusterNode *node);
 
@@ -105,8 +115,7 @@ int clusterPrimariesHaveReplicas(void);
 int clusterNodeClearSlotBit(clusterNode *n, int slot);
 void clusterRemoveNodeFromShard(clusterNode *node);
 void clusterAddNodeToShard(const char *shard_id, clusterNode *node);
-
-#endif /* CLUSTER_STATE_H */
-
 bool isAnySlotInManualImportingState(void);
 bool isAnySlotInManualMigratingState(void);
+
+#endif /* CLUSTER_STATE_H */

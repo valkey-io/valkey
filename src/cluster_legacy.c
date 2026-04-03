@@ -3476,35 +3476,30 @@ static uint32_t writePingExtensions(clusterMsg *hdr, int gossipcount) {
     return totlen;
 }
 
-/* Tmp function just process the shard id. */
-void clusterProcessPingShardIDExtensions(clusterMsg *hdr, clusterLink *link) {
-    clusterNode *sender = link->node ? link->node : clusterLookupNode(hdr->sender, CLUSTER_NAMELEN);
+/* Process only the shard_id extension from the message and update the sender's
+ * shard_id. This is called before clusterUpdateSlotsConfigWith() to ensure
+ * that the sender's shard_id is up-to-date when making shard membership
+ * decisions (e.g. areInSameShard checks).
+ *
+ * This is necessary because clusterProcessPingExtensions(), which normally
+ * handles all extensions including shard_id, is called after slot config
+ * updates. Without this early shard_id update, a node that has just performed
+ * CLUSTER RESET SOFT (generating a new shard_id) would still appear to be in
+ * the same shard as its former primary, causing incorrect reconfiguration. */
+static void clusterProcessShardIdExtension(clusterMsg *hdr, clusterNode *sender) {
     char *ext_shardid = NULL;
     uint16_t extensions = ntohs(hdr->extensions);
-    /* Loop through all the extensions and process them */
     clusterMsgPingExt *ext = getInitialPingExt(hdr, ntohs(hdr->count));
     while (extensions--) {
         uint16_t type = ntohs(ext->type);
         if (type == CLUSTERMSG_EXT_TYPE_SHARDID) {
             clusterMsgPingExtShardId *shardid_ext = (clusterMsgPingExtShardId *)&(ext->ext[0].shard_id);
             ext_shardid = shardid_ext->shard_id;
+            break;
         }
-
-        /* We know this will be valid since we validated it ahead of time */
         ext = getNextPingExt(ext);
     }
-
-    /* If the node did not send us a shard-id extension, it means the sender
-     * does not support it (old version), node->shard_id is randomly generated.
-     * A cluster-wide consensus for the node's shard_id is not necessary.
-     * The key is maintaining consistency of the shard_id on each individual 7.2 node.
-     * As the cluster progressively upgrades to version 7.2, we can expect the shard_ids
-     * across all nodes to naturally converge and align.
-     *
-     * If sender is a replica, set the shard_id to the shard_id of its primary.
-     * Otherwise, we'll set it now. */
     if (ext_shardid == NULL) ext_shardid = clusterNodeGetPrimary(sender)->shard_id;
-
     updateShardId(sender, ext_shardid);
 }
 
@@ -3912,15 +3907,6 @@ int clusterProcessPacket(clusterLink *link) {
         } else {
             sender->flags &= ~CLUSTER_NODE_MY_PRIMARY_FAIL;
         }
-    }
-
-    /* We try to process extensions first, as we become more and more
-     * dependent on extensions. */
-
-    /* updateShardId may rely on node flag, but in here, we don't have
-     * the right node flag, so the shard id is not actually update. */
-    if (sender && (type == CLUSTERMSG_TYPE_PING || type == CLUSTERMSG_TYPE_PONG || type == CLUSTERMSG_TYPE_MEET)) {
-        clusterProcessPingShardIDExtensions(msg, link);
     }
 
     /* Update the last time we saw any data from this node. We
@@ -4341,16 +4327,13 @@ int clusterProcessPacket(clusterLink *link) {
             /* Make sure CLUSTER_NODE_PRIMARY has already been set by now on sender */
             serverAssert(nodeIsPrimary(sender));
 
-            /* We try to process extensions before the clusterUpdateSlotsConfigWith,
-             * because it relies on extensions such as shard_id. */
-            // clusterProcessPingShardIDExtensions(msg, link);
-
             serverLog(LL_NOTICE, "Mismatch in topology information for sender node %.40s (%s) in shard %.40s", sender->name,
                       humanNodename(sender), sender->shard_id);
 
             /* 1) If the sender of the message is a primary, and we detected that
              *    the set of slots it claims changed, scan the slots to see if we
              *    need to update our configuration. */
+            clusterProcessShardIdExtension(msg, sender);
             clusterUpdateSlotsConfigWith(sender, sender_claimed_config_epoch, msg->myslots);
 
             /* 2) We also check for the reverse condition, that is, the sender

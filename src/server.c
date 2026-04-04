@@ -437,7 +437,6 @@ uint64_t genHashFunctionConfigurableSeed(const char *buf, size_t len) {
 }
 
 uint64_t sdsHashConfigurableSeed(const void *key, size_t key_len) {
-    if (key_len == 0) key_len = sdslen(key);
     return genHashFunctionConfigurableSeed(key, key_len);
 }
 

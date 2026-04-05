@@ -491,7 +491,6 @@ ENGINE_SERVER_OBJ = \
     db.o \
     debug.o \
     defrag.o \
-    dict.o \
     entry.o \
     eval.o \
     evict.o \
@@ -587,7 +586,7 @@ ENGINE_CLI_OBJ = \
     crc64.o \
     crccombine.o \
     crcspeed.o \
-    dict.o \
+    hashtable.o \
     monotonic.o \
     mt19937-64.o \
     release.o \
@@ -611,9 +610,9 @@ ENGINE_BENCHMARK_OBJ = \
     crc64.o \
     crccombine.o \
     crcspeed.o \
-    dict.o \
     fuzzer_client.o \
     fuzzer_command_generator.o \
+    hashtable.o \
     monotonic.o \
     mt19937-64.o \
     release.o \
@@ -807,6 +806,7 @@ lcov:
 	@lcov --version
 	$(MAKE) gcov
 	@(set -e; cd ..; ./runtest)
+	$(MAKE) test-unit COVERAGE=1 COVERAGE_CFLAGS="-fprofile-arcs -ftest-coverage"
 	@geninfo -o valkey.info .
 	@genhtml --legend -o lcov-html valkey.info
 

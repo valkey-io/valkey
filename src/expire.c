@@ -605,15 +605,14 @@ void expireReplicaKeys(void) {
 
 /* Track keys that received an EXPIRE or similar command in the context
  * of a writable replica. */
+
 void rememberReplicaKeyWithExpire(serverDb *db, robj *key) {
     if (replicaKeysWithExpire == NULL) {
         static dictType dt = {
-            dictSdsHash,       /* hash function */
-            NULL,              /* key dup */
-            dictSdsKeyCompare, /* key compare */
-            dictSdsDestructor, /* key destructor */
-            NULL,              /* val destructor */
-            NULL               /* allow to expand */
+            .entryGetKey = dictEntryGetKey,
+            .hashFunction = dictSdsHash,
+            .keyCompare = dictSdsKeyCompare,
+            .entryDestructor = dictEntryDestructorSdsKey,
         };
         replicaKeysWithExpire = dictCreate(&dt);
     }

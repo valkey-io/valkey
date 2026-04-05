@@ -247,39 +247,33 @@ static_assert(offsetof(clusterMsg, type) + sizeof(uint16_t) == RCVBUF_MIN_READ_L
 /* Cluster nodes hash table, mapping nodes addresses 1.2.3.4:6379 to
  * clusterNode structures. */
 dictType clusterNodesDictType = {
-    dictSdsHash,       /* hash function */
-    NULL,              /* key dup */
-    dictSdsKeyCompare, /* key compare */
-    dictSdsDestructor, /* key destructor */
-    NULL,              /* val destructor */
-    NULL               /* allow to expand */
+    .entryGetKey = dictEntryGetKey,
+    .hashFunction = dictSdsHash,
+    .keyCompare = dictSdsKeyCompare,
+    .entryDestructor = dictEntryDestructorSdsKey,
 };
 
 /* Cluster re-addition blacklist. This maps node IDs to the time
  * we can re-add this node. The goal is to avoid reading a removed
  * node for some time. */
 dictType clusterNodesBlackListDictType = {
-    dictSdsCaseHash,       /* hash function */
-    NULL,                  /* key dup */
-    dictSdsKeyCaseCompare, /* key compare */
-    dictSdsDestructor,     /* key destructor */
-    NULL,                  /* val destructor */
-    NULL                   /* allow to expand */
+    .entryGetKey = dictEntryGetKey,
+    .hashFunction = dictSdsCaseHash,
+    .keyCompare = dictSdsKeyCaseCompare,
+    .entryDestructor = dictEntryDestructorSdsKey,
 };
 
 /* Cluster shards hash table, mapping shard id to list of nodes */
 dictType clusterSdsToListType = {
-    dictSdsHash,        /* hash function */
-    NULL,               /* key dup */
-    dictSdsKeyCompare,  /* key compare */
-    dictSdsDestructor,  /* key destructor */
-    dictListDestructor, /* val destructor */
-    NULL                /* allow to expand */
+    .entryGetKey = dictEntryGetKey,
+    .hashFunction = dictSdsHash,
+    .keyCompare = dictSdsKeyCompare,
+    .entryDestructor = dictEntryDestructorSdsKeyListValue,
 };
 
 static uint64_t dictPtrHash(const void *key) {
     /* We hash the pointer value itself. */
-    return dictGenHashFunction(&key, sizeof(key));
+    return dictGenHashFunction((const char *)&key, sizeof(key));
 }
 
 static int dictPtrCompare(const void *key1, const void *key2) {
@@ -289,12 +283,10 @@ static int dictPtrCompare(const void *key1, const void *key2) {
 /* Dictionary type for mapping hash slots to cluster nodes.
  * Keys are slot numbers encoded directly as pointer values, values are clusterNode pointers. */
 dictType clusterSlotDictType = {
-    dictPtrHash,    /* hash function */
-    NULL,           /* key dup */
-    dictPtrCompare, /* key compare */
-    NULL,           /* key destructor */
-    NULL,           /* val destructor */
-    NULL            /* allow to expand */
+    .entryGetKey = dictEntryGetKey,
+    .hashFunction = dictPtrHash,
+    .keyCompare = dictPtrCompare,
+    .entryDestructor = zfree,
 };
 
 typedef struct {
@@ -4173,13 +4165,14 @@ int clusterProcessPacket(clusterLink *link) {
                     /* Primary turned into a replica! Reconfigure the node. */
                     if (sender_claimed_primary && areInSameShard(sender_claimed_primary, sender)) {
                         /* `sender` was a primary and was in the same shard as its new primary */
-                        if (nodeEpoch(sender_claimed_primary) > sender_claimed_config_epoch) {
+                        if (nodeEpoch(sender) > sender_claimed_config_epoch ||
+                            nodeEpoch(sender_claimed_primary) > sender_claimed_config_epoch) {
                             serverLog(LL_NOTICE,
                                       "Ignore stale message from %.40s (%s) in shard %.40s;"
                                       " gossip config epoch: %llu, current config epoch: %llu",
                                       sender->name, humanNodename(sender), sender->shard_id,
                                       (unsigned long long)sender_claimed_config_epoch,
-                                      (unsigned long long)nodeEpoch(sender_claimed_primary));
+                                      (unsigned long long)max(nodeEpoch(sender), nodeEpoch(sender_claimed_primary)));
                             /* This packet is stale so we avoid processing it anymore. Otherwise
                              * this may cause a primary-replica chain issue. */
                             return 1;
@@ -4336,6 +4329,7 @@ int clusterProcessPacket(clusterLink *link) {
             for (size_t w = 0; w < CLUSTER_SLOT_WORDS && !found_new_owner; w++) {
                 uint64_t word;
                 memcpy(&word, msg->myslots + SLOT_WORD_OFFSET(w), sizeof(word));
+                memrev64ifbe(&word);
                 while (word) {
                     const int slot = clusterExtractSlotFromWord(&word, w);
 
@@ -4477,6 +4471,7 @@ void clusterWriteHandler(connection *conn) {
 
         nwritten = connWrite(conn, (char *)msg + msg_offset, msg_len - msg_offset);
         if (nwritten <= 0) {
+            if (nwritten == -1 && connGetState(conn) == CONN_STATE_CONNECTED) return; /* equivalent to EAGAIN */
             serverLog(LL_DEBUG, "I/O error writing to node link: %s",
                       (nwritten == -1) ? connGetLastError(conn) : "short write");
             handleLinkIOError(link);
@@ -4876,7 +4871,7 @@ void clusterSendPing(clusterLink *link, int type) {
     int candidates_wanted = wanted + 2; /* +2 for myself and link->node */
     if (candidates_wanted > (int)dictSize(server.cluster->nodes))
         candidates_wanted = dictSize(server.cluster->nodes);
-    dictEntry **candidates = zmalloc(sizeof(dictEntry *) * candidates_wanted);
+    void **candidates = zmalloc(sizeof(void *) * candidates_wanted);
     unsigned int ncandidates = dictGetSomeKeys(server.cluster->nodes, candidates, candidates_wanted);
 
     for (unsigned int i = 0; i < ncandidates && gossipcount < wanted; i++) {
@@ -5327,6 +5322,7 @@ void clusterSendFailoverAuthIfNeeded(clusterNode *node, clusterMsg *request) {
     for (size_t w = 0; w < CLUSTER_SLOT_WORDS; w++) {
         uint64_t word;
         memcpy(&word, claimed_slots + SLOT_WORD_OFFSET(w), sizeof(word));
+        memrev64ifbe(&word);
         while (word) {
             slot = clusterExtractSlotFromWord(&word, w);
 

@@ -299,16 +299,41 @@ static void activeDefragZsetNode(void *privdata, void *entry_ref) {
 #define DEFRAG_SDS_DICT_VAL_VOID_PTR 3
 #define DEFRAG_SDS_DICT_VAL_LUA_SCRIPT 4
 
-static void activeDefragSdsDictCallback(void *privdata, const dictEntry *de) {
-    UNUSED(privdata);
-    UNUSED(de);
+typedef void *(dictDefragAllocFunction)(void *ptr);
+typedef struct {
+    dictDefragAllocFunction *defragKey;
+    dictDefragAllocFunction *defragVal;
+} dictDefragFunctions;
+
+static void activeDefragDictCallback(void *privdata, void *entry_ref) {
+    dictDefragFunctions *defragfns = privdata;
+    dictEntry **de_ref = (dictEntry **)entry_ref;
+    dictEntry *de = *de_ref;
+
+    /* Defrag the entry itself */
+    dictEntry *newentry = activeDefragAlloc(de);
+    if (newentry) {
+        de = newentry;
+        *de_ref = newentry;
+    }
+
+    /* Defrag the key */
+    if (defragfns->defragKey) {
+        void *newkey = defragfns->defragKey(de->key);
+        if (newkey) de->key = newkey;
+    }
+
+    /* Defrag the value */
+    if (defragfns->defragVal) {
+        void *newval = defragfns->defragVal(de->v.val);
+        if (newval) de->v.val = newval;
+    }
 }
 
 /* Defrag a dict with sds key and optional value (either ptr, sds or robj string) */
 static void activeDefragSdsDict(dict *d, int val_type) {
     unsigned long cursor = 0;
     dictDefragFunctions defragfns = {
-        .defragAlloc = activeDefragAlloc,
         .defragKey = (dictDefragAllocFunction *)activeDefragSds,
         .defragVal = (val_type == DEFRAG_SDS_DICT_VAL_IS_SDS       ? (dictDefragAllocFunction *)activeDefragSds
                       : val_type == DEFRAG_SDS_DICT_VAL_IS_STROB   ? (dictDefragAllocFunction *)activeDefragStringOb
@@ -316,7 +341,8 @@ static void activeDefragSdsDict(dict *d, int val_type) {
                       : val_type == DEFRAG_SDS_DICT_VAL_LUA_SCRIPT ? (dictDefragAllocFunction *)evalActiveDefragScript
                                                                    : NULL)};
     do {
-        cursor = dictScanDefrag(d, cursor, activeDefragSdsDictCallback, &defragfns, NULL);
+        cursor = hashtableScanDefrag(d, cursor, activeDefragDictCallback,
+                                     &defragfns, activeDefragAlloc, HASHTABLE_SCAN_EMIT_REF);
     } while (cursor != 0);
 }
 

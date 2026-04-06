@@ -65,6 +65,11 @@ typedef struct clusterLink {
 #define CLUSTER_NODE_MULTI_MEET_SUPPORTED CLUSTER_NODE_LIGHT_HDR_MODULE_SUPPORTED /* This node handles multi meet packet.                             \
                                                                                      Light hdr for module and multi meet were both introduced in 8.1, \
                                                                                      so we could reduce the same flag value. */
+#define CLUSTER_NODE_MY_PRIMARY_FAIL (1 << 13)                                    /* myself is a replica and my primary is FAIL in my view. \
+                                                                                   * myself will gossip this flag to other replica in the   \
+                                                                                   * shard so that the replicas can make a better ranking   \
+                                                                                   * decisions to help with the failover. */
+
 #define CLUSTER_NODE_NULL_NAME                                                                                         \
     "\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000" \
     "\000\000\000\000\000\000\000\000\000\000\000\000"
@@ -80,6 +85,7 @@ typedef struct clusterLink {
 #define nodeSupportsExtensions(n) ((n)->flags & CLUSTER_NODE_EXTENSIONS_SUPPORTED)
 #define nodeSupportsMultiMeet(n) ((n)->flags & CLUSTER_NODE_MULTI_MEET_SUPPORTED)
 #define nodeInNormalState(n) (!((n)->flags & (CLUSTER_NODE_HANDSHAKE | CLUSTER_NODE_MEET | CLUSTER_NODE_PFAIL | CLUSTER_NODE_FAIL)))
+#define nodePrimaryIsFail(n) ((n)->flags & CLUSTER_NODE_MY_PRIMARY_FAIL)
 
 /* Cluster messages header */
 
@@ -166,6 +172,7 @@ typedef enum {
     CLUSTERMSG_EXT_TYPE_CLIENT_IPV6,
     CLUSTERMSG_EXT_TYPE_CLIENT_PORT,
     CLUSTERMSG_EXT_TYPE_CLIENT_TLS_PORT,
+    CLUSTERMSG_EXT_TYPE_AVAILABILITY_ZONE,
 } clusterMsgPingtypes;
 
 /* Helper function for making sure extensions are eight byte aligned. */
@@ -178,6 +185,10 @@ typedef struct {
 typedef struct {
     char human_nodename[1]; /* The announced nodename, ends with \0. */
 } clusterMsgPingExtHumanNodename;
+
+typedef struct {
+    char availability_zone[1]; /* The availability zone, ends with \0. */
+} clusterMsgPingExtAvailabilityZone;
 
 typedef struct {
     char name[CLUSTER_NAMELEN]; /* Node name. */
@@ -219,6 +230,7 @@ typedef struct {
         clusterMsgPingExtClientIpV6 announce_client_ipv6;
         clusterMsgPingExtClientPort announce_client_port;
         clusterMsgPingExtClientTlsPort announce_client_tls_port;
+        clusterMsgPingExtAvailabilityZone availability_zone;
     } ext[]; /* Actual extension information, formatted so that the data is 8
               * byte aligned, regardless of its content. */
 } clusterMsgPingExt;
@@ -392,6 +404,7 @@ struct _clusterNode {
     sds announce_client_ipv6;               /* IPv6 for clients only. */
     sds hostname;                           /* The known hostname for this node */
     sds human_nodename;                     /* The known human readable nodename for this node */
+    sds availability_zone;                  /* The known availability zone for this node */
     int tcp_port;                           /* Latest known clients TCP port. */
     int tls_port;                           /* Latest known clients TLS port */
     int cport;                              /* Latest known cluster port of this node. */

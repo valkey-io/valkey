@@ -42,12 +42,11 @@ distclean:
 	-(cd jemalloc && [ -f Makefile ] && $(MAKE) distclean) > /dev/null || true
 	-(cd hdr_histogram && $(MAKE) clean) > /dev/null || true
 	-(cd fpconv && $(MAKE) clean) > /dev/null || true
-	-(cd fast_float_c_interface && $(MAKE) clean) > /dev/null || true
 	-(rm -f .make-*)
 
 .PHONY: distclean
 
-LIBVALKEY_MAKE_FLAGS = SDS_INCLUDE_DIR=../../src/ DICT_INCLUDE_DIR=../../src/
+LIBVALKEY_MAKE_FLAGS = SDS_INCLUDE_DIR=../../src/
 ifneq (,$(filter $(BUILD_TLS),yes module))
     LIBVALKEY_MAKE_FLAGS += USE_TLS=1
 endif
@@ -125,12 +124,6 @@ jemalloc: .make-prerequisites
 	cd jemalloc && $(MAKE) lib/libjemalloc.a
 
 .PHONY: jemalloc
-
-fast_float_c_interface: .make-prerequisites
-	@printf '%b %b\n' $(MAKECOLOR)MAKE$(ENDCOLOR) $(BINCOLOR)$@$(ENDCOLOR)
-	cd fast_float_c_interface && $(MAKE)
-
-.PHONY: fast_float_c_interface
 
 gtest-parallel: .make-prerequisites
 	@printf '%b %b\n' $(MAKECOLOR)MAKE$(ENDCOLOR) $(BINCOLOR)$@$(ENDCOLOR)

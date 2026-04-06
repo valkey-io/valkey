@@ -385,21 +385,10 @@ int dictSdsKeyCompare(const void *key1, const void *key2) {
     return memcmp(key1, key2, l1) == 0;
 }
 
-/* Returns 0 when keys match */
-int hashtableSdsKeyCompare(const void *key1, const void *key2) {
-    const sds sds1 = (const sds)key1, sds2 = (const sds)key2;
-    return sdslen(sds1) != sdslen(sds2) || sdscmp(sds1, sds2);
-}
-
 /* A case insensitive version used for the command lookup table and other
  * places where case insensitive non binary-safe comparison is needed. */
 int dictSdsKeyCaseCompare(const void *key1, const void *key2) {
     return strcasecmp(key1, key2) == 0;
-}
-
-/* Case insensitive key comparison */
-int hashtableStringKeyCaseCompare(const void *key1, const void *key2) {
-    return strcasecmp(key1, key2);
 }
 
 void dictObjectDestructor(void *val) {
@@ -409,10 +398,6 @@ void dictObjectDestructor(void *val) {
 
 void dictSdsDestructor(void *val) {
     sdsfree(val);
-}
-
-void *dictSdsDup(const void *key) {
-    return sdsdup((const sds)key);
 }
 
 int dictObjKeyCompare(const void *key1, const void *key2) {
@@ -426,21 +411,40 @@ uint64_t dictObjHash(const void *key) {
 }
 
 uint64_t dictSdsHash(const void *key) {
-    return dictGenHashFunction((unsigned char *)key, sdslen((char *)key));
+    return dictGenHashFunction(key, sdslen(key));
+}
+
+/* Hash function using a configurable seed (set via hash-seed config).
+ * Used for data hashtables (keys, sets, zsets, hashes) where deterministic
+ * iteration order across cluster nodes is needed. */
+static uint8_t configurable_hash_seed[16];
+
+extern uint64_t siphash(const uint8_t *in, const size_t inlen, const uint8_t *k);
+
+void setConfigurableHashSeed(uint8_t *seed) {
+    memcpy(configurable_hash_seed, seed, sizeof(configurable_hash_seed));
+}
+
+uint64_t genHashFunctionConfigurableSeed(const char *buf, size_t len) {
+    return siphash((const uint8_t *)buf, len, configurable_hash_seed);
+}
+
+uint64_t sdsHashConfigurableSeed(const void *key) {
+    return genHashFunctionConfigurableSeed(key, sdslen(key));
 }
 
 uint64_t dictSdsCaseHash(const void *key) {
-    return dictGenCaseHashFunction((unsigned char *)key, sdslen((char *)key));
+    return dictGenCaseHashFunction(key, sdslen(key));
 }
 
 /* Dict hash function for null terminated string */
 uint64_t dictCStrHash(const void *key) {
-    return dictGenHashFunction((unsigned char *)key, strlen((char *)key));
+    return dictGenHashFunction(key, strlen(key));
 }
 
 /* Dict hash function for null terminated string */
 uint64_t dictCStrCaseHash(const void *key) {
-    return dictGenCaseHashFunction((unsigned char *)key, strlen((char *)key));
+    return dictGenCaseHashFunction(key, strlen((char *)key));
 }
 
 /* Hash function for client */
@@ -448,18 +452,14 @@ uint64_t hashtableClientHash(const void *key) {
     return ((client *)key)->id;
 }
 
-/* Hashtable compare function for client, 0 means equal. */
+/* Hashtable compare function for client */
 int hashtableClientKeyCompare(const void *key1, const void *key2) {
-    return ((client *)key1)->id != ((client *)key2)->id;
+    return ((client *)key1)->id == ((client *)key2)->id;
 }
 
 /* Dict compare function for null terminated string */
 int dictCStrKeyCompare(const void *key1, const void *key2) {
-    int l1, l2;
-    l1 = strlen((char *)key1);
-    l2 = strlen((char *)key2);
-    if (l1 != l2) return 0;
-    return memcmp(key1, key2, l1) == 0;
+    return strcmp(key1, key2) == 0;
 }
 
 /* Dict case insensitive compare function for null terminated string */
@@ -485,11 +485,6 @@ int dictEncObjKeyCompare(const void *key1, const void *key2) {
     return cmp;
 }
 
-/* Returns 0 when keys match */
-int hashtableEncObjKeyCompare(const void *key1, const void *key2) {
-    return !dictEncObjKeyCompare(key1, key2);
-}
-
 uint64_t dictEncObjHash(const void *key) {
     robj *o = (robj *)key;
 
@@ -500,7 +495,7 @@ uint64_t dictEncObjHash(const void *key) {
         int len;
 
         len = ll2string(buf, 32, (long)objectGetVal(o));
-        return dictGenHashFunction((unsigned char *)buf, len);
+        return dictGenHashFunction(buf, len);
     } else {
         serverPanic("Unknown string encoding");
     }
@@ -534,39 +529,96 @@ const void *hashtableSubcommandGetKey(const void *element) {
     return command->declared_name;
 }
 
+/* Entry destructor that frees object key and the dictEntry itself */
+void dictEntryDestructorObjectKey(void *entry) {
+    dictEntry *de = entry;
+    dictObjectDestructor(dictGetKey(de));
+    zfree(de);
+}
+
+/* Entry destructor that frees object key, heap pointer value, and the dictEntry itself */
+void dictEntryDestructorObjectKeyHeapValue(void *entry) {
+    dictEntry *de = entry;
+    dictObjectDestructor(dictGetKey(de));
+    zfree(dictGetVal(de));
+    zfree(de);
+}
+
+/* Entry destructor that frees object key, list value, and the dictEntry itself */
+void dictEntryDestructorObjectKeyListValue(void *entry) {
+    dictEntry *de = entry;
+    dictObjectDestructor(dictGetKey(de));
+    dictListDestructor(dictGetVal(de));
+    zfree(de);
+}
+
+/* Entry destructor that frees object key, hashtable value, and the dictEntry itself */
+void dictEntryDestructorObjectKeyHashtableValue(void *entry) {
+    dictEntry *de = entry;
+    dictObjectDestructor(dictGetKey(de));
+    dictHashtableDestructor(dictGetVal(de));
+    zfree(de);
+}
+
+/* Entry destructor that frees SDS key and the dictEntry itself */
+void dictEntryDestructorSdsKey(void *entry) {
+    dictEntry *de = entry;
+    dictSdsDestructor(dictGetKey(de));
+    zfree(de);
+}
+
+void dictEntryDestructorSdsKeyValue(void *entry) {
+    dictEntry *de = entry;
+    dictSdsDestructor(dictGetKey(de));
+    dictSdsDestructor(dictGetVal(de));
+    zfree(de);
+}
+
+/* Entry destructor that frees SDS key, list value, and the dictEntry itself */
+void dictEntryDestructorSdsKeyListValue(void *entry) {
+    dictEntry *de = entry;
+    dictSdsDestructor(dictGetKey(de));
+    dictListDestructor(dictGetVal(de));
+    zfree(de);
+}
+
+/* Entry destructor that frees SDS key, heap pointer value, and the dictEntry itself */
+void dictEntryDestructorSdsKeyHeapValue(void *entry) {
+    dictEntry *de = entry;
+    dictSdsDestructor(dictGetKey(de));
+    zfree(dictGetVal(de));
+    zfree(de);
+}
+
 /* Generic hash table type where keys are Objects, Values
  * dummy pointers. */
 dictType objectKeyPointerValueDictType = {
-    dictEncObjHash,       /* hash function */
-    NULL,                 /* key dup */
-    dictEncObjKeyCompare, /* key compare */
-    dictObjectDestructor, /* key destructor */
-    NULL,                 /* val destructor */
-    NULL                  /* allow to expand */
+    .entryGetKey = dictEntryGetKey,
+    .hashFunction = dictEncObjHash,
+    .keyCompare = dictEncObjKeyCompare,
+    .entryDestructor = dictEntryDestructorObjectKey,
 };
 
 /* Like objectKeyPointerValueDictType(), but values can be destroyed, if
  * not NULL, calling zfree(). */
 dictType objectKeyHeapPointerValueDictType = {
-    dictEncObjHash,       /* hash function */
-    NULL,                 /* key dup */
-    dictEncObjKeyCompare, /* key compare */
-    dictObjectDestructor, /* key destructor */
-    dictVanillaFree,      /* val destructor */
-    NULL                  /* allow to expand */
+    .entryGetKey = dictEntryGetKey,
+    .hashFunction = dictEncObjHash,
+    .keyCompare = dictEncObjKeyCompare,
+    .entryDestructor = dictEntryDestructorObjectKeyHeapValue,
 };
 
 /* Generic hashtable type: set of robj elements */
 hashtableType objectHashtableType = {
     .hashFunction = dictEncObjHash,
-    .keyCompare = hashtableEncObjKeyCompare,
+    .keyCompare = dictEncObjKeyCompare,
     .entryDestructor = dictObjectDestructor,
 };
 
 /* Set hashtable type. Items are SDS strings */
 hashtableType setHashtableType = {
-    .hashFunction = dictSdsHash,
-    .keyCompare = hashtableSdsKeyCompare,
+    .hashFunction = sdsHashConfigurableSeed,
+    .keyCompare = dictSdsKeyCompare,
     .entryDestructor = dictSdsDestructor};
 
 const void *zsetHashtableGetKey(const void *element) {
@@ -576,9 +628,9 @@ const void *zsetHashtableGetKey(const void *element) {
 
 /* Sorted sets hash (note: a skiplist is used in addition to the hash table) */
 hashtableType zsetHashtableType = {
-    .hashFunction = dictSdsHash,
+    .hashFunction = sdsHashConfigurableSeed,
     .entryGetKey = zsetHashtableGetKey,
-    .keyCompare = hashtableSdsKeyCompare,
+    .keyCompare = dictSdsKeyCompare,
 };
 
 uint64_t hashtableSdsHash(const void *key) {
@@ -598,11 +650,6 @@ void hashtableObjectPrefetchValue(const void *entry) {
     }
 }
 
-int hashtableObjKeyCompare(const void *key1, const void *key2) {
-    const robj *o1 = key1, *o2 = key2;
-    return hashtableSdsKeyCompare(objectGetVal(o1), objectGetVal(o2));
-}
-
 void hashtableObjectDestructor(void *val) {
     if (val == NULL) return; /* Lazy freeing will set value to NULL. */
     decrRefCount(val);
@@ -612,8 +659,8 @@ void hashtableObjectDestructor(void *val) {
 hashtableType kvstoreKeysHashtableType = {
     .entryPrefetchValue = hashtableObjectPrefetchValue,
     .entryGetKey = hashtableObjectGetKey,
-    .hashFunction = hashtableSdsHash,
-    .keyCompare = hashtableSdsKeyCompare,
+    .hashFunction = sdsHashConfigurableSeed,
+    .keyCompare = dictSdsKeyCompare,
     .entryDestructor = hashtableObjectDestructor,
     .resizeAllowed = hashtableResizeAllowed,
     .rehashingStarted = kvstoreHashtableRehashingStarted,
@@ -626,8 +673,8 @@ hashtableType kvstoreKeysHashtableType = {
 hashtableType kvstoreExpiresHashtableType = {
     .entryPrefetchValue = hashtableObjectPrefetchValue,
     .entryGetKey = hashtableObjectGetKey,
-    .hashFunction = hashtableSdsHash,
-    .keyCompare = hashtableSdsKeyCompare,
+    .hashFunction = sdsHashConfigurableSeed,
+    .keyCompare = dictSdsKeyCompare,
     .entryDestructor = NULL, /* shared with keyspace table */
     .resizeAllowed = hashtableResizeAllowed,
     .rehashingStarted = kvstoreHashtableRehashingStarted,
@@ -639,19 +686,19 @@ hashtableType kvstoreExpiresHashtableType = {
 /* Command set, hashed by current command name, stores serverCommand structs. */
 hashtableType commandSetType = {.entryGetKey = hashtableCommandGetCurrentName,
                                 .hashFunction = dictSdsCaseHash,
-                                .keyCompare = hashtableStringKeyCaseCompare,
+                                .keyCompare = dictCStrKeyCaseCompare,
                                 .instant_rehashing = 1};
 
 /* Command set, hashed by original command name, stores serverCommand structs. */
 hashtableType originalCommandSetType = {.entryGetKey = hashtableCommandGetOriginalName,
                                         .hashFunction = dictSdsCaseHash,
-                                        .keyCompare = hashtableStringKeyCaseCompare,
+                                        .keyCompare = dictCStrKeyCaseCompare,
                                         .instant_rehashing = 1};
 
 /* Sub-command set, hashed by char* string, stores serverCommand structs. */
 hashtableType subcommandSetType = {.entryGetKey = hashtableSubcommandGetKey,
                                    .hashFunction = dictCStrCaseHash,
-                                   .keyCompare = hashtableStringKeyCaseCompare,
+                                   .keyCompare = dictCStrKeyCaseCompare,
                                    .instant_rehashing = 1};
 
 /* Hash type hash table (note that small hashes are represented with listpacks) */
@@ -670,17 +717,17 @@ size_t hashHashtableTypeMetadataSize(void) {
 extern bool hashHashtableTypeValidate(hashtable *ht, void *entry);
 
 hashtableType hashHashtableType = {
-    .hashFunction = dictSdsHash,
+    .hashFunction = sdsHashConfigurableSeed,
     .entryGetKey = hashHashtableTypeGetKey,
-    .keyCompare = hashtableSdsKeyCompare,
+    .keyCompare = dictSdsKeyCompare,
     .entryDestructor = hashHashtableTypeDestructor,
     .getMetadataSize = hashHashtableTypeMetadataSize,
 };
 
 hashtableType hashWithVolatileItemsHashtableType = {
-    .hashFunction = dictSdsHash,
+    .hashFunction = sdsHashConfigurableSeed,
     .entryGetKey = hashHashtableTypeGetKey,
-    .keyCompare = hashtableSdsKeyCompare,
+    .keyCompare = dictSdsKeyCompare,
     .entryDestructor = hashHashtableTypeDestructor,
     .getMetadataSize = hashHashtableTypeMetadataSize,
     .validateEntry = hashHashtableTypeValidate,
@@ -689,29 +736,25 @@ hashtableType hashWithVolatileItemsHashtableType = {
 /* Hashtable type without destructor */
 hashtableType sdsReplyHashtableType = {
     .hashFunction = dictSdsCaseHash,
-    .keyCompare = hashtableSdsKeyCompare};
+    .keyCompare = dictSdsKeyCompare};
 
 /* Keylist hash table type has unencoded Objects as keys and
  * lists as values. It's used for blocking operations (BLPOP) and to
  * map swapped keys to a list of clients waiting for this keys to be loaded. */
 dictType keylistDictType = {
-    dictObjHash,          /* hash function */
-    NULL,                 /* key dup */
-    dictObjKeyCompare,    /* key compare */
-    dictObjectDestructor, /* key destructor */
-    dictListDestructor,   /* val destructor */
-    NULL                  /* allow to expand */
+    .entryGetKey = dictEntryGetKey,
+    .hashFunction = dictObjHash,
+    .keyCompare = dictObjKeyCompare,
+    .entryDestructor = dictEntryDestructorObjectKeyListValue,
 };
 
 /* objToHashtableDictType has unencoded Objects as keys and
  * hashtables as values. It's used for PUBSUB command to track clients subscribing the patterns. */
 dictType objToHashtableDictType = {
-    dictObjHash,             /* hash function */
-    NULL,                    /* key dup */
-    dictObjKeyCompare,       /* key compare */
-    dictObjectDestructor,    /* key destructor */
-    dictHashtableDestructor, /* val destructor */
-    NULL                     /* allow to expand */
+    .entryGetKey = dictEntryGetKey,
+    .hashFunction = dictObjHash,
+    .keyCompare = dictObjKeyCompare,
+    .entryDestructor = dictEntryDestructorObjectKeyHashtableValue,
 };
 
 /* Callback used for hash tables where the entries are dicts and the key
@@ -728,14 +771,14 @@ void hashtableChannelsDestructor(void *entry) {
     hashtableRelease(ht);
 }
 
-/* Similar to objToDictDictType, but changed to hashtable and added some kvstore
+/* Similar to objToHashtableDictType, but changed to hashtable and added some kvstore
  * callbacks, it's used for PUBSUB command to track clients subscribing the
  * channels. The elements are dicts where the keys are clients. The metadata in
  * each dict stores a pointer to the channel name. */
 hashtableType kvstoreChannelHashtableType = {
     .entryGetKey = hashtableChannelsGetKey,
     .hashFunction = dictObjHash,
-    .keyCompare = hashtableObjKeyCompare,
+    .keyCompare = dictObjKeyCompare,
     .entryDestructor = hashtableChannelsDestructor,
     .rehashingStarted = kvstoreHashtableRehashingStarted,
     .rehashingCompleted = kvstoreHashtableRehashingCompleted,
@@ -746,55 +789,45 @@ hashtableType kvstoreChannelHashtableType = {
 /* Modules system dictionary type. Keys are module name,
  * values are pointer to ValkeyModule struct. */
 dictType modulesDictType = {
-    dictSdsCaseHash,       /* hash function */
-    NULL,                  /* key dup */
-    dictSdsKeyCaseCompare, /* key compare */
-    dictSdsDestructor,     /* key destructor */
-    NULL,                  /* val destructor */
-    NULL                   /* allow to expand */
+    .entryGetKey = dictEntryGetKey,
+    .hashFunction = dictSdsCaseHash,
+    .keyCompare = dictSdsKeyCaseCompare,
+    .entryDestructor = dictEntryDestructorSdsKey,
 };
 
 /* Migrate cache dict type. */
 dictType migrateCacheDictType = {
-    dictSdsHash,       /* hash function */
-    NULL,              /* key dup */
-    dictSdsKeyCompare, /* key compare */
-    dictSdsDestructor, /* key destructor */
-    NULL,              /* val destructor */
-    NULL               /* allow to expand */
+    .entryGetKey = dictEntryGetKey,
+    .hashFunction = dictSdsHash,
+    .keyCompare = dictSdsKeyCompare,
+    .entryDestructor = dictEntryDestructorSdsKey,
 };
 
 /* Dict for for case-insensitive search using null terminated C strings.
  * The keys stored in dict are sds though. */
 dictType stringSetDictType = {
-    dictCStrCaseHash,       /* hash function */
-    NULL,                   /* key dup */
-    dictCStrKeyCaseCompare, /* key compare */
-    dictSdsDestructor,      /* key destructor */
-    NULL,                   /* val destructor */
-    NULL                    /* allow to expand */
+    .entryGetKey = dictEntryGetKey,
+    .hashFunction = dictCStrCaseHash,
+    .keyCompare = dictCStrKeyCaseCompare,
+    .entryDestructor = dictEntryDestructorSdsKey,
 };
 
 /* Dict for for case-insensitive search using null terminated C strings.
  * The key and value do not have a destructor. */
 dictType externalStringType = {
-    dictCStrCaseHash,       /* hash function */
-    NULL,                   /* key dup */
-    dictCStrKeyCaseCompare, /* key compare */
-    NULL,                   /* key destructor */
-    NULL,                   /* val destructor */
-    NULL                    /* allow to expand */
+    .entryGetKey = dictEntryGetKey,
+    .hashFunction = dictCStrCaseHash,
+    .keyCompare = dictCStrKeyCaseCompare,
+    .entryDestructor = zfree,
 };
 
 /* Dict for case-insensitive search using sds objects with a zmalloc
  * allocated object as the value. */
 dictType sdsHashDictType = {
-    dictSdsCaseHash,       /* hash function */
-    NULL,                  /* key dup */
-    dictSdsKeyCaseCompare, /* key compare */
-    dictSdsDestructor,     /* key destructor */
-    dictVanillaFree,       /* val destructor */
-    NULL                   /* allow to expand */
+    .entryGetKey = dictEntryGetKey,
+    .hashFunction = dictSdsCaseHash,
+    .keyCompare = dictSdsKeyCaseCompare,
+    .entryDestructor = dictEntryDestructorSdsKeyHeapValue,
 };
 
 size_t clientHashtableTypeMetadataSize(void) {
@@ -816,13 +849,10 @@ hashtableType clientHashtableType = {
  * active fork child running. */
 void updateDictResizePolicy(void) {
     if (server.in_fork_child != CHILD_TYPE_NONE || !server.dict_resizing) {
-        dictSetResizeEnabled(DICT_RESIZE_FORBID);
         hashtableSetResizePolicy(HASHTABLE_RESIZE_FORBID);
     } else if (hasActiveChildProcess()) {
-        dictSetResizeEnabled(DICT_RESIZE_AVOID);
         hashtableSetResizePolicy(HASHTABLE_RESIZE_AVOID);
     } else {
-        dictSetResizeEnabled(DICT_RESIZE_ENABLE);
         hashtableSetResizePolicy(HASHTABLE_RESIZE_ALLOW);
     }
 }
@@ -1335,7 +1365,7 @@ void databasesCron(void) {
     }
 }
 
-static inline void updateCachedTimeWithUs(int update_daylight_info, const long long ustime) {
+static inline void updateCachedTimeWithUs(int update_daylight_info, const ustime_t ustime) {
     server.ustime = ustime;
     server.mstime = server.ustime / 1000;
     server.unixtime = server.mstime / 1000;
@@ -1365,7 +1395,7 @@ static inline void updateCachedTimeWithUs(int update_daylight_info, const long l
  * such info only when calling this function from serverCron() but not when
  * calling it from call(). */
 void updateCachedTime(int update_daylight_info) {
-    const long long us = ustime();
+    const ustime_t us = ustime();
     updateCachedTimeWithUs(update_daylight_info, us);
 }
 
@@ -1375,7 +1405,7 @@ void updateCachedTime(int update_daylight_info) {
  * the execution unit.
  * update_cached_time - if 0, will not update the cached time even if required.
  * us - if not zero, use this time for cached time, otherwise get current time. */
-void enterExecutionUnit(int update_cached_time, long long us) {
+void enterExecutionUnit(int update_cached_time, ustime_t us) {
     if (server.execution_nesting++ == 0 && update_cached_time) {
         if (us == 0) {
             us = ustime();
@@ -1869,7 +1899,7 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
 
     /* Run a fast expire cycle (the called function will return
      * ASAP if a fast cycle is not needed). */
-    long long expire_cycle_time = 0;
+    ustime_t expire_cycle_time = 0;
     if (server.active_expire_enabled && !server.import_mode && iAmPrimary()) {
         expire_cycle_time = activeExpireCycle(ACTIVE_EXPIRE_CYCLE_FAST);
     }
@@ -2231,7 +2261,6 @@ void createSharedObjects(void) {
 
     for (j = 0; j < OBJ_SHARED_INTEGERS; j++) {
         shared.integers[j] = makeObjectShared(createObject(OBJ_STRING, (void *)(long)j));
-        shared.integers[j]->encoding = OBJ_ENCODING_INT;
         shared.integers[j]->encoding = OBJ_ENCODING_INT;
     }
     for (j = 0; j < OBJ_SHARED_BULKHDR_LEN; j++) {
@@ -3865,7 +3894,7 @@ void call(client *c, int flags) {
     long long old_primary_repl_offset = server.primary_repl_offset;
     incrCommandStatsOnError(NULL, 0);
 
-    const long long call_timer = ustime();
+    const ustime_t call_timer = ustime();
     enterExecutionUnit(1, call_timer);
 
     /* setting the CLIENT_EXECUTING_COMMAND flag so we will avoid
@@ -6118,7 +6147,7 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
         pause_purpose purpose;
         char *paused_reason = "none";
         char *paused_actions = "none";
-        long long paused_timeout = 0;
+        mstime_t paused_timeout = 0;
         if (server.paused_actions & PAUSE_ACTION_CLIENT_ALL) {
             paused_actions = "all";
             paused_timeout = getPausedActionTimeout(PAUSE_ACTION_CLIENT_ALL, &purpose);
@@ -6208,7 +6237,7 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                 "used_memory_vm_eval:%lld\r\n", memory_lua,
                 "used_memory_lua_human:%s\r\n", used_memory_lua_hmem, /* deprecated */
                 "used_memory_scripts_eval:%lld\r\n", (long long)mh->lua_caches,
-                "number_of_cached_scripts:%lu\r\n", dictSize(evalScriptsDict()),
+                "number_of_cached_scripts:%zu\r\n", dictSize(evalScriptsDict()),
                 "number_of_functions:%lu\r\n", functionsNum(),
                 "number_of_libraries:%lu\r\n", functionsLibNum(),
                 "used_memory_vm_functions:%lld\r\n", memory_functions,
@@ -6346,10 +6375,10 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
 
     /* Stats */
     if (all_sections || (dictFind(section_dict, "stats") != NULL)) {
-        long long current_eviction_exceeded_time =
-            server.stat_last_eviction_exceeded_time ? (long long)elapsedUs(server.stat_last_eviction_exceeded_time) : 0;
-        long long current_active_defrag_time =
-            server.stat_last_active_defrag_time ? (long long)elapsedUs(server.stat_last_active_defrag_time) : 0;
+        ustime_t current_eviction_exceeded_time =
+            server.stat_last_eviction_exceeded_time ? (ustime_t)elapsedUs(server.stat_last_eviction_exceeded_time) : 0;
+        ustime_t current_active_defrag_time =
+            server.stat_last_active_defrag_time ? (ustime_t)elapsedUs(server.stat_last_active_defrag_time) : 0;
 
         if (sections++) info = sdscat(info, "\r\n");
         info = sdscatprintf(
@@ -6386,11 +6415,11 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                 "keyspace_hits:%lld\r\n", server.stat_keyspace_hits,
                 "keyspace_misses:%lld\r\n", server.stat_keyspace_misses,
                 "pubsub_channels:%llu\r\n", kvstoreSize(server.pubsub_channels),
-                "pubsub_patterns:%lu\r\n", dictSize(server.pubsub_patterns),
+                "pubsub_patterns:%zu\r\n", dictSize(server.pubsub_patterns),
                 "pubsubshard_channels:%llu\r\n", kvstoreSize(server.pubsubshard_channels),
                 "latest_fork_usec:%lld\r\n", server.stat_fork_time,
                 "total_forks:%lld\r\n", server.stat_total_forks,
-                "migrate_cached_sockets:%ld\r\n", dictSize(server.migrate_cached_sockets),
+                "migrate_cached_sockets:%zu\r\n", dictSize(server.migrate_cached_sockets),
                 "slave_expires_tracked_keys:%zu\r\n", getReplicaKeyWithExpireCount(),
                 "active_defrag_hits:%lld\r\n", server.stat_active_defrag_hits,
                 "active_defrag_misses:%lld\r\n", server.stat_active_defrag_misses,
@@ -6573,12 +6602,12 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                             (long)m_ru.ru_utime.tv_usec);
 #endif /* RUSAGE_THREAD */
         long long active_seconds = server.stat_active_time / 1000000;
-        long long active_microseconds = server.stat_active_time % 1000000;
+        ustime_t active_microseconds = server.stat_active_time % 1000000;
         info = sdscatprintf(info,
                             "used_active_time_main_thread:%lld.%06lld\r\n",
                             active_seconds, active_microseconds);
         for (int i = 1; i < server.io_threads_num; i++) {
-            long long used_active_time_io_thread = getIOThreadActiveTimeMicroseconds(i);
+            ustime_t used_active_time_io_thread = getIOThreadActiveTimeMicroseconds(i);
             info = sdscatprintf(info,
                                 "used_active_time_io_thread_%d:%lld.%06lld\r\n",
                                 i,
@@ -6998,7 +7027,7 @@ int serverFork(int purpose) {
     }
 
     int childpid;
-    long long start = ustime();
+    ustime_t start = ustime();
     if ((childpid = valkey_fork()) == 0) {
         /* Child.
          *
@@ -7147,7 +7176,7 @@ int checkForSentinelMode(int argc, char **argv, char *exec_name) {
 
 /* Function called at startup to load RDB or AOF file in memory. */
 void loadDataFromDisk(void) {
-    long long start = ustime();
+    ustime_t start = ustime();
     if (server.aof_state == AOF_ON) {
         int ret = loadAppendOnlyFiles(server.aof_manifest);
         if (ret == AOF_FAILED || ret == AOF_OPEN_ERR) exit(1);
@@ -7394,7 +7423,6 @@ __attribute__((weak)) int main(int argc, char **argv) {
 
     uint8_t hashseed[16];
     getRandomBytes(hashseed, sizeof(hashseed));
-    dictSetHashFunctionSeed(hashseed);
     hashtableSetHashFunctionSeed(hashseed);
 
     char *exec_name = strrchr(argv[0], '/');
@@ -7551,10 +7579,15 @@ __attribute__((weak)) int main(int argc, char **argv) {
         sdsfree(options);
     }
     if (server.sentinel_mode) sentinelCheckConfigFile();
-    if (server.hash_seed != NULL) {
-        memset(hashseed, 0, sizeof(hashseed));
-        getHashSeedFromString(hashseed, sizeof(hashseed), server.hash_seed);
-        hashtableSetHashFunctionSeed(hashseed);
+
+    /* Set the configured hash seed used by data hashtables (keys, sets, zsets,
+     * hashes) or use the random seed if not configured. */
+    if (server.hash_seed) {
+        uint8_t seed[16] = {0};
+        getHashSeedFromString(seed, sizeof(seed), server.hash_seed);
+        setConfigurableHashSeed(seed);
+    } else {
+        setConfigurableHashSeed(hashtableGetHashFunctionSeed());
     }
 
     /* Do system checks */
@@ -7694,23 +7727,27 @@ __attribute__((weak)) int main(int argc, char **argv) {
  * The parseExtendedCommandArgumentsOrReply() function performs the common validation for extended
  * command arguments used in STRING and HASH commands.
  *
- * Get specific command extended options - PERSIST/DEL
- * Set specific command extended options - XX/NX/GET/IFEQ
- * HSET specific command extended options - FXX/FNX
+ * GET specific command extended options - PERSIST
+ * SET specific command extended options - XX/NX/GET/IFEQ
+ * MSET specific command extended options - XX/NX
+ * HGET specific command extended options - PERSIST
+ * HSET specific command extended options - NX/XX/FXX/FNX
  * Common command extended options - EX/EXAT/PX/PXAT/KEEPTTL
  *
- * Function takes pointers to client, flags, unit, pointer to pointer of expire obj if needed
- * to be determined and command_type which can be COMMAND_GET or COMMAND_SET.
+ * Function takes pointers to client, flags, unit, expire_idx, pointer to pointer of expire obj,
+ * pointer to pointer of compare obj if needed to be determined and command_type which can be COMMAND_*.
  *
  * If there are any syntax violations C_ERR is returned else C_OK is returned.
  *
- * Input flags are updated upon parsing the arguments. Unit and expire are updated if there are any
+ * Input flags are updated upon parsing the arguments. Unit, expire_idx and expire are updated if there are any
  * EX/EXAT/PX/PXAT arguments. Unit is updated to millisecond if PX/PXAT is set.
  *
+ * start_idx provides a way to start scanning from a specific index.
  * max_args provides a way to limit the scan to a specific range of arguments.
  */
-int parseExtendedCommandArgumentsOrReply(client *c, int *flags, int *unit, robj **expire, robj **compare_val, int command_type, int max_args) {
-    int j = command_type == COMMAND_SET ? 3 : 2;
+int parseExtendedCommandArgumentsOrReply(client *c, int command_type, int start_idx, int max_args, int *flags, int *unit, int *expire_idx, robj **expire, robj **compare_val) {
+    int j = start_idx;
+    if (expire_idx) *expire_idx = -1;
     for (; j < max_args; j++) {
         char *opt = objectGetVal(c->argv[j]);
         robj *next = (j == max_args - 1) ? NULL : c->argv[j + 1];
@@ -7718,12 +7755,14 @@ int parseExtendedCommandArgumentsOrReply(client *c, int *flags, int *unit, robj 
         /* clang-format off */
         if ((opt[0] == 'n' || opt[0] == 'N') &&
             (opt[1] == 'x' || opt[1] == 'X') && opt[2] == '\0' &&
-            !(*flags & ARGS_SET_XX || *flags & ARGS_SET_IFEQ) && (command_type == COMMAND_SET || command_type == COMMAND_HSET))
+            !(*flags & ARGS_SET_XX || *flags & ARGS_SET_IFEQ) &&
+            (command_type == COMMAND_SET || command_type == COMMAND_HSET || command_type == COMMAND_MSET))
         {
             *flags |= ARGS_SET_NX;
         } else if ((opt[0] == 'x' || opt[0] == 'X') &&
                    (opt[1] == 'x' || opt[1] == 'X') && opt[2] == '\0' &&
-                   !(*flags & ARGS_SET_NX || *flags & ARGS_SET_IFEQ) && (command_type == COMMAND_SET || command_type == COMMAND_HSET))
+                   !(*flags & ARGS_SET_NX || *flags & ARGS_SET_IFEQ) &&
+                   (command_type == COMMAND_SET || command_type == COMMAND_HSET || command_type == COMMAND_MSET))
         {
             *flags |= ARGS_SET_XX;
         } else if ((opt[0] == 'f' || opt[0] == 'F') &&
@@ -7756,7 +7795,8 @@ int parseExtendedCommandArgumentsOrReply(client *c, int *flags, int *unit, robj 
             *flags |= ARGS_SET_GET;
         } else if (!strcasecmp(opt, "KEEPTTL") && !(*flags & ARGS_PERSIST) &&
                    !(*flags & ARGS_EX) && !(*flags & ARGS_EXAT) &&
-                   !(*flags & ARGS_PX) && !(*flags & ARGS_PXAT) && (command_type == COMMAND_SET || command_type == COMMAND_HSET))
+                   !(*flags & ARGS_PX) && !(*flags & ARGS_PXAT) &&
+                   (command_type == COMMAND_SET || command_type == COMMAND_HSET || command_type == COMMAND_MSET))
         {
             *flags |= ARGS_KEEPTTL;
         } else if (!strcasecmp(opt,"PERSIST") && (command_type == COMMAND_GET || command_type == COMMAND_HGET) &&
@@ -7773,6 +7813,7 @@ int parseExtendedCommandArgumentsOrReply(client *c, int *flags, int *unit, robj 
         {
             *flags |= ARGS_EX;
             *expire = next;
+            if (expire_idx) *expire_idx = j;
             j++;
         } else if ((opt[0] == 'p' || opt[0] == 'P') &&
                    (opt[1] == 'x' || opt[1] == 'X') && opt[2] == '\0' &&
@@ -7783,6 +7824,7 @@ int parseExtendedCommandArgumentsOrReply(client *c, int *flags, int *unit, robj 
             *flags |= ARGS_PX;
             *unit = UNIT_MILLISECONDS;
             *expire = next;
+            if (expire_idx) *expire_idx = j;
             j++;
         } else if ((opt[0] == 'e' || opt[0] == 'E') &&
                    (opt[1] == 'x' || opt[1] == 'X') &&
@@ -7794,6 +7836,7 @@ int parseExtendedCommandArgumentsOrReply(client *c, int *flags, int *unit, robj 
         {
             *flags |= ARGS_EXAT;
             *expire = next;
+            if (expire_idx) *expire_idx = j;
             j++;
         } else if ((opt[0] == 'p' || opt[0] == 'P') &&
                    (opt[1] == 'x' || opt[1] == 'X') &&
@@ -7806,9 +7849,10 @@ int parseExtendedCommandArgumentsOrReply(client *c, int *flags, int *unit, robj 
             *flags |= ARGS_PXAT;
             *unit = UNIT_MILLISECONDS;
             *expire = next;
+            if (expire_idx) *expire_idx = j;
             j++;
         } else {
-            addReplyErrorObject(c,shared.syntaxerr);
+            addReplyErrorObject(c, shared.syntaxerr);
             return C_ERR;
         }
         /* clang-format on */

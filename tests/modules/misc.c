@@ -454,7 +454,7 @@ int test_rm_call_flags(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc
 }
 
 /* Reply handler used by VM_CallArgv wrappers: forwards the raw RESP reply to the client */
-static int misc_call_argv_reply_handler(ValkeyModuleCallReplyCtx *ctx, ValkeyModuleCtx *mctx, const char *proto, size_t proto_len) {
+static int misc_call_argv_reply_handler(void *ctx, ValkeyModuleCtx *mctx, const char *proto, size_t proto_len) {
     UNUSED(ctx);
     if (proto_len == 0) {
         /* DRY RUN FLAG case */

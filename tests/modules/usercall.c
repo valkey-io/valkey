@@ -201,7 +201,7 @@ int call_with_user_bg(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc)
 }
 
 /* Reply handler for VM_CallArgv wrappers */
-static int usercall_argv_reply_handler(ValkeyModuleCallReplyCtx *ctx, ValkeyModuleCtx *mctx, const char *proto, size_t proto_len) {
+static int usercall_argv_reply_handler(void *ctx, ValkeyModuleCtx *mctx, const char *proto, size_t proto_len) {
     UNUSED(ctx);
     ValkeyModule_ReplyRaw(mctx, proto, proto_len);
     return 0;

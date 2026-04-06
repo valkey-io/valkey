@@ -59,6 +59,6 @@ void freeCallReply(CallReply *rep);
 CallReply *callReplyCreatePromise(void *private_data);
 void enableParseExactReplyTypeFlag(CallReply *rep);
 
-void invokeReplyHandlers(ValkeyModuleCtx *ctx, client *c, const ValkeyModuleReplyHandlers *handlers, ValkeyModuleCallReplyCtx *reply_ctx);
+void invokeReplyHandlers(ValkeyModuleCtx *ctx, client *c, const ValkeyModuleReplyHandlers *handlers, void *reply_ctx);
 
 #endif /* SRC_CALL_REPLY_H_ */

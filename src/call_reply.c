@@ -78,7 +78,7 @@
  * receives a pointer to one of these as its opaque `ctx` argument. */
 typedef struct {
     const ValkeyModuleReplyHandlers *handlers;
-    ValkeyModuleCallReplyCtx *context;
+    void *context;
 } RespHandlersCtx;
 
 static void callRawReplyNull(void *ctx, const char *proto, size_t proto_len) {
@@ -255,7 +255,7 @@ static const ReplyParserCallbacks RawReplyParserCallbacks = {
  *
  * The client's output buffer is consumed by this call (bufpos reset, reply
  * list drained). */
-void invokeReplyHandlers(ValkeyModuleCtx *ctx, client *c, const ValkeyModuleReplyHandlers *handlers, ValkeyModuleCallReplyCtx *reply_ctx) {
+void invokeReplyHandlers(ValkeyModuleCtx *ctx, client *c, const ValkeyModuleReplyHandlers *handlers, void *reply_ctx) {
     char *buf = NULL;
     size_t buf_len = 0;
     int free_buffer = 0;

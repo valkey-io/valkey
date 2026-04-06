@@ -1347,14 +1347,14 @@ typedef struct ValkeyModuleReplyHandlers {
     /* This callback is invoked when the client is blocked waiting for a reply.
      * `handle` can be passed to ValkeyModule_CallArgvAbort to cancel the
      * pending call before a reply arrives. The handle is valid until either
-     * onAvailable is invoked or ValkeyModule_CallArgvAbort is called. */
+     * onRespAvailable is invoked or ValkeyModule_CallArgvAbort is called. */
     void (*onBlocked)(void *ctx, ValkeyModuleCtx *module_ctx, ValkeyModuleCallArgvHandle *handle);
 
     /* This callback is invoked when a RESP reply is available for processing.
      * The callback should return 1 if parsing should continue, or 0 if parsing should stop.
      * `proto` and `proto_len` provide the raw RESP bytes for the entire reply.
      */
-    int (*onAvailable)(void *ctx, ValkeyModuleCtx *module_ctx, const char *proto, size_t proto_len);
+    int (*onRespAvailable)(void *ctx, ValkeyModuleCtx *module_ctx, const char *proto, size_t proto_len);
 } ValkeyModuleReplyHandlers;
 
 #define ValkeyModuleScriptingEngineMethods ValkeyModuleScriptingEngineMethodsV4

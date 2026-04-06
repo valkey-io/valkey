@@ -592,7 +592,7 @@ int do_vm_call_argv_async_aux(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, i
 
     ValkeyModuleReplyHandlers resp_handlers = {
         .onBlocked = call_argv_deferred_reply_handle,
-        .onAvailable = call_argv_raw_resp_handler,
+        .onRespAvailable = call_argv_raw_resp_handler,
     };
 
      ValkeyModule_CallArgv(ctx, argv, (size_t)argc, flags, &resp_handlers, (void *)actx);
@@ -654,7 +654,7 @@ int do_vm_call_argv_async_fire_and_forget(ValkeyModuleCtx *ctx, ValkeyModuleStri
         VALKEYMODULE_CALL_ARGV_ALLOW_BLOCK;
 
     ValkeyModuleReplyHandlers resp_handlers = {
-        .onAvailable = do_vm_call_argv_async_script_mode_available_reply_handle,
+        .onRespAvailable = do_vm_call_argv_async_script_mode_available_reply_handle,
         .onBlocked = do_vm_call_argv_async_script_mode_deferred_reply_handle,
     };
 
@@ -720,7 +720,7 @@ int do_vm_call_argv_async_on_thread(ValkeyModuleCtx *ctx, ValkeyModuleString **a
 
     ValkeyModuleReplyHandlers resp_handlers = {
         .onBlocked = call_argv_deferred_reply_handle,
-        .onAvailable = call_argv_async_on_thread_available_handler,
+        .onRespAvailable = call_argv_async_on_thread_available_handler,
     };
 
     ValkeyModule_CallArgv(ctx, argv + 1, (size_t)argc - 1, flags, &resp_handlers, actx);
@@ -795,7 +795,7 @@ int wait_and_do_vm_call_argv_async(ValkeyModuleCtx *ctx, ValkeyModuleString **ar
 
     ValkeyModuleReplyHandlers resp_handlers = {
         .onBlocked = wait_and_call_argv_deferred_reply_handle,
-        .onAvailable = wait_and_call_argv_raw_resp_handler,
+        .onRespAvailable = wait_and_call_argv_raw_resp_handler,
     };
 
     flags = VALKEYMODULE_CALL_ARGV_ALLOW_BLOCK |
@@ -863,7 +863,7 @@ int blpop_and_set_multiple_keys_with_vm_call_argv(ValkeyModuleCtx *ctx, ValkeyMo
 
     ValkeyModuleReplyHandlers resp_handlers = {
         .onBlocked = wait_and_call_argv_deferred_reply_handle,
-        .onAvailable = blpop_and_set_multiple_keys_on_available,
+        .onRespAvailable = blpop_and_set_multiple_keys_on_available,
     };
 
     flags = VALKEYMODULE_CALL_ARGV_ALLOW_BLOCK |

@@ -102,7 +102,7 @@ ValkeyModuleReplyHandlers resp_handlers = {
     .bulkString = handleBulkString,
     .arrayStart = handleArray,
     .error = handleError,
-    .onAvailable = NULL,
+    .onRespAvailable = NULL,
 };
 
 /* TEST.CALL_ARGV -- Test CallArgv() API. */
@@ -129,9 +129,9 @@ int TestCallArgvRaw(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
 
     int flags = VALKEYMODULE_CALL_ARGV_NO_WRITES | VALKEYMODULE_CALL_ARGV_ERRORS_AS_REPLIES;
 
-    resp_handlers.onAvailable = replyWithRawRespString;
+    resp_handlers.onRespAvailable = replyWithRawRespString;
     ValkeyModule_CallArgv(ctx, argv + 1, argc - 1, flags, &resp_handlers, NULL);
-    resp_handlers.onAvailable = NULL;
+    resp_handlers.onRespAvailable = NULL;
     return VALKEYMODULE_OK;
 }
 

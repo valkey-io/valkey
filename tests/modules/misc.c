@@ -474,7 +474,7 @@ int test_call_generic_argv(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int 
     }
 
     ValkeyModuleReplyHandlers handlers = {
-        .onAvailable = misc_call_argv_reply_handler,
+        .onRespAvailable = misc_call_argv_reply_handler,
     };
 
     /* argv[1] is the command name; pass argv+1 so argv[0] of the call is the command */
@@ -500,7 +500,7 @@ int test_call_info_argv(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
     }
 
     ValkeyModuleReplyHandlers handlers = {
-        .onAvailable = misc_call_argv_reply_handler,
+        .onRespAvailable = misc_call_argv_reply_handler,
     };
 
     if (ValkeyModule_CallArgv(ctx, call_argv, call_argc, 0, &handlers, NULL) == VALKEYMODULE_ERR) {
@@ -516,7 +516,7 @@ int test_rm_call_argv(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc)
 
     int flags = VALKEYMODULE_CALL_ARGV_ERRORS_AS_REPLIES;
     ValkeyModuleReplyHandlers handlers = {
-        .onAvailable = misc_call_argv_reply_handler,
+        .onRespAvailable = misc_call_argv_reply_handler,
     };
 
     if (ValkeyModule_CallArgv(ctx, argv + 1, (size_t)argc - 1, flags, &handlers, NULL) == VALKEYMODULE_ERR) {
@@ -554,7 +554,7 @@ int test_rm_call_flags_argv(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int
     }
 
     ValkeyModuleReplyHandlers handlers = {
-        .onAvailable = misc_call_argv_reply_handler,
+        .onRespAvailable = misc_call_argv_reply_handler,
     };
 
     /* argv[2] is the command name; pass argv+2 so it becomes argv[0] of the call */

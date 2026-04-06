@@ -248,7 +248,7 @@ static const ReplyParserCallbacks RawReplyParserCallbacks = {
 /* Parse the RESP reply accumulated in client `c`'s output buffer and deliver
  * it to the handler callbacks in `handlers`.
  *
- * If `handlers->onAvailable` is set it is called first with the raw
+ * If `handlers->onRespAvailable` is set it is called first with the raw
  * RESP bytes.  When it returns 0, per-type callbacks are skipped; when it
  * returns 1 (or is NULL), the reply is walked recursively and each value is
  * dispatched to the matching typed callback.
@@ -297,8 +297,8 @@ void invokeReplyHandlers(ValkeyModuleCtx *ctx, client *c, const ValkeyModuleRepl
 
     int continue_parsing = 1;
 
-    if (handlers->onAvailable) {
-        continue_parsing = handlers->onAvailable(reply_ctx, ctx, buf, buf_len);
+    if (handlers->onRespAvailable) {
+        continue_parsing = handlers->onRespAvailable(reply_ctx, ctx, buf, buf_len);
     }
 
     if (continue_parsing) {

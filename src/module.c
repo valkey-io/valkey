@@ -3618,7 +3618,7 @@ int VM_ReplyWithCallReply(ValkeyModuleCtx *ctx, ValkeyModuleCallReply *reply) {
 
 /* Forward raw RESP bytes directly to the client that issued the module command.
  *
- * This is intended to be called from a ValkeyModuleReplyHandlers.onAvailable
+ * This is intended to be called from a ValkeyModuleReplyHandlers.onRespAvailable
  * callback to implement zero-copy pass-through: instead of parsing and
  * re-serialising the inner command's reply the module writes the raw wire
  * bytes straight to the calling client's output buffer.
@@ -6262,10 +6262,10 @@ int VM_CallReplyPromiseAbort(ValkeyModuleCallReply *reply, void **private_data) 
  * Returns VALKEYMODULE_OK if the abort succeeded, or VALKEYMODULE_ERR if the
  * call has already completed and can no longer be aborted.
  *
- * If the abort succeeds it is guaranteed that neither onAvailable nor
+ * If the abort succeeds it is guaranteed that neither onRespAvailable nor
  * any other reply callback in ValkeyModuleReplyHandlers will be invoked for
  * this call. The abort handle becomes invalid after this function returns.
- * The abort handle also becomes invalid once onAvailable is called.
+ * The abort handle also becomes invalid once onRespAvailable is called.
  *
  * Note: as with VM_CallReplyPromiseAbort, if the underlying blocking command
  * belongs to a module that does not honour disconnect callbacks, the abort may
@@ -7015,7 +7015,7 @@ ValkeyModuleCallReply *VM_Call(ValkeyModuleCtx *ctx, const char *cmdname, const 
  *     VALKEYMODULE_CALL_ARGV_REPLY_EXACT: Request exact reply parsing (do not
  *         coerce reply types) (format specifier: "X").
  * * **resp_handlers**: Struct of callbacks that receive the command reply. The
- *     `onAvailable` callback is called first with the raw RESP bytes; if it
+ *     `onRespAvailable` callback is called first with the raw RESP bytes; if it
  *     returns 0 the per-type callbacks are skipped. If the inner command blocks,
  *     `onBlocked` is called instead.
  *
@@ -7090,11 +7090,11 @@ int VM_CallArgv(ValkeyModuleCtx *ctx,
          *
          * If `resp_handlers` is set the promise is passed to `onBlocked` as an
          * abort handle, but that is a *borrowed* pointer, not a counted reference.
-         * Its validity is bounded by the client's lifetime: `onAvailable` is
+         * Its validity is bounded by the client's lifetime: `onRespAvailable` is
          * always invoked (inside `moduleCallCommandUnblockedHandler`) before
          * `moduleReleaseTempClient` releases the client's reference and frees the
          * promise, so the promise is guaranteed to be alive for the duration of the
-         * callback. The abort handle becomes invalid once `onAvailable` returns
+         * callback. The abort handle becomes invalid once `onRespAvailable` returns
          * or `ValkeyModule_CallArgvAbort` is called, whichever comes first. */
         if (resp_handlers) {
             promise->from_call_argv = 1;

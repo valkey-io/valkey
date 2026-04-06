@@ -53,7 +53,7 @@ typedef enum {
 } expiryModificationResult;
 
 // A vsetGetExpiryFunc
-static long long entryGetExpiryVsetFunc(const void *e) {
+static mstime_t entryGetExpiryVsetFunc(const void *e) {
     return entryGetExpiry((const entry *)e);
 }
 
@@ -129,7 +129,7 @@ static void hashTypeUntrackEntry(robj *o, entry *entry) {
     }
 }
 
-static void hashTypeTrackUpdateEntry(robj *o, entry *old_entry, entry *new_entry, long long old_expiry, long long new_expiry) {
+static void hashTypeTrackUpdateEntry(robj *o, entry *old_entry, entry *new_entry, mstime_t old_expiry, mstime_t new_expiry) {
     int old_tracked = (old_entry && old_expiry != EXPIRY_NONE);
     int new_tracked = (new_entry && new_expiry != EXPIRY_NONE);
     /* If entry was not tracked before and not going to be tracked now, we can simply return */
@@ -231,7 +231,7 @@ int hashTypeGetFromListpack(robj *o, sds field, unsigned char **vstr, unsigned i
  *
  * If *expiry is populated than the function will also provide the current field expiration time
  * or EXPIRY_NONE in case the field has no expiration time defined. */
-int hashTypeGetValue(robj *o, sds field, unsigned char **vstr, unsigned int *vlen, long long *vll, long long *expiry) {
+int hashTypeGetValue(robj *o, sds field, unsigned char **vstr, unsigned int *vlen, long long *vll, mstime_t *expiry) {
     if (o->encoding == OBJ_ENCODING_LISTPACK) {
         *vstr = NULL;
         if (hashTypeGetFromListpack(o, field, vstr, vlen, vll) == 0) {
@@ -260,7 +260,7 @@ int hashTypeGetValue(robj *o, sds field, unsigned char **vstr, unsigned int *vle
  * If the field is found C_OK is returned, otherwise C_ERR.
  * The matching item expiration time is assigned to `expiry` memory location, if specified.
  * In case the item has no assigned expiration time, -1 is returned. */
-int hashTypeGetExpiry(robj *o, sds field, long long *expiry) {
+int hashTypeGetExpiry(robj *o, sds field, mstime_t *expiry) {
     if (o->encoding == OBJ_ENCODING_LISTPACK) {
         if (hashTypeExists(o, field)) {
             if (expiry) *expiry = EXPIRY_NONE;
@@ -339,7 +339,7 @@ int hashTypeUpdateAsStringRef(robj *o, sds field, const char *buf, size_t len) {
     hashtable *ht = objectGetVal(o);
     void **entry_ref = hashtableFindRef(ht, field);
     entry *entry = *entry_ref;
-    long long expiry = entryGetExpiry(entry);
+    mstime_t expiry = entryGetExpiry(entry);
     void *new_entry = entryUpdateAsStringRef(entry, buf, len, expiry);
     bool replaced = hashtableReplaceReallocatedEntry(ht, entry, new_entry);
     serverAssert(replaced);
@@ -365,7 +365,7 @@ int hashTypeUpdateAsStringRef(robj *o, sds field, const char *buf, size_t len) {
  * semantics of copying the values if needed.
  *
  */
-int hashTypeSet(robj *o, sds field, sds value, long long expiry, int flags, bool *expired_overwritten) {
+int hashTypeSet(robj *o, sds field, sds value, mstime_t expiry, int flags, bool *expired_overwritten) {
     int update = 0;
     bool is_expired = false;
     /* Check if the field is too long for listpack, and convert before adding the item.
@@ -429,7 +429,7 @@ int hashTypeSet(robj *o, sds field, sds value, long long expiry, int flags, bool
             }
         } else {
             /* exists: replace value */
-            long long entry_expiry = entryGetExpiry(existing);
+            mstime_t entry_expiry = entryGetExpiry(existing);
             /* It is possible that the entry is already expired. In this case we can override it, but we need to make sure to expire it first
              * and treat it like it did not exist. */
             is_expired = entry_expiry != EXPIRY_NONE && checkAlreadyExpired(entry_expiry);
@@ -468,7 +468,7 @@ int hashTypeSet(robj *o, sds field, sds value, long long expiry, int flags, bool
  * returns 0 if the specified flag conditions has not been met.
  * returns 1 if the expiration time was applied.
  * returns 2 when 'expire' indicate a past Unix time. In this case, if the item exists in the HASH, it will also be expired. */
-static expiryModificationResult hashTypeSetExpire(robj *o, sds field, long long expiry, int flag) {
+static expiryModificationResult hashTypeSetExpire(robj *o, sds field, mstime_t expiry, int flag) {
     /* If no object we will return -2 */
     if (o == NULL) return EXPIRATION_MODIFICATION_NOT_EXIST;
 
@@ -503,7 +503,7 @@ static expiryModificationResult hashTypeSetExpire(robj *o, sds field, long long 
     void **entry_ref = NULL;
     if ((entry_ref = hashtableFindRef(ht, field))) {
         entry *current_entry = *entry_ref;
-        long long current_expire = entryGetExpiry(current_entry);
+        mstime_t current_expire = entryGetExpiry(current_entry);
         if (flag) {
             /* NX option is set, check no current expiry */
             if (flag & EXPIRE_NX) {
@@ -567,7 +567,7 @@ static expiryModificationResult hashTypePersist(robj *o, sds field) {
     void **entry_ref = NULL;
     if ((entry_ref = hashtableFindRef(ht, field))) {
         entry *current_entry = *entry_ref;
-        long long current_expire = entryGetExpiry(current_entry);
+        mstime_t current_expire = entryGetExpiry(current_entry);
         if (current_expire != EXPIRY_NONE) {
             hashTypeUntrackEntry(o, current_entry);
             *entry_ref = entrySetExpiry(current_entry, EXPIRY_NONE);
@@ -843,7 +843,7 @@ robj *hashTypeDup(robj *o) {
             size_t len;
             sds field = entryGetField(hi.next);
             char *value_str = entryGetValue(hi.next, &len);
-            long long expiry = entryGetExpiry(hi.next);
+            mstime_t expiry = entryGetExpiry(hi.next);
             /* Add a field-value pair to a new hash object. */
             sds value = sdsnewlen(value_str, len);
             entry *entry = entryCreate(field, value, expiry);
@@ -921,7 +921,7 @@ void hincrbyCommand(client *c) {
     sds new;
     unsigned char *vstr;
     unsigned int vlen;
-    long long expiry = EXPIRY_NONE;
+    mstime_t expiry = EXPIRY_NONE;
 
     if (getLongLongFromObjectOrReply(c, c->argv[3], &incr, NULL) != C_OK) return;
     if ((o = hashTypeLookupWriteOrCreate(c, c->argv[1])) == NULL) return;
@@ -997,7 +997,7 @@ void hincrbyfloatCommand(client *c) {
     sds new;
     unsigned char *vstr;
     unsigned int vlen;
-    long long expiry = EXPIRY_NONE;
+    mstime_t expiry = EXPIRY_NONE;
 
     if (getLongDoubleFromObjectOrReply(c, c->argv[3], &incr, NULL) != C_OK) return;
     if (isnan(incr) || isinf(incr)) {
@@ -1362,7 +1362,7 @@ void hsetexCommand(client *c) {
     int flags = ARGS_NO_FLAGS;
     int fields_index = 0;
     long long num_fields = 0;
-    long long when = EXPIRY_NONE;
+    mstime_t when = EXPIRY_NONE;
     int i = 0;
     int set_flags = HASH_SET_COPY, set_expired = 0;
     int changes = 0;
@@ -1375,7 +1375,7 @@ void hsetexCommand(client *c) {
     for (; fields_index < c->argc - 1; fields_index++) {
         if (!strcasecmp(objectGetVal(c->argv[fields_index]), "fields")) {
             /* checking optional flags */
-            if (parseExtendedCommandArgumentsOrReply(c, &flags, &unit, &expire, &comparison, COMMAND_HSET, fields_index++) != C_OK) return;
+            if (parseExtendedCommandArgumentsOrReply(c, COMMAND_HSET, 2, fields_index++, &flags, &unit, NULL, &expire, &comparison) != C_OK) return;
             if (getLongLongFromObjectOrReply(c, c->argv[fields_index++], &num_fields, NULL) != C_OK) return;
             break;
         }
@@ -1405,7 +1405,7 @@ void hsetexCommand(client *c) {
     if (flags & ARGS_KEEPTTL)
         set_flags |= HASH_SET_KEEP_EXPIRY;
     else if (expire) {
-        long long basetime = (flags & (ARGS_EXAT | ARGS_PXAT)) ? 0 : commandTimeSnapshot();
+        mstime_t basetime = (flags & (ARGS_EXAT | ARGS_PXAT)) ? 0 : commandTimeSnapshot();
 
         if (convertExpireArgumentToUnixTime(c, expire, basetime, unit, &when) == C_ERR)
             return;
@@ -1622,7 +1622,7 @@ void hgetexCommand(client *c) {
     int flags = ARGS_NO_FLAGS;
     int fields_index = 0;
     long long num_fields = -1;
-    long long when = EXPIRY_NONE;
+    mstime_t when = EXPIRY_NONE;
     int i = 0;
     int set_expiry = 0, set_expired = 0, persist = 0;
     int changes = 0;
@@ -1634,7 +1634,7 @@ void hgetexCommand(client *c) {
     for (; fields_index < c->argc - 1; fields_index++) {
         if (!strcasecmp(objectGetVal(c->argv[fields_index]), "fields")) {
             /* checking optional flags */
-            if (parseExtendedCommandArgumentsOrReply(c, &flags, &unit, &expire, &comparison, COMMAND_HGET, fields_index++) != C_OK) return;
+            if (parseExtendedCommandArgumentsOrReply(c, COMMAND_HGET, 2, fields_index++, &flags, &unit, NULL, &expire, &comparison) != C_OK) return;
             if (getLongLongFromObjectOrReply(c, c->argv[fields_index++], &num_fields, NULL) != C_OK) return;
             break;
         }
@@ -1657,7 +1657,7 @@ void hgetexCommand(client *c) {
     if (flags & ARGS_PERSIST) {
         persist = 1;
     } else if (expire) {
-        long long basetime = (flags & (ARGS_EXAT | ARGS_PXAT)) ? 0 : commandTimeSnapshot();
+        mstime_t basetime = (flags & (ARGS_EXAT | ARGS_PXAT)) ? 0 : commandTimeSnapshot();
 
         if (convertExpireArgumentToUnixTime(c, expire, basetime, unit, &when) == C_ERR)
             return;
@@ -1821,7 +1821,7 @@ void hscanCommand(client *c) {
 
     if (parseScanCursorOrReply(c, objectGetVal(c->argv[2]), &cursor) == C_ERR) return;
     if ((o = lookupKeyReadOrReply(c, c->argv[1], shared.emptyscan)) == NULL || checkType(c, o, OBJ_HASH)) return;
-    scanGenericCommand(c, o, cursor);
+    scanGenericCommand(c, o, cursor, -1, NULL, NULL);
 }
 
 static void hrandfieldReplyWithListpack(writePreparedClient *wpc, unsigned int count, listpackEntry *fields, listpackEntry *vals) {
@@ -1877,9 +1877,9 @@ static void hrandfieldReplyWithListpack(writePreparedClient *wpc, unsigned int c
  * - "hexpired" — when fields are immediately expired and deleted.
  * - "hexpire"  — when fields receive new expiration timestamps.
  * - "del"      — when the hash key becomes empty and is removed. */
-void hexpireGenericCommand(client *c, long long basetime, int unit) {
+void hexpireGenericCommand(client *c, mstime_t basetime, int unit) {
     robj *key = c->argv[1], *param = c->argv[2];
-    long long when; /* unix time in milliseconds when the key will expire. */
+    mstime_t when; /* unix time in milliseconds when the key will expire. */
     int flag = 0;
     int fields_index = 3;
     long long num_fields = 0;
@@ -2072,7 +2072,7 @@ void hpersistCommand(client *c) {
  *
  * Keyspace Notifications:
  * - None emitted; this command is read-only. */
-void httlGenericCommand(client *c, long long basetime, int unit) {
+void httlGenericCommand(client *c, mstime_t basetime, int unit) {
     int fields_index = 4;
     long long num_fields = 0, result = -2;
 
@@ -2424,7 +2424,7 @@ static void defragHashTypeEntry(void *privdata, void *element_ref) {
 
     entry *new_entry = entryDefrag(old_entry, activeDefragAlloc, activeDefragSds);
     if (new_entry) {
-        long long expiry = entryGetExpiry(new_entry);
+        mstime_t expiry = entryGetExpiry(new_entry);
         /* In case the entry is tracked we need to update it in the volatile set */
         if (expiry != EXPIRY_NONE) {
             // We don't need to pass the db because db-level tracking isn't going to change for this update.

@@ -157,7 +157,7 @@ start_server {tags {"tls"}} {
 
         test {TLS: Auto-authenticate using tls-auth-clients-user (CN)} {
             # Create a user matching the CN in the client certificate (CN=Client-only)
-            r ACL SETUSER {Client-only} on >clientpass allcommands allkeys
+            r ACL SETUSER {Client-only} on allcommands allkeys
 
             # Enable the feature to auto-authenticate based on CN
             r CONFIG SET tls-auth-clients-user CN
@@ -172,6 +172,70 @@ start_server {tags {"tls"}} {
             assert_equal "Client-only" [$s ACL WHOAMI]
 
             $s close
+        }
+
+        test {TLS: Auto-authenticate using tls-auth-clients-user (URI)} {
+            # Enable the feature to auto-authenticate based on URI
+            r CONFIG SET tls-auth-clients-user URI
+            
+            # Create users matching the URI in the client certificate
+            r ACL SETUSER {urn:valkey:user:first} on allcommands
+            r ACL SETUSER {urn:valkey:user:second} on allcommands
+
+            # With feature on, client should be auto-authenticated using the URI from SAN
+            # Verify that the authenticated user matches the first URI
+            set s [valkey_client]
+            assert_equal "urn:valkey:user:first" [$s ACL WHOAMI]
+            $s close
+
+            # Turn off the first user
+            r ACL SETUSER {urn:valkey:user:first} off
+
+            # Verify that the authenticated user matches the second URI
+            set s [valkey_client]
+            assert_equal "urn:valkey:user:second" [$s ACL WHOAMI]
+            $s close
+
+            # Turn off the second user
+            r ACL SETUSER {urn:valkey:user:second} off
+
+            # Verify that the authenticated user matches the default
+            set s [valkey_client]
+            assert_equal "default" [$s ACL WHOAMI]
+            $s close
+
+            # Delete all users
+            r ACL DELUSER {urn:valkey:user:first} {urn:valkey:user:second}
+
+            # Verify that the authenticated user matches the default
+            set s [valkey_client]
+            assert_equal "default" [$s ACL WHOAMI]
+            $s close
+
+            # Restore
+            r CONFIG SET tls-auth-clients-user off
+        }
+
+        test {TLS: Verify CN and URI modes are mutually exclusive} {
+            # Create both CN and URI users
+            r ACL SETUSER {Client-only} on allcommands allkeys
+            r ACL SETUSER {urn:valkey:user:first} on allcommands allkeys
+
+            # Set to CN mode
+            r CONFIG SET tls-auth-clients-user CN
+            set s [valkey_client]
+            assert_equal "Client-only" [$s ACL WHOAMI]
+            $s close
+
+            # Set to URI mode
+            r CONFIG SET tls-auth-clients-user URI
+            set s [valkey_client]
+            assert_equal "urn:valkey:user:first" [$s ACL WHOAMI]
+            $s close
+
+            # Clean up
+            r ACL DELUSER {Client-only} {urn:valkey:user:first}
+            r CONFIG SET tls-auth-clients-user off
         }
 
         test {TLS: Auto-reload detects changes} {

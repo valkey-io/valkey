@@ -5,7 +5,7 @@ extend-exclude = [
     ".git/",
     "deps/",
     # crc16_slottable is primarily pre-generated random strings.
-    "src/crc16_slottable.h",
+    "src/crc16_slottable.c",
 ]
 ignore-hidden = false
 

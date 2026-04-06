@@ -72,7 +72,7 @@ static uint64_t hashfunc(const void *key) {
 }
 
 static int keycmp(const void *key1, const void *key2) {
-    return strcmp((const char *)key1, (const char *)key2);
+    return strcmp((const char *)key1, (const char *)key2) == 0;
 }
 
 static void freekeyval(void *keyval) {

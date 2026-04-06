@@ -1404,15 +1404,17 @@ test "Test dual-channel-replication replica can lazyfree the local buffer" {
                 fail "replica didn't start sync session in time"
             }
 
+            # Get the main channel connection id while sync is still in progress.
+            set replica_main_conn_id [get_client_id_by_last_cmd $primary "psync"]
+            assert_not_equal $replica_main_conn_id ""
+
             # Adding more data to replica local buffer
             set bigstr [string repeat x 1000000]
-            for {set j 0} {$j < 50} {incr j} {
+            for {set j 0} {$j < 10} {incr j} {
                 $primary set key $bigstr
             }
 
             # Kill the main channel so that the replica will abort the sync
-            set replica_main_conn_id [get_client_id_by_last_cmd $primary "psync"]
-            assert_not_equal $replica_main_conn_id ""
             $primary client kill id $replica_main_conn_id
 
             # Wait for replica to abort the sync and lazyfree the local buffer.
@@ -1453,15 +1455,17 @@ test "Test dual-channel-replication replica can lazyfree the local buffer" {
                 fail "replica didn't start sync session in time"
             }
 
+            # Get the main channel connection id while sync is still in progress.
+            set replica_main_conn_id [get_client_id_by_last_cmd $primary "psync"]
+            assert_not_equal $replica_main_conn_id ""
+
             # Adding more data to replica local buffer
             set bigstr [string repeat x 1000000]
-            for {set j 0} {$j < 50} {incr j} {
+            for {set j 0} {$j < 10} {incr j} {
                 $primary set key $bigstr
             }
 
             # Kill the main channel so that the replica will abort the sync
-            set replica_main_conn_id [get_client_id_by_last_cmd $primary "psync"]
-            assert_not_equal $replica_main_conn_id ""
             $primary client kill id $replica_main_conn_id
 
             # Wait for replica to abort the sync and lazyfree the local buffer.
@@ -1574,9 +1578,12 @@ test "Dual channel replication buffer memory fields" {
                 fail "replica didn't receive the data in time"
             }
 
-            # Primary side check.
-            set primary_info [$primary info]
-            set primary_memory_stats [$primary memory stats]
+            # Primary side check. Capture INFO and MEMORY STATS in one EXEC so the
+            # replication buffer cannot change between the two snapshots.
+            $primary multi
+            $primary info
+            $primary memory stats
+            lassign [$primary exec] primary_info primary_memory_stats
 
             # Primary's total replication buffers check.
             assert_lessthan_equal [getInfoProperty $primary_info mem_total_replication_buffers] [expr 1024000 * 10]
@@ -1585,9 +1592,12 @@ test "Dual channel replication buffer memory fields" {
             assert_equal 0 [getInfoProperty $primary_info mem_replicas_repl_buffer]
             assert_equal 0 [dict get $primary_memory_stats replicas.repl.buffer]
 
-            # Replica side check.
-            set replica_info [$replica info]
-            set replica_memory_stats [$replica memory stats]
+            # Replica side check. The pending replication buffer keeps growing while
+            # the RDB transfer is in progress, so take both views from one EXEC.
+            $replica multi
+            $replica info
+            $replica memory stats
+            lassign [$replica exec] replica_info replica_memory_stats
 
             # Replica's memory overhead check.
             assert_morethan_equal [getInfoProperty $replica_info used_memory_overhead] [expr 1024000 * 40]

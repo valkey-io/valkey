@@ -227,7 +227,7 @@ static robj *createEmbeddedStringObject(const char *ptr, size_t len) {
 }
 
 static bool shouldEmbedStringObject(size_t val_len, const_sds key, long long expire) {
-    /* When to embed? Embed when the sum is up to 128 bytes. (2 cache lines on most systems) */
+    /* When to embed? Embed when the sum is up to 64 bytes. (1 cache line on most systems) */
     if (val_len > sdsTypeMaxSize(SDS_TYPE_8)) return false;
 
     size_t size = sizeof(robj) - sizeof(void *); /* reusing 'ptr' memory when embedding */

@@ -5,8 +5,10 @@ DEPS_DIR=../../../deps
 
 ifeq ($(BUILD_LUA),module)
 	STATIC_LUA_FLAG=-DSTATIC_LUA=0
+	LUA_TARGET=libvalkeylua.so
 else
 	STATIC_LUA_FLAG=-DSTATIC_LUA=1
+	LUA_TARGET=libvalkeylua.a
 endif
 
 ifeq ($(uname_S),Darwin)
@@ -66,15 +68,12 @@ ifeq ("$(wildcard /usr/lib/libSystem.dylib)","")
 endif
 endif
 
+all: $(LUA_TARGET)
 ifeq ($(BUILD_LUA),module)
-all: libvalkeylua.so
-
-libvalkeylua.so: $(OBJS) $(LIBS)
+$(LUA_TARGET): $(OBJS) $(LIBS)
 	$(QUIET_LINK_MOD)$(CC) -o $@ $(SHOBJ_LDFLAGS) $^
 else
-all: libvalkeylua.a
-
-libvalkeylua.a: $(OBJS) $(LIBS)
+$(LUA_TARGET): $(OBJS) $(LIBS)
 	$(QUIET_LINK_MOD)$(AR) rcs $@ $(OBJS)
 endif
 

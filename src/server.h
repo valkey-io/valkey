@@ -231,47 +231,6 @@ typedef enum {
 
 extern int configOOMScoreAdjValuesDefaults[CONFIG_OOM_COUNT];
 
-#define COMMAND_GET 0
-#define COMMAND_SET 1
-#define COMMAND_HGET 2
-#define COMMAND_HSET 3
-#define COMMAND_MSET 4
-
-/* Command flags. Please check the definition of struct serverCommand in this file
- * for more information about the meaning of every flag. */
-#define CMD_WRITE (1ULL << 0)
-#define CMD_READONLY (1ULL << 1)
-#define CMD_DENYOOM (1ULL << 2)
-#define CMD_MODULE (1ULL << 3) /* Command exported by module. */
-#define CMD_ADMIN (1ULL << 4)
-#define CMD_PUBSUB (1ULL << 5)
-#define CMD_NOSCRIPT (1ULL << 6)
-#define CMD_BLOCKING (1ULL << 8) /* Has potential to block. */
-#define CMD_LOADING (1ULL << 9)
-#define CMD_STALE (1ULL << 10)
-#define CMD_SKIP_MONITOR (1ULL << 11)
-#define CMD_SKIP_COMMANDLOG (1ULL << 12)
-#define CMD_ASKING (1ULL << 13)
-#define CMD_FAST (1ULL << 14)
-#define CMD_NO_AUTH (1ULL << 15)
-#define CMD_MAY_REPLICATE (1ULL << 16)
-#define CMD_SENTINEL (1ULL << 17)
-#define CMD_ONLY_SENTINEL (1ULL << 18)
-#define CMD_NO_MANDATORY_KEYS (1ULL << 19)
-#define CMD_PROTECTED (1ULL << 20)
-#define CMD_MODULE_GETKEYS (1ULL << 21)    /* Use the modules getkeys interface. */
-#define CMD_MODULE_NO_CLUSTER (1ULL << 22) /* Deny on Cluster. */
-#define CMD_NO_ASYNC_LOADING (1ULL << 23)
-#define CMD_NO_MULTI (1ULL << 24)
-#define CMD_MOVABLE_KEYS (1ULL << 25) /* The legacy range spec doesn't cover all keys. \
-                                       * Populated by populateCommandLegacyRangeSpec. */
-#define CMD_ALLOW_BUSY ((1ULL << 26))
-#define CMD_MODULE_GETCHANNELS (1ULL << 27) /* Use the modules getchannels interface. */
-#define CMD_TOUCHES_ARBITRARY_KEYS (1ULL << 28)
-#define CMD_ALL_DBS (1ULL << 29)
-/* Command flags. Please don't forget to add command flag documentation in struct
- * serverCommand in this file. */
-
 /* Command flags that describe ACLs categories. */
 #define ACL_CATEGORY_KEYSPACE (1ULL << 0)
 #define ACL_CATEGORY_READ (1ULL << 1)
@@ -974,18 +933,21 @@ typedef struct multiCmd {
 } multiCmd;
 
 typedef struct multiState {
-    multiCmd *commands;   /* Array of MULTI commands */
-    int count;            /* Total number of MULTI commands */
-    int cmd_flags;        /* The accumulated command flags OR-ed together.
-                             So if at least a command has a given flag, it
-                             will be set in this field. */
-    int cmd_inv_flags;    /* Same as cmd_flags, OR-ing the ~flags. so that it
-                             is possible to know if all the commands have a
-                             certain flag. */
-    size_t argv_len_sums; /* mem used by all commands arguments */
-    int alloc_count;      /* total number of multiCmd struct memory reserved. */
-    list watched_keys;
-    int transaction_db_id; /* Currently SELECTed DB id in transaction context */
+    multiCmd *commands;             /* Array of MULTI commands */
+    int count;                      /* Total number of MULTI commands */
+    int cmd_flags;                  /* The accumulated command flags OR-ed together.
+                                       So if at least a command has a given flag, it
+                                       will be set in this field. */
+    int cmd_inv_flags;              /* Same as cmd_flags, OR-ing the ~flags. so that it
+                                       is possible to know if all the commands have a
+                                       certain flag. */
+    size_t argv_len_sums;           /* mem used by all commands arguments */
+    int alloc_count;                /* total number of multiCmd struct memory reserved. */
+    list watched_keys;              /* List of watchedKey for iteration and cleanup. */
+    hashtable **watched_keys_by_db; /* Per-db hashtable for O(1) watched key lookup.
+                                       Array of size server.dbnum, lazily allocated.
+                                       Each hashtable stores watchedKey* directly. */
+    int transaction_db_id;          /* Currently SELECTed DB id in transaction context */
 } multiState;
 
 /* This structure holds the blocking operation state for a client.
@@ -2825,7 +2787,6 @@ extern dictType objectKeyPointerValueDictType;
 extern hashtableType objectHashtableType;
 extern dictType objectKeyHeapPointerValueDictType;
 extern hashtableType setHashtableType;
-extern dictType BenchmarkDictType;
 extern hashtableType zsetHashtableType;
 extern hashtableType kvstoreKeysHashtableType;
 extern hashtableType kvstoreExpiresHashtableType;
@@ -2836,7 +2797,6 @@ extern dictType stringSetDictType;
 extern dictType externalStringType;
 extern dictType sdsHashDictType;
 extern hashtableType clientHashtableType;
-extern dictType objToDictDictType;
 extern hashtableType kvstoreChannelHashtableType;
 extern dictType modulesDictType;
 extern hashtableType sdsReplyHashtableType;
@@ -3907,12 +3867,19 @@ void startEvictionTimeProc(void);
 /* Keys hashing/comparison functions for dict.c and hashtable.c hash tables. */
 uint64_t dictSdsHash(const void *key);
 uint64_t dictSdsCaseHash(const void *key);
+uint64_t dictCStrHash(const void *key);
+uint64_t dictCStrCaseHash(const void *key);
+uint64_t dictEncObjHash(const void *key);
 int dictSdsKeyCompare(const void *key1, const void *key2);
-int hashtableSdsKeyCompare(const void *key1, const void *key2);
 int dictSdsKeyCaseCompare(const void *key1, const void *key2);
+int dictCStrKeyCompare(const void *key1, const void *key2);
+int dictCStrKeyCaseCompare(const void *key1, const void *key2);
+int dictEncObjKeyCompare(const void *key1, const void *key2);
 void dictSdsDestructor(void *val);
 void dictListDestructor(void *val);
-void *dictSdsDup(const void *key);
+void dictEntryDestructorSdsKey(void *entry);
+void dictEntryDestructorSdsKeyValue(void *entry);
+void dictEntryDestructorSdsKeyListValue(void *entry);
 
 /* Git SHA1 */
 char *serverGitSHA1(void);

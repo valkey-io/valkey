@@ -75,10 +75,6 @@ typedef struct clusterBusType {
      * Sets node->protocol_data. If NULL, protocol_data is left as NULL. */
     void (*initNodeData)(clusterNode *node);
 
-    /* Called when a slot is assigned or unassigned, for protocol-specific
-     * bookkeeping (e.g. clearing gossip uncertainty flags). If NULL, skipped. */
-    void (*onSlotReset)(int slot);
-
     /* Slot ownership changes — called from cluster commands and slot migration.
      * Assigns or unassigns slots specified by an array of slot ranges. If
      * target is non-NULL, slots are assigned to target. If target is NULL,

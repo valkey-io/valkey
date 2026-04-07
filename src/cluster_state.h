@@ -121,6 +121,16 @@ int clusterPrimariesHaveReplicas(void);
 int clusterNodeClearSlotBit(clusterNode *n, int slot);
 void clusterRemoveNodeFromShard(clusterNode *node);
 void clusterAddNodeToShard(const char *shard_id, clusterNode *node);
+
+/* Node creation. */
+clusterNode *createClusterNode(char *nodename, int flags);
+
+/* Slot assignment. */
+void clusterNodeSetSlotBit(clusterNode *n, int slot);
+int clusterAddSlot(clusterNode *n, int slot);
+int clusterDelSlot(int slot);
+int clusterDelNodeSlots(clusterNode *node);
+
 bool isAnySlotInManualImportingState(void);
 bool isAnySlotInManualMigratingState(void);
 

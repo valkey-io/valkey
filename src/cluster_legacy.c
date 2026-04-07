@@ -1760,47 +1760,6 @@ static unsigned long clusterLegacyGetConnectionsCount(void) {
  *
  * The node is created and returned to the user, but it is not automatically
  * added to the nodes hash table. */
-clusterNode *createClusterNode(char *nodename, int flags) {
-    clusterNode *node = zmalloc(sizeof(*node));
-
-    if (nodename)
-        memcpy(node->name, nodename, CLUSTER_NAMELEN);
-    else
-        getRandomHexChars(node->name, CLUSTER_NAMELEN);
-    getRandomHexChars(node->shard_id, CLUSTER_NAMELEN);
-    node->ctime = mstime();
-    node->flags = flags;
-    memset(node->slots, 0, sizeof(node->slots));
-    node->slot_info_pairs = NULL;
-    node->slot_info_pairs_count = 0;
-    node->numslots = 0;
-    node->num_replicas = 0;
-    node->replicas = NULL;
-    node->replicaof = NULL;
-    node->outbound_link_attempt_time = 0;
-    node->data_received = 0;
-    node->link = NULL;
-    node->inbound_link = NULL;
-    node->inbound_link_freed_time = node->ctime;
-    memset(node->ip, 0, sizeof(node->ip));
-    node->announce_client_ipv4 = sdsempty();
-    node->announce_client_ipv6 = sdsempty();
-    node->hostname = sdsempty();
-    node->human_nodename = sdsempty();
-    node->availability_zone = sdsempty();
-    node->tcp_port = 0;
-    node->cport = 0;
-    node->tls_port = 0;
-    node->announce_client_tcp_port = 0;
-    node->announce_client_tls_port = 0;
-    node->repl_offset = 0;
-    node->is_node_healthy = 0;
-    node->protocol_data = NULL;
-    if (clusterCurrentBus->initNodeData)
-        clusterCurrentBus->initNodeData(node);
-    return node;
-}
-
 /* 8 bytes mstime + 8 bytes cluster node pointer (padded with zeros on 32-bit systems). */
 #define FAILURE_REPORT_KEYLEN 16
 #define SEC_IN_MS 1000ULL
@@ -2009,10 +1968,6 @@ static void clusterLegacyInitNodeData(clusterNode *node) {
     legacy->fail_time = 0;
     legacy->orphaned_time = 0;
     legacy->fail_reports = raxNew();
-}
-
-static void clusterLegacyOnSlotReset(int slot) {
-    bitmapClearBit(LEGACY_STATE()->owner_not_claiming_slot, slot);
 }
 
 
@@ -3000,6 +2955,7 @@ void clusterUpdateSlotsConfigWith(clusterNode *sender, uint64_t senderConfigEpoc
                      * practice. */
                     clusterDelSlot(j);
                     clusterAddSlot(myself, j);
+                    bitmapClearBit(LEGACY_STATE()->owner_not_claiming_slot, j);
                     clusterBumpConfigEpochWithoutConsensus();
                     clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_UPDATE_STATE |
                                          CLUSTER_TODO_FSYNC_CONFIG);
@@ -5280,6 +5236,7 @@ void clusterFailoverReplaceYourPrimary(void) {
             int slot = (byte << 3) | bit;
             clusterDelSlot(slot);
             clusterAddSlot(myself, slot);
+            bitmapClearBit(LEGACY_STATE()->owner_not_claiming_slot, slot);
             bits &= bits - 1;
             remaining--;
         }
@@ -6133,6 +6090,7 @@ static void clusterLegacySlotChange(slotRange *ranges, int numranges, clusterNod
                     setImportingSlotSource(j, NULL);
                 if (server.cluster->slots[j]) clusterDelSlot(j);
                 clusterAddSlot(target, j);
+                bitmapClearBit(LEGACY_STATE()->owner_not_claiming_slot, j);
             } else {
                 clusterDelSlot(j);
             }
@@ -6156,84 +6114,6 @@ mstime_t clusterComputeMfPauseEnd(void) {
     return mstime() + server.cluster_mf_timeout * CLUSTER_MF_PAUSE_MULT;
 }
 
-/* -----------------------------------------------------------------------------
- * Slots management
- * -------------------------------------------------------------------------- */
-
-
-void clusterNodeSetSlotBit(clusterNode *n, int slot) {
-    if (!bitmapTestBit(n->slots, slot)) {
-        bitmapSetBit(n->slots, slot);
-        n->numslots++;
-        /* When a primary gets its first slot, even if it has no replicas,
-         * it gets flagged with MIGRATE_TO, that is, the primary is a valid
-         * target for replicas migration, if and only if at least one of
-         * the other primaries has replicas right now.
-         *
-         * Normally primaries are valid targets of replica migration if:
-         * 1. The used to have replicas (but no longer have).
-         * 2. They are replicas failing over a primary that used to have replicas.
-         *
-         * However new primaries with slots assigned are considered valid
-         * migration targets if the rest of the cluster is not a replica-less.
-         *
-         * See https://github.com/redis/redis/issues/3043 for more info. */
-        if (n->numslots == 1 && clusterPrimariesHaveReplicas()) n->flags |= CLUSTER_NODE_MIGRATE_TO;
-    }
-}
-
-
-/* Add the specified slot to the list of slots that node 'n' will
- * serve. Return C_OK if the operation ended with success.
- * If the slot is already assigned to another instance this is considered
- * an error and C_ERR is returned. */
-int clusterAddSlot(clusterNode *n, int slot) {
-    if (server.cluster->slots[slot]) return C_ERR;
-    clusterNodeSetSlotBit(n, slot);
-    server.cluster->slots[slot] = n;
-    if (clusterCurrentBus->onSlotReset) clusterCurrentBus->onSlotReset(slot);
-    clusterSlotStatReset(slot);
-    return C_OK;
-}
-
-/* Delete the specified slot marking it as unassigned.
- * Returns C_OK if the slot was assigned, otherwise if the slot was
- * already unassigned C_ERR is returned. */
-int clusterDelSlot(int slot) {
-    clusterNode *n = server.cluster->slots[slot];
-
-    if (!n) return C_ERR;
-
-    /* Cleanup the channels in primary/replica as part of slot deletion. */
-    removeChannelsInSlot(slot);
-    /* Clear the slot bit. */
-    serverAssert(clusterNodeClearSlotBit(n, slot) == 1);
-    server.cluster->slots[slot] = NULL;
-    if (clusterCurrentBus->onSlotReset) clusterCurrentBus->onSlotReset(slot);
-    clusterSlotStatReset(slot);
-    return C_OK;
-}
-
-/* Delete all the slots associated with the specified node.
- * The number of deleted slots is returned. */
-int clusterDelNodeSlots(clusterNode *node) {
-    int deleted = 0;
-    if (node->numslots == 0) return 0;
-    int remaining = node->numslots;
-
-    for (unsigned long byte = 0; byte < sizeof(node->slots) && remaining > 0; ++byte) {
-        unsigned char bits = node->slots[byte];
-        while (bits) {
-            unsigned bit = __builtin_ctz(bits);
-            int slot = (byte << 3) | bit;
-            clusterDelSlot(slot);
-            bits &= bits - 1;
-            deleted++;
-            remaining--;
-        }
-    }
-    return deleted;
-}
 
 /* Transfer slots from `from_node` to `to_node`.
  *
@@ -6250,6 +6130,7 @@ void clusterMoveNodeSlots(clusterNode *from_node, clusterNode *to_node, int *slo
         if (clusterNodeCoversSlot(from_node, j)) {
             clusterDelSlot(j);
             clusterAddSlot(to_node, j);
+            bitmapClearBit(LEGACY_STATE()->owner_not_claiming_slot, j);
             processed++;
         }
 
@@ -6470,6 +6351,7 @@ int verifyClusterConfigWithData(void) {
                       "Taking responsibility for it.",
                       j);
             clusterAddSlot(myself, j);
+            bitmapClearBit(LEGACY_STATE()->owner_not_claiming_slot, j);
         } else if (in != slot_owner) {
             if (in == NULL) {
                 serverLog(LL_NOTICE,
@@ -6910,7 +6792,6 @@ clusterBusType clusterLegacyBus = {
     .parseVarsLine = clusterLegacyParseVarsLine,
     .postLoad = clusterLegacyPostLoad,
     .initNodeData = clusterLegacyInitNodeData,
-    .onSlotReset = clusterLegacyOnSlotReset,
     .slotChange = clusterLegacySlotChange,
     .resetManualFailoverState = clusterLegacyResetManualFailover,
     .resetAutomaticFailoverState = clusterLegacyResetAutomaticFailover,

@@ -81,6 +81,32 @@ unsigned long getClusterConnectionsCount(void);
 int isClusterHealthy(void);
 
 sds clusterGenNodesDescription(client *c, int filter, int tls_primary);
+sds representClusterNodeFlags(sds ci, uint16_t flags);
+
+/* Aux field handler types and table for nodes.conf serialization. */
+typedef int(aux_value_setter)(clusterNode *n, void *value, size_t length);
+typedef sds(aux_value_getter)(clusterNode *n, sds s);
+typedef int(aux_value_present)(clusterNode *n);
+typedef struct {
+    char *field;
+    aux_value_setter *setter;
+    aux_value_getter *getter;
+    aux_value_present *isPresent;
+} auxFieldHandler;
+typedef enum {
+    af_shard_id,
+    af_human_nodename,
+    af_tcp_port,
+    af_tls_port,
+    af_announce_client_ipv4,
+    af_announce_client_ipv6,
+    af_announce_client_tcp_port,
+    af_announce_client_tls_port,
+    af_availability_zone,
+    af_count,
+} auxFieldIndex;
+extern auxFieldHandler auxFieldHandlers[];
+
 sds genClusterInfoString(sds info);
 /* handle implementation specific debug cluster commands. Return 1 if handled, 0 otherwise. */
 int handleDebugClusterCommand(client *c);
@@ -93,6 +119,8 @@ void clusterCommandSlots(client *c);
 void clusterCommandMyId(client *c);
 void clusterCommandMyShardId(client *c);
 void clusterCommandShards(client *c);
+void clusterGenNodesSlotsInfo(int filter);
+void clusterFreeNodesSlotsInfo(clusterNode *n);
 sds clusterGenNodeDescription(client *c, clusterNode *node, int tls_primary);
 
 int clusterNodeCoversSlot(clusterNode *n, int slot);

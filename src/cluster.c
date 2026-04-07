@@ -48,6 +48,7 @@
 #include "crc16_slottable.h"
 
 #include <ctype.h>
+#include <arpa/inet.h>
 
 /* The active cluster bus protocol implementation. */
 extern clusterBusType clusterLegacyBus;
@@ -2328,6 +2329,549 @@ int verifyCachedClusterSlotsResponse(sds cached_response, int resp) {
         serverLog(LL_WARNING, "\ngenerated_response:\n%s\n\ncached_response:\n%s", generated_response, cached_response);
     sdsfree(generated_response);
     return is_equal;
+}
+/* -----------------------------------------------------------------------------
+ * Nodes to string representation functions.
+ * -------------------------------------------------------------------------- */
+
+/* Aux fields — types and enum are declared in cluster.h.
+ * Implementations and handler table follow. */
+
+static int auxShardIdSetter(clusterNode *n, void *value, size_t length) {
+    if (verifyClusterNodeId(value, length) == C_ERR) {
+        return C_ERR;
+    }
+    memcpy(n->shard_id, value, CLUSTER_NAMELEN);
+    /* if n already has replicas, make sure they all agree
+     * on the shard id. If not, update them. */
+    for (int i = 0; i < n->num_replicas; i++) {
+        if (memcmp(n->replicas[i]->shard_id, n->shard_id, CLUSTER_NAMELEN) != 0) {
+            serverLog(LL_NOTICE,
+                      "Node %.40s has a different shard id (%.40s) than its primary's shard id %.40s (%.40s). "
+                      "Updating replica's shard id to match primary's shard id.",
+                      n->replicas[i]->name, n->replicas[i]->shard_id, n->name, n->shard_id);
+            clusterRemoveNodeFromShard(n->replicas[i]);
+            memcpy(n->replicas[i]->shard_id, n->shard_id, CLUSTER_NAMELEN);
+            clusterAddNodeToShard(n->shard_id, n->replicas[i]);
+        }
+    }
+    clusterAddNodeToShard(value, n);
+    return C_OK;
+}
+
+static sds auxShardIdGetter(clusterNode *n, sds s) {
+    return sdscatlen(s, n->shard_id, CLUSTER_NAMELEN);
+}
+
+static int auxShardIdPresent(clusterNode *n) {
+    return strlen(n->shard_id);
+}
+
+static int auxHumanNodenameSetter(clusterNode *n, void *value, size_t length) {
+    if (sdslen(n->human_nodename) == length && !strncmp(value, n->human_nodename, length)) {
+        return C_OK;
+    }
+    n->human_nodename = sdscpylen(n->human_nodename, value, length);
+    return C_OK;
+}
+
+static sds auxHumanNodenameGetter(clusterNode *n, sds s) {
+    return sdscat(s, n->human_nodename);
+}
+
+static int auxHumanNodenamePresent(clusterNode *n) {
+    return sdslen(n->human_nodename);
+}
+
+static int auxAvailabilityZoneSetter(clusterNode *n, void *value, size_t length) {
+    if (sdslen(n->availability_zone) == length && !strncmp(value, n->availability_zone, length)) {
+        return C_OK;
+    }
+    n->availability_zone = sdscpylen(n->availability_zone, value, length);
+    return C_OK;
+}
+
+static sds auxAvailabilityZoneGetter(clusterNode *n, sds s) {
+    return sdscat(s, n->availability_zone);
+}
+
+static int auxAvailabilityZonePresent(clusterNode *n) {
+    return sdslen(n->availability_zone);
+}
+
+static int auxAnnounceClientIpV4Setter(clusterNode *n, void *value, size_t length) {
+    if (sdslen(n->announce_client_ipv4) == length && !strncmp(value, n->announce_client_ipv4, length)) {
+        return C_OK;
+    }
+    if (length != 0) {
+        struct sockaddr_in sa;
+        if (inet_pton(AF_INET, (const char *)value, &(sa.sin_addr)) == 0) {
+            return C_ERR;
+        }
+    }
+    n->announce_client_ipv4 = sdscpylen(n->announce_client_ipv4, value, length);
+    return C_OK;
+}
+
+static sds auxAnnounceClientIpV4Getter(clusterNode *n, sds s) {
+    return sdscat(s, n->announce_client_ipv4);
+}
+
+static int auxAnnounceClientIpV4Present(clusterNode *n) {
+    return sdslen(n->announce_client_ipv4) != 0;
+}
+
+static int auxAnnounceClientIpV6Setter(clusterNode *n, void *value, size_t length) {
+    if (sdslen(n->announce_client_ipv6) == length && !strncmp(value, n->announce_client_ipv6, length)) {
+        return C_OK;
+    }
+    if (length != 0) {
+        struct sockaddr_in6 sa;
+        if (inet_pton(AF_INET6, (const char *)value, &(sa.sin6_addr)) == 0) {
+            return C_ERR;
+        }
+    }
+    n->announce_client_ipv6 = sdscpylen(n->announce_client_ipv6, value, length);
+    return C_OK;
+}
+
+static sds auxAnnounceClientIpV6Getter(clusterNode *n, sds s) {
+    return sdscat(s, n->announce_client_ipv6);
+}
+
+static int auxAnnounceClientIpV6Present(clusterNode *n) {
+    return sdslen(n->announce_client_ipv6) != 0;
+}
+
+static int auxTcpPortSetter(clusterNode *n, void *value, size_t length) {
+    if (length > 5 || length < 1) return C_ERR;
+    char buf[length + 1];
+    memcpy(buf, (char *)value, length);
+    buf[length] = '\0';
+    n->tcp_port = atoi(buf);
+    return (n->tcp_port < 0 || n->tcp_port >= 65536) ? C_ERR : C_OK;
+}
+
+static sds auxTcpPortGetter(clusterNode *n, sds s) {
+    return sdscatfmt(s, "%i", n->tcp_port);
+}
+
+static int auxTcpPortPresent(clusterNode *n) {
+    return n->tcp_port >= 0 && n->tcp_port < 65536;
+}
+
+static int auxTlsPortSetter(clusterNode *n, void *value, size_t length) {
+    if (length > 5 || length < 1) return C_ERR;
+    char buf[length + 1];
+    memcpy(buf, (char *)value, length);
+    buf[length] = '\0';
+    n->tls_port = atoi(buf);
+    return (n->tls_port < 0 || n->tls_port >= 65536) ? C_ERR : C_OK;
+}
+
+static sds auxTlsPortGetter(clusterNode *n, sds s) {
+    return sdscatfmt(s, "%i", n->tls_port);
+}
+
+static int auxTlsPortPresent(clusterNode *n) {
+    return n->tls_port >= 0 && n->tls_port < 65536;
+}
+
+static int auxAnnounceClientTcpPortSetter(clusterNode *n, void *value, size_t length) {
+    if (length > 5 || length < 1) return C_ERR;
+    char buf[length + 1];
+    memcpy(buf, (char *)value, length);
+    buf[length] = '\0';
+    n->announce_client_tcp_port = atoi(buf);
+    return (n->announce_client_tcp_port < 0 || n->announce_client_tcp_port >= 65536) ? C_ERR : C_OK;
+}
+
+static sds auxAnnounceClientTcpPortGetter(clusterNode *n, sds s) {
+    return sdscatfmt(s, "%i", n->announce_client_tcp_port);
+}
+
+static int auxAnnounceClientTcpPortPresent(clusterNode *n) {
+    return n->announce_client_tcp_port > 0 && n->announce_client_tcp_port < 65536;
+}
+
+static int auxAnnounceClientTlsPortSetter(clusterNode *n, void *value, size_t length) {
+    if (length > 5 || length < 1) return C_ERR;
+    char buf[length + 1];
+    memcpy(buf, (char *)value, length);
+    buf[length] = '\0';
+    n->announce_client_tls_port = atoi(buf);
+    return (n->announce_client_tls_port < 0 || n->announce_client_tls_port >= 65536) ? C_ERR : C_OK;
+}
+
+static sds auxAnnounceClientTlsPortGetter(clusterNode *n, sds s) {
+    return sdscatfmt(s, "%i", n->announce_client_tls_port);
+}
+
+static int auxAnnounceClientTlsPortPresent(clusterNode *n) {
+    return n->announce_client_tls_port > 0 && n->announce_client_tls_port < 65536;
+}
+
+/* Note that
+ * 1. the order of the elements below must match that of their
+ *    indices as defined in auxFieldIndex
+ * 2. aux name can contain characters that pass the isValidAuxChar check only */
+auxFieldHandler auxFieldHandlers[] = {
+    {"shard-id", auxShardIdSetter, auxShardIdGetter, auxShardIdPresent},
+    {"nodename", auxHumanNodenameSetter, auxHumanNodenameGetter, auxHumanNodenamePresent},
+    {"tcp-port", auxTcpPortSetter, auxTcpPortGetter, auxTcpPortPresent},
+    {"tls-port", auxTlsPortSetter, auxTlsPortGetter, auxTlsPortPresent},
+    {"client-ipv4", auxAnnounceClientIpV4Setter, auxAnnounceClientIpV4Getter, auxAnnounceClientIpV4Present},
+    {"client-ipv6", auxAnnounceClientIpV6Setter, auxAnnounceClientIpV6Getter, auxAnnounceClientIpV6Present},
+    {"client-tcp-port", auxAnnounceClientTcpPortSetter, auxAnnounceClientTcpPortGetter, auxAnnounceClientTcpPortPresent},
+    {"client-tls-port", auxAnnounceClientTlsPortSetter, auxAnnounceClientTlsPortGetter, auxAnnounceClientTlsPortPresent},
+    {"availability-zone", auxAvailabilityZoneSetter, auxAvailabilityZoneGetter, auxAvailabilityZonePresent},
+};
+
+struct clusterNodeFlags {
+    uint16_t flag;
+    char *name;
+};
+
+static struct clusterNodeFlags clusterNodeFlagsTable[] = {
+    {CLUSTER_NODE_MYSELF, "myself,"},
+    {CLUSTER_NODE_PRIMARY, "master,"},
+    {CLUSTER_NODE_REPLICA, "slave,"},
+    {CLUSTER_NODE_PFAIL, "fail?,"},
+    {CLUSTER_NODE_FAIL, "fail,"},
+    {CLUSTER_NODE_HANDSHAKE, "handshake,"},
+    {CLUSTER_NODE_NOADDR, "noaddr,"},
+    {CLUSTER_NODE_NOFAILOVER, "nofailover,"}};
+
+/* Concatenate the comma separated list of node flags to the given SDS
+ * string 'ci'. */
+sds representClusterNodeFlags(sds ci, uint16_t flags) {
+    size_t orig_len = sdslen(ci);
+    int i, size = sizeof(clusterNodeFlagsTable) / sizeof(struct clusterNodeFlags);
+    for (i = 0; i < size; i++) {
+        struct clusterNodeFlags *nodeflag = clusterNodeFlagsTable + i;
+        if (flags & nodeflag->flag) ci = sdscat(ci, nodeflag->name);
+    }
+    /* If no flag was added, add the "noflags" special flag. */
+    if (sdslen(ci) == orig_len) ci = sdscat(ci, "noflags,");
+    sdsIncrLen(ci, -1); /* Remove trailing comma. */
+    return ci;
+}
+
+/* Concatenate the slot ownership information to the given SDS string 'ci'.
+ * If the slot ownership is in a contiguous block, it's represented as start-end pair,
+ * else each slot is added separately. */
+static sds representSlotInfo(sds ci, uint16_t *slot_info_pairs, int slot_info_pairs_count) {
+    for (int i = 0; i < slot_info_pairs_count; i += 2) {
+        unsigned int start = slot_info_pairs[i];
+        unsigned int end = slot_info_pairs[i + 1];
+        if (start == end) {
+            ci = sdscatfmt(ci, " %u", start);
+        } else {
+            ci = sdscatfmt(ci, " %u-%u", start, end);
+        }
+    }
+    return ci;
+}
+
+/* Generate a csv-alike representation of the specified cluster node.
+ * See clusterGenNodesDescription() top comment for more information.
+ *
+ * If a client is provided, we're creating a reply to the CLUSTER NODES command.
+ * If client is NULL, we are creating the content of nodes.conf.
+ *
+ * The function returns the string representation as an SDS string. */
+sds clusterGenNodeDescription(client *c, clusterNode *node, int tls_primary) {
+    int j, start;
+    sds ci;
+    int port = clusterNodeClientPort(node, tls_primary, c);
+    char *ip = clusterNodeIp(node, c);
+
+    /* Node coordinates */
+    ci = sdscatlen(sdsempty(), node->name, CLUSTER_NAMELEN);
+    ci = sdscatfmt(ci, " %s:%i@%i", ip, port, node->cport);
+    if (sdslen(node->hostname) != 0) {
+        ci = sdscatfmt(ci, ",%s", node->hostname);
+    }
+    /* Don't expose aux fields to any clients yet but do allow them
+     * to be persisted to nodes.conf */
+    if (c == NULL) {
+        if (sdslen(node->hostname) == 0) {
+            ci = sdscatfmt(ci, ",", 1);
+        }
+        for (int i = af_count - 1; i >= 0; i--) {
+            if ((tls_primary && i == af_tls_port) || (!tls_primary && i == af_tcp_port)) {
+                continue;
+            }
+            if (auxFieldHandlers[i].isPresent(node)) {
+                ci = sdscatfmt(ci, ",%s=", auxFieldHandlers[i].field);
+                ci = auxFieldHandlers[i].getter(node, ci);
+            }
+        }
+    }
+
+    /* Flags */
+    ci = sdscatlen(ci, " ", 1);
+    ci = representClusterNodeFlags(ci, node->flags);
+
+    /* Replica of... or just "-" */
+    ci = sdscatlen(ci, " ", 1);
+    if (node->replicaof)
+        ci = sdscatlen(ci, node->replicaof->name, CLUSTER_NAMELEN);
+    else
+        ci = sdscatlen(ci, "-", 1);
+
+    /* Latency from the POV of this node, config epoch, link status.
+     * Protocol implementations provide these via getNodePingPongEpoch.
+     * If the callback is NULL, all three are reported as 0. */
+    long long ping_sent = 0, pong_received = 0;
+    uint64_t config_epoch = 0;
+    if (clusterCurrentBus->getNodePingPongEpoch)
+        clusterCurrentBus->getNodePingPongEpoch(node, &ping_sent, &pong_received, &config_epoch);
+    ci = sdscatfmt(ci, " %I %I %U %s", ping_sent, pong_received, config_epoch,
+                   (node->link || node->flags & CLUSTER_NODE_MYSELF) ? "connected" : "disconnected");
+
+    /* Slots served by this instance. If we already have slots info,
+     * append it directly, otherwise, generate slots only if it has. */
+    if (node->slot_info_pairs) {
+        ci = representSlotInfo(ci, node->slot_info_pairs, node->slot_info_pairs_count);
+    } else if (node->numslots > 0) {
+        start = -1;
+        for (j = 0; j < CLUSTER_SLOTS; j++) {
+            int bit;
+
+            if ((bit = clusterNodeCoversSlot(node, j)) != 0) {
+                if (start == -1) start = j;
+            }
+            if (start != -1 && (!bit || j == CLUSTER_SLOTS - 1)) {
+                if (bit && j == CLUSTER_SLOTS - 1) j++;
+
+                if (start == j - 1) {
+                    ci = sdscatfmt(ci, " %i", start);
+                } else {
+                    ci = sdscatfmt(ci, " %i-%i", start, j - 1);
+                }
+                start = -1;
+            }
+        }
+    }
+
+    /* Just for MYSELF node we also dump info about slots that
+     * we are migrating to other instances or importing from other
+     * instances. */
+    if (node->flags & CLUSTER_NODE_MYSELF) {
+        for (j = 0; j < CLUSTER_SLOTS; j++) {
+            clusterNode *mn = getMigratingSlotDest(j);
+            clusterNode *in = getImportingSlotSource(j);
+            if (mn) {
+                ci = sdscatfmt(ci, " [%i->-", j);
+                ci = sdscatlen(ci, mn->name, CLUSTER_NAMELEN);
+                ci = sdscat(ci, "]");
+            } else if (in) {
+                ci = sdscatfmt(ci, " [%i-<-", j);
+                ci = sdscatlen(ci, in->name, CLUSTER_NAMELEN);
+                ci = sdscat(ci, "]");
+            }
+        }
+    }
+    return ci;
+}
+
+/* Generate a csv-alike representation of the nodes we are aware of,
+ * including the "myself" node, and return an SDS string containing the
+ * representation (it is up to the caller to free it).
+ *
+ * All the nodes matching at least one of the node flags specified in
+ * "filter" are excluded from the output, so using zero as a filter will
+ * include all the known nodes in the representation, including nodes in
+ * the HANDSHAKE state.
+ *
+ * Setting tls_primary to 1 to put TLS port in the main <ip>:<port>
+ * field and put TCP port in aux field, instead of the opposite way.
+ *
+ * The representation obtained using this function is used for the output
+ * of the CLUSTER NODES function, and as format for the cluster
+ * configuration file (nodes.conf) for a given node. */
+sds clusterGenNodesDescription(client *c, int filter, int tls_primary) {
+    sds ci = sdsempty(), ni;
+    dictIterator *di;
+    dictEntry *de;
+
+    /* Generate all nodes slots info firstly. */
+    clusterGenNodesSlotsInfo(filter);
+
+    di = dictGetSafeIterator(server.cluster->nodes);
+    while ((de = dictNext(di)) != NULL) {
+        clusterNode *node = dictGetVal(de);
+
+        if (node->flags & filter) continue;
+        ni = clusterGenNodeDescription(c, node, tls_primary);
+        ci = sdscatsds(ci, ni);
+        sdsfree(ni);
+        ci = sdscatlen(ci, "\n", 1);
+
+        /* Release slots info. */
+        clusterFreeNodesSlotsInfo(node);
+    }
+    dictReleaseIterator(di);
+    return ci;
+}
+
+/* Generate the slot topology for all nodes and store the slot range information
+ * in the slot_info_pairs array on the node. This is used to improve the efficiency
+ * of clusterGenNodesDescription() because it removes looping of the slot space
+ * for generating the slot info for each node individually. */
+void clusterGenNodesSlotsInfo(int filter) {
+    clusterNode *n = NULL;
+    int start = -1;
+
+    for (int i = 0; i <= CLUSTER_SLOTS; i++) {
+        /* Find start node and slot id. */
+        if (n == NULL) {
+            if (i == CLUSTER_SLOTS) break;
+            n = server.cluster->slots[i];
+            start = i;
+            continue;
+        }
+
+        /* Generate slots info when occur different node with start
+         * or end of slot. */
+        if (i == CLUSTER_SLOTS || n != server.cluster->slots[i]) {
+            if (!(n->flags & filter)) {
+                if (!n->slot_info_pairs) {
+                    n->slot_info_pairs = zmalloc(2 * n->numslots * sizeof(uint16_t));
+                }
+                serverAssert((n->slot_info_pairs_count + 1) < (2 * n->numslots));
+                n->slot_info_pairs[n->slot_info_pairs_count++] = start;
+                n->slot_info_pairs[n->slot_info_pairs_count++] = i - 1;
+            }
+            if (i == CLUSTER_SLOTS) break;
+            n = server.cluster->slots[i];
+            start = i;
+        }
+    }
+}
+
+void clusterFreeNodesSlotsInfo(clusterNode *n) {
+    zfree(n->slot_info_pairs);
+    n->slot_info_pairs = NULL;
+    n->slot_info_pairs_count = 0;
+}
+
+/* Add detailed information of a node to the output buffer of the given client. */
+static void addNodeDetailsToShardReply(client *c, clusterNode *node) {
+    int reply_count = 0;
+    void *node_replylen = addReplyDeferredLen(c);
+    addReplyBulkCString(c, "id");
+    addReplyBulkCBuffer(c, node->name, CLUSTER_NAMELEN);
+    reply_count++;
+
+    if (node->tcp_port) {
+        addReplyBulkCString(c, "port");
+        addReplyLongLong(c, clusterNodeClientPort(node, false, c));
+        reply_count++;
+    }
+
+    if (node->tls_port) {
+        addReplyBulkCString(c, "tls-port");
+        addReplyLongLong(c, clusterNodeClientPort(node, true, c));
+        reply_count++;
+    }
+
+    addReplyBulkCString(c, "ip");
+    addReplyBulkCString(c, clusterNodeIp(node, c));
+    reply_count++;
+
+    addReplyBulkCString(c, "endpoint");
+    addReplyBulkCString(c, clusterNodePreferredEndpoint(node, c));
+    reply_count++;
+
+    if (sdslen(node->hostname) != 0) {
+        addReplyBulkCString(c, "hostname");
+        addReplyBulkCBuffer(c, node->hostname, sdslen(node->hostname));
+        reply_count++;
+    }
+
+    long long node_offset = getNodeReplicationOffset(node);
+
+    addReplyBulkCString(c, "role");
+    addReplyBulkCString(c, nodeIsReplica(node) ? "replica" : "master");
+    reply_count++;
+
+    addReplyBulkCString(c, "replication-offset");
+    addReplyLongLong(c, node_offset);
+    reply_count++;
+
+    addReplyBulkCString(c, "health");
+    const char *health_msg = NULL;
+    if (nodeFailed(node)) {
+        health_msg = "fail";
+    } else if (nodeIsReplica(node) && node_offset == 0) {
+        health_msg = "loading";
+    } else {
+        health_msg = "online";
+    }
+    addReplyBulkCString(c, health_msg);
+    reply_count++;
+
+    if (sdslen(node->availability_zone) != 0) {
+        addReplyBulkCString(c, "availability-zone");
+        addReplyBulkCBuffer(c, node->availability_zone, sdslen(node->availability_zone));
+        reply_count++;
+    }
+
+    setDeferredMapLen(c, node_replylen, reply_count);
+}
+
+/* Add to the output buffer of the given client,
+ * an array of slot (start, end) pair owned by the shard,
+ * an array of the primary and set of replica(s) along with information about each node,
+ * and shard id.
+ */
+void clusterCommandShards(client *c) {
+    addReplyArrayLen(c, dictSize(server.cluster->shards));
+    /* This call will add slot_info_pairs to all nodes */
+    clusterGenNodesSlotsInfo(0);
+    dictIterator *di = dictGetSafeIterator(server.cluster->shards);
+    for (dictEntry *de = dictNext(di); de != NULL; de = dictNext(di)) {
+        list *nodes = dictGetVal(de);
+        serverAssert(listLength(nodes) > 0);
+        addReplyMapLen(c, 3);
+        addReplyBulkCString(c, "slots");
+
+        /* Find a node which has the slot information served by this shard. */
+        clusterNode *n = NULL;
+        listIter li;
+        listRewind(nodes, &li);
+        for (listNode *ln = listNext(&li); ln != NULL; ln = listNext(&li)) {
+            n = listNodeValue(ln);
+            if (n->slot_info_pairs) {
+                break;
+            }
+        }
+
+        if (n && n->slot_info_pairs != NULL) {
+            serverAssert((n->slot_info_pairs_count % 2) == 0);
+            addReplyArrayLen(c, n->slot_info_pairs_count);
+            for (int i = 0; i < n->slot_info_pairs_count; i++) {
+                addReplyLongLong(c, (unsigned long)n->slot_info_pairs[i]);
+            }
+        } else {
+            /* If no slot info pair is provided, the node owns no slots */
+            addReplyArrayLen(c, 0);
+        }
+
+        addReplyBulkCString(c, "nodes");
+        addReplyArrayLen(c, listLength(nodes));
+        listRewind(nodes, &li);
+        for (listNode *ln = listNext(&li); ln != NULL; ln = listNext(&li)) {
+            clusterNode *n = listNodeValue(ln);
+            addNodeDetailsToShardReply(c, n);
+            clusterFreeNodesSlotsInfo(n);
+        }
+        addReplyBulkCString(c, "id");
+        addReplyBulkCBuffer(c, dictGetKey(de), CLUSTER_NAMELEN);
+    }
+    dictReleaseIterator(di);
 }
 
 void clusterCommandSlots(client *c) {

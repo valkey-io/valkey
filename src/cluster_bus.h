@@ -44,6 +44,41 @@ typedef struct clusterBusType {
     sds (*appendInfoFields)(sds info);
     int (*getFailureReportsCount)(clusterNode *node);
 
+    /* Return protocol-specific per-node ping_sent, pong_received and
+     * config_epoch for CLUSTER NODES output and nodes.conf serialization.
+     * If NULL, all three are reported as 0. */
+    void (*getNodePingPongEpoch)(clusterNode *node, long long *ping_sent, long long *pong_received, uint64_t *config_epoch);
+
+    /* Set protocol-specific per-node fields when loading nodes.conf.
+     * ping_sent and pong_received are booleans (non-zero means active).
+     * config_epoch is the node's configuration epoch.
+     * If NULL, these fields are ignored. */
+    void (*setNodePingPongEpoch)(clusterNode *node, int ping_active, int pong_active, uint64_t config_epoch);
+
+    /* Called when a node is marked as failed during nodes.conf loading.
+     * If NULL, no protocol-specific action is taken. */
+    void (*setNodeFailed)(clusterNode *node);
+
+    /* Append protocol-specific variables to the nodes.conf content.
+     * If NULL, no vars line is appended. */
+    sds (*appendVarsLine)(sds config);
+
+    /* Parse a protocol-specific variable from the nodes.conf "vars" line.
+     * Returns 1 if the variable was handled, 0 otherwise. */
+    int (*parseVarsLine)(const char *name, const char *value);
+
+    /* Called after nodes.conf is fully loaded, for post-load fixups
+     * (e.g. ensuring currentEpoch >= max configEpoch). If NULL, skipped. */
+    void (*postLoad)(void);
+
+    /* Allocate and initialize protocol-specific data for a new node.
+     * Sets node->protocol_data. If NULL, protocol_data is left as NULL. */
+    void (*initNodeData)(clusterNode *node);
+
+    /* Called when a slot is assigned or unassigned, for protocol-specific
+     * bookkeeping (e.g. clearing gossip uncertainty flags). If NULL, skipped. */
+    void (*onSlotReset)(int slot);
+
     /* Slot ownership changes — called from cluster commands and slot migration.
      * Assigns or unassigns slots specified by an array of slot ranges. If
      * target is non-NULL, slots are assigned to target. If target is NULL,

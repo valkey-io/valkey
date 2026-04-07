@@ -1134,11 +1134,6 @@ foreach provider_mode {aof} {
                 assert_match {*I/O error*} $err
             }
 
-            test "($provider_mode) Demoted primary returns ERR on dirty data" {
-                set reader [valkey_client -1]
-                catch {$reader get durable:failover} err
-                assert_equal "ERR Accessed data unavailable to be served" $err
-            }
         }
     }
 }

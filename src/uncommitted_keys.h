@@ -77,13 +77,6 @@ void uncommittedKeysInitPending(void);
  */
 void uncommittedKeysCleanupPending(void);
 
-/*================================= Uncommitted Data Access Checks =========== */
-
-/**
- * Checks if we should reject a command that is accessing uncommitted data.
- */
-bool shouldRejectCommandWithUncommittedData(struct client *c);
-
 /**
  * Determine if there are uncommitted keys in the server.
  */

@@ -1,6 +1,10 @@
 #ifndef REPLY_BLOCKING_H
 #define REPLY_BLOCKING_H
 
+/* Include feature-test macros early so _FILE_OFFSET_BITS=64 is defined
+ * before any system headers, ensuring off_t is 64-bit on 32-bit builds. */
+#include "fmacros.h"
+
 #include <inttypes.h>
 #include <sys/types.h>
 #include <stdbool.h>
@@ -11,7 +15,6 @@
 #include "uncommitted_keys.h"
 #include "durable_task.h"
 
-#define DURABILITY_DATA_UNAVAILABLE "Accessed data unavailable to be served"
 /* Command filter codes that are used in pre execution stage of a command. */
 #define CMD_FILTER_ALLOW 0
 #define CMD_FILTER_REJECT 1

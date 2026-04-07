@@ -280,6 +280,8 @@ else
 	FINAL_CFLAGS+=-DLUA_ENABLED -DSTATIC_LUA=1
 	ifeq ($(uname_S),Darwin)
 		LUA_LDFLAGS=-Wl,-export_dynamic -Wl,-force_load,$(current_dir)/modules/lua/libvalkeylua.a ../deps/lua/src/liblua.a
+	else ifeq ($(uname_S),FreeBSD)
+		LUA_LDFLAGS=-Wl,--export-dynamic -Wl,--whole-archive $(current_dir)/modules/lua/libvalkeylua.a -Wl,--no-whole-archive ../deps/lua/src/liblua.a
 	else
 		LUA_LDFLAGS=-Wl,--whole-archive $(current_dir)/modules/lua/libvalkeylua.a -Wl,--no-whole-archive ../deps/lua/src/liblua.a
 	endif

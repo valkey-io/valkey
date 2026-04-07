@@ -60,10 +60,7 @@ static const void *uncommittedKeyEntryGetKey(const void *entry);
 static void uncommittedKeyEntryDestructor(void *entry);
 static void handleDirtyDatabase(client *c, serverDb *db);
 static bool swapdbGetParams(robj **argv, int argc, int *id1_p, int *id2_p);
-static bool selectGetParams(robj **argv, int argc, client *permission_client, int *dbid_p);
 static bool getDbIdFromRobj(robj *obj, int *db_id);
-static int isSingleCommandAccessingUncommittedKeys(const serverDb *db, struct serverCommand *cmd, robj **argv, int argc);
-static int isAccessingUncommittedData(client *c);
 
 /*================================= Hashtable Type =========================== */
 
@@ -271,17 +268,6 @@ static bool swapdbGetParams(robj **argv, int argc, int *id1_p, int *id2_p) {
     return true;
 }
 
-static bool selectGetParams(robj **argv, int argc, client *permission_client, int *dbid_p) {
-    UNUSED(permission_client);
-    int dbid;
-    if (argc != 2) return false;
-    if (getIntFromObject(argv[1], &dbid) != C_OK) return false;
-    if (dbid < 0 || dbid >= server.dbnum) return false;
-
-    *dbid_p = dbid;
-    return true;
-}
-
 static bool getDbIdFromRobj(robj *obj, int *db_id) {
     if ((getIntFromObject(obj, db_id) != C_OK) || (*db_id < 0) || (*db_id >= server.dbnum)) {
         return false;
@@ -378,29 +364,6 @@ void clearAllUncommittedKeys(void) {
 /*================================= Access Validation ======================== */
 
 /**
- * Determines if a single command is trying to access an uncommitted key.
- */
-int isSingleCommandAccessingUncommittedKeys(const serverDb *db, struct serverCommand *cmd, robj **argv, int argc) {
-    if (hashtableSize(db->uncommitted_keys) == 0) return 0;
-
-    getKeysResult keysResult;
-    initGetKeysResult(&keysResult);
-    const int numKeys = getKeysFromCommand(cmd, argv, argc, &keysResult);
-    const keyReference *keys = keysResult.keys;
-
-    for (int i = 0; i < numKeys; i++) {
-        const sds keyStr = objectGetVal(argv[keys[i].pos]);
-        if (hashtableFind(db->uncommitted_keys, keyStr, NULL)) {
-            getKeysFreeResult(&keysResult);
-            return 1;
-        }
-    }
-
-    getKeysFreeResult(&keysResult);
-    return 0;
-}
-
-/**
  * Determine if there are uncommitted keys in the server.
  */
 int hasUncommittedKeys(void) {
@@ -409,62 +372,6 @@ int hasUncommittedKeys(void) {
             return 1;
     }
     return 0;
-}
-
-/**
- * Determine if a client is trying to access uncommitted data.
- */
-int isAccessingUncommittedData(client *c) {
-    // Informational command handling
-    if (IS_KEYSPACE_INFORMATIONAL(c->cmd) && (hasUncommittedKeys() || isDurableFunctionStoreUncommitted())) {
-        return 1;
-    }
-
-    // Single command handling
-    if (isSingleCommandAccessingUncommittedKeys(c->db, c->cmd, c->argv, c->argc) || (isFunctionStoreRWCommand(c) && isDurableFunctionStoreUncommitted())) {
-        return 1;
-    }
-
-    int ret_val = 0;
-    if ((c->flag.multi) && c->cmd->proc == execCommand) {
-        serverDb *cur_db = c->db;
-        for (int i = 0; i < c->mstate->count; i++) {
-            multiCmd mc = c->mstate->commands[i];
-            if (mc.cmd->proc == selectCommand) {
-                int db_id;
-                if (selectGetParams(mc.argv, mc.argc, c, &db_id)) {
-                    c->db = server.db[db_id];
-                    continue;
-                } else {
-                    discardTransaction(c);
-                    ret_val = 1;
-                    break;
-                }
-            }
-            if (isSingleCommandAccessingUncommittedKeys(c->db, mc.cmd, mc.argv, mc.argc) || (isFunctionStoreRWCommand(c) && isDurableFunctionStoreUncommitted())) {
-                discardTransaction(c);
-                ret_val = 1;
-                break;
-            }
-        }
-        c->db = cur_db;
-    }
-    return ret_val;
-}
-
-/**
- * Checks if we should reject a command that is accessing uncommitted data.
- */
-bool shouldRejectCommandWithUncommittedData(client *c) {
-    if (c->cmd == NULL || ((c->cmd->flags & CMD_ADMIN)) || c->flag.primary) {
-        return false;
-    }
-
-    if ((!iAmPrimary()) && isAccessingUncommittedData(c)) {
-        return true;
-    }
-
-    return false;
 }
 
 /*================================= Pending Data Processing ================== */

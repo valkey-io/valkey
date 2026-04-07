@@ -583,14 +583,7 @@ void afterCommandTrackReplOffset(client *c) {
 }
 
 char *preScriptCmd(client *c) {
-    if (!isDurabilityEnabled()) {
-        return NULL;
-    }
-
-    if (shouldRejectCommandWithUncommittedData(c)) {
-        return DURABILITY_DATA_UNAVAILABLE;
-    }
-
+    UNUSED(c);
     return NULL;
 }
 
@@ -600,13 +593,6 @@ char *preScriptCmd(client *c) {
 int preCommandExec(client *c) {
     c->clientDurabilityInfo.current_command_repl_offset = -1;
     c->clientDurabilityInfo.module_cmd_blocking_offset = -1;
-
-    if (shouldRejectCommandWithUncommittedData(c)) {
-        serverAssert(!(c->cmd->flags & CMD_WRITE));
-        flagTransaction(c);
-        addReplyError(c, DURABILITY_DATA_UNAVAILABLE);
-        return CMD_FILTER_REJECT;
-    }
 
     if (iAmPrimary() && clientEligibleForResponseTracking(c)) {
         trackCommandPreExecutionPosition(c);

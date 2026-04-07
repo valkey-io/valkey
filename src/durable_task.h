@@ -1,6 +1,10 @@
 #ifndef DURABLE_TASK_H
 #define DURABLE_TASK_H
 
+/* Include feature-test macros early so _FILE_OFFSET_BITS=64 is defined
+ * before any system headers, ensuring off_t is 64-bit on 32-bit builds. */
+#include "fmacros.h"
+
 #include <stdbool.h>
 #include <inttypes.h>
 

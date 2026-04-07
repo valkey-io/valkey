@@ -43,8 +43,8 @@ proc create_nodes_conf_folder {srv_idx} {
     exec mkdir -p $cluster_conf_path
 }
 
-start_cluster 1 1 {tags {external:skip cluster} overrides {cluster-persist-config sync}} {
-    test {cluster-persist-config sync mode - node exits when config save fails} {
+start_cluster 1 1 {tags {external:skip cluster} overrides {cluster-config-save-behavior sync}} {
+    test {cluster-config-save-behavior sync mode - node exits when config save fails} {
         # Create folder that can cause the rename fail.
         create_nodes_conf_folder 1
 
@@ -64,8 +64,8 @@ start_cluster 1 1 {tags {external:skip cluster} overrides {cluster-persist-confi
     }
 }
 
-start_cluster 1 1 {tags {external:skip cluster} overrides {cluster-persist-config best-effort}} {
-    test {cluster-persist-config best-effort mode - node continues running when config save fails} {
+start_cluster 1 1 {tags {external:skip cluster} overrides {cluster-config-save-behavior best-effort}} {
+    test {cluster-config-save-behavior best-effort mode - node continues running when config save fails} {
         # Create folder that can cause the rename fail.
         create_nodes_conf_folder 0
         create_nodes_conf_folder 1

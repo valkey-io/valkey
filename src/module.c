@@ -11733,7 +11733,7 @@ void moduleFireCommandResultEvent(client *c,
         .is_module_client = (c->flag.module ? 1 : 0),
         .argc = argc,
         .argv = (ValkeyModuleString **)decoded_argv,
-        .object = NULL,
+        .rejection_context = NULL,
     };
 
     /* Fire the appropriate event based on success/failure */
@@ -11755,21 +11755,21 @@ void moduleFireCommandResultEvent(client *c,
  * errpos is the index into c->argv of the denied key or channel for ACL_KEY/ACL_CHANNEL; -1 otherwise.
  * object_hint is a caller-supplied object string for CLUSTER/REDIRECT (the redirect target address);
  * pass NULL to let the function derive the object automatically. */
-void moduleFireCommandRejectedEvent(client *c, uint64_t subevent, int errpos,
-                                    const char *object_hint) {
+void moduleFireCommandRejectedEvent(client *c, uint64_t subevent, int errpos, const char *object_hint) {
     if (commandResultRejectedListeners == 0) return;
 
     char int_key_buf[LONG_STR_SIZE];
-    const char *object = object_hint;
-    if (object == NULL) {
+    const char *rejection_context = object_hint;
+    if (rejection_context == NULL) {
         if (subevent == VALKEYMODULE_SUBEVENT_COMMAND_RESULT_REJECTED_UNKNOWN_CMD && c->argc > 0) {
-            /* command_name is NULL for unknown commands; surface argv[0] as the object
+            /* command_name is NULL for unknown commands; surface argv[0] as the context
              * so callers can see what was attempted without walking argv themselves. */
             robj *cmd_obj = c->argv[0];
-            object = (cmd_obj->encoding == OBJ_ENCODING_INT)
-                         ? (ll2string(int_key_buf, sizeof(int_key_buf), (long)objectGetVal(cmd_obj)),
-                            int_key_buf)
-                         : objectGetVal(cmd_obj);
+            rejection_context = (cmd_obj->encoding == OBJ_ENCODING_INT)
+                                    ? (ll2string(int_key_buf, sizeof(int_key_buf),
+                                                 (long)objectGetVal(cmd_obj)),
+                                       int_key_buf)
+                                    : objectGetVal(cmd_obj);
         } else if ((subevent == VALKEYMODULE_SUBEVENT_COMMAND_RESULT_REJECTED_ACL_KEY ||
                     subevent == VALKEYMODULE_SUBEVENT_COMMAND_RESULT_REJECTED_ACL_CHANNEL) &&
                    errpos >= 0 && errpos < c->argc) {
@@ -11777,9 +11777,9 @@ void moduleFireCommandRejectedEvent(client *c, uint64_t subevent, int errpos,
             robj *key_obj = c->argv[errpos];
             if (key_obj->encoding == OBJ_ENCODING_INT) {
                 ll2string(int_key_buf, sizeof(int_key_buf), (long)objectGetVal(key_obj));
-                object = int_key_buf;
+                rejection_context = int_key_buf;
             } else {
-                object = objectGetVal(key_obj);
+                rejection_context = objectGetVal(key_obj);
             }
         }
     }
@@ -11793,7 +11793,7 @@ void moduleFireCommandRejectedEvent(client *c, uint64_t subevent, int errpos,
         .is_module_client = (c->flag.module ? 1 : 0),
         .argc = c->argc,
         .argv = (ValkeyModuleString **)c->argv,
-        .object = object,
+        .rejection_context = rejection_context,
     };
 
     moduleFireServerEvent(VALKEYMODULE_EVENT_COMMAND_RESULT_REJECTED, subevent, &info);
@@ -12635,23 +12635,24 @@ static uint64_t moduleEventVersions[] = {
  *
  *     Called when a command is rejected before execution. The subevent argument
  *     identifies the rejection reason (VALKEYMODULE_SUBEVENT_COMMAND_RESULT_REJECTED_*).
- *     All 19 rejection paths in processCommand fire this event, including:
+ *     Rejection paths in processCommand fire this event, including:
  *
  *       - NOAUTH: client not authenticated
  *       - ACL_CMD / ACL_KEY / ACL_CHANNEL: ACL permission denied (NOPERM)
  *       - UNKNOWN_CMD / WRONG_ARITY: invalid command syntax
  *       - OOM, LOADING, BUSY, STALE, DISK_ERROR, NO_REPLICAS, RO_REPLICA, etc.
  *
- *     For NOAUTH, see also ValkeyModuleEvent_AuthenticationAttempt (PR #2237)
+ *     For NOAUTH, see also ValkeyModuleEvent_AuthenticationAttempt
  *     which covers AUTH/HELLO command outcomes.
  *
  *     duration_us and dirty are always 0 for this event — the command never ran.
  *
  *     The data pointer can be casted to a ValkeyModuleCommandResultInfo structure.
- *     The `object` field carries subevent-specific context:
+ *     The `rejection_context` field carries subevent-specific context:
  *       - ACL_KEY / ACL_CHANNEL: the denied key or channel name
  *       - UNKNOWN_CMD: the attempted command string (command_name is NULL in this case)
- *       - CLUSTER / REDIRECT: the redirect target address as "host:port"
+ *       - CLUSTER: the key slot number as a decimal string
+ *       - REDIRECT: the redirect target address as "host:port"
  *       - All other subevents: NULL
  *
  * The function returns VALKEYMODULE_OK if the module was successfully subscribed

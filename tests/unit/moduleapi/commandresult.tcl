@@ -433,7 +433,7 @@ start_server {tags {"modules"}} {
         assert_equal [dict get $entry status] "rejected"
         # VALKEYMODULE_SUBEVENT_COMMAND_RESULT_REJECTED_ACL_CMD = 1
         assert_equal [dict get $entry subevent] 1
-        assert_equal [dict get $entry object] ""
+        assert_equal [dict get $entry rejection_context] ""
 
         r acl deluser testuser_cmd
         r cmdresult.unsubscribe
@@ -460,7 +460,7 @@ start_server {tags {"modules"}} {
         assert_equal [dict get $entry status] "rejected"
         # VALKEYMODULE_SUBEVENT_COMMAND_RESULT_REJECTED_ACL_KEY = 2
         assert_equal [dict get $entry subevent] 2
-        assert_equal [dict get $entry object] "denied_key"
+        assert_equal [dict get $entry rejection_context] "denied_key"
 
         r acl deluser testuser_key
         r cmdresult.unsubscribe
@@ -487,7 +487,7 @@ start_server {tags {"modules"}} {
         assert_equal [dict get $entry status] "rejected"
         # VALKEYMODULE_SUBEVENT_COMMAND_RESULT_REJECTED_ACL_CHANNEL = 3
         assert_equal [dict get $entry subevent] 3
-        assert_equal [dict get $entry object] "secret_channel"
+        assert_equal [dict get $entry rejection_context] "secret_channel"
 
         r acl deluser testuser_chan
         r cmdresult.unsubscribe
@@ -536,7 +536,7 @@ start_server {tags {"modules"}} {
         assert_equal [dict get $entry status] "rejected"
         # VALKEYMODULE_SUBEVENT_COMMAND_RESULT_REJECTED_NOAUTH = 0
         assert_equal [dict get $entry subevent] 0
-        assert_equal [dict get $entry object] ""
+        assert_equal [dict get $entry rejection_context] ""
 
         r cmdresult.unsubscribe
     }

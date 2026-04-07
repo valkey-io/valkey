@@ -45,7 +45,7 @@ typedef struct {
   int is_module_client;
   int argc;
   char argv[MAX_ARGV_LOG][MAX_ARG_LEN];
-  char object[MAX_ARG_LEN];
+  char rejection_context[MAX_ARG_LEN];
 } ResultLogEntry;
 
 static ResultLogEntry result_log[MAX_LOG_ENTRIES];
@@ -63,7 +63,8 @@ static int subscription_mode = 0;
 void LogResult(const char *cmd_name, int status, uint64_t subevent,
                long long duration, long long dirty,
                unsigned long long client_id, int is_module_client,
-               ValkeyModuleString **argv, int argc, const char *object) {
+               ValkeyModuleString **argv, int argc,
+               const char *rejection_context) {
   ResultLogEntry *entry = &result_log[log_head];
 
   strncpy(entry->command_name, cmd_name, sizeof(entry->command_name) - 1);
@@ -75,11 +76,12 @@ void LogResult(const char *cmd_name, int status, uint64_t subevent,
   entry->client_id = client_id;
   entry->is_module_client = is_module_client;
 
-  if (object) {
-    strncpy(entry->object, object, sizeof(entry->object) - 1);
-    entry->object[sizeof(entry->object) - 1] = '\0';
+  if (rejection_context) {
+    strncpy(entry->rejection_context, rejection_context,
+            sizeof(entry->rejection_context) - 1);
+    entry->rejection_context[sizeof(entry->rejection_context) - 1] = '\0';
   } else {
-    entry->object[0] = '\0';
+    entry->rejection_context[0] = '\0';
   }
 
   /* Store argv */
@@ -139,7 +141,8 @@ void CommandResultEventCallback(ValkeyModuleCtx *ctx, ValkeyModuleEvent eid,
 
   LogResult(info->command_name ? info->command_name : "unknown", status,
             subevent, info->duration_us, info->dirty, info->client_id,
-            info->is_module_client, info->argv, info->argc, info->object);
+            info->is_module_client, info->argv, info->argc,
+            info->rejection_context);
 }
 
 /* CMDRESULT.REGISTER <mode>
@@ -339,8 +342,8 @@ int CmdResultGetLog_ValkeyCommand(ValkeyModuleCtx *ctx,
     ValkeyModule_ReplyWithLongLong(ctx, entry->is_module_client);
     ValkeyModule_ReplyWithSimpleString(ctx, "subevent");
     ValkeyModule_ReplyWithLongLong(ctx, entry->subevent);
-    ValkeyModule_ReplyWithSimpleString(ctx, "object");
-    ValkeyModule_ReplyWithCString(ctx, entry->object);
+    ValkeyModule_ReplyWithSimpleString(ctx, "rejection_context");
+    ValkeyModule_ReplyWithCString(ctx, entry->rejection_context);
     ValkeyModule_ReplyWithSimpleString(ctx, "argv");
     ValkeyModule_ReplyWithArray(ctx, entry->argc);
     for (int j = 0; j < entry->argc; j++) {

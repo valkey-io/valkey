@@ -4450,14 +4450,10 @@ int processCommand(client *c) {
             clusterRedirectClient(c, n, c->slot, error_code);
             c->duration = 0;
             c->cmd->rejected_calls++;
-            char cluster_target[NET_IP_STR_LEN + 16] = {0};
-            if (n) {
-                int use_tls = c->conn ? connIsTLS(c->conn) : server.tls_cluster;
-                snprintf(cluster_target, sizeof(cluster_target), "%s:%d",
-                         clusterNodeIp(n, c), clusterNodeClientPort(n, use_tls, c));
-            }
+            char slot_buf[16];
+            snprintf(slot_buf, sizeof(slot_buf), "%d", c->slot);
             moduleFireCommandRejectedEvent(c, VALKEYMODULE_SUBEVENT_COMMAND_RESULT_REJECTED_CLUSTER,
-                                           -1, n ? cluster_target : NULL);
+                                           -1, slot_buf);
             return C_OK;
         }
     }

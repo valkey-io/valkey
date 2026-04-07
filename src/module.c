@@ -7046,6 +7046,8 @@ int VM_CallArgv(ValkeyModuleCtx *ctx,
                 int flags,
                 const ValkeyModuleReplyHandlers *resp_handlers,
                 void *reply_ctx) {
+    debugServerAssert(resp_handlers == NULL || resp_handlers->version == VALKEYMODULE_REPLY_HANDLERS_VERSION);
+
     int ret = VALKEYMODULE_OK;
     client *c = NULL;
     sds reply_error_msg = NULL;

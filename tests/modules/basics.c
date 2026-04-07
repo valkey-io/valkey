@@ -104,6 +104,7 @@ void handleError(void *ctx, const char *str, size_t len) {
 }
 
 ValkeyModuleReplyHandlers resp_handlers = {
+    .version = VALKEYMODULE_REPLY_HANDLERS_VERSION,
     .simpleString = handleSimpleString,
     .bulkString = handleBulkString,
     .arrayStart = handleArray,
@@ -175,6 +176,7 @@ int TestCallArgvNullArrayStart(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, 
 
     int count = 0;
     ValkeyModuleReplyHandlers handlers = {
+        .version = VALKEYMODULE_REPLY_HANDLERS_VERSION,
         /* arrayStart intentionally NULL — the parser must still consume
          * the array children to stay in sync. */
         .bulkString = countBulkString,

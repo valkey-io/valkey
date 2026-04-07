@@ -480,6 +480,7 @@ int test_call_generic_argv(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int 
     }
 
     ValkeyModuleReplyHandlers handlers = {
+        .version = VALKEYMODULE_REPLY_HANDLERS_VERSION,
         .onRespAvailable = misc_call_argv_reply_handler,
     };
 
@@ -506,6 +507,7 @@ int test_call_info_argv(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
     }
 
     ValkeyModuleReplyHandlers handlers = {
+        .version = VALKEYMODULE_REPLY_HANDLERS_VERSION,
         .onRespAvailable = misc_call_argv_reply_handler,
     };
 
@@ -522,6 +524,7 @@ int test_rm_call_argv(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc)
 
     int flags = VALKEYMODULE_CALL_ARGV_ERRORS_AS_REPLIES;
     ValkeyModuleReplyHandlers handlers = {
+        .version = VALKEYMODULE_REPLY_HANDLERS_VERSION,
         .onRespAvailable = misc_call_argv_reply_handler,
     };
 
@@ -560,6 +563,7 @@ int test_rm_call_flags_argv(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int
     }
 
     ValkeyModuleReplyHandlers handlers = {
+        .version = VALKEYMODULE_REPLY_HANDLERS_VERSION,
         .onRespAvailable = misc_call_argv_reply_handler,
     };
 

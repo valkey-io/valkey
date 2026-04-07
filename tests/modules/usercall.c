@@ -218,6 +218,7 @@ int call_without_user_argv(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int 
     if (argc < 2) return ValkeyModule_WrongArity(ctx);
 
     ValkeyModuleReplyHandlers handlers = {
+        .version = VALKEYMODULE_REPLY_HANDLERS_VERSION,
         .onRespAvailable = usercall_argv_reply_handler,
     };
 
@@ -245,6 +246,7 @@ int call_with_user_flag_argv(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, in
     }
 
     ValkeyModuleReplyHandlers handlers = {
+        .version = VALKEYMODULE_REPLY_HANDLERS_VERSION,
         .onRespAvailable = usercall_argv_reply_handler,
     };
 

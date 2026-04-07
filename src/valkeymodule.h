@@ -1315,6 +1315,11 @@ typedef struct ValkeyModuleScriptingEngineMethodsV4 {
 
 } ValkeyModuleScriptingEngineMethodsV4;
 
+#define ValkeyModuleScriptingEngineMethods ValkeyModuleScriptingEngineMethodsV4
+
+/* Current ABI version for CallArgv Reply Handlers structure */
+#define VALKEYMODULE_REPLY_HANDLERS_VERSION 1UL
+
 /* Handler table for parsing RESP replies, used by ValkeyModule_CallArgv.
  * Set the function pointers for the types you want to handle; leave unused ones as NULL.
  * The `context` pointer is passed as the first argument to every callback.
@@ -1323,7 +1328,9 @@ typedef struct ValkeyModuleScriptingEngineMethodsV4 {
  * provided. The `proto` in the end callback covers the entire collection including all its
  * elements.
  */
-typedef struct ValkeyModuleReplyHandlers {
+typedef struct ValkeyModuleReplyHandlersV1 {
+    uint64_t version; /* Version of this structure for ABI compat. */
+
     void (*null)(void *ctx);
     void (*nullBulkString)(void *ctx);
     void (*nullArray)(void *ctx);
@@ -1356,9 +1363,9 @@ typedef struct ValkeyModuleReplyHandlers {
      * `proto` and `proto_len` provide the raw RESP bytes for the entire reply.
      */
     int (*onRespAvailable)(void *ctx, ValkeyModuleCtx *module_ctx, const char *proto, size_t proto_len);
-} ValkeyModuleReplyHandlers;
+} ValkeyModuleReplyHandlersV1;
 
-#define ValkeyModuleScriptingEngineMethods ValkeyModuleScriptingEngineMethodsV4
+#define ValkeyModuleReplyHandlers ValkeyModuleReplyHandlersV1
 
 /* ------------------------- End of common defines ------------------------ */
 

@@ -599,6 +599,7 @@ int do_vm_call_argv_async_aux(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, i
     };
 
     ValkeyModuleReplyHandlers resp_handlers = {
+        .version = VALKEYMODULE_REPLY_HANDLERS_VERSION,
         .onBlocked = call_argv_deferred_reply_handle,
         .onRespAvailable = call_argv_raw_resp_handler,
     };
@@ -662,6 +663,7 @@ int do_vm_call_argv_async_fire_and_forget(ValkeyModuleCtx *ctx, ValkeyModuleStri
         VALKEYMODULE_CALL_ARGV_ALLOW_BLOCK;
 
     ValkeyModuleReplyHandlers resp_handlers = {
+        .version = VALKEYMODULE_REPLY_HANDLERS_VERSION,
         .onRespAvailable = do_vm_call_argv_async_script_mode_available_reply_handle,
         .onBlocked = do_vm_call_argv_async_script_mode_deferred_reply_handle,
     };
@@ -727,6 +729,7 @@ int do_vm_call_argv_async_on_thread(ValkeyModuleCtx *ctx, ValkeyModuleString **a
     };
 
     ValkeyModuleReplyHandlers resp_handlers = {
+        .version = VALKEYMODULE_REPLY_HANDLERS_VERSION,
         .onBlocked = call_argv_deferred_reply_handle,
         .onRespAvailable = call_argv_async_on_thread_available_handler,
     };
@@ -802,6 +805,7 @@ int wait_and_do_vm_call_argv_async(ValkeyModuleCtx *ctx, ValkeyModuleString **ar
     }
 
     ValkeyModuleReplyHandlers resp_handlers = {
+        .version = VALKEYMODULE_REPLY_HANDLERS_VERSION,
         .onBlocked = wait_and_call_argv_deferred_reply_handle,
         .onRespAvailable = wait_and_call_argv_raw_resp_handler,
     };
@@ -870,6 +874,7 @@ int blpop_and_set_multiple_keys_with_vm_call_argv(ValkeyModuleCtx *ctx, ValkeyMo
     }
 
     ValkeyModuleReplyHandlers resp_handlers = {
+        .version = VALKEYMODULE_REPLY_HANDLERS_VERSION,
         .onBlocked = wait_and_call_argv_deferred_reply_handle,
         .onRespAvailable = blpop_and_set_multiple_keys_on_available,
     };

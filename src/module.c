@@ -12466,21 +12466,11 @@ size_t moduleGetMemUsage(robj *key, robj *val, size_t sample_size, int dbid) {
 /* server.moduleapi dictionary type. Only uses plain C strings since
  * this gets queries from modules. */
 
-uint64_t dictCStringKeyHash(const void *key) {
-    return dictGenHashFunction((unsigned char *)key, strlen((char *)key));
-}
-
-int dictCStringKeyCompare(const void *key1, const void *key2) {
-    return strcmp(key1, key2) == 0;
-}
-
 dictType moduleAPIDictType = {
-    dictCStringKeyHash,    /* hash function */
-    NULL,                  /* key dup */
-    dictCStringKeyCompare, /* key compare */
-    NULL,                  /* key destructor */
-    NULL,                  /* val destructor */
-    NULL                   /* allow to expand */
+    .entryGetKey = dictEntryGetKey,
+    .hashFunction = dictCStrHash,
+    .keyCompare = dictCStrKeyCompare,
+    .entryDestructor = zfree,
 };
 
 int moduleRegisterApi(const char *funcname, void *funcptr) {
@@ -12503,14 +12493,11 @@ void moduleRegisterCoreAPI(void);
 void moduleInitModulesSystemLast(void) {
 }
 
-
 dictType sdsKeyValueHashDictType = {
-    dictSdsCaseHash,       /* hash function */
-    NULL,                  /* key dup */
-    dictSdsKeyCaseCompare, /* key compare */
-    dictSdsDestructor,     /* key destructor */
-    dictSdsDestructor,     /* val destructor */
-    NULL                   /* allow to expand */
+    .entryGetKey = dictEntryGetKey,
+    .hashFunction = dictSdsCaseHash,
+    .keyCompare = dictSdsKeyCaseCompare,
+    .entryDestructor = dictEntryDestructorSdsKeyValue,
 };
 
 void moduleInitModulesSystem(void) {

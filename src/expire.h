@@ -55,7 +55,6 @@ enum activeExpiryType {
 typedef struct client client;
 typedef struct serverObject robj;
 typedef struct serverDb serverDb;
-typedef struct dict dict;
 
 /* return the relevant expiration policy based on the current server state and the provided flags.
  * FLAGS can indicate either:

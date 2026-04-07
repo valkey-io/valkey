@@ -951,7 +951,7 @@ start_server {tags {"repl external:skip"} overrides {save ""}} {
                     }
 
                     # wait for rdb child to exit
-                    set bgsave_wait [expr {$all_drop eq "no" ? 1500 : 500}]
+                    set bgsave_wait [expr {$all_drop eq "no" ? 1000 : 500}]
                     wait_for_condition $bgsave_wait 100 {
                         [s -2 rdb_bgsave_in_progress] == 0
                     } else {

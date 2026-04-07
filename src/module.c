@@ -12919,30 +12919,11 @@ int moduleLoad(const char *path, void **module_argv, int module_argc, int is_loa
     return C_OK;
 }
 
-/**
- * Load a static symbol from the current process by constructing a module-specific symbol name.
- *
- * This function builds the lookup name as "<symbol_name>_<module_name>", opens the current
- * process image with dlopen(), and then resolves the symbol with dlsym(). On failure, it logs
- * a warning and returns C_ERR; on success, it stores the resolved address and handle and returns
- * C_OK.
- *
- * @param out
- *   void **. Output pointer that receives the address of the resolved symbol.
- * @param handle
- *   void **. Output pointer that receives the dlopen() handle for the current process.
- * @param symbol_name
- *   const char *. Base name of the symbol to resolve.
- * @param module_name
- *   const char *. Module name appended to the symbol name to form the final lookup name.
- *
- * @return int
- *   C_OK on success, or C_ERR if the symbol name is too long, dlopen() fails, or dlsym()
- *   cannot resolve the symbol.
- *
- * @note This function is intended for use in the module-loading context and relies on the
- * current process exposing statically linked module entry points under the constructed name.
- */
+/* Resolve a symbol from a statically linked module. The symbol is looked up
+ * by constructing the name "<symbol_name>_<module_name>" and searching for it
+ * in the current process via dlopen(NULL)/dlsym(). On success, '*out' is set
+ * to the symbol address, '*handle' is set to the dlopen handle, and C_OK is
+ * returned. On failure C_ERR is returned and an appropriate warning is logged. */
 static int moduleLoadStaticSymbol(void **out, void **handle, const char *symbol_name, const char *module_name) {
     char symbol_full_name[128];
     int n = snprintf(symbol_full_name, sizeof(symbol_full_name), "%s_%s", symbol_name, module_name);
@@ -12975,31 +12956,25 @@ static int moduleLoadStaticSymbol(void **out, void **handle, const char *symbol_
     return C_OK;
 }
 
-/**
- * @brief Loads a statically linked module by locating its on-load and on-unload entry points.
+/* Load a statically linked module and initialize it. This is the static
+ * counterpart of moduleLoad(): instead of dlopen()ing a shared object from
+ * a file path, it resolves the module's entry point from the running
+ * executable itself.
  *
- * This function builds the expected symbol names for the module, resolves them from the current
- * process image, and invokes the module's initialization routine. On success, the module is registered
- * with the server, its state is initialized, and module load events are fired. If validation or
- * post-load checks fail, the module is unloaded and an error is returned.
+ * The entry point is located by constructing the symbol name
+ * "ValkeyModule_OnLoad_<module_name>" and resolving it with
+ * moduleLoadStaticSymbol(). For example, a module named "mymodule" must
+ * provide a function called ValkeyModule_OnLoad_mymodule.
  *
- * @param module_name const char * Name of the static module, used to construct the on-load and
- * on-unload symbol names.
- * @param module_argv void ** Array of module arguments passed through to the module's on-load
- * function.
- * @param module_argc int Number of entries in module_argv.
- * @param is_loadex int Nonzero if the module is being loaded via the loadex path and queued
- * configuration arguments should be validated.
+ * Once the entry point is found, the function creates a temporary module
+ * context, invokes the OnLoad callback, and on success registers the module
+ * in the global modules dictionary with is_static_module set to 1 and handle
+ * set to NULL (since there is no shared-object handle to keep open).
  *
- * @return int C_OK on successful load; C_ERR if symbol lookup fails, module initialization fails,
- * or post-load validation detects an error.
+ * If 'is_loadex' is true, the function also validates that all queued module
+ * configurations were consumed; otherwise the module is unloaded.
  *
- * @note This function operates in the server/module loading context and expects the module's
- * ValkeyModule_OnLoad_<name> and ValkeyModule_OnUnload_<name> symbols to be present in the
- * current process.
- *
- * @throws No exceptions are thrown. Errors are reported via server logging and by returning C_ERR.
- */
+ * On success C_OK is returned, otherwise C_ERR is returned. */
 int moduleLoadStatic(const char *module_name, void **module_argv, int module_argc, int is_loadex) {
     // Locate the load
     ModuleLoadFunc onload;

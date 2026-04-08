@@ -28,7 +28,6 @@
  */
 
 #include "../../valkeymodule.h"
-#include "../../resp_parser.h"
 #include "script_lua.h"
 #include "debug_lua.h"
 #include "engine_structs.h"
@@ -806,35 +805,6 @@ static void luaProcessReplyError(const char *err, lua_State *lua) {
     lua_pushstring(lua, "ignore_error_stats_update");
     lua_pushboolean(lua, 1);
     lua_settable(lua, -3);
-}
-
-static inline int callReplyType(const char *proto) {
-    switch (proto[0]) {
-    case '+': return VALKEYMODULE_REPLY_SIMPLE_STRING;
-    case '-': return VALKEYMODULE_REPLY_ERROR;
-    case ':': return VALKEYMODULE_REPLY_INTEGER;
-    case '$': {
-        if (proto[1] == '-') {
-            return VALKEYMODULE_REPLY_NULL;
-        }
-        return VALKEYMODULE_REPLY_STRING;
-    }
-    case '*': {
-        if (proto[1] == '-') {
-            return VALKEYMODULE_REPLY_ARRAY_NULL;
-        }
-        return VALKEYMODULE_REPLY_ARRAY;
-    }
-    case '_': return VALKEYMODULE_REPLY_NULL;
-    case '%': return VALKEYMODULE_REPLY_MAP;
-    case '~': return VALKEYMODULE_REPLY_SET;
-    case '#': return VALKEYMODULE_REPLY_BOOL;
-    case ',': return VALKEYMODULE_REPLY_DOUBLE;
-    case '(': return VALKEYMODULE_REPLY_BIG_NUMBER;
-    case '=': return VALKEYMODULE_REPLY_VERBATIM_STRING;
-    case '|': return VALKEYMODULE_REPLY_ATTRIBUTE;
-    default: return VALKEYMODULE_REPLY_UNKNOWN;
-    }
 }
 
 #define MAX_NESTED_COLLECTIONS_DEPTH 256

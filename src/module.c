@@ -7046,7 +7046,7 @@ int VM_CallArgv(ValkeyModuleCtx *ctx,
                 int flags,
                 const ValkeyModuleReplyHandlers *resp_handlers,
                 void *reply_ctx) {
-    debugServerAssert(resp_handlers == NULL || resp_handlers->version == VALKEYMODULE_REPLY_HANDLERS_VERSION);
+    serverAssert(resp_handlers == NULL || resp_handlers->version == VALKEYMODULE_REPLY_HANDLERS_VERSION);
 
     int ret = VALKEYMODULE_OK;
     client *c = NULL;
@@ -11583,6 +11583,19 @@ ValkeyModuleString *VM_CommandFilterArgGet(ValkeyModuleCommandFilterCtx *fctx, i
     return fctx->argv[pos];
 }
 
+/* Backup the original client argv if it is borrowed because the client does not own it. */
+static void backupOriginalClientArgv(ValkeyModuleCommandFilterCtx *fctx) {
+    if (!fctx->c->original_argv) {
+        fctx->c->original_argv = fctx->argv;
+        fctx->c->original_argc = fctx->argc;
+        fctx->argv = zmalloc(fctx->argv_len * sizeof(ValkeyModuleString *));
+        for (int i = 0; i < fctx->argc; i++) {
+            incrRefCount(fctx->c->original_argv[i]);
+            fctx->argv[i] = fctx->c->original_argv[i];
+        }
+    }
+}
+
 /* Modify the filtered command by inserting a new argument at the specified
  * position.  The specified ValkeyModuleString argument may be used by the server
  * after the filter context is destroyed, so it must not be auto-memory
@@ -11595,7 +11608,11 @@ int VM_CommandFilterArgInsert(ValkeyModuleCommandFilterCtx *fctx, int pos, Valke
 
     if (fctx->argv_len < fctx->argc + 1) {
         fctx->argv_len = fctx->argc + 1;
-        fctx->argv = zrealloc(fctx->argv, fctx->argv_len * sizeof(ValkeyModuleString *));
+        if (fctx->c->flag.argv_borrowed) {
+            backupOriginalClientArgv(fctx);
+        } else {
+            fctx->argv = zrealloc(fctx->argv, fctx->argv_len * sizeof(ValkeyModuleString *));
+        }
     }
     for (i = fctx->argc; i > pos; i--) {
         fctx->argv[i] = fctx->argv[i - 1];
@@ -11614,6 +11631,10 @@ int VM_CommandFilterArgInsert(ValkeyModuleCommandFilterCtx *fctx, int pos, Valke
 int VM_CommandFilterArgReplace(ValkeyModuleCommandFilterCtx *fctx, int pos, ValkeyModuleString *arg) {
     if (pos < 0 || pos >= fctx->argc) return VALKEYMODULE_ERR;
 
+    if (fctx->c->flag.argv_borrowed) {
+        backupOriginalClientArgv(fctx);
+    }
+
     decrRefCount(fctx->argv[pos]);
     fctx->argv[pos] = arg;
 
@@ -11626,6 +11647,10 @@ int VM_CommandFilterArgReplace(ValkeyModuleCommandFilterCtx *fctx, int pos, Valk
 int VM_CommandFilterArgDelete(ValkeyModuleCommandFilterCtx *fctx, int pos) {
     int i;
     if (pos < 0 || pos >= fctx->argc) return VALKEYMODULE_ERR;
+
+    if (fctx->c->flag.argv_borrowed) {
+        backupOriginalClientArgv(fctx);
+    }
 
     decrRefCount(fctx->argv[pos]);
     for (i = pos; i < fctx->argc - 1; i++) {

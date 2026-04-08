@@ -2248,12 +2248,10 @@ static sds numericConfigGet(standardConfig *config) {
         int len = ll2string(buf, sizeof(buf), -value);
         buf[len] = '%';
         buf[len + 1] = '\0';
+    } else if (config->data.numeric.flags & SIGNED_MEMORY_CONFIG && value < 0) {
+        ll2string(buf, sizeof(buf), value);
     } else if (config->data.numeric.flags & MEMORY_CONFIG) {
-        if (config->data.numeric.flags & SIGNED_MEMORY_CONFIG && value < 0) {
-            ll2string(buf, sizeof(buf), value);
-        } else {
-            ull2string(buf, sizeof(buf), value);
-        }
+        ull2string(buf, sizeof(buf), value);
     } else if (config->data.numeric.flags & OCTAL_CONFIG) {
         snprintf(buf, sizeof(buf), "%llo", value);
     } else if (config->data.numeric.flags & UNSIGNED_CONFIG) {
@@ -2271,12 +2269,10 @@ static void numericConfigRewrite(standardConfig *config, const char *name, struc
 
     if (config->data.numeric.flags & PERCENT_CONFIG && value < 0) {
         rewriteConfigPercentOption(state, name, -value, config->data.numeric.default_value);
+    } else if (config->data.numeric.flags & SIGNED_MEMORY_CONFIG && value < 0) {
+        rewriteConfigNumericalOption(state, name, value, config->data.numeric.default_value);
     } else if (config->data.numeric.flags & MEMORY_CONFIG) {
-        if (config->data.numeric.flags & SIGNED_MEMORY_CONFIG && value < 0) {
-            rewriteConfigNumericalOption(state, name, value, config->data.numeric.default_value);
-        } else {
-            rewriteConfigBytesOption(state, name, value, config->data.numeric.default_value);
-        }
+        rewriteConfigBytesOption(state, name, value, config->data.numeric.default_value);
     } else if (config->data.numeric.flags & OCTAL_CONFIG) {
         rewriteConfigOctalOption(state, name, value, config->data.numeric.default_value);
     } else if (config->data.numeric.flags & UNSIGNED_CONFIG) {
@@ -3535,9 +3531,13 @@ void initConfigValues(void) {
     for (standardConfig *config = static_configs; config->name != NULL; config++) {
         if (config->interface.init) config->interface.init(config);
 
-        /* PERCENT_CONFIG and SIGNED_MEMORY_CONFIG both use negative values
-         * with different semantics, so they must not be combined. */
         if (config->type == NUMERIC_CONFIG) {
+            /* SIGNED_MEMORY_CONFIG must be used together with MEMORY_CONFIG. */
+            serverAssert(!((config->data.numeric.flags & SIGNED_MEMORY_CONFIG) &&
+                           !(config->data.numeric.flags & MEMORY_CONFIG)));
+
+            /* PERCENT_CONFIG and SIGNED_MEMORY_CONFIG both use negative values
+             * with different semantics, so they must not be combined. */
             serverAssert(!((config->data.numeric.flags & PERCENT_CONFIG) &&
                            (config->data.numeric.flags & SIGNED_MEMORY_CONFIG)));
         }

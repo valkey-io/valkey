@@ -6415,6 +6415,7 @@ int processIOThreadsReadDone(void) {
         }
 
         if (c->argc > 0) {
+            if (c->read_flags & READ_FLAGS_DONT_PARSE) continue;
             c->flag.pending_command = 1;
         }
 

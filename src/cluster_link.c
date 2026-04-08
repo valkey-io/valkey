@@ -17,6 +17,8 @@
 #include "cluster_state.h"
 #include "cluster_link.h"
 
+/* Decrement the reference count of a send block and free it when it reaches
+ * zero. Takes void * because it is used as a list free method callback. */
 void clusterMsgSendBlockDecrRefCount(void *ptr) {
     clusterMsgSendBlock *block = (clusterMsgSendBlock *)ptr;
     block->refcount--;

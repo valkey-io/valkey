@@ -38,11 +38,27 @@
 
 #include "server.h"
 #include "cluster.h"
+#include "cluster_bus.h"
 #include "cluster_nodes.h"
 #include "cluster_state.h"
 #include "cluster_link.h"
+#include "cluster_slot_stats.h"
+#include "cluster_migrateslots.h"
+#include "endianconv.h"
+#include "connection.h"
+#include "module.h"
 
+/* Access legacy protocol-specific data from a clusterNode. */
+#define LEGACY_DATA(n) ((clusterNodeLegacyData *)(n)->protocol_data)
+
+/* Access legacy protocol-specific state from the cluster. */
+#define LEGACY_STATE() ((clusterLegacyState *)server.cluster->protocol_data)
+
+/* Legacy-specific defines. */
 #define CLUSTER_MF_PAUSE_MULT 2 /* Primary pause manual failover mult. */
+#define CLUSTER_FAIL_REPORT_VALIDITY_MULT 2  /* Fail report validity. */
+#define CLUSTER_FAIL_UNDO_TIME_MULT 2        /* Undo fail if primary is back. */
+#define CLUSTER_REPLICA_MIGRATION_DELAY 5000 /* Delay for replica migration. */
 
 /* clusterState todo_before_sleep flags. */
 #define CLUSTER_TODO_HANDLE_FAILOVER (1 << 0)
@@ -52,25 +68,7 @@
 #define CLUSTER_TODO_HANDLE_MANUALFAILOVER (1 << 4)
 #define CLUSTER_TODO_BROADCAST_ALL (1 << 5)
 #define CLUSTER_TODO_HANDLE_SLOT_MIGRATION (1 << 6)
-#include "cluster_state.h"
-#include "cluster_slot_stats.h"
-#include "cluster_migrateslots.h"
-#include "endianconv.h"
-#include "connection.h"
-#include "module.h"
 
-#include "cluster_bus.h"
-
-/* Access legacy protocol-specific data from a clusterNode. */
-#define LEGACY_DATA(n) ((clusterNodeLegacyData *)(n)->protocol_data)
-
-/* Access legacy protocol-specific state from the cluster. */
-#define LEGACY_STATE() ((clusterLegacyState *)server.cluster->protocol_data)
-
-/* Legacy-specific defines. */
-#define CLUSTER_FAIL_REPORT_VALIDITY_MULT 2  /* Fail report validity. */
-#define CLUSTER_FAIL_UNDO_TIME_MULT 2        /* Undo fail if primary is back. */
-#define CLUSTER_REPLICA_MIGRATION_DELAY 5000 /* Delay for replica migration. */
 #define CLUSTER_CANT_FAILOVER_NONE 0
 #define CLUSTER_CANT_FAILOVER_DATA_AGE 1
 #define CLUSTER_CANT_FAILOVER_WAITING_DELAY 2

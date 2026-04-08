@@ -99,8 +99,11 @@ struct clusterState {
 int defaultClientPort(void);
 
 /* Derive announced ports from server configuration. */
-void deriveAnnouncedPorts(int *announced_tcp_port, int *announced_tls_port, int *announced_cport,
-                          int *announced_client_tcp_port, int *announced_client_tls_port);
+void deriveAnnouncedPorts(int *announced_tcp_port,
+                          int *announced_tls_port,
+                          int *announced_cport,
+                          int *announced_client_tcp_port,
+                          int *announced_client_tls_port);
 
 /* Node accessor used by protocol implementations and description generation. */
 char *humanNodename(clusterNode *node);

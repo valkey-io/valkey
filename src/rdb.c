@@ -144,13 +144,18 @@ typedef struct {
     rdbAuxFieldDecoder decoder;
 } rdbAuxFieldCodec;
 
+static void dictEntryDestructorSdsKeyHeapValue(void *entry) {
+    dictEntry *de = entry;
+    dictSdsDestructor(dictGetKey(de));
+    dictVanillaFree(dictGetVal(de));
+    zfree(de);
+}
+
 dictType rdbAuxFieldDictType = {
-    dictSdsCaseHash,       /* hash function */
-    NULL,                  /* key dup */
-    dictSdsKeyCaseCompare, /* key compare */
-    dictSdsDestructor,     /* key destructor */
-    dictVanillaFree,       /* val destructor */
-    NULL                   /* allow to expand */
+    .entryGetKey = dictEntryGetKey,
+    .hashFunction = dictSdsCaseHash,
+    .keyCompare = dictSdsKeyCaseCompare,
+    .entryDestructor = dictEntryDestructorSdsKeyHeapValue,
 };
 
 dict *rdbAuxFields = NULL;
@@ -1013,7 +1018,7 @@ ssize_t rdbSaveObject(rio *rdb, robj *o, robj *key, int dbid, unsigned char rdbt
                 nwritten += n;
                 if (add_expiry) {
                     long long expiry = entryGetExpiry(next);
-                    if ((n = rdbSaveMillisecondTime(rdb, expiry) == -1)) {
+                    if ((n = rdbSaveMillisecondTime(rdb, expiry)) == -1) {
                         hashtableCleanupIterator(&iter);
                         return -1;
                     }
@@ -2409,6 +2414,7 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
                         hashtableRelease(dupSearchHashtable);
                         sdsfree(field);
                         zfree(encoded);
+                        zfree(lp);
                         objectSetVal(o, NULL);
                         decrRefCount(o);
                         return NULL;

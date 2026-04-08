@@ -890,6 +890,11 @@ for {set j 0} {$j < [llength $argv]} {incr j} {
     }
 }
 
+# Scale the global timeout for valgrind runs, which are significantly slower.
+if {$::valgrind} {
+    set ::timeout [expr {$::timeout * 3}]
+}
+
 set filtered_tests {}
 
 # Set the filtered tests to be the short list (single_tests) if exists.

@@ -384,6 +384,7 @@ struct hashtableStats {
 typedef struct {
     unsigned size;  /* Size of the entries array. */
     unsigned seen;  /* Number of entries seen. */
+    unsigned safe;  /* Number of entries safe from replacement. */
     void **entries; /* Array of sampled entries. */
 } scan_samples;
 
@@ -1099,10 +1100,16 @@ static void sampleEntriesScanFn(void *privdata, void *entry) {
         samples->entries[samples->seen++] = entry;
     } else {
         /* More entries than we wanted. This can happen if there are long
-         * bucket chains. Replace random entries using reservoir sampling. */
+         * bucket chains. Replace random entries using reservoir sampling,
+         * but only replace entries from the current bucket chain (indices
+         * >= safe), to avoid replacing already confirmed unique entries
+         * from previous bucket chains with potential duplicates. */
         samples->seen++;
-        unsigned idx = random() % samples->seen;
-        if (idx < samples->size) samples->entries[idx] = entry;
+        unsigned replaceable = samples->size - samples->safe;
+        if (replaceable > 0) {
+            unsigned idx = random() % (samples->seen - samples->safe);
+            if (idx < replaceable) samples->entries[samples->safe + idx] = entry;
+        }
     }
 }
 
@@ -2363,10 +2370,16 @@ unsigned hashtableSampleEntries(hashtable *ht, void **dst, unsigned count) {
     scan_samples samples;
     samples.size = count;
     samples.seen = 0;
+    samples.safe = 0;
     samples.entries = dst;
     size_t cursor = randomSizeT();
     while (samples.seen < count) {
         cursor = hashtableScan(ht, cursor, sampleEntriesScanFn, &samples);
+        /* Entries collected so far are from distinct buckets and guaranteed
+         * unique. Mark them safe so reservoir sampling in the next iteration
+         * won't overwrite them with potential duplicates if the cursor wraps
+         * around. */
+        samples.safe = samples.seen <= count ? samples.seen : count;
     }
     rehashStepOnReadIfNeeded(ht);
     /* samples.seen is the number of entries scanned. It may be greater than

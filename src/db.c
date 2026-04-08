@@ -1294,18 +1294,15 @@ void scanGenericCommand(client *c, robj *o, unsigned long long cursor, int slot,
             .only_keys = only_keys,
         };
 
-        /* Determine which slot to scan:
-         * - If slot >= 0, scan the specific slot (CLUSTERSCAN)
-         * - If slot == -1 try to derive from pattern; otherwise scan all */
-        int onlydidx = slot;
-        if (onlydidx == -1 && o == NULL && use_pattern && server.cluster_enabled) {
-            onlydidx = patternHashSlot(pat, patlen);
+        /* For regular SCAN in cluster mode, derive the slot from the pattern's hashtag. */
+        if (slot == -1 && o == NULL && use_pattern && server.cluster_enabled) {
+            slot = patternHashSlot(pat, patlen);
         }
         do {
             /* In cluster mode there is a separate dictionary for each slot.
              * If cursor is empty, we should try exploring next non-empty slot. */
             if (o == NULL) {
-                cursor = kvstoreScan(c->db->keys, cursor, onlydidx, final_slot, keysScanCallback, NULL, &data);
+                cursor = kvstoreScan(c->db->keys, cursor, slot, final_slot >= 0 ? final_slot : slot, keysScanCallback, NULL, &data);
             } else {
                 cursor = hashtableScan(ht, cursor, hashtableScanCallback, &data);
             }
@@ -1363,7 +1360,10 @@ void scanGenericCommand(client *c, robj *o, unsigned long long cursor, int slot,
     /* Step 3: Reply to the client. */
     addReplyArrayLen(c, 2);
 
-    /* Handle CLUSTERSCAN prefixing */
+    /* Handle CLUSTERSCAN prefixing.
+     * final_slot < 0 means single-slot mode (user passed SLOT or single-slot MATCH);
+     * we return cursor "0" without advancing. final_slot >= 0 means range mode,
+     * where we advance to final_slot+1 so iteration moves to the next node. */
     if (cursor == 0 && fp && final_slot >= 0 && final_slot + 1 < CLUSTER_SLOTS) {
         /* Range mode: advance to next slot outside the current node's range. */
         sds new_cursor = sdscatfmt(sdsempty(), "0-{%s}-0", crc16_slot_table[final_slot + 1]);

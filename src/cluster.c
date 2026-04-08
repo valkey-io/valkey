@@ -1837,5 +1837,6 @@ void clusterscanCommand(client *c) {
         }
     }
 
+    serverAssert(slot >= 0 && slot < CLUSTER_SLOTS);
     scanGenericCommand(c, NULL, cursor, slot, final_slot, clusterscanFingerprint());
 }

@@ -3533,8 +3533,8 @@ void initConfigValues(void) {
 
         if (config->type == NUMERIC_CONFIG) {
             /* SIGNED_MEMORY_CONFIG must be used together with MEMORY_CONFIG. */
-            serverAssert(!((config->data.numeric.flags & SIGNED_MEMORY_CONFIG) &&
-                           !(config->data.numeric.flags & MEMORY_CONFIG)));
+            serverAssert(!(config->data.numeric.flags & SIGNED_MEMORY_CONFIG) ||
+                         (config->data.numeric.flags & MEMORY_CONFIG));
 
             /* PERCENT_CONFIG and SIGNED_MEMORY_CONFIG both use negative values
              * with different semantics, so they must not be combined. */

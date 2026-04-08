@@ -2168,6 +2168,13 @@ static int numericParseString(standardConfig *config, sds value, const char **er
         int memerr;
         *res = memtoull(value, &memerr);
         if (!memerr) return 1;
+
+        /* memtoull rejects negative values, but some memory configs accept
+         * special negative values (e.g. -1 to disable a limit). Fall back
+         * to plain integer parsing for those. */
+        if (config->data.numeric.flags & SIGNED_MEMORY_CONFIG) {
+            if (string2ll(value, sdslen(value), res)) return 1;
+        }
     }
 
     /* Attempt to parse as percent */
@@ -2241,6 +2248,8 @@ static sds numericConfigGet(standardConfig *config) {
         int len = ll2string(buf, sizeof(buf), -value);
         buf[len] = '%';
         buf[len + 1] = '\0';
+    } else if (config->data.numeric.flags & SIGNED_MEMORY_CONFIG && value < 0) {
+        ll2string(buf, sizeof(buf), value);
     } else if (config->data.numeric.flags & MEMORY_CONFIG) {
         ull2string(buf, sizeof(buf), value);
     } else if (config->data.numeric.flags & OCTAL_CONFIG) {
@@ -2260,6 +2269,8 @@ static void numericConfigRewrite(standardConfig *config, const char *name, struc
 
     if (config->data.numeric.flags & PERCENT_CONFIG && value < 0) {
         rewriteConfigPercentOption(state, name, -value, config->data.numeric.default_value);
+    } else if (config->data.numeric.flags & SIGNED_MEMORY_CONFIG && value < 0) {
+        rewriteConfigNumericalOption(state, name, value, config->data.numeric.default_value);
     } else if (config->data.numeric.flags & MEMORY_CONFIG) {
         rewriteConfigBytesOption(state, name, value, config->data.numeric.default_value);
     } else if (config->data.numeric.flags & OCTAL_CONFIG) {
@@ -3452,7 +3463,7 @@ standardConfig static_configs[] = {
     createSizeTConfig("tracking-table-max-keys", NULL, MODIFIABLE_CONFIG, 0, LONG_MAX, server.tracking_table_max_keys, 1000000, INTEGER_CONFIG, NULL, NULL),                                      /* Default: 1 million keys max. */
     createSizeTConfig("client-query-buffer-limit", NULL, DEBUG_CONFIG | MODIFIABLE_CONFIG, 1024 * 1024, LONG_MAX, server.client_max_querybuf_len, 1024 * 1024 * 1024, MEMORY_CONFIG, NULL, NULL), /* Default: 1GB max query buffer. */
     createSSizeTConfig("maxmemory-clients", NULL, MODIFIABLE_CONFIG, -100, SSIZE_MAX, server.maxmemory_clients, 0, MEMORY_CONFIG | PERCENT_CONFIG, NULL, applyClientMaxMemoryUsage),
-    createSSizeTConfig("slot-migration-max-failover-repl-bytes", NULL, MODIFIABLE_CONFIG, -1, SSIZE_MAX, server.slot_migration_max_failover_repl_bytes, 0, MEMORY_CONFIG, NULL, NULL),
+    createSSizeTConfig("slot-migration-max-failover-repl-bytes", NULL, MODIFIABLE_CONFIG, -1, SSIZE_MAX, server.slot_migration_max_failover_repl_bytes, 0, MEMORY_CONFIG | SIGNED_MEMORY_CONFIG, NULL, NULL),
 
     /* Other configs */
     createTimeTConfig("repl-backlog-ttl", NULL, MODIFIABLE_CONFIG, 0, LONG_MAX, server.repl_backlog_time_limit, 60 * 60, INTEGER_CONFIG, NULL, NULL), /* Default: 1 hour */
@@ -3519,6 +3530,18 @@ void initConfigValues(void) {
     dictExpand(configs, sizeof(static_configs) / sizeof(standardConfig));
     for (standardConfig *config = static_configs; config->name != NULL; config++) {
         if (config->interface.init) config->interface.init(config);
+
+        if (config->type == NUMERIC_CONFIG) {
+            /* SIGNED_MEMORY_CONFIG must be used together with MEMORY_CONFIG. */
+            serverAssert(!(config->data.numeric.flags & SIGNED_MEMORY_CONFIG) ||
+                         (config->data.numeric.flags & MEMORY_CONFIG));
+
+            /* PERCENT_CONFIG and SIGNED_MEMORY_CONFIG both use negative values
+             * with different semantics, so they must not be combined. */
+            serverAssert(!((config->data.numeric.flags & PERCENT_CONFIG) &&
+                           (config->data.numeric.flags & SIGNED_MEMORY_CONFIG)));
+        }
+
         /* Add the primary config to the dictionary. */
         int ret = registerConfigValue(config->name, config, 0);
         serverAssert(ret);

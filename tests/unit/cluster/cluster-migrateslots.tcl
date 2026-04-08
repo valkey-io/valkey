@@ -2450,7 +2450,7 @@ start_cluster 3 0 {tags {logreqres:skip external:skip cluster} overrides {cluste
         set 16383_slot_tag "{6ZJ}"
         set_debug_prevent_pause 1
 
-        # Move 16383 from R0 to R2
+        # Move 16383 from R2 to R0.
         assert_match "OK" [R 2 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE [R 0 CLUSTER MYID]]
         set jobname [get_job_name 2 16383]
         wait_for_migration_field 2 $jobname state waiting-to-pause
@@ -2482,5 +2482,48 @@ start_cluster 3 0 {tags {logreqres:skip external:skip cluster} overrides {cluste
         set export_migration [get_migration_by_name 2 $jobname]
         assert_equal [dict get $export_migration remaining_repl_size] 0
         assert_equal [dict get $import_migration remaining_repl_size] 0
+
+        # Check the remaining_repl_size log is OK.
+        verify_log_message -2 "*Pausing writes (remaining_repl_size is 0) to allow slot migration*" 0
+    }
+}
+
+start_cluster 3 0 {tags {logreqres:skip external:skip cluster} overrides {cluster-require-full-coverage no slot-migration-max-failover-repl-bytes -1}} {
+    test "slot-migration-max-failover-repl-bytes -1 disables repl bytes limit" {
+        set 16383_slot_tag "{6ZJ}"
+
+        # Use PREVENT-PAUSE to hold the migration at the waiting-to-pause
+        # state so we can fill the replication buffer first.
+        R 2 DEBUG SLOTMIGRATION PREVENT-PAUSE 1
+
+        # Move slot 16383 from R2 to R0.
+        assert_match "OK" [R 2 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE [R 0 CLUSTER MYID]]
+        set jobname [get_job_name 2 16383]
+        wait_for_migration_field 2 $jobname state waiting-to-pause
+
+        # Pause the target (R0) process and generate data to fill the
+        # replication buffer on the source (R2).
+        pause_process [srv 0 pid]
+        set bigstr [string repeat x 1024000]
+        for {set j 0} {$j < 50} {incr j} {
+            R 2 set "$16383_slot_tag:key:$j" $bigstr
+        }
+
+        # Confirm the replication buffer has accumulated data.
+        set export_migration [get_migration_by_name 2 $jobname]
+        set remaining_repl_size [dict get $export_migration remaining_repl_size]
+        assert_morethan $remaining_repl_size [expr 1024000 * 25]
+
+        # Resume the PREVENT-PAUSE.
+        # With slot-migration-max-failover-repl-bytes -1, the source (R2) should proceed
+        # to pause writes regardless of the large remaining_repl_size.
+        R 2 DEBUG SLOTMIGRATION PREVENT-PAUSE 0
+        wait_for_log_messages -2 {"*Pausing writes*"} 0 1000 10
+        set pattern "*Pausing writes (remaining_repl_size is $remaining_repl_size) to allow slot migration*"
+        verify_log_message -2 $pattern 0
+
+        # Resume R0 and wait for R0 to finish the migration.
+        resume_process [srv 0 pid]
+        wait_for_migration 0 16383
     }
 }

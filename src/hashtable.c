@@ -2330,6 +2330,7 @@ bool hashtableNext(hashtableIterator *iterator, void **elemptr) {
  * results, this picks a new random bucket each time for fair sampling at the
  * cost of possible duplicates. */
 static unsigned sampleRandomBuckets(hashtable *ht, void **dst, unsigned count) {
+    if (count > hashtableSize(ht)) count = hashtableSize(ht);
     scan_samples samples;
     samples.size = count;
     samples.seen = 0;

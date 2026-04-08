@@ -864,7 +864,7 @@ typedef struct ValkeyModuleIO ValkeyModuleIO;
 typedef struct ValkeyModuleDigest ValkeyModuleDigest;
 typedef struct ValkeyModuleInfoCtx ValkeyModuleInfoCtx;
 typedef struct ValkeyModuleDefragCtx ValkeyModuleDefragCtx;
-typedef struct ValkeyModuleAsyncRMCallPromise ValkeyModuleCallArgvHandle;
+typedef struct ValkeyModuleAsyncRMCallPromise ValkeyModuleCallArgvBlockedHandle;
 
 /* Function pointers needed by both the core and modules, these needs to be
  * exposed since you can't cast a function pointer to (void *). */
@@ -1356,7 +1356,7 @@ typedef struct ValkeyModuleReplyHandlersV1 {
      * `handle` can be passed to ValkeyModule_CallArgvAbort to cancel the
      * pending call before a reply arrives. The handle is valid until either
      * onRespAvailable is invoked or ValkeyModule_CallArgvAbort is called. */
-    void (*onBlocked)(void *ctx, ValkeyModuleCtx *module_ctx, ValkeyModuleCallArgvHandle *handle);
+    void (*onBlocked)(void *ctx, ValkeyModuleCtx *module_ctx, ValkeyModuleCallArgvBlockedHandle *handle);
 
     /* This callback is invoked when a RESP reply is available for processing.
      * The callback should return 1 if parsing should continue, or 0 if parsing should stop.

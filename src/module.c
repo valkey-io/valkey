@@ -506,7 +506,7 @@ typedef struct ValkeyModuleAsyncRMCallPromise {
     void *resp_handlers_ctx;
 } ValkeyModuleAsyncRMCallPromise;
 
-typedef struct ValkeyModuleAsyncRMCallPromise ValkeyModuleCallArgvHandle;
+typedef struct ValkeyModuleAsyncRMCallPromise ValkeyModuleCallArgvBlockedHandle;
 
 /* --------------------------------------------------------------------------
  * Prototypes
@@ -6277,7 +6277,7 @@ int VM_CallReplyPromiseAbort(ValkeyModuleCallReply *reply, void **private_data) 
  * Note: as with VM_CallReplyPromiseAbort, if the underlying blocking command
  * belongs to a module that does not honour disconnect callbacks, the abort may
  * succeed internally without the command actually stopping. */
-int VM_CallArgvAbort(ValkeyModuleCallArgvHandle *handle) {
+int VM_CallArgvAbort(ValkeyModuleCallArgvBlockedHandle *handle) {
     ValkeyModuleAsyncRMCallPromise *promise = handle;
     serverAssert(promise->from_call_argv);
     if (!promise->c) return VALKEYMODULE_ERR;               /* Already finished or aborted. */

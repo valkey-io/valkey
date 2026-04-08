@@ -14,7 +14,7 @@
 
 /* Forward declarations of module API functions not publicly exposed */
 extern int VM_CallArgv(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc, int flags, const ValkeyModuleReplyHandlers *resp_handlers, void *reply_ctx);
-extern int VM_CallArgvAbort(ValkeyModuleCallArgvHandle *handle);
+extern int VM_CallArgvAbort(ValkeyModuleCallArgvBlockedHandle *handle);
 extern int VM_ReplyRaw(ValkeyModuleCtx *ctx, const char *proto, size_t proto_len);
 #define ValkeyModule_CallArgv VM_CallArgv
 #define ValkeyModule_CallArgvAbort VM_CallArgvAbort
@@ -538,7 +538,7 @@ int blpop_and_set_multiple_keys_with_rm_call(ValkeyModuleCtx *ctx, ValkeyModuleS
 
 struct CallArgvAsyncContext {
     int is_async;
-    ValkeyModuleCallArgvHandle *abort_handle;
+    ValkeyModuleCallArgvBlockedHandle *abort_handle;
     ValkeyModuleBlockedClient *bc;
 };
 
@@ -573,7 +573,7 @@ static void do_vm_call_argv_async_disconnect(ValkeyModuleCtx *ctx, struct Valkey
 }
 
 static void call_argv_deferred_reply_handle(void *ctx, ValkeyModuleCtx *mctx,
-                                             ValkeyModuleCallArgvHandle *abort_handle) {
+                                             ValkeyModuleCallArgvBlockedHandle *abort_handle) {
     struct CallArgvAsyncContext *actx = (struct CallArgvAsyncContext *)(void *)ctx;
     actx->is_async = 1;
     actx->abort_handle = abort_handle;
@@ -647,7 +647,7 @@ int do_vm_call_argv_async_script_mode_available_reply_handle(void *ctx, ValkeyMo
 }
 
 void do_vm_call_argv_async_script_mode_deferred_reply_handle(void *ctx, ValkeyModuleCtx *mctx,
-                                                             ValkeyModuleCallArgvHandle *abort_handle) {
+                                                             ValkeyModuleCallArgvBlockedHandle *abort_handle) {
     UNUSED(ctx);
     UNUSED(abort_handle);
     ValkeyModule_ReplyWithSimpleString(mctx, "Blocked");
@@ -762,7 +762,7 @@ int wait_and_call_argv_raw_resp_handler(void *ctx, ValkeyModuleCtx *mctx, const 
 }
 
 void wait_and_call_argv_deferred_reply_handle(void *ctx, ValkeyModuleCtx *mctx,
-                                               ValkeyModuleCallArgvHandle *abort_handle) {
+                                               ValkeyModuleCallArgvBlockedHandle *abort_handle) {
     UNUSED(abort_handle);
     struct WaitAndCallArgvAsyncContext *actx = (struct WaitAndCallArgvAsyncContext *)ctx;
     ValkeyModuleBlockedClient *bc = ValkeyModule_BlockClient(mctx, NULL, NULL, NULL, 0);

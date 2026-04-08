@@ -278,6 +278,41 @@ int clusterLinkDebugCommand(client *c) {
     return 1;
 }
 
+/* Queue a send block on a link for sending. The caller must set
+ * msgblock->len to the number of bytes to send before calling this. */
+void clusterLinkSendBlock(clusterLink *link, clusterMsgSendBlock *msgblock) {
+    if (!link) return;
+    if (listLength(link->send_msg_queue) == 0 && msgblock->len != 0)
+        connSetWriteHandlerWithBarrier(link->conn, clusterWriteHandler, 1);
+
+    listAddNodeTail(link->send_msg_queue, msgblock);
+    msgblock->refcount++;
+
+    /* Update memory tracking */
+    link->send_msg_queue_mem += sizeof(listNode) + msgblock->totlen;
+    server.stat_cluster_links_memory += sizeof(listNode);
+}
+
+/* Free a cluster link if its send buffer exceeds the configured limit.
+ * Returns 1 if the link was freed, 0 otherwise. */
+int freeClusterLinkOnBufferLimitReached(clusterLink *link) {
+    if (link == NULL || server.cluster_link_msg_queue_limit_bytes == 0) {
+        return 0;
+    }
+    if (link->send_msg_queue_mem > server.cluster_link_msg_queue_limit_bytes) {
+        serverLog(LL_WARNING,
+                  "Freeing cluster link(%s node %.40s (%s), used memory: %llu) due to "
+                  "exceeding send buffer memory limit.",
+                  link->inbound ? "from" : "to", clusterLinkGetNodeName(link),
+                  clusterLinkGetHumanNodeName(link),
+                  (unsigned long long)link->send_msg_queue_mem);
+        freeClusterLink(link);
+        server.cluster->stat_cluster_links_buffer_limit_exceeded++;
+        return 1;
+    }
+    return 0;
+}
+
 const char **clusterLinkDebugHelp(void) {
     static const char *help[] = {
         "CLUSTERLINK KILL <to|from|all> <node-id>",

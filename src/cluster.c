@@ -62,6 +62,7 @@ static void clusterCommandFlushslot(client *c);
 
 void clusterInit(void) {
     clusterCurrentBus->init();
+    server.cluster->stat_cluster_links_buffer_limit_exceeded = 0;
 }
 void clusterInitLast(void) {
     clusterCurrentBus->initLast();
@@ -124,6 +125,7 @@ unsigned long getClusterConnectionsCount(void) {
  * to reset via CONFIG RESETSTAT. The function is also used in order to
  * initialize these fields in clusterInit() at server startup. */
 void resetClusterStats(void) {
+    server.cluster->stat_cluster_links_buffer_limit_exceeded = 0;
     clusterCurrentBus->resetStats();
 }
 sds genClusterInfoString(sds info) {

@@ -125,7 +125,6 @@ typedef struct clusterLegacyState {
     long long stats_bus_messages_sent[CLUSTERMSG_TYPE_COUNT];
     long long stats_bus_messages_received[CLUSTERMSG_TYPE_COUNT];
     long long stats_pfail_nodes;
-    unsigned long long stat_cluster_links_buffer_limit_exceeded;
     unsigned char owner_not_claiming_slot[CLUSTER_SLOTS / 8];
 } clusterLegacyState;
 
@@ -821,7 +820,6 @@ static void clusterLegacyInit(void) {
         LEGACY_STATE()->stats_bus_messages_received[i] = 0;
     }
     LEGACY_STATE()->stats_pfail_nodes = 0;
-    LEGACY_STATE()->stat_cluster_links_buffer_limit_exceeded = 0;
 
     memset(server.cluster->slots, 0, sizeof(server.cluster->slots));
     clusterCloseAllSlots();
@@ -897,7 +895,6 @@ static void clusterLegacyResetStats(void) {
     clusterSlotStatResetAll();
     memset(LEGACY_STATE()->stats_bus_messages_sent, 0, sizeof(LEGACY_STATE()->stats_bus_messages_sent));
     memset(LEGACY_STATE()->stats_bus_messages_received, 0, sizeof(LEGACY_STATE()->stats_bus_messages_received));
-    LEGACY_STATE()->stat_cluster_links_buffer_limit_exceeded = 0;
 }
 
 static void clusterLegacyInitLast(void) {
@@ -3779,22 +3776,13 @@ void clusterReadHandler(connection *conn) {
  * the link to be invalidated, so it is safe to call this function
  * from event handlers that will do stuff with the same link later. */
 void clusterSendMessage(clusterLink *link, clusterMsgSendBlock *msgblock) {
-    if (!link) {
-        return;
-    }
-    if (listLength(link->send_msg_queue) == 0 && getMessageFromSendBlock(msgblock)->totlen != 0)
-        connSetWriteHandlerWithBarrier(link->conn, clusterWriteHandler, 1);
+    if (!link) return;
 
     /* Update the send block data length to the actual message length, which
      * may be smaller than the initially allocated size. */
     msgblock->len = ntohl(getMessageFromSendBlock(msgblock)->totlen);
 
-    listAddNodeTail(link->send_msg_queue, msgblock);
-    msgblock->refcount++;
-
-    /* Update memory tracking */
-    link->send_msg_queue_mem += sizeof(listNode) + msgblock->totlen;
-    server.stat_cluster_links_memory += sizeof(listNode);
+    clusterLinkSendBlock(link, msgblock);
 
     /* Populate sent messages stats. */
     uint16_t type = ntohs(getMessageFromSendBlock(msgblock)->type) & ~CLUSTERMSG_MODIFIER_MASK;
@@ -5223,22 +5211,6 @@ static int clusterNodeCronHandleReconnect(clusterNode *node, mstime_t now, long 
     return 0;
 }
 
-static void freeClusterLinkOnBufferLimitReached(clusterLink *link) {
-    if (link == NULL || server.cluster_link_msg_queue_limit_bytes == 0) {
-        return;
-    }
-
-    unsigned long long mem_link = link->send_msg_queue_mem;
-    if (mem_link > server.cluster_link_msg_queue_limit_bytes) {
-        serverLog(LL_WARNING,
-                  "Freeing cluster link(%s node %.40s (%s), used memory: %llu) due to "
-                  "exceeding send buffer memory limit.",
-                  link->inbound ? "from" : "to", clusterLinkGetNodeName(link), clusterLinkGetHumanNodeName(link), mem_link);
-        freeClusterLink(link);
-        LEGACY_STATE()->stat_cluster_links_buffer_limit_exceeded++;
-    }
-}
-
 /* Free outbound link to a node if its send buffer size exceeded limit. */
 static void clusterNodeCronFreeLinkOnBufferLimitReached(clusterNode *node) {
     freeClusterLinkOnBufferLimitReached(node->link);
@@ -5923,7 +5895,7 @@ static sds clusterLegacyAppendInfoFields(sds info) {
     info = sdscatfmt(info, "cluster_stats_messages_received:%I\r\n", tot_msg_received);
 
     info = sdscatfmt(info, "total_cluster_links_buffer_limit_exceeded:%U\r\n",
-                     (unsigned long long)LEGACY_STATE()->stat_cluster_links_buffer_limit_exceeded);
+                     (unsigned long long)server.cluster->stat_cluster_links_buffer_limit_exceeded);
 
     return info;
 }

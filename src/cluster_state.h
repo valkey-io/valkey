@@ -89,6 +89,7 @@ struct clusterState {
     clusterNode *slots[CLUSTER_SLOTS];
     list *slot_migration_jobs; /* List storing all slot migration jobs. */
     slotStat slot_stats[CLUSTER_SLOTS];
+    unsigned long long stat_cluster_links_buffer_limit_exceeded; /* Total times links freed due to buffer limit. */
     void *protocol_data; /* Protocol-specific state (e.g. clusterLegacyState) */
 };
 

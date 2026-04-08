@@ -45,6 +45,8 @@ void clusterWriteHandler(connection *conn);
 
 char *clusterLinkGetNodeName(clusterLink *link);
 char *clusterLinkGetHumanNodeName(clusterLink *link);
+void clusterLinkSendBlock(clusterLink *link, clusterMsgSendBlock *msgblock);
+int freeClusterLinkOnBufferLimitReached(clusterLink *link);
 
 struct client;
 void clusterCommandLinks(struct client *c);

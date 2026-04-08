@@ -958,6 +958,11 @@ TEST_F(ListpackTest, listpackLpFindInteger) {
     /* String entry "hello" should not match any integer search */
     ASSERT_EQ(lpFindInteger(lp, lpFirst(lp), 0, 0), nullptr);
 
+     /* String "42" and integer 42 should find the same listpack entry */
+    unsigned char *ptr_by_int = lpFindInteger(lp, lpFirst(lp), 42, 0);
+    unsigned char *ptr_by_str = lpFind(lp, lpFirst(lp), (unsigned char *)"42", 2, 0);
+    ASSERT_EQ(ptr_by_int, ptr_by_str);
+
     lpFree(lp);
 }
 

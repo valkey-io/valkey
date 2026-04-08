@@ -697,12 +697,23 @@ unsigned char *lpFindInteger(unsigned char *lp, unsigned char *p, long long v, u
         } else {
             /* Skip entry */
             skipcnt--;
-            uint64_t skip_entry_size;
-            lpGetWithSize(p, &ll, NULL, &skip_entry_size);
-            p += skip_entry_size;
+
+            /* Move to next entry, avoid use `lpNext` due to `lpAssertValidEntry` in
+             * `lpNext` will call `lpBytes`, will cause performance degradation */
+            p = lpSkip(p);
         }
-        /* Safety: ensure we don't walk past the end */
-        if (p >= lp + lp_bytes) break;
+
+        /* The next call to lpGetWithSize could read at most 8 bytes past `p`
+         * We use the slower validation call only when necessary. */
+        if (p + 8 >= lp + lp_bytes)
+            lpAssertValidEntry(lp, lp_bytes, p);
+        else
+            assert(p >= lp + LP_HDR_SIZE && p < lp + lp_bytes);
+        if (unlikely(p[0] == LP_EOF)) {
+            /* EOF must only appear at the end of a listpack. */
+            assert(p + 1 == lp + lp_bytes);
+            break;
+        }
     }
     return NULL;
 }

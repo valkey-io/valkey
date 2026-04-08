@@ -170,6 +170,8 @@ char *clusterLinkGetHumanNodeName(clusterLink *link) {
 
 /* --- CLUSTER LINKS command --- */
 
+/* Add to the output buffer of the given client the description of the given cluster link.
+ * The description is a map with each entry being an attribute of the link. */
 static void addReplyClusterLinkDescription(client *c, clusterLink *link) {
     addReplyMapLen(c, 6);
 
@@ -202,6 +204,8 @@ static void addReplyClusterLinkDescription(client *c, clusterLink *link) {
     addReplyLongLong(c, link->send_msg_queue_mem);
 }
 
+/* Add to the output buffer of the given client an array of cluster link descriptions,
+ * with array entry being a description of a single current cluster link. */
 static void addReplyClusterLinksDescription(client *c) {
     dictIterator *di;
     dictEntry *de;

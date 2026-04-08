@@ -5818,16 +5818,6 @@ int verifyClusterConfigWithData(void) {
 }
 
 /* -----------------------------------------------------------------------------
- * REPLICA nodes handling
- * -------------------------------------------------------------------------- */
-
-/* Add to the output buffer of the given client the description of the given cluster link.
- * The description is a map with each entry being an attribute of the link. */
-
-/* Add to the output buffer of the given client an array of cluster link descriptions,
- * with array entry being a description of a single current cluster link. */
-
-/* -----------------------------------------------------------------------------
  * CLUSTER command
  * -------------------------------------------------------------------------- */
 

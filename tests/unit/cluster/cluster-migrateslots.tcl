@@ -2429,3 +2429,36 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster aofrw} overrides {
         assert_match "OK" [R 2 FLUSHDB SYNC]
     }
 }
+
+start_cluster 3 0 {tags {logreqres:skip external:skip cluster} overrides {cluster-require-full-coverage no slot-migration-max-failover-repl-bytes -1}} {
+    test "slot-migration-max-failover-repl-bytes -1 disables repl bytes limit" {
+        set 16383_slot_tag "{6ZJ}"
+
+        # Use PREVENT-PAUSE to hold the migration at the waiting-to-pause
+        # state so we can fill the replication buffer first.
+        R 2 DEBUG SLOTMIGRATION PREVENT-PAUSE 1
+
+        # Move slot 16383 from R2 to R0.
+        assert_match "OK" [R 2 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE [R 0 CLUSTER MYID]]
+        set jobname [get_job_name 2 16383]
+        wait_for_migration_field 2 $jobname state waiting-to-pause
+
+        # Pause the target (R0) process and generate data to fill the
+        # replication buffer on the source (R2).
+        pause_process [srv 0 pid]
+        set bigstr [string repeat x 1024000]
+        for {set j 0} {$j < 50} {incr j} {
+            R 2 set "$16383_slot_tag:key:$j" $bigstr
+        }
+
+        # Resume the PREVENT-PAUSE.
+        # With slot-migration-max-failover-repl-bytes -1, the source (R2) should proceed
+        # to pause writes regardless of the large replication buffer.
+        R 2 DEBUG SLOTMIGRATION PREVENT-PAUSE 0
+        wait_for_log_messages -2 {"*Pausing writes*"} 0 1000 10
+
+        # Resume R0 and wait for R0 to finish the migration.
+        resume_process [srv 0 pid]
+        wait_for_migration 0 16383
+    }
+}

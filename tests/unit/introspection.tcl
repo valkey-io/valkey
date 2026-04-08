@@ -1956,3 +1956,15 @@ test {CONFIG REWRITE handles alias config properly} {
         assert_equal [r config get hash-max-listpack-entries] {hash-max-listpack-entries 100}
     }
 } {} {external:skip}
+
+test {SIGNED MEMORY CONFIG allows negative number} {
+    start_server {tags {"introspection"}} {
+        r config set slot-migration-max-failover-repl-bytes -1
+        assert_equal [lindex [r config get slot-migration-max-failover-repl-bytes] 1] -1
+        assert_error {*argument must be between -1 and *} {r config set slot-migration-max-failover-repl-bytes -2}
+
+        r config rewrite
+        restart_server 0 true false
+        assert_equal [lindex [r config get slot-migration-max-failover-repl-bytes] 1] -1
+    }
+} {} {external:skip}

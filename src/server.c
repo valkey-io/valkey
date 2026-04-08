@@ -3930,12 +3930,12 @@ void call(client *c, int flags) {
     if (c->flag.argv_borrowed && server.enable_debug_assert) {
         robj **argv = c->original_argv ? c->original_argv : c->argv;
         serverAssert((c->original_argv ? c->original_argc : c->argc) == debug_argc_clone);
-        for (int i = 0; i < c->argc; i++) {
+        for (int i = 0; i < debug_argc_clone; i++) {
             if (argv[i] != debug_argv_clone[i]) {
                 serverLog(LL_WARNING, "Debug: command %s modified argv[%d]", c->cmd->current_name, i);
             }
             serverAssert(debug_argv_clone[i] == argv[i]);
-            if (argv[i]->refcount != debug_argv_refcount[i]) {
+            if (argv[i]->refcount < debug_argv_refcount[i]) {
                 serverLog(LL_WARNING, "Debug: command %s modified argv[%d] refcount, original value: %d, new value: %d",
                           c->cmd->current_name, i, debug_argv_refcount[i], argv[i]->refcount);
             }

@@ -72,6 +72,7 @@ void clusterInit(void) {
     server.cluster->importing_slots_from = dictCreate(&clusterSlotDictType);
     server.cluster->stat_cluster_links_buffer_limit_exceeded = 0;
     server.cluster->safe_to_join = 0;
+    server.cluster->before_sleep_handle_slot_migration = 0;
     server.cluster->protocol_data = NULL;
     memset(server.cluster->slots, 0, sizeof(server.cluster->slots));
     clusterCloseAllSlots();
@@ -148,6 +149,10 @@ void clusterCron(void) {
     clusterCurrentBus->cron();
 }
 void clusterBeforeSleep(void) {
+    if (server.cluster->before_sleep_handle_slot_migration) {
+        server.cluster->before_sleep_handle_slot_migration = 0;
+        clusterSlotMigrationCron();
+    }
     clusterCurrentBus->beforeSleep();
 }
 void clusterHandleServerShutdown(bool auto_failover) {
@@ -223,6 +228,14 @@ void clusterSlotChange(slotRange *ranges, int numranges, clusterNode *target, vo
 
 void clusterCleanupFailoverState(void) {
     clusterCurrentBus->resetManualFailoverState();
+}
+
+void clusterScheduleHandleSlotMigration(void) {
+    server.cluster->before_sleep_handle_slot_migration = 1;
+}
+
+mstime_t clusterComputeMfPauseEnd(void) {
+    return mstime() + server.cluster_mf_timeout * CLUSTER_MF_PAUSE_MULT;
 }
 
 /* Set the specified node 'n' as primary for this node.
@@ -2317,23 +2330,6 @@ void addNodeToNodeReply(client *c, clusterNode *node) {
     }
 
     serverAssert(length == 0);
-}
-
-/* Returns an indication if the node is fully available
- * and should be listed in CLUSTER SLOTS response.
- * Returns 1 for available nodes, 0 for nodes that have
- * not finished their initial sync, in failed state, or are
- * otherwise considered not available to serve read commands. */
-int isNodeAvailable(clusterNode *node) {
-    /* We don't consider PFAIL here because it's not a reliable indicator
-     * for node available and we don't want clients to use it. */
-    if (clusterNodeIsFailing(node)) {
-        return 0;
-    }
-
-    /* Hide empty replicas in here, from a data-path POV, an empty replica
-     * is not available. */
-    return getNodeReplicationOffset(node) != 0;
 }
 
 void addNodeReplyForClusterSlot(client *c, clusterNode *node, int start_slot, int end_slot) {

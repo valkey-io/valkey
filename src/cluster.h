@@ -36,6 +36,9 @@ typedef struct slotRange {
 /* Fixed timeout value for cluster operations (milliseconds) */
 #define CLUSTER_OPERATION_TIMEOUT 2000
 
+/* Manual failover pause multiplier: pause time = timeout * PAUSE_MULT. */
+#define CLUSTER_MF_PAUSE_MULT 2
+
 typedef struct clusterNode clusterNode;
 struct clusterState;
 
@@ -114,7 +117,6 @@ int clusterNodeClientPort(clusterNode *n, int use_tls, client *c);
 char *clusterNodeHostname(clusterNode *node);
 const char *clusterNodePreferredEndpoint(clusterNode *n, client *c);
 clusterNode *clusterLookupNode(const char *name, int length);
-int detectAndUpdateCachedNodeHealth(void);
 client *createCachedResponseClient(int resp);
 void deleteCachedResponseClient(client *recording_client);
 void clearCachedClusterSlotsResponse(void);
@@ -141,7 +143,6 @@ void migrateCommand(client *c);
 void clusterCommand(client *c);
 void clusterKeySlotCommand(client *c);
 ConnectionType *connTypeOfCluster(void);
-int isNodeAvailable(clusterNode *node);
 long long getNodeReplicationOffset(clusterNode *node);
 sds aggregateClientOutputBuffer(client *c);
 void resetClusterStats(void);
@@ -156,10 +157,6 @@ int clusterDecodeOpenSlotsAuxField(int rdbflags, sds s);
 void clusterSlotChange(slotRange *ranges, int numranges, clusterNode *target, void *ctx, void (*callback)(void *ctx, int success));
 void clusterCleanupFailoverState(void);
 void clusterSetPrimary(clusterNode *n, int closeSlots, int full_sync_required);
-/* TODO: The following functions wrap legacy protocol details (CLUSTER_TODO_*
- * flags, manual failover timing). They should be replaced with protocol-agnostic
- * abstractions or moved behind the clusterBusType vtable when slot migration
- * is refactored to support alternative cluster bus implementations. */
 void clusterScheduleHandleSlotMigration(void);
 mstime_t clusterComputeMfPauseEnd(void);
 

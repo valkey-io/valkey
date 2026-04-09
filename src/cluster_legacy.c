@@ -55,7 +55,6 @@
 #define LEGACY_STATE() ((clusterLegacyState *)server.cluster->protocol_data)
 
 /* Legacy-specific defines. */
-#define CLUSTER_MF_PAUSE_MULT 2 /* Primary pause manual failover mult. */
 #define CLUSTER_FAIL_REPORT_VALIDITY_MULT 2  /* Fail report validity. */
 #define CLUSTER_FAIL_UNDO_TIME_MULT 2        /* Undo fail if primary is back. */
 #define CLUSTER_REPLICA_MIGRATION_DELAY 5000 /* Delay for replica migration. */
@@ -67,7 +66,6 @@
 #define CLUSTER_TODO_FSYNC_CONFIG (1 << 3)
 #define CLUSTER_TODO_HANDLE_MANUALFAILOVER (1 << 4)
 #define CLUSTER_TODO_BROADCAST_ALL (1 << 5)
-#define CLUSTER_TODO_HANDLE_SLOT_MIGRATION (1 << 6)
 
 #define CLUSTER_CANT_FAILOVER_NONE 0
 #define CLUSTER_CANT_FAILOVER_DATA_AGE 1
@@ -5356,10 +5354,6 @@ static void clusterLegacyBeforeSleep(void) {
         }
     }
 
-    if (flags & CLUSTER_TODO_HANDLE_SLOT_MIGRATION) {
-        clusterSlotMigrationCron();
-    }
-
     /* Save the config, possibly using fsync. */
     if (flags & CLUSTER_TODO_SAVE_CONFIG) {
         int fsync = flags & CLUSTER_TODO_FSYNC_CONFIG;
@@ -5379,18 +5373,6 @@ void clusterDoBeforeSleep(int flags) {
     if (flags & CLUSTER_TODO_SAVE_CONFIG) clearCachedClusterSlotsResponse();
 
     LEGACY_STATE()->todo_before_sleep |= flags;
-}
-
-void clusterScheduleHandleSlotMigration(void) {
-    clusterDoBeforeSleep(CLUSTER_TODO_HANDLE_SLOT_MIGRATION);
-}
-
-void clusterScheduleSaveAndFsyncConfig(void) {
-    clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_FSYNC_CONFIG);
-}
-
-void clusterScheduleBroadcastAll(void) {
-    clusterDoBeforeSleep(CLUSTER_TODO_BROADCAST_ALL);
 }
 
 static void clusterLegacySlotChange(slotRange *ranges, int numranges, clusterNode *target, void *ctx, void (*callback)(void *ctx, int success)) {
@@ -5430,10 +5412,6 @@ static void clusterLegacySlotChange(slotRange *ranges, int numranges, clusterNod
                              CLUSTER_TODO_SAVE_CONFIG);
     }
     if (callback) callback(ctx, 1);
-}
-
-mstime_t clusterComputeMfPauseEnd(void) {
-    return mstime() + server.cluster_mf_timeout * CLUSTER_MF_PAUSE_MULT;
 }
 
 
@@ -5845,26 +5823,6 @@ static void clusterLegacyFailover(client *c, int force, int takeover) {
 }
 
 
-int detectAndUpdateCachedNodeHealth(void) {
-    dictIterator di;
-    dictInitIterator(&di, server.cluster->nodes);
-    dictEntry *de;
-    clusterNode *node;
-    int overall_health_changed = 0;
-    while ((de = dictNext(&di)) != NULL) {
-        node = dictGetVal(de);
-        int present_is_node_healthy = isNodeAvailable(node);
-        if (present_is_node_healthy != node->is_node_healthy) {
-            overall_health_changed = 1;
-            node->is_node_healthy = present_is_node_healthy;
-        }
-    }
-
-    return overall_health_changed;
-}
-
-
-/* Returns if any slot has been put in IMPORTING state via SETSLOT command. */
 clusterBusType clusterLegacyBus = {
     .init = clusterLegacyInit,
     .initLast = clusterLegacyInitLast,

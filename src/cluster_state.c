@@ -626,3 +626,38 @@ bool isAnySlotInManualImportingState(void) {
 bool isAnySlotInManualMigratingState(void) {
     return dictSize(server.cluster->migrating_slots_to) > 0;
 }
+
+/* Returns an indication if the node is fully available
+ * and should be listed in CLUSTER SLOTS response.
+ * Returns 1 for available nodes, 0 for nodes that have
+ * not finished their initial sync, in failed state, or are
+ * otherwise considered not available to serve read commands. */
+int isNodeAvailable(clusterNode *node) {
+    /* We don't consider PFAIL here because it's not a reliable indicator
+     * for node available and we don't want clients to use it. */
+    if (clusterNodeIsFailing(node)) {
+        return 0;
+    }
+
+    /* Hide empty replicas in here, from a data-path POV, an empty replica
+     * is not available. */
+    return getNodeReplicationOffset(node) != 0;
+}
+
+int detectAndUpdateCachedNodeHealth(void) {
+    dictIterator di;
+    dictInitIterator(&di, server.cluster->nodes);
+    dictEntry *de;
+    clusterNode *node;
+    int overall_health_changed = 0;
+    while ((de = dictNext(&di)) != NULL) {
+        node = dictGetVal(de);
+        int present_is_node_healthy = isNodeAvailable(node);
+        if (present_is_node_healthy != node->is_node_healthy) {
+            overall_health_changed = 1;
+            node->is_node_healthy = present_is_node_healthy;
+        }
+    }
+
+    return overall_health_changed;
+}

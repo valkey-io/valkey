@@ -71,7 +71,6 @@ void clusterInit(void) {
     server.cluster->migrating_slots_to = dictCreate(&clusterSlotDictType);
     server.cluster->importing_slots_from = dictCreate(&clusterSlotDictType);
     server.cluster->stat_cluster_links_buffer_limit_exceeded = 0;
-    server.cluster->safe_to_join = 0;
     server.cluster->before_sleep_handle_slot_migration = 0;
     server.cluster->protocol_data = NULL;
     memset(server.cluster->slots, 0, sizeof(server.cluster->slots));
@@ -2884,7 +2883,7 @@ void clusterscanCommand(client *c) {
 #define CLUSTER_MIN_REJOIN_DELAY 500
 #define CLUSTER_WRITABLE_DELAY 2000
 
-static void clusterLogFailReason(int reason) {
+void clusterLogFailReason(int reason) {
     if (reason == CLUSTER_FAIL_NONE) return;
 
     char *msg;
@@ -2899,113 +2898,6 @@ static void clusterLogFailReason(int reason) {
     default: serverPanic("Unknown fail reason code.");
     }
     serverLog(LL_WARNING, "Cluster is currently down: %s", msg);
-}
-
-void clusterUpdateState(void) {
-    int j, new_state, new_reason;
-    int reachable_primaries = 0;
-    static mstime_t among_minority_time;
-    static mstime_t first_call_time = 0;
-
-    /* If this is a primary node, wait some time before turning the state
-     * into OK, since it is not a good idea to rejoin the cluster as a writable
-     * primary, after a reboot, without giving the cluster a chance to
-     * reconfigure this node. Note that the delay is calculated starting from
-     * the first call to this function and not since the server start, in order
-     * to not count the DB loading time. */
-    if (first_call_time == 0) first_call_time = mstime();
-    if (clusterNodeIsPrimary(myself) && server.cluster->state == CLUSTER_FAIL &&
-        mstime() - first_call_time < CLUSTER_WRITABLE_DELAY) {
-        server.cluster->safe_to_join = 0;
-        return;
-    } else {
-        server.cluster->safe_to_join = 1;
-    }
-
-    /* Start assuming the state is OK. We'll turn it into FAIL if there
-     * are the right conditions. */
-    new_state = CLUSTER_OK;
-    new_reason = CLUSTER_FAIL_NONE;
-
-    /* Check if all the slots are covered. */
-    if (server.cluster_require_full_coverage) {
-        for (j = 0; j < CLUSTER_SLOTS; j++) {
-            if (server.cluster->slots[j] == NULL || server.cluster->slots[j]->flags & (CLUSTER_NODE_FAIL)) {
-                new_state = CLUSTER_FAIL;
-                new_reason = CLUSTER_FAIL_NOT_FULL_COVERAGE;
-                break;
-            }
-        }
-    }
-
-    /* Compute the cluster size, that is the number of primary nodes
-     * serving at least a single slot.
-     *
-     * At the same time count the number of reachable primaries having
-     * at least one slot. */
-    {
-        dictIterator *di;
-        dictEntry *de;
-
-        server.cluster->size = 0;
-        di = dictGetSafeIterator(server.cluster->nodes);
-        while ((de = dictNext(di)) != NULL) {
-            clusterNode *node = dictGetVal(de);
-
-            if (clusterNodeIsVotingPrimary(node)) {
-                server.cluster->size++;
-                if ((node->flags & (CLUSTER_NODE_FAIL | CLUSTER_NODE_PFAIL)) == 0) reachable_primaries++;
-            }
-        }
-        dictReleaseIterator(di);
-    }
-
-    /* If we are in a minority partition, change the cluster state
-     * to FAIL. */
-    {
-        int needed_quorum = (server.cluster->size / 2) + 1;
-
-        if (reachable_primaries < needed_quorum) {
-            new_state = CLUSTER_FAIL;
-            new_reason = CLUSTER_FAIL_MINORITY_PARTITION;
-            among_minority_time = mstime();
-        }
-    }
-
-    /* Log a state change */
-    if (new_state != server.cluster->state) {
-        mstime_t rejoin_delay = server.cluster_node_timeout;
-
-        /* If the instance is a primary and was partitioned away with the
-         * minority, don't let it accept queries for some time after the
-         * partition heals, to make sure there is enough time to receive
-         * a configuration update. */
-        if (rejoin_delay > CLUSTER_MAX_REJOIN_DELAY) rejoin_delay = CLUSTER_MAX_REJOIN_DELAY;
-        if (rejoin_delay < CLUSTER_MIN_REJOIN_DELAY) rejoin_delay = CLUSTER_MIN_REJOIN_DELAY;
-
-        if (new_state == CLUSTER_OK && clusterNodeIsPrimary(myself) && mstime() - among_minority_time < rejoin_delay) {
-            return;
-        }
-
-        /* Change the state and log the event. */
-        serverLog(new_state == CLUSTER_OK ? LL_NOTICE : LL_WARNING, "Cluster state changed: %s",
-                  new_state == CLUSTER_OK ? "ok" : "fail");
-        server.cluster->state = new_state;
-
-        /* Cluster state changes from ok to fail, print a log. */
-        if (new_state == CLUSTER_FAIL) {
-            clusterLogFailReason(new_reason);
-            server.cluster->fail_reason = new_reason;
-        }
-    }
-
-    /* Cluster state is still fail, but the reason has changed, print a log. */
-    if (new_state == CLUSTER_FAIL && new_reason != server.cluster->fail_reason) {
-        clusterLogFailReason(new_reason);
-        server.cluster->fail_reason = new_reason;
-    }
-
-    if (new_state == CLUSTER_OK) server.cluster->fail_reason = CLUSTER_FAIL_NONE;
 }
 
 /* -----------------------------------------------------------------------------

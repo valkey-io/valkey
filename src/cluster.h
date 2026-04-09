@@ -149,7 +149,7 @@ void resetClusterStats(void);
 unsigned int delKeysInSlot(unsigned int hashslot, int lazy, bool propagate_del, bool send_del_event);
 
 unsigned int propagateSlotDeletionByKeys(unsigned int hashslot);
-void clusterUpdateState(void);
+void clusterLogFailReason(int reason);
 sds clusterEncodeOpenSlotsAuxField(int rdbflags);
 int clusterDecodeOpenSlotsAuxField(int rdbflags, sds s);
 

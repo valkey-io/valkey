@@ -1334,9 +1334,7 @@ typedef struct client {
     payloadHeader *last_header; /* Pointer to the last header in a buffer when using copy avoidance */
     int original_argc;          /* Num of arguments of original command if arguments were rewritten. */
     robj **original_argv;       /* Arguments of original command if arguments were rewritten. */
-    int *redact_args;           /* Array of argument indexes that should be redacted in logs. */
-    int redact_args_capacity;   /* Capacity of redact_args array. */
-    int redact_args_count;      /* Number of elements in redact_args array. */
+    uint32_t redact_arg_bitmap; /* Bitmap of argument indexes that should be redacted in logs. */
     /* Client flags and state indicators */
     union {
         uint64_t raw_flag;

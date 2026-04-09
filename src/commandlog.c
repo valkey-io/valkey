@@ -45,9 +45,9 @@ static commandlogEntry *commandlogCreateEntry(client *c, robj **argv, int argc, 
         } else {
             if (clientCommandArgShouldBeRedacted(c, j)) {
                 ce->argv[j] = shared.redacted;
-            /* Trim too long strings as well... */
+                /* Trim too long strings as well... */
             } else if (argv[j]->type == OBJ_STRING && sdsEncodedObject(argv[j]) &&
-                sdslen(objectGetVal(argv[j])) > COMMANDLOG_ENTRY_MAX_STRING) {
+                       sdslen(objectGetVal(argv[j])) > COMMANDLOG_ENTRY_MAX_STRING) {
                 sds s = sdsnewlen(objectGetVal(argv[j]), COMMANDLOG_ENTRY_MAX_STRING);
 
                 s = sdscatprintf(s, "... (%lu more bytes)",

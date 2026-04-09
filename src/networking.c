@@ -316,9 +316,7 @@ client *createClient(connection *conn) {
     c->argv_len_sum = 0;
     c->original_argc = 0;
     c->original_argv = NULL;
-    c->redact_args = NULL;
-    c->redact_args_capacity = 0;
-    c->redact_args_count = 0;
+    c->redact_arg_bitmap = 0;
     c->nread = 0;
     c->read_flags = 0;
     c->write_flags = 0;
@@ -2134,12 +2132,6 @@ void freeClient(client *c) {
 
     freeClientArgv(c);
     freeClientOriginalArgv(c);
-    if (c->redact_args) {
-        zfree(c->redact_args);
-        c->redact_args = NULL;
-        c->redact_args_capacity = 0;
-        c->redact_args_count = 0;
-    }
     discardCommandQueue(c);
     if (c->deferred_reply_errors) listRelease(c->deferred_reply_errors);
     c->deferred_reply_errors = NULL;
@@ -3256,12 +3248,7 @@ void resetClient(client *c) {
 
     freeClientArgv(c);
     freeClientOriginalArgv(c);
-    if (c->redact_args) {
-        zfree(c->redact_args);
-        c->redact_args = NULL;
-        c->redact_args_capacity = 0;
-        c->redact_args_count = 0;
-    }
+    c->redact_arg_bitmap = 0;
     c->cur_script = NULL;
     c->net_input_bytes_curr_cmd = 0;
     c->slot = -1;
@@ -5870,21 +5857,15 @@ static void backupAndUpdateClientArgv(client *c, int new_argc, robj **new_argv) 
 }
 
 bool clientCommandArgShouldBeRedacted(client *c, int arg_index) {
-    for (int i = 0; i < c->redact_args_count; i++) {
-        if (c->redact_args[i] == arg_index) return true;
-    }
-    return false;
+    if (arg_index < 1 || arg_index >= 32) return false;
+    return (c->redact_arg_bitmap >> arg_index) & 1;
 }
 
 /* Redact a given argument to prevent it from being shown
- * in the commandlog. This information is stored in the
- * original_argv array. */
+ * in the commandlog. The argument index is recorded in a bitmap. */
 void redactClientCommandArgument(client *c, int argc) {
-    if (c->redact_args_count == c->redact_args_capacity) {
-        c->redact_args_capacity = c->redact_args_capacity == 0 ? 4 : c->redact_args_capacity * 2;
-        c->redact_args = zrealloc(c->redact_args, sizeof(int) * c->redact_args_capacity);
-    }
-    c->redact_args[c->redact_args_count++] = argc;
+    serverAssert(argc >= 1 && argc < 32);
+    c->redact_arg_bitmap |= (1U << argc);
 }
 
 /* Rewrite the command vector of the client. All the new objects ref count

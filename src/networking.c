@@ -316,6 +316,7 @@ client *createClient(connection *conn) {
     c->argv_len_sum = 0;
     c->original_argc = 0;
     c->original_argv = NULL;
+    c->redact_arg_bitmap = 0;
     c->nread = 0;
     c->read_flags = 0;
     c->write_flags = 0;
@@ -3247,6 +3248,7 @@ void resetClient(client *c) {
 
     freeClientArgv(c);
     freeClientOriginalArgv(c);
+    c->redact_arg_bitmap = 0;
     c->cur_script = NULL;
     c->net_input_bytes_curr_cmd = 0;
     c->slot = -1;
@@ -5854,17 +5856,24 @@ static void backupAndUpdateClientArgv(client *c, int new_argc, robj **new_argv) 
     }
 }
 
+bool clientCommandArgShouldBeRedacted(client *c, int arg_index) {
+    if (arg_index < 1) return false;
+    if (arg_index >= 32) return c->redact_arg_bitmap & 1U;
+    return (c->redact_arg_bitmap >> arg_index) & 1;
+}
+
 /* Redact a given argument to prevent it from being shown
- * in the commandlog. This information is stored in the
- * original_argv array. */
+ * in the commandlog. The argument index is recorded in a bitmap.
+ * For indices in the range [1, 31] the corresponding bit is set.
+ * For indices >= 32, bit 0 is set as a sentinel to indicate that all
+ * arguments beyond the bitmap range should also be redacted. */
 void redactClientCommandArgument(client *c, int argc) {
-    backupAndUpdateClientArgv(c, c->argc, NULL);
-    if (c->original_argv[argc] == shared.redacted) {
-        /* This argument has already been redacted */
-        return;
+    serverAssert(argc >= 1);
+    if (argc < 32) {
+        c->redact_arg_bitmap |= (1U << argc);
+    } else {
+        c->redact_arg_bitmap |= 1U;
     }
-    decrRefCount(c->original_argv[argc]);
-    c->original_argv[argc] = shared.redacted;
 }
 
 /* Rewrite the command vector of the client. All the new objects ref count

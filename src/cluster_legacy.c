@@ -425,13 +425,6 @@ static_assert(offsetof(clusterMsgHeader, notused2) == offsetof(clusterMsg, count
 #include <math.h>
 #include <sys/file.h>
 
-/* A global reference to myself is handy to make code more clear.
- * Myself always points to server.cluster->myself, that is, the clusterNode
- * that represents this node. */
-clusterNode *myself = NULL;
-
-clusterNode *createClusterNode(char *nodename, int flags);
-void clusterAddNode(clusterNode *node);
 void clusterAcceptHandler(aeEventLoop *el, int fd, void *privdata, int mask);
 void clusterReadHandler(connection *conn);
 void clusterSendPing(clusterLink *link, int type);
@@ -789,22 +782,11 @@ static void clusterLegacyUpdateMyselfClientIpV6(void) {
 }
 
 static void clusterLegacyInit(void) {
-    int saveconf = 0;
-
-    server.cluster = zmalloc(sizeof(struct clusterState));
     server.cluster->protocol_data = zmalloc(sizeof(clusterLegacyState));
-    server.cluster->myself = NULL;
     LEGACY_STATE()->currentEpoch = 0;
-    server.cluster->state = CLUSTER_FAIL;
-    server.cluster->fail_reason = CLUSTER_FAIL_NONE;
     LEGACY_STATE()->safe_to_join = 0;
-    server.cluster->size = 0;
     LEGACY_STATE()->todo_before_sleep = 0;
-    server.cluster->nodes = dictCreate(&clusterNodesDictType);
-    server.cluster->shards = dictCreate(&clusterSdsToListType);
     LEGACY_STATE()->nodes_black_list = dictCreate(&clusterNodesBlackListDictType);
-    server.cluster->migrating_slots_to = dictCreate(&clusterSlotDictType);
-    server.cluster->importing_slots_from = dictCreate(&clusterSlotDictType);
     LEGACY_STATE()->failover_auth_time = 0;
     LEGACY_STATE()->failover_auth_count = 0;
     LEGACY_STATE()->failover_auth_rank = 0;
@@ -821,73 +803,11 @@ static void clusterLegacyInit(void) {
     }
     LEGACY_STATE()->stats_pfail_nodes = 0;
 
-    memset(server.cluster->slots, 0, sizeof(server.cluster->slots));
-    clusterCloseAllSlots();
-
     memset(LEGACY_STATE()->owner_not_claiming_slot, 0, sizeof(LEGACY_STATE()->owner_not_claiming_slot));
-
-    /* Lock the cluster config file to make sure every node uses
-     * its own nodes.conf. */
-    server.cluster_config_file_lock_fd = -1;
-    if (clusterLockConfig(server.cluster_configfile) == C_ERR) exit(1);
-
-    /* Load or create a new nodes configuration. */
-    if (clusterLoadConfig(server.cluster_configfile) == C_ERR) {
-        /* No configuration found. We will just use the random name provided
-         * by the createClusterNode() function. */
-        myself = server.cluster->myself = createClusterNode(NULL, CLUSTER_NODE_MYSELF | CLUSTER_NODE_PRIMARY);
-        serverLog(LL_NOTICE, "No cluster configuration found, I'm %.40s", myself->name);
-        clusterAddNode(myself);
-        clusterAddNodeToShard(myself->shard_id, myself);
-        saveconf = 1;
-    }
-    myself = server.cluster->myself;
-    if (saveconf) clusterSaveConfigOrDie(1);
-
-    /* Port sanity check II
-     * The other handshake port check is triggered too late to stop
-     * us from trying to use a too-high cluster port number. */
-    int port = defaultClientPort();
-    if (!server.cluster_port && port > (65535 - CLUSTER_PORT_INCR)) {
-        serverLog(LL_WARNING,
-                  "%s port number too high. "
-                  "Cluster communication port is 10,000 port "
-                  "numbers higher than your %s port. "
-                  "Your %s port number must be 55535 or less.",
-                  SERVER_TITLE, SERVER_TITLE, SERVER_TITLE);
-        exit(1);
-    }
-    if (!server.bindaddr_count) {
-        serverLog(LL_WARNING, "No bind address is configured, but it is required for the Cluster bus.");
-        exit(1);
-    }
-
-    /* Register our own rdb aux fields */
-    serverAssert(rdbRegisterAuxField("cluster-slot-states", clusterEncodeOpenSlotsAuxField,
-                                     clusterDecodeOpenSlotsAuxField) == C_OK);
-
-    /* Initialize list for slot migration jobs. */
-    initClusterSlotMigrationJobList();
-
-    /* Set myself->port/cport/pport to my listening ports, we'll just need to
-     * discover the IP address via MEET messages. */
-    deriveAnnouncedPorts(&myself->tcp_port, &myself->tls_port, &myself->cport,
-                         &myself->announce_client_tcp_port, &myself->announce_client_tls_port);
 
     LEGACY_STATE()->mf_end = 0;
     LEGACY_STATE()->mf_replica = NULL;
-    for (int conn_type = 0; conn_type < CACHE_CONN_TYPE_MAX; conn_type++) {
-        server.cached_cluster_slot_info[conn_type] = NULL;
-    }
     clusterLegacyResetManualFailover();
-    clusterLegacyUpdateMyselfFlags();
-    clusterLegacyUpdateMyselfIp();
-    clusterLegacyUpdateMyselfClientIpV4();
-    clusterLegacyUpdateMyselfClientIpV6();
-    clusterLegacyUpdateMyselfHostname();
-    clusterLegacyUpdateMyselfHumanNodename();
-    clusterLegacyUpdateMyselfAvailabilityZone();
-    clusterLegacyResetStats();
 }
 
 static void clusterLegacyResetStats(void) {

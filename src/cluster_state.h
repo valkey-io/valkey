@@ -129,6 +129,7 @@ void clusterAddNode(clusterNode *node);
 list *clusterGetNodesInMyShard(clusterNode *node);
 
 /* Node creation. */
+extern clusterNode *myself;
 clusterNode *createClusterNode(char *nodename, int flags);
 
 /* Slot assignment. */

@@ -498,6 +498,11 @@ int clusterNodeClearSlotBit(clusterNode *n, int slot) {
  * Node creation
  * -------------------------------------------------------------------------- */
 
+/* A global reference to myself is handy to make code more clear.
+ * Myself always points to server.cluster->myself, that is, the clusterNode
+ * that represents this node. */
+clusterNode *myself = NULL;
+
 clusterNode *createClusterNode(char *nodename, int flags) {
     clusterNode *node = zmalloc(sizeof(*node));
 

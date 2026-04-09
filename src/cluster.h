@@ -156,6 +156,8 @@ unsigned int propagateSlotDeletionByKeys(unsigned int hashslot);
 void clusterUpdateState(void);
 int clusterBumpConfigEpochWithoutConsensus(void);
 void clusterDoBeforeSleep(int flags);
+sds clusterEncodeOpenSlotsAuxField(int rdbflags);
+int clusterDecodeOpenSlotsAuxField(int rdbflags, sds s);
 
 /* Change slot ownerships. See clusterBusType.slotChange. */
 void clusterSlotChange(slotRange *ranges, int numranges, clusterNode *target, void *ctx, void (*callback)(void *ctx, int success));

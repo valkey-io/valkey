@@ -61,8 +61,84 @@ static void clusterCommandFlushslot(client *c);
  * -------------------------------------------------------------------------- */
 
 void clusterInit(void) {
-    clusterCurrentBus->init();
+    server.cluster = zmalloc(sizeof(struct clusterState));
+    server.cluster->myself = NULL;
+    server.cluster->state = CLUSTER_FAIL;
+    server.cluster->fail_reason = CLUSTER_FAIL_NONE;
+    server.cluster->size = 0;
+    server.cluster->nodes = dictCreate(&clusterNodesDictType);
+    server.cluster->shards = dictCreate(&clusterSdsToListType);
+    server.cluster->migrating_slots_to = dictCreate(&clusterSlotDictType);
+    server.cluster->importing_slots_from = dictCreate(&clusterSlotDictType);
     server.cluster->stat_cluster_links_buffer_limit_exceeded = 0;
+    server.cluster->protocol_data = NULL;
+    memset(server.cluster->slots, 0, sizeof(server.cluster->slots));
+    clusterCloseAllSlots();
+
+    /* Protocol-specific init (allocates protocol_data, etc.). */
+    clusterCurrentBus->init();
+
+    /* Lock the cluster config file to make sure every node uses
+     * its own nodes.conf. */
+    server.cluster_config_file_lock_fd = -1;
+    if (clusterLockConfig(server.cluster_configfile) == C_ERR) exit(1);
+
+    /* Load or create a new nodes configuration. */
+    if (clusterLoadConfig(server.cluster_configfile) == C_ERR) {
+        /* No configuration found. We will just use the random name provided
+         * by the createClusterNode() function. */
+        clusterNode *node = createClusterNode(NULL, CLUSTER_NODE_MYSELF | CLUSTER_NODE_PRIMARY);
+        server.cluster->myself = node;
+        serverLog(LL_NOTICE, "No cluster configuration found, I'm %.40s", node->name);
+        clusterAddNode(node);
+        clusterAddNodeToShard(node->shard_id, node);
+        clusterSaveConfigOrDie(1);
+    }
+    myself = server.cluster->myself;
+
+    /* Port sanity check II
+     * The other handshake port check is triggered too late to stop
+     * us from trying to use a too-high cluster port number. */
+    int port = defaultClientPort();
+    if (!server.cluster_port && port > (65535 - CLUSTER_PORT_INCR)) {
+        serverLog(LL_WARNING,
+                  "%s port number too high. "
+                  "Cluster communication port is 10,000 port "
+                  "numbers higher than your %s port. "
+                  "Your %s port number must be 55535 or less.",
+                  SERVER_TITLE, SERVER_TITLE, SERVER_TITLE);
+        exit(1);
+    }
+    if (!server.bindaddr_count) {
+        serverLog(LL_WARNING, "No bind address is configured, but it is required for the Cluster bus.");
+        exit(1);
+    }
+
+    /* Register our own rdb aux fields */
+    serverAssert(rdbRegisterAuxField("cluster-slot-states", clusterEncodeOpenSlotsAuxField,
+                                     clusterDecodeOpenSlotsAuxField) == C_OK);
+
+    /* Initialize list for slot migration jobs. */
+    initClusterSlotMigrationJobList();
+
+    /* Set myself->port/cport/pport to my listening ports, we'll just need to
+     * discover the IP address via MEET messages. */
+    deriveAnnouncedPorts(&myself->tcp_port, &myself->tls_port, &myself->cport,
+                         &myself->announce_client_tcp_port, &myself->announce_client_tls_port);
+
+    for (int conn_type = 0; conn_type < CACHE_CONN_TYPE_MAX; conn_type++) {
+        server.cached_cluster_slot_info[conn_type] = NULL;
+    }
+
+    /* Initialize myself node properties from server config. */
+    clusterUpdateMyselfFlags();
+    clusterUpdateMyselfIp();
+    clusterUpdateMyselfClientIpV4();
+    clusterUpdateMyselfClientIpV6();
+    clusterUpdateMyselfHostname();
+    clusterUpdateMyselfHumanNodename();
+    clusterUpdateMyselfAvailabilityZone();
+    resetClusterStats();
 }
 void clusterInitLast(void) {
     clusterCurrentBus->initLast();

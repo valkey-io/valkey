@@ -10493,7 +10493,7 @@ int VM_RedactClientCommandArgument(ValkeyModuleCtx *ctx, int pos) {
     if (!ctx || !ctx->client || pos <= 0 || ctx->client->argc <= pos) {
         return VALKEYMODULE_ERR;
     }
-    redactClientCommandArgument(ctx->client, pos);
+    redactClientCommandArgument(ctx->client, pos, false);
     return VALKEYMODULE_OK;
 }
 

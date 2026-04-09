@@ -3117,7 +3117,7 @@ void aclCommand(client *c) {
         /* Initially redact all of the arguments to not leak any information
          * about the user. */
         for (int j = 2; j < c->argc; j++) {
-            redactClientCommandArgument(c, j);
+            redactClientCommandArgument(c, j, true);
         }
 
         sds username = objectGetVal(c->argv[2]);
@@ -3143,7 +3143,7 @@ void aclCommand(client *c) {
     } else if (!strcasecmp(sub, "deluser") && c->argc >= 3) {
         /* Initially redact all the arguments to not leak any information
          * about the users. */
-        for (int j = 2; j < c->argc; j++) redactClientCommandArgument(c, j);
+        for (int j = 2; j < c->argc; j++) redactClientCommandArgument(c, j, true);
 
         int deleted = 0;
         for (int j = 2; j < c->argc; j++) {
@@ -3165,7 +3165,7 @@ void aclCommand(client *c) {
         addReplyLongLong(c, deleted);
     } else if (!strcasecmp(sub, "getuser") && c->argc == 3) {
         /* Redact the username to not leak any information about the user. */
-        redactClientCommandArgument(c, 2);
+        redactClientCommandArgument(c, 2, false);
 
         user *u = ACLGetUserByName(objectGetVal(c->argv[2]), sdslen(objectGetVal(c->argv[2])));
         if (u == NULL) {
@@ -3457,7 +3457,7 @@ void authCommand(client *c) {
         return;
     }
     /* Always redact the second argument */
-    redactClientCommandArgument(c, 1);
+    redactClientCommandArgument(c, 1, false);
 
     /* Handle the two different forms here. The form with two arguments
      * will just use "default" as username. */
@@ -3477,7 +3477,7 @@ void authCommand(client *c) {
     } else {
         username = c->argv[1];
         password = c->argv[2];
-        redactClientCommandArgument(c, 2);
+        redactClientCommandArgument(c, 2, false);
     }
 
     robj *err = NULL;

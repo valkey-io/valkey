@@ -653,11 +653,18 @@ void msetexCommand(client *c) {
     /* MSET all the keys. */
     for (int j = 2; j < 2 + numkeys * 2; j += 2) {
         robj *key = c->argv[j];
-        robj *val = tryObjectEncoding(c->argv[j + 1]);
+        robj *val = c->flag.argv_borrowed ? c->argv[j + 1] : tryObjectEncoding(c->argv[j + 1]);
+        if (c->flag.argv_borrowed) {
+            incrRefCount(val);
+        }
         setKey(c, c->db, key, &val, setkey_flags);
         if (expire) val = setExpire(c, c->db, key, milliseconds);
-        c->argv[j + 1] = val;
-        incrRefCount(val);
+        if (c->flag.argv_borrowed) {
+            rewriteClientCommandArgument(c, j + 1, val);
+        } else {
+            c->argv[j + 1] = val;
+            incrRefCount(val);
+        }
         server.dirty++;
         notifyKeyspaceEvent(NOTIFY_STRING, "set", key, c->db->id);
         if (expire) notifyKeyspaceEvent(NOTIFY_GENERIC, "expire", key, c->db->id);

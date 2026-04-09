@@ -4302,8 +4302,7 @@ int clusterProcessPacket(clusterLink *link) {
                         clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_UPDATE_STATE |
                                              CLUSTER_TODO_FSYNC_CONFIG | CLUSTER_TODO_BROADCAST_ALL);
                     } else if (myself->replicaof && myself->replicaof->replicaof &&
-                               myself->replicaof->replicaof != myself &&
-                               nodeFailed(myself->replicaof->replicaof)) {
+                               myself->replicaof->replicaof != myself) {
                         serverLog(LL_NOTICE,
                                   "I'm a sub-replica, but node %.40s (%s) is failed. "
                                   "Keeping my current primary %.40s (%s)",

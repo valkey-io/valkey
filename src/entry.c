@@ -33,7 +33,7 @@
  *                              |
  *     +--------------+---------V------------+----------------------------+
  *     | Expire (opt) |       Field          |      Value                 |
- *     |  long long   | sdshdr8 | "foo" \0   | sdshdr8 "bar" \0 (padding) |
+ *     |  mstime_t    | sdshdr8 | "foo" \0   | sdshdr8 "bar" \0 (padding) |
  *     +--------------+---------+------------+----------------------------+
  *
  *     Identified by: field sds type is SDS_TYPE_8  AND  has embedded value
@@ -49,7 +49,7 @@
  *                                               |
  *     +--------------+---------------+----------V----------+--------+
  *     | Expire (opt) |     Value     |        Field        | / / / /|
- *     |  long long   | sds (pointer) | sdshdr8+ | "foo" \0 |/ / / / |
+ *     |  mstime_t    | sds (pointer) | sdshdr8+ | "foo" \0 |/ / / / |
  *     +--------------+-------+-------+----------+----------+--------+
  *                            |
  *                            +-> sds value
@@ -69,7 +69,7 @@
  *                                                     |
  *     +--------------+---------------------+----------V----------+--------+
  *     | Expire (opt) |        Value        |        Field        | / / / /|
- *     |  long long   | stringRef (pointer) | sdshdr8+ | "foo" \0 |/ / / / |
+ *     |  mstime_t    | stringRef (pointer) | sdshdr8+ | "foo" \0 |/ / / / |
  *     +--------------+----------+----------+----------+----------+--------+
  *                               |
  *                               |
@@ -194,27 +194,27 @@ static void entrySetValueSds(entry *e, sds value) {
 static void *entryGetAllocPtr(const entry *entry) {
     char *buf = sdsAllocPtr(entryGetField(entry));
     if (entryHasValuePtr(entry)) buf -= sizeof(void *);
-    if (entryHasExpiry(entry)) buf -= sizeof(long long);
+    if (entryHasExpiry(entry)) buf -= sizeof(mstime_t);
     return buf;
 }
 
 /**************************************** Entry Expiry API *****************************************/
 /* Returns the location of a pointer to the expiry */
-static long long *entryGetExpiryRef(const entry *entry) {
+static mstime_t *entryGetExpiryRef(const entry *entry) {
     serverAssert(entryHasExpiry(entry));
     char *buf = entryGetAllocPtr(entry);
-    return (long long *)buf;
+    return (mstime_t *)buf;
 }
 
 /* Returns the entry expiration timestamp.
  * In case this entry has no expiration time, will return EXPIRE_NONE. */
-long long entryGetExpiry(const entry *entry) {
+mstime_t entryGetExpiry(const entry *entry) {
     if (entryHasExpiry(entry)) return *entryGetExpiryRef(entry);
     return EXPIRY_NONE;
 }
 
 /* Modify the expiration time of this entry and return a pointer to the (potentially new) entry. */
-entry *entrySetExpiry(entry *e, long long expiry) {
+entry *entrySetExpiry(entry *e, mstime_t expiry) {
     if (expiry != EXPIRY_NONE && entryHasExpiry(e)) {
         *entryGetExpiryRef(e) = expiry;
         return e;
@@ -229,7 +229,7 @@ entry *entrySetExpiry(entry *e, long long expiry) {
 /* Return true in case the entry has assigned expiration and has already expired,
  * or false otherwise. */
 bool entryIsExpired(entry *entry) {
-    long long entry_expiry = entryGetExpiry(entry);
+    mstime_t entry_expiry = entryGetExpiry(entry);
     if (entry_expiry == EXPIRY_NONE) return false;
     return timestampIsExpired(entry_expiry);
 }
@@ -242,13 +242,13 @@ void entryFree(entry *entry) {
 
 static inline size_t entryReqSize(size_t field_len,
                                   size_t value_len,
-                                  long long expiry,
+                                  mstime_t expiry,
                                   bool *is_value_embedded,
                                   int *field_sds_type,
                                   size_t *field_size,
                                   size_t *expiry_size,
                                   size_t *embedded_value_size) {
-    size_t expiry_alloc_size = (expiry == EXPIRY_NONE) ? 0 : sizeof(long long);
+    size_t expiry_alloc_size = (expiry == EXPIRY_NONE) ? 0 : sizeof(mstime_t);
     int embedded_field_sds_type = sdsReqType(field_len);
     if (embedded_field_sds_type == SDS_TYPE_5 && (expiry_alloc_size > 0)) {
         embedded_field_sds_type = SDS_TYPE_8;
@@ -303,7 +303,7 @@ static entry *entryConstruct(size_t alloc_size,
                              const_sds field,
                              sds sds_value,
                              stringRef *stringref_value,
-                             long long expiry,
+                             mstime_t expiry,
                              bool embed_value,
                              int embedded_field_sds_type,
                              size_t expiry_size,
@@ -316,7 +316,7 @@ static entry *entryConstruct(size_t alloc_size,
 
     /* Set the expiry if exists */
     if (expiry_size) {
-        *(long long *)buf = expiry;
+        *(mstime_t *)buf = expiry;
         buf += expiry_size;
         buf_size -= expiry_size;
     }
@@ -347,7 +347,7 @@ static entry *entryConstruct(size_t alloc_size,
 }
 
 /* Takes ownership of value. does not take ownership of field */
-entry *entryCreate(const_sds field, sds value, long long expiry) {
+entry *entryCreate(const_sds field, sds value, mstime_t expiry) {
     bool embed_value = false;
     int embedded_field_sds_type;
     size_t expiry_size, embedded_value_sds_size, embedded_field_sds_size;
@@ -360,8 +360,8 @@ entry *entryCreate(const_sds field, sds value, long long expiry) {
  * The reference points to the provided `buf` but does not assume ownership.
  * It is assumed that an external mechanism will handle releasing any memory which
  * may have been associated with value->buf */
-entry *entryUpdateAsStringRef(entry *e, const char *buf, size_t len, long long expiry) {
-    long long entry_expiry = entryGetExpiry(e);
+entry *entryUpdateAsStringRef(entry *e, const char *buf, size_t len, mstime_t expiry) {
+    mstime_t entry_expiry = entryGetExpiry(e);
     // Check for toggling expiration
     bool expiry_add_remove = (expiry != entry_expiry) && (entry_expiry == EXPIRY_NONE || expiry == EXPIRY_NONE);
     if (entryHasValuePtr(e) && !expiry_add_remove) {
@@ -402,7 +402,7 @@ entry *entryUpdateAsStringRef(entry *e, const char *buf, size_t len, long long e
  * In case the provided value is NULL, will use the existing value.
  * Note that the value ownership is moved to this function and the caller should assume the
  * value is no longer usable after calling this function. */
-entry *entryUpdate(entry *e, sds value, long long expiry) {
+entry *entryUpdate(entry *e, sds value, mstime_t expiry) {
     sds field = entryGetField(e);
     entry *new_entry = NULL;
 
@@ -412,7 +412,7 @@ entry *entryUpdate(entry *e, sds value, long long expiry) {
         return entryUpdateAsStringRef(e, value->buf, value->len, expiry);
     }
     bool update_value = value ? true : false;
-    long long curr_expiration_time = entryGetExpiry(e);
+    mstime_t curr_expiration_time = entryGetExpiry(e);
     bool update_expiry = (expiry != curr_expiration_time) ? true : false;
     /* Just a sanity check. If nothing changes, lets just return */
     if (!update_value && !update_expiry) return e;
@@ -447,7 +447,7 @@ entry *entryUpdate(entry *e, sds value, long long expiry) {
         if (update_expiry) {
             serverAssert(entryHasExpiry(e));
             char *buf = entryGetAllocPtr(e);
-            *(long long *)buf = expiry;
+            *(mstime_t *)buf = expiry;
         }
         /* In this case we are sure we do not have to allocate new entry, so value must already be set or we have enough room to embed it. */
         if (update_value) {
@@ -497,7 +497,7 @@ size_t entryMemUsage(entry *entry) {
 
     if (entryHasEmbeddedValue(entry)) {
         mem += sdsReqSize(sdslen(entryGetField(entry)), sdsType(entryGetField(entry)));
-        if (entryHasExpiry(entry)) mem += sizeof(long long);
+        if (entryHasExpiry(entry)) mem += sizeof(mstime_t);
     } else {
         /* In case the value is not embedded we might not be able to sum all the allocation sizes since the field
          * header could be too small for holding the real allocation size. */

@@ -50,6 +50,7 @@
 #include "mt19937-64.h"
 #include "monotonic.h"
 #include "config.h"
+#include "util.h"
 
 #include <limits.h>
 #include <stdint.h>
@@ -73,6 +74,7 @@ uint64_t siphash_nocase(const uint8_t *in, const size_t inlen, const uint8_t *k)
 
 static uint8_t hash_function_seed[16];
 static hashtableResizePolicy resize_policy = HASHTABLE_RESIZE_ALLOW;
+static bool hashtable_can_abort_shrink = true;
 
 /* --- Fill factor --- */
 
@@ -147,6 +149,12 @@ uint64_t hashtableGenCaseHashFunction(const char *buf, size_t len) {
  */
 void hashtableSetResizePolicy(hashtableResizePolicy policy) {
     resize_policy = policy;
+}
+
+/* Set whether the hashtable can abort shrinking.
+ * Mainly used for debugging and testing. */
+void hashtableSetCanAbortShrink(bool can_abort) {
+    hashtable_can_abort_shrink = can_abort;
 }
 
 /* --- Hash table layout --- */
@@ -388,6 +396,7 @@ static inline bool validateElementIfNeeded(hashtable *ht, void *elem) {
 }
 
 static bucket *findBucketForInsert(hashtable *ht, uint64_t hash, int *pos_in_bucket, int *table_index);
+static bool abortShrinkIfNeeded(hashtable *ht);
 
 static inline void freeEntry(hashtable *ht, void *entry) {
     if (ht->type->entryDestructor) ht->type->entryDestructor(entry);
@@ -397,7 +406,7 @@ static inline int compareKeys(hashtable *ht, const void *key1, const void *key2)
     if (ht->type->keyCompare != NULL) {
         return ht->type->keyCompare(key1, key2);
     } else {
-        return key1 != key2;
+        return key1 == key2;
     }
 }
 
@@ -463,6 +472,23 @@ static signed char nextBucketExp(size_t min_capacity) {
     return CHAR_BIT * sizeof(size_t) - __builtin_clzl(min_buckets - 1);
 }
 
+#define SWAP(a, b, type) \
+    do {                 \
+        type temp = (a); \
+        (a) = (b);       \
+        (b) = temp;      \
+    } while (0)
+
+/* This function swaps ht[0] and ht[1] in the hashtable. */
+static void swapTables(hashtable *ht) {
+    assert(hashtableIsRehashing(ht));
+
+    SWAP(ht->tables[0], ht->tables[1], bucket *);
+    SWAP(ht->used[0], ht->used[1], size_t);
+    SWAP(ht->bucket_exp[0], ht->bucket_exp[1], int8_t);
+    SWAP(ht->child_buckets[0], ht->child_buckets[1], size_t);
+}
+
 /* Swaps the tables and frees the old table. */
 static void rehashingCompleted(hashtable *ht) {
     if (ht->type->rehashingCompleted) ht->type->rehashingCompleted(ht);
@@ -472,10 +498,8 @@ static void rehashingCompleted(hashtable *ht) {
             ht->type->trackMemUsage(ht, -sizeof(bucket) * numBuckets(ht->bucket_exp[0]));
         }
     }
-    ht->bucket_exp[0] = ht->bucket_exp[1];
-    ht->tables[0] = ht->tables[1];
-    ht->used[0] = ht->used[1];
-    ht->child_buckets[0] = ht->child_buckets[1];
+
+    swapTables(ht);
     resetTable(ht, 1);
     ht->rehash_idx = -1;
 }
@@ -777,7 +801,7 @@ static inline int checkCandidateInBucket(hashtable *ht, bucket *b, int pos, cons
     /* It's a candidate. */
     void *entry = b->entries[pos];
     const void *elem_key = entryGetKey(ht, entry);
-    if (compareKeys(ht, key, elem_key) == 0) {
+    if (compareKeys(ht, key, elem_key)) {
         /* It's a match. */
         assert(pos_in_bucket != NULL);
         if (!validateElementIfNeeded(ht, entry)) {
@@ -1062,14 +1086,7 @@ static uint64_t hashtableFingerprint(hashtable *ht) {
     /* Result = hash(hash(hash(int1)+int2)+int3) */
     for (int j = 0; j < 6; j++) {
         hash += integers[j];
-        /* Tomas Wang's 64 bit integer hash. */
-        hash = (~hash) + (hash << 21); /* hash = (hash << 21) - hash - 1; */
-        hash = hash ^ (hash >> 24);
-        hash = (hash + (hash << 3)) + (hash << 8); /* hash * 265 */
-        hash = hash ^ (hash >> 14);
-        hash = (hash + (hash << 2)) + (hash << 4); /* hash * 21 */
-        hash = hash ^ (hash >> 28);
-        hash = hash + (hash << 31);
+        hash = wangHash64(hash);
     }
     return hash;
 }
@@ -1331,7 +1348,7 @@ unsigned hashtableEntriesPerBucket(void) {
 
 /* Returns the size of the hashtable structures, in bytes (not including the sizes
  * of the entries, if the entries are pointers to allocated objects). */
-size_t hashtableMemUsage(hashtable *ht) {
+size_t hashtableMemUsage(const hashtable *ht) {
     size_t num_buckets = numBuckets(ht->bucket_exp[0]) + numBuckets(ht->bucket_exp[1]);
     num_buckets += ht->child_buckets[0] + ht->child_buckets[1];
     size_t metasize = ht->type->getMetadataSize ? ht->type->getMetadataSize() : 0;
@@ -1431,13 +1448,21 @@ bool hashtableTryExpand(hashtable *ht, size_t size) {
  * policy is set to AVOID and not at all if set to FORBID.
  * Returns true if expanding, false if not expanding. */
 bool hashtableExpandIfNeeded(hashtable *ht) {
-    /* Don't expand if rehashing is already in progress. */
     if (hashtableIsRehashing(ht)) {
-        return false;
+        if (ht->bucket_exp[1] >= ht->bucket_exp[0]) {
+            /* Expand already in progress. */
+            return false;
+        } else {
+            /* Shrink in progress, check the fill percent of ht[1] to see if
+             * we need to abort the shrink. */
+            return abortShrinkIfNeeded(ht);
+        }
     }
 
-    size_t min_capacity = ht->used[0] + ht->used[1] + 1;
-    size_t num_buckets = numBuckets(ht->bucket_exp[hashtableIsRehashing(ht) ? 1 : 0]);
+    /* There's no rehashing on going now, check the fill percent of ht[0] to
+     * see if we need to expand. */
+    size_t min_capacity = ht->used[0] + 1;
+    size_t num_buckets = numBuckets(ht->bucket_exp[0]);
     size_t current_capacity = num_buckets * ENTRIES_PER_BUCKET;
     unsigned max_fill_percent = resize_policy == HASHTABLE_RESIZE_ALLOW ? MAX_FILL_PERCENT_SOFT : MAX_FILL_PERCENT_HARD;
     if (min_capacity * 100 <= current_capacity * max_fill_percent) {
@@ -1460,6 +1485,47 @@ bool hashtableShrinkIfNeeded(hashtable *ht) {
         return false;
     }
     return resize(ht, ht->used[0], NULL);
+}
+
+/* Check if ht[1] will overload during the shrink and abort if necessary.
+ *
+ * This function should be called before inserting new entries during
+ * shrink rehashing to prevent ht[1] from becoming severely overloaded.
+ * Currently, it is called in hashtableExpandIfNeeded because we call
+ * it every time an insertion occurs, aborting shrink and switching it
+ * to expand is somehow expand-if-needed.
+ *
+ * Returns true if shrink was aborted, false otherwise. */
+static bool abortShrinkIfNeeded(hashtable *ht) {
+    /* Not allow to abort. */
+    if (!hashtable_can_abort_shrink) {
+        return false;
+    }
+    /* Only check during shrink rehashing. */
+    if (!hashtableIsRehashing(ht) || ht->bucket_exp[1] >= ht->bucket_exp[0]) {
+        return false;
+    }
+    /* It is not safe to abort while safe iterators are active. */
+    if (ht->safe_iterators) {
+        return false;
+    }
+
+    /* Check if ht[1] can hold all elements when shrinking is complete. */
+    size_t num_elements = ht->used[0] + ht->used[1] + 1;
+    size_t ht1_capacity = numBuckets(ht->bucket_exp[1]) * ENTRIES_PER_BUCKET;
+    if (num_elements * 100 <= ht1_capacity * MAX_FILL_PERCENT_HARD) {
+        /* Don't abort shrinking. */
+        return false;
+    }
+
+    /* ht[1] will be overloaded, swap the tables to abort the shrink and
+     * switch it to expand. */
+    swapTables(ht);
+
+    /* Set rehash_idx back to 0 and restart the rehashing. */
+    ht->rehash_idx = 0;
+
+    return true;
 }
 
 /* Resizes the hashtable to an optimal size, based on the current number of
@@ -1813,7 +1879,7 @@ bool hashtableIncrementalFindStep(hashtableIncrementalFindState *state) {
             hashtable *ht = data->hashtable;
             void *entry = data->bucket->entries[data->pos];
             const void *elem_key = entryGetKey(ht, entry);
-            if (compareKeys(ht, data->key, elem_key) == 0) {
+            if (compareKeys(ht, data->key, elem_key)) {
                 /* It's a match. */
                 data->state = HASHTABLE_FOUND;
                 return false;
@@ -2146,11 +2212,12 @@ void hashtableCleanupIterator(hashtableIterator *iterator) {
     if (!(iter->index == -1 && iter->table == 0)) {
         if (isSafe(iter)) {
             hashtableResumeRehashing(iter->hashtable);
-            untrackSafeIterator(iter);
         } else {
             assert(iter->fingerprint == hashtableFingerprint(iter->hashtable));
         }
     }
+    if (isSafe(iter))
+        untrackSafeIterator(iter);
 }
 
 /* Allocates and initializes an iterator. */

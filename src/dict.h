@@ -1,9 +1,7 @@
-/* Hash Tables Implementation.
+/* Dict, a key-value hashtable API.
  *
- * This file implements in-memory hash tables with insert/del/replace/find/
- * get-random-element operations. Hash tables will auto-resize if needed
- * tables of power of two in size are used, collisions are handled by
- * chaining. See the source code for more information... :)
+ * This file implements the dict API as a thin wrapper of the newer hashtable
+ * API. The dictEntry struct is used as the entry type in underlying hashtable.
  *
  * Copyright (c) 2006-2012, Redis Ltd.
  * All rights reserved.
@@ -36,177 +34,265 @@
 #ifndef __DICT_H
 #define __DICT_H
 
-#include "mt19937-64.h"
-#include <limits.h>
+#include "hashtable.h"
+#include "zmalloc.h"
 #include <stdint.h>
-#include <stdlib.h>
 
 #define DICT_OK 0
 #define DICT_ERR 1
 
-/* Hash table parameters */
-#define HASHTABLE_MIN_FILL 8 /* Minimal hash table fill 12.5%(100/8) */
+/* dict is now an alias for hashtable */
+typedef hashtable dict;
+typedef hashtableType dictType;
+typedef hashtableIterator dictIterator;
 
-typedef struct dictEntry dictEntry; /* opaque */
-typedef struct dict dict;
+/* dictEntry represents a key-value pair for use with hashtable */
+typedef struct dictEntry {
+    void *key;
+    union {
+        void *val;
+        uint64_t u64;
+        int64_t s64;
+        double d;
+    } v;
+} dictEntry;
 
-typedef struct dictType {
-    /* Callbacks */
-    uint64_t (*hashFunction)(const void *key);
-    void *(*keyDup)(const void *key);
-    int (*keyCompare)(const void *key1, const void *key2);
-    void (*keyDestructor)(void *key);
-    void (*valDestructor)(void *obj);
-    int (*resizeAllowed)(size_t moreMem, double usedRatio);
-    /* Invoked at the start of dict initialization/rehashing (old and new ht are already created) */
-    void (*rehashingStarted)(dict *d);
-    /* Invoked at the end of dict initialization/rehashing of all the entries from old to new ht. Both ht still exists
-     * and are cleaned up after this callback.  */
-    void (*rehashingCompleted)(dict *d);
-    /* Allow a dict to carry extra caller-defined metadata. The
-     * extra memory is initialized to 0 when a dict is allocated. */
-    size_t (*dictMetadataBytes)(dict *d);
-} dictType;
+#define UNUSED(V) ((void)V)
 
-#define DICTHT_SIZE(exp) ((exp) == -1 ? 0 : (unsigned long)1 << (exp))
-#define DICTHT_SIZE_MASK(exp) ((exp) == -1 ? 0 : (DICTHT_SIZE(exp)) - 1)
+#define dictSize(d) hashtableSize(d)
+#define dictIsEmpty(d) (hashtableSize(d) == 0)
+#define dictIsRehashing(d) hashtableIsRehashing(d)
+#define dictCreate(type) hashtableCreate(type)
+#define dictRelease(d) hashtableRelease(d)
+#define dictEmpty(d, callback) hashtableEmpty(d, callback)
+#define dictGetSomeKeys(d, dst, count) hashtableSampleEntries(d, dst, count)
+#define dictGenHashFunction(key, len) hashtableGenHashFunction(key, len)
+#define dictGenCaseHashFunction(buf, len) hashtableGenCaseHashFunction(buf, len)
+#define dictRehashMicroseconds(d, us) hashtableRehashMicroseconds(d, us)
+#define dictGetIterator(d) hashtableCreateIterator(d, 0)
+#define dictGetSafeIterator(d) hashtableCreateIterator(d, HASHTABLE_ITER_SAFE)
+#define dictReleaseIterator(iter) hashtableReleaseIterator(iter)
+#define dictInitIterator(iter, d) hashtableInitIterator(iter, d, 0)
+#define dictInitSafeIterator(iter, d) hashtableInitIterator(iter, d, HASHTABLE_ITER_SAFE)
+#define dictResetIterator(iter) hashtableCleanupIterator(iter)
 
-struct dict {
-    dictType *type;
-
-    dictEntry **ht_table[2];
-    unsigned long ht_used[2];
-
-    long rehashidx; /* rehashing not in progress if rehashidx == -1 */
-
-    /* Keep small vars at end for optimal (minimal) struct padding */
-    int16_t pauserehash;        /* If >0 rehashing is paused (<0 indicates coding error) */
-    signed char ht_size_exp[2]; /* exponent of size. (size = 1<<exp) */
-    int16_t pauseAutoResize;    /* If >0 automatic resizing is disallowed (<0 indicates coding error) */
-    void *metadata[];
-};
-
-/* If safe is set to 1 this is a safe iterator, that means, you can call
- * dictAdd, dictFind, and other functions against the dictionary even while
- * iterating. Otherwise it is a non safe iterator, and only dictNext()
- * should be called while iterating. */
-typedef struct dictIterator {
-    dict *d;
-    long index;
-    int table, safe;
-    dictEntry *entry, *nextEntry;
-    /* unsafe iterator fingerprint for misuse detection. */
-    unsigned long long fingerprint;
-} dictIterator;
-
-typedef void(dictScanFunction)(void *privdata, const dictEntry *de);
-typedef void *(dictDefragAllocFunction)(void *ptr);
-typedef void(dictDefragEntryCb)(void *privdata, void *ptr);
-typedef struct {
-    dictDefragAllocFunction *defragAlloc; /* Used for entries etc. */
-    dictDefragAllocFunction *defragKey;   /* Defrag-realloc keys (optional) */
-    dictDefragAllocFunction *defragVal;   /* Defrag-realloc values (optional) */
-} dictDefragFunctions;
-
-/* This is the initial size of every hash table */
-#define DICT_HT_INITIAL_EXP 2
-#define DICT_HT_INITIAL_SIZE (1 << (DICT_HT_INITIAL_EXP))
-
-/* ------------------------------- Macros ------------------------------------*/
-static inline int dictCompareKeys(dict *d, const void *key1, const void *key2) {
-    if (d->type->keyCompare) {
-        return d->type->keyCompare(key1, key2);
-    } else {
-        return (key1 == key2);
-    }
+/* Expand the hash table if needed. Returns DICT_OK if expand was performed
+ * or if the dictionary is already large enough, DICT_ERR if expand was not
+ * performed. */
+static inline int dictExpand(dict *d, unsigned long size) {
+    return hashtableExpand(d, size) ? DICT_OK : DICT_ERR;
 }
 
-#define dictMetadata(d) (&(d)->metadata)
-#define dictMetadataSize(d) ((d)->type->dictMetadataBytes ? (d)->type->dictMetadataBytes(d) : 0)
+/* Entry accessor functions */
+static inline void dictSetKey(dict *d, dictEntry *de, void *key) {
+    UNUSED(d);
+    de->key = key;
+}
 
-#define dictHashKey(d, key) ((d)->type->hashFunction(key))
-#define dictBuckets(d) (DICTHT_SIZE((d)->ht_size_exp[0]) + DICTHT_SIZE((d)->ht_size_exp[1]))
-#define dictSize(d) ((d)->ht_used[0] + (d)->ht_used[1])
-#define dictIsEmpty(d) ((d)->ht_used[0] == 0 && (d)->ht_used[1] == 0)
-#define dictIsRehashing(d) ((d)->rehashidx != -1)
-#define dictPauseRehashing(d) ((d)->pauserehash++)
-#define dictResumeRehashing(d) ((d)->pauserehash--)
-#define dictIsRehashingPaused(d) ((d)->pauserehash > 0)
-#define dictPauseAutoResize(d) ((d)->pauseAutoResize++)
-#define dictResumeAutoResize(d) ((d)->pauseAutoResize--)
+static inline void dictSetVal(dict *d, dictEntry *de, void *val) {
+    UNUSED(d);
+    de->v.val = val;
+}
 
-/* If our unsigned long type can store a 64 bit number, use a 64 bit PRNG. */
-#if ULONG_MAX >= 0xffffffffffffffff
-#define randomULong() ((unsigned long)genrand64_int64())
-#else
-#define randomULong() random()
-#endif
+static inline void dictSetSignedIntegerVal(dictEntry *de, int64_t val) {
+    de->v.s64 = val;
+}
 
-typedef enum {
-    DICT_RESIZE_ENABLE,
-    DICT_RESIZE_AVOID,
-    DICT_RESIZE_FORBID,
-} dictResizeEnable;
+static inline void dictSetUnsignedIntegerVal(dictEntry *de, uint64_t val) {
+    de->v.u64 = val;
+}
 
-/* API */
-dict *dictCreate(dictType *type);
-int dictExpand(dict *d, unsigned long size);
-int dictTryExpand(dict *d, unsigned long size);
-int dictShrink(dict *d, unsigned long size);
-int dictAdd(dict *d, void *key, void *val);
-dictEntry *dictAddRaw(dict *d, void *key, dictEntry **existing);
-void *dictFindPositionForInsert(dict *d, const void *key, dictEntry **existing);
-dictEntry *dictInsertAtPosition(dict *d, void *key, void *position);
-dictEntry *dictAddOrFind(dict *d, void *key);
-int dictReplace(dict *d, void *key, void *val);
-int dictDelete(dict *d, const void *key);
-dictEntry *dictUnlink(dict *d, const void *key);
-void dictFreeUnlinkedEntry(dict *d, dictEntry *he);
-void dictRelease(dict *d);
-dictEntry *dictFind(dict *d, const void *key);
-void *dictFetchValue(dict *d, const void *key);
-int dictShrinkIfNeeded(dict *d);
-int dictExpandIfNeeded(dict *d);
-void dictSetKey(dict *d, dictEntry *de, void *key);
-void dictSetVal(dict *d, dictEntry *de, void *val);
-void dictSetSignedIntegerVal(dictEntry *de, int64_t val);
-void dictSetUnsignedIntegerVal(dictEntry *de, uint64_t val);
-void dictSetDoubleVal(dictEntry *de, double val);
-int64_t dictIncrSignedIntegerVal(dictEntry *de, int64_t val);
-uint64_t dictIncrUnsignedIntegerVal(dictEntry *de, uint64_t val);
-double dictIncrDoubleVal(dictEntry *de, double val);
-void *dictGetKey(const dictEntry *de);
-void *dictGetVal(const dictEntry *de);
-int64_t dictGetSignedIntegerVal(const dictEntry *de);
-uint64_t dictGetUnsignedIntegerVal(const dictEntry *de);
-double dictGetDoubleVal(const dictEntry *de);
-double *dictGetDoubleValPtr(dictEntry *de);
-size_t dictMemUsage(const dict *d);
-size_t dictEntryMemUsage(dictEntry *de);
-dictIterator *dictGetIterator(dict *d);
-dictIterator *dictGetSafeIterator(dict *d);
-void dictInitIterator(dictIterator *iter, dict *d);
-void dictInitSafeIterator(dictIterator *iter, dict *d);
-void dictResetIterator(dictIterator *iter);
-dictEntry *dictNext(dictIterator *iter);
-dictEntry *dictGetNext(const dictEntry *de);
-void dictReleaseIterator(dictIterator *iter);
-dictEntry *dictGetRandomKey(dict *d);
-dictEntry *dictGetFairRandomKey(dict *d);
-unsigned int dictGetSomeKeys(dict *d, dictEntry **des, unsigned int count);
-void dictGetStats(char *buf, size_t bufsize, dict *d, int full);
-uint64_t dictGenHashFunction(const void *key, size_t len);
-uint64_t dictGenCaseHashFunction(const unsigned char *buf, size_t len);
-void dictEmpty(dict *d, void(callback)(dict *));
-void dictSetResizeEnabled(dictResizeEnable enable);
-int dictRehash(dict *d, int n);
-int dictRehashMicroseconds(dict *d, uint64_t us);
-void dictSetHashFunctionSeed(uint8_t *seed);
-uint8_t *dictGetHashFunctionSeed(void);
-unsigned long dictScan(dict *d, unsigned long v, dictScanFunction *fn, void *privdata);
-unsigned long
-dictScanDefrag(dict *d, unsigned long v, dictScanFunction *fn, const dictDefragFunctions *defragfns, void *privdata);
-uint64_t dictGetHash(dict *d, const void *key);
-void dictRehashingInfo(dict *d, unsigned long long *from_size, unsigned long long *to_size);
+static inline void dictSetDoubleVal(dictEntry *de, double val) {
+    de->v.d = val;
+}
+
+static inline int64_t dictIncrSignedIntegerVal(dictEntry *de, int64_t val) {
+    de->v.s64 += val;
+    return de->v.s64;
+}
+
+static inline uint64_t dictIncrUnsignedIntegerVal(dictEntry *de, uint64_t val) {
+    de->v.u64 += val;
+    return de->v.u64;
+}
+
+static inline double dictIncrDoubleVal(dictEntry *de, double val) {
+    de->v.d += val;
+    return de->v.d;
+}
+
+static inline void *dictGetKey(const dictEntry *de) {
+    return de->key;
+}
+
+/* Callback for dictType.entryGetKey, which expects void pointers. */
+static inline const void *dictEntryGetKey(const void *entry) {
+    return dictGetKey((const dictEntry *)entry);
+}
+
+static inline void *dictGetVal(const dictEntry *de) {
+    return de->v.val;
+}
+
+static inline int64_t dictGetSignedIntegerVal(const dictEntry *de) {
+    return de->v.s64;
+}
+
+static inline uint64_t dictGetUnsignedIntegerVal(const dictEntry *de) {
+    return de->v.u64;
+}
+
+static inline double dictGetDoubleVal(const dictEntry *de) {
+    return de->v.d;
+}
+
+static inline double *dictGetDoubleValPtr(dictEntry *de) {
+    return &de->v.d;
+}
+
+static inline size_t dictEntryMemUsage(dictEntry *de) {
+    return sizeof(*de);
+}
+
+static inline size_t dictMemUsage(const dict *d) {
+    return hashtableMemUsage(d) + hashtableSize(d) * sizeof(dictEntry);
+}
+
+/* Search for a key in the dictionary. Returns the dictEntry if found,
+ * or NULL if the key doesn't exist. */
+static inline dictEntry *dictFind(dict *d, const void *key) {
+    void *found = NULL;
+    return hashtableFind(d, key, &found) ? (dictEntry *)found : NULL;
+}
+
+/* Fetch the value associated with a key. Returns the value if the key exists,
+ * or NULL if the key doesn't exist. */
+static inline void *dictFetchValue(dict *d, const void *key) {
+    dictEntry *de = dictFind(d, key);
+    return de ? de->v.val : NULL;
+}
+
+/* Remove a key from the dictionary. Returns DICT_OK if the key was found
+ * and removed, DICT_ERR if the key was not found. */
+static inline int dictDelete(dict *d, const void *key) {
+    return hashtableDelete(d, key) ? DICT_OK : DICT_ERR;
+}
+
+/* Free an entry that was previously unlinked with dictUnlink().
+ * It's safe to call this function with de = NULL. */
+static inline void dictFreeUnlinkedEntry(dict *d, dictEntry *de) {
+    if (de == NULL) return;
+    hashtableType *type = hashtableGetType(d);
+    type->entryDestructor(de);
+}
+
+/* Return a random entry from the hash table. */
+static inline dictEntry *dictGetRandomKey(dict *d) {
+    void *entry = NULL;
+    return hashtableRandomEntry(d, &entry) ? (dictEntry *)entry : NULL;
+}
+
+/* A more fair random entry selection that considers chain lengths.
+ * This provides better distribution than dictGetRandomKey(). */
+static inline dictEntry *dictGetFairRandomKey(dict *d) {
+    void *entry = NULL;
+    return hashtableFairRandomEntry(d, &entry) ? (dictEntry *)entry : NULL;
+}
+
+/* Remove an element from the table, but without actually releasing
+ * the key, value and dictionary entry. The dictionary entry is returned
+ * if the element was found (and unlinked from the table), and the user
+ * should later call `dictFreeUnlinkedEntry()` with it in order to release
+ * it. Otherwise if the key is not found, NULL is returned.
+ *
+ * This function is useful when we want to remove something from the hash
+ * table but want to use its value before actually deleting the entry.
+ * Without this function the pattern would require two lookups. */
+static inline dictEntry *dictUnlink(dict *d, const void *key) {
+    void *entry = NULL;
+    return hashtablePop(d, key, &entry) ? (dictEntry *)entry : NULL;
+}
+
+/* Add an entry to the dictionary. */
+static inline int dictAdd(dict *d, void *key, void *val) {
+    hashtablePosition pos;
+    void *existing = NULL;
+
+    if (!hashtableFindPositionForInsert(d, key, &pos, &existing)) {
+        return DICT_ERR; /* Key already exists */
+    }
+
+    dictEntry *entry = (dictEntry *)zmalloc(sizeof(*entry));
+    entry->key = key;
+    entry->v.val = val;
+    hashtableInsertAtPosition(d, entry, &pos);
+    return DICT_OK;
+}
+
+/* Adds a key to the dictionary without setting a value.
+ *
+ * If key already exists, NULL is returned, and "*existing" is populated
+ * with the existing entry if existing is not NULL.
+ *
+ * If key was added, the dictEntry is returned to be manipulated by the
+ * caller. */
+static inline dictEntry *dictAddRaw(dict *d, void *key, dictEntry **existing) {
+    hashtablePosition pos;
+    void *existing_entry = NULL;
+
+    if (!hashtableFindPositionForInsert(d, key, &pos, &existing_entry)) {
+        if (existing) *existing = (dictEntry *)existing_entry;
+        return NULL;
+    }
+
+    dictEntry *entry = (dictEntry *)zmalloc(sizeof(*entry));
+    entry->key = key;
+    hashtableInsertAtPosition(d, entry, &pos);
+    if (existing) *existing = NULL;
+    return entry;
+}
+
+/* Adds a key to the dictionary if it doesn't already exists. Returns the
+ * dictEntry of the key, whether it was just added or not. */
+static inline dictEntry *dictAddOrFind(dict *d, void *key) {
+    dictEntry *existing = NULL;
+    dictEntry *entry = dictAddRaw(d, key, &existing);
+    return entry ? entry : existing;
+}
+
+/* Adds an element to the dictionary. If the key already exists, the old
+ * value is replaced with the new one.
+ *
+ * Always returns 1 to indicate the key was consumed (either added or used
+ * to replace). The caller should not free the key after calling this. */
+static inline int dictReplace(dict *d, void *key, void *val) {
+    dictEntry *entry = (dictEntry *)zmalloc(sizeof(*entry));
+    entry->key = key;
+    entry->v.val = val;
+
+    void *existing = NULL;
+    if (hashtableAddOrFind(d, entry, &existing)) {
+        return 1; /* Entry was added */
+    }
+
+    /* Entry already exists. Put the old value in our new entry and free it. */
+    dictEntry *existing_entry = (dictEntry *)existing;
+    entry->v.val = existing_entry->v.val;
+    hashtableType *type = hashtableGetType(d);
+    type->entryDestructor(entry);
+
+    /* Update the existing entry with the new value. */
+    existing_entry->v.val = val;
+    return 1;
+}
+
+/* Iterator operations */
+static inline dictEntry *dictNext(dictIterator *iter) {
+    void *entry = NULL;
+    if (hashtableNext(iter, &entry)) {
+        return (dictEntry *)entry;
+    }
+    return NULL;
+}
 
 #endif /* __DICT_H */

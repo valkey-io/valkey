@@ -125,7 +125,7 @@ size_t hashtableSize(const hashtable *ht);
 size_t hashtableBuckets(hashtable *ht);
 size_t hashtableChainedBuckets(hashtable *ht, int table);
 unsigned hashtableEntriesPerBucket(void);
-size_t hashtableMemUsage(hashtable *ht);
+size_t hashtableMemUsage(const hashtable *ht);
 void hashtablePauseAutoShrink(hashtable *ht);
 void hashtableResumeAutoShrink(hashtable *ht);
 bool hashtableIsRehashing(hashtable *ht);
@@ -140,6 +140,7 @@ bool hashtableShrinkIfNeeded(hashtable *ht);
 bool hashtableRightsizeIfNeeded(hashtable *ht);
 hashtable *hashtableDefragTables(hashtable *ht, void *(*defragfn)(void *));
 void dismissHashtable(hashtable *ht);
+void hashtableSetCanAbortShrink(bool can_abort);
 
 /* Entries */
 bool hashtableFind(hashtable *ht, const void *key, void **found);

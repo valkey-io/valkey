@@ -32,21 +32,21 @@ start_server {tags {"modules"}} {
         wait_for_blocked_clients_count 0
         assert_equal "1" [$rd1 read]
         pause_process [srv 0 pid]
-        # Queue up three commands
+        # Queue up three commands: hget (non-blocking), hset (blocking), hget (non-blocking)
         $rd1 hget key_10 field_10
         $rd1 hset key_10 value_10 ss
         $rd1 hget key_10 field_10
-        set start [clock milliseconds]; # Record time before unblocking
         resume_process [srv 0 pid]
+        # First hget should return immediately (non-blocking)
         assert_equal "value_10" [$rd1 read]
-        set first_hget [expr [clock milliseconds] - $start];
-        assert_equal "1" [$rd1 read]
-        set first_hset [expr [clock milliseconds] - $start];
-        assert_equal "value_10" [$rd1 read]
-        set second_hget [expr [clock milliseconds] - $start];
-        assert {[expr {$first_hget * 10 < $first_hset}]}
-        assert {[expr {$second_hget - $first_hset <= 50}]}
+        # hset triggers blocking keyspace notification - wait for it to block
+        wait_for_blocked_clients_count 1
+        # Now wait for hset to complete
         wait_for_blocked_clients_count 0
+        assert_equal "1" [$rd1 read]
+        # Second hget returns after hset completes
+        assert_equal "value_10" [$rd1 read]
+        $rd1 close
     }
     test {Blocking keyspace notification with pipelining hget after hset} {
         wait_for_blocked_clients_count 0

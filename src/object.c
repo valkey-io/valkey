@@ -33,6 +33,7 @@
 #include "serverassert.h"
 #include "functions.h"
 #include "intset.h" /* Compact integer set structure */
+#include "util.h"
 #include "vset.h"
 #include "zmalloc.h"
 #include "sds.h"
@@ -236,7 +237,7 @@ static bool shouldEmbedStringObject(size_t val_len, const_sds key, long long exp
     }
     size += (expire != EXPIRY_NONE) * sizeof(long long);
     size += sdsReqSize(val_len, SDS_TYPE_8);
-    return size <= 64;
+    return size <= 128;
 }
 
 /* Create a string object with EMBSTR encoding if it is small, otherwise RAW encoding */
@@ -273,7 +274,6 @@ void *objectGetVal(const robj *o) {
             data += 1 + hdr_size;                /* +1 for header size byte */
             data += sdslen((const_sds)data) + 1; /* +1 for null terminator */
         }
-        assert(o->encoding == OBJ_ENCODING_EMBSTR);
         return data + sdsHdrSize(SDS_TYPE_8);
     } else {
         return o->val_ptr;
@@ -294,9 +294,9 @@ sds objectGetKey(const robj *o) {
     return NULL;
 }
 
-/* Return the expire time of the specified robj, or EXPIRY_NONE if no expire
+/* Return the expire time in ms of the specified robj, or EXPIRY_NONE if no expire
  * is associated with this robj (i.e. the robj is non volatile) */
-long long objectGetExpire(const robj *o) {
+mstime_t objectGetExpire(const robj *o) {
     if (o->hasexpire) {
         const unsigned char *data = objectEmbeddedData((robj *)o);
         return *(long long *)data;
@@ -1404,7 +1404,9 @@ struct serverMemOverhead *getMemoryOverheadData(void) {
         mh->repl_backlog += server.repl_backlog->blocks_index->numnodes * sizeof(raxNode) +
                             raxSize(server.repl_backlog->blocks_index) * sizeof(void *);
     }
+    mh->replicas_repl_buffer = server.pending_repl_data.mem;
     mem_total += mh->repl_backlog;
+    mem_total += mh->replicas_repl_buffer;
     mem_total += mh->clients_replicas;
 
     /* Computing the memory used by the clients would be O(N) if done
@@ -1786,7 +1788,7 @@ void memoryCommand(client *c) {
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "stats") && c->argc == 2) {
         struct serverMemOverhead *mh = getMemoryOverheadData();
 
-        addReplyMapLen(c, 33 + mh->num_dbs);
+        addReplyMapLen(c, 34 + mh->num_dbs);
 
         addReplyBulkCString(c, "peak.allocated");
         addReplyLongLong(c, mh->peak_allocated);
@@ -1799,6 +1801,9 @@ void memoryCommand(client *c) {
 
         addReplyBulkCString(c, "replication.backlog");
         addReplyLongLong(c, mh->repl_backlog);
+
+        addReplyBulkCString(c, "replicas.repl.buffer");
+        addReplyLongLong(c, mh->replicas_repl_buffer);
 
         addReplyBulkCString(c, "clients.slaves");
         addReplyLongLong(c, mh->clients_replicas);

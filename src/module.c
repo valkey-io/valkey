@@ -460,6 +460,7 @@ typedef struct ValkeyModuleKeyOptCtx {
 /* The function signatures for module config get callbacks. These are identical to the ones exposed in valkeymodule.h. */
 typedef ValkeyModuleString *(*ValkeyModuleConfigGetStringFunc)(const char *name, void *privdata);
 typedef long long (*ValkeyModuleConfigGetNumericFunc)(const char *name, void *privdata);
+typedef unsigned long long (*ValkeyModuleConfigGetUnsignedNumericFunc)(const char *name, void *privdata);
 typedef int (*ValkeyModuleConfigGetBoolFunc)(const char *name, void *privdata);
 typedef int (*ValkeyModuleConfigGetEnumFunc)(const char *name, void *privdata);
 /* The function signatures for module config set callbacks. These are identical to the ones exposed in valkeymodule.h. */
@@ -471,6 +472,10 @@ typedef int (*ValkeyModuleConfigSetNumericFunc)(const char *name,
                                                 long long val,
                                                 void *privdata,
                                                 ValkeyModuleString **err);
+typedef int (*ValkeyModuleConfigSetUnsignedNumericFunc)(const char *name,
+                                                        unsigned long long val,
+                                                        void *privdata,
+                                                        ValkeyModuleString **err);
 typedef int (*ValkeyModuleConfigSetBoolFunc)(const char *name, int val, void *privdata, ValkeyModuleString **err);
 typedef int (*ValkeyModuleConfigSetEnumFunc)(const char *name, int val, void *privdata, ValkeyModuleString **err);
 /* Apply signature, identical to valkeymodule.h */
@@ -483,12 +488,14 @@ struct ModuleConfig {
     union get_fn {  /* The get callback specified by the module */
         ValkeyModuleConfigGetStringFunc get_string;
         ValkeyModuleConfigGetNumericFunc get_numeric;
+        ValkeyModuleConfigGetUnsignedNumericFunc get_unsigned_numeric;
         ValkeyModuleConfigGetBoolFunc get_bool;
         ValkeyModuleConfigGetEnumFunc get_enum;
     } get_fn;
     union set_fn { /* The set callback specified by the module */
         ValkeyModuleConfigSetStringFunc set_string;
         ValkeyModuleConfigSetNumericFunc set_numeric;
+        ValkeyModuleConfigSetUnsignedNumericFunc set_unsigned_numeric;
         ValkeyModuleConfigSetBoolFunc set_bool;
         ValkeyModuleConfigSetEnumFunc set_enum;
     } set_fn;
@@ -5056,7 +5063,7 @@ void zsetKeyReset(ValkeyModuleKey *key) {
 void VM_ZsetRangeStop(ValkeyModuleKey *key) {
     if (!key->value || key->value->type != OBJ_ZSET) return;
     /* Free resources if needed. */
-    if (key->u.zset.type == VALKEYMODULE_ZSET_RANGE_LEX) zslFreeLexRange(&key->u.zset.lrs);
+    if (key->u.zset.type == VALKEYMODULE_ZSET_RANGE_LEX) zsetFreeLexRange(&key->u.zset.lrs);
     /* Setup sensible values so that misused iteration API calls when an
      * iterator is not active will result into something more sensible
      * than crashing. */
@@ -5146,7 +5153,7 @@ int zsetInitLexRange(ValkeyModuleKey *key, ValkeyModuleString *min, ValkeyModule
     /* Setup the range structure used by the sorted set core implementation
      * in order to seek at the specified element. */
     zlexrangespec *zlrs = &key->u.zset.lrs;
-    if (zslParseLexRange(min, max, zlrs) == C_ERR) return VALKEYMODULE_ERR;
+    if (zsetParseLexRange(min, max, zlrs) == C_ERR) return VALKEYMODULE_ERR;
 
     /* Set the range type to lex only after successfully parsing the range,
      * otherwise we don't want the zlexrangespec to be freed. */
@@ -7044,6 +7051,13 @@ const char *moduleNameFromCommand(struct serverCommand *cmd) {
 
     ValkeyModuleCommand *cp = cmd->module_cmd;
     return cp->module->name;
+}
+
+ValkeyModule *moduleFromCommand(struct serverCommand *cmd) {
+    serverAssert(cmd->proc == ValkeyModuleCommandDispatcher);
+
+    ValkeyModuleCommand *cp = cmd->module_cmd;
+    return cp->module;
 }
 
 /* Create a copy of a module type value using the copy callback. If failed
@@ -12452,21 +12466,11 @@ size_t moduleGetMemUsage(robj *key, robj *val, size_t sample_size, int dbid) {
 /* server.moduleapi dictionary type. Only uses plain C strings since
  * this gets queries from modules. */
 
-uint64_t dictCStringKeyHash(const void *key) {
-    return dictGenHashFunction((unsigned char *)key, strlen((char *)key));
-}
-
-int dictCStringKeyCompare(const void *key1, const void *key2) {
-    return strcmp(key1, key2) == 0;
-}
-
 dictType moduleAPIDictType = {
-    dictCStringKeyHash,    /* hash function */
-    NULL,                  /* key dup */
-    dictCStringKeyCompare, /* key compare */
-    NULL,                  /* key destructor */
-    NULL,                  /* val destructor */
-    NULL                   /* allow to expand */
+    .entryGetKey = dictEntryGetKey,
+    .hashFunction = dictCStrHash,
+    .keyCompare = dictCStrKeyCompare,
+    .entryDestructor = zfree,
 };
 
 int moduleRegisterApi(const char *funcname, void *funcptr) {
@@ -12489,14 +12493,11 @@ void moduleRegisterCoreAPI(void);
 void moduleInitModulesSystemLast(void) {
 }
 
-
 dictType sdsKeyValueHashDictType = {
-    dictSdsCaseHash,       /* hash function */
-    NULL,                  /* key dup */
-    dictSdsKeyCaseCompare, /* key compare */
-    dictSdsDestructor,     /* key destructor */
-    dictSdsDestructor,     /* val destructor */
-    NULL                   /* allow to expand */
+    .entryGetKey = dictEntryGetKey,
+    .hashFunction = dictSdsCaseHash,
+    .keyCompare = dictSdsKeyCaseCompare,
+    .entryDestructor = dictEntryDestructorSdsKeyValue,
 };
 
 void moduleInitModulesSystem(void) {
@@ -12818,10 +12819,10 @@ int moduleLoad(const char *path, void **module_argv, int module_argc, int is_loa
     }
 
     int dlopen_flags = RTLD_NOW | RTLD_LOCAL;
-#if (defined(__GLIBC__) || defined(__FreeBSD__)) && !defined(VALKEY_ADDRESS_SANITIZER) && __has_include(<dlfcn.h>)
+#if (defined(__GLIBC__) || defined(__FreeBSD__)) && !defined(VALKEY_ADDRESS_SANITIZER) && !defined(VALKEY_THREAD_SANITIZER) && __has_include(<dlfcn.h>)
     /* RTLD_DEEPBIND, which is required for loading modules that contains the
-     * same symbols, does not work with ASAN. Therefore, we exclude
-     * RTLD_DEEPBIND when doing test builds with ASAN.
+     * same symbols, does not work with ASAN or TSAN. Therefore, we exclude
+     * RTLD_DEEPBIND when doing test builds with sanitizers.
      * See https://github.com/google/sanitizers/issues/611 for more details.
      *
      * This flag is also currently only available in Linux and FreeBSD. */
@@ -12934,6 +12935,18 @@ static int moduleUnloadInternal(struct ValkeyModule *module, const char **errmsg
     } else if (moduleHoldsTimer(module)) {
         *errmsg = "the module holds timer that is not fired. "
                   "Please stop the timer or wait until it fires.";
+        return C_ERR;
+    }
+
+    sds acl_rule = NULL;
+    if (ACLModuleHasCommandRules(module, &acl_rule)) {
+        serverLog(LL_WARNING,
+                  "Module %s unload blocked: An ACL user has reference to rule '%s'",
+                  module->name,
+                  acl_rule ? acl_rule : "unknown");
+        if (acl_rule) sdsfree(acl_rule);
+        *errmsg = "one or more ACL users reference commands from this module. "
+                  "Remove those ACL rules before unloading";
         return C_ERR;
     }
 
@@ -13144,11 +13157,11 @@ int isModuleConfigNameRegistered(ValkeyModule *module, const char *name) {
 int moduleVerifyConfigFlags(unsigned int flags, configType type) {
     if ((flags & ~(VALKEYMODULE_CONFIG_DEFAULT | VALKEYMODULE_CONFIG_IMMUTABLE | VALKEYMODULE_CONFIG_SENSITIVE |
                    VALKEYMODULE_CONFIG_HIDDEN | VALKEYMODULE_CONFIG_PROTECTED | VALKEYMODULE_CONFIG_DENY_LOADING |
-                   VALKEYMODULE_CONFIG_BITFLAGS | VALKEYMODULE_CONFIG_MEMORY))) {
+                   VALKEYMODULE_CONFIG_BITFLAGS | VALKEYMODULE_CONFIG_MEMORY | VALKEYMODULE_CONFIG_UNSIGNED))) {
         serverLogRaw(LL_WARNING, "Invalid flag(s) for configuration");
         return VALKEYMODULE_ERR;
     }
-    if (type != NUMERIC_CONFIG && flags & VALKEYMODULE_CONFIG_MEMORY) {
+    if (type != NUMERIC_CONFIG && (flags & (VALKEYMODULE_CONFIG_MEMORY | VALKEYMODULE_CONFIG_UNSIGNED))) {
         serverLogRaw(LL_WARNING, "Numeric flag provided for non-numeric configuration.");
         return VALKEYMODULE_ERR;
     }
@@ -13220,6 +13233,13 @@ int setModuleNumericConfig(ModuleConfig *config, long long val, const char **err
     return return_code == VALKEYMODULE_OK ? 1 : 0;
 }
 
+int setModuleUnsignedNumericConfig(ModuleConfig *config, unsigned long long val, const char **err) {
+    ValkeyModuleString *error = NULL;
+    int return_code = config->set_fn.set_unsigned_numeric(config->name, val, config->privdata, &error);
+    propagateErrorString(error, err);
+    return return_code == VALKEYMODULE_OK ? 1 : 0;
+}
+
 /* This is a series of get functions for each type that act as dispatchers for
  * config.c to call module set callbacks. */
 int getModuleBoolConfig(ModuleConfig *module_config) {
@@ -13237,6 +13257,10 @@ int getModuleEnumConfig(ModuleConfig *module_config) {
 
 long long getModuleNumericConfig(ModuleConfig *module_config) {
     return module_config->get_fn.get_numeric(module_config->name, module_config->privdata);
+}
+
+unsigned long long getModuleUnsignedNumericConfig(ModuleConfig *module_config) {
+    return module_config->get_fn.get_unsigned_numeric(module_config->name, module_config->privdata);
 }
 
 /* This function takes a module and a list of configs stored as sds NAME VALUE pairs.
@@ -13359,6 +13383,7 @@ unsigned int maskModuleConfigFlags(unsigned int flags) {
 unsigned int maskModuleNumericConfigFlags(unsigned int flags) {
     unsigned int new_flags = 0;
     if (flags & VALKEYMODULE_CONFIG_MEMORY) new_flags |= MEMORY_CONFIG;
+    if (flags & VALKEYMODULE_CONFIG_UNSIGNED) new_flags |= UNSIGNED_CONFIG;
     return new_flags;
 }
 
@@ -13580,6 +13605,34 @@ int VM_RegisterNumericConfig(ValkeyModuleCtx *ctx,
     unsigned int numeric_flags = maskModuleNumericConfigFlags(flags);
     flags = maskModuleConfigFlags(flags);
     addModuleNumericConfig(module->name, name, flags, new_config, default_val, numeric_flags, min, max);
+    return VALKEYMODULE_OK;
+}
+
+/*
+ * Create an unsigned integer config that server clients can interact with via the
+ * `CONFIG SET`, `CONFIG GET`, and `CONFIG REWRITE` commands. See
+ * ValkeyModule_RegisterStringConfig for detailed information about configs. */
+int VM_RegisterUnsignedNumericConfig(ValkeyModuleCtx *ctx,
+                                     const char *name,
+                                     unsigned long long default_val,
+                                     unsigned int flags,
+                                     unsigned long long min,
+                                     unsigned long long max,
+                                     ValkeyModuleConfigGetUnsignedNumericFunc getfn,
+                                     ValkeyModuleConfigSetUnsignedNumericFunc setfn,
+                                     ValkeyModuleConfigApplyFunc applyfn,
+                                     void *privdata) {
+    ValkeyModule *module = ctx->module;
+    if (moduleConfigValidityCheck(module, name, flags, NUMERIC_CONFIG)) {
+        return VALKEYMODULE_ERR;
+    }
+    ModuleConfig *new_config = createModuleConfig(name, applyfn, privdata, module);
+    new_config->get_fn.get_unsigned_numeric = getfn;
+    new_config->set_fn.set_unsigned_numeric = setfn;
+    listAddNodeTail(module->module_configs, new_config);
+    unsigned int numeric_flags = maskModuleNumericConfigFlags(flags);
+    flags = maskModuleConfigFlags(flags);
+    addModuleUnsignedNumericConfig(module->name, name, flags, new_config, default_val, numeric_flags, min, max);
     return VALKEYMODULE_OK;
 }
 
@@ -14770,6 +14823,7 @@ void moduleRegisterCoreAPI(void) {
     REGISTER_API(Yield);
     REGISTER_API(RegisterBoolConfig);
     REGISTER_API(RegisterNumericConfig);
+    REGISTER_API(RegisterUnsignedNumericConfig);
     REGISTER_API(RegisterStringConfig);
     REGISTER_API(RegisterEnumConfig);
     REGISTER_API(LoadConfigs);

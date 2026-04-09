@@ -8,6 +8,7 @@
         "container": "CLIENT",
         "function": "clientNoEvictCommand",
         "command_flags": [
+            "ALLOW_BUSY",
             "ADMIN",
             "NOSCRIPT",
             "LOADING",

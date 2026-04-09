@@ -316,6 +316,7 @@ client *createClient(connection *conn) {
     c->argv_len_sum = 0;
     c->original_argc = 0;
     c->original_argv = NULL;
+    c->redact_arg_bitmap = 0;
     c->nread = 0;
     c->read_flags = 0;
     c->write_flags = 0;
@@ -971,6 +972,16 @@ void addReplyErrorSds(client *c, sds err) {
 void addReplyErrorSdsSafe(client *c, sds err) {
     err = sdsmapchars(err, "\r\n", "  ", 2);
     addReplyErrorSdsEx(c, err, 0);
+}
+
+/* Add error reply to the given client.
+ * Supported flags:
+ * ERR_REPLY_FLAG_NO_STATS_UPDATE - indicate not to perform any error stats updates
+ * As a side effect the SDS string is freed. */
+void addReplyErrorSdsExSafe(client *c, sds err, int flags) {
+    err = sdstrim(err, "\r\n");
+    err = sdsmapchars(err, "\r\n", "  ", 2);
+    addReplyErrorSdsEx(c, err, flags);
 }
 
 /* Internal function used by addReplyErrorFormat, addReplyErrorFormatEx and RM_ReplyWithErrorFormat.
@@ -1762,20 +1773,18 @@ void clientAcceptHandler(connection *conn) {
         }
     }
 
-    /* Auto-authenticate from cert_user field if set */
-    sds username = connGetPeerUsername(conn);
-    if (username != NULL) {
-        user *u = ACLGetUserByName(username, sdslen(username));
-        if (u && (u->flags & USER_FLAG_ENABLED)) {
-            clientSetUser(c, u, 1);
-            moduleNotifyUserChanged(c);
-            serverLog(LL_VERBOSE, "TLS: Auto-authenticated client as %s",
-                      server.hide_user_data_from_log ? "*redacted*" : u->name);
-        } else {
-            addACLLogEntry(c, ACL_INVALID_TLS_CERT_AUTH, ACL_LOG_CTX_TOPLEVEL, 0, username, NULL);
-        }
-        sdsfree(username);
+    /* Auto-authenticate from cert user field if set */
+    sds cert_username = NULL;
+    user *u = connGetPeerUser(conn, &cert_username);
+    if (u) {
+        clientSetUser(c, u, 1);
+        moduleNotifyUserChanged(c);
+        serverLog(LL_VERBOSE, "TLS: Auto-authenticated client as %s",
+                  server.hide_user_data_from_log ? "*redacted*" : u->name);
+    } else if (cert_username) {
+        addACLLogEntry(c, ACL_INVALID_TLS_CERT_AUTH, ACL_LOG_CTX_TOPLEVEL, 0, cert_username, NULL);
     }
+    sdsfree(cert_username);
 
     server.stat_numconnections++;
     moduleFireServerEvent(VALKEYMODULE_EVENT_CLIENT_CHANGE, VALKEYMODULE_SUBEVENT_CLIENT_CHANGE_CONNECTED, c);
@@ -3097,12 +3106,14 @@ parseResult handleParseResults(client *c) {
         /* in case the client's query was an empty line we will ignore it and proceed to process the rest of the buffer
          * if any */
         resetClient(c);
+        c->reqtype = 0;
         return PARSE_OK;
     }
 
     if (c->read_flags & READ_FLAGS_PARSING_NEGATIVE_MBULK_LEN) {
         /* Multibulk processing could see a <= 0 length. */
         resetClient(c);
+        c->reqtype = 0;
         return PARSE_OK;
     }
 
@@ -3237,6 +3248,7 @@ void resetClient(client *c) {
 
     freeClientArgv(c);
     freeClientOriginalArgv(c);
+    c->redact_arg_bitmap = 0;
     c->cur_script = NULL;
     c->net_input_bytes_curr_cmd = 0;
     c->slot = -1;
@@ -5844,17 +5856,24 @@ static void backupAndUpdateClientArgv(client *c, int new_argc, robj **new_argv) 
     }
 }
 
+bool clientCommandArgShouldBeRedacted(client *c, int arg_index) {
+    if (arg_index < 1) return false;
+    if (arg_index >= 32) return c->redact_arg_bitmap & 1U;
+    return (c->redact_arg_bitmap >> arg_index) & 1;
+}
+
 /* Redact a given argument to prevent it from being shown
- * in the commandlog. This information is stored in the
- * original_argv array. */
+ * in the commandlog. The argument index is recorded in a bitmap.
+ * For indices in the range [1, 31] the corresponding bit is set.
+ * For indices >= 32, bit 0 is set as a sentinel to indicate that all
+ * arguments beyond the bitmap range should also be redacted. */
 void redactClientCommandArgument(client *c, int argc) {
-    backupAndUpdateClientArgv(c, c->argc, NULL);
-    if (c->original_argv[argc] == shared.redacted) {
-        /* This argument has already been redacted */
-        return;
+    serverAssert(argc >= 1);
+    if (argc < 32) {
+        c->redact_arg_bitmap |= (1U << argc);
+    } else {
+        c->redact_arg_bitmap |= 1U;
     }
-    decrRefCount(c->original_argv[argc]);
-    c->original_argv[argc] = shared.redacted;
 }
 
 /* Rewrite the command vector of the client. All the new objects ref count
@@ -5977,25 +5996,6 @@ size_t getClientMemoryUsage(client *c, size_t *output_buffer_mem_usage) {
     return mem;
 }
 
-/* Get the class of a client, used in order to enforce limits to different
- * classes of clients.
- *
- * The function will return one of the following:
- * CLIENT_TYPE_NORMAL -> Normal client, including MONITOR
- * CLIENT_TYPE_REPLICA  -> replica
- * CLIENT_TYPE_PUBSUB -> Client subscribed to Pub/Sub channels
- * CLIENT_TYPE_PRIMARY -> The client representing our replication primary.
- */
-int getClientType(client *c) {
-    if (c->flag.primary) return CLIENT_TYPE_PRIMARY;
-    /* Even though MONITOR clients are marked as replicas, we
-     * want the expose them as normal clients. */
-    if (c->flag.replica && !c->flag.monitor) return CLIENT_TYPE_REPLICA;
-    if (c->flag.pubsub) return CLIENT_TYPE_PUBSUB;
-    if (c->slot_migration_job) return isImportSlotMigrationJob(c->slot_migration_job) ? CLIENT_TYPE_SLOT_IMPORT : CLIENT_TYPE_SLOT_EXPORT;
-    return CLIENT_TYPE_NORMAL;
-}
-
 int getClientTypeByName(char *name) {
     if (!strcasecmp(name, "normal"))
         return CLIENT_TYPE_NORMAL;
@@ -6011,8 +6011,8 @@ int getClientTypeByName(char *name) {
         return -1;
 }
 
-char *getClientTypeName(int class) {
-    switch (class) {
+char *getClientTypeName(int client_class) {
+    switch (client_class) {
     case CLIENT_TYPE_NORMAL: return "normal";
     case CLIENT_TYPE_REPLICA: return "slave";
     case CLIENT_TYPE_PUBSUB: return "pubsub";
@@ -6556,4 +6556,72 @@ void ioThreadWriteToClient(void *data) {
 
     atomic_thread_fence(memory_order_release);
     c->io_write_state = CLIENT_COMPLETED_IO;
+}
+
+/* ========================== Wrapper Functions for Testing ========================== */
+/* These wrapper functions expose static functions for use in GoogleTest unit tests.
+ * They are non-static wrappers that simply call the corresponding static functions. */
+
+void testOnlyPostWriteToReplica(client *c) {
+    postWriteToReplica(c);
+}
+
+void testOnlyWriteToReplica(client *c) {
+    writeToReplica(c);
+}
+
+void testOnlyBackupAndUpdateClientArgv(client *c, int new_argc, robj **new_argv) {
+    backupAndUpdateClientArgv(c, new_argc, new_argv);
+}
+
+size_t testOnlyUpsertPayloadHeader(char *buf, size_t *bufpos, payloadHeader **last_header, uint8_t type, size_t len, int slot, size_t available) {
+    return upsertPayloadHeader(buf, bufpos, last_header, type, len, slot, 0, available);
+}
+
+int testOnlyIsCopyAvoidPreferred(client *c, robj *obj) {
+    return isCopyAvoidPreferred(c, obj);
+}
+
+size_t testOnlyAddReplyPayloadToBuffer(client *c, const void *payload, size_t len, uint8_t payload_type) {
+    return _addReplyPayloadToBuffer(c, payload, len, payload_type);
+}
+
+size_t testOnlyAddBulkStrRefToBuffer(client *c, const void *payload, size_t len) {
+    return _addBulkStrRefToBuffer(c, payload, len);
+}
+
+void testOnlyAddReplyPayloadToList(client *c, list *reply_list, const char *payload, size_t len, uint8_t payload_type) {
+    _addReplyPayloadToList(c, reply_list, payload, len, payload_type);
+}
+
+void testOnlyAddBulkStrRefToToList(client *c, const void *payload, size_t len) {
+    _addBulkStrRefToToList(c, payload, len);
+}
+
+void testOnlyAddBulkStrRefToBufferOrList(client *c, robj *obj) {
+    _addBulkStrRefToBufferOrList(c, obj);
+}
+
+void testOnlyInitReplyIOV(client *c, int iovsize, struct iovec *iov_arr, char (*prefixes)[BULK_STR_LEN_PREFIX_MAX_SIZE], char *crlf, replyIOV *reply) {
+    initReplyIOV(c, iovsize, iov_arr, prefixes, crlf, reply);
+}
+
+void testOnlyAddPlainBufferToReplyIOV(char *buf, size_t buf_len, replyIOV *reply, bufWriteMetadata *metadata) {
+    addPlainBufferToReplyIOV(buf, buf_len, reply, metadata);
+}
+
+void testOnlyAddBulkStringToReplyIOV(char *buf, size_t buf_len, replyIOV *reply, bufWriteMetadata *metadata) {
+    addBulkStringToReplyIOV(buf, buf_len, reply, metadata);
+}
+
+void testOnlyAddEncodedBufferToReplyIOV(char *buf, size_t bufpos, replyIOV *reply, bufWriteMetadata *metadata) {
+    addEncodedBufferToReplyIOV(buf, bufpos, reply, metadata);
+}
+
+void testOnlyAddBufferToReplyIOV(int encoded, char *buf, size_t bufpos, replyIOV *reply, bufWriteMetadata *metadata) {
+    addBufferToReplyIOV(encoded, buf, bufpos, reply, metadata);
+}
+
+void testOnlySaveLastWrittenBuf(client *c, bufWriteMetadata *metadata, int bufcnt, size_t totlen, size_t totwritten) {
+    saveLastWrittenBuf(c, metadata, bufcnt, totlen, totwritten);
 }

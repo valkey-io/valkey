@@ -56,7 +56,7 @@ static int checkStringLength(client *c, long long size, long long append) {
 }
 
 /* Forward declaration */
-static int getExpireMillisecondsOrReply(client *c, robj *expire, int flags, int unit, long long *milliseconds);
+static int getExpireMillisecondsOrReply(client *c, robj *expire, int flags, int unit, mstime_t *milliseconds);
 
 /* The setGenericCommand() function implements the SET operation with different
  * options and variants. This function is called in order to implement the
@@ -82,7 +82,7 @@ void setGenericCommand(client *c,
                        robj *ok_reply,
                        robj *abort_reply,
                        robj *comparison) {
-    long long milliseconds = 0; /* initialized to avoid any harmness warning */
+    mstime_t milliseconds = 0; /* initialized to avoid any harmness warning */
     int found = 0;
     int setkey_flags = 0;
 
@@ -154,7 +154,15 @@ void setGenericCommand(client *c,
          * EX/PX/EXAT flag. */
         if (!(flags & ARGS_PXAT)) {
             robj *milliseconds_obj = createStringObjectFromLongLong(milliseconds);
-            rewriteClientCommandVector(c, 5, shared.set, key, val, shared.pxat, milliseconds_obj);
+            if (c->cmd->proc == setCommand && c->argc == 5) {
+                /* If the command is in the form of "SET key value EX/PX/EXAT ttl",
+                 * then we don't need to rewrite the entire command vector. */
+                serverAssert(flags & (ARGS_EX | ARGS_PX | ARGS_EXAT));
+                rewriteClientCommandArgument(c, 3, shared.pxat);
+                rewriteClientCommandArgument(c, 4, milliseconds_obj);
+            } else {
+                rewriteClientCommandVector(c, 5, shared.set, key, val, shared.pxat, milliseconds_obj);
+            }
             decrRefCount(milliseconds_obj);
         }
         notifyKeyspaceEvent(NOTIFY_GENERIC, "expire", key, c->db->id);
@@ -198,7 +206,7 @@ cleanup:
  * If return C_OK, "milliseconds" output argument will be set to the resulting absolute timestamp.
  * If return C_ERR, an error reply has been added to the given client.
  */
-static int getExpireMillisecondsOrReply(client *c, robj *expire, int flags, int unit, long long *milliseconds) {
+static int getExpireMillisecondsOrReply(client *c, robj *expire, int flags, int unit, mstime_t *milliseconds) {
     int ret = getLongLongFromObjectOrReply(c, expire, milliseconds, NULL);
     if (ret != C_OK) {
         return ret;
@@ -234,7 +242,7 @@ void setCommand(client *c) {
     int unit = UNIT_SECONDS;
     int flags = ARGS_NO_FLAGS;
 
-    if (parseExtendedCommandArgumentsOrReply(c, &flags, &unit, &expire, &comparison, COMMAND_SET, c->argc) != C_OK) {
+    if (parseExtendedCommandArgumentsOrReply(c, COMMAND_SET, 3, c->argc, &flags, &unit, NULL, &expire, &comparison) != C_OK) {
         return;
     }
 
@@ -320,12 +328,12 @@ void getexCommand(client *c) {
     int unit = UNIT_SECONDS;
     int flags = ARGS_NO_FLAGS;
 
-    if (parseExtendedCommandArgumentsOrReply(c, &flags, &unit, &expire, NULL, COMMAND_GET, c->argc) != C_OK) {
+    if (parseExtendedCommandArgumentsOrReply(c, COMMAND_GET, 2, c->argc, &flags, &unit, NULL, &expire, NULL) != C_OK) {
         return;
     }
 
     /* Validate the expiration time value first */
-    long long milliseconds = 0;
+    mstime_t milliseconds = 0;
     if (expire && getExpireMillisecondsOrReply(c, expire, flags, unit, &milliseconds) != C_OK) {
         return;
     }
@@ -547,12 +555,100 @@ void msetGenericCommand(client *c, int nx) {
     addReply(c, nx ? shared.cone : shared.ok);
 }
 
+/* MSET key value [key value ...] */
 void msetCommand(client *c) {
     msetGenericCommand(c, 0);
 }
 
+/* MSETNX key value [key value ...] */
 void msetnxCommand(client *c) {
     msetGenericCommand(c, 1);
+}
+
+/* MSETEX numkeys key value [key value ...] [NX | XX]
+ *     [EX seconds | PX milliseconds |
+ *      EXAT seconds-timestamp | PXAT milliseconds-timestamp | KEEPTTL] */
+void msetexCommand(client *c) {
+    long numkeys = 0;
+    int unit = UNIT_SECONDS;
+    int expire_idx = -1;
+    robj *expire = NULL;
+    long long milliseconds = 0;
+    int flags = ARGS_NO_FLAGS;
+    int setkey_flags = 0;
+
+    /* Parse the numkeys. */
+    if (getRangeLongFromObjectOrReply(c, c->argv[1], 1, INT_MAX, &numkeys,
+                                      "invalid numkeys value or out of range") != C_OK) {
+        return;
+    }
+
+    /* Parse the optional arguments that follow, our starting index is (2 + numkeys * 2),
+     * that is skipping command name, numkeys token and all the key value pairs. */
+    long long args_start_idx = 2 + (long long)numkeys * 2;
+    if (args_start_idx > c->argc) {
+        addReplyErrorObject(c, shared.syntaxerr);
+        return;
+    }
+    if (parseExtendedCommandArgumentsOrReply(c, COMMAND_MSET, (int)args_start_idx, c->argc,
+                                             &flags, &unit, &expire_idx, &expire, NULL) != C_OK) {
+        return;
+    }
+
+    /* Parse the expiration time and validate the expiration time value first.
+     *
+     * If the `milliseconds` have expired, we can actually avoid setting the keys in the
+     * database, just like we do when handling the SET command. Like we could rewrite it
+     * to DEL xxx xxx, but it will make the code more complicated and it seems excessive.
+     * Currently we will add it to the database and wait for either active expire or lazy
+     * expire to delete it. */
+    if (expire && getExpireMillisecondsOrReply(c, expire, flags, unit, &milliseconds) != C_OK) {
+        return;
+    }
+
+    /* Check NX/XX key-level conditions before setting the keys.
+     * All key-value pairs are located within the range [2, args_start_idx). */
+    if (flags & (ARGS_SET_NX | ARGS_SET_XX)) {
+        for (int j = 2; j < args_start_idx; j += 2) {
+            robj *o = lookupKeyWrite(c->db, c->argv[j]);
+            if (((flags & ARGS_SET_NX) && o != NULL) ||
+                ((flags & ARGS_SET_XX) && o == NULL)) {
+                addReply(c, shared.czero);
+                return;
+            }
+        }
+    }
+
+    /* Setting KEEPTTL flag.
+     *
+     * When expire is not NULL, we avoid deleting the TTL so it can be updated
+     * later instead of being deleted and then created again. */
+    setkey_flags |= (flags & ARGS_KEEPTTL || expire) ? SETKEY_KEEPTTL : 0;
+
+    /* MSET all the keys. */
+    for (int j = 2; j < 2 + numkeys * 2; j += 2) {
+        robj *key = c->argv[j];
+        robj *val = tryObjectEncoding(c->argv[j + 1]);
+        setKey(c, c->db, key, &val, setkey_flags);
+        if (expire) val = setExpire(c, c->db, key, milliseconds);
+        c->argv[j + 1] = val;
+        incrRefCount(val);
+        server.dirty++;
+        notifyKeyspaceEvent(NOTIFY_STRING, "set", key, c->db->id);
+        if (expire) notifyKeyspaceEvent(NOTIFY_GENERIC, "expire", key, c->db->id);
+    }
+
+    /* Propagate as MSETEX numkeys key value PXAT millisecond-timestamp if there is
+     * EX/PX/EXAT flag. */
+    if (expire && !(flags & ARGS_PXAT)) {
+        serverAssert(expire_idx != -1);
+        robj *milliseconds_obj = createStringObjectFromLongLong(milliseconds);
+        rewriteClientCommandArgument(c, expire_idx, shared.pxat);
+        rewriteClientCommandArgument(c, expire_idx + 1, milliseconds_obj);
+        decrRefCount(milliseconds_obj);
+    }
+
+    addReply(c, shared.cone);
 }
 
 void incrDecrCommand(client *c, long long incr) {

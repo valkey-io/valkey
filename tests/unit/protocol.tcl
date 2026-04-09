@@ -316,7 +316,7 @@ start_server {tags {"protocol network"}} {
 
 }
 
-start_server {tags {"protocol hello logreqres:skip"}} {
+start_server {tags {"protocol hello"}} {
     test {HELLO without protover} {
         set reply [r HELLO 3]
         assert_equal [dict get $reply proto] 3
@@ -325,10 +325,10 @@ start_server {tags {"protocol hello logreqres:skip"}} {
         assert_equal [dict get $reply proto] 3
 
         set reply [r HELLO 2]
-        assert_equal [dict get $reply proto] 2
+        assert_equal [dict get $reply proto] [expr $::force_resp3 ? 3 : 2]
 
         set reply [r HELLO]
-        assert_equal [dict get $reply proto] 2
+        assert_equal [dict get $reply proto] [expr $::force_resp3 ? 3 : 2]
     }
 
     test {HELLO and availability-zone} {
@@ -351,6 +351,13 @@ start_server {tags {"protocol hello logreqres:skip"}} {
 }
 
 start_server {tags {"regression"}} {
+    test "Regression for a crash on zero-length multibulk" {
+        reconnect
+        r write "*0\r\nPING\r\n"
+        r flush
+        assert_equal "PONG" [r ping]
+    }
+
     test "Regression for a crash with blocking ops and pipelining" {
         set rd [valkey_deferring_client]
         set fd [r channel]

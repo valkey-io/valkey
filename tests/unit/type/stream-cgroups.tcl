@@ -1479,6 +1479,104 @@ start_server {
         }
     }
 
+    start_server {tags {"external:skip"}} {
+        set master [srv -1 client]
+        set master_host [srv -1 host]
+        set master_port [srv -1 port]
+        set replica [srv 0 client]
+
+        test {XACKDEL replication: ack-only (no deletion) propagates PEL removal to replica} {
+            $replica replicaof $master_host $master_port
+            wait_for_condition 50 100 {
+                [s 0 master_link_status] eq {up}
+            } else {
+                fail "Replication not started."
+            }
+
+            # Two groups both read the message so grp2 blocks deletion in ACKED mode
+            $master DEL stream
+            $master XADD stream 1-0 f v
+            $master XGROUP CREATE stream grp1 0
+            $master XGROUP CREATE stream grp2 0
+            $master XREADGROUP GROUP grp1 alice COUNT 1 STREAMS stream >
+            $master XREADGROUP GROUP grp2 bob COUNT 1 STREAMS stream >
+
+            wait_for_ofs_sync $master $replica
+
+            # Replica should have the pending entry in grp1 before ack
+            assert_equal [llength [$replica XPENDING stream grp1 - + 10]] 1
+
+            # ACKED mode: grp2 still has entry in PEL so deletion is suppressed
+            $master XACKDEL stream grp1 ACKED IDS 1 1-0
+
+            wait_for_ofs_sync $master $replica
+
+            # grp1's PEL entry should be gone, stream entry still present on replica
+            assert_equal [llength [$replica XPENDING stream grp1 - + 10]] 0
+            assert_equal [llength [$replica XRANGE stream - +]] 1
+        }
+
+        test {XACKDEL replication: ACKED mode deletion propagates stream removal to replica} {
+            $replica replicaof $master_host $master_port
+            wait_for_condition 50 100 {
+                [s 0 master_link_status] eq {up}
+            } else {
+                fail "Replication not started."
+            }
+
+            $master DEL stream
+            $master XADD stream 1-0 f v
+            $master XGROUP CREATE stream grp 0
+            $master XREADGROUP GROUP grp alice COUNT 1 STREAMS stream >
+
+            wait_for_ofs_sync $master $replica
+
+            # Replica should have entry in stream and PEL before ack
+            assert_equal [llength [$replica XRANGE stream - +]] 1
+            assert_equal [llength [$replica XPENDING stream grp - + 10]] 1
+
+            # ACKED mode with only one group: triggers deletion
+            $master XACKDEL stream grp ACKED IDS 1 1-0
+
+            wait_for_ofs_sync $master $replica
+
+            # Both PEL entry and stream entry should be gone on replica
+            assert_equal [llength [$replica XPENDING stream grp - + 10]] 0
+            assert_equal [llength [$replica XRANGE stream - +]] 0
+        }
+
+        test {XACKDEL replication: DELREF clears other groups' PELs on replica} {
+            $replica replicaof $master_host $master_port
+            wait_for_condition 50 100 {
+                [s 0 master_link_status] eq {up}
+            } else {
+                fail "Replication not started."
+            }
+
+            $master DEL stream
+            $master XADD stream 1-0 f v
+            $master XGROUP CREATE stream grp1 0
+            $master XGROUP CREATE stream grp2 0
+            $master XREADGROUP GROUP grp1 alice COUNT 1 STREAMS stream >
+            $master XREADGROUP GROUP grp2 bob COUNT 1 STREAMS stream >
+
+            wait_for_ofs_sync $master $replica
+
+            # Both groups should have the entry in their PEL on replica
+            assert_equal [llength [$replica XPENDING stream grp1 - + 10]] 1
+            assert_equal [llength [$replica XPENDING stream grp2 - + 10]] 1
+
+            # DELREF: ack for grp1, force-delete from stream and clear all groups' PELs
+            $master XACKDEL stream grp1 DELREF IDS 1 1-0
+
+            wait_for_ofs_sync $master $replica
+
+            # Stream entry and grp2's PEL entry should both be gone on replica
+            assert_equal [llength [$replica XRANGE stream - +]] 0
+            assert_equal [llength [$replica XPENDING stream grp2 - + 10]] 0
+        }
+    }
+
     start_server {tags {"stream needs:debug"} overrides {appendonly yes aof-use-rdb-preamble no}} {
         test {Empty stream with no lastid can be rewrite into AOF correctly} {
             r XGROUP CREATE mystream group-name $ MKSTREAM

@@ -3558,6 +3558,227 @@ cleanup:
     if (ids != static_ids) zfree(ids);
 }
 
+/* XACKDEL <key> <group> [KEEPREF | DELREF | ACKED] IDS num [<ID1> <ID2> ... <IDN>]
+ *
+ * Acknowledge one or more messages and delete them if all consumer groups have
+ * ack'd. Returns an array of integers equal to the number of ids. For this int
+ * array, -1 means the message does not exist in the stream, 1 means the message
+ * was acknowledged and deleted, and 2 means the message was acknowledged but
+ * not deleted. */
+void xackdelCommand(client *c) {
+    streamCG *group = NULL;
+    robj *o = lookupKeyRead(c->db, c->argv[1]);
+    if (o) {
+        if (checkType(c, o, OBJ_STREAM)) return; /* Type error. */
+        group = streamLookupCG(objectGetVal(o), objectGetVal(c->argv[2]));
+    }
+
+    /* Check what mode is set, if any.
+     * ex. [KEEPREF | DELREF | ACKED] IDS n [ID ...]
+     */
+    int argi = 3;
+    int mode = 0; /* 0=keepref, 1=delref, 2=acked */
+    if (strcasecmp(objectGetVal(c->argv[argi]), "KEEPREF") == 0) {
+        argi += 1;
+        mode = 0;
+    } else if (strcasecmp(objectGetVal(c->argv[argi]), "DELREF") == 0) {
+        argi += 1;
+        mode = 1;
+    } else if (strcasecmp(objectGetVal(c->argv[argi]), "ACKED") == 0) {
+        argi += 1;
+        mode = 2;
+    } else if (strcasecmp(objectGetVal(c->argv[argi]), "IDS") != 0) {
+        addReplyError(c, "xackdel mode not recognized");
+        return;
+    }
+
+    /* Expect IDS token. */
+    if (strcasecmp(objectGetVal(c->argv[argi]), "IDS") != 0) {
+        addReplyError(c, "syntax error");
+        return;
+    }
+    argi++; /* past IDS */
+
+    /* Parse and validate numids: must be a positive integer. */
+    long long id_count;
+    if (getLongLongFromObject(c->argv[argi], &id_count) != C_OK || id_count <= 0) {
+        addReplyError(c, "Number of IDs must be a positive integer");
+        return;
+    }
+    argi++; /* past numids */
+
+    /* Validate numids matches remaining arg count. */
+    long long actual_ids = c->argc - argi;
+    if (id_count > actual_ids) {
+        addReplyError(c, "numids parameter must match the number of IDs provided");
+        return;
+    } else if (id_count < actual_ids) {
+        addReplyError(c, "syntax error");
+        return;
+    }
+
+    /* If missing stream or group, return -1 for each ID. */
+    if (o == NULL || group == NULL) {
+        addReplyArrayLen(c, id_count);
+        for (long long i = 0; i < id_count; i++) {
+            addReplyLongLong(c, -1);
+        }
+        return;
+    }
+
+    stream *s = objectGetVal(o);
+
+    /* Start parsing the IDs, so that we abort ASAP if there is a syntax
+     * error: the return value of this command cannot be an error in case
+     * the client successfully acknowledged some messages, so it should be
+     * executed in a "all or nothing" fashion. */
+    streamID static_ids[STREAMID_STATIC_VECTOR_LEN];
+    streamID *ids = static_ids;
+    if (id_count > STREAMID_STATIC_VECTOR_LEN) ids = zmalloc(sizeof(streamID) * id_count);
+    for (long long j = argi; j < c->argc; j++) {
+        if (streamParseStrictIDOrReply(c, c->argv[j], &ids[j - argi], 0, NULL) != C_OK)
+            goto cleanup;
+    }
+
+    /* Respond with array of counts */
+    addReplyArrayLen(c, id_count);
+
+    int deleted = 0;
+    int first_entry = 0;
+    for (long long j = argi; j < c->argc; j++) {
+        /* Response defaults to stream message not found. This value is also
+         * returned when the consumer group hasn't yet reached this message. */
+        int response = -1;
+
+        streamID *id = &ids[j - argi];
+        unsigned char buf[sizeof(streamID)];
+        streamEncodeID(buf, &ids[j - argi]);
+
+        /* Lookup the ID in the group PEL: it will have a reference to the
+         * NACK structure that will have a reference to the consumer, so that
+         * we are able to remove the entry from both PELs. */
+        void *result;
+        if (raxFind(group->pel, buf, sizeof(buf), &result)) {
+            streamNACK *nack = result;
+            raxRemove(group->pel, buf, sizeof(buf), NULL);
+            raxRemove(nack->consumer->pel, buf, sizeof(buf), NULL);
+            streamFreeNACK(nack);
+            server.dirty++;
+            response = 2; /* Setup response as acked and not deleted */
+        } else {
+            goto response; /* Not in this group's PEL; return -1 with no side effects */
+        }
+
+        /* In ACKED mode, only delete if all other groups have ACK'd */
+        if (mode == 2 && s->cgroups != NULL) {
+            raxIterator ri_cgroups;
+            raxStart(&ri_cgroups, s->cgroups);
+            raxSeek(&ri_cgroups, "^", NULL, 0);
+
+            /* The dreaded, nested loop, is there a better way here for streams
+             * with lots of consumers? */
+            while (raxNext(&ri_cgroups)) {
+                void *result;
+                streamCG *cg = ri_cgroups.data;
+
+                /* Skip the group the command is targeting, this is handled above. */
+                if (cg == group) {
+                    continue;
+                }
+
+                /* Message is not claimed yet */
+                if (streamCompareID(id, &cg->last_id) > 0) {
+                    /* Check if the message exists */
+                    if (streamEntryExists(s, id)) {
+                        /* Acked but not deleted: another group still has a reference. */
+                        response = 2;
+                    }
+
+                    raxStop(&ri_cgroups);
+                    goto response;
+                }
+
+                /* Message is in PEL */
+                if (raxFind(cg->pel, buf, sizeof(buf), &result)) {
+                    raxStop(&ri_cgroups);
+                    goto response;
+                }
+            }
+            raxStop(&ri_cgroups);
+        }
+
+        /* Delete message from the stream */
+        if (streamDeleteItem(s, id)) {
+            /* We want to know if the first entry in the stream was deleted
+             * so we can later set the new one. */
+            if (streamCompareID(id, &s->first_id) == 0) {
+                first_entry = 1;
+            }
+            /* Update the stream's maximal tombstone if needed. */
+            if (streamCompareID(id, &s->max_deleted_entry_id) > 0) {
+                s->max_deleted_entry_id = *id;
+            }
+            deleted++;
+            response = 1; /* Setup response as acked and deleted */
+        } else if (!streamEntryExists(s, id)) {
+            /* Entry was already deleted (e.g., via XDEL). Since the
+             * message is gone and PEL was cleared, report success. */
+            response = 1;
+        }
+
+        /* In DELREF mode, we also delete from all consumer groups's PEL entries */
+        if (mode == 1 && s->cgroups != NULL) {
+            raxIterator ri_cgroups;
+            raxStart(&ri_cgroups, s->cgroups);
+            raxSeek(&ri_cgroups, "^", NULL, 0);
+
+            /* The dreaded, nested loop, is there a better way here for streams
+             * with lots of consumers? */
+            while (raxNext(&ri_cgroups)) {
+                void *result;
+                streamCG *cg = ri_cgroups.data;
+
+                /* Skip the group the command is targeting, this is handled above. */
+                if (cg == group) {
+                    continue;
+                }
+
+                if (raxFind(cg->pel, buf, sizeof(buf), &result)) {
+                    streamNACK *nack = result;
+                    raxRemove(cg->pel, buf, sizeof(buf), NULL);
+                    raxRemove(nack->consumer->pel, buf, sizeof(buf), NULL);
+                    streamFreeNACK(nack);
+                    server.dirty++;
+                }
+            }
+            raxStop(&ri_cgroups);
+        }
+
+    response:
+        addReplyLongLong(c, response);
+    }
+
+    /* Update the stream's first ID. */
+    if (deleted) {
+        if (s->length == 0) {
+            s->first_id.ms = 0;
+            s->first_id.seq = 0;
+        } else if (first_entry) {
+            streamGetEdgeID(s, 1, 1, &s->first_id);
+        }
+    }
+
+    /* Propagate the write if needed. */
+    if (deleted) {
+        signalModifiedKey(c, c->db, c->argv[1]);
+        notifyKeyspaceEvent(NOTIFY_STREAM, "xdel", c->argv[1], c->db->id);
+        server.dirty += deleted;
+    }
+
+cleanup:
+    if (ids != static_ids) zfree(ids);
+}
+
 /* General form: XTRIM <key> [... options ...]
  *
  * List of options:

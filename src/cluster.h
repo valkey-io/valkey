@@ -46,10 +46,6 @@ struct clusterState;
 #define CLUSTER_MODULE_FLAG_NO_FAILOVER (1 << 1)
 #define CLUSTER_MODULE_FLAG_NO_REDIRECTION (1 << 2)
 
-/* For clusterBroadcastPong */
-#define CLUSTER_BROADCAST_ALL 0            /* All known instances. */
-#define CLUSTER_BROADCAST_LOCAL_REPLICAS 1 /* All replicas in my primary-replicas ring. */
-
 /* ---------------------- API exported outside cluster.c -------------------- */
 /* functions requiring mechanism specific implementations */
 void clusterInit(void);
@@ -75,7 +71,6 @@ void clusterUpdateMyselfHumanNodename(void);
 void clusterUpdateMyselfAvailabilityZone(void);
 
 void clusterPropagatePublish(robj *channel, robj *message, int sharded);
-void clusterBroadcastPong(int target);
 
 unsigned long getClusterConnectionsCount(void);
 int isClusterHealthy(void);
@@ -154,8 +149,6 @@ unsigned int delKeysInSlot(unsigned int hashslot, int lazy, bool propagate_del, 
 
 unsigned int propagateSlotDeletionByKeys(unsigned int hashslot);
 void clusterUpdateState(void);
-int clusterBumpConfigEpochWithoutConsensus(void);
-void clusterDoBeforeSleep(int flags);
 sds clusterEncodeOpenSlotsAuxField(int rdbflags);
 int clusterDecodeOpenSlotsAuxField(int rdbflags, sds s);
 
@@ -168,8 +161,6 @@ void clusterSetPrimary(clusterNode *n, int closeSlots, int full_sync_required);
  * abstractions or moved behind the clusterBusType vtable when slot migration
  * is refactored to support alternative cluster bus implementations. */
 void clusterScheduleHandleSlotMigration(void);
-void clusterScheduleSaveAndFsyncConfig(void);
-void clusterScheduleBroadcastAll(void);
 mstime_t clusterComputeMfPauseEnd(void);
 
 #endif /* __CLUSTER_H */

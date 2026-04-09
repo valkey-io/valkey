@@ -71,6 +71,7 @@ void clusterInit(void) {
     server.cluster->migrating_slots_to = dictCreate(&clusterSlotDictType);
     server.cluster->importing_slots_from = dictCreate(&clusterSlotDictType);
     server.cluster->stat_cluster_links_buffer_limit_exceeded = 0;
+    server.cluster->safe_to_join = 0;
     server.cluster->protocol_data = NULL;
     memset(server.cluster->slots, 0, sizeof(server.cluster->slots));
     clusterCloseAllSlots();
@@ -2877,4 +2878,217 @@ void clusterscanCommand(client *c) {
     scanGenericCommand(c, NULL, cursor, slot, cursor_prefix, finished_cursor_prefix);
     sdsfree(cursor_prefix);
     sdsfree(finished_cursor_prefix);
+}
+
+/* -----------------------------------------------------------------------------
+ * Cluster state evaluation
+ * -------------------------------------------------------------------------- */
+
+#define CLUSTER_MAX_REJOIN_DELAY 5000
+#define CLUSTER_MIN_REJOIN_DELAY 500
+#define CLUSTER_WRITABLE_DELAY 2000
+
+static void clusterLogFailReason(int reason) {
+    if (reason == CLUSTER_FAIL_NONE) return;
+
+    char *msg;
+    switch (reason) {
+    case CLUSTER_FAIL_NOT_FULL_COVERAGE:
+        msg = "At least one hash slot is not served by any available node. "
+              "Please check the 'cluster-require-full-coverage' configuration.";
+        break;
+    case CLUSTER_FAIL_MINORITY_PARTITION:
+        msg = "I am part of a minority partition.";
+        break;
+    default: serverPanic("Unknown fail reason code.");
+    }
+    serverLog(LL_WARNING, "Cluster is currently down: %s", msg);
+}
+
+void clusterUpdateState(void) {
+    int j, new_state, new_reason;
+    int reachable_primaries = 0;
+    static mstime_t among_minority_time;
+    static mstime_t first_call_time = 0;
+
+    /* If this is a primary node, wait some time before turning the state
+     * into OK, since it is not a good idea to rejoin the cluster as a writable
+     * primary, after a reboot, without giving the cluster a chance to
+     * reconfigure this node. Note that the delay is calculated starting from
+     * the first call to this function and not since the server start, in order
+     * to not count the DB loading time. */
+    if (first_call_time == 0) first_call_time = mstime();
+    if (clusterNodeIsPrimary(myself) && server.cluster->state == CLUSTER_FAIL &&
+        mstime() - first_call_time < CLUSTER_WRITABLE_DELAY) {
+        server.cluster->safe_to_join = 0;
+        return;
+    } else {
+        server.cluster->safe_to_join = 1;
+    }
+
+    /* Start assuming the state is OK. We'll turn it into FAIL if there
+     * are the right conditions. */
+    new_state = CLUSTER_OK;
+    new_reason = CLUSTER_FAIL_NONE;
+
+    /* Check if all the slots are covered. */
+    if (server.cluster_require_full_coverage) {
+        for (j = 0; j < CLUSTER_SLOTS; j++) {
+            if (server.cluster->slots[j] == NULL || server.cluster->slots[j]->flags & (CLUSTER_NODE_FAIL)) {
+                new_state = CLUSTER_FAIL;
+                new_reason = CLUSTER_FAIL_NOT_FULL_COVERAGE;
+                break;
+            }
+        }
+    }
+
+    /* Compute the cluster size, that is the number of primary nodes
+     * serving at least a single slot.
+     *
+     * At the same time count the number of reachable primaries having
+     * at least one slot. */
+    {
+        dictIterator *di;
+        dictEntry *de;
+
+        server.cluster->size = 0;
+        di = dictGetSafeIterator(server.cluster->nodes);
+        while ((de = dictNext(di)) != NULL) {
+            clusterNode *node = dictGetVal(de);
+
+            if (clusterNodeIsVotingPrimary(node)) {
+                server.cluster->size++;
+                if ((node->flags & (CLUSTER_NODE_FAIL | CLUSTER_NODE_PFAIL)) == 0) reachable_primaries++;
+            }
+        }
+        dictReleaseIterator(di);
+    }
+
+    /* If we are in a minority partition, change the cluster state
+     * to FAIL. */
+    {
+        int needed_quorum = (server.cluster->size / 2) + 1;
+
+        if (reachable_primaries < needed_quorum) {
+            new_state = CLUSTER_FAIL;
+            new_reason = CLUSTER_FAIL_MINORITY_PARTITION;
+            among_minority_time = mstime();
+        }
+    }
+
+    /* Log a state change */
+    if (new_state != server.cluster->state) {
+        mstime_t rejoin_delay = server.cluster_node_timeout;
+
+        /* If the instance is a primary and was partitioned away with the
+         * minority, don't let it accept queries for some time after the
+         * partition heals, to make sure there is enough time to receive
+         * a configuration update. */
+        if (rejoin_delay > CLUSTER_MAX_REJOIN_DELAY) rejoin_delay = CLUSTER_MAX_REJOIN_DELAY;
+        if (rejoin_delay < CLUSTER_MIN_REJOIN_DELAY) rejoin_delay = CLUSTER_MIN_REJOIN_DELAY;
+
+        if (new_state == CLUSTER_OK && clusterNodeIsPrimary(myself) && mstime() - among_minority_time < rejoin_delay) {
+            return;
+        }
+
+        /* Change the state and log the event. */
+        serverLog(new_state == CLUSTER_OK ? LL_NOTICE : LL_WARNING, "Cluster state changed: %s",
+                  new_state == CLUSTER_OK ? "ok" : "fail");
+        server.cluster->state = new_state;
+
+        /* Cluster state changes from ok to fail, print a log. */
+        if (new_state == CLUSTER_FAIL) {
+            clusterLogFailReason(new_reason);
+            server.cluster->fail_reason = new_reason;
+        }
+    }
+
+    /* Cluster state is still fail, but the reason has changed, print a log. */
+    if (new_state == CLUSTER_FAIL && new_reason != server.cluster->fail_reason) {
+        clusterLogFailReason(new_reason);
+        server.cluster->fail_reason = new_reason;
+    }
+
+    if (new_state == CLUSTER_OK) server.cluster->fail_reason = CLUSTER_FAIL_NONE;
+}
+
+/* -----------------------------------------------------------------------------
+ * Open slot state RDB aux field encoding/decoding
+ * -------------------------------------------------------------------------- */
+
+/* Encode open slot states into an sds string to be persisted as an aux field in RDB. */
+sds clusterEncodeOpenSlotsAuxField(int rdbflags) {
+    if (!server.cluster_enabled) return NULL;
+
+    /* Open slots should not be persisted to an RDB file. This data is intended only for full sync. */
+    if ((rdbflags & RDBFLAGS_REPLICATION) == 0) return NULL;
+
+    sds s = NULL;
+
+    for (int i = 0; i < 2; i++) {
+        dict *d = (i == 0) ? server.cluster->importing_slots_from : server.cluster->migrating_slots_to;
+        dictIterator *di = dictGetIterator(d);
+        dictEntry *de;
+        while ((de = dictNext(di)) != NULL) {
+            int slot = (int)(uintptr_t)dictGetKey(de);
+            clusterNode *node = dictGetVal(de);
+            if (s == NULL) s = sdsempty();
+            s = sdscatfmt(s, "%i%s", slot, (i == 0) ? "<" : ">");
+            s = sdscatlen(s, node->name, CLUSTER_NAMELEN);
+            s = sdscatlen(s, ",", 1);
+        }
+        dictReleaseIterator(di);
+    }
+
+    return s;
+}
+
+/* Decode the open slot aux field and restore the in-memory slot states. */
+int clusterDecodeOpenSlotsAuxField(int rdbflags, sds s) {
+    if (!server.cluster_enabled || s == NULL) return C_OK;
+
+    /* Open slots should not be loaded from a persisted RDB file, but only from a full sync. */
+    if ((rdbflags & RDBFLAGS_REPLICATION) == 0) return C_OK;
+
+    while (*s) {
+        /* Extract slot number */
+        int slot = atoi(s);
+        if (slot < 0 || slot >= CLUSTER_SLOTS) return C_ERR;
+
+        while (*s && *s != '<' && *s != '>') s++;
+        if (*s != '<' && *s != '>') return C_ERR;
+
+        /* Determine if it's an importing or migrating slot */
+        int is_importing = (*s == '<');
+        s++;
+
+        /* Extract the node name */
+        char node_name[CLUSTER_NAMELEN];
+        int k = 0;
+        while (*s && *s != ',' && k < CLUSTER_NAMELEN) {
+            node_name[k++] = *s++;
+        }
+
+        /* Ensure the node name is of the correct length */
+        if (k != CLUSTER_NAMELEN || *s != ',') return C_ERR;
+
+        /* Move to the next slot */
+        s++;
+
+        /* Find the corresponding node */
+        clusterNode *node = clusterLookupNode(node_name, CLUSTER_NAMELEN);
+        if (!node) {
+            /* Create a new node if not found */
+            node = createClusterNode(node_name, 0);
+            clusterAddNode(node);
+        }
+
+        /* Set the slot state */
+        if (is_importing) {
+            setImportingSlotSource(slot, node);
+        } else {
+            setMigratingSlotDest(slot, node);
+        }
+    }
+    return C_OK;
 }

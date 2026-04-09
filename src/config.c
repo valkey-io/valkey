@@ -1272,29 +1272,29 @@ int rewriteConfigRewriteLine(struct rewriteConfigState *state, const char *optio
     return 1;
 }
 
-/* Write the long long 'bytes' value as a string in a way that is parsable
+/* Write the unsigned long long 'bytes' value as a string in a way that is parsable
  * inside valkey.conf. If possible uses the GB, MB, KB notation. */
-int rewriteConfigFormatMemory(char *buf, size_t len, long long bytes) {
+int rewriteConfigFormatMemory(char *buf, size_t len, unsigned long long bytes) {
     int gb = 1024 * 1024 * 1024;
     int mb = 1024 * 1024;
     int kb = 1024;
 
     if (bytes && (bytes % gb) == 0) {
-        return snprintf(buf, len, "%lldgb", bytes / gb);
+        return snprintf(buf, len, "%llugb", bytes / gb);
     } else if (bytes && (bytes % mb) == 0) {
-        return snprintf(buf, len, "%lldmb", bytes / mb);
+        return snprintf(buf, len, "%llumb", bytes / mb);
     } else if (bytes && (bytes % kb) == 0) {
-        return snprintf(buf, len, "%lldkb", bytes / kb);
+        return snprintf(buf, len, "%llukb", bytes / kb);
     } else {
-        return snprintf(buf, len, "%lld", bytes);
+        return snprintf(buf, len, "%llu", bytes);
     }
 }
 
 /* Rewrite a simple "option-name <bytes>" configuration option. */
 void rewriteConfigBytesOption(struct rewriteConfigState *state,
                               const char *option,
-                              long long value,
-                              long long defvalue) {
+                              unsigned long long value,
+                              unsigned long long defvalue) {
     char buf[64];
     int force = value != defvalue;
     sds line;

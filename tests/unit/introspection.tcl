@@ -1964,6 +1964,19 @@ test {CONFIG REWRITE handles alias config properly} {
     }
 } {} {external:skip}
 
+test {CONFIG REWRITE handles large unsigned memory config values} {
+    start_server {tags {"introspection"}} {
+        r config set maxmemory 9223372036854775808
+        r config set maxmemory-clients 100%
+
+        r config rewrite
+        restart_server 0 true false
+
+        assert_equal [lindex [r config get maxmemory] 1] 9223372036854775808
+        assert_equal [lindex [r config get maxmemory-clients] 1] 100%
+    }
+} {} {external:skip}
+
 test {SIGNED MEMORY CONFIG allows negative number} {
     start_server {tags {"introspection"}} {
         r config set slot-migration-max-failover-repl-bytes -1

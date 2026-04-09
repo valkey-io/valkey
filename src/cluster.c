@@ -461,16 +461,16 @@ void migrateCommand(client *c) {
             }
             j++;
             password = objectGetVal(c->argv[j]);
-            redactClientCommandArgument(c, j, false);
+            redactClientCommandArgument(c, j);
         } else if (!strcasecmp(objectGetVal(c->argv[j]), "auth2")) {
             if (moreargs < 2) {
                 addReplyErrorObject(c, shared.syntaxerr);
                 return;
             }
             username = objectGetVal(c->argv[++j]);
-            redactClientCommandArgument(c, j, false);
+            redactClientCommandArgument(c, j);
             password = objectGetVal(c->argv[++j]);
-            redactClientCommandArgument(c, j, false);
+            redactClientCommandArgument(c, j);
         } else if (!strcasecmp(objectGetVal(c->argv[j]), "keys")) {
             if (sdslen(objectGetVal(c->argv[3])) != 0) {
                 addReplyError(c, "When using MIGRATE KEYS option, the key argument"

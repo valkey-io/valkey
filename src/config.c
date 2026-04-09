@@ -834,7 +834,7 @@ void configSetCommand(client *c) {
          * log/commandlog/monitor/etc. displaying sensitive info. So even if we encounter an error we still continue
          * running over the remaining arguments. */
         if (config->flags & SENSITIVE_CONFIG) {
-            redactClientCommandArgument(c, 2 + i * 2 + 1, false);
+            redactClientCommandArgument(c, 2 + i * 2 + 1);
         }
 
         /* We continue to make sure we redact all the configs */

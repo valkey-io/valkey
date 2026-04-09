@@ -2956,7 +2956,7 @@ bool clientCommandArgShouldBeRedacted(client *c, int arg_index);
 void rewriteClientCommandVector(client *c, int argc, ...);
 void rewriteClientCommandArgument(client *c, int i, robj *newval);
 void replaceClientCommandVector(client *c, int argc, robj **argv);
-void redactClientCommandArgument(client *c, int argc, bool redact_all_after_limit);
+void redactClientCommandArgument(client *c, int argc);
 size_t getClientOutputBufferMemoryUsage(client *c);
 size_t getClientMemoryUsage(client *c, size_t *output_buffer_mem_usage);
 int freeClientsInAsyncFreeQueue(void);

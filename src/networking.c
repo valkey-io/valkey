@@ -5689,8 +5689,8 @@ void helloCommand(client *c) {
         int moreargs = (c->argc - 1) - j;
         const char *opt = objectGetVal(c->argv[j]);
         if (!strcasecmp(opt, "AUTH") && moreargs >= 2) {
-            redactClientCommandArgument(c, j + 1, false);
-            redactClientCommandArgument(c, j + 2, false);
+            redactClientCommandArgument(c, j + 1);
+            redactClientCommandArgument(c, j + 2);
             username = c->argv[j + 1];
             password = c->argv[j + 2];
             j += 2;
@@ -5857,25 +5857,15 @@ static void backupAndUpdateClientArgv(client *c, int new_argc, robj **new_argv) 
 }
 
 bool clientCommandArgShouldBeRedacted(client *c, int arg_index) {
-    if (arg_index < 1) return false;
-    /* Bit 0 indicates that all arguments at index >= 32 are redacted. */
-    if (arg_index >= 32) return c->redact_arg_bitmap & 1U;
+    if (arg_index < 1 || arg_index >= 32) return false;
     return (c->redact_arg_bitmap >> arg_index) & 1;
 }
 
 /* Redact a given argument to prevent it from being shown
- * in the commandlog. The argument index is recorded in a bitmap.
- * If redact_all_after_limit is set and argc >= 32, bit 0 is set to
- * indicate that all arguments beyond the bitmap range should
- * also be redacted. */
-void redactClientCommandArgument(client *c, int argc, bool redact_all_after_limit) {
-    serverAssert(argc >= 1 && (redact_all_after_limit || argc < 32));
-
-    if (argc >= 32) {
-        c->redact_arg_bitmap |= 1U;
-    } else {
-        c->redact_arg_bitmap |= (1U << argc);
-    }
+ * in the commandlog. The argument index is recorded in a bitmap. */
+void redactClientCommandArgument(client *c, int argc) {
+    serverAssert(argc >= 1 && argc < 32);
+    c->redact_arg_bitmap |= (1U << argc);
 }
 
 /* Rewrite the command vector of the client. All the new objects ref count

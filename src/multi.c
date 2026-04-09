@@ -35,6 +35,7 @@
 void initClientMultiState(client *c) {
     if (c->mstate) return;
     c->mstate = zcalloc(sizeof(multiState));
+    c->mstate->transaction_db_id = c->db->id;
 }
 
 void freeClientMultiStateCmds(client *c) {
@@ -50,12 +51,26 @@ void freeClientMultiStateCmds(client *c) {
     c->mstate->commands = NULL;
 }
 
+void freeClientMultiWatchedKeysByDB(client *c) {
+    if (!c->mstate || !c->mstate->watched_keys_by_db) return;
+
+    for (int i = 0; i < server.dbnum; i++) {
+        if (c->mstate->watched_keys_by_db[i]) {
+            hashtableRelease(c->mstate->watched_keys_by_db[i]);
+            c->mstate->watched_keys_by_db[i] = NULL;
+        }
+    }
+    zfree(c->mstate->watched_keys_by_db);
+    c->mstate->watched_keys_by_db = NULL;
+}
+
 /* Release all the resources associated with MULTI/EXEC state */
 void freeClientMultiState(client *c) {
     if (!c->mstate) return;
 
     freeClientMultiStateCmds(c);
     unwatchAllKeys(c);
+    freeClientMultiWatchedKeysByDB(c);
     zfree(c->mstate);
     c->mstate = NULL;
 }
@@ -69,6 +84,7 @@ void resetClientMultiState(client *c) {
     c->mstate->cmd_inv_flags = 0;
     c->mstate->argv_len_sums = 0;
     c->mstate->alloc_count = 0;
+    c->mstate->transaction_db_id = c->db->id;
 }
 
 /* Add a new command into the MULTI commands queue */
@@ -97,6 +113,15 @@ void queueMultiCommand(client *c, uint64_t cmd_flags) {
     mc->argv = c->argv;
     mc->argv_len = c->argv_len;
     mc->slot = c->slot;
+
+    if (mc->cmd->get_dbid_args && mc->cmd->proc == selectCommand) {
+        int count;
+        int *dbids = mc->cmd->get_dbid_args(mc->argv, mc->argc, &count);
+        if (dbids && count > 0) {
+            c->mstate->transaction_db_id = dbids[0];
+            zfree(dbids);
+        }
+    }
 
     c->mstate->count++;
     c->mstate->cmd_flags |= cmd_flags;
@@ -131,6 +156,7 @@ void flagTransaction(client *c) {
 void multiCommand(client *c) {
     if (!c->mstate) initClientMultiState(c);
     c->flag.multi = 1;
+    c->mstate->transaction_db_id = c->db->id;
     addReply(c, shared.ok);
 }
 
@@ -207,6 +233,7 @@ void execCommand(client *c) {
     orig_argv_len = c->argv_len;
     orig_argc = c->argc;
     orig_cmd = c->cmd;
+    c->mstate->transaction_db_id = c->db->id;
     addReplyArrayLen(c, c->mstate->count);
     for (j = 0; j < c->mstate->count; j++) {
         c->argc = c->mstate->commands[j].argc;
@@ -292,6 +319,22 @@ typedef struct watchedKey {
     unsigned expired : 1; /* Flag that we're watching an already expired key. */
 } watchedKey;
 
+/* Callback used for watchedKeysHashtableType where the entries are watchedKey *
+ * and it already contains the key. */
+static const void *watchedKeyGetKey(const void *entry) {
+    const watchedKey *wk = entry;
+    return wk->key;
+}
+
+/* Hashtable type for client's per-db watched keys lookup.
+ * Entries are watchedKey* stored directly, no destructor needed since the
+ * actual memory is managed by the multiState->watched_keys list. */
+hashtableType watchedKeysHashtableType = {
+    .entryGetKey = watchedKeyGetKey,
+    .hashFunction = dictEncObjHash,
+    .keyCompare = dictEncObjKeyCompare,
+};
+
 /* Attach a watchedKey to the list of clients watching that key. */
 static inline void watchedKeyLinkToClients(list *clients, watchedKey *wk) {
     wk->node.value = clients;             /* Point the value back to the list */
@@ -312,18 +355,25 @@ static inline listNode *watchedKeyGetClientNode(watchedKey *wk) {
 /* Watch for the specified key */
 void watchForKey(client *c, robj *key) {
     list *clients = NULL;
-    listIter li;
-    listNode *ln;
     watchedKey *wk;
 
     if (listLength(&c->mstate->watched_keys) == 0) server.watching_clients++;
 
-    /* Check if we are already watching for this key */
-    listRewind(&c->mstate->watched_keys, &li);
-    while ((ln = listNext(&li))) {
-        wk = listNodeValue(ln);
-        if (wk->db == c->db && equalStringObjects(key, wk->key)) return; /* Key already watched */
+    /* Lazily allocate the per-db hashtable array. */
+    if (c->mstate->watched_keys_by_db == NULL) {
+        c->mstate->watched_keys_by_db = zcalloc(sizeof(hashtable *) * server.dbnum);
     }
+
+    /* Lazily allocate the hashtable for this specific db. */
+    if (c->mstate->watched_keys_by_db[c->db->id] == NULL) {
+        c->mstate->watched_keys_by_db[c->db->id] = hashtableCreate(&watchedKeysHashtableType);
+    }
+
+    /* Check if we are already watching for this key */
+    if (hashtableFind(c->mstate->watched_keys_by_db[c->db->id], key, NULL)) {
+        return; /* Key already watched */
+    }
+
     /* This key is not already watched in this DB. Let's add it */
     clients = dictFetchValue(c->db->watched_keys, key);
     if (!clients) {
@@ -331,6 +381,7 @@ void watchForKey(client *c, robj *key) {
         dictAdd(c->db->watched_keys, key, clients);
         incrRefCount(key);
     }
+
     /* Add the new key to the list of keys watched by this client */
     wk = zmalloc(sizeof(*wk));
     wk->key = key;
@@ -340,6 +391,9 @@ void watchForKey(client *c, robj *key) {
     incrRefCount(key);
     listAddNodeTail(&c->mstate->watched_keys, wk);
     watchedKeyLinkToClients(clients, wk);
+
+    /* Add the new key to the per-db hashtable for O(1) lookup. */
+    hashtableAdd(c->mstate->watched_keys_by_db[c->db->id], wk);
 }
 
 /* Unwatch all the keys watched by this client. To clean the EXEC dirty
@@ -366,6 +420,16 @@ void unwatchAllKeys(client *c) {
         decrRefCount(wk->key);
         zfree(wk);
     }
+
+    /* Empty the per-db hashtables as we have unwatched all keys. */
+    if (c->mstate->watched_keys_by_db) {
+        for (int i = 0; i < server.dbnum; i++) {
+            if (c->mstate->watched_keys_by_db[i]) {
+                hashtableEmpty(c->mstate->watched_keys_by_db[i], NULL);
+            }
+        }
+    }
+
     server.watching_clients--;
 }
 
@@ -406,7 +470,7 @@ void touchWatchedKey(serverDb *db, robj *key) {
 
         if (wk->expired) {
             /* The key was already expired when WATCH was called. */
-            if (db == wk->db && equalStringObjects(key, wk->key) && dbFind(db, key->ptr) == NULL) {
+            if (db == wk->db && equalStringObjects(key, wk->key) && dbFind(db, objectGetVal(key)) == NULL) {
                 /* Already expired key is deleted, so logically no change. Clear
                  * the flag. Deleted keys are not flagged as expired. */
                 wk->expired = 0;
@@ -444,15 +508,15 @@ void touchAllWatchedKeysInDb(serverDb *emptied, serverDb *replaced_with) {
     dictIterator *di = dictGetSafeIterator(emptied->watched_keys);
     while ((de = dictNext(di)) != NULL) {
         robj *key = dictGetKey(de);
-        int exists_in_emptied = dbFind(emptied, key->ptr) != NULL;
-        if (exists_in_emptied || (replaced_with && dbFind(replaced_with, key->ptr) != NULL)) {
+        int exists_in_emptied = dbFind(emptied, objectGetVal(key)) != NULL;
+        if (exists_in_emptied || (replaced_with && dbFind(replaced_with, objectGetVal(key)) != NULL)) {
             list *clients = dictGetVal(de);
             if (!clients) continue;
             listRewind(clients, &li);
             while ((ln = listNext(&li))) {
                 watchedKey *wk = server_member2struct(watchedKey, node, ln);
                 if (wk->expired) {
-                    if (!replaced_with || !dbFind(replaced_with, key->ptr)) {
+                    if (!replaced_with || !dbFind(replaced_with, objectGetVal(key))) {
                         /* Expired key now deleted. No logical change. Clear the
                          * flag. Deleted keys are not flagged as expired. */
                         wk->expired = 0;
@@ -504,7 +568,16 @@ size_t multiStateMemOverhead(client *c) {
     size_t mem = c->mstate->argv_len_sums;
     /* Add watched keys overhead, Note: this doesn't take into account the watched keys themselves, because they aren't
      * managed per-client. */
-    mem += listLength(&c->mstate->watched_keys) * (sizeof(listNode) + sizeof(c->mstate->watched_keys));
+    mem += listLength(&c->mstate->watched_keys) * (sizeof(listNode) + sizeof(watchedKey));
+    /* Add per-db watched keys hashtable overhead. */
+    if (c->mstate->watched_keys_by_db) {
+        mem += sizeof(hashtable *) * server.dbnum;
+        for (int i = 0; i < server.dbnum; i++) {
+            if (c->mstate->watched_keys_by_db[i]) {
+                mem += hashtableMemUsage(c->mstate->watched_keys_by_db[i]);
+            }
+        }
+    }
     /* Reserved memory for queued multi commands. */
     mem += c->mstate->alloc_count * sizeof(multiCmd);
     return mem;

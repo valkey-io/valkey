@@ -75,7 +75,7 @@ typedef int (*vsetExpiryFunc)(void *entry, void *ctx);
 // vset is just a pointer to a bucket
 typedef void *vset;
 
-typedef uint8_t vsetIterator[560];
+typedef uint8_t vsetIterator[600];
 
 bool vsetAddEntry(vset *set, vsetGetExpiryFunc getExpiry, void *entry);
 bool vsetRemoveEntry(vset *set, vsetGetExpiryFunc getExpiry, void *entry);

@@ -17,6 +17,9 @@
         "reply_schema": {
             "description": "The serialized cluster configuration.",
             "type": "string"
-        }
+        },
+        "acl_categories": [
+            "SLOW"
+        ]
     }
 }

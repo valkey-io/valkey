@@ -17,7 +17,9 @@
             "WRITE"
         ],
         "acl_categories": [
-            "STREAM"
+            "SLOW",
+            "STREAM",
+            "WRITE"
         ],
         "key_specs": [
             {

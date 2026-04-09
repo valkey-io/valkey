@@ -10,7 +10,6 @@ set(VALKEY_SERVER_SRCS
     ${CMAKE_SOURCE_DIR}/src/quicklist.c
     ${CMAKE_SOURCE_DIR}/src/ae.c
     ${CMAKE_SOURCE_DIR}/src/anet.c
-    ${CMAKE_SOURCE_DIR}/src/dict.c
     ${CMAKE_SOURCE_DIR}/src/hashtable.c
     ${CMAKE_SOURCE_DIR}/src/kvstore.c
     ${CMAKE_SOURCE_DIR}/src/sds.c
@@ -48,7 +47,7 @@ set(VALKEY_SERVER_SRCS
     ${CMAKE_SOURCE_DIR}/src/cluster_legacy.c
     ${CMAKE_SOURCE_DIR}/src/cluster_slot_stats.c
     ${CMAKE_SOURCE_DIR}/src/crc16.c
-    ${CMAKE_SOURCE_DIR}/src/endianconv.c
+    ${CMAKE_SOURCE_DIR}/src/crc16_slottable.c
     ${CMAKE_SOURCE_DIR}/src/commandlog.c
     ${CMAKE_SOURCE_DIR}/src/eval.c
     ${CMAKE_SOURCE_DIR}/src/bio.c
@@ -69,9 +68,11 @@ set(VALKEY_SERVER_SRCS
     ${CMAKE_SOURCE_DIR}/src/sparkline.c
     ${CMAKE_SOURCE_DIR}/src/valkey-check-rdb.c
     ${CMAKE_SOURCE_DIR}/src/valkey-check-aof.c
+    ${CMAKE_SOURCE_DIR}/src/valkey_strtod.c
     ${CMAKE_SOURCE_DIR}/src/geo.c
     ${CMAKE_SOURCE_DIR}/src/lazyfree.c
     ${CMAKE_SOURCE_DIR}/src/module.c
+    ${CMAKE_SOURCE_DIR}/src/lrulfu.c
     ${CMAKE_SOURCE_DIR}/src/evict.c
     ${CMAKE_SOURCE_DIR}/src/expire.c
     ${CMAKE_SOURCE_DIR}/src/geohash.c
@@ -87,6 +88,7 @@ set(VALKEY_SERVER_SRCS
     ${CMAKE_SOURCE_DIR}/src/lolwut.c
     ${CMAKE_SOURCE_DIR}/src/lolwut5.c
     ${CMAKE_SOURCE_DIR}/src/lolwut6.c
+    ${CMAKE_SOURCE_DIR}/src/lolwut9.c
     ${CMAKE_SOURCE_DIR}/src/acl.c
     ${CMAKE_SOURCE_DIR}/src/tracking.c
     ${CMAKE_SOURCE_DIR}/src/socket.c
@@ -99,13 +101,9 @@ set(VALKEY_SERVER_SRCS
     ${CMAKE_SOURCE_DIR}/src/mt19937-64.c
     ${CMAKE_SOURCE_DIR}/src/resp_parser.c
     ${CMAKE_SOURCE_DIR}/src/call_reply.c
-    ${CMAKE_SOURCE_DIR}/src/lua/script_lua.c
     ${CMAKE_SOURCE_DIR}/src/script.c
     ${CMAKE_SOURCE_DIR}/src/functions.c
     ${CMAKE_SOURCE_DIR}/src/scripting_engine.c
-    ${CMAKE_SOURCE_DIR}/src/lua/function_lua.c
-    ${CMAKE_SOURCE_DIR}/src/lua/engine_lua.c
-    ${CMAKE_SOURCE_DIR}/src/lua/debug_lua.c
     ${CMAKE_SOURCE_DIR}/src/trace/trace.c
     ${CMAKE_SOURCE_DIR}/src/trace/trace_rdb.c
     ${CMAKE_SOURCE_DIR}/src/trace/trace_aof.c
@@ -120,18 +118,21 @@ set(VALKEY_SERVER_SRCS
     ${CMAKE_SOURCE_DIR}/src/server.c
     ${CMAKE_SOURCE_DIR}/src/logreqres.c
     ${CMAKE_SOURCE_DIR}/src/entry.c
-    ${CMAKE_SOURCE_DIR}/src/vset.c)
+    ${CMAKE_SOURCE_DIR}/src/vset.c
+    ${CMAKE_SOURCE_DIR}/src/fifo.c
+    ${CMAKE_SOURCE_DIR}/src/mutexqueue.c)
 
 
 # valkey-cli
 set(VALKEY_CLI_SRCS
     ${CMAKE_SOURCE_DIR}/src/anet.c
     ${CMAKE_SOURCE_DIR}/src/adlist.c
-    ${CMAKE_SOURCE_DIR}/src/dict.c
+    ${CMAKE_SOURCE_DIR}/src/hashtable.c
     ${CMAKE_SOURCE_DIR}/src/sds.c
     ${CMAKE_SOURCE_DIR}/src/sha256.c
     ${CMAKE_SOURCE_DIR}/src/util.c
     ${CMAKE_SOURCE_DIR}/src/valkey-cli.c
+    ${CMAKE_SOURCE_DIR}/src/valkey_strtod.c
     ${CMAKE_SOURCE_DIR}/src/zmalloc.c
     ${CMAKE_SOURCE_DIR}/src/release.c
     ${CMAKE_SOURCE_DIR}/src/ae.c
@@ -155,8 +156,9 @@ set(VALKEY_BENCHMARK_SRCS
     ${CMAKE_SOURCE_DIR}/src/sha256.c
     ${CMAKE_SOURCE_DIR}/src/util.c
     ${CMAKE_SOURCE_DIR}/src/valkey-benchmark.c
+    ${CMAKE_SOURCE_DIR}/src/valkey_strtod.c
     ${CMAKE_SOURCE_DIR}/src/adlist.c
-    ${CMAKE_SOURCE_DIR}/src/dict.c
+    ${CMAKE_SOURCE_DIR}/src/hashtable.c
     ${CMAKE_SOURCE_DIR}/src/zmalloc.c
     ${CMAKE_SOURCE_DIR}/src/serverassert.c
     ${CMAKE_SOURCE_DIR}/src/release.c
@@ -165,10 +167,13 @@ set(VALKEY_BENCHMARK_SRCS
     ${CMAKE_SOURCE_DIR}/src/crc64.c
     ${CMAKE_SOURCE_DIR}/src/siphash.c
     ${CMAKE_SOURCE_DIR}/src/crc16.c
+    ${CMAKE_SOURCE_DIR}/src/crc16_slottable.c
     ${CMAKE_SOURCE_DIR}/src/monotonic.c
     ${CMAKE_SOURCE_DIR}/src/cli_common.c
     ${CMAKE_SOURCE_DIR}/src/mt19937-64.c
-    ${CMAKE_SOURCE_DIR}/src/strl.c)
+    ${CMAKE_SOURCE_DIR}/src/strl.c
+    ${CMAKE_SOURCE_DIR}/src/fuzzer_client.c
+    ${CMAKE_SOURCE_DIR}/src/fuzzer_command_generator.c)
 
 # valkey-rdma module
 set(VALKEY_RDMA_MODULE_SRCS ${CMAKE_SOURCE_DIR}/src/rdma.c)

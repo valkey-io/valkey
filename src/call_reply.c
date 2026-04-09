@@ -33,6 +33,7 @@
 #define REPLY_FLAG_ROOT (1 << 0)
 #define REPLY_FLAG_PARSED (1 << 1)
 #define REPLY_FLAG_RESP3 (1 << 2)
+#define REPLY_FLAG_EXACT_TYPE (1 << 3)
 
 /* --------------------------------------------------------
  * An opaque struct used to parse a RESP protocol reply and
@@ -83,7 +84,9 @@ static void callReplyNullBulkString(void *ctx, const char *proto, size_t proto_l
 
 static void callReplyNullArray(void *ctx, const char *proto, size_t proto_len) {
     CallReply *rep = ctx;
-    callReplySetSharedData(rep, VALKEYMODULE_REPLY_NULL, proto, proto_len, 0);
+    int type = rep->flags & REPLY_FLAG_EXACT_TYPE ? VALKEYMODULE_REPLY_ARRAY_NULL
+                                                  : VALKEYMODULE_REPLY_NULL;
+    callReplySetSharedData(rep, type, proto, proto_len, 0);
 }
 
 static void callReplyBulkString(void *ctx, const char *str, size_t len, const char *proto, size_t proto_len) {
@@ -102,7 +105,9 @@ static void callReplyError(void *ctx, const char *str, size_t len, const char *p
 
 static void callReplySimpleStr(void *ctx, const char *str, size_t len, const char *proto, size_t proto_len) {
     CallReply *rep = ctx;
-    callReplySetSharedData(rep, VALKEYMODULE_REPLY_STRING, proto, proto_len, 0);
+    int type = rep->flags & REPLY_FLAG_EXACT_TYPE ? VALKEYMODULE_REPLY_SIMPLE_STRING
+                                                  : VALKEYMODULE_REPLY_STRING;
+    callReplySetSharedData(rep, type, proto, proto_len, 0);
     rep->len = len;
     rep->val.str = str;
 }
@@ -306,6 +311,7 @@ int callReplyType(CallReply *rep) {
 
 /* Return reply string as buffer and len. Applicable to:
  * - VALKEYMODULE_REPLY_STRING
+ * - VALKEYMODULE_REPLY_SIMPLE_STRING
  * - VALKEYMODULE_REPLY_ERROR
  *
  * The return value is borrowed from CallReply, so it must not be freed
@@ -316,7 +322,9 @@ int callReplyType(CallReply *rep) {
  */
 const char *callReplyGetString(CallReply *rep, size_t *len) {
     callReplyParse(rep);
-    if (rep->type != VALKEYMODULE_REPLY_STRING && rep->type != VALKEYMODULE_REPLY_ERROR) return NULL;
+    if (rep->type != VALKEYMODULE_REPLY_STRING &&
+        rep->type != VALKEYMODULE_REPLY_SIMPLE_STRING &&
+        rep->type != VALKEYMODULE_REPLY_ERROR) return NULL;
     if (len) *len = rep->len;
     return rep->val.str;
 }
@@ -562,4 +570,15 @@ CallReply *callReplyCreateError(sds reply, void *private_data) {
     listSetFreeMethod(deferred_error_list, sdsfreeVoid);
     listAddNodeTail(deferred_error_list, sdsnew(err_buff));
     return callReplyCreate(err_buff, deferred_error_list, private_data);
+}
+
+/* Enable exact reply type parsing to preserve type distinctions.
+ *
+ * This flag maintains the distinction between simple strings and bulk strings,
+ * as well as preserving RESP2's distinction between null bulk strings and null arrays
+ * when parsing the CallReply.
+ */
+void enableParseExactReplyTypeFlag(CallReply *rep) {
+    serverAssert(!(rep->flags & REPLY_FLAG_PARSED));
+    rep->flags |= REPLY_FLAG_EXACT_TYPE;
 }

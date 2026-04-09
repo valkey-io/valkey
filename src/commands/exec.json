@@ -13,6 +13,7 @@
             "SKIP_COMMANDLOG"
         ],
         "acl_categories": [
+            "SLOW",
             "TRANSACTION"
         ],
         "reply_schema": {

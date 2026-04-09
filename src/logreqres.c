@@ -77,11 +77,16 @@
 static int reqresShouldLog(client *c) {
     if (!server.req_res_logfile) return 0;
 
+    /* Only log real network clients. */
+    if (c->flag.fake || c->conn == NULL) return 0;
+
     /* Ignore client with streaming non-standard response */
     if (c->flag.pubsub || c->flag.monitor || c->flag.replica) return 0;
 
-    /* We only work on primaries (didn't implement reqresAppendResponse to work on shared replica buffers) */
-    if (getClientType(c) == CLIENT_TYPE_PRIMARY) return 0;
+    /* We only log normal user clients.
+     * Internal clients (slot migration etc.) may use shared buffers or emit commands that
+     * intentionally have no replies (e.g. CLUSTER SYNCSLOTS ACK), which would break the request/response log format. */
+    if (getClientType(c) != CLIENT_TYPE_NORMAL) return 0;
 
     return 1;
 }
@@ -178,7 +183,7 @@ size_t reqresAppendRequest(client *c) {
     if (!reqresShouldLog(c)) return 0;
 
     /* Ignore commands that have streaming non-standard response */
-    sds cmd = argv[0]->ptr;
+    sds cmd = objectGetVal(argv[0]);
     if (!strcasecmp(cmd, "debug") || /* because of DEBUG SEGFAULT */
         !strcasecmp(cmd, "sync") || !strcasecmp(cmd, "psync") || !strcasecmp(cmd, "monitor") ||
         !strcasecmp(cmd, "subscribe") || !strcasecmp(cmd, "unsubscribe") || !strcasecmp(cmd, "ssubscribe") ||
@@ -191,10 +196,10 @@ size_t reqresAppendRequest(client *c) {
     size_t ret = 0;
     for (int i = 0; i < argc; i++) {
         if (sdsEncodedObject(argv[i])) {
-            ret += reqresAppendArg(c, argv[i]->ptr, sdslen(argv[i]->ptr));
+            ret += reqresAppendArg(c, objectGetVal(argv[i]), sdslen(objectGetVal(argv[i])));
         } else if (argv[i]->encoding == OBJ_ENCODING_INT) {
             char buf[LONG_STR_SIZE];
-            size_t len = ll2string(buf, sizeof(buf), (long)argv[i]->ptr);
+            size_t len = ll2string(buf, sizeof(buf), (long)objectGetVal(argv[i]));
             ret += reqresAppendArg(c, buf, len);
         } else {
             serverPanic("Wrong encoding in reqresAppendRequest()");

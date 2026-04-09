@@ -1,0 +1,20 @@
+[
+  {
+    "duration": 180,
+    "keyspacelen": [3000000],
+    "data_sizes": [16,96],
+    "pipelines": [1, 10],
+    "clients": [1600],
+    "commands": [
+      "SET",
+      "GET"
+    ],
+    "cluster_mode": false,
+    "tls_mode": false,
+    "warmup": 30,
+    "io-threads": [1,9],
+    "benchmark-threads": 90,
+    "server_cpu_range": "0-8",
+    "client_cpu_range": "144-191,48-95"
+  }
+]

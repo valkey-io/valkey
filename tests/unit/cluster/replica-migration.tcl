@@ -40,7 +40,7 @@ proc test_migrated_replica {type} {
         set addr "[srv 0 host]:[srv 0 port]"
         set myid [R 3 CLUSTER MYID]
         set code [catch {
-            exec src/valkey-cli {*}[valkeycli_tls_config "./tests"] --cluster rebalance $addr --cluster-weight $myid=0
+            exec $::VALKEY_CLI_BIN {*}[valkeycli_tls_config "./tests"] --cluster rebalance $addr --cluster-weight $myid=0
         } result]
         if {$code != 0} {
             fail "valkey-cli --cluster rebalance returns non-zero exit code, output below:\n$result"
@@ -106,17 +106,21 @@ proc test_migrated_replica {type} {
         R 3 readonly
         R 7 readonly
         wait_for_condition 1000 50 {
-            [R 3 get key_991803] == 1024 && [R 3 get key_977613] == 10240 &&
-            [R 4 get key_991803] == 1024 && [R 4 get key_977613] == 10240 &&
-            [R 7 get key_991803] == 1024 && [R 7 get key_977613] == 10240
+            [catch {expr {
+                [R 3 get key_991803] == 1024 && [R 3 get key_977613] == 10240 &&
+                [R 4 get key_991803] == 1024 && [R 4 get key_977613] == 10240 &&
+                [R 7 get key_991803] == 1024 && [R 7 get key_977613] == 10240
+            }} result] == 0 && $result
         } else {
-            puts "R 3: [R 3 keys *]"
-            puts "R 4: [R 4 keys *]"
-            puts "R 7: [R 7 keys *]"
+            catch {puts "R 3: [R 3 keys *]"}
+            catch {puts "R 4: [R 4 keys *]"}
+            catch {puts "R 7: [R 7 keys *]"}
             fail "Key not consistent"
         }
 
         if {$type == "sigstop"} {
+            assert_equal 0 [count_log_message -7 "I'm a sub-replica"]
+
             resume_process $primary0_pid
 
             # Wait for the old primary to go online and become a replica.
@@ -201,11 +205,13 @@ proc test_nonempty_replica {type} {
         # Make sure the key exists and is consistent.
         R 7 readonly
         wait_for_condition 1000 50 {
-            [R 4 get key_991803] == 1024 &&
-            [R 7 get key_991803] == 1024
+            [catch {expr {
+                [R 4 get key_991803] == 1024 &&
+                [R 7 get key_991803] == 1024
+            }} result] == 0 && $result
         } else {
-            puts "R 4: [R 4 get key_991803]"
-            puts "R 7: [R 7 get key_991803]"
+            catch {puts "R 4: [R 4 get key_991803]"}
+            catch {puts "R 7: [R 7 get key_991803]"}
             fail "Key not consistent"
         }
 
@@ -256,7 +262,7 @@ proc test_sub_replica {type} {
         set addr "[srv 0 host]:[srv 0 port]"
         set myid [R 3 CLUSTER MYID]
         set code [catch {
-            exec src/valkey-cli {*}[valkeycli_tls_config "./tests"] --cluster rebalance $addr --cluster-weight $myid=0
+            exec $::VALKEY_CLI_BIN {*}[valkeycli_tls_config "./tests"] --cluster rebalance $addr --cluster-weight $myid=0
         } result]
         if {$code != 0} {
             fail "valkey-cli --cluster rebalance returns non-zero exit code, output below:\n$result"
@@ -325,13 +331,15 @@ proc test_sub_replica {type} {
         R 3 readonly
         R 7 readonly
         wait_for_condition 1000 50 {
-            [R 3 get key_991803] == 1024 && [R 3 get key_977613] == 10240 &&
-            [R 4 get key_991803] == 1024 && [R 4 get key_977613] == 10240 &&
-            [R 7 get key_991803] == 1024 && [R 7 get key_977613] == 10240
+            [catch {expr {
+                [R 3 get key_991803] == 1024 && [R 3 get key_977613] == 10240 &&
+                [R 4 get key_991803] == 1024 && [R 4 get key_977613] == 10240 &&
+                [R 7 get key_991803] == 1024 && [R 7 get key_977613] == 10240
+            }} result] == 0 && $result
         } else {
-            puts "R 3: [R 3 keys *]"
-            puts "R 4: [R 4 keys *]"
-            puts "R 7: [R 7 keys *]"
+            catch {puts "R 3: [R 3 keys *]"}
+            catch {puts "R 4: [R 4 keys *]"}
+            catch {puts "R 7: [R 7 keys *]"}
             fail "Key not consistent"
         }
 
@@ -371,7 +379,7 @@ proc test_cluster_setslot {type} {
         set addr "[srv 0 host]:[srv 0 port]"
         set myid [R 3 CLUSTER MYID]
         set code [catch {
-            exec src/valkey-cli {*}[valkeycli_tls_config "./tests"] --cluster rebalance $addr --cluster-weight $myid=0
+            exec $::VALKEY_CLI_BIN {*}[valkeycli_tls_config "./tests"] --cluster rebalance $addr --cluster-weight $myid=0
         } result]
         if {$code != 0} {
             fail "valkey-cli --cluster rebalance returns non-zero exit code, output below:\n$result"

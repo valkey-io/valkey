@@ -1,6 +1,10 @@
 #ifndef EXPIRE_H
 #define EXPIRE_H
 
+/* Include feature-test macros early for unit tests that include expire.h
+ * before server.h. */
+#include "fmacros.h"
+
 #include <stdbool.h>
 #include "util.h"
 
@@ -58,14 +62,15 @@ typedef struct serverDb serverDb;
  * EXPIRE_FORCE_DELETE_EXPIRED - which indicate to delete expired keys even in case of a replica (for the writable replicas case) */
 expirationPolicy getExpirationPolicyWithFlags(int flags);
 int parseExtendedExpireArgumentsOrReply(client *c, int *flags, int max_args);
-int convertExpireArgumentToUnixTime(client *c, robj *arg, long long basetime, int unit, long long *unixtime);
+int convertExpireArgumentToUnixTime(client *c, robj *arg, mstime_t basetime, int unit, mstime_t *unixtime);
 
 /* Handling of expired keys and hash fields */
-void activeExpireCycle(int type);
+ustime_t activeExpireCycle(int type);
 void expireReplicaKeys(void);
 void rememberReplicaKeyWithExpire(serverDb *db, robj *key);
-void flushReplicaKeysWithExpireList(void);
+void flushReplicaKeysWithExpireList(int async);
 size_t getReplicaKeyWithExpireCount(void);
 bool timestampIsExpired(mstime_t when);
+void freeReplicaKeysWithExpireAsync(dict *replica_keys_with_expire);
 
 #endif

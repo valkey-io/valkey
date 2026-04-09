@@ -69,6 +69,11 @@
                 "type": "integer",
                 "optional": true
             }
+        ],
+        "acl_categories": [
+            "ADMIN",
+            "DANGEROUS",
+            "SLOW"
         ]
     }
 }

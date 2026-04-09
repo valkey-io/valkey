@@ -12,7 +12,8 @@
             "STALE"
         ],
         "acl_categories": [
-            "SCRIPTING"
+            "SCRIPTING",
+            "SLOW"
         ],
         "command_tips": [
             "REQUEST_POLICY:ALL_SHARDS",

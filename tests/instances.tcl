@@ -7,8 +7,6 @@
 # This software is released under the BSD License. See the COPYING file for
 # more information.
 
-package require Tcl 8.5
-
 set tcl_precision 17
 source ../support/valkey.tcl
 source ../support/util.tcl
@@ -21,6 +19,7 @@ set ::valgrind 0
 set ::tls 0
 set ::tls_module 0
 set ::io_threads 0
+set ::leaks 1
 set ::pause_on_error 0
 set ::dont_clean 0
 set ::simulate_error 0
@@ -50,18 +49,18 @@ if {[catch {cd tmp}]} {
 # the provided configuration file. Returns the PID of the process.
 proc exec_instance {type dirname cfgfile} {
     if {$type eq "valkey"} {
-        set prgname valkey-server
+        set program_path $::VALKEY_SERVER_BIN
     } elseif {$type eq "sentinel"} {
-        set prgname valkey-sentinel
+        set program_path $::VALKEY_SENTINEL_BIN
     } else {
         error "Unknown instance type."
     }
 
     set errfile [file join $dirname err.txt]
     if {$::valgrind} {
-        set pid [exec valgrind --track-origins=yes --suppressions=../../../src/valgrind.sup --show-reachable=no --show-possibly-lost=no --leak-check=full ../../../src/${prgname} $cfgfile 2>> $errfile &]
+        set pid [exec valgrind --track-origins=yes --suppressions=../../../src/valgrind.sup --show-reachable=no --show-possibly-lost=no --leak-check=full ${program_path} $cfgfile 2>> $errfile &]
     } else {
-        set pid [exec ../../../src/${prgname} $cfgfile 2>> $errfile &]
+        set pid [exec ${program_path} $cfgfile 2>> $errfile &]
     }
     return $pid
 }
@@ -89,7 +88,7 @@ proc spawn_instance {type base_port count {conf {}} {base_conf_file ""}} {
 
         if {$::tls} {
             if {$::tls_module} {
-                puts $cfg [format "loadmodule %s/../../../src/valkey-tls.so" [pwd]]
+                puts $cfg "loadmodule $::VALKEY_TLS_MODULE"
             }
 
             puts $cfg "tls-port $port"
@@ -287,13 +286,15 @@ proc parse_options {} {
             set ::dont_clean 1
         } elseif {$opt eq "--fail"} {
             set ::simulate_error 1
+        } elseif {$opt eq {--skip-leaks}} {
+            set ::leaks 0
         } elseif {$opt eq {--valgrind}} {
             set ::valgrind 1
         } elseif {$opt eq {--host}} {
             incr j
             set ::host ${val}
         } elseif {$opt eq {--tls} || $opt eq {--tls-module}} {
-            package require tls 1.6
+            package require tls
             ::tls::init \
                 -cafile "$::tlsdir/ca.crt" \
                 -certfile "$::tlsdir/client.crt" \
@@ -323,6 +324,7 @@ proc parse_options {} {
             puts "--dont-clean            Keep log files on exit."
             puts "--pause-on-error        Pause for manual inspection on error."
             puts "--fail                  Simulate a test failure."
+            puts "--skip-leaks            Disable macOS leaks verification."
             puts "--valgrind              Run with valgrind."
             puts "--tls                   Run tests in TLS mode."
             puts "--tls-module            Run tests in TLS mode with Valkey module."
@@ -446,7 +448,7 @@ proc test {descr code} {
 
 # Check memory leaks when running on macOS using the "leaks" utility.
 proc check_leaks instance_types {
-    if {[string match {*Darwin*} [exec uname -a]]} {
+    if {$::leaks && [string match {*Darwin*} [exec uname -a]]} {
         puts -nonewline "Testing for memory leaks..."; flush stdout
         foreach type $instance_types {
             foreach_instance_id [set ::${type}_instances] id {

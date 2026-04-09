@@ -740,7 +740,7 @@ unsigned char *ziplistResize(unsigned char *zl, size_t len) {
  * updated, i.e. consecutive fields MAY need an update. */
 unsigned char *__ziplistCascadeUpdate(unsigned char *zl, unsigned char *p) {
     zlentry cur;
-    size_t prevlen, prevlensize, prevoffset; /* Informat of the last changed entry. */
+    size_t prevlen, prevlensize, prevoffset; /* Information of the last changed entry. */
     size_t firstentrylen;                    /* Used to handle insert at head. */
     size_t rawlen, curlen = intrev32ifbe(ZIPLIST_BYTES(zl));
     size_t extra = 0, cnt = 0, offset;
@@ -1643,4 +1643,9 @@ unsigned int ziplistRandomPairsUnique(unsigned char *zl, unsigned int count, zip
         index++;
     }
     return picked;
+}
+
+/* Wrapper function for gtest to access static zipEntry function. */
+void testOnlyZipEntry(unsigned char *p, zlentry *e) {
+    zipEntry(p, e);
 }

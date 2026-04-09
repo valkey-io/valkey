@@ -14,7 +14,8 @@
             "NONDETERMINISTIC_OUTPUT_ORDER"
         ],
         "acl_categories": [
-            "SCRIPTING"
+            "SCRIPTING",
+            "SLOW"
         ],
         "reply_schema": {
             "type": "array",

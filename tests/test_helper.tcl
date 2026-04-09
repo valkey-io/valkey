@@ -2,8 +2,6 @@
 # This software is released under the BSD License. See the COPYING file for
 # more information.
 
-package require Tcl 8.5
-
 set tcl_precision 17
 source tests/support/valkey.tcl
 source tests/support/aofmanifest.tcl
@@ -12,6 +10,7 @@ source tests/support/cluster_util.tcl
 source tests/support/tmpfile.tcl
 source tests/support/test.tcl
 source tests/support/util.tcl
+source tests/support/set_executable_path.tcl
 
 set dir [pwd]
 set ::all_tests []
@@ -56,6 +55,7 @@ set ::durable 0
 set ::tls 0
 set ::io_threads 0
 set ::tls_module 0
+set ::leaks 1
 set ::stack_logging 0
 set ::verbose 0
 set ::quiet 0
@@ -140,6 +140,8 @@ set ::numclients 16
 proc execute_test_file __testname {
     set path "tests/$__testname.tcl"
     set ::curfile $path
+    # Reset tags at the start of each test file
+    set ::tags {}
     source $path
     send_data_packet $::test_server_fd done "$__testname"
 }
@@ -151,6 +153,8 @@ proc execute_test_file __testname {
 # finished.
 proc execute_test_code {__testname filename code} {
     set ::curfile $filename
+    # Reset tags at the start of each test code execution
+    set ::tags {}
     eval $code
     send_data_packet $::test_server_fd done "$__testname"
 }
@@ -377,6 +381,8 @@ proc test_server_main {} {
     array set ::clients_start_time {}
     set ::clients_time_history {}
     set ::failed_tests {}
+    set ::ok_count 0
+    set ::err_count 0
 
     # Enter the event loop to handle clients I/O
     after 100 test_server_cron
@@ -406,6 +412,7 @@ proc test_server_cron {} {
                         set file $::active_clients_file($fd)
                     }
                     lappend ::failed_tests "\[[colorstr red TIMEOUT]\]: $test_name in $file"
+                    incr ::err_count
                 }
             }
         }
@@ -419,7 +426,7 @@ proc test_server_cron {} {
 }
 
 proc accept_test_clients {fd addr port} {
-    fconfigure $fd -encoding binary
+    fconfigure $fd -translation binary
     fileevent $fd readable [list read_from_test_client $fd]
 }
 
@@ -463,6 +470,7 @@ proc read_from_test_client fd {
         if {!$::quiet} {
             puts "\[[colorstr green $status]\]: $data ($elapsed ms)"
         }
+        incr ::ok_count
         set ::active_clients_task($fd) "(OK) $data"
     } elseif {$status eq {skip}} {
         if {!$::quiet} {
@@ -476,6 +484,7 @@ proc read_from_test_client fd {
         set err "\[[colorstr red $status]\]: $data"
         puts $err
         lappend ::failed_tests $err
+        incr ::err_count
         set ::active_clients_task($fd) "(ERR) $data"
         if {$::exit_on_failure} {
             puts "(Fast fail: test will exit now)"
@@ -595,6 +604,10 @@ proc signal_idle_client fd {
 
 # The the_end function gets called when all the test units were already
 # executed, so the test finished.
+proc print_test_summary {} {
+    puts "\nTest Summary: [colorstr bold-green $::ok_count] passed, [colorstr bold-red $::err_count] failed"
+}
+
 proc the_end {} {
     # TODO: print the status, exit with the right exit code.
     puts "\n                   The End\n"
@@ -602,6 +615,7 @@ proc the_end {} {
     foreach {time name} $::clients_time_history {
         puts "  $time seconds - $name"
     }
+    print_test_summary
     if {[llength $::failed_tests]} {
         puts "\n[colorstr bold-red {!!! WARNING}] The following tests failed:\n"
         foreach failed $::failed_tests {
@@ -620,7 +634,7 @@ proc the_end {} {
 # to read the command, execute, reply... all this in a loop.
 proc test_client_main server_port {
     set ::test_server_fd [socket localhost $server_port]
-    fconfigure $::test_server_fd -encoding binary
+    fconfigure $::test_server_fd -translation binary
     send_data_packet $::test_server_fd ready [pid]
     while 1 {
         set bytes [gets $::test_server_fd]
@@ -651,6 +665,7 @@ proc print_help_screen {} {
         "                   with all tests."
         "--moduleapi        Run the module API tests, this option should only be used in"
         "                   runtest-moduleapi which will build the test module."
+        "--skip-leaks       Disable macOS leaks verification."
         "--valgrind         Run the test over valgrind."
         "--durable          suppress test crashes and keep running"
         "--stack-logging    Enable macOS leaks/malloc stack logging."
@@ -674,8 +689,9 @@ proc print_help_screen {} {
         "                   line). This option can be repeated."
         "--skiptest <test>  Test name or regexp pattern (if <test> starts with '/') to"
         "                   skip. This option can be repeated."
-        "--tags <tags>      Run only tests having specified tags or not having '-'"
-        "                   prefixed tags."
+        "--tags <tags>      Run only tests having specified tags (allow list) or, for '-'"
+        "                   prefixed tags, skip tests with the tag (deny list). Only"
+        "                   top-level-only tags are possible in the allow list."
         "--dont-clean       Don't delete valkey log files after the run."
         "--dont-pre-clean   Don't delete existing valkey log files before the run."
         "--no-latency       Skip latency measurements and validation by some tests."
@@ -718,6 +734,12 @@ for {set j 0} {$j < [llength $argv]} {incr j} {
             if {[string index $tag 0] eq "-"} {
                 lappend ::denytags [string range $tag 1 end]
             } else {
+                # Validate that allowtags only use top-level tags
+                if {[lsearch -exact $::toplevel_only_tags $tag] < 0} {
+                    puts "Error: --tags allowlist can only use top-level-only tags: large-memory, needs:other-server, compatible-redis, network"
+                    puts "Invalid tag: $tag"
+                    exit 1
+                }
                 lappend ::allowtags $tag
             }
         }
@@ -744,10 +766,13 @@ for {set j 0} {$j < [llength $argv]} {incr j} {
     } elseif {$opt eq {--skiptest}} {
         lappend ::skiptests $arg
         incr j
+    } elseif {$opt eq {--skip-leaks}} {
+        set ::leaks 0
     } elseif {$opt eq {--valgrind}} {
         set ::valgrind 1
     } elseif {$opt eq {--stack-logging}} {
         if {[string match {*Darwin*} [exec uname -a]]} {
+            set ::leaks 1
             set ::stack_logging 1
         }
     } elseif {$opt eq {--quiet}} {
@@ -755,7 +780,7 @@ for {set j 0} {$j < [llength $argv]} {incr j} {
     } elseif {$opt eq {--io-threads}} {
         set ::io_threads 1
     } elseif {$opt eq {--tls} || $opt eq {--tls-module}} {
-        package require tls 1.6
+        package require tls
         set ::tls 1
         ::tls::init \
             -cafile "$::tlsdir/ca.crt" \
@@ -909,6 +934,11 @@ if {[llength $filtered_tests] < [llength $::all_tests]} {
     set ::all_tests $filtered_tests
 }
 
+# Don't start more test runners than the total number of tests to run.
+if {$::numclients > [llength $filtered_tests] && $::total_loops == 1} {
+    set ::numclients [llength $filtered_tests]
+}
+
 proc attach_to_replication_stream_on_connection {conn} {
     r config set repl-ping-replica-period 3600
     if {$::tls} {
@@ -987,6 +1017,32 @@ proc close_replication_stream {s} {
     close $s
     r config set repl-ping-replica-period 10
     return
+}
+
+# IPv6 detection utilities
+# for this detection: the socket connection on ::1 address
+proc is_ipv6_available {} {
+    if {[catch {
+        set server [socket -server dummy -myaddr ::1 0]
+        set port [lindex [chan configure $server -sockname] 2]
+        set client [socket ::1 $port]
+        close $server
+        close $client
+    }] == 0} {
+        return 1
+    }
+    return 0
+}
+
+# MPTCP detection
+proc is_mptcp_available {} {
+    # Typical error output from valkey-cli --mptcp:
+    # Could not connect to Valkey at 127.0.0.1:6379: MPTCP is not supported on this platform
+    if {[catch {exec $::VALKEY_CLI_BIN --mptcp ping} e] &&
+        [string match "*MPTCP is not supported on this platform*" $e]} {
+        return 0
+    }
+    return 1
 }
 
 # With the parallel test running multiple server instances at the same time

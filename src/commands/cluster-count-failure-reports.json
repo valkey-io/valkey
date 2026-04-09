@@ -30,6 +30,11 @@
             "description": "The number of active failure reports for the node.",
             "type": "integer",
             "minimum": 0
-        }
+        },
+        "acl_categories": [
+            "ADMIN",
+            "DANGEROUS",
+            "SLOW"
+        ]
     }
 }

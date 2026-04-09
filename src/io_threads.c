@@ -356,7 +356,7 @@ static void *IOThreadMain(void *myid) {
                 ioThreadWriteToClient((client *)data);
                 break;
             case JOB_REQ_FREE_OBJ:
-                sdsfreeVoid(data);
+                decrRefCount(data);
                 break;
             case JOB_REQ_ACCEPT:
                 ioThreadAccept((client *)data);
@@ -697,12 +697,8 @@ int tryOffloadFreeObjToIOThreads(robj *obj) {
 
     if (obj->encoding != OBJ_ENCODING_RAW || obj->type != OBJ_STRING) return C_ERR;
 
-    /* We offload only the free of the ptr that may be allocated by the I/O thread.
-     * The object itself was allocated by the main thread and will be freed by the main thread. */
-    void *job = tagJob(objectGetVal(obj), JOB_REQ_FREE_OBJ);
+    void *job = tagJob(obj, JOB_REQ_FREE_OBJ);
     if (unlikely(spmcEnqueue(&io_shared_inbox, job) == false)) return C_ERR;
-    objectSetVal(obj, NULL);
-    decrRefCount(obj);
     io_jobs_submitted++;
     server.stat_io_freed_objects++;
     return C_OK;

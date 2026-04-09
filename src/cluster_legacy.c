@@ -1404,6 +1404,18 @@ static inline uint64_t nodeEpoch(clusterNode *n) {
     return n->replicaof ? n->replicaof->configEpoch : n->configEpoch;
 }
 
+static clusterNode *clusterGetSubReplicaPrimary(clusterNode *node) {
+    if (node == NULL || node->replicaof == NULL) return NULL;
+
+    clusterNode *primary = node->replicaof;
+    clusterNode *grand_primary = primary->replicaof;
+
+    if (grand_primary == NULL || grand_primary == node) return NULL;
+    if (nodeFailed(grand_primary)) return NULL;
+
+    return grand_primary;
+}
+
 /* Update my hostname based on server configuration values */
 void clusterUpdateMyselfHostname(void) {
     if (!myself) return;
@@ -4271,7 +4283,8 @@ int clusterProcessPacket(clusterLink *link) {
                      *
                      * Therefore, it's essential to delay any shard_id updates until after the replication
                      * relationship has been properly established and verified. */
-                    if (myself->replicaof && myself->replicaof->replicaof && myself->replicaof->replicaof != myself) {
+                    clusterNode *subreplica_primary = clusterGetSubReplicaPrimary(myself);
+                    if (subreplica_primary) {
                         /* Safeguard against sub-replicas.
                          *
                          * A replica's primary can turn itself into a replica if its last slot
@@ -4283,11 +4296,21 @@ int clusterProcessPacket(clusterLink *link) {
                          * replica during a failover. In this case, they are in the same shard,
                          * so we can try a psync. */
                         serverLog(LL_NOTICE, "I'm a sub-replica! Reconfiguring myself as a replica of %.40s from %.40s",
-                                  myself->replicaof->replicaof->name, myself->replicaof->name);
-                        clusterSetPrimary(myself->replicaof->replicaof, 1,
-                                          !areInSameShard(myself->replicaof->replicaof, myself));
+                                  subreplica_primary->name, myself->replicaof->name);
+                        clusterSetPrimary(subreplica_primary, 1,
+                                          !areInSameShard(subreplica_primary, myself));
                         clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_UPDATE_STATE |
                                              CLUSTER_TODO_FSYNC_CONFIG | CLUSTER_TODO_BROADCAST_ALL);
+                    } else if (myself->replicaof && myself->replicaof->replicaof &&
+                               myself->replicaof->replicaof != myself &&
+                               nodeFailed(myself->replicaof->replicaof)) {
+                        serverLog(LL_NOTICE,
+                                  "I'm a sub-replica, but node %.40s (%s) is failed. "
+                                  "Keeping my current primary %.40s (%s)",
+                                  myself->replicaof->replicaof->name,
+                                  humanNodename(myself->replicaof->replicaof),
+                                  myself->replicaof->name,
+                                  humanNodename(myself->replicaof));
                     }
 
                     /* Update the shard_id when a replica is connected to its

@@ -1275,7 +1275,7 @@ int rewriteConfigRewriteLine(struct rewriteConfigState *state, const char *optio
 
 /* Write the long long 'bytes' value as a string in a way that is parsable
  * inside valkey.conf. If possible uses the GB, MB, KB notation. */
-int rewriteConfigFormatMemory(char *buf, size_t len, unsigned long long bytes) {
+int rewriteConfigFormatMemory(char *buf, size_t len, long long bytes) {
     int gb = 1024 * 1024 * 1024;
     int mb = 1024 * 1024;
     int kb = 1024;
@@ -1294,8 +1294,8 @@ int rewriteConfigFormatMemory(char *buf, size_t len, unsigned long long bytes) {
 /* Rewrite a simple "option-name <bytes>" configuration option. */
 void rewriteConfigBytesOption(struct rewriteConfigState *state,
                               const char *option,
-                              unsigned long long value,
-                              unsigned long long defvalue) {
+                              long long value,
+                              long long defvalue) {
     char buf[64];
     int force = value != defvalue;
     sds line;
@@ -2152,8 +2152,6 @@ static int numericParseString(standardConfig *config, sds value, const char **er
         int memerr;
         *res = memtoull(value, &memerr);
         if (!memerr) return 1;
-
-        if (string2ll(value, sdslen(value), res)) return 1;
     }
 
     /* Attempt to parse as percent */
@@ -2179,7 +2177,7 @@ static int numericParseString(standardConfig *config, sds value, const char **er
     if (config->data.numeric.flags & MEMORY_CONFIG && config->data.numeric.flags & PERCENT_CONFIG)
         *err = "argument must be a memory or percent value";
     else if (config->data.numeric.flags & MEMORY_CONFIG)
-        *err = "argument must be a memory value or couldn't be parsed into an integer";
+        *err = "argument must be a memory value";
     else if (config->data.numeric.flags & OCTAL_CONFIG)
         *err = "argument couldn't be parsed as an octal number";
     else
@@ -2216,11 +2214,7 @@ static sds numericConfigGet(standardConfig *config) {
         buf[len] = '%';
         buf[len + 1] = '\0';
     } else if (config->data.numeric.flags & MEMORY_CONFIG) {
-        if (config->data.numeric.numeric_type == NUMERIC_TYPE_LONG_LONG && value < 0) {
-            ll2string(buf, sizeof(buf), value);
-        } else {
-            ull2string(buf, sizeof(buf), value);
-        }
+        ull2string(buf, sizeof(buf), value);
     } else if (config->data.numeric.flags & OCTAL_CONFIG) {
         snprintf(buf, sizeof(buf), "%llo", value);
     } else {
@@ -2237,11 +2231,7 @@ static void numericConfigRewrite(standardConfig *config, const char *name, struc
     if (config->data.numeric.flags & PERCENT_CONFIG && value < 0) {
         rewriteConfigPercentOption(state, name, -value, config->data.numeric.default_value);
     } else if (config->data.numeric.flags & MEMORY_CONFIG) {
-        if (config->data.numeric.numeric_type == NUMERIC_TYPE_LONG_LONG && value < 0) {
-            rewriteConfigNumericalOption(state, name, value, config->data.numeric.default_value);
-        } else {
-            rewriteConfigBytesOption(state, name, value, config->data.numeric.default_value);
-        }
+        rewriteConfigBytesOption(state, name, value, config->data.numeric.default_value);
     } else if (config->data.numeric.flags & OCTAL_CONFIG) {
         rewriteConfigOctalOption(state, name, value, config->data.numeric.default_value);
     } else {
@@ -3374,8 +3364,8 @@ standardConfig static_configs[] = {
     createLongLongConfig("cluster-node-timeout", NULL, MODIFIABLE_CONFIG, 0, LLONG_MAX, server.cluster_node_timeout, 15000, INTEGER_CONFIG, NULL, NULL),
     createLongLongConfig("cluster-ping-interval", NULL, MODIFIABLE_CONFIG | HIDDEN_CONFIG, 0, LLONG_MAX, server.cluster_ping_interval, 0, INTEGER_CONFIG, NULL, NULL),
     createLongLongConfig("commandlog-execution-slower-than", "slowlog-log-slower-than", MODIFIABLE_CONFIG, -1, LLONG_MAX, server.commandlog[COMMANDLOG_TYPE_SLOW].threshold, 10000, INTEGER_CONFIG, NULL, NULL),
-    createLongLongConfig("commandlog-request-larger-than", NULL, MODIFIABLE_CONFIG, -1, LLONG_MAX, server.commandlog[COMMANDLOG_TYPE_LARGE_REQUEST].threshold, 1024 * 1024, MEMORY_CONFIG, NULL, NULL),
-    createLongLongConfig("commandlog-reply-larger-than", NULL, MODIFIABLE_CONFIG, -1, LLONG_MAX, server.commandlog[COMMANDLOG_TYPE_LARGE_REPLY].threshold, 1024 * 1024, MEMORY_CONFIG, NULL, NULL),
+    createLongLongConfig("commandlog-request-larger-than", NULL, MODIFIABLE_CONFIG, -1, LLONG_MAX, server.commandlog[COMMANDLOG_TYPE_LARGE_REQUEST].threshold, 1024 * 1024, INTEGER_CONFIG, NULL, NULL),
+    createLongLongConfig("commandlog-reply-larger-than", NULL, MODIFIABLE_CONFIG, -1, LLONG_MAX, server.commandlog[COMMANDLOG_TYPE_LARGE_REPLY].threshold, 1024 * 1024, INTEGER_CONFIG, NULL, NULL),
     createLongLongConfig("latency-monitor-threshold", NULL, MODIFIABLE_CONFIG, 0, LLONG_MAX, server.latency_monitor_threshold, 0, INTEGER_CONFIG, NULL, NULL),
     createLongLongConfig("proto-max-bulk-len", NULL, DEBUG_CONFIG | MODIFIABLE_CONFIG, 1024 * 1024, LONG_MAX, server.proto_max_bulk_len, 512ll * 1024 * 1024, MEMORY_CONFIG, NULL, NULL), /* Bulk request max size */
     createLongLongConfig("stream-node-max-entries", NULL, MODIFIABLE_CONFIG, 0, LLONG_MAX, server.stream_node_max_entries, 100, INTEGER_CONFIG, NULL, NULL),

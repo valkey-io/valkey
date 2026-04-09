@@ -59,6 +59,12 @@ typedef struct dictEntry {
 
 #define UNUSED(V) ((void)V)
 
+#if defined(__GNUC__) || defined(__clang__)
+#define DICT_INLINE static inline __attribute__((always_inline))
+#else
+#define DICT_INLINE static inline
+#endif
+
 #define dictSize(d) hashtableSize(d)
 #define dictIsEmpty(d) (hashtableSize(d) == 0)
 #define dictIsRehashing(d) hashtableIsRehashing(d)
@@ -79,122 +85,122 @@ typedef struct dictEntry {
 /* Expand the hash table if needed. Returns DICT_OK if expand was performed
  * or if the dictionary is already large enough, DICT_ERR if expand was not
  * performed. */
-static inline int dictExpand(dict *d, unsigned long size) {
+DICT_INLINE int dictExpand(dict *d, unsigned long size) {
     return hashtableExpand(d, size) ? DICT_OK : DICT_ERR;
 }
 
 /* Entry accessor functions */
-static inline void dictSetKey(dict *d, dictEntry *de, void *key) {
+DICT_INLINE void dictSetKey(dict *d, dictEntry *de, void *key) {
     UNUSED(d);
     de->key = key;
 }
 
-static inline void dictSetVal(dict *d, dictEntry *de, void *val) {
+DICT_INLINE void dictSetVal(dict *d, dictEntry *de, void *val) {
     UNUSED(d);
     de->v.val = val;
 }
 
-static inline void dictSetSignedIntegerVal(dictEntry *de, int64_t val) {
+DICT_INLINE void dictSetSignedIntegerVal(dictEntry *de, int64_t val) {
     de->v.s64 = val;
 }
 
-static inline void dictSetUnsignedIntegerVal(dictEntry *de, uint64_t val) {
+DICT_INLINE void dictSetUnsignedIntegerVal(dictEntry *de, uint64_t val) {
     de->v.u64 = val;
 }
 
-static inline void dictSetDoubleVal(dictEntry *de, double val) {
+DICT_INLINE void dictSetDoubleVal(dictEntry *de, double val) {
     de->v.d = val;
 }
 
-static inline int64_t dictIncrSignedIntegerVal(dictEntry *de, int64_t val) {
+DICT_INLINE int64_t dictIncrSignedIntegerVal(dictEntry *de, int64_t val) {
     de->v.s64 += val;
     return de->v.s64;
 }
 
-static inline uint64_t dictIncrUnsignedIntegerVal(dictEntry *de, uint64_t val) {
+DICT_INLINE uint64_t dictIncrUnsignedIntegerVal(dictEntry *de, uint64_t val) {
     de->v.u64 += val;
     return de->v.u64;
 }
 
-static inline double dictIncrDoubleVal(dictEntry *de, double val) {
+DICT_INLINE double dictIncrDoubleVal(dictEntry *de, double val) {
     de->v.d += val;
     return de->v.d;
 }
 
-static inline void *dictGetKey(const dictEntry *de) {
+DICT_INLINE void *dictGetKey(const dictEntry *de) {
     return de->key;
 }
 
 /* Callback for dictType.entryGetKey, which expects void pointers. */
-static inline const void *dictEntryGetKey(const void *entry) {
+DICT_INLINE const void *dictEntryGetKey(const void *entry) {
     return dictGetKey((const dictEntry *)entry);
 }
 
-static inline void *dictGetVal(const dictEntry *de) {
+DICT_INLINE void *dictGetVal(const dictEntry *de) {
     return de->v.val;
 }
 
-static inline int64_t dictGetSignedIntegerVal(const dictEntry *de) {
+DICT_INLINE int64_t dictGetSignedIntegerVal(const dictEntry *de) {
     return de->v.s64;
 }
 
-static inline uint64_t dictGetUnsignedIntegerVal(const dictEntry *de) {
+DICT_INLINE uint64_t dictGetUnsignedIntegerVal(const dictEntry *de) {
     return de->v.u64;
 }
 
-static inline double dictGetDoubleVal(const dictEntry *de) {
+DICT_INLINE double dictGetDoubleVal(const dictEntry *de) {
     return de->v.d;
 }
 
-static inline double *dictGetDoubleValPtr(dictEntry *de) {
+DICT_INLINE double *dictGetDoubleValPtr(dictEntry *de) {
     return &de->v.d;
 }
 
-static inline size_t dictEntryMemUsage(dictEntry *de) {
+DICT_INLINE size_t dictEntryMemUsage(dictEntry *de) {
     return sizeof(*de);
 }
 
-static inline size_t dictMemUsage(const dict *d) {
+DICT_INLINE size_t dictMemUsage(const dict *d) {
     return hashtableMemUsage(d) + hashtableSize(d) * sizeof(dictEntry);
 }
 
 /* Search for a key in the dictionary. Returns the dictEntry if found,
  * or NULL if the key doesn't exist. */
-static inline dictEntry *dictFind(dict *d, const void *key) {
+DICT_INLINE dictEntry *dictFind(dict *d, const void *key) {
     void *found = NULL;
     return hashtableFind(d, key, &found) ? (dictEntry *)found : NULL;
 }
 
 /* Fetch the value associated with a key. Returns the value if the key exists,
  * or NULL if the key doesn't exist. */
-static inline void *dictFetchValue(dict *d, const void *key) {
+DICT_INLINE void *dictFetchValue(dict *d, const void *key) {
     dictEntry *de = dictFind(d, key);
     return de ? de->v.val : NULL;
 }
 
 /* Remove a key from the dictionary. Returns DICT_OK if the key was found
  * and removed, DICT_ERR if the key was not found. */
-static inline int dictDelete(dict *d, const void *key) {
+DICT_INLINE int dictDelete(dict *d, const void *key) {
     return hashtableDelete(d, key) ? DICT_OK : DICT_ERR;
 }
 
 /* Free an entry that was previously unlinked with dictUnlink().
  * It's safe to call this function with de = NULL. */
-static inline void dictFreeUnlinkedEntry(dict *d, dictEntry *de) {
+DICT_INLINE void dictFreeUnlinkedEntry(dict *d, dictEntry *de) {
     if (de == NULL) return;
     hashtableType *type = hashtableGetType(d);
     type->entryDestructor(de);
 }
 
 /* Return a random entry from the hash table. */
-static inline dictEntry *dictGetRandomKey(dict *d) {
+DICT_INLINE dictEntry *dictGetRandomKey(dict *d) {
     void *entry = NULL;
     return hashtableRandomEntry(d, &entry) ? (dictEntry *)entry : NULL;
 }
 
 /* A more fair random entry selection that considers chain lengths.
  * This provides better distribution than dictGetRandomKey(). */
-static inline dictEntry *dictGetFairRandomKey(dict *d) {
+DICT_INLINE dictEntry *dictGetFairRandomKey(dict *d) {
     void *entry = NULL;
     return hashtableFairRandomEntry(d, &entry) ? (dictEntry *)entry : NULL;
 }
@@ -208,13 +214,13 @@ static inline dictEntry *dictGetFairRandomKey(dict *d) {
  * This function is useful when we want to remove something from the hash
  * table but want to use its value before actually deleting the entry.
  * Without this function the pattern would require two lookups. */
-static inline dictEntry *dictUnlink(dict *d, const void *key) {
+DICT_INLINE dictEntry *dictUnlink(dict *d, const void *key) {
     void *entry = NULL;
     return hashtablePop(d, key, &entry) ? (dictEntry *)entry : NULL;
 }
 
 /* Add an entry to the dictionary. */
-static inline int dictAdd(dict *d, void *key, void *val) {
+DICT_INLINE int dictAdd(dict *d, void *key, void *val) {
     hashtablePosition pos;
     void *existing = NULL;
 
@@ -236,7 +242,7 @@ static inline int dictAdd(dict *d, void *key, void *val) {
  *
  * If key was added, the dictEntry is returned to be manipulated by the
  * caller. */
-static inline dictEntry *dictAddRaw(dict *d, void *key, dictEntry **existing) {
+DICT_INLINE dictEntry *dictAddRaw(dict *d, void *key, dictEntry **existing) {
     hashtablePosition pos;
     void *existing_entry = NULL;
 
@@ -254,7 +260,7 @@ static inline dictEntry *dictAddRaw(dict *d, void *key, dictEntry **existing) {
 
 /* Adds a key to the dictionary if it doesn't already exists. Returns the
  * dictEntry of the key, whether it was just added or not. */
-static inline dictEntry *dictAddOrFind(dict *d, void *key) {
+DICT_INLINE dictEntry *dictAddOrFind(dict *d, void *key) {
     dictEntry *existing = NULL;
     dictEntry *entry = dictAddRaw(d, key, &existing);
     return entry ? entry : existing;
@@ -265,7 +271,7 @@ static inline dictEntry *dictAddOrFind(dict *d, void *key) {
  *
  * Always returns 1 to indicate the key was consumed (either added or used
  * to replace). The caller should not free the key after calling this. */
-static inline int dictReplace(dict *d, void *key, void *val) {
+DICT_INLINE int dictReplace(dict *d, void *key, void *val) {
     dictEntry *entry = (dictEntry *)zmalloc(sizeof(*entry));
     entry->key = key;
     entry->v.val = val;
@@ -287,7 +293,7 @@ static inline int dictReplace(dict *d, void *key, void *val) {
 }
 
 /* Iterator operations */
-static inline dictEntry *dictNext(dictIterator *iter) {
+DICT_INLINE dictEntry *dictNext(dictIterator *iter) {
     void *entry = NULL;
     if (hashtableNext(iter, &entry)) {
         return (dictEntry *)entry;

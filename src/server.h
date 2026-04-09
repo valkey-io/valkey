@@ -1334,6 +1334,9 @@ typedef struct client {
     payloadHeader *last_header; /* Pointer to the last header in a buffer when using copy avoidance */
     int original_argc;          /* Num of arguments of original command if arguments were rewritten. */
     robj **original_argv;       /* Arguments of original command if arguments were rewritten. */
+    int *redact_args;           /* Array of argument indexes that should be redacted in logs. */
+    int redact_args_capacity;   /* Capacity of redact_args array. */
+    int redact_args_count;      /* Number of elements in redact_args array. */
     /* Client flags and state indicators */
     union {
         uint64_t raw_flag;
@@ -2951,6 +2954,7 @@ sds catClientInfoString(sds s, client *client, int hide_user_data);
 sds catClientInfoShortString(sds s, client *client, int hide_user_data);
 sds getAllClientsInfoString(int type, int hide_user_data);
 int clientSetName(client *c, robj *name, const char **err);
+bool clientCommandArgShouldBeRedacted(client *c, int arg_index);
 void rewriteClientCommandVector(client *c, int argc, ...);
 void rewriteClientCommandArgument(client *c, int i, robj *newval);
 void replaceClientCommandVector(client *c, int argc, robj **argv);

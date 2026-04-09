@@ -43,8 +43,10 @@ static commandlogEntry *commandlogCreateEntry(client *c, robj **argv, int argc, 
             ce->argv[j] =
                 createObject(OBJ_STRING, sdscatprintf(sdsempty(), "... (%d more arguments)", argc - ceargc + 1));
         } else {
+            if (clientCommandArgShouldBeRedacted(c, j)) {
+                ce->argv[j] = shared.redacted;
             /* Trim too long strings as well... */
-            if (argv[j]->type == OBJ_STRING && sdsEncodedObject(argv[j]) &&
+            } else if (argv[j]->type == OBJ_STRING && sdsEncodedObject(argv[j]) &&
                 sdslen(objectGetVal(argv[j])) > COMMANDLOG_ENTRY_MAX_STRING) {
                 sds s = sdsnewlen(objectGetVal(argv[j]), COMMANDLOG_ENTRY_MAX_STRING);
 

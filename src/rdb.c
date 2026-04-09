@@ -2403,11 +2403,11 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
 
                     /* search for duplicate records */
                     sds field = sdstrynewlen(fstr, flen);
-                    if (!field || !hashtableAdd(dupSearchHashtable, field) ||
-                        !lpSafeToAdd(lp, (size_t)flen + vlen)) {
+                    int field_added = field && hashtableAdd(dupSearchHashtable, field);
+                    if (!field_added || !lpSafeToAdd(lp, (size_t)flen + vlen)) {
                         rdbReportCorruptRDB("Hash zipmap with dup elements, or big length (%u)", flen);
                         hashtableRelease(dupSearchHashtable);
-                        sdsfree(field);
+                        if (!field_added) sdsfree(field);
                         zfree(encoded);
                         zfree(lp);
                         objectSetVal(o, NULL);

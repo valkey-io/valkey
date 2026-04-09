@@ -634,6 +634,233 @@ start_server {
         }
     }
 
+    test {XDELEX deletes items} {
+        r DEL teststream
+        r XADD teststream 1 msg helllo
+        r XADD teststream 2 msg helllo
+        r XADD teststream 3 msg helllo
+        set resp [ r XDELEX teststream IDS 1 1 ]
+        assert_equal 1 [llength $resp]
+        assert_equal 1 [lindex $resp 0]
+
+        assert_equal 2 [ r XLEN teststream ]
+    }
+
+    test {XDELEX on non-existent key returns -1 for each ID} {
+        r DEL nonexistent
+        set resp [r XDELEX nonexistent IDS 2 1 2]
+        assert_equal 2 [llength $resp]
+        assert_equal -1 [lindex $resp 0]
+        assert_equal -1 [lindex $resp 1]
+    }
+
+    test {XDELEX on wrong key type returns error} {
+        r DEL testset
+        r SADD testset a b c
+        assert_error "*WRONGTYPE*" {r XDELEX testset IDS 1 1}
+    }
+
+    test {XDELEX w/ ACKED only deletes acked items} {
+        r DEL teststream
+        r XADD teststream 1 msg helllo
+        r XADD teststream 2 msg helllo
+        r XADD teststream 3 msg helllo
+
+        r XGROUP CREATE teststream testgrp1 0
+        r XREADGROUP GROUP testgrp1 testconsumer COUNT 1 STREAMS teststream >
+        r XACK teststream testgrp1 1
+
+        set ids [ r XDELEX teststream ACKED IDS 3 1 2 99 ]
+        assert_equal 3 [llength $ids]
+        assert_equal 1 [lindex $ids 0]
+        assert_equal 2 [lindex $ids 1]
+        assert_equal -1 [lindex $ids 2]
+
+        assert_equal 2 [ r XLEN teststream ]
+    }
+
+    test {XDELEX w/ KEEPREF deletes all but keeps refs in consumer group PELs} {
+        r DEL teststream
+        r XADD teststream 1 msg helllo
+        r XADD teststream 2 msg helllo
+        r XADD teststream 3 msg helllo
+
+        r XGROUP CREATE teststream testgrp1 0
+        r XREADGROUP GROUP testgrp1 testconsumer COUNT 1 STREAMS teststream >
+
+        set ids [ r XDELEX teststream KEEPREF IDS 3 1 2 99 ]
+        assert_equal 3 [llength $ids]
+        assert_equal 1 [lindex $ids 0]
+        assert_equal 1 [lindex $ids 1]
+        assert_equal -1 [lindex $ids 2]
+
+        assert_equal {1 1-0 1-0 {{testconsumer 1}}} [r XPENDING teststream testgrp1]
+
+        assert_equal 1 [ r XLEN teststream ]
+    }
+
+    test {XDELEX w/ DELREF deletes all but keeps refs in consumer group PELs} {
+        r DEL teststream
+        r XADD teststream 1 msg helllo
+        r XADD teststream 2 msg helllo
+        r XADD teststream 3 msg helllo
+
+        r XGROUP CREATE teststream testgrp1 0
+        r XREADGROUP GROUP testgrp1 testconsumer COUNT 1 STREAMS teststream >
+
+        set ids [ r XDELEX teststream DELREF IDS 3 1 2 99 ]
+        assert_equal 3 [llength $ids]
+        assert_equal 1 [lindex $ids 0]
+        assert_equal 1 [lindex $ids 1]
+        assert_equal -1 [lindex $ids 2]
+
+        assert_equal {0 {} {} {}} [r XPENDING teststream testgrp1]
+
+        assert_equal 1 [ r XLEN teststream ]
+    }
+
+    test {XDELEX on already-deleted ID returns -1} {
+        r DEL teststream
+        r XADD teststream 1 msg hello
+        r XADD teststream 2 msg hello
+
+        # First delete succeeds
+        set resp [r XDELEX teststream IDS 1 1]
+        assert_equal 1 [lindex $resp 0]
+
+        # Second delete on the same ID returns -1
+        set resp [r XDELEX teststream IDS 1 1]
+        assert_equal -1 [lindex $resp 0]
+    }
+
+    test {XDELEX should fail on invalid stream ID format} {
+        r DEL teststream
+        r XADD teststream 1 msg hello
+        assert_error "*Invalid stream ID specified*" {r XDELEX teststream IDS 1 not-a-valid-id}
+    }
+
+    test {XDELEX w/ KEEPREF preserves second consumer group's PEL} {
+        r DEL teststream
+        r XADD teststream 1-0 msg hello
+        r XADD teststream 2-0 msg hello
+        r XGROUP CREATE teststream grp1 0
+        r XGROUP CREATE teststream grp2 0
+        r XREADGROUP GROUP grp1 consumer COUNT 1 STREAMS teststream >
+        r XREADGROUP GROUP grp2 consumer COUNT 1 STREAMS teststream >
+
+        # KEEPREF: delete from stream but leave grp2's PEL reference intact
+        set ids [r XDELEX teststream KEEPREF IDS 1 1-0]
+        assert_equal 1 [lindex $ids 0]
+
+        assert_equal {1 1-0 1-0 {{consumer 1}}} [r XPENDING teststream grp2]
+        assert_equal 1 [r XLEN teststream]
+    }
+
+    test {XDELEX w/ DELREF clears all consumer groups' PELs} {
+        r DEL teststream
+        r XADD teststream 1-0 msg hello
+        r XADD teststream 2-0 msg hello
+        r XGROUP CREATE teststream grp1 0
+        r XGROUP CREATE teststream grp2 0
+        r XREADGROUP GROUP grp1 consumer COUNT 1 STREAMS teststream >
+        r XREADGROUP GROUP grp2 consumer COUNT 1 STREAMS teststream >
+
+        # DELREF: delete from stream and wipe all groups' PEL references
+        set ids [r XDELEX teststream DELREF IDS 1 1-0]
+        assert_equal 1 [lindex $ids 0]
+
+        assert_equal {0 {} {} {}} [r XPENDING teststream grp1]
+        assert_equal {0 {} {} {}} [r XPENDING teststream grp2]
+        assert_equal 1 [r XLEN teststream]
+    }
+
+    test {XDELEX w/ ACKED waits for all consumer groups before deleting} {
+        r DEL teststream
+        r XADD teststream 1-0 msg hello
+        r XGROUP CREATE teststream grp1 0
+        r XGROUP CREATE teststream grp2 0
+        r XREADGROUP GROUP grp1 consumer COUNT 1 STREAMS teststream >
+        r XREADGROUP GROUP grp2 consumer COUNT 1 STREAMS teststream >
+
+        # grp1 acks but grp2 still has it in PEL → no deletion
+        r XACK teststream grp1 1-0
+        set ids [r XDELEX teststream ACKED IDS 1 1-0]
+        assert_equal 2 [lindex $ids 0]
+        assert_equal 1 [r XLEN teststream]
+
+        # grp2 acks; all groups done → deletion occurs
+        r XACK teststream grp2 1-0
+        set ids [r XDELEX teststream ACKED IDS 1 1-0]
+        assert_equal 1 [lindex $ids 0]
+        assert_equal 0 [r XLEN teststream]
+    }
+
+    test {XDELEX returns syntax error when IDS token is missing after mode} {
+        r DEL teststream
+        r XADD teststream 1 msg hello
+        assert_error "*syntax error*" {r XDELEX teststream KEEPREF NOIDS 1 1}
+        assert_error "*syntax error*" {r XDELEX teststream DELREF NOIDS 1 1}
+        assert_error "*syntax error*" {r XDELEX teststream ACKED NOIDS 1 1}
+    }
+
+    test {XDELEX returns error for unrecognized mode token} {
+        r DEL teststream
+        r XADD teststream 1 msg hello
+        assert_error "*xdelex mode not recognized*" {r XDELEX teststream BADMODE IDS 1 1}
+    }
+
+    test {XDELEX returns error for invalid numids} {
+        r DEL teststream
+        r XADD teststream 1 msg hello
+        assert_error "*positive integer*" {r XDELEX teststream IDS 0 1}
+        assert_error "*positive integer*" {r XDELEX teststream IDS -1 1}
+        assert_error "*positive integer*" {r XDELEX teststream IDS abc 1}
+    }
+
+    test {XDELEX returns error when numids does not match ID count} {
+        r DEL teststream
+        r XADD teststream 1 msg hello
+        r XADD teststream 2 msg hello
+        # Too few IDs provided for numids
+        assert_error "*numids parameter must match*" {r XDELEX teststream IDS 3 1 2}
+        # Too many IDs provided for numids
+        assert_error "*syntax error*" {r XDELEX teststream IDS 1 1 2}
+    }
+
+    test {XDELEX with more than 8 IDs exercises dynamic allocation} {
+        r DEL teststream
+        # STREAMID_STATIC_VECTOR_LEN is 8, use 10 to force zmalloc path
+        for {set i 1} {$i <= 10} {incr i} {
+            r XADD teststream $i msg hello
+        }
+        set ids [r XDELEX teststream IDS 10 1 2 3 4 5 6 7 8 9 10]
+        assert_equal 10 [llength $ids]
+        foreach id $ids {
+            assert_equal 1 $id
+        }
+        assert_equal 0 [r XLEN teststream]
+    }
+
+    test {XDELEX with more than 8 IDs and ACKED mode exercises dynamic allocation} {
+        r DEL teststream
+        for {set i 1} {$i <= 10} {incr i} {
+            r XADD teststream $i msg hello
+        }
+        r XGROUP CREATE teststream grp 0
+        # Read all entries into the group's PEL
+        r XREADGROUP GROUP grp consumer COUNT 10 STREAMS teststream >
+        # Ack all so ACKED mode can delete them
+        for {set i 1} {$i <= 10} {incr i} {
+            r XACK teststream grp $i
+        }
+        set ids [r XDELEX teststream ACKED IDS 10 1 2 3 4 5 6 7 8 9 10]
+        assert_equal 10 [llength $ids]
+        foreach id $ids {
+            assert_equal 1 $id
+        }
+        assert_equal 0 [r XLEN teststream]
+    }
+
     test {XRANGE fuzzing} {
         set items [r XRANGE mystream{t} - +]
         set low_id [lindex $items 0 0]

@@ -5857,15 +5857,23 @@ static void backupAndUpdateClientArgv(client *c, int new_argc, robj **new_argv) 
 }
 
 bool clientCommandArgShouldBeRedacted(client *c, int arg_index) {
-    if (arg_index < 1 || arg_index >= 32) return false;
+    if (arg_index < 1) return false;
+    if (arg_index >= 32) return c->redact_arg_bitmap & 1U;
     return (c->redact_arg_bitmap >> arg_index) & 1;
 }
 
 /* Redact a given argument to prevent it from being shown
- * in the commandlog. The argument index is recorded in a bitmap. */
+ * in the commandlog. The argument index is recorded in a bitmap.
+ * For indices in the range [1, 31] the corresponding bit is set.
+ * For indices >= 32, bit 0 is set as a sentinel to indicate that all
+ * arguments beyond the bitmap range should also be redacted. */
 void redactClientCommandArgument(client *c, int argc) {
-    serverAssert(argc >= 1 && argc < 32);
-    c->redact_arg_bitmap |= (1U << argc);
+    serverAssert(argc >= 1);
+    if (argc < 32) {
+        c->redact_arg_bitmap |= (1U << argc);
+    } else {
+        c->redact_arg_bitmap |= 1U;
+    }
 }
 
 /* Rewrite the command vector of the client. All the new objects ref count

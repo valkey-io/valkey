@@ -7,6 +7,7 @@
 typedef char *sds;
 struct serverObject;
 struct client;
+struct clusterLink;
 
 /* Interface for cluster bus protocol implementations.
  * Only includes operations that code outside the protocol
@@ -20,6 +21,20 @@ typedef struct clusterBusType {
     void (*cron)(void);
     void (*beforeSleep)(void);
     void (*handleServerShutdown)(bool auto_failover);
+
+    /* Cluster link message handling — called from cluster_link.c */
+
+    /* Validate the message header (first RCVBUF_MIN_READ_LEN bytes)
+     * and return the total message length. Returns 0 if invalid. */
+    uint32_t (*validateMessageHeader)(char *header);
+
+    /* Process a complete message in link->rcvbuf. Returns 1 on success,
+     * 0 if the link is no longer valid (freed). */
+    int (*processMessage)(struct clusterLink *link);
+
+    /* Called after an outbound link connection is established. The
+     * implementation typically sends an initial message (e.g. PING). */
+    void (*postConnect)(struct clusterLink *link);
 
     /* Config updates — called from config.c */
     void (*updateMyselfFlags)(void);

@@ -14,6 +14,7 @@
 
 #include "server.h"
 #include "cluster.h"
+#include "cluster_bus.h"
 #include "cluster_state.h"
 #include "cluster_link.h"
 
@@ -338,4 +339,194 @@ const char **clusterLinkDebugHelp(void) {
         "with the provided node.",
         NULL};
     return help;
+}
+
+/* -----------------------------------------------------------------------------
+ * Cluster link connection and message handling
+ * -------------------------------------------------------------------------- */
+
+/* Called when an outbound connection to a cluster node is established. */
+void clusterLinkConnectHandler(connection *conn) {
+    clusterLink *link = connGetPrivateData(conn);
+    clusterNode *node = link->node;
+
+    /* Check if connection succeeded */
+    if (connGetState(conn) != CONN_STATE_CONNECTED) {
+        serverLog(LL_VERBOSE, "Connection with Node %.40s at %s:%d failed: %s", node->name, node->ip, node->cport,
+                  connGetLastError(conn));
+        freeClusterLink(link);
+        return;
+    }
+
+    /* Register a read handler from now on */
+    connSetReadHandler(conn, clusterReadHandler);
+
+    /* Protocol-specific post-connect action (e.g. send initial PING). */
+    if (clusterCurrentBus->postConnect) clusterCurrentBus->postConnect(link);
+
+    serverLog(LL_DEBUG, "Connecting with Node %.40s at %s:%d", node->name, node->ip, node->cport);
+}
+
+/* Called when a new inbound connection is accepted on the cluster bus. */
+static void clusterConnAcceptHandler(connection *conn) {
+    clusterLink *link;
+
+    if (connGetState(conn) != CONN_STATE_CONNECTED) {
+        serverLog(LL_VERBOSE, "Error accepting cluster node connection: %s", connGetLastError(conn));
+        connClose(conn);
+        return;
+    }
+
+    /* Create a link object we use to handle the connection.
+     * It gets passed to the readable handler when data is available.
+     * Initially the link->node pointer is set to NULL as we don't know
+     * which node is, but the right node is references once we know the
+     * node identity. */
+    link = createClusterLink(NULL);
+    link->conn = conn;
+    connSetPrivateData(conn, link);
+
+    /* Register read handler */
+    connSetReadHandler(conn, clusterReadHandler);
+}
+
+void clusterAcceptHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
+    int cport, cfd;
+    int max = server.tls_cluster ? server.max_new_tls_conns_per_cycle : server.max_new_conns_per_cycle;
+    char cip[NET_IP_STR_LEN];
+    int require_auth = TLS_CLIENT_AUTH_YES;
+    UNUSED(el);
+    UNUSED(mask);
+    UNUSED(privdata);
+
+    /* If the server is starting up, don't accept cluster connections:
+     * UPDATE messages may interact with the database content. */
+    if (server.primary_host == NULL && server.loading) return;
+
+    while (max--) {
+        cfd = anetTcpAccept(server.neterr, fd, cip, sizeof(cip), &cport);
+        if (cfd == ANET_ERR) {
+            if (anetRetryAcceptOnError(errno)) continue;
+            if (errno != EWOULDBLOCK) serverLog(LL_VERBOSE, "Error accepting cluster node: %s", server.neterr);
+            return;
+        }
+
+        connection *conn = connCreateAccepted(connTypeOfCluster(), cfd, &require_auth);
+
+        /* Make sure connection is not in an error state */
+        if (connGetState(conn) != CONN_STATE_ACCEPTING) {
+            serverLog(LL_VERBOSE, "Error creating an accepting connection for cluster node: %s",
+                      connGetLastError(conn));
+            connClose(conn);
+            return;
+        }
+
+        connKeepAlive(conn, server.cluster_node_timeout / 1000 * 2);
+
+        /* Use non-blocking I/O for cluster messages. */
+        serverLog(LL_VERBOSE, "Accepting cluster node connection from %s:%d", cip, cport);
+
+        /* Accept the connection now.  connAccept() may call our handler directly
+         * or schedule it for later depending on connection implementation.
+         */
+        if (connAccept(conn, clusterConnAcceptHandler) == C_ERR) {
+            if (connGetState(conn) == CONN_STATE_ERROR)
+                serverLog(LL_VERBOSE, "Error accepting cluster node connection: %s", connGetLastError(conn));
+            connClose(conn);
+            return;
+        }
+    }
+}
+
+/* Read data. Try to read the first field of the header first to check the
+ * full length of the packet. When a whole packet is in memory this function
+ * will call the function to process the packet. And so forth. */
+void clusterReadHandler(connection *conn) {
+    char buf[sizeof(clusterMsgSendBlock)];
+    ssize_t nread;
+    clusterLink *link = connGetPrivateData(conn);
+    unsigned int readlen, rcvbuflen;
+
+    while (1) { /* Read as long as there is data to read. */
+        rcvbuflen = link->rcvbuf_len;
+        if (rcvbuflen < RCVBUF_MIN_READ_LEN) {
+            /* First, obtain the first bytes to get the full message
+             * length. */
+            readlen = RCVBUF_MIN_READ_LEN - rcvbuflen;
+        } else {
+            uint32_t totlen;
+            if (rcvbuflen == RCVBUF_MIN_READ_LEN) {
+                /* Perform some sanity check on the message signature
+                 * and length. */
+                totlen = clusterCurrentBus->validateMessageHeader(link->rcvbuf);
+                if (!totlen) {
+                    char ip[NET_IP_STR_LEN];
+                    int port;
+                    if (connAddrPeerName(conn, ip, sizeof(ip), &port) == -1) {
+                        serverLog(LL_WARNING, "Bad message length or signature received "
+                                              "on the Cluster bus.");
+                    } else {
+                        serverLog(LL_WARNING,
+                                  "Bad message length or signature received "
+                                  "on the Cluster bus from %s:%d",
+                                  ip, port);
+                    }
+                    freeClusterLink(link);
+                    return;
+                }
+            } else {
+                /* We already validated; re-read totlen from the buffer.
+                 * The protocol must store it as a 32-bit big-endian value
+                 * at a fixed offset within the first RCVBUF_MIN_READ_LEN bytes. */
+                totlen = clusterCurrentBus->validateMessageHeader(link->rcvbuf);
+            }
+            readlen = totlen - rcvbuflen;
+            if (readlen > sizeof(buf)) readlen = sizeof(buf);
+        }
+
+        nread = connRead(conn, buf, readlen);
+        if (nread == -1 && (connGetState(conn) == CONN_STATE_CONNECTED)) return; /* No more data ready. */
+
+        if (nread <= 0) {
+            /* I/O error... */
+            serverLog(LL_DEBUG, "I/O error reading from node link (%.40s:%s) (%s): %s",
+                      clusterLinkGetNodeName(link), link->inbound ? "inbound" : "outbound",
+                      clusterLinkGetHumanNodeName(link),
+                      (nread == 0) ? "connection closed" : connGetLastError(conn));
+            freeClusterLink(link);
+            return;
+        } else {
+            /* Read data and recast the pointer to the new buffer. */
+            size_t unused = link->rcvbuf_alloc - link->rcvbuf_len;
+            if ((size_t)nread > unused) {
+                size_t required = link->rcvbuf_len + nread;
+                size_t prev_rcvbuf_alloc = link->rcvbuf_alloc;
+                /* If less than 1mb, grow to twice the needed size, if larger grow by 1mb. */
+                link->rcvbuf_alloc = required < RCVBUF_MAX_PREALLOC ? required * 2 : required + RCVBUF_MAX_PREALLOC;
+                link->rcvbuf = zrealloc(link->rcvbuf, link->rcvbuf_alloc);
+                server.stat_cluster_links_memory += link->rcvbuf_alloc - prev_rcvbuf_alloc;
+            }
+            memcpy(link->rcvbuf + link->rcvbuf_len, buf, nread);
+            link->rcvbuf_len += nread;
+            rcvbuflen += nread;
+        }
+
+        /* Total length obtained? Process this packet. */
+        if (rcvbuflen >= RCVBUF_MIN_READ_LEN) {
+            uint32_t totlen = clusterCurrentBus->validateMessageHeader(link->rcvbuf);
+            if (totlen && rcvbuflen == totlen) {
+                if (clusterCurrentBus->processMessage(link)) {
+                    if (link->rcvbuf_alloc > RCVBUF_INIT_LEN) {
+                        size_t prev_rcvbuf_alloc = link->rcvbuf_alloc;
+                        zfree(link->rcvbuf);
+                        link->rcvbuf = zmalloc(link->rcvbuf_alloc = RCVBUF_INIT_LEN);
+                        server.stat_cluster_links_memory += link->rcvbuf_alloc - prev_rcvbuf_alloc;
+                    }
+                    link->rcvbuf_len = 0;
+                } else {
+                    return; /* Link no longer valid. */
+                }
+            }
+        }
+    }
 }

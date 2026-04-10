@@ -133,6 +133,27 @@ list *clusterGetNodesInMyShard(clusterNode *node);
 extern clusterNode *myself;
 clusterNode *createClusterNode(char *nodename, int flags);
 
+/* Iterator for traversing cluster nodes. Supports iterating over all nodes,
+ * nodes in a shard, or a single node. */
+typedef struct {
+    enum {
+        ITER_DICT,
+        ITER_LIST,
+        ITER_NODE,
+    } type;
+    union {
+        dictIterator di;
+        listIter li;
+        clusterNode *node;
+    };
+} ClusterNodeIterator;
+
+void clusterNodeIterInitAllNodes(ClusterNodeIterator *iter);
+void clusterNodeIterInitMyShard(ClusterNodeIterator *iter);
+void clusterNodeIterNode(ClusterNodeIterator *iter, clusterNode *node);
+clusterNode *clusterNodeIterNext(ClusterNodeIterator *iter);
+void clusterNodeIterReset(ClusterNodeIterator *iter);
+
 /* Slot assignment. */
 void clusterNodeSetSlotBit(clusterNode *n, int slot);
 int clusterAddSlot(clusterNode *n, int slot);

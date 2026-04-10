@@ -18,6 +18,11 @@
 #include "cluster_bus.h"
 #include "cluster_slot_stats.h"
 
+/* A global reference to myself is handy to make code more clear.
+ * Myself always points to server.cluster->myself, that is, the clusterNode
+ * that represents this node. */
+clusterNode *myself = NULL;
+
 /* -------------------------------------------------------------------------
  * Dict types for common cluster state
  * ------------------------------------------------------------------------- */
@@ -498,11 +503,6 @@ int clusterNodeClearSlotBit(clusterNode *n, int slot) {
  * Node creation
  * -------------------------------------------------------------------------- */
 
-/* A global reference to myself is handy to make code more clear.
- * Myself always points to server.cluster->myself, that is, the clusterNode
- * that represents this node. */
-clusterNode *myself = NULL;
-
 clusterNode *createClusterNode(char *nodename, int flags) {
     clusterNode *node = zmalloc(sizeof(*node));
 
@@ -660,4 +660,55 @@ int detectAndUpdateCachedNodeHealth(void) {
     }
 
     return overall_health_changed;
+}
+
+/* -----------------------------------------------------------------------------
+ * Node iterator
+ * -------------------------------------------------------------------------- */
+
+void clusterNodeIterInitAllNodes(ClusterNodeIterator *iter) {
+    iter->type = ITER_DICT;
+    dictInitSafeIterator(&iter->di, server.cluster->nodes);
+}
+
+void clusterNodeIterInitMyShard(ClusterNodeIterator *iter) {
+    list *nodes = clusterGetNodesInMyShard(server.cluster->myself);
+    serverAssert(nodes != NULL);
+    iter->type = ITER_LIST;
+    listRewind(nodes, &iter->li);
+}
+
+void clusterNodeIterNode(ClusterNodeIterator *iter, clusterNode *node) {
+    iter->type = ITER_NODE;
+    iter->node = node;
+}
+
+clusterNode *clusterNodeIterNext(ClusterNodeIterator *iter) {
+    switch (iter->type) {
+    case ITER_DICT: {
+        dictEntry *de = dictNext(&iter->di);
+        return de ? dictGetVal(de) : NULL;
+    }
+    case ITER_LIST: {
+        listNode *ln = listNext(&iter->li);
+        return ln ? listNodeValue(ln) : NULL;
+    }
+    case ITER_NODE: {
+        if (iter->node) {
+            clusterNode *node = iter->node;
+            iter->node = NULL;
+            return node;
+        }
+        return NULL;
+    }
+    }
+    serverPanic("Unknown iterator type %d", iter->type);
+}
+
+void clusterNodeIterReset(ClusterNodeIterator *iter) {
+    if (iter->type == ITER_DICT) {
+        dictResetIterator(&iter->di);
+    } else if (iter->type == ITER_NODE) {
+        iter->node = NULL;
+    }
 }

@@ -206,6 +206,7 @@ unsigned long getClusterConnectionsCount(void) {
  * to reset via CONFIG RESETSTAT. The function is also used in order to
  * initialize these fields in clusterInit() at server startup. */
 void resetClusterStats(void) {
+    if (!server.cluster_enabled) return;
     server.cluster->stat_cluster_links_buffer_limit_exceeded = 0;
     clusterCurrentBus->resetStats();
 }

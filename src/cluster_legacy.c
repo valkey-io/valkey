@@ -935,6 +935,7 @@ static void clusterLegacyReset(int hard) {
 /* -----------------------------------------------------------------------------
  * CLUSTER communication link
  * -------------------------------------------------------------------------- */
+
 clusterMsgSendBlock *createClusterMsgSendBlock(int type, uint32_t msglen) {
     uint32_t blocklen = sizeof(clusterMsgSendBlock) + msglen;
     clusterMsgSendBlock *msgblock = zcalloc(blocklen);
@@ -949,8 +950,6 @@ clusterMsgSendBlock *createClusterMsgSendBlock(int type, uint32_t msglen) {
     }
     return msgblock;
 }
-
-
 
 /* Return the approximated number of sockets we are using in order to
  * take the cluster bus connections. */

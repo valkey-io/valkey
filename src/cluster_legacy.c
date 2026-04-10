@@ -1914,24 +1914,6 @@ void clusterProcessGossipSection(clusterMsg *hdr, clusterLink *link) {
     }
 }
 
-/* IP -> string conversion. 'buf' is supposed to at least be 46 bytes.
- * If 'announced_ip' length is non-zero, it is used instead of extracting
- * the IP from the socket peer address. */
-int nodeIp2String(char *buf, clusterLink *link, char *announced_ip) {
-    if (announced_ip[0] != '\0') {
-        memcpy(buf, announced_ip, NET_IP_STR_LEN);
-        buf[NET_IP_STR_LEN - 1] = '\0'; /* We are not sure the input is sane. */
-        return C_OK;
-    } else {
-        if (connAddrPeerName(link->conn, buf, NET_IP_STR_LEN, NULL) == -1) {
-            serverLog(LL_NOTICE, "Error converting peer IP to string: %s",
-                      link->conn ? connGetLastError(link->conn) : "no link");
-            return C_ERR;
-        }
-        return C_OK;
-    }
-}
-
 /* Update the node address to the IP address that can be extracted
  * from link->fd, or if hdr->myip is non empty, to the address the node
  * is announcing us. The port is taken from the packet header as well.

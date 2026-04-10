@@ -170,6 +170,24 @@ char *clusterLinkGetHumanNodeName(clusterLink *link) {
     return link->node ? humanNodename(link->node) : "<unknown>";
 }
 
+/* IP -> string conversion. 'buf' is supposed to at least be 46 bytes.
+ * If 'announced_ip' length is non-zero, it is used instead of extracting
+ * the IP from the socket peer address. */
+int nodeIp2String(char *buf, clusterLink *link, char *announced_ip) {
+    if (announced_ip[0] != '\0') {
+        memcpy(buf, announced_ip, NET_IP_STR_LEN);
+        buf[NET_IP_STR_LEN - 1] = '\0'; /* We are not sure the input is sane. */
+        return C_OK;
+    } else {
+        if (connAddrPeerName(link->conn, buf, NET_IP_STR_LEN, NULL) == -1) {
+            serverLog(LL_NOTICE, "Error converting peer IP to string: %s",
+                      link->conn ? connGetLastError(link->conn) : "no link");
+            return C_ERR;
+        }
+        return C_OK;
+    }
+}
+
 /* --- CLUSTER LINKS command --- */
 
 /* Add to the output buffer of the given client the description of the given cluster link.

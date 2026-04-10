@@ -419,7 +419,7 @@ start_server {tags {"commandlog"} overrides {commandlog-execution-slower-than 10
         restart_server 0 true false
         assert_equal [lindex [r config get commandlog-request-larger-than] 1] 10485760
         assert_equal [lindex [r config get commandlog-reply-larger-than] 1] 10485760
-    }
+    } {} {external:skip}
 
     test {COMMANDLOG - special number -1 disables the command logging} {
         r config set commandlog-execution-slower-than -1
@@ -443,5 +443,5 @@ start_server {tags {"commandlog"} overrides {commandlog-execution-slower-than 10
         assert_equal [lindex [r config get commandlog-execution-slower-than] 1] -1
         assert_equal [lindex [r config get commandlog-request-larger-than] 1] -1
         assert_equal [lindex [r config get commandlog-reply-larger-than] 1] -1
-    }
+    } {} {external:skip}
 }

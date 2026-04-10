@@ -442,6 +442,7 @@ struct clusterState {
     dict *migrating_slots_to;
     dict *importing_slots_from;
     clusterNode *slots[CLUSTER_SLOTS];
+    int slots_info_dirty;      /* True when slot_info_pairs on nodes need recomputation. */
     list *slot_migration_jobs; /* List storing all slot migration jobs. Stored
                                 * in order from most recent to least recently
                                 * created. */

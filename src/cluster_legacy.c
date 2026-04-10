@@ -1441,6 +1441,7 @@ void clusterInit(void) {
     server.cluster->safe_to_join = 0;
     server.cluster->size = 0;
     server.cluster->todo_before_sleep = 0;
+    server.cluster->slots_info_dirty = 1;
     server.cluster->nodes = dictCreate(&clusterNodesDictType);
     server.cluster->shards = dictCreate(&clusterSdsToListType);
     server.cluster->nodes_black_list = dictCreate(&clusterNodesBlackListDictType);
@@ -2200,6 +2201,7 @@ void freeClusterNode(clusterNode *n) {
     sdsfree(n->announce_client_ipv4);
     sdsfree(n->announce_client_ipv6);
     raxFree(n->fail_reports);
+    zfree(n->slot_info_pairs);
     zfree(n->replicas);
     zfree(n);
 }
@@ -6457,6 +6459,7 @@ int clusterAddSlot(clusterNode *n, int slot) {
     server.cluster->slots[slot] = n;
     bitmapClearBit(server.cluster->owner_not_claiming_slot, slot);
     clusterSlotStatReset(slot);
+    server.cluster->slots_info_dirty = 1;
     return C_OK;
 }
 
@@ -6476,6 +6479,7 @@ int clusterDelSlot(int slot) {
     /* Make owner_not_claiming_slot flag consistent with slot ownership information. */
     bitmapClearBit(server.cluster->owner_not_claiming_slot, slot);
     clusterSlotStatReset(slot);
+    server.cluster->slots_info_dirty = 1;
     return C_OK;
 }
 
@@ -6961,6 +6965,13 @@ sds clusterGenNodeDescription(client *c, clusterNode *node, int tls_primary) {
  * of clusterGenNodesDescription() because it removes looping of the slot space
  * for generating the slot info for each node individually. */
 void clusterGenNodesSlotsInfo(int filter) {
+    dictIterator *di = dictGetSafeIterator(server.cluster->nodes);
+    dictEntry *de;
+    while ((de = dictNext(di)) != NULL) {
+        clusterFreeNodesSlotsInfo(dictGetVal(de));
+    }
+    dictReleaseIterator(di);
+
     clusterNode *n = NULL;
     int start = -1;
 
@@ -7017,8 +7028,8 @@ sds clusterGenNodesDescription(client *c, int filter, int tls_primary) {
     dictIterator *di;
     dictEntry *de;
 
-    /* Generate all nodes slots info firstly. */
     clusterGenNodesSlotsInfo(filter);
+    server.cluster->slots_info_dirty = 1;
 
     di = dictGetSafeIterator(server.cluster->nodes);
     while ((de = dictNext(di)) != NULL) {
@@ -7252,8 +7263,10 @@ void addNodeDetailsToShardReply(client *c, clusterNode *node) {
  */
 void clusterCommandShards(client *c) {
     addReplyArrayLen(c, dictSize(server.cluster->shards));
-    /* This call will add slot_info_pairs to all nodes */
-    clusterGenNodesSlotsInfo(0);
+    if (server.cluster->slots_info_dirty) {
+        clusterGenNodesSlotsInfo(0);
+        server.cluster->slots_info_dirty = 0;
+    }
     dictIterator *di = dictGetSafeIterator(server.cluster->shards);
     for (dictEntry *de = dictNext(di); de != NULL; de = dictNext(di)) {
         list *nodes = dictGetVal(de);
@@ -7289,7 +7302,6 @@ void clusterCommandShards(client *c) {
         for (listNode *ln = listNext(&li); ln != NULL; ln = listNext(&li)) {
             clusterNode *n = listNodeValue(ln);
             addNodeDetailsToShardReply(c, n);
-            clusterFreeNodesSlotsInfo(n);
         }
         addReplyBulkCString(c, "id");
         addReplyBulkCBuffer(c, dictGetKey(de), CLUSTER_NAMELEN);

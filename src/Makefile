@@ -209,18 +209,22 @@ ifeq ($(uname_S),NetBSD)
 else
 ifeq ($(uname_S),FreeBSD)
 	# FreeBSD
+	FINAL_LDFLAGS+= -rdynamic
 	FINAL_LIBS+= -lpthread -lexecinfo
 else
 ifeq ($(uname_S),DragonFly)
 	# DragonFly
+	FINAL_LDFLAGS+= -rdynamic
 	FINAL_LIBS+= -lpthread -lexecinfo
 else
 ifeq ($(uname_S),OpenBSD)
 	# OpenBSD
+	FINAL_LDFLAGS+= -rdynamic
 	FINAL_LIBS+= -lpthread -lexecinfo
 else
 ifeq ($(uname_S),NetBSD)
 	# NetBSD
+	FINAL_LDFLAGS+= -rdynamic
 	FINAL_LIBS+= -lpthread -lexecinfo
 else
 ifeq ($(uname_S),Haiku)

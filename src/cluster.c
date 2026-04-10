@@ -1773,7 +1773,27 @@ void clusterCommand(client *c) {
         clusterCurrentBus->meet(objectGetVal(c->argv[2]), port, cport, c, clusterCommandMeetCompletion);
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "reset") && (c->argc == 2 || c->argc == 3)) {
         /* CLUSTER RESET [SOFT|HARD] */
-        clusterCurrentBus->resetCluster(c);
+        int hard = 0;
+        if (c->argc == 3) {
+            if (!strcasecmp(objectGetVal(c->argv[2]), "hard")) {
+                hard = 1;
+            } else if (!strcasecmp(objectGetVal(c->argv[2]), "soft")) {
+                hard = 0;
+            } else {
+                addReplyErrorObject(c, shared.syntaxerr);
+                return;
+            }
+        }
+        if (clusterNodeIsPrimary(getMyClusterNode()) && !dbsHaveNoKeys()) {
+            addReplyError(c, "CLUSTER RESET can't be called with "
+                             "master nodes containing keys");
+            return;
+        }
+        sds cl = catClientInfoShortString(sdsempty(), c, server.hide_user_data_from_log);
+        serverLog(LL_NOTICE, "Cluster reset (user request from '%s').", cl);
+        sdsfree(cl);
+        clusterCurrentBus->resetCluster(hard);
+        addReply(c, shared.ok);
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "failover") &&
                c->argc >= 2) {
         /* CLUSTER FAILOVER [FORCE|TAKEOVER] [REPLICAID <NODE ID>] */

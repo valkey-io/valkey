@@ -922,7 +922,7 @@ static void clusterLegacyHandleServerShutdown(bool auto_failover) {
  * 6) The new configuration is saved and the cluster state updated.
  * 7) If the node was a replica, the whole data set is flushed away.
  * 8) If it is a hard reset or the node was a replica: a new Shard ID is generated. */
-void clusterReset(int hard) {
+static void clusterLegacyReset(int hard) {
     dictIterator *di;
     dictEntry *de;
     int j;
@@ -5845,30 +5845,6 @@ static int clusterLegacySpecialCommand(client *c) {
     return 0;
 }
 
-static void clusterLegacyResetCluster(client *c) {
-    int hard = 0;
-    if (c->argc == 3) {
-        if (!strcasecmp(objectGetVal(c->argv[2]), "hard")) {
-            hard = 1;
-        } else if (!strcasecmp(objectGetVal(c->argv[2]), "soft")) {
-            hard = 0;
-        } else {
-            addReplyErrorObject(c, shared.syntaxerr);
-            return;
-        }
-    }
-    if (clusterNodeIsPrimary(myself) && !dbsHaveNoKeys()) {
-        addReplyError(c, "CLUSTER RESET can't be called with "
-                         "master nodes containing keys");
-        return;
-    }
-    sds cl = catClientInfoShortString(sdsempty(), c, server.hide_user_data_from_log);
-    serverLog(LL_NOTICE, "Cluster reset (user request from '%s').", cl);
-    sdsfree(cl);
-    clusterReset(hard);
-    addReply(c, shared.ok);
-}
-
 static void clusterLegacyFailover(int force, int takeover, void *ctx, void (*callback)(void *ctx, const char *error)) {
     clusterLegacyResetManualFailover();
     LEGACY_STATE()->mf_end = mstime() + server.cluster_mf_timeout;
@@ -5920,6 +5896,6 @@ clusterBusType clusterLegacyBus = {
     .setReplicaOf = clusterLegacySetReplicaOf,
     .failover = clusterLegacyFailover,
     .meet = clusterLegacyMeet,
-    .resetCluster = clusterLegacyResetCluster,
+    .resetCluster = clusterLegacyReset,
     .specialCommand = clusterLegacySpecialCommand,
 };

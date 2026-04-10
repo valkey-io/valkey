@@ -636,6 +636,12 @@ typedef enum {
     CLUSTER_ENDPOINT_TYPE_UNKNOWN_ENDPOINT /* Show NULL or empty */
 } cluster_endpoint_type;
 
+/* Cluster persist config mode. */
+typedef enum {
+    CLUSTER_CONFIGFILE_SAVE_BEHAVIOR_SYNC = 0,    /* Perform a synchronous save, exit the process if it fails. */
+    CLUSTER_CONFIGFILE_SAVE_BEHAVIOR_BEST_EFFORT, /* Attempt to save on a "best-effort" basis, process will not exit if it fails. */
+} cluster_persist_config_mode;
+
 /* RDB active child save type. */
 #define RDB_CHILD_TYPE_NONE 0
 #define RDB_CHILD_TYPE_DISK 1   /* RDB is written to disk. */
@@ -1334,6 +1340,7 @@ typedef struct client {
     payloadHeader *last_header; /* Pointer to the last header in a buffer when using copy avoidance */
     int original_argc;          /* Num of arguments of original command if arguments were rewritten. */
     robj **original_argv;       /* Arguments of original command if arguments were rewritten. */
+    uint32_t redact_arg_bitmap; /* Bitmap of argument indexes that should be redacted in logs. */
     /* Client flags and state indicators */
     union {
         uint64_t raw_flag;
@@ -2252,6 +2259,7 @@ struct valkeyServer {
     mstime_t cluster_ping_interval;                        /* A debug configuration for setting how often cluster nodes send ping messages. */
     int cluster_message_gossip_perc;                       /* A configuration for setting the percentage of peer nodes to be gossiped in ping/pong messages. */
     char *cluster_configfile;                              /* Cluster auto-generated config file name. */
+    int cluster_configfile_save_behavior;                  /* Cluster config file save behavior. */
     struct clusterState *cluster;                          /* State of the cluster */
     int cluster_migration_barrier;                         /* Cluster replicas migration barrier. */
     int cluster_allow_replica_migration;                   /* Automatic replica migrations to orphaned primaries and from empty primaries */
@@ -2951,6 +2959,7 @@ sds catClientInfoString(sds s, client *client, int hide_user_data);
 sds catClientInfoShortString(sds s, client *client, int hide_user_data);
 sds getAllClientsInfoString(int type, int hide_user_data);
 int clientSetName(client *c, robj *name, const char **err);
+bool clientCommandArgShouldBeRedacted(client *c, int arg_index);
 void rewriteClientCommandVector(client *c, int argc, ...);
 void rewriteClientCommandArgument(client *c, int i, robj *newval);
 void replaceClientCommandVector(client *c, int argc, robj **argv);

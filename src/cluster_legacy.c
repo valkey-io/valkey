@@ -6374,6 +6374,15 @@ void clusterBeforeSleep(void) {
     if (flags & CLUSTER_TODO_SAVE_CONFIG) {
         bool fsync = flags & CLUSTER_TODO_FSYNC_CONFIG;
         clusterSaveConfigBackground(fsync);
+
+        int fsync = flags & CLUSTER_TODO_FSYNC_CONFIG;
+        if (server.cluster_configfile_save_behavior == CLUSTER_CONFIGFILE_SAVE_BEHAVIOR_SYNC) {
+            /* Sync mode: exit the process if saving fails. */
+            clusterSaveConfigOrDie(fsync);
+        } else if (server.cluster_configfile_save_behavior == CLUSTER_CONFIGFILE_SAVE_BEHAVIOR_BEST_EFFORT) {
+            /* Best-effort mode: log (don't exit) if saving fails and wait for the next retry. */
+            clusterSaveConfigOrLog(fsync);
+        }
     }
 
     if (flags & CLUSTER_TODO_BROADCAST_ALL) {

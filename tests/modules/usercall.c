@@ -229,7 +229,7 @@ int call_without_user_argv(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int 
 }
 
 /* VM_CallArgv variant of call_with_user_flag */
-int call_with_user_flag_argv(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+int call_argv_with_user_flag(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     if (argc < 3) return ValkeyModule_WrongArity(ctx);
 
     ValkeyModule_SetContextUser(ctx, user);
@@ -273,7 +273,7 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
     if (ValkeyModule_CreateCommand(ctx,"usercall.call_with_user_flag", call_with_user_flag,"write",0,0,0) == VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
 
-    if (ValkeyModule_CreateCommand(ctx,"usercall.call_with_user_flag_argv", call_with_user_flag_argv,"write",0,0,0) == VALKEYMODULE_ERR)
+    if (ValkeyModule_CreateCommand(ctx,"usercall.call_argv_with_user_flag", call_argv_with_user_flag,"write",0,0,0) == VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
 
     if (ValkeyModule_CreateCommand(ctx, "usercall.call_with_user_bg", call_with_user_bg, "write", 0, 0, 0) == VALKEYMODULE_ERR)

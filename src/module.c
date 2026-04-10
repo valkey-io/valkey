@@ -6996,34 +6996,33 @@ cleanup:
  * * **argv**: The array of arguments.
  * * **argc**: The length of the array of arguments.
  * * **flags**: A combination of VALKEYMODULE_CALL_ARGV_* flags. The supported flags are:
- *     VALKEYMODULE_CALL_ARGV_REPLICATE: Propagate the command to replicas and AOF
- *         (format specifier: "!", used to mark operations that should be
- *         replicated).
- *     VALKEYMODULE_CALL_ARGV_NO_AOF: Do not propagate the command to the AOF
- *         file (format specifier: "A").
- *     VALKEYMODULE_CALL_ARGV_NO_REPLICAS: Do not propagate the command to
- *         replicas (format specifier: "R").
- *     VALKEYMODULE_CALL_ARGV_RESP_3: Request a RESP3 reply from the inner command
- *         (format specifier: "3").
- *     VALKEYMODULE_CALL_ARGV_RESP_AUTO: Use the same RESP version as the calling
- *         client (format specifier: "0"). Recommended for pass-through use cases.
- *     VALKEYMODULE_CALL_ARGV_RUN_AS_USER: Run the command with the given user for
- *         ACL checks (format specifier: "C").
- *     VALKEYMODULE_CALL_ARGV_SCRIPT_MODE: Mark the call as coming from script
- *         execution (format specifier: "S").
- *     VALKEYMODULE_CALL_ARGV_NO_WRITES: Disallow write commands in this call
- *         (format specifier: "W").
- *     VALKEYMODULE_CALL_ARGV_ERRORS_AS_REPLIES: Deliver error replies through
- *         reply_handlers rather than setting errno on the module context
- *         (format specifier: "E").
- *     VALKEYMODULE_CALL_ARGV_RESPECT_DENY_OOM: Respect deny-oom policy when
- *         executing the command (format specifier: "M").
- *     VALKEYMODULE_CALL_ARGV_DRY_RUN: Execute in dry-run mode; implies
- *         `VALKEYMODULE_CALL_ARGV_ERRORS_AS_REPLIES` (format specifier: "D").
- *     VALKEYMODULE_CALL_ARGV_ALLOW_BLOCK: Allow blocking commands/calls (format
- *         specifier: "K").
- *     VALKEYMODULE_CALL_ARGV_REPLY_EXACT: Request exact reply parsing (do not
- *         coerce reply types) (format specifier: "X").
+ *   * `VALKEYMODULE_CALL_ARGV_REPLICATE`: Propagate the command to replicas and AOF
+ *     (format specifier: "!").
+ *   * `VALKEYMODULE_CALL_ARGV_NO_AOF`: Do not propagate the command to the AOF
+ *     file (format specifier: "A").
+ *   * `VALKEYMODULE_CALL_ARGV_NO_REPLICAS`: Do not propagate the command to
+ *     replicas (format specifier: "R").
+ *   * `VALKEYMODULE_CALL_ARGV_RESP_3`: Request a RESP3 reply from the inner command
+ *     (format specifier: "3").
+ *   * `VALKEYMODULE_CALL_ARGV_RESP_AUTO`: Use the same RESP version as the calling
+ *     client (format specifier: "0"). Recommended for pass-through use cases.
+ *   * `VALKEYMODULE_CALL_ARGV_RUN_AS_USER`: Run the command with the given user for
+ *     ACL checks (format specifier: "C").
+ *   * `VALKEYMODULE_CALL_ARGV_SCRIPT_MODE`: Mark the call as coming from script
+ *     execution (format specifier: "S").
+ *   * `VALKEYMODULE_CALL_ARGV_NO_WRITES`: Disallow write commands in this call
+ *     (format specifier: "W").
+ *   * `VALKEYMODULE_CALL_ARGV_ERRORS_AS_REPLIES`: Deliver error replies through
+ *     reply_handlers rather than setting errno on the module context
+ *     (format specifier: "E").
+ *   * `VALKEYMODULE_CALL_ARGV_RESPECT_DENY_OOM`: Respect deny-oom policy when
+ *     executing the command (format specifier: "M").
+ *   * `VALKEYMODULE_CALL_ARGV_DRY_RUN`: Execute in dry-run mode; implies
+ *     `VALKEYMODULE_CALL_ARGV_ERRORS_AS_REPLIES` (format specifier: "D").
+ *   * `VALKEYMODULE_CALL_ARGV_ALLOW_BLOCK`: Allow blocking commands/calls
+ *     (format specifier: "K").
+ *   * `VALKEYMODULE_CALL_ARGV_REPLY_EXACT`: Request exact reply parsing (do not
+ *     coerce reply types) (format specifier: "X").
  * * **resp_handlers**: Struct of callbacks that receive the command reply. The
  *     `onRespAvailable` callback is called first with the raw RESP bytes; if it
  *     returns 0 the per-type callbacks are skipped. If the inner command blocks,
@@ -7070,6 +7069,9 @@ int VM_CallArgv(ValkeyModuleCtx *ctx,
             serverAssert(errno != 0);
             if (resp_handlers) {
                 if (reply_error_msg[0] != '-') {
+                    /* Sanitize the message to prevent embedded CR/LF from
+                     * breaking RESP protocol framing. */
+                    memmapchars(reply_error_msg, sdslen(reply_error_msg), "\r\n", "  ", 2);
                     sds err_buff = sdscatfmt(sdsempty(), "-ERR %S\r\n", reply_error_msg);
                     sdsfree(reply_error_msg);
                     reply_error_msg = err_buff;

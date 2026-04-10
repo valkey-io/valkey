@@ -472,8 +472,7 @@ static int misc_call_argv_reply_handler(void *ctx, ValkeyModuleCtx *mctx, const 
 }
 
 /* VM_CallArgv variant of test_call_generic */
-int test_call_generic_argv(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc)
-{
+int test_call_argv_generic(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     if (argc < 2) {
         ValkeyModule_WrongArity(ctx);
         return VALKEYMODULE_OK;
@@ -492,8 +491,7 @@ int test_call_generic_argv(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int 
 }
 
 /* VM_CallArgv variant of test_call_info */
-int test_call_info_argv(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc)
-{
+int test_call_argv_info(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     ValkeyModuleString *info_cmd = ValkeyModule_CreateString(ctx, "info", 4);
     ValkeyModuleString *call_argv[2];
     int call_argc;
@@ -519,7 +517,7 @@ int test_call_info_argv(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
 }
 
 /* VM_CallArgv variant of test_rm_call */
-int test_rm_call_argv(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+int test_vm_call_argv(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     if (argc < 2) return ValkeyModule_WrongArity(ctx);
 
     int flags = VALKEYMODULE_CALL_ARGV_ERRORS_AS_REPLIES;
@@ -535,8 +533,8 @@ int test_rm_call_argv(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc)
 }
 
 /* VM_CallArgv variant of test_rm_call_replicate */
-int test_rm_call_replicate_argv(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
-    test_rm_call_argv(ctx, argv, argc);
+int test_vm_call_argv_replicate(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    test_vm_call_argv(ctx, argv, argc);
     ValkeyModule_ReplicateVerbatim(ctx);
     return VALKEYMODULE_OK;
 }
@@ -544,7 +542,7 @@ int test_rm_call_replicate_argv(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
 /* VM_CallArgv variant of test_rm_call_flags.
  * Parses a flag string (subset of VM_Call format chars) and maps them to
  * VALKEYMODULE_CALL_ARGV_* constants, always adding ERRORS_AS_REPLIES. */
-int test_rm_call_flags_argv(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+int test_vm_call_argv_flags(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     if (argc < 3) return ValkeyModule_WrongArity(ctx);
 
     size_t flags_len;
@@ -735,15 +733,15 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
         return VALKEYMODULE_ERR;
     if (ValkeyModule_CreateCommand(ctx, "test.rm_call_replicate", test_rm_call_replicate,"allow-stale", 0, 0, 0) == VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
-    if (ValkeyModule_CreateCommand(ctx,"test.call_generic_argv", test_call_generic_argv,"",0,0,0) == VALKEYMODULE_ERR)
+    if (ValkeyModule_CreateCommand(ctx,"test.call_argv_generic", test_call_argv_generic,"",0,0,0) == VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
-    if (ValkeyModule_CreateCommand(ctx,"test.call_info_argv", test_call_info_argv,"",0,0,0) == VALKEYMODULE_ERR)
+    if (ValkeyModule_CreateCommand(ctx,"test.call_argv_info", test_call_argv_info,"",0,0,0) == VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
-    if (ValkeyModule_CreateCommand(ctx, "test.rm_call_argv", test_rm_call_argv,"allow-stale", 0, 0, 0) == VALKEYMODULE_ERR)
+    if (ValkeyModule_CreateCommand(ctx, "test.vm_call_argv", test_vm_call_argv,"allow-stale", 0, 0, 0) == VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
-    if (ValkeyModule_CreateCommand(ctx, "test.rm_call_flags_argv", test_rm_call_flags_argv,"allow-stale", 0, 0, 0) == VALKEYMODULE_ERR)
+    if (ValkeyModule_CreateCommand(ctx, "test.vm_call_argv_flags", test_vm_call_argv_flags,"allow-stale", 0, 0, 0) == VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
-    if (ValkeyModule_CreateCommand(ctx, "test.rm_call_replicate_argv", test_rm_call_replicate_argv,"allow-stale", 0, 0, 0) == VALKEYMODULE_ERR)
+    if (ValkeyModule_CreateCommand(ctx, "test.vm_call_argv_replicate", test_vm_call_argv_replicate,"allow-stale", 0, 0, 0) == VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
     if (ValkeyModule_CreateCommand(ctx, "test.silent_open_key", test_open_key_no_effects,"", 0, 0, 0) == VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;

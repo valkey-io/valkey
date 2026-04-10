@@ -22,7 +22,7 @@ start_server {tags {"modules usercall network"}} {
     }
 
     # call with user with acl set on it, but without testing the acl
-    foreach cmd {call_with_user_flag call_with_user_flag_argv} {
+    foreach cmd {call_with_user_flag call_argv_with_user_flag} {
         test "test module check regular valkey command with user with $cmd" {
             assert_equal [r set x 5] OK
 
@@ -40,7 +40,7 @@ start_server {tags {"modules usercall network"}} {
     }
 
     # call with user with acl set on it, but with testing the acl in rm_call (for cmd itself)
-    foreach cmd {call_with_user_flag call_with_user_flag_argv} {
+    foreach cmd {call_with_user_flag call_argv_with_user_flag} {
         test "test module check regular valkey command with user and acl with $cmd" {
             assert_equal [r set x 5] OK
 
@@ -103,7 +103,7 @@ start_server {tags {"modules usercall network"}} {
     }
 
     # baseline script test, call without user on script
-    foreach cmd {call_with_user_flag call_with_user_flag_argv} {
+    foreach cmd {call_with_user_flag call_argv_with_user_flag} {
         test "test module check eval script with user being set, but not acl testing with $cmd" {
             set sha_set [r script load $test_script_set]
             set sha_get [r script load $test_script_get]
@@ -121,7 +121,7 @@ start_server {tags {"modules usercall network"}} {
 
     # call with user on script (without rm_call acl check) to ensure user carries through to script execution
     # we already tested the check in rm_call above, here we are checking the script itself will enforce ACL
-    foreach cmd {call_with_user_flag call_with_user_flag_argv} {
+    foreach cmd {call_with_user_flag call_argv_with_user_flag} {
         test "test module check eval script with user and acl with $cmd" {
             set sha_set [r script load $test_script_set]
             set sha_get [r script load $test_script_get]
@@ -169,7 +169,7 @@ start_server {tags {"modules usercall network"}} {
             }
         }
 
-        foreach cmd {call_with_user_flag call_with_user_flag_argv} {
+        foreach cmd {call_with_user_flag call_argv_with_user_flag} {
             test "test module replicate only to replicas and WAITAOF with $cmd" {
                 $master set x 1
                 assert_equal [$master waitaof 1 1 10000] {1 1}

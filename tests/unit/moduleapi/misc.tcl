@@ -3,22 +3,22 @@ set testmodule [file normalize tests/modules/misc.so]
 start_server {overrides {save {900 1}} tags {"modules"}} {
     r module load $testmodule
 
-    foreach cmd {call_info call_info_argv} {
-        test "test RM_Call with $cmd" {
+    foreach cmd {call_info call_argv_info} {
+        test "call with $cmd" {
             set info [r test.$cmd commandstats]
             # cmdstat is not in a default section, so we also test an argument was passed
             assert { [string match "*cmdstat_module*" $info] }
         }
     }
 
-    foreach cmd {call_generic call_generic_argv} {
-        test "test RM_Call args array with $cmd" {
+    foreach cmd {call_generic call_argv_generic} {
+        test "call args array with $cmd" {
             set info [r test.$cmd info commandstats]
             # cmdstat is not in a default section, so we also test an argument was passed
             assert { [string match "*cmdstat_module*" $info] }
         }
 
-        test "test RM_Call recursive with $cmd" {
+        test "call recursive with $cmd" {
             set info [r test.$cmd test.$cmd info commandstats]
             assert { [string match "*cmdstat_module*" $info] }
         }
@@ -104,14 +104,14 @@ start_server {overrides {save {900 1}} tags {"modules"}} {
     proc parse_client_flags {flags} {
         set flag_list [split $flags ":"]
         set parsed_flags {}
-        
+
         # Just collect all non-empty flags
         foreach flag $flag_list {
             if {$flag ne ""} {
                 lappend parsed_flags $flag
             }
         }
-        
+
         return $parsed_flags
     }
 
@@ -119,9 +119,9 @@ start_server {overrides {save {900 1}} tags {"modules"}} {
         # Test basic sanity and SSL flag
         set info [r test.clientinfo]
         assert { [dict get $info db] == 9 }
-        
+
         set flags [parse_client_flags [dict get $info flags]]
-        
+
         # Check initial state - should have auth flags, maybe SSL
         if {$::tls} {
             assert { "ssl" in $flags }
@@ -160,7 +160,7 @@ start_server {overrides {save {900 1}} tags {"modules"}} {
         assert { "multi" ni $flags }
         assert { "authenticated" in $flags }
         assert { "ever_authenticated" in $flags }
-        
+
         r readwrite
         set info [r test.clientinfo]
         set flags [parse_client_flags [dict get $info flags]]
@@ -169,7 +169,7 @@ start_server {overrides {save {900 1}} tags {"modules"}} {
         assert { "ever_authenticated" in $flags }
     }
 
-    foreach cmd {rm_call rm_call_argv} {
+    foreach cmd {rm_call vm_call_argv} {
         test "tracking with $cmd sanity" {
             set rd_trk [valkey_client]
             $rd_trk HELLO 3
@@ -200,7 +200,7 @@ start_server {overrides {save {900 1}} tags {"modules"}} {
         }
     }
 
-    foreach cmd {rm_call rm_call_argv} {
+    foreach cmd {rm_call vm_call_argv} {
         test "publish to self inside $cmd" {
             r hello 3
             r subscribe foo
@@ -257,7 +257,7 @@ start_server {overrides {save {900 1}} tags {"modules"}} {
         assert { [r test.monotonic_time] >= $x }
     }
 
-    foreach {cmd flags_cmd} {rm_call rm_call_flags rm_call_argv rm_call_flags_argv} {
+    foreach {cmd flags_cmd} {rm_call rm_call_flags vm_call_argv vm_call_argv_flags} {
         test "rm_call OOM with $cmd" {
             r config set maxmemory 1
             r config set maxmemory-policy volatile-lru
@@ -281,7 +281,7 @@ start_server {overrides {save {900 1}} tags {"modules"}} {
         } {OK} {needs:config-maxmemory}
     }
 
-    foreach cmd {rm_call_flags rm_call_flags_argv} {
+    foreach cmd {rm_call_flags vm_call_argv_flags} {
         test "rm_call clear OOM with $cmd" {
             r config set maxmemory 1
 
@@ -298,7 +298,7 @@ start_server {overrides {save {900 1}} tags {"modules"}} {
         } {OK} {needs:config-maxmemory}
     }
 
-    foreach cmd {rm_call_flags rm_call_flags_argv} {
+    foreach cmd {rm_call_flags vm_call_argv_flags} {
         test "rm_call OOM Eval with $cmd" {
             r config set maxmemory 1
             r config set maxmemory-policy volatile-lru
@@ -323,7 +323,7 @@ start_server {overrides {save {900 1}} tags {"modules"}} {
         } {OK} {needs:config-maxmemory}
     }
 
-    foreach cmd {rm_call_flags rm_call_flags_argv} {
+    foreach cmd {rm_call_flags vm_call_argv_flags} {
         test "rm_call write flag with $cmd" {
             # add the W flag
             assert_error {ERR Write command 'set' was called while write is not allowed.} {
@@ -335,7 +335,7 @@ start_server {overrides {save {900 1}} tags {"modules"}} {
         } {1}
     }
 
-    foreach cmd {rm_call rm_call_argv} {
+    foreach cmd {rm_call vm_call_argv} {
         test "rm_call EVAL with $cmd" {
             r test.$cmd eval {
                 redis.call('set','x',1)
@@ -352,7 +352,7 @@ start_server {overrides {save {900 1}} tags {"modules"}} {
     }
 
     # Note: each script is unique, to check that flags are extracted correctly
-    foreach cmd {rm_call_flags rm_call_flags_argv} {
+    foreach cmd {rm_call_flags vm_call_argv_flags} {
         test "rm_call EVAL - OOM - with M flag with $cmd" {
             r config set maxmemory 1
 
@@ -395,7 +395,7 @@ start_server {overrides {save {900 1}} tags {"modules"}} {
     }
 
     # All RM_Call for script succeeds in OOM state without using the M flag
-    foreach cmd {rm_call rm_call_argv} {
+    foreach cmd {rm_call vm_call_argv} {
         test "rm_call EVAL - OOM - without M flag with $cmd" {
             r config set maxmemory 1
 
@@ -421,7 +421,7 @@ start_server {overrides {save {900 1}} tags {"modules"}} {
         } {OK} {needs:config-maxmemory}
     }
 
-    foreach {cmd flags_cmd} {rm_call rm_call_flags rm_call_argv rm_call_flags_argv} {
+    foreach {cmd flags_cmd} {rm_call rm_call_flags vm_call_argv vm_call_argv_flags} {
         test "not enough good replicas with $cmd" {
             r set x "some value"
             r config set min-replicas-to-write 1
@@ -457,7 +457,7 @@ start_server {overrides {save {900 1}} tags {"modules"}} {
         }
     }
 
-    foreach {cmd flags_cmd} {rm_call rm_call_flags rm_call_argv rm_call_flags_argv} {
+    foreach {cmd flags_cmd} {rm_call rm_call_flags vm_call_argv vm_call_argv_flags} {
         test "rm_call EVAL - read-only replica with $cmd" {
             r replicaof 127.0.0.1 1
 
@@ -492,7 +492,7 @@ start_server {overrides {save {900 1}} tags {"modules"}} {
         } {OK} {needs:config-maxmemory}
     }
 
-    foreach {cmd flags_cmd} {rm_call rm_call_flags rm_call_argv rm_call_flags_argv} {
+    foreach {cmd flags_cmd} {rm_call rm_call_flags vm_call_argv vm_call_argv_flags} {
         test "rm_call EVAL - stale replica with $cmd" {
             r replicaof 127.0.0.1 1
             r config set replica-serve-stale-data no
@@ -521,7 +521,7 @@ start_server {overrides {save {900 1}} tags {"modules"}} {
         } {OK} {needs:config-maxmemory}
     }
 
-    foreach {cmd flags_cmd} {rm_call rm_call_flags rm_call_argv rm_call_flags_argv} {
+    foreach {cmd flags_cmd} {rm_call rm_call_flags vm_call_argv vm_call_argv_flags} {
         test "rm_call EVAL - failed bgsave prevents writes with $cmd" {
             r config set rdb-key-save-delay 10000000
             populate 1000
@@ -581,7 +581,7 @@ start_server {overrides {save {900 1}} tags {"modules"}} {
 start_server {tags {"modules"}} {
     r module load $testmodule
 
-    foreach cmd {rm_call_flags rm_call_flags_argv} {
+    foreach cmd {rm_call_flags vm_call_argv_flags} {
         test "test Dry Run - OK OOM/ACL with $cmd" {
             set x 5
             r set x $x

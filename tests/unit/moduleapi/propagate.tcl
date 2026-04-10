@@ -729,7 +729,7 @@ tags "modules aof" {
             assert_equal [s 0 unexpected_error_replies] 0
         }
     }
-    foreach cmd {rm_call_replicate rm_call_replicate_argv} {
+    foreach cmd {rm_call_replicate vm_call_argv_replicate} {
     test "Modules RM_Call does not update stats during aof load: AOF-load type $aofload_type cmd $cmd" {
         start_server [list overrides [list loadmodule "$miscmodule"]] {
             # Enable the AOF

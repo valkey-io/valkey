@@ -7,17 +7,17 @@ foreach cmd {rm_call vm_call_argv } {
     start_server {tags {"modules"}} {
         r module load $testmodule
 
-        test "Locked GIL acquisition from async RM_Call - $cmd" {
+        test "Locked GIL acquisition from async call - $cmd" {
             assert_equal {OK} [r do_${cmd}_async acquire_gil]
         }
 
-        test "Blpop on async RM_Call fire and forget - $cmd" {
+        test "Blpop on async call fire and forget - $cmd" {
             assert_equal {Blocked} [r do_${cmd}_fire_and_forget blpop l 0]
             r lpush l a
             assert_equal {0} [r llen l]
         }
 
-        test "Blpop on threaded async RM_Call - $cmd" {
+        test "Blpop on threaded async call - $cmd" {
             set rd [valkey_deferring_client]
 
             $rd do_${cmd}_async_on_thread blpop l 0
@@ -30,7 +30,7 @@ foreach cmd {rm_call vm_call_argv } {
 
         foreach ncmd [list "do_${cmd}_async" "do_${cmd}_async_script_mode"] {
 
-            test "Blpop on async RM_Call using $cmd" {
+            test "Blpop on async call using $cmd" {
                 set rd [valkey_deferring_client]
 
                 $rd $ncmd blpop l 0
@@ -41,7 +41,7 @@ foreach cmd {rm_call vm_call_argv } {
                 $rd close
             }
 
-            test "Brpop on async RM_Call using $cmd" {
+            test "Brpop on async call using $cmd" {
                 set rd [valkey_deferring_client]
 
                 $rd $ncmd brpop l 0
@@ -52,7 +52,7 @@ foreach cmd {rm_call vm_call_argv } {
                 $rd close
             }
 
-            test "Brpoplpush on async RM_Call using $cmd" {
+            test "Brpoplpush on async call using $cmd" {
                 set rd [valkey_deferring_client]
 
                 $rd $ncmd brpoplpush l1 l2 0
@@ -64,7 +64,7 @@ foreach cmd {rm_call vm_call_argv } {
                 r lpop l2
             } {a}
 
-            test "Blmove on async RM_Call using $cmd" {
+            test "Blmove on async call using $cmd" {
                 set rd [valkey_deferring_client]
 
                 $rd $ncmd blmove l1 l2 LEFT LEFT 0
@@ -76,7 +76,7 @@ foreach cmd {rm_call vm_call_argv } {
                 r lpop l2
             } {a}
 
-            test "Bzpopmin on async RM_Call using $cmd" {
+            test "Bzpopmin on async call using $cmd" {
                 set rd [valkey_deferring_client]
 
                 $rd $ncmd bzpopmin s 0
@@ -87,7 +87,7 @@ foreach cmd {rm_call vm_call_argv } {
                 $rd close
             }
 
-            test "Bzpopmax on async RM_Call using $cmd" {
+            test "Bzpopmax on async call using $cmd" {
                 set rd [valkey_deferring_client]
 
                 $rd $ncmd bzpopmax s 0
@@ -125,19 +125,19 @@ foreach cmd {rm_call vm_call_argv } {
             $rd2 close
         }
 
-        test "async RM_Call $cmd calls RM_Call" {
+        test "async call $cmd calls RM_Call" {
             assert_equal {PONG} [r do_${cmd}_async do_rm_call ping]
         }
 
-        test "async RM_Call $cmd calls background RM_Call calls RM_Call" {
+        test "async call $cmd calls background RM_Call calls RM_Call" {
             assert_equal {PONG} [r do_${cmd}_async do_bg_rm_call do_rm_call ping]
         }
 
-        test "async RM_Call $cmd calls background RM_Call calls RM_Call calls async RM_Call" {
+        test "async call $cmd calls background RM_Call calls RM_Call calls async call" {
             assert_equal {PONG} [r do_${cmd}_async do_bg_rm_call do_rm_call do_${cmd}_async ping]
         }
 
-        test "async RM_Call - $cmd - inside async RM_Call callback" {
+        test "async call - $cmd - inside async call callback" {
             set rd [valkey_deferring_client]
             $rd wait_and_do_${cmd} blpop l 0
             wait_for_blocked_clients_count 1
@@ -161,7 +161,7 @@ foreach cmd {rm_call vm_call_argv } {
             $rd close
         }
 
-        test "Become replica while having async RM_Call - $cmd - running" {
+        test "Become replica while having async call - $cmd - running" {
             r flushall
             set rd [valkey_deferring_client]
             $rd do_${cmd}_async blpop l 0

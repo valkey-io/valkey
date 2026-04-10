@@ -48,6 +48,7 @@
 #include "cluster_slot_stats.h"
 
 #include <arpa/inet.h>
+#include <sys/file.h>
 #include <sys/stat.h>
 
 /* Forward declarations. */

@@ -214,7 +214,7 @@ static int usercall_argv_reply_handler(void *ctx, ValkeyModuleCtx *mctx, const c
 }
 
 /* VM_CallArgv variant of call_without_user */
-int call_without_user_argv(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+int call_argv_without_user(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     if (argc < 2) return ValkeyModule_WrongArity(ctx);
 
     ValkeyModuleReplyHandlers handlers = {
@@ -267,7 +267,7 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
     if (ValkeyModule_CreateCommand(ctx,"usercall.call_without_user", call_without_user,"write",0,0,0) == VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
 
-    if (ValkeyModule_CreateCommand(ctx,"usercall.call_without_user_argv", call_without_user_argv,"write",0,0,0) == VALKEYMODULE_ERR)
+    if (ValkeyModule_CreateCommand(ctx,"usercall.call_argv_without_user", call_argv_without_user,"write",0,0,0) == VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
 
     if (ValkeyModule_CreateCommand(ctx,"usercall.call_with_user_flag", call_with_user_flag,"write",0,0,0) == VALKEYMODULE_ERR)

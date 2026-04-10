@@ -12,7 +12,7 @@ start_server {tags {"modules usercall network"}} {
     r module load $testmodule
 
     # baseline test that module isn't doing anything weird
-    foreach cmd {call_without_user call_without_user_argv} {
+    foreach cmd {call_without_user call_argv_without_user} {
         test "test module check regular valkey command without user/acl with $cmd" {
             assert_equal [r usercall.reset_user] OK
             assert_equal [r usercall.add_to_acl "~* &* +@all -set"] OK
@@ -92,7 +92,7 @@ start_server {tags {"modules usercall network"}} {
     }
 
     # baseline script test, call without user on script
-    foreach cmd {call_without_user call_without_user_argv} {
+    foreach cmd {call_without_user call_argv_without_user} {
         test "test module check eval script without user with $cmd" {
             set sha_set [r script load $test_script_set]
             set sha_get [r script load $test_script_get]

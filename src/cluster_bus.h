@@ -107,9 +107,11 @@ typedef struct clusterBusType {
     void (*setReplicaOf)(clusterNode *primary, void *ctx, void (*callback)(void *ctx, const char *error));
     void (*failover)(int force, int takeover, void *ctx, void (*callback)(void *ctx, const char *error));
     void (*meet)(const char *ip, int port, int cport, void *ctx, void (*callback)(void *ctx, const char *error));
-    void (*bumpEpoch)(client *c);
-    void (*setConfigEpoch)(client *c);
     void (*resetCluster)(client *c);
+
+    /* Handle protocol-specific CLUSTER subcommands (e.g. BUMPEPOCH,
+     * SET-CONFIG-EPOCH). Returns 1 if handled, 0 if not recognized. */
+    int (*specialCommand)(client *c);
 } clusterBusType;
 
 extern clusterBusType *clusterCurrentBus;

@@ -1742,7 +1742,7 @@ static int clusterHandshakeInProgress(char *ip, int port, int cport) {
  *
  * EAGAIN - There is already a handshake in progress for this address.
  * EINVAL - IP or port are not valid. */
-static int clusterStartHandshake(char *ip, int port, int cport) {
+static int clusterStartHandshake(const char *ip, int port, int cport) {
     clusterNode *n;
     char norm_ip[NET_IP_STR_LEN];
     struct sockaddr_storage sa;
@@ -5814,35 +5814,35 @@ static void clusterLegacyMeet(const char *ip, int port, int cport, void *ctx, vo
     }
 }
 
-static void clusterLegacyBumpEpoch(client *c) {
-    int retval = clusterBumpConfigEpochWithoutConsensus();
-    sds reply = sdscatfmt(sdsempty(), "+%s %U\r\n",
-                          (retval == C_OK) ? "BUMPED" : "STILL",
-                          (unsigned long long)LEGACY_DATA(myself)->configEpoch);
-    addReplySds(c, reply);
-}
+static int clusterLegacySpecialCommand(client *c) {
+    if (!strcasecmp(objectGetVal(c->argv[1]), "bumpepoch") && c->argc == 2) {
+        int retval = clusterBumpConfigEpochWithoutConsensus();
+        sds reply = sdscatfmt(sdsempty(), "+%s %U\r\n", (retval == C_OK) ? "BUMPED" : "STILL",
+                              (unsigned long long)LEGACY_DATA(myself)->configEpoch);
+        addReplySds(c, reply);
+        return 1;
+    } else if (!strcasecmp(objectGetVal(c->argv[1]), "set-config-epoch") && c->argc == 3) {
+        long long epoch;
+        if (getLongLongFromObjectOrReply(c, c->argv[2], &epoch, NULL) != C_OK) return 1;
 
-static void clusterLegacySetConfigEpoch(client *c) {
-    long long epoch;
-    if (getLongLongFromObjectOrReply(c, c->argv[2], &epoch, NULL) != C_OK) return;
-
-    if (epoch < 0) {
-        addReplyErrorFormat(c, "Invalid config epoch specified: %lld", epoch);
-    } else if (dictSize(server.cluster->nodes) > 1) {
-        addReplyError(c, "The user can assign a config epoch only when the "
-                         "node does not know any other node.");
-    } else if (LEGACY_DATA(myself)->configEpoch != 0) {
-        addReplyError(c, "Node config epoch is already non-zero");
-    } else {
-        LEGACY_DATA(myself)->configEpoch = epoch;
-        serverLog(LL_NOTICE,
-                  "configEpoch set to %llu via CLUSTER SET-CONFIG-EPOCH",
-                  (unsigned long long)LEGACY_DATA(myself)->configEpoch);
-        if (LEGACY_STATE()->currentEpoch < (uint64_t)epoch)
-            LEGACY_STATE()->currentEpoch = epoch;
-        clusterDoBeforeSleep(CLUSTER_TODO_UPDATE_STATE | CLUSTER_TODO_SAVE_CONFIG);
-        addReply(c, shared.ok);
+        if (epoch < 0) {
+            addReplyErrorFormat(c, "Invalid config epoch specified: %lld", epoch);
+        } else if (dictSize(server.cluster->nodes) > 1) {
+            addReplyError(c, "The user can assign a config epoch only when the "
+                             "node does not know any other node.");
+        } else if (LEGACY_DATA(myself)->configEpoch != 0) {
+            addReplyError(c, "Node config epoch is already non-zero");
+        } else {
+            LEGACY_DATA(myself)->configEpoch = epoch;
+            serverLog(LL_NOTICE, "configEpoch set to %llu via CLUSTER SET-CONFIG-EPOCH",
+                      (unsigned long long)LEGACY_DATA(myself)->configEpoch);
+            if (LEGACY_STATE()->currentEpoch < (uint64_t)epoch) LEGACY_STATE()->currentEpoch = epoch;
+            clusterDoBeforeSleep(CLUSTER_TODO_UPDATE_STATE | CLUSTER_TODO_SAVE_CONFIG);
+            addReply(c, shared.ok);
+        }
+        return 1;
     }
+    return 0;
 }
 
 static void clusterLegacyResetCluster(client *c) {
@@ -5920,7 +5920,6 @@ clusterBusType clusterLegacyBus = {
     .setReplicaOf = clusterLegacySetReplicaOf,
     .failover = clusterLegacyFailover,
     .meet = clusterLegacyMeet,
-    .bumpEpoch = clusterLegacyBumpEpoch,
-    .setConfigEpoch = clusterLegacySetConfigEpoch,
     .resetCluster = clusterLegacyResetCluster,
+    .specialCommand = clusterLegacySpecialCommand,
 };

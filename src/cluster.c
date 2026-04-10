@@ -1771,12 +1771,6 @@ void clusterCommand(client *c) {
                   (char *)objectGetVal(c->argv[2]), port, cl);
         sdsfree(cl);
         clusterCurrentBus->meet(objectGetVal(c->argv[2]), port, cport, c, clusterCommandMeetCompletion);
-    } else if (!strcasecmp(objectGetVal(c->argv[1]), "bumpepoch") && c->argc == 2) {
-        /* CLUSTER BUMPEPOCH */
-        clusterCurrentBus->bumpEpoch(c);
-    } else if (!strcasecmp(objectGetVal(c->argv[1]), "set-config-epoch") && c->argc == 3) {
-        /* CLUSTER SET-CONFIG-EPOCH <epoch> */
-        clusterCurrentBus->setConfigEpoch(c);
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "reset") && (c->argc == 2 || c->argc == 3)) {
         /* CLUSTER RESET [SOFT|HARD] */
         clusterCurrentBus->resetCluster(c);
@@ -1926,8 +1920,11 @@ void clusterCommand(client *c) {
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "links") && c->argc == 2) {
         /* CLUSTER LINKS */
         clusterCommandLinks(c);
+    } else if (clusterCurrentBus->specialCommand && clusterCurrentBus->specialCommand(c)) {
+        /* Handled by protocol-specific command handler. */
     } else {
-        addReplySubcommandSyntaxError(c);
+        addReplyErrorFormat(c, "Cluster subcommand not implemented for the current protocol: %s",
+                            (char *)objectGetVal(c->argv[1]));
         return;
     }
 }

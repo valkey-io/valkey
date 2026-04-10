@@ -5773,7 +5773,7 @@ static mstime_t clusterLegacyManualFailoverTimeLimit(void) {
 }
 
 
-static void clusterLegacySetReplicaOf(clusterNode *primary) {
+static void clusterLegacySetReplicaOf(clusterNode *primary, void *ctx, void (*callback)(void *ctx, const char *error)) {
     if (primary) {
         clusterSetPrimary(primary, 1, 1);
     } else {
@@ -5787,58 +5787,30 @@ static void clusterLegacySetReplicaOf(clusterNode *primary) {
     clusterDoBeforeSleep(CLUSTER_TODO_UPDATE_STATE |
                          CLUSTER_TODO_SAVE_CONFIG |
                          CLUSTER_TODO_BROADCAST_ALL);
+    callback(ctx, NULL);
 }
 
-static int clusterLegacyForgetNode(const char *node_id, size_t id_len) {
+static void clusterLegacyForgetNode(const char *node_id, size_t id_len, void *ctx, void (*callback)(void *ctx, const char *error)) {
     clusterNode *n = clusterLookupNode(node_id, id_len);
     if (!n) {
-        if (clusterBlacklistExists((char *)node_id, id_len))
-            return 1; /* Already forgotten. */
-        return 0;     /* Unknown node. */
+        if (clusterBlacklistExists((char *)node_id, id_len)) {
+            callback(ctx, NULL); /* Already forgotten. */
+        } else {
+            callback(ctx, "Unknown node");
+        }
+        return;
     }
     clusterBlacklistAddNode(n);
     clusterDelNode(n);
     clusterDoBeforeSleep(CLUSTER_TODO_UPDATE_STATE | CLUSTER_TODO_SAVE_CONFIG);
-    return 1;
+    callback(ctx, NULL);
 }
 
-static void clusterLegacyMeet(client *c) {
-    /* CLUSTER MEET <ip> <port> [cport] */
-    long long port, cport;
-
-    if (getLongLongFromObject(c->argv[3], &port) != C_OK) {
-        addReplyErrorFormat(c, "Invalid base port specified: %s", (char *)objectGetVal(c->argv[3]));
-        return;
-    }
-    if (port <= 0 || port > 65535) {
-        addReplyErrorFormat(c, "Port number is out of range");
-        return;
-    }
-
-    if (c->argc == 5) {
-        if (getLongLongFromObject(c->argv[4], &cport) != C_OK) {
-            addReplyErrorFormat(c, "Invalid bus port specified: %s", (char *)objectGetVal(c->argv[4]));
-            return;
-        }
+static void clusterLegacyMeet(const char *ip, int port, int cport, void *ctx, void (*callback)(void *ctx, const char *error)) {
+    if (clusterStartHandshake(ip, port, cport) == 0 && errno == EINVAL) {
+        callback(ctx, "Invalid node address specified");
     } else {
-        cport = port + CLUSTER_PORT_INCR;
-    }
-
-    if (cport <= 0 || cport > 65535) {
-        addReplyErrorFormat(c, "Cluster bus port number is out of range");
-        return;
-    }
-
-    if (clusterStartHandshake(objectGetVal(c->argv[2]), port, cport) == 0 && errno == EINVAL) {
-        addReplyErrorFormat(c, "Invalid node address specified: %s:%s",
-                            (char *)objectGetVal(c->argv[2]),
-                            (char *)objectGetVal(c->argv[3]));
-    } else {
-        sds cl = catClientInfoShortString(sdsempty(), c, server.hide_user_data_from_log);
-        serverLog(LL_NOTICE, "Cluster meet %s:%lld (user request from '%s').",
-                  (char *)objectGetVal(c->argv[2]), port, cl);
-        sdsfree(cl);
-        addReply(c, shared.ok);
+        callback(ctx, NULL);
     }
 }
 
@@ -5897,45 +5869,19 @@ static void clusterLegacyResetCluster(client *c) {
     addReply(c, shared.ok);
 }
 
-static void clusterLegacyFailover(client *c, int force, int takeover) {
-    if (!force && (nodeFailed(myself->replicaof) ||
-                   myself->replicaof->link == NULL)) {
-        addReplyError(c, "Master is down or failed, "
-                         "please use CLUSTER FAILOVER FORCE");
-        return;
-    }
+static void clusterLegacyFailover(int force, int takeover, void *ctx, void (*callback)(void *ctx, const char *error)) {
     clusterLegacyResetManualFailover();
     LEGACY_STATE()->mf_end = mstime() + server.cluster_mf_timeout;
-    sds cl = catClientInfoShortString(sdsempty(), c,
-                                      server.hide_user_data_from_log);
     if (takeover) {
-        serverLog(LL_NOTICE,
-                  "Taking over the primary (user request from '%s').", cl);
         clusterBumpConfigEpochWithoutConsensus();
         clusterFailoverReplaceYourPrimary();
     } else if (force) {
-        if (c == server.primary) {
-            serverLog(LL_NOTICE,
-                      "Forced failover primary request accepted "
-                      "(primary request from '%s').",
-                      cl);
-        } else {
-            serverLog(LL_NOTICE,
-                      "Forced failover user request accepted "
-                      "(user request from '%s').",
-                      cl);
-        }
         manualFailoverCanStart();
         clusterDoBeforeSleep(CLUSTER_TODO_HANDLE_MANUALFAILOVER);
     } else {
-        serverLog(LL_NOTICE,
-                  "Manual failover user request accepted "
-                  "(user request from '%s').",
-                  cl);
         clusterSendMFStart(myself->replicaof);
     }
-    sdsfree(cl);
-    addReply(c, shared.ok);
+    callback(ctx, NULL);
 }
 
 

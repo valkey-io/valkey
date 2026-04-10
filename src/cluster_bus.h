@@ -96,11 +96,17 @@ typedef struct clusterBusType {
      * to a new primary, since any previous election state is stale. */
     void (*resetAutomaticFailoverState)(void);
 
-    /* Node management — called from cluster commands */
-    int (*forgetNode)(const char *node_id, size_t id_len);
-    void (*setReplicaOf)(clusterNode *primary);
-    void (*failover)(client *c, int force, int takeover);
-    void (*meet)(client *c);
+    /* Node management — called from cluster commands.
+     * Each callback performs the protocol-specific action and calls the
+     * completion callback when done. The legacy implementation calls it
+     * synchronously. A consensus-based implementation may call it after
+     * the change is committed. The ctx pointer is passed through to the
+     * completion callback (typically the client). On success, error is
+     * NULL. On failure, error points to an error message string. */
+    void (*forgetNode)(const char *node_id, size_t id_len, void *ctx, void (*callback)(void *ctx, const char *error));
+    void (*setReplicaOf)(clusterNode *primary, void *ctx, void (*callback)(void *ctx, const char *error));
+    void (*failover)(int force, int takeover, void *ctx, void (*callback)(void *ctx, const char *error));
+    void (*meet)(const char *ip, int port, int cport, void *ctx, void (*callback)(void *ctx, const char *error));
     void (*bumpEpoch)(client *c);
     void (*setConfigEpoch)(client *c);
     void (*resetCluster)(client *c);

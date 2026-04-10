@@ -1461,6 +1461,59 @@ void clusterCommandSetSlot(client *c) {
 }
 
 
+/* Completion callbacks for async-capable cluster commands. The ctx is the
+ * client. On error, an error reply is sent. On success, the command-specific
+ * post-action work is done and an OK reply is sent. */
+
+static void clusterCommandMeetCompletion(void *ctx, const char *error) {
+    client *c = ctx;
+    if (error) {
+        addReplyError(c, error);
+    } else {
+        addReply(c, shared.ok);
+    }
+}
+
+static void clusterCommandForgetCompletion(void *ctx, const char *error) {
+    client *c = ctx;
+    if (error) {
+        addReplyError(c, error);
+    } else {
+        addReply(c, shared.ok);
+    }
+}
+
+static void clusterCommandReplicateCompletion(void *ctx, const char *error) {
+    client *c = ctx;
+    if (error) {
+        addReplyError(c, error);
+    } else {
+        addReply(c, shared.ok);
+    }
+}
+
+static void clusterCommandPromoteCompletion(void *ctx, const char *error) {
+    client *c = ctx;
+    if (error) {
+        addReplyError(c, error);
+        return;
+    }
+    flushAllDataAndResetRDB(server.repl_replica_lazy_flush ? EMPTYDB_ASYNC : EMPTYDB_NO_FLAGS);
+    verifyClusterConfigWithData();
+    clusterCloseAllSlots();
+    clusterCleanupFailoverState();
+    addReply(c, shared.ok);
+}
+
+static void clusterCommandFailoverCompletion(void *ctx, const char *error) {
+    client *c = ctx;
+    if (error) {
+        addReplyError(c, error);
+    } else {
+        addReply(c, shared.ok);
+    }
+}
+
 void clusterCommand(client *c) {
     if (server.cluster_enabled == 0) {
         addReplyError(c, "This instance has cluster support disabled");
@@ -1688,7 +1741,36 @@ void clusterCommand(client *c) {
         clusterCommandSyncSlots(c);
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "meet") && (c->argc == 4 || c->argc == 5)) {
         /* CLUSTER MEET <ip> <port> [cport] */
-        clusterCurrentBus->meet(c);
+        long long port, cport;
+
+        if (getLongLongFromObject(c->argv[3], &port) != C_OK) {
+            addReplyErrorFormat(c, "Invalid base port specified: %s", (char *)objectGetVal(c->argv[3]));
+            return;
+        }
+        if (port <= 0 || port > 65535) {
+            addReplyErrorFormat(c, "Port number is out of range");
+            return;
+        }
+
+        if (c->argc == 5) {
+            if (getLongLongFromObject(c->argv[4], &cport) != C_OK) {
+                addReplyErrorFormat(c, "Invalid bus port specified: %s", (char *)objectGetVal(c->argv[4]));
+                return;
+            }
+        } else {
+            cport = port + CLUSTER_PORT_INCR;
+        }
+
+        if (cport <= 0 || cport > 65535) {
+            addReplyErrorFormat(c, "Cluster bus port number is out of range");
+            return;
+        }
+
+        sds cl = catClientInfoShortString(sdsempty(), c, server.hide_user_data_from_log);
+        serverLog(LL_NOTICE, "Cluster meet %s:%lld (user request from '%s').",
+                  (char *)objectGetVal(c->argv[2]), port, cl);
+        sdsfree(cl);
+        clusterCurrentBus->meet(objectGetVal(c->argv[2]), port, cport, c, clusterCommandMeetCompletion);
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "bumpepoch") && c->argc == 2) {
         /* CLUSTER BUMPEPOCH */
         clusterCurrentBus->bumpEpoch(c);
@@ -1739,7 +1821,24 @@ void clusterCommand(client *c) {
             addReplyError(c, "I'm a replica but my master is unknown to me");
             return;
         }
-        clusterCurrentBus->failover(c, force, takeover);
+        if (!force && (nodeFailed(myself->replicaof) ||
+                       myself->replicaof->link == NULL)) {
+            addReplyError(c, "Master is down or failed, "
+                             "please use CLUSTER FAILOVER FORCE");
+            return;
+        }
+        sds cl = catClientInfoShortString(sdsempty(), c, server.hide_user_data_from_log);
+        if (takeover) {
+            serverLog(LL_NOTICE, "Taking over the primary (user request from '%s').", cl);
+        } else if (force) {
+            serverLog(LL_NOTICE, "Forced failover %s request accepted (%s request from '%s').",
+                      c == server.primary ? "primary" : "user",
+                      c == server.primary ? "primary" : "user", cl);
+        } else {
+            serverLog(LL_NOTICE, "Manual failover user request accepted (user request from '%s').", cl);
+        }
+        sdsfree(cl);
+        clusterCurrentBus->failover(force, takeover, c, clusterCommandFailoverCompletion);
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "replicate") &&
                (c->argc == 3 || c->argc == 4)) {
         /* CLUSTER REPLICATE (<NODE ID> | NO ONE) */
@@ -1762,14 +1861,7 @@ void clusterCommand(client *c) {
                       "primary (request from '%s').",
                       cl);
             sdsfree(cl);
-            clusterCurrentBus->setReplicaOf(NULL);
-            flushAllDataAndResetRDB(server.repl_replica_lazy_flush
-                                        ? EMPTYDB_ASYNC
-                                        : EMPTYDB_NO_FLAGS);
-            verifyClusterConfigWithData();
-            clusterCloseAllSlots();
-            clusterCleanupFailoverState();
-            addReply(c, shared.ok);
+            clusterCurrentBus->setReplicaOf(NULL, c, clusterCommandPromoteCompletion);
             return;
         }
         /* CLUSTER REPLICATE <NODE ID> */
@@ -1798,8 +1890,7 @@ void clusterCommand(client *c) {
             addReply(c, shared.ok);
             return;
         }
-        clusterCurrentBus->setReplicaOf(n);
-        addReply(c, shared.ok);
+        clusterCurrentBus->setReplicaOf(n, c, clusterCommandReplicateCompletion);
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "forget") && c->argc == 3) {
         /* CLUSTER FORGET <NODE ID> */
         const char *node_id = objectGetVal(c->argv[2]);
@@ -1814,16 +1905,14 @@ void clusterCommand(client *c) {
             addReplyError(c, "Can't forget my master!");
             return;
         }
-        if (!clusterCurrentBus->forgetNode(node_id, id_len)) {
-            addReplyErrorFormat(c, "Unknown node %s", node_id);
-            return;
+        if (n) {
+            sds cl = catClientInfoShortString(sdsempty(), c,
+                                              server.hide_user_data_from_log);
+            serverLog(LL_NOTICE, "Cluster forget %s (user request from '%s').",
+                      node_id, cl);
+            sdsfree(cl);
         }
-        sds cl = catClientInfoShortString(sdsempty(), c,
-                                          server.hide_user_data_from_log);
-        serverLog(LL_NOTICE, "Cluster forget %s (user request from '%s').",
-                  node_id, cl);
-        sdsfree(cl);
-        addReply(c, shared.ok);
+        clusterCurrentBus->forgetNode(node_id, id_len, c, clusterCommandForgetCompletion);
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "count-failure-reports") && c->argc == 3) {
         /* CLUSTER COUNT-FAILURE-REPORTS <NODE ID> */
         clusterNode *n = clusterLookupNode(objectGetVal(c->argv[2]),

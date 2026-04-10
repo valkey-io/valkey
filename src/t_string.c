@@ -139,7 +139,8 @@ void setGenericCommand(client *c,
     setkey_flags |= found ? SETKEY_ALREADY_EXIST : SETKEY_DOESNT_EXIST;
 
     if (c->flag.argv_borrowed) {
-        /* If the client does not own the argv, we need to create a copy of the value object to be set into the db. */
+        /* If the client does not own the argv, we need to ensure that the value
+         * object is not released when adding it to the database. */
         incrRefCount(val);
     }
     setKey(c, c->db, key, &val, setkey_flags);
@@ -407,15 +408,18 @@ void getdelCommand(client *c) {
 void getsetCommand(client *c) {
     initDeferredReplyBuffer(c);
     if (getGenericCommand(c) == C_ERR) return;
+    robj *val = c->argv[2];
     if (c->flag.argv_borrowed) {
-        robj *val = c->argv[2];
+        /* If the client does not own the argv, we need to ensure that the value
+         * object is not released when adding it to the database. */
         incrRefCount(val);
         setKey(c, c->db, c->argv[1], &val, 0);
         rewriteClientCommandArgument(c, 2, val);
     } else {
-        c->argv[2] = tryObjectEncoding(c->argv[2]);
-        setKey(c, c->db, c->argv[1], &c->argv[2], 0);
-        incrRefCount(c->argv[2]);
+        val = tryObjectEncoding(val);
+        setKey(c, c->db, c->argv[1], &val, 0);
+        incrRefCount(val);
+        c->argv[2] = val;
     }
     notifyKeyspaceEvent(NOTIFY_STRING, "set", c->argv[1], c->db->id);
     server.dirty++;
@@ -562,12 +566,16 @@ void msetGenericCommand(client *c, int nx) {
 
     int setkey_flags = nx ? SETKEY_DOESNT_EXIST : 0;
     for (j = 1; j < c->argc; j += 2) {
-        robj *val = c->flag.argv_borrowed ? c->argv[j + 1] : tryObjectEncoding(c->argv[j + 1]);
-        if (c->flag.argv_borrowed) incrRefCount(val);
-        setKey(c, c->db, c->argv[j], &val, setkey_flags);
+        robj *val = c->argv[j + 1];
         if (c->flag.argv_borrowed) {
+            /* If the client does not own the argv, we need to ensure that the value
+             * object is not released when adding it to the database. */
+            incrRefCount(val);
+            setKey(c, c->db, c->argv[j], &val, setkey_flags);
             rewriteClientCommandArgument(c, j + 1, val);
         } else {
+            val = tryObjectEncoding(val);
+            setKey(c, c->db, c->argv[j], &val, setkey_flags);
             incrRefCount(val);
             c->argv[j + 1] = val;
         }
@@ -653,17 +661,20 @@ void msetexCommand(client *c) {
     /* MSET all the keys. */
     for (int j = 2; j < 2 + numkeys * 2; j += 2) {
         robj *key = c->argv[j];
-        robj *val = c->flag.argv_borrowed ? c->argv[j + 1] : tryObjectEncoding(c->argv[j + 1]);
+        robj *val = c->argv[j + 1];
         if (c->flag.argv_borrowed) {
+            /* If the client does not own the argv, we need to ensure that the value
+             * object is not released when adding it to the database. */
             incrRefCount(val);
-        }
-        setKey(c, c->db, key, &val, setkey_flags);
-        if (expire) val = setExpire(c, c->db, key, milliseconds);
-        if (c->flag.argv_borrowed) {
+            setKey(c, c->db, key, &val, setkey_flags);
+            if (expire) val = setExpire(c, c->db, key, milliseconds);
             rewriteClientCommandArgument(c, j + 1, val);
         } else {
-            c->argv[j + 1] = val;
+            val = tryObjectEncoding(val);
+            setKey(c, c->db, key, &val, setkey_flags);
+            if (expire) val = setExpire(c, c->db, key, milliseconds);
             incrRefCount(val);
+            c->argv[j + 1] = val;
         }
         server.dirty++;
         notifyKeyspaceEvent(NOTIFY_STRING, "set", key, c->db->id);
@@ -784,17 +795,20 @@ void appendCommand(client *c) {
     o = lookupKeyWrite(c->db, c->argv[1]);
     if (o == NULL) {
         /* Create the key */
+        robj *val = c->argv[2];
         if (c->flag.argv_borrowed) {
-            robj *val = c->argv[2];
+            /* If the client does not own the argv, we need to ensure that the value
+             * object is not released when adding it to the database. */
             incrRefCount(val);
             dbAdd(c->db, c->argv[1], &val);
             rewriteClientCommandArgument(c, 2, val);
             totlen = stringObjectLen(val);
         } else {
-            c->argv[2] = tryObjectEncoding(c->argv[2]);
-            dbAdd(c->db, c->argv[1], &c->argv[2]);
-            incrRefCount(c->argv[2]);
-            totlen = stringObjectLen(c->argv[2]);
+            val = tryObjectEncoding(val);
+            dbAdd(c->db, c->argv[1], &val);
+            incrRefCount(val);
+            c->argv[2] = val;
+            totlen = stringObjectLen(val);
         }
     } else {
         /* Key exists, check type */

@@ -65,7 +65,6 @@
 #include "call_reply.h"
 #include "hdr_histogram.h"
 #include "crc16_slottable.h"
-#include "util.h"
 #include "valkeymodule.h"
 #include "module.h"
 #include "io_threads.h"
@@ -534,6 +533,8 @@ void moduleCreateContext(ValkeyModuleCtx *out_ctx, ValkeyModule *module, int ctx
 
 /* Common helper functions. */
 int moduleVerifyResourceName(const char *name);
+
+static void moduleCallCommandHelper(ValkeyModuleCtx *ctx, client *c, robj **argv, int argc, int flags, sds *error);
 
 /* --------------------------------------------------------------------------
  * ## Heap allocation raw functions
@@ -3633,6 +3634,7 @@ int VM_ReplyWithCallReply(ValkeyModuleCtx *ctx, ValkeyModuleCallReply *reply) {
  * `proto` must point to a valid, complete RESP-encoded reply of length
  * `proto_len`.  Returns VALKEYMODULE_OK.  If there is no client context
  * (script, timer, etc.) the call is a no-op and returns VALKEYMODULE_OK. */
+// NON-PUBLIC API: remove this line when making this API public.
 int VM_ReplyRaw(ValkeyModuleCtx *ctx, const char *proto, size_t proto_len) {
     client *c = moduleGetReplyClient(ctx);
     if (c == NULL) return VALKEYMODULE_OK;
@@ -6277,6 +6279,7 @@ int VM_CallReplyPromiseAbort(ValkeyModuleCallReply *reply, void **private_data) 
  * Note: as with VM_CallReplyPromiseAbort, if the underlying blocking command
  * belongs to a module that does not honour disconnect callbacks, the abort may
  * succeed internally without the command actually stopping. */
+// NON-PUBLIC API: remove this line when making this API public.
 int VM_CallArgvAbort(ValkeyModuleCallArgvBlockedHandle *handle) {
     ValkeyModuleAsyncRMCallPromise *promise = handle;
     serverAssert(promise->from_call_argv);
@@ -6438,9 +6441,168 @@ fmterr:
     return NULL;
 }
 
+/* Exported API to call any command from modules.
+ *
+ * * **cmdname**: The command to call.
+ * * **fmt**: A format specifier string for the command's arguments. Each
+ *   of the arguments should be specified by a valid type specification. The
+ *   format specifier can also contain the modifiers `!`, `A`, `3` and `R` which
+ *   don't have a corresponding argument.
+ *
+ *     * `b` -- The argument is a buffer and is immediately followed by another
+ *              argument that is the buffer's length.
+ *     * `c` -- The argument is a pointer to a plain C string (null-terminated).
+ *     * `l` -- The argument is a `long long` integer.
+ *     * `s` -- The argument is a ValkeyModuleString.
+ *     * `v` -- The argument(s) is a vector of ValkeyModuleString.
+ *     * `!` -- Sends the command and its arguments to replicas and AOF.
+ *     * `A` -- Suppress AOF propagation, send only to replicas (requires `!`).
+ *     * `R` -- Suppress replicas propagation, send only to AOF (requires `!`).
+ *     * `3` -- Return a RESP3 reply. This will change the command reply.
+ *              e.g., HGETALL returns a map instead of a flat array.
+ *     * `0` -- Return the reply in auto mode, i.e. the reply format will be the
+ *              same as the client attached to the given ValkeyModuleCtx. This will
+ *              probably used when you want to pass the reply directly to the client.
+ *     * `C` -- Run a command as the user attached to the context.
+ *              User is either attached automatically via the client that directly
+ *              issued the command and created the context or via VM_SetContextUser.
+ *              If the context is not directly created by an issued command (such as a
+ *              background context and no user was set on it via VM_SetContextUser,
+ *              VM_Call will fail.
+ *              Checks if the command can be executed according to ACL rules and causes
+ *              the command to run as the determined user, so that any future user
+ *              dependent activity, such as ACL checks within scripts will proceed as
+ *              expected.
+ *              Otherwise, the command will run as the unrestricted user.
+ *     * `S` -- Run the command in a script mode, this means that it will raise
+ *              an error if a command which are not allowed inside a script
+ *              (flagged with the `deny-script` flag) is invoked (like SHUTDOWN).
+ *              In addition, on script mode, write commands are not allowed if there are
+ *              not enough good replicas (as configured with `min-replicas-to-write`)
+ *              or when the server is unable to persist to the disk.
+ *     * `W` -- Do not allow to run any write command (flagged with the `write` flag).
+ *     * `M` -- Do not allow `deny-oom` flagged commands when over the memory limit.
+ *     * `E` -- Return error as ValkeyModuleCallReply. If there is an error before
+ *              invoking the command, the error is returned using errno mechanism.
+ *              This flag allows to get the error also as an error CallReply with
+ *              relevant error message.
+ *     * 'D' -- A "Dry Run" mode. Return before executing the underlying call().
+ *              If everything succeeded, it will return with a NULL, otherwise it will
+ *              return with a CallReply object denoting the error, as if it was called with
+ *              the 'E' code.
+ *     * 'K' -- Allow running blocking commands. If enabled and the command gets blocked, a
+ *              special VALKEYMODULE_REPLY_PROMISE will be returned. This reply type
+ *              indicates that the command was blocked and the reply will be given asynchronously.
+ *              The module can use this reply object to set a handler which will be called when
+ *              the command gets unblocked using ValkeyModule_CallReplyPromiseSetUnblockHandler.
+ *              The handler must be set immediately after the command invocation (without releasing
+ *              the lock in between). If the handler is not set, the blocking command will
+ *              still continue its execution but the reply will be ignored (fire and forget),
+ *              notice that this is dangerous in case of role change, as explained below.
+ *              The module can use ValkeyModule_CallReplyPromiseAbort to abort the command invocation
+ *              if it was not yet finished (see ValkeyModule_CallReplyPromiseAbort documentation for more
+ *              details). It is also the module's responsibility to abort the execution on role change, either by using
+ *              server event (to get notified when the instance becomes a replica) or relying on the disconnect
+ *              callback of the original client. Failing to do so can result in a write operation on a replica.
+ *              Unlike other call replies, promise call reply **must** be freed while the GIL is locked.
+ *              Notice that on unblocking, the only promise is that the unblock handler will be called,
+ *              If the blocking VM_Call caused the module to also block some real client (using VM_BlockClient),
+ *              it is the module responsibility to unblock this client on the unblock handler.
+ *              On the unblock handler it is only allowed to perform the following:
+ *              * Calling additional commands using VM_Call
+ *              * Open keys using VM_OpenKey
+ *              * Replicate data to the replica or AOF
+ *
+ *              Specifically, it is not allowed to call any module API which are client related such as:
+ *              * VM_Reply* API's
+ *              * VM_BlockClient
+ *              * VM_GetCurrentUserName
+ *
+ *     * 'X' -- Return exact reply types, including the differences between simple
+ *              string and bulk string, and the RESP 2 difference between nulls
+ *              and null arrays.
+ *
+ * * **...**: The actual arguments to the command.
+ *
+ * On success a ValkeyModuleCallReply object is returned, otherwise
+ * NULL is returned and errno is set to the following values:
+ *
+ * * EBADF: wrong format specifier.
+ * * EINVAL: wrong command arity.
+ * * ENOENT: command does not exist.
+ * * EPERM: operation in Cluster instance with key in non local slot.
+ * * EROFS: operation in Cluster instance when a write command is sent
+ *          in a readonly state.
+ * * ENETDOWN: operation in Cluster instance when cluster is down.
+ * * ENOTSUP: No ACL user for the specified module context
+ * * EACCES: Command cannot be executed, according to ACL rules
+ * * ENOSPC: Write or deny-oom command is not allowed
+ * * ESPIPE: Command not allowed on script mode
+ *
+ * Example code fragment:
+ *
+ *      reply = ValkeyModule_Call(ctx,"INCRBY","sc",argv[1],"10");
+ *      if (ValkeyModule_CallReplyType(reply) == VALKEYMODULE_REPLY_INTEGER) {
+ *        long long myval = ValkeyModule_CallReplyInteger(reply);
+ *        // Do something with myval.
+ *      }
+ *
+ * This API is documented here: https://valkey.io/topics/modules-intro
+ */
+ValkeyModuleCallReply *VM_Call(ValkeyModuleCtx *ctx, const char *cmdname, const char *fmt, ...) {
+    client *c = NULL;
+    robj **argv = NULL;
+    int argc = 0, flags = 0;
+    va_list ap;
+    ValkeyModuleCallReply *reply = NULL;
+    sds reply_error_msg = NULL;
+
+    /* Handle arguments. */
+    va_start(ap, fmt);
+    argv = moduleCreateArgvFromUserFormat(cmdname, fmt, &argc, &flags, ap);
+    va_end(ap);
+
+    c = moduleAllocTempClient();
+    moduleCallCommandHelper(ctx, c, argv, argc, flags, &reply_error_msg);
+
+    if (errno == 0) {
+        if (!c->flag.blocked) {
+            reply = moduleParseReply(c, (ctx->flags & VALKEYMODULE_CTX_AUTO_MEMORY) ? ctx : NULL);
+            if (flags & VALKEYMODULE_CALL_ARGV_REPLY_EXACT) {
+                enableParseExactReplyTypeFlag(reply);
+            }
+        } else {
+            serverAssert(flags & VALKEYMODULE_CALL_ARGV_ALLOW_BLOCK);
+            serverAssert(c->bstate->async_rm_call_handle);
+            /* Acquire a reference for the CallReply we are about to create.
+             * The promise was initialized with ref_count=1 for the blocked client;
+             * this second reference keeps it alive until the caller frees the reply. */
+
+            ValkeyModuleAsyncRMCallPromise *promise = c->bstate->async_rm_call_handle;
+            promise->ref_count++;
+            reply = callReplyCreatePromise(promise);
+            c = NULL; /* Make sure not to free the client */
+        }
+    } else {
+        if (reply_error_msg != NULL) {
+            reply = callReplyCreateError(reply_error_msg, ctx);
+        }
+    }
+
+    if (reply) {
+        autoMemoryAdd(ctx, VALKEYMODULE_AM_REPLY, reply);
+    }
+
+    if (c) {
+        moduleReleaseTempClient(c);
+    }
+
+    return reply;
+}
+
 /* Helper function that supports VM_Call and VM_CallArgv.
  */
-void callCommandHelper(ValkeyModuleCtx *ctx, client *c, robj **argv, int argc, int flags, sds *error) {
+static void moduleCallCommandHelper(ValkeyModuleCtx *ctx, client *c, robj **argv, int argc, int flags, sds *error) {
     sds reply_error_msg = NULL;
     int replicate = 0;             /* Replicate this command? */
     int error_as_call_replies = 0; /* return errors as ValkeyModuleCallReply object */
@@ -6821,165 +6983,6 @@ cleanup:
     }
 }
 
-/* Exported API to call any command from modules.
- *
- * * **cmdname**: The command to call.
- * * **fmt**: A format specifier string for the command's arguments. Each
- *   of the arguments should be specified by a valid type specification. The
- *   format specifier can also contain the modifiers `!`, `A`, `3` and `R` which
- *   don't have a corresponding argument.
- *
- *     * `b` -- The argument is a buffer and is immediately followed by another
- *              argument that is the buffer's length.
- *     * `c` -- The argument is a pointer to a plain C string (null-terminated).
- *     * `l` -- The argument is a `long long` integer.
- *     * `s` -- The argument is a ValkeyModuleString.
- *     * `v` -- The argument(s) is a vector of ValkeyModuleString.
- *     * `!` -- Sends the command and its arguments to replicas and AOF.
- *     * `A` -- Suppress AOF propagation, send only to replicas (requires `!`).
- *     * `R` -- Suppress replicas propagation, send only to AOF (requires `!`).
- *     * `3` -- Return a RESP3 reply. This will change the command reply.
- *              e.g., HGETALL returns a map instead of a flat array.
- *     * `0` -- Return the reply in auto mode, i.e. the reply format will be the
- *              same as the client attached to the given ValkeyModuleCtx. This will
- *              probably used when you want to pass the reply directly to the client.
- *     * `C` -- Run a command as the user attached to the context.
- *              User is either attached automatically via the client that directly
- *              issued the command and created the context or via VM_SetContextUser.
- *              If the context is not directly created by an issued command (such as a
- *              background context and no user was set on it via VM_SetContextUser,
- *              VM_Call will fail.
- *              Checks if the command can be executed according to ACL rules and causes
- *              the command to run as the determined user, so that any future user
- *              dependent activity, such as ACL checks within scripts will proceed as
- *              expected.
- *              Otherwise, the command will run as the unrestricted user.
- *     * `S` -- Run the command in a script mode, this means that it will raise
- *              an error if a command which are not allowed inside a script
- *              (flagged with the `deny-script` flag) is invoked (like SHUTDOWN).
- *              In addition, on script mode, write commands are not allowed if there are
- *              not enough good replicas (as configured with `min-replicas-to-write`)
- *              or when the server is unable to persist to the disk.
- *     * `W` -- Do not allow to run any write command (flagged with the `write` flag).
- *     * `M` -- Do not allow `deny-oom` flagged commands when over the memory limit.
- *     * `E` -- Return error as ValkeyModuleCallReply. If there is an error before
- *              invoking the command, the error is returned using errno mechanism.
- *              This flag allows to get the error also as an error CallReply with
- *              relevant error message.
- *     * 'D' -- A "Dry Run" mode. Return before executing the underlying call().
- *              If everything succeeded, it will return with a NULL, otherwise it will
- *              return with a CallReply object denoting the error, as if it was called with
- *              the 'E' code.
- *     * 'K' -- Allow running blocking commands. If enabled and the command gets blocked, a
- *              special VALKEYMODULE_REPLY_PROMISE will be returned. This reply type
- *              indicates that the command was blocked and the reply will be given asynchronously.
- *              The module can use this reply object to set a handler which will be called when
- *              the command gets unblocked using ValkeyModule_CallReplyPromiseSetUnblockHandler.
- *              The handler must be set immediately after the command invocation (without releasing
- *              the lock in between). If the handler is not set, the blocking command will
- *              still continue its execution but the reply will be ignored (fire and forget),
- *              notice that this is dangerous in case of role change, as explained below.
- *              The module can use ValkeyModule_CallReplyPromiseAbort to abort the command invocation
- *              if it was not yet finished (see ValkeyModule_CallReplyPromiseAbort documentation for more
- *              details). It is also the module's responsibility to abort the execution on role change, either by using
- *              server event (to get notified when the instance becomes a replica) or relying on the disconnect
- *              callback of the original client. Failing to do so can result in a write operation on a replica.
- *              Unlike other call replies, promise call reply **must** be freed while the GIL is locked.
- *              Notice that on unblocking, the only promise is that the unblock handler will be called,
- *              If the blocking VM_Call caused the module to also block some real client (using VM_BlockClient),
- *              it is the module responsibility to unblock this client on the unblock handler.
- *              On the unblock handler it is only allowed to perform the following:
- *              * Calling additional commands using VM_Call
- *              * Open keys using VM_OpenKey
- *              * Replicate data to the replica or AOF
- *
- *              Specifically, it is not allowed to call any module API which are client related such as:
- *              * VM_Reply* API's
- *              * VM_BlockClient
- *              * VM_GetCurrentUserName
- *
- *     * 'X' -- Return exact reply types, including the differences between simple
- *              string and bulk string, and the RESP 2 difference between nulls
- *              and null arrays.
- *
- * * **...**: The actual arguments to the command.
- *
- * On success a ValkeyModuleCallReply object is returned, otherwise
- * NULL is returned and errno is set to the following values:
- *
- * * EBADF: wrong format specifier.
- * * EINVAL: wrong command arity.
- * * ENOENT: command does not exist.
- * * EPERM: operation in Cluster instance with key in non local slot.
- * * EROFS: operation in Cluster instance when a write command is sent
- *          in a readonly state.
- * * ENETDOWN: operation in Cluster instance when cluster is down.
- * * ENOTSUP: No ACL user for the specified module context
- * * EACCES: Command cannot be executed, according to ACL rules
- * * ENOSPC: Write or deny-oom command is not allowed
- * * ESPIPE: Command not allowed on script mode
- *
- * Example code fragment:
- *
- *      reply = ValkeyModule_Call(ctx,"INCRBY","sc",argv[1],"10");
- *      if (ValkeyModule_CallReplyType(reply) == VALKEYMODULE_REPLY_INTEGER) {
- *        long long myval = ValkeyModule_CallReplyInteger(reply);
- *        // Do something with myval.
- *      }
- *
- * This API is documented here: https://valkey.io/topics/modules-intro
- */
-ValkeyModuleCallReply *VM_Call(ValkeyModuleCtx *ctx, const char *cmdname, const char *fmt, ...) {
-    client *c = NULL;
-    robj **argv = NULL;
-    int argc = 0, flags = 0;
-    va_list ap;
-    ValkeyModuleCallReply *reply = NULL;
-    sds reply_error_msg = NULL;
-
-    /* Handle arguments. */
-    va_start(ap, fmt);
-    argv = moduleCreateArgvFromUserFormat(cmdname, fmt, &argc, &flags, ap);
-    va_end(ap);
-
-    c = moduleAllocTempClient();
-    callCommandHelper(ctx, c, argv, argc, flags, &reply_error_msg);
-
-    if (errno == 0) {
-        if (!c->flag.blocked) {
-            reply = moduleParseReply(c, (ctx->flags & VALKEYMODULE_CTX_AUTO_MEMORY) ? ctx : NULL);
-            if (flags & VALKEYMODULE_CALL_ARGV_REPLY_EXACT) {
-                enableParseExactReplyTypeFlag(reply);
-            }
-        } else {
-            serverAssert(flags & VALKEYMODULE_CALL_ARGV_ALLOW_BLOCK);
-            serverAssert(c->bstate->async_rm_call_handle);
-            /* Acquire a reference for the CallReply we are about to create.
-             * The promise was initialized with ref_count=1 for the blocked client;
-             * this second reference keeps it alive until the caller frees the reply. */
-
-            ValkeyModuleAsyncRMCallPromise *promise = c->bstate->async_rm_call_handle;
-            promise->ref_count++;
-            reply = callReplyCreatePromise(promise);
-            c = NULL; /* Make sure not to free the client */
-        }
-    } else {
-        if (reply_error_msg != NULL) {
-            reply = callReplyCreateError(reply_error_msg, ctx);
-        }
-    }
-
-    if (reply) {
-        autoMemoryAdd(ctx, VALKEYMODULE_AM_REPLY, reply);
-    }
-
-    if (c) {
-        moduleReleaseTempClient(c);
-    }
-
-    return reply;
-}
-
 /* Low-level API to call any command from modules.
  *
  * This is an optimized version of VM_Call when the module already has the
@@ -7040,6 +7043,7 @@ ValkeyModuleCallReply *VM_Call(ValkeyModuleCtx *ctx, const char *cmdname, const 
  * * ENOSPC: Write or deny-oom command is not allowed
  * * ESPIPE: Command not allowed on script mode
  */
+// NON-PUBLIC API: remove this line when making this API public.
 int VM_CallArgv(ValkeyModuleCtx *ctx,
                 ValkeyModuleString **argv,
                 int argc,
@@ -7054,7 +7058,7 @@ int VM_CallArgv(ValkeyModuleCtx *ctx,
 
     c = moduleAllocTempClient();
     c->flag.argv_borrowed = 1;
-    callCommandHelper(ctx, c, argv, argc, flags, &reply_error_msg);
+    moduleCallCommandHelper(ctx, c, argv, argc, flags, &reply_error_msg);
 
     if (errno != 0 && !(flags & VALKEYMODULE_CALL_ARGV_ERRORS_AS_REPLIES)) {
         /* Signal the caller that an error occurred */

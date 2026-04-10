@@ -153,7 +153,7 @@ unsigned int delKeysInSlot(unsigned int hashslot, int lazy, bool propagate_del, 
 
 void clusterUpdateState(void);
 int clusterSaveConfigFromBio(sds content, bool do_fsync);
-void clusterSaveConfigOrDie(void);
+void clusterSaveConfigOrDie(bool do_fsync);
 int clusterDelSlot(int slot);
 int clusterAddSlot(clusterNode *n, int slot);
 int clusterBumpConfigEpochWithoutConsensus(void);

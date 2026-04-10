@@ -1177,8 +1177,8 @@ int clusterSaveConfigFromBio(sds content, bool do_fsync) {
 }
 
 /* Save the cluster configuration file. If the save fails, exit the process. */
-void clusterSaveConfigOrDie(void) {
-    if (clusterSaveConfig(false, true) == C_ERR) {
+void clusterSaveConfigOrDie(bool fsync) {
+    if (clusterSaveConfig(false, fsync) == C_ERR) {
         serverLog(LL_WARNING, "Fatal: can't update cluster config file.");
         exit(1);
     }
@@ -1510,7 +1510,7 @@ void clusterInit(void) {
         clusterAddNodeToShard(myself->shard_id, myself);
         saveconf = 1;
     }
-    if (saveconf) clusterSaveConfigOrDie();
+    if (saveconf) clusterSaveConfigOrDie(true);
 
     /* Port sanity check II
      * The other handshake port check is triggered too late to stop
@@ -6373,15 +6373,13 @@ void clusterBeforeSleep(void) {
     /* Save the config, possibly using fsync. */
     if (flags & CLUSTER_TODO_SAVE_CONFIG) {
         bool fsync = flags & CLUSTER_TODO_FSYNC_CONFIG;
-        clusterSaveConfigBackground(fsync);
-
-        int fsync = flags & CLUSTER_TODO_FSYNC_CONFIG;
         if (server.cluster_configfile_save_behavior == CLUSTER_CONFIGFILE_SAVE_BEHAVIOR_SYNC) {
             /* Sync mode: exit the process if saving fails. */
             clusterSaveConfigOrDie(fsync);
         } else if (server.cluster_configfile_save_behavior == CLUSTER_CONFIGFILE_SAVE_BEHAVIOR_BEST_EFFORT) {
-            /* Best-effort mode: log (don't exit) if saving fails and wait for the next retry. */
-            clusterSaveConfigOrLog(fsync);
+            /* Best-effort mode: save asynchronously via BIO thread; failures are logged (not fatal)
+             * and the save will be retried on the next config change. */
+            clusterSaveConfigBackground(fsync);
         }
     }
 
@@ -6791,7 +6789,7 @@ int verifyClusterConfigWithData(void) {
     }
     if (update_config) {
         bioDrainWorker(BIO_CLUSTER_SAVE);
-        clusterSaveConfigOrDie();
+        clusterSaveConfigOrDie(true);
     }
     return C_OK;
 }

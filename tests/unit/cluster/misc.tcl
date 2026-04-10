@@ -55,13 +55,6 @@ proc remove_nodes_conf_folder {srv_idx} {
     exec rm -rf $cluster_conf_path
 }
 
-start_cluster 1 1 {tags {external:skip cluster}} {
-    test {Fail to save the cluster configuration file will not exit the process} {
-        set BIO_CLUSTER_SAVE 6
-
-        assert_equal "ok" [getInfoProperty [R 0 cluster info] cluster_config_save_status]
-        assert_equal "ok" [getInfoProperty [R 1 cluster info] cluster_config_save_status]
-
 start_cluster 1 1 {tags {external:skip cluster} overrides {cluster-config-save-behavior sync}} {
     test {cluster-config-save-behavior sync mode - node exits when config save fails} {
         # Create folder that can cause the rename fail.
@@ -85,6 +78,11 @@ start_cluster 1 1 {tags {external:skip cluster} overrides {cluster-config-save-b
 
 start_cluster 1 1 {tags {external:skip cluster} overrides {cluster-config-save-behavior best-effort}} {
     test {cluster-config-save-behavior best-effort mode - node continues running when config save fails} {
+        set BIO_CLUSTER_SAVE 6
+
+        assert_equal "ok" [getInfoProperty [R 0 cluster info] cluster_config_save_status]
+        assert_equal "ok" [getInfoProperty [R 1 cluster info] cluster_config_save_status]
+
         # Create folder that can cause the rename fail.
         create_nodes_conf_folder 0
         create_nodes_conf_folder 1

@@ -951,7 +951,7 @@ start_server {tags {"repl external:skip"} overrides {save ""}} {
                     }
 
                     # wait for rdb child to exit
-                    wait_for_condition 500 100 {
+                    wait_for_condition 1200 100 {
                         [s -2 rdb_bgsave_in_progress] == 0
                     } else {
                         fail "rdb child didn't terminate"

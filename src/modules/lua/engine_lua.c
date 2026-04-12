@@ -481,6 +481,11 @@ static void luaEngineDebuggerEnd(ValkeyModuleCtx *module_ctx,
 static struct luaEngineCtx *engine_ctx = NULL;
 
 #if STATIC_LUA
+/*
+ * When building Lua as a static library, hide the generic module entry
+ * points, ValkeyModule_OnLoad and ValkeyModule_OnLoad, to avoid multiple
+ * symbol definitions. This is done by declaring these functions as static.
+ */
 #define LUA_MODULE_VISIBILITY static
 #else
 #define LUA_MODULE_VISIBILITY
@@ -552,12 +557,14 @@ LUA_MODULE_VISIBILITY int ValkeyModule_OnUnload(ValkeyModuleCtx *ctx) {
     return VALKEYMODULE_OK;
 }
 
-__attribute__((visibility("default"))) int ValkeyModule_OnLoad_lua(ValkeyModuleCtx *ctx,
-                                                                   ValkeyModuleString **argv,
-                                                                   int argc) {
+/* Unique entry points (Load and Unload) used by the Lua module when linked statically */
+
+int ValkeyModule_OnLoad_lua(ValkeyModuleCtx *ctx,
+                            ValkeyModuleString **argv,
+                            int argc) {
     return ValkeyModule_OnLoad(ctx, argv, argc);
 }
 
-__attribute__((visibility("default"))) int ValkeyModule_OnUnload_lua(ValkeyModuleCtx *ctx) {
+int ValkeyModule_OnUnload_lua(ValkeyModuleCtx *ctx) {
     return ValkeyModule_OnUnload(ctx);
 }

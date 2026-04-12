@@ -1511,28 +1511,36 @@ int zsetAdd(robj *zobj, double score, sds ele, int in_flags, int *out_flags, dou
                 unsigned char *sptr = lpNext(zl, eptr);
                 serverAssert(sptr != NULL);
 
-                /* Fast path: if the new score keeps the element between its
-                 * current neighbors (by (score, ele) ordering), replace the
-                 * score entry in place instead of delete + full re-scan. */
-                unsigned char *prev_eptr = eptr, *prev_sptr = sptr;
-                zzlPrev(zl, &prev_eptr, &prev_sptr);
-                unsigned char *next_eptr = eptr, *next_sptr = sptr;
-                zzlNext(zl, &next_eptr, &next_sptr);
-
+                /* Fast path: if the new score keeps the element in its current
+                 * slot under (score, ele) ordering, replace the score entry in
+                 * place instead of delete + full re-scan.
+                 *
+                 * Only the neighbor in the direction of the score change needs
+                 * to be checked: if the score increases, the previous neighbor
+                 * satisfies (prev_score < score) strictly (since prev_score <=
+                 * curscore < score), so only the next neighbor can violate the
+                 * order. The score-decrease case is symmetric. */
                 int keep_position = 1;
-                if (prev_sptr != NULL) {
-                    double prev_score = zzlGetScore(prev_sptr);
-                    if (prev_score > score ||
-                        (prev_score == score &&
-                         zzlCompareElements(prev_eptr, (unsigned char *)ele, sdslen(ele)) > 0))
-                        keep_position = 0;
-                }
-                if (keep_position && next_sptr != NULL) {
-                    double next_score = zzlGetScore(next_sptr);
-                    if (next_score < score ||
-                        (next_score == score &&
-                         zzlCompareElements(next_eptr, (unsigned char *)ele, sdslen(ele)) < 0))
-                        keep_position = 0;
+                if (score > curscore) {
+                    unsigned char *next_eptr = eptr, *next_sptr = sptr;
+                    zzlNext(zl, &next_eptr, &next_sptr);
+                    if (next_sptr != NULL) {
+                        double next_score = zzlGetScore(next_sptr);
+                        if (next_score < score ||
+                            (next_score == score &&
+                             zzlCompareElements(next_eptr, (unsigned char *)ele, sdslen(ele)) < 0))
+                            keep_position = 0;
+                    }
+                } else { /* score < curscore */
+                    unsigned char *prev_eptr = eptr, *prev_sptr = sptr;
+                    zzlPrev(zl, &prev_eptr, &prev_sptr);
+                    if (prev_sptr != NULL) {
+                        double prev_score = zzlGetScore(prev_sptr);
+                        if (prev_score > score ||
+                            (prev_score == score &&
+                             zzlCompareElements(prev_eptr, (unsigned char *)ele, sdslen(ele)) > 0))
+                            keep_position = 0;
+                    }
                 }
 
                 if (keep_position) {

@@ -634,10 +634,12 @@ static int zslParseRange(robj *min, robj *max, zrangespec *spec) {
         char *s = objectGetVal(min);
         size_t len = sdslen(s);
         if (s[0] == '(') {
+            if (len < 2) return C_ERR; /* bare "(" with no number */
             spec->min = valkey_strtod_n(s + 1, len - 1, &eptr);
             if (eptr[0] != '\0' || isnan(spec->min)) return C_ERR;
             spec->minex = 1;
         } else {
+            if (len == 0) return C_ERR; /* empty string */
             spec->min = valkey_strtod_n(s, len, &eptr);
             if (eptr[0] != '\0' || isnan(spec->min)) return C_ERR;
         }
@@ -648,10 +650,12 @@ static int zslParseRange(robj *min, robj *max, zrangespec *spec) {
         char *s = objectGetVal(max);
         size_t len = sdslen(s);
         if (s[0] == '(') {
+            if (len < 2) return C_ERR; /* bare "(" with no number */
             spec->max = valkey_strtod_n(s + 1, len - 1, &eptr);
             if (eptr[0] != '\0' || isnan(spec->max)) return C_ERR;
             spec->maxex = 1;
         } else {
+            if (len == 0) return C_ERR; /* empty string */
             spec->max = valkey_strtod_n(s, len, &eptr);
             if (eptr[0] != '\0' || isnan(spec->max)) return C_ERR;
         }

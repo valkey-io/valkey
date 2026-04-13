@@ -4,6 +4,12 @@
 
 #define UNUSED(V) ((void) V)
 
+/* Forward declarations of module API functions not publicly exposed */
+extern int VM_CallArgv(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc, int flags, const ValkeyModuleReplyHandlers *resp_handlers, void *reply_ctx);
+extern int VM_ReplyRaw(ValkeyModuleCtx *ctx, const char *proto, size_t proto_len);
+#define ValkeyModule_CallArgv VM_CallArgv
+#define ValkeyModule_ReplyRaw VM_ReplyRaw
+
 ValkeyModuleUser *user = NULL;
 
 int call_without_user(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
@@ -200,6 +206,57 @@ int call_with_user_bg(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc)
     return VALKEYMODULE_OK;
 }
 
+/* Reply handler for VM_CallArgv wrappers */
+static int usercall_argv_reply_handler(void *ctx, ValkeyModuleCtx *mctx, const char *proto, size_t proto_len) {
+    UNUSED(ctx);
+    ValkeyModule_ReplyRaw(mctx, proto, proto_len);
+    return 0;
+}
+
+/* VM_CallArgv variant of call_without_user */
+int call_argv_without_user(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    if (argc < 2) return ValkeyModule_WrongArity(ctx);
+
+    ValkeyModuleReplyHandlers handlers = {
+        .version = VALKEYMODULE_REPLY_HANDLERS_VERSION,
+        .onRespAvailable = usercall_argv_reply_handler,
+    };
+
+    if (ValkeyModule_CallArgv(ctx, argv + 1, (size_t)argc - 1, 0, &handlers, NULL) == VALKEYMODULE_ERR) {
+        ValkeyModule_ReplyWithError(ctx, "NULL reply returned");
+    }
+    return VALKEYMODULE_OK;
+}
+
+/* VM_CallArgv variant of call_with_user_flag */
+int call_argv_with_user_flag(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    if (argc < 3) return ValkeyModule_WrongArity(ctx);
+
+    ValkeyModule_SetContextUser(ctx, user);
+
+    size_t flags_len;
+    const char *flags_str = ValkeyModule_StringPtrLen(argv[1], &flags_len);
+
+    int flags = VALKEYMODULE_CALL_ARGV_ERRORS_AS_REPLIES;
+    for (size_t i = 0; i < flags_len; i++) {
+        switch (flags_str[i]) {
+        case 'C': flags |= VALKEYMODULE_CALL_ARGV_RUN_AS_USER; break;
+        case '!': flags |= VALKEYMODULE_CALL_ARGV_REPLICATE; break;
+        }
+    }
+
+    ValkeyModuleReplyHandlers handlers = {
+        .version = VALKEYMODULE_REPLY_HANDLERS_VERSION,
+        .onRespAvailable = usercall_argv_reply_handler,
+    };
+
+    /* argv[2] is the command; pass argv+2 so it becomes argv[0] of the call */
+    if (ValkeyModule_CallArgv(ctx, argv + 2, (size_t)argc - 2, flags, &handlers, NULL) == VALKEYMODULE_ERR) {
+        ValkeyModule_ReplyWithError(ctx, "NULL reply returned");
+    }
+    return VALKEYMODULE_OK;
+}
+
 int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     VALKEYMODULE_NOT_USED(argv);
     VALKEYMODULE_NOT_USED(argc);
@@ -210,7 +267,13 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
     if (ValkeyModule_CreateCommand(ctx,"usercall.call_without_user", call_without_user,"write",0,0,0) == VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
 
+    if (ValkeyModule_CreateCommand(ctx,"usercall.call_argv_without_user", call_argv_without_user,"write",0,0,0) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
+
     if (ValkeyModule_CreateCommand(ctx,"usercall.call_with_user_flag", call_with_user_flag,"write",0,0,0) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
+
+    if (ValkeyModule_CreateCommand(ctx,"usercall.call_argv_with_user_flag", call_argv_with_user_flag,"write",0,0,0) == VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
 
     if (ValkeyModule_CreateCommand(ctx, "usercall.call_with_user_bg", call_with_user_bg, "write", 0, 0, 0) == VALKEYMODULE_ERR)

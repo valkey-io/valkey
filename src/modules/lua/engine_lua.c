@@ -557,8 +557,8 @@ LUA_MODULE_VISIBILITY int ValkeyModule_OnUnload(ValkeyModuleCtx *ctx) {
     return VALKEYMODULE_OK;
 }
 
+#if STATIC_LUA
 /* Unique entry points (Load and Unload) used by the Lua module when linked statically */
-
 int ValkeyModule_OnLoad_lua(ValkeyModuleCtx *ctx,
                             ValkeyModuleString **argv,
                             int argc) {
@@ -568,3 +568,4 @@ int ValkeyModule_OnLoad_lua(ValkeyModuleCtx *ctx,
 int ValkeyModule_OnUnload_lua(ValkeyModuleCtx *ctx) {
     return ValkeyModule_OnUnload(ctx);
 }
+#endif

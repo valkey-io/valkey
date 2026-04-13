@@ -158,12 +158,6 @@ void freeEvalScripts(dict *scripts, list *scripts_lru_list, list *engine_callbac
     }
 }
 
-void freeCachedScriptsForEngine(scriptingEngine *engine) {
-    if (engine == NULL) {
-        return;
-    }
-}
-
 static void resetEngineEvalEnvCallback(scriptingEngine *engine, void *context) {
     int async = context != NULL;
     callableLazyEnvReset *callback = scriptingEngineCallResetEnvFunc(engine, VMSE_EVAL, async);

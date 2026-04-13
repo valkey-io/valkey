@@ -13204,7 +13204,7 @@ static int moduleLoadStaticSymbol(void **out, void **handle, const char *symbol_
         return C_ERR;
     }
 
-    // Open a handle to self
+    /* Open a handle to self */
     *handle = dlopen(NULL, RTLD_NOW);
     if (*handle == NULL) {
         char *error = dlerror();
@@ -13248,7 +13248,6 @@ static int moduleLoadStaticSymbol(void **out, void **handle, const char *symbol_
  *
  * On success C_OK is returned, otherwise C_ERR is returned. */
 int moduleLoadStatic(const char *module_name, void **module_argv, int module_argc, int is_loadex) {
-    // Locate the load
     ModuleLoadFunc onload;
     void *handle = NULL;
     if (moduleLoadStaticSymbol((void **)&onload, &handle, "ValkeyModule_OnLoad", module_name) != C_OK) {
@@ -13357,6 +13356,8 @@ static int moduleUnloadInternal(struct ValkeyModule *module, const char **errmsg
     ModuleUnLoadFunc onunload = NULL;
     if (module->is_static_module == 1) {
         if (moduleLoadStaticSymbol((void **)&onunload, &module->handle, "ValkeyModule_OnUnload", module->name) != C_OK) {
+            serverLog(LL_WARNING, "Module %s OnUnload failed. Unload canceled.", module->name);
+            errno = ECANCELED;
             return C_ERR;
         }
     } else {
@@ -13388,7 +13389,7 @@ static int moduleUnloadInternal(struct ValkeyModule *module, const char **errmsg
     moduleUnregisterCleanup(module);
 
     /* Unload the dynamic library. */
-    if (dlclose(module->handle) == -1) {
+    if (module->handle != NULL && dlclose(module->handle) == -1) {
         char *error = dlerror();
         if (error == NULL) error = "Unknown error";
         serverLog(LL_WARNING, "Error when trying to close the %s module: %s", module->name, error);

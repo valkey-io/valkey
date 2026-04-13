@@ -1285,7 +1285,7 @@ static int luaRedisPCallCommand(lua_State *lua) {
  *
  * 'digest' should point to a 41 bytes buffer: 40 for SHA1 converted into an
  * hexadecimal number, plus 1 byte for null term. */
-__attribute((weak)) void sha1hex(char *digest, char *script, size_t len) {
+__attribute__((weak)) void sha1hex(char *digest, char *script, size_t len) {
     SHA1_CTX ctx;
     unsigned char hash[20];
     char *cset = "0123456789abcdef";

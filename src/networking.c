@@ -326,7 +326,8 @@ client *createClient(connection *conn) {
     c->cur_script = NULL;
     c->multibulklen = 0;
     c->bulklen = -1;
-    c->raw_flag = 0;
+    c->raw_flag1 = 0;
+    c->raw_flag2 = 0;
     c->capa = 0;
     c->slot = -1;
     c->ctime = c->last_interaction = server.unixtime;
@@ -1862,6 +1863,13 @@ void freeClientOriginalArgv(client *c) {
     /* We didn't rewrite this client */
     if (!c->original_argv) return;
 
+    /* Client does not own the original argv, it just borrowed it. */
+    if (c->flag.argv_borrowed) {
+        c->original_argv = NULL;
+        c->original_argc = 0;
+        return;
+    }
+
     if (tryOffloadFreeArgvToIOThreads(c, c->original_argc, c->original_argv) == C_ERR) {
         for (int j = 0; j < c->original_argc; j++) decrRefCount(c->original_argv[j]);
         zfree(c->original_argv);
@@ -1872,12 +1880,18 @@ void freeClientOriginalArgv(client *c) {
 }
 
 void freeClientArgv(client *c) {
+    if (c->flag.argv_borrowed && !c->original_argv) {
+        /* Client does not own the argv, and there is no original argv, so just clear the fields. */
+        goto clear;
+    }
+
     /* If original_argv exists, 'c->argv' was allocated by the main thread,
      * so it's more efficient to free it directly here rather than offloading to IO threads */
     if (c->original_argv || tryOffloadFreeArgvToIOThreads(c, c->argc, c->argv) == C_ERR) {
         for (int j = 0; j < c->argc; j++) decrRefCount(c->argv[j]);
         zfree(c->argv);
     }
+clear:
     c->argc = 0;
     c->cmd = NULL;
     c->parsed_cmd = NULL;
@@ -3285,6 +3299,11 @@ void resetClient(client *c) {
         c->flag.reply_skip = 1;
         c->flag.reply_skip_next = 0;
     }
+
+    /* Clear the borrowed-argv flag: the argv array was only borrowed for the
+     * duration of a single VM_CallArgv dispatch; after execution it no longer
+     * points to the caller's array. */
+    c->flag.argv_borrowed = 0;
 }
 
 void resetClientIOState(client *c) {

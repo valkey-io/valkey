@@ -144,13 +144,18 @@ typedef struct {
     rdbAuxFieldDecoder decoder;
 } rdbAuxFieldCodec;
 
+static void dictEntryDestructorSdsKeyHeapValue(void *entry) {
+    dictEntry *de = entry;
+    dictSdsDestructor(dictGetKey(de));
+    dictVanillaFree(dictGetVal(de));
+    zfree(de);
+}
+
 dictType rdbAuxFieldDictType = {
-    dictSdsCaseHash,       /* hash function */
-    NULL,                  /* key dup */
-    dictSdsKeyCaseCompare, /* key compare */
-    dictSdsDestructor,     /* key destructor */
-    dictVanillaFree,       /* val destructor */
-    NULL                   /* allow to expand */
+    .entryGetKey = dictEntryGetKey,
+    .hashFunction = dictSdsCaseHash,
+    .keyCompare = dictSdsKeyCaseCompare,
+    .entryDestructor = dictEntryDestructorSdsKeyHeapValue,
 };
 
 dict *rdbAuxFields = NULL;
@@ -1013,7 +1018,7 @@ ssize_t rdbSaveObject(rio *rdb, robj *o, robj *key, int dbid, unsigned char rdbt
                 nwritten += n;
                 if (add_expiry) {
                     long long expiry = entryGetExpiry(next);
-                    if ((n = rdbSaveMillisecondTime(rdb, expiry) == -1)) {
+                    if ((n = rdbSaveMillisecondTime(rdb, expiry)) == -1) {
                         hashtableCleanupIterator(&iter);
                         return -1;
                     }
@@ -2403,12 +2408,13 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
 
                     /* search for duplicate records */
                     sds field = sdstrynewlen(fstr, flen);
-                    if (!field || !hashtableAdd(dupSearchHashtable, field) ||
-                        !lpSafeToAdd(lp, (size_t)flen + vlen)) {
+                    int field_added = field && hashtableAdd(dupSearchHashtable, field);
+                    if (!field_added || !lpSafeToAdd(lp, (size_t)flen + vlen)) {
                         rdbReportCorruptRDB("Hash zipmap with dup elements, or big length (%u)", flen);
                         hashtableRelease(dupSearchHashtable);
-                        sdsfree(field);
+                        if (!field_added) sdsfree(field);
                         zfree(encoded);
+                        zfree(lp);
                         objectSetVal(o, NULL);
                         decrRefCount(o);
                         return NULL;

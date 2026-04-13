@@ -316,6 +316,7 @@ client *createClient(connection *conn) {
     c->argv_len_sum = 0;
     c->original_argc = 0;
     c->original_argv = NULL;
+    c->redact_arg_bitmap = 0;
     c->nread = 0;
     c->read_flags = 0;
     c->write_flags = 0;
@@ -325,7 +326,8 @@ client *createClient(connection *conn) {
     c->cur_script = NULL;
     c->multibulklen = 0;
     c->bulklen = -1;
-    c->raw_flag = 0;
+    c->raw_flag1 = 0;
+    c->raw_flag2 = 0;
     c->capa = 0;
     c->slot = -1;
     c->ctime = c->last_interaction = server.unixtime;
@@ -1861,6 +1863,13 @@ void freeClientOriginalArgv(client *c) {
     /* We didn't rewrite this client */
     if (!c->original_argv) return;
 
+    /* Client does not own the original argv, it just borrowed it. */
+    if (c->flag.argv_borrowed) {
+        c->original_argv = NULL;
+        c->original_argc = 0;
+        return;
+    }
+
     if (tryOffloadFreeArgvToIOThreads(c, c->original_argc, c->original_argv) == C_ERR) {
         for (int j = 0; j < c->original_argc; j++) decrRefCount(c->original_argv[j]);
         zfree(c->original_argv);
@@ -1871,12 +1880,18 @@ void freeClientOriginalArgv(client *c) {
 }
 
 void freeClientArgv(client *c) {
+    if (c->flag.argv_borrowed && !c->original_argv) {
+        /* Client does not own the argv, and there is no original argv, so just clear the fields. */
+        goto clear;
+    }
+
     /* If original_argv exists, 'c->argv' was allocated by the main thread,
      * so it's more efficient to free it directly here rather than offloading to IO threads */
     if (c->original_argv || tryOffloadFreeArgvToIOThreads(c, c->argc, c->argv) == C_ERR) {
         for (int j = 0; j < c->argc; j++) decrRefCount(c->argv[j]);
         zfree(c->argv);
     }
+clear:
     c->argc = 0;
     c->cmd = NULL;
     c->parsed_cmd = NULL;
@@ -3247,6 +3262,7 @@ void resetClient(client *c) {
 
     freeClientArgv(c);
     freeClientOriginalArgv(c);
+    c->redact_arg_bitmap = 0;
     c->cur_script = NULL;
     c->net_input_bytes_curr_cmd = 0;
     c->slot = -1;
@@ -3283,6 +3299,11 @@ void resetClient(client *c) {
         c->flag.reply_skip = 1;
         c->flag.reply_skip_next = 0;
     }
+
+    /* Clear the borrowed-argv flag: the argv array was only borrowed for the
+     * duration of a single VM_CallArgv dispatch; after execution it no longer
+     * points to the caller's array. */
+    c->flag.argv_borrowed = 0;
 }
 
 void resetClientIOState(client *c) {
@@ -5854,17 +5875,24 @@ static void backupAndUpdateClientArgv(client *c, int new_argc, robj **new_argv) 
     }
 }
 
+bool clientCommandArgShouldBeRedacted(client *c, int arg_index) {
+    if (arg_index < 1) return false;
+    if (arg_index >= 32) return c->redact_arg_bitmap & 1U;
+    return (c->redact_arg_bitmap >> arg_index) & 1;
+}
+
 /* Redact a given argument to prevent it from being shown
- * in the commandlog. This information is stored in the
- * original_argv array. */
+ * in the commandlog. The argument index is recorded in a bitmap.
+ * For indices in the range [1, 31] the corresponding bit is set.
+ * For indices >= 32, bit 0 is set as a sentinel to indicate that all
+ * arguments beyond the bitmap range should also be redacted. */
 void redactClientCommandArgument(client *c, int argc) {
-    backupAndUpdateClientArgv(c, c->argc, NULL);
-    if (c->original_argv[argc] == shared.redacted) {
-        /* This argument has already been redacted */
-        return;
+    serverAssert(argc >= 1);
+    if (argc < 32) {
+        c->redact_arg_bitmap |= (1U << argc);
+    } else {
+        c->redact_arg_bitmap |= 1U;
     }
-    decrRefCount(c->original_argv[argc]);
-    c->original_argv[argc] = shared.redacted;
 }
 
 /* Rewrite the command vector of the client. All the new objects ref count

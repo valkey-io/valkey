@@ -1404,15 +1404,17 @@ test "Test dual-channel-replication replica can lazyfree the local buffer" {
                 fail "replica didn't start sync session in time"
             }
 
+            # Get the main channel connection id while sync is still in progress.
+            set replica_main_conn_id [get_client_id_by_last_cmd $primary "psync"]
+            assert_not_equal $replica_main_conn_id ""
+
             # Adding more data to replica local buffer
             set bigstr [string repeat x 1000000]
-            for {set j 0} {$j < 50} {incr j} {
+            for {set j 0} {$j < 10} {incr j} {
                 $primary set key $bigstr
             }
 
             # Kill the main channel so that the replica will abort the sync
-            set replica_main_conn_id [get_client_id_by_last_cmd $primary "psync"]
-            assert_not_equal $replica_main_conn_id ""
             $primary client kill id $replica_main_conn_id
 
             # Wait for replica to abort the sync and lazyfree the local buffer.
@@ -1453,15 +1455,17 @@ test "Test dual-channel-replication replica can lazyfree the local buffer" {
                 fail "replica didn't start sync session in time"
             }
 
+            # Get the main channel connection id while sync is still in progress.
+            set replica_main_conn_id [get_client_id_by_last_cmd $primary "psync"]
+            assert_not_equal $replica_main_conn_id ""
+
             # Adding more data to replica local buffer
             set bigstr [string repeat x 1000000]
-            for {set j 0} {$j < 50} {incr j} {
+            for {set j 0} {$j < 10} {incr j} {
                 $primary set key $bigstr
             }
 
             # Kill the main channel so that the replica will abort the sync
-            set replica_main_conn_id [get_client_id_by_last_cmd $primary "psync"]
-            assert_not_equal $replica_main_conn_id ""
             $primary client kill id $replica_main_conn_id
 
             # Wait for replica to abort the sync and lazyfree the local buffer.

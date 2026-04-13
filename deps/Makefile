@@ -46,7 +46,7 @@ distclean:
 
 .PHONY: distclean
 
-LIBVALKEY_MAKE_FLAGS = SDS_INCLUDE_DIR=../../src/ DICT_INCLUDE_DIR=../../src/
+LIBVALKEY_MAKE_FLAGS = SDS_INCLUDE_DIR=../../src/
 ifneq (,$(filter $(BUILD_TLS),yes module))
     LIBVALKEY_MAKE_FLAGS += USE_TLS=1
 endif

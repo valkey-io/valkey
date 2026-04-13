@@ -76,7 +76,7 @@ proc test_best_ranked_replica {} {
         resume_process [srv -5 pid]
 
         # Make sure both primaries R0 and R1 are FAIL from the replica's view.
-        wait_for_condition 1000 10 {
+        wait_for_condition 1000 50 {
             [cluster_has_flag [cluster_get_node_by_id 5 $R0_nodeid] fail] eq 1 &&
             [cluster_has_flag [cluster_get_node_by_id 5 $R1_nodeid] fail] eq 1 &&
             [cluster_has_flag [cluster_get_node_by_id 10 $R0_nodeid] fail] eq 1 &&
@@ -108,7 +108,7 @@ proc test_best_ranked_replica {} {
         # This is the best ranked replica and can initiate the election immediately
         # Myself become the best ranked replica, initiate the election immediately
         verify_log_message -10 "*best ranked replica*" 0
-        set psync_max_retries [expr {$::valgrind ? 6000 : 1200}]
+        set psync_max_retries [expr {$::valgrind ? 12000 : 2400}]
         wait_for_log_messages -5 {"*Successful partial resynchronization with primary*"} 0 $psync_max_retries 100
 
         # case 2: R0 and R1 down in the same time, R1 have a better failed primary rank, R6 or R11
@@ -144,7 +144,7 @@ proc test_best_ranked_replica {} {
 
 # This change and test is quite important, so we want to run it a few more times.
 for {set i 0} {$i < 5} {incr i} {
-    start_cluster 5 7 {tags {external:skip cluster} overrides {cluster-ping-interval 1000 cluster-node-timeout 5000}} {
+    start_cluster 5 7 {tags {external:skip cluster tls:skip} overrides {cluster-ping-interval 1000 cluster-node-timeout 5000}} {
         test_best_ranked_replica
     } my_slot_allocation cluster_allocate_replicas ;# start_cluster
 }

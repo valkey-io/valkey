@@ -1465,8 +1465,8 @@ int slotExportTryDoPause(slotMigrationJob *job) {
         return C_ERR;
     }
     serverLog(LL_NOTICE,
-              "Pausing writes to allow slot migration %s to finalize failover.",
-              job->description);
+              "Pausing writes (remaining_repl_size is %lld) to allow slot migration %s to finalize failover.",
+              job->client->reply_bytes, job->description);
     job->mf_end = clusterComputeMfPauseEnd();
     pauseActions(PAUSE_DURING_SLOT_MIGRATION, job->mf_end,
                  PAUSE_ACTIONS_CLIENT_WRITE_SET);

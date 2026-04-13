@@ -144,7 +144,7 @@ start_cluster 3 2 {tags {external:skip cluster} overrides {cluster-ping-interval
 # Slot allocation for test 2 (5 primaries, 7 replicas).
 # Allocate slot 0 to the first primary and allocate slot 1 to the second primary,
 # and then evenly distribute the remaining slots to the remaining primaries.
-proc dual_primary_slot_allocation {primaries replicas} {
+proc two_primaries_slot_allocation {primaries replicas} {
     R 0 cluster addslots 0
     R 1 cluster addslots 1
     R 2 cluster addslotsrange 2 5463
@@ -314,4 +314,4 @@ start_cluster 5 7 {tags {external:skip cluster tls:skip} overrides {cluster-ping
         }
         assert_morethan $best_ranked_triggered 0
     }
-} dual_primary_slot_allocation cluster_allocate_replicas ;# start_cluster
+} two_primaries_slot_allocation cluster_allocate_replicas ;# start_cluster

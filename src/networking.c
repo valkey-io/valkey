@@ -357,7 +357,6 @@ client *createClient(connection *conn) {
     c->last_memory_usage = 0;
     c->last_memory_type = CLIENT_TYPE_NORMAL;
     listInitNode(&c->clients_pending_write_node, c);
-    listInitNode(&c->pending_read_list_node, c);
     c->mem_usage_bucket = NULL;
     c->mem_usage_bucket_node = NULL;
     if (conn) linkClient(c);
@@ -1921,9 +1920,6 @@ void disconnectReplicas(void) {
 void unlinkClient(client *c) {
     listNode *ln;
 
-    /* Wait for IO operations to be done before unlinking the client. */
-    waitForClientIO(c);
-
     /* If this is marked as current client unset it. */
     if (c->conn && server.current_client == c) server.current_client = NULL;
 
@@ -1983,21 +1979,12 @@ void unlinkClient(client *c) {
 
     /* Remove from the list of pending writes if needed. */
     if (c->flag.pending_write) {
-        if (c->io_write_state == CLIENT_IDLE) {
-            listUnlinkNode(server.clients_pending_write, &c->clients_pending_write_node);
-        } else {
-            listUnlinkNode(server.clients_pending_io_write, &c->clients_pending_write_node);
-        }
+        serverAssert(server.clients_pending_write->len > 0);
+        listUnlinkNode(server.clients_pending_write, &c->clients_pending_write_node);
         c->flag.pending_write = 0;
     }
 
-    /* Remove from the list of pending reads if needed. */
     serverAssert(c->io_read_state != CLIENT_PENDING_IO && c->io_write_state != CLIENT_PENDING_IO);
-    if (c->flag.pending_read) {
-        listUnlinkNode(server.clients_pending_io_read, &c->pending_read_list_node);
-        c->flag.pending_read = 0;
-    }
-
 
     /* When client was just unblocked because of a blocking operation,
      * remove it from the list of unblocked clients. */
@@ -2060,18 +2047,18 @@ void clearClientConnectionState(client *c) {
     c->flag.no_evict = 0;
 }
 
-void freeClient(client *c) {
+/* Free the client structure and all the data associated with it.
+ * Returns 0 if the client was not freed immediately, but scheduled for
+ * asynchronous freeing, and 1 if the client was freed immediately. */
+int freeClient(client *c) {
     listNode *ln;
 
     /* If a client is protected, yet we need to free it right now, make sure
      * to at least use asynchronous freeing. */
-    if (c->flag.protected || c->flag.protected_rdb_channel) {
+    if (c->flag.protected || c->flag.protected_rdb_channel || clientHasPendingIO(c)) {
         freeClientAsync(c);
-        return;
+        return 0;
     }
-
-    /* Wait for IO operations to be done before proceeding */
-    waitForClientIO(c);
 
     /* For connected clients, call the disconnection event of modules hooks. */
     if (c->conn) {
@@ -2103,7 +2090,7 @@ void freeClient(client *c) {
             c->flag.close_asap = 0;
             c->flag.close_after_reply = 0;
             replicationCachePrimary(c);
-            return;
+            return 0;
         }
     }
 
@@ -2179,6 +2166,7 @@ void freeClient(client *c) {
     sdsfree(c->peerid);
     sdsfree(c->sockname);
     zfree(c);
+    return 1;
 }
 
 /* Schedule a client to free it at a safe time in the beforeSleep() function.
@@ -2341,7 +2329,7 @@ int freeClientsInAsyncFreeQueue(void) {
             c->flag.protected_rdb_channel = 0;
         }
 
-        if (c->flag.protected) continue;
+        if (c->flag.protected || clientHasPendingIO(c)) continue;
 
         c->flag.close_asap = 0;
         freeClient(c);
@@ -3142,67 +3130,33 @@ parseResult handleParseResults(client *c) {
  * This function handles various post-write tasks, including updating client state,
  * allow_async_writes - A flag indicating whether I/O threads can handle pending writes for this client.
  * returns 1 if processing completed successfully, 0 if processing is skipped. */
-int processClientIOWriteDone(client *c, int allow_async_writes) {
-    /* memory barrier acquire to get the latest client state */
-    atomic_thread_fence(memory_order_acquire);
-    /* If a client is protected, don't proceed to check the write results as it may trigger conn close. */
-    if (c->flag.protected) return 0;
-
-    listUnlinkNode(server.clients_pending_io_write, &c->clients_pending_write_node);
-    c->flag.pending_write = 0;
+void processClientIOWriteDone(client *c) {
+    if (c->io_write_state == CLIENT_IDLE) return; /* Already handled */
+    serverAssert(c->io_write_state == CLIENT_COMPLETED_IO);
     c->io_write_state = CLIENT_IDLE;
 
     /* Don't post-process-writes to clients that are going to be closed anyway. */
-    if (c->flag.close_asap) return 0;
+    if (c->flag.close_asap) return;
 
-    /* Update processed count on server */
-    server.stat_io_writes_processed += 1;
 
     connSetPostponeUpdateState(c->conn, 0);
     connUpdateState(c->conn);
     if (postWriteToClient(c) == C_ERR) {
-        return 1;
+        return;
     }
 
-    if (clientHasPendingReplies(c)) {
-        if (c->write_flags & WRITE_FLAGS_WRITE_ERROR) {
-            /* Install the write handler if there are pending writes in some of the clients as a result of not being
-             * able to write everything in one go. */
-            installClientWriteHandler(c);
-        } else {
-            /* If we can send the client to the I/O thread, let it handle the write. */
-            if (allow_async_writes && trySendWriteToIOThreads(c) == C_OK) return 1;
-            /* Try again in the next eventloop */
-            putClientInPendingWriteQueue(c);
-        }
+    if (!clientHasPendingReplies(c)) return;
+
+    if (c->write_flags & WRITE_FLAGS_WRITE_ERROR) {
+        /* Install the write handler if there are pending writes in some of the clients as a result of not being
+         * able to write everything in one go. */
+        installClientWriteHandler(c);
+    } else {
+        /* If we can send the client to the I/O thread, let it handle the write. */
+        if (trySendWriteToIOThreads(c) == C_OK) return;
+        /* Try again in the next eventloop */
+        putClientInPendingWriteQueue(c);
     }
-
-    return 1;
-}
-
-/* This function handles the post-processing of I/O write operations that have been
- * completed for clients. It iterates through the list of clients with pending I/O
- * writes and performs necessary actions based on their current state.
- *
- * Returns The number of clients processed during this function call. */
-int processIOThreadsWriteDone(void) {
-    if (listLength(server.clients_pending_io_write) == 0) return 0;
-    int processed = 0;
-    listNode *ln;
-
-    listNode *next = listFirst(server.clients_pending_io_write);
-    while (next) {
-        ln = next;
-        next = listNextNode(ln);
-        client *c = listNodeValue(ln);
-
-        /* Client is still waiting for a pending I/O - skip it */
-        if (c->io_write_state == CLIENT_PENDING_IO || c->io_read_state == CLIENT_PENDING_IO) continue;
-
-        processed += processClientIOWriteDone(c, 1);
-    }
-
-    return processed;
 }
 
 /* This function is called just before entering the event loop, in the hope
@@ -3214,17 +3168,12 @@ int handleClientsWithPendingWrites(void) {
     int pending_writes = listLength(server.clients_pending_write);
     if (pending_writes == 0) return processed; /* Return ASAP if there are no clients. */
 
-    /* Adjust the number of I/O threads based on the number of pending writes this is required in case pending_writes >
-     * poll_events (for example in pubsub) */
-    adjustIOThreadsByEventLoad(pending_writes, 1);
-
     listIter li;
     listNode *ln;
     listRewind(server.clients_pending_write, &li);
     while ((ln = listNext(&li))) {
         client *c = listNodeValue(ln);
-        c->flag.pending_write = 0;
-        listUnlinkNode(server.clients_pending_write, ln);
+        serverAssert(c->flag.pending_write);
 
         /* If a client is protected, don't do anything,
          * that may trigger write error or recreate handler. */
@@ -3233,13 +3182,18 @@ int handleClientsWithPendingWrites(void) {
         /* Don't write to clients that are going to be closed anyway. */
         if (c->flag.close_asap) continue;
 
+        if (c->io_read_state == CLIENT_PENDING_IO) continue;
+
+        c->flag.pending_write = 0;
+        listUnlinkNode(server.clients_pending_write, ln);
+
         if (!clientHasPendingReplies(c)) continue;
 
         /* If we can send the client to the I/O thread, let it handle the write. */
         if (trySendWriteToIOThreads(c) == C_OK) continue;
 
         /* We can't write to the client while IO operation is in progress. */
-        if (c->io_write_state != CLIENT_IDLE || c->io_read_state != CLIENT_IDLE) continue;
+        if (c->io_write_state != CLIENT_IDLE) continue;
 
         processed++;
 
@@ -3323,8 +3277,7 @@ void initSharedQueryBuf(void) {
     sdsclear(thread_shared_qb);
 }
 
-void freeSharedQueryBuf(void *dummy) {
-    UNUSED(dummy);
+void freeSharedQueryBuf(void) {
     sdsfree(thread_shared_qb);
     thread_shared_qb = NULL;
 }
@@ -6377,91 +6330,59 @@ int postponeClientRead(client *c) {
     return (trySendReadToIOThreads(c) == C_OK);
 }
 
-int processIOThreadsReadDone(void) {
+void processClientIOReadsDone(client *c) {
+    serverAssert(c->io_read_state == CLIENT_COMPLETED_IO);
+
     if (ProcessingEventsWhileBlocked) {
         /* When ProcessingEventsWhileBlocked we may call processIOThreadsReadDone recursively.
          * In this case, there may be some clients left in the batch waiting to be processed. */
         processClientsCommandsBatch();
     }
 
-    if (listLength(server.clients_pending_io_read) == 0) return 0;
-    int processed = 0;
-    listNode *ln;
+    c->flag.pending_read = 0;
+    c->io_read_state = CLIENT_IDLE;
 
-    listNode *next = listFirst(server.clients_pending_io_read);
-    while (next) {
-        ln = next;
-        next = listNextNode(ln);
-        client *c = listNodeValue(ln);
+    /* Don't post-process-reads from clients that are going to be closed anyway. */
+    if (c->flag.close_asap) return;
 
-        /* Client is still waiting for a pending I/O - skip it */
-        if (c->io_write_state == CLIENT_PENDING_IO || c->io_read_state == CLIENT_PENDING_IO) continue;
-        /* If the write job is done, process it ASAP to free the buffer and handle connection errors */
-        if (c->io_write_state == CLIENT_COMPLETED_IO) {
-            int allow_async_writes = 0; /* Don't send writes for the client to IO threads before processing the reads */
-            processClientIOWriteDone(c, allow_async_writes);
-        }
-        /* memory barrier acquire to get the updated client state */
-        atomic_thread_fence(memory_order_acquire);
+    /* If a client is protected, don't do anything,
+     * that may trigger read/write error or recreate handler. */
+    if (c->flag.protected) return;
 
-        listUnlinkNode(server.clients_pending_io_read, ln);
-        c->flag.pending_read = 0;
-        c->io_read_state = CLIENT_IDLE;
+    /* Save the current conn state, as connUpdateState may modify it */
+    int in_accept_state = (connGetState(c->conn) == CONN_STATE_ACCEPTING);
+    connSetPostponeUpdateState(c->conn, 0);
+    connUpdateState(c->conn);
 
-        /* Don't post-process-reads from clients that are going to be closed anyway. */
-        if (c->flag.close_asap) continue;
+    /* In accept state, no client's data was read - stop here. */
+    if (in_accept_state) return;
 
-        /* If a client is protected, don't do anything,
-         * that may trigger read/write error or recreate handler. */
-        if (c->flag.protected) continue;
+    /* On read error - stop here. */
+    if (handleReadResult(c) == C_ERR) {
+        return;
+    }
 
-        processed++;
-        server.stat_io_reads_processed++;
-
-        /* Save the current conn state, as connUpdateState may modify it */
-        int in_accept_state = (connGetState(c->conn) == CONN_STATE_ACCEPTING);
-        connSetPostponeUpdateState(c->conn, 0);
-        connUpdateState(c->conn);
-
-        /* In accept state, no client's data was read - stop here. */
-        if (in_accept_state) continue;
-
-        /* On read error - stop here. */
-        if (handleReadResult(c) == C_ERR) {
-            continue;
-        }
-
-        if (!(c->read_flags & READ_FLAGS_DONT_PARSE)) {
-            parseResult res = handleParseResults(c);
-            /* On parse error - stop here. */
-            if (res == PARSE_ERR) {
-                continue;
-            } else if (res == PARSE_NEEDMORE) {
-                beforeNextClient(c);
-                continue;
-            }
-        }
-
-        if (c->argc > 0) {
-            c->flag.pending_command = 1;
-        }
-
-        size_t list_length_before_command_execute = listLength(server.clients_pending_io_read);
-        /* try to add the command to the batch */
-        int ret = addCommandToBatchAndProcessIfFull(c);
-        /* If the command was not added to the commands batch, process it immediately */
-        if (ret == C_ERR) {
-            if (processPendingCommandAndInputBuffer(c) == C_OK) beforeNextClient(c);
-        }
-        if (list_length_before_command_execute != listLength(server.clients_pending_io_read)) {
-            /* A client was unlink from the list possibly making the next node invalid */
-            next = listFirst(server.clients_pending_io_read);
+    if (!(c->read_flags & READ_FLAGS_DONT_PARSE)) {
+        parseResult res = handleParseResults(c);
+        /* On parse error - stop here. */
+        if (res == PARSE_ERR) {
+            return;
+        } else if (res == PARSE_NEEDMORE) {
+            beforeNextClient(c);
+            return;
         }
     }
 
-    processClientsCommandsBatch();
+    if (c->argc > 0) {
+        c->flag.pending_command = 1;
+    }
 
-    return processed;
+    /* try to add the command to the batch */
+    int ret = addCommandToBatchAndProcessIfFull(c);
+    /* If the command was not added to the commands batch, process it immediately */
+    if (ret == C_ERR) {
+        if (processPendingCommandAndInputBuffer(c) == C_OK) beforeNextClient(c);
+    }
 }
 
 /* Returns the actual client eviction limit based on current configuration or
@@ -6494,16 +6415,32 @@ void evictClients(void) {
     listRewind(server.client_mem_usage_buckets[curr_bucket].clients, &bucket_iter);
     size_t client_eviction_limit = getClientEvictionLimit();
     if (client_eviction_limit == 0) return;
-    while (server.stat_clients_type_memory[CLIENT_TYPE_NORMAL] + server.stat_clients_type_memory[CLIENT_TYPE_PUBSUB] >
+
+    /* Variable to track memory of clients marked for close but not yet freed */
+    size_t pending_freed = 0;
+
+    while (server.stat_clients_type_memory[CLIENT_TYPE_NORMAL] +
+               server.stat_clients_type_memory[CLIENT_TYPE_PUBSUB] -
+               pending_freed >
            client_eviction_limit) {
         listNode *ln = listNext(&bucket_iter);
         if (ln) {
             client *c = ln->value;
+            if (c->flag.close_asap) {
+                /* Already scheduled to close. Count memory as freed and skip. */
+                pending_freed += getClientMemoryUsage(c, NULL);
+                continue;
+            }
             sds ci = catClientInfoString(sdsempty(), c, server.hide_user_data_from_log);
             serverLog(LL_NOTICE, "Evicting client: %s", ci);
-            freeClient(c);
             sdsfree(ci);
             server.stat_evictedclients++;
+
+            if (freeClient(c) == 0) {
+                /* Protected client (async close). Count memory as freed and skip. */
+                pending_freed += getClientMemoryUsage(c, NULL);
+                continue;
+            }
         } else {
             curr_bucket--;
             if (curr_bucket < 0) {
@@ -6517,12 +6454,15 @@ void evictClients(void) {
 
 /* IO threads functions */
 
-void ioThreadReadQueryFromClient(void *data) {
-    client *c = data;
+void ioThreadReadQueryFromClient(client *c) {
     serverAssert(c->io_read_state == CLIENT_PENDING_IO);
 
     /* Read */
     readToQueryBuf(c);
+
+    if (c->flag.close_asap) {
+        goto done;
+    }
 
     /* Check for read errors. */
     if (c->nread <= 0) {
@@ -6559,12 +6499,13 @@ done:
     if (!(c->read_flags & READ_FLAGS_REPLICATED)) {
         trimClientQueryBuffer(c);
     }
-    atomic_thread_fence(memory_order_release);
+
     c->io_read_state = CLIENT_COMPLETED_IO;
+    c->cur_tid = getCurTid();
+    sendToMainThread(c, JOB_RES_READ_CLIENT);
 }
 
-void ioThreadWriteToClient(void *data) {
-    client *c = data;
+void ioThreadWriteToClient(client *c) {
     serverAssert(c->io_write_state == CLIENT_PENDING_IO);
     c->nwritten = 0;
     if (c->write_flags & WRITE_FLAGS_IS_REPLICA) {
@@ -6573,8 +6514,8 @@ void ioThreadWriteToClient(void *data) {
         _writeToClient(c);
     }
 
-    atomic_thread_fence(memory_order_release);
     c->io_write_state = CLIENT_COMPLETED_IO;
+    sendToMainThread(c, JOB_RES_WRITE_CLIENT);
 }
 
 /* ========================== Wrapper Functions for Testing ========================== */

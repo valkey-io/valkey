@@ -3879,7 +3879,46 @@ void call(client *c, int flags) {
     monotime monotonic_start = 0;
     if (monotonicGetType() == MONOTONIC_CLOCK_HW) monotonic_start = getMonotonicUs();
 
+    /* We need to ensure that if the client does not own the argv array, then the command
+     * does not modify it. This is important for debugging purposes to catch any unintended
+     * modifications. */
+    robj **debug_argv_clone = NULL;
+    int debug_argc_clone = 0;
+    int *debug_argv_refcount = NULL;
+    if (c->flag.argv_borrowed && server.enable_debug_assert) {
+        debug_argc_clone = c->original_argv ? c->original_argc : c->argc;
+        debug_argv_clone = zmalloc(sizeof(robj *) * debug_argc_clone);
+        debug_argv_refcount = zmalloc(sizeof(int) * debug_argc_clone);
+        for (int i = 0; i < debug_argc_clone; i++) {
+            debug_argv_clone[i] = c->original_argv ? c->original_argv[i] : c->argv[i];
+            debug_argv_refcount[i] = c->original_argv ? c->original_argv[i]->refcount : c->argv[i]->refcount;
+        }
+    }
+
     c->cmd->proc(c);
+
+    if (c->flag.argv_borrowed && server.enable_debug_assert) {
+        robj **argv = c->original_argv ? c->original_argv : c->argv;
+        int argc = c->original_argv ? c->original_argc : c->argc;
+        if (argc != debug_argc_clone) {
+            serverLog(LL_WARNING, "Debug: command %s modified argc, original value: %d, new value: %d",
+                      c->cmd->current_name, debug_argc_clone, argc);
+        }
+        serverAssert(argc == debug_argc_clone);
+        for (int i = 0; i < debug_argc_clone; i++) {
+            if (argv[i] != debug_argv_clone[i]) {
+                serverLog(LL_WARNING, "Debug: command %s modified argv[%d]", c->cmd->current_name, i);
+            }
+            serverAssert(debug_argv_clone[i] == argv[i]);
+            if (argv[i]->refcount < debug_argv_refcount[i]) {
+                serverLog(LL_WARNING, "Debug: command %s modified argv[%d] refcount, original value: %d, new value: %d",
+                          c->cmd->current_name, i, debug_argv_refcount[i], argv[i]->refcount);
+            }
+            serverAssert(argv[i]->refcount >= debug_argv_refcount[i]);
+        }
+        zfree(debug_argv_clone);
+        zfree(debug_argv_refcount);
+    }
 
     exitExecutionUnit();
 

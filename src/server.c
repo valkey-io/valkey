@@ -4439,8 +4439,8 @@ int processCommand(client *c) {
      * However we don't perform the redirection if:
      * 1) The sender of this command is our primary.
      * 2) The command has no key arguments. */
-    if (server.cluster_enabled && !obey_client &&
-        !(!(c->cmd->flags & CMD_MOVABLE_KEYS) && c->cmd->key_specs_num == 0 && c->cmd->proc != execCommand)) {
+    int is_keyless = !(c->cmd->flags & CMD_MOVABLE_KEYS) && c->cmd->key_specs_num == 0 && c->cmd->proc != execCommand;
+    if (server.cluster_enabled && !obey_client && !is_keyless) {
         int error_code;
         clusterNode *n = getNodeByQuery(c, &error_code);
         if (n == NULL || !clusterNodeIsMyself(n)) {
@@ -4453,6 +4453,25 @@ int processCommand(client *c) {
             c->duration = 0;
             c->cmd->rejected_calls++;
             moduleFireCommandRejectedEvent(c, NULL);
+            return C_OK;
+        }
+    }
+
+    /* If the client has the redirect-keyless capability, redirect keyless
+     * read commands to the primary when this is a replica and the client
+     * has not opted into replica reads with READONLY. EXEC with all-keyless
+     * queued commands is also considered keyless (c->slot remains -1 after
+     * getNodeByQuery). */
+    int is_keyless_exec = is_exec && c->slot == -1;
+    if (server.cluster_enabled && !obey_client && (is_keyless || is_keyless_exec) && is_read_command &&
+        (c->capa & CLIENT_CAPA_REDIRECT_KEYLESS) && !c->flag.readonly) {
+        clusterNode *myself = getMyClusterNode();
+        if (clusterNodeIsReplica(myself)) {
+            clusterNode *primary = clusterNodeGetPrimary(myself);
+            // We pass -1 as it does not matter which slot will be passed in MOVED command
+            clusterRedirectClient(c, primary, -1, CLUSTER_REDIR_MOVED);
+            c->duration = 0;
+            c->cmd->rejected_calls++;
             return C_OK;
         }
     }

@@ -56,4 +56,69 @@ start_cluster 1 1 {tags {external:skip cluster}} {
         $rd0_ro close
         $rd1 close
     }
+
+    test {keyless read commands execute on replica without redirect-keyless capa} {
+        # Without the capa, keyless read commands like SCAN execute locally on the replica
+        # After failover, node 0 is the new replica.
+        set rd [valkey_deferring_client 0]
+        $rd SCAN 0
+        set reply [$rd read]
+        assert_match "0 *" $reply
+        $rd close
+    }
+
+    test {keyless read commands are MOVED with redirect-keyless capa} {
+        set rd [valkey_deferring_client 0]
+        $rd CLIENT CAPA redirect-keyless
+        assert_equal OK [$rd read]
+
+        $rd DBSIZE
+        assert_error "MOVED *" {$rd read}
+
+        $rd RANDOMKEY
+        assert_error "MOVED *" {$rd read}
+
+        $rd SCAN 0
+        assert_error "MOVED *" {$rd read}
+
+        $rd close
+    }
+
+    test {keyless read commands execute on replica with redirect-keyless and READONLY} {
+        set rd [valkey_deferring_client 0]
+        $rd CLIENT CAPA redirect-keyless
+        assert_equal OK [$rd read]
+        $rd READONLY
+        assert_equal OK [$rd read]
+
+        # With READONLY, keyless reads should execute locally
+        $rd DBSIZE
+        set reply [$rd read]
+        assert {$reply >= 0}
+
+        $rd close
+    }
+
+    test {non-read keyless commands are not affected by redirect-keyless capa} {
+        set rd [valkey_deferring_client 0]
+        $rd CLIENT CAPA redirect-keyless
+        assert_equal OK [$rd read]
+
+        # PING is not CMD_READONLY, should still work on replica
+        $rd PING
+        assert_equal PONG [$rd read]
+
+        $rd close
+    }
+
+    test {CLIENT INFO reports redirect-keyless capa} {
+        set rd [valkey_deferring_client 0]
+        $rd CLIENT CAPA redirect-keyless
+        assert_equal OK [$rd read]
+
+        $rd CLIENT INFO
+        assert_match "*capa=k*" [$rd read]
+
+        $rd close
+    }
 } ;# start_cluster

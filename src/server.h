@@ -333,7 +333,8 @@ extern int configOOMScoreAdjValuesDefaults[CONFIG_OOM_COUNT];
 #define CMD_DOC_SYSCMD (1 << 1)     /* System (internal) command */
 
 /* Client capabilities */
-#define CLIENT_CAPA_REDIRECT (1 << 0) /* Indicate that the client can handle redirection */
+#define CLIENT_CAPA_REDIRECT (1 << 0)          /* Indicate that the client can handle redirection */
+#define CLIENT_CAPA_REDIRECT_KEYLESS (1 << 1)  /* Redirect keyless read commands to primary in cluster mode */
 
 /* Client block type (btype field in client structure)
  * if CLIENT_BLOCKED flag is set. */

@@ -363,6 +363,7 @@ typedef enum blocking_type {
     BLOCKED_POSTPONE, /* Blocked by processCommand, re-try processing later. */
     BLOCKED_SHUTDOWN, /* SHUTDOWN. */
     BLOCKED_INUSE,    /* Key in use by background thread. */
+    BLOCKED_ASYNC,    /* Waiting for async completion callback (e.g. Raft commit). */
     BLOCKED_NUM,      /* Number of blocked states. */
     BLOCKED_END       /* End of enumeration */
 } blocking_type;
@@ -2365,8 +2366,9 @@ struct valkeyServer {
     /* Import Mode */
     int import_mode; /* If true, server is in import mode and forbid expiration and eviction. */
     /* Synchronous replication. */
-    list *clients_waiting_acks; /* Clients waiting in WAIT or WAITAOF. */
-    int get_ack_from_replicas;  /* If true we send REPLCONF GETACK. */
+    list *clients_waiting_acks;          /* Clients waiting in WAIT or WAITAOF. */
+    list *clients_pending_async_unblock; /* BLOCKED_ASYNC clients to unblock in beforeSleep. */
+    int get_ack_from_replicas;           /* If true we send REPLCONF GETACK. */
     /* Limits */
     unsigned int maxclients;                    /* Max number of simultaneous clients */
     unsigned int maxclients_reserved;           /* Client connection slots reserved for priority subnets */
@@ -4186,6 +4188,10 @@ void handleClientsBlockedOnKeys(void);
 void signalKeyAsReady(serverDb *db, robj *key, int type);
 void blockForKeys(client *c, int btype, robj **keys, int numkeys, mstime_t timeout, int unblock_on_nokey);
 void blockClientShutdown(client *c);
+typedef struct blockedAsyncHandle blockedAsyncHandle;
+blockedAsyncHandle *blockClientAsync(client *c);
+client *consumeBlockedClientAsyncHandle(blockedAsyncHandle *handle);
+void unblockClientAsync(client *c);
 void blockPostponeClient(client *c);
 void blockClientInUseOnKeys(client *c, int num_keys, robj *keys[]);
 void unblockClientsInUseOnKey(robj *key);

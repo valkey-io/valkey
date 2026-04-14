@@ -13,7 +13,7 @@ Valkey is a high-performance open-source key-value store server.
 - Integration tests: `tests/` (Tcl)
 - Top-level `Makefile` forwards most targets into `src/Makefile`
 - Third-party dependencies in `deps/`: jemalloc, libvalkey, lua, linenoise, hdr_histogram, fast_float
-- Command definitions: `src/commands/*.json` (427+ entries in JSON format)
+- Command definitions: `src/commands/*.json`
 
 ## Source code layout
 
@@ -61,8 +61,8 @@ make distclean && make
 
 **Common combinations:**
 ```bash
-make -j4 BUILD_TLS=yes             # With TLS support
-make -j4 SANITIZER=address         # With AddressSanitizer
+make -j$(nproc) BUILD_TLS=yes             # With TLS support
+make -j$(nproc) SANITIZER=address         # With AddressSanitizer
 make noopt                          # Debug build without optimization
 make valgrind                       # Valgrind-compatible build
 ```
@@ -126,7 +126,7 @@ Always run the smallest relevant test scope first before running broader suites.
 
 - Follow conventions in `DEVELOPMENT_GUIDE.md`.
 - CI enforces `clang-format-18` on `*.c`, `*.h`, `*.cpp`, `*.hpp`.
-- After modifying C/C++ files, run: `clang-format-18 -i <modified files>`
+- After modifying C/C++ files, run: `clang-format -i <modified files>`
 
 **Key style rules:**
 
@@ -176,7 +176,7 @@ Always run the smallest relevant test scope first before running broader suites.
 - Never push directly to the `unstable` branch.
 - If your fork does not exist, create one before pushing.
 - All commits must include a DCO sign-off: `git commit -s`
-- For large features, open an Issue for discussion before submitting a PR.
+- For large features, open an issue for discussion before submitting a PR.
 
 ## Troubleshooting
 
@@ -184,6 +184,6 @@ Always run the smallest relevant test scope first before running broader suites.
 |---|---|
 | Build fails with jemalloc errors | `make distclean && make` |
 | `commands.def` out of sync | `python utils/generate-command-code.py` |
-| `clang-format` CI check fails | `clang-format-18 -i <modified files>` |
+| `clang-format` CI check fails | `clang-format -i <modified files>` |
 | Integration tests fail to start (missing `tclsh`) | Install Tcl 8.5+: `apt install tcl` / `brew install tcl-tk` |
 | TLS tests fail due to missing certificates | `./utils/gen-test-certs.sh` |

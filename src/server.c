@@ -1855,14 +1855,14 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
      * events to handle. */
     if (ProcessingEventsWhileBlocked) {
         uint64_t processed = 0;
-        processed += processIOThreadsReadDone();
+        processed += processIOThreadsResponses();
         processed += connTypeProcessPendingData();
         if (server.aof_state == AOF_ON || server.aof_state == AOF_WAIT_REWRITE) flushAppendOnlyFile(0);
         processed += handleClientsWithPendingWrites();
         int last_processed = 0;
         do {
             /* Try to process all the pending IO events. */
-            last_processed = processIOThreadsReadDone() + processIOThreadsWriteDone();
+            last_processed = processIOThreadsResponses();
             processed += last_processed;
         } while (last_processed != 0);
         processed += freeClientsInAsyncFreeQueue();
@@ -1871,7 +1871,7 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
     }
 
     /* We should handle pending reads clients ASAP after event loop. */
-    int io_responses = processIOThreadsReadDone();
+    int io_responses = processIOThreadsResponses();
     if (io_responses > 0) server.el_iteration_active = true;
 
     /* Handle pending data(typical TLS). (must be done before flushAppendOnlyFile) */
@@ -1972,7 +1972,7 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
 
     /* Try to process more IO reads that are ready to be processed. */
     if (server.aof_fsync != AOF_FSYNC_ALWAYS) {
-        int io_responses_after = processIOThreadsReadDone();
+        int io_responses_after = processIOThreadsResponses();
         if (io_responses_after > 0) {
             server.el_iteration_active = true;
 
@@ -1980,10 +1980,6 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
             handleClientsWithPendingWrites();
         }
     }
-
-    int io_writes = processIOThreadsWriteDone();
-    if (io_writes > 0) server.el_iteration_active = true;
-
     /* Record cron time in beforeSleep. This does not include the time consumed by AOF writing and IO writing above. */
     monotime cron_start_time_after_write = getMonotonicUs();
 
@@ -1998,11 +1994,12 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
     evictClients();
 
     /* Record cron time in beforeSleep. */
-    monotime duration_after_write = getMonotonicUs() - cron_start_time_after_write;
+    monotime current_time = getMonotonicUs();
+    monotime duration_after_write = current_time - cron_start_time_after_write;
 
     /* Record eventloop latency. */
     if (server.el_start > 0) {
-        monotime el_duration = getMonotonicUs() - server.el_start;
+        monotime el_duration = current_time - server.el_start;
         durationAddSample(EL_DURATION_TYPE_EL, el_duration);
         latencyTraceIfNeeded(server, eventloop, el_duration);
 
@@ -2029,6 +2026,8 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
     /* Don't sleep at all before the next beforeSleep() if needed (e.g. a
      * connection has pending data) */
     aeSetDontWait(server.el, dont_sleep);
+
+    IOThreadsBeforeSleep(current_time);
 
     /* Before we are going to sleep, let the threads access the dataset by
      * releasing the GIL. The server main thread will not touch anything at this
@@ -2078,7 +2077,7 @@ void afterSleep(struct aeEventLoop *eventLoop, int numevents) {
         server.cmd_time_snapshot = server.mstime;
     }
 
-    adjustIOThreadsByEventLoad(numevents, 0);
+    IOThreadsAfterSleep(numevents);
 }
 
 /* =========================== Server initialization ======================== */
@@ -2940,8 +2939,6 @@ void initServer(void) {
     server.replicas_waiting_psync = raxNew();
     server.wait_before_rdb_client_free = DEFAULT_WAIT_BEFORE_RDB_CLIENT_FREE;
     server.clients_pending_write = listCreate();
-    server.clients_pending_io_write = listCreate();
-    server.clients_pending_io_read = listCreate();
     server.clients_timeout_table = raxNew();
     server.replication_allowed = 1;
     server.replicas_eldb = -1; /* Force to emit the first SELECT command. */
@@ -3218,7 +3215,7 @@ void initListeners(void) {
  * see: https://sourceware.org/bugzilla/show_bug.cgi?id=19329 */
 void InitServerLast(void) {
     bioInit();
-    initIOThreads();
+    initIOThreads(1);
     set_jemalloc_bg_thread(server.jemalloc_bg_thread);
 
     /* First set initial_memory_usage to zero as baseline for getMemoryOverheadData(). */
@@ -3909,7 +3906,46 @@ void call(client *c, int flags) {
     monotime monotonic_start = 0;
     if (monotonicGetType() == MONOTONIC_CLOCK_HW) monotonic_start = getMonotonicUs();
 
+    /* We need to ensure that if the client does not own the argv array, then the command
+     * does not modify it. This is important for debugging purposes to catch any unintended
+     * modifications. */
+    robj **debug_argv_clone = NULL;
+    int debug_argc_clone = 0;
+    int *debug_argv_refcount = NULL;
+    if (c->flag.argv_borrowed && server.enable_debug_assert) {
+        debug_argc_clone = c->original_argv ? c->original_argc : c->argc;
+        debug_argv_clone = zmalloc(sizeof(robj *) * debug_argc_clone);
+        debug_argv_refcount = zmalloc(sizeof(int) * debug_argc_clone);
+        for (int i = 0; i < debug_argc_clone; i++) {
+            debug_argv_clone[i] = c->original_argv ? c->original_argv[i] : c->argv[i];
+            debug_argv_refcount[i] = c->original_argv ? c->original_argv[i]->refcount : c->argv[i]->refcount;
+        }
+    }
+
     c->cmd->proc(c);
+
+    if (c->flag.argv_borrowed && server.enable_debug_assert) {
+        robj **argv = c->original_argv ? c->original_argv : c->argv;
+        int argc = c->original_argv ? c->original_argc : c->argc;
+        if (argc != debug_argc_clone) {
+            serverLog(LL_WARNING, "Debug: command %s modified argc, original value: %d, new value: %d",
+                      c->cmd->current_name, debug_argc_clone, argc);
+        }
+        serverAssert(argc == debug_argc_clone);
+        for (int i = 0; i < debug_argc_clone; i++) {
+            if (argv[i] != debug_argv_clone[i]) {
+                serverLog(LL_WARNING, "Debug: command %s modified argv[%d]", c->cmd->current_name, i);
+            }
+            serverAssert(debug_argv_clone[i] == argv[i]);
+            if (argv[i]->refcount < debug_argv_refcount[i]) {
+                serverLog(LL_WARNING, "Debug: command %s modified argv[%d] refcount, original value: %d, new value: %d",
+                          c->cmd->current_name, i, debug_argv_refcount[i], argv[i]->refcount);
+            }
+            serverAssert(argv[i]->refcount >= debug_argv_refcount[i]);
+        }
+        zfree(debug_argv_clone);
+        zfree(debug_argv_refcount);
+    }
 
     exitExecutionUnit();
 
@@ -6720,7 +6756,9 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                 "eventloop_duration_aof_sum:%llu\r\n", server.duration_stats[EL_DURATION_TYPE_AOF].sum,
                 "eventloop_duration_cron_sum:%llu\r\n", server.duration_stats[EL_DURATION_TYPE_CRON].sum,
                 "eventloop_duration_max:%llu\r\n", server.duration_stats[EL_DURATION_TYPE_EL].max,
-                "eventloop_cmd_per_cycle_max:%lld\r\n", server.el_cmd_cnt_max));
+                "eventloop_cmd_per_cycle_max:%lld\r\n", server.el_cmd_cnt_max,
+                "io_threaded_reads_pending:%lld\r\n", server.stat_io_reads_pending,
+                "io_threaded_writes_pending:%lld\r\n", server.stat_io_writes_pending));
     }
 
     return info;

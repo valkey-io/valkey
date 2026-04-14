@@ -950,8 +950,10 @@ start_server {tags {"repl external:skip"} overrides {save ""}} {
                         after 2000
                     }
 
-                    # wait for rdb child to exit
-                    wait_for_condition 1200 100 {
+                    # The "no" case keeps both replicas connected and can take
+                    # longer on slow CI runners to finish streaming the full RDB.
+                    set rdb_child_wait_tries [expr {$all_drop == "no" ? 1500 : 1200}]
+                    wait_for_condition $rdb_child_wait_tries 100 {
                         [s -2 rdb_bgsave_in_progress] == 0
                     } else {
                         fail "rdb child didn't terminate"

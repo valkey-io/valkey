@@ -222,10 +222,12 @@ typedef struct serverConfig {
     sds appendonly;
 } serverConfig;
 
-/* Helper to create an event and optionally fire it immediately */
-static inline void createFileEvent(aeEventLoop *eventLoop, int fd, int mask, aeFileProc *proc, void *clientData, int fire) {
+/* Helper to create an event and optionally fire it immediately for RDMA connections.
+ * For RDMA, we need to speculatively invoke the handler to catch any data that may
+ * have been consumed during the write path's CQ draining (lost wakeup issue). */
+static inline void createFileEvent(aeEventLoop *eventLoop, int fd, int mask, aeFileProc *proc, void *clientData) {
     aeCreateFileEvent(eventLoop, fd, mask, proc, clientData);
-    if (fire) {
+    if (config.ct == VALKEY_CONN_RDMA) {
         proc(eventLoop, fd, clientData, mask);
     }
 }
@@ -568,7 +570,7 @@ static void resetClient(client c) {
     aeEventLoop *el = CLIENT_GET_EVENTLOOP(c);
     aeDeleteFileEvent(el, c->context->fd, AE_WRITABLE);
     aeDeleteFileEvent(el, c->context->fd, AE_READABLE);
-    createFileEvent(el, c->context->fd, AE_WRITABLE, writeHandler, c, config.ct == VALKEY_CONN_RDMA);
+    createFileEvent(el, c->context->fd, AE_WRITABLE, writeHandler, c);
     c->written = 0;
     c->pending = config.pipeline * c->seqlen;
 }
@@ -896,7 +898,7 @@ static void writeHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
                 }
             } else {
                 aeDeleteFileEvent(el, c->context->fd, AE_WRITABLE);
-                createFileEvent(el, c->context->fd, AE_READABLE, readHandler, c, config.ct == VALKEY_CONN_RDMA);
+                createFileEvent(el, c->context->fd, AE_READABLE, readHandler, c);
                 return;
             }
         }
@@ -1078,7 +1080,7 @@ static client createClient(char *cmd, int len, int seqlen, client from, int thre
         el = thread->el;
     }
     if (config.idlemode == 0) {
-        createFileEvent(el, c->context->fd, AE_WRITABLE, writeHandler, c, config.ct == VALKEY_CONN_RDMA);
+        createFileEvent(el, c->context->fd, AE_WRITABLE, writeHandler, c);
     } else
         /* In idle mode, clients still need to register readHandler for catching errors */
         aeCreateFileEvent(el, c->context->fd, AE_READABLE, readHandler, c);

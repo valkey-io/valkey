@@ -819,7 +819,7 @@ ssize_t rdbSaveStreamPEL(rio *rdb, rax *pel, int nacks) {
 /* Serialize the consumers of a stream consumer group into the RDB. Helper
  * function for the stream data type serialization. What we do here is to
  * persist the consumer metadata, and it's PEL, for each consumer. */
-size_t rdbSaveStreamConsumers(rio *rdb, streamCG *cg) {
+ssize_t rdbSaveStreamConsumers(rio *rdb, streamCG *cg) {
     ssize_t n, nwritten = 0;
 
     /* Number of consumers in this consumer group. */

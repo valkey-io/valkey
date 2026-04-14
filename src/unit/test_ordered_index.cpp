@@ -18,6 +18,10 @@ extern "C" {
 #define TEST_ASSERT(x) ASSERT_TRUE(x)
 #define TEST_ASSERT_SCORE_EQ(a, b) ASSERT_DOUBLE_EQ(a, b)
 
+/* Use double infinity to avoid -Wdouble-promotion on macOS where INFINITY is float */
+static const double POS_INF = (double)INFINITY;
+static const double NEG_INF = (double)-INFINITY;
+
 /* Generic tests that work with any OrderedIndex implementation */
 
 static void test_create_free_generic(const OrderedIndexOps *ops) {
@@ -560,8 +564,8 @@ static void test_special_double_values_generic(const OrderedIndexOps *ops) {
     sds zero = sdsnew("zero");
     sds one = sdsnew("one");
 
-    orderedIndexInsert(ops, idx, -INFINITY, neg_inf);
-    orderedIndexInsert(ops, idx, INFINITY, pos_inf);
+    orderedIndexInsert(ops, idx, NEG_INF, neg_inf);
+    orderedIndexInsert(ops, idx, POS_INF, pos_inf);
     orderedIndexInsert(ops, idx, 0.0, zero);
     orderedIndexInsert(ops, idx, 1.0, one);
 
@@ -570,13 +574,13 @@ static void test_special_double_values_generic(const OrderedIndexOps *ops) {
     OrderedIndexItem *pos;
     orderedIndexInitIterator(ops, &iter, idx);
     TEST_ASSERT(orderedIndexNext(ops, &iter, &pos));
-    TEST_ASSERT_SCORE_EQ(orderedIndexGetScore(ops, pos), -INFINITY);
+    TEST_ASSERT_SCORE_EQ(orderedIndexGetScore(ops, pos), NEG_INF);
     TEST_ASSERT(orderedIndexNext(ops, &iter, &pos));
     TEST_ASSERT_SCORE_EQ(orderedIndexGetScore(ops, pos), 0.0);
     TEST_ASSERT(orderedIndexNext(ops, &iter, &pos));
     TEST_ASSERT_SCORE_EQ(orderedIndexGetScore(ops, pos), 1.0);
     TEST_ASSERT(orderedIndexNext(ops, &iter, &pos));
-    TEST_ASSERT_SCORE_EQ(orderedIndexGetScore(ops, pos), INFINITY);
+    TEST_ASSERT_SCORE_EQ(orderedIndexGetScore(ops, pos), POS_INF);
     orderedIndexResetIterator(ops, &iter);
 
     sdsfree(neg_inf);
@@ -1120,7 +1124,7 @@ static void test_seek_inf_reverse_iteration_generic(const OrderedIndexOps *ops) 
     /* Seek to [-inf, +inf] with offset -1 (last element), then iterate backwards.
      * This is how ZREVRANGEBYSCORE -inf +inf works. */
     orderedIndexInitIterator(ops, &iter, idx);
-    orderedIndexSeekToScoreRange(ops, &iter, -INFINITY, INFINITY, 0, 0, -1);
+    orderedIndexSeekToScoreRange(ops, &iter, NEG_INF, POS_INF, 0, 0, -1);
     int count = 0;
     double expected = 5.0;
     while (orderedIndexNext(ops, &iter, &pos)) {
@@ -1164,7 +1168,7 @@ static void test_seek_inf_forward_iteration_generic(const OrderedIndexOps *ops) 
     /* Seek to [-inf, +inf] with offset 0 (first element), then iterate forwards.
      * This is how ZRANGEBYSCORE -inf +inf works. */
     orderedIndexInitIterator(ops, &iter, idx);
-    orderedIndexSeekToScoreRange(ops, &iter, -INFINITY, INFINITY, 0, 0, 0);
+    orderedIndexSeekToScoreRange(ops, &iter, NEG_INF, POS_INF, 0, 0, 0);
     int count = 0;
     double expected = 1.0;
     while (orderedIndexNext(ops, &iter, &pos)) {

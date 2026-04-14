@@ -55,7 +55,11 @@
 
 typedef uint64_t monotime;
 
-static monotime getMonotonicUs(void) {
+#if STATIC_LUA
+/* Use the engine's version */
+#include "../../monotonic.h"
+#else
+monotime getMonotonicUs(void) {
     /* clock_gettime() is specified in POSIX.1b (1993).  Even so, some systems
      * did not support this until much later.  CLOCK_MONOTONIC is technically
      * optional and may not be supported - but it appears to be universal.
@@ -64,14 +68,14 @@ static monotime getMonotonicUs(void) {
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return ((uint64_t)ts.tv_sec) * 1000000 + ts.tv_nsec / 1000;
 }
-
-static inline uint64_t elapsedUs(monotime start_time) {
+inline uint64_t elapsedUs(monotime start_time) {
     return getMonotonicUs() - start_time;
 }
 
-static inline uint64_t elapsedMs(monotime start_time) {
+inline uint64_t elapsedMs(monotime start_time) {
     return elapsedUs(start_time) / 1000;
 }
+#endif
 
 typedef struct loadCtx {
     List *functions;

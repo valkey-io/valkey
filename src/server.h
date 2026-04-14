@@ -3391,8 +3391,30 @@ zskiplistNode *zslGetHeader(zskiplist *zsl);
 size_t zslGetAllocSize(void);
 void zslFree(zskiplist *zsl);
 zskiplistNode *zslInsert(zskiplist *zsl, double score, const_sds ele);
+void zslDelete(zskiplist *zsl, zskiplistNode *node);
+zskiplistNode *zslDetachNode(zskiplist *zsl, zskiplistNode *node);
+void zslFreeNode(zskiplistNode *node);
+zskiplistNode *zslGetFirst(const zskiplist *zsl);
+zskiplistNode *zslGetElementByRank(zskiplist *zsl, unsigned long rank);
+unsigned long zslGetRank(zskiplist *zsl, const zskiplistNode *node);
+unsigned long zslDeleteRangeByScore(zskiplist *zsl, zrangespec *range, hashtable *ht);
+unsigned long zslDeleteRangeByRank(zskiplist *zsl, unsigned int start, unsigned int end, hashtable *ht);
 zskiplistNode *zslNthInRange(zskiplist *zsl, zrangespec *range, long n, long *rank);
+zskiplistNode *zslUpdateScore(zskiplist *zsl, zskiplistNode *node, double newscore);
 sds zslGetNodeElement(const zskiplistNode *x);
+
+/* Skiplist iterator - opaque type that can be stack allocated.
+ * Size: 2 x uint64_t = 16 bytes (zsl pointer + node pointer) */
+typedef uint64_t zskiplistIterator[2];
+void zslInitIterator(zskiplistIterator *iter, zskiplist *zsl);
+void zslResetIterator(zskiplistIterator *iter);
+zskiplistIterator *zslCreateIterator(zskiplist *zsl);
+void zslReleaseIterator(zskiplistIterator *iter);
+bool zslNext(zskiplistIterator *iter, zskiplistNode **nodeptr);
+bool zslPrev(zskiplistIterator *iter, zskiplistNode **nodeptr);
+void zslSeekToRank(zskiplistIterator *iter, unsigned long rank);
+void zslSeekToScoreRange(zskiplistIterator *iterator, double min, double max, int min_ex, int max_ex, long offset);
+void zslSeekToLexRange(zskiplistIterator *iterator, const_sds min, const_sds max, int min_ex, int max_ex, long offset);
 double zzlGetScore(unsigned char *sptr);
 void zzlNext(unsigned char *zl, unsigned char **eptr, unsigned char **sptr);
 void zzlPrev(unsigned char *zl, unsigned char **eptr, unsigned char **sptr);

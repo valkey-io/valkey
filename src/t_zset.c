@@ -195,8 +195,13 @@ zskiplistNode *zslGetHeader(zskiplist *zsl) {
     return &zsl->header;
 }
 
+/* Helper function to get first element (head) of skiplist. Returns NULL if empty. */
+zskiplistNode *zslGetFirst(const zskiplist *zsl) {
+    return zsl->header.level[0].forward;
+}
+
 /* Free the specified skiplist node. */
-static void zslFreeNode(zskiplistNode *node) {
+void zslFreeNode(zskiplistNode *node) {
     zfree(node);
 }
 
@@ -336,8 +341,8 @@ static void zslDeleteNode(zskiplist *zsl, zskiplistNode *x, zskiplistNode **upda
     zsl->header.length--;
 }
 
-/* Delete specified node from the skiplist. */
-static void zslDelete(zskiplist *zsl, zskiplistNode *node) {
+/* Detach node from skiplist without freeing. Caller owns the node after this. */
+zskiplistNode *zslDetachNode(zskiplist *zsl, zskiplistNode *node) {
     zskiplistNode *update[ZSKIPLIST_MAXLEVEL];
     zskiplistNode *x = zslGetHeader(zsl);
     for (int i = zslGetHeight(zsl) - 1; i >= 0; i--) {
@@ -346,11 +351,14 @@ static void zslDelete(zskiplist *zsl, zskiplistNode *node) {
         }
         update[i] = x;
     }
-
-    /* We should have arrived at the correct node */
     serverAssert(x->level[0].forward == node);
-
     zslDeleteNode(zsl, node, update);
+    return node;
+}
+
+/* Delete specified node from the skiplist. */
+void zslDelete(zskiplist *zsl, zskiplistNode *node) {
+    zslDetachNode(zsl, node);
     zslFreeNode(node);
 }
 
@@ -362,7 +370,7 @@ static void zslDelete(zskiplist *zsl, zskiplistNode *node) {
  * node can be kept it returns NULL.
  * Otherwise the skiplist is modified by removing and re-adding a new
  * element, which is more costly. A pointer to the new node is returned. */
-static zskiplistNode *zslUpdateScore(zskiplist *zsl, zskiplistNode *node, double newscore) {
+zskiplistNode *zslUpdateScore(zskiplist *zsl, zskiplistNode *node, double newscore) {
     /* If the node, after the score update, would be still exactly
      * at the same position, we can just update the score without
      * actually removing and re-inserting the element in the skiplist. */
@@ -494,7 +502,7 @@ zskiplistNode *zslNthInRange(zskiplist *zsl, zrangespec *range, long n, long *ra
  * range->maxex). When inclusive a score >= min && score <= max is deleted.
  * Note that this function takes the reference to the hash table view of the
  * sorted set, in order to remove the elements from the hash table too. */
-static unsigned long zslDeleteRangeByScore(zskiplist *zsl, zrangespec *range, hashtable *ht) {
+unsigned long zslDeleteRangeByScore(zskiplist *zsl, zrangespec *range, hashtable *ht) {
     zskiplistNode *update[ZSKIPLIST_MAXLEVEL], *x;
     unsigned long removed = 0;
     int i;
@@ -513,7 +521,7 @@ static unsigned long zslDeleteRangeByScore(zskiplist *zsl, zrangespec *range, ha
         zskiplistNode *next = x->level[0].forward;
         zslDeleteNode(zsl, x, update);
         sds ele = zslGetNodeElement(x);
-        hashtablePop(ht, ele, NULL);
+        if (ht) hashtablePop(ht, ele, NULL);
         zslFreeNode(x);
         removed++;
         x = next;
@@ -553,7 +561,7 @@ static unsigned long zslDeleteRangeByLex(zskiplist *zsl, zlexrangespec *range, h
 
 /* Delete all the elements with rank between start and end from the skiplist.
  * Start and end are inclusive. Note that start and end need to be 1-based */
-static unsigned long zslDeleteRangeByRank(zskiplist *zsl, unsigned int start, unsigned int end, hashtable *ht) {
+unsigned long zslDeleteRangeByRank(zskiplist *zsl, unsigned int start, unsigned int end, hashtable *ht) {
     zskiplistNode *update[ZSKIPLIST_MAXLEVEL], *x;
     unsigned long traversed = 0, removed = 0;
     int i;
@@ -572,7 +580,8 @@ static unsigned long zslDeleteRangeByRank(zskiplist *zsl, unsigned int start, un
     while (x && traversed <= end) {
         zskiplistNode *next = x->level[0].forward;
         zslDeleteNode(zsl, x, update);
-        hashtableDelete(ht, zslGetNodeElement(x));
+        sds ele = zslGetNodeElement(x);
+        if (ht) hashtableDelete(ht, ele);
         zslFreeNode(x);
         removed++;
         traversed++;
@@ -583,7 +592,7 @@ static unsigned long zslDeleteRangeByRank(zskiplist *zsl, unsigned int start, un
 
 /* Find the rank for a specific skiplist member node. Counts nodes after the one
  * specified and subtracts from list length. Note that rank is 1-based.  */
-static unsigned long zslGetRank(zskiplist *zsl, const zskiplistNode *node) {
+unsigned long zslGetRank(zskiplist *zsl, const zskiplistNode *node) {
     unsigned long count_after_node = 0;
     while (node) { /* note this is never null the first time */
         int highest_node_span = zslGetNodeHeight(node) - 1;
@@ -617,6 +626,141 @@ static zskiplistNode *zslGetElementByRankFromNode(zskiplistNode *start_node, int
 /* Finds an element by its rank. The rank argument needs to be 1-based. */
 zskiplistNode *zslGetElementByRank(zskiplist *zsl, unsigned long rank) {
     return zslGetElementByRankFromNode(zslGetHeader(zsl), zslGetHeight(zsl) - 1, rank);
+}
+
+/*-----------------------------------------------------------------------------
+ * Skiplist iterator
+ *----------------------------------------------------------------------------*/
+
+/* Internal iterator structure */
+typedef struct {
+    zskiplist *zsl;      /* The skiplist being iterated */
+    zskiplistNode *node; /* Current node (NULL before first call) */
+} zslIter;
+
+static_assert(sizeof(zskiplistIterator) >= sizeof(zslIter), "zskiplistIterator must be large enough to hold zslIter");
+
+/* Helper macros to convert between opaque and internal types */
+#define zslIterFromOpaque(iter) ((zslIter *)(iter))
+#define zslIterToOpaque(iter) ((zskiplistIterator *)(iter))
+
+/* Initialize a stack-allocated iterator */
+void zslInitIterator(zskiplistIterator *iterator, zskiplist *zsl) {
+    zslIter *iter = zslIterFromOpaque(iterator);
+    iter->zsl = zsl;
+    iter->node = NULL;
+}
+
+/* Reset a stack-allocated iterator */
+void zslResetIterator(zskiplistIterator *iterator) {
+    zslIter *iter = zslIterFromOpaque(iterator);
+    iter->zsl = NULL;
+    iter->node = NULL;
+}
+
+/* Allocate and initialize an iterator (heap-allocated) */
+zskiplistIterator *zslCreateIterator(zskiplist *zsl) {
+    zslIter *iter = zmalloc(sizeof(*iter));
+    zskiplistIterator *opaque = zslIterToOpaque(iter);
+    zslInitIterator(opaque, zsl);
+    return opaque;
+}
+
+/* Reset and free a heap-allocated iterator */
+void zslReleaseIterator(zskiplistIterator *iterator) {
+    zslResetIterator(iterator);
+    zslIter *iter = zslIterFromOpaque(iterator);
+    zfree(iter);
+}
+
+/* Get the next node (forward direction)
+ * Returns the node at the current iterator position and advances the iterator.
+ * For the "between items" mental model: if positioned between N and N+1,
+ * this returns N+1 and positions between N+1 and N+2. */
+bool zslNext(zskiplistIterator *iterator, zskiplistNode **nodeptr) {
+    zslIter *iter = zslIterFromOpaque(iterator);
+    if (iter->zsl == NULL) return false;
+
+    if (iter->node == NULL) {
+        /* First call - start from head */
+        iter->node = zslGetHeader(iter->zsl)->level[0].forward;
+    } else {
+        iter->node = iter->node->level[0].forward;
+    }
+    if (iter->node == NULL) {
+        iter->zsl = NULL; /* reached end - invalidate iterator */
+        return false;
+    } else {
+        *nodeptr = iter->node;
+        return true;
+    }
+}
+
+/* Get the previous node (backward direction)
+ * Returns the node at the current iterator position and moves backward.
+ * For the "between items" mental model: if positioned between N and N+1,
+ * this returns N and positions between N-1 and N. */
+bool zslPrev(zskiplistIterator *iterator, zskiplistNode **nodeptr) {
+    zslIter *iter = zslIterFromOpaque(iterator);
+    if (iter->zsl == NULL) return false;
+    if (iter->node == zslGetHeader(iter->zsl)) {
+        iter->zsl = NULL;
+        return false;
+    }
+
+    if (iter->node == NULL) {
+        /* First call - start from tail */
+        iter->node = zslGetTail(iter->zsl);
+    }
+
+    *nodeptr = iter->node;
+    iter->node = iter->node->backward;
+    if (iter->node == zslGetHeader(iter->zsl) || iter->node == NULL) iter->zsl = NULL;
+    return true;
+}
+
+/* Seek to rank position. The mental model is that the iterator is positioned
+ * "between" ranks. Seeking to rank N positions the iterator at N.5:
+ * - next() will return rank N+1
+ * - prev() will return rank N
+ * Rank is 1-based. */
+void zslSeekToRank(zskiplistIterator *iterator, unsigned long rank) {
+    zslIter *iter = zslIterFromOpaque(iterator);
+    if (iter->zsl == NULL) return;
+    if (rank == 0)
+        iter->node = zslGetHeader(iter->zsl);
+    else
+        iter->node = zslGetElementByRank(iter->zsl, rank);
+}
+
+/* Seek to a position within a score range with offset.
+ * min/max: score range bounds
+ * min_ex/max_ex: 1 for exclusive bounds, 0 for inclusive
+ * offset: 0-based position within range (negative counts from end) */
+void zslSeekToScoreRange(zskiplistIterator *iterator, double min, double max, int min_ex, int max_ex, long offset) {
+    zslIter *iter = zslIterFromOpaque(iterator);
+    if (iter->zsl == NULL) return;
+    zrangespec range = {.min = min, .max = max, .minex = min_ex, .maxex = max_ex};
+    zskiplistNode *node = zslNthInRange(iter->zsl, &range, offset, NULL);
+    if (node == NULL) {
+        iter->node = NULL;
+        iter->zsl = NULL;
+        return;
+    }
+    iter->node = node->backward;
+}
+
+void zslSeekToLexRange(zskiplistIterator *iterator, const_sds min, const_sds max, int min_ex, int max_ex, long offset) {
+    zslIter *iter = zslIterFromOpaque(iterator);
+    if (iter->zsl == NULL) return;
+    zlexrangespec range = {.min = (sds)min, .max = (sds)max, .minex = min_ex, .maxex = max_ex};
+    zskiplistNode *node = zslNthInLexRange(iter->zsl, &range, offset);
+    if (node == NULL) {
+        iter->node = NULL;
+        iter->zsl = NULL;
+        return;
+    }
+    iter->node = node->backward;
 }
 
 /* Populate the rangespec according to the objects min and max. */

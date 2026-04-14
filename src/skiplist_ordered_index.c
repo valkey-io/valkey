@@ -1,6 +1,9 @@
 #include "server.h"
 #include "ordered_index.h"
 
+static_assert(sizeof(OrderedIndexIterator) >= sizeof(zskiplistIterator),
+              "OrderedIndexIterator must be large enough to hold zskiplistIterator");
+
 /* Skiplist implementation of OrderedIndex interface */
 
 /* Lifecycle */
@@ -57,6 +60,11 @@ static unsigned long skiplistDeleteRangeByRank(OrderedIndex *idx, unsigned long 
     return zslDeleteRangeByRank((zskiplist *)idx, start, end, NULL);
 }
 
+static unsigned long skiplistDeleteRangeByLex(OrderedIndex *idx, const_sds min, const_sds max, int min_ex, int max_ex) {
+    zlexrangespec range = {.min = (sds)min, .max = (sds)max, .minex = min_ex, .maxex = max_ex};
+    return zslDeleteRangeByLex((zskiplist *)idx, &range, NULL);
+}
+
 /* Query */
 
 static unsigned long skiplistLength(OrderedIndex *idx) {
@@ -67,8 +75,8 @@ static OrderedIndexItem *skiplistGetByRank(OrderedIndex *idx, unsigned long rank
     return (OrderedIndexItem *)zslGetElementByRank((zskiplist *)idx, rank);
 }
 
-static long skiplistGetRank(OrderedIndex *idx, const OrderedIndexItem *node) {
-    return (long)zslGetRank((zskiplist *)idx, (const zskiplistNode *)node);
+static unsigned long skiplistGetRank(OrderedIndex *idx, const OrderedIndexItem *node) {
+    return zslGetRank((zskiplist *)idx, (const zskiplistNode *)node);
 }
 
 static void skiplistGetElementRaw(const OrderedIndexItem *node, const char **ptr, size_t *len) {
@@ -79,7 +87,7 @@ static void skiplistGetElementRaw(const OrderedIndexItem *node, const char **ptr
 }
 
 static double skiplistGetScore(const OrderedIndexItem *node) {
-    return ((const zskiplistNode *)node)->score;
+    return zslGetScore((const zskiplistNode *)node);
 }
 
 /* Iterator */
@@ -119,13 +127,14 @@ const OrderedIndexOps skiplistOrderedIndexOps = {
     .free = skiplistFree,
     /* Modification */
     .insert = skiplistInsert,
-    .deleteItem = skiplistDelete,
+    .delete_item = skiplistDelete,
     .update_score = skiplistUpdateScore,
     .pop_first = skiplistPopFirst,
     .pop_last = skiplistPopLast,
     .free_item = skiplistFreeItem,
     .delete_range_by_score = skiplistDeleteRangeByScore,
     .delete_range_by_rank = skiplistDeleteRangeByRank,
+    .delete_range_by_lex = skiplistDeleteRangeByLex,
     /* Query */
     .length = skiplistLength,
     .get_by_rank = skiplistGetByRank,

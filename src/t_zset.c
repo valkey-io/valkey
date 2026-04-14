@@ -158,6 +158,11 @@ sds zslGetNodeElement(const zskiplistNode *x) {
     return (sds)data;
 }
 
+/* Helper function to return the score from a skip list node. */
+double zslGetScore(const zskiplistNode *node) {
+    return node->score;
+}
+
 /* Helper function to set the height of skiplist. */
 static void zslSetHeight(zskiplist *zsl, int height) {
     zsl->header.level[0].span = height;
@@ -529,7 +534,7 @@ unsigned long zslDeleteRangeByScore(zskiplist *zsl, zrangespec *range, hashtable
     return removed;
 }
 
-static unsigned long zslDeleteRangeByLex(zskiplist *zsl, zlexrangespec *range, hashtable *ht) {
+unsigned long zslDeleteRangeByLex(zskiplist *zsl, zlexrangespec *range, hashtable *ht) {
     zskiplistNode *update[ZSKIPLIST_MAXLEVEL], *x;
     unsigned long removed = 0;
     int i;
@@ -551,7 +556,8 @@ static unsigned long zslDeleteRangeByLex(zskiplist *zsl, zlexrangespec *range, h
     while (x && zslLexValueLteMax(zslGetNodeElement(x), range)) {
         zskiplistNode *next = x->level[0].forward;
         zslDeleteNode(zsl, x, update);
-        hashtableDelete(ht, zslGetNodeElement(x));
+        sds ele = zslGetNodeElement(x);
+        if (ht) hashtableDelete(ht, ele);
         zslFreeNode(x); /* Here is where x->ele is actually released. */
         removed++;
         x = next;
@@ -561,7 +567,7 @@ static unsigned long zslDeleteRangeByLex(zskiplist *zsl, zlexrangespec *range, h
 
 /* Delete all the elements with rank between start and end from the skiplist.
  * Start and end are inclusive. Note that start and end need to be 1-based */
-unsigned long zslDeleteRangeByRank(zskiplist *zsl, unsigned int start, unsigned int end, hashtable *ht) {
+unsigned long zslDeleteRangeByRank(zskiplist *zsl, unsigned long start, unsigned long end, hashtable *ht) {
     zskiplistNode *update[ZSKIPLIST_MAXLEVEL], *x;
     unsigned long traversed = 0, removed = 0;
     int i;

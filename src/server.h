@@ -3398,10 +3398,12 @@ zskiplistNode *zslGetFirst(const zskiplist *zsl);
 zskiplistNode *zslGetElementByRank(zskiplist *zsl, unsigned long rank);
 unsigned long zslGetRank(zskiplist *zsl, const zskiplistNode *node);
 unsigned long zslDeleteRangeByScore(zskiplist *zsl, zrangespec *range, hashtable *ht);
-unsigned long zslDeleteRangeByRank(zskiplist *zsl, unsigned int start, unsigned int end, hashtable *ht);
+unsigned long zslDeleteRangeByRank(zskiplist *zsl, unsigned long start, unsigned long end, hashtable *ht);
+unsigned long zslDeleteRangeByLex(zskiplist *zsl, zlexrangespec *range, hashtable *ht);
 zskiplistNode *zslNthInRange(zskiplist *zsl, zrangespec *range, long n, long *rank);
 zskiplistNode *zslUpdateScore(zskiplist *zsl, zskiplistNode *node, double newscore);
 sds zslGetNodeElement(const zskiplistNode *x);
+double zslGetScore(const zskiplistNode *node);
 
 /* Skiplist iterator - opaque type that can be stack allocated.
  * Size: 2 x uint64_t = 16 bytes (zsl pointer + node pointer) */

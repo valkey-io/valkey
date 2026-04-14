@@ -6,14 +6,21 @@
 
 #include "generated_wrappers.hpp"
 
-#include <cmath>
-#include <cstdio>
-#include <cstring>
-
 extern "C" {
 #include "ordered_index.h"
 #include "server.h"
 }
+
+/* Undefine min/max macros from server.h to avoid conflicts with C++ standard library */
+#undef min
+#undef max
+
+#include <algorithm>
+#include <cmath>
+#include <cstring>
+#include <random>
+#include <string>
+#include <vector>
 
 #define TEST_ASSERT(x) ASSERT_TRUE(x)
 #define TEST_ASSERT_SCORE_EQ(a, b) ASSERT_DOUBLE_EQ(a, b)
@@ -1261,6 +1268,593 @@ static void test_seek_to_lex_range_generic(const OrderedIndexOps *ops) {
     orderedIndexFree(ops, idx);
 }
 
+/* ========== delete_range_by_lex tests ========== */
+
+static void test_delete_range_by_lex_inclusive_generic(const OrderedIndexOps *ops) {
+    OrderedIndex *idx = orderedIndexCreate(ops);
+
+    /* Insert elements with same score (lex range is meaningful when scores are equal) */
+    const char *elements[] = {"apple", "banana", "cherry", "date", "elderberry"};
+    for (int i = 0; i < 5; i++) {
+        sds ele = sdsnew(elements[i]);
+        orderedIndexInsert(ops, idx, 1.0, ele);
+        sdsfree(ele);
+    }
+
+    /* Delete inclusive range [banana, date] — should remove banana, cherry, date */
+    sds min = sdsnew("banana");
+    sds max = sdsnew("date");
+    unsigned long deleted = orderedIndexDeleteRangeByLex(ops, idx, min, max, 0, 0);
+    TEST_ASSERT(deleted == 3);
+    TEST_ASSERT(orderedIndexLength(ops, idx) == 2);
+
+    /* Verify remaining: apple, elderberry */
+    OrderedIndexIterator iter;
+    OrderedIndexItem *pos;
+    const char *ptr;
+    size_t len;
+    orderedIndexInitIterator(ops, &iter, idx);
+    TEST_ASSERT(orderedIndexNext(ops, &iter, &pos));
+    orderedIndexGetElementRaw(ops, pos, &ptr, &len);
+    TEST_ASSERT(len == 5 && memcmp(ptr, "apple", 5) == 0);
+    TEST_ASSERT(orderedIndexNext(ops, &iter, &pos));
+    orderedIndexGetElementRaw(ops, pos, &ptr, &len);
+    TEST_ASSERT(len == 10 && memcmp(ptr, "elderberry", 10) == 0);
+    TEST_ASSERT(!orderedIndexNext(ops, &iter, &pos));
+    orderedIndexResetIterator(ops, &iter);
+
+    sdsfree(min);
+    sdsfree(max);
+    orderedIndexFree(ops, idx);
+}
+
+static void test_delete_range_by_lex_exclusive_generic(const OrderedIndexOps *ops) {
+    OrderedIndex *idx = orderedIndexCreate(ops);
+
+    const char *elements[] = {"apple", "banana", "cherry", "date", "elderberry"};
+    for (int i = 0; i < 5; i++) {
+        sds ele = sdsnew(elements[i]);
+        orderedIndexInsert(ops, idx, 1.0, ele);
+        sdsfree(ele);
+    }
+
+    /* Delete exclusive range (banana, date) — should remove only cherry */
+    sds min = sdsnew("banana");
+    sds max = sdsnew("date");
+    unsigned long deleted = orderedIndexDeleteRangeByLex(ops, idx, min, max, 1, 1);
+    TEST_ASSERT(deleted == 1);
+    TEST_ASSERT(orderedIndexLength(ops, idx) == 4);
+
+    /* Verify remaining: apple, banana, date, elderberry */
+    OrderedIndexIterator iter;
+    OrderedIndexItem *pos;
+    const char *ptr;
+    size_t len;
+    orderedIndexInitIterator(ops, &iter, idx);
+    TEST_ASSERT(orderedIndexNext(ops, &iter, &pos));
+    orderedIndexGetElementRaw(ops, pos, &ptr, &len);
+    TEST_ASSERT(len == 5 && memcmp(ptr, "apple", 5) == 0);
+    TEST_ASSERT(orderedIndexNext(ops, &iter, &pos));
+    orderedIndexGetElementRaw(ops, pos, &ptr, &len);
+    TEST_ASSERT(len == 6 && memcmp(ptr, "banana", 6) == 0);
+    TEST_ASSERT(orderedIndexNext(ops, &iter, &pos));
+    orderedIndexGetElementRaw(ops, pos, &ptr, &len);
+    TEST_ASSERT(len == 4 && memcmp(ptr, "date", 4) == 0);
+    TEST_ASSERT(orderedIndexNext(ops, &iter, &pos));
+    orderedIndexGetElementRaw(ops, pos, &ptr, &len);
+    TEST_ASSERT(len == 10 && memcmp(ptr, "elderberry", 10) == 0);
+    TEST_ASSERT(!orderedIndexNext(ops, &iter, &pos));
+    orderedIndexResetIterator(ops, &iter);
+
+    sdsfree(min);
+    sdsfree(max);
+    orderedIndexFree(ops, idx);
+}
+
+static void test_delete_range_by_lex_boundary_cases_generic(const OrderedIndexOps *ops) {
+    /* Empty range: min > max lexicographically */
+    OrderedIndex *idx = orderedIndexCreate(ops);
+    const char *elements[] = {"apple", "banana", "cherry"};
+    for (int i = 0; i < 3; i++) {
+        sds ele = sdsnew(elements[i]);
+        orderedIndexInsert(ops, idx, 1.0, ele);
+        sdsfree(ele);
+    }
+
+    sds min = sdsnew("zzz");
+    sds max = sdsnew("aaa");
+    unsigned long deleted = orderedIndexDeleteRangeByLex(ops, idx, min, max, 0, 0);
+    TEST_ASSERT(deleted == 0);
+    TEST_ASSERT(orderedIndexLength(ops, idx) == 3);
+    sdsfree(min);
+    sdsfree(max);
+    orderedIndexFree(ops, idx);
+
+    /* Delete all elements: range covers everything */
+    idx = orderedIndexCreate(ops);
+    for (int i = 0; i < 3; i++) {
+        sds ele = sdsnew(elements[i]);
+        orderedIndexInsert(ops, idx, 1.0, ele);
+        sdsfree(ele);
+    }
+
+    min = sdsnew("a");
+    max = sdsnew("z");
+    deleted = orderedIndexDeleteRangeByLex(ops, idx, min, max, 0, 0);
+    TEST_ASSERT(deleted == 3);
+    TEST_ASSERT(orderedIndexLength(ops, idx) == 0);
+    sdsfree(min);
+    sdsfree(max);
+    orderedIndexFree(ops, idx);
+
+    /* Delete single element: range matches exactly one */
+    idx = orderedIndexCreate(ops);
+    for (int i = 0; i < 3; i++) {
+        sds ele = sdsnew(elements[i]);
+        orderedIndexInsert(ops, idx, 1.0, ele);
+        sdsfree(ele);
+    }
+
+    min = sdsnew("banana");
+    max = sdsnew("banana");
+    deleted = orderedIndexDeleteRangeByLex(ops, idx, min, max, 0, 0);
+    TEST_ASSERT(deleted == 1);
+    TEST_ASSERT(orderedIndexLength(ops, idx) == 2);
+
+    /* Verify remaining: apple, cherry */
+    OrderedIndexIterator iter;
+    OrderedIndexItem *pos;
+    const char *ptr;
+    size_t len;
+    orderedIndexInitIterator(ops, &iter, idx);
+    TEST_ASSERT(orderedIndexNext(ops, &iter, &pos));
+    orderedIndexGetElementRaw(ops, pos, &ptr, &len);
+    TEST_ASSERT(len == 5 && memcmp(ptr, "apple", 5) == 0);
+    TEST_ASSERT(orderedIndexNext(ops, &iter, &pos));
+    orderedIndexGetElementRaw(ops, pos, &ptr, &len);
+    TEST_ASSERT(len == 6 && memcmp(ptr, "cherry", 6) == 0);
+    TEST_ASSERT(!orderedIndexNext(ops, &iter, &pos));
+    orderedIndexResetIterator(ops, &iter);
+
+    sdsfree(min);
+    sdsfree(max);
+    orderedIndexFree(ops, idx);
+}
+
+static void test_delete_range_by_lex_preserves_outside_generic(const OrderedIndexOps *ops) {
+    OrderedIndex *idx = orderedIndexCreate(ops);
+
+    /* Insert elements with same score */
+    const char *elements[] = {"alpha", "bravo", "charlie", "delta", "echo", "foxtrot"};
+    for (int i = 0; i < 6; i++) {
+        sds ele = sdsnew(elements[i]);
+        orderedIndexInsert(ops, idx, 1.0, ele);
+        sdsfree(ele);
+    }
+
+    /* Delete [charlie, delta] — should preserve alpha, bravo, echo, foxtrot */
+    sds min = sdsnew("charlie");
+    sds max = sdsnew("delta");
+    unsigned long deleted = orderedIndexDeleteRangeByLex(ops, idx, min, max, 0, 0);
+    TEST_ASSERT(deleted == 2);
+    TEST_ASSERT(orderedIndexLength(ops, idx) == 4);
+
+    /* Verify all preserved elements are present and in order */
+    const char *expected[] = {"alpha", "bravo", "echo", "foxtrot"};
+    size_t expected_lens[] = {5, 5, 4, 7};
+    OrderedIndexIterator iter;
+    OrderedIndexItem *pos;
+    const char *ptr;
+    size_t len;
+    orderedIndexInitIterator(ops, &iter, idx);
+    for (int i = 0; i < 4; i++) {
+        TEST_ASSERT(orderedIndexNext(ops, &iter, &pos));
+        orderedIndexGetElementRaw(ops, pos, &ptr, &len);
+        TEST_ASSERT(len == expected_lens[i] && memcmp(ptr, expected[i], len) == 0);
+    }
+    TEST_ASSERT(!orderedIndexNext(ops, &iter, &pos));
+    orderedIndexResetIterator(ops, &iter);
+
+    /* Verify scores are preserved */
+    orderedIndexInitIterator(ops, &iter, idx);
+    while (orderedIndexNext(ops, &iter, &pos)) {
+        TEST_ASSERT_SCORE_EQ(orderedIndexGetScore(ops, pos), 1.0);
+    }
+    orderedIndexResetIterator(ops, &iter);
+
+    /* Verify ranks are correct after deletion */
+    for (unsigned long r = 1; r <= 4; r++) {
+        OrderedIndexItem *node = orderedIndexGetByRank(ops, idx, r);
+        TEST_ASSERT(node != NULL);
+        unsigned long rank = orderedIndexGetRank(ops, idx, node);
+        TEST_ASSERT(rank == r);
+    }
+
+    sdsfree(min);
+    sdsfree(max);
+    orderedIndexFree(ops, idx);
+}
+
+/* ========== Randomized property tests (generic) ========== */
+
+/* Helpers for randomized tests */
+struct RandomIndexEntry {
+    OrderedIndexItem *node;
+    double score;
+    std::string element;
+};
+
+static std::string test_random_element(std::mt19937 &rng, int maxLen = 16) {
+    std::uniform_int_distribution<int> lenDist(1, maxLen);
+    std::uniform_int_distribution<int> charDist('a', 'z');
+    int len = lenDist(rng);
+    std::string s(len, ' ');
+    for (int i = 0; i < len; i++) s[i] = (char)charDist(rng);
+    return s;
+}
+
+static double test_random_score(std::mt19937 &rng) {
+    std::uniform_real_distribution<double> dist(-1e6, 1e6);
+    return dist(rng);
+}
+
+static std::vector<RandomIndexEntry> test_build_random_index(const OrderedIndexOps *ops, OrderedIndex *idx,
+                                                              std::mt19937 &rng, int count) {
+    std::vector<RandomIndexEntry> entries;
+    for (int i = 0; i < count; i++) {
+        double score = test_random_score(rng);
+        std::string elem = test_random_element(rng) + std::to_string(i);
+        sds ele = sdsnew(elem.c_str());
+        OrderedIndexItem *node = orderedIndexInsert(ops, idx, score, ele);
+        entries.push_back({node, score, elem});
+        sdsfree(ele);
+    }
+    return entries;
+}
+
+/* Property: Insert N random elements, then verify length and forward traversal order. */
+static void test_randomized_insert_and_traversal_generic(const OrderedIndexOps *ops) {
+    std::mt19937 rng(42);
+    for (int trial = 0; trial < 20; trial++) {
+        std::uniform_int_distribution<int> sizeDist(1, 50);
+        int n = sizeDist(rng);
+
+        OrderedIndex *idx = orderedIndexCreate(ops);
+        test_build_random_index(ops, idx, rng, n);
+
+        ASSERT_EQ(orderedIndexLength(ops, idx), (unsigned long)n);
+
+        OrderedIndexIterator iter;
+        OrderedIndexItem *pos;
+        orderedIndexInitIterator(ops, &iter, idx);
+        int count = 0;
+        double prevScore = -INFINITY;
+        while (orderedIndexNext(ops, &iter, &pos)) {
+            double s = orderedIndexGetScore(ops, pos);
+            ASSERT_GE(s, prevScore);
+            prevScore = s;
+            count++;
+        }
+        ASSERT_EQ(count, n);
+        orderedIndexResetIterator(ops, &iter);
+        orderedIndexFree(ops, idx);
+    }
+}
+
+/* Property: Backward traversal visits elements in non-increasing score order. */
+static void test_randomized_backward_traversal_generic(const OrderedIndexOps *ops) {
+    std::mt19937 rng(42);
+    for (int trial = 0; trial < 20; trial++) {
+        std::uniform_int_distribution<int> sizeDist(1, 50);
+        int n = sizeDist(rng);
+
+        OrderedIndex *idx = orderedIndexCreate(ops);
+        test_build_random_index(ops, idx, rng, n);
+
+        OrderedIndexIterator iter;
+        OrderedIndexItem *pos;
+        orderedIndexInitIterator(ops, &iter, idx);
+        int count = 0;
+        double prevScore = INFINITY;
+        while (orderedIndexPrev(ops, &iter, &pos)) {
+            double s = orderedIndexGetScore(ops, pos);
+            ASSERT_LE(s, prevScore);
+            prevScore = s;
+            count++;
+        }
+        ASSERT_EQ(count, n);
+        orderedIndexResetIterator(ops, &iter);
+        orderedIndexFree(ops, idx);
+    }
+}
+
+/* Property: get_score returns the exact same double value that was inserted. */
+static void test_randomized_score_retrieval_generic(const OrderedIndexOps *ops) {
+    std::mt19937 rng(42);
+    for (int trial = 0; trial < 20; trial++) {
+        std::uniform_int_distribution<int> sizeDist(1, 50);
+        int n = sizeDist(rng);
+
+        OrderedIndex *idx = orderedIndexCreate(ops);
+        auto entries = test_build_random_index(ops, idx, rng, n);
+
+        for (auto &e : entries) {
+            ASSERT_EQ(orderedIndexGetScore(ops, e.node), e.score);
+        }
+        orderedIndexFree(ops, idx);
+    }
+}
+
+/* Property: get_rank returns correct 1-based rank consistent with traversal order. */
+static void test_randomized_rank_consistency_generic(const OrderedIndexOps *ops) {
+    std::mt19937 rng(42);
+    for (int trial = 0; trial < 20; trial++) {
+        std::uniform_int_distribution<int> sizeDist(1, 50);
+        int n = sizeDist(rng);
+
+        OrderedIndex *idx = orderedIndexCreate(ops);
+        test_build_random_index(ops, idx, rng, n);
+
+        OrderedIndexIterator iter;
+        OrderedIndexItem *pos;
+        orderedIndexInitIterator(ops, &iter, idx);
+        unsigned long expectedRank = 1;
+        while (orderedIndexNext(ops, &iter, &pos)) {
+            unsigned long rank = orderedIndexGetRank(ops, idx, pos);
+            ASSERT_EQ(rank, expectedRank);
+            OrderedIndexItem *byRank = orderedIndexGetByRank(ops, idx, expectedRank);
+            ASSERT_EQ(byRank, pos);
+            expectedRank++;
+        }
+        ASSERT_EQ(expectedRank - 1, (unsigned long)n);
+        orderedIndexResetIterator(ops, &iter);
+        orderedIndexFree(ops, idx);
+    }
+}
+
+/* Property: Delete a random element, length decreases, remaining in order. */
+static void test_randomized_delete_generic(const OrderedIndexOps *ops) {
+    std::mt19937 rng(42);
+    for (int trial = 0; trial < 20; trial++) {
+        std::uniform_int_distribution<int> sizeDist(2, 30);
+        int n = sizeDist(rng);
+
+        OrderedIndex *idx = orderedIndexCreate(ops);
+        auto entries = test_build_random_index(ops, idx, rng, n);
+
+        std::uniform_int_distribution<int> pickDist(0, n - 1);
+        int delIdx = pickDist(rng);
+        orderedIndexDelete(ops, idx, entries[delIdx].node);
+
+        ASSERT_EQ(orderedIndexLength(ops, idx), (unsigned long)(n - 1));
+
+        OrderedIndexIterator iter;
+        OrderedIndexItem *pos;
+        orderedIndexInitIterator(ops, &iter, idx);
+        int count = 0;
+        double prevScore = -INFINITY;
+        while (orderedIndexNext(ops, &iter, &pos)) {
+            ASSERT_GE(orderedIndexGetScore(ops, pos), prevScore);
+            prevScore = orderedIndexGetScore(ops, pos);
+            count++;
+        }
+        ASSERT_EQ(count, n - 1);
+        orderedIndexResetIterator(ops, &iter);
+        orderedIndexFree(ops, idx);
+    }
+}
+
+/* Property: update_score moves element to correct position, preserves exact score. */
+static void test_randomized_update_score_generic(const OrderedIndexOps *ops) {
+    std::mt19937 rng(42);
+    for (int trial = 0; trial < 20; trial++) {
+        std::uniform_int_distribution<int> sizeDist(2, 30);
+        int n = sizeDist(rng);
+
+        OrderedIndex *idx = orderedIndexCreate(ops);
+        auto entries = test_build_random_index(ops, idx, rng, n);
+
+        std::uniform_int_distribution<int> pickDist(0, n - 1);
+        int updIdx = pickDist(rng);
+        double newScore = test_random_score(rng);
+
+        OrderedIndexItem *updated = orderedIndexUpdateScore(ops, idx, entries[updIdx].node, newScore);
+        ASSERT_NE(updated, nullptr);
+        ASSERT_EQ(orderedIndexGetScore(ops, updated), newScore);
+        ASSERT_EQ(orderedIndexLength(ops, idx), (unsigned long)n);
+
+        OrderedIndexIterator iter;
+        OrderedIndexItem *pos;
+        orderedIndexInitIterator(ops, &iter, idx);
+        double prevScore = -INFINITY;
+        while (orderedIndexNext(ops, &iter, &pos)) {
+            ASSERT_GE(orderedIndexGetScore(ops, pos), prevScore);
+            prevScore = orderedIndexGetScore(ops, pos);
+        }
+        orderedIndexResetIterator(ops, &iter);
+        orderedIndexFree(ops, idx);
+    }
+}
+
+/* Property: pop_first/pop_last remove min/max elements correctly. */
+static void test_randomized_pop_generic(const OrderedIndexOps *ops) {
+    std::mt19937 rng(42);
+    for (int trial = 0; trial < 10; trial++) {
+        std::uniform_int_distribution<int> sizeDist(3, 30);
+        int n = sizeDist(rng);
+
+        OrderedIndex *idx = orderedIndexCreate(ops);
+        test_build_random_index(ops, idx, rng, n);
+
+        OrderedIndexIterator iter;
+        OrderedIndexItem *pos;
+        orderedIndexInitIterator(ops, &iter, idx);
+        ASSERT_TRUE(orderedIndexNext(ops, &iter, &pos));
+        double minScore = orderedIndexGetScore(ops, pos);
+        orderedIndexResetIterator(ops, &iter);
+
+        orderedIndexInitIterator(ops, &iter, idx);
+        ASSERT_TRUE(orderedIndexPrev(ops, &iter, &pos));
+        double maxScore = orderedIndexGetScore(ops, pos);
+        orderedIndexResetIterator(ops, &iter);
+
+        OrderedIndexItem *first = orderedIndexPopFirst(ops, idx);
+        ASSERT_NE(first, nullptr);
+        ASSERT_EQ(orderedIndexGetScore(ops, first), minScore);
+        ASSERT_EQ(orderedIndexLength(ops, idx), (unsigned long)(n - 1));
+        orderedIndexFreeItem(ops, first);
+
+        OrderedIndexItem *last = orderedIndexPopLast(ops, idx);
+        ASSERT_NE(last, nullptr);
+        ASSERT_EQ(orderedIndexGetScore(ops, last), maxScore);
+        ASSERT_EQ(orderedIndexLength(ops, idx), (unsigned long)(n - 2));
+        orderedIndexFreeItem(ops, last);
+
+        orderedIndexInitIterator(ops, &iter, idx);
+        double prevScore = -INFINITY;
+        while (orderedIndexNext(ops, &iter, &pos)) {
+            ASSERT_GE(orderedIndexGetScore(ops, pos), prevScore);
+            prevScore = orderedIndexGetScore(ops, pos);
+        }
+        orderedIndexResetIterator(ops, &iter);
+        orderedIndexFree(ops, idx);
+    }
+}
+
+/* Property: delete_range_by_score removes exactly the right elements. */
+static void test_randomized_delete_range_by_score_generic(const OrderedIndexOps *ops) {
+    std::mt19937 rng(42);
+    for (int trial = 0; trial < 20; trial++) {
+        std::uniform_int_distribution<int> sizeDist(5, 40);
+        int n = sizeDist(rng);
+
+        OrderedIndex *idx = orderedIndexCreate(ops);
+        auto entries = test_build_random_index(ops, idx, rng, n);
+
+        double s1 = test_random_score(rng), s2 = test_random_score(rng);
+        double lo = (std::min)(s1, s2), hi = (std::max)(s1, s2);
+
+        int expectedDeleted = 0;
+        for (auto &e : entries) {
+            if (e.score >= lo && e.score <= hi) expectedDeleted++;
+        }
+
+        unsigned long deleted = orderedIndexDeleteRangeByScore(ops, idx, lo, hi, 0, 0);
+        ASSERT_EQ(deleted, (unsigned long)expectedDeleted);
+        ASSERT_EQ(orderedIndexLength(ops, idx), (unsigned long)(n - expectedDeleted));
+
+        OrderedIndexIterator iter;
+        OrderedIndexItem *pos;
+        orderedIndexInitIterator(ops, &iter, idx);
+        double prevScore = -INFINITY;
+        while (orderedIndexNext(ops, &iter, &pos)) {
+            double s = orderedIndexGetScore(ops, pos);
+            ASSERT_TRUE(s < lo || s > hi);
+            ASSERT_GE(s, prevScore);
+            prevScore = s;
+        }
+        orderedIndexResetIterator(ops, &iter);
+        orderedIndexFree(ops, idx);
+    }
+}
+
+/* Property: delete_range_by_rank removes exactly the right rank positions. */
+static void test_randomized_delete_range_by_rank_generic(const OrderedIndexOps *ops) {
+    std::mt19937 rng(42);
+    for (int trial = 0; trial < 20; trial++) {
+        std::uniform_int_distribution<int> sizeDist(5, 40);
+        int n = sizeDist(rng);
+
+        OrderedIndex *idx = orderedIndexCreate(ops);
+        test_build_random_index(ops, idx, rng, n);
+
+        std::uniform_int_distribution<int> rankDist(1, n);
+        int r1 = rankDist(rng), r2 = rankDist(rng);
+        unsigned long start = (unsigned long)(std::min)(r1, r2);
+        unsigned long end = (unsigned long)(std::max)(r1, r2);
+        unsigned long expectedDeleted = end - start + 1;
+
+        unsigned long deleted = orderedIndexDeleteRangeByRank(ops, idx, start, end);
+        ASSERT_EQ(deleted, expectedDeleted);
+        ASSERT_EQ(orderedIndexLength(ops, idx), (unsigned long)(n) - expectedDeleted);
+
+        OrderedIndexIterator iter;
+        OrderedIndexItem *pos;
+        orderedIndexInitIterator(ops, &iter, idx);
+        int remaining = 0;
+        double prevScore = -INFINITY;
+        while (orderedIndexNext(ops, &iter, &pos)) {
+            ASSERT_GE(orderedIndexGetScore(ops, pos), prevScore);
+            prevScore = orderedIndexGetScore(ops, pos);
+            remaining++;
+        }
+        ASSERT_EQ(remaining, n - (int)expectedDeleted);
+        orderedIndexResetIterator(ops, &iter);
+        orderedIndexFree(ops, idx);
+    }
+}
+
+/* Property: Forward and backward traversal produce mirror-image sequences. */
+static void test_randomized_forward_backward_mirror_generic(const OrderedIndexOps *ops) {
+    std::mt19937 rng(42);
+    for (int trial = 0; trial < 20; trial++) {
+        std::uniform_int_distribution<int> sizeDist(1, 50);
+        int n = sizeDist(rng);
+
+        OrderedIndex *idx = orderedIndexCreate(ops);
+        test_build_random_index(ops, idx, rng, n);
+
+        std::vector<double> forwardScores;
+        OrderedIndexIterator iter;
+        OrderedIndexItem *pos;
+        orderedIndexInitIterator(ops, &iter, idx);
+        while (orderedIndexNext(ops, &iter, &pos)) {
+            forwardScores.push_back(orderedIndexGetScore(ops, pos));
+        }
+        orderedIndexResetIterator(ops, &iter);
+
+        std::vector<double> backwardScores;
+        orderedIndexInitIterator(ops, &iter, idx);
+        while (orderedIndexPrev(ops, &iter, &pos)) {
+            backwardScores.push_back(orderedIndexGetScore(ops, pos));
+        }
+        orderedIndexResetIterator(ops, &iter);
+
+        ASSERT_EQ(forwardScores.size(), backwardScores.size());
+        std::reverse(backwardScores.begin(), backwardScores.end());
+        for (size_t i = 0; i < forwardScores.size(); i++) {
+            ASSERT_EQ(forwardScores[i], backwardScores[i]);
+        }
+        orderedIndexFree(ops, idx);
+    }
+}
+
+/* Verify all vtable function pointers are non-null. */
+static void test_vtable_fully_populated_generic(const OrderedIndexOps *ops) {
+    ASSERT_NE(ops->create, nullptr);
+    ASSERT_NE(ops->free, nullptr);
+    ASSERT_NE(ops->insert, nullptr);
+    ASSERT_NE(ops->delete_item, nullptr);
+    ASSERT_NE(ops->update_score, nullptr);
+    ASSERT_NE(ops->pop_first, nullptr);
+    ASSERT_NE(ops->pop_last, nullptr);
+    ASSERT_NE(ops->free_item, nullptr);
+    ASSERT_NE(ops->delete_range_by_score, nullptr);
+    ASSERT_NE(ops->delete_range_by_rank, nullptr);
+    ASSERT_NE(ops->length, nullptr);
+    ASSERT_NE(ops->get_by_rank, nullptr);
+    ASSERT_NE(ops->get_rank, nullptr);
+    ASSERT_NE(ops->get_element_raw, nullptr);
+    ASSERT_NE(ops->get_score, nullptr);
+    ASSERT_NE(ops->init_iterator, nullptr);
+    ASSERT_NE(ops->reset_iterator, nullptr);
+    ASSERT_NE(ops->next, nullptr);
+    ASSERT_NE(ops->prev, nullptr);
+    ASSERT_NE(ops->seek_to_rank, nullptr);
+    ASSERT_NE(ops->seek_to_score_range, nullptr);
+    ASSERT_NE(ops->seek_to_lex_range, nullptr);
+}
+
 /* ========== Skiplist Tests ========== */
 
 class SkiplistOrderedIndexTest : public ::testing::Test {};
@@ -1355,3 +1949,50 @@ TEST_F(SkiplistOrderedIndexTest, SeekInfForwardIteration) {
 TEST_F(SkiplistOrderedIndexTest, SeekToLexRange) {
     test_seek_to_lex_range_generic(&skiplistOrderedIndexOps);
 }
+TEST_F(SkiplistOrderedIndexTest, DeleteRangeByLexInclusive) {
+    test_delete_range_by_lex_inclusive_generic(&skiplistOrderedIndexOps);
+}
+TEST_F(SkiplistOrderedIndexTest, DeleteRangeByLexExclusive) {
+    test_delete_range_by_lex_exclusive_generic(&skiplistOrderedIndexOps);
+}
+TEST_F(SkiplistOrderedIndexTest, DeleteRangeByLexBoundaryCases) {
+    test_delete_range_by_lex_boundary_cases_generic(&skiplistOrderedIndexOps);
+}
+TEST_F(SkiplistOrderedIndexTest, DeleteRangeByLexPreservesOutside) {
+    test_delete_range_by_lex_preserves_outside_generic(&skiplistOrderedIndexOps);
+}
+TEST_F(SkiplistOrderedIndexTest, RandomizedInsertAndTraversal) {
+    test_randomized_insert_and_traversal_generic(&skiplistOrderedIndexOps);
+}
+TEST_F(SkiplistOrderedIndexTest, RandomizedBackwardTraversal) {
+    test_randomized_backward_traversal_generic(&skiplistOrderedIndexOps);
+}
+TEST_F(SkiplistOrderedIndexTest, RandomizedScoreRetrieval) {
+    test_randomized_score_retrieval_generic(&skiplistOrderedIndexOps);
+}
+TEST_F(SkiplistOrderedIndexTest, RandomizedRankConsistency) {
+    test_randomized_rank_consistency_generic(&skiplistOrderedIndexOps);
+}
+TEST_F(SkiplistOrderedIndexTest, RandomizedDelete) {
+    test_randomized_delete_generic(&skiplistOrderedIndexOps);
+}
+TEST_F(SkiplistOrderedIndexTest, RandomizedUpdateScore) {
+    test_randomized_update_score_generic(&skiplistOrderedIndexOps);
+}
+TEST_F(SkiplistOrderedIndexTest, RandomizedPop) {
+    test_randomized_pop_generic(&skiplistOrderedIndexOps);
+}
+TEST_F(SkiplistOrderedIndexTest, RandomizedDeleteRangeByScore) {
+    test_randomized_delete_range_by_score_generic(&skiplistOrderedIndexOps);
+}
+TEST_F(SkiplistOrderedIndexTest, RandomizedDeleteRangeByRank) {
+    test_randomized_delete_range_by_rank_generic(&skiplistOrderedIndexOps);
+}
+TEST_F(SkiplistOrderedIndexTest, RandomizedForwardBackwardMirror) {
+    test_randomized_forward_backward_mirror_generic(&skiplistOrderedIndexOps);
+}
+TEST_F(SkiplistOrderedIndexTest, VtableFullyPopulated) {
+    test_vtable_fully_populated_generic(&skiplistOrderedIndexOps);
+}
+
+

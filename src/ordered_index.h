@@ -16,18 +16,19 @@ typedef struct OrderedIndexOps {
 
     /* Modification */
     OrderedIndexItem *(*insert)(OrderedIndex *idx, double score, const_sds ele);
-    void (*deleteItem)(OrderedIndex *idx, OrderedIndexItem *pos);
+    void (*delete_item)(OrderedIndex *idx, OrderedIndexItem *pos);
     OrderedIndexItem *(*update_score)(OrderedIndex *idx, OrderedIndexItem *pos, double newscore);
     OrderedIndexItem *(*pop_first)(OrderedIndex *idx);
     OrderedIndexItem *(*pop_last)(OrderedIndex *idx);
     void (*free_item)(OrderedIndexItem *item);
     unsigned long (*delete_range_by_score)(OrderedIndex *idx, double min, double max, int min_ex, int max_ex);
     unsigned long (*delete_range_by_rank)(OrderedIndex *idx, unsigned long start, unsigned long end);
+    unsigned long (*delete_range_by_lex)(OrderedIndex *idx, const_sds min, const_sds max, int min_ex, int max_ex);
 
     /* Query */
     unsigned long (*length)(OrderedIndex *idx);
     OrderedIndexItem *(*get_by_rank)(OrderedIndex *idx, unsigned long rank);
-    long (*get_rank)(OrderedIndex *idx, const OrderedIndexItem *pos);
+    unsigned long (*get_rank)(OrderedIndex *idx, const OrderedIndexItem *pos);
     void (*get_element_raw)(const OrderedIndexItem *pos, const char **ptr, size_t *len);
     double (*get_score)(const OrderedIndexItem *pos);
 
@@ -60,7 +61,7 @@ static inline OrderedIndexItem *orderedIndexInsert(const OrderedIndexOps *ops, O
 }
 
 static inline void orderedIndexDelete(const OrderedIndexOps *ops, OrderedIndex *idx, OrderedIndexItem *pos) {
-    ops->deleteItem(idx, pos);
+    ops->delete_item(idx, pos);
 }
 
 static inline OrderedIndexItem *orderedIndexUpdateScore(const OrderedIndexOps *ops, OrderedIndex *idx, OrderedIndexItem *pos, double newscore) {
@@ -87,6 +88,10 @@ static inline unsigned long orderedIndexDeleteRangeByRank(const OrderedIndexOps 
     return ops->delete_range_by_rank(idx, start, end);
 }
 
+static inline unsigned long orderedIndexDeleteRangeByLex(const OrderedIndexOps *ops, OrderedIndex *idx, const_sds min, const_sds max, int min_ex, int max_ex) {
+    return ops->delete_range_by_lex(idx, min, max, min_ex, max_ex);
+}
+
 static inline unsigned long orderedIndexLength(const OrderedIndexOps *ops, OrderedIndex *idx) {
     return ops->length(idx);
 }
@@ -95,7 +100,7 @@ static inline OrderedIndexItem *orderedIndexGetByRank(const OrderedIndexOps *ops
     return ops->get_by_rank(idx, rank);
 }
 
-static inline long orderedIndexGetRank(const OrderedIndexOps *ops, OrderedIndex *idx, const OrderedIndexItem *pos) {
+static inline unsigned long orderedIndexGetRank(const OrderedIndexOps *ops, OrderedIndex *idx, const OrderedIndexItem *pos) {
     return ops->get_rank(idx, pos);
 }
 

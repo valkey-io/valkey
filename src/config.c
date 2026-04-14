@@ -192,6 +192,24 @@ clientBufferLimitsConfig clientBufferLimitsDefaults[CLIENT_TYPE_OBUF_COUNT] = {
 /* OOM Score defaults */
 int configOOMScoreAdjValuesDefaults[CONFIG_OOM_COUNT] = {0, 200, 800};
 
+/* Mapping of config flags to their human-readable names.
+ * Keep in sync with the flag definitions in server.h. */
+struct {
+    unsigned int flag;
+    const char *name;
+} configFlagNames[] = {
+    {IMMUTABLE_CONFIG, "immutable"},
+    {SENSITIVE_CONFIG, "sensitive"},
+    {DEBUG_CONFIG, "debug"},
+    {MULTI_ARG_CONFIG, "multi-arg"},
+    {HIDDEN_CONFIG, "hidden"},
+    {PROTECTED_CONFIG, "protected"},
+    {DENY_LOADING_CONFIG, "deny-loading"},
+    {ALIAS_CONFIG, "alias"},
+    {MODULE_CONFIG, "module"},
+    {VOLATILE_CONFIG, "volatile"},
+};
+
 /* Generic config infrastructure function pointers
  * int is_valid_fn(val, err)
  *     Return 1 when val is valid, and 0 when invalid.
@@ -3716,12 +3734,16 @@ void configHelpCommand(client *c) {
  *----------------------------------------------------------------------------*/
 
 static void addConfigInfoReply(client *c, standardConfig *config) {
-    int fields = 2; /* name and type */
+    int fields = 4; /* name, type, flags, alias */
     if (config->type == ENUM_CONFIG || config->type == NUMERIC_CONFIG) fields++;
 
     addReplyMapLen(c, fields);
+
+    /* Name */
     addReplyBulkCString(c, "name");
     addReplyBulkCString(c, config->name);
+
+    /* Type */
     addReplyBulkCString(c, "type");
     const char *type_str;
     switch (config->type) {
@@ -3735,6 +3757,22 @@ static void addConfigInfoReply(client *c, standardConfig *config) {
     }
     addReplyBulkCString(c, type_str);
 
+    /* Flags */
+    int flag_count = 0;
+    for (int i = 0; i < (int)numElements(configFlagNames); i++) {
+        if (config->flags & configFlagNames[i].flag) flag_count++;
+    }
+    addReplyBulkCString(c, "flags");
+    addReplyArrayLen(c, flag_count);
+    for (int i = 0; i < (int)numElements(configFlagNames); i++) {
+        if (config->flags & configFlagNames[i].flag) addReplyBulkCString(c, configFlagNames[i].name);
+    }
+
+    /* Alias */
+    addReplyBulkCString(c, "alias");
+    addReplyBulkCString(c, config->alias ? config->alias : "");
+
+    /* Values (enum) or Range (numeric) */
     if (config->type == ENUM_CONFIG) {
         configEnum *enumNode = config->data.enumd.enum_value;
         int count = 0;

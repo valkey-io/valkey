@@ -93,6 +93,50 @@ start_server {tags {"other"}} {
         assert_equal $count 1
     }
 
+    test {CONFIG INFO includes flags field} {
+        set result [r CONFIG INFO maxmemory]
+        set info [lindex $result 0]
+        assert {[dict exists $info flags]}
+    }
+
+    test {CONFIG INFO flags for immutable config} {
+        set result [r CONFIG INFO databases]
+        set info [lindex $result 0]
+        assert {[lsearch [dict get $info flags] "immutable"] >= 0}
+    }
+
+    test {CONFIG INFO flags for sensitive config} {
+        set result [r CONFIG INFO requirepass]
+        set info [lindex $result 0]
+        assert {[lsearch [dict get $info flags] "sensitive"] >= 0}
+    }
+
+    test {CONFIG INFO includes alias field} {
+        set result [r CONFIG INFO maxmemory]
+        set info [lindex $result 0]
+        assert {[dict exists $info alias]}
+    }
+
+    test {CONFIG INFO alias for config with alias} {
+        set result [r CONFIG INFO replicaof]
+        set info [lindex $result 0]
+        assert_equal [dict get $info alias] "slaveof"
+    }
+
+    test {CONFIG INFO looking up by alias name includes alias flag and points back to primary name} {
+        set result [r CONFIG INFO slaveof]
+        set info [lindex $result 0]
+        assert_equal [dict get $info name] "slaveof"
+        assert_equal [dict get $info alias] "replicaof"
+        assert {[lsearch [dict get $info flags] "alias"] >= 0}
+    }
+
+    test {CONFIG INFO config without alias has empty alias field} {
+        set result [r CONFIG INFO maxmemory]
+        set info [lindex $result 0]
+        assert_equal [dict get $info alias] ""
+    }
+
     test {CONFIG INFO ordering is consistent across calls} {
         # Get initial ordering
         set info1 [r CONFIG INFO a*]

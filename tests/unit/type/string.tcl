@@ -1182,4 +1182,40 @@ if {[string match {*jemalloc*} [s mem_allocator]]} {
     } {} {needs:debug}
 } ; # if jemalloc
 
+test {SET with IFEQ propagate as SET command to replica} {
+    set repl [attach_to_replication_stream]
+    r set foo "initial_value"
+    
+    # Test 1: SET with IFEQ success
+    r set foo "new_value" ifeq "initial_value"
+    
+    # Test 2: SET with IFEQ and GET success
+    r set foo "newer_value" ifeq "new_value" get
+    
+    assert_replication_stream $repl {
+        {select *}
+        {set foo initial_value}
+        {set foo new_value}
+        {set foo newer_value}
+    }
+    close_replication_stream $repl
+} {} {needs:repl}
+
+test {SET with IFEQ and EXPIRE propagate correctly} {
+    set repl [attach_to_replication_stream]
+    r set foo "initial_value"
+
+    # Test 3: SET with IFEQ and EX
+    r set foo "value_with_ex" ifeq "initial_value" ex 100
+
+    # We expect it to be rewritten with PXAT
+    assert_replication_stream $repl {
+        {select *}
+        {set foo initial_value}
+        {set foo value_with_ex PXAT *}
+    }
+
+    close_replication_stream $repl
+} {} {needs:repl}
+
 }

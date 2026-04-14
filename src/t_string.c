@@ -184,18 +184,24 @@ void setGenericCommand(client *c,
         addReply(c, ok_reply ? ok_reply : shared.ok);
     }
 
-    /* Propagate without the GET argument (Isn't needed if we had expire since in that case we completely re-written the
+    /* Propagate without the GET and IFEQ arguments (Isn't needed if we had expire since in that case we completely re-written the
      * command argv) */
-    if ((flags & ARGS_SET_GET) && !expire) {
+    if ((flags & (ARGS_SET_GET | ARGS_SET_IFEQ)) && !expire) {
         int argc = 0;
         int j;
-        robj **argv = zmalloc((c->argc - 1) * sizeof(robj *));
+        robj **argv = zmalloc(c->argc * sizeof(robj *));
         for (j = 0; j < c->argc; j++) {
             char *a = objectGetVal(c->argv[j]);
             /* Skip GET which may be repeated multiple times. */
             if (j >= 3 && (a[0] == 'g' || a[0] == 'G') && (a[1] == 'e' || a[1] == 'E') &&
                 (a[2] == 't' || a[2] == 'T') && a[3] == '\0')
                 continue;
+            /* Skip IFEQ and its argument. */
+            if (j >= 3 && (a[0] == 'i' || a[0] == 'I') && (a[1] == 'f' || a[1] == 'F') &&
+                (a[2] == 'e' || a[2] == 'E') && (a[3] == 'q' || a[3] == 'Q') && a[4] == '\0') {
+                j++;
+                continue;
+            }
             argv[argc++] = c->argv[j];
             incrRefCount(c->argv[j]);
         }

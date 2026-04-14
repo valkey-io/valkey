@@ -213,7 +213,7 @@ typedef struct flagStr {
     const char *str;
 } flagStr;
 
-flagStr lua_scripts_flags_def[] = {
+static flagStr lua_scripts_flags[] = {
     {.flag = VMSE_SCRIPT_FLAG_NO_WRITES, .str = "no-writes"},
     {.flag = VMSE_SCRIPT_FLAG_ALLOW_OOM, .str = "allow-oom"},
     {.flag = VMSE_SCRIPT_FLAG_ALLOW_STALE, .str = "allow-stale"},
@@ -244,7 +244,7 @@ static int luaRegisterFunctionReadFlags(lua_State *lua, uint64_t *flags) {
 
         const char *flag_str = lua_tostring(lua, -1);
         int found = 0;
-        for (flagStr *flag = lua_scripts_flags_def; flag->str; ++flag) {
+        for (flagStr *flag = lua_scripts_flags; flag->str; ++flag) {
             if (!strcasecmp(flag->str, flag_str)) {
                 f_flags |= flag->flag;
                 found = 1;

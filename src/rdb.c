@@ -44,6 +44,7 @@
 #include "bio.h"
 #include "zmalloc.h"
 #include "module.h"
+#include "ordered_index.h"
 #include "cluster.h"
 #include "cluster_migrateslots.h"
 
@@ -956,28 +957,31 @@ ssize_t rdbSaveObject(rio *rdb, robj *o, robj *key, int dbid, unsigned char rdbt
             nwritten += n;
         } else if (o->encoding == OBJ_ENCODING_SKIPLIST) {
             zset *zs = objectGetVal(o);
-            zskiplist *zsl = zs->zsl;
 
-            if ((n = rdbSaveLen(rdb, zslGetLength(zsl))) == -1) return -1;
+            if ((n = rdbSaveLen(rdb, orderedIndexLength(zs->zidx))) == -1) return -1;
             nwritten += n;
 
             /* We save the skiplist elements from the greatest to the smallest
-             * (that's trivial since the elements are already ordered in the
-             * skiplist): this improves the load process, since the next loaded
-             * element will always be the smaller, so adding to the skiplist
-             * will always immediately stop at the head, making the insertion
-             * O(1) instead of O(log(N)). */
-            zskiplistNode *zn = zslGetTail(zsl);
-            while (zn != NULL) {
-                sds ele = zslGetNodeElement(zn);
-                if ((n = rdbSaveRawString(rdb, (unsigned char *)ele, sdslen(ele))) == -1) {
+             * because on load prepending will be O(1) instead of O(log(N)). */
+            OrderedIndexIterator iter;
+            OrderedIndexItem *item;
+            orderedIndexInitIterator(&iter, zs->zidx);
+            while (orderedIndexPrev(&iter, &item)) {
+                const char *ele_ptr;
+                size_t ele_len;
+                orderedIndexGetElementRaw(item, &ele_ptr, &ele_len);
+                if ((n = rdbSaveRawString(rdb, (unsigned char *)ele_ptr, ele_len)) == -1) {
+                    orderedIndexResetIterator(&iter);
                     return -1;
                 }
                 nwritten += n;
-                if ((n = rdbSaveBinaryDoubleValue(rdb, zn->score)) == -1) return -1;
+                if ((n = rdbSaveBinaryDoubleValue(rdb, orderedIndexGetScore(item))) == -1) {
+                    orderedIndexResetIterator(&iter);
+                    return -1;
+                }
                 nwritten += n;
-                zn = zn->backward;
             }
+            orderedIndexResetIterator(&iter);
         } else {
             serverPanic("Unknown sorted set encoding");
         }
@@ -2083,7 +2087,6 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
         while (zsetlen--) {
             sds sdsele;
             double score;
-            zskiplistNode *znode;
 
             if ((sdsele = rdbGenericLoadStringObject(rdb, RDB_LOAD_SDS, NULL)) == NULL) {
                 decrRefCount(o);
@@ -2115,9 +2118,9 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
             if (sdslen(sdsele) > maxelelen) maxelelen = sdslen(sdsele);
             totelelen += sdslen(sdsele);
 
-            znode = zslInsert(zs->zsl, score, sdsele);
+            OrderedIndexItem *zitem = orderedIndexInsert(zs->zidx, score, sdsele);
             sdsfree(sdsele);
-            if (!hashtableAdd(zs->ht, znode)) {
+            if (!hashtableAdd(zs->ht, zitem)) {
                 rdbReportCorruptRDB("Duplicate zset fields detected");
                 decrRefCount(o);
                 /* no need to free 'sdsele', will be released by zslFree together with 'o' */

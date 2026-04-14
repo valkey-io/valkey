@@ -33,6 +33,7 @@
 #include "module.h"
 #include "hdr_histogram.h"
 #include "fpconv_dtoa.h"
+#include "ordered_index.h"
 
 #include <stdarg.h>
 #include <sys/time.h>
@@ -323,13 +324,15 @@ void computeDatasetProfile(int dbid, robj *keyobj, robj *o, long long expiretime
 
             void *next;
             while (hashtableNext(&iter, &next)) {
-                zskiplistNode *node = next;
+                OrderedIndexItem *node = next;
                 size_t eleLen = 0;
 
-                const int len = fpconv_dtoa(node->score, buf);
+                const int len = fpconv_dtoa(orderedIndexGetScore(node), buf);
                 buf[len] = '\0';
-                sds ele = zslGetNodeElement(node);
-                eleLen += sdslen(ele) + strlen(buf);
+                const char *ele_ptr;
+                size_t ele_len;
+                orderedIndexGetElementRaw(node, &ele_ptr, &ele_len);
+                eleLen += ele_len + strlen(buf);
                 statsRecordElementSize(eleLen, 1, stats);
             }
             hashtableCleanupIterator(&iter);

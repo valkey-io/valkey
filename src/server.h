@@ -1522,9 +1522,12 @@ typedef struct zskiplist {
     zskiplistNode header;
 } zskiplist;
 
+/* Forward declaration — full definition in ordered_index.h */
+typedef struct OrderedIndex OrderedIndex;
+
 typedef struct zset {
     hashtable *ht;
-    zskiplist *zsl;
+    OrderedIndex *zidx;
 } zset;
 
 typedef struct clientBufferLimitsConfig {
@@ -2806,7 +2809,7 @@ extern dictType objectKeyPointerValueDictType;
 extern hashtableType objectHashtableType;
 extern dictType objectKeyHeapPointerValueDictType;
 extern hashtableType setHashtableType;
-extern hashtableType zsetHashtableType;
+extern dictType BenchmarkDictType;
 extern hashtableType kvstoreKeysHashtableType;
 extern hashtableType kvstoreExpiresHashtableType;
 extern double R_Zero, R_PosInf, R_NegInf, R_Nan;
@@ -3382,47 +3385,32 @@ typedef struct {
 #define ERROR_COMMAND_REJECTED (1 << 0) /* Indicate to update the command rejected stats */
 #define ERROR_COMMAND_FAILED (1 << 1)   /* Indicate to update the command failed stats */
 
-zskiplist *zslCreate(void);
+/* TODO: migrate debug.c and module.c to use OrderedIndex interface, then move
+ * remaining zsl* declarations to skiplist_internal.h. */
 int zslGetHeight(const zskiplist *zsl);
-zskiplistNode *zslGetTail(const zskiplist *zsl);
-void zslSetTail(zskiplist *zsl, zskiplistNode *tail);
-unsigned long zslGetLength(const zskiplist *zsl);
-zskiplistNode *zslGetHeader(zskiplist *zsl);
-size_t zslGetAllocSize(void);
-void zslFree(zskiplist *zsl);
-zskiplistNode *zslInsert(zskiplist *zsl, double score, const_sds ele);
-void zslDelete(zskiplist *zsl, zskiplistNode *node);
-zskiplistNode *zslDetachNode(zskiplist *zsl, zskiplistNode *node);
-void zslFreeNode(zskiplistNode *node);
-zskiplistNode *zslGetFirst(const zskiplist *zsl);
-zskiplistNode *zslGetElementByRank(zskiplist *zsl, unsigned long rank);
-unsigned long zslGetRank(zskiplist *zsl, const zskiplistNode *node);
-unsigned long zslDeleteRangeByScore(zskiplist *zsl, zrangespec *range, hashtable *ht);
-unsigned long zslDeleteRangeByRank(zskiplist *zsl, unsigned long start, unsigned long end, hashtable *ht);
-unsigned long zslDeleteRangeByLex(zskiplist *zsl, zlexrangespec *range, hashtable *ht);
 zskiplistNode *zslNthInRange(zskiplist *zsl, zrangespec *range, long n, long *rank);
-zskiplistNode *zslUpdateScore(zskiplist *zsl, zskiplistNode *node, double newscore);
 sds zslGetNodeElement(const zskiplistNode *x);
 double zslGetScore(const zskiplistNode *node);
 
 /* Skiplist iterator - opaque type that can be stack allocated.
  * Size: 2 x uint64_t = 16 bytes (zsl pointer + node pointer) */
 typedef uint64_t zskiplistIterator[2];
-void zslInitIterator(zskiplistIterator *iter, zskiplist *zsl);
-void zslResetIterator(zskiplistIterator *iter);
-zskiplistIterator *zslCreateIterator(zskiplist *zsl);
-void zslReleaseIterator(zskiplistIterator *iter);
-bool zslNext(zskiplistIterator *iter, zskiplistNode **nodeptr);
-bool zslPrev(zskiplistIterator *iter, zskiplistNode **nodeptr);
-void zslSeekToRank(zskiplistIterator *iter, unsigned long rank);
-void zslSeekToScoreRange(zskiplistIterator *iterator, double min, double max, int min_ex, int max_ex, long offset);
-void zslSeekToLexRange(zskiplistIterator *iterator, const_sds min, const_sds max, int min_ex, int max_ex, long offset);
+
 double zzlGetScore(unsigned char *sptr);
 void zzlNext(unsigned char *zl, unsigned char **eptr, unsigned char **sptr);
 void zzlPrev(unsigned char *zl, unsigned char **eptr, unsigned char **sptr);
 unsigned char *zzlFirstInRange(unsigned char *zl, zrangespec *range);
 unsigned char *zzlLastInRange(unsigned char *zl, zrangespec *range);
+/* Score range comparison helpers */
+static inline bool zsetScoreGteMin(double score, double min, int min_ex) {
+    return min_ex ? (score > min) : (score >= min);
+}
+static inline bool zsetScoreLteMax(double score, double max, int max_ex) {
+    return max_ex ? (score < max) : (score <= max);
+}
+
 unsigned long zsetLength(const robj *zobj);
+zset *zsetCreate(void);
 void zsetConvert(robj *zobj, int encoding);
 void zsetConvertToListpackIfNeeded(robj *zobj, size_t maxelelen, size_t totelelen);
 int zsetScore(robj *zobj, sds member, double *score);

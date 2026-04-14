@@ -69,6 +69,7 @@
 #include "io_threads.h"
 #include "scripting_engine.h"
 #include "cluster_migrateslots.h"
+#include "ordered_index.h"
 #include <dlfcn.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
@@ -5128,7 +5129,7 @@ int zsetInitScoreRange(ValkeyModuleKey *key, double min, double max, int minex, 
         key->u.zset.current = first ? zzlFirstInRange(objectGetVal(key->value), zrs) : zzlLastInRange(objectGetVal(key->value), zrs);
     } else if (key->value->encoding == OBJ_ENCODING_SKIPLIST) {
         zset *zs = objectGetVal(key->value);
-        zskiplist *zsl = zs->zsl;
+        zskiplist *zsl = (zskiplist *)zs->zidx;
         key->u.zset.current = first ? zslNthInRange(zsl, zrs, 0, NULL) : zslNthInRange(zsl, zrs, -1, NULL);
     } else {
         serverPanic("Unsupported zset encoding");
@@ -5191,7 +5192,7 @@ int zsetInitLexRange(ValkeyModuleKey *key, ValkeyModuleString *min, ValkeyModule
             first ? zzlFirstInLexRange(objectGetVal(key->value), zlrs) : zzlLastInLexRange(objectGetVal(key->value), zlrs);
     } else if (key->value->encoding == OBJ_ENCODING_SKIPLIST) {
         zset *zs = objectGetVal(key->value);
-        zskiplist *zsl = zs->zsl;
+        zskiplist *zsl = (zskiplist *)zs->zidx;
         key->u.zset.current = first ? zslNthInLexRange(zsl, zlrs, 0) : zslNthInLexRange(zsl, zlrs, -1);
     } else {
         serverPanic("Unsupported zset encoding");
@@ -12004,9 +12005,12 @@ static void moduleScanKeyHashtableCallback(void *privdata, void *entry) {
         key = entry;
         /* no value */
     } else if (o->type == OBJ_ZSET) {
-        zskiplistNode *node = (zskiplistNode *)entry;
-        key = zslGetNodeElement(node);
-        value = createStringObjectFromLongDouble(node->score, 0);
+        OrderedIndexItem *node = (OrderedIndexItem *)entry;
+        const char *ele_ptr;
+        size_t ele_len;
+        orderedIndexGetElementRaw(node, &ele_ptr, &ele_len);
+        key = (sds)ele_ptr;
+        value = createStringObjectFromLongDouble(orderedIndexGetScore(node), 0);
     } else if (o->type == OBJ_HASH) {
         key = entryGetField(entry);
         size_t val_len;

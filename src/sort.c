@@ -33,10 +33,9 @@
 #include "pqsort.h" /* Partial qsort for SORT+LIMIT */
 #include <math.h>   /* isnan() */
 #include "cluster.h"
+#include "ordered_index.h"
 
 #include "valkey_strtod.h"
-
-zskiplistNode *zslGetElementByRank(zskiplist *zsl, unsigned long rank);
 
 serverSortOperation *createSortOperation(int type, robj *pattern) {
     serverSortOperation *so = zmalloc(sizeof(*so));
@@ -417,32 +416,40 @@ void sortCommandGeneric(client *c, int readonly) {
          * way, just getting the required range, as an optimization. */
 
         zset *zs = objectGetVal(sortval);
-        zskiplist *zsl = zs->zsl;
-        zskiplistNode *ln;
-        sds sdsele;
+        OrderedIndex *idx = zs->zidx;
+        OrderedIndexItem *ln;
         int rangelen = vectorlen;
+
+        OrderedIndexIterator oiiter;
+        orderedIndexInitIterator(&oiiter, idx);
 
         /* Check if starting point is trivial, before doing log(N) lookup. */
         if (desc) {
             long zsetlen = hashtableSize(((zset *)objectGetVal(sortval))->ht);
-
-            ln = zslGetTail(zsl);
-            if (start > 0) ln = zslGetElementByRank(zsl, zsetlen - start);
+            unsigned long startrank = (start > 0) ? (unsigned long)(zsetlen - start) : orderedIndexLength(idx);
+            /* Seek so that prev() returns the element at startrank */
+            orderedIndexSeekToRank(&oiiter, startrank);
         } else {
-            zskiplistNode *zheader = zslGetHeader(zsl);
-            ln = zheader->level[0].forward;
-            if (start > 0) ln = zslGetElementByRank(zsl, start + 1);
+            unsigned long startrank = (start > 0) ? (unsigned long)(start + 1) : 1;
+            /* Seek so that next() returns the element at startrank */
+            orderedIndexSeekToRank(&oiiter, startrank - 1);
         }
 
         while (rangelen--) {
+            if (desc)
+                orderedIndexPrev(&oiiter, &ln);
+            else
+                orderedIndexNext(&oiiter, &ln);
             serverAssertWithInfo(c, sortval, ln != NULL);
-            sdsele = zslGetNodeElement(ln);
-            vector[j].obj = createStringObject(sdsele, sdslen(sdsele));
+            const char *ptr;
+            size_t len;
+            orderedIndexGetElementRaw(ln, &ptr, &len);
+            vector[j].obj = createStringObject(ptr, len);
             vector[j].u.score = 0;
             vector[j].u.cmpobj = NULL;
             j++;
-            ln = desc ? ln->backward : ln->level[0].forward;
         }
+        orderedIndexResetIterator(&oiiter);
         /* Fix start/end: output code is not aware of this optimization. */
         end -= start;
         start = 0;
@@ -452,9 +459,11 @@ void sortCommandGeneric(client *c, int readonly) {
         hashtableInitIterator(&iter, ht, 0);
         void *next;
         while (hashtableNext(&iter, &next)) {
-            zskiplistNode *node = next;
-            sds sdsele = zslGetNodeElement(node);
-            vector[j].obj = createStringObject(sdsele, sdslen(sdsele));
+            OrderedIndexItem *node = (OrderedIndexItem *)next;
+            const char *ptr;
+            size_t len;
+            orderedIndexGetElementRaw(node, &ptr, &len);
+            vector[j].obj = createStringObject(ptr, len);
             vector[j].u.score = 0;
             vector[j].u.cmpobj = NULL;
             j++;

@@ -30,6 +30,7 @@
 #include "server.h"
 #include "cluster.h"
 #include "cluster_migrateslots.h"
+#include "ordered_index.h"
 #include "latency.h"
 #include "script.h"
 #include "functions.h"
@@ -1049,7 +1050,8 @@ void keysScanCallback(void *privdata, void *entry, int didx) {
 void hashtableScanCallback(void *privdata, void *entry) {
     scanData *data = (scanData *)privdata;
     stringRef val = {NULL, 0};
-    sds key = NULL;
+    const char *key = NULL;
+    size_t key_len = 0;
 
     robj *o = data->o;
     data->sampled++;
@@ -1060,13 +1062,15 @@ void hashtableScanCallback(void *privdata, void *entry) {
 
     /* get key, value */
     if (o->type == OBJ_SET) {
-        key = (sds)entry;
+        key = (const char *)entry;
+        key_len = sdslen((sds)entry);
     } else if (o->type == OBJ_ZSET) {
-        zskiplistNode *node = (zskiplistNode *)entry;
-        key = zslGetNodeElement(node);
+        OrderedIndexItem *node = (OrderedIndexItem *)entry;
+        orderedIndexGetElementRaw(node, &key, &key_len);
         /* zset data is copied after filtering by key */
     } else if (o->type == OBJ_HASH) {
         key = entryGetField(entry);
+        key_len = sdslen((sds)key);
         if (!data->only_keys) {
             val.buf = entryGetValue(entry, &val.len);
         }
@@ -1076,7 +1080,7 @@ void hashtableScanCallback(void *privdata, void *entry) {
 
     /* Filter element if it does not match the pattern. */
     if (data->pattern) {
-        if (!stringmatchlen(data->pattern, sdslen(data->pattern), key, sdslen(key), 0)) {
+        if (!stringmatchlen(data->pattern, sdslen(data->pattern), key, key_len, 0)) {
             return;
         }
     }
@@ -1084,19 +1088,18 @@ void hashtableScanCallback(void *privdata, void *entry) {
     /* zset data must be copied. Do this after filtering to avoid unneeded
      * allocations. */
     if (o->type == OBJ_ZSET) {
-        /* zset data is copied */
-        zskiplistNode *node = (zskiplistNode *)entry;
-        key = sdsdup(zslGetNodeElement(node));
+        OrderedIndexItem *node = (OrderedIndexItem *)entry;
+        key = sdsnewlen(key, key_len);
         if (!data->only_keys) {
             char buf[MAX_LONG_DOUBLE_CHARS];
-            int len = ld2string(buf, sizeof(buf), node->score, LD_STR_AUTO);
+            int len = ld2string(buf, sizeof(buf), orderedIndexGetScore(node), LD_STR_AUTO);
             sds tmp = sdsnewlen(buf, len);
             val.buf = (const char *)tmp;
             val.len = sdslen(tmp);
         }
     }
 
-    addScanDataItem(data->result, (const char *)key, sdslen(key));
+    addScanDataItem(data->result, key, key_len);
     if (val.buf) {
         addScanDataItem(data->result, val.buf, val.len);
     }

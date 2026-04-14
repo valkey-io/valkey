@@ -40,6 +40,7 @@
 
 #include "server.h"
 #include "hashtable.h"
+#include "ordered_index.h"
 #include "eval.h"
 #include "script.h"
 #include "module.h"
@@ -236,63 +237,6 @@ robj *activeDefragStringOb(robj *ob) {
     return new_robj;
 }
 
-/* Internal function used by zslDefrag */
-static void zslUpdateNode(zskiplist *zsl, zskiplistNode *oldnode, zskiplistNode *newnode, zskiplistNode **update) {
-    int i;
-    for (i = 0; i < zslGetHeight(zsl); i++) {
-        if (update[i]->level[i].forward == oldnode) update[i]->level[i].forward = newnode;
-    }
-    serverAssert(zslGetHeader(zsl) != oldnode);
-    if (newnode->level[0].forward) {
-        serverAssert(newnode->level[0].forward->backward == oldnode);
-        newnode->level[0].forward->backward = newnode;
-    } else {
-        serverAssert(zslGetTail(zsl) == oldnode);
-        zslSetTail(zsl, newnode);
-    }
-}
-
-/* Hashtable scan callback for sorted set. It defragments a single skiplist
- * node, updates skiplist pointers, and updates the hashtable pointer to the
- * node. */
-static void activeDefragZsetNode(void *privdata, void *entry_ref) {
-    zskiplist *zsl = privdata;
-    zskiplistNode **node_ref = (zskiplistNode **)entry_ref;
-    zskiplistNode *node = *node_ref;
-
-    size_t allocation_size;
-    zskiplistNode *newnode = activeDefragAllocWithoutFree(node, &allocation_size);
-    if (newnode == NULL) return;
-
-    const double score = node->score;
-
-    /* find skiplist pointers that need to be updated if we end up moving the
-     * skiplist node. */
-    sds ele = zslGetNodeElement(node);
-    zskiplistNode *update[ZSKIPLIST_MAXLEVEL];
-    zskiplistNode *x = zslGetHeader(zsl);
-    for (int i = zslGetHeight(zsl) - 1; i >= 0; i--) {
-        /* stop when we've reached the end of this level or the next node comes
-         * after our target in sorted order. Even though defrag replacements does not impact the skip list order,
-         * when scores are equal, we MUST compare elements lexicographically to maintain correct skip list ordering.
-         * Otherwise we might miss locating the entry. */
-        zskiplistNode *next = x->level[i].forward;
-        while (next &&
-               (next->score < score ||
-                (next->score == score && sdscmp(zslGetNodeElement(next), ele) < 0))) {
-            x = next;
-            next = x->level[i].forward;
-        }
-        update[i] = x;
-    }
-    /* should have arrived at intended node */
-    serverAssert(x->level[0].forward == node);
-
-    zslUpdateNode(zsl, node, newnode, update);
-    *node_ref = newnode; /* update hashtable pointer */
-    allocatorDefragFree(node, allocation_size);
-}
-
 #define DEFRAG_SDS_DICT_NO_VAL 0
 #define DEFRAG_SDS_DICT_VAL_IS_SDS 1
 #define DEFRAG_SDS_DICT_VAL_IS_STROB 2
@@ -433,15 +377,16 @@ static long scanLaterList(robj *ob, unsigned long *cursor, monotime endtime) {
     return 0;
 }
 
-static void scanLaterZsetCallback(void *privdata, void *element_ref) {
-    activeDefragZsetNode(privdata, element_ref);
+static void defragZsetItemMoved(OrderedIndexItem *old_item, OrderedIndexItem *new_item, void *ctx) {
+    hashtable *ht = ctx;
+    hashtableReplaceReallocatedEntry(ht, old_item, new_item);
     server.stat_active_defrag_scanned++;
 }
 
 static void scanLaterZset(robj *ob, unsigned long *cursor) {
     serverAssert(ob->type == OBJ_ZSET && ob->encoding == OBJ_ENCODING_SKIPLIST);
     zset *zs = (zset *)objectGetVal(ob);
-    *cursor = hashtableScanDefrag(zs->ht, *cursor, scanLaterZsetCallback, zs->zsl, activeDefragAlloc, HASHTABLE_SCAN_EMIT_REF);
+    *cursor = orderedIndexScanDefrag(zs->zidx, *cursor, defragZsetItemMoved, zs->ht, activeDefragAlloc);
 }
 
 /* Used as hashtable scan callback when all we need is to defrag the hashtable
@@ -481,12 +426,13 @@ static void defragZsetSkiplist(robj *ob) {
     zset *zs = (zset *)objectGetVal(ob);
 
     zset *newzs;
-    zskiplist *newzsl;
     if ((newzs = activeDefragAlloc(zs))) {
         objectSetVal(ob, newzs);
         zs = newzs;
     }
-    if ((newzsl = activeDefragAlloc(zs->zsl))) zs->zsl = newzsl;
+
+    OrderedIndex *newidx = orderedIndexDefragInternals(zs->zidx, activeDefragAlloc);
+    if (newidx) zs->zidx = newidx;
 
     hashtable *newtable;
     if ((newtable = hashtableDefragTables(zs->ht, activeDefragAlloc))) zs->ht = newtable;
@@ -496,7 +442,7 @@ static void defragZsetSkiplist(robj *ob) {
     else {
         unsigned long cursor = 0;
         do {
-            cursor = hashtableScanDefrag(zs->ht, cursor, activeDefragZsetNode, zs->zsl, activeDefragAlloc, HASHTABLE_SCAN_EMIT_REF);
+            cursor = orderedIndexScanDefrag(zs->zidx, cursor, defragZsetItemMoved, zs->ht, activeDefragAlloc);
         } while (cursor != 0);
     }
 }

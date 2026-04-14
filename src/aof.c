@@ -32,6 +32,7 @@
 #include "rio.h"
 #include "functions.h"
 #include "module.h"
+#include "ordered_index.h"
 
 #include <signal.h>
 #include <fcntl.h>
@@ -2026,7 +2027,7 @@ int rewriteSortedSetObject(rio *r, robj *key, robj *o) {
         hashtableInitIterator(&iter, zs->ht, 0);
         void *next;
         while (hashtableNext(&iter, &next)) {
-            zskiplistNode *node = next;
+            OrderedIndexItem *item = next;
             if (count == 0) {
                 int cmd_items = (items > AOF_REWRITE_ITEMS_PER_CMD) ? AOF_REWRITE_ITEMS_PER_CMD : items;
 
@@ -2036,8 +2037,10 @@ int rewriteSortedSetObject(rio *r, robj *key, robj *o) {
                     return 0;
                 }
             }
-            sds ele = zslGetNodeElement(node);
-            if (!rioWriteBulkDouble(r, node->score) || !rioWriteBulkString(r, ele, sdslen(ele))) {
+            const char *ele_ptr;
+            size_t ele_len;
+            orderedIndexGetElementRaw(item, &ele_ptr, &ele_len);
+            if (!rioWriteBulkDouble(r, orderedIndexGetScore(item)) || !rioWriteBulkString(r, ele_ptr, ele_len)) {
                 hashtableCleanupIterator(&iter);
                 return 0;
             }

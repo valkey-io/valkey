@@ -32,11 +32,11 @@
 #include "geohash_helper.h"
 #include "debugmacro.h"
 #include "pqsort.h"
+#include "ordered_index.h"
 
 /* Things exported from t_zset.c only for geo.c, since it is the only other
  * part of the server that requires close zset introspection. */
 unsigned char *zzlFirstInRange(unsigned char *zl, zrangespec *range);
-int zslValueLteMax(double value, zrangespec *spec);
 
 /* ====================================================================
  * This file implements the following commands:
@@ -294,7 +294,7 @@ int geoGetPointsInRange(robj *zobj, double min, double max, GeoShape *shape, geo
             score = zzlGetScore(sptr);
 
             /* If we fell out of range, break. */
-            if (!zslValueLteMax(score, &range)) break;
+            if (!zsetScoreLteMax(score, range.max, range.maxex)) break;
 
             vstr = lpGetValue(eptr, &vlen, &vlong);
             if (geoWithinShape(shape, score, xy, &distance) == C_OK) {
@@ -307,27 +307,27 @@ int geoGetPointsInRange(robj *zobj, double min, double max, GeoShape *shape, geo
         }
     } else if (zobj->encoding == OBJ_ENCODING_SKIPLIST) {
         zset *zs = objectGetVal(zobj);
-        zskiplist *zsl = zs->zsl;
-        zskiplistNode *ln;
+        OrderedIndexIterator iter;
+        OrderedIndexItem *node;
 
-        if ((ln = zslNthInRange(zsl, &range, 0, NULL)) == NULL) {
-            /* Nothing exists starting at our min.  No results. */
-            return 0;
-        }
-
-        while (ln) {
+        orderedIndexInitIterator(&iter, zs->zidx);
+        orderedIndexSeekToScoreRange(&iter, range.min, range.max, range.minex, range.maxex, 0);
+        while (orderedIndexNext(&iter, &node)) {
             double xy[2];
             double distance = 0;
+            double score = orderedIndexGetScore(node);
             /* Abort when the node is no longer in range. */
-            if (!zslValueLteMax(ln->score, &range)) break;
-            if (geoWithinShape(shape, ln->score, xy, &distance) == C_OK) {
+            if (!zsetScoreLteMax(score, range.max, range.maxex)) break;
+            if (geoWithinShape(shape, score, xy, &distance) == C_OK) {
                 /* Append the new element. */
-                sds ele = zslGetNodeElement(ln);
-                geoArrayAppend(ga, xy, distance, ln->score, sdsdup(ele));
+                const char *ptr;
+                size_t len;
+                orderedIndexGetElementRaw(node, &ptr, &len);
+                geoArrayAppend(ga, xy, distance, score, sdsnewlen(ptr, len));
             }
             if (ga->used && limit && ga->used >= limit) break;
-            ln = ln->level[0].forward;
         }
+        orderedIndexResetIterator(&iter);
     }
     return ga->used - origincount;
 }
@@ -816,7 +816,7 @@ void georadiusGeneric(client *c, int srcKeyIndex, int flags) {
         }
 
         for (i = 0; i < returned_items; i++) {
-            zskiplistNode *znode;
+            OrderedIndexItem *znode;
             geoPoint *gp = ga.array + i;
             gp->dist /= shape.conversion; /* Fix according to unit. */
             double score = storedist ? gp->dist : gp->score;
@@ -824,7 +824,7 @@ void georadiusGeneric(client *c, int srcKeyIndex, int flags) {
 
             if (maxelelen < elelen) maxelelen = elelen;
             totelelen += elelen;
-            znode = zslInsert(zs->zsl, score, gp->member);
+            znode = orderedIndexInsert(zs->zidx, score, gp->member);
             serverAssert(hashtableAdd(zs->ht, znode));
             sdsfree(gp->member);
             gp->member = NULL;

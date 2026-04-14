@@ -39,6 +39,7 @@
 #include "io_threads.h"
 #include "sds.h"
 #include "module.h"
+#include "ordered_index.h"
 
 #include <arpa/inet.h>
 #include <signal.h>
@@ -216,12 +217,14 @@ void xorObjectDigest(serverDb *db, robj *keyobj, unsigned char *digest, robj *o)
 
             void *next;
             while (hashtableNext(&iter, &next)) {
-                zskiplistNode *node = next;
-                const int len = fpconv_dtoa(node->score, buf);
+                OrderedIndexItem *item = next;
+                const int len = fpconv_dtoa(orderedIndexGetScore(item), buf);
                 buf[len] = '\0';
                 memset(eledigest, 0, 20);
-                sds ele = zslGetNodeElement(node);
-                mixDigest(eledigest, ele, sdslen(ele));
+                const char *ele_ptr;
+                size_t ele_len;
+                orderedIndexGetElementRaw(item, &ele_ptr, &ele_len);
+                mixDigest(eledigest, ele_ptr, ele_len);
                 mixDigest(eledigest, buf, strlen(buf));
                 xorDigest(digest, eledigest, 20);
             }
@@ -1162,7 +1165,7 @@ void serverLogObjectDebugInfo(const robj *o) {
     } else if (o->type == OBJ_ZSET) {
         serverLog(LL_WARNING, "Sorted set size: %d", (int)zsetLength(o));
         if (o->encoding == OBJ_ENCODING_SKIPLIST)
-            serverLog(LL_WARNING, "Skiplist level: %d", (int)((const zset *)o->ptr)->zsl->level);
+            serverLog(LL_WARNING, "Skiplist level: %d", (int)zslGetHeight((const zskiplist *)((const zset *)o->ptr)->zidx));
     } else if (o->type == OBJ_STREAM) {
         serverLog(LL_WARNING, "Stream size: %d", (int)streamLength(o));
     }

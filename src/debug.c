@@ -396,6 +396,31 @@ void mallctl_string(client *c, robj **argv, int argc) {
 }
 #endif
 
+typedef struct {
+    blockedAsyncHandle *handle;
+} debugBlockAsyncCtx;
+
+/* Timer event proc for DEBUG BLOCK-ASYNC. Fires after the requested delay,
+ * sends the reply, and unblocks the client. */
+static long long debugBlockAsyncTimeProc(struct aeEventLoop *el, long long id, void *clientData) {
+    UNUSED(el);
+    UNUSED(id);
+    debugBlockAsyncCtx *ctx = clientData;
+    client *c = consumeBlockedClientAsyncHandle(ctx->handle);
+    ctx->handle = NULL;
+    if (c) {
+        addReply(c, shared.ok);
+        unblockClientAsync(c);
+    }
+    return AE_NOMORE;
+}
+
+/* Timer event finalizer for DEBUG BLOCK-ASYNC. Frees the context. */
+static void debugBlockAsyncFinalize(struct aeEventLoop *el, void *clientData) {
+    UNUSED(el);
+    zfree(clientData);
+}
+
 void debugCommand(client *c) {
     if (c->argc == 2 && !strcasecmp(objectGetVal(c->argv[1]), "help")) {
         const char *help[] = {
@@ -490,8 +515,10 @@ void debugCommand(client *c) {
             "    Default value is 1GB, allows values up to 4GB. Setting to 0 restores to default.",
             "SET-SKIP-CHECKSUM-VALIDATION <0|1>",
             "    Enables or disables checksum checks for RDB files and RESTORE's payload.",
-            "SLEEP <seconds>",
+            "SLEEP <seconds> [ASYNC]",
             "    Stop the server for <seconds>. Decimals allowed.",
+            "    With ASYNC, block the client and unblock via a timer event.",
+            "    SLEEP 0 ASYNC unblocks synchronously (inside call()).",
             "STRINGMATCH-TEST",
             "    Run a fuzz tester against the stringmatchlen() function.",
             "STRUCTSIZE",
@@ -893,6 +920,25 @@ void debugCommand(client *c) {
         tv.tv_nsec = (utime % 1000000) * 1000;
         nanosleep(&tv, NULL);
         addReply(c, shared.ok);
+    } else if (!strcasecmp(objectGetVal(c->argv[1]), "sleep") && c->argc == 4 &&
+               !strcasecmp(objectGetVal(c->argv[3]), "async")) {
+        /* Test the BLOCKED_ASYNC infrastructure: block the client and
+         * unblock it after a timer fires (or immediately if 0). */
+        double dtime = valkey_strtod_sds(objectGetVal(c->argv[2]), NULL);
+        long long ms = (long long)(dtime * 1000);
+        if (ms == 0) {
+            blockedAsyncHandle *h = blockClientAsync(c);
+            client *bc = consumeBlockedClientAsyncHandle(h);
+            if (bc) {
+                addReply(bc, shared.ok);
+                unblockClientAsync(bc);
+            }
+        } else {
+            blockedAsyncHandle *h = blockClientAsync(c);
+            debugBlockAsyncCtx *ctx = zmalloc(sizeof(*ctx));
+            ctx->handle = h;
+            aeCreateTimeEvent(server.el, ms, debugBlockAsyncTimeProc, ctx, debugBlockAsyncFinalize);
+        }
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "set-active-expire") && c->argc == 3) {
         server.active_expire_enabled = atoi(objectGetVal(c->argv[2]));
         addReply(c, shared.ok);

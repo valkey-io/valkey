@@ -105,7 +105,7 @@ void freeClientBlockingState(client *c) {
  * and will be processed when the client is unblocked. */
 void blockClient(client *c, int btype) {
     /* Replicated clients should never be blocked unless pause or module */
-    serverAssert(!(isReplicatedClient(c) && btype != BLOCKED_MODULE && btype != BLOCKED_POSTPONE));
+    serverAssert(!(isReplicatedClient(c) && btype != BLOCKED_MODULE && btype != BLOCKED_POSTPONE && btype != BLOCKED_ASYNC));
 
     initClientBlockingState(c);
 
@@ -228,6 +228,10 @@ void unblockClient(client *c, int queue_for_reprocessing) {
         c->bstate->postponed_list_node = NULL;
     } else if (c->bstate->btype == BLOCKED_SHUTDOWN) {
         /* No special cleanup. */
+    } else if (c->bstate->btype == BLOCKED_ASYNC) {
+        /* The async handle is owned by the caller. When the operation
+         * completes, the callback will look up the client by ID and
+         * find it gone. No cleanup needed here. */
     } else {
         serverPanic("Unknown btype in unblockClient().");
     }
@@ -292,6 +296,11 @@ void replyToBlockedClientTimedOut(client *c) {
         }
     } else if (c->bstate->btype == BLOCKED_MODULE) {
         moduleBlockedClientTimedOut(c, 0);
+    } else if (c->bstate->btype == BLOCKED_ASYNC) {
+        /* Timeout: the operation didn't complete in time. The handle is
+         * still out there but lookupClientByID will return NULL after
+         * the client is freed. */
+        addReplyError(c, "Operation timed out");
     } else {
         serverPanic("Unknown btype in replyToBlockedClientTimedOut().");
     }
@@ -693,6 +702,55 @@ void blockClientShutdown(client *c) {
     blockClient(c, BLOCKED_SHUTDOWN);
 }
 
+/* --------------------------------------------------------------------------
+ * BLOCKED_ASYNC: async operation handle
+ *
+ * An async handle wraps a client ID so that a completion callback can
+ * safely look up the client even if it disconnected while waiting.
+ * -------------------------------------------------------------------------- */
+
+typedef struct blockedAsyncHandle {
+    uint64_t client_id;
+} blockedAsyncHandle;
+
+blockedAsyncHandle *blockClientAsync(client *c) {
+    blockedAsyncHandle *h = zmalloc(sizeof(*h));
+    h->client_id = c->id;
+    blockClient(c, BLOCKED_ASYNC);
+    return h;
+}
+
+client *consumeBlockedClientAsyncHandle(blockedAsyncHandle *handle) {
+    client *c = lookupClientByID(handle->client_id);
+    zfree(handle);
+    return c;
+}
+
+/* Complete a BLOCKED_ASYNC operation. The caller must have already added
+ * the reply (addReply / addReplyError) before calling this.
+ *
+ * Synchronous path (inside call()): clears blocked state immediately so
+ * call() does normal post-processing.
+ *
+ * Async path (timer, read handler, etc.): defers the actual unblock to
+ * blockedBeforeSleep, matching the pattern used by all other block types. */
+void unblockClientAsync(client *c) {
+    serverAssert(c->flag.blocked && c->bstate->btype == BLOCKED_ASYNC);
+
+    if (c->flag.executing_command && server.current_client == c) {
+        /* Synchronous completion — still inside call(). Just clear the
+         * blocked state so call() does normal post-processing. */
+        c->flag.blocked = 0;
+        c->bstate->btype = BLOCKED_NONE;
+        removeClientFromTimeoutTable(c);
+        server.blocked_clients--;
+        server.blocked_clients_by_type[BLOCKED_ASYNC]--;
+    } else {
+        /* Async completion — defer to blockedBeforeSleep. */
+        listAddNodeTail(server.clients_pending_async_unblock, c);
+    }
+}
+
 /* Unblock a client once a specific key became available for it.
  * This function will remove the client from the list of clients blocked on this key
  * and also remove the key from the dictionary of keys this client is blocked on.
@@ -806,6 +864,20 @@ void blockedBeforeSleep(void) {
     /* Check if there are clients unblocked by modules that implement
      * blocking commands. */
     if (moduleCount()) moduleHandleBlockedClients();
+
+    /* Unblock clients pending async completion (e.g. Raft commits). */
+    while (listLength(server.clients_pending_async_unblock)) {
+        listNode *ln = listFirst(server.clients_pending_async_unblock);
+        client *c = ln->value;
+        listDelNode(server.clients_pending_async_unblock, ln);
+        commitDeferredReplyBuffer(c, 0);
+        updateStatsOnUnblock(c, 0, 0, 0);
+        unblockClient(c, 1);
+        if (clientHasPendingReplies(c) && !c->flag.pending_write && c->conn) {
+            c->flag.pending_write = 1;
+            listLinkNodeHead(server.clients_pending_write, &c->clients_pending_write_node);
+        }
+    }
 
     /* Try to process pending commands for clients that were just unblocked. */
     if (listLength(server.unblocked_clients)) processUnblockedClients();

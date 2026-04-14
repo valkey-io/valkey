@@ -3138,15 +3138,15 @@ ValkeyModuleString *VM_ReplaceString(ValkeyModuleString *str, const char *new_st
 
     if (new_len > len + sdsavail(ptr)) {
         if (str->encoding == OBJ_ENCODING_EMBSTR) {
-            objectUnembedVal(str);
-            ptr = objectGetVal(str);
-            len = sdslen(ptr);
+            /* Can't grow an embedded sds independently. Free and create a new
+             * string which will use the optimal encoding for new_len. */
+            ValkeyModuleString *new_obj = VM_CreateString(NULL, new_str, new_len);
+            VM_FreeString(NULL, str);
+            return new_obj;
         }
-        if (new_len > len + sdsavail(ptr)) {
-            ptr = sdsMakeRoomForNonGreedy(ptr, new_len - len);
-            serverAssert(ptr != NULL);
-            objectSetVal(str, ptr);
-        }
+        ptr = sdsMakeRoomForNonGreedy(ptr, new_len - len);
+        serverAssert(ptr != NULL);
+        objectSetVal(str, ptr);
     }
 
     memcpy(ptr, new_str, new_len);

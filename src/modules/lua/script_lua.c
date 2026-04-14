@@ -2226,7 +2226,7 @@ unsigned long luaMemory(lua_State *lua) {
 }
 
 void clearCallArgvCache(void) {
-    for (int i=0; i < LUA_CMD_OBJCACHE_SIZE; i++) {
+    for (int i = 0; i < LUA_CMD_OBJCACHE_SIZE; i++) {
         if (argv_cache.cache[i]) {
             ValkeyModule_FreeString(NULL, argv_cache.cache[i]);
             argv_cache.cache[i] = NULL;

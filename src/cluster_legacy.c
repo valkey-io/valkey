@@ -3648,10 +3648,10 @@ static void clusterBusAddNetworkBytesByType(uint16_t type, uint64_t bytes, bool 
          : (server.cluster->stats_bus_bytes_received += bytes);
 
     if (type == CLUSTERMSG_TYPE_PUBLISH || type == CLUSTERMSG_TYPE_PUBLISHSHARD) {
-        sent ? (server.cluster->stats_bus_pubsub_bytes_sent += bytes);
+        sent ? (server.cluster->stats_bus_pubsub_bytes_sent += bytes)
              : (server.cluster->stats_bus_pubsub_bytes_received += bytes);
     } else if (type == CLUSTERMSG_TYPE_MODULE) {
-        sent ? (server.cluster->stats_bus_module_bytes_sent += bytes);
+        sent ? (server.cluster->stats_bus_module_bytes_sent += bytes)
              : (server.cluster->stats_bus_module_bytes_received += bytes);
     }
 }

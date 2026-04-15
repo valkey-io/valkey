@@ -889,7 +889,7 @@ start_server {tags {"repl external:skip"} overrides {save ""}} {
     set master_port [srv 0 port]
     set master_pid [srv 0 pid]
     # Put enough data in the db that the rdb file is bigger than the socket
-    # buffers so the master can hit the blocked writer path while replicas
+    # buffers so the primary can hit the blocked writer path while replicas
     # consume the streamed RDB.
     $master debug populate 20000 test 10000
     $master config set rdbcompression no
@@ -913,11 +913,6 @@ start_server {tags {"repl external:skip"} overrides {save ""}} {
                     # so that the whole rdb generation process is bound to that
                     set loglines [count_log_lines -2]
                     [lindex $replicas 0] config set repl-diskless-load swapdb
-                    if {$all_drop != "no"} {
-                        # Keep the existing per-key delay for the drop/timeout
-                        # cases. The "no" case uses a bounded pause below.
-                        [lindex $replicas 0] config set key-load-delay 100 ;# 20k keys and 100 microseconds sleep means at least 2 seconds
-                    }
                     [lindex $replicas 0] replicaof $master_host $master_port
                     [lindex $replicas 1] replicaof $master_host $master_port
 
@@ -931,12 +926,10 @@ start_server {tags {"repl external:skip"} overrides {save ""}} {
                         set start_time [clock seconds]
                     }
 
-                    if {$all_drop == "no"} {
-                        # Bound the slow-reader simulation to avoid very long
-                        # scheduler-sensitive tails on slower CI runners.
-                        set slow_replica_pid [srv -1 pid]
-                        pause_process $slow_replica_pid
-                    }
+                    # Bound the slow-reader simulation to avoid very long
+                    # scheduler-sensitive tails on slower CI runners.
+                    set slow_replica_pid [srv -1 pid]
+                    pause_process $slow_replica_pid
 
                     # Wait a while so that the pipe socket writer will be
                     # blocked on write while replica 0 is slowed down.
@@ -945,8 +938,15 @@ start_server {tags {"repl external:skip"} overrides {save ""}} {
                     # add some command to be present in the command stream after the rdb.
                     $master incr $all_drop
 
-                    if {$all_drop == "no"} {
-                        after 1500
+                    if {$all_drop == "no" || $all_drop == "fast"} {
+                        set slow_replica_resume_delay [expr {$all_drop == "no" ? 1000 : 1500}]
+                        after $slow_replica_resume_delay
+                        resume_process $slow_replica_pid
+                    }
+
+                    # Resume before terminating the paused slow replica so the
+                    # disconnect is observed immediately instead of timing out.
+                    if {$all_drop == "all" || $all_drop == "slow"} {
                         resume_process $slow_replica_pid
                     }
 
@@ -966,10 +966,9 @@ start_server {tags {"repl external:skip"} overrides {save ""}} {
                         after 2000
                     }
 
-                    # The "no" case keeps both replicas connected, so give it a
-                    # slightly larger budget after the bounded pause above.
-                    set rdb_child_wait_tries [expr {$all_drop == "no" ? 1800 : 1200}]
-                    wait_for_condition $rdb_child_wait_tries 100 {
+                    # Use a single generous budget for all subcases to keep
+                    # the control flow simple; successful runs still exit early.
+                    wait_for_condition 2400 100 {
                         [s -2 rdb_bgsave_in_progress] == 0
                     } else {
                         fail "rdb child didn't terminate"

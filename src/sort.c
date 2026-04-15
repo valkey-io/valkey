@@ -484,7 +484,7 @@ void sortCommandGeneric(client *c, int readonly) {
                 if (sdsEncodedObject(byval)) {
                     char *eptr;
                     errno = 0;
-                    vector[j].u.score = valkey_strtod(objectGetVal(byval), &eptr);
+                    vector[j].u.score = valkey_strtod_sds(objectGetVal(byval), &eptr);
                     if (eptr[0] != '\0' || errno == ERANGE || errno == EINVAL || isnan(vector[j].u.score)) {
                         int_conversion_error = 1;
                     }

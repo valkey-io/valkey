@@ -880,7 +880,7 @@ void debugCommand(client *c) {
                              "string|integer|double|bignum|null|array|set|map|attrib|push|verbatim|true|false");
         }
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "sleep") && c->argc == 3) {
-        double dtime = valkey_strtod(objectGetVal(c->argv[2]), NULL);
+        double dtime = valkey_strtod_sds(objectGetVal(c->argv[2]), NULL);
         long long utime = dtime * 1000000;
         struct timespec tv;
 
@@ -1117,7 +1117,7 @@ void _serverAssertPrintClientInfo(const client *c) {
 
     bugReportStart();
     serverLog(LL_WARNING, "=== ASSERTION FAILED CLIENT CONTEXT ===");
-    serverLog(LL_WARNING, "client->flags = %llu", (unsigned long long)c->raw_flag);
+    serverLog(LL_WARNING, "client->flags = %llu(0-63) %llu(64-127)", (unsigned long long)c->raw_flag1, (unsigned long long)c->raw_flag2);
     serverLog(LL_WARNING, "client->conn = %s", connGetInfo(c->conn, conninfo, sizeof(conninfo)));
     serverLog(LL_WARNING, "client->argc = %d", c->argc);
     for (j = 0; j < c->argc; j++) {

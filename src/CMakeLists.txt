@@ -10,6 +10,7 @@ message(STATUS "CFLAGS: ${CMAKE_C_FLAGS}")
 get_valkey_server_linker_option(VALKEY_SERVER_LDFLAGS)
 list(APPEND SERVER_LIBS "fpconv")
 list(APPEND SERVER_LIBS "hdr_histogram")
+list(APPEND SERVER_LIBS "ffc")
 valkey_build_and_install_bin(valkey-server "${VALKEY_SERVER_SRCS}" "${VALKEY_SERVER_LDFLAGS}" "${SERVER_LIBS}"
                              "redis-server")
 add_dependencies(valkey-server generate_commands_def)
@@ -60,6 +61,7 @@ unset(BUILD_SANITIZER CACHE)
 # Target: valkey-cli
 list(APPEND CLI_LIBS "fpconv")
 list(APPEND CLI_LIBS "linenoise")
+list(APPEND CLI_LIBS "ffc")
 valkey_build_and_install_bin(valkey-cli "${VALKEY_CLI_SRCS}" "${VALKEY_SERVER_LDFLAGS}" "${CLI_LIBS}" "redis-cli")
 add_dependencies(valkey-cli generate_commands_def)
 add_dependencies(valkey-cli generate_fmtargs_h)
@@ -67,6 +69,7 @@ add_dependencies(valkey-cli generate_fmtargs_h)
 # Target: valkey-benchmark
 list(APPEND BENCH_LIBS "fpconv")
 list(APPEND BENCH_LIBS "hdr_histogram")
+list(APPEND BENCH_LIBS "ffc")
 valkey_build_and_install_bin(valkey-benchmark "${VALKEY_BENCHMARK_SRCS}" "${VALKEY_SERVER_LDFLAGS}" "${BENCH_LIBS}"
                              "redis-benchmark")
 add_dependencies(valkey-benchmark generate_commands_def)

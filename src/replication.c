@@ -712,7 +712,9 @@ void replicationFeedMonitors(client *c, list *monitors, int dictid, robj **argv,
     }
 
     for (j = 0; j < argc; j++) {
-        if (argv[j]->encoding == OBJ_ENCODING_INT) {
+        if (clientCommandArgShouldBeRedacted(c, j)) {
+            cmdrepr = sdscatrepr(cmdrepr, (char *)objectGetVal(shared.redacted), sdslen(objectGetVal(shared.redacted)));
+        } else if (argv[j]->encoding == OBJ_ENCODING_INT) {
             cmdrepr = sdscatprintf(cmdrepr, "\"%ld\"", (long)objectGetVal(argv[j]));
         } else {
             cmdrepr = sdscatrepr(cmdrepr, (char *)objectGetVal(argv[j]), sdslen(objectGetVal(argv[j])));
@@ -2340,7 +2342,7 @@ void replicaBeforeLoadPrimaryRDB(connection *conn, int use_diskless_load) {
     connSetReadHandler(conn, NULL);
 }
 
-void replicaAfterLoadPrimaryRDB(connection *conn, rdbSaveInfo *rsi) {
+void replicaAfterLoadPrimaryRDB(connection *conn, rdbSaveInfo *rsi, int disk_based_sync) {
     /* Final setup of the connected replica <- primary link */
     if (conn == server.repl_rdb_transfer_s) {
         dualChannelSyncHandleRdbLoadCompletion();
@@ -2375,10 +2377,21 @@ void replicaAfterLoadPrimaryRDB(connection *conn, rdbSaveInfo *rsi) {
                                  "in read-write mode.\n");
     }
 
-    /* Restart the AOF subsystem now that we finished the sync. This
-     * will trigger an AOF rewrite, and when done will start appending
-     * to the new file. */
-    if (server.aof_enabled) restartAOFAfterSYNC();
+    /* Restart the AOF subsystem now that we finished the sync.
+     *
+     * When disk-based sync was used and aof-use-rdb-preamble is enabled,
+     * reuse the RDB file received from the primary as the AOF base file
+     * directly, avoiding a redundant bgrewriteaof. Otherwise (diskless
+     * sync or rdb-preamble disabled), fall back to bgrewriteaof. */
+    if (server.aof_enabled) {
+        if (disk_based_sync && server.aof_use_rdb_preamble) {
+            if (restartAOFWithSyncRdb() == C_ERR) {
+                restartAOFAfterSYNC();
+            }
+        } else {
+            restartAOFAfterSYNC();
+        }
+    }
 
     /* In case of dual channel replication sync we want to close the RDB connection
      * once the connection is established */
@@ -2581,8 +2594,11 @@ int replicaLoadPrimaryRDBFromDisk(rdbSaveInfo *rsi) {
         return C_ERR;
     }
 
-    /* Cleanup. */
-    if (server.rdb_del_sync_files && allPersistenceDisabled()) {
+    /* Cleanup. When aof-use-rdb-preamble is enabled and AOF is on, keep the
+     * RDB file so it can be reused as the AOF base file, avoiding a redundant
+     * bgrewriteaof that would produce an almost identical snapshot. */
+    if (!(server.aof_enabled && server.aof_use_rdb_preamble) &&
+        server.rdb_del_sync_files && allPersistenceDisabled()) {
         serverLog(LL_NOTICE, "Removing the RDB file obtained from "
                              "the primary. This replica has persistence "
                              "disabled");
@@ -2642,7 +2658,7 @@ read_from_socket:
         cancelReplicationHandshake(1);
         return;
     }
-    replicaAfterLoadPrimaryRDB(conn, &rsi);
+    replicaAfterLoadPrimaryRDB(conn, &rsi, 0);
 }
 
 int tryReadBulkPayload(connection *conn, char *buf, int usemark, ssize_t *nread_out) {
@@ -5200,7 +5216,7 @@ void handleBioThreadFinishedRDBDownload(void) {
         cancelReplicationHandshake(1);
         return;
     }
-    replicaAfterLoadPrimaryRDB(conn, &rsi);
+    replicaAfterLoadPrimaryRDB(conn, &rsi, 1);
     server.repl_transfer_size = bio_repl_transfer_size;
     server.repl_transfer_read = bio_repl_transfer_read;
 }

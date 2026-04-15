@@ -105,7 +105,6 @@ endif
 ifeq ($(strip $(GTEST_LIBS)),)
     $(error googletest not found. Install gtest or set GTEST_CFLAGS/GTEST_LIBS explicitly)
 endif
-FAST_FLOAT_LIB := ../../deps/fast_float_c_interface/fast_float_strtod.o
 
 # On Darwin (macOS), the linker does not support -Wl,--wrap,
 # so we manually define __wrap_* and __real_* for each function in wrappers.h.
@@ -167,11 +166,6 @@ ifeq ($(USE_LIBBACKTRACE),yes)
     LD_LIBS += -lbacktrace
 endif
 
-# Add fast_float support if enabled
-ifeq ($(USE_FAST_FLOAT),yes)
-	LD_LIBS += $(FAST_FLOAT_LIB)
-endif
-
 # Add TLS libraries if enabled
 ifeq ($(BUILD_TLS),yes)
 	LD_LIBS += $(TLS_LIBS)
@@ -223,8 +217,9 @@ endif
 all: valkey-unit-gtests
 
 .PHONY: test-unit
+TEST_ARGS = $(if $(accurate),--accurate) $(if $(large_memory),--large-memory) $(if $(valgrind),--valgrind) $(if $(seed),--seed $(seed))
 test-unit: valkey-unit-gtests
-	python3 ../../deps/gtest-parallel/gtest_parallel.py ./valkey-unit-gtests
+	python3 ../../deps/gtest-parallel/gtest_parallel.py ./valkey-unit-gtests --gtest_filter=$(UNIT_TEST_PATTERN)* -- $(TEST_ARGS)
 	@printf '\033[32mAll UNIT TESTS PASSED!\033[0m\n'
 
 .PHONY: valgrind

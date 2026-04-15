@@ -3651,11 +3651,29 @@ static inline int messageTypeSupportsLightHdr(uint16_t type) {
     return 0;
 }
 
+static void clusterBusAddNetworkBytesByType(uint16_t type, uint64_t bytes, bool sent) {
+    sent ? (server.cluster->stats_bus_bytes_sent += bytes)
+         : (server.cluster->stats_bus_bytes_received += bytes);
+
+    if (type == CLUSTERMSG_TYPE_PUBLISH || type == CLUSTERMSG_TYPE_PUBLISHSHARD) {
+        sent ? (server.cluster->stats_bus_pubsub_bytes_sent += bytes)
+             : (server.cluster->stats_bus_pubsub_bytes_received += bytes);
+    } else if (type == CLUSTERMSG_TYPE_MODULE) {
+        sent ? (server.cluster->stats_bus_module_bytes_sent += bytes)
+             : (server.cluster->stats_bus_module_bytes_received += bytes);
+    }
+}
+
 int clusterIsValidPacket(clusterLink *link) {
     clusterMsgHeader *hdr = (clusterMsgHeader *)link->rcvbuf;
     uint32_t totlen = ntohl(hdr->totlen);
     int is_light = IS_LIGHT_MESSAGE(ntohs(hdr->type));
     uint16_t type = ntohs(hdr->type) & ~CLUSTERMSG_MODIFIER_MASK;
+
+    if (type < CLUSTERMSG_TYPE_COUNT) {
+        server.cluster->stats_bus_messages_received[type]++;
+        clusterBusAddNetworkBytesByType(type, totlen, 0);
+    }
 
     if (is_light && !messageTypeSupportsLightHdr(type)) {
         serverLog(LL_NOTICE,
@@ -3663,8 +3681,6 @@ int clusterIsValidPacket(clusterLink *link) {
                   clusterGetMessageTypeString(type), type);
         return 0;
     }
-
-    if (type < CLUSTERMSG_TYPE_COUNT) server.cluster->stats_bus_messages_received[type]++;
 
     serverLog(LL_DEBUG, "--- Processing packet of type %s, %lu bytes", clusterGetMessageTypeString(type),
               (unsigned long)totlen);
@@ -4485,6 +4501,7 @@ void clusterWriteHandler(connection *conn) {
             handleLinkIOError(link);
             return;
         }
+        clusterBusAddNetworkBytesByType(ntohs(msg->type) & ~CLUSTERMSG_MODIFIER_MASK, nwritten, 1);
         if (msg_offset + nwritten < msg_len) {
             /* If full message wasn't written, record the offset
              * and continue sending from this point next time */
@@ -7379,6 +7396,19 @@ sds genClusterInfoString(sds info) {
                          (long long)server.cluster->stats_bus_messages_received[i]);
     }
     info = sdscatfmt(info, "cluster_stats_messages_received:%I\r\n", tot_msg_received);
+    info = sdscatfmt(info,
+                     "cluster_stats_bytes_sent:%U\r\n"
+                     "cluster_stats_bytes_received:%U\r\n"
+                     "cluster_stats_pubsub_bytes_sent:%U\r\n"
+                     "cluster_stats_pubsub_bytes_received:%U\r\n"
+                     "cluster_stats_module_bytes_sent:%U\r\n"
+                     "cluster_stats_module_bytes_received:%U\r\n",
+                     (unsigned long long)server.cluster->stats_bus_bytes_sent,
+                     (unsigned long long)server.cluster->stats_bus_bytes_received,
+                     (unsigned long long)server.cluster->stats_bus_pubsub_bytes_sent,
+                     (unsigned long long)server.cluster->stats_bus_pubsub_bytes_received,
+                     (unsigned long long)server.cluster->stats_bus_module_bytes_sent,
+                     (unsigned long long)server.cluster->stats_bus_module_bytes_received);
 
     info = sdscatfmt(info, "total_cluster_links_buffer_limit_exceeded:%U\r\n",
                      (unsigned long long)server.cluster->stat_cluster_links_buffer_limit_exceeded);

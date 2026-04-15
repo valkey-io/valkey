@@ -3644,20 +3644,16 @@ static inline int messageTypeSupportsLightHdr(uint16_t type) {
 }
 
 static void clusterBusAddNetworkBytesByType(uint16_t type, uint64_t bytes, bool sent) {
-    uint64_t *counter = sent ? &server.cluster->stats_bus_bytes_sent : &server.cluster->stats_bus_bytes_received;
-
-    *counter += bytes;
+    sent ? (server.cluster->stats_bus_bytes_sent += bytes)
+         : (server.cluster->stats_bus_bytes_received += bytes);
 
     if (type == CLUSTERMSG_TYPE_PUBLISH || type == CLUSTERMSG_TYPE_PUBLISHSHARD) {
-        counter = sent ? &server.cluster->stats_bus_pubsub_bytes_sent
-                       : &server.cluster->stats_bus_pubsub_bytes_received;
+        sent ? (server.cluster->stats_bus_pubsub_bytes_sent += bytes);
+             : (server.cluster->stats_bus_pubsub_bytes_received += bytes);
     } else if (type == CLUSTERMSG_TYPE_MODULE) {
-        counter = sent ? &server.cluster->stats_bus_module_bytes_sent
-                       : &server.cluster->stats_bus_module_bytes_received;
-    } else {
-        return;
+        sent ? (server.cluster->stats_bus_module_bytes_sent += bytes);
+             : (server.cluster->stats_bus_module_bytes_received += bytes);
     }
-    *counter += bytes;
 }
 
 int clusterIsValidPacket(clusterLink *link) {

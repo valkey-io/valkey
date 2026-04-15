@@ -55,7 +55,7 @@ start_cluster 3 0 {tags {external:skip cluster}} {
 
         set sender_pubsub_bytes [CI 0 cluster_stats_pubsub_bytes_sent]
         set receiver_pubsub_bytes [expr {[CI 1 cluster_stats_pubsub_bytes_received] + [CI 2 cluster_stats_pubsub_bytes_received]}]
-        assert {$sender_pubsub_bytes > 0}
+        assert_morethan $sender_pubsub_bytes 0
         assert_equal $sender_pubsub_bytes $receiver_pubsub_bytes
     }
 }

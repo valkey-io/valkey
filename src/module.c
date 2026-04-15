@@ -11754,7 +11754,7 @@ void moduleFireCommandResultEvent(client *c,
  * For ACL rejections, subevent is the ValkeyModuleACLLogEntryReason value
  * (VALKEYMODULE_ACL_LOG_AUTH/CMD/KEY/CHANNEL/DB). For all other rejections,
  * subevent is VALKEYMODULE_SUBEVENT_COMMAND_RESULT_REJECTED_OTHER and object_hint
- * carries the Valkey error code prefix (e.g. "OOM", "LOADING", "ERR").
+ * carries the Valkey error code prefix (e.g. "OOM", "LOADING", "NOMULTI").
  * errpos is the index into c->argv of the denied key or channel for
  * VALKEYMODULE_ACL_LOG_KEY/CHANNEL; pass -1 for all other rejections.
  * Pass object_hint=NULL for ACL key/channel to extract the resource from argv[errpos]. */
@@ -12648,8 +12648,8 @@ static uint64_t moduleEventVersions[] = {
  *       - VALKEYMODULE_ACL_LOG_KEY / VALKEYMODULE_ACL_LOG_CHANNEL:
  *         the denied key or channel name from argv
  *       - VALKEYMODULE_SUBEVENT_COMMAND_RESULT_REJECTED_OTHER:
- *         the Valkey error code prefix (e.g. "OOM", "LOADING", "BUSY",
- *         "MOVED", "ASK", "REDIRECT", "NOREPLICAS", "MASTERDOWN", "ERR", ...)
+ *         the Valkey error code string (e.g. "OOM", "LOADING", "BUSY",
+ *         "MOVED", "ASK", "CLUSTERDOWN", "NOREPLICAS", "NOMULTI", ...)
  *       - All other ACL subevents: NULL
  *
  * The function returns VALKEYMODULE_OK if the module was successfully subscribed

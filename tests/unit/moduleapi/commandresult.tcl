@@ -431,7 +431,7 @@ start_server {tags {"modules"}} {
         set log [r cmdresult.getlog 1]
         set entry [lindex $log 0]
         assert_equal [dict get $entry status] "rejected"
-        # VALKEYMODULE_SUBEVENT_COMMAND_RESULT_REJECTED_ACL_CMD = 1
+        # VALKEYMODULE_ACL_LOG_CMD = 1
         assert_equal [dict get $entry subevent] 1
         assert_equal [dict get $entry rejection_context] ""
 
@@ -458,7 +458,7 @@ start_server {tags {"modules"}} {
         set log [r cmdresult.getlog 1]
         set entry [lindex $log 0]
         assert_equal [dict get $entry status] "rejected"
-        # VALKEYMODULE_SUBEVENT_COMMAND_RESULT_REJECTED_ACL_KEY = 2
+        # VALKEYMODULE_ACL_LOG_KEY = 2
         assert_equal [dict get $entry subevent] 2
         assert_equal [dict get $entry rejection_context] "denied_key"
 
@@ -485,7 +485,7 @@ start_server {tags {"modules"}} {
         set log [r cmdresult.getlog 1]
         set entry [lindex $log 0]
         assert_equal [dict get $entry status] "rejected"
-        # VALKEYMODULE_SUBEVENT_COMMAND_RESULT_REJECTED_ACL_CHANNEL = 3
+        # VALKEYMODULE_ACL_LOG_CHANNEL = 3
         assert_equal [dict get $entry subevent] 3
         assert_equal [dict get $entry rejection_context] "secret_channel"
 
@@ -534,7 +534,7 @@ start_server {tags {"modules"}} {
         set log [r cmdresult.getlog 1]
         set entry [lindex $log 0]
         assert_equal [dict get $entry status] "rejected"
-        # VALKEYMODULE_SUBEVENT_COMMAND_RESULT_REJECTED_NOAUTH = 0
+        # VALKEYMODULE_ACL_LOG_AUTH = 0
         assert_equal [dict get $entry subevent] 0
         assert_equal [dict get $entry rejection_context] ""
 
@@ -562,6 +562,132 @@ start_server {tags {"modules"}} {
         assert_equal [dict get $stats total_callbacks] 0
 
         r acl deluser testuser_reset
+        r cmdresult.unsubscribe
+    }
+
+    test {Module commandresult - rejected: unknown command (UNKNOWNCMD)} {
+        cleanup_callback
+        r cmdresult.register rejected
+
+        catch {r thisdoesnotexist} e
+
+        set stats [r cmdresult.stats]
+        assert {[dict get $stats rejected_count] >= 1}
+
+        set log [r cmdresult.getlog 1]
+        set entry [lindex $log 0]
+        assert_equal [dict get $entry status] "rejected"
+        assert_equal [dict get $entry rejection_context] "UNKNOWNCMD"
+
+        r cmdresult.unsubscribe
+    }
+
+    test {Module commandresult - rejected: wrong number of arguments (WRONGARITY)} {
+        cleanup_callback
+        r cmdresult.register rejected
+
+        catch {r set} e
+
+        set stats [r cmdresult.stats]
+        assert {[dict get $stats rejected_count] >= 1}
+
+        set log [r cmdresult.getlog 1]
+        set entry [lindex $log 0]
+        assert_equal [dict get $entry status] "rejected"
+        assert_equal [dict get $entry command] "set"
+        assert_equal [dict get $entry rejection_context] "WRONGARITY"
+
+        r cmdresult.unsubscribe
+    }
+
+    test {Module commandresult - rejected: command not allowed in MULTI (NOMULTI)} {
+        cleanup_callback
+        r cmdresult.register rejected
+
+        r multi
+        catch {r multi} e
+        r discard
+
+        set stats [r cmdresult.stats]
+        assert {[dict get $stats rejected_count] >= 1}
+
+        set log [r cmdresult.getlog 1]
+        set entry [lindex $log 0]
+        assert_equal [dict get $entry status] "rejected"
+        assert_equal [dict get $entry command] "multi"
+        assert_equal [dict get $entry rejection_context] "NOMULTI"
+
+        r cmdresult.unsubscribe
+    }
+
+    test {Module commandresult - rejected: command not allowed in Pub/Sub context (PUBSUB)} {
+        cleanup_callback
+        r cmdresult.register rejected
+
+        set rd [valkey_deferring_client]
+        $rd subscribe testchan
+        $rd read
+        $rd set foo bar
+        catch {$rd read} e
+        $rd unsubscribe testchan
+        $rd read
+        $rd close
+
+        set stats [r cmdresult.stats]
+        assert {[dict get $stats rejected_count] >= 1}
+
+        set log [r cmdresult.getlog 1]
+        set entry [lindex $log 0]
+        assert_equal [dict get $entry status] "rejected"
+        assert_equal [dict get $entry command] "set"
+        assert_equal [dict get $entry rejection_context] "PUBSUB"
+
+        r cmdresult.unsubscribe
+    }
+
+    test {Module commandresult - rejected: not enough replicas (NOREPLICAS)} {
+        cleanup_callback
+        r cmdresult.register rejected
+
+        r config set min-replicas-to-write 100
+
+        catch {r set foo bar} e
+        assert_match {*NOREPLICAS*} $e
+
+        r config set min-replicas-to-write 0
+
+        set stats [r cmdresult.stats]
+        assert {[dict get $stats rejected_count] >= 1}
+
+        set log [r cmdresult.getlog 1]
+        set entry [lindex $log 0]
+        assert_equal [dict get $entry status] "rejected"
+        assert_equal [dict get $entry command] "set"
+        assert_equal [dict get $entry rejection_context] "NOREPLICAS"
+
+        r cmdresult.unsubscribe
+    }
+
+    test {Module commandresult - rejected: out of memory (OOM)} {
+        cleanup_callback
+        r cmdresult.register rejected
+
+        r config set maxmemory 1
+        r config set maxmemory-policy noeviction
+
+        catch {r set oomkey oomval} e
+        assert_match {*OOM*} $e
+
+        r config set maxmemory 0
+
+        set stats [r cmdresult.stats]
+        assert {[dict get $stats rejected_count] >= 1}
+
+        set log [r cmdresult.getlog 1]
+        set entry [lindex $log 0]
+        assert_equal [dict get $entry status] "rejected"
+        assert_equal [dict get $entry rejection_context] "OOM"
+
         r cmdresult.unsubscribe
     }
 

@@ -13894,10 +13894,12 @@ void moduleCommand(client *c) {
         /* If this is a loadex command we want to populate server.module_configs_queue with
          * sds NAME VALUE pairs. We also want to increment argv to just after ARGS, if supplied. */
         const char *errmsg = NULL;
-        if (parseLoadexArguments((ValkeyModuleString ***)&argv, &argc) == VALKEYMODULE_OK &&
-            moduleLoad(objectGetVal(c->argv[2]), (void **)argv, argc, 1, &errmsg) == C_OK)
+        if (parseLoadexArguments((ValkeyModuleString ***)&argv, &argc) != VALKEYMODULE_OK) {
+            dictEmpty(server.module_configs_queue, NULL);
+            addReplyError(c, "Error loading module: invalid LOADEX arguments");
+        } else if (moduleLoad(objectGetVal(c->argv[2]), (void **)argv, argc, 1, &errmsg) == C_OK) {
             addReply(c, shared.ok);
-        else {
+        } else {
             dictEmpty(server.module_configs_queue, NULL);
             if (errmsg == NULL) errmsg = "operation not possible";
             addReplyErrorFormat(c, "Error loading module: %s", errmsg);

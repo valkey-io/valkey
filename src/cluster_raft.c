@@ -106,6 +106,14 @@ typedef struct {
     void (*callback)(void *ctx, const char *error);
 } raftPendingProposal;
 
+/* A pending meet tracks a CLUSTER MEET client waiting for the NODE_JOIN
+ * to be committed. Matched by target ip:cport. */
+typedef struct {
+    sds addr; /* "ip:cport" */
+    void *ctx;
+    void (*callback)(void *ctx, const char *error);
+} raftPendingMeet;
+
 /* --------------------------------------------------------------------------
  * Protocol-specific state (stored in clusterState.protocol_data)
  * -------------------------------------------------------------------------- */
@@ -131,6 +139,9 @@ typedef struct {
     /* Pending proposals waiting for commit. */
     list *pending_proposals; /* list of raftPendingProposal */
 
+    /* Pending MEET callbacks waiting for NODE_JOIN commit. */
+    list *pending_meets; /* list of raftPendingMeet */
+
     /* Election */
     int votes_received;
     mstime_t election_timeout; /* Randomized timeout */
@@ -147,7 +158,9 @@ typedef struct {
  * -------------------------------------------------------------------------- */
 
 typedef struct {
-    raftPeerState peer; /* Replication tracking when we are leader */
+    raftPeerState peer;                /* Replication tracking when we are leader */
+    unsigned int hello_received : 1;   /* Received initial HELLO from this node */
+    unsigned int sender_singleton : 1; /* The HELLO sender was a singleton */
 } clusterNodeRaftData;
 
 #define RAFT_DATA(n) ((clusterNodeRaftData *)(n)->protocol_data)
@@ -158,10 +171,12 @@ typedef struct {
 
 static void clusterRaftPropose(sds entry, void *ctx, void (*callback)(void *ctx, const char *error));
 static void clusterRaftFlushPendingProposals(clusterRaftState *rs, const char *error);
+static raftPendingMeet *clusterRaftConsumePendingMeet(clusterNode *node);
 static void clusterRaftApplySlotChange(sds data);
 static void raftLogApply(raftLogEntry *e);
 static raftLogEntry *raftLogCreate(uint64_t term, uint64_t index, uint8_t type, sds data);
 static void raftLogAppend(clusterRaftState *rs, raftLogEntry *e);
+static raftLogEntry *raftLogGet(clusterRaftState *rs, uint64_t index);
 static uint64_t raftLogLastIndex(clusterRaftState *rs);
 static uint64_t raftLogTermAt(clusterRaftState *rs, uint64_t index);
 
@@ -178,23 +193,27 @@ static void clusterRaftRandomizeElectionTimeout(clusterRaftState *rs) {
 
 /* HELLO format: HELLO <node-id> <address> <term> <role> <cluster-size> */
 
-static void clusterRaftSendHello(clusterLink *link) {
+static void clusterRaftSendGreeting(clusterLink *link, const char *verb) {
     clusterRaftState *rs = RAFT_STATE();
-    int tls_primary = server.tls_cluster;
-    sds msg = wireNewMsg("HELLO");
+    sds msg = wireNewMsg(verb);
     msg = sdscatlen(msg, " ", 1);
     msg = sdscatlen(msg, myself->name, CLUSTER_NAMELEN);
     msg = sdscatlen(msg, " ", 1);
-    msg = clusterNodeAppendAddressString(msg, myself, tls_primary);
+    msg = clusterNodeAppendAddressString(msg, myself, server.tls_cluster);
     msg = sdscatfmt(msg, " %U %i %U", (unsigned long long)rs->current_term, rs->role,
-                    (unsigned long long)dictSize(server.cluster->nodes));
+                    (unsigned long long)server.cluster->size);
     msg = wireFinishMsg(msg);
     clusterRaftSendMsg(link, msg);
 }
 
-/* Process a received HELLO message. Associates the link with the sender node
- * and completes the handshake if the node was in HANDSHAKE state. Returns 1
- * on success, 0 if the link was freed. */
+static void clusterRaftSendHello(clusterLink *link) {
+    clusterRaftSendGreeting(link, "HELLO");
+}
+
+/* Process a received HELLO, WELCOME, or HI message. Associates the link with
+ * the sender node and completes the handshake if needed. HELLO is the initial
+ * contact; WELCOME is the reply after NODE_JOIN commit; HI is the immediate
+ * reply from a singleton. Returns 1 on success, 0 if the link was freed. */
 static int clusterRaftProcessHello(clusterLink *link, int argc, sds *argv) {
     /* argv: HELLO <node-id> <address> <term> <role> <cluster-size> */
     if (argc < 6) return 1;
@@ -205,7 +224,7 @@ static int clusterRaftProcessHello(clusterLink *link, int argc, sds *argv) {
     uint64_t sender_term = strtoull(argv[3], NULL, 10);
     int sender_role = atoi(argv[4]);
     uint64_t sender_cluster_size = strtoull(argv[5], NULL, 10);
-    uint64_t my_cluster_size = dictSize(server.cluster->nodes);
+    uint64_t my_cluster_size = server.cluster->size;
 
     clusterNode *sender = clusterLookupNode(sender_name, CLUSTER_NAMELEN);
 
@@ -231,54 +250,43 @@ static int clusterRaftProcessHello(clusterLink *link, int argc, sds *argv) {
             return 1;
         }
         clusterAddNode(sender);
+        /* If the sender doesn't know its own IP yet, use the peer address. */
+        if (sender->ip[0] == '\0') {
+            connAddrPeerName(link->conn, sender->ip, sizeof(sender->ip), NULL);
+        }
         serverLog(LL_NOTICE, "New node %.40s (%s:%d) discovered via HELLO.",
                   sender->name, sender->ip, (int)sender->cport);
     }
 
-    /* Propose NODE_JOIN through the Raft log. */
-    if (!nodeInHandshake(sender)) {
-        /* Dedup: check if already in the log. */
-        int already_in_log = 0;
-        for (uint64_t i = 0; i < rs->log_count; i++) {
-            if (rs->log[i]->type == RAFT_ENTRY_NODE_JOIN &&
-                sdslen(rs->log[i]->data) >= CLUSTER_NAMELEN &&
-                memcmp(rs->log[i]->data, sender_name, CLUSTER_NAMELEN) == 0) {
-                already_in_log = 1;
-                break;
-            }
-        }
-        if (!already_in_log) {
-            sds entry = sdsnew("NODE_JOIN ");
-            entry = sdscatlen(entry, sender_name, CLUSTER_NAMELEN);
-            entry = sdscatlen(entry, " ", 1);
-            entry = clusterNodeAppendAddressString(entry, sender, server.tls_cluster);
-            clusterRaftPropose(entry, NULL, NULL);
-            sdsfree(entry);
-        }
-    }
+    int sender_is_singleton = (sender_cluster_size <= 1);
+    int i_am_singleton = (my_cluster_size <= 1);
+    int is_initial = !strcasecmp(argv[0], "HELLO");
 
-    /* Leader step-down when two leaders meet. */
+    /* Leader step-down when two leaders meet.
+     * Rule: the singleton always steps down. When both are singletons,
+     * the HELLO receiver stays leader to propose NODE_JOIN; the HELLO
+     * sender steps down when it receives the WELCOME reply.
+     * can stay leader and propose NODE_JOIN. */
     if (rs->role == RAFT_ROLE_LEADER && sender_role == RAFT_ROLE_LEADER) {
         int i_step_down;
         if (sender_term > rs->current_term) {
             i_step_down = 1;
         } else if (rs->current_term > sender_term) {
             i_step_down = 0;
-        } else if (sender_cluster_size > 1 && my_cluster_size <= 2) {
-            /* I'm the singleton joining an existing cluster. */
+        } else if (i_am_singleton && !sender_is_singleton) {
             i_step_down = 1;
-        } else if (sender_cluster_size <= 1 && my_cluster_size > 2) {
-            /* They're the singleton. They'll step down on our HELLO. */
+        } else if (!i_am_singleton && sender_is_singleton) {
             i_step_down = 0;
+        } else if (i_am_singleton && sender_is_singleton) {
+            /* Both singletons: HELLO receiver stays leader, HELLO sender
+             * steps down when it receives the WELCOME reply. */
+            i_step_down = !is_initial;
         } else {
-            /* Both singletons or same size: lower node ID steps down. */
+            /* Both non-singletons — shouldn't happen. */
             i_step_down = memcmp(myself->name, sender_name, CLUSTER_NAMELEN) < 0;
         }
 
         if (i_step_down) {
-            /* The node stepping down becomes a learner. It will be
-             * promoted to follower when its NODE_JOIN entry is committed
-             * by the leader. */
             clusterRaftFlushPendingProposals(rs, "leader changed");
             rs->role = RAFT_ROLE_LEARNER;
             rs->current_term = sender_term;
@@ -293,7 +301,6 @@ static int clusterRaftProcessHello(clusterLink *link, int argc, sds *argv) {
 
     /* Associate link with node. */
     if (link->inbound) {
-        /* Learn our own IP from the inbound connection if not yet known. */
         if (myself->ip[0] == '\0' && server.cluster_announce_ip == NULL) {
             char ip[NET_IP_STR_LEN];
             if (connAddrSockName(link->conn, ip, sizeof(ip), NULL) != -1 && strcmp(ip, myself->ip)) {
@@ -301,15 +308,27 @@ static int clusterRaftProcessHello(clusterLink *link, int argc, sds *argv) {
                 serverLog(LL_NOTICE, "IP address for this node updated to %s", myself->ip);
             }
         }
-
         if (sender->inbound_link && sender->inbound_link != link) {
             freeClusterLink(sender->inbound_link);
         }
         setClusterNodeToInboundClusterLink(sender, link);
-        /* Reply with our own HELLO so the other side can identify us. */
-        clusterRaftSendHello(link);
-    } else {
-        /* Outbound link — already associated via createClusterLink(node). */
+    }
+
+    /* For initial HELLO: set flags so postConnect sends the right reply
+     * (WELCOME or HI) when the outbound link is established. */
+    if (is_initial && !nodeInHandshake(sender)) {
+        RAFT_DATA(sender)->hello_received = 1;
+        if (sender_is_singleton) RAFT_DATA(sender)->sender_singleton = 1;
+    }
+
+    /* WELCOME means our NODE_JOIN was committed — fire pending MEET callback. */
+    if (!strcasecmp(argv[0], "WELCOME")) {
+        raftPendingMeet *pm = clusterRaftConsumePendingMeet(sender);
+        if (pm) {
+            pm->callback(pm->ctx, NULL);
+            sdsfree(pm->addr);
+            zfree(pm);
+        }
     }
 
     return 1;
@@ -384,6 +403,16 @@ static void clusterRaftPropose(sds entry, void *ctx, void (*callback)(void *ctx,
         raftLogAppend(rs, raftLogCreate(rs->current_term, idx, type, data));
         serverLog(LL_NOTICE, "Leader appended %s (index %llu).",
                   raftEntryTypeName(type), (unsigned long long)idx);
+
+        /* Single-node cluster: commit and apply immediately. */
+        if (server.cluster->size <= 1) {
+            rs->commit_index = idx;
+            while (rs->last_applied < rs->commit_index) {
+                rs->last_applied++;
+                raftLogEntry *e = raftLogGet(rs, rs->last_applied);
+                if (e) raftLogApply(e);
+            }
+        }
     } else {
         sdsfree(data);
         clusterNode *leader = clusterLookupNode(rs->leader, CLUSTER_NAMELEN);
@@ -430,6 +459,17 @@ static int clusterRaftProcessPropose(clusterLink *link, int argc, sds *argv) {
     raftLogAppend(rs, raftLogCreate(rs->current_term, idx, type, data));
     serverLog(LL_NOTICE, "Leader appended proposed %s (index %llu).",
               raftEntryTypeName(type), (unsigned long long)idx);
+
+    /* Single-node cluster: commit and apply immediately. */
+    if (server.cluster->size <= 1) {
+        rs->commit_index = idx;
+        while (rs->last_applied < rs->commit_index) {
+            rs->last_applied++;
+            raftLogEntry *e = raftLogGet(rs, rs->last_applied);
+            if (e) raftLogApply(e);
+        }
+    }
+
     sdsfree(entry);
     return 1;
 }
@@ -450,6 +490,8 @@ static void clusterRaftFlushPendingProposals(clusterRaftState *rs, const char *e
         zfree(pp);
         listDelNode(rs->pending_proposals, ln);
     }
+    /* Note: pending_meets are NOT flushed here. A MEET remains valid
+     * across leader changes — the WELCOME will arrive eventually. */
 }
 
 /* Step down to follower if we see a higher term. Returns 1 if stepped down. */
@@ -537,16 +579,21 @@ static void raftLogApply(raftLogEntry *e) {
         int argc;
         sds *argv = sdssplitlen(e->data, sdslen(e->data), " ", 1, &argc);
         if (argv && argc >= 2 && sdslen(argv[0]) == CLUSTER_NAMELEN) {
-            if (!clusterLookupNode(argv[0], CLUSTER_NAMELEN)) {
+            clusterNode *existing = clusterLookupNode(argv[0], CLUSTER_NAMELEN);
+            if (!existing) {
                 clusterNode *n = createClusterNode(argv[0], 0);
                 if (clusterNodeParseAddressString(n, argv[1]) == C_OK) {
                     clusterAddNode(n);
-                    server.cluster->size++;
-                    serverLog(LL_NOTICE, "Applied NODE_JOIN for %.40s.", argv[0]);
                 } else {
                     freeClusterNode(n);
+                    if (argv) sdsfreesplitres(argv, argc);
+                    break;
                 }
             }
+            server.cluster->size++;
+            serverLog(LL_NOTICE, "Applied NODE_JOIN for %.40s (size=%d).",
+                      argv[0], server.cluster->size);
+
             /* If this entry is about us, promote from learner to follower. */
             if (memcmp(argv[0], myself->name, CLUSTER_NAMELEN) == 0 &&
                 rs->role == RAFT_ROLE_LEARNER) {
@@ -889,6 +936,7 @@ static void clusterRaftInit(void) {
     rs->last_heartbeat = mstime();
     rs->peer_state = dictCreate(&clusterNodesDictType);
     rs->pending_proposals = listCreate();
+    rs->pending_meets = listCreate();
     server.cluster->protocol_data = rs;
     server.cluster->size = 1; /* Myself */
 }
@@ -992,6 +1040,8 @@ static int clusterRaftProcessMessage(struct clusterLink *link) {
 
     if (!strcasecmp(argv[0], "HELLO")) {
         ret = clusterRaftProcessHello(link, argc, argv);
+    } else if (!strcasecmp(argv[0], "WELCOME") || !strcasecmp(argv[0], "HI")) {
+        ret = clusterRaftProcessHello(link, argc, argv);
     } else if (!strcasecmp(argv[0], "PROPOSE")) {
         ret = clusterRaftProcessPropose(link, argc, argv);
     } else if (!strcasecmp(argv[0], "AE")) {
@@ -1012,8 +1062,82 @@ done:
     return ret;
 }
 
+/* Look up and consume a pending MEET callback by node address. */
+static raftPendingMeet *clusterRaftConsumePendingMeet(clusterNode *node) {
+    clusterRaftState *rs = RAFT_STATE();
+    sds addr = sdscatfmt(sdsempty(), "%s:%i", node->ip, node->cport);
+    listIter li;
+    listNode *ln;
+    listRewind(rs->pending_meets, &li);
+    while ((ln = listNext(&li)) != NULL) {
+        raftPendingMeet *pm = listNodeValue(ln);
+        if (!sdscmp(pm->addr, addr)) {
+            sdsfree(addr);
+            listDelNode(rs->pending_meets, ln);
+            return pm;
+        }
+    }
+    sdsfree(addr);
+    return NULL;
+}
+
+/* Context for NODE_JOIN callback that sends WELCOME and fires MEET callback. */
+typedef struct {
+    sds node_name;
+    void *meet_ctx;
+    void (*meet_callback)(void *ctx, const char *error);
+} raftJoinCallbackCtx;
+
+static void clusterRaftJoinCallback(void *ctx, const char *error) {
+    raftJoinCallbackCtx *jc = ctx;
+    /* Send WELCOME to the joined node. */
+    if (!error) {
+        clusterNode *n = clusterLookupNode(jc->node_name, sdslen(jc->node_name));
+        if (n && n->link) clusterRaftSendGreeting(n->link, "WELCOME");
+    }
+    /* Fire the MEET callback if present. */
+    if (jc->meet_callback) jc->meet_callback(jc->meet_ctx, error);
+    sdsfree(jc->node_name);
+    zfree(jc);
+}
+
 static void clusterRaftPostConnect(struct clusterLink *link) {
-    clusterRaftSendHello(link);
+    clusterNode *node = link->node;
+    if (!node) return;
+
+    if (nodeInHandshake(node)) {
+        clusterRaftSendHello(link);
+    } else if (RAFT_DATA(node)->hello_received) {
+        int i_am_singleton = (server.cluster->size <= 1);
+        int sender_was_singleton = RAFT_DATA(node)->sender_singleton;
+        RAFT_DATA(node)->hello_received = 0;
+        RAFT_DATA(node)->sender_singleton = 0;
+
+        if (i_am_singleton && !sender_was_singleton) {
+            clusterRaftSendGreeting(link, "HI");
+        } else {
+            sds entry = sdsnew("NODE_JOIN ");
+            entry = sdscatlen(entry, node->name, CLUSTER_NAMELEN);
+            entry = sdscatlen(entry, " ", 1);
+            entry = clusterNodeAppendAddressString(entry, node, server.tls_cluster);
+
+            /* Build callback that sends WELCOME and optionally fires MEET. */
+            raftJoinCallbackCtx *jc = zmalloc(sizeof(*jc));
+            jc->node_name = sdsnewlen(node->name, CLUSTER_NAMELEN);
+            raftPendingMeet *pm = clusterRaftConsumePendingMeet(node);
+            if (pm) {
+                jc->meet_ctx = pm->ctx;
+                jc->meet_callback = pm->callback;
+                sdsfree(pm->addr);
+                zfree(pm);
+            } else {
+                jc->meet_ctx = NULL;
+                jc->meet_callback = NULL;
+            }
+            clusterRaftPropose(entry, jc, clusterRaftJoinCallback);
+            sdsfree(entry);
+        }
+    }
 }
 
 /* --------------------------------------------------------------------------
@@ -1297,7 +1421,15 @@ static void clusterRaftMeet(const char *ip, int port, int cport, void *ctx, void
         clusterAddNode(n);
     }
 
-    if (callback) callback(ctx, NULL);
+    /* Store callback — it fires when the nodes are joined in the cluster. */
+    if (callback) {
+        clusterRaftState *rs = RAFT_STATE();
+        raftPendingMeet *pm = zmalloc(sizeof(*pm));
+        pm->addr = sdscatfmt(sdsempty(), "%s:%i", norm_ip, cport);
+        pm->ctx = ctx;
+        pm->callback = callback;
+        listAddNodeTail(rs->pending_meets, pm);
+    }
 }
 
 static void clusterRaftResetCluster(int hard) {

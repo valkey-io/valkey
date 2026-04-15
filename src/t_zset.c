@@ -106,8 +106,6 @@ zset *zsetCreate(void) {
  * Skiplist implementation of the low level API
  *----------------------------------------------------------------------------*/
 
-int zslLexValueGteMin(sds value, zlexrangespec *spec);
-int zslLexValueLteMax(sds value, zlexrangespec *spec);
 void zsetConvertAndExpand(robj *zobj, int encoding, unsigned long cap);
 static zskiplistNode *zslGetElementByRankFromNode(zskiplistNode *start_node, int start_level, unsigned long rank);
 zskiplistNode *zslGetElementByRank(zskiplist *zsl, unsigned long rank);
@@ -799,22 +797,28 @@ int zsetParseLexRange(robj *min, robj *max, zlexrangespec *spec) {
     }
 }
 
-/* This is just a wrapper to sdscmp() that is able to
+/* This is a comparison helper that is able to
  * handle shared.minstring and shared.maxstring as the equivalent of
- * -inf and +inf for strings */
-static int sdscmplex(sds a, sds b) {
-    if (a == b) return 0;
-    if (a == shared.minstring || b == shared.maxstring) return -1;
-    if (a == shared.maxstring || b == shared.minstring) return 1;
-    return sdscmp(a, b);
+ * -inf and +inf for strings.
+ * The first argument is a raw (ptr, len) pair from the element.
+ * The second argument is an sds from the lex range spec. */
+static int sdscmplex(const char *a, size_t alen, sds b) {
+    if (a == (const char *)b) return 0;
+    if (a == (const char *)shared.minstring || b == shared.maxstring) return -1;
+    if (a == (const char *)shared.maxstring || b == shared.minstring) return 1;
+    size_t blen = sdslen(b);
+    size_t minlen = (alen < blen) ? alen : blen;
+    int cmp = memcmp(a, b, minlen);
+    if (cmp == 0) return (alen > blen) - (alen < blen);
+    return cmp;
 }
 
-int zslLexValueGteMin(sds value, zlexrangespec *spec) {
-    return spec->minex ? (sdscmplex(value, spec->min) > 0) : (sdscmplex(value, spec->min) >= 0);
+int zslLexValueGteMin(const char *value, size_t value_len, zlexrangespec *spec) {
+    return spec->minex ? (sdscmplex(value, value_len, spec->min) > 0) : (sdscmplex(value, value_len, spec->min) >= 0);
 }
 
-int zslLexValueLteMax(sds value, zlexrangespec *spec) {
-    return spec->maxex ? (sdscmplex(value, spec->max) < 0) : (sdscmplex(value, spec->max) <= 0);
+int zslLexValueLteMax(const char *value, size_t value_len, zlexrangespec *spec) {
+    return spec->maxex ? (sdscmplex(value, value_len, spec->max) < 0) : (sdscmplex(value, value_len, spec->max) <= 0);
 }
 
 /* Returns if there is a part of the zset is in the lex range. */
@@ -822,15 +826,17 @@ static int zslIsInLexRange(zskiplist *zsl, zlexrangespec *range) {
     zskiplistNode *x;
 
     /* Test for ranges that will always be empty. */
-    int cmp = sdscmplex(range->min, range->max);
+    int cmp = sdscmplex(range->min, sdslen(range->min), range->max);
     if (cmp > 0 || (cmp == 0 && (range->minex || range->maxex))) return 0;
     x = zslGetTail(zsl);
+    if (x == NULL) return 0;
     sds ele = zslGetNodeElement(x);
-    if (x == NULL || !zslLexValueGteMin(ele, range)) return 0;
+    if (!zslLexValueGteMin(ele, sdslen(ele), range)) return 0;
     zskiplistNode *zheader = zslGetHeader(zsl);
     x = zheader->level[0].forward;
+    if (x == NULL) return 0;
     ele = zslGetNodeElement(x);
-    if (x == NULL || !zslLexValueLteMax(ele, range)) return 0;
+    if (!zslLexValueLteMax(ele, sdslen(ele), range)) return 0;
     return 1;
 }
 
@@ -839,6 +845,7 @@ static int zslIsInLexRange(zskiplist *zsl, zlexrangespec *range) {
  * NULL when no element is contained in the range. */
 zskiplistNode *zslNthInLexRange(zskiplist *zsl, zlexrangespec *range, long n) {
     zskiplistNode *x;
+    sds ele;
     int i;
     long edge_rank = 0;
     long last_highest_level_rank = 0;
@@ -851,7 +858,9 @@ zskiplistNode *zslNthInLexRange(zskiplist *zsl, zlexrangespec *range, long n) {
     /* Go forward while *OUT* of range at highest level. */
     x = zslGetHeader(zsl);
     i = zslGetHeight(zsl) - 1;
-    while (x->level[i].forward && !zslLexValueGteMin(zslGetNodeElement(x->level[i].forward), range)) {
+    while (x->level[i].forward) {
+        ele = zslGetNodeElement(x->level[i].forward);
+        if (zslLexValueGteMin(ele, sdslen(ele), range)) break;
         edge_rank += zslGetNodeSpanAtLevel(x, i);
         x = x->level[i].forward;
     }
@@ -862,7 +871,9 @@ zskiplistNode *zslNthInLexRange(zskiplist *zsl, zlexrangespec *range, long n) {
     if (n >= 0) {
         for (i = zslGetHeight(zsl) - 2; i >= 0; i--) {
             /* Go forward while *OUT* of range. */
-            while (x->level[i].forward && !zslLexValueGteMin(zslGetNodeElement(x->level[i].forward), range)) {
+            while (x->level[i].forward) {
+                ele = zslGetNodeElement(x->level[i].forward);
+                if (zslLexValueGteMin(ele, sdslen(ele), range)) break;
                 /* Count the rank of the last element smaller than the range. */
                 edge_rank += zslGetNodeSpanAtLevel(x, i);
                 x = x->level[i].forward;
@@ -877,16 +888,21 @@ zskiplistNode *zslNthInLexRange(zskiplist *zsl, zlexrangespec *range, long n) {
                 x = x->level[0].forward;
             }
         } else {
-            /* If offset is big, we caasn jump from the last zslGetHeight(zsl)-1 node. */
+            /* If offset is big, we can jump from the last zslGetHeight(zsl)-1 node. */
             rank_diff = edge_rank + 1 + n - last_highest_level_rank;
             x = zslGetElementByRankFromNode(last_highest_level_node, zslGetHeight(zsl) - 1, rank_diff);
         }
         /* Check if score <= max. */
-        if (x && !zslLexValueLteMax(zslGetNodeElement(x), range)) return NULL;
+        if (x) {
+            ele = zslGetNodeElement(x);
+            if (!zslLexValueLteMax(ele, sdslen(ele), range)) return NULL;
+        }
     } else {
         for (i = zslGetHeight(zsl) - 1; i >= 0; i--) {
             /* Go forward while *IN* range. */
-            while (x->level[i].forward && zslLexValueLteMax(zslGetNodeElement(x->level[i].forward), range)) {
+            while (x->level[i].forward) {
+                ele = zslGetNodeElement(x->level[i].forward);
+                if (!zslLexValueLteMax(ele, sdslen(ele), range)) break;
                 /* Count the rank of the last element in range. */
                 edge_rank += zslGetNodeSpanAtLevel(x, i);
                 x = x->level[i].forward;
@@ -906,7 +922,10 @@ zskiplistNode *zslNthInLexRange(zskiplist *zsl, zlexrangespec *range, long n) {
             x = zslGetElementByRankFromNode(last_highest_level_node, zslGetHeight(zsl) - 1, rank_diff);
         }
         /* Check if score >= min. */
-        if (x && !zslLexValueGteMin(zslGetNodeElement(x), range)) return NULL;
+        if (x) {
+            ele = zslGetNodeElement(x);
+            if (!zslLexValueGteMin(ele, sdslen(ele), range)) return NULL;
+        }
     }
 
     return x;
@@ -1100,14 +1119,14 @@ unsigned char *zzlLastInRange(unsigned char *zl, zrangespec *range) {
 
 int zzlLexValueGteMin(unsigned char *p, zlexrangespec *spec) {
     sds value = lpGetObject(p);
-    int res = zslLexValueGteMin(value, spec);
+    int res = zslLexValueGteMin(value, sdslen(value), spec);
     sdsfree(value);
     return res;
 }
 
 int zzlLexValueLteMax(unsigned char *p, zlexrangespec *spec) {
     sds value = lpGetObject(p);
-    int res = zslLexValueLteMax(value, spec);
+    int res = zslLexValueLteMax(value, sdslen(value), spec);
     sdsfree(value);
     return res;
 }
@@ -1118,7 +1137,7 @@ int zzlIsInLexRange(unsigned char *zl, zlexrangespec *range) {
     unsigned char *p;
 
     /* Test for ranges that will always be empty. */
-    int cmp = sdscmplex(range->min, range->max);
+    int cmp = sdscmplex(range->min, sdslen(range->min), range->max);
     if (cmp > 0 || (cmp == 0 && (range->minex || range->maxex))) return 0;
 
     p = lpSeek(zl, -2); /* Last element. */
@@ -3617,7 +3636,7 @@ void genericZrangebylexCommand(zrange_result_handler *handler,
                 const char *ele_ptr;
                 size_t ele_len;
                 orderedIndexGetElementRaw(node, &ele_ptr, &ele_len);
-                if (!zslLexValueGteMin((sds)ele_ptr, range)) break;
+                if (!zslLexValueGteMin(ele_ptr, ele_len, range)) break;
                 rangelen++;
                 handler->emitResultFromCBuffer(handler, ele_ptr, ele_len, orderedIndexGetScore(node));
             }
@@ -3627,7 +3646,7 @@ void genericZrangebylexCommand(zrange_result_handler *handler,
                 const char *ele_ptr;
                 size_t ele_len;
                 orderedIndexGetElementRaw(node, &ele_ptr, &ele_len);
-                if (!zslLexValueLteMax((sds)ele_ptr, range)) break;
+                if (!zslLexValueLteMax(ele_ptr, ele_len, range)) break;
                 rangelen++;
                 handler->emitResultFromCBuffer(handler, ele_ptr, ele_len, orderedIndexGetScore(node));
             }

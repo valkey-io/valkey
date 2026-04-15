@@ -225,7 +225,8 @@ struct ValkeyModuleKey {
             zlexrangespec lrs; /* Lex range. */
             uint32_t start;    /* Start pos for positional ranges. */
             uint32_t end;      /* End pos for positional ranges. */
-            void *current;     /* Zset iterator current node. */
+            void *current;     /* Zset iterator current node (listpack pointer or OrderedIndexItem). */
+            OrderedIndexIterator oi; /* OrderedIndex iterator for skiplist encoding. */
             int er;            /* Zset iterator end reached flag
                                    (true if end was reached). */
         } zset;
@@ -5129,8 +5130,15 @@ int zsetInitScoreRange(ValkeyModuleKey *key, double min, double max, int minex, 
         key->u.zset.current = first ? zzlFirstInRange(objectGetVal(key->value), zrs) : zzlLastInRange(objectGetVal(key->value), zrs);
     } else if (key->value->encoding == OBJ_ENCODING_SKIPLIST) {
         zset *zs = objectGetVal(key->value);
-        zskiplist *zsl = (zskiplist *)zs->zidx;
-        key->u.zset.current = first ? zslNthInRange(zsl, zrs, 0, NULL) : zslNthInRange(zsl, zrs, -1, NULL);
+        orderedIndexInitIterator(&key->u.zset.oi, zs->zidx);
+        orderedIndexSeekToScoreRange(&key->u.zset.oi, zrs->min, zrs->max, zrs->minex, zrs->maxex, first ? 0 : -1);
+        OrderedIndexItem *item;
+        if (first) {
+            orderedIndexNext(&key->u.zset.oi, &item);
+        } else {
+            orderedIndexPrev(&key->u.zset.oi, &item);
+        }
+        key->u.zset.current = item;
     } else {
         serverPanic("Unsupported zset encoding");
     }
@@ -5192,8 +5200,15 @@ int zsetInitLexRange(ValkeyModuleKey *key, ValkeyModuleString *min, ValkeyModule
             first ? zzlFirstInLexRange(objectGetVal(key->value), zlrs) : zzlLastInLexRange(objectGetVal(key->value), zlrs);
     } else if (key->value->encoding == OBJ_ENCODING_SKIPLIST) {
         zset *zs = objectGetVal(key->value);
-        zskiplist *zsl = (zskiplist *)zs->zidx;
-        key->u.zset.current = first ? zslNthInLexRange(zsl, zlrs, 0) : zslNthInLexRange(zsl, zlrs, -1);
+        orderedIndexInitIterator(&key->u.zset.oi, zs->zidx);
+        orderedIndexSeekToLexRange(&key->u.zset.oi, zlrs->min, zlrs->max, zlrs->minex, zlrs->maxex, first ? 0 : -1);
+        OrderedIndexItem *item;
+        if (first) {
+            orderedIndexNext(&key->u.zset.oi, &item);
+        } else {
+            orderedIndexPrev(&key->u.zset.oi, &item);
+        }
+        key->u.zset.current = item;
     } else {
         serverPanic("Unsupported zset encoding");
     }
@@ -5242,10 +5257,12 @@ ValkeyModuleString *VM_ZsetRangeCurrentElement(ValkeyModuleKey *key, double *sco
         }
         str = createObject(OBJ_STRING, ele);
     } else if (key->value->encoding == OBJ_ENCODING_SKIPLIST) {
-        zskiplistNode *ln = key->u.zset.current;
-        if (score) *score = ln->score;
-        sds ele = zslGetNodeElement(ln);
-        str = createStringObject(ele, sdslen(ele));
+        OrderedIndexItem *ln = key->u.zset.current;
+        if (score) *score = orderedIndexGetScore(ln);
+        const char *ptr;
+        size_t len;
+        orderedIndexGetElementRaw(ln, &ptr, &len);
+        str = createStringObject(ptr, len);
     } else {
         serverPanic("Unsupported zset encoding");
     }
@@ -5292,17 +5309,20 @@ int VM_ZsetRangeNext(ValkeyModuleKey *key) {
             return 1;
         }
     } else if (key->value->encoding == OBJ_ENCODING_SKIPLIST) {
-        zskiplistNode *ln = key->u.zset.current, *next = ln->level[0].forward;
-        if (next == NULL) {
+        OrderedIndexItem *next;
+        if (!orderedIndexNext(&key->u.zset.oi, &next)) {
             key->u.zset.er = 1;
             return 0;
         } else {
             /* Are we still within the range? */
-            if (key->u.zset.type == VALKEYMODULE_ZSET_RANGE_SCORE && !zslValueLteMax(next->score, &key->u.zset.rs)) {
+            if (key->u.zset.type == VALKEYMODULE_ZSET_RANGE_SCORE && !zslValueLteMax(orderedIndexGetScore(next), &key->u.zset.rs)) {
                 key->u.zset.er = 1;
                 return 0;
             } else if (key->u.zset.type == VALKEYMODULE_ZSET_RANGE_LEX) {
-                if (!zslLexValueLteMax(zslGetNodeElement(next), &key->u.zset.lrs)) {
+                const char *ele_ptr;
+                size_t ele_len;
+                orderedIndexGetElementRaw(next, &ele_ptr, &ele_len);
+                if (!zslLexValueLteMax(ele_ptr, ele_len, &key->u.zset.lrs)) {
                     key->u.zset.er = 1;
                     return 0;
                 }
@@ -5354,17 +5374,20 @@ int VM_ZsetRangePrev(ValkeyModuleKey *key) {
             return 1;
         }
     } else if (key->value->encoding == OBJ_ENCODING_SKIPLIST) {
-        zskiplistNode *ln = key->u.zset.current, *prev = ln->backward;
-        if (prev == NULL) {
+        OrderedIndexItem *prev;
+        if (!orderedIndexPrev(&key->u.zset.oi, &prev)) {
             key->u.zset.er = 1;
             return 0;
         } else {
             /* Are we still within the range? */
-            if (key->u.zset.type == VALKEYMODULE_ZSET_RANGE_SCORE && !zslValueGteMin(prev->score, &key->u.zset.rs)) {
+            if (key->u.zset.type == VALKEYMODULE_ZSET_RANGE_SCORE && !zslValueGteMin(orderedIndexGetScore(prev), &key->u.zset.rs)) {
                 key->u.zset.er = 1;
                 return 0;
             } else if (key->u.zset.type == VALKEYMODULE_ZSET_RANGE_LEX) {
-                if (!zslLexValueGteMin(zslGetNodeElement(prev), &key->u.zset.lrs)) {
+                const char *ele_ptr;
+                size_t ele_len;
+                orderedIndexGetElementRaw(prev, &ele_ptr, &ele_len);
+                if (!zslLexValueGteMin(ele_ptr, ele_len, &key->u.zset.lrs)) {
                     key->u.zset.er = 1;
                     return 0;
                 }

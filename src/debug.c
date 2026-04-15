@@ -40,6 +40,7 @@
 #include "sds.h"
 #include "module.h"
 #include "ordered_index.h"
+#include "skiplist_internal.h"
 
 #include <arpa/inet.h>
 #include <signal.h>

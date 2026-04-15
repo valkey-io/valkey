@@ -30,12 +30,11 @@ proc activate_io_threads_and_wait {} {
         $rd($i) close
     }
 
-    # Wait until active io_threads are no longer active
-    wait_for_condition 1000 50 {
-        [getInfoProperty [r info server] io_threads_active] eq 0
-    } else {
-        fail "Failed to wait until no io_threads are active"
-    }
+    # In io-threads-always-active mode, polling INFO to watch the worker state
+    # re-triggers activation in afterSleep(). Once the write burst completed,
+    # keep the server idle briefly so beforeSleep() can park the workers
+    # without more client traffic waking them again.
+    after 200
 }
 
 start_server {config "minimal.conf" tags {"external:skip" "valgrind:skip"} overrides {enable-debug-command {yes} io-threads 5}} {

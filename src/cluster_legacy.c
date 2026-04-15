@@ -4345,6 +4345,7 @@ int clusterProcessPacket(clusterLink *link) {
             for (size_t w = 0; w < CLUSTER_SLOT_WORDS && !found_new_owner; w++) {
                 uint64_t word;
                 memcpy(&word, msg->myslots + SLOT_WORD_OFFSET(w), sizeof(word));
+                memrev64ifbe(&word);
                 while (word) {
                     const int slot = clusterExtractSlotFromWord(&word, w);
 
@@ -5338,6 +5339,7 @@ void clusterSendFailoverAuthIfNeeded(clusterNode *node, clusterMsg *request) {
     for (size_t w = 0; w < CLUSTER_SLOT_WORDS; w++) {
         uint64_t word;
         memcpy(&word, claimed_slots + SLOT_WORD_OFFSET(w), sizeof(word));
+        memrev64ifbe(&word);
         while (word) {
             slot = clusterExtractSlotFromWord(&word, w);
 
@@ -6360,7 +6362,13 @@ void clusterBeforeSleep(void) {
     /* Save the config, possibly using fsync. */
     if (flags & CLUSTER_TODO_SAVE_CONFIG) {
         int fsync = flags & CLUSTER_TODO_FSYNC_CONFIG;
-        clusterSaveConfigOrLog(fsync);
+        if (server.cluster_configfile_save_behavior == CLUSTER_CONFIGFILE_SAVE_BEHAVIOR_SYNC) {
+            /* Sync mode: exit the process if saving fails. */
+            clusterSaveConfigOrDie(fsync);
+        } else if (server.cluster_configfile_save_behavior == CLUSTER_CONFIGFILE_SAVE_BEHAVIOR_BEST_EFFORT) {
+            /* Best-effort mode: log (don't exit) if saving fails and wait for the next retry. */
+            clusterSaveConfigOrLog(fsync);
+        }
     }
 
     if (flags & CLUSTER_TODO_BROADCAST_ALL) {

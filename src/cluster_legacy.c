@@ -5130,7 +5130,7 @@ void clusterDoBeforeSleep(int flags) {
     LEGACY_STATE()->todo_before_sleep |= flags;
 }
 
-static void clusterLegacySlotChange(slotRange *ranges, int numranges, clusterNode *target, void *ctx, void (*callback)(void *ctx, int success)) {
+static void clusterLegacySlotChange(slotRange *ranges, int numranges, clusterNode *target, void *ctx, void (*callback)(void *ctx, const char *error)) {
     /* If we're claiming slots owned by someone else, bump the epoch to
      * propagate the ownership change authoritatively. Callers never mix
      * claimed and unclaimed slots, so checking the first slot suffices. */
@@ -5166,7 +5166,7 @@ static void clusterLegacySlotChange(slotRange *ranges, int numranges, clusterNod
         clusterDoBeforeSleep(CLUSTER_TODO_UPDATE_STATE |
                              CLUSTER_TODO_SAVE_CONFIG);
     }
-    if (callback) callback(ctx, 1);
+    if (callback) callback(ctx, NULL);
 }
 
 

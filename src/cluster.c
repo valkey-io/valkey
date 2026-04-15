@@ -221,7 +221,7 @@ const char **clusterDebugCommandExtendedHelp(void) {
 }
 
 /* Change slot ownerships. */
-void clusterSlotChange(slotRange *ranges, int numranges, clusterNode *target, void *ctx, void (*callback)(void *ctx, int success)) {
+void clusterSlotChange(slotRange *ranges, int numranges, clusterNode *target, void *ctx, void (*callback)(void *ctx, const char *error)) {
     clusterCurrentBus->slotChange(ranges, numranges,
                                   target, ctx, callback);
 }
@@ -1153,10 +1153,10 @@ void clusterKeySlotCommand(client *c) {
 /* Callback for CLUSTER ADDSLOTS/DELSLOTS/ADDSLOTSRANGE/DELSLOTSRANGE.
  * Called after the slot change is applied. This may be called inline
  * or asynchronously if the change goes through cluster consensus. */
-static void clusterAddDelSlotsCallback(void *ctx, int success) {
+static void clusterAddDelSlotsCallback(void *ctx, const char *error) {
     client *c = (client *)ctx;
-    if (!success) {
-        addReplyError(c, "Slot change proposal failed");
+    if (error) {
+        addReplyError(c, error);
         return;
     }
     addReply(c, shared.ok);
@@ -1164,10 +1164,10 @@ static void clusterAddDelSlotsCallback(void *ctx, int success) {
 
 /* Callback for CLUSTER SETSLOT NODE after the slot change is applied.
  * Handles replica migration if this shard lost its last slot. */
-static void clusterSetSlotNodeCallback(void *ctx, int success) {
+static void clusterSetSlotNodeCallback(void *ctx, const char *error) {
     client *c = (client *)ctx;
-    if (!success) {
-        addReplyError(c, "Slot change proposal failed");
+    if (error) {
+        addReplyError(c, error);
         return;
     }
 

@@ -845,9 +845,9 @@ slotMigrationJob *createSlotImportJob(client *c,
 /* This function implements the final part of manual slot failovers,
  * where the target takes over all the slot migration job's hash slots, and
  * propagates the new configuration. */
-static void slotImportFailoverCallback(void *ctx, int success) {
+static void slotImportFailoverCallback(void *ctx, const char *error) {
     slotMigrationJob *job = (slotMigrationJob *)ctx;
-    if (success) {
+    if (!error) {
         serverLog(LL_NOTICE,
                   "Slot migration %s completed successfully. "
                   "This node is now the owner of the slots",

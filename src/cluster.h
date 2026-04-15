@@ -154,7 +154,7 @@ sds clusterEncodeOpenSlotsAuxField(int rdbflags);
 int clusterDecodeOpenSlotsAuxField(int rdbflags, sds s);
 
 /* Change slot ownerships. See clusterBusType.slotChange. */
-void clusterSlotChange(slotRange *ranges, int numranges, clusterNode *target, void *ctx, void (*callback)(void *ctx, int success));
+void clusterSlotChange(slotRange *ranges, int numranges, clusterNode *target, void *ctx, void (*callback)(void *ctx, const char *error));
 void clusterCleanupFailoverState(void);
 void clusterSetPrimary(clusterNode *n, int closeSlots, int full_sync_required);
 void clusterScheduleHandleSlotMigration(void);

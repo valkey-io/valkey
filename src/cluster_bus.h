@@ -100,7 +100,7 @@ typedef struct clusterBusType {
      * TODO: When the callback is asynchronous, the caller must block the
      * client so the server can continue processing other clients while
      * waiting for the consensus commit. */
-    void (*slotChange)(slotRange *ranges, int numranges, clusterNode *target, void *ctx, void (*callback)(void *ctx, int success));
+    void (*slotChange)(slotRange *ranges, int numranges, clusterNode *target, void *ctx, void (*callback)(void *ctx, const char *error));
 
     /* Clean up any protocol-specific manual failover state. Called when the
      * node's role changes and any in-progress manual failover state is no

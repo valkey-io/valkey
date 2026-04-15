@@ -4283,15 +4283,17 @@ void unprepareCommand(client *c) {
 }
 
 /* Wrappers used within processCommand to reject a command and fire the
- * ValkeyModuleEvent_CommandResultRejected server event to registered modules. */
-static void processCommandReject(client *c, robj *reply, uint64_t subevent) {
+ * ValkeyModuleEvent_CommandResultRejected server event to registered modules.
+ * error_code is the Valkey error prefix string (e.g. "OOM", "LOADING", "ERR")
+ * passed as rejection_context for the REJECTED_OTHER subevent. */
+static void processCommandReject(client *c, robj *reply, const char *error_code) {
     rejectCommand(c, reply);
-    moduleFireCommandRejectedEvent(c, subevent, -1, NULL);
+    moduleFireCommandRejectedEvent(c, VALKEYMODULE_SUBEVENT_COMMAND_RESULT_REJECTED_OTHER, -1, error_code);
 }
 
-static void processCommandRejectSds(client *c, sds s, uint64_t subevent) {
+static void processCommandRejectSds(client *c, sds s, const char *error_code) {
     rejectCommandSds(c, s);
-    moduleFireCommandRejectedEvent(c, subevent, -1, NULL);
+    moduleFireCommandRejectedEvent(c, VALKEYMODULE_SUBEVENT_COMMAND_RESULT_REJECTED_OTHER, -1, error_code);
 }
 
 /* If this function gets called we already read a whole
@@ -4352,8 +4354,8 @@ int processCommand(client *c) {
             /* AUTH and HELLO and no auth commands are valid even in
              * non-authenticated state. */
             if (!c->cmd || !(c->cmd->flags & CMD_NO_AUTH)) {
-                processCommandReject(c, shared.noautherr,
-                                     VALKEYMODULE_SUBEVENT_COMMAND_RESULT_REJECTED_NOAUTH);
+                rejectCommand(c, shared.noautherr);
+                moduleFireCommandRejectedEvent(c, VALKEYMODULE_ACL_LOG_AUTH, -1, NULL);
                 return C_OK;
             }
         }
@@ -4362,13 +4364,13 @@ int processCommand(client *c) {
         sds err;
 
         if (!commandCheckExistence(c, &err)) {
-            processCommandRejectSds(c, err, VALKEYMODULE_SUBEVENT_COMMAND_RESULT_REJECTED_UNKNOWN_CMD);
+            processCommandRejectSds(c, err, "UNKNOWNCMD");
             return C_OK;
         }
         if (c->read_flags & READ_FLAGS_BAD_ARITY) {
             /* Already detected this, but do it again just to get the error message. */
             serverAssert(!commandCheckArity(c->cmd, c->argc, &err));
-            processCommandRejectSds(c, err, VALKEYMODULE_SUBEVENT_COMMAND_RESULT_REJECTED_WRONG_ARITY);
+            processCommandRejectSds(c, err, "WRONGARITY");
             return C_OK;
         }
 
@@ -4383,7 +4385,7 @@ int processCommand(client *c) {
                                     c->cmd->proc == debugCommand ? "DEBUG" : "MODULE",
                                     c->cmd->proc == debugCommand ? "enable-debug-command" : "enable-module-command");
                 moduleFireCommandRejectedEvent(
-                    c, VALKEYMODULE_SUBEVENT_COMMAND_RESULT_REJECTED_PROTECTED, -1, NULL);
+                    c, VALKEYMODULE_SUBEVENT_COMMAND_RESULT_REJECTED_OTHER, -1, "PROTECTED");
                 return C_OK;
             }
         }
@@ -4409,7 +4411,7 @@ int processCommand(client *c) {
 
     if (c->flag.multi && c->cmd->flags & CMD_NO_MULTI) {
         rejectCommandFormat(c, "Command '%s' not allowed inside a transaction", c->cmd->fullname);
-        moduleFireCommandRejectedEvent(c, VALKEYMODULE_SUBEVENT_COMMAND_RESULT_REJECTED_NO_MULTI, -1, NULL);
+        moduleFireCommandRejectedEvent(c, VALKEYMODULE_SUBEVENT_COMMAND_RESULT_REJECTED_OTHER, -1, "NOMULTI");
         return C_OK;
     }
 
@@ -4425,9 +4427,10 @@ int processCommand(client *c) {
         sdsfree(msg);
         uint64_t acl_subevent;
         switch (acl_retval) {
-        case ACL_DENIED_KEY: acl_subevent = VALKEYMODULE_SUBEVENT_COMMAND_RESULT_REJECTED_ACL_KEY; break;
-        case ACL_DENIED_CHANNEL: acl_subevent = VALKEYMODULE_SUBEVENT_COMMAND_RESULT_REJECTED_ACL_CHANNEL; break;
-        default: acl_subevent = VALKEYMODULE_SUBEVENT_COMMAND_RESULT_REJECTED_ACL_CMD; break;
+        case ACL_DENIED_DB: acl_subevent = VALKEYMODULE_ACL_LOG_DB; break;
+        case ACL_DENIED_KEY: acl_subevent = VALKEYMODULE_ACL_LOG_KEY; break;
+        case ACL_DENIED_CHANNEL: acl_subevent = VALKEYMODULE_ACL_LOG_CHANNEL; break;
+        default: acl_subevent = VALKEYMODULE_ACL_LOG_CMD; break;
         }
         moduleFireCommandRejectedEvent(c, acl_subevent, acl_errpos, NULL);
         return C_OK;
@@ -4450,10 +4453,18 @@ int processCommand(client *c) {
             clusterRedirectClient(c, n, c->slot, error_code);
             c->duration = 0;
             c->cmd->rejected_calls++;
-            char slot_buf[16];
-            snprintf(slot_buf, sizeof(slot_buf), "%d", c->slot);
-            moduleFireCommandRejectedEvent(c, VALKEYMODULE_SUBEVENT_COMMAND_RESULT_REJECTED_CLUSTER,
-                                           -1, slot_buf);
+            const char *cluster_err_str;
+            switch (error_code) {
+            case CLUSTER_REDIR_ASK: cluster_err_str = "ASK"; break;
+            case CLUSTER_REDIR_CROSS_SLOT: cluster_err_str = "CROSSSLOT"; break;
+            case CLUSTER_REDIR_UNSTABLE: cluster_err_str = "TRYAGAIN"; break;
+            case CLUSTER_REDIR_DOWN_STATE:
+            case CLUSTER_REDIR_DOWN_UNBOUND:
+            case CLUSTER_REDIR_DOWN_RO_STATE: cluster_err_str = "CLUSTERDOWN"; break;
+            default: cluster_err_str = "MOVED"; break;
+            }
+            moduleFireCommandRejectedEvent(c, VALKEYMODULE_SUBEVENT_COMMAND_RESULT_REJECTED_OTHER,
+                                           -1, cluster_err_str);
             return C_OK;
         }
     }
@@ -4490,11 +4501,8 @@ int processCommand(client *c) {
             c->duration = 0;
             c->cmd->rejected_calls++;
             addReplyErrorSds(c, sdscatprintf(sdsempty(), "-REDIRECT %s:%d", server.primary_host, server.primary_port));
-            char redirect_target[NET_IP_STR_LEN + 16];
-            snprintf(redirect_target, sizeof(redirect_target), "%s:%d",
-                     server.primary_host, server.primary_port);
-            moduleFireCommandRejectedEvent(c, VALKEYMODULE_SUBEVENT_COMMAND_RESULT_REJECTED_REDIRECT,
-                                           -1, redirect_target);
+            moduleFireCommandRejectedEvent(c, VALKEYMODULE_SUBEVENT_COMMAND_RESULT_REJECTED_OTHER,
+                                           -1, "REDIRECT");
         }
         return C_OK;
     }
@@ -4533,7 +4541,7 @@ int processCommand(client *c) {
                 return C_ERR;
             }
 
-            processCommandReject(c, shared.oomerr, VALKEYMODULE_SUBEVENT_COMMAND_RESULT_REJECTED_OOM);
+            processCommandReject(c, shared.oomerr, "OOM");
             return C_OK;
         }
 
@@ -4570,7 +4578,7 @@ int processCommand(client *c) {
             sds err = writeCommandsGetDiskErrorMessage(deny_write_type);
             /* remove the newline since rejectCommandSds adds it. */
             sdssubstr(err, 0, sdslen(err) - 2);
-            processCommandRejectSds(c, err, VALKEYMODULE_SUBEVENT_COMMAND_RESULT_REJECTED_DISK_ERROR);
+            processCommandRejectSds(c, err, "MISCONF");
             return C_OK;
         }
     }
@@ -4578,16 +4586,14 @@ int processCommand(client *c) {
     /* Don't accept write commands if there are not enough good replicas and
      * user configured the min-replicas-to-write option. */
     if (is_write_command && !checkGoodReplicasStatus()) {
-        processCommandReject(c, shared.noreplicaserr,
-                             VALKEYMODULE_SUBEVENT_COMMAND_RESULT_REJECTED_NO_REPLICAS);
+        processCommandReject(c, shared.noreplicaserr, "NOREPLICAS");
         return C_OK;
     }
 
     /* Don't accept write commands if this is a read only replica. But
      * accept write commands if this is our primary. */
     if (server.primary_host && server.repl_replica_ro && !obey_client && is_write_command) {
-        processCommandReject(c, shared.roreplicaerr,
-                             VALKEYMODULE_SUBEVENT_COMMAND_RESULT_REJECTED_RO_REPLICA);
+        processCommandReject(c, shared.roreplicaerr, "ROREPLICAERR");
         return C_OK;
     }
 
@@ -4601,7 +4607,7 @@ int processCommand(client *c) {
                             "Can't execute '%s': only (P|S)SUBSCRIBE / "
                             "(P|S)UNSUBSCRIBE / PING / QUIT / RESET are allowed in this context",
                             c->cmd->fullname);
-        moduleFireCommandRejectedEvent(c, VALKEYMODULE_SUBEVENT_COMMAND_RESULT_REJECTED_PUBSUB, -1, NULL);
+        moduleFireCommandRejectedEvent(c, VALKEYMODULE_SUBEVENT_COMMAND_RESULT_REJECTED_OTHER, -1, "PUBSUB");
         return C_OK;
     }
 
@@ -4610,21 +4616,20 @@ int processCommand(client *c) {
      * link with primary. */
     if (server.primary_host && server.repl_state != REPL_STATE_CONNECTED && server.repl_serve_stale_data == 0 &&
         is_denystale_command) {
-        processCommandReject(c, shared.primarydownerr,
-                             VALKEYMODULE_SUBEVENT_COMMAND_RESULT_REJECTED_STALE);
+        processCommandReject(c, shared.primarydownerr, "MASTERDOWN");
         return C_OK;
     }
 
     /* Loading DB? Return an error if the command has not the
      * CMD_LOADING flag. */
     if (server.loading && !server.async_loading && is_denyloading_command) {
-        processCommandReject(c, shared.loadingerr, VALKEYMODULE_SUBEVENT_COMMAND_RESULT_REJECTED_LOADING);
+        processCommandReject(c, shared.loadingerr, "LOADING");
         return C_OK;
     }
 
     /* During async-loading, block certain commands. */
     if (server.async_loading && is_deny_async_loading_command) {
-        processCommandReject(c, shared.loadingerr, VALKEYMODULE_SUBEVENT_COMMAND_RESULT_REJECTED_LOADING);
+        processCommandReject(c, shared.loadingerr, "LOADING");
         return C_OK;
     }
 
@@ -4645,7 +4650,7 @@ int processCommand(client *c) {
         } else {
             rejectCommand(c, shared.slowscripterr);
         }
-        moduleFireCommandRejectedEvent(c, VALKEYMODULE_SUBEVENT_COMMAND_RESULT_REJECTED_BUSY, -1, NULL);
+        moduleFireCommandRejectedEvent(c, VALKEYMODULE_SUBEVENT_COMMAND_RESULT_REJECTED_OTHER, -1, "BUSY");
         return C_OK;
     }
 
@@ -4654,7 +4659,7 @@ int processCommand(client *c) {
      * from which replicas are exempt. */
     if (c->flag.replica && (is_may_replicate_command || is_write_command || is_read_command)) {
         rejectCommandFormat(c, "Replica can't interact with the keyspace");
-        moduleFireCommandRejectedEvent(c, VALKEYMODULE_SUBEVENT_COMMAND_RESULT_REJECTED_REPLICA_KS, -1, NULL);
+        moduleFireCommandRejectedEvent(c, VALKEYMODULE_SUBEVENT_COMMAND_RESULT_REJECTED_OTHER, -1, "REPLICAKS");
         return C_OK;
     }
 

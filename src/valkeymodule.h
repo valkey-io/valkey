@@ -681,6 +681,22 @@ static const ValkeyModuleEvent ValkeyModuleEvent_ReplicationRoleChanged = {VALKE
 #define VALKEYMODULE_SUBEVENT_ATOMIC_SLOT_MIGRATION_EXPORT_COMPLETED 5
 #define _VALKEYMODULE_SUBEVENT_ATOMIC_SLOT_MIGRATION_NEXT 6
 
+/* Subevents for ValkeyModuleEvent_CommandResultRejected.
+ *
+ * ACL-related rejections reuse the ValkeyModuleACLLogEntryReason enum values
+ * so the same constants work with both the ACL log and command result APIs:
+ *   VALKEYMODULE_ACL_LOG_AUTH    = 0  (NOAUTH: client not authenticated;    rejection_context = NULL)
+ *   VALKEYMODULE_ACL_LOG_CMD     = 1  (NOPERM: command not permitted;       rejection_context = NULL)
+ *   VALKEYMODULE_ACL_LOG_KEY     = 2  (NOPERM: key access denied;           rejection_context = key name)
+ *   VALKEYMODULE_ACL_LOG_CHANNEL = 3  (NOPERM: channel access denied;       rejection_context = channel name)
+ *   VALKEYMODULE_ACL_LOG_DB      = 4  (NOPERM: database access denied;      rejection_context = NULL)
+ *
+ * All other pre-execution rejections use REJECTED_OTHER. The rejection_context
+ * field carries a short error code string identifying the reason; see the
+ * ValkeyModuleCommandResultInfoV1 struct for the full list of values. */
+#define VALKEYMODULE_SUBEVENT_COMMAND_RESULT_REJECTED_OTHER 5
+#define _VALKEYMODULE_SUBEVENT_COMMAND_RESULT_REJECTED_NEXT 6
+
 /* ValkeyModuleClientInfo flags.
  * Note: flags VALKEYMODULE_CLIENTINFO_FLAG_PRIMARY and below were added in Valkey 9.1 */
 #define VALKEYMODULE_CLIENTINFO_FLAG_SSL (1 << 0)
@@ -864,12 +880,27 @@ typedef struct ValkeyModuleCommandResultInfo {
     int is_module_client;          /* 1 if command was from RM_Call, 0 otherwise. */
     int argc;                      /* Number of command arguments. */
     ValkeyModuleString **argv;     /* Command arguments array (zero-copy). */
-    const char *rejection_context; /* Subevent-specific context string:
-                                    * ACL_KEY/ACL_CHANNEL: denied key or channel name
-                                    * UNKNOWN_CMD: the attempted command string
-                                    * CLUSTER: the key slot number as a decimal string
-                                    * REDIRECT: the redirect target as "host:port"
-                                    * All other subevents: NULL */
+    const char *rejection_context; /* Only set for ValkeyModuleEvent_CommandResultRejected events.
+                                    * ACL_KEY (2): the denied key name.
+                                    * ACL_CHANNEL (3): the denied channel name.
+                                    * REJECTED_OTHER (5): a short error code string, one of:
+                                    *   "UNKNOWNCMD"  - unknown command
+                                    *   "WRONGARITY"  - wrong number of arguments
+                                    *   "PROTECTED"   - protected command not allowed
+                                    *   "NOMULTI"     - command not allowed inside MULTI
+                                    *   "OOM"         - server out of memory
+                                    *   "MISCONF"     - disk write error (MISCONF)
+                                    *   "NOREPLICAS"  - not enough replicas
+                                    *   "ROREPLICAERR"- write to read-only replica
+                                    *   "PUBSUB"      - write command in Pub/Sub context
+                                    *   "MASTERDOWN"  - primary is down
+                                    *   "LOADING"     - server loading dataset
+                                    *   "BUSY"        - server busy (active script/slow log)
+                                    *   "REPLICAKS"   - replica keyspace notification blocked
+                                    *   "MOVED"       - cluster MOVED redirect
+                                    *   "ASK"         - cluster ASK redirect
+                                    *   "CLUSTERDOWN" - cluster is down
+                                    * All other subevents: NULL. */
 } ValkeyModuleCommandResultInfoV1;
 
 #define ValkeyModuleCommandResultInfo ValkeyModuleCommandResultInfoV1

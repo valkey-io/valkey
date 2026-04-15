@@ -145,6 +145,7 @@ enum RdbType {
 
 /* Special RDB opcodes (saved/loaded with rdbSaveType/rdbLoadType).
  * These are special RDB types, but they start from 255 and grow down. */
+#define RDB_OPCODE_UPDATE 200           /* Inline replication command during forkless save. */
 #define RDB_OPCODE_SLOT_IMPORT 243     /* Slot import state (9.0). */
 #define RDB_OPCODE_SLOT_INFO 244       /* Foreign slot info, safe to ignore. */
 #define RDB_OPCODE_FUNCTION2 245       /* function library data */

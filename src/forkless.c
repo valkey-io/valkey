@@ -95,6 +95,51 @@ static int pruneDisconnectedReplicas(forklessSaveInfo *saveInfo);
 static void waitForBuffersToDrain(forklessSaveInfo *saveInfo);
 static int transitionRioReplicaCobToRioConnset(forklessSaveInfo *saveInfo);
 
+/* Write an inline replication command into the RDB stream using RDB_OPCODE_UPDATE.
+ * The command is serialized as RESP (multi-bulk) so the replica can replay it during RDB load. */
+static int writeReplicationData(forklessSaveInfo *saveInfo, bgIteratorItem *item) {
+    serverAssert(item->type == BGITERATOR_ITEM_REPLICATION);
+
+    if (rdbSaveType(&saveInfo->save_rio, RDB_OPCODE_UPDATE) == -1) return C_ERR;
+
+    char llaux[LONG_STR_SIZE + 3];
+    char llstr[LONG_STR_SIZE];
+    int auxlen;
+
+    /* Multi bulk length */
+    auxlen = 0;
+    llaux[auxlen++] = '*';
+    auxlen += ll2string(llaux + auxlen, LONG_STR_SIZE, item->u.repl.argc);
+    llaux[auxlen++] = '\r';
+    llaux[auxlen++] = '\n';
+    if (!rioWrite(&saveInfo->save_rio, llaux, auxlen)) return C_ERR;
+
+    for (int i = 0; i < item->u.repl.argc; i++) {
+        robj *o = item->u.repl.argv[i];
+        int objlen;
+        char *p;
+
+        if (sdsEncodedObject(o)) {
+            p = objectGetVal(o);
+            objlen = sdslen(objectGetVal(o));
+        } else {
+            p = llstr;
+            objlen = ll2string(p, LONG_STR_SIZE, (long)objectGetVal(o));
+        }
+
+        auxlen = 0;
+        llaux[auxlen++] = '$';
+        auxlen += ll2string(llaux + auxlen, LONG_STR_SIZE, objlen);
+        llaux[auxlen++] = '\r';
+        llaux[auxlen++] = '\n';
+        if (!rioWrite(&saveInfo->save_rio, llaux, auxlen)) return C_ERR;
+        if (!rioWrite(&saveInfo->save_rio, p, objlen)) return C_ERR;
+        if (!rioWrite(&saveInfo->save_rio, "\r\n", 2)) return C_ERR;
+    }
+
+    return C_OK;
+}
+
 /* Entry point for background thread.
  * Upon entering:
  *  - The RDB header has been written (magic, aux fields, functions)
@@ -156,17 +201,32 @@ static void *forklessSaveProcessor(void *arg) {
             initStaticStringObject(key, objectGetKey(item->u.dbe.de));
             robj *o = item->u.dbe.de;
 
-            long long expire = objectGetExpire(item->u.dbe.de);
-            if (rdbSaveKeyValuePair(&saveInfo->save_rio, &key, o, expire, item->dbid, RDB_VERSION) == -1) {
-                serverLog(LL_WARNING, "forkless-save: error writing KV pair");
-                err = C_ERR;
-            }
-            break;
-        default:
-            /* bgIteration may deliver item types that are not necessarily relevant to us.
-             * New types may also be added in the future. It is the client's responsibility
-             * to filter out irrelevant types, so we simply ignore them here. */
-            break;
+                long long expire = objectGetExpire(item->u.dbe.de);
+                if (rdbSaveKeyValuePair(&saveInfo->save_rio, &key, o, expire, item->dbid, RDB_VERSION) == -1) {
+                    serverLog(LL_WARNING, "forkless-save: error writing KV pair");
+                    err = C_ERR;
+                }
+                break;
+
+            case BGITERATOR_ITEM_REPLICATION:
+                serverAssert(saveInfo->write_target == RDB_WRITE_TARGET_SOCKET);
+                if ((err = writeSelectDb(saveInfo, item->dbid)) == C_ERR) break;
+                err = writeReplicationData(saveInfo, item);
+                break;
+
+            case BGITERATOR_ITEM_SWAPDB:
+                /* Iterator tracks swapdb internally; no special action needed. */
+                break;
+
+            case BGITERATOR_ITEM_FLUSHDB:
+                /* Flush command will be replicated via the replication stream. */
+                break;
+            
+            default:
+                /* bgIteration may deliver item types that are not necessarily relevant to us.
+                * New types may also be added in the future. It is the client's responsibility
+                * to filter out irrelevant types, so we simply ignore them here. */
+                break;
         }
 
         if (elapsedMs(lastStatsTime) >= statsIntervalMs) {

@@ -3707,10 +3707,94 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
         if ((type = rdbLoadType(rdb)) == -1) goto eoferr;
 
         /* Safeguard for unknown foreign opcode interpretations. */
-        if (is_redis_magic && type >= RDB_FOREIGN_TYPE_MIN && type <= RDB_FOREIGN_TYPE_MAX) {
+        if (is_redis_magic && type >= RDB_FOREIGN_TYPE_MIN && type <= RDB_FOREIGN_TYPE_MAX
+            && type != RDB_OPCODE_UPDATE) {
             serverLog(LL_WARNING, "Can't handle foreign type or opcode %d in RDB with version %d",
                       type, rdbver);
             return RDB_FAILED;
+        }
+
+        /* Handle inline replication commands embedded during forkless save. */
+        if (type == RDB_OPCODE_UPDATE) {
+            char buf[128];
+            int argc, j;
+
+            /* Read multi-bulk header: *<argc>\r\n */
+            if (rioRead(rdb, buf, 1) == 0 || buf[0] != '*') goto eoferr;
+            {
+                int pos = 0;
+                while (pos < (int)sizeof(buf) - 1) {
+                    if (rioRead(rdb, buf + pos, 1) == 0) goto eoferr;
+                    if (buf[pos] == '\n') break;
+                    pos++;
+                }
+                buf[pos] = '\0'; /* overwrite \n, buf may have trailing \r */
+                argc = atoi(buf);
+            }
+            if (argc < 1) goto eoferr;
+
+            /* Read each argument: $<len>\r\n<data>\r\n */
+            robj **argv = zmalloc(sizeof(robj *) * argc);
+            for (j = 0; j < argc; j++) {
+                if (rioRead(rdb, buf, 1) == 0 || buf[0] != '$') {
+                    for (int k = 0; k < j; k++) decrRefCount(argv[k]);
+                    zfree(argv);
+                    goto eoferr;
+                }
+                int pos = 0;
+                while (pos < (int)sizeof(buf) - 1) {
+                    if (rioRead(rdb, buf + pos, 1) == 0) {
+                        for (int k = 0; k < j; k++) decrRefCount(argv[k]);
+                        zfree(argv);
+                        goto eoferr;
+                    }
+                    if (buf[pos] == '\n') break;
+                    pos++;
+                }
+                buf[pos] = '\0';
+                long len = strtol(buf, NULL, 10);
+
+                sds argsds = sdsnewlen(SDS_NOINIT, len);
+                if (len && rioRead(rdb, argsds, len) == 0) {
+                    sdsfree(argsds);
+                    for (int k = 0; k < j; k++) decrRefCount(argv[k]);
+                    zfree(argv);
+                    goto eoferr;
+                }
+                argv[j] = createObject(OBJ_STRING, argsds);
+                /* Discard \r\n */
+                char crlf[2];
+                if (rioRead(rdb, crlf, 2) == 0) {
+                    for (int k = 0; k <= j; k++) decrRefCount(argv[k]);
+                    zfree(argv);
+                    goto eoferr;
+                }
+            }
+
+            /* Look up and execute the command */
+            struct serverCommand *cmd = lookupCommand(argv, argc);
+            if (cmd) {
+                if (rdb_loading_ctx->update_client == NULL) {
+                    rdb_loading_ctx->update_client = createAOFClient();
+                    serverAssert(rdb_loading_ctx->update_client != NULL);
+                }
+                client *fakeClient = rdb_loading_ctx->update_client;
+                fakeClient->argc = argc;
+                fakeClient->argv = argv;
+                fakeClient->argv_len = argc;
+                fakeClient->cmd = fakeClient->lastcmd = cmd;
+                fakeClient->db = db;
+                cmd->proc(fakeClient);
+                fakeClient->cmd = NULL;
+                /* Reset client but don't free argv — we free below */
+                fakeClient->argc = 0;
+                fakeClient->argv = NULL;
+                fakeClient->argv_len = 0;
+            }
+
+            for (j = 0; j < argc; j++) decrRefCount(argv[j]);
+            zfree(argv);
+            continue;
         }
 
         /* Handle special types. */
@@ -4105,6 +4189,10 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
         serverLog(LL_NOTICE, "Done loading RDB, keys loaded: %lld, keys expired: %lld, all fields expired hashes: %lld.",
                   server.rdb_last_load_keys_loaded, server.rdb_last_load_keys_expired, rdb_last_load_all_fields_expired);
     }
+    if (rdb_loading_ctx->update_client) {
+        freeClient(rdb_loading_ctx->update_client);
+        rdb_loading_ctx->update_client = NULL;
+    }
     return RDB_OK;
 
     /* Unexpected end of file is handled here calling rdbReportReadError():
@@ -4112,6 +4200,10 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
      * the RDB file from a socket during initial SYNC (diskless replica mode),
      * we'll report the error to the caller, so that we can retry. */
 eoferr:
+    if (rdb_loading_ctx->update_client) {
+        freeClient(rdb_loading_ctx->update_client);
+        rdb_loading_ctx->update_client = NULL;
+    }
     if (rdbRioHasInternalStreamReaderError(rdb)) {
         serverLog(LL_WARNING, "Internal error while decoding streaming-compressed RDB input. Aborting now.");
         rdbReportReadError("Internal error decoding compressed RDB stream");

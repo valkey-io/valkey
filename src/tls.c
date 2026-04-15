@@ -1707,7 +1707,9 @@ static const char *connTLSGetLastError(connection *conn_) {
 }
 
 static int connTLSSetWriteHandler(connection *conn, ConnectionCallbackFunc func, int barrier) {
+    tls_connection *tls_conn = (tls_connection *)conn;
     conn->write_handler = func;
+    if (!func) tls_conn->flags &= ~TLS_CONN_FLAG_WRITE_WANT_READ;
     if (barrier)
         conn->flags |= CONN_FLAG_WRITE_BARRIER;
     else
@@ -1717,7 +1719,9 @@ static int connTLSSetWriteHandler(connection *conn, ConnectionCallbackFunc func,
 }
 
 static int connTLSSetReadHandler(connection *conn, ConnectionCallbackFunc func) {
+    tls_connection *tls_conn = (tls_connection *)conn;
     conn->read_handler = func;
+    if (!func) tls_conn->flags &= ~TLS_CONN_FLAG_READ_WANT_WRITE;
     updateSSLEvent((tls_connection *)conn);
     return C_OK;
 }

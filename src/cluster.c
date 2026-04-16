@@ -145,6 +145,7 @@ void clusterInitLast(void) {
     if (clusterCurrentBus->initLast) clusterCurrentBus->initLast();
 }
 void clusterCron(void) {
+    clusterSlotMigrationCron();
     clusterCurrentBus->cron();
 }
 void clusterBeforeSleep(void) {
@@ -157,29 +158,89 @@ void clusterBeforeSleep(void) {
 void clusterHandleServerShutdown(bool auto_failover) {
     clusterCurrentBus->handleServerShutdown(auto_failover);
 }
+static void clusterNotifyMyselfUpdated(int old_flags);
+
 void clusterUpdateMyselfFlags(void) {
-    clusterCurrentBus->updateMyselfFlags();
+    if (!myself) return;
+    int oldflags = myself->flags;
+    int nofailover = server.cluster_replica_no_failover ? CLUSTER_NODE_NOFAILOVER : 0;
+    myself->flags &= ~CLUSTER_NODE_NOFAILOVER;
+    myself->flags |= nofailover;
+    if (myself->flags != oldflags) {
+        clusterNotifyMyselfUpdated(oldflags);
+    }
 }
+
+static void clusterNotifyMyselfUpdated(int old_flags) {
+    if (clusterCurrentBus->onMyselfUpdated) clusterCurrentBus->onMyselfUpdated(old_flags);
+}
+
 void clusterUpdateMyselfIp(void) {
-    clusterCurrentBus->updateMyselfIp();
+    if (!myself) return;
+    static char *prev_ip = NULL;
+    char *curr_ip = server.cluster_announce_ip;
+    int changed = 0;
+
+    if (prev_ip == NULL && curr_ip != NULL)
+        changed = 1;
+    else if (prev_ip != NULL && curr_ip == NULL)
+        changed = 1;
+    else if (prev_ip && curr_ip && strcmp(prev_ip, curr_ip))
+        changed = 1;
+
+    if (changed) {
+        if (prev_ip) zfree(prev_ip);
+        prev_ip = curr_ip;
+        if (curr_ip) {
+            prev_ip = zstrdup(prev_ip);
+            valkey_strlcpy(myself->ip, server.cluster_announce_ip, NET_IP_STR_LEN);
+        } else {
+            myself->ip[0] = '\0'; /* Force autodetection. */
+        }
+        clusterNotifyMyselfUpdated(myself->flags);
+    }
 }
+
+static int clusterUpdateMyselfSdsField(char **field, const char *value) {
+    if (value != NULL && !strcmp(value, *field)) return 0;
+    if (value == NULL && sdslen(*field) == 0) return 0;
+    if (value != NULL)
+        *field = sdscpy(*field, value);
+    else
+        sdsclear(*field);
+    return 1;
+}
+
 void clusterUpdateMyselfHostname(void) {
-    clusterCurrentBus->updateMyselfHostname();
+    if (!myself) return;
+    if (clusterUpdateMyselfSdsField(&myself->hostname, server.cluster_announce_hostname))
+        clusterNotifyMyselfUpdated(myself->flags);
 }
 void clusterUpdateMyselfAnnouncedPorts(void) {
-    clusterCurrentBus->updateMyselfAnnouncedPorts();
+    if (!myself) return;
+    deriveAnnouncedPorts(&myself->tcp_port, &myself->tls_port, &myself->cport,
+                         &myself->announce_client_tcp_port, &myself->announce_client_tls_port);
+    clusterNotifyMyselfUpdated(myself->flags);
 }
 void clusterUpdateMyselfHumanNodename(void) {
-    clusterCurrentBus->updateMyselfHumanNodename();
+    if (!myself) return;
+    if (clusterUpdateMyselfSdsField(&myself->human_nodename, server.cluster_announce_human_nodename))
+        clusterNotifyMyselfUpdated(myself->flags);
 }
 void clusterUpdateMyselfClientIpV4(void) {
-    clusterCurrentBus->updateMyselfClientIpV4();
+    if (!myself) return;
+    if (clusterUpdateMyselfSdsField(&myself->announce_client_ipv4, server.cluster_announce_client_ipv4))
+        clusterNotifyMyselfUpdated(myself->flags);
 }
 void clusterUpdateMyselfClientIpV6(void) {
-    clusterCurrentBus->updateMyselfClientIpV6();
+    if (!myself) return;
+    if (clusterUpdateMyselfSdsField(&myself->announce_client_ipv6, server.cluster_announce_client_ipv6))
+        clusterNotifyMyselfUpdated(myself->flags);
 }
 void clusterUpdateMyselfAvailabilityZone(void) {
-    clusterCurrentBus->updateMyselfAvailabilityZone();
+    if (!myself) return;
+    if (clusterUpdateMyselfSdsField(&myself->availability_zone, server.availability_zone))
+        clusterNotifyMyselfUpdated(myself->flags);
 }
 
 void clusterPropagatePublish(robj *channel, robj *message, int sharded) {

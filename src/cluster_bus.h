@@ -36,15 +36,12 @@ typedef struct clusterBusType {
      * implementation typically sends an initial message (e.g. PING). */
     void (*postConnect)(struct clusterLink *link);
 
-    /* Config updates — called from config.c */
-    void (*updateMyselfFlags)(void);
-    void (*updateMyselfIp)(void);
-    void (*updateMyselfHostname)(void);
-    void (*updateMyselfAnnouncedPorts)(void);
-    void (*updateMyselfHumanNodename)(void);
-    void (*updateMyselfClientIpV4)(void);
-    void (*updateMyselfClientIpV6)(void);
-    void (*updateMyselfAvailabilityZone)(void);
+    /* Called after a config change updates myself's metadata (IP, ports,
+     * hostname, flags, etc.). The protocol implementation should arrange
+     * for the change to be persisted and propagated. old_flags is the
+     * value of myself->flags before the update, so the implementation
+     * can detect flag changes that require additional action. */
+    void (*onMyselfUpdated)(int old_flags);
 
     /* Message propagation — called from pubsub.c, module.c */
     void (*propagatePublish)(struct serverObject *channel, struct serverObject *message, int sharded);

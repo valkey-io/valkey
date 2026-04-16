@@ -516,61 +516,10 @@ static clusterMsg *getMessageFromSendBlock(clusterMsgSendBlock *block) {
  * in the "myself" node based on the current configuration of the node,
  * that may change at runtime via CONFIG SET. This function changes the
  * set of flags in myself->flags accordingly. */
-static void clusterLegacyUpdateMyselfFlags(void) {
-    if (!myself) return;
-    int oldflags = myself->flags;
-    int nofailover = server.cluster_replica_no_failover ? CLUSTER_NODE_NOFAILOVER : 0;
-    myself->flags &= ~CLUSTER_NODE_NOFAILOVER;
-    myself->flags |= nofailover;
-    myself->flags |= CLUSTER_NODE_EXTENSIONS_SUPPORTED |
-                     CLUSTER_NODE_LIGHT_HDR_PUBLISH_SUPPORTED |
-                     CLUSTER_NODE_LIGHT_HDR_MODULE_SUPPORTED |
-                     CLUSTER_NODE_MULTI_MEET_SUPPORTED;
-    if (myself->flags != oldflags) {
-        clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_UPDATE_STATE);
-    }
-}
-
-
-/* We want to take myself->port/cport/pport in sync with the
- * cluster-announce-port/cluster-announce-bus-port/cluster-announce-tls-port option.
- * The option can be set at runtime via CONFIG SET. */
-static void clusterLegacyUpdateMyselfAnnouncedPorts(void) {
-    if (!myself) return;
-    deriveAnnouncedPorts(&myself->tcp_port, &myself->tls_port, &myself->cport,
-                         &myself->announce_client_tcp_port, &myself->announce_client_tls_port);
+static void clusterLegacyOnMyselfUpdated(int old_flags) {
     clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG);
-}
-
-/* We want to take myself->ip in sync with the cluster-announce-ip option.
- * The option can be set at runtime via CONFIG SET. */
-static void clusterLegacyUpdateMyselfIp(void) {
-    if (!myself) return;
-    static char *prev_ip = NULL;
-    char *curr_ip = server.cluster_announce_ip;
-    int changed = 0;
-
-    if (prev_ip == NULL && curr_ip != NULL)
-        changed = 1;
-    else if (prev_ip != NULL && curr_ip == NULL)
-        changed = 1;
-    else if (prev_ip && curr_ip && strcmp(prev_ip, curr_ip))
-        changed = 1;
-
-    if (changed) {
-        if (prev_ip) zfree(prev_ip);
-        prev_ip = curr_ip;
-
-        if (curr_ip) {
-            /* We always take a copy of the previous IP address, by
-             * duplicating the string. This way later we can check if
-             * the address really changed. */
-            prev_ip = zstrdup(prev_ip);
-            valkey_strlcpy(myself->ip, server.cluster_announce_ip, NET_IP_STR_LEN);
-        } else {
-            myself->ip[0] = '\0'; /* Force autodetection. */
-        }
-        clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG);
+    if ((myself->flags ^ old_flags) & CLUSTER_NODE_NOFAILOVER) {
+        clusterDoBeforeSleep(CLUSTER_TODO_UPDATE_STATE);
     }
 }
 
@@ -676,32 +625,6 @@ static inline uint64_t nodeEpoch(clusterNode *n) {
     return n->replicaof ? LEGACY_DATA(n->replicaof)->configEpoch : LEGACY_DATA(n)->configEpoch;
 }
 
-/* Update my hostname based on server configuration values */
-static void clusterLegacyUpdateMyselfHostname(void) {
-    if (!myself) return;
-    updateAnnouncedHostname(myself, server.cluster_announce_hostname);
-}
-
-static void clusterLegacyUpdateMyselfHumanNodename(void) {
-    if (!myself) return;
-    updateAnnouncedHumanNodename(myself, server.cluster_announce_human_nodename);
-}
-
-static void clusterLegacyUpdateMyselfAvailabilityZone(void) {
-    if (!myself) return;
-    updateAvailabilityZone(myself, server.availability_zone);
-}
-
-static void clusterLegacyUpdateMyselfClientIpV4(void) {
-    if (!myself) return;
-    updateAnnouncedClientIpV4(myself, server.cluster_announce_client_ipv4);
-}
-
-static void clusterLegacyUpdateMyselfClientIpV6(void) {
-    if (!myself) return;
-    updateAnnouncedClientIpV6(myself, server.cluster_announce_client_ipv6);
-}
-
 static void clusterLegacyInit(void) {
     server.cluster->protocol_data = zmalloc(sizeof(clusterLegacyState));
     LEGACY_STATE()->currentEpoch = 0;
@@ -741,6 +664,11 @@ static void clusterLegacyResetStats(void) {
 
 static void clusterLegacyInitLast(void) {
     clusterListenerInit();
+    /* Set gossip protocol capability flags on myself. */
+    myself->flags |= CLUSTER_NODE_EXTENSIONS_SUPPORTED |
+                     CLUSTER_NODE_LIGHT_HDR_PUBLISH_SUPPORTED |
+                     CLUSTER_NODE_LIGHT_HDR_MODULE_SUPPORTED |
+                     CLUSTER_NODE_MULTI_MEET_SUPPORTED;
 }
 
 void clusterAutoFailoverOnShutdown(void) {
@@ -4846,11 +4774,6 @@ static void clusterLegacyCron(void) {
     static unsigned long long iteration = 0;
     iteration++; /* Number of times this function was called so far. */
 
-    clusterLegacyUpdateMyselfHostname();
-
-    /* Drive in progress slot import/export links. */
-    clusterSlotMigrationCron();
-
     /* Clear so clusterNodeCronHandleReconnect can count the number of nodes in PFAIL. */
     LEGACY_STATE()->stats_pfail_nodes = 0;
     /* Run through some of the operations we want to do on each cluster node. */
@@ -5563,14 +5486,7 @@ clusterBusType clusterLegacyBus = {
     .validateMessageHeader = clusterLegacyValidateMessageHeader,
     .processMessage = clusterProcessPacket,
     .postConnect = clusterLegacyPostConnect,
-    .updateMyselfFlags = clusterLegacyUpdateMyselfFlags,
-    .updateMyselfIp = clusterLegacyUpdateMyselfIp,
-    .updateMyselfHostname = clusterLegacyUpdateMyselfHostname,
-    .updateMyselfAnnouncedPorts = clusterLegacyUpdateMyselfAnnouncedPorts,
-    .updateMyselfHumanNodename = clusterLegacyUpdateMyselfHumanNodename,
-    .updateMyselfClientIpV4 = clusterLegacyUpdateMyselfClientIpV4,
-    .updateMyselfClientIpV6 = clusterLegacyUpdateMyselfClientIpV6,
-    .updateMyselfAvailabilityZone = clusterLegacyUpdateMyselfAvailabilityZone,
+    .onMyselfUpdated = clusterLegacyOnMyselfUpdated,
     .propagatePublish = clusterLegacyPropagatePublish,
     .sendModuleMessage = clusterLegacySendModuleMessageToTarget,
     .getConnectionsCount = clusterLegacyGetConnectionsCount,

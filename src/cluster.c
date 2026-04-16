@@ -166,9 +166,7 @@ void clusterUpdateMyselfFlags(void) {
     int nofailover = server.cluster_replica_no_failover ? CLUSTER_NODE_NOFAILOVER : 0;
     myself->flags &= ~CLUSTER_NODE_NOFAILOVER;
     myself->flags |= nofailover;
-    if (myself->flags != oldflags) {
-        clusterNotifyMyselfUpdated(oldflags);
-    }
+    clusterNotifyMyselfUpdated(oldflags);
 }
 
 static void clusterNotifyMyselfUpdated(int old_flags) {
@@ -284,8 +282,8 @@ void clusterSlotChange(slotRange *ranges, int numranges, clusterNode *target, vo
                                   target, ctx, callback);
 }
 
-void clusterCleanupFailoverState(void) {
-    clusterCurrentBus->resetManualFailoverState();
+void clusterCancelManualFailover(void) {
+    clusterCurrentBus->cancelManualFailover();
 }
 
 void clusterScheduleHandleSlotMigration(void) {
@@ -325,12 +323,12 @@ void clusterSetPrimary(clusterNode *n, int closeSlots, int full_sync_required) {
     clusterNodeAddReplica(n, myself);
     replicationSetPrimary(n->ip, getNodeDefaultReplicationPort(n), full_sync_required, true);
     removeAllNotOwnedShardChannelSubscriptions();
-    clusterCleanupFailoverState();
+    clusterCancelManualFailover();
 
     /* Since we have changed to a new primary node, the previously set
      * election state should no longer be used, whether it is in progress
      * or timed out. */
-    clusterCurrentBus->resetAutomaticFailoverState();
+    clusterCurrentBus->cancelAutomaticFailover();
 
     /* Perform needed slot migration state transitions */
     clusterUpdateSlotExportsOnOwnershipChange();
@@ -1560,7 +1558,7 @@ static void clusterCommandPromoteCompletion(void *ctx, const char *error) {
     flushAllDataAndResetRDB(server.repl_replica_lazy_flush ? EMPTYDB_ASYNC : EMPTYDB_NO_FLAGS);
     verifyClusterConfigWithData();
     clusterCloseAllSlots();
-    clusterCleanupFailoverState();
+    clusterCancelManualFailover();
     addReply(c, shared.ok);
 }
 

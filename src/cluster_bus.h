@@ -103,11 +103,11 @@ typedef struct clusterBusType {
     /* Clean up any protocol-specific manual failover state. Called when the
      * node's role changes and any in-progress manual failover state is no
      * longer relevant. */
-    void (*resetManualFailoverState)(void);
+    void (*cancelManualFailover)(void);
 
     /* Reset automatic failover election state. Called when the node switches
      * to a new primary, since any previous election state is stale. */
-    void (*resetAutomaticFailoverState)(void);
+    void (*cancelAutomaticFailover)(void);
 
     /* Node management — called from cluster commands.
      * Each callback performs the protocol-specific action and calls the

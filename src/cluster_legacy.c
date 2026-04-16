@@ -434,7 +434,7 @@ void clusterMoveNodeSlots(clusterNode *from_node, clusterNode *to_node, int *slo
 void clusterHandleReplicaFailover(void);
 void clusterHandleReplicaMigration(int max_replicas);
 void clusterSendUpdate(clusterLink *link, clusterNode *node);
-static void clusterLegacyResetManualFailover(void);
+static void clusterLegacyCancelManualFailover(void);
 void clusterSetNodeAsPrimary(clusterNode *n);
 void clusterDelNode(clusterNode *delnode);
 static void clusterLegacyResetStats(void);
@@ -517,6 +517,11 @@ static clusterMsg *getMessageFromSendBlock(clusterMsgSendBlock *block) {
  * that may change at runtime via CONFIG SET. This function changes the
  * set of flags in myself->flags accordingly. */
 static void clusterLegacyOnMyselfUpdated(int old_flags) {
+    /* Set gossip protocol capability flags. */
+    myself->flags |= CLUSTER_NODE_EXTENSIONS_SUPPORTED |
+                     CLUSTER_NODE_LIGHT_HDR_PUBLISH_SUPPORTED |
+                     CLUSTER_NODE_LIGHT_HDR_MODULE_SUPPORTED |
+                     CLUSTER_NODE_MULTI_MEET_SUPPORTED;
     clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG);
     if ((myself->flags ^ old_flags) & CLUSTER_NODE_NOFAILOVER) {
         clusterDoBeforeSleep(CLUSTER_TODO_UPDATE_STATE);
@@ -651,7 +656,7 @@ static void clusterLegacyInit(void) {
 
     LEGACY_STATE()->mf_end = 0;
     LEGACY_STATE()->mf_replica = NULL;
-    clusterLegacyResetManualFailover();
+    clusterLegacyCancelManualFailover();
 }
 
 static void clusterLegacyResetStats(void) {
@@ -664,11 +669,6 @@ static void clusterLegacyResetStats(void) {
 
 static void clusterLegacyInitLast(void) {
     clusterListenerInit();
-    /* Set gossip protocol capability flags on myself. */
-    myself->flags |= CLUSTER_NODE_EXTENSIONS_SUPPORTED |
-                     CLUSTER_NODE_LIGHT_HDR_PUBLISH_SUPPORTED |
-                     CLUSTER_NODE_LIGHT_HDR_MODULE_SUPPORTED |
-                     CLUSTER_NODE_MULTI_MEET_SUPPORTED;
 }
 
 void clusterAutoFailoverOnShutdown(void) {
@@ -771,7 +771,7 @@ static void clusterLegacyReset(int hard) {
 
     /* Close slots, reset manual failover state. */
     clusterCloseAllSlots();
-    clusterLegacyResetManualFailover();
+    clusterLegacyCancelManualFailover();
 
     /* Unassign all the slots. */
     for (j = 0; j < CLUSTER_SLOTS; j++) clusterDelSlot(j);
@@ -3209,7 +3209,7 @@ int clusterProcessPacket(clusterLink *link) {
         if (!sender || sender->replicaof != myself) return 1;
         /* Manual failover requested from replicas. Initialize the state
          * accordingly. */
-        clusterLegacyResetManualFailover();
+        clusterLegacyCancelManualFailover();
         LEGACY_STATE()->mf_end = now + server.cluster_mf_timeout;
         LEGACY_STATE()->mf_replica = sender;
         pauseActions(PAUSE_DURING_FAILOVER, now + (server.cluster_mf_timeout * CLUSTER_MF_PAUSE_MULT),
@@ -4210,7 +4210,7 @@ void clusterFailoverReplaceYourPrimary(void) {
     clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_FSYNC_CONFIG | CLUSTER_TODO_BROADCAST_ALL);
 
     /* 5) If there was a manual failover in progress, clear the state. */
-    clusterLegacyResetManualFailover();
+    clusterLegacyCancelManualFailover();
 
     /* 6) Upon becoming primary, we need to ensure that data is deleted in unowned slots. */
     verifyClusterConfigWithData();
@@ -4605,7 +4605,7 @@ void manualFailoverCanStart(void) {
  *
  * The function can be used both to initialize the manual failover state at
  * startup or to abort a manual failover in progress. */
-static void clusterLegacyResetManualFailover(void) {
+static void clusterLegacyCancelManualFailover(void) {
     if (LEGACY_STATE()->mf_replica) {
         /* We were a primary failing over, so we paused clients and related actions.
          * Regardless of the outcome we unpause now to allow traffic again. */
@@ -4618,7 +4618,7 @@ static void clusterLegacyResetManualFailover(void) {
 }
 
 /* Reset automatic failover election state. */
-static void clusterLegacyResetAutomaticFailover(void) {
+static void clusterLegacyCancelAutomaticFailover(void) {
     LEGACY_STATE()->failover_auth_time = 0;
 }
 
@@ -4626,7 +4626,7 @@ static void clusterLegacyResetAutomaticFailover(void) {
 void manualFailoverCheckTimeout(void) {
     if (LEGACY_STATE()->mf_end && LEGACY_STATE()->mf_end < mstime()) {
         serverLog(LL_WARNING, "Manual failover timed out.");
-        clusterLegacyResetManualFailover();
+        clusterLegacyCancelManualFailover();
     }
 }
 
@@ -5462,7 +5462,7 @@ static int clusterLegacySubcommand(client *c) {
 }
 
 static void clusterLegacyFailover(int force, int takeover, void *ctx, void (*callback)(void *ctx, const char *error)) {
-    clusterLegacyResetManualFailover();
+    clusterLegacyCancelManualFailover();
     LEGACY_STATE()->mf_end = mstime() + server.cluster_mf_timeout;
     if (takeover) {
         clusterBumpConfigEpochWithoutConsensus();
@@ -5502,8 +5502,8 @@ clusterBusType clusterLegacyBus = {
     .initNodeData = clusterLegacyInitNodeData,
     .freeNodeData = clusterLegacyFreeNodeData,
     .slotChange = clusterLegacySlotChange,
-    .resetManualFailoverState = clusterLegacyResetManualFailover,
-    .resetAutomaticFailoverState = clusterLegacyResetAutomaticFailover,
+    .cancelManualFailover = clusterLegacyCancelManualFailover,
+    .cancelAutomaticFailover = clusterLegacyCancelAutomaticFailover,
     .forgetNode = clusterLegacyForgetNode,
     .setReplicaOf = clusterLegacySetReplicaOf,
     .failover = clusterLegacyFailover,

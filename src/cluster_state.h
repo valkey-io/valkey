@@ -127,6 +127,9 @@ int clusterNodeClearSlotBit(clusterNode *n, int slot);
 void clusterRemoveNodeFromShard(clusterNode *node);
 void clusterAddNodeToShard(const char *shard_id, clusterNode *node);
 void clusterAddNode(clusterNode *node);
+void clusterDelNode(clusterNode *node);
+void clusterRenameNode(clusterNode *node, char *newname);
+void freeClusterNode(clusterNode *n);
 list *clusterGetNodesInMyShard(clusterNode *node);
 
 /* Node creation. */

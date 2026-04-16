@@ -297,6 +297,17 @@ int clusterLinkDebugCommand(client *c) {
     return 1;
 }
 
+/* Allocate a zeroed send block that can hold msglen bytes of payload. */
+clusterMsgSendBlock *clusterAllocMsgSendBlock(uint32_t msglen) {
+    uint32_t blocklen = sizeof(clusterMsgSendBlock) + msglen;
+    clusterMsgSendBlock *msgblock = zcalloc(blocklen);
+    msgblock->refcount = 1;
+    msgblock->totlen = blocklen;
+    msgblock->len = msglen;
+    server.stat_cluster_links_memory += blocklen;
+    return msgblock;
+}
+
 /* Queue a send block on a link for sending. The caller must set
  * msgblock->len to the number of bytes to send before calling this. */
 void clusterLinkSendBlock(clusterLink *link, clusterMsgSendBlock *msgblock) {
@@ -388,6 +399,69 @@ static void clusterConnAcceptHandler(connection *conn) {
 
     /* Register read handler */
     connSetReadHandler(conn, clusterReadHandler);
+}
+
+/* Establish outbound links to nodes that don't have one.
+ * Throttles reconnection attempts and cleans up timed-out handshakes. */
+void clusterConnectNodes(void) {
+    mstime_t now = mstime();
+    mstime_t handshake_timeout = max(server.cluster_node_timeout, 1000);
+    mstime_t reconnect_interval = server.cluster_node_timeout / 2;
+    if (reconnect_interval <= 0) reconnect_interval = 1;
+
+    dictIterator *di = dictGetSafeIterator(server.cluster->nodes);
+    dictEntry *de;
+    while ((de = dictNext(di)) != NULL) {
+        clusterNode *node = dictGetVal(de);
+        if (node == myself) continue;
+        if (node->link) continue;
+
+        /* Remove handshake nodes that have timed out. */
+        if (nodeInHandshake(node) && now - node->ctime > handshake_timeout) {
+            clusterDelNode(node);
+            continue;
+        }
+
+        /* Throttle reconnection attempts. */
+        if (now - node->outbound_link_attempt_time < reconnect_interval) continue;
+        node->outbound_link_attempt_time = now;
+
+        clusterLink *link = createClusterLink(node);
+        link->conn = connCreate(connTypeOfCluster());
+        connSetPrivateData(link->conn, link);
+        if (connConnect(link->conn, node->ip, node->cport, server.bind_source_addr, 0,
+                        clusterLinkConnectHandler) == C_ERR) {
+            serverLog(LL_DEBUG, "Unable to connect to Cluster Node [%s]:%d -> %s", node->ip, node->cport,
+                      server.neterr);
+            freeClusterLink(link);
+        }
+    }
+    dictReleaseIterator(di);
+}
+
+void clusterListenerInit(void) {
+    if (!connectionByType(connTypeOfCluster()->get_type())) {
+        serverLog(LL_WARNING, "Missing connection type %s, but it is required for the Cluster bus.",
+                  getConnectionTypeName(connTypeOfCluster()->get_type()));
+        exit(1);
+    }
+
+    int port = defaultClientPort();
+    connListener *listener = &server.clistener;
+    listener->count = 0;
+    listener->bindaddr = server.bindaddr;
+    listener->bindaddr_count = server.bindaddr_count;
+    listener->port = server.cluster_port ? server.cluster_port : port + CLUSTER_PORT_INCR;
+    listener->ct = connTypeOfCluster();
+    if (connListen(listener) == C_ERR) {
+        /* Note: the following log text is matched by the test suite. */
+        serverLog(LL_WARNING, "Failed listening on port %u (cluster), aborting.", listener->port);
+        exit(1);
+    }
+
+    if (createSocketAcceptHandler(&server.clistener, clusterAcceptHandler) != C_OK) {
+        serverPanic("Unrecoverable error creating Cluster socket accept handler.");
+    }
 }
 
 void clusterAcceptHandler(aeEventLoop *el, int fd, void *privdata, int mask) {

@@ -90,6 +90,10 @@ typedef struct clusterBusType {
      * Sets node->protocol_data. If NULL, protocol_data is left as NULL. */
     void (*initNodeData)(clusterNode *node);
 
+    /* Free protocol-specific per-node data allocated by initNodeData.
+     * If NULL, protocol_data is not freed. */
+    void (*freeNodeData)(clusterNode *node);
+
     /* Slot ownership changes — called from cluster commands and slot migration.
      * Assigns or unassigns slots specified by an array of slot ranges. If
      * target is non-NULL, slots are assigned to target. If target is NULL,
@@ -114,10 +118,10 @@ typedef struct clusterBusType {
     /* Node management — called from cluster commands.
      * Each callback performs the protocol-specific action and calls the
      * completion callback when done. The legacy implementation calls it
-     * synchronously. A consensus-based implementation may call it after
-     * the change is committed. The ctx pointer is passed through to the
-     * completion callback (typically the client). On success, error is
-     * NULL. On failure, error points to an error message string. */
+     * synchronously. A consensus-based implementation may call it after the
+     * change is committed. The ctx pointer is passed through to the completion
+     * callback. On success, error is NULL. On failure, error points to an error
+     * message string. */
     void (*forgetNode)(const char *node_id, size_t id_len, void *ctx, void (*callback)(void *ctx, const char *error));
     void (*setReplicaOf)(clusterNode *primary, void *ctx, void (*callback)(void *ctx, const char *error));
     void (*failover)(int force, int takeover, void *ctx, void (*callback)(void *ctx, const char *error));

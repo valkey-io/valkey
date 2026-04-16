@@ -142,7 +142,7 @@ void clusterInit(void) {
     resetClusterStats();
 }
 void clusterInitLast(void) {
-    clusterCurrentBus->initLast();
+    if (clusterCurrentBus->initLast) clusterCurrentBus->initLast();
 }
 void clusterCron(void) {
     clusterCurrentBus->cron();

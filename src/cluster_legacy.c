@@ -738,29 +738,9 @@ static void clusterLegacyResetStats(void) {
     memset(LEGACY_STATE()->stats_bus_messages_received, 0, sizeof(LEGACY_STATE()->stats_bus_messages_received));
 }
 
+
 static void clusterLegacyInitLast(void) {
-    if (!connectionByType(connTypeOfCluster()->get_type())) {
-        serverLog(LL_WARNING, "Missing connection type %s, but it is required for the Cluster bus.",
-                  getConnectionTypeName(connTypeOfCluster()->get_type()));
-        exit(1);
-    }
-
-    int port = defaultClientPort();
-    connListener *listener = &server.clistener;
-    listener->count = 0;
-    listener->bindaddr = server.bindaddr;
-    listener->bindaddr_count = server.bindaddr_count;
-    listener->port = server.cluster_port ? server.cluster_port : port + CLUSTER_PORT_INCR;
-    listener->ct = connTypeOfCluster();
-    if (connListen(listener) == C_ERR) {
-        /* Note: the following log text is matched by the test suite. */
-        serverLog(LL_WARNING, "Failed listening on port %u (cluster), aborting.", listener->port);
-        exit(1);
-    }
-
-    if (createSocketAcceptHandler(&server.clistener, clusterAcceptHandler) != C_OK) {
-        serverPanic("Unrecoverable error creating Cluster socket accept handler.");
-    }
+    clusterListenerInit();
 }
 
 void clusterAutoFailoverOnShutdown(void) {
@@ -937,12 +917,7 @@ static void clusterLegacyReset(int hard) {
  * -------------------------------------------------------------------------- */
 
 clusterMsgSendBlock *createClusterMsgSendBlock(int type, uint32_t msglen) {
-    uint32_t blocklen = sizeof(clusterMsgSendBlock) + msglen;
-    clusterMsgSendBlock *msgblock = zcalloc(blocklen);
-    msgblock->refcount = 1;
-    msgblock->totlen = blocklen;
-    msgblock->len = msglen;
-    server.stat_cluster_links_memory += blocklen;
+    clusterMsgSendBlock *msgblock = clusterAllocMsgSendBlock(msglen);
     if (IS_LIGHT_MESSAGE(type)) {
         clusterBuildMessageHdrLight(getLightMessageFromSendBlock(msgblock), type, msglen);
     } else {
@@ -1181,38 +1156,9 @@ static void clusterLegacyInitNodeData(clusterNode *node) {
     legacy->fail_reports = raxNew();
 }
 
-
-/* Low level cleanup of the node structure. Only called by clusterDelNode(). */
-void freeClusterNode(clusterNode *n) {
-    sds nodename;
-    int j;
-
-    /* If the node has associated replicas, we have to set
-     * all the replicas->replicaof fields to NULL (unknown). */
-    for (j = 0; j < n->num_replicas; j++) n->replicas[j]->replicaof = NULL;
-
-    /* Remove this node from the list of replicas of its primary. */
-    if (nodeIsReplica(n) && n->replicaof) clusterNodeRemoveReplica(n->replicaof, n);
-
-    /* Unlink from the set of nodes. */
-    nodename = sdsnewlen(n->name, CLUSTER_NAMELEN);
-    serverAssert(dictDelete(server.cluster->nodes, nodename) == DICT_OK);
-    sdsfree(nodename);
-
-    /* Release links and associated data structures. */
-    if (n->link) freeClusterLink(n->link);
-    if (n->inbound_link) freeClusterLink(n->inbound_link);
-
-    /* Free these members after links are freed, as freeClusterLink may access them. */
-    sdsfree(n->hostname);
-    sdsfree(n->human_nodename);
-    sdsfree(n->availability_zone);
-    sdsfree(n->announce_client_ipv4);
-    sdsfree(n->announce_client_ipv6);
-    raxFree(LEGACY_DATA(n)->fail_reports);
-    zfree(n->replicas);
-    zfree(n->protocol_data);
-    zfree(n);
+static void clusterLegacyFreeNodeData(clusterNode *node) {
+    raxFree(LEGACY_DATA(node)->fail_reports);
+    zfree(node->protocol_data);
 }
 
 
@@ -5644,6 +5590,7 @@ clusterBusType clusterLegacyBus = {
     .parseVarsLine = clusterLegacyParseVarsLine,
     .postLoad = clusterLegacyPostLoad,
     .initNodeData = clusterLegacyInitNodeData,
+    .freeNodeData = clusterLegacyFreeNodeData,
     .slotChange = clusterLegacySlotChange,
     .resetManualFailoverState = clusterLegacyResetManualFailover,
     .resetAutomaticFailoverState = clusterLegacyResetAutomaticFailover,

@@ -42,6 +42,7 @@ typedef struct clusterLink {
 clusterLink *createClusterLink(clusterNode *node);
 void freeClusterLink(clusterLink *link);
 void clusterMsgSendBlockDecrRefCount(void *ptr);
+clusterMsgSendBlock *clusterAllocMsgSendBlock(uint32_t msglen);
 void setClusterNodeToInboundClusterLink(clusterNode *node, clusterLink *link);
 void clusterWriteHandler(connection *conn);
 
@@ -53,6 +54,8 @@ int freeClusterLinkOnBufferLimitReached(clusterLink *link);
 
 void clusterReadHandler(connection *conn);
 void clusterLinkConnectHandler(connection *conn);
+void clusterConnectNodes(void);
+void clusterListenerInit(void);
 void clusterAcceptHandler(aeEventLoop *el, int fd, void *privdata, int mask);
 
 struct client;

@@ -16,6 +16,7 @@
 #include "cluster.h"
 #include "cluster_state.h"
 #include "cluster_bus.h"
+#include "cluster_link.h"
 #include "cluster_slot_stats.h"
 
 /* A global reference to myself is handy to make code more clear.
@@ -542,6 +543,38 @@ clusterNode *createClusterNode(char *nodename, int flags) {
     if (clusterCurrentBus->initNodeData)
         clusterCurrentBus->initNodeData(node);
     return node;
+}
+
+/* Low level cleanup of the node structure. */
+void freeClusterNode(clusterNode *n) {
+    int j;
+
+    /* If the node has associated replicas, we have to set
+     * all the replicas->replicaof fields to NULL (unknown). */
+    for (j = 0; j < n->num_replicas; j++) n->replicas[j]->replicaof = NULL;
+
+    /* Remove this node from the list of replicas of its primary. */
+    if (nodeIsReplica(n) && n->replicaof) clusterNodeRemoveReplica(n->replicaof, n);
+
+    /* Unlink from the set of nodes. */
+    sds nodename = sdsnewlen(n->name, CLUSTER_NAMELEN);
+    serverAssert(dictDelete(server.cluster->nodes, nodename) == DICT_OK);
+    sdsfree(nodename);
+
+    /* Release links and associated data structures. */
+    if (n->link) freeClusterLink(n->link);
+    if (n->inbound_link) freeClusterLink(n->inbound_link);
+
+    /* Free these members after links are freed, as freeClusterLink may access them. */
+    sdsfree(n->hostname);
+    sdsfree(n->human_nodename);
+    sdsfree(n->availability_zone);
+    sdsfree(n->announce_client_ipv4);
+    sdsfree(n->announce_client_ipv6);
+    if (clusterCurrentBus->freeNodeData)
+        clusterCurrentBus->freeNodeData(n);
+    zfree(n->replicas);
+    zfree(n);
 }
 
 /* -----------------------------------------------------------------------------

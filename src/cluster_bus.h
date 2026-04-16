@@ -124,7 +124,7 @@ typedef struct clusterBusType {
 
     /* Handle protocol-specific CLUSTER subcommands (e.g. BUMPEPOCH,
      * SET-CONFIG-EPOCH). Returns 1 if handled, 0 if not recognized. */
-    int (*specialCommand)(client *c);
+    int (*protocolSubcommand)(client *c);
 } clusterBusType;
 
 extern clusterBusType *clusterCurrentBus;

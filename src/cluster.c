@@ -1999,7 +1999,7 @@ void clusterCommand(client *c) {
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "links") && c->argc == 2) {
         /* CLUSTER LINKS */
         clusterCommandLinks(c);
-    } else if (clusterCurrentBus->specialCommand && clusterCurrentBus->specialCommand(c)) {
+    } else if (clusterCurrentBus->protocolSubcommand && clusterCurrentBus->protocolSubcommand(c)) {
         /* Handled by protocol-specific command handler. */
     } else {
         addReplyErrorFormat(c, "Cluster subcommand not implemented for the current protocol: %s",

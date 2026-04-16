@@ -5430,7 +5430,7 @@ static void clusterLegacyMeet(const char *ip, int port, int cport, void *ctx, vo
     }
 }
 
-static int clusterLegacySpecialCommand(client *c) {
+static int clusterLegacySubcommand(client *c) {
     if (!strcasecmp(objectGetVal(c->argv[1]), "bumpepoch") && c->argc == 2) {
         int retval = clusterBumpConfigEpochWithoutConsensus();
         sds reply = sdscatfmt(sdsempty(), "+%s %U\r\n", (retval == C_OK) ? "BUMPED" : "STILL",
@@ -5509,5 +5509,5 @@ clusterBusType clusterLegacyBus = {
     .failover = clusterLegacyFailover,
     .meet = clusterLegacyMeet,
     .resetCluster = clusterLegacyReset,
-    .specialCommand = clusterLegacySpecialCommand,
+    .protocolSubcommand = clusterLegacySubcommand,
 };

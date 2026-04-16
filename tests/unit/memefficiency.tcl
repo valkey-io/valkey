@@ -180,15 +180,17 @@ start_server {tags {"defrag external:skip"} overrides {appendonly yes auto-aof-r
             # Populate memory with interleaving script-key pattern of same size
             set dummy_script "--[string repeat x 400]\nreturn "
             set rd [redis_deferring_client]
+            $rd client reply off
+            $rd flush
             for {set j 0} {$j < $n} {incr j} {
                 set val "$dummy_script[format "%06d" $j]"
                 $rd script load $val
                 $rd set k$j $val
+                if {$j % 100 == 0} {$rd flush}
             }
-            for {set j 0} {$j < $n} {incr j} {
-                $rd read ; # Discard script load replies
-                $rd read ; # Discard set replies
-            }
+            $rd client reply on
+            $rd flush
+            $rd read ;# read the +OK from CLIENT REPLY ON
             after 120 ;# serverCron only updates the info once in 100ms
             if {$::verbose} {
                 puts "used [s allocator_allocated]"
@@ -199,8 +201,15 @@ start_server {tags {"defrag external:skip"} overrides {appendonly yes auto-aof-r
             assert_lessthan [s allocator_frag_ratio] 1.05
             
             # Delete all the keys to create fragmentation
-            for {set j 0} {$j < $n} {incr j} { $rd del k$j }
-            for {set j 0} {$j < $n} {incr j} { $rd read } ; # Discard del replies
+            $rd client reply off
+            $rd flush
+            for {set j 0} {$j < $n} {incr j} {
+                $rd del k$j
+                if {$j % 100 == 0} {$rd flush}
+            }
+            $rd client reply on
+            $rd flush
+            $rd read ;# read the +OK from CLIENT REPLY ON
             $rd close
             after 120 ;# serverCron only updates the info once in 100ms
             if {$::verbose} {

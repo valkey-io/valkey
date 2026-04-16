@@ -6,6 +6,7 @@
 
 #include "generated_wrappers.hpp"
 
+#include <cstdint>
 #include <cstdio>
 
 extern "C" {
@@ -44,6 +45,19 @@ TEST_F(ZmallocTest, TestZmallocAllocZeroByteAndFree) {
 
     ptr = zmalloc(0);
     printf("Allocated 0 bytes; used: %zu\n", zmalloc_used_memory());
+    zfree(ptr);
+
+    ASSERT_EQ(zmalloc_used_memory(), used_memory_before);
+}
+
+TEST_F(ZmallocTest, TestZmallocAlignedAllocAndFree) {
+    size_t used_memory_before = zmalloc_used_memory();
+    void *ptr = zmalloc_aligned(CACHE_LINE_SIZE, 123);
+
+    ASSERT_NE(ptr, nullptr);
+    EXPECT_EQ(reinterpret_cast<uintptr_t>(ptr) % CACHE_LINE_SIZE, 0u);
+    EXPECT_GE(zmalloc_usable_size(ptr), 123u);
+
     zfree(ptr);
 
     ASSERT_EQ(zmalloc_used_memory(), used_memory_before);

@@ -4891,6 +4891,7 @@ static int validateClientCapaFilter(sds capa) {
         const char capability = capa[i];
         switch (capability) {
         case 'r':
+        case 'k':
             /* Valid capability, do nothing. */
             break;
         default:

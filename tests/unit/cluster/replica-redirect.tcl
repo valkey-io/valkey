@@ -121,4 +121,47 @@ start_cluster 1 1 {tags {external:skip cluster}} {
 
         $rd close
     }
+
+    test {keyless commands inside MULTI are individually MOVED with redirect-keyless capa} {
+        set rd [valkey_deferring_client 0]
+        $rd CLIENT CAPA redirect-keyless
+        assert_equal OK [$rd read]
+
+        $rd MULTI
+        assert_equal OK [$rd read]
+        # Individual keyless commands get MOVED, consistent with keyed commands
+        $rd DBSIZE
+        assert_error "MOVED -1 *" {$rd read}
+        $rd RANDOMKEY
+        assert_error "MOVED -1 *" {$rd read}
+        # Transaction was flagged dirty, EXEC returns EXECABORT
+        $rd EXEC
+        assert_error "EXECABORT *" {$rd read}
+
+        $rd PING
+        assert_equal PONG [$rd read]
+
+        $rd close
+    }
+
+    test {both redirect and redirect-keyless capas work together} {
+        set rd [valkey_deferring_client 0]
+        $rd CLIENT CAPA redirect
+        assert_equal OK [$rd read]
+        $rd CLIENT CAPA redirect-keyless
+        assert_equal OK [$rd read]
+
+        $rd CLIENT INFO
+        assert_match "*capa=rk*" [$rd read]
+
+        # Keyless read is redirected via redirect-keyless
+        $rd DBSIZE
+        assert_error "MOVED -1 *" {$rd read}
+
+        # Keyed read is redirected via standard cluster redirect
+        $rd GET x
+        assert_error "MOVED *" {$rd read}
+
+        $rd close
+    }
 } ;# start_cluster

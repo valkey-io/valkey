@@ -4468,7 +4468,12 @@ int processCommand(client *c) {
         clusterNode *myself = getMyClusterNode();
         if (clusterNodeIsReplica(myself)) {
             clusterNode *primary = clusterNodeGetPrimary(myself);
-            // We pass -1 as it does not matter which slot will be passed in MOVED command
+            if (is_keyless_exec) {
+                discardTransaction(c);
+            } else {
+                flagTransaction(c);
+            }
+            /* We pass -1 as it does not matter which slot will be passed in MOVED command */
             clusterRedirectClient(c, primary, -1, CLUSTER_REDIR_MOVED);
             c->duration = 0;
             c->cmd->rejected_calls++;

@@ -13,6 +13,7 @@ if { ! [ catch {
 
 proc generate_collections {suffix elements} {
     set rd [redis_deferring_client]
+    $rd client reply off
     for {set j 0} {$j < $elements} {incr j} {
         # add both string values and integers
         if {$j % 2 == 0} {set val $j} else {set val "_$j"}
@@ -22,9 +23,8 @@ proc generate_collections {suffix elements} {
         $rd sadd set$suffix $val
         $rd xadd stream$suffix * item 1 value $val
     }
-    for {set j 0} {$j < $elements * 5} {incr j} {
-        $rd read ; # Discard replies
-    }
+    $rd client reply on
+    assert_equal OK [$rd read]
     $rd close
 }
 

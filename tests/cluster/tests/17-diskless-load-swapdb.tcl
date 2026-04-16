@@ -52,12 +52,13 @@ test "Main db not affected when fail to diskless load" {
     set num 10000
     set value [string repeat A 1024]
     set rd [redis_deferring_client redis $master_id]
+    $rd client reply off
     for {set j 0} {$j < $num} {incr j} {
         $rd set $j $value
+        if {$j % 1000 == 0} {$rd flush}
     }
-    for {set j 0} {$j < $num} {incr j} {
-        $rd read
-    }
+    $rd client reply on
+    assert_equal OK [$rd read]
 
     # Start the replica again
     restart_instance redis $replica_id

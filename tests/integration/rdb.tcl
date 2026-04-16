@@ -263,16 +263,15 @@ start_server {overrides {save ""}} {
         # changing some keys and read the reported COW size, we are using small key size to prevent from
         # the "dismiss mechanism" free memory and reduce the COW size)
         set rd [redis_deferring_client 0]
+        $rd client reply off
         set size 500 ;# aim for the 512 bin (sds overhead)
         set cmd_count 10000
+        set AAA [string repeat A $size]
         for {set k 0} {$k < $cmd_count} {incr k} {
-            $rd set key$k [string repeat A $size]
+            $rd set key$k $AAA
         }
-
-        for {set k 0} {$k < $cmd_count} {incr k} {
-            catch { $rd read }
-        }
-
+        $rd client reply on
+        assert_equal OK [$rd read]
         $rd close
 
         # start background rdb save
@@ -301,8 +300,9 @@ start_server {overrides {save ""}} {
 
             # trigger copy-on-write
             set modified_keys 16
+            set BBB [string repeat B $size]
             for {set k 0} {$k < $modified_keys} {incr k} {
-                r setrange key$key_idx 0 [string repeat B $size]
+                r setrange key$key_idx 0 $BBB
                 incr key_idx 1
             }
 

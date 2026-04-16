@@ -3,6 +3,10 @@
 
 #include "cluster.h"
 
+/* Node address string: ip:port@cport[,hostname][,aux=val]* */
+sds clusterNodeAppendAddressString(sds s, clusterNode *node, int tls_primary);
+int clusterNodeParseAddressString(clusterNode *n, char *str);
+
 /* Node description / serialization. */
 sds clusterGenNodeDescription(client *c, clusterNode *node, int tls_primary);
 sds clusterGenNodesDescription(client *c, int filter, int tls_primary);

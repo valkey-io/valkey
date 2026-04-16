@@ -2642,7 +2642,7 @@ void initServer(void) {
         server.db[j].avg_ttl = 0;
         server.db[j].defrag_later = listCreate();
         server.db[j].slots_to_keys = NULL; /* Set by clusterInit later on if necessary. */
-        listSetFreeMethod(server.db[j].defrag_later,(void (*)(void*))sdsfree);
+        listSetFreeMethod(server.db[j].defrag_later,sdsfreeVoid);
     }
     evictionPoolAlloc(); /* Initialize the LRU keys pool. */
     server.pubsub_channels = dictCreate(&keylistDictType);

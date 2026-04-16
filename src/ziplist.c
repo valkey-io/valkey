@@ -2368,7 +2368,7 @@ int ziplistTest(int argc, char **argv, int flags) {
         for (i = 0; i < iteration; i++) {
             zl = ziplistNew();
             ref = listCreate();
-            listSetFreeMethod(ref,(void (*)(void*))sdsfree);
+            listSetFreeMethod(ref,sdsfreeVoid);
             len = rand() % 256;
 
             /* Create lists */

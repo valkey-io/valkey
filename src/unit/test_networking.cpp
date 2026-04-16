@@ -31,7 +31,7 @@ typedef struct __attribute__((__packed__)) payloadHeader {
     uint8_t payload_type : 1;
     uint8_t track_bytes : 1;
     uint8_t reserved : 6;
-    uint8_t tracked_for_cob;
+    _Atomic(uint8_t) tracked_for_cob;
 } payloadHeader;
 
 typedef struct bufWriteMetadata {

@@ -114,12 +114,15 @@ typedef enum {
  * The packed attribute is specified because buffer is accessed at arbitrary offsets,
  * so no benefit in data structure padding and applying packed saves the space in the buffer  */
 typedef struct __attribute__((__packed__)) payloadHeader {
-    size_t payload_len;               /* payload length in a reply buffer */
-    size_t reply_len;                 /* actual reply length for non-plain payloads */
-    int16_t slot;                     /* to report network-bytes-out for BULK_STR_REF chunks */
-    uint8_t payload_type : 1;         /* one of payloadType */
-    uint8_t track_bytes : 1;          /* 1 if net bytes tracking was enabled when reply was added */
-    uint8_t reserved : 6;             /* reserved */
+    size_t payload_len;       /* payload length in a reply buffer */
+    size_t reply_len;         /* actual reply length for non-plain payloads */
+    int16_t slot;             /* to report network-bytes-out for BULK_STR_REF chunks */
+    uint8_t payload_type : 1; /* one of payloadType */
+    uint8_t track_bytes : 1;  /* 1 if net bytes tracking was enabled when reply was added */
+    uint8_t reserved : 6;     /* reserved */
+    /* tracked_for_cob is placed after the bitfield byte so it is byte aligned.
+     * _Atomic(uint8_t) has alignment 1, this is safe inside __packed__
+     * because the compiler will not insert padding before it */
     _Atomic(uint8_t) tracked_for_cob; /* 1 if this header's reply_len has been tracked in io_tracked_reply_len */
 } payloadHeader;
 
@@ -2831,7 +2834,7 @@ void resetLastWrittenBuf(client *c) {
  * Calculates reply_len for BULK_STR_REFs if not already set, and adds to client's tracking counter.
  * This is called from I/O thread before writing to account for actual reply sizes. */
 static void trackBufReferences(char *buf, size_t bufpos, client *c) {
-    if (!c) return;
+    serverAssert(c);
 
     char *ptr = buf;
     while (ptr < buf + bufpos) {
@@ -2854,6 +2857,9 @@ static void trackBufReferences(char *buf, size_t bufpos, client *c) {
                     str_ref++;
                     len -= sizeof(bulkStrRef);
                 }
+                /* reply_len must be set here because addEncodedBufferToReplyIOV
+                 * stops early on partial writes (limit_reached) and may not check
+                 * headers after write boundary */
                 header->reply_len = total_reply_len;
                 atomic_fetch_add_explicit(&c->io_tracked_reply_len, total_reply_len, memory_order_relaxed);
             }

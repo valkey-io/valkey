@@ -377,10 +377,13 @@ start_server {tags {"obuf-limits external:skip logreqres:skip"}} {
         set client_id [$rd read]
 
        
+        # Each pipelined GET for a 16 KB value requires payloadHeader (20 bytes on 64-bit)
+        # and bulkStrRef (16 bytes) in client buf (PROTO_REPLY_CHUNK_BYTES = 16 KB).
+        # 1300 commands * ~36 bytes/header >> 16 KB, so replies spill into c->reply list.
+        # On 32-bit header size is smaller, so we need 3000 commands * ~20 bytes/header >> 16 KB.
         if {[s arch_bits] == 64} {
             set cmd_count 1300
         } else {
-            # On 32-bit we need more commands to trigger spill
             set cmd_count 3000
         }
         set pipeline ""

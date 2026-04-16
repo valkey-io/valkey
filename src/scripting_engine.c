@@ -179,7 +179,7 @@ int scriptingEngineManagerUnregister(const char *engine_name) {
     scriptingEngine *e = dictGetVal(entry);
 
     functionsRemoveLibFromEngine(e);
-    evalRemoveScriptsOfEngine(e, e->name);
+    evalRemoveScriptsOfEngine(e);
 
     engineMemoryInfo mem_info = scriptingEngineCallGetMemoryInfo(e, VMSE_ALL);
     engineMgr.total_memory_overhead -= zmalloc_size(e) +

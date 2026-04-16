@@ -915,7 +915,14 @@ start_server {tags {"repl external:skip"} overrides {save ""}} {
                     # so that the whole rdb generation process is bound to that
                     set loglines [count_log_lines -2]
                     [lindex $replicas 0] config set repl-diskless-load swapdb
-                    [lindex $replicas 0] config set key-load-delay 100 ;# 20k keys and 100 microseconds sleep means at least 2 seconds
+                    # For "no" and "fast" subcases, use key-load-delay to keep
+                    # replica 0 as a steady slow reader for the entire RDB
+                    # transfer. A brief SIGSTOP/SIGCONT is insufficient on
+                    # slow CI runners because the TLS layer cannot always drain
+                    # the pipe fast enough after resume.
+                    if {$all_drop == "no" || $all_drop == "fast"} {
+                        [lindex $replicas 0] config set key-load-delay 100
+                    }
                     [lindex $replicas 0] replicaof $master_host $master_port
                     [lindex $replicas 1] replicaof $master_host $master_port
 
@@ -929,12 +936,26 @@ start_server {tags {"repl external:skip"} overrides {save ""}} {
                         set start_time [clock seconds]
                     }
 
-                    # wait a while so that the pipe socket writer will be
-                    # blocked on write (since replica 0 is slow to read from the socket)
-                    after 500
+                    if {$all_drop == "no" || $all_drop == "fast"} {
+                        # key-load-delay is already throttling the slow
+                        # replica; just wait for the pipe to fill.
+                        after 500
+                    } else {
+                        # For slow/all/timeout subcases the replica will be
+                        # killed or timed out, so a brief SIGSTOP is fine.
+                        set slow_replica_pid [srv -1 pid]
+                        pause_process $slow_replica_pid
+                        after 500
+                    }
 
                     # add some command to be present in the command stream after the rdb.
                     $master incr $all_drop
+
+                    # Resume before terminating the paused slow replica so the
+                    # disconnect is observed immediately instead of timing out.
+                    if {$all_drop == "all" || $all_drop == "slow"} {
+                        resume_process $slow_replica_pid
+                    }
 
                     # disconnect replicas depending on the current test
                     if {$all_drop == "all" || $all_drop == "fast"} {

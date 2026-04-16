@@ -50,9 +50,6 @@ typedef struct clusterBusType {
     void (*propagatePublish)(struct serverObject *channel, struct serverObject *message, int sharded);
     int (*sendModuleMessage)(const char *target, uint64_t module_id, uint8_t type, const char *payload, uint32_t len);
 
-    /* Failover — called from replication.c */
-    long long (*manualFailoverTimeLimit)(void);
-
     /* Info and stats — called from server.c, networking.c, config.c */
     unsigned long (*getConnectionsCount)(void);
     void (*resetStats)(void);

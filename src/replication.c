@@ -5280,7 +5280,7 @@ void replicationCron(void) {
          * alter the replication offsets of primary and replica, and will no longer
          * match the one stored into 'mf_primary_offset' state. */
         int manual_failover_in_progress =
-            ((server.cluster_enabled && clusterManualFailoverTimeLimit()) || server.failover_end_time) &&
+            getPausedActionsWithPurpose(PAUSE_DURING_FAILOVER) &&
             isPausedActionsWithUpdate(PAUSE_ACTION_REPLICA);
 
         if (!manual_failover_in_progress) {

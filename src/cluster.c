@@ -196,9 +196,6 @@ int clusterAllowFailoverCmd(client *c) {
                      "Use CLUSTER FAILOVER command instead.");
     return 0;
 }
-mstime_t clusterManualFailoverTimeLimit(void) {
-    return clusterCurrentBus->manualFailoverTimeLimit();
-}
 unsigned long getClusterConnectionsCount(void) {
     return clusterCurrentBus->getConnectionsCount();
 }

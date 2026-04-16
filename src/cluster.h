@@ -84,7 +84,6 @@ int handleDebugClusterCommand(client *c);
 const char **clusterDebugCommandExtendedHelp(void);
 
 int clusterAllowFailoverCmd(client *c);
-mstime_t clusterManualFailoverTimeLimit(void);
 
 void clusterCommandSlots(client *c);
 void clusterCommandMyId(client *c);

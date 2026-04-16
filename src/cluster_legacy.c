@@ -5466,11 +5466,6 @@ static sds clusterLegacyAppendInfoFields(sds info) {
 }
 
 
-static mstime_t clusterLegacyManualFailoverTimeLimit(void) {
-    return LEGACY_STATE()->mf_end;
-}
-
-
 static void clusterLegacySetReplicaOf(clusterNode *primary, void *ctx, void (*callback)(void *ctx, const char *error)) {
     if (primary) {
         clusterSetPrimary(primary, 1, 1);
@@ -5578,7 +5573,6 @@ clusterBusType clusterLegacyBus = {
     .updateMyselfAvailabilityZone = clusterLegacyUpdateMyselfAvailabilityZone,
     .propagatePublish = clusterLegacyPropagatePublish,
     .sendModuleMessage = clusterLegacySendModuleMessageToTarget,
-    .manualFailoverTimeLimit = clusterLegacyManualFailoverTimeLimit,
     .getConnectionsCount = clusterLegacyGetConnectionsCount,
     .resetStats = clusterLegacyResetStats,
     .appendInfoFields = clusterLegacyAppendInfoFields,

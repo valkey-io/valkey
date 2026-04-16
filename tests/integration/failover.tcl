@@ -33,6 +33,8 @@ start_server {overrides {save {}}} {
         $node_2 replicaof $node_0_host $node_0_port
         wait_for_sync $node_1
         wait_for_sync $node_2
+        verify_replica_online $node_0 0 50
+        verify_replica_online $node_0 1 50
     }
 
     test {failover command fails with invalid host} {

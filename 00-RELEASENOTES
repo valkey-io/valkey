@@ -11,6 +11,48 @@ Upgrade urgency levels:
 | CRITICAL | There is a critical bug affecting MOST USERS. Upgrade ASAP.         |
 | SECURITY | There are security fixes in the release.                            |
 
+Valkey 9.1.0-rc2 - Released Thu Apr 17 00:00:00 2026
+-------------------------------------
+
+Upgrade urgency LOW: This is the second release candidate of Valkey 9.1.0.
+
+### New Features and enhanced behavior
+* Do the failover immediately if the replica is the best ranked replica by @enjoy-binbin (#2227)
+* Add `cluster-config-save-behavior` option to control nodes.conf save behavior by @enjoy-binbin (#3372)
+* Lua scripting engine is now statically linked by default instead of dynamically linked by @eifrah-aws (#3392)
+* Module command result callback addition by @martinrvisser (#2936)
+
+### Performance and Efficiency improvements
+* Redesign IO threading communication model with lock-free queues (8-17% throughput gain) by @akashkgit (#3324)
+* Increase embedded string threshold from 64 to 128 bytes (30% GET throughput gain) by @Nikhil-Manglore (#3397)
+* ARM NEON SIMD optimization for pvFind() in vset.c (2-3x speedup) by @ahmadbelb (#3033)
+* Optimize WATCH duplicate key check from O(N) to O(1) using per-db hashtable by @enjoy-binbin (#3360)
+* Optimize `CLUSTERSCAN MATCH` so that it uses a specific slot if given by @nmvk (#3380)
+* Improve COB memory tracking with copy avoidance by @dvkashapov (#3306)
+* Optimize `HGETDEL` to pause auto shrink when deleting multiple items by @charsyam (#3535)
+
+### Bug Fixes
+* Fix `valkey-cli --cluster del-node` for unreachable nodes by @yang-z-o (#3209)
+* Enhance cluster stale packet detection to prevent sub-replica and empty primary by @zhijun42 (#2811)
+* Handle EAGAIN in clusterWriteHandler by @enjoy-binbin (#3421)
+* Big endian bitmap byte order mismatch fix by @nmvk (#3401)
+* Fix RDB expiry write length and leak when loading zipmap by @charsyam (#3422)
+* Fix slot-migration-max-failover-repl-bytes unable to accept -1 by @enjoy-binbin (#3443)
+* Fix config rewrite producing negative values for unsigned memory configs by @enjoy-binbin (#3440)
+* Fix trivial double-free issue in rdbLoadObject by @charsyam (#3453)
+* Fix incorrect memory overhead calculation for watched keys by @enjoy-binbin (#3359)
+* Fix HPERSIST RESP protocol violation on wrong-type key by @madolson (#3516)
+* Fix race condition during async client freeing with IO threading enabled by @deepakrn (#3458)
+* Fix double free in stream consumer PEL loading with corrupt RDB data by @enjoy-binbin (#3498)
+* Fix FD leak in connSocketBlockingConnect on timeout by @madolson (#3541)
+* Fix SPMC queue buffer alignment by @sarthakaggarwal97 (#3504)
+* Fix module commandresult event cleanup during unsubscribe and module unload by @sarthakaggarwal97 (#3545)
+
+### Build and Tooling
+* Fix VLA warning in linenoise and enable -Werror by @madolson (#3439)
+* Avoid having server.h being included by cli and benchmark by @ranshid (#3420)
+* Fix VLA warning in io_threads by @enjoy-binbin (#3518)
+
 Valkey 9.1.0-rc1 - Released Tue Mar 17 00:00:00 2026
 -------------------------------------
 

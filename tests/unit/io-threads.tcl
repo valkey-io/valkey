@@ -42,6 +42,8 @@ start_server {config "minimal.conf" tags {"external:skip" "valgrind:skip"} overr
     # Skip if non io-threads mode - as it is relevant only for io-threads mode
     assert_equal {io-threads 5} [r config get io-threads]
     test {Force the use of IO threads and assert active IO thread usage} {
+        # Ensure all configured IO threads activate on any event, bypassing CPU-based ignition thresholds.
+        r config set io-threads-always-active yes
         activate_io_threads_and_wait
         set info [r info]
         set io_threads_count [dict get [r config get io-threads] io-threads]

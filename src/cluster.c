@@ -1623,6 +1623,12 @@ void resetClusterStats(void) {
 
     memset(server.cluster->stats_bus_messages_sent, 0, sizeof(server.cluster->stats_bus_messages_sent));
     memset(server.cluster->stats_bus_messages_received, 0, sizeof(server.cluster->stats_bus_messages_received));
+    server.cluster->stats_bus_bytes_sent = 0;
+    server.cluster->stats_bus_bytes_received = 0;
+    server.cluster->stats_bus_pubsub_bytes_sent = 0;
+    server.cluster->stats_bus_pubsub_bytes_received = 0;
+    server.cluster->stats_bus_module_bytes_sent = 0;
+    server.cluster->stats_bus_module_bytes_received = 0;
     server.cluster->stat_cluster_links_buffer_limit_exceeded = 0;
 }
 

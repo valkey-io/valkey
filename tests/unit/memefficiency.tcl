@@ -206,10 +206,12 @@ run_solo {defrag} {
             set dummy_script "--[string repeat x 400]\nreturn "
             set rd [valkey_deferring_client]
             $rd client reply off
+            $rd flush
             for {set j 0} {$j < $n} {incr j} {
                 set val "$dummy_script[format "%06d" $j]"
                 $rd script load $val
                 $rd set k$j $val
+                if {$j % 100 == 0} {$rd flush}
                 if {$j % 1000 == 999} {client_reply_off_wait_for_server $rd}
             }
             after 120 ;# serverCron only updates the info once in 100ms
@@ -224,6 +226,7 @@ run_solo {defrag} {
             # Delete all the keys to create fragmentation
             for {set j 0} {$j < $n} {incr j} {
                 $rd del k$j
+                if {$j % 100 == 0} {$rd flush}
                 if {$j % 1000 == 999} {client_reply_off_wait_for_server $rd}
             }
             $rd close
@@ -321,6 +324,7 @@ run_solo {defrag} {
                 # scale the hash to 1m fields in order to have a measurable the latency
                 for {set j 10000} {$j < 1000000} {incr j} {
                     $rd hset bighash $j [concat "asdfasdfasdf" $j]
+                    if {$j % 100 == 0} {$rd flush}
                     if {$j % 1000 == 999} {client_reply_off_wait_for_server $rd}
                 }
                 # creating that big hash, increased used_memory, so the relative frag goes down
@@ -448,6 +452,7 @@ run_solo {defrag} {
             $rd client reply off
             for {set j 0} {$j < $n} {incr j} {
                 $rd del k$j
+                if {$j % 100 == 0} {$rd flush}
                 if {$j % 1000 == 999} {client_reply_off_wait_for_server $rd}
             }
             $rd close

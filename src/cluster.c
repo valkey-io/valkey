@@ -52,7 +52,7 @@
 
 /* The active cluster bus protocol implementation. */
 extern clusterBusType clusterLegacyBus;
-clusterBusType *clusterCurrentBus = &clusterLegacyBus;
+clusterBusType *clusterCurrentBus = NULL;
 
 static void clusterCommandFlushslot(client *c);
 
@@ -75,6 +75,14 @@ void clusterInit(void) {
     server.cluster->protocol_data = NULL;
     memset(server.cluster->slots, 0, sizeof(server.cluster->slots));
     clusterCloseAllSlots();
+
+    /* Select the cluster bus protocol implementation. */
+    if (server.cluster_protocol == CLUSTER_PROTOCOL_RAFT) {
+        extern clusterBusType clusterRaftBus;
+        clusterCurrentBus = &clusterRaftBus;
+    } else {
+        clusterCurrentBus = &clusterLegacyBus;
+    }
 
     /* Protocol-specific init (allocates protocol_data, etc.). */
     clusterCurrentBus->init();
@@ -1210,20 +1218,24 @@ void clusterKeySlotCommand(client *c) {
  * Called after the slot change is applied. This may be called inline
  * or asynchronously if the change goes through cluster consensus. */
 static void clusterAddDelSlotsCallback(void *ctx, const char *error) {
-    client *c = (client *)ctx;
+    client *c = consumeBlockedClientAsyncHandle((blockedAsyncHandle *)ctx);
+    if (!c) return;
     if (error) {
         addReplyError(c, error);
-        return;
+    } else {
+        addReply(c, shared.ok);
     }
-    addReply(c, shared.ok);
+    unblockClientAsync(c);
 }
 
 /* Callback for CLUSTER SETSLOT NODE after the slot change is applied.
  * Handles replica migration if this shard lost its last slot. */
 static void clusterSetSlotNodeCallback(void *ctx, const char *error) {
-    client *c = (client *)ctx;
+    client *c = consumeBlockedClientAsyncHandle((blockedAsyncHandle *)ctx);
+    if (!c) return;
     if (error) {
         addReplyError(c, error);
+        unblockClientAsync(c);
         return;
     }
 
@@ -1254,6 +1266,7 @@ static void clusterSetSlotNodeCallback(void *ctx, const char *error) {
     }
 
     addReply(c, shared.ok);
+    unblockClientAsync(c);
 }
 
 /* Validate slot assignments for ADDSLOTS/DELSLOTS commands.
@@ -1510,7 +1523,8 @@ void clusterCommandSetSlot(client *c) {
         }
 
         slotRange range = {slot, slot};
-        clusterSlotChange(&range, 1, n, c, clusterSetSlotNodeCallback);
+        void *h = blockClientAsync(c);
+        clusterSlotChange(&range, 1, n, h, clusterSetSlotNodeCallback);
         return;
     }
 
@@ -1684,14 +1698,11 @@ void clusterCommand(client *c) {
             return;
         }
         /* Propose the slot change. The reply is deferred to the callback,
-         * which is called after the change is applied.
-         * TODO: If the callback is not called immediately (e.g. when the
-         * change goes through cluster consensus), the client needs to be
-         * put in a blocked state so the server can continue processing
-         * other clients while waiting for the commit. */
+         * which is called after the change is applied. */
+        void *h = blockClientAsync(c);
         clusterSlotChange(ranges, numslots,
                           del ? NULL : getMyClusterNode(),
-                          c, clusterAddDelSlotsCallback);
+                          h, clusterAddDelSlotsCallback);
         zfree(ranges);
     } else if ((!strcasecmp(objectGetVal(c->argv[1]), "addslotsrange") || !strcasecmp(objectGetVal(c->argv[1]), "delslotsrange")) &&
                c->argc >= 4) {
@@ -1735,9 +1746,10 @@ void clusterCommand(client *c) {
          * change goes through cluster consensus), the client needs to be
          * put in a blocked state so the server can continue processing
          * other clients while waiting for the commit. */
+        void *h = blockClientAsync(c);
         clusterSlotChange(ranges, numranges,
                           del ? NULL : getMyClusterNode(),
-                          c, clusterAddDelSlotsCallback);
+                          h, clusterAddDelSlotsCallback);
         zfree(ranges);
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "flushslots") && c->argc == 2) {
         /* CLUSTER FLUSHSLOTS */
@@ -1765,8 +1777,9 @@ void clusterCommand(client *c) {
                 }
             }
             if (in_range) numranges++;
+            void *h = blockClientAsync(c);
             clusterSlotChange(ranges, numranges, NULL,
-                              c, clusterAddDelSlotsCallback);
+                              h, clusterAddDelSlotsCallback);
             zfree(ranges);
         }
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "setslot") && c->argc >= 4) {

@@ -1145,7 +1145,8 @@ static void clusterRaftPostConnect(struct clusterLink *link) {
  * -------------------------------------------------------------------------- */
 
 static void clusterRaftUpdateMyself(int old_flags) {
-    UNUSED(old_flags); /* TODO: propose a NODE_META entry to the Raft log */
+    UNUSED(old_flags);
+    /* TODO: propose a NODE_META entry to the Raft log */
 }
 
 /* --------------------------------------------------------------------------
@@ -1270,7 +1271,6 @@ static int clusterRaftGetFailureReportsCount(clusterNode *node) {
 /* --------------------------------------------------------------------------
  * Failover
  * -------------------------------------------------------------------------- */
-
 
 static void clusterRaftCancelManualFailover(void) {
     /* TODO */

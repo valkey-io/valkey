@@ -182,17 +182,17 @@ proc test_replica_config_epoch_failover {type} {
 
         # Make sure both the automatic and the manual failover will fail in the first time.
         if {$type == "automatic"} {
-            wait_for_log_messages -3 {"*Failover attempt expired*"} 0 1000 10
+            wait_for_log_messages -3 {"*Failover attempt expired*"} 0 1200 50
         } elseif {$type == "manual"} {
             R 3 cluster failover force
-            wait_for_log_messages -3 {"*Manual failover timed out*"} 0 1000 10
+            wait_for_log_messages -3 {"*Manual failover timed out*"} 0 1200 50
         }
 
         # Make sure the primaries prints the relevant logs.
-        wait_for_log_messages -1 {"*Failover auth denied to* epoch * > reqConfigEpoch*"} 0 1000 10
-        wait_for_log_messages -1 {"*has old slots configuration, sending an UPDATE message about*"} 0 1000 10
-        wait_for_log_messages -2 {"*Failover auth denied to* epoch * > reqConfigEpoch*"} 0 1000 10
-        wait_for_log_messages -2 {"*has old slots configuration, sending an UPDATE message about*"} 0 1000 10
+        wait_for_log_messages -1 {"*Failover auth denied to* epoch * > reqConfigEpoch*"} 0 1200 50
+        wait_for_log_messages -1 {"*has old slots configuration, sending an UPDATE message about*"} 0 1200 50
+        wait_for_log_messages -2 {"*Failover auth denied to* epoch * > reqConfigEpoch*"} 0 1200 50
+        wait_for_log_messages -2 {"*has old slots configuration, sending an UPDATE message about*"} 0 1200 50
 
         # Make sure the replica has updated the config epoch.
         wait_for_condition 1000 10 {

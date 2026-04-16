@@ -1281,7 +1281,9 @@ catch {
 }
 if {[lindex [r config get proto-max-bulk-len] 1] == 10000000000} {
 
-    set str_length 4400000000 ;#~4.4GB
+    # Reduced from 4.4GB to fit in 16GB CI runners with ASAN overhead
+    # Must exceed 2^32 (4294967296) to test >4GiB (32-bit boundary) behavior
+    set str_length 4300000000 ;#~4GiB, >2^32
 
     test {SADD, SCARD, SISMEMBER - large data} {
         r flushdb

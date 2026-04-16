@@ -644,6 +644,7 @@ proc print_help_screen {} {
         "--timeout <sec>    Test timeout in seconds (default 20 min)."
         "--force-failure    Force the execution of a test that always fails."
         "--config <k> <v>   Extra config file argument."
+        "--io-threads       Run tests with IO threads enabled."
         "--skipfile <file>  Name of a file containing test names or regexp patterns (if <test> starts with '/') that should be skipped (one per line). This option can be repeated."
         "--skiptest <test>  Test name or regexp pattern (if <test> starts with '/') to skip. This option can be repeated."
         "--tags <tags>      Run only tests having specified tags or not having '-' prefixed tags."
@@ -688,6 +689,9 @@ for {set j 0} {$j < [llength $argv]} {incr j} {
         lappend ::global_overrides $arg
         lappend ::global_overrides $arg2
         incr j 2
+    } elseif {$opt eq {--io-threads}} {
+        lappend ::global_overrides "io-threads" "4"
+        lappend ::global_overrides "io-threads-do-reads" "yes"
     } elseif {$opt eq {--log-req-res}} {
         set ::log_req_res 1
     } elseif {$opt eq {--force-resp3}} {

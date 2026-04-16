@@ -1520,7 +1520,7 @@ int zsetAdd(robj *zobj, double score, sds ele, int in_flags, int *out_flags, dou
                  * satisfies (prev_score < score) strictly (since prev_score <=
                  * curscore < score), so only the next neighbor can violate the
                  * order. The score-decrease case is symmetric. */
-                int keep_position = 1;
+                bool keep_position = true;
                 if (score > curscore) {
                     unsigned char *next_eptr = eptr, *next_sptr = sptr;
                     zzlNext(zl, &next_eptr, &next_sptr);
@@ -1529,7 +1529,7 @@ int zsetAdd(robj *zobj, double score, sds ele, int in_flags, int *out_flags, dou
                         if (next_score < score ||
                             (next_score == score &&
                              zzlCompareElements(next_eptr, (unsigned char *)ele, sdslen(ele)) < 0))
-                            keep_position = 0;
+                            keep_position = false;
                     }
                 } else { /* score < curscore */
                     unsigned char *prev_eptr = eptr, *prev_sptr = sptr;
@@ -1539,7 +1539,7 @@ int zsetAdd(robj *zobj, double score, sds ele, int in_flags, int *out_flags, dou
                         if (prev_score > score ||
                             (prev_score == score &&
                              zzlCompareElements(prev_eptr, (unsigned char *)ele, sdslen(ele)) > 0))
-                            keep_position = 0;
+                            keep_position = false;
                     }
                 }
 

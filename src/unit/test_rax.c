@@ -165,7 +165,7 @@ static uint32_t int2int(uint32_t input) {
         r = l ^ F;
         l = nl;
     }
-    return (r << 16) | l;
+    return ((uint32_t)r << 16) | l;
 }
 
 /* Turn an uint32_t integer into an alphanumerical key and return its

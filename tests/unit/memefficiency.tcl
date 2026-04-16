@@ -1,6 +1,8 @@
 proc test_memory_efficiency {range} {
     r flushall
     set rd [redis_deferring_client]
+    $rd client reply off
+    $rd flush
     set base_mem [s used_memory]
     set written 0
     for {set j 0} {$j < 10000} {incr j} {
@@ -11,9 +13,9 @@ proc test_memory_efficiency {range} {
         incr written [string length $val]
         incr written 2 ;# A separator is the minimum to store key-value data.
     }
-    for {set j 0} {$j < 10000} {incr j} {
-        $rd read ; # Discard replies
-    }
+    $rd client reply on
+    $rd flush
+    $rd read ;# read the +OK from CLIENT REPLY ON
     $rd close
 
     set current_mem [s used_memory]

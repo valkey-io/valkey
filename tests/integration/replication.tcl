@@ -992,7 +992,13 @@ start_server {tags {"repl external:skip"} overrides {save ""}} {
                         if {[catch {
                             wait_for_log_messages -2 {"*Diskless rdb transfer, last replica dropped, killing fork child*"} $loglines 1 1
                         }]} {
-                            wait_for_log_messages -2 {"*Diskless rdb transfer, done reading from pipe, 1 replicas still up*"} $loglines 1 1
+                            # RDB finished before replicas were killed; accept
+                            # either 1 or 2 replicas still up at pipe-read time.
+                            if {[catch {
+                                wait_for_log_messages -2 {"*Diskless rdb transfer, done reading from pipe, 1 replicas still up*"} $loglines 1 1
+                            }]} {
+                                wait_for_log_messages -2 {"*Diskless rdb transfer, done reading from pipe, 2 replicas still up*"} $loglines 1 1
+                            }
                         }
                     }
                     if {$all_drop == "no"} {

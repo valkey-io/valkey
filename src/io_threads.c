@@ -7,7 +7,7 @@
 #include "io_threads.h"
 #include "ae.h"
 #include "cluster.h"
-#include "cluster_legacy.h"
+#include "cluster_link.h"
 #include "connhelpers.h"
 #include "cluster_migrateslots.h"
 #include "connection.h"

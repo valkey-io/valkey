@@ -13,27 +13,64 @@
 
 extern "C" {
 #include "cluster.h"
-#include "cluster_legacy.h"
+#include "cluster_bus.h"
+#include "cluster_link.h"
+#include "cluster_state.h"
 #include "connhelpers.h"
 #include "io_threads.h"
 #include "server.h"
-
-clusterLink *createClusterLink(clusterNode *node);
-int freeClusterLink(clusterLink *link);
-void testOnlyFreeClusterLinkOnBufferLimitReached(clusterLink *link);
 }
 
-/* Mirrors clusterMsgSendBlock, which is private to cluster_legacy.c. The
- * layout must match exactly: the write job and its completion both read the
- * message's own totlen and type out of the block. */
-typedef struct TestMsgBlock {
-    size_t totlen;
-    int refcount;
-    union {
-        clusterMsg msg;
-        clusterMsgLight msg_light;
-    } data[1];
-} TestMsgBlock;
+/* The link layer frames and dispatches packets through the protocol's
+ * validateMessageHeader() and processMessage(). The tests use a minimal
+ * protocol with a gossip-like header: the signature "RCmb" at offset 0, the
+ * big-endian total length at offset 4 and the big-endian message type at
+ * offset 12, within the first RCVBUF_MIN_READ_LEN bytes. Processing a message
+ * only counts it per type. */
+#define TEST_MSG_TOTLEN_OFFSET 4
+#define TEST_MSG_TYPE_OFFSET 12
+static_assert(TEST_MSG_TYPE_OFFSET + 2 == RCVBUF_MIN_READ_LEN, "test header must fill the minimum read length");
+
+#define TEST_MSG_MIN_LEN 64
+#define TEST_MSG_TYPE_PING 0
+#define TEST_MSG_TYPE_AUTH_REQUEST 5
+#define TEST_MSG_TYPE_AUTH_ACK 6
+#define TEST_MSG_TYPE_COUNT 12
+
+static long long test_messages_received[64];
+
+static void testSetMsgHeader(void *buf, uint32_t totlen, uint16_t type) {
+    unsigned char *p = (unsigned char *)buf;
+    uint32_t totlen_be = htonl(totlen);
+    uint16_t type_be = htons(type);
+    memcpy(p, "RCmb", 4);
+    memcpy(p + TEST_MSG_TOTLEN_OFFSET, &totlen_be, sizeof(totlen_be));
+    memcpy(p + TEST_MSG_TYPE_OFFSET, &type_be, sizeof(type_be));
+}
+
+static void testSetMsgType(void *buf, uint16_t type) {
+    uint16_t type_be = htons(type);
+    memcpy((unsigned char *)buf + TEST_MSG_TYPE_OFFSET, &type_be, sizeof(type_be));
+}
+
+static uint32_t testValidateMessageHeader(char *header) {
+    uint32_t totlen_be;
+    if (memcmp(header, "RCmb", 4) != 0) return 0;
+    memcpy(&totlen_be, header + TEST_MSG_TOTLEN_OFFSET, sizeof(totlen_be));
+    uint32_t totlen = ntohl(totlen_be);
+    if (totlen < TEST_MSG_MIN_LEN) return 0;
+    return totlen;
+}
+
+static int testProcessMessage(clusterLink *link) {
+    uint16_t type_be;
+    memcpy(&type_be, link->rcvbuf + TEST_MSG_TYPE_OFFSET, sizeof(type_be));
+    uint16_t type = ntohs(type_be);
+    if (type < 64) test_messages_received[type]++;
+    return 1;
+}
+
+static clusterBusType testBus;
 
 class ClusterIOOffloadTest : public ::testing::Test {
   protected:
@@ -42,6 +79,7 @@ class ClusterIOOffloadTest : public ::testing::Test {
     int owned_conns_count;
     clusterLink *owned_links[MAX_OWNED];
     int owned_links_count;
+    clusterBusType *saved_bus;
 
     void SetUp() override {
         owned_conns_count = 0;
@@ -55,6 +93,12 @@ class ClusterIOOffloadTest : public ::testing::Test {
         server.logfile = zstrdup("");
         server.verbosity = LL_WARNING;
         server.cluster = (clusterState *)zcalloc(sizeof(clusterState));
+        memset(test_messages_received, 0, sizeof(test_messages_received));
+        memset(&testBus, 0, sizeof(testBus));
+        testBus.validateMessageHeader = testValidateMessageHeader;
+        testBus.processMessage = testProcessMessage;
+        saved_bus = clusterCurrentBus;
+        clusterCurrentBus = &testBus;
     }
 
     void TearDown() override {
@@ -75,6 +119,7 @@ class ClusterIOOffloadTest : public ::testing::Test {
          * forever and stall processIOThreadsResponses(). */
         EXPECT_EQ(testOnlyGetClusterIOPendingResponses(), 0u) << "leaked a cluster I/O pending response";
         testOnlyFreeIOThreadQueues();
+        clusterCurrentBus = saved_bus;
         if (server.el) {
             aeDeleteEventLoop(server.el);
             server.el = NULL;
@@ -124,46 +169,31 @@ class ClusterIOOffloadTest : public ::testing::Test {
     /* Queue one message of msg_len wire bytes. The block is sized to hold the
      * message, since the write job reads msg_len bytes starting at data[0]. */
     void enqueueFakeMsg(clusterLink *link, uint32_t msg_len = 64) {
-        size_t alloc = offsetof(TestMsgBlock, data) + msg_len;
-        if (alloc < sizeof(TestMsgBlock)) alloc = sizeof(TestMsgBlock);
-        TestMsgBlock *blk = (TestMsgBlock *)zcalloc(alloc);
-        blk->refcount = 1;
-        blk->totlen = alloc;
-        clusterMsg *msg = &blk->data[0].msg;
-        memcpy(msg->sig, "RCmb", 4);
-        msg->totlen = htonl(msg_len);
-        msg->ver = htons(CLUSTER_PROTO_VER);
-        msg->type = htons(CLUSTERMSG_TYPE_PING);
+        clusterMsgSendBlock *blk = clusterAllocMsgSendBlock(msg_len);
+        testSetMsgHeader(blk->data, msg_len, TEST_MSG_TYPE_PING);
         listAddNodeTail(link->send_msg_queue, blk);
         link->send_msg_queue_mem += sizeof(listNode) + blk->totlen;
     }
 
-    /* A minimal well-formed cluster packet. The type is chosen so that
-     * clusterProcessPacket() accepts it from an unknown sender and only bumps
-     * the per-type received counter. */
+    /* A minimal well-formed packet of the test protocol. */
     unsigned char *buildRawPacket(uint32_t totlen) {
         unsigned char *raw = (unsigned char *)zcalloc(totlen);
-        clusterMsgHeader *hdr = (clusterMsgHeader *)(void *)raw;
-        memcpy(hdr->sig, "RCmb", 4);
-        hdr->totlen = htonl(totlen);
-        hdr->ver = htons(CLUSTER_PROTO_VER);
-        hdr->type = htons(CLUSTERMSG_TYPE_FAILOVER_AUTH_ACK);
+        testSetMsgHeader(raw, totlen, TEST_MSG_TYPE_AUTH_ACK);
         return raw;
     }
 
-    /* A packet of arbitrary length. FAILOVER_AUTH_ACK is length-checked exactly,
-     * so an unknown type is used instead: clusterIsValidPacket() accepts any
-     * totlen for one, and the stats index is guarded by CLUSTERMSG_TYPE_COUNT. */
+    /* A packet of arbitrary length, with a type that isn't counted as one of
+     * the others. */
     unsigned char *buildOversizedPacket(uint32_t totlen) {
         unsigned char *raw = buildRawPacket(totlen);
-        ((clusterMsgHeader *)(void *)raw)->type = htons(CLUSTERMSG_TYPE_COUNT + 1);
+        testSetMsgType(raw, TEST_MSG_TYPE_COUNT + 1);
         return raw;
     }
 
     /* Exactly one complete packet, nothing after it. */
     void seedOneCompletePacket(fakeConnection *fc) {
-        unsigned char *pkt = buildRawPacket(CLUSTERMSG_MIN_LEN);
-        fakeConnSetReadData(fc, pkt, CLUSTERMSG_MIN_LEN);
+        unsigned char *pkt = buildRawPacket(TEST_MSG_MIN_LEN);
+        fakeConnSetReadData(fc, pkt, TEST_MSG_MIN_LEN);
         zfree(pkt);
     }
 
@@ -173,11 +203,11 @@ class ClusterIOOffloadTest : public ::testing::Test {
      * header rather than treat it as a partial read. */
     void seedCompletePacketFollowedByGarbage(fakeConnection *fc) {
         const size_t garbage_len = 64;
-        size_t len = CLUSTERMSG_MIN_LEN + garbage_len;
-        unsigned char *pkt = buildRawPacket(CLUSTERMSG_MIN_LEN);
+        size_t len = TEST_MSG_MIN_LEN + garbage_len;
+        unsigned char *pkt = buildRawPacket(TEST_MSG_MIN_LEN);
         unsigned char *buf = (unsigned char *)zcalloc(len);
-        memcpy(buf, pkt, CLUSTERMSG_MIN_LEN);
-        memset(buf + CLUSTERMSG_MIN_LEN, 'Z', garbage_len);
+        memcpy(buf, pkt, TEST_MSG_MIN_LEN);
+        memset(buf + TEST_MSG_MIN_LEN, 'Z', garbage_len);
         fakeConnSetReadData(fc, buf, len);
         zfree(pkt);
         zfree(buf);
@@ -186,18 +216,19 @@ class ClusterIOOffloadTest : public ::testing::Test {
     /* Feed the connection one complete packet plus a partial tail, so a read
      * job frames exactly one packet. */
     void seedReadableSocket(fakeConnection *fc) {
-        unsigned char *pkt = buildRawPacket(CLUSTERMSG_MIN_LEN);
-        unsigned char *buf = (unsigned char *)zmalloc(CLUSTERMSG_MIN_LEN + 1);
-        memcpy(buf, pkt, CLUSTERMSG_MIN_LEN);
-        buf[CLUSTERMSG_MIN_LEN] = 'T';
-        fakeConnSetReadData(fc, buf, CLUSTERMSG_MIN_LEN + 1);
+        unsigned char *pkt = buildRawPacket(TEST_MSG_MIN_LEN);
+        unsigned char *buf = (unsigned char *)zmalloc(TEST_MSG_MIN_LEN + 1);
+        memcpy(buf, pkt, TEST_MSG_MIN_LEN);
+        buf[TEST_MSG_MIN_LEN] = 'T';
+        fakeConnSetReadData(fc, buf, TEST_MSG_MIN_LEN + 1);
         zfree(pkt);
         zfree(buf);
     }
 
     /* Two complete packets plus a partial tail larger than RCVBUF_INIT_LEN. */
     size_t seedPacketsAndLargePartialTail(fakeConnection *fc) {
-        const uint32_t whole = CLUSTERMSG_MIN_LEN;
+        /* Larger than the partial tail, so the tail really is incomplete. */
+        const uint32_t whole = RCVBUF_INIT_LEN * 2 + 256;
         const size_t partial = RCVBUF_INIT_LEN + 512;
         size_t len = whole * 2 + partial;
         unsigned char *buf = (unsigned char *)zcalloc(len);
@@ -219,14 +250,14 @@ class ClusterIOOffloadTest : public ::testing::Test {
      * Each packet carries a distinct type, so a packet landing at the wrong
      * offset shows up as a wrong per-type counter. */
     void seedThreePacketsAndTail(fakeConnection *fc) {
-        const uint32_t small = CLUSTERMSG_MIN_LEN;
-        const uint32_t large = CLUSTERMSG_MIN_LEN + 512;
+        const uint32_t small = TEST_MSG_MIN_LEN;
+        const uint32_t large = TEST_MSG_MIN_LEN + 512;
         size_t len = small + large + small + 1;
         unsigned char *buf = (unsigned char *)zcalloc(len);
         unsigned char *p1 = buildRawPacket(small);
         unsigned char *p2 = buildOversizedPacket(large);
         unsigned char *p3 = buildRawPacket(small);
-        ((clusterMsgHeader *)(void *)p3)->type = htons(CLUSTERMSG_TYPE_FAILOVER_AUTH_REQUEST);
+        testSetMsgType(p3, TEST_MSG_TYPE_AUTH_REQUEST);
         memcpy(buf, p1, small);
         memcpy(buf + small, p2, large);
         memcpy(buf + small + large, p3, small);
@@ -256,10 +287,10 @@ TEST_F(ClusterIOOffloadTest, ReadJobFramesCompletePrefixAndLeavesTail) {
     link->io_read_state = CLUSTER_LINK_IO_PENDING;
     clusterReadJob(link);
 
-    EXPECT_EQ(link->io_complete_bytes, (size_t)CLUSTERMSG_MIN_LEN);
+    EXPECT_EQ(link->io_complete_bytes, (size_t)TEST_MSG_MIN_LEN);
     EXPECT_EQ(link->io_complete_packets, 1u);
     /* The partial tail is read but deliberately not published. */
-    EXPECT_EQ(link->rcvbuf_len, (size_t)CLUSTERMSG_MIN_LEN + 1);
+    EXPECT_EQ(link->rcvbuf_len, (size_t)TEST_MSG_MIN_LEN + 1);
     link->io_read_state = CLUSTER_LINK_IO_IDLE;
 }
 
@@ -277,7 +308,7 @@ TEST_F(ClusterIOOffloadTest, ReadOffloadRoundTrip) {
 
     runInlineWorkerAndDrain(clusterReadJob, link);
 
-    EXPECT_EQ(server.cluster->stats_bus_messages_received[CLUSTERMSG_TYPE_FAILOVER_AUTH_ACK], 1LL);
+    EXPECT_EQ(test_messages_received[TEST_MSG_TYPE_AUTH_ACK], 1LL);
     EXPECT_EQ(link->io_read_state, CLUSTER_LINK_IO_IDLE);
     EXPECT_EQ(link->io_refs, 0);
     EXPECT_EQ(link->io_complete_bytes, 0u);
@@ -304,7 +335,7 @@ TEST_F(ClusterIOOffloadTest, ReadOffloadOnEofDrainsThenCloses) {
     releaseLinkOwnership(link);
 
     EXPECT_GE(fc->close_calls, 1);
-    EXPECT_EQ(server.cluster->stats_bus_messages_received[CLUSTERMSG_TYPE_FAILOVER_AUTH_ACK], 1LL);
+    EXPECT_EQ(test_messages_received[TEST_MSG_TYPE_AUTH_ACK], 1LL);
 }
 
 TEST_F(ClusterIOOffloadTest, ReadOffloadOnReadErrorDrainsThenCloses) {
@@ -318,7 +349,7 @@ TEST_F(ClusterIOOffloadTest, ReadOffloadOnReadErrorDrainsThenCloses) {
     releaseLinkOwnership(link);
 
     EXPECT_GE(fc->close_calls, 1);
-    EXPECT_EQ(server.cluster->stats_bus_messages_received[CLUSTERMSG_TYPE_FAILOVER_AUTH_ACK], 1LL);
+    EXPECT_EQ(test_messages_received[TEST_MSG_TYPE_AUTH_ACK], 1LL);
 }
 
 TEST_F(ClusterIOOffloadTest, ReadOffloadOnProtocolErrorDrainsValidPrefixThenCloses) {
@@ -331,7 +362,7 @@ TEST_F(ClusterIOOffloadTest, ReadOffloadOnProtocolErrorDrainsValidPrefixThenClos
     releaseLinkOwnership(link);
 
     EXPECT_GE(fc->close_calls, 1);
-    EXPECT_EQ(server.cluster->stats_bus_messages_received[CLUSTERMSG_TYPE_FAILOVER_AUTH_ACK], 1LL);
+    EXPECT_EQ(test_messages_received[TEST_MSG_TYPE_AUTH_ACK], 1LL);
 }
 
 /* --- Write path ------------------------------------------------------- */
@@ -346,8 +377,8 @@ TEST_F(ClusterIOOffloadTest, ReadOffloadDrainsMultiplePacketsAndCompactsTail) {
 
     /* Each packet must be seen exactly once, in its own right: a wrong slide
      * offset would put some other packet's header at rcvbuf[0]. */
-    EXPECT_EQ(server.cluster->stats_bus_messages_received[CLUSTERMSG_TYPE_FAILOVER_AUTH_ACK], 1LL);
-    EXPECT_EQ(server.cluster->stats_bus_messages_received[CLUSTERMSG_TYPE_FAILOVER_AUTH_REQUEST], 1LL);
+    EXPECT_EQ(test_messages_received[TEST_MSG_TYPE_AUTH_ACK], 1LL);
+    EXPECT_EQ(test_messages_received[TEST_MSG_TYPE_AUTH_REQUEST], 1LL);
     EXPECT_EQ(link->io_complete_bytes, 0u);
     EXPECT_EQ(link->io_complete_packets, 0u);
     /* Only the unparsed tail survives, compacted to the front. */
@@ -370,7 +401,7 @@ TEST_F(ClusterIOOffloadTest, ReadCompletionShrinksAroundPartialTail) {
     processIOThreadsResponses();
 
     /* Both packets applied; the tail survives and the buffer shrank around it. */
-    EXPECT_EQ(server.cluster->stats_bus_messages_received[CLUSTERMSG_TYPE_FAILOVER_AUTH_ACK], 2LL);
+    EXPECT_EQ(test_messages_received[TEST_MSG_TYPE_AUTH_ACK], 2LL);
     EXPECT_EQ(link->rcvbuf_len, partial);
     EXPECT_EQ(link->rcvbuf_alloc, partial + RCVBUF_INIT_LEN);
     EXPECT_LT(link->rcvbuf_alloc, grown);
@@ -736,7 +767,7 @@ TEST_F(ClusterIOOffloadTest, BusySendQueueDoesNotStarveReads) {
     EXPECT_EQ(trySendClusterReadToIOThreads(link), C_OK);
     EXPECT_EQ(link->io_read_state, CLUSTER_LINK_IO_PENDING);
     runInlineWorkerAndDrain(clusterReadJob, link);
-    EXPECT_EQ(server.cluster->stats_bus_messages_received[CLUSTERMSG_TYPE_FAILOVER_AUTH_ACK], 1LL);
+    EXPECT_EQ(test_messages_received[TEST_MSG_TYPE_AUTH_ACK], 1LL);
 }
 
 /* The yield is one-shot: with no read waiting, writes dispatch back to back. */

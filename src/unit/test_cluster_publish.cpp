@@ -12,25 +12,31 @@
 
 extern "C" {
 #include "cluster.h"
-#include "cluster_legacy.h"
+#include "cluster_bus.h"
+#include "cluster_link.h"
 #include "server.h"
 
-void *clusterCreatePublishMsgBlock(robj *channel, robj *message, int is_light, int is_sharded);
+extern clusterBusType clusterLegacyBus;
+
+clusterMsgSendBlock *clusterCreatePublishMsgBlock(robj *channel, robj *message, int is_light, int is_sharded);
+size_t testOnlyClusterPublishMaxPayloadLen(void);
+void testOnlyClusterLightPublishLayout(size_t *hdr_len,
+                                       size_t *totlen_offset,
+                                       size_t *channel_len_offset,
+                                       size_t *message_len_offset,
+                                       size_t *bulk_data_offset);
 }
 
-/* Mirrors clusterMsgSendBlock, which is private to cluster_legacy.c. */
-typedef struct TestClusterMsgSendBlock {
-    size_t totlen;
-    int refcount;
-    union {
-        clusterMsg msg;
-        clusterMsgLight msg_light;
-    } data[1];
-} TestClusterMsgSendBlock;
+/* The gossip wire format is private to cluster_legacy.c, so fields are read at
+ * the offsets it reports. */
+static uint32_t readBe32(const unsigned char *msg, size_t offset) {
+    uint32_t v;
+    memcpy(&v, msg + offset, sizeof(v));
+    return ntohl(v);
+}
 
 static size_t maxPublishPayloadLen(void) {
-    return (size_t)UINT32_MAX - offsetof(TestClusterMsgSendBlock, data) - CLUSTERMSG_MIN_LEN -
-           offsetof(clusterMsgDataPublish, bulk_data);
+    return testOnlyClusterPublishMaxPayloadLen();
 }
 
 static robj *createStringObjectWithFakeLength(size_t len) {
@@ -42,29 +48,43 @@ static robj *createStringObjectWithFakeLength(size_t len) {
     return createObject(OBJ_STRING, sh->buf);
 }
 
-TEST(ClusterPublishTest, BuildsRepresentableLightMessage) {
+/* clusterPublishMessageLengthValid() dispatches to the current cluster bus. */
+class ClusterPublishTest : public ::testing::Test {
+  protected:
+    clusterBusType *saved_bus;
+
+    void SetUp() override {
+        saved_bus = clusterCurrentBus;
+        clusterCurrentBus = &clusterLegacyBus;
+    }
+
+    void TearDown() override {
+        clusterCurrentBus = saved_bus;
+    }
+};
+
+TEST_F(ClusterPublishTest, BuildsRepresentableLightMessage) {
     const char channel_value[] = "channel";
     const char message_value[] = "message";
     robj *channel = createStringObject(channel_value, strlen(channel_value));
     robj *message = createStringObject(message_value, strlen(message_value));
     size_t memory_before = server.stat_cluster_links_memory;
 
-    TestClusterMsgSendBlock *msgblock =
-        (TestClusterMsgSendBlock *)clusterCreatePublishMsgBlock(channel, message, 1, 0);
+    clusterMsgSendBlock *msgblock = clusterCreatePublishMsgBlock(channel, message, 1, 0);
 
     if (msgblock == NULL) {
         decrRefCount(channel);
         decrRefCount(message);
         FAIL() << "failed to build a representable cluster publish message";
     }
-    clusterMsgLight *hdr = &msgblock->data[0].msg_light;
-    EXPECT_EQ(ntohl(hdr->totlen),
-              CLUSTERMSG_LIGHT_MIN_LEN + offsetof(clusterMsgDataPublish, bulk_data) + strlen(channel_value) +
-                  strlen(message_value));
-    EXPECT_EQ(ntohl(hdr->data.publish.msg.channel_len), strlen(channel_value));
-    EXPECT_EQ(ntohl(hdr->data.publish.msg.message_len), strlen(message_value));
-    EXPECT_EQ(memcmp(hdr->data.publish.msg.bulk_data, channel_value, strlen(channel_value)), 0);
-    EXPECT_EQ(memcmp(hdr->data.publish.msg.bulk_data + strlen(channel_value), message_value, strlen(message_value)), 0);
+    size_t hdr_len, totlen_off, channel_len_off, message_len_off, bulk_off;
+    testOnlyClusterLightPublishLayout(&hdr_len, &totlen_off, &channel_len_off, &message_len_off, &bulk_off);
+    const unsigned char *hdr = (const unsigned char *)msgblock->data;
+    EXPECT_EQ(readBe32(hdr, totlen_off), hdr_len + strlen(channel_value) + strlen(message_value));
+    EXPECT_EQ(readBe32(hdr, channel_len_off), strlen(channel_value));
+    EXPECT_EQ(readBe32(hdr, message_len_off), strlen(message_value));
+    EXPECT_EQ(memcmp(hdr + bulk_off, channel_value, strlen(channel_value)), 0);
+    EXPECT_EQ(memcmp(hdr + bulk_off + strlen(channel_value), message_value, strlen(message_value)), 0);
 
     server.stat_cluster_links_memory -= msgblock->totlen;
     zfree(msgblock);
@@ -73,19 +93,19 @@ TEST(ClusterPublishTest, BuildsRepresentableLightMessage) {
     EXPECT_EQ(server.stat_cluster_links_memory, memory_before);
 }
 
-TEST(ClusterPublishTest, RejectsPayloadThatExceedsClusterBusLimit) {
+TEST_F(ClusterPublishTest, RejectsPayloadThatExceedsClusterBusLimit) {
     size_t max_payload_len = maxPublishPayloadLen();
     robj *channel = createStringObjectWithFakeLength(max_payload_len);
     robj *message = createStringObjectWithFakeLength(1);
 
-    EXPECT_EQ(clusterCreatePublishMsgBlock(channel, message, 1, 0), (void *)NULL);
-    EXPECT_EQ(clusterCreatePublishMsgBlock(channel, message, 0, 0), (void *)NULL);
+    EXPECT_EQ(clusterCreatePublishMsgBlock(channel, message, 1, 0), (clusterMsgSendBlock *)NULL);
+    EXPECT_EQ(clusterCreatePublishMsgBlock(channel, message, 0, 0), (clusterMsgSendBlock *)NULL);
 
     decrRefCount(channel);
     decrRefCount(message);
 }
 
-TEST(ClusterPublishTest, AcceptsPayloadAtClusterBusLimit) {
+TEST_F(ClusterPublishTest, AcceptsPayloadAtClusterBusLimit) {
     size_t max_payload_len = maxPublishPayloadLen();
     robj *channel = createStringObjectWithFakeLength(1);
     robj *message = createStringObjectWithFakeLength(max_payload_len - 1);
@@ -96,7 +116,7 @@ TEST(ClusterPublishTest, AcceptsPayloadAtClusterBusLimit) {
     decrRefCount(message);
 }
 
-TEST(ClusterPublishTest, RejectsOversizedPayloadBeforePublishingLocally) {
+TEST_F(ClusterPublishTest, RejectsOversizedPayloadBeforePublishingLocally) {
     size_t max_payload_len = maxPublishPayloadLen();
     robj *channel = createStringObjectWithFakeLength(max_payload_len);
     robj *message = createStringObjectWithFakeLength(1);
@@ -111,11 +131,11 @@ TEST(ClusterPublishTest, RejectsOversizedPayloadBeforePublishingLocally) {
 }
 
 #if SIZE_MAX > UINT32_MAX
-TEST(ClusterPublishTest, RejectsIndividualLengthThatCannotFitWireField) {
+TEST_F(ClusterPublishTest, RejectsIndividualLengthThatCannotFitWireField) {
     robj *channel = createStringObjectWithFakeLength((size_t)UINT32_MAX + 1);
     robj *message = createStringObject("", 0);
 
-    EXPECT_EQ(clusterCreatePublishMsgBlock(channel, message, 1, 0), (void *)NULL);
+    EXPECT_EQ(clusterCreatePublishMsgBlock(channel, message, 1, 0), (clusterMsgSendBlock *)NULL);
 
     decrRefCount(channel);
     decrRefCount(message);

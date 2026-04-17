@@ -50,9 +50,9 @@ TEST_F(ZmallocTest, TestZmallocAllocZeroByteAndFree) {
     ASSERT_EQ(zmalloc_used_memory(), used_memory_before);
 }
 
-TEST_F(ZmallocTest, TestZmallocAlignedAllocAndFree) {
+TEST_F(ZmallocTest, TestZmallocCacheAlignedAllocAndFree) {
     size_t used_memory_before = zmalloc_used_memory();
-    void *ptr = zmalloc_aligned(CACHE_LINE_SIZE, 123);
+    void *ptr = zmalloc_cache_aligned(123);
 
     ASSERT_NE(ptr, nullptr);
     EXPECT_EQ(reinterpret_cast<uintptr_t>(ptr) % CACHE_LINE_SIZE, 0u);

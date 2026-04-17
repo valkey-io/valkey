@@ -72,11 +72,6 @@ void zlibc_free(void *ptr) {
  */
 #define MALLOC_MIN_SIZE(x) ((x) > 0 ? (x) : sizeof(long))
 
-#ifndef HAVE_MALLOC_SIZE
-#define ZMALLOC_ALIGNED_FLAG ((size_t)1 << (sizeof(size_t) * 8 - 1))
-#define ZMALLOC_ALIGNED_SIZE_MASK (~ZMALLOC_ALIGNED_FLAG)
-#endif
-
 /* Explicitly override malloc/free etc when using tcmalloc. */
 #if defined(USE_TCMALLOC)
 #define malloc(size) tc_malloc(size)
@@ -146,29 +141,6 @@ static void zmalloc_default_oom(size_t size) {
 
 static void (*zmalloc_oom_handler)(size_t) = zmalloc_default_oom;
 
-static inline void zmallocValidateAlignment(size_t alignment) {
-    if (alignment < sizeof(void *) || (alignment & (alignment - 1)) != 0) {
-        panic("zmalloc_aligned alignment must be a power of two and at least sizeof(void *)");
-    }
-}
-
-#ifdef HAVE_MALLOC_SIZE
-static inline int zmallocPosixMemalign(void **memptr, size_t alignment, size_t size) {
-#ifdef USE_JEMALLOC
-    return je_posix_memalign(memptr, alignment, size);
-#else
-    return posix_memalign(memptr, alignment, size);
-#endif
-}
-#else
-static inline int zmallocIsAlignedAllocation(size_t size) {
-    return (size & ZMALLOC_ALIGNED_FLAG) != 0;
-}
-
-static inline size_t zmallocAlignedDataSize(size_t size) {
-    return size & ZMALLOC_ALIGNED_SIZE_MASK;
-}
-#endif
 
 #ifdef HAVE_MALLOC_SIZE
 void *extend_to_usable(void *ptr, size_t size) {
@@ -216,54 +188,25 @@ void *zmalloc(size_t size) {
     return ptr;
 }
 
-/* Allocate aligned memory or panic.
+/* Allocate CACHE_LINE_SIZE-aligned memory or panic.
  * The returned pointer can be freed with zfree(). */
-void *zmalloc_aligned(size_t alignment, size_t size) {
-    size_t alloc_size = MALLOC_MIN_SIZE(size);
-
-    zmallocValidateAlignment(alignment);
-
-    if (alloc_size >= SIZE_MAX / 2) {
-        zmalloc_oom_handler(size);
-        return NULL;
-    }
-
-#ifdef HAVE_MALLOC_SIZE
+void *zmalloc_cache_aligned(size_t size) {
+#ifndef HAVE_MALLOC_SIZE
+    /* The PREFIX_SIZE header that zmalloc uses on !HAVE_MALLOC_SIZE platforms
+     * would break the alignment guarantee.  Every platform Valkey ships on
+     * (Linux/glibc, macOS, FreeBSD) defines HAVE_MALLOC_SIZE. */
+    panic("zmalloc_cache_aligned requires HAVE_MALLOC_SIZE");
+    return NULL;
+#else
     void *ptr = NULL;
-    int ret = zmallocPosixMemalign(&ptr, alignment, alloc_size);
+    size = MALLOC_MIN_SIZE(size);
+#ifdef USE_JEMALLOC
+    int ret = je_posix_memalign(&ptr, CACHE_LINE_SIZE, size);
+#else
+    int ret = posix_memalign(&ptr, CACHE_LINE_SIZE, size);
+#endif
     if (ret != 0 || !ptr) zmalloc_oom_handler(size);
     update_zmalloc_stat_alloc(zmalloc_size(ptr));
-    return ptr;
-#else
-    if (alloc_size & ZMALLOC_ALIGNED_FLAG) {
-        zmalloc_oom_handler(size);
-        return NULL;
-    }
-
-    size_t extra = alignment - 1;
-    if (extra > SIZE_MAX - PREFIX_SIZE - sizeof(void *)) {
-        zmalloc_oom_handler(size);
-        return NULL;
-    }
-    extra += PREFIX_SIZE + sizeof(void *);
-    if (alloc_size > SIZE_MAX - extra) {
-        zmalloc_oom_handler(size);
-        return NULL;
-    }
-
-    unsigned char *raw = malloc(alloc_size + extra);
-    if (!raw) zmalloc_oom_handler(size);
-
-    uintptr_t aligned =
-        ((uintptr_t)(raw + sizeof(void *) + PREFIX_SIZE + alignment - 1)) & ~((uintptr_t)alignment - 1);
-    void *ptr = (void *)aligned;
-
-    /* Store the original allocation so zfree() can release the right pointer
-     * while keeping the public pointer aligned. */
-    *((void **)((unsigned char *)ptr - PREFIX_SIZE - sizeof(void *))) = raw;
-    *((size_t *)((unsigned char *)ptr - PREFIX_SIZE)) = alloc_size | ZMALLOC_ALIGNED_FLAG;
-
-    update_zmalloc_stat_alloc(alloc_size + PREFIX_SIZE);
     return ptr;
 #endif
 }
@@ -455,8 +398,8 @@ void *zrealloc_usable(void *ptr, size_t size, size_t *usable) {
  * information as the first bytes of every allocation. */
 #ifndef HAVE_MALLOC_SIZE
 size_t zmalloc_size(void *ptr) {
-    size_t size = *((size_t *)((char *)ptr - PREFIX_SIZE));
-    size = zmallocAlignedDataSize(size);
+    void *realptr = (char *)ptr - PREFIX_SIZE;
+    size_t size = *((size_t *)realptr);
     return size + PREFIX_SIZE;
 }
 size_t zmalloc_usable_size(void *ptr) {
@@ -488,15 +431,8 @@ void zfree(void *ptr) {
 #ifdef HAVE_MALLOC_SIZE
     size_t size = zmalloc_size(ptr);
 #else
-    unsigned char *prefix = (unsigned char *)ptr - PREFIX_SIZE;
-    size_t data_size = *((size_t *)prefix);
-    if (zmallocIsAlignedAllocation(data_size)) {
-        size_t size = zmallocAlignedDataSize(data_size) + PREFIX_SIZE;
-        void *raw = *((void **)(prefix - sizeof(void *)));
-        zfree_internal(raw, size);
-        return;
-    }
-    ptr = prefix;
+    ptr = (char *)ptr - PREFIX_SIZE;
+    size_t data_size = *((size_t *)ptr);
     size_t size = data_size + PREFIX_SIZE;
 #endif
 
@@ -508,12 +444,7 @@ void zfree_with_size(void *ptr, size_t size) {
     if (ptr == NULL) return;
 
 #ifndef HAVE_MALLOC_SIZE
-    unsigned char *prefix = (unsigned char *)ptr - PREFIX_SIZE;
-    if (zmallocIsAlignedAllocation(*((size_t *)prefix))) {
-        ptr = *((void **)(prefix - sizeof(void *)));
-    } else {
-        ptr = prefix;
-    }
+    ptr = (char *)ptr - PREFIX_SIZE;
     size += PREFIX_SIZE;
 #endif
 

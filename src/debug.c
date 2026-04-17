@@ -35,6 +35,7 @@
 #include "quicklist.h"
 #include "fpconv_dtoa.h"
 #include "cluster.h"
+#include "cluster_nodes.h"
 #include "threads_mngr.h"
 #include "io_threads.h"
 #include "sds.h"

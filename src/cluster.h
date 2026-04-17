@@ -2,6 +2,11 @@
 #define __CLUSTER_H
 
 #include <stdbool.h>
+
+typedef struct slotRange {
+    int start_slot;
+    int end_slot;
+} slotRange;
 /*-----------------------------------------------------------------------------
  * Cluster exported API.
  *----------------------------------------------------------------------------*/
@@ -31,7 +36,10 @@
 /* Fixed timeout value for cluster operations (milliseconds) */
 #define CLUSTER_OPERATION_TIMEOUT 2000
 
-typedef struct _clusterNode clusterNode;
+/* Manual failover pause multiplier: pause time = timeout * PAUSE_MULT. */
+#define CLUSTER_MF_PAUSE_MULT 2
+
+typedef struct clusterNode clusterNode;
 struct clusterState;
 
 /* Flags that a module can set in order to prevent certain Cluster
@@ -40,10 +48,6 @@ struct clusterState;
 #define CLUSTER_MODULE_FLAG_NONE 0
 #define CLUSTER_MODULE_FLAG_NO_FAILOVER (1 << 1)
 #define CLUSTER_MODULE_FLAG_NO_REDIRECTION (1 << 2)
-
-/* For clusterBroadcastPong */
-#define CLUSTER_BROADCAST_ALL 0            /* All known instances. */
-#define CLUSTER_BROADCAST_LOCAL_REPLICAS 1 /* All replicas in my primary-replicas ring. */
 
 /* ---------------------- API exported outside cluster.c -------------------- */
 /* functions requiring mechanism specific implementations */
@@ -70,29 +74,21 @@ void clusterUpdateMyselfHumanNodename(void);
 void clusterUpdateMyselfAvailabilityZone(void);
 
 void clusterPropagatePublish(robj *channel, robj *message, int sharded);
-void clusterBroadcastPong(int target);
 
 unsigned long getClusterConnectionsCount(void);
 int isClusterHealthy(void);
 
-sds clusterGenNodesDescription(client *c, int filter, int tls_primary);
 sds genClusterInfoString(sds info);
 /* handle implementation specific debug cluster commands. Return 1 if handled, 0 otherwise. */
 int handleDebugClusterCommand(client *c);
 const char **clusterDebugCommandExtendedHelp(void);
-/* handle implementation specific cluster commands. Return 1 if handled, 0 otherwise. */
-int clusterCommandSpecial(client *c);
-const char **clusterCommandExtendedHelp(void);
 
 int clusterAllowFailoverCmd(client *c);
-void clusterPromoteSelfToPrimary(void);
-mstime_t clusterManualFailoverTimeLimit(void);
 
 void clusterCommandSlots(client *c);
 void clusterCommandMyId(client *c);
 void clusterCommandMyShardId(client *c);
 void clusterCommandShards(client *c);
-sds clusterGenNodeDescription(client *c, clusterNode *node, int tls_primary);
 
 int clusterNodeCoversSlot(clusterNode *n, int slot);
 int getNodeDefaultClientPort(clusterNode *n);
@@ -120,16 +116,16 @@ int clusterNodeClientPort(clusterNode *n, int use_tls, client *c);
 char *clusterNodeHostname(clusterNode *node);
 const char *clusterNodePreferredEndpoint(clusterNode *n, client *c);
 clusterNode *clusterLookupNode(const char *name, int length);
-int detectAndUpdateCachedNodeHealth(void);
 client *createCachedResponseClient(int resp);
 void deleteCachedResponseClient(client *recording_client);
 void clearCachedClusterSlotsResponse(void);
 unsigned int countKeysInSlotForDb(unsigned int hashslot, serverDb *db);
 unsigned int countKeysInSlot(unsigned int hashslot);
+unsigned int countChannelsInSlot(unsigned int hashslot);
+void removeChannelsInSlot(unsigned int slot);
+void removeAllNotOwnedShardChannelSubscriptions(void);
 int getSlotOrReply(client *c, robj *o);
 int getNodeDefaultReplicationPort(clusterNode *node);
-bool isAnySlotInManualImportingState(void);
-bool isAnySlotInManualMigratingState(void);
 
 /* functions with shared implementations */
 int clusterNodeIsMyself(clusterNode *n);
@@ -141,22 +137,26 @@ void migrateCloseTimedoutSockets(void);
 unsigned int keyHashSlot(const char *key, int keylen);
 int patternHashSlot(char *pattern, int length);
 int isValidAuxString(char *s, unsigned int length);
+int verifyClusterNodeId(const char *name, int length);
 void migrateCommand(client *c);
 void clusterCommand(client *c);
 void clusterKeySlotCommand(client *c);
 ConnectionType *connTypeOfCluster(void);
-int isNodeAvailable(clusterNode *node);
 long long getNodeReplicationOffset(clusterNode *node);
 sds aggregateClientOutputBuffer(client *c);
 void resetClusterStats(void);
 unsigned int delKeysInSlot(unsigned int hashslot, int lazy, bool propagate_del, bool send_del_event);
 
 unsigned int propagateSlotDeletionByKeys(unsigned int hashslot);
-void clusterUpdateState(void);
-void clusterSaveConfigOrDie(int do_fsync);
-int clusterDelSlot(int slot);
-int clusterAddSlot(clusterNode *n, int slot);
-int clusterBumpConfigEpochWithoutConsensus(void);
-void clusterDoBeforeSleep(int flags);
+void clusterLogFailReason(int reason);
+sds clusterEncodeOpenSlotsAuxField(int rdbflags);
+int clusterDecodeOpenSlotsAuxField(int rdbflags, sds s);
+
+/* Change slot ownerships. See clusterBusType.slotChange. */
+void clusterSlotChange(slotRange *ranges, int numranges, clusterNode *target, void *ctx, void (*callback)(void *ctx, const char *error));
+void clusterCancelManualFailover(void);
+void clusterSetPrimary(clusterNode *n, int closeSlots, int full_sync_required);
+void clusterScheduleHandleSlotMigration(void);
+mstime_t clusterComputeMfPauseEnd(void);
 
 #endif /* __CLUSTER_H */

@@ -1094,10 +1094,11 @@ void syncCommand(client *c) {
 
         if (!strcasecmp(objectGetVal(c->argv[1]), server.replid)) {
             if (server.cluster_enabled) {
-                clusterPromoteSelfToPrimary();
-            } else {
-                replicationUnsetPrimary();
+                addReplyError(c, "PSYNC FAILOVER not supported in cluster mode. "
+                                 "Use CLUSTER FAILOVER instead.");
+                return;
             }
+            replicationUnsetPrimary();
             sds client = catClientInfoShortString(sdsempty(), c, server.hide_user_data_from_log);
             serverLog(LL_NOTICE, "PRIMARY MODE enabled (failover request from '%s')", client);
             sdsfree(client);
@@ -5292,7 +5293,7 @@ void replicationCron(void) {
          * alter the replication offsets of primary and replica, and will no longer
          * match the one stored into 'mf_primary_offset' state. */
         int manual_failover_in_progress =
-            ((server.cluster_enabled && clusterManualFailoverTimeLimit()) || server.failover_end_time) &&
+            getPausedActionsWithPurpose(PAUSE_DURING_FAILOVER) &&
             isPausedActionsWithUpdate(PAUSE_ACTION_REPLICA);
 
         if (!manual_failover_in_progress) {

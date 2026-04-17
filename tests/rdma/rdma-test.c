@@ -918,9 +918,9 @@ static void *test_routine(void *arg) {
     for (int i = 0; i < keys; i++) {
         kv_pair = &kv_pairs[i];
         /* build SET command */
-        outbytes = sprintf(outbuf, "*3\r\n$3\r\nSET\r\n$%ld\r\n%s\r\n$%ld\r\n%s\r\n",
-                           strlen(kv_pair->key), kv_pair->key,
-                           strlen(kv_pair->value), kv_pair->value);
+        outbytes = snprintf(outbuf, sizeof(outbuf), "*3\r\n$3\r\nSET\r\n$%ld\r\n%s\r\n$%ld\r\n%s\r\n",
+                            strlen(kv_pair->key), kv_pair->key,
+                            strlen(kv_pair->value), kv_pair->value);
         valkeyRdmaWrite(ctx, outbuf, outbytes);
         inbytes = valkeyRdmaReadFull(ctx, inbuf, strlen(okresp));
         assert(!strncmp("+OK\r\n", inbuf, inbytes));
@@ -946,8 +946,8 @@ static void *test_routine(void *arg) {
     for (int i = 0; i < keys; i++) {
         kv_pair = &kv_pairs[i];
         /* build GET command */
-        outbytes = sprintf(outbuf, "*2\r\n$3\r\nGET\r\n$%ld\r\n%s\r\n",
-                           strlen(kv_pair->key), kv_pair->key);
+        outbytes = snprintf(outbuf, sizeof(outbuf), "*2\r\n$3\r\nGET\r\n$%ld\r\n%s\r\n",
+                            strlen(kv_pair->key), kv_pair->key);
         valkeyRdmaWrite(ctx, outbuf, outbytes);
         inbytes = valkeyRdmaReadFull(ctx, inbuf, getrespprexlen + strlen(kv_pair->value) + 2);
         assert(!strncmp(getrespprex, inbuf, getrespprexlen));

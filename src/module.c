@@ -420,10 +420,11 @@ typedef struct ValkeyModuleEventListener {
     ValkeyModuleEventCallback callback;
 } ValkeyModuleEventListener;
 
-list *ValkeyModule_EventListeners;             /* Global list of all the active events. */
-static int commandResultSuccessListeners = 0;  /* Count of modules listening for command result success. */
-static int commandResultFailureListeners = 0;  /* Count of modules listening for command result failure. */
-static int commandResultRejectedListeners = 0; /* Count of modules listening for command result rejected. */
+list *ValkeyModule_EventListeners;                /* Global list of all the active events. */
+static int commandResultSuccessListeners = 0;     /* Count of modules listening for command result success. */
+static int commandResultFailureListeners = 0;     /* Count of modules listening for command result failure. */
+static int commandResultRejectedListeners = 0;    /* Count of modules listening for command result rejected. */
+static int commandResultACLRejectedListeners = 0; /* Count of modules listening for command result ACL rejected. */
 
 /* Data structures related to the module users */
 
@@ -11749,24 +11750,41 @@ void moduleFireCommandResultEvent(client *c,
     }
 }
 
-/* Fire command result rejected server event.
- * Called from processCommand() when a command is rejected before execution.
- * For ACL rejections, subevent is the ValkeyModuleACLLogEntryReason value
- * (VALKEYMODULE_ACL_LOG_AUTH/CMD/KEY/CHANNEL/DB). For all other rejections,
- * subevent is VALKEYMODULE_SUBEVENT_COMMAND_RESULT_REJECTED_OTHER and object_hint
- * carries the Valkey error code prefix (e.g. "OOM", "LOADING", "NOMULTI").
- * errpos is the index into c->argv of the denied key or channel for
- * VALKEYMODULE_ACL_LOG_KEY/CHANNEL; pass -1 for all other rejections.
- * Pass object_hint=NULL for ACL key/channel to extract the resource from argv[errpos]. */
-void moduleFireCommandRejectedEvent(client *c, uint64_t subevent, int errpos, const char *object_hint) {
+/* Fire command result rejected server event (non-ACL rejections).
+ * Called from processCommand() for all pre-execution rejections that are not
+ * ACL-related. reply_str is the full error reply string that was sent to the
+ * client; it is used as rejection_context in the event info. */
+void moduleFireCommandRejectedEvent(client *c, const char *reply_str) {
     if (commandResultRejectedListeners == 0) return;
 
+    ValkeyModuleCommandResultInfoV1 info = {
+        .version = VALKEYMODULE_COMMANDRESULTINFO_VERSION,
+        .command_name = c->cmd ? c->cmd->fullname : NULL,
+        .duration_us = 0,
+        .dirty = 0,
+        .client_id = c->id,
+        .is_module_client = (c->flag.module ? 1 : 0),
+        .argc = c->argc,
+        .argv = (ValkeyModuleString **)c->argv,
+        .rejection_context = reply_str,
+    };
+
+    moduleFireServerEvent(VALKEYMODULE_EVENT_COMMAND_RESULT_REJECTED, 0, &info);
+}
+
+/* Fire command result ACL rejected server event.
+ * Called from processCommand() when ACLCheckAllPerm() denies the command, or
+ * when authRequired() rejects an unauthenticated client.
+ * subevent is a ValkeyModuleACLLogEntryReason value (VALKEYMODULE_ACL_LOG_*).
+ * errpos is the index into c->argv of the denied key or channel for
+ * VALKEYMODULE_ACL_LOG_KEY/CHANNEL; pass -1 for all other subevents. */
+void moduleFireCommandACLRejectedEvent(client *c, uint64_t subevent, int errpos) {
+    if (commandResultACLRejectedListeners == 0) return;
+
     char int_key_buf[LONG_STR_SIZE];
-    const char *rejection_context = object_hint;
-    if (rejection_context == NULL &&
-        (subevent == VALKEYMODULE_ACL_LOG_KEY || subevent == VALKEYMODULE_ACL_LOG_CHANNEL) &&
+    const char *rejection_context = NULL;
+    if ((subevent == VALKEYMODULE_ACL_LOG_KEY || subevent == VALKEYMODULE_ACL_LOG_CHANNEL) &&
         errpos >= 0 && errpos < c->argc) {
-        /* ACL key/channel denials: extract the denied resource name from argv. */
         robj *key_obj = c->argv[errpos];
         if (key_obj->encoding == OBJ_ENCODING_INT) {
             ll2string(int_key_buf, sizeof(int_key_buf), (long)objectGetVal(key_obj));
@@ -11788,7 +11806,7 @@ void moduleFireCommandRejectedEvent(client *c, uint64_t subevent, int errpos, co
         .rejection_context = rejection_context,
     };
 
-    moduleFireServerEvent(VALKEYMODULE_EVENT_COMMAND_RESULT_REJECTED, subevent, &info);
+    moduleFireServerEvent(VALKEYMODULE_EVENT_COMMAND_RESULT_ACL_REJECTED, subevent, &info);
 }
 
 /* For a given pointer allocated via ValkeyModule_Alloc() or
@@ -12247,6 +12265,7 @@ static uint64_t moduleEventVersions[] = {
     VALKEYMODULE_COMMANDRESULTINFO_VERSION,        /* VALKEYMODULE_EVENT_COMMAND_RESULT_SUCCESS */
     VALKEYMODULE_COMMANDRESULTINFO_VERSION,        /* VALKEYMODULE_EVENT_COMMAND_RESULT_FAILURE */
     VALKEYMODULE_COMMANDRESULTINFO_VERSION,        /* VALKEYMODULE_EVENT_COMMAND_RESULT_REJECTED */
+    VALKEYMODULE_COMMANDRESULTINFO_VERSION,        /* VALKEYMODULE_EVENT_COMMAND_RESULT_ACL_REJECTED */
 };
 
 /* Register to be notified, via a callback, when the specified server event
@@ -12625,21 +12644,33 @@ static uint64_t moduleEventVersions[] = {
  *
  * * ValkeyModuleEvent_CommandResultRejected
  *
- *     Called when a command is rejected before execution.
+ *     Called when a command is rejected before execution for non-ACL reasons
+ *     (unknown command, wrong arity, OOM, cluster redirect, loading,
+ *     busy script/module, read-only replica, Pub/Sub context, etc.).
  *
- *     For ACL rejections the subevent is the ValkeyModuleACLLogEntryReason value:
+ *     The subevent is always 0 for this event — there is no subevent breakdown.
+ *
+ *     duration_us and dirty are always 0 for this event — the command never ran.
+ *
+ *     The data pointer can be casted to a ValkeyModuleCommandResultInfo structure.
+ *     The `rejection_context` field carries the full error reply string that was
+ *     sent to the client (e.g. "-OOM command not allowed when used memory >
+ *     'maxmemory'", "-ERR Command 'multi' not allowed inside a transaction").
+ *
+ * * ValkeyModuleEvent_CommandResultACLRejected
+ *
+ *     Called when a command is rejected before execution due to an ACL check
+ *     failure, or when an unauthenticated client sends a command (NOAUTH).
+ *
+ *     For NOAUTH, see also ValkeyModuleEvent_AuthenticationAttempt
+ *     which covers AUTH/HELLO command outcomes.
+ *
+ *     The subevent is a ValkeyModuleACLLogEntryReason value:
  *       - VALKEYMODULE_ACL_LOG_AUTH    (0): NOAUTH — client not yet authenticated
  *       - VALKEYMODULE_ACL_LOG_CMD     (1): NOPERM — command not permitted
  *       - VALKEYMODULE_ACL_LOG_KEY     (2): NOPERM — key access denied
  *       - VALKEYMODULE_ACL_LOG_CHANNEL (3): NOPERM — channel access denied
  *       - VALKEYMODULE_ACL_LOG_DB      (4): NOPERM — database access denied
- *
- *     All other rejections (unknown command, wrong arity, OOM, cluster redirect,
- *     loading, busy script/module, read-only replica, etc.) use subevent
- *     VALKEYMODULE_SUBEVENT_COMMAND_RESULT_REJECTED_OTHER (5).
- *
- *     For NOAUTH, see also ValkeyModuleEvent_AuthenticationAttempt
- *     which covers AUTH/HELLO command outcomes.
  *
  *     duration_us and dirty are always 0 for this event — the command never ran.
  *
@@ -12647,9 +12678,6 @@ static uint64_t moduleEventVersions[] = {
  *     The `rejection_context` field carries subevent-specific context:
  *       - VALKEYMODULE_ACL_LOG_KEY / VALKEYMODULE_ACL_LOG_CHANNEL:
  *         the denied key or channel name from argv
- *       - VALKEYMODULE_SUBEVENT_COMMAND_RESULT_REJECTED_OTHER:
- *         the Valkey error code string (e.g. "OOM", "LOADING", "BUSY",
- *         "MOVED", "ASK", "CLUSTERDOWN", "NOREPLICAS", "NOMULTI", ...)
  *       - All other ACL subevents: NULL
  *
  * The function returns VALKEYMODULE_OK if the module was successfully subscribed
@@ -12684,6 +12712,8 @@ int VM_SubscribeToServerEvent(ValkeyModuleCtx *ctx, ValkeyModuleEvent event, Val
                 commandResultFailureListeners--;
             else if (event.id == VALKEYMODULE_EVENT_COMMAND_RESULT_REJECTED)
                 commandResultRejectedListeners--;
+            else if (event.id == VALKEYMODULE_EVENT_COMMAND_RESULT_ACL_REJECTED)
+                commandResultACLRejectedListeners--;
         } else {
             el->callback = callback; /* Update the callback with the new one. */
         }
@@ -12702,6 +12732,8 @@ int VM_SubscribeToServerEvent(ValkeyModuleCtx *ctx, ValkeyModuleEvent event, Val
         commandResultFailureListeners++;
     else if (event.id == VALKEYMODULE_EVENT_COMMAND_RESULT_REJECTED)
         commandResultRejectedListeners++;
+    else if (event.id == VALKEYMODULE_EVENT_COMMAND_RESULT_ACL_REJECTED)
+        commandResultACLRejectedListeners++;
     return VALKEYMODULE_OK;
 }
 
@@ -12729,7 +12761,9 @@ int VM_IsSubEventSupported(ValkeyModuleEvent event, int64_t subevent) {
     case VALKEYMODULE_EVENT_CONFIG: return subevent < _VALKEYMODULE_SUBEVENT_CONFIG_NEXT;
     case VALKEYMODULE_EVENT_KEY: return subevent < _VALKEYMODULE_SUBEVENT_KEY_NEXT;
     case VALKEYMODULE_EVENT_COMMAND_RESULT_REJECTED:
-        return subevent < _VALKEYMODULE_SUBEVENT_COMMAND_RESULT_REJECTED_NEXT;
+        return subevent == 0;
+    case VALKEYMODULE_EVENT_COMMAND_RESULT_ACL_REJECTED:
+        return subevent < 5; /* ValkeyModuleACLLogEntryReason has 5 values (0-4) */
     default: break;
     }
     return 0;
@@ -12821,7 +12855,8 @@ void moduleFireServerEvent(uint64_t eid, int subid, void *data) {
                 moduledata = data;
             } else if (eid == VALKEYMODULE_EVENT_COMMAND_RESULT_SUCCESS ||
                        eid == VALKEYMODULE_EVENT_COMMAND_RESULT_FAILURE ||
-                       eid == VALKEYMODULE_EVENT_COMMAND_RESULT_REJECTED) {
+                       eid == VALKEYMODULE_EVENT_COMMAND_RESULT_REJECTED ||
+                       eid == VALKEYMODULE_EVENT_COMMAND_RESULT_ACL_REJECTED) {
                 moduledata = data;
             }
 

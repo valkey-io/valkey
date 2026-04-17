@@ -1,12 +1,13 @@
 /* Test module for command result event API
  *
  * This module tests the VALKEYMODULE_EVENT_COMMAND_RESULT_SUCCESS,
- * VALKEYMODULE_EVENT_COMMAND_RESULT_FAILURE, and
- * VALKEYMODULE_EVENT_COMMAND_RESULT_REJECTED server events.
+ * VALKEYMODULE_EVENT_COMMAND_RESULT_FAILURE,
+ * VALKEYMODULE_EVENT_COMMAND_RESULT_REJECTED, and
+ * VALKEYMODULE_EVENT_COMMAND_RESULT_ACL_REJECTED server events.
  *
  * Commands provided:
  * - CMDRESULT.REGISTER <mode> - Register event subscription
- * (success/failure/rejected/all)
+ * (success/failure/rejected/acl_rejected/all)
  * - CMDRESULT.UNSUBSCRIBE - Unsubscribe from the event
  * - CMDRESULT.STATS - Get statistics about event invocations
  * - CMDRESULT.RESET - Reset statistics
@@ -26,6 +27,7 @@ static struct {
   long long success_count;
   long long failure_count;
   long long rejected_count;
+  long long acl_denied_count;
   long long total_duration_us;
   long long total_dirty;
 } stats = {0};
@@ -37,7 +39,7 @@ static struct {
 
 typedef struct {
   char command_name[64];
-  int status; /* 0 = success, 1 = failure, 2 = rejected */
+  int status; /* 0 = success, 1 = failure, 2 = acl_rejected, 3 = rejected */
   uint64_t subevent;
   long long duration;
   long long dirty;
@@ -53,10 +55,11 @@ static int log_head = 0;
 static int log_count = 0;
 
 /* Track subscription mode bitmask:
- * bit 0 = success, bit 1 = failure, bit 2 = rejected */
+ * bit 0 = success, bit 1 = failure, bit 2 = rejected, bit 3 = acl_rejected */
 #define MODE_SUCCESS 0x1
 #define MODE_FAILURE 0x2
 #define MODE_REJECTED 0x4
+#define MODE_ACL_REJECTED 0x8
 static int subscription_mode = 0;
 
 /* Add entry to circular log */
@@ -125,8 +128,11 @@ void CommandResultEventCallback(ValkeyModuleCtx *ctx, ValkeyModuleEvent eid,
   stats.total_callbacks++;
 
   int status;
-  if (eid.id == VALKEYMODULE_EVENT_COMMAND_RESULT_REJECTED) {
+  if (eid.id == VALKEYMODULE_EVENT_COMMAND_RESULT_ACL_REJECTED) {
     status = 2;
+    stats.acl_denied_count++;
+  } else if (eid.id == VALKEYMODULE_EVENT_COMMAND_RESULT_REJECTED) {
+    status = 3;
     stats.rejected_count++;
   } else if (eid.id == VALKEYMODULE_EVENT_COMMAND_RESULT_FAILURE) {
     status = 1;
@@ -164,16 +170,19 @@ int CmdResultRegister_ValkeyCommand(ValkeyModuleCtx *ctx,
 
   int new_mode = 0;
   if (strcmp(mode_str, "all") == 0) {
-    new_mode = MODE_SUCCESS | MODE_FAILURE | MODE_REJECTED;
+    new_mode = MODE_SUCCESS | MODE_FAILURE | MODE_REJECTED | MODE_ACL_REJECTED;
   } else if (strcmp(mode_str, "success") == 0) {
     new_mode = MODE_SUCCESS;
   } else if (strcmp(mode_str, "failure") == 0) {
     new_mode = MODE_FAILURE;
   } else if (strcmp(mode_str, "rejected") == 0) {
     new_mode = MODE_REJECTED;
+  } else if (strcmp(mode_str, "acl_rejected") == 0) {
+    new_mode = MODE_ACL_REJECTED;
   } else {
-    return ValkeyModule_ReplyWithError(
-        ctx, "ERR invalid mode. Use: all, success, failure, or rejected");
+    return ValkeyModule_ReplyWithError(ctx,
+                                       "ERR invalid mode. Use: all, success, "
+                                       "failure, rejected, or acl_rejected");
   }
 
   if ((new_mode & MODE_SUCCESS) &&
@@ -209,6 +218,23 @@ int CmdResultRegister_ValkeyCommand(ValkeyModuleCtx *ctx,
         ctx, "ERR failed to subscribe to rejected event");
   }
 
+  if ((new_mode & MODE_ACL_REJECTED) &&
+      ValkeyModule_SubscribeToServerEvent(
+          ctx, ValkeyModuleEvent_CommandResultACLRejected,
+          CommandResultEventCallback) == VALKEYMODULE_ERR) {
+    if (new_mode & MODE_SUCCESS)
+      ValkeyModule_SubscribeToServerEvent(
+          ctx, ValkeyModuleEvent_CommandResultSuccess, NULL);
+    if (new_mode & MODE_FAILURE)
+      ValkeyModule_SubscribeToServerEvent(
+          ctx, ValkeyModuleEvent_CommandResultFailure, NULL);
+    if (new_mode & MODE_REJECTED)
+      ValkeyModule_SubscribeToServerEvent(
+          ctx, ValkeyModuleEvent_CommandResultRejected, NULL);
+    return ValkeyModule_ReplyWithError(
+        ctx, "ERR failed to subscribe to acl_rejected event");
+  }
+
   subscription_mode = new_mode;
   return ValkeyModule_ReplyWithSimpleString(ctx, "OK");
 }
@@ -236,6 +262,9 @@ int CmdResultUnsubscribe_ValkeyCommand(ValkeyModuleCtx *ctx,
   if (subscription_mode & MODE_REJECTED)
     ValkeyModule_SubscribeToServerEvent(
         ctx, ValkeyModuleEvent_CommandResultRejected, NULL);
+  if (subscription_mode & MODE_ACL_REJECTED)
+    ValkeyModule_SubscribeToServerEvent(
+        ctx, ValkeyModuleEvent_CommandResultACLRejected, NULL);
 
   subscription_mode = 0;
   return ValkeyModule_ReplyWithSimpleString(ctx, "OK");
@@ -253,7 +282,7 @@ int CmdResultStats_ValkeyCommand(ValkeyModuleCtx *ctx,
     return ValkeyModule_WrongArity(ctx);
   }
 
-  ValkeyModule_ReplyWithArray(ctx, 12);
+  ValkeyModule_ReplyWithArray(ctx, 14);
   ValkeyModule_ReplyWithSimpleString(ctx, "total_callbacks");
   ValkeyModule_ReplyWithLongLong(ctx, stats.total_callbacks);
   ValkeyModule_ReplyWithSimpleString(ctx, "success_count");
@@ -262,6 +291,8 @@ int CmdResultStats_ValkeyCommand(ValkeyModuleCtx *ctx,
   ValkeyModule_ReplyWithLongLong(ctx, stats.failure_count);
   ValkeyModule_ReplyWithSimpleString(ctx, "rejected_count");
   ValkeyModule_ReplyWithLongLong(ctx, stats.rejected_count);
+  ValkeyModule_ReplyWithSimpleString(ctx, "acl_denied_count");
+  ValkeyModule_ReplyWithLongLong(ctx, stats.acl_denied_count);
   ValkeyModule_ReplyWithSimpleString(ctx, "total_duration_us");
   ValkeyModule_ReplyWithLongLong(ctx, stats.total_duration_us);
   ValkeyModule_ReplyWithSimpleString(ctx, "total_dirty");
@@ -283,6 +314,7 @@ int CmdResultReset_ValkeyCommand(ValkeyModuleCtx *ctx,
   stats.success_count = 0;
   stats.failure_count = 0;
   stats.rejected_count = 0;
+  stats.acl_denied_count = 0;
   stats.total_duration_us = 0;
   stats.total_dirty = 0;
 
@@ -320,8 +352,10 @@ int CmdResultGetLog_ValkeyCommand(ValkeyModuleCtx *ctx,
     ResultLogEntry *entry = &result_log[idx];
 
     const char *status_str;
-    if (entry->status == 2)
+    if (entry->status == 3)
       status_str = "rejected";
+    else if (entry->status == 2)
+      status_str = "acl_rejected";
     else if (entry->status == 1)
       status_str = "failure";
     else

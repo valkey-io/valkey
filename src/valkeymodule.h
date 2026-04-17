@@ -539,7 +539,8 @@ typedef void (*ValkeyModuleEventLoopOneShotFunc)(void *user_data);
 #define VALKEYMODULE_EVENT_COMMAND_RESULT_SUCCESS 20
 #define VALKEYMODULE_EVENT_COMMAND_RESULT_FAILURE 21
 #define VALKEYMODULE_EVENT_COMMAND_RESULT_REJECTED 22
-#define _VALKEYMODULE_EVENT_NEXT 23 /* Next event flag, should be updated if a new event added. */
+#define VALKEYMODULE_EVENT_COMMAND_RESULT_ACL_REJECTED 23
+#define _VALKEYMODULE_EVENT_NEXT 24 /* Next event flag, should be updated if a new event added. */
 
 typedef struct ValkeyModuleEvent {
     uint64_t id;      /* VALKEYMODULE_EVENT_... defines. */
@@ -601,7 +602,8 @@ static const ValkeyModuleEvent ValkeyModuleEvent_ReplicationRoleChanged = {VALKE
                                ValkeyModuleEvent_AtomicSlotMigration = {VALKEYMODULE_EVENT_ATOMIC_SLOT_MIGRATION, 1},
                                ValkeyModuleEvent_CommandResultSuccess = {VALKEYMODULE_EVENT_COMMAND_RESULT_SUCCESS, 1},
                                ValkeyModuleEvent_CommandResultFailure = {VALKEYMODULE_EVENT_COMMAND_RESULT_FAILURE, 1},
-                               ValkeyModuleEvent_CommandResultRejected = {VALKEYMODULE_EVENT_COMMAND_RESULT_REJECTED, 1};
+                               ValkeyModuleEvent_CommandResultRejected = {VALKEYMODULE_EVENT_COMMAND_RESULT_REJECTED, 1},
+                               ValkeyModuleEvent_CommandResultACLRejected = {VALKEYMODULE_EVENT_COMMAND_RESULT_ACL_REJECTED, 1};
 
 /* Those are values that are used for the 'subevent' callback argument. */
 #define VALKEYMODULE_SUBEVENT_PERSISTENCE_RDB_START 0
@@ -681,21 +683,20 @@ static const ValkeyModuleEvent ValkeyModuleEvent_ReplicationRoleChanged = {VALKE
 #define VALKEYMODULE_SUBEVENT_ATOMIC_SLOT_MIGRATION_EXPORT_COMPLETED 5
 #define _VALKEYMODULE_SUBEVENT_ATOMIC_SLOT_MIGRATION_NEXT 6
 
-/* Subevents for ValkeyModuleEvent_CommandResultRejected.
- *
- * ACL-related rejections reuse the ValkeyModuleACLLogEntryReason enum values
- * so the same constants work with both the ACL log and command result APIs:
- *   VALKEYMODULE_ACL_LOG_AUTH    = 0  (NOAUTH: client not authenticated;    rejection_context = NULL)
- *   VALKEYMODULE_ACL_LOG_CMD     = 1  (NOPERM: command not permitted;       rejection_context = NULL)
- *   VALKEYMODULE_ACL_LOG_KEY     = 2  (NOPERM: key access denied;           rejection_context = key name)
- *   VALKEYMODULE_ACL_LOG_CHANNEL = 3  (NOPERM: channel access denied;       rejection_context = channel name)
- *   VALKEYMODULE_ACL_LOG_DB      = 4  (NOPERM: database access denied;      rejection_context = NULL)
- *
- * All other pre-execution rejections use REJECTED_OTHER. The rejection_context
- * field carries a short error code string identifying the reason; see the
- * ValkeyModuleCommandResultInfoV1 struct for the full list of values. */
-#define VALKEYMODULE_SUBEVENT_COMMAND_RESULT_REJECTED_OTHER 5
-#define _VALKEYMODULE_SUBEVENT_COMMAND_RESULT_REJECTED_NEXT 6
+/* ValkeyModuleEvent_CommandResultRejected has no subevents (subevent is always 0).
+ * The rejection_context field in ValkeyModuleCommandResultInfo carries the full
+ * error reply string sent to the client (e.g. "-OOM command not allowed...",
+ * "-ERR Command 'xyz' not allowed inside a transaction"). */
+
+/* Subevents for ValkeyModuleEvent_CommandResultACLRejected.
+ * These reuse the ValkeyModuleACLLogEntryReason enum values so the same
+ * constants work with both the ACL log API and this event:
+ *   VALKEYMODULE_ACL_LOG_AUTH    = 0  (NOAUTH; rejection_context = NULL)
+ *   VALKEYMODULE_ACL_LOG_CMD     = 1  (NOPERM command; rejection_context = NULL)
+ *   VALKEYMODULE_ACL_LOG_KEY     = 2  (NOPERM key; rejection_context = key name)
+ *   VALKEYMODULE_ACL_LOG_CHANNEL = 3  (NOPERM channel; rejection_context = channel name)
+ *   VALKEYMODULE_ACL_LOG_DB      = 4  (NOPERM database; rejection_context = NULL)
+ * No additional subevent constants are needed. */
 
 /* ValkeyModuleClientInfo flags.
  * Note: flags VALKEYMODULE_CLIENTINFO_FLAG_PRIMARY and below were added in Valkey 9.1 */
@@ -880,27 +881,14 @@ typedef struct ValkeyModuleCommandResultInfo {
     int is_module_client;          /* 1 if command was from RM_Call, 0 otherwise. */
     int argc;                      /* Number of command arguments. */
     ValkeyModuleString **argv;     /* Command arguments array (zero-copy). */
-    const char *rejection_context; /* Only set for ValkeyModuleEvent_CommandResultRejected events.
-                                    * ACL_KEY (2): the denied key name.
-                                    * ACL_CHANNEL (3): the denied channel name.
-                                    * REJECTED_OTHER (5): a short error code string, one of:
-                                    *   "UNKNOWNCMD"  - unknown command
-                                    *   "WRONGARITY"  - wrong number of arguments
-                                    *   "PROTECTED"   - protected command not allowed
-                                    *   "NOMULTI"     - command not allowed inside MULTI
-                                    *   "OOM"         - server out of memory
-                                    *   "MISCONF"     - disk write error (MISCONF)
-                                    *   "NOREPLICAS"  - not enough replicas
-                                    *   "ROREPLICAERR"- write to read-only replica
-                                    *   "PUBSUB"      - write command in Pub/Sub context
-                                    *   "MASTERDOWN"  - primary is down
-                                    *   "LOADING"     - server loading dataset
-                                    *   "BUSY"        - server busy (active script/slow log)
-                                    *   "REPLICAKS"   - replica keyspace notification blocked
-                                    *   "MOVED"       - cluster MOVED redirect
-                                    *   "ASK"         - cluster ASK redirect
-                                    *   "CLUSTERDOWN" - cluster is down
-                                    * All other subevents: NULL. */
+    const char *rejection_context; /* Context string; meaning depends on the event:
+                                    * ValkeyModuleEvent_CommandResultRejected:
+                                    *   The full error reply string sent to the client
+                                    *   (e.g. "-OOM command not allowed when used memory > 'maxmemory'").
+                                    * ValkeyModuleEvent_CommandResultACLRejected:
+                                    *   ACL_LOG_KEY (2): the denied key name.
+                                    *   ACL_LOG_CHANNEL (3): the denied channel name.
+                                    *   All other ACL subevents: NULL. */
 } ValkeyModuleCommandResultInfoV1;
 
 #define ValkeyModuleCommandResultInfo ValkeyModuleCommandResultInfoV1

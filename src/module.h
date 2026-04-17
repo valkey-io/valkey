@@ -214,7 +214,8 @@ void moduleFireCommandResultEvent(client *c,
                                   int command_failed,
                                   long long duration,
                                   long long dirty);
-void moduleFireCommandRejectedEvent(client *c, uint64_t subevent, int errpos, const char *object_hint);
+void moduleFireCommandRejectedEvent(client *c, const char *reply_str);
+void moduleFireCommandACLRejectedEvent(client *c, uint64_t subevent, int errpos);
 void modulePostExecutionUnitOperations(void);
 void ModuleForkDoneHandler(int exitcode, int bysignal);
 int TerminateModuleForkChild(int child_pid, int wait);

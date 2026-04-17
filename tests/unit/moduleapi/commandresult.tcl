@@ -219,6 +219,8 @@ start_server {tags {"modules"}} {
         assert_equal [dict get $stats total_callbacks] 0
         assert_equal [dict get $stats success_count] 0
         assert_equal [dict get $stats failure_count] 0
+        assert_equal [dict get $stats rejected_count] 0
+        assert_equal [dict get $stats acl_denied_count] 0
 
         set log [r cmdresult.getlog]
         assert_equal [llength $log] 0
@@ -410,9 +412,9 @@ start_server {tags {"modules"}} {
         r cmdresult.unsubscribe
     }
 
-    test {Module commandresult - rejected: command not permitted (ACL_DENIED_CMD)} {
+    test {Module commandresult - acl_rejected: command not permitted (ACL_DENIED_CMD)} {
         cleanup_callback
-        r cmdresult.register rejected
+        r cmdresult.register acl_rejected
 
         # Create a user with no command permissions and authenticate
         r acl setuser testuser_cmd on >testpass nocommands
@@ -424,13 +426,14 @@ start_server {tags {"modules"}} {
         $rd close
 
         set stats [r cmdresult.stats]
-        assert {[dict get $stats rejected_count] >= 1}
+        assert {[dict get $stats acl_denied_count] >= 1}
         assert_equal [dict get $stats success_count] 0
         assert_equal [dict get $stats failure_count] 0
+        assert_equal [dict get $stats rejected_count] 0
 
         set log [r cmdresult.getlog 1]
         set entry [lindex $log 0]
-        assert_equal [dict get $entry status] "rejected"
+        assert_equal [dict get $entry status] "acl_rejected"
         # VALKEYMODULE_ACL_LOG_CMD = 1
         assert_equal [dict get $entry subevent] 1
         assert_equal [dict get $entry rejection_context] ""
@@ -439,9 +442,9 @@ start_server {tags {"modules"}} {
         r cmdresult.unsubscribe
     }
 
-    test {Module commandresult - rejected: key pattern not permitted (ACL_DENIED_KEY)} {
+    test {Module commandresult - acl_rejected: key pattern not permitted (ACL_DENIED_KEY)} {
         cleanup_callback
-        r cmdresult.register rejected
+        r cmdresult.register acl_rejected
 
         # Create a user allowed to run GET but only on keys matching "allowed:*"
         r acl setuser testuser_key on >testpass allcommands ~allowed:* nopass
@@ -453,11 +456,11 @@ start_server {tags {"modules"}} {
         $rd close
 
         set stats [r cmdresult.stats]
-        assert {[dict get $stats rejected_count] >= 1}
+        assert {[dict get $stats acl_denied_count] >= 1}
 
         set log [r cmdresult.getlog 1]
         set entry [lindex $log 0]
-        assert_equal [dict get $entry status] "rejected"
+        assert_equal [dict get $entry status] "acl_rejected"
         # VALKEYMODULE_ACL_LOG_KEY = 2
         assert_equal [dict get $entry subevent] 2
         assert_equal [dict get $entry rejection_context] "denied_key"
@@ -466,9 +469,9 @@ start_server {tags {"modules"}} {
         r cmdresult.unsubscribe
     }
 
-    test {Module commandresult - rejected: channel not permitted (ACL_DENIED_CHANNEL)} {
+    test {Module commandresult - acl_rejected: channel not permitted (ACL_DENIED_CHANNEL)} {
         cleanup_callback
-        r cmdresult.register rejected
+        r cmdresult.register acl_rejected
 
         # Create a user with allcommands but no pub/sub channel access
         r acl setuser testuser_chan on >testpass allcommands allkeys resetchannels nopass
@@ -480,11 +483,11 @@ start_server {tags {"modules"}} {
         $rd close
 
         set stats [r cmdresult.stats]
-        assert {[dict get $stats rejected_count] >= 1}
+        assert {[dict get $stats acl_denied_count] >= 1}
 
         set log [r cmdresult.getlog 1]
         set entry [lindex $log 0]
-        assert_equal [dict get $entry status] "rejected"
+        assert_equal [dict get $entry status] "acl_rejected"
         # VALKEYMODULE_ACL_LOG_CHANNEL = 3
         assert_equal [dict get $entry subevent] 3
         assert_equal [dict get $entry rejection_context] "secret_channel"
@@ -493,7 +496,7 @@ start_server {tags {"modules"}} {
         r cmdresult.unsubscribe
     }
 
-    test {Module commandresult - rejected events not fired when not subscribed} {
+    test {Module commandresult - acl_rejected events not fired when not subscribed} {
         cleanup_callback
         r cmdresult.register failure
 
@@ -506,15 +509,16 @@ start_server {tags {"modules"}} {
         $rd close
 
         set stats [r cmdresult.stats]
+        assert_equal [dict get $stats acl_denied_count] 0
         assert_equal [dict get $stats rejected_count] 0
 
         r acl deluser testuser_nosub
         r cmdresult.unsubscribe
     }
 
-    test {Module commandresult - rejected: unauthenticated command (NOAUTH)} {
+    test {Module commandresult - acl_rejected: unauthenticated command (NOAUTH)} {
         cleanup_callback
-        r cmdresult.register rejected
+        r cmdresult.register acl_rejected
 
         # Enable password so new connections require authentication
         r config set requirepass testpass
@@ -529,11 +533,11 @@ start_server {tags {"modules"}} {
         r config set requirepass ""
 
         set stats [r cmdresult.stats]
-        assert {[dict get $stats rejected_count] >= 1}
+        assert {[dict get $stats acl_denied_count] >= 1}
 
         set log [r cmdresult.getlog 1]
         set entry [lindex $log 0]
-        assert_equal [dict get $entry status] "rejected"
+        assert_equal [dict get $entry status] "acl_rejected"
         # VALKEYMODULE_ACL_LOG_AUTH = 0
         assert_equal [dict get $entry subevent] 0
         assert_equal [dict get $entry rejection_context] ""
@@ -541,9 +545,9 @@ start_server {tags {"modules"}} {
         r cmdresult.unsubscribe
     }
 
-    test {Module commandresult - Reset clears rejected_count} {
+    test {Module commandresult - Reset clears acl_denied_count} {
         cleanup_callback
-        r cmdresult.register rejected
+        r cmdresult.register acl_rejected
 
         r acl setuser testuser_reset on >testpass nocommands nopass
         set rd [valkey_deferring_client]
@@ -554,10 +558,11 @@ start_server {tags {"modules"}} {
         $rd close
 
         set stats [r cmdresult.stats]
-        assert {[dict get $stats rejected_count] >= 1}
+        assert {[dict get $stats acl_denied_count] >= 1}
 
         r cmdresult.reset
         set stats [r cmdresult.stats]
+        assert_equal [dict get $stats acl_denied_count] 0
         assert_equal [dict get $stats rejected_count] 0
         assert_equal [dict get $stats total_callbacks] 0
 
@@ -577,7 +582,7 @@ start_server {tags {"modules"}} {
         set log [r cmdresult.getlog 1]
         set entry [lindex $log 0]
         assert_equal [dict get $entry status] "rejected"
-        assert_equal [dict get $entry rejection_context] "UNKNOWNCMD"
+        assert_match {*unknown*command*} [string tolower [dict get $entry rejection_context]]
 
         r cmdresult.unsubscribe
     }
@@ -595,7 +600,7 @@ start_server {tags {"modules"}} {
         set entry [lindex $log 0]
         assert_equal [dict get $entry status] "rejected"
         assert_equal [dict get $entry command] "set"
-        assert_equal [dict get $entry rejection_context] "WRONGARITY"
+        assert_match {*wrong*number*arguments*} [string tolower [dict get $entry rejection_context]]
 
         r cmdresult.unsubscribe
     }
@@ -615,7 +620,7 @@ start_server {tags {"modules"}} {
         set entry [lindex $log 0]
         assert_equal [dict get $entry status] "rejected"
         assert_equal [dict get $entry command] "multi"
-        assert_equal [dict get $entry rejection_context] "NOMULTI"
+        assert_match {*not allowed inside a transaction*} [string tolower [dict get $entry rejection_context]]
 
         r cmdresult.unsubscribe
     }
@@ -640,7 +645,7 @@ start_server {tags {"modules"}} {
         set entry [lindex $log 0]
         assert_equal [dict get $entry status] "rejected"
         assert_equal [dict get $entry command] "set"
-        assert_equal [dict get $entry rejection_context] "PUBSUB"
+        assert_match {*only*(p|s)subscribe*} [string tolower [dict get $entry rejection_context]]
 
         r cmdresult.unsubscribe
     }
@@ -663,7 +668,7 @@ start_server {tags {"modules"}} {
         set entry [lindex $log 0]
         assert_equal [dict get $entry status] "rejected"
         assert_equal [dict get $entry command] "set"
-        assert_equal [dict get $entry rejection_context] "NOREPLICAS"
+        assert_match {*NOREPLICAS*} [dict get $entry rejection_context]
 
         r cmdresult.unsubscribe
     }
@@ -686,7 +691,7 @@ start_server {tags {"modules"}} {
         set log [r cmdresult.getlog 1]
         set entry [lindex $log 0]
         assert_equal [dict get $entry status] "rejected"
-        assert_equal [dict get $entry rejection_context] "OOM"
+        assert_match {*OOM*} [dict get $entry rejection_context]
 
         r cmdresult.unsubscribe
     }

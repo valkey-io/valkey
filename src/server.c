@@ -4284,16 +4284,15 @@ void unprepareCommand(client *c) {
 
 /* Wrappers used within processCommand to reject a command and fire the
  * ValkeyModuleEvent_CommandResultRejected server event to registered modules.
- * error_code is the Valkey error prefix string (e.g. "OOM", "LOADING", "ERR")
- * passed as rejection_context for the REJECTED_OTHER subevent. */
-static void processCommandReject(client *c, robj *reply, const char *error_code) {
+ * The full reply string is passed as rejection_context in the event info. */
+static void processCommandReject(client *c, robj *reply) {
+    moduleFireCommandRejectedEvent(c, objectGetVal(reply));
     rejectCommand(c, reply);
-    moduleFireCommandRejectedEvent(c, VALKEYMODULE_SUBEVENT_COMMAND_RESULT_REJECTED_OTHER, -1, error_code);
 }
 
-static void processCommandRejectSds(client *c, sds s, const char *error_code) {
+static void processCommandRejectSds(client *c, sds s) {
+    moduleFireCommandRejectedEvent(c, s);
     rejectCommandSds(c, s);
-    moduleFireCommandRejectedEvent(c, VALKEYMODULE_SUBEVENT_COMMAND_RESULT_REJECTED_OTHER, -1, error_code);
 }
 
 /* If this function gets called we already read a whole
@@ -4355,7 +4354,7 @@ int processCommand(client *c) {
              * non-authenticated state. */
             if (!c->cmd || !(c->cmd->flags & CMD_NO_AUTH)) {
                 rejectCommand(c, shared.noautherr);
-                moduleFireCommandRejectedEvent(c, VALKEYMODULE_ACL_LOG_AUTH, -1, NULL);
+                moduleFireCommandACLRejectedEvent(c, VALKEYMODULE_ACL_LOG_AUTH, -1);
                 return C_OK;
             }
         }
@@ -4364,13 +4363,13 @@ int processCommand(client *c) {
         sds err;
 
         if (!commandCheckExistence(c, &err)) {
-            processCommandRejectSds(c, err, "UNKNOWNCMD");
+            processCommandRejectSds(c, err);
             return C_OK;
         }
         if (c->read_flags & READ_FLAGS_BAD_ARITY) {
             /* Already detected this, but do it again just to get the error message. */
             serverAssert(!commandCheckArity(c->cmd, c->argc, &err));
-            processCommandRejectSds(c, err, "WRONGARITY");
+            processCommandRejectSds(c, err);
             return C_OK;
         }
 
@@ -4378,14 +4377,15 @@ int processCommand(client *c) {
         if (c->cmd->flags & CMD_PROTECTED) {
             if ((c->cmd->proc == debugCommand && !allowProtectedAction(server.enable_debug_cmd, c)) ||
                 (c->cmd->proc == moduleCommand && !allowProtectedAction(server.enable_module_cmd, c))) {
-                rejectCommandFormat(c,
-                                    "%s command not allowed. If the %s option is set to \"local\", "
-                                    "you can run it from a local connection, otherwise you need to set this option "
-                                    "in the configuration file, and then restart the server.",
-                                    c->cmd->proc == debugCommand ? "DEBUG" : "MODULE",
-                                    c->cmd->proc == debugCommand ? "enable-debug-command" : "enable-module-command");
-                moduleFireCommandRejectedEvent(
-                    c, VALKEYMODULE_SUBEVENT_COMMAND_RESULT_REJECTED_OTHER, -1, "PROTECTED");
+                sds protected_err = sdscatprintf(
+                    sdsempty(),
+                    "%s command not allowed. If the %s option is set to \"local\", "
+                    "you can run it from a local connection, otherwise you need to set this option "
+                    "in the configuration file, and then restart the server.",
+                    c->cmd->proc == debugCommand ? "DEBUG" : "MODULE",
+                    c->cmd->proc == debugCommand ? "enable-debug-command" : "enable-module-command");
+                sdsmapchars(protected_err, "\r\n", "  ", 2);
+                processCommandRejectSds(c, protected_err);
                 return C_OK;
             }
         }
@@ -4410,8 +4410,10 @@ int processCommand(client *c) {
     const int obey_client = mustObeyClient(c);
 
     if (c->flag.multi && c->cmd->flags & CMD_NO_MULTI) {
-        rejectCommandFormat(c, "Command '%s' not allowed inside a transaction", c->cmd->fullname);
-        moduleFireCommandRejectedEvent(c, VALKEYMODULE_SUBEVENT_COMMAND_RESULT_REJECTED_OTHER, -1, "NOMULTI");
+        sds nomulti_err =
+            sdscatprintf(sdsempty(), "Command '%s' not allowed inside a transaction", c->cmd->fullname);
+        sdsmapchars(nomulti_err, "\r\n", "  ", 2);
+        processCommandRejectSds(c, nomulti_err);
         return C_OK;
     }
 
@@ -4432,7 +4434,7 @@ int processCommand(client *c) {
         case ACL_DENIED_CHANNEL: acl_subevent = VALKEYMODULE_ACL_LOG_CHANNEL; break;
         default: acl_subevent = VALKEYMODULE_ACL_LOG_CMD; break;
         }
-        moduleFireCommandRejectedEvent(c, acl_subevent, acl_errpos, NULL);
+        moduleFireCommandACLRejectedEvent(c, acl_subevent, acl_errpos);
         return C_OK;
     }
 
@@ -4463,8 +4465,7 @@ int processCommand(client *c) {
             case CLUSTER_REDIR_DOWN_RO_STATE: cluster_err_str = "CLUSTERDOWN"; break;
             default: cluster_err_str = "MOVED"; break;
             }
-            moduleFireCommandRejectedEvent(c, VALKEYMODULE_SUBEVENT_COMMAND_RESULT_REJECTED_OTHER,
-                                           -1, cluster_err_str);
+            moduleFireCommandRejectedEvent(c, "cluster redirect");
             return C_OK;
         }
     }
@@ -4500,9 +4501,8 @@ int processCommand(client *c) {
             }
             c->duration = 0;
             c->cmd->rejected_calls++;
+            moduleFireCommandRejectedEvent(c, "-REDIRECT");
             addReplyErrorSds(c, sdscatprintf(sdsempty(), "-REDIRECT %s:%d", server.primary_host, server.primary_port));
-            moduleFireCommandRejectedEvent(c, VALKEYMODULE_SUBEVENT_COMMAND_RESULT_REJECTED_OTHER,
-                                           -1, "REDIRECT");
         }
         return C_OK;
     }
@@ -4541,7 +4541,7 @@ int processCommand(client *c) {
                 return C_ERR;
             }
 
-            processCommandReject(c, shared.oomerr, "OOM");
+            processCommandReject(c, shared.oomerr);
             return C_OK;
         }
 
@@ -4578,7 +4578,7 @@ int processCommand(client *c) {
             sds err = writeCommandsGetDiskErrorMessage(deny_write_type);
             /* remove the newline since rejectCommandSds adds it. */
             sdssubstr(err, 0, sdslen(err) - 2);
-            processCommandRejectSds(c, err, "MISCONF");
+            processCommandRejectSds(c, err);
             return C_OK;
         }
     }
@@ -4586,14 +4586,14 @@ int processCommand(client *c) {
     /* Don't accept write commands if there are not enough good replicas and
      * user configured the min-replicas-to-write option. */
     if (is_write_command && !checkGoodReplicasStatus()) {
-        processCommandReject(c, shared.noreplicaserr, "NOREPLICAS");
+        processCommandReject(c, shared.noreplicaserr);
         return C_OK;
     }
 
     /* Don't accept write commands if this is a read only replica. But
      * accept write commands if this is our primary. */
     if (server.primary_host && server.repl_replica_ro && !obey_client && is_write_command) {
-        processCommandReject(c, shared.roreplicaerr, "ROREPLICAERR");
+        processCommandReject(c, shared.roreplicaerr);
         return C_OK;
     }
 
@@ -4603,11 +4603,12 @@ int processCommand(client *c) {
         c->cmd->proc != ssubscribeCommand && c->cmd->proc != unsubscribeCommand &&
         c->cmd->proc != sunsubscribeCommand && c->cmd->proc != psubscribeCommand &&
         c->cmd->proc != punsubscribeCommand && c->cmd->proc != quitCommand && c->cmd->proc != resetCommand) {
-        rejectCommandFormat(c,
-                            "Can't execute '%s': only (P|S)SUBSCRIBE / "
-                            "(P|S)UNSUBSCRIBE / PING / QUIT / RESET are allowed in this context",
-                            c->cmd->fullname);
-        moduleFireCommandRejectedEvent(c, VALKEYMODULE_SUBEVENT_COMMAND_RESULT_REJECTED_OTHER, -1, "PUBSUB");
+        sds pubsub_err = sdscatprintf(sdsempty(),
+                                      "Can't execute '%s': only (P|S)SUBSCRIBE / "
+                                      "(P|S)UNSUBSCRIBE / PING / QUIT / RESET are allowed in this context",
+                                      c->cmd->fullname);
+        sdsmapchars(pubsub_err, "\r\n", "  ", 2);
+        processCommandRejectSds(c, pubsub_err);
         return C_OK;
     }
 
@@ -4616,20 +4617,20 @@ int processCommand(client *c) {
      * link with primary. */
     if (server.primary_host && server.repl_state != REPL_STATE_CONNECTED && server.repl_serve_stale_data == 0 &&
         is_denystale_command) {
-        processCommandReject(c, shared.primarydownerr, "MASTERDOWN");
+        processCommandReject(c, shared.primarydownerr);
         return C_OK;
     }
 
     /* Loading DB? Return an error if the command has not the
      * CMD_LOADING flag. */
     if (server.loading && !server.async_loading && is_denyloading_command) {
-        processCommandReject(c, shared.loadingerr, "LOADING");
+        processCommandReject(c, shared.loadingerr);
         return C_OK;
     }
 
     /* During async-loading, block certain commands. */
     if (server.async_loading && is_deny_async_loading_command) {
-        processCommandReject(c, shared.loadingerr, "LOADING");
+        processCommandReject(c, shared.loadingerr);
         return C_OK;
     }
 
@@ -4641,16 +4642,18 @@ int processCommand(client *c) {
      * condition resolves, and the bottom-half of the transaction gets
      * executed, see Github PR #7022. */
     if (isInsideYieldingLongCommand() && !(c->cmd->flags & CMD_ALLOW_BUSY)) {
+        sds busy_err;
         if (server.busy_module_yield_flags && server.busy_module_yield_reply) {
-            rejectCommandFormat(c, "-BUSY %s", server.busy_module_yield_reply);
+            busy_err = sdscatprintf(sdsempty(), "-BUSY %s", server.busy_module_yield_reply);
+            sdsmapchars(busy_err, "\r\n", "  ", 2);
         } else if (server.busy_module_yield_flags) {
-            rejectCommand(c, shared.slowmoduleerr);
+            busy_err = sdsdup(objectGetVal(shared.slowmoduleerr));
         } else if (scriptIsEval()) {
-            rejectCommand(c, shared.slowevalerr);
+            busy_err = sdsdup(objectGetVal(shared.slowevalerr));
         } else {
-            rejectCommand(c, shared.slowscripterr);
+            busy_err = sdsdup(objectGetVal(shared.slowscripterr));
         }
-        moduleFireCommandRejectedEvent(c, VALKEYMODULE_SUBEVENT_COMMAND_RESULT_REJECTED_OTHER, -1, "BUSY");
+        processCommandRejectSds(c, busy_err);
         return C_OK;
     }
 
@@ -4658,8 +4661,8 @@ int processCommand(client *c) {
      * The main objective here is to prevent abuse of client pause check
      * from which replicas are exempt. */
     if (c->flag.replica && (is_may_replicate_command || is_write_command || is_read_command)) {
-        rejectCommandFormat(c, "Replica can't interact with the keyspace");
-        moduleFireCommandRejectedEvent(c, VALKEYMODULE_SUBEVENT_COMMAND_RESULT_REJECTED_OTHER, -1, "REPLICAKS");
+        sds replica_err = sdsnew("Replica can't interact with the keyspace");
+        processCommandRejectSds(c, replica_err);
         return C_OK;
     }
 

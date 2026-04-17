@@ -4455,17 +4455,7 @@ int processCommand(client *c) {
             clusterRedirectClient(c, n, c->slot, error_code);
             c->duration = 0;
             c->cmd->rejected_calls++;
-            const char *cluster_err_str;
-            switch (error_code) {
-            case CLUSTER_REDIR_ASK: cluster_err_str = "ASK"; break;
-            case CLUSTER_REDIR_CROSS_SLOT: cluster_err_str = "CROSSSLOT"; break;
-            case CLUSTER_REDIR_UNSTABLE: cluster_err_str = "TRYAGAIN"; break;
-            case CLUSTER_REDIR_DOWN_STATE:
-            case CLUSTER_REDIR_DOWN_UNBOUND:
-            case CLUSTER_REDIR_DOWN_RO_STATE: cluster_err_str = "CLUSTERDOWN"; break;
-            default: cluster_err_str = "MOVED"; break;
-            }
-            moduleFireCommandRejectedEvent(c, "cluster redirect");
+            moduleFireCommandRejectedEvent(c, NULL);
             return C_OK;
         }
     }

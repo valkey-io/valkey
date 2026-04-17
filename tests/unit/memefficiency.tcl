@@ -41,6 +41,12 @@ start_server {tags {"memefficiency external:skip"}} {
 
 run_solo {defrag} {
 start_server {tags {"defrag external:skip"} overrides {appendonly yes auto-aof-rewrite-percentage 0 save ""}} {
+    proc client_reply_off_wait_for_server {rd} {
+        $rd client reply on
+        assert_equal OK [$rd read]
+        $rd client reply off
+    }
+
     if {[string match {*jemalloc*} [s mem_allocator]] && [r debug mallctl arenas.page] <= 8192} {
         test "Active defrag" {
             r config set hz 100
@@ -181,16 +187,12 @@ start_server {tags {"defrag external:skip"} overrides {appendonly yes auto-aof-r
             set dummy_script "--[string repeat x 400]\nreturn "
             set rd [redis_deferring_client]
             $rd client reply off
-            $rd flush
             for {set j 0} {$j < $n} {incr j} {
                 set val "$dummy_script[format "%06d" $j]"
                 $rd script load $val
                 $rd set k$j $val
-                if {$j % 100 == 0} {$rd flush}
+                if {$j % 1000 == 999} {client_reply_off_wait_for_server $rd}
             }
-            $rd client reply on
-            $rd flush
-            $rd read ;# read the +OK from CLIENT REPLY ON
             after 120 ;# serverCron only updates the info once in 100ms
             if {$::verbose} {
                 puts "used [s allocator_allocated]"
@@ -201,15 +203,10 @@ start_server {tags {"defrag external:skip"} overrides {appendonly yes auto-aof-r
             assert_lessthan [s allocator_frag_ratio] 1.05
             
             # Delete all the keys to create fragmentation
-            $rd client reply off
-            $rd flush
             for {set j 0} {$j < $n} {incr j} {
                 $rd del k$j
-                if {$j % 100 == 0} {$rd flush}
+                if {$j % 1000 == 999} {client_reply_off_wait_for_server $rd}
             }
-            $rd client reply on
-            $rd flush
-            $rd read ;# read the +OK from CLIENT REPLY ON
             $rd close
             after 120 ;# serverCron only updates the info once in 100ms
             if {$::verbose} {
@@ -278,15 +275,14 @@ start_server {tags {"defrag external:skip"} overrides {appendonly yes auto-aof-r
 
             # create big keys with 10k items
             set rd [redis_deferring_client]
+            $rd client reply off
             for {set j 0} {$j < 10000} {incr j} {
                 $rd hset bighash $j [concat "asdfasdfasdf" $j]
                 $rd lpush biglist [concat "asdfasdfasdf" $j]
                 $rd zadd bigzset $j [concat "asdfasdfasdf" $j]
                 $rd sadd bigset [concat "asdfasdfasdf" $j]
                 $rd xadd bigstream * item 1 value a
-            }
-            for {set j 0} {$j < 50000} {incr j} {
-                $rd read ; # Discard replies
+                if {$j % 100 == 99} {client_reply_off_wait_for_server $rd}
             }
 
             set expected_frag 1.7
@@ -294,9 +290,7 @@ start_server {tags {"defrag external:skip"} overrides {appendonly yes auto-aof-r
                 # scale the hash to 1m fields in order to have a measurable the latency
                 for {set j 10000} {$j < 1000000} {incr j} {
                     $rd hset bighash $j [concat "asdfasdfasdf" $j]
-                }
-                for {set j 10000} {$j < 1000000} {incr j} {
-                    $rd read ; # Discard replies
+                    if {$j % 1000 == 999} {client_reply_off_wait_for_server $rd}
                 }
                 # creating that big hash, increased used_memory, so the relative frag goes down
                 set expected_frag 1.3
@@ -305,18 +299,14 @@ start_server {tags {"defrag external:skip"} overrides {appendonly yes auto-aof-r
             # add a mass of string keys
             for {set j 0} {$j < 500000} {incr j} {
                 $rd setrange $j 150 a
-            }
-            for {set j 0} {$j < 500000} {incr j} {
-                $rd read ; # Discard replies
+                if {$j % 1000 == 999} {client_reply_off_wait_for_server $rd}
             }
             assert_equal [r dbsize] 500010
 
             # create some fragmentation
             for {set j 0} {$j < 500000} {incr j 2} {
                 $rd del $j
-            }
-            for {set j 0} {$j < 500000} {incr j 2} {
-                $rd read ; # Discard replies
+                if {$j % 1000 == 998} {client_reply_off_wait_for_server $rd}
             }
             assert_equal [r dbsize] 250010
 

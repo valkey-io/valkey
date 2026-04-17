@@ -45,7 +45,7 @@ a vtable-based dispatch mechanism.
 │  - Epoch management (configEpoch, currentEpoch)                 │
 │  - Replica migration, manual failover state machine             │
 │  - clusterLegacyState, clusterNodeLegacyData                    │
-│  - BUMPEPOCH, SET-CONFIG-EPOCH (via specialCommand)             │
+│  - BUMPEPOCH, SET-CONFIG-EPOCH (via protocolSubcommand)         │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -63,10 +63,11 @@ a vtable-based dispatch mechanism.
   pointer selects the active implementation.
 
 - **cluster_state.c / cluster_state.h** — Low-level cluster state
-  management: node struct (`clusterNode`), node accessors, node creation,
-  slot assignment (`clusterAddSlot`, `clusterDelSlot`), shard management,
-  dict types, `ClusterNodeIterator`, and `clusterUpdateState` evaluation.
-  Also defines the global `myself` pointer.
+  management: node struct (`clusterNode`), node accessors, node creation
+  and cleanup (`createClusterNode`, `freeClusterNode`, `clusterDelNode`,
+  `clusterRenameNode`), slot assignment (`clusterAddSlot`, `clusterDelSlot`),
+  shard management, dict types, `ClusterNodeIterator`. Also defines the
+  global `myself` pointer.
 
 - **cluster_nodes.c / cluster_nodes.h** — Node serialization and
   persistence: `nodes.conf` loading/saving/locking, `CLUSTER NODES` text
@@ -78,13 +79,14 @@ a vtable-based dispatch mechanism.
   lifecycle (`createClusterLink`, `freeClusterLink`), connection handlers
   (`clusterAcceptHandler`, `clusterLinkConnectHandler`, `clusterReadHandler`),
   write handler, send block management (`clusterLinkSendBlock`,
-  `clusterMsgSendBlockDecrRefCount`), buffer limit enforcement, and
-  `nodeIp2String`. The read handler dispatches to vtable callbacks for
-  message validation and processing.
+  `clusterAllocMsgSendBlock`, `clusterMsgSendBlockDecrRefCount`), buffer
+  limit enforcement, `nodeIp2String`, shared infrastructure
+  (`clusterListenerInit`, `clusterConnectNodes`). The read handler
+  dispatches to vtable callbacks for message validation and processing.
 
 - **cluster_migrateslots.c / cluster_migrateslots.h** — Atomic slot
   migration (SYNCSLOTS protocol). Operates over regular client connections,
-  not the cluster bus.
+  not the cluster bus. See [atomic-slot-migration.md](atomic-slot-migration.md).
 
 - **cluster_slot_stats.c / cluster_slot_stats.h** — Per-slot CPU and
   network statistics.
@@ -119,10 +121,12 @@ The vtable is organized into groups:
 
 ### Config updates
 
-- `updateMyselfFlags`, `updateMyselfIp`, `updateMyselfHostname`,
-  `updateMyselfAnnouncedPorts`, `updateMyselfHumanNodename`,
-  `updateMyselfClientIpV4`, `updateMyselfClientIpV6`,
-  `updateMyselfAvailabilityZone` — Called when server config changes.
+- `onMyselfUpdated(int old_flags)` — Called after any config change that
+  updates `myself`'s metadata (IP, ports, hostname, human nodename,
+  availability zone, client IPs, flags). The `old_flags` parameter lets
+  the implementation detect flag changes that require additional action.
+  The common layer handles the actual field updates; the implementation
+  just needs to persist and propagate the change.
 
 ### Message propagation
 
@@ -131,9 +135,9 @@ The vtable is organized into groups:
 
 ### Failover
 
-- `manualFailoverTimeLimit` — Return the manual failover deadline.
-- `resetManualFailoverState` — Clean up manual failover state.
-- `resetAutomaticFailoverState` — Reset election state.
+- `cancelManualFailover` — Cancel any in-progress manual failover.
+- `cancelAutomaticFailover` — Cancel any in-progress automatic failover
+  election state.
 
 ### Info and stats
 
@@ -152,6 +156,7 @@ The vtable is organized into groups:
 - `parseVarsLine` — Parse a protocol-specific variable during load.
 - `postLoad` — Post-load fixups (e.g. epoch consistency).
 - `initNodeData` — Allocate protocol-specific per-node data.
+- `freeNodeData` — Free protocol-specific per-node data.
 
 ### Slot ownership
 
@@ -164,8 +169,9 @@ The vtable is organized into groups:
 These use a completion callback pattern: the vtable performs the
 protocol-specific action and calls the callback when done. The callback
 receives `void *ctx` (typically the client) and `const char *error`
-(NULL on success). This allows consensus-based implementations to block
-the client until the change is committed.
+(NULL on success). The gossip implementation calls the callback
+synchronously. A consensus-based implementation may call it after the
+change is committed, blocking the client in the meantime.
 
 - `forgetNode` — Remove a node from the cluster.
 - `setReplicaOf` — Set replication target or promote to primary.
@@ -175,7 +181,7 @@ the client until the change is committed.
 
 ### Protocol-specific commands
 
-- `specialCommand` — Handle protocol-specific CLUSTER subcommands
+- `protocolSubcommand` — Handle protocol-specific CLUSTER subcommands
   (e.g. BUMPEPOCH, SET-CONFIG-EPOCH for gossip). Returns 1 if handled,
   0 if not recognized.
 

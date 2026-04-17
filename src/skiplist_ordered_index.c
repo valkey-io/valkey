@@ -243,6 +243,12 @@ void skiplistSeekToLexRange(OrderedIndexIterator *iter, const_sds min, const_sds
     zslSeekToLexRange((zskiplistIterator *)iter, min, max, min_ex, max_ex, offset);
 }
 
+/* Debug */
+
+int skiplistGetHeight(OrderedIndex *idx) {
+    return zslGetHeight((zskiplist *)idx);
+}
+
 /* Memory */
 
 void skiplistDismissMemory(OrderedIndex *idx) {

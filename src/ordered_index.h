@@ -89,6 +89,11 @@ static inline double orderedIndexGetScore(const OrderedIndexItem *pos) {
     return skiplistGetScore(pos);
 }
 
+/* Debug */
+static inline int orderedIndexGetHeight(OrderedIndex *idx) {
+    return skiplistGetHeight(idx);
+}
+
 /* Memory */
 static inline void orderedIndexDismissMemory(OrderedIndex *idx) {
     skiplistDismissMemory(idx);

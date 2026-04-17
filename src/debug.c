@@ -40,7 +40,6 @@
 #include "sds.h"
 #include "module.h"
 #include "ordered_index.h"
-#include "skiplist_internal.h"
 
 #include <arpa/inet.h>
 #include <signal.h>
@@ -1166,7 +1165,7 @@ void serverLogObjectDebugInfo(const robj *o) {
     } else if (o->type == OBJ_ZSET) {
         serverLog(LL_WARNING, "Sorted set size: %d", (int)zsetLength(o));
         if (o->encoding == OBJ_ENCODING_SKIPLIST)
-            serverLog(LL_WARNING, "Skiplist level: %d", (int)zslGetHeight((const zskiplist *)((const zset *)o->ptr)->zidx));
+            serverLog(LL_WARNING, "Skiplist level: %d", orderedIndexGetHeight(((const zset *)o->ptr)->zidx));
     } else if (o->type == OBJ_STREAM) {
         serverLog(LL_WARNING, "Stream size: %d", (int)streamLength(o));
     }

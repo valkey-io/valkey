@@ -4632,18 +4632,17 @@ int processCommand(client *c) {
      * condition resolves, and the bottom-half of the transaction gets
      * executed, see Github PR #7022. */
     if (isInsideYieldingLongCommand() && !(c->cmd->flags & CMD_ALLOW_BUSY)) {
-        sds busy_err;
         if (server.busy_module_yield_flags && server.busy_module_yield_reply) {
-            busy_err = sdscatprintf(sdsempty(), "-BUSY %s", server.busy_module_yield_reply);
+            sds busy_err = sdscatprintf(sdsempty(), "-BUSY %s", server.busy_module_yield_reply);
             sdsmapchars(busy_err, "\r\n", "  ", 2);
+            processCommandRejectSds(c, busy_err);
         } else if (server.busy_module_yield_flags) {
-            busy_err = sdsdup(objectGetVal(shared.slowmoduleerr));
+            processCommandReject(c, shared.slowmoduleerr);
         } else if (scriptIsEval()) {
-            busy_err = sdsdup(objectGetVal(shared.slowevalerr));
+            processCommandReject(c, shared.slowevalerr);
         } else {
-            busy_err = sdsdup(objectGetVal(shared.slowscripterr));
+            processCommandReject(c, shared.slowscripterr);
         }
-        processCommandRejectSds(c, busy_err);
         return C_OK;
     }
 

@@ -45,6 +45,7 @@ set(VALKEY_SERVER_SRCS
     ${CMAKE_SOURCE_DIR}/src/cluster.c
     ${CMAKE_SOURCE_DIR}/src/cluster_migrateslots.c
     ${CMAKE_SOURCE_DIR}/src/cluster_legacy.c
+    ${CMAKE_SOURCE_DIR}/src/cluster_raft.c
     ${CMAKE_SOURCE_DIR}/src/cluster_link.c
     ${CMAKE_SOURCE_DIR}/src/cluster_nodes.c
     ${CMAKE_SOURCE_DIR}/src/cluster_state.c

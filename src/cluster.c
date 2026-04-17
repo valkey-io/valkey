@@ -52,6 +52,7 @@
 
 /* The active cluster bus protocol implementation. */
 extern clusterBusType clusterLegacyBus;
+extern clusterBusType clusterRaftBus;
 clusterBusType *clusterCurrentBus = &clusterLegacyBus;
 
 static void clusterCommandFlushslot(client *c);
@@ -61,6 +62,10 @@ static void clusterCommandFlushslot(client *c);
  * -------------------------------------------------------------------------- */
 
 void clusterInit(void) {
+    if (server.cluster_raft_enabled) {
+        clusterCurrentBus = &clusterRaftBus;
+    }
+
     server.cluster = zmalloc(sizeof(struct clusterState));
     server.cluster->myself = NULL;
     server.cluster->state = CLUSTER_FAIL;

@@ -1228,6 +1228,7 @@ start_server {tags {"introspection"}} {
             always-show-logo
             syslog-enabled
             cluster-enabled
+            cluster-raft-enabled
             disable-thp
             aclfile
             unixsocket

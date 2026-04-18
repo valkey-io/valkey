@@ -250,18 +250,22 @@ static int clusterRaftProcessHello(clusterLink *link, int argc, sds *argv) {
     clusterRaftState *rs = RAFT_STATE();
     uint64_t sender_cluster_size = strtoull(argv[5], NULL, 10);
 
-    /* Rule 1: singleton leader always steps down on receiving HELLO. */
-    if (rs->role == RAFT_ROLE_LEADER && server.cluster->size <= 1) {
+    /* Look up or create the sender node. */
+    clusterNode *sender = clusterLookupNode(sender_name, CLUSTER_NAMELEN);
+
+    /* Rule 1: singleton leader steps down on HELLO from an unknown node.
+     * This means we're the MEET target — the sender will stay leader.
+     * If the sender is already known, this is just a reconnect HELLO. */
+    if (rs->role == RAFT_ROLE_LEADER && server.cluster->size <= 1 && !sender) {
         clusterRaftFlushPendingProposals(rs, "leader changed");
         rs->role = RAFT_ROLE_LEARNER;
+        memcpy(rs->leader, sender_name, CLUSTER_NAMELEN);
         memset(rs->voted_for, 0, CLUSTER_NAMELEN);
         clusterRaftRandomizeElectionTimeout(rs);
         rs->last_heartbeat = mstime();
-        serverLog(LL_NOTICE, "Singleton stepping down on HELLO.");
+        rs->todo_connect_nodes = 1;
+        serverLog(LL_NOTICE, "Singleton stepping down on HELLO from %.40s.", sender_name);
     }
-
-    /* Look up or create the sender node. */
-    clusterNode *sender = clusterLookupNode(sender_name, CLUSTER_NAMELEN);
     if (!sender) {
         sender = createClusterNode(sender_name, 0);
         if (clusterNodeParseAddressString(sender, argv[2]) == C_ERR) {
@@ -355,10 +359,11 @@ static int clusterRaftProcessHi(clusterLink *link, int argc, sds *argv) {
     if (rs->role == RAFT_ROLE_LEADER && server.cluster->size <= 1 && sender_cluster_size > 1) {
         clusterRaftFlushPendingProposals(rs, "leader changed");
         rs->role = RAFT_ROLE_LEARNER;
+        memcpy(rs->leader, sender_name, CLUSTER_NAMELEN);
         memset(rs->voted_for, 0, CLUSTER_NAMELEN);
         clusterRaftRandomizeElectionTimeout(rs);
         rs->last_heartbeat = mstime();
-        serverLog(LL_NOTICE, "Singleton stepping down on HI from non-singleton.");
+        serverLog(LL_NOTICE, "Singleton stepping down on HI from non-singleton %.40s.", sender_name);
     }
 
     /* Complete handshake: rename handshake node or transfer link. */
@@ -535,7 +540,8 @@ static void clusterRaftPropose(sds entry, void *ctx, void (*callback)(void *ctx,
     } else {
         sdsfree(data);
         clusterNode *leader = clusterLookupNode(rs->leader, CLUSTER_NAMELEN);
-        if (!leader || !leader->link) {
+        clusterLink *leader_link = leader ? (leader->link ? leader->link : leader->inbound_link) : NULL;
+        if (!leader_link) {
             /* Can't reach leader — flush the proposal we just added. */
             if (callback) {
                 listNode *ln = listLast(rs->pending_proposals);
@@ -551,7 +557,7 @@ static void clusterRaftPropose(sds entry, void *ctx, void (*callback)(void *ctx,
         msg = sdscatlen(msg, " ", 1);
         msg = sdscatlen(msg, entry, sdslen(entry));
         msg = wireFinishMsg(msg);
-        clusterRaftSendMsg(leader->link, msg);
+        clusterRaftSendMsg(leader_link, msg);
     }
 }
 
@@ -808,13 +814,19 @@ static void clusterRaftSendAppendEntries(clusterLink *link, clusterNode *node) {
 static void clusterRaftBroadcastAppendEntries(clusterRaftState *rs) {
     dictIterator *di = dictGetSafeIterator(server.cluster->nodes);
     dictEntry *de;
+    int pending = 0;
     while ((de = dictNext(di)) != NULL) {
         clusterNode *node = dictGetVal(de);
-        if (node == myself || !node->link) continue;
+        if (node == myself) continue;
+        if (!node->link) {
+            pending = 1;
+            continue;
+        }
         clusterRaftSendAppendEntries(node->link, node);
     }
     dictReleaseIterator(di);
-    UNUSED(rs);
+    /* Retry in next beforeSleep if some nodes had no link yet. */
+    if (pending) rs->todo_broadcast_ae = 1;
 }
 
 /* AE_OK <term> <success> <last-log-index> */

@@ -264,7 +264,7 @@ int clusterAllowFailoverCmd(client *c) {
     return 0;
 }
 unsigned long getClusterConnectionsCount(void) {
-    return clusterCurrentBus->getConnectionsCount();
+    return server.cluster_enabled ? ((dictSize(server.cluster->nodes) - 1) * 2) : 0;
 }
 /* Resets transient cluster stats that we expose via INFO or other means that we want
  * to reset via CONFIG RESETSTAT. The function is also used in order to

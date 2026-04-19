@@ -1210,20 +1210,24 @@ void clusterKeySlotCommand(client *c) {
  * Called after the slot change is applied. This may be called inline
  * or asynchronously if the change goes through cluster consensus. */
 static void clusterAddDelSlotsCallback(void *ctx, const char *error) {
-    client *c = (client *)ctx;
+    client *c = consumeBlockedClientAsyncHandle((blockedAsyncHandle *)ctx);
+    if (!c) return;
     if (error) {
         addReplyError(c, error);
-        return;
+    } else {
+        addReply(c, shared.ok);
     }
-    addReply(c, shared.ok);
+    unblockClientAsync(c);
 }
 
 /* Callback for CLUSTER SETSLOT NODE after the slot change is applied.
  * Handles replica migration if this shard lost its last slot. */
 static void clusterSetSlotNodeCallback(void *ctx, const char *error) {
-    client *c = (client *)ctx;
+    client *c = consumeBlockedClientAsyncHandle((blockedAsyncHandle *)ctx);
+    if (!c) return;
     if (error) {
         addReplyError(c, error);
+        unblockClientAsync(c);
         return;
     }
 
@@ -1254,6 +1258,7 @@ static void clusterSetSlotNodeCallback(void *ctx, const char *error) {
     }
 
     addReply(c, shared.ok);
+    unblockClientAsync(c);
 }
 
 /* Validate slot assignments for ADDSLOTS/DELSLOTS commands.
@@ -1510,7 +1515,8 @@ void clusterCommandSetSlot(client *c) {
         }
 
         slotRange range = {slot, slot};
-        clusterSlotChange(&range, 1, n, c, clusterSetSlotNodeCallback);
+        void *h = blockClientAsync(c);
+        clusterSlotChange(&range, 1, n, h, clusterSetSlotNodeCallback);
         return;
     }
 
@@ -1523,36 +1529,44 @@ void clusterCommandSetSlot(client *c) {
  * post-action work is done and an OK reply is sent. */
 
 static void clusterCommandMeetCompletion(void *ctx, const char *error) {
-    client *c = ctx;
+    client *c = consumeBlockedClientAsyncHandle((blockedAsyncHandle *)ctx);
+    if (!c) return;
     if (error) {
         addReplyError(c, error);
     } else {
         addReply(c, shared.ok);
     }
+    unblockClientAsync(c);
 }
 
 static void clusterCommandForgetCompletion(void *ctx, const char *error) {
-    client *c = ctx;
+    client *c = consumeBlockedClientAsyncHandle((blockedAsyncHandle *)ctx);
+    if (!c) return;
     if (error) {
         addReplyError(c, error);
     } else {
         addReply(c, shared.ok);
     }
+    unblockClientAsync(c);
 }
 
 static void clusterCommandReplicateCompletion(void *ctx, const char *error) {
-    client *c = ctx;
+    client *c = consumeBlockedClientAsyncHandle((blockedAsyncHandle *)ctx);
+    if (!c) return;
     if (error) {
         addReplyError(c, error);
     } else {
         addReply(c, shared.ok);
     }
+    unblockClientAsync(c);
 }
 
 static void clusterCommandPromoteCompletion(void *ctx, const char *error) {
-    client *c = ctx;
+    client *c = consumeBlockedClientAsyncHandle((blockedAsyncHandle *)ctx);
+    if (!c) return;
     if (error) {
         addReplyError(c, error);
+        unblockClientAsync(c);
         return;
     }
     flushAllDataAndResetRDB(server.repl_replica_lazy_flush ? EMPTYDB_ASYNC : EMPTYDB_NO_FLAGS);
@@ -1560,15 +1574,18 @@ static void clusterCommandPromoteCompletion(void *ctx, const char *error) {
     clusterCloseAllSlots();
     clusterCancelManualFailover();
     addReply(c, shared.ok);
+    unblockClientAsync(c);
 }
 
 static void clusterCommandFailoverCompletion(void *ctx, const char *error) {
-    client *c = ctx;
+    client *c = consumeBlockedClientAsyncHandle((blockedAsyncHandle *)ctx);
+    if (!c) return;
     if (error) {
         addReplyError(c, error);
     } else {
         addReply(c, shared.ok);
     }
+    unblockClientAsync(c);
 }
 
 void clusterCommand(client *c) {
@@ -1684,14 +1701,11 @@ void clusterCommand(client *c) {
             return;
         }
         /* Propose the slot change. The reply is deferred to the callback,
-         * which is called after the change is applied.
-         * TODO: If the callback is not called immediately (e.g. when the
-         * change goes through cluster consensus), the client needs to be
-         * put in a blocked state so the server can continue processing
-         * other clients while waiting for the commit. */
+         * which is called after the change is applied. */
+        void *h = blockClientAsync(c);
         clusterSlotChange(ranges, numslots,
                           del ? NULL : getMyClusterNode(),
-                          c, clusterAddDelSlotsCallback);
+                          h, clusterAddDelSlotsCallback);
         zfree(ranges);
     } else if ((!strcasecmp(objectGetVal(c->argv[1]), "addslotsrange") || !strcasecmp(objectGetVal(c->argv[1]), "delslotsrange")) &&
                c->argc >= 4) {
@@ -1735,9 +1749,10 @@ void clusterCommand(client *c) {
          * change goes through cluster consensus), the client needs to be
          * put in a blocked state so the server can continue processing
          * other clients while waiting for the commit. */
+        void *h = blockClientAsync(c);
         clusterSlotChange(ranges, numranges,
                           del ? NULL : getMyClusterNode(),
-                          c, clusterAddDelSlotsCallback);
+                          h, clusterAddDelSlotsCallback);
         zfree(ranges);
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "flushslots") && c->argc == 2) {
         /* CLUSTER FLUSHSLOTS */
@@ -1765,8 +1780,9 @@ void clusterCommand(client *c) {
                 }
             }
             if (in_range) numranges++;
+            void *h = blockClientAsync(c);
             clusterSlotChange(ranges, numranges, NULL,
-                              c, clusterAddDelSlotsCallback);
+                              h, clusterAddDelSlotsCallback);
             zfree(ranges);
         }
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "setslot") && c->argc >= 4) {
@@ -1827,7 +1843,8 @@ void clusterCommand(client *c) {
         serverLog(LL_NOTICE, "Cluster meet %s:%lld (user request from '%s').",
                   (char *)objectGetVal(c->argv[2]), port, cl);
         sdsfree(cl);
-        clusterCurrentBus->meet(objectGetVal(c->argv[2]), port, cport, c, clusterCommandMeetCompletion);
+        void *h = blockClientAsync(c);
+        clusterCurrentBus->meet(objectGetVal(c->argv[2]), port, cport, h, clusterCommandMeetCompletion);
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "reset") && (c->argc == 2 || c->argc == 3)) {
         /* CLUSTER RESET [SOFT|HARD] */
         int hard = 0;
@@ -1909,7 +1926,8 @@ void clusterCommand(client *c) {
             serverLog(LL_NOTICE, "Manual failover user request accepted (user request from '%s').", cl);
         }
         sdsfree(cl);
-        clusterCurrentBus->failover(force, takeover, c, clusterCommandFailoverCompletion);
+        void *h = blockClientAsync(c);
+        clusterCurrentBus->failover(force, takeover, h, clusterCommandFailoverCompletion);
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "replicate") &&
                (c->argc == 3 || c->argc == 4)) {
         /* CLUSTER REPLICATE (<NODE ID> | NO ONE) */
@@ -1932,7 +1950,8 @@ void clusterCommand(client *c) {
                       "primary (request from '%s').",
                       cl);
             sdsfree(cl);
-            clusterCurrentBus->setReplicaOf(NULL, c, clusterCommandPromoteCompletion);
+            void *h = blockClientAsync(c);
+            clusterCurrentBus->setReplicaOf(NULL, h, clusterCommandPromoteCompletion);
             return;
         }
         /* CLUSTER REPLICATE <NODE ID> */
@@ -1961,7 +1980,8 @@ void clusterCommand(client *c) {
             addReply(c, shared.ok);
             return;
         }
-        clusterCurrentBus->setReplicaOf(n, c, clusterCommandReplicateCompletion);
+        void *h = blockClientAsync(c);
+        clusterCurrentBus->setReplicaOf(n, h, clusterCommandReplicateCompletion);
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "forget") && c->argc == 3) {
         /* CLUSTER FORGET <NODE ID> */
         const char *node_id = objectGetVal(c->argv[2]);
@@ -1983,7 +2003,8 @@ void clusterCommand(client *c) {
                       node_id, cl);
             sdsfree(cl);
         }
-        clusterCurrentBus->forgetNode(node_id, id_len, c, clusterCommandForgetCompletion);
+        void *h = blockClientAsync(c);
+        clusterCurrentBus->forgetNode(node_id, id_len, h, clusterCommandForgetCompletion);
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "count-failure-reports") && c->argc == 3) {
         /* CLUSTER COUNT-FAILURE-REPORTS <NODE ID> */
         clusterNode *n = clusterLookupNode(objectGetVal(c->argv[2]),

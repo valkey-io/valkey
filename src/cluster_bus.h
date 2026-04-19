@@ -109,10 +109,7 @@ typedef struct clusterBusType {
      * slots are unassigned. If the target is myself and the slots were being
      * imported, the implementation handles finalization (e.g. epoch bump and
      * broadcast in the legacy protocol). The ctx pointer is passed through
-     * to the callback, which is called when the change is applied.
-     * TODO: When the callback is asynchronous, the caller must block the
-     * client so the server can continue processing other clients while
-     * waiting for the consensus commit. */
+     * to the callback, which is called when the change is applied. */
     void (*slotChange)(slotRange *ranges, int numranges, clusterNode *target, void *ctx, void (*callback)(void *ctx, const char *error));
 
     /* Clean up any protocol-specific manual failover state. Called when the

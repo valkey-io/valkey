@@ -198,18 +198,9 @@ int matchListeningIP(char **bindaddr, int bind_count, const char *ip, sds *local
 
     for (int i = 0; i < local_ip_count; i++) {
         if (strcmp(local_ips[i], ip) == 0) {
-            for (int j = 0; j < local_ip_count; j++) {
-                sdsfree(local_ips[j]);
-            }
-            zfree(local_ips);
             return 1;
         }
     }
-
-    for (int i = 0; i < local_ip_count; i++) {
-        sdsfree(local_ips[i]);
-    }
-    zfree(local_ips);
 
     return 0;
 }

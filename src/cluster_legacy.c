@@ -1027,18 +1027,18 @@ int clusterLoadConfig(char *filename) {
 
 #ifdef ENABLE_CLUSTERX_FEATURE
     {
-        dictIterator di;
+        dictIterator *di;
         dictEntry *de;
 
         server.cluster->size = 0;
-        dictInitSafeIterator(&di, server.cluster->nodes);
-        while ((de = dictNext(&di)) != NULL) {
+        di = dictGetSafeIterator(server.cluster->nodes);
+        while ((de = dictNext(di)) != NULL) {
             clusterNode *node = dictGetVal(de);
-            if (clusterNodeIsPrimary(node) && node->numslots) {
+            if (clusterNodeIsVotingPrimary(node)) {
                 server.cluster->size++;
             }
         }
-        dictResetIterator(&di);
+        dictResetIterator(di);
     }
 #endif
 
@@ -7375,6 +7375,7 @@ sds genClusterInfoString(sds info) {
     char *statestr[] = {"ok", "fail"};
     int slots_assigned = 0, slots_ok = 0, slots_pfail = 0, slots_fail = 0;
     uint64_t my_epoch = myself ? nodeEpoch(myself) : 0;
+    unsigned long long current_epoch = 0;
 
     dictIterator *di = dictGetIterator(server.cluster->nodes);
     dictEntry *de;
@@ -7407,6 +7408,13 @@ sds genClusterInfoString(sds info) {
     }
     dictReleaseIterator(di);
 
+#ifdef ENABLE_CLUSTERX_FEATURE
+    my_epoch = current_epoch = (unsigned long long)server.cluster->topologyVersion;
+#else
+    current_epoch = (unsigned long long)server.cluster->currentEpoch;
+    my_epoch = (unsigned long long)my_epoch;
+#endif
+
     info = sdscatfmt(info,
                      "cluster_state:%s\r\n"
                      "cluster_slots_assigned:%i\r\n"
@@ -7424,11 +7432,7 @@ sds genClusterInfoString(sds info) {
                      statestr[server.cluster->state], slots_assigned, slots_ok, slots_pfail, slots_fail,
                      nodes_pfail, nodes_fail, voting_nodes_pfail, voting_nodes_fail,
                      (unsigned long long)dictSize(server.cluster->nodes), server.cluster->size,
-                     (unsigned long long)server.cluster->currentEpoch, (unsigned long long)my_epoch);
-
-#ifdef ENABLE_CLUSTERX_FEATURE
-    info = sdscatfmt(info, "cluster_topology_version:%U\r\n", (unsigned long long)server.cluster->topologyVersion);
-#endif
+                     current_epoch, my_epoch);
 
     /* Show stats about messages sent and received. */
     long long tot_msg_sent = 0;
@@ -8634,6 +8638,10 @@ int setClusterNodes(client *c, const char *nodes_str, long long version) {
         }
         dictReleaseIterator(di);
     }
+    for (int i = 0; i < local_ip_count; i++) {
+        sdsfree(local_ips[i]);
+    }
+    zfree(local_ips);
 
     /* must find node_id in new_nodes */
     sds s = sdsnewlen(node_id, CLUSTER_NAMELEN);
@@ -8683,8 +8691,8 @@ int setClusterNodes(client *c, const char *nodes_str, long long version) {
                     memcpy(node->shard_id, master->shard_id, CLUSTER_NAMELEN);
                     clusterNodeAddReplica(master, node);
                 }
-                clusterAddNodeToShard(node->shard_id, node);
             }
+            clusterAddNodeToShard(node->shard_id, node);
         }
         dictReleaseIterator(di);
     }

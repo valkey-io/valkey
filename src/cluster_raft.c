@@ -65,7 +65,7 @@ enum raftEntryType {
     RAFT_ENTRY_NODE_JOIN = 1,   /* MEET */
     RAFT_ENTRY_NODE_LEAVE = 2,  /* FORGET */
     RAFT_ENTRY_SLOT_CHANGE = 3, /* Slot ownership */
-    RAFT_ENTRY_SET_REPLICA = 4, /* Replication topology */
+    RAFT_ENTRY_SET_REPLICA_OF = 4, /* Replication topology */
     RAFT_ENTRY_FAILOVER = 5,    /* Manual failover */
     RAFT_ENTRY_NODE_META = 6,   /* IP, port, hostname, etc. */
 };
@@ -189,6 +189,7 @@ typedef struct {
 static void clusterRaftJoinCallback(void *ctx, const char *error);
 static raftPendingMeet *clusterRaftConsumePendingMeet(clusterNode *node);
 static void clusterRaftApplySlotChange(sds data);
+static void clusterRaftApplySetReplica(sds data);
 static void raftLogApply(raftLogEntry *e);
 static raftLogEntry *raftLogCreate(uint64_t term, uint64_t index, uint8_t type, sds data);
 static void raftLogAppend(clusterRaftState *rs, raftLogEntry *e);
@@ -472,7 +473,7 @@ static int raftEntryTypeByName(const char *name) {
     if (!strcasecmp(name, "NODE_JOIN")) return RAFT_ENTRY_NODE_JOIN;
     if (!strcasecmp(name, "NODE_LEAVE")) return RAFT_ENTRY_NODE_LEAVE;
     if (!strcasecmp(name, "SLOT_CHANGE")) return RAFT_ENTRY_SLOT_CHANGE;
-    if (!strcasecmp(name, "SET_REPLICA")) return RAFT_ENTRY_SET_REPLICA;
+    if (!strcasecmp(name, "SET_REPLICA_OF")) return RAFT_ENTRY_SET_REPLICA_OF;
     if (!strcasecmp(name, "FAILOVER")) return RAFT_ENTRY_FAILOVER;
     if (!strcasecmp(name, "NODE_META")) return RAFT_ENTRY_NODE_META;
     return -1;
@@ -483,7 +484,7 @@ static const char *raftEntryTypeName(uint8_t type) {
     case RAFT_ENTRY_NODE_JOIN: return "NODE_JOIN";
     case RAFT_ENTRY_NODE_LEAVE: return "NODE_LEAVE";
     case RAFT_ENTRY_SLOT_CHANGE: return "SLOT_CHANGE";
-    case RAFT_ENTRY_SET_REPLICA: return "SET_REPLICA";
+    case RAFT_ENTRY_SET_REPLICA_OF: return "SET_REPLICA_OF";
     case RAFT_ENTRY_FAILOVER: return "FAILOVER";
     case RAFT_ENTRY_NODE_META: return "NODE_META";
     default: return "UNKNOWN";
@@ -748,6 +749,11 @@ static void raftLogApply(raftLogEntry *e) {
         rs->todo_update_slot_coverage = 1;
         rs->todo_invalidate_slots_cache = 1;
         serverLog(LL_NOTICE, "Applied SLOT_CHANGE (index %llu).", (unsigned long long)e->index);
+        break;
+    case RAFT_ENTRY_SET_REPLICA_OF:
+        clusterRaftApplySetReplica(e->data);
+        rs->todo_invalidate_slots_cache = 1;
+        serverLog(LL_NOTICE, "Applied SET_REPLICA_OF (index %llu).", (unsigned long long)e->index);
         break;
     default:
         serverLog(LL_NOTICE, "Applied log entry type %d (index %llu).", e->type,
@@ -1488,6 +1494,54 @@ done:
     if (argv) sdsfreesplitres(argv, argc);
 }
 
+/* Apply a SET_REPLICA_OF entry. Format: "<replica-id> <primary-id-or-dash>" */
+static void clusterRaftApplySetReplica(sds data) {
+    int argc;
+    sds *argv = sdssplitlen(data, sdslen(data), " ", 1, &argc);
+    if (!argv || argc != 2) goto done;
+
+    clusterNode *replica = clusterLookupNode(argv[0], sdslen(argv[0]));
+    if (!replica) goto done;
+
+    if (sdslen(argv[1]) == 1 && argv[1][0] == '-') {
+        /* Promote to primary. */
+        if (nodeIsReplica(replica)) {
+            if (replica->replicaof) clusterNodeRemoveReplica(replica->replicaof, replica);
+            replica->flags &= ~CLUSTER_NODE_REPLICA;
+            replica->flags |= CLUSTER_NODE_PRIMARY;
+            replica->replicaof = NULL;
+            if (replica == myself) replicationUnsetPrimary();
+        }
+        char new_shard_id[CLUSTER_NAMELEN];
+        getRandomHexChars(new_shard_id, CLUSTER_NAMELEN);
+        clusterRemoveNodeFromShard(replica);
+        memcpy(replica->shard_id, new_shard_id, CLUSTER_NAMELEN);
+        clusterAddNodeToShard(new_shard_id, replica);
+    } else {
+        clusterNode *primary = clusterLookupNode(argv[1], sdslen(argv[1]));
+        if (!primary) goto done;
+        if (replica == myself) {
+            clusterSetPrimary(primary, 1, 1);
+        } else {
+            if (replica->replicaof) clusterNodeRemoveReplica(replica->replicaof, replica);
+            replica->flags &= ~CLUSTER_NODE_PRIMARY;
+            replica->flags |= CLUSTER_NODE_REPLICA;
+            replica->replicaof = primary;
+            clusterNodeAddReplica(primary, replica);
+            /* Set repl_offset to non-zero so CLUSTER SHARDS reports
+             * "online" instead of "loading". In gossip this is updated
+             * via ping/pong; in raft we don't track it. */
+            replica->repl_offset = 1;
+            /* Move replica to primary's shard. */
+            clusterRemoveNodeFromShard(replica);
+            memcpy(replica->shard_id, primary->shard_id, CLUSTER_NAMELEN);
+            clusterAddNodeToShard(primary->shard_id, replica);
+        }
+    }
+done:
+    if (argv) sdsfreesplitres(argv, argc);
+}
+
 static void clusterRaftForgetNode(const char *node_id, size_t id_len, void *ctx, void (*callback)(void *ctx, const char *error)) {
     UNUSED(node_id);
     UNUSED(id_len);
@@ -1496,28 +1550,13 @@ static void clusterRaftForgetNode(const char *node_id, size_t id_len, void *ctx,
 }
 
 static void clusterRaftSetReplicaOf(clusterNode *primary, void *ctx, void (*callback)(void *ctx, const char *error)) {
-    /* TODO: Propose SET_REPLICA through Raft log and call callback after
-     * commit. For now, apply immediately. */
-    if (primary) {
-        clusterSetPrimary(primary, 1, 1);
-    } else {
-        /* Promote to primary. */
-        if (nodeIsReplica(myself)) {
-            if (myself->replicaof) clusterNodeRemoveReplica(myself->replicaof, myself);
-            myself->flags &= ~CLUSTER_NODE_REPLICA;
-            myself->flags |= CLUSTER_NODE_PRIMARY;
-            myself->replicaof = NULL;
-            replicationUnsetPrimary();
-        }
-        /* Assign a new shard ID. */
-        char new_shard_id[CLUSTER_NAMELEN];
-        getRandomHexChars(new_shard_id, CLUSTER_NAMELEN);
-        clusterRemoveNodeFromShard(myself);
-        memcpy(myself->shard_id, new_shard_id, CLUSTER_NAMELEN);
-        clusterAddNodeToShard(new_shard_id, myself);
-        serverLog(LL_NOTICE, "Moving myself to a new shard %.40s.", myself->shard_id);
-    }
-    if (callback) callback(ctx, NULL);
+    /* Propose SET_REPLICA_OF: "<myself-id> <primary-id-or-dash>" */
+    sds entry = sdsnew("SET_REPLICA_OF ");
+    entry = sdscatlen(entry, myself->name, CLUSTER_NAMELEN);
+    entry = sdscatlen(entry, " ", 1);
+    entry = sdscatlen(entry, primary ? primary->name : "-", primary ? CLUSTER_NAMELEN : 1);
+    clusterRaftPropose(entry, ctx, callback);
+    sdsfree(entry);
 }
 
 static void clusterRaftFailover(int force, int takeover, void *ctx, void (*callback)(void *ctx, const char *error)) {

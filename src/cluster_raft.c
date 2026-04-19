@@ -13,7 +13,7 @@
  *   VOTE <candidate-id> <term> <last-log-index> <last-log-term>
  *   VOTE_OK <term> <granted>
  *   AE <leader-id> <term> <prev-log-index> <prev-log-term> <leader-commit>
- *   AE_OK <term> <success>
+ *   AE_ACK <term> <success>
  */
 
 #include "server.h"
@@ -62,12 +62,13 @@ static void clusterRaftSendMsg(clusterLink *link, sds msg) {
  * -------------------------------------------------------------------------- */
 
 enum raftEntryType {
-    RAFT_ENTRY_NODE_JOIN = 1,   /* MEET */
-    RAFT_ENTRY_NODE_LEAVE = 2,  /* FORGET */
-    RAFT_ENTRY_SLOT_CHANGE = 3, /* Slot ownership */
+    RAFT_ENTRY_NODE_JOIN = 1,      /* MEET */
+    RAFT_ENTRY_NODE_LEAVE = 2,     /* FORGET */
+    RAFT_ENTRY_SLOT_CHANGE = 3,    /* Slot ownership */
     RAFT_ENTRY_SET_REPLICA_OF = 4, /* Replication topology */
-    RAFT_ENTRY_FAILOVER = 5,    /* Manual failover */
-    RAFT_ENTRY_NODE_META = 6,   /* IP, port, hostname, etc. */
+    RAFT_ENTRY_FAILOVER = 5,       /* Manual failover */
+    RAFT_ENTRY_NODE_META = 6,      /* IP, port, hostname, etc. */
+    RAFT_ENTRY_NODE_FAIL = 7,      /* Node failure detected by leader */
 };
 
 typedef struct {
@@ -95,6 +96,7 @@ enum raftRole {
 typedef struct {
     uint64_t next_index;
     uint64_t match_index;
+    mstime_t last_ack_time; /* Last time we received AE_ACK from this peer */
 } raftPeerState;
 
 /* A pending proposal tracks a client waiting for a Raft entry to be
@@ -198,7 +200,9 @@ static uint64_t raftLogLastIndex(clusterRaftState *rs);
 static uint64_t raftLogTermAt(clusterRaftState *rs, uint64_t index);
 
 static void clusterRaftRandomizeElectionTimeout(clusterRaftState *rs) {
-    rs->election_timeout = 1000 + (rand() % 1000); /* 1-2s */
+    mstime_t base = server.cluster_node_timeout;
+    if (base < 1000) base = 1000;
+    rs->election_timeout = base + (rand() % base);
 }
 
 /* --------------------------------------------------------------------------
@@ -476,6 +480,7 @@ static int raftEntryTypeByName(const char *name) {
     if (!strcasecmp(name, "SET_REPLICA_OF")) return RAFT_ENTRY_SET_REPLICA_OF;
     if (!strcasecmp(name, "FAILOVER")) return RAFT_ENTRY_FAILOVER;
     if (!strcasecmp(name, "NODE_META")) return RAFT_ENTRY_NODE_META;
+    if (!strcasecmp(name, "NODE_FAIL")) return RAFT_ENTRY_NODE_FAIL;
     return -1;
 }
 
@@ -487,6 +492,7 @@ static const char *raftEntryTypeName(uint8_t type) {
     case RAFT_ENTRY_SET_REPLICA_OF: return "SET_REPLICA_OF";
     case RAFT_ENTRY_FAILOVER: return "FAILOVER";
     case RAFT_ENTRY_NODE_META: return "NODE_META";
+    case RAFT_ENTRY_NODE_FAIL: return "NODE_FAIL";
     default: return "UNKNOWN";
     }
 }
@@ -731,6 +737,7 @@ static void raftLogApply(raftLogEntry *e) {
                 if (joined && joined != myself) {
                     RAFT_DATA(joined)->peer.next_index = 1;
                     RAFT_DATA(joined)->peer.match_index = 0;
+                    RAFT_DATA(joined)->peer.last_ack_time = mstime();
                 }
             }
 
@@ -755,6 +762,17 @@ static void raftLogApply(raftLogEntry *e) {
         rs->todo_invalidate_slots_cache = 1;
         serverLog(LL_NOTICE, "Applied SET_REPLICA_OF (index %llu).", (unsigned long long)e->index);
         break;
+    case RAFT_ENTRY_NODE_FAIL: {
+        clusterNode *node = clusterLookupNode(e->data, sdslen(e->data));
+        if (node && node != myself) {
+            node->flags |= CLUSTER_NODE_FAIL;
+            rs->todo_update_slot_coverage = 1;
+            rs->todo_invalidate_slots_cache = 1;
+        }
+        serverLog(LL_NOTICE, "Applied NODE_FAIL %.40s (index %llu).",
+                  e->data, (unsigned long long)e->index);
+        break;
+    }
     default:
         serverLog(LL_NOTICE, "Applied log entry type %d (index %llu).", e->type,
                   (unsigned long long)e->index);
@@ -835,10 +853,10 @@ static void clusterRaftBroadcastAppendEntries(clusterRaftState *rs) {
     if (pending) rs->todo_broadcast_ae = 1;
 }
 
-/* AE_OK <term> <success> <last-log-index> */
+/* AE_ACK <term> <success> <last-log-index> */
 static void clusterRaftSendAppendEntriesResponse(clusterLink *link, uint64_t term, int success) {
     clusterRaftState *rs = RAFT_STATE();
-    sds msg = wireNewMsg("AE_OK");
+    sds msg = wireNewMsg("AE_ACK");
     msg = sdscatfmt(msg, " %U %i %U", (unsigned long long)term, success,
                     (unsigned long long)raftLogLastIndex(rs));
     msg = wireFinishMsg(msg);
@@ -925,9 +943,9 @@ static int clusterRaftProcessAppendEntries(clusterLink *link, int argc, sds *arg
 }
 
 static int clusterRaftProcessAppendEntriesResponse(clusterLink *link, int argc, sds *argv) {
-    /* argv: AE_OK <term> <success> <last-log-index> */
+    /* argv: AE_ACK <term> <success> <last-log-index> */
     if (argc < 4) return 1;
-    serverLog(LL_DEBUG, "Received AE_OK: term=%s success=%s last_index=%s from %.40s",
+    serverLog(LL_DEBUG, "Received AE_ACK: term=%s success=%s last_index=%s from %.40s",
               argv[1], argv[2], argv[3], link->node ? link->node->name : "?");
 
     clusterRaftState *rs = RAFT_STATE();
@@ -941,6 +959,15 @@ static int clusterRaftProcessAppendEntriesResponse(clusterLink *link, int argc, 
     clusterNode *node = link->node;
     if (!node) return 1;
     clusterNodeRaftData *rd = RAFT_DATA(node);
+    rd->peer.last_ack_time = mstime();
+
+    /* Clear FAIL flag if the node is back. */
+    if (nodeFailed(node)) {
+        node->flags &= ~CLUSTER_NODE_FAIL;
+        rs->todo_update_slot_coverage = 1;
+        rs->todo_invalidate_slots_cache = 1;
+        serverLog(LL_NOTICE, "Node %.40s is back, clearing FAIL.", node->name);
+    }
 
     if (success) {
         /* Follower accepted — update matchIndex/nextIndex. */
@@ -1065,6 +1092,7 @@ static int clusterRaftProcessRequestVoteResponse(clusterLink *link, int argc, sd
                 if (peer == myself) continue;
                 RAFT_DATA(peer)->peer.next_index = last + 1;
                 RAFT_DATA(peer)->peer.match_index = 0;
+                RAFT_DATA(peer)->peer.last_ack_time = mstime();
             }
             dictReleaseIterator(di);
             /* Immediate heartbeat to assert leadership. */
@@ -1154,6 +1182,25 @@ static void clusterRaftCron(void) {
                 rs->last_heartbeat = now;
                 clusterRaftBroadcastAppendEntries(rs);
             }
+
+            /* Leader: detect node failures. */
+            mstime_t node_timeout = server.cluster_node_timeout;
+            dictIterator *di = dictGetSafeIterator(server.cluster->nodes);
+            dictEntry *de;
+            while ((de = dictNext(di)) != NULL) {
+                clusterNode *node = dictGetVal(de);
+                if (node == myself || nodeFailed(node)) continue;
+                clusterNodeRaftData *rd = RAFT_DATA(node);
+                if (rd->peer.last_ack_time > 0 &&
+                    now - rd->peer.last_ack_time > node_timeout) {
+                    serverLog(LL_NOTICE, "Node %.40s not responding, proposing NODE_FAIL.", node->name);
+                    sds entry = sdsnew("NODE_FAIL ");
+                    entry = sdscatlen(entry, node->name, CLUSTER_NAMELEN);
+                    clusterRaftPropose(entry, NULL, NULL);
+                    sdsfree(entry);
+                }
+            }
+            dictReleaseIterator(di);
         }
     }
 }
@@ -1162,7 +1209,8 @@ static void clusterRaftCheckSlotCoverage(void) {
     int all_slots_covered = 1;
     if (server.cluster_require_full_coverage) {
         for (int j = 0; j < CLUSTER_SLOTS; j++) {
-            if (server.cluster->slots[j] == NULL) {
+            if (server.cluster->slots[j] == NULL ||
+                nodeFailed(server.cluster->slots[j])) {
                 all_slots_covered = 0;
                 break;
             }
@@ -1245,7 +1293,7 @@ static int clusterRaftProcessMessage(struct clusterLink *link) {
         ret = clusterRaftProcessPropose(link, argc, argv);
     } else if (!strcasecmp(argv[0], "AE")) {
         ret = clusterRaftProcessAppendEntries(link, argc, argv, lines + 1, line_count - 1);
-    } else if (!strcasecmp(argv[0], "AE_OK")) {
+    } else if (!strcasecmp(argv[0], "AE_ACK")) {
         ret = clusterRaftProcessAppendEntriesResponse(link, argc, argv);
     } else if (!strcasecmp(argv[0], "VOTE")) {
         ret = clusterRaftProcessRequestVote(link, argc, argv);
@@ -1528,9 +1576,12 @@ static void clusterRaftApplySetReplica(sds data) {
             replica->flags |= CLUSTER_NODE_REPLICA;
             replica->replicaof = primary;
             clusterNodeAddReplica(primary, replica);
-            /* Set repl_offset to non-zero so CLUSTER SHARDS reports
-             * "online" instead of "loading". In gossip this is updated
-             * via ping/pong; in raft we don't track it. */
+            /* TODO: Replication offsets are not propagated in the raft
+             * protocol (gossip piggybacks them on ping/pong). Set to
+             * non-zero so isNodeAvailable() returns true and CLUSTER SLOTS
+             * includes this replica. To make CLUSTER SHARDS fully compatible,
+             * we would need to propagate offsets periodically (e.g. on
+             * heartbeats) or at least a loading/online flag. */
             replica->repl_offset = 1;
             /* Move replica to primary's shard. */
             clusterRemoveNodeFromShard(replica);

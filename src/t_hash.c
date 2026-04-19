@@ -2018,12 +2018,12 @@ void hpersistCommand(client *c) {
         return;
     }
 
-    /* From this point we would return array reply */
-    addReplyArrayLen(c, num_fields);
-
     robj *hash = lookupKeyWrite(c->db, c->argv[1]);
     if (checkType(c, hash, OBJ_HASH))
         return;
+
+    /* From this point we would return array reply */
+    addReplyArrayLen(c, num_fields);
 
     bool has_volatile_fields = hashTypeHasVolatileFields(hash);
 

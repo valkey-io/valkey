@@ -171,6 +171,7 @@ ifeq ($(uname_S),SunOS)
 else
 ifeq ($(uname_S),Darwin)
 	# Darwin
+	FINAL_LDFLAGS+= -Wl,-export_dynamic
 	FINAL_LIBS+= -ldl
 	# Homebrew's OpenSSL is not linked to /usr/local to avoid
 	# conflicts with the system's LibreSSL installation so it
@@ -209,18 +210,22 @@ ifeq ($(uname_S),NetBSD)
 else
 ifeq ($(uname_S),FreeBSD)
 	# FreeBSD
+	FINAL_LDFLAGS+= -rdynamic
 	FINAL_LIBS+= -lpthread -lexecinfo
 else
 ifeq ($(uname_S),DragonFly)
 	# DragonFly
+	FINAL_LDFLAGS+= -rdynamic
 	FINAL_LIBS+= -lpthread -lexecinfo
 else
 ifeq ($(uname_S),OpenBSD)
 	# OpenBSD
+	FINAL_LDFLAGS+= -rdynamic
 	FINAL_LIBS+= -lpthread -lexecinfo
 else
 ifeq ($(uname_S),NetBSD)
 	# NetBSD
+	FINAL_LDFLAGS+= -rdynamic
 	FINAL_LIBS+= -lpthread -lexecinfo
 else
 ifeq ($(uname_S),Haiku)
@@ -478,7 +483,6 @@ ENGINE_SERVER_OBJ = \
     db.o \
     debug.o \
     defrag.o \
-    dict.o \
     entry.o \
     eval.o \
     evict.o \
@@ -561,7 +565,8 @@ ENGINE_SERVER_OBJ = \
     vset.o \
     ziplist.o \
     zipmap.o \
-    zmalloc.o
+    zmalloc.o \
+	queues.o
 ENGINE_SERVER_OBJ+=$(ENGINE_TRACE_OBJ)
 ENGINE_CLI_NAME=$(ENGINE_NAME)-cli$(PROG_SUFFIX)
 ENGINE_CLI_OBJ = \
@@ -574,7 +579,7 @@ ENGINE_CLI_OBJ = \
     crc64.o \
     crccombine.o \
     crcspeed.o \
-    dict.o \
+    hashtable.o \
     monotonic.o \
     mt19937-64.o \
     release.o \
@@ -598,9 +603,9 @@ ENGINE_BENCHMARK_OBJ = \
     crc64.o \
     crccombine.o \
     crcspeed.o \
-    dict.o \
     fuzzer_client.o \
     fuzzer_command_generator.o \
+    hashtable.o \
     monotonic.o \
     mt19937-64.o \
     release.o \
@@ -794,6 +799,7 @@ lcov:
 	@lcov --version
 	$(MAKE) gcov
 	@(set -e; cd ..; ./runtest)
+	$(MAKE) test-unit COVERAGE=1 COVERAGE_CFLAGS="-fprofile-arcs -ftest-coverage"
 	@geninfo -o valkey.info .
 	@genhtml --legend -o lcov-html valkey.info
 

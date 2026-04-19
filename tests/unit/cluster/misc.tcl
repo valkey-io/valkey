@@ -43,8 +43,29 @@ proc create_nodes_conf_folder {srv_idx} {
     exec mkdir -p $cluster_conf_path
 }
 
-start_cluster 1 1 {tags {external:skip cluster}} {
-    test {Fail to save the cluster configuration file will not exit the process} {
+start_cluster 1 1 {tags {external:skip cluster} overrides {cluster-config-save-behavior sync}} {
+    test {cluster-config-save-behavior sync mode - node exits when config save fails} {
+        # Create folder that can cause the rename fail.
+        create_nodes_conf_folder 1
+
+        # Trigger a takeover so that cluster will need to update the config file.
+        catch {R 1 cluster failover takeover}
+
+        # Wait for R1 to exit due to config save failure.
+        wait_for_condition 1000 50 {
+            [process_is_alive [srv -1 pid]] == 0
+        } else {
+            fail "R1 did not exit"
+        }
+
+        # Verify that save failure and fatal exit logs were printed.
+        verify_log_message -1 "*Could not rename tmp cluster config file*" 0
+        verify_log_message -1 "*Fatal: can't update cluster config file*" 0
+    }
+}
+
+start_cluster 1 1 {tags {external:skip cluster} overrides {cluster-config-save-behavior best-effort}} {
+    test {cluster-config-save-behavior best-effort mode - node continues running when config save fails} {
         # Create folder that can cause the rename fail.
         create_nodes_conf_folder 0
         create_nodes_conf_folder 1

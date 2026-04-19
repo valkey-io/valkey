@@ -62,6 +62,7 @@
 
 #include "server.h"
 #include "intset.h" /* Compact integer set structure */
+#include "mt19937-64.h"
 #include <math.h>
 
 #include "valkey_strtod.h"

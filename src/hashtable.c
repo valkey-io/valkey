@@ -406,7 +406,7 @@ static inline int compareKeys(hashtable *ht, const void *key1, const void *key2)
     if (ht->type->keyCompare != NULL) {
         return ht->type->keyCompare(key1, key2);
     } else {
-        return key1 != key2;
+        return key1 == key2;
     }
 }
 
@@ -801,7 +801,7 @@ static inline int checkCandidateInBucket(hashtable *ht, bucket *b, int pos, cons
     /* It's a candidate. */
     void *entry = b->entries[pos];
     const void *elem_key = entryGetKey(ht, entry);
-    if (compareKeys(ht, key, elem_key) == 0) {
+    if (compareKeys(ht, key, elem_key)) {
         /* It's a match. */
         assert(pos_in_bucket != NULL);
         if (!validateElementIfNeeded(ht, entry)) {
@@ -1348,7 +1348,7 @@ unsigned hashtableEntriesPerBucket(void) {
 
 /* Returns the size of the hashtable structures, in bytes (not including the sizes
  * of the entries, if the entries are pointers to allocated objects). */
-size_t hashtableMemUsage(hashtable *ht) {
+size_t hashtableMemUsage(const hashtable *ht) {
     size_t num_buckets = numBuckets(ht->bucket_exp[0]) + numBuckets(ht->bucket_exp[1]);
     num_buckets += ht->child_buckets[0] + ht->child_buckets[1];
     size_t metasize = ht->type->getMetadataSize ? ht->type->getMetadataSize() : 0;
@@ -1879,7 +1879,7 @@ bool hashtableIncrementalFindStep(hashtableIncrementalFindState *state) {
             hashtable *ht = data->hashtable;
             void *entry = data->bucket->entries[data->pos];
             const void *elem_key = entryGetKey(ht, entry);
-            if (compareKeys(ht, data->key, elem_key) == 0) {
+            if (compareKeys(ht, data->key, elem_key)) {
                 /* It's a match. */
                 data->state = HASHTABLE_FOUND;
                 return false;
@@ -2325,11 +2325,28 @@ bool hashtableNext(hashtableIterator *iterator, void **elemptr) {
 
 /* --- Random entries --- */
 
+/* Scan independent random buckets and collect entries using reservoir sampling.
+ * Unlike hashtableSampleEntries which scans contiguous buckets for unique
+ * results, this picks a new random bucket each time for fair sampling at the
+ * cost of possible duplicates. */
+static unsigned sampleRandomBuckets(hashtable *ht, void **dst, unsigned count) {
+    if (count > hashtableSize(ht)) count = hashtableSize(ht);
+    scan_samples samples;
+    samples.size = count;
+    samples.seen = 0;
+    samples.entries = dst;
+    while (samples.seen < count) {
+        hashtableScan(ht, randomSizeT(), sampleEntriesScanFn, &samples);
+    }
+    rehashStepOnReadIfNeeded(ht);
+    return samples.seen <= count ? samples.seen : count;
+}
+
 /* Points 'found' to a random entry in the hash table and returns true. Returns false
  * if the table is empty. */
 bool hashtableRandomEntry(hashtable *ht, void **found) {
     void *samples[WEAK_RANDOM_SAMPLE_SIZE];
-    unsigned count = hashtableSampleEntries(ht, &samples[0], WEAK_RANDOM_SAMPLE_SIZE);
+    unsigned count = sampleRandomBuckets(ht, &samples[0], WEAK_RANDOM_SAMPLE_SIZE);
     if (count == 0) return false;
     unsigned idx = random() % count;
     *found = samples[idx];
@@ -2342,7 +2359,7 @@ bool hashtableFairRandomEntry(hashtable *ht, void **found) {
     /* Sample less if it's very sparse. */
     size_t num_samples = hashtableSize(ht) >= hashtableBuckets(ht) ? FAIR_RANDOM_SAMPLE_SIZE : WEAK_RANDOM_SAMPLE_SIZE;
     void *samples[num_samples];
-    unsigned count = hashtableSampleEntries(ht, &samples[0], num_samples);
+    unsigned count = sampleRandomBuckets(ht, &samples[0], num_samples);
     if (count == 0) return false;
     unsigned idx = random() % count;
     *found = samples[idx];
@@ -2364,8 +2381,9 @@ unsigned hashtableSampleEntries(hashtable *ht, void **dst, unsigned count) {
     samples.size = count;
     samples.seen = 0;
     samples.entries = dst;
+    size_t cursor = randomSizeT();
     while (samples.seen < count) {
-        hashtableScan(ht, randomSizeT(), sampleEntriesScanFn, &samples);
+        cursor = hashtableScan(ht, cursor, sampleEntriesScanFn, &samples);
     }
     rehashStepOnReadIfNeeded(ht);
     /* samples.seen is the number of entries scanned. It may be greater than

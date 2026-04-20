@@ -409,7 +409,8 @@ libraryJoin(functionsLibCtx *functions_lib_ctx_dst, functionsLibCtx *functions_l
     while ((entry = dictNext(iter))) {
         functionInfo *fi = dictGetVal(entry);
         if (dictFetchValue(functions_lib_ctx_dst->functions,
-                           objectGetVal(fi->compiled_function->name))) {
+                           objectGetVal(fi->compiled_function->name)))
+        {
             *err = sdscatfmt(sdsempty(),
                              "Function %s already exists",
                              objectGetVal(fi->compiled_function->name));
@@ -825,7 +826,8 @@ void functionRestoreCommand(client *c) {
         functions_lib_ctx = NULL; /* avoid releasing the f_ctx in the end */
     } else {
         if (libraryJoin(curr_functions_lib_ctx, functions_lib_ctx, restore_replicy == restorePolicy_Replace, &err) !=
-            C_OK) {
+            C_OK)
+        {
             goto load_error;
         }
     }
@@ -923,7 +925,8 @@ static int functionsVerifyName(sds name) {
     for (size_t i = 0; i < sdslen(name); ++i) {
         char curr_char = name[i];
         if ((curr_char >= 'a' && curr_char <= 'z') || (curr_char >= 'A' && curr_char <= 'Z') ||
-            (curr_char >= '0' && curr_char <= '9') || (curr_char == '_')) {
+            (curr_char >= '0' && curr_char <= '9') || (curr_char == '_'))
+        {
             continue;
         }
         return C_ERR;
@@ -1085,7 +1088,8 @@ sds functionsCreateWithLibraryCtx(sds code, int replace, sds *err, functionsLibC
     while ((entry = dictNext(iter))) {
         functionInfo *fi = dictGetVal(entry);
         if (dictFetchValue(lib_ctx->functions,
-                           objectGetVal(fi->compiled_function->name))) {
+                           objectGetVal(fi->compiled_function->name)))
+        {
             /* functions name collision, abort. */
             *err = sdscatfmt(sdsempty(), "Function %s already exists",
                              objectGetVal(fi->compiled_function->name));

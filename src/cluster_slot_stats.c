@@ -263,7 +263,8 @@ void clusterSlotStatsCommand(client *c) {
         /* CLUSTER SLOT-STATS SLOTSRANGE start-slot end-slot */
         int startslot, endslot;
         if ((startslot = getSlotOrReply(c, c->argv[3])) == -1 ||
-            (endslot = getSlotOrReply(c, c->argv[4])) == -1) {
+            (endslot = getSlotOrReply(c, c->argv[4])) == -1)
+        {
             return;
         }
         if (startslot > endslot) {
@@ -299,7 +300,8 @@ void clusterSlotStatsCommand(client *c) {
             if (!strcasecmp(objectGetVal(c->argv[i]), "limit") && moreargs) {
                 if (getRangeLongFromObjectOrReply(
                         c, c->argv[i + 1], 1, CLUSTER_SLOTS, &limit,
-                        "Limit has to lie in between 1 and 16384 (maximum number of slots).") != C_OK) {
+                        "Limit has to lie in between 1 and 16384 (maximum number of slots).") != C_OK)
+                {
                     return;
                 }
                 i++;

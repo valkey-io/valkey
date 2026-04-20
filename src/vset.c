@@ -1417,7 +1417,8 @@ static inline bool shrinkRaxBucketIfPossible(vsetBucket **target, vsetGetExpiryF
         /* We will not convert hashtable to our only bucket since we will lose the ability to scan the items in a sorted way.
          * We will also not shrink when we have a full vector, since it might immediately be repopulated.  */
         if (bucket_type == VSET_BUCKET_SINGLE ||
-            (bucket_type == VSET_BUCKET_VECTOR && pvLen(vsetBucketVector(bucket)) < VOLATILESET_VECTOR_BUCKET_MAX_SIZE)) {
+            (bucket_type == VSET_BUCKET_VECTOR && pvLen(vsetBucketVector(bucket)) < VOLATILESET_VECTOR_BUCKET_MAX_SIZE))
+        {
             if (bucket_type == VSET_BUCKET_VECTOR) {
                 pVector *pv = vsetBucketVector(bucket);
                 /* first lets sort the vector. we cannot set the target bucket as unsorted vector bucket */

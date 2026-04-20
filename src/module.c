@@ -2008,7 +2008,8 @@ int VM_SetCommandInfo(ValkeyModuleCommand *command, const ValkeyModuleCommandInf
         !(cmd->key_specs_num == 0 ||
           /* Allow key spec populated from legacy (first,last,step) to exist. */
           (cmd->key_specs_num == 1 && cmd->key_specs[0].begin_search_type == KSPEC_BS_INDEX &&
-           cmd->key_specs[0].find_keys_type == KSPEC_FK_RANGE))) {
+           cmd->key_specs[0].find_keys_type == KSPEC_FK_RANGE)))
+    {
         errno = EEXIST;
         return VALKEYMODULE_ERR;
     }
@@ -4865,11 +4866,13 @@ int VM_ListInsert(ValkeyModuleKey *key, long index, ValkeyModuleString *value) {
         /* Insert in empty key => push. */
         return VM_ListPush(key, VALKEYMODULE_LIST_TAIL, value);
     } else if (key != NULL && key->value != NULL && key->value->type == OBJ_LIST &&
-               (index == (long)listTypeLength(key->value) || index == -1)) {
+               (index == (long)listTypeLength(key->value) || index == -1))
+    {
         /* Insert after the last element => push tail. */
         return VM_ListPush(key, VALKEYMODULE_LIST_TAIL, value);
     } else if (key != NULL && key->value != NULL && key->value->type == OBJ_LIST &&
-               (index == 0 || index == -(long)listTypeLength(key->value) - 1)) {
+               (index == 0 || index == -(long)listTypeLength(key->value) - 1))
+    {
         /* Insert before the first element => push head. */
         return VM_ListPush(key, VALKEYMODULE_LIST_HEAD, value);
     }
@@ -5468,7 +5471,8 @@ int VM_HashHasStringRef(ValkeyModuleKey *key, ValkeyModuleString *field) {
 int VM_HashSet(ValkeyModuleKey *key, int flags, ...) {
     va_list ap;
     if (!key || (flags & ~(VALKEYMODULE_HASH_NX | VALKEYMODULE_HASH_XX | VALKEYMODULE_HASH_CFIELDS |
-                           VALKEYMODULE_HASH_COUNT_ALL))) {
+                           VALKEYMODULE_HASH_COUNT_ALL)))
+    {
         errno = EINVAL;
         return 0;
     } else if (key->value && key->value->type != OBJ_HASH) {
@@ -6832,7 +6836,8 @@ static void moduleCallCommandHelper(ValkeyModuleCtx *ctx, client *c, robj **argv
         /* If the script already made a modification to the dataset, we can't
          * fail it on unpredictable error state. */
         if ((is_running_script && !scriptIsWriteDirty() && cmd_flags & CMD_WRITE) ||
-            (!is_running_script && cmd_flags & CMD_WRITE)) {
+            (!is_running_script && cmd_flags & CMD_WRITE))
+        {
             /* on script mode, if a command is a write command,
              * We will not run it if we encounter disk error
              * or we do not have enough replicas */
@@ -6870,7 +6875,8 @@ static void moduleCallCommandHelper(ValkeyModuleCtx *ctx, client *c, robj **argv
         }
 
         if (server.primary_host && server.repl_state != REPL_STATE_CONNECTED && server.repl_serve_stale_data == 0 &&
-            !(cmd_flags & CMD_STALE)) {
+            !(cmd_flags & CMD_STALE))
+        {
             errno = ESPIPE;
             if (error_as_call_replies) {
                 if (is_running_script) {
@@ -7203,7 +7209,8 @@ moduleType *moduleTypeLookupModuleByNameInternal(const char *name, int ignore_ca
         while ((ln = listNext(&li))) {
             moduleType *mt = ln->value;
             if ((!ignore_case && memcmp(name, mt->name, sizeof(mt->name)) == 0) ||
-                (ignore_case && !strcasecmp(name, mt->name))) {
+                (ignore_case && !strcasecmp(name, mt->name)))
+            {
                 dictReleaseIterator(di);
                 return mt;
             }
@@ -9495,7 +9502,8 @@ void moduleNotifyKeyspaceEvent(int type, const char *event, robj *key, int dbid)
         /* Only notify subscribers on events matching the registration,
          * and avoid subscribers triggering themselves */
         if ((sub->event_mask & type) &&
-            (sub->active == 0 || (sub->module->options & VALKEYMODULE_OPTIONS_ALLOW_NESTED_KEYSPACE_NOTIFICATIONS))) {
+            (sub->active == 0 || (sub->module->options & VALKEYMODULE_OPTIONS_ALLOW_NESTED_KEYSPACE_NOTIFICATIONS)))
+        {
             ValkeyModuleCtx ctx;
             if (server.executing_client == NULL) {
                 moduleCreateContext(&ctx, sub->module, VALKEYMODULE_CTX_TEMP_CLIENT);
@@ -11044,7 +11052,8 @@ int VM_InfoAddSection(ValkeyModuleInfoCtx *ctx, const char *name) {
      * 3) this specific section was requested. */
     if (ctx->requested_sections) {
         if ((!full_name || !dictFind(ctx->requested_sections, full_name)) &&
-            (!dictFind(ctx->requested_sections, ctx->module->name))) {
+            (!dictFind(ctx->requested_sections, ctx->module->name)))
+        {
             sdsfree(full_name);
             ctx->in_section = 0;
             return VALKEYMODULE_ERR;
@@ -13530,7 +13539,8 @@ int isModuleConfigNameRegistered(ValkeyModule *module, const char *name) {
 int moduleVerifyConfigFlags(unsigned int flags, configType type) {
     if ((flags & ~(VALKEYMODULE_CONFIG_DEFAULT | VALKEYMODULE_CONFIG_IMMUTABLE | VALKEYMODULE_CONFIG_SENSITIVE |
                    VALKEYMODULE_CONFIG_HIDDEN | VALKEYMODULE_CONFIG_PROTECTED | VALKEYMODULE_CONFIG_DENY_LOADING |
-                   VALKEYMODULE_CONFIG_BITFLAGS | VALKEYMODULE_CONFIG_MEMORY | VALKEYMODULE_CONFIG_UNSIGNED))) {
+                   VALKEYMODULE_CONFIG_BITFLAGS | VALKEYMODULE_CONFIG_MEMORY | VALKEYMODULE_CONFIG_UNSIGNED)))
+    {
         serverLogRaw(LL_WARNING, "Invalid flag(s) for configuration");
         return VALKEYMODULE_ERR;
     }
@@ -13555,7 +13565,8 @@ int moduleVerifyResourceName(const char *name) {
     for (size_t i = 0; name[i] != '\0'; i++) {
         char curr_char = name[i];
         if ((curr_char >= 'a' && curr_char <= 'z') || (curr_char >= 'A' && curr_char <= 'Z') ||
-            (curr_char >= '0' && curr_char <= '9') || (curr_char == '_') || (curr_char == '-')) {
+            (curr_char >= '0' && curr_char <= '9') || (curr_char == '_') || (curr_char == '-'))
+        {
             continue;
         }
         serverLog(LL_WARNING, "Invalid character %c in Module resource name %s.", curr_char, name);
@@ -14197,7 +14208,8 @@ int VM_RegisterScriptingEngine(ValkeyModuleCtx *module_ctx,
     if (scriptingEngineManagerRegister(engine_name,
                                        module_ctx->module,
                                        engine_ctx,
-                                       engine_methods) != C_OK) {
+                                       engine_methods) != C_OK)
+    {
         return VALKEYMODULE_ERR;
     }
 

@@ -488,7 +488,8 @@ void migrateCommand(client *c) {
 
     /* Sanity check */
     if (getLongFromObjectOrReply(c, c->argv[5], &timeout, NULL) != C_OK ||
-        getLongFromObjectOrReply(c, c->argv[4], &dbid, NULL) != C_OK) {
+        getLongFromObjectOrReply(c, c->argv[4], &dbid, NULL) != C_OK)
+    {
         return;
     }
     if (timeout <= 0) timeout = 1000;
@@ -1202,7 +1203,8 @@ clusterNode *getNodeByQuery(client *c, int *error_code) {
              * Allowing cross-DB COPY is possible, but it would require looking up the second key in the target DB.
              * The command should only be allowed if the key exists. We may revisit this decision in the future. */
             if (mcmd->proc == copyCommand &&
-                margc >= 4 && !strcasecmp(objectGetVal(margv[3]), "db")) {
+                margc >= 4 && !strcasecmp(objectGetVal(margv[3]), "db"))
+            {
                 long long value;
                 if (getLongLongFromObject(margv[4], &value) != C_OK || value != currentDb->id) {
                     if (error_code) *error_code = CLUSTER_REDIR_UNSTABLE;
@@ -1219,7 +1221,8 @@ clusterNode *getNodeByQuery(client *c, int *error_code) {
              * NODE <node-id>. */
             int flags = LOOKUP_NOTOUCH | LOOKUP_NOSTATS | LOOKUP_NONOTIFY | LOOKUP_NOEXPIRE;
             if (!pubsubshard_included &&
-                (!c->flag.multi || (c->flag.multi && c->cmd->proc == execCommand))) {
+                (!c->flag.multi || (c->flag.multi && c->cmd->proc == execCommand)))
+            {
                 /* Multi/Exec validation happens on exec */
                 if (lookupKeyReadWithFlags(currentDb, thiskey, flags) == NULL)
                     missing_keys++;
@@ -1295,7 +1298,8 @@ after_checking_each_key:
     int is_write_command =
         (cmd_flags & CMD_WRITE) || (c->cmd->proc == execCommand && (c->mstate->cmd_flags & CMD_WRITE));
     if ((c->flag.readonly || pubsubshard_included) && !is_write_command && clusterNodeIsReplica(myself) &&
-        clusterNodeGetPrimary(myself) == n) {
+        clusterNodeGetPrimary(myself) == n)
+    {
         return myself;
     }
 
@@ -1351,7 +1355,8 @@ void clusterRedirectClient(client *c, clusterNode *n, int hashslot, int error_co
 int clusterRedirectBlockedClientIfNeeded(client *c) {
     clusterNode *myself = getMyClusterNode();
     if (c->flag.blocked && (c->bstate->btype == BLOCKED_LIST || c->bstate->btype == BLOCKED_ZSET ||
-                            c->bstate->btype == BLOCKED_STREAM || c->bstate->btype == BLOCKED_MODULE)) {
+                            c->bstate->btype == BLOCKED_STREAM || c->bstate->btype == BLOCKED_MODULE))
+    {
         dictEntry *de;
         dictIterator *di;
 
@@ -1379,7 +1384,8 @@ int clusterRedirectBlockedClientIfNeeded(client *c) {
             /* if the client is read-only and attempting to access key that our
              * replica can handle, allow it. */
             if (c->flag.readonly && !(c->lastcmd->flags & CMD_WRITE) && clusterNodeIsReplica(myself) &&
-                clusterNodeGetPrimary(myself) == node) {
+                clusterNodeGetPrimary(myself) == node)
+            {
                 node = myself;
             }
 
@@ -1431,7 +1437,8 @@ void addNodeToNodeReply(client *c, clusterNode *node) {
         length++;
     }
     if (server.cluster_preferred_endpoint_type != CLUSTER_ENDPOINT_TYPE_HOSTNAME && hostname != NULL &&
-        hostname[0] != '\0') {
+        hostname[0] != '\0')
+    {
         length++;
     }
 
@@ -1447,7 +1454,8 @@ void addNodeToNodeReply(client *c, clusterNode *node) {
         length--;
     }
     if (server.cluster_preferred_endpoint_type != CLUSTER_ENDPOINT_TYPE_HOSTNAME && hostname != NULL &&
-        hostname[0] != '\0') {
+        hostname[0] != '\0')
+    {
         addReplyBulkCString(c, "hostname");
         addReplyBulkCString(c, hostname);
         length--;

@@ -279,7 +279,8 @@ static void activeDefragZsetNode(void *privdata, void *entry_ref) {
         zskiplistNode *next = x->level[i].forward;
         while (next &&
                (next->score < score ||
-                (next->score == score && sdscmp(zslGetNodeElement(next), ele) < 0))) {
+                (next->score == score && sdscmp(zslGetNodeElement(next), ele) < 0)))
+        {
             x = next;
             next = x->level[i].forward;
         }
@@ -874,7 +875,8 @@ static doneStatus defragLaterStep(monotime endtime, void *privdata) {
         }
 
         if (++iterations > 16 || server.stat_active_defrag_hits > prev_defragged ||
-            server.stat_active_defrag_scanned - prev_scanned > 64) {
+            server.stat_active_defrag_scanned - prev_scanned > 64)
+        {
             if (getMonotonicUs() > endtime) break;
             iterations = 0;
             prev_defragged = server.stat_active_defrag_hits;

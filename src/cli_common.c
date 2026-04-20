@@ -328,7 +328,8 @@ void parseUri(const char *uri, const char *tool_name, cliConnInfo *connInfo, int
 
     /* URI must start with a valid scheme. */
     if (!strncasecmp(tlsscheme, curr, strlen(tlsscheme)) ||
-        !strncasecmp(redisTlsscheme, curr, strlen(redisTlsscheme))) {
+        !strncasecmp(redisTlsscheme, curr, strlen(redisTlsscheme)))
+    {
 #ifdef USE_OPENSSL
         *tls_flag = 1;
         const char *del = strstr(curr, "://");

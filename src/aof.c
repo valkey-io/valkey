@@ -657,7 +657,8 @@ void aofUpgradePrepare(aofManifest *am) {
  */
 int aofDelHistoryFiles(void) {
     if (server.aof_manifest == NULL || server.aof_disable_auto_gc == 1 ||
-        !listLength(server.aof_manifest->history_aof_list)) {
+        !listLength(server.aof_manifest->history_aof_list))
+    {
         return C_OK;
     }
 
@@ -1187,7 +1188,8 @@ void flushAppendOnlyFile(int force) {
          * stop write commands before fsync called in one second,
          * the data in page cache cannot be flushed in time. */
         if (server.aof_fsync == AOF_FSYNC_EVERYSEC && server.aof_last_incr_fsync_offset != server.aof_last_incr_size &&
-            server.mstime - server.aof_last_fsync >= 1000 && !(sync_in_progress = aofFsyncInProgress())) {
+            server.mstime - server.aof_last_fsync >= 1000 && !(sync_in_progress = aofFsyncInProgress()))
+        {
             goto try_fsync;
 
             /* Check if we need to do fsync even the aof buffer is empty,
@@ -1195,7 +1197,8 @@ void flushAppendOnlyFile(int force) {
              * and AOF_FSYNC_ALWAYS is also checked here to handle a case where
              * aof_fsync is changed from everysec to always. */
         } else if (server.aof_fsync == AOF_FSYNC_ALWAYS &&
-                   server.aof_last_incr_fsync_offset != server.aof_last_incr_size) {
+                   server.aof_last_incr_fsync_offset != server.aof_last_incr_size)
+        {
             goto try_fsync;
         } else {
             /* All data is fsync'd already: Update fsynced_reploff_pending just in case.
@@ -1791,7 +1794,8 @@ int loadAppendOnlyFiles(aofManifest *am) {
     if (fileExist(server.aof_filename)) {
         if (!dirExists(server.aof_dirname) || (am->base_aof_info == NULL && listLength(am->incr_aof_list) == 0) ||
             (am->base_aof_info != NULL && listLength(am->incr_aof_list) == 0 &&
-             !strcmp(am->base_aof_info->file_name, server.aof_filename) && !aofFileExist(server.aof_filename))) {
+             !strcmp(am->base_aof_info->file_name, server.aof_filename) && !aofFileExist(server.aof_filename)))
+        {
             aofUpgradePrepare(am);
         }
     }
@@ -1923,7 +1927,8 @@ int rewriteListObject(rio *r, robj *key, robj *o) {
         if (count == 0) {
             int cmd_items = (items > AOF_REWRITE_ITEMS_PER_CMD) ? AOF_REWRITE_ITEMS_PER_CMD : items;
             if (!rioWriteBulkCount(r, '*', 2 + cmd_items) || !rioWriteBulkString(r, "RPUSH", 5) ||
-                !rioWriteBulkObject(r, key)) {
+                !rioWriteBulkObject(r, key))
+            {
                 listTypeReleaseIterator(li);
                 return 0;
             }
@@ -1963,7 +1968,8 @@ int rewriteSetObject(rio *r, robj *key, robj *o) {
         if (count == 0) {
             int cmd_items = (items > AOF_REWRITE_ITEMS_PER_CMD) ? AOF_REWRITE_ITEMS_PER_CMD : items;
             if (!rioWriteBulkCount(r, '*', 2 + cmd_items) || !rioWriteBulkString(r, "SADD", 4) ||
-                !rioWriteBulkObject(r, key)) {
+                !rioWriteBulkObject(r, key))
+            {
                 setTypeReleaseIterator(si);
                 return 0;
             }
@@ -2006,7 +2012,8 @@ int rewriteSortedSetObject(rio *r, robj *key, robj *o) {
                 int cmd_items = (items > AOF_REWRITE_ITEMS_PER_CMD) ? AOF_REWRITE_ITEMS_PER_CMD : items;
 
                 if (!rioWriteBulkCount(r, '*', 2 + cmd_items * 2) || !rioWriteBulkString(r, "ZADD", 4) ||
-                    !rioWriteBulkObject(r, key)) {
+                    !rioWriteBulkObject(r, key))
+                {
                     return 0;
                 }
             }
@@ -2031,7 +2038,8 @@ int rewriteSortedSetObject(rio *r, robj *key, robj *o) {
                 int cmd_items = (items > AOF_REWRITE_ITEMS_PER_CMD) ? AOF_REWRITE_ITEMS_PER_CMD : items;
 
                 if (!rioWriteBulkCount(r, '*', 2 + cmd_items * 2) || !rioWriteBulkString(r, "ZADD", 4) ||
-                    !rioWriteBulkObject(r, key)) {
+                    !rioWriteBulkObject(r, key))
+                {
                     hashtableCleanupIterator(&iter);
                     return 0;
                 }
@@ -2114,7 +2122,8 @@ int rewriteHashObject(rio *r, robj *key, robj *o) {
             int cmd_items = (non_volatile_items > AOF_REWRITE_ITEMS_PER_CMD) ? AOF_REWRITE_ITEMS_PER_CMD : non_volatile_items;
 
             if (!rioWriteBulkCount(r, '*', 2 + cmd_items * 2) || !rioWriteBulkString(r, "HMSET", 5) ||
-                !rioWriteBulkObject(r, key)) {
+                !rioWriteBulkObject(r, key))
+            {
                 hashTypeResetIterator(&hi);
                 return 0;
             }
@@ -2209,7 +2218,8 @@ int rewriteStreamObject(rio *r, robj *key, robj *o) {
 
             /* Emit the XADD <key> <id> ...fields... command. */
             if (!rioWriteBulkCount(r, '*', 3 + numfields * 2) || !rioWriteBulkString(r, "XADD", 4) ||
-                !rioWriteBulkObject(r, key) || !rioWriteBulkStreamID(r, &id)) {
+                !rioWriteBulkObject(r, key) || !rioWriteBulkStreamID(r, &id))
+            {
                 streamIteratorStop(&si);
                 return 0;
             }
@@ -2218,7 +2228,8 @@ int rewriteStreamObject(rio *r, robj *key, robj *o) {
                 int64_t field_len, value_len;
                 streamIteratorGetField(&si, &field, &value, &field_len, &value_len);
                 if (!rioWriteBulkString(r, (char *)field, field_len) ||
-                    !rioWriteBulkString(r, (char *)value, value_len)) {
+                    !rioWriteBulkString(r, (char *)value, value_len))
+                {
                     streamIteratorStop(&si);
                     return 0;
                 }
@@ -2232,7 +2243,8 @@ int rewriteStreamObject(rio *r, robj *key, robj *o) {
         id.seq = 1;
         if (!rioWriteBulkCount(r, '*', 7) || !rioWriteBulkString(r, "XADD", 4) || !rioWriteBulkObject(r, key) ||
             !rioWriteBulkString(r, "MAXLEN", 6) || !rioWriteBulkString(r, "0", 1) || !rioWriteBulkStreamID(r, &id) ||
-            !rioWriteBulkString(r, "x", 1) || !rioWriteBulkString(r, "y", 1)) {
+            !rioWriteBulkString(r, "x", 1) || !rioWriteBulkString(r, "y", 1))
+        {
             streamIteratorStop(&si);
             return 0;
         }
@@ -2243,7 +2255,8 @@ int rewriteStreamObject(rio *r, robj *key, robj *o) {
     if (!rioWriteBulkCount(r, '*', 7) || !rioWriteBulkString(r, "XSETID", 6) || !rioWriteBulkObject(r, key) ||
         !rioWriteBulkStreamID(r, &s->last_id) || !rioWriteBulkString(r, "ENTRIESADDED", 12) ||
         !rioWriteBulkLongLong(r, s->entries_added) || !rioWriteBulkString(r, "MAXDELETEDID", 12) ||
-        !rioWriteBulkStreamID(r, &s->max_deleted_entry_id)) {
+        !rioWriteBulkStreamID(r, &s->max_deleted_entry_id))
+    {
         streamIteratorStop(&si);
         return 0;
     }
@@ -2260,7 +2273,8 @@ int rewriteStreamObject(rio *r, robj *key, robj *o) {
             if (!rioWriteBulkCount(r, '*', 7) || !rioWriteBulkString(r, "XGROUP", 6) ||
                 !rioWriteBulkString(r, "CREATE", 6) || !rioWriteBulkObject(r, key) ||
                 !rioWriteBulkString(r, (char *)ri.key, ri.key_len) || !rioWriteBulkStreamID(r, &group->last_id) ||
-                !rioWriteBulkString(r, "ENTRIESREAD", 11) || !rioWriteBulkLongLong(r, group->entries_read)) {
+                !rioWriteBulkString(r, "ENTRIESREAD", 11) || !rioWriteBulkLongLong(r, group->entries_read))
+            {
                 raxStop(&ri);
                 streamIteratorStop(&si);
                 return 0;
@@ -2292,7 +2306,8 @@ int rewriteStreamObject(rio *r, robj *key, robj *o) {
                 while (raxNext(&ri_pel)) {
                     streamNACK *nack = ri_pel.data;
                     if (rioWriteStreamPendingEntry(r, key, (char *)ri.key, ri.key_len, consumer, ri_pel.key, nack) ==
-                        0) {
+                        0)
+                    {
                         raxStop(&ri_pel);
                         raxStop(&ri_cons);
                         raxStop(&ri);

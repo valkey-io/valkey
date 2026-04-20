@@ -612,7 +612,8 @@ void msetexCommand(client *c) {
 
     /* Parse the numkeys. */
     if (getRangeLongFromObjectOrReply(c, c->argv[1], 1, INT_MAX, &numkeys,
-                                      "invalid numkeys value or out of range") != C_OK) {
+                                      "invalid numkeys value or out of range") != C_OK)
+    {
         return;
     }
 
@@ -624,7 +625,8 @@ void msetexCommand(client *c) {
         return;
     }
     if (parseExtendedCommandArgumentsOrReply(c, COMMAND_MSET, (int)args_start_idx, c->argc,
-                                             &flags, &unit, &expire_idx, &expire, NULL) != C_OK) {
+                                             &flags, &unit, &expire_idx, &expire, NULL) != C_OK)
+    {
         return;
     }
 
@@ -645,7 +647,8 @@ void msetexCommand(client *c) {
         for (int j = 2; j < args_start_idx; j += 2) {
             robj *o = lookupKeyWrite(c->db, c->argv[j]);
             if (((flags & ARGS_SET_NX) && o != NULL) ||
-                ((flags & ARGS_SET_XX) && o == NULL)) {
+                ((flags & ARGS_SET_XX) && o == NULL))
+            {
                 addReply(c, shared.czero);
                 return;
             }
@@ -704,14 +707,16 @@ void incrDecrCommand(client *c, long long incr) {
 
     oldvalue = value;
     if ((incr < 0 && oldvalue < 0 && incr < (LLONG_MIN - oldvalue)) ||
-        (incr > 0 && oldvalue > 0 && incr > (LLONG_MAX - oldvalue))) {
+        (incr > 0 && oldvalue > 0 && incr > (LLONG_MAX - oldvalue)))
+    {
         addReplyError(c, "increment or decrement would overflow");
         return;
     }
     value += incr;
 
     if (o && o->refcount == 1 && o->encoding == OBJ_ENCODING_INT &&
-        value >= LONG_MIN && value <= LONG_MAX) {
+        value >= LONG_MIN && value <= LONG_MAX)
+    {
         new = o;
         objectSetVal(o, (void *)((long)value));
     } else {
@@ -849,7 +854,8 @@ void lcsCommand(client *c) {
     obja = lookupKeyRead(c->db, c->argv[1]);
     objb = lookupKeyRead(c->db, c->argv[2]);
     if ((obja && obja->type != OBJ_STRING) ||
-        (objb && objb->type != OBJ_STRING)) {
+        (objb && objb->type != OBJ_STRING))
+    {
         addReplyError(c,
                       "The specified keys must contain string values");
         /* Don't cleanup the objects, we need to do that

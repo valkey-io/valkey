@@ -641,7 +641,8 @@ static long long acquireTokenOrWait(int tokens) {
                 &old_last_time_ns,
                 last_time_ns,
                 memory_order_release,
-                memory_order_relaxed)) {
+                memory_order_relaxed))
+        {
             break;
         }
     }
@@ -2517,7 +2518,8 @@ int main(int argc, char **argv) {
         }
 
         if (test_is_selected("lrange") || test_is_selected("lrange_100") || test_is_selected("lrange_300") ||
-            test_is_selected("lrange_500") || test_is_selected("lrange_600")) {
+            test_is_selected("lrange_500") || test_is_selected("lrange_600"))
+        {
             len = valkeyFormatCommand(&cmd, "LPUSH mylist%s %s", tag, data);
             benchmark("LPUSH (needed to benchmark LRANGE)", cmd, len);
             free(cmd);

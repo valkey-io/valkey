@@ -226,7 +226,8 @@ void IOThreadsAfterSleep(int numevents) {
         serverLog(LL_DEBUG, "IO threads increased from %zu to %zu", active, target);
     }
     /* Scale Down*/
-    else if (target < active) {
+    else if (target < active)
+    {
         int tid = active - 1;
 
         /* Don't suspend if work remains in the specific thread's queue... */

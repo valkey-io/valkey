@@ -400,7 +400,8 @@ static int tlsUpdateCertInfoFromDir(const char *path, long long *expiry, sds *se
 
 static void tlsRefreshServerCertInfo(void) {
     if (!(server.tls_port || server.tls_replication || server.tls_cluster) || !valkey_tls_ctx ||
-        tlsUpdateCertInfoFromCtx(valkey_tls_ctx, &server.tls_server_cert_expire_time, &server.tls_server_cert_serial) == C_ERR) {
+        tlsUpdateCertInfoFromCtx(valkey_tls_ctx, &server.tls_server_cert_expire_time, &server.tls_server_cert_serial) == C_ERR)
+    {
         tlsClearCertInfo(&server.tls_server_cert_expire_time, &server.tls_server_cert_serial);
     }
 }
@@ -470,7 +471,8 @@ static bool isCertValid(X509 *cert) {
     const ASN1_TIME *not_after = X509_get0_notAfter(cert);
     if (!not_before || !not_after) return false;
     if (X509_cmp_current_time(not_before) > 0 ||
-        X509_cmp_current_time(not_after) < 0) {
+        X509_cmp_current_time(not_after) < 0)
+    {
         return false;
     }
     return true;
@@ -658,7 +660,8 @@ static int tlsCreateContexts(serverTLSContextConfig *ctx_config, SSL_CTX **out_c
     }
 
     if (((server.tls_auth_clients != TLS_CLIENT_AUTH_NO) || server.tls_cluster || server.tls_replication) &&
-        !ctx_config->ca_cert_file && !ctx_config->ca_cert_dir) {
+        !ctx_config->ca_cert_file && !ctx_config->ca_cert_dir)
+    {
         serverLog(LL_WARNING, "Either tls-ca-cert-file or tls-ca-cert-dir must be specified when tls-cluster, "
                               "tls-replication or tls-auth-clients are enabled!");
         goto error;
@@ -849,17 +852,20 @@ static void captureMetadata(serverTLSContextConfig *ctx_config, tlsMaterialsMeta
 static int metadataChanged(const tlsMaterialsMetadata *old, const tlsMaterialsMetadata *new) {
     /* Check certificate fingerprints */
     if (old->cert_fingerprint_len != new->cert_fingerprint_len ||
-        (new->cert_fingerprint_len > 0 && memcmp(old->cert_fingerprint, new->cert_fingerprint, new->cert_fingerprint_len) != 0)) {
+        (new->cert_fingerprint_len > 0 && memcmp(old->cert_fingerprint, new->cert_fingerprint, new->cert_fingerprint_len) != 0))
+    {
         return 1;
     }
 
     if (old->client_cert_fingerprint_len != new->client_cert_fingerprint_len ||
-        (new->client_cert_fingerprint_len > 0 && memcmp(old->client_cert_fingerprint, new->client_cert_fingerprint, new->client_cert_fingerprint_len) != 0)) {
+        (new->client_cert_fingerprint_len > 0 && memcmp(old->client_cert_fingerprint, new->client_cert_fingerprint, new->client_cert_fingerprint_len) != 0))
+    {
         return 1;
     }
 
     if (old->ca_cert_fingerprint_len != new->ca_cert_fingerprint_len ||
-        (new->ca_cert_fingerprint_len > 0 && memcmp(old->ca_cert_fingerprint, new->ca_cert_fingerprint, new->ca_cert_fingerprint_len) != 0)) {
+        (new->ca_cert_fingerprint_len > 0 && memcmp(old->ca_cert_fingerprint, new->ca_cert_fingerprint, new->ca_cert_fingerprint_len) != 0))
+    {
         return 1;
     }
 
@@ -1011,7 +1017,8 @@ void tlsReconfigureIfNeeded(void) {
     const long long configAgeMicros = server.ustime - lastConfigureTime;
     const long long configAgeSeconds = (configAgeMicros / 1000) / 1000;
     if (server.tls_ctx_config.auto_reload_interval == 0 ||
-        configAgeSeconds < server.tls_ctx_config.auto_reload_interval) {
+        configAgeSeconds < server.tls_ctx_config.auto_reload_interval)
+    {
         return;
     }
     bioCreateTlsReloadJob();

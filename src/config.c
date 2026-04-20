@@ -847,7 +847,8 @@ void configSetCommand(client *c) {
         if (invalid_args) continue;
 
         if (config->flags & IMMUTABLE_CONFIG ||
-            (config->flags & PROTECTED_CONFIG && !allowProtectedAction(server.enable_protected_configs, c))) {
+            (config->flags & PROTECTED_CONFIG && !allowProtectedAction(server.enable_protected_configs, c)))
+        {
             /* Note: we don't abort the loop since we still want to handle redacting sensitive configs (above) */
             errstr = (config->flags & IMMUTABLE_CONFIG) ? "can't set immutable config" : "can't set protected config";
             err_arg_name = objectGetVal(c->argv[2 + i * 2]);
@@ -1183,7 +1184,8 @@ struct rewriteConfigState *rewriteConfigReadOldFile(char *path) {
              /* The following is a list of config features that are only supported in
               * config file parsing and are not recognized by lookupConfig */
              strcasecmp(argv[0], "include") && strcasecmp(argv[0], "rename-command") && strcasecmp(argv[0], "user") &&
-             strcasecmp(argv[0], "loadmodule") && strcasecmp(argv[0], "sentinel"))) {
+             strcasecmp(argv[0], "loadmodule") && strcasecmp(argv[0], "sentinel")))
+        {
             /* The line is either unparsable for some reason, for
              * instance it may have unbalanced quotes, may contain a
              * config that doesn't exist anymore, for instance a module that got
@@ -2132,7 +2134,8 @@ static int numericBoundaryCheck(standardConfig *config, long long ll, const char
     if (config->data.numeric.numeric_type == NUMERIC_TYPE_ULONG_LONG ||
         config->data.numeric.numeric_type == NUMERIC_TYPE_ULONG ||
         config->data.numeric.numeric_type == NUMERIC_TYPE_UINT ||
-        config->data.numeric.numeric_type == NUMERIC_TYPE_SIZE_T) {
+        config->data.numeric.numeric_type == NUMERIC_TYPE_SIZE_T)
+    {
         /* Boundary check for unsigned types */
         unsigned long long ull = ll;
         unsigned long long upper_bound = config->data.numeric.upper_bound;
@@ -2159,7 +2162,8 @@ static int numericBoundaryCheck(standardConfig *config, long long ll, const char
             }
         }
         /* Boundary check for signed types */
-        else if (ll > config->data.numeric.upper_bound || ll < config->data.numeric.lower_bound) {
+        else if (ll > config->data.numeric.upper_bound || ll < config->data.numeric.lower_bound)
+        {
             snprintf(loadbuf, LOADBUF_SIZE, "argument must be between %lld and %lld inclusive",
                      config->data.numeric.lower_bound, config->data.numeric.upper_bound);
             *err = loadbuf;
@@ -2186,7 +2190,8 @@ static int numericParseString(standardConfig *config, sds value, const char **er
 
     /* Attempt to parse as percent */
     if (config->data.numeric.flags & PERCENT_CONFIG && sdslen(value) > 1 && value[sdslen(value) - 1] == '%' &&
-        string2ll(value, sdslen(value) - 1, res) && *res >= 0) {
+        string2ll(value, sdslen(value) - 1, res) && *res >= 0)
+    {
         /* We store percentage as negative value */
         *res = -*res;
         return 1;
@@ -2797,7 +2802,8 @@ static int applyTlsCfg(const char **err) {
 
     /* If TLS is enabled, try to configure OpenSSL. */
     if ((server.tls_port || server.tls_replication || server.tls_cluster) &&
-        connTypeConfigure(connectionTypeTls(), &server.tls_ctx_config, 1) == C_ERR) {
+        connTypeConfigure(connectionTypeTls(), &server.tls_ctx_config, 1) == C_ERR)
+    {
         *err = "Unable to update TLS configuration. Check server logs.";
         return 0;
     }
@@ -2968,7 +2974,8 @@ static int setConfigOOMScoreAdjValuesOption(standardConfig *config, sds *argv, i
      */
 
     if (values[CONFIG_OOM_REPLICA] < values[CONFIG_OOM_PRIMARY] ||
-        values[CONFIG_OOM_BGCHILD] < values[CONFIG_OOM_REPLICA]) {
+        values[CONFIG_OOM_BGCHILD] < values[CONFIG_OOM_REPLICA])
+    {
         serverLog(LL_WARNING, "The oom-score-adj-values configuration may not work for non-privileged processes! "
                               "Please consult the documentation.");
     }

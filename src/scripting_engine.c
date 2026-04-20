@@ -430,7 +430,8 @@ debuggerEnableRet scriptingEngineCallDebuggerEnable(scriptingEngine *engine,
     if (engine->impl.methods.debugger_enable == NULL ||
         engine->impl.methods.debugger_disable == NULL ||
         engine->impl.methods.debugger_start == NULL ||
-        engine->impl.methods.debugger_end == NULL) {
+        engine->impl.methods.debugger_end == NULL)
+    {
         return VMSE_DEBUG_NOT_SUPPORTED;
     }
 
@@ -1012,7 +1013,8 @@ static const debuggerCommand *findCommand(robj **argv, size_t argc) {
         const debuggerCommand *cmd = &builtins[i];
         if ((sdslen(objectGetVal(argv[0])) == cmd->prefix_len &&
              strncasecmp(cmd->name, objectGetVal(argv[0]), cmd->prefix_len) == 0) ||
-            strcasecmp(cmd->name, objectGetVal(argv[0])) == 0) {
+            strcasecmp(cmd->name, objectGetVal(argv[0])) == 0)
+        {
             if (checkCommandParameters(cmd, argc)) {
                 return cmd;
             }
@@ -1024,7 +1026,8 @@ static const debuggerCommand *findCommand(robj **argv, size_t argc) {
         const debuggerCommand *cmd = &ds.commands[i];
         if ((sdslen(objectGetVal(argv[0])) == cmd->prefix_len &&
              strncasecmp(cmd->name, objectGetVal(argv[0]), cmd->prefix_len) == 0) ||
-            strcasecmp(cmd->name, objectGetVal(argv[0])) == 0) {
+            strcasecmp(cmd->name, objectGetVal(argv[0])) == 0)
+        {
             if (checkCommandParameters(cmd, argc)) {
                 return cmd;
             }

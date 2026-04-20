@@ -367,7 +367,8 @@ static zskiplistNode *zslUpdateScore(zskiplist *zsl, zskiplistNode *node, double
      * at the same position, we can just update the score without
      * actually removing and re-inserting the element in the skiplist. */
     if ((node->backward == NULL || node->backward->score < newscore) &&
-        (node->level[0].forward == NULL || node->level[0].forward->score > newscore)) {
+        (node->level[0].forward == NULL || node->level[0].forward->score > newscore))
+    {
         node->score = newscore;
         return NULL;
     }
@@ -530,7 +531,8 @@ static unsigned long zslDeleteRangeByLex(zskiplist *zsl, zlexrangespec *range, h
     x = zslGetHeader(zsl);
     for (i = zslGetHeight(zsl) - 1; i >= 0; i--) {
         while (x->level[i].forward &&
-               !zslLexValueGteMin(zslGetNodeElement(x->level[i].forward), range)) {
+               !zslLexValueGteMin(zslGetNodeElement(x->level[i].forward), range))
+        {
             x = x->level[i].forward;
         }
         update[i] = x;
@@ -720,7 +722,8 @@ int zsetParseLexRange(robj *min, robj *max, zlexrangespec *spec) {
 
     spec->min = spec->max = NULL;
     if (zslParseLexRangeItem(min, &spec->min, &spec->minex) == C_ERR ||
-        zslParseLexRangeItem(max, &spec->max, &spec->maxex) == C_ERR) {
+        zslParseLexRangeItem(max, &spec->max, &spec->maxex) == C_ERR)
+    {
         zsetFreeLexRange(spec);
         return C_ERR;
     } else {
@@ -1295,7 +1298,8 @@ robj *zsetTypeCreate(size_t size_hint, size_t val_len_hint) {
  * the size hint. */
 void zsetTypeMaybeConvert(robj *zobj, size_t size_hint, size_t value_len_hint) {
     if (zobj->encoding == OBJ_ENCODING_LISTPACK &&
-        (size_hint > server.zset_max_listpack_entries || value_len_hint > server.zset_max_listpack_value)) {
+        (size_hint > server.zset_max_listpack_entries || value_len_hint > server.zset_max_listpack_value))
+    {
         zsetConvertAndExpand(zobj, OBJ_ENCODING_SKIPLIST, size_hint);
     }
 }
@@ -1390,7 +1394,8 @@ void zsetConvertToListpackIfNeeded(robj *zobj, size_t maxelelen, size_t totelele
     zset *zset = objectGetVal(zobj);
 
     if (zslGetLength(zset->zsl) <= server.zset_max_listpack_entries &&
-        maxelelen <= server.zset_max_listpack_value && lpSafeToAdd(NULL, totelelen)) {
+        maxelelen <= server.zset_max_listpack_value && lpSafeToAdd(NULL, totelelen))
+    {
         zsetConvert(zobj, OBJ_ENCODING_LISTPACK);
     }
 }
@@ -1516,7 +1521,8 @@ int zsetAdd(robj *zobj, double score, sds ele, int in_flags, int *out_flags, dou
             /* check if the element is too large or the list
              * becomes too long *before* executing zzlInsert. */
             if (zzlLength(objectGetVal(zobj)) + 1 > server.zset_max_listpack_entries ||
-                sdslen(ele) > server.zset_max_listpack_value || !lpSafeToAdd(objectGetVal(zobj), sdslen(ele))) {
+                sdslen(ele) > server.zset_max_listpack_value || !lpSafeToAdd(objectGetVal(zobj), sdslen(ele)))
+            {
                 zsetConvertAndExpand(zobj, OBJ_ENCODING_SKIPLIST, zsetLength(zobj) + 1);
             } else {
                 objectSetVal(zobj, zzlInsert(objectGetVal(zobj), ele, score));
@@ -2650,18 +2656,21 @@ static void zunionInterDiffGenericCommand(client *c, robj *dstkey, int numkeysIn
 
         while (remaining) {
             if (op != SET_OP_DIFF && !cardinality_only && remaining >= (setnum + 1) &&
-                !strcasecmp(objectGetVal(c->argv[j]), "weights")) {
+                !strcasecmp(objectGetVal(c->argv[j]), "weights"))
+            {
                 j++;
                 remaining--;
                 for (i = 0; i < setnum; i++, j++, remaining--) {
                     if (getDoubleFromObjectOrReply(c, c->argv[j], &src[i].weight, "weight value is not a float") !=
-                        C_OK) {
+                        C_OK)
+                    {
                         zfree(src);
                         return;
                     }
                 }
             } else if (op != SET_OP_DIFF && !cardinality_only && remaining >= 2 &&
-                       !strcasecmp(objectGetVal(c->argv[j]), "aggregate")) {
+                       !strcasecmp(objectGetVal(c->argv[j]), "aggregate"))
+            {
                 j++;
                 remaining--;
                 if (!strcasecmp(objectGetVal(c->argv[j]), "sum")) {
@@ -3621,7 +3630,8 @@ void zrangeGenericCommand(zrange_result_handler *handler,
             opt_withscores = 1;
         } else if (!strcasecmp(objectGetVal(c->argv[j]), "limit") && leftargs >= 2) {
             if ((getLongFromObjectOrReply(c, c->argv[j + 1], &opt_offset, NULL) != C_OK) ||
-                (getLongFromObjectOrReply(c, c->argv[j + 2], &opt_limit, NULL) != C_OK)) {
+                (getLongFromObjectOrReply(c, c->argv[j + 2], &opt_limit, NULL) != C_OK))
+            {
                 return;
             }
             j += 2;
@@ -3664,7 +3674,8 @@ void zrangeGenericCommand(zrange_result_handler *handler,
     case ZRANGE_RANK:
         /* Z[REV]RANGE, ZRANGESTORE [REV]RANGE */
         if ((getLongFromObjectOrReply(c, c->argv[minidx], &opt_start, NULL) != C_OK) ||
-            (getLongFromObjectOrReply(c, c->argv[maxidx], &opt_end, NULL) != C_OK)) {
+            (getLongFromObjectOrReply(c, c->argv[maxidx], &opt_end, NULL) != C_OK))
+        {
             return;
         }
         break;
@@ -4291,7 +4302,8 @@ void zrandmemberWithCountCommand(client *c, long l, int withscores) {
      * In this case we can simply get random elements from the zset and add
      * to the temporary set, trying to eventually get enough unique elements
      * to reach the specified count. */
-    else {
+    else
+    {
         /* Hashtable encoding (generic implementation) */
         unsigned long added = 0;
         hashtable *ht = hashtableCreate(&setHashtableType);

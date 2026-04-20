@@ -134,7 +134,8 @@ int geohashEncode(const GeoHashRange *long_range,
     hash->step = step;
 
     if (latitude < lat_range->min || latitude > lat_range->max || longitude < long_range->min ||
-        longitude > long_range->max) {
+        longitude > long_range->max)
+    {
         return 0;
     }
 

@@ -64,7 +64,8 @@ robj *setTypeCreate(sds value, size_t size_hint) {
  * the size hint. */
 void setTypeMaybeConvert(robj *set, size_t size_hint) {
     if ((set->encoding == OBJ_ENCODING_LISTPACK && size_hint > server.set_max_listpack_entries) ||
-        (set->encoding == OBJ_ENCODING_INTSET && size_hint > server.set_max_intset_entries)) {
+        (set->encoding == OBJ_ENCODING_INTSET && size_hint > server.set_max_intset_entries))
+    {
         setTypeConvertAndExpand(set, OBJ_ENCODING_HASHTABLE, size_hint, 1);
     }
 }
@@ -162,7 +163,8 @@ int setTypeAddAux(robj *set, char *str, size_t len, int64_t llval, int str_is_sd
         if (p == NULL) {
             /* Not found.  */
             if (lpLength(lp) < server.set_max_listpack_entries && len <= server.set_max_listpack_value &&
-                lpSafeToAdd(lp, len)) {
+                lpSafeToAdd(lp, len))
+            {
                 if (str == tmpbuf) {
                     /* This came in as integer so we can avoid parsing it again.
                      * TODO: Create and use lpFindInteger; don't go via string. */
@@ -201,7 +203,8 @@ int setTypeAddAux(robj *set, char *str, size_t len, int64_t llval, int str_is_sd
             }
             if (intsetLen((const intset *)objectGetVal(set)) < server.set_max_listpack_entries &&
                 len <= server.set_max_listpack_value && maxelelen <= server.set_max_listpack_value &&
-                lpSafeToAdd(NULL, totsize + len)) {
+                lpSafeToAdd(NULL, totsize + len))
+            {
                 /* In the "safe to add" check above we assumed all elements in
                  * the intset are of size maxelelen. This is an upper bound. */
                 setTypeConvertAndExpand(set, OBJ_ENCODING_LISTPACK, intsetLen(objectGetVal(set)) + 1, 1);
@@ -1161,7 +1164,8 @@ void srandmemberWithCountCommand(client *c) {
      * In this case we can simply get random elements from the set and add
      * to the temporary set, trying to eventually get enough unique elements
      * to reach the specified count. */
-    else {
+    else
+    {
         unsigned long added = 0;
         sds sdsele;
 
@@ -1483,7 +1487,8 @@ void sunionDiffGenericCommand(client *c, robj **setkeys, int setnum, robj *dstke
          * the hashtable is more efficient when find and compare than the listpack. The corresponding
          * time complexity are O(1) vs O(n). */
         if (!dstkey && dstset_encoding == OBJ_ENCODING_INTSET &&
-            (setobj->encoding == OBJ_ENCODING_LISTPACK || setobj->encoding == OBJ_ENCODING_HASHTABLE)) {
+            (setobj->encoding == OBJ_ENCODING_LISTPACK || setobj->encoding == OBJ_ENCODING_HASHTABLE))
+        {
             dstset_encoding = OBJ_ENCODING_HASHTABLE;
         }
         sets[j] = setobj;

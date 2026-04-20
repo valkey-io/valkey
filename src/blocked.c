@@ -265,7 +265,8 @@ int blockedClientMayTimeout(client *c) {
     if (c->bstate->btype == BLOCKED_LIST ||
         c->bstate->btype == BLOCKED_ZSET ||
         c->bstate->btype == BLOCKED_STREAM ||
-        c->bstate->btype == BLOCKED_WAIT) {
+        c->bstate->btype == BLOCKED_WAIT)
+    {
         return 1;
     }
     return 0;
@@ -345,7 +346,8 @@ void disconnectOrRedirectAllBlockedClients(void) {
                 /* if the client is read-only and blocked by a read command, we do not unblock it */
                 if (c->flag.readonly && !(c->lastcmd->flags & CMD_WRITE)) continue;
                 if (clientSupportStandAloneRedirect(c) && (c->bstate->btype == BLOCKED_LIST || c->bstate->btype == BLOCKED_ZSET ||
-                                                           c->bstate->btype == BLOCKED_STREAM || c->bstate->btype == BLOCKED_MODULE)) {
+                                                           c->bstate->btype == BLOCKED_STREAM || c->bstate->btype == BLOCKED_MODULE))
+                {
                     if (c->bstate->btype == BLOCKED_MODULE && !moduleClientIsBlockedOnKeys(c)) continue;
                     /* Client has redirect capability and blocked on keys */
                     addReplyErrorSds(c, sdscatprintf(sdsempty(), "-REDIRECT %s:%d", server.primary_host, server.primary_port));
@@ -646,7 +648,8 @@ static void handleClientsBlockedOnKey(readyList *rl) {
              * 3. In case of XREADGROUP call we will want to unblock on any change in object type
              *    or in case the key was deleted, since the group is no longer valid. */
             if ((o != NULL && (receiver->bstate->btype == getBlockedTypeByType(o->type))) ||
-                (o != NULL && (receiver->bstate->btype == BLOCKED_MODULE)) || (receiver->bstate->unblock_on_nokey)) {
+                (o != NULL && (receiver->bstate->btype == BLOCKED_MODULE)) || (receiver->bstate->unblock_on_nokey))
+            {
                 if (receiver->bstate->btype != BLOCKED_MODULE)
                     unblockClientOnKey(receiver, rl->key);
                 else

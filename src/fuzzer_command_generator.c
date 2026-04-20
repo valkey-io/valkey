@@ -526,7 +526,8 @@ void generateRandomSpecialValue(FuzzerCommand *cmd, ConfigEntry *entry, const ch
         appendArg(cmd, percentiles);
     } else if (strcasecmp(config_name, "rdma-bind") == 0 ||
                strcasecmp(config_name, "bind") == 0 ||
-               strcasecmp(config_name, "dir") == 0) {
+               strcasecmp(config_name, "dir") == 0)
+    {
         /* For these configs, use the current value as we don't want to change them */
         appendArg(cmd, sdsnew(entry->value));
     } else {
@@ -1431,7 +1432,8 @@ static void generateStringArgValue(FuzzerCommand *cmd, const char *argName, Comm
         appendArg(cmd, sdscatprintf(sdsempty(), "\"%s\"", serialized_values[rand() % 2]));
     } else if (strcmp(argName, "member") == 0 ||
                strcmp(argName, "member1") == 0 ||
-               strcmp(argName, "member2") == 0) {
+               strcmp(argName, "member2") == 0)
+    {
         appendArg(cmd, sdscatprintf(sdsempty(), "member:%d", rand() % 50));
     } else if (strcmp(argName, "host") == 0) {
         appendArg(cmd, sdscatprintf(sdsempty(), "host-%d.example.com", rand() % 5));
@@ -1487,13 +1489,15 @@ static void generateStringArgValue(FuzzerCommand *cmd, const char *argName, Comm
     } else if (strcmp(argName, "function-code") == 0) {
         appendArg(cmd, sdscatprintf(sdsempty(), "\"#!lua name=myfunc%d \nserver.register_function('test', function(keys, args) return args[1] end) \"", rand() % 5));
     } else if (strcmp(argName, "library-name") == 0 || strcmp(argName, "library-name-pattern") == 0 ||
-               strcmp(argName, "lib-name") == 0 || strcmp(argName, "libname") == 0) {
+               strcmp(argName, "lib-name") == 0 || strcmp(argName, "libname") == 0)
+    {
         appendArg(cmd, sdscatprintf(sdsempty(), "lib%d", rand() % 5));
     } else if (strcmp(argName, "libver") == 0 || strcmp(argName, "lib-ver") == 0) {
         appendArg(cmd, sdscatprintf(sdsempty(), "%d.%d.%d", rand() % 10, rand() % 10, rand() % 10));
     } else if (strcmp(argName, "node-id") == 0 || strcmp(argName, "nodename") == 0 ||
                strcmp(argName, "importing") == 0 || strcmp(argName, "migrating") == 0 ||
-               strcmp(argName, "node") == 0) {
+               strcmp(argName, "node") == 0)
+    {
         appendArg(cmd, sdscatprintf(sdsempty(), "%08x%08x%08x%08x%08x",
                                     rand(), rand(), rand(), rand(), rand()));
     } else if (strcmp(argName, "encoding") == 0) {
@@ -1510,7 +1514,8 @@ static void generateStringArgValue(FuzzerCommand *cmd, const char *argName, Comm
         appendArg(cmd, sdscatprintf(sdsempty(), "%08x%08x%08x%08x%08x",
                                     rand(), rand(), rand(), rand(), rand()));
     } else if (strcmp(argName, "last-id") == 0 || strcmp(argName, "lastid") == 0 ||
-               strcmp(argName, "max-deleted-id") == 0) {
+               strcmp(argName, "max-deleted-id") == 0)
+    {
         appendArg(cmd, sdscatprintf(sdsempty(), "%d-%d", rand() % 1000, rand() % 1000));
     } else if (strcmp(argName, "min-idle-time") == 0) {
         appendArg(cmd, sdscatprintf(sdsempty(), "%d", rand() % 10000));
@@ -1692,7 +1697,8 @@ static CommandEntry *handlePubSubCommandSelection(void) {
     if ((strcasecmp(selectedCommand->fullname, "UNSUBSCRIBE") == 0 && client_ctx->subscribe_type == 0) ||
         (strcasecmp(selectedCommand->fullname, "PUNSUBSCRIBE") == 0 && client_ctx->subscribe_type == 1) ||
         (strcasecmp(selectedCommand->fullname, "SUNSUBSCRIBE") == 0 && client_ctx->subscribe_type == 2) ||
-        (strcasecmp(selectedCommand->fullname, "RESET") == 0)) {
+        (strcasecmp(selectedCommand->fullname, "RESET") == 0))
+    {
         client_ctx->in_subscribe_mode = 0;
         client_ctx->subscribe_type = 0;
     }

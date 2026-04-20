@@ -2014,7 +2014,8 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
                         return NULL;
                     }
                 } else if (setTypeSize(o) < server.set_max_listpack_entries &&
-                           maxelelen <= server.set_max_listpack_value && lpSafeToAdd(NULL, sumelelen)) {
+                           maxelelen <= server.set_max_listpack_value && lpSafeToAdd(NULL, sumelelen))
+                {
                     /* We checked if it's safe to add one large element instead
                      * of many small ones. It's OK since lpSafeToAdd doesn't
                      * care about individual elements, only the total size. */
@@ -2031,7 +2032,8 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
              * to a listpack encoded set. */
             if (o->encoding == OBJ_ENCODING_LISTPACK) {
                 if (setTypeSize(o) < server.set_max_listpack_entries && elelen <= server.set_max_listpack_value &&
-                    lpSafeToAdd(objectGetVal(o), elelen)) {
+                    lpSafeToAdd(objectGetVal(o), elelen))
+                {
                     unsigned char *p = lpFirst(objectGetVal(o));
                     if (p && lpFind(objectGetVal(o), p, (unsigned char *)sdsele, elelen, 0)) {
                         rdbReportCorruptRDB("Duplicate set members detected");
@@ -2127,7 +2129,8 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
 
         /* Convert *after* loading, since sorted sets are not stored ordered. */
         if (zsetLength(o) <= server.zset_max_listpack_entries && maxelelen <= server.zset_max_listpack_value &&
-            lpSafeToAdd(NULL, totelelen)) {
+            lpSafeToAdd(NULL, totelelen))
+        {
             zsetConvert(o, OBJ_ENCODING_LISTPACK);
         }
     } else if (rdbtype == RDB_TYPE_HASH || rdbtype == RDB_TYPE_HASH_2) {
@@ -2185,7 +2188,8 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
             /* Convert to hash table if size threshold is exceeded */
             if (o->encoding != OBJ_ENCODING_HASHTABLE &&
                 (sdslen(field) > server.hash_max_listpack_value || sdslen(value) > server.hash_max_listpack_value ||
-                 !lpSafeToAdd(objectGetVal(o), sdslen(field) + sdslen(value)))) {
+                 !lpSafeToAdd(objectGetVal(o), sdslen(field) + sdslen(value))))
+            {
                 hashTypeConvert(o, OBJ_ENCODING_HASHTABLE);
                 entry *entry = entryCreate(field, value, EXPIRY_NONE);
                 sdsfree(field);
@@ -2252,7 +2256,8 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
             /* If this is a non-preamble RDB being loaded on the primary, and this
              * field is already expired relative to 'now', skip it. */
             if (iAmPrimary() && !(rdbflags & RDBFLAGS_AOF_PREAMBLE) && now != 0 &&
-                itemexpiry != EXPIRY_NONE && itemexpiry < now) {
+                itemexpiry != EXPIRY_NONE && itemexpiry < now)
+            {
                 /* Emit HDEL to replicas. */
                 if ((rdbflags & RDBFLAGS_FEED_REPL) && server.repl_backlog) {
                     robj keyobj, fieldobj;
@@ -2368,7 +2373,8 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
     } else if (rdbtype == RDB_TYPE_HASH_ZIPMAP || rdbtype == RDB_TYPE_LIST_ZIPLIST || rdbtype == RDB_TYPE_SET_INTSET ||
                rdbtype == RDB_TYPE_SET_LISTPACK || rdbtype == RDB_TYPE_ZSET_ZIPLIST ||
                rdbtype == RDB_TYPE_ZSET_LISTPACK || rdbtype == RDB_TYPE_HASH_ZIPLIST ||
-               rdbtype == RDB_TYPE_HASH_LISTPACK) {
+               rdbtype == RDB_TYPE_HASH_LISTPACK)
+    {
         size_t encoded_len;
         unsigned char *encoded = rdbGenericLoadStringObject(rdb, RDB_LOAD_PLAIN, &encoded_len);
         if (encoded == NULL) return NULL;
@@ -2588,7 +2594,8 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
             break;
         }
     } else if (rdbtype == RDB_TYPE_STREAM_LISTPACKS || rdbtype == RDB_TYPE_STREAM_LISTPACKS_2 ||
-               rdbtype == RDB_TYPE_STREAM_LISTPACKS_3) {
+               rdbtype == RDB_TYPE_STREAM_LISTPACKS_3)
+    {
         o = createStreamObject();
         stream *s = objectGetVal(o);
         uint64_t listpacks = rdbLoadLen(rdb, NULL);
@@ -3054,7 +3061,8 @@ void rdbLoadProgressCallback(rio *r, const void *buf, size_t len) {
     if (server.rdb_checksum) rioGenericUpdateChecksum(r, buf, len);
     if (server.loading_process_events_interval_bytes &&
         (r->processed_bytes + len) / server.loading_process_events_interval_bytes >
-            r->processed_bytes / server.loading_process_events_interval_bytes) {
+            r->processed_bytes / server.loading_process_events_interval_bytes)
+    {
         if (server.primary_host && server.repl_state == REPL_STATE_TRANSFER) replicationSendNewlineToPrimary();
         loadingAbsProgress(r->processed_bytes);
         processEventsWhileBlocked();
@@ -3085,7 +3093,8 @@ int rdbFunctionLoad(rio *rdb, int ver, functionsLibCtx *lib_ctx, int rdbflags, s
     if (lib_ctx) {
         sds library_name = NULL;
         if (!(library_name =
-                  functionsCreateWithLibraryCtx(final_payload, rdbflags & RDBFLAGS_ALLOW_DUP, &error, lib_ctx, 0))) {
+                  functionsCreateWithLibraryCtx(final_payload, rdbflags & RDBFLAGS_ALLOW_DUP, &error, lib_ctx, 0)))
+        {
             if (!error) {
                 error = sdsnew("Failed creating the library");
             }
@@ -3329,7 +3338,8 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
                  * which are the slot number, number of keys in slot and the number of volatile keys. */
                 if (sscanf(objectGetVal(auxval), "%i,%lu,%lu,%lu",
                            &slot_id, &slot_size, &expires_slot_size,
-                           &keys_with_volatile_items_slot_size) < 3) {
+                           &keys_with_volatile_items_slot_size) < 3)
+                {
                     decrRefCount(auxkey);
                     decrRefCount(auxval);
                     goto eoferr;
@@ -3889,7 +3899,8 @@ int rdbSaveToReplicasSockets(int req, int rdbver, rdbSaveInfo *rsi) {
             } else {
                 close(rdb_pipe_write); /* close write in parent so that it can detect the close on the child. */
                 if (aeCreateFileEvent(server.el, server.rdb_pipe_read, AE_READABLE, rdbPipeReadHandler, NULL) ==
-                    AE_ERR) {
+                    AE_ERR)
+                {
                     serverPanic("Unrecoverable error creating server.rdb_pipe_read file event.");
                 }
             }

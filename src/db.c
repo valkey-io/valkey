@@ -249,7 +249,8 @@ int getKeySlot(sds key) {
      * so we must always recompute the slot for commands coming from the primary or AOF.
      */
     if (server.current_client && server.current_client->slot >= 0 && server.current_client->flag.executing_command &&
-        !mustObeyClient(server.current_client)) {
+        !mustObeyClient(server.current_client))
+    {
         debugServerAssertWithInfo(server.current_client, NULL,
                                   (int)keyHashSlot(key, (int)sdslen(key)) == server.current_client->slot);
         return server.current_client->slot;
@@ -341,7 +342,8 @@ static void dbSetValue(serverDb *db, robj *key, robj **valref, int overwrite, vo
     }
 
     if ((old->refcount == 1 && old->encoding != OBJ_ENCODING_EMBSTR) &&
-        (val->refcount == 1 && val->encoding != OBJ_ENCODING_EMBSTR)) {
+        (val->refcount == 1 && val->encoding != OBJ_ENCODING_EMBSTR))
+    {
         /* Keep old object in the database. Just swap it's ptr, type and
          * encoding with the content of val. */
         int tmp_type = old->type;
@@ -2951,7 +2953,8 @@ int setGetKeys(struct serverCommand *cmd, robj **argv, int argc, getKeysResult *
     for (int i = 3; i < argc; i++) {
         char *arg = objectGetVal(argv[i]);
         if ((arg[0] == 'g' || arg[0] == 'G') && (arg[1] == 'e' || arg[1] == 'E') && (arg[2] == 't' || arg[2] == 'T') &&
-            arg[3] == '\0') {
+            arg[3] == '\0')
+        {
             keys[0].flags = CMD_KEY_RW | CMD_KEY_ACCESS | CMD_KEY_UPDATE;
             return 1;
         }

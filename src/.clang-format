@@ -8,7 +8,16 @@ PenaltyBreakFirstLessLess: 120
 PenaltyBreakString: 100
 PenaltyExcessCharacter: 100
 MaxEmptyLinesToKeep: 2
-BreakBeforeBraces: Attach
+BreakBeforeBraces: Custom
+BraceWrapping:
+  AfterControlStatement: MultiLine
+  AfterFunction: false
+  AfterStruct: false
+  AfterEnum: false
+  AfterUnion: false
+  BeforeElse: false
+  BeforeCatch: false
+  SplitEmptyFunction: false
 AllowShortCaseLabelsOnASingleLine: true
 AllowShortIfStatementsOnASingleLine: WithoutElse
 AllowShortLoopsOnASingleLine: true

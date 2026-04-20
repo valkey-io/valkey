@@ -227,7 +227,8 @@ void sortCommandGeneric(client *c, int readonly) {
             alpha = 1;
         } else if (!strcasecmp(objectGetVal(c->argv[j]), "limit") && leftargs >= 2) {
             if ((getLongFromObjectOrReply(c, c->argv[j + 1], &limit_start, NULL) != C_OK) ||
-                (getLongFromObjectOrReply(c, c->argv[j + 2], &limit_count, NULL) != C_OK)) {
+                (getLongFromObjectOrReply(c, c->argv[j + 2], &limit_count, NULL) != C_OK))
+            {
                 syntax_error++;
                 break;
             }
@@ -246,7 +247,8 @@ void sortCommandGeneric(client *c, int readonly) {
                  * unless we can make sure the keys formed by the pattern are in the same slot
                  * as the key to sort. */
                 if (server.cluster_enabled &&
-                    patternHashSlot(objectGetVal(sortby), sdslen(objectGetVal(sortby))) != getKeySlot(objectGetVal(c->argv[1]))) {
+                    patternHashSlot(objectGetVal(sortby), sdslen(objectGetVal(sortby))) != getKeySlot(objectGetVal(c->argv[1])))
+                {
                     addReplyError(c, "BY option of SORT denied in Cluster mode when "
                                      "keys formed by the pattern may be in different slots.");
                     syntax_error++;
@@ -267,7 +269,8 @@ void sortCommandGeneric(client *c, int readonly) {
              * as the key to sort. */
             if (server.cluster_enabled &&
                 !isReturnSubstPattern(objectGetVal(c->argv[j + 1])) &&
-                patternHashSlot(objectGetVal(c->argv[j + 1]), sdslen(objectGetVal(c->argv[j + 1]))) != getKeySlot(objectGetVal(c->argv[1]))) {
+                patternHashSlot(objectGetVal(c->argv[j + 1]), sdslen(objectGetVal(c->argv[j + 1]))) != getKeySlot(objectGetVal(c->argv[1])))
+            {
                 addReplyError(c, "GET option of SORT denied in Cluster mode when "
                                  "keys formed by the pattern may be in different slots.");
                 syntax_error++;

@@ -548,7 +548,8 @@ void clusterCommandSyncSlotsEstablish(client *c) {
     while (i < c->argc) {
         if (!strcasecmp(objectGetVal(c->argv[i]), "source")) {
             if (source_node || i + 1 >= c->argc ||
-                sdslen(objectGetVal(c->argv[i + 1])) != CLUSTER_NAMELEN) {
+                sdslen(objectGetVal(c->argv[i + 1])) != CLUSTER_NAMELEN)
+            {
                 addReplyErrorObject(c, shared.syntaxerr);
                 goto cleanup;
             }
@@ -576,7 +577,8 @@ void clusterCommandSyncSlotsEstablish(client *c) {
         }
         if (!strcasecmp(objectGetVal(c->argv[i]), "name")) {
             if (name || i + 1 >= c->argc ||
-                sdslen(objectGetVal(c->argv[i + 1])) != CLUSTER_NAMELEN) {
+                sdslen(objectGetVal(c->argv[i + 1])) != CLUSTER_NAMELEN)
+            {
                 addReplyErrorObject(c, shared.syntaxerr);
                 goto cleanup;
             }
@@ -737,7 +739,8 @@ void clusterCommandSyncSlotsFinish(client *c) {
         }
         if (!strcasecmp(objectGetVal(c->argv[i]), "name")) {
             if (name || i + 1 >= c->argc ||
-                sdslen(objectGetVal(c->argv[i + 1])) != CLUSTER_NAMELEN) {
+                sdslen(objectGetVal(c->argv[i + 1])) != CLUSTER_NAMELEN)
+            {
                 addReplyErrorObject(c, shared.syntaxerr);
                 return;
             }
@@ -1196,7 +1199,8 @@ void clusterCommandMigrateSlots(client *c) {
         }
 
         if (curr_index + 1 >= c->argc ||
-            strcasecmp(objectGetVal(c->argv[curr_index]), "node")) {
+            strcasecmp(objectGetVal(c->argv[curr_index]), "node"))
+        {
             addReplyErrorObject(c, shared.syntaxerr);
             goto cleanup;
         }
@@ -1277,7 +1281,8 @@ void clusterCommandCancelSlotMigrations(client *c) {
     while ((ln = listNext(&li)) != NULL) {
         slotMigrationJob *job = ln->value;
         if (!isSlotMigrationJobInProgress(job) ||
-            job->type == SLOT_MIGRATION_IMPORT) {
+            job->type == SLOT_MIGRATION_IMPORT)
+        {
             continue;
         }
         finishSlotMigrationJob(job, SLOT_MIGRATION_JOB_CANCELLED, NULL);
@@ -1311,7 +1316,8 @@ int connectSlotExportJob(slotMigrationJob *job) {
 
     job->conn = connCreate(connTypeOfReplication());
     if (connConnect(job->conn, n->ip, port, server.bind_source_addr,
-                    0, slotExportConnectHandler) == C_ERR) {
+                    0, slotExportConnectHandler) == C_ERR)
+    {
         return C_ERR;
     }
 
@@ -1444,7 +1450,8 @@ int slotExportTryDoPause(slotMigrationJob *job) {
 
     if (server.debug_slot_migration_prevent_pause ||
         (server.slot_migration_max_failover_repl_bytes >= 0 &&
-         job->client->reply_bytes > (size_t)server.slot_migration_max_failover_repl_bytes)) {
+         job->client->reply_bytes > (size_t)server.slot_migration_max_failover_repl_bytes))
+    {
         return C_ERR;
     }
     serverLog(LL_NOTICE,
@@ -1468,7 +1475,8 @@ void clusterCommandSyncSlotsRequestPause(client *c) {
     serverAssert(isSlotMigrationJobInProgress(c->slot_migration_job));
     /* Child process may not have closed yet, so SNAPSHOTTING is okay here */
     if (c->slot_migration_job->state != SLOT_EXPORT_STREAMING &&
-        c->slot_migration_job->state != SLOT_EXPORT_SNAPSHOTTING) {
+        c->slot_migration_job->state != SLOT_EXPORT_SNAPSHOTTING)
+    {
         serverLog(LL_WARNING,
                   "Received CLUSTER SYNCSLOTS REQUEST-PAUSE for slot migration "
                   "%s, but the client was not streaming incremental updates. "
@@ -1902,7 +1910,8 @@ void slotMigrationJobReadEstablishResponse(connection *conn) {
     }
     if (sdslen(job->response_buf) < 2 ||
         job->response_buf[sdslen(job->response_buf) - 2] != '\r' ||
-        job->response_buf[sdslen(job->response_buf) - 1] != '\n') {
+        job->response_buf[sdslen(job->response_buf) - 1] != '\n')
+    {
         if (sdsavail(job->response_buf) == 0) {
             /* We filled up the buffer, and we still have no response. Only
              * choice is to stop the migration. */
@@ -2448,7 +2457,8 @@ void clusterCleanupSlotMigrationLog(size_t max_len) {
     listIter li;
     listRewindTail(server.cluster->slot_migration_jobs, &li);
     while (server.cluster->slot_migration_jobs->len > max_len &&
-           (ln = listNext(&li)) != NULL) {
+           (ln = listNext(&li)) != NULL)
+    {
         slotMigrationJob *job = ln->value;
         if (isSlotMigrationJobFinished(job)) {
             listDelNode(server.cluster->slot_migration_jobs, ln);
@@ -2488,7 +2498,8 @@ void clusterSlotMigrationCron(void) {
          * connection timeout, since we will use pause timeout. */
         if (isSlotMigrationJobInProgress(job) &&
             job->state != SLOT_EXPORT_FAILOVER_GRANTED &&
-            job->state != SLOT_IMPORT_OCCURRING_ON_PRIMARY) {
+            job->state != SLOT_IMPORT_OCCURRING_ON_PRIMARY)
+        {
             serverAssert(job->type == SLOT_MIGRATION_EXPORT || job->client);
             /* For imports, last interaction will be set to the last
              * incoming command, as replicated clients don't set
@@ -2500,7 +2511,8 @@ void clusterSlotMigrationCron(void) {
                                           : job->client->last_interaction;
 
             if (last_interaction &&
-                (server.unixtime - last_interaction > server.repl_timeout)) {
+                (server.unixtime - last_interaction > server.repl_timeout))
+            {
                 serverLog(LL_WARNING,
                           "Timing out slot migration %s "
                           "after not receiving ack for too long",
@@ -2516,7 +2528,8 @@ void clusterSlotMigrationCron(void) {
 
         if (isSlotMigrationJobInProgress(job) &&
             job->state != SLOT_EXPORT_FAILOVER_GRANTED &&
-            canSlotMigrationJobSendAck(job)) {
+            canSlotMigrationJobSendAck(job))
+        {
             /* For slot exports, the timer is refreshed on any interaction, so we
              * don't need to send an ACK if we wrote this cron loop already. */
             bool timer_already_refreshed = (job->type != SLOT_MIGRATION_IMPORT && job->client->flag.pending_write);
@@ -2619,7 +2632,8 @@ void clusterCommandSyncSlots(client *c) {
         return;
     }
     if (c->slot_migration_job &&
-        isSlotMigrationJobInProgress(c->slot_migration_job)) {
+        isSlotMigrationJobInProgress(c->slot_migration_job))
+    {
         serverLog(LL_WARNING, "Received unknown SYNCSLOTS subcommand from "
                               "slot migration %s. Failing the migration.",
                   c->slot_migration_job->description);

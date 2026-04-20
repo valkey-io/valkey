@@ -814,7 +814,8 @@ int clusterLoadConfig(char *filename) {
             int field_found = 0;
             for (unsigned j = 0; j < numElements(auxFieldHandlers); j++) {
                 if (sdslen(field_argv[0]) != strlen(auxFieldHandlers[j].field) ||
-                    memcmp(field_argv[0], auxFieldHandlers[j].field, sdslen(field_argv[0])) != 0) {
+                    memcmp(field_argv[0], auxFieldHandlers[j].field, sdslen(field_argv[0])) != 0)
+                {
                     continue;
                 }
                 field_found = 1;
@@ -928,7 +929,8 @@ int clusterLoadConfig(char *filename) {
                 memcpy(n->shard_id, primary->shard_id, CLUSTER_NAMELEN);
                 clusterAddNodeToShard(primary->shard_id, n);
             } else if (clusterGetNodesInMyShard(primary) != NULL &&
-                       memcmp(primary->shard_id, n->shard_id, CLUSTER_NAMELEN) != 0) {
+                       memcmp(primary->shard_id, n->shard_id, CLUSTER_NAMELEN) != 0)
+            {
                 /* If the primary has been added to a shard and this replica has
                  * a different shard id stored in nodes.conf, update it to match
                  * the primary instead of aborting the startup. */
@@ -1370,7 +1372,8 @@ static void updateShardId(clusterNode *node, const char *shard_id) {
      * eventually resolve, if the primary crashes beforehand, it will enter a
      * crash-restart loop due to the mismatch in its nodes.conf. */
     if (shard_id && nodeIsReplica(node) &&
-        memcmp(clusterNodeGetPrimary(node)->shard_id, shard_id, CLUSTER_NAMELEN) != 0) {
+        memcmp(clusterNodeGetPrimary(node)->shard_id, shard_id, CLUSTER_NAMELEN) != 0)
+    {
         serverLog(
             LL_NOTICE,
             "Shard id %.40s update request for node id %.40s diverges from existing primary shard id %.40s, rejecting!",
@@ -1576,7 +1579,8 @@ void clusterAutoFailoverOnShutdown(void) {
         }
         if (replica->repl_data->repl_state == REPLICA_STATE_ONLINE &&
             replica->repl_data->repl_ack_off == server.primary_repl_offset &&
-            replica->repl_data->replica_nodeid && sdslen(replica->repl_data->replica_nodeid) == CLUSTER_NAMELEN) {
+            replica->repl_data->replica_nodeid && sdslen(replica->repl_data->replica_nodeid) == CLUSTER_NAMELEN)
+        {
             best_replica = replica;
         }
     }
@@ -2619,7 +2623,8 @@ void clearNodeFailureIfNeeded(clusterNode *node) {
      * 2) It is yet serving slots from our point of view (not failed over).
      * Apparently no one is going to fix these slots, clear the FAIL flag. */
     if (clusterNodeIsVotingPrimary(node) &&
-        (now - node->fail_time) > (server.cluster_node_timeout * CLUSTER_FAIL_UNDO_TIME_MULT)) {
+        (now - node->fail_time) > (server.cluster_node_timeout * CLUSTER_FAIL_UNDO_TIME_MULT))
+    {
         serverLog(
             LL_NOTICE,
             "Clear FAIL state for node %.40s (%s): is reachable again and nobody is serving its slots after some time.",
@@ -2819,7 +2824,8 @@ void clusterProcessGossipSection(clusterMsg *hdr, clusterLink *link) {
             if (!(flags & (CLUSTER_NODE_FAIL | CLUSTER_NODE_PFAIL)) &&
                 nodeInNormalState(node) &&
                 node->ping_sent == 0 &&
-                clusterNodeFailureReportsCount(node) == 0) {
+                clusterNodeFailureReportsCount(node) == 0)
+            {
                 mstime_t pongtime = ntohl(g->pong_received);
                 pongtime *= 1000; /* Convert back to milliseconds. */
 
@@ -2840,7 +2846,8 @@ void clusterProcessGossipSection(clusterMsg *hdr, clusterLink *link) {
             if (node->flags & (CLUSTER_NODE_FAIL | CLUSTER_NODE_PFAIL) && !(flags & CLUSTER_NODE_NOADDR) &&
                 !(flags & (CLUSTER_NODE_FAIL | CLUSTER_NODE_PFAIL)) &&
                 (strcasecmp(node->ip, g->ip) || node->tls_port != msg_tls_port ||
-                 node->tcp_port != msg_tcp_port || node->cport != ntohs(g->cport))) {
+                 node->tcp_port != msg_tcp_port || node->cport != ntohs(g->cport)))
+            {
                 if (node->link) freeClusterLink(node->link);
                 memcpy(node->ip, g->ip, NET_IP_STR_LEN);
                 node->tcp_port = msg_tcp_port;
@@ -3069,7 +3076,8 @@ void clusterUpdateSlotsConfigWith(clusterNode *sender, uint64_t senderConfigEpoc
              * epoch. */
             if (isSlotUnclaimed(j) ||
                 server.cluster->slots[j]->configEpoch < senderConfigEpoch ||
-                clusterSlotFailoverGranted(j)) {
+                clusterSlotFailoverGranted(j))
+            {
                 if (!isSlotUnclaimed(j) && !areInSameShard(server.cluster->slots[j], sender)) {
                     if (first_migrated_slot == -1) {
                         /* Delay-initialize the range of migrated slots. */
@@ -3125,7 +3133,8 @@ void clusterUpdateSlotsConfigWith(clusterNode *sender, uint64_t senderConfigEpoc
                 /* Handle the case where we are importing this slot and the ownership changes */
                 clusterNode *in = getImportingSlotSource(j);
                 if (in != NULL &&
-                    in != sender) {
+                    in != sender)
+                {
                     /* Update importing_slots_from to point to the sender, if it is in the
                      * same shard as the previous slot owner */
                     if (areInSameShard(sender, in)) {
@@ -3169,7 +3178,8 @@ void clusterUpdateSlotsConfigWith(clusterNode *sender, uint64_t senderConfigEpoc
             if (mn != NULL && mn != sender &&
                 (mn->configEpoch < senderConfigEpoch ||
                  nodeIsReplica(mn)) &&
-                areInSameShard(mn, sender)) {
+                areInSameShard(mn, sender))
+            {
                 serverLog(LL_VERBOSE,
                           "Failover occurred in migration target."
                           " Slot %d is now being migrated to node %.40s (%s) in shard %.40s.",
@@ -3239,7 +3249,8 @@ void clusterUpdateSlotsConfigWith(clusterNode *sender, uint64_t senderConfigEpoc
      * the new primary if my current config epoch is lower than the
      * sender's. */
     if (!new_primary && myself->replicaof != sender && sender_slots == 0 && myself->numslots == 0 &&
-        nodeEpoch(myself) < senderConfigEpoch && are_in_same_shard) {
+        nodeEpoch(myself) < senderConfigEpoch && are_in_same_shard)
+    {
         new_primary = sender;
     }
 
@@ -3597,7 +3608,8 @@ static void clusterProcessPublishPacket(clusterMsgDataPublish *publish_data, uin
     /* Don't bother creating useless objects if there are no
      * Pub/Sub subscribers. */
     if ((type == CLUSTERMSG_TYPE_PUBLISH && serverPubsubSubscriptionCount() > 0) ||
-        (type == CLUSTERMSG_TYPE_PUBLISHSHARD && serverPubsubShardSubscriptionCount() > 0)) {
+        (type == CLUSTERMSG_TYPE_PUBLISHSHARD && serverPubsubShardSubscriptionCount() > 0))
+    {
         channel_len = ntohl(publish_data->channel_len);
         message_len = ntohl(publish_data->message_len);
         channel = createStringObject((char *)publish_data->bulk_data, channel_len);
@@ -3763,7 +3775,8 @@ int clusterIsValidPacket(clusterLink *link) {
         explen +=
             sizeof(clusterMsgDataPublish) - 8 + ntohl(publish_data->channel_len) + ntohl(publish_data->message_len);
     } else if (type == CLUSTERMSG_TYPE_FAILOVER_AUTH_REQUEST || type == CLUSTERMSG_TYPE_FAILOVER_AUTH_ACK ||
-               type == CLUSTERMSG_TYPE_MFSTART) {
+               type == CLUSTERMSG_TYPE_MFSTART)
+    {
         explen = sizeof(clusterMsg) - sizeof(union clusterMsgData);
     } else if (type == CLUSTERMSG_TYPE_UPDATE) {
         explen = sizeof(clusterMsg) - sizeof(union clusterMsgData);
@@ -3817,7 +3830,8 @@ int clusterProcessPacket(clusterLink *link) {
         clusterMsgHeader *hdr = (clusterMsgHeader *)link->rcvbuf;
         uint16_t type = ntohs(hdr->type);
         if (server.debug_cluster_close_link_on_packet_drop &&
-            (type == server.cluster_drop_packet_filter || server.cluster_drop_packet_filter == -2)) {
+            (type == server.cluster_drop_packet_filter || server.cluster_drop_packet_filter == -2))
+        {
             freeClusterLink(link);
             serverLog(LL_WARNING, "Closing link for matching packet type %s", clusterGetMessageTypeString(type));
             return 0;
@@ -3915,7 +3929,8 @@ int clusterProcessPacket(clusterLink *link) {
             clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_FSYNC_CONFIG);
 
             if (server.cluster->failover_auth_time && server.cluster->failover_auth_sent &&
-                sender->configEpoch >= server.cluster->failover_auth_epoch) {
+                sender->configEpoch >= server.cluster->failover_auth_epoch)
+            {
                 /* Another node has claimed an epoch greater than or equal to ours.
                  * If we have an ongoing election, reset it because we cannot win
                  * with an epoch smaller than or equal to the incoming claim. This
@@ -3938,7 +3953,8 @@ int clusterProcessPacket(clusterLink *link) {
         /* If we are a replica performing a manual failover and our primary
          * sent its offset while already paused, populate the MF state. */
         if (server.cluster->mf_end && nodeIsReplica(myself) && myself->replicaof == sender &&
-            msg->mflags[0] & CLUSTERMSG_FLAG0_PAUSED && server.cluster->mf_primary_offset == -1) {
+            msg->mflags[0] & CLUSTERMSG_FLAG0_PAUSED && server.cluster->mf_primary_offset == -1)
+        {
             server.cluster->mf_primary_offset = sender->repl_offset;
             clusterDoBeforeSleep(CLUSTER_TODO_HANDLE_MANUALFAILOVER);
             serverLog(LL_NOTICE,
@@ -4138,7 +4154,8 @@ int clusterProcessPacket(clusterLink *link) {
 
         /* Update the node address if it changed. */
         if (sender && type == CLUSTERMSG_TYPE_PING && !nodeInHandshake(sender) &&
-            nodeUpdateAddressIfNeeded(sender, link, msg)) {
+            nodeUpdateAddressIfNeeded(sender, link, msg))
+        {
             clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_UPDATE_STATE);
         }
 
@@ -4182,7 +4199,8 @@ int clusterProcessPacket(clusterLink *link) {
                     if (sender_claimed_primary && areInSameShard(sender_claimed_primary, sender)) {
                         /* `sender` was a primary and was in the same shard as its new primary */
                         if (nodeEpoch(sender) > sender_claimed_config_epoch ||
-                            nodeEpoch(sender_claimed_primary) > sender_claimed_config_epoch) {
+                            nodeEpoch(sender_claimed_primary) > sender_claimed_config_epoch)
+                        {
                             serverLog(LL_NOTICE,
                                       "Ignore stale message from %.40s (%s) in shard %.40s;"
                                       " gossip config epoch: %llu, current config epoch: %llu",
@@ -4311,7 +4329,8 @@ int clusterProcessPacket(clusterLink *link) {
          * this ASAP to avoid other computational expensive checks later.*/
 
         if (sender && sender_claims_to_be_primary &&
-            (sender_last_reported_as_replica || memcmp(sender->slots, msg->myslots, sizeof(msg->myslots)))) {
+            (sender_last_reported_as_replica || memcmp(sender->slots, msg->myslots, sizeof(msg->myslots))))
+        {
             /* Make sure CLUSTER_NODE_PRIMARY has already been set by now on sender */
             serverAssert(nodeIsPrimary(sender));
 
@@ -4372,7 +4391,8 @@ int clusterProcessPacket(clusterLink *link) {
         /* If our config epoch collides with the sender's try to fix
          * the problem. */
         if (sender && nodeIsPrimary(myself) && nodeIsPrimary(sender) &&
-            sender_claimed_config_epoch == myself->configEpoch) {
+            sender_claimed_config_epoch == myself->configEpoch)
+        {
             clusterHandleConfigEpochCollision(sender);
         }
 
@@ -4909,7 +4929,8 @@ void clusterSendPing(clusterLink *link, int type) {
          * 4) Disconnected nodes if they don't have configured slots.
          */
         if (this->flags & (CLUSTER_NODE_HANDSHAKE | CLUSTER_NODE_NOADDR) ||
-            (this->link == NULL && this->numslots == 0)) {
+            (this->link == NULL && this->numslots == 0))
+        {
             continue;
         }
 
@@ -5409,7 +5430,8 @@ int clusterGetReplicaRank(void) {
         if (primary->replicas[j]->repl_offset > myoffset) {
             rank++;
         } else if (primary->replicas[j]->repl_offset == myoffset &&
-                   memcmp(primary->replicas[j]->name, myself->name, CLUSTER_NAMELEN) < 0) {
+                   memcmp(primary->replicas[j]->name, myself->name, CLUSTER_NAMELEN) < 0)
+        {
             rank++;
         }
     }
@@ -5509,7 +5531,8 @@ void clusterLogCantFailover(int reason) {
 
     /* Special case: If the failure reason is due to data age, log 10 times less frequently. */
     if (reason == server.cluster->cant_failover_reason && reason == CLUSTER_CANT_FAILOVER_DATA_AGE &&
-        now - lastlog_time < 10 * CLUSTER_CANT_FAILOVER_RELOG_PERIOD) {
+        now - lastlog_time < 10 * CLUSTER_CANT_FAILOVER_RELOG_PERIOD)
+    {
         return;
     }
 
@@ -5628,7 +5651,8 @@ void clusterHandleReplicaFailover(void) {
      *    not a manual failover. */
     if (clusterNodeIsPrimary(myself) || myself->replicaof == NULL ||
         (!nodeFailed(myself->replicaof) && !manual_failover) ||
-        (server.cluster_replica_no_failover && !manual_failover)) {
+        (server.cluster_replica_no_failover && !manual_failover))
+    {
         /* There are no reasons to failover, so we set the reason why we
          * are returning without failing over to NONE. */
         server.cluster->cant_failover_reason = CLUSTER_CANT_FAILOVER_NONE;
@@ -5654,7 +5678,8 @@ void clusterHandleReplicaFailover(void) {
      * Check bypassed for manual failovers. */
     if (server.cluster_replica_validity_factor &&
         data_age > (((mstime_t)server.repl_ping_replica_period * 1000) +
-                    (server.cluster_node_timeout * server.cluster_replica_validity_factor))) {
+                    (server.cluster_node_timeout * server.cluster_replica_validity_factor)))
+    {
         if (!manual_failover) {
             clusterLogCantFailover(CLUSTER_CANT_FAILOVER_DATA_AGE);
             return;
@@ -5736,7 +5761,8 @@ void clusterHandleReplicaFailover(void) {
      *
      * Not performed if this is a manual failover. */
     if (server.cluster->failover_auth_sent == 0 && server.cluster->mf_end == 0 &&
-        server.cluster->failover_auth_time != now) {
+        server.cluster->failover_auth_time != now)
+    {
         int newrank = clusterGetReplicaRank();
         if (newrank != server.cluster->failover_auth_rank) {
             long long added_delay = (newrank - server.cluster->failover_auth_rank) * (delay * 2);
@@ -5907,7 +5933,8 @@ void clusterHandleReplicaMigration(int max_replicas) {
      * the natural replicas of this instance to advertise their switch from
      * the old primary to the new one. */
     if (target && candidate == myself && (mstime() - target->orphaned_time) > CLUSTER_REPLICA_MIGRATION_DELAY &&
-        !(server.cluster_module_flags & CLUSTER_MODULE_FLAG_NO_FAILOVER)) {
+        !(server.cluster_module_flags & CLUSTER_MODULE_FLAG_NO_FAILOVER))
+    {
         serverLog(LL_NOTICE, "Migrating to orphaned primary %.40s (%s) in shard %.40s", target->name,
                   humanNodename(target), target->shard_id);
         /* We are migrating to a different shard that has a completely different
@@ -6054,7 +6081,8 @@ static int clusterNodeCronHandleReconnect(clusterNode *node, mstime_t now, long 
     if (nodeInNormalState(node) && node->link != NULL && node->inbound_link == NULL &&
         now - node->inbound_link_freed_time > getHandshakeTimeout() &&
         now - node->meet_sent > getHandshakeTimeout() &&
-        nodeSupportsMultiMeet(node)) {
+        nodeSupportsMultiMeet(node))
+    {
         /* Node has an outbound link, but no inbound link for more than the handshake timeout.
          * This probably means this node does not know us yet, whereas we know it.
          * So we send it a MEET packet to do a handshake with it and correct the inconsistent cluster view.
@@ -6082,7 +6110,8 @@ static int clusterNodeCronHandleReconnect(clusterNode *node, mstime_t now, long 
         link->conn = connCreate(connTypeOfCluster());
         connSetPrivateData(link->conn, link);
         if (connConnect(link->conn, node->ip, node->cport, server.bind_source_addr, 0, clusterLinkConnectHandler) ==
-            C_ERR) {
+            C_ERR)
+        {
             /* We got a synchronous error from connect before
              * clusterSendPing() had a chance to be called.
              * If node->ping_sent is zero, failure detection can't work,
@@ -6241,7 +6270,8 @@ void clusterCron(void) {
             /* and we are waiting for the pong more than timeout/2 */
             ping_delay > server.cluster_node_timeout / 2 &&
             /* and in such interval we are not seeing any traffic at all. */
-            data_delay > server.cluster_node_timeout / 2) {
+            data_delay > server.cluster_node_timeout / 2)
+        {
             /* Disconnect the link, it will be reconnected automatically. */
             freeClusterLink(node->link);
         }
@@ -6260,7 +6290,8 @@ void clusterCron(void) {
         /* If we are a primary and one of the replicas requested a manual
          * failover, ping it continuously. */
         if (server.cluster->mf_end && clusterNodeIsPrimary(myself) && server.cluster->mf_replica == node &&
-            node->link) {
+            node->link)
+        {
             clusterSendPing(node->link, CLUSTERMSG_TYPE_PING);
             continue;
         }
@@ -6350,7 +6381,8 @@ void clusterBeforeSleep(void) {
          * is likely that we can start the election or there is already
          * the quorum from primaries in order to react fast. */
         if (nodeIsReplica(myself) &&
-            !(server.cluster_module_flags & CLUSTER_MODULE_FLAG_NO_FAILOVER)) {
+            !(server.cluster_module_flags & CLUSTER_MODULE_FLAG_NO_FAILOVER))
+        {
             clusterHandleReplicaFailover();
         }
     }
@@ -6611,7 +6643,8 @@ void clusterUpdateState(void) {
      * to not count the DB loading time. */
     if (first_call_time == 0) first_call_time = mstime();
     if (clusterNodeIsPrimary(myself) && server.cluster->state == CLUSTER_FAIL &&
-        mstime() - first_call_time < CLUSTER_WRITABLE_DELAY) {
+        mstime() - first_call_time < CLUSTER_WRITABLE_DELAY)
+    {
         server.cluster->safe_to_join = 0;
         return;
     } else {
@@ -7976,7 +8009,8 @@ int clusterCommandSpecial(client *c) {
         clusterDoBeforeSleep(CLUSTER_TODO_UPDATE_STATE | CLUSTER_TODO_SAVE_CONFIG);
         addReply(c, shared.ok);
     } else if ((!strcasecmp(objectGetVal(c->argv[1]), "addslotsrange") || !strcasecmp(objectGetVal(c->argv[1]), "delslotsrange")) &&
-               c->argc >= 4) {
+               c->argc >= 4)
+    {
         if (c->argc % 2 == 1) {
             addReplyErrorArity(c);
             return 1;

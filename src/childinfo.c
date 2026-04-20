@@ -84,7 +84,8 @@ void sendChildInfoGeneric(childInfoType info_type, size_t keys, size_t repl_outp
 
     monotime now = getMonotonicUs();
     if (info_type != CHILD_INFO_TYPE_CURRENT_INFO || !cow_updated ||
-        now - cow_updated > cow_update_cost * CHILD_COW_DUTY_CYCLE) {
+        now - cow_updated > cow_update_cost * CHILD_COW_DUTY_CYCLE)
+    {
         cow = zmalloc_get_private_dirty(-1);
         cow_updated = getMonotonicUs();
         cow_update_cost = cow_updated - now;

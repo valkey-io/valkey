@@ -629,7 +629,8 @@ int redis_check_rdb(char *rdbfilename, FILE *fp) {
     rdbver = atoi(buf + 6);
     if (rdbver < 1 ||
         (rdbver < RDB_FOREIGN_VERSION_MIN && !is_redis_magic) ||
-        (rdbver > RDB_FOREIGN_VERSION_MAX && !is_valkey_magic)) {
+        (rdbver > RDB_FOREIGN_VERSION_MAX && !is_valkey_magic))
+    {
         rdbCheckError("Can't handle RDB format version %d", rdbver);
         goto err;
     } else if (rdbver > RDB_VERSION) {
@@ -767,7 +768,8 @@ int redis_check_rdb(char *rdbfilename, FILE *fp) {
             continue;
         } else if (rdbIsForeignVersion(rdbver) &&
                    type >= RDB_FOREIGN_TYPE_MIN &&
-                   type <= RDB_FOREIGN_TYPE_MAX) {
+                   type <= RDB_FOREIGN_TYPE_MAX)
+        {
             rdbCheckError("Unknown object type %d in RDB file with foreign version %d", type, rdbver);
             goto err;
         } else if (!rdbIsObjectType(type)) {

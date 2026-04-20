@@ -138,7 +138,8 @@ int checkPrefixCollisionsOrReply(client *c, robj **prefixes, size_t numprefix) {
         /* Check input has no overlap with itself. */
         for (size_t j = i + 1; j < numprefix; j++) {
             if (stringCheckPrefix(objectGetVal(prefixes[i]), sdslen(objectGetVal(prefixes[i])), objectGetVal(prefixes[j]),
-                                  sdslen(objectGetVal(prefixes[j])))) {
+                                  sdslen(objectGetVal(prefixes[j]))))
+            {
                 addReplyErrorFormat(c,
                                     "Prefix '%s' overlaps with another provided prefix '%s'. "
                                     "Prefixes for a single client must not overlap.",

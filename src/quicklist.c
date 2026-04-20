@@ -225,7 +225,8 @@ static int __quicklistCompressNode(quicklistNode *node) {
 
     /* Cancel if compression fails or doesn't compress small enough */
     if (((lzf->sz = lzf_compress(node->entry, node->sz, lzf->compressed, node->sz)) == 0) ||
-        lzf->sz + MIN_COMPRESS_IMPROVE >= node->sz) {
+        lzf->sz + MIN_COMPRESS_IMPROVE >= node->sz)
+    {
         /* lzf_compress aborts/rejects compression if value not compressible. */
         zfree(lzf);
         return 0;
@@ -730,7 +731,8 @@ void quicklistReplaceEntry(quicklistIter *iter, quicklistEntry *entry, void *dat
     unsigned char *newentry;
 
     if (likely(!QL_NODE_IS_PLAIN(entry->node) && !isLargeElement(sz, quicklist->fill) &&
-               (newentry = lpReplace(entry->node->entry, &entry->zi, data, sz)) != NULL)) {
+               (newentry = lpReplace(entry->node->entry, &entry->zi, data, sz)) != NULL))
+    {
         entry->node->entry = newentry;
         quicklistNodeUpdateSz(entry->node);
         /* quicklistNext() and quicklistGetIteratorEntryAtIdx() provide an uncompressed node */

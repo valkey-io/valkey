@@ -187,7 +187,8 @@ size_t reqresAppendRequest(client *c) {
     if (!strcasecmp(cmd, "debug") || /* because of DEBUG SEGFAULT */
         !strcasecmp(cmd, "sync") || !strcasecmp(cmd, "psync") || !strcasecmp(cmd, "monitor") ||
         !strcasecmp(cmd, "subscribe") || !strcasecmp(cmd, "unsubscribe") || !strcasecmp(cmd, "ssubscribe") ||
-        !strcasecmp(cmd, "sunsubscribe") || !strcasecmp(cmd, "psubscribe") || !strcasecmp(cmd, "punsubscribe")) {
+        !strcasecmp(cmd, "sunsubscribe") || !strcasecmp(cmd, "psubscribe") || !strcasecmp(cmd, "punsubscribe"))
+    {
         return 0;
     }
 

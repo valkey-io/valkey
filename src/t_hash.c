@@ -938,7 +938,8 @@ void hincrbyCommand(client *c) {
 
     oldvalue = value;
     if ((incr < 0 && oldvalue < 0 && incr < (LLONG_MIN - oldvalue)) ||
-        (incr > 0 && oldvalue > 0 && incr > (LLONG_MAX - oldvalue))) {
+        (incr > 0 && oldvalue > 0 && incr > (LLONG_MAX - oldvalue)))
+    {
         addReplyError(c, "increment or decrement would overflow");
         return;
     }
@@ -1396,7 +1397,8 @@ void hsetexCommand(client *c) {
 
     /* Check NX/XX key-level conditions before creating a new object */
     if (((flags & ARGS_SET_NX) && o != NULL) ||
-        ((flags & ARGS_SET_XX) && o == NULL)) {
+        ((flags & ARGS_SET_XX) && o == NULL))
+    {
         addReply(c, shared.czero);
         return;
     }
@@ -1422,7 +1424,8 @@ void hsetexCommand(client *c) {
             /* Key exists: check fields normally */
             for (i = fields_index; i < c->argc; i += 2) {
                 if (((flags & ARGS_SET_FNX) && hashTypeExists(o, objectGetVal(c->argv[i]))) ||
-                    ((flags & ARGS_SET_FXX) && !hashTypeExists(o, objectGetVal(c->argv[i])))) {
+                    ((flags & ARGS_SET_FXX) && !hashTypeExists(o, objectGetVal(c->argv[i]))))
+                {
                     addReply(c, shared.czero);
                     return;
                 }
@@ -1462,7 +1465,8 @@ void hsetexCommand(client *c) {
             if (strcasecmp(objectGetVal(c->argv[i]), "NX") &&
                 strcasecmp(objectGetVal(c->argv[i]), "XX") &&
                 strcasecmp(objectGetVal(c->argv[i]), "FNX") &&
-                strcasecmp(objectGetVal(c->argv[i]), "FXX")) {
+                strcasecmp(objectGetVal(c->argv[i]), "FXX"))
+            {
                 /* Propagate as HSETEX Key Value PXAT millisecond-timestamp if there is
                  * EX/PX/EXAT flag. */
                 if (expire && !(flags & ARGS_PXAT) && c->argv[i + 1] == expire) {
@@ -2291,7 +2295,8 @@ void hrandfieldWithCountCommand(client *c, long l, int withvalues) {
      * In this case we can simply get random elements from the hash and add
      * to the temporary hash, trying to eventually get enough unique elements
      * to reach the specified count. */
-    else {
+    else
+    {
         /* Hashtable encoding (generic implementation) */
         unsigned long added = 0;
         listpackEntry field, value;

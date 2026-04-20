@@ -191,7 +191,8 @@ int extractDistanceOrReply(client *c, robj **argv, double *conversion, double *r
 int extractBoxOrReply(client *c, robj **argv, double *conversion, double *width, double *height) {
     double h, w;
     if ((getDoubleFromObjectOrReply(c, argv[0], &w, "need numeric width") != C_OK) ||
-        (getDoubleFromObjectOrReply(c, argv[1], &h, "need numeric height") != C_OK)) {
+        (getDoubleFromObjectOrReply(c, argv[1], &h, "need numeric height") != C_OK))
+    {
         return C_ERR;
     }
 
@@ -416,7 +417,8 @@ int membersOfAllNeighbors(robj *zobj, const GeoHashRadius *n, GeoShape *shape, g
          * elements. Skip every range which is the same as the one
          * processed previously. */
         if (last_processed && neighbors[i].bits == neighbors[last_processed].bits &&
-            neighbors[i].step == neighbors[last_processed].step) {
+            neighbors[i].step == neighbors[last_processed].step)
+        {
             if (debugmsg) D("Skipping processing of %d, same as previous\n", i);
             continue;
         }
@@ -602,12 +604,14 @@ void georadiusGeneric(client *c, int srcKeyIndex, int flags) {
                 }
                 i++;
             } else if (!strcasecmp(arg, "store") && (i + 1) < remaining && !(flags & RADIUS_NOSTORE) &&
-                       !(flags & GEOSEARCH)) {
+                       !(flags & GEOSEARCH))
+            {
                 storekey = c->argv[base_args + i + 1];
                 storedist = 0;
                 i++;
             } else if (!strcasecmp(arg, "storedist") && (i + 1) < remaining && !(flags & RADIUS_NOSTORE) &&
-                       !(flags & GEOSEARCH)) {
+                       !(flags & GEOSEARCH))
+            {
                 storekey = c->argv[base_args + i + 1];
                 storedist = 1;
                 i++;

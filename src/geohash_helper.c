@@ -357,7 +357,8 @@ int geohashGetDistanceIfInPolygon(double centroidLon, double centroidLat, double
         double *vertexA = vertices[i];
         double *vertexB = vertices[j];
         if (((vertexA[1] > point[1]) != (vertexB[1] > point[1])) &&
-            (point[0] < (vertexB[0] - vertexA[0]) * (point[1] - vertexA[1]) / (vertexB[1] - vertexA[1]) + vertexA[0])) {
+            (point[0] < (vertexB[0] - vertexA[0]) * (point[1] - vertexA[1]) / (vertexB[1] - vertexA[1]) + vertexA[0]))
+        {
             inside = !inside;
         }
     }

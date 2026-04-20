@@ -1801,7 +1801,8 @@ static int ACLCheckChannelAgainstList(list *reference, const char *channel, int 
         /* Channel patterns are matched literally against the channels in
          * the list. Regular channels perform pattern matching. */
         if ((is_pattern && !strcmp(pattern, channel)) ||
-            (!is_pattern && stringmatchlen(pattern, plen, channel, channellen, 0))) {
+            (!is_pattern && stringmatchlen(pattern, plen, channel, channellen, 0)))
+        {
             return ACL_OK;
         }
     }
@@ -2662,7 +2663,8 @@ static sds ACLLoadFromFile(const char *filename) {
             user *new_user = ACLGetUserByName(c->user->name, sdslen(c->user->name));
             if (new_user && user_channels) {
                 if (!raxFind(user_channels, (unsigned char *)(new_user->name), sdslen(new_user->name),
-                             (void **)&channels)) {
+                             (void **)&channels))
+                {
                     channels = getUpcomingChannelList(new_user, original);
                     raxInsert(user_channels, (unsigned char *)(new_user->name), sdslen(new_user->name), channels, NULL);
                 }
@@ -2920,7 +2922,8 @@ void addACLLogEntry(client *c, int reason, int context, int argpos, sds username
     le->cinfo = catClientInfoString(sdsempty(), realclient, 0);
 
     if (context == ACL_LOG_CTX_SCRIPT &&
-        strcmp(scriptGetRunningEngineName(), "LUA") == 0) {
+        strcmp(scriptGetRunningEngineName(), "LUA") == 0)
+    {
         /* For backward compatibility, we track that it's Lua using a special
          * lua ACL log context. Any other scripting language is just "script" in
          * the ACL log. */

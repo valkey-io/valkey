@@ -645,7 +645,8 @@ const void *hashtableObjectGetKey(const void *entry) {
 void hashtableObjectPrefetchValue(const void *entry) {
     const robj *obj = entry;
     if (obj->encoding != OBJ_ENCODING_EMBSTR &&
-        obj->encoding != OBJ_ENCODING_INT) {
+        obj->encoding != OBJ_ENCODING_INT)
+    {
         valkey_prefetch(objectGetVal(obj));
     }
 }
@@ -1017,7 +1018,8 @@ int clientsCronResizeOutputBuffer(client *c, mstime_t now_ms) {
      * it will start to shrink.
      */
     if (server.reply_buffer_peak_reset_time >= 0 &&
-        now_ms - c->buf_peak_last_reset_time >= server.reply_buffer_peak_reset_time) {
+        now_ms - c->buf_peak_last_reset_time >= server.reply_buffer_peak_reset_time)
+    {
         c->buf_peak = c->bufpos;
         c->buf_peak_last_reset_time = now_ms;
     }
@@ -1639,7 +1641,8 @@ long long serverCron(struct aeEventLoop *eventLoop, long long id, void *clientDa
              * CONFIG_BGSAVE_RETRY_DELAY seconds already elapsed. */
             if (server.dirty >= sp->changes && server.unixtime - server.lastsave > sp->seconds &&
                 (server.unixtime - server.lastbgsave_try > CONFIG_BGSAVE_RETRY_DELAY ||
-                 server.lastbgsave_status == C_OK)) {
+                 server.lastbgsave_status == C_OK))
+            {
                 serverLog(LL_NOTICE, "%d changes in %d seconds. Saving...", sp->changes, (int)sp->seconds);
                 rdbSaveInfo rsi, *rsiptr;
                 rsiptr = rdbPopulateSaveInfo(&rsi);
@@ -1650,7 +1653,8 @@ long long serverCron(struct aeEventLoop *eventLoop, long long id, void *clientDa
 
         /* Trigger an AOF rewrite if needed. */
         if (server.aof_state == AOF_ON && !hasActiveChildProcess() && server.aof_rewrite_perc &&
-            server.aof_current_size > server.aof_rewrite_min_size) {
+            server.aof_current_size > server.aof_rewrite_min_size)
+        {
             long long base = server.aof_rewrite_base_size ? server.aof_rewrite_base_size : 1;
             long long growth = (server.aof_current_size * 100 / base) - 100;
             if (growth >= server.aof_rewrite_perc && !aofRewriteLimited()) {
@@ -1675,7 +1679,8 @@ long long serverCron(struct aeEventLoop *eventLoop, long long id, void *clientDa
      * a higher frequency. */
     run_with_period(1000) {
         if ((server.aof_state == AOF_ON || server.aof_state == AOF_WAIT_REWRITE) &&
-            server.aof_last_write_status == C_ERR) {
+            server.aof_last_write_status == C_ERR)
+        {
             flushAppendOnlyFile(0);
         }
     }
@@ -1721,7 +1726,8 @@ long long serverCron(struct aeEventLoop *eventLoop, long long id, void *clientDa
      * make sure when refactoring this file to keep this order. This is useful
      * because we want to give priority to RDB savings for replication. */
     if (!hasActiveChildProcess() && server.rdb_bgsave_scheduled &&
-        (server.unixtime - server.lastbgsave_try > CONFIG_BGSAVE_RETRY_DELAY || server.lastbgsave_status == C_OK)) {
+        (server.unixtime - server.lastbgsave_try > CONFIG_BGSAVE_RETRY_DELAY || server.lastbgsave_status == C_OK))
+    {
         rdbSaveInfo rsi, *rsiptr;
         rsiptr = rdbPopulateSaveInfo(&rsi);
         if (rdbSaveBackground(REPLICA_REQ_NONE, server.rdb_filename, rsiptr, RDBFLAGS_NONE) == C_OK)
@@ -1731,7 +1737,8 @@ long long serverCron(struct aeEventLoop *eventLoop, long long id, void *clientDa
     /* TLS auto-reload if enabled (only when TLS is built-in). */
 #if defined(USE_OPENSSL) && USE_OPENSSL == 1 /* BUILD_YES */
     if ((server.tls_port || server.tls_replication || server.tls_cluster) &&
-        server.tls_ctx_config.auto_reload_interval > 0) {
+        server.tls_ctx_config.auto_reload_interval > 0)
+    {
         run_with_period(1000) {
             tlsReconfigureIfNeeded();
             tlsApplyPendingReload();
@@ -3270,7 +3277,8 @@ void populateCommandLegacyRangeSpec(struct serverCommand *c) {
     }
 
     if (c->key_specs_num == 1 && c->key_specs[0].begin_search_type == KSPEC_BS_INDEX &&
-        c->key_specs[0].find_keys_type == KSPEC_FK_RANGE) {
+        c->key_specs[0].find_keys_type == KSPEC_FK_RANGE)
+    {
         /* Quick win, exactly one range spec. */
         c->legacy_range_key_spec = c->key_specs[0];
         /* If it has the incomplete flag, set the movablekeys flag on the command. */
@@ -3287,7 +3295,8 @@ void populateCommandLegacyRangeSpec(struct serverCommand *c) {
             continue;
         }
         if (c->key_specs[i].fk.range.keystep != 1 ||
-            (prev_lastkey && prev_lastkey != c->key_specs[i].bs.index.pos - 1)) {
+            (prev_lastkey && prev_lastkey != c->key_specs[i].bs.index.pos - 1))
+        {
             /* Found a range spec that's not plain (step of 1) or not consecutive to the previous one.
              * Skip it, and we set the movablekeys flag. */
             c->flags |= CMD_MOVABLE_KEYS;
@@ -3741,7 +3750,8 @@ static void propagatePendingCommands(void) {
      * (i.e. not from within a script, MULTI/EXEC, RM_Call, etc.) we want
      * to avoid using a transaction (much like active-expire) */
     if (server.current_client && server.current_client->cmd &&
-        server.current_client->cmd->flags & CMD_TOUCHES_ARBITRARY_KEYS) {
+        server.current_client->cmd->flags & CMD_TOUCHES_ARBITRARY_KEYS)
+    {
         transaction = 0;
     }
 
@@ -4036,7 +4046,8 @@ void call(client *c, int flags) {
      * propagated if needed (see propagatePendingCommands).
      * Also, module commands take care of themselves */
     if (flags & CMD_CALL_PROPAGATE && !c->flag.prevent_prop && c->cmd->proc != execCommand &&
-        !(c->cmd->flags & CMD_MODULE)) {
+        !(c->cmd->flags & CMD_MODULE))
+    {
         int propagate_flags = PROPAGATE_NONE;
 
         /* Check if the command operated changes in the data set. If so
@@ -4071,12 +4082,14 @@ void call(client *c, int flags) {
      * make sure to remember the keys it fetched via this command. For read-only
      * scripts, don't process the script, only the commands it executes. */
     if ((c->cmd->flags & CMD_READONLY) && (c->cmd->proc != evalRoCommand) && (c->cmd->proc != evalShaRoCommand) &&
-        (c->cmd->proc != fcallroCommand)) {
+        (c->cmd->proc != fcallroCommand))
+    {
         /* We use the tracking flag of the original external client that
          * triggered the command, but we take the keys from the actual command
          * being executed. */
         if (server.current_client && (server.current_client->flag.tracking) &&
-            !(server.current_client->flag.tracking_bcast)) {
+            !(server.current_client->flag.tracking_bcast))
+        {
             trackingRememberKeys(server.current_client, c);
         }
     }
@@ -4222,7 +4235,8 @@ uint64_t getCommandFlags(client *c) {
     if (c->cmd->proc == fcallCommand || c->cmd->proc == fcallroCommand) {
         cmd_flags = fcallGetCommandFlags(c, cmd_flags);
     } else if (c->cmd->proc == evalCommand || c->cmd->proc == evalRoCommand || c->cmd->proc == evalShaCommand ||
-               c->cmd->proc == evalShaRoCommand) {
+               c->cmd->proc == evalShaRoCommand)
+    {
         cmd_flags = evalGetCommandFlags(c, cmd_flags);
     }
 
@@ -4308,7 +4322,8 @@ int processCommand(client *c) {
     /* If we're inside a module blocked context yielding that wants to avoid
      * processing clients, postpone the command. */
     if (server.busy_module_yield_flags != BUSY_MODULE_YIELD_NONE &&
-        !(server.busy_module_yield_flags & BUSY_MODULE_YIELD_CLIENTS)) {
+        !(server.busy_module_yield_flags & BUSY_MODULE_YIELD_CLIENTS))
+    {
         blockPostponeClient(c);
         return C_OK;
     }
@@ -4357,7 +4372,8 @@ int processCommand(client *c) {
         /* Check if the command is marked as protected and the relevant configuration allows it */
         if (c->cmd->flags & CMD_PROTECTED) {
             if ((c->cmd->proc == debugCommand && !allowProtectedAction(server.enable_debug_cmd, c)) ||
-                (c->cmd->proc == moduleCommand && !allowProtectedAction(server.enable_module_cmd, c))) {
+                (c->cmd->proc == moduleCommand && !allowProtectedAction(server.enable_module_cmd, c)))
+            {
                 rejectCommandFormat(c,
                                     "%s command not allowed. If the %s option is set to \"local\", "
                                     "you can run it from a local connection, otherwise you need to set this option "
@@ -4410,7 +4426,8 @@ int processCommand(client *c) {
      * 1) The sender of this command is our primary.
      * 2) The command has no key arguments. */
     if (server.cluster_enabled && !obey_client &&
-        !(!(c->cmd->flags & CMD_MOVABLE_KEYS) && c->cmd->key_specs_num == 0 && c->cmd->proc != execCommand)) {
+        !(!(c->cmd->flags & CMD_MOVABLE_KEYS) && c->cmd->key_specs_num == 0 && c->cmd->proc != execCommand))
+    {
         int error_code;
         clusterNode *n = getNodeByQuery(c, &error_code);
         if (n == NULL || !clusterNodeIsMyself(n)) {
@@ -4427,7 +4444,8 @@ int processCommand(client *c) {
     }
 
     if (clientSupportStandAloneRedirect(c) && !obey_client &&
-        (is_write_command || (is_read_command && !c->flag.readonly))) {
+        (is_write_command || (is_read_command && !c->flag.readonly)))
+    {
         if (server.failover_state == FAILOVER_IN_PROGRESS) {
             /* During the FAILOVER process, when conditions are met (such as
              * when the force time is reached or the primary and replica offsets
@@ -4557,7 +4575,8 @@ int processCommand(client *c) {
     if ((c->flag.pubsub && c->resp == 2) && c->cmd->proc != pingCommand && c->cmd->proc != subscribeCommand &&
         c->cmd->proc != ssubscribeCommand && c->cmd->proc != unsubscribeCommand &&
         c->cmd->proc != sunsubscribeCommand && c->cmd->proc != psubscribeCommand &&
-        c->cmd->proc != punsubscribeCommand && c->cmd->proc != quitCommand && c->cmd->proc != resetCommand) {
+        c->cmd->proc != punsubscribeCommand && c->cmd->proc != quitCommand && c->cmd->proc != resetCommand)
+    {
         rejectCommandFormat(c,
                             "Can't execute '%s': only (P|S)SUBSCRIBE / "
                             "(P|S)UNSUBSCRIBE / PING / QUIT / RESET are allowed in this context",
@@ -4569,7 +4588,8 @@ int processCommand(client *c) {
      * when replica-serve-stale-data is no and we are a replica with a broken
      * link with primary. */
     if (server.primary_host && server.repl_state != REPL_STATE_CONNECTED && server.repl_serve_stale_data == 0 &&
-        is_denystale_command) {
+        is_denystale_command)
+    {
         rejectCommand(c, shared.primarydownerr);
         return C_OK;
     }
@@ -4618,7 +4638,8 @@ int processCommand(client *c) {
     /* If the server is paused, block the client until the pause has ended. Replicas and slot
      * export clients are never paused to allow failover/slot migration to succeed. */
     if (!c->flag.replica && (!c->slot_migration_job || isImportSlotMigrationJob(c->slot_migration_job)) &&
-        ((isPausedActions(PAUSE_ACTION_CLIENT_ALL)) || ((isPausedActions(PAUSE_ACTION_CLIENT_WRITE)) && is_may_replicate_command))) {
+        ((isPausedActions(PAUSE_ACTION_CLIENT_ALL)) || ((isPausedActions(PAUSE_ACTION_CLIENT_WRITE)) && is_may_replicate_command)))
+    {
         blockPostponeClient(c);
         return C_OK;
     }
@@ -4626,7 +4647,8 @@ int processCommand(client *c) {
     /* Exec the command */
     if (c->flag.multi && c->cmd->proc != execCommand && c->cmd->proc != discardCommand &&
         c->cmd->proc != quitCommand &&
-        c->cmd->proc != resetCommand) {
+        c->cmd->proc != resetCommand)
+    {
         queueMultiCommand(c, cmd_flags);
         addReply(c, shared.queued);
     } else {
@@ -6654,7 +6676,8 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
 
     /* Modules */
     if (all_sections || (dictFind(section_dict, "module_list") != NULL) ||
-        (dictFind(section_dict, "modules") != NULL)) {
+        (dictFind(section_dict, "modules") != NULL))
+    {
         if (sections++) info = sdscat(info, "\r\n");
         info = sdscatprintf(info, "# Modules\r\n");
         info = genModulesInfoString(info);
@@ -6742,7 +6765,8 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
      * so we proceed if there's a requested section name that's not found yet, or when the user asked
      * for "all" with any additional section names. */
     if (everything || dictFind(section_dict, "modules") != NULL || sections < (int)dictSize(section_dict) ||
-        (all_sections && dictSize(section_dict))) {
+        (all_sections && dictSize(section_dict)))
+    {
         info = modulesCollectInfo(info, everything || dictFind(section_dict, "modules") != NULL ? NULL : section_dict,
                                   0, /* not a crash report */
                                   sections);
@@ -7240,7 +7264,8 @@ void loadDataFromDisk(void) {
                 /* Note that older implementations may save a repl_stream_db
                  * of -1 inside the RDB file in a wrong way, see more
                  * information in function rdbPopulateSaveInfo. */
-                rsi.repl_stream_db != -1) {
+                rsi.repl_stream_db != -1)
+            {
                 rsi_is_valid = 1;
                 if (!iAmPrimary()) {
                     memcpy(server.replid, rsi.repl_id, sizeof(server.replid));
@@ -7553,7 +7578,8 @@ __attribute__((weak)) int main(int argc, char **argv) {
              * string "port 6380\n" to be parsed after the actual config file
              * and stdin input are parsed (if they exist).
              * Only consider that if the last config has at least one argument. */
-            else if (handled_last_config_arg && argv[j][0] == '-' && argv[j][1] == '-') {
+            else if (handled_last_config_arg && argv[j][0] == '-' && argv[j][1] == '-')
+            {
                 /* Option name */
                 if (sdslen(options)) options = sdscat(options, "\n");
                 /* argv[j]+2 for removing the preceding `--` */
@@ -7566,7 +7592,8 @@ __attribute__((weak)) int main(int argc, char **argv) {
                     handled_last_config_arg = 0;
 
                     if ((j != argc - 1) && argv[j + 1][0] == '-' && argv[j + 1][1] == '-' &&
-                        !strcasecmp(argv[j], "--save")) {
+                        !strcasecmp(argv[j], "--save"))
+                    {
                         /* Special case: handle some things like `--save --config value`.
                          * In this case, if next argument starts with `--`, we will reset
                          * handled_last_config_arg flag and append an empty "" config value
@@ -7582,7 +7609,8 @@ __attribute__((weak)) int main(int argc, char **argv) {
                          * so it will become `--save ""` and will follow the same reset thing. */
                         options = sdscat(options, "\"\"");
                     } else if ((j != argc - 1) && argv[j + 1][0] == '-' && argv[j + 1][1] == '-' &&
-                               !strcasecmp(argv[j], "--sentinel")) {
+                               !strcasecmp(argv[j], "--sentinel"))
+                    {
                         /* Special case: handle some things like `--sentinel --config value`.
                          * It is a pseudo config option with no value. In this case, if next
                          * argument starts with `--`, we will reset handled_last_config_arg flag.

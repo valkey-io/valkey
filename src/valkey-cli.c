@@ -1876,7 +1876,8 @@ static sds cliFormatReplyTTY(valkeyReply *r, char *prefix) {
 /* Returns 1 if the reply is a pubsub pushed reply. */
 int isPubsubPush(valkeyReply *r) {
     if (r == NULL || r->type != (config.current_resp3 ? VALKEY_REPLY_PUSH : VALKEY_REPLY_ARRAY) || r->elements < 3 ||
-        r->element[0]->type != VALKEY_REPLY_STRING) {
+        r->element[0]->type != VALKEY_REPLY_STRING)
+    {
         return 0;
     }
     char *str = r->element[0]->str;
@@ -2095,7 +2096,8 @@ static sds cliFormatReplyJson(sds out, valkeyReply *r, int mode) {
         for (i = 0; i < r->elements; i += 2) {
             valkeyReply *key = r->element[i];
             if (key->type == VALKEY_REPLY_ERROR || key->type == VALKEY_REPLY_STATUS || key->type == VALKEY_REPLY_STRING ||
-                key->type == VALKEY_REPLY_VERB) {
+                key->type == VALKEY_REPLY_VERB)
+            {
                 out = cliFormatReplyJson(out, key, mode);
             } else {
                 /* According to JSON spec, JSON map keys must be strings,
@@ -2204,7 +2206,8 @@ static int cliReadReply(int output_raw_strings) {
     /* Check if we need to connect to a different node and reissue the
      * request. */
     if (config.cluster_mode && reply->type == VALKEY_REPLY_ERROR &&
-        (!strncmp(reply->str, "MOVED ", 6) || !strncmp(reply->str, "ASK ", 4))) {
+        (!strncmp(reply->str, "MOVED ", 6) || !strncmp(reply->str, "ASK ", 4)))
+    {
         char *p = reply->str, *s;
         int slot;
 
@@ -2366,7 +2369,8 @@ static int cliSendCommand(int argc, char **argv, long repeat) {
         (argc == 2 && !strcasecmp(command, "latency") && !strcasecmp(argv[1], "doctor")) ||
         /* Format PROXY INFO command for Cluster Proxy:
          * https://github.com/artix75/redis-cluster-proxy */
-        (argc >= 2 && !strcasecmp(command, "proxy") && !strcasecmp(argv[1], "info"))) {
+        (argc >= 2 && !strcasecmp(command, "proxy") && !strcasecmp(argv[1], "info")))
+    {
         output_raw = 1;
     }
 
@@ -2799,12 +2803,14 @@ static int parseOptions(int argc, char **argv) {
         } else if (!strcmp(argv[i], "--cluster-slave") || !strcmp(argv[i], "--cluster-replica")) {
             config.cluster_manager_command.flags |= CLUSTER_MANAGER_CMD_FLAG_REPLICA;
         } else if (!strcmp(argv[i], "--cluster-use-empty-masters") ||
-                   !strcmp(argv[i], "--cluster-use-empty-primaries")) {
+                   !strcmp(argv[i], "--cluster-use-empty-primaries"))
+        {
             config.cluster_manager_command.flags |= CLUSTER_MANAGER_CMD_FLAG_EMPTY_PRIMARY;
         } else if (!strcmp(argv[i], "--cluster-search-multiple-owners")) {
             config.cluster_manager_command.flags |= CLUSTER_MANAGER_CMD_FLAG_CHECK_OWNERS;
         } else if (!strcmp(argv[i], "--cluster-fix-with-unreachable-masters") ||
-                   !strcmp(argv[i], "--cluster-fix-with-unreachable-primaries")) {
+                   !strcmp(argv[i], "--cluster-fix-with-unreachable-primaries"))
+        {
             config.cluster_manager_command.flags |= CLUSTER_MANAGER_CMD_FLAG_FIX_WITH_UNREACHABLE_PRIMARIES;
         } else if (!strcmp(argv[i], "--cluster-use-atomic-slot-migration")) {
             config.cluster_manager_command.flags |= CLUSTER_MANAGER_CMD_FLAG_USE_ATOMIC_SLOT_MIGRATION;
@@ -3151,7 +3157,8 @@ static int issueCommandRepeat(int argc, char **argv, long repeat) {
 
     while (1) {
         if (config.cluster_reissue_command || context == NULL || context->err == VALKEY_ERR_IO ||
-            context->err == VALKEY_ERR_EOF) {
+            context->err == VALKEY_ERR_EOF)
+        {
             if (cliConnect(CC_FORCE) != VALKEY_OK) {
                 cliPrintContextError();
                 config.cluster_reissue_command = 0;
@@ -3264,14 +3271,16 @@ static int isSensitiveCommand(int argc, char **argv) {
         return 1;
     } else if (argc > 1 && !strcasecmp(argv[0], "acl") &&
                (!strcasecmp(argv[1], "deluser") || !strcasecmp(argv[1], "setuser") ||
-                !strcasecmp(argv[1], "getuser"))) {
+                !strcasecmp(argv[1], "getuser")))
+    {
         return 1;
     } else if (argc > 2 && !strcasecmp(argv[0], "config") && !strcasecmp(argv[1], "set")) {
         for (int j = 2; j < argc; j = j + 2) {
             if (!strcasecmp(argv[j], "masterauth") || !strcasecmp(argv[j], "masteruser") ||
                 !strcasecmp(argv[j], "primaryuser") || !strcasecmp(argv[j], "primaryauth") ||
                 !strcasecmp(argv[j], "tls-key-file-pass") || !strcasecmp(argv[j], "tls-client-key-file-pass") ||
-                !strcasecmp(argv[j], "requirepass")) {
+                !strcasecmp(argv[j], "requirepass"))
+            {
                 return 1;
             }
         }
@@ -3305,7 +3314,8 @@ static int isSensitiveCommand(int argc, char **argv) {
         /* SENTINEL CONFIG SET sentinel-pass password
          * SENTINEL CONFIG SET sentinel-user username */
         if (!strcasecmp(argv[1], "config") && !strcasecmp(argv[2], "set") &&
-            (!strcasecmp(argv[3], "sentinel-pass") || !strcasecmp(argv[3], "sentinel-user"))) {
+            (!strcasecmp(argv[3], "sentinel-pass") || !strcasecmp(argv[3], "sentinel-user")))
+        {
             return 1;
         }
         /* SENTINEL SET <primaryname> auth-pass password
@@ -5302,7 +5312,8 @@ static int clusterManagerMigrateKeysInSlot(clusterManagerNode *source,
                             clusterManagerLogErr("*** Value check failed!\n");
                             const char *debug_not_allowed = "ERR DEBUG command not allowed.";
                             if ((source_err && !strncmp(source_err, debug_not_allowed, 30)) ||
-                                (target_err && !strncmp(target_err, debug_not_allowed, 30))) {
+                                (target_err && !strncmp(target_err, debug_not_allowed, 30)))
+                            {
                                 clusterManagerLogErr("DEBUG command is not allowed.\n"
                                                      "You can turn on the enable-debug-command option.\n"
                                                      "Or you can relaunch the command with --cluster-replace "
@@ -5829,7 +5840,8 @@ static int clusterManagerLoadInfoCommon(clusterManagerNode *node, int include_un
             e = NULL;
             if (clusterManagerNodeLoadInfo(friend, 0, &e)) {
                 if (friend->flags &
-                    (CLUSTER_MANAGER_FLAG_NOADDR | CLUSTER_MANAGER_FLAG_DISCONNECT | CLUSTER_MANAGER_FLAG_FAIL)) {
+                    (CLUSTER_MANAGER_FLAG_NOADDR | CLUSTER_MANAGER_FLAG_DISCONNECT | CLUSTER_MANAGER_FLAG_FAIL))
+                {
                     goto invalid_friend;
                 }
                 listAddNodeTail(cluster_manager.nodes, friend);
@@ -6367,7 +6379,8 @@ static int clusterManagerFixSlotsCoverage(char *all_slots) {
         clusterManagerPrintSlotsList(multi);
         if (confirmWithYes("Fix these slots by moving keys "
                            "into a single node?",
-                           ignore_force)) {
+                           ignore_force))
+        {
             listIter li;
             listNode *ln;
             listRewind(multi, &li);
@@ -6615,7 +6628,8 @@ static int clusterManagerFixOpenSlot(int slot) {
      * they probably got keys about the slot after a restart so opened
      * the slot. In this case we just move all the keys to the owner
      * according to the configuration. */
-    else if (listLength(migrating) == 0 && listLength(importing) > 0) {
+    else if (listLength(migrating) == 0 && listLength(importing) > 0)
+    {
         clusterManagerLogInfo(">>> Case 2: Moving all the %d slot keys to its "
                               "owner %s:%d\n",
                               slot, owner->ip, owner->port);
@@ -6653,7 +6667,8 @@ static int clusterManagerFixOpenSlot(int slot) {
      * If no importing node has the same ID as the destination node of the
      * migrating node, the slot's state is closed on both the migrating node
      * and the importing nodes. */
-    else if (listLength(migrating) == 1 && listLength(importing) > 1) {
+    else if (listLength(migrating) == 1 && listLength(importing) > 1)
+    {
         int try_to_fix = 1;
         clusterManagerNode *src = listFirst(migrating)->value;
         clusterManagerNode *dst = NULL;
@@ -9350,7 +9365,8 @@ static void sendReadOnly(void) {
         fprintf(stderr, "\nI/O error\n");
         exit(1);
     } else if (read_reply->type == VALKEY_REPLY_ERROR &&
-               strcmp(read_reply->str, "ERR This instance has cluster support disabled") != 0) {
+               strcmp(read_reply->str, "ERR This instance has cluster support disabled") != 0)
+    {
         fprintf(stderr, "Error: %s\n", read_reply->str);
         exit(1);
     }

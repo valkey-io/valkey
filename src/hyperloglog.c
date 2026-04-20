@@ -2040,7 +2040,8 @@ void pfdebugCommand(client *c) {
         }
     }
     /* PFDEBUG DECODE <key> */
-    else if (!strcasecmp(cmd, "decode")) {
+    else if (!strcasecmp(cmd, "decode"))
+    {
         if (c->argc != 3) goto arityerr;
 
         uint8_t *p = objectGetVal(o), *end = p + sdslen(objectGetVal(o));
@@ -2076,14 +2077,16 @@ void pfdebugCommand(client *c) {
         sdsfree(decoded);
     }
     /* PFDEBUG ENCODING <key> */
-    else if (!strcasecmp(cmd, "encoding")) {
+    else if (!strcasecmp(cmd, "encoding"))
+    {
         char *encodingstr[2] = {"dense", "sparse"};
         if (c->argc != 3) goto arityerr;
 
         addReplyStatus(c, encodingstr[hdr->encoding]);
     }
     /* PFDEBUG TODENSE <key> */
-    else if (!strcasecmp(cmd, "todense")) {
+    else if (!strcasecmp(cmd, "todense"))
+    {
         int conv = 0;
         if (c->argc != 3) goto arityerr;
 

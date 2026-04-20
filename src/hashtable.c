@@ -2281,7 +2281,8 @@ bool hashtableNext(hashtableIterator *iterator, void **elemptr) {
                      * we can do the compaction now when we're done with a
                      * bucket chain, before we move on to the next index. */
                     if (iter->hashtable->pause_rehash == 1 &&
-                        iter->hashtable->used[iter->table] < iter->last_seen_size) {
+                        iter->hashtable->used[iter->table] < iter->last_seen_size)
+                    {
                         compactBucketChain(iter->hashtable, iter->index, iter->table);
                     }
                     iter->last_seen_size = iter->hashtable->used[iter->table];

@@ -410,7 +410,8 @@ void putClientInPendingWriteQueue(client *c) {
         (!c->repl_data ||
          c->repl_data->repl_state == REPL_STATE_NONE ||
          (isReplicaReadyForReplData(c) && !c->repl_data->repl_start_cmd_stream_on_ack)) &&
-        clusterSlotMigrationShouldInstallWriteHandler(c)) {
+        clusterSlotMigrationShouldInstallWriteHandler(c))
+    {
         /* Here instead of installing the write handler, we just flag the
          * client and put it into a list of clients that have something
          * to write to the socket. This way before re-entering the event
@@ -546,7 +547,8 @@ static size_t upsertPayloadHeader(char *buf,
     /* Try to add payload to last chunk if possible */
     if (*last_header != NULL && (*last_header)->payload_type == type && (*last_header)->slot == slot &&
         (*last_header)->track_bytes == track_bytes &&
-        !atomic_load_explicit(&(*last_header)->tracked_for_cob, memory_order_acquire)) {
+        !atomic_load_explicit(&(*last_header)->tracked_for_cob, memory_order_acquire))
+    {
         (*last_header)->payload_len += allowed_len;
         return allowed_len;
     }
@@ -866,7 +868,8 @@ void afterErrorReply(client *c, const char *s, size_t len, int flags) {
         /* After the errors RAX reaches its limit, instead of tracking
          * custom errors (e.g. LUA), we track the error under `errorstat_ERRORSTATS_OVERFLOW` */
         if (flags & ERR_REPLY_FLAG_CUSTOM && raxSize(server.errors) >= ERRORSTATS_LIMIT &&
-            !raxFind(server.errors, (unsigned char *)err_prefix, prefix_len, NULL)) {
+            !raxFind(server.errors, (unsigned char *)err_prefix, prefix_len, NULL))
+        {
             err_prefix = ERRORSTATS_OVERFLOW_ERR;
             prefix_len = strlen(ERRORSTATS_OVERFLOW_ERR);
         }
@@ -1077,7 +1080,8 @@ void trimReplyUnusedTailSpace(client *c) {
      * Also, to avoid large memmove which happens as part of realloc, we only do
      * that if the used part is small.  */
     if (tail->size - tail->used > tail->size / 4 && tail->used < PROTO_REPLY_CHUNK_BYTES &&
-        c->io_write_state != CLIENT_PENDING_IO && !tail->flag.buf_encoded) {
+        c->io_write_state != CLIENT_PENDING_IO && !tail->flag.buf_encoded)
+    {
         size_t usable_size;
         size_t old_size = tail->size;
         tail = zrealloc_usable(tail, tail->used + sizeof(clientReplyBlock), &usable_size);
@@ -1139,7 +1143,8 @@ void setDeferredReply(client *c, void *node, const char *s, size_t length) {
      * - And not too large (avoid large memmove)
      * - And the client is not in a pending I/O state */
     if (ln->prev != NULL && (prev = listNodeValue(ln->prev)) && prev->size > prev->used &&
-        c->io_write_state != CLIENT_PENDING_IO && !prev->flag.buf_encoded) {
+        c->io_write_state != CLIENT_PENDING_IO && !prev->flag.buf_encoded)
+    {
         size_t len_to_copy = prev->size - prev->used;
         if (len_to_copy > length) len_to_copy = length;
         memcpy(prev->buf + prev->used, s, len_to_copy);
@@ -1154,7 +1159,8 @@ void setDeferredReply(client *c, void *node, const char *s, size_t length) {
     }
 
     if (ln->next != NULL && (next = listNodeValue(ln->next)) && next->size - next->used >= length &&
-        next->used < PROTO_REPLY_CHUNK_BYTES * 4 && c->io_write_state != CLIENT_PENDING_IO && !next->flag.buf_encoded) {
+        next->used < PROTO_REPLY_CHUNK_BYTES * 4 && c->io_write_state != CLIENT_PENDING_IO && !next->flag.buf_encoded)
+    {
         memmove(next->buf + length, next->buf, next->used);
         memcpy(next->buf, s, length);
         c->net_output_bytes_curr_cmd += length;
@@ -1961,7 +1967,8 @@ void unlinkClient(client *c) {
          * snapshot child may take some time to die, during which the migration will continue past
          * the snapshot state. */
         if (c->repl_data && server.rdb_pipe_conns &&
-            ((c->flag.replica && c->repl_data->repl_state == REPLICA_STATE_WAIT_BGSAVE_END))) {
+            ((c->flag.replica && c->repl_data->repl_state == REPLICA_STATE_WAIT_BGSAVE_END)))
+        {
             int i;
             int still_alive = 0;
             for (i = 0; i < server.rdb_pipe_numconns; i++) {
@@ -1979,7 +1986,8 @@ void unlinkClient(client *c) {
         /* Check if this is the slot migration client we are writing to in a
          * child process*/
         if (c->slot_migration_job && !isImportSlotMigrationJob(c->slot_migration_job) &&
-            server.slot_migration_pipe_conn == c->conn) {
+            server.slot_migration_pipe_conn == c->conn)
+        {
             server.slot_migration_pipe_conn = NULL;
             serverLog(LL_NOTICE, "Slot migration target dropped, killing fork child.");
             killSlotMigrationChild();
@@ -2844,7 +2852,8 @@ static void trackBufReferences(char *buf, size_t bufpos, client *c) {
         if (header->payload_type == BULK_STR_REF) {
             uint8_t expected = 0;
             if (atomic_compare_exchange_strong_explicit(&header->tracked_for_cob, &expected, 1,
-                                                        memory_order_acq_rel, memory_order_acquire)) {
+                                                        memory_order_acq_rel, memory_order_acquire))
+            {
                 /* We claimed tracking rights */
                 bulkStrRef *str_ref = (bulkStrRef *)ptr;
                 size_t len = header->payload_len;
@@ -3544,7 +3553,8 @@ void parseMultibulkBuffer(client *c) {
     serverAssert(queue->len == 0);
     while ((flag & READ_FLAGS_PARSING_COMPLETED) &&
            sdslen(c->querybuf) > c->qb_pos &&
-           c->querybuf[c->qb_pos] == '*') {
+           c->querybuf[c->qb_pos] == '*')
+    {
         c->reqtype = PROTO_REQ_MULTIBULK;
         /* Push a new parser state to the command queue */
         if (queue->len == queue->cap) {
@@ -3754,7 +3764,8 @@ static int parseMultibulk(client *c,
 
             /* Check that what follows argv is a real \r\n */
             if (unlikely(c->querybuf[c->qb_pos + c->bulklen] != '\r' ||
-                         c->querybuf[c->qb_pos + c->bulklen + 1] != '\n')) {
+                         c->querybuf[c->qb_pos + c->bulklen + 1] != '\n'))
+            {
                 return READ_FLAGS_ERROR_INVALID_CRLF;
             }
 
@@ -3762,7 +3773,8 @@ static int parseMultibulk(client *c,
              * instead of creating a new object by *copying* the sds we
              * just use the current sds string. */
             if (!is_replicated && c->qb_pos == 0 && c->bulklen >= PROTO_MBULK_BIG_ARG &&
-                sdslen(c->querybuf) == (size_t)(c->bulklen + 2)) {
+                sdslen(c->querybuf) == (size_t)(c->bulklen + 2))
+            {
                 (*argv)[(*argc)++] = createObject(OBJ_STRING, c->querybuf);
                 *argv_len_sum += c->bulklen;
                 sdsIncrLen(c->querybuf, -2); /* remove CRLF */
@@ -4113,7 +4125,8 @@ static void prefetchCommandQueueKeys(client *c) {
 int processInputBuffer(client *c) {
     /* Parse the query buffer and/or execute already parsed commands. */
     while ((c->querybuf && c->qb_pos < sdslen(c->querybuf)) ||
-           c->cmd_queue.off < c->cmd_queue.len) {
+           c->cmd_queue.off < c->cmd_queue.len)
+    {
         if (!canParseCommand(c)) {
             break;
         }
@@ -4204,7 +4217,8 @@ static bool readToQueryBuf(client *c) {
      * thread_shared_qb, we still add this check for code robustness. */
     int use_thread_shared_qb = (c->querybuf == thread_shared_qb) ? 1 : 0;
     if (!is_replicated && // replicated clients' querybuf can grow greedy.
-        (big_arg || sdsalloc(c->querybuf) < PROTO_IOBUF_LEN)) {
+        (big_arg || sdsalloc(c->querybuf) < PROTO_IOBUF_LEN))
+    {
         /* When reading a BIG_ARG we won't be reading more than that one arg
          * into the query buffer, so we don't need to pre-allocate more than we
          * need, so using the non-greedy growing. For an initial allocation of
@@ -4237,7 +4251,8 @@ static bool readToQueryBuf(client *c) {
          * For unauthenticated clients, the query buffer cannot exceed 1MB at most. */
         size_t qb_memory = sdslen(c->querybuf) + (c->mstate ? c->mstate->argv_len_sums : 0);
         if (qb_memory > server.client_max_querybuf_len ||
-            (qb_memory > 1024 * 1024 && (c->read_flags & READ_FLAGS_AUTH_REQUIRED))) {
+            (qb_memory > 1024 * 1024 && (c->read_flags & READ_FLAGS_AUTH_REQUIRED)))
+        {
             c->read_flags |= READ_FLAGS_QB_LIMIT_REACHED;
         }
     }
@@ -5055,7 +5070,8 @@ static int clientMatchesFlagFilter(client *c, sds flag_filter) {
                 c->flag.unblocked || c->flag.close_asap ||
                 c->flag.unix_socket || c->flag.readonly ||
                 c->flag.no_evict || c->flag.no_touch ||
-                c->flag.import_source || c->slot_migration_job) {
+                c->flag.import_source || c->slot_migration_job)
+            {
                 return 0;
             }
             break;
@@ -5534,7 +5550,8 @@ void clientTrackingCommand(client *c) {
         }
 
         if ((options.tracking_optin && c->flag.tracking_optout) ||
-            (options.tracking_optout && c->flag.tracking_optin)) {
+            (options.tracking_optout && c->flag.tracking_optin))
+        {
             addReplyError(c, "You can't switch OPTIN/OPTOUT mode before disabling "
                              "tracking for this client, and then re-enabling it with "
                              "a different mode.");
@@ -5716,7 +5733,8 @@ void helloCommand(client *c) {
 
     if (c->argc >= 2) {
         if (getLongLongFromObjectOrReply(c, c->argv[next_arg++], &ver,
-                                         "Protocol version is not an integer or out of range") != C_OK) {
+                                         "Protocol version is not an integer or out of range") != C_OK)
+        {
             return;
         }
 
@@ -6201,7 +6219,8 @@ void flushReplicasOutputBuffers(void) {
          * 3. Obviously if the replica is not ONLINE.
          */
         if (isReplicaReadyForReplData(replica) && !(replica->flag.close_asap) && can_receive_writes &&
-            !replica->repl_data->repl_start_cmd_stream_on_ack && clientHasPendingReplies(replica)) {
+            !replica->repl_data->repl_start_cmd_stream_on_ack && clientHasPendingReplies(replica))
+        {
             writeToClient(replica);
         }
     }
@@ -6498,7 +6517,8 @@ void evictClients(void) {
     while (server.stat_clients_type_memory[CLIENT_TYPE_NORMAL] +
                server.stat_clients_type_memory[CLIENT_TYPE_PUBSUB] -
                pending_freed >
-           client_eviction_limit) {
+           client_eviction_limit)
+    {
         listNode *ln = listNext(&bucket_iter);
         if (ln) {
             client *c = ln->value;

@@ -1184,7 +1184,8 @@ int streamIteratorGetID(streamIterator *si, streamID *id, int64_t *numfields) {
              * deleted or tombstones are included, emit it. */
             if (!si->rev) {
                 if (streamCompareID(id, &si->start_id) >= 0 &&
-                    (!si->skip_tombstones || !(flags & STREAM_ITEM_FLAG_DELETED))) {
+                    (!si->skip_tombstones || !(flags & STREAM_ITEM_FLAG_DELETED)))
+                {
                     if (streamCompareID(id, &si->end_id) > 0) return 0; /* We are already out of range. */
                     si->entry_flags = flags;
                     if (flags & STREAM_ITEM_FLAG_SAMEFIELDS) si->primary_fields_ptr = si->primary_fields_start;
@@ -1192,7 +1193,8 @@ int streamIteratorGetID(streamIterator *si, streamID *id, int64_t *numfields) {
                 }
             } else {
                 if (streamCompareID(id, &si->end_id) <= 0 &&
-                    (!si->skip_tombstones || !(flags & STREAM_ITEM_FLAG_DELETED))) {
+                    (!si->skip_tombstones || !(flags & STREAM_ITEM_FLAG_DELETED)))
+                {
                     if (streamCompareID(id, &si->start_id) < 0) return 0; /* We are already out of range. */
                     si->entry_flags = flags;
                     if (flags & STREAM_ITEM_FLAG_SAMEFIELDS) si->primary_fields_ptr = si->primary_fields_start;
@@ -1427,7 +1429,8 @@ int streamRangeHasTombstones(stream *s, streamID *start, streamID *end) {
     }
 
     if (streamCompareID(&start_id, &s->max_deleted_entry_id) <= 0 &&
-        streamCompareID(&s->max_deleted_entry_id, &end_id) <= 0) {
+        streamCompareID(&s->max_deleted_entry_id, &end_id) <= 0)
+    {
         /* start_id <= max_deleted_entry_id <= end_id: The range does include a tombstone. */
         return 1;
     }
@@ -1700,7 +1703,8 @@ size_t streamReplyWithRange(client *c,
         if (group && streamCompareID(&id, &group->last_id) > 0) {
             if (group->entries_read != SCG_INVALID_ENTRIES_READ &&
                 streamCompareID(&group->last_id, &s->first_id) >= 0 &&
-                !streamRangeHasTombstones(s, &group->last_id, NULL)) {
+                !streamRangeHasTombstones(s, &group->last_id, NULL))
+            {
                 /* A valid counter and no tombstones in the group's last-delivered-id and the stream's last-generated-id,
                  * we can increment the read counter to keep tracking the group's progress. */
                 group->entries_read++;
@@ -2039,7 +2043,8 @@ void xaddCommand(client *c) {
     errno = 0;
     streamID id;
     if (streamAppendItem(s, c->argv + field_pos, (c->argc - field_pos) / 2, &id,
-                         parsed_args.id_given ? &parsed_args.id : NULL, parsed_args.seq_given) == C_ERR) {
+                         parsed_args.id_given ? &parsed_args.id : NULL, parsed_args.seq_given) == C_ERR)
+    {
         serverAssert(errno != 0);
         if (errno == EDOM)
             addReplyError(c, "The ID specified in XADD is equal or smaller than "
@@ -2599,7 +2604,8 @@ void xgroupCommand(client *c) {
                 mkstream = 1;
                 i++;
             } else if ((create_subcmd || setid_subcmd) && !strcasecmp(objectGetVal(c->argv[i]), "ENTRIESREAD") &&
-                       i + 1 < c->argc) {
+                       i + 1 < c->argc)
+            {
                 if (getLongLongFromObjectOrReply(c, c->argv[i + 1], &entries_read, NULL) != C_OK) return;
                 if (entries_read < 0 && entries_read != SCG_INVALID_ENTRIES_READ) {
                     addReplyError(c, "value for ENTRIESREAD must be positive or -1");
@@ -2632,7 +2638,8 @@ void xgroupCommand(client *c) {
 
         /* Certain subcommands require the group to exist. */
         if ((cg = streamLookupCG(s, grpname)) == NULL &&
-            (!strcasecmp(opt, "SETID") || !strcasecmp(opt, "CREATECONSUMER") || !strcasecmp(opt, "DELCONSUMER"))) {
+            (!strcasecmp(opt, "SETID") || !strcasecmp(opt, "CREATECONSUMER") || !strcasecmp(opt, "DELCONSUMER")))
+        {
             addReplyErrorFormat(c,
                                 "-NOGROUP No such consumer group '%s' "
                                 "for key name '%s'",

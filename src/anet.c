@@ -681,7 +681,8 @@ int anetRetryAcceptOnError(int err) {
        and ENETUNREACH. */
     if (err == ENETDOWN || err == EPROTO || err == ENOPROTOOPT ||
         err == EHOSTDOWN || err == ENONET || err == EHOSTUNREACH ||
-        err == EOPNOTSUPP || err == ENETUNREACH) {
+        err == EOPNOTSUPP || err == ENETUNREACH)
+    {
         return 1;
     }
 #endif

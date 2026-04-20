@@ -864,7 +864,8 @@ int primaryTryPartialResynchronization(client *c, long long psync_offset) {
      * Note that there are two potentially valid replication IDs: the ID1
      * and the ID2. The ID2 however is only valid up to a specific offset. */
     if (strcasecmp(primary_replid, server.replid) &&
-        (strcasecmp(primary_replid, server.replid2) || psync_offset > server.second_replid_offset)) {
+        (strcasecmp(primary_replid, server.replid2) || psync_offset > server.second_replid_offset))
+    {
         /* Replid "?" is used by replicas that want to force a full resync. */
         if (primary_replid[0] != '?') {
             if (strcasecmp(primary_replid, server.replid) && strcasecmp(primary_replid, server.replid2)) {
@@ -888,7 +889,8 @@ int primaryTryPartialResynchronization(client *c, long long psync_offset) {
 
     /* We still have the data our replica is asking for? */
     if (!server.repl_backlog || psync_offset < server.repl_backlog->offset ||
-        psync_offset > (server.repl_backlog->offset + server.repl_backlog->histlen)) {
+        psync_offset > (server.repl_backlog->offset + server.repl_backlog->histlen))
+    {
         if (!server.repl_backlog) {
             serverLog(LL_NOTICE,
                       "Unable to partial resync with replica %s for lack of backlog (Replica request was: %s:%lld).",
@@ -1234,7 +1236,8 @@ void syncCommand(client *c) {
          * capabilities of the replica that triggered the current BGSAVE
          * and its exact requirements. */
         if (ln && ((c->repl_data->replica_capa & replica->repl_data->replica_capa) == replica->repl_data->replica_capa) &&
-            c->repl_data->replica_req == replica->repl_data->replica_req) {
+            c->repl_data->replica_req == replica->repl_data->replica_req)
+        {
             /* Perfect, the server is already registering differences for
              * another replica. Set the right state, and copy the buffer.
              * We don't copy buffer if clients don't want. */
@@ -1314,7 +1317,8 @@ void freeClientReplicationData(client *c) {
          * to keep data safe and we may delay configured 'save' for full sync. */
         if (server.saveparamslen == 0 && c->repl_data->repl_state == REPLICA_STATE_WAIT_BGSAVE_END &&
             server.child_type == CHILD_TYPE_RDB && server.rdb_child_type == RDB_CHILD_TYPE_DISK &&
-            anyOtherReplicaWaitRdb(c) == 0) {
+            anyOtherReplicaWaitRdb(c) == 0)
+        {
             serverLog(LL_NOTICE, "Background saving, persistence disabled, last replica dropped, killing fork child.");
             killRDBChild();
         }
@@ -1648,7 +1652,8 @@ void removeRDBUsedToSyncReplicas(void) {
             replica = ln->value;
             if (replica->repl_data->repl_state == REPLICA_STATE_WAIT_BGSAVE_START ||
                 replica->repl_data->repl_state == REPLICA_STATE_WAIT_BGSAVE_END ||
-                replica->repl_data->repl_state == REPLICA_STATE_SEND_BULK) {
+                replica->repl_data->repl_state == REPLICA_STATE_SEND_BULK)
+            {
                 delrdb = 0;
                 break; /* No need to check the other replicas. */
             }
@@ -1766,7 +1771,8 @@ void rdbPipeWriteHandler(struct connection *conn) {
     client *replica = connGetPrivateData(conn);
     ssize_t nwritten;
     if ((nwritten = connWrite(conn, server.rdb_pipe_buff + replica->repl_data->repldboff,
-                              server.rdb_pipe_bufflen - replica->repl_data->repldboff)) == -1) {
+                              server.rdb_pipe_bufflen - replica->repl_data->repldboff)) == -1)
+    {
         if (connGetState(conn) == CONN_STATE_CONNECTED) return; /* equivalent to EAGAIN */
         serverLog(LL_WARNING, "Write error sending DB to replica: %s", connGetLastError(conn));
         freeClient(replica);
@@ -1873,7 +1879,8 @@ void slotMigrationPipeWriteHandler(struct connection *conn) {
     client *target = connGetPrivateData(conn);
     ssize_t nwritten;
     if ((nwritten = connWrite(conn, server.slot_migration_pipe_buff + target->repl_data->repldboff,
-                              server.slot_migration_pipe_bufflen - target->repl_data->repldboff)) == -1) {
+                              server.slot_migration_pipe_bufflen - target->repl_data->repldboff)) == -1)
+    {
         if (connGetState(conn) == CONN_STATE_CONNECTED) return; /* equivalent to EAGAIN */
         serverLog(LL_WARNING, "Write error sending slot migration snapshot to target: %s", connGetLastError(conn));
         freeClient(target);
@@ -2200,7 +2207,8 @@ static int useDisklessLoad(void) {
             enabled = 0;
         }
         /* Check all modules handle async replication, otherwise it's not safe to use diskless load. */
-        else if (server.repl_diskless_load == REPL_DISKLESS_LOAD_SWAPDB && !moduleAllModulesHandleReplAsyncLoad()) {
+        else if (server.repl_diskless_load == REPL_DISKLESS_LOAD_SWAPDB && !moduleAllModulesHandleReplAsyncLoad())
+        {
             serverLog(LL_NOTICE,
                       "Skipping diskless-load because there are modules that are not aware of async replication.");
             enabled = 0;
@@ -2598,7 +2606,8 @@ int replicaLoadPrimaryRDBFromDisk(rdbSaveInfo *rsi) {
      * RDB file so it can be reused as the AOF base file, avoiding a redundant
      * bgrewriteaof that would produce an almost identical snapshot. */
     if (!(server.aof_enabled && server.aof_use_rdb_preamble) &&
-        server.rdb_del_sync_files && allPersistenceDisabled()) {
+        server.rdb_del_sync_files && allPersistenceDisabled())
+    {
         serverLog(LL_NOTICE, "Removing the RDB file obtained from "
                              "the primary. This replica has persistence "
                              "disabled");
@@ -3252,7 +3261,8 @@ void replStreamProgressCallback(size_t offset, int readlen, time_t *last_progres
     if (server.loading_process_events_interval_bytes &&
         ((offset + readlen) / server.loading_process_events_interval_bytes >
          offset / server.loading_process_events_interval_bytes) &&
-        (now - *last_progress_callback > server.loading_process_events_interval_ms)) {
+        (now - *last_progress_callback > server.loading_process_events_interval_ms))
+    {
         replicationSendNewlineToPrimary();
         processEventsWhileBlocked();
         *last_progress_callback = now;
@@ -3303,7 +3313,8 @@ void bufferReplData(connection *conn) {
         }
         if (readlen && remaining_bytes == 0) {
             if (server.client_obuf_limits[CLIENT_TYPE_REPLICA].hard_limit_bytes &&
-                server.pending_repl_data.len > server.client_obuf_limits[CLIENT_TYPE_REPLICA].hard_limit_bytes) {
+                server.pending_repl_data.len > server.client_obuf_limits[CLIENT_TYPE_REPLICA].hard_limit_bytes)
+            {
                 dualChannelServerLog(LL_NOTICE,
                                      "Replication buffer limit reached (%llu bytes), stopping buffering. "
                                      "Further accumulation will occur on primary side.",
@@ -3792,7 +3803,8 @@ int syncWithPrimaryHandleReceivePingReplyState(connection *conn) {
      * permitted" instead of using a proper error code, so we test
      * both. */
     if (err[0] != '+' && strncmp(err, "-NOAUTH", 7) != 0 && strncmp(err, "-NOPERM", 7) != 0 &&
-        strncmp(err, "-ERR operation not permitted", 28) != 0) {
+        strncmp(err, "-ERR operation not permitted", 28) != 0)
+    {
         serverLog(LL_WARNING, "Error reply to PING from primary: '%s'", err);
         sdsfree(err);
         return C_ERR;
@@ -4204,7 +4216,8 @@ void syncWithPrimary(connection *conn) {
      * could happen in edge cases. */
     if (server.failover_state == FAILOVER_IN_PROGRESS) {
         if (psync_result == PSYNC_CONTINUE || psync_result == PSYNC_FULLRESYNC ||
-            psync_result == PSYNC_FULLRESYNC_DUAL_CHANNEL) {
+            psync_result == PSYNC_FULLRESYNC_DUAL_CHANNEL)
+        {
             clearFailoverState(true);
         } else {
             abortFailover("Failover target rejected psync request");
@@ -4274,7 +4287,8 @@ void syncWithPrimary(connection *conn) {
         /* Create RDB connection */
         server.repl_rdb_transfer_s = connCreate(connTypeOfReplication());
         if (connConnect(server.repl_rdb_transfer_s, server.primary_host, server.primary_port, server.bind_source_addr,
-                        server.repl_mptcp, dualChannelFullSyncWithPrimary) == C_ERR) {
+                        server.repl_mptcp, dualChannelFullSyncWithPrimary) == C_ERR)
+        {
             dualChannelServerLog(LL_WARNING, "Unable to connect to Primary: %s",
                                  connGetLastError(server.repl_rdb_transfer_s));
             connClose(server.repl_rdb_transfer_s);
@@ -4324,7 +4338,8 @@ void syncWithPrimary(connection *conn) {
 int connectWithPrimary(void) {
     server.repl_transfer_s = connCreate(connTypeOfReplication());
     if (connConnect(server.repl_transfer_s, server.primary_host, server.primary_port, server.bind_source_addr,
-                    server.repl_mptcp, syncWithPrimary) == C_ERR) {
+                    server.repl_mptcp, syncWithPrimary) == C_ERR)
+    {
         serverLog(LL_WARNING, "Unable to connect to PRIMARY: %s", connGetLastError(server.repl_transfer_s));
         connClose(server.repl_transfer_s);
         server.repl_transfer_s = NULL;
@@ -5109,10 +5124,12 @@ void processClientsWaitingReplicas(void) {
          * or calling replicationCountAOFAcksByOffset()
          * if the requested offset / replicas were equal or less. */
         if (!is_wait_aof && last_offset && last_offset >= c->bstate->reploffset &&
-            last_numreplicas >= c->bstate->numreplicas) {
+            last_numreplicas >= c->bstate->numreplicas)
+        {
             numreplicas = last_numreplicas;
         } else if (is_wait_aof && last_aof_offset && last_aof_offset >= c->bstate->reploffset &&
-                   last_aof_numreplicas >= c->bstate->numreplicas) {
+                   last_aof_numreplicas >= c->bstate->numreplicas)
+        {
             numreplicas = last_aof_numreplicas;
         } else {
             numreplicas = is_wait_aof ? replicationCountAOFAcksByOffset(c->bstate->reploffset)
@@ -5233,14 +5250,16 @@ void replicationCron(void) {
 
     /* Non blocking connection timeout? */
     if (server.primary_host && (server.repl_state == REPL_STATE_CONNECTING || replicaIsInHandshakeState()) &&
-        (time(NULL) - server.repl_transfer_lastio) > server.repl_timeout) {
+        (time(NULL) - server.repl_transfer_lastio) > server.repl_timeout)
+    {
         serverLog(LL_WARNING, "Timeout connecting to the PRIMARY...");
         cancelReplicationHandshake(1);
     }
 
     /* Bulk transfer I/O timeout? */
     if (server.primary_host && server.repl_state == REPL_STATE_TRANSFER &&
-        (time(NULL) - server.repl_transfer_lastio) > server.repl_timeout) {
+        (time(NULL) - server.repl_transfer_lastio) > server.repl_timeout)
+    {
         serverLog(LL_WARNING, "Timeout receiving bulk data from PRIMARY... If the problem persists try to set the "
                               "'repl-timeout' parameter in valkey.conf to a larger value.");
         cancelReplicationHandshake(1);
@@ -5248,7 +5267,8 @@ void replicationCron(void) {
 
     /* Timed out primary when we are an already connected replica? */
     if (server.primary_host && server.repl_state == REPL_STATE_CONNECTED &&
-        (time(NULL) - server.primary->last_interaction) > server.repl_timeout) {
+        (time(NULL) - server.primary->last_interaction) > server.repl_timeout)
+    {
         serverLog(LL_WARNING, "PRIMARY timeout: no data nor PING received...");
         freeClient(server.primary);
     }
@@ -5337,9 +5357,11 @@ void replicationCron(void) {
              * by the fork child so if a disk-based replica is stuck it doesn't prevent the fork child
              * from terminating. */
             if (replica->repl_data->repl_state == REPLICA_STATE_WAIT_BGSAVE_END &&
-                server.rdb_child_type == RDB_CHILD_TYPE_SOCKET) {
+                server.rdb_child_type == RDB_CHILD_TYPE_SOCKET)
+            {
                 if (replica->repl_data->repl_last_partial_write != 0 &&
-                    (server.unixtime - replica->repl_data->repl_last_partial_write) > server.repl_timeout) {
+                    (server.unixtime - replica->repl_data->repl_last_partial_write) > server.repl_timeout)
+                {
                     serverLog(LL_WARNING, "Disconnecting timedout replica (full sync): %s",
                               replicationGetReplicaName(replica));
                     freeClient(replica);
@@ -5356,7 +5378,8 @@ void replicationCron(void) {
      * backlog, in order to reply to PSYNC queries if they are turned into
      * primaries after a failover. */
     if (listLength(server.replicas) == 0 && server.repl_backlog_time_limit && server.repl_backlog &&
-        server.primary_host == NULL) {
+        server.primary_host == NULL)
+    {
         time_t idle = server.unixtime - server.repl_no_replicas_since;
 
         if (idle > server.repl_backlog_time_limit) {
@@ -5435,7 +5458,8 @@ int shouldStartChildReplication(int *mincapa_out, int *req_out, int *rdbver_out)
                     req = replica->repl_data->replica_req;
                     rdbver = replicaRdbVersion(replica);
                 } else if (req != replica->repl_data->replica_req ||
-                           rdbver != replicaRdbVersion(replica)) {
+                           rdbver != replicaRdbVersion(replica))
+                {
                     /* Skip replicas that don't match */
                     continue;
                 }
@@ -5450,7 +5474,8 @@ int shouldStartChildReplication(int *mincapa_out, int *req_out, int *rdbver_out)
         if (replicas_waiting && (!server.repl_diskless_sync ||
                                  (server.repl_diskless_sync_max_replicas > 0 &&
                                   replicas_waiting >= server.repl_diskless_sync_max_replicas) ||
-                                 max_idle >= server.repl_diskless_sync_delay)) {
+                                 max_idle >= server.repl_diskless_sync_delay))
+        {
             if (mincapa_out) *mincapa_out = mincapa;
             if (req_out) *req_out = req;
             if (rdbver_out) *rdbver_out = rdbver;

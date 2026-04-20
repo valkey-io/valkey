@@ -1591,6 +1591,24 @@ void clusterCommand(client *c) {
         return;
     }
 
+    /* In raft mode, cluster commands that modify state use blockClientAsync,
+     * which is not compatible with MULTI/EXEC. Reject early.
+     * TODO: Consider making these commands non-blocking (reply OK
+     * immediately and let the caller poll for completion) to allow
+     * them inside MULTI and to match legacy CLUSTER MEET behavior. */
+    if (c->flag.multi && server.cluster_protocol == CLUSTER_PROTOCOL_RAFT) {
+        const char *sub = objectGetVal(c->argv[1]);
+        if (!strcasecmp(sub, "meet") || !strcasecmp(sub, "addslots") ||
+            !strcasecmp(sub, "addslotsrange") || !strcasecmp(sub, "delslots") ||
+            !strcasecmp(sub, "delslotsrange") || !strcasecmp(sub, "flushslots") ||
+            !strcasecmp(sub, "setslot") || !strcasecmp(sub, "replicate") ||
+            !strcasecmp(sub, "failover") || !strcasecmp(sub, "forget") ||
+            !strcasecmp(sub, "reset")) {
+            addReplyError(c, "This cluster command is not allowed inside MULTI");
+            return;
+        }
+    }
+
     if (c->argc == 2 && !strcasecmp(objectGetVal(c->argv[1]), "help")) {
         clusterCommandHelp(c);
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "nodes") && c->argc == 2) {

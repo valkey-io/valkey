@@ -802,5 +802,53 @@ start_server {tags {"tls"}} {
             $tls_client close
             $plain_client close
         }
+        test {TLS: No busy loop when write/read handlers are removed} {
+            set host [srv 0 host]
+            set port [srv 0 port]
+            set r [valkey $host $port 0 1]
+            
+            set pid [s process_id]
+            set statfile "/proc/$pid/stat"
+            
+            if {![file exists $statfile]} {
+                # Cannot measure exact CPU cycles without /proc
+                continue
+            }
+            
+            # 1. Measure CPU clock ticks before sleep
+            set fd [open $statfile r]
+            set data [split [read $fd 1024] " "]
+            close $fd
+            set utime_start [lindex $data 13]
+            set stime_start [lindex $data 14]
+            
+            # 2. Trigger the 'protectClient' (which removes both handlers)
+            # AND pipeline a PING. The PING stays entirely in the OS buffer.
+            # If the `WRITE_WANT_READ` is falsely tying up AE_READABLE polling, 
+            # epoll will endlessly fire against the unread PING data.
+            $r write "DEBUG SLEEP 2\r\n"
+            $r write "PING\r\n"
+            $r flush
+            
+            assert_equal [$r read] "OK"
+            assert_equal [$r read] "PONG"
+            
+            # 3. Measure CPU clock ticks after sleep
+            set fd [open $statfile r]
+            set data [split [read $fd 1024] " "]
+            close $fd
+            set utime_end [lindex $data 13]
+            set stime_end [lindex $data 14]
+            
+            set utime_diff [expr {$utime_end - $utime_start}]
+            set stime_diff [expr {$stime_end - $stime_start}]
+            set total_cpu_ticks [expr {$utime_diff + $stime_diff}]
+            
+            # In a 2-second 100% CPU busy loop, the OS tick differential will jump 
+            # heavily (usually ~200 at a standard 100Hz clock). 
+            # At rest with our fix, it will be virtually 0. Accommodate CI jitter up to 30 ticks.
+            assert {$total_cpu_ticks < 30}
+        }
+
     }
 }

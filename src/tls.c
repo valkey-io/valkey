@@ -1236,8 +1236,8 @@ static void updateSSLEvent(tls_connection *conn) {
     if (conn->flags & TLS_CONN_FLAG_POSTPONE_UPDATE_STATE) return;
 
     int mask = aeGetFileEvents(server.el, conn->c.fd);
-    int need_read = conn->c.read_handler || (conn->flags & TLS_CONN_FLAG_WRITE_WANT_READ);
-    int need_write = conn->c.write_handler || (conn->flags & TLS_CONN_FLAG_READ_WANT_WRITE);
+    int need_read = conn->c.read_handler || (conn->c.write_handler && (conn->flags & TLS_CONN_FLAG_WRITE_WANT_READ));
+    int need_write = conn->c.write_handler || (conn->c.read_handler && (conn->flags & TLS_CONN_FLAG_READ_WANT_WRITE));
 
     if (need_read && !(mask & AE_READABLE))
         aeCreateFileEvent(server.el, conn->c.fd, AE_READABLE, tlsEventHandler, conn);
@@ -1444,10 +1444,12 @@ static void tlsHandleEvent(tls_connection *conn, int mask) {
         if (connTLSAccept((connection *)conn, NULL) == C_ERR || conn->c.state != CONN_STATE_CONNECTED) return;
         break;
     case CONN_STATE_CONNECTED: {
-        int call_read = ((mask & AE_READABLE) && conn->c.read_handler) ||
-                        ((mask & AE_WRITABLE) && (conn->flags & TLS_CONN_FLAG_READ_WANT_WRITE));
-        int call_write = ((mask & AE_WRITABLE) && conn->c.write_handler) ||
-                         ((mask & AE_READABLE) && (conn->flags & TLS_CONN_FLAG_WRITE_WANT_READ));
+        int call_read = conn->c.read_handler &&
+                        ((mask & AE_READABLE) ||
+                         ((mask & AE_WRITABLE) && (conn->flags & TLS_CONN_FLAG_READ_WANT_WRITE)));
+        int call_write = conn->c.write_handler &&
+                         ((mask & AE_WRITABLE) ||
+                          ((mask & AE_READABLE) && (conn->flags & TLS_CONN_FLAG_WRITE_WANT_READ)));
 
         /* Normally we execute the readable event first, and the writable
          * event laster. This is useful as sometimes we may be able
@@ -1707,9 +1709,7 @@ static const char *connTLSGetLastError(connection *conn_) {
 }
 
 static int connTLSSetWriteHandler(connection *conn, ConnectionCallbackFunc func, int barrier) {
-    tls_connection *tls_conn = (tls_connection *)conn;
     conn->write_handler = func;
-    if (!func) tls_conn->flags &= ~TLS_CONN_FLAG_WRITE_WANT_READ;
     if (barrier)
         conn->flags |= CONN_FLAG_WRITE_BARRIER;
     else
@@ -1719,9 +1719,7 @@ static int connTLSSetWriteHandler(connection *conn, ConnectionCallbackFunc func,
 }
 
 static int connTLSSetReadHandler(connection *conn, ConnectionCallbackFunc func) {
-    tls_connection *tls_conn = (tls_connection *)conn;
     conn->read_handler = func;
-    if (!func) tls_conn->flags &= ~TLS_CONN_FLAG_READ_WANT_WRITE;
     updateSSLEvent((tls_connection *)conn);
     return C_OK;
 }

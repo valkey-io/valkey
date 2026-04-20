@@ -426,10 +426,11 @@ void sortCommandGeneric(client *c, int readonly) {
         if (desc) {
             long zsetlen = hashtableSize(((zset *)objectGetVal(sortval))->ht);
 
-            ln = zsl->tail;
+            ln = zslGetTail(zsl);
             if (start > 0) ln = zslGetElementByRank(zsl, zsetlen - start);
         } else {
-            ln = zsl->header->level[0].forward;
+            zskiplistNode *zheader = zslGetHeader(zsl);
+            ln = zheader->level[0].forward;
             if (start > 0) ln = zslGetElementByRank(zsl, start + 1);
         }
 
@@ -483,7 +484,7 @@ void sortCommandGeneric(client *c, int readonly) {
                 if (sdsEncodedObject(byval)) {
                     char *eptr;
                     errno = 0;
-                    vector[j].u.score = valkey_strtod(objectGetVal(byval), &eptr);
+                    vector[j].u.score = valkey_strtod_sds(objectGetVal(byval), &eptr);
                     if (eptr[0] != '\0' || errno == ERANGE || errno == EINVAL || isnan(vector[j].u.score)) {
                         int_conversion_error = 1;
                     }

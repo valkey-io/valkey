@@ -6,7 +6,7 @@
         "since": "3.0.0",
         "arity": 3,
         "container": "CLUSTER",
-        "function": "clusterCommand",
+        "function": "clusterKeySlotCommand",
         "command_flags": [
             "STALE"
         ],

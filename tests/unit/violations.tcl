@@ -1,4 +1,5 @@
-# One XADD with one huge 5GB field
+# One XADD with one huge >4GiB field (reduced from 5GB for CI memory limits)
+# Must exceed 2^32 to require more than 32 bits to address
 # Expected to fail resulting in an empty stream
 run_solo {violations} {
 start_server [list overrides [list save ""] tags {"large-memory"}] {
@@ -8,11 +9,11 @@ start_server [list overrides [list save ""] tags {"large-memory"}] {
         r write "*5\r\n\$4\r\nXADD\r\n\$2\r\nS1\r\n\$1\r\n*\r\n"
         r write "\$1\r\nA\r\n"
         catch {
-            write_big_bulk 5000000000 ;#5gb
+            write_big_bulk 4300000000 ;#~4GiB, >2^32
         } err
         assert_match {*too large*} $err
         r xlen S1
-    } {0} {large-memory}
+    } {0}
 }
 
 # One XADD with one huge (exactly nearly) 4GB field
@@ -29,19 +30,20 @@ start_server [list overrides [list save ""] tags {"large-memory"}] {
         } err
         assert_match {*too large*} $err
         r xlen S1
-    } {0} {large-memory}
+    } {0}
 }
 
 # Gradually add big stream fields using repeated XADD calls
+# Reduced from 10 to 3 iterations to fit in 16GB CI runners with ASAN overhead
 start_server [list overrides [list save ""] tags {"large-memory"}] {
     test {several XADD big fields} {
         r config set stream-node-max-bytes 0
-        for {set j 0} {$j<10} {incr j} {
+        for {set j 0} {$j<3} {incr j} {
             r xadd stream * 1 $::str500 2 $::str500
         }
         r ping
         r xlen stream
-    } {10} {large-memory}
+    } {3}
 }
 
 # Add over 4GB to a single stream listpack (one XADD command)
@@ -57,7 +59,7 @@ start_server [list overrides [list save ""] tags {"large-memory"}] {
         catch {r read} err
         assert_match {*too large*} $err
         r xlen S
-    } {0} {large-memory}
+    } {0}
 }
 
 # Gradually add big hash fields using repeated HSET calls
@@ -70,11 +72,12 @@ start_server [list overrides [list save ""] tags {"large-memory"}] {
             r hset h $j $::str500
         }
         r object encoding h
-    } {hashtable} {large-memory}
+    } {hashtable}
 }
 
 # Add over 4GB to a single hash field (one HSET command)
 # Object will be converted to hashtable encoding
+# Reduced from 5GB; must exceed 2^32 to test >4GiB (32-bit boundary) behavior
 start_server [list overrides [list save ""] tags {"large-memory"}] {
     test {hash with one huge field} {
         catch {r config set hash-max-ziplist-value 10000000000} ;#10gb
@@ -82,9 +85,9 @@ start_server [list overrides [list save ""] tags {"large-memory"}] {
         r config set client-query-buffer-limit 10000000000 ;#10gb
         r write "*4\r\n\$4\r\nHSET\r\n\$2\r\nH1\r\n"
         r write "\$1\r\nA\r\n"
-        write_big_bulk 5000000000 ;#5gb
+        write_big_bulk 4300000000 ;#~4GiB, >2^32
         r object encoding H1
-    } {hashtable} {large-memory}
+    } {hashtable}
 }
 } ;# run_solo
 

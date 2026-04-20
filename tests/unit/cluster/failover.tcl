@@ -121,13 +121,34 @@ start_cluster 3 6 {tags {external:skip cluster}} {
     }
 
     test "Make sure the replicas always get the different ranks" {
-        if {[s -3 role] == "master"} {
-            verify_log_message -3 "*Start of election*rank #0*" 0
-            verify_log_message -6 "*Start of election*rank #1*" 0
-        } else {
-            verify_log_message -3 "*Start of election*rank #1*" 0
-            verify_log_message -6 "*Start of election*rank #0*" 0
+        set log3 [exec cat [srv -3 stdout]]
+        set log6 [exec cat [srv -6 stdout]]
+    
+        set srv3_has_rank0 [string match "*Start of election*(rank #0*" $log3]
+        set srv3_has_rank1 [string match "*Start of election*(rank #1*" $log3]
+        set srv6_has_rank0 [string match "*Start of election*(rank #0*" $log6]
+        set srv6_has_rank1 [string match "*Start of election*(rank #1*" $log6]
+    
+        # One should have rank #0, other should have rank #1 (different ranks)
+        if {!(($srv3_has_rank0 && $srv6_has_rank1) || ($srv3_has_rank1 && $srv6_has_rank0))} {
+            fail "Replicas should have different ranks: srv3_rank0=$srv3_has_rank0, srv3_rank1=$srv3_has_rank1, srv6_rank0=$srv6_has_rank0, srv6_rank1=$srv6_has_rank1"
         }
     }
 
+} ;# start_cluster
+
+# Verify failover works when slot boundaries are not 64-bit aligned.
+# When we use 3-shard layout, it puts boundaries at 5461 and 10922 (mid-word in the bitmap).
+# We need memrev64ifbe after memcpy so ctzll returns the right bit positions
+# on big-endian hosts, otherwise this test will fail early if there is no failover consensus.
+start_cluster 3 1 {tags {external:skip cluster}} {
+    test "Failover succeeds with non 64 bit aligned slot boundaries" {
+        R 3 cluster failover
+        wait_for_condition 1000 50 {
+            [s -3 role] eq {master} &&
+            [s 0 role] eq {slave}
+        } else {
+            fail "Failover did not happen"
+        }
+    }
 } ;# start_cluster

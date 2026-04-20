@@ -47,6 +47,18 @@ VOTE <term> <granted>
 PROPOSE <entry>
     Forwards a proposal from a follower to the leader. The entry
     uses the same format as log entries (type followed by data).
+
+FAILOVER_PREPARE
+    Sent by a replica to its primary to request a coordinated failover.
+    The primary pauses writes so the replica can catch up. Not a raft
+    log entry — just a direct message over the cluster link.
+
+REPL_OFFSETS <context-node-id> <node-id> <offset> [<node-id> <offset> ...]
+    Sent by the leader to propagate replication offsets. Used before
+    NODE_FAIL to provide replicas with sibling offsets for failover
+    ranking. The context-node-id is the failed primary (or dash if
+    not failover-related). Recipients update node->repl_offset for
+    CLUSTER SLOTS/SHARDS health reporting.
 ```
 
 The address string uses the nodes.conf format:
@@ -138,19 +150,17 @@ changes are infrequent.
 
 ## PROPOSE and Leader Validation
 
-Followers forward proposals to the leader using the PROPOSE message.
-The leader always accepts proposals without validation — it appends
-them to the log and replicates them. Validation happens at apply time,
-where the apply function can detect conflicts and treat them as no-ops.
+Followers forward proposals to the leader using the PROPOSE message,
+sent on the outbound link to the leader. The leader always accepts
+proposals without validation — it appends them to the log and
+replicates them. Validation happens at apply time, where the apply
+function can detect conflicts and treat them as no-ops.
 
 This design simplifies the leader: it doesn't need to understand the
 semantics of each entry type. The leader is a pure log replication
 engine. The apply function on each node independently resolves
 conflicts using the same deterministic logic, ensuring all nodes
 converge to the same state.
-
-If a follower doesn't have an outbound link to the leader, it uses
-the inbound link (from the leader's connection) to send PROPOSE.
 
 ## Synchronous MEET (HELLO/HI/WELCOME Protocol)
 
@@ -178,25 +188,53 @@ commits. It fires the pending MEET callback, unblocking the client.
 ### Two singletons meeting
 
 ```
-  Node A (MEET target)              Node B (MEET initiator)
-  singleton leader                  singleton leader
-       |                                 |
-       |  <--- outbound link ---  HELLO  |  (B connects to A)
-       |                                 |
-  step down (unknown sender)             |
-  set leader = B                         |
-       |                                 |
-       |  HI (on inbound link) --------> |
-       |                                 |  propose NODE_JOIN(A)
-       |                                 |  commit (single node)
-       |                                 |  apply: A joins cluster
-       |                                 |
-       |  <--- AE (NODE_JOIN) ---------- |  (replicate to A)
-  apply: A joins, promote to follower    |
-       |  --- AE_ACK ------------------> |
-       |                                 |
-       |  <--- WELCOME on outbound ---   |  (NODE_JOIN committed)
-  fire MEET callback                     |
+  Admin                   Node A               Node B
+  client               singleton leader     singleton leader
+    |                       |                     |
+    |--- CLUSTER MEET B --->|                     |
+    |                       |--- HELLO ---------->|
+    |                       |                     |  Unknown sender
+    |                       |                     |  Step down to learner
+    |                       |<------- HI ---------|
+    |                       |                     |
+    |             Propose NODE_JOIN               |
+    |             Commit (single node)            |
+    |             Apply: B joins cluster          |
+    |                       |                     |
+    |<------- OK -----------|                     |
+    |                       |---- WELCOME ------->|  No-op in this case
+    |                       |                     |
+    |                       |--- AppendEntries -->|  Apply: promote
+    |                       |                     |  to follower
+    |                       |<-- AppendEntriesAck-|
+```
+
+### Singleton joining an existing cluster
+
+```
+  Admin                   Node A               Node B          Node C
+  client               singleton leader      follower          leader
+    |                       |                     |               |
+    |--- CLUSTER MEET B --->|                     |               |
+    |                       |--- HELLO ---------->|               |
+    |                       |                     |  Unknown sender
+    |                       |<------- HI ---------|               |
+    |                       |                     |               |
+    |          Step down (rule 2: HI              |               |
+    |          from non-singleton)                |               |
+    |                       |          PROPOSE NODE_JOIN(A) ----->|  Append to Raft log
+    |                       |                     |               |
+    |                       |              +--------------------------+
+    |                       |              |  NODE_JOIN(A) committed  |
+    |                       |              |  via Raft (B+C quorum)   |
+    |                       |              +--------------------------+
+    |                       |                     |               |
+    |                       |<------- WELCOME ----|               |
+    |<------- OK -----------|                     |               |
+    |                       |                     |               |  Eventually,
+    |                       |<---- AppendEntries -----------------|  when link to A
+    |              Apply: A joins                 |               |  is established
+    |              Promote to follower            |               |
 ```
 
 ### Step-down rules
@@ -209,12 +247,6 @@ commits. It fires the pending MEET callback, unblocking the client.
 
 Both rules set `rs->leader` to the sender's name so the follower
 knows where to send PROPOSE.
-
-### Singleton joining an existing cluster
-
-When a follower in an existing cluster receives HELLO from an unknown
-singleton, it proposes NODE_JOIN to the leader. The leader commits it
-and the new node receives the entry via AE replication.
 
 ## Failure Detection
 
@@ -268,20 +300,17 @@ replication offsets. In gossip, each node's replication offset is
 piggybacked on ping/pong messages and stored in `node->repl_offset`.
 This is not persisted in nodes.conf — it's purely ephemeral.
 
-In raft, we don't propagate replication offsets between nodes.
-`isNodeAvailable()` uses the offset to decide whether a replica is
-"loading" (offset == 0) or "online". For remote replicas in raft,
-we set `repl_offset = 1` when applying SET_REPLICA_OF so they appear
-available in CLUSTER SLOTS output.
+The leader learns each follower's replication offset from AE_ACK
+messages and updates `node->repl_offset` locally. To propagate
+offsets to other nodes, the leader sends REPL_OFFSETS messages. This
+is currently done before NODE_FAIL (for failover ranking) and is
+planned for when a replica finishes initial sync (offset transitions
+from 0 to non-zero).
 
-This is a known limitation. To achieve full compatibility:
-- Propagate a loading/online flag when a replica finishes initial
-  sync (one-time event, could be a log entry or piggybacked on
-  heartbeats).
-- Propagate approximate replication offsets periodically by
-  piggybacking on AE/AE_ACK messages (no disk cost since heartbeats
-  are not persisted). In large clusters, this could be done for a
-  rotating subset of nodes per heartbeat to avoid O(N) message size.
+On the leader, CLUSTER SLOTS and CLUSTER SHARDS show accurate offsets
+and health. On followers, remote replicas use `repl_offset = 1` as a
+placeholder (set when applying SET_REPLICA_OF) until REPL_OFFSETS
+broadcast to all nodes is fully implemented.
 
 ## Persistence
 
@@ -294,9 +323,8 @@ lines for uncommitted log entries.
 - Pre-vote protocol to avoid term inflation from partitioned nodes.
 - Log compaction / snapshotting for lagging followers.
 - Persistence of Raft log to disk.
-- NODE_FORGET (CLUSTER FORGET) through Raft log.
-- Automatic failover through Raft log.
 - Slot migration (SETSLOT MIGRATING/IMPORTING).
+- Broadcast REPL_OFFSETS to all nodes when a replica finishes sync.
 - Pub/sub and module message propagation over Raft links.
 - Permanent learners: in large clusters, some nodes may stay as
   non-voting learners to reduce election and commit overhead. The

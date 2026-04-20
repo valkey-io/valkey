@@ -263,7 +263,6 @@ static int clusterRaftProcessHello(clusterLink *link, int argc, sds *argv) {
               sender_name, link->inbound ? "inbound" : "outbound");
 
     clusterRaftState *rs = RAFT_STATE();
-    uint64_t sender_cluster_size = strtoull(argv[5], NULL, 10);
 
     /* Look up or create the sender node. */
     clusterNode *sender = clusterLookupNode(sender_name, CLUSTER_NAMELEN);
@@ -557,8 +556,7 @@ static void clusterRaftPropose(sds entry, void *ctx, void (*callback)(void *ctx,
     } else {
         sdsfree(data);
         clusterNode *leader = clusterLookupNode(rs->leader, CLUSTER_NAMELEN);
-        clusterLink *leader_link = leader ? (leader->link ? leader->link : leader->inbound_link) : NULL;
-        if (!leader_link) {
+        if (!leader || !leader->link) {
             /* Can't reach leader — flush the proposal we just added. */
             if (callback) {
                 listNode *ln = listLast(rs->pending_proposals);
@@ -566,15 +564,16 @@ static void clusterRaftPropose(sds entry, void *ctx, void (*callback)(void *ctx,
                 sdsfree(pp->data);
                 zfree(pp);
                 listDelNode(rs->pending_proposals, ln);
-                callback(ctx, "no leader");
+                callback(ctx, "no leader link");
             }
+            serverLog(LL_WARNING, "PROPOSE failed: no outbound link to leader.");
             return;
         }
         sds msg = wireNewMsg("PROPOSE");
         msg = sdscatlen(msg, " ", 1);
         msg = sdscatlen(msg, entry, sdslen(entry));
         msg = wireFinishMsg(msg);
-        clusterRaftSendMsg(leader_link, msg);
+        clusterRaftSendMsg(leader->link, msg);
     }
 }
 
@@ -1257,9 +1256,12 @@ static void clusterRaftCron(void) {
                         for (int r = 0; r < num_replicas; r++) {
                             clusterNode *replica = clusterNodeGetReplica(node, r);
                             if (replica == myself) continue;
-                            clusterLink *link = replica->link ? replica->link : replica->inbound_link;
+                            clusterLink *link = replica->link;
                             if (link) {
                                 clusterLinkSendBlock(link, block);
+                            } else {
+                                serverLog(LL_WARNING, "No outbound link to replica %.40s for REPL_OFFSETS.",
+                                          replica->name);
                             }
                         }
                         clusterMsgSendBlockDecrRefCount(block);
@@ -1869,12 +1871,13 @@ static void clusterRaftFailover(int force, int takeover, void *ctx, void (*callb
         rs->mf_callback = callback;
 
         /* Send FAILOVER_PREPARE to the primary. */
-        clusterLink *link = primary->link ? primary->link : primary->inbound_link;
-        if (link) {
-            sds msg = wireNewMsg("FAILOVER_PREPARE");
-            msg = wireFinishMsg(msg);
-            clusterRaftSendMsg(link, msg);
+        if (!primary->link) {
+            if (callback) callback(ctx, "no link to primary");
+            return;
         }
+        sds msg = wireNewMsg("FAILOVER_PREPARE");
+        msg = wireFinishMsg(msg);
+        clusterRaftSendMsg(primary->link, msg);
     }
 }
 

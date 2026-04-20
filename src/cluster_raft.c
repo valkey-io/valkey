@@ -97,6 +97,7 @@ typedef struct {
     uint64_t next_index;
     uint64_t match_index;
     mstime_t last_ack_time; /* Last time we received AE_ACK from this peer */
+    long long repl_offset;  /* Last known replication offset from AE_ACK */
 } raftPeerState;
 
 /* A pending proposal tracks a client waiting for a Raft entry to be
@@ -162,6 +163,9 @@ typedef struct {
     mstime_t mf_end; /* Timeout for manual failover, 0 = not in progress */
     void *mf_ctx;    /* blockedAsyncHandle for the CLUSTER FAILOVER client */
     void (*mf_callback)(void *ctx, const char *error);
+
+    /* Automatic failover state (on the replica side) */
+    mstime_t failover_time; /* When to propose FAILOVER based on rank, 0 = inactive */
 } clusterRaftState;
 
 #define RAFT_STATE() ((clusterRaftState *)server.cluster->protocol_data)
@@ -884,9 +888,10 @@ static void clusterRaftBroadcastAppendEntries(clusterRaftState *rs) {
 /* AE_ACK <term> <success> <last-log-index> */
 static void clusterRaftSendAppendEntriesResponse(clusterLink *link, uint64_t term, int success) {
     clusterRaftState *rs = RAFT_STATE();
+    long long offset = nodeIsReplica(myself) ? replicationGetReplicaOffset() : server.primary_repl_offset;
     sds msg = wireNewMsg("AE_ACK");
-    msg = sdscatfmt(msg, " %U %i %U", (unsigned long long)term, success,
-                    (unsigned long long)raftLogLastIndex(rs));
+    msg = sdscatfmt(msg, " %U %i %U %I", (unsigned long long)term, success,
+                    (unsigned long long)raftLogLastIndex(rs), (long long)offset);
     msg = wireFinishMsg(msg);
     clusterRaftSendMsg(link, msg);
 }
@@ -971,7 +976,7 @@ static int clusterRaftProcessAppendEntries(clusterLink *link, int argc, sds *arg
 }
 
 static int clusterRaftProcessAppendEntriesResponse(clusterLink *link, int argc, sds *argv) {
-    /* argv: AE_ACK <term> <success> <last-log-index> */
+    /* argv: AE_ACK <term> <success> <last-log-index> [<repl-offset>] */
     if (argc < 4) return 1;
     serverLog(LL_DEBUG, "Received AE_ACK: term=%s success=%s last_index=%s from %.40s",
               argv[1], argv[2], argv[3], link->node ? link->node->name : "?");
@@ -980,6 +985,7 @@ static int clusterRaftProcessAppendEntriesResponse(clusterLink *link, int argc, 
     uint64_t msg_term = strtoull(argv[1], NULL, 10);
     int success = atoi(argv[2]);
     uint64_t follower_last_index = strtoull(argv[3], NULL, 10);
+    long long follower_repl_offset = (argc >= 5) ? strtoll(argv[4], NULL, 10) : 0;
 
     clusterRaftMaybeStepDown(rs, msg_term);
     if (rs->role != RAFT_ROLE_LEADER) return 1;
@@ -988,6 +994,7 @@ static int clusterRaftProcessAppendEntriesResponse(clusterLink *link, int argc, 
     if (!node) return 1;
     clusterNodeRaftData *rd = RAFT_DATA(node);
     rd->peer.last_ack_time = mstime();
+    rd->peer.repl_offset = follower_repl_offset;
 
     /* Clear FAIL flag if the node is back. */
     if (nodeFailed(node)) {
@@ -1222,6 +1229,54 @@ static void clusterRaftCron(void) {
                 if (rd->peer.last_ack_time > 0 &&
                     now - rd->peer.last_ack_time > node_timeout) {
                     serverLog(LL_NOTICE, "Node %.40s not responding, proposing NODE_FAIL.", node->name);
+
+                    /* If the failed node is a primary with replicas, send
+                     * REPL_OFFSETS to each replica with all sibling offsets
+                     * so they can rank themselves for automatic failover. */
+                    if (!nodeIsReplica(node) && clusterNodeNumReplicas(node) > 0) {
+                        int num_replicas = clusterNodeNumReplicas(node);
+                        sds hint = wireNewMsg("REPL_OFFSETS");
+                        hint = sdscatfmt(hint, " %.40s", node->name);
+                        for (int r = 0; r < num_replicas; r++) {
+                            clusterNode *replica = clusterNodeGetReplica(node, r);
+                            long long roff = (replica == myself)
+                                                 ? (nodeIsReplica(myself) ? replicationGetReplicaOffset()
+                                                                          : server.primary_repl_offset)
+                                                 : RAFT_DATA(replica)->peer.repl_offset;
+                            hint = sdscatfmt(hint, " %.40s %I", replica->name, roff);
+                        }
+                        hint = wireFinishMsg(hint);
+
+                        /* Build a send block and send to remote replicas. */
+                        size_t hint_len = sdslen(hint);
+                        clusterMsgSendBlock *block = clusterAllocMsgSendBlock(hint_len);
+                        memcpy(block->data, hint, hint_len);
+                        sdsfree(hint);
+                        for (int r = 0; r < num_replicas; r++) {
+                            clusterNode *replica = clusterNodeGetReplica(node, r);
+                            if (replica == myself) continue;
+                            clusterLink *link = replica->link ? replica->link : replica->inbound_link;
+                            if (link) {
+                                clusterLinkSendBlock(link, block);
+                            }
+                        }
+                        clusterMsgSendBlockDecrRefCount(block);
+
+                        /* If I'm a replica of the failed primary, schedule
+                         * failover directly (no hint message to self). */
+                        if (nodeIsReplica(myself) && myself->replicaof == node) {
+                            long long my_offset = replicationGetReplicaOffset();
+                            int rank = 0;
+                            for (int r = 0; r < num_replicas; r++) {
+                                clusterNode *rep = clusterNodeGetReplica(node, r);
+                                if (rep == myself) continue;
+                                if (RAFT_DATA(rep)->peer.repl_offset > my_offset) rank++;
+                            }
+                            rs->failover_time = now + rank * 1000;
+                            serverLog(LL_NOTICE, "I'm replica of failed primary, rank %d.", rank);
+                        }
+                    }
+
                     sds entry = sdsnew("NODE_FAIL ");
                     entry = sdscatlen(entry, node->name, CLUSTER_NAMELEN);
                     clusterRaftPropose(entry, NULL, NULL);
@@ -1256,6 +1311,21 @@ static void clusterRaftCron(void) {
             rs->mf_ctx = NULL;
             rs->mf_callback = NULL;
             serverLog(LL_NOTICE, "Replication caught up, proposing FAILOVER.");
+        }
+    }
+
+    /* Automatic failover: propose FAILOVER when our scheduled time arrives. */
+    if (rs->failover_time && now >= rs->failover_time) {
+        if (nodeIsReplica(myself) && myself->replicaof && nodeFailed(myself->replicaof)) {
+            rs->failover_time = 0;
+            clusterNode *primary = myself->replicaof;
+            serverLog(LL_NOTICE, "Automatic failover: proposing FAILOVER for primary %.40s.", primary->name);
+            sds entry = sdsnew("FAILOVER ");
+            entry = sdscatlen(entry, myself->name, CLUSTER_NAMELEN);
+            entry = sdscatlen(entry, " ", 1);
+            entry = sdscatlen(entry, primary->name, CLUSTER_NAMELEN);
+            clusterRaftPropose(entry, NULL, NULL);
+            sdsfree(entry);
         }
     }
 }
@@ -1364,6 +1434,37 @@ static int clusterRaftProcessMessage(struct clusterLink *link) {
                          PAUSE_ACTIONS_CLIENT_WRITE_SET);
             serverLog(LL_NOTICE, "Manual failover requested by replica %.40s, pausing writes.",
                       link->node->name);
+        }
+    } else if (!strcasecmp(argv[0], "REPL_OFFSETS") && argc >= 4) {
+        /* Leader broadcasts replication offsets for a set of nodes.
+         * argv: REPL_OFFSETS <context-node-id> <node-id> <offset> ...
+         * Update node->repl_offset for CLUSTER SLOTS/SHARDS health.
+         * If context node is my primary and it's failed, compute
+         * failover rank. */
+        clusterRaftState *rs = RAFT_STATE();
+
+        /* Update repl_offset for all mentioned nodes. */
+        for (int i = 2; i + 1 < argc; i += 2) {
+            clusterNode *node = clusterLookupNode(argv[i], sdslen(argv[i]));
+            if (node && node != myself) {
+                node->repl_offset = strtoll(argv[i + 1], NULL, 10);
+            }
+        }
+
+        /* Compute failover rank if context node is my failed primary. */
+        if (nodeIsReplica(myself) && myself->replicaof &&
+            sdslen(argv[1]) == CLUSTER_NAMELEN &&
+            memcmp(myself->replicaof->name, argv[1], CLUSTER_NAMELEN) == 0) {
+            long long my_offset = nodeIsReplica(myself) ? replicationGetReplicaOffset() : 0;
+            int rank = 0;
+            for (int i = 2; i + 1 < argc; i += 2) {
+                if (memcmp(argv[i], myself->name, CLUSTER_NAMELEN) == 0) continue;
+                long long off = strtoll(argv[i + 1], NULL, 10);
+                if (off > my_offset) rank++;
+            }
+            rs->failover_time = mstime() + rank * 1000;
+            serverLog(LL_NOTICE, "REPL_OFFSETS: failover rank %d for primary %.40s.",
+                      rank, argv[1]);
         }
     } else {
         serverLog(LL_WARNING, "Unknown Raft message: %s", argv[0]);
@@ -1648,12 +1749,9 @@ static void clusterRaftApplySetReplica(sds data) {
             replica->flags |= CLUSTER_NODE_REPLICA;
             replica->replicaof = primary;
             clusterNodeAddReplica(primary, replica);
-            /* TODO: Replication offsets are not propagated in the raft
-             * protocol (gossip piggybacks them on ping/pong). Set to
-             * non-zero so isNodeAvailable() returns true and CLUSTER SLOTS
-             * includes this replica. To make CLUSTER SHARDS fully compatible,
-             * we would need to propagate offsets periodically (e.g. on
-             * heartbeats) or at least a loading/online flag. */
+            /* Set to non-zero so isNodeAvailable() returns true and
+             * CLUSTER SLOTS includes this replica. The leader will
+             * broadcast real offsets via REPL_OFFSETS messages. */
             replica->repl_offset = 1;
             /* Move replica to primary's shard. */
             clusterRemoveNodeFromShard(replica);
@@ -1676,7 +1774,7 @@ static void clusterRaftApplyFailover(sds data) {
     clusterNode *replica = clusterLookupNode(argv[0], sdslen(argv[0]));
     clusterNode *primary = clusterLookupNode(argv[1], sdslen(argv[1]));
     if (!replica || !primary) goto done;
-    if (!nodeIsReplica(replica) || !clusterNodeIsPrimary(primary)) goto done;
+    if (!nodeIsReplica(replica)) goto done;
 
     /* Transfer slots from old primary to new primary. */
     for (int j = 0; j < CLUSTER_SLOTS; j++) {

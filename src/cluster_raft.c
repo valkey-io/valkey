@@ -157,6 +157,11 @@ typedef struct {
 
     /* Leader identity */
     char leader[CLUSTER_NAMELEN]; /* All zeros = unknown */
+
+    /* Manual failover state (on the replica side) */
+    mstime_t mf_end; /* Timeout for manual failover, 0 = not in progress */
+    void *mf_ctx;    /* blockedAsyncHandle for the CLUSTER FAILOVER client */
+    void (*mf_callback)(void *ctx, const char *error);
 } clusterRaftState;
 
 #define RAFT_STATE() ((clusterRaftState *)server.cluster->protocol_data)
@@ -192,6 +197,7 @@ static void clusterRaftJoinCallback(void *ctx, const char *error);
 static raftPendingMeet *clusterRaftConsumePendingMeet(clusterNode *node);
 static void clusterRaftApplySlotChange(sds data);
 static void clusterRaftApplySetReplica(sds data);
+static void clusterRaftApplyFailover(sds data);
 static void raftLogApply(raftLogEntry *e);
 static raftLogEntry *raftLogCreate(uint64_t term, uint64_t index, uint8_t type, sds data);
 static void raftLogAppend(clusterRaftState *rs, raftLogEntry *e);
@@ -762,6 +768,12 @@ static void raftLogApply(raftLogEntry *e) {
         rs->todo_invalidate_slots_cache = 1;
         serverLog(LL_NOTICE, "Applied SET_REPLICA_OF (index %llu).", (unsigned long long)e->index);
         break;
+    case RAFT_ENTRY_FAILOVER:
+        clusterRaftApplyFailover(e->data);
+        rs->todo_update_slot_coverage = 1;
+        rs->todo_invalidate_slots_cache = 1;
+        serverLog(LL_NOTICE, "Applied FAILOVER (index %llu).", (unsigned long long)e->index);
+        break;
     case RAFT_ENTRY_NODE_FORGET: {
         clusterNode *node = clusterLookupNode(e->data, sdslen(e->data));
         if (node && node != myself) {
@@ -1219,6 +1231,33 @@ static void clusterRaftCron(void) {
             dictReleaseIterator(di);
         }
     }
+
+    /* Coordinated manual failover: check if replication caught up. */
+    if (rs->mf_end) {
+        if (now > rs->mf_end) {
+            /* Timeout. */
+            serverLog(LL_NOTICE, "Manual failover timed out.");
+            if (rs->mf_callback) rs->mf_callback(rs->mf_ctx, "manual failover timed out");
+            rs->mf_end = 0;
+            rs->mf_ctx = NULL;
+            rs->mf_callback = NULL;
+        } else if (nodeIsReplica(myself) && myself->replicaof &&
+                   replicationGetReplicaOffset() == server.primary_repl_offset &&
+                   server.primary_repl_offset > 0) {
+            /* Caught up — propose FAILOVER. */
+            clusterNode *primary = myself->replicaof;
+            sds entry = sdsnew("FAILOVER ");
+            entry = sdscatlen(entry, myself->name, CLUSTER_NAMELEN);
+            entry = sdscatlen(entry, " ", 1);
+            entry = sdscatlen(entry, primary->name, CLUSTER_NAMELEN);
+            clusterRaftPropose(entry, rs->mf_ctx, rs->mf_callback);
+            sdsfree(entry);
+            rs->mf_end = 0;
+            rs->mf_ctx = NULL;
+            rs->mf_callback = NULL;
+            serverLog(LL_NOTICE, "Replication caught up, proposing FAILOVER.");
+        }
+    }
 }
 
 static void clusterRaftCheckSlotCoverage(void) {
@@ -1315,6 +1354,17 @@ static int clusterRaftProcessMessage(struct clusterLink *link) {
         ret = clusterRaftProcessRequestVote(link, argc, argv);
     } else if (!strcasecmp(argv[0], "VOTE")) {
         ret = clusterRaftProcessRequestVoteResponse(link, argc, argv);
+    } else if (!strcasecmp(argv[0], "FAILOVER_PREPARE")) {
+        /* Primary side: pause writes for coordinated failover. */
+        if (link->node && nodeIsReplica(link->node) && link->node->replicaof == myself) {
+            clusterRaftState *rs = RAFT_STATE();
+            rs->mf_end = mstime() + server.cluster_mf_timeout;
+            pauseActions(PAUSE_DURING_FAILOVER,
+                         mstime() + (server.cluster_mf_timeout * CLUSTER_MF_PAUSE_MULT),
+                         PAUSE_ACTIONS_CLIENT_WRITE_SET);
+            serverLog(LL_NOTICE, "Manual failover requested by replica %.40s, pausing writes.",
+                      link->node->name);
+        }
     } else {
         serverLog(LL_WARNING, "Unknown Raft message: %s", argv[0]);
     }
@@ -1495,7 +1545,13 @@ static int clusterRaftGetFailureReportsCount(clusterNode *node) {
  * -------------------------------------------------------------------------- */
 
 static void clusterRaftCancelManualFailover(void) {
-    /* TODO */
+    clusterRaftState *rs = RAFT_STATE();
+    if (rs->mf_end) {
+        if (rs->mf_callback) rs->mf_callback(rs->mf_ctx, "manual failover aborted");
+        rs->mf_end = 0;
+        rs->mf_ctx = NULL;
+        rs->mf_callback = NULL;
+    }
 }
 
 static void clusterRaftCancelAutomaticFailover(void) {
@@ -1609,6 +1665,56 @@ done:
     if (argv) sdsfreesplitres(argv, argc);
 }
 
+/* Apply a FAILOVER entry. Format: "<replica-id> <primary-id>"
+ * The replica takes over the primary's slots and becomes primary.
+ * The old primary becomes a replica of the new primary. */
+static void clusterRaftApplyFailover(sds data) {
+    int argc;
+    sds *argv = sdssplitlen(data, sdslen(data), " ", 1, &argc);
+    if (!argv || argc != 2) goto done;
+
+    clusterNode *replica = clusterLookupNode(argv[0], sdslen(argv[0]));
+    clusterNode *primary = clusterLookupNode(argv[1], sdslen(argv[1]));
+    if (!replica || !primary) goto done;
+    if (!nodeIsReplica(replica) || !clusterNodeIsPrimary(primary)) goto done;
+
+    /* Transfer slots from old primary to new primary. */
+    for (int j = 0; j < CLUSTER_SLOTS; j++) {
+        if (server.cluster->slots[j] == primary) {
+            clusterDelSlot(j);
+            clusterAddSlot(replica, j);
+        }
+    }
+
+    /* Promote replica to primary. */
+    clusterNodeRemoveReplica(primary, replica);
+    replica->flags &= ~CLUSTER_NODE_REPLICA;
+    replica->flags |= CLUSTER_NODE_PRIMARY;
+    replica->replicaof = NULL;
+
+    /* Demote old primary to replica of new primary. */
+    primary->flags &= ~CLUSTER_NODE_PRIMARY;
+    primary->flags |= CLUSTER_NODE_REPLICA;
+    primary->replicaof = replica;
+    clusterNodeAddReplica(replica, primary);
+
+    /* Move old primary to new primary's shard. */
+    clusterRemoveNodeFromShard(primary);
+    memcpy(primary->shard_id, replica->shard_id, CLUSTER_NAMELEN);
+    clusterAddNodeToShard(replica->shard_id, primary);
+
+    /* If I'm the replica being promoted, start acting as primary. */
+    if (replica == myself) {
+        replicationUnsetPrimary();
+    }
+    /* If I'm the old primary being demoted, start replicating. */
+    if (primary == myself) {
+        clusterSetPrimary(replica, 1, 1);
+    }
+done:
+    if (argv) sdsfreesplitres(argv, argc);
+}
+
 static void clusterRaftForgetNode(const char *node_id, size_t id_len, void *ctx, void (*callback)(void *ctx, const char *error)) {
     sds entry = sdsnew("NODE_FORGET ");
     entry = sdscatlen(entry, node_id, id_len);
@@ -1627,10 +1733,41 @@ static void clusterRaftSetReplicaOf(clusterNode *primary, void *ctx, void (*call
 }
 
 static void clusterRaftFailover(int force, int takeover, void *ctx, void (*callback)(void *ctx, const char *error)) {
-    UNUSED(force);
     UNUSED(takeover);
-    /* TODO: propose FAILOVER entry */
-    if (callback) callback(ctx, "not implemented");
+    clusterNode *primary = myself->replicaof;
+    if (!primary) {
+        if (callback) callback(ctx, "no primary to fail over");
+        return;
+    }
+
+    if (force) {
+        /* FORCE/TAKEOVER: propose immediately without coordination. */
+        sds entry = sdsnew("FAILOVER ");
+        entry = sdscatlen(entry, myself->name, CLUSTER_NAMELEN);
+        entry = sdscatlen(entry, " ", 1);
+        entry = sdscatlen(entry, primary->name, CLUSTER_NAMELEN);
+        clusterRaftPropose(entry, ctx, callback);
+        sdsfree(entry);
+    } else {
+        /* Coordinated failover: ask primary to pause writes, then wait
+         * for replication to catch up before proposing. */
+        clusterRaftState *rs = RAFT_STATE();
+        if (rs->mf_end) {
+            if (callback) callback(ctx, "manual failover already in progress");
+            return;
+        }
+        rs->mf_end = mstime() + server.cluster_mf_timeout;
+        rs->mf_ctx = ctx;
+        rs->mf_callback = callback;
+
+        /* Send FAILOVER_PREPARE to the primary. */
+        clusterLink *link = primary->link ? primary->link : primary->inbound_link;
+        if (link) {
+            sds msg = wireNewMsg("FAILOVER_PREPARE");
+            msg = wireFinishMsg(msg);
+            clusterRaftSendMsg(link, msg);
+        }
+    }
 }
 
 static void clusterRaftMeet(const char *ip, int port, int cport, void *ctx, void (*callback)(void *ctx, const char *error)) {

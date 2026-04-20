@@ -266,6 +266,11 @@ proc tags_acceptable {tags err_return} {
         return 0
     }
 
+    if {$::cluster_v2 && [lsearch -exact $tags "cluster-v2:skip"] >= 0} {
+        set err "Not supported with cluster-v2 (raft)"
+        return 0
+    }
+
     if {$::tls && [lsearch -exact $tags "tls:skip"] >= 0} {
         set err "Not supported in tls mode"
         return 0

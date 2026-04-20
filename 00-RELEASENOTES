@@ -1,16 +1,166 @@
-Hello! This file is just a placeholder, since this is the "unstable" branch
-of Valkey, the place where all the development happens.
+Valkey 9.1 release notes
+========================
 
-There is no release notes for this branch, it gets forked into another branch
-every time there is a partial feature freeze in order to eventually create
-a new stable release.
+Upgrade urgency levels:
 
-Usually "unstable" is stable enough for you to use it in development environments
-however you should never use it in production environments. It is possible
-to download the latest stable release here:
+| Level    | Meaning                                                             |
+|----------|---------------------------------------------------------------------|
+| LOW      | No need to upgrade unless there are new features you want to use.   |
+| MODERATE | Program an upgrade of the server, but it's not urgent.              |
+| HIGH     | There is a critical bug that may affect a subset of users. Upgrade! |
+| CRITICAL | There is a critical bug affecting MOST USERS. Upgrade ASAP.         |
+| SECURITY | There are security fixes in the release.                            |
 
-    https://valkey.io/download/
+Valkey 9.1.0-rc1 - Released Tue Mar 17 00:00:00 2026
+-------------------------------------
 
-More information is available at https://valkey.io
+Upgrade urgency LOW: This is the first release candidate of Valkey 9.1.0, with
+new features, performance improvements, and bug fixes.
 
-Happy hacking!
+### New Features and enhanced behavior
+* Database-level access control by @dvkashapov (#2309)
+* Move Lua scripting engine into a Valkey module by @rjd15372 (#2858)
+* Support cross node consistency for `SCAN` commands through configurable DB hash seed by @sarthakaggarwal97 (#2608)
+* Support automatic TLS reload by @yang-z-o (#3020)
+* Support TLS authentication using SAN URI by @yang-z-o (#3078)
+* Prevent invalid TLS certificates from being loaded by @yang-z-o (#2999)
+* Failing to save the cluster config file will no longer exit the process by @enjoy-binbin (#1032)
+
+### Command and API updates
+* Makes `CLUSTER KEYSLOT` available in standalone mode by @stockholmux (#3040)
+* Update HSETEX so that it always issue keyspace notifications after validation by @ranshid (#3001)
+* Adds HGETDEL command by @roshkhatri (#2851)
+* Support NX/XX flag in HSETEX command by @hanxizh9910 (#2668)
+* New `CLUSTERSCAN` command for cluster-wide key scanning across nodes by @nmvk (#2934)
+* New `MSETEX` command to set multiple keys with a shared expiration by @enjoy-binbin (#3121)
+* `CLUSTER SHARDS`/`CLUSTER SLOTS` now include an `availability-zone` field by @bandalgomsu (#3156)
+
+### Performance and Efficiency improvements
+* Optimize zset memory usage by embedding element in skiplist by @chzhoo (#2508)
+* Remove internal server object pointer overhead in small strings by @rainsupreme (#2516)
+* Optimize skiplist query efficiency by embedding the skiplist header by @chzhoo (#2867)
+* Improve performance during rehashing by @chzhoo (#3073)
+* Optimize SREM/ZREM/HDEL to pause auto shrink when deleting multiple items by @enjoy-binbin (#3144)
+* Abort and swap the tables if ht1 is very full during the hashtable shrink rehashing by @enjoy-binbin (#3175)
+* Improve performance of copy avoidance when command reply tracking is disabled by @dvkashapov (#3086)
+* Enable hardware clock by default by @dvkashapov (#3103)
+* Improve `COMMAND` performance by caching responses by @ebarskiy (#2839)
+* Add support for asynchronous freeing of keys on writable replicas by @Scut-Corgis (#2849)
+* Faster `XRANGE`/`XREVRANGE` via stream range hot-path optimization by @nesty92 (#3002)
+* Replicas can reuse the RDB file as AOF preamble after disk-based full sync by @RayaCoo (#1901)
+
+### Module API changes
+* Add ValkeyModule_ClusterKeySlotC by @bandalgomsu (#2984)
+* Add more client info flags to module API by @martinrvisser (#2868)
+* Add prefix-aware ACL permission checks and new module API by @eifrah-aws (#2796)
+* Support unsigned 64-bit numeric config values in module API by @artikell (#1546)
+
+### Observability and logging
+* Cumulative metrics for active I/O threads usage by @deepakrn (#2463)
+* Cumulative metric for active main thread usage by @dvkashapov (#2931)
+* Support whole cluster info for INFO command in cluster_info section by @soloestoy, @ranshid (#2876, #2964)
+* Add remaining_repl_size field in `CLUSTER GETSLOTMIGRATIONS` output by @enjoy-binbin (#3135)
+* Add logging helper function to print node's ip:port when nodename not explicitly set by @zhijun42 (#2777)
+* Dual-channel-replication announces itself at replica-announce-ip if configured by @jdheyburn (#2846)
+* Show replica dual-channel replication buffer memory in `INFO MEMORY` and `MEMORY STATS` by @enjoy-binbin (#2924)
+* Add `rdb_transmitted` state to replica state in `INFO` by @enjoy-binbin (#2833)
+* New INFO section for scripting engines by @rjd15372 (#2738)
+* Adding json support for log-format config by @jbergstroem (#1791)
+* Add server side TLS certificate expiry tracking and INFO telemetry by @YiwenZhang12 (#2913)
+* Add option to use libbacktrace for backtraces in crash reports by @rainsupreme (#3034)
+
+### Build and Tooling
+* Show RPS histogram in valkey-benchmark by @hanxizh9910 (#2471)
+* Add --warmup and --duration parameters to valkey-benchmark by @rainsupreme (#2581)
+* Lazy loading of RDMA libs in CLI/Benchmark when building as module by @Ada-Church-Closure (#3072)
+* Add support for atomic slot migration to valkey-cli by @murphyjacob4 (#2755)
+* Replace C++ fast_float dependency with pure C implementation (ffc) by @lemire (#3329)
+
+### Bug Fixes
+* Strictly check CRLF when parsing querybuf by @enjoy-binbin (#2872)
+
+### Contributors
+* Adam Fowler @adam-fowler
+* Aditya Teltia @AdityaTeltia
+* Alina Liu @asagege
+* Allen Samuels @allenss-amazon
+* Alon Arenberg @alon-arenberg
+* aradz44 @aradz44
+* Arthur Lee @arthurkiller
+* bandalgomsu @bandalgomsu
+* Baswanth @baswanth09
+* Benson-li @li-benson
+* Binbin @enjoy-binbin
+* Björn Svensson @bjosv
+* bpint @bpint
+* chzhoo @chzhoo
+* cjx-zar @cjx-zar
+* Daniil Kashapov @dvkashapov
+* Deepak Nandihalli @deepakrn
+* Diego Ciciani @diegociciani
+* eifrah-aws @eifrah-aws
+* Evgeny Barskiy @ebarskiy
+* Gabi Ganam @gabiganam
+* Gagan H R @gaganhr94
+* Hanxi Zhang @hanxizh9910
+* Harkrishn Patro @hpatro
+* Harry Lin @harrylin98
+* hieu2102 @hieu2102
+* Jacob Murphy @murphyjacob4
+* jiegang0219 @jiegang0219
+* Jim Brunner @JimB123
+* Johan Bergström @jbergstroem
+* John @johnufida
+* Joseph Heyburn @jdheyburn
+* Katie Holly @Fusl
+* Ken @otherscase
+* korjeek @korjeek
+* Kurt McKee @kurtmckee
+* Kyle J. Davis @stockholmux
+* Kyle Kim @kyle-yh-kim
+* Leon Anavi @leon-anavi
+* Madelyn Olson @madolson
+* Mangat Singh Toor @immangat
+* Marc Jakobi @mrcjkb
+* martinrvisser @martinrvisser
+* Marvin Rösch @marvinroesch
+* Murad Shahmammadli @MuradSh
+* NAM UK KIM @namuk2004
+* Nikhil Manglore @Nikhil-Manglore
+* Ouri Half @ouriamzn
+* Patrik Hermansson @phermansson
+* Ping Xie @PingXie
+* Quanye Yang @Ada-Church-Closure
+* Rain Valentine @rainsupreme
+* Ran Shidlansik @ranshid
+* Ricardo Dias @rjd15372
+* Ritoban Dutta @ritoban23
+* Roshan Khatri @roshkhatri
+* ruihong123 @ruihong123
+* Sachin Venkatesha Murthy @sachinvmurthy
+* Sarthak Aggarwal @sarthakaggarwal97
+* Satheesha CH Gowda @satheesha
+* Seungmin Lee @sungming2
+* Shinobu Nunotaba @Ada-Church-Closure
+* Simon Baatz @gmbnomis
+* skyfirelee @artikell
+* Sourav Singh Rawat @frostzt
+* stydxm @stydxm
+* Ted Lyngmo @TedLyngmo
+* Tony Wooster @twooster
+* uriyage @uriyage
+* Vadym Khoptynets @poiuj
+* Venkat Pamulapati @ChiliPaneer
+* Viktor Söderqvist @zuiderkwast
+* Vitah Lin @vitahlin
+* Vitali @VitalyAR
+* withRiver @withRiver
+* wxmzy88 @wxmzy88
+* xbasel @xbasel
+* Yair Gottdenker @yairgott
+* Yana Molodetsky @yanamolo
+* Yang Zhao @yang-z-o
+* Yiwen Zhang @YiwenZhang12
+* yzc-yzc @yzc-yzc
+* zhaozhao.zz @soloestoy
+* Zhijun Liao @zhijun42

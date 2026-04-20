@@ -455,6 +455,8 @@ static int updateClientOutputBufferLimit(sds *args, int arg_len, const char **er
  * within conf file parsing. This is only needed to support the deprecated
  * abnormal aggregate `save T C` functionality. Remove in the future. */
 static int reading_config_file;
+/* support detecting include vs main config file */
+static int reading_include_file = 0;
 
 void loadServerConfigFromString(sds config) {
     deprecatedConfig deprecated_configs[] = {
@@ -547,7 +549,9 @@ void loadServerConfigFromString(sds config) {
 
         /* Execute config directives */
         if (!strcasecmp(argv[0], "include") && argc == 2) {
+            reading_include_file = 1;
             loadServerConfig(argv[1], 0, NULL);
+            reading_include_file = 0;
         } else if (!strcasecmp(argv[0], "rename-command") && argc == 3) {
             struct serverCommand *cmd = lookupCommandBySds(argv[1]);
 
@@ -580,7 +584,7 @@ void loadServerConfigFromString(sds config) {
                 goto loaderr;
             }
         } else if (!strcasecmp(argv[0], "loadmodule") && argc >= 2) {
-            moduleEnqueueLoadModule(argv[1], &argv[2], argc - 2);
+            moduleEnqueueLoadModule(argv[1], &argv[2], argc - 2, reading_include_file);
         } else if (strchr(argv[0], '.')) {
             if (argc < 2) {
                 err = "Module config specified without value";
@@ -1620,7 +1624,7 @@ void rewriteConfigLoadmoduleOption(struct rewriteConfigState *state) {
     while ((de = dictNext(di)) != NULL) {
         struct ValkeyModule *module = dictGetVal(de);
         line = moduleLoadQueueEntryToLoadmoduleOptionStr(module, "loadmodule");
-        rewriteConfigRewriteLine(state, "loadmodule", line, 1);
+        if (line) rewriteConfigRewriteLine(state, "loadmodule", line, 1);
     }
     dictReleaseIterator(di);
     /* Mark "loadmodule" as processed in case modules is empty. */

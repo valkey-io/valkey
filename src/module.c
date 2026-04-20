@@ -84,6 +84,7 @@
 
 struct moduleLoadQueueEntry {
     sds path;
+    int from_include;
     int argc;
     robj **argv;
 };
@@ -676,7 +677,7 @@ void freeClientModuleData(client *c) {
     c->module_data = NULL;
 }
 
-void moduleEnqueueLoadModule(sds path, sds *argv, int argc) {
+void moduleEnqueueLoadModule(sds path, sds *argv, int argc, int from_include) {
     int i;
     struct moduleLoadQueueEntry *loadmod;
 
@@ -684,6 +685,7 @@ void moduleEnqueueLoadModule(sds path, sds *argv, int argc) {
     loadmod->argv = argc ? zmalloc(sizeof(robj *) * argc) : NULL;
     loadmod->path = sdsnew(path);
     loadmod->argc = argc;
+    loadmod->from_include = from_include;
     for (i = 0; i < argc; i++) {
         loadmod->argv[i] = createRawStringObject(argv[i], sdslen(argv[i]));
     }
@@ -694,6 +696,10 @@ sds moduleLoadQueueEntryToLoadmoduleOptionStr(ValkeyModule *module,
                                               const char *config_option_str) {
     sds line;
 
+    if (module->loadmod->from_include) {
+        /* no need to add as already from config */
+        return NULL;
+    }
     line = sdsnew(config_option_str);
     line = sdscatlen(line, " ", 1);
     line = sdscatsds(line, module->loadmod->path);
@@ -12888,7 +12894,7 @@ void moduleLoadFromQueue(void) {
     listRewind(server.loadmodule_queue, &li);
     while ((ln = listNext(&li))) {
         struct moduleLoadQueueEntry *loadmod = ln->value;
-        if (moduleLoad(loadmod->path, (void **)loadmod->argv, loadmod->argc, 0) == C_ERR) {
+        if (moduleLoad(loadmod->path, (void **)loadmod->argv, loadmod->argc, 0, loadmod->from_include) == C_ERR) {
             serverLog(LL_WARNING, "Can't load module from %s: server aborting", loadmod->path);
             exit(1);
         }
@@ -13077,7 +13083,7 @@ void moduleUnregisterCleanup(ValkeyModule *module) {
 
 /* Load a module and initialize it. On success C_OK is returned, otherwise
  * C_ERR is returned. */
-int moduleLoad(const char *path, void **module_argv, int module_argc, int is_loadex) {
+int moduleLoad(const char *path, void **module_argv, int module_argc, int is_loadex, int from_include) {
     int (*onload)(void *, void **, int);
     void *handle;
 
@@ -13152,6 +13158,7 @@ int moduleLoad(const char *path, void **module_argv, int module_argc, int is_loa
     ctx.module->loadmod->path = sdsnew(path);
     ctx.module->loadmod->argv = module_argc ? zmalloc(sizeof(robj *) * module_argc) : NULL;
     ctx.module->loadmod->argc = module_argc;
+    ctx.module->loadmod->from_include = from_include;
     for (int i = 0; i < module_argc; i++) {
         ctx.module->loadmod->argv[i] = module_argv[i];
         incrRefCount(ctx.module->loadmod->argv[i]);
@@ -14220,7 +14227,7 @@ void moduleCommand(client *c) {
             argv = &c->argv[3];
         }
 
-        if (moduleLoad(objectGetVal(c->argv[2]), (void **)argv, argc, 0) == C_OK)
+        if (moduleLoad(objectGetVal(c->argv[2]), (void **)argv, argc, 0, 0) == C_OK)
             addReply(c, shared.ok);
         else
             addReplyError(c, "Error loading the extension. Please check the server logs.");
@@ -14235,7 +14242,7 @@ void moduleCommand(client *c) {
         /* If this is a loadex command we want to populate server.module_configs_queue with
          * sds NAME VALUE pairs. We also want to increment argv to just after ARGS, if supplied. */
         if (parseLoadexArguments((ValkeyModuleString ***)&argv, &argc) == VALKEYMODULE_OK &&
-            moduleLoad(objectGetVal(c->argv[2]), (void **)argv, argc, 1) == C_OK)
+            moduleLoad(objectGetVal(c->argv[2]), (void **)argv, argc, 1, 0) == C_OK)
             addReply(c, shared.ok);
         else {
             dictEmpty(server.module_configs_queue, NULL);

@@ -55,18 +55,17 @@
  * replacements are done, such as the replacement of RM with ValkeyModule in
  * function names. For details, see the script src/modules/gendoc.rb.
  * -------------------------------------------------------------------------- */
-
 #include "server.h"
 #include "cluster.h"
 #include "commandlog.h"
 #include "rdb.h"
 #include "monotonic.h"
 #include "script.h"
-#include "call_reply.h"
 #include "hdr_histogram.h"
 #include "crc16_slottable.h"
 #include "valkeymodule.h"
 #include "module.h"
+#include "call_reply.h"
 #include "io_threads.h"
 #include "scripting_engine.h"
 #include "cluster_migrateslots.h"
@@ -13088,10 +13087,100 @@ void moduleUnregisterCleanup(ValkeyModule *module) {
     moduleUnregisterAuthCBs(module);
 }
 
+/* Common helper for moduleLoad and moduleLoadStatic.
+ * Invokes the onload callback, registers the module, and performs post-load
+ * validation.  'display_name' is used in log messages, 'handle' is the
+ * dlopen handle (NULL for static modules), and 'is_static' controls the
+ * is_static_module flag and handle ownership semantics. */
+static int moduleInitPostOnLoadResolved(ModuleLoadFunc onload,
+                                        void *handle,
+                                        const char *display_name,
+                                        void **module_argv,
+                                        int module_argc,
+                                        int is_loadex,
+                                        int is_static) {
+    ValkeyModuleCtx ctx;
+    moduleCreateContext(&ctx, NULL, VALKEYMODULE_CTX_TEMP_CLIENT); /* We pass NULL since we don't have a module yet. */
+    if (onload((void *)&ctx, module_argv, module_argc) == VALKEYMODULE_ERR) {
+        if (ctx.module) {
+            serverLog(LL_WARNING, "%sModule %s initialization failed. Module not loaded.",
+                      is_static ? "Static " : "", display_name);
+            moduleUnregisterCleanup(ctx.module);
+            moduleRemoveCateogires(ctx.module);
+            moduleFreeModuleStructure(ctx.module);
+        } else {
+            /* If there is no ctx.module, this means that our ValkeyModule_Init call failed,
+             * and currently init will only fail on busy name. */
+            serverLog(LL_WARNING, "%sModule %s initialization failed. Module name is busy.",
+                      is_static ? "Static " : "", display_name);
+        }
+        moduleFreeContext(&ctx);
+        if (handle) {
+            dlclose(handle);
+        }
+        return C_ERR;
+    }
+
+    if (is_static && handle) {
+        dlclose(handle);
+        handle = NULL;
+    }
+
+    /* Module loaded! Register it. */
+    dictAdd(modules, ctx.module->name, ctx.module);
+    ctx.module->blocked_clients = 0;
+    ctx.module->handle = handle;
+    ctx.module->is_static_module = is_static;
+    ctx.module->loadmod = zmalloc(sizeof(struct moduleLoadQueueEntry));
+    ctx.module->loadmod->path = sdsnew(display_name);
+    ctx.module->loadmod->argv = module_argc ? zmalloc(sizeof(robj *) * module_argc) : NULL;
+    ctx.module->loadmod->argc = module_argc;
+    for (int i = 0; i < module_argc; i++) {
+        ctx.module->loadmod->argv[i] = module_argv[i];
+        incrRefCount(ctx.module->loadmod->argv[i]);
+    }
+
+    /* If module commands have ACL categories, recompute command bits
+     * for all existing users once the modules has been registered. */
+    if (ctx.module->num_commands_with_acl_categories) {
+        ACLRecomputeCommandBitsFromCommandRulesAllUsers();
+    }
+    if (is_static) {
+        serverLog(LL_NOTICE, "Static Module '%s' successfully loaded", ctx.module->name);
+    } else {
+        serverLog(LL_NOTICE, "Module '%s' loaded from %s", ctx.module->name, display_name);
+    }
+    ctx.module->onload = 0;
+
+    int post_load_err = 0;
+    if (listLength(ctx.module->module_configs) && !ctx.module->configs_initialized) {
+        serverLogRaw(LL_WARNING,
+                     "Module Configurations were not set, likely a missing LoadConfigs call. Unloading the module.");
+        post_load_err = 1;
+    }
+
+    if (is_loadex && dictSize(server.module_configs_queue)) {
+        serverLogRaw(LL_WARNING,
+                     "Loadex configurations were not applied, likely due to invalid arguments. Unloading the module.");
+        post_load_err = 1;
+    }
+
+    if (post_load_err) {
+        moduleUnload(ctx.module->name, NULL);
+        moduleFreeContext(&ctx);
+        return C_ERR;
+    }
+
+    /* Fire the loaded modules event. */
+    moduleFireServerEvent(VALKEYMODULE_EVENT_MODULE_CHANGE, VALKEYMODULE_SUBEVENT_MODULE_LOADED, ctx.module);
+    moduleFreeContext(&ctx);
+    return C_OK;
+}
+
 /* Load a module and initialize it. On success C_OK is returned, otherwise
  * C_ERR is returned. */
 int moduleLoad(const char *path, void **module_argv, int module_argc, int is_loadex) {
-    int (*onload)(void *, void **, int);
+    ModuleLoadFunc onload;
     void *handle;
 
     struct stat st;
@@ -13122,7 +13211,7 @@ int moduleLoad(const char *path, void **module_argv, int module_argc, int is_loa
 
     const char *onLoadNames[] = {"ValkeyModule_OnLoad", "RedisModule_OnLoad"};
     for (size_t i = 0; i < sizeof(onLoadNames) / sizeof(onLoadNames[0]); i++) {
-        onload = (int (*)(void *, void **, int))(unsigned long)dlsym(handle, onLoadNames[i]);
+        onload = (ModuleLoadFunc)(unsigned long)dlsym(handle, onLoadNames[i]);
         if (onload != NULL) {
             if (i != 0) {
                 serverLog(LL_NOTICE, "Legacy Redis Module %s found", path);
@@ -13139,69 +13228,73 @@ int moduleLoad(const char *path, void **module_argv, int module_argc, int is_loa
                   path);
         return C_ERR;
     }
-    ValkeyModuleCtx ctx;
-    moduleCreateContext(&ctx, NULL, VALKEYMODULE_CTX_TEMP_CLIENT); /* We pass NULL since we don't have a module yet. */
-    if (onload((void *)&ctx, module_argv, module_argc) == VALKEYMODULE_ERR) {
-        if (ctx.module) {
-            serverLog(LL_WARNING, "Module %s initialization failed. Module not loaded.", path);
-            moduleUnregisterCleanup(ctx.module);
-            moduleRemoveCateogires(ctx.module);
-            moduleFreeModuleStructure(ctx.module);
-        } else {
-            /* If there is no ctx.module, this means that our ValkeyModule_Init call failed,
-             * and currently init will only fail on busy name. */
-            serverLog(LL_WARNING, "Module %s initialization failed. Module name is busy.", path);
-        }
-        moduleFreeContext(&ctx);
-        dlclose(handle);
+    return moduleInitPostOnLoadResolved(onload, handle, path, module_argv, module_argc, is_loadex, 0);
+}
+
+/* Resolve a symbol from a statically linked module. The symbol is looked up
+ * by constructing the name "<symbol_name>_<module_name>" and searching for it
+ * in the current process via dlopen(NULL)/dlsym(). On success, '*out' is set
+ * to the symbol address, '*handle' is set to the dlopen handle, and C_OK is
+ * returned. On failure C_ERR is returned and an appropriate warning is logged. */
+static int moduleLoadStaticSymbol(void **out, void **handle, const char *symbol_name, const char *module_name) {
+    char symbol_full_name[128];
+    int n = snprintf(symbol_full_name, sizeof(symbol_full_name), "%s_%s", symbol_name, module_name);
+    if (n >= (int)sizeof(symbol_full_name)) {
+        serverLog(LL_WARNING, "Module name is too long");
         return C_ERR;
     }
 
-    /* Module loaded! Register it. */
-    dictAdd(modules, ctx.module->name, ctx.module);
-    ctx.module->blocked_clients = 0;
-    ctx.module->handle = handle;
-    ctx.module->loadmod = zmalloc(sizeof(struct moduleLoadQueueEntry));
-    ctx.module->loadmod->path = sdsnew(path);
-    ctx.module->loadmod->argv = module_argc ? zmalloc(sizeof(robj *) * module_argc) : NULL;
-    ctx.module->loadmod->argc = module_argc;
-    for (int i = 0; i < module_argc; i++) {
-        ctx.module->loadmod->argv[i] = module_argv[i];
-        incrRefCount(ctx.module->loadmod->argv[i]);
-    }
+    /* Open a handle to self */
+    *handle = dlopen(NULL, RTLD_NOW);
+    if (*handle == NULL) {
+        char *error = dlerror();
+        if (error == NULL) error = "Unknown error";
 
-    /* If module commands have ACL categories, recompute command bits
-     * for all existing users once the modules has been registered. */
-    if (ctx.module->num_commands_with_acl_categories) {
-        ACLRecomputeCommandBitsFromCommandRulesAllUsers();
-    }
-    serverLog(LL_NOTICE, "Module '%s' loaded from %s", ctx.module->name, path);
-    ctx.module->onload = 0;
-
-    int post_load_err = 0;
-    if (listLength(ctx.module->module_configs) && !ctx.module->configs_initialized) {
-        serverLogRaw(LL_WARNING,
-                     "Module Configurations were not set, likely a missing LoadConfigs call. Unloading the module.");
-        post_load_err = 1;
-    }
-
-    if (is_loadex && dictSize(server.module_configs_queue)) {
-        serverLogRaw(LL_WARNING,
-                     "Loadex configurations were not applied, likely due to invalid arguments. Unloading the module.");
-        post_load_err = 1;
-    }
-
-    if (post_load_err) {
-        moduleUnload(ctx.module->name, NULL);
-        moduleFreeContext(&ctx);
+        serverLog(LL_WARNING, "Failed to load static module: %s. %s", module_name, error);
         return C_ERR;
     }
 
-    /* Fire the loaded modules event. */
-    moduleFireServerEvent(VALKEYMODULE_EVENT_MODULE_CHANGE, VALKEYMODULE_SUBEVENT_MODULE_LOADED, ctx.module);
+    *out = dlsym(*handle, symbol_full_name);
+    if (*out == NULL) {
+        char *error = dlerror();
+        if (error == NULL) error = "Unknown error";
 
-    moduleFreeContext(&ctx);
+        serverLog(LL_WARNING,
+                  "Failed to load static module: %s. Could not load method: %s. %s", module_name,
+                  symbol_full_name, error);
+        dlclose(*handle);
+        return C_ERR;
+    }
     return C_OK;
+}
+
+/* Load a statically linked module and initialize it. This is the static
+ * counterpart of moduleLoad(): instead of dlopen()ing a shared object from
+ * a file path, it resolves the module's entry point from the running
+ * executable itself.
+ *
+ * The entry point is located by constructing the symbol name
+ * "ValkeyModule_OnLoad_<module_name>" and resolving it with
+ * moduleLoadStaticSymbol(). For example, a module named "mymodule" must
+ * provide a function called ValkeyModule_OnLoad_mymodule.
+ *
+ * Once the entry point is found, the function creates a temporary module
+ * context, invokes the OnLoad callback, and on success registers the module
+ * in the global modules dictionary with is_static_module set to 1 and handle
+ * set to NULL (since there is no shared-object handle to keep open).
+ *
+ * If 'is_loadex' is true, the function also validates that all queued module
+ * configurations were consumed; otherwise the module is unloaded.
+ *
+ * On success C_OK is returned, otherwise C_ERR is returned. */
+int moduleLoadStatic(const char *module_name, void **module_argv, int module_argc, int is_loadex) {
+    ModuleLoadFunc onload;
+    void *handle = NULL;
+    if (moduleLoadStaticSymbol((void **)&onload, &handle, "ValkeyModule_OnLoad", module_name) != C_OK) {
+        return C_ERR;
+    }
+    return moduleInitPostOnLoadResolved(onload, handle, module_name, module_argv, module_argc,
+                                        is_loadex, 1);
 }
 
 static int moduleUnloadInternal(struct ValkeyModule *module, const char **errmsg) {
@@ -13236,15 +13329,23 @@ static int moduleUnloadInternal(struct ValkeyModule *module, const char **errmsg
     }
 
     /* Give module a chance to clean up. */
-    const char *onUnloadNames[] = {"ValkeyModule_OnUnload", "RedisModule_OnUnload"};
-    int (*onunload)(void *) = NULL;
-    for (size_t i = 0; i < sizeof(onUnloadNames) / sizeof(onUnloadNames[0]); i++) {
-        onunload = (int (*)(void *))(unsigned long)dlsym(module->handle, onUnloadNames[i]);
-        if (onunload) {
-            if (i != 0) {
-                serverLog(LL_NOTICE, "Legacy Redis Module %s found", module->name);
+    ModuleUnLoadFunc onunload = NULL;
+    if (module->is_static_module == 1) {
+        if (moduleLoadStaticSymbol((void **)&onunload, &module->handle, "ValkeyModule_OnUnload", module->name) != C_OK) {
+            serverLog(LL_WARNING, "Module %s OnUnload failed. Unload canceled.", module->name);
+            errno = ECANCELED;
+            return C_ERR;
+        }
+    } else {
+        const char *onUnloadNames[] = {"ValkeyModule_OnUnload", "RedisModule_OnUnload"};
+        for (size_t i = 0; i < sizeof(onUnloadNames) / sizeof(onUnloadNames[0]); i++) {
+            onunload = (int (*)(void *))(unsigned long)dlsym(module->handle, onUnloadNames[i]);
+            if (onunload) {
+                if (i != 0) {
+                    serverLog(LL_NOTICE, "Legacy Redis Module %s found", module->name);
+                }
+                break;
             }
-            break;
         }
     }
 
@@ -13264,7 +13365,7 @@ static int moduleUnloadInternal(struct ValkeyModule *module, const char **errmsg
     moduleUnregisterCleanup(module);
 
     /* Unload the dynamic library. */
-    if (dlclose(module->handle) == -1) {
+    if (module->handle != NULL && dlclose(module->handle) == -1) {
         char *error = dlerror();
         if (error == NULL) error = "Unknown error";
         serverLog(LL_WARNING, "Error when trying to close the %s module: %s", module->name, error);

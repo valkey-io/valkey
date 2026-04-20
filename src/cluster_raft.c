@@ -804,6 +804,21 @@ static void raftLogApply(raftLogEntry *e) {
                   e->data, (unsigned long long)e->index);
         break;
     }
+    case RAFT_ENTRY_NODE_META: {
+        /* Format: "<node-id> <address-string>" */
+        if (sdslen(e->data) > CLUSTER_NAMELEN + 1) {
+            clusterNode *node = clusterLookupNode(e->data, CLUSTER_NAMELEN);
+            if (node && node != myself) {
+                clusterNodeParseAddressString(node, e->data + CLUSTER_NAMELEN + 1);
+            }
+        }
+        /* Invalidate immediately — address changes make the cached
+         * CLUSTER SLOTS response invalid and the verify assert fires
+         * if a client queries before beforeSleep runs. */
+        clearCachedClusterSlotsResponse();
+        serverLog(LL_NOTICE, "Applied NODE_META (index %llu).", (unsigned long long)e->index);
+        break;
+    }
     default:
         serverLog(LL_NOTICE, "Applied log entry type %d (index %llu).", e->type,
                   (unsigned long long)e->index);
@@ -1528,7 +1543,16 @@ static void clusterRaftPostConnect(struct clusterLink *link) {
 
 static void clusterRaftUpdateMyself(int old_flags) {
     UNUSED(old_flags);
-    /* TODO: propose a NODE_META entry to the Raft log */
+    /* Clear cached CLUSTER SLOTS immediately — our address/hostname
+     * has already changed in the config layer. */
+    clearCachedClusterSlotsResponse();
+    /* Propose NODE_META to propagate the change to other nodes. */
+    sds entry = sdsnew("NODE_META ");
+    entry = sdscatlen(entry, myself->name, CLUSTER_NAMELEN);
+    entry = sdscatlen(entry, " ", 1);
+    entry = clusterNodeAppendAddressString(entry, myself, server.tls_cluster);
+    clusterRaftPropose(entry, NULL, NULL);
+    sdsfree(entry);
 }
 
 /* --------------------------------------------------------------------------

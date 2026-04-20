@@ -25,6 +25,10 @@
 
 #include <arpa/inet.h>
 
+/* From module.c */
+void moduleCallClusterReceivers(const char *sender_id, uint64_t module_id, uint8_t type,
+                                const unsigned char *payload, uint32_t len);
+
 /* --------------------------------------------------------------------------
  * Wire format helpers
  * -------------------------------------------------------------------------- */
@@ -166,6 +170,10 @@ typedef struct {
 
     /* Automatic failover state (on the replica side) */
     mstime_t failover_time; /* When to propose FAILOVER based on rank, 0 = inactive */
+
+    /* Message stats for CLUSTER INFO */
+    long long stats_module_messages_sent;
+    long long stats_module_messages_received;
 } clusterRaftState;
 
 #define RAFT_STATE() ((clusterRaftState *)server.cluster->protocol_data)
@@ -1490,6 +1498,39 @@ static int clusterRaftProcessMessage(struct clusterLink *link) {
             serverLog(LL_NOTICE, "REPL_OFFSETS: failover rank %d for primary %.40s.",
                       rank, argv[1]);
         }
+    } else if (!strcasecmp(argv[0], "PUBLISH") && argc >= 4) {
+        /* PUBLISH <sharded> <chan_len> <msg_len>
+         * Followed by raw binary payload (channel + message) after the
+         * newline. We read directly from the receive buffer to handle
+         * binary-safe data containing spaces, newlines, or nulls. */
+        int sharded = atoi(argv[1]);
+        size_t chan_len = strtoull(argv[2], NULL, 10);
+        size_t msg_len = strtoull(argv[3], NULL, 10);
+        /* Payload starts after the first \n in the raw buffer. */
+        char *buf = link->rcvbuf + RAFT_HDR_SIZE;
+        size_t buf_len = link->rcvbuf_len - RAFT_HDR_SIZE;
+        char *nl = memchr(buf, '\n', buf_len);
+        if (nl && (size_t)(buf + buf_len - nl - 1) >= chan_len + msg_len) {
+            char *payload = nl + 1;
+            robj *chan = createStringObject(payload, chan_len);
+            robj *pmsg = createStringObject(payload + chan_len, msg_len);
+            pubsubPublishMessage(chan, pmsg, sharded);
+            decrRefCount(chan);
+            decrRefCount(pmsg);
+        }
+    } else if (!strcasecmp(argv[0], "MODULE") && argc >= 4) {
+        /* MODULE <module_id> <type> <len>\n<payload> */
+        uint64_t module_id = strtoull(argv[1], NULL, 10);
+        uint8_t type = atoi(argv[2]);
+        uint32_t len = strtoull(argv[3], NULL, 10);
+        char *buf = link->rcvbuf + RAFT_HDR_SIZE;
+        size_t buf_len = link->rcvbuf_len - RAFT_HDR_SIZE;
+        char *nl = memchr(buf, '\n', buf_len);
+        if (nl && (size_t)(buf + buf_len - nl - 1) >= len) {
+            moduleCallClusterReceivers(link->node ? link->node->name : "",
+                                       module_id, type, (const unsigned char *)(nl + 1), len);
+            RAFT_STATE()->stats_module_messages_received++;
+        }
     } else {
         serverLog(LL_WARNING, "Unknown Raft message: %s", argv[0]);
     }
@@ -1595,19 +1636,57 @@ static void clusterRaftPostLoad(void) {
  * -------------------------------------------------------------------------- */
 
 static void clusterRaftPropagatePublish(robj *channel, robj *message, int sharded) {
-    UNUSED(channel);
-    UNUSED(message);
-    UNUSED(sharded);
-    /* TODO: pub/sub propagation over Raft links */
+    sds chan = objectGetVal(channel);
+    sds data = objectGetVal(message);
+    sds msg = wireNewMsg("PUBLISH");
+    msg = sdscatfmt(msg, " %i %U %U\n", sharded,
+                    (unsigned long long)sdslen(chan),
+                    (unsigned long long)sdslen(data));
+    msg = sdscatlen(msg, chan, sdslen(chan));
+    msg = sdscatlen(msg, data, sdslen(data));
+    msg = wireFinishMsg(msg);
+
+    dictIterator *di = dictGetSafeIterator(server.cluster->nodes);
+    dictEntry *de;
+    while ((de = dictNext(di)) != NULL) {
+        clusterNode *node = dictGetVal(de);
+        if (node == myself || !node->link) continue;
+        if (sharded && memcmp(node->shard_id, myself->shard_id, CLUSTER_NAMELEN) != 0) continue;
+        clusterRaftSendMsg(node->link, sdsdup(msg));
+    }
+    dictReleaseIterator(di);
+    sdsfree(msg);
 }
 
 static int clusterRaftSendModuleMessage(const char *target, uint64_t module_id, uint8_t type, const char *payload, uint32_t len) {
-    UNUSED(target);
-    UNUSED(module_id);
-    UNUSED(type);
-    UNUSED(payload);
-    UNUSED(len);
-    return C_ERR; /* TODO */
+    sds msg = wireNewMsg("MODULE");
+    msg = sdscatfmt(msg, " %U %i %U\n", (unsigned long long)module_id, (int)type, (unsigned long long)len);
+    msg = sdscatlen(msg, payload, len);
+    msg = wireFinishMsg(msg);
+
+    if (target) {
+        clusterNode *node = clusterLookupNode(target, strlen(target));
+        if (!node || !node->link) {
+            sdsfree(msg);
+            return C_ERR;
+        }
+        clusterRaftSendMsg(node->link, msg);
+        RAFT_STATE()->stats_module_messages_sent++;
+    } else {
+        dictIterator *di = dictGetSafeIterator(server.cluster->nodes);
+        dictEntry *de;
+        int sent = 0;
+        while ((de = dictNext(di)) != NULL) {
+            clusterNode *node = dictGetVal(de);
+            if (node == myself || !node->link) continue;
+            clusterRaftSendMsg(node->link, sdsdup(msg));
+            sent++;
+        }
+        dictReleaseIterator(di);
+        sdsfree(msg);
+        RAFT_STATE()->stats_module_messages_sent += sent;
+    }
+    return C_OK;
 }
 
 /* --------------------------------------------------------------------------
@@ -1662,10 +1741,13 @@ static sds clusterRaftAppendInfoFields(sds info) {
                         "cluster_raft_commit_index:%llu\r\n"
                         "cluster_raft_last_applied:%llu\r\n"
                         "cluster_raft_log_entries:%llu\r\n"
-                        "cluster_raft_leader:%.40s\r\n",
+                        "cluster_raft_leader:%.40s\r\n"
+                        "cluster_stats_messages_module_sent:%lld\r\n"
+                        "cluster_stats_messages_module_received:%lld\r\n",
                         role_str, (unsigned long long)rs->current_term,
                         (unsigned long long)rs->commit_index, (unsigned long long)rs->last_applied,
-                        (unsigned long long)rs->log_count, rs->leader);
+                        (unsigned long long)rs->log_count, rs->leader,
+                        rs->stats_module_messages_sent, rs->stats_module_messages_received);
     return info;
 }
 
@@ -1737,9 +1819,16 @@ static void clusterRaftApplySlotChange(sds data) {
         }
         for (int j = start; j <= end; j++) {
             if (target) {
+                /* If this slot is moving away from myself, delete keys. */
+                if (server.cluster->slots[j] == myself && target != myself) {
+                    delKeysInSlot(j, server.lazyfree_lazy_server_del, true, false);
+                }
                 if (server.cluster->slots[j]) clusterDelSlot(j);
                 clusterAddSlot(target, j);
             } else {
+                if (server.cluster->slots[j] == myself) {
+                    delKeysInSlot(j, server.lazyfree_lazy_server_del, true, false);
+                }
                 clusterDelSlot(j);
             }
         }

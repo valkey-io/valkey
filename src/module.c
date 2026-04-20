@@ -390,7 +390,6 @@ typedef struct ValkeyModuleCommandFilter {
 /* Registered filters */
 static list *moduleCommandFilters;
 
-
 typedef void (*ValkeyModuleForkDoneHandler)(int exitcode, int bysignal, void *user_data);
 
 static struct ValkeyModuleForkInfo {

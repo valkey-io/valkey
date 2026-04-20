@@ -4121,8 +4121,9 @@ void call(client *c, int flags) {
  * If there's a transaction is flags it as dirty, and if the command is EXEC,
  * it aborts the transaction.
  * The duration is reset, since we reject the command, and it did not record.
- * Note: 'reply' is expected to end with \r\n */
-void rejectCommand(client *c, robj *reply) {
+ * Note: 'reply' is expected to end with \r\n.
+ * If notify_modules is non-zero, fires ValkeyModuleEvent_CommandResultRejected. */
+void rejectCommand(client *c, robj *reply, int notify_modules) {
     flagTransaction(c);
     c->duration = 0;
     if (c->cmd) c->cmd->rejected_calls++;
@@ -4132,12 +4133,16 @@ void rejectCommand(client *c, robj *reply) {
         /* using addReplyError* rather than addReply so that the error can be logged. */
         addReplyErrorObject(c, reply);
     }
+    if (notify_modules) moduleFireCommandRejectedEvent(c, objectGetVal(reply));
 }
 
-void rejectCommandSds(client *c, sds s) {
+/* notify_modules controls whether ValkeyModuleEvent_CommandResultRejected is fired.
+ * The event is fired before 's' is consumed so the string remains valid for callbacks. */
+void rejectCommandSds(client *c, sds s, int notify_modules) {
     flagTransaction(c);
     c->duration = 0;
     if (c->cmd) c->cmd->rejected_calls++;
+    if (notify_modules) moduleFireCommandRejectedEvent(c, s);
     if (c->cmd && c->cmd->proc == execCommand) {
         execCommandAbort(c, s);
         sdsfree(s);
@@ -4147,7 +4152,7 @@ void rejectCommandSds(client *c, sds s) {
     }
 }
 
-void rejectCommandFormat(client *c, const char *fmt, ...) {
+void rejectCommandFormat(client *c, int notify_modules, const char *fmt, ...) {
     va_list ap;
     va_start(ap, fmt);
     sds s = sdscatvprintf(sdsempty(), fmt, ap);
@@ -4155,7 +4160,7 @@ void rejectCommandFormat(client *c, const char *fmt, ...) {
     /* Make sure there are no newlines in the string, otherwise invalid protocol
      * is emitted (The args come from the user, they may contain any character). */
     sdsmapchars(s, "\r\n", "  ", 2);
-    rejectCommandSds(c, s);
+    rejectCommandSds(c, s, notify_modules);
 }
 
 /* This is called after a command in call, we can do some maintenance job in it. */
@@ -4282,19 +4287,6 @@ void unprepareCommand(client *c) {
     c->slot = -1;
 }
 
-/* Wrappers used within processCommand to reject a command and fire the
- * ValkeyModuleEvent_CommandResultRejected server event to registered modules.
- * The full reply string is passed as rejection_context in the event info. */
-static void processCommandReject(client *c, robj *reply) {
-    moduleFireCommandRejectedEvent(c, objectGetVal(reply));
-    rejectCommand(c, reply);
-}
-
-static void processCommandRejectSds(client *c, sds s) {
-    moduleFireCommandRejectedEvent(c, s);
-    rejectCommandSds(c, s);
-}
-
 /* If this function gets called we already read a whole
  * command, arguments are in the client argv/argc fields.
  * processCommand() execute the command or prepare the
@@ -4353,7 +4345,7 @@ int processCommand(client *c) {
             /* AUTH and HELLO and no auth commands are valid even in
              * non-authenticated state. */
             if (!c->cmd || !(c->cmd->flags & CMD_NO_AUTH)) {
-                rejectCommand(c, shared.noautherr);
+                rejectCommand(c, shared.noautherr, 0);
                 moduleFireCommandACLRejectedEvent(c, VALKEYMODULE_ACL_LOG_AUTH, -1);
                 return C_OK;
             }
@@ -4363,13 +4355,13 @@ int processCommand(client *c) {
         sds err;
 
         if (!commandCheckExistence(c, &err)) {
-            processCommandRejectSds(c, err);
+            rejectCommandSds(c, err, 1);
             return C_OK;
         }
         if (c->read_flags & READ_FLAGS_BAD_ARITY) {
             /* Already detected this, but do it again just to get the error message. */
             serverAssert(!commandCheckArity(c->cmd, c->argc, &err));
-            processCommandRejectSds(c, err);
+            rejectCommandSds(c, err, 1);
             return C_OK;
         }
 
@@ -4385,7 +4377,7 @@ int processCommand(client *c) {
                     c->cmd->proc == debugCommand ? "DEBUG" : "MODULE",
                     c->cmd->proc == debugCommand ? "enable-debug-command" : "enable-module-command");
                 sdsmapchars(protected_err, "\r\n", "  ", 2);
-                processCommandRejectSds(c, protected_err);
+                rejectCommandSds(c, protected_err, 1);
                 return C_OK;
             }
         }
@@ -4413,7 +4405,7 @@ int processCommand(client *c) {
         sds nomulti_err =
             sdscatprintf(sdsempty(), "Command '%s' not allowed inside a transaction", c->cmd->fullname);
         sdsmapchars(nomulti_err, "\r\n", "  ", 2);
-        processCommandRejectSds(c, nomulti_err);
+        rejectCommandSds(c, nomulti_err, 1);
         return C_OK;
     }
 
@@ -4425,7 +4417,7 @@ int processCommand(client *c) {
         addACLLogEntry(c, acl_retval, (c->flag.multi) ? ACL_LOG_CTX_MULTI : ACL_LOG_CTX_TOPLEVEL, acl_errpos, NULL,
                        NULL);
         sds msg = getAclErrorMessage(acl_retval, c->user, c->cmd, objectGetVal(c->argv[acl_errpos]), 0);
-        rejectCommandFormat(c, "-NOPERM %s", msg);
+        rejectCommandFormat(c, 0, "-NOPERM %s", msg);
         sdsfree(msg);
         uint64_t acl_subevent;
         switch (acl_retval) {
@@ -4531,7 +4523,7 @@ int processCommand(client *c) {
                 return C_ERR;
             }
 
-            processCommandReject(c, shared.oomerr);
+            rejectCommand(c, shared.oomerr, 1);
             return C_OK;
         }
 
@@ -4568,7 +4560,7 @@ int processCommand(client *c) {
             sds err = writeCommandsGetDiskErrorMessage(deny_write_type);
             /* remove the newline since rejectCommandSds adds it. */
             sdssubstr(err, 0, sdslen(err) - 2);
-            processCommandRejectSds(c, err);
+            rejectCommandSds(c, err, 1);
             return C_OK;
         }
     }
@@ -4576,14 +4568,14 @@ int processCommand(client *c) {
     /* Don't accept write commands if there are not enough good replicas and
      * user configured the min-replicas-to-write option. */
     if (is_write_command && !checkGoodReplicasStatus()) {
-        processCommandReject(c, shared.noreplicaserr);
+        rejectCommand(c, shared.noreplicaserr, 1);
         return C_OK;
     }
 
     /* Don't accept write commands if this is a read only replica. But
      * accept write commands if this is our primary. */
     if (server.primary_host && server.repl_replica_ro && !obey_client && is_write_command) {
-        processCommandReject(c, shared.roreplicaerr);
+        rejectCommand(c, shared.roreplicaerr, 1);
         return C_OK;
     }
 
@@ -4598,7 +4590,7 @@ int processCommand(client *c) {
                                       "(P|S)UNSUBSCRIBE / PING / QUIT / RESET are allowed in this context",
                                       c->cmd->fullname);
         sdsmapchars(pubsub_err, "\r\n", "  ", 2);
-        processCommandRejectSds(c, pubsub_err);
+        rejectCommandSds(c, pubsub_err, 1);
         return C_OK;
     }
 
@@ -4607,20 +4599,20 @@ int processCommand(client *c) {
      * link with primary. */
     if (server.primary_host && server.repl_state != REPL_STATE_CONNECTED && server.repl_serve_stale_data == 0 &&
         is_denystale_command) {
-        processCommandReject(c, shared.primarydownerr);
+        rejectCommand(c, shared.primarydownerr, 1);
         return C_OK;
     }
 
     /* Loading DB? Return an error if the command has not the
      * CMD_LOADING flag. */
     if (server.loading && !server.async_loading && is_denyloading_command) {
-        processCommandReject(c, shared.loadingerr);
+        rejectCommand(c, shared.loadingerr, 1);
         return C_OK;
     }
 
     /* During async-loading, block certain commands. */
     if (server.async_loading && is_deny_async_loading_command) {
-        processCommandReject(c, shared.loadingerr);
+        rejectCommand(c, shared.loadingerr, 1);
         return C_OK;
     }
 
@@ -4635,13 +4627,13 @@ int processCommand(client *c) {
         if (server.busy_module_yield_flags && server.busy_module_yield_reply) {
             sds busy_err = sdscatprintf(sdsempty(), "-BUSY %s", server.busy_module_yield_reply);
             sdsmapchars(busy_err, "\r\n", "  ", 2);
-            processCommandRejectSds(c, busy_err);
+            rejectCommandSds(c, busy_err, 1);
         } else if (server.busy_module_yield_flags) {
-            processCommandReject(c, shared.slowmoduleerr);
+            rejectCommand(c, shared.slowmoduleerr, 1);
         } else if (scriptIsEval()) {
-            processCommandReject(c, shared.slowevalerr);
+            rejectCommand(c, shared.slowevalerr, 1);
         } else {
-            processCommandReject(c, shared.slowscripterr);
+            rejectCommand(c, shared.slowscripterr, 1);
         }
         return C_OK;
     }
@@ -4651,7 +4643,7 @@ int processCommand(client *c) {
      * from which replicas are exempt. */
     if (c->flag.replica && (is_may_replicate_command || is_write_command || is_read_command)) {
         sds replica_err = sdsnew("Replica can't interact with the keyspace");
-        processCommandRejectSds(c, replica_err);
+        rejectCommandSds(c, replica_err, 1);
         return C_OK;
     }
 

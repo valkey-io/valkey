@@ -75,7 +75,7 @@ NODE_JOIN <node-id> <address>
     via MEET. The node starts as a learner and is promoted to follower
     when the entry is committed.
 
-NODE_LEAVE <node-id>
+NODE_FORGET <node-id>
     Remove a node from the cluster (CLUSTER FORGET). Not yet implemented.
 
 SLOT_CHANGE <node-id-or-dash> <range> [<range> ...]
@@ -294,7 +294,7 @@ lines for uncommitted log entries.
 - Pre-vote protocol to avoid term inflation from partitioned nodes.
 - Log compaction / snapshotting for lagging followers.
 - Persistence of Raft log to disk.
-- NODE_LEAVE (CLUSTER FORGET) through Raft log.
+- NODE_FORGET (CLUSTER FORGET) through Raft log.
 - Automatic failover through Raft log.
 - Slot migration (SETSLOT MIGRATING/IMPORTING).
 - Pub/sub and module message propagation over Raft links.

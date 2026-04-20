@@ -63,7 +63,7 @@ static void clusterRaftSendMsg(clusterLink *link, sds msg) {
 
 enum raftEntryType {
     RAFT_ENTRY_NODE_JOIN = 1,      /* MEET */
-    RAFT_ENTRY_NODE_LEAVE = 2,     /* FORGET */
+    RAFT_ENTRY_NODE_FORGET = 2,    /* FORGET */
     RAFT_ENTRY_SLOT_CHANGE = 3,    /* Slot ownership */
     RAFT_ENTRY_SET_REPLICA_OF = 4, /* Replication topology */
     RAFT_ENTRY_FAILOVER = 5,       /* Manual failover */
@@ -475,7 +475,7 @@ static int clusterRaftProcessWelcome(clusterLink *link, int argc, sds *argv) {
 
 static int raftEntryTypeByName(const char *name) {
     if (!strcasecmp(name, "NODE_JOIN")) return RAFT_ENTRY_NODE_JOIN;
-    if (!strcasecmp(name, "NODE_LEAVE")) return RAFT_ENTRY_NODE_LEAVE;
+    if (!strcasecmp(name, "NODE_FORGET")) return RAFT_ENTRY_NODE_FORGET;
     if (!strcasecmp(name, "SLOT_CHANGE")) return RAFT_ENTRY_SLOT_CHANGE;
     if (!strcasecmp(name, "SET_REPLICA_OF")) return RAFT_ENTRY_SET_REPLICA_OF;
     if (!strcasecmp(name, "FAILOVER")) return RAFT_ENTRY_FAILOVER;
@@ -487,7 +487,7 @@ static int raftEntryTypeByName(const char *name) {
 static const char *raftEntryTypeName(uint8_t type) {
     switch (type) {
     case RAFT_ENTRY_NODE_JOIN: return "NODE_JOIN";
-    case RAFT_ENTRY_NODE_LEAVE: return "NODE_LEAVE";
+    case RAFT_ENTRY_NODE_FORGET: return "NODE_FORGET";
     case RAFT_ENTRY_SLOT_CHANGE: return "SLOT_CHANGE";
     case RAFT_ENTRY_SET_REPLICA_OF: return "SET_REPLICA_OF";
     case RAFT_ENTRY_FAILOVER: return "FAILOVER";
@@ -762,6 +762,22 @@ static void raftLogApply(raftLogEntry *e) {
         rs->todo_invalidate_slots_cache = 1;
         serverLog(LL_NOTICE, "Applied SET_REPLICA_OF (index %llu).", (unsigned long long)e->index);
         break;
+    case RAFT_ENTRY_NODE_FORGET: {
+        clusterNode *node = clusterLookupNode(e->data, sdslen(e->data));
+        if (node && node != myself) {
+            /* Clear slots owned by this node. */
+            for (int j = 0; j < CLUSTER_SLOTS; j++) {
+                if (server.cluster->slots[j] == node) clusterDelSlot(j);
+            }
+            clusterRemoveNodeFromShard(node);
+            freeClusterNode(node);
+            rs->todo_update_slot_coverage = 1;
+            rs->todo_invalidate_slots_cache = 1;
+        }
+        serverLog(LL_NOTICE, "Applied NODE_FORGET %.40s (index %llu).",
+                  e->data, (unsigned long long)e->index);
+        break;
+    }
     case RAFT_ENTRY_NODE_FAIL: {
         clusterNode *node = clusterLookupNode(e->data, sdslen(e->data));
         if (node && node != myself) {
@@ -1594,10 +1610,10 @@ done:
 }
 
 static void clusterRaftForgetNode(const char *node_id, size_t id_len, void *ctx, void (*callback)(void *ctx, const char *error)) {
-    UNUSED(node_id);
-    UNUSED(id_len);
-    /* TODO: propose NODE_LEAVE entry */
-    if (callback) callback(ctx, "not implemented");
+    sds entry = sdsnew("NODE_FORGET ");
+    entry = sdscatlen(entry, node_id, id_len);
+    clusterRaftPropose(entry, ctx, callback);
+    sdsfree(entry);
 }
 
 static void clusterRaftSetReplicaOf(clusterNode *primary, void *ctx, void (*callback)(void *ctx, const char *error)) {

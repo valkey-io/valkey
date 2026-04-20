@@ -3002,17 +3002,17 @@ int sendCurrentOffsetToReplica(client *replica) {
     return C_OK;
 }
 
-sds replicationSendAuth(connection *conn) {
+sds replicationSendAuth(connection *conn, const char *user, const char *pass, size_t pass_len) {
     char *args[] = {"AUTH", NULL, NULL};
     size_t lens[] = {4, 0, 0};
     int argc = 1;
-    if (server.primary_user) {
-        args[argc] = server.primary_user;
-        lens[argc] = strlen(server.primary_user);
+    if (user) {
+        args[argc] = (char *)user;
+        lens[argc] = strlen(user);
         argc++;
     }
-    args[argc] = server.primary_auth;
-    lens[argc] = sdslen(server.primary_auth);
+    args[argc] = (char *)pass;
+    lens[argc] = pass_len;
     argc++;
     return sendCommandArgv(conn, argc, args, lens);
 }
@@ -3033,7 +3033,7 @@ static int dualChannelReplHandleHandshake(connection *conn, sds *err) {
     dualChannelServerLog(LL_DEBUG, "Received first reply from primary using rdb connection.");
     /* AUTH with the primary if required. */
     if (server.primary_auth) {
-        *err = replicationSendAuth(conn);
+        *err = replicationSendAuth(conn, server.primary_user, server.primary_auth, sdslen(server.primary_auth));
         if (*err) {
             dualChannelServerLog(LL_WARNING, "Sending command to primary in dual channel replication handshake: %s", *err);
             return C_ERR;
@@ -3807,7 +3807,7 @@ int syncWithPrimaryHandleSendHandshakeState(connection *conn) {
     sds err;
     /* AUTH with the primary if required. */
     if (server.primary_auth) {
-        err = replicationSendAuth(conn);
+        err = replicationSendAuth(conn, server.primary_user, server.primary_auth, sdslen(server.primary_auth));
         if (err) goto err;
     }
 

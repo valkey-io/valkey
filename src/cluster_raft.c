@@ -10,8 +10,8 @@
  *
  * Message types:
  *   HELLO <node-id> <address-string>
- *   VOTE <candidate-id> <term> <last-log-index> <last-log-term>
- *   VOTE_OK <term> <granted>
+ *   VOTE_REQ <candidate-id> <term> <last-log-index> <last-log-term>
+ *   VOTE <term> <granted>
  *   AE <leader-id> <term> <prev-log-index> <prev-log-term> <leader-commit>
  *   AE_ACK <term> <success>
  */
@@ -1016,9 +1016,9 @@ static int clusterRaftProcessAppendEntriesResponse(clusterLink *link, int argc, 
     return 1;
 }
 
-/* VOTE <candidate-id> <term> <last-log-index> <last-log-term> */
+/* VOTE_REQ <candidate-id> <term> <last-log-index> <last-log-term> */
 static void clusterRaftSendRequestVote(clusterLink *link, clusterRaftState *rs) {
-    sds msg = wireNewMsg("VOTE");
+    sds msg = wireNewMsg("VOTE_REQ");
     msg = sdscatlen(msg, " ", 1);
     msg = sdscatlen(msg, myself->name, CLUSTER_NAMELEN);
     msg = sdscatfmt(msg, " %U %U %U", (unsigned long long)rs->current_term,
@@ -1028,16 +1028,16 @@ static void clusterRaftSendRequestVote(clusterLink *link, clusterRaftState *rs) 
     clusterRaftSendMsg(link, msg);
 }
 
-/* VOTE_OK <term> <granted> */
+/* VOTE <term> <granted> */
 static void clusterRaftSendVoteResponse(clusterLink *link, uint64_t term, int granted) {
-    sds msg = wireNewMsg("VOTE_OK");
+    sds msg = wireNewMsg("VOTE");
     msg = sdscatfmt(msg, " %U %i", (unsigned long long)term, granted);
     msg = wireFinishMsg(msg);
     clusterRaftSendMsg(link, msg);
 }
 
 static int clusterRaftProcessRequestVote(clusterLink *link, int argc, sds *argv) {
-    /* argv: VOTE <candidate-id> <term> <last-log-index> <last-log-term> */
+    /* argv: VOTE_REQ <candidate-id> <term> <last-log-index> <last-log-term> */
     if (argc < 5) return 1;
     if (sdslen(argv[1]) != CLUSTER_NAMELEN) return 1;
 
@@ -1063,7 +1063,7 @@ static int clusterRaftProcessRequestVote(clusterLink *link, int argc, sds *argv)
 
 static int clusterRaftProcessRequestVoteResponse(clusterLink *link, int argc, sds *argv) {
     UNUSED(link);
-    /* argv: VOTE_OK <term> <granted> */
+    /* argv: VOTE <term> <granted> */
     if (argc < 3) return 1;
 
     clusterRaftState *rs = RAFT_STATE();
@@ -1295,9 +1295,9 @@ static int clusterRaftProcessMessage(struct clusterLink *link) {
         ret = clusterRaftProcessAppendEntries(link, argc, argv, lines + 1, line_count - 1);
     } else if (!strcasecmp(argv[0], "AE_ACK")) {
         ret = clusterRaftProcessAppendEntriesResponse(link, argc, argv);
-    } else if (!strcasecmp(argv[0], "VOTE")) {
+    } else if (!strcasecmp(argv[0], "VOTE_REQ")) {
         ret = clusterRaftProcessRequestVote(link, argc, argv);
-    } else if (!strcasecmp(argv[0], "VOTE_OK")) {
+    } else if (!strcasecmp(argv[0], "VOTE")) {
         ret = clusterRaftProcessRequestVoteResponse(link, argc, argv);
     } else {
         serverLog(LL_WARNING, "Unknown Raft message: %s", argv[0]);

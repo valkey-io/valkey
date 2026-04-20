@@ -995,6 +995,8 @@ static int clusterRaftProcessAppendEntriesResponse(clusterLink *link, int argc, 
     clusterNodeRaftData *rd = RAFT_DATA(node);
     rd->peer.last_ack_time = mstime();
     rd->peer.repl_offset = follower_repl_offset;
+    /* Keep node->repl_offset in sync for CLUSTER SLOTS/SHARDS on the leader. */
+    node->repl_offset = follower_repl_offset;
 
     /* Clear FAIL flag if the node is back. */
     if (nodeFailed(node)) {
@@ -1367,6 +1369,11 @@ static void clusterRaftBeforeSleep(void) {
     if (rs->todo_invalidate_slots_cache) {
         rs->todo_invalidate_slots_cache = 0;
         clearCachedClusterSlotsResponse();
+    }
+
+    /* Keep myself->repl_offset up to date for CLUSTER SLOTS/SHARDS. */
+    if (nodeIsReplica(myself)) {
+        myself->repl_offset = replicationGetReplicaOffset();
     }
 }
 
@@ -1750,8 +1757,11 @@ static void clusterRaftApplySetReplica(sds data) {
             replica->replicaof = primary;
             clusterNodeAddReplica(primary, replica);
             /* Set to non-zero so isNodeAvailable() returns true and
-             * CLUSTER SLOTS includes this replica. The leader will
-             * broadcast real offsets via REPL_OFFSETS messages. */
+             * CLUSTER SLOTS includes this replica. TODO: broadcast real
+             * offsets via REPL_OFFSETS when the replica finishes sync,
+             * replacing this workaround. Needs investigation into why
+             * messages sent on newly established outbound links are not
+             * always delivered. */
             replica->repl_offset = 1;
             /* Move replica to primary's shard. */
             clusterRemoveNodeFromShard(replica);

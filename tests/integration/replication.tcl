@@ -947,8 +947,7 @@ start_server {tags {"repl external:skip"} overrides {save ""}} {
                     } else {
                         # For slow/all/timeout subcases the replica will be
                         # killed or timed out, so a brief SIGSTOP is fine.
-                        set slow_replica_pid [srv -1 pid]
-                        pause_process $slow_replica_pid
+                        pause_process [srv -1 pid]
                         after 500
                     }
 
@@ -958,7 +957,7 @@ start_server {tags {"repl external:skip"} overrides {save ""}} {
                     # Resume before terminating the paused slow replica so the
                     # disconnect is observed immediately instead of timing out.
                     if {$all_drop == "all" || $all_drop == "slow"} {
-                        resume_process $slow_replica_pid
+                        resume_process [srv -1 pid]
                     }
 
                     # disconnect replicas depending on the current test

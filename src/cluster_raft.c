@@ -106,9 +106,9 @@ typedef struct {
 /* A pending proposal tracks a client waiting for a Raft entry to be
  * committed. Stored on the node that originated the proposal. */
 typedef struct {
-    uint8_t type;  /* Expected entry type */
-    sds data;      /* Expected entry data (for matching) */
-    void *ctx;     /* Client context */
+    uint8_t type; /* Expected entry type */
+    sds data;     /* Expected entry data (for matching) */
+    void *ctx;    /* Client context */
     void (*callback)(void *ctx, const char *error);
     mstime_t ctime; /* Creation time for expiry */
 } raftPendingProposal;
@@ -156,6 +156,10 @@ typedef struct {
     unsigned int todo_broadcast_ae : 1;
     unsigned int todo_retry_proposals : 1;
 
+    /* NODE_INFO divergence detection. */
+    sds my_last_committed_info;
+    mstime_t last_node_info_check;
+
     /* Election */
     int votes_received;
     mstime_t election_timeout; /* Randomized timeout */
@@ -194,8 +198,8 @@ typedef struct {
  * -------------------------------------------------------------------------- */
 
 static void clusterRaftPropose(sds entry, void *ctx, void (*callback)(void *ctx, const char *error));
-static void clusterRaftFailPendingProposals(clusterRaftState *rs, const char *error);
 static void clusterRaftDeferPendingProposals(clusterRaftState *rs);
+static void clusterRaftUpdateMyself(int old_flags);
 static void clusterRaftCheckSlotCoverage(void);
 static void clusterRaftBroadcastAppendEntries(clusterRaftState *rs);
 static void clusterRaftSendAppendEntries(clusterLink *link, clusterNode *node);
@@ -535,8 +539,8 @@ static void clusterRaftPropose(sds entry, void *ctx, void (*callback)(void *ctx,
 
     sds data = sp ? sdsnew(sp + 1) : sdsempty();
 
-    /* Track pending callback for matching on commit. */
-    if (callback) {
+    /* Track pending proposal for retry on leader change. */
+    {
         raftPendingProposal *pp = zmalloc(sizeof(*pp));
         pp->type = type;
         pp->data = sdsdup(data);
@@ -625,20 +629,6 @@ static int clusterRaftProcessPropose(clusterLink *link, int argc, sds *argv) {
 /* --------------------------------------------------------------------------
  * Raft election and heartbeat
  * -------------------------------------------------------------------------- */
-
-/* Fail all pending proposals with an error and free them. */
-static void clusterRaftFailPendingProposals(clusterRaftState *rs, const char *error) {
-    listIter li;
-    listNode *ln;
-    listRewind(rs->pending_proposals, &li);
-    while ((ln = listNext(&li)) != NULL) {
-        raftPendingProposal *pp = listNodeValue(ln);
-        pp->callback(pp->ctx, error);
-        sdsfree(pp->data);
-        zfree(pp);
-        listDelNode(rs->pending_proposals, ln);
-    }
-}
 
 /* Defer pending proposals for retry after a leader change. The proposals
  * are idempotent, so retrying is safe. They will be resent to the new
@@ -831,6 +821,10 @@ static void raftLogApply(raftLogEntry *e) {
                 sdsclear(node->human_nodename);
                 clusterNodeParseAddressString(node, e->data + CLUSTER_NAMELEN + 1);
             }
+            if (node == myself) {
+                sdsfree(rs->my_last_committed_info);
+                rs->my_last_committed_info = sdsnew(e->data + CLUSTER_NAMELEN + 1);
+            }
         }
         /* Invalidate immediately — address changes make the cached
          * CLUSTER SLOTS response invalid and the verify assert fires
@@ -845,15 +839,20 @@ static void raftLogApply(raftLogEntry *e) {
         break;
     }
 
-    /* Check pending proposals for a matching callback (FIFO). */
+    /* Check pending proposals for a match and remove it. */
     if (listLength(rs->pending_proposals) > 0) {
-        listNode *ln = listFirst(rs->pending_proposals);
-        raftPendingProposal *pp = listNodeValue(ln);
-        if (pp->type == e->type && !sdscmp(pp->data, e->data)) {
-            pp->callback(pp->ctx, NULL);
-            sdsfree(pp->data);
-            zfree(pp);
-            listDelNode(rs->pending_proposals, ln);
+        listIter li;
+        listNode *ln;
+        listRewind(rs->pending_proposals, &li);
+        while ((ln = listNext(&li)) != NULL) {
+            raftPendingProposal *pp = listNodeValue(ln);
+            if (pp->type == e->type && !sdscmp(pp->data, e->data)) {
+                if (pp->callback) pp->callback(pp->ctx, NULL);
+                sdsfree(pp->data);
+                zfree(pp);
+                listDelNode(rs->pending_proposals, ln);
+                break;
+            }
         }
     }
 }
@@ -1214,6 +1213,8 @@ static void clusterRaftInit(void) {
     rs->peer_state = dictCreate(&clusterNodesDictType);
     rs->pending_proposals = listCreate();
     rs->pending_meets = listCreate();
+    rs->my_last_committed_info = sdsempty();
+    rs->last_node_info_check = mstime();
     server.cluster->protocol_data = rs;
     server.cluster->size = 1; /* Myself */
 }
@@ -1258,7 +1259,7 @@ static void clusterRaftCron(void) {
                 if (now - pp->ctime > timeout) {
                     serverLog(LL_NOTICE, "Expiring stale proposal %s after %lldms.",
                               raftEntryTypeName(pp->type), (long long)(now - pp->ctime));
-                    pp->callback(pp->ctx, "-TIMEOUT Cluster consensus not reached in time");
+                    if (pp->callback) pp->callback(pp->ctx, "-TIMEOUT Cluster consensus not reached in time");
                     sdsfree(pp->data);
                     zfree(pp);
                     listDelNode(rs->pending_proposals, eln);
@@ -1305,6 +1306,19 @@ static void clusterRaftCron(void) {
                               listLength(rs->pending_proposals));
                 }
             }
+        }
+
+        /* Periodically check if our NODE_INFO diverged from what was last
+         * committed (e.g. a CONFIG SET succeeded but the proposal timed
+         * out). Re-propose if needed. Check every 10 seconds. */
+        if (now - rs->last_node_info_check > 10000) {
+            rs->last_node_info_check = now;
+            sds current = clusterNodeAppendAddressString(sdsempty(), myself, server.tls_cluster);
+            if (sdscmp(current, rs->my_last_committed_info) != 0) {
+                serverLog(LL_NOTICE, "NODE_INFO diverged from last commit, re-proposing.");
+                clusterRaftUpdateMyself(0);
+            }
+            sdsfree(current);
         }
 
         /* Leader: send periodic heartbeats. */

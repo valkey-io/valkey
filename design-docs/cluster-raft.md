@@ -265,6 +265,14 @@ commits. It fires the pending MEET callback, unblocking the client.
 Both rules set `rs->leader` to the sender's name so the follower
 knows where to send PROPOSE.
 
+### Membership changes
+
+Nodes are added and removed one at a time using NODE_JOIN and
+NODE_FORGET log entries. Adding or removing a single server at a
+time is safe without joint consensus, as described in the Raft
+dissertation (Ongaro, 2014, p. 51):
+https://web.stanford.edu/~ouster/cgi-bin/papers/OngaroPhD.pdf
+
 ## Failure Detection
 
 The leader tracks `last_ack_time` per peer, updated on every AE_ACK

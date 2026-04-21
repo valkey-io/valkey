@@ -41,6 +41,7 @@
 #include "connection.h"
 #include "module.h"
 #include "cluster_migrateslots.h"
+#include "bgiteration.h"
 
 #include <memory.h>
 #include <sys/time.h>
@@ -2482,6 +2483,7 @@ int replicaLoadPrimaryRDBFromSocket(connection *conn, char *buf, char *eofmark, 
             } else {
                 /* Remove the half-loaded data in case the load failed for other reasons. */
                 serverLog(LL_NOTICE, "PRIMARY <-> REPLICA sync: Discarding the half-loaded data");
+                bgIteration_flushall();
                 emptyData(-1, empty_db_flags, replicationEmptyDbCallback);
             }
         }
@@ -2585,6 +2587,7 @@ int replicaLoadPrimaryRDBFromDisk(rdbSaveInfo *rsi) {
         } else {
             /* If disk-based RDB loading fails, remove the half-loaded dataset. */
             serverLog(LL_NOTICE, "PRIMARY <-> REPLICA sync: Discarding the half-loaded data");
+            bgIteration_flushall();
             emptyData(-1, empty_db_flags, replicationEmptyDbCallback);
         }
 

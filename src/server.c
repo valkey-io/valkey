@@ -54,6 +54,7 @@
 #include "util.h"
 
 #include "eval.h"
+#include "bgiteration.h"
 
 #include "trace/trace_commands.h"
 
@@ -3018,8 +3019,11 @@ void initServer(void) {
 
     /* Set object metadata size before creating any database key objects */
     if (server.forkless_options_supported) {
-        objectSetMetadataSize(sizeof(uint32_t)); /* This is a placeholder until Threadsave defines a metadata structure */
-                                                 /* 4 bytes for iterator_epoch for now*/
+        /* NOTE: At this time, there is only one reason for dbEntry metadata.  bgIteration.  However,
+         * if/when new metadata options are added, we will need to compute the size of a variable
+         * size metadata, and provide appropriate accessors to access the specific portion of the
+         * metadata (each of which may/may not exist, based on immutable startup parameters).  */
+        objectSetMetadataSize(sizeof(bgIterationEntryMetadata));
     }
 
     createDatabaseIfNeeded(0); /* The default database should always exist */
@@ -3141,6 +3145,7 @@ void initServer(void) {
     commandlogInit();
     latencyMonitorInit();
     initSharedQueryBuf();
+    bgIteration_init();
 
     /* Initialize ACL default password if it exists */
     ACLUpdateDefaultUserPassword(server.requirepass);
@@ -3702,6 +3707,11 @@ static void propagateNow(int dbid, robj **argv, int argc, int target, int slot) 
     if (propagate_to_slot_migration) clusterFeedSlotExportJobs(dbid, argv, argc, slot);
 }
 
+// If true, a MULTI has been sent to bgIterator.
+//  Remember to send the matching EXEC in propagatePendingCommands().
+static bool sentMultiToBgIterator = false;
+static int lastDbidSentToBgIterator;
+
 /* Used inside commands to schedule the propagation of additional commands
  * after the current command is propagated to AOF / Replication.
  *
@@ -3714,6 +3724,29 @@ static void propagateNow(int dbid, robj **argv, int argc, int target, int slot) 
  * stack allocated).  The function automatically increments ref count of
  * passed objects, so the caller does not need to. */
 void alsoPropagate(int dbid, robj **argv, int argc, int target, int slot) {
+    if (target & PROPAGATE_REPL && bgIteration_iterationActive()) {
+        // Note that bgIterator must be invoked immediately after each command.  This is required
+        //  for proper processing in the bgIterator state machine.  It's NOT ok to call bgIterator
+        //  from propagateNow as that handles all of the commands for a transaction at the end.
+        // THIS FUNCTION (alsoPropagate) is called after each command.
+        if (!sentMultiToBgIterator && (scriptIsRunning() || server.in_exec)) {
+            // For a script or multi/exec, we should be sending the MULTI at the beginning of the
+            //  execution unit.  There shouldn't be any commands in the propagation queue yet.
+            serverAssert(server.also_propagate.numops == 0);
+            // If this is the first propagated command of a script or multi, make it a transaction.
+            //  It may turn out that there is only 1 command in the MULTI block, but we can't know
+            //  that now.  Unlike regular replication, we can't defer all of the replication until
+            //  we know for sure.  We must call bgIterator after each command.
+            static struct serverCommand* cmd_multi = NULL;   // STATIC to avoid repeated lookups
+            if (cmd_multi == NULL) cmd_multi = lookupCommandOrOriginal(&shared.multi, 1);
+            bgIteration_handleCommandReplication(dbid, cmd_multi, 1, &shared.multi);
+            sentMultiToBgIterator = true;
+        }
+        struct serverCommand* cmd = lookupCommandOrOriginal(argv, argc);
+        bgIteration_handleCommandReplication(dbid, cmd, argc, argv);
+        lastDbidSentToBgIterator = dbid;
+    }
+
     robj **argvcopy;
     int j;
 
@@ -3780,6 +3813,17 @@ void updateCommandLatencyHistogram(struct hdr_histogram **latency_histogram, int
  * multiple separated commands. Note that alsoPropagate() is not affected
  * by CLIENT_PREVENT_PROP flag. */
 static void propagatePendingCommands(void) {
+    // Note: This is done before the check on server.also_propagate.numops.  Numops might be zero
+    //       if there is no replica but we might be running bgIteration for something other than
+    //       replication.  If we sent the multi (to bgIteration), we need to send the matching exec.
+    if (sentMultiToBgIterator) {
+        // If a MULTI was sent to bgIterator via alsoPropagate(), then send the matching EXEC.
+        static struct serverCommand* cmd_exec = NULL;    // STATIC to avoid repeated lookups
+        if (cmd_exec == NULL) cmd_exec = lookupCommandOrOriginal(&shared.exec, 1);
+        bgIteration_handleCommandReplication(lastDbidSentToBgIterator, cmd_exec, 1, &shared.exec);
+        sentMultiToBgIterator = false;
+    }
+
     if (server.also_propagate.numops == 0) return;
 
     int j;
@@ -3909,6 +3953,8 @@ int incrCommandStatsOnError(struct serverCommand *cmd, int flags) {
  *
  */
 void call(client *c, int flags) {
+    if (bgIteration_blockClientIfRequired(c)) return;
+
     long long dirty;
     struct ClientFlags client_old_flags = c->flag;
 

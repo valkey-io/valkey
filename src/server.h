@@ -344,6 +344,7 @@ typedef enum blocking_type {
     BLOCKED_ZSET,     /* BZPOP et al. */
     BLOCKED_POSTPONE, /* Blocked by processCommand, re-try processing later. */
     BLOCKED_SHUTDOWN, /* SHUTDOWN. */
+    BLOCKED_INUSE,    /* Key in use by background thread. */
     BLOCKED_NUM,      /* Number of blocked states. */
     BLOCKED_END       /* End of enumeration */
 } blocking_type;
@@ -3848,6 +3849,9 @@ void signalKeyAsReady(serverDb *db, robj *key, int type);
 void blockForKeys(client *c, int btype, robj **keys, int numkeys, mstime_t timeout, int unblock_on_nokey);
 void blockClientShutdown(client *c);
 void blockPostponeClient(client *c);
+void blockClientInUseOnKeys(client *c, int num_keys, robj *keys[]);
+void unblockClientsInUseOnKey(robj *key);
+void unblockClientsInUseOnAllKeys(void);
 void blockClientForReplicaAck(client *c, mstime_t timeout, long long offset, long numreplicas, int numlocal);
 void replicationRequestAckFromReplicas(void);
 void signalDeletedKeyAsReady(serverDb *db, robj *key, int type);

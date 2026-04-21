@@ -1184,6 +1184,24 @@ void getExpensiveClientsInfo(size_t *in_usage, size_t *out_usage) {
     *out_usage = o;
 }
 
+/* Detect and free zombie connections whose read handler was removed (e.g.
+ * BLOCKED_INUSE). Without a read handler the event loop won't notice the
+ * remote side closing, so these fds would leak until the fd limit is hit. */
+static bool clientsCronTcpIsClosing(client *c) {
+    if (!c->conn) return false;
+
+    if (!connIsClosing(c->conn)) return false;
+
+    if (server.verbosity <= LL_VERBOSE) {
+        sds client_info = catClientInfoString(sdsempty(), c, server.hide_user_data_from_log);
+        serverLog(LL_VERBOSE, "Client closed connection while blocked %s", client_info);
+        sdsfree(client_info);
+    }
+
+    freeClientAsync(c);
+    return true;
+}
+
 /* This function is called by clientsTimeProc() and is used in order to perform
  * operations on clients that are important to perform constantly. For instance
  * we use this function in order to disconnect clients after a timeout, including
@@ -1238,6 +1256,7 @@ static void clientsCron(int clients_this_cycle) {
         if (clientsCronResizeQueryBuffer(c)) continue;
         if (clientsCronResizeOutputBuffer(c, now)) continue;
         if (clientsCronTrackExpensiveClients(c, curr_peak_mem_usage_slot)) continue;
+        if (clientsCronTcpIsClosing(c)) continue;
 
         /* Iterating all the clients in getMemoryOverheadData() is too slow and
          * in turn would make the INFO command too slow. So we perform this
@@ -4273,6 +4292,8 @@ void unprepareCommand(client *c) {
  * other operations can be performed by the caller. Otherwise
  * if C_ERR is returned the client was destroyed (i.e. after QUIT). */
 int processCommand(client *c) {
+    serverAssert(!c->flag.blocked && !c->flag.unblocked);
+
     if (!scriptIsTimedout()) {
         /* Both EXEC and scripts call call() directly so there should be
          * no way in_exec or scriptIsRunning() is 1.

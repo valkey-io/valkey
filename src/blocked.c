@@ -77,6 +77,7 @@ static void handleClientsBlockedOnKey(readyList *rl);
 static void unblockClientOnKey(client *c, robj *key);
 static void moduleUnblockClientOnKey(client *c, robj *key);
 static void releaseBlockedEntry(client *c, dictEntry *de, int remove_key);
+static void unlinkBlockInUseClient(client *c);
 
 void initClientBlockingState(client *c) {
     if (c->bstate) return;
@@ -164,6 +165,7 @@ void processUnblockedClients(void) {
         serverAssert(ln != NULL);
         c = ln->value;
         listDelNode(server.unblocked_clients, ln);
+        serverAssert(c->flag.module || !c->flag.blocked);
         c->flag.unblocked = 0;
 
         if (c->flag.module) {
@@ -173,15 +175,15 @@ void processUnblockedClients(void) {
             continue;
         }
 
-        /* Process remaining data in the input buffer, unless the client
-         * is blocked again. Actually processInputBuffer() checks that the
-         * client is not blocked before to proceed, but things may change and
-         * the code is conceptually more correct this way. */
-        if (!c->flag.blocked) {
-            /* If we have a queued command, execute it now. */
-            if (processPendingCommandAndInputBuffer(c) == C_ERR) {
+        if (c->conn && !connHasReadHandler(c->conn)) {
+            if (connSetReadHandler(c->conn, readQueryFromClient) == C_ERR) {
+                freeClient(c);
                 continue;
             }
+        }
+        /* If we have a queued command, execute it now. */
+        if (processPendingCommandAndInputBuffer(c) == C_ERR) {
+            continue;
         }
         beforeNextClient(c);
     }
@@ -215,20 +217,31 @@ void queueClientForReprocessing(client *c) {
 /* Unblock a client calling the right function depending on the kind
  * of operation the client is blocking for. */
 void unblockClient(client *c, int queue_for_reprocessing) {
-    if (c->bstate->btype == BLOCKED_LIST || c->bstate->btype == BLOCKED_ZSET || c->bstate->btype == BLOCKED_STREAM) {
+    switch (c->bstate->btype) {
+    case BLOCKED_LIST:
+    case BLOCKED_ZSET:
+    case BLOCKED_STREAM:
         unblockClientWaitingData(c);
-    } else if (c->bstate->btype == BLOCKED_WAIT) {
+        break;
+    case BLOCKED_WAIT:
         unblockClientWaitingReplicas(c);
-    } else if (c->bstate->btype == BLOCKED_MODULE) {
+        break;
+    case BLOCKED_MODULE:
         if (moduleClientIsBlockedOnKeys(c)) unblockClientWaitingData(c);
         unblockClientFromModule(c);
-    } else if (c->bstate->btype == BLOCKED_POSTPONE) {
+        break;
+    case BLOCKED_POSTPONE:
         serverAssert(c->bstate->postponed_list_node);
         listDelNode(server.postponed_clients, c->bstate->postponed_list_node);
         c->bstate->postponed_list_node = NULL;
-    } else if (c->bstate->btype == BLOCKED_SHUTDOWN) {
+        break;
+    case BLOCKED_SHUTDOWN:
         /* No special cleanup. */
-    } else {
+        break;
+    case BLOCKED_INUSE:
+        unlinkBlockInUseClient(c);
+        break;
+    default:
         serverPanic("Unknown btype in unblockClient().");
     }
 
@@ -337,6 +350,10 @@ void disconnectOrRedirectAllBlockedClients(void) {
              * be either executed or rejected. (unlike LIST blocked clients for
              * which the command is already in progress in a way. */
             if (c->bstate->btype == BLOCKED_POSTPONE) continue;
+
+            /* BLOCKED_INUSE clients will reprocess their command when unblocked
+             * by the caller. Sending error replies here would be incorrect. */
+            if (c->bstate->btype == BLOCKED_INUSE) continue;
 
             if (server.cluster_enabled) {
                 if (clusterRedirectBlockedClientIfNeeded(c))
@@ -787,6 +804,197 @@ void unblockClientOnError(client *c, const char *err_str) {
     unblockClient(c, 1);
 }
 
+/* ========================== BlockInUse ====================================
+ *
+ * Client blocking mechanism for keys currently being processed by a
+ * background thread.
+ *
+ * Note: All blockInUse APIs must be called from the main thread only.
+ *
+ * This uses the BLOCKED_INUSE blocking type (via blockClient()) and tracks
+ * blocked keys per client in c->bstate->keys and a key→clients mapping in
+ * a static hashtable (inuse_key_to_clients).
+ *
+ * Workflow:
+ *   1. blockClientInUseOnKeys() blocks the client via
+ *      blockClient(c, BLOCKED_INUSE) and records mappings in both
+ *      c->bstate->keys and inuse_key_to_clients.
+ *   2. unblockClientsInUseOnKey() unblocks a single key. A client remains
+ *      blocked until all its keys are unblocked.
+ *   3. A client is fully unblocked only when it has no remaining keys in its
+ *      c->bstate->keys dict.
+ *   4. processUnblockedClients() restores the read handler and resumes the
+ *      pending command.
+ */
+
+/* Internal blockInUse data structures.
+ *
+ * Clients are blocked on key name, regardless of DB. This avoids complexity
+ * with DB swaps. A BLOCKED_INUSE client may get unblocked early due to
+ * unblocking a key with the same name on a different DB. In this case, the
+ * client will get reblocked when attempting to reprocess the command. */
+static hashtable *inuse_key_to_clients; /* Maps keys to keyToClientsEntry. */
+
+/* ----------------------------- key_to_clients Hashtable Util ------------------------- */
+
+typedef struct {
+    robj *key;
+    list *clients;
+} keyToClientsEntry;
+
+// hashtable callback, returns an robj containing a string
+static const void *keyToClientsGetKey(const void *entry) {
+    return ((keyToClientsEntry *)entry)->key;
+}
+
+// hashtable callback
+static void keyToClientsDestructor(void *entry) {
+    keyToClientsEntry *e = entry;
+    decrRefCount(e->key);
+    listRelease(e->clients);
+    zfree(e);
+}
+
+static hashtableType keyToClientsHashtableType = {
+    .entryGetKey = keyToClientsGetKey,
+    .hashFunction = dictEncObjHash,
+    .keyCompare = dictEncObjKeyCompare,
+    .entryDestructor = keyToClientsDestructor,
+};
+
+// Return the list of clients blocked on key, or NULL if none exist.
+static list *keyToClients_getBlockedClientsList(robj *key) {
+    keyToClientsEntry *entry;
+    if (hashtableFind(inuse_key_to_clients, key, (void **)&entry)) {
+        return entry->clients;
+    }
+    return NULL;
+}
+
+/* Create a new keyToClientsEntry for key, add it to key_to_clients,
+ * and return its clients list. Precondition: the key must not already exist. */
+static list *keyToClients_addEntry(robj *key) {
+    keyToClientsEntry *entry = zcalloc(sizeof(keyToClientsEntry));
+    entry->key = key;
+    incrRefCount(key);
+    entry->clients = listCreate();
+    serverAssert(hashtableAdd(inuse_key_to_clients, entry));
+    return entry->clients;
+}
+
+/* ----------------------------- blockInUse API ----------------------------- */
+
+static bool isClientBlockedInUse(client *c) {
+    return c->flag.blocked && c->bstate->btype == BLOCKED_INUSE;
+}
+
+/* Block a client on a set of keys. Duplicate keys are deduplicated.
+ *
+ * Each key robj must contain an sds string value. Keys are simple names,
+ * independent of DB — a client may be unblocked early if the same key name
+ * in another DB is unblocked.
+ *
+ * The client remains blocked until ALL of its keys are unblocked via
+ * unblockClientsInUseOnKey().
+ *
+ * The caller MUST set c->flag.pending_command = 1 before calling this function.
+ * This ensures the pending command is executed when the client is later
+ * unblocked via processPendingCommandAndInputBuffer().
+ * The caller should then return without executing the command. */
+void blockClientInUseOnKeys(client *c, int num_keys, robj *keys[]) {
+    serverAssert(!c->flag.blocked && !c->flag.unblocked);
+    serverAssert(c->flag.pending_command == 1);
+    serverAssert(num_keys > 0);
+    serverAssert(!c->flag.replica);
+
+    if (!inuse_key_to_clients) inuse_key_to_clients = hashtableCreate(&keyToClientsHashtableType);
+
+    initClientBlockingState(c);
+    c->bstate->timeout = 0;
+    serverAssert(dictSize(c->bstate->keys) == 0);
+
+    for (int i = 0; i < num_keys; ++i) {
+        robj *key = keys[i];
+        serverAssert(key->type == OBJ_STRING);
+
+        /* Deduplicate via bstate->keys dict */
+        if (dictAdd(c->bstate->keys, key, NULL) != DICT_OK) continue;
+        incrRefCount(key);
+
+        list *blockedClientsList = keyToClients_getBlockedClientsList(key);
+        if (!blockedClientsList) blockedClientsList = keyToClients_addEntry(key);
+        listAddNodeTail(blockedClientsList, c);
+    }
+
+    serverAssert(dictSize(c->bstate->keys) > 0);
+    blockClient(c, BLOCKED_INUSE);
+
+    /* Disable client's Read Handler to prevent reading commands while blocked */
+    if (c->conn) {
+        connSetReadHandler(c->conn, NULL);
+    }
+}
+
+/* Unblock clients blocked on the given key.
+ *
+ * A client is fully unblocked only when it has no remaining keys in its
+ * bstate->keys dict. Such clients are queued for reprocessing and resumed
+ * later during processUnblockedClients(). */
+void unblockClientsInUseOnKey(robj *key) {
+    list *blockedClientsList = keyToClients_getBlockedClientsList(key);
+    if (blockedClientsList == NULL) return;
+
+    serverAssert(listLength(blockedClientsList) > 0);
+
+    while (listLength(blockedClientsList) > 0) {
+        listNode *ln = listFirst(blockedClientsList);
+        client *c = listNodeValue(ln);
+        serverAssert(isClientBlockedInUse(c) && c->flag.unblocked == 0);
+        listDelNode(blockedClientsList, ln);
+        dictDelete(c->bstate->keys, key);
+
+        if (dictSize(c->bstate->keys) == 0) {
+            unblockClient(c, 1);
+        }
+    }
+
+    hashtableDelete(inuse_key_to_clients, key);
+}
+
+/* Unblock all clients that are currently blocked by blockInUse, across all
+ * keys. Unblocked clients are queued for reprocessing and resumed during
+ * processUnblockedClients(). After this call, no clients remain blocked
+ * by blockInUse. */
+void unblockClientsInUseOnAllKeys(void) {
+    if (!inuse_key_to_clients) return;
+    hashtableIterator iter;
+    hashtableInitIterator(&iter, inuse_key_to_clients, HASHTABLE_ITER_SAFE);
+    keyToClientsEntry *e;
+    while (hashtableNext(&iter, (void **)&e)) {
+        unblockClientsInUseOnKey(e->key);
+    }
+    hashtableCleanupIterator(&iter);
+    serverAssert(server.blocked_clients_by_type[BLOCKED_INUSE] == 0);
+    serverAssert(hashtableSize(inuse_key_to_clients) == 0);
+}
+
+/* Remove a client from all blockInUse key-to-clients mappings.
+ * Called from unblockClient() for BLOCKED_INUSE cleanup. */
+static void unlinkBlockInUseClient(client *c) {
+    if (!c->bstate->keys || dictSize(c->bstate->keys) == 0) return;
+    dictIterator *di = dictGetIterator(c->bstate->keys);
+    dictEntry *de;
+    while ((de = dictNext(di)) != NULL) {
+        robj *key = dictGetKey(de);
+        list *clientList = keyToClients_getBlockedClientsList(key);
+        serverAssert(clientList != NULL);
+        listDelNode(clientList, listSearchKey(clientList, c));
+        if (listLength(clientList) == 0) hashtableDelete(inuse_key_to_clients, key);
+    }
+    dictReleaseIterator(di);
+    dictEmpty(c->bstate->keys, NULL);
+}
+
 void blockedBeforeSleep(void) {
     /* Handle precise timeouts of blocked clients. */
     handleBlockedClientsTimeout();
@@ -809,4 +1017,22 @@ void blockedBeforeSleep(void) {
 
     /* Try to process pending commands for clients that were just unblocked. */
     if (listLength(server.unblocked_clients)) processUnblockedClients();
+}
+
+/* --------------------------------------------------------------------------
+ * Test-only APIs for blockInUse
+ * -------------------------------------------------------------------------- */
+
+/* Test-only: get the current number of blocked keys by blockInUse. */
+int getBlockInUseKeyCount(void) {
+    return inuse_key_to_clients ? hashtableSize(inuse_key_to_clients) : 0;
+}
+
+/* Test-only: release the blockInUse hashtable. */
+void releaseBlockInUse(void) {
+    unblockClientsInUseOnAllKeys();
+    if (inuse_key_to_clients) {
+        hashtableRelease(inuse_key_to_clients);
+        inuse_key_to_clients = NULL;
+    }
 }

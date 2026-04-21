@@ -1996,6 +1996,10 @@ void unlinkClient(client *c) {
 
     /* Clear the tracking status. */
     if (c->flag.tracking) disableTracking(c);
+
+    /* Client must not be in blocked or unblocked state at this point.
+     * Guaranteed by freeClient ordering: unblockClient -> freeClientBlockingState -> unlinkClient. */
+    serverAssert(!c->flag.blocked && !c->flag.unblocked);
 }
 
 /* Clear the client state to resemble a newly connected client. */
@@ -2117,7 +2121,7 @@ void freeClient(client *c) {
     /* Deallocate structures used to block on blocking ops. */
     /* If there is any in-flight command, we don't record their duration. */
     c->duration = 0;
-    if (c->flag.blocked) unblockClient(c, 1);
+    if (c->flag.blocked) unblockClient(c, 0);
 
     freeClientBlockingState(c);
     freeClientPubSubData(c);
@@ -3831,6 +3835,7 @@ int processPendingCommandAndInputBuffer(client *c) {
      * But in case of a module blocked client (see RM_Call 'K' flag) we do not reach this code path.
      * So whenever we change the code here we need to consider if we need this change on module
      * blocked client as well */
+    if (c->flag.close_asap) return C_ERR;
     if (c->flag.pending_command) {
         c->flag.pending_command = 0;
         if (processCommandAndResetClient(c) == C_ERR) {

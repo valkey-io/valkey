@@ -6830,6 +6830,16 @@ ValkeyModuleCallReply *VM_Call(ValkeyModuleCtx *ctx, const char *cmdname, const 
     server.replication_allowed = prev_replication_allowed;
 
     if (c->flag.blocked) {
+        if (c->flag.deny_blocking) {
+            /* The module did not pass ALLOW_BLOCK — it does not expect the
+             * command to block. Unblock the client and return an error. */
+            c->flag.pending_command = 0;
+            unblockClient(c, 0);
+            addReplyError(c, "INUSE key is being processed.");
+            reply = moduleParseReply(c, (ctx->flags & VALKEYMODULE_CTX_AUTO_MEMORY) ? ctx : NULL);
+            goto cleanup;
+        }
+
         /* Blocking commands are not allowed when calling commands in scripting engines. */
         serverAssert(!is_running_script);
         serverAssert(flags & VALKEYMODULE_ARGV_ALLOW_BLOCK);

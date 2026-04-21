@@ -53,12 +53,13 @@ FAILOVER_PREPARE
     The primary pauses writes so the replica can catch up. Not a raft
     log entry — just a direct message over the cluster link.
 
-REPL_OFFSETS <context-node-id> <node-id> <offset> [<node-id> <offset> ...]
-    Sent by the leader to propagate replication offsets. Used before
-    NODE_FAIL to provide replicas with sibling offsets for failover
-    ranking. The context-node-id is the failed primary (or dash if
-    not failover-related). Recipients update node->repl_offset for
-    CLUSTER SLOTS/SHARDS health reporting.
+REPL_OFFSETS <node-id> <offset> [<node-id> <offset> ...]
+    Sent by the leader to propagate replication offsets. Broadcast
+    periodically (every 10s) and immediately when a replica's offset
+    transitions from 0 to non-zero. Also sent before NODE_FAIL to
+    provide replicas with sibling offsets for failover ranking.
+    Recipients update node->repl_offset for CLUSTER SLOTS/SHARDS
+    health reporting.
 ```
 
 The address string uses the nodes.conf format:

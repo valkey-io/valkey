@@ -164,8 +164,9 @@ typedef struct {
 
     /* Election */
     int votes_received;
-    mstime_t election_timeout; /* Randomized timeout */
-    mstime_t last_heartbeat;   /* Last time we heard from leader */
+    mstime_t election_timeout;            /* Randomized timeout */
+    mstime_t last_heartbeat;              /* Last time we heard from leader */
+    mstime_t last_repl_offsets_broadcast; /* Last REPL_OFFSETS broadcast */
 
     /* Leader identity */
     char leader[CLUSTER_NAMELEN]; /* All zeros = unknown */
@@ -812,6 +813,21 @@ static void raftLogApply(raftLogEntry *e) {
         }
         serverLog(LL_NOTICE, "Applied NODE_FAIL %.40s (index %llu).",
                   e->data, (unsigned long long)e->index);
+
+        /* If the failed node is my primary, compute failover rank. */
+        if (node && nodeIsReplica(myself) && myself->replicaof == node &&
+            !nodeCantFailover(myself)) {
+            long long my_offset = replicationGetReplicaOffset();
+            int rank = 0;
+            for (int r = 0; r < clusterNodeNumReplicas(node); r++) {
+                clusterNode *sibling = clusterNodeGetReplica(node, r);
+                if (sibling == myself) continue;
+                if (sibling->repl_offset > my_offset) rank++;
+            }
+            rs->failover_time = mstime() + rank * 1000;
+            serverLog(LL_NOTICE, "Primary %.40s failed, failover rank %d.",
+                      node->name, rank);
+        }
         break;
     }
     case RAFT_ENTRY_NODE_RECOVER: {
@@ -1057,7 +1073,29 @@ static int clusterRaftProcessAppendEntriesResponse(clusterLink *link, int argc, 
     rd->peer.last_ack_time = mstime();
     rd->peer.repl_offset = follower_repl_offset;
     /* Keep node->repl_offset in sync for CLUSTER SLOTS/SHARDS on the leader. */
+    long long prev_offset = node->repl_offset;
     node->repl_offset = follower_repl_offset;
+
+    /* Broadcast this node's offset to all peers when it transitions
+     * from 0 to non-zero (e.g. replica finishes initial sync). */
+    if (prev_offset == 0 && follower_repl_offset > 0) {
+        sds msg = wireNewMsg("REPL_OFFSETS");
+        msg = sdscatfmt(msg, " %.40s %I", node->name, (long long)follower_repl_offset);
+        msg = wireFinishMsg(msg);
+        size_t msg_len = sdslen(msg);
+        clusterMsgSendBlock *block = clusterAllocMsgSendBlock(msg_len);
+        memcpy(block->data, msg, msg_len);
+        sdsfree(msg);
+        dictIterator *bdi = dictGetSafeIterator(server.cluster->nodes);
+        dictEntry *bde;
+        while ((bde = dictNext(bdi)) != NULL) {
+            clusterNode *n = dictGetVal(bde);
+            if (n == myself || !n->link) continue;
+            clusterLinkSendBlock(n->link, block);
+        }
+        dictReleaseIterator(bdi);
+        clusterMsgSendBlockDecrRefCount(block);
+    }
 
     /* Propose NODE_RECOVER if the node is back. */
     if (nodeFailed(node) && !rd->peer.pending_fail_change) {
@@ -1365,6 +1403,35 @@ static void clusterRaftCron(void) {
                 clusterRaftBroadcastAppendEntries(rs);
             }
 
+            /* Leader: broadcast all replication offsets every 10s so
+             * followers have accurate data for CLUSTER SLOTS/SHARDS. */
+            if (now - rs->last_repl_offsets_broadcast > 10000) {
+                rs->last_repl_offsets_broadcast = now;
+                sds msg = wireNewMsg("REPL_OFFSETS");
+                dictIterator *odi = dictGetSafeIterator(server.cluster->nodes);
+                dictEntry *ode;
+                while ((ode = dictNext(odi)) != NULL) {
+                    clusterNode *n = dictGetVal(ode);
+                    if (n == myself) continue;
+                    msg = sdscatfmt(msg, " %.40s %I", n->name, (long long)n->repl_offset);
+                }
+                dictReleaseIterator(odi);
+                msg = wireFinishMsg(msg);
+                size_t msg_len = sdslen(msg);
+                clusterMsgSendBlock *block = clusterAllocMsgSendBlock(msg_len);
+                memcpy(block->data, msg, msg_len);
+                sdsfree(msg);
+                dictIterator *bdi = dictGetSafeIterator(server.cluster->nodes);
+                dictEntry *bde;
+                while ((bde = dictNext(bdi)) != NULL) {
+                    clusterNode *n = dictGetVal(bde);
+                    if (n == myself || !n->link) continue;
+                    clusterLinkSendBlock(n->link, block);
+                }
+                dictReleaseIterator(bdi);
+                clusterMsgSendBlockDecrRefCount(block);
+            }
+
             /* Leader: detect node failures. */
             mstime_t node_timeout = server.cluster_node_timeout;
             dictIterator *di = dictGetSafeIterator(server.cluster->nodes);
@@ -1399,7 +1466,6 @@ static void clusterRaftCron(void) {
                     if (!nodeIsReplica(node) && clusterNodeNumReplicas(node) > 0) {
                         int num_replicas = clusterNodeNumReplicas(node);
                         sds hint = wireNewMsg("REPL_OFFSETS");
-                        hint = sdscatfmt(hint, " %.40s", node->name);
                         for (int r = 0; r < num_replicas; r++) {
                             clusterNode *replica = clusterNodeGetReplica(node, r);
                             long long roff = (replica == myself)
@@ -1427,20 +1493,6 @@ static void clusterRaftCron(void) {
                             }
                         }
                         clusterMsgSendBlockDecrRefCount(block);
-
-                        /* If I'm a replica of the failed primary, schedule
-                         * failover directly (no hint message to self). */
-                        if (nodeIsReplica(myself) && myself->replicaof == node) {
-                            long long my_offset = replicationGetReplicaOffset();
-                            int rank = 0;
-                            for (int r = 0; r < num_replicas; r++) {
-                                clusterNode *rep = clusterNodeGetReplica(node, r);
-                                if (rep == myself) continue;
-                                if (RAFT_DATA(rep)->peer.repl_offset > my_offset) rank++;
-                            }
-                            rs->failover_time = now + rank * 1000;
-                            serverLog(LL_NOTICE, "I'm replica of failed primary, rank %d.", rank);
-                        }
                     }
 
                     sds entry = sdsnew("NODE_FAIL ");
@@ -1607,36 +1659,19 @@ static int clusterRaftProcessMessage(struct clusterLink *link) {
             serverLog(LL_NOTICE, "Manual failover requested by replica %.40s, pausing writes.",
                       link->node->name);
         }
-    } else if (!strcasecmp(argv[0], "REPL_OFFSETS") && argc >= 4) {
+    } else if (!strcasecmp(argv[0], "REPL_OFFSETS") && argc >= 3) {
         /* Leader broadcasts replication offsets for a set of nodes.
-         * argv: REPL_OFFSETS <context-node-id> <node-id> <offset> ...
+         * argv: REPL_OFFSETS <node-id> <offset> ...
          * Update node->repl_offset for CLUSTER SLOTS/SHARDS health.
-         * If context node is my primary and it's failed, compute
-         * failover rank. */
+         * If my primary is failed, compute failover rank from sibling offsets. */
         clusterRaftState *rs = RAFT_STATE();
 
         /* Update repl_offset for all mentioned nodes. */
-        for (int i = 2; i + 1 < argc; i += 2) {
+        for (int i = 1; i + 1 < argc; i += 2) {
             clusterNode *node = clusterLookupNode(argv[i], sdslen(argv[i]));
             if (node && node != myself) {
                 node->repl_offset = strtoll(argv[i + 1], NULL, 10);
             }
-        }
-
-        /* Compute failover rank if context node is my failed primary. */
-        if (nodeIsReplica(myself) && myself->replicaof &&
-            sdslen(argv[1]) == CLUSTER_NAMELEN &&
-            memcmp(myself->replicaof->name, argv[1], CLUSTER_NAMELEN) == 0) {
-            long long my_offset = nodeIsReplica(myself) ? replicationGetReplicaOffset() : 0;
-            int rank = 0;
-            for (int i = 2; i + 1 < argc; i += 2) {
-                if (memcmp(argv[i], myself->name, CLUSTER_NAMELEN) == 0) continue;
-                long long off = strtoll(argv[i + 1], NULL, 10);
-                if (off > my_offset) rank++;
-            }
-            rs->failover_time = mstime() + rank * 1000;
-            serverLog(LL_NOTICE, "REPL_OFFSETS: failover rank %d for primary %.40s.",
-                      rank, argv[1]);
         }
     } else if (!strcasecmp(argv[0], "PUBLISH") && argc >= 4) {
         /* PUBLISH <sharded> <chan_len> <msg_len>
@@ -2017,13 +2052,6 @@ static void clusterRaftApplySetReplica(sds data) {
             replica->flags |= CLUSTER_NODE_REPLICA;
             replica->replicaof = primary;
             clusterNodeAddReplica(primary, replica);
-            /* Set to non-zero so isNodeAvailable() returns true and
-             * CLUSTER SLOTS includes this replica. TODO: broadcast real
-             * offsets via REPL_OFFSETS when the replica finishes sync,
-             * replacing this workaround. Needs investigation into why
-             * messages sent on newly established outbound links are not
-             * always delivered. */
-            replica->repl_offset = 1;
             /* Move replica to primary's shard. */
             clusterRemoveNodeFromShard(replica);
             memcpy(replica->shard_id, primary->shard_id, CLUSTER_NAMELEN);

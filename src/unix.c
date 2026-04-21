@@ -214,6 +214,7 @@ static ConnectionType CT_Unix = {
 
     /* Miscellaneous */
     .connIntegrityChecked = NULL,
+    .is_closing = NULL,
 };
 
 int RedisRegisterConnectionTypeUnix(void) {

@@ -26,8 +26,7 @@
 #include <arpa/inet.h>
 
 /* From module.c */
-void moduleCallClusterReceivers(const char *sender_id, uint64_t module_id, uint8_t type,
-                                const unsigned char *payload, uint32_t len);
+void moduleCallClusterReceivers(const char *sender_id, uint64_t module_id, uint8_t type, const unsigned char *payload, uint32_t len);
 
 /* --------------------------------------------------------------------------
  * Wire format helpers
@@ -107,10 +106,11 @@ typedef struct {
 /* A pending proposal tracks a client waiting for a Raft entry to be
  * committed. Stored on the node that originated the proposal. */
 typedef struct {
-    uint8_t type; /* Expected entry type */
-    sds data;     /* Expected entry data (for matching) */
-    void *ctx;    /* Client context */
+    uint8_t type;  /* Expected entry type */
+    sds data;      /* Expected entry data (for matching) */
+    void *ctx;     /* Client context */
     void (*callback)(void *ctx, const char *error);
+    mstime_t ctime; /* Creation time for expiry */
 } raftPendingProposal;
 
 /* A pending meet tracks a CLUSTER MEET client waiting for the NODE_JOIN
@@ -154,6 +154,7 @@ typedef struct {
     unsigned int todo_invalidate_slots_cache : 1;
     unsigned int todo_connect_nodes : 1;
     unsigned int todo_broadcast_ae : 1;
+    unsigned int todo_retry_proposals : 1;
 
     /* Election */
     int votes_received;
@@ -193,7 +194,8 @@ typedef struct {
  * -------------------------------------------------------------------------- */
 
 static void clusterRaftPropose(sds entry, void *ctx, void (*callback)(void *ctx, const char *error));
-static void clusterRaftFlushPendingProposals(clusterRaftState *rs, const char *error);
+static void clusterRaftFailPendingProposals(clusterRaftState *rs, const char *error);
+static void clusterRaftDeferPendingProposals(clusterRaftState *rs);
 static void clusterRaftCheckSlotCoverage(void);
 static void clusterRaftBroadcastAppendEntries(clusterRaftState *rs);
 static void clusterRaftSendAppendEntries(clusterLink *link, clusterNode *node);
@@ -279,7 +281,7 @@ static int clusterRaftProcessHello(clusterLink *link, int argc, sds *argv) {
      * This means we're the MEET target — the sender will stay leader.
      * If the sender is already known, this is just a reconnect HELLO. */
     if (rs->role == RAFT_ROLE_LEADER && server.cluster->size <= 1 && !sender) {
-        clusterRaftFlushPendingProposals(rs, "leader changed");
+        clusterRaftDeferPendingProposals(rs);
         rs->role = RAFT_ROLE_LEARNER;
         memcpy(rs->leader, sender_name, CLUSTER_NAMELEN);
         memset(rs->voted_for, 0, CLUSTER_NAMELEN);
@@ -379,7 +381,7 @@ static int clusterRaftProcessHi(clusterLink *link, int argc, sds *argv) {
 
     /* Rule 2: singleton leader steps down on HI from non-singleton. */
     if (rs->role == RAFT_ROLE_LEADER && server.cluster->size <= 1 && sender_cluster_size > 1) {
-        clusterRaftFlushPendingProposals(rs, "leader changed");
+        clusterRaftDeferPendingProposals(rs);
         rs->role = RAFT_ROLE_LEARNER;
         memcpy(rs->leader, sender_name, CLUSTER_NAMELEN);
         memset(rs->voted_for, 0, CLUSTER_NAMELEN);
@@ -540,6 +542,7 @@ static void clusterRaftPropose(sds entry, void *ctx, void (*callback)(void *ctx,
         pp->data = sdsdup(data);
         pp->ctx = ctx;
         pp->callback = callback;
+        pp->ctime = mstime();
         listAddNodeTail(rs->pending_proposals, pp);
     }
 
@@ -565,16 +568,9 @@ static void clusterRaftPropose(sds entry, void *ctx, void (*callback)(void *ctx,
         sdsfree(data);
         clusterNode *leader = clusterLookupNode(rs->leader, CLUSTER_NAMELEN);
         if (!leader || !leader->link) {
-            /* Can't reach leader — flush the proposal we just added. */
-            if (callback) {
-                listNode *ln = listLast(rs->pending_proposals);
-                raftPendingProposal *pp = listNodeValue(ln);
-                sdsfree(pp->data);
-                zfree(pp);
-                listDelNode(rs->pending_proposals, ln);
-                callback(ctx, "no leader link");
-            }
-            serverLog(LL_WARNING, "PROPOSE failed: no outbound link to leader.");
+            /* Can't reach leader yet — defer for retry. */
+            rs->todo_retry_proposals = 1;
+            serverLog(LL_NOTICE, "PROPOSE deferred: no outbound link to leader.");
             return;
         }
         sds msg = wireNewMsg("PROPOSE");
@@ -630,8 +626,8 @@ static int clusterRaftProcessPropose(clusterLink *link, int argc, sds *argv) {
  * Raft election and heartbeat
  * -------------------------------------------------------------------------- */
 
-/* Flush all pending proposals with an error. Called on leader change. */
-static void clusterRaftFlushPendingProposals(clusterRaftState *rs, const char *error) {
+/* Fail all pending proposals with an error and free them. */
+static void clusterRaftFailPendingProposals(clusterRaftState *rs, const char *error) {
     listIter li;
     listNode *ln;
     listRewind(rs->pending_proposals, &li);
@@ -642,6 +638,17 @@ static void clusterRaftFlushPendingProposals(clusterRaftState *rs, const char *e
         zfree(pp);
         listDelNode(rs->pending_proposals, ln);
     }
+}
+
+/* Defer pending proposals for retry after a leader change. The proposals
+ * are idempotent, so retrying is safe. They will be resent to the new
+ * leader (or appended locally if we become leader) in the next cron. */
+static void clusterRaftDeferPendingProposals(clusterRaftState *rs) {
+    if (listLength(rs->pending_proposals) > 0) {
+        rs->todo_retry_proposals = 1;
+        serverLog(LL_NOTICE, "Deferring %lu pending proposals for retry.",
+                  listLength(rs->pending_proposals));
+    }
     /* Note: pending_meets are NOT flushed here. A MEET remains valid
      * across leader changes — the WELCOME will arrive eventually. */
 }
@@ -649,7 +656,7 @@ static void clusterRaftFlushPendingProposals(clusterRaftState *rs, const char *e
 /* Step down to follower if we see a higher term. Returns 1 if stepped down. */
 static int clusterRaftMaybeStepDown(clusterRaftState *rs, uint64_t term) {
     if (term > rs->current_term) {
-        clusterRaftFlushPendingProposals(rs, "leader changed");
+        clusterRaftDeferPendingProposals(rs);
         rs->current_term = term;
         rs->role = RAFT_ROLE_FOLLOWER;
         memset(rs->voted_for, 0, CLUSTER_NAMELEN);
@@ -1231,6 +1238,68 @@ static void clusterRaftCron(void) {
         if ((rs->role == RAFT_ROLE_FOLLOWER || rs->role == RAFT_ROLE_CANDIDATE) &&
             now - rs->last_heartbeat > rs->election_timeout) {
             clusterRaftStartElection(rs);
+        }
+
+        /* Expire stale pending proposals to prevent unbounded buildup
+         * during prolonged partitions. Timeout covers election detection
+         * (1-2x node_timeout), election itself (~1x), plus margin. */
+        if (listLength(rs->pending_proposals) > 0) {
+            mstime_t timeout = server.cluster_node_timeout * 3;
+            listIter ei;
+            listNode *eln;
+            listRewind(rs->pending_proposals, &ei);
+            while ((eln = listNext(&ei)) != NULL) {
+                raftPendingProposal *pp = listNodeValue(eln);
+                if (now - pp->ctime > timeout) {
+                    serverLog(LL_NOTICE, "Expiring stale proposal %s after %lldms.",
+                              raftEntryTypeName(pp->type), (long long)(now - pp->ctime));
+                    pp->callback(pp->ctx, "-TIMEOUT Cluster consensus not reached in time");
+                    sdsfree(pp->data);
+                    zfree(pp);
+                    listDelNode(rs->pending_proposals, eln);
+                }
+            }
+        }
+
+        /* Retry deferred proposals when leader link becomes available. */
+        if (rs->todo_retry_proposals && listLength(rs->pending_proposals) > 0) {
+            if (rs->role == RAFT_ROLE_LEADER) {
+                /* We became leader — append to our own log. */
+                rs->todo_retry_proposals = 0;
+                listIter li;
+                listNode *ln;
+                listRewind(rs->pending_proposals, &li);
+                while ((ln = listNext(&li)) != NULL) {
+                    raftPendingProposal *pp = listNodeValue(ln);
+                    uint64_t idx = raftLogLastIndex(rs) + 1;
+                    raftLogAppend(rs, raftLogCreate(rs->current_term, idx, pp->type, sdsdup(pp->data)));
+                    serverLog(LL_NOTICE, "Leader appended deferred %s (index %llu).",
+                              raftEntryTypeName(pp->type), (unsigned long long)idx);
+                }
+                rs->todo_broadcast_ae = 1;
+            } else if (rs->role == RAFT_ROLE_FOLLOWER) {
+                clusterNode *leader = clusterLookupNode(rs->leader, CLUSTER_NAMELEN);
+                if (leader && leader->link) {
+                    /* Forward to new leader. */
+                    rs->todo_retry_proposals = 0;
+                    listIter li;
+                    listNode *ln;
+                    listRewind(rs->pending_proposals, &li);
+                    while ((ln = listNext(&li)) != NULL) {
+                        raftPendingProposal *pp = listNodeValue(ln);
+                        sds entry = sdscatfmt(sdsempty(), "%s %S",
+                                              raftEntryTypeName(pp->type), pp->data);
+                        sds msg = wireNewMsg("PROPOSE");
+                        msg = sdscatlen(msg, " ", 1);
+                        msg = sdscatlen(msg, entry, sdslen(entry));
+                        msg = wireFinishMsg(msg);
+                        clusterRaftSendMsg(leader->link, msg);
+                        sdsfree(entry);
+                    }
+                    serverLog(LL_NOTICE, "Retried %lu deferred proposals to new leader.",
+                              listLength(rs->pending_proposals));
+                }
+            }
         }
 
         /* Leader: send periodic heartbeats. */

@@ -162,6 +162,23 @@ engine. The apply function on each node independently resolves
 conflicts using the same deterministic logic, ensuring all nodes
 converge to the same state.
 
+### Proposal retry on leader change
+
+A pending proposal stays in the follower's list until the matching
+entry is committed and applied. Sending PROPOSE does not remove it.
+If the leader dies or a new leader is elected, the proposal is
+retried automatically:
+
+- If the follower becomes the new leader, it appends the pending
+  proposals to its own log.
+- If another node becomes leader, the follower forwards the pending
+  proposals to the new leader.
+
+This makes proposals resilient to leader changes. Even if a PROPOSE
+was successfully sent but the leader died before committing, the
+proposal is retried. Duplicate proposals are harmless because all
+entry types are idempotent at apply time.
+
 ## Synchronous MEET (HELLO/HI/WELCOME Protocol)
 
 CLUSTER MEET is synchronous from the client's perspective: the command

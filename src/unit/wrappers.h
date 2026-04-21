@@ -63,6 +63,8 @@ extern "C" {
 long long __wrap_aeCreateTimeEvent(aeEventLoop *eventLoop, long long milliseconds, aeTimeProc *proc, void *clientData, aeEventFinalizerProc *finalizerProc);
 ssize_t __wrap_streamDecompressorFeed(streamDecompressor *decompressor, uint8_t *output, size_t output_capacity, const uint8_t *input, size_t input_len, size_t *input_consumed);
 void __wrap_zmadvise_dontneed(void *ptr, size_t size_hint);
+int __wrap_processPendingCommandAndInputBuffer(client *c);
+void __wrap_beforeNextClient(client *c);
 #undef protected
 #undef _Bool
 #undef typename

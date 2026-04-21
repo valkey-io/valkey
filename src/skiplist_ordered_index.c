@@ -85,6 +85,26 @@ void skiplistFreeItem(OrderedIndexItem *item) {
     zslFreeNode((zskiplistNode *)item);
 }
 
+OrderedIndexItem *skiplistCreateDetached(double score, const char *ele, size_t len) {
+    sds tmp = sdsnewlen(ele, len);
+    zskiplistNode *node = zslCreateNode(zslRandomLevel(), score, tmp);
+    sdsfree(tmp);
+    return (OrderedIndexItem *)node;
+}
+
+/* Set the score on a detached item (created by skiplistCreateDetached but not
+ * yet inserted). Must NOT be used on items that are already in an index —
+ * doing so would silently corrupt the sort order. Use skiplistUpdateScore
+ * (orderedIndexUpdateScore) to change the score of an inserted item. */
+void skiplistDetachedSetScore(OrderedIndexItem *item, double score) {
+    ((zskiplistNode *)item)->score = score;
+}
+
+OrderedIndexItem *skiplistInsertDetached(OrderedIndex *idx, OrderedIndexItem *item) {
+    zskiplistNode *node = zslInsertNode((zskiplist *)idx, (zskiplistNode *)item);
+    return (OrderedIndexItem *)node;
+}
+
 unsigned long skiplistDeleteRangeByScore(OrderedIndex *idx, double min, double max,
                                          int min_ex, int max_ex,
                                          OrderedIndexOnDelete on_delete, void *ctx) {

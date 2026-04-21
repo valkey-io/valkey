@@ -85,6 +85,11 @@ void zslSeekToRank(zskiplistIterator *iter, unsigned long rank);
 void zslSeekToScoreRange(zskiplistIterator *iterator, double min, double max, int min_ex, int max_ex, long offset);
 void zslSeekToLexRange(zskiplistIterator *iterator, const_sds min, const_sds max, int min_ex, int max_ex, long offset);
 
+/* Node creation and insertion (used by skiplist_ordered_index.c for detached items) */
+zskiplistNode *zslCreateNode(int height, double score, const_sds ele);
+int zslRandomLevel(void);
+zskiplistNode *zslInsertNode(zskiplist *zsl, zskiplistNode *node);
+
 /* Level-0 span stores the node height, so span accessors treat it specially. */
 static inline unsigned long zslGetNodeSpanAtLevel(const zskiplistNode *x, int level) {
     if (level > 0) return x->level[level].span;

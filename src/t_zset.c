@@ -133,7 +133,7 @@ static inline size_t zslGetNodeAllocSize(int level) {
  *
  *   sds-header-size and element-sds are only valid for non-header nodes.
  */
-static zskiplistNode *zslCreateNode(int height, double score, const_sds ele) {
+zskiplistNode *zslCreateNode(int height, double score, const_sds ele) {
     size_t ele_sds_len = sdslen(ele);
     char ele_sds_type = sdsReqType(ele_sds_len);
     size_t ele_sds_size = sdsReqSize(ele_sds_len, ele_sds_type);
@@ -232,7 +232,7 @@ void zslFree(zskiplist *zsl) {
  * The return value of this function is between 1 and ZSKIPLIST_MAXLEVEL
  * (both inclusive), with a powerlaw-alike distribution where higher
  * levels are less likely to be returned. */
-static int zslRandomLevel(void) {
+int zslRandomLevel(void) {
     uint64_t rand = genrand64_int64();
 
     /* The probability of gaining 2 additional leading zeros is 0.25.
@@ -263,7 +263,7 @@ static int zslCompareNodes(const zskiplistNode *a, const zskiplistNode *b) {
 /* Insert a node in the skiplist. Assumes the element does not already exist in
  * the skiplist (up to the caller to enforce that). The skiplist takes ownership
  * of the passed node. */
-static zskiplistNode *zslInsertNode(zskiplist *zsl, zskiplistNode *node) {
+zskiplistNode *zslInsertNode(zskiplist *zsl, zskiplistNode *node) {
     zskiplistNode *update[ZSKIPLIST_MAXLEVEL];
     unsigned long rank[ZSKIPLIST_MAXLEVEL];
     const int level = zslGetNodeHeight(node);
@@ -2861,41 +2861,38 @@ static void zunionInterDiffGenericCommand(client *c, robj *dstkey, int numkeysIn
                 void *existing;
                 if (hashtableFindPositionForInsert(dstzset->ht, sdsval, &position, &existing)) {
                     sds tmp_ele = zuiNewSdsFromValue(&zval);
-                    /* TODO: migrate to OrderedIndex when interface supports deferred insertion.
-                     * This creates a node without inserting it into the skiplist. */
-                    zskiplistNode *new_node = zslCreateNode(zslRandomLevel(), score, tmp_ele);
+                    OrderedIndexItem *new_item = orderedIndexCreateDetached(score, tmp_ele, sdslen(tmp_ele));
                     sdsfree(tmp_ele);
-                    hashtableInsertAtPosition(dstzset->ht, new_node, &position);
+                    hashtableInsertAtPosition(dstzset->ht, new_item, &position);
                     /* Remember the longest single element encountered,
                      * to understand if it's possible to convert to listpack
                      * at the end. */
                     const char *ele_ptr;
                     size_t ele_len;
-                    orderedIndexGetElementRaw((OrderedIndexItem *)new_node, &ele_ptr, &ele_len);
+                    orderedIndexGetElementRaw(new_item, &ele_ptr, &ele_len);
                     totelelen += ele_len;
                     if (ele_len > maxelelen) {
                         maxelelen = ele_len;
                     }
                 } else {
                     /* Update the score with the score of the new instance
-                     * of the element found in the current sorted set.
-                     * TODO: migrate to OrderedIndex when interface supports in-place score mutation. */
-                    zskiplistNode *node = existing;
-                    zunionInterAggregate(&node->score, score, aggregate);
+                     * of the element found in the current sorted set. */
+                    OrderedIndexItem *item = existing;
+                    double cur = orderedIndexGetScore(item);
+                    zunionInterAggregate(&cur, score, aggregate);
+                    orderedIndexDetachedSetScore(item, cur);
                 }
             }
             zuiClearIterator(&src[i]);
         }
 
-        /* Step 2: Create the skiplist using final score ordering
-         * TODO: migrate to OrderedIndex when interface supports deferred insertion. */
+        /* Step 2: Insert all detached items into the ordered index. */
         hashtableIterator iter;
         hashtableInitIterator(&iter, dstzset->ht, 0);
 
         void *next;
         while (hashtableNext(&iter, &next)) {
-            zskiplistNode *node = next;
-            zslInsertNode((zskiplist *)dstzset->zidx, node);
+            orderedIndexInsertDetached(dstzset->zidx, next);
         }
         hashtableCleanupIterator(&iter);
     } else if (op == SET_OP_DIFF) {

@@ -56,6 +56,20 @@ static inline void orderedIndexFreeItem(OrderedIndexItem *item) {
     skiplistFreeItem(item);
 }
 
+static inline OrderedIndexItem *orderedIndexCreateDetached(double score, const char *ele, size_t len) {
+    return skiplistCreateDetached(score, ele, len);
+}
+
+/* Set the score on a detached item (not yet inserted into an index).
+ * Do not use on inserted items — use orderedIndexUpdateScore instead. */
+static inline void orderedIndexDetachedSetScore(OrderedIndexItem *item, double score) {
+    skiplistDetachedSetScore(item, score);
+}
+
+static inline OrderedIndexItem *orderedIndexInsertDetached(OrderedIndex *idx, OrderedIndexItem *item) {
+    return skiplistInsertDetached(idx, item);
+}
+
 static inline unsigned long orderedIndexDeleteRangeByScore(OrderedIndex *idx, double min, double max, int min_ex, int max_ex, OrderedIndexOnDelete on_delete, void *ctx) {
     return skiplistDeleteRangeByScore(idx, min, max, min_ex, max_ex, on_delete, ctx);
 }

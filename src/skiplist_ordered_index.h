@@ -19,6 +19,9 @@ OrderedIndexItem *skiplistUpdateScore(OrderedIndex *idx, OrderedIndexItem *node,
 OrderedIndexItem *skiplistPopFirst(OrderedIndex *idx);
 OrderedIndexItem *skiplistPopLast(OrderedIndex *idx);
 void skiplistFreeItem(OrderedIndexItem *item);
+OrderedIndexItem *skiplistCreateDetached(double score, const char *ele, size_t len);
+void skiplistDetachedSetScore(OrderedIndexItem *item, double score);
+OrderedIndexItem *skiplistInsertDetached(OrderedIndex *idx, OrderedIndexItem *item);
 unsigned long skiplistDeleteRangeByScore(OrderedIndex *idx, double min, double max,
                                          int min_ex, int max_ex,
                                          OrderedIndexOnDelete on_delete, void *ctx);

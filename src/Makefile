@@ -259,22 +259,37 @@ endif
 FINAL_CFLAGS+= -I../deps/libvalkey/include -I../deps/linenoise -I../deps/hdr_histogram -I../deps/fpconv -I../deps/fast_float
 
 # Lua scripting engine module
-LUA_MODULE_NAME:=modules/lua/libvalkeylua.so
 ifeq ($(BUILD_LUA),no)
+	LUA_MODULE_NAME=
 	LUA_MODULE=
 	LUA_MODULE_INSTALL=
-else
+	FINAL_CFLAGS+=-DSTATIC_LUA=0
+else ifeq ($(BUILD_LUA),module)
+	LUA_MODULE_NAME=modules/lua/libvalkeylua.so
 	LUA_MODULE=$(LUA_MODULE_NAME)
 	LUA_MODULE_INSTALL=install-lua-module
 
 	current_dir = $(shell pwd)
-	FINAL_CFLAGS+=-DLUA_ENABLED -DLUA_LIB=libvalkeylua.so
-ifeq ($(uname_S),Darwin)
-	FINAL_LDFLAGS+= -Wl,-rpath,$(PREFIX)/lib
-	FINAL_LDFLAGS+= -Wl,-rpath,$(current_dir)/modules/lua
+	FINAL_CFLAGS+=-DLUA_ENABLED -DLUA_LIB=libvalkeylua.so -DSTATIC_LUA=0
+	ifeq ($(uname_S),Darwin)
+		FINAL_LDFLAGS+= -Wl,-rpath,$(PREFIX)/lib
+		FINAL_LDFLAGS+= -Wl,-rpath,$(current_dir)/modules/lua
+	else
+		FINAL_LDFLAGS+= -Wl,-rpath,$(PREFIX)/lib:$(current_dir)/modules/lua -Wl,--disable-new-dtags
+	endif
 else
-	FINAL_LDFLAGS+= -Wl,-rpath,$(PREFIX)/lib:$(current_dir)/modules/lua -Wl,--disable-new-dtags
-endif
+	# The default: building Lua as a static module.
+	LUA_MODULE_NAME=modules/lua/libvalkeylua.a
+	LUA_MODULE=$(LUA_MODULE_NAME)
+	current_dir = $(shell pwd)
+	FINAL_CFLAGS+=-DLUA_ENABLED -DSTATIC_LUA=1
+	ifeq ($(uname_S),Darwin)
+		LUA_LDFLAGS=-Wl,-export_dynamic -Wl,-force_load,$(current_dir)/modules/lua/libvalkeylua.a ../deps/lua/src/liblua.a
+	else ifeq ($(uname_S),FreeBSD)
+		LUA_LDFLAGS=-Wl,--export-dynamic -Wl,--whole-archive $(current_dir)/modules/lua/libvalkeylua.a -Wl,--no-whole-archive ../deps/lua/src/liblua.a
+	else
+		LUA_LDFLAGS=-Wl,--whole-archive $(current_dir)/modules/lua/libvalkeylua.a -Wl,--no-whole-archive ../deps/lua/src/liblua.a
+	endif
 endif
 
 # Determine systemd support and/or build preference (defaulting to auto-detection)
@@ -693,7 +708,7 @@ endif
 
 # valkey-server
 $(SERVER_NAME): $(ENGINE_SERVER_OBJ) $(LUA_MODULE)
-	$(SERVER_LD) -o $@ $(ENGINE_SERVER_OBJ) ../deps/libvalkey/lib/libvalkey.a ../deps/hdr_histogram/libhdrhistogram.a ../deps/fpconv/libfpconv.a $(FINAL_LIBS)
+	$(SERVER_LD) -o $@ $(ENGINE_SERVER_OBJ) ../deps/libvalkey/lib/libvalkey.a ../deps/hdr_histogram/libhdrhistogram.a ../deps/fpconv/libfpconv.a $(FINAL_LIBS) $(LUA_LDFLAGS)
 
 # Valkey static library, used to compile against for unit testing
 $(ENGINE_LIB_NAME): $(ENGINE_SERVER_OBJ)
@@ -721,7 +736,7 @@ $(RDMA_MODULE_NAME): $(SERVER_NAME)
 
 # engine_lua.so
 $(LUA_MODULE_NAME): .make-prerequisites
-	cd modules/lua && $(MAKE) OPTIMIZATION="$(OPTIMIZATION)"
+	$(MAKE) -C modules/lua OPTIMIZATION="$(OPTIMIZATION)" BUILD_LUA="$(BUILD_LUA)"
 
 # valkey-cli
 $(ENGINE_CLI_NAME): $(ENGINE_CLI_OBJ)

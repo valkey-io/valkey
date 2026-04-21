@@ -181,7 +181,6 @@ void evalRelease(int async) {
     }
 }
 
-
 void evalReset(int async) {
     evalRelease(async);
     evalInit();

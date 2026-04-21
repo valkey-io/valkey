@@ -44,8 +44,8 @@ static inline void untagJob(void *tagged_ptr, void **ptr, int *type) {
 /* Handler prototypes */
 void ioThreadReadQueryFromClient(client *c);
 void ioThreadWriteToClient(client *c);
-void IOThreadFreeArgv(robj **argv);
-void IOThreadPoll(aeEventLoop *el);
+void ioThreadFreeArgv(robj **argv);
+void ioThreadPoll(aeEventLoop *el);
 static void ioThreadAccept(client *c);
 
 int inMainThread(void) {
@@ -242,7 +242,7 @@ void IOThreadsAfterSleep(int numevents) {
 
 /* This function performs polling on the given event loop and updates the server's
  * IO fired events count and poll state. */
-void IOThreadPoll(aeEventLoop *el) {
+void ioThreadPoll(aeEventLoop *el) {
     struct timeval tvp = {0, 0};
     int num_events = aePoll(el, &tvp);
     server.io_ae_fired_events = num_events;
@@ -326,10 +326,10 @@ static void *IOThreadMain(void *myid) {
 
                 switch (type) {
                 case JOB_REQ_FREE_ARGV:
-                    IOThreadFreeArgv((robj **)data);
+                    ioThreadFreeArgv((robj **)data);
                     break;
                 case JOB_REQ_POLL:
-                    IOThreadPoll((aeEventLoop *)data);
+                    ioThreadPoll((aeEventLoop *)data);
                     break;
                 default:
                     serverPanic("Invalid SPSC job type: %d", type);
@@ -338,10 +338,8 @@ static void *IOThreadMain(void *myid) {
             processed += batch_count;
         }
 
-        /*
-         * PRIORITY 2: Shared Global Queue (SPMC)
-         * Only checked after SPSC is drained.
-         */
+        /* PRIORITY 2: Shared Global Queue (SPMC)
+         * Only checked after SPSC is drained. */
         void *tagged_job = spmcDequeue(&io_shared_inbox);
         if (tagged_job) {
             void *data;
@@ -356,13 +354,13 @@ static void *IOThreadMain(void *myid) {
                 ioThreadWriteToClient((client *)data);
                 break;
             case JOB_REQ_FREE_OBJ:
-                decrRefCount(data);
+                zfree(data);
                 break;
             case JOB_REQ_ACCEPT:
                 ioThreadAccept((client *)data);
                 break;
             case JOB_REQ_POLL:
-                IOThreadPoll((aeEventLoop *)data);
+                ioThreadPoll((aeEventLoop *)data);
                 break;
             default:
                 serverPanic("Invalid SPMC job type: %d", type);
@@ -609,7 +607,7 @@ int trySendWriteToIOThreads(client *c) {
 }
 
 /* Internal function to free the client's argv in an IO thread. */
-void IOThreadFreeArgv(robj **argv) {
+void ioThreadFreeArgv(robj **argv) {
     int last_arg = 0;
     for (int i = 0;; i++) {
         robj *o = argv[i];
@@ -697,8 +695,12 @@ int tryOffloadFreeObjToIOThreads(robj *obj) {
 
     if (obj->encoding != OBJ_ENCODING_RAW || obj->type != OBJ_STRING) return C_ERR;
 
-    void *job = tagJob(obj, JOB_REQ_FREE_OBJ);
+    /* We offload only the free of the ptr that may be allocated by the I/O thread.
+     * The object itself was allocated by the main thread and will be freed by the main thread. */
+    void *job = tagJob(sdsAllocPtr(objectGetVal(obj)), JOB_REQ_FREE_OBJ);
     if (unlikely(spmcEnqueue(&io_shared_inbox, job) == false)) return C_ERR;
+    objectSetVal(obj, NULL);
+    decrRefCount(obj);
     io_jobs_submitted++;
     server.stat_io_freed_objects++;
     return C_OK;

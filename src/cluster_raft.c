@@ -810,22 +810,33 @@ static void raftLogApply(raftLogEntry *e) {
         break;
     }
     case RAFT_ENTRY_NODE_INFO: {
-        /* Format: "<node-id> <address-string>" */
-        if (sdslen(e->data) > CLUSTER_NAMELEN + 1) {
-            clusterNode *node = clusterLookupNode(e->data, CLUSTER_NAMELEN);
+        /* Format: "<node-id> <address-string> <flags>" */
+        int argc;
+        sds *argv = sdssplitlen(e->data, sdslen(e->data), " ", 1, &argc);
+        if (argv && argc >= 2 && sdslen(argv[0]) == CLUSTER_NAMELEN) {
+            clusterNode *node = clusterLookupNode(argv[0], CLUSTER_NAMELEN);
             if (node && node != myself) {
                 /* Reset optional fields so absent aux fields get cleared. */
                 node->announce_client_tcp_port = 0;
                 node->announce_client_tls_port = 0;
                 sdsclear(node->hostname);
                 sdsclear(node->human_nodename);
-                clusterNodeParseAddressString(node, e->data + CLUSTER_NAMELEN + 1);
+                clusterNodeParseAddressString(node, argv[1]);
+                /* Apply self-set flags. TODO: split on comma and compare
+                 * each part individually when more flags are added. */
+                if (argc >= 3) {
+                    node->flags &= ~CLUSTER_NODE_NOFAILOVER;
+                    if (strstr(argv[2], "nofailover")) {
+                        node->flags |= CLUSTER_NODE_NOFAILOVER;
+                    }
+                }
             }
             if (node == myself) {
                 sdsfree(rs->my_last_committed_info);
-                rs->my_last_committed_info = sdsnew(e->data + CLUSTER_NAMELEN + 1);
+                rs->my_last_committed_info = sdsdup(e->data);
             }
         }
+        if (argv) sdsfreesplitres(argv, argc);
         /* Invalidate immediately — address changes make the cached
          * CLUSTER SLOTS response invalid and the verify assert fires
          * if a client queries before beforeSleep runs. */
@@ -1313,7 +1324,11 @@ static void clusterRaftCron(void) {
          * out). Re-propose if needed. Check every 10 seconds. */
         if (now - rs->last_node_info_check > 10000) {
             rs->last_node_info_check = now;
-            sds current = clusterNodeAppendAddressString(sdsempty(), myself, server.tls_cluster);
+            sds current = sdscatlen(sdsempty(), myself->name, CLUSTER_NAMELEN);
+            current = sdscatlen(current, " ", 1);
+            current = clusterNodeAppendAddressString(current, myself, server.tls_cluster);
+            current = sdscatfmt(current, " %s",
+                                (myself->flags & CLUSTER_NODE_NOFAILOVER) ? "nofailover" : "noflags");
             if (sdscmp(current, rs->my_last_committed_info) != 0) {
                 serverLog(LL_NOTICE, "NODE_INFO diverged from last commit, re-proposing.");
                 clusterRaftUpdateMyself(0);
@@ -1680,6 +1695,12 @@ static void clusterRaftUpdateMyself(int old_flags) {
     entry = sdscatlen(entry, myself->name, CLUSTER_NAMELEN);
     entry = sdscatlen(entry, " ", 1);
     entry = clusterNodeAppendAddressString(entry, myself, server.tls_cluster);
+    entry = sdscatlen(entry, " ", 1);
+    if (myself->flags & CLUSTER_NODE_NOFAILOVER) {
+        entry = sdscat(entry, "nofailover");
+    } else {
+        entry = sdscat(entry, "noflags");
+    }
     clusterRaftPropose(entry, NULL, NULL);
     sdsfree(entry);
 }

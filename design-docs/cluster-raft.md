@@ -101,7 +101,7 @@ SET_REPLICA_OF <replica-id> <primary-id-or-dash>
 FAILOVER <node-id>
     Initiate a manual failover. Not yet implemented.
 
-NODE_META <node-id> <key>=<value> [<key>=<value> ...]
+NODE_INFO <node-id> <key>=<value> [<key>=<value> ...]
     Update node metadata (IP, port, hostname). Not yet implemented.
 
 NODE_FAIL <node-id>

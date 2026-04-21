@@ -70,7 +70,7 @@ enum raftEntryType {
     RAFT_ENTRY_SLOT_CHANGE = 3,    /* Slot ownership */
     RAFT_ENTRY_SET_REPLICA_OF = 4, /* Replication topology */
     RAFT_ENTRY_FAILOVER = 5,       /* Manual failover */
-    RAFT_ENTRY_NODE_META = 6,      /* IP, port, hostname, etc. */
+    RAFT_ENTRY_NODE_INFO = 6,      /* IP, port, hostname, etc. */
     RAFT_ENTRY_NODE_FAIL = 7,      /* Node failure detected by leader */
 };
 
@@ -498,7 +498,7 @@ static int raftEntryTypeByName(const char *name) {
     if (!strcasecmp(name, "SLOT_CHANGE")) return RAFT_ENTRY_SLOT_CHANGE;
     if (!strcasecmp(name, "SET_REPLICA_OF")) return RAFT_ENTRY_SET_REPLICA_OF;
     if (!strcasecmp(name, "FAILOVER")) return RAFT_ENTRY_FAILOVER;
-    if (!strcasecmp(name, "NODE_META")) return RAFT_ENTRY_NODE_META;
+    if (!strcasecmp(name, "NODE_INFO")) return RAFT_ENTRY_NODE_INFO;
     if (!strcasecmp(name, "NODE_FAIL")) return RAFT_ENTRY_NODE_FAIL;
     return -1;
 }
@@ -510,7 +510,7 @@ static const char *raftEntryTypeName(uint8_t type) {
     case RAFT_ENTRY_SLOT_CHANGE: return "SLOT_CHANGE";
     case RAFT_ENTRY_SET_REPLICA_OF: return "SET_REPLICA_OF";
     case RAFT_ENTRY_FAILOVER: return "FAILOVER";
-    case RAFT_ENTRY_NODE_META: return "NODE_META";
+    case RAFT_ENTRY_NODE_INFO: return "NODE_INFO";
     case RAFT_ENTRY_NODE_FAIL: return "NODE_FAIL";
     default: return "UNKNOWN";
     }
@@ -819,7 +819,7 @@ static void raftLogApply(raftLogEntry *e) {
                   e->data, (unsigned long long)e->index);
         break;
     }
-    case RAFT_ENTRY_NODE_META: {
+    case RAFT_ENTRY_NODE_INFO: {
         /* Format: "<node-id> <address-string>" */
         if (sdslen(e->data) > CLUSTER_NAMELEN + 1) {
             clusterNode *node = clusterLookupNode(e->data, CLUSTER_NAMELEN);
@@ -836,7 +836,7 @@ static void raftLogApply(raftLogEntry *e) {
          * CLUSTER SLOTS response invalid and the verify assert fires
          * if a client queries before beforeSleep runs. */
         clearCachedClusterSlotsResponse();
-        serverLog(LL_NOTICE, "Applied NODE_META (index %llu).", (unsigned long long)e->index);
+        serverLog(LL_NOTICE, "Applied NODE_INFO (index %llu).", (unsigned long long)e->index);
         break;
     }
     default:
@@ -1661,8 +1661,8 @@ static void clusterRaftUpdateMyself(int old_flags) {
     /* Clear cached CLUSTER SLOTS immediately — our address/hostname
      * has already changed in the config layer. */
     clearCachedClusterSlotsResponse();
-    /* Propose NODE_META to propagate the change to other nodes. */
-    sds entry = sdsnew("NODE_META ");
+    /* Propose NODE_INFO to propagate the change to other nodes. */
+    sds entry = sdsnew("NODE_INFO ");
     entry = sdscatlen(entry, myself->name, CLUSTER_NAMELEN);
     entry = sdscatlen(entry, " ", 1);
     entry = clusterNodeAppendAddressString(entry, myself, server.tls_cluster);

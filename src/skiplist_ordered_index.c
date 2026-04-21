@@ -213,6 +213,39 @@ double skiplistGetScore(const OrderedIndexItem *node) {
     return zslGetScore((const zskiplistNode *)node);
 }
 
+unsigned long skiplistCountScoreRange(OrderedIndex *idx, double min, double max, int min_ex, int max_ex) {
+    zskiplist *zsl = (zskiplist *)idx;
+    zrangespec range = {.min = min, .max = max, .minex = min_ex, .maxex = max_ex};
+    long first_rank, last_rank;
+
+    /* Find first element in range and its rank. */
+    zskiplistNode *first = zslNthInRange(zsl, &range, 0, &first_rank);
+    if (first == NULL) return 0;
+
+    /* Find last element in range and its rank. */
+    zskiplistNode *last_node = zslNthInRange(zsl, &range, -1, &last_rank);
+    if (last_node == NULL) return 0;
+
+    return (unsigned long)(last_rank - first_rank + 1);
+}
+
+unsigned long skiplistCountLexRange(OrderedIndex *idx, const_sds min, const_sds max, int min_ex, int max_ex) {
+    zskiplist *zsl = (zskiplist *)idx;
+    zlexrangespec range = {.min = (sds)min, .max = (sds)max, .minex = min_ex, .maxex = max_ex};
+
+    /* Find first element in range. */
+    zskiplistNode *first = zslNthInLexRange(zsl, &range, 0);
+    if (first == NULL) return 0;
+    unsigned long first_rank = zslGetRank(zsl, first);
+
+    /* Find last element in range. */
+    zskiplistNode *last_node = zslNthInLexRange(zsl, &range, -1);
+    if (last_node == NULL) return 0;
+    unsigned long last_rank = zslGetRank(zsl, last_node);
+
+    return last_rank - first_rank + 1;
+}
+
 /* Iterator */
 
 void skiplistInitIterator(OrderedIndexIterator *iter, OrderedIndex *idx) {
@@ -241,12 +274,6 @@ void skiplistSeekToScoreRange(OrderedIndexIterator *iter, double min, double max
 
 void skiplistSeekToLexRange(OrderedIndexIterator *iter, const_sds min, const_sds max, int min_ex, int max_ex, long offset) {
     zslSeekToLexRange((zskiplistIterator *)iter, min, max, min_ex, max_ex, offset);
-}
-
-/* Debug */
-
-int skiplistGetHeight(OrderedIndex *idx) {
-    return zslGetHeight((zskiplist *)idx);
 }
 
 /* Memory */
@@ -359,5 +386,140 @@ unsigned long skiplistScanDefrag(OrderedIndex *idx, unsigned long cursor,
     }
 
     return node ? rank : 0; /* 0 = done */
+}
+
+/* Debug */
+
+int skiplistGetHeight(OrderedIndex *idx) {
+    return zslGetHeight((zskiplist *)idx);
+}
+
+/* Verify the structural integrity of the skiplist.
+ * Returns 1 if valid, 0 if corrupt (with a description in errmsg). */
+int skiplistVerifyIntegrity(OrderedIndex *idx, char *errmsg, size_t errmsg_len) {
+    zskiplist *zsl = (zskiplist *)idx;
+    zskiplistNode *header = zslGetHeader(zsl);
+    int height = zslGetHeight(zsl);
+    unsigned long length = zslGetLength(zsl);
+
+#define FAIL(...)                              \
+    do {                                       \
+        snprintf(errmsg, errmsg_len, __VA_ARGS__); \
+        return 0;                              \
+    } while (0)
+
+    /* 1. Height must be in [1, ZSKIPLIST_MAXLEVEL]. */
+    if (height < 1 || height > ZSKIPLIST_MAXLEVEL)
+        FAIL("height %d out of range [1, %d]", height, ZSKIPLIST_MAXLEVEL);
+
+    /* 2. All levels above height must have NULL forward from header. */
+    for (int i = height; i < ZSKIPLIST_MAXLEVEL; i++) {
+        if (header->level[i].forward != NULL)
+            FAIL("header level %d forward is non-NULL above height %d", i, height);
+    }
+
+    /* 3. Walk level 0 to count nodes, verify ordering, backward pointers, and tail. */
+    unsigned long count = 0;
+    zskiplistNode *prev = NULL;
+    zskiplistNode *node = header->level[0].forward;
+    zskiplistNode *last = NULL;
+
+    while (node != NULL) {
+        count++;
+
+        /* Verify backward pointer. */
+        if (node->backward != prev)
+            FAIL("node at rank %lu: backward pointer mismatch", count);
+
+        /* Verify sort order (score, then element). */
+        if (prev != NULL) {
+            if (node->score < prev->score)
+                FAIL("node at rank %lu: score %.17g < previous %.17g", count, node->score, prev->score);
+            if (node->score == prev->score) {
+                sds prev_ele = zslGetNodeElement(prev);
+                sds node_ele = zslGetNodeElement(node);
+                if (sdscmp(node_ele, prev_ele) <= 0)
+                    FAIL("node at rank %lu: element not lexicographically after previous at same score", count);
+            }
+        }
+
+        /* Verify node height is in valid range. */
+        unsigned long node_height = zslGetNodeHeight(node);
+        if (node_height < 1 || node_height > (unsigned long)ZSKIPLIST_MAXLEVEL)
+            FAIL("node at rank %lu: height %lu out of range", count, node_height);
+
+        /* Node height should not exceed skiplist height. */
+        if (node_height > (unsigned long)height)
+            FAIL("node at rank %lu: height %lu exceeds skiplist height %d", count, node_height, height);
+
+        last = node;
+        prev = node;
+        node = node->level[0].forward;
+    }
+
+    /* 4. Verify length. */
+    if (count != length)
+        FAIL("length mismatch: stored %lu, counted %lu", length, count);
+
+    /* 5. Verify tail pointer. */
+    zskiplistNode *tail = zslGetTail(zsl);
+    if (length == 0) {
+        if (tail != NULL)
+            FAIL("tail should be NULL for empty skiplist");
+    } else {
+        if (tail != last)
+            FAIL("tail pointer does not point to last node");
+    }
+
+    /* 6. Verify the highest non-empty level matches height. */
+    if (length > 0) {
+        if (header->level[height - 1].forward == NULL)
+            FAIL("highest level %d has NULL forward but skiplist is non-empty", height - 1);
+    }
+
+    /* 7. Verify spans at each level. */
+    for (int i = 1; i < height; i++) {
+        unsigned long rank = 0;
+        zskiplistNode *x = header;
+
+        while (x != NULL) {
+            zskiplistNode *next_at_level = x->level[i].forward;
+            unsigned long span = zslGetNodeSpanAtLevel(x, i);
+
+            if (next_at_level == NULL) {
+                unsigned long remaining = length - rank;
+                if (span != remaining)
+                    FAIL("level %d: node at rank %lu has span %lu but %lu nodes remain",
+                         i, rank, span, remaining);
+                break;
+            }
+
+            if (zslGetNodeHeight(next_at_level) <= (unsigned long)i)
+                FAIL("level %d: forward node has height %lu, expected > %d",
+                     i, zslGetNodeHeight(next_at_level), i);
+
+            unsigned long actual_span = 0;
+            zskiplistNode *walk_next = (x == header) ? header->level[0].forward : x->level[0].forward;
+            while (walk_next != NULL && walk_next != next_at_level) {
+                actual_span++;
+                walk_next = walk_next->level[0].forward;
+            }
+            actual_span++;
+
+            if (walk_next != next_at_level)
+                FAIL("level %d: forward pointer from rank %lu does not appear in level-0 chain", i, rank);
+
+            if (span != actual_span)
+                FAIL("level %d: node at rank %lu has span %lu but actual distance is %lu",
+                     i, rank, span, actual_span);
+
+            rank += span;
+            x = next_at_level;
+        }
+    }
+
+#undef FAIL
+    errmsg[0] = '\0';
+    return 1;
 }
 

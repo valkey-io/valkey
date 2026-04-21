@@ -27,6 +27,16 @@ extern "C" {
 #define TEST_ASSERT(x) ASSERT_TRUE(x)
 #define TEST_ASSERT_SCORE_EQ(a, b) ASSERT_DOUBLE_EQ(a, b)
 
+/* Verify structural integrity of the ordered index after mutations. */
+static ::testing::AssertionResult verifyIntegrity(OrderedIndexTestApi &api, OrderedIndex *idx) {
+    char errmsg[256];
+    if (api.verifyIntegrity(idx, errmsg, sizeof(errmsg)))
+        return ::testing::AssertionResult(true);
+    return ::testing::AssertionFailure() << errmsg;
+}
+
+#define VERIFY_INTEGRITY(api_ref, idx_ptr) ASSERT_TRUE(verifyIntegrity(api_ref, idx_ptr))
+
 /* Use double infinity to avoid -Wdouble-promotion on macOS where INFINITY is float */
 static const double POS_INF = (double)INFINITY;
 static const double NEG_INF = (double)-INFINITY;
@@ -1741,6 +1751,116 @@ TEST_P(OrderedIndexTest, RandomizedForwardBackwardMirror) {
         }
         api.free(idx);
     }
+}
+
+/* ========== Count range tests ========== */
+
+TEST_P(OrderedIndexTest, CountScoreRange) {
+    OrderedIndex *idx = api.create();
+
+    for (int i = 0; i < 10; i++) {
+        char buf[32];
+        snprintf(buf, sizeof(buf), "key%d", i);
+        sds ele = sdsnew(buf);
+        api.insertSds(idx, (double)i, ele);
+        sdsfree(ele);
+    }
+
+    /* Full range */
+    ASSERT_EQ(api.countScoreRange(idx, NEG_INF, POS_INF, 0, 0), 10UL);
+
+    /* Inclusive [3, 6] */
+    ASSERT_EQ(api.countScoreRange(idx, 3.0, 6.0, 0, 0), 4UL);
+
+    /* Exclusive (3, 6) */
+    ASSERT_EQ(api.countScoreRange(idx, 3.0, 6.0, 1, 1), 2UL);
+
+    /* Single element [5, 5] */
+    ASSERT_EQ(api.countScoreRange(idx, 5.0, 5.0, 0, 0), 1UL);
+
+    /* Empty exclusive (5, 5) */
+    ASSERT_EQ(api.countScoreRange(idx, 5.0, 5.0, 1, 0), 0UL);
+
+    /* No match above */
+    ASSERT_EQ(api.countScoreRange(idx, 10.0, 20.0, 0, 0), 0UL);
+
+    /* No match below */
+    ASSERT_EQ(api.countScoreRange(idx, -20.0, -10.0, 0, 0), 0UL);
+
+    /* Min > max */
+    ASSERT_EQ(api.countScoreRange(idx, 6.0, 3.0, 0, 0), 0UL);
+
+    /* First element only [0, 0] */
+    ASSERT_EQ(api.countScoreRange(idx, 0.0, 0.0, 0, 0), 1UL);
+
+    /* Last element only [9, 9] */
+    ASSERT_EQ(api.countScoreRange(idx, 9.0, 9.0, 0, 0), 1UL);
+
+    api.free(idx);
+}
+
+TEST_P(OrderedIndexTest, CountScoreRangeEmpty) {
+    OrderedIndex *idx = api.create();
+    ASSERT_EQ(api.countScoreRange(idx, NEG_INF, POS_INF, 0, 0), 0UL);
+    api.free(idx);
+}
+
+TEST_P(OrderedIndexTest, CountLexRange) {
+    OrderedIndex *idx = api.create();
+
+    const char *elements[] = {"apple", "banana", "cherry", "date", "elderberry"};
+    for (int i = 0; i < 5; i++) {
+        sds ele = sdsnew(elements[i]);
+        api.insertSds(idx, 1.0, ele);
+        sdsfree(ele);
+    }
+
+    /* Inclusive [banana, date] */
+    sds min = sdsnew("banana");
+    sds max = sdsnew("date");
+    ASSERT_EQ(api.countLexRange(idx, min, max, 0, 0), 3UL);
+    sdsfree(min);
+    sdsfree(max);
+
+    /* Exclusive (banana, date) */
+    min = sdsnew("banana");
+    max = sdsnew("date");
+    ASSERT_EQ(api.countLexRange(idx, min, max, 1, 1), 1UL);
+    sdsfree(min);
+    sdsfree(max);
+
+    /* Single element [cherry, cherry] */
+    min = sdsnew("cherry");
+    max = sdsnew("cherry");
+    ASSERT_EQ(api.countLexRange(idx, min, max, 0, 0), 1UL);
+    sdsfree(min);
+    sdsfree(max);
+
+    /* No match */
+    min = sdsnew("fig");
+    max = sdsnew("grape");
+    ASSERT_EQ(api.countLexRange(idx, min, max, 0, 0), 0UL);
+    sdsfree(min);
+    sdsfree(max);
+
+    /* All elements */
+    min = sdsnew("a");
+    max = sdsnew("z");
+    ASSERT_EQ(api.countLexRange(idx, min, max, 0, 0), 5UL);
+    sdsfree(min);
+    sdsfree(max);
+
+    api.free(idx);
+}
+
+TEST_P(OrderedIndexTest, CountLexRangeEmpty) {
+    OrderedIndex *idx = api.create();
+    sds min = sdsnew("a");
+    sds max = sdsnew("z");
+    ASSERT_EQ(api.countLexRange(idx, min, max, 0, 0), 0UL);
+    sdsfree(min);
+    sdsfree(max);
+    api.free(idx);
 }
 
 /* ========== Instantiate parameterized tests for all implementations ========== */

@@ -1225,7 +1225,7 @@ static unsigned char *zzlDelete(unsigned char *zl, unsigned char *eptr) {
     return lpDeleteRangeWithEntry(zl, &eptr, 2);
 }
 
-static unsigned char *zzlInsertAt(unsigned char *zl, unsigned char *eptr, sds ele, double score) {
+static unsigned char *zzlInsertAt(unsigned char *zl, unsigned char *eptr, const char *ele, size_t ele_len, double score) {
     unsigned char *sptr;
     char scorebuf[MAX_D2STRING_CHARS];
     int scorelen = 0;
@@ -1233,14 +1233,14 @@ static unsigned char *zzlInsertAt(unsigned char *zl, unsigned char *eptr, sds el
     int score_is_long = double2ll(score, &lscore);
     if (!score_is_long) scorelen = d2string(scorebuf, sizeof(scorebuf), score);
     if (eptr == NULL) {
-        zl = lpAppend(zl, (unsigned char *)ele, sdslen(ele));
+        zl = lpAppend(zl, (unsigned char *)ele, ele_len);
         if (score_is_long)
             zl = lpAppendInteger(zl, lscore);
         else
             zl = lpAppend(zl, (unsigned char *)scorebuf, scorelen);
     } else {
         /* Insert member before the element 'eptr'. */
-        zl = lpInsertString(zl, (unsigned char *)ele, sdslen(ele), eptr, LP_BEFORE, &sptr);
+        zl = lpInsertString(zl, (unsigned char *)ele, ele_len, eptr, LP_BEFORE, &sptr);
 
         /* Insert score after the member. */
         if (score_is_long)
@@ -1266,12 +1266,12 @@ static unsigned char *zzlInsert(unsigned char *zl, sds ele, double score) {
             /* First element with score larger than score for element to be
              * inserted. This means we should take its spot in the list to
              * maintain ordering. */
-            zl = zzlInsertAt(zl, eptr, ele, score);
+            zl = zzlInsertAt(zl, eptr, ele, sdslen(ele), score);
             break;
         } else if (s == score) {
             /* Ensure lexicographical ordering for elements. */
             if (zzlCompareElements(eptr, (unsigned char *)ele, sdslen(ele)) > 0) {
-                zl = zzlInsertAt(zl, eptr, ele, score);
+                zl = zzlInsertAt(zl, eptr, ele, sdslen(ele), score);
                 break;
             }
         }
@@ -1281,7 +1281,7 @@ static unsigned char *zzlInsert(unsigned char *zl, sds ele, double score) {
     }
 
     /* Push on tail of list when it was not yet inserted. */
-    if (eptr == NULL) zl = zzlInsertAt(zl, NULL, ele, score);
+    if (eptr == NULL) zl = zzlInsertAt(zl, NULL, ele, sdslen(ele), score);
     return zl;
 }
 
@@ -1397,6 +1397,16 @@ void zsetConvert(robj *zobj, int encoding) {
     zsetConvertAndExpand(zobj, encoding, zsetLength(zobj));
 }
 
+/* Callback for orderedIndexDeleteRangeByRank used during skiplist→listpack
+ * conversion. Appends each removed item to the listpack pointed to by ctx. */
+static void zsetConvertToListpackCallback(OrderedIndexItem *item, void *ctx) {
+    unsigned char **zl = ctx;
+    const char *ele_ptr;
+    size_t ele_len;
+    orderedIndexGetElementRaw(item, &ele_ptr, &ele_len);
+    *zl = zzlInsertAt(*zl, NULL, ele_ptr, ele_len, orderedIndexGetScore(item));
+}
+
 /* Converts a zset to the specified encoding, pre-sizing it for 'cap' elements. */
 void zsetConvertAndExpand(robj *zobj, int encoding, unsigned long cap) {
     if (zobj->encoding == encoding) return;
@@ -1443,29 +1453,13 @@ void zsetConvertAndExpand(robj *zobj, int encoding, unsigned long cap) {
 
         if (encoding != OBJ_ENCODING_LISTPACK) serverPanic("Unknown target encoding");
 
-        /* Approach similar to zslFree(), since we want to free the skiplist at
-         * the same time as creating the listpack. */
+        /* Delete all elements via range deletion, building the listpack
+         * in the on_delete callback as nodes are removed in order. */
         zset *zs = objectGetVal(zobj);
         hashtableRelease(zs->ht);
-        /* TODO: migrate to OrderedIndex when interface supports destructive iteration.
-         * This manually walks and frees skiplist nodes after releasing the header. */
-        zskiplistNode *zheader = zslGetHeader((zskiplist *)zs->zidx);
-        
-        zskiplistNode *node = zheader->level[0].forward;
-        zfree(zs->zidx);
-
-        while (node) {
-            const char *ele_ptr;
-            size_t ele_len;
-            orderedIndexGetElementRaw((OrderedIndexItem *)node, &ele_ptr, &ele_len);
-            sds ele_sds = sdsnewlen(ele_ptr, ele_len);
-            zl = zzlInsertAt(zl, NULL, ele_sds, orderedIndexGetScore((OrderedIndexItem *)node));
-            sdsfree(ele_sds);
-            zskiplistNode *next = node->level[0].forward;
-            orderedIndexFreeItem((OrderedIndexItem *)node);
-            node = next;
-        }
-
+        unsigned long len = orderedIndexLength(zs->zidx);
+        orderedIndexDeleteRangeByRank(zs->zidx, 1, len, zsetConvertToListpackCallback, &zl);
+        orderedIndexFree(zs->zidx);
         zfree(zs);
         objectSetVal(zobj, zl);
         zobj->encoding = OBJ_ENCODING_LISTPACK;
@@ -3453,26 +3447,7 @@ void zcountCommand(client *c) {
         }
     } else if (zobj->encoding == OBJ_ENCODING_SKIPLIST) {
         zset *zs = objectGetVal(zobj);
-        /* TODO: migrate to OrderedIndex when interface supports rank-returning range lookup. */
-        zskiplist *zsl = (zskiplist *)zs->zidx;
-        zskiplistNode *zn;
-        long rank;
-
-        /* Find first element in range */
-        zn = zslNthInRange(zsl, &range, 0, &rank);
-
-        /* Use rank of first element, if any, to determine preliminary count */
-        if (zn != NULL) {
-            count = (orderedIndexLength(zs->zidx) - (rank - 1));
-
-            /* Find last element in range */
-            zn = zslNthInRange(zsl, &range, -1, &rank);
-
-            /* Use rank of last element, if any, to determine the actual count */
-            if (zn != NULL) {
-                count -= (orderedIndexLength(zs->zidx) - rank);
-            }
-        }
+        count = orderedIndexCountScoreRange(zs->zidx, range.min, range.max, range.minex, range.maxex);
     } else {
         serverPanic("Unknown sorted set encoding");
     }
@@ -3528,28 +3503,7 @@ void zlexcountCommand(client *c) {
         }
     } else if (zobj->encoding == OBJ_ENCODING_SKIPLIST) {
         zset *zs = objectGetVal(zobj);
-        /* TODO: migrate to OrderedIndex when interface supports rank-returning range lookup. */
-        zskiplist *zsl = (zskiplist *)zs->zidx;
-        zskiplistNode *zn;
-        unsigned long rank;
-
-        /* Find first element in range */
-        zn = zslNthInLexRange(zsl, &range, 0);
-
-        /* Use rank of first element, if any, to determine preliminary count */
-        if (zn != NULL) {
-            rank = orderedIndexGetRank(zs->zidx, (OrderedIndexItem *)zn);
-            count = (orderedIndexLength(zs->zidx) - (rank - 1));
-
-            /* Find last element in range */
-            zn = zslNthInLexRange(zsl, &range, -1);
-
-            /* Use rank of last element, if any, to determine the actual count */
-            if (zn != NULL) {
-                rank = orderedIndexGetRank(zs->zidx, (OrderedIndexItem *)zn);
-                count -= (orderedIndexLength(zs->zidx) - rank);
-            }
-        }
+        count = orderedIndexCountLexRange(zs->zidx, range.min, range.max, range.minex, range.maxex);
     } else {
         serverPanic("Unknown sorted set encoding");
     }

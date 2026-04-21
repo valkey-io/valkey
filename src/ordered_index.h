@@ -89,18 +89,12 @@ static inline double orderedIndexGetScore(const OrderedIndexItem *pos) {
     return skiplistGetScore(pos);
 }
 
-/* Debug */
-static inline int orderedIndexGetHeight(OrderedIndex *idx) {
-    return skiplistGetHeight(idx);
+static inline unsigned long orderedIndexCountScoreRange(OrderedIndex *idx, double min, double max, int min_ex, int max_ex) {
+    return skiplistCountScoreRange(idx, min, max, min_ex, max_ex);
 }
 
-/* Memory */
-static inline void orderedIndexDismissMemory(OrderedIndex *idx) {
-    skiplistDismissMemory(idx);
-}
-
-static inline size_t orderedIndexEstimateMemory(OrderedIndex *idx, size_t sample_size) {
-    return skiplistEstimateMemory(idx, sample_size);
+static inline unsigned long orderedIndexCountLexRange(OrderedIndex *idx, const_sds min, const_sds max, int min_ex, int max_ex) {
+    return skiplistCountLexRange(idx, min, max, min_ex, max_ex);
 }
 
 /* Iterator */
@@ -138,6 +132,15 @@ static inline void orderedIndexSeekToLexRange(OrderedIndexIterator *iter, const_
     skiplistSeekToLexRange(iter, min, max, min_ex, max_ex, offset);
 }
 
+/* Memory */
+static inline void orderedIndexDismissMemory(OrderedIndex *idx) {
+    skiplistDismissMemory(idx);
+}
+
+static inline size_t orderedIndexEstimateMemory(OrderedIndex *idx, size_t sample_size) {
+    return skiplistEstimateMemory(idx, sample_size);
+}
+
 /* Defrag */
 typedef void (*OrderedIndexDefragCallback)(OrderedIndexItem *old_item, OrderedIndexItem *new_item, void *ctx);
 
@@ -149,6 +152,15 @@ static inline unsigned long orderedIndexScanDefrag(OrderedIndex *idx, unsigned l
                                                    OrderedIndexDefragCallback callback, void *ctx,
                                                    void *(*defragfn)(void *)) {
     return skiplistScanDefrag(idx, cursor, callback, ctx, defragfn);
+}
+
+/* Debug */
+static inline int orderedIndexGetHeight(OrderedIndex *idx) {
+    return skiplistGetHeight(idx);
+}
+
+static inline int orderedIndexVerifyIntegrity(OrderedIndex *idx, char *errmsg, size_t errmsg_len) {
+    return skiplistVerifyIntegrity(idx, errmsg, errmsg_len);
 }
 
 #endif /* ORDERED_INDEX_H */

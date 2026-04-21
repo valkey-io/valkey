@@ -52,6 +52,13 @@ public:
     /* Memory */
     virtual size_t estimateMemory(OrderedIndex *idx, size_t sample_size) = 0;
 
+    /* Debug / verification */
+    virtual int verifyIntegrity(OrderedIndex *idx, char *errmsg, size_t errmsg_len) = 0;
+
+    /* Count */
+    virtual unsigned long countScoreRange(OrderedIndex *idx, double min, double max, int min_ex, int max_ex) = 0;
+    virtual unsigned long countLexRange(OrderedIndex *idx, const_sds min, const_sds max, int min_ex, int max_ex) = 0;
+
     /* Iterator */
     virtual void initIterator(OrderedIndexIterator *iter, OrderedIndex *idx) = 0;
     virtual void resetIterator(OrderedIndexIterator *iter) = 0;
@@ -128,6 +135,17 @@ public:
 
     size_t estimateMemory(OrderedIndex *idx, size_t sample_size) override {
         return skiplistEstimateMemory(idx, sample_size);
+    }
+
+    int verifyIntegrity(OrderedIndex *idx, char *errmsg, size_t errmsg_len) override {
+        return skiplistVerifyIntegrity(idx, errmsg, errmsg_len);
+    }
+
+    unsigned long countScoreRange(OrderedIndex *idx, double min, double max, int min_ex, int max_ex) override {
+        return skiplistCountScoreRange(idx, min, max, min_ex, max_ex);
+    }
+    unsigned long countLexRange(OrderedIndex *idx, const_sds min, const_sds max, int min_ex, int max_ex) override {
+        return skiplistCountLexRange(idx, min, max, min_ex, max_ex);
     }
 
     void initIterator(OrderedIndexIterator *iter, OrderedIndex *idx) override {

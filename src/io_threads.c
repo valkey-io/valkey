@@ -558,6 +558,7 @@ int trySendWriteToIOThreads(client *c) {
     if (c->flag.lua_debug) return C_ERR;
 
     int is_replica = getClientType(c) == CLIENT_TYPE_REPLICA;
+    clientReplyBlock *block = NULL;
     if (is_replica) {
         c->io_last_reply_block = listLast(server.repl_buffer_blocks);
         replBufBlock *o = listNodeValue(c->io_last_reply_block);
@@ -569,14 +570,10 @@ int trySendWriteToIOThreads(client *c) {
          * threads from reading data that might be invalid in their local CPU cache. */
         c->io_last_reply_block = listLast(c->reply);
         if (c->io_last_reply_block) {
-            clientReplyBlock *block = (clientReplyBlock *)listNodeValue(c->io_last_reply_block);
+            block = (clientReplyBlock *)listNodeValue(c->io_last_reply_block);
             c->io_last_bufpos = block->used;
-            /* If buffer is encoded force new header */
-            if (block->flag.buf_encoded) block->last_header = NULL;
         } else {
             c->io_last_bufpos = (size_t)c->bufpos;
-            /* If buffer is encoded force new header */
-            if (c->flag.buf_encoded) c->last_header = NULL;
         }
     }
 
@@ -595,7 +592,15 @@ int trySendWriteToIOThreads(client *c) {
         c->io_last_bufpos = 0;
         return C_ERR;
     }
-
+    /* Force new header after successful enqueue so the main thread doesn't
+     * extend a header the I/O thread is currently reading. */
+    if (!is_replica) {
+        if (block) {
+            if (block->flag.buf_encoded) block->last_header = NULL;
+        } else {
+            if (c->flag.buf_encoded) c->last_header = NULL;
+        }
+    }
     if (c->flag.pending_write) {
         listUnlinkNode(server.clients_pending_write, &c->clients_pending_write_node);
         c->flag.pending_write = 0;

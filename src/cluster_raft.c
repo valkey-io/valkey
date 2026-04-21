@@ -72,6 +72,7 @@ enum raftEntryType {
     RAFT_ENTRY_FAILOVER = 5,       /* Manual failover */
     RAFT_ENTRY_NODE_INFO = 6,      /* IP, port, hostname, etc. */
     RAFT_ENTRY_NODE_FAIL = 7,      /* Node failure detected by leader */
+    RAFT_ENTRY_NODE_RECOVER = 8,   /* Node recovery detected by leader */
 };
 
 typedef struct {
@@ -99,8 +100,9 @@ enum raftRole {
 typedef struct {
     uint64_t next_index;
     uint64_t match_index;
-    mstime_t last_ack_time; /* Last time we received AE_ACK from this peer */
-    long long repl_offset;  /* Last known replication offset from AE_ACK */
+    mstime_t last_ack_time;               /* Last time we received AE_ACK from this peer */
+    long long repl_offset;                /* Last known replication offset from AE_ACK */
+    unsigned int pending_fail_change : 1; /* NODE_FAIL or NODE_RECOVER in flight */
 } raftPeerState;
 
 /* A pending proposal tracks a client waiting for a Raft entry to be
@@ -504,6 +506,7 @@ static int raftEntryTypeByName(const char *name) {
     if (!strcasecmp(name, "FAILOVER")) return RAFT_ENTRY_FAILOVER;
     if (!strcasecmp(name, "NODE_INFO")) return RAFT_ENTRY_NODE_INFO;
     if (!strcasecmp(name, "NODE_FAIL")) return RAFT_ENTRY_NODE_FAIL;
+    if (!strcasecmp(name, "NODE_RECOVER")) return RAFT_ENTRY_NODE_RECOVER;
     return -1;
 }
 
@@ -516,6 +519,7 @@ static const char *raftEntryTypeName(uint8_t type) {
     case RAFT_ENTRY_FAILOVER: return "FAILOVER";
     case RAFT_ENTRY_NODE_INFO: return "NODE_INFO";
     case RAFT_ENTRY_NODE_FAIL: return "NODE_FAIL";
+    case RAFT_ENTRY_NODE_RECOVER: return "NODE_RECOVER";
     default: return "UNKNOWN";
     }
 }
@@ -802,10 +806,23 @@ static void raftLogApply(raftLogEntry *e) {
         clusterNode *node = clusterLookupNode(e->data, sdslen(e->data));
         if (node && node != myself) {
             node->flags |= CLUSTER_NODE_FAIL;
+            RAFT_DATA(node)->peer.pending_fail_change = 0;
             rs->todo_update_slot_coverage = 1;
             rs->todo_invalidate_slots_cache = 1;
         }
         serverLog(LL_NOTICE, "Applied NODE_FAIL %.40s (index %llu).",
+                  e->data, (unsigned long long)e->index);
+        break;
+    }
+    case RAFT_ENTRY_NODE_RECOVER: {
+        clusterNode *node = clusterLookupNode(e->data, sdslen(e->data));
+        if (node) {
+            node->flags &= ~CLUSTER_NODE_FAIL;
+            RAFT_DATA(node)->peer.pending_fail_change = 0;
+            rs->todo_update_slot_coverage = 1;
+            rs->todo_invalidate_slots_cache = 1;
+        }
+        serverLog(LL_NOTICE, "Applied NODE_RECOVER %.40s (index %llu).",
                   e->data, (unsigned long long)e->index);
         break;
     }
@@ -1042,12 +1059,14 @@ static int clusterRaftProcessAppendEntriesResponse(clusterLink *link, int argc, 
     /* Keep node->repl_offset in sync for CLUSTER SLOTS/SHARDS on the leader. */
     node->repl_offset = follower_repl_offset;
 
-    /* Clear FAIL flag if the node is back. */
-    if (nodeFailed(node)) {
-        node->flags &= ~CLUSTER_NODE_FAIL;
-        rs->todo_update_slot_coverage = 1;
-        rs->todo_invalidate_slots_cache = 1;
-        serverLog(LL_NOTICE, "Node %.40s is back, clearing FAIL.", node->name);
+    /* Propose NODE_RECOVER if the node is back. */
+    if (nodeFailed(node) && !rd->peer.pending_fail_change) {
+        rd->peer.pending_fail_change = 1;
+        sds entry = sdsnew("NODE_RECOVER ");
+        entry = sdscatlen(entry, node->name, CLUSTER_NAMELEN);
+        clusterRaftPropose(entry, NULL, NULL);
+        sdsfree(entry);
+        serverLog(LL_NOTICE, "Node %.40s is back, proposing NODE_RECOVER.", node->name);
     }
 
     if (success) {
@@ -1174,6 +1193,7 @@ static int clusterRaftProcessRequestVoteResponse(clusterLink *link, int argc, sd
                 RAFT_DATA(peer)->peer.next_index = last + 1;
                 RAFT_DATA(peer)->peer.match_index = 0;
                 RAFT_DATA(peer)->peer.last_ack_time = mstime();
+                RAFT_DATA(peer)->peer.pending_fail_change = 0;
             }
             dictReleaseIterator(di);
             /* Immediate heartbeat to assert leadership. */
@@ -1351,8 +1371,24 @@ static void clusterRaftCron(void) {
             dictEntry *de;
             while ((de = dictNext(di)) != NULL) {
                 clusterNode *node = dictGetVal(de);
-                if (node == myself || nodeFailed(node)) continue;
+                if (node == myself) continue;
+
+                if (nodeFailed(node)) {
+                    /* For failed nodes, drop stale links periodically so
+                     * clusterConnectNodes can establish a fresh connection.
+                     * This allows the leader to detect recovery via AE_ACK. */
+                    if (node->link) {
+                        clusterNodeRaftData *rd = RAFT_DATA(node);
+                        if (rd->peer.last_ack_time > 0 &&
+                            now - rd->peer.last_ack_time > node_timeout) {
+                            freeClusterLink(node->link);
+                            rd->peer.last_ack_time = now;
+                        }
+                    }
+                    continue;
+                }
                 clusterNodeRaftData *rd = RAFT_DATA(node);
+                if (rd->peer.pending_fail_change) continue;
                 if (rd->peer.last_ack_time > 0 &&
                     now - rd->peer.last_ack_time > node_timeout) {
                     serverLog(LL_NOTICE, "Node %.40s not responding, proposing NODE_FAIL.", node->name);
@@ -1411,6 +1447,7 @@ static void clusterRaftCron(void) {
                     entry = sdscatlen(entry, node->name, CLUSTER_NAMELEN);
                     clusterRaftPropose(entry, NULL, NULL);
                     sdsfree(entry);
+                    rd->peer.pending_fail_change = 1;
                 }
             }
             dictReleaseIterator(di);

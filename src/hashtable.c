@@ -214,6 +214,8 @@ static_assert(100 * BUCKET_DIVISOR / BUCKET_FACTOR / ENTRIES_PER_BUCKET <= MAX_F
               "Expand must result in a fill below the soft max fill factor");
 static_assert(MAX_FILL_PERCENT_SOFT <= MAX_FILL_PERCENT_HARD, "Soft vs hard fill factor");
 
+#define ITERATOR_DONE_WITH_BUCKET_IDX (ENTRIES_PER_BUCKET + 1)
+
 /* --- Random entry --- */
 
 #define FAIR_RANDOM_SAMPLE_SIZE (ENTRIES_PER_BUCKET * 10)
@@ -344,7 +346,7 @@ typedef struct {
 } position;
 
 static_assert(sizeof(hashtablePosition) >= sizeof(position),
-              "Opaque iterator size");
+              "Opaque position size");
 
 /* State for incremental find. */
 typedef struct {
@@ -612,7 +614,8 @@ static bucket *fetchEntriesForExpand(bucket *b, void *buf[], int *size, int max_
 
 /* Processes one bucket chain during incremental table expansion.
  * Uses batch processing to optimize memory access patterns. */
-static void rehashStepExpand(hashtable *ht) {
+// Not API, but not static - used in unit testing
+void rehashStepExpand(hashtable *ht) {
     void *entry_buf[FETCH_ENTRY_BUFFER_SIZE_WHEN_EXPAND];
     const void *key_buf[FETCH_ENTRY_BUFFER_SIZE_WHEN_EXPAND];
     size_t idx = ht->rehash_idx;
@@ -1377,13 +1380,13 @@ void hashtableResumeAutoShrink(hashtable *ht) {
  * spaces, "holes", in the bucket chains, which wastes memory. Additionally, we
  * pause auto shrink when rehashing is paused, meaning the hashtable will not
  * shrink the bucket count. */
-static void hashtablePauseRehashing(hashtable *ht) {
+void hashtablePauseRehashing(hashtable *ht) {
     ht->pause_rehash++;
     hashtablePauseAutoShrink(ht);
 }
 
 /* Resumes incremental rehashing, after pausing it. */
-static void hashtableResumeRehashing(hashtable *ht) {
+void hashtableResumeRehashing(hashtable *ht) {
     ht->pause_rehash--;
     assert(ht->pause_rehash >= 0);
     hashtableResumeAutoShrink(ht);
@@ -2268,7 +2271,9 @@ bool hashtableNext(hashtableIterator *iterator, void **elemptr) {
              * child bucket in a chain, or to the next bucket index, or to the
              * next table. */
             iter->pos_in_bucket++;
-            if (iter->bucket->chained && iter->pos_in_bucket >= ENTRIES_PER_BUCKET - 1) {
+            if (iter->bucket->chained
+                    && iter->pos_in_bucket >= ENTRIES_PER_BUCKET - 1
+                    && iter->pos_in_bucket != ITERATOR_DONE_WITH_BUCKET_IDX) {
                 iter->pos_in_bucket = 0;
                 iter->bucket = getChildBucket(iter->bucket);
             } else if (iter->pos_in_bucket >= ENTRIES_PER_BUCKET) {
@@ -2561,4 +2566,69 @@ int hashtableLongestBucketChain(hashtable *ht) {
         }
     }
     return maxlen;
+}
+
+/* This is an internal function - not part of the standard API.  It must be explicitly declared
+ * where used.  It shouldn't be included in any .h (API) file.  Use of this interface is discouraged
+ * as it depends on the internal structure, which may change.
+ *
+ * For a given key, return:
+ *   table_idx - the index of the internal table (0 or 1)
+ *   bucket_idx - the bucket index within the table (0..n)
+ *
+ * Returns TRUE if the the key exists in the table.
+ * Returns FALSE if the key doesn't exist (and table/index are undefined)
+ */
+bool hashtableInternalFindBucketIdx(hashtable *ht, void *key, int *table_idx, size_t *bucket_idx) {
+    uint64_t hash = hashKey(ht, key);
+    int pos_in_bucket;
+    int table;
+    bucket *b = findBucket(ht, hash, key, &pos_in_bucket, &table);
+    if (!b) return false;
+
+    *table_idx = table;
+    *bucket_idx = hash & expToMask(ht->bucket_exp[table]);
+    return true;
+}
+
+/* This is an internal function - not part of the standard API.  It must be explicitly declared
+ * where used.  It shouldn't be included in any .h (API) file.  Use of this interface is discouraged
+ * as it depends on the internal structure, which may change.
+ *
+ * For a given iterator, return:
+ *   table_idx - the index of the internal table (0 or 1)
+ *   bucket_idx - the bucket index within the table (0..n)
+ *
+ * NOTE: hashtableIterator position is based on the LAST item returned.
+ */
+void hashtableInternalIteratorGetBucketIdx(hashtableIterator *iterator, int *table_idx, size_t *bucket_idx) {
+    iter *it = iteratorFromOpaque(iterator);
+    *table_idx = it->table;
+    *bucket_idx = it->index;
+}
+
+/* This is an internal function - not part of the standard API.  It must be explicitly declared
+ * where used.  It shouldn't be included in any .h (API) file.  Use of this interface is discouraged
+ * as it depends on the internal structure, which may change.
+ *
+ * Returns TRUE if the iterator is ready to move to the next bucket index (if it has completed the
+ * current bucket index).  Note: hashtableIterator bucket_idx is the bucket index of the last item
+ * returned by hashtableNext.
+ *
+ * Note: If this function returns true, the iterator commits to move onto the next bucket index,
+ * even if something new is added to the end of the current bucket before hashtableNext is called.
+ */
+bool hashtableInternalIteratorIsBucketIdxComplete(hashtableIterator *iterator) {
+    iter *it = iteratorFromOpaque(iterator);
+
+    if (it->bucket->chained) return false;
+
+    if (!(it->bucket->presence >> (it->pos_in_bucket + 1))) {
+        /* There's CURRENTLY nothing else to return at this bucket index.  Mark pos_in_bucket so
+         * so that hashtableNext will move to the next bucket index, regardless of items which may
+         * be added in the future. */
+        it->pos_in_bucket = ITERATOR_DONE_WITH_BUCKET_IDX;
+        return true;
+    }
+    return false;
 }

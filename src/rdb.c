@@ -46,6 +46,7 @@
 #include "module.h"
 #include "cluster.h"
 #include "cluster_migrateslots.h"
+#include "bgiteration.h"
 
 #include <math.h>
 #include <fcntl.h>
@@ -3171,6 +3172,7 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
     if (rdbflags & RDBFLAGS_EMPTY_DATA) {
         int empty_db_flags = server.repl_replica_lazy_flush ? EMPTYDB_ASYNC : EMPTYDB_NO_FLAGS;
         serverLog(LL_NOTICE, "RDB signature and version check passed. Flushing old data");
+        bgIteration_flushall();
         emptyData(-1, empty_db_flags, replicationEmptyDbCallback);
 
         /* functionsLibCtx is cleared when we call emptyData, reinitialize here. */

@@ -824,6 +824,11 @@ static void raftLogApply(raftLogEntry *e) {
         if (sdslen(e->data) > CLUSTER_NAMELEN + 1) {
             clusterNode *node = clusterLookupNode(e->data, CLUSTER_NAMELEN);
             if (node && node != myself) {
+                /* Reset optional fields so absent aux fields get cleared. */
+                node->announce_client_tcp_port = 0;
+                node->announce_client_tls_port = 0;
+                sdsclear(node->hostname);
+                sdsclear(node->human_nodename);
                 clusterNodeParseAddressString(node, e->data + CLUSTER_NAMELEN + 1);
             }
         }

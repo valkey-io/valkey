@@ -1,10 +1,11 @@
-# Check if cluster's view of human announced nodename is reported in logs
+# Check if cluster's view of human announced nodename is reported in logs.
+# Tests check gossip-specific log messages ("Sending ping packet", "reported node as not reachable").
 
 # Override cluster-node-timeout: shorten timeout to quickly trigger the failure message
 # Override loglevel: we need to use some debug level logs in assertions
 # Override cluster-announce-human-nodename: cluster nodes in test suite are assigned human nodenames
 #       like R0, R1, R2 etc. So we temporarily turn off the setting so that we can run our test cases here.
-start_cluster 4 0 {tags {external:skip cluster} overrides {cluster-node-timeout 1000 loglevel "debug" cluster-announce-human-nodename "''"}} {
+start_cluster 4 0 {tags {external:skip cluster cluster-v2:skip} overrides {cluster-node-timeout 1000 loglevel "debug" cluster-announce-human-nodename "''"}} {
     set RO_node_id [dict get [cluster_get_myself 0] id]
     set R0_port [srv 0 port]
     set R1_port [srv -1 port]
@@ -58,7 +59,7 @@ start_cluster 4 0 {tags {external:skip cluster} overrides {cluster-node-timeout 
     }
 }
 
-start_cluster 4 0 {tags {external:skip cluster ipv6} overrides {bind {127.0.0.1 ::1} cluster-announce-ip ::1 loglevel "debug" cluster-announce-human-nodename "''"}} {
+start_cluster 4 0 {tags {external:skip cluster ipv6 cluster-v2:skip} overrides {bind {127.0.0.1 ::1} cluster-announce-ip ::1 loglevel "debug" cluster-announce-human-nodename "''"}} {
     set RO_node_id [dict get [cluster_get_myself 0] id]
     set R0_port [srv 0 port]
     set R1_port [srv -1 port]

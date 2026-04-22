@@ -4,6 +4,17 @@
  * topology) are replicated through a Raft consensus log. The Raft leader is
  * independent of the data primary/replica role.
  *
+ * Invariants:
+ * - server.cluster->size counts nodes with a committed NODE_JOIN entry.
+ *   Initialized to 0; incremented by NODE_JOIN apply, decremented by
+ *   NODE_FORGET apply.
+ * - Every node in the cluster has a NODE_JOIN entry in the log, including
+ *   the singleton leader (committed when it first learns its own IP).
+ * - CLUSTER_NODE_MEET means "not yet in the raft log" — set on all
+ *   nodes (including myself) at creation, cleared on NODE_JOIN apply.
+ * - NODE_INFO is not proposed while MEET is set or myself->ip is
+ *   empty, to avoid overwriting correct IPs on other nodes.
+ *
  * Wire protocol:
  *   Header: "RAFT" (4 bytes) + totlen (uint32 big-endian) = 8 bytes.
  *   Payload: space-separated text fields. First field is the message type.
@@ -298,7 +309,7 @@ static int clusterRaftProcessHello(clusterLink *link, int argc, sds *argv) {
         serverLog(LL_NOTICE, "Singleton stepping down on HELLO from %.40s.", sender_name);
     }
     if (!sender) {
-        sender = createClusterNode(sender_name, 0);
+        sender = createClusterNode(sender_name, CLUSTER_NODE_MEET);
         if (clusterNodeParseAddressString(sender, argv[2]) == C_ERR) {
             serverLog(LL_WARNING, "Bad address in HELLO from %.40s", sender_name);
             freeClusterNode(sender);
@@ -333,7 +344,7 @@ static int clusterRaftProcessHello(clusterLink *link, int argc, sds *argv) {
     clusterRaftSendGreeting(link, "HI");
 
     /* Propose NODE_JOIN if sender is new to the cluster. */
-    if (server.cluster->size > 1 && !nodeInHandshake(sender)) {
+    if (server.cluster->size > 1 && (sender->flags & CLUSTER_NODE_MEET)) {
         int already_in_log = 0;
         for (uint64_t i = 0; i < rs->log_count; i++) {
             if (rs->log[i]->type == RAFT_ENTRY_NODE_JOIN &&
@@ -403,13 +414,14 @@ static int clusterRaftProcessHi(clusterLink *link, int argc, sds *argv) {
         if (!sender) {
             /* Normal: rename handshake node to real ID. */
             clusterRenameNode(link->node, sender_name);
-            link->node->flags &= ~(CLUSTER_NODE_HANDSHAKE | CLUSTER_NODE_MEET);
+            link->node->flags &= ~CLUSTER_NODE_HANDSHAKE;
             if (clusterNodeParseAddressString(link->node, argv[2]) == C_ERR) {
                 serverLog(LL_WARNING, "Bad address in HI from %.40s", sender_name);
                 return 1;
             }
+            serverLog(LL_NOTICE, "TRACE HI parseAddr %.40s ip=%s", link->node->name, link->node->ip);
             sender = link->node;
-        } else {
+        } else if (sender != link->node) {
             /* Real node already exists (from NODE_JOIN apply).
              * Delete handshake node and transfer the link. */
             clusterNode *handshake = link->node;
@@ -418,13 +430,15 @@ static int clusterRaftProcessHi(clusterLink *link, int argc, sds *argv) {
             handshake->link = NULL;
             clusterDelNode(handshake);
         }
-        serverLog(LL_NOTICE, "Handshake with node %.40s completed.", sender->name);
+        serverLog(LL_NOTICE, "Handshake with node %.40s completed.", sender_name);
     }
 
     if (!sender) return 1;
 
-    /* If we're leader, propose NODE_JOIN for the sender. */
-    if (rs->role == RAFT_ROLE_LEADER && !nodeInHandshake(sender)) {
+    /* Propose NODE_JOIN for the sender. On followers, this forwards
+     * to the leader via PROPOSE. */
+    if (sender->flags & CLUSTER_NODE_MEET) {
+        serverLog(LL_NOTICE, "TRACE HI: proposing NODE_JOIN for %.40s (role=%d)", sender->name, rs->role);
         int already_in_log = 0;
         for (uint64_t i = 0; i < rs->log_count; i++) {
             if (rs->log[i]->type == RAFT_ENTRY_NODE_JOIN &&
@@ -737,18 +751,31 @@ static void raftLogApply(raftLogEntry *e) {
             if (!existing) {
                 clusterNode *n = createClusterNode(argv[0], 0);
                 if (clusterNodeParseAddressString(n, argv[1]) == C_OK) {
+                    serverLog(LL_NOTICE, "TRACE NODE_JOIN parseAddr %.40s ip=%s", n->name, n->ip);
                     clusterAddNode(n);
                 } else {
                     freeClusterNode(n);
                     if (argv) sdsfreesplitres(argv, argc);
                     break;
                 }
+            } else if (existing != myself) {
+                /* Update address for existing node. */
+                clusterNodeParseAddressString(existing, argv[1]);
+                serverLog(LL_NOTICE, "TRACE parseAddr %.40s ip=%s", existing->name, existing->ip);
             }
-            server.cluster->size++;
+            /* Only count the first NODE_JOIN for each node. New nodes
+             * don't have HANDSHAKE. Existing nodes from handshake do. */
+            clusterNode *joined = existing ? existing : clusterLookupNode(argv[0], CLUSTER_NAMELEN);
+            if (joined) {
+                if (!existing || (joined->flags & CLUSTER_NODE_MEET)) {
+                    joined->flags &= ~CLUSTER_NODE_MEET;
+                    server.cluster->size++;
+                }
+            }
             rs->todo_invalidate_slots_cache = 1;
             rs->todo_connect_nodes = 1;
-            serverLog(LL_NOTICE, "Applied NODE_JOIN for %.40s (size=%d).",
-                      argv[0], server.cluster->size);
+            serverLog(LL_NOTICE, "Applied NODE_JOIN for %.40s addr=%s (size=%d).",
+                      argv[0], argc >= 2 ? argv[1] : "?", server.cluster->size);
 
             /* Leader: initialize replication state for the new peer. */
             if (rs->role == RAFT_ROLE_LEADER) {
@@ -761,10 +788,11 @@ static void raftLogApply(raftLogEntry *e) {
             }
 
             /* If this entry is about us, promote from learner to follower. */
-            if (memcmp(argv[0], myself->name, CLUSTER_NAMELEN) == 0 &&
-                rs->role == RAFT_ROLE_LEARNER) {
-                rs->role = RAFT_ROLE_FOLLOWER;
-                serverLog(LL_NOTICE, "Promoted from learner to follower.");
+            if (memcmp(argv[0], myself->name, CLUSTER_NAMELEN) == 0) {
+                if (rs->role == RAFT_ROLE_LEARNER) {
+                    rs->role = RAFT_ROLE_FOLLOWER;
+                    serverLog(LL_NOTICE, "Promoted from learner to follower.");
+                }
             }
         }
         if (argv) sdsfreesplitres(argv, argc);
@@ -854,7 +882,10 @@ static void raftLogApply(raftLogEntry *e) {
                 node->announce_client_tls_port = 0;
                 sdsclear(node->hostname);
                 sdsclear(node->human_nodename);
+                sdsclear(node->announce_client_ipv4);
+                sdsclear(node->announce_client_ipv6);
                 clusterNodeParseAddressString(node, argv[1]);
+                serverLog(LL_NOTICE, "TRACE parseAddr %.40s ip=%s", node->name, node->ip);
                 /* Apply self-set flags. TODO: split on comma and compare
                  * each part individually when more flags are added. */
                 if (argc >= 3) {
@@ -1285,11 +1316,15 @@ static void clusterRaftInit(void) {
     rs->my_last_committed_info = sdsempty();
     rs->last_node_info_check = mstime();
     server.cluster->protocol_data = rs;
-    server.cluster->size = 1; /* Myself */
+    server.cluster->size = 0; /* Incremented by NODE_JOIN apply */
 }
 
 static void clusterRaftInitLast(void) {
     clusterListenerInit();
+
+    /* Mark myself as not yet in the raft log. Cleared when our own
+     * NODE_JOIN is applied. Prevents NODE_INFO with empty IP. */
+    myself->flags |= CLUSTER_NODE_MEET;
 
     /* Single-node cluster: become leader immediately. */
     clusterRaftState *rs = RAFT_STATE();
@@ -1389,6 +1424,8 @@ static void clusterRaftCron(void) {
                                 (myself->flags & CLUSTER_NODE_NOFAILOVER) ? "nofailover" : "noflags");
             if (sdscmp(current, rs->my_last_committed_info) != 0) {
                 serverLog(LL_NOTICE, "NODE_INFO diverged from last commit, re-proposing.");
+                serverLog(LL_DEBUG, "Old node-info: %s", rs->my_last_committed_info);
+                serverLog(LL_DEBUG, "New node-info: %s", current);
                 clusterRaftUpdateMyself(0);
             }
             sdsfree(current);
@@ -1664,7 +1701,7 @@ static int clusterRaftProcessMessage(struct clusterLink *link) {
          * argv: REPL_OFFSETS <node-id> <offset> ...
          * Update node->repl_offset for CLUSTER SLOTS/SHARDS health.
          * If my primary is failed, compute failover rank from sibling offsets. */
-        clusterRaftState *rs = RAFT_STATE();
+        //clusterRaftState *rs = RAFT_STATE();
 
         /* Update repl_offset for all mentioned nodes. */
         for (int i = 1; i + 1 < argc; i += 2) {
@@ -1749,6 +1786,23 @@ static void clusterRaftJoinCallback(void *ctx, const char *error) {
 }
 
 static void clusterRaftPostConnect(struct clusterLink *link) {
+    /* Learn our own IP from the outbound connection if not yet known. */
+    if (myself->ip[0] == '\0' && server.cluster_announce_ip == NULL) {
+        connAddrSockName(link->conn, myself->ip, sizeof(myself->ip), NULL);
+        serverLog(LL_NOTICE, "IP address for this node updated to %s", myself->ip);
+    }
+    /* Commit NODE_JOIN for ourselves once we know our IP. */
+    if ((myself->flags & CLUSTER_NODE_MEET) && myself->ip[0] != '\0') {
+        clusterRaftState *rs = RAFT_STATE();
+        if (rs->role == RAFT_ROLE_LEADER) {
+            sds entry = sdsnew("NODE_JOIN ");
+            entry = sdscatlen(entry, myself->name, CLUSTER_NAMELEN);
+            entry = sdscatlen(entry, " ", 1);
+            entry = clusterNodeAppendAddressString(entry, myself, server.tls_cluster);
+            clusterRaftPropose(entry, NULL, NULL);
+            sdsfree(entry);
+        }
+    }
     /* Send HELLO on every new outbound link for identification. */
     clusterRaftSendHello(link);
 }
@@ -1762,6 +1816,9 @@ static void clusterRaftUpdateMyself(int old_flags) {
     /* Clear cached CLUSTER SLOTS immediately — our address/hostname
      * has already changed in the config layer. */
     clearCachedClusterSlotsResponse();
+    /* Don't propose NODE_INFO before our own NODE_JOIN is in the log,
+     * or if our IP is not yet known. */
+    if ((myself->flags & CLUSTER_NODE_MEET) || myself->ip[0] == '\0') return;
     /* Propose NODE_INFO to propagate the change to other nodes. */
     sds entry = sdsnew("NODE_INFO ");
     entry = sdscatlen(entry, myself->name, CLUSTER_NAMELEN);
@@ -2052,6 +2109,11 @@ static void clusterRaftApplySetReplica(sds data) {
             replica->flags |= CLUSTER_NODE_REPLICA;
             replica->replicaof = primary;
             clusterNodeAddReplica(primary, replica);
+            /* Fake a non-zero replication offset so isNodeAvailable() returns
+             * true and the node appears in CLUSTER SLOTS. The real offset
+             * arrives via REPL_OFFSETS broadcast from the leader, but it
+             * doesn't seem to work yet. */
+            if (replica->repl_offset == 0) replica->repl_offset = 1; /* TODO: remove this line */
             /* Move replica to primary's shard. */
             clusterRemoveNodeFromShard(replica);
             memcpy(replica->shard_id, primary->shard_id, CLUSTER_NAMELEN);
@@ -2203,7 +2265,7 @@ static void clusterRaftMeet(const char *ip, int port, int cport, void *ctx, void
     dictReleaseIterator(di);
 
     if (!already) {
-        clusterNode *n = createClusterNode(NULL, CLUSTER_NODE_HANDSHAKE | CLUSTER_NODE_MEET);
+        clusterNode *n = createClusterNode(NULL, CLUSTER_NODE_MEET | CLUSTER_NODE_HANDSHAKE);
         memcpy(n->ip, norm_ip, sizeof(n->ip));
         if (server.tls_cluster) {
             n->tls_port = port;

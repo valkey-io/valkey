@@ -41,7 +41,9 @@ jobs:
       - name: test
         run: |
           sudo apt-get install tcl8.6 tclx
-          ./runtest --verbose --tags -slow --dump-logs
+          ./runtest --verbose --tags "-slow -cluster" --dump-logs
+      - name: cluster tests
+        run: ./runtest --cluster --verbose --dump-logs
       - name: module api test
         run: CFLAGS='-Werror' ./runtest-moduleapi --verbose --dump-logs
       - name: validate commands.def up to date
@@ -114,7 +116,9 @@ jobs:
         run: |
           sudo apt-get install -y tcl8.6 tclx tcl-tls
           ./utils/gen-test-certs.sh
-          ./build-release/runtest --verbose --tags -slow --dump-logs --tls
+          ./build-release/runtest --verbose --tags "-slow -cluster" --dump-logs --tls
+      - name: cluster tests
+        run: ./build-release/runtest --cluster --verbose --dump-logs --tls
       - name: unit tests
         run: make -C build-release test-unit
 
@@ -138,7 +142,7 @@ jobs:
       - name: testprep
         run: sudo apt-get install tcl8.6 tclx -y
       - name: test
-        run: ./runtest --verbose --tags -slow --dump-logs
+        run: ./runtest --verbose --tags "-slow -cluster" --dump-logs
       - name: module api test
         run: CFLAGS='-Werror' ./runtest-moduleapi --verbose --dump-logs
       - name: unit tests

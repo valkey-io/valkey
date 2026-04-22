@@ -2774,7 +2774,6 @@ extern dictType objectKeyPointerValueDictType;
 extern hashtableType objectHashtableType;
 extern dictType objectKeyHeapPointerValueDictType;
 extern hashtableType setHashtableType;
-extern dictType BenchmarkDictType;
 extern hashtableType kvstoreKeysHashtableType;
 extern hashtableType kvstoreExpiresHashtableType;
 extern double R_Zero, R_PosInf, R_NegInf, R_Nan;
@@ -3353,10 +3352,10 @@ static inline bool zsetScoreGteMin(double score, double min, int min_ex) {
 static inline bool zsetScoreLteMax(double score, double max, int max_ex) {
     return max_ex ? (score < max) : (score <= max);
 }
-int zslValueGteMin(double value, zrangespec *spec);
-int zslValueLteMax(double value, zrangespec *spec);
-int zslLexValueGteMin(const char *value, size_t value_len, zlexrangespec *spec);
-int zslLexValueLteMax(const char *value, size_t value_len, zlexrangespec *spec);
+int zsetValueGteMin(double value, zrangespec *spec);
+int zsetValueLteMax(double value, zrangespec *spec);
+int zsetLexValueGteMin(const char *value, size_t value_len, zlexrangespec *spec);
+int zsetLexValueLteMax(const char *value, size_t value_len, zlexrangespec *spec);
 
 /* flags for incrCommandFailedCalls */
 #define ERROR_COMMAND_REJECTED (1 << 0) /* Indicate to update the command rejected stats */

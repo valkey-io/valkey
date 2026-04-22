@@ -90,6 +90,9 @@ zskiplistNode *zslCreateNode(int height, double score, const_sds ele);
 int zslRandomLevel(void);
 zskiplistNode *zslInsertNode(zskiplist *zsl, zskiplistNode *node);
 
+/* Internal unlink helper (used by skiplist_ordered_index.c for range deletion) */
+void zslDeleteNode(zskiplist *zsl, zskiplistNode *x, zskiplistNode **update);
+
 /* Level-0 span stores the node height, so span accessors treat it specially. */
 static inline unsigned long zslGetNodeSpanAtLevel(const zskiplistNode *x, int level) {
     if (level > 0) return x->level[level].span;

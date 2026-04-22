@@ -1085,12 +1085,15 @@ void hashtableScanCallback(void *privdata, void *entry) {
         }
     }
 
-    /* zset data must be copied. Do this after filtering to avoid unneeded
-     * allocations. */
+    /* zset data: the score value must always be copied (it's formatted from a
+     * double into a stack buffer). The element key points directly into the
+     * node and doesn't need copying when only_keys is set. When values are
+     * included, we must copy the key too since free_callback applies to all
+     * items uniformly. */
     if (o->type == OBJ_ZSET) {
-        OrderedIndexItem *node = (OrderedIndexItem *)entry;
-        key = sdsnewlen(key, key_len);
         if (!data->only_keys) {
+            OrderedIndexItem *node = (OrderedIndexItem *)entry;
+            key = sdsnewlen(key, key_len);
             char buf[MAX_LONG_DOUBLE_CHARS];
             int len = ld2string(buf, sizeof(buf), orderedIndexGetScore(node), LD_STR_AUTO);
             sds tmp = sdsnewlen(buf, len);
@@ -1260,8 +1263,10 @@ void scanGenericCommand(client *c, robj *o, unsigned long long cursor, int slot,
     } else if (o->type == OBJ_ZSET && o->encoding == OBJ_ENCODING_SKIPLIST) {
         zset *zs = objectGetVal(o);
         ht = zs->ht;
-        /* scanning ZSET allocates temporary strings even though it's a dict */
-        free_callback = sdsfree;
+        /* When returning scores, both element and score strings are allocated
+         * copies. When only_keys, element pointers reference the live data
+         * structure directly — no freeing needed. */
+        free_callback = only_keys ? NULL : sdsfree;
     }
     vectorInit(&result, SCAN_VECTOR_INITIAL_ALLOC, sizeof(stringRef));
 

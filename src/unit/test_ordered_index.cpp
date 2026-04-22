@@ -54,6 +54,7 @@ TEST_P(OrderedIndexTest, CreateFree) {
     OrderedIndex *idx = api.create();
     TEST_ASSERT(idx != NULL);
     TEST_ASSERT(api.length(idx) == 0);
+    VERIFY_INTEGRITY(api, idx);
 
     OrderedIndexIterator iter;
     OrderedIndexItem *pos;
@@ -68,6 +69,7 @@ TEST_P(OrderedIndexTest, InsertSingle) {
     OrderedIndex *idx = api.create();
     sds ele = sdsnew("test");
     OrderedIndexItem *node = api.insertSds(idx, 1.0, ele);
+    VERIFY_INTEGRITY(api, idx);
 
     TEST_ASSERT(node != NULL);
     TEST_ASSERT(api.length(idx) == 1);
@@ -102,6 +104,7 @@ TEST_P(OrderedIndexTest, InsertMultipleOrdered) {
     }
 
     TEST_ASSERT(api.length(idx) == 10);
+    VERIFY_INTEGRITY(api, idx);
 
     /* Verify forward traversal */
     OrderedIndexIterator iter;
@@ -138,6 +141,7 @@ TEST_P(OrderedIndexTest, DuplicateScores) {
     }
 
     TEST_ASSERT(api.length(idx) == 5);
+    VERIFY_INTEGRITY(api, idx);
 
     /* Verify lexicographic ordering for same scores */
     OrderedIndexIterator iter;
@@ -169,6 +173,7 @@ TEST_P(OrderedIndexTest, RankOperations) {
         nodes[i] = api.insertSds(idx, (double)i, ele);
         sdsfree(ele);
     }
+    VERIFY_INTEGRITY(api, idx);
 
     for (int i = 0; i < 10; i++) {
         unsigned long rank = api.getRank(idx, nodes[i]);
@@ -199,6 +204,7 @@ TEST_P(OrderedIndexTest, Delete) {
 
     api.deleteItem(idx, nodes[2]);
     TEST_ASSERT(api.length(idx) == 4);
+    VERIFY_INTEGRITY(api, idx);
 
     OrderedIndexIterator iter;
     OrderedIndexItem *pos;
@@ -239,11 +245,13 @@ TEST_P(OrderedIndexTest, PopFirst) {
     TEST_ASSERT(len == 4 && memcmp(ptr, "key0", 4) == 0);
     api.freeItem(item);
     TEST_ASSERT(api.length(idx) == 4);
+    VERIFY_INTEGRITY(api, idx);
 
     item = api.popFirst(idx);
     TEST_ASSERT_SCORE_EQ(api.getScore(item), 1.0);
     api.freeItem(item);
     TEST_ASSERT(api.length(idx) == 3);
+    VERIFY_INTEGRITY(api, idx);
 
     api.free(idx);
 }
@@ -271,11 +279,13 @@ TEST_P(OrderedIndexTest, PopLast) {
     TEST_ASSERT(len == 4 && memcmp(ptr, "key4", 4) == 0);
     api.freeItem(item);
     TEST_ASSERT(api.length(idx) == 4);
+    VERIFY_INTEGRITY(api, idx);
 
     item = api.popLast(idx);
     TEST_ASSERT_SCORE_EQ(api.getScore(item), 3.0);
     api.freeItem(item);
     TEST_ASSERT(api.length(idx) == 3);
+    VERIFY_INTEGRITY(api, idx);
 
     api.free(idx);
 }
@@ -296,6 +306,7 @@ TEST_P(OrderedIndexTest, UpdateScore) {
     OrderedIndexItem *updated = api.updateScore(idx, node2, 4.0);
     TEST_ASSERT(updated != NULL);
     TEST_ASSERT_SCORE_EQ(api.getScore(updated), 4.0);
+    VERIFY_INTEGRITY(api, idx);
     const char *ptr;
     size_t len;
     api.getElementRaw(updated, &ptr, &len);
@@ -318,6 +329,7 @@ TEST_P(OrderedIndexTest, UpdateScore) {
     /* Update to same score (no-op) */
     updated = api.updateScore(idx, node1, 1.0);
     TEST_ASSERT_SCORE_EQ(api.getScore(updated), 1.0);
+    VERIFY_INTEGRITY(api, idx);
 
     api.free(idx);
 }
@@ -337,6 +349,7 @@ TEST_P(OrderedIndexTest, DeleteRangeByScore) {
     unsigned long deleted = api.deleteRangeByScore(idx, 3.0, 6.0, 0, 0, NULL, NULL);
     TEST_ASSERT(deleted == 4); /* 3, 4, 5, 6 */
     TEST_ASSERT(api.length(idx) == 6);
+    VERIFY_INTEGRITY(api, idx);
 
     OrderedIndexIterator iter;
     OrderedIndexItem *pos;
@@ -355,6 +368,7 @@ TEST_P(OrderedIndexTest, DeleteRangeByScore) {
     deleted = api.deleteRangeByScore(idx, 2.0, 8.0, 1, 1, NULL, NULL);
     TEST_ASSERT(deleted == 1);
     TEST_ASSERT(api.length(idx) == 5);
+    VERIFY_INTEGRITY(api, idx);
 
     api.free(idx);
 }
@@ -374,6 +388,7 @@ TEST_P(OrderedIndexTest, DeleteRangeByRank) {
     unsigned long deleted = api.deleteRangeByRank(idx, 3, 5, NULL, NULL);
     TEST_ASSERT(deleted == 3);
     TEST_ASSERT(api.length(idx) == 7);
+    VERIFY_INTEGRITY(api, idx);
 
     OrderedIndexIterator iter;
     OrderedIndexItem *pos;
@@ -405,9 +420,11 @@ TEST_P(OrderedIndexTest, MixedOperationsRankIntegrity) {
         api.deleteItem(idx, nodes[i]);
         nodes[i] = NULL;
     }
+    VERIFY_INTEGRITY(api, idx);
 
     if (nodes[10]) nodes[10] = api.updateScore(idx, nodes[10], 150.0);
     if (nodes[20]) nodes[20] = api.updateScore(idx, nodes[20], 160.0);
+    VERIFY_INTEGRITY(api, idx);
 
     OrderedIndexIterator iter;
     OrderedIndexItem *pos;
@@ -438,6 +455,7 @@ TEST_P(OrderedIndexTest, BackwardTraversalAfterDeletions) {
     api.deleteItem(idx, nodes[5]);
     api.deleteItem(idx, nodes[10]);
     api.deleteItem(idx, nodes[15]);
+    VERIFY_INTEGRITY(api, idx);
 
     OrderedIndexIterator iter;
     OrderedIndexItem *pos;
@@ -648,6 +666,7 @@ TEST_P(OrderedIndexTest, DeleteEdgeCases) {
     OrderedIndexItem *node = api.insertSds(idx, 1.0, ele);
     api.deleteItem(idx, node);
     TEST_ASSERT(api.length(idx) == 0);
+    VERIFY_INTEGRITY(api, idx);
     OrderedIndexIterator iter;
     OrderedIndexItem *pos;
     api.initIterator(&iter, idx);
@@ -666,6 +685,7 @@ TEST_P(OrderedIndexTest, DeleteEdgeCases) {
     }
     api.deleteItem(idx, nodes[0]);
     TEST_ASSERT(api.length(idx) == 2);
+    VERIFY_INTEGRITY(api, idx);
     api.initIterator(&iter, idx);
     TEST_ASSERT(api.next(&iter, &pos));
     TEST_ASSERT_SCORE_EQ(api.getScore(pos), 1.0);
@@ -674,6 +694,7 @@ TEST_P(OrderedIndexTest, DeleteEdgeCases) {
     /* Delete last element */
     api.deleteItem(idx, nodes[2]);
     TEST_ASSERT(api.length(idx) == 1);
+    VERIFY_INTEGRITY(api, idx);
     api.initIterator(&iter, idx);
     TEST_ASSERT(api.prev(&iter, &pos));
     TEST_ASSERT_SCORE_EQ(api.getScore(pos), 1.0);
@@ -784,6 +805,7 @@ TEST_P(OrderedIndexTest, RangeDeleteEdgeCases) {
     /* Delete first elements by rank */
     deleted = api.deleteRangeByRank(idx, 1, 2, NULL, NULL);
     TEST_ASSERT(deleted == 2);
+    VERIFY_INTEGRITY(api, idx);
     OrderedIndexIterator iter;
     OrderedIndexItem *pos;
     api.initIterator(&iter, idx);
@@ -795,6 +817,7 @@ TEST_P(OrderedIndexTest, RangeDeleteEdgeCases) {
     unsigned long len = api.length(idx);
     deleted = api.deleteRangeByRank(idx, len - 1, len, NULL, NULL);
     TEST_ASSERT(deleted == 2);
+    VERIFY_INTEGRITY(api, idx);
     api.initIterator(&iter, idx);
     TEST_ASSERT(api.prev(&iter, &pos));
     TEST_ASSERT_SCORE_EQ(api.getScore(pos), 7.0);
@@ -804,6 +827,7 @@ TEST_P(OrderedIndexTest, RangeDeleteEdgeCases) {
     deleted = api.deleteRangeByScore(idx, -100.0, 100.0, 0, 0, NULL, NULL);
     TEST_ASSERT(deleted == 6);
     TEST_ASSERT(api.length(idx) == 0);
+    VERIFY_INTEGRITY(api, idx);
 
     api.free(idx);
 }
@@ -1229,6 +1253,7 @@ TEST_P(OrderedIndexTest, DeleteRangeByLexInclusive) {
     unsigned long deleted = api.deleteRangeByLex(idx, min, max, 0, 0, NULL, NULL);
     TEST_ASSERT(deleted == 3);
     TEST_ASSERT(api.length(idx) == 2);
+    VERIFY_INTEGRITY(api, idx);
 
     OrderedIndexIterator iter;
     OrderedIndexItem *pos;
@@ -1456,6 +1481,7 @@ TEST_P(OrderedIndexTest, RandomizedInsertAndTraversal) {
         test_build_random_index(api, idx, rng, n);
 
         ASSERT_EQ(api.length(idx), (unsigned long)n);
+        VERIFY_INTEGRITY(api, idx);
 
         OrderedIndexIterator iter;
         OrderedIndexItem *pos;
@@ -1556,6 +1582,7 @@ TEST_P(OrderedIndexTest, RandomizedDelete) {
         api.deleteItem(idx, entries[delIdx].node);
 
         ASSERT_EQ(api.length(idx), (unsigned long)(n - 1));
+        VERIFY_INTEGRITY(api, idx);
 
         OrderedIndexIterator iter;
         OrderedIndexItem *pos;
@@ -1590,6 +1617,7 @@ TEST_P(OrderedIndexTest, RandomizedUpdateScore) {
         ASSERT_NE(updated, nullptr);
         ASSERT_EQ(api.getScore(updated), newScore);
         ASSERT_EQ(api.length(idx), (unsigned long)n);
+        VERIFY_INTEGRITY(api, idx);
 
         OrderedIndexIterator iter;
         OrderedIndexItem *pos;
@@ -1630,12 +1658,14 @@ TEST_P(OrderedIndexTest, RandomizedPop) {
         ASSERT_EQ(api.getScore(first), minScore);
         ASSERT_EQ(api.length(idx), (unsigned long)(n - 1));
         api.freeItem(first);
+        VERIFY_INTEGRITY(api, idx);
 
         OrderedIndexItem *last = api.popLast(idx);
         ASSERT_NE(last, nullptr);
         ASSERT_EQ(api.getScore(last), maxScore);
         ASSERT_EQ(api.length(idx), (unsigned long)(n - 2));
         api.freeItem(last);
+        VERIFY_INTEGRITY(api, idx);
 
         api.initIterator(&iter, idx);
         double prevScore = -INFINITY;
@@ -1668,6 +1698,7 @@ TEST_P(OrderedIndexTest, RandomizedDeleteRangeByScore) {
         unsigned long deleted = api.deleteRangeByScore(idx, lo, hi, 0, 0, NULL, NULL);
         ASSERT_EQ(deleted, (unsigned long)expectedDeleted);
         ASSERT_EQ(api.length(idx), (unsigned long)(n - expectedDeleted));
+        VERIFY_INTEGRITY(api, idx);
 
         OrderedIndexIterator iter;
         OrderedIndexItem *pos;
@@ -1702,6 +1733,7 @@ TEST_P(OrderedIndexTest, RandomizedDeleteRangeByRank) {
         unsigned long deleted = api.deleteRangeByRank(idx, start, end, NULL, NULL);
         ASSERT_EQ(deleted, expectedDeleted);
         ASSERT_EQ(api.length(idx), (unsigned long)(n) - expectedDeleted);
+        VERIFY_INTEGRITY(api, idx);
 
         OrderedIndexIterator iter;
         OrderedIndexItem *pos;
@@ -1953,6 +1985,7 @@ TEST_F(OnDeleteCallbackTest, DeleteRangeByScore_Subset) {
     ASSERT_EQ(deleted, 4UL);
     ASSERT_EQ(rec.count, 4);
     ASSERT_EQ(api.length(idx), 6UL);
+    VERIFY_INTEGRITY(api, idx);
 
     std::sort(rec.elements.begin(), rec.elements.end());
     ASSERT_EQ(rec.elements, (std::vector<std::string>{"key3", "key4", "key5", "key6"}));
@@ -1971,6 +2004,7 @@ TEST_F(OnDeleteCallbackTest, DeleteRangeByScore_All) {
     ASSERT_EQ(deleted, 5UL);
     ASSERT_EQ(rec.count, 5);
     ASSERT_EQ(api.length(idx), 0UL);
+    VERIFY_INTEGRITY(api, idx);
     api.free(idx);
 }
 

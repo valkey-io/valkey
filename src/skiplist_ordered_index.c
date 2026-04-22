@@ -11,32 +11,6 @@ static_assert(sizeof(OrderedIndexIterator) >= sizeof(zskiplistIterator),
  * Internal skiplist helpers
  *---------------------------------------------------------------------------*/
 
-/* Internal function to unlink a node from the skiplist (does not free it). */
-static void skiplistUnlinkNode(zskiplist *zsl, zskiplistNode *x, zskiplistNode **update) {
-    int i;
-    for (i = 0; i < zslGetHeight(zsl); i++) {
-        if (update[i]->level[i].forward == x) {
-            zslIncrNodeSpanAtLevel(update[i], i, zslGetNodeSpanAtLevel(x, i) - 1);
-            update[i]->level[i].forward = x->level[i].forward;
-        } else {
-            zslDecrNodeSpanAtLevel(update[i], i, 1);
-        }
-    }
-    if (x->level[0].forward) {
-        x->level[0].forward->backward = x->backward;
-    } else {
-        zslSetTail(zsl, x->backward);
-    }
-
-    int level;
-    zskiplistNode *zheader = zslGetHeader(zsl);
-    while ((level = zslGetHeight(zsl)) > 1 && zheader->level[level - 1].forward == NULL) {
-        /* zslSetHeight is static in t_zset.c, replicate inline: header level[0].span = height */
-        zheader->level[0].span = level - 1;
-    }
-    zsl->header.length--;
-}
-
 /* Lifecycle */
 
 OrderedIndex *skiplistCreate(void) {
@@ -116,7 +90,7 @@ unsigned long skiplistDeleteRangeByScore(OrderedIndex *idx, double min, double m
 
     x = zslGetHeader(zsl);
     for (i = zslGetHeight(zsl) - 1; i >= 0; i--) {
-        while (x->level[i].forward && !zslValueGteMin(x->level[i].forward->score, &range))
+        while (x->level[i].forward && !zsetValueGteMin(x->level[i].forward->score, &range))
             x = x->level[i].forward;
         update[i] = x;
     }
@@ -125,9 +99,9 @@ unsigned long skiplistDeleteRangeByScore(OrderedIndex *idx, double min, double m
     x = x->level[0].forward;
 
     /* Delete nodes while in range. */
-    while (x && zslValueLteMax(x->score, &range)) {
+    while (x && zsetValueLteMax(x->score, &range)) {
         zskiplistNode *next = x->level[0].forward;
-        skiplistUnlinkNode(zsl, x, update);
+        zslDeleteNode(zsl, x, update);
         if (on_delete) {
             on_delete((OrderedIndexItem *)x, ctx);
         }
@@ -158,7 +132,7 @@ unsigned long skiplistDeleteRangeByRank(OrderedIndex *idx, unsigned long start, 
     x = x->level[0].forward;
     while (x && traversed <= end) {
         zskiplistNode *next = x->level[0].forward;
-        skiplistUnlinkNode(zsl, x, update);
+        zslDeleteNode(zsl, x, update);
         if (on_delete) {
             on_delete((OrderedIndexItem *)x, ctx);
         }
@@ -183,7 +157,7 @@ unsigned long skiplistDeleteRangeByLex(OrderedIndex *idx, const_sds min, const_s
     for (i = zslGetHeight(zsl) - 1; i >= 0; i--) {
         while (x->level[i].forward) {
             sds fwd_ele = zslGetNodeElement(x->level[i].forward);
-            if (zslLexValueGteMin(fwd_ele, sdslen(fwd_ele), &range)) break;
+            if (zsetLexValueGteMin(fwd_ele, sdslen(fwd_ele), &range)) break;
             x = x->level[i].forward;
         }
         update[i] = x;
@@ -195,9 +169,9 @@ unsigned long skiplistDeleteRangeByLex(OrderedIndex *idx, const_sds min, const_s
     /* Delete nodes while in range. */
     while (x) {
         sds ele = zslGetNodeElement(x);
-        if (!zslLexValueLteMax(ele, sdslen(ele), &range)) break;
+        if (!zsetLexValueLteMax(ele, sdslen(ele), &range)) break;
         zskiplistNode *next = x->level[0].forward;
-        skiplistUnlinkNode(zsl, x, update);
+        zslDeleteNode(zsl, x, update);
         if (on_delete) {
             on_delete((OrderedIndexItem *)x, ctx);
         }
@@ -355,7 +329,7 @@ static void skiplistPatchNodePointers(zskiplist *zsl, zskiplistNode *oldnode,
  * goes via defragfn. When an item is reallocated there is a callback
  * for any other pointer updates needed.
  *
- * Processes up to 64 nodes per call to bound latency, returning the
+ * Processes up to 16 nodes per call to bound latency, returning the
  * next cursor position (or 0 when complete). */
 unsigned long skiplistScanDefrag(OrderedIndex *idx, unsigned long cursor,
                                  void (*callback)(OrderedIndexItem *old_item, OrderedIndexItem *new_item, void *ctx),

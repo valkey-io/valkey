@@ -79,9 +79,7 @@ OrderedIndexItem *skiplistInsertDetached(OrderedIndex *idx, OrderedIndexItem *it
     return (OrderedIndexItem *)node;
 }
 
-unsigned long skiplistDeleteRangeByScore(OrderedIndex *idx, double min, double max,
-                                         int min_ex, int max_ex,
-                                         OrderedIndexOnDelete on_delete, void *ctx) {
+unsigned long skiplistDeleteRangeByScore(OrderedIndex *idx, double min, double max, int min_ex, int max_ex, OrderedIndexOnDelete on_delete, void *ctx) {
     zskiplist *zsl = (zskiplist *)idx;
     zrangespec range = {.min = min, .max = max, .minex = min_ex, .maxex = max_ex};
     zskiplistNode *update[ZSKIPLIST_MAXLEVEL], *x;
@@ -112,8 +110,7 @@ unsigned long skiplistDeleteRangeByScore(OrderedIndex *idx, double min, double m
     return removed;
 }
 
-unsigned long skiplistDeleteRangeByRank(OrderedIndex *idx, unsigned long start, unsigned long end,
-                                        OrderedIndexOnDelete on_delete, void *ctx) {
+unsigned long skiplistDeleteRangeByRank(OrderedIndex *idx, unsigned long start, unsigned long end, OrderedIndexOnDelete on_delete, void *ctx) {
     zskiplist *zsl = (zskiplist *)idx;
     zskiplistNode *update[ZSKIPLIST_MAXLEVEL], *x;
     unsigned long traversed = 0, removed = 0;
@@ -144,9 +141,7 @@ unsigned long skiplistDeleteRangeByRank(OrderedIndex *idx, unsigned long start, 
     return removed;
 }
 
-unsigned long skiplistDeleteRangeByLex(OrderedIndex *idx, const_sds min, const_sds max,
-                                       int min_ex, int max_ex,
-                                       OrderedIndexOnDelete on_delete, void *ctx) {
+unsigned long skiplistDeleteRangeByLex(OrderedIndex *idx, const_sds min, const_sds max, int min_ex, int max_ex, OrderedIndexOnDelete on_delete, void *ctx) {
     zskiplist *zsl = (zskiplist *)idx;
     zlexrangespec range = {.min = (sds)min, .max = (sds)max, .minex = min_ex, .maxex = max_ex};
     zskiplistNode *update[ZSKIPLIST_MAXLEVEL], *x;
@@ -310,8 +305,7 @@ OrderedIndex *skiplistDefragInternals(OrderedIndex *idx, void *(*defragfn)(void 
 
 /* Patch skiplist pointers after a node has been reallocated to a new address.
  * update[] contains the predecessor at each level. */
-static void skiplistPatchNodePointers(zskiplist *zsl, zskiplistNode *oldnode,
-                                      zskiplistNode *newnode, zskiplistNode **update) {
+static void skiplistPatchNodePointers(zskiplist *zsl, zskiplistNode *oldnode, zskiplistNode *newnode, zskiplistNode **update) {
     for (int i = 0; i < zslGetHeight(zsl); i++) {
         if (update[i]->level[i].forward == oldnode)
             update[i]->level[i].forward = newnode;
@@ -331,10 +325,7 @@ static void skiplistPatchNodePointers(zskiplist *zsl, zskiplistNode *oldnode,
  *
  * Processes up to 16 nodes per call to bound latency, returning the
  * next cursor position (or 0 when complete). */
-unsigned long skiplistScanDefrag(OrderedIndex *idx, unsigned long cursor,
-                                 void (*callback)(OrderedIndexItem *old_item, OrderedIndexItem *new_item, void *ctx),
-                                 void *ctx,
-                                 void *(*defragfn)(void *)) {
+unsigned long skiplistScanDefrag(OrderedIndex *idx, unsigned long cursor, void (*callback)(OrderedIndexItem *old_item, OrderedIndexItem *new_item, void *ctx), void *ctx, void *(*defragfn)(void *)) {
     zskiplist *zsl = (zskiplist *)idx;
     zskiplistNode *header = zslGetHeader(zsl);
 
@@ -396,10 +387,10 @@ int skiplistVerifyIntegrity(OrderedIndex *idx, char *errmsg, size_t errmsg_len) 
     int height = zslGetHeight(zsl);
     unsigned long length = zslGetLength(zsl);
 
-#define FAIL(...)                              \
-    do {                                       \
+#define FAIL(...)                                  \
+    do {                                           \
         snprintf(errmsg, errmsg_len, __VA_ARGS__); \
-        return 0;                              \
+        return 0;                                  \
     } while (0)
 
     /* 1. Height must be in [1, ZSKIPLIST_MAXLEVEL]. */
@@ -516,4 +507,3 @@ int skiplistVerifyIntegrity(OrderedIndex *idx, char *errmsg, size_t errmsg_len) 
     errmsg[0] = '\0';
     return 1;
 }
-

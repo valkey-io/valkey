@@ -162,9 +162,7 @@ static inline OrderedIndex *orderedIndexDefragInternals(OrderedIndex *idx, void 
     return skiplistDefragInternals(idx, defragfn);
 }
 
-static inline unsigned long orderedIndexScanDefrag(OrderedIndex *idx, unsigned long cursor,
-                                                   OrderedIndexDefragCallback callback, void *ctx,
-                                                   void *(*defragfn)(void *)) {
+static inline unsigned long orderedIndexScanDefrag(OrderedIndex *idx, unsigned long cursor, OrderedIndexDefragCallback callback, void *ctx, void *(*defragfn)(void *)) {
     return skiplistScanDefrag(idx, cursor, callback, ctx, defragfn);
 }
 

@@ -22,14 +22,9 @@ void skiplistFreeItem(OrderedIndexItem *item);
 OrderedIndexItem *skiplistCreateDetached(double score, const char *ele, size_t len);
 void skiplistDetachedSetScore(OrderedIndexItem *item, double score);
 OrderedIndexItem *skiplistInsertDetached(OrderedIndex *idx, OrderedIndexItem *item);
-unsigned long skiplistDeleteRangeByScore(OrderedIndex *idx, double min, double max,
-                                         int min_ex, int max_ex,
-                                         OrderedIndexOnDelete on_delete, void *ctx);
-unsigned long skiplistDeleteRangeByRank(OrderedIndex *idx, unsigned long start, unsigned long end,
-                                        OrderedIndexOnDelete on_delete, void *ctx);
-unsigned long skiplistDeleteRangeByLex(OrderedIndex *idx, const_sds min, const_sds max,
-                                       int min_ex, int max_ex,
-                                       OrderedIndexOnDelete on_delete, void *ctx);
+unsigned long skiplistDeleteRangeByScore(OrderedIndex *idx, double min, double max, int min_ex, int max_ex, OrderedIndexOnDelete on_delete, void *ctx);
+unsigned long skiplistDeleteRangeByRank(OrderedIndex *idx, unsigned long start, unsigned long end, OrderedIndexOnDelete on_delete, void *ctx);
+unsigned long skiplistDeleteRangeByLex(OrderedIndex *idx, const_sds min, const_sds max, int min_ex, int max_ex, OrderedIndexOnDelete on_delete, void *ctx);
 
 /* Query */
 unsigned long skiplistLength(OrderedIndex *idx);
@@ -46,10 +41,8 @@ void skiplistResetIterator(OrderedIndexIterator *iter);
 bool skiplistNext(OrderedIndexIterator *iter, OrderedIndexItem **pos);
 bool skiplistPrev(OrderedIndexIterator *iter, OrderedIndexItem **pos);
 void skiplistSeekToRank(OrderedIndexIterator *iter, unsigned long rank);
-void skiplistSeekToScoreRange(OrderedIndexIterator *iter, double min, double max,
-                               int min_ex, int max_ex, long offset);
-void skiplistSeekToLexRange(OrderedIndexIterator *iter, const_sds min, const_sds max,
-                             int min_ex, int max_ex, long offset);
+void skiplistSeekToScoreRange(OrderedIndexIterator *iter, double min, double max, int min_ex, int max_ex, long offset);
+void skiplistSeekToLexRange(OrderedIndexIterator *iter, const_sds min, const_sds max, int min_ex, int max_ex, long offset);
 
 /* Memory */
 void skiplistDismissMemory(OrderedIndex *idx);
@@ -57,10 +50,7 @@ size_t skiplistEstimateMemory(OrderedIndex *idx, size_t sample_size);
 
 /* Defrag */
 OrderedIndex *skiplistDefragInternals(OrderedIndex *idx, void *(*defragfn)(void *));
-unsigned long skiplistScanDefrag(OrderedIndex *idx, unsigned long cursor,
-                                 void (*callback)(OrderedIndexItem *old_item, OrderedIndexItem *new_item, void *ctx),
-                                 void *ctx,
-                                 void *(*defragfn)(void *));
+unsigned long skiplistScanDefrag(OrderedIndex *idx, unsigned long cursor, void (*callback)(OrderedIndexItem *old_item, OrderedIndexItem *new_item, void *ctx), void *ctx, void *(*defragfn)(void *));
 
 /* Debug */
 int skiplistGetHeight(OrderedIndex *idx);

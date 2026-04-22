@@ -4010,8 +4010,8 @@ void genericZpopCommand(client *c,
 
             /* Pop the first or last element from the ordered index. */
             OrderedIndexItem *item = (where == ZSET_MAX
-                ? orderedIndexPopLast(zs->zidx)
-                : orderedIndexPopFirst(zs->zidx));
+                                          ? orderedIndexPopLast(zs->zidx)
+                                          : orderedIndexPopFirst(zs->zidx));
 
             /* There must be an element in the sorted set. */
             serverAssertWithInfo(c, zobj, item != NULL);

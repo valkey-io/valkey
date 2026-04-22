@@ -44,7 +44,7 @@ static const double NEG_INF = (double)-INFINITY;
 /* ========== Parameterized test fixture ========== */
 
 class OrderedIndexTest : public ::testing::TestWithParam<OrderedIndexTestApi *> {
-protected:
+  protected:
     OrderedIndexTestApi &api = *GetParam();
 };
 
@@ -1457,8 +1457,7 @@ static double test_random_score(std::mt19937 &rng) {
     return dist(rng);
 }
 
-static std::vector<RandomIndexEntry> test_build_random_index(OrderedIndexTestApi &api, OrderedIndex *idx,
-                                                              std::mt19937 &rng, int count) {
+static std::vector<RandomIndexEntry> test_build_random_index(OrderedIndexTestApi &api, OrderedIndex *idx, std::mt19937 &rng, int count) {
     std::vector<RandomIndexEntry> entries;
     for (int i = 0; i < count; i++) {
         double score = test_random_score(rng);
@@ -1732,7 +1731,7 @@ TEST_P(OrderedIndexTest, RandomizedDeleteRangeByRank) {
 
         unsigned long deleted = api.deleteRangeByRank(idx, start, end, NULL, NULL);
         ASSERT_EQ(deleted, expectedDeleted);
-        ASSERT_EQ(api.length(idx), (unsigned long)(n) - expectedDeleted);
+        ASSERT_EQ(api.length(idx), (unsigned long)(n)-expectedDeleted);
         VERIFY_INTEGRITY(api, idx);
 
         OrderedIndexIterator iter;
@@ -1919,7 +1918,7 @@ static void testOnDeleteCallback(OrderedIndexItem *item, void *ctx) {
 }
 
 class OnDeleteCallbackTest : public ::testing::Test {
-protected:
+  protected:
     SkiplistOrderedIndex api;
 
     void insertN(OrderedIndex *idx, int n) {
@@ -2274,7 +2273,7 @@ static void hashtableConsistencyOnDelete(OrderedIndexItem *item, void *ctx) {
 }
 
 class RangeDeleteHashtableConsistencyTest : public ::testing::Test {
-protected:
+  protected:
     SkiplistOrderedIndex api;
 
     void insertN(OrderedIndex *idx, std::set<std::string> &ht, int n) {

@@ -21,7 +21,7 @@ extern "C" {
 /* ---- Abstract interface ---- */
 
 class OrderedIndexTestApi {
-public:
+  public:
     virtual ~OrderedIndexTestApi() = default;
 
     /* Lifecycle */
@@ -35,12 +35,9 @@ public:
     virtual OrderedIndexItem *popFirst(OrderedIndex *idx) = 0;
     virtual OrderedIndexItem *popLast(OrderedIndex *idx) = 0;
     virtual void freeItem(OrderedIndexItem *item) = 0;
-    virtual unsigned long deleteRangeByScore(OrderedIndex *idx, double min, double max, int min_ex, int max_ex,
-                                             OrderedIndexOnDelete on_delete, void *ctx) = 0;
-    virtual unsigned long deleteRangeByRank(OrderedIndex *idx, unsigned long start, unsigned long end,
-                                            OrderedIndexOnDelete on_delete, void *ctx) = 0;
-    virtual unsigned long deleteRangeByLex(OrderedIndex *idx, const_sds min, const_sds max, int min_ex, int max_ex,
-                                           OrderedIndexOnDelete on_delete, void *ctx) = 0;
+    virtual unsigned long deleteRangeByScore(OrderedIndex *idx, double min, double max, int min_ex, int max_ex, OrderedIndexOnDelete on_delete, void *ctx) = 0;
+    virtual unsigned long deleteRangeByRank(OrderedIndex *idx, unsigned long start, unsigned long end, OrderedIndexOnDelete on_delete, void *ctx) = 0;
+    virtual unsigned long deleteRangeByLex(OrderedIndex *idx, const_sds min, const_sds max, int min_ex, int max_ex, OrderedIndexOnDelete on_delete, void *ctx) = 0;
 
     /* Query */
     virtual unsigned long length(OrderedIndex *idx) = 0;
@@ -65,10 +62,8 @@ public:
     virtual bool next(OrderedIndexIterator *iter, OrderedIndexItem **pos) = 0;
     virtual bool prev(OrderedIndexIterator *iter, OrderedIndexItem **pos) = 0;
     virtual void seekToRank(OrderedIndexIterator *iter, unsigned long rank) = 0;
-    virtual void seekToScoreRange(OrderedIndexIterator *iter, double min, double max, int min_ex, int max_ex,
-                                  long offset) = 0;
-    virtual void seekToLexRange(OrderedIndexIterator *iter, const_sds min, const_sds max, int min_ex, int max_ex,
-                                long offset) = 0;
+    virtual void seekToScoreRange(OrderedIndexIterator *iter, double min, double max, int min_ex, int max_ex, long offset) = 0;
+    virtual void seekToLexRange(OrderedIndexIterator *iter, const_sds min, const_sds max, int min_ex, int max_ex, long offset) = 0;
 
     /* Convenience (non-virtual) */
     OrderedIndexItem *insertSds(OrderedIndex *idx, double score, const_sds ele) {
@@ -94,34 +89,45 @@ public:
 /* ---- Skiplist implementation ---- */
 
 class SkiplistOrderedIndex : public OrderedIndexTestApi {
-public:
-    OrderedIndex *create() override { return skiplistCreate(); }
-    void free(OrderedIndex *idx) override { skiplistFree(idx); }
+  public:
+    OrderedIndex *create() override {
+        return skiplistCreate();
+    }
+    void free(OrderedIndex *idx) override {
+        skiplistFree(idx);
+    }
 
     OrderedIndexItem *insert(OrderedIndex *idx, double score, const char *ele, size_t len) override {
         return skiplistInsert(idx, score, ele, len);
     }
-    void deleteItem(OrderedIndex *idx, OrderedIndexItem *pos) override { skiplistDelete(idx, pos); }
+    void deleteItem(OrderedIndex *idx, OrderedIndexItem *pos) override {
+        skiplistDelete(idx, pos);
+    }
     OrderedIndexItem *updateScore(OrderedIndex *idx, OrderedIndexItem *pos, double newscore) override {
         return skiplistUpdateScore(idx, pos, newscore);
     }
-    OrderedIndexItem *popFirst(OrderedIndex *idx) override { return skiplistPopFirst(idx); }
-    OrderedIndexItem *popLast(OrderedIndex *idx) override { return skiplistPopLast(idx); }
-    void freeItem(OrderedIndexItem *item) override { skiplistFreeItem(item); }
-    unsigned long deleteRangeByScore(OrderedIndex *idx, double min, double max, int min_ex, int max_ex,
-                                     OrderedIndexOnDelete on_delete, void *ctx) override {
+    OrderedIndexItem *popFirst(OrderedIndex *idx) override {
+        return skiplistPopFirst(idx);
+    }
+    OrderedIndexItem *popLast(OrderedIndex *idx) override {
+        return skiplistPopLast(idx);
+    }
+    void freeItem(OrderedIndexItem *item) override {
+        skiplistFreeItem(item);
+    }
+    unsigned long deleteRangeByScore(OrderedIndex *idx, double min, double max, int min_ex, int max_ex, OrderedIndexOnDelete on_delete, void *ctx) override {
         return skiplistDeleteRangeByScore(idx, min, max, min_ex, max_ex, on_delete, ctx);
     }
-    unsigned long deleteRangeByRank(OrderedIndex *idx, unsigned long start, unsigned long end,
-                                    OrderedIndexOnDelete on_delete, void *ctx) override {
+    unsigned long deleteRangeByRank(OrderedIndex *idx, unsigned long start, unsigned long end, OrderedIndexOnDelete on_delete, void *ctx) override {
         return skiplistDeleteRangeByRank(idx, start, end, on_delete, ctx);
     }
-    unsigned long deleteRangeByLex(OrderedIndex *idx, const_sds min, const_sds max, int min_ex, int max_ex,
-                                   OrderedIndexOnDelete on_delete, void *ctx) override {
+    unsigned long deleteRangeByLex(OrderedIndex *idx, const_sds min, const_sds max, int min_ex, int max_ex, OrderedIndexOnDelete on_delete, void *ctx) override {
         return skiplistDeleteRangeByLex(idx, min, max, min_ex, max_ex, on_delete, ctx);
     }
 
-    unsigned long length(OrderedIndex *idx) override { return skiplistLength(idx); }
+    unsigned long length(OrderedIndex *idx) override {
+        return skiplistLength(idx);
+    }
     OrderedIndexItem *getByRank(OrderedIndex *idx, unsigned long rank) override {
         return skiplistGetByRank(idx, rank);
     }
@@ -131,7 +137,9 @@ public:
     void getElementRaw(const OrderedIndexItem *pos, const char **ptr, size_t *len) override {
         skiplistGetElementRaw(pos, ptr, len);
     }
-    double getScore(const OrderedIndexItem *pos) override { return skiplistGetScore(pos); }
+    double getScore(const OrderedIndexItem *pos) override {
+        return skiplistGetScore(pos);
+    }
 
     size_t estimateMemory(OrderedIndex *idx, size_t sample_size) override {
         return skiplistEstimateMemory(idx, sample_size);
@@ -151,18 +159,22 @@ public:
     void initIterator(OrderedIndexIterator *iter, OrderedIndex *idx) override {
         skiplistInitIterator(iter, idx);
     }
-    void resetIterator(OrderedIndexIterator *iter) override { skiplistResetIterator(iter); }
-    bool next(OrderedIndexIterator *iter, OrderedIndexItem **pos) override { return skiplistNext(iter, pos); }
-    bool prev(OrderedIndexIterator *iter, OrderedIndexItem **pos) override { return skiplistPrev(iter, pos); }
+    void resetIterator(OrderedIndexIterator *iter) override {
+        skiplistResetIterator(iter);
+    }
+    bool next(OrderedIndexIterator *iter, OrderedIndexItem **pos) override {
+        return skiplistNext(iter, pos);
+    }
+    bool prev(OrderedIndexIterator *iter, OrderedIndexItem **pos) override {
+        return skiplistPrev(iter, pos);
+    }
     void seekToRank(OrderedIndexIterator *iter, unsigned long rank) override {
         skiplistSeekToRank(iter, rank);
     }
-    void seekToScoreRange(OrderedIndexIterator *iter, double min, double max, int min_ex, int max_ex,
-                          long offset) override {
+    void seekToScoreRange(OrderedIndexIterator *iter, double min, double max, int min_ex, int max_ex, long offset) override {
         skiplistSeekToScoreRange(iter, min, max, min_ex, max_ex, offset);
     }
-    void seekToLexRange(OrderedIndexIterator *iter, const_sds min, const_sds max, int min_ex, int max_ex,
-                        long offset) override {
+    void seekToLexRange(OrderedIndexIterator *iter, const_sds min, const_sds max, int min_ex, int max_ex, long offset) override {
         skiplistSeekToLexRange(iter, min, max, min_ex, max_ex, offset);
     }
 };

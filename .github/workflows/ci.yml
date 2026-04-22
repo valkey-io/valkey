@@ -44,6 +44,8 @@ jobs:
           ./runtest --verbose --tags -slow --dump-logs
       - name: module api test
         run: CFLAGS='-Werror' ./runtest-moduleapi --verbose --dump-logs
+      - name: cluster test with raft protocol
+        run: ./runtest --verbose --dump-logs --cluster-v2 --single tests/unit/cluster --single tests/unit/moduleapi/cluster.tcl
       - name: validate commands.def up to date
         run: |
           touch src/commands/ping.json

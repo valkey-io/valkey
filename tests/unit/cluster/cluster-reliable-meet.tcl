@@ -1,4 +1,4 @@
-tags {tls:skip external:skip cluster singledb} {
+tags {tls:skip external:skip cluster singledb cluster-v2:skip} {
     set CLUSTER_PACKET_TYPE_PING 0
     set CLUSTER_PACKET_TYPE_PONG 1
     set CLUSTER_PACKET_TYPE_MEET 2

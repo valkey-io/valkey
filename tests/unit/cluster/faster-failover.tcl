@@ -31,7 +31,7 @@ proc my_slot_allocation {primaries replicas} {
 # that there will not have failover timeout.
 #
 # Needs to run in the body of
-# start_cluster 5 7 {tags {external:skip cluster} overrides {cluster-ping-interval 1000 cluster-node-timeout 5000}} {
+# start_cluster 5 7 {tags {external:skip cluster cluster-v2:skip} overrides {cluster-ping-interval 1000 cluster-node-timeout 5000}} {
 proc test_best_ranked_replica {} {
     test "The best replica can initiate an election immediately in an automatic failover" {
         # We calculate their rankings so that we can make rank judgments later.
@@ -144,7 +144,7 @@ proc test_best_ranked_replica {} {
 
 # This change and test is quite important, so we want to run it a few more times.
 for {set i 0} {$i < 5} {incr i} {
-    start_cluster 5 7 {tags {external:skip cluster tls:skip} overrides {cluster-ping-interval 1000 cluster-node-timeout 5000}} {
+    start_cluster 5 7 {tags {external:skip cluster cluster-v2:skip tls:skip} overrides {cluster-ping-interval 1000 cluster-node-timeout 5000}} {
         test_best_ranked_replica
     } my_slot_allocation cluster_allocate_replicas ;# start_cluster
 }

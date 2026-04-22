@@ -1,4 +1,4 @@
-tags {external:skip cluster singledb} {
+tags {external:skip cluster cluster-v2:skip singledb} {
     # Start a cluster with a divergent shard ID configuration
     test "divergent cluster shardid conflict" {
         for {set i 1} {$i <= 4} {incr i} {

@@ -284,15 +284,84 @@ On apply, the FAIL flag is set on the node and slot coverage is
 rechecked, transitioning `cluster_state` to `fail` if a node with
 slots is down.
 
-When a failed node comes back and sends AE_ACK, the leader clears
-the FAIL flag directly (no log entry needed, since the leader is the
-authority on liveness).
+When a failed node comes back and sends AE_ACK, the leader proposes
+a NODE_RECOVER entry to clear the FAIL flag on all nodes.
 
 ### Election timeout
 
 The election timeout is based on `cluster-node-timeout`:
 `[T, 2T)` where T = max(cluster-node-timeout, 1000ms). The heartbeat
 interval is `election_timeout / 10`, minimum 100ms.
+
+### Backdating on leader election
+
+When a node wins an election, it backdates the old leader's
+`last_ack_time` to the time of the last heartbeat received. This
+allows the new leader to detect the old leader as failed almost
+immediately, without waiting an additional `node_timeout`.
+
+### Multiple simultaneous failures
+
+When the raft leader and another primary fail simultaneously, the
+failure detection timelines differ between gossip and raft:
+
+```
+Gossip protocol — parallel failure detection:
+
+  Time 0     Leader (L) and Primary (P) both fail
+             |
+  T          All nodes mark L and P as PFAIL independently
+             |
+  T+few sec  Gossip propagates PFAIL → FAIL for both L and P
+             Replicas of L and P start failover in parallel
+             |
+  ~T+3s      Both failovers complete
+
+  Total: ~node_timeout + gossip propagation
+```
+
+```
+Raft protocol — sequential through new leader:
+
+  Time 0     Leader (L) and Primary (P) both fail
+             |
+  T..2T      Election timeout fires on fastest follower
+             New leader (N) elected
+             |
+  ~T         N backdates L's last_ack_time → proposes NODE_FAIL(L)
+             immediately. Replica of L starts failover.
+             |
+  ~2T        N's last_ack_time for P was set to election time.
+             After node_timeout from election, N detects P as failed.
+             Proposes NODE_FAIL(P). Replica of P starts failover.
+
+  Total: ~2 * node_timeout for the second failure
+```
+
+The gossip protocol detects all failures in parallel after one
+`node_timeout`. Raft detects the old leader quickly (backdating) but
+other failures take an additional `node_timeout` from the election,
+because the new leader has no prior heartbeat history for those nodes.
+
+Note: in gossip, only one failover election can be in progress at a
+time (per epoch). When multiple primaries fail simultaneously, their
+replicas are staggered using a "failed primary rank" to avoid
+collisions. This adds small delays but is still much faster than
+raft's sequential detection, since the ranking delays are on the
+order of seconds rather than a full `node_timeout`.
+
+### Potential future improvements to simultaneous failure detection
+
+* Heartbeat timestamps in VOTE: To close this gap, voters could include their
+  last known `last_ack_time` for each peer in the VOTE response. The new leader
+  would use the oldest `last_ack_time` across all voters for each peer, giving
+  it a head start on failure detection for all unresponsive nodes — not just the
+  old leader. However, this will bloat the heartbeat messages.
+
+* Defer primary failure detection to each shard, using the replication protocol.
+  Primaries send PING commands over the replication stream as heartbeats to the
+  replicas. If a replica hasn't received one for enough time, it can propose its
+  primary as failing to the raft leader.
 
 ## Blocking Async Commands
 

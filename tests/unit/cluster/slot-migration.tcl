@@ -85,7 +85,7 @@ proc migrate_slot {from to slot} {
     assert_equal {OK} [R $to CLUSTER SETSLOT $slot IMPORTING $from_id]
 }
 
-start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica-migration no cluster-node-timeout 1000} } {
+start_cluster 3 3 {tags {external:skip cluster cluster-v2:skip} overrides {cluster-allow-replica-migration no cluster-node-timeout 1000} } {
 
     set node_timeout [lindex [R 0 CONFIG GET cluster-node-timeout] 1]
     set R0_id [R 0 CLUSTER MYID]
@@ -254,7 +254,7 @@ proc create_empty_shard {p r} {
 # Temporarily disable empty shard migration tests while we
 # work to reduce their flakiness. See https://github.com/valkey-io/valkey/issues/858.
 if {0} {
-start_cluster 3 5 {tags {external:skip cluster} overrides {cluster-allow-replica-migration no cluster-node-timeout 1000} } {
+start_cluster 3 5 {tags {external:skip cluster cluster-v2:skip} overrides {cluster-allow-replica-migration no cluster-node-timeout 1000} } {
 
     set node_timeout [lindex [R 0 CONFIG GET cluster-node-timeout] 1]
     set R0_id [R 0 CLUSTER MYID]
@@ -333,7 +333,7 @@ start_cluster 3 5 {tags {external:skip cluster} overrides {cluster-allow-replica
 }
 
 
-start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica-migration no cluster-node-timeout 1000} } {
+start_cluster 3 3 {tags {external:skip cluster cluster-v2:skip} overrides {cluster-allow-replica-migration no cluster-node-timeout 1000} } {
 
     set node_timeout [lindex [R 0 CONFIG GET cluster-node-timeout] 1]
     set R0_id [R 0 CLUSTER MYID]
@@ -380,7 +380,7 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
 
 }
 
-start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica-migration no cluster-node-timeout 1000} } {
+start_cluster 3 3 {tags {external:skip cluster cluster-v2:skip} overrides {cluster-allow-replica-migration no cluster-node-timeout 1000} } {
 
     set node_timeout [lindex [R 0 CONFIG GET cluster-node-timeout] 1]
     set R0_id [R 0 CLUSTER MYID]
@@ -400,7 +400,7 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
     }
 }
 
-start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica-migration no cluster-node-timeout 1000} } {
+start_cluster 3 3 {tags {external:skip cluster cluster-v2:skip} overrides {cluster-allow-replica-migration no cluster-node-timeout 1000} } {
     set R1_id [R 1 CLUSTER MYID]
 
     test "CLUSTER SETSLOT with invalid timeouts" {
@@ -421,7 +421,7 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
     }
 }
 
-start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica-migration no cluster-node-timeout 1000} } {
+start_cluster 3 3 {tags {external:skip cluster cluster-v2:skip} overrides {cluster-allow-replica-migration no cluster-node-timeout 1000} } {
     set R1_id [R 1 CLUSTER MYID]
 
     test "CLUSTER SETSLOT with an explicit timeout" {
@@ -465,7 +465,7 @@ start_cluster 2 0 {tags {tls:skip external:skip cluster regression} overrides {c
     }
 }
 
-start_cluster 3 6 {tags {external:skip cluster} overrides {cluster-node-timeout 1000} } {
+start_cluster 3 6 {tags {external:skip cluster cluster-v2:skip} overrides {cluster-node-timeout 1000} } {
     test "Slot migration is ok when the replicas are down" {
         # Killing all replicas in primary 0.
         assert_equal 2 [s 0 connected_slaves]
@@ -497,7 +497,7 @@ start_cluster 3 6 {tags {external:skip cluster} overrides {cluster-node-timeout 
     }
 }
 
-start_cluster 3 3 {tags {external:skip cluster} } {
+start_cluster 3 3 {tags {external:skip cluster cluster-v2:skip} } {
     test "Multi/Exec Validation During Slot Migration with Multiple Databases" {
         set primary_id_src 0
         set primary_id_src_nodeid [R $primary_id_src CLUSTER MYID]
@@ -594,7 +594,7 @@ start_cluster 3 3 {tags {external:skip cluster} } {
 }
 
 
-start_cluster 3 3 {tags {external:skip cluster} } {
+start_cluster 3 3 {tags {external:skip cluster cluster-v2:skip} } {
     test "MOVE should not be allowed while migrating slots with multi databases" {
         set primary_id_src 0
         set primary_id_src_nodeid [R $primary_id_src CLUSTER MYID]    
@@ -621,7 +621,7 @@ start_cluster 3 3 {tags {external:skip cluster} } {
 }
 
 
-start_cluster 3 3 {tags {external:skip cluster} } {
+start_cluster 3 3 {tags {external:skip cluster cluster-v2:skip} } {
     test "Cross-DB COPY command should not be allow during slot migration" {
         set primary_id_src 0
         set primary_id_src_nodeid [R $primary_id_src CLUSTER MYID]    

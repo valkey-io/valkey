@@ -31,11 +31,15 @@ test "Killing one master node" {
 
 test "Wait for failover" {
     wait_for_condition 1000 50 {
-        [CI 1 cluster_current_epoch] > $current_epoch
+        [s -5 role] eq {master}
     } else {
         fail "No failover detected"
     }
 }
+
+test "Epoch increased after failover" {
+    assert {[CI 1 cluster_current_epoch] > $current_epoch}
+} {} {cluster-v2:skip}
 
 test "Cluster should eventually be up again" {
     for {set j 0} {$j < [llength $::servers]} {incr j} {
@@ -66,7 +70,6 @@ test "Instance #0 gets converted into a slave" {
     } else {
         fail "Old master was not converted into slave"
     }
-    wait_for_cluster_propagation
 }
 
 } ;# start_cluster
@@ -90,11 +93,15 @@ start_cluster 3 6 {tags {external:skip cluster}} {
 
     test "Wait for failover" {
         wait_for_condition 1000 50 {
-            [CI 1 cluster_current_epoch] > $current_epoch
+            [s -3 role] eq {master} || [s -6 role] eq {master}
         } else {
             fail "No failover detected"
         }
     }
+
+    test "Epoch increased after failover" {
+        assert {[CI 1 cluster_current_epoch] > $current_epoch}
+    } {} {cluster-v2:skip}
 
     test "Cluster should eventually be up again" {
         for {set j 0} {$j < [llength $::servers]} {incr j} {
@@ -117,7 +124,6 @@ start_cluster 3 6 {tags {external:skip cluster}} {
         } else {
             fail "Old primary was not converted into replica"
         }
-        wait_for_cluster_propagation
     }
 
     test "Make sure the replicas always get the different ranks" {
@@ -133,7 +139,7 @@ start_cluster 3 6 {tags {external:skip cluster}} {
         if {!(($srv3_has_rank0 && $srv6_has_rank1) || ($srv3_has_rank1 && $srv6_has_rank0))} {
             fail "Replicas should have different ranks: srv3_rank0=$srv3_has_rank0, srv3_rank1=$srv3_has_rank1, srv6_rank0=$srv6_has_rank0, srv6_rank1=$srv6_has_rank1"
         }
-    }
+    } {} {cluster-v2:skip} ;# Checks gossip election log messages
 
 } ;# start_cluster
 

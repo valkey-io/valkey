@@ -1,6 +1,6 @@
 # Manual takeover test
 
-start_cluster 5 5 {tags {external:skip cluster}} {
+start_cluster 5 5 {tags {external:skip cluster cluster-v2:skip}} {
 
 test "Cluster is up" {
     wait_for_cluster_state ok

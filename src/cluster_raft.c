@@ -153,9 +153,6 @@ typedef struct {
     uint64_t log_count;
     uint64_t log_alloc;
 
-    /* Leader state: per-peer tracking, keyed by node name */
-    dict *peer_state; /* node name -> raftPeerState */
-
     /* Pending proposals waiting for commit. */
     list *pending_proposals; /* list of raftPendingProposal */
 
@@ -193,6 +190,8 @@ typedef struct {
     /* Message stats for CLUSTER INFO */
     long long stats_module_messages_sent;
     long long stats_module_messages_received;
+    long long stats_publish_messages_sent;
+    long long stats_publish_messages_received;
 } clusterRaftState;
 
 #define RAFT_STATE() ((clusterRaftState *)server.cluster->protocol_data)
@@ -884,6 +883,7 @@ static void raftLogApply(raftLogEntry *e) {
                 sdsclear(node->human_nodename);
                 sdsclear(node->announce_client_ipv4);
                 sdsclear(node->announce_client_ipv6);
+                sdsclear(node->availability_zone);
                 clusterNodeParseAddressString(node, argv[1]);
                 serverLog(LL_NOTICE, "TRACE parseAddr %.40s ip=%s", node->name, node->ip);
                 /* Apply self-set flags. TODO: split on comma and compare
@@ -1261,8 +1261,15 @@ static int clusterRaftProcessRequestVoteResponse(clusterLink *link, int argc, sd
                 if (peer == myself) continue;
                 RAFT_DATA(peer)->peer.next_index = last + 1;
                 RAFT_DATA(peer)->peer.match_index = 0;
-                RAFT_DATA(peer)->peer.last_ack_time = mstime();
                 RAFT_DATA(peer)->peer.pending_fail_change = 0;
+                /* For the old leader, backdate last_ack_time to when we last
+                 * heard from it, so failure detection kicks in faster. This
+                 * matters if the old leader is also a primary. */
+                if (memcmp(peer->name, rs->leader, CLUSTER_NAMELEN) == 0) {
+                    RAFT_DATA(peer)->peer.last_ack_time = rs->last_heartbeat;
+                } else {
+                    RAFT_DATA(peer)->peer.last_ack_time = mstime();
+                }
             }
             dictReleaseIterator(di);
             /* Immediate heartbeat to assert leadership. */
@@ -1310,7 +1317,6 @@ static void clusterRaftInit(void) {
     rs->role = RAFT_ROLE_FOLLOWER;
     clusterRaftRandomizeElectionTimeout(rs);
     rs->last_heartbeat = mstime();
-    rs->peer_state = dictCreate(&clusterNodesDictType);
     rs->pending_proposals = listCreate();
     rs->pending_meets = listCreate();
     rs->my_last_committed_info = sdsempty();
@@ -1716,6 +1722,7 @@ static int clusterRaftProcessMessage(struct clusterLink *link) {
          * newline. We read directly from the receive buffer to handle
          * binary-safe data containing spaces, newlines, or nulls. */
         int sharded = atoi(argv[1]);
+        RAFT_STATE()->stats_publish_messages_received++;
         size_t chan_len = strtoull(argv[2], NULL, 10);
         size_t msg_len = strtoull(argv[3], NULL, 10);
         /* Payload starts after the first \n in the raw buffer. */
@@ -1886,13 +1893,16 @@ static void clusterRaftPropagatePublish(robj *channel, robj *message, int sharde
 
     dictIterator *di = dictGetSafeIterator(server.cluster->nodes);
     dictEntry *de;
+    int sent = 0;
     while ((de = dictNext(di)) != NULL) {
         clusterNode *node = dictGetVal(de);
         if (node == myself || !node->link) continue;
         if (sharded && memcmp(node->shard_id, myself->shard_id, CLUSTER_NAMELEN) != 0) continue;
         clusterRaftSendMsg(node->link, sdsdup(msg));
+        sent++;
     }
     dictReleaseIterator(di);
+    RAFT_STATE()->stats_publish_messages_sent += sent;
     sdsfree(msg);
 }
 
@@ -1981,11 +1991,14 @@ static sds clusterRaftAppendInfoFields(sds info) {
                         "cluster_raft_log_entries:%llu\r\n"
                         "cluster_raft_leader:%.40s\r\n"
                         "cluster_stats_messages_module_sent:%lld\r\n"
-                        "cluster_stats_messages_module_received:%lld\r\n",
+                        "cluster_stats_messages_module_received:%lld\r\n"
+                        "cluster_stats_messages_publish_sent:%lld\r\n"
+                        "cluster_stats_messages_publish_received:%lld\r\n",
                         role_str, (unsigned long long)rs->current_term,
                         (unsigned long long)rs->commit_index, (unsigned long long)rs->last_applied,
                         (unsigned long long)rs->log_count, rs->leader,
-                        rs->stats_module_messages_sent, rs->stats_module_messages_received);
+                        rs->stats_module_messages_sent, rs->stats_module_messages_received,
+                        rs->stats_publish_messages_sent, rs->stats_publish_messages_received);
     return info;
 }
 

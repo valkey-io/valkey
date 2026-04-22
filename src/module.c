@@ -12718,6 +12718,8 @@ int VM_SubscribeToServerEvent(ValkeyModuleCtx *ctx, ValkeyModuleEvent event, Val
         return VALKEYMODULE_OK;
     }
 
+    if (callback == NULL) return VALKEYMODULE_OK;
+
     /* No event found, we need to add a new one. */
     el = zmalloc(sizeof(*el));
     el->module = ctx->module;
@@ -12874,17 +12876,24 @@ void moduleFireServerEvent(uint64_t eid, int subid, void *data) {
 /* Remove all the listeners for this module: this is used before unloading
  * a module. */
 void moduleUnsubscribeAllServerEvents(ValkeyModule *module) {
-    ValkeyModuleEventListener *el;
-    listIter li;
-    listNode *ln;
-    listRewind(ValkeyModule_EventListeners, &li);
+    listNode *ln = listFirst(ValkeyModule_EventListeners);
 
-    while ((ln = listNext(&li))) {
-        el = ln->value;
+    while (ln) {
+        listNode *next = listNextNode(ln);
+        ValkeyModuleEventListener *el = ln->value;
         if (el->module == module) {
+            if (el->event.id == VALKEYMODULE_EVENT_COMMAND_RESULT_SUCCESS)
+                commandResultSuccessListeners--;
+            else if (el->event.id == VALKEYMODULE_EVENT_COMMAND_RESULT_FAILURE)
+                commandResultFailureListeners--;
+            else if (el->event.id == VALKEYMODULE_EVENT_COMMAND_RESULT_REJECTED)
+                commandResultRejectedListeners--;
+            else if (el->event.id == VALKEYMODULE_EVENT_COMMAND_RESULT_ACL_REJECTED)
+                commandResultACLRejectedListeners--;
             listDelNode(ValkeyModule_EventListeners, ln);
             zfree(el);
         }
+        ln = next;
     }
 }
 

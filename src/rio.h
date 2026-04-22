@@ -33,6 +33,7 @@
 #define VALKEY_RIO_H
 
 #include <stdio.h>
+#include <sys/types.h>
 #include <stdint.h>
 #include "sds.h"
 #include "connection.h"
@@ -41,6 +42,9 @@
 #define RIO_FLAG_WRITE_ERROR (1 << 1)
 #define RIO_FLAG_CLOSE_ASAP (1 << 2) /* Rio was closed asynchronously during the current rio operation. */
 #define RIO_FLAG_SKIP_RDB_CHECKSUM (1 << 3)
+#define RIO_FLAG_STREAMING_COMPRESSION (1 << 4)    /* Streaming compression active — skip per-string LZF */
+#define RIO_FLAG_STREAMING_DECOMPRESSION (1 << 5)  /* rio is a stream decompression adapter */
+#define RIO_FLAG_STREAMING_CODEC_CHECKSUM (1 << 6) /* Streaming frame integrity checks are authoritative */
 
 #define RIO_TYPE_FILE (1 << 0)
 #define RIO_TYPE_BUFFER (1 << 1)
@@ -55,6 +59,11 @@ struct _rio {
     size_t (*write)(struct _rio *, const void *buf, size_t len);
     off_t (*tell)(struct _rio *);
     int (*flush)(struct _rio *);
+    /* Partial-read backend: returns >0 bytes read, 0 on EOF, -1 on error.
+     * Unlike read(), partial results are allowed. Used by rioReadPartial()
+     * for streaming decompression and other adapters that need incremental
+     * input. NULL when the backend does not support reading. */
+    ssize_t (*read_some)(struct _rio *, void *buf, size_t len);
     /* The update_cksum method if not NULL is used to compute the checksum of
      * all the data that was read or written so far. The method should be
      * designed so that can be called with the current checksum, and the buf
@@ -70,6 +79,9 @@ struct _rio {
 
     /* maximum single read or write chunk size */
     size_t max_processing_chunk;
+
+    /* Backend type (RIO_TYPE_*). Decorators should preserve the wrapped type. */
+    uint8_t type;
 
     /* Backend-specific vars. */
     union {
@@ -200,6 +212,7 @@ struct serverObject;
 int rioWriteBulkObject(rio *r, struct serverObject *obj);
 
 void rioGenericUpdateChecksum(rio *r, const void *buf, size_t len);
+ssize_t rioReadPartial(rio *r, void *buf, size_t len);
 void rioSetAutoSync(rio *r, off_t bytes);
 void rioSetReclaimCache(rio *r, int enabled);
 uint8_t rioCheckType(rio *r);

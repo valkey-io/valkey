@@ -31,6 +31,8 @@
 #define __RDB_H
 
 #include <stdio.h>
+#include <string.h>
+#include "compression_rio.h"
 #include "rio.h"
 
 /* TBD: include only necessary headers. */
@@ -70,6 +72,17 @@ static inline bool rdbIsForeignVersion(int rdbver) {
 
 static inline bool rdbUseValkeyMagic(int rdbver) {
     return rdbver > RDB_FOREIGN_VERSION_MAX;
+}
+
+/* Check whether a buffer starts with a recognized RDB magic prefix.
+ * "VALKEY" is the exact 6-byte magic for Valkey-format RDB (e.g. "VALKEY080").
+ * "REDIS" + digit matches the legacy format (e.g. "REDIS0080") for all
+ * versions 0000-9999, avoiding a forward-compatibility cliff at version 1000.
+ * Matches the same checks used in rdbLoadRio() (rdb.c). */
+static inline bool rdbIsValidMagic(const uint8_t *header, size_t len) {
+    if (len < 6) return false;
+    if (memcmp(header, "VALKEY", 6) == 0) return true;
+    return memcmp(header, "REDIS", 5) == 0 && header[5] >= '0' && header[5] <= '9';
 }
 
 /* Defines related to the dump file format. To store 32 bits lengths for short
@@ -186,6 +199,15 @@ enum RdbType {
 #define RDB_LOAD_ERR_OTHER 3             /* Any other errors */
 #define RDB_LOAD_ERR_ALL_ITEMS_EXPIRED 4 /* All fields expired */
 
+/* Wrapper state for preparing a raw input rio as a logical RDB byte stream. */
+typedef struct {
+    rio *raw_rio;
+    rio *rdb_rio;
+    decompress_rio_t decompressor;
+    stream_reader_info_t stream_info;
+    bool initialized;
+} rdbInputStream;
+
 bool rdbIsVersionAccepted(int rdbver, bool is_valkey_magic, bool is_redis_magic);
 ssize_t rdbWriteRaw(rio *rdb, void *p, size_t len);
 int rdbSaveType(rio *rdb, unsigned char type);
@@ -221,6 +243,10 @@ int rdbSaveBinaryFloatValue(rio *rdb, float val);
 int rdbLoadBinaryFloatValue(rio *rdb, float *val);
 int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi);
 int rdbLoadRioWithLoadingCtxScopedRdb(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadingCtx *rdb_loading_ctx);
+void rdbInputStreamInit(rdbInputStream *input, rio *raw_rio);
+decompress_rio_init_result_t rdbInputStreamPrepare(rdbInputStream *input);
+void rdbInputStreamDestroy(rdbInputStream *input);
+bool rdbRioHasCorruptCompressedInput(const rio *rdb);
 int rdbFunctionLoad(rio *rdb, int ver, functionsLibCtx *lib_ctx, int rdbflags, sds *err);
 int rdbSaveRio(int req, int rdbver, rio *rdb, int *error, int rdbflags, rdbSaveInfo *rsi);
 ssize_t rdbSaveFunctions(rio *rdb);

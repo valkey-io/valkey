@@ -121,7 +121,11 @@ set(VALKEY_SERVER_SRCS
     ${CMAKE_SOURCE_DIR}/src/vset.c
     ${CMAKE_SOURCE_DIR}/src/fifo.c
     ${CMAKE_SOURCE_DIR}/src/mutexqueue.c
-    ${CMAKE_SOURCE_DIR}/src/queues.c)
+    ${CMAKE_SOURCE_DIR}/src/queues.c
+    ${CMAKE_SOURCE_DIR}/src/compression.c
+    ${CMAKE_SOURCE_DIR}/src/compression_lz4.c
+    ${CMAKE_SOURCE_DIR}/src/compression_stream.c
+    ${CMAKE_SOURCE_DIR}/src/compression_rio.c)
 
 
 # valkey-cli

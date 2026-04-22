@@ -94,6 +94,7 @@ HIREDIS_LIB := ../../deps/libvalkey/lib/libvalkey.a
 JEMALLOC_LIB := ../../deps/jemalloc/lib/libjemalloc.a
 HDR_HISTOGRAM_LIB := ../../deps/hdr_histogram/libhdrhistogram.a
 FPCONV_LIB := ../../deps/fpconv/libfpconv.a
+LZ4_LIB := ../../deps/lz4/liblz4.a
 TLS_LIBS := ../../deps/libvalkey/lib/libvalkey_tls.a -lssl -lcrypto
 GTEST_CFLAGS ?=
 GTEST_LIBS   ?=
@@ -105,6 +106,9 @@ endif
 ifeq ($(strip $(GTEST_LIBS)),)
     $(error googletest not found. Install gtest or set GTEST_CFLAGS/GTEST_LIBS explicitly)
 endif
+
+../.make-settings: ../Makefile
+	cd .. && $(MAKE) write-make-settings
 
 # On Darwin (macOS), the linker does not support -Wl,--wrap,
 # so we manually define __wrap_* and __real_* for each function in wrappers.h.
@@ -154,7 +158,8 @@ LD_LIBS := $(HIREDIS_LIB) \
 	$(JEMALLOC_LIB) \
 	$(GTEST_LIBS) \
 	$(HDR_HISTOGRAM_LIB) \
-	$(FPCONV_LIB)
+	$(FPCONV_LIB) \
+	$(LZ4_LIB)
 
 # Add libbacktrace support if enabled
 ifeq ($(USE_LIBBACKTRACE),yes)

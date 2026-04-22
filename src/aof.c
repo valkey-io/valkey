@@ -1009,6 +1009,23 @@ int startAppendOnly(void) {
  * as the new BASE file (RDB preamble mode), avoiding a redundant AOFRW.
  * Returns C_OK on success; on C_ERR caller should fallback to
  * restartAOFAfterSYNC(). */
+static int rdbFileUsesStreamingCompression(const char *filename) {
+    unsigned char header[4];
+    int fd = open(filename, O_RDONLY);
+    if (fd == -1) return -1;
+
+    ssize_t nread = read(fd, header, sizeof(header));
+    int read_errno = errno;
+    close(fd);
+
+    if (nread == -1) {
+        errno = read_errno;
+        return -1;
+    }
+    if (nread < (ssize_t)sizeof(header)) return 0;
+    return memcmp(header, "VKCS", sizeof(header)) == 0;
+}
+
 int restartAOFWithSyncRdb(void) {
     serverAssert(server.aof_state == AOF_OFF);
 
@@ -1019,6 +1036,19 @@ int restartAOFWithSyncRdb(void) {
     sds new_incr_filename = NULL;
     sds new_incr_filepath = NULL;
     aofManifest *temp_am = NULL;
+
+    int compressed_sync_rdb = rdbFileUsesStreamingCompression(server.rdb_filename);
+    if (compressed_sync_rdb == -1) {
+        serverLog(LL_WARNING, "Error inspecting the RDB file %s before AOF reuse: %s",
+                  server.rdb_filename, strerror(errno));
+        goto cleanup;
+    }
+    if (compressed_sync_rdb) {
+        serverLog(LL_NOTICE,
+                  "Sync RDB file %s uses streaming compression, falling back to BGREWRITEAOF instead of reusing it as an AOF base",
+                  server.rdb_filename);
+        return C_ERR;
+    }
 
     if (dirCreateIfMissing(server.aof_dirname) == -1) {
         serverLog(LL_WARNING, "Can't open or create append-only dir %s: %s", server.aof_dirname, strerror(errno));

@@ -1,3 +1,9 @@
+/*
+ * Copyright (c) Valkey Contributors
+ * All rights reserved.
+ * SPDX-License-Identifier: BSD-3-Clause
+ */
+
 /* cluster_raft.c — Raft-based cluster bus implementation.
  *
  * All cluster metadata changes (node membership, slot ownership, replication
@@ -1637,9 +1643,8 @@ static void clusterRaftBeforeSleep(void) {
     }
 }
 
-static void clusterRaftHandleServerShutdown(bool auto_failover) {
-    UNUSED(auto_failover);
-    /* TODO: step down if leader, persist state */
+static void clusterRaftHandleServerShutdown(void) {
+    /* TODO: persist state, transfer leadership */
 }
 
 /* --------------------------------------------------------------------------
@@ -1707,7 +1712,6 @@ static int clusterRaftProcessMessage(struct clusterLink *link) {
          * argv: REPL_OFFSETS <node-id> <offset> ...
          * Update node->repl_offset for CLUSTER SLOTS/SHARDS health.
          * If my primary is failed, compute failover rank from sibling offsets. */
-        //clusterRaftState *rs = RAFT_STATE();
 
         /* Update repl_offset for all mentioned nodes. */
         for (int i = 1; i + 1 < argc; i += 2) {

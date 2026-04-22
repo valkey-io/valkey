@@ -79,18 +79,18 @@ proc test_auto_failover {how shutdown_timeout} {
     }
 }
 
-start_cluster 3 4 {tags {external:skip cluster cluster-v2:skip}} {
+start_cluster 3 4 {tags {external:skip cluster}} {
     test_auto_failover "shutdown" 0
 }
 
-start_cluster 3 4 {tags {external:skip cluster cluster-v2:skip}} {
+start_cluster 3 4 {tags {external:skip cluster}} {
     test_auto_failover "sigterm" 0
 }
 
-start_cluster 3 4 {tags {external:skip cluster cluster-v2:skip}} {
+start_cluster 3 4 {tags {external:skip cluster}} {
     test_auto_failover "shutdown" 10
 }
 
-start_cluster 3 4 {tags {external:skip cluster cluster-v2:skip}} {
+start_cluster 3 4 {tags {external:skip cluster}} {
     test_auto_failover "sigterm" 10
 }

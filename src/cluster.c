@@ -163,8 +163,57 @@ void clusterBeforeSleep(void) {
     }
     clusterCurrentBus->beforeSleep();
 }
+static void clusterAutoFailoverOnShutdown(void) {
+    if (!nodeIsPrimary(myself)) return;
+
+    /* Find the best replica, that is, the replica with the largest offset. */
+    int legacy_replica = 0;
+    client *best_replica = NULL;
+    listIter replicas_iter;
+    listNode *replicas_list_node;
+    listRewind(server.replicas, &replicas_iter);
+    while ((replicas_list_node = listNext(&replicas_iter)) != NULL) {
+        client *replica = listNodeValue(replicas_list_node);
+        if (replica->repl_data->replica_version < 0x90000) {
+            legacy_replica = 1;
+            best_replica = NULL;
+            break;
+        }
+        if (replica->repl_data->repl_state == REPLICA_STATE_ONLINE &&
+            replica->repl_data->repl_ack_off == server.primary_repl_offset &&
+            replica->repl_data->replica_nodeid && sdslen(replica->repl_data->replica_nodeid) == CLUSTER_NAMELEN) {
+            best_replica = replica;
+        }
+    }
+
+    if (best_replica == NULL) {
+        if (legacy_replica) {
+            serverLog(LL_NOTICE, "Unable to perform auto failover on shutdown since there are legacy replicas.");
+        } else {
+            serverLog(LL_NOTICE, "Unable to find a replica to perform the auto failover on shutdown.");
+        }
+        return;
+    }
+
+    char buf[128];
+    size_t buflen = snprintf(buf, sizeof(buf),
+                             "*5\r\n$7\r\nCLUSTER\r\n"
+                             "$8\r\nFAILOVER\r\n"
+                             "$5\r\nFORCE\r\n"
+                             "$9\r\nREPLICAID\r\n"
+                             "$%d\r\n%.*s\r\n",
+                             CLUSTER_NAMELEN,
+                             CLUSTER_NAMELEN,
+                             best_replica->repl_data->replica_nodeid);
+    serverAssert(buflen <= 128);
+    prepareReplicasToWrite();
+    feedReplicationBuffer(buf, buflen);
+    serverLog(LL_NOTICE, "Perform auto failover to replica %s on shutdown.", best_replica->repl_data->replica_nodeid);
+}
+
 void clusterHandleServerShutdown(bool auto_failover) {
-    clusterCurrentBus->handleServerShutdown(auto_failover);
+    if (auto_failover) clusterAutoFailoverOnShutdown();
+    clusterCurrentBus->handleServerShutdown();
 }
 static void clusterNotifyMyselfUpdated(int old_flags);
 
@@ -1940,7 +1989,8 @@ void clusterCommand(client *c) {
             serverLog(LL_NOTICE, "Manual failover user request accepted (user request from '%s').", cl);
         }
         sdsfree(cl);
-        clusterCurrentBus->failover(force, takeover, c, clusterCommandFailoverCompletion);
+        clusterCurrentBus->failover(force, takeover, c,
+                                     c == server.primary ? NULL : clusterCommandFailoverCompletion);
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "replicate") &&
                (c->argc == 3 || c->argc == 4)) {
         /* CLUSTER REPLICATE (<NODE ID> | NO ONE) */

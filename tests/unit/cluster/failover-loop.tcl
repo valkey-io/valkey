@@ -3,6 +3,7 @@
 # iterations. The test checks that certain properties
 # are preserved across iterations.
 
+run_solo {cluster-failover-loop} {
 start_cluster 5 5 {tags {external:skip cluster}} {
 
 test "Cluster is up" {
@@ -111,3 +112,4 @@ test "Post condition: current_epoch >= my_epoch everywhere" {
 }
 
 } ;# start_cluster
+}

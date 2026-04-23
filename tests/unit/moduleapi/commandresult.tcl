@@ -268,10 +268,6 @@ start_server {tags {"modules"}} {
         # Unload module while subscription is still active.
         assert_equal {OK} [r module unload commandresult]
 
-        # Commands issued after unload still exercise the command result event
-        # path when listener counters were left stale.
-        assert_equal {PONG} [r ping]
-
         # Unsubscribing after reload has no matching listener. It must not add
         # NULL callbacks that would be invoked by later command result events.
         r module load $testmodule

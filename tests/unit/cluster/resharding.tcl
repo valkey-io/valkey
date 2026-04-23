@@ -11,6 +11,7 @@ proc process_is_running {pid} {
     expr {![catch {exec ps -p $pid}]}
 }
 
+run_solo {cluster-resharding} {
 start_cluster 5 5 {tags {external:skip cluster}} {
 
 test "Cluster is up" {
@@ -194,3 +195,4 @@ test "Dump sanitization was skipped for migrations" {
 }
 
 } ;# start_cluster
+} ;# run_solo

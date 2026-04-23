@@ -4,6 +4,7 @@
 # is acquired again, after being getting slots again, in a cluster where the
 # other masters have slaves.
 
+run_solo {cluster-replica-migration-2} {
 start_cluster 5 15 {tags {external:skip cluster}} {
 
 test "Cluster is up" {
@@ -65,3 +66,4 @@ test "Master #0 should re-acquire one or more replicas" {
 }
 
 } ;# start_cluster
+} ;# run_solo

@@ -112,4 +112,4 @@ test "Post condition: current_epoch >= my_epoch everywhere" {
 }
 
 } ;# start_cluster
-}
+} ;# run_solo

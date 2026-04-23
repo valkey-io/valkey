@@ -3,6 +3,7 @@
 # Check that if 'cluster-allow-replica-migration' is set to 'no', slaves do not
 # migrate when master becomes empty.
 
+run_solo {cluster-replica-migration-3} {
 start_cluster 5 15 {tags {external:skip cluster}} {
 
 test "Cluster is up" {
@@ -54,3 +55,4 @@ test "Each master should have at least two replicas attached" {
 }
 
 } ;# start_cluster
+} ;# run_solo

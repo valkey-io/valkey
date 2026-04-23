@@ -1361,3 +1361,30 @@ TEST_F(HashtableTest, safe_iterator_cleanup_on_exhaustion) {
     hashtableCleanupIterator(&iter);
     hashtableRelease(ht);
 }
+
+TEST_F(HashtableTest, safe_iterator_release_before_cleanup) {
+    hashtableType type = {};
+    hashtable *ht = hashtableCreate(&type);
+
+    /* Add entries until rehashing starts. */
+    long j = 0;
+    while (!hashtableIsRehashing(ht)) {
+        j++;
+        ASSERT_TRUE(hashtableAdd(ht, (void *)j));
+    }
+
+    hashtableIterator iter;
+    void *entry;
+    hashtableInitIterator(&iter, ht, HASHTABLE_ITER_SAFE);
+
+    /* Exhaust the iterator. */
+    while (hashtableNext(&iter, &entry)) {
+    }
+
+    /* Release the hashtable before calling cleanup. The iterator was already
+     * untracked by exhaustion, so this should not access freed memory. */
+    hashtableRelease(ht);
+
+    /* Cleanup should be a no-op (hashtable == NULL). */
+    hashtableCleanupIterator(&iter);
+}

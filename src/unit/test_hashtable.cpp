@@ -1300,3 +1300,64 @@ TEST_F(HashtableTest, hashtable_retarget_iterator) {
 
     hashtableCleanupIterator(&iter);
 }
+
+TEST_F(HashtableTest, iterator_next_after_exhaustion) {
+    hashtableType type = {};
+    hashtable *ht = hashtableCreate(&type);
+
+    for (int i = 0; i < 100; i++) {
+        ASSERT_TRUE(hashtableAdd(ht, (void *)(long)i));
+    }
+
+    /* Exhaust the iterator. */
+    hashtableIterator iter;
+    void *entry;
+    hashtableInitIterator(&iter, ht, 0);
+
+    size_t count = 0;
+    while (hashtableNext(&iter, &entry)) count++;
+    ASSERT_EQ(count, 100u);
+
+    /* Repeated calls after exhaustion should return false. */
+    ASSERT_FALSE(hashtableNext(&iter, &entry));
+    ASSERT_FALSE(hashtableNext(&iter, &entry));
+
+    /* Cleanup should still be safe (no-op). */
+    hashtableCleanupIterator(&iter);
+    hashtableRelease(ht);
+}
+
+TEST_F(HashtableTest, safe_iterator_cleanup_on_exhaustion) {
+    hashtableType type = {};
+    hashtable *ht = hashtableCreate(&type);
+
+    /* Add entries until rehashing starts so we can observe pause/resume. */
+    long j = 0;
+    while (!hashtableIsRehashing(ht)) {
+        j++;
+        ASSERT_TRUE(hashtableAdd(ht, (void *)j));
+    }
+
+    hashtableIterator iter;
+    void *entry;
+    hashtableInitIterator(&iter, ht, HASHTABLE_ITER_SAFE);
+
+    /* First call pauses rehashing. */
+    ASSERT_TRUE(hashtableNext(&iter, &entry));
+    ASSERT_TRUE(hashtableIsRehashingPaused(ht));
+
+    /* Exhaust the iterator. */
+    while (hashtableNext(&iter, &entry)) {
+    }
+
+    /* Rehashing should already be resumed by the exhaustion path,
+     * before the caller's explicit cleanup call. */
+    ASSERT_FALSE(hashtableIsRehashingPaused(ht));
+
+    /* Repeated calls should return false safely. */
+    ASSERT_FALSE(hashtableNext(&iter, &entry));
+
+    /* Cleanup is a no-op but must not crash. */
+    hashtableCleanupIterator(&iter);
+    hashtableRelease(ht);
+}

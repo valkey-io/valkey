@@ -1763,31 +1763,13 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster} overrides {cluste
         }
     }
 
-    test "MIGRATESLOTS AUTH with WRONGPASS fails cleanly" {
-        assert_does_not_resync {
-            R 0 CONFIG SET requirepass "correctpass"
-
-            # Perform one-shot import with wrong password in AUTH option
-            assert_match "OK" [R 2 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node0_id AUTH wrongpass]
-            set jobname [get_job_name 2 16383]
-
-            # Should be denied with clear error message
-            wait_for_migration_field 2 $jobname state failed
-            assert_match {*Failed to AUTH to target node*} [dict get [get_migration_by_name 2 $jobname] message]
-
-            # Cleanup for next test
-            R 0 CONFIG SET requirepass ""
-        }
-    }
-
-    test "MIGRATESLOTS with AUTH succeeds when target requires password" {
+    test "CLUSTER MIGRATESLOTS with AUTH succeeds when target requires password" {
         assert_does_not_resync {
             R 0 CONFIG SET requirepass "targetpass"
 
             # Populate data before migration
             populate 1000 "$16383_slot_tag:" 1000 -2
 
-            # AUTH keyword in command overrides primaryauth on source
             assert_match "OK" [R 2 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node0_id AUTH targetpass]
             set jobname [get_job_name 2 16383]
             wait_for_migration 0 16383
@@ -1809,11 +1791,27 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster} overrides {cluste
             assert_match "OK" [R 0 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node2_id]
             wait_for_migration 2 16383
             R 0 CONFIG SET requirepass ""
-            R 2 CONFIG SET primaryauth ""
         }
     }
 
-        test "MIGRATESLOTS with AUTH overrides primaryauth" {
+    test "CLUSTER MIGRATESLOTS AUTH with WRONGPASS fails cleanly" {
+        assert_does_not_resync {
+            R 0 CONFIG SET requirepass "correctpass"
+
+            # Perform one-shot import with wrong password in AUTH option
+            assert_match "OK" [R 2 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node0_id AUTH wrongpass]
+            set jobname [get_job_name 2 16383]
+
+            # Should be denied with clear error message
+            wait_for_migration_field 2 $jobname state failed
+            assert_match {*Failed to AUTH to target node*} [dict get [get_migration_by_name 2 $jobname] message]
+
+            # Cleanup for next test
+            R 0 CONFIG SET requirepass ""
+        }
+    }
+
+    test "CLUSTER MIGRATESLOTS with AUTH overrides primaryauth" {
         assert_does_not_resync {
             R 0 CONFIG SET requirepass "targetpass"
             R 2 CONFIG SET primaryauth "wrongpass"
@@ -1847,15 +1845,15 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster} overrides {cluste
         }
     }
 
-    test "MIGRATESLOTS with AUTH2 succeeds for ACL user" {
+    test "CLUSTER MIGRATESLOTS with AUTH2 succeeds for ACL user" {
         assert_does_not_resync {
-            # Set up ACL user on target with full permissions
+            R 0 CONFIG SET requirepass "mustauth"
             R 0 ACL SETUSER alice on >s3cret ~* &* +@all
 
             # Populate data before migration
             populate 1000 "$16383_slot_tag:" 1000 -2
 
-            # AUTH2 authenticates as the ACL user on the target; source primaryauth is unset
+            # AUTH2 authenticates as the ACL user; bare AUTH or no-auth would fail
             assert_match "OK" [R 2 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node0_id AUTH2 alice s3cret]
             set jobname [get_job_name 2 16383]
             wait_for_migration 0 16383
@@ -1877,10 +1875,11 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster} overrides {cluste
             assert_match "OK" [R 0 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node2_id]
             wait_for_migration 2 16383
             R 0 ACL DELUSER alice
+            R 0 CONFIG SET requirepass ""
         }
     }
 
-    test "MIGRATESLOTS per-target AUTH differs in single command" {
+    test "CLUSTER MIGRATESLOTS per-target AUTH differs in single command" {
         # Explicit AUTH pw0 for node0, primaryauth fallback pw1 for node1.
         ensure_slot_on_node 2 16383
         ensure_slot_on_node 2 16382

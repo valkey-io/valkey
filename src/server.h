@@ -202,6 +202,9 @@ typedef enum {
     STATS_METRIC_NET_OUTPUT_REPLICATION, /* Bytes written to network during replication. */
     STATS_METRIC_EL_CYCLE,               /* Number of eventloop cycled. */
     STATS_METRIC_EL_DURATION,            /* Eventloop duration. */
+    STATS_METRIC_IO_WAIT,                /* IO queue size */
+    STATS_METRIC_MAIN_THREAD_CPU_SYS,    /* Main thread CPU sys time */
+    STATS_METRIC_MAIN_THREAD_CPU_USER,   /* Main thread CPU user time */
     STATS_METRIC_COUNT                   /* Total count */
 } instantaneous_metric_type;
 
@@ -230,47 +233,6 @@ typedef enum {
 #define CONFIG_OOM_COUNT 3
 
 extern int configOOMScoreAdjValuesDefaults[CONFIG_OOM_COUNT];
-
-#define COMMAND_GET 0
-#define COMMAND_SET 1
-#define COMMAND_HGET 2
-#define COMMAND_HSET 3
-#define COMMAND_MSET 4
-
-/* Command flags. Please check the definition of struct serverCommand in this file
- * for more information about the meaning of every flag. */
-#define CMD_WRITE (1ULL << 0)
-#define CMD_READONLY (1ULL << 1)
-#define CMD_DENYOOM (1ULL << 2)
-#define CMD_MODULE (1ULL << 3) /* Command exported by module. */
-#define CMD_ADMIN (1ULL << 4)
-#define CMD_PUBSUB (1ULL << 5)
-#define CMD_NOSCRIPT (1ULL << 6)
-#define CMD_BLOCKING (1ULL << 8) /* Has potential to block. */
-#define CMD_LOADING (1ULL << 9)
-#define CMD_STALE (1ULL << 10)
-#define CMD_SKIP_MONITOR (1ULL << 11)
-#define CMD_SKIP_COMMANDLOG (1ULL << 12)
-#define CMD_ASKING (1ULL << 13)
-#define CMD_FAST (1ULL << 14)
-#define CMD_NO_AUTH (1ULL << 15)
-#define CMD_MAY_REPLICATE (1ULL << 16)
-#define CMD_SENTINEL (1ULL << 17)
-#define CMD_ONLY_SENTINEL (1ULL << 18)
-#define CMD_NO_MANDATORY_KEYS (1ULL << 19)
-#define CMD_PROTECTED (1ULL << 20)
-#define CMD_MODULE_GETKEYS (1ULL << 21)    /* Use the modules getkeys interface. */
-#define CMD_MODULE_NO_CLUSTER (1ULL << 22) /* Deny on Cluster. */
-#define CMD_NO_ASYNC_LOADING (1ULL << 23)
-#define CMD_NO_MULTI (1ULL << 24)
-#define CMD_MOVABLE_KEYS (1ULL << 25) /* The legacy range spec doesn't cover all keys. \
-                                       * Populated by populateCommandLegacyRangeSpec. */
-#define CMD_ALLOW_BUSY ((1ULL << 26))
-#define CMD_MODULE_GETCHANNELS (1ULL << 27) /* Use the modules getchannels interface. */
-#define CMD_TOUCHES_ARBITRARY_KEYS (1ULL << 28)
-#define CMD_ALL_DBS (1ULL << 29)
-/* Command flags. Please don't forget to add command flag documentation in struct
- * serverCommand in this file. */
 
 /* Command flags that describe ACLs categories. */
 #define ACL_CATEGORY_KEYSPACE (1ULL << 0)
@@ -677,6 +639,12 @@ typedef enum {
     CLUSTER_ENDPOINT_TYPE_UNKNOWN_ENDPOINT /* Show NULL or empty */
 } cluster_endpoint_type;
 
+/* Cluster persist config mode. */
+typedef enum {
+    CLUSTER_CONFIGFILE_SAVE_BEHAVIOR_SYNC = 0,    /* Perform a synchronous save, exit the process if it fails. */
+    CLUSTER_CONFIGFILE_SAVE_BEHAVIOR_BEST_EFFORT, /* Attempt to save on a "best-effort" basis, process will not exit if it fails. */
+} cluster_persist_config_mode;
+
 /* RDB active child save type. */
 #define RDB_CHILD_TYPE_NONE 0
 #define RDB_CHILD_TYPE_DISK 1   /* RDB is written to disk. */
@@ -974,18 +942,21 @@ typedef struct multiCmd {
 } multiCmd;
 
 typedef struct multiState {
-    multiCmd *commands;   /* Array of MULTI commands */
-    int count;            /* Total number of MULTI commands */
-    int cmd_flags;        /* The accumulated command flags OR-ed together.
-                             So if at least a command has a given flag, it
-                             will be set in this field. */
-    int cmd_inv_flags;    /* Same as cmd_flags, OR-ing the ~flags. so that it
-                             is possible to know if all the commands have a
-                             certain flag. */
-    size_t argv_len_sums; /* mem used by all commands arguments */
-    int alloc_count;      /* total number of multiCmd struct memory reserved. */
-    list watched_keys;
-    int transaction_db_id; /* Currently SELECTed DB id in transaction context */
+    multiCmd *commands;             /* Array of MULTI commands */
+    int count;                      /* Total number of MULTI commands */
+    int cmd_flags;                  /* The accumulated command flags OR-ed together.
+                                       So if at least a command has a given flag, it
+                                       will be set in this field. */
+    int cmd_inv_flags;              /* Same as cmd_flags, OR-ing the ~flags. so that it
+                                       is possible to know if all the commands have a
+                                       certain flag. */
+    size_t argv_len_sums;           /* mem used by all commands arguments */
+    int alloc_count;                /* total number of multiCmd struct memory reserved. */
+    list watched_keys;              /* List of watchedKey for iteration and cleanup. */
+    hashtable **watched_keys_by_db; /* Per-db hashtable for O(1) watched key lookup.
+                                       Array of size server.dbnum, lazily allocated.
+                                       Each hashtable stores watchedKey* directly. */
+    int transaction_db_id;          /* Currently SELECTed DB id in transaction context */
 } multiState;
 
 /* This structure holds the blocking operation state for a client.
@@ -1232,7 +1203,12 @@ typedef struct ClientFlags {
                                               or client::buf. */
     uint64_t keyspace_notified : 1;        /* Indicates that a keyspace notification was triggered during the execution of the
                                               current command. */
+    uint64_t argv_borrowed : 1;            /* The argv array and its elements are borrowed from the caller (VM_CallArgv) and must not be freed. */
 } ClientFlags;
+/* Ensure ClientFlags never silently grows beyond two uint64_t words.
+ * If this fires, move a flag to a separate field or widen the limit. */
+static_assert(sizeof(ClientFlags) <= sizeof(uint64_t) * 2,
+              "ClientFlags exceeds 128 bits; add a new word or remove a flag");
 
 typedef struct ClientPubSubData {
     hashtable *pubsub_channels;      /* channels a client is interested in (SUBSCRIBE) */
@@ -1372,9 +1348,13 @@ typedef struct client {
     payloadHeader *last_header; /* Pointer to the last header in a buffer when using copy avoidance */
     int original_argc;          /* Num of arguments of original command if arguments were rewritten. */
     robj **original_argv;       /* Arguments of original command if arguments were rewritten. */
+    uint32_t redact_arg_bitmap; /* Bitmap of argument indexes that should be redacted in logs. */
     /* Client flags and state indicators */
     union {
-        uint64_t raw_flag;
+        struct {
+            uint64_t raw_flag1;
+            uint64_t raw_flag2;
+        };
         struct ClientFlags flag;
     };
     /* Cache Locality: Grouped with 'flag' for getClientType() hot path. */
@@ -1390,14 +1370,14 @@ typedef struct client {
      * client, and in which category the client was, in order to remove it
      * before adding it the new value. */
     uint8_t last_memory_type;
-    uint8_t capa;                    /* Client capabilities: CLIENT_CAPA* macros. */
-    listNode pending_read_list_node; /* IO thread only ?*/
+    uint8_t capa; /* Client capabilities: CLIENT_CAPA* macros. */
     /* Statistics and metrics */
     unsigned long long net_input_bytes;           /* Total network input bytes read from this client. */
     unsigned long long net_input_bytes_curr_cmd;  /* Total network input bytes read for the* execution of this client's current command. */
     unsigned long long net_output_bytes;          /* Total network output bytes sent to this client. */
     unsigned long long commands_processed;        /* Total count of commands this client executed. */
     unsigned long long net_output_bytes_curr_cmd; /* Total network output bytes sent to this client, by the current command. */
+    _Atomic(size_t) io_tracked_reply_len;         /* Total size of BULK_STR_REF replies tracked by I/O threads. */
     size_t buf_peak;                              /* Peak used size of buffer in last 5 sec interval. */
     int nwritten;                                 /* Number of bytes of the last write. */
     int nread;                                    /* Number of bytes of the last read. */
@@ -1834,8 +1814,6 @@ struct valkeyServer {
     list *clients;                         /* List of active clients */
     list *clients_to_close;                /* Clients to close asynchronously */
     list *clients_pending_write;           /* There is to write or install handler. */
-    list *clients_pending_io_read;         /* List of clients with pending read to be process by I/O threads. */
-    list *clients_pending_io_write;        /* List of clients with pending write to be process by I/O threads. */
     list *replicas, *monitors;             /* List of replicas and MONITORs */
     rax *replicas_waiting_psync;           /* Radix tree for tracking replicas awaiting partial synchronization.
                                             * Key: RDB client ID
@@ -1868,7 +1846,7 @@ struct valkeyServer {
     int protected_mode;                       /* Don't accept external connections. */
     int io_threads_num;                       /* Number of IO threads to use. */
     int active_io_threads_num;                /* Current number of active IO threads, includes main thread. */
-    int events_per_io_thread;                 /* Number of events on the event loop to trigger IO threads activation. */
+    int io_threads_always_active;             /* Activate all IO threads regardless of load size. */
     int prefetch_batch_max_size;              /* Maximum number of keys to prefetch in a single batch */
     long long events_processed_while_blocked; /* processEventsWhileBlocked() */
     int enable_protected_configs;             /* Enable the modification of protected configs, see PROTECTED_ACTION_ALLOWED_* */
@@ -1950,7 +1928,9 @@ struct valkeyServer {
     long long stat_total_error_replies;                /* Total number of issued error replies ( command + rejected errors ) */
     long long stat_dump_payload_sanitizations;         /* Number deep dump payloads integrity validations. */
     long long stat_io_reads_processed;                 /* Number of read events processed by IO threads */
+    long long stat_io_reads_pending;                   /* Number of read events pending in IO threads */
     long long stat_io_writes_processed;                /* Number of write events processed by IO threads */
+    long long stat_io_writes_pending;                  /* Number of write events pending in IO threads */
     long long stat_io_freed_objects;                   /* Number of objects freed by IO threads */
     long long stat_io_accept_offloaded;                /* Number of offloaded accepts */
     long long stat_poll_processed_by_io_threads;       /* Total number of poll jobs processed by IO */
@@ -2112,7 +2092,7 @@ struct valkeyServer {
     int syslog_facility;      /* Syslog facility */
     int crashlog_enabled;     /* Enable signal handler for crashlog.
                                * disable for clean core dumps. */
-    int crashed;              /* True if the server has crashed, used in catClientInfoString
+    volatile int crashed;     /* True if the server has crashed, used in catClientInfoString
                                * to indicate that no wait for IO threads is needed. */
     int memcheck_enabled;     /* Enable memory check on crash. */
     int use_exit_on_panic;    /* Use exit() on panic and assert rather than
@@ -2290,6 +2270,7 @@ struct valkeyServer {
     mstime_t cluster_ping_interval;                        /* A debug configuration for setting how often cluster nodes send ping messages. */
     int cluster_message_gossip_perc;                       /* A configuration for setting the percentage of peer nodes to be gossiped in ping/pong messages. */
     char *cluster_configfile;                              /* Cluster auto-generated config file name. */
+    int cluster_configfile_save_behavior;                  /* Cluster config file save behavior. */
     struct clusterState *cluster;                          /* State of the cluster */
     int cluster_migration_barrier;                         /* Cluster replicas migration barrier. */
     int cluster_allow_replica_migration;                   /* Automatic replica migrations to orphaned primaries and from empty primaries */
@@ -2825,7 +2806,6 @@ extern dictType objectKeyPointerValueDictType;
 extern hashtableType objectHashtableType;
 extern dictType objectKeyHeapPointerValueDictType;
 extern hashtableType setHashtableType;
-extern dictType BenchmarkDictType;
 extern hashtableType zsetHashtableType;
 extern hashtableType kvstoreKeysHashtableType;
 extern hashtableType kvstoreExpiresHashtableType;
@@ -2836,7 +2816,6 @@ extern dictType stringSetDictType;
 extern dictType externalStringType;
 extern dictType sdsHashDictType;
 extern hashtableType clientHashtableType;
-extern dictType objToDictDictType;
 extern hashtableType kvstoreChannelHashtableType;
 extern dictType modulesDictType;
 extern hashtableType sdsReplyHashtableType;
@@ -2907,7 +2886,7 @@ void dictVanillaFree(void *val);
 #define WRITE_FLAGS_IS_REPLICA (1 << 1)
 
 client *createClient(connection *conn);
-void freeClient(client *c);
+int freeClient(client *c);
 void freeClientAsync(client *c);
 void freeClientOrCloseLater(client *c, int async);
 void logInvalidUseAndFreeClientAsync(client *c, const char *fmt, ...);
@@ -2991,6 +2970,7 @@ sds catClientInfoString(sds s, client *client, int hide_user_data);
 sds catClientInfoShortString(sds s, client *client, int hide_user_data);
 sds getAllClientsInfoString(int type, int hide_user_data);
 int clientSetName(client *c, robj *name, const char **err);
+bool clientCommandArgShouldBeRedacted(client *c, int arg_index);
 void rewriteClientCommandVector(client *c, int argc, ...);
 void rewriteClientCommandArgument(client *c, int i, robj *newval);
 void replaceClientCommandVector(client *c, int argc, robj **argv);
@@ -3031,7 +3011,7 @@ void linkClient(client *c);
 void protectClient(client *c);
 void unprotectClient(client *c);
 void initSharedQueryBuf(void);
-void freeSharedQueryBuf(void *dummy);
+void freeSharedQueryBuf(void);
 client *lookupClientByID(uint64_t id);
 int authRequired(client *c);
 void clientSetUser(client *c, user *u, int authenticated);
@@ -3039,11 +3019,11 @@ void putClientInPendingWriteQueue(client *c);
 client *createCachedResponseClient(int resp);
 void deleteCachedResponseClient(client *recording_client);
 void waitForClientIO(client *c);
-void ioThreadReadQueryFromClient(void *data);
-void ioThreadWriteToClient(void *data);
+void ioThreadReadQueryFromClient(client *c);
+void ioThreadWriteToClient(client *c);
 int canParseCommand(client *c);
-int processIOThreadsReadDone(void);
-int processIOThreadsWriteDone(void);
+void processClientIOReadsDone(client *c);
+void processClientIOWriteDone(client *c);
 void releaseReplyReferences(client *c);
 void resetLastWrittenBuf(client *c);
 
@@ -3519,13 +3499,15 @@ struct serverMemOverhead *getMemoryOverheadData(void);
 void freeMemoryOverheadData(struct serverMemOverhead *mh);
 void checkChildrenDone(void);
 int setOOMScoreAdj(int process_class);
-void rejectCommandFormat(client *c, const char *fmt, ...);
+void rejectCommandFormat(client *c, int notify_modules, const char *fmt, ...);
 void *activeDefragAlloc(void *ptr);
 sds activeDefragSds(sds sdsptr);
 robj *activeDefragStringOb(robj *ob);
 void dismissSds(sds s);
 void dismissMemoryInChild(void);
 void tlsResetCertInfo(void);
+void trackInstantaneousMetric(int metric, long long current_value, long long current_base, long long factor);
+long long getInstantaneousMetric(int metric);
 
 #define RESTART_SERVER_NONE 0
 #define RESTART_SERVER_GRACEFULLY (1 << 0)     /* Do proper shutdown. */
@@ -3639,11 +3621,13 @@ sds keyspaceEventsFlagsToString(int flags);
                                          * to apply the configuration change even if the new config value is the same as    \
                                          * the old. */
 
-#define INTEGER_CONFIG 0         /* No flags means a simple integer configuration */
-#define MEMORY_CONFIG (1 << 0)   /* Indicates if this value can be loaded as a memory value */
-#define PERCENT_CONFIG (1 << 1)  /* Indicates if this value can be loaded as a percent (and stored as a negative int) */
-#define OCTAL_CONFIG (1 << 2)    /* This value uses octal representation */
-#define UNSIGNED_CONFIG (1 << 3) /* This value uses unsigned representation */
+/* Numeric Flags */
+#define INTEGER_CONFIG 0              /* No flags means a simple integer configuration */
+#define MEMORY_CONFIG (1 << 0)        /* Indicates if this value can be loaded as a memory value */
+#define PERCENT_CONFIG (1 << 1)       /* Indicates if this value can be loaded as a percent (and stored as a negative int) */
+#define OCTAL_CONFIG (1 << 2)         /* This value uses octal representation */
+#define UNSIGNED_CONFIG (1 << 3)      /* This value uses unsigned representation */
+#define SIGNED_MEMORY_CONFIG (1 << 4) /* A MEMORY_CONFIG that also accepts plain negative integers */
 
 /* Enum Configs contain an array of configEnum objects that match a string with an integer. */
 typedef struct configEnum {
@@ -3907,12 +3891,19 @@ void startEvictionTimeProc(void);
 /* Keys hashing/comparison functions for dict.c and hashtable.c hash tables. */
 uint64_t dictSdsHash(const void *key);
 uint64_t dictSdsCaseHash(const void *key);
+uint64_t dictCStrHash(const void *key);
+uint64_t dictCStrCaseHash(const void *key);
+uint64_t dictEncObjHash(const void *key);
 int dictSdsKeyCompare(const void *key1, const void *key2);
-int hashtableSdsKeyCompare(const void *key1, const void *key2);
 int dictSdsKeyCaseCompare(const void *key1, const void *key2);
+int dictCStrKeyCompare(const void *key1, const void *key2);
+int dictCStrKeyCaseCompare(const void *key1, const void *key2);
+int dictEncObjKeyCompare(const void *key1, const void *key2);
 void dictSdsDestructor(void *val);
 void dictListDestructor(void *val);
-void *dictSdsDup(const void *key);
+void dictEntryDestructorSdsKey(void *entry);
+void dictEntryDestructorSdsKeyValue(void *entry);
+void dictEntryDestructorSdsKeyListValue(void *entry);
 
 /* Git SHA1 */
 char *serverGitSHA1(void);

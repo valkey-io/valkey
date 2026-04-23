@@ -9,8 +9,6 @@
 #include "io_threads.h"
 #include "module.h"
 #include "functions.h"
-#include "sds.h"
-#include "server.h"
 
 #include <sys/wait.h>
 #include <fcntl.h>
@@ -91,7 +89,7 @@ typedef struct slotMigrationJob {
     /* State needed during client establishment */
     connection *conn; /* Connection to slot import source node. */
     sds response_buf;
-    sds auth_user; /* User used for AUTH of the export job. */
+    sds auth_user;     /* User used for AUTH of the export job. */
     sds auth_password; /* Password used for AUTH of the export job */
 } slotMigrationJob;
 
@@ -108,7 +106,9 @@ static void updateSlotMigrationJobState(slotMigrationJob *job,
 static void sendSyncSlotsMessage(slotMigrationJob *job, const char *subcommand);
 static void proceedWithSlotMigration(slotMigrationJob *job);
 static slotMigrationJob *createSlotExportJob(clusterNode *target_node,
-                                             list *slot_ranges, sds auth_user, sds auth_password);
+                                             list *slot_ranges,
+                                             sds auth_user,
+                                             sds auth_password);
 static bool isSlotExportPauseTimedOut(slotMigrationJob *job);
 static void resetSlotMigrationJob(slotMigrationJob *job);
 static void finishSlotMigrationJob(slotMigrationJob *job,
@@ -1267,7 +1267,7 @@ void clusterCommandMigrateSlots(client *c) {
                 redactClientCommandArgument(c, curr_index + 1);
                 auth_pass = sdsdup(objectGetVal(c->argv[curr_index + 2]));
                 redactClientCommandArgument(c, curr_index + 2);
-                curr_index +=3;
+                curr_index += 3;
             }
         }
 
@@ -1439,7 +1439,7 @@ void slotMigrationJobSendAuth(slotMigrationJob *job) {
     sds pass = job->auth_password ? job->auth_password : server.primary_auth;
     serverAssert(pass);
 
-    sds err = replicationSendAuth(job->conn, user, pass, sdslen(pass));
+    sds err = replicationSendAuth(job->conn, user, pass);
     if (err) {
         sds status_msg = sdscatfmt(sdsempty(), "Failed to send AUTH command to target node: %s", err);
         finishSlotMigrationJob(job, SLOT_MIGRATION_JOB_FAILED, status_msg);
@@ -1936,7 +1936,9 @@ size_t clusterGetTotalSlotExportBufferMemory(void) {
 
 /* Create a slot export job with the given target and slot ranges. */
 slotMigrationJob *createSlotExportJob(clusterNode *target_node,
-                                      list *slot_ranges,  sds auth_user, sds auth_password) {
+                                      list *slot_ranges,
+                                      sds auth_user,
+                                      sds auth_password) {
     slotMigrationJob *job = zcalloc(sizeof(slotMigrationJob));
 
     job->ctime = server.unixtime;
@@ -1950,7 +1952,7 @@ slotMigrationJob *createSlotExportJob(clusterNode *target_node,
     memcpy(job->target_node_name, target_node->name, CLUSTER_NAMELEN);
     memcpy(job->source_node_name, server.cluster->myself->name, CLUSTER_NAMELEN);
     job->description = generateSlotMigrationJobDescription(job, target_node);
-    job->auth_user =  auth_user;
+    job->auth_user = auth_user;
     job->auth_password = auth_password;
     return job;
 }

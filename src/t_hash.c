@@ -1173,6 +1173,7 @@ void hgetdelCommand(client *c) {
     if (checkType(c, o, OBJ_HASH)) return;
 
     bool hash_volatile_items = hashTypeHasVolatileFields(o);
+    if (o && o->encoding == OBJ_ENCODING_HASHTABLE) hashtablePauseAutoShrink(objectGetVal(o));
 
     /* Reply with array of values and delete at the same time */
     addReplyArrayLen(c, num_fields);
@@ -1191,6 +1192,7 @@ void hgetdelCommand(client *c) {
             }
         }
     }
+    if (!keyremoved && o && o->encoding == OBJ_ENCODING_HASHTABLE) hashtableResumeAutoShrink(objectGetVal(o));
 
     if (deleted) {
         if (!keyremoved && hash_volatile_items != hashTypeHasVolatileFields(o)) {

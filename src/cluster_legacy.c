@@ -5362,7 +5362,7 @@ static void clusterLegacyFailover(int force, int takeover, void *ctx, void (*cal
     } else {
         clusterSendMFStart(myself->replicaof);
     }
-    callback(ctx, NULL);
+    if (callback) callback(ctx, NULL);
 }
 
 

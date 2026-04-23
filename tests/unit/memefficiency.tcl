@@ -390,6 +390,7 @@ start_server {tags {"defrag external:skip"} overrides {appendonly yes auto-aof-r
 
             # create big keys with 10k items
             set rd [redis_deferring_client]
+            $rd client reply off
 
             set expected_frag 1.7
             # add a mass of list nodes to two lists (allocations are interlaced)
@@ -398,10 +399,7 @@ start_server {tags {"defrag external:skip"} overrides {appendonly yes auto-aof-r
             for {set j 0} {$j < $elements} {incr j} {
                 $rd lpush biglist1 $val
                 $rd lpush biglist2 $val
-            }
-            for {set j 0} {$j < $elements} {incr j} {
-                $rd read ; # Discard replies
-                $rd read ; # Discard replies
+                if {$j % 1000 == 999} {client_reply_off_wait_for_server $rd}
             }
 
             $rd close
@@ -425,8 +423,12 @@ start_server {tags {"defrag external:skip"} overrides {appendonly yes auto-aof-r
             if {[r config get activedefrag] eq "activedefrag yes"} {
                 # wait for the active defrag to start working (decision once a second)
                 wait_for_condition 50 100 {
-                    [s active_defrag_running] ne 0
+                    [s total_active_defrag_time] ne 0
                 } else {
+                    after 120 ;# serverCron only updates the info once in 100ms
+                    puts [r info memory]
+                    puts [r info stats]
+                    puts [r memory malloc-stats]
                     fail "defrag not started."
                 }
 

@@ -24,10 +24,9 @@ void skiplistFree(OrderedIndex *idx) {
 /* Modification */
 
 OrderedIndexItem *skiplistInsert(OrderedIndex *idx, double score, const char *ele, size_t len) {
-    sds tmp = sdsnewlen(ele, len);
-    OrderedIndexItem *node = (OrderedIndexItem *)zslInsert((zskiplist *)idx, score, tmp);
-    sdsfree(tmp);
-    return node;
+    zskiplistNode *node = zslCreateNode(zslRandomLevel(), score, ele, len);
+    zslInsertNode((zskiplist *)idx, node);
+    return (OrderedIndexItem *)node;
 }
 
 void skiplistDelete(OrderedIndex *idx, OrderedIndexItem *node) {
@@ -60,9 +59,7 @@ void skiplistFreeItem(OrderedIndexItem *item) {
 }
 
 OrderedIndexItem *skiplistCreateDetached(double score, const char *ele, size_t len) {
-    sds tmp = sdsnewlen(ele, len);
-    zskiplistNode *node = zslCreateNode(zslRandomLevel(), score, tmp);
-    sdsfree(tmp);
+    zskiplistNode *node = zslCreateNode(zslRandomLevel(), score, ele, len);
     return (OrderedIndexItem *)node;
 }
 
@@ -200,6 +197,10 @@ void skiplistGetElementRaw(const OrderedIndexItem *node, const char **ptr, size_
 
 double skiplistGetScore(const OrderedIndexItem *node) {
     return zslGetScore((const zskiplistNode *)node);
+}
+
+size_t skiplistElementLen(const char *ptr) {
+    return sdslen((const_sds)ptr);
 }
 
 unsigned long skiplistCountScoreRange(OrderedIndex *idx, double min, double max, int min_ex, int max_ex) {

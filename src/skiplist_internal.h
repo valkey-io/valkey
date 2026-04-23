@@ -86,7 +86,7 @@ void zslSeekToScoreRange(zskiplistIterator *iterator, double min, double max, in
 void zslSeekToLexRange(zskiplistIterator *iterator, const_sds min, const_sds max, int min_ex, int max_ex, long offset);
 
 /* Node creation and insertion (used by skiplist_ordered_index.c for detached items) */
-zskiplistNode *zslCreateNode(int height, double score, const_sds ele);
+zskiplistNode *zslCreateNode(int height, double score, const char *ele, size_t ele_len);
 int zslRandomLevel(void);
 zskiplistNode *zslInsertNode(zskiplist *zsl, zskiplistNode *node);
 

@@ -103,6 +103,13 @@ static inline double orderedIndexGetScore(const OrderedIndexItem *pos) {
     return skiplistGetScore(pos);
 }
 
+/* Return the length of an element string. The pointer may come from
+ * orderedIndexGetElementRaw (pointing into an index item) or be a plain
+ * sds used as a lookup key. The implementation knows how to handle both. */
+static inline size_t orderedIndexElementLen(const char *ptr) {
+    return skiplistElementLen(ptr);
+}
+
 static inline unsigned long orderedIndexCountScoreRange(OrderedIndex *idx, double min, double max, int min_ex, int max_ex) {
     return skiplistCountScoreRange(idx, min, max, min_ex, max_ex);
 }

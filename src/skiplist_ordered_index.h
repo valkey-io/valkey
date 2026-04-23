@@ -32,6 +32,7 @@ OrderedIndexItem *skiplistGetByRank(OrderedIndex *idx, unsigned long rank);
 unsigned long skiplistGetRank(OrderedIndex *idx, const OrderedIndexItem *node);
 void skiplistGetElementRaw(const OrderedIndexItem *node, const char **ptr, size_t *len);
 double skiplistGetScore(const OrderedIndexItem *node);
+size_t skiplistElementLen(const char *ptr);
 unsigned long skiplistCountScoreRange(OrderedIndex *idx, double min, double max, int min_ex, int max_ex);
 unsigned long skiplistCountLexRange(OrderedIndex *idx, const_sds min, const_sds max, int min_ex, int max_ex);
 

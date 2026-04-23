@@ -84,14 +84,22 @@ static const void *zsetHashtableGetKey(const void *element) {
     return ptr;
 }
 
-/* Defined in server.c */
-extern uint64_t sdsHashConfigurableSeed(const void *key);
+static uint64_t zsetHashtableHash(const void *key) {
+    return genHashFunctionConfigurableSeed(key, orderedIndexElementLen(key));
+}
+
+static int zsetHashtableKeyCompare(const void *key1, const void *key2) {
+    size_t l1 = orderedIndexElementLen(key1);
+    size_t l2 = orderedIndexElementLen(key2);
+    if (l1 != l2) return 0;
+    return memcmp(key1, key2, l1) == 0;
+}
 
 /* Sorted sets hashtable (note: a skiplist is used in addition to the hash table) */
 static hashtableType zsetHashtableType = {
-    .hashFunction = sdsHashConfigurableSeed,
+    .hashFunction = zsetHashtableHash,
     .entryGetKey = zsetHashtableGetKey,
-    .keyCompare = dictSdsKeyCompare,
+    .keyCompare = zsetHashtableKeyCompare,
 };
 
 /* Allocate and initialize a new zset (skiplist + hashtable). */
@@ -133,10 +141,9 @@ static inline size_t zslGetNodeAllocSize(int level) {
  *
  *   sds-header-size and element-sds are only valid for non-header nodes.
  */
-zskiplistNode *zslCreateNode(int height, double score, const_sds ele) {
-    size_t ele_sds_len = sdslen(ele);
-    char ele_sds_type = sdsReqType(ele_sds_len);
-    size_t ele_sds_size = sdsReqSize(ele_sds_len, ele_sds_type);
+zskiplistNode *zslCreateNode(int height, double score, const char *ele, size_t ele_len) {
+    char ele_sds_type = sdsReqType(ele_len);
+    size_t ele_sds_size = sdsReqSize(ele_len, ele_sds_type);
     /* Allocate enough space for the node, levels, and the element sds.
      * We include one extra byte representing the sds header size,
      * which is the offset into the embedded sds data where the
@@ -147,7 +154,7 @@ zskiplistNode *zslCreateNode(int height, double score, const_sds ele) {
     zslSetNodeHeight(zn, height);
     char *data = ((char *)zn) + node_size;
     *data++ = sdsHdrSize(ele_sds_type);
-    sdswrite(data, ele_sds_size, ele_sds_type, ele, ele_sds_len);
+    sdswrite(data, ele_sds_size, ele_sds_type, ele, ele_len);
     return zn;
 }
 
@@ -318,7 +325,7 @@ zskiplistNode *zslInsertNode(zskiplist *zsl, zskiplistNode *node) {
  * exist (up to the caller to enforce that). The string 'ele' is copied. */
 zskiplistNode *zslInsert(zskiplist *zsl, double score, const_sds ele) {
     const int level = zslRandomLevel();
-    zskiplistNode *node = zslCreateNode(level, score, ele);
+    zskiplistNode *node = zslCreateNode(level, score, ele, sdslen(ele));
     zslInsertNode(zsl, node);
     return node;
 }

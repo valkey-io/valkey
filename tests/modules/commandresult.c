@@ -71,14 +71,10 @@ static void ResetState(void) {
 }
 
 static void UnsubscribeAllCommandResultEvents(ValkeyModuleCtx *ctx) {
-  ValkeyModule_SubscribeToServerEvent(
-      ctx, ValkeyModuleEvent_CommandResultSuccess, NULL);
-  ValkeyModule_SubscribeToServerEvent(
-      ctx, ValkeyModuleEvent_CommandResultFailure, NULL);
-  ValkeyModule_SubscribeToServerEvent(
-      ctx, ValkeyModuleEvent_CommandResultRejected, NULL);
-  ValkeyModule_SubscribeToServerEvent(
-      ctx, ValkeyModuleEvent_CommandResultACLRejected, NULL);
+  ValkeyModule_SubscribeToServerEvent(ctx, ValkeyModuleEvent_CommandResultSuccess, NULL);
+  ValkeyModule_SubscribeToServerEvent(ctx, ValkeyModuleEvent_CommandResultFailure, NULL);
+  ValkeyModule_SubscribeToServerEvent(ctx, ValkeyModuleEvent_CommandResultRejected, NULL);
+  ValkeyModule_SubscribeToServerEvent(ctx, ValkeyModuleEvent_CommandResultACLRejected, NULL);
 }
 
 /* Add entry to circular log */

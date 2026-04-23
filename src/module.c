@@ -12876,11 +12876,13 @@ void moduleFireServerEvent(uint64_t eid, int subid, void *data) {
 /* Remove all the listeners for this module: this is used before unloading
  * a module. */
 void moduleUnsubscribeAllServerEvents(ValkeyModule *module) {
-    listNode *ln = listFirst(ValkeyModule_EventListeners);
+    ValkeyModuleEventListener *el;
+    listIter li;
+    listNode *ln;
 
-    while (ln) {
-        listNode *next = listNextNode(ln);
-        ValkeyModuleEventListener *el = ln->value;
+    listRewind(ValkeyModule_EventListeners, &li);
+    while ((ln = listNext(&li))) {
+        el = ln->value;
         if (el->module == module) {
             if (el->event.id == VALKEYMODULE_EVENT_COMMAND_RESULT_SUCCESS)
                 commandResultSuccessListeners--;
@@ -12893,7 +12895,6 @@ void moduleUnsubscribeAllServerEvents(ValkeyModule *module) {
             listDelNode(ValkeyModule_EventListeners, ln);
             zfree(el);
         }
-        ln = next;
     }
 }
 

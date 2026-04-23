@@ -71,12 +71,10 @@ start_server {tags {"modules"}} {
         cleanup_callback
         r cmdresult.register all
 
-        r cmdresult.success
-        r ping
+        r eval {local sum = 0; for i = 1, 100000 do sum = sum + i end; return sum} 0
 
         set stats [r cmdresult.stats]
-        # Very fast commands may complete within the same microsecond tick.
-        assert {[dict get $stats total_duration_us] >= 0}
+        assert {[dict get $stats total_duration_us] > 0}
 
         r cmdresult.unsubscribe
     }
@@ -267,14 +265,19 @@ start_server {tags {"modules"}} {
         set stats [r cmdresult.stats]
         assert {[dict get $stats total_callbacks] >= 2}
 
-        # Unload module while subscription is still active
+        # Unload module while subscription is still active.
         assert_equal {OK} [r module unload commandresult]
 
-        # Commands issued after unload must not try to hit stale callbacks.
+        # Commands issued after unload still exercise the command result event
+        # path when listener counters were left stale.
         assert_equal {PONG} [r ping]
 
-        # Reload module for remaining tests
+        # Unsubscribing after reload has no matching listener. It must not add
+        # NULL callbacks that would be invoked by later command result events.
         r module load $testmodule
+        catch {r cmdresult.unsubscribe} err
+        assert_match {*not subscribed*} $err
+        assert_equal {PONG} [r ping]
     }
 
     test {Module commandresult - Multiple callbacks from different operations} {

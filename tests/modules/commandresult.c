@@ -70,13 +70,6 @@ static void ResetState(void) {
   subscription_mode = 0;
 }
 
-static void UnsubscribeAllCommandResultEvents(ValkeyModuleCtx *ctx) {
-  ValkeyModule_SubscribeToServerEvent(ctx, ValkeyModuleEvent_CommandResultSuccess, NULL);
-  ValkeyModule_SubscribeToServerEvent(ctx, ValkeyModuleEvent_CommandResultFailure, NULL);
-  ValkeyModule_SubscribeToServerEvent(ctx, ValkeyModuleEvent_CommandResultRejected, NULL);
-  ValkeyModule_SubscribeToServerEvent(ctx, ValkeyModuleEvent_CommandResultACLRejected, NULL);
-}
-
 /* Add entry to circular log */
 void LogResult(const char *cmd_name, int status, uint64_t subevent,
                long long duration, long long dirty,
@@ -264,7 +257,10 @@ int CmdResultUnsubscribe_ValkeyCommand(ValkeyModuleCtx *ctx,
     return ValkeyModule_WrongArity(ctx);
   }
 
-  UnsubscribeAllCommandResultEvents(ctx);
+  ValkeyModule_SubscribeToServerEvent(ctx, ValkeyModuleEvent_CommandResultSuccess, NULL);
+  ValkeyModule_SubscribeToServerEvent(ctx, ValkeyModuleEvent_CommandResultFailure, NULL);
+  ValkeyModule_SubscribeToServerEvent(ctx, ValkeyModuleEvent_CommandResultRejected, NULL);
+  ValkeyModule_SubscribeToServerEvent(ctx, ValkeyModuleEvent_CommandResultACLRejected, NULL);
   subscription_mode = 0;
 
   if (!had_subscription) {

@@ -259,43 +259,44 @@ int test_typesAndAllocSize(int argc, char **argv, int flags) {
 
     sds x = sdsnewlen(NULL, 31);
     TEST_ASSERT_MESSAGE("len 31 type", (x[-1] & SDS_TYPE_MASK) == SDS_TYPE_5);
+    TEST_ASSERT_MESSAGE("len 31 sdsAllocSize", sdsAllocSize(x) == s_malloc_usable_size(sdsAllocPtr(x)));
     sdsfree(x);
 
     x = sdsnewlen(NULL, 32);
     TEST_ASSERT_MESSAGE("len 32 type", (x[-1] & SDS_TYPE_MASK) >= SDS_TYPE_8);
-    TEST_ASSERT_MESSAGE("len 32 sdsAllocSize", sdsAllocSize(x) == s_malloc_size(sdsAllocPtr(x)));
+    TEST_ASSERT_MESSAGE("len 32 sdsAllocSize", sdsAllocSize(x) == s_malloc_usable_size(sdsAllocPtr(x)));
     sdsfree(x);
 
     x = sdsnewlen(NULL, 252);
     TEST_ASSERT_MESSAGE("len 252 type", (x[-1] & SDS_TYPE_MASK) >= SDS_TYPE_8);
-    TEST_ASSERT_MESSAGE("len 252 sdsAllocSize", sdsAllocSize(x) == s_malloc_size(sdsAllocPtr(x)));
+    TEST_ASSERT_MESSAGE("len 252 sdsAllocSize", sdsAllocSize(x) == s_malloc_usable_size(sdsAllocPtr(x)));
     sdsfree(x);
 
     x = sdsnewlen(NULL, 253);
     TEST_ASSERT_MESSAGE("len 253 type", (x[-1] & SDS_TYPE_MASK) == SDS_TYPE_16);
-    TEST_ASSERT_MESSAGE("len 253 sdsAllocSize", sdsAllocSize(x) == s_malloc_size(sdsAllocPtr(x)));
+    TEST_ASSERT_MESSAGE("len 253 sdsAllocSize", sdsAllocSize(x) == s_malloc_usable_size(sdsAllocPtr(x)));
     sdsfree(x);
 
     x = sdsnewlen(NULL, 65530);
     TEST_ASSERT_MESSAGE("len 65530 type", (x[-1] & SDS_TYPE_MASK) >= SDS_TYPE_16);
-    TEST_ASSERT_MESSAGE("len 65530 sdsAllocSize", sdsAllocSize(x) == s_malloc_size(sdsAllocPtr(x)));
+    TEST_ASSERT_MESSAGE("len 65530 sdsAllocSize", sdsAllocSize(x) == s_malloc_usable_size(sdsAllocPtr(x)));
     sdsfree(x);
 
     x = sdsnewlen(NULL, 65531);
     TEST_ASSERT_MESSAGE("len 65531 type", (x[-1] & SDS_TYPE_MASK) >= SDS_TYPE_32);
-    TEST_ASSERT_MESSAGE("len 65531 sdsAllocSize", sdsAllocSize(x) == s_malloc_size(sdsAllocPtr(x)));
+    TEST_ASSERT_MESSAGE("len 65531 sdsAllocSize", sdsAllocSize(x) == s_malloc_usable_size(sdsAllocPtr(x)));
     sdsfree(x);
 
 #if (LONG_MAX == LLONG_MAX)
     if (flags & UNIT_TEST_LARGE_MEMORY) {
         x = sdsnewlen(NULL, 4294967286);
         TEST_ASSERT_MESSAGE("len 4294967286 type", (x[-1] & SDS_TYPE_MASK) >= SDS_TYPE_32);
-        TEST_ASSERT_MESSAGE("len 4294967286 sdsAllocSize", sdsAllocSize(x) == s_malloc_size(sdsAllocPtr(x)));
+        TEST_ASSERT_MESSAGE("len 4294967286 sdsAllocSize", sdsAllocSize(x) == s_malloc_usable_size(sdsAllocPtr(x)));
         sdsfree(x);
 
         x = sdsnewlen(NULL, 4294967287);
         TEST_ASSERT_MESSAGE("len 4294967287 type", (x[-1] & SDS_TYPE_MASK) == SDS_TYPE_64);
-        TEST_ASSERT_MESSAGE("len 4294967287 sdsAllocSize", sdsAllocSize(x) == s_malloc_size(sdsAllocPtr(x)));
+        TEST_ASSERT_MESSAGE("len 4294967287 sdsAllocSize", sdsAllocSize(x) == s_malloc_usable_size(sdsAllocPtr(x)));
         sdsfree(x);
     }
 #endif

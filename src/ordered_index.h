@@ -6,7 +6,7 @@
 /* Opaque types for ordered index, positions, and iterators */
 typedef struct OrderedIndex OrderedIndex;
 typedef struct OrderedIndexItem OrderedIndexItem;
-typedef uint64_t OrderedIndexIterator[3];
+typedef uint64_t OrderedIndexIterator[2];
 
 /* Callback invoked for each item removed during a range-delete operation. */
 typedef void (*OrderedIndexOnDelete)(OrderedIndexItem *item, void *ctx);
@@ -60,8 +60,13 @@ static inline OrderedIndexItem *orderedIndexCreateDetached(double score, const c
     return skiplistCreateDetached(score, ele, len);
 }
 
-/* Set the score on a detached item (not yet inserted into an index).
- * Do not use on inserted items — use orderedIndexUpdateScore instead. */
+/* Set the score on a detached item — one created via orderedIndexCreateDetached
+ * but not yet inserted into an ordered index.  Items that live only in a
+ * hashtable (e.g. during ZUNIONSTORE score accumulation) are still considered
+ * "detached" for this purpose because they are not part of any ordered index.
+ *
+ * Do NOT use on items that have been inserted into an ordered index — doing so
+ * would silently corrupt the sort order.  Use orderedIndexUpdateScore instead. */
 static inline void orderedIndexDetachedSetScore(OrderedIndexItem *item, double score) {
     skiplistDetachedSetScore(item, score);
 }
@@ -103,9 +108,12 @@ static inline double orderedIndexGetScore(const OrderedIndexItem *pos) {
     return skiplistGetScore(pos);
 }
 
-/* Return the length of an element string. The pointer may come from
+/* Return the length of an element string.  The pointer may come from
  * orderedIndexGetElementRaw (pointing into an index item) or be a plain
- * sds used as a lookup key. The implementation knows how to handle both. */
+ * SDS used as a lookup key — both are valid.  This dual-use is intentional:
+ * the zset hashtable callbacks receive plain SDS keys during lookups and
+ * OrderedIndexItem element pointers for stored entries, and both must be
+ * measurable through the same function. */
 static inline size_t orderedIndexElementLen(const char *ptr) {
     return skiplistElementLen(ptr);
 }
@@ -163,12 +171,18 @@ static inline size_t orderedIndexEstimateMemory(OrderedIndex *idx, size_t sample
 }
 
 /* Defrag */
+
+/* Defrag */
 typedef void (*OrderedIndexDefragCallback)(OrderedIndexItem *old_item, OrderedIndexItem *new_item, void *ctx);
 
 static inline OrderedIndex *orderedIndexDefragInternals(OrderedIndex *idx, void *(*defragfn)(void *)) {
     return skiplistDefragInternals(idx, defragfn);
 }
 
+/* Cursor-based incremental defrag.  Walks the ordered index in batches,
+ * calling defragfn on each item.  When an item is reallocated, the callback
+ * is invoked so the caller can update external references (e.g. hashtable).
+ * Returns the next cursor, or 0 when the scan is complete. */
 static inline unsigned long orderedIndexScanDefrag(OrderedIndex *idx, unsigned long cursor, OrderedIndexDefragCallback callback, void *ctx, void *(*defragfn)(void *)) {
     return skiplistScanDefrag(idx, cursor, callback, ctx, defragfn);
 }

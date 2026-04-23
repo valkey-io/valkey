@@ -411,11 +411,11 @@ zskiplistNode *zslUpdateScore(zskiplist *zsl, zskiplistNode *node, double newsco
     return node;
 }
 
-int zsetValueGteMin(double value, zrangespec *spec) {
+int zsetScoreGteMin(double value, zrangespec *spec) {
     return spec->minex ? (value > spec->min) : (value >= spec->min);
 }
 
-int zsetValueLteMax(double value, zrangespec *spec) {
+int zsetScoreLteMax(double value, zrangespec *spec) {
     return spec->maxex ? (value < spec->max) : (value <= spec->max);
 }
 
@@ -426,10 +426,10 @@ int zslIsInRange(zskiplist *zsl, zrangespec *range) {
     /* Test for ranges that will always be empty. */
     if (range->min > range->max || (range->min == range->max && (range->minex || range->maxex))) return 0;
     x = zslGetTail(zsl);
-    if (x == NULL || !zsetValueGteMin(x->score, range)) return 0;
+    if (x == NULL || !zsetScoreGteMin(x->score, range)) return 0;
     zskiplistNode *zheader = zslGetHeader(zsl);
     x = zheader->level[0].forward;
-    if (x == NULL || !zsetValueLteMax(x->score, range)) return 0;
+    if (x == NULL || !zsetScoreLteMax(x->score, range)) return 0;
     return 1;
 }
 
@@ -445,7 +445,7 @@ zskiplistNode *zslNthInRange(zskiplist *zsl, zrangespec *range, long n, long *ra
     zskiplistNode *x = zslGetHeader(zsl);
     int i = zslGetHeight(zsl) - 1;
     long last_highest_level_rank = 0;
-    while (x->level[i].forward && !zsetValueGteMin(x->level[i].forward->score, range)) {
+    while (x->level[i].forward && !zsetScoreGteMin(x->level[i].forward->score, range)) {
         last_highest_level_rank += zslGetNodeSpanAtLevel(x, i);
         x = x->level[i].forward;
     }
@@ -456,7 +456,7 @@ zskiplistNode *zslNthInRange(zskiplist *zsl, zrangespec *range, long n, long *ra
         long start_rank = last_highest_level_rank;
         for (i = zslGetHeight(zsl) - 2; i >= 0; i--) {
             /* Go forward while *OUT* of range. */
-            while (x->level[i].forward && !zsetValueGteMin(x->level[i].forward->score, range)) {
+            while (x->level[i].forward && !zsetScoreGteMin(x->level[i].forward->score, range)) {
                 /* Count the rank of the last element smaller than the range. */
                 start_rank += zslGetNodeSpanAtLevel(x, i);
                 x = x->level[i].forward;
@@ -476,13 +476,13 @@ zskiplistNode *zslNthInRange(zskiplist *zsl, zrangespec *range, long n, long *ra
             x = zslGetElementByRankFromNode(last_highest_level_node, zslGetHeight(zsl) - 1, rank_diff);
         }
         /* Check if score <= max. */
-        if (x && !zsetValueLteMax(x->score, range)) return NULL;
+        if (x && !zsetScoreLteMax(x->score, range)) return NULL;
         if (rank) *rank = start_rank + n;
     } else {
         long end_rank = last_highest_level_rank;
         for (i = zslGetHeight(zsl) - 1; i >= 0; i--) {
             /* Go forward while *IN* range. */
-            while (x->level[i].forward && zsetValueLteMax(x->level[i].forward->score, range)) {
+            while (x->level[i].forward && zsetScoreLteMax(x->level[i].forward->score, range)) {
                 /* Count the rank of the last element in range. */
                 end_rank += zslGetNodeSpanAtLevel(x, i);
                 x = x->level[i].forward;
@@ -503,7 +503,7 @@ zskiplistNode *zslNthInRange(zskiplist *zsl, zrangespec *range, long n, long *ra
             x = zslGetElementByRankFromNode(last_highest_level_node, zslGetHeight(zsl) - 1, rank_diff);
         }
         /* Check if score >= min. */
-        if (x && !zsetValueGteMin(x->score, range)) return NULL;
+        if (x && !zsetScoreGteMin(x->score, range)) return NULL;
         if (rank) *rank = end_rank + n;
     }
 
@@ -820,11 +820,11 @@ static int sdscmplex(const char *a, size_t alen, sds b) {
     return cmp;
 }
 
-int zsetLexValueGteMin(const char *value, size_t value_len, zlexrangespec *spec) {
+int zsetLexGteMin(const char *value, size_t value_len, zlexrangespec *spec) {
     return spec->minex ? (sdscmplex(value, value_len, spec->min) > 0) : (sdscmplex(value, value_len, spec->min) >= 0);
 }
 
-int zsetLexValueLteMax(const char *value, size_t value_len, zlexrangespec *spec) {
+int zsetLexLteMax(const char *value, size_t value_len, zlexrangespec *spec) {
     return spec->maxex ? (sdscmplex(value, value_len, spec->max) < 0) : (sdscmplex(value, value_len, spec->max) <= 0);
 }
 
@@ -838,12 +838,12 @@ static int zslIsInLexRange(zskiplist *zsl, zlexrangespec *range) {
     x = zslGetTail(zsl);
     if (x == NULL) return 0;
     sds ele = zslGetNodeElement(x);
-    if (!zsetLexValueGteMin(ele, sdslen(ele), range)) return 0;
+    if (!zsetLexGteMin(ele, sdslen(ele), range)) return 0;
     zskiplistNode *zheader = zslGetHeader(zsl);
     x = zheader->level[0].forward;
     if (x == NULL) return 0;
     ele = zslGetNodeElement(x);
-    if (!zsetLexValueLteMax(ele, sdslen(ele), range)) return 0;
+    if (!zsetLexLteMax(ele, sdslen(ele), range)) return 0;
     return 1;
 }
 
@@ -867,7 +867,7 @@ zskiplistNode *zslNthInLexRange(zskiplist *zsl, zlexrangespec *range, long n) {
     i = zslGetHeight(zsl) - 1;
     while (x->level[i].forward) {
         ele = zslGetNodeElement(x->level[i].forward);
-        if (zsetLexValueGteMin(ele, sdslen(ele), range)) break;
+        if (zsetLexGteMin(ele, sdslen(ele), range)) break;
         edge_rank += zslGetNodeSpanAtLevel(x, i);
         x = x->level[i].forward;
     }
@@ -880,7 +880,7 @@ zskiplistNode *zslNthInLexRange(zskiplist *zsl, zlexrangespec *range, long n) {
             /* Go forward while *OUT* of range. */
             while (x->level[i].forward) {
                 ele = zslGetNodeElement(x->level[i].forward);
-                if (zsetLexValueGteMin(ele, sdslen(ele), range)) break;
+                if (zsetLexGteMin(ele, sdslen(ele), range)) break;
                 /* Count the rank of the last element smaller than the range. */
                 edge_rank += zslGetNodeSpanAtLevel(x, i);
                 x = x->level[i].forward;
@@ -902,14 +902,14 @@ zskiplistNode *zslNthInLexRange(zskiplist *zsl, zlexrangespec *range, long n) {
         /* Check if score <= max. */
         if (x) {
             ele = zslGetNodeElement(x);
-            if (!zsetLexValueLteMax(ele, sdslen(ele), range)) return NULL;
+            if (!zsetLexLteMax(ele, sdslen(ele), range)) return NULL;
         }
     } else {
         for (i = zslGetHeight(zsl) - 1; i >= 0; i--) {
             /* Go forward while *IN* range. */
             while (x->level[i].forward) {
                 ele = zslGetNodeElement(x->level[i].forward);
-                if (!zsetLexValueLteMax(ele, sdslen(ele), range)) break;
+                if (!zsetLexLteMax(ele, sdslen(ele), range)) break;
                 /* Count the rank of the last element in range. */
                 edge_rank += zslGetNodeSpanAtLevel(x, i);
                 x = x->level[i].forward;
@@ -931,7 +931,7 @@ zskiplistNode *zslNthInLexRange(zskiplist *zsl, zlexrangespec *range, long n) {
         /* Check if score >= min. */
         if (x) {
             ele = zslGetNodeElement(x);
-            if (!zsetLexValueGteMin(ele, sdslen(ele), range)) return NULL;
+            if (!zsetLexGteMin(ele, sdslen(ele), range)) return NULL;
         }
     }
 
@@ -1055,12 +1055,12 @@ int zzlIsInRange(unsigned char *zl, zrangespec *range) {
     p = lpSeek(zl, -1);      /* Last score. */
     if (p == NULL) return 0; /* Empty sorted set */
     score = zzlGetScore(p);
-    if (!zsetValueGteMin(score, range)) return 0;
+    if (!zsetScoreGteMin(score, range)) return 0;
 
     p = lpSeek(zl, 1); /* First score. */
     serverAssert(p != NULL);
     score = zzlGetScore(p);
-    if (!zsetValueLteMax(score, range)) return 0;
+    if (!zsetScoreLteMax(score, range)) return 0;
 
     return 1;
 }
@@ -1079,9 +1079,9 @@ unsigned char *zzlFirstInRange(unsigned char *zl, zrangespec *range) {
         serverAssert(sptr != NULL);
 
         score = zzlGetScore(sptr);
-        if (zsetValueGteMin(score, range)) {
+        if (zsetScoreGteMin(score, range)) {
             /* Check if score <= max. */
-            if (zsetValueLteMax(score, range)) return eptr;
+            if (zsetScoreLteMax(score, range)) return eptr;
             return NULL;
         }
 
@@ -1106,9 +1106,9 @@ unsigned char *zzlLastInRange(unsigned char *zl, zrangespec *range) {
         serverAssert(sptr != NULL);
 
         score = zzlGetScore(sptr);
-        if (zsetValueLteMax(score, range)) {
+        if (zsetScoreLteMax(score, range)) {
             /* Check if score >= min. */
-            if (zsetValueGteMin(score, range)) return eptr;
+            if (zsetScoreGteMin(score, range)) return eptr;
             return NULL;
         }
 
@@ -1126,14 +1126,14 @@ unsigned char *zzlLastInRange(unsigned char *zl, zrangespec *range) {
 
 int zzlLexValueGteMin(unsigned char *p, zlexrangespec *spec) {
     sds value = lpGetObject(p);
-    int res = zsetLexValueGteMin(value, sdslen(value), spec);
+    int res = zsetLexGteMin(value, sdslen(value), spec);
     sdsfree(value);
     return res;
 }
 
 int zzlLexValueLteMax(unsigned char *p, zlexrangespec *spec) {
     sds value = lpGetObject(p);
-    int res = zsetLexValueLteMax(value, sdslen(value), spec);
+    int res = zsetLexLteMax(value, sdslen(value), spec);
     sdsfree(value);
     return res;
 }
@@ -1305,7 +1305,7 @@ static unsigned char *zzlDeleteRangeByScore(unsigned char *zl, zrangespec *range
     /* When the tail of the listpack is deleted, eptr will be NULL. */
     while (eptr && (sptr = lpNext(zl, eptr)) != NULL) {
         score = zzlGetScore(sptr);
-        if (zsetValueLteMax(score, range)) {
+        if (zsetScoreLteMax(score, range)) {
             /* Delete both the element and the score. */
             zl = lpDeleteRangeWithEntry(zl, &eptr, 2);
             num++;
@@ -3333,9 +3333,9 @@ void genericZrangebyscoreCommand(zrange_result_handler *handler,
 
             /* Abort when the node is no longer in range. */
             if (reverse) {
-                if (!zsetValueGteMin(score, range)) break;
+                if (!zsetScoreGteMin(score, range)) break;
             } else {
-                if (!zsetValueLteMax(score, range)) break;
+                if (!zsetScoreLteMax(score, range)) break;
             }
 
             vstr = lpGetValue(eptr, &vlen, &vlong);
@@ -3363,7 +3363,7 @@ void genericZrangebyscoreCommand(zrange_result_handler *handler,
         if (reverse) {
             orderedIndexSeekToScoreRange(&iter, range->min, range->max, range->minex, range->maxex, -offset - 1);
             while (orderedIndexPrev(&iter, &item) && limit--) {
-                if (!zsetScoreGteMin(orderedIndexGetScore(item), range->min, range->minex)) break;
+                if (!zsetScoreGte(orderedIndexGetScore(item), range->min, range->minex)) break;
                 rangelen++;
                 const char *ele_ptr;
                 size_t ele_len;
@@ -3373,7 +3373,7 @@ void genericZrangebyscoreCommand(zrange_result_handler *handler,
         } else {
             orderedIndexSeekToScoreRange(&iter, range->min, range->max, range->minex, range->maxex, offset);
             while (orderedIndexNext(&iter, &item) && limit--) {
-                if (!zsetScoreLteMax(orderedIndexGetScore(item), range->max, range->maxex)) break;
+                if (!zsetScoreLte(orderedIndexGetScore(item), range->max, range->maxex)) break;
                 rangelen++;
                 const char *ele_ptr;
                 size_t ele_len;
@@ -3435,14 +3435,14 @@ void zcountCommand(client *c) {
         /* First element is in range */
         sptr = lpNext(zl, eptr);
         score = zzlGetScore(sptr);
-        serverAssertWithInfo(c, zobj, zsetValueLteMax(score, &range));
+        serverAssertWithInfo(c, zobj, zsetScoreLteMax(score, &range));
 
         /* Iterate over elements in range */
         while (eptr) {
             score = zzlGetScore(sptr);
 
             /* Abort when the node is no longer in range. */
-            if (!zsetValueLteMax(score, &range)) {
+            if (!zsetScoreLteMax(score, &range)) {
                 break;
             } else {
                 count++;
@@ -3594,7 +3594,7 @@ void genericZrangebylexCommand(zrange_result_handler *handler,
                 const char *ele_ptr;
                 size_t ele_len;
                 orderedIndexGetElementRaw(node, &ele_ptr, &ele_len);
-                if (!zsetLexValueGteMin(ele_ptr, ele_len, range)) break;
+                if (!zsetLexGteMin(ele_ptr, ele_len, range)) break;
                 rangelen++;
                 handler->emitResultFromCBuffer(handler, ele_ptr, ele_len, orderedIndexGetScore(node));
             }
@@ -3604,7 +3604,7 @@ void genericZrangebylexCommand(zrange_result_handler *handler,
                 const char *ele_ptr;
                 size_t ele_len;
                 orderedIndexGetElementRaw(node, &ele_ptr, &ele_len);
-                if (!zsetLexValueLteMax(ele_ptr, ele_len, range)) break;
+                if (!zsetLexLteMax(ele_ptr, ele_len, range)) break;
                 rangelen++;
                 handler->emitResultFromCBuffer(handler, ele_ptr, ele_len, orderedIndexGetScore(node));
             }
@@ -3932,7 +3932,7 @@ void genericZpopCommand(client *c,
     int idx;
     robj *key = NULL;
     robj *zobj = NULL;
-    sds ele;
+    sds ele = NULL;
     double score;
 
     if (deleted) *deleted = 0;
@@ -3973,6 +3973,10 @@ void genericZpopCommand(client *c,
 
     /* Remove the element. */
     do {
+        const char *reply_ptr;
+        size_t reply_len;
+        OrderedIndexItem *popped_item = NULL; /* non-NULL only for skiplist */
+
         if (zobj->encoding == OBJ_ENCODING_LISTPACK) {
             unsigned char *zl = objectGetVal(zobj);
             unsigned char *eptr, *sptr;
@@ -3996,59 +4000,47 @@ void genericZpopCommand(client *c,
 
             /* Delete from listpack. */
             serverAssertWithInfo(c, zobj, zsetDel(zobj, ele));
-
-            server.dirty++;
-
-            if (result_count == 0) { /* Do this only for the first iteration. */
-                char *events[2] = {"zpopmin", "zpopmax"};
-                notifyKeyspaceEvent(NOTIFY_ZSET, events[where], key, c->db->id);
-                addZpopInitialReply(c, emitkey, use_nested_array, rangelen, key);
-            }
-
-            if (use_nested_array) {
-                addReplyArrayLen(c, 2);
-            }
-            addReplyBulkCBuffer(c, ele, sdslen(ele));
-            addReplyDouble(c, score);
-            sdsfree(ele);
-            ++result_count;
+            reply_ptr = ele;
+            reply_len = sdslen(ele);
         } else if (zobj->encoding == OBJ_ENCODING_SKIPLIST) {
             zset *zs = objectGetVal(zobj);
 
             /* Pop the first or last element from the ordered index. */
-            OrderedIndexItem *item = (where == ZSET_MAX
-                                          ? orderedIndexPopLast(zs->zidx)
-                                          : orderedIndexPopFirst(zs->zidx));
+            popped_item = (where == ZSET_MAX
+                               ? orderedIndexPopLast(zs->zidx)
+                               : orderedIndexPopFirst(zs->zidx));
 
             /* There must be an element in the sorted set. */
-            serverAssertWithInfo(c, zobj, item != NULL);
-            const char *ele_ptr;
-            size_t ele_len;
-            orderedIndexGetElementRaw(item, &ele_ptr, &ele_len);
-            score = orderedIndexGetScore(item);
+            serverAssertWithInfo(c, zobj, popped_item != NULL);
+            orderedIndexGetElementRaw(popped_item, &reply_ptr, &reply_len);
+            score = orderedIndexGetScore(popped_item);
 
             /* Remove from hashtable. */
-            hashtablePop(zs->ht, (sds)ele_ptr, NULL);
-
-            server.dirty++;
-
-            if (result_count == 0) { /* Do this only for the first iteration. */
-                char *events[2] = {"zpopmin", "zpopmax"};
-                notifyKeyspaceEvent(NOTIFY_ZSET, events[where], key, c->db->id);
-                addZpopInitialReply(c, emitkey, use_nested_array, rangelen, key);
-            }
-
-            if (use_nested_array) {
-                addReplyArrayLen(c, 2);
-            }
-            /* Reply directly from the item's buffer, then free. */
-            addReplyBulkCBuffer(c, ele_ptr, ele_len);
-            addReplyDouble(c, score);
-            orderedIndexFreeItem(item);
-            ++result_count;
+            hashtablePop(zs->ht, (sds)reply_ptr, NULL);
         } else {
             serverPanic("Unknown sorted set encoding");
         }
+
+        server.dirty++;
+
+        if (result_count == 0) { /* Do this only for the first iteration. */
+            char *events[2] = {"zpopmin", "zpopmax"};
+            notifyKeyspaceEvent(NOTIFY_ZSET, events[where], key, c->db->id);
+            addZpopInitialReply(c, emitkey, use_nested_array, rangelen, key);
+        }
+
+        if (use_nested_array) {
+            addReplyArrayLen(c, 2);
+        }
+        addReplyBulkCBuffer(c, reply_ptr, reply_len);
+        addReplyDouble(c, score);
+
+        /* Free encoding-specific resources. */
+        if (popped_item)
+            orderedIndexFreeItem(popped_item);
+        else
+            sdsfree(ele);
+        ++result_count;
     } while (--rangelen);
 
     /* Remove the key, if indeed needed. */

@@ -294,7 +294,7 @@ int geoGetPointsInRange(robj *zobj, double min, double max, GeoShape *shape, geo
             score = zzlGetScore(sptr);
 
             /* If we fell out of range, break. */
-            if (!zsetScoreLteMax(score, range.max, range.maxex)) break;
+            if (!zsetScoreLte(score, range.max, range.maxex)) break;
 
             vstr = lpGetValue(eptr, &vlen, &vlong);
             if (geoWithinShape(shape, score, xy, &distance) == C_OK) {
@@ -317,7 +317,7 @@ int geoGetPointsInRange(robj *zobj, double min, double max, GeoShape *shape, geo
             double distance = 0;
             double score = orderedIndexGetScore(node);
             /* Abort when the node is no longer in range. */
-            if (!zsetScoreLteMax(score, range.max, range.maxex)) break;
+            if (!zsetScoreLte(score, range.max, range.maxex)) break;
             if (geoWithinShape(shape, score, xy, &distance) == C_OK) {
                 /* Append the new element. */
                 const char *ptr;

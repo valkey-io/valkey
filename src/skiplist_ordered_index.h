@@ -3,11 +3,6 @@
 
 #include "sds.h"
 
-typedef struct OrderedIndex OrderedIndex;
-typedef struct OrderedIndexItem OrderedIndexItem;
-typedef uint64_t OrderedIndexIterator[3];
-typedef void (*OrderedIndexOnDelete)(OrderedIndexItem *item, void *ctx);
-
 /* Lifecycle */
 OrderedIndex *skiplistCreate(void);
 void skiplistFree(OrderedIndex *idx);

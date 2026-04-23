@@ -3,9 +3,16 @@
 
 /* Internal skiplist node helpers shared between t_zset.c and
  * skiplist_ordered_index.c.  Not for use outside the skiplist
- * implementation. */
+ * implementation.
+ *
+ * Callers must include server.h before this header for the full
+ * definitions of zrangespec and zlexrangespec. */
 
-#include "server.h"
+#include "sds.h"
+
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
 
 #define ZSKIPLIST_MAXLEVEL 32 /* Should be enough for 2^64 elements */
 #define ZSKIPLIST_MAX_SEARCH 10

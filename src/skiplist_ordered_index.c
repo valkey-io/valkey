@@ -85,7 +85,7 @@ unsigned long skiplistDeleteRangeByScore(OrderedIndex *idx, double min, double m
 
     x = zslGetHeader(zsl);
     for (i = zslGetHeight(zsl) - 1; i >= 0; i--) {
-        while (x->level[i].forward && !zsetValueGteMin(x->level[i].forward->score, &range))
+        while (x->level[i].forward && !zsetScoreGteMin(x->level[i].forward->score, &range))
             x = x->level[i].forward;
         update[i] = x;
     }
@@ -94,7 +94,7 @@ unsigned long skiplistDeleteRangeByScore(OrderedIndex *idx, double min, double m
     x = x->level[0].forward;
 
     /* Delete nodes while in range. */
-    while (x && zsetValueLteMax(x->score, &range)) {
+    while (x && zsetScoreLteMax(x->score, &range)) {
         zskiplistNode *next = x->level[0].forward;
         zslDeleteNode(zsl, x, update);
         if (on_delete) {
@@ -149,7 +149,7 @@ unsigned long skiplistDeleteRangeByLex(OrderedIndex *idx, const_sds min, const_s
     for (i = zslGetHeight(zsl) - 1; i >= 0; i--) {
         while (x->level[i].forward) {
             sds fwd_ele = zslGetNodeElement(x->level[i].forward);
-            if (zsetLexValueGteMin(fwd_ele, sdslen(fwd_ele), &range)) break;
+            if (zsetLexGteMin(fwd_ele, sdslen(fwd_ele), &range)) break;
             x = x->level[i].forward;
         }
         update[i] = x;
@@ -161,7 +161,7 @@ unsigned long skiplistDeleteRangeByLex(OrderedIndex *idx, const_sds min, const_s
     /* Delete nodes while in range. */
     while (x) {
         sds ele = zslGetNodeElement(x);
-        if (!zsetLexValueLteMax(ele, sdslen(ele), &range)) break;
+        if (!zsetLexLteMax(ele, sdslen(ele), &range)) break;
         zskiplistNode *next = x->level[0].forward;
         zslDeleteNode(zsl, x, update);
         if (on_delete) {

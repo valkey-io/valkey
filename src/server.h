@@ -3345,17 +3345,21 @@ typedef struct {
     int minex, maxex; /* are min or max exclusive? */
 } zlexrangespec;
 
-/* Score/lex range comparison helpers */
-static inline bool zsetScoreGteMin(double score, double min, int min_ex) {
+/* Score/lex range comparison helpers.
+ *
+ * zsetScoreGte / zsetScoreLte — compare a score against explicit bounds.
+ * zsetScoreGteMin / zsetScoreLteMax — compare against a zrangespec.
+ * zsetLexGteMin / zsetLexLteMax — compare against a zlexrangespec. */
+static inline bool zsetScoreGte(double score, double min, int min_ex) {
     return min_ex ? (score > min) : (score >= min);
 }
-static inline bool zsetScoreLteMax(double score, double max, int max_ex) {
+static inline bool zsetScoreLte(double score, double max, int max_ex) {
     return max_ex ? (score < max) : (score <= max);
 }
-int zsetValueGteMin(double value, zrangespec *spec);
-int zsetValueLteMax(double value, zrangespec *spec);
-int zsetLexValueGteMin(const char *value, size_t value_len, zlexrangespec *spec);
-int zsetLexValueLteMax(const char *value, size_t value_len, zlexrangespec *spec);
+int zsetScoreGteMin(double value, zrangespec *spec);
+int zsetScoreLteMax(double value, zrangespec *spec);
+int zsetLexGteMin(const char *value, size_t value_len, zlexrangespec *spec);
+int zsetLexLteMax(const char *value, size_t value_len, zlexrangespec *spec);
 
 /* flags for incrCommandFailedCalls */
 #define ERROR_COMMAND_REJECTED (1 << 0) /* Indicate to update the command rejected stats */
@@ -3855,6 +3859,7 @@ void startEvictionTimeProc(void);
 /* Keys hashing/comparison functions for dict.c and hashtable.c hash tables. */
 uint64_t dictSdsHash(const void *key);
 uint64_t dictSdsCaseHash(const void *key);
+uint64_t genHashFunctionConfigurableSeed(const char *buf, size_t len);
 uint64_t dictCStrHash(const void *key);
 uint64_t dictCStrCaseHash(const void *key);
 uint64_t dictEncObjHash(const void *key);

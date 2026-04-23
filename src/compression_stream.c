@@ -398,7 +398,7 @@ int stream_writer_flush(stream_writer_t *t) {
     /* Flush-after-finish is a harmless no-op: frame is already closed. */
     if (t->finished) return 0;
 
-    if (!t->envelope_written || !t->compressor.frame_started) return 0;
+    if (!t->envelope_written || !t->compressor.stream_started) return 0;
     if (streamWriterFeedAndEmit(t, NULL, 0, FLUSH_SYNC) != 0) return -1;
     return 0;
 }
@@ -735,7 +735,7 @@ static ssize_t streamReaderReadCompressed(stream_reader_t *t, uint8_t *dst, size
                     t->error_kind == STREAM_READER_ERROR_NONE ? STREAM_READER_ERROR_IO
                                                               : t->error_kind);
             }
-            if (filled == 0 && !t->decompressor.frame_done) {
+            if (filled == 0 && !streamDecompressorFrameDone(&t->decompressor)) {
                 return streamReaderFailWithError(t, total, STREAM_READER_ERROR_CORRUPT);
             }
             if (filled == 0) break;

@@ -14,7 +14,7 @@
 typedef struct {
     rio base; /* Must be first — allows casting to (rio *) */
     rio *inner;
-    stream_writer_t *compressor;
+    stream_writer_t *writer;
     bool finalized;
 } compress_rio_t;
 

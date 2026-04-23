@@ -87,7 +87,7 @@ ssize_t compressionLz4CompressFeed(stream_compressor_t *sc,
     cctx = (LZ4F_cctx *)sc->ctx;
 
     /* Begin frame on first call */
-    if (!sc->frame_started) {
+    if (!sc->stream_started) {
         /* Local copy of shared prefs so we can set the actual level
          * and checksum mode per-stream. */
         LZ4F_preferences_t prefs = lz4f_prefs;
@@ -105,7 +105,7 @@ ssize_t compressionLz4CompressFeed(stream_compressor_t *sc,
             return -1;
         }
         offset = r;
-        sc->frame_started = true;
+        sc->stream_started = true;
     }
 
     /* Compress input data */
@@ -134,7 +134,7 @@ ssize_t compressionLz4CompressFeed(stream_compressor_t *sc,
         r = LZ4F_compressEnd(cctx, output + offset, output_capacity - offset, NULL);
         if (LZ4F_isError(r)) goto lz4_error;
         offset += r;
-        sc->frame_started = false;
+        sc->stream_started = false;
     }
 
     if (offset > (size_t)SSIZE_MAX) goto lz4_error;

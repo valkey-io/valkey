@@ -132,6 +132,10 @@ void streamDecompressorDestroy(stream_decompressor_t *sd) {
     memset(sd, 0, sizeof(*sd));
 }
 
+bool streamDecompressorFrameDone(const stream_decompressor_t *sd) {
+    return sd && sd->frame_done;
+}
+
 size_t streamCompressOutputBound(const stream_compressor_t *sc, size_t input_len) {
     if (!sc) return 0;
     const compression_codec_impl_t *codec_impl = compressionCodecImplForAlgo(sc->algo);

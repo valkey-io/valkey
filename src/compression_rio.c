@@ -73,11 +73,11 @@ static int compressRioEmit(void *ctx, const uint8_t *data, size_t len) {
 /* rio vtable: write callback — compress then delegate to inner rio */
 static size_t compressRioWrite(rio *r, const void *buf, size_t len) {
     compress_rio_t *cr = (compress_rio_t *)r;
-    if (!cr->compressor || cr->finalized || stream_writer_is_errored(cr->compressor)) {
+    if (!cr->writer || cr->finalized || stream_writer_is_errored(cr->writer)) {
         r->flags |= RIO_FLAG_WRITE_ERROR;
         return 0;
     }
-    if (stream_writer_write(cr->compressor, buf, len) < 0) {
+    if (stream_writer_write(cr->writer, buf, len) < 0) {
         r->flags |= RIO_FLAG_WRITE_ERROR;
         return 0;
     }
@@ -94,13 +94,13 @@ static off_t compressRioTell(rio *r) {
  * This is critical because some call sites flush mid-stream. */
 static int compressRioFlush(rio *r) {
     compress_rio_t *cr = (compress_rio_t *)r;
-    if (!cr->compressor || stream_writer_is_errored(cr->compressor)) return 0;
+    if (!cr->writer || stream_writer_is_errored(cr->writer)) return 0;
     if (cr->finalized) return 1;
 
-    if (stream_writer_flush(cr->compressor) != 0) return 0;
+    if (stream_writer_flush(cr->writer) != 0) return 0;
 
     if (cr->inner->flush && cr->inner->flush(cr->inner) == 0) {
-        stream_writer_set_error(cr->compressor);
+        stream_writer_set_error(cr->writer);
         return 0;
     }
     return 1;
@@ -131,8 +131,8 @@ int rioInitWithCompress(compress_rio_t *cr, rio *inner, const stream_writer_conf
 
     cr->inner = inner;
     cr->finalized = 0;
-    cr->compressor = stream_writer_create(cfg, compressRioEmit, cr);
-    return cr->compressor ? 0 : -1;
+    cr->writer = stream_writer_create(cfg, compressRioEmit, cr);
+    return cr->writer ? 0 : -1;
 }
 
 /* Finalize the compression frame and flush inner rio.
@@ -141,11 +141,11 @@ int rioInitWithCompress(compress_rio_t *cr, rio *inner, const stream_writer_conf
 /* Returns 0 on success, -1 if the compressor or inner flush errored. */
 int compress_rio_finish(compress_rio_t *cr) {
     if (!cr) return -1;
-    if (!cr->compressor) return -1;
-    if (cr->finalized) return stream_writer_is_errored(cr->compressor) ? -1 : 0;
+    if (!cr->writer) return -1;
+    if (cr->finalized) return stream_writer_is_errored(cr->writer) ? -1 : 0;
     cr->finalized = 1;
 
-    if (stream_writer_finish(cr->compressor) != 0) {
+    if (stream_writer_finish(cr->writer) != 0) {
         return -1;
     }
 
@@ -153,18 +153,18 @@ int compress_rio_finish(compress_rio_t *cr) {
      * Propagate flush failure to the compressor error state so
      * callers can detect it. */
     if (cr->inner->flush && cr->inner->flush(cr->inner) == 0) {
-        stream_writer_set_error(cr->compressor);
+        stream_writer_set_error(cr->writer);
     }
-    return stream_writer_is_errored(cr->compressor) ? -1 : 0;
+    return stream_writer_is_errored(cr->writer) ? -1 : 0;
 }
 
 /* Free compressor context and buffers. Does NOT finalize the frame.
  * Call compress_rio_finish() first on all exit paths. */
 void compress_rio_destroy(compress_rio_t *cr) {
     if (!cr) return;
-    if (cr->compressor) {
-        stream_writer_destroy(cr->compressor);
-        cr->compressor = NULL;
+    if (cr->writer) {
+        stream_writer_destroy(cr->writer);
+        cr->writer = NULL;
     }
 }
 

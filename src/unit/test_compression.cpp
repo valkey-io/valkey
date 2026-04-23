@@ -121,7 +121,7 @@ TEST(compression, streamCompressorInitDestroy) {
     stream_compressor_t sc;
     ASSERT_TRUE(streamCompressorInit(&sc, ALGO_LZ4, 0) == 0) << "LZ4 init should succeed";
     ASSERT_TRUE(sc.algo == ALGO_LZ4) << "algo should be LZ4";
-    ASSERT_TRUE(sc.frame_started == false) << "frame_started should be false";
+    ASSERT_TRUE(sc.stream_started == false) << "stream_started should be false";
     ASSERT_TRUE(sc.ctx != NULL) << "ctx should be non-NULL";
     streamCompressorDestroy(&sc);
     ASSERT_TRUE(sc.ctx == NULL) << "ctx should be NULL after destroy";
@@ -166,7 +166,7 @@ TEST(compression, streamCompressDecompressRoundTrip) {
                                                 (const uint8_t *)input, input_len,
                                                 FLUSH_END);
     ASSERT_TRUE(compressed_len > 0) << "compress should succeed";
-    ASSERT_TRUE(sc.frame_started == false) << "frame should be closed after FLUSH_END";
+    ASSERT_TRUE(sc.stream_started == false) << "frame should be closed after FLUSH_END";
     streamCompressorDestroy(&sc);
 
     /* Decompress */
@@ -296,7 +296,7 @@ TEST(compression, streamCompressFeedErrorRecovery) {
                                      (const uint8_t *)"test data", 9, FLUSH_END);
     ASSERT_TRUE(ret == -1) << "should fail with tiny buffer";
     ASSERT_TRUE(sc.errored == false) << "errored should NOT be set (pre-frame failure)";
-    ASSERT_TRUE(sc.frame_started == false) << "frame_started should still be false";
+    ASSERT_TRUE(sc.stream_started == false) << "stream_started should still be false";
 
     /* Retry with a proper buffer — should succeed */
     size_t bound = streamCompressOutputBound(&sc, 9);
@@ -317,7 +317,7 @@ TEST(compression, streamCompressFeedErrorRecovery) {
     ssize_t ret3 = streamCompressFeed(&sc2, buf2, bound2,
                                       (const uint8_t *)"hello", 5, FLUSH_CONTINUE);
     ASSERT_TRUE(ret3 >= 0) << "first write should succeed";
-    ASSERT_TRUE(sc2.frame_started == true) << "frame should be started";
+    ASSERT_TRUE(sc2.stream_started == true) << "stream should be started";
 
     /* Now force a mid-frame error with a tiny buffer */
     uint8_t tiny2[1];

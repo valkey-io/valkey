@@ -32,7 +32,7 @@ typedef struct {
     compression_algo_t algo;
     int level;
     void *ctx; /* Private codec-specific compressor context. */
-    bool frame_started;
+    bool stream_started;
     bool errored;        /* Permanently failed — algorithm state is undefined after
                           * an error. All subsequent streamCompressFeed calls return
                           * -1 immediately. The caller must tear down the stream
@@ -70,6 +70,9 @@ void streamCompressorDestroy(stream_compressor_t *sc);
 /* Initialize/destroy streaming decompressor. */
 int streamDecompressorInit(stream_decompressor_t *sd, compression_algo_t algo);
 void streamDecompressorDestroy(stream_decompressor_t *sd);
+
+/* Returns true when the codec frame has been fully decoded. */
+bool streamDecompressorFrameDone(const stream_decompressor_t *sd);
 
 /* Return upper bound on compressed output size.
  * The bound is conservative: it includes frame header, data, and flush/end

@@ -597,9 +597,6 @@ jobs:
       - name: test
         if: true && !contains(github.event.inputs.skiptests, 'valkey')
         run: ./runtest --io-threads --accurate --verbose --tags network --dump-logs ${{github.event.inputs.test_args}}
-      - name: cluster tests
-        if: true && !contains(github.event.inputs.skiptests, 'cluster')
-        run: ./runtest --cluster --io-threads --accurate --verbose --dump-logs ${{github.event.inputs.cluster_test_args}}
   test-ubuntu-tls-io-threads:
     runs-on: ubuntu-latest
     if: |
@@ -644,10 +641,6 @@ jobs:
         if: true && !contains(github.event.inputs.skiptests, 'valkey')
         run: |
           ./runtest --io-threads --tls --accurate --verbose --tags network --dump-logs ${{github.event.inputs.test_args}}
-      - name: cluster tests
-        if: true && !contains(github.event.inputs.skiptests, 'cluster')
-        run: |
-          ./runtest --cluster --io-threads --tls --accurate --verbose --dump-logs ${{github.event.inputs.cluster_test_args}}
   test-ubuntu-reclaim-cache:
     runs-on: ubuntu-latest
     if: |
@@ -958,7 +951,7 @@ jobs:
           sudo apt-get install tcl8.6 tclx -y
       - name: test
         if: true && !contains(github.event.inputs.skiptests, 'valkey')
-        run: ./runtest --accurate --verbose --tags -cluster --dump-logs ${{github.event.inputs.test_args}}
+        run: ./runtest --accurate --verbose --dump-logs ${{github.event.inputs.test_args}}
       - name: module api test
         if: true && !contains(github.event.inputs.skiptests, 'modules')
         run: CFLAGS='-Werror' ./runtest-moduleapi --verbose --dump-logs ${{github.event.inputs.test_args}}
@@ -1093,7 +1086,7 @@ jobs:
           sudo apt-get install tcl8.6 tclx -y
       - name: test
         if: true && !contains(github.event.inputs.skiptests, 'valkey')
-        run: ./runtest --accurate --verbose --tags -cluster --dump-logs ${{github.event.inputs.test_args}}
+        run: ./runtest --accurate --verbose --dump-logs ${{github.event.inputs.test_args}}
       - name: module api test
         if: true && !contains(github.event.inputs.skiptests, 'modules')
         run: CFLAGS='-Werror' ./runtest-moduleapi --verbose --dump-logs ${{github.event.inputs.test_args}}
@@ -1224,7 +1217,7 @@ jobs:
           sudo apt-get install tcl8.6 tclx -y
       - name: test
         if: true && !contains(github.event.inputs.skiptests, 'valkey')
-        run: ./runtest --accurate --verbose --tags -cluster --dump-logs ${{github.event.inputs.test_args}}
+        run: ./runtest --accurate --verbose --dump-logs ${{github.event.inputs.test_args}}
       - name: module api test
         if: true && !contains(github.event.inputs.skiptests, 'modules')
         run: CFLAGS='-Werror' ./runtest-moduleapi --verbose --dump-logs ${{github.event.inputs.test_args}}

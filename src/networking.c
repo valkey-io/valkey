@@ -3326,7 +3326,10 @@ void readToQueryBuf(client *c) {
     size_t qblen, readlen;
 
     /* If the replica RDB client is marked as closed ASAP, do not try to read from it */
-    if (c->flag.close_asap) return;
+    if (c->flag.close_asap) {
+        c->nread = 0;
+        return;
+    }
 
     int is_primary = c->read_flags & READ_FLAGS_PRIMARY;
 

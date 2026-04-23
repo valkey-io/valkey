@@ -2092,17 +2092,20 @@ done:
     if (argv) sdsfreesplitres(argv, argc);
 }
 
-/* Apply a SET_REPLICA_OF entry. Format: "<replica-id> <primary-id-or-dash>" */
+/* Apply a SET_REPLICA_OF entry.
+ * Format: "<replica-id> <primary-id-or-dash> <shard-id>" */
 static void clusterRaftApplySetReplica(sds data) {
     int argc;
     sds *argv = sdssplitlen(data, sdslen(data), " ", 1, &argc);
-    if (!argv || argc != 2) goto done;
+    if (!argv || argc != 3) goto done;
 
     clusterNode *replica = clusterLookupNode(argv[0], sdslen(argv[0]));
     if (!replica) goto done;
 
+    char *shard_id = argv[2];
+
     if (sdslen(argv[1]) == 1 && argv[1][0] == '-') {
-        /* Promote to primary. */
+        /* Promote to primary with the shard-id from the entry. */
         if (nodeIsReplica(replica)) {
             if (replica->replicaof) clusterNodeRemoveReplica(replica->replicaof, replica);
             replica->flags &= ~CLUSTER_NODE_REPLICA;
@@ -2110,14 +2113,14 @@ static void clusterRaftApplySetReplica(sds data) {
             replica->replicaof = NULL;
             if (replica == myself) replicationUnsetPrimary();
         }
-        char new_shard_id[CLUSTER_NAMELEN];
-        getRandomHexChars(new_shard_id, CLUSTER_NAMELEN);
         clusterRemoveNodeFromShard(replica);
-        memcpy(replica->shard_id, new_shard_id, CLUSTER_NAMELEN);
-        clusterAddNodeToShard(new_shard_id, replica);
+        memcpy(replica->shard_id, shard_id, CLUSTER_NAMELEN);
+        clusterAddNodeToShard(shard_id, replica);
     } else {
         clusterNode *primary = clusterLookupNode(argv[1], sdslen(argv[1]));
         if (!primary) goto done;
+        /* Guard: skip if the primary's shard-id has changed. */
+        if (memcmp(primary->shard_id, shard_id, CLUSTER_NAMELEN) != 0) goto done;
         if (replica == myself) {
             clusterSetPrimary(primary, 1, 1);
         } else {
@@ -2199,11 +2202,22 @@ static void clusterRaftForgetNode(const char *node_id, size_t id_len, void *ctx,
 }
 
 static void clusterRaftSetReplicaOf(clusterNode *primary, void *ctx, void (*callback)(void *ctx, const char *error)) {
-    /* Propose SET_REPLICA_OF: "<myself-id> <primary-id-or-dash>" */
+    /* Propose SET_REPLICA_OF: "<myself-id> <primary-id-or-dash> <shard-id>"
+     * For promotion (dash): shard-id is a new random id.
+     * For assignment: shard-id is the primary's current shard-id, used
+     * as a guard against concurrent shard changes. */
     sds entry = sdsnew("SET_REPLICA_OF ");
     entry = sdscatlen(entry, myself->name, CLUSTER_NAMELEN);
     entry = sdscatlen(entry, " ", 1);
     entry = sdscatlen(entry, primary ? primary->name : "-", primary ? CLUSTER_NAMELEN : 1);
+    entry = sdscatlen(entry, " ", 1);
+    if (primary) {
+        entry = sdscatlen(entry, primary->shard_id, CLUSTER_NAMELEN);
+    } else {
+        char new_shard_id[CLUSTER_NAMELEN];
+        getRandomHexChars(new_shard_id, CLUSTER_NAMELEN);
+        entry = sdscatlen(entry, new_shard_id, CLUSTER_NAMELEN);
+    }
     clusterRaftPropose(entry, ctx, callback);
     sdsfree(entry);
 }

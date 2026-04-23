@@ -95,19 +95,27 @@ SLOT_CHANGE <node-id-or-dash> <range> [<range> ...]
     Assign or remove slot ownership. A dash means "no owner" (delete
     slots). Ranges use the nodes.conf format: "0-5460" or "5461".
 
-SET_REPLICA_OF <replica-id> <primary-id-or-dash>
+SET_REPLICA_OF <replica-id> <primary-id-or-dash> <shard-id>
     Set a node as replica of a primary (CLUSTER REPLICATE). A dash as
-    primary means promote to primary.
+    primary means promote to primary. The shard-id is the target shard:
+    for promotion, a new random id; for assignment, the primary's
+    current shard-id (used as a guard against concurrent changes).
 
-FAILOVER <node-id>
-    Initiate a manual failover. Not yet implemented.
+FAILOVER <replica-id> <primary-id>
+    The replica takes over the primary's slots and becomes primary.
+    The old primary becomes a replica of the new primary.
 
-NODE_INFO <node-id> <key>=<value> [<key>=<value> ...]
-    Update node metadata (IP, port, hostname). Not yet implemented.
+NODE_INFO <node-id> <address-string> <flags>
+    Update node address and self-set flags. The address-string uses
+    the nodes.conf format. Flags is "nofailover" or "noflags".
 
 NODE_FAIL <node-id>
     Mark a node as failed. Proposed by the leader when a peer exceeds
     the node timeout without responding to heartbeats.
+
+NODE_RECOVER <node-id>
+    Clear the FAIL flag. Proposed by the leader when it receives
+    AE_ACK from a previously failed node.
 ```
 
 Ranges in SLOT_CHANGE use the same format as nodes.conf: `0-5460` or

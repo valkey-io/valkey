@@ -70,6 +70,7 @@ test "Instance #0 gets converted into a slave" {
     } else {
         fail "Old master was not converted into slave"
     }
+    wait_for_cluster_propagation
 }
 
 } ;# start_cluster
@@ -124,6 +125,7 @@ start_cluster 3 6 {tags {external:skip cluster}} {
         } else {
             fail "Old primary was not converted into replica"
         }
+        wait_for_cluster_propagation
     }
 
     test "Make sure the replicas always get the different ranks" {

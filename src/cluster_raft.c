@@ -171,6 +171,7 @@ typedef struct {
     unsigned int todo_connect_nodes : 1;
     unsigned int todo_broadcast_ae : 1;
     unsigned int todo_retry_proposals : 1;
+    unsigned int todo_schedule_failover : 1;
 
     /* NODE_INFO divergence detection. */
     sds my_last_committed_info;
@@ -847,19 +848,13 @@ static void raftLogApply(raftLogEntry *e) {
         serverLog(LL_NOTICE, "Applied NODE_FAIL %.40s (index %llu).",
                   e->data, (unsigned long long)e->index);
 
-        /* If the failed node is my primary, compute failover rank. */
+        /* If the failed node is my primary, defer failover scheduling
+         * to beforeSleep. This avoids acting on stale NODE_FAIL entries
+         * when catching up on old log entries — a subsequent NODE_RECOVER
+         * in the same batch will clear the flag. */
         if (node && nodeIsReplica(myself) && myself->replicaof == node &&
             !nodeCantFailover(myself)) {
-            long long my_offset = replicationGetReplicaOffset();
-            int rank = 0;
-            for (int r = 0; r < clusterNodeNumReplicas(node); r++) {
-                clusterNode *sibling = clusterNodeGetReplica(node, r);
-                if (sibling == myself) continue;
-                if (sibling->repl_offset > my_offset) rank++;
-            }
-            rs->failover_time = mstime() + rank * 1000;
-            serverLog(LL_NOTICE, "Primary %.40s failed, failover rank %d.",
-                      node->name, rank);
+            rs->todo_schedule_failover = 1;
         }
         break;
     }
@@ -870,6 +865,10 @@ static void raftLogApply(raftLogEntry *e) {
             RAFT_DATA(node)->peer.pending_fail_change = 0;
             rs->todo_update_slot_coverage = 1;
             rs->todo_invalidate_slots_cache = 1;
+            /* Cancel deferred failover if the recovered node is my primary. */
+            if (nodeIsReplica(myself) && myself->replicaof == node) {
+                rs->todo_schedule_failover = 0;
+            }
         }
         serverLog(LL_NOTICE, "Applied NODE_RECOVER %.40s (index %llu).",
                   e->data, (unsigned long long)e->index);
@@ -1637,6 +1636,24 @@ static void clusterRaftBeforeSleep(void) {
         clearCachedClusterSlotsResponse();
     }
 
+    if (rs->todo_schedule_failover) {
+        rs->todo_schedule_failover = 0;
+        /* Schedule automatic failover if my primary is still failed. */
+        if (nodeIsReplica(myself) && myself->replicaof &&
+            nodeFailed(myself->replicaof) && !nodeCantFailover(myself)) {
+            long long my_offset = replicationGetReplicaOffset();
+            int rank = 0;
+            for (int r = 0; r < clusterNodeNumReplicas(myself->replicaof); r++) {
+                clusterNode *sibling = clusterNodeGetReplica(myself->replicaof, r);
+                if (sibling == myself) continue;
+                if (sibling->repl_offset > my_offset) rank++;
+            }
+            rs->failover_time = mstime() + rank * 1000;
+            serverLog(LL_NOTICE, "Primary %.40s failed, scheduling failover (rank %d).",
+                      myself->replicaof->name, rank);
+        }
+    }
+
     /* Keep myself->repl_offset up to date for CLUSTER SLOTS/SHARDS. */
     if (nodeIsReplica(myself)) {
         myself->repl_offset = replicationGetReplicaOffset();
@@ -2155,7 +2172,7 @@ static void clusterRaftApplyFailover(sds data) {
     clusterNode *replica = clusterLookupNode(argv[0], sdslen(argv[0]));
     clusterNode *primary = clusterLookupNode(argv[1], sdslen(argv[1]));
     if (!replica || !primary) goto done;
-    if (!nodeIsReplica(replica)) goto done;
+    if (!nodeIsReplica(replica) || nodeIsReplica(primary) || replica->replicaof != primary) goto done;
 
     /* Transfer slots from old primary to new primary. */
     for (int j = 0; j < CLUSTER_SLOTS; j++) {
@@ -2170,6 +2187,15 @@ static void clusterRaftApplyFailover(sds data) {
     replica->flags &= ~CLUSTER_NODE_REPLICA;
     replica->flags |= CLUSTER_NODE_PRIMARY;
     replica->replicaof = NULL;
+
+    /* Reassign all remaining replicas of the old primary to the new primary. */
+    while (clusterNodeNumReplicas(primary) > 0) {
+        clusterNode *r = clusterNodeGetReplica(primary, 0);
+        clusterNodeRemoveReplica(primary, r);
+        r->replicaof = replica;
+        clusterNodeAddReplica(replica, r);
+        if (r == myself) clusterSetPrimary(replica, 1, 1);
+    }
 
     /* Demote old primary to replica of new primary. */
     primary->flags &= ~CLUSTER_NODE_PRIMARY;

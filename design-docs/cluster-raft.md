@@ -421,6 +421,40 @@ TODO: The Raft log and state (currentTerm, votedFor) will be persisted
 in nodes.conf using the vars section for Raft state and additional
 lines for uncommitted log entries.
 
+## Shard Epoch (not yet implemented)
+
+A shard-epoch is a per-shard monotonically increasing counter, bumped
+on topology changes within the shard (FAILOVER, SET_REPLICA_OF,
+SLOT_CHANGE). Entries that modify shard topology include the current
+shard-epoch at proposal time. On apply, if the shard-epoch has
+advanced, the entry is stale and becomes a no-op.
+
+This prevents stale entries from causing inconsistencies when
+concurrent operations race in the log. Example:
+
+```
+Slot migration racing with failover:
+
+1. Atomic slot migration starts: keys transferred from shard A to B.
+2. Primary of shard A fails. FAILOVER entry is proposed.
+3. Migration is rolled back (keys stay on shard A's new primary).
+4. SLOT_CHANGE entry (assigning slot to shard B) was proposed before
+   the failover and appears after FAILOVER in the log.
+5. Without shard-epoch: SLOT_CHANGE applies, slot moves to shard B,
+   but keys are on shard A. Data and ownership are out of sync.
+6. With shard-epoch: FAILOVER bumped shard A's epoch. SLOT_CHANGE
+   carries the old epoch, so it's a no-op. Slot stays on shard A.
+```
+
+Entries that should carry a shard-epoch:
+- FAILOVER (bumps epoch of the shard)
+- SET_REPLICA_OF (bumps epoch when changing shard membership)
+- SLOT_CHANGE (checked against source and target shard epochs)
+
+Entries that don't need a shard-epoch:
+- NODE_FAIL / NODE_RECOVER (liveness, not topology)
+- NODE_INFO / NODE_JOIN / NODE_FORGET (node-level, not shard-level)
+
 ## Future Work
 
 - Pre-vote protocol to avoid term inflation from partitioned nodes.

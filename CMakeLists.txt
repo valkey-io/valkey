@@ -72,6 +72,7 @@ export VALKEY_BIN_DIR=\"${CMAKE_BINARY_DIR}/bin\"
 endfunction()
 
 copy_runtest_script("runtest")
+copy_runtest_script("runtest-cluster")
 copy_runtest_script("runtest-moduleapi")
 copy_runtest_script("runtest-rdma")
 copy_runtest_script("runtest-sentinel")

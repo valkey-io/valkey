@@ -51,6 +51,36 @@
                         "type": "string",
                         "pattern": "^[0-9a-fA-F]{40}$",
                         "description": "40 character node name of the node to migrate to"
+                    },
+                    {
+                        "name": "authentication",
+                        "type": "oneof",
+                        "optional": true,
+                        "arguments": [
+                            {
+                                "token": "AUTH",
+                                "name": "auth",
+                                "display": "password",
+                                "type": "string",
+                                "since": "9.1.0"
+                            },
+                            {
+                                "token": "AUTH2",
+                                "name": "auth2",
+                                "type": "block",
+                                "since": "9.1.0",
+                                "arguments": [
+                                    {
+                                        "name": "username",
+                                        "type": "string"
+                                    },
+                                    {
+                                        "name": "password",
+                                        "type": "string"
+                                    }
+                                ]
+                            }
+                        ]
                     }
                 ]
             }

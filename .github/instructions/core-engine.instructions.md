@@ -9,7 +9,7 @@ applyTo:
 Apply these standards to core engine C code. Do NOT apply to `deps/` (vendored dependencies).
 
 ## 1. Code Style (from DEVELOPMENT_GUIDE.md)
-- **Formatting:** Follow clang-format (4-space indent, no tabs, braces attached).
+- **Formatting:** Follow astyle (4-space indent, no tabs, braces attached).
 - **Comments:**
   - C-style `/* ... */` for single or multi-line.
   - C++ `//` only for single-line.

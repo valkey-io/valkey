@@ -12,7 +12,7 @@ During our long development history, we've made a lot of inconsistent decisions,
    When the workload characteristics can't be inferred or imply a tradeoff (CPU vs memory), then provide a configuration.
 
 ## General style guidelines
-Most of the style guidelines are enforced by clang format, but some additional comments are included here.
+Most of the style guidelines are enforced by astyle, but some additional comments are included here.
 
 1. C style comments `/* comment */` can be used for both single and multi-line comments.
    C++ comments `//` can only be used for single line comments.

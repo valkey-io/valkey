@@ -1,0 +1,7 @@
+--indent=spaces=4
+--convert-tabs
+--align-pointer=name
+--align-reference=name
+--pad-header
+--pad-oper
+--max-code-length=120

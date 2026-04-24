@@ -1114,9 +1114,11 @@ static int clusterRaftProcessAppendEntriesResponse(clusterLink *link, int argc, 
 
     /* Broadcast this node's offset to all peers when it transitions
      * from 0 to non-zero (e.g. replica finishes initial sync). */
-    if (prev_offset == 0 && follower_repl_offset > 0) {
+    if (prev_offset == 0 && follower_repl_offset > 0 && !(node->flags & CLUSTER_NODE_MEET)) {
         sds msg = wireNewMsg("REPL_OFFSETS");
-        msg = sdscatfmt(msg, " %.40s %I", node->name, (long long)follower_repl_offset);
+        msg = sdscatlen(msg, " ", 1);
+        msg = sdscatlen(msg, node->name, CLUSTER_NAMELEN);
+        msg = sdscatfmt(msg, " %I", (long long)follower_repl_offset);
         msg = wireFinishMsg(msg);
         size_t msg_len = sdslen(msg);
         clusterMsgSendBlock *block = clusterAllocMsgSendBlock(msg_len);
@@ -1127,6 +1129,7 @@ static int clusterRaftProcessAppendEntriesResponse(clusterLink *link, int argc, 
         while ((bde = dictNext(bdi)) != NULL) {
             clusterNode *n = dictGetVal(bde);
             if (n == myself || !n->link) continue;
+            if (RAFT_DATA(n)->peer.match_index == 0) continue;
             clusterLinkSendBlock(n->link, block);
         }
         dictReleaseIterator(bdi);
@@ -1456,28 +1459,40 @@ static void clusterRaftCron(void) {
             if (now - rs->last_repl_offsets_broadcast > 10000) {
                 rs->last_repl_offsets_broadcast = now;
                 sds msg = wireNewMsg("REPL_OFFSETS");
+                int count = 0;
                 dictIterator *odi = dictGetSafeIterator(server.cluster->nodes);
                 dictEntry *ode;
                 while ((ode = dictNext(odi)) != NULL) {
                     clusterNode *n = dictGetVal(ode);
                     if (n == myself) continue;
-                    msg = sdscatfmt(msg, " %.40s %I", n->name, (long long)n->repl_offset);
+                    if (n->flags & CLUSTER_NODE_MEET) continue; /* Not yet in the log. */
+                    msg = sdscatlen(msg, " ", 1);
+                    msg = sdscatlen(msg, n->name, CLUSTER_NAMELEN);
+                    msg = sdscatfmt(msg, " %I", (long long)n->repl_offset);
+                    count++;
                 }
                 dictReleaseIterator(odi);
-                msg = wireFinishMsg(msg);
-                size_t msg_len = sdslen(msg);
-                clusterMsgSendBlock *block = clusterAllocMsgSendBlock(msg_len);
-                memcpy(block->data, msg, msg_len);
-                sdsfree(msg);
-                dictIterator *bdi = dictGetSafeIterator(server.cluster->nodes);
-                dictEntry *bde;
-                while ((bde = dictNext(bdi)) != NULL) {
-                    clusterNode *n = dictGetVal(bde);
-                    if (n == myself || !n->link) continue;
-                    clusterLinkSendBlock(n->link, block);
+                if (count > 0) {
+                    msg = wireFinishMsg(msg);
+                    size_t msg_len = sdslen(msg);
+                    clusterMsgSendBlock *block = clusterAllocMsgSendBlock(msg_len);
+                    memcpy(block->data, msg, msg_len);
+                    sdsfree(msg);
+                    dictIterator *bdi = dictGetSafeIterator(server.cluster->nodes);
+                    dictEntry *bde;
+                    while ((bde = dictNext(bdi)) != NULL) {
+                        clusterNode *n = dictGetVal(bde);
+                        if (n == myself || !n->link) continue;
+                        /* Skip followers that haven't acked any entries yet —
+                         * they don't know about the nodes we're reporting. */
+                        if (RAFT_DATA(n)->peer.match_index == 0) continue;
+                        clusterLinkSendBlock(n->link, block);
+                    }
+                    dictReleaseIterator(bdi);
+                    clusterMsgSendBlockDecrRefCount(block);
+                } else {
+                    sdsfree(msg);
                 }
-                dictReleaseIterator(bdi);
-                clusterMsgSendBlockDecrRefCount(block);
             }
 
             /* Leader: detect node failures. */
@@ -1520,7 +1535,9 @@ static void clusterRaftCron(void) {
                                                  ? (nodeIsReplica(myself) ? replicationGetReplicaOffset()
                                                                           : server.primary_repl_offset)
                                                  : RAFT_DATA(replica)->peer.repl_offset;
-                            hint = sdscatfmt(hint, " %.40s %I", replica->name, roff);
+                            hint = sdscatlen(hint, " ", 1);
+                            hint = sdscatlen(hint, replica->name, CLUSTER_NAMELEN);
+                            hint = sdscatfmt(hint, " %I", roff);
                         }
                         hint = wireFinishMsg(hint);
 
@@ -2146,11 +2163,6 @@ static void clusterRaftApplySetReplica(sds data) {
             replica->flags |= CLUSTER_NODE_REPLICA;
             replica->replicaof = primary;
             clusterNodeAddReplica(primary, replica);
-            /* Fake a non-zero replication offset so isNodeAvailable() returns
-             * true and the node appears in CLUSTER SLOTS. The real offset
-             * arrives via REPL_OFFSETS broadcast from the leader, but it
-             * doesn't seem to work yet. */
-            if (replica->repl_offset == 0) replica->repl_offset = 1; /* TODO: remove this line */
             /* Move replica to primary's shard. */
             clusterRemoveNodeFromShard(replica);
             memcpy(replica->shard_id, primary->shard_id, CLUSTER_NAMELEN);

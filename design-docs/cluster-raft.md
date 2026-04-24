@@ -411,9 +411,11 @@ planned for when a replica finishes initial sync (offset transitions
 from 0 to non-zero).
 
 On the leader, CLUSTER SLOTS and CLUSTER SHARDS show accurate offsets
-and health. On followers, remote replicas use `repl_offset = 1` as a
-placeholder (set when applying SET_REPLICA_OF) until REPL_OFFSETS
-broadcast to all nodes is fully implemented.
+and health. On followers, remote replicas start with `repl_offset = 0`
+(hidden from CLUSTER SLOTS) until the leader broadcasts their real
+offset via REPL_OFFSETS. The broadcast is triggered immediately when
+a node's offset transitions from 0 to non-zero, and periodically
+every 10 seconds.
 
 ## Persistence
 

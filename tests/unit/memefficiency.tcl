@@ -509,23 +509,18 @@ start_server {tags {"defrag external:skip"} overrides {appendonly yes auto-aof-r
 
                 # add a mass of keys with 600 bytes values, fill the bin of 640 bytes which has 32 regs per slab.
                 set rd [redis_deferring_client]
+                $rd client reply off
                 set keys 640000
                 for {set j 0} {$j < $keys} {incr j} {
                     $rd setrange $j 600 x
-                }
-                for {set j 0} {$j < $keys} {incr j} {
-                    $rd read ; # Discard replies
+                    if {$j % 1000 == 999} {client_reply_off_wait_for_server $rd}
                 }
 
                 # create some fragmentation of 50%
-                set sent 0
                 for {set j 0} {$j < $keys} {incr j 1} {
                     $rd del $j
-                    incr sent
                     incr j 1
-                }
-                for {set j 0} {$j < $sent} {incr j} {
-                    $rd read ; # Discard replies
+                    if {$j % 1000 == 998} {client_reply_off_wait_for_server $rd}
                 }
                 $rd close
 

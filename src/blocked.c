@@ -901,6 +901,7 @@ static hashtableType keyToClientsHashtableType = {
 
 // Return the list of clients blocked on key, or NULL if none exist.
 static list *keyToClients_getBlockedClientsList(robj *key) {
+    if (!inuse_key_to_clients) return NULL;
     keyToClientsEntry *entry;
     if (hashtableFind(inuse_key_to_clients, key, (void **)&entry)) {
         return entry->clients;

@@ -325,15 +325,13 @@ void computeDatasetProfile(int dbid, robj *keyobj, robj *o, long long expiretime
             void *next;
             while (hashtableNext(&iter, &next)) {
                 OrderedIndexItem *node = next;
-                size_t eleLen = 0;
 
                 const int len = fpconv_dtoa(orderedIndexGetScore(node), buf);
                 buf[len] = '\0';
                 const char *ele_ptr;
                 size_t ele_len;
                 orderedIndexGetElementRaw(node, &ele_ptr, &ele_len);
-                eleLen += ele_len + strlen(buf);
-                statsRecordElementSize(eleLen, 1, stats);
+                statsRecordElementSize(ele_len + strlen(buf), 1, stats);
             }
             hashtableCleanupIterator(&iter);
             statsRecordCount(hashtableSize(zs->ht), stats);

@@ -430,9 +430,11 @@ void sortCommandGeneric(client *c, int readonly) {
             /* Seek so that prev() returns the element at startrank */
             orderedIndexSeekToRank(&oiiter, startrank);
         } else {
-            unsigned long startrank = (start > 0) ? (unsigned long)(start + 1) : 1;
-            /* Seek so that next() returns the element at startrank */
-            orderedIndexSeekToRank(&oiiter, startrank - 1);
+            /* start is 0-based; seekToRank uses 1-based ranks and positions
+             * the iterator so that next() returns rank N+1.  Seeking to rank
+             * 'start' makes next() return rank start+1, i.e. the element at
+             * 0-based index 'start'. */
+            orderedIndexSeekToRank(&oiiter, (unsigned long)start);
         }
 
         while (rangelen--) {

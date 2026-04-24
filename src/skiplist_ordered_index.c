@@ -2,8 +2,8 @@
 #include "ordered_index.h"
 #include "skiplist_internal.h"
 
-static_assert(sizeof(OrderedIndexIterator) >= sizeof(zskiplistIterator),
-              "OrderedIndexIterator must be large enough to hold zskiplistIterator");
+static_assert(sizeof(OrderedIndexIterator) >= sizeof(zslIter),
+              "OrderedIndexIterator must be large enough to hold zslIter");
 
 /* Skiplist implementation of OrderedIndex interface */
 
@@ -199,10 +199,6 @@ double skiplistGetScore(const OrderedIndexItem *node) {
     return zslGetScore((const zskiplistNode *)node);
 }
 
-size_t skiplistElementLen(const char *ptr) {
-    return sdslen((const_sds)ptr);
-}
-
 unsigned long skiplistCountScoreRange(OrderedIndex *idx, double min, double max, int min_ex, int max_ex) {
     zskiplist *zsl = (zskiplist *)idx;
     zrangespec range = {.min = min, .max = max, .minex = min_ex, .maxex = max_ex};
@@ -239,31 +235,31 @@ unsigned long skiplistCountLexRange(OrderedIndex *idx, const_sds min, const_sds 
 /* Iterator */
 
 void skiplistInitIterator(OrderedIndexIterator *iter, OrderedIndex *idx) {
-    zslInitIterator((zskiplistIterator *)iter, (zskiplist *)idx);
+    zslInitIterator((zslIter *)iter, (zskiplist *)idx);
 }
 
 void skiplistResetIterator(OrderedIndexIterator *iter) {
-    zslResetIterator((zskiplistIterator *)iter);
+    zslResetIterator((zslIter *)iter);
 }
 
 bool skiplistNext(OrderedIndexIterator *iter, OrderedIndexItem **pos) {
-    return zslNext((zskiplistIterator *)iter, (zskiplistNode **)pos);
+    return zslNext((zslIter *)iter, (zskiplistNode **)pos);
 }
 
 bool skiplistPrev(OrderedIndexIterator *iter, OrderedIndexItem **pos) {
-    return zslPrev((zskiplistIterator *)iter, (zskiplistNode **)pos);
+    return zslPrev((zslIter *)iter, (zskiplistNode **)pos);
 }
 
 void skiplistSeekToRank(OrderedIndexIterator *iter, unsigned long rank) {
-    zslSeekToRank((zskiplistIterator *)iter, rank);
+    zslSeekToRank((zslIter *)iter, rank);
 }
 
 void skiplistSeekToScoreRange(OrderedIndexIterator *iter, double min, double max, int min_ex, int max_ex, long offset) {
-    zslSeekToScoreRange((zskiplistIterator *)iter, min, max, min_ex, max_ex, offset);
+    zslSeekToScoreRange((zslIter *)iter, min, max, min_ex, max_ex, offset);
 }
 
 void skiplistSeekToLexRange(OrderedIndexIterator *iter, const_sds min, const_sds max, int min_ex, int max_ex, long offset) {
-    zslSeekToLexRange((zskiplistIterator *)iter, min, max, min_ex, max_ex, offset);
+    zslSeekToLexRange((zslIter *)iter, min, max, min_ex, max_ex, offset);
 }
 
 /* Memory */

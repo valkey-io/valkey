@@ -84,13 +84,19 @@ static const void *zsetHashtableGetKey(const void *element) {
     return ptr;
 }
 
+/* The zset hashtable callbacks operate on SDS element strings returned by
+ * entryGetKey.  When the ordered index backend changes (e.g. to a B+ tree),
+ * the hash/compare callbacks and entryGetKey will need to be revisited so
+ * they can distinguish between stored OrderedIndexItem pointers and plain
+ * SDS lookup keys. */
+
 static uint64_t zsetHashtableHash(const void *key) {
-    return genHashFunctionConfigurableSeed(key, orderedIndexElementLen(key));
+    return genHashFunctionConfigurableSeed(key, sdslen((const_sds)key));
 }
 
 static int zsetHashtableKeyCompare(const void *key1, const void *key2) {
-    size_t l1 = orderedIndexElementLen(key1);
-    size_t l2 = orderedIndexElementLen(key2);
+    size_t l1 = sdslen((const_sds)key1);
+    size_t l2 = sdslen((const_sds)key2);
     if (l1 != l2) return 0;
     return memcmp(key1, key2, l1) == 0;
 }
@@ -559,44 +565,28 @@ zskiplistNode *zslGetElementByRank(zskiplist *zsl, unsigned long rank) {
  * Skiplist iterator
  *----------------------------------------------------------------------------*/
 
-/* Internal iterator structure */
-typedef struct {
-    zskiplist *zsl;      /* The skiplist being iterated */
-    zskiplistNode *node; /* Current node (NULL before first call) */
-} zslIter;
-
-static_assert(sizeof(zskiplistIterator) >= sizeof(zslIter), "zskiplistIterator must be large enough to hold zslIter");
-
-/* Helper macros to convert between opaque and internal types */
-#define zslIterFromOpaque(iter) ((zslIter *)(iter))
-#define zslIterToOpaque(iter) ((zskiplistIterator *)(iter))
-
 /* Initialize a stack-allocated iterator */
-void zslInitIterator(zskiplistIterator *iterator, zskiplist *zsl) {
-    zslIter *iter = zslIterFromOpaque(iterator);
+void zslInitIterator(zslIter *iter, zskiplist *zsl) {
     iter->zsl = zsl;
     iter->node = NULL;
 }
 
 /* Reset a stack-allocated iterator */
-void zslResetIterator(zskiplistIterator *iterator) {
-    zslIter *iter = zslIterFromOpaque(iterator);
+void zslResetIterator(zslIter *iter) {
     iter->zsl = NULL;
     iter->node = NULL;
 }
 
 /* Allocate and initialize an iterator (heap-allocated) */
-zskiplistIterator *zslCreateIterator(zskiplist *zsl) {
+zslIter *zslCreateIterator(zskiplist *zsl) {
     zslIter *iter = zmalloc(sizeof(*iter));
-    zskiplistIterator *opaque = zslIterToOpaque(iter);
-    zslInitIterator(opaque, zsl);
-    return opaque;
+    zslInitIterator(iter, zsl);
+    return iter;
 }
 
 /* Reset and free a heap-allocated iterator */
-void zslReleaseIterator(zskiplistIterator *iterator) {
-    zslResetIterator(iterator);
-    zslIter *iter = zslIterFromOpaque(iterator);
+void zslReleaseIterator(zslIter *iter) {
+    zslResetIterator(iter);
     zfree(iter);
 }
 
@@ -604,8 +594,7 @@ void zslReleaseIterator(zskiplistIterator *iterator) {
  * Returns the node at the current iterator position and advances the iterator.
  * For the "between items" mental model: if positioned between N and N+1,
  * this returns N+1 and positions between N+1 and N+2. */
-bool zslNext(zskiplistIterator *iterator, zskiplistNode **nodeptr) {
-    zslIter *iter = zslIterFromOpaque(iterator);
+bool zslNext(zslIter *iter, zskiplistNode **nodeptr) {
     if (iter->zsl == NULL) return false;
 
     if (iter->node == NULL) {
@@ -627,8 +616,7 @@ bool zslNext(zskiplistIterator *iterator, zskiplistNode **nodeptr) {
  * Returns the node at the current iterator position and moves backward.
  * For the "between items" mental model: if positioned between N and N+1,
  * this returns N and positions between N-1 and N. */
-bool zslPrev(zskiplistIterator *iterator, zskiplistNode **nodeptr) {
-    zslIter *iter = zslIterFromOpaque(iterator);
+bool zslPrev(zslIter *iter, zskiplistNode **nodeptr) {
     if (iter->zsl == NULL) return false;
     if (iter->node == zslGetHeader(iter->zsl)) {
         iter->zsl = NULL;
@@ -651,8 +639,7 @@ bool zslPrev(zskiplistIterator *iterator, zskiplistNode **nodeptr) {
  * - next() will return rank N+1
  * - prev() will return rank N
  * Rank is 1-based. */
-void zslSeekToRank(zskiplistIterator *iterator, unsigned long rank) {
-    zslIter *iter = zslIterFromOpaque(iterator);
+void zslSeekToRank(zslIter *iter, unsigned long rank) {
     if (iter->zsl == NULL) return;
     if (rank == 0)
         iter->node = zslGetHeader(iter->zsl);
@@ -667,8 +654,7 @@ void zslSeekToRank(zskiplistIterator *iterator, unsigned long rank) {
  * min_ex/max_ex: 1 for exclusive bounds, 0 for inclusive
  * offset >= 0: positions for forward iteration via next(). 0 = first in range.
  * offset < 0:  positions for reverse iteration via prev(). -1 = last in range. */
-void zslSeekToScoreRange(zskiplistIterator *iterator, double min, double max, int min_ex, int max_ex, long offset) {
-    zslIter *iter = zslIterFromOpaque(iterator);
+void zslSeekToScoreRange(zslIter *iter, double min, double max, int min_ex, int max_ex, long offset) {
     if (iter->zsl == NULL) return;
     zrangespec range = {.min = min, .max = max, .minex = min_ex, .maxex = max_ex};
     zskiplistNode *node = zslNthInRange(iter->zsl, &range, offset, NULL);
@@ -682,8 +668,7 @@ void zslSeekToScoreRange(zskiplistIterator *iterator, double min, double max, in
     iter->node = (offset < 0) ? node : node->backward;
 }
 
-void zslSeekToLexRange(zskiplistIterator *iterator, const_sds min, const_sds max, int min_ex, int max_ex, long offset) {
-    zslIter *iter = zslIterFromOpaque(iterator);
+void zslSeekToLexRange(zslIter *iter, const_sds min, const_sds max, int min_ex, int max_ex, long offset) {
     if (iter->zsl == NULL) return;
     zlexrangespec range = {.min = (sds)min, .max = (sds)max, .minex = min_ex, .maxex = max_ex};
     zskiplistNode *node = zslNthInLexRange(iter->zsl, &range, offset);

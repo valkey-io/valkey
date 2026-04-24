@@ -108,16 +108,6 @@ static inline double orderedIndexGetScore(const OrderedIndexItem *pos) {
     return skiplistGetScore(pos);
 }
 
-/* Return the length of an element string.  The pointer may come from
- * orderedIndexGetElementRaw (pointing into an index item) or be a plain
- * SDS used as a lookup key — both are valid.  This dual-use is intentional:
- * the zset hashtable callbacks receive plain SDS keys during lookups and
- * OrderedIndexItem element pointers for stored entries, and both must be
- * measurable through the same function. */
-static inline size_t orderedIndexElementLen(const char *ptr) {
-    return skiplistElementLen(ptr);
-}
-
 static inline unsigned long orderedIndexCountScoreRange(OrderedIndex *idx, double min, double max, int min_ex, int max_ex) {
     return skiplistCountScoreRange(idx, min, max, min_ex, max_ex);
 }
@@ -169,8 +159,6 @@ static inline void orderedIndexDismissMemory(OrderedIndex *idx) {
 static inline size_t orderedIndexEstimateMemory(OrderedIndex *idx, size_t sample_size) {
     return skiplistEstimateMemory(idx, sample_size);
 }
-
-/* Defrag */
 
 /* Defrag */
 typedef void (*OrderedIndexDefragCallback)(OrderedIndexItem *old_item, OrderedIndexItem *new_item, void *ctx);

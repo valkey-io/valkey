@@ -49,9 +49,12 @@ typedef struct zskiplist {
     zskiplistNode header;
 } zskiplist;
 
-/* Skiplist iterator - opaque type that can be stack allocated.
- * Size: 2 x uint64_t = 16 bytes (zsl pointer + node pointer) */
-typedef uint64_t zskiplistIterator[2];
+/* Skiplist iterator — used directly by the skiplist implementation and
+ * cast from OrderedIndexIterator in skiplist_ordered_index.c. */
+typedef struct {
+    zskiplist *zsl;      /* The skiplist being iterated */
+    zskiplistNode *node; /* Current node (NULL before first call) */
+} zslIter;
 
 /* Lifecycle */
 zskiplist *zslCreate(void);
@@ -82,15 +85,15 @@ zskiplistNode *zslNthInRange(zskiplist *zsl, zrangespec *range, long n, long *ra
 zskiplistNode *zslNthInLexRange(zskiplist *zsl, zlexrangespec *range, long n);
 
 /* Iterator */
-void zslInitIterator(zskiplistIterator *iter, zskiplist *zsl);
-void zslResetIterator(zskiplistIterator *iter);
-zskiplistIterator *zslCreateIterator(zskiplist *zsl);
-void zslReleaseIterator(zskiplistIterator *iter);
-bool zslNext(zskiplistIterator *iter, zskiplistNode **nodeptr);
-bool zslPrev(zskiplistIterator *iter, zskiplistNode **nodeptr);
-void zslSeekToRank(zskiplistIterator *iter, unsigned long rank);
-void zslSeekToScoreRange(zskiplistIterator *iterator, double min, double max, int min_ex, int max_ex, long offset);
-void zslSeekToLexRange(zskiplistIterator *iterator, const_sds min, const_sds max, int min_ex, int max_ex, long offset);
+void zslInitIterator(zslIter *iter, zskiplist *zsl);
+void zslResetIterator(zslIter *iter);
+zslIter *zslCreateIterator(zskiplist *zsl);
+void zslReleaseIterator(zslIter *iter);
+bool zslNext(zslIter *iter, zskiplistNode **nodeptr);
+bool zslPrev(zslIter *iter, zskiplistNode **nodeptr);
+void zslSeekToRank(zslIter *iter, unsigned long rank);
+void zslSeekToScoreRange(zslIter *iter, double min, double max, int min_ex, int max_ex, long offset);
+void zslSeekToLexRange(zslIter *iter, const_sds min, const_sds max, int min_ex, int max_ex, long offset);
 
 /* Node creation and insertion (used by skiplist_ordered_index.c for detached items) */
 zskiplistNode *zslCreateNode(int height, double score, const char *ele, size_t ele_len);

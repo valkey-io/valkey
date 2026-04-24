@@ -51,7 +51,7 @@ Upgrade urgency LOW: This is the second release candidate of Valkey 9.1.0.
 ### Build and Tooling
 * Fix VLA warning in linenoise and enable -Werror by @madolson (#3439)
 * Avoid having server.h being included by cli and benchmark by @ranshid (#3420)
-* Fix VLA warning in io_threads by @enjoy-binbin (#3518)
+* Fix VLA warning in io_threads by @yang-z-o (#3518)
 
 Valkey 9.1.0-rc1 - Released Tue Mar 17 00:00:00 2026
 -------------------------------------

@@ -462,9 +462,21 @@ Entries that don't need a shard-epoch:
 - Pre-vote protocol to avoid term inflation from partitioned nodes.
 - Log compaction / snapshotting for lagging followers.
 - Persistence of Raft log to disk.
-- Slot migration (SETSLOT MIGRATING/IMPORTING).
 - Broadcast REPL_OFFSETS to all nodes when a replica finishes sync.
-- Pub/sub and module message propagation over Raft links.
 - Permanent learners: in large clusters, some nodes may stay as
   non-voting learners to reduce election and commit overhead. The
   NODE_JOIN entry would include the intended role (follower or learner).
+- Leader transfer, in particular on graceful shutdown.
+- Cluster merging via MEET: when two independently configured clusters
+  are joined via CLUSTER MEET, the joining node's state (slots,
+  replicas) should be carried in the HELLO/HI handshake and
+  incorporated into the leader's log. This makes raft compatible with
+  the existing admin workflow of configuring each node independently
+  (ADDSLOTS, REPLICATE) and then connecting them with MEET.
+- Non-blocking cluster commands: make MEET, ADDSLOTS, REPLICATE and
+  other cluster mutation commands return OK immediately (like gossip)
+  instead of blocking until committed. This enables MULTI/EXEC
+  compatibility and works with existing admin tools (valkey-cli
+  --cluster, third-party tools). Convergence is checked externally
+  via CLUSTER INFO / CLUSTER NODES. Optionally, blocking variants
+  can be offered for scripts that want commit confirmation.

@@ -34,6 +34,54 @@ start_server {tags {"hash"}} {
         return $res
     }
 
+    proc create_expired_heavy_hash_for_hrandfield {key expired_count {live_count 1}} {
+        r del $key
+
+        # Force hashtable encoding up front so random sampling goes through
+        # the hashtable path even when only a few live fields remain.
+        set force_field [format "force:%s" [string repeat x 80]]
+        r hset $key $force_field seed
+        r hdel $key $force_field
+
+        set batch_size 200
+        for {set base 0} {$base < $expired_count} {incr base $batch_size} {
+            set hset_args [list HSET $key]
+            set expire_fields {}
+            set limit [expr {min($expired_count, $base + $batch_size)}]
+            for {set i $base} {$i < $limit} {incr i} {
+                set field "expired:$i"
+                lappend hset_args $field x
+                lappend expire_fields $field
+            }
+            r {*}$hset_args
+            r HPEXPIRE $key 1 FIELDS [llength $expire_fields] {*}$expire_fields
+        }
+
+        after 50
+
+        for {set i 0} {$i < $live_count} {incr i} {
+            r hset $key "live:$i" "value:$i"
+        }
+
+        assert_encoding hashtable $key
+    }
+
+    proc repeat_hrandfield_invocations {iterations body} {
+        for {set i 0} {$i < $iterations} {incr i} {
+            uplevel 1 $body
+        }
+    }
+
+    proc with_active_expire_disabled {body} {
+        r debug set-active-expire 0
+        set err_code [catch {uplevel 1 $body} result options]
+        r debug set-active-expire 1
+        if {$err_code} {
+            return -options $options $result
+        }
+        return $result
+    }
+
     foreach {type contents} "listpack {{a 1} {b 2} {c 3}} hashtable {{a 1} {b 2} {[randstring 70 90 alpha] 3}}" {
         set original_max_value [lindex [r config get hash-max-ziplist-value] 1]
         r config set hash-max-ziplist-value 10
@@ -225,6 +273,60 @@ start_server {tags {"hash"}} {
             }
         }
         r config set hash-max-ziplist-value $original_max_value
+    }
+
+    tags {slow} {
+        test {HRANDFIELD returns the live field on an expired-heavy hash} {
+            with_active_expire_disabled {
+                create_expired_heavy_hash_for_hrandfield stalehash 20000 1
+
+                repeat_hrandfield_invocations 64 {
+                    assert_equal live:0 [r hrandfield stalehash]
+                }
+            }
+        }
+
+        test {HRANDFIELD negative count does not stop early on an expired-heavy hash} {
+            with_active_expire_disabled {
+                create_expired_heavy_hash_for_hrandfield stalehash 20000 1
+
+                repeat_hrandfield_invocations 32 {
+                    set result [r hrandfield stalehash -16]
+                    assert_equal 16 [llength $result]
+                    assert_equal [lrepeat 16 live:0] $result
+                }
+            }
+        }
+
+        test {HRANDFIELD WITHVALUES returns all live fields on an expired-heavy hash} {
+            with_active_expire_disabled {
+                create_expired_heavy_hash_for_hrandfield stalehash 20000 4
+
+                set expected [dict create live:0 value:0 live:1 value:1 live:2 value:2 live:3 value:3]
+                repeat_hrandfield_invocations 32 {
+                    set result [r hrandfield stalehash 4 withvalues]
+                    assert_equal 8 [llength $result]
+                    set result_dict [dict create {*}$result]
+                    assert_equal 4 [dict size $result_dict]
+                    foreach {field value} $expected {
+                        assert_equal $value [dict get $result_dict $field]
+                    }
+                }
+            }
+        }
+
+        test {HRANDFIELD returns unique live fields on an expired-heavy hash} {
+            with_active_expire_disabled {
+                create_expired_heavy_hash_for_hrandfield stalehash 20000 4
+
+                set expected [list live:0 live:1 live:2 live:3]
+                repeat_hrandfield_invocations 32 {
+                    set result [r hrandfield stalehash 4]
+                    assert_equal 4 [llength $result]
+                    assert_equal $expected [lsort $result]
+                }
+            }
+        }
     }
 
 

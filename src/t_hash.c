@@ -910,6 +910,184 @@ static int hashTypeRandomElement(robj *hashobj, unsigned long hashsize, listpack
     return rc;
 }
 
+/* Bound the amount of expiry cleanup HRANDFIELD does up front so stale-heavy
+ * hashes improve quickly without turning a read path into an unbounded sweep.
+ * Keep the default conservative and rely on the validated fallback for
+ * correctness if stale entries still dominate the physical hash size. */
+#ifndef HRANDFIELD_EXPIRED_PRUNE_LIMIT
+#define HRANDFIELD_EXPIRED_PRUNE_LIMIT 32
+#endif
+
+static robj *hrandfieldMaybePruneExpiredFields(client *c, robj *hash) {
+    if (!hash || hash->encoding != OBJ_ENCODING_HASHTABLE || !hashTypeHasVolatileFields(hash)) {
+        return hash;
+    }
+    if (!iAmPrimary() || server.import_mode || server.lazy_expire_disabled) {
+        return hash;
+    }
+    if (isPausedActionsWithUpdate(PAUSE_ACTION_EXPIRE)) {
+        return hash;
+    }
+
+    dbReclaimExpiredFields(hash, c->db, commandTimeSnapshot(), HRANDFIELD_EXPIRED_PRUNE_LIMIT, c->slot);
+    return lookupKeyRead(c->db, c->argv[1]);
+}
+
+static unsigned long hrandfieldCollectLiveHashtableEntries(robj *hash, entry ***entries_out) {
+    serverAssert(hash->encoding == OBJ_ENCODING_HASHTABLE);
+    unsigned long count = 0, capacity = 16;
+    entry **entries = zmalloc(sizeof(*entries) * capacity);
+    hashTypeIterator hi;
+    hashTypeInitIterator(hash, &hi);
+
+    while (hashTypeNext(&hi) != C_ERR) {
+        if (count == capacity) {
+            capacity *= 2;
+            entries = zrealloc(entries, sizeof(*entries) * capacity);
+        }
+        entries[count++] = hi.next;
+    }
+    hashTypeResetIterator(&hi);
+
+    if (count == 0) {
+        zfree(entries);
+        entries = NULL;
+    }
+
+    *entries_out = entries;
+    return count;
+}
+
+static entry *hrandfieldSelectRandomLiveHashtableEntry(robj *hash) {
+    serverAssert(hash->encoding == OBJ_ENCODING_HASHTABLE);
+    entry *selected = NULL;
+    unsigned long seen = 0;
+    hashTypeIterator hi;
+    hashTypeInitIterator(hash, &hi);
+
+    while (hashTypeNext(&hi) != C_ERR) {
+        seen++;
+        if ((random() % seen) == 0) {
+            selected = hi.next;
+        }
+    }
+    hashTypeResetIterator(&hi);
+
+    return selected;
+}
+
+static void hrandfieldReplyHashtableEntry(writePreparedClient *wpc, entry *e, int withvalues, int resp);
+
+static unsigned long hrandfieldReplyFromReservoirSample(writePreparedClient *wpc,
+                                                        robj *hash,
+                                                        unsigned long count,
+                                                        int withvalues,
+                                                        int resp,
+                                                        hashtable *selected) {
+    serverAssert(hash->encoding == OBJ_ENCODING_HASHTABLE);
+
+    if (count == 0) return 0;
+
+    entry **reservoir = zmalloc(sizeof(*reservoir) * count);
+    unsigned long seen = 0, kept = 0;
+    hashTypeIterator hi;
+    hashTypeInitIterator(hash, &hi);
+
+    while (hashTypeNext(&hi) != C_ERR) {
+        entry *e = hi.next;
+        sds field = entryGetField(e);
+
+        if (selected && hashtableFind(selected, field, NULL)) {
+            continue;
+        }
+
+        seen++;
+        if (kept < count) {
+            reservoir[kept++] = e;
+        } else {
+            unsigned long j = random() % seen;
+            if (j < count) {
+                reservoir[j] = e;
+            }
+        }
+    }
+    hashTypeResetIterator(&hi);
+
+    for (unsigned long i = 0; i < kept; i++) {
+        unsigned long j = i + (random() % (kept - i));
+        entry *tmp = reservoir[i];
+        reservoir[i] = reservoir[j];
+        reservoir[j] = tmp;
+    }
+
+    for (unsigned long i = 0; i < kept; i++) {
+        entry *e = reservoir[i];
+
+        if (selected) {
+            sds field = entryGetField(e);
+            int res = hashtableAdd(selected, sdsdup(field));
+            serverAssert(res);
+        }
+
+        hrandfieldReplyHashtableEntry(wpc, e, withvalues, resp);
+    }
+
+    zfree(reservoir);
+    return kept;
+}
+
+static void hrandfieldReplyHashtableEntry(writePreparedClient *wpc, entry *e, int withvalues, int resp) {
+    sds field = entryGetField(e);
+    size_t value_len;
+    char *value = entryGetValue(e, &value_len);
+
+    if (withvalues && resp > 2) addWritePreparedReplyArrayLen(wpc, 2);
+    addWritePreparedReplyBulkCBuffer(wpc, field, sdslen(field));
+    if (withvalues) addWritePreparedReplyBulkCBuffer(wpc, value, value_len);
+}
+
+static unsigned long hrandfieldReplyFromCollectedEntries(writePreparedClient *wpc,
+                                                         entry **entries,
+                                                         unsigned long live_count,
+                                                         unsigned long count,
+                                                         int uniq,
+                                                         int withvalues,
+                                                         int resp,
+                                                         hashtable *selected) {
+    unsigned long added = 0;
+
+    if (live_count == 0 || count == 0) return 0;
+
+    if (!uniq) {
+        while (added < count) {
+            hrandfieldReplyHashtableEntry(wpc, entries[random() % live_count], withvalues, resp);
+            added++;
+        }
+        return added;
+    }
+
+    for (unsigned long i = 0; i < live_count && added < count; i++) {
+        unsigned long j = i + (random() % (live_count - i));
+        entry *tmp = entries[i];
+        entries[i] = entries[j];
+        entries[j] = tmp;
+
+        sds field = entryGetField(entries[i]);
+        if (selected) {
+            hashtablePosition position;
+            if (!hashtableFindPositionForInsert(selected, field, &position, NULL)) {
+                continue;
+            }
+            sds selected_field = sdsdup(field);
+            hashtableInsertAtPosition(selected, selected_field, &position);
+        }
+        hrandfieldReplyHashtableEntry(wpc, entries[i], withvalues, resp);
+        added++;
+    }
+
+    return added;
+}
+
 
 /*-----------------------------------------------------------------------------
  * Hash type commands
@@ -2138,6 +2316,11 @@ void hrandfieldWithCountCommand(client *c, long l, int withvalues) {
     robj *hash;
 
     if ((hash = lookupKeyReadOrReply(c, c->argv[1], shared.emptyarray)) == NULL || checkType(c, hash, OBJ_HASH)) return;
+    hash = hrandfieldMaybePruneExpiredFields(c, hash);
+    if (hash == NULL) {
+        addReply(c, shared.emptyarray);
+        return;
+    }
     size = hashTypeLength(hash);
 
     if (l >= 0) {
@@ -2166,13 +2349,19 @@ void hrandfieldWithCountCommand(client *c, long l, int withvalues) {
      * elements in random order. */
     if (!uniq || count == 1) {
         if (hash->encoding == OBJ_ENCODING_HASHTABLE) {
-            while (count--) {
+            unsigned long remaining = count;
+            while (remaining--) {
                 listpackEntry field, value;
 
-                /* In case we were unable to locate random element, it is probably because there is no such element
-                 * since all elements are expired. */
-                if (hashTypeRandomElement(hash, size, &field, &value) != C_OK)
+                /* Include the current slot in the fallback count because this
+                 * iteration already consumed one attempt. */
+                if (hashTypeRandomElement(hash, size, &field, &value) != C_OK) {
+                    entry **entries = NULL;
+                    unsigned long live_count = hrandfieldCollectLiveHashtableEntries(hash, &entries);
+                    reply_size += hrandfieldReplyFromCollectedEntries(wpc, entries, live_count, remaining + 1, uniq, withvalues, c->resp, NULL);
+                    zfree(entries);
                     break;
+                }
 
                 if (withvalues && c->resp > 2) addWritePreparedReplyArrayLen(wpc, 2);
                 addWritePreparedReplyBulkCBuffer(wpc, field.sval, field.slen);
@@ -2302,8 +2491,10 @@ void hrandfieldWithCountCommand(client *c, long l, int withvalues) {
         while (added < count) {
             /* In case we were unable to locate random element, it is probably because there is no such element
              * since all elements are expired. */
-            if (hashTypeRandomElement(hash, size, &field, withvalues ? &value : NULL) != C_OK)
+            if (hashTypeRandomElement(hash, size, &field, withvalues ? &value : NULL) != C_OK) {
+                added += hrandfieldReplyFromReservoirSample(wpc, hash, count - added, withvalues, c->resp, ht);
                 break;
+            }
 
             /* Try to add the object to the hashtable. If expired, stop adding (there are probably non left).
              * If it already exists free it, otherwise increment the number of objects we have
@@ -2362,9 +2553,23 @@ void hrandfieldCommand(client *c) {
     if ((hash = lookupKeyReadOrReply(c, c->argv[1], shared.null[c->resp])) == NULL || checkType(c, hash, OBJ_HASH)) {
         return;
     }
+    hash = hrandfieldMaybePruneExpiredFields(c, hash);
+    if (hash == NULL) {
+        addReplyNull(c);
+        return;
+    }
+
     if (hashTypeRandomElement(hash, hashTypeLength(hash), &ele, NULL) == C_OK)
         hashReplyFromListpackEntry(c, &ele);
-    else
+    else if (hash->encoding == OBJ_ENCODING_HASHTABLE) {
+        entry *e = hrandfieldSelectRandomLiveHashtableEntry(hash);
+        if (e == NULL) {
+            addReplyNull(c);
+        } else {
+            sds field = entryGetField(e);
+            addReplyBulkCBuffer(c, field, sdslen(field));
+        }
+    } else
         addReplyNull(c);
 }
 

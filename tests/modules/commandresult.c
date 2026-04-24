@@ -62,6 +62,14 @@ static int log_count = 0;
 #define MODE_ACL_REJECTED 0x8
 static int subscription_mode = 0;
 
+static void ResetState(void) {
+  memset(&stats, 0, sizeof(stats));
+  memset(result_log, 0, sizeof(result_log));
+  log_head = 0;
+  log_count = 0;
+  subscription_mode = 0;
+}
+
 /* Add entry to circular log */
 void LogResult(const char *cmd_name, int status, uint64_t subevent,
                long long duration, long long dirty,
@@ -243,30 +251,23 @@ int CmdResultRegister_ValkeyCommand(ValkeyModuleCtx *ctx,
 int CmdResultUnsubscribe_ValkeyCommand(ValkeyModuleCtx *ctx,
                                        ValkeyModuleString **argv, int argc) {
   VALKEYMODULE_NOT_USED(argv);
+  int had_subscription = (subscription_mode != 0);
 
   if (argc != 1) {
     return ValkeyModule_WrongArity(ctx);
   }
 
-  if (subscription_mode == 0) {
+  ValkeyModule_SubscribeToServerEvent(ctx, ValkeyModuleEvent_CommandResultSuccess, NULL);
+  ValkeyModule_SubscribeToServerEvent(ctx, ValkeyModuleEvent_CommandResultFailure, NULL);
+  ValkeyModule_SubscribeToServerEvent(ctx, ValkeyModuleEvent_CommandResultRejected, NULL);
+  ValkeyModule_SubscribeToServerEvent(ctx, ValkeyModuleEvent_CommandResultACLRejected, NULL);
+  subscription_mode = 0;
+
+  if (!had_subscription) {
     return ValkeyModule_ReplyWithError(
         ctx, "ERR not subscribed to command result events");
   }
 
-  if (subscription_mode & MODE_SUCCESS)
-    ValkeyModule_SubscribeToServerEvent(
-        ctx, ValkeyModuleEvent_CommandResultSuccess, NULL);
-  if (subscription_mode & MODE_FAILURE)
-    ValkeyModule_SubscribeToServerEvent(
-        ctx, ValkeyModuleEvent_CommandResultFailure, NULL);
-  if (subscription_mode & MODE_REJECTED)
-    ValkeyModule_SubscribeToServerEvent(
-        ctx, ValkeyModuleEvent_CommandResultRejected, NULL);
-  if (subscription_mode & MODE_ACL_REJECTED)
-    ValkeyModule_SubscribeToServerEvent(
-        ctx, ValkeyModuleEvent_CommandResultACLRejected, NULL);
-
-  subscription_mode = 0;
   return ValkeyModule_ReplyWithSimpleString(ctx, "OK");
 }
 
@@ -439,6 +440,8 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
                         int argc) {
   VALKEYMODULE_NOT_USED(argv);
   VALKEYMODULE_NOT_USED(argc);
+
+  ResetState();
 
   if (ValkeyModule_Init(ctx, "commandresult", 1, VALKEYMODULE_APIVER_1) ==
       VALKEYMODULE_ERR) {

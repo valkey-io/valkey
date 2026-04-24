@@ -1,7 +1,7 @@
 # Check that the status of primary that can be targeted by replica migration
 # is acquired again, after being getting slots again, in a cluster where the
 # other primaries have replicas.
-tags {"slow"} {
+tags {"slow valgrind:skip"} {
 run_solo {cluster-replica-migration-slow} {
 start_cluster 5 15 {tags {external:skip cluster} overrides {cluster-allow-replica-migration yes}} {
     test "Primary #0 should re-acquire one or more replicas" {

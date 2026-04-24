@@ -2347,9 +2347,66 @@ static void clusterRaftMeet(const char *ip, int port, int cport, void *ctx, void
     RAFT_STATE()->todo_connect_nodes = 1;
 }
 
+/* Reset the cluster to a clean state. Much of this is similar to
+ * clusterLegacyReset and could be de-duplicated into common code. */
 static void clusterRaftResetCluster(int hard) {
-    UNUSED(hard);
-    /* TODO */
+    clusterRaftState *rs = RAFT_STATE();
+
+    /* Unassign all slots. */
+    for (int j = 0; j < CLUSTER_SLOTS; j++) clusterDelSlot(j);
+
+    /* Recreate shards dict. */
+    dictEmpty(server.cluster->shards, NULL);
+
+    /* Forget all nodes except myself. */
+    dictIterator *di = dictGetSafeIterator(server.cluster->nodes);
+    dictEntry *de;
+    while ((de = dictNext(di)) != NULL) {
+        clusterNode *node = dictGetVal(de);
+        if (node == myself) continue;
+        clusterDelNode(node);
+    }
+    dictReleaseIterator(di);
+
+    /* Reset raft state. */
+    rs->current_term = 0;
+    memset(rs->leader, 0, CLUSTER_NAMELEN);
+    memset(rs->voted_for, 0, CLUSTER_NAMELEN);
+    rs->commit_index = 0;
+    rs->last_applied = 0;
+    rs->log_count = 0;
+    rs->role = RAFT_ROLE_LEADER;
+    rs->failover_time = 0;
+    rs->mf_end = 0;
+    server.cluster->size = 0;
+    myself->flags |= CLUSTER_NODE_MEET;
+
+    /* Hard reset: change node ID. */
+    if (hard) {
+        sds oldname = sdsnewlen(myself->name, CLUSTER_NAMELEN);
+        dictDelete(server.cluster->nodes, oldname);
+        sdsfree(oldname);
+        getRandomHexChars(myself->name, CLUSTER_NAMELEN);
+        clusterAddNode(myself);
+    }
+
+    /* New shard-id. */
+    clusterRemoveNodeFromShard(myself);
+    getRandomHexChars(myself->shard_id, CLUSTER_NAMELEN);
+    clusterAddNodeToShard(myself->shard_id, myself);
+
+    /* If replica, promote to primary and flush data. */
+    if (nodeIsReplica(myself)) {
+        myself->flags &= ~CLUSTER_NODE_REPLICA;
+        myself->flags |= CLUSTER_NODE_PRIMARY;
+        myself->replicaof = NULL;
+        replicationUnsetPrimary();
+        flushAllDataAndResetRDB(server.lazyfree_lazy_user_flush ? EMPTYDB_ASYNC : EMPTYDB_NO_FLAGS);
+    }
+
+    clearCachedClusterSlotsResponse();
+    serverLog(LL_NOTICE, "Cluster %s reset, now I'm %.40s",
+              hard ? "hard" : "soft", myself->name);
 }
 
 static int clusterRaftSpecialCommand(client *c) {

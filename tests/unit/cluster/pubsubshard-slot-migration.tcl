@@ -207,6 +207,6 @@ test "Reset cluster, verify sunsubscribe message" {
     
     $cluster close
     $subscribeclient close
-} {} {cluster-v2:skip} ;# CLUSTER RESET not yet implemented
+}
 
 } ;# start_cluster

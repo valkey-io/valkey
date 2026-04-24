@@ -950,7 +950,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        compiler: [gcc, clang]
+        compiler: [gcc, clang-17]
     env:
       CC: ${{ matrix.compiler }}
     steps:
@@ -1017,7 +1017,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        compiler: [gcc, clang]
+        compiler: [gcc, clang-17]
     env:
       CC: ${{ matrix.compiler }}
     steps:
@@ -1088,7 +1088,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        compiler: [gcc, clang]
+        compiler: [gcc, clang-17]
     env:
       CC: ${{ matrix.compiler }}
     steps:
@@ -1155,7 +1155,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        compiler: [gcc, clang]
+        compiler: [gcc, clang-17]
     env:
       CC: ${{ matrix.compiler }}
     steps:

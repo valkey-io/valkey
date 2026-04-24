@@ -4167,7 +4167,10 @@ static bool readToQueryBuf(client *c) {
     size_t qblen, readlen;
 
     /* If the replica RDB client is marked as closed ASAP, do not try to read from it */
-    if (c->flag.close_asap) return false;
+    if (c->flag.close_asap) {
+        c->nread = 0;
+        return false;
+    }
 
     int is_replicated = c->read_flags & READ_FLAGS_REPLICATED;
 

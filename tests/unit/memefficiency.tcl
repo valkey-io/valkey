@@ -596,15 +596,14 @@ start_cluster 1 0 {tags {"defrag external:skip"}} {
             catch {r config set activedefrag yes} e
             if {[r config get activedefrag] eq "activedefrag yes"} {
                 set rd [redis_deferring_client]
+                $rd client reply off
                 set random_int [expr 1+[randomInt 10240]]
 
                 # Create keys
                 for {set j 0} {$j < 10000} {incr j} {
                     set buf [string repeat "pl-$j" $random_int]
                     $rd set $j $buf ex 10000
-                }
-                for {set j 0} {$j < 10000} {incr j} {
-                    $rd read ;# Discard replies
+                    if {$j % 1000 == 999} {client_reply_off_wait_for_server $rd}
                 }
 
                 # wait for the active defrag to start
@@ -619,9 +618,7 @@ start_cluster 1 0 {tags {"defrag external:skip"}} {
                 for {set j 0} {$j < 10000} {incr j} {
                     set buf [string repeat "pl-$j" $random_int]
                     $rd set $j $buf ex $random_int
-                }
-                for {set j 0} {$j < 10000} {incr j} {
-                    $rd read ; # Discard replies
+                    if {$j % 1000 == 999} {client_reply_off_wait_for_server $rd}
                 }
                 $rd close
 

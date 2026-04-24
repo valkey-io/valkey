@@ -32,6 +32,7 @@
 #include "rio.h"
 #include "functions.h"
 #include "module.h"
+#include "compression_stream.h"
 
 #include <signal.h>
 #include <fcntl.h>
@@ -1010,7 +1011,7 @@ int startAppendOnly(void) {
  * Returns C_OK on success; on C_ERR caller should fallback to
  * restartAOFAfterSYNC(). */
 static int rdbFileUsesStreamingCompression(const char *filename) {
-    unsigned char header[4];
+    unsigned char header[VKCS_ENVELOPE_SIZE];
     int fd = open(filename, O_RDONLY);
     if (fd == -1) return -1;
 
@@ -1023,7 +1024,10 @@ static int rdbFileUsesStreamingCompression(const char *filename) {
         return -1;
     }
     if (nread < (ssize_t)sizeof(header)) return 0;
-    return memcmp(header, "VKCS", sizeof(header)) == 0;
+    /* Validate the full 8-byte VKCS envelope (magic + version + codec)
+     * so a file that happens to start with "VKCS" but has an invalid
+     * version or codec is not misclassified as compressed. */
+    return memcmp(header, "VKCS", 4) == 0 && header[4] == VKCS_VERSION;
 }
 
 int restartAOFWithSyncRdb(void) {

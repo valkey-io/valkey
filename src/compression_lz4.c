@@ -26,7 +26,7 @@ static const LZ4F_preferences_t lz4f_prefs = {
                             * compression uses sc->level via a local copy */
 };
 
-int compressionLz4CompressorInit(stream_compressor_t *sc) {
+int compressionLz4CompressorInit(streamCompressor *sc) {
     LZ4F_cctx *cctx = NULL;
     LZ4F_errorCode_t err;
 
@@ -39,14 +39,14 @@ int compressionLz4CompressorInit(stream_compressor_t *sc) {
     return 0;
 }
 
-void compressionLz4CompressorDestroy(stream_compressor_t *sc) {
+void compressionLz4CompressorDestroy(streamCompressor *sc) {
     if (!sc || !sc->ctx) return;
 
     LZ4F_freeCompressionContext((LZ4F_cctx *)sc->ctx);
     sc->ctx = NULL;
 }
 
-int compressionLz4DecompressorInit(stream_decompressor_t *sd) {
+int compressionLz4DecompressorInit(streamDecompressor *sd) {
     LZ4F_dctx *dctx = NULL;
     LZ4F_errorCode_t err;
 
@@ -59,7 +59,7 @@ int compressionLz4DecompressorInit(stream_decompressor_t *sd) {
     return 0;
 }
 
-void compressionLz4DecompressorDestroy(stream_decompressor_t *sd) {
+void compressionLz4DecompressorDestroy(streamDecompressor *sd) {
     if (!sd || !sd->ctx) return;
 
     LZ4F_freeDecompressionContext((LZ4F_dctx *)sd->ctx);
@@ -73,12 +73,12 @@ size_t compressionLz4OutputBound(size_t input_len) {
     return LZ4F_compressBound(input_len, &lz4f_prefs) + LZ4F_HEADER_SIZE_MAX + LZ4F_compressBound(0, &lz4f_prefs);
 }
 
-ssize_t compressionLz4CompressFeed(stream_compressor_t *sc,
+ssize_t compressionLz4CompressFeed(streamCompressor *sc,
                                    uint8_t *output,
                                    size_t output_capacity,
                                    const uint8_t *input,
                                    size_t input_len,
-                                   compress_flush_mode_t flush_mode) {
+                                   compressFlushMode flush_mode) {
     LZ4F_cctx *cctx;
     size_t offset = 0;
 
@@ -149,7 +149,7 @@ lz4_error:
     return -1;
 }
 
-ssize_t compressionLz4DecompressFeed(stream_decompressor_t *sd,
+ssize_t compressionLz4DecompressFeed(streamDecompressor *sd,
                                      uint8_t *output,
                                      size_t output_capacity,
                                      const uint8_t *input,

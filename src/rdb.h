@@ -203,8 +203,8 @@ enum RdbType {
 typedef struct {
     rio *raw_rio;
     rio *rdb_rio;
-    decompress_rio_t decompressor;
-    stream_reader_info_t stream_info;
+    decompressRio decompressor;
+    streamReaderInfo stream_info;
     bool initialized;
 } rdbInputStream;
 
@@ -244,7 +244,7 @@ int rdbLoadBinaryFloatValue(rio *rdb, float *val);
 int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi);
 int rdbLoadRioWithLoadingCtxScopedRdb(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadingCtx *rdb_loading_ctx);
 void rdbInputStreamInit(rdbInputStream *input, rio *raw_rio);
-decompress_rio_init_result_t rdbInputStreamPrepare(rdbInputStream *input);
+decompressRioInitResult rdbInputStreamPrepare(rdbInputStream *input);
 void rdbInputStreamDestroy(rdbInputStream *input);
 bool rdbRioHasCorruptCompressedInput(const rio *rdb);
 int rdbFunctionLoad(rio *rdb, int ver, functionsLibCtx *lib_ctx, int rdbflags, sds *err);

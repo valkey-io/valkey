@@ -21,10 +21,10 @@
 
 typedef enum {
     VKCS_CODEC_LZ4 = 0x01,
-} vkcs_codec_t;
+} vkcsCodec;
 
 /* Emit callback used by the VKCS envelope and streaming writer. */
-typedef int (*vkcs_emit_fn)(void *ctx, const uint8_t *data, size_t len);
+typedef int (*vkcsEmitFn)(void *ctx, const uint8_t *data, size_t len);
 
 /* Default fixed buffer size for stream_reader when cfg->buffer_size == 0.
  * The reader uses one compressed input buffer and one decompressed output
@@ -36,11 +36,11 @@ typedef int (*vkcs_emit_fn)(void *ctx, const uint8_t *data, size_t len);
 
 /* Streaming writer config. */
 typedef struct {
-    compression_algo_t algo;     /* Compression algorithm for this stream. */
+    compressionAlgo algo;        /* Compression algorithm for this stream. */
     int level;                   /* Codec-specific compression level; ignored when unsupported. */
     uint8_t stream_kind;         /* Application-defined stream kind stored in the VKCS envelope. */
     bool codec_checksum_enabled; /* Enable codec-native integrity checks when supported. */
-} stream_writer_config_t;
+} streamWriterConfig;
 
 /* Streaming reader config.
  * - auto-detect VKCS envelope, decode if compressed
@@ -52,82 +52,82 @@ typedef struct {
     uint8_t expected_stream_kind; /* Required VKCS stream kind when the input is compressed. */
     bool allow_passthrough;       /* true => non-VKCS input is treated as raw bytes instead of an error. */
     size_t buffer_size;           /* Fixed compressed input buffer and decompressed output window size; 0 => internal default. */
-} stream_reader_config_t;
+} streamReaderConfig;
 
 /* Opaque streaming writer context. */
-typedef struct stream_writer stream_writer_t;
+typedef struct streamWriter streamWriter;
 /* Opaque streaming reader context. */
-typedef struct stream_reader stream_reader_t;
+typedef struct streamReader streamReader;
 
 /* Stream metadata returned after probing. */
 typedef struct {
     bool compressed;             /* true => input was classified as VKCS-compressed, false => passthrough. */
     bool codec_checksum_enabled; /* Parsed VKCS checksum policy. Ignore when compressed is false. */
-    compression_algo_t algo;     /* Parsed compression algorithm, or ALGO_NONE for passthrough. */
+    compressionAlgo algo;        /* Parsed compression algorithm, or ALGO_NONE for passthrough. */
     uint8_t stream_kind;         /* Parsed VKCS stream kind. Ignore when compressed is false. */
-} stream_reader_info_t;
+} streamReaderInfo;
 
 typedef enum {
     STREAM_READER_ERROR_NONE = 0,
     STREAM_READER_ERROR_IO = 1,
     STREAM_READER_ERROR_INCOMPATIBLE = 2,
     STREAM_READER_ERROR_CORRUPT = 3,
-} stream_reader_error_t;
+} streamReaderError;
 
 /* Caller-provided input callback.
  * Returns:
  * - >0: bytes read into buf (partial reads allowed)
  * -  0: EOF
  * - -1: read error */
-typedef ssize_t (*stream_reader_read_fn)(void *ctx, void *buf, size_t len);
+typedef ssize_t (*streamReaderReadFn)(void *ctx, void *buf, size_t len);
 
 /* Streaming writer API.
  * Ownership: returned context is owned by caller and must be destroyed.
- * Threading: stream_writer_t is NOT thread-safe; all API calls on a given
+ * Threading: streamWriter is NOT thread-safe; all API calls on a given
  * instance must be externally serialized and single-owner at any instant. */
-stream_writer_t *stream_writer_create(const stream_writer_config_t *cfg,
-                                      vkcs_emit_fn emit_cb,
-                                      void *emit_ctx);
+streamWriter *streamWriterCreate(const streamWriterConfig *cfg,
+                                 vkcsEmitFn emit_cb,
+                                 void *emit_ctx);
 /* Returns emitted bytes for this call (>=0), -1 on error.
  * NOTE: the return value is the number of *compressed* bytes emitted to the
  * output sink, NOT the number of input bytes consumed (which is always `len`
  * on success). On the first successful write this includes the 8-byte VKCS
  * envelope. Callers that need to track input progress should use `len`.
- * After stream_writer_finish(), write returns -1 and does not emit bytes. */
-ssize_t stream_writer_write(stream_writer_t *t, const void *buf, size_t len);
+ * After streamWriterFinish(), write returns -1 and does not emit bytes. */
+ssize_t streamWriterWrite(streamWriter *t, const void *buf, size_t len);
 /* Returns 0 on success, -1 on error.
  * Flush-after-finish is a no-op success. */
-int stream_writer_flush(stream_writer_t *t);
+int streamWriterFlush(streamWriter *t);
 /* Returns 0 on success, -1 on error.
  * Calling finish more than once is a no-op success. */
-int stream_writer_finish(stream_writer_t *t);
-void stream_writer_destroy(stream_writer_t *t);
+int streamWriterFinish(streamWriter *t);
+void streamWriterDestroy(streamWriter *t);
 /* Snapshot only; cross-thread readers must synchronize externally
  * (for example via waitForClientIO-equivalent quiesce). */
-int stream_writer_is_errored(const stream_writer_t *t);
-void stream_writer_set_error(stream_writer_t *t);
+int streamWriterIsErrored(const streamWriter *t);
+void streamWriterSetError(streamWriter *t);
 
 /* Streaming reader API.
  * Ownership: returned context is owned by caller and must be destroyed. */
-stream_reader_t *stream_reader_create(const stream_reader_config_t *cfg,
-                                      stream_reader_read_fn read_cb,
-                                      void *read_ctx);
+streamReader *streamReaderCreate(const streamReaderConfig *cfg,
+                                 streamReaderReadFn read_cb,
+                                 void *read_ctx);
 /* Ensure stream mode is detected and metadata is available.
  * Safe to call more than once.
  * Returns 0 on success, -1 on error. */
-int stream_reader_probe(stream_reader_t *t);
+int streamReaderProbe(streamReader *t);
 /* Read up to len bytes into buf.
  * len must fit in ssize_t; larger requests return -1 without consuming input.
  * Returns:
  * - >0: bytes produced (decompressed or passthrough)
  * -  0: EOF
  * - -1: error */
-ssize_t stream_reader_read(stream_reader_t *t, void *buf, size_t len);
+ssize_t streamReaderRead(streamReader *t, void *buf, size_t len);
 /* Populate stream metadata after probing.
  * For passthrough streams: compressed=0, algo=ALGO_NONE, stream_kind=0.
  * Returns 0 on success, -1 on error. */
-int stream_reader_get_info(stream_reader_t *t, stream_reader_info_t *info);
-stream_reader_error_t stream_reader_get_error(const stream_reader_t *t);
-void stream_reader_destroy(stream_reader_t *t);
+int streamReaderGetInfo(streamReader *t, streamReaderInfo *info);
+streamReaderError streamReaderGetError(const streamReader *t);
+void streamReaderDestroy(streamReader *t);
 
 #endif /* COMPRESSION_STREAM_H */

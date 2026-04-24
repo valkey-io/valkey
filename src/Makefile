@@ -644,13 +644,6 @@ ENGINE_LIB_NAME=lib$(ENGINE_NAME).a
 ENGINE_UNIT_GTESTS:=$(ENGINE_NAME)-unit-gtests$(PROG_SUFFIX)
 ALL_SOURCES=$(sort $(patsubst %.o,%.c,$(ENGINE_SERVER_OBJ) $(ENGINE_CLI_OBJ) $(ENGINE_BENCHMARK_OBJ)))
 
-USE_FAST_FLOAT?=no
-ifeq ($(USE_FAST_FLOAT),yes)
-	# valkey_strtod.c embeds the header-only ffc.h implementation, so this
-	# compatibility option only needs the preprocessor define.
-	FINAL_CFLAGS += -D USE_FAST_FLOAT
-endif
-
 USE_LIBBACKTRACE?=no
 ifeq ($(USE_LIBBACKTRACE),yes)
 	FINAL_CFLAGS += -DUSE_LIBBACKTRACE
@@ -682,8 +675,7 @@ endif
 all-with-unit-tests: all $(ENGINE_UNIT_GTESTS)
 .PHONY: all
 
-write-make-settings:
-	rm -f .make-settings
+persist-settings: distclean
 	echo STD=$(STD) >> .make-settings
 	echo WARN=$(WARN) >> .make-settings
 	echo OPT=$(OPT) >> .make-settings
@@ -693,7 +685,6 @@ write-make-settings:
 	echo BUILD_RDMA=$(BUILD_RDMA) >> .make-settings
 	echo USE_SYSTEMD=$(USE_SYSTEMD) >> .make-settings
 	echo BUILD_LUA=$(BUILD_LUA) >> .make-settings
-	echo USE_FAST_FLOAT=$(USE_FAST_FLOAT) >> .make-settings
 	echo USE_LIBBACKTRACE=$(USE_LIBBACKTRACE) >> .make-settings
 	echo LIBBACKTRACE_PREFIX=$(LIBBACKTRACE_PREFIX) >> .make-settings
 	echo CFLAGS=$(CFLAGS) >> .make-settings
@@ -703,10 +694,6 @@ write-make-settings:
 	echo PREV_FINAL_CFLAGS=$(FINAL_CFLAGS) >> .make-settings
 	echo PREV_FINAL_LDFLAGS=$(FINAL_LDFLAGS) >> .make-settings
 	echo ENGINE_SERVER_OBJ=$(ENGINE_SERVER_OBJ) >> .make-settings
-
-.PHONY: write-make-settings
-
-persist-settings: distclean write-make-settings
 	-(cd ../deps && $(MAKE) $(DEPENDENCY_TARGETS))
 
 .PHONY: persist-settings

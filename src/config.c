@@ -634,6 +634,7 @@ void loadServerConfigFromString(sds config) {
         err = "replicaof directive not allowed in cluster mode";
         goto loaderr;
     }
+
     /* To ensure backward compatibility and work while hz is out of range */
     if (server.hz < CONFIG_MIN_HZ) server.hz = CONFIG_MIN_HZ;
     if (server.hz > CONFIG_MAX_HZ) server.hz = CONFIG_MAX_HZ;

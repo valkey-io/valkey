@@ -134,8 +134,6 @@ gtest-parallel: .make-prerequisites
 		git clone --depth 1 https://github.com/google/gtest-parallel.git gtest-parallel; \
 	fi
 
-.PHONY: gtest-parallel
-
 lz4: .make-prerequisites
 	@printf '%b %b\n' $(MAKECOLOR)MAKE$(ENDCOLOR) $(BINCOLOR)$@$(ENDCOLOR)
 	cd lz4 && $(MAKE) CFLAGS="$(CFLAGS)"

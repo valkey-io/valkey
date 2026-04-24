@@ -107,9 +107,6 @@ ifeq ($(strip $(GTEST_LIBS)),)
     $(error googletest not found. Install gtest or set GTEST_CFLAGS/GTEST_LIBS explicitly)
 endif
 
-../.make-settings: ../Makefile
-	cd .. && $(MAKE) write-make-settings
-
 # On Darwin (macOS), the linker does not support -Wl,--wrap,
 # so we manually define __wrap_* and __real_* for each function in wrappers.h.
 # by copying all object files into the wrapped/ folder and applying symbol redefinitions.

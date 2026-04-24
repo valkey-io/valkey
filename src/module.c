@@ -12718,6 +12718,8 @@ int VM_SubscribeToServerEvent(ValkeyModuleCtx *ctx, ValkeyModuleEvent event, Val
         return VALKEYMODULE_OK;
     }
 
+    if (callback == NULL) return VALKEYMODULE_OK;
+
     /* No event found, we need to add a new one. */
     el = zmalloc(sizeof(*el));
     el->module = ctx->module;
@@ -12877,11 +12879,19 @@ void moduleUnsubscribeAllServerEvents(ValkeyModule *module) {
     ValkeyModuleEventListener *el;
     listIter li;
     listNode *ln;
-    listRewind(ValkeyModule_EventListeners, &li);
 
+    listRewind(ValkeyModule_EventListeners, &li);
     while ((ln = listNext(&li))) {
         el = ln->value;
         if (el->module == module) {
+            if (el->event.id == VALKEYMODULE_EVENT_COMMAND_RESULT_SUCCESS)
+                commandResultSuccessListeners--;
+            else if (el->event.id == VALKEYMODULE_EVENT_COMMAND_RESULT_FAILURE)
+                commandResultFailureListeners--;
+            else if (el->event.id == VALKEYMODULE_EVENT_COMMAND_RESULT_REJECTED)
+                commandResultRejectedListeners--;
+            else if (el->event.id == VALKEYMODULE_EVENT_COMMAND_RESULT_ACL_REJECTED)
+                commandResultACLRejectedListeners--;
             listDelNode(ValkeyModule_EventListeners, ln);
             zfree(el);
         }

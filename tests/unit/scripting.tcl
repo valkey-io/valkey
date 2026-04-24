@@ -689,7 +689,7 @@ start_server {tags {"scripting"}} {
         }
     } {} {external:skip}
 
-    start_server {tags {"scripting"} overrides {lua-enable-insecure-api yes}} {
+    start_server {tags {"scripting external:skip"} overrides {lua-enable-insecure-api yes}} {
         test {Dynamic reset of lua engine with insecure API config change - default yes} {
             # Ensure insecure API is available by default
             assert_equal {} [r eval "return getfenv()" 0]
@@ -705,7 +705,7 @@ start_server {tags {"scripting"}} {
         }
     }
 
-    start_server {tags {"scripting"} config {default.conf} overrides {lua-enable-insecure-api no} args {--lua-enable-insecure-api yes}} {
+    start_server {tags {"scripting external:skip"} config {default.conf} overrides {lua-enable-insecure-api no} args {--lua-enable-insecure-api yes}} {
         test {Dynamic reset of lua engine with insecure API config change - command line yes} {
             # Ensure insecure API is available by default
             assert_equal {} [r eval "return getfenv()" 0]

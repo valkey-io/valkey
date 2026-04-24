@@ -498,6 +498,7 @@ ENGINE_SERVER_OBJ = \
     db.o \
     debug.o \
     defrag.o \
+	dict_ht.o \
     entry.o \
     eval.o \
     evict.o \
@@ -594,6 +595,7 @@ ENGINE_CLI_OBJ = \
     crc64.o \
     crccombine.o \
     crcspeed.o \
+	dict_ht.o \
     hashtable.o \
     monotonic.o \
     mt19937-64.o \
@@ -618,6 +620,7 @@ ENGINE_BENCHMARK_OBJ = \
     crc64.o \
     crccombine.o \
     crcspeed.o \
+	dict_ht.o \
     fuzzer_client.o \
     fuzzer_command_generator.o \
     hashtable.o \

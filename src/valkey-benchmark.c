@@ -291,7 +291,6 @@ static int dictSdsKeyCompare(const void *key1, const void *key2) {
 }
 
 static dictType dtype = {
-    .entryGetKey = dictEntryGetKey,
     .hashFunction = dictSdsHash,
     .keyCompare = dictSdsKeyCompare,
     .entryDestructor = zfree,

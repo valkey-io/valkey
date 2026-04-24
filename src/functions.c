@@ -70,7 +70,6 @@ typedef struct functionsLibMetaData {
 } functionsLibMetaData;
 
 dictType functionDictType = {
-    .entryGetKey = dictEntryGetKey,
     .hashFunction = dictCStrCaseHash,
     .keyCompare = dictSdsKeyCaseCompare,
     .entryDestructor = dictEntryDestructorSdsKey,
@@ -84,7 +83,6 @@ static void dictEntryDestructorSdsKeyEngineStatsValue(void *entry) {
 }
 
 dictType engineStatsDictType = {
-    .entryGetKey = dictEntryGetKey,
     .hashFunction = dictSdsCaseHash,
     .keyCompare = dictSdsKeyCaseCompare,
     .entryDestructor = dictEntryDestructorSdsKeyEngineStatsValue,
@@ -98,7 +96,6 @@ static void dictEntryDestructorSdsKeyEngineFunctionValue(void *entry) {
 }
 
 dictType libraryFunctionDictType = {
-    .entryGetKey = dictEntryGetKey,
     .hashFunction = dictSdsHash,
     .keyCompare = dictSdsKeyCompare,
     .entryDestructor = dictEntryDestructorSdsKeyEngineFunctionValue,
@@ -112,7 +109,6 @@ static void dictEntryDestructorSdsKeyEngineLibraryValue(void *entry) {
 }
 
 dictType librariesDictType = {
-    .entryGetKey = dictEntryGetKey,
     .hashFunction = dictSdsHash,
     .keyCompare = dictSdsKeyCompare,
     .entryDestructor = dictEntryDestructorSdsKeyEngineLibraryValue,

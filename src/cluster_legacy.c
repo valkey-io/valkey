@@ -3237,7 +3237,8 @@ void clusterUpdateSlotsConfigWith(clusterNode *sender, uint64_t senderConfigEpoc
     /* Handle a special case where new_primary is not set but both sender
      * and myself own no slots and in the same shard. Set the sender as
      * the new primary if my current config epoch is lower than the
-     * sender's. */
+     * sender's. Make sure the empty shard can be reconfigured later
+     * after a failover. */
     if (!new_primary && myself->replicaof != sender && sender_slots == 0 && myself->numslots == 0 &&
         nodeEpoch(myself) < senderConfigEpoch && are_in_same_shard) {
         new_primary = sender;
@@ -3473,6 +3474,33 @@ static uint32_t writePingExtensions(clusterMsg *hdr, int gossipcount) {
     }
 
     return totlen;
+}
+
+/* Process only the shard_id extension from the message and update the sender's
+ * shard_id. This is called before clusterUpdateSlotsConfigWith() to ensure
+ * that the sender's shard_id is up-to-date when making shard membership
+ * decisions (e.g. areInSameShard checks).
+ *
+ * This is necessary because clusterProcessPingExtensions(), which normally
+ * handles all extensions including shard_id, is called after slot config
+ * updates. Without this early shard_id update, a node that has just performed
+ * CLUSTER RESET SOFT (generating a new shard_id) would still appear to be in
+ * the same shard as its former primary, causing incorrect reconfiguration. */
+static void clusterProcessShardIdExtension(clusterMsg *hdr, clusterNode *sender) {
+    char *ext_shardid = NULL;
+    uint16_t extensions = ntohs(hdr->extensions);
+    clusterMsgPingExt *ext = getInitialPingExt(hdr, ntohs(hdr->count));
+    while (extensions--) {
+        uint16_t type = ntohs(ext->type);
+        if (type == CLUSTERMSG_EXT_TYPE_SHARDID) {
+            clusterMsgPingExtShardId *shardid_ext = (clusterMsgPingExtShardId *)&(ext->ext[0].shard_id);
+            ext_shardid = shardid_ext->shard_id;
+            break;
+        }
+        ext = getNextPingExt(ext);
+    }
+    if (ext_shardid == NULL) ext_shardid = clusterNodeGetPrimary(sender)->shard_id;
+    updateShardId(sender, ext_shardid);
 }
 
 /* We previously validated the extensions, so this function just needs to
@@ -4321,6 +4349,7 @@ int clusterProcessPacket(clusterLink *link) {
             /* 1) If the sender of the message is a primary, and we detected that
              *    the set of slots it claims changed, scan the slots to see if we
              *    need to update our configuration. */
+            clusterProcessShardIdExtension(msg, sender);
             clusterUpdateSlotsConfigWith(sender, sender_claimed_config_epoch, msg->myslots);
 
             /* 2) We also check for the reverse condition, that is, the sender

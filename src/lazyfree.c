@@ -85,11 +85,11 @@ void lazyFreeReplicationBacklogRefMem(void *args[]) {
     atomic_fetch_add_explicit(&lazyfreed_objects, len, memory_order_relaxed);
 }
 
-/* Release the replicaKeysWithExpire dict. */
+/* Release the replicaKeysWithExpire hashtable. */
 void lazyFreeReplicaKeysWithExpire(void *args[]) {
-    dict *replica_keys_with_expire = args[0];
-    size_t len = dictSize(replica_keys_with_expire);
-    dictRelease(replica_keys_with_expire);
+    hashtable *replica_keys_with_expire = args[0];
+    size_t len = hashtableSize(replica_keys_with_expire);
+    hashtableRelease(replica_keys_with_expire);
     atomic_fetch_sub_explicit(&lazyfree_objects, len, memory_order_relaxed);
     atomic_fetch_add_explicit(&lazyfreed_objects, len, memory_order_relaxed);
 }
@@ -279,13 +279,13 @@ void freeReplicationBacklogRefMemAsync(list *blocks, rax *index) {
     }
 }
 
-/* Free replicaKeysWithExpire dict, if the dict is huge enough, free it in async way. */
-void freeReplicaKeysWithExpireAsync(dict *replica_keys_with_expire) {
-    if (dictSize(replica_keys_with_expire) > LAZYFREE_THRESHOLD) {
-        atomic_fetch_add_explicit(&lazyfree_objects, dictSize(replica_keys_with_expire), memory_order_relaxed);
+/* Free replicaKeysWithExpire hashtable, if it is huge enough, free it in async way. */
+void freeReplicaKeysWithExpireAsync(hashtable *replica_keys_with_expire) {
+    if (hashtableSize(replica_keys_with_expire) > LAZYFREE_THRESHOLD) {
+        atomic_fetch_add_explicit(&lazyfree_objects, hashtableSize(replica_keys_with_expire), memory_order_relaxed);
         bioCreateLazyFreeJob(lazyFreeReplicaKeysWithExpire, 1, replica_keys_with_expire);
     } else {
-        dictRelease(replica_keys_with_expire);
+        hashtableRelease(replica_keys_with_expire);
     }
 }
 

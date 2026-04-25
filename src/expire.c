@@ -529,31 +529,57 @@ ustime_t activeExpireCycle(int type) {
  * the keys as implemented in 3.2.
  *----------------------------------------------------------------------------*/
 
-/* The dictionary where we remember key names and database ID of keys we may
+/* The hashtable where we remember key names and database ID of keys we may
  * want to expire from the replica. Since this function is not often used we
  * don't even care to initialize the database at startup. We'll do it once
  * the feature is used the first time, that is, when rememberreplicaKeyWithExpire()
  * is called.
  *
- * The dictionary has an SDS string representing the key as the hash table
- * key, while the value is a 64 bit unsigned integer with the bits corresponding
- * to the DB where the keys may exist set to 1. Currently the keys created
- * with a DB id > 63 are not expired, but a trivial fix is to set the bitmap
- * to the max 64 bit unsigned value when we know there is a key with a DB
- * ID greater than 63, and check all the configured DBs in such a case. */
-dict *replicaKeysWithExpire = NULL;
+ * The hashtable stores replicaKeyExpireEntry structs, each containing an SDS
+ * key name and a 64 bit unsigned bitmap with the bits corresponding to the DB
+ * where the keys may exist set to 1. Currently the keys created with a DB id
+ * > 63 are not expired, but a trivial fix is to set the bitmap to the max 64
+ * bit unsigned value when we know there is a key with a DB ID greater than 63,
+ * and check all the configured DBs in such a case. */
+
+typedef struct replicaKeyExpireEntry {
+    sds key;
+    uint64_t dbids;
+} replicaKeyExpireEntry;
+
+static const void *replicaKeyExpireEntryGetKey(const void *entry) {
+    const replicaKeyExpireEntry *e = entry;
+    return e->key;
+}
+
+static void replicaKeyExpireEntryDestructor(void *entry) {
+    replicaKeyExpireEntry *e = entry;
+    sdsfree(e->key);
+    zfree(e);
+}
+
+static hashtableType replicaKeyExpireHashtableType = {
+    .entryGetKey = replicaKeyExpireEntryGetKey,
+    .hashFunction = dictSdsHash,
+    .keyCompare = dictSdsKeyCompare,
+    .entryDestructor = replicaKeyExpireEntryDestructor,
+};
+
+hashtable *replicaKeysWithExpire = NULL;
 
 /* Check the set of keys created by the primary with an expire set in order to
  * check if they should be evicted. */
 void expireReplicaKeys(void) {
-    if (replicaKeysWithExpire == NULL || dictSize(replicaKeysWithExpire) == 0) return;
+    if (replicaKeysWithExpire == NULL || hashtableSize(replicaKeysWithExpire) == 0) return;
 
     int cycles = 0, noexpire = 0;
     mstime_t start = mstime();
     while (1) {
-        dictEntry *de = dictGetRandomKey(replicaKeysWithExpire);
-        sds keyname = dictGetKey(de);
-        uint64_t dbids = dictGetUnsignedIntegerVal(de);
+        void *entry = NULL;
+        hashtableRandomEntry(replicaKeysWithExpire, &entry);
+        replicaKeyExpireEntry *e = entry;
+        sds keyname = e->key;
+        uint64_t dbids = e->dbids;
         uint64_t new_dbids = 0;
 
         /* Check the key against every database corresponding to the
@@ -586,57 +612,52 @@ void expireReplicaKeys(void) {
             dbids >>= 1;
         }
 
-        /* Set the new bitmap as value of the key, in the dictionary
+        /* Set the new bitmap as value of the key, in the hashtable
          * of keys with an expire set directly in the writable replica. Otherwise
          * if the bitmap is zero, we no longer need to keep track of it. */
         if (new_dbids)
-            dictSetUnsignedIntegerVal(de, new_dbids);
+            e->dbids = new_dbids;
         else
-            dictDelete(replicaKeysWithExpire, keyname);
+            hashtableDelete(replicaKeysWithExpire, keyname);
 
         /* Stop conditions: found 3 keys we can't expire in a row or
          * time limit was reached. */
         cycles++;
         if (noexpire > 3) break;
         if ((cycles % 64) == 0 && mstime() - start > 1) break;
-        if (dictSize(replicaKeysWithExpire) == 0) break;
+        if (hashtableSize(replicaKeysWithExpire) == 0) break;
     }
 }
 
 /* Track keys that received an EXPIRE or similar command in the context
  * of a writable replica. */
-
 void rememberReplicaKeyWithExpire(serverDb *db, robj *key) {
     if (replicaKeysWithExpire == NULL) {
-        static dictType dt = {
-            .entryGetKey = dictEntryGetKey,
-            .hashFunction = dictSdsHash,
-            .keyCompare = dictSdsKeyCompare,
-            .entryDestructor = dictEntryDestructorSdsKey,
-        };
-        replicaKeysWithExpire = dictCreate(&dt);
+        replicaKeysWithExpire = hashtableCreate(&replicaKeyExpireHashtableType);
     }
     if (db->id > 63) return;
 
-    dictEntry *de = dictAddOrFind(replicaKeysWithExpire, objectGetVal(key));
-    /* If the entry was just created, set it to a copy of the SDS string
-     * representing the key: we don't want to need to take those keys
-     * in sync with the main DB. The keys will be removed by expireReplicaKeys()
-     * as it scans to find keys to remove. */
-    if (dictGetKey(de) == objectGetVal(key)) {
-        dictSetKey(replicaKeysWithExpire, de, sdsdup(objectGetVal(key)));
-        dictSetUnsignedIntegerVal(de, 0);
+    void *existing = NULL;
+    hashtablePosition pos;
+    replicaKeyExpireEntry *e;
+
+    if (hashtableFindPositionForInsert(replicaKeysWithExpire, objectGetVal(key), &pos, &existing)) {
+        /* Key is new; allocate the entry and insert it. */
+        e = zmalloc(sizeof(*e));
+        e->key = sdsdup(objectGetVal(key));
+        e->dbids = 0;
+        hashtableInsertAtPosition(replicaKeysWithExpire, e, &pos);
+    } else {
+        e = existing;
     }
 
-    uint64_t dbids = dictGetUnsignedIntegerVal(de);
-    dbids |= (uint64_t)1 << db->id;
-    dictSetUnsignedIntegerVal(de, dbids);
+    e->dbids |= (uint64_t)1 << db->id;
 }
 
 /* Return the number of keys we are tracking. */
 size_t getReplicaKeyWithExpireCount(void) {
     if (replicaKeysWithExpire == NULL) return 0;
-    return dictSize(replicaKeysWithExpire);
+    return hashtableSize(replicaKeysWithExpire);
 }
 
 /* Remove the keys in the hash table. We need to do that when data is
@@ -652,7 +673,7 @@ void flushReplicaKeysWithExpireList(int async) {
         if (async) {
             freeReplicaKeysWithExpireAsync(replicaKeysWithExpire);
         } else {
-            dictRelease(replicaKeysWithExpire);
+            hashtableRelease(replicaKeysWithExpire);
         }
         replicaKeysWithExpire = NULL;
     }

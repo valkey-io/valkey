@@ -84,11 +84,6 @@ static inline int dictExpand(dict *d, unsigned long size) {
 }
 
 /* Entry accessor functions */
-static inline void dictSetKey(dict *d, dictEntry *de, void *key) {
-    UNUSED(d);
-    de->key = key;
-}
-
 static inline void dictSetVal(dict *d, dictEntry *de, void *val) {
     UNUSED(d);
     de->v.val = val;

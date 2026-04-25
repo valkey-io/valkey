@@ -55,6 +55,7 @@ enum activeExpiryType {
 typedef struct client client;
 typedef struct serverObject robj;
 typedef struct serverDb serverDb;
+typedef struct hashtable hashtable;
 
 /* return the relevant expiration policy based on the current server state and the provided flags.
  * FLAGS can indicate either:
@@ -71,6 +72,6 @@ void rememberReplicaKeyWithExpire(serverDb *db, robj *key);
 void flushReplicaKeysWithExpireList(int async);
 size_t getReplicaKeyWithExpireCount(void);
 bool timestampIsExpired(mstime_t when);
-void freeReplicaKeysWithExpireAsync(dict *replica_keys_with_expire);
+void freeReplicaKeysWithExpireAsync(hashtable *replica_keys_with_expire);
 
 #endif

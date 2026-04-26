@@ -184,7 +184,7 @@ void evalRelease(int async) {
 /* Remove all cached eval scripts associated with the given scripting engine.
  * Called when a scripting engine is unregistered to avoid dangling engine
  * pointers in the eval script cache. */
-void evalRemoveScriptsOfEngine(scriptingEngine *engine) {
+void evalRemoveScriptsFromEngine(scriptingEngine *engine) {
     dictIterator *iter = dictGetSafeIterator(evalCtx.scripts);
     dictEntry *entry;
     while ((entry = dictNext(iter))) {

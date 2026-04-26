@@ -10,6 +10,7 @@ permissions:
 
 jobs:
   refresh:
+    if: github.repository == 'valkey-io/valkey'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -17,16 +18,15 @@ jobs:
           fetch-depth: 0
 
       - name: Refresh Fingerprints
-        uses: valkey-io/verify-provenance@490e6c1627d9eedd0f140848b89073c7b8e741b2
+        uses: valkey-io/verify-provenance@ed6147b7254576ba838303f3aa09f558e08617b3
         with:
           mode: "refresh"
           source_repo: "redis/redis"
           target_repo: "${{ github.repository }}"
-          branding_pairs: "Redis:Valkey"
-          source_brand: "Redis"
-          target_brand: "Valkey"
+          branding_pairs: "Redis:Valkey,KeyDB:Valkey"
+          prefix_pairs: "RM_:VM_,REDISMODULE_:VALKEYMODULE_"
           github_token: "${{ secrets.GITHUB_TOKEN }}"
-          db_branch: "provenance-guard-db"
+          db_branch: "verify-provenance-db"
 
       - name: Commit Updated PR DB
         run: |
@@ -34,12 +34,14 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
+          DB_BRANCH="verify-provenance-db"
+
           # Create the DB branch on first run, otherwise reuse it.
-          if git ls-remote --exit-code --heads origin provenance-guard-db >/dev/null 2>&1; then
-            git fetch origin provenance-guard-db:provenance-guard-db
-            git checkout provenance-guard-db
+          if git ls-remote --exit-code --heads origin "$DB_BRANCH" >/dev/null 2>&1; then
+            git fetch origin "+$DB_BRANCH:$DB_BRANCH"
+            git checkout "$DB_BRANCH"
           else
-            git checkout --orphan provenance-guard-db
+            git checkout --orphan "$DB_BRANCH"
             git rm -rf . >/dev/null 2>&1 || true
           fi
 
@@ -49,7 +51,7 @@ jobs:
             git add pr_fingerprints.json.gz
             if ! git diff --cached --quiet; then
               git commit -m "Automated PR fingerprint refresh [skip ci]"
-              git push origin provenance-guard-db
+              git push origin "$DB_BRANCH"
             else
               echo "No changes to PR database."
             fi

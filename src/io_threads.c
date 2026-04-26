@@ -149,6 +149,7 @@ void IOThreadsBeforeSleep(long long current_time) {
 #define IO_IGNITION_CPU_SYS 30.0
 #define IO_IGNITION_CPU_SYS_LOW 5.0
 #define IO_IGNITION_CPU_USER 50.0
+#define BATCH_SIZE 32
 
 void IOThreadsAfterSleep(int numevents) {
     if (server.io_threads_num == 1) return;
@@ -301,7 +302,6 @@ static void *IOThreadMain(void *myid) {
     pthread_cleanup_push(cleanupThreadResources, NULL);
 
     thread_id = (int)id;
-    const int BATCH_SIZE = 32;
     void *batch_jobs[BATCH_SIZE];
     int processed = 0;
     monotime work_start_time = 0;

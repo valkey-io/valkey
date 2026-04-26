@@ -148,6 +148,8 @@ class SpmcQueueTest : public ::testing::Test {
 
     void SetUp() override {
         spmcInit(&q);
+        ASSERT_NE(q.buffer, nullptr);
+        EXPECT_EQ(reinterpret_cast<uintptr_t>(q.buffer) % CACHE_LINE_SIZE, 0u);
     }
 
     void TearDown() override {

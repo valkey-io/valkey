@@ -1,3 +1,28 @@
+proc wait_for_io_threads_to_go_idle {} {
+    set io_threads_always_active [dict get [r config get io-threads-always-active] io-threads-always-active]
+    if {$io_threads_always_active eq {yes}} {
+        # Polling INFO while io-threads-always-active is enabled wakes the
+        # workers in afterSleep(), so observe the idle transition with that
+        # policy disabled and then restore the original test setting.
+        assert_equal {OK} [r config set io-threads-always-active no]
+    }
+
+    set errcode [catch {
+        wait_for_condition 1000 50 {
+            [getInfoProperty [r info server] io_threads_active] eq 0
+        } else {
+            fail "Failed to wait until no io_threads are active"
+        }
+    } result]
+
+    if {$io_threads_always_active eq {yes}} {
+        assert_equal {OK} [r config set io-threads-always-active yes]
+    }
+    if {$errcode != 0} {
+        return -code $errcode $result
+    }
+}
+
 proc activate_io_threads_and_wait {} {
     set server_pid [s process_id]
     set client_count 16
@@ -30,12 +55,7 @@ proc activate_io_threads_and_wait {} {
         $rd($i) close
     }
 
-    # Wait until active io_threads are no longer active
-    wait_for_condition 1000 50 {
-        [getInfoProperty [r info server] io_threads_active] eq 0
-    } else {
-        fail "Failed to wait until no io_threads are active"
-    }
+    wait_for_io_threads_to_go_idle
 }
 
 start_server {config "minimal.conf" tags {"external:skip" "valgrind:skip"} overrides {enable-debug-command {yes} io-threads 5}} {
@@ -61,11 +81,7 @@ start_server {config "minimal.conf" tags {"external:skip" "valgrind:skip"} overr
         # Adjust io-threads to a lower value and assert that active io_threads fields are >= values found initially
         assert_equal {OK} [r config set io-threads 1]
         set info [r info]
-        wait_for_condition 1000 50 {
-            [getInfoProperty [r info server] io_threads_active] eq 0
-        } else {
-            fail "Failed to wait until no io_threads are active"
-        }
+        wait_for_io_threads_to_go_idle
         set used_active_time_1 [getInfoProperty $info used_active_time_io_thread_1]
         assert_equal $used_active_time_1 {}
 

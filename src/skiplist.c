@@ -583,12 +583,14 @@ static int zslIsInLexRange(zskiplist *zsl, zlexrangespec *range) {
     int cmp = sdscmplex(range->min, range->max);
     if (cmp > 0 || (cmp == 0 && (range->minex || range->maxex))) return 0;
     x = zslGetTail(zsl);
+    if (x == NULL) return 0;
     sds ele = zslGetNodeElement(x);
-    if (x == NULL || !zslLexValueGteMin(ele, range)) return 0;
+    if (!zslLexValueGteMin(ele, range)) return 0;
     zskiplistNode *zheader = zslGetHeader(zsl);
     x = zheader->level[0].forward;
+    if (x == NULL) return 0;
     ele = zslGetNodeElement(x);
-    if (x == NULL || !zslLexValueLteMax(ele, range)) return 0;
+    if (!zslLexValueLteMax(ele, range)) return 0;
     return 1;
 }
 

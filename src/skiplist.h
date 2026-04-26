@@ -37,6 +37,7 @@
 #define SKIPLIST_H
 
 #include "server.h"
+#include <stdbool.h>
 
 /*
  * This skiplist implementation is almost a C translation of the original
@@ -131,7 +132,7 @@ zskiplistNode *zslGetHeader(zskiplist *zsl);
 sds zslGetNodeElement(const zskiplistNode *x);
 
 /* Insertion */
-zskiplistNode *zslCreateNode(int height, double score, const_sds ele);
+zskiplistNode *zslCreateNode(int height, double score, const char *ele, size_t ele_len);
 int zslRandomLevel(void);
 zskiplistNode *zslInsertNode(zskiplist *zsl, zskiplistNode *node);
 zskiplistNode *zslInsert(zskiplist *zsl, double score, const_sds ele);
@@ -160,5 +161,26 @@ int zslLexValueGteMin(sds value, zlexrangespec *spec);
 int zslLexValueLteMax(sds value, zlexrangespec *spec);
 int sdscmplex(sds a, sds b);
 zskiplistNode *zslNthInLexRange(zskiplist *zsl, zlexrangespec *range, long n);
+
+/* Iterator */
+typedef struct {
+    zskiplist *zsl;      /* The skiplist being iterated */
+    zskiplistNode *node; /* Current node (NULL before first call) */
+} zslIter;
+
+void zslInitIterator(zslIter *iter, zskiplist *zsl);
+void zslResetIterator(zslIter *iter);
+zslIter *zslCreateIterator(zskiplist *zsl);
+void zslReleaseIterator(zslIter *iter);
+bool zslNext(zslIter *iter, zskiplistNode **nodeptr);
+bool zslPrev(zslIter *iter, zskiplistNode **nodeptr);
+void zslSeekToRank(zslIter *iter, unsigned long rank);
+void zslSeekToScoreRange(zslIter *iter, double min, double max, int min_ex, int max_ex, long offset);
+void zslSeekToLexRange(zslIter *iter, const_sds min, const_sds max, int min_ex, int max_ex, long offset);
+
+/* Additional accessors */
+zskiplistNode *zslGetFirst(const zskiplist *zsl);
+double zslGetScore(const zskiplistNode *node);
+zskiplistNode *zslDetachNode(zskiplist *zsl, zskiplistNode *node);
 
 #endif /* SKIPLIST_H */

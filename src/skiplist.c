@@ -52,8 +52,8 @@ static zskiplistNode *zslGetElementByRankFromNode(zskiplistNode *start_node, int
  *
  *   sds-header-size and element-sds are only valid for non-header nodes.
  */
-zskiplistNode *zslCreateNode(int height, double score, const_sds ele) {
-    size_t ele_sds_len = sdslen(ele);
+zskiplistNode *zslCreateNode(int height, double score, const char *ele, size_t ele_len) {
+    size_t ele_sds_len = ele_len;
     char ele_sds_type = sdsReqType(ele_sds_len);
     size_t ele_sds_size = sdsReqSize(ele_sds_len, ele_sds_type);
     /* Allocate enough space for the node, levels, and the element sds.
@@ -227,7 +227,7 @@ zskiplistNode *zslInsertNode(zskiplist *zsl, zskiplistNode *node) {
  * exist (up to the caller to enforce that). The string 'ele' is copied. */
 zskiplistNode *zslInsert(zskiplist *zsl, double score, const_sds ele) {
     const int level = zslRandomLevel();
-    zskiplistNode *node = zslCreateNode(level, score, ele);
+    zskiplistNode *node = zslCreateNode(level, score, ele, sdslen(ele));
     zslInsertNode(zsl, node);
     return node;
 }
@@ -670,4 +670,112 @@ zskiplistNode *zslNthInLexRange(zskiplist *zsl, zlexrangespec *range, long n) {
     }
 
     return x;
+}
+
+/* --- Accessors added for OrderedIndex --- */
+
+zskiplistNode *zslGetFirst(const zskiplist *zsl) {
+    return ((zskiplist *)zsl)->header.level[0].forward;
+}
+
+double zslGetScore(const zskiplistNode *node) {
+    return node->score;
+}
+
+/* Detach a node from the skiplist without freeing it. */
+zskiplistNode *zslDetachNode(zskiplist *zsl, zskiplistNode *node) {
+    zskiplistNode *update[ZSKIPLIST_MAXLEVEL];
+    zskiplistNode *x = zslGetHeader(zsl);
+    for (int i = zslGetHeight(zsl) - 1; i >= 0; i--) {
+        while (x->level[i].forward && x->level[i].forward != node) {
+            x = x->level[i].forward;
+        }
+        update[i] = x;
+    }
+    serverAssert(x->level[0].forward == node);
+    zslDeleteNode(zsl, node, update);
+    return node;
+}
+
+/* --- Iterator implementation --- */
+
+void zslInitIterator(zslIter *iter, zskiplist *zsl) {
+    iter->zsl = zsl;
+    iter->node = NULL;
+}
+
+void zslResetIterator(zslIter *iter) {
+    iter->node = NULL;
+}
+
+zslIter *zslCreateIterator(zskiplist *zsl) {
+    zslIter *iter = zmalloc(sizeof(*iter));
+    zslInitIterator(iter, zsl);
+    return iter;
+}
+
+void zslReleaseIterator(zslIter *iter) {
+    zfree(iter);
+}
+
+bool zslNext(zslIter *iter, zskiplistNode **nodeptr) {
+    if (iter->zsl == NULL) { *nodeptr = NULL; return false; }
+    if (iter->node == NULL) {
+        iter->node = zslGetHeader(iter->zsl)->level[0].forward;
+    } else if (iter->node == zslGetTail(iter->zsl)) {
+        *nodeptr = NULL; return false;
+    } else {
+        iter->node = iter->node->level[0].forward;
+    }
+    if (iter->node == NULL) { *nodeptr = NULL; return false; }
+    *nodeptr = iter->node;
+    return true;
+}
+
+bool zslPrev(zslIter *iter, zskiplistNode **nodeptr) {
+    if (iter->zsl == NULL) { *nodeptr = NULL; return false; }
+    if (iter->node == zslGetHeader(iter->zsl)) {
+        *nodeptr = NULL; return false;
+    }
+    if (iter->node == NULL) {
+        iter->node = zslGetTail(iter->zsl);
+        if (iter->node == NULL) { *nodeptr = NULL; return false; }
+    }
+    zskiplistNode *ret = iter->node;
+    iter->node = iter->node->backward;
+    if (iter->node == NULL) iter->node = zslGetHeader(iter->zsl);
+    *nodeptr = ret;
+    return true;
+}
+
+void zslSeekToRank(zslIter *iter, unsigned long rank) {
+    if (iter->zsl == NULL) return;
+    if (rank == 0)
+        iter->node = zslGetHeader(iter->zsl);
+    else if (rank >= zslGetLength(iter->zsl))
+        iter->node = zslGetTail(iter->zsl);
+    else
+        iter->node = zslGetElementByRank(iter->zsl, rank);
+}
+
+void zslSeekToScoreRange(zslIter *iter, double min, double max, int min_ex, int max_ex, long offset) {
+    if (iter->zsl == NULL) return;
+    zrangespec range = {.min = min, .max = max, .minex = min_ex, .maxex = max_ex};
+    zskiplistNode *node = zslNthInRange(iter->zsl, &range, offset, NULL);
+    if (node == NULL) {
+        iter->node = (offset < 0) ? zslGetHeader(iter->zsl) : zslGetTail(iter->zsl);
+        return;
+    }
+    iter->node = (offset < 0) ? node : node->backward;
+}
+
+void zslSeekToLexRange(zslIter *iter, const_sds min, const_sds max, int min_ex, int max_ex, long offset) {
+    if (iter->zsl == NULL) return;
+    zlexrangespec range = {.min = (sds)min, .max = (sds)max, .minex = min_ex, .maxex = max_ex};
+    zskiplistNode *node = zslNthInLexRange(iter->zsl, &range, offset);
+    if (node == NULL) {
+        iter->node = (offset < 0) ? zslGetHeader(iter->zsl) : zslGetTail(iter->zsl);
+        return;
+    }
+    iter->node = (offset < 0) ? node : node->backward;
 }

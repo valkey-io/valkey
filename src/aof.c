@@ -1237,18 +1237,24 @@ static void processAofIOThreadFlushResult(void) {
     server.aof_last_write_errno = err;
     atomic_store_explicit(&server.aof_io_flush_state, AOF_IO_FLUSH_IDLE, memory_order_release);
 
-    if (server.aof_fsync == AOF_FSYNC_ALWAYS) {
-        serverLog(LL_WARNING,
-                  "Can't persist AOF from IO thread when the "
-                  "AOF fsync policy is 'always': %s. Exiting...",
-                  strerror(err));
-        exit(1);
-    }
-    server.aof_last_write_status = C_ERR;
+    /* IO thread flush is only used with appendfsync=always, so an error here
+     * is always fatal. We cannot guarantee durability. */
+    serverLog(LL_WARNING,
+              "Can't persist AOF from IO thread for "
+              "AOF fsync policy 'always': %s. Exiting...",
+              strerror(err));
+    exit(1);
 }
 
 static int tryOffloadAofAlwaysFlushToIOThreads(void) {
     if (server.aof_fsync != AOF_FSYNC_ALWAYS || sdslen(server.aof_buf) == 0 || aofIOFlushInProgress()) {
+        return C_ERR;
+    }
+
+    /* Ensure the previous IO thread result has been fully processed.
+     * aofIOFlushInProgress() only checks for PENDING; the state could also
+     * be DONE or ERR if processAofIOThreadFlushResult() hasn't run yet. */
+    if (atomic_load_explicit(&server.aof_io_flush_state, memory_order_acquire) != AOF_IO_FLUSH_IDLE) {
         return C_ERR;
     }
 
@@ -1271,18 +1277,17 @@ static int tryOffloadAofAlwaysFlushToIOThreads(void) {
     job->len = sdslen(job->buf);
     job->reploff = server.primary_repl_offset;
 
-    server.aof_buf = sdsempty();
     atomic_store_explicit(&server.aof_io_flush_errno, 0, memory_order_relaxed);
     atomic_store_explicit(&server.aof_io_flush_size, 0, memory_order_relaxed);
     atomic_store_explicit(&server.aof_io_flush_state, AOF_IO_FLUSH_PENDING, memory_order_release);
     if (trySendJobToIOThreads(aofIOThreadFlushJobHandler, job) == C_OK) {
+        /* Hand off the buffer to the IO thread; allocate a fresh one for new writes. */
+        server.aof_buf = sdsempty();
         server.aof_flush_postponed_start = 0;
         return C_OK;
     }
 
     atomic_store_explicit(&server.aof_io_flush_state, AOF_IO_FLUSH_IDLE, memory_order_release);
-    sdsfree(server.aof_buf);
-    server.aof_buf = job->buf;
     zfree(job);
     return C_ERR;
 }
@@ -1314,9 +1319,17 @@ void flushAppendOnlyFile(int force) {
     processAofIOThreadFlushResult();
     if (aofIOFlushInProgress()) {
         if (!force) return;
+        /* Busy-wait for the IO thread to finish. Timeout after 30 seconds
+         * to prevent hanging indefinitely. */
+        monotime wait_start = getMonotonicUs();
         while (aofIOFlushInProgress()) {
             usleep(100);
             processAofIOThreadFlushResult();
+            if (getMonotonicUs() - wait_start > 30 * 1000000ULL) {
+                serverLog(LL_WARNING,
+                          "Timed out waiting for AOF IO thread flush to complete. Exiting...");
+                exit(1);
+            }
         }
     }
 

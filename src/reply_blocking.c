@@ -434,7 +434,12 @@ static long long getSingleCommandBlockingOffsetForReplicatingCommand(client *c) 
     } else {
         getKeysResult result;
         initGetKeysResult(&result);
-        int numkeys = getKeysFromCommand(c->cmd, c->argv, c->argc, &result);
+        /* Use key specs directly to extract key positions. We avoid
+         * getKeysFromCommand / getkeys_proc because some commands (e.g. SET)
+         * rewrite argv during execution (EX→PXAT) and the custom getkeys_proc
+         * may crash on the rewritten embedded-string robj. We only need key
+         * positions here, not per-key flags, so key specs are sufficient. */
+        int numkeys = getKeysUsingKeySpecs(c->cmd, c->argv, c->argc, GET_KEYSPEC_DEFAULT, &result);
         keyReference *keys = result.keys;
         if (numkeys > 0) {
             if (c->cmd->proc == moveCommand) {
@@ -485,7 +490,7 @@ static long long getSingleCommandBlockingOffsetForNonReplicatingCommand(client *
         blocking_repl_offset = c->db->dirty_repl_offset;
         getKeysResult result;
         initGetKeysResult(&result);
-        int numkeys = getKeysFromCommand(c->cmd, c->argv, c->argc, &result);
+        int numkeys = getKeysUsingKeySpecs(c->cmd, c->argv, c->argc, GET_KEYSPEC_DEFAULT, &result);
         keyReference *keys = result.keys;
 
         for (int i = 0; i < numkeys; i++) {
@@ -495,6 +500,22 @@ static long long getSingleCommandBlockingOffsetForNonReplicatingCommand(client *
                 blocking_repl_offset = offset;
             }
         }
+
+        /* COPY/MOVE may target a different DB; check the destination key there too. */
+        if (c->cmd->proc == moveCommand) {
+            int dest_dbid = -1;
+            if (getIntFromObject(c->argv[2], &dest_dbid) == C_OK && dest_dbid != c->db->id) {
+                long long offset = durabilityPurgeAndGetUncommittedKeyOffset(objectGetVal(c->argv[1]), server.db[dest_dbid]);
+                if (offset > blocking_repl_offset) blocking_repl_offset = offset;
+            }
+        } else if (c->cmd->proc == copyCommand) {
+            int dest_dbid;
+            if (getTargetDbIdForCopyCommand(c->argc, c->argv, c->db->id, &dest_dbid) && dest_dbid != c->db->id) {
+                long long offset = durabilityPurgeAndGetUncommittedKeyOffset(objectGetVal(c->argv[2]), server.db[dest_dbid]);
+                if (offset > blocking_repl_offset) blocking_repl_offset = offset;
+            }
+        }
+
         getKeysFreeResult(&result);
     }
 

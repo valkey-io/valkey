@@ -28,12 +28,12 @@ test "Killing majority of master nodes" {
     kill_instance redis 2
 }
 
-foreach id $replica_ids {
-    R $id config set cluster-replica-no-failover no
-}
-
 test "Cluster should eventually be down" {
     assert_cluster_state fail
+}
+
+foreach id $replica_ids {
+    R $id config set cluster-replica-no-failover no
 }
 
 test "Use takeover to bring slaves back" {

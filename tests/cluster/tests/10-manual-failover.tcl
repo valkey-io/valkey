@@ -132,8 +132,11 @@ test "Send CLUSTER FAILOVER to instance #5" {
 }
 
 test "Instance #5 is still a slave after some time (no failover)" {
-    after 5000
-    assert {[RI 5 role] eq {master}}
+    wait_for_condition 1000 50 {
+        [RI 5 role] eq {master}
+    } else {
+        fail "Instance #5 is not a master after some time"
+    }
 }
 
 test "Wait for instance #0 to return back alive" {

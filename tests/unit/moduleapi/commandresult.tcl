@@ -71,11 +71,9 @@ start_server {tags {"modules"}} {
         cleanup_callback
         r cmdresult.register all
 
-        r cmdresult.success
-        r ping
+        r eval {local sum = 0; for i = 1, 100000 do sum = sum + i end; return sum} 0
 
         set stats [r cmdresult.stats]
-        # Duration should be > 0 microseconds
         assert {[dict get $stats total_duration_us] > 0}
 
         r cmdresult.unsubscribe
@@ -267,11 +265,15 @@ start_server {tags {"modules"}} {
         set stats [r cmdresult.stats]
         assert {[dict get $stats total_callbacks] >= 2}
 
-        # Unload module while subscription is still active
+        # Unload module while subscription is still active.
         assert_equal {OK} [r module unload commandresult]
 
-        # Reload module for remaining tests
+        # Unsubscribing after reload has no matching listener. It must not add
+        # NULL callbacks that would be invoked by later command result events.
         r module load $testmodule
+        catch {r cmdresult.unsubscribe} err
+        assert_match {*not subscribed*} $err
+        assert_equal {PONG} [r ping]
     }
 
     test {Module commandresult - Multiple callbacks from different operations} {
@@ -627,6 +629,9 @@ start_server {tags {"modules"}} {
 
     test {Module commandresult - rejected: command not allowed in Pub/Sub context (PUBSUB)} {
         cleanup_callback
+        if {$::force_resp3} {
+            skip "RESP3 Pub/Sub clients may issue arbitrary commands"
+        }
         r cmdresult.register rejected
 
         set rd [valkey_deferring_client]

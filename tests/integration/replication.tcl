@@ -918,7 +918,6 @@ start_server {tags {"repl external:skip"} overrides {save ""}} {
                     [lindex $replicas 0] config set repl-diskless-load swapdb
                     # For "no" and "fast" subcases, use key-load-delay to keep
                     # replica 0 as a steady slow reader for the entire RDB
-<<<<<<< HEAD
                     # transfer. A brief SIGSTOP/SIGCONT is insufficient
                     # because after resume the TLS layer on slow CI runners
                     # can't drain the pipe fast enough, leaving the RDB child

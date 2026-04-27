@@ -570,6 +570,7 @@ int performEvictions(void) {
             signalModifiedKey(NULL, db, keyobj);
             notifyKeyspaceEvent(NOTIFY_EVICTED, "evicted", keyobj, db->id);
             propagateDeletion(db, keyobj, server.lazyfree_lazy_eviction, bestslot);
+            if (isPrimaryDurabilityEnabled()) handleUncommittedKeyForClient(NULL, keyobj, db);
             exitExecutionUnit();
             postExecutionUnitOperations();
             decrRefCount(keyobj);

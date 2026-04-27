@@ -1458,7 +1458,7 @@ bool isImportSlotMigrationJob(slotMigrationJob *job);
  * The function will return one of the following:
  * CLIENT_TYPE_NORMAL -> Normal client, including MONITOR
  * CLIENT_TYPE_REPLICA  -> replica
- * CLIENT_TYPE_PUBSUB -> Client subscribed to Pub\/Sub channels
+ * CLIENT_TYPE_PUBSUB -> Client subscribed to Pub/Sub channels
  * CLIENT_TYPE_PRIMARY -> The client representing our replication primary.
  */
 static inline int getClientType(client *c) {
@@ -3824,6 +3824,7 @@ int getKeysFromCommandWithSpecs(struct serverCommand *cmd,
                                 getKeysResult *result);
 keyReference *getKeysPrepareResult(getKeysResult *result, int numkeys);
 int getKeysFromCommand(struct serverCommand *cmd, robj **argv, int argc, getKeysResult *result);
+int getKeysUsingKeySpecs(struct serverCommand *cmd, robj **argv, int argc, int search_flags, getKeysResult *result);
 int doesCommandHaveKeys(struct serverCommand *cmd);
 int getChannelsFromCommand(struct serverCommand *cmd, robj **argv, int argc, getKeysResult *result);
 int doesCommandHaveChannelsWithFlags(struct serverCommand *cmd, int flags);

@@ -1773,6 +1773,15 @@ int dbSwapDatabases(int id1, int id2) {
     db2->keys_with_volatile_items = aux.keys_with_volatile_items;
     copyDbExpiry(db2, &aux);
 
+    /* Swap uncommitted key tracking so it stays consistent with the key data. */
+    db1->uncommitted_keys = db2->uncommitted_keys;
+    db1->dirty_repl_offset = db2->dirty_repl_offset;
+    db1->uncommitted_keys_cursor = db2->uncommitted_keys_cursor;
+
+    db2->uncommitted_keys = aux.uncommitted_keys;
+    db2->dirty_repl_offset = aux.dirty_repl_offset;
+    db2->uncommitted_keys_cursor = aux.uncommitted_keys_cursor;
+
     /* Now we need to handle clients blocked on lists: as an effect
      * of swapping the two DBs, a client that was waiting for list
      * X in a given DB, may now actually be unblocked if X happens
@@ -1817,6 +1826,15 @@ void swapMainDbWithTempDb(serverDb **tempDb) {
         newdb->expires = aux.expires;
         newdb->keys_with_volatile_items = aux.keys_with_volatile_items;
         copyDbExpiry(newdb, &aux);
+
+        /* Swap uncommitted key tracking so it stays consistent with the key data. */
+        activedb->uncommitted_keys = newdb->uncommitted_keys;
+        activedb->dirty_repl_offset = newdb->dirty_repl_offset;
+        activedb->uncommitted_keys_cursor = newdb->uncommitted_keys_cursor;
+
+        newdb->uncommitted_keys = aux.uncommitted_keys;
+        newdb->dirty_repl_offset = aux.dirty_repl_offset;
+        newdb->uncommitted_keys_cursor = aux.uncommitted_keys_cursor;
 
         /* Now we need to handle clients blocked on lists: as an effect
          * of swapping the two DBs, a client that was waiting for list
@@ -1953,6 +1971,7 @@ void deleteExpiredKeyAndPropagateWithDictIndex(serverDb *db, robj *keyobj, int d
     notifyKeyspaceEvent(NOTIFY_EXPIRED, "expired", keyobj, db->id);
     signalModifiedKey(NULL, db, keyobj);
     propagateDeletion(db, keyobj, server.lazyfree_lazy_expire, dict_index);
+    if (isPrimaryDurabilityEnabled()) handleUncommittedKeyForClient(NULL, keyobj, db);
     server.stat_expiredkeys++;
 }
 
@@ -2084,6 +2103,7 @@ size_t dbReclaimExpiredFields(robj *o, serverDb *db, mstime_t now, unsigned long
             if (!hashTypeHasVolatileFields(o)) dbUntrackKeyWithVolatileItems(db, o);
         }
         signalModifiedKey(NULL, db, keyobj);
+        if (isPrimaryDurabilityEnabled()) handleUncommittedKeyForClient(NULL, keyobj, db);
         exitExecutionUnit();
         postExecutionUnitOperations();
         decrRefCount(keyobj);

@@ -1828,6 +1828,11 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
         processed += processIOThreadsReadDone();
         processed += connTypeProcessPendingData();
         if (server.aof_state == AOF_ON || server.aof_state == AOF_WAIT_REWRITE) flushAppendOnlyFile(0);
+        /* When appendfsync=always and the AOF fsync has been offloaded to an
+         * IO thread, skip flushing replies to clients until the fsync completes.
+         * This ensures clients don't receive responses before their writes are
+         * durable on disk. The next beforeSleep iteration will flush replies
+         * once processAofIOThreadFlushResult() confirms the fsync is done. */
         if (!(server.aof_fsync == AOF_FSYNC_ALWAYS && aofIOFlushInProgress())) {
             processed += handleClientsWithPendingWrites();
         }
@@ -4045,8 +4050,11 @@ void call(client *c, int flags) {
     if (zmalloc_used > server.stat_peak_memory) server.stat_peak_memory = zmalloc_used;
 
     /* Do some maintenance job and cleanup */
-    // TODO: should blocking postCall could be moved into afterCommand?
     afterCommand(c);
+    /* Track replication offset for durability blocking. This must stay
+     * here rather than inside afterCommand() because afterCommand() is
+     * also invoked from nested call() contexts (e.g. propagatePendingCommands)
+     * where the client argv may no longer be valid. */
     afterCommandTrackReplOffset(c);
 
     /* Remember the replication offset of the client, right after its last

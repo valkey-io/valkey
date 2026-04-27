@@ -53,3 +53,25 @@ start_cluster 3 3 {tags {external:skip cluster}} {
         assert_equal $shard_0_slot_coverage [dict get [get_node_info_from_shard $node_0_id $validation_node "shard"] "slots"]
     }
 }
+
+start_cluster 2 0 {tags {external:skip cluster}} {
+
+    test "CLUSTER SHARDS refreshes cached slots after resharding" {
+        set node0_id [R 0 CLUSTER MYID]
+        set node1_id [R 1 CLUSTER MYID]
+
+        # Verify initial slot distribution
+        assert_equal {0 8191} [dict get [get_node_info_from_shard $node0_id 0 shard] slots]
+        assert_equal {8192 16383} [dict get [get_node_info_from_shard $node1_id 0 shard] slots]
+
+        # Move slot 0 from node 0 to node 1
+        R 0 CLUSTER SETSLOT 0 MIGRATING $node1_id
+        R 1 CLUSTER SETSLOT 0 IMPORTING $node0_id
+        R 0 CLUSTER SETSLOT 0 NODE $node1_id
+        R 1 CLUSTER SETSLOT 0 NODE $node1_id
+
+        # Cached result must reflect the new ownership
+        assert_equal {1 8191} [dict get [get_node_info_from_shard $node0_id 0 shard] slots]
+        assert_equal {0 0 8192 16383} [dict get [get_node_info_from_shard $node1_id 0 shard] slots]
+    }
+}

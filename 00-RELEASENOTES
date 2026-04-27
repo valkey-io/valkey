@@ -48,13 +48,10 @@ Upgrade urgency LOW: This is the second release candidate of Valkey 9.1.0.
 * Fix race condition during async client freeing with IO threading enabled by @deepakrn (#3458)
 * Fix double free in stream consumer PEL loading with corrupt RDB data by @enjoy-binbin (#3498)
 * Fix FD leak in connSocketBlockingConnect on timeout by @madolson (#3541)
-* Fix SPMC queue buffer alignment by @sarthakaggarwal97 (#3504)
-* Fix module commandresult event cleanup during unsubscribe and module unload by @sarthakaggarwal97 (#3545)
 * Fix dismissHashtable madvise size by @charsyam (#3533)
 * Fix rdmaServer leaks when create listen cm id error by @enjoy-binbin (#3557)
 * Fix lua-enable-insecure-api default value cannot be changed to yes by @enjoy-binbin (#3548)
 * Ensure client slot migration pointer is cleared during reset by @murphyjacob4 (#3554)
-* Fix remove cached eval scripts on engine unregister by @eifrah-aws (#3503)
 
 Valkey 9.1.0-rc1 - Released Tue Mar 17 00:00:00 2026
 -------------------------------------

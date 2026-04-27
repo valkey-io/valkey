@@ -47,11 +47,17 @@ Upgrade urgency LOW: This is the second release candidate of Valkey 9.1.0.
 * Fix FD leak in connSocketBlockingConnect on timeout by @madolson (#3541)
 * Fix SPMC queue buffer alignment by @sarthakaggarwal97 (#3504)
 * Fix module commandresult event cleanup during unsubscribe and module unload by @sarthakaggarwal97 (#3545)
+* Fix dismissHashtable madvise size by @charsyam (#3533)
+* Fix rdmaServer leaks when create listen cm id error by @enjoy-binbin (#3557)
+* Fix lua-enable-insecure-api default value cannot be changed to yes by @enjoy-binbin (#3548)
+* Ensure client slot migration pointer is cleared during reset by @murphyjacob4 (#3554)
+* Fix remove cached eval scripts on engine unregister by @eifrah-aws (#3503)
 
 ### Build and Tooling
 * Fix VLA warning in linenoise and enable -Werror by @madolson (#3439)
 * Avoid having server.h being included by cli and benchmark by @ranshid (#3420)
 * Fix VLA warning in io_threads by @yang-z-o (#3518)
+* Strip LTO flags from static Lua module build by @hanxizh9910 (#3555)
 
 Valkey 9.1.0-rc1 - Released Tue Mar 17 00:00:00 2026
 -------------------------------------

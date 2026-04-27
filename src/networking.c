@@ -1978,8 +1978,7 @@ void unlinkClient(client *c) {
         }
         /* Check if this is the slot migration client we are writing to in a
          * child process*/
-        if (c->slot_migration_job && !isImportSlotMigrationJob(c->slot_migration_job) &&
-            server.slot_migration_pipe_conn == c->conn) {
+        if (server.slot_migration_pipe_conn == c->conn) {
             server.slot_migration_pipe_conn = NULL;
             serverLog(LL_NOTICE, "Slot migration target dropped, killing fork child.");
             killSlotMigrationChild();

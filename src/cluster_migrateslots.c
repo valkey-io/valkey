@@ -2145,6 +2145,7 @@ void resetSlotMigrationJob(slotMigrationJob *job) {
     /* Only one of client or conn should be set. */
     serverAssert(!job->client || !job->conn);
     if (job->client) {
+        job->client->slot_migration_job = NULL;
         freeClientAsync(job->client);
         job->client = NULL;
     } else if (job->conn) {

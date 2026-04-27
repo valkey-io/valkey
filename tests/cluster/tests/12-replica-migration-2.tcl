@@ -5,7 +5,7 @@
 # other masters have slaves.
 
 source "../tests/includes/init-tests.tcl"
-source "../../../tests/support/cli.tcl"
+source "../tests/includes/utils.tcl"
 
 # Create a cluster with 5 master and 15 slaves, to make sure there are no
 # empty masters and make rebalancing simpler to handle during the test.
@@ -33,6 +33,10 @@ test "Set allow-replica-migration yes" {
     foreach_valkey_id id {
         R $id CONFIG SET cluster-allow-replica-migration yes
     }
+}
+
+test "Wait cluster to be stable before resharding" {
+    wait_cluster_stable
 }
 
 set master0_id [dict get [get_myself 0] id]

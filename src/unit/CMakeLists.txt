@@ -157,8 +157,14 @@ gtest_discover_tests(valkey-unit-gtests)
 
 # Add custom test target using gtest-parallel
 add_custom_target(test-unit
-    COMMAND python3 ${CMAKE_SOURCE_DIR}/deps/gtest-parallel/gtest_parallel.py $<TARGET_FILE:valkey-unit-gtests>
+    COMMAND sh -c "TEST_ARGS=''; \
+        [ -n \"$accurate\" ] && TEST_ARGS=\"$TEST_ARGS --accurate\"; \
+        [ -n \"$large_memory\" ] && TEST_ARGS=\"$TEST_ARGS --large-memory\"; \
+        [ -n \"$valgrind\" ] && TEST_ARGS=\"$TEST_ARGS --valgrind\"; \
+        [ -n \"$seed\" ] && TEST_ARGS=\"$TEST_ARGS --seed $seed\"; \
+        python3 ${CMAKE_SOURCE_DIR}/deps/gtest-parallel/gtest_parallel.py $<TARGET_FILE:valkey-unit-gtests> --gtest_filter=\"$UNIT_TEST_PATTERN\"* -- $TEST_ARGS"
     DEPENDS valkey-unit-gtests
     WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
     COMMENT "Running tests with gtest-parallel"
+    VERBATIM
 )

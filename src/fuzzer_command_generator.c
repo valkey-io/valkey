@@ -9,8 +9,8 @@
 #include "fuzzer_command_generator.h"
 #include "sds.h"
 #include "dict.h"
-#include "server.h"
-
+#include "zmalloc.h"
+#include "util.h"
 #include <assert.h>
 #include <string.h>
 #include <math.h>

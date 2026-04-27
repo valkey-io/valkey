@@ -712,7 +712,9 @@ void replicationFeedMonitors(client *c, list *monitors, int dictid, robj **argv,
     }
 
     for (j = 0; j < argc; j++) {
-        if (argv[j]->encoding == OBJ_ENCODING_INT) {
+        if (clientCommandArgShouldBeRedacted(c, j)) {
+            cmdrepr = sdscatrepr(cmdrepr, (char *)objectGetVal(shared.redacted), sdslen(objectGetVal(shared.redacted)));
+        } else if (argv[j]->encoding == OBJ_ENCODING_INT) {
             cmdrepr = sdscatprintf(cmdrepr, "\"%ld\"", (long)objectGetVal(argv[j]));
         } else {
             cmdrepr = sdscatrepr(cmdrepr, (char *)objectGetVal(argv[j]), sdslen(objectGetVal(argv[j])));

@@ -689,6 +689,38 @@ start_server {tags {"scripting"}} {
         }
     } {} {external:skip}
 
+    start_server {tags {"scripting external:skip"} overrides {lua-enable-insecure-api yes}} {
+        test {Dynamic reset of lua engine with insecure API config change - default yes} {
+            # Ensure insecure API is available by default
+            assert_equal {} [r eval "return getfenv()" 0]
+
+            # Verify that disabling the config `lua-enable-insecure-api` disallows insecure API access
+            r config set lua-enable-insecure-api no
+            assert_error {*Script attempted to access nonexistent global variable 'getfenv'*} {
+                r eval "return getfenv()" 0
+            }
+
+            r config set lua-enable-insecure-api yes
+            assert_equal {} [r eval "return getfenv()" 0]
+        }
+    }
+
+    start_server {tags {"scripting external:skip"} config {default.conf} overrides {lua-enable-insecure-api no} args {--lua-enable-insecure-api yes}} {
+        test {Dynamic reset of lua engine with insecure API config change - command line yes} {
+            # Ensure insecure API is available by default
+            assert_equal {} [r eval "return getfenv()" 0]
+
+            # Verify that disabling the config `lua-enable-insecure-api` disallows insecure API access
+            r config set lua-enable-insecure-api no
+            assert_error {*Script attempted to access nonexistent global variable 'getfenv'*} {
+                r eval "return getfenv()" 0
+            }
+
+            r config set lua-enable-insecure-api yes
+            assert_equal {} [r eval "return getfenv()" 0]
+        }
+    }
+
     test {SCRIPTING FLUSH ASYNC} {
         r script flush sync
         for {set j 0} {$j < 100} {incr j} {
@@ -1658,9 +1690,11 @@ start_server {tags {"scripting repl external:skip"}} {
 
 if {$is_eval eq 1 && $script_compatibility_api == "redis"} {
 start_server {tags {"scripting external:skip"}} {
-    r script debug sync
-    r eval {return 'hello'} 0
-    r eval {return 'hello'} 0
+    test {Test scripting debug smoke} {
+        r script debug sync
+        r eval {return 'hello'} 0
+        r eval {return 'hello'} 0
+    }
 }
 
 start_server {tags {"scripting needs:debug external:skip"}} {

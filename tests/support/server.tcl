@@ -77,7 +77,7 @@ proc kill_server config {
     }
 
     # check for leaks
-    if {![dict exists $config "skipleaks"]} {
+    if {$::leaks && ![dict exists $config "skipleaks"]} {
         catch {
             if {[string match {*Darwin*} [exec uname -a]]} {
                 tags {"leaks"} {
@@ -588,7 +588,7 @@ proc start_server {options {code undefined}} {
 
     if {$::io_threads} {
         dict set config "io-threads" 2
-        dict set config "events-per-io-thread" 0
+        dict set config "io-threads-always-active" yes
         dict set config "min-io-threads-avoid-copy-reply" 2
     }
 

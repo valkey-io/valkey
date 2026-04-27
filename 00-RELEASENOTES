@@ -16,6 +16,9 @@ Valkey 9.1.0-rc2 - Released Tue Apr 28 00:00:00 2026
 
 Upgrade urgency LOW: This is the second release candidate of Valkey 9.1.0.
 
+### Behavior Changes
+* Revert "Prevent invalid TLS certificates from being loaded" (#2999) — deferred to next major version as it is a breaking change (#3572)
+
 ### New Features and enhanced behavior
 * Do the failover immediately if the replica is the best ranked replica by @enjoy-binbin (#2227)
 * Add `cluster-config-save-behavior` option to control nodes.conf save behavior by @enjoy-binbin (#3372)

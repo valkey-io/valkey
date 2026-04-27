@@ -44,7 +44,7 @@ start_cluster 5 15 {tags {external:skip cluster} overrides {cluster-allow-replic
 
 # Check that if 'cluster-allow-replica-migration' is set to 'no', replicas do not
 # migrate when primary becomes empty.
-tags {"slow"} {
+tags {"slow valgrind:skip"} {
 run_solo {cluster-replica-migration-slow} {
 start_cluster 5 15 {tags {external:skip cluster} overrides {cluster-allow-replica-migration no}} {
     test "Each primary should have at least two replicas attached" {

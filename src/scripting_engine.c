@@ -7,6 +7,7 @@
 #include "scripting_engine.h"
 #include "bio.h"
 #include "dict.h"
+#include "eval.h"
 #include "functions.h"
 #include "module.h"
 #include "server.h"
@@ -178,6 +179,7 @@ int scriptingEngineManagerUnregister(const char *engine_name) {
     scriptingEngine *e = dictGetVal(entry);
 
     functionsRemoveLibFromEngine(e);
+    evalRemoveScriptsFromEngine(e);
 
     engineMemoryInfo mem_info = scriptingEngineCallGetMemoryInfo(e, VMSE_ALL);
     engineMgr.total_memory_overhead -= zmalloc_size(e) +

@@ -181,6 +181,26 @@ void evalRelease(int async) {
     }
 }
 
+/* Remove all cached eval scripts associated with the given scripting engine.
+ * Called when a scripting engine is unregistered to avoid dangling engine
+ * pointers in the eval script cache. */
+void evalRemoveScriptsFromEngine(scriptingEngine *engine) {
+    dictIterator *iter = dictGetSafeIterator(evalCtx.scripts);
+    dictEntry *entry;
+    while ((entry = dictNext(iter))) {
+        evalScript *es = dictGetVal(entry);
+        if (es->engine == engine) {
+            sds sha = dictGetKey(entry);
+            evalCtx.scripts_mem -= sdsAllocSize(sha) + getStringObjectSdsUsedMemory(es->body);
+            if (es->node) {
+                listDelNode(evalCtx.scripts_lru_list, es->node);
+            }
+            dictDelete(evalCtx.scripts, sha);
+        }
+    }
+    dictReleaseIterator(iter);
+}
+
 void evalReset(int async) {
     evalRelease(async);
     evalInit();

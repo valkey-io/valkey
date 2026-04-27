@@ -2948,4 +2948,17 @@ start_server [list overrides [list save ""] tags {"zset needs:debug external:ski
         }
         assert_equal 1 $can_break
     }
+
+    test {ZRANGEBYSCORE with bare "(" or empty string returns an error} {
+        r zadd zset_test 1 "a"
+        
+        # Check that a bare "(" as min score results in an error
+        assert_error "*min or max is not a float*" {r zrangebyscore zset_test ( +inf}
+        
+        # Check that an empty string as min score results in an error
+        assert_error "*min or max is not a float*" {r zrangebyscore zset_test "" +inf}
+        
+        # Check that a bare "(" as max score results in an error
+        assert_error "*min or max is not a float*" {r zrangebyscore zset_test -inf (}
+    }
 }

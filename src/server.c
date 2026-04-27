@@ -7704,6 +7704,12 @@ __attribute__((weak)) int main(int argc, char **argv) {
     }
 #endif
 
+    /* Sync lua_insecure_api_current with the final config value after all
+     * config sources (default, config file, command-line args) have been
+     * applied, so that updateLuaEnableInsecureApi() can correctly detect
+     * subsequent changes via CONFIG SET. */
+    server.lua_insecure_api_current = server.lua_enable_insecure_api;
+
     InitServerLast();
 
     if (!server.sentinel_mode) {

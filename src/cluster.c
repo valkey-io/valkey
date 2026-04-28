@@ -1990,7 +1990,7 @@ void clusterCommand(client *c) {
         }
         sdsfree(cl);
         clusterCurrentBus->failover(force, takeover, c,
-                                     c == server.primary ? NULL : clusterCommandFailoverCompletion);
+                                    c == server.primary ? NULL : clusterCommandFailoverCompletion);
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "replicate") &&
                (c->argc == 3 || c->argc == 4)) {
         /* CLUSTER REPLICATE (<NODE ID> | NO ONE) */

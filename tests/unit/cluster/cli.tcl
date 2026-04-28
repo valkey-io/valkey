@@ -3,6 +3,7 @@
 source tests/support/cli.tcl
 
 # cluster creation is complicated with TLS, and the current tests don't really need that coverage
+# valkey-cli --cluster create does ADDSLOTS and REPLICATE before MEET. This doesn't work with v2.
 tags {tls:skip external:skip cluster singledb cluster-v2:skip} {
 
 set base_conf [list cluster-enabled yes cluster-node-timeout 1000]

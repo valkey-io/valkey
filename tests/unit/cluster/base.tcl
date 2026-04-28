@@ -75,7 +75,7 @@ test "After the join, every node gets a different config epoch" {
     if {$trynum == 0} {
         fail "Config epoch conflict resolution is not working."
     }
-}
+} {} {cluster-v2:skip} ;# Raft doesn't use config epochs; conflict resolution is gossip-specific.
 
 test "Nodes should report cluster_state is ok now" {
     wait_for_cluster_state ok

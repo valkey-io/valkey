@@ -98,7 +98,8 @@ start_cluster 3 1 {tags {external:skip cluster} overrides {shutdown-timeout 100}
     }
 }
 
-start_cluster 3 1 {tags {external:skip cluster}} {
+# Uses gossip packet filter to stall failover
+start_cluster 3 1 {tags {external:skip cluster cluster-v2:skip}} {
     test "Primary lost a slot during the manual failover pausing" {
         R 0 set FOO 0
 

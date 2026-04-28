@@ -242,17 +242,20 @@ test "Raft proto: leader sends REPL_OFFSETS after follower offset changes" {
         # Reply with repl_offset=5000 (0 -> non-zero transition).
         raft_reply_ae_ack $fd $reply 5000
 
-        # Read messages until we find REPL_OFFSETS or timeout.
+        # Read messages until we find REPL_OFFSETS with non-zero offset.
         set found 0
         for {set i 0} {$i < 30} {incr i} {
             if {[catch {set reply [raft_recv $fd 2000]} err]} break
-            if {[string match "REPL_OFFSETS *" $reply]} {
-                assert_match "*$fake_id 5000*" $reply
+            if {[string match "REPL_OFFSETS *$fake_id 5000*" $reply]} {
                 set found 1
                 break
             }
+            # Reply to AE heartbeats to keep the connection alive.
+            if {[string match "AE *" $reply]} {
+                raft_reply_ae_ack $fd $reply 5000
+            }
         }
-        assert_equal 1 $found "leader should send REPL_OFFSETS"
+        assert_equal 1 $found "leader should send REPL_OFFSETS with offset 5000"
 
         close $fd
     }

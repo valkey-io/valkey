@@ -6219,7 +6219,6 @@ static clusterManagerNode *clusterManagerNodePrimaryRandom(void) {
     }
 
     assert(primary_count > 0);
-    srand(time(NULL));
     idx = rand() % primary_count;
     listRewind(cluster_manager.nodes, &li);
     while ((ln = listNext(&li)) != NULL) {

@@ -289,7 +289,7 @@ class BgIterationTest : public ::testing::Test {
             addKeyToDb(0, "F0", "F0");
             addKeyToDb(0, "G0", "G0");
             addKeyToDb(0, "H0", "H0");
-            hashtable *ht = kvstoreGetHashtable(server.db[1]->keys, 0);
+            hashtable *ht = kvstoreGetHashtable(server.db[0]->keys, 0);
             hashtablePauseRehashing(ht);
 
             kvstoreExpand(server.db[1]->keys, 16, 0, NULL);

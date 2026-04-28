@@ -910,29 +910,6 @@ static int hashTypeRandomElement(robj *hashobj, unsigned long hashsize, listpack
     return rc;
 }
 
-/* Bound the amount of expiry cleanup HRANDFIELD does up front so stale-heavy
- * hashes improve quickly without turning a read path into an unbounded sweep.
- * Keep the default conservative and rely on the validated fallback for
- * correctness if stale entries still dominate the physical hash size. */
-#ifndef HRANDFIELD_EXPIRED_PRUNE_LIMIT
-#define HRANDFIELD_EXPIRED_PRUNE_LIMIT 32
-#endif
-
-static robj *hrandfieldMaybePruneExpiredFields(client *c, robj *hash) {
-    if (!hash || hash->encoding != OBJ_ENCODING_HASHTABLE || !hashTypeHasVolatileFields(hash)) {
-        return hash;
-    }
-    if (!iAmPrimary() || server.import_mode || server.lazy_expire_disabled) {
-        return hash;
-    }
-    if (isPausedActionsWithUpdate(PAUSE_ACTION_EXPIRE)) {
-        return hash;
-    }
-
-    dbReclaimExpiredFields(hash, c->db, commandTimeSnapshot(), HRANDFIELD_EXPIRED_PRUNE_LIMIT, c->slot);
-    return lookupKeyRead(c->db, c->argv[1]);
-}
-
 static unsigned long hrandfieldCollectLiveHashtableEntries(robj *hash, entry ***entries_out) {
     serverAssert(hash->encoding == OBJ_ENCODING_HASHTABLE);
     unsigned long count = 0, capacity = 16;
@@ -1085,6 +1062,25 @@ static unsigned long hrandfieldReplyFromCollectedEntries(writePreparedClient *wp
         added++;
     }
 
+    return added;
+}
+
+static unsigned long hrandfieldReplyFromValidatedHashtableEntries(writePreparedClient *wpc,
+                                                                  robj *hash,
+                                                                  unsigned long count,
+                                                                  int uniq,
+                                                                  int withvalues,
+                                                                  int resp,
+                                                                  hashtable *selected) {
+    if (uniq) {
+        return hrandfieldReplyFromReservoirSample(wpc, hash, count, withvalues, resp, selected);
+    }
+
+    entry **entries = NULL;
+    unsigned long live_count = hrandfieldCollectLiveHashtableEntries(hash, &entries);
+    unsigned long added = hrandfieldReplyFromCollectedEntries(wpc, entries, live_count,
+                                                              count, uniq, withvalues, resp, selected);
+    zfree(entries);
     return added;
 }
 
@@ -2310,17 +2306,16 @@ void hpexpiretimeCommand(client *c) {
  * the number of randoms per time. */
 #define HRANDFIELD_RANDOM_SAMPLE_LIMIT 1000
 
+#define HRANDFIELD_RANDOM_DUPLICATE_MIN_LIMIT 32
+#define HRANDFIELD_RANDOM_DUPLICATE_MAX_LIMIT 256
+#define HRANDFIELD_RANDOM_DUPLICATE_STREAK_LIMIT 8
+
 void hrandfieldWithCountCommand(client *c, long l, int withvalues) {
     unsigned long count, size;
     int uniq = 1;
     robj *hash;
 
     if ((hash = lookupKeyReadOrReply(c, c->argv[1], shared.emptyarray)) == NULL || checkType(c, hash, OBJ_HASH)) return;
-    hash = hrandfieldMaybePruneExpiredFields(c, hash);
-    if (hash == NULL) {
-        addReply(c, shared.emptyarray);
-        return;
-    }
     size = hashTypeLength(hash);
 
     if (l >= 0) {
@@ -2356,10 +2351,8 @@ void hrandfieldWithCountCommand(client *c, long l, int withvalues) {
                 /* Include the current slot in the fallback count because this
                  * iteration already consumed one attempt. */
                 if (hashTypeRandomElement(hash, size, &field, &value) != C_OK) {
-                    entry **entries = NULL;
-                    unsigned long live_count = hrandfieldCollectLiveHashtableEntries(hash, &entries);
-                    reply_size += hrandfieldReplyFromCollectedEntries(wpc, entries, live_count, remaining + 1, uniq, withvalues, c->resp, NULL);
-                    zfree(entries);
+                    reply_size += hrandfieldReplyFromValidatedHashtableEntries(wpc, hash, remaining + 1,
+                                                                               uniq, withvalues, c->resp, NULL);
                     break;
                 }
 
@@ -2485,6 +2478,14 @@ void hrandfieldWithCountCommand(client *c, long l, int withvalues) {
     else {
         /* Hashtable encoding (generic implementation) */
         unsigned long added = 0;
+        unsigned long duplicates = 0;
+        unsigned long consecutive_duplicates = 0;
+        unsigned long duplicate_limit = count / 2;
+        if (duplicate_limit < HRANDFIELD_RANDOM_DUPLICATE_MIN_LIMIT) {
+            duplicate_limit = HRANDFIELD_RANDOM_DUPLICATE_MIN_LIMIT;
+        } else if (duplicate_limit > HRANDFIELD_RANDOM_DUPLICATE_MAX_LIMIT) {
+            duplicate_limit = HRANDFIELD_RANDOM_DUPLICATE_MAX_LIMIT;
+        }
         listpackEntry field, value;
         hashtable *ht = hashtableCreate(&setHashtableType);
         hashtableExpand(ht, count);
@@ -2492,7 +2493,8 @@ void hrandfieldWithCountCommand(client *c, long l, int withvalues) {
             /* In case we were unable to locate random element, it is probably because there is no such element
              * since all elements are expired. */
             if (hashTypeRandomElement(hash, size, &field, withvalues ? &value : NULL) != C_OK) {
-                added += hrandfieldReplyFromReservoirSample(wpc, hash, count - added, withvalues, c->resp, ht);
+                added += hrandfieldReplyFromValidatedHashtableEntries(wpc, hash, count - added,
+                                                                      uniq, withvalues, c->resp, ht);
                 break;
             }
 
@@ -2502,8 +2504,19 @@ void hrandfieldWithCountCommand(client *c, long l, int withvalues) {
             sds sfield = hashSdsFromListpackEntry(&field);
             if (!hashtableAdd(ht, sfield)) {
                 sdsfree(sfield);
+                /* Switch to a validated pass if random probing spends too
+                 * much work on fields already selected for this reply. */
+                duplicates++;
+                consecutive_duplicates++;
+                if (duplicates >= duplicate_limit ||
+                    consecutive_duplicates >= HRANDFIELD_RANDOM_DUPLICATE_STREAK_LIMIT) {
+                    added += hrandfieldReplyFromValidatedHashtableEntries(wpc, hash, count - added,
+                                                                          uniq, withvalues, c->resp, ht);
+                    break;
+                }
                 continue;
             }
+            consecutive_duplicates = 0;
             added++;
 
             /* We can reply right away, so that we don't need to store the value in the dict. */
@@ -2551,11 +2564,6 @@ void hrandfieldCommand(client *c) {
 
     /* Handle variant without <count> argument. Reply with simple bulk string */
     if ((hash = lookupKeyReadOrReply(c, c->argv[1], shared.null[c->resp])) == NULL || checkType(c, hash, OBJ_HASH)) {
-        return;
-    }
-    hash = hrandfieldMaybePruneExpiredFields(c, hash);
-    if (hash == NULL) {
-        addReplyNull(c);
         return;
     }
 

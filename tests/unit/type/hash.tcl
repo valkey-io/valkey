@@ -327,6 +327,22 @@ start_server {tags {"hash"}} {
                 }
             }
         }
+
+        test {HRANDFIELD unique count falls back when live fields are fewer than requested in CASE 4} {
+            with_active_expire_disabled {
+                create_expired_heavy_hash_for_hrandfield stalehash 201 99
+                assert_equal 300 [r hlen stalehash]
+
+                set result [r hrandfield stalehash 100]
+                assert_equal 99 [llength $result]
+
+                set expected {}
+                for {set i 0} {$i < 99} {incr i} {
+                    lappend expected "live:$i"
+                }
+                assert_equal [lsort $expected] [lsort $result]
+            }
+        }
     }
 
 

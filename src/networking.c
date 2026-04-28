@@ -1112,9 +1112,15 @@ void *addReplyDeferredLen(client *c) {
      * buffer offset (see function comment) */
     reqresSaveClientReplyOffset(c);
 
+    /* When the deferred reply buffer is active, the placeholder must go into
+     * the same list that subsequent ReplyWith* calls will append to.
+     * Otherwise setDeferredReply will fill the placeholder in c->reply while
+     * the array elements live in c->deferred_reply, producing a malformed
+     * response after commitDeferredReplyBuffer joins the two lists. */
+    list *reply_list = isDeferredReplyEnabled(c) ? c->deferred_reply : c->reply;
     trimReplyUnusedTailSpace(c);
-    listAddNodeTail(c->reply, NULL); /* NULL is our placeholder. */
-    return listLast(c->reply);
+    listAddNodeTail(reply_list, NULL); /* NULL is our placeholder. */
+    return listLast(reply_list);
 }
 
 void setDeferredReply(client *c, void *node, const char *s, size_t length) {
@@ -1125,6 +1131,11 @@ void setDeferredReply(client *c, void *node, const char *s, size_t length) {
      * we return NULL in addReplyDeferredLen() */
     if (node == NULL) return;
     serverAssert(!listNodeValue(ln));
+
+    /* The placeholder node may live in c->deferred_reply when the deferred
+     * reply buffer is active.  Use the same list for deletion/accounting. */
+    list *reply_list = isDeferredReplyEnabled(c) ? c->deferred_reply : c->reply;
+    unsigned long long *reply_bytes = isDeferredReplyEnabled(c) ? &c->deferred_reply_bytes : &c->reply_bytes;
 
     /* Normally we fill this dummy NULL node, added by addReplyDeferredLen(),
      * with a new buffer structure containing the protocol needed to specify
@@ -1147,7 +1158,7 @@ void setDeferredReply(client *c, void *node, const char *s, size_t length) {
         prev->used += len_to_copy;
         length -= len_to_copy;
         if (length == 0) {
-            listDelNode(c->reply, ln);
+            listDelNode(reply_list, ln);
             return;
         }
         s += len_to_copy;
@@ -1159,7 +1170,7 @@ void setDeferredReply(client *c, void *node, const char *s, size_t length) {
         memcpy(next->buf, s, length);
         c->net_output_bytes_curr_cmd += length;
         next->used += length;
-        listDelNode(c->reply, ln);
+        listDelNode(reply_list, ln);
     } else {
         /* Create a new node */
         size_t usable_size;
@@ -1171,7 +1182,7 @@ void setDeferredReply(client *c, void *node, const char *s, size_t length) {
         memcpy(buf->buf, s, length);
         c->net_output_bytes_curr_cmd += length;
         listNodeValue(ln) = buf;
-        c->reply_bytes += buf->size;
+        *reply_bytes += buf->size;
 
         closeClientOnOutputBufferLimitReached(c, 1);
     }

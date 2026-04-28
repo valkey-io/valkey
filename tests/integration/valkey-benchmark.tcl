@@ -360,3 +360,33 @@ tags {"benchmark network external:skip logreqres:skip"} {
         }
     }
 }
+
+tags {"benchmark rfr external:skip logreqres:skip cluster singledb"} {
+    set base_conf [list cluster-enabled yes cluster-node-timeout 1000]
+    start_multiple_servers 2 [list overrides $base_conf] {
+        exec $::VALKEY_CLI_BIN --cluster-yes --cluster create \
+                            127.0.0.1:[srv 0 port] \
+                            127.0.0.1:[srv -1 port]
+
+        wait_for_condition 1000 50 {
+            [CI 0 cluster_state] eq {ok} &&
+            [CI 1 cluster_state] eq {ok}
+        } else {
+            fail "Cluster doesn't stabilize"
+        }
+        set host [srv 0 host]
+        set port [srv 0 port]
+
+        test {benchmark: function_load,fcall} {
+            set cmd [valkeybenchmark $host $port "--cluster --rfr all -c 5 -n 10 -t function_load,fcall"]
+            common_bench_setup $cmd
+            assert_match 0 [catch { exec {*}$cmd } output]
+        }
+
+        test {benchmark: set,get} {
+            set cmd [valkeybenchmark $host $port "--cluster --rfr all -c 5 -n 10 -t set,get"]
+            common_bench_setup $cmd
+            assert_match 0 [catch { exec {*}$cmd } output]
+        }
+    }
+}

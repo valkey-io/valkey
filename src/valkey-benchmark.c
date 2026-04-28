@@ -142,7 +142,9 @@ static struct config {
     int fuzz_flags; /* Bit flags for fuzzing modes */
     readFromReplica read_from_replica;
     int cluster_node_count;
+    int primary_node_count;
     struct clusterNode **cluster_nodes;
+    struct clusterNode **primary_nodes;
     struct serverConfig *server_config;
     struct hdr_histogram *latency_histogram;
     struct hdr_histogram *current_sec_latency_histogram;
@@ -932,12 +934,19 @@ static client createClient(char *cmd, int len, int seqlen, client from, int thre
         port = config.conn_info.hostport;
     } else {
         int node_idx = 0;
+        int node_count = config.cluster_node_count;
+        clusterNode **nodes = config.cluster_nodes;
+        if (!strcmp(config.title, "FUNCTION LOAD")) {
+            node_count = config.primary_node_count;
+            nodes = config.primary_nodes;
+        }
         if (config.num_threads < config.cluster_node_count)
-            node_idx = config.liveclients % config.cluster_node_count;
+            node_idx = config.liveclients % node_count;
         else
-            node_idx = thread_id % config.cluster_node_count;
-        clusterNode *node = config.cluster_nodes[node_idx];
+            node_idx = thread_id % node_count;
+        clusterNode *node = nodes[node_idx];
         assert(node != NULL);
+        if (!strcmp(config.title, "FUNCTION LOAD")) assert(node->replicate == NULL);
         ip = (const char *)node->ip;
         port = node->port;
         c->cluster_node = node;
@@ -1400,6 +1409,11 @@ static clusterNode **addClusterNode(clusterNode *node) {
     config.cluster_nodes = zrealloc(config.cluster_nodes, count * sizeof(*node));
     if (!config.cluster_nodes) return NULL;
     config.cluster_nodes[config.cluster_node_count++] = node;
+    if (node->replicate == NULL) {
+        config.primary_node_count++;
+        config.primary_nodes = zrealloc(config.primary_nodes, config.primary_node_count * sizeof(node));
+        config.primary_nodes[config.primary_node_count - 1] = node;
+    }
     return config.cluster_nodes;
 }
 
@@ -2591,17 +2605,17 @@ int main(int argc, char **argv) {
         if (test_is_selected("fcall")) {
             char *script = generateFunctionScript(1, config.num_keys_in_fcall > 0);
 
-            valkeyContext *ctx = getValkeyContext(config.ct, config.conn_info.hostip, config.conn_info.hostport);
-            if (ctx == NULL) {
-                exit(1);
+            for (int i = 0; i < config.primary_node_count; i++) {
+                valkeyContext *ctx = getValkeyContext(config.ct, config.primary_nodes[i]->ip, config.primary_nodes[i]->port);
+                if (ctx == NULL) {
+                    exit(1);
+                }
+                assert(ctx != NULL && ctx->err == 0);
+                void *reply = valkeyCommand(ctx, "FUNCTION LOAD REPLACE %s", script);
+                assert(reply != NULL);
+                freeReplyObject(reply);
+                valkeyFree(ctx);
             }
-
-            assert(ctx != NULL && ctx->err == 0);
-            void *reply = valkeyCommand(ctx, "FUNCTION LOAD REPLACE %s", script);
-
-            assert(reply != NULL);
-            freeReplyObject(reply);
-            valkeyFree(ctx);
             zfree(script);
 
             char **cmd_argv = zmalloc(sizeof(char *) * (config.num_keys_in_fcall + 3));
@@ -2612,7 +2626,7 @@ int main(int argc, char **argv) {
             ret = asprintf(&(cmd_argv[2]), "%d", config.num_keys_in_fcall);
             UNUSED(ret);
             for (int i = 0; i < config.num_keys_in_fcall; i++) {
-                ret = asprintf(&(cmd_argv[3 + i]), "key%d", i + 1);
+                ret = asprintf(&(cmd_argv[3 + i]), "key%s%d", tag, i + 1);
                 UNUSED(ret);
             }
             len = valkeyFormatCommandArgv(&cmd, config.num_keys_in_fcall + 3, (const char **)cmd_argv, NULL);
@@ -2620,7 +2634,6 @@ int main(int argc, char **argv) {
                 free(cmd_argv[i]);
             }
             zfree(cmd_argv);
-
             benchmark("FCALL", cmd, len);
             free(cmd);
         }

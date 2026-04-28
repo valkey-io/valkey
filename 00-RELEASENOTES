@@ -38,16 +38,12 @@ Upgrade urgency LOW: This is the second release candidate of Valkey 9.1.0.
 * Enhance cluster stale packet detection to prevent sub-replica and empty primary by @zhijun42 (#2811)
 * Handle EAGAIN in clusterWriteHandler by @enjoy-binbin (#3421)
 * Big endian bitmap byte order mismatch fix by @nmvk (#3401)
-* Fix RDB expiry write length and leak when loading zipmap by @charsyam (#3422)
 * Fix slot-migration-max-failover-repl-bytes unable to accept -1 by @enjoy-binbin (#3443)
 * Fix config rewrite producing negative values for unsigned memory configs by @enjoy-binbin (#3440)
-* Fix trivial double-free issue in rdbLoadObject by @charsyam (#3453)
 * Fix HPERSIST RESP protocol violation on wrong-type key by @madolson (#3516)
 * Fix race condition during async client freeing with IO threading enabled by @deepakrn (#3458)
-* Fix double free in stream consumer PEL loading with corrupt RDB data by @enjoy-binbin (#3498)
 * Fix FD leak in connSocketBlockingConnect on timeout by @madolson (#3541)
 * Fix lua-enable-insecure-api default value cannot be changed to yes by @enjoy-binbin (#3548)
-* Ensure client slot migration pointer is cleared during reset by @murphyjacob4 (#3554)
 
 Valkey 9.1.0-rc1 - Released Tue Mar 17 00:00:00 2026
 -------------------------------------

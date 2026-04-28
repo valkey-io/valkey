@@ -36,11 +36,18 @@ class TrackingTest : public ::testing::Test {
         listSetDupMethod(c->reply, dupClientReplyValue);
         c->conn = (connection *)c; /* dummy, avoids NULL dereference */
         c->deferred_reply_bytes = ULLONG_MAX;
+        listInitNode(&c->clients_pending_write_node, c);
         initClientPubSubData(c);
         return c;
     }
 
     static void freeTrackingTestClient(client *c) {
+        /* Remove from pending-write list to avoid dangling pointers;
+         * addReplyErrorFormat may have added the client there. */
+        if (c->flag.pending_write) {
+            listUnlinkNode(server.clients_pending_write, &c->clients_pending_write_node);
+            c->flag.pending_write = 0;
+        }
         if (c->pubsub_data) {
             if (c->pubsub_data->client_tracking_prefixes) {
                 raxFree(c->pubsub_data->client_tracking_prefixes);

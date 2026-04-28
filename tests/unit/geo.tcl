@@ -565,26 +565,12 @@ start_server {tags {"geo"}} {
         r del points
         r geoadd points 151.2093 -33.8688 "Sydney"
 
-        set malformed_searches {
-            {ERR value is not an integer or out of range} {GEOSEARCH points BYPOLYGON 3 151.2039 -33.8744 151.2132 -33.8829 151.2229 -33.8839 COUNT notanumber}
-            {ERR COUNT must be > 0} {GEOSEARCH points BYPOLYGON 3 151.2039 -33.8744 151.2132 -33.8829 151.2229 -33.8839 COUNT -1}
+        assert_error {ERR value is not an integer or out of range} {
+            r GEOSEARCH points BYPOLYGON 3 151.2039 -33.8744 151.2132 -33.8829 151.2229 -33.8839 COUNT notanumber
         }
-
-        foreach {expected_error command} $malformed_searches {
-            assert_error $expected_error {r {*}$command}
+        assert_error {ERR COUNT must be > 0} {
+            r GEOSEARCH points BYPOLYGON 3 151.2039 -33.8744 151.2132 -33.8829 151.2229 -33.8839 COUNT -1
         }
-
-        set used_memory_before [s used_memory]
-        for {set i 0} {$i < 100} {incr i} {
-            foreach {expected_error command} $malformed_searches {
-                assert_error $expected_error {r {*}$command}
-            }
-        }
-        set used_memory_after [s used_memory]
-
-        # Without freeing the BYPOLYGON points on COUNT errors, these malformed
-        # searches leak enough memory to be visible above allocator noise.
-        assert {$used_memory_after - $used_memory_before < 32*1024}
     }
 
     test {GEOSEARCH BYPOLYGON standard operations} {

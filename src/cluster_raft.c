@@ -2031,12 +2031,14 @@ static sds clusterRaftAppendInfoFields(sds info) {
                         "cluster_stats_messages_module_sent:%lld\r\n"
                         "cluster_stats_messages_module_received:%lld\r\n"
                         "cluster_stats_messages_publish_sent:%lld\r\n"
-                        "cluster_stats_messages_publish_received:%lld\r\n",
+                        "cluster_stats_messages_publish_received:%lld\r\n"
+                        "total_cluster_links_buffer_limit_exceeded:%llu\r\n",
                         role_str, (unsigned long long)rs->current_term,
                         (unsigned long long)rs->commit_index, (unsigned long long)rs->last_applied,
                         (unsigned long long)rs->log_count, rs->leader,
                         rs->stats_module_messages_sent, rs->stats_module_messages_received,
-                        rs->stats_publish_messages_sent, rs->stats_publish_messages_received);
+                        rs->stats_publish_messages_sent, rs->stats_publish_messages_received,
+                        (unsigned long long)server.cluster->stat_cluster_links_buffer_limit_exceeded);
     return info;
 }
 
@@ -2110,6 +2112,8 @@ static void clusterRaftApplySlotChange(sds data) {
             if (target) {
                 /* If this slot is moving away from myself, delete keys. */
                 if (server.cluster->slots[j] == myself && target != myself) {
+                    serverLog(LL_NOTICE, "Deleting keys in dirty slot %d on node %.40s",
+                              j, myself->name);
                     delKeysInSlot(j, server.lazyfree_lazy_server_del, true, false);
                 }
                 if (server.cluster->slots[j]) clusterDelSlot(j);

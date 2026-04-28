@@ -10,6 +10,9 @@ typedef struct clusterNode clusterNode;
 #define RCVBUF_MIN_READ_LEN 14
 #define RCVBUF_MAX_PREALLOC (1 << 20) /* 1MB */
 
+/* How many times per node_timeout we attempt to reconnect to each node. */
+#define NODE_CONNECTION_RETRIES_PER_TIMEOUT 10
+
 /* A refcounted block of bytes queued for sending on a cluster link.
  * The data member is uint64_t to ensure alignment for protocol
  * implementations that cast it to message structs with uint64_t fields. */

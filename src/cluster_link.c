@@ -409,11 +409,23 @@ void clusterConnectNodes(void) {
     mstime_t reconnect_interval = server.cluster_node_timeout / 2;
     if (reconnect_interval <= 0) reconnect_interval = 1;
 
+    /* Budget: try to contact every node NODE_CONNECTION_RETRIES_PER_TIMEOUT
+     * times within node_timeout. Each cron tick gets a proportional share. */
+    long long budget = (long long)dictSize(server.cluster->nodes) *
+                       CLUSTER_CRON_PERIOD_MS / reconnect_interval *
+                       NODE_CONNECTION_RETRIES_PER_TIMEOUT;
+    if (budget < 1) budget = 1;
+
     dictIterator *di = dictGetSafeIterator(server.cluster->nodes);
     dictEntry *de;
     while ((de = dictNext(di)) != NULL) {
         clusterNode *node = dictGetVal(de);
-        if (node == myself) continue;
+        if (node->flags & (CLUSTER_NODE_MYSELF | CLUSTER_NODE_NOADDR)) continue;
+
+        /* Free links that exceeded the send buffer limit. */
+        freeClusterLinkOnBufferLimitReached(node->link);
+        freeClusterLinkOnBufferLimitReached(node->inbound_link);
+
         if (node->link) continue;
 
         /* Remove handshake nodes that have timed out. */
@@ -422,9 +434,14 @@ void clusterConnectNodes(void) {
             continue;
         }
 
-        /* Throttle reconnection attempts. */
-        if (now - node->outbound_link_attempt_time < reconnect_interval) continue;
+        /* Throttle reconnection attempts. If an inbound link exists the peer
+         * already knows us, so reconnect immediately without throttling. */
+        if (!node->inbound_link) {
+            mstime_t backoff = reconnect_interval / NODE_CONNECTION_RETRIES_PER_TIMEOUT;
+            if (now - node->outbound_link_attempt_time < backoff && budget <= 0) continue;
+        }
         node->outbound_link_attempt_time = now;
+        budget--;
 
         clusterLink *link = createClusterLink(node);
         link->conn = connCreate(connTypeOfCluster());

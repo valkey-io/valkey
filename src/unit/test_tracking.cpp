@@ -21,6 +21,12 @@ class TrackingTest : public ::testing::Test {
     }
 
     void TearDown() override {
+        /* Nodes in clients_pending_write are embedded in client structs,
+         * not heap-allocated, so we must not let listRelease zfree them.
+         * Just detach any remaining nodes, then free the list container. */
+        while (listLength(server.clients_pending_write)) {
+            listUnlinkNode(server.clients_pending_write, listFirst(server.clients_pending_write));
+        }
         listRelease(server.clients_pending_write);
         raxFree(server.errors);
     }

@@ -8,6 +8,8 @@
 #include "bio.h"
 #include "module.h"
 #include "functions.h"
+#include "sds.h"
+#include "server.h"
 
 #include <sys/wait.h>
 #include <fcntl.h>
@@ -1280,9 +1282,7 @@ void clusterCommandMigrateSlots(client *c) {
 cleanup:
     if (slot_ranges) listRelease(slot_ranges);
     listRelease(new_slot_migrations);
-    if (auth_user) {
-        sdsfree(auth_user);
-    }
+    sdsfree(auth_user);
     if (auth_pass) {
         memset(auth_pass, 0, sdslen(auth_pass));
         sdsfree(auth_pass);
@@ -1405,11 +1405,19 @@ void slotMigrationJobReadAuthResponse(connection *conn) {
  * job's connection. */
 void slotMigrationJobSendAuth(slotMigrationJob *job) {
     serverAssert(job->type == SLOT_MIGRATION_EXPORT);
-    sds user = job->auth_user ? job->auth_user : server.primary_user;
+    const char *user = NULL;
+    size_t user_len = 0;
+    if (job->auth_user) {
+        user = job->auth_user;
+        user_len = sdslen(job->auth_user);
+    } else if (server.primary_user) {
+        user = server.primary_user;
+        user_len = strlen(server.primary_user);
+    }
     sds pass = job->auth_password ? job->auth_password : server.primary_auth;
     serverAssert(pass);
 
-    sds err = replicationSendAuth(job->conn, user, pass);
+    sds err = replicationSendAuth(job->conn, user, user_len, pass, sdslen(pass));
     if (err) {
         sds status_msg = sdscatfmt(sdsempty(), "Failed to send AUTH command to target node: %s", err);
         finishSlotMigrationJob(job, SLOT_MIGRATION_JOB_FAILED, status_msg);
@@ -2209,9 +2217,7 @@ void freeSlotMigrationJob(void *o) {
     sdsfree(job->status_msg);
     sdsfree(job->response_buf);
     sdsfree(job->description);
-    if (job->auth_user) {
-        sdsfree(job->auth_user);
-    }
+    sdsfree(job->auth_user);
     if (job->auth_password) {
         memset(job->auth_password, 0, sdslen(job->auth_password));
         sdsfree(job->auth_password);

@@ -17,23 +17,17 @@ class TrackingTest : public ::testing::Test {
     void SetUp() override {
         memset(&server, 0, sizeof(valkeyServer));
         server.errors = raxNew();
-        server.clients_pending_write = listCreate();
     }
 
     void TearDown() override {
-        /* Nodes in clients_pending_write are embedded in client structs,
-         * not heap-allocated, so we must not let listRelease zfree them.
-         * Just detach any remaining nodes, then free the list container. */
-        while (listLength(server.clients_pending_write)) {
-            listUnlinkNode(server.clients_pending_write, listFirst(server.clients_pending_write));
-        }
-        listRelease(server.clients_pending_write);
         raxFree(server.errors);
     }
 
     /* Create a minimal client suitable for checkPrefixCollisionsOrReply.
      * The client needs a reply buffer (for addReplyErrorFormat) and
-     * initialized pubsub_data (for client_tracking_prefixes). */
+     * initialized pubsub_data (for client_tracking_prefixes).
+     * We set reply_off so prepareClientToWrite returns early and the
+     * client is never added to server.clients_pending_write. */
     static client *createTrackingTestClient(void) {
         client *c = (client *)(zcalloc(sizeof(client)));
         c->buf = (char *)zmalloc_usable(PROTO_REPLY_CHUNK_BYTES, &c->buf_usable_size);
@@ -42,18 +36,12 @@ class TrackingTest : public ::testing::Test {
         listSetDupMethod(c->reply, dupClientReplyValue);
         c->conn = (connection *)c; /* dummy, avoids NULL dereference */
         c->deferred_reply_bytes = ULLONG_MAX;
-        listInitNode(&c->clients_pending_write_node, c);
+        c->flag.reply_off = 1;
         initClientPubSubData(c);
         return c;
     }
 
     static void freeTrackingTestClient(client *c) {
-        /* Remove from pending-write list to avoid dangling pointers;
-         * addReplyErrorFormat may have added the client there. */
-        if (c->flag.pending_write) {
-            listUnlinkNode(server.clients_pending_write, &c->clients_pending_write_node);
-            c->flag.pending_write = 0;
-        }
         if (c->pubsub_data) {
             if (c->pubsub_data->client_tracking_prefixes) {
                 raxFree(c->pubsub_data->client_tracking_prefixes);

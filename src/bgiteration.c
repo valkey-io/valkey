@@ -1806,7 +1806,7 @@ static void removePtrFromEarlyIterate(dbEntry *de) {
 
 static int findDbForEntry(dbEntry *de) {
     for (int i = 0; i < server.dbnum; i++) {
-        if (dbFind(server.db[i], objectGetKey(de)) == de) return i;
+        if (server.db[i] && dbFind(server.db[i], objectGetKey(de)) == de) return i;
     }
     serverAssert(false); // the entry MUST be in one of the DBs
 }

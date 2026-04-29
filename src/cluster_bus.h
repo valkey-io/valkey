@@ -8,6 +8,7 @@ typedef char *sds;
 struct serverObject;
 struct client;
 struct clusterLink;
+typedef struct clusterNode clusterNode;
 
 /* Bit flags for the onMyselfUpdated callback */
 #define CLUSTER_UPDATED_NOFAILOVER (1 << 0)
@@ -97,6 +98,10 @@ typedef struct clusterBusType {
     /* Free protocol-specific per-node data allocated by initNodeData.
      * If NULL, protocol_data is not freed. */
     void (*freeNodeData)(clusterNode *node);
+
+    /* Clean up any protocol-specific data associated with a node before it is deleted.
+     * If NULL, no protocol-specific cleanup is performed. */
+    void (*cleanupNode)(clusterNode *node);
 
     /* Slot ownership changes — called from cluster commands and slot migration.
      * Assigns or unassigns slots specified by an array of slot ranges. If

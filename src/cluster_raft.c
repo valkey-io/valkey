@@ -448,7 +448,7 @@ static int clusterRaftProcessHi(clusterLink *link, int argc, sds *argv) {
                 serverLog(LL_WARNING, "Bad address in HI from %.40s", sender_name);
                 return 1;
             }
-            serverLog(LL_NOTICE, "TRACE HI parseAddr %.40s ip=%s", link->node->name, link->node->ip);
+            serverLog(LL_DEBUG, "TRACE HI parseAddr %.40s ip=%s", link->node->name, link->node->ip);
             sender = link->node;
         } else if (sender != link->node) {
             /* Real node already exists (from NODE_JOIN apply).
@@ -467,7 +467,7 @@ static int clusterRaftProcessHi(clusterLink *link, int argc, sds *argv) {
     /* Propose NODE_JOIN for the sender. On followers, this forwards
      * to the leader via PROPOSE. */
     if (sender->flags & CLUSTER_NODE_MEET) {
-        serverLog(LL_NOTICE, "TRACE HI: proposing NODE_JOIN for %.40s (role=%d)", sender->name, rs->role);
+        serverLog(LL_DEBUG, "TRACE HI: proposing NODE_JOIN for %.40s (role=%d)", sender->name, rs->role);
         int already_in_log = 0;
         for (uint64_t i = 0; i < rs->log_count; i++) {
             if (rs->log[i]->type == RAFT_ENTRY_NODE_JOIN &&
@@ -780,7 +780,7 @@ static void raftLogApply(raftLogEntry *e) {
             if (!existing) {
                 clusterNode *n = createClusterNode(argv[0], 0);
                 if (clusterNodeParseAddressString(n, argv[1]) == C_OK) {
-                    serverLog(LL_NOTICE, "TRACE NODE_JOIN parseAddr %.40s ip=%s", n->name, n->ip);
+                    serverLog(LL_DEBUG, "TRACE NODE_JOIN parseAddr %.40s ip=%s", n->name, n->ip);
                     clusterAddNode(n);
                 } else {
                     freeClusterNode(n);
@@ -790,7 +790,7 @@ static void raftLogApply(raftLogEntry *e) {
             } else if (existing != myself) {
                 /* Update address for existing node. */
                 clusterNodeParseAddressString(existing, argv[1]);
-                serverLog(LL_NOTICE, "TRACE parseAddr %.40s ip=%s", existing->name, existing->ip);
+                serverLog(LL_DEBUG, "TRACE parseAddr %.40s ip=%s", existing->name, existing->ip);
             }
             /* Only count the first NODE_JOIN for each node. New nodes
              * don't have HANDSHAKE. Existing nodes from handshake do. */
@@ -913,7 +913,7 @@ static void raftLogApply(raftLogEntry *e) {
                 sdsclear(node->announce_client_ipv6);
                 sdsclear(node->availability_zone);
                 clusterNodeParseAddressString(node, argv[1]);
-                serverLog(LL_NOTICE, "TRACE parseAddr %.40s ip=%s", node->name, node->ip);
+                serverLog(LL_DEBUG, "TRACE parseAddr %.40s ip=%s", node->name, node->ip);
                 /* Apply self-set flags. TODO: split on comma and compare
                  * each part individually when more flags are added. */
                 if (argc >= 3) {
@@ -1137,7 +1137,7 @@ static int clusterRaftProcessAppendEntriesResponse(clusterLink *link, int argc, 
     /* Broadcast this node's offset to all peers when it transitions
      * from 0 to non-zero (e.g. replica finishes initial sync). */
     if (prev_offset == 0 && follower_repl_offset > 0 && !(node->flags & CLUSTER_NODE_MEET)) {
-        serverLog(LL_NOTICE, "TRACE leader broadcast offset 0->%lld for %.40s",
+        serverLog(LL_DEBUG, "TRACE leader broadcast offset 0->%lld for %.40s",
                   follower_repl_offset, node->name);
         clusterRaftBroadcastNodeOffset(node, follower_repl_offset);
     }
@@ -1465,7 +1465,7 @@ static void clusterRaftCron(void) {
              * followers have accurate data for CLUSTER SLOTS/SHARDS. */
             long long my_offset = getNodeReplicationOffset(myself);
             if (now - rs->last_repl_offsets_broadcast > REPL_OFFSETS_BROADCAST_PERIOD_MS) {
-                serverLog(LL_NOTICE, "TRACE periodic REPL_OFFSETS broadcast (term %llu)",
+                serverLog(LL_DEBUG, "TRACE periodic REPL_OFFSETS broadcast (term %llu)",
                           (unsigned long long)rs->current_term);
                 rs->last_repl_offsets_broadcast = now;
                 sds msg = wireNewMsg("REPL_OFFSETS");
@@ -1698,12 +1698,12 @@ static void clusterRaftBeforeSleep(void) {
                 strcmp(server.primary_host, primary->ip) != 0 ||
                 server.primary_port != getNodeDefaultReplicationPort(primary)) {
                 int same_shard = memcmp(myself->shard_id, primary->shard_id, CLUSTER_NAMELEN) == 0;
-                serverLog(LL_NOTICE, "TRACE todo_update_replication: connecting to %.40s %s:%d (same_shard=%d)",
+                serverLog(LL_DEBUG, "TRACE todo_update_replication: connecting to %.40s %s:%d (same_shard=%d)",
                           primary->name, primary->ip, getNodeDefaultReplicationPort(primary), same_shard);
                 clusterSetPrimary(primary, !same_shard, !same_shard);
             }
         } else if (nodeIsPrimary(myself) && server.primary_host) {
-            serverLog(LL_NOTICE, "TRACE todo_update_replication: promoting to primary");
+            serverLog(LL_DEBUG, "TRACE todo_update_replication: promoting to primary");
             replicationUnsetPrimary();
         }
     }
@@ -1712,7 +1712,7 @@ static void clusterRaftBeforeSleep(void) {
     if (nodeIsReplica(myself)) {
         long long new_offset = replicationGetReplicaOffset();
         if (myself->repl_offset == 0 && new_offset > 0) {
-            serverLog(LL_NOTICE, "TRACE replica offset 0->%lld (repl_state=%d)", new_offset, server.repl_state);
+            serverLog(LL_DEBUG, "TRACE replica offset 0->%lld (repl_state=%d)", new_offset, server.repl_state);
         }
         myself->repl_offset = new_offset;
     }

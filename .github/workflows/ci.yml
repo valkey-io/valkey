@@ -287,7 +287,7 @@ jobs:
             GTEST_CFLAGS="-I/usr/src/googletest/googletest/include -I/usr/src/googletest/googlemock/include" \
             GTEST_LIBS="/usr/lib32/libgtest.a /usr/lib32/libgmock.a"
 
-  build-libc-malloc:
+  test-ubuntu-libc-malloc:
     runs-on: ubuntu-latest
     steps:
       - name: Install libbacktrace
@@ -300,7 +300,13 @@ jobs:
       - name: Checkout Valkey
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - name: make
-        run: make -j4 SERVER_CFLAGS='-Werror' MALLOC=libc USE_LIBBACKTRACE=yes
+        run: make -j4 SERVER_CFLAGS='-Werror' MALLOC=libc CFLAGS=-DNO_MALLOC_USABLE_SIZE USE_LIBBACKTRACE=yes
+      - name: test
+        run: |
+          sudo apt-get install tcl8.6 tclx
+          ./runtest --verbose --tags -slow --dump-logs
+      - name: module api test
+        run: CFLAGS='-Werror' ./runtest-moduleapi --verbose --dump-logs
 
   build-almalinux8-jemalloc:
     runs-on: ubuntu-latest

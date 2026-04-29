@@ -2540,6 +2540,11 @@ int replicaLoadPrimaryRDBFromDisk(rdbSaveInfo *rsi) {
 /* Asynchronously read the SYNC payload we receive from a primary, parse it,
  * and load it directly to memory without going through the disk */
 void replicaReceiveRDBFromPrimaryToMemory(connection *conn) {
+    /* During full sync, the functions engine is freed right before loading
+     * the RDB. To avoid this happening while a function is still running,
+     * delay full sync processing until it finishes. */
+    if (isInsideYieldingLongCommand()) return;
+
     char buf[PROTO_IOBUF_LEN];
     int ret;
     rdbSaveInfo rsi = RDB_SAVE_INFO_INIT;

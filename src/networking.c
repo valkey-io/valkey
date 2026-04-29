@@ -4409,7 +4409,7 @@ sds catClientInfoString(sds s, client *client, int hide_user_data) {
 
     p = capa;
     if (client->capa & CLIENT_CAPA_REDIRECT) *p++ = 'r';
-    if (client->capa & CLIENT_CAPA_REDIRECT_KEYLESS) *p++ = 'k';
+    if (client->capa & CLIENT_CAPA_PRIMARY_READ) *p++ = 'k';
     *p = '\0';
 
     /* Compute the total memory consumed by this client. */
@@ -5009,7 +5009,7 @@ static int clientMatchesCapaFilter(client *c, sds capa_filter) {
             if (!(c->capa & CLIENT_CAPA_REDIRECT)) return 0;
             break;
         case 'k': /* client supports keyless redirection */
-            if (!(c->capa & CLIENT_CAPA_REDIRECT_KEYLESS)) return 0;
+            if (!(c->capa & CLIENT_CAPA_PRIMARY_READ)) return 0;
             break;
         default:
             /* Invalid capa, return false */
@@ -5118,7 +5118,7 @@ void clientHelpCommand(client *c) {
         "    The client claims its some capability options. Options are:",
         "    * REDIRECT",
         "      The client can handle redirection during primary and replica failover in standalone mode.",
-        "    * REDIRECT-KEYLESS",
+        "    * PRIMARY-READ",
         "      Redirect keyless read commands to the primary when the replica is not in READONLY mode.",
         "GETREDIR",
         "    Return the client ID we are redirecting to when tracking is enabled.",
@@ -5725,8 +5725,8 @@ void clientCapaCommand(client *c) {
     for (int i = 2; i < c->argc; i++) {
         if (!strcasecmp(objectGetVal(c->argv[i]), "redirect")) {
             c->capa |= CLIENT_CAPA_REDIRECT;
-        } else if (!strcasecmp(objectGetVal(c->argv[i]), "redirect-keyless")) {
-            c->capa |= CLIENT_CAPA_REDIRECT_KEYLESS;
+        } else if (!strcasecmp(objectGetVal(c->argv[i]), "primary-read")) {
+            c->capa |= CLIENT_CAPA_PRIMARY_READ;
         }
     }
     addReply(c, shared.ok);

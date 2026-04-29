@@ -247,7 +247,7 @@ start_server {tags {"introspection"}} {
 
         set c2 [valkey_client]
         $c2 client setname "client-with-k"
-        $c2 client capa redirect-keyless
+        $c2 client capa primary-read
 
         set output [r client list capa r capa r]
         assert_match *client-with-r* $output
@@ -297,7 +297,7 @@ start_server {tags {"introspection"}} {
 
         set c2 [valkey_client]
         $c2 client setname "killme-capa-k"
-        $c2 client capa redirect-keyless
+        $c2 client capa primary-read
 
         # Kill using capa r filter
         r client kill capa r skipme yes

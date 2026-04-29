@@ -4457,14 +4457,14 @@ int processCommand(client *c) {
         }
     }
 
-    /* If the client has the redirect-keyless capability, redirect keyless
+    /* If the client has the primary-read capability, redirect keyless
      * read commands to the primary when this is a replica and the client
      * has not opted into replica reads with READONLY. EXEC with all-keyless
      * queued commands is also considered keyless (c->slot remains -1 after
      * getNodeByQuery). */
     int is_keyless_exec = is_exec && c->slot == -1;
     if (server.cluster_enabled && !obey_client && (is_keyless || is_keyless_exec) && is_read_command &&
-        (c->capa & CLIENT_CAPA_REDIRECT_KEYLESS) && !c->flag.readonly) {
+        (c->capa & CLIENT_CAPA_PRIMARY_READ) && !c->flag.readonly) {
         clusterNode *myself = getMyClusterNode();
         if (clusterNodeIsReplica(myself)) {
             clusterNode *primary = clusterNodeGetPrimary(myself);
@@ -4473,8 +4473,9 @@ int processCommand(client *c) {
             } else {
                 flagTransaction(c);
             }
-            /* We pass -1 as it does not matter which slot will be passed in MOVED command */
-            clusterRedirectClient(c, primary, -1, CLUSTER_REDIR_MOVED);
+            int port = clusterNodeClientPort(primary, connIsTLS(c->conn), c);
+            addReplyErrorSds(c, sdscatprintf(sdsempty(), "-REDIRECT %s:%d",
+                                             clusterNodePreferredEndpoint(primary, c), port));
             c->duration = 0;
             c->cmd->rejected_calls++;
             return C_OK;

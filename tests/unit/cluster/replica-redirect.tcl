@@ -57,7 +57,7 @@ start_cluster 1 1 {tags {external:skip cluster}} {
         $rd1 close
     }
 
-    test {keyless read commands execute on replica without redirect-keyless capa} {
+    test {keyless read commands execute on replica without primary-read capa} {
         # Without the capa, keyless read commands like SCAN execute locally on the replica
         # After failover, node 0 is the new replica.
         set rd [valkey_deferring_client 0]
@@ -67,26 +67,26 @@ start_cluster 1 1 {tags {external:skip cluster}} {
         $rd close
     }
 
-    test {keyless read commands are MOVED with redirect-keyless capa} {
+    test {keyless read commands are MOVED with primary-read capa} {
         set rd [valkey_deferring_client 0]
-        $rd CLIENT CAPA redirect-keyless
+        $rd CLIENT CAPA primary-read
         assert_equal OK [$rd read]
 
         $rd DBSIZE
-        assert_error "MOVED *" {$rd read}
+        assert_error "REDIRECT *" {$rd read}
 
         $rd RANDOMKEY
-        assert_error "MOVED *" {$rd read}
+        assert_error "REDIRECT *" {$rd read}
 
         $rd SCAN 0
-        assert_error "MOVED *" {$rd read}
+        assert_error "REDIRECT *" {$rd read}
 
         $rd close
     }
 
-    test {keyless read commands execute on replica with redirect-keyless and READONLY} {
+    test {keyless read commands execute on replica with primary-read and READONLY} {
         set rd [valkey_deferring_client 0]
-        $rd CLIENT CAPA redirect-keyless
+        $rd CLIENT CAPA primary-read
         assert_equal OK [$rd read]
         $rd READONLY
         assert_equal OK [$rd read]
@@ -99,9 +99,9 @@ start_cluster 1 1 {tags {external:skip cluster}} {
         $rd close
     }
 
-    test {non-read keyless commands are not affected by redirect-keyless capa} {
+    test {non-read keyless commands are not affected by primary-read capa} {
         set rd [valkey_deferring_client 0]
-        $rd CLIENT CAPA redirect-keyless
+        $rd CLIENT CAPA primary-read
         assert_equal OK [$rd read]
 
         # PING is not CMD_READONLY, should still work on replica
@@ -111,9 +111,9 @@ start_cluster 1 1 {tags {external:skip cluster}} {
         $rd close
     }
 
-    test {CLIENT INFO reports redirect-keyless capa} {
+    test {CLIENT INFO reports primary-read capa} {
         set rd [valkey_deferring_client 0]
-        $rd CLIENT CAPA redirect-keyless
+        $rd CLIENT CAPA primary-read
         assert_equal OK [$rd read]
 
         $rd CLIENT INFO
@@ -122,18 +122,18 @@ start_cluster 1 1 {tags {external:skip cluster}} {
         $rd close
     }
 
-    test {keyless commands inside MULTI are individually MOVED with redirect-keyless capa} {
+    test {keyless commands inside MULTI are individually MOVED with primary-read capa} {
         set rd [valkey_deferring_client 0]
-        $rd CLIENT CAPA redirect-keyless
+        $rd CLIENT CAPA primary-read
         assert_equal OK [$rd read]
 
         $rd MULTI
         assert_equal OK [$rd read]
         # Individual keyless commands get MOVED, consistent with keyed commands
         $rd DBSIZE
-        assert_error "MOVED -1 *" {$rd read}
+        assert_error "REDIRECT *" {$rd read}
         $rd RANDOMKEY
-        assert_error "MOVED -1 *" {$rd read}
+        assert_error "REDIRECT *" {$rd read}
         # Transaction was flagged dirty, EXEC returns EXECABORT
         $rd EXEC
         assert_error "EXECABORT *" {$rd read}
@@ -144,19 +144,19 @@ start_cluster 1 1 {tags {external:skip cluster}} {
         $rd close
     }
 
-    test {both redirect and redirect-keyless capas work together} {
+    test {both redirect and primary-read capas work together} {
         set rd [valkey_deferring_client 0]
         $rd CLIENT CAPA redirect
         assert_equal OK [$rd read]
-        $rd CLIENT CAPA redirect-keyless
+        $rd CLIENT CAPA primary-read
         assert_equal OK [$rd read]
 
         $rd CLIENT INFO
         assert_match "*capa=rk*" [$rd read]
 
-        # Keyless read is redirected via redirect-keyless
+        # Keyless read is redirected via primary-read
         $rd DBSIZE
-        assert_error "MOVED -1 *" {$rd read}
+        assert_error "REDIRECT *" {$rd read}
 
         # Keyed read is redirected via standard cluster redirect
         $rd GET x

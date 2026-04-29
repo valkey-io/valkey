@@ -257,7 +257,9 @@ int evalExtractShebangFlags(sds body,
         }
 
         if (out_engine) {
-            size_t engine_name_len = sdslen(parts[0]) - 2;
+            size_t part0_len = sdslen(parts[0]);
+            serverAssert(part0_len >= 2);
+            size_t engine_name_len = part0_len - 2;
             *out_engine = zcalloc(engine_name_len + 1);
             valkey_strlcpy(*out_engine, parts[0] + 2, engine_name_len + 1);
         }

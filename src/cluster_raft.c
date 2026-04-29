@@ -50,6 +50,7 @@ void moduleCallClusterReceivers(const char *sender_id, uint64_t module_id, uint8
  * -------------------------------------------------------------------------- */
 
 #define RAFT_HDR_SIZE 8
+#define REPL_OFFSETS_BROADCAST_PERIOD_MS 10000
 
 /* Start building a message. Reserves space for the binary header and
  * appends the message type as the first text field. */
@@ -193,6 +194,7 @@ typedef struct {
     unsigned int todo_broadcast_ae : 1;
     unsigned int todo_retry_proposals : 1;
     unsigned int todo_schedule_failover : 1;
+    unsigned int todo_update_replication : 1;
 
     /* NODE_INFO divergence detection. */
     sds my_last_committed_info;
@@ -1135,6 +1137,8 @@ static int clusterRaftProcessAppendEntriesResponse(clusterLink *link, int argc, 
     /* Broadcast this node's offset to all peers when it transitions
      * from 0 to non-zero (e.g. replica finishes initial sync). */
     if (prev_offset == 0 && follower_repl_offset > 0 && !(node->flags & CLUSTER_NODE_MEET)) {
+        serverLog(LL_NOTICE, "TRACE leader broadcast offset 0->%lld for %.40s",
+                  follower_repl_offset, node->name);
         clusterRaftBroadcastNodeOffset(node, follower_repl_offset);
     }
 
@@ -1460,7 +1464,9 @@ static void clusterRaftCron(void) {
             /* Broadcast all replication offsets every 10s so
              * followers have accurate data for CLUSTER SLOTS/SHARDS. */
             long long my_offset = getNodeReplicationOffset(myself);
-            if (now - rs->last_repl_offsets_broadcast > 10000) {
+            if (now - rs->last_repl_offsets_broadcast > REPL_OFFSETS_BROADCAST_PERIOD_MS) {
+                serverLog(LL_NOTICE, "TRACE periodic REPL_OFFSETS broadcast (term %llu)",
+                          (unsigned long long)rs->current_term);
                 rs->last_repl_offsets_broadcast = now;
                 sds msg = wireNewMsg("REPL_OFFSETS");
                 int count = 0;
@@ -1683,9 +1689,32 @@ static void clusterRaftBeforeSleep(void) {
         }
     }
 
+    if (rs->todo_update_replication) {
+        rs->todo_update_replication = 0;
+        if (nodeIsReplica(myself) && myself->replicaof) {
+            clusterNode *primary = myself->replicaof;
+            /* Only call clusterSetPrimary if replication target changed. */
+            if (!server.primary_host ||
+                strcmp(server.primary_host, primary->ip) != 0 ||
+                server.primary_port != getNodeDefaultReplicationPort(primary)) {
+                int same_shard = memcmp(myself->shard_id, primary->shard_id, CLUSTER_NAMELEN) == 0;
+                serverLog(LL_NOTICE, "TRACE todo_update_replication: connecting to %.40s %s:%d (same_shard=%d)",
+                          primary->name, primary->ip, getNodeDefaultReplicationPort(primary), same_shard);
+                clusterSetPrimary(primary, !same_shard, !same_shard);
+            }
+        } else if (nodeIsPrimary(myself) && server.primary_host) {
+            serverLog(LL_NOTICE, "TRACE todo_update_replication: promoting to primary");
+            replicationUnsetPrimary();
+        }
+    }
+
     /* Keep myself->repl_offset up to date for CLUSTER SLOTS/SHARDS. */
     if (nodeIsReplica(myself)) {
-        myself->repl_offset = replicationGetReplicaOffset();
+        long long new_offset = replicationGetReplicaOffset();
+        if (myself->repl_offset == 0 && new_offset > 0) {
+            serverLog(LL_NOTICE, "TRACE replica offset 0->%lld (repl_state=%d)", new_offset, server.repl_state);
+        }
+        myself->repl_offset = new_offset;
     }
 }
 
@@ -2145,6 +2174,7 @@ done:
 /* Apply a SET_REPLICA_OF entry.
  * Format: "<replica-id> <primary-id-or-dash> <shard-id>" */
 static void clusterRaftApplySetReplica(sds data) {
+    clusterRaftState *rs = RAFT_STATE();
     int argc;
     sds *argv = sdssplitlen(data, sdslen(data), " ", 1, &argc);
     if (!argv || argc != 3) goto done;
@@ -2161,7 +2191,7 @@ static void clusterRaftApplySetReplica(sds data) {
             replica->flags &= ~CLUSTER_NODE_REPLICA;
             replica->flags |= CLUSTER_NODE_PRIMARY;
             replica->replicaof = NULL;
-            if (replica == myself) replicationUnsetPrimary();
+            if (replica == myself) rs->todo_update_replication = 1;
         }
         clusterRemoveNodeFromShard(replica);
         memcpy(replica->shard_id, shard_id, CLUSTER_NAMELEN);
@@ -2172,8 +2202,16 @@ static void clusterRaftApplySetReplica(sds data) {
         /* Guard: skip if the primary's shard-id has changed. */
         if (memcmp(primary->shard_id, shard_id, CLUSTER_NAMELEN) != 0) goto done;
         if (replica == myself) {
-            int same_shard = memcmp(myself->shard_id, primary->shard_id, CLUSTER_NAMELEN) == 0;
-            clusterSetPrimary(primary, !same_shard, !same_shard);
+            /* Update cluster state; actual replication change deferred to beforeSleep. */
+            if (myself->replicaof) clusterNodeRemoveReplica(myself->replicaof, myself);
+            myself->flags &= ~CLUSTER_NODE_PRIMARY;
+            myself->flags |= CLUSTER_NODE_REPLICA;
+            myself->replicaof = primary;
+            clusterNodeAddReplica(primary, myself);
+            clusterRemoveNodeFromShard(myself);
+            memcpy(myself->shard_id, primary->shard_id, CLUSTER_NAMELEN);
+            clusterAddNodeToShard(primary->shard_id, myself);
+            rs->todo_update_replication = 1;
         } else {
             if (replica->replicaof) clusterNodeRemoveReplica(replica->replicaof, replica);
             replica->flags &= ~CLUSTER_NODE_PRIMARY;
@@ -2194,6 +2232,7 @@ done:
  * The replica takes over the primary's slots and becomes primary.
  * The old primary becomes a replica of the new primary. */
 static void clusterRaftApplyFailover(sds data) {
+    clusterRaftState *rs = RAFT_STATE();
     int argc;
     sds *argv = sdssplitlen(data, sdslen(data), " ", 1, &argc);
     if (!argv || argc != 2) goto done;
@@ -2223,7 +2262,7 @@ static void clusterRaftApplyFailover(sds data) {
         clusterNodeRemoveReplica(primary, r);
         r->replicaof = replica;
         clusterNodeAddReplica(replica, r);
-        if (r == myself) clusterSetPrimary(replica, 0, 0);
+        if (r == myself) rs->todo_update_replication = 1;
     }
 
     /* Demote old primary to replica of new primary. */
@@ -2239,11 +2278,11 @@ static void clusterRaftApplyFailover(sds data) {
 
     /* If I'm the replica being promoted, start acting as primary. */
     if (replica == myself) {
-        replicationUnsetPrimary();
+        rs->todo_update_replication = 1;
     }
     /* If I'm the old primary being demoted, start replicating. */
     if (primary == myself) {
-        clusterSetPrimary(replica, 0, 0);
+        rs->todo_update_replication = 1;
     }
 done:
     if (argv) sdsfreesplitres(argv, argc);

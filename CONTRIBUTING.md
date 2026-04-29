@@ -108,6 +108,48 @@ which includes documentation about various best practices for writing Valkey cod
 To link a pull request to an existing issue, please write "Fixes #xyz" somewhere
 in the pull request description, where xyz is the issue number.
 
+## Code formatting with clang-format
+
+Valkey enforces code formatting using `clang-format-18`. A CI check runs on
+every pull request and will fail if your code is not formatted correctly.
+
+### Install clang-format-18
+
+**Option A — pip (any platform):**
+
+```bash
+pip install clang-format==18.1.8
+```
+
+**Option B — apt (Debian/Ubuntu):**
+
+```bash
+sudo apt-get install software-properties-common -y
+wget -O - https://apt.llvm.org/llvm-snapshot.gpg.key | gpg --dearmor | sudo tee /usr/share/keyrings/llvm-toolchain.gpg > /dev/null
+echo "deb [signed-by=/usr/share/keyrings/llvm-toolchain.gpg] http://apt.llvm.org/$(lsb_release -cs)/ llvm-toolchain-$(lsb_release -cs)-18 main" | sudo tee /etc/apt/sources.list.d/llvm.list
+sudo apt-get update -y
+sudo apt-get install clang-format-18 -y
+```
+
+### Format your changes
+
+From the repository root, run clang-format on the `src/` directory:
+
+```bash
+cd src
+clang-format-18 -i **/*.c **/*.h **/*.cpp **/*.hpp
+```
+
+Or format only the files you changed:
+
+```bash
+clang-format-18 -i src/file_you_changed.c
+```
+
+The formatting configuration lives in `src/.clang-format`. Use version 18
+specifically — different versions may produce different output and cause the
+CI check to fail.
+
 ## Running the daily workflow on demand for your branch
 
 Use [`.github/workflows/daily.yml`](.github/workflows/daily.yml) with

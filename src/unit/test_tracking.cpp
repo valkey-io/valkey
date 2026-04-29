@@ -20,7 +20,7 @@ class TrackingTest : public ::testing::Test {
     }
 
     void TearDown() override {
-        raxFree(server.errors);
+        raxFreeWithCallback(server.errors, zfree);
     }
 
     /* Create a minimal client suitable for checkPrefixCollisionsOrReply.

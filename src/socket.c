@@ -389,15 +389,27 @@ static int connSocketBlockingConnect(connection *conn, const char *addr, int por
  */
 
 static ssize_t connSocketSyncWrite(connection *conn, char *ptr, ssize_t size, long long timeout) {
-    return syncWrite(conn->fd, ptr, size, timeout);
+    ssize_t ret = syncWrite(conn->fd, ptr, size, timeout);
+    if (ret == -1) {
+        conn->last_errno = errno;
+    }
+    return ret;
 }
 
 static ssize_t connSocketSyncRead(connection *conn, char *ptr, ssize_t size, long long timeout) {
-    return syncRead(conn->fd, ptr, size, timeout);
+    ssize_t ret = syncRead(conn->fd, ptr, size, timeout);
+    if (ret == -1) {
+        conn->last_errno = errno;
+    }
+    return ret;
 }
 
 static ssize_t connSocketSyncReadLine(connection *conn, char *ptr, ssize_t size, long long timeout) {
-    return syncReadLine(conn->fd, ptr, size, timeout);
+    ssize_t ret = syncReadLine(conn->fd, ptr, size, timeout);
+    if (ret == -1) {
+        conn->last_errno = errno;
+    }
+    return ret;
 }
 
 static const char *connSocketGetType(connection *conn) {

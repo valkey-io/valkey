@@ -1034,6 +1034,9 @@ static ssize_t connTLSSyncWrite(connection *conn_, char *ptr, ssize_t size, long
     SSL_set_mode(conn->ssl, SSL_MODE_ENABLE_PARTIAL_WRITE);
     unsetBlockingTimeout(conn);
 
+    if (ret < 0) {
+        conn->c.last_errno = errno;
+    }
     return ret;
 }
 
@@ -1046,6 +1049,9 @@ static ssize_t connTLSSyncRead(connection *conn_, char *ptr, ssize_t size, long 
     ret = updateStateAfterSSLIO(conn, ret, 0);
     unsetBlockingTimeout(conn);
 
+    if (ret < 0) {
+        conn->c.last_errno = errno;
+    }
     return ret;
 }
 
@@ -1079,6 +1085,9 @@ static ssize_t connTLSSyncReadLine(connection *conn_, char *ptr, ssize_t size, l
     }
 exit:
     unsetBlockingTimeout(conn);
+    if (nread < 0) {
+        conn->c.last_errno = errno;
+    }
     return nread;
 }
 

@@ -577,6 +577,56 @@ void freeClusterNode(clusterNode *n) {
     zfree(n);
 }
 
+/* Remove a node from the cluster. The function performs the high level
+ * cleanup, calling freeClusterNode() for the low level cleanup.
+ * Here we do the following:
+ *
+ * 1) Mark all the slots handled by it as unassigned.
+ * 2) Remove all the failure reports sent by this node and referenced by
+ *    other nodes via the bus hook.
+ * 3) Remove the node from the owning shard
+ * 4) Free the node with freeClusterNode() that will in turn remove it
+ *    from the hash table and from the list of replicas of its primary, if
+ *    it is a replica node.
+ */
+void clusterDelNode(clusterNode *delnode) {
+    serverAssert(delnode != NULL);
+    serverLog(LL_DEBUG, "Deleting node %.40s (%s) from cluster view", delnode->name, humanNodename(delnode));
+
+    int j;
+
+    /* 1) Mark slots as unassigned. */
+    for (j = 0; j < CLUSTER_SLOTS; j++) {
+        if (getImportingSlotSource(j) == delnode) setImportingSlotSource(j, NULL);
+        if (getMigratingSlotDest(j) == delnode) setMigratingSlotDest(j, NULL);
+        if (server.cluster->slots[j] == delnode) clusterDelSlot(j);
+    }
+
+    /* 2) Remove failure reports via bus hook. */
+    if (clusterCurrentBus->cleanupNode) {
+        clusterCurrentBus->cleanupNode(delnode);
+    }
+
+    /* 3) Remove the node from the owning shard */
+    clusterRemoveNodeFromShard(delnode);
+
+    /* 4) Free the node, unlinking it from the cluster. */
+    freeClusterNode(delnode);
+}
+
+void clusterRenameNode(clusterNode *node, char *newname) {
+    int retval;
+    sds s = sdsnewlen(node->name, CLUSTER_NAMELEN);
+
+    serverLog(LL_DEBUG, "Renaming node %.40s (%s) into %.40s", node->name, humanNodename(node), newname);
+    retval = dictDelete(server.cluster->nodes, s);
+    sdsfree(s);
+    serverAssert(retval == DICT_OK);
+    memcpy(node->name, newname, CLUSTER_NAMELEN);
+    clusterAddNode(node);
+    clusterAddNodeToShard(node->shard_id, node);
+}
+
 /* -----------------------------------------------------------------------------
  * Slot assignment
  * -------------------------------------------------------------------------- */

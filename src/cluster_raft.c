@@ -2019,8 +2019,13 @@ static void clusterRaftFreeNodeData(clusterNode *node) {
 
 static sds clusterRaftAppendVarsLine(sds config) {
     clusterRaftState *rs = RAFT_STATE();
-    config = sdscatprintf(config, "vars currentTerm %llu raftLeader %.40s\n",
-                          (unsigned long long)rs->current_term, rs->leader);
+    config = sdscatprintf(config, "vars currentTerm %llu",
+                          (unsigned long long)rs->current_term);
+    if (rs->leader[0]) {
+        config = sdscatlen(config, " raftLeader ", 12);
+        config = sdscatlen(config, rs->leader, CLUSTER_NAMELEN);
+    }
+    config = sdscatlen(config, "\n", 1);
     return config;
 }
 

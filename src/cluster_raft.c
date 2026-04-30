@@ -52,6 +52,12 @@ void moduleCallClusterReceivers(const char *sender_id, uint64_t module_id, uint8
 #define RAFT_HDR_SIZE 8
 #define REPL_OFFSETS_BROADCAST_PERIOD_MS 10000
 
+/* Monotonic millisecond clock for timeouts and failure detection.
+ * Unlike monotonicMs(), this is not affected by system clock adjustments. */
+static mstime_t monotonicMs(void) {
+    return (mstime_t)(getMonotonicUs() / 1000);
+}
+
 /* Start building a message. Reserves space for the binary header and
  * appends the message type as the first text field. */
 static sds wireNewMsg(const char *type) {
@@ -365,7 +371,7 @@ static int clusterRaftProcessHello(clusterLink *link, int argc, sds *argv) {
         memcpy(rs->leader, sender_name, CLUSTER_NAMELEN);
         memset(rs->voted_for, 0, CLUSTER_NAMELEN);
         clusterRaftRandomizeElectionTimeout(rs);
-        rs->last_heartbeat = mstime();
+        rs->last_heartbeat = monotonicMs();
         rs->todo_connect_nodes = 1;
         serverLog(LL_NOTICE, "Singleton stepping down on HELLO from %.40s.", sender_name);
     }
@@ -465,7 +471,7 @@ static int clusterRaftProcessHi(clusterLink *link, int argc, sds *argv) {
         memcpy(rs->leader, sender_name, CLUSTER_NAMELEN);
         memset(rs->voted_for, 0, CLUSTER_NAMELEN);
         clusterRaftRandomizeElectionTimeout(rs);
-        rs->last_heartbeat = mstime();
+        rs->last_heartbeat = monotonicMs();
         serverLog(LL_NOTICE, "Singleton stepping down on HI from non-singleton %.40s.", sender_name);
     }
 
@@ -633,7 +639,7 @@ static void clusterRaftPropose(sds entry, void *ctx, void (*callback)(void *ctx,
         pp->data = sdsdup(data);
         pp->ctx = ctx;
         pp->callback = callback;
-        pp->ctime = mstime();
+        pp->ctime = monotonicMs();
         listAddNodeTail(rs->pending_proposals, pp);
     }
 
@@ -739,7 +745,7 @@ static int clusterRaftMaybeStepDown(clusterRaftState *rs, uint64_t term) {
         memset(rs->voted_for, 0, CLUSTER_NAMELEN);
         memset(rs->leader, 0, CLUSTER_NAMELEN);
         clusterRaftRandomizeElectionTimeout(rs);
-        rs->last_heartbeat = mstime();
+        rs->last_heartbeat = monotonicMs();
         return 1;
     }
     return 0;
@@ -851,7 +857,7 @@ static void raftLogApply(raftLogEntry *e) {
                 if (joined && joined != myself) {
                     RAFT_DATA(joined)->peer.next_index = 1;
                     RAFT_DATA(joined)->peer.match_index = 0;
-                    RAFT_DATA(joined)->peer.last_ack_time = mstime();
+                    RAFT_DATA(joined)->peer.last_ack_time = monotonicMs();
                 }
             }
 
@@ -1094,7 +1100,7 @@ static int clusterRaftProcessAppendEntries(clusterLink *link, int argc, sds *arg
 
     /* Accept heartbeat. */
     if (rs->role != RAFT_ROLE_LEARNER) rs->role = RAFT_ROLE_FOLLOWER;
-    rs->last_heartbeat = mstime();
+    rs->last_heartbeat = monotonicMs();
     memcpy(rs->leader, argv[1], CLUSTER_NAMELEN);
 
     /* Log consistency check: verify prev_log_index/term match. */
@@ -1168,7 +1174,7 @@ static int clusterRaftProcessAppendEntriesResponse(clusterLink *link, int argc, 
     clusterNode *node = link->node;
     if (!node) return 1;
     clusterNodeRaftData *rd = RAFT_DATA(node);
-    rd->peer.last_ack_time = mstime();
+    rd->peer.last_ack_time = monotonicMs();
     /* Keep node->repl_offset in sync for CLUSTER SLOTS/SHARDS on the leader. */
     long long prev_offset = node->repl_offset;
     node->repl_offset = follower_repl_offset;
@@ -1275,7 +1281,7 @@ static int clusterRaftProcessRequestVote(clusterLink *link, int argc, sds *argv)
         /* TODO: log completeness check (compare last log index/term) */
         granted = 1;
         memcpy(rs->voted_for, argv[1], CLUSTER_NAMELEN);
-        rs->last_heartbeat = mstime(); /* Reset election timer */
+        rs->last_heartbeat = monotonicMs(); /* Reset election timer */
         serverLog(LL_NOTICE, "Voted for %.40s in term %llu.", argv[1], (unsigned long long)msg_term);
     }
 
@@ -1323,7 +1329,7 @@ static int clusterRaftProcessRequestVoteResponse(clusterLink *link, int argc, sd
                 if (memcmp(peer->name, old_leader, CLUSTER_NAMELEN) == 0) {
                     RAFT_DATA(peer)->peer.last_ack_time = rs->last_heartbeat;
                 } else {
-                    RAFT_DATA(peer)->peer.last_ack_time = mstime();
+                    RAFT_DATA(peer)->peer.last_ack_time = monotonicMs();
                 }
             }
             dictReleaseIterator(di);
@@ -1340,7 +1346,7 @@ static void clusterRaftStartElection(clusterRaftState *rs) {
     memcpy(rs->voted_for, myself->name, CLUSTER_NAMELEN);
     rs->votes_received = 1; /* Vote for self */
     clusterRaftRandomizeElectionTimeout(rs);
-    rs->last_heartbeat = mstime();
+    rs->last_heartbeat = monotonicMs();
 
     serverLog(LL_NOTICE, "Starting Raft election (term %llu).", (unsigned long long)rs->current_term);
 
@@ -1371,11 +1377,11 @@ static void clusterRaftInit(void) {
     clusterRaftState *rs = zcalloc(sizeof(*rs));
     rs->role = RAFT_ROLE_FOLLOWER;
     clusterRaftRandomizeElectionTimeout(rs);
-    rs->last_heartbeat = mstime();
+    rs->last_heartbeat = monotonicMs();
     rs->pending_proposals = listCreate();
     rs->pending_meets = listCreate();
     rs->my_last_committed_info = sdsempty();
-    rs->last_node_info_check = mstime();
+    rs->last_node_info_check = monotonicMs();
     server.cluster->protocol_data = rs;
     server.cluster->size = 0; /* Incremented by NODE_JOIN apply */
 }
@@ -1507,7 +1513,7 @@ static void clusterRaftDetectFailures(mstime_t now) {
 
 static void clusterRaftCron(void) {
     clusterRaftState *rs = RAFT_STATE();
-    mstime_t now = mstime();
+    mstime_t now = monotonicMs();
 
     clusterConnectNodes();
 
@@ -1735,7 +1741,7 @@ static void clusterRaftBeforeSleep(void) {
                 if (sibling == myself) continue;
                 if (sibling->repl_offset > my_offset) rank++;
             }
-            rs->failover_time = mstime() + rank * 1000;
+            rs->failover_time = monotonicMs() + rank * 1000;
             serverLog(LL_NOTICE, "Primary %.40s failed, scheduling failover (rank %d).",
                       myself->replicaof->name, rank);
         }
@@ -1827,9 +1833,9 @@ static int clusterRaftProcessMessage(struct clusterLink *link) {
         /* Primary side: pause writes for coordinated failover. */
         if (link->node && nodeIsReplica(link->node) && link->node->replicaof == myself) {
             clusterRaftState *rs = RAFT_STATE();
-            rs->mf_end = mstime() + server.cluster_mf_timeout;
+            rs->mf_end = monotonicMs() + server.cluster_mf_timeout;
             pauseActions(PAUSE_DURING_FAILOVER,
-                         mstime() + (server.cluster_mf_timeout * CLUSTER_MF_PAUSE_MULT),
+                         monotonicMs() + (server.cluster_mf_timeout * CLUSTER_MF_PAUSE_MULT),
                          PAUSE_ACTIONS_CLIENT_WRITE_SET);
             serverLog(LL_NOTICE, "Manual failover requested by replica %.40s, pausing writes.",
                       link->node->name);
@@ -2392,7 +2398,7 @@ static void clusterRaftFailover(int force, int takeover, void *ctx, void (*callb
             if (callback) callback(ctx, "manual failover already in progress");
             return;
         }
-        rs->mf_end = mstime() + server.cluster_mf_timeout;
+        rs->mf_end = monotonicMs() + server.cluster_mf_timeout;
         rs->mf_ctx = ctx;
         rs->mf_callback = callback;
 

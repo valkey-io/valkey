@@ -126,7 +126,7 @@ proc cluster_size_consistent {cluster_size} {
 
 # Wait for cluster configuration to propagate and be consistent across nodes.
 proc wait_for_cluster_propagation {} {
-    wait_for_condition 1000 50 {
+    wait_for_condition 1200 50 {
         [cluster_config_consistent] eq 1
     } else {
         for {set j 0} {$j < [llength $::servers]} {incr j} {

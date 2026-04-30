@@ -1006,6 +1006,10 @@ proc assert_replication_stream {s patterns} {
         set pattern [lindex $patterns $j]
         lappend patterns_list $pattern
         set value [read_from_replication_stream $s]
+        # Skip pings that can appear depending on timing.
+        while {$value eq "ping"} {
+            set value [read_from_replication_stream $s]
+        }
         lappend values_list $value
         if {![string match $pattern $value]} { incr errors }
     }

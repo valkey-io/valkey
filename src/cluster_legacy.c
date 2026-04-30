@@ -5228,11 +5228,11 @@ static sds clusterLegacyAppendInfoFields(sds info) {
     info = sdscatfmt(info, "cluster_stats_messages_received:%I\r\n", tot_msg_received);
 
     info = sdscatfmt(info, "cluster_stats_bytes_sent:%U\r\n"
-                     "cluster_stats_bytes_received:%U\r\n"
-                     "cluster_stats_pubsub_bytes_sent:%U\r\n"
-                     "cluster_stats_pubsub_bytes_received:%U\r\n"
-                     "cluster_stats_module_bytes_sent:%U\r\n"
-                     "cluster_stats_module_bytes_received:%U\r\n",
+                           "cluster_stats_bytes_received:%U\r\n"
+                           "cluster_stats_pubsub_bytes_sent:%U\r\n"
+                           "cluster_stats_pubsub_bytes_received:%U\r\n"
+                           "cluster_stats_module_bytes_sent:%U\r\n"
+                           "cluster_stats_module_bytes_received:%U\r\n",
                      (unsigned long long)LEGACY_STATE()->stats_bus_bytes_sent,
                      (unsigned long long)LEGACY_STATE()->stats_bus_bytes_received,
                      (unsigned long long)LEGACY_STATE()->stats_bus_pubsub_bytes_sent,

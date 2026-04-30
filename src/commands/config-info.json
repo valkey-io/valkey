@@ -8,10 +8,13 @@
         "container": "CONFIG",
         "function": "configInfoCommand",
         "command_flags": [
+            "ADMIN",
             "LOADING",
             "STALE"
         ],
         "acl_categories": [
+            "ADMIN",
+            "DANGEROUS",
             "SLOW"
         ],
         "arguments": [

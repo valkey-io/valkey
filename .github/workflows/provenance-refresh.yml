@@ -18,7 +18,7 @@ jobs:
           fetch-depth: 0
 
       - name: Refresh Fingerprints
-        uses: valkey-io/verify-provenance@dea1178cfc6555387f59f1df3c070101c977a7cd
+        uses: valkey-io/verify-provenance@05ee217ecf96b948ce996dbc965f285cbe73752a
         with:
           mode: "refresh"
           source_repo: "redis/redis"

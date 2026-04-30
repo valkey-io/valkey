@@ -594,6 +594,80 @@ TEST_F(UncommittedKeysTest, GetNumberOfUncommittedKeys) {
     decrRefCount(k3);
 }
 
+TEST_F(UncommittedKeysTest, DrainCommittedKeysRemovesCommitted) {
+    robj *k1 = createStringObject("key1", 4);
+    robj *k2 = createStringObject("key2", 4);
+    robj *k3 = createStringObject("key3", 4);
+
+    server.primary_repl_offset = 10;
+    handleUncommittedKeyForClient(nullptr, k1, server.db[0]);
+    server.primary_repl_offset = 20;
+    handleUncommittedKeyForClient(nullptr, k2, server.db[0]);
+    server.primary_repl_offset = 30;
+    handleUncommittedKeyForClient(nullptr, k3, server.db[0]);
+
+    ASSERT_EQ(hashtableSize(server.db[0]->uncommitted_keys), 3u);
+
+    /* Drain up to offset 20 — key1 and key2 should be removed */
+    drainCommittedKeys(20);
+    ASSERT_EQ(hashtableSize(server.db[0]->uncommitted_keys), 1u);
+
+    /* key3 should still be present */
+    void *found = nullptr;
+    ASSERT_TRUE(hashtableFind(server.db[0]->uncommitted_keys,
+                              (sds)objectGetVal(k3), &found));
+
+    /* Drain up to 30 — key3 removed */
+    drainCommittedKeys(30);
+    ASSERT_EQ(hashtableSize(server.db[0]->uncommitted_keys), 0u);
+
+    decrRefCount(k1);
+    decrRefCount(k2);
+    decrRefCount(k3);
+}
+
+TEST_F(UncommittedKeysTest, DrainPreservesReDirtiedKey) {
+    robj *key_obj = createStringObject("hotkey", 6);
+
+    /* Write at offset 10 */
+    server.primary_repl_offset = 10;
+    handleUncommittedKeyForClient(nullptr, key_obj, server.db[0]);
+
+    /* Re-dirty at offset 50 */
+    server.primary_repl_offset = 50;
+    handleUncommittedKeyForClient(nullptr, key_obj, server.db[0]);
+
+    ASSERT_EQ(hashtableSize(server.db[0]->uncommitted_keys), 1u);
+
+    /* Drain up to 10 — key should NOT be removed because it was re-dirtied at 50 */
+    drainCommittedKeys(10);
+    ASSERT_EQ(hashtableSize(server.db[0]->uncommitted_keys), 1u);
+
+    /* Drain up to 50 — now it should be removed */
+    drainCommittedKeys(50);
+    ASSERT_EQ(hashtableSize(server.db[0]->uncommitted_keys), 0u);
+
+    decrRefCount(key_obj);
+}
+
+TEST_F(UncommittedKeysTest, DrainClearsDirtyDbOffset) {
+    server.db[0]->dirty_repl_offset = 100;
+
+    /* Drain below the DB offset — should not clear */
+    drainCommittedKeys(50);
+    ASSERT_EQ(server.db[0]->dirty_repl_offset, 100);
+
+    /* Drain at the DB offset — should clear */
+    drainCommittedKeys(100);
+    ASSERT_EQ(server.db[0]->dirty_repl_offset, -1);
+}
+
+TEST_F(UncommittedKeysTest, DrainEmptyHashtableIsNoop) {
+    ASSERT_EQ(hashtableSize(server.db[0]->uncommitted_keys), 0u);
+    drainCommittedKeys(1000); /* Should not crash */
+    ASSERT_EQ(hashtableSize(server.db[0]->uncommitted_keys), 0u);
+}
+
 
 /* ========================= Function Store Tests ========================= */
 

@@ -1776,11 +1776,9 @@ int dbSwapDatabases(int id1, int id2) {
     /* Swap uncommitted key tracking so it stays consistent with the key data. */
     db1->uncommitted_keys = db2->uncommitted_keys;
     db1->dirty_repl_offset = db2->dirty_repl_offset;
-    db1->uncommitted_keys_cursor = db2->uncommitted_keys_cursor;
 
     db2->uncommitted_keys = aux.uncommitted_keys;
     db2->dirty_repl_offset = aux.dirty_repl_offset;
-    db2->uncommitted_keys_cursor = aux.uncommitted_keys_cursor;
 
     /* Now we need to handle clients blocked on lists: as an effect
      * of swapping the two DBs, a client that was waiting for list
@@ -1830,11 +1828,9 @@ void swapMainDbWithTempDb(serverDb **tempDb) {
         /* Swap uncommitted key tracking so it stays consistent with the key data. */
         activedb->uncommitted_keys = newdb->uncommitted_keys;
         activedb->dirty_repl_offset = newdb->dirty_repl_offset;
-        activedb->uncommitted_keys_cursor = newdb->uncommitted_keys_cursor;
 
         newdb->uncommitted_keys = aux.uncommitted_keys;
         newdb->dirty_repl_offset = aux.dirty_repl_offset;
-        newdb->uncommitted_keys_cursor = aux.uncommitted_keys_cursor;
 
         /* Now we need to handle clients blocked on lists: as an effect
          * of swapping the two DBs, a client that was waiting for list

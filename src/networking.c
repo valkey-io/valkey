@@ -2291,9 +2291,20 @@ void beforeNextClient(client *c) {
         if (c->repl_data->repl_applied) {
             sdsrange(c->querybuf, c->repl_data->repl_applied, -1);
             c->qb_pos -= c->repl_data->repl_applied;
+            /* Shift qb_end_pos of pending parsed commands (recorded against
+             * the un-trimmed querybuf) so commandProcessed() stays consistent. */
+            cmdQueue *queue = &c->cmd_queue;
+            for (uint16_t i = queue->off; i < queue->len; i++) {
+                /* Skip entries with qb_end_pos == 0 (parsing not completed) */
+                if (queue->cmds[i].qb_end_pos == 0) continue;
+
+                queue->cmds[i].qb_end_pos -= c->repl_data->repl_applied;
+                serverAssert(queue->cmds[i].qb_end_pos >= 0);
+            }
             c->repl_data->repl_applied = 0;
         }
     } else {
+        /* Non-replicated clients don't read qb_applied, so no shift needed. */
         trimClientQueryBuffer(c);
     }
     /* Handle async frees */
@@ -3472,6 +3483,8 @@ void parseInlineBuffer(client *c) {
      * */
     c->net_input_bytes_curr_cmd = (c->argv_len_sum + (c->argc - 1) + 2);
     c->read_flags |= READ_FLAGS_PARSING_COMPLETED;
+    /* Record qb_pos so commandProcessed() can update reploff precisely. */
+    c->qb_applied = c->qb_pos;
     c->reqtype = 0;
 }
 
@@ -3525,16 +3538,12 @@ void parseMultibulkBuffer(client *c) {
                               &c->argv_len_sum, &c->net_input_bytes_curr_cmd);
     c->read_flags |= flag;
 
+    /* Record qb_pos so commandProcessed() can update reploff precisely. */
+    if (c->read_flags & READ_FLAGS_PARSING_COMPLETED) c->qb_applied = c->qb_pos;
+
     if (c->read_flags & READ_FLAGS_AUTH_REQUIRED) {
         /* Execute client's AUTH command before parsing more, because it affects
          * parser limits for max allowed bulk and multibulk lengths. */
-        return;
-    }
-
-    if (isReplicatedClient(c)) {
-        /* TODO: some change is required for replication offset which is
-         * computed from c->qb_pos, assuming we only parse one command at a
-         * time. Disable multi-command parsing for replication for now. */
         return;
     }
 
@@ -3561,6 +3570,8 @@ void parseMultibulkBuffer(client *c) {
         flag = parseMultibulk(c, &p->argc, &p->argv, &p->argv_len,
                               &p->argv_len_sum, &p->input_bytes);
         p->read_flags = flag;
+        /* Record qb_pos so commandProcessed() can update reploff precisely. */
+        if (p->read_flags & READ_FLAGS_PARSING_COMPLETED) p->qb_end_pos = c->qb_pos;
         p->slot = -1;
     }
 }
@@ -3812,8 +3823,10 @@ void commandProcessed(client *c) {
 
     long long prev_offset = c->repl_data->reploff;
     if (isReplicatedClient(c) && !c->flag.multi) {
-        /* Update the applied replication offset of our primary. */
-        c->repl_data->reploff = c->repl_data->read_reploff - sdslen(c->querybuf) + c->qb_pos;
+        /* Advance reploff by exactly this command's bytes. Use qb_applied
+         * (current command's right boundary) instead of qb_pos, which may
+         * have run ahead due to multi-command parsing. */
+        c->repl_data->reploff = c->repl_data->read_reploff - sdslen(c->querybuf) + c->qb_applied;
     }
 
     /* If the client is replicated we need to compute the difference
@@ -3989,6 +4002,8 @@ static bool consumeCommandQueue(client *c) {
     c->net_input_bytes_curr_cmd = p->input_bytes;
     c->parsed_cmd = p->cmd;
     c->slot = p->slot;
+    /* Restore qb_pos snapshot so commandProcessed() can update reploff precisely. */
+    c->qb_applied = p->qb_end_pos;
     if (queue->off == queue->len) {
         /* The queue is empty. Don't free it here, because if parsing is done in
          * I/O threads, we want to free it in I/O threads too, to avoid

@@ -1565,7 +1565,7 @@ static int rdmaServer(char *err, int port, char *bindaddr, int af, rdma_listener
 
         if (rdma_create_id(listen_channel, &listen_cmid, NULL, RDMA_PS_TCP)) {
             serverRdmaError(err, "RDMA: create listen cm id error");
-            return ANET_ERR;
+            goto error;
         }
 
         rdma_set_option(listen_cmid, RDMA_OPTION_ID, RDMA_OPTION_ID_AFONLY, &afonly, sizeof(afonly));

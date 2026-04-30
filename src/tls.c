@@ -1775,6 +1775,9 @@ static ssize_t connTLSSyncWrite(connection *conn_, char *ptr, ssize_t size, long
         unsetBlockingTimeout(conn);
     }
 
+    if (ret < 0) {
+        conn->c.last_errno = errno;
+    }
     return ret;
 }
 
@@ -1790,6 +1793,9 @@ static ssize_t connTLSSyncRead(connection *conn_, char *ptr, ssize_t size, long 
         unsetBlockingTimeout(conn);
     }
 
+    if (ret < 0) {
+        conn->c.last_errno = errno;
+    }
     return ret;
 }
 
@@ -1826,6 +1832,9 @@ static ssize_t connTLSSyncReadLine(connection *conn_, char *ptr, ssize_t size, l
 exit:
     if (!blocking) {
         unsetBlockingTimeout(conn);
+    }
+    if (nread < 0) {
+        conn->c.last_errno = errno;
     }
     return nread;
 }

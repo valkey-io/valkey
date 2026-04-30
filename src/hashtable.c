@@ -1568,7 +1568,7 @@ hashtable *hashtableDefragTables(hashtable *ht, void *(*defragfn)(void *)) {
  * forked and memory won't be used again. See zmadvise_dontneed() */
 void dismissHashtable(hashtable *ht) {
     for (int i = 0; i < 2; i++) {
-        zmadvise_dontneed(ht->tables[i], numBuckets(ht->bucket_exp[i]) * sizeof(bucket *));
+        zmadvise_dontneed(ht->tables[i], numBuckets(ht->bucket_exp[i]) * sizeof(bucket));
     }
 }
 
@@ -2320,6 +2320,11 @@ bool hashtableNext(hashtableIterator *iterator, void **elemptr) {
         }
         return true;
     }
+    /* Clean up eagerly so repeated hashtableNext calls return false and
+     * safe iterators don't keep rehashing paused. The caller's own
+     * hashtableCleanupIterator call becomes a no-op (hashtable == NULL). */
+    hashtableCleanupIterator(iterator);
+    iter->hashtable = NULL;
     return false;
 }
 

@@ -19,11 +19,11 @@ jobs:
           fetch-depth: 0
 
       - name: Run Provenance Check
-        uses: valkey-io/verify-provenance@dea1178cfc6555387f59f1df3c070101c977a7cd
+        uses: valkey-io/verify-provenance@05ee217ecf96b948ce996dbc965f285cbe73752a
         with:
           source_repo: "redis/redis"
           target_repo: "${{ github.repository }}"
-          branding_pairs: "Redis:Valkey,KeyDB:Valkey"
+          branding_pairs: "Redis:Valkey"
           prefix_pairs: "RM_:VM_,REDISMODULE_:VALKEYMODULE_"
           exclude_dirs: "deps/"
           github_token: "${{ secrets.GITHUB_TOKEN }}"

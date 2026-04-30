@@ -2236,7 +2236,7 @@ start_cluster 3 6 {tags {logreqres:skip external:skip cluster cluster-v2:skip}} 
     }
 }
 
-start_cluster 3 0 {tags {logreqres:skip external:skip cluster}} {
+start_cluster 3 0 {tags {logreqres:skip external:skip cluster cluster-v2:skip}} {
 
     set node0_id [R 0 CLUSTER MYID]
     set node1_id [R 1 CLUSTER MYID]

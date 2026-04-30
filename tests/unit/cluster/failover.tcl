@@ -165,7 +165,7 @@ start_cluster 3 1 {tags {external:skip cluster}} {
 # In this test a different node is killed in a loop for N
 # iterations. The test checks that certain properties
 # are preserved across iterations.
-start_cluster 5 5 {tags {external:skip cluster}} {
+start_cluster 5 5 {tags {external:skip cluster cluster-v2:skip}} { ;# Restarts servers (needs raft persistence)
     set iterations 10
     set cluster [valkey_cluster 127.0.0.1:[srv 0 port]]
 

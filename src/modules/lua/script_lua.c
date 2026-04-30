@@ -176,26 +176,6 @@ static void _serverPanic(const char *file, int line, const char *msg, ...) {
 
 #define serverPanic(...) _serverPanic(__FILE__, __LINE__, __VA_ARGS__)
 
-typedef uint64_t monotime;
-
-monotime getMonotonicUs(void) {
-    /* clock_gettime() is specified in POSIX.1b (1993).  Even so, some systems
-     * did not support this until much later.  CLOCK_MONOTONIC is technically
-     * optional and may not be supported - but it appears to be universal.
-     * If this is not supported, provide a system-specific alternate version.  */
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return ((uint64_t)ts.tv_sec) * 1000000 + ts.tv_nsec / 1000;
-}
-
-inline uint64_t elapsedUs(monotime start_time) {
-    return getMonotonicUs() - start_time;
-}
-
-inline uint64_t elapsedMs(monotime start_time) {
-    return elapsedUs(start_time) / 1000;
-}
-
 static int server_math_random(lua_State *L);
 static int server_math_randomseed(lua_State *L);
 
@@ -1280,7 +1260,7 @@ static int luaRedisPCallCommand(lua_State *lua) {
  *
  * 'digest' should point to a 41 bytes buffer: 40 for SHA1 converted into an
  * hexadecimal number, plus 1 byte for null term. */
-void sha1hex(char *digest, char *script, size_t len) {
+__attribute__((weak)) void sha1hex(char *digest, char *script, size_t len) {
     SHA1_CTX ctx;
     unsigned char hash[20];
     char *cset = "0123456789abcdef";

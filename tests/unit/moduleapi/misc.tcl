@@ -169,6 +169,17 @@ start_server {overrides {save {900 1}} tags {"modules"}} {
         assert { "ever_authenticated" in $flags }
     }
 
+    test {test module clientinfo api - primary/replica/monitor flags} {
+        # Normal client should not have primary, replica, or monitor flags
+        set info [r test.clientinfo]
+        set flags [parse_client_flags [dict get $info flags]]
+        assert { "primary" ni $flags }
+        assert { "replica" ni $flags }
+        assert { "monitor" ni $flags }
+        assert { "module" ni $flags }
+        assert { "fake" ni $flags }
+    }
+
     foreach cmd {rm_call vm_call_argv} {
         test "tracking with $cmd sanity" {
             set rd_trk [valkey_client]

@@ -1173,6 +1173,7 @@ void hgetdelCommand(client *c) {
     if (checkType(c, o, OBJ_HASH)) return;
 
     bool hash_volatile_items = hashTypeHasVolatileFields(o);
+    if (o && o->encoding == OBJ_ENCODING_HASHTABLE) hashtablePauseAutoShrink(objectGetVal(o));
 
     /* Reply with array of values and delete at the same time */
     addReplyArrayLen(c, num_fields);
@@ -1191,6 +1192,7 @@ void hgetdelCommand(client *c) {
             }
         }
     }
+    if (!keyremoved && o && o->encoding == OBJ_ENCODING_HASHTABLE) hashtableResumeAutoShrink(objectGetVal(o));
 
     if (deleted) {
         if (!keyremoved && hash_volatile_items != hashTypeHasVolatileFields(o)) {
@@ -1790,8 +1792,7 @@ void genericHgetallCommand(client *c, int flags) {
     hashTypeResetIterator(&hi);
     /* Make sure we returned the right number of elements. */
     if (flags & OBJ_HASH_FIELD && flags & OBJ_HASH_VALUE) {
-        setDeferredMapLen(c, replylen, count /= 2);
-        count /= 2;
+        setDeferredMapLen(c, replylen, count / 2);
     } else {
         setDeferredArrayLen(c, replylen, count);
     }
@@ -2018,12 +2019,12 @@ void hpersistCommand(client *c) {
         return;
     }
 
-    /* From this point we would return array reply */
-    addReplyArrayLen(c, num_fields);
-
     robj *hash = lookupKeyWrite(c->db, c->argv[1]);
     if (checkType(c, hash, OBJ_HASH))
         return;
+
+    /* From this point we would return array reply */
+    addReplyArrayLen(c, num_fields);
 
     bool has_volatile_fields = hashTypeHasVolatileFields(hash);
 

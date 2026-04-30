@@ -2230,6 +2230,24 @@ void hpexpiretimeCommand(client *c) {
  * the number of randoms per time. */
 #define HRANDFIELD_RANDOM_SAMPLE_LIMIT 1000
 
+/* CASE 4 fallback budget. hashTypeRandomElement only returns C_ERR after
+ * 100 *consecutive* expired probes; that signal does not fire when the
+ * live pool is exhausted but most random picks still resolve to a live
+ * (already-collected) entry. Bound the random-probing loop with a count-
+ * proportional cumulative duplicate budget plus a small consecutive-dup
+ * streak guard, so CASE 4 falls back to a single validated reservoir pass
+ * before the loop can spin indefinitely.
+ *
+ *  - MIN floor (32): keep small counts above coupon-collector tail noise,
+ *    e.g. count=4 with live=4 expects ~4 natural duplicates.
+ *  - MAX cap (256): once cumulative dups reach this many, the wasted
+ *    probing cost approaches a single O(size) iteration anyway.
+ *  - STREAK (8): early signal for very-expired-heavy hashes where dup
+ *    streaks appear before the cumulative budget is exhausted. */
+#define HRANDFIELD_RANDOM_DUPLICATE_MIN_LIMIT     32
+#define HRANDFIELD_RANDOM_DUPLICATE_MAX_LIMIT    256
+#define HRANDFIELD_RANDOM_DUPLICATE_STREAK_LIMIT   8
+
 void hrandfieldWithCountCommand(client *c, long l, int withvalues) {
     unsigned long count, size;
     int uniq = 1;
@@ -2427,13 +2445,26 @@ void hrandfieldWithCountCommand(client *c, long l, int withvalues) {
     else {
         /* Hashtable encoding (generic implementation) */
         unsigned long added = 0;
+        unsigned long duplicates = 0;
+        unsigned long consecutive_duplicates = 0;
+        unsigned long duplicate_limit = count / 2;
+        if (duplicate_limit < HRANDFIELD_RANDOM_DUPLICATE_MIN_LIMIT)
+            duplicate_limit = HRANDFIELD_RANDOM_DUPLICATE_MIN_LIMIT;
+        else if (duplicate_limit > HRANDFIELD_RANDOM_DUPLICATE_MAX_LIMIT)
+            duplicate_limit = HRANDFIELD_RANDOM_DUPLICATE_MAX_LIMIT;
+
         listpackEntry field, value;
         hashtable *ht = hashtableCreate(&setHashtableType);
         hashtableExpand(ht, count);
         while (added < count) {
-            /* In case we were unable to locate random element, it is probably because there is no such element
-             * since all elements are expired. */
-            if (hashTypeRandomElement(hash, size, &field, withvalues ? &value : NULL) != C_OK) {
+            int budget_exhausted = (duplicates >= duplicate_limit ||
+                                    consecutive_duplicates >= HRANDFIELD_RANDOM_DUPLICATE_STREAK_LIMIT);
+            /* Fall back when random probing exhausts its budget or fails outright.
+             * The C_ERR path means the live pool is too sparse for random probing;
+             * the budget path means we are stuck on duplicates and one validated
+             * reservoir pass is cheaper than continued probing. */
+            if (budget_exhausted ||
+                hashTypeRandomElement(hash, size, &field, withvalues ? &value : NULL) != C_OK) {
                 unsigned long kept;
                 entry **entries = hrandfieldSampleLiveEntries(hash, count - added, ht, &kept);
                 for (unsigned long i = 0; i < kept; i++) {
@@ -2453,14 +2484,16 @@ void hrandfieldWithCountCommand(client *c, long l, int withvalues) {
                 break;
             }
 
-            /* Try to add the object to the hashtable. If expired, stop adding (there are probably non left).
-             * If it already exists free it, otherwise increment the number of objects we have
-             * in the result hashtable. */
+            /* Try to add the object to the hashtable. If it already exists, count
+             * it as a duplicate; the budget caps how long we keep trying. */
             sds sfield = hashSdsFromListpackEntry(&field);
             if (!hashtableAdd(ht, sfield)) {
                 sdsfree(sfield);
+                duplicates++;
+                consecutive_duplicates++;
                 continue;
             }
+            consecutive_duplicates = 0;
             added++;
 
             /* We can reply right away, so that we don't need to store the value in the dict. */

@@ -343,6 +343,35 @@ start_server {tags {"hash"}} {
                 assert_equal [lsort $expected] [lsort $result]
             }
         }
+
+        test {HRANDFIELD CASE 4 must not hang on a moderately-expired hash with count > live} {
+            # Hang regression. At ~78% expired, hashTypeRandomElement's internal
+            # maxtries=100 essentially never returns C_ERR (~1e-10 per call), so
+            # the CASE 4 random-probing loop relies on the cumulative + consecutive
+            # duplicate budget to trigger the validated reservoir fallback. Without
+            # the budget the loop spins once the live pool is exhausted but count
+            # is not yet met, blocking the entire server thread indefinitely.
+            with_active_expire_disabled {
+                create_expired_heavy_hash_for_hrandfield stalehash 700 200
+                assert_equal 900 [r hlen stalehash]
+
+                set start [clock milliseconds]
+                set result [r hrandfield stalehash 250]
+                set elapsed [expr {[clock milliseconds] - $start}]
+
+                # A correct implementation completes in single-digit ms; allow a
+                # generous bound for slow CI. A regression would not return at all
+                # until a higher-level timeout kills it.
+                assert {$elapsed < 1000}
+                assert_equal 200 [llength $result]
+
+                set expected {}
+                for {set i 0} {$i < 200} {incr i} {
+                    lappend expected "live:$i"
+                }
+                assert_equal [lsort $expected] [lsort $result]
+            }
+        }
     }
 
 

@@ -36,7 +36,7 @@ test "Test publishing to slave" {
 }
 } ;# start_cluster
 
-start_cluster 3 0 {tags {external:skip cluster}} {
+start_cluster 3 0 {tags {external:skip cluster cluster-v2:skip}} { ;# Byte stats not yet implemented for raft
     test "Test cluster info stats for publish" {
         R 0 CONFIG RESETSTAT
         R 1 CONFIG RESETSTAT

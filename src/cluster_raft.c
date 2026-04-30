@@ -2527,6 +2527,31 @@ static void clusterRaftResetCluster(int hard) {
     dictReleaseIterator(di);
 
     /* Reset raft state. */
+    for (uint64_t i = 0; i < rs->log_count; i++) {
+        sdsfree(rs->log[i]->data);
+        zfree(rs->log[i]);
+    }
+    rs->log_count = 0;
+    /* Clear pending proposals. */
+    listIter li;
+    listNode *ln;
+    listRewind(rs->pending_proposals, &li);
+    while ((ln = listNext(&li)) != NULL) {
+        raftPendingProposal *pp = listNodeValue(ln);
+        if (pp->callback) pp->callback(pp->ctx, "cluster reset");
+        sdsfree(pp->data);
+        zfree(pp);
+        listDelNode(rs->pending_proposals, ln);
+    }
+    /* Clear pending meets. */
+    listRewind(rs->pending_meets, &li);
+    while ((ln = listNext(&li)) != NULL) {
+        raftPendingMeet *pm = listNodeValue(ln);
+        if (pm->callback) pm->callback(pm->ctx, "cluster reset");
+        sdsfree(pm->addr);
+        zfree(pm);
+        listDelNode(rs->pending_meets, ln);
+    }
     rs->current_term = 0;
     memset(rs->leader, 0, CLUSTER_NAMELEN);
     memset(rs->voted_for, 0, CLUSTER_NAMELEN);

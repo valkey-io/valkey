@@ -100,6 +100,38 @@ static void clusterRaftBroadcastNodeOffset(clusterNode *node, long long offset) 
     clusterMsgSendBlockDecrRefCount(block);
 }
 
+/* Build a REPL_OFFSETS message containing all known non-zero offsets.
+ * Returns a refcounted send block, or NULL if there's nothing to send.
+ * Caller must call clusterMsgSendBlockDecrRefCount when done. */
+static clusterMsgSendBlock *clusterRaftBuildAllOffsetsMsg(void) {
+    sds msg = wireNewMsg("REPL_OFFSETS");
+    int count = 0;
+    dictIterator *di = dictGetSafeIterator(server.cluster->nodes);
+    dictEntry *de;
+    while ((de = dictNext(di)) != NULL) {
+        clusterNode *n = dictGetVal(de);
+        if (n->flags & CLUSTER_NODE_MEET) continue;
+        long long off = (n == myself) ? getNodeReplicationOffset(myself)
+                                      : n->repl_offset;
+        if (off == 0) continue;
+        msg = sdscatlen(msg, " ", 1);
+        msg = sdscatlen(msg, n->name, CLUSTER_NAMELEN);
+        msg = sdscatfmt(msg, " %I", off);
+        count++;
+    }
+    dictReleaseIterator(di);
+    if (count == 0) {
+        sdsfree(msg);
+        return NULL;
+    }
+    msg = wireFinishMsg(msg);
+    size_t msg_len = sdslen(msg);
+    clusterMsgSendBlock *block = clusterAllocMsgSendBlock(msg_len);
+    memcpy(block->data, msg, msg_len);
+    sdsfree(msg);
+    return block;
+}
+
 /* --------------------------------------------------------------------------
  * Raft log entry types — what gets replicated
  * -------------------------------------------------------------------------- */
@@ -503,6 +535,13 @@ static int clusterRaftProcessHi(clusterLink *link, int argc, sds *argv) {
     /* Send AE immediately to catch up the peer. */
     if (rs->role == RAFT_ROLE_LEADER && sender->link) {
         rs->todo_broadcast_ae = 1;
+        /* Send REPL_OFFSETS so the peer has accurate data for
+         * CLUSTER SLOTS/SHARDS immediately after connecting. */
+        clusterMsgSendBlock *block = clusterRaftBuildAllOffsetsMsg();
+        if (block) {
+            clusterLinkSendBlock(sender->link, block);
+            clusterMsgSendBlockDecrRefCount(block);
+        }
     }
 
     return 1;
@@ -1468,41 +1507,17 @@ static void clusterRaftCron(void) {
                 serverLog(LL_DEBUG, "TRACE periodic REPL_OFFSETS broadcast (term %llu)",
                           (unsigned long long)rs->current_term);
                 rs->last_repl_offsets_broadcast = now;
-                sds msg = wireNewMsg("REPL_OFFSETS");
-                int count = 0;
-                dictIterator *odi = dictGetSafeIterator(server.cluster->nodes);
-                dictEntry *ode;
-                while ((ode = dictNext(odi)) != NULL) {
-                    clusterNode *n = dictGetVal(ode);
-                    if (n->flags & CLUSTER_NODE_MEET) continue; /* Not yet in the log. */
-                    long long off = (n == myself) ? my_offset
-                                                  : n->repl_offset;
-                    msg = sdscatlen(msg, " ", 1);
-                    msg = sdscatlen(msg, n->name, CLUSTER_NAMELEN);
-                    msg = sdscatfmt(msg, " %I", off);
-                    count++;
-                }
-                dictReleaseIterator(odi);
-                if (count > 0) {
-                    msg = wireFinishMsg(msg);
-                    size_t msg_len = sdslen(msg);
-                    clusterMsgSendBlock *block = clusterAllocMsgSendBlock(msg_len);
-                    memcpy(block->data, msg, msg_len);
-                    sdsfree(msg);
-                    dictIterator *bdi = dictGetSafeIterator(server.cluster->nodes);
-                    dictEntry *bde;
-                    while ((bde = dictNext(bdi)) != NULL) {
-                        clusterNode *n = dictGetVal(bde);
+                clusterMsgSendBlock *block = clusterRaftBuildAllOffsetsMsg();
+                if (block) {
+                    dictIterator *di = dictGetSafeIterator(server.cluster->nodes);
+                    dictEntry *de;
+                    while ((de = dictNext(di)) != NULL) {
+                        clusterNode *n = dictGetVal(de);
                         if (n == myself || !n->link) continue;
-                        /* Skip followers that haven't acked any entries yet —
-                         * they don't know about the nodes we're reporting. */
-                        if (RAFT_DATA(n)->peer.match_index == 0) continue;
                         clusterLinkSendBlock(n->link, block);
                     }
-                    dictReleaseIterator(bdi);
+                    dictReleaseIterator(di);
                     clusterMsgSendBlockDecrRefCount(block);
-                } else {
-                    sdsfree(msg);
                 }
             } else {
                 /* Broadcast leader's own offset on 0 -> non-zero transition. */

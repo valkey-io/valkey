@@ -2354,19 +2354,21 @@ int getKeysUsingKeySpecs(struct serverCommand *cmd, robj **argv, int argc, int s
             }
 
             first += spec->fk.keynum.firstkey;
-            last = first + (int)numkeys - 1;
+            long long temp_last = first + numkeys - 1;
+            if (temp_last > INT_MAX || temp_last < INT_MIN) goto invalid_spec;
+            last = (int)temp_last;
         } else {
             /* unknown spec */
             goto invalid_spec;
         }
 
-        int count = ((last - first) + 1);
-        keys = getKeysPrepareResult(result, result->numkeys + count);
-
         /* First or last is out of bounds, which indicates a syntax error */
         if (last >= argc || last < first || first >= argc) {
             goto invalid_spec;
         }
+
+        int count = ((last - first) + 1);
+        keys = getKeysPrepareResult(result, result->numkeys + count);
 
         for (i = first; i <= last; i += step) {
             if (i >= argc || i < first) {

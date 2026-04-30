@@ -1777,7 +1777,34 @@ static void clusterRaftBeforeSleep(void) {
 }
 
 static void clusterRaftHandleServerShutdown(void) {
-    /* TODO: persist state, transfer leadership */
+    clusterRaftState *rs = RAFT_STATE();
+    /* Free pending proposals. */
+    listIter li;
+    listNode *ln;
+    listRewind(rs->pending_proposals, &li);
+    while ((ln = listNext(&li)) != NULL) {
+        raftPendingProposal *pp = listNodeValue(ln);
+        sdsfree(pp->data);
+        zfree(pp);
+    }
+    listRelease(rs->pending_proposals);
+    /* Free pending meets. */
+    listRewind(rs->pending_meets, &li);
+    while ((ln = listNext(&li)) != NULL) {
+        raftPendingMeet *pm = listNodeValue(ln);
+        sdsfree(pm->addr);
+        zfree(pm);
+    }
+    listRelease(rs->pending_meets);
+    /* Free raft log. */
+    for (uint64_t i = 0; i < rs->log_count; i++) {
+        sdsfree(rs->log[i]->data);
+        zfree(rs->log[i]);
+    }
+    zfree(rs->log);
+    sdsfree(rs->my_last_committed_info);
+    zfree(rs);
+    server.cluster->protocol_data = NULL;
 }
 
 /* --------------------------------------------------------------------------

@@ -122,6 +122,12 @@ typedef struct clusterLegacyState {
     int todo_before_sleep;
     long long stats_bus_messages_sent[CLUSTERMSG_TYPE_COUNT];
     long long stats_bus_messages_received[CLUSTERMSG_TYPE_COUNT];
+    uint64_t stats_bus_bytes_sent;
+    uint64_t stats_bus_bytes_received;
+    uint64_t stats_bus_pubsub_bytes_sent;
+    uint64_t stats_bus_pubsub_bytes_received;
+    uint64_t stats_bus_module_bytes_sent;
+    uint64_t stats_bus_module_bytes_received;
     long long stats_pfail_nodes;
     unsigned char owner_not_claiming_slot[CLUSTER_SLOTS / 8];
 } clusterLegacyState;
@@ -663,6 +669,12 @@ static void clusterLegacyResetStats(void) {
     clusterSlotStatResetAll();
     memset(LEGACY_STATE()->stats_bus_messages_sent, 0, sizeof(LEGACY_STATE()->stats_bus_messages_sent));
     memset(LEGACY_STATE()->stats_bus_messages_received, 0, sizeof(LEGACY_STATE()->stats_bus_messages_received));
+    LEGACY_STATE()->stats_bus_bytes_sent = 0;
+    LEGACY_STATE()->stats_bus_bytes_received = 0;
+    LEGACY_STATE()->stats_bus_pubsub_bytes_sent = 0;
+    LEGACY_STATE()->stats_bus_pubsub_bytes_received = 0;
+    LEGACY_STATE()->stats_bus_module_bytes_sent = 0;
+    LEGACY_STATE()->stats_bus_module_bytes_received = 0;
 }
 
 
@@ -2339,6 +2351,19 @@ static inline int messageTypeSupportsLightHdr(uint16_t type) {
     return 0;
 }
 
+static void clusterBusAddNetworkBytesByType(uint16_t type, uint64_t bytes, bool sent) {
+    sent ? (LEGACY_STATE()->stats_bus_bytes_sent += bytes)
+         : (LEGACY_STATE()->stats_bus_bytes_received += bytes);
+
+    if (type == CLUSTERMSG_TYPE_PUBLISH || type == CLUSTERMSG_TYPE_PUBLISHSHARD) {
+        sent ? (LEGACY_STATE()->stats_bus_pubsub_bytes_sent += bytes)
+             : (LEGACY_STATE()->stats_bus_pubsub_bytes_received += bytes);
+    } else if (type == CLUSTERMSG_TYPE_MODULE) {
+        sent ? (LEGACY_STATE()->stats_bus_module_bytes_sent += bytes)
+             : (LEGACY_STATE()->stats_bus_module_bytes_received += bytes);
+    }
+}
+
 int clusterIsValidPacket(clusterLink *link) {
     clusterMsgHeader *hdr = (clusterMsgHeader *)link->rcvbuf;
     uint32_t totlen = ntohl(hdr->totlen);
@@ -2352,7 +2377,10 @@ int clusterIsValidPacket(clusterLink *link) {
         return 0;
     }
 
-    if (type < CLUSTERMSG_TYPE_COUNT) LEGACY_STATE()->stats_bus_messages_received[type]++;
+    if (type < CLUSTERMSG_TYPE_COUNT) {
+        LEGACY_STATE()->stats_bus_messages_received[type]++;
+        clusterBusAddNetworkBytesByType(type, totlen, 0);
+    }
 
     serverLog(LL_DEBUG, "--- Processing packet of type %s, %lu bytes", clusterGetMessageTypeString(type),
               (unsigned long)totlen);
@@ -3202,7 +3230,10 @@ void clusterSendMessage(clusterLink *link, clusterMsgSendBlock *msgblock) {
 
     /* Populate sent messages stats. */
     uint16_t type = ntohs(getMessageFromSendBlock(msgblock)->type) & ~CLUSTERMSG_MODIFIER_MASK;
-    if (type < CLUSTERMSG_TYPE_COUNT) LEGACY_STATE()->stats_bus_messages_sent[type]++;
+    if (type < CLUSTERMSG_TYPE_COUNT) {
+        LEGACY_STATE()->stats_bus_messages_sent[type]++;
+        clusterBusAddNetworkBytesByType(type, msgblock->len, 1);
+    }
 }
 
 /* Send a message to all the nodes that are part of the cluster having
@@ -5195,6 +5226,19 @@ static sds clusterLegacyAppendInfoFields(sds info) {
                          (long long)LEGACY_STATE()->stats_bus_messages_received[i]);
     }
     info = sdscatfmt(info, "cluster_stats_messages_received:%I\r\n", tot_msg_received);
+
+    info = sdscatfmt(info, "cluster_stats_bytes_sent:%U\r\n"
+                     "cluster_stats_bytes_received:%U\r\n"
+                     "cluster_stats_pubsub_bytes_sent:%U\r\n"
+                     "cluster_stats_pubsub_bytes_received:%U\r\n"
+                     "cluster_stats_module_bytes_sent:%U\r\n"
+                     "cluster_stats_module_bytes_received:%U\r\n",
+                     (unsigned long long)LEGACY_STATE()->stats_bus_bytes_sent,
+                     (unsigned long long)LEGACY_STATE()->stats_bus_bytes_received,
+                     (unsigned long long)LEGACY_STATE()->stats_bus_pubsub_bytes_sent,
+                     (unsigned long long)LEGACY_STATE()->stats_bus_pubsub_bytes_received,
+                     (unsigned long long)LEGACY_STATE()->stats_bus_module_bytes_sent,
+                     (unsigned long long)LEGACY_STATE()->stats_bus_module_bytes_received);
 
     info = sdscatfmt(info, "total_cluster_links_buffer_limit_exceeded:%U\r\n",
                      (unsigned long long)server.cluster->stat_cluster_links_buffer_limit_exceeded);

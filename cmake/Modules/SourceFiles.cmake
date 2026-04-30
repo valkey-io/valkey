@@ -46,8 +46,8 @@ set(VALKEY_SERVER_SRCS
     ${CMAKE_SOURCE_DIR}/src/cluster_migrateslots.c
     ${CMAKE_SOURCE_DIR}/src/cluster_legacy.c
     ${CMAKE_SOURCE_DIR}/src/cluster_link.c
-    ${CMAKE_SOURCE_DIR}/src/cluster_nodes.c
     ${CMAKE_SOURCE_DIR}/src/cluster_raft.c
+    ${CMAKE_SOURCE_DIR}/src/cluster_nodes.c
     ${CMAKE_SOURCE_DIR}/src/cluster_state.c
     ${CMAKE_SOURCE_DIR}/src/cluster_slot_stats.c
     ${CMAKE_SOURCE_DIR}/src/crc16.c
@@ -124,7 +124,8 @@ set(VALKEY_SERVER_SRCS
     ${CMAKE_SOURCE_DIR}/src/entry.c
     ${CMAKE_SOURCE_DIR}/src/vset.c
     ${CMAKE_SOURCE_DIR}/src/fifo.c
-    ${CMAKE_SOURCE_DIR}/src/mutexqueue.c)
+    ${CMAKE_SOURCE_DIR}/src/mutexqueue.c
+    ${CMAKE_SOURCE_DIR}/src/queues.c)
 
 
 # valkey-cli
@@ -160,6 +161,7 @@ set(VALKEY_BENCHMARK_SRCS
     ${CMAKE_SOURCE_DIR}/src/sha256.c
     ${CMAKE_SOURCE_DIR}/src/util.c
     ${CMAKE_SOURCE_DIR}/src/valkey-benchmark.c
+    ${CMAKE_SOURCE_DIR}/src/valkey-benchmark-dataset.c
     ${CMAKE_SOURCE_DIR}/src/valkey_strtod.c
     ${CMAKE_SOURCE_DIR}/src/adlist.c
     ${CMAKE_SOURCE_DIR}/src/hashtable.c

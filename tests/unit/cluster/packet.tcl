@@ -135,7 +135,7 @@ start_cluster 10 0 {tags {external:skip cluster tls:skip cluster-v2:skip}} {
         binary scan $reply @14Su count
 
         assert_equal 1 $type
-        assert_morethan $count 3
+        assert_morethan_equal $count 7
         assert_lessthan_equal $count 9
     }
 }

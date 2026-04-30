@@ -202,6 +202,9 @@ typedef enum {
     STATS_METRIC_NET_OUTPUT_REPLICATION, /* Bytes written to network during replication. */
     STATS_METRIC_EL_CYCLE,               /* Number of eventloop cycled. */
     STATS_METRIC_EL_DURATION,            /* Eventloop duration. */
+    STATS_METRIC_IO_WAIT,                /* IO queue size */
+    STATS_METRIC_MAIN_THREAD_CPU_SYS,    /* Main thread CPU sys time */
+    STATS_METRIC_MAIN_THREAD_CPU_USER,   /* Main thread CPU user time */
     STATS_METRIC_COUNT                   /* Total count */
 } instantaneous_metric_type;
 
@@ -1207,7 +1210,12 @@ typedef struct ClientFlags {
                                               or client::buf. */
     uint64_t keyspace_notified : 1;        /* Indicates that a keyspace notification was triggered during the execution of the
                                               current command. */
+    uint64_t argv_borrowed : 1;            /* The argv array and its elements are borrowed from the caller (VM_CallArgv) and must not be freed. */
 } ClientFlags;
+/* Ensure ClientFlags never silently grows beyond two uint64_t words.
+ * If this fires, move a flag to a separate field or widen the limit. */
+static_assert(sizeof(ClientFlags) <= sizeof(uint64_t) * 2,
+              "ClientFlags exceeds 128 bits; add a new word or remove a flag");
 
 typedef struct ClientPubSubData {
     hashtable *pubsub_channels;      /* channels a client is interested in (SUBSCRIBE) */
@@ -1350,7 +1358,10 @@ typedef struct client {
     uint32_t redact_arg_bitmap; /* Bitmap of argument indexes that should be redacted in logs. */
     /* Client flags and state indicators */
     union {
-        uint64_t raw_flag;
+        struct {
+            uint64_t raw_flag1;
+            uint64_t raw_flag2;
+        };
         struct ClientFlags flag;
     };
     /* Cache Locality: Grouped with 'flag' for getClientType() hot path. */
@@ -1366,14 +1377,14 @@ typedef struct client {
      * client, and in which category the client was, in order to remove it
      * before adding it the new value. */
     uint8_t last_memory_type;
-    uint8_t capa;                    /* Client capabilities: CLIENT_CAPA* macros. */
-    listNode pending_read_list_node; /* IO thread only ?*/
+    uint8_t capa; /* Client capabilities: CLIENT_CAPA* macros. */
     /* Statistics and metrics */
     unsigned long long net_input_bytes;           /* Total network input bytes read from this client. */
     unsigned long long net_input_bytes_curr_cmd;  /* Total network input bytes read for the* execution of this client's current command. */
     unsigned long long net_output_bytes;          /* Total network output bytes sent to this client. */
     unsigned long long commands_processed;        /* Total count of commands this client executed. */
     unsigned long long net_output_bytes_curr_cmd; /* Total network output bytes sent to this client, by the current command. */
+    _Atomic(size_t) io_tracked_reply_len;         /* Total size of BULK_STR_REF replies tracked by I/O threads. */
     size_t buf_peak;                              /* Peak used size of buffer in last 5 sec interval. */
     int nwritten;                                 /* Number of bytes of the last write. */
     int nread;                                    /* Number of bytes of the last read. */
@@ -1810,8 +1821,6 @@ struct valkeyServer {
     list *clients;                         /* List of active clients */
     list *clients_to_close;                /* Clients to close asynchronously */
     list *clients_pending_write;           /* There is to write or install handler. */
-    list *clients_pending_io_read;         /* List of clients with pending read to be process by I/O threads. */
-    list *clients_pending_io_write;        /* List of clients with pending write to be process by I/O threads. */
     list *replicas, *monitors;             /* List of replicas and MONITORs */
     rax *replicas_waiting_psync;           /* Radix tree for tracking replicas awaiting partial synchronization.
                                             * Key: RDB client ID
@@ -1844,7 +1853,7 @@ struct valkeyServer {
     int protected_mode;                       /* Don't accept external connections. */
     int io_threads_num;                       /* Number of IO threads to use. */
     int active_io_threads_num;                /* Current number of active IO threads, includes main thread. */
-    int events_per_io_thread;                 /* Number of events on the event loop to trigger IO threads activation. */
+    int io_threads_always_active;             /* Activate all IO threads regardless of load size. */
     int prefetch_batch_max_size;              /* Maximum number of keys to prefetch in a single batch */
     long long events_processed_while_blocked; /* processEventsWhileBlocked() */
     int enable_protected_configs;             /* Enable the modification of protected configs, see PROTECTED_ACTION_ALLOWED_* */
@@ -1926,7 +1935,9 @@ struct valkeyServer {
     long long stat_total_error_replies;                /* Total number of issued error replies ( command + rejected errors ) */
     long long stat_dump_payload_sanitizations;         /* Number deep dump payloads integrity validations. */
     long long stat_io_reads_processed;                 /* Number of read events processed by IO threads */
+    long long stat_io_reads_pending;                   /* Number of read events pending in IO threads */
     long long stat_io_writes_processed;                /* Number of write events processed by IO threads */
+    long long stat_io_writes_pending;                  /* Number of write events pending in IO threads */
     long long stat_io_freed_objects;                   /* Number of objects freed by IO threads */
     long long stat_io_accept_offloaded;                /* Number of offloaded accepts */
     long long stat_poll_processed_by_io_threads;       /* Total number of poll jobs processed by IO */
@@ -2088,7 +2099,7 @@ struct valkeyServer {
     int syslog_facility;      /* Syslog facility */
     int crashlog_enabled;     /* Enable signal handler for crashlog.
                                * disable for clean core dumps. */
-    int crashed;              /* True if the server has crashed, used in catClientInfoString
+    volatile int crashed;     /* True if the server has crashed, used in catClientInfoString
                                * to indicate that no wait for IO threads is needed. */
     int memcheck_enabled;     /* Enable memory check on crash. */
     int use_exit_on_panic;    /* Use exit() on panic and assert rather than
@@ -2884,7 +2895,7 @@ void dictVanillaFree(void *val);
 #define WRITE_FLAGS_IS_REPLICA (1 << 1)
 
 client *createClient(connection *conn);
-void freeClient(client *c);
+int freeClient(client *c);
 void freeClientAsync(client *c);
 void freeClientOrCloseLater(client *c, int async);
 void logInvalidUseAndFreeClientAsync(client *c, const char *fmt, ...);
@@ -3009,7 +3020,7 @@ void linkClient(client *c);
 void protectClient(client *c);
 void unprotectClient(client *c);
 void initSharedQueryBuf(void);
-void freeSharedQueryBuf(void *dummy);
+void freeSharedQueryBuf(void);
 client *lookupClientByID(uint64_t id);
 int authRequired(client *c);
 void clientSetUser(client *c, user *u, int authenticated);
@@ -3017,11 +3028,11 @@ void putClientInPendingWriteQueue(client *c);
 client *createCachedResponseClient(int resp);
 void deleteCachedResponseClient(client *recording_client);
 void waitForClientIO(client *c);
-void ioThreadReadQueryFromClient(void *data);
-void ioThreadWriteToClient(void *data);
+void ioThreadReadQueryFromClient(client *c);
+void ioThreadWriteToClient(client *c);
 int canParseCommand(client *c);
-int processIOThreadsReadDone(void);
-int processIOThreadsWriteDone(void);
+void processClientIOReadsDone(client *c);
+void processClientIOWriteDone(client *c);
 void releaseReplyReferences(client *c);
 void resetLastWrittenBuf(client *c);
 
@@ -3497,13 +3508,15 @@ struct serverMemOverhead *getMemoryOverheadData(void);
 void freeMemoryOverheadData(struct serverMemOverhead *mh);
 void checkChildrenDone(void);
 int setOOMScoreAdj(int process_class);
-void rejectCommandFormat(client *c, const char *fmt, ...);
+void rejectCommandFormat(client *c, int notify_modules, const char *fmt, ...);
 void *activeDefragAlloc(void *ptr);
 sds activeDefragSds(sds sdsptr);
 robj *activeDefragStringOb(robj *ob);
 void dismissSds(sds s);
 void dismissMemoryInChild(void);
 void tlsResetCertInfo(void);
+void trackInstantaneousMetric(int metric, long long current_value, long long current_base, long long factor);
+long long getInstantaneousMetric(int metric);
 
 #define RESTART_SERVER_NONE 0
 #define RESTART_SERVER_GRACEFULLY (1 << 0)     /* Do proper shutdown. */

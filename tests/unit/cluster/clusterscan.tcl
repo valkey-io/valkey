@@ -30,10 +30,14 @@ start_cluster 1 0 {tags {external:skip cluster}} {
         assert_error "*Invalid cursor*" {R 0 clusterscan "0-{0}"}
     }
 
-    test "CLUSTERSCAN rejects unknown options" {
+    test "CLUSTERSCAN rejects invalid options" {
         set valid_cursor "0-{06S}-0"
         assert_error "*syntax*" {R 0 clusterscan $valid_cursor UNKNOWNOPTION}
         assert_error "*syntax*" {R 0 clusterscan $valid_cursor COUNT 10 BADOPTION}
+        assert_error "*syntax*" {R 0 clusterscan 0 COUNT 0}
+        assert_error "*syntax*" {R 0 clusterscan 0 COUNT -1}
+        assert_error "*value is not an integer or out of range*" {R 0 clusterscan 0 COUNT not-an-integer}
+        assert_error "*unknown type name*" {R 0 clusterscan 0 TYPE notatype}
     }
 
     test "CLUSTERSCAN with SLOT restricts to single slot" {

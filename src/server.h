@@ -831,6 +831,7 @@ struct serverObject {
 };
 static_assert(sizeof(struct serverObject) <= 8 + sizeof(void *), "unexpected size - verify struct is packed correctly");
 
+long long getObjectTypeByName(char *name);
 /* The string name for an object's type as listed above
  * Native types are checked against the OBJ_STRING, OBJ_LIST, OBJ_* defines,
  * and Module types have their registered name returned. */
@@ -3761,7 +3762,13 @@ void discardTempDb(serverDb **tempDb);
 int selectDb(client *c, int id);
 void signalModifiedKey(client *c, serverDb *db, robj *key);
 void signalFlushedDb(int dbid, int async);
-void scanGenericCommand(client *c, robj *o, unsigned long long cursor, int slot, int final_slot, const char *fp);
+typedef struct clusterScanCtx {
+    int slot;
+    int final_slot;
+    bool advance_to_next_slot;
+    const char *fp;
+} clusterScanCtx;
+void scanGenericCommand(client *c, robj *o, unsigned long long cursor, const clusterScanCtx *cluster_ctx);
 int parseScanCursorOrReply(client *c, sds buf, unsigned long long *cursor);
 int dbAsyncDelete(serverDb *db, robj *key);
 void emptyDbAsync(serverDb *db);

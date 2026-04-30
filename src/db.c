@@ -1159,16 +1159,18 @@ char *getObjectTypeName(robj *o) {
  * In the case of a Hash object the function returns both the field and value
  * of every element on the Hash.
  *
- * slot, final_slot and fingerprint 'fp' are used during CLUSTERSCAN to scan
- * a specific slot or range of slots and to return the valid cursor to advance the scan.
+ * cluster_ctx is used during CLUSTERSCAN to scan a specific slot or range of
+ * slots and to return the valid cursor to advance the scan.
  */
-void scanGenericCommand(client *c, robj *o, unsigned long long cursor, int slot, int final_slot, const char *fp) {
+void scanGenericCommand(client *c, robj *o, unsigned long long cursor, const clusterScanCtx *cluster_ctx) {
     int i, j;
     long count = DEFAULT_SCAN_COMMAND_COUNT;
     sds pat = NULL;
     sds typename = NULL;
     long long type = LLONG_MAX;
     int patlen = 0, use_pattern = 0, only_keys = 0;
+    int slot = cluster_ctx ? cluster_ctx->slot : -1;
+    int final_slot = cluster_ctx ? cluster_ctx->final_slot : -1;
     vector result;
 
     /* Object must be NULL (to iterate keys names), or the type of the object
@@ -1297,12 +1299,18 @@ void scanGenericCommand(client *c, robj *o, unsigned long long cursor, int slot,
         /* For regular SCAN in cluster mode, derive the slot from the pattern's hashtag. */
         if (slot == -1 && o == NULL && use_pattern && server.cluster_enabled) {
             slot = patternHashSlot(pat, patlen);
+            final_slot = slot;
+        }
+        if (slot >= 0) {
+            serverAssert(final_slot >= slot && final_slot < CLUSTER_SLOTS);
+        } else {
+            serverAssert(final_slot == -1);
         }
         do {
             /* In cluster mode there is a separate dictionary for each slot.
              * If cursor is empty, we should try exploring next non-empty slot. */
             if (o == NULL) {
-                cursor = kvstoreScan(c->db->keys, cursor, slot, final_slot >= 0 ? final_slot : slot, keysScanCallback, NULL, &data);
+                cursor = kvstoreScan(c->db->keys, cursor, slot, final_slot, keysScanCallback, NULL, &data);
             } else {
                 cursor = hashtableScan(ht, cursor, hashtableScanCallback, &data);
             }
@@ -1360,19 +1368,16 @@ void scanGenericCommand(client *c, robj *o, unsigned long long cursor, int slot,
     /* Step 3: Reply to the client. */
     addReplyArrayLen(c, 2);
 
-    /* Handle CLUSTERSCAN prefixing.
-     * final_slot < 0 means single-slot mode (user passed SLOT or single-slot MATCH);
-     * we return cursor "0" without advancing. final_slot >= 0 means range mode,
-     * where we advance to final_slot+1 so iteration moves to the next node. */
-    if (cursor == 0 && fp && final_slot >= 0 && final_slot + 1 < CLUSTER_SLOTS) {
+    /* Handle CLUSTERSCAN prefixing. */
+    if (cursor == 0 && cluster_ctx && cluster_ctx->advance_to_next_slot && final_slot + 1 < CLUSTER_SLOTS) {
         /* Range mode: advance to next slot outside the current node's range. */
         sds new_cursor = sdscatfmt(sdsempty(), "0-{%s}-0", crc16_slot_table[final_slot + 1]);
         addReplyBulkSds(c, new_cursor);
-    } else if (fp && cursor != 0) {
+    } else if (cluster_ctx && cursor != 0) {
         /* Derive hashtag from the cursor's actual slot for resharding safety.
          * Works for single slot mode as well. */
         int actual_slot = (int)(cursor & (CLUSTER_SLOTS - 1));
-        sds new_cursor = sdscatfmt(sdsempty(), "%s-{%s}-%U", fp, crc16_slot_table[actual_slot], cursor);
+        sds new_cursor = sdscatfmt(sdsempty(), "%s-{%s}-%U", cluster_ctx->fp, crc16_slot_table[actual_slot], cursor);
         addReplyBulkSds(c, new_cursor);
     } else {
         addReplyBulkLongLong(c, cursor);
@@ -1394,7 +1399,7 @@ void scanGenericCommand(client *c, robj *o, unsigned long long cursor, int slot,
 void scanCommand(client *c) {
     unsigned long long cursor;
     if (parseScanCursorOrReply(c, objectGetVal(c->argv[1]), &cursor) == C_ERR) return;
-    scanGenericCommand(c, NULL, cursor, -1, -1, NULL);
+    scanGenericCommand(c, NULL, cursor, NULL);
 }
 
 void dbsizeCommand(client *c) {

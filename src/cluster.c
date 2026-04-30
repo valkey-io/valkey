@@ -1768,8 +1768,21 @@ void clusterscanCommand(client *c) {
             int patlen = sdslen(pat);
             match_slot = (patlen == 1 && pat[0] == '*') ? -1 : patternHashSlot(pat, patlen);
             i++;
-        } else if ((!strcasecmp(opt, "count") || !strcasecmp(opt, "type")) && remaining >= 2) {
-            i++; /* Let scanGenericCommand parse this */
+        } else if (!strcasecmp(opt, "count") && remaining >= 2) {
+            long count;
+            if (getLongFromObjectOrReply(c, c->argv[i + 1], &count, NULL) != C_OK) return;
+            if (count < 1) {
+                addReplyErrorObject(c, shared.syntaxerr);
+                return;
+            }
+            i++;
+        } else if (!strcasecmp(opt, "type") && remaining >= 2) {
+            char *typename = objectGetVal(c->argv[i + 1]);
+            if (getObjectTypeByName(typename) == LLONG_MAX) {
+                addReplyErrorFormat(c, "unknown type name '%s'", typename);
+                return;
+            }
+            i++;
         } else {
             addReplyErrorObject(c, shared.syntaxerr);
             return;
@@ -1824,19 +1837,24 @@ void clusterscanCommand(client *c) {
         }
     }
 
-    /* If SLOT argument was provided or implied by MATCH, don't advance to next slot then return 0 cursor.
-     * Else, scan continuous range of slots owned by this node */
-    int final_slot;
-    if (input_slot != -1 || match_slot != -1) {
-        final_slot = -1; /* Single slot scan */
-    } else {
+    /* If SLOT argument was provided or implied by MATCH, scan only that slot.
+     * Otherwise, scan the continuous range of slots owned by this node. */
+    int final_slot = slot;
+    bool advance_to_next_slot = false;
+    if (input_slot == -1 && match_slot == -1) {
         clusterNode *owner = getNodeBySlot(slot);
-        final_slot = slot;
         while (final_slot + 1 < CLUSTER_SLOTS && getNodeBySlot(final_slot + 1) == owner) {
             final_slot++;
         }
+        advance_to_next_slot = true;
     }
 
     serverAssert(slot >= 0 && slot < CLUSTER_SLOTS);
-    scanGenericCommand(c, NULL, cursor, slot, final_slot, clusterscanFingerprint());
+    clusterScanCtx cluster_ctx = {
+        .slot = slot,
+        .final_slot = final_slot,
+        .advance_to_next_slot = advance_to_next_slot,
+        .fp = clusterscanFingerprint(),
+    };
+    scanGenericCommand(c, NULL, cursor, &cluster_ctx);
 }

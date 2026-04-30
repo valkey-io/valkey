@@ -631,6 +631,7 @@ ENGINE_BENCHMARK_OBJ = \
     strl.o \
     util.o \
     valkey-benchmark.o \
+    valkey-benchmark-dataset.o \
     valkey_strtod.o \
     zmalloc.o
 ENGINE_CHECK_RDB_NAME=$(ENGINE_NAME)-check-rdb$(PROG_SUFFIX)

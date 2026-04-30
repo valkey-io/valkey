@@ -1301,6 +1301,8 @@ static int clusterRaftProcessRequestVoteResponse(clusterLink *link, int argc, sd
         rs->votes_received++;
         int quorum = server.cluster->size / 2 + 1;
         if (rs->votes_received >= quorum) {
+            char old_leader[CLUSTER_NAMELEN];
+            memcpy(old_leader, rs->leader, CLUSTER_NAMELEN);
             rs->role = RAFT_ROLE_LEADER;
             memcpy(rs->leader, myself->name, CLUSTER_NAMELEN);
             serverLog(LL_NOTICE, "Elected as Raft leader (term %llu, %d votes).",
@@ -1318,7 +1320,7 @@ static int clusterRaftProcessRequestVoteResponse(clusterLink *link, int argc, sd
                 /* For the old leader, backdate last_ack_time to when we last
                  * heard from it, so failure detection kicks in faster. This
                  * matters if the old leader is also a primary. */
-                if (memcmp(peer->name, rs->leader, CLUSTER_NAMELEN) == 0) {
+                if (memcmp(peer->name, old_leader, CLUSTER_NAMELEN) == 0) {
                     RAFT_DATA(peer)->peer.last_ack_time = rs->last_heartbeat;
                 } else {
                     RAFT_DATA(peer)->peer.last_ack_time = mstime();
@@ -1394,6 +1396,113 @@ static void clusterRaftInitLast(void) {
         serverLog(LL_NOTICE, "Single-node cluster: becoming Raft leader (term %llu).",
                   (unsigned long long)rs->current_term);
     }
+}
+
+/* Leader: detect node failures and propose NODE_FAIL.
+ * If a majority of peers are overdue, the problem is likely on our side
+ * (paused or partitioned) — reset ack times to avoid false positives. */
+static void clusterRaftDetectFailures(mstime_t now) {
+    mstime_t node_timeout = server.cluster_node_timeout;
+
+    /* Check if a majority of peers are overdue. */
+    int overdue = 0, total = 0;
+    dictIterator *di = dictGetSafeIterator(server.cluster->nodes);
+    dictEntry *de;
+    while ((de = dictNext(di)) != NULL) {
+        clusterNode *n = dictGetVal(de);
+        if (n == myself) continue;
+        total++;
+        clusterNodeRaftData *rd = RAFT_DATA(n);
+        if (rd->peer.last_ack_time > 0 &&
+            now - rd->peer.last_ack_time > node_timeout) {
+            overdue++;
+        }
+    }
+    dictReleaseIterator(di);
+
+    if (overdue > total / 2) {
+        /* Majority overdue — reset all ack times. */
+        di = dictGetSafeIterator(server.cluster->nodes);
+        while ((de = dictNext(di)) != NULL) {
+            clusterNode *n = dictGetVal(de);
+            if (n == myself) continue;
+            RAFT_DATA(n)->peer.last_ack_time = now;
+        }
+        dictReleaseIterator(di);
+        return;
+    }
+
+    /* Check individual nodes. */
+    di = dictGetSafeIterator(server.cluster->nodes);
+    while ((de = dictNext(di)) != NULL) {
+        clusterNode *node = dictGetVal(de);
+        if (node == myself) continue;
+
+        if (nodeFailed(node)) {
+            /* For failed nodes, drop stale links periodically so
+             * clusterConnectNodes can establish a fresh connection.
+             * This allows the leader to detect recovery via AE_ACK. */
+            if (node->link) {
+                clusterNodeRaftData *rd = RAFT_DATA(node);
+                if (rd->peer.last_ack_time > 0 &&
+                    now - rd->peer.last_ack_time > node_timeout) {
+                    freeClusterLink(node->link);
+                    rd->peer.last_ack_time = now;
+                }
+            }
+            continue;
+        }
+        clusterNodeRaftData *rd = RAFT_DATA(node);
+        if (rd->peer.pending_fail_change) continue;
+        if (rd->peer.last_ack_time > 0 &&
+            now - rd->peer.last_ack_time > node_timeout) {
+            serverLog(LL_NOTICE, "Node %.40s not responding, proposing NODE_FAIL.", node->name);
+
+            /* If the failed node is a primary with replicas, send
+             * REPL_OFFSETS to each replica with all sibling offsets
+             * so they can rank themselves for automatic failover. */
+            if (!nodeIsReplica(node) && clusterNodeNumReplicas(node) > 0) {
+                int num_replicas = clusterNodeNumReplicas(node);
+                sds hint = wireNewMsg("REPL_OFFSETS");
+                for (int r = 0; r < num_replicas; r++) {
+                    clusterNode *replica = clusterNodeGetReplica(node, r);
+                    long long roff = (replica == myself)
+                                         ? (nodeIsReplica(myself) ? replicationGetReplicaOffset()
+                                                                  : server.primary_repl_offset)
+                                         : replica->repl_offset;
+                    hint = sdscatlen(hint, " ", 1);
+                    hint = sdscatlen(hint, replica->name, CLUSTER_NAMELEN);
+                    hint = sdscatfmt(hint, " %I", roff);
+                }
+                hint = wireFinishMsg(hint);
+
+                /* Build a send block and send to remote replicas. */
+                size_t hint_len = sdslen(hint);
+                clusterMsgSendBlock *block = clusterAllocMsgSendBlock(hint_len);
+                memcpy(block->data, hint, hint_len);
+                sdsfree(hint);
+                for (int r = 0; r < num_replicas; r++) {
+                    clusterNode *replica = clusterNodeGetReplica(node, r);
+                    if (replica == myself) continue;
+                    clusterLink *link = replica->link;
+                    if (link) {
+                        clusterLinkSendBlock(link, block);
+                    } else {
+                        serverLog(LL_WARNING, "No outbound link to replica %.40s for REPL_OFFSETS.",
+                                  replica->name);
+                    }
+                }
+                clusterMsgSendBlockDecrRefCount(block);
+            }
+
+            sds entry = sdsnew("NODE_FAIL ");
+            entry = sdscatlen(entry, node->name, CLUSTER_NAMELEN);
+            clusterRaftPropose(entry, NULL, NULL);
+            sdsfree(entry);
+            rd->peer.pending_fail_change = 1;
+        }
+    }
+    dictReleaseIterator(di);
 }
 
 static void clusterRaftCron(void) {
@@ -1528,79 +1637,7 @@ static void clusterRaftCron(void) {
             myself->repl_offset = my_offset;
 
 
-            /* Detect node failures. */
-            mstime_t node_timeout = server.cluster_node_timeout;
-            dictIterator *di = dictGetSafeIterator(server.cluster->nodes);
-            dictEntry *de;
-            while ((de = dictNext(di)) != NULL) {
-                clusterNode *node = dictGetVal(de);
-                if (node == myself) continue;
-
-                if (nodeFailed(node)) {
-                    /* For failed nodes, drop stale links periodically so
-                     * clusterConnectNodes can establish a fresh connection.
-                     * This allows the leader to detect recovery via AE_ACK. */
-                    if (node->link) {
-                        clusterNodeRaftData *rd = RAFT_DATA(node);
-                        if (rd->peer.last_ack_time > 0 &&
-                            now - rd->peer.last_ack_time > node_timeout) {
-                            freeClusterLink(node->link);
-                            rd->peer.last_ack_time = now;
-                        }
-                    }
-                    continue;
-                }
-                clusterNodeRaftData *rd = RAFT_DATA(node);
-                if (rd->peer.pending_fail_change) continue;
-                if (rd->peer.last_ack_time > 0 &&
-                    now - rd->peer.last_ack_time > node_timeout) {
-                    serverLog(LL_NOTICE, "Node %.40s not responding, proposing NODE_FAIL.", node->name);
-
-                    /* If the failed node is a primary with replicas, send
-                     * REPL_OFFSETS to each replica with all sibling offsets
-                     * so they can rank themselves for automatic failover. */
-                    if (!nodeIsReplica(node) && clusterNodeNumReplicas(node) > 0) {
-                        int num_replicas = clusterNodeNumReplicas(node);
-                        sds hint = wireNewMsg("REPL_OFFSETS");
-                        for (int r = 0; r < num_replicas; r++) {
-                            clusterNode *replica = clusterNodeGetReplica(node, r);
-                            long long roff = (replica == myself)
-                                                 ? (nodeIsReplica(myself) ? replicationGetReplicaOffset()
-                                                                          : server.primary_repl_offset)
-                                                 : replica->repl_offset;
-                            hint = sdscatlen(hint, " ", 1);
-                            hint = sdscatlen(hint, replica->name, CLUSTER_NAMELEN);
-                            hint = sdscatfmt(hint, " %I", roff);
-                        }
-                        hint = wireFinishMsg(hint);
-
-                        /* Build a send block and send to remote replicas. */
-                        size_t hint_len = sdslen(hint);
-                        clusterMsgSendBlock *block = clusterAllocMsgSendBlock(hint_len);
-                        memcpy(block->data, hint, hint_len);
-                        sdsfree(hint);
-                        for (int r = 0; r < num_replicas; r++) {
-                            clusterNode *replica = clusterNodeGetReplica(node, r);
-                            if (replica == myself) continue;
-                            clusterLink *link = replica->link;
-                            if (link) {
-                                clusterLinkSendBlock(link, block);
-                            } else {
-                                serverLog(LL_WARNING, "No outbound link to replica %.40s for REPL_OFFSETS.",
-                                          replica->name);
-                            }
-                        }
-                        clusterMsgSendBlockDecrRefCount(block);
-                    }
-
-                    sds entry = sdsnew("NODE_FAIL ");
-                    entry = sdscatlen(entry, node->name, CLUSTER_NAMELEN);
-                    clusterRaftPropose(entry, NULL, NULL);
-                    sdsfree(entry);
-                    rd->peer.pending_fail_change = 1;
-                }
-            }
-            dictReleaseIterator(di);
+            clusterRaftDetectFailures(now);
         }
     }
 

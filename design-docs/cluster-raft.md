@@ -480,3 +480,7 @@ Entries that don't need a shard-epoch:
   --cluster, third-party tools). Convergence is checked externally
   via CLUSTER INFO / CLUSTER NODES. Optionally, blocking variants
   can be offered for scripts that want commit confirmation.
+- Automatic replica migration: when a primary becomes orphaned (no
+  replicas), a replica from a shard with excess replicas should migrate
+  to it. In raft, this is a leader-driven decision (the leader detects
+  orphaned primaries and proposes SET_REPLICA_OF to move a replica).

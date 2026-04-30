@@ -186,6 +186,15 @@ static void handleDirtyDatabase(client *c, serverDb *db) {
             server.durability.all_dbs_dirty_in_current_cmd = true;
             listEmpty(pending_uncommitted_keys);
             listEmpty(pending_uncommitted_dbs);
+            /* FLUSHALL inside a transaction: any keys previously dirtied
+             * in this transaction are now gone.  Clear the per-DB
+             * uncommitted_keys hashtables so stale LLONG_MAX-offset
+             * entries don't block future reads after the EXEC commits. */
+            for (int i = 0; i < server.dbnum; i++) {
+                if (server.db[i] != NULL) {
+                    hashtableEmpty(server.db[i]->uncommitted_keys, NULL);
+                }
+            }
         }
     } else {
         if (db != NULL) {
@@ -264,14 +273,10 @@ bool getTargetDbIdForCopyCommand(int argc, robj **argv, int selected_dbid, int *
  * Remove committed entries from the per-DB uncommitted_keys hashtables.
  *
  * Iterates each database's uncommitted_keys hashtable with a safe iterator
- * and deletes entries whose offset has been durably committed.  This is
- * simpler and more memory-efficient than the previous FIFO queue approach:
- * no extra data structure, no duplicate entries for re-dirtied keys, and
- * no per-write allocation overhead.
+ * and deletes entries whose offset has been durably committed.
  *
  * With appendfsync=always the uncommitted set stays small (bounded by keys
- * written between fsyncs), so the full-scan cost is negligible (~14μs for
- * 200 keys) compared to the 2-6ms fsync.
+ * written between fsyncs), so the full-scan cost is smaller than the fsync.
  */
 void drainCommittedKeys(long long committed_offset) {
     for (int i = 0; i < server.dbnum; i++) {

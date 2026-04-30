@@ -8793,6 +8793,13 @@ void moduleHandleBlockedClients(void) {
              * to NULL, because if we reached this point, the client was
              * properly unblocked by the module. */
             bc->disconnect_callback = NULL;
+            /* pending_command was set in processInputBuffer before the
+             * command executed. By the time we reach here, the module has
+             * already handled the client's reply. Clear it to prevent
+             * re-execution. Exception: module auth clients need
+             * re-execution after auth completes. */
+            if (!clientHasModuleAuthInProgress(c))
+                c->flag.pending_command = 0;
             unblockClient(c, 1);
 
             /* Update the wait offset, we don't know if this blocked client propagated anything,

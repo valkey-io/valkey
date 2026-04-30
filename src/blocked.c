@@ -731,7 +731,6 @@ static void unblockClientOnKey(client *c, robj *key) {
     /* In case this client was blocked on keys during command
      * we need to re process the command again */
     if (c->flag.pending_command) {
-        c->flag.pending_command = 0;
         c->flag.reexecuting_command = 1;
         /* We want the command processing and the unblock handler (see RM_Call 'K' option)
          * to run atomically, this is why we must enter the execution unit here before
@@ -898,10 +897,7 @@ static bool isClientBlockedInUse(client *c) {
  * The client remains blocked until ALL of its keys are unblocked via
  * unblockClientsInUseOnKey().
  *
- * The caller MUST set c->flag.pending_command = 1 before calling this function.
- * This ensures the pending command is executed when the client is later
- * unblocked via processPendingCommandAndInputBuffer().
- * The caller should then return without executing the command. */
+ * The caller should return without executing the command after calling this. */
 void blockClientInUseOnKeys(client *c, int num_keys, robj *keys[]) {
     serverAssert(!c->flag.blocked && !c->flag.unblocked);
     serverAssert(c->flag.pending_command == 1);

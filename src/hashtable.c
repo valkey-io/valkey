@@ -493,9 +493,6 @@ static void swapTables(hashtable *ht) {
 static void rehashingCompleted(hashtable *ht) {
     if (ht->type->rehashingCompleted) ht->type->rehashingCompleted(ht);
     if (ht->tables[0]) {
-        /* Although the old table is large, most of its pages have been
-         * incrementally released via MADV_DONTNEED during rehashing.
-         * The zfree() here will be fast and won't cause latency spikes. */
         zfree(ht->tables[0]);
         if (ht->type->trackMemUsage) {
             ht->type->trackMemUsage(ht, -sizeof(bucket) * numBuckets(ht->bucket_exp[0]));

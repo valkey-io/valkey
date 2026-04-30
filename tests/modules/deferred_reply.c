@@ -57,6 +57,8 @@ static int OnKeyspaceNotification(ValkeyModuleCtx *ctx, int type,
     pthread_t tid;
     if (pthread_create(&tid, NULL, UnblockThread, bc) != 0) {
         ValkeyModule_UnblockClient(bc, NULL);
+    } else {
+        pthread_detach(tid);
     }
     return VALKEYMODULE_OK;
 }

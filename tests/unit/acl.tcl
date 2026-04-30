@@ -621,6 +621,29 @@ start_server {tags {"acl external:skip"}} {
         assert_equal "-@all +config" [dict get [r ACL getuser adv-test] commands]
     }
 
+    test {ACL serialization - Remove Quoted Rule} {
+        r ACL SETUSER panic-user-quote "+get|text\""
+        set acl [r ACL GETUSER panic-user-quote]
+        set cmdstr [dict get $acl commands]
+        assert_match {*+get|text\\\"*} $cmdstr
+
+        # First, check that unrelated rule preserves the quoted rule.
+        r ACL SETUSER panic-user-quote "+set"
+        set acl [r ACL GETUSER panic-user-quote]
+        set cmdstr [dict get $acl commands]
+        assert_match {*+get|text\\\"*} $cmdstr
+        assert_match {*+set*} $cmdstr
+
+        # Now add +get to remove the specific first-arg rule
+        r ACL SETUSER panic-user-quote "+get"
+        set acl [r ACL GETUSER panic-user-quote]
+        set cmdstr [dict get $acl commands]
+        assert {![string match {*+get|text\\\"*} $cmdstr]}
+        assert_match {*+get*} $cmdstr
+        assert_match {*+set*} $cmdstr
+        r ACL DELUSER panic-user-quote
+    }
+
     test "ACL CAT with illegal arguments" {
         assert_error {*Unknown category 'NON_EXISTS'} {r ACL CAT NON_EXISTS}
         assert_error {*unknown subcommand or wrong number of arguments for 'CAT'*} {r ACL CAT NON_EXISTS NON_EXISTS2}
@@ -1421,3 +1444,146 @@ start_server [list overrides [list "dir" $server_path "aclfile" "user.acl"] tags
         }
     }
 }
+
+set cases {
+    {"quoter" "+get|text\"" {commands "-@all \"+get|text\\\"\""}}
+    {"tester" "(~key) +get)" {selectors {{keys "~key)" commands "-@all +get"}}}}
+    {"test\"user" "+get" {commands "-@all +get"}}
+    {"keyquoter" "~key\"name" {keys "~key\"name"}}
+    {"chanquoter" "&chan\"name" {channels "&chan\"name"}}
+}
+
+set server_path [tmpdir "server.acl.roundtrip"]
+set acl_file [file join $server_path "user.acl"]
+
+set fp [open $acl_file w]
+puts $fp "user default on nopass ~* \&* +@all"
+close $fp
+
+start_server [list overrides [list "dir" $server_path "aclfile" "user.acl"] tags [list "external:skip"]] {
+    foreach case $cases {
+        lassign $case username rules expected_fields
+        
+        test "ACL serialization - Round Trip - $username" {
+            # Set user
+            r ACL SETUSER $username on nopass $rules
+            
+            # Save
+            r ACL SAVE
+            
+            # Load
+            r ACL LOAD
+            
+            # Verify with GETUSER
+            set acl [r ACL GETUSER $username]
+            
+            # Check expected fields
+            foreach {field expected_val} $expected_fields {
+                if {$field eq "selectors"} {
+                    set selectors [dict get $acl selectors]
+                    set expected_selectors $expected_val
+                    assert_equal [llength $selectors] [llength $expected_selectors]
+                    for {set i 0} {$i < [llength $selectors]} {incr i} {
+                        set s [lindex $selectors $i]
+                        set es [lindex $expected_selectors $i]
+                        foreach {f v} $es {
+                            assert_equal [dict get $s $f] $v
+                        }
+                    }
+                } else {
+                    assert_equal [dict get $acl $field] $expected_val
+                }
+            
+            # Verify with LIST for specific cases to ensure quoting in serialization
+            if {$username eq "keyquoter"} {
+                set acl_list [r ACL LIST]
+                assert_match {*"~key\\\"name"*} $acl_list
+            }
+            if {$username eq "chanquoter"} {
+                set acl_list [r ACL LIST]
+                assert_match {*"&chan\\\"name"*} $acl_list
+            }
+            }
+            
+            # Clean up user for next iteration
+            r ACL DELUSER $username
+        }
+    }
+}
+
+set old_cases {
+    {"unquoted_selector" "user tester on nopass -@all (~key resetchannels -@all +get)" "tester" {selectors {{keys "~key" commands "-@all +get"}}}}
+    {"unquoted_username" "user test\"user on nopass +@all" "test\"user" {commands "+@all"}}
+    {"unquoted_key" "user tester on nopass ~key\"name" "tester" {keys "~key\"name"}}
+}
+
+set server_path [tmpdir "server.acl.upgrade"]
+set acl_file [file join $server_path "user.acl"]
+
+set fp [open $acl_file w]
+puts $fp "user default on nopass ~* \&* +@all"
+close $fp
+
+start_server [list overrides [list "dir" $server_path "aclfile" "user.acl"] tags [list "external:skip"]] {
+    foreach case $old_cases {
+        lassign $case name file_line username expected_fields
+        
+        test "ACL LOAD - Upgrade Scenario - $name" {
+            # Write old format to file
+            set fp [open $acl_file w]
+            puts $fp "user default on nopass ~* \&* +@all"
+            puts $fp $file_line
+            close $fp
+            
+            # Load it
+            r ACL LOAD
+            
+            # Verify LOAD worked via GETUSER
+            set acl [r ACL GETUSER $username]
+            foreach {field expected_val} $expected_fields {
+                if {$field eq "selectors"} {
+                    set selectors [dict get $acl selectors]
+                    set expected_selectors $expected_val
+                    for {set i 0} {$i < [llength $selectors]} {incr i} {
+                        set s [lindex $selectors $i]
+                        set es [lindex $expected_selectors $i]
+                        foreach {f v} $es {
+                            assert_equal [dict get $s $f] $v
+                        }
+                    }
+                } else {
+                    assert_equal [dict get $acl $field] $expected_val
+                }
+            }
+            
+            # Save (should upgrade to new format with quotes)
+            r ACL SAVE
+            
+            # Load again
+            r ACL LOAD
+            
+            # Verify semantics still preserved
+            set acl [r ACL GETUSER $username]
+            foreach {field expected_val} $expected_fields {
+                if {$field eq "selectors"} {
+                    set selectors [dict get $acl selectors]
+                    set expected_selectors $expected_val
+                    for {set i 0} {$i < [llength $selectors]} {incr i} {
+                        set s [lindex $selectors $i]
+                        set es [lindex $expected_selectors $i]
+                        foreach {f v} $es {
+                            assert_equal [dict get $s $f] $v
+                        }
+                    }
+                } else {
+                    assert_equal [dict get $acl $field] $expected_val
+                }
+            }
+            
+            # Clean up user for next iteration
+            r ACL DELUSER $username
+        }
+    }
+}
+
+

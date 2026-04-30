@@ -27,6 +27,7 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
+#include "sds.h"
 #include "server.h"
 #include "sha256.h"
 #include "module.h"
@@ -336,6 +337,16 @@ static void *ACLListDupKeyPattern(void *item) {
     return ACLKeyPatternCreate(sdsdup(old->pattern), old->flags);
 }
 
+/* Append the string with quotes if it needs representation, otherwise append
+ * it raw. */
+static sds sdscatreprifneeded(sds base, const char *s, size_t len) {
+    if (sdsneedsrepr(s)) {
+        return sdscatrepr(base, s, len);
+    } else {
+        return sdscatlen(base, s, len);
+    }
+}
+
 /* Append the string representation of a key pattern onto the
  * provided base string. */
 static sds sdsCatPatternString(sds base, keyPattern *pat) {
@@ -586,47 +597,45 @@ static void ACLSetSelectorCommandBit(aclSelector *selector, unsigned long id, in
  * verbatim, but also remove subcommand rules if we are adding or removing the
  * entire command. */
 static void ACLSelectorRemoveCommandRule(aclSelector *selector, sds new_rule) {
+    int argc = 0;
+    /* command_rules is stored as an escaped string in memory to handle
+     * rules with spaces (like deprecated first-arg rules). We use
+     * sdssplitargs to parse it correctly. */
+    sds *argv = sdssplitargs(selector->command_rules, &argc);
+    if (!argv) return;
+
+    sds updated_rules = sdsempty();
     size_t new_len = sdslen(new_rule);
-    char *existing_rule = selector->command_rules;
 
-    /* Loop over the existing rules, trying to find a rule that "matches"
-     * the new rule. If we find a match, then remove the command from the string by
-     * copying the later rules over it. */
-    while (existing_rule[0]) {
+    for (int i = 0; i < argc; i++) {
+        sds rule = argv[i];
+        if (sdslen(rule) == 0) continue;
+
         /* The first character of the rule is +/-, which we don't need to compare. */
-        char *copy_position = existing_rule;
-        existing_rule += 1;
-
-        /* Assume a trailing space after a command is part of the command, like '+get ', so trim it
-         * as well if the command is removed. */
-        char *rule_end = strchr(existing_rule, ' ');
-        if (!rule_end) {
-            /* This is the last rule, so move it to the end of the string. */
-            rule_end = existing_rule + strlen(existing_rule);
-
-            /* This approach can leave a trailing space if the last rule is removed,
-             * but only if it's not the first rule, so handle that case. */
-            if (copy_position != selector->command_rules) copy_position -= 1;
-        }
-        char *copy_end = rule_end;
-        if (*copy_end == ' ') copy_end++;
+        char *existing_rule = rule + 1;
+        size_t existing_len = sdslen(rule) - 1;
 
         /* Exact match or the rule we are comparing is a subcommand denoted by '|' */
-        size_t existing_len = rule_end - existing_rule;
         if (!memcmp(existing_rule, new_rule, min(existing_len, new_len))) {
             if ((existing_len == new_len) || (existing_len > new_len && (existing_rule[new_len]) == '|')) {
-                /* Copy the remaining rules starting at the next rule to replace the rule to be
-                 * deleted, including the terminating NULL character. */
-                memmove(copy_position, copy_end, strlen(copy_end) + 1);
-                existing_rule = copy_position;
+                /* Found a match. Don't add this to the updated_rules. */
                 continue;
             }
         }
-        existing_rule = copy_end;
+
+        /* Not a match. Add the rule back to the new updated_rules */
+        if (sdslen(updated_rules)) updated_rules = sdscat(updated_rules, " ");
+
+        /* Some edge cases could result in a command needing escaping:
+         * 1. (deprecated) First argument rules (e.g. "+get|my key")
+         * 2. Module commands could register characters needing escape, like
+         *    double quotes (e.g. "+my_command\""). */
+        updated_rules = sdscatreprifneeded(updated_rules, rule, sdslen(rule));
     }
 
-    /* There is now extra padding at the end of the rules, so clean that up. */
-    sdsupdatelen(selector->command_rules);
+    sdsfree(selector->command_rules);
+    selector->command_rules = updated_rules;
+    sdsfreesplitres(argv, argc);
 }
 
 /* This function is responsible for updating the command_rules struct so that relative ordering of
@@ -636,8 +645,19 @@ static void ACLUpdateCommandRules(aclSelector *selector, const char *rule, int a
     sdstolower(new_rule);
 
     ACLSelectorRemoveCommandRule(selector, new_rule);
+
+    sds rule_to_add = sdsempty();
+    rule_to_add = sdscatfmt(rule_to_add, allow ? "+%S" : "-%S", new_rule);
+
     if (sdslen(selector->command_rules)) selector->command_rules = sdscat(selector->command_rules, " ");
-    selector->command_rules = sdscatfmt(selector->command_rules, allow ? "+%S" : "-%S", new_rule);
+
+    /* Command rules are stored escaped in memory in selector->command_rules.
+     * This ensures that they are unambiguously separable by sdssplitargs
+     * during modification (e.g. in ACLSelectorRemoveCommandRule), even if
+     * they contain spaces (like in deprecated first-arg rules). */
+    selector->command_rules = sdscatreprifneeded(selector->command_rules, rule_to_add, sdslen(rule_to_add));
+
+    sdsfree(rule_to_add);
     sdsfree(new_rule);
 }
 
@@ -848,8 +868,18 @@ static sds ACLDescribeSelector(aclSelector *selector) {
         listRewind(selector->patterns, &li);
         while ((ln = listNext(&li))) {
             keyPattern *thispat = (keyPattern *)listNodeValue(ln);
-            res = sdsCatPatternString(res, thispat);
+            sds rule = sdsempty();
+            rule = sdsCatPatternString(rule, thispat);
+            /* We only need to quote individual key patterns if they are on the
+             * root selector. Non-root selectors are quoted as a whole in
+             * ACLDescribeUser. */
+            if ((selector->flags & SELECTOR_FLAG_ROOT) && sdsneedsrepr(rule)) {
+                res = sdscatrepr(res, rule, sdslen(rule));
+            } else {
+                res = sdscatsds(res, rule);
+            }
             res = sdscatlen(res, " ", 1);
+            sdsfree(rule);
         }
     }
 
@@ -861,9 +891,19 @@ static sds ACLDescribeSelector(aclSelector *selector) {
         listRewind(selector->channels, &li);
         while ((ln = listNext(&li))) {
             sds thispat = listNodeValue(ln);
-            res = sdscatlen(res, "&", 1);
-            res = sdscatsds(res, thispat);
+            sds rule = sdsempty();
+            rule = sdscatlen(rule, "&", 1);
+            rule = sdscatsds(rule, thispat);
+            /* We only need to quote individual channel patterns if they are on
+             * the root selector. Non-root selectors are quoted as a whole in
+             * ACLDescribeUser. */
+            if ((selector->flags & SELECTOR_FLAG_ROOT) && sdsneedsrepr(rule)) {
+                res = sdscatrepr(res, rule, sdslen(rule));
+            } else {
+                res = sdscatsds(res, rule);
+            }
             res = sdscatlen(res, " ", 1);
+            sdsfree(rule);
         }
     }
 
@@ -934,7 +974,14 @@ robj *ACLDescribeUser(user *u) {
         if (selector->flags & SELECTOR_FLAG_ROOT) {
             res = sdscatfmt(res, "%s", default_perm);
         } else {
-            res = sdscatfmt(res, " (%s)", default_perm);
+            res = sdscatlen(res, " ", 1);
+            sds selector_str = sdsempty();
+            selector_str = sdscatfmt(selector_str, "(%s)", default_perm);
+
+            /* If needed, wrap selectors as a whole in one pair of quotes and
+             * escape any special characters within them. */
+            res = sdscatreprifneeded(res, selector_str, sdslen(selector_str));
+            sdsfree(selector_str);
         }
         sdsfree(default_perm);
     }
@@ -2480,6 +2527,23 @@ static int ACLLoadConfiguredUsers(void) {
     return C_OK;
 }
 
+/* Return 1 if the line needs to be parsed with sdssplitargs instead of
+ * sdssplitlen. */
+static int ACLLineNeedsQuotedParser(const char *s) {
+    int i = 0;
+    while (s[i]) {
+        if (s[i] == '"') {
+            /* A quote is at the start of a token if it's the first character
+             * or if it's preceded by a space or tab. */
+            if (i == 0 || s[i - 1] == ' ' || s[i - 1] == '\t') {
+                return 1;
+            }
+        }
+        i++;
+    }
+    return 0;
+}
+
 /* This function loads the ACL from the specified filename: every line
  * is validated and should be either empty or in the format used to specify
  * users in the valkey.conf or in the ACL file, that is:
@@ -2541,8 +2605,27 @@ static sds ACLLoadFromFile(const char *filename) {
         /* Skip blank lines */
         if (lines[i][0] == '\0') continue;
 
-        /* Split into arguments */
-        argv = sdssplitlen(lines[i], sdslen(lines[i]), " ", 1, &argc);
+        /* Old ACL file formats did not escape characters like quotes,
+         * which can lead to parsing failures during upgrade if we unconditionally
+         * use sdssplitargs (which assumes quotes are used to escape an argument).
+         *
+         * E.g.
+         * - Old Format: user testuser on -@all (~my"key"name +get)
+         * - New Format: user testuser on -@all "(~my\"key\"name +get)"
+         *
+         * Passing old format to sdssplitargs would incorrectly return the tokens:
+         *
+         * ["user", "testuser", "on", "-@all", "(~mykeyname", "+get)"]
+         *
+         * And remove the double quotes from the key name. In the new format, quotes
+         * are used to escape characters, so sdssplitargs would correctly return:
+         *
+         * ["user", "testuser", "on", "-@all", "(~my\"key\"name +get)"] */
+        if (ACLLineNeedsQuotedParser(lines[i])) {
+            argv = sdssplitargs(lines[i], &argc);
+        } else {
+            argv = sdssplitlen(lines[i], sdslen(lines[i]), " ", 1, &argc);
+        }
         if (argv == NULL) {
             errors = sdscatprintf(errors, "%s:%d: unbalanced quotes in acl line. ", server.acl_filename, linenum);
             continue;
@@ -2585,6 +2668,12 @@ static sds ACLLoadFromFile(const char *filename) {
          * be cleanly applied to the user. If any option fails
          * to apply, the other values won't be applied since
          * all the pending changes will get dropped. */
+
+        /* In the old ACL file format, selectors were not wrapped in quotes.
+         * To figure out where selectors begin and end, we used a naive merging
+         * approach that attempted to match tokens starting with "(" with
+         * tokens ending with ")". For backwards compatibility, we continue to
+         * attempt this merge, although the new format doesn't need to do it. */
         int merged_argc;
         sds *acl_args = ACLMergeSelectorArguments(argv + 2, argc - 2, &merged_argc, NULL);
         if (!acl_args) {
@@ -2707,7 +2796,10 @@ static int ACLSaveToFile(const char *filename) {
         user *u = ri.data;
         /* Return information in the configuration file format. */
         sds user = sdsnew("user ");
-        user = sdscatsds(user, u->name);
+
+        /* Users may contain special characters that need escaping (e.g. my"user
+         * is valid). */
+        user = sdscatreprifneeded(user, u->name, sdslen(u->name));
         user = sdscatlen(user, " ", 1);
         robj *descr = ACLDescribeUser(u);
         user = sdscatsds(user, objectGetVal(descr));
@@ -3225,7 +3317,11 @@ void aclCommand(client *c) {
             } else {
                 /* Return information in the configuration file format. */
                 sds config = sdsnew("user ");
-                config = sdscatsds(config, u->name);
+
+                /* Users may contain special characters that need escaping (e.g.
+                 * my"user is valid). */
+                config = sdscatreprifneeded(config, u->name, sdslen(u->name));
+
                 config = sdscatlen(config, " ", 1);
                 robj *descr = ACLDescribeUser(u);
                 config = sdscatsds(config, objectGetVal(descr));

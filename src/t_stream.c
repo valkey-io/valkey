@@ -818,12 +818,12 @@ int64_t streamTrim(stream *s, streamAddTrimArgs *args) {
 
             /* Mark the entry as deleted. */
             if (!(flags & STREAM_ITEM_FLAG_DELETED)) {
-                intptr_t delta = p - lp;
+                ptrdiff_t delta = p ? p - lp : 0;
                 flags |= STREAM_ITEM_FLAG_DELETED;
                 lp = lpReplaceInteger(lp, &pcopy, flags);
+                if (p) p = lp + delta;
                 deleted_from_lp++;
                 s->length--;
-                p = lp + delta;
             }
         }
         deleted += deleted_from_lp;

@@ -175,17 +175,18 @@ typedef struct {
      * matching is used, the field is just set to NULL to avoid allocating
      * USER_COMMAND_BITS_COUNT pointers. */
     sds **allowed_firstargs;
-    list *patterns;    /* A list of allowed key patterns. If this field is NULL
-                          the user cannot mention any key in a command, unless
-                          the flag ALLKEYS is set in the user. */
-    list *channels;    /* A list of allowed Pub/Sub channel patterns. If this
-                          field is NULL the user cannot mention any channel in a
-                          `PUBLISH` or [P][UNSUBSCRIBE] command, unless the flag
-                          ALLCHANNELS is set in the user. */
-    sds command_rules; /* A string representation of the ordered categories and commands, this
-                        * is used to regenerate the original ACL string for display. */
-    intset *dbs;       /* Set of allowed database ids. If set is NULL or empty the user
-                        * cannot access any database, unless the flag ALLDBS is set. */
+    list *patterns;      /* A list of allowed key patterns. If this field is NULL
+                            the user cannot mention any key in a command, unless
+                            the flag ALLKEYS is set in the user. */
+    list *channels;      /* A list of allowed Pub/Sub channel patterns. If this
+                            field is NULL the user cannot mention any channel in a
+                            `PUBLISH` or [P][UNSUBSCRIBE] command, unless the flag
+                            ALLCHANNELS is set in the user. */
+    list *command_rules; /* A list of unescaped SDS strings representing the ordered
+                          * categories and commands. This is used to regenerate the
+                          * original ACL string for display and modification. */
+    intset *dbs;         /* Set of allowed database ids. If set is NULL or empty the user
+                          * cannot access any database, unless the flag ALLDBS is set. */
 } aclSelector;
 
 static void ACLResetFirstArgsForCommand(aclSelector *selector, unsigned long id);
@@ -372,7 +373,7 @@ static aclSelector *ACLCreateSelector(int flags) {
     selector->channels = listCreate();
     selector->dbs = intsetNew();
     selector->allowed_firstargs = NULL;
-    selector->command_rules = sdsempty();
+    selector->command_rules = listCreate();
 
     listSetMatchMethod(selector->patterns, ACLListMatchKeyPattern);
     listSetFreeMethod(selector->patterns, ACLListFreeKeyPattern);
@@ -380,6 +381,9 @@ static aclSelector *ACLCreateSelector(int flags) {
     listSetMatchMethod(selector->channels, ACLListMatchSds);
     listSetFreeMethod(selector->channels, sdsfreeVoid);
     listSetDupMethod(selector->channels, ACLListDupSds);
+    listSetFreeMethod(selector->command_rules, sdsfreeVoid);
+    listSetMatchMethod(selector->command_rules, ACLListMatchSds);
+    listSetDupMethod(selector->command_rules, ACLListDupSds);
     memset(selector->allowed_commands, 0, sizeof(selector->allowed_commands));
 
     return selector;
@@ -390,7 +394,7 @@ static void ACLFreeSelector(aclSelector *selector) {
     listRelease(selector->patterns);
     listRelease(selector->channels);
     intsetFree(selector->dbs);
-    sdsfree(selector->command_rules);
+    listRelease(selector->command_rules);
     ACLResetFirstArgs(selector);
     zfree(selector);
 }
@@ -402,7 +406,7 @@ static aclSelector *ACLCopySelector(aclSelector *src) {
     dst->patterns = listDup(src->patterns);
     dst->channels = listDup(src->channels);
     dst->dbs = intsetDup(src->dbs);
-    dst->command_rules = sdsdup(src->command_rules);
+    dst->command_rules = listDup(src->command_rules);
     memcpy(dst->allowed_commands, src->allowed_commands, sizeof(dst->allowed_commands));
     dst->allowed_firstargs = NULL;
     /* Copy the allowed first-args array of array of SDS strings. */
@@ -597,45 +601,22 @@ static void ACLSetSelectorCommandBit(aclSelector *selector, unsigned long id, in
  * verbatim, but also remove subcommand rules if we are adding or removing the
  * entire command. */
 static void ACLSelectorRemoveCommandRule(aclSelector *selector, sds new_rule) {
-    int argc = 0;
-    /* command_rules is stored as an escaped string in memory to handle
-     * rules with spaces (like deprecated first-arg rules). We use
-     * sdssplitargs to parse it correctly. */
-    sds *argv = sdssplitargs(selector->command_rules, &argc);
-    if (!argv) return;
-
-    sds updated_rules = sdsempty();
+    listIter li;
+    listNode *ln;
+    listRewind(selector->command_rules, &li);
     size_t new_len = sdslen(new_rule);
 
-    for (int i = 0; i < argc; i++) {
-        sds rule = argv[i];
-        if (sdslen(rule) == 0) continue;
-
-        /* The first character of the rule is +/-, which we don't need to compare. */
+    while ((ln = listNext(&li))) {
+        sds rule = listNodeValue(ln);
         char *existing_rule = rule + 1;
         size_t existing_len = sdslen(rule) - 1;
 
-        /* Exact match or the rule we are comparing is a subcommand denoted by '|' */
         if (!memcmp(existing_rule, new_rule, min(existing_len, new_len))) {
             if ((existing_len == new_len) || (existing_len > new_len && (existing_rule[new_len]) == '|')) {
-                /* Found a match. Don't add this to the updated_rules. */
-                continue;
+                listDelNode(selector->command_rules, ln);
             }
         }
-
-        /* Not a match. Add the rule back to the new updated_rules */
-        if (sdslen(updated_rules)) updated_rules = sdscat(updated_rules, " ");
-
-        /* Some edge cases could result in a command needing escaping:
-         * 1. (deprecated) First argument rules (e.g. "+get|my key")
-         * 2. Module commands could register characters needing escape, like
-         *    double quotes (e.g. "+my_command\""). */
-        updated_rules = sdscatreprifneeded(updated_rules, rule, sdslen(rule));
     }
-
-    sdsfree(selector->command_rules);
-    selector->command_rules = updated_rules;
-    sdsfreesplitres(argv, argc);
 }
 
 /* This function is responsible for updating the command_rules struct so that relative ordering of
@@ -649,15 +630,8 @@ static void ACLUpdateCommandRules(aclSelector *selector, const char *rule, int a
     sds rule_to_add = sdsempty();
     rule_to_add = sdscatfmt(rule_to_add, allow ? "+%S" : "-%S", new_rule);
 
-    if (sdslen(selector->command_rules)) selector->command_rules = sdscat(selector->command_rules, " ");
+    listAddNodeTail(selector->command_rules, rule_to_add);
 
-    /* Command rules are stored escaped in memory in selector->command_rules.
-     * This ensures that they are unambiguously separable by sdssplitargs
-     * during modification (e.g. in ACLSelectorRemoveCommandRule), even if
-     * they contain spaces (like in deprecated first-arg rules). */
-    selector->command_rules = sdscatreprifneeded(selector->command_rules, rule_to_add, sdslen(rule_to_add));
-
-    sdsfree(rule_to_add);
     sdsfree(new_rule);
 }
 
@@ -715,9 +689,6 @@ void ACLRecomputeCommandBitsFromCommandRulesAllUsers(void) {
         listRewind(u->selectors, &li);
         while ((ln = listNext(&li))) {
             aclSelector *selector = (aclSelector *)listNodeValue(ln);
-            int argc = 0;
-            sds *argv = sdssplitargs(selector->command_rules, &argc);
-            serverAssert(argv != NULL);
             /* Checking selector's permissions for all commands to start with a clean state. */
             if (ACLSelectorCanExecuteFutureCommands(selector)) {
                 int res = ACLSetSelector(selector, "+@all", -1);
@@ -728,11 +699,14 @@ void ACLRecomputeCommandBitsFromCommandRulesAllUsers(void) {
             }
 
             /* Apply all of the commands and categories to this selector. */
-            for (int i = 0; i < argc; i++) {
-                int res = ACLSetSelector(selector, argv[i], sdslen(argv[i]));
+            listIter sli;
+            listNode *sln;
+            listRewind(selector->command_rules, &sli);
+            while ((sln = listNext(&sli))) {
+                sds rule = listNodeValue(sln);
+                int res = ACLSetSelector(selector, rule, sdslen(rule));
                 serverAssert(res == C_OK);
             }
-            sdsfreesplitres(argv, argc);
         }
     }
     raxStop(&ri);
@@ -764,14 +738,13 @@ int ACLModuleHasCommandRules(const struct ValkeyModule *module, sds *rule_out) {
         listRewind(u->selectors, &li);
         while ((ln = listNext(&li)) != NULL) {
             aclSelector *selector = listNodeValue(ln);
-            if (sdslen(selector->command_rules) == 0) continue;
+            if (listLength(selector->command_rules) == 0) continue;
 
-            int argc = 0;
-            sds *argv = sdssplitargs(selector->command_rules, &argc);
-            if (!argv) continue;
-
-            for (int i = 0; i < argc; i++) {
-                sds rule = argv[i];
+            listIter sli;
+            listNode *sln;
+            listRewind(selector->command_rules, &sli);
+            while ((sln = listNext(&sli))) {
+                sds rule = listNodeValue(sln);
                 if (rule[0] != '+' && rule[0] != '-') continue;
                 if (rule[1] == '@') continue;
 
@@ -789,11 +762,9 @@ int ACLModuleHasCommandRules(const struct ValkeyModule *module, sds *rule_out) {
                 if (moduleFromCommand(cmd) != module) continue;
 
                 if (rule_out) *rule_out = sdsdup(rule);
-                sdsfreesplitres(argv, argc);
                 raxStop(&ri);
                 return 1;
             }
-            sdsfreesplitres(argv, argc);
         }
     }
     raxStop(&ri);
@@ -828,19 +799,20 @@ static sds ACLDescribeSelectorCommandRules(aclSelector *selector) {
         ACLSetSelector(fake_selector, "-@all", -1);
     }
 
-    /* Apply all of the commands and categories to the fake selector. */
-    int argc = 0;
-    sds *argv = sdssplitargs(selector->command_rules, &argc);
-    serverAssert(argv != NULL);
-
-    for (int i = 0; i < argc; i++) {
-        int res = ACLSetSelector(fake_selector, argv[i], -1);
+    /* Apply all of the commands and categories to the fake selector and build rules string. */
+    listIter li;
+    listNode *ln;
+    listRewind(selector->command_rules, &li);
+    while ((ln = listNext(&li))) {
+        sds rule = listNodeValue(ln);
+        /* Apply to fake selector */
+        int res = ACLSetSelector(fake_selector, rule, -1);
         serverAssert(res == C_OK);
+
+        /* Append to rules string, quoting if needed */
+        rules = sdscatreprifneeded(rules, rule, sdslen(rule));
+        rules = sdscatlen(rules, " ", 1);
     }
-    if (sdslen(selector->command_rules)) {
-        rules = sdscatfmt(rules, "%S ", selector->command_rules);
-    }
-    sdsfreesplitres(argv, argc);
 
     /* Trim the final useless space. */
     sdsrange(rules, 0, -2);
@@ -1219,12 +1191,12 @@ static int ACLSetSelector(aclSelector *selector, const char *op, size_t oplen) {
     } else if (!strcasecmp(op, "allcommands") || !strcasecmp(op, "+@all")) {
         memset(selector->allowed_commands, 255, sizeof(selector->allowed_commands));
         selector->flags |= SELECTOR_FLAG_ALLCOMMANDS;
-        sdsclear(selector->command_rules);
+        listEmpty(selector->command_rules);
         ACLResetFirstArgs(selector);
     } else if (!strcasecmp(op, "nocommands") || !strcasecmp(op, "-@all")) {
         memset(selector->allowed_commands, 0, sizeof(selector->allowed_commands));
         selector->flags &= ~SELECTOR_FLAG_ALLCOMMANDS;
-        sdsclear(selector->command_rules);
+        listEmpty(selector->command_rules);
         ACLResetFirstArgs(selector);
     } else if (op[0] == '~' || op[0] == '%') {
         if (selector->flags & SELECTOR_FLAG_ALLKEYS) {

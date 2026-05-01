@@ -313,6 +313,7 @@ client *createClient(connection *conn) {
     c->buf_peak = c->buf_usable_size;
     c->buf_peak_last_reset_time = server.unixtime;
     c->qb_pos = 0;
+    c->qb_applied = 0;
     c->querybuf = NULL;
     c->querybuf_peak = 0;
     c->reqtype = 0;
@@ -2299,7 +2300,6 @@ void beforeNextClient(client *c) {
                 if (queue->cmds[i].qb_end_pos == 0) continue;
 
                 queue->cmds[i].qb_end_pos -= c->repl_data->repl_applied;
-                serverAssert(queue->cmds[i].qb_end_pos >= 0);
             }
             c->repl_data->repl_applied = 0;
         }

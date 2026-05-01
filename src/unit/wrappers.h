@@ -44,6 +44,7 @@ extern "C" {
 #define protected protected_                     /* Avoid conflict with C++ 'protected' keyword */
 
 #include "ae.h"
+#include "anet.h"
 #include "server.h"
 
 /**
@@ -60,6 +61,8 @@ extern "C" {
  *       Example: serverLog(int level, const char *fmt, ...) should NOT be mocked.
  */
 long long __wrap_aeCreateTimeEvent(aeEventLoop *eventLoop, long long milliseconds, aeTimeProc *proc, void *clientData, aeEventFinalizerProc *finalizerProc);
+int __wrap_aeWait(int fd, int mask, long long milliseconds);
+int __wrap_anetTcpNonBlockConnect(char *err, const char *addr, int port);
 #undef protected
 #undef _Bool
 #undef typename

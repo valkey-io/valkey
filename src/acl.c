@@ -27,8 +27,8 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include "sds.h"
 #include "server.h"
+#include "sds.h"
 #include "sha256.h"
 #include "module.h"
 #include "intset.h"
@@ -676,7 +676,7 @@ static void ACLSetSelectorCommandBitsForCategory(hashtable *commands, aclSelecto
 }
 
 /* This function is responsible for recomputing the command bits for all selectors of the existing users.
- * It uses the 'command_rules', a string representation of the ordered categories and commands,
+ * It uses the 'command_rules', a list of the ordered categories and commands,
  * to recompute the command bits. */
 void ACLRecomputeCommandBitsFromCommandRulesAllUsers(void) {
     raxIterator ri;
@@ -689,6 +689,10 @@ void ACLRecomputeCommandBitsFromCommandRulesAllUsers(void) {
         listRewind(u->selectors, &li);
         while ((ln = listNext(&li))) {
             aclSelector *selector = (aclSelector *)listNodeValue(ln);
+            /* Duplicate the rules list before resetting the selector, as
+             * ACLSetSelector will clear selector->command_rules. */
+            list *rules_copy = listDup(selector->command_rules);
+ 
             /* Checking selector's permissions for all commands to start with a clean state. */
             if (ACLSelectorCanExecuteFutureCommands(selector)) {
                 int res = ACLSetSelector(selector, "+@all", -1);
@@ -698,15 +702,16 @@ void ACLRecomputeCommandBitsFromCommandRulesAllUsers(void) {
                 serverAssert(res == C_OK);
             }
 
-            /* Apply all of the commands and categories to this selector. */
+            /* Apply all of the commands and categories to this selector from the copy. */
             listIter sli;
             listNode *sln;
-            listRewind(selector->command_rules, &sli);
+            listRewind(rules_copy, &sli);
             while ((sln = listNext(&sli))) {
                 sds rule = listNodeValue(sln);
                 int res = ACLSetSelector(selector, rule, sdslen(rule));
                 serverAssert(res == C_OK);
             }
+            listRelease(rules_copy);
         }
     }
     raxStop(&ri);

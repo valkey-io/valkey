@@ -1493,16 +1493,16 @@ start_server [list overrides [list "dir" $server_path "aclfile" "user.acl"] tags
                 } else {
                     assert_equal [dict get $acl $field] $expected_val
                 }
-            
-            # Verify with LIST for specific cases to ensure quoting in serialization
-            if {$username eq "keyquoter"} {
-                set acl_list [r ACL LIST]
-                assert_match {*"~key\\\"name"*} $acl_list
-            }
-            if {$username eq "chanquoter"} {
-                set acl_list [r ACL LIST]
-                assert_match {*"&chan\\\"name"*} $acl_list
-            }
+
+                # Verify with LIST for specific cases to ensure quoting in serialization
+                if {$username eq "keyquoter"} {
+                    set acl_list [r ACL LIST]
+                    assert_match {*"~key\\\"name"*} $acl_list
+                }
+                if {$username eq "chanquoter"} {
+                    set acl_list [r ACL LIST]
+                    assert_match {*"&chan\\\"name"*} $acl_list
+                }
             }
             
             # Clean up user for next iteration

@@ -46,6 +46,7 @@ extern "C" {
 #define protected protected_                     /* Avoid conflict with C++ 'protected' keyword */
 
 #include "ae.h"
+#include "anet.h"
 #include "compression.h"
 #include "server.h"
 #include "stat_calc.h"
@@ -67,6 +68,8 @@ extern "C" {
  */
 long long __wrap_aeCreateTimeEvent(aeEventLoop *eventLoop, long long milliseconds, aeTimeProc *proc, void *clientData, aeEventFinalizerProc *finalizerProc);
 int __wrap_aeDeleteTimeEvent(aeEventLoop *eventLoop, long long id);
+int __wrap_aeWait(int fd, int mask, long long milliseconds);
+int __wrap_anetTcpNonBlockConnect(char *err, const char *addr, int port);
 size_t __wrap_getClientOutputBufferMemoryUsage(client *c);
 int __wrap_getMaxmemoryState(size_t *total, size_t *logical, size_t *tofree, float *level);
 void __wrap_queueClientForReprocessing(client *c);

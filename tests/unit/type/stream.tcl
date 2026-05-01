@@ -772,6 +772,35 @@ start_server {
         assert {[r XTRIM mystream MAXLEN ~ 0 LIMIT 1] == 0}
         assert {[r XTRIM mystream MAXLEN ~ 0 LIMIT 2] == 2}
     }
+
+    test {XTRIM MINID marking last entry in listpack as deleted} {
+        # Regression test: when XTRIM marks the last entry in a listpack
+        # node as deleted, the pointer past the lp-count field is NULL
+        # (EOF). The delta recalculation after lpReplaceInteger must
+        # handle this to avoid listpack corruption.
+        r del mystream
+        r config set stream-node-max-entries 3
+
+        # Add 4 entries: first 3 go into node 1, 4th into node 2.
+        r XADD mystream 1-0 f v
+        r XADD mystream 2-0 f v
+        r XADD mystream 3-0 f v
+        r XADD mystream 4-0 f v
+
+        # Exact MINID trim: marks entries 1-0 and 2-0 as deleted inside
+        # node 1. Entry 3-0 is the last entry in that node, so after
+        # skipping its lp-count the pointer hits EOF (NULL).
+        r XTRIM mystream MINID = 4-0
+
+        # Verify the stream is intact and XREAD works.
+        assert_equal [r XLEN mystream] 1
+        set result [r XRANGE mystream - +]
+        assert_equal $result {{4-0 {f v}}}
+        set result [r XREAD COUNT 10 STREAMS mystream 0-0]
+        assert_equal $result {{mystream {{4-0 {f v}}}}}
+
+        r config set stream-node-max-entries 100
+    }
 }
 
 start_server {tags {"stream needs:debug"} overrides {appendonly yes}} {

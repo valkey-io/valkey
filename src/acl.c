@@ -692,7 +692,7 @@ void ACLRecomputeCommandBitsFromCommandRulesAllUsers(void) {
             /* Duplicate the rules list before resetting the selector, as
              * ACLSetSelector will clear selector->command_rules. */
             list *rules_copy = listDup(selector->command_rules);
- 
+
             /* Checking selector's permissions for all commands to start with a clean state. */
             if (ACLSelectorCanExecuteFutureCommands(selector)) {
                 int res = ACLSetSelector(selector, "+@all", -1);

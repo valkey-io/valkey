@@ -753,12 +753,486 @@ void getbitCommand(client *c) {
     addReply(c, bitval ? shared.cone : shared.czero);
 }
 
+static void bitopScalarRange(unsigned char *dst, unsigned char **src, unsigned long *len, unsigned long numkeys, unsigned long start, unsigned long end, int op) {
+    unsigned char output, byte;
+    unsigned long i, j;
+
+    for (j = start; j < end; j++) {
+        output = (len[0] <= j) ? 0 : src[0][j];
+        if (op == BITOP_NOT) output = ~output;
+        for (i = 1; i < numkeys; i++) {
+            int skip = 0;
+            byte = (len[i] <= j) ? 0 : src[i][j];
+            switch (op) {
+            case BITOP_AND:
+                output &= byte;
+                skip = (output == 0);
+                break;
+            case BITOP_OR:
+                output |= byte;
+                skip = (output == 0xff);
+                break;
+            case BITOP_XOR: output ^= byte; break;
+            }
+
+            if (skip) {
+                break;
+            }
+        }
+        dst[j] = output;
+    }
+}
+
+#if HAVE_X86_SIMD
+#define BITOP_AVX2_LOAD(p) _mm256_loadu_si256((const __m256i *)(p))
+#define BITOP_AVX2_STORE(p, v) _mm256_storeu_si256((__m256i *)(p), (v))
+
+ATTRIBUTE_TARGET_AVX2
+void bitopAndAVX2(unsigned char *dst, unsigned char **src, unsigned long *len, unsigned long numkeys, unsigned long minlen, unsigned long maxlen) {
+    unsigned long i, j = 0;
+
+    while (j + 8 * 32 <= minlen) {
+        __m256i r0 = BITOP_AVX2_LOAD(src[0] + j);
+        __m256i r1 = BITOP_AVX2_LOAD(src[0] + j + 32);
+        __m256i r2 = BITOP_AVX2_LOAD(src[0] + j + 2 * 32);
+        __m256i r3 = BITOP_AVX2_LOAD(src[0] + j + 3 * 32);
+        __m256i r4 = BITOP_AVX2_LOAD(src[0] + j + 4 * 32);
+        __m256i r5 = BITOP_AVX2_LOAD(src[0] + j + 5 * 32);
+        __m256i r6 = BITOP_AVX2_LOAD(src[0] + j + 6 * 32);
+        __m256i r7 = BITOP_AVX2_LOAD(src[0] + j + 7 * 32);
+
+        for (i = 1; i < numkeys; i++) {
+            r0 = _mm256_and_si256(r0, BITOP_AVX2_LOAD(src[i] + j));
+            r1 = _mm256_and_si256(r1, BITOP_AVX2_LOAD(src[i] + j + 32));
+            r2 = _mm256_and_si256(r2, BITOP_AVX2_LOAD(src[i] + j + 2 * 32));
+            r3 = _mm256_and_si256(r3, BITOP_AVX2_LOAD(src[i] + j + 3 * 32));
+            r4 = _mm256_and_si256(r4, BITOP_AVX2_LOAD(src[i] + j + 4 * 32));
+            r5 = _mm256_and_si256(r5, BITOP_AVX2_LOAD(src[i] + j + 5 * 32));
+            r6 = _mm256_and_si256(r6, BITOP_AVX2_LOAD(src[i] + j + 6 * 32));
+            r7 = _mm256_and_si256(r7, BITOP_AVX2_LOAD(src[i] + j + 7 * 32));
+        }
+
+        BITOP_AVX2_STORE(dst + j, r0);
+        BITOP_AVX2_STORE(dst + j + 32, r1);
+        BITOP_AVX2_STORE(dst + j + 2 * 32, r2);
+        BITOP_AVX2_STORE(dst + j + 3 * 32, r3);
+        BITOP_AVX2_STORE(dst + j + 4 * 32, r4);
+        BITOP_AVX2_STORE(dst + j + 5 * 32, r5);
+        BITOP_AVX2_STORE(dst + j + 6 * 32, r6);
+        BITOP_AVX2_STORE(dst + j + 7 * 32, r7);
+        j += 8 * 32;
+    }
+
+    while (j + 32 <= minlen) {
+        __m256i r = BITOP_AVX2_LOAD(src[0] + j);
+
+        for (i = 1; i < numkeys; i++) {
+            r = _mm256_and_si256(r, BITOP_AVX2_LOAD(src[i] + j));
+        }
+
+        BITOP_AVX2_STORE(dst + j, r);
+        j += 32;
+    }
+
+    _mm256_zeroupper();
+    bitopScalarRange(dst, src, len, numkeys, j, minlen, BITOP_AND);
+    if (minlen < maxlen) memset(dst + minlen, 0, maxlen - minlen);
+}
+
+ATTRIBUTE_TARGET_AVX2
+void bitopOrAVX2(unsigned char *dst, unsigned char **src, unsigned long *len, unsigned long numkeys, unsigned long minlen, unsigned long maxlen) {
+    unsigned long i, j = 0;
+
+    while (j + 8 * 32 <= minlen) {
+        __m256i r0 = BITOP_AVX2_LOAD(src[0] + j);
+        __m256i r1 = BITOP_AVX2_LOAD(src[0] + j + 32);
+        __m256i r2 = BITOP_AVX2_LOAD(src[0] + j + 2 * 32);
+        __m256i r3 = BITOP_AVX2_LOAD(src[0] + j + 3 * 32);
+        __m256i r4 = BITOP_AVX2_LOAD(src[0] + j + 4 * 32);
+        __m256i r5 = BITOP_AVX2_LOAD(src[0] + j + 5 * 32);
+        __m256i r6 = BITOP_AVX2_LOAD(src[0] + j + 6 * 32);
+        __m256i r7 = BITOP_AVX2_LOAD(src[0] + j + 7 * 32);
+
+        for (i = 1; i < numkeys; i++) {
+            r0 = _mm256_or_si256(r0, BITOP_AVX2_LOAD(src[i] + j));
+            r1 = _mm256_or_si256(r1, BITOP_AVX2_LOAD(src[i] + j + 32));
+            r2 = _mm256_or_si256(r2, BITOP_AVX2_LOAD(src[i] + j + 2 * 32));
+            r3 = _mm256_or_si256(r3, BITOP_AVX2_LOAD(src[i] + j + 3 * 32));
+            r4 = _mm256_or_si256(r4, BITOP_AVX2_LOAD(src[i] + j + 4 * 32));
+            r5 = _mm256_or_si256(r5, BITOP_AVX2_LOAD(src[i] + j + 5 * 32));
+            r6 = _mm256_or_si256(r6, BITOP_AVX2_LOAD(src[i] + j + 6 * 32));
+            r7 = _mm256_or_si256(r7, BITOP_AVX2_LOAD(src[i] + j + 7 * 32));
+        }
+
+        BITOP_AVX2_STORE(dst + j, r0);
+        BITOP_AVX2_STORE(dst + j + 32, r1);
+        BITOP_AVX2_STORE(dst + j + 2 * 32, r2);
+        BITOP_AVX2_STORE(dst + j + 3 * 32, r3);
+        BITOP_AVX2_STORE(dst + j + 4 * 32, r4);
+        BITOP_AVX2_STORE(dst + j + 5 * 32, r5);
+        BITOP_AVX2_STORE(dst + j + 6 * 32, r6);
+        BITOP_AVX2_STORE(dst + j + 7 * 32, r7);
+        j += 8 * 32;
+    }
+
+    while (j + 32 <= minlen) {
+        __m256i r = BITOP_AVX2_LOAD(src[0] + j);
+
+        for (i = 1; i < numkeys; i++) {
+            r = _mm256_or_si256(r, BITOP_AVX2_LOAD(src[i] + j));
+        }
+
+        BITOP_AVX2_STORE(dst + j, r);
+        j += 32;
+    }
+
+    _mm256_zeroupper();
+    bitopScalarRange(dst, src, len, numkeys, j, maxlen, BITOP_OR);
+}
+
+ATTRIBUTE_TARGET_AVX2
+void bitopXorAVX2(unsigned char *dst, unsigned char **src, unsigned long *len, unsigned long numkeys, unsigned long minlen, unsigned long maxlen) {
+    unsigned long i, j = 0;
+
+    while (j + 8 * 32 <= minlen) {
+        __m256i r0 = BITOP_AVX2_LOAD(src[0] + j);
+        __m256i r1 = BITOP_AVX2_LOAD(src[0] + j + 32);
+        __m256i r2 = BITOP_AVX2_LOAD(src[0] + j + 2 * 32);
+        __m256i r3 = BITOP_AVX2_LOAD(src[0] + j + 3 * 32);
+        __m256i r4 = BITOP_AVX2_LOAD(src[0] + j + 4 * 32);
+        __m256i r5 = BITOP_AVX2_LOAD(src[0] + j + 5 * 32);
+        __m256i r6 = BITOP_AVX2_LOAD(src[0] + j + 6 * 32);
+        __m256i r7 = BITOP_AVX2_LOAD(src[0] + j + 7 * 32);
+
+        for (i = 1; i < numkeys; i++) {
+            r0 = _mm256_xor_si256(r0, BITOP_AVX2_LOAD(src[i] + j));
+            r1 = _mm256_xor_si256(r1, BITOP_AVX2_LOAD(src[i] + j + 32));
+            r2 = _mm256_xor_si256(r2, BITOP_AVX2_LOAD(src[i] + j + 2 * 32));
+            r3 = _mm256_xor_si256(r3, BITOP_AVX2_LOAD(src[i] + j + 3 * 32));
+            r4 = _mm256_xor_si256(r4, BITOP_AVX2_LOAD(src[i] + j + 4 * 32));
+            r5 = _mm256_xor_si256(r5, BITOP_AVX2_LOAD(src[i] + j + 5 * 32));
+            r6 = _mm256_xor_si256(r6, BITOP_AVX2_LOAD(src[i] + j + 6 * 32));
+            r7 = _mm256_xor_si256(r7, BITOP_AVX2_LOAD(src[i] + j + 7 * 32));
+        }
+
+        BITOP_AVX2_STORE(dst + j, r0);
+        BITOP_AVX2_STORE(dst + j + 32, r1);
+        BITOP_AVX2_STORE(dst + j + 2 * 32, r2);
+        BITOP_AVX2_STORE(dst + j + 3 * 32, r3);
+        BITOP_AVX2_STORE(dst + j + 4 * 32, r4);
+        BITOP_AVX2_STORE(dst + j + 5 * 32, r5);
+        BITOP_AVX2_STORE(dst + j + 6 * 32, r6);
+        BITOP_AVX2_STORE(dst + j + 7 * 32, r7);
+        j += 8 * 32;
+    }
+
+    while (j + 32 <= minlen) {
+        __m256i r = BITOP_AVX2_LOAD(src[0] + j);
+
+        for (i = 1; i < numkeys; i++) {
+            r = _mm256_xor_si256(r, BITOP_AVX2_LOAD(src[i] + j));
+        }
+
+        BITOP_AVX2_STORE(dst + j, r);
+        j += 32;
+    }
+
+    _mm256_zeroupper();
+    bitopScalarRange(dst, src, len, numkeys, j, maxlen, BITOP_XOR);
+}
+
+ATTRIBUTE_TARGET_AVX2
+void bitopNotAVX2(unsigned char *dst, unsigned char **src, unsigned long *len, unsigned long numkeys, unsigned long minlen, unsigned long maxlen) {
+    const __m256i ones = _mm256_set1_epi8((char)0xff);
+    unsigned long j = 0;
+
+    (void)minlen;
+
+    while (j + 8 * 32 <= maxlen) {
+        __m256i r0 = _mm256_xor_si256(BITOP_AVX2_LOAD(src[0] + j), ones);
+        __m256i r1 = _mm256_xor_si256(BITOP_AVX2_LOAD(src[0] + j + 32), ones);
+        __m256i r2 = _mm256_xor_si256(BITOP_AVX2_LOAD(src[0] + j + 2 * 32), ones);
+        __m256i r3 = _mm256_xor_si256(BITOP_AVX2_LOAD(src[0] + j + 3 * 32), ones);
+        __m256i r4 = _mm256_xor_si256(BITOP_AVX2_LOAD(src[0] + j + 4 * 32), ones);
+        __m256i r5 = _mm256_xor_si256(BITOP_AVX2_LOAD(src[0] + j + 5 * 32), ones);
+        __m256i r6 = _mm256_xor_si256(BITOP_AVX2_LOAD(src[0] + j + 6 * 32), ones);
+        __m256i r7 = _mm256_xor_si256(BITOP_AVX2_LOAD(src[0] + j + 7 * 32), ones);
+
+        BITOP_AVX2_STORE(dst + j, r0);
+        BITOP_AVX2_STORE(dst + j + 32, r1);
+        BITOP_AVX2_STORE(dst + j + 2 * 32, r2);
+        BITOP_AVX2_STORE(dst + j + 3 * 32, r3);
+        BITOP_AVX2_STORE(dst + j + 4 * 32, r4);
+        BITOP_AVX2_STORE(dst + j + 5 * 32, r5);
+        BITOP_AVX2_STORE(dst + j + 6 * 32, r6);
+        BITOP_AVX2_STORE(dst + j + 7 * 32, r7);
+        j += 8 * 32;
+    }
+
+    while (j + 32 <= maxlen) {
+        __m256i r = _mm256_xor_si256(BITOP_AVX2_LOAD(src[0] + j), ones);
+
+        BITOP_AVX2_STORE(dst + j, r);
+        j += 32;
+    }
+
+    _mm256_zeroupper();
+    bitopScalarRange(dst, src, len, numkeys, j, maxlen, BITOP_NOT);
+}
+
+#undef BITOP_AVX2_LOAD
+#undef BITOP_AVX2_STORE
+#endif
+
+#if HAVE_ARM_NEON
+#define BITOP_NEON_LOAD(p) vld1q_u8((p))
+#define BITOP_NEON_STORE(p, v) vst1q_u8((p), (v))
+
+void bitopAndNEON(unsigned char *dst, unsigned char **src, unsigned long *len, unsigned long numkeys, unsigned long minlen, unsigned long maxlen) {
+    unsigned long i, j = 0;
+
+    while (j + 8 * 16 <= minlen) {
+        uint8x16_t r0 = BITOP_NEON_LOAD(src[0] + j);
+        uint8x16_t r1 = BITOP_NEON_LOAD(src[0] + j + 16);
+        uint8x16_t r2 = BITOP_NEON_LOAD(src[0] + j + 2 * 16);
+        uint8x16_t r3 = BITOP_NEON_LOAD(src[0] + j + 3 * 16);
+        uint8x16_t r4 = BITOP_NEON_LOAD(src[0] + j + 4 * 16);
+        uint8x16_t r5 = BITOP_NEON_LOAD(src[0] + j + 5 * 16);
+        uint8x16_t r6 = BITOP_NEON_LOAD(src[0] + j + 6 * 16);
+        uint8x16_t r7 = BITOP_NEON_LOAD(src[0] + j + 7 * 16);
+
+        for (i = 1; i < numkeys; i++) {
+            r0 = vandq_u8(r0, BITOP_NEON_LOAD(src[i] + j));
+            r1 = vandq_u8(r1, BITOP_NEON_LOAD(src[i] + j + 16));
+            r2 = vandq_u8(r2, BITOP_NEON_LOAD(src[i] + j + 2 * 16));
+            r3 = vandq_u8(r3, BITOP_NEON_LOAD(src[i] + j + 3 * 16));
+            r4 = vandq_u8(r4, BITOP_NEON_LOAD(src[i] + j + 4 * 16));
+            r5 = vandq_u8(r5, BITOP_NEON_LOAD(src[i] + j + 5 * 16));
+            r6 = vandq_u8(r6, BITOP_NEON_LOAD(src[i] + j + 6 * 16));
+            r7 = vandq_u8(r7, BITOP_NEON_LOAD(src[i] + j + 7 * 16));
+        }
+
+        BITOP_NEON_STORE(dst + j, r0);
+        BITOP_NEON_STORE(dst + j + 16, r1);
+        BITOP_NEON_STORE(dst + j + 2 * 16, r2);
+        BITOP_NEON_STORE(dst + j + 3 * 16, r3);
+        BITOP_NEON_STORE(dst + j + 4 * 16, r4);
+        BITOP_NEON_STORE(dst + j + 5 * 16, r5);
+        BITOP_NEON_STORE(dst + j + 6 * 16, r6);
+        BITOP_NEON_STORE(dst + j + 7 * 16, r7);
+        j += 8 * 16;
+    }
+
+    while (j + 16 <= minlen) {
+        uint8x16_t r = BITOP_NEON_LOAD(src[0] + j);
+
+        for (i = 1; i < numkeys; i++) {
+            r = vandq_u8(r, BITOP_NEON_LOAD(src[i] + j));
+        }
+
+        BITOP_NEON_STORE(dst + j, r);
+        j += 16;
+    }
+
+    bitopScalarRange(dst, src, len, numkeys, j, minlen, BITOP_AND);
+    if (minlen < maxlen) memset(dst + minlen, 0, maxlen - minlen);
+}
+
+void bitopOrNEON(unsigned char *dst, unsigned char **src, unsigned long *len, unsigned long numkeys, unsigned long minlen, unsigned long maxlen) {
+    unsigned long i, j = 0;
+
+    while (j + 8 * 16 <= minlen) {
+        uint8x16_t r0 = BITOP_NEON_LOAD(src[0] + j);
+        uint8x16_t r1 = BITOP_NEON_LOAD(src[0] + j + 16);
+        uint8x16_t r2 = BITOP_NEON_LOAD(src[0] + j + 2 * 16);
+        uint8x16_t r3 = BITOP_NEON_LOAD(src[0] + j + 3 * 16);
+        uint8x16_t r4 = BITOP_NEON_LOAD(src[0] + j + 4 * 16);
+        uint8x16_t r5 = BITOP_NEON_LOAD(src[0] + j + 5 * 16);
+        uint8x16_t r6 = BITOP_NEON_LOAD(src[0] + j + 6 * 16);
+        uint8x16_t r7 = BITOP_NEON_LOAD(src[0] + j + 7 * 16);
+
+        for (i = 1; i < numkeys; i++) {
+            r0 = vorrq_u8(r0, BITOP_NEON_LOAD(src[i] + j));
+            r1 = vorrq_u8(r1, BITOP_NEON_LOAD(src[i] + j + 16));
+            r2 = vorrq_u8(r2, BITOP_NEON_LOAD(src[i] + j + 2 * 16));
+            r3 = vorrq_u8(r3, BITOP_NEON_LOAD(src[i] + j + 3 * 16));
+            r4 = vorrq_u8(r4, BITOP_NEON_LOAD(src[i] + j + 4 * 16));
+            r5 = vorrq_u8(r5, BITOP_NEON_LOAD(src[i] + j + 5 * 16));
+            r6 = vorrq_u8(r6, BITOP_NEON_LOAD(src[i] + j + 6 * 16));
+            r7 = vorrq_u8(r7, BITOP_NEON_LOAD(src[i] + j + 7 * 16));
+        }
+
+        BITOP_NEON_STORE(dst + j, r0);
+        BITOP_NEON_STORE(dst + j + 16, r1);
+        BITOP_NEON_STORE(dst + j + 2 * 16, r2);
+        BITOP_NEON_STORE(dst + j + 3 * 16, r3);
+        BITOP_NEON_STORE(dst + j + 4 * 16, r4);
+        BITOP_NEON_STORE(dst + j + 5 * 16, r5);
+        BITOP_NEON_STORE(dst + j + 6 * 16, r6);
+        BITOP_NEON_STORE(dst + j + 7 * 16, r7);
+        j += 8 * 16;
+    }
+
+    while (j + 16 <= minlen) {
+        uint8x16_t r = BITOP_NEON_LOAD(src[0] + j);
+
+        for (i = 1; i < numkeys; i++) {
+            r = vorrq_u8(r, BITOP_NEON_LOAD(src[i] + j));
+        }
+
+        BITOP_NEON_STORE(dst + j, r);
+        j += 16;
+    }
+
+    bitopScalarRange(dst, src, len, numkeys, j, maxlen, BITOP_OR);
+}
+
+void bitopXorNEON(unsigned char *dst, unsigned char **src, unsigned long *len, unsigned long numkeys, unsigned long minlen, unsigned long maxlen) {
+    unsigned long i, j = 0;
+
+    while (j + 8 * 16 <= minlen) {
+        uint8x16_t r0 = BITOP_NEON_LOAD(src[0] + j);
+        uint8x16_t r1 = BITOP_NEON_LOAD(src[0] + j + 16);
+        uint8x16_t r2 = BITOP_NEON_LOAD(src[0] + j + 2 * 16);
+        uint8x16_t r3 = BITOP_NEON_LOAD(src[0] + j + 3 * 16);
+        uint8x16_t r4 = BITOP_NEON_LOAD(src[0] + j + 4 * 16);
+        uint8x16_t r5 = BITOP_NEON_LOAD(src[0] + j + 5 * 16);
+        uint8x16_t r6 = BITOP_NEON_LOAD(src[0] + j + 6 * 16);
+        uint8x16_t r7 = BITOP_NEON_LOAD(src[0] + j + 7 * 16);
+
+        for (i = 1; i < numkeys; i++) {
+            r0 = veorq_u8(r0, BITOP_NEON_LOAD(src[i] + j));
+            r1 = veorq_u8(r1, BITOP_NEON_LOAD(src[i] + j + 16));
+            r2 = veorq_u8(r2, BITOP_NEON_LOAD(src[i] + j + 2 * 16));
+            r3 = veorq_u8(r3, BITOP_NEON_LOAD(src[i] + j + 3 * 16));
+            r4 = veorq_u8(r4, BITOP_NEON_LOAD(src[i] + j + 4 * 16));
+            r5 = veorq_u8(r5, BITOP_NEON_LOAD(src[i] + j + 5 * 16));
+            r6 = veorq_u8(r6, BITOP_NEON_LOAD(src[i] + j + 6 * 16));
+            r7 = veorq_u8(r7, BITOP_NEON_LOAD(src[i] + j + 7 * 16));
+        }
+
+        BITOP_NEON_STORE(dst + j, r0);
+        BITOP_NEON_STORE(dst + j + 16, r1);
+        BITOP_NEON_STORE(dst + j + 2 * 16, r2);
+        BITOP_NEON_STORE(dst + j + 3 * 16, r3);
+        BITOP_NEON_STORE(dst + j + 4 * 16, r4);
+        BITOP_NEON_STORE(dst + j + 5 * 16, r5);
+        BITOP_NEON_STORE(dst + j + 6 * 16, r6);
+        BITOP_NEON_STORE(dst + j + 7 * 16, r7);
+        j += 8 * 16;
+    }
+
+    while (j + 16 <= minlen) {
+        uint8x16_t r = BITOP_NEON_LOAD(src[0] + j);
+
+        for (i = 1; i < numkeys; i++) {
+            r = veorq_u8(r, BITOP_NEON_LOAD(src[i] + j));
+        }
+
+        BITOP_NEON_STORE(dst + j, r);
+        j += 16;
+    }
+
+    bitopScalarRange(dst, src, len, numkeys, j, maxlen, BITOP_XOR);
+}
+
+void bitopNotNEON(unsigned char *dst, unsigned char **src, unsigned long *len, unsigned long numkeys, unsigned long minlen, unsigned long maxlen) {
+    unsigned long j = 0;
+
+    (void)minlen;
+
+    while (j + 8 * 16 <= maxlen) {
+        uint8x16_t r0 = vmvnq_u8(BITOP_NEON_LOAD(src[0] + j));
+        uint8x16_t r1 = vmvnq_u8(BITOP_NEON_LOAD(src[0] + j + 16));
+        uint8x16_t r2 = vmvnq_u8(BITOP_NEON_LOAD(src[0] + j + 2 * 16));
+        uint8x16_t r3 = vmvnq_u8(BITOP_NEON_LOAD(src[0] + j + 3 * 16));
+        uint8x16_t r4 = vmvnq_u8(BITOP_NEON_LOAD(src[0] + j + 4 * 16));
+        uint8x16_t r5 = vmvnq_u8(BITOP_NEON_LOAD(src[0] + j + 5 * 16));
+        uint8x16_t r6 = vmvnq_u8(BITOP_NEON_LOAD(src[0] + j + 6 * 16));
+        uint8x16_t r7 = vmvnq_u8(BITOP_NEON_LOAD(src[0] + j + 7 * 16));
+
+        BITOP_NEON_STORE(dst + j, r0);
+        BITOP_NEON_STORE(dst + j + 16, r1);
+        BITOP_NEON_STORE(dst + j + 2 * 16, r2);
+        BITOP_NEON_STORE(dst + j + 3 * 16, r3);
+        BITOP_NEON_STORE(dst + j + 4 * 16, r4);
+        BITOP_NEON_STORE(dst + j + 5 * 16, r5);
+        BITOP_NEON_STORE(dst + j + 6 * 16, r6);
+        BITOP_NEON_STORE(dst + j + 7 * 16, r7);
+        j += 8 * 16;
+    }
+
+    while (j + 16 <= maxlen) {
+        uint8x16_t r = vmvnq_u8(BITOP_NEON_LOAD(src[0] + j));
+
+        BITOP_NEON_STORE(dst + j, r);
+        j += 16;
+    }
+
+    bitopScalarRange(dst, src, len, numkeys, j, maxlen, BITOP_NOT);
+}
+
+#undef BITOP_NEON_LOAD
+#undef BITOP_NEON_STORE
+#endif
+
+static int bitopTrySimd(int op, unsigned char *dst, unsigned char **src, unsigned long *len, unsigned long numkeys, unsigned long minlen, unsigned long maxlen) {
+#if HAVE_X86_SIMD
+    if (((op == BITOP_NOT && maxlen >= 32) || (op != BITOP_NOT && minlen >= 32)) &&
+        __builtin_cpu_supports("avx2")) {
+        switch (op) {
+        case BITOP_AND:
+            bitopAndAVX2(dst, src, len, numkeys, minlen, maxlen);
+            return 1;
+        case BITOP_OR:
+            bitopOrAVX2(dst, src, len, numkeys, minlen, maxlen);
+            return 1;
+        case BITOP_XOR:
+            bitopXorAVX2(dst, src, len, numkeys, minlen, maxlen);
+            return 1;
+        case BITOP_NOT:
+            bitopNotAVX2(dst, src, len, numkeys, minlen, maxlen);
+            return 1;
+        }
+    }
+#endif
+#if HAVE_ARM_NEON
+    if ((op == BITOP_NOT && maxlen >= 16) || (op != BITOP_NOT && minlen >= 16)) {
+        switch (op) {
+        case BITOP_AND:
+            bitopAndNEON(dst, src, len, numkeys, minlen, maxlen);
+            return 1;
+        case BITOP_OR:
+            bitopOrNEON(dst, src, len, numkeys, minlen, maxlen);
+            return 1;
+        case BITOP_XOR:
+            bitopXorNEON(dst, src, len, numkeys, minlen, maxlen);
+            return 1;
+        case BITOP_NOT:
+            bitopNotNEON(dst, src, len, numkeys, minlen, maxlen);
+            return 1;
+        }
+    }
+#endif
+#if !HAVE_X86_SIMD && !HAVE_ARM_NEON
+    (void)op;
+    (void)dst;
+    (void)src;
+    (void)len;
+    (void)numkeys;
+    (void)minlen;
+    (void)maxlen;
+#endif
+    return 0;
+}
+
 /* BITOP op_name target_key src_key1 src_key2 src_key3 ... src_keyN */
 VALKEY_NO_SANITIZE("alignment")
 void bitopCommand(client *c) {
     char *opname = objectGetVal(c->argv[1]);
     robj *o, *targetkey = c->argv[2];
-    unsigned long op, j, numkeys;
+    int op;
+    unsigned long j, numkeys;
     robj **objects;                 /* Array of source objects. */
     unsigned char **src;            /* Array of source strings pointers. */
     unsigned long *len, maxlen = 0; /* Array of length of src strings,
@@ -822,101 +1296,78 @@ void bitopCommand(client *c) {
     /* Compute the bit operation, if at least one string is not empty. */
     if (maxlen) {
         res = (unsigned char *)sdsnewlen(NULL, maxlen);
-        unsigned char output, byte;
-        unsigned long i;
-
-        /* Fast path: as far as we have data for all the input bitmaps we
-         * can take a fast path that performs much better than the
-         * vanilla algorithm. On ARM we skip the fast path since it will
-         * result in GCC compiling the code using multiple-words load/store
-         * operations that are not supported even in ARM >= v6. */
-        j = 0;
+        if (!bitopTrySimd(op, res, src, len, numkeys, minlen, maxlen)) {
+            /* Fast path: as far as we have data for all the input bitmaps we
+             * can take a fast path that performs much better than the
+             * vanilla algorithm. On ARM we skip the fast path since it will
+             * result in GCC compiling the code using multiple-words load/store
+             * operations that are not supported even in ARM >= v6. */
+            j = 0;
 #ifndef USE_ALIGNED_ACCESS
-        if (minlen >= sizeof(unsigned long) * 4 && numkeys <= 16) {
-            unsigned long *lp[16];
-            unsigned long *lres = (unsigned long *)res;
+            if (minlen >= sizeof(unsigned long) * 4 && numkeys <= 16) {
+                unsigned long i;
+                unsigned long *lp[16];
+                unsigned long *lres = (unsigned long *)res;
 
-            memcpy(lp, src, sizeof(unsigned long *) * numkeys);
-            memcpy(res, src[0], minlen);
+                memcpy(lp, src, sizeof(unsigned long *) * numkeys);
+                memcpy(res, src[0], minlen);
 
-            /* Different branches per different operations for speed (sorry). */
-            if (op == BITOP_AND) {
-                while (minlen >= sizeof(unsigned long) * 4) {
-                    for (i = 1; i < numkeys; i++) {
-                        lres[0] &= lp[i][0];
-                        lres[1] &= lp[i][1];
-                        lres[2] &= lp[i][2];
-                        lres[3] &= lp[i][3];
-                        lp[i] += 4;
+                /* Different branches per different operations for speed (sorry). */
+                if (op == BITOP_AND) {
+                    while (minlen >= sizeof(unsigned long) * 4) {
+                        for (i = 1; i < numkeys; i++) {
+                            lres[0] &= lp[i][0];
+                            lres[1] &= lp[i][1];
+                            lres[2] &= lp[i][2];
+                            lres[3] &= lp[i][3];
+                            lp[i] += 4;
+                        }
+                        lres += 4;
+                        j += sizeof(unsigned long) * 4;
+                        minlen -= sizeof(unsigned long) * 4;
                     }
-                    lres += 4;
-                    j += sizeof(unsigned long) * 4;
-                    minlen -= sizeof(unsigned long) * 4;
-                }
-            } else if (op == BITOP_OR) {
-                while (minlen >= sizeof(unsigned long) * 4) {
-                    for (i = 1; i < numkeys; i++) {
-                        lres[0] |= lp[i][0];
-                        lres[1] |= lp[i][1];
-                        lres[2] |= lp[i][2];
-                        lres[3] |= lp[i][3];
-                        lp[i] += 4;
+                } else if (op == BITOP_OR) {
+                    while (minlen >= sizeof(unsigned long) * 4) {
+                        for (i = 1; i < numkeys; i++) {
+                            lres[0] |= lp[i][0];
+                            lres[1] |= lp[i][1];
+                            lres[2] |= lp[i][2];
+                            lres[3] |= lp[i][3];
+                            lp[i] += 4;
+                        }
+                        lres += 4;
+                        j += sizeof(unsigned long) * 4;
+                        minlen -= sizeof(unsigned long) * 4;
                     }
-                    lres += 4;
-                    j += sizeof(unsigned long) * 4;
-                    minlen -= sizeof(unsigned long) * 4;
-                }
-            } else if (op == BITOP_XOR) {
-                while (minlen >= sizeof(unsigned long) * 4) {
-                    for (i = 1; i < numkeys; i++) {
-                        lres[0] ^= lp[i][0];
-                        lres[1] ^= lp[i][1];
-                        lres[2] ^= lp[i][2];
-                        lres[3] ^= lp[i][3];
-                        lp[i] += 4;
+                } else if (op == BITOP_XOR) {
+                    while (minlen >= sizeof(unsigned long) * 4) {
+                        for (i = 1; i < numkeys; i++) {
+                            lres[0] ^= lp[i][0];
+                            lres[1] ^= lp[i][1];
+                            lres[2] ^= lp[i][2];
+                            lres[3] ^= lp[i][3];
+                            lp[i] += 4;
+                        }
+                        lres += 4;
+                        j += sizeof(unsigned long) * 4;
+                        minlen -= sizeof(unsigned long) * 4;
                     }
-                    lres += 4;
-                    j += sizeof(unsigned long) * 4;
-                    minlen -= sizeof(unsigned long) * 4;
-                }
-            } else if (op == BITOP_NOT) {
-                while (minlen >= sizeof(unsigned long) * 4) {
-                    lres[0] = ~lres[0];
-                    lres[1] = ~lres[1];
-                    lres[2] = ~lres[2];
-                    lres[3] = ~lres[3];
-                    lres += 4;
-                    j += sizeof(unsigned long) * 4;
-                    minlen -= sizeof(unsigned long) * 4;
+                } else if (op == BITOP_NOT) {
+                    while (minlen >= sizeof(unsigned long) * 4) {
+                        lres[0] = ~lres[0];
+                        lres[1] = ~lres[1];
+                        lres[2] = ~lres[2];
+                        lres[3] = ~lres[3];
+                        lres += 4;
+                        j += sizeof(unsigned long) * 4;
+                        minlen -= sizeof(unsigned long) * 4;
+                    }
                 }
             }
-        }
 #endif
 
-        /* j is set to the next byte to process by the previous loop. */
-        for (; j < maxlen; j++) {
-            output = (len[0] <= j) ? 0 : src[0][j];
-            if (op == BITOP_NOT) output = ~output;
-            for (i = 1; i < numkeys; i++) {
-                int skip = 0;
-                byte = (len[i] <= j) ? 0 : src[i][j];
-                switch (op) {
-                case BITOP_AND:
-                    output &= byte;
-                    skip = (output == 0);
-                    break;
-                case BITOP_OR:
-                    output |= byte;
-                    skip = (output == 0xff);
-                    break;
-                case BITOP_XOR: output ^= byte; break;
-                }
-
-                if (skip) {
-                    break;
-                }
-            }
-            res[j] = output;
+            /* j is set to the next byte to process by the previous loop. */
+            bitopScalarRange(res, src, len, numkeys, j, maxlen, op);
         }
     }
     for (j = 0; j < numkeys; j++) {

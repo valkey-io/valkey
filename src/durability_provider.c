@@ -79,17 +79,82 @@ static durabilityProvider builtinAofProvider = {
     .pausedOffset = 0,
 };
 
+/*================================= Built-in Replication Provider ============ */
+
+/**
+ * The replication durability provider is enabled when min-sync-replicas > 0.
+ * This implements the sync replication data path from the PacificA framework:
+ * writes are only considered committed once acknowledged by at least
+ * min-sync-replicas sync replicas (replicas with REPLICA_CAPA_SYNC flag).
+ */
+static bool replicationProviderIsEnabled(void) {
+    return server.sync_replication_enabled == 1;
+}
+
+/**
+ * Compute the consensus offset across all sync replicas.
+ *
+ * For every REPLCONF ACK, we calculate the minimum ack offset of all
+ * online sync replicas (those in the ISR — with is_in_sync flag set).
+ *
+ * consensus_offset = minimum_ack_offset(list of sync replicas)
+ *
+ * A replica is in the ISR when:
+ *   1. It declared REPLICA_CAPA_SYNC capability via REPLCONF
+ *   2. Its repl_ack_off caught up to the committed_offset
+ *   3. It has not timed out (checked by replicationCron)
+ *
+ * If there are fewer ISR members than min-sync-replicas,
+ * returns -1 to block consensus advancement (the shard is not writable).
+ */
+static long long replicationProviderGetAckedOffset(void) {
+    listIter li;
+    listNode *ln;
+    int sync_replica_count = 0;
+    long long min_offset = LLONG_MAX;
+
+    listRewind(server.replicas, &li);
+    while ((ln = listNext(&li))) {
+        client *replica = ln->value;
+
+        /* Only consider replicas that are online and in the ISR. */
+        if (replica->repl_data->repl_state != REPLICA_STATE_ONLINE) continue;
+        if (!replica->repl_data->is_in_sync) continue;
+
+        sync_replica_count++;
+        if (replica->repl_data->repl_ack_off < min_offset) {
+            min_offset = replica->repl_data->repl_ack_off;
+        }
+    }
+
+    /* If we don't have enough sync replicas, block consensus. */
+    if (sync_replica_count < server.min_sync_replicas) {
+        return -1;
+    }
+
+    /* If min_offset was never updated (shouldn't happen given count check),
+     * return 0 as a safe fallback. */
+    return (min_offset == LLONG_MAX) ? 0 : min_offset;
+}
+
+static durabilityProvider builtinReplicationProvider = {
+    .name = "replication",
+    .isEnabled = replicationProviderIsEnabled,
+    .getAckedOffset = replicationProviderGetAckedOffset,
+    .paused = false,
+    .pausedOffset = 0,
+};
+
 /**
  * Register the built-in durability providers. Called from durabilityInit().
  *
- * Currently only the AOF provider is built-in. Replica-based durability
- * (e.g. raft consensus) should be registered externally as a provider
- * via registerDurabilityProvider().
+ * Currently the AOF provider and replication provider are built-in.
  */
 void registerBuiltinDurabilityProviders(void) {
     /* Only register if not already registered (idempotent) */
     if (num_durability_providers == 0) {
         registerDurabilityProvider(&builtinAofProvider);
+        registerDurabilityProvider(&builtinReplicationProvider);
     }
 }
 

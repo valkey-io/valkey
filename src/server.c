@@ -2140,6 +2140,7 @@ void createSharedObjects(void) {
     shared.oomerr = createSharedString("-OOM command not allowed when used memory > 'maxmemory'.\r\n");
     shared.execaborterr = createSharedString("-EXECABORT Transaction discarded because of previous errors.\r\n");
     shared.noreplicaserr = createSharedString("-NOREPLICAS Not enough good replicas to write.\r\n");
+    shared.nosyncreplicas = createSharedString("-CLUSTERDOWN Not enough sync replicas to accept writes.\r\n");
     shared.busykeyerr = createSharedString("-BUSYKEY Target key name already exists.\r\n");
 
     /* The shared NULL depends on the protocol version. */
@@ -2230,6 +2231,7 @@ void createSharedObjects(void) {
     shared.load = createSharedString("LOAD");
     shared.createconsumer = createSharedString("CREATECONSUMER");
     shared.getack = createSharedString("GETACK");
+    shared.commit = createSharedString("commit");
     shared.special_asterisk = createSharedString("*");
     shared.special_equals = createSharedString("=");
     shared.redacted = createSharedString("(redacted)");
@@ -4501,6 +4503,13 @@ int processCommand(client *c) {
      * user configured the min-replicas-to-write option. */
     if (is_write_command && !checkGoodReplicasStatus()) {
         rejectCommand(c, shared.noreplicaserr);
+        return C_OK;
+    }
+
+    /* Don't accept write commands if there are not enough sync replicas
+     * in the ISR and user configured min-sync-replicas. */
+    if (is_write_command && !checkSyncReplicasStatus()) {
+        rejectCommand(c, shared.nosyncreplicas);
         return C_OK;
     }
 

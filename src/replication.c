@@ -1444,6 +1444,8 @@ void replconfCommand(client *c) {
                 }
             } else if (!strcasecmp(objectGetVal(c->argv[j + 1]), REPLICA_CAPA_SKIP_RDB_CHECKSUM_STR))
                 c->repl_data->replica_capa |= REPLICA_CAPA_SKIP_RDB_CHECKSUM;
+            else if (!strcasecmp(objectGetVal(c->argv[j + 1]), "sync-replica"))
+                c->repl_data->replica_capa |= REPLICA_CAPA_SYNC;
         } else if (!strcasecmp(objectGetVal(c->argv[j]), "ack")) {
             /* REPLCONF ACK is used by replica to inform the primary the amount
              * of replication stream that it processed so far. It is an
@@ -1458,6 +1460,22 @@ void replconfCommand(client *c) {
                 if (offset > c->repl_data->repl_aof_off) c->repl_data->repl_aof_off = offset;
             }
             c->repl_data->repl_ack_time = server.unixtime;
+
+            /* Sync replica ISR promotion: if this replica has the SYNC capability
+             * and its ack offset has caught up to the committed offset, promote
+             * it to the in-sync replica group (ISR). The committed offset is
+             * tracked as previous_acked_offset in the durability subsystem. */
+            if ((c->repl_data->replica_capa & REPLICA_CAPA_SYNC) &&
+                !c->repl_data->is_in_sync &&
+                c->repl_data->repl_state == REPLICA_STATE_ONLINE &&
+                c->repl_data->repl_ack_off >= server.durability.previous_acked_offset) {
+                c->repl_data->is_in_sync = 1;
+                serverLog(LL_NOTICE, "Replica %s promoted to ISR (ack_off=%lld, committed_offset=%lld)",
+                          replicationGetReplicaName(c),
+                          c->repl_data->repl_ack_off,
+                          server.durability.previous_acked_offset);
+            }
+
             /* If this was a diskless replication, we need to really put
              * the replica online when the first ACK is received (which
              * confirms replica is online and ready to get more data). This
@@ -1479,6 +1497,20 @@ void replconfCommand(client *c) {
             /* REPLCONF GETACK is used in order to request an ACK ASAP
              * to the replica. */
             if (server.primary_host && server.primary) replicationSendAck();
+            return;
+        } else if (!strcasecmp(objectGetVal(c->argv[j]), "commit")) {
+            /* REPLCONF COMMIT <offset> is sent by the primary to inform
+             * replicas of the current committed (durable) offset. This
+             * is the highest offset that has been acknowledged by all
+             * required sync replicas on the primary side. */
+            serverAssert(server.primary != NULL);
+             long long offset;
+            if ((getLongLongFromObject(c->argv[j + 1], &offset) != C_OK)) return;
+            if (offset > server.durability.previous_acked_offset) {
+                server.durability.previous_acked_offset = offset;
+            }
+            /* This command does not reply anything — it is injected
+             * into the replication stream like PING and GETACK. */
             return;
         } else if (!strcasecmp(objectGetVal(c->argv[j]), "rdb-only")) {
             /* REPLCONF RDB-ONLY is used to identify the client only wants
@@ -3841,8 +3873,8 @@ int syncWithPrimaryHandleSendHandshakeState(connection *conn) {
 
     // we can ignore primary's conditions when sending capa (is_primary_stream_verified=1)
     int send_skip_rdb_checksum_capa = replicationSupportSkipRDBChecksum(conn, useDisklessLoad(), 1);
-    char *argv[9] = {"REPLCONF", "capa", "eof", "capa", "psync2", NULL, NULL, NULL, NULL};
-    size_t lens[9] = {8, 4, 3, 4, 6, 0, 0, 0, 0};
+    char *argv[11] = {"REPLCONF", "capa", "eof", "capa", "psync2", NULL, NULL, NULL, NULL, NULL, NULL};
+    size_t lens[11] = {8, 4, 3, 4, 6, 0, 0, 0, 0, 0, 0};
     int argc = 5;
     if (send_skip_rdb_checksum_capa) {
         argv[argc] = "capa";
@@ -3858,6 +3890,14 @@ int syncWithPrimaryHandleSendHandshakeState(connection *conn) {
         argc++;
         argv[argc] = "dual-channel";
         lens[argc] = strlen("dual-channel");
+        argc++;
+    }
+    if (server.sync_replication_enabled && server.sync_eligible) {
+        argv[argc] = "capa";
+        lens[argc] = strlen("capa");
+        argc++;
+        argv[argc] = "sync-replica";
+        lens[argc] = strlen("sync-replica");
         argc++;
     }
     err = sendCommandArgv(conn, argc, argv, lens);
@@ -4914,6 +4954,45 @@ int checkGoodReplicasStatus(void) {
            server.repl_good_replicas_count >= server.repl_min_replicas_to_write; /* check if we have enough replicas */
 }
 
+/* Return true if we have enough sync replicas in the ISR to accept writes.
+ * When min-sync-replicas is 0 (disabled), always returns true.
+ * When this node is a replica (has primary_host), always returns true. */
+int checkSyncReplicasStatus(void) {
+    if (server.primary_host) return 1;  /* Not a primary — OK */
+    if (server.min_sync_replicas <= 0) return 1; /* Feature disabled — OK */
+
+    listIter li;
+    listNode *ln;
+    int isr_count = 0;
+
+    listRewind(server.replicas, &li);
+    while ((ln = listNext(&li))) {
+        client *replica = ln->value;
+        if (replica->repl_data->repl_state == REPLICA_STATE_ONLINE &&
+            replica->repl_data->is_in_sync) {
+            isr_count++;
+        }
+    }
+    return isr_count >= server.min_sync_replicas;
+}
+
+/* Return the number of sync replicas currently in the ISR. */
+int getSyncReplicaCount(void) {
+    listIter li;
+    listNode *ln;
+    int count = 0;
+
+    listRewind(server.replicas, &li);
+    while ((ln = listNext(&li))) {
+        client *replica = ln->value;
+        if (replica->repl_data->repl_state == REPLICA_STATE_ONLINE &&
+            replica->repl_data->is_in_sync) {
+            count++;
+        }
+    }
+    return count;
+}
+
 /* ----------------------- SYNCHRONOUS REPLICATION --------------------------
  * Synchronous replication design can be summarized in points:
  *
@@ -5288,6 +5367,19 @@ void replicationCron(void) {
         }
     }
 
+    /* Send the committed offset to replicas so they know which data
+     * has been durably committed. This is used by the sync replication
+     * protocol — replicas use this to know what data is safe. */
+    if (server.min_sync_replicas > 0 && listLength(server.replicas) &&
+        server.durability.previous_acked_offset > 0) {
+        robj *commit_argv[3];
+        commit_argv[0] = shared.replconf;
+        commit_argv[1] = shared.commit;
+        commit_argv[2] = createObject(OBJ_STRING, sdsfromlonglong(server.durability.previous_acked_offset));
+        replicationFeedReplicas(-1, commit_argv, 3);
+        decrRefCount(commit_argv[2]);
+    }
+
     /* Second, send a newline to all the replicas in pre-synchronization
      * stage, that is, replicas waiting for the primary to create the RDB file.
      *
@@ -5312,6 +5404,29 @@ void replicationCron(void) {
 
         if (is_presync) {
             connWrite(replica->conn, "\n", 1);
+        }
+    }
+
+    /* Remove sync replicas from ISR if they haven't ACKed within the
+     * ISR timeout. #todo: @spaneru to expand this when lease mechanism is implemented */
+    if (server.sync_replication_enabled && getSyncReplicaCount() > 0) {
+        listIter li;
+        listNode *ln;
+
+        listRewind(server.replicas, &li);
+        while ((ln = listNext(&li))) {
+            client *replica = ln->value;
+
+            if (!replica->repl_data->is_in_sync) continue;
+
+            time_t last_ack_age = server.unixtime - replica->repl_data->repl_ack_time;
+            if (last_ack_age > REPLICA_ISR_TIMEOUT) {
+                replica->repl_data->is_in_sync = 0;
+                serverLog(LL_WARNING,
+                          "Removing replica %s from ISR: no ACK for %ld seconds (timeout=%d)",
+                          replicationGetReplicaName(replica),
+                          (long)last_ack_age, REPLICA_ISR_TIMEOUT);
+            }
         }
     }
 

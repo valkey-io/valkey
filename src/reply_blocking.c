@@ -769,14 +769,18 @@ sds genDurabilityInfoString(sds info) {
                         "durability_write_blocked_count:%lld\r\n"
                         "durability_clients_waiting_ack:%lu\r\n"
                         "durability_uncommitted_keys:%llu\r\n"
-                        "durability_previous_acked_offset:%lld\r\n"
-                        "durability_primary_repl_offset:%lld\r\n",
+                        "durability_committed_offset:%lld\r\n"
+                        "durability_primary_repl_offset:%lld\r\n"
+                        "durability_sync_replicas:%d\r\n"
+                        "durability_min_sync_replicas:%d\r\n",
                         server.durability.read_responses_blocked,
                         server.durability.write_responses_blocked,
                         listLength(server.durability.clients_waiting_ack),
                         getNumberOfUncommittedKeys(),
                         server.durability.previous_acked_offset,
-                        server.primary_repl_offset);
+                        server.primary_repl_offset,
+                        getSyncReplicaCount(),
+                        server.min_sync_replicas);
 
     return info;
 }

@@ -754,7 +754,7 @@ foreach provider_mode {aof} {
                 set info [$primary info all]
                 assert_match "*durability_enabled:1*" $info
                 assert_match "*durability_primary_repl_offset:*" $info
-                assert_match "*durability_previous_acked_offset:*" $info
+                assert_match "*durability_committed_offset:*" $info
             }
 
             # ==================== Client tracking invalidation (deferred tasks) ====================

@@ -492,6 +492,7 @@ typedef enum {
 #define REPLICA_CAPA_PSYNC2 (1 << 1)            /* Supports PSYNC2 protocol. */
 #define REPLICA_CAPA_DUAL_CHANNEL (1 << 2)      /* Supports dual channel replication sync */
 #define REPLICA_CAPA_SKIP_RDB_CHECKSUM (1 << 3) /* Supports skipping RDB checksum for sync requests. */
+#define REPLICA_CAPA_SYNC (1 << 4)              /* Replica participates in sync replication (ISR member). */
 
 /* Replica capability strings */
 #define REPLICA_CAPA_SKIP_RDB_CHECKSUM_STR "skip-rdb-checksum" /* Supports skipping RDB checksum for sync requests. */
@@ -506,6 +507,10 @@ typedef enum {
 
 /* Synchronous read timeout - replica side */
 #define CONFIG_REPL_SYNCIO_TIMEOUT 5
+
+/* ISR (in-sync replica) timeout in seconds. If a sync replica has not
+ * sent a REPLCONF ACK within this period, it is removed from the ISR. */
+#define REPLICA_ISR_TIMEOUT 10
 
 /* The default number of replication backlog blocks to trim per call. */
 #define REPL_BACKLOG_TRIM_BLOCKS_PER_CALL 64
@@ -1284,6 +1289,10 @@ typedef struct ClientReplicationData {
     int replica_version;                 /* Version on the form 0xMMmmpp. */
     short replica_capa;                  /* Replica capabilities: REPLICA_CAPA_* bitwise OR. */
     short replica_req;                   /* Replica requirements: REPLICA_REQ_* */
+    int is_in_sync;                      /* Runtime flag: 1 if this replica is in the ISR
+                                            (in-sync replica group). Set by primary when
+                                            repl_ack_off >= committed_offset for a
+                                            REPLICA_CAPA_SYNC replica. Cleared on timeout. */
     uint64_t associated_rdb_client_id;   /* The client id of this replica's rdb connection */
     time_t rdb_client_disconnect_time;   /* Time of the first freeClient call on this client. Used for delaying free. */
     listNode *ref_repl_buf_node;         /* Referenced node of replication buffer blocks,
@@ -1510,11 +1519,11 @@ struct sharedObjectsStruct {
         *loadingerr, *slowevalerr, *slowscripterr, *slowmoduleerr, *bgsaveerr, *primarydownerr, *roreplicaerr,
         *loadingerr_variants[2], *slowevalerr_variants[2], *slowscripterr_variants[2], *slowmoduleerr_variants[2],
         *bgsaveerr_variants[2],
-        *execaborterr, *noautherr, *noreplicaserr, *busykeyerr, *oomerr, *plus, *messagebulk, *pmessagebulk,
+        *execaborterr, *noautherr, *noreplicaserr, *nosyncreplicas, *busykeyerr, *oomerr, *plus, *messagebulk, *pmessagebulk,
         *subscribebulk, *unsubscribebulk, *psubscribebulk, *punsubscribebulk, *del, *unlink, *rpop, *lpop, *lpush, *zadd,
         *rpoplpush, *lmove, *blmove, *zpopmin, *zpopmax, *emptyscan, *multi, *exec, *left, *right, *hset, *hsetex, *hdel, *hpexpireat, *hpersist, *srem,
         *xgroup, *xclaim, *script, *replconf, *eval, *cluster, *syncslots, *persist, *set, *pexpireat, *pexpire, *time, *pxat, *absttl,
-        *retrycount, *force, *justid, *entriesread, *lastid, *ping, *setid, *keepttl, *load, *createconsumer, *getack,
+        *retrycount, *force, *justid, *entriesread, *lastid, *ping, *setid, *keepttl, *load, *createconsumer, *commit, *getack,
         *special_asterisk, *special_equals, *default_username, *redacted, *ssubscribebulk, *sunsubscribebulk, *fields,
         *finish, *state, *success, *failed, *name, *message,
         *smessagebulk, *select[PROTO_SHARED_SELECT_CMDS], *integers[OBJ_SHARED_INTEGERS],
@@ -2165,6 +2174,11 @@ struct valkeyServer {
     int repl_min_replicas_to_write;             /* Min number of replicas to write. */
     int repl_min_replicas_max_lag;              /* Max lag of <count> replicas to write. */
     int repl_good_replicas_count;               /* Number of replicas with lag <= max_lag. */
+    int min_sync_replicas;                      /* Min number of sync replicas required to accept writes. */
+    int sync_replication_enabled;               /* If true, this node participates in sync replication.
+                                                   Replicas send REPLCONF capa sync-replica during handshake. */
+    int sync_eligible;                          /* If true, this replica is eligible to join the ISR.
+                                                   Must be combined with sync_replication_enabled. */
     int repl_diskless_sync;                     /* Primary send RDB to replicas sockets directly. */
     int repl_diskless_load;                     /* Replica parse RDB directly from the socket.
                                                  * see REPL_DISKLESS_LOAD_* enum */
@@ -3232,6 +3246,8 @@ void replicationSetPrimary(char *ip, int port, int full_sync_required, bool disc
 void replicationUnsetPrimary(void);
 void refreshGoodReplicasCount(void);
 int checkGoodReplicasStatus(void);
+int checkSyncReplicasStatus(void);
+int getSyncReplicaCount(void);
 void processClientsWaitingReplicas(void);
 void unblockClientWaitingReplicas(client *c);
 int replicationCountAcksByOffset(long long offset);

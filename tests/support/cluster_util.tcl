@@ -272,7 +272,6 @@ proc start_cluster {masters replicas options code {slot_allocator continuous_slo
     set setup_code [list cluster_setup $masters $replicas $node_count $slot_allocator $replica_allocator $options]
     set teardown_code {}
     set code [list test_fixture "start_cluster" $setup_code $teardown_code $code]
-    #set code [list cluster_setup_then_test $masters $replicas $node_count $slot_allocator $replica_allocator $code $options]
 
     # Configure the starting of multiple servers. Set cluster node timeout
     # aggressively since many tests depend on ping/pong messages.

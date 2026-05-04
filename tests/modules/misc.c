@@ -194,6 +194,7 @@ int test_getlru(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc)
         return VALKEYMODULE_OK;
     }
     ValkeyModuleKey *key = open_key_or_reply(ctx, argv[1], VALKEYMODULE_READ|VALKEYMODULE_OPEN_KEY_NOTOUCH);
+    if (!key) return VALKEYMODULE_OK;
     mstime_t lru;
     ValkeyModule_GetLRU(key, &lru);
     ValkeyModule_ReplyWithLongLong(ctx, lru);
@@ -208,6 +209,7 @@ int test_setlru(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc)
         return VALKEYMODULE_OK;
     }
     ValkeyModuleKey *key = open_key_or_reply(ctx, argv[1], VALKEYMODULE_READ|VALKEYMODULE_OPEN_KEY_NOTOUCH);
+    if (!key) return VALKEYMODULE_OK;
     mstime_t lru;
     if (ValkeyModule_StringToLongLong(argv[2], &lru) != VALKEYMODULE_OK) {
         ValkeyModule_ReplyWithError(ctx, "invalid idle time");
@@ -226,6 +228,7 @@ int test_getlfu(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc)
         return VALKEYMODULE_OK;
     }
     ValkeyModuleKey *key = open_key_or_reply(ctx, argv[1], VALKEYMODULE_READ|VALKEYMODULE_OPEN_KEY_NOTOUCH);
+    if (!key) return VALKEYMODULE_OK;
     mstime_t lfu;
     ValkeyModule_GetLFU(key, &lfu);
     ValkeyModule_ReplyWithLongLong(ctx, lfu);
@@ -240,6 +243,7 @@ int test_setlfu(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc)
         return VALKEYMODULE_OK;
     }
     ValkeyModuleKey *key = open_key_or_reply(ctx, argv[1], VALKEYMODULE_READ|VALKEYMODULE_OPEN_KEY_NOTOUCH);
+    if (!key) return VALKEYMODULE_OK;
     mstime_t lfu;
     if (ValkeyModule_StringToLongLong(argv[2], &lfu) != VALKEYMODULE_OK) {
         ValkeyModule_ReplyWithError(ctx, "invalid freq");

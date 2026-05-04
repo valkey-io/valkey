@@ -120,7 +120,7 @@ static void addUncommittedKey(const sds key, const long long offset, hashtable *
  * key from uncommitted keys set if the replication offset has been committed.
  */
 long long durabilityPurgeAndGetUncommittedKeyOffset(const sds key, serverDb *db) {
-    serverAssert(iAmPrimary());
+    // serverAssert(iAmPrimary());
     uncommittedKeyEntry *entry = NULL;
     if (!hashtableFind(db->uncommitted_keys, key, (void **)&entry)) {
         return -1;
@@ -170,8 +170,16 @@ void handleUncommittedKeyForClient(const client *c, robj *key, serverDb *db) {
         dirty_key->uncommitted_keys = db->uncommitted_keys;
         listAddNodeTail(pending_uncommitted_keys, dirty_key);
     } else {
-        /* Single command: mark dirty with real offset */
-        addUncommittedKey(keystr, server.primary_repl_offset, db->uncommitted_keys);
+
+         /* [WBL] - On a replica, primary_repl_offset doesn't advance for
+         * commands from the replication stream. Use the primary
+         * client's applied replication offset instead. */
+        long long offset = server.primary_repl_offset;
+        if (server.primary != NULL && server.current_client != NULL &&
+            server.current_client->flag.primary) {
+            offset = server.primary->repl_data->reploff;
+        }
+        addUncommittedKey(keystr, offset, db->uncommitted_keys);
     }
 }
 

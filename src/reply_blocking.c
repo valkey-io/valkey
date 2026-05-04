@@ -136,12 +136,15 @@ static bool isClientDoingTransaction(client *c) {
 }
 
 /**
- * Returns true if the client is eligible for keyspace tracking on a primary node.
+ * Returns true if the client is eligible for response tracking.
+ * [WBL] On a replica, the primary's replication connection must NOT be tracked —
+ * blocking it would stall the replication stream.
  */
 static bool clientEligibleForResponseTracking(client *c) {
-    serverAssert(iAmPrimary());
-
     if (c->cmd == NULL) return false;
+
+    /* [WBL] Never block the replication stream from the primary. */
+    if (c->flag.primary) return false;
 
     bool is_keyspace_informational_cmd = IS_KEYSPACE_INFORMATIONAL(c->cmd);
 
@@ -286,7 +289,7 @@ static int isBlockingNeededForOffset(const client *c, const long long offset) {
  * Block a given client on the specified replication offset if applicable.
  */
 void blockClientOnReplOffset(client *c, const long long blockingReplOffset) {
-    serverAssert(isPrimaryDurabilityEnabled());
+    serverAssert(isDurabilityEnabled());
 
     if (isBlockingNeededForOffset(c, blockingReplOffset)) {
         serverLog(LL_DEBUG, "client should be blocked at offset %lld, cmd=%s, is_write=%d",
@@ -371,7 +374,7 @@ void unblockResponsesWithAckOffset(const durable_t *durability, const long long 
 /*================================= Post-ack handlers ======================= */
 
 void notifyDurabilityProgress(void) {
-    if (!isPrimaryDurabilityEnabled()) {
+    if (!isDurabilityEnabled()) {
         return;
     }
 
@@ -526,7 +529,7 @@ static long long getSingleCommandBlockingOffsetForNonReplicatingCommand(client *
  * Process a single command for consistent write blocking.
  */
 static long long getSingleCommandBlockingOffsetForConsistentWrites(struct client *c) {
-    serverAssert(isPrimaryDurabilityEnabled());
+    serverAssert(isDurabilityEnabled());
 
     if (!anyDurabilityProviderEnabled())
         return -1;
@@ -539,6 +542,15 @@ static long long getSingleCommandBlockingOffsetForConsistentWrites(struct client
         blocking_repl_offset = server.primary_repl_offset;
     } else if ((server.primary_repl_offset > server.durability.pre_call_replication_offset) || (server.also_propagate.numops > server.durability.pre_call_num_ops_pending_propagation)) {
         blocking_repl_offset = getSingleCommandBlockingOffsetForReplicatingCommand(c);
+    } else if (c->flag.primary && (c->cmd->flags & CMD_WRITE)) {
+        /* [WBL] On a replica, write commands from the replication stream don't
+         * advance primary_repl_offset (no sub-replicas), but we still
+         * need to track their keys as uncommitted until REPLCONF COMMIT
+         * confirms the offset. Call the replicating-command path to
+         * register the keys, but return -1 so we don't block the
+         * replication stream client itself. */
+        getSingleCommandBlockingOffsetForReplicatingCommand(c);
+        blocking_repl_offset = -1;
     } else {
         blocking_repl_offset = getSingleCommandBlockingOffsetForNonReplicatingCommand(c);
     }
@@ -567,7 +579,7 @@ static void durabilitySetClientCmdFlags(client *c) {
  * Record the starting replication offset of the command about to be executed.
  */
 void beforeCommandTrackReplOffset(struct client *c) {
-    if (!isPrimaryDurabilityEnabled()) return;
+    if (!isDurabilityEnabled()) return;
 
     durabilitySetClientCmdFlags(c);
 
@@ -589,7 +601,7 @@ static bool isClientBlockedByModule(struct client *c) {
  */
 void afterCommandTrackReplOffset(client *c) {
     serverLog(LL_DEBUG, "afterCommandTrackReplOffset entered for command '%s'", c->cmd->declared_name);
-    if (!isPrimaryDurabilityEnabled() || (c->flag.blocked && !isClientBlockedByModule(c)))
+    if (!isDurabilityEnabled() || (c->flag.blocked && !isClientBlockedByModule(c)))
         return;
 
     long long current_cmd_blocking_offset = getSingleCommandBlockingOffsetForConsistentWrites(c);
@@ -615,7 +627,7 @@ int preCommandExec(client *c) {
     c->clientDurabilityInfo.current_command_repl_offset = -1;
     c->clientDurabilityInfo.module_cmd_blocking_offset = -1;
 
-    if (iAmPrimary() && clientEligibleForResponseTracking(c)) {
+    if (isDurabilityEnabled() && clientEligibleForResponseTracking(c)) {
         trackCommandPreExecutionPosition(c);
 
         if (isCommandReplicatedToMonitors()) {
@@ -637,7 +649,7 @@ int preCommandExec(client *c) {
  * Perform post-processing after command execution for a given client.
  */
 void postCommandExec(client *c) {
-    if (!isPrimaryDurabilityEnabled() || c->cmd == NULL || c->flag.multi) {
+    if (!isDurabilityEnabled() || c->cmd == NULL || c->flag.multi) {
         return;
     }
 

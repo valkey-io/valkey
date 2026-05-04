@@ -2174,11 +2174,10 @@ struct valkeyServer {
     int repl_min_replicas_to_write;             /* Min number of replicas to write. */
     int repl_min_replicas_max_lag;              /* Max lag of <count> replicas to write. */
     int repl_good_replicas_count;               /* Number of replicas with lag <= max_lag. */
-    int min_sync_replicas;                      /* Min number of sync replicas required to accept writes. */
-    int sync_replication_enabled;               /* If true, this node participates in sync replication.
-                                                   Replicas send REPLCONF capa sync-replica during handshake. */
+    int min_sync_replicas;                      /* Min number of sync replicas required to accept writes.
+                                                   When > 0, sync replication is enabled. */
     int sync_eligible;                          /* If true, this replica is eligible to join the ISR.
-                                                   Must be combined with sync_replication_enabled. */
+                                                   Only meaningful when min_sync_replicas > 0. */
     int repl_diskless_sync;                     /* Primary send RDB to replicas sockets directly. */
     int repl_diskless_load;                     /* Replica parse RDB directly from the socket.
                                                  * see REPL_DISKLESS_LOAD_* enum */

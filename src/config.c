@@ -2590,14 +2590,6 @@ static int updateGoodReplicas(const char **err) {
     return 1;
 }
 
-static int updateMinSyncReplicas(const char **err) {
-    UNUSED(err);
-    /* Toggling min-sync-replicas may enable or disable the replication
-     * durability provider, so re-initialize durability state for all clients. */
-    durabilityReset();
-    return 1;
-}
-
 static int updateWatchdogPeriod(const char **err) {
     UNUSED(err);
     applyWatchdogPeriod();
@@ -3273,7 +3265,6 @@ standardConfig static_configs[] = {
     createBoolConfig("repl-mptcp", NULL, IMMUTABLE_CONFIG, server.repl_mptcp, 0, isValidMptcp, NULL),
     createBoolConfig("repl-diskless-sync", NULL, DEBUG_CONFIG | MODIFIABLE_CONFIG, server.repl_diskless_sync, 1, NULL, NULL),
     createBoolConfig("dual-channel-replication-enabled", NULL, DEBUG_CONFIG | MODIFIABLE_CONFIG, server.dual_channel_replication, 0, NULL, NULL),
-    createBoolConfig("sync-replication-enabled", NULL, IMMUTABLE_CONFIG, server.sync_replication_enabled, 0, NULL, NULL),
     createBoolConfig("sync-eligible", NULL, MODIFIABLE_CONFIG, server.sync_eligible, 0, NULL, NULL),
     createBoolConfig("aof-rewrite-incremental-fsync", NULL, MODIFIABLE_CONFIG, server.aof_rewrite_incremental_fsync, 1, NULL, NULL),
     createBoolConfig("no-appendfsync-on-rewrite", NULL, MODIFIABLE_CONFIG, server.aof_no_fsync_on_rewrite, 0, NULL, NULL),
@@ -3413,7 +3404,7 @@ standardConfig static_configs[] = {
     createIntConfig("hz", NULL, MODIFIABLE_CONFIG, 0, INT_MAX, server.hz, CONFIG_DEFAULT_HZ, INTEGER_CONFIG, NULL, updateHZ),
     createIntConfig("min-replicas-to-write", "min-slaves-to-write", MODIFIABLE_CONFIG, 0, INT_MAX, server.repl_min_replicas_to_write, 0, INTEGER_CONFIG, NULL, updateGoodReplicas),
     createIntConfig("min-replicas-max-lag", "min-slaves-max-lag", MODIFIABLE_CONFIG, 0, INT_MAX, server.repl_min_replicas_max_lag, 10, INTEGER_CONFIG, NULL, updateGoodReplicas),
-    createIntConfig("min-sync-replicas", NULL, IMMUTABLE_CONFIG, 0, INT_MAX, server.min_sync_replicas, 0, INTEGER_CONFIG, NULL, updateMinSyncReplicas),
+    createIntConfig("min-sync-replicas", NULL, IMMUTABLE_CONFIG, 0, 6, server.min_sync_replicas, 0, INTEGER_CONFIG, NULL, NULL),
     createIntConfig("watchdog-period", NULL, MODIFIABLE_CONFIG | HIDDEN_CONFIG, 0, INT_MAX, server.watchdog_period, 0, INTEGER_CONFIG, NULL, updateWatchdogPeriod),
     createIntConfig("shutdown-timeout", NULL, MODIFIABLE_CONFIG, 0, INT_MAX, server.shutdown_timeout, 10, INTEGER_CONFIG, NULL, NULL),
     createIntConfig("repl-diskless-sync-max-replicas", NULL, MODIFIABLE_CONFIG, 0, INT_MAX, server.repl_diskless_sync_max_replicas, 0, INTEGER_CONFIG, NULL, NULL),

@@ -88,7 +88,7 @@ static durabilityProvider builtinAofProvider = {
  * min-sync-replicas sync replicas (replicas with REPLICA_CAPA_SYNC flag).
  */
 static bool replicationProviderIsEnabled(void) {
-    return server.sync_replication_enabled == 1;
+    return server.min_sync_replicas > 0;
 }
 
 /**

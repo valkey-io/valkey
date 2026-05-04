@@ -21,6 +21,7 @@ typedef struct clusterBusType {
     void (*initLast)(void);
     void (*cron)(void);
     void (*beforeSleep)(void);
+    void (*prepareShutdown)(void); /* Called early in shutdown to allow graceful handoff. */
     void (*handleServerShutdown)(void);
 
     /* Cluster link message handling — called from cluster_link.c */

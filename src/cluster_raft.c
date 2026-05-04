@@ -1783,6 +1783,39 @@ static void clusterRaftBeforeSleep(void) {
     }
 }
 
+static void clusterRaftPrepareShutdown(void) {
+    clusterRaftState *rs = RAFT_STATE();
+    if (rs->role != RAFT_ROLE_LEADER || server.cluster->size <= 1) return;
+
+    /* Find the follower with the highest match_index. */
+    clusterNode *best = NULL;
+    uint64_t best_match = 0;
+    dictIterator *di = dictGetSafeIterator(server.cluster->nodes);
+    dictEntry *de;
+    while ((de = dictNext(di)) != NULL) {
+        clusterNode *node = dictGetVal(de);
+        if (node == myself || !node->link) continue;
+        if (nodeFailed(node)) continue;
+        if (node->flags & (CLUSTER_NODE_MEET | CLUSTER_NODE_HANDSHAKE)) continue;
+        uint64_t mi = RAFT_DATA(node)->peer.match_index;
+        if (!best || mi > best_match) {
+            best = node;
+            best_match = mi;
+        }
+    }
+    dictReleaseIterator(di);
+    if (best) {
+        sds msg = wireNewMsg("TIMEOUT_NOW");
+        msg = sdscatfmt(msg, " %U", (unsigned long long)rs->current_term);
+        msg = wireFinishMsg(msg);
+        clusterRaftSendMsg(best->link, msg);
+        /* Flush immediately so the message reaches the target even if
+         * the server exits right after (SHUTDOWN NOW). */
+        clusterWriteHandler(best->link->conn);
+        serverLog(LL_NOTICE, "Leadership transfer: sent TIMEOUT_NOW to %.40s.", best->name);
+    }
+}
+
 static void clusterRaftHandleServerShutdown(void) {
     clusterRaftState *rs = RAFT_STATE();
     /* Free pending proposals. */
@@ -1865,6 +1898,15 @@ static int clusterRaftProcessMessage(struct clusterLink *link) {
         ret = clusterRaftProcessRequestVote(link, argc, argv);
     } else if (!strcasecmp(argv[0], "VOTE")) {
         ret = clusterRaftProcessRequestVoteResponse(link, argc, argv);
+    } else if (!strcasecmp(argv[0], "TIMEOUT_NOW") && argc >= 2) {
+        /* Leader transfer: immediately start an election. */
+        uint64_t term = strtoull(argv[1], NULL, 10);
+        clusterRaftState *rs = RAFT_STATE();
+        if (term >= rs->current_term && rs->role == RAFT_ROLE_FOLLOWER) {
+            serverLog(LL_NOTICE, "Received TIMEOUT_NOW (term %llu), starting election.",
+                      (unsigned long long)term);
+            clusterRaftStartElection(rs);
+        }
     } else if (!strcasecmp(argv[0], "FAILOVER_PREPARE")) {
         /* Primary side: pause writes for coordinated failover. */
         if (link->node && nodeIsReplica(link->node) && link->node->replicaof == myself) {
@@ -2652,6 +2694,7 @@ clusterBusType clusterRaftBus = {
     .initLast = clusterRaftInitLast,
     .cron = clusterRaftCron,
     .beforeSleep = clusterRaftBeforeSleep,
+    .prepareShutdown = clusterRaftPrepareShutdown,
     .handleServerShutdown = clusterRaftHandleServerShutdown,
     .validateMessageHeader = clusterRaftValidateMessageHeader,
     .processMessage = clusterRaftProcessMessage,

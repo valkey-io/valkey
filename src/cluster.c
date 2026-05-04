@@ -211,6 +211,10 @@ static void clusterAutoFailoverOnShutdown(void) {
     serverLog(LL_NOTICE, "Perform auto failover to replica %s on shutdown.", best_replica->repl_data->replica_nodeid);
 }
 
+void clusterPrepareShutdown(void) {
+    if (clusterCurrentBus->prepareShutdown) clusterCurrentBus->prepareShutdown();
+}
+
 void clusterHandleServerShutdown(bool auto_failover) {
     if (auto_failover) clusterAutoFailoverOnShutdown();
     clusterCurrentBus->handleServerShutdown();

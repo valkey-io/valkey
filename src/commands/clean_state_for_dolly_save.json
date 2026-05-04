@@ -1,0 +1,19 @@
+{
+    "CLEAN_STATE_FOR_DOLLY_SAVE": {
+        "summary": "Clears machine-identity state before a CRIU snapshot for migration.",
+        "complexity": "O(N) where N is the number of known cluster nodes.",
+        "group": "server",
+        "since": "8.2.0",
+        "arity": 1,
+        "function": "cleanStateForDollySaveCommand",
+        "command_flags": [
+            "ADMIN",
+            "NOSCRIPT",
+            "LOADING",
+            "STALE"
+        ],
+        "reply_schema": {
+            "const": "OK"
+        }
+    }
+}

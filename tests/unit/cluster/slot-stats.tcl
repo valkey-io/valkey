@@ -144,7 +144,7 @@ proc wait_for_replica_key_exists {key key_count} {
 # Test cases for CLUSTER SLOT-STATS cpu-usec metric correctness.
 # -----------------------------------------------------------------------------
 
-start_cluster 1 0 {tags {external:skip cluster cluster-v2:skip} overrides {cluster-slot-stats-enabled yes}} {
+start_cluster 1 0 {tags {external:skip cluster} overrides {cluster-slot-stats-enabled yes}} {
 
     # Define shared variables.
     set key "FOO"
@@ -346,7 +346,7 @@ start_cluster 1 0 {tags {external:skip cluster cluster-v2:skip} overrides {clust
 # Test cases for CLUSTER SLOT-STATS network-bytes-in.
 # -----------------------------------------------------------------------------
 
-start_cluster 1 0 {tags {external:skip cluster cluster-v2:skip} overrides {cluster-slot-stats-enabled yes}} {
+start_cluster 1 0 {tags {external:skip cluster} overrides {cluster-slot-stats-enabled yes}} {
 
     # Define shared variables.
     set key "key"
@@ -458,7 +458,7 @@ start_cluster 1 0 {tags {external:skip cluster cluster-v2:skip} overrides {clust
     R 0 FLUSHALL
 }
 
-start_cluster 1 1 {tags {external:skip cluster cluster-v2:skip} overrides {cluster-slot-stats-enabled yes}} {
+start_cluster 1 1 {tags {external:skip cluster} overrides {cluster-slot-stats-enabled yes}} {
     set channel "channel"
     set key_slot [R 0 cluster keyslot $channel]
     set metrics_to_assert [list network-bytes-in]
@@ -506,7 +506,7 @@ start_cluster 1 1 {tags {external:skip cluster cluster-v2:skip} overrides {clust
 # Test cases for CLUSTER SLOT-STATS network-bytes-out correctness.
 # -----------------------------------------------------------------------------
 
-start_cluster 1 0 {tags {external:skip cluster cluster-v2:skip}} {
+start_cluster 1 0 {tags {external:skip cluster}} {
     # Define shared variables.
     set key "FOO"
     set key_slot [R 0 cluster keyslot $key]
@@ -588,7 +588,7 @@ start_cluster 1 0 {tags {external:skip cluster cluster-v2:skip}} {
     R 0 FLUSHALL
 }
 
-start_cluster 1 1 {tags {external:skip cluster cluster-v2:skip}} {
+start_cluster 1 1 {tags {external:skip cluster}} {
 
     # Define shared variables.
     set key "FOO"
@@ -619,7 +619,7 @@ start_cluster 1 1 {tags {external:skip cluster cluster-v2:skip}} {
     }
 }
 
-start_cluster 1 1 {tags {external:skip cluster cluster-v2:skip}} {
+start_cluster 1 1 {tags {external:skip cluster}} {
 
     # Define shared variables.
     set channel "channel"
@@ -711,7 +711,7 @@ start_cluster 1 1 {tags {external:skip cluster cluster-v2:skip}} {
 # Test cases for CLUSTER SLOT-STATS key-count metric correctness.
 # -----------------------------------------------------------------------------
 
-start_cluster 1 0 {tags {external:skip cluster cluster-v2:skip} overrides {cluster-slot-stats-enabled yes}} {
+start_cluster 1 0 {tags {external:skip cluster} overrides {cluster-slot-stats-enabled yes}} {
 
     # Define shared variables.
     set key "FOO"
@@ -768,7 +768,7 @@ start_cluster 1 0 {tags {external:skip cluster cluster-v2:skip} overrides {clust
 # Test cases for CLUSTER SLOT-STATS SLOTSRANGE sub-argument.
 # -----------------------------------------------------------------------------
 
-start_cluster 1 0 {tags {external:skip cluster cluster-v2:skip}} {
+start_cluster 1 0 {tags {external:skip cluster}} {
 
     test "CLUSTER SLOT-STATS SLOTSRANGE all slots present" {
         set start_slot 100
@@ -796,7 +796,7 @@ start_cluster 1 0 {tags {external:skip cluster cluster-v2:skip}} {
 # Test cases for CLUSTER SLOT-STATS ORDERBY sub-argument.
 # -----------------------------------------------------------------------------
 
-start_cluster 1 0 {tags {external:skip cluster cluster-v2:skip} overrides {cluster-slot-stats-enabled yes}} {
+start_cluster 1 0 {tags {external:skip cluster} overrides {cluster-slot-stats-enabled yes}} {
 
     set metrics [list "key-count" "cpu-usec" "network-bytes-in" "network-bytes-out"]
 
@@ -896,7 +896,7 @@ start_cluster 1 0 {tags {external:skip cluster cluster-v2:skip} overrides {clust
 # Test cases for CLUSTER SLOT-STATS replication.
 # -----------------------------------------------------------------------------
 
-start_cluster 1 1 {tags {external:skip cluster cluster-v2:skip} overrides {cluster-slot-stats-enabled yes}} {
+start_cluster 1 1 {tags {external:skip cluster} overrides {cluster-slot-stats-enabled yes}} {
 
     # Define shared variables.
     set key "key"
@@ -999,7 +999,7 @@ start_cluster 1 1 {tags {external:skip cluster cluster-v2:skip} overrides {clust
     R 1 CONFIG RESETSTAT
 }
 
-start_cluster 1 0 {tags {external:skip cluster cluster-v2:skip} overrides {cluster-slot-stats-enabled yes}} {
+start_cluster 1 0 {tags {external:skip cluster} overrides {cluster-slot-stats-enabled yes}} {
     set key "testslotbytes"
     set key_slot [R 0 cluster keyslot $key]
     set metrics_to_assert [list network-bytes-out]

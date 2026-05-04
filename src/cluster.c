@@ -320,6 +320,7 @@ unsigned long getClusterConnectionsCount(void) {
  * initialize these fields in clusterInit() at server startup. */
 void resetClusterStats(void) {
     if (!server.cluster_enabled) return;
+    clusterSlotStatResetAll();
     server.cluster->stat_cluster_links_buffer_limit_exceeded = 0;
     clusterCurrentBus->resetStats();
 }

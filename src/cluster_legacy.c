@@ -666,7 +666,6 @@ static void clusterLegacyInit(void) {
 
 static void clusterLegacyResetStats(void) {
     if (!server.cluster_enabled) return;
-    clusterSlotStatResetAll();
     memset(LEGACY_STATE()->stats_bus_messages_sent, 0, sizeof(LEGACY_STATE()->stats_bus_messages_sent));
     memset(LEGACY_STATE()->stats_bus_messages_received, 0, sizeof(LEGACY_STATE()->stats_bus_messages_received));
     LEGACY_STATE()->stats_bus_bytes_sent = 0;

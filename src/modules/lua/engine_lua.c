@@ -22,6 +22,8 @@
 #define LUA_ENGINE_NAME "LUA"
 #define REGISTRY_ERROR_HANDLER_NAME "__ERROR_HANDLER__"
 
+static int isLuaInsecureAPIEnabled(ValkeyModuleCtx *module_ctx);
+
 /* Adds server.debug() function used by lua debugger
  *
  * Log a string message into the output console.
@@ -201,7 +203,7 @@ static struct luaEngineCtx *createEngineContext(ValkeyModuleCtx *ctx) {
                      &lua_engine_ctx->valkey_version,
                      &lua_engine_ctx->valkey_version_num);
 
-    lua_engine_ctx->lua_enable_insecure_api = 0;
+    lua_engine_ctx->lua_enable_insecure_api = isLuaInsecureAPIEnabled(ctx);
 
     initializeLuaState(lua_engine_ctx, VMSE_EVAL);
     initializeLuaState(lua_engine_ctx, VMSE_FUNCTION);

@@ -25,6 +25,7 @@ endif
 
 TEST_MODULES = \
     commandfilter.so \
+    commandresult.so \
     basics.so \
     testrdb.so \
     fork.so \

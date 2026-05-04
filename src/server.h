@@ -3498,7 +3498,7 @@ struct serverMemOverhead *getMemoryOverheadData(void);
 void freeMemoryOverheadData(struct serverMemOverhead *mh);
 void checkChildrenDone(void);
 int setOOMScoreAdj(int process_class);
-void rejectCommandFormat(client *c, const char *fmt, ...);
+void rejectCommandFormat(client *c, int notify_modules, const char *fmt, ...);
 void *activeDefragAlloc(void *ptr);
 sds activeDefragSds(sds sdsptr);
 robj *activeDefragStringOb(robj *ob);
@@ -3877,6 +3877,8 @@ void blockedBeforeSleep(void);
 void addClientToTimeoutTable(client *c);
 void removeClientFromTimeoutTable(client *c);
 void handleBlockedClientsTimeout(void);
+void encodeTimeoutKey(client *c, uint64_t timeout, unsigned char *buf_out);
+void decodeTimeoutKey(unsigned char *buf, uint64_t *timeout_ptr, client **client_ptr);
 int clientsCronHandleTimeout(client *c, mstime_t now_ms);
 
 /* evict.c -- maxmemory handling and LRU eviction. */

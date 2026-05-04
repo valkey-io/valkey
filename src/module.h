@@ -23,6 +23,7 @@ struct ValkeyModuleCtx;
 struct moduleLoadQueueEntry;
 struct ValkeyModuleKeyOptCtx;
 struct ValkeyModuleCommand;
+struct ValkeyModuleCommandResult;
 struct clusterState;
 
 /* Each module type implementation should export a set of methods in order
@@ -213,6 +214,13 @@ void moduleNotifyKeyspaceEvent(int type, const char *event, robj *key, int dbid)
 unsigned long moduleNotifyKeyspaceSubscribersCnt(void);
 void firePostExecutionUnitJobs(void);
 void moduleCallCommandFilters(client *c);
+void moduleFireCommandResultEvent(client *c,
+                                  struct serverCommand *cmd,
+                                  int command_failed,
+                                  long long duration,
+                                  long long dirty);
+void moduleFireCommandRejectedEvent(client *c, const char *reply_str);
+void moduleFireCommandACLRejectedEvent(client *c, uint64_t subevent, int errpos);
 void modulePostExecutionUnitOperations(void);
 void ModuleForkDoneHandler(int exitcode, int bysignal);
 int TerminateModuleForkChild(int child_pid, int wait);

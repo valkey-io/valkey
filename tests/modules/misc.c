@@ -194,6 +194,7 @@ int test_getlru(RedisModuleCtx *ctx, RedisModuleString **argv, int argc)
         return REDISMODULE_OK;
     }
     RedisModuleKey *key = open_key_or_reply(ctx, argv[1], REDISMODULE_READ|REDISMODULE_OPEN_KEY_NOTOUCH);
+    if (!key) return REDISMODULE_OK;
     mstime_t lru;
     RedisModule_GetLRU(key, &lru);
     RedisModule_ReplyWithLongLong(ctx, lru);
@@ -208,6 +209,7 @@ int test_setlru(RedisModuleCtx *ctx, RedisModuleString **argv, int argc)
         return REDISMODULE_OK;
     }
     RedisModuleKey *key = open_key_or_reply(ctx, argv[1], REDISMODULE_READ|REDISMODULE_OPEN_KEY_NOTOUCH);
+    if (!key) return REDISMODULE_OK;
     mstime_t lru;
     if (RedisModule_StringToLongLong(argv[2], &lru) != REDISMODULE_OK) {
         RedisModule_ReplyWithError(ctx, "invalid idle time");
@@ -226,6 +228,7 @@ int test_getlfu(RedisModuleCtx *ctx, RedisModuleString **argv, int argc)
         return REDISMODULE_OK;
     }
     RedisModuleKey *key = open_key_or_reply(ctx, argv[1], REDISMODULE_READ|REDISMODULE_OPEN_KEY_NOTOUCH);
+    if (!key) return REDISMODULE_OK;
     mstime_t lfu;
     RedisModule_GetLFU(key, &lfu);
     RedisModule_ReplyWithLongLong(ctx, lfu);
@@ -240,6 +243,7 @@ int test_setlfu(RedisModuleCtx *ctx, RedisModuleString **argv, int argc)
         return REDISMODULE_OK;
     }
     RedisModuleKey *key = open_key_or_reply(ctx, argv[1], REDISMODULE_READ|REDISMODULE_OPEN_KEY_NOTOUCH);
+    if (!key) return REDISMODULE_OK;
     mstime_t lfu;
     if (RedisModule_StringToLongLong(argv[2], &lfu) != REDISMODULE_OK) {
         RedisModule_ReplyWithError(ctx, "invalid freq");

@@ -46,99 +46,6 @@
 void moduleCallClusterReceivers(const char *sender_id, uint64_t module_id, uint8_t type, const unsigned char *payload, uint32_t len);
 
 /* --------------------------------------------------------------------------
- * Wire format helpers
- * -------------------------------------------------------------------------- */
-
-#define RAFT_HDR_SIZE 8
-#define REPL_OFFSETS_BROADCAST_PERIOD_MS 10000
-
-/* Monotonic millisecond clock for timeouts and failure detection.
- * Unlike monotonicMs(), this is not affected by system clock adjustments. */
-static mstime_t monotonicMs(void) {
-    return (mstime_t)(getMonotonicUs() / 1000);
-}
-
-/* Start building a message. Reserves space for the binary header and
- * appends the message type as the first text field. */
-static sds wireNewMsg(const char *type) {
-    sds buf = sdsnewlen(NULL, RAFT_HDR_SIZE);
-    memcpy(buf, "RAFT", 4);
-    /* totlen patched by wireFinishMsg */
-    return sdscatfmt(buf, "%s", type);
-}
-
-/* Patch the totlen in the header after the message is fully built. */
-static sds wireFinishMsg(sds buf) {
-    uint32_t totlen = htonl(sdslen(buf));
-    memcpy(buf + 4, &totlen, 4);
-    return buf;
-}
-
-/* Send an sds message on a link. Frees the sds. */
-static void clusterRaftSendMsg(clusterLink *link, sds msg) {
-    size_t len = sdslen(msg);
-    clusterMsgSendBlock *block = clusterAllocMsgSendBlock(len);
-    memcpy(block->data, msg, len);
-    sdsfree(msg);
-    clusterLinkSendBlock(link, block);
-    clusterMsgSendBlockDecrRefCount(block);
-}
-
-/* Broadcast a single node's replication offset to all connected peers. */
-static void clusterRaftBroadcastNodeOffset(clusterNode *node, long long offset) {
-    sds msg = wireNewMsg("REPL_OFFSETS");
-    msg = sdscatlen(msg, " ", 1);
-    msg = sdscatlen(msg, node->name, CLUSTER_NAMELEN);
-    msg = sdscatfmt(msg, " %I", offset);
-    msg = wireFinishMsg(msg);
-    size_t msg_len = sdslen(msg);
-    clusterMsgSendBlock *block = clusterAllocMsgSendBlock(msg_len);
-    memcpy(block->data, msg, msg_len);
-    sdsfree(msg);
-    dictIterator *di = dictGetSafeIterator(server.cluster->nodes);
-    dictEntry *de;
-    while ((de = dictNext(di)) != NULL) {
-        clusterNode *n = dictGetVal(de);
-        if (n == myself || !n->link) continue;
-        clusterLinkSendBlock(n->link, block);
-    }
-    dictReleaseIterator(di);
-    clusterMsgSendBlockDecrRefCount(block);
-}
-
-/* Build a REPL_OFFSETS message containing all known non-zero offsets.
- * Returns a refcounted send block, or NULL if there's nothing to send.
- * Caller must call clusterMsgSendBlockDecrRefCount when done. */
-static clusterMsgSendBlock *clusterRaftBuildAllOffsetsMsg(void) {
-    sds msg = wireNewMsg("REPL_OFFSETS");
-    int count = 0;
-    dictIterator *di = dictGetSafeIterator(server.cluster->nodes);
-    dictEntry *de;
-    while ((de = dictNext(di)) != NULL) {
-        clusterNode *n = dictGetVal(de);
-        if (n->flags & CLUSTER_NODE_MEET) continue;
-        long long off = (n == myself) ? getNodeReplicationOffset(myself)
-                                      : n->repl_offset;
-        if (off == 0) continue;
-        msg = sdscatlen(msg, " ", 1);
-        msg = sdscatlen(msg, n->name, CLUSTER_NAMELEN);
-        msg = sdscatfmt(msg, " %I", off);
-        count++;
-    }
-    dictReleaseIterator(di);
-    if (count == 0) {
-        sdsfree(msg);
-        return NULL;
-    }
-    msg = wireFinishMsg(msg);
-    size_t msg_len = sdslen(msg);
-    clusterMsgSendBlock *block = clusterAllocMsgSendBlock(msg_len);
-    memcpy(block->data, msg, msg_len);
-    sdsfree(msg);
-    return block;
-}
-
-/* --------------------------------------------------------------------------
  * Raft log entry types — what gets replicated
  * -------------------------------------------------------------------------- */
 
@@ -260,6 +167,12 @@ typedef struct {
     long long stats_module_messages_received;
     long long stats_publish_messages_sent;
     long long stats_publish_messages_received;
+    uint64_t stats_bytes_sent;
+    uint64_t stats_bytes_received;
+    uint64_t stats_pubsub_bytes_sent;
+    uint64_t stats_pubsub_bytes_received;
+    uint64_t stats_module_bytes_sent;
+    uint64_t stats_module_bytes_received;
 } clusterRaftState;
 
 #define RAFT_STATE() ((clusterRaftState *)server.cluster->protocol_data)
@@ -273,6 +186,100 @@ typedef struct {
 } clusterNodeRaftData;
 
 #define RAFT_DATA(n) ((clusterNodeRaftData *)(n)->protocol_data)
+
+/* --------------------------------------------------------------------------
+ * Wire format helpers
+ * -------------------------------------------------------------------------- */
+
+#define RAFT_HDR_SIZE 8
+#define REPL_OFFSETS_BROADCAST_PERIOD_MS 10000
+
+/* Monotonic millisecond clock for timeouts and failure detection.
+ * Unlike monotonicMs(), this is not affected by system clock adjustments. */
+static mstime_t monotonicMs(void) {
+    return (mstime_t)(getMonotonicUs() / 1000);
+}
+
+/* Start building a message. Reserves space for the binary header and
+ * appends the message type as the first text field. */
+static sds wireNewMsg(const char *type) {
+    sds buf = sdsnewlen(NULL, RAFT_HDR_SIZE);
+    memcpy(buf, "RAFT", 4);
+    /* totlen patched by wireFinishMsg */
+    return sdscatfmt(buf, "%s", type);
+}
+
+/* Patch the totlen in the header after the message is fully built. */
+static sds wireFinishMsg(sds buf) {
+    uint32_t totlen = htonl(sdslen(buf));
+    memcpy(buf + 4, &totlen, 4);
+    return buf;
+}
+
+/* Send an sds message on a link. Frees the sds. */
+static void clusterRaftSendMsg(clusterLink *link, sds msg) {
+    size_t len = sdslen(msg);
+    clusterMsgSendBlock *block = clusterAllocMsgSendBlock(len);
+    memcpy(block->data, msg, len);
+    sdsfree(msg);
+    clusterLinkSendBlock(link, block);
+    clusterMsgSendBlockDecrRefCount(block);
+    RAFT_STATE()->stats_bytes_sent += len;
+}
+
+/* Broadcast a single node's replication offset to all connected peers. */
+static void clusterRaftBroadcastNodeOffset(clusterNode *node, long long offset) {
+    sds msg = wireNewMsg("REPL_OFFSETS");
+    msg = sdscatlen(msg, " ", 1);
+    msg = sdscatlen(msg, node->name, CLUSTER_NAMELEN);
+    msg = sdscatfmt(msg, " %I", offset);
+    msg = wireFinishMsg(msg);
+    size_t msg_len = sdslen(msg);
+    clusterMsgSendBlock *block = clusterAllocMsgSendBlock(msg_len);
+    memcpy(block->data, msg, msg_len);
+    sdsfree(msg);
+    dictIterator *di = dictGetSafeIterator(server.cluster->nodes);
+    dictEntry *de;
+    while ((de = dictNext(di)) != NULL) {
+        clusterNode *n = dictGetVal(de);
+        if (n == myself || !n->link) continue;
+        clusterLinkSendBlock(n->link, block);
+    }
+    dictReleaseIterator(di);
+    clusterMsgSendBlockDecrRefCount(block);
+}
+
+/* Build a REPL_OFFSETS message containing all known non-zero offsets.
+ * Returns a refcounted send block, or NULL if there's nothing to send.
+ * Caller must call clusterMsgSendBlockDecrRefCount when done. */
+static clusterMsgSendBlock *clusterRaftBuildAllOffsetsMsg(void) {
+    sds msg = wireNewMsg("REPL_OFFSETS");
+    int count = 0;
+    dictIterator *di = dictGetSafeIterator(server.cluster->nodes);
+    dictEntry *de;
+    while ((de = dictNext(di)) != NULL) {
+        clusterNode *n = dictGetVal(de);
+        if (n->flags & CLUSTER_NODE_MEET) continue;
+        long long off = (n == myself) ? getNodeReplicationOffset(myself)
+                                      : n->repl_offset;
+        if (off == 0) continue;
+        msg = sdscatlen(msg, " ", 1);
+        msg = sdscatlen(msg, n->name, CLUSTER_NAMELEN);
+        msg = sdscatfmt(msg, " %I", off);
+        count++;
+    }
+    dictReleaseIterator(di);
+    if (count == 0) {
+        sdsfree(msg);
+        return NULL;
+    }
+    msg = wireFinishMsg(msg);
+    size_t msg_len = sdslen(msg);
+    clusterMsgSendBlock *block = clusterAllocMsgSendBlock(msg_len);
+    memcpy(block->data, msg, msg_len);
+    sdsfree(msg);
+    return block;
+}
 
 /* --------------------------------------------------------------------------
  * Helpers
@@ -1821,6 +1828,8 @@ static uint32_t clusterRaftValidateMessageHeader(char *header) {
 }
 
 static int clusterRaftProcessMessage(struct clusterLink *link) {
+    RAFT_STATE()->stats_bytes_received += link->rcvbuf_len;
+
     /* Parse the text payload after the binary header.
      * Split by \n first (AE messages have entry lines), then split
      * the first line by space for the header fields. */
@@ -1887,6 +1896,7 @@ static int clusterRaftProcessMessage(struct clusterLink *link) {
          * binary-safe data containing spaces, newlines, or nulls. */
         int sharded = atoi(argv[1]);
         RAFT_STATE()->stats_publish_messages_received++;
+        RAFT_STATE()->stats_pubsub_bytes_received += link->rcvbuf_len;
         size_t chan_len = strtoull(argv[2], NULL, 10);
         size_t msg_len = strtoull(argv[3], NULL, 10);
         /* Payload starts after the first \n in the raw buffer. */
@@ -1913,6 +1923,7 @@ static int clusterRaftProcessMessage(struct clusterLink *link) {
             moduleCallClusterReceivers(link->node ? link->node->name : "",
                                        module_id, type, (const unsigned char *)(nl + 1), len);
             RAFT_STATE()->stats_module_messages_received++;
+            RAFT_STATE()->stats_module_bytes_received += link->rcvbuf_len;
         }
     } else {
         serverLog(LL_WARNING, "Unknown Raft message: %s", argv[0]);
@@ -2063,6 +2074,7 @@ static void clusterRaftPropagatePublish(robj *channel, robj *message, int sharde
     dictIterator *di = dictGetSafeIterator(server.cluster->nodes);
     dictEntry *de;
     int sent = 0;
+    size_t msg_len = sdslen(msg);
     while ((de = dictNext(di)) != NULL) {
         clusterNode *node = dictGetVal(de);
         if (node == myself || !node->link) continue;
@@ -2072,6 +2084,7 @@ static void clusterRaftPropagatePublish(robj *channel, robj *message, int sharde
     }
     dictReleaseIterator(di);
     RAFT_STATE()->stats_publish_messages_sent += sent;
+    RAFT_STATE()->stats_pubsub_bytes_sent += msg_len * sent;
     sdsfree(msg);
 }
 
@@ -2080,6 +2093,7 @@ static int clusterRaftSendModuleMessage(const char *target, uint64_t module_id, 
     msg = sdscatfmt(msg, " %U %i %U\n", (unsigned long long)module_id, (int)type, (unsigned long long)len);
     msg = sdscatlen(msg, payload, len);
     msg = wireFinishMsg(msg);
+    size_t msg_len = sdslen(msg);
 
     if (target) {
         clusterNode *node = clusterLookupNode(target, strlen(target));
@@ -2089,6 +2103,7 @@ static int clusterRaftSendModuleMessage(const char *target, uint64_t module_id, 
         }
         clusterRaftSendMsg(node->link, msg);
         RAFT_STATE()->stats_module_messages_sent++;
+        RAFT_STATE()->stats_module_bytes_sent += msg_len;
     } else {
         dictIterator *di = dictGetSafeIterator(server.cluster->nodes);
         dictEntry *de;
@@ -2102,6 +2117,7 @@ static int clusterRaftSendModuleMessage(const char *target, uint64_t module_id, 
         dictReleaseIterator(di);
         sdsfree(msg);
         RAFT_STATE()->stats_module_messages_sent += sent;
+        RAFT_STATE()->stats_module_bytes_sent += msg_len * sent;
     }
     return C_OK;
 }
@@ -2115,7 +2131,17 @@ static unsigned long clusterRaftGetConnectionsCount(void) {
 }
 
 static void clusterRaftResetStats(void) {
-    /* TODO */
+    clusterRaftState *rs = RAFT_STATE();
+    rs->stats_module_messages_sent = 0;
+    rs->stats_module_messages_received = 0;
+    rs->stats_publish_messages_sent = 0;
+    rs->stats_publish_messages_received = 0;
+    rs->stats_bytes_sent = 0;
+    rs->stats_bytes_received = 0;
+    rs->stats_pubsub_bytes_sent = 0;
+    rs->stats_pubsub_bytes_received = 0;
+    rs->stats_module_bytes_sent = 0;
+    rs->stats_module_bytes_received = 0;
 }
 
 static sds clusterRaftAppendInfoFields(sds info) {
@@ -2163,12 +2189,24 @@ static sds clusterRaftAppendInfoFields(sds info) {
                         "cluster_stats_messages_module_received:%lld\r\n"
                         "cluster_stats_messages_publish_sent:%lld\r\n"
                         "cluster_stats_messages_publish_received:%lld\r\n"
+                        "cluster_stats_bytes_sent:%llu\r\n"
+                        "cluster_stats_bytes_received:%llu\r\n"
+                        "cluster_stats_pubsub_bytes_sent:%llu\r\n"
+                        "cluster_stats_pubsub_bytes_received:%llu\r\n"
+                        "cluster_stats_module_bytes_sent:%llu\r\n"
+                        "cluster_stats_module_bytes_received:%llu\r\n"
                         "total_cluster_links_buffer_limit_exceeded:%llu\r\n",
                         role_str, (unsigned long long)rs->current_term,
                         (unsigned long long)rs->commit_index, (unsigned long long)rs->last_applied,
                         (unsigned long long)rs->log_count, rs->leader,
                         rs->stats_module_messages_sent, rs->stats_module_messages_received,
                         rs->stats_publish_messages_sent, rs->stats_publish_messages_received,
+                        (unsigned long long)rs->stats_bytes_sent,
+                        (unsigned long long)rs->stats_bytes_received,
+                        (unsigned long long)rs->stats_pubsub_bytes_sent,
+                        (unsigned long long)rs->stats_pubsub_bytes_received,
+                        (unsigned long long)rs->stats_module_bytes_sent,
+                        (unsigned long long)rs->stats_module_bytes_received,
                         (unsigned long long)server.cluster->stat_cluster_links_buffer_limit_exceeded);
     return info;
 }

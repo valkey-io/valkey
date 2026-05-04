@@ -426,13 +426,13 @@ void clusterConnectNodes(void) {
         freeClusterLinkOnBufferLimitReached(node->link);
         freeClusterLinkOnBufferLimitReached(node->inbound_link);
 
-        if (node->link) continue;
-
         /* Remove handshake nodes that have timed out. */
         if (nodeInHandshake(node) && now - node->ctime > handshake_timeout) {
             clusterDelNode(node);
             continue;
         }
+
+        if (node->link) continue;
 
         /* Throttle reconnection attempts. If an inbound link exists the peer
          * already knows us, so reconnect immediately without throttling. */

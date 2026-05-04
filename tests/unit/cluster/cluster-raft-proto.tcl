@@ -2,8 +2,6 @@
 # A single valkey-server is started and we connect to its cluster bus port,
 # speaking the raft wire protocol directly.
 
-package require Tcl 8.5
-
 # Build a raft wire message: "RAFT" + 4-byte big-endian length + payload.
 proc raft_msg {payload} {
     set len [expr {8 + [string length $payload]}]
@@ -59,7 +57,7 @@ proc raft_recv {fd {timeout 5000}} {
     return $payload
 }
 
-tags {external:skip cluster singledb} {
+tags {tls:skip external:skip cluster singledb} {
 
 # Listen on a random port, accept one connection, close the listener.
 # Returns the accepted client fd. Sets the listen port in the upvar port_var.

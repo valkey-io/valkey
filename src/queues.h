@@ -33,12 +33,6 @@
  * MPSC QUEUE (Multi-Producer Single-Consumer)
  * ========================================================================== */
 
-#define MPSC_QUEUE_SIZE 16384
-#define MPSC_QUEUE_MASK (MPSC_QUEUE_SIZE - 1)
-#ifndef __cplusplus
-static_assert((MPSC_QUEUE_SIZE & (MPSC_QUEUE_SIZE - 1)) == 0, "MPSC_QUEUE_SIZE must be power of 2");
-#endif
-
 typedef struct mpscTicket {
     size_t index;
     bool has_reservation;
@@ -55,9 +49,10 @@ typedef struct mpscQueue {
 
     /* Data buffer */
     _Alignas(CACHE_LINE_SIZE) _Atomic(void *) *buffer;
+    size_t queue_size;
 } mpscQueue;
 
-void mpscInit(mpscQueue *q);
+void mpscInit(mpscQueue *q, size_t queue_size);
 void mpscFree(mpscQueue *q);
 
 /* Pushes an item into the queue and returns true if the queue is not full.
@@ -72,12 +67,6 @@ size_t mpscDequeueBatch(mpscQueue *q, void **jobs_out, size_t max_jobs);
 /* ==========================================================================
  * SPMC QUEUE (Single-Producer Multi-Consumer)
  * ========================================================================== */
-
-#define SPMC_QUEUE_SIZE 4096
-#define SPMC_QUEUE_MASK (SPMC_QUEUE_SIZE - 1)
-#ifndef __cplusplus
-static_assert((SPMC_QUEUE_SIZE & (SPMC_QUEUE_SIZE - 1)) == 0, "SPMC_QUEUE_SIZE must be power of 2");
-#endif
 
 typedef struct spmcCell {
     _Alignas(CACHE_LINE_SIZE) _Atomic(size_t) sequence;
@@ -94,9 +83,10 @@ typedef struct spmcQueue {
 
     /* Data buffer */
     _Alignas(CACHE_LINE_SIZE) spmcCell *buffer;
+    size_t queue_size;
 } spmcQueue;
 
-void spmcInit(spmcQueue *q);
+void spmcInit(spmcQueue *q, size_t queue_size);
 void spmcFree(spmcQueue *q);
 bool spmcIsEmpty(spmcQueue *q);
 size_t spmcSize(spmcQueue *q);
@@ -106,12 +96,6 @@ void *spmcDequeue(spmcQueue *q);
 /* ==========================================================================
  * SPSC QUEUE (Single-Producer Single-Consumer)
  * ========================================================================== */
-
-#define SPSC_QUEUE_SIZE 4096
-#define SPSC_QUEUE_MASK (SPSC_QUEUE_SIZE - 1)
-#ifndef __cplusplus
-static_assert((SPSC_QUEUE_SIZE & (SPSC_QUEUE_SIZE - 1)) == 0, "SPSC_QUEUE_SIZE must be power of 2");
-#endif
 
 typedef struct spscQueue {
     /* Consumer cache line */
@@ -125,9 +109,10 @@ typedef struct spscQueue {
 
     /* Dynamic buffer */
     _Alignas(CACHE_LINE_SIZE) void **buffer;
+    size_t queue_size;
 } spscQueue;
 
-void spscInit(spscQueue *q);
+void spscInit(spscQueue *q, size_t queue_size);
 void spscFree(spscQueue *q);
 bool spscIsFull(spscQueue *q);
 /* Push data to the queue. Caller must ensure queue is not full via spscIsFull().

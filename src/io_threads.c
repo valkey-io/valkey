@@ -107,9 +107,6 @@ void waitForClientIO(client *c) {
 }
 
 void IOThreadsBeforeSleep(long long current_time) {
-#ifndef RUSAGE_THREAD
-    UNUSED(current_time);
-#endif
     if (server.io_threads_num == 1) return;
     serverAssert(inMainThread());
 
@@ -126,29 +123,20 @@ void IOThreadsBeforeSleep(long long current_time) {
         }
     }
 
-#ifdef RUSAGE_THREAD
-    /* If threads are not active track main thread CPU time for ignition decision */
+    /* If threads are not active, track main-thread active time for ignition decision */
     if (server.active_io_threads_num == 1) {
         static long long last_measurement_time = 0;
         if (current_time - last_measurement_time < 50000) return; /* Sample once in 50ms */
         last_measurement_time = current_time;
-        struct rusage ru;
-        if (getrusage(RUSAGE_THREAD, &ru) == 0) {
-            long long sys_time_us = ru.ru_stime.tv_sec * 1000000LL + ru.ru_stime.tv_usec;
-            long long user_time_us = ru.ru_utime.tv_sec * 1000000LL + ru.ru_utime.tv_usec;
-            trackInstantaneousMetric(STATS_METRIC_MAIN_THREAD_CPU_SYS, sys_time_us, current_time, 1000000);
-            trackInstantaneousMetric(STATS_METRIC_MAIN_THREAD_CPU_USER, user_time_us, current_time, 1000000);
-        }
+        trackInstantaneousMetric(STATS_METRIC_MAIN_THREAD_ACTIVE_TIME, server.stat_active_time, current_time, 1000000);
     }
-#endif
 }
 
 #define IO_COOLDOWN_MS 1000
 #define IO_SAMPLE_RATE_MS 10
 #define IO_IGNITION_EVENTS 4
-#define IO_IGNITION_CPU_SYS 30.0
-#define IO_IGNITION_CPU_SYS_LOW 5.0
-#define IO_IGNITION_CPU_USER 50.0
+#define IO_IGNITION_MAIN_THREAD_ACTIVE_PERCENT 30
+#define BATCH_SIZE 32
 
 void IOThreadsAfterSleep(int numevents) {
     if (server.io_threads_num == 1) return;
@@ -170,15 +158,9 @@ void IOThreadsAfterSleep(int numevents) {
     /* Ignition Policy */
     if (server.active_io_threads_num == 1) {
         int should_ignite = 0;
-#ifdef RUSAGE_THREAD
-        float cpu_sys = (float)getInstantaneousMetric(STATS_METRIC_MAIN_THREAD_CPU_SYS) / 10000.0;
-        float cpu_user = (float)getInstantaneousMetric(STATS_METRIC_MAIN_THREAD_CPU_USER) / 10000.0;
-        /* Ignite IO threads if sys CPU > 30%, or if sys CPU > 5% and user CPU > 50% */
-        should_ignite = (cpu_sys > IO_IGNITION_CPU_SYS) ||
-                        (cpu_sys > IO_IGNITION_CPU_SYS_LOW && cpu_user > IO_IGNITION_CPU_USER);
-#else
-        should_ignite = (numevents >= IO_IGNITION_EVENTS);
-#endif
+        float main_thread_active_time = (float)getInstantaneousMetric(STATS_METRIC_MAIN_THREAD_ACTIVE_TIME) / 10000.0;
+        /* Ignite IO threads when main-thread active time exceeds the threshold (30%) */
+        should_ignite = (main_thread_active_time > (float)IO_IGNITION_MAIN_THREAD_ACTIVE_PERCENT);
         if (should_ignite) {
             pthread_mutex_unlock(&io_threads_mutex[1]);
             server.active_io_threads_num++;

@@ -79,6 +79,13 @@ start_server {overrides {save {900 1}} tags {"modules"}} {
     }
     r config set maxmemory-policy allkeys-lru
 
+    test {test module lru/lfu api with nonexistent key} {
+        assert_error {*key not found*} {r test.getlru nonexistent_key}
+        assert_error {*key not found*} {r test.setlru nonexistent_key 100}
+        assert_error {*key not found*} {r test.getlfu nonexistent_key}
+        assert_error {*key not found*} {r test.setlfu nonexistent_key 100}
+    }
+
     test {test module lfu api} {
         r config set maxmemory-policy allkeys-lfu
         r set x foo

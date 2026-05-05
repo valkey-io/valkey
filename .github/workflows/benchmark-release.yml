@@ -53,13 +53,49 @@ jobs:
             exit 1
           fi
 
-      - name: Checkout valkey (latest)
-        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+          # Validate runs is a positive number
+          if ! [[ "${{ github.event.inputs.runs }}" =~ ^[1-9][0-9]*$ ]]; then
+            echo "Error: Runs must be a positive number"
+            exit 1
+          fi
+
+      - name: Checkout valkey for latest benchmark.
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           repository: ${{ github.repository_owner }}/valkey
           path: valkey_latest
           fetch-depth: 0
           persist-credentials: false
+
+      - name: Checkout valkey
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          path: valkey
+
+      - name: Checkout valkey-perf-benchmark
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: ${{ github.repository_owner }}/valkey-perf-benchmark
+          path: valkey-perf-benchmark
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: kishaningithub/setup-python-amazon-linux@a326cdc792983fe0fbd04c81d3d62b59b6123a6c # v1.1.0
+        with:
+          python-version: "3.10"
+          cache: "pip"
+
+      - name: Install dependencies
+        working-directory: valkey-perf-benchmark
+        run: |
+          sudo dnf groupinstall "Development Tools" -y
+          sudo dnf install -y gcc gcc-c++ make \
+              python3-devel \
+              openssl-devel \
+              bzip2-devel \
+              libffi-devel
+          pip install -r requirements.txt
 
       - name: Build latest valkey_latest
         working-directory: valkey_latest
@@ -191,15 +227,58 @@ jobs:
       - name: Upload artifacts
         if: always()
         continue-on-error: true
-        uses: actions/upload-artifact@6f51ac03b9356f520e9adb1b1b7802705f340c2b # v4.5.0
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: benchmark-results-${{ github.event.inputs.issue_id }}
           path: |
             ./valkey-perf-benchmark/results/*/metrics.json
             comparison.md
 
-      - name: Comment on issue with results
-        uses: actions/github-script@5c56fde4671bc2d3592fb0f2c5b5bab9ddae03b1 # v7
+      - name: Cleanup any running valkey processes and files
+        if: always()
+        continue-on-error: true
+        run: |
+          pkill -f valkey || echo "No valkey processes found to kill"
+          rm -rf *
+
+  combine-results:
+    needs: benchmark
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          path: artifacts
+
+      - name: Combine results and create comprehensive report
+        run: |
+          echo "# Multi-Architecture Benchmark Comparison: ${{ github.event.inputs.version1 }} vs ${{ github.event.inputs.version2 }}" > combined_report.md
+          echo "" >> combined_report.md
+          echo "**Versions Compared:**" >> combined_report.md
+          echo "- Version 1: \`${{ github.event.inputs.version1 }}\`" >> combined_report.md
+          echo "- Version 2: \`${{ github.event.inputs.version2 }}\`" >> combined_report.md
+          echo "" >> combined_report.md
+          echo "**Runs:** ${{ github.event.inputs.runs }} per configuration" >> combined_report.md
+          echo "**Workflow Run:** [View Details](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})" >> combined_report.md
+          echo "" >> combined_report.md
+          echo "---" >> combined_report.md
+          echo "" >> combined_report.md
+
+          # Process each architecture's results
+          for arch in x86 arm64; do
+            artifact_dir="artifacts/benchmark-results-${arch}-${{ github.event.inputs.issue_id }}"
+            if [[ -d "$artifact_dir" && -f "$artifact_dir/comparison.md" ]]; then
+              echo "## ${arch^^} Architecture Results" >> combined_report.md
+              echo "" >> combined_report.md
+              cat "$artifact_dir/comparison.md" >> combined_report.md
+              echo "" >> combined_report.md
+              echo "---" >> combined_report.md
+              echo "" >> combined_report.md
+            fi
+          done
+
+      - name: Comment on issue with combined results
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |

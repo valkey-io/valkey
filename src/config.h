@@ -392,7 +392,7 @@ void setcpuaffinity(const char *cpulist);
 #endif
 
 /* Check if we can compile ARM SIMD code */
-#if defined(__ARM_NEON) || defined(__ARM_NEON__)
+#if defined(__aarch64__) && (defined(__ARM_NEON) || defined(__ARM_NEON__))
 #define HAVE_ARM_NEON 1
 #else
 #define HAVE_ARM_NEON 0

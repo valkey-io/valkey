@@ -5396,7 +5396,7 @@ int VM_HashSet(ValkeyModuleKey *key, int flags, ...) {
 
         robj *argv[2] = {field, value};
         hashTypeTryConversion(key->value, argv, 0, 1);
-        int updated = hashTypeSet(key->value, field->ptr, value->ptr, EXPIRY_NONE, low_flags);
+        int updated = hashTypeSet(key->value, field->ptr, value->ptr, EXPIRY_NONE, low_flags, NULL);
         count += (flags & VALKEYMODULE_HASH_COUNT_ALL) ? 1 : updated;
 
         /* If CFIELDS is active, SDS string ownership is now of hashTypeSet(),
@@ -6733,7 +6733,7 @@ uint64_t moduleTypeEncodeId(const char *name, int encver) {
 
     uint64_t id = 0;
     for (int j = 0; j < 9; j++) {
-        char *p = strchr(cset, name[j]);
+        const char *p = strchr(cset, name[j]);
         if (!p) return 0;
         unsigned long pos = p - cset;
         id = (id << 6) | pos;
@@ -6852,6 +6852,13 @@ const char *moduleNameFromCommand(struct serverCommand *cmd) {
 
     ValkeyModuleCommand *cp = cmd->module_cmd;
     return cp->module->name;
+}
+
+ValkeyModule *moduleFromCommand(struct serverCommand *cmd) {
+    serverAssert(cmd->proc == ValkeyModuleCommandDispatcher);
+
+    ValkeyModuleCommand *cp = cmd->module_cmd;
+    return cp->module;
 }
 
 /* Create a copy of a module type value using the copy callback. If failed
@@ -9808,11 +9815,7 @@ void revokeClientAuthentication(client *c) {
     clientSetUser(c, DefaultUser, 0);
     /* We will write replies to this client later, so we can't close it
      * directly even if async. */
-    if (c == server.current_client) {
-        c->flag.close_after_command = 1;
-    } else {
-        freeClientAsync(c);
-    }
+    freeClientOrCloseLater(c, 1);
 }
 
 /* Cleanup all clients that have been authenticated with this module. This
@@ -11022,8 +11025,10 @@ void moduleCallCommandFilters(client *c) {
 
     ValkeyModuleCommandFilterCtx filter = {.argv = c->argv, .argv_len = c->argv_len, .argc = c->argc, .c = c};
 
-    robj *tmp = c->argv[0];
-    incrRefCount(tmp);
+    robj *pre_filter_command = c->argv[0];
+    incrRefCount(pre_filter_command);
+    const int pre_filter_argc = c->argc;
+
     while ((ln = listNext(&li))) {
         ValkeyModuleCommandFilter *f = ln->value;
 
@@ -11036,15 +11041,21 @@ void moduleCallCommandFilters(client *c) {
         f->callback(&filter);
     }
 
+    /* Apply filter output */
     c->argv = filter.argv;
     c->argv_len = filter.argv_len;
     c->argc = filter.argc;
-    if (tmp != c->argv[0]) {
+
+    /* If filter changed the command or number of arguments, redo prepareCommand */
+    const bool command_changed = (c->argv[0] != pre_filter_command);
+    const bool argc_changed = (c->argc != pre_filter_argc);
+
+    if (command_changed || argc_changed) {
         /* Reset and lookup the command and cluster slot again. */
         unprepareCommand(c);
         prepareCommand(c);
     }
-    decrRefCount(tmp);
+    decrRefCount(pre_filter_command);
 }
 
 /* Return the number of arguments a filtered command has.  The number of
@@ -12669,6 +12680,18 @@ int moduleUnload(sds name, const char **errmsg) {
     } else if (moduleHoldsTimer(module)) {
         *errmsg = "the module holds timer that is not fired. "
                   "Please stop the timer or wait until it fires.";
+        return C_ERR;
+    }
+
+    sds acl_rule = NULL;
+    if (ACLModuleHasCommandRules(module, &acl_rule)) {
+        serverLog(LL_WARNING,
+                  "Module %s unload blocked: An ACL user has reference to rule '%s'",
+                  module->name,
+                  acl_rule ? acl_rule : "unknown");
+        if (acl_rule) sdsfree(acl_rule);
+        *errmsg = "one or more ACL users reference commands from this module. "
+                  "Remove those ACL rules before unloading";
         return C_ERR;
     }
 

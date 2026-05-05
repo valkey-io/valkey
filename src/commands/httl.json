@@ -1,7 +1,7 @@
 {
     "HTTL": {
         "summary": "Returns the remaining time to live (in seconds) of a hash key's field(s) that have an associated expiration.",
-        "complexity": "O(1) for each field, so O(N) for N items when the command is called with multiple fields.",
+        "complexity": "O(N) where N is the number of specified fields.",
         "group": "hash",
         "since": "9.0.0",
         "arity": -5,

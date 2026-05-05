@@ -1145,7 +1145,8 @@ void clusterUpdateMyselfFlags(void) {
     myself->flags |= nofailover;
     myself->flags |= CLUSTER_NODE_EXTENSIONS_SUPPORTED |
                      CLUSTER_NODE_LIGHT_HDR_PUBLISH_SUPPORTED |
-                     CLUSTER_NODE_LIGHT_HDR_MODULE_SUPPORTED;
+                     CLUSTER_NODE_LIGHT_HDR_MODULE_SUPPORTED |
+                     CLUSTER_NODE_MULTI_MEET_SUPPORTED;
     if (myself->flags != oldflags) {
         clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_UPDATE_STATE);
     }
@@ -3531,17 +3532,38 @@ int clusterIsValidPacket(clusterLink *link) {
         explen = sizeof(clusterMsg) - sizeof(union clusterMsgData);
         explen += (sizeof(clusterMsgDataGossip) * count);
 
+        /* Make sure that the number of gossip messages fit in the remaining
+         * space in the message. */
+        if (totlen < explen) {
+            serverLog(LL_WARNING,
+                      "Received invalid %s packet with gossip count %d that exceeds "
+                      "total packet length (%lld)",
+                      clusterGetMessageTypeString(type), count, (unsigned long long)totlen);
+            return 0;
+        }
+
         /* If there is extension data, which doesn't have a fixed length,
          * loop through them and validate the length of it now. */
         if (hdr->mflags[0] & CLUSTERMSG_FLAG0_EXT_DATA) {
             clusterMsgPingExt *ext = getInitialPingExt(hdr, count);
             while (extensions--) {
+                /* Make sure there is at least enough memory for the extension information so
+                 * we can parse it. */
+                if ((totlen - explen) < sizeof(clusterMsgPingExt)) {
+                    serverLog(LL_WARNING,
+                              "Received invalid %s packet with extension data that exceeds "
+                              "total packet length (%lld)",
+                              clusterGetMessageTypeString(type), (unsigned long long)totlen);
+                    return 0;
+                }
                 uint32_t extlen = getPingExtLength(ext);
                 if (extlen % 8 != 0) {
                     serverLog(LL_WARNING, "Received a %s packet without proper padding (%d bytes)",
                               clusterGetMessageTypeString(type), (int)extlen);
                     return 0;
                 }
+                /* Similar check to earlier, but we want to make sure the extension length is valid
+                 * this time. */
                 if ((totlen - explen) < extlen) {
                     serverLog(LL_WARNING,
                               "Received invalid %s packet with extension data that exceeds "
@@ -3674,6 +3696,13 @@ int clusterProcessPacket(clusterLink *link) {
             sender->flags |= CLUSTER_NODE_LIGHT_HDR_MODULE_SUPPORTED;
         } else {
             sender->flags &= ~CLUSTER_NODE_LIGHT_HDR_MODULE_SUPPORTED;
+        }
+
+        /* Check if the node can handle multi meet packet. */
+        if (flags & CLUSTER_NODE_MULTI_MEET_SUPPORTED) {
+            sender->flags |= CLUSTER_NODE_MULTI_MEET_SUPPORTED;
+        } else {
+            sender->flags &= ~CLUSTER_NODE_MULTI_MEET_SUPPORTED;
         }
     }
 
@@ -4828,6 +4857,18 @@ void clusterSendUpdate(clusterLink *link, clusterNode *node) {
     clusterMsgSendBlockDecrRefCount(msgblock);
 }
 
+/* Inline functions that check support of light weight messages by node
+ * and avoid using light weight messages until the bidirectional
+ * link(s) have been established. */
+static inline bool nodeSupportsLightMsgHdrForPubSub(clusterNode *n) {
+    return n->link && n->pong_received >= n->link->ctime &&
+           (n->flags & CLUSTER_NODE_LIGHT_HDR_PUBLISH_SUPPORTED);
+}
+static inline bool nodeSupportsLightMsgHdrForModule(clusterNode *n) {
+    return n->link && n->pong_received >= n->link->ctime &&
+           (n->flags & CLUSTER_NODE_LIGHT_HDR_MODULE_SUPPORTED);
+}
+
 /* Create a MODULE message block.
  *
  * If is_light is 1, then build a message block with `clusterMsgLight` struct else `clusterMsg`. */
@@ -5715,7 +5756,8 @@ static int clusterNodeCronHandleReconnect(clusterNode *node, mstime_t now, long 
     }
     if (nodeInNormalState(node) && node->link != NULL && node->inbound_link == NULL &&
         now - node->inbound_link_freed_time > getHandshakeTimeout() &&
-        now - node->meet_sent > getHandshakeTimeout()) {
+        now - node->meet_sent > getHandshakeTimeout() &&
+        nodeSupportsMultiMeet(node)) {
         /* Node has an outbound link, but no inbound link for more than the handshake timeout.
          * This probably means this node does not know us yet, whereas we know it.
          * So we send it a MEET packet to do a handshake with it and correct the inconsistent cluster view.
@@ -5825,7 +5867,7 @@ void clusterCron(void) {
     long long cluster_node_conn_attempts = maxConnectionAttemptsPerCron();
     while ((de = dictNext(di)) != NULL) {
         clusterNode *node = dictGetVal(de);
-        /* We free the inbound or outboud link to the node if the link has an
+        /* We free the inbound or outbound link to the node if the link has an
          * oversized message send queue and immediately try reconnecting. */
         clusterNodeCronFreeLinkOnBufferLimitReached(node);
         /* The protocol is that function(s) below return non-zero if the node was

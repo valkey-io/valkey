@@ -103,6 +103,8 @@ typedef struct serverObject robj;
 #include "crc64.h"
 
 struct hdr_histogram;
+struct ValkeyModule;
+
 
 /* helpers */
 #define numElements(x) (sizeof(x) / sizeof((x)[0]))
@@ -1408,7 +1410,7 @@ struct sharedObjectsStruct {
         *bgsaveerr_variants[2],
         *execaborterr, *noautherr, *noreplicaserr, *busykeyerr, *oomerr, *plus, *messagebulk, *pmessagebulk,
         *subscribebulk, *unsubscribebulk, *psubscribebulk, *punsubscribebulk, *del, *unlink, *rpop, *lpop, *lpush,
-        *rpoplpush, *lmove, *blmove, *zpopmin, *zpopmax, *emptyscan, *multi, *exec, *left, *right, *hset, *hdel, *hpexpireat, *hpersist, *srem,
+        *rpoplpush, *lmove, *blmove, *zpopmin, *zpopmax, *emptyscan, *multi, *exec, *left, *right, *hset, *hsetex, *hdel, *hpexpireat, *hpersist, *srem,
         *xgroup, *xclaim, *script, *replconf, *eval, *cluster, *syncslots, *persist, *set, *pexpireat, *pexpire, *time, *pxat, *absttl,
         *retrycount, *force, *justid, *entriesread, *lastid, *ping, *setid, *keepttl, *load, *createconsumer, *getack,
         *special_asterisk, *special_equals, *default_username, *redacted, *ssubscribebulk, *sunsubscribebulk, *fields,
@@ -2789,6 +2791,7 @@ void dictVanillaFree(void *val);
 client *createClient(connection *conn);
 void freeClient(client *c);
 void freeClientAsync(client *c);
+void freeClientOrCloseLater(client *c, int async);
 void logInvalidUseAndFreeClientAsync(client *c, const char *fmt, ...);
 void beforeNextClient(client *c);
 void clearClientConnectionState(client *c);
@@ -2835,6 +2838,7 @@ void addReplyOrErrorObject(client *c, robj *reply);
 void afterErrorReply(client *c, const char *s, size_t len, int flags);
 void addReplyErrorFormatInternal(client *c, int flags, const char *fmt, va_list ap);
 void addReplyErrorSdsEx(client *c, sds err, int flags);
+void addReplyErrorSdsExSafe(client *c, sds err, int flags);
 void addReplyErrorSds(client *c, sds err);
 void addReplyErrorSdsSafe(client *c, sds err);
 void addReplyError(client *c, const char *err);
@@ -3184,6 +3188,7 @@ int isMutuallyExclusiveChildType(int type);
 extern rax *Users;
 extern user *DefaultUser;
 void ACLInit(void);
+int ACLModuleHasCommandRules(const struct ValkeyModule *module, sds *rule_out);
 /* Return values for ACLCheckAllPerm(). */
 #define ACL_OK 0
 #define ACL_DENIED_CMD 1
@@ -3455,7 +3460,7 @@ sds hashTypeCurrentFromHashTable(hashTypeIterator *hi, int what);
 sds hashTypeCurrentObjectNewSds(hashTypeIterator *hi, int what);
 robj *hashTypeLookupWriteOrCreate(client *c, robj *key);
 robj *hashTypeGetValueObject(robj *o, sds field);
-int hashTypeSet(robj *o, sds field, sds value, long long expiry, int flags);
+int hashTypeSet(robj *o, sds field, sds value, long long expiry, int flags, bool *expired_overwritten);
 robj *hashTypeDup(robj *o);
 bool hashTypeHasVolatileFields(robj *o);
 
@@ -3573,6 +3578,7 @@ void deleteExpiredKeyAndPropagate(serverDb *db, robj *keyobj);
 void deleteExpiredKeyAndPropagateWithDictIndex(serverDb *db, robj *keyobj, int dict_index);
 void deleteExpiredKeyFromOverwriteAndPropagate(client *c, robj *keyobj);
 void propagateDeletion(serverDb *db, robj *key, int lazy, int slot);
+int propagateFieldsDeletion(serverDb *db, robj *o, size_t n_fields, robj *fields[], int slot);
 size_t dbReclaimExpiredFields(robj *o, serverDb *db, mstime_t now, unsigned long max_entries, int didx);
 int keyIsExpired(serverDb *db, robj *key);
 long long getExpire(serverDb *db, robj *key);

@@ -1,7 +1,7 @@
 {
     "HSETEX": {
         "summary": "Set the value of one or more fields of a given hash key, and optionally set their expiration time.",
-        "complexity": "O(1)",
+        "complexity": "O(N) where N is the number of specified fields.",
         "group": "hash",
         "since": "9.0.0",
         "arity": -6,

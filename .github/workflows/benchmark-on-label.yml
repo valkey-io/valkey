@@ -24,7 +24,7 @@ jobs:
       github.event.action == 'labeled' && github.event.label.name == 'run-benchmark'
     steps:
       - name: Checkout valkey
-        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           path: valkey
           fetch-depth: 0
@@ -32,7 +32,7 @@ jobs:
           persist-credentials: false
 
       - name: Checkout valkey-perf-benchmark
-        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           repository: ${{ github.repository_owner }}/valkey-perf-benchmark
           path: valkey-perf-benchmark
@@ -40,7 +40,7 @@ jobs:
           persist-credentials: false
 
       - name: Set up Python
-        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        uses: kishaningithub/setup-python-amazon-linux@a326cdc792983fe0fbd04c81d3d62b59b6123a6c # v1.1.0
         with:
           python-version: "3.10"
           cache: "pip"
@@ -85,7 +85,7 @@ jobs:
       - name: Upload artifacts
         if: always()
         continue-on-error: true
-        uses: actions/upload-artifact@6f51ac03b9356f520e9adb1b1b7802705f340c2b # v4.5.0
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: benchmark-results
           path: |
@@ -94,7 +94,7 @@ jobs:
             comparison.md
 
       - name: Comment PR with results
-        uses: actions/github-script@5c56fde4671bc2d3592fb0f2c5b5bab9ddae03b1 # v7
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
@@ -127,7 +127,7 @@ jobs:
 
       - name: Remove ${{ github.event.label.name }} label
         if: always() && github.event.label.name == 'run-benchmark'
-        uses: actions/github-script@5c56fde4671bc2d3592fb0f2c5b5bab9ddae03b1 # v7
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |

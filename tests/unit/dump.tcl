@@ -456,9 +456,13 @@ start_server {tags {"dump"}} {
         #   6a6b6c          - "jkl"
         #   ff              - ZIPMAP_END
         #
+        # Pre-patch: validation passes (overlong encoding walks in-bounds),
+        # then zipmapNext() misaligns by 4 bytes, interpreting 0x61 ('a') as a
+        # 97-byte field length → heap buffer over-read / crash.
+        #
         # Post-patch: zipmapValidateIntegrity() rejects (l < 254 && s != 1).
         #
-        # RESTORE payload: <type=09><rdb-string-len=18><zipmap><rdb-ver=80><crc=0>
+        # RESTORE payload: <type=09><rdb-string-len=18><zipmap><rdb-ver=5000><crc=0>
 
         r debug set-skip-checksum-validation 1
         set payload "\x09\x18\x02\xfe\x03\x00\x00\x00\x61\x62\x63\x03\x00\x64\x65\x66\x03\x67\x68\x69\x03\x00\x6a\x6b\x6c\xff\x50\x00\x00\x00\x00\x00\x00\x00\x00\x00"

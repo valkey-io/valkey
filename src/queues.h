@@ -52,7 +52,9 @@ typedef struct mpscQueue {
     size_t queue_size;
 } mpscQueue;
 
+/* Initializes an MPSC queue with a size that must be a power of 2 */
 void mpscInit(mpscQueue *q, size_t queue_size);
+/* Frees the MPSC queue's internal buffer and resets its state */
 void mpscFree(mpscQueue *q);
 
 /* Pushes an item into the queue and returns true if the queue is not full.
@@ -86,11 +88,17 @@ typedef struct spmcQueue {
     size_t queue_size;
 } spmcQueue;
 
+/* Initializes an SPMC queue with a size that must be a power of 2 */
 void spmcInit(spmcQueue *q, size_t queue_size);
+/* Frees the SPMC queue's internal buffer and resets its state */
 void spmcFree(spmcQueue *q);
+/* Returns true if the SPMC queue has no items */
 bool spmcIsEmpty(spmcQueue *q);
+/* Returns an approximate number of items currently in the queue */
 size_t spmcSize(spmcQueue *q);
+/* Pushes an item to the SPMC queue. Returns true on success, false if the queue is full. */
 bool spmcEnqueue(spmcQueue *q, void *data);
+/* Pops and returns the next item from the queue, or NULL if the queue is empty */
 void *spmcDequeue(spmcQueue *q);
 
 /* ==========================================================================
@@ -112,14 +120,19 @@ typedef struct spscQueue {
     size_t queue_size;
 } spscQueue;
 
+/* Initializes an SPSC queue with a size that must be a power of 2 */
 void spscInit(spscQueue *q, size_t queue_size);
+/* Frees the SPSC queue's internal buffer and resets its state */
 void spscFree(spscQueue *q);
+/* Returns true if the queue is full, or false otherwise */
 bool spscIsFull(spscQueue *q);
 /* Push data to the queue. Caller must ensure queue is not full via spscIsFull().
  * If commit is true, the tail pointer is updated immediately (visible to consumer) else,
  * only local index is updated (batching). */
 void spscEnqueue(spscQueue *q, void *data, bool commit);
+/* Publishes any pending batched enqueues by advancing the shared tail pointer */
 void spscCommit(spscQueue *q);
+/* Pops up to num_jobs items from the queue and returns the actual number popped */
 size_t spscDequeueBatch(spscQueue *q, void **jobs_out, size_t num_jobs);
 /* Check if queue is empty from producer's perspective. */
 bool spscIsEmpty(spscQueue *q);

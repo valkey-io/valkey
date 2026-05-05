@@ -30,7 +30,7 @@ test "Raft MEET: two singletons" {
     }}
 }
 
-test "Raft MEET: singleton joins 2-node cluster" {
+test "Raft MEET: star formation - first node meets each node" {
     start_server {overrides {cluster-enabled yes cluster-protocol raft}} {
     start_server {overrides {cluster-enabled yes cluster-protocol raft}} {
     start_server {overrides {cluster-enabled yes cluster-protocol raft}} {
@@ -46,6 +46,28 @@ test "Raft MEET: singleton joins 2-node cluster" {
         }
 
         $r0 CLUSTER MEET [srv -2 host] [srv -2 port]
+        wait_for_condition 50 100 {
+            [get_cluster_info_field $r0 cluster_size] == 3 &&
+            [get_cluster_info_field $r1 cluster_size] == 3 &&
+            [get_cluster_info_field $r2 cluster_size] == 3
+        } else {
+            fail "Sizes: [get_cluster_info_field $r0 cluster_size] [get_cluster_info_field $r1 cluster_size] [get_cluster_info_field $r2 cluster_size]"
+        }
+    }}}
+}
+
+test "Raft MEET: reverse star formation - each node meets the first node" {
+    start_server {overrides {cluster-enabled yes cluster-protocol raft}} {
+    start_server {overrides {cluster-enabled yes cluster-protocol raft}} {
+    start_server {overrides {cluster-enabled yes cluster-protocol raft}} {
+        set r0 [srv 0 client]
+        set r1 [srv -1 client]
+        set r2 [srv -2 client]
+
+        # Each singleton meets node A (like valkey-cli --cluster create).
+        $r1 CLUSTER MEET [srv 0 host] [srv 0 port]
+        $r2 CLUSTER MEET [srv 0 host] [srv 0 port]
+
         wait_for_condition 50 100 {
             [get_cluster_info_field $r0 cluster_size] == 3 &&
             [get_cluster_info_field $r1 cluster_size] == 3 &&

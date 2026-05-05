@@ -214,6 +214,10 @@ static sds wireFinishMsg(sds buf) {
 
 /* Send an sds message on a link. Frees the sds. */
 static void clusterRaftSendMsg(clusterLink *link, sds msg) {
+    if (!link || !link->conn) {
+        sdsfree(msg);
+        return;
+    }
     size_t len = sdslen(msg);
     clusterMsgSendBlock *block = clusterAllocMsgSendBlock(len);
     memcpy(block->data, msg, len);
@@ -288,11 +292,9 @@ static void clusterRaftCheckSlotCoverage(void);
 static void clusterRaftBroadcastAppendEntries(clusterRaftState *rs);
 static void clusterRaftSendAppendEntries(clusterLink *link, clusterNode *node);
 
-/* Context for NODE_JOIN callback that sends WELCOME and fires MEET callback. */
+/* Context for NODE_JOIN callback that sends WELCOME. */
 typedef struct {
     sds node_name;
-    void *meet_ctx;
-    void (*meet_callback)(void *ctx, const char *error);
 } raftJoinCallbackCtx;
 
 static void clusterRaftJoinCallback(void *ctx, const char *error);
@@ -306,11 +308,79 @@ static void raftLogAppend(clusterRaftState *rs, raftLogEntry *e);
 static raftLogEntry *raftLogGet(clusterRaftState *rs, uint64_t index);
 static uint64_t raftLogLastIndex(clusterRaftState *rs);
 static uint64_t raftLogTermAt(clusterRaftState *rs, uint64_t index);
+static void raftLogTruncateFrom(clusterRaftState *rs, uint64_t index);
 
 static void clusterRaftRandomizeElectionTimeout(clusterRaftState *rs) {
     mstime_t base = server.cluster_node_timeout;
     if (base < 1000) base = 1000;
     rs->election_timeout = base + (rand() % base);
+}
+
+/* If we're a leader with an empty log (singleton that hasn't added itself yet),
+ * propose and commit NODE_JOIN + SLOT_CHANGE for ourselves. This ensures the
+ * leader's NODE_JOIN is first in the log and the followers can look up the
+ * leader before applying any other entry. */
+static void clusterRaftMaybeSelfJoin(void) {
+    clusterRaftState *rs = RAFT_STATE();
+    if (rs->role != RAFT_ROLE_LEADER || raftLogLastIndex(rs) != 0) return;
+
+    sds entry = sdsnew("NODE_JOIN ");
+    entry = sdscatlen(entry, myself->name, CLUSTER_NAMELEN);
+    entry = sdscat(entry, " ");
+    entry = clusterNodeAppendAddressString(entry, myself, server.tls_cluster);
+    clusterRaftPropose(entry, NULL, NULL);
+    sdsfree(entry);
+
+    /* Propose SLOT_CHANGE for slots assigned before any node joined. */
+    sds slots = sdsempty();
+    for (int j = 0; j < CLUSTER_SLOTS; j++) {
+        if (server.cluster->slots[j] != myself) continue;
+        int start = j;
+        while (j + 1 < CLUSTER_SLOTS && server.cluster->slots[j + 1] == myself) j++;
+        if (j == start)
+            slots = sdscatfmt(slots, " %i", start);
+        else
+            slots = sdscatfmt(slots, " %i-%i", start, j);
+    }
+    if (sdslen(slots) > 0) {
+        entry = sdsnew("SLOT_CHANGE ");
+        entry = sdscatlen(entry, myself->name, CLUSTER_NAMELEN);
+        entry = sdscatsds(entry, slots);
+        clusterRaftPropose(entry, NULL, NULL);
+        sdsfree(entry);
+    }
+    sdsfree(slots);
+}
+
+/* Propose NODE_JOIN if sender is new to the cluster and I'm not new. */
+static void clusterRaftMaybeInvitePeer(clusterNode *sender) {
+    clusterRaftState *rs = RAFT_STATE();
+    if (myself->flags & CLUSTER_NODE_MEET) {
+        return;
+    }
+    if (!(sender->flags & CLUSTER_NODE_MEET)) {
+        return;
+    }
+
+    /* Check if a NODE_JOIN entry for the sender is already in the log
+     * (uncommitted) to avoid adding a duplicate. */
+    for (uint64_t i = 0; i < rs->log_count; i++) {
+        if (rs->log[i]->type == RAFT_ENTRY_NODE_JOIN &&
+            sdslen(rs->log[i]->data) >= CLUSTER_NAMELEN &&
+            memcmp(rs->log[i]->data, sender->name, CLUSTER_NAMELEN) == 0) {
+            return;
+        }
+    }
+
+    sds entry = sdsnew("NODE_JOIN ");
+    entry = sdscatlen(entry, sender->name, CLUSTER_NAMELEN);
+    entry = sdscatlen(entry, " ", 1);
+    entry = clusterNodeAppendAddressString(entry, sender, server.tls_cluster);
+
+    raftJoinCallbackCtx *jc = zmalloc(sizeof(*jc));
+    jc->node_name = sdsnewlen(sender->name, CLUSTER_NAMELEN);
+    clusterRaftPropose(entry, jc, clusterRaftJoinCallback);
+    sdsfree(entry);
 }
 
 /* --------------------------------------------------------------------------
@@ -376,6 +446,10 @@ static int clusterRaftProcessHello(clusterLink *link, int argc, sds *argv) {
         clusterRaftRandomizeElectionTimeout(rs);
         rs->last_heartbeat = monotonicMs();
         rs->todo_connect_nodes = 1;
+        /* Clear singleton log — the leader's log is authoritative. */
+        raftLogTruncateFrom(rs, 1);
+        rs->last_applied = 0;
+        rs->commit_index = 0;
         serverLog(LL_NOTICE, "Singleton stepping down on HELLO from %.40s.", sender_name);
     }
     if (!sender) {
@@ -413,43 +487,8 @@ static int clusterRaftProcessHello(clusterLink *link, int argc, sds *argv) {
     /* Reply HI on the same inbound link. */
     clusterRaftSendGreeting(link, "HI");
 
-    /* Propose NODE_JOIN if sender is new to the cluster. */
-    if (server.cluster->size > 1 && (sender->flags & CLUSTER_NODE_MEET)) {
-        int already_in_log = 0;
-        for (uint64_t i = 0; i < rs->log_count; i++) {
-            if (rs->log[i]->type == RAFT_ENTRY_NODE_JOIN &&
-                sdslen(rs->log[i]->data) >= CLUSTER_NAMELEN &&
-                memcmp(rs->log[i]->data, sender->name, CLUSTER_NAMELEN) == 0) {
-                already_in_log = 1;
-                break;
-            }
-        }
-        if (!already_in_log) {
-            sds entry = sdsnew("NODE_JOIN ");
-            entry = sdscatlen(entry, sender->name, CLUSTER_NAMELEN);
-            entry = sdscatlen(entry, " ", 1);
-            entry = clusterNodeAppendAddressString(entry, sender, server.tls_cluster);
-
-            if (rs->role == RAFT_ROLE_LEADER) {
-                raftJoinCallbackCtx *jc = zmalloc(sizeof(*jc));
-                jc->node_name = sdsnewlen(sender->name, CLUSTER_NAMELEN);
-                raftPendingMeet *pm = clusterRaftConsumePendingMeet(sender);
-                if (pm) {
-                    jc->meet_ctx = pm->ctx;
-                    jc->meet_callback = pm->callback;
-                    sdsfree(pm->addr);
-                    zfree(pm);
-                } else {
-                    jc->meet_ctx = NULL;
-                    jc->meet_callback = NULL;
-                }
-                clusterRaftPropose(entry, jc, clusterRaftJoinCallback);
-            } else {
-                clusterRaftPropose(entry, NULL, NULL);
-            }
-            sdsfree(entry);
-        }
-    }
+    /* Add the peer to the cluster, if it's new and we're not new. */
+    clusterRaftMaybeInvitePeer(sender);
 
     return 1;
 }
@@ -475,6 +514,11 @@ static int clusterRaftProcessHi(clusterLink *link, int argc, sds *argv) {
         memset(rs->voted_for, 0, CLUSTER_NAMELEN);
         clusterRaftRandomizeElectionTimeout(rs);
         rs->last_heartbeat = monotonicMs();
+        rs->todo_connect_nodes = 1;
+        /* Clear singleton log — the leader's log is authoritative. */
+        raftLogTruncateFrom(rs, 1);
+        rs->last_applied = 0;
+        rs->commit_index = 0;
         serverLog(LL_NOTICE, "Singleton stepping down on HI from non-singleton %.40s.", sender_name);
     }
 
@@ -505,41 +549,8 @@ static int clusterRaftProcessHi(clusterLink *link, int argc, sds *argv) {
 
     if (!sender) return 1;
 
-    /* Propose NODE_JOIN for the sender. On followers, this forwards
-     * to the leader via PROPOSE. */
-    if (sender->flags & CLUSTER_NODE_MEET) {
-        serverLog(LL_DEBUG, "TRACE HI: proposing NODE_JOIN for %.40s (role=%d)", sender->name, rs->role);
-        int already_in_log = 0;
-        for (uint64_t i = 0; i < rs->log_count; i++) {
-            if (rs->log[i]->type == RAFT_ENTRY_NODE_JOIN &&
-                sdslen(rs->log[i]->data) >= CLUSTER_NAMELEN &&
-                memcmp(rs->log[i]->data, sender->name, CLUSTER_NAMELEN) == 0) {
-                already_in_log = 1;
-                break;
-            }
-        }
-        if (!already_in_log) {
-            sds entry = sdsnew("NODE_JOIN ");
-            entry = sdscatlen(entry, sender->name, CLUSTER_NAMELEN);
-            entry = sdscatlen(entry, " ", 1);
-            entry = clusterNodeAppendAddressString(entry, sender, server.tls_cluster);
-
-            raftJoinCallbackCtx *jc = zmalloc(sizeof(*jc));
-            jc->node_name = sdsnewlen(sender->name, CLUSTER_NAMELEN);
-            raftPendingMeet *pm = clusterRaftConsumePendingMeet(sender);
-            if (pm) {
-                jc->meet_ctx = pm->ctx;
-                jc->meet_callback = pm->callback;
-                sdsfree(pm->addr);
-                zfree(pm);
-            } else {
-                jc->meet_ctx = NULL;
-                jc->meet_callback = NULL;
-            }
-            clusterRaftPropose(entry, jc, clusterRaftJoinCallback);
-            sdsfree(entry);
-        }
-    }
+    /* Add the peer to the cluster, if it's new and we're not new. */
+    clusterRaftMaybeInvitePeer(sender);
 
     /* Send AE immediately to catch up the peer. */
     if (rs->role == RAFT_ROLE_LEADER && sender->link) {
@@ -556,7 +567,7 @@ static int clusterRaftProcessHi(clusterLink *link, int argc, sds *argv) {
     return 1;
 }
 
-/* WELCOME: received on an outbound link after NODE_JOIN committed.
+/* WELCOME: received after NODE_JOIN committed.
  * Fires the pending MEET callback. */
 static int clusterRaftProcessWelcome(clusterLink *link, int argc, sds *argv) {
     UNUSED(link);
@@ -647,6 +658,15 @@ static void clusterRaftPropose(sds entry, void *ctx, void (*callback)(void *ctx,
     }
 
     if (rs->role == RAFT_ROLE_LEADER) {
+        /* If we're a singleton leader with an empty log that hasn't committed
+         * its own NODE_JOIN yet, do it now before appending any other entry. */
+        if (raftLogLastIndex(rs) == 0 &&
+            !(type == RAFT_ENTRY_NODE_JOIN &&
+              sdslen(data) >= CLUSTER_NAMELEN &&
+              memcmp(data, myself->name, CLUSTER_NAMELEN) == 0)) {
+            clusterRaftMaybeSelfJoin();
+        }
+
         uint64_t idx = raftLogLastIndex(rs) + 1;
         raftLogAppend(rs, raftLogCreate(rs->current_term, idx, type, data));
         serverLog(LL_NOTICE, "Leader appended %s (index %llu).",
@@ -869,6 +889,40 @@ static void raftLogApply(raftLogEntry *e) {
                 if (rs->role == RAFT_ROLE_LEARNER) {
                     rs->role = RAFT_ROLE_FOLLOWER;
                     serverLog(LL_NOTICE, "Promoted from learner to follower.");
+
+                    /* Propose SLOT_CHANGE for slots assigned before joining
+                     * the cluster (from our singleton state). */
+                    sds entry = sdsnew("SLOT_CHANGE ");
+                    entry = sdscatlen(entry, myself->name, CLUSTER_NAMELEN);
+                    int count = 0;
+                    for (int j = 0; j < CLUSTER_SLOTS; j++) {
+                        if (server.cluster->slots[j] != myself) continue;
+                        int start = j;
+                        while (j + 1 < CLUSTER_SLOTS && server.cluster->slots[j + 1] == myself) j++;
+                        if (j == start)
+                            entry = sdscatfmt(entry, " %i", start);
+                        else
+                            entry = sdscatfmt(entry, " %i-%i", start, j);
+                        count++;
+                    }
+                    if (count > 0) {
+                        clusterRaftPropose(entry, NULL, NULL);
+                    }
+                    sdsfree(entry);
+                }
+            }
+
+            /* If we have a pending CLUSTER MEET for this node, fire its
+             * callback now that the NODE_JOIN is committed. */
+            {
+                clusterNode *node = clusterLookupNode(argv[0], CLUSTER_NAMELEN);
+                if (node) {
+                    raftPendingMeet *pm = clusterRaftConsumePendingMeet(node);
+                    if (pm) {
+                        pm->callback(pm->ctx, NULL);
+                        sdsfree(pm->addr);
+                        zfree(pm);
+                    }
                 }
             }
         }
@@ -895,12 +949,13 @@ static void raftLogApply(raftLogEntry *e) {
     case RAFT_ENTRY_NODE_FORGET: {
         clusterNode *node = clusterLookupNode(e->data, sdslen(e->data));
         if (node && node != myself) {
-            /* Clear slots owned by this node. */
-            for (int j = 0; j < CLUSTER_SLOTS; j++) {
-                if (server.cluster->slots[j] == node) clusterDelSlot(j);
+            /* Detach link before deleting so clusterReadHandler can detect
+             * that the node it was talking to is gone. */
+            if (node->link) {
+                node->link->node = NULL;
+                node->link = NULL;
             }
-            clusterRemoveNodeFromShard(node);
-            freeClusterNode(node);
+            clusterDelNode(node);
             rs->todo_update_slot_coverage = 1;
             rs->todo_invalidate_slots_cache = 1;
         }
@@ -1234,6 +1289,11 @@ static int clusterRaftProcessAppendEntriesResponse(clusterLink *link, int argc, 
             rs->last_applied++;
             raftLogEntry *e = raftLogGet(rs, rs->last_applied);
             if (e) raftLogApply(e);
+        }
+        /* If the node we were talking to was forgotten, bail out. */
+        if (!link->node) {
+            freeClusterLink(link);
+            return 0;
         }
         /* If commit advanced, broadcast so followers learn the new commit. */
         if (rs->last_applied > prev_commit) {
@@ -1976,6 +2036,7 @@ done:
 /* Look up and consume a pending MEET callback by node address. */
 static raftPendingMeet *clusterRaftConsumePendingMeet(clusterNode *node) {
     clusterRaftState *rs = RAFT_STATE();
+    if (listLength(rs->pending_meets) == 0) return NULL;
     sds addr = sdscatfmt(sdsempty(), "%s:%i", node->ip, node->cport);
     listIter li;
     listNode *ln;
@@ -1999,8 +2060,6 @@ static void clusterRaftJoinCallback(void *ctx, const char *error) {
         clusterNode *n = clusterLookupNode(jc->node_name, sdslen(jc->node_name));
         if (n && n->link) clusterRaftSendGreeting(n->link, "WELCOME");
     }
-    /* Fire the MEET callback if present. */
-    if (jc->meet_callback) jc->meet_callback(jc->meet_ctx, error);
     sdsfree(jc->node_name);
     zfree(jc);
 }
@@ -2013,15 +2072,7 @@ static void clusterRaftPostConnect(struct clusterLink *link) {
     }
     /* Commit NODE_JOIN for ourselves once we know our IP. */
     if ((myself->flags & CLUSTER_NODE_MEET) && myself->ip[0] != '\0') {
-        clusterRaftState *rs = RAFT_STATE();
-        if (rs->role == RAFT_ROLE_LEADER) {
-            sds entry = sdsnew("NODE_JOIN ");
-            entry = sdscatlen(entry, myself->name, CLUSTER_NAMELEN);
-            entry = sdscatlen(entry, " ", 1);
-            entry = clusterNodeAppendAddressString(entry, myself, server.tls_cluster);
-            clusterRaftPropose(entry, NULL, NULL);
-            sdsfree(entry);
-        }
+        clusterRaftMaybeSelfJoin();
     }
     /* Send HELLO on every new outbound link for identification. */
     clusterRaftSendHello(link);
@@ -2295,6 +2346,28 @@ static void clusterRaftSlotChangeApplyCallback(void *ctx, const char *error) {
 
 /* Invoked for slot assignments and slot migrations (ADDSLOTS, SETSLOT, etc.) */
 static void clusterRaftSlotChange(slotRange *ranges, int numranges, clusterNode *target, void *ctx, void (*callback)(void *ctx, const char *error)) {
+    clusterRaftState *rs = RAFT_STATE();
+
+    /* Singleton with empty log: apply locally without proposing.
+     * The entries will be proposed when the first node joins. */
+    if (rs->role == RAFT_ROLE_LEADER && server.cluster->size <= 1 &&
+        raftLogLastIndex(rs) == 0) {
+        for (int i = 0; i < numranges; i++) {
+            for (int j = ranges[i].start_slot; j <= ranges[i].end_slot; j++) {
+                if (target) {
+                    if (server.cluster->slots[j]) clusterDelSlot(j);
+                    clusterAddSlot(target, j);
+                } else {
+                    clusterDelSlot(j);
+                }
+            }
+        }
+        rs->todo_update_slot_coverage = 1;
+        rs->todo_invalidate_slots_cache = 1;
+        if (callback) callback(ctx, NULL);
+        return;
+    }
+
     /* Build entry: "SLOT_CHANGE <node-id-or-dash> <ranges...>" */
     sds entry = sdsnew("SLOT_CHANGE ");
     entry = sdscatlen(entry, target ? target->name : "-", target ? CLUSTER_NAMELEN : 1);

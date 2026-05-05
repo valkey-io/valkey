@@ -265,8 +265,9 @@ static void createIOThread(int id) {
     pthread_mutex_init(&io_threads_mutex[id], NULL);
     IOJobQueue_init(&io_jobs[id], IO_JOB_QUEUE_SIZE);
     pthread_mutex_lock(&io_threads_mutex[id]); /* Thread will be stopped. */
-    if (pthread_create(&tid, NULL, IOThreadMain, (void *)(long)id) != 0) {
-        serverLog(LL_WARNING, "Fatal: Can't initialize IO thread, pthread_create failed with: %s", strerror(errno));
+    int err = pthread_create(&tid, NULL, IOThreadMain, (void *)(long)id);
+    if (err) {
+        serverLog(LL_WARNING, "Fatal: Can't initialize IO thread, pthread_create failed with: %s", strerror(err));
         exit(1);
     }
     io_threads[id] = tid;
@@ -574,6 +575,7 @@ void trySendPollJobToIOThreads(void) {
 static void ioThreadAccept(void *data) {
     client *c = (client *)data;
     connAccept(c->conn, NULL);
+    atomic_thread_fence(memory_order_release);
     c->io_read_state = CLIENT_COMPLETED_IO;
 }
 

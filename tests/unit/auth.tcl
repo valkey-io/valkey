@@ -45,6 +45,58 @@ start_server {tags {"auth external:skip"} overrides {requirepass foobar}} {
         assert_match {*unauthenticated bulk length*} $e
         $rr close
     }
+
+    test {For unauthenticated clients output buffer is limited} {
+        set rr [valkey [srv "host"] [srv "port"] 1 $::tls]
+        
+        # make sure the client is no longer authenticated
+        $rr SET x 5
+        catch {[$rr read]} e
+        assert_match {*NOAUTH Authentication required*} $e
+
+        # Force clients to use the reply list in order 
+        # to make them have a larger than 1K output buffer on any reply
+        assert_match "OK" [r debug client-enforce-reply-list 1]
+        
+        # Fill the output buffer without reading it and make
+        # sure the client disconnected.
+        $rr SET x 5
+        catch {[$rr read]} e
+        assert_match {I/O error reading reply} $e  
+
+        # Reset the debug
+        assert_match "OK" [r debug client-enforce-reply-list 0]
+    }  
+
+    test {For once authenticated clients output buffer is NOT limited} {
+        set rr [valkey [srv "host"] [srv "port"] 1 $::tls]
+
+        # first time authenticate client
+        $rr auth foobar
+        assert_equal {OK} [$rr read]
+
+        # now reset the client so it is not authenticated
+        $rr reset
+        assert_equal {RESET} [$rr read]
+
+        # make sure the client is no longer authenticated
+        $rr SET x 5
+        catch {[$rr read]} e
+        assert_match {*NOAUTH Authentication required*} $e
+
+        # Force clients to use the reply list in order 
+        # to make them have a larger than 1K output buffer on any reply
+        assert_match "OK" [r debug client-enforce-reply-list 1]
+        
+        # Fill the output buffer without reading it and make
+        # sure the client was NOT disconnected.
+        $rr SET x 5
+        catch {[$rr read]} e
+        assert_match {*NOAUTH Authentication required*} $e
+
+        # Reset the debug
+        assert_match "OK" [r debug client-enforce-reply-list 0]
+    }  
 }
 
 foreach dualchannel {yes no} {

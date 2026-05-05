@@ -57,6 +57,7 @@ unsigned long kvstoreHashtableRehashingCount(kvstore *kvs);
 
 /* Specific hashtable access by hashtable-index */
 unsigned long kvstoreHashtableSize(kvstore *kvs, int didx);
+unsigned long kvstoreHashtableBuckets(kvstore *kvs, int didx);
 kvstoreHashtableIterator *kvstoreGetHashtableIterator(kvstore *kvs, int didx, uint8_t flags);
 void kvstoreReleaseHashtableIterator(kvstoreHashtableIterator *kvs_id);
 int kvstoreHashtableIteratorNext(kvstoreHashtableIterator *kvs_di, void **next);
@@ -64,6 +65,7 @@ int kvstoreHashtableRandomEntry(kvstore *kvs, int didx, void **found);
 int kvstoreHashtableFairRandomEntry(kvstore *kvs, int didx, void **found);
 unsigned int kvstoreHashtableSampleEntries(kvstore *kvs, int didx, void **dst, unsigned int count);
 int kvstoreHashtableExpand(kvstore *kvs, int didx, unsigned long size);
+int kvstoreHashtableTryExpand(kvstore *kvs, int didx, unsigned long size);
 unsigned long kvstoreHashtableScanDefrag(kvstore *kvs,
                                          int didx,
                                          unsigned long v,

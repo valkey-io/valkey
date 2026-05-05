@@ -38,6 +38,34 @@ start_server {tags {"tracking network logreqres:skip"}} {
         }
     }
 
+    test {Client tracking prefixes memory overhead} {
+        r CLIENT TRACKING off
+        set tot_mem_before [get_field_in_client_info [r client info] "tot-mem"]
+
+        # We add multiple $i to prefix to avoid prefix conflicts, so in this
+        # args we will have about 20000 rax nodes.
+        set args {}
+        for {set i 0} {$i < 10240} {incr i} {
+            lappend args PREFIX
+            lappend args PREFIX-$i-$i-$i-$i-$i-$i-$i
+        }
+        r CLIENT TRACKING on BCAST {*}$args
+
+        set arch_bits [s arch_bits]
+        set tot_mem_after [get_field_in_client_info [r client info] "tot-mem"]
+        set diff [expr $tot_mem_after - $tot_mem_before]
+
+        # In 64 bits, before we would consume about 20000 * (4 * 8), that is 640000.
+        # And now we are 20000 * (4 + 8), that is 240000.
+        if {$arch_bits == 64} {
+            assert_lessthan $diff 300000
+        } elseif {$arch_bits == 32} {
+            assert_lessthan $diff 200000
+        }
+
+        r CLIENT TRACKING off
+    }
+
     test {Clients are able to enable tracking and redirect it} {
         r CLIENT TRACKING on REDIRECT $redir_id
     } {*OK}

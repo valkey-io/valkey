@@ -213,7 +213,7 @@ start_cluster 3 1 {tags {external:skip cluster} overrides {cluster-ping-interval
     }
 } ;# start_cluster
 
-start_cluster 3 1 {tags {external:skip cluster} overrides {cluster-ping-interval 1000 cluster-node-timeout 2000}} {
+start_cluster 3 1 {tags {external:skip cluster} overrides {cluster-ping-interval 1000 cluster-node-timeout 2000 cluster-replica-validity-factor 0}} {
     test "Manual failover vote is not limited by two times the node timeout - mixed failover" {
         # Make sure the failover is triggered by us.
         R 1 config set cluster-replica-validity-factor 0
@@ -263,7 +263,7 @@ start_cluster 3 1 {tags {external:skip cluster} overrides {cluster-ping-interval
     }
 } ;# start_cluster
 
-start_cluster 3 1 {tags {external:skip cluster} overrides {cluster-ping-interval 1000 cluster-node-timeout 2000}} {
+start_cluster 3 1 {tags {external:skip cluster} overrides {cluster-ping-interval 1000 cluster-node-timeout 2000 cluster-replica-validity-factor 0}} {
     test "Automatic failover vote is not limited by two times the node timeout - mixed failover" {
         R 3 cluster failover
         wait_for_condition 1000 50 {

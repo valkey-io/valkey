@@ -139,28 +139,6 @@ start_server {tags {"introspection"}} {
         assert_error "ERR *greater than 0*" {r client list maxage -1}
     }
 
-    proc get_field_in_client_info {info field} {
-        set info [string trim $info]
-        foreach item [split $info " "] {
-            set kv [split $item "="]
-            set k [lindex $kv 0]
-            if {[string match $field $k]} {
-                return [lindex $kv 1]
-            }
-        }
-        return ""
-    }
-
-    proc get_field_in_client_list {id client_list filed} {
-        set list [split $client_list "\r\n"]
-        foreach info $list {
-            if {[string match "id=$id *" $info] } {
-                return [get_field_in_client_info $info $filed]
-            }
-        }
-        return ""
-    }
-
     proc get_client_tot_in_out_cmds {id} {
         set info_list [r client list]
         set in [get_field_in_client_list $id $info_list "tot-net-in"]
@@ -418,6 +396,15 @@ start_server {tags {"introspection"}} {
         $rd close
         set _ $res
     } {*"set" "foo"*"get" "foo"*}
+
+    test {MONITOR properly escapes special characters through sdscatrepr} {
+        set rd [valkey_deferring_client]
+        $rd monitor
+        assert_match {*OK*} [$rd read]
+        r echo "backslash\\quotes\"newline\ncarriagereturn\rtab\talert\abackspace\bhexnormal\x7Ahexspecial\x7F"
+        assert_match {*"echo" "backslash\\\\quotes\\"newline\\ncarriagereturn\\rtab\\talert\\abackspace\\bhexnormalzhexspecial\\x7f"*} [$rd read]
+        $rd close
+    }
 
     test {MONITOR can log commands issued by the scripting engine} {
         set rd [valkey_deferring_client]
@@ -813,7 +800,7 @@ start_server {tags {"introspection"}} {
             lappend backups $c [lindex [r config get $c] 1]
         }
 
-        # multi config set and veirfy
+        # multi config set and verify
         assert_equal [eval "r config set $some_configs"] "OK"
         dict for {c val} $some_configs {
             assert_equal [lindex [r config get $c] 1] $val

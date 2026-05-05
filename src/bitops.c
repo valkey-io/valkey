@@ -194,7 +194,7 @@ long long serverPopcount(void *s, long count) {
 #ifdef HAVE_AVX2
     /* If length of s >= 256 bits and the CPU supports AVX2,
      * we prefer to use the SIMD version */
-    if (count >= 32) {
+    if (count >= 32 && __builtin_cpu_supports("avx2")) {
         return popcountAVX2(s, count);
     }
 #endif
@@ -1253,6 +1253,7 @@ void bitfieldGeneric(client *c, int flags) {
         }
     }
 
+    initDeferredReplyBuffer(c);
     addReplyArrayLen(c, numops);
 
     /* Actually process the operations. */
@@ -1364,6 +1365,7 @@ void bitfieldGeneric(client *c, int flags) {
         notifyKeyspaceEvent(NOTIFY_STRING, "setbit", c->argv[1], c->db->id);
         server.dirty += changes;
     }
+    commitDeferredReplyBuffer(c, 1);
     zfree(ops);
 }
 

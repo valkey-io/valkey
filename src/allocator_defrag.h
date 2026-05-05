@@ -5,7 +5,7 @@
 #include <jemalloc/jemalloc.h>
 /* We can enable the server defrag capabilities only if we are using Jemalloc
  * and the version that has the experimental.utilization namespace in mallctl . */
-#if (defined(JEMALLOC_VERSION_MAJOR) &&                                                                 \
+#if (defined(VALKEY_VENDORED_JEMALLOC) && defined(JEMALLOC_VERSION_MAJOR) &&                            \
      (JEMALLOC_VERSION_MAJOR > 5 ||                                                                     \
       (JEMALLOC_VERSION_MAJOR == 5 && JEMALLOC_VERSION_MINOR > 2) ||                                    \
       (JEMALLOC_VERSION_MAJOR == 5 && JEMALLOC_VERSION_MINOR == 2 && JEMALLOC_VERSION_BUGFIX >= 1))) || \

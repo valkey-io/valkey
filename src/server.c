@@ -988,6 +988,9 @@ int clientsCronResizeOutputBuffer(client *c, mstime_t now_ms) {
         size_t oldbuf_size = c->buf_usable_size;
         c->buf = zmalloc_usable(new_buffer_size, &c->buf_usable_size);
         memcpy(c->buf, oldbuf, c->bufpos);
+        if (c->io_last_written.buf == oldbuf) {
+            c->io_last_written.buf = c->buf;
+        }
         zfree_with_size(oldbuf, oldbuf_size);
     }
     return 0;
@@ -1915,7 +1918,11 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
 
     /* Try to process more IO reads that are ready to be processed. */
     if (server.aof_fsync != AOF_FSYNC_ALWAYS) {
-        processIOThreadsReadDone();
+        int io_responses_after = processIOThreadsReadDone();
+        if (io_responses_after > 0) {
+            /* Any responses that failed to enqueue to IO threads need to be handled now */
+            handleClientsWithPendingWrites();
+        }
     }
 
     processIOThreadsWriteDone();
@@ -2138,6 +2145,7 @@ void createSharedObjects(void) {
     shared.multi = createSharedString("MULTI");
     shared.exec = createSharedString("EXEC");
     shared.hset = createSharedString("HSET");
+    shared.hsetex = createSharedString("HSETEX");
     shared.hdel = createSharedString("HDEL");
     shared.hpexpireat = createSharedString("HPEXPIREAT");
     shared.hpersist = createSharedString("HPERSIST");
@@ -3131,7 +3139,13 @@ void InitServerLast(void) {
     bioInit();
     initIOThreads();
     set_jemalloc_bg_thread(server.jemalloc_bg_thread);
-    server.initial_memory_usage = zmalloc_used_memory();
+
+    /* First set initial_memory_usage to zero as baseline for getMemoryOverheadData(). */
+    server.initial_memory_usage = 0;
+    struct serverMemOverhead *mh = getMemoryOverheadData();
+    /* Exclude current overhead memory to avoid double counting in the future. */
+    server.initial_memory_usage = zmalloc_used_memory() - mh->overhead_total;
+    freeMemoryOverheadData(mh);
 }
 
 /* The purpose of this function is to try to "glue" consecutive range

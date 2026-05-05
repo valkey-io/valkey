@@ -118,10 +118,11 @@ start_server {tags {"commandlog"} overrides {commandlog-execution-slower-than 10
         assert_equal [lindex $e 3] {set testkey {AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA... (896 more bytes)}}
         assert_equal {foobar} [lindex $e 5]
 
-        # for large-reply
-        set copy_avoid [lindex [r config get min-io-threads-avoid-copy-reply] 1]
-        r config set min-io-threads-avoid-copy-reply 0
-
+        # for large-reply - without reply copy avoidance
+        set copy_avoid [lindex [r config get min-string-size-avoid-copy-reply] 1]
+        if {!$::external} {
+            assert_morethan $copy_avoid 1024
+        }
         r get testkey
         set e [lindex [r commandlog get -1 large-reply] 0]
         assert_equal [llength $e] 6
@@ -132,8 +133,20 @@ start_server {tags {"commandlog"} overrides {commandlog-execution-slower-than 10
         assert_equal [lindex $e 3] {get testkey}
         assert_equal {foobar} [lindex $e 5]
 
-        # Restore min-io-threads-avoid-copy-reply value
-        r config set min-io-threads-avoid-copy-reply $copy_avoid
+        # for large-reply - with reply copy avoidance
+        # set min-string-size-avoid-copy-reply to 1 so wo will use reply copy avoidance
+        r config set min-string-size-avoid-copy-reply 1
+        r get testkey
+        set e [lindex [r commandlog get -1 large-reply] 0]
+        assert_equal [llength $e] 6
+        if {!$::external} {
+            assert_equal [lindex $e 0] 118
+        }
+        assert_equal [expr {[lindex $e 2] > 1024}] 1
+        assert_equal [lindex $e 3] {get testkey}
+        assert_equal {foobar} [lindex $e 5]
+        # Restore min-string-size-avoid-copy-reply value
+        r config set min-string-size-avoid-copy-reply $copy_avoid
     } {OK} {needs:debug}
 
     test {COMMANDLOG slow - Certain commands are omitted that contain sensitive information} {
@@ -362,5 +375,37 @@ start_server {tags {"commandlog"} overrides {commandlog-execution-slower-than 10
             assert_equal {test-client} [lindex $script_cmd 5]
             assert_equal {test-client} [lindex $ping_cmd 5]
         }
+    }
+
+    test {COMMANDLOG large-reply - byte tracking with copy avoidance} {
+        set copy_avoid [lindex [r config get min-string-size-avoid-copy-reply] 1]
+        r config set min-string-size-avoid-copy-reply 1
+        
+        # Disable reply tracking
+        r config set commandlog-reply-larger-than -1
+        r commandlog reset large-reply
+        
+        set value [string repeat A 2048]
+        r set testkey $value
+        
+        # Should not be logged
+        r get testkey
+        assert_equal [r commandlog len large-reply] 0
+        
+        # Enable tracking
+        r config set commandlog-reply-larger-than 1024
+        r commandlog reset large-reply
+        
+        # Get the value again, should be tracked
+        r get testkey
+        assert_equal [r commandlog len large-reply] 1
+        set e [lindex [r commandlog get -1 large-reply] 0]
+        assert_equal [lindex $e 3] {get testkey}
+        # For 2048 bytes: $2048\r\n<data>\r\n = 2057
+        assert_equal [lindex $e 2] 2057
+        
+        # Cleanup
+        r config set min-string-size-avoid-copy-reply $copy_avoid
+        r del testkey
     }
 }

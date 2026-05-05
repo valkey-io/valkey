@@ -27,7 +27,7 @@ jobs:
     if: github.event_name != 'schedule' || github.repository == 'valkey-io/valkey'
     timeout-minutes: 1440
     steps:
-      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - name: Build
         run: make SERVER_CFLAGS=-Werror
       - name: Start valkey-server
@@ -42,7 +42,7 @@ jobs:
             --tags -slow
       - name: Archive server log
         if: ${{ failure() }}
-        uses: actions/upload-artifact@6f51ac03b9356f520e9adb1b1b7802705f340c2b # v4.5.0
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: test-external-standalone-log
           path: external-server.log
@@ -52,7 +52,7 @@ jobs:
     if: github.event_name != 'schedule' || github.repository == 'valkey-io/valkey'
     timeout-minutes: 1440
     steps:
-      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - name: Build
         run: make SERVER_CFLAGS=-Werror
       - name: Start valkey-server
@@ -71,7 +71,7 @@ jobs:
             --tags -slow
       - name: Archive server log
         if: ${{ failure() }}
-        uses: actions/upload-artifact@6f51ac03b9356f520e9adb1b1b7802705f340c2b # v4.5.0
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: test-external-cluster-log
           path: external-server.log
@@ -81,7 +81,7 @@ jobs:
     if: github.event_name != 'schedule' || github.repository == 'valkey-io/valkey'
     timeout-minutes: 1440
     steps:
-      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - name: Build
         run: make SERVER_CFLAGS=-Werror
       - name: Start valkey-server
@@ -95,7 +95,7 @@ jobs:
             --tags "-slow -needs:debug"
       - name: Archive server log
         if: ${{ failure() }}
-        uses: actions/upload-artifact@6f51ac03b9356f520e9adb1b1b7802705f340c2b # v4.5.0
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: test-external-nodebug-log
           path: external-server.log

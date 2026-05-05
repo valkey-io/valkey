@@ -10,6 +10,19 @@ SECURITY: There are security fixes in the release.
 --------------------------------------------------------------------------------
 
 ================================================================================
+Valkey 8.1.7  -  Tue 05 May 2026
+================================================================================
+
+Upgrade urgency SECURITY: This release includes security fixes we recommend you
+apply as soon as possible.
+
+Security fixes
+==============
+* (CVE-2026-23479) Use-After-Free in unblock client flow
+* (CVE-2026-25243) Invalid Memory Access in RESTORE command
+* (CVE-2026-23631) Use-after-free when full sync occurs during a yielding Lua/function execution
+
+================================================================================
 Valkey 8.1.6  -  Released Mon 23 February 2026
 ================================================================================
 

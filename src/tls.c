@@ -1993,6 +1993,7 @@ static ConnectionType CT_TLS = {
     .process_pending_data = tlsProcessPendingData,
     .postpone_update_state = postPoneUpdateSSLState,
     .update_state = updateSSLState,
+    .update_state_may_invoke_handlers = 0,
 
     /* TLS specified methods */
     .get_peer_cert = connTLSGetPeerCert,

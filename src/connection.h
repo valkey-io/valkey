@@ -144,6 +144,9 @@ typedef struct ConnectionType {
     void (*postpone_update_state)(struct connection *conn, int);
     /* Called by the main-thread */
     void (*update_state)(struct connection *conn);
+    /* If true, update_state() may synchronously invoke read/write handlers (or
+     * equivalent). Networking defers/reschedules work around connUpdateState(). */
+    int update_state_may_invoke_handlers;
 
     /* TLS specified methods */
     sds (*get_peer_cert)(struct connection *conn);
@@ -509,6 +512,11 @@ int RegisterConnectionTypeRdma(void);
 /* Return 1 if connection is using TLS protocol, 0 if otherwise. */
 static inline int connIsTLS(connection *conn) {
     return conn && conn->type == connectionTypeTls();
+}
+
+/* Return non-zero if this connection type's update_state may re-enter handlers. */
+static inline int connUpdateStateMayInvokeHandlers(connection *conn) {
+    return conn && conn->type && conn->type->update_state_may_invoke_handlers;
 }
 
 static inline void connUpdateState(connection *conn) {

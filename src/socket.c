@@ -462,6 +462,7 @@ static ConnectionType CT_Socket = {
     .process_pending_data = NULL,
     .postpone_update_state = NULL,
     .update_state = NULL,
+    .update_state_may_invoke_handlers = 0,
 
     /* Miscellaneous */
     .connIntegrityChecked = NULL,

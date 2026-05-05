@@ -3303,11 +3303,14 @@ void processClientIOWriteDone(client *c) {
     /* Don't post-process-writes to clients that are going to be closed anyway. */
     if (c->flag.close_asap) return;
 
-
-    connSetPostponeUpdateState(c->conn, 0);
-    connUpdateState(c->conn);
-    if (postWriteToClient(c) == C_ERR) {
-        return;
+    if (connUpdateStateMayInvokeHandlers(c->conn)) {
+        if (postWriteToClient(c) == C_ERR) return;
+        connSetPostponeUpdateState(c->conn, 0);
+        connUpdateState(c->conn);
+    } else {
+        connSetPostponeUpdateState(c->conn, 0);
+        connUpdateState(c->conn);
+        if (postWriteToClient(c) == C_ERR) return;
     }
 
     if (!clientHasPendingReplies(c)) return;
@@ -6513,7 +6516,7 @@ int postponeClientRead(client *c) {
     return (trySendReadToIOThreads(c) == C_OK);
 }
 
-void processClientIOReadsDone(client *c) {
+int processClientIOReadsDone(client *c) {
     serverAssert(c->io_read_state == CLIENT_COMPLETED_IO);
 
     if (ProcessingEventsWhileBlocked) {
@@ -6526,33 +6529,36 @@ void processClientIOReadsDone(client *c) {
     c->io_read_state = CLIENT_IDLE;
 
     /* Don't post-process-reads from clients that are going to be closed anyway. */
-    if (c->flag.close_asap) return;
+    if (c->flag.close_asap) return 0;
 
     /* If a client is protected, don't do anything,
      * that may trigger read/write error or recreate handler. */
-    if (c->flag.protected) return;
+    if (c->flag.protected) return 0;
 
     /* Save the current conn state, as connUpdateState may modify it */
     int in_accept_state = (connGetState(c->conn) == CONN_STATE_ACCEPTING);
+    /* If update_state may synchronously run the read handler and re-offload this
+     * client, wait until the current command queue is drained first. */
+    int defer_update_state = connUpdateStateMayInvokeHandlers(c->conn) && !in_accept_state;
     connSetPostponeUpdateState(c->conn, 0);
-    connUpdateState(c->conn);
+    if (!defer_update_state) connUpdateState(c->conn);
 
     /* In accept state, no client's data was read - stop here. */
-    if (in_accept_state) return;
+    if (in_accept_state) return 0;
 
     /* On read error - stop here. */
     if (handleReadResult(c) == C_ERR) {
-        return;
+        return 0;
     }
 
     if (!(c->read_flags & READ_FLAGS_DONT_PARSE)) {
         parseResult res = handleParseResults(c);
         /* On parse error - stop here. */
         if (res == PARSE_ERR) {
-            return;
+            return 0;
         } else if (res == PARSE_NEEDMORE) {
             beforeNextClient(c);
-            return;
+            return defer_update_state;
         }
     }
 
@@ -6566,6 +6572,7 @@ void processClientIOReadsDone(client *c) {
     if (ret == C_ERR) {
         if (processPendingCommandAndInputBuffer(c) == C_OK) beforeNextClient(c);
     }
+    return defer_update_state;
 }
 
 /* Returns the actual client eviction limit based on current configuration or

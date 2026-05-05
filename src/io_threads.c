@@ -6,6 +6,7 @@
 
 #include "io_threads.h"
 #include "cluster_migrateslots.h"
+#include "connection.h"
 #include "queues.h"
 #include <sys/resource.h>
 
@@ -501,6 +502,8 @@ void initIOThreads(int prev_threads_num) {
 
 int trySendReadToIOThreads(client *c) {
     if (server.active_io_threads_num <= 1) return C_ERR;
+    /* Fake/teardown clients may have no connection; never offload those. */
+    if (!c->conn) return C_ERR;
     /* If IO thread is already reading, return C_OK to make sure the main thread will not handle it. */
     if (c->io_read_state != CLIENT_IDLE) return C_OK;
     if (c->io_write_state == CLIENT_PENDING_IO) return C_OK;
@@ -537,6 +540,7 @@ int trySendReadToIOThreads(client *c) {
  * or C_ERR if the client is not eligible for offloading. */
 int trySendWriteToIOThreads(client *c) {
     if (server.active_io_threads_num <= 1) return C_ERR;
+    if (!c->conn) return C_ERR;
     /* The I/O thread is already writing for this client. */
     if (c->io_write_state != CLIENT_IDLE) return C_OK;
     if (c->io_read_state == CLIENT_PENDING_IO) return C_ERR;
@@ -832,20 +836,38 @@ int trySendAcceptToIOThreads(connection *conn) {
     return C_OK;
 }
 
+#define JOB_BATCH_SIZE (16)
+
 /* Function to handle read jobs */
 static void handleReadJobs(client **read_jobs, int read_count) {
     server.stat_io_reads_pending -= read_count;
     serverAssert(server.stat_io_reads_pending >= 0);
+    uint64_t read_client_ids[JOB_BATCH_SIZE];
+    int id_count = 0;
     /* process each client */
     for (int i = 0; i < read_count; i++) {
         client *c = read_jobs[i];
-        processClientIOReadsDone(c);
+        uint64_t id = c->id;
+        if (processClientIOReadsDone(c)) read_client_ids[id_count++] = id;
     }
 
     /* Process commands in batch if we processed any reads */
     if (read_count) {
         server.stat_io_reads_processed += read_count;
         processClientsCommandsBatch();
+
+        /* RDMA is edge-triggered, so resume its transport after the batch and
+         * synchronously drain anything that arrived while updates were postponed. */
+        for (int i = 0; i < id_count; i++) {
+            client *c = lookupClientByID(read_client_ids[i]);
+            if (!c || !c->conn || !connUpdateStateMayInvokeHandlers(c->conn)) continue;
+
+            connUpdateState(c->conn);
+
+            c = lookupClientByID(read_client_ids[i]);
+            if (!c || !c->conn) continue;
+            if (processPendingCommandAndInputBuffer(c) == C_OK) beforeNextClient(c);
+        }
     }
 }
 
@@ -861,7 +883,6 @@ static void handleWriteJobs(client **write_jobs, int write_count) {
     }
 }
 
-#define JOB_BATCH_SIZE (16)
 int processIOThreadsResponses(void) {
     /* We don't check for threads number  since some threads may return jobs then deactivate/shut-down */
 

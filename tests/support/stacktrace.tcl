@@ -16,7 +16,7 @@ proc stacktrace {{skip 1}} {
             # Eval frame from uplevel - compute absolute line from last anchor
             set abs_line [expr {$prev_line + [dict get $frame line] - 1}]
             if {[dict exists $frame cmd]} {
-                set cmd [lindex [dict get $frame cmd] 0]
+                regexp {^\S+} [dict get $frame cmd] cmd
             } else {
                 set cmd "?"
             }
@@ -40,7 +40,7 @@ proc stacktrace {{skip 1}} {
         } else {
             # Non-proc source frame: show first word of cmd
             if {[dict exists $frame cmd]} {
-                set cmd [lindex [dict get $frame cmd] 0]
+                regexp {^\S+} [dict get $frame cmd] cmd
             } else {
                 set cmd "?"
             }
@@ -104,21 +104,15 @@ proc return {args} {
     }
 
     # Bump -level by 1 to account for this wrapper's stack frame.
-    # Default -level for return is 1; we need it to be 2 to exit the caller.
     if {[dict exists $opts -level]} {
         set level [dict get $opts -level]
+        incr level
+        set idx [lsearch -exact $args -level]
+        set args [lreplace $args $idx [expr {$idx+1}] -level $level]
     } else {
-        set level 1
+        set args [linsert $args 0 -level 2]
     }
-    incr level
-    # Rebuild args with the adjusted -level
-    dict set opts -level $level
-    # Reconstruct: flatten opts + result (if any)
-    if {$i < [llength $args]} {
-        orig_return {*}$opts [lindex $args $i]
-    } else {
-        orig_return {*}$opts
-    }
+    orig_return {*}$args
 }
 
 # Redefine 'error' to capture stacktraces

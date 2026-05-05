@@ -157,6 +157,7 @@ set(VALKEY_BENCHMARK_SRCS
     ${CMAKE_SOURCE_DIR}/src/sha256.c
     ${CMAKE_SOURCE_DIR}/src/util.c
     ${CMAKE_SOURCE_DIR}/src/valkey-benchmark.c
+    ${CMAKE_SOURCE_DIR}/src/valkey-benchmark-dataset.c
     ${CMAKE_SOURCE_DIR}/src/valkey_strtod.c
     ${CMAKE_SOURCE_DIR}/src/adlist.c
     ${CMAKE_SOURCE_DIR}/src/hashtable.c

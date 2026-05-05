@@ -1758,6 +1758,8 @@ static void zaddGenericCommand(client *c, int flags) {
     int j, elements, ch = 0;
     size_t maxelelen = 0;
     int scoreidx = 0;
+    int reply_err = 0;
+
     /* The following vars are used in order to track what the command actually
      * did during the execution, to reply to the client and to trigger the
      * notification of keyspace change. */
@@ -1851,18 +1853,26 @@ static void zaddGenericCommand(client *c, int flags) {
         ele = c->argv[scoreidx + 1 + j * 2]->ptr;
         int retval = zsetAdd(zobj, score, ele, flags, &retflags, &newscore);
         if (retval == 0) {
-            addReplyError(c, nanerr);
-            goto cleanup;
+            reply_err = 1;
+            break;
         }
         if (retflags & ZADD_OUT_ADDED) added++;
         if (retflags & ZADD_OUT_UPDATED) updated++;
         if (!(retflags & ZADD_OUT_NOP)) processed++;
         score = newscore;
     }
-    server.dirty += (added + updated);
+    if (!reply_err) {
+        server.dirty += (added + updated);
+    }
+    if (added || updated) {
+        signalModifiedKey(c, c->db, key);
+        notifyKeyspaceEvent(NOTIFY_ZSET, incr ? "zincr" : "zadd", key, c->db->id);
+    }
 
 reply_to_client:
-    if (incr) { /* ZINCRBY or INCR option. */
+    if (reply_err) {
+        addReplyError(c, nanerr);
+    } else if (incr) { /* ZINCRBY or INCR option. */
         if (processed)
             addReplyDouble(c, score);
         else
@@ -1870,13 +1880,8 @@ reply_to_client:
     } else { /* ZADD. */
         addReplyLongLong(c, ch ? added + updated : added);
     }
-
 cleanup:
     zfree(scores);
-    if (added || updated) {
-        signalModifiedKey(c, c->db, key);
-        notifyKeyspaceEvent(NOTIFY_ZSET, incr ? "zincr" : "zadd", key, c->db->id);
-    }
 }
 
 void zaddCommand(client *c) {
@@ -2771,18 +2776,17 @@ static void zunionInterDiffGenericCommand(client *c, robj *dstkey, int numkeysIn
         if (dstzset->zsl->length) {
             zsetConvertToListpackIfNeeded(dstobj, maxelelen, totelelen);
             setKey(c, c->db, dstkey, &dstobj, 0);
+            notifyKeyspaceEvent(NOTIFY_ZSET, (op == SET_OP_UNION) ? "zunionstore" : (op == SET_OP_INTER ? "zinterstore" : "zdiffstore"),
+                                dstkey, c->db->id);
             addReplyLongLong(c, zsetLength(dstobj));
-            notifyKeyspaceEvent(
-                NOTIFY_ZSET, (op == SET_OP_UNION) ? "zunionstore" : (op == SET_OP_INTER ? "zinterstore" : "zdiffstore"),
-                dstkey, c->db->id);
             server.dirty++;
         } else {
-            addReply(c, shared.czero);
             if (dbDelete(c->db, dstkey)) {
                 signalModifiedKey(c, c->db, dstkey);
                 notifyKeyspaceEvent(NOTIFY_GENERIC, "del", dstkey, c->db->id);
                 server.dirty++;
             }
+            addReply(c, shared.czero);
             decrRefCount(dstobj);
         }
     } else if (cardinality_only) {
@@ -2974,16 +2978,16 @@ static void zrangeResultEmitLongLongForStore(zrange_result_handler *handler, lon
 static void zrangeResultFinalizeStore(zrange_result_handler *handler, size_t result_count) {
     if (result_count) {
         setKey(handler->client, handler->client->db, handler->dstkey, &handler->dstobj, 0);
-        addReplyLongLong(handler->client, result_count);
         notifyKeyspaceEvent(NOTIFY_ZSET, "zrangestore", handler->dstkey, handler->client->db->id);
         server.dirty++;
+        addReplyLongLong(handler->client, result_count);
     } else {
-        addReply(handler->client, shared.czero);
         if (dbDelete(handler->client->db, handler->dstkey)) {
             signalModifiedKey(handler->client, handler->client->db, handler->dstkey);
             notifyKeyspaceEvent(NOTIFY_GENERIC, "del", handler->dstkey, handler->client->db->id);
             server.dirty++;
         }
+        addReply(handler->client, shared.czero);
         decrRefCount(handler->dstobj);
     }
 }
@@ -3776,6 +3780,24 @@ void zscanCommand(client *c) {
     scanGenericCommand(c, o, cursor);
 }
 
+void addZpopInitialReply(client *c, int emitkey, int use_nested_array, long rangelen, robj *key) {
+    if (!use_nested_array && !emitkey) {
+        /* ZPOPMIN/ZPOPMAX with or without COUNT option in RESP2. */
+        addReplyArrayLen(c, rangelen * 2);
+    } else if (use_nested_array && !emitkey) {
+        /* ZPOPMIN/ZPOPMAX with COUNT option in RESP3. */
+        addReplyArrayLen(c, rangelen);
+    } else if (!use_nested_array && emitkey) {
+        /* BZPOPMIN/BZPOPMAX in RESP2 and RESP3. */
+        addReplyArrayLen(c, rangelen * 2 + 1);
+        addReplyBulk(c, key);
+    } else if (use_nested_array && emitkey) {
+        /* ZMPOP/BZMPOP in RESP2 and RESP3. */
+        addReplyArrayLen(c, 2);
+        addReplyBulk(c, key);
+        addReplyArrayLen(c, rangelen);
+    }
+}
 /* This command implements the generic zpop operation, used by:
  * ZPOPMIN, ZPOPMAX, BZPOPMIN, BZPOPMAX and ZMPOP. This function is also used
  * inside blocked.c in the unblocking stage of BZPOPMIN, BZPOPMAX and BZMPOP.
@@ -3848,23 +3870,6 @@ void genericZpopCommand(client *c,
     long llen = zsetLength(zobj);
     long rangelen = (count > llen) ? llen : count;
 
-    if (!use_nested_array && !emitkey) {
-        /* ZPOPMIN/ZPOPMAX with or without COUNT option in RESP2. */
-        addReplyArrayLen(c, rangelen * 2);
-    } else if (use_nested_array && !emitkey) {
-        /* ZPOPMIN/ZPOPMAX with COUNT option in RESP3. */
-        addReplyArrayLen(c, rangelen);
-    } else if (!use_nested_array && emitkey) {
-        /* BZPOPMIN/BZPOPMAX in RESP2 and RESP3. */
-        addReplyArrayLen(c, rangelen * 2 + 1);
-        addReplyBulk(c, key);
-    } else if (use_nested_array && emitkey) {
-        /* ZMPOP/BZMPOP in RESP2 and RESP3. */
-        addReplyArrayLen(c, 2);
-        addReplyBulk(c, key);
-        addReplyArrayLen(c, rangelen);
-    }
-
     /* Remove the element. */
     do {
         if (zobj->encoding == OBJ_ENCODING_LISTPACK) {
@@ -3909,6 +3914,7 @@ void genericZpopCommand(client *c,
         if (result_count == 0) { /* Do this only for the first iteration. */
             char *events[2] = {"zpopmin", "zpopmax"};
             notifyKeyspaceEvent(NOTIFY_ZSET, events[where], key, c->db->id);
+            addZpopInitialReply(c, emitkey, use_nested_array, rangelen, key);
         }
 
         if (use_nested_array) {

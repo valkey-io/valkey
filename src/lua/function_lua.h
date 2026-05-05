@@ -11,8 +11,6 @@ compiledFunction **luaFunctionLibraryCreate(lua_State *lua,
                                             size_t *out_num_compiled_functions,
                                             robj **err);
 
-int luaFunctionGetLuaFunctionRef(compiledFunction *compiled_function);
-
 void luaFunctionFreeFunction(lua_State *lua, void *function);
 
 #endif /* _FUNCTION_LUA_H_ */

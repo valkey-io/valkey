@@ -10,6 +10,135 @@ SECURITY: There are security fixes in the release.
 --------------------------------------------------------------------------------
 
 ================================================================================
+Valkey 8.1.6  -  Released Mon 23 February 2026
+================================================================================
+
+Upgrade urgency SECURITY: This release includes security fixes we recommend you
+apply as soon as possible.
+
+Security fixes
+==============
+* (CVE-2026-21863) Remote DoS with malformed Valkey Cluster bus message
+* (CVE-2025-67733) RESP Protocol Injection via Lua error_reply
+
+Bug fixes
+=========
+* Restrict ttl from being negative and avoid crash in import-mode (#2944)
+* Fix chained replica crash when doing dual channel replication (#2983)
+* Fix used_memory_dataset underflow due to miscalculated used_memory_overhead (#3005)
+* Fix crashing while MODULE UNLOAD when ACL rules reference a module command or subcommand (#3160)
+* Fix server assert on ACL LOAD and resetchannels (#3182)
+* Fix bug causing no response flush sometimes when IO threads are busy (#3205)
+
+================================================================================
+Valkey 8.1.5  -  Released Thu 04 December 2025
+================================================================================
+
+Upgrade urgency MODERATE: Program an upgrade of the server, but it's not urgent.
+
+Bug fixes
+=========
+* Fix Lua VM crash after FUNCTION FLUSH ASYNC + FUNCTION LOAD (#1826)
+* Fix invalid memory address caused by hashtable shrinking during safe iteration (#2753)
+* Cluster: Avoid usage of light weight messages to nodes with not ready bidirectional links (#2817)
+* Send duplicate multi meet packet only for node which supports it (#2840)
+* Fix loading AOF files from future Valkey versions (#2899)
+
+================================================================================
+Valkey 8.1.4  -  Released Fri 03 October 2025
+================================================================================
+
+Upgrade urgency SECURITY: This release includes security fixes we recommend you
+apply as soon as possible.
+
+Security fixes
+==============
+* (CVE-2025-49844) A Lua script may lead to remote code execution
+* (CVE-2025-46817) A Lua script may lead to integer overflow and potential RCE
+* (CVE-2025-46818) A Lua script can be executed in the context of another user
+* (CVE-2025-46819) LUA out-of-bound read
+
+Bug fixes
+=========
+* Fix accounting for dual channel RDB bytes in replication stats (#2614)
+* Fix EVAL to report unknown error when empty error table is provided (#2229)
+* Fix use-after-free when active expiration triggers hashtable to shrink (#2257)
+* Fix MEMORY USAGE to account for embedded keys (#2290)
+* Fix memory leak when shrinking a hashtable without entries (#2288)
+* Prevent potential assertion in active defrag handling large allocations (#2353)
+* Prevent bad memory access when NOTOUCH client gets unblocked (#2347)
+* Converge divergent shard-id persisted in nodes.conf to primary's shard id (#2174)
+* Fix client tracking memory overhead calculation (#2360)
+* Fix RDB load per slot memory pre-allocation when loading from RDB snapshot (#2466)
+* Don't use AVX2 instructions if the CPU doesn't support it (#2571)
+* Fix bug where active defrag may be unable to defrag sparsely filled pages (#2656)
+
+================================================================================
+Valkey 8.1.3  -  Released Sun 07 July 2025
+================================================================================
+
+Upgrade urgency SECURITY: This release includes security fixes we recommend you
+apply as soon as possible.
+
+Bug fixes
+=========
+* Fix missing response when AUTH is errored inside a transaction (#2287)
+
+Security fixes
+==============
+* CVE-2025-32023 prevent out-of-bounds write during hyperloglog operations (#2146)
+* CVE-2025-48367 retry accept on transient errors (#2315)
+
+================================================================================
+Valkey 8.1.2  -  Released Wed 11 June 2025
+================================================================================
+
+Upgrade urgency HIGH: This release includes CVE fix for valkey-check-aof tool, we recommend you
+apply as soon as possible if you use the tool.
+
+Bug fixes
+=========
+* Properly escape double quotes and backslash in `MONITOR` command (#2036)
+* Fix high CPU usage when fetching a random element in skewed sparse hash table (#2085)
+* Fix a bug that allowed clients to process commands when the server has paused command processing (#2109)
+* Fix a crash where the wrong slot is used when processing sharded pubsub unsubscribe events  (#2137)
+* Fix a crash when a module attempts to write auxiliary data with AOF enabled  (#2132)
+* Fix a bug where the engine may crash when establishing new outbound TLS connections (#2140)
+* Fix a bug where a cluster bus packet may be incorrectly marked as invalid (#2144)
+* Fix a bug where CLUSTER SLOTS/NODES information can be stale after updating node port/tls-port (#2186)
+* Fix a bug where replica in cluster mode can't finish failover when config epoch is outdated (#2178)
+* Fix a bug to avoid CLIENT UNBLOCK command to unblock paused clients (#2117)
+
+Security fixes
+==============
+* CVE-2025-27151 Check length of AOF file name in valkey-check-aof (#2146)
+  
+================================================================================
+Valkey 8.1.1  -  Released Wed 23 Apr 2025
+================================================================================
+
+Upgrade urgency SECURITY: This release includes security fixes we recommend you
+apply as soon as possible.
+
+Bug fixes
+=========
+* Fix the build on less common platforms in zmalloc.c (#1922)
+* fix: add samples to stream object consumer trees (#1825)
+* Fix crash during TLS handshake with I/O threads (#1955)
+* Fix cluster slot stats assertion during promotion of replica (#1950)
+* Fix panic in primary when blocking shutdown after previous block with timeout (#1948)
+* Ignore stale gossip packets that arrive out of order (#1777)
+* Fix incorrect lag reported in XINFO GROUPS (#1952)
+* Fix engine crash on module client blocking during keyspace events (#1819)
+* Avoid shard id update of replica if not matching with primary shard id (#573)
+* Only enable defrag for vendored jemalloc (#1985)
+* Allow scripts to support null characters again (#1984)
+
+Security fixes
+==============
+* CVE-2025-21605 Limit output buffer for unauthenticated clients (#1994)
+
+================================================================================
 Valkey 8.1.0 GA  -  Released Mon 31 March 2025
 ================================================================================
 Upgrade urgency LOW: This is the first release of Valkey 8.1, 

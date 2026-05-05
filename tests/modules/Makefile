@@ -39,6 +39,7 @@ TEST_MODULES = \
     datatype2.so \
     auth.so \
     keyspace_events.so \
+    block_keyspace_notification.so \
     blockedclient.so \
     getkeys.so \
     getchannels.so \

@@ -187,6 +187,7 @@ static void ACLResetFirstArgs(aclSelector *selector);
 static void ACLAddAllowedFirstArg(aclSelector *selector, unsigned long id, const char *sub);
 static void ACLFreeLogEntry(void *le);
 static int ACLSetSelector(aclSelector *selector, const char *op, size_t oplen);
+static struct serverCommand *ACLLookupCommand(const char *name);
 
 /* The length of the string representation of a hashed password. */
 #define HASH_PASSWORD_LEN (SHA256_BLOCK_SIZE * 2)
@@ -495,15 +496,10 @@ void ACLFreeUserAndKillClients(user *u) {
              * this may result in some security hole: it's much
              * more defensive to set the default user and put
              * it in non authenticated mode. */
-            c->user = DefaultUser;
-            c->flag.authenticated = 0;
+            clientSetUser(c, DefaultUser, 0);
             /* We will write replies to this client later, so we can't
              * close it directly even if async. */
-            if (c == server.current_client) {
-                c->flag.close_after_command = 1;
-            } else {
-                freeClientAsync(c);
-            }
+            freeClientOrCloseLater(c, 1);
         }
     }
     ACLFreeUser(u);
@@ -722,6 +718,57 @@ static int ACLSetSelectorCategory(aclSelector *selector, const char *category, i
     /* Set the actual command bits on the selector. */
     ACLSetSelectorCommandBitsForCategory(server.orig_commands, selector, cflag, allow);
     return C_OK;
+}
+
+/* Check if any ACL user has command rules referencing the specified module.
+ * If rule_out is not NULL, it will be set to a duplicate of the first matching
+ * rule.
+ * Returns 1 if any rules are found, 0 otherwise. */
+int ACLModuleHasCommandRules(const struct ValkeyModule *module, sds *rule_out) {
+    raxIterator ri;
+    raxStart(&ri, Users);
+    raxSeek(&ri, "^", NULL, 0);
+    while (raxNext(&ri)) {
+        user *u = ri.data;
+        listIter li;
+        listNode *ln;
+        listRewind(u->selectors, &li);
+        while ((ln = listNext(&li)) != NULL) {
+            aclSelector *selector = listNodeValue(ln);
+            if (sdslen(selector->command_rules) == 0) continue;
+
+            int argc = 0;
+            sds *argv = sdssplitargs(selector->command_rules, &argc);
+            if (!argv) continue;
+
+            for (int i = 0; i < argc; i++) {
+                sds rule = argv[i];
+                if (rule[0] != '+' && rule[0] != '-') continue;
+                if (rule[1] == '@') continue;
+
+                struct serverCommand *cmd = ACLLookupCommand(rule + 1);
+                if (!cmd) {
+                    const char *subsep = strchr(rule + 1, '|');
+                    if (subsep) {
+                        size_t base_len = (size_t)(subsep - (rule + 1));
+                        sds base = sdsnewlen(rule + 1, base_len);
+                        cmd = ACLLookupCommand(base);
+                        sdsfree(base);
+                    }
+                }
+                if (!cmd || !(cmd->flags & CMD_MODULE)) continue;
+                if (moduleFromCommand(cmd) != module) continue;
+
+                if (rule_out) *rule_out = sdsdup(rule);
+                sdsfreesplitres(argv, argc);
+                raxStop(&ri);
+                return 1;
+            }
+            sdsfreesplitres(argv, argc);
+        }
+    }
+    raxStop(&ri);
+    return 0;
 }
 
 /* This function returns an SDS string representing the specified selector ACL
@@ -1440,7 +1487,12 @@ int ACLCheckUserCredentials(robj *username, robj *password) {
 /* If `err` is provided, this is added as an error reply to the client.
  * Otherwise, the standard Auth error is added as a reply. */
 void addAuthErrReply(client *c, robj *err) {
-    if (clientHasPendingReplies(c)) return;
+    /* Note that a module auth can add reply in its callback, or not
+     * add reply and just return an error robj in its callback. So in
+     * here, we use buffered_reply flag to determine if auth command
+     * has already had a reply added. */
+    if (c->flag.buffered_reply) return;
+
     if (!err) {
         addReplyError(c, "-WRONGPASS invalid username-password pair or user is disabled.");
         return;
@@ -1455,8 +1507,8 @@ void addAuthErrReply(client *c, robj *err) {
  * The return value is AUTH_OK on success (valid username / password pair) & AUTH_ERR otherwise. */
 static int checkPasswordBasedAuth(client *c, robj *username, robj *password) {
     if (ACLCheckUserCredentials(username, password) == C_OK) {
-        c->flag.authenticated = 1;
-        c->user = ACLGetUserByName(username->ptr, sdslen(username->ptr));
+        user *user = ACLGetUserByName(username->ptr, sdslen(username->ptr));
+        clientSetUser(c, user, 1);
         moduleNotifyUserChanged(c);
         return AUTH_OK;
     } else {
@@ -1964,7 +2016,9 @@ static void ACLKillPubsubClientsIfNeeded(user *new, user *original) {
     while ((ln = listNext(&li)) != NULL) {
         client *c = listNodeValue(ln);
         if (c->user != original) continue;
-        if (ACLShouldKillPubsubClient(c, channels)) freeClient(c);
+        if (ACLShouldKillPubsubClient(c, channels)) {
+            freeClientOrCloseLater(c, 0);
+        }
     }
 
     listRelease(channels);
@@ -2393,7 +2447,7 @@ static sds ACLLoadFromFile(const char *filename) {
             /* When the new channel list is NULL, it means the new user's channel list is a superset of the old user's
              * list. */
             if (!new_user || (channels && ACLShouldKillPubsubClient(c, channels))) {
-                freeClient(c);
+                freeClientOrCloseLater(c, 0);
                 continue;
             }
             c->user = new_user;

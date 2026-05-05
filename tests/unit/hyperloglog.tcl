@@ -1,4 +1,30 @@
 start_server {tags {"hll"}} {
+    test {CVE-2025-32023: Sparse HLL XZERO overflow triggers crash} {
+        # Build a valid HLL header for sparse encoding
+        set hll [binary format cccc 72 89 76 76] ; # "HYLL"
+        append hll [binary format cccc 1 0 0 0] ; # encoding=sparse, 3 reserved
+        append hll [binary format cccccccc 0 0 0 0 0 0 0 0] ; # cached cardinality
+
+        # We need alternating XZERO and ZERO opcodes to build up a large enough
+        # HyperLogLog value that will overflow the runlength.
+        # 0x7f 0xff is the XZERO opcode that sets the index to 16384.
+        # 0x3f is the ZERO opcode that sets the index to 256.
+        # We repeat this pattern at least 33554432 times to overflow the runlength,
+        # 50331648 is just 33554432 * 1.5, which is just a round number.
+        append hll [string repeat [binary format ccc 0x7f 0xff 0x3f] 50331648]
+
+        # We need an actual value at the end to trigger the out of bounds write
+        append hll [binary format c 0x80]
+
+        # Set the raw value into the key
+        r set hll_overflow $hll
+        r pfadd hll_merge_source hi
+
+        # Test pfadd and pfmerge, these used to crash but now error
+        assert_error {*INVALIDOBJ*} {r pfmerge fail_target hll_overflow hll_merge_source}
+        assert_error {*INVALIDOBJ*} {r pfadd hll_overflow foo}
+    } {} {large-memory}
+
     test {HyperLogLog self test passes} {
         catch {r pfselftest} e
         set e

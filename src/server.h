@@ -2792,6 +2792,13 @@ typedef struct {
 
 } hashTypeIterator;
 
+typedef struct clusterScanCtx {
+    int slot;
+    int final_slot;
+    bool advance_to_next_slot;
+    const char *fp;
+} clusterScanCtx;
+
 #include "stream.h" /* Stream data type header file. */
 
 #define OBJ_HASH_FIELD 1
@@ -3762,12 +3769,6 @@ void discardTempDb(serverDb **tempDb);
 int selectDb(client *c, int id);
 void signalModifiedKey(client *c, serverDb *db, robj *key);
 void signalFlushedDb(int dbid, int async);
-typedef struct clusterScanCtx {
-    int slot;
-    int final_slot;
-    bool advance_to_next_slot;
-    const char *fp;
-} clusterScanCtx;
 void scanGenericCommand(client *c, robj *o, unsigned long long cursor, const clusterScanCtx *cluster_ctx);
 int parseScanCursorOrReply(client *c, sds buf, unsigned long long *cursor);
 int dbAsyncDelete(serverDb *db, robj *key);

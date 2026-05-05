@@ -162,6 +162,10 @@ start_server {tags {"introspection"}} {
         assert_equal {} [r command getkeys eval "return 1" 0]
     }
 
+    test {COMMAND GETKEYS EVAL with huge numkeys} {
+        assert_equal {} [r command getkeys eval "return 1" 2147483647 key1]
+    }
+
     test {COMMAND GETKEYS LCS} {
         assert_equal {key1 key2} [r command getkeys lcs key1 key2]
     }

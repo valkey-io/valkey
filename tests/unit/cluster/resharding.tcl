@@ -1,7 +1,7 @@
 # Resharding test.
 # In this test a live resharding is performed and the test checks
 # that certain properties are preserved across the operation.
-tags {"slow"} {
+tags {"slow valgrind:skip"} {
 run_solo {cluster-resharding} {
 start_cluster 5 5 {tags {external:skip cluster}} {
     test "Enable AOF in all the instances" {

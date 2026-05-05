@@ -477,10 +477,10 @@ void checkMultiPartAof(char *dirpath, char *manifest_filepath, int fix) {
         sds aof_filename = am->base_aof_info->file_name;
         sds aof_filepath = makePath(dirpath, aof_filename);
         last_file = ++aof_num == total_num;
-        int aof_preable = fileIsRDB(aof_filepath);
+        int aof_preamble = fileIsRDB(aof_filepath);
 
-        printf("Start to check BASE AOF (%s format).\n", aof_preable ? "RDB" : "RESP");
-        ret = checkSingleAof(aof_filename, aof_filepath, last_file, fix, aof_preable);
+        printf("Start to check BASE AOF (%s format).\n", aof_preamble ? "RDB" : "RESP");
+        ret = checkSingleAof(aof_filename, aof_filepath, last_file, fix, aof_preamble);
         printAofStyle(ret, aof_filename, (char *)"BASE AOF");
         sdsfree(aof_filepath);
     }
@@ -553,6 +553,12 @@ int redis_check_aof_main(int argc, char **argv) {
             goto invalid_args;
         }
     } else {
+        goto invalid_args;
+    }
+
+    /* Check if filepath is longer than PATH_MAX */
+    if (strnlen(filepath, PATH_MAX + 1) > PATH_MAX) {
+        printf("Error: filepath is too long (exceeds PATH_MAX)\n");
         goto invalid_args;
     }
 

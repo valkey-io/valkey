@@ -146,9 +146,9 @@ void freeEvalScripts(dict *scripts, list *scripts_lru_list, list *engine_callbac
         listIter *iter = listGetIterator(engine_callbacks, 0);
         listNode *node = NULL;
         while ((node = listNext(iter)) != NULL) {
-            callableLazyEvalReset *callback = listNodeValue(node);
+            callableLazyEnvReset *callback = listNodeValue(node);
             if (callback != NULL) {
-                callback->engineLazyEvalResetCallback(callback->context);
+                callback->engineLazyEnvResetCallback(callback->context);
                 zfree(callback);
             }
         }
@@ -159,7 +159,7 @@ void freeEvalScripts(dict *scripts, list *scripts_lru_list, list *engine_callbac
 
 static void resetEngineEvalEnvCallback(scriptingEngine *engine, void *context) {
     int async = context != NULL;
-    callableLazyEvalReset *callback = scriptingEngineCallResetEvalEnvFunc(engine, async);
+    callableLazyEnvReset *callback = scriptingEngineCallResetEnvFunc(engine, VMSE_EVAL, async);
 
     if (async) {
         list *callbacks = context;
@@ -174,7 +174,6 @@ void evalRelease(int async) {
         list *engine_callbacks = listCreate();
         scriptingEngineManagerForEachEngine(resetEngineEvalEnvCallback, engine_callbacks);
         freeEvalScriptsAsync(evalCtx.scripts, evalCtx.scripts_lru_list, engine_callbacks);
-
     } else {
         freeEvalScripts(evalCtx.scripts, evalCtx.scripts_lru_list, NULL);
         scriptingEngineManagerForEachEngine(resetEngineEvalEnvCallback, NULL);
@@ -411,6 +410,7 @@ static int evalRegisterNewScript(client *c, robj *body, char **sha) {
         scriptingEngineCallCompileCode(engine,
                                        VMSE_EVAL,
                                        (sds)body->ptr + shebang_len,
+                                       sdslen(body->ptr) - shebang_len,
                                        0,
                                        &num_compiled_functions,
                                        &_err);

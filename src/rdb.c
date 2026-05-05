@@ -1280,6 +1280,10 @@ ssize_t rdbSaveSingleModuleAux(rio *rdb, int when, moduleType *mt) {
              * to allow loading this RDB if the module is not present. */
             sdsfree(io.pre_flush_buffer);
             io.pre_flush_buffer = NULL;
+            if (io.ctx) {
+                moduleFreeContext(io.ctx);
+                zfree(io.ctx);
+            }
             return 0;
         }
     } else {
@@ -3175,8 +3179,8 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
                 if (server.cluster_enabled) {
                     /* In cluster mode we resize individual slot specific dictionaries based on the number of keys that
                      * slot holds. */
-                    kvstoreHashtableExpand(db->keys, slot_id, slot_size);
-                    kvstoreHashtableExpand(db->expires, slot_id, expires_slot_size);
+                    if (slot_size) kvstoreHashtableExpand(db->keys, slot_id, slot_size);
+                    if (expires_slot_size) kvstoreHashtableExpand(db->expires, slot_id, expires_slot_size);
                     should_expand_db = 0;
                 }
             } else {
@@ -3648,6 +3652,9 @@ int rdbSaveToReplicasSockets(int req, rdbSaveInfo *rsi) {
 
         if (retval == C_OK) {
             sendChildCowInfo(CHILD_INFO_TYPE_RDB_COW_SIZE, "RDB");
+            if (dual_channel) {
+                sendChildInfoGeneric(CHILD_INFO_TYPE_REPL_OUTPUT_BYTES, 0, rdb.processed_bytes, -1, "RDB");
+            }
         }
         if (dual_channel) {
             rioFreeConnset(&rdb);

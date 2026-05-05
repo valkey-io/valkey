@@ -2,8 +2,6 @@
 # This software is released under the BSD License. See the COPYING file for
 # more information.
 
-package require Tcl 8.5
-
 set tcl_precision 17
 source tests/support/valkey.tcl
 source tests/support/aofmanifest.tcl
@@ -264,6 +262,30 @@ proc CI {index field} {
     getInfoProperty [R $index cluster info] $field
 }
 
+# Provide easy access to CLIENT INFO properties from CLIENT INFO string.
+proc get_field_in_client_info {info field} {
+    set info [string trim $info]
+    foreach item [split $info " "] {
+        set kv [split $item "="]
+        set k [lindex $kv 0]
+        if {[string match $field $k]} {
+            return [lindex $kv 1]
+        }
+    }
+    return ""
+}
+
+# Provide easy access to CLIENT INFO properties from CLIENT LIST string.
+proc get_field_in_client_list {id client_list filed} {
+    set list [split $client_list "\r\n"]
+    foreach info $list {
+        if {[string match "id=$id *" $info] } {
+            return [get_field_in_client_info $info $filed]
+        }
+    }
+    return ""
+}
+
 # Test wrapped into run_solo are sent back from the client to the
 # test server, so that the test server will send them again to
 # clients once the clients are idle.
@@ -280,6 +302,7 @@ proc cleanup {} {
     if {!$::quiet} {puts -nonewline "Cleanup: may take some time... "}
     flush stdout
     catch {exec rm -rf {*}[glob tests/tmp/valkey.conf.*]}
+    catch {exec rm -rf {*}[glob tests/tmp/nodes.conf.*]}
     catch {exec rm -rf {*}[glob tests/tmp/server*.*]}
     catch {exec rm -rf {*}[glob tests/tmp/*.acl.*]}
     if {!$::quiet} {puts "OK"}
@@ -317,6 +340,7 @@ proc test_server_main {} {
     set ::idle_clients {}
     set ::active_clients {}
     array set ::active_clients_task {}
+    array set ::active_clients_file {}
     array set ::clients_start_time {}
     set ::clients_time_history {}
     set ::failed_tests {}
@@ -333,7 +357,25 @@ proc test_server_cron {} {
     if {$elapsed > $::timeout} {
         set err "\[[colorstr red TIMEOUT]\]: clients state report follows."
         puts $err
-        lappend ::failed_tests $err
+        foreach fd $::active_clients {
+            if {[info exist ::active_clients_task($fd)]} {
+                set task $::active_clients_task($fd)
+                set test_name [regsub {^\([^)]*\)\s*} $task {}]
+                set test_name [regsub {\s*\(pid\s+\d+\)\s*$} $test_name {}]
+                if {![string length [string trim $test_name]] && \
+                    [regexp {\(([^()]*)\)$} $task -> tn]} {
+                    set test_name $tn
+                }
+                set test_name [string trim $test_name]
+                if {[string length $test_name]} {
+                    set file {}
+                    if {[info exist ::active_clients_file($fd)]} {
+                        set file $::active_clients_file($fd)
+                    }
+                    lappend ::failed_tests "\[TIMEOUT]: $test_name in $file"
+                }
+            }
+        }
         show_clients_state
         kill_clients
         force_kill_all_servers
@@ -344,7 +386,7 @@ proc test_server_cron {} {
 }
 
 proc accept_test_clients {fd addr port} {
-    fconfigure $fd -encoding binary
+    fconfigure $fd -translation binary
     fileevent $fd readable [list read_from_test_client $fd]
 }
 
@@ -384,6 +426,7 @@ proc read_from_test_client fd {
         lappend ::clients_time_history $elapsed $data
         signal_idle_client $fd
         set ::active_clients_task($fd) "(DONE) $data"
+        unset ::active_clients_file($fd)
     } elseif {$status eq {ok}} {
         if {!$::quiet} {
             puts "\[[colorstr green $status]\]: $data ($elapsed ms)"
@@ -400,7 +443,8 @@ proc read_from_test_client fd {
     } elseif {$status eq {err}} {
         set err "\[[colorstr red $status]\]: $data"
         puts $err
-        lappend ::failed_tests $err
+        set test_name [lindex [split $data "\n"] 0]
+        lappend ::failed_tests $test_name
         set ::active_clients_task($fd) "(ERR) $data"
         if {$::exit_on_failure} {
             puts -nonewline "(Fast fail: test will exit now)"
@@ -491,6 +535,7 @@ proc signal_idle_client fd {
             puts [colorstr bold-white "Testing [lindex $::all_tests $::next_test]"]
             set ::active_clients_task($fd) "ASSIGNED: $fd ([lindex $::all_tests $::next_test])"
         }
+        set ::active_clients_file($fd) "tests/[lindex $::all_tests $::next_test].tcl"
         set ::clients_start_time($fd) [clock seconds]
         send_data_packet $fd run [lindex $::all_tests $::next_test]
         lappend ::active_clients $fd
@@ -505,7 +550,9 @@ proc signal_idle_client fd {
             set ::active_clients_task($fd) "ASSIGNED: $fd solo test"
         }
         set ::clients_start_time($fd) [clock seconds]
-        send_data_packet $fd run_code [lpop ::run_solo_tests]
+        set solo_data [lpop ::run_solo_tests]
+        set ::active_clients_file($fd) [lindex $solo_data 1]
+        send_data_packet $fd run_code $solo_data
         lappend ::active_clients $fd
     } else {
         lappend ::idle_clients $fd
@@ -543,7 +590,7 @@ proc the_end {} {
 # to read the command, execute, reply... all this in a loop.
 proc test_client_main server_port {
     set ::test_server_fd [socket localhost $server_port]
-    fconfigure $::test_server_fd -encoding binary
+    fconfigure $::test_server_fd -translation binary
     send_data_packet $::test_server_fd ready [pid]
     while 1 {
         set bytes [gets $::test_server_fd]
@@ -675,7 +722,7 @@ for {set j 0} {$j < [llength $argv]} {incr j} {
     } elseif {$opt eq {--io-threads}} {
         set ::io_threads 1
     } elseif {$opt eq {--tls} || $opt eq {--tls-module}} {
-        package require tls 1.6
+        package require tls
         set ::tls 1
         ::tls::init \
             -cafile "$::tlsdir/ca.crt" \

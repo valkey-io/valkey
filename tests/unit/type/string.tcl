@@ -59,6 +59,31 @@ start_server {tags {"string"}} {
         } {10000}
     }
 
+    test {memoryusage of string} {
+        # Simple test
+        set key "key"
+        set value "value"
+        r set $key $value
+        assert_lessthan_equal [expr [string length $key] + [string length $value]] [r memory usage key]
+
+        # Big value
+        set key "key"
+        set value [string repeat A 100000]
+        r set $key $value
+        assert_lessthan_equal [expr [string length $key] + [string length $value]] [r memory usage key]
+
+        # Big key
+        set key [string repeat A 100000]
+        set value "value"
+        r set $key $value
+        assert_lessthan_equal [expr [string length $key] + [string length $value]] [r memory usage key]
+
+        # Big key for int
+        set key [string repeat B 100000]
+        r incr $key
+        assert_lessthan_equal [string length $key] [r memory usage $key]
+    }
+
     test "SETNX target key missing" {
         r del novar
         assert_equal 1 [r setnx novar foobared]

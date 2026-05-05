@@ -132,8 +132,22 @@ void linkClient(client *c) {
 static void clientSetDefaultAuth(client *c) {
     /* If the default user does not require authentication, the user is
      * directly authenticated. */
-    c->user = DefaultUser;
-    c->flag.authenticated = (c->user->flags & USER_FLAG_NOPASS) && !(c->user->flags & USER_FLAG_DISABLED);
+    clientSetUser(c, DefaultUser, (DefaultUser->flags & USER_FLAG_NOPASS) && !(DefaultUser->flags & USER_FLAG_DISABLED));
+}
+
+/* Attach the user u to this client.
+ * Also, mark the client authentication state. In case the client is marked as authenticated,
+ * it will also set the ever_authenticated flag on the client in order to avoid low level
+ * limiting of the client output buffer.*/
+void clientSetUser(client *c, user *u, int authenticated) {
+    c->user = u;
+    c->flag.authenticated = authenticated;
+    if (authenticated)
+        c->flag.ever_authenticated = authenticated;
+}
+
+static int clientEverAuthenticated(client *c) {
+    return c->flag.ever_authenticated;
 }
 
 int authRequired(client *c) {
@@ -203,8 +217,10 @@ client *createClient(connection *conn) {
     c->duration = 0;
     clientSetDefaultAuth(c);
     c->reply = listCreate();
+    c->deferred_reply = NULL;
     c->deferred_reply_errors = NULL;
     c->reply_bytes = 0;
+    c->deferred_reply_bytes = ULLONG_MAX;
     c->obuf_soft_limit_reached_time = 0;
     listSetFreeMethod(c->reply, freeClientReplyValue);
     listSetDupMethod(c->reply, dupClientReplyValue);
@@ -277,7 +293,6 @@ void putClientInPendingWriteQueue(client *c) {
         listLinkNodeHead(server.clients_pending_write, &c->clients_pending_write_node);
     }
 }
-
 /* This function is called every time we are going to transmit new data
  * to the client. The behavior is the following:
  *
@@ -326,6 +341,7 @@ int prepareClientToWrite(client *c) {
      * it should already be setup to do so (it has already pending data). */
     if (!clientHasPendingReplies(c)) putClientInPendingWriteQueue(c);
 
+    if (!isDeferredReplyEnabled(c)) c->flag.buffered_reply = 1;
     /* Authorize the caller to queue in the output buffer of this client. */
     return C_OK;
 }
@@ -386,7 +402,8 @@ void deleteCachedResponseClient(client *recording_client) {
 VALKEY_NO_SANITIZE("bounds")
 size_t _addReplyToBuffer(client *c, const char *s, size_t len) {
     size_t available = c->buf_usable_size - c->bufpos;
-
+    /* If the debug enforcing to use the reply list is enabled.*/
+    if (server.debug_client_enforce_reply_list) return 0;
     /* If there already are entries in the reply list, we cannot
      * add anything more to the static buffer. */
     if (listLength(c->reply) > 0) return 0;
@@ -424,14 +441,16 @@ void _addReplyProtoToList(client *c, list *reply_list, const char *s, size_t len
         /* Create a new node, make sure it is allocated to at
          * least PROTO_REPLY_CHUNK_BYTES */
         size_t usable_size;
-        size_t size = len < PROTO_REPLY_CHUNK_BYTES ? PROTO_REPLY_CHUNK_BYTES : len;
+        size_t min_reply_size = isDeferredReplyEnabled(c) ? PROTO_REPLY_MIN_BYTES : PROTO_REPLY_CHUNK_BYTES;
+        size_t size = len < min_reply_size ? min_reply_size : len;
         tail = zmalloc_usable(size + sizeof(clientReplyBlock), &usable_size);
         /* take over the allocation's internal fragmentation */
         tail->size = usable_size - sizeof(clientReplyBlock);
         tail->used = len;
         memcpy(tail->buf, s, len);
         listAddNodeTail(reply_list, tail);
-        c->reply_bytes += tail->size;
+        unsigned long long *reply_bytes = (isDeferredReplyEnabled(c)) ? &c->deferred_reply_bytes : &c->reply_bytes;
+        *reply_bytes += tail->size;
 
         closeClientOnOutputBufferLimitReached(c, 1);
     }
@@ -461,7 +480,6 @@ void _addReplyToBufferOrList(client *c, const char *s, size_t len) {
     }
 
     c->net_output_bytes_curr_cmd += len;
-
     /* We call it here because this function may affect the reply
      * buffer offset (see function comment) */
     reqresSaveClientReplyOffset(c);
@@ -472,12 +490,17 @@ void _addReplyToBufferOrList(client *c, const char *s, size_t len) {
      * the SUBSCRIBE command family, which (currently) have a push message instead of a proper reply.
      * The check for executing_client also avoids affecting push messages that are part of eviction.
      * Check CLIENT_PUSHING first to avoid race conditions, as it's absent in module's fake client. */
-    if (c->flag.pushing && c == server.current_client && server.executing_client &&
-        !cmdHasPushAsReply(server.executing_client->cmd)) {
-        _addReplyProtoToList(c, server.pending_push_messages, s, len);
+    int defer_push_message = c->flag.pushing && c == server.current_client && server.executing_client &&
+                             !cmdHasPushAsReply(server.executing_client->cmd);
+    if (defer_push_message == 0 && isDeferredReplyEnabled(c)) {
+        _addReplyProtoToList(c, c->deferred_reply, s, len);
         return;
     }
 
+    if (defer_push_message) {
+        _addReplyProtoToList(c, server.pending_push_messages, s, len);
+        return;
+    }
     size_t reply_len = _addReplyToBuffer(c, s, len);
     if (len > reply_len) _addReplyProtoToList(c, c->reply, s + reply_len, len - reply_len);
 }
@@ -564,6 +587,7 @@ void afterErrorReply(client *c, const char *s, size_t len, int flags) {
         return;
     }
 
+    commitDeferredReplyBuffer(c, 1);
     if (!(flags & ERR_REPLY_FLAG_NO_STATS_UPDATE)) {
         /* Increment the global error counter */
         server.stat_total_error_replies++;
@@ -573,7 +597,7 @@ void afterErrorReply(client *c, const char *s, size_t len, int flags) {
         char *err_prefix = "ERR";
         size_t prefix_len = 3;
         if (s[0] == '-') {
-            char *spaceloc = memchr(s, ' ', len < 32 ? len : 32);
+            const char *spaceloc = memchr(s, ' ', len < 32 ? len : 32);
             /* If we cannot retrieve the error prefix, use the default: "ERR". */
             if (spaceloc) {
                 const size_t errEndPos = (size_t)(spaceloc - s);
@@ -678,6 +702,20 @@ void addReplyError(client *c, const char *err) {
 
 /* Add error reply to the given client.
  * Supported flags:
+ * ERR_REPLY_FLAG_NO_STATS_UPDATE - indicate not to perform any error stats updates
+ * As a side effect the SDS string is freed. */
+void addReplyErrorSdsExSafe(client *c, sds err, int flags) {
+    /* Trim any newlines at the end (ones will be added by addReplyErrorLength) */
+    err = sdstrim(err, "\r\n");
+    /* Make sure there are no newlines in the middle of the string, otherwise
+     * invalid protocol is emitted. */
+    err = sdsmapchars(err, "\r\n", "  ", 2);
+    addReplyErrorSdsEx(c, err, flags);
+}
+
+/* Add error reply to the given client.
+ * See addReplyErrorLength for expectations from the input string.
+ * Supported flags:
  * * ERR_REPLY_FLAG_NO_STATS_UPDATE - indicate not to perform any error stats updates */
 void addReplyErrorSdsEx(client *c, sds err, int flags) {
     addReplyErrorLength(c, err, sdslen(err));
@@ -701,10 +739,10 @@ void addReplyErrorSdsSafe(client *c, sds err) {
 /* Internal function used by addReplyErrorFormat, addReplyErrorFormatEx and RM_ReplyWithErrorFormat.
  * Refer to afterErrorReply for more information about the flags. */
 void addReplyErrorFormatInternal(client *c, int flags, const char *fmt, va_list ap) {
-    va_list cpy;
-    va_copy(cpy, ap);
-    sds s = sdscatvprintf(sdsempty(), fmt, cpy);
-    va_end(cpy);
+    va_list copy;
+    va_copy(copy, ap);
+    sds s = sdscatvprintf(sdsempty(), fmt, copy);
+    va_end(copy);
     /* Trim any newlines at the end (ones will be added by addReplyErrorLength) */
     s = sdstrim(s, "\r\n");
     /* Make sure there are no newlines in the middle of the string, otherwise
@@ -835,7 +873,7 @@ void setDeferredReply(client *c, void *node, const char *s, size_t length) {
      * - It has enough room already allocated
      * - And not too large (avoid large memmove)
      * - And the client is not in a pending I/O state */
-    if (ln->prev != NULL && (prev = listNodeValue(ln->prev)) && prev->size - prev->used > 0 &&
+    if (ln->prev != NULL && (prev = listNodeValue(ln->prev)) && prev->used < prev->size &&
         c->io_write_state != CLIENT_PENDING_IO) {
         size_t len_to_copy = prev->size - prev->used;
         if (len_to_copy > length) len_to_copy = length;
@@ -1283,6 +1321,52 @@ void addReplySubcommandSyntaxError(client *c) {
     sdsfree(cmd);
 }
 
+inline int isDeferredReplyEnabled(client *c) {
+    return c->deferred_reply_bytes != ULLONG_MAX;
+}
+
+/* Commands that generate replies before triggering keyspace notifications must
+ * use a deferred reply buffer. This allows postponing the actual transmission
+ * of the reply until after the client is unblocked, in case it was blocked by
+ * a keyspace notification. This is necessary because modules subscribed to
+ * keyspace notifications can block the client from within the notification
+ * callback. */
+void initDeferredReplyBuffer(client *c) {
+    if (moduleNotifyKeyspaceSubscribersCnt() == 0) return;
+    if (c->deferred_reply == NULL) {
+        c->deferred_reply = listCreate();
+        listSetFreeMethod(c->deferred_reply, freeClientReplyValue);
+    }
+    if (!isDeferredReplyEnabled(c)) c->deferred_reply_bytes = 0;
+}
+
+static void resetDeferredReplyBuffer(client *c) {
+    listEmpty(c->deferred_reply);
+    c->deferred_reply_bytes = ULLONG_MAX;
+}
+
+/* Move the client deferred reply buffer into the client reply buffer and put the client
+ * in the pending write queue. */
+void commitDeferredReplyBuffer(client *c, int skip_if_blocked) {
+    if (skip_if_blocked && c->flag.blocked) return;
+
+    if (!isDeferredReplyEnabled(c) || (c->deferred_reply && listLength(c->deferred_reply) == 0)) {
+        resetDeferredReplyBuffer(c);
+        return;
+    }
+
+    listJoin(c->reply, c->deferred_reply);
+    c->reply_bytes += c->deferred_reply_bytes;
+
+    resetDeferredReplyBuffer(c);
+    if (prepareClientToWrite(c) != C_OK) {
+        return;
+    }
+    /* We call it here because this function may affect the reply
+     * buffer offset (see function comment) */
+    reqresSaveClientReplyOffset(c);
+}
+
 /* Append 'src' client output buffers into 'dst' client output buffers.
  * This function clears the output buffers of 'src' */
 void AddReplyFromClient(client *dst, client *src) {
@@ -1525,7 +1609,10 @@ void disconnectReplicas(void) {
     listNode *ln;
     listRewind(server.replicas, &li);
     while ((ln = listNext(&li))) {
-        freeClient((client *)ln->value);
+        client *replica = (client *)ln->value;
+        /* If we are going to disconnect all replicas, there is no need to protect the rdb channel. */
+        replica->flag.protected_rdb_channel = 0;
+        freeClient(replica);
     }
 }
 
@@ -1736,6 +1823,7 @@ void freeClient(client *c) {
     c->reply = NULL;
     zfree_with_size(c->buf, c->buf_usable_size);
     c->buf = NULL;
+    listRelease(c->deferred_reply);
 
     freeClientArgv(c);
     freeClientOriginalArgv(c);
@@ -1783,6 +1871,22 @@ void freeClientAsync(client *c) {
     debugServerAssertWithInfo(c, NULL, listSearchKey(server.clients_to_close, c) == NULL);
     listAddNodeTail(server.clients_to_close, c);
 }
+/* Helper function to free a client or flag it for closure after current command.
+ * We can't free the current client right now because that would trigger an
+ * assert in prepareClientToWrite() when the server tries to write the response.
+ * So instead flag it for closure after the current command completes. */
+void freeClientOrCloseLater(client *c, int async) {
+    if (c == server.current_client) {
+        c->flag.close_after_command = 1;
+    } else {
+        if (async) {
+            freeClientAsync(c);
+        } else {
+            freeClient(c);
+        }
+    }
+}
+
 
 /* Log errors for invalid use and free the client in async way.
  * We will add additional information about the client to the message. */
@@ -2010,6 +2114,11 @@ static void writeToReplica(client *c) {
         size_t start = (cur_node == first_node) ? c->repl_data->ref_block_pos : 0;
         size_t len = (cur_node == last_node) ? bufpos : cur_block->used;
         len -= start;
+
+        /* For TLS, we should not call SSL_write() with num=0 */
+        if (unlikely(len == 0)) {
+            continue;
+        }
 
         iov[iovcnt].iov_base = cur_block->buf + start;
         iov[iovcnt].iov_len = len;
@@ -2578,6 +2687,8 @@ void resetClient(client *c) {
     c->slot = -1;
     c->flag.executing_command = 0;
     c->flag.replication_done = 0;
+    c->flag.buffered_reply = 0;
+    c->flag.keyspace_notified = 0;
     c->net_output_bytes_curr_cmd = 0;
 
     /* Make sure the duration has been recorded to some command. */
@@ -2588,6 +2699,7 @@ void resetClient(client *c) {
 
     if (c->deferred_reply_errors) listRelease(c->deferred_reply_errors);
     c->deferred_reply_errors = NULL;
+    commitDeferredReplyBuffer(c, 1);
 
     /* We clear the ASKING flag as well if we are not inside a MULTI, and
      * if what we just executed is not the ASKING command itself. */
@@ -3935,11 +4047,12 @@ void clientUnblockCommand(client *c) {
     }
     if (getLongLongFromObjectOrReply(c, c->argv[2], &id, NULL) != C_OK) return;
     struct client *target = lookupClientByID(id);
-    /* Note that we never try to unblock a client blocked on a module command, which
+    /* Note that we never try to unblock a client blocked on a module command,
+     * or a client blocked by CLIENT PAUSE or some other blocking type which
      * doesn't have a timeout callback (even in the case of UNBLOCK ERROR).
      * The reason is that we assume that if a command doesn't expect to be timedout,
      * it also doesn't expect to be unblocked by CLIENT UNBLOCK */
-    if (target && target->flag.blocked && moduleBlockedClientMayTimeout(target)) {
+    if (target && target->flag.blocked && blockedClientMayTimeout(target)) {
         if (unblock_error)
             unblockClientOnError(target, "-UNBLOCKED client unblocked via CLIENT UNBLOCK");
         else
@@ -4478,10 +4591,10 @@ void rewriteClientCommandVector(client *c, int argc, ...) {
 
 /* Completely replace the client command vector with the provided one. */
 void replaceClientCommandVector(client *c, int argc, robj **argv) {
-    int j;
     backupAndUpdateClientArgv(c, argc, argv);
     c->argv_len_sum = 0;
-    for (j = 0; j < c->argc; j++)
+    c->flag.buffered_reply = 0;
+    for (int j = 0; j < c->argc; j++)
         if (c->argv[j]) c->argv_len_sum += getStringObjectLen(c->argv[j]);
     c->cmd = lookupCommandOrOriginal(c->argv, c->argc);
     serverAssertWithInfo(c, NULL, c->cmd != NULL);
@@ -4512,6 +4625,7 @@ void rewriteClientCommandArgument(client *c, int i, robj *newval) {
 
     /* If this is the command name make sure to fix c->cmd. */
     if (i == 0) {
+        c->flag.buffered_reply = 0;
         c->cmd = lookupCommandOrOriginal(c->argv, c->argc);
         serverAssertWithInfo(c, NULL, c->cmd != NULL);
     }
@@ -4535,10 +4649,15 @@ size_t getClientOutputBufferMemoryUsage(client *c) {
             repl_node_num = last->id - cur->id + 1;
         }
         return repl_buf_size + (repl_node_size * repl_node_num);
-    } else {
-        size_t list_item_size = sizeof(listNode) + sizeof(clientReplyBlock);
-        return c->reply_bytes + (list_item_size * listLength(c->reply));
     }
+
+    size_t list_item_size = sizeof(listNode) + sizeof(clientReplyBlock);
+    size_t usage = c->reply_bytes + (list_item_size * listLength(c->reply));
+    if (isDeferredReplyEnabled(c)) {
+        usage += c->deferred_reply_bytes +
+                 (list_item_size * listLength(c->deferred_reply));
+    }
+    return usage;
 }
 
 /* Returns the total client's memory usage.
@@ -4564,7 +4683,7 @@ size_t getClientMemoryUsage(client *c, size_t *output_buffer_mem_usage) {
     /* Add memory overhead of the tracking prefixes, this is an underestimation so we don't need to traverse the entire
      * rax */
     if (c->pubsub_data && c->pubsub_data->client_tracking_prefixes)
-        mem += c->pubsub_data->client_tracking_prefixes->numnodes * (sizeof(raxNode) * sizeof(raxNode *));
+        mem += c->pubsub_data->client_tracking_prefixes->numnodes * (sizeof(raxNode) + sizeof(raxNode *));
 
     return mem;
 }
@@ -4621,6 +4740,11 @@ char *getClientTypeName(int class) {
 int checkClientOutputBufferLimits(client *c) {
     int soft = 0, hard = 0, class;
     unsigned long used_mem = getClientOutputBufferMemoryUsage(c);
+
+    /* For unauthenticated clients which were also never authenticated before the output buffer is limited to prevent
+     * them from abusing it by not reading the replies */
+    if (used_mem > REPLY_BUFFER_SIZE_UNAUTHENTICATED_CLIENT && authRequired(c) && !clientEverAuthenticated(c))
+        return 1;
 
     class = getClientType(c);
     /* For the purpose of output buffer limiting, primaries are handled

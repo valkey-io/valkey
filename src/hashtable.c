@@ -198,7 +198,7 @@ static_assert(MAX_FILL_PERCENT_SOFT <= MAX_FILL_PERCENT_HARD, "Soft vs hard fill
 
 /* --- Random entry --- */
 
-#define FAIR_RANDOM_SAMPLE_SIZE (ENTRIES_PER_BUCKET * 40)
+#define FAIR_RANDOM_SAMPLE_SIZE (ENTRIES_PER_BUCKET * 10)
 #define WEAK_RANDOM_SAMPLE_SIZE ENTRIES_PER_BUCKET
 
 /* --- Types --- */
@@ -649,7 +649,7 @@ static int resize(hashtable *ht, size_t min_capacity, int *malloc_failed) {
     if (ht->type->rehashingStarted) ht->type->rehashingStarted(ht);
 
     /* If the old table was empty, the rehashing is completed immediately. */
-    if (ht->tables[0] == NULL || ht->used[0] == 0) {
+    if (ht->tables[0] == NULL || (ht->used[0] == 0 && ht->child_buckets[0] == 0)) {
         rehashingCompleted(ht);
     } else if (ht->type->instant_rehashing) {
         while (hashtableIsRehashing(ht)) {
@@ -1138,14 +1138,18 @@ void hashtableResumeAutoShrink(hashtable *ht) {
 
 /* Pauses incremental rehashing. When rehashing is paused, bucket chains are not
  * automatically compacted when entries are deleted. Doing so may leave empty
- * spaces, "holes", in the bucket chains, which wastes memory. */
+ * spaces, "holes", in the bucket chains, which wastes memory. Additionally, we
+ * pause auto shrink when rehashing is paused, meaning the hashtable will not
+ * shrink the bucket count. */
 static void hashtablePauseRehashing(hashtable *ht) {
     ht->pause_rehash++;
+    hashtablePauseAutoShrink(ht);
 }
 
 /* Resumes incremental rehashing, after pausing it. */
 static void hashtableResumeRehashing(hashtable *ht) {
     ht->pause_rehash--;
+    hashtableResumeAutoShrink(ht);
 }
 
 /* Returns 1 if incremental rehashing is paused, 0 if it isn't. */
@@ -1218,7 +1222,7 @@ int hashtableExpandIfNeeded(hashtable *ht) {
  * resize policy to ALLOW, you may want to call hashtableShrinkIfNeeded. */
 int hashtableShrinkIfNeeded(hashtable *ht) {
     /* Don't shrink if rehashing is already in progress. */
-    if (hashtableIsRehashing(ht) || resize_policy == HASHTABLE_RESIZE_FORBID) {
+    if (hashtableIsRehashing(ht) || resize_policy == HASHTABLE_RESIZE_FORBID || ht->pause_auto_shrink) {
         return 0;
     }
     size_t current_capacity = numBuckets(ht->bucket_exp[0]) * ENTRIES_PER_BUCKET;
@@ -1524,6 +1528,9 @@ void hashtableTwoPhasePopDelete(hashtable *ht, hashtablePosition *pos) {
     assert(isPositionFilled(b, pos_in_bucket));
     b->presence &= ~(1 << pos_in_bucket);
     ht->used[table_index]--;
+    /* When we resume rehashing, it may cause the bucket to be deleted due to
+     * auto shrink. */
+    hashtablePauseAutoShrink(ht);
     hashtableResumeRehashing(ht);
     if (b->chained && !hashtableIsRehashingPaused(ht)) {
         /* Rehashing paused also means bucket chain compaction paused. It is
@@ -1532,7 +1539,7 @@ void hashtableTwoPhasePopDelete(hashtable *ht, hashtablePosition *pos) {
          * we do the compaction in the scan and iterator code instead. */
         fillBucketHole(ht, b, pos_in_bucket, table_index);
     }
-    hashtableShrinkIfNeeded(ht);
+    hashtableResumeAutoShrink(ht);
 }
 
 /* Initializes the state for an incremental find operation.
@@ -1717,7 +1724,9 @@ size_t hashtableScanDefrag(hashtable *ht, size_t cursor, hashtableScanFunction f
     if (!hashtableIsRehashing(ht)) {
         /* Emit entries at the cursor index. */
         size_t mask = expToMask(ht->bucket_exp[0]);
-        bucket *b = &ht->tables[0][cursor & mask];
+        size_t idx = cursor & mask;
+        size_t used_before = ht->used[0];
+        bucket *b = &ht->tables[0][idx];
         do {
             if (b->presence != 0) {
                 int pos;
@@ -1734,6 +1743,11 @@ size_t hashtableScanDefrag(hashtable *ht, size_t cursor, hashtableScanFunction f
             }
             b = next;
         } while (b != NULL);
+
+        /* If any entries were deleted, fill the holes. */
+        if (ht->used[0] < used_before) {
+            compactBucketChain(ht, idx, 0);
+        }
 
         /* Advance cursor. */
         cursor = nextCursor(cursor, mask);
@@ -2003,8 +2017,10 @@ int hashtableRandomEntry(hashtable *ht, void **found) {
 /* Points 'found' to a random entry in the hash table and returns 1. Returns 0
  * if the table is empty. This one is more fair than hashtableRandomEntry(). */
 int hashtableFairRandomEntry(hashtable *ht, void **found) {
-    void *samples[FAIR_RANDOM_SAMPLE_SIZE];
-    unsigned count = hashtableSampleEntries(ht, &samples[0], FAIR_RANDOM_SAMPLE_SIZE);
+    /* Sample less if it's very sparse. */
+    size_t num_samples = hashtableSize(ht) >= hashtableBuckets(ht) ? FAIR_RANDOM_SAMPLE_SIZE : WEAK_RANDOM_SAMPLE_SIZE;
+    void *samples[num_samples];
+    unsigned count = hashtableSampleEntries(ht, &samples[0], num_samples);
     if (count == 0) return 0;
     unsigned idx = random() % count;
     *found = samples[idx];
@@ -2026,9 +2042,8 @@ unsigned hashtableSampleEntries(hashtable *ht, void **dst, unsigned count) {
     samples.size = count;
     samples.seen = 0;
     samples.entries = dst;
-    size_t cursor = randomSizeT();
     while (samples.seen < count) {
-        cursor = hashtableScan(ht, cursor, sampleEntriesScanFn, &samples);
+        hashtableScan(ht, randomSizeT(), sampleEntriesScanFn, &samples);
     }
     rehashStepOnReadIfNeeded(ht);
     /* samples.seen is the number of entries scanned. It may be greater than

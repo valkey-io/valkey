@@ -575,9 +575,72 @@ every 10 seconds.
 
 ## Persistence
 
-TODO: The Raft log and state (currentTerm, votedFor) will be persisted
-in nodes.conf using the vars section for Raft state and additional
-lines for uncommitted log entries.
+Raft state is persisted in `nodes.conf`. The file has three sections:
+
+1. **Node lines** — the cluster state snapshot (nodes, slots, replication
+   topology) as of `lastApplied`.
+2. **Vars line** — `currentTerm`, `lastApplied`, `votedFor`, `raftLeader`.
+3. **Log lines** — entries with index > `lastApplied` appended at the end.
+
+Only `currentTerm`, `votedFor`, and the log require persistence for
+safety; `commitIndex` is rediscovered from the leader after restart
+(Raft paper §5.2, Figure 2).
+
+Log line format:
+
+    log <index> <term> <type> <data>
+
+### Full rewrite
+
+A full rewrite (atomic write to temp file + rename + fsync) is triggered
+when:
+
+- `currentTerm` changes (step-down on higher term).
+- `votedFor` changes (granting a vote or starting an election).
+- An applied entry affects `myself` (SLOT_CHANGE, SET_REPLICA_OF,
+  FAILOVER, NODE_JOIN promotion from learner).
+
+A full rewrite updates the snapshot (node lines reflect the current
+applied state), updates `lastApplied` in vars, and writes only
+unapplied log entries in the tail.
+
+### Append-only
+
+When new log entries arrive (from AE or local proposals), they are
+appended to the end of the file with a single batched write + fsync
+(deferred to `beforeSleep`). No full rewrite is needed.
+
+**Safety invariant:** The fsync in `beforeSleep` must complete before
+the AE_ACK is written to the socket. This holds because `beforeSleep`
+runs before the event loop's writable handlers flush outgoing buffers.
+If fsync is ever moved to a background thread, the AE_ACK must be
+deferred until the fsync completes.
+
+### Startup
+
+On load:
+
+1. Node lines are parsed → cluster state restored (snapshot).
+2. Vars line is parsed → `currentTerm`, `votedFor`, `lastApplied` restored.
+   `commit_index` is set to `lastApplied`.
+3. Log lines are parsed → entries added to the in-memory log.
+4. If the node is a replica, replication is started.
+
+The leader will send AE after reconnection, updating `commit_index`.
+Entries between `lastApplied + 1` and the new `commit_index` are then
+applied.
+
+### Incomplete lines
+
+If the last line lacks a trailing newline (crash during append), it and
+everything after it is discarded.
+
+### File format
+
+The node lines share the same format as the gossip protocol (code
+reuse), but the vars and log lines are raft-specific. The file is not
+compatible between protocols — switching from gossip to raft (or vice
+versa) requires removing nodes.conf.
 
 ## Shard Epoch (not yet implemented)
 
@@ -631,7 +694,6 @@ targets.
   entries, especially don't trigger primary/replica failovers in a
   minority partition).
 - Log compaction / snapshotting for lagging followers.
-- Persistence of Raft log to disk.
 - Learners (non-voting members): reduces the risk for split-vote for
   leader election in large clusters and reduces commit overhead.
 - Leader transfer on CLUSTER FORGET where the target is the leader.

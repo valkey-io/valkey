@@ -84,7 +84,7 @@ proc cluster_ensure_master {id} {
 }
 
 # start_cluster 4 masters + 5 nodes (4 replicas + 1 standalone R8)
-start_cluster 4 5 {tags {external:skip cluster cluster-raft:skip}} { ;# Restarts servers (needs raft persistence)
+start_cluster 4 5 {tags {external:skip cluster}} {
 
 # cluster_master_nodes and cluster_replica_nodes refer to the active cluster members.
 set ::cluster_master_nodes 4

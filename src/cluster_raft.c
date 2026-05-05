@@ -133,6 +133,9 @@ typedef struct {
     unsigned int todo_retry_proposals : 1;
     unsigned int todo_schedule_failover : 1;
     unsigned int todo_update_replication : 1;
+    unsigned int todo_persist_log : 1;
+    unsigned int todo_save_config : 1;
+    uint64_t persist_log_from; /* First index to persist in next batch */
 
     /* NODE_INFO divergence detection. */
     sds my_last_committed_info;
@@ -308,10 +311,12 @@ static void clusterRaftApplyFailover(sds data);
 static void raftLogApply(raftLogEntry *e);
 static raftLogEntry *raftLogCreate(uint64_t term, uint64_t index, uint8_t type, sds data);
 static void raftLogAppend(raftLogEntry *e);
+static void raftLogMarkDirty(uint64_t index);
 static raftLogEntry *raftLogGet(uint64_t index);
 static uint64_t raftLogLastIndex(void);
 static uint64_t raftLogTermAt(uint64_t index);
 static void raftLogTruncateFrom(uint64_t index);
+static void clusterRaftPersistNewLogEntries(uint64_t from);
 
 static void clusterRaftRandomizeElectionTimeout(void) {
     mstime_t base = server.cluster_node_timeout;
@@ -729,6 +734,7 @@ static void clusterRaftPropose(sds entry, void *ctx, void (*callback)(void *ctx,
 
         uint64_t idx = raftLogLastIndex() + 1;
         raftLogAppend(raftLogCreate(rs->current_term, idx, type, data));
+        raftLogMarkDirty(idx);
         serverLog(LL_NOTICE, "Leader appended %s (index %llu).",
                   raftEntryTypeName(type), (unsigned long long)idx);
 
@@ -785,6 +791,7 @@ static int clusterRaftProcessPropose(clusterLink *link, int argc, sds *argv) {
 
     uint64_t idx = raftLogLastIndex() + 1;
     raftLogAppend(raftLogCreate(rs->current_term, idx, type, data));
+    raftLogMarkDirty(idx);
     serverLog(LL_NOTICE, "Leader appended proposed %s (index %llu).",
               raftEntryTypeName(type), (unsigned long long)idx);
 
@@ -833,6 +840,7 @@ static int clusterRaftMaybeStepDown(clusterRaftState *rs, uint64_t term) {
         memset(rs->leader, 0, CLUSTER_NAMELEN);
         clusterRaftRandomizeElectionTimeout();
         rs->last_heartbeat = monotonicMs();
+        rs->todo_save_config = 1;
         return 1;
     }
     return 0;
@@ -868,6 +876,15 @@ static void raftLogAppend(raftLogEntry *e) {
         rs->log = zrealloc(rs->log, rs->log_alloc * sizeof(raftLogEntry *));
     }
     rs->log[rs->log_count++] = e;
+}
+
+/* Mark that new log entries need to be persisted in the next beforeSleep. */
+static void raftLogMarkDirty(uint64_t index) {
+    clusterRaftState *rs = RAFT_STATE();
+    if (!rs->todo_persist_log) {
+        rs->todo_persist_log = 1;
+        rs->persist_log_from = index;
+    }
 }
 
 /* O(1) lookup by index. Returns NULL if out of range. Indices start at 1. */
@@ -972,6 +989,7 @@ static void raftLogApply(raftLogEntry *e) {
             if (memcmp(argv[0], myself->name, CLUSTER_NAMELEN) == 0) {
                 if (rs->role == RAFT_ROLE_JOINER) {
                     rs->role = RAFT_ROLE_FOLLOWER;
+                    rs->todo_save_config = 1;
                     serverLog(LL_NOTICE, "Promoted from joiner to follower.");
 
                     /* Propose SLOT_CHANGE for slots assigned before joining
@@ -1266,6 +1284,7 @@ static int clusterRaftProcessAppendEntries(clusterLink *link, int argc, sds *arg
         }
         if (!existing) {
             raftLogAppend(raftLogCreate(e_term, new_index, e_type, e_data));
+            raftLogMarkDirty(new_index);
         } else {
             sdsfree(e_data); /* Already have this entry. */
         }
@@ -1417,6 +1436,7 @@ static int clusterRaftProcessRequestVote(clusterLink *link, int argc, sds *argv)
         granted = 1;
         memcpy(rs->voted_for, argv[1], CLUSTER_NAMELEN);
         rs->last_heartbeat = monotonicMs(); /* Reset election timer */
+        rs->todo_save_config = 1;
         serverLog(LL_NOTICE, "Voted for %.40s in term %llu.", argv[1], (unsigned long long)msg_term);
     }
 
@@ -1483,6 +1503,7 @@ static void clusterRaftStartElection(void) {
     rs->votes_received = 1; /* Vote for self */
     clusterRaftRandomizeElectionTimeout();
     rs->last_heartbeat = monotonicMs();
+    rs->todo_save_config = 1;
 
     serverLog(LL_NOTICE, "Starting Raft election (term %llu).", (unsigned long long)rs->current_term);
 
@@ -1663,6 +1684,7 @@ static void clusterRaftRetryProposals(void) {
             raftPendingProposal *pp = listNodeValue(ln);
             uint64_t idx = raftLogLastIndex() + 1;
             raftLogAppend(raftLogCreate(rs->current_term, idx, pp->type, sdsdup(pp->data)));
+            raftLogMarkDirty(idx);
             serverLog(LL_NOTICE, "Leader appended deferred %s (index %llu).",
                       raftEntryTypeName(pp->type), (unsigned long long)idx);
         }
@@ -1858,6 +1880,15 @@ static void clusterRaftBeforeSleep(void) {
     if (rs->todo_connect_nodes) {
         rs->todo_connect_nodes = 0;
         clusterConnectNodes();
+    }
+
+    if (rs->todo_save_config) {
+        rs->todo_save_config = 0;
+        rs->todo_persist_log = 0; /* Full rewrite includes log entries. */
+        clusterSaveConfigOrDie(1);
+    } else if (rs->todo_persist_log) {
+        rs->todo_persist_log = 0;
+        clusterRaftPersistNewLogEntries(rs->persist_log_from);
     }
 
     if (rs->todo_broadcast_ae) {
@@ -2202,10 +2233,15 @@ static void clusterRaftFreeNodeData(clusterNode *node) {
 
 static sds clusterRaftAppendVarsLine(sds config) {
     clusterRaftState *rs = RAFT_STATE();
-    config = sdscatprintf(config, "vars currentTerm %llu",
-                          (unsigned long long)rs->current_term);
+    config = sdscatprintf(config, "vars currentTerm %llu lastApplied %llu",
+                          (unsigned long long)rs->current_term,
+                          (unsigned long long)rs->last_applied);
+    if (rs->voted_for[0]) {
+        config = sdscat(config, " votedFor ");
+        config = sdscatlen(config, rs->voted_for, CLUSTER_NAMELEN);
+    }
     if (rs->leader[0]) {
-        config = sdscatlen(config, " raftLeader ", 12);
+        config = sdscat(config, " raftLeader ");
         config = sdscatlen(config, rs->leader, CLUSTER_NAMELEN);
     }
     config = sdscatlen(config, "\n", 1);
@@ -2217,6 +2253,13 @@ static int clusterRaftParseVarsLine(const char *name, const char *value) {
     if (!strcasecmp(name, "currentTerm")) {
         rs->current_term = strtoull(value, NULL, 10);
         return 1;
+    } else if (!strcasecmp(name, "lastApplied")) {
+        rs->last_applied = strtoull(value, NULL, 10);
+        rs->commit_index = rs->last_applied;
+        return 1;
+    } else if (!strcasecmp(name, "votedFor")) {
+        memcpy(rs->voted_for, value, CLUSTER_NAMELEN);
+        return 1;
     } else if (!strcasecmp(name, "raftLeader")) {
         memcpy(rs->leader, value, CLUSTER_NAMELEN);
         return 1;
@@ -2224,8 +2267,86 @@ static int clusterRaftParseVarsLine(const char *name, const char *value) {
     return 0;
 }
 
+/* Append uncommitted log entries (index > last_applied) as "log" lines
+ * at the end of nodes.conf during a full rewrite. */
+static sds clusterRaftAppendLogLines(sds config) {
+    clusterRaftState *rs = RAFT_STATE();
+    for (uint64_t i = 0; i < rs->log_count; i++) {
+        raftLogEntry *e = rs->log[i];
+        if (e->index <= rs->last_applied) continue;
+        config = sdscatprintf(config, "log %llu %llu %s %s\n",
+                              (unsigned long long)e->index,
+                              (unsigned long long)e->term,
+                              raftEntryTypeName(e->type),
+                              e->data);
+    }
+    return config;
+}
+
+/* Append all log entries from index 'from' onwards to nodes.conf. Called
+ * from beforeSleep to batch multiple entries into a single write+fsync. */
+static void clusterRaftPersistNewLogEntries(uint64_t from) {
+    clusterRaftState *rs = RAFT_STATE();
+    sds buf = sdsempty();
+    for (uint64_t i = 0; i < rs->log_count; i++) {
+        raftLogEntry *e = rs->log[i];
+        if (e->index < from) continue;
+        buf = sdscatprintf(buf, "log %llu %llu %s %s\n",
+                           (unsigned long long)e->index,
+                           (unsigned long long)e->term,
+                           raftEntryTypeName(e->type),
+                           e->data);
+    }
+    if (sdslen(buf) == 0) {
+        sdsfree(buf);
+        return;
+    }
+    int fd = open(server.cluster_configfile, O_WRONLY | O_APPEND);
+    if (fd == -1) {
+        serverLog(LL_WARNING, "Could not open cluster config for log append: %s", strerror(errno));
+        sdsfree(buf);
+        return;
+    }
+    if (write(fd, buf, sdslen(buf)) == -1) {
+        serverLog(LL_WARNING, "Could not append log entries to cluster config: %s", strerror(errno));
+    }
+    valkey_fsync(fd);
+    close(fd);
+    sdsfree(buf);
+}
+
+
+static void clusterRaftParseLogLine(sds *argv, int argc) {
+    /* Format: log <index> <term> <type> <data...> */
+    if (argc < 5) return;
+    uint64_t index = strtoull(argv[1], NULL, 10);
+    uint64_t term = strtoull(argv[2], NULL, 10);
+    int type = raftEntryTypeByName(argv[3]);
+    if (type < 0) return;
+
+    /* Reconstruct data from remaining args (space-separated). */
+    sds data = sdsdup(argv[4]);
+    for (int i = 5; i < argc; i++) {
+        data = sdscatlen(data, " ", 1);
+        data = sdscatsds(data, argv[i]);
+    }
+
+    raftLogEntry *e = raftLogCreate(term, index, type, data);
+    raftLogAppend(e);
+}
+
 static void clusterRaftPostLoad(void) {
-    /* TODO: rebuild peer state from loaded nodes */
+    clusterRaftState *rs = RAFT_STATE();
+    /* commit_index was set to last_applied in parseVarsLine. On startup,
+     * the leader will update it via AE. For now, ensure it's consistent. */
+    if (rs->commit_index < rs->last_applied)
+        rs->commit_index = rs->last_applied;
+    /* If we're a replica, start replication. */
+    if (server.cluster->myself &&
+        nodeIsReplica(server.cluster->myself) &&
+        server.cluster->myself->replicaof) {
+        rs->todo_update_replication = 1;
+    }
 }
 
 /* --------------------------------------------------------------------------
@@ -2473,6 +2594,8 @@ static void clusterRaftApplySlotChange(sds data) {
             start = end = atoi(argv[i]);
         }
         for (int j = start; j <= end; j++) {
+            if (target == myself || server.cluster->slots[j] == myself)
+                RAFT_STATE()->todo_save_config = 1;
             if (target) {
                 /* If this slot is moving away from myself, delete keys. */
                 if (server.cluster->slots[j] == myself && target != myself) {
@@ -2504,6 +2627,8 @@ static void clusterRaftApplySetReplica(sds data) {
 
     clusterNode *replica = clusterLookupNode(argv[0], sdslen(argv[0]));
     if (!replica) goto done;
+
+    if (replica == myself) rs->todo_save_config = 1;
 
     char *shard_id = argv[2];
 
@@ -2602,10 +2727,12 @@ static void clusterRaftApplyFailover(sds data) {
     /* If I'm the replica being promoted, start acting as primary. */
     if (replica == myself) {
         rs->todo_update_replication = 1;
+        rs->todo_save_config = 1;
     }
     /* If I'm the old primary being demoted, start replicating. */
     if (primary == myself) {
         rs->todo_update_replication = 1;
+        rs->todo_save_config = 1;
     }
 done:
     if (argv) sdsfreesplitres(argv, argc);
@@ -2865,6 +2992,8 @@ clusterBusType clusterRaftBus = {
     .setNodeFailed = NULL,
     .appendVarsLine = clusterRaftAppendVarsLine,
     .parseVarsLine = clusterRaftParseVarsLine,
+    .parseLogLine = clusterRaftParseLogLine,
+    .appendLogLines = clusterRaftAppendLogLines,
     .postLoad = clusterRaftPostLoad,
     .initNodeData = clusterRaftInitNodeData,
     .freeNodeData = clusterRaftFreeNodeData,

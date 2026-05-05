@@ -651,6 +651,12 @@ int clusterLoadConfig(char *filename) {
          * before the truncate() call. */
         if (line[0] == '\n' || line[0] == '\0') continue;
 
+        /* A line without a trailing newline means the write was interrupted
+         * (crash during append). Stop reading — this and anything after is
+         * potentially incomplete. */
+        size_t linelen = strlen(line);
+        if (linelen > 0 && line[linelen - 1] != '\n') break;
+
         /* Split the line into arguments for processing. */
         argv = sdssplitargs(line, &argc);
         if (argv == NULL) goto fmterr;
@@ -666,6 +672,14 @@ int clusterLoadConfig(char *filename) {
                 }
                 serverLog(LL_NOTICE, "Skipping unknown cluster config variable '%s'", argv[j]);
             }
+            sdsfreesplitres(argv, argc);
+            continue;
+        }
+
+        /* Handle "log" lines (protocol-specific WAL entries). */
+        if (strcasecmp(argv[0], "log") == 0) {
+            if (clusterCurrentBus->parseLogLine)
+                clusterCurrentBus->parseLogLine(argv, argc);
             sdsfreesplitres(argv, argc);
             continue;
         }
@@ -894,6 +908,8 @@ int clusterSaveConfig(int do_fsync) {
     ci = clusterGenNodesDescription(NULL, CLUSTER_NODE_HANDSHAKE, 0);
     if (clusterCurrentBus->appendVarsLine)
         ci = clusterCurrentBus->appendVarsLine(ci);
+    if (clusterCurrentBus->appendLogLines)
+        ci = clusterCurrentBus->appendLogLines(ci);
     content_size = sdslen(ci);
 
     /* Create a temp file with the new content. */

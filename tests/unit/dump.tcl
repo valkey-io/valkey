@@ -407,4 +407,12 @@ start_server {tags {"dump"}} {
             assert_match {*WRONGPASS*} $err
         }
     } {} {external:skip}
+
+    test {RESTORE rejects zipmap with overlong field length encoding (CVE-2026-25243)} {
+        r debug set-skip-checksum-validation 1
+        set payload "\x09\x18\x02\xfe\x03\x00\x00\x00\x61\x62\x63\x03\x00\x64\x65\x66\x03\x67\x68\x69\x03\x00\x6a\x6b\x6c\xff\x0b\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+        catch {r restore zipmap_test 0 $payload} err
+        r debug set-skip-checksum-validation 0
+        assert_match {*Bad data format*} $err
+    } {} {needs:debug}
 }

@@ -285,6 +285,10 @@ static void shutdownIOThread(int id) {
     if (tid == pthread_self()) return;
     if (tid == 0) return;
 
+    /* Only unlock mutex for inactive threads. Active threads are already unlocked. */
+    if (id >= server.active_io_threads_num) {
+        pthread_mutex_unlock(&io_threads_mutex[id]);
+    }
     pthread_cancel(tid);
 
     if ((err = pthread_join(tid, NULL)) != 0) {

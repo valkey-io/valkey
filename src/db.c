@@ -258,10 +258,10 @@ int getKeySlot(sds key) {
      * the key slot would fallback to keyHashSlot.
      *
      * Modules and scripts executed on the primary may get replicated as multi-execs that operate on multiple slots,
-     * so we must always recompute the slot for commands coming from the primary.
+     * so we must always recompute the slot for commands coming from the primary or AOF.
      */
     if (server.current_client && server.current_client->slot >= 0 && server.current_client->flag.executing_command &&
-        !isReplicatedClient(server.current_client)) {
+        !mustObeyClient(server.current_client)) {
         debugServerAssertWithInfo(server.current_client, NULL,
                                   (int)keyHashSlot(key, (int)sdslen(key)) == server.current_client->slot);
         return server.current_client->slot;
@@ -382,6 +382,17 @@ static void dbSetValue(serverDb *db, robj *key, robj **valref, int overwrite, vo
             *expireref = new;
         }
     }
+
+    /* If overwriting a hash object, un-track it from the volatile items tracking if it contains volatile items.*/
+    if (old->type == OBJ_HASH && hashTypeHasVolatileFields(old)) {
+        /* Some commands create a new value (with NO key) and use setKey to change the value of an existing key.
+         * In this case the old can be replaced with the provided value and be left without a key
+         * however it is still a hashObject with optional volatile items and we need to untrack it. */
+        dbUntrackKeyWithVolatileItems(db, old->hasembkey ? old : new);
+    }
+    /* If the new object is a hash with volatile items we need to track it again */
+    dbTrackKeyWithVolatileItems(db, new);
+
     /* For efficiency, let the I/O thread that allocated an object also deallocate it. */
     if (tryOffloadFreeObjToIOThreads(old) == C_OK) {
         /* OK */
@@ -1977,12 +1988,15 @@ void propagateDeletion(serverDb *db, robj *key, int lazy, int slot) {
  *
  * This function builds and propagates a single HDEL command with multiple fields
  * for the given hash object `o`. It temporarily enables replication (if needed),
- * constructs the command using the field names, and sends it via alsoPropagate(). */
-static void propagateFieldsDeletion(serverDb *db, robj *o, size_t n_fields, robj *fields[], int didx) {
+ * constructs the command using the field names, and sends it via alsoPropagate().
+ * Returns how many fields where propagated */
+int propagateFieldsDeletion(serverDb *db, robj *o, size_t n_fields, robj *fields[], int didx) {
     int prev_replication_allowed = server.replication_allowed;
     server.replication_allowed = 1;
 
     robj *argv[EXPIRE_BULK_LIMIT + 2]; /* HDEL + key + fields */
+    if (n_fields > EXPIRE_BULK_LIMIT) n_fields = EXPIRE_BULK_LIMIT;
+
     int argc = 0;
     robj *keyobj = createStringObjectFromSds(objectGetKey(o));
     argv[argc++] = shared.hdel; // HDEL command
@@ -1997,6 +2011,7 @@ static void propagateFieldsDeletion(serverDb *db, robj *o, size_t n_fields, robj
     for (int i = 0; i < argc; i++) {
         decrRefCount(argv[i]);
     }
+    return n_fields;
 }
 
 /* Process expired fields for a hash delete them and propagate changes to replicas and AOF.

@@ -992,3 +992,23 @@ start_cluster 1 0 {tags {"external:skip cluster"}} {
         assert_equal [R 0 EXEC] {1 FIZZ}
     }
 }
+
+start_cluster 1 0 {tags {"external:skip cluster needs:debug"} overrides {appendonly yes}} {
+    test "Regression test for #2995: MULTI/EXEC with different slot keys should not duplicate on AOF reload" {
+        R 0 SET k0 a
+        R 0 BGREWRITEAOF
+        waitForBgrewriteaof [srv 0 client]
+
+        R 0 SET k1 b
+        R 0 MULTI
+        R 0 SET k0 c
+        R 0 APPEND k0 d
+        assert_equal [R 0 EXEC] {OK 2}
+
+        R 0 DEBUG LOADAOF
+
+        assert_equal [llength [R 0 KEYS *]] 2
+        assert_equal [R 0 GET k0] "cd"
+        assert_equal [R 0 GET k1] "b"
+    }
+}

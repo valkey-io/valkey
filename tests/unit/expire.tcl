@@ -949,6 +949,22 @@ start_server {tags {"expire"}} {
             fail "Keys did not actively expire."
         }
     }
+
+    test {Negative ttl will not cause server to crash when import mode is on} {
+        r flushall
+        r config set import-mode yes
+        r set foo bar
+        r expireat foo -1
+        r set foo1 bar
+        r expireat foo1 -10000
+        assert_equal [r dbsize] 2
+        r config set import-mode no
+        wait_for_condition 30 100 {
+            [r dbsize] == 0
+        } else {
+            fail "key wasn't expired"
+        }
+    }
 }
 
 start_server {tags {expire} overrides {hz 100}} {

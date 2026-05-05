@@ -331,7 +331,7 @@ void parseUri(const char *uri, const char *tool_name, cliConnInfo *connInfo, int
         !strncasecmp(redisTlsscheme, curr, strlen(redisTlsscheme))) {
 #ifdef USE_OPENSSL
         *tls_flag = 1;
-        char *del = strstr(curr, "://");
+        const char *del = strstr(curr, "://");
         curr += (del - curr) + 3;
 #else
         char *copy = strdup(curr);
@@ -341,7 +341,7 @@ void parseUri(const char *uri, const char *tool_name, cliConnInfo *connInfo, int
         exit(1);
 #endif
     } else if (!strncasecmp(scheme, curr, strlen(scheme)) || !strncasecmp(redisScheme, curr, strlen(redisScheme))) {
-        char *del = strstr(curr, "://");
+        const char *del = strstr(curr, "://");
         curr += (del - curr) + 3;
     } else {
         fprintf(stderr, "Invalid URI scheme\n");

@@ -1,7 +1,7 @@
 {
     "HPERSIST": {
         "summary": "Remove the existing expiration on a hash key's field(s).",
-        "complexity": "O(1) for each field assigned with TTL, so O(N) to persist N items when the command is called with multiple fields.",
+        "complexity": "O(N) where N is the number of specified fields.",
         "group": "hash",
         "since": "9.0.0",
         "arity": -5,

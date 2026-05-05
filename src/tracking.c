@@ -143,7 +143,7 @@ int checkPrefixCollisionsOrReply(client *c, robj **prefixes, size_t numprefix) {
                                     "Prefix '%s' overlaps with another provided prefix '%s'. "
                                     "Prefixes for a single client must not overlap.",
                                     (unsigned char *)objectGetVal(prefixes[i]), (unsigned char *)objectGetVal(prefixes[j]));
-                return i;
+                return 0;
             }
         }
     }

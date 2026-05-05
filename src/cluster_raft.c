@@ -79,15 +79,8 @@ enum raftRole {
 };
 
 /* --------------------------------------------------------------------------
- * Per-peer replication state (leader only)
+ * Helper types for pending operations
  * -------------------------------------------------------------------------- */
-
-typedef struct {
-    uint64_t next_index;
-    uint64_t match_index;
-    mstime_t last_ack_time;               /* Last time we received AE_ACK from this peer */
-    unsigned int pending_fail_change : 1; /* NODE_FAIL or NODE_RECOVER in flight */
-} raftPeerState;
 
 /* A pending proposal tracks a client waiting for a Raft entry to be
  * committed. Stored on the node that originated the proposal. */
@@ -182,7 +175,10 @@ typedef struct {
  * -------------------------------------------------------------------------- */
 
 typedef struct {
-    raftPeerState peer; /* Replication tracking when we are leader */
+    uint64_t next_index;
+    uint64_t match_index;
+    mstime_t last_ack_time;               /* Last time we received AE_ACK from this peer */
+    unsigned int pending_fail_change : 1; /* NODE_FAIL or NODE_RECOVER in flight */
 } clusterNodeRaftData;
 
 #define RAFT_DATA(n) ((clusterNodeRaftData *)(n)->protocol_data)
@@ -862,9 +858,9 @@ static void raftLogApply(raftLogEntry *e) {
             if (rs->role == RAFT_ROLE_LEADER) {
                 clusterNode *joined = clusterLookupNode(argv[0], CLUSTER_NAMELEN);
                 if (joined && joined != myself) {
-                    RAFT_DATA(joined)->peer.next_index = 1;
-                    RAFT_DATA(joined)->peer.match_index = 0;
-                    RAFT_DATA(joined)->peer.last_ack_time = monotonicMs();
+                    RAFT_DATA(joined)->next_index = 1;
+                    RAFT_DATA(joined)->match_index = 0;
+                    RAFT_DATA(joined)->last_ack_time = monotonicMs();
                 }
             }
 
@@ -916,7 +912,7 @@ static void raftLogApply(raftLogEntry *e) {
         clusterNode *node = clusterLookupNode(e->data, sdslen(e->data));
         if (node && node != myself) {
             node->flags |= CLUSTER_NODE_FAIL;
-            RAFT_DATA(node)->peer.pending_fail_change = 0;
+            RAFT_DATA(node)->pending_fail_change = 0;
             rs->todo_update_slot_coverage = 1;
             rs->todo_invalidate_slots_cache = 1;
         }
@@ -937,7 +933,7 @@ static void raftLogApply(raftLogEntry *e) {
         clusterNode *node = clusterLookupNode(e->data, sdslen(e->data));
         if (node) {
             node->flags &= ~CLUSTER_NODE_FAIL;
-            RAFT_DATA(node)->peer.pending_fail_change = 0;
+            RAFT_DATA(node)->pending_fail_change = 0;
             rs->todo_update_slot_coverage = 1;
             rs->todo_invalidate_slots_cache = 1;
             /* Cancel deferred failover if the recovered node is my primary. */
@@ -1023,7 +1019,7 @@ static void clusterRaftSendAppendEntries(clusterLink *link, clusterNode *node) {
     clusterRaftState *rs = RAFT_STATE();
     clusterNodeRaftData *rd = RAFT_DATA(node);
 
-    uint64_t next = rd->peer.next_index;
+    uint64_t next = rd->next_index;
     uint64_t prev_index = next > 0 ? next - 1 : 0;
     uint64_t prev_term = raftLogTermAt(rs, prev_index);
 
@@ -1181,7 +1177,7 @@ static int clusterRaftProcessAppendEntriesResponse(clusterLink *link, int argc, 
     clusterNode *node = link->node;
     if (!node) return 1;
     clusterNodeRaftData *rd = RAFT_DATA(node);
-    rd->peer.last_ack_time = monotonicMs();
+    rd->last_ack_time = monotonicMs();
     /* Keep node->repl_offset in sync for CLUSTER SLOTS/SHARDS on the leader. */
     long long prev_offset = node->repl_offset;
     node->repl_offset = follower_repl_offset;
@@ -1195,8 +1191,8 @@ static int clusterRaftProcessAppendEntriesResponse(clusterLink *link, int argc, 
     }
 
     /* Propose NODE_RECOVER if the node is back. */
-    if (nodeFailed(node) && !rd->peer.pending_fail_change) {
-        rd->peer.pending_fail_change = 1;
+    if (nodeFailed(node) && !rd->pending_fail_change) {
+        rd->pending_fail_change = 1;
         sds entry = sdsnew("NODE_RECOVER ");
         entry = sdscatlen(entry, node->name, CLUSTER_NAMELEN);
         clusterRaftPropose(entry, NULL, NULL);
@@ -1206,8 +1202,8 @@ static int clusterRaftProcessAppendEntriesResponse(clusterLink *link, int argc, 
 
     if (success) {
         /* Follower accepted — update matchIndex/nextIndex. */
-        rd->peer.match_index = follower_last_index;
-        rd->peer.next_index = follower_last_index + 1;
+        rd->match_index = follower_last_index;
+        rd->next_index = follower_last_index + 1;
 
         /* Check if we can advance commitIndex (Raft paper §5.3/§5.4). */
         for (uint64_t i = rs->log_count; i > 0; i--) {
@@ -1221,7 +1217,7 @@ static int clusterRaftProcessAppendEntriesResponse(clusterLink *link, int argc, 
             while ((de = dictNext(di)) != NULL) {
                 clusterNode *peer = dictGetVal(de);
                 if (peer == myself) continue;
-                if (RAFT_DATA(peer)->peer.match_index >= idx) matches++;
+                if (RAFT_DATA(peer)->match_index >= idx) matches++;
             }
             dictReleaseIterator(di);
 
@@ -1245,7 +1241,7 @@ static int clusterRaftProcessAppendEntriesResponse(clusterLink *link, int argc, 
         }
     } else {
         /* Follower rejected — decrement nextIndex and retry immediately. */
-        if (rd->peer.next_index > 1) rd->peer.next_index--;
+        if (rd->next_index > 1) rd->next_index--;
         clusterRaftSendAppendEntries(node->link, node);
     }
     return 1;
@@ -1327,16 +1323,16 @@ static int clusterRaftProcessRequestVoteResponse(clusterLink *link, int argc, sd
             while ((de = dictNext(di)) != NULL) {
                 clusterNode *peer = dictGetVal(de);
                 if (peer == myself) continue;
-                RAFT_DATA(peer)->peer.next_index = last + 1;
-                RAFT_DATA(peer)->peer.match_index = 0;
-                RAFT_DATA(peer)->peer.pending_fail_change = 0;
+                RAFT_DATA(peer)->next_index = last + 1;
+                RAFT_DATA(peer)->match_index = 0;
+                RAFT_DATA(peer)->pending_fail_change = 0;
                 /* For the old leader, backdate last_ack_time to when we last
                  * heard from it, so failure detection kicks in faster. This
                  * matters if the old leader is also a primary. */
                 if (memcmp(peer->name, old_leader, CLUSTER_NAMELEN) == 0) {
-                    RAFT_DATA(peer)->peer.last_ack_time = rs->last_heartbeat;
+                    RAFT_DATA(peer)->last_ack_time = rs->last_heartbeat;
                 } else {
-                    RAFT_DATA(peer)->peer.last_ack_time = monotonicMs();
+                    RAFT_DATA(peer)->last_ack_time = monotonicMs();
                 }
             }
             dictReleaseIterator(di);
@@ -1426,8 +1422,8 @@ static void clusterRaftDetectFailures(mstime_t now) {
         if (n == myself) continue;
         total++;
         clusterNodeRaftData *rd = RAFT_DATA(n);
-        if (rd->peer.last_ack_time > 0 &&
-            now - rd->peer.last_ack_time > node_timeout) {
+        if (rd->last_ack_time > 0 &&
+            now - rd->last_ack_time > node_timeout) {
             overdue++;
         }
     }
@@ -1439,7 +1435,7 @@ static void clusterRaftDetectFailures(mstime_t now) {
         while ((de = dictNext(di)) != NULL) {
             clusterNode *n = dictGetVal(de);
             if (n == myself) continue;
-            RAFT_DATA(n)->peer.last_ack_time = now;
+            RAFT_DATA(n)->last_ack_time = now;
         }
         dictReleaseIterator(di);
         return;
@@ -1457,18 +1453,18 @@ static void clusterRaftDetectFailures(mstime_t now) {
              * This allows the leader to detect recovery via AE_ACK. */
             if (node->link) {
                 clusterNodeRaftData *rd = RAFT_DATA(node);
-                if (rd->peer.last_ack_time > 0 &&
-                    now - rd->peer.last_ack_time > node_timeout) {
+                if (rd->last_ack_time > 0 &&
+                    now - rd->last_ack_time > node_timeout) {
                     freeClusterLink(node->link);
-                    rd->peer.last_ack_time = now;
+                    rd->last_ack_time = now;
                 }
             }
             continue;
         }
         clusterNodeRaftData *rd = RAFT_DATA(node);
-        if (rd->peer.pending_fail_change) continue;
-        if (rd->peer.last_ack_time > 0 &&
-            now - rd->peer.last_ack_time > node_timeout) {
+        if (rd->pending_fail_change) continue;
+        if (rd->last_ack_time > 0 &&
+            now - rd->last_ack_time > node_timeout) {
             serverLog(LL_NOTICE, "Node %.40s not responding, proposing NODE_FAIL.", node->name);
 
             /* If the failed node is a primary with replicas, send
@@ -1512,7 +1508,7 @@ static void clusterRaftDetectFailures(mstime_t now) {
             entry = sdscatlen(entry, node->name, CLUSTER_NAMELEN);
             clusterRaftPropose(entry, NULL, NULL);
             sdsfree(entry);
-            rd->peer.pending_fail_change = 1;
+            rd->pending_fail_change = 1;
         }
     }
     dictReleaseIterator(di);
@@ -1797,7 +1793,7 @@ static void clusterRaftPrepareShutdown(void) {
         if (node == myself || !node->link) continue;
         if (nodeFailed(node)) continue;
         if (node->flags & (CLUSTER_NODE_MEET | CLUSTER_NODE_HANDSHAKE)) continue;
-        uint64_t mi = RAFT_DATA(node)->peer.match_index;
+        uint64_t mi = RAFT_DATA(node)->match_index;
         if (!best || mi > best_match) {
             best = node;
             best_match = mi;

@@ -76,23 +76,12 @@ set ::stacktrace_err ""
 if {[info commands tailcall] ne ""} {
     rename return orig_return
     proc return {args} {
-        set opts {}
-        set i 0
-        while {$i < [llength $args]} {
-            set arg [lindex $args $i]
-            switch -glob -- $arg {
-                -code - -errorcode - -errorinfo - -errorstack - -level - -options {
-                    dict set opts $arg [lindex $args $i+1]
-                    incr i 2
-                }
-                -- {
-                    incr i
-                    break
-                }
-                default {
-                    break
-                }
-            }
+        if {[llength $args] % 2 == 1} {
+            set opts [lrange $args 0 end-1]
+            set result [lindex $args end]
+        } else {
+            set opts $args
+            set result ""
         }
 
         # Intercept errors and capture the stacktrace, unless it's a re-raise
@@ -100,7 +89,7 @@ if {[info commands tailcall] ne ""} {
             set code [dict get $opts -code]
             if {$code eq "error" || $code == 1} {
                 set ::stacktrace [stacktrace 2]
-                set ::stacktrace_err [lindex $args $i]
+                set ::stacktrace_err $result
             }
         }
 

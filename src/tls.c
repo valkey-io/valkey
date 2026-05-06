@@ -740,7 +740,7 @@ static void tlsHandleEvent(tls_connection *conn, int mask) {
              * risk of not calling the read handler again, make sure to add it
              * to a list of pending connection that should be handled anyway. */
             if ((mask & AE_READABLE)) {
-                if (SSL_pending(conn->ssl) > 0) {
+                if (conn->ssl && SSL_pending(conn->ssl) > 0) {
                     if (!conn->pending_list_node) {
                         listAddNodeTail(pending_list, conn);
                         conn->pending_list_node = listLast(pending_list);

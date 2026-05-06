@@ -72,57 +72,51 @@ proc stacktrace {{skip 1}} {
 set ::stacktrace ""
 set ::stacktrace_err ""
 
-# Redefine 'return' to capture stacktraces
-rename return orig_return
-proc return {args} {
-    set opts {}
-    set i 0
-    while {$i < [llength $args]} {
-        set arg [lindex $args $i]
-        switch -glob -- $arg {
-            -code - -errorcode - -errorinfo - -errorstack - -level - -options {
-                dict set opts $arg [lindex $args $i+1]
-                incr i 2
-            }
-            -- {
-                incr i
-                break
-            }
-            default {
-                break
+# Redefine 'return' to capture stacktraces (requires tailcall, Tcl 8.6+)
+if {[info commands tailcall] ne ""} {
+    rename return orig_return
+    proc return {args} {
+        set opts {}
+        set i 0
+        while {$i < [llength $args]} {
+            set arg [lindex $args $i]
+            switch -glob -- $arg {
+                -code - -errorcode - -errorinfo - -errorstack - -level - -options {
+                    dict set opts $arg [lindex $args $i+1]
+                    incr i 2
+                }
+                -- {
+                    incr i
+                    break
+                }
+                default {
+                    break
+                }
             }
         }
-    }
 
-    # Intercept errors and capture the stacktrace, unless it's a re-raise
-    if {[dict exists $opts -code] && ![dict exists $opts -errorinfo]} {
-        set code [dict get $opts -code]
-        if {$code eq "error" || $code == 1} {
-            set ::stacktrace [stacktrace 2]
-            set ::stacktrace_err [lindex $args $i]
+        # Intercept errors and capture the stacktrace, unless it's a re-raise
+        if {[dict exists $opts -code] && ![dict exists $opts -errorinfo]} {
+            set code [dict get $opts -code]
+            if {$code eq "error" || $code == 1} {
+                set ::stacktrace [stacktrace 2]
+                set ::stacktrace_err [lindex $args $i]
+            }
         }
-    }
 
-    # Bump -level by 1 to account for this wrapper's stack frame.
-    if {[dict exists $opts -level]} {
-        set level [dict get $opts -level]
-        incr level
-        set idx [lsearch -exact $args -level]
-        set args [lreplace $args $idx [expr {$idx+1}] -level $level]
-    } else {
-        set args [linsert $args 0 -level 2]
+        tailcall orig_return {*}$args
     }
-    orig_return {*}$args
 }
 
 # Redefine 'error' to capture stacktraces
 rename error orig_error
 proc error {msg {errorinfo ""} {errorcode ""}} {
     if {$errorinfo eq ""} {
-        # Fresh error - use return -code error to trigger stacktrace capture
-        return -code error $msg
+        set ::stacktrace [stacktrace 1]
+        set ::stacktrace_err $msg
+        orig_error $msg
     } else {
         # Re-raise - pass through with errorinfo
-        return -code error -errorinfo $errorinfo -errorcode $errorcode $msg
+        orig_error $msg $errorinfo $errorcode
     }
 }

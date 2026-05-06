@@ -1171,7 +1171,7 @@ int parseScanOptionsOrReply(client *c, robj *o, int start_idx, bool allow_slot, 
             opts->pat = objectGetVal(c->argv[i + 1]);
             opts->patlen = sdslen(opts->pat);
             opts->use_pattern = !(opts->patlen == 1 && opts->pat[0] == '*');
-            opts->match_slot = opts->use_pattern ? patternHashSlot(opts->pat, opts->patlen) : -1;
+            opts->match_slot = opts->use_pattern && server.cluster_enabled ? patternHashSlot(opts->pat, opts->patlen) : -1;
             i += 2;
         } else if (!strcasecmp(opt, "type") && o == NULL && j >= 2) {
             /* TYPE filter applies to key names only, not to object fields. */

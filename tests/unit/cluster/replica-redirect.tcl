@@ -144,6 +144,52 @@ start_cluster 1 1 {tags {external:skip cluster}} {
         $rd close
     }
 
+    test {EXEC with all-keyless read commands is redirected after failover with primary-read capa} {
+        # After the earlier failover, node -1 is primary and node 0 is replica.
+        # Failover back so node 0 is primary again for this test.
+        R 0 CLUSTER FAILOVER
+        wait_for_condition 1000 50 {
+            [s 0 role] eq {master} &&
+            [s -1 role] eq {slave}
+        } else {
+            fail "Failover back did not happen"
+        }
+
+        # Connect to node 0 (currently primary) with primary-read capa
+        set rd [valkey_deferring_client 0]
+        $rd CLIENT CAPA primary-read
+        assert_equal OK [$rd read]
+
+        # Queue keyless read commands on the primary — they get QUEUED
+        # because we're on a primary (redirect only fires on replicas)
+        $rd MULTI
+        assert_equal OK [$rd read]
+        $rd DBSIZE
+        assert_equal QUEUED [$rd read]
+        $rd RANDOMKEY
+        assert_equal QUEUED [$rd read]
+
+        # Failover: node 0 becomes a replica
+        R 1 CLUSTER FAILOVER
+        wait_for_condition 1000 50 {
+            [s 0 role] eq {slave} &&
+            [s -1 role] eq {master}
+        } else {
+            fail "Failover did not happen"
+        }
+
+        # EXEC is now on a replica with all-keyless queued read commands.
+        # The transaction should be discarded and REDIRECT returned.
+        $rd EXEC
+        assert_error "REDIRECT *" {$rd read}
+
+        # Client should be usable after the discarded transaction
+        $rd PING
+        assert_equal PONG [$rd read]
+
+        $rd close
+    }
+
     test {both redirect and primary-read capas work together} {
         set rd [valkey_deferring_client 0]
         $rd CLIENT CAPA redirect

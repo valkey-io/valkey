@@ -3830,7 +3830,7 @@ void zscanCommand(client *c) {
 
     if (parseScanCursorOrReply(c, objectGetVal(c->argv[2]), &cursor) == C_ERR) return;
     if ((o = lookupKeyReadOrReply(c, c->argv[1], shared.emptyscan)) == NULL || checkType(c, o, OBJ_ZSET)) return;
-    scanGenericCommand(c, o, cursor, -1, NULL, NULL);
+    scanGenericCommand(c, o, cursor);
 }
 
 void addZpopInitialReply(client *c, int emitkey, int use_nested_array, long rangelen, robj *key) {

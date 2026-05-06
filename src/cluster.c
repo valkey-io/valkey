@@ -1746,59 +1746,21 @@ void clusterscanCommand(client *c) {
 
     int slot;
     unsigned long long cursor;
-    int input_slot = -1;
-    int match_slot = -1;
+    scanOptions opts;
     int skip_scan = 0;
 
-    /* Parse all arguments together so that values of MATCH/COUNT/SLOT/TYPE are
-     * not mistaken for the option names.*/
-    for (int i = 2; i < c->argc; i++) {
-        int remaining = c->argc - i;
-        char *opt = objectGetVal(c->argv[i]);
-
-        if (!strcasecmp(opt, "slot") && remaining >= 2) {
-            if (input_slot != -1) {
-                addReplyError(c, "SLOT option can only be specified once");
-                return;
-            }
-            if ((input_slot = getSlotOrReply(c, c->argv[i + 1])) == -1) return;
-            i++;
-        } else if (!strcasecmp(opt, "match") && remaining >= 2) {
-            sds pat = objectGetVal(c->argv[i + 1]);
-            int patlen = sdslen(pat);
-            match_slot = (patlen == 1 && pat[0] == '*') ? -1 : patternHashSlot(pat, patlen);
-            i++;
-        } else if (!strcasecmp(opt, "count") && remaining >= 2) {
-            long count;
-            if (getLongFromObjectOrReply(c, c->argv[i + 1], &count, NULL) != C_OK) return;
-            if (count < 1) {
-                addReplyErrorObject(c, shared.syntaxerr);
-                return;
-            }
-            i++;
-        } else if (!strcasecmp(opt, "type") && remaining >= 2) {
-            char *typename = objectGetVal(c->argv[i + 1]);
-            if (getObjectTypeByName(typename) == LLONG_MAX) {
-                addReplyErrorFormat(c, "unknown type name '%s'", typename);
-                return;
-            }
-            i++;
-        } else {
-            addReplyErrorObject(c, shared.syntaxerr);
-            return;
-        }
-    }
+    if (parseScanOptionsOrReply(c, NULL, 2, true, &opts) != C_OK) return;
 
     /* SLOT and single slot MATCH target different slots hence conclude the scan */
-    skip_scan = input_slot != -1 && match_slot != -1 && input_slot != match_slot;
+    skip_scan = opts.input_slot != -1 && opts.match_slot != -1 && opts.input_slot != opts.match_slot;
 
     /* Handle cursor "0" case. If slot information is provided we return
      * the updated cursor to scan input slot, else scan from slot 0. */
     if (strcmp(objectGetVal(c->argv[1]), "0") == 0) {
-        if (input_slot != -1) {
-            slot = input_slot;
-        } else if (match_slot != -1) {
-            slot = match_slot; /* If match maps to a particular slot, start scan from there */
+        if (opts.input_slot != -1) {
+            slot = opts.input_slot;
+        } else if (opts.match_slot != -1) {
+            slot = opts.match_slot; /* If match maps to a particular slot, start scan from there */
         } else {
             slot = 0;
         }
@@ -1818,16 +1780,16 @@ void clusterscanCommand(client *c) {
             return;
         }
 
-        if (input_slot != -1 && slot != input_slot) {
+        if (opts.input_slot != -1 && slot != opts.input_slot) {
             addReplyError(c, "Cursor slot mismatch with SLOT argument");
             return;
         }
 
-        if (match_slot != -1 && slot != match_slot) {
+        if (opts.match_slot != -1 && slot != opts.match_slot) {
             /* Advance cursor to the slot matched by MATCH if required but do not go back. */
             addReplyArrayLen(c, 2);
-            if (!skip_scan && match_slot > slot) {
-                sds new_cursor = sdscatfmt(sdsempty(), "0-{%s}-0", crc16_slot_table[match_slot]);
+            if (!skip_scan && opts.match_slot > slot) {
+                sds new_cursor = sdscatfmt(sdsempty(), "0-{%s}-0", crc16_slot_table[opts.match_slot]);
                 addReplyBulkSds(c, new_cursor);
             } else {
                 addReplyBulkCString(c, "0");
@@ -1841,7 +1803,7 @@ void clusterscanCommand(client *c) {
      * Otherwise, scan the continuous range of slots owned by this node. */
     int final_slot = slot;
     bool advance_to_next_slot = false;
-    if (input_slot == -1 && match_slot == -1) {
+    if (opts.input_slot == -1 && opts.match_slot == -1) {
         clusterNode *owner = getNodeBySlot(slot);
         while (final_slot + 1 < CLUSTER_SLOTS && getNodeBySlot(final_slot + 1) == owner) {
             final_slot++;
@@ -1856,5 +1818,5 @@ void clusterscanCommand(client *c) {
         .advance_to_next_slot = advance_to_next_slot,
         .fp = clusterscanFingerprint(),
     };
-    scanGenericCommand(c, NULL, cursor, &cluster_ctx);
+    scanGenericCommandWithOptions(c, NULL, cursor, &opts, &cluster_ctx);
 }

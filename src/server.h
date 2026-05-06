@@ -831,7 +831,6 @@ struct serverObject {
 };
 static_assert(sizeof(struct serverObject) <= 8 + sizeof(void *), "unexpected size - verify struct is packed correctly");
 
-long long getObjectTypeByName(char *name);
 /* The string name for an object's type as listed above
  * Native types are checked against the OBJ_STRING, OBJ_LIST, OBJ_* defines,
  * and Module types have their registered name returned. */
@@ -2792,6 +2791,17 @@ typedef struct {
 
 } hashTypeIterator;
 
+typedef struct scanOptions {
+    long count;      /* COUNT option. */
+    sds pat;         /* MATCH pattern. */
+    long long type;  /* TYPE filter. */
+    int patlen;      /* MATCH pattern length. */
+    int use_pattern; /* MATCH is active. */
+    int only_keys;   /* NOVALUES/NOSCORES option. */
+    int input_slot;  /* SLOT option, or -1. */
+    int match_slot;  /* MATCH hashtag slot, or -1. */
+} scanOptions;
+
 typedef struct clusterScanCtx {
     int slot;
     int final_slot;
@@ -3769,7 +3779,9 @@ void discardTempDb(serverDb **tempDb);
 int selectDb(client *c, int id);
 void signalModifiedKey(client *c, serverDb *db, robj *key);
 void signalFlushedDb(int dbid, int async);
-void scanGenericCommand(client *c, robj *o, unsigned long long cursor, const clusterScanCtx *cluster_ctx);
+int parseScanOptionsOrReply(client *c, robj *o, int start_idx, bool allow_slot, scanOptions *opts);
+void scanGenericCommand(client *c, robj *o, unsigned long long cursor);
+void scanGenericCommandWithOptions(client *c, robj *o, unsigned long long cursor, const scanOptions *opts, const clusterScanCtx *cluster_ctx);
 int parseScanCursorOrReply(client *c, sds buf, unsigned long long *cursor);
 int dbAsyncDelete(serverDb *db, robj *key);
 void emptyDbAsync(serverDb *db);

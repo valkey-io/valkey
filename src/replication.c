@@ -1617,11 +1617,10 @@ void replicaStartCommandStream(client *replica) {
     serverAssert(!(replica->flag.repl_rdbonly));
     replica->repl_data->repl_start_cmd_stream_on_ack = 0;
 
-    /* If the replication stream is empty in cluster mode, send a PING so that
-     * master_repl_offset becomes non-zero. This allows replicas to be reported
-     * as available in CLUSTER SLOTS/SHARDS right away. */
-    if (server.cluster_enabled && server.primary_repl_offset == 0 &&
-        server.primary_host == NULL) {
+    /* If the replication stream is empty, send a PING so that replication
+     * offset becomes non-zero. In cluster mode, this allows replicas to be
+     * reported as available in CLUSTER SLOTS/SHARDS right away. */
+    if (server.primary_repl_offset == 0) {
         robj *ping_argv[1] = {shared.ping};
         replicationFeedReplicas(-1, ping_argv, 1);
     }

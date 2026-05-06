@@ -67,7 +67,8 @@ TEST_MODULES = \
     rdbloadsave.so \
     crash.so \
     cluster.so \
-    helloscripting.so
+    helloscripting.so \
+    deferred_reply.so
 
 .PHONY: all
 

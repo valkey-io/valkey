@@ -222,17 +222,12 @@ typedef struct serverConfig {
     sds appendonly;
 } serverConfig;
 
-/* Register a file event; for RDMA, also invoke the handler once when registering WRITABLE.
+/* Register a file event. For RDMA with AE_WRITABLE, invoke the handler once after
+ * registering: this fd is not POLLOUT-driven like TCP, so the loop may never deliver
+ * AE_WRITABLE without an explicit kick.
  *
- * Write path: RDMA is not driven by kernel POLLOUT on this fd the way TCP is, so the
- * event loop may never deliver AE_WRITABLE. The benchmark used to call writeHandler
- * directly (issueFirstRequestForClients on startup, resetClient after each pipeline).
- * We fold that into this helper when mask is AE_WRITABLE.
- *
- * Read path: libvalkey may already process inbound data while draining the CQ during a
- * write (lost EPOLLIN / "stuck until more traffic" before valkey-io/libvalkey#301).
- * Upstream libvalkey fixes that with an eventfd kick so the outer epoll still wakes.
- * Non-RDMA: plain aeCreate. */
+ * Non-RDMA: same as aeCreateFileEvent. Read-side wakeups when libvalkey drains the CQ on
+ * the write path require libvalkey to notify the outer poll (valkey-io/libvalkey#301). */
 static inline void createFileEvent(aeEventLoop *eventLoop, int fd, int mask, aeFileProc *proc, void *clientData) {
     aeCreateFileEvent(eventLoop, fd, mask, proc, clientData);
     if (config.ct == VALKEY_CONN_RDMA && (mask & AE_WRITABLE)) {

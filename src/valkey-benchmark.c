@@ -222,6 +222,19 @@ typedef struct serverConfig {
     sds appendonly;
 } serverConfig;
 
+/* Register a file event. For RDMA with AE_WRITABLE, invoke the handler once after
+ * registering: this fd is not POLLOUT-driven like TCP, so the loop may never deliver
+ * AE_WRITABLE without an explicit kick.
+ *
+ * Non-RDMA: same as aeCreateFileEvent. Read-side wakeups when libvalkey drains the CQ on
+ * the write path require libvalkey to notify the outer poll (valkey-io/libvalkey#301). */
+static inline void createFileEvent(aeEventLoop *eventLoop, int fd, int mask, aeFileProc *proc, void *clientData) {
+    aeCreateFileEvent(eventLoop, fd, mask, proc, clientData);
+    if (config.ct == VALKEY_CONN_RDMA && (mask & AE_WRITABLE)) {
+        proc(eventLoop, fd, clientData, mask);
+    }
+}
+
 /* Prototypes */
 static void writeHandler(aeEventLoop *el, int fd, void *privdata, int mask);
 static void createMissingClients(client c);
@@ -560,11 +573,7 @@ static void resetClient(client c) {
     aeEventLoop *el = CLIENT_GET_EVENTLOOP(c);
     aeDeleteFileEvent(el, c->context->fd, AE_WRITABLE);
     aeDeleteFileEvent(el, c->context->fd, AE_READABLE);
-    if (config.ct == VALKEY_CONN_RDMA) {
-        writeHandler(el, c->context->fd, c, 0); /* RDMA context always writable, but it can't be invoked by AE_WRITABLE */
-    } else {
-        aeCreateFileEvent(el, c->context->fd, AE_WRITABLE, writeHandler, c);
-    }
+    createFileEvent(el, c->context->fd, AE_WRITABLE, writeHandler, c);
     c->written = 0;
     c->pending = config.pipeline * c->seqlen;
 }
@@ -892,7 +901,7 @@ static void writeHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
                 }
             } else {
                 aeDeleteFileEvent(el, c->context->fd, AE_WRITABLE);
-                aeCreateFileEvent(el, c->context->fd, AE_READABLE, readHandler, c);
+                createFileEvent(el, c->context->fd, AE_READABLE, readHandler, c);
                 return;
             }
         }
@@ -1074,9 +1083,7 @@ static client createClient(char *cmd, int len, int seqlen, client from, int thre
         el = thread->el;
     }
     if (config.idlemode == 0) {
-        if (config.ct != VALKEY_CONN_RDMA) {
-            aeCreateFileEvent(el, c->context->fd, AE_WRITABLE, writeHandler, c);
-        }
+        createFileEvent(el, c->context->fd, AE_WRITABLE, writeHandler, c);
     } else
         /* In idle mode, clients still need to register readHandler for catching errors */
         aeCreateFileEvent(el, c->context->fd, AE_READABLE, readHandler, c);
@@ -1239,20 +1246,6 @@ static void startBenchmarkThreads(void) {
     for (i = 0; i < config.num_threads; i++) pthread_join(config.threads[i]->thread, NULL);
 }
 
-#ifdef USE_RDMA
-static void issueFirstRequestForClients(aeEventLoop *el, int this_thread, int nt) {
-    listNode *ln = config.clients->head;
-    int count = 0;
-    while (ln) {
-        if (count++ % nt == this_thread) {
-            client c = ln->value;
-            writeHandler(el, c->context->fd, c, 0);
-        }
-        ln = ln->next;
-    }
-}
-#endif
-
 /* Benchmark a sequence of commands. The cmd is RESP encoded of length len and
  * seqlen is the number of commands included in cmd. */
 static void benchmarkSequence(const char *title, char *cmd, int len, int seqlen) {
@@ -1295,11 +1288,6 @@ static void benchmarkSequence(const char *title, char *cmd, int len, int seqlen)
 
     config.start = mstime();
     if (!config.num_threads) {
-#ifdef USE_RDMA
-        if (config.idlemode == 0 && config.ct == VALKEY_CONN_RDMA) {
-            issueFirstRequestForClients(config.el, 0, 1);
-        }
-#endif
         aeMain(config.el);
     } else
         startBenchmarkThreads();
@@ -1347,11 +1335,6 @@ static void freeBenchmarkThreads(void) {
 
 static void *execBenchmarkThread(void *ptr) {
     benchmarkThread *thread = (benchmarkThread *)ptr;
-#ifdef USE_RDMA
-    if (config.idlemode == 0 && config.ct == VALKEY_CONN_RDMA) {
-        issueFirstRequestForClients(thread->el, thread->index, config.num_threads);
-    }
-#endif
     aeMain(thread->el);
     return NULL;
 }

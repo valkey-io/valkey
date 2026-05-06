@@ -1127,7 +1127,7 @@ static void updatePendingData(tls_connection *conn) {
 }
 
 void updateSSLPendingFlag(tls_connection *conn) {
-    if (SSL_pending(conn->ssl) > 0) {
+    if (conn->ssl && SSL_pending(conn->ssl) > 0) {
         conn->flags |= TLS_CONN_FLAG_HAS_PENDING;
     } else {
         conn->flags &= ~TLS_CONN_FLAG_HAS_PENDING;

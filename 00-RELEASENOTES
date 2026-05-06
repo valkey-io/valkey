@@ -19,7 +19,7 @@ security fixes we recommend you apply as soon as possible.
 Notes
 =====
 * Valkey 8.0.8 has been revoked. The 8.0.8 tag was placed on a commit that is
-  not part of the 8.0 release branch, so checking out v8.0.8 yields a tree
+  not part of the 8.0 release branch, so checking out 8.0.8 yields a tree
   that does not correspond to the 8.0 line. Do not use 8.0.8. Users should
   upgrade directly from 8.0.7 to 8.0.9, which contains the intended security
   fixes on the 8.0 branch.
@@ -36,12 +36,6 @@ Valkey 8.0.8  -  Tue 05 May 2026  [REVOKED -- do not use; see 8.0.9]
 
 This release has been revoked. The 8.0.8 tag was placed on a commit that is
 not part of the 8.0 release branch. Users should upgrade to 8.0.9 instead.
-
-Security fixes (shipped in 8.0.9)
-=================================
-* (CVE-2026-23479) Use-After-Free in unblock client flow
-* (CVE-2026-25243) Invalid Memory Access in RESTORE command
-* (CVE-2026-23631) Use-after-free when full sync occurs during a yielding Lua/function execution
 
 ================================================================================
 Valkey 8.0.7  -  Released Mon 23 February 2026

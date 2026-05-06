@@ -245,6 +245,7 @@ int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi);
 int rdbLoadRioWithLoadingCtxScopedRdb(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadingCtx *rdb_loading_ctx);
 void rdbInputStreamInit(rdbInputStream *input, rio *raw_rio);
 decompressRioInitResult rdbInputStreamPrepare(rdbInputStream *input);
+int rdbInputStreamValidateEnd(rdbInputStream *input);
 void rdbInputStreamDestroy(rdbInputStream *input);
 bool rdbRioHasCorruptCompressedInput(const rio *rdb);
 int rdbFunctionLoad(rio *rdb, int ver, functionsLibCtx *lib_ctx, int rdbflags, sds *err);

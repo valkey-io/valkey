@@ -44,6 +44,7 @@ decompressRioInitResult rioInitWithDecompress(decompressRio *dr,
                                               const streamReaderConfig *cfg,
                                               streamReaderInfo *info);
 streamReaderError decompressRioGetError(const decompressRio *dr);
+int decompressRioValidateEnd(decompressRio *dr);
 /* Destroy the adapter without additional I/O. */
 void decompressRioDestroy(decompressRio *dr);
 

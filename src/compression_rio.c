@@ -54,12 +54,6 @@ static void rioInitBase(rio *base,
 /* ===================================================================
  * Compression Rio Decorator
  * Wraps an inner rio for transparent compression on write.
- * Currently used by file-backed RDB save paths.
- *
- * RDB CHECKSUM SEMANTICS:
- * - when codec checksums are enabled, they are the authoritative integrity
- *   signal for the compressed stream and the RDB checksum field is left zero.
- * - otherwise the standard RDB checksum protects the logical stream.
  * =================================================================== */
 
 /* Emit callback for compress_rio: writes compressed bytes to inner rio.
@@ -115,19 +109,8 @@ int rioInitWithCompress(compressRio *cr, rio *inner, const streamWriterConfig *c
 
     memset(cr, 0, sizeof(*cr));
 
-    uint64_t flags = RIO_FLAG_STREAMING_COMPRESSION;
-    if (cfg->codec_checksum_enabled) flags |= RIO_FLAG_STREAMING_CODEC_CHECKSUM;
-    flags |= inner->flags & RIO_FLAG_SKIP_RDB_CHECKSUM;
-
     rioInitBase(&cr->base, rioReadUnsupported, compressRioWrite, compressRioTell,
-                compressRioFlush, flags, rioCheckType(inner));
-    /* Track the uncompressed byte stream only when the standard RDB checksum is
-     * the active integrity mechanism. Honor explicit skip requests from the
-     * wrapped rio and skip checksum tracking whenever codec checksums are
-     * authoritative. */
-    if (!(flags & (RIO_FLAG_SKIP_RDB_CHECKSUM | RIO_FLAG_STREAMING_CODEC_CHECKSUM))) {
-        cr->base.update_cksum = rioGenericUpdateChecksum;
-    }
+                compressRioFlush, RIO_FLAG_STREAMING_COMPRESSION, rioCheckType(inner));
 
     cr->inner = inner;
     cr->finalized = 0;
@@ -219,6 +202,11 @@ streamReaderError decompressRioGetError(const decompressRio *dr) {
     return streamReaderGetError(dr->reader);
 }
 
+int decompressRioValidateEnd(decompressRio *dr) {
+    if (!dr || !dr->reader) return -1;
+    return streamReaderValidateEnd(dr->reader);
+}
+
 /* Initialize a decompression rio and eagerly probe the wrapped stream so the
  * caller gets a stable classification up front: passthrough, compressed, or
  * incompatible envelope. */
@@ -252,9 +240,6 @@ decompressRioInitResult rioInitWithDecompress(decompressRio *dr,
 
     if (local_info.compressed) {
         dr->base.flags |= RIO_FLAG_STREAMING_COMPRESSION;
-        if (local_info.codec_checksum_enabled) {
-            dr->base.flags |= RIO_FLAG_STREAMING_CODEC_CHECKSUM;
-        }
     }
     if (info) *info = local_info;
     return DECOMPRESS_RIO_INIT_OK;

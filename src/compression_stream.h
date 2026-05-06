@@ -106,6 +106,10 @@ void streamWriterDestroy(streamWriter *t);
  * (for example via waitForClientIO-equivalent quiesce). */
 int streamWriterIsErrored(const streamWriter *t);
 void streamWriterSetError(streamWriter *t);
+int streamReadEnvelopeInfo(const uint8_t *buf,
+                           size_t len,
+                           uint8_t expected_stream_kind,
+                           streamReaderInfo *info);
 
 /* Streaming reader API.
  * Ownership: returned context is owned by caller and must be destroyed. */
@@ -128,6 +132,7 @@ ssize_t streamReaderRead(streamReader *t, void *buf, size_t len);
  * Returns 0 on success, -1 on error. */
 int streamReaderGetInfo(streamReader *t, streamReaderInfo *info);
 streamReaderError streamReaderGetError(const streamReader *t);
+int streamReaderValidateEnd(streamReader *t);
 void streamReaderDestroy(streamReader *t);
 
 #endif /* COMPRESSION_STREAM_H */

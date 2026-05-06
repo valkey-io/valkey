@@ -49,7 +49,7 @@ tags {"check-rdb external:skip logreqres:skip"} {
 
 tags {"check-rdb network external:skip logreqres:skip"} {
     start_server {} {
-        test "test valkey-check-rdb validates LZ4-compressed RDB" {
+        test "test valkey-check-rdb validates LZ4-compressed RDB frame" {
             r flushall
             r config set rdbcompression yes
             r config set rdb-compression-algo lz4
@@ -61,7 +61,8 @@ tags {"check-rdb network external:skip logreqres:skip"} {
                 exec $::VALKEY_CHECK_RDB_BIN $dump_rdb
             } result
             assert_match {*RDB looks OK!*} $result
-            assert_match {*Streaming-compressed RDB: integrity validated by codec checksums.*} $result
+            assert_match {*RDB file was saved with checksum disabled: skipped checksum for this transfer.*} $result
+            assert_no_match {*Checksum OK*} $result
 
             # Keep subsequent tests on default path unless they explicitly change it.
             r config set rdb-compression-algo lzf
@@ -174,7 +175,7 @@ tags {"check-rdb network external:skip logreqres:skip"} {
             catch {
                 exec $::VALKEY_CHECK_RDB_BIN $dump_rdb
             } result
-            assert_match {*RDB file was saved with checksum disabled: no check performed.*} $result
+            assert_match {*RDB file was saved with checksum disabled: skipped checksum for this transfer.*} $result
             assert_match {*RDB looks OK!*} $result
 
             r config set rdb-compression-algo lzf

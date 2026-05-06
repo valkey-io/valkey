@@ -928,6 +928,59 @@ TEST(compression, streamWriterCodecChecksumToggle) {
     }
 }
 
+TEST(compression, streamReaderValidateEndAcceptsClosedFrame) {
+    const char *payload = "validate frame end payload";
+    dynamic_buf_t db;
+    dynamicBufInit(&db);
+
+    streamWriterConfig wcfg = makeWriterConfig(ALGO_LZ4, 0, STREAM_KIND_RDB, true);
+    streamWriter *w = streamWriterCreate(&wcfg, emitToDynamicBuf, &db);
+    ASSERT_TRUE(w != NULL);
+    ASSERT_TRUE(streamWriterWrite(w, payload, strlen(payload)) >= 0);
+    ASSERT_TRUE(streamWriterFinish(w) == 0);
+
+    mem_reader_t reader_ctx = {db.data, sdslen((const char *)db.data), 0, 7};
+    streamReaderConfig rcfg = makeReaderConfig(STREAM_KIND_RDB, false, 0);
+    streamReader *reader = streamReaderCreate(&rcfg, memReaderRead, &reader_ctx);
+    ASSERT_TRUE(reader != NULL);
+
+    char out[64];
+    ASSERT_TRUE(streamReaderRead(reader, out, strlen(payload)) == (ssize_t)strlen(payload));
+    ASSERT_TRUE(memcmp(out, payload, strlen(payload)) == 0);
+    ASSERT_TRUE(streamReaderValidateEnd(reader) == 0);
+
+    streamReaderDestroy(reader);
+    streamWriterDestroy(w);
+    dynamicBufFree(&db);
+}
+
+TEST(compression, streamReaderValidateEndRejectsTrailingBytes) {
+    const char *payload = "payload with trailing compressed bytes";
+    dynamic_buf_t db;
+    dynamicBufInit(&db);
+
+    streamWriterConfig wcfg = makeWriterConfig(ALGO_LZ4, 0, STREAM_KIND_RDB, true);
+    streamWriter *w = streamWriterCreate(&wcfg, emitToDynamicBuf, &db);
+    ASSERT_TRUE(w != NULL);
+    ASSERT_TRUE(streamWriterWrite(w, payload, strlen(payload)) >= 0);
+    ASSERT_TRUE(streamWriterFinish(w) == 0);
+    db.data = (uint8_t *)sdscatlen((sds)db.data, "x", 1);
+
+    mem_reader_t reader_ctx = {db.data, sdslen((const char *)db.data), 0, 0};
+    streamReaderConfig rcfg = makeReaderConfig(STREAM_KIND_RDB, false, 0);
+    streamReader *reader = streamReaderCreate(&rcfg, memReaderRead, &reader_ctx);
+    ASSERT_TRUE(reader != NULL);
+
+    char out[64];
+    ASSERT_TRUE(streamReaderRead(reader, out, strlen(payload)) == (ssize_t)strlen(payload));
+    ASSERT_TRUE(streamReaderValidateEnd(reader) == -1);
+    ASSERT_TRUE(streamReaderGetError(reader) == STREAM_READER_ERROR_CORRUPT);
+
+    streamReaderDestroy(reader);
+    streamWriterDestroy(w);
+    dynamicBufFree(&db);
+}
+
 /* --- Test: compressRio write + finish round-trip --- */
 TEST(compression, compressRioRoundTrip) {
     /* Use a buffer rio as the inner rio */
@@ -989,7 +1042,7 @@ TEST(compression, compressRioRoundTrip) {
     return;
 }
 
-TEST(compression, compressRioTracksUncompressedChecksum) {
+TEST(compression, compressRioDoesNotInstallRdbChecksum) {
     sds buf = sdsempty();
     rio buffer_rio;
     rioInitWithBuffer(&buffer_rio, buf);
@@ -997,14 +1050,13 @@ TEST(compression, compressRioTracksUncompressedChecksum) {
     streamWriterConfig cfg = makeWriterConfig(ALGO_LZ4, 0, STREAM_KIND_RDB);
     compressRio cr;
     ASSERT_TRUE(rioInitWithCompress(&cr, &buffer_rio, &cfg) == 0);
+    ASSERT_TRUE(cr.base.update_cksum == NULL);
 
     const char *payload = "checksum-payload-for-compressed-rio";
     size_t payload_len = strlen(payload);
     ASSERT_TRUE(rioWrite((rio *)&cr, payload, payload_len) != 0);
 
-    rio expected = {};
-    rioGenericUpdateChecksum(&expected, payload, payload_len);
-    ASSERT_TRUE(cr.base.cksum == expected.cksum) << "compress_rio should track the checksum of uncompressed bytes";
+    ASSERT_TRUE(cr.base.cksum == 0) << "compress_rio should not own RDB checksum policy";
 
     ASSERT_TRUE(compressRioFinish(&cr) == 0);
     compressRioDestroy(&cr);
@@ -1012,7 +1064,7 @@ TEST(compression, compressRioTracksUncompressedChecksum) {
     return;
 }
 
-TEST(compression, compressRioPreservesSkipRdbChecksumFlag) {
+TEST(compression, compressRioDoesNotCopyRdbChecksumFlags) {
     sds buf = sdsempty();
     rio buffer_rio;
     rioInitWithBuffer(&buffer_rio, buf);
@@ -1021,11 +1073,11 @@ TEST(compression, compressRioPreservesSkipRdbChecksumFlag) {
     streamWriterConfig cfg = makeWriterConfig(ALGO_LZ4, 0, STREAM_KIND_RDB);
     compressRio cr;
     ASSERT_TRUE(rioInitWithCompress(&cr, &buffer_rio, &cfg) == 0);
-    ASSERT_TRUE((((rio *)&cr)->flags & RIO_FLAG_SKIP_RDB_CHECKSUM) != 0);
+    ASSERT_TRUE((((rio *)&cr)->flags & RIO_FLAG_SKIP_RDB_CHECKSUM) == 0);
 
     const char *payload = "skip-checksum-payload";
     ASSERT_TRUE(rioWrite((rio *)&cr, payload, strlen(payload)) != 0);
-    ASSERT_TRUE(cr.base.cksum == 0) << "skip-checksum should disable uncompressed RDB checksum tracking";
+    ASSERT_TRUE(cr.base.cksum == 0) << "compress_rio should not inspect RDB checksum flags";
 
     ASSERT_TRUE(compressRioFinish(&cr) == 0);
     compressRioDestroy(&cr);
@@ -1033,7 +1085,7 @@ TEST(compression, compressRioPreservesSkipRdbChecksumFlag) {
     return;
 }
 
-TEST(compression, compressRioUsesCodecChecksumsInsteadOfRdbChecksumWhenEnabled) {
+TEST(compression, compressRioCodecChecksumDoesNotInstallRdbChecksum) {
     sds buf = sdsempty();
     rio buffer_rio;
     rioInitWithBuffer(&buffer_rio, buf);
@@ -1041,12 +1093,11 @@ TEST(compression, compressRioUsesCodecChecksumsInsteadOfRdbChecksumWhenEnabled) 
     streamWriterConfig cfg = makeWriterConfig(ALGO_LZ4, 0, STREAM_KIND_RDB, true);
     compressRio cr;
     ASSERT_TRUE(rioInitWithCompress(&cr, &buffer_rio, &cfg) == 0);
-    ASSERT_TRUE((((rio *)&cr)->flags & RIO_FLAG_STREAMING_CODEC_CHECKSUM) != 0);
 
     const char *payload = "codec-checksum-enabled";
     ASSERT_TRUE(rioWrite((rio *)&cr, payload, strlen(payload)) != 0);
     ASSERT_TRUE(cr.base.cksum == 0)
-        << "codec checksums should disable standard RDB checksum tracking for compressed RDB";
+        << "codec checksums should not control standard RDB checksum tracking";
 
     ASSERT_TRUE(compressRioFinish(&cr) == 0);
     compressRioDestroy(&cr);

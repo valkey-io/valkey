@@ -839,9 +839,7 @@ int redis_check_rdb(char *rdbfilename, FILE *fp) {
         rdbstate.doing = RDB_CHECK_DOING_CHECK_SUM;
         if (rioRead(rdb, &cksum, 8) == 0) goto eoferr;
         memrev64ifbe(&cksum);
-        if (rdb->flags & RIO_FLAG_STREAMING_CODEC_CHECKSUM) {
-            rdbCheckInfo("Streaming-compressed RDB: integrity validated by codec checksums.");
-        } else if (rdb->flags & RIO_FLAG_SKIP_RDB_CHECKSUM) {
+        if (rdb->flags & RIO_FLAG_SKIP_RDB_CHECKSUM) {
             rdbCheckInfo("RDB file was saved with checksum disabled: skipped checksum for this transfer.");
         } else if (cksum == 0) {
             rdbCheckInfo("RDB file was saved with checksum disabled: no check performed.");
@@ -851,6 +849,11 @@ int redis_check_rdb(char *rdbfilename, FILE *fp) {
         } else {
             rdbCheckInfo("Checksum OK");
         }
+    }
+
+    if (rdbInputStreamValidateEnd(&input) != C_OK) {
+        rdbCheckError("Compressed RDB stream did not end cleanly");
+        goto err;
     }
 
     rdbInputStreamDestroy(&input);

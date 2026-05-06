@@ -112,6 +112,8 @@ ssize_t compressionLz4CompressFeed(streamCompressor *sc,
     if (input_len > 0) {
         size_t r;
 
+        /* Capacity shortage before calling into LZ4F is retriable because the
+         * codec state has not changed yet. */
         if (offset >= output_capacity) return -1;
         r = LZ4F_compressUpdate(cctx, output + offset, output_capacity - offset,
                                 input, input_len, NULL);
@@ -123,6 +125,8 @@ ssize_t compressionLz4CompressFeed(streamCompressor *sc,
     if (flush_mode == FLUSH_SYNC) {
         size_t r;
 
+        /* Capacity shortage before calling into LZ4F is retriable because the
+         * codec state has not changed yet. */
         if (offset >= output_capacity) return -1;
         r = LZ4F_flush(cctx, output + offset, output_capacity - offset, NULL);
         if (LZ4F_isError(r)) goto lz4_error;
@@ -130,6 +134,8 @@ ssize_t compressionLz4CompressFeed(streamCompressor *sc,
     } else if (flush_mode == FLUSH_END) {
         size_t r;
 
+        /* Capacity shortage before calling into LZ4F is retriable because the
+         * codec state has not changed yet. */
         if (offset >= output_capacity) return -1;
         r = LZ4F_compressEnd(cctx, output + offset, output_capacity - offset, NULL);
         if (LZ4F_isError(r)) goto lz4_error;

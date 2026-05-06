@@ -76,7 +76,10 @@ static size_t rioBufferRead(rio *r, void *buf, size_t len) {
 
 /* Partial-read variant: returns bytes read (may be less than len), 0 on EOF. */
 static ssize_t rioBufferReadSome(rio *r, void *buf, size_t len) {
-    size_t avail = sdslen(r->io.buffer.ptr) - r->io.buffer.pos;
+    size_t buflen = sdslen(r->io.buffer.ptr);
+    if (r->io.buffer.pos < 0 || (size_t)r->io.buffer.pos >= buflen) return 0;
+
+    size_t avail = buflen - (size_t)r->io.buffer.pos;
     if (avail == 0) return 0;
 
     size_t got = avail < len ? avail : len;

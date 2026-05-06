@@ -226,7 +226,7 @@ start_server {overrides {save "" enable-debug-command local}} {
         assert_equal "lz4" [lindex [r config get rdb-compression-algo] 1]
     }
 
-    test {LZ4 compressed RDB with rdb-checksum yes sets the VKCS codec checksum flag} {
+    test {LZ4 compressed RDB with rdbchecksum yes sets the VKCS codec checksum flag} {
         r config set rdbcompression yes
         r config set rdb-compression-algo lz4
         r flushall
@@ -403,7 +403,7 @@ start_server {config "minimal.conf" args {"--rdb-compression-algo lz4"}} {
 }
 
 start_server {overrides {save "" enable-debug-command local rdbchecksum no}} {
-    test {LZ4 compressed RDB with rdb-checksum no leaves VKCS flags clear and loads correctly} {
+    test {LZ4 compressed RDB with rdbchecksum no leaves VKCS flags clear and loads correctly} {
         r config set rdbcompression yes
         r config set rdb-compression-algo lz4
         r flushall

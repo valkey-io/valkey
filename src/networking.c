@@ -524,14 +524,14 @@ void deleteCachedResponseClient(client *recording_client) {
 /* Return the reply list that new reply data should be appended to.
  * When the deferred reply buffer is active, replies go to
  * c->deferred_reply; otherwise they go to c->reply. */
-static inline list *clientGetActiveReplyList(client *c) {
+static inline list *clientGetReplyList(client *c) {
     return isDeferredReplyEnabled(c) ? c->deferred_reply : c->reply;
 }
 
 /* Return the reply bytes for the client.
  * When the deferred reply buffer is active, replies go to
  * c->deferred_reply_bytes; otherwise they go to c->reply_bytes. */
-static inline unsigned long long *clientGetActiveReplyBytes(client *c) {
+static inline unsigned long long *clientGetReplyBytesPtr(client *c) {
     return isDeferredReplyEnabled(c) ? &c->deferred_reply_bytes : &c->reply_bytes;
 }
 
@@ -689,7 +689,7 @@ static void _addReplyPayloadToList(client *c, list *reply_list, const char *payl
         memcpy(tail->buf + tail->used, payload, len);
         tail->used += len;
         listAddNodeTail(reply_list, tail);
-        unsigned long long *reply_bytes = clientGetActiveReplyBytes(c);
+        unsigned long long *reply_bytes = clientGetReplyBytesPtr(c);
         *reply_bytes += tail->size;
 
         closeClientOnOutputBufferLimitReached(c, 1);
@@ -1079,9 +1079,9 @@ void addReplyStatusFormat(client *c, const char *fmt, ...) {
  * the previous one, when that happens, we wanna try to trim the unused space
  * at the end of the last reply node which we won't use anymore. */
 void trimReplyUnusedTailSpace(client *c) {
-    listNode *ln = listLast(clientGetActiveReplyList(c));
+    listNode *ln = listLast(clientGetReplyList(c));
     clientReplyBlock *tail = ln ? listNodeValue(ln) : NULL;
-    unsigned long long *reply_bytes = clientGetActiveReplyBytes(c);
+    unsigned long long *reply_bytes = clientGetReplyBytesPtr(c);
 
     /* Note that 'tail' may be NULL even if we have a tail node, because when
      * addReplyDeferredLen() is used */
@@ -1132,7 +1132,7 @@ void *addReplyDeferredLen(client *c) {
      * Otherwise setDeferredReply will fill the placeholder in c->reply while
      * the array elements live in c->deferred_reply, producing a malformed
      * response after commitDeferredReplyBuffer joins the two lists. */
-    list *reply_list = clientGetActiveReplyList(c);
+    list *reply_list = clientGetReplyList(c);
     trimReplyUnusedTailSpace(c);
     listAddNodeTail(reply_list, NULL); /* NULL is our placeholder. */
     return listLast(reply_list);
@@ -1149,8 +1149,8 @@ void setDeferredReply(client *c, void *node, const char *s, size_t length) {
 
     /* The placeholder node may live in c->deferred_reply when the deferred
      * reply buffer is active.  Use the same list for deletion/accounting. */
-    list *reply_list = clientGetActiveReplyList(c);
-    unsigned long long *reply_bytes = clientGetActiveReplyBytes(c);
+    list *reply_list = clientGetReplyList(c);
+    unsigned long long *reply_bytes = clientGetReplyBytesPtr(c);
 
     /* Normally we fill this dummy NULL node, added by addReplyDeferredLen(),
      * with a new buffer structure containing the protocol needed to specify

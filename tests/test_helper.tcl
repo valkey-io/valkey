@@ -74,6 +74,7 @@ set ::file ""; # If set, runs only the tests in this comma separated list
 set ::curfile ""; # Hold the filename of the current suite
 set ::accurate 0; # If true runs fuzz tests with more iterations
 set ::force_failure 0
+set ::failures_output_file ""; # If set, write failures JSON to this path
 set ::timeout 1200; # 20 minutes without progresses will quit the test.
 set ::last_progress [clock seconds]
 set ::active_servers {} ; # Pids of active server instances.
@@ -497,6 +498,9 @@ proc read_from_test_client fd {
         }
     } elseif {$status eq {exception}} {
         puts "\[[colorstr red $status]\]: $data"
+        if {[catch {write_test_failures} err]} {
+            puts "Warning: Failed to write test failures: $err"
+        }
         kill_clients
         force_kill_all_servers
         exit 1
@@ -608,6 +612,49 @@ proc print_test_summary {} {
     puts "\nTest Summary: [colorstr bold-green $::ok_count] passed, [colorstr bold-red $::err_count] failed"
 }
 
+proc write_test_failures {} {
+    if {$::failures_output_file eq ""} {
+        return
+    }
+
+    set failures {}
+    foreach failed $::failed_tests {
+        if {[string match {*\[*TIMEOUT*\]*} $failed]} continue
+        if {[string match {*Sanitizer error*} $failed]} continue
+        if {[string match {*Valgrind error*} $failed]} continue
+        if {[string match {*Can't start*} $failed]} continue
+        if {[string match {*Check for memory leaks*} $failed]} continue
+
+        set status "err"
+        set test_name ""
+        set test_file ""
+        set error_msg ""
+
+        if {[regexp {\[(\w+)\]:\s*(.+?)\s+in\s+(tests/\S+\.tcl)\s*(.*)} $failed -> status test_name test_file error_msg]} {
+            # Successfully parsed
+        } else {
+            set test_name $failed
+            set test_file "unknown"
+            set error_msg $failed
+        }
+
+        set test_name [string map {"\\" "\\\\" "\"" "\\\"" "\n" "\\n" "\r" "\\r" "\t" "\\t" "\b" "\\b" "\f" "\\f"} $test_name]
+        set test_file [string map {"\\" "\\\\" "\"" "\\\"" "\n" "\\n" "\r" "\\r" "\t" "\\t" "\b" "\\b" "\f" "\\f"} $test_file]
+        set error_msg [string map {"\\" "\\\\" "\"" "\\\"" "\n" "\\n" "\r" "\\r" "\t" "\\t" "\b" "\\b" "\f" "\\f"} $error_msg]
+        set status [string map {"\\" "\\\\" "\"" "\\\"" "\n" "\\n" "\r" "\\r" "\t" "\\t" "\b" "\\b" "\f" "\\f"} $status]
+
+        lappend failures "\{\"test_name\":\"$test_name\",\"test_file\":\"$test_file\",\"status\":\"$status\",\"error\":\"$error_msg\"\}"
+    }
+
+    set outdir [file dirname $::failures_output_file]
+    if {$outdir ne "."} {
+        file mkdir $outdir
+    }
+    set fp [open $::failures_output_file w]
+    puts $fp "\[[join $failures ","]\]"
+    close $fp
+}
+
 proc the_end {} {
     # TODO: print the status, exit with the right exit code.
     puts "\n                   The End\n"
@@ -616,6 +663,12 @@ proc the_end {} {
         puts "  $time seconds - $name"
     }
     print_test_summary
+
+    # Write structured failures for automated detection
+    if {[catch {write_test_failures} err]} {
+        puts "Warning: Failed to write test failures: $err"
+    }
+
     if {[llength $::failed_tests]} {
         puts "\n[colorstr bold-red {!!! WARNING}] The following tests failed:\n"
         foreach failed $::failed_tests {
@@ -683,6 +736,8 @@ proc print_help_screen {} {
         "--clients <num>    Number of test clients (default 16)."
         "--timeout <sec>    Test timeout in seconds (default 20 min)."
         "--force-failure    Force the execution of a test that always fails."
+        "--failures-output <path>"
+        "                   Write test failures to the specified JSON file."
         "--config <k> <v>   Extra config file argument."
         "--skipfile <file>  Name of a file containing test names or regexp patterns (if"
         "                   <test> starts with '/') that should be skipped (one per"
@@ -809,6 +864,9 @@ for {set j 0} {$j < [llength $argv]} {incr j} {
         set ::accurate 1
     } elseif {$opt eq {--force-failure}} {
         set ::force_failure 1
+    } elseif {$opt eq {--failures-output}} {
+        set ::failures_output_file $arg
+        incr j
     } elseif {$opt eq {--single}} {
         foreach unit [expand_unit_spec $arg] {
             lappend ::single_tests $unit

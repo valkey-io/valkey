@@ -1,6 +1,6 @@
 set testmodule [file normalize tests/modules/deferred_reply.so]
 
-start_server {tags {"modules"}} {
+start_server {tags {"modules logreqres:skip"}} {
     r module load $testmodule
 
     test {Deferred reply with postponed array length during active deferred reply buffer} {

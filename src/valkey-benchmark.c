@@ -1361,10 +1361,7 @@ static clusterNode *createClusterNode(char *ip, int port) {
 static void freeClusterNode(clusterNode *node) {
     if (node->name) sdsfree(node->name);
     if (node->replicate) sdsfree(node->replicate);
-    /* If the node is not the reference node, that uses the address from
-     * config.conn_info.hostip and config.conn_info.hostport, then the node ip has been
-     * allocated by fetchClusterConfiguration, so it must be freed. */
-    if (node->ip && strcmp(node->ip, config.conn_info.hostip) != 0) sdsfree(node->ip);
+    if (node->ip) sdsfree(node->ip);
     if (node->server_config != NULL) freeServerConfig(node->server_config);
     zfree(node->slots);
     zfree(node);
@@ -1435,9 +1432,11 @@ static int fetchClusterConfiguration(void) {
             clusterNode *node = NULL;
             dictEntry *entry = dictFind(nodes, name);
             if (entry == NULL) {
-                node = createClusterNode(sdsnew(ip), port);
+                node = createClusterNode(ip, port);
                 if (node == NULL) {
                     success = 0;
+                    sdsfree(ip);
+                    sdsfree(name);
                     goto cleanup;
                 } else {
                     node->name = name;
@@ -1445,6 +1444,8 @@ static int fetchClusterConfiguration(void) {
                 }
             } else {
                 node = dictGetVal(entry);
+                sdsfree(ip);
+                sdsfree(name);
             }
             if (slot_start == slot_end) {
                 node->slots[node->slots_count++] = slot_start;

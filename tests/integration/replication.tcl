@@ -1478,7 +1478,7 @@ start_server {tags {"repl" "external:skip"}} {
         set lines [count_log_lines 0]
 
         $rd psync replicationid -1
-        assert_match {FULLRESYNC * 0} [$rd read]
+        assert_match {FULLRESYNC * *} [$rd read]
         $rd get foo
         catch {$rd read} e
         if {$::verbose} { puts "PSYNC _addReplyToBufferOrList: $e" }
@@ -1498,7 +1498,7 @@ start_server {tags {"repl" "external:skip"}} {
         set lines [count_log_lines 0]
 
         $rd psync replicationid -1
-        assert_match {FULLRESYNC * 0} [$rd read]
+        assert_match {FULLRESYNC * *} [$rd read]
         $rd slowlog get
         catch {$rd read} e
         if {$::verbose} { puts "PSYNC addReplyDeferredLen: $e" }

@@ -70,7 +70,8 @@ TEST_MODULES = \
     crash.so \
     cluster.so \
     helloscripting.so \
-    unsupported_features.so
+    unsupported_features.so \
+    deferred_reply.so
 
 .PHONY: all
 

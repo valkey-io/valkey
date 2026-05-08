@@ -117,6 +117,53 @@ test "Raft proto: connect to cluster bus and exchange HELLO" {
     }
 }
 
+test "Raft proto: singleton clears leader on step-down from HELLO" {
+    start_server {overrides {cluster-enabled yes cluster-protocol raft}} {
+        set port [srv 0 port]
+        set cport [expr {$port + 10000}]
+
+        # Singleton is its own leader.
+        assert_equal [R 0 CLUSTER MYID] [CI 0 cluster_raft_leader]
+
+        # Send HELLO from a fake node (simulating a MEET target receiving HELLO).
+        set fake_id [string repeat "c" 40]
+        set fake_addr "127.0.0.1:9998@19998,,tls-port=0,shard-id=[string repeat d 40]"
+        set fd [raft_connect 127.0.0.1 $cport]
+        raft_send $fd "HELLO $fake_id $fake_addr 1 3 1"
+        set reply [raft_recv $fd]
+        assert_match "HI *" $reply
+        close $fd
+
+        # After step-down, leader should be empty (unknown).
+        assert_equal "" [CI 0 cluster_raft_leader]
+        assert_equal "learner" [CI 0 cluster_raft_role]
+    }
+}
+
+test "Raft proto: singleton clears leader on step-down from HI" {
+    start_server {overrides {cluster-enabled yes cluster-protocol raft}} {
+        set port [srv 0 port]
+        set cport [expr {$port + 10000}]
+
+        # Singleton is its own leader.
+        assert_equal [R 0 CLUSTER MYID] [CI 0 cluster_raft_leader]
+
+        # Send HI from a fake non-singleton (cluster_size=3).
+        set fake_id [string repeat "e" 40]
+        set fake_addr "127.0.0.1:9997@19997,,tls-port=0,shard-id=[string repeat f 40]"
+        set fd [raft_connect 127.0.0.1 $cport]
+        raft_send $fd "HI $fake_id $fake_addr 1 1 3"
+
+        # After step-down, leader should be empty (unknown).
+        after 100
+        assert_equal "" [CI 0 cluster_raft_leader]
+        assert_equal "learner" [CI 0 cluster_raft_role]
+
+        close $fd
+    }
+}
+
+
 test "Raft proto: REPL_OFFSETS updates node replication offset" {
     start_server {overrides {cluster-enabled yes cluster-protocol raft}} {
         set port [srv 0 port]

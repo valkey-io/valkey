@@ -316,6 +316,21 @@ static void clusterRaftRandomizeElectionTimeout(clusterRaftState *rs) {
     rs->election_timeout = base + (rand() % base);
 }
 
+/* Singleton leader steps down to learner when joining another cluster. */
+static void clusterRaftSingletonStepDown(clusterRaftState *rs) {
+    clusterRaftDeferPendingProposals(rs);
+    rs->role = RAFT_ROLE_LEARNER;
+    memset(rs->leader, 0, CLUSTER_NAMELEN);
+    memset(rs->voted_for, 0, CLUSTER_NAMELEN);
+    clusterRaftRandomizeElectionTimeout(rs);
+    rs->last_heartbeat = monotonicMs();
+    rs->todo_connect_nodes = 1;
+    /* Clear singleton log — the leader's log is authoritative. */
+    raftLogTruncateFrom(rs, 1);
+    rs->last_applied = 0;
+    rs->commit_index = 0;
+}
+
 /* If we're a leader with an empty log (singleton that hasn't added itself yet),
  * propose and commit NODE_JOIN + SLOT_CHANGE for ourselves. This ensures the
  * leader's NODE_JOIN is first in the log and the followers can look up the
@@ -439,17 +454,7 @@ static int clusterRaftProcessHello(clusterLink *link, int argc, sds *argv) {
      * This means we're the MEET target — the sender will stay leader.
      * If the sender is already known, this is just a reconnect HELLO. */
     if (rs->role == RAFT_ROLE_LEADER && server.cluster->size <= 1 && !sender) {
-        clusterRaftDeferPendingProposals(rs);
-        rs->role = RAFT_ROLE_LEARNER;
-        memcpy(rs->leader, sender_name, CLUSTER_NAMELEN);
-        memset(rs->voted_for, 0, CLUSTER_NAMELEN);
-        clusterRaftRandomizeElectionTimeout(rs);
-        rs->last_heartbeat = monotonicMs();
-        rs->todo_connect_nodes = 1;
-        /* Clear singleton log — the leader's log is authoritative. */
-        raftLogTruncateFrom(rs, 1);
-        rs->last_applied = 0;
-        rs->commit_index = 0;
+        clusterRaftSingletonStepDown(rs);
         serverLog(LL_NOTICE, "Singleton stepping down on HELLO from %.40s.", sender_name);
     }
     if (!sender) {
@@ -508,17 +513,7 @@ static int clusterRaftProcessHi(clusterLink *link, int argc, sds *argv) {
 
     /* Rule 2: singleton leader steps down on HI from non-singleton. */
     if (rs->role == RAFT_ROLE_LEADER && server.cluster->size <= 1 && sender_cluster_size > 1) {
-        clusterRaftDeferPendingProposals(rs);
-        rs->role = RAFT_ROLE_LEARNER;
-        memcpy(rs->leader, sender_name, CLUSTER_NAMELEN);
-        memset(rs->voted_for, 0, CLUSTER_NAMELEN);
-        clusterRaftRandomizeElectionTimeout(rs);
-        rs->last_heartbeat = monotonicMs();
-        rs->todo_connect_nodes = 1;
-        /* Clear singleton log — the leader's log is authoritative. */
-        raftLogTruncateFrom(rs, 1);
-        rs->last_applied = 0;
-        rs->commit_index = 0;
+        clusterRaftSingletonStepDown(rs);
         serverLog(LL_NOTICE, "Singleton stepping down on HI from non-singleton %.40s.", sender_name);
     }
 

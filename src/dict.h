@@ -40,75 +40,75 @@ typedef struct dictEntry dictEntry; // opaque
 #define dictResetIterator(iter) hashtableCleanupIterator(iter)
 
 /* functions with variation for hashtable implementation
- * the "htdict" prefix is used to avoid colliding with the "dict" in libvalkey */
-#define dictCreate(type) htdictCreate(type)
-#define dictExpand(d, size) htdictExpand(d, size)
-#define dictSetKey(d, de, key) htdictSetKey(d, de, key)
-#define dictSetVal(d, de, val) htdictSetVal(d, de, val)
-#define dictSetSignedIntegerVal(de, val) htdictSetSignedIntegerVal(de, val)
-#define dictSetUnsignedIntegerVal(de, val) htdictSetUnsignedIntegerVal(de, val)
-#define dictSetDoubleVal(de, val) htdictSetDoubleVal(de, val)
-#define dictIncrSignedIntegerVal(de, val) htdictIncrSignedIntegerVal(de, val)
-#define dictIncrUnsignedIntegerVal(de, val) htdictIncrUnsignedIntegerVal(de, val)
-#define dictIncrDoubleVal(de, val) htdictIncrDoubleVal(de, val)
+ * the "dictht" prefix is used to avoid colliding with the "dict" in libvalkey */
+#define dictCreate(type) dicthtCreate(type)
+#define dictExpand(d, size) dicthtExpand(d, size)
+#define dictSetKey(d, de, key) dicthtSetKey(d, de, key)
+#define dictSetVal(d, de, val) dicthtSetVal(d, de, val)
+#define dictSetSignedIntegerVal(de, val) dicthtSetSignedIntegerVal(de, val)
+#define dictSetUnsignedIntegerVal(de, val) dicthtSetUnsignedIntegerVal(de, val)
+#define dictSetDoubleVal(de, val) dicthtSetDoubleVal(de, val)
+#define dictIncrSignedIntegerVal(de, val) dicthtIncrSignedIntegerVal(de, val)
+#define dictIncrUnsignedIntegerVal(de, val) dicthtIncrUnsignedIntegerVal(de, val)
+#define dictIncrDoubleVal(de, val) dicthtIncrDoubleVal(de, val)
 
-#define dictGetKey(de) htdictGetKey(de)
-#define dictGetVal(de) htdictGetVal(de)
+#define dictGetKey(de) dicthtGetKey(de)
+#define dictGetVal(de) dicthtGetVal(de)
 
-#define dictGetSignedIntegerVal(de) htdictGetSignedIntegerVal(de)
-#define dictGetUnsignedIntegerVal(de) htdictGetUnsignedIntegerVal(de)
-#define dictGetDoubleVal(de) htdictGetDoubleVal(de)
-#define dictGetDoubleValPtr(de) htdictGetDoubleValPtr(de)
+#define dictGetSignedIntegerVal(de) dicthtGetSignedIntegerVal(de)
+#define dictGetUnsignedIntegerVal(de) dicthtGetUnsignedIntegerVal(de)
+#define dictGetDoubleVal(de) dicthtGetDoubleVal(de)
+#define dictGetDoubleValPtr(de) dicthtGetDoubleValPtr(de)
 
-#define dictEntryMemUsage(de) htdictEntryMemUsage(de)
-#define dictMemUsage(d) htdictMemUsage(d)
+#define dictEntryMemUsage(de) dicthtEntryMemUsage(de)
+#define dictMemUsage(d) dicthtMemUsage(d)
 
-#define dictFind(d, key) htdictFind(d, key)
-#define dictFetchValue(d, key) htdictFetchValue(d, key)
-#define dictDelete(d, key) htdictDelete(d, key)
+#define dictFind(d, key) dicthtFind(d, key)
+#define dictFetchValue(d, key) dicthtFetchValue(d, key)
+#define dictDelete(d, key) dicthtDelete(d, key)
 
-#define dictFreeUnlinkedEntry(d, de) htdictFreeUnlinkedEntry(d, de)
-#define dictGetRandomKey(d) htdictGetRandomKey(d)
-#define dictGetFairRandomKey(d) htdictGetFairRandomKey(d)
+#define dictFreeUnlinkedEntry(d, de) dicthtFreeUnlinkedEntry(d, de)
+#define dictGetRandomKey(d) dicthtGetRandomKey(d)
+#define dictGetFairRandomKey(d) dicthtGetFairRandomKey(d)
 
-#define dictUnlink(d, key) htdictUnlink(d, key)
-#define dictAdd(d, key, val) htdictAdd(d, key, val)
-#define dictAddRaw(d, key, existing) htdictAddRaw(d, key, existing)
-#define dictAddOrFind(d, key) htdictAddOrFind(d, key)
-#define dictReplace(d, key, val) htdictReplace(d, key, val)
+#define dictUnlink(d, key) dicthtUnlink(d, key)
+#define dictAdd(d, key, val) dicthtAdd(d, key, val)
+#define dictAddRaw(d, key, existing) dicthtAddRaw(d, key, existing)
+#define dictAddOrFind(d, key) dicthtAddOrFind(d, key)
+#define dictReplace(d, key, val) dicthtReplace(d, key, val)
 
-#define dictNext(iter) htdictNext(iter)
+#define dictNext(iter) dicthtNext(iter)
 
-dict *htdictCreate(dictType *type);
-int htdictExpand(dict *d, unsigned long size);
-void htdictSetKey(dict *d, dictEntry *de, void *key);
-void htdictSetVal(dict *d, dictEntry *de, void *val);
-void htdictSetSignedIntegerVal(dictEntry *de, int64_t val);
-void htdictSetUnsignedIntegerVal(dictEntry *de, uint64_t val);
-void htdictSetDoubleVal(dictEntry *de, double val);
-int64_t htdictIncrSignedIntegerVal(dictEntry *de, int64_t val);
-uint64_t htdictIncrUnsignedIntegerVal(dictEntry *de, uint64_t val);
-double htdictIncrDoubleVal(dictEntry *de, double val);
-void *htdictGetKey(const dictEntry *de);
-void *htdictGetVal(const dictEntry *de);
-int64_t htdictGetSignedIntegerVal(const dictEntry *de);
-uint64_t htdictGetUnsignedIntegerVal(const dictEntry *de);
-double htdictGetDoubleVal(const dictEntry *de);
-double *htdictGetDoubleValPtr(dictEntry *de);
-size_t htdictEntryMemUsage(dictEntry *de);
-size_t htdictMemUsage(const dict *d);
-dictEntry *htdictFind(dict *d, const void *key);
-void *htdictFetchValue(dict *d, const void *key);
-int htdictDelete(dict *d, const void *key);
-void htdictFreeUnlinkedEntry(dict *d, dictEntry *de);
-dictEntry *htdictGetRandomKey(dict *d);
-dictEntry *htdictGetFairRandomKey(dict *d);
-dictEntry *htdictUnlink(dict *d, const void *key);
-int htdictAdd(dict *d, void *key, void *val);
-dictEntry *htdictAddRaw(dict *d, void *key, dictEntry **existing);
-dictEntry *htdictAddOrFind(dict *d, void *key);
-int htdictReplace(dict *d, void *key, void *val);
-dictEntry *htdictNext(dictIterator *iter);
+dict *dicthtCreate(dictType *type);
+int dicthtExpand(dict *d, unsigned long size);
+void dicthtSetKey(dict *d, dictEntry *de, void *key);
+void dicthtSetVal(dict *d, dictEntry *de, void *val);
+void dicthtSetSignedIntegerVal(dictEntry *de, int64_t val);
+void dicthtSetUnsignedIntegerVal(dictEntry *de, uint64_t val);
+void dicthtSetDoubleVal(dictEntry *de, double val);
+int64_t dicthtIncrSignedIntegerVal(dictEntry *de, int64_t val);
+uint64_t dicthtIncrUnsignedIntegerVal(dictEntry *de, uint64_t val);
+double dicthtIncrDoubleVal(dictEntry *de, double val);
+void *dicthtGetKey(const dictEntry *de);
+void *dicthtGetVal(const dictEntry *de);
+int64_t dicthtGetSignedIntegerVal(const dictEntry *de);
+uint64_t dicthtGetUnsignedIntegerVal(const dictEntry *de);
+double dicthtGetDoubleVal(const dictEntry *de);
+double *dicthtGetDoubleValPtr(dictEntry *de);
+size_t dicthtEntryMemUsage(dictEntry *de);
+size_t dicthtMemUsage(const dict *d);
+dictEntry *dicthtFind(dict *d, const void *key);
+void *dicthtFetchValue(dict *d, const void *key);
+int dicthtDelete(dict *d, const void *key);
+void dicthtFreeUnlinkedEntry(dict *d, dictEntry *de);
+dictEntry *dicthtGetRandomKey(dict *d);
+dictEntry *dicthtGetFairRandomKey(dict *d);
+dictEntry *dicthtUnlink(dict *d, const void *key);
+int dicthtAdd(dict *d, void *key, void *val);
+dictEntry *dicthtAddRaw(dict *d, void *key, dictEntry **existing);
+dictEntry *dicthtAddOrFind(dict *d, void *key);
+int dicthtReplace(dict *d, void *key, void *val);
+dictEntry *dicthtNext(dictIterator *iter);
 
 typedef void *(dictDefragAllocFunction)(void *ptr);
 typedef struct {
@@ -116,6 +116,6 @@ typedef struct {
     dictDefragAllocFunction *defragKey;
     dictDefragAllocFunction *defragVal;
 } dictDefragFunctions;
-void htdictDefragEntry(dictEntry **de_ref, dictDefragFunctions *defragfns);
+void dicthtDefragEntry(dictEntry **de_ref, dictDefragFunctions *defragfns);
 
 #endif /* __DICT_H */

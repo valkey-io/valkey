@@ -498,7 +498,7 @@ ENGINE_SERVER_OBJ = \
     db.o \
     debug.o \
     defrag.o \
-	dict_ht.o \
+    dictht.o \
     entry.o \
     eval.o \
     evict.o \
@@ -582,7 +582,7 @@ ENGINE_SERVER_OBJ = \
     ziplist.o \
     zipmap.o \
     zmalloc.o \
-	queues.o
+    queues.o
 ENGINE_SERVER_OBJ+=$(ENGINE_TRACE_OBJ)
 ENGINE_CLI_NAME=$(ENGINE_NAME)-cli$(PROG_SUFFIX)
 ENGINE_CLI_OBJ = \
@@ -595,7 +595,7 @@ ENGINE_CLI_OBJ = \
     crc64.o \
     crccombine.o \
     crcspeed.o \
-	dict_ht.o \
+    dictht.o \
     hashtable.o \
     monotonic.o \
     mt19937-64.o \
@@ -620,7 +620,7 @@ ENGINE_BENCHMARK_OBJ = \
     crc64.o \
     crccombine.o \
     crcspeed.o \
-	dict_ht.o \
+    dictht.o \
     fuzzer_client.o \
     fuzzer_command_generator.o \
     hashtable.o \

@@ -142,6 +142,7 @@ size_t zmalloc_get_memory_size(void);
 void zlibc_free(void *ptr);
 void zlibc_trim(void);
 void zmadvise_dontneed(void *ptr, size_t size_hint);
+void zmadvise_dontneed_range(void *ptr, size_t size);
 
 #ifndef HAVE_MALLOC_SIZE
 size_t zmalloc_size(void *ptr);

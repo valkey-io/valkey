@@ -569,6 +569,22 @@ void zmadvise_dontneed(void *ptr, size_t size_hint) {
 #endif
 }
 
+/* Release pages back to the OS using MADV_DONTNEED for a specific address range.
+ * Unlike zmadvise_dontneed(), this function does not query the allocator for
+ * the allocation size, and does not perform any pointer alignment. The caller
+ * must ensure that 'ptr' is page-aligned and 'size' is a multiple of page size.
+ * This is useful when we want to release a portion of a larger allocation that
+ * is no longer needed. */
+void zmadvise_dontneed_range(void *ptr, size_t size) {
+#if defined(__linux__)
+    if (ptr == NULL || size == 0) return;
+    madvise(ptr, size, MADV_DONTNEED);
+#else
+    (void)(ptr);
+    (void)(size);
+#endif
+}
+
 /* Get the RSS information in an OS-specific way.
  *
  * WARNING: the function zmalloc_get_rss() is not designed to be fast

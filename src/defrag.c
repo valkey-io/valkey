@@ -303,7 +303,7 @@ static void activeDefragZsetNode(void *privdata, void *entry_ref) {
 static void activeDefragDictCallback(void *privdata, void *entry_ref) {
     dictDefragFunctions *defragfns = privdata;
     dictEntry **de_ref = (dictEntry **)entry_ref;
-    htdictDefragEntry(de_ref, defragfns);
+    dicthtDefragEntry(de_ref, defragfns);
 }
 
 /* Defrag a dict with sds key and optional value (either ptr, sds or robj string) */

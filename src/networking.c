@@ -6495,7 +6495,8 @@ void evictClients(void) {
     if (client_eviction_limit == 0) return;
 
     while (server.stat_clients_type_memory[CLIENT_TYPE_NORMAL] +
-               server.stat_clients_type_memory[CLIENT_TYPE_PUBSUB] > client_eviction_limit) {
+               server.stat_clients_type_memory[CLIENT_TYPE_PUBSUB] >
+           client_eviction_limit) {
         listNode *ln = listNext(&bucket_iter);
         if (ln) {
             client *c = ln->value;

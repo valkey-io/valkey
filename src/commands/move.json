@@ -4,8 +4,14 @@
         "complexity": "O(1)",
         "group": "generic",
         "since": "1.0.0",
-        "arity": 3,
+        "arity": -3,
         "function": "moveCommand",
+        "history": [
+            [
+                "10.0.0",
+                "added REPLACE option."
+            ]
+        ],
         "command_flags": [
             "WRITE",
             "FAST"
@@ -46,6 +52,13 @@
             {
                 "name": "db",
                 "type": "integer"
+            },
+            {
+                "name": "replace",
+                "token": "REPLACE",
+                "type": "pure-token",
+                "since": "10.0.0",
+                "optional": true
             }
         ],
         "reply_schema": {
@@ -55,7 +68,7 @@
                     "const": 1
                 },
                 {
-                    "description": "Key wasn't moved. When key already exists in the destination database, or it does not exist in the source database",
+                    "description": "Key wasn't moved. When key already exists in the destination database without REPLACE, or it does not exist in the source database",
                     "const": 0
                 }
             ]

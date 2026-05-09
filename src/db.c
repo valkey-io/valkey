@@ -1541,6 +1541,23 @@ void moveCommand(client *c) {
     int srcid, dbid;
     long long expire;
 
+    /* Parse optional REPLACE token (MOVE key db [REPLACE]).
+     * Without REPLACE, MOVE returns 0 if the key already exists in the target DB.
+     * With REPLACE, the destination key is overwritten by the moved key. */
+    int set_key_flags = SETKEY_DOESNT_EXIST;
+    if (c->argc > 4) {
+        addReplyErrorObject(c, shared.syntaxerr);
+        return;
+    } else if (c->argc == 4) {
+        if (!strcasecmp(objectGetVal(c->argv[3]), "replace")) {
+            set_key_flags = SETKEY_ADD_OR_UPDATE;
+        } else {
+            addReplyErrorObject(c, shared.syntaxerr);
+            return;
+        }
+    }
+    set_key_flags |= SETKEY_NO_SIGNAL;
+
     /* Obtain source and target DB pointers */
     src = c->db;
     srcid = c->db->id;
@@ -1569,8 +1586,8 @@ void moveCommand(client *c) {
     }
     expire = objectGetExpire(o);
 
-    /* Return zero if the key already exists in the target DB */
-    if (lookupKeyWrite(dst, c->argv[1]) != NULL) {
+    /* Without REPLACE, return zero if the key already exists in the target DB. */
+    if (lookupKeyWrite(dst, c->argv[1]) != NULL && (set_key_flags & SETKEY_DOESNT_EXIST)) {
         addReply(c, shared.czero);
         return;
     }
@@ -1578,7 +1595,7 @@ void moveCommand(client *c) {
     incrRefCount(o);           /* ref counter = 2 */
     dbDelete(src, c->argv[1]); /* ref counter = 1 */
 
-    dbAdd(dst, c->argv[1], &o);
+    setKey(c, dst, c->argv[1], &o, set_key_flags);
     if (expire != -1) o = setExpire(c, dst, c->argv[1], expire);
 
     /* OK! key moved */

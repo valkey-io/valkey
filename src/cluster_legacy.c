@@ -666,6 +666,7 @@ static void clusterLegacyInit(void) {
 
 static void clusterLegacyResetStats(void) {
     if (!server.cluster_enabled) return;
+    clusterSlotStatResetAll();
     memset(LEGACY_STATE()->stats_bus_messages_sent, 0, sizeof(LEGACY_STATE()->stats_bus_messages_sent));
     memset(LEGACY_STATE()->stats_bus_messages_received, 0, sizeof(LEGACY_STATE()->stats_bus_messages_received));
     LEGACY_STATE()->stats_bus_bytes_sent = 0;
@@ -675,7 +676,6 @@ static void clusterLegacyResetStats(void) {
     LEGACY_STATE()->stats_bus_module_bytes_sent = 0;
     LEGACY_STATE()->stats_bus_module_bytes_received = 0;
 }
-
 
 static void clusterLegacyInitLast(void) {
     clusterListenerInit();
@@ -2369,16 +2369,16 @@ int clusterIsValidPacket(clusterLink *link) {
     int is_light = IS_LIGHT_MESSAGE(ntohs(hdr->type));
     uint16_t type = ntohs(hdr->type) & ~CLUSTERMSG_MODIFIER_MASK;
 
+    if (type < CLUSTERMSG_TYPE_COUNT) {
+        LEGACY_STATE()->stats_bus_messages_received[type]++;
+        clusterBusAddNetworkBytesByType(type, totlen, 0);
+    }
+
     if (is_light && !messageTypeSupportsLightHdr(type)) {
         serverLog(LL_NOTICE,
                   "Packet of type '%s' (%u) does not support light cluster header. Marking packet as invalid.",
                   clusterGetMessageTypeString(type), type);
         return 0;
-    }
-
-    if (type < CLUSTERMSG_TYPE_COUNT) {
-        LEGACY_STATE()->stats_bus_messages_received[type]++;
-        clusterBusAddNetworkBytesByType(type, totlen, 0);
     }
 
     serverLog(LL_DEBUG, "--- Processing packet of type %s, %lu bytes", clusterGetMessageTypeString(type),
@@ -4624,7 +4624,7 @@ static void clusterLegacyCron(void) {
 
     /* Clear pfail counter before iterating. */
     LEGACY_STATE()->stats_pfail_nodes = 0;
-    /* Gossip-specific per-node maintenance (PFAIL counting, MEET for missing inbound). */
+    /* Run through some of the operations we want to do on each cluster node. */
     di = dictGetSafeIterator(server.cluster->nodes);
     while ((de = dictNext(di)) != NULL) {
         clusterNode *node = dictGetVal(de);
@@ -5225,13 +5225,13 @@ static sds clusterLegacyAppendInfoFields(sds info) {
                          (long long)LEGACY_STATE()->stats_bus_messages_received[i]);
     }
     info = sdscatfmt(info, "cluster_stats_messages_received:%I\r\n", tot_msg_received);
-
-    info = sdscatfmt(info, "cluster_stats_bytes_sent:%U\r\n"
-                           "cluster_stats_bytes_received:%U\r\n"
-                           "cluster_stats_pubsub_bytes_sent:%U\r\n"
-                           "cluster_stats_pubsub_bytes_received:%U\r\n"
-                           "cluster_stats_module_bytes_sent:%U\r\n"
-                           "cluster_stats_module_bytes_received:%U\r\n",
+    info = sdscatfmt(info,
+                     "cluster_stats_bytes_sent:%U\r\n"
+                     "cluster_stats_bytes_received:%U\r\n"
+                     "cluster_stats_pubsub_bytes_sent:%U\r\n"
+                     "cluster_stats_pubsub_bytes_received:%U\r\n"
+                     "cluster_stats_module_bytes_sent:%U\r\n"
+                     "cluster_stats_module_bytes_received:%U\r\n",
                      (unsigned long long)LEGACY_STATE()->stats_bus_bytes_sent,
                      (unsigned long long)LEGACY_STATE()->stats_bus_bytes_received,
                      (unsigned long long)LEGACY_STATE()->stats_bus_pubsub_bytes_sent,

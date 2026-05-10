@@ -2006,9 +2006,13 @@ void clusterCommand(client *c) {
             serverLog(LL_NOTICE, "Manual failover user request accepted (user request from '%s').", cl);
         }
         sdsfree(cl);
-        void *h = blockClientAsync(c);
-        clusterCurrentBus->failover(force, takeover, h,
-                                    c == server.primary ? NULL : clusterCommandFailoverCompletion);
+        if (c == server.primary) {
+            /* CLUSTER FAILOVER send by the primary over the replication stream. */
+            clusterCurrentBus->failover(force, takeover, NULL, NULL);
+        } else {
+            void *h = blockClientAsync(c);
+            clusterCurrentBus->failover(force, takeover, h, clusterCommandFailoverCompletion);
+        }
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "replicate") &&
                (c->argc == 3 || c->argc == 4)) {
         /* CLUSTER REPLICATE (<NODE ID> | NO ONE) */

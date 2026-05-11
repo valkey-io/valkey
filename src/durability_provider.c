@@ -81,10 +81,6 @@ static durabilityProvider builtinAofProvider = {
 
 /**
  * Register the built-in durability providers. Called from durabilityInit().
- *
- * Currently only the AOF provider is built-in. Replica-based durability
- * (e.g. raft consensus) should be registered externally as a provider
- * via registerDurabilityProvider().
  */
 void registerBuiltinDurabilityProviders(void) {
     /* Only register if not already registered (idempotent) */

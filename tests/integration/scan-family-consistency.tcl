@@ -64,3 +64,33 @@ test {scan family consistency with configured hash seed} {
         }
     }
 } {} {external:skip}
+
+test {hash-seed uses full bytes including embedded NULL for seeding} {
+    set seed_a {"valkey\x00AAAAA"}
+    set seed_b {"valkey\x00BBBBB"}
+
+    start_server [list overrides [list hash-seed $seed_a]] {
+        start_server [list overrides [list hash-seed $seed_b]] {
+            set primary [srv -1 client]
+            set replica [srv 0 client]
+
+            $replica replicaof [srv -1 host] [srv -1 port]
+            wait_for_sync $replica
+
+            set n 16384
+            for {set i 0} {$i < $n} {incr i} {
+                $primary set "k:$i" x
+            }
+
+            wait_for_condition 200 50 {
+                [$replica dbsize] == [$primary dbsize]
+            } else {
+                fail "replica did not catch up"
+            }
+
+            set keys [scan_interleaved $primary $replica scan]
+            set keys [lsort -unique $keys]
+            assert_not_equal $n [llength $keys]
+        }
+    }
+} {} {external:skip}

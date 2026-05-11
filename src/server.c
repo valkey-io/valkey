@@ -7654,7 +7654,7 @@ __attribute__((weak)) int main(int argc, char **argv) {
      * hashes) or use the random seed if not configured. */
     if (server.hash_seed) {
         uint8_t seed[16] = {0};
-        getHashSeedFromString(seed, sizeof(seed), server.hash_seed);
+        getHashSeedFromString(seed, sizeof(seed), server.hash_seed, sdslen(server.hash_seed));
         setConfigurableHashSeed(seed);
     } else {
         setConfigurableHashSeed(hashtableGetHashFunctionSeed());

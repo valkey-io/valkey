@@ -818,14 +818,18 @@ void set_jemalloc_bg_thread(int enable) {
 
 int jemalloc_purge(void) {
     /* return all unused (reserved) pages to the OS */
+    int ret = -1;
     char tmp[32];
     unsigned narenas = 0;
     size_t sz = sizeof(unsigned);
     if (!je_mallctl("arenas.narenas", &narenas, &sz, NULL, 0)) {
         snprintf(tmp, sizeof(tmp), "arena.%d.purge", narenas);
-        if (!je_mallctl(tmp, NULL, 0, NULL, 0)) return 0;
+        if (!je_mallctl(tmp, NULL, 0, NULL, 0)) ret = 0;
     }
-    return -1;
+    /* Also release free pages of the libc main arena back to the OS,
+     * see the comment above zlibc_trim() below. */
+    zlibc_trim();
+    return ret;
 }
 
 #else
@@ -842,12 +846,29 @@ void set_jemalloc_bg_thread(int enable) {
 }
 
 int jemalloc_purge(void) {
+    /* Even when jemalloc is not in use, callers ask the allocator to
+     * return memory to the OS. Trim the libc main arena where possible;
+     * zlibc_trim() is a no-op on non-glibc builds. */
+    zlibc_trim();
     return 0;
 }
 
 #endif
 
-/* This function provides us access to the libc malloc_trim(). */
+/* This function provides us access to the libc malloc_trim(3).
+ *
+ * When jemalloc is built with a prefix (the default for the bundled copy),
+ * libc-internal allocations made by glibc itself - for example from
+ * getaddrinfo(3), NSS lookups, pthread internals, stdio buffers or any
+ * module that calls malloc() directly - are served by libc malloc rather
+ * than jemalloc, and live in the libc main arena, growing the program
+ * break (the [heap] segment) via sbrk(2). That memory is invisible to
+ * jemalloc and is rarely returned to the OS automatically.
+ *
+ * jemalloc_purge() therefore also calls this helper so that whenever we
+ * ask the allocator to release memory - from MEMORY PURGE, FLUSHDB and
+ * FLUSHALL in their synchronous form - we also release free pages of
+ * the libc main arena back to the OS. */
 void zlibc_trim(void) {
 #if defined(__GLIBC__) && !defined(USE_LIBC)
     malloc_trim(0);

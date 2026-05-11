@@ -1924,19 +1924,10 @@ void memoryCommand(client *c) {
         addReplyVerbatim(c, report, sdslen(report), "txt");
         sdsfree(report);
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "purge") && c->argc == 2) {
-        int err = jemalloc_purge();
-        /* Also release free pages from the libc main arena back to the OS.
-         * When jemalloc is built with a prefix (the default for the bundled
-         * copy), libc-internal allocations made by glibc itself (for example
-         * from getaddrinfo(3), pthread internals, NSS or stdio) are served
-         * by libc malloc and live in the [heap] segment grown via sbrk(2).
-         * That memory is invisible to jemalloc and is rarely returned to the
-         * OS automatically, which can show up as a large rss_overhead and a
-         * high mem_fragmentation_ratio on long running instances. Calling
-         * malloc_trim(3) here lets the operator reclaim it on demand. The
-         * helper is a no-op on non-glibc builds. */
-        zlibc_trim();
-        if (err == 0)
+        /* jemalloc_purge() also calls zlibc_trim() to release free pages
+         * of the libc main arena back to the OS on glibc systems; see the
+         * comment above zlibc_trim() in zmalloc.c. */
+        if (jemalloc_purge() == 0)
             addReply(c, shared.ok);
         else
             addReplyError(c, "Error purging dirty pages");

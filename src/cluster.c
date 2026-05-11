@@ -1577,8 +1577,13 @@ void clusterCommandSetSlot(client *c) {
         }
 
         slotRange range = {slot, slot};
-        void *h = blockClientAsync(c);
-        clusterSlotChange(&range, 1, n, h, clusterSetSlotNodeCallback);
+        if (c == server.primary) {
+            /* Replicated CLUSTER SETSLOT. Don't block and don't send a reply. */
+            clusterSlotChange(&range, 1, n, NULL, NULL);
+        } else {
+            void *h = blockClientAsync(c);
+            clusterSlotChange(&range, 1, n, h, clusterSetSlotNodeCallback);
+        }
         return;
     }
 

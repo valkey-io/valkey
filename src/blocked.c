@@ -105,7 +105,7 @@ void freeClientBlockingState(client *c) {
  * and will be processed when the client is unblocked. */
 void blockClient(client *c, int btype) {
     /* Replicated clients should never be blocked unless pause or module */
-    serverAssert(!(isReplicatedClient(c) && btype != BLOCKED_MODULE && btype != BLOCKED_POSTPONE && btype != BLOCKED_ASYNC));
+    serverAssert(!(isReplicatedClient(c) && btype != BLOCKED_MODULE && btype != BLOCKED_POSTPONE));
 
     initClientBlockingState(c);
 

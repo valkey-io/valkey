@@ -1924,10 +1924,7 @@ void memoryCommand(client *c) {
         addReplyVerbatim(c, report, sdslen(report), "txt");
         sdsfree(report);
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "purge") && c->argc == 2) {
-        /* jemalloc_purge() also calls zlibc_trim() to release free pages
-         * of the libc main arena back to the OS on glibc systems; see the
-         * comment above zlibc_trim() in zmalloc.c. */
-        if (jemalloc_purge() == 0)
+        if (zmallocTrim() == 0)
             addReply(c, shared.ok);
         else
             addReplyError(c, "Error purging dirty pages");

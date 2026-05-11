@@ -135,6 +135,7 @@ endif ()
 # Link with GoogleTest using target names
 target_link_libraries(
     valkey-unit-gtests
+    PRIVATE
     valkeylib-gtest
     fpconv
     lualib

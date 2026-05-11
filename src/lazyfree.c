@@ -1,4 +1,5 @@
 #include "server.h"
+#include "skiplist.h"
 #include "bio.h"
 #include "functions.h"
 #include "cluster.h"

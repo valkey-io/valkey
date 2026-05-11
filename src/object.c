@@ -30,6 +30,7 @@
 
 #include "hashtable.h"
 #include "server.h"
+#include "skiplist.h"
 #include "serverassert.h"
 #include "functions.h"
 #include "intset.h" /* Compact integer set structure */

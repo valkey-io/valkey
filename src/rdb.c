@@ -34,6 +34,7 @@
 
 #include "hashtable.h"
 #include "server.h"
+#include "skiplist.h"
 #include "lzf.h" /* LZF compression library */
 #include "zipmap.h"
 #include "endianconv.h"

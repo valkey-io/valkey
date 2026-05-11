@@ -28,6 +28,7 @@
  */
 
 #include "server.h"
+#include "skiplist.h"
 #include "bio.h"
 #include "rio.h"
 #include "functions.h"

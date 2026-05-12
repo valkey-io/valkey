@@ -4853,6 +4853,8 @@ static void clusterLegacySlotChange(slotRange *ranges, int numranges, clusterNod
 
     if (claiming) clusterBumpConfigEpochWithoutConsensus();
 
+    clusterNode *my_primary = clusterNodeGetPrimary(myself);
+    int num_slots_before = my_primary->numslots;
     for (int i = 0; i < numranges; i++) {
         for (int j = ranges[i].start_slot; j <= ranges[i].end_slot; j++) {
             if (target) {
@@ -4867,6 +4869,14 @@ static void clusterLegacySlotChange(slotRange *ranges, int numranges, clusterNod
                 clusterDelSlot(j);
             }
         }
+    }
+    if (num_slots_before > 0 && my_primary->numslots == 0 && target) {
+        /* Lost the last slot. If this is a replicated SETSLOT command, protect
+         * the primary client so it doesn't get freed by the replica migration. */
+        int is_replicated = server.primary && (server.current_client == server.primary);
+        if (is_replicated) protectClient(server.primary);
+        clusterHandleLostLastSlot(target);
+        if (is_replicated) unprotectClient(server.primary);
     }
 
     if (claiming) {
@@ -5260,7 +5270,7 @@ static void clusterLegacySetReplicaOf(clusterNode *primary, void *ctx, void (*ca
     clusterDoBeforeSleep(CLUSTER_TODO_UPDATE_STATE |
                          CLUSTER_TODO_SAVE_CONFIG |
                          CLUSTER_TODO_BROADCAST_ALL);
-    callback(ctx, NULL);
+    if (callback) callback(ctx, NULL);
 }
 
 static void clusterLegacyForgetNode(const char *node_id, size_t id_len, void *ctx, void (*callback)(void *ctx, const char *error)) {

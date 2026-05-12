@@ -157,6 +157,7 @@ int clusterDecodeOpenSlotsAuxField(int rdbflags, sds s);
 void clusterSlotChange(slotRange *ranges, int numranges, clusterNode *target, void *ctx, void (*callback)(void *ctx, const char *error));
 void clusterCancelManualFailover(void);
 void clusterSetPrimary(clusterNode *n, int closeSlots, int full_sync_required);
+void clusterHandleLostLastSlot(clusterNode *target);
 void clusterScheduleHandleSlotMigration(void);
 mstime_t clusterComputeMfPauseEnd(void);
 

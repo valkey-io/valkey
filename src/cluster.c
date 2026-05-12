@@ -397,6 +397,25 @@ void clusterSetPrimary(clusterNode *n, int closeSlots, int full_sync_required) {
     clusterUpdateSlotImportsOnOwnershipChange();
 }
 
+/* Called by cluster internals when a node has lost its last slot. Triggers
+ * replica migration. */
+void clusterHandleLostLastSlot(clusterNode *target) {
+    clusterNode *my_primary = clusterNodeGetPrimary(myself);
+    serverAssert(my_primary->numslots == 0 && target != my_primary);
+    if (server.cluster_allow_replica_migration) {
+        serverLog(LL_NOTICE,
+                  "Lost my last slot during slot migration. "
+                  "Reconfiguring myself as a replica of %.40s (%s) in shard %.40s",
+                  target->name, humanNodename(target), target->shard_id);
+        clusterCurrentBus->setReplicaOf(target, NULL, NULL);
+    } else if (nodeIsPrimary(myself)) {
+        serverLog(LL_NOTICE,
+                  "My last slot was migrated to node %.40s (%s) "
+                  "in shard %.40s. I am now an empty primary.",
+                  target->name, humanNodename(target), target->shard_id);
+    }
+}
+
 /* -----------------------------------------------------------------------------
  * Key space handling
  * -------------------------------------------------------------------------- */
@@ -1289,37 +1308,9 @@ static void clusterSetSlotNodeCallback(void *ctx, const char *error) {
     if (!c) return;
     if (error) {
         addReplyError(c, error);
-        unblockClientAsync(c);
-        return;
+    } else {
+        addReply(c, shared.ok);
     }
-
-    /* If this shard lost its last slot, reconfigure as a replica of the
-     * new owner. This is a local decision, not a cluster-wide change. */
-    clusterNode *myself = getMyClusterNode();
-    clusterNode *my_primary = clusterNodeGetPrimary(myself);
-    if (my_primary->numslots == 0) {
-        /* Find who got our slots — look at argv for the target node. */
-        clusterNode *target = clusterLookupNode(objectGetVal(c->argv[4]),
-                                                sdslen(objectGetVal(c->argv[4])));
-        if (target && target != my_primary) {
-            if (server.cluster_allow_replica_migration) {
-                serverLog(LL_NOTICE,
-                          "Lost my last slot during slot migration. Reconfiguring myself "
-                          "as a replica of %.40s (%s) in shard %.40s",
-                          target->name, humanNodename(target), target->shard_id);
-                if (nodeIsReplica(myself)) protectClient(c);
-                clusterSetPrimary(target, 1, 1);
-                if (nodeIsReplica(myself)) unprotectClient(c);
-            } else if (nodeIsPrimary(myself)) {
-                serverLog(LL_NOTICE,
-                          "My last slot was migrated to node %.40s (%s) in shard %.40s. "
-                          "I am now an empty primary.",
-                          target->name, humanNodename(target), target->shard_id);
-            }
-        }
-    }
-
-    addReply(c, shared.ok);
     unblockClientAsync(c);
 }
 

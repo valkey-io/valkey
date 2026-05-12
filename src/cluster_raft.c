@@ -2276,7 +2276,24 @@ static void clusterRaftCancelAutomaticFailover(void) {
  * Node management — propose changes to Raft log
  * -------------------------------------------------------------------------- */
 
+typedef struct {
+    void *orig_ctx;
+    void (*orig_callback)(void *orig_ctx, const char *error);
+    clusterNode *target;
+    int num_slots_before;
+} slotChangeCallbackCtx;
 
+static void clusterRaftSlotChangeApplyCallback(void *ctx, const char *error) {
+    slotChangeCallbackCtx *sc = (slotChangeCallbackCtx *)ctx;
+    if (sc->num_slots_before > 0 && clusterNodeGetPrimary(myself)->numslots == 0 &&
+        sc->target && !error) {
+        clusterHandleLostLastSlot(sc->target);
+    }
+    if (sc->orig_callback) sc->orig_callback(sc->orig_ctx, error);
+    zfree(ctx);
+}
+
+/* Invoked for slot assignments and slot migrations (ADDSLOTS, SETSLOT, etc.) */
 static void clusterRaftSlotChange(slotRange *ranges, int numranges, clusterNode *target, void *ctx, void (*callback)(void *ctx, const char *error)) {
     /* Build entry: "SLOT_CHANGE <node-id-or-dash> <ranges...>" */
     sds entry = sdsnew("SLOT_CHANGE ");
@@ -2288,9 +2305,16 @@ static void clusterRaftSlotChange(slotRange *ranges, int numranges, clusterNode 
             entry = sdscatfmt(entry, " %i-%i", ranges[i].start_slot, ranges[i].end_slot);
     }
 
-    /* Propose through Raft (leader appends, follower forwards).
-     * The callback is invoked when the entry is committed and applied. */
-    clusterRaftPropose(entry, ctx, callback);
+    /* Propose through Raft (leader appends, follower forwards). The callback is
+     * invoked when the entry is committed and applied. We use two chained
+     * callbacks, to handle some side-effects like replica migration, before
+     * involing the original callback. */
+    slotChangeCallbackCtx *sc = zmalloc(sizeof(slotChangeCallbackCtx));
+    sc->orig_ctx = ctx;
+    sc->orig_callback = callback;
+    sc->target = target;
+    sc->num_slots_before = clusterNodeGetPrimary(myself)->numslots;
+    clusterRaftPropose(entry, sc, &clusterRaftSlotChangeApplyCallback);
     sdsfree(entry);
 }
 

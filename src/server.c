@@ -2313,6 +2313,7 @@ void initServerConfig(void) {
     atomic_store_explicit(&server.aof_io_flush_errno, 0, memory_order_relaxed);
     atomic_store_explicit(&server.aof_io_flush_size, 0, memory_order_relaxed);
     atomic_store_explicit(&server.aof_bio_fsync_status, C_OK, memory_order_relaxed);
+    server.bio_aof_offload_enabled = 0;
     server.aof_rewrite_time_last = -1;
     server.aof_rewrite_time_start = -1;
     server.aof_lastbgrewrite_status = C_OK;
@@ -4055,7 +4056,7 @@ void call(client *c, int flags) {
      * here rather than inside afterCommand() because afterCommand() is
      * also invoked from nested call() contexts (e.g. propagatePendingCommands)
      * where the client argv may no longer be valid. */
-    afterCommandTrackReplOffset(c);
+    if (server.bio_aof_offload_enabled) afterCommandTrackReplOffset(c);
 
     /* Remember the replication offset of the client, right after its last
      * command that resulted in propagation. */
@@ -4589,7 +4590,7 @@ int processCommand(client *c) {
         queueMultiCommand(c, cmd_flags);
         addReply(c, shared.queued);
     } else {
-        if (preCommandExec(c) == CMD_FILTER_REJECT) {
+        if (server.bio_aof_offload_enabled && preCommandExec(c) == CMD_FILTER_REJECT) {
             return C_OK;
         }
         int flags = CMD_CALL_FULL;

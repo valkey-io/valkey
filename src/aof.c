@@ -1388,7 +1388,7 @@ void flushAppendOnlyFile(int force) {
         }
     }
 
-    if (server.aof_fsync == AOF_FSYNC_ALWAYS && !force && tryOffloadAofAlwaysFlushToIOThreads() == C_OK) {
+    if (server.bio_aof_offload_enabled && server.aof_fsync == AOF_FSYNC_ALWAYS && !force && tryOffloadAofAlwaysFlushToIOThreads() == C_OK) {
         return;
     }
 

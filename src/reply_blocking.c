@@ -30,7 +30,7 @@ static void durabilityResetPrimaryState(bool is_free_clients_needed);
  * appendonly + appendfsync always).
  */
 int isDurabilityEnabled(void) {
-    return anyDurabilityProviderEnabled();
+    return server.bio_aof_offload_enabled && anyDurabilityProviderEnabled();
 }
 
 /**

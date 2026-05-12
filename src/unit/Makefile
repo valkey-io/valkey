@@ -173,7 +173,7 @@ endif
 
 # Compile C++ test files, recompile if generated_wrappers or compiler flags change
 %.o: %.cpp generated_wrappers.cpp .flags
-	$(CXX) -MD -MP -std=c++17 -faligned-new -Wno-write-strings -fpermissive $(GCC_FLAGS) $(OPT) $(DEBUG) $(TEST_CFLAGS) -Wall -Wno-deprecated-declarations -c \
+	$(CXX) -MD -MP -std=c++20 -faligned-new -Wno-write-strings -fpermissive $(GCC_FLAGS) $(OPT) $(DEBUG) $(TEST_CFLAGS) -Wall -Wno-deprecated-declarations -c \
 	-isystem .. -I ../../deps/lua/src/ -I ../../deps/hdr_histogram/ -I ../../deps/fpconv/ $(JEMALLOC_CFLAGS) \
 	$(GTEST_CFLAGS) $<
 

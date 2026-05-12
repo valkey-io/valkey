@@ -6808,12 +6808,13 @@ ValkeyModuleCallReply *VM_Call(ValkeyModuleCtx *ctx, const char *cmdname, const 
         if (!(flags & VALKEYMODULE_ARGV_NO_REPLICAS)) call_flags |= CMD_CALL_PROPAGATE_REPL;
     }
 
-    // check if we need to reject the execution due to access to dirty data
+    /* Reject execution if the command accesses uncommitted (dirty) keys. */
     char *pre_script_err = preScriptCmd(c);
     if (pre_script_err != NULL) {
         if (error_as_call_replies) {
             reply_error_msg = sdsnew(pre_script_err);
         }
+        errno = EBUSY;
         goto cleanup;
     }
 

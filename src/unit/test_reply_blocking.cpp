@@ -27,6 +27,7 @@ static void initTestEnv(void) {
     if (server.logfile == nullptr) {
         server.logfile = test_logfile;
     }
+    server.bio_aof_offload_enabled = 1;
 }
 
 /**
@@ -183,6 +184,7 @@ TEST_F(DurabilityProviderTest, IsDurabilityEnabled) {
 }
 
 TEST_F(SyncReplicationTest, IsPrimaryDurabilityEnabled) {
+    initDurabilityForTest();
     server.aof_state = AOF_ON;
     server.aof_fsync = AOF_FSYNC_ALWAYS;
 
@@ -199,9 +201,12 @@ TEST_F(SyncReplicationTest, IsPrimaryDurabilityEnabled) {
     server.aof_fsync = AOF_FSYNC_EVERYSEC;
     server.primary_host = nullptr;
     ASSERT_EQ(isPrimaryDurabilityEnabled(), 0);
+
+    cleanupDurabilityForTest();
 }
 
 TEST_F(SyncReplicationTest, ClientInitAndReset) {
+    initDurabilityForTest();
     client *c = (client *)zcalloc(sizeof(client));
     c->clientDurabilityInfo.blocked_responses = nullptr;
     c->clientDurabilityInfo.durability_blocked = 0;
@@ -230,6 +235,7 @@ TEST_F(SyncReplicationTest, ClientInitAndReset) {
 
     server.aof_state = AOF_OFF; server.aof_fsync = AOF_FSYNC_EVERYSEC;
     zfree(c);
+    cleanupDurabilityForTest();
 }
 
 TEST_F(SyncReplicationTest, IsClientReplyBufferLimited) {
@@ -271,7 +277,8 @@ TEST_F(SyncReplicationTest, ClientHasPendingRepliesUsesBufposNotDataLen) {
     c->reply = listCreate();
     c->repl_data = nullptr;
     c->slot_migration_job = nullptr;
-    c->raw_flag = 0;
+    c->raw_flag1 = 0;
+    c->raw_flag2 = 0;
 
     /* Set up a blocked response at offset 100 in c->buf (no reply block) */
     c->clientDurabilityInfo.blocked_responses = listCreate();
@@ -700,6 +707,7 @@ TEST_F(SyncReplicationTest, GenInfoStringDisabled) {
 }
 
 TEST_F(SyncReplicationTest, GenInfoStringEnabled) {
+    initDurabilityForTest();
     server.aof_state = AOF_ON; server.aof_fsync = AOF_FSYNC_ALWAYS;
     server.durability.clients_waiting_ack = listCreate();
     server.durability.read_responses_blocked = 5;
@@ -719,6 +727,7 @@ TEST_F(SyncReplicationTest, GenInfoStringEnabled) {
     listRelease(server.durability.clients_waiting_ack);
     server.durability.clients_waiting_ack = nullptr;
     server.aof_state = AOF_OFF; server.aof_fsync = AOF_FSYNC_EVERYSEC;
+    cleanupDurabilityForTest();
 }
 
 /* ========================= Migrated from C tests ========================= */
@@ -1022,6 +1031,7 @@ TEST_F(FullDurabilityTest, KeyspaceNotifyTaskCopiesEventString) {
 
 /* Test durabilityClientInit is idempotent */
 TEST_F(SyncReplicationTest, ClientInitIdempotent) {
+    initDurabilityForTest();
     server.aof_state = AOF_ON; server.aof_fsync = AOF_FSYNC_ALWAYS;
 
     client *c = (client *)zcalloc(sizeof(client));
@@ -1038,4 +1048,5 @@ TEST_F(SyncReplicationTest, ClientInitIdempotent) {
     durabilityClientReset(c);
     server.aof_state = AOF_OFF; server.aof_fsync = AOF_FSYNC_EVERYSEC;
     zfree(c);
+    cleanupDurabilityForTest();
 }

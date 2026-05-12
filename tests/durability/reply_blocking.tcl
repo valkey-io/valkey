@@ -9,13 +9,13 @@
 foreach provider_mode {aof} {
 
     if {$provider_mode eq "replica"} {
-        set server_overrides {appendonly yes appendfsync always}
+        set server_overrides {appendonly yes appendfsync always bio-aof-offload-enabled yes}
     } else {
         # Durability is implied by appendonly + appendfsync always.
         # We use DEBUG durability-provider-pause/resume to control blocking
         # instead of toggling appendfsync, which avoids the issue where the
         # provider reports as disabled when appendfsync != always.
-        set server_overrides {appendonly yes appendfsync always}
+        set server_overrides {appendonly yes appendfsync always bio-aof-offload-enabled yes}
     }
 
     start_server [list tags {"repl durability external:skip"} overrides $server_overrides] {
@@ -72,6 +72,26 @@ foreach provider_mode {aof} {
                     # Issue a PING to force a beforeSleep cycle that fsyncs the AOF
                     $primary ping
                 }
+            }
+
+            # ==================== bio-aof-offload-enabled config tests ====================
+
+            test "bio-aof-offload-enabled can be toggled at runtime - $provider_mode" {
+                # Server started with bio-aof-offload-enabled yes
+                assert_equal [lindex [$primary config get bio-aof-offload-enabled] 1] "yes"
+
+                $primary set key1 value1
+                assert_equal [$primary get key1] "value1"
+
+                $primary config set bio-aof-offload-enabled no
+                assert_equal [lindex [$primary config get bio-aof-offload-enabled] 1] "no"
+
+                $primary set key2 value2
+                assert_equal [$primary get key2] "value2"
+
+                # Re-enable for remaining tests
+                $primary config set bio-aof-offload-enabled yes
+                assert_equal [lindex [$primary config get bio-aof-offload-enabled] 1] "yes"
             }
 
             # ==================== Write blocking tests ====================

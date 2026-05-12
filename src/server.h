@@ -1785,6 +1785,7 @@ typedef enum childInfoType {
 
 struct valkeyServer {
     durable_t durability;
+    int bio_aof_offload_enabled;     /* Hidden feature flag to enable/disable BIO AOF offload + dirty key tracking */
     /* General */
     pid_t pid;                                        /* Main process pid. */
     pthread_t main_thread_id;                         /* Main thread id */

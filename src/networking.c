@@ -370,9 +370,6 @@ client *createClient(connection *conn) {
     c->io_last_written.bufpos = 0;
     c->io_last_written.data_len = 0;
     memset(&c->clientDurabilityInfo, 0, sizeof(c->clientDurabilityInfo));
-
-    // init durability info like
-    // key blocking on primary
     durabilityClientInit(c);
 
     return c;

@@ -195,17 +195,16 @@ struct ValkeyModule;
 /* Instantaneous metrics tracking. */
 #define STATS_METRIC_SAMPLES 16 /* Number of samples per metric. */
 typedef enum {
-    STATS_METRIC_COMMAND = 0,            /* Number of commands executed. */
-    STATS_METRIC_NET_INPUT,              /* Bytes read from network. */
-    STATS_METRIC_NET_OUTPUT,             /* Bytes written to network. */
-    STATS_METRIC_NET_INPUT_REPLICATION,  /* Bytes read from network during replication. */
-    STATS_METRIC_NET_OUTPUT_REPLICATION, /* Bytes written to network during replication. */
-    STATS_METRIC_EL_CYCLE,               /* Number of eventloop cycled. */
-    STATS_METRIC_EL_DURATION,            /* Eventloop duration. */
-    STATS_METRIC_IO_WAIT,                /* IO queue size */
-    STATS_METRIC_MAIN_THREAD_CPU_SYS,    /* Main thread CPU sys time */
-    STATS_METRIC_MAIN_THREAD_CPU_USER,   /* Main thread CPU user time */
-    STATS_METRIC_COUNT                   /* Total count */
+    STATS_METRIC_COMMAND = 0,             /* Number of commands executed. */
+    STATS_METRIC_NET_INPUT,               /* Bytes read from network. */
+    STATS_METRIC_NET_OUTPUT,              /* Bytes written to network. */
+    STATS_METRIC_NET_INPUT_REPLICATION,   /* Bytes read from network during replication. */
+    STATS_METRIC_NET_OUTPUT_REPLICATION,  /* Bytes written to network during replication. */
+    STATS_METRIC_EL_CYCLE,                /* Number of eventloop cycled. */
+    STATS_METRIC_EL_DURATION,             /* Eventloop duration. */
+    STATS_METRIC_IO_WAIT,                 /* IO queue size */
+    STATS_METRIC_MAIN_THREAD_ACTIVE_TIME, /* Main-thread active time */
+    STATS_METRIC_COUNT                    /* Total count */
 } instantaneous_metric_type;
 
 /* Protocol and I/O related defines */
@@ -1377,6 +1376,7 @@ typedef struct client {
     unsigned long long net_output_bytes;          /* Total network output bytes sent to this client. */
     unsigned long long commands_processed;        /* Total count of commands this client executed. */
     unsigned long long net_output_bytes_curr_cmd; /* Total network output bytes sent to this client, by the current command. */
+    _Atomic(size_t) io_tracked_reply_len;         /* Total size of BULK_STR_REF replies tracked by I/O threads. */
     size_t buf_peak;                              /* Peak used size of buffer in last 5 sec interval. */
     int nwritten;                                 /* Number of bytes of the last write. */
     int nread;                                    /* Number of bytes of the last read. */
@@ -2790,6 +2790,24 @@ typedef struct {
 
 } hashTypeIterator;
 
+typedef struct scanOptions {
+    long count;      /* COUNT option. */
+    sds pat;         /* MATCH pattern. */
+    long long type;  /* TYPE filter. */
+    int patlen;      /* MATCH pattern length. */
+    int use_pattern; /* MATCH is active. */
+    int only_keys;   /* NOVALUES/NOSCORES option. */
+    int input_slot;  /* SLOT option, or -1. */
+    int match_slot;  /* MATCH hashtag slot, or -1. */
+} scanOptions;
+
+typedef struct clusterScanCtx {
+    int slot;
+    int final_slot;
+    bool advance_to_next_slot;
+    const char *fp;
+} clusterScanCtx;
+
 #include "stream.h" /* Stream data type header file. */
 
 #define OBJ_HASH_FIELD 1
@@ -3498,7 +3516,7 @@ struct serverMemOverhead *getMemoryOverheadData(void);
 void freeMemoryOverheadData(struct serverMemOverhead *mh);
 void checkChildrenDone(void);
 int setOOMScoreAdj(int process_class);
-void rejectCommandFormat(client *c, const char *fmt, ...);
+void rejectCommandFormat(client *c, int notify_modules, const char *fmt, ...);
 void *activeDefragAlloc(void *ptr);
 sds activeDefragSds(sds sdsptr);
 robj *activeDefragStringOb(robj *ob);
@@ -3760,7 +3778,9 @@ void discardTempDb(serverDb **tempDb);
 int selectDb(client *c, int id);
 void signalModifiedKey(client *c, serverDb *db, robj *key);
 void signalFlushedDb(int dbid, int async);
-void scanGenericCommand(client *c, robj *o, unsigned long long cursor, int slot, sds cursor_prefix, sds finished_cursor_prefix);
+int parseScanOptionsOrReply(client *c, robj *o, int start_idx, bool allow_slot, scanOptions *opts);
+void scanGenericCommand(client *c, robj *o, unsigned long long cursor);
+void scanGenericCommandWithOptions(client *c, robj *o, unsigned long long cursor, const scanOptions *opts, const clusterScanCtx *cluster_ctx);
 int parseScanCursorOrReply(client *c, sds buf, unsigned long long *cursor);
 int dbAsyncDelete(serverDb *db, robj *key);
 void emptyDbAsync(serverDb *db);
@@ -3877,6 +3897,8 @@ void blockedBeforeSleep(void);
 void addClientToTimeoutTable(client *c);
 void removeClientFromTimeoutTable(client *c);
 void handleBlockedClientsTimeout(void);
+void encodeTimeoutKey(client *c, uint64_t timeout, unsigned char *buf_out);
+void decodeTimeoutKey(unsigned char *buf, uint64_t *timeout_ptr, client **client_ptr);
 int clientsCronHandleTimeout(client *c, mstime_t now_ms);
 
 /* evict.c -- maxmemory handling and LRU eviction. */

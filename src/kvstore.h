@@ -28,7 +28,8 @@ unsigned long kvstoreBuckets(kvstore *kvs);
 size_t kvstoreMemUsage(kvstore *kvs);
 unsigned long long kvstoreScan(kvstore *kvs,
                                unsigned long long cursor,
-                               int onlydidx,
+                               int first_idx,
+                               int last_idx,
                                kvstoreScanFunction scan_cb,
                                kvstoreScanShouldSkipHashtable *skip_cb,
                                void *privdata);

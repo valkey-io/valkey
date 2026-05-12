@@ -83,6 +83,13 @@ start_server {overrides {save {900 1}} tags {"modules"}} {
     }
     r config set maxmemory-policy allkeys-lru
 
+    test {test module lru/lfu api with nonexistent key} {
+        assert_error {*key not found*} {r test.getlru nonexistent_key}
+        assert_error {*key not found*} {r test.setlru nonexistent_key 100}
+        assert_error {*key not found*} {r test.getlfu nonexistent_key}
+        assert_error {*key not found*} {r test.setlfu nonexistent_key 100}
+    }
+
     test {test module lfu api} {
         r config set maxmemory-policy allkeys-lfu
         r set x foo
@@ -167,6 +174,17 @@ start_server {overrides {save {900 1}} tags {"modules"}} {
         assert { "readonly" ni $flags }
         assert { "authenticated" in $flags }
         assert { "ever_authenticated" in $flags }
+    }
+
+    test {test module clientinfo api - primary/replica/monitor flags} {
+        # Normal client should not have primary, replica, or monitor flags
+        set info [r test.clientinfo]
+        set flags [parse_client_flags [dict get $info flags]]
+        assert { "primary" ni $flags }
+        assert { "replica" ni $flags }
+        assert { "monitor" ni $flags }
+        assert { "module" ni $flags }
+        assert { "fake" ni $flags }
     }
 
     foreach cmd {rm_call vm_call_argv} {

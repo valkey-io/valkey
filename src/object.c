@@ -237,7 +237,7 @@ static bool shouldEmbedStringObject(size_t val_len, const_sds key, long long exp
     }
     size += (expire != EXPIRY_NONE) * sizeof(long long);
     size += sdsReqSize(val_len, SDS_TYPE_8);
-    return size <= 64;
+    return size <= 128;
 }
 
 /* Create a string object with EMBSTR encoding if it is small, otherwise RAW encoding */
@@ -274,7 +274,6 @@ void *objectGetVal(const robj *o) {
             data += 1 + hdr_size;                /* +1 for header size byte */
             data += sdslen((const_sds)data) + 1; /* +1 for null terminator */
         }
-        assert(o->encoding == OBJ_ENCODING_EMBSTR);
         return data + sdsHdrSize(SDS_TYPE_8);
     } else {
         return o->val_ptr;

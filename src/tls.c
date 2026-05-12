@@ -1225,7 +1225,7 @@ static void updatePendingData(tls_connection *conn) {
 }
 
 void updateSSLPendingFlag(tls_connection *conn) {
-    if (SSL_pending(conn->ssl) > 0) {
+    if (conn->ssl && SSL_pending(conn->ssl) > 0) {
         conn->flags |= TLS_CONN_FLAG_HAS_PENDING;
     } else {
         conn->flags &= ~TLS_CONN_FLAG_HAS_PENDING;
@@ -1775,6 +1775,9 @@ static ssize_t connTLSSyncWrite(connection *conn_, char *ptr, ssize_t size, long
         unsetBlockingTimeout(conn);
     }
 
+    if (ret < 0) {
+        conn->c.last_errno = errno;
+    }
     return ret;
 }
 
@@ -1790,6 +1793,9 @@ static ssize_t connTLSSyncRead(connection *conn_, char *ptr, ssize_t size, long 
         unsetBlockingTimeout(conn);
     }
 
+    if (ret < 0) {
+        conn->c.last_errno = errno;
+    }
     return ret;
 }
 
@@ -1826,6 +1832,9 @@ static ssize_t connTLSSyncReadLine(connection *conn_, char *ptr, ssize_t size, l
 exit:
     if (!blocking) {
         unsetBlockingTimeout(conn);
+    }
+    if (nread < 0) {
+        conn->c.last_errno = errno;
     }
     return nread;
 }

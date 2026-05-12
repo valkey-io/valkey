@@ -7,6 +7,7 @@
 
 #include <stdbool.h>
 #include "util.h"
+#include "dict.h"
 
 /* Special Expiry values */
 #define EXPIRY_NONE -1
@@ -55,7 +56,6 @@ enum activeExpiryType {
 typedef struct client client;
 typedef struct serverObject robj;
 typedef struct serverDb serverDb;
-typedef struct dict dict;
 
 /* return the relevant expiration policy based on the current server state and the provided flags.
  * FLAGS can indicate either:

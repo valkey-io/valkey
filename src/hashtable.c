@@ -406,7 +406,7 @@ static inline int compareKeys(hashtable *ht, const void *key1, const void *key2)
     if (ht->type->keyCompare != NULL) {
         return ht->type->keyCompare(key1, key2);
     } else {
-        return key1 != key2;
+        return key1 == key2;
     }
 }
 
@@ -565,6 +565,31 @@ static void rehashEntry(hashtable *ht, void *entry, uint64_t hash, uint8_t h2) {
     ht->used[1]++;
 }
 
+/* Release memory pages of rehashed buckets back to the OS incrementally.
+ * This function is called after each bucket is rehashed. When an entire range
+ * worth of buckets has been processed, it advises the OS that the pages
+ * are no longer needed (MADV_DONTNEED). This spreads the memory release over
+ * the entire rehashing process, avoiding a latency spike that would occur if
+ * we released all the old table's memory at once when rehashing completes. */
+static void dismissRehashedBucketsIfNeeded(hashtable *ht) {
+    static size_t page_size = 0;
+    if (page_size == 0) page_size = sysconf(_SC_PAGESIZE);
+
+    size_t buckets_per_page = page_size / sizeof(bucket);
+    const size_t pages_per_dismiss = 16;
+    size_t buckets_per_dismiss = buckets_per_page * pages_per_dismiss;
+    if (ht->rehash_idx % buckets_per_dismiss != 0) {
+        return;
+    }
+
+    bucket *ptr = ht->tables[0] + ht->rehash_idx - buckets_per_dismiss;
+    ptr = (bucket *)((size_t)ptr & ~(page_size - 1));
+    if (ptr < ht->tables[0]) {
+        return;
+    }
+    zmadvise_dontneed_range(ptr, pages_per_dismiss * page_size);
+}
+
 /* After migrating entries in a bucket chain from the old table
  * to the new one, this function should be called immediately to
  * handle the cleanup of old buckets, such as clearing presence bits. */
@@ -587,6 +612,9 @@ static void rehashStepFinalize(hashtable *ht) {
 
     /* Advance to the next bucket. */
     ht->rehash_idx++;
+
+    /* Release page back to OS incrementally. */
+    dismissRehashedBucketsIfNeeded(ht);
 
     /* Check if we already rehashed the whole table. */
     if (ht->used[0] == 0 && ht->child_buckets[0] == 0) {
@@ -801,7 +829,7 @@ static inline int checkCandidateInBucket(hashtable *ht, bucket *b, int pos, cons
     /* It's a candidate. */
     void *entry = b->entries[pos];
     const void *elem_key = entryGetKey(ht, entry);
-    if (compareKeys(ht, key, elem_key) == 0) {
+    if (compareKeys(ht, key, elem_key)) {
         /* It's a match. */
         assert(pos_in_bucket != NULL);
         if (!validateElementIfNeeded(ht, entry)) {
@@ -1348,7 +1376,7 @@ unsigned hashtableEntriesPerBucket(void) {
 
 /* Returns the size of the hashtable structures, in bytes (not including the sizes
  * of the entries, if the entries are pointers to allocated objects). */
-size_t hashtableMemUsage(hashtable *ht) {
+size_t hashtableMemUsage(const hashtable *ht) {
     size_t num_buckets = numBuckets(ht->bucket_exp[0]) + numBuckets(ht->bucket_exp[1]);
     num_buckets += ht->child_buckets[0] + ht->child_buckets[1];
     size_t metasize = ht->type->getMetadataSize ? ht->type->getMetadataSize() : 0;
@@ -1568,7 +1596,7 @@ hashtable *hashtableDefragTables(hashtable *ht, void *(*defragfn)(void *)) {
  * forked and memory won't be used again. See zmadvise_dontneed() */
 void dismissHashtable(hashtable *ht) {
     for (int i = 0; i < 2; i++) {
-        zmadvise_dontneed(ht->tables[i], numBuckets(ht->bucket_exp[i]) * sizeof(bucket *));
+        zmadvise_dontneed(ht->tables[i], numBuckets(ht->bucket_exp[i]) * sizeof(bucket));
     }
 }
 
@@ -1879,7 +1907,7 @@ bool hashtableIncrementalFindStep(hashtableIncrementalFindState *state) {
             hashtable *ht = data->hashtable;
             void *entry = data->bucket->entries[data->pos];
             const void *elem_key = entryGetKey(ht, entry);
-            if (compareKeys(ht, data->key, elem_key) == 0) {
+            if (compareKeys(ht, data->key, elem_key)) {
                 /* It's a match. */
                 data->state = HASHTABLE_FOUND;
                 return false;
@@ -2320,16 +2348,38 @@ bool hashtableNext(hashtableIterator *iterator, void **elemptr) {
         }
         return true;
     }
+    /* Clean up eagerly so repeated hashtableNext calls return false and
+     * safe iterators don't keep rehashing paused. The caller's own
+     * hashtableCleanupIterator call becomes a no-op (hashtable == NULL). */
+    hashtableCleanupIterator(iterator);
+    iter->hashtable = NULL;
     return false;
 }
 
 /* --- Random entries --- */
 
+/* Scan independent random buckets and collect entries using reservoir sampling.
+ * Unlike hashtableSampleEntries which scans contiguous buckets for unique
+ * results, this picks a new random bucket each time for fair sampling at the
+ * cost of possible duplicates. */
+static unsigned sampleRandomBuckets(hashtable *ht, void **dst, unsigned count) {
+    if (count > hashtableSize(ht)) count = hashtableSize(ht);
+    scan_samples samples;
+    samples.size = count;
+    samples.seen = 0;
+    samples.entries = dst;
+    while (samples.seen < count) {
+        hashtableScan(ht, randomSizeT(), sampleEntriesScanFn, &samples);
+    }
+    rehashStepOnReadIfNeeded(ht);
+    return samples.seen <= count ? samples.seen : count;
+}
+
 /* Points 'found' to a random entry in the hash table and returns true. Returns false
  * if the table is empty. */
 bool hashtableRandomEntry(hashtable *ht, void **found) {
     void *samples[WEAK_RANDOM_SAMPLE_SIZE];
-    unsigned count = hashtableSampleEntries(ht, &samples[0], WEAK_RANDOM_SAMPLE_SIZE);
+    unsigned count = sampleRandomBuckets(ht, &samples[0], WEAK_RANDOM_SAMPLE_SIZE);
     if (count == 0) return false;
     unsigned idx = random() % count;
     *found = samples[idx];
@@ -2342,7 +2392,7 @@ bool hashtableFairRandomEntry(hashtable *ht, void **found) {
     /* Sample less if it's very sparse. */
     size_t num_samples = hashtableSize(ht) >= hashtableBuckets(ht) ? FAIR_RANDOM_SAMPLE_SIZE : WEAK_RANDOM_SAMPLE_SIZE;
     void *samples[num_samples];
-    unsigned count = hashtableSampleEntries(ht, &samples[0], num_samples);
+    unsigned count = sampleRandomBuckets(ht, &samples[0], num_samples);
     if (count == 0) return false;
     unsigned idx = random() % count;
     *found = samples[idx];
@@ -2364,8 +2414,9 @@ unsigned hashtableSampleEntries(hashtable *ht, void **dst, unsigned count) {
     samples.size = count;
     samples.seen = 0;
     samples.entries = dst;
+    size_t cursor = randomSizeT();
     while (samples.seen < count) {
-        hashtableScan(ht, randomSizeT(), sampleEntriesScanFn, &samples);
+        cursor = hashtableScan(ht, cursor, sampleEntriesScanFn, &samples);
     }
     rehashStepOnReadIfNeeded(ht);
     /* samples.seen is the number of entries scanned. It may be greater than

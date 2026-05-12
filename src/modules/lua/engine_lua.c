@@ -22,6 +22,8 @@
 #define LUA_ENGINE_NAME "LUA"
 #define REGISTRY_ERROR_HANDLER_NAME "__ERROR_HANDLER__"
 
+static int isLuaInsecureAPIEnabled(ValkeyModuleCtx *module_ctx);
+
 /* Adds server.debug() function used by lua debugger
  *
  * Log a string message into the output console.
@@ -201,7 +203,7 @@ static struct luaEngineCtx *createEngineContext(ValkeyModuleCtx *ctx) {
                      &lua_engine_ctx->valkey_version,
                      &lua_engine_ctx->valkey_version_num);
 
-    lua_engine_ctx->lua_enable_insecure_api = 0;
+    lua_engine_ctx->lua_enable_insecure_api = isLuaInsecureAPIEnabled(ctx);
 
     initializeLuaState(lua_engine_ctx, VMSE_EVAL);
     initializeLuaState(lua_engine_ctx, VMSE_FUNCTION);
@@ -480,9 +482,20 @@ static void luaEngineDebuggerEnd(ValkeyModuleCtx *module_ctx,
 
 static struct luaEngineCtx *engine_ctx = NULL;
 
-int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx,
-                        ValkeyModuleString **argv,
-                        int argc) {
+#if STATIC_LUA
+/*
+ * When building Lua as a static library, hide the generic module entry
+ * points, ValkeyModule_OnLoad and ValkeyModule_OnLoad, to avoid multiple
+ * symbol definitions. This is done by declaring these functions as static.
+ */
+#define LUA_MODULE_VISIBILITY static
+#else
+#define LUA_MODULE_VISIBILITY
+#endif
+
+LUA_MODULE_VISIBILITY int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx,
+                                              ValkeyModuleString **argv,
+                                              int argc) {
     VALKEYMODULE_NOT_USED(argv);
     VALKEYMODULE_NOT_USED(argc);
 
@@ -533,7 +546,8 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx,
     return VALKEYMODULE_OK;
 }
 
-int ValkeyModule_OnUnload(ValkeyModuleCtx *ctx) {
+
+LUA_MODULE_VISIBILITY int ValkeyModule_OnUnload(ValkeyModuleCtx *ctx) {
     if (ValkeyModule_UnregisterScriptingEngine(ctx, LUA_ENGINE_NAME) != VALKEYMODULE_OK) {
         ValkeyModule_Log(ctx, "error", "Failed to unregister engine");
         return VALKEYMODULE_ERR;
@@ -544,3 +558,16 @@ int ValkeyModule_OnUnload(ValkeyModuleCtx *ctx) {
 
     return VALKEYMODULE_OK;
 }
+
+#if STATIC_LUA
+/* Unique entry points (Load and Unload) used by the Lua module when linked statically */
+int ValkeyModule_OnLoad_lua(ValkeyModuleCtx *ctx,
+                            ValkeyModuleString **argv,
+                            int argc) {
+    return ValkeyModule_OnLoad(ctx, argv, argc);
+}
+
+int ValkeyModule_OnUnload_lua(ValkeyModuleCtx *ctx) {
+    return ValkeyModule_OnUnload(ctx);
+}
+#endif

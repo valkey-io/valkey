@@ -25,8 +25,7 @@ if (USE_RDMA) # Module or no module
         set(ENABLE_DLOPEN_RDMA ON CACHE BOOL "Build valkey_rdma with dynamic loading")
     endif()
 endif ()
-# Let libvalkey use sds and dict provided by valkey.
-set(DICT_INCLUDE_DIR ${CMAKE_SOURCE_DIR}/src)
+# Let libvalkey use sds provided by valkey.
 set(SDS_INCLUDE_DIR ${CMAKE_SOURCE_DIR}/src)
 
 add_subdirectory(libvalkey)

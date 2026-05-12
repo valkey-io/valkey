@@ -561,6 +561,18 @@ start_server {tags {"geo"}} {
         assert_equal {{1 0.0001} {2 9.8182}} [r GEORADIUS points -122.407107 37.794300 30 mi ASC WITHDIST]
     }
 
+    test {GEOSEARCH BYPOLYGON with invalid COUNT} {
+        r del points
+        r geoadd points 151.2093 -33.8688 "Sydney"
+
+        assert_error {ERR value is not an integer or out of range} {
+            r GEOSEARCH points BYPOLYGON 3 151.2039 -33.8744 151.2132 -33.8829 151.2229 -33.8839 COUNT notanumber
+        }
+        assert_error {ERR COUNT must be > 0} {
+            r GEOSEARCH points BYPOLYGON 3 151.2039 -33.8744 151.2132 -33.8829 151.2229 -33.8839 COUNT -1
+        }
+    }
+
     test {GEOSEARCH BYPOLYGON standard operations} {
         r geoadd points 151.20932132005692 -33.877723137822436 "146, Elizabeth Street, Koreatown, Sydney, Sydney CBD, Sydney, Council of the City of Sydney, New South Wales, 2000, Australia"
         r geoadd points 151.2119820713997 -33.87697539508043 "Connaught Centre, 187, Liverpool Street, Koreatown, Sydney, Sydney CBD, Sydney, Council of the City of Sydney, New South Wales, 2000, Australia"

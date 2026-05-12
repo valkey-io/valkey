@@ -22,12 +22,8 @@ HEADERS = $(filter-out $(INCLUDE_DIR)/tls.h $(INCLUDE_DIR)/rdma.h, $(wildcard $(
 # compatible implementations (like Valkey's).
 # A replaced type is not included in a built archive or shared library.
 SDS_INCLUDE_DIR ?= $(SRC_DIR)
-DICT_INCLUDE_DIR ?= $(SRC_DIR)
 ifneq ($(SDS_INCLUDE_DIR),$(SRC_DIR))
   SOURCES := $(filter-out $(SRC_DIR)/sds.c, $(SOURCES))
-endif
-ifneq ($(DICT_INCLUDE_DIR),$(SRC_DIR))
-  SOURCES := $(filter-out $(SRC_DIR)/dict.c, $(SOURCES))
 endif
 
 OBJS = $(patsubst $(SRC_DIR)/%.c,$(OBJ_DIR)/%.o,$(SOURCES))
@@ -268,10 +264,10 @@ $(RDMA_STLIBNAME): $(RDMA_OBJS)
 	$(STLIB_MAKE_CMD) $(RDMA_STLIBNAME) $(RDMA_OBJS)
 
 $(OBJ_DIR)/%.o: $(SRC_DIR)/%.c | $(OBJ_DIR)
-	$(CC) -std=c99 -pedantic $(REAL_CFLAGS) -I$(INCLUDE_DIR) -I$(SDS_INCLUDE_DIR) -I$(DICT_INCLUDE_DIR) -MMD -MP -c $< -o $@
+	$(CC) -std=c99 -pedantic $(REAL_CFLAGS) -I$(INCLUDE_DIR) -I$(SDS_INCLUDE_DIR) -MMD -MP -c $< -o $@
 
 $(OBJ_DIR)/%.o: $(TEST_DIR)/%.c | $(OBJ_DIR)
-	$(CC) -std=c99 -pedantic $(REAL_CFLAGS) -I$(INCLUDE_DIR) -I$(SDS_INCLUDE_DIR) -I$(DICT_INCLUDE_DIR) -I$(SRC_DIR) -MMD -MP -c $< -o $@
+	$(CC) -std=c99 -pedantic $(REAL_CFLAGS) -I$(INCLUDE_DIR) -I$(SDS_INCLUDE_DIR) -I$(SRC_DIR) -MMD -MP -c $< -o $@
 
 $(TEST_DIR)/%: $(OBJ_DIR)/%.o $(STLIBNAME) $(TLS_STLIB)
 	$(CC) -o $@ $< $(RDMA_STLIB) $(STLIBNAME) $(TLS_STLIB) $(REAL_LDFLAGS) $(TEST_LDFLAGS)

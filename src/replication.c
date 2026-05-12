@@ -712,7 +712,9 @@ void replicationFeedMonitors(client *c, list *monitors, int dictid, robj **argv,
     }
 
     for (j = 0; j < argc; j++) {
-        if (argv[j]->encoding == OBJ_ENCODING_INT) {
+        if (clientCommandArgShouldBeRedacted(c, j)) {
+            cmdrepr = sdscatrepr(cmdrepr, (char *)objectGetVal(shared.redacted), sdslen(objectGetVal(shared.redacted)));
+        } else if (argv[j]->encoding == OBJ_ENCODING_INT) {
             cmdrepr = sdscatprintf(cmdrepr, "\"%ld\"", (long)objectGetVal(argv[j]));
         } else {
             cmdrepr = sdscatrepr(cmdrepr, (char *)objectGetVal(argv[j]), sdslen(objectGetVal(argv[j])));
@@ -1614,6 +1616,14 @@ int replicaPutOnline(client *replica) {
 void replicaStartCommandStream(client *replica) {
     serverAssert(!(replica->flag.repl_rdbonly));
     replica->repl_data->repl_start_cmd_stream_on_ack = 0;
+
+    /* If the replication stream is empty, send a PING so that replication
+     * offset becomes non-zero. In cluster mode, this allows replicas to be
+     * reported as available in CLUSTER SLOTS/SHARDS right away. */
+    if (server.primary_repl_offset == 0) {
+        robj *ping_argv[1] = {shared.ping};
+        replicationFeedReplicas(-1, ping_argv, 1);
+    }
 
     putClientInPendingWriteQueue(replica);
 }
@@ -2613,6 +2623,11 @@ int replicaLoadPrimaryRDBFromDisk(rdbSaveInfo *rsi) {
 /* Asynchronously read the SYNC payload we receive from a primary, parse it,
  * and load it directly to memory without going through the disk */
 void replicaReceiveRDBFromPrimaryToMemory(connection *conn) {
+    /* During full sync, the functions engine is freed right before loading
+     * the RDB. To avoid this happening while a function is still running,
+     * delay full sync processing until it finishes. */
+    if (isInsideYieldingLongCommand()) return;
+
     char buf[PROTO_IOBUF_LEN];
     int ret;
     rdbSaveInfo rsi = RDB_SAVE_INFO_INIT;

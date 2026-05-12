@@ -30,10 +30,14 @@ start_cluster 1 0 {tags {external:skip cluster}} {
         assert_error "*Invalid cursor*" {R 0 clusterscan "0-{0}"}
     }
 
-    test "CLUSTERSCAN rejects unknown options" {
+    test "CLUSTERSCAN rejects invalid options" {
         set valid_cursor "0-{06S}-0"
         assert_error "*syntax*" {R 0 clusterscan $valid_cursor UNKNOWNOPTION}
         assert_error "*syntax*" {R 0 clusterscan $valid_cursor COUNT 10 BADOPTION}
+        assert_error "*syntax*" {R 0 clusterscan 0 COUNT 0}
+        assert_error "*syntax*" {R 0 clusterscan 0 COUNT -1}
+        assert_error "*value is not an integer or out of range*" {R 0 clusterscan 0 COUNT not-an-integer}
+        assert_error "*unknown type name*" {R 0 clusterscan 0 TYPE notatype}
     }
 
     test "CLUSTERSCAN with SLOT restricts to single slot" {
@@ -346,51 +350,61 @@ start_cluster 3 0 {tags {external:skip cluster}} {
 
     test "CLUSTERSCAN fingerprint validation" {
         set cluster [valkey_cluster 127.0.0.1:[srv 0 port]]
-        
-        set 0_slot_tag "{06S}"
-        set 1_slot_tag "{Qi}"
 
-
-        # Load keys into slot 0
+        # slot 0, 8192, 16000 are the three slots we will use for this test
         for {set i 0} {$i < 50} {incr i} {
-            $cluster set "$0_slot_tag:$i" "value:$i"
-            $cluster set "$1_slot_tag:$i" "value:$i" 
+            $cluster set "fingerprint:{06S}:$i" "value:$i"
+            $cluster set "fingerprint:{8YG}:$i" "value:$i"
+            $cluster set "fingerprint:{he}:$i" "value:$i"
         }
 
-        set res [$cluster clusterscan 0]
-        set cursor [lindex $res 0]
-
-        # Assert that fp is 0
-        assert_match "0-*-*" $cursor
-
-        # Assert to scan slot 0 only and assert that fp reset upon slot 1
-        set max_loops 10000
-        set iterations 0
-        while {$cursor ne "0-{Qi}-0" && $iterations < $max_loops} {
-            set res [$cluster clusterscan $cursor]
-            set cursor [lindex $res 0]
-            incr iterations
-        }
-        assert {$iterations < $max_loops} 
-
-         # Ensure that local cursor is ignored when fp is 0
-        set cursor "0-{Qi}-09393399393"
+        set max_loops 1000
+        set cursor "0"
         set keys {}
-        set max_loops 10000
+        set fps {}
         set iterations 0
-        while {$cursor ne "0" && $iterations < $max_loops} {
-            set res [$cluster clusterscan $cursor slot 1]
+        while {$iterations < $max_loops} {
+            set res [$cluster clusterscan $cursor match "fingerprint:*" ]
             set cursor [lindex $res 0]
             foreach k [lindex $res 1] {
                lappend keys $k
             }
             incr iterations
+            set fp [string range $cursor 0 [expr {[string first "-" $cursor] - 1}]]
+            if {$fp ne "0"} {
+                lappend fps $fp
+            }
+
+            if {$cursor eq "0"} {
+                break
+            }
         }
         assert {$iterations < $max_loops}
 
-        assert {[llength $keys] > 1}
-        assert {[llength $keys] < 300}
+        # Assert all keys are returned
+        assert_equal [llength $keys] 150
 
+        # Assert different finger print for different slots
+        set fps [lsort -unique $fps]
+        assert {[llength $fps] >= 3}
+
+        # Assert that the local cursor is ignored when finger print is 0
+        set cursor "0-{he}-09393399393"
+        set res [$cluster clusterscan $cursor match "fingerprint:*" count 100]
+        set keys [lindex $res 1]
+        assert_equal [llength $keys] 50
+
+        $cluster close
+    }
+
+    # Verify CLUSTERSCAN range end at non 64-bit aligned slot boundary.
+    # With 3 shards slot ownership is 0-5461, 5462-10922, 10923-16383.
+    test "CLUSTERSCAN cursor advances to next shard at non 64 bit aligned boundary" {
+        set cluster [valkey_cluster 127.0.0.1:[srv 0 port]]
+
+        set res [$cluster clusterscan 0-{06S}-0 COUNT 20000]
+        set cur [lindex $res 0]
+        assert_equal [$cluster cluster keyslot $cur] 5462
         $cluster close
     }
 }
@@ -503,6 +517,69 @@ start_cluster 2 0 {tags {external:skip cluster}} {
         # CLUSTERSCAN with two SLOT option should result in error
         assert_error "*SLOT option can only be specified once*" {R $slot0_node clusterscan 0-{06S}-0 SLOT 0 SLOT 0}
     }
+
+    test "CLUSTERSCAN range scanning and cursor hashtag correctness" {
+        # slot 50 = {4ZG}, slot 100 = {0or} — both on node 0.
+        R 0 set "{4ZG}:key" "value"
+        R 0 set "{0or}:key" "value"
+
+        # Both slots scanned in single call (range scan, default count > 2 keys)
+        set res [R 0 clusterscan "0-{4ZG}-0"]
+        set keys [lsort [lindex $res 1]]
+        set cursor [lindex $res 0]
+
+        # Both keys from slot 50 and 100 returned in one call
+        assert_equal [llength $keys] 2
+        assert_equal [lindex $keys 0] "{0or}:key"
+        assert_equal [lindex $keys 1] "{4ZG}:key"
+
+        # Cursor is cross-node transition
+        assert_match "0-*-0" $cursor
+
+        # Now scan happens one slot at a time
+        set res [R 0 clusterscan "0-{4ZG}-0" COUNT 1]
+        set keys [lindex $res 1]
+        set cursor [lindex $res 0]
+
+        # Found key from slot 50
+        assert_equal [lindex $keys 0] "{4ZG}:key"
+
+        # Cursor jumped to slot 100 (next non-empty slot), not slot 51.
+        assert_match "*-{0or}-*" $cursor
+        assert_not_equal $cursor "0"
+
+        # Continue: scan slot 100
+        set res [R 0 clusterscan $cursor]
+        set keys [lindex $res 1]
+        set cursor [lindex $res 0]
+
+        assert_equal [lindex $keys 0] "{0or}:key"
+
+        # Migrate slot 51 this breaks contiguous range at slot 50
+        set source_id [R 0 cluster myid]
+        set target_id [R 1 cluster myid]
+        R 0 cluster setslot 51 migrating $target_id
+        R 1 cluster setslot 51 importing $source_id
+        R 0 cluster setslot 51 node $target_id
+        R 1 cluster setslot 51 node $target_id
+
+        # Re-scan from slot 50 — range now ends at 50 (slot 51 on node 1)
+        set res [R 0 clusterscan "0-{4ZG}-0"]
+        set keys [lindex $res 1]
+        set cursor [lindex $res 0]
+
+        assert_equal [lindex $keys 0] "{4ZG}:key"
+        # Cross-node transition to slot 51 ({6od})
+        assert_equal $cursor "0-{6od}-0"
+
+        # Validate final slot of the cluster
+        R 1 set "{6ZJ}:key" "value"
+        set res [R 1 clusterscan "0-{6ZJ}-0"]
+        set keys [lindex $res 1]
+        set cursor [lindex $res 0]
+        assert_equal [lindex $keys 0] "{6ZJ}:key"
+        assert_equal $cursor "0"
+    }
 }
 
 # CLUSTERSCAN CLUSTERDOWN test - separate cluster to test unassigned slots
@@ -530,5 +607,105 @@ start_cluster 2 0 {tags {external:skip cluster}} {
         } else {
             fail "Expected CLUSTERDOWN error"
         }
+    }
+}
+
+proc scan_interleaved_clusterscan {primary replica args} {
+    set cursor "0-{06S}-0"
+    set keys {}
+    set toggle [randomInt 2]
+    while {1} {
+        if {$toggle == 0} {
+            set res [$primary clusterscan $cursor {*}$args]
+        } else {
+            set res [$replica clusterscan $cursor {*}$args]
+        }
+        lappend keys {*}[lindex $res 1]
+        set cursor [lindex $res 0]
+        if {$cursor eq "0"} break
+        set toggle [expr {1 - $toggle}]
+    }
+    return $keys
+}
+
+# Nodes with the same hash-seed produce the same fingerprint, so
+# CLUSTERSCAN cursors can be exchanged between primary and replica.
+start_cluster 1 1 {tags {external:skip cluster} overrides {hash-seed "fingerprint-seed"}} {
+    test "CLUSTERSCAN fingerprint is consistent across nodes with same hash-seed" {
+        set n 500
+        for {set i 0} {$i < $n} {incr i} {
+            R 0 set "{06S}:fp:$i" "val"
+        }
+        wait_for_condition 200 50 {
+            [R 1 dbsize] == $n
+        } else {
+            fail "Replica did not sync"
+        }
+
+        R 1 readonly
+
+        # Verify fingerprints match directly.
+        set primary_res [R 0 clusterscan "0-{06S}-0" SLOT 0 COUNT 1]
+        set replica_res [R 1 clusterscan "0-{06S}-0" SLOT 0 COUNT 1]
+        set primary_fp [string range [lindex $primary_res 0] 0 [expr {[string first "-" [lindex $primary_res 0]] - 1}]]
+        set replica_fp [string range [lindex $replica_res 0] 0 [expr {[string first "-" [lindex $replica_res 0]] - 1}]]
+        assert_equal $primary_fp $replica_fp
+
+        # Verify fingerprints match when interleaving primary and replica scans.
+        set keys [scan_interleaved_clusterscan [srv 0 client] [srv -1 client] SLOT 0]
+        set keys [lsort -unique $keys]
+        assert_equal $n [llength $keys]
+    }
+
+    test "CLUSTERSCAN cursor survives failover with same hash-seed" {
+        R 0 flushall
+        set n 500
+        for {set i 0} {$i < $n} {incr i} {
+            R 0 set "{06S}:fo:$i" "val"
+        }
+        wait_for_condition 200 50 {
+            [R 1 dbsize] == $n
+        } else {
+            fail "Replica did not sync"
+        }
+
+        # Partial scan on old primary.
+        set cursor "0-{06S}-0"
+        set keys_before {}
+        while {1} {
+            set res [R 0 clusterscan $cursor SLOT 0 COUNT 10]
+            set cursor [lindex $res 0]
+            lappend keys_before {*}[lindex $res 1]
+            if {[llength $keys_before] > 0 && $cursor ne "0"} break
+        }
+
+        # Extract fingerprint from old primary's cursor.
+        set old_primary_fp [string range $cursor 0 [expr {[string first "-" $cursor] - 1}]]
+
+        # Failover: replica becomes new primary.
+        R 1 cluster failover
+        wait_for_condition 1000 50 {
+            [s 0 role] == "slave" &&
+            [s -1 role] == "master"
+        } else {
+            fail "Failover did not happen"
+        }
+
+        # Verify new primary produces the same fingerprint.
+        set res [R 1 clusterscan "0-{06S}-0" SLOT 0 COUNT 1]
+        set new_primary_fp [string range [lindex $res 0] 0 [expr {[string first "-" [lindex $res 0]] - 1}]]
+        assert_equal $old_primary_fp $new_primary_fp
+
+        # Continue on new primary with the old cursor.
+        set keys_after {}
+        while {$cursor ne "0"} {
+            set res [R 1 clusterscan $cursor SLOT 0 COUNT 100]
+            set cursor [lindex $res 0]
+            lappend keys_after {*}[lindex $res 1]
+        }
+
+        # Verify all keys are present.
+        set all_keys [lsort -unique [concat $keys_before $keys_after]]
+        assert_equal $n [llength $all_keys]
     }
 }

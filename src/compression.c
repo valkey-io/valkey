@@ -136,6 +136,10 @@ bool streamDecompressorFrameDone(const streamDecompressor *sd) {
     return sd && sd->frame_done;
 }
 
+size_t streamDecompressorInputHint(const streamDecompressor *sd) {
+    return sd ? sd->input_hint : 0;
+}
+
 size_t streamCompressOutputBound(const streamCompressor *sc, size_t input_len) {
     if (!sc) return 0;
     const compressionCodecImpl *codec_impl = compressionCodecImplForAlgo(sc->algo);
@@ -170,6 +174,10 @@ ssize_t streamDecompressFeed(streamDecompressor *sd,
     if (sd->errored) return -1;
     *input_consumed = 0;
     if (sd->frame_done) return 0;
+    if (input_len > 0 && !input) {
+        sd->errored = true;
+        return -1;
+    }
     /* Zero output capacity is a caller bug — returning 0 with no progress
      * would cause streaming loops to spin forever. */
     if (!output || output_capacity == 0) {

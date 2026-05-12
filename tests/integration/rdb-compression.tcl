@@ -211,8 +211,9 @@ start_server {overrides {save "" enable-debug-command local}} {
     }
 
     test {Invalid compression algo config is rejected} {
-        catch {r config set rdb-compression-algo snappy} err
-        assert_match "*argument(s) must be one of the following: lzf, lz4*" $err
+        assert_error "*argument(s) must be one of the following: lzf, lz4*" {
+            r config set rdb-compression-algo snappy
+        }
     }
 
     test {RDB compression configs survive CONFIG REWRITE and restart} {
@@ -247,10 +248,9 @@ start_server {overrides {save "" enable-debug-command local}} {
         assert_equal [string repeat "payload42 " 200] [r get cksum:42]
     }
 
-    test {Partial VKCS snapshot copied from an interrupted BGSAVE is rejected on load} {
+    test {Truncated VKCS snapshot is rejected on load} {
         r config set rdbcompression yes
         r config set rdb-compression-algo lz4
-        r config set rdb-key-save-delay 10000
         r flushall
         set noisy_payload ""
         for {set j 0} {$j < 32768} {incr j} {
@@ -260,51 +260,24 @@ start_server {overrides {save "" enable-debug-command local}} {
             r set "partial:$i" "${noisy_payload}:$i"
         }
 
-        assert_match {*Background saving started*} [r bgsave]
-        wait_for_condition 200 10 {
-            [s rdb_bgsave_in_progress] eq 1
-        } else {
-            r config set rdb-key-save-delay 0
-            fail "BGSAVE did not start in time"
-        }
+        assert_equal "OK" [r save]
+        set rdbfile [dump_rdb_path r]
+        assert_equal "VKCS" [string range [read_binary_file_prefix $rdbfile 8] 0 3]
 
-        wait_for_condition 200 10 {
-            [get_child_pid 0] ne ""
-        } else {
-            r config set rdb-key-save-delay 0
-            fail "Timed out waiting for BGSAVE child pid"
-        }
-        set child_pid [get_child_pid 0]
-        set dir [lindex [r config get dir] 1]
-        set temp_rdb [file join $dir temp-${child_pid}.rdb]
-        set partial_rdb [file join $dir partial-vkcs.rdb]
-        wait_for_condition 500 10 {
-            [file exists $temp_rdb] && [file size $temp_rdb] > 4096
-        } else {
-            r config set rdb-key-save-delay 0
-            catch {exec kill -9 $child_pid}
-            fail "Timed out waiting for partial VKCS snapshot"
-        }
+        set truncated [read_binary_file_prefix $rdbfile [expr {[file size $rdbfile] / 2}]]
+        set fd [open $rdbfile w]
+        fconfigure $fd -translation binary
+        puts -nonewline $fd $truncated
+        close $fd
 
-        file copy -force $temp_rdb $partial_rdb
-        assert_equal "VKCS" [string range [read_binary_file_prefix $partial_rdb 8] 0 3]
-
-        catch {exec kill -9 $child_pid}
-        wait_for_condition 500 10 {
-            [s rdb_bgsave_in_progress] eq 0
-        } else {
-            r config set rdb-key-save-delay 0
-            fail "Interrupted BGSAVE child was not collected in time"
-        }
-        r config set rdb-key-save-delay 0
-
-        file copy -force $partial_rdb [dump_rdb_path r]
         catch {r debug reload nosave} err
         assert_match "*Error*" $err
     }
 
     test {LZ4 compressed RDB detects tail corruption when codec checksums are enabled} {
+        r config set rdbcompression yes
         r config set rdb-compression-algo lz4
+        assert_equal "yes" [lindex [r config get rdbchecksum] 1]
         r flushall
         for {set i 0} {$i < 100} {incr i} {
             r set "footer:$i" [string repeat "payload$i " 100]
@@ -454,9 +427,7 @@ start_server {tags {"rdb-compression repl external:skip"}} {
             }
 
             assert_equal [string repeat "payload42 " 40] [$replica get repl:42]
-        }
 
-        test {Incremental replication continues after LZ4 full sync} {
             $primary set repl:post-sync "after-sync"
             wait_for_condition 50 100 {
                 [$replica get repl:post-sync] eq "after-sync"
@@ -496,8 +467,27 @@ start_server {tags {"rdb-compression repl external:skip"}} {
 set cluster_bus_port [find_available_port $::baseport $::portcount]
 start_server [list tags {"rdb-compression cluster external:skip singledb"} overrides [list save "" cluster-enabled yes cluster-port $cluster_bus_port]] {
     test {RDB compression config works in cluster mode} {
+        r config set rdbcompression yes
         r config set rdb-compression-algo lz4
+        assert_equal "OK" [r cluster addslotsrange 0 16383]
+        wait_for_condition 50 100 {
+            [getInfoProperty [r cluster info] cluster_state] eq "ok"
+        } else {
+            fail "Cluster did not become writable"
+        }
+        assert_equal "OK" [r cluster saveconfig]
+        r set cluster-rdb-compression value
         assert_equal "OK" [r save]
+        assert_equal "VKCS" [string range [read_dump_rdb_header_bytes r] 0 3]
+
+        restart_server 0 true false
+        wait_for_condition 50 100 {
+            [getInfoProperty [r cluster info] cluster_state] eq "ok"
+        } else {
+            fail "Cluster did not become writable after restart"
+        }
+
+        assert_equal "value" [r get cluster-rdb-compression]
     }
 }
 

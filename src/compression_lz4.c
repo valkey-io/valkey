@@ -56,6 +56,7 @@ int compressionLz4DecompressorInit(streamDecompressor *sd) {
     if (LZ4F_isError(err)) return -1;
 
     sd->ctx = dctx;
+    sd->input_hint = LZ4F_HEADER_SIZE_MIN;
     return 0;
 }
 
@@ -177,6 +178,7 @@ ssize_t compressionLz4DecompressFeed(streamDecompressor *sd,
         return -1;
     }
     *input_consumed = src_size;
+    sd->input_hint = ret;
     if (ret == 0) sd->frame_done = true;
     if (dst_size > (size_t)SSIZE_MAX) {
         sd->errored = true;

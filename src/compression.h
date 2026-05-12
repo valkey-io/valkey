@@ -46,13 +46,14 @@ typedef struct {
 /* --- Streaming decompressor context --- */
 typedef struct {
     compressionAlgo algo;
-    void *ctx;       /* Private codec-specific decompressor context. */
-    bool errored;    /* Permanently failed — algorithm state is undefined after
-                      * an error. All subsequent streamDecompressFeed calls
-                      * return -1 immediately until reinitialized. */
-    bool frame_done; /* Set when the codec frame is fully decoded.
-                      * Subsequent streamDecompressFeed calls return 0
-                      * immediately (no more output). */
+    void *ctx;         /* Private codec-specific decompressor context. */
+    bool errored;      /* Permanently failed — algorithm state is undefined after
+                        * an error. All subsequent streamDecompressFeed calls
+                        * return -1 immediately until reinitialized. */
+    bool frame_done;   /* Set when the codec frame is fully decoded.
+                        * Subsequent streamDecompressFeed calls return 0
+                        * immediately (no more output). */
+    size_t input_hint; /* Preferred compressed bytes for next feed when known. */
 } streamDecompressor;
 
 /* Returns true if the algorithm supports streaming codec framing. */
@@ -73,6 +74,9 @@ void streamDecompressorDestroy(streamDecompressor *sd);
 
 /* Returns true when the codec frame has been fully decoded. */
 bool streamDecompressorFrameDone(const streamDecompressor *sd);
+/* Returns the preferred compressed input size for the next decoder feed, or 0
+ * when the codec has no current hint. */
+size_t streamDecompressorInputHint(const streamDecompressor *sd);
 
 /* Return upper bound on compressed output size.
  * The bound is conservative: it includes frame header, data, and flush/end

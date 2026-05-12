@@ -182,16 +182,18 @@ tags {"repl external:skip"} {
                 $replica replicaof $primary_host $primary_port
                 wait_for_sync $replica
 
-                set replica_rdb [file join [lindex [$replica config get dir] 1] dump.rdb]
                 wait_for_condition 50 100 {
-                    [file exists $replica_rdb]
+                    [log_file_matches $replica_log "*uses streaming compression, falling back to BGREWRITEAOF*"]
                 } else {
-                    fail "Replica removed the synced RDB before BGREWRITEAOF fallback completed"
+                    fail "Expected streaming-compressed sync RDB fallback log not found"
                 }
 
-                after 1000
                 assert {![log_file_matches $replica_log "*Reused RDB file from primary sync as AOF base file*"]}
                 waitForBgrewriteaof $replica
+                set manifest_path [get_aof_manifest_path $replica]
+                set base_name [get_cur_base_aof_name $manifest_path]
+                assert {$base_name ne ""}
+                assert {[string match "*.rdb" $base_name]}
 
                 for {set i 40} {$i < 60} {incr i} {
                     $primary set "lz4-key:$i" "value:$i"

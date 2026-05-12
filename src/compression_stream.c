@@ -605,16 +605,19 @@ static int streamReaderDrainCompressedBuf(streamReader *t,
     *out_written = 0;
     while (t->compressed_buf_len > 0 && *out_written < out_size) {
         size_t consumed = 0;
+        size_t feed_len = t->compressed_buf_len;
+        size_t input_hint = streamDecompressorInputHint(&t->decompressor);
+        if (input_hint > 0 && feed_len > input_hint) feed_len = input_hint;
         ssize_t produced = streamDecompressFeed(
             &t->decompressor,
             out + *out_written, out_size - *out_written,
             t->compressed_buf + t->compressed_buf_pos,
-            t->compressed_buf_len, &consumed);
+            feed_len, &consumed);
         if (produced < 0) {
             streamReaderSetError(t, STREAM_READER_ERROR_CORRUPT);
             return -1;
         }
-        if (consumed > t->compressed_buf_len ||
+        if (consumed > feed_len ||
             (size_t)produced > out_size - *out_written) {
             streamReaderSetError(t, STREAM_READER_ERROR_CORRUPT);
             return -1;
@@ -622,6 +625,7 @@ static int streamReaderDrainCompressedBuf(streamReader *t,
         *out_written += (size_t)produced;
         t->compressed_buf_pos += consumed;
         t->compressed_buf_len -= consumed;
+        if (streamDecompressorFrameDone(&t->decompressor)) break;
         if (consumed == 0 && produced == 0) break;
     }
     if (t->compressed_buf_len == 0) t->compressed_buf_pos = 0;
@@ -652,7 +656,11 @@ static size_t streamReaderCompressedBufTailSpace(streamReader *t) {
 }
 
 static int streamReaderRefillCompressedBuf(streamReader *t) {
+    if (streamDecompressorFrameDone(&t->decompressor)) return 0;
+
     size_t read_size = streamReaderCompressedBufTailSpace(t);
+    size_t input_hint = streamDecompressorInputHint(&t->decompressor);
+    if (input_hint > 0 && read_size > input_hint) read_size = input_hint;
     if (read_size > (size_t)SSIZE_MAX) read_size = (size_t)SSIZE_MAX;
     if (read_size == 0) return -1;
 
@@ -780,6 +788,10 @@ int streamReaderValidateEnd(streamReader *t) {
     if (!t) return -1;
     if (streamReaderProbe(t) != 0) return -1;
     if (!t->probe.compressed) return 0;
+    if (streamReaderDecompressedBufAvail(t) > 0) {
+        streamReaderSetError(t, STREAM_READER_ERROR_CORRUPT);
+        return -1;
+    }
 
     while (!streamDecompressorFrameDone(&t->decompressor)) {
         ssize_t nread = streamReaderRead(t, buf, sizeof(buf));

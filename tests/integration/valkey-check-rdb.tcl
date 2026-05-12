@@ -177,8 +177,7 @@ tags {"check-rdb network external:skip logreqres:skip"} {
             } result
             assert_match {*RDB file was saved with checksum disabled: skipped checksum for this transfer.*} $result
             assert_match {*RDB looks OK!*} $result
-
-            r config set rdb-compression-algo lzf
+            assert_no_match {*Checksum OK*} $result
         }
     }
 }

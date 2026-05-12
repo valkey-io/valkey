@@ -61,7 +61,7 @@ tags {"check-rdb network external:skip logreqres:skip"} {
                 exec $::VALKEY_CHECK_RDB_BIN $dump_rdb
             } result
             assert_match {*RDB looks OK!*} $result
-            assert_match {*RDB file was saved with checksum disabled: skipped checksum for this transfer.*} $result
+            assert_match {*Skipping logical RDB checksum for streaming-compressed input.*} $result
             assert_no_match {*Checksum OK*} $result
 
             # Keep subsequent tests on default path unless they explicitly change it.
@@ -175,7 +175,7 @@ tags {"check-rdb network external:skip logreqres:skip"} {
             catch {
                 exec $::VALKEY_CHECK_RDB_BIN $dump_rdb
             } result
-            assert_match {*RDB file was saved with checksum disabled: skipped checksum for this transfer.*} $result
+            assert_match {*Skipping logical RDB checksum for streaming-compressed input.*} $result
             assert_match {*RDB looks OK!*} $result
             assert_no_match {*Checksum OK*} $result
         }

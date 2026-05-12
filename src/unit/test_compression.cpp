@@ -133,6 +133,30 @@ static ssize_t flakyReaderRead(void *ctx, void *buf, size_t len) {
     return (ssize_t)n;
 }
 
+static size_t discardRioWrite(rio *r, const void *buf, size_t len) {
+    (void)r;
+    (void)buf;
+    (void)len;
+    return 1;
+}
+
+static off_t discardRioTell(rio *r) {
+    return (off_t)r->processed_bytes;
+}
+
+static int failRioFlush(rio *r) {
+    (void)r;
+    return 0;
+}
+
+static void initFailingFlushRio(rio *r) {
+    memset(r, 0, sizeof(*r));
+    r->write = discardRioWrite;
+    r->tell = discardRioTell;
+    r->flush = failRioFlush;
+    r->type = RIO_TYPE_BUFFER;
+}
+
 /* ===================================================================
  * Streaming compression/decompression tests
  * =================================================================== */
@@ -1152,6 +1176,38 @@ TEST_F(CompressionTest, compressRioCodecChecksumDoesNotInstallRdbChecksum) {
     ASSERT_EQ(compressRioFinish(&cr), 0);
     compressRioDestroy(&cr);
     sdsfree(buffer_rio.io.buffer.ptr);
+}
+
+TEST_F(CompressionTest, compressRioFlushFailureSetsWriteError) {
+    rio inner;
+    initFailingFlushRio(&inner);
+
+    streamWriterConfig cfg = makeWriterConfig(ALGO_LZ4, 0, STREAM_KIND_RDB);
+    compressRio cr;
+    ASSERT_EQ(rioInitWithCompress(&cr, &inner, &cfg), 0);
+
+    const char *payload = "flush failure should latch rio write error";
+    ASSERT_NE(rioWrite((rio *)&cr, payload, strlen(payload)), 0u);
+    ASSERT_EQ(rioFlush((rio *)&cr), 0);
+    ASSERT_TRUE(((rio *)&cr)->flags & RIO_FLAG_WRITE_ERROR);
+
+    compressRioDestroy(&cr);
+}
+
+TEST_F(CompressionTest, compressRioFinishFailureSetsWriteError) {
+    rio inner;
+    initFailingFlushRio(&inner);
+
+    streamWriterConfig cfg = makeWriterConfig(ALGO_LZ4, 0, STREAM_KIND_RDB);
+    compressRio cr;
+    ASSERT_EQ(rioInitWithCompress(&cr, &inner, &cfg), 0);
+
+    const char *payload = "finish failure should latch rio write error";
+    ASSERT_NE(rioWrite((rio *)&cr, payload, strlen(payload)), 0u);
+    ASSERT_EQ(compressRioFinish(&cr), -1);
+    ASSERT_TRUE(((rio *)&cr)->flags & RIO_FLAG_WRITE_ERROR);
+
+    compressRioDestroy(&cr);
 }
 
 TEST_F(CompressionTest, rioDecoratorsPreserveInnerType) {

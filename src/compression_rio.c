@@ -88,13 +88,20 @@ static off_t compressRioTell(rio *r) {
  * This is critical because some call sites flush mid-stream. */
 static int compressRioFlush(rio *r) {
     compressRio *cr = (compressRio *)r;
-    if (!cr->writer || streamWriterIsErrored(cr->writer)) return 0;
+    if (!cr->writer || streamWriterIsErrored(cr->writer)) {
+        r->flags |= RIO_FLAG_WRITE_ERROR;
+        return 0;
+    }
     if (cr->finalized) return 1;
 
-    if (streamWriterFlush(cr->writer) != 0) return 0;
+    if (streamWriterFlush(cr->writer) != 0) {
+        r->flags |= RIO_FLAG_WRITE_ERROR;
+        return 0;
+    }
 
     if (cr->inner->flush && cr->inner->flush(cr->inner) == 0) {
         streamWriterSetError(cr->writer);
+        r->flags |= RIO_FLAG_WRITE_ERROR;
         return 0;
     }
     return 1;
@@ -124,11 +131,21 @@ int rioInitWithCompress(compressRio *cr, rio *inner, const streamWriterConfig *c
 /* Returns 0 on success, -1 if the writer or inner flush errored. */
 int compressRioFinish(compressRio *cr) {
     if (!cr) return -1;
-    if (!cr->writer) return -1;
-    if (cr->finalized) return streamWriterIsErrored(cr->writer) ? -1 : 0;
+    if (!cr->writer) {
+        cr->base.flags |= RIO_FLAG_WRITE_ERROR;
+        return -1;
+    }
+    if (cr->finalized) {
+        if (streamWriterIsErrored(cr->writer)) {
+            cr->base.flags |= RIO_FLAG_WRITE_ERROR;
+            return -1;
+        }
+        return 0;
+    }
     cr->finalized = 1;
 
     if (streamWriterFinish(cr->writer) != 0) {
+        cr->base.flags |= RIO_FLAG_WRITE_ERROR;
         return -1;
     }
 
@@ -137,8 +154,13 @@ int compressRioFinish(compressRio *cr) {
      * callers can detect it. */
     if (cr->inner->flush && cr->inner->flush(cr->inner) == 0) {
         streamWriterSetError(cr->writer);
+        cr->base.flags |= RIO_FLAG_WRITE_ERROR;
     }
-    return streamWriterIsErrored(cr->writer) ? -1 : 0;
+    if (streamWriterIsErrored(cr->writer)) {
+        cr->base.flags |= RIO_FLAG_WRITE_ERROR;
+        return -1;
+    }
+    return 0;
 }
 
 /* Free writer context and buffers. Does NOT finalize the frame.

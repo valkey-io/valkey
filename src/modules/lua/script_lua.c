@@ -48,8 +48,14 @@
 /* Forward declarations of module API functions not publicly exposed */
 extern int VM_CallArgv(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc, int flags, const ValkeyModuleReplyHandlers *resp_handlers, void *reply_ctx);
 extern int VM_ReplyRaw(ValkeyModuleCtx *ctx, const char *proto, size_t proto_len);
+extern size_t VM_StringLength(const ValkeyModuleString *str);
+extern int VM_StringIsSingleOwner(const ValkeyModuleString *str);
+extern ValkeyModuleString *VM_ReplaceString(ValkeyModuleString *str, const char *new_str, size_t new_len);
 #define ValkeyModule_CallArgv VM_CallArgv
 #define ValkeyModule_ReplyRaw VM_ReplyRaw
+#define ValkeyModule_StringLength VM_StringLength
+#define ValkeyModule_StringIsSingleOwner VM_StringIsSingleOwner
+#define ValkeyModule_ReplaceString VM_ReplaceString
 
 /* Cache of recently used small arguments to avoid malloc calls. */
 #define LUA_CMD_OBJCACHE_SIZE 32

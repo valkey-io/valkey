@@ -14879,9 +14879,6 @@ void moduleRegisterCoreAPI(void) {
     REGISTER_API(CreateStringPrintf);
     REGISTER_API(FreeString);
     REGISTER_API(StringPtrLen);
-    REGISTER_API(StringLength);
-    REGISTER_API(StringIsSingleOwner);
-    REGISTER_API(ReplaceString);
     REGISTER_API(AutoMemory);
     REGISTER_API(Replicate);
     REGISTER_API(ReplicateVerbatim);

@@ -140,8 +140,9 @@ void IOThreadsBeforeSleep(long long current_time) {
 #define IO_SAMPLE_RATE_MS 10
 #define IO_IGNITION_EVENTS 4
 /* Start using I/O threads when the main thread is active for more than the below
- * defined percentage of the time.
- * TODO: tune this threshold via comprehensive benchmarking. */
+ * defined percentage of the time. This number is picked somewhat arbitrarily but
+ * needed to be low enough to make sure we start the next thread quickly while not
+ * starting too many threads unnecessarily to avoid contention. */
 #define IO_IGNITION_MAIN_THREAD_ACTIVE_PERCENT 30
 #define BATCH_SIZE 32
 

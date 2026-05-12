@@ -1661,7 +1661,7 @@ void clusterCommandFlushslot(client *c) {
  * but additional factors (e.g., hash table type) can be mixed in later.
  *
  * Fingerprint is encoded using consecutive ASCII values starting from '0'
- * (48 to 111), each represenenting 6 bits. This encoding avoids '-', '{', '}'
+ * (48 to 111), each representing 6 bits. This encoding avoids '-', '{', '}'
  * which are part of the cursor.
  *
  * Returns a non zero 32-bit fingerprint. 0 is reserved for cross-node cursor */
@@ -1669,7 +1669,10 @@ static const char *clusterscanFingerprint(void) {
     static char cached_fp[7];
     if (cached_fp[0]) return cached_fp;
 
-    uint64_t *seed = (uint64_t *)hashtableGetHashFunctionSeed();
+    /* Use configurable_hash_seed (derived from hash-seed config) so that nodes
+     * sharing the same hash-seed produce the same fingerprint, allowing cursors
+     * to survive failover without restarting the scan. */
+    uint64_t *seed = (uint64_t *)getConfigurableHashSeed();
     uint64_t hash = wangHash64(seed[0] ^ seed[1]);
 
     /* Truncating to 32 bit instead of 64 bit */

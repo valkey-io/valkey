@@ -6,6 +6,7 @@
         "since": "9.1.0",
         "arity": -2,
         "function": "clusterscanCommand",
+        "get_keys_function": "clusterscanGetKeys",
         "command_flags": [
             "READONLY",
             "TOUCHES_ARBITRARY_KEYS"

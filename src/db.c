@@ -3029,6 +3029,29 @@ int bitfieldGetKeys(struct serverCommand *cmd, robj **argv, int argc, getKeysRes
     return 1;
 }
 
+/* CLUSTERSCAN getkeys function: when the cursor is "0", no slot routing is
+ * needed (any node can handle the initial scan call). For non-"0" cursors the
+ * format is "<fingerprint>-<hashtag>-<local_cursor>" and the cursor itself
+ * contains a hashtag that routes to the correct slot, so we return it as a
+ * "key" for the cluster routing layer to compute the correct target node. */
+int clusterscanGetKeys(struct serverCommand *cmd, robj **argv, int argc, getKeysResult *result) {
+    UNUSED(cmd);
+    UNUSED(argc);
+
+    /* Initial cursor: no routing needed, handle on any node. */
+    if (strcmp(objectGetVal(argv[1]), "0") == 0) {
+        result->numkeys = 0;
+        return 0;
+    }
+
+    /* Non-"0" cursor contains {hashtag} for routing. */
+    keyReference *keys = getKeysPrepareResult(result, 1);
+    keys[0].pos = 1;
+    keys[0].flags = 0;
+    result->numkeys = 1;
+    return 1;
+}
+
 int *selectDbIdArgs(robj **argv, int argc, int *count) {
     if (argc < 2) return NULL;
 

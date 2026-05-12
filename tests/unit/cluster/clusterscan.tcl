@@ -609,3 +609,37 @@ start_cluster 2 0 {tags {external:skip cluster}} {
         }
     }
 }
+
+start_cluster 3 3 {tags {external:skip cluster}} {
+    test "CLUSTERSCAN 0 can be executed on any node without MOVED" {
+        # Cursor "0" is the initial scan start point and does not access any
+        # slot data, so it must be handled locally by any node regardless of
+        # slot ownership or role (primary/replica).
+        for {set id 0} {$id < [llength $::servers]} {incr id} {
+            # Plain clusterscan 0
+            # slot 0 hashtag is {06S}
+            assert_equal [R $id clusterscan 0] {0-{06S}-0 {}}
+
+            # clusterscan 0 with match
+            # "valkey" slot is 7659, hashtag is {39t}
+            assert_equal [R $id clusterscan 0 match valkey] {0-{39t}-0 {}}
+
+            # clusterscan 0 with slot
+            # slot 16383 hashtag is {6ZJ}
+            assert_equal [R $id clusterscan 0 slot 16383] {0-{6ZJ}-0 {}}
+
+            # clusterscan 0 with match and slot
+            # "valkey" slot is 7659, hashtag is {39t}
+            assert_equal [R $id clusterscan 0 match valkey slot 7659] {0-{39t}-0 {}}
+
+            # clusterscan 0 with skipscan
+            # "valkey" slot is 7659, hashtag is {39t}
+            assert_equal [R $id clusterscan 0 match valkey slot 0] {0 {}}
+            assert_equal [R $id clusterscan 0 match valkey slot 5460] {0 {}}
+            assert_equal [R $id clusterscan 0 match valkey slot 5461] {0 {}}
+            assert_equal [R $id clusterscan 0 match valkey slot 10922] {0 {}}
+            assert_equal [R $id clusterscan 0 match valkey slot 10923] {0 {}}
+            assert_equal [R $id clusterscan 0 match valkey slot 16383] {0 {}}
+        }
+    }
+}

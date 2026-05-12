@@ -425,6 +425,10 @@ void setConfigurableHashSeed(uint8_t *seed) {
     memcpy(configurable_hash_seed, seed, sizeof(configurable_hash_seed));
 }
 
+uint8_t *getConfigurableHashSeed(void) {
+    return configurable_hash_seed;
+}
+
 uint64_t genHashFunctionConfigurableSeed(const char *buf, size_t len) {
     return siphash((const uint8_t *)buf, len, configurable_hash_seed);
 }

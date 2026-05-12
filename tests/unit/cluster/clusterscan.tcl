@@ -609,3 +609,103 @@ start_cluster 2 0 {tags {external:skip cluster}} {
         }
     }
 }
+
+proc scan_interleaved_clusterscan {primary replica args} {
+    set cursor "0-{06S}-0"
+    set keys {}
+    set toggle [randomInt 2]
+    while {1} {
+        if {$toggle == 0} {
+            set res [$primary clusterscan $cursor {*}$args]
+        } else {
+            set res [$replica clusterscan $cursor {*}$args]
+        }
+        lappend keys {*}[lindex $res 1]
+        set cursor [lindex $res 0]
+        if {$cursor eq "0"} break
+        set toggle [expr {1 - $toggle}]
+    }
+    return $keys
+}
+
+# Nodes with the same hash-seed produce the same fingerprint, so
+# CLUSTERSCAN cursors can be exchanged between primary and replica.
+start_cluster 1 1 {tags {external:skip cluster} overrides {hash-seed "fingerprint-seed"}} {
+    test "CLUSTERSCAN fingerprint is consistent across nodes with same hash-seed" {
+        set n 500
+        for {set i 0} {$i < $n} {incr i} {
+            R 0 set "{06S}:fp:$i" "val"
+        }
+        wait_for_condition 200 50 {
+            [R 1 dbsize] == $n
+        } else {
+            fail "Replica did not sync"
+        }
+
+        R 1 readonly
+
+        # Verify fingerprints match directly.
+        set primary_res [R 0 clusterscan "0-{06S}-0" SLOT 0 COUNT 1]
+        set replica_res [R 1 clusterscan "0-{06S}-0" SLOT 0 COUNT 1]
+        set primary_fp [string range [lindex $primary_res 0] 0 [expr {[string first "-" [lindex $primary_res 0]] - 1}]]
+        set replica_fp [string range [lindex $replica_res 0] 0 [expr {[string first "-" [lindex $replica_res 0]] - 1}]]
+        assert_equal $primary_fp $replica_fp
+
+        # Verify fingerprints match when interleaving primary and replica scans.
+        set keys [scan_interleaved_clusterscan [srv 0 client] [srv -1 client] SLOT 0]
+        set keys [lsort -unique $keys]
+        assert_equal $n [llength $keys]
+    }
+
+    test "CLUSTERSCAN cursor survives failover with same hash-seed" {
+        R 0 flushall
+        set n 500
+        for {set i 0} {$i < $n} {incr i} {
+            R 0 set "{06S}:fo:$i" "val"
+        }
+        wait_for_condition 200 50 {
+            [R 1 dbsize] == $n
+        } else {
+            fail "Replica did not sync"
+        }
+
+        # Partial scan on old primary.
+        set cursor "0-{06S}-0"
+        set keys_before {}
+        while {1} {
+            set res [R 0 clusterscan $cursor SLOT 0 COUNT 10]
+            set cursor [lindex $res 0]
+            lappend keys_before {*}[lindex $res 1]
+            if {[llength $keys_before] > 0 && $cursor ne "0"} break
+        }
+
+        # Extract fingerprint from old primary's cursor.
+        set old_primary_fp [string range $cursor 0 [expr {[string first "-" $cursor] - 1}]]
+
+        # Failover: replica becomes new primary.
+        R 1 cluster failover
+        wait_for_condition 1000 50 {
+            [s 0 role] == "slave" &&
+            [s -1 role] == "master"
+        } else {
+            fail "Failover did not happen"
+        }
+
+        # Verify new primary produces the same fingerprint.
+        set res [R 1 clusterscan "0-{06S}-0" SLOT 0 COUNT 1]
+        set new_primary_fp [string range [lindex $res 0] 0 [expr {[string first "-" [lindex $res 0]] - 1}]]
+        assert_equal $old_primary_fp $new_primary_fp
+
+        # Continue on new primary with the old cursor.
+        set keys_after {}
+        while {$cursor ne "0"} {
+            set res [R 1 clusterscan $cursor SLOT 0 COUNT 100]
+            set cursor [lindex $res 0]
+            lappend keys_after {*}[lindex $res 1]
+        }
+
+        # Verify all keys are present.
+        set all_keys [lsort -unique [concat $keys_before $keys_after]]
+        assert_equal $n [llength $all_keys]
+    }
+}

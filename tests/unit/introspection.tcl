@@ -245,19 +245,10 @@ start_server {tags {"introspection"}} {
         $c1 client setname "client-with-r"
         $c1 client capa redirect
 
-        set c2 [valkey_client]
-        $c2 client setname "client-with-k"
-        $c2 client capa primary-read
-
         set output [r client list capa r capa r]
         assert_match *client-with-r* $output
 
-        set output [r client list capa k]
-        assert_match *client-with-k* $output
-        assert_no_match *client-with-r* $output
-
         catch {$c1 close}
-        catch {$c2 close}
     }
 
     test {CLIENT KILL with IP filter} {
@@ -295,19 +286,9 @@ start_server {tags {"introspection"}} {
         $c1 client setname "killme-capa"
         $c1 client capa redirect
 
-        set c2 [valkey_client]
-        $c2 client setname "killme-capa-k"
-        $c2 client capa primary-read
-
         # Kill using capa r filter
         r client kill capa r skipme yes
         assert_error "*I/O error*" {$c1 ping}
-        # c2 should still be alive (only has k, not r)
-        assert_equal {PONG} [$c2 ping]
-
-        # Now kill using capa k filter
-        r client kill capa k skipme yes
-        assert_error "*I/O error*" {$c2 ping}
     } {}
 
     test {CLIENT KILL with NAME filter} {

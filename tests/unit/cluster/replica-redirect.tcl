@@ -57,7 +57,7 @@ start_cluster 1 1 {tags {external:skip cluster}} {
         $rd1 close
     }
 
-    test {keyless read commands execute on replica without primary-read capa} {
+    test {keyless read commands execute on replica without redirect capa} {
         # Without the capa, keyless read commands like SCAN execute locally on the replica
         # After failover, node 0 is the new replica.
         set rd [valkey_deferring_client 0]
@@ -67,9 +67,9 @@ start_cluster 1 1 {tags {external:skip cluster}} {
         $rd close
     }
 
-    test {keyless read commands are MOVED with primary-read capa} {
+    test {keyless read commands are redirected with redirect capa} {
         set rd [valkey_deferring_client 0]
-        $rd CLIENT CAPA primary-read
+        $rd CLIENT CAPA redirect
         assert_equal OK [$rd read]
 
         $rd DBSIZE
@@ -84,9 +84,9 @@ start_cluster 1 1 {tags {external:skip cluster}} {
         $rd close
     }
 
-    test {keyless read commands execute on replica with primary-read and READONLY} {
+    test {keyless read commands execute on replica with redirect capa and READONLY} {
         set rd [valkey_deferring_client 0]
-        $rd CLIENT CAPA primary-read
+        $rd CLIENT CAPA redirect
         assert_equal OK [$rd read]
         $rd READONLY
         assert_equal OK [$rd read]
@@ -99,9 +99,9 @@ start_cluster 1 1 {tags {external:skip cluster}} {
         $rd close
     }
 
-    test {non-read keyless commands are not affected by primary-read capa} {
+    test {non-read keyless commands are not affected by redirect capa} {
         set rd [valkey_deferring_client 0]
-        $rd CLIENT CAPA primary-read
+        $rd CLIENT CAPA redirect
         assert_equal OK [$rd read]
 
         # PING is not CMD_READONLY, should still work on replica
@@ -111,20 +111,20 @@ start_cluster 1 1 {tags {external:skip cluster}} {
         $rd close
     }
 
-    test {CLIENT INFO reports primary-read capa} {
+    test {CLIENT INFO reports redirect capa} {
         set rd [valkey_deferring_client 0]
-        $rd CLIENT CAPA primary-read
+        $rd CLIENT CAPA redirect
         assert_equal OK [$rd read]
 
         $rd CLIENT INFO
-        assert_match "*capa=k*" [$rd read]
+        assert_match "*capa=r*" [$rd read]
 
         $rd close
     }
 
-    test {keyless commands inside MULTI are individually MOVED with primary-read capa} {
+    test {keyless commands inside MULTI are individually redirected with redirect capa} {
         set rd [valkey_deferring_client 0]
-        $rd CLIENT CAPA primary-read
+        $rd CLIENT CAPA redirect
         assert_equal OK [$rd read]
 
         $rd MULTI
@@ -144,7 +144,7 @@ start_cluster 1 1 {tags {external:skip cluster}} {
         $rd close
     }
 
-    test {EXEC with all-keyless read commands is redirected after failover with primary-read capa} {
+    test {EXEC with all-keyless read commands is redirected after failover with redirect capa} {
         # After the earlier failover, node -1 is primary and node 0 is replica.
         # Failover back so node 0 is primary again for this test.
         R 0 CLUSTER FAILOVER
@@ -155,9 +155,9 @@ start_cluster 1 1 {tags {external:skip cluster}} {
             fail "Failover back did not happen"
         }
 
-        # Connect to node 0 (currently primary) with primary-read capa
+        # Connect to node 0 (currently primary) with redirect capa
         set rd [valkey_deferring_client 0]
-        $rd CLIENT CAPA primary-read
+        $rd CLIENT CAPA redirect
         assert_equal OK [$rd read]
 
         # Queue keyless read commands on the primary — they get QUEUED
@@ -190,17 +190,15 @@ start_cluster 1 1 {tags {external:skip cluster}} {
         $rd close
     }
 
-    test {both redirect and primary-read capas work together} {
+    test {redirect capa handles both keyed and keyless redirects} {
         set rd [valkey_deferring_client 0]
         $rd CLIENT CAPA redirect
         assert_equal OK [$rd read]
-        $rd CLIENT CAPA primary-read
-        assert_equal OK [$rd read]
 
         $rd CLIENT INFO
-        assert_match "*capa=rk*" [$rd read]
+        assert_match "*capa=r*" [$rd read]
 
-        # Keyless read is redirected via primary-read
+        # Keyless read is redirected
         $rd DBSIZE
         assert_error "REDIRECT *" {$rd read}
 

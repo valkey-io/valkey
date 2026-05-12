@@ -4409,7 +4409,6 @@ sds catClientInfoString(sds s, client *client, int hide_user_data) {
 
     p = capa;
     if (client->capa & CLIENT_CAPA_REDIRECT) *p++ = 'r';
-    if (client->capa & CLIENT_CAPA_PRIMARY_READ) *p++ = 'k';
     *p = '\0';
 
     /* Compute the total memory consumed by this client. */
@@ -4891,7 +4890,6 @@ static int validateClientCapaFilter(sds capa) {
         const char capability = capa[i];
         switch (capability) {
         case 'r':
-        case 'k':
             /* Valid capability, do nothing. */
             break;
         default:
@@ -5008,9 +5006,6 @@ static int clientMatchesCapaFilter(client *c, sds capa_filter) {
         case 'r': /* client supports redirection */
             if (!(c->capa & CLIENT_CAPA_REDIRECT)) return 0;
             break;
-        case 'k': /* client supports keyless redirection */
-            if (!(c->capa & CLIENT_CAPA_PRIMARY_READ)) return 0;
-            break;
         default:
             /* Invalid capa, return false */
             return 0;
@@ -5117,9 +5112,7 @@ void clientHelpCommand(client *c) {
         "CAPA <option> [options...]",
         "    The client claims its some capability options. Options are:",
         "    * REDIRECT",
-        "      The client can handle redirection during primary and replica failover in standalone mode.",
-        "    * PRIMARY-READ",
-        "      Redirect keyless read commands to the primary when the replica is not in READONLY mode.",
+        "      The client can handle redirection (standalone failover and keyless reads on replicas).",
         "GETREDIR",
         "    Return the client ID we are redirecting to when tracking is enabled.",
         "GETNAME",
@@ -5725,8 +5718,6 @@ void clientCapaCommand(client *c) {
     for (int i = 2; i < c->argc; i++) {
         if (!strcasecmp(objectGetVal(c->argv[i]), "redirect")) {
             c->capa |= CLIENT_CAPA_REDIRECT;
-        } else if (!strcasecmp(objectGetVal(c->argv[i]), "primary-read")) {
-            c->capa |= CLIENT_CAPA_PRIMARY_READ;
         }
     }
     addReply(c, shared.ok);

@@ -40,6 +40,7 @@ FetchContent_MakeAvailable(googletest)
 
 # Build Valkey sources as a static library for the test (C code compiled with C compiler)
 add_library(valkeylib-gtest STATIC ${VALKEY_SERVER_SRCS})
+add_dependencies(valkeylib-gtest release_header)
 target_compile_options(valkeylib-gtest PRIVATE -Og -g -fno-lto)
 target_compile_definitions(valkeylib-gtest PRIVATE "${COMPILE_DEFINITIONS}")
 target_include_directories(valkeylib-gtest PRIVATE ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/deps)

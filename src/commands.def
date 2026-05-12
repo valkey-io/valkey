@@ -2369,7 +2369,9 @@ struct COMMAND_ARG MIGRATE_Args[] = {
 
 #ifndef SKIP_CMD_HISTORY_TABLE
 /* MOVE history */
-#define MOVE_History NULL
+commandHistory MOVE_History[] = {
+{"10.0.0","added REPLACE option."},
+};
 #endif
 
 #ifndef SKIP_CMD_TIPS_TABLE
@@ -2388,6 +2390,7 @@ keySpec MOVE_Keyspecs[1] = {
 struct COMMAND_ARG MOVE_Args[] = {
 {MAKE_ARG("key",ARG_TYPE_KEY,0,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
 {MAKE_ARG("db",ARG_TYPE_INTEGER,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("replace",ARG_TYPE_PURE_TOKEN,-1,"REPLACE",NULL,"10.0.0",CMD_ARG_OPTIONAL,0,NULL)},
 };
 
 /********** OBJECT ENCODING ********************/
@@ -11879,7 +11882,7 @@ struct COMMAND_STRUCT serverCommandTable[] = {
 {MAKE_CMD("expiretime","Returns the expiration time of a key as a Unix timestamp.","O(1)","7.0.0",CMD_DOC_NONE,NULL,NULL,"generic",COMMAND_GROUP_GENERIC,EXPIRETIME_History,0,EXPIRETIME_Tips,0,expiretimeCommand,2,CMD_READONLY|CMD_FAST,ACL_CATEGORY_FAST|ACL_CATEGORY_KEYSPACE|ACL_CATEGORY_READ,NULL,EXPIRETIME_Keyspecs,1,NULL,1),.args=EXPIRETIME_Args},
 {MAKE_CMD("keys","Returns all key names that match a pattern.","O(N) with N being the number of keys in the database, under the assumption that the key names in the database and the given pattern have limited length.","1.0.0",CMD_DOC_NONE,NULL,NULL,"generic",COMMAND_GROUP_GENERIC,KEYS_History,0,KEYS_Tips,2,keysCommand,2,CMD_READONLY,ACL_CATEGORY_DANGEROUS|ACL_CATEGORY_KEYSPACE|ACL_CATEGORY_READ|ACL_CATEGORY_SLOW,NULL,KEYS_Keyspecs,0,NULL,1),.args=KEYS_Args},
 {MAKE_CMD("migrate","Atomically transfers a key from one instance to another.","This command actually executes a DUMP+DEL in the source instance, and a RESTORE in the target instance. See the pages of these commands for time complexity. Also an O(N) data transfer between the two instances is performed.","2.6.0",CMD_DOC_NONE,NULL,NULL,"generic",COMMAND_GROUP_GENERIC,MIGRATE_History,4,MIGRATE_Tips,1,migrateCommand,-6,CMD_WRITE,ACL_CATEGORY_DANGEROUS|ACL_CATEGORY_KEYSPACE|ACL_CATEGORY_SLOW|ACL_CATEGORY_WRITE,NULL,MIGRATE_Keyspecs,2,migrateGetKeys,9),.args=MIGRATE_Args},
-{MAKE_CMD("move","Moves a key to another database.","O(1)","1.0.0",CMD_DOC_NONE,NULL,NULL,"generic",COMMAND_GROUP_GENERIC,MOVE_History,0,MOVE_Tips,0,moveCommand,3,CMD_WRITE|CMD_FAST,ACL_CATEGORY_FAST|ACL_CATEGORY_KEYSPACE|ACL_CATEGORY_WRITE,moveDbIdArgs,MOVE_Keyspecs,1,NULL,2),.args=MOVE_Args},
+{MAKE_CMD("move","Moves a key to another database.","O(1)","1.0.0",CMD_DOC_NONE,NULL,NULL,"generic",COMMAND_GROUP_GENERIC,MOVE_History,1,MOVE_Tips,0,moveCommand,-3,CMD_WRITE|CMD_FAST,ACL_CATEGORY_FAST|ACL_CATEGORY_KEYSPACE|ACL_CATEGORY_WRITE,moveDbIdArgs,MOVE_Keyspecs,1,NULL,3),.args=MOVE_Args},
 {MAKE_CMD("object","A container for object introspection commands.","Depends on subcommand.","2.2.3",CMD_DOC_NONE,NULL,NULL,"generic",COMMAND_GROUP_GENERIC,OBJECT_History,0,OBJECT_Tips,0,NULL,-2,0,ACL_CATEGORY_SLOW,NULL,OBJECT_Keyspecs,0,NULL,0),.subcommands=OBJECT_Subcommands},
 {MAKE_CMD("persist","Removes the expiration time of a key.","O(1)","2.2.0",CMD_DOC_NONE,NULL,NULL,"generic",COMMAND_GROUP_GENERIC,PERSIST_History,0,PERSIST_Tips,0,persistCommand,2,CMD_WRITE|CMD_FAST,ACL_CATEGORY_FAST|ACL_CATEGORY_KEYSPACE|ACL_CATEGORY_WRITE,NULL,PERSIST_Keyspecs,1,NULL,1),.args=PERSIST_Args},
 {MAKE_CMD("pexpire","Sets the expiration time of a key in milliseconds.","O(1)","2.6.0",CMD_DOC_NONE,NULL,NULL,"generic",COMMAND_GROUP_GENERIC,PEXPIRE_History,1,PEXPIRE_Tips,0,pexpireCommand,-3,CMD_WRITE|CMD_FAST,ACL_CATEGORY_FAST|ACL_CATEGORY_KEYSPACE|ACL_CATEGORY_WRITE,NULL,PEXPIRE_Keyspecs,1,NULL,3),.args=PEXPIRE_Args},

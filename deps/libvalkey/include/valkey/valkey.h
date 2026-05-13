@@ -50,7 +50,7 @@ typedef SSIZE_T ssize_t;
 #include <stdint.h> /* uintXX_t, etc */
 
 #define LIBVALKEY_VERSION_MAJOR 0
-#define LIBVALKEY_VERSION_MINOR 4
+#define LIBVALKEY_VERSION_MINOR 5
 #define LIBVALKEY_VERSION_PATCH 0
 
 /* Connection type can be blocking or non-blocking and is set in the

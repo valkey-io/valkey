@@ -419,6 +419,16 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
         catch {R 0 CLUSTER SETSLOT 609 TIMEOUT 100 MIGRATING $R1_id} e
         assert_equal $e "ERR Invalid CLUSTER SETSLOT action or number of arguments. Try CLUSTER HELP"
     }
+
+    test "CLUSTER SETSLOT MIGRATING/IMPORTING should not be allowed to target self" {
+        set R0_id [R 0 CLUSTER MYID]
+        set slot 1
+
+        set result [catch {assert_error [R 0 CLUSTER SETSLOT $slot MIGRATING $R0_id]} err]
+        assert_match "ERR Target node is myself" $err
+        set result [catch {assert_error [R 1 CLUSTER SETSLOT $slot IMPORTING $R1_id]} err]
+        assert_match "ERR Target node is myself" $err
+    }
 }
 
 start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica-migration no cluster-node-timeout 1000} } {
@@ -657,17 +667,4 @@ start_cluster 3 3 {tags {external:skip cluster} } {
 
     }
 
-}
-
-start_cluster 3 0 {tags {external:skip cluster} } {
-    test "CLUSTER SETSLOT MIGRATING/IMPORTING should not be allowed to target self" {
-        set R0_id [R 0 CLUSTER MYID]
-        set R1_id [R 1 CLUSTER MYID]
-        set slot 1
-
-        set result [catch {assert_error [R 0 CLUSTER SETSLOT $slot MIGRATING $R0_id]} err]
-        assert_match "ERR Target node is myself" $err
-        set result [catch {assert_error [R 1 CLUSTER SETSLOT $slot IMPORTING $R1_id]} err]
-        assert_match "ERR Target node is myself" $err
-    }
 }

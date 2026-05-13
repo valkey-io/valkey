@@ -155,8 +155,61 @@ void clusterBeforeSleep(void) {
     }
     clusterCurrentBus->beforeSleep();
 }
+static void clusterAutoFailoverOnShutdown(void) {
+    if (!nodeIsPrimary(myself)) return;
+
+    /* Find the best replica, that is, the replica with the largest offset. */
+    int legacy_replica = 0;
+    client *best_replica = NULL;
+    listIter replicas_iter;
+    listNode *replicas_list_node;
+    listRewind(server.replicas, &replicas_iter);
+    while ((replicas_list_node = listNext(&replicas_iter)) != NULL) {
+        client *replica = listNodeValue(replicas_list_node);
+        if (replica->repl_data->replica_version < 0x90000) {
+            legacy_replica = 1;
+            best_replica = NULL;
+            break;
+        }
+        if (replica->repl_data->repl_state == REPLICA_STATE_ONLINE &&
+            replica->repl_data->repl_ack_off == server.primary_repl_offset &&
+            replica->repl_data->replica_nodeid && sdslen(replica->repl_data->replica_nodeid) == CLUSTER_NAMELEN) {
+            best_replica = replica;
+        }
+    }
+
+    if (best_replica == NULL) {
+        if (legacy_replica) {
+            serverLog(LL_NOTICE, "Unable to perform auto failover on shutdown since there are legacy replicas.");
+        } else {
+            serverLog(LL_NOTICE, "Unable to find a replica to perform the auto failover on shutdown.");
+        }
+        return;
+    }
+
+    char buf[128];
+    size_t buflen = snprintf(buf, sizeof(buf),
+                             "*5\r\n$7\r\nCLUSTER\r\n"
+                             "$8\r\nFAILOVER\r\n"
+                             "$5\r\nFORCE\r\n"
+                             "$9\r\nREPLICAID\r\n"
+                             "$%d\r\n%.*s\r\n",
+                             CLUSTER_NAMELEN,
+                             CLUSTER_NAMELEN,
+                             best_replica->repl_data->replica_nodeid);
+    serverAssert(buflen <= 128);
+    prepareReplicasToWrite();
+    feedReplicationBuffer(buf, buflen);
+    serverLog(LL_NOTICE, "Perform auto failover to replica %s on shutdown.", best_replica->repl_data->replica_nodeid);
+}
+
+void clusterPrepareShutdown(void) {
+    if (clusterCurrentBus->prepareShutdown) clusterCurrentBus->prepareShutdown();
+}
+
 void clusterHandleServerShutdown(bool auto_failover) {
-    clusterCurrentBus->handleServerShutdown(auto_failover);
+    if (auto_failover) clusterAutoFailoverOnShutdown();
+    clusterCurrentBus->handleServerShutdown();
 }
 static void clusterNotifyMyselfUpdated(int old_flags);
 
@@ -256,13 +309,14 @@ int clusterAllowFailoverCmd(client *c) {
     return 0;
 }
 unsigned long getClusterConnectionsCount(void) {
-    return clusterCurrentBus->getConnectionsCount();
+    return server.cluster_enabled ? ((dictSize(server.cluster->nodes) - 1) * 2) : 0;
 }
 /* Resets transient cluster stats that we expose via INFO or other means that we want
  * to reset via CONFIG RESETSTAT. The function is also used in order to
  * initialize these fields in clusterInit() at server startup. */
 void resetClusterStats(void) {
     if (!server.cluster_enabled) return;
+    clusterSlotStatResetAll();
     server.cluster->stat_cluster_links_buffer_limit_exceeded = 0;
     clusterCurrentBus->resetStats();
 }
@@ -333,6 +387,25 @@ void clusterSetPrimary(clusterNode *n, int closeSlots, int full_sync_required) {
     /* Perform needed slot migration state transitions */
     clusterUpdateSlotExportsOnOwnershipChange();
     clusterUpdateSlotImportsOnOwnershipChange();
+}
+
+/* Called by cluster internals when a node has lost its last slot. Triggers
+ * replica migration. */
+void clusterHandleLostLastSlot(clusterNode *target) {
+    clusterNode *my_primary = clusterNodeGetPrimary(myself);
+    serverAssert(my_primary->numslots == 0 && target != my_primary);
+    if (server.cluster_allow_replica_migration) {
+        serverLog(LL_NOTICE,
+                  "Lost my last slot during slot migration. "
+                  "Reconfiguring myself as a replica of %.40s (%s) in shard %.40s",
+                  target->name, humanNodename(target), target->shard_id);
+        clusterCurrentBus->setReplicaOf(target, NULL, NULL);
+    } else if (nodeIsPrimary(myself)) {
+        serverLog(LL_NOTICE,
+                  "My last slot was migrated to node %.40s (%s) "
+                  "in shard %.40s. I am now an empty primary.",
+                  target->name, humanNodename(target), target->shard_id);
+    }
 }
 
 /* -----------------------------------------------------------------------------
@@ -1227,37 +1300,9 @@ static void clusterSetSlotNodeCallback(void *ctx, const char *error) {
     if (!c) return;
     if (error) {
         addReplyError(c, error);
-        unblockClientAsync(c);
-        return;
+    } else {
+        addReply(c, shared.ok);
     }
-
-    /* If this shard lost its last slot, reconfigure as a replica of the
-     * new owner. This is a local decision, not a cluster-wide change. */
-    clusterNode *myself = getMyClusterNode();
-    clusterNode *my_primary = clusterNodeGetPrimary(myself);
-    if (my_primary->numslots == 0) {
-        /* Find who got our slots — look at argv for the target node. */
-        clusterNode *target = clusterLookupNode(objectGetVal(c->argv[4]),
-                                                sdslen(objectGetVal(c->argv[4])));
-        if (target && target != my_primary) {
-            if (server.cluster_allow_replica_migration) {
-                serverLog(LL_NOTICE,
-                          "Lost my last slot during slot migration. Reconfiguring myself "
-                          "as a replica of %.40s (%s) in shard %.40s",
-                          target->name, humanNodename(target), target->shard_id);
-                if (nodeIsReplica(myself)) protectClient(c);
-                clusterSetPrimary(target, 1, 1);
-                if (nodeIsReplica(myself)) unprotectClient(c);
-            } else if (nodeIsPrimary(myself)) {
-                serverLog(LL_NOTICE,
-                          "My last slot was migrated to node %.40s (%s) in shard %.40s. "
-                          "I am now an empty primary.",
-                          target->name, humanNodename(target), target->shard_id);
-            }
-        }
-    }
-
-    addReply(c, shared.ok);
     unblockClientAsync(c);
 }
 
@@ -1515,8 +1560,13 @@ void clusterCommandSetSlot(client *c) {
         }
 
         slotRange range = {slot, slot};
-        void *h = blockClientAsync(c);
-        clusterSlotChange(&range, 1, n, h, clusterSetSlotNodeCallback);
+        if (c == server.primary) {
+            /* Replicated CLUSTER SETSLOT. Don't block and don't send a reply. */
+            clusterSlotChange(&range, 1, n, NULL, NULL);
+        } else {
+            void *h = blockClientAsync(c);
+            clusterSlotChange(&range, 1, n, h, clusterSetSlotNodeCallback);
+        }
         return;
     }
 
@@ -1926,8 +1976,13 @@ void clusterCommand(client *c) {
             serverLog(LL_NOTICE, "Manual failover user request accepted (user request from '%s').", cl);
         }
         sdsfree(cl);
-        void *h = blockClientAsync(c);
-        clusterCurrentBus->failover(force, takeover, h, clusterCommandFailoverCompletion);
+        if (c == server.primary) {
+            /* CLUSTER FAILOVER send by the primary over the replication stream. */
+            clusterCurrentBus->failover(force, takeover, NULL, NULL);
+        } else {
+            void *h = blockClientAsync(c);
+            clusterCurrentBus->failover(force, takeover, h, clusterCommandFailoverCompletion);
+        }
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "replicate") &&
                (c->argc == 3 || c->argc == 4)) {
         /* CLUSTER REPLICATE (<NODE ID> | NO ONE) */
@@ -3037,10 +3092,6 @@ void clusterscanCommand(client *c) {
 /* -----------------------------------------------------------------------------
  * Cluster state evaluation
  * -------------------------------------------------------------------------- */
-
-#define CLUSTER_MAX_REJOIN_DELAY 5000
-#define CLUSTER_MIN_REJOIN_DELAY 500
-#define CLUSTER_WRITABLE_DELAY 2000
 
 void clusterLogFailReason(int reason) {
     if (reason == CLUSTER_FAIL_NONE) return;

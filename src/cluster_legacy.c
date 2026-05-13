@@ -677,73 +677,11 @@ static void clusterLegacyResetStats(void) {
     LEGACY_STATE()->stats_bus_module_bytes_received = 0;
 }
 
-
 static void clusterLegacyInitLast(void) {
     clusterListenerInit();
 }
 
-void clusterAutoFailoverOnShutdown(void) {
-    if (!nodeIsPrimary(myself)) return;
-
-    /* Find the first best replica, that is, the replica with the largest offset. */
-    int legacy_replica = 0;
-    client *best_replica = NULL;
-    listIter replicas_iter;
-    listNode *replicas_list_node;
-    listRewind(server.replicas, &replicas_iter);
-    while ((replicas_list_node = listNext(&replicas_iter)) != NULL) {
-        client *replica = listNodeValue(replicas_list_node);
-        /* This is done only when the replica offset is caught up, to avoid data loss.
-         * And 0x90000 is 9.0.0, we only support this feature in this version. */
-        if (replica->repl_data->replica_version < 0x90000) {
-            legacy_replica = 1;
-            best_replica = NULL;
-            break;
-        }
-        if (replica->repl_data->repl_state == REPLICA_STATE_ONLINE &&
-            replica->repl_data->repl_ack_off == server.primary_repl_offset &&
-            replica->repl_data->replica_nodeid && sdslen(replica->repl_data->replica_nodeid) == CLUSTER_NAMELEN) {
-            best_replica = replica;
-        }
-    }
-
-    /* We are not able to find the replica to do the auto failover. */
-    if (best_replica == NULL) {
-        if (legacy_replica) {
-            serverLog(LL_NOTICE, "Unable to perform auto failover on shutdown since there are legacy replicas.");
-        } else {
-            serverLog(LL_NOTICE, "Unable to find a replica to perform the auto failover on shutdown.");
-        }
-        return;
-    }
-
-    /* Send the CLUSTER FAILOVER FORCE REPLICAID node-id to all replicas since
-     * it is a shared replication buffer, but only the replica with the matching
-     * node-id will execute it. The caller will call flushReplicasOutputBuffers,
-     * so in here it is a best effort. */
-    char buf[128];
-    size_t buflen = snprintf(buf, sizeof(buf),
-                             "*5\r\n$7\r\nCLUSTER\r\n"
-                             "$8\r\nFAILOVER\r\n"
-                             "$5\r\nFORCE\r\n"
-                             "$9\r\nREPLICAID\r\n"
-                             "$%d\r\n%.*s\r\n",
-                             CLUSTER_NAMELEN,
-                             CLUSTER_NAMELEN,
-                             best_replica->repl_data->replica_nodeid);
-    serverAssert(buflen <= 128);
-    /* Must install write handler for all replicas first before feeding
-     * replication stream. */
-    prepareReplicasToWrite();
-    feedReplicationBuffer(buf, buflen);
-    serverLog(LL_NOTICE, "Perform auto failover to replica %s on shutdown.", best_replica->repl_data->replica_nodeid);
-}
-
-/* Called when a cluster node receives SHUTDOWN. */
-static void clusterLegacyHandleServerShutdown(bool auto_failover) {
-    /* Check if we are able to do the auto failover on shutdown. */
-    if (auto_failover) clusterAutoFailoverOnShutdown();
-
+static void clusterLegacyHandleServerShutdown(void) {
     /* The error logs have been logged in the save function if the save fails. */
     serverLog(LL_NOTICE, "Saving the cluster configuration file before exiting.");
     clusterSaveConfig(1);
@@ -4651,95 +4589,24 @@ static int nodeExceedsHandshakeTimeout(clusterNode *node, mstime_t now) {
     return now - node->ctime > getHandshakeTimeout() ? 1 : 0;
 }
 
-#define NODE_CONNECTION_RETRIES_PER_TIMEOUT 10
-
-/* Check if the node is disconnected and re-establish the connection.
- * Also update a few stats while we are here, that can be used to make
- * better decisions in other part of the code. */
-static int clusterNodeCronHandleReconnect(clusterNode *node, mstime_t now, long long *cluster_conn_attempts) {
-    /* Not interested in reconnecting the link with myself or nodes
-     * for which we have no address. */
-    if (node->flags & (CLUSTER_NODE_MYSELF | CLUSTER_NODE_NOADDR)) return 1;
+/* Gossip-specific per-node maintenance: count PFAIL nodes and send MEET
+ * to peers that have an outbound link but no inbound link. */
+static void clusterNodeCronGossipMaintenance(clusterNode *node, mstime_t now) {
+    if (node->flags & (CLUSTER_NODE_MYSELF | CLUSTER_NODE_NOADDR)) return;
 
     if (node->flags & CLUSTER_NODE_PFAIL) LEGACY_STATE()->stats_pfail_nodes++;
 
-    /* A Node in HANDSHAKE state has a limited lifespan equal to the
-     * configured node timeout. */
-    if (nodeInHandshake(node) && nodeExceedsHandshakeTimeout(node, now)) {
-        serverLog(LL_WARNING, "Clusterbus handshake timeout %s:%d", node->ip, node->cport);
-        clusterDelNode(node);
-        return 1;
-    }
+    /* If we have an outbound link but no inbound link for longer than the
+     * handshake timeout, the peer probably doesn't know us. Send MEET. */
     if (nodeInNormalState(node) && node->link != NULL && node->inbound_link == NULL &&
         now - node->inbound_link_freed_time > getHandshakeTimeout() &&
         now - LEGACY_DATA(node)->meet_sent > getHandshakeTimeout() &&
         nodeSupportsMultiMeet(node)) {
-        /* Node has an outbound link, but no inbound link for more than the handshake timeout.
-         * This probably means this node does not know us yet, whereas we know it.
-         * So we send it a MEET packet to do a handshake with it and correct the inconsistent cluster view.
-         * We make sure to not re-send a MEET packet more than once every handshake timeout period, so as to
-         * leave the other node time to complete the handshake. */
         node->flags |= CLUSTER_NODE_MEET;
         serverLog(LL_NOTICE, "Sending MEET packet to node %.40s (%s) because there is no inbound link for it",
                   node->name, humanNodename(node));
         clusterSendPing(node->link, CLUSTERMSG_TYPE_MEET);
     }
-
-    if (node->link == NULL) {
-        mstime_t reconnect_interval = server.cluster_node_timeout / 2;
-        /* Skip this outbound connection attempt when all these conditions are true:
-         *  1. No inbound link from the peer exists.
-         *  2. The back‑off window since the last try is still active
-         *  3. The node has already exceeded its retry budget for this cron cycle
-         */
-        if (!node->inbound_link && (now - node->outbound_link_attempt_time < reconnect_interval / NODE_CONNECTION_RETRIES_PER_TIMEOUT && *cluster_conn_attempts == 0)) {
-            return 1;
-        }
-        node->outbound_link_attempt_time = now;
-        (*cluster_conn_attempts)--;
-        clusterLink *link = createClusterLink(node);
-        link->conn = connCreate(connTypeOfCluster());
-        connSetPrivateData(link->conn, link);
-        if (connConnect(link->conn, node->ip, node->cport, server.bind_source_addr, 0, clusterLinkConnectHandler) ==
-            C_ERR) {
-            /* We got a synchronous error from connect before
-             * clusterSendPing() had a chance to be called.
-             * If LEGACY_DATA(node)->ping_sent is zero, failure detection can't work,
-             * so we claim we actually sent a ping now (that will
-             * be really sent as soon as the link is obtained). */
-            if (LEGACY_DATA(node)->ping_sent == 0) LEGACY_DATA(node)->ping_sent = mstime();
-            serverLog(LL_DEBUG,
-                      "Unable to connect to "
-                      "Cluster Node [%s]:%d -> %s",
-                      node->ip, node->cport, server.neterr);
-
-            freeClusterLink(link);
-            return 0;
-        }
-    }
-    return 0;
-}
-
-/* Free outbound link to a node if its send buffer size exceeded limit. */
-static void clusterNodeCronFreeLinkOnBufferLimitReached(clusterNode *node) {
-    freeClusterLinkOnBufferLimitReached(node->link);
-    freeClusterLinkOnBufferLimitReached(node->inbound_link);
-}
-
-/* Compute the maximum number of connection attempts the clusterLegacyCron
- * loop should schedule in a single cron.
- *
- * We want to guarantee that every node is contacted 10 times within node timeout. */
-static long long maxConnectionAttemptsPerCron(void) {
-    long long reconnect_interval = server.cluster_node_timeout / 2;
-    if (reconnect_interval <= 0)
-        return 0;
-    /* We run the cron loop every 100 ms.  To reach 100 % of the nodes
-     * within the timeout, we need: ceil(nodes * 100 / reconnect_interval) */
-    const long long min_nodes_for_coverage = dictSize(server.cluster->nodes) * CLUSTER_CRON_PERIOD_MS / reconnect_interval;
-    /* Increase the coverage budget so each node can be probed 10 times
-     * inside the timeout. */
-    return min_nodes_for_coverage * NODE_CONNECTION_RETRIES_PER_TIMEOUT;
 }
 
 /* This is executed 10 times every second */
@@ -4755,22 +4622,18 @@ static void clusterLegacyCron(void) {
     static unsigned long long iteration = 0;
     iteration++; /* Number of times this function was called so far. */
 
-    /* Clear so clusterNodeCronHandleReconnect can count the number of nodes in PFAIL. */
+    /* Clear pfail counter before iterating. */
     LEGACY_STATE()->stats_pfail_nodes = 0;
     /* Run through some of the operations we want to do on each cluster node. */
     di = dictGetSafeIterator(server.cluster->nodes);
-    long long cluster_node_conn_attempts = maxConnectionAttemptsPerCron();
     while ((de = dictNext(di)) != NULL) {
         clusterNode *node = dictGetVal(de);
-        /* We free the inbound or outbound link to the node if the link has an
-         * oversized message send queue and immediately try reconnecting. */
-        clusterNodeCronFreeLinkOnBufferLimitReached(node);
-        /* The protocol is that function(s) below return non-zero if the node was
-         * terminated.
-         */
-        if (!server.debug_cluster_disable_reconnection && clusterNodeCronHandleReconnect(node, now, &cluster_node_conn_attempts)) continue;
+        clusterNodeCronGossipMaintenance(node, now);
     }
     dictReleaseIterator(di);
+
+    /* Reconnect nodes with no outbound link (shared with raft). */
+    if (!server.debug_cluster_disable_reconnection) clusterConnectNodes();
 
     /* Ping some random node 1 time every 10 iterations, so that we usually ping
      * one random node every second. */
@@ -4990,6 +4853,8 @@ static void clusterLegacySlotChange(slotRange *ranges, int numranges, clusterNod
 
     if (claiming) clusterBumpConfigEpochWithoutConsensus();
 
+    clusterNode *my_primary = clusterNodeGetPrimary(myself);
+    int num_slots_before = my_primary->numslots;
     for (int i = 0; i < numranges; i++) {
         for (int j = ranges[i].start_slot; j <= ranges[i].end_slot; j++) {
             if (target) {
@@ -5004,6 +4869,14 @@ static void clusterLegacySlotChange(slotRange *ranges, int numranges, clusterNod
                 clusterDelSlot(j);
             }
         }
+    }
+    if (num_slots_before > 0 && my_primary->numslots == 0 && target) {
+        /* Lost the last slot. If this is a replicated SETSLOT command, protect
+         * the primary client so it doesn't get freed by the replica migration. */
+        int is_replicated = server.primary && (server.current_client == server.primary);
+        if (is_replicated) protectClient(server.primary);
+        clusterHandleLostLastSlot(target);
+        if (is_replicated) unprotectClient(server.primary);
     }
 
     if (claiming) {
@@ -5397,7 +5270,7 @@ static void clusterLegacySetReplicaOf(clusterNode *primary, void *ctx, void (*ca
     clusterDoBeforeSleep(CLUSTER_TODO_UPDATE_STATE |
                          CLUSTER_TODO_SAVE_CONFIG |
                          CLUSTER_TODO_BROADCAST_ALL);
-    callback(ctx, NULL);
+    if (callback) callback(ctx, NULL);
 }
 
 static void clusterLegacyForgetNode(const char *node_id, size_t id_len, void *ctx, void (*callback)(void *ctx, const char *error)) {
@@ -5467,7 +5340,7 @@ static void clusterLegacyFailover(int force, int takeover, void *ctx, void (*cal
     } else {
         clusterSendMFStart(myself->replicaof);
     }
-    callback(ctx, NULL);
+    if (callback) callback(ctx, NULL);
 }
 
 

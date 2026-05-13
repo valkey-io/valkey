@@ -4560,7 +4560,13 @@ void replicationHandlePrimaryDisconnection(void) {
         moduleFireServerEvent(VALKEYMODULE_EVENT_PRIMARY_LINK_CHANGE, VALKEYMODULE_SUBEVENT_PRIMARY_LINK_DOWN, NULL);
 
     server.primary = NULL;
-    server.repl_state = REPL_STATE_CONNECT;
+    /* freeClient(primary) can be deferred via freeClientAsync when the client
+     * has pending IO (since #3324). By the time we run in that deferred context,
+     * replicationUnsetPrimary()/replicationSetPrimary() may have already
+     * finalized replication state. If primary_host is NULL, a deliberate unset
+     * is in progress (or complete), so avoid setting REPL_STATE_CONNECT which
+     * would make replicationCron call connectWithPrimary() with a NULL host. */
+    server.repl_state = server.primary_host ? REPL_STATE_CONNECT : REPL_STATE_NONE;
     server.repl_down_since = server.unixtime;
     /* We lost connection with our primary, don't disconnect replicas yet,
      * maybe we'll be able to PSYNC with our primary later. We'll disconnect
@@ -5268,8 +5274,14 @@ void replicationCron(void) {
 
     /* Check if we should connect to a PRIMARY */
     if (server.repl_state == REPL_STATE_CONNECT) {
-        serverLog(LL_NOTICE, "Connecting to PRIMARY %s:%d", server.primary_host, server.primary_port);
-        connectWithPrimary();
+        if (server.primary_host) {
+            serverLog(LL_NOTICE, "Connecting to PRIMARY %s:%d", server.primary_host, server.primary_port);
+            connectWithPrimary();
+        } else {
+            serverLog(LL_WARNING,
+                      "REPL_STATE_CONNECT with primary_host == NULL; resetting to REPL_STATE_NONE");
+            server.repl_state = REPL_STATE_NONE;
+        }
     }
 
     /* Send ACK to primary from time to time.

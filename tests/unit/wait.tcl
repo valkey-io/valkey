@@ -343,7 +343,7 @@ tags {"wait aof network external:skip"} {
                 set rd [valkey_deferring_client -1]
                 $rd incr foo
                 $rd read
-                $rd waitaof 0 1 0
+                $rd waitaof 0 1 10000
                 wait_for_blocked_client -1
                 $replica replicaof $master_host $master_port
                 assert_equal [$rd read] {1 1}

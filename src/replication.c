@@ -4335,6 +4335,10 @@ void syncWithPrimary(connection *conn) {
 }
 
 int connectWithPrimary(void) {
+    if (server.primary_host == NULL) {
+        serverLog(LL_WARNING, "Unable to connect to PRIMARY: primary_host is NULL");
+        return C_ERR;
+    }
     server.repl_transfer_s = connCreate(connTypeOfReplication());
     if (connConnect(server.repl_transfer_s, server.primary_host, server.primary_port, server.bind_source_addr,
                     server.repl_mptcp, syncWithPrimary) == C_ERR) {
@@ -5268,8 +5272,12 @@ void replicationCron(void) {
 
     /* Check if we should connect to a PRIMARY */
     if (server.repl_state == REPL_STATE_CONNECT) {
-        serverLog(LL_NOTICE, "Connecting to PRIMARY %s:%d", server.primary_host, server.primary_port);
-        connectWithPrimary();
+        if (server.primary_host) {
+            serverLog(LL_NOTICE, "Connecting to PRIMARY %s:%d", server.primary_host, server.primary_port);
+            connectWithPrimary();
+        } else {
+            server.repl_state = REPL_STATE_NONE;
+        }
     }
 
     /* Send ACK to primary from time to time.

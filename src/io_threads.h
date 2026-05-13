@@ -12,16 +12,14 @@ typedef enum {
     JOB_REQ_ACCEPT,
     JOB_REQ_COUNT
 } JobRequest;
-_Static_assert(JOB_REQ_COUNT <= 8, "JOB_REQ_COUNT must not exceed 7 for pointer arithmetic");
+_Static_assert(JOB_REQ_COUNT <= 8, "JOB_REQ_COUNT must not exceed 8 for pointer arithmetic");
 
 typedef enum {
     JOB_RES_READ_CLIENT = 0,
     JOB_RES_WRITE_CLIENT,
     JOB_RES_COUNT
 } JobResult;
-_Static_assert(JOB_RES_COUNT <= 8, "JOB_RES_COUNT must not exceed 7 for pointer arithmetic");
-
-typedef void (*job_handler)(void *);
+_Static_assert(JOB_RES_COUNT <= 8, "JOB_RES_COUNT must not exceed 8 for pointer arithmetic");
 
 void initIOThreads(int prev_threads_num);
 void killIOThreads(void);

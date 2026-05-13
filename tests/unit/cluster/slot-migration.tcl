@@ -421,13 +421,8 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
     }
 
     test "CLUSTER SETSLOT MIGRATING/IMPORTING should not be allowed to target self" {
-        set R0_id [R 0 CLUSTER MYID]
-        set slot 1
-
-        set result [catch {assert_error [R 0 CLUSTER SETSLOT $slot MIGRATING $R0_id]} err]
-        assert_match "ERR Target node is myself" $err
-        set result [catch {assert_error [R 1 CLUSTER SETSLOT $slot IMPORTING $R1_id]} err]
-        assert_match "ERR Target node is myself" $err
+        assert_error {ERR Target node is myself} {R 0 CLUSTER SETSLOT 609 MIGRATING [R 0 CLUSTER MYID]}
+        assert_error {ERR Target node is myself} {R 1 CLUSTER SETSLOT 609 IMPORTING [R 1 CLUSTER MYID]}
     }
 }
 

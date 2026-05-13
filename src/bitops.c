@@ -1176,10 +1176,19 @@ void bitopNotNEON(unsigned char *dst, unsigned char **src, unsigned long *len, u
 #undef BITOP_NEON_STORE
 #endif
 
+static int bitopUseSimd(int op, unsigned long numkeys, unsigned long minlen, unsigned long maxlen, unsigned long threshold) {
+    if (op == BITOP_NOT) return maxlen >= threshold;
+
+    /* Preserve the legacy byte loop for many-source AND/OR so it can stop early
+     * when the accumulated byte reaches 0x00 or 0xff. */
+    if ((op == BITOP_AND || op == BITOP_OR) && numkeys > 16) return 0;
+
+    return minlen >= threshold;
+}
+
 static int bitopTrySimd(int op, unsigned char *dst, unsigned char **src, unsigned long *len, unsigned long numkeys, unsigned long minlen, unsigned long maxlen) {
 #if HAVE_X86_SIMD
-    if (((op == BITOP_NOT && maxlen >= 32) || (op != BITOP_NOT && minlen >= 32)) &&
-        __builtin_cpu_supports("avx2")) {
+    if (bitopUseSimd(op, numkeys, minlen, maxlen, 32) && __builtin_cpu_supports("avx2")) {
         switch (op) {
         case BITOP_AND:
             bitopAndAVX2(dst, src, len, numkeys, minlen, maxlen);
@@ -1197,7 +1206,7 @@ static int bitopTrySimd(int op, unsigned char *dst, unsigned char **src, unsigne
     }
 #endif
 #if HAVE_ARM_NEON
-    if ((op == BITOP_NOT && maxlen >= 16) || (op != BITOP_NOT && minlen >= 16)) {
+    if (bitopUseSimd(op, numkeys, minlen, maxlen, 16)) {
         switch (op) {
         case BITOP_AND:
             bitopAndNEON(dst, src, len, numkeys, minlen, maxlen);

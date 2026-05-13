@@ -472,7 +472,7 @@ int prepareClientToWrite(client *c) {
      * it should already be setup to do so (it has already pending data). */
     if (!clientHasPendingReplies(c)) putClientInPendingWriteQueue(c);
 
-    if (!isDeferredReplyEnabled(c)) c->flag.buffered_reply = 1;
+    if (!isDeferredReplyEnabled(c) && isPrimaryDurabilityEnabled()) c->flag.buffered_reply = 1;
     /* Authorize the caller to queue in the output buffer of this client. */
     return C_OK;
 }

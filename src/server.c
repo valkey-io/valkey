@@ -1867,7 +1867,7 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
          * This ensures clients don't receive responses before their writes are
          * durable on disk. The next beforeSleep iteration will flush replies
          * once processAofIOThreadFlushResult() confirms the fsync is done. */
-        if (!(server.aof_fsync == AOF_FSYNC_ALWAYS && aofIOFlushInProgress())) {
+        if (!(server.bio_aof_offload_enabled && server.aof_fsync == AOF_FSYNC_ALWAYS && aofIOFlushInProgress())) {
             processed += handleClientsWithPendingWrites();
         }
         int last_processed = 0;
@@ -4693,7 +4693,7 @@ int processCommand(client *c) {
         }
         int flags = CMD_CALL_FULL;
         call(c, flags);
-        postCommandExec(c);
+        if (server.bio_aof_offload_enabled) postCommandExec(c);
         if (listLength(server.ready_keys) && !isInsideYieldingLongCommand()) handleClientsBlockedOnKeys();
     }
     return C_OK;
@@ -7245,8 +7245,8 @@ void dismissMemoryInChild(void) {
     /* madvise(MADV_DONTNEED) may not work if Transparent Huge Pages is enabled. */
     if (server.thp_enabled) return;
 
-        /* Currently we use zmadvise_dontneed only when we use jemalloc with Linux.
-         * so we avoid these pointless loops when they're not going to do anything. */
+    /* Currently we use zmadvise_dontneed only when we use jemalloc with Linux.
+     * so we avoid these pointless loops when they're not going to do anything. */
 #if defined(USE_JEMALLOC) && defined(__linux__)
     listIter li;
     listNode *ln;

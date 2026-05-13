@@ -918,9 +918,9 @@ typedef struct serverDb {
 
     /* fields related to dirty key tracking
      * for consistent writes with durability */
-    hashtable *uncommitted_keys;    /* Map of dirty keys to the offset required by replica acknowledgement */
-    long long dirty_repl_offset;    /* Replication offset for a dirty DB */
-    rax *reply_duration;            /* Radix tree tracking reply durations for durable blocked clients */
+    hashtable *uncommitted_keys; /* Map of dirty keys to the offset required by replica acknowledgement */
+    long long dirty_repl_offset; /* Replication offset for a dirty DB */
+    rax *reply_duration;         /* Radix tree tracking reply durations for durable blocked clients */
 } serverDb;
 
 /* forward declaration for functions ctx */
@@ -1761,7 +1761,7 @@ typedef enum childInfoType {
 
 struct valkeyServer {
     durable_t durability;
-    int bio_aof_offload_enabled;     /* Hidden feature flag to enable/disable BIO AOF offload + dirty key tracking */
+    int bio_aof_offload_enabled; /* Hidden feature flag to enable/disable BIO AOF offload + dirty key tracking */
     /* General */
     pid_t pid;                                        /* Main process pid. */
     pthread_t main_thread_id;                         /* Main thread id */
@@ -2052,9 +2052,9 @@ struct valkeyServer {
     int aof_load_truncated;             /* Don't stop on unexpected AOF EOF. */
     int aof_use_rdb_preamble;           /* Specify base AOF to use RDB encoding on AOF rewrites. */
     int aof_rewrite_use_rdb_preamble;   /* Base AOF to use RDB encoding on AOF rewrites start. */
-    _Atomic(int) aof_io_flush_state;     /* AOF always-fsync IO-thread flush state. */
-    _Atomic(int) aof_io_flush_errno;     /* Errno of AOF always-fsync IO-thread flush. */
-    _Atomic(off_t) aof_io_flush_size;    /* Bytes written by the last IO-thread flush. */
+    _Atomic(int) aof_io_flush_state;    /* AOF always-fsync IO-thread flush state. */
+    _Atomic(int) aof_io_flush_errno;    /* Errno of AOF always-fsync IO-thread flush. */
+    _Atomic(off_t) aof_io_flush_size;   /* Bytes written by the last IO-thread flush. */
     _Atomic(int) aof_bio_fsync_status;  /* Status of AOF fsync in bio job. */
     _Atomic(int) aof_bio_fsync_errno;   /* Errno of AOF fsync in bio job. */
     aofManifest *aof_manifest;          /* Used to track AOFs. */

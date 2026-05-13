@@ -65,7 +65,7 @@ typedef struct {
 /* Attempts to offload a generic job to an IO thread.
  * Returns C_OK if the job is enqueued, C_ERR otherwise. */
 int trySendJobToIOThreads(void (*handler)(void *), void *data) {
-    if (!inMainThread() || server.active_io_threads_num <= 1) return C_ERR;
+    if (!handler || !inMainThread() || server.active_io_threads_num <= 1) return C_ERR;
     GenericIOJob *job = zmalloc(sizeof(GenericIOJob));
     job->handler = handler;
     job->data = data;

@@ -717,6 +717,10 @@ void discardTempDb(serverDb **tempDb) {
             dictRelease(tempDb[i]->blocking_keys_unblock_on_nokey);
             dictRelease(tempDb[i]->ready_keys);
             dictRelease(tempDb[i]->watched_keys);
+            if (tempDb[i]->uncommitted_keys) {
+                hashtableRelease(tempDb[i]->uncommitted_keys);
+                tempDb[i]->uncommitted_keys = NULL;
+            }
             zfree(tempDb[i]);
             tempDb[i] = NULL;
         }

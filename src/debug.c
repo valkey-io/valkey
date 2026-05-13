@@ -1089,6 +1089,10 @@ void debugCommand(client *c) {
         if (getLongLongFromObjectOrReply(c, c->argv[2], &client_id, NULL) != C_OK) return;
         if (getLongLongFromObjectOrReply(c, c->argv[3], &bufpos_val, NULL) != C_OK) return;
         if (getLongLongFromObjectOrReply(c, c->argv[4], &data_len_val, NULL) != C_OK) return;
+        if (bufpos_val < 0 || data_len_val < 0) {
+            addReplyError(c, "bufpos and data_len must be non-negative");
+            return;
+        }
         client *target = lookupClientByID((uint64_t)client_id);
         if (target == NULL) {
             addReplyError(c, "No such client");

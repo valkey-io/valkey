@@ -18,24 +18,24 @@
 /* Command filter codes that are used in pre execution stage of a command. */
 #define CMD_FILTER_ALLOW 0
 #define CMD_FILTER_REJECT 1
-// Returns true if the cmd is a script command that never replicates.
+/* Returns true if the cmd is a script command that never replicates. */
 #define IS_SCRIPT_CALL_READONLY_CMD(cmd) ((cmd) && (((cmd)->proc == fcallroCommand) || ((cmd)->proc == evalRoCommand) || ((cmd)->proc == evalShaRoCommand)))
 
-// Returns true if the cmd is a script command
-// (EVAL/EVAL_RO/EVALSHA/EVALSHA_RO/FCALL/FCALL_RO).
+/* Returns true if the cmd is a script command
+ * (EVAL/EVAL_RO/EVALSHA/EVALSHA_RO/FCALL/FCALL_RO). */
 #define IS_SCRIPT_CALL_CMD(cmd) ((cmd) && (((cmd)->proc == fcallCommand) || ((cmd)->proc == fcallroCommand) || ((cmd)->proc == evalCommand) || ((cmd)->proc == evalRoCommand) || ((cmd)->proc == evalShaCommand) || ((cmd)->proc == evalShaRoCommand)))
 
-// Returns true if the cmd is a keyspace informational command — a command that is
-// related to the keyspace (ACL_CATEGORY_KEYSPACE) but does not mutate it (not CMD_WRITE).
-// These commands provide information about the keyspace and need to be tracked for
-// durability response blocking even when they are admin or non-read/non-write commands.
+/* Returns true if the cmd is a keyspace informational command — a command that is
+ * related to the keyspace (ACL_CATEGORY_KEYSPACE) but does not mutate it (not CMD_WRITE).
+ * These commands provide information about the keyspace and need to be tracked for
+ * durability response blocking even when they are admin or non-read/non-write commands. */
 #define IS_KEYSPACE_INFORMATIONAL(cmd) ((cmd) && ((cmd)->acl_categories & ACL_CATEGORY_KEYSPACE) && !((cmd)->flags & CMD_WRITE))
 
 /* Flags below help in correctly classifying transactions as
  * either read/write commands or non-keyspace commands. */
-// Indicates the client's last command was a mutative command.
+/* Indicates the client's last command was a mutative command. */
 #define DURABILITY_CLIENT_LAST_CMD_WRITE (1ULL << 20)
-// Indicates the client's last command was read-only command. */
+/* Indicates the client's last command was read-only command. */
 #define DURABILITY_CLIENT_LAST_CMD_READONLY (1ULL << 21)
 
 struct client;
@@ -124,51 +124,51 @@ typedef enum {
     DURABLE_BLOCKED_CMD_READ
 } durableBlockedCmdType;
 
-// Blocked response structure used by client to mark
-// the blocking information associated with each response
+/* Blocked response structure used by client to mark
+ * the blocking information associated with each response */
 typedef struct blockedResponse {
-    // Pointer to the client's reply node where the blocked response starts.
-    // NULL if the blocked response starts from the 16KB initial buffer
+    /* Pointer to the client's reply node where the blocked response starts.
+     * NULL if the blocked response starts from the 16KB initial buffer */
     struct listNode *disallowed_reply_block;
-    // The boundary in the reply buffer where the blocked response starts.
+    /* The boundary in the reply buffer where the blocked response starts. */
     size_t disallowed_byte_offset;
-    // The replication offset to wait for acknowledgement from durability providers
+    /* The replication offset to wait for acknowledgement from durability providers */
     long long primary_repl_offset;
 
-    // Enum to store the type of blocked command
+    /* Enum to store the type of blocked command */
     durableBlockedCmdType cmd_type;
-    // Timer for blocked command
+    /* Timer for blocked command */
     monotime blocked_command_timer;
 } blockedResponse;
 
-// Describes a pre-execution COB offset for a client
+/* Describes a pre-execution COB offset for a client */
 typedef struct preExecutionOffsetPosition {
-    // True if the pre execution offset/reply block are initialized
+    /* True if the pre execution offset/reply block are initialized */
     bool recorded;
-    // Track initial client COB position for client blocking
+    /* Track initial client COB position for client blocking */
     struct listNode *reply_block;
-    // Byte position boundary within the pre-execution reply block
+    /* Byte position boundary within the pre-execution reply block */
     size_t byte_offset;
 } preExecutionOffsetPosition;
 
 typedef struct clientDurabilityInfo {
-    // Blocked client responses list for durability
+    /* Blocked client responses list for durability */
     struct list *blocked_responses;
 
     /* Pre-execution data recorded before a command is executed
      * to record the boundaries of the COB. */
     preExecutionOffsetPosition offset;
 
-    // Replication offset to block this current command response
+    /* Replication offset to block this current command response */
     long long current_command_repl_offset;
 
-    // The list of async notification tasks that reference this client
+    /* The list of async notification tasks that reference this client */
     struct list *pending_notify_tasks;
 
-    // This client is waiting for durability providers to acknowledge
-    // the write before its response can be sent.
+    /* This client is waiting for durability providers to acknowledge
+     * the write before its response can be sent. */
     uint64_t durability_blocked : 1;
-    // Modules can set the blocking offset for read cmds
+    /* Modules can set the blocking offset for read cmds */
     long long module_cmd_blocking_offset;
 
     uint64_t durability_flags;

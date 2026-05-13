@@ -315,6 +315,11 @@ void durabilityInitDatabase(serverDb *db) {
  */
 void clearAllUncommittedKeys(void) {
     serverLog(LL_NOTICE, "Clearing all uncommitted keys for sync replication");
+    /* Clear pending list first — entries hold raw pointers to db->uncommitted_keys
+     * hashtables that we're about to free. */
+    if (pending_uncommitted_keys != NULL) {
+        listEmpty(pending_uncommitted_keys);
+    }
     for (int i = 0; i < server.dbnum; i++) {
         serverDb *db = server.db[i];
         if (db == NULL) continue;

@@ -23,6 +23,7 @@ xxhash.o: xxhash.c xxhash.h
 .c.o:
 	$(R_CC) -fPIC -c $<
 
+.PHONY: clean
 clean:
 	rm -f *.o
 	rm -f *.a

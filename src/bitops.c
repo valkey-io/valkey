@@ -753,6 +753,8 @@ void getbitCommand(client *c) {
     addReply(c, bitval ? shared.cone : shared.czero);
 }
 
+/* Byte fallback and SIMD-tail helper. It owns BITOP's zero-extension semantics
+ * and preserves the legacy AND/OR early-exit behavior for terminal bytes. */
 static void bitopScalarRange(unsigned char *dst, unsigned char **src, unsigned long *len, unsigned long numkeys, unsigned long start, unsigned long end, int op) {
     unsigned char output, byte;
     unsigned long i, j;
@@ -784,9 +786,13 @@ static void bitopScalarRange(unsigned char *dst, unsigned char **src, unsigned l
 }
 
 #if HAVE_X86_SIMD
+/* SDS strings are not vector-aligned, so the AVX2 helpers intentionally use
+ * unaligned loads/stores and only read bytes covered by minlen/maxlen. */
 #define BITOP_AVX2_LOAD(p) _mm256_loadu_si256((const __m256i *)(p))
 #define BITOP_AVX2_STORE(p, v) _mm256_storeu_si256((__m256i *)(p), (v))
 
+/* Vectorize AND over the common source prefix with unaligned AVX2 loads. The
+ * suffix is zero-filled because BITOP zero-extends shorter sources. */
 ATTRIBUTE_TARGET_AVX2
 void bitopAndAVX2(unsigned char *dst, unsigned char **src, unsigned long *len, unsigned long numkeys, unsigned long minlen, unsigned long maxlen) {
     unsigned long i, j = 0;
@@ -834,11 +840,14 @@ void bitopAndAVX2(unsigned char *dst, unsigned char **src, unsigned long *len, u
         j += 32;
     }
 
+    /* Avoid AVX-to-SSE transition penalties before returning to scalar code. */
     _mm256_zeroupper();
     bitopScalarRange(dst, src, len, numkeys, j, minlen, BITOP_AND);
     if (minlen < maxlen) memset(dst + minlen, 0, maxlen - minlen);
 }
 
+/* Vectorize OR over the common source prefix with unaligned AVX2 loads. The
+ * scalar tail handles mixed source lengths after the vectorized range. */
 ATTRIBUTE_TARGET_AVX2
 void bitopOrAVX2(unsigned char *dst, unsigned char **src, unsigned long *len, unsigned long numkeys, unsigned long minlen, unsigned long maxlen) {
     unsigned long i, j = 0;
@@ -886,10 +895,13 @@ void bitopOrAVX2(unsigned char *dst, unsigned char **src, unsigned long *len, un
         j += 32;
     }
 
+    /* Avoid AVX-to-SSE transition penalties before returning to scalar code. */
     _mm256_zeroupper();
     bitopScalarRange(dst, src, len, numkeys, j, maxlen, BITOP_OR);
 }
 
+/* Vectorize XOR over the common source prefix with unaligned AVX2 loads. The
+ * scalar tail preserves zero-extension when source lengths differ. */
 ATTRIBUTE_TARGET_AVX2
 void bitopXorAVX2(unsigned char *dst, unsigned char **src, unsigned long *len, unsigned long numkeys, unsigned long minlen, unsigned long maxlen) {
     unsigned long i, j = 0;
@@ -937,10 +949,13 @@ void bitopXorAVX2(unsigned char *dst, unsigned char **src, unsigned long *len, u
         j += 32;
     }
 
+    /* Avoid AVX-to-SSE transition penalties before returning to scalar code. */
     _mm256_zeroupper();
     bitopScalarRange(dst, src, len, numkeys, j, maxlen, BITOP_XOR);
 }
 
+/* Vectorize NOT across maxlen because the single input length defines the full
+ * destination. Unaligned loads are safe for SDS-backed strings. */
 ATTRIBUTE_TARGET_AVX2
 void bitopNotAVX2(unsigned char *dst, unsigned char **src, unsigned long *len, unsigned long numkeys, unsigned long minlen, unsigned long maxlen) {
     const __m256i ones = _mm256_set1_epi8((char)0xff);
@@ -976,6 +991,7 @@ void bitopNotAVX2(unsigned char *dst, unsigned char **src, unsigned long *len, u
         j += 32;
     }
 
+    /* Avoid AVX-to-SSE transition penalties before returning to scalar code. */
     _mm256_zeroupper();
     bitopScalarRange(dst, src, len, numkeys, j, maxlen, BITOP_NOT);
 }
@@ -985,9 +1001,13 @@ void bitopNotAVX2(unsigned char *dst, unsigned char **src, unsigned long *len, u
 #endif
 
 #if HAVE_ARM_NEON
+/* NEON helpers also use unaligned SDS-backed accesses and delegate all
+ * mixed-length tails to bitopScalarRange. */
 #define BITOP_NEON_LOAD(p) vld1q_u8((p))
 #define BITOP_NEON_STORE(p, v) vst1q_u8((p), (v))
 
+/* Vectorize AND over the NEON-width common prefix. The suffix is zero-filled
+ * because missing bytes are treated as zero. */
 void bitopAndNEON(unsigned char *dst, unsigned char **src, unsigned long *len, unsigned long numkeys, unsigned long minlen, unsigned long maxlen) {
     unsigned long i, j = 0;
 
@@ -1038,6 +1058,8 @@ void bitopAndNEON(unsigned char *dst, unsigned char **src, unsigned long *len, u
     if (minlen < maxlen) memset(dst + minlen, 0, maxlen - minlen);
 }
 
+/* Vectorize OR over the common prefix; scalar fallback handles any suffix where
+ * input lengths differ. */
 void bitopOrNEON(unsigned char *dst, unsigned char **src, unsigned long *len, unsigned long numkeys, unsigned long minlen, unsigned long maxlen) {
     unsigned long i, j = 0;
 
@@ -1087,6 +1109,8 @@ void bitopOrNEON(unsigned char *dst, unsigned char **src, unsigned long *len, un
     bitopScalarRange(dst, src, len, numkeys, j, maxlen, BITOP_OR);
 }
 
+/* Vectorize XOR over the common prefix; scalar fallback preserves zero-extended
+ * mixed-length behavior after the vectorized range. */
 void bitopXorNEON(unsigned char *dst, unsigned char **src, unsigned long *len, unsigned long numkeys, unsigned long minlen, unsigned long maxlen) {
     unsigned long i, j = 0;
 
@@ -1136,6 +1160,8 @@ void bitopXorNEON(unsigned char *dst, unsigned char **src, unsigned long *len, u
     bitopScalarRange(dst, src, len, numkeys, j, maxlen, BITOP_XOR);
 }
 
+/* Vectorize NOT across maxlen because BITOP NOT has one input and no
+ * zero-extended multi-source suffix to merge. */
 void bitopNotNEON(unsigned char *dst, unsigned char **src, unsigned long *len, unsigned long numkeys, unsigned long minlen, unsigned long maxlen) {
     unsigned long j = 0;
 
@@ -1176,6 +1202,8 @@ void bitopNotNEON(unsigned char *dst, unsigned char **src, unsigned long *len, u
 #undef BITOP_NEON_STORE
 #endif
 
+/* Centralize SIMD eligibility: NOT uses maxlen, multi-source ops need minlen
+ * for safe vector loads, and many-source AND/OR keep scalar short-circuiting. */
 static int bitopUseSimd(int op, unsigned long numkeys, unsigned long minlen, unsigned long maxlen, unsigned long threshold) {
     if (op == BITOP_NOT) return maxlen >= threshold;
 
@@ -1186,6 +1214,8 @@ static int bitopUseSimd(int op, unsigned long numkeys, unsigned long minlen, uns
     return minlen >= threshold;
 }
 
+/* Runtime dispatcher. Returning 0 deliberately preserves the existing word and
+ * byte fallback for unsupported CPUs, short inputs, or scalar-favored shapes. */
 static int bitopTrySimd(int op, unsigned char *dst, unsigned char **src, unsigned long *len, unsigned long numkeys, unsigned long minlen, unsigned long maxlen) {
 #if HAVE_X86_SIMD
     if (bitopUseSimd(op, numkeys, minlen, maxlen, 32) && __builtin_cpu_supports("avx2")) {

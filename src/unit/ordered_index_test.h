@@ -5,8 +5,8 @@
  * Test-only interface for ordered index implementations.
  *
  * Defines an abstract C++ interface that each implementation subclasses.
- * Production code uses compile-time dispatch via the inline wrappers in
- * ordered_index.h instead.
+ * Production code uses the functions declared in ordered_index.h
+ * (implemented in ordered_index.c) which delegate to the active backend.
  */
 
 extern "C" {
@@ -26,55 +26,55 @@ class OrderedIndexTestApi {
 
     /* Lifecycle */
     virtual OrderedIndex *create() = 0;
-    virtual void free(OrderedIndex *idx) = 0;
+    virtual void free(OrderedIndex *oi) = 0;
 
     /* Modification */
-    virtual OrderedIndexItem *insert(OrderedIndex *idx, double score, const char *ele, size_t len) = 0;
-    virtual void deleteItem(OrderedIndex *idx, OrderedIndexItem *pos) = 0;
-    virtual OrderedIndexItem *updateScore(OrderedIndex *idx, OrderedIndexItem *pos, double newscore) = 0;
-    virtual OrderedIndexItem *popFirst(OrderedIndex *idx) = 0;
-    virtual OrderedIndexItem *popLast(OrderedIndex *idx) = 0;
+    virtual OrderedIndexItem *insert(OrderedIndex *oi, double score, const char *ele, size_t len) = 0;
+    virtual void deleteItem(OrderedIndex *oi, OrderedIndexItem *pos) = 0;
+    virtual OrderedIndexItem *updateScore(OrderedIndex *oi, OrderedIndexItem *pos, double newscore) = 0;
+    virtual OrderedIndexItem *popFirst(OrderedIndex *oi) = 0;
+    virtual OrderedIndexItem *popLast(OrderedIndex *oi) = 0;
     virtual void freeItem(OrderedIndexItem *item) = 0;
-    virtual unsigned long deleteRangeByScore(OrderedIndex *idx, double min, double max, int min_ex, int max_ex, OrderedIndexOnDelete on_delete, void *ctx) = 0;
-    virtual unsigned long deleteRangeByRank(OrderedIndex *idx, unsigned long start, unsigned long end, OrderedIndexOnDelete on_delete, void *ctx) = 0;
-    virtual unsigned long deleteRangeByLex(OrderedIndex *idx, const_sds min, const_sds max, int min_ex, int max_ex, OrderedIndexOnDelete on_delete, void *ctx) = 0;
+    virtual unsigned long deleteRangeByScore(OrderedIndex *oi, double min, double max, int min_ex, int max_ex, OrderedIndexOnDelete on_delete, void *ctx) = 0;
+    virtual unsigned long deleteRangeByRank(OrderedIndex *oi, unsigned long start, unsigned long end, OrderedIndexOnDelete on_delete, void *ctx) = 0;
+    virtual unsigned long deleteRangeByLex(OrderedIndex *oi, const_sds min, const_sds max, int min_ex, int max_ex, OrderedIndexOnDelete on_delete, void *ctx) = 0;
 
     /* Query */
-    virtual unsigned long length(OrderedIndex *idx) = 0;
-    virtual OrderedIndexItem *getByRank(OrderedIndex *idx, unsigned long rank) = 0;
-    virtual unsigned long getRank(OrderedIndex *idx, const OrderedIndexItem *pos) = 0;
+    virtual unsigned long length(OrderedIndex *oi) = 0;
+    virtual OrderedIndexItem *getByRank(OrderedIndex *oi, unsigned long rank) = 0;
+    virtual unsigned long getRank(OrderedIndex *oi, const OrderedIndexItem *pos) = 0;
     virtual void getElementRaw(const OrderedIndexItem *pos, const char **ptr, size_t *len) = 0;
     virtual double getScore(const OrderedIndexItem *pos) = 0;
 
     /* Memory */
-    virtual size_t estimateMemory(OrderedIndex *idx, size_t sample_size) = 0;
+    virtual size_t estimateMemory(OrderedIndex *oi, size_t sample_size) = 0;
 
     /* Debug / verification */
-    virtual int verifyIntegrity(OrderedIndex *idx, char *errmsg, size_t errmsg_len) = 0;
+    virtual int verifyIntegrity(OrderedIndex *oi, char *errmsg, size_t errmsg_len) = 0;
 
     /* Count */
-    virtual unsigned long countScoreRange(OrderedIndex *idx, double min, double max, int min_ex, int max_ex) = 0;
-    virtual unsigned long countLexRange(OrderedIndex *idx, const_sds min, const_sds max, int min_ex, int max_ex) = 0;
+    virtual unsigned long countScoreRange(OrderedIndex *oi, double min, double max, int min_ex, int max_ex) = 0;
+    virtual unsigned long countLexRange(OrderedIndex *oi, const_sds min, const_sds max, int min_ex, int max_ex) = 0;
 
     /* Iterator */
-    virtual void initIterator(OrderedIndexIterator *iter, OrderedIndex *idx) = 0;
+    virtual void initIterator(OrderedIndexIterator *iter, OrderedIndex *oi) = 0;
     virtual void resetIterator(OrderedIndexIterator *iter) = 0;
-    virtual bool next(OrderedIndexIterator *iter, OrderedIndexItem **pos) = 0;
-    virtual bool prev(OrderedIndexIterator *iter, OrderedIndexItem **pos) = 0;
+    virtual OrderedIndexItem *next(OrderedIndexIterator *iter) = 0;
+    virtual OrderedIndexItem *prev(OrderedIndexIterator *iter) = 0;
     virtual void seekToRank(OrderedIndexIterator *iter, unsigned long rank) = 0;
     virtual void seekToScoreRange(OrderedIndexIterator *iter, double min, double max, int min_ex, int max_ex, long offset) = 0;
     virtual void seekToLexRange(OrderedIndexIterator *iter, const_sds min, const_sds max, int min_ex, int max_ex, long offset) = 0;
 
     /* Convenience (non-virtual) */
-    OrderedIndexItem *insertSds(OrderedIndex *idx, double score, const_sds ele) {
-        return insert(idx, score, ele, sdslen(ele));
+    OrderedIndexItem *insertSds(OrderedIndex *oi, double score, const_sds ele) {
+        return insert(oi, score, ele, sdslen(ele));
     }
 
-    std::vector<std::pair<double, std::string>> collectAll(OrderedIndex *idx) {
+    std::vector<std::pair<double, std::string>> collectAll(OrderedIndex *oi) {
         std::vector<std::pair<double, std::string>> result;
         OrderedIndexIterator iter;
         OrderedIndexItem *pos;
-        initIterator(&iter, idx);
+        initIterator(&iter, oi);
         while (next(&iter, &pos)) {
             const char *ptr;
             size_t len;
@@ -93,46 +93,46 @@ class SkiplistOrderedIndex : public OrderedIndexTestApi {
     OrderedIndex *create() override {
         return skiplistCreate();
     }
-    void free(OrderedIndex *idx) override {
-        skiplistFree(idx);
+    void free(OrderedIndex *oi) override {
+        skiplistFree(oi);
     }
 
-    OrderedIndexItem *insert(OrderedIndex *idx, double score, const char *ele, size_t len) override {
-        return skiplistInsert(idx, score, ele, len);
+    OrderedIndexItem *insert(OrderedIndex *oi, double score, const char *ele, size_t len) override {
+        return skiplistInsert(oi, score, ele, len);
     }
-    void deleteItem(OrderedIndex *idx, OrderedIndexItem *pos) override {
-        skiplistDelete(idx, pos);
+    void deleteItem(OrderedIndex *oi, OrderedIndexItem *pos) override {
+        skiplistDelete(oi, pos);
     }
-    OrderedIndexItem *updateScore(OrderedIndex *idx, OrderedIndexItem *pos, double newscore) override {
-        return skiplistUpdateScore(idx, pos, newscore);
+    OrderedIndexItem *updateScore(OrderedIndex *oi, OrderedIndexItem *pos, double newscore) override {
+        return skiplistUpdateScore(oi, pos, newscore);
     }
-    OrderedIndexItem *popFirst(OrderedIndex *idx) override {
-        return skiplistPopFirst(idx);
+    OrderedIndexItem *popFirst(OrderedIndex *oi) override {
+        return skiplistPopFirst(oi);
     }
-    OrderedIndexItem *popLast(OrderedIndex *idx) override {
-        return skiplistPopLast(idx);
+    OrderedIndexItem *popLast(OrderedIndex *oi) override {
+        return skiplistPopLast(oi);
     }
     void freeItem(OrderedIndexItem *item) override {
         skiplistFreeItem(item);
     }
-    unsigned long deleteRangeByScore(OrderedIndex *idx, double min, double max, int min_ex, int max_ex, OrderedIndexOnDelete on_delete, void *ctx) override {
-        return skiplistDeleteRangeByScore(idx, min, max, min_ex, max_ex, on_delete, ctx);
+    unsigned long deleteRangeByScore(OrderedIndex *oi, double min, double max, int min_ex, int max_ex, OrderedIndexOnDelete on_delete, void *ctx) override {
+        return skiplistDeleteRangeByScore(oi, min, max, min_ex, max_ex, on_delete, ctx);
     }
-    unsigned long deleteRangeByRank(OrderedIndex *idx, unsigned long start, unsigned long end, OrderedIndexOnDelete on_delete, void *ctx) override {
-        return skiplistDeleteRangeByRank(idx, start, end, on_delete, ctx);
+    unsigned long deleteRangeByRank(OrderedIndex *oi, unsigned long start, unsigned long end, OrderedIndexOnDelete on_delete, void *ctx) override {
+        return skiplistDeleteRangeByRank(oi, start, end, on_delete, ctx);
     }
-    unsigned long deleteRangeByLex(OrderedIndex *idx, const_sds min, const_sds max, int min_ex, int max_ex, OrderedIndexOnDelete on_delete, void *ctx) override {
-        return skiplistDeleteRangeByLex(idx, min, max, min_ex, max_ex, on_delete, ctx);
+    unsigned long deleteRangeByLex(OrderedIndex *oi, const_sds min, const_sds max, int min_ex, int max_ex, OrderedIndexOnDelete on_delete, void *ctx) override {
+        return skiplistDeleteRangeByLex(oi, min, max, min_ex, max_ex, on_delete, ctx);
     }
 
-    unsigned long length(OrderedIndex *idx) override {
-        return skiplistLength(idx);
+    unsigned long length(OrderedIndex *oi) override {
+        return skiplistLength(oi);
     }
-    OrderedIndexItem *getByRank(OrderedIndex *idx, unsigned long rank) override {
-        return skiplistGetByRank(idx, rank);
+    OrderedIndexItem *getByRank(OrderedIndex *oi, unsigned long rank) override {
+        return skiplistGetByRank(oi, rank);
     }
-    unsigned long getRank(OrderedIndex *idx, const OrderedIndexItem *pos) override {
-        return skiplistGetRank(idx, pos);
+    unsigned long getRank(OrderedIndex *oi, const OrderedIndexItem *pos) override {
+        return skiplistGetRank(oi, pos);
     }
     void getElementRaw(const OrderedIndexItem *pos, const char **ptr, size_t *len) override {
         skiplistGetElementRaw(pos, ptr, len);
@@ -141,32 +141,32 @@ class SkiplistOrderedIndex : public OrderedIndexTestApi {
         return skiplistGetScore(pos);
     }
 
-    size_t estimateMemory(OrderedIndex *idx, size_t sample_size) override {
-        return skiplistEstimateMemory(idx, sample_size);
+    size_t estimateMemory(OrderedIndex *oi, size_t sample_size) override {
+        return skiplistEstimateMemory(oi, sample_size);
     }
 
-    int verifyIntegrity(OrderedIndex *idx, char *errmsg, size_t errmsg_len) override {
-        return skiplistVerifyIntegrity(idx, errmsg, errmsg_len);
+    int verifyIntegrity(OrderedIndex *oi, char *errmsg, size_t errmsg_len) override {
+        return skiplistVerifyIntegrity(oi, errmsg, errmsg_len);
     }
 
-    unsigned long countScoreRange(OrderedIndex *idx, double min, double max, int min_ex, int max_ex) override {
-        return skiplistCountScoreRange(idx, min, max, min_ex, max_ex);
+    unsigned long countScoreRange(OrderedIndex *oi, double min, double max, int min_ex, int max_ex) override {
+        return skiplistCountScoreRange(oi, min, max, min_ex, max_ex);
     }
-    unsigned long countLexRange(OrderedIndex *idx, const_sds min, const_sds max, int min_ex, int max_ex) override {
-        return skiplistCountLexRange(idx, min, max, min_ex, max_ex);
+    unsigned long countLexRange(OrderedIndex *oi, const_sds min, const_sds max, int min_ex, int max_ex) override {
+        return skiplistCountLexRange(oi, min, max, min_ex, max_ex);
     }
 
-    void initIterator(OrderedIndexIterator *iter, OrderedIndex *idx) override {
-        skiplistInitIterator(iter, idx);
+    void initIterator(OrderedIndexIterator *iter, OrderedIndex *oi) override {
+        skiplistInitIterator(iter, oi);
     }
     void resetIterator(OrderedIndexIterator *iter) override {
         skiplistResetIterator(iter);
     }
-    bool next(OrderedIndexIterator *iter, OrderedIndexItem **pos) override {
-        return skiplistNext(iter, pos);
+    OrderedIndexItem *next(OrderedIndexIterator *iter) override {
+        return skiplistNext(iter);
     }
-    bool prev(OrderedIndexIterator *iter, OrderedIndexItem **pos) override {
-        return skiplistPrev(iter, pos);
+    OrderedIndexItem *prev(OrderedIndexIterator *iter) override {
+        return skiplistPrev(iter);
     }
     void seekToRank(OrderedIndexIterator *iter, unsigned long rank) override {
         skiplistSeekToRank(iter, rank);

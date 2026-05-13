@@ -17,37 +17,37 @@ OrderedIndex *skiplistCreate(void) {
     return (OrderedIndex *)zslCreate();
 }
 
-void skiplistFree(OrderedIndex *idx) {
-    zslFree((zskiplist *)idx);
+void skiplistFree(OrderedIndex *oi) {
+    zslFree((zskiplist *)oi);
 }
 
 /* Modification */
 
-OrderedIndexItem *skiplistInsert(OrderedIndex *idx, double score, const char *ele, size_t len) {
+OrderedIndexItem *skiplistInsert(OrderedIndex *oi, double score, const char *ele, size_t len) {
     zskiplistNode *node = zslCreateNode(zslRandomLevel(), score, ele, len);
-    zslInsertNode((zskiplist *)idx, node);
+    zslInsertNode((zskiplist *)oi, node);
     return (OrderedIndexItem *)node;
 }
 
-void skiplistDelete(OrderedIndex *idx, OrderedIndexItem *node) {
-    zslDelete((zskiplist *)idx, (zskiplistNode *)node);
+void skiplistDelete(OrderedIndex *oi, OrderedIndexItem *node) {
+    zslDelete((zskiplist *)oi, (zskiplistNode *)node);
 }
 
-OrderedIndexItem *skiplistUpdateScore(OrderedIndex *idx, OrderedIndexItem *node, double newscore) {
-    zskiplistNode *result = zslUpdateScore((zskiplist *)idx, (zskiplistNode *)node, newscore);
+OrderedIndexItem *skiplistUpdateScore(OrderedIndex *oi, OrderedIndexItem *node, double newscore) {
+    zskiplistNode *result = zslUpdateScore((zskiplist *)oi, (zskiplistNode *)node, newscore);
     return result ? (OrderedIndexItem *)result : (OrderedIndexItem *)node;
 }
 
-OrderedIndexItem *skiplistPopFirst(OrderedIndex *idx) {
-    zskiplist *zsl = (zskiplist *)idx;
+OrderedIndexItem *skiplistPopFirst(OrderedIndex *oi) {
+    zskiplist *zsl = (zskiplist *)oi;
     zskiplistNode *first = zslGetFirst(zsl);
     if (!first) return NULL;
     zslDetachNode(zsl, first);
     return (OrderedIndexItem *)first;
 }
 
-OrderedIndexItem *skiplistPopLast(OrderedIndex *idx) {
-    zskiplist *zsl = (zskiplist *)idx;
+OrderedIndexItem *skiplistPopLast(OrderedIndex *oi) {
+    zskiplist *zsl = (zskiplist *)oi;
     zskiplistNode *last = zslGetTail(zsl);
     if (!last) return NULL;
     zslDetachNode(zsl, last);
@@ -71,13 +71,13 @@ void skiplistDetachedSetScore(OrderedIndexItem *item, double score) {
     ((zskiplistNode *)item)->score = score;
 }
 
-OrderedIndexItem *skiplistInsertDetached(OrderedIndex *idx, OrderedIndexItem *item) {
-    zskiplistNode *node = zslInsertNode((zskiplist *)idx, (zskiplistNode *)item);
+OrderedIndexItem *skiplistInsertDetached(OrderedIndex *oi, OrderedIndexItem *item) {
+    zskiplistNode *node = zslInsertNode((zskiplist *)oi, (zskiplistNode *)item);
     return (OrderedIndexItem *)node;
 }
 
-unsigned long skiplistDeleteRangeByScore(OrderedIndex *idx, double min, double max, int min_ex, int max_ex, OrderedIndexOnDelete on_delete, void *ctx) {
-    zskiplist *zsl = (zskiplist *)idx;
+unsigned long skiplistDeleteRangeByScore(OrderedIndex *oi, double min, double max, int min_ex, int max_ex, OrderedIndexOnDelete on_delete, void *ctx) {
+    zskiplist *zsl = (zskiplist *)oi;
     zrangespec range = {.min = min, .max = max, .minex = min_ex, .maxex = max_ex};
     zskiplistNode *update[ZSKIPLIST_MAXLEVEL], *x;
     unsigned long removed = 0;
@@ -107,8 +107,8 @@ unsigned long skiplistDeleteRangeByScore(OrderedIndex *idx, double min, double m
     return removed;
 }
 
-unsigned long skiplistDeleteRangeByRank(OrderedIndex *idx, unsigned long start, unsigned long end, OrderedIndexOnDelete on_delete, void *ctx) {
-    zskiplist *zsl = (zskiplist *)idx;
+unsigned long skiplistDeleteRangeByRank(OrderedIndex *oi, unsigned long start, unsigned long end, OrderedIndexOnDelete on_delete, void *ctx) {
+    zskiplist *zsl = (zskiplist *)oi;
     zskiplistNode *update[ZSKIPLIST_MAXLEVEL], *x;
     unsigned long traversed = 0, removed = 0;
     int i;
@@ -138,8 +138,8 @@ unsigned long skiplistDeleteRangeByRank(OrderedIndex *idx, unsigned long start, 
     return removed;
 }
 
-unsigned long skiplistDeleteRangeByLex(OrderedIndex *idx, const_sds min, const_sds max, int min_ex, int max_ex, OrderedIndexOnDelete on_delete, void *ctx) {
-    zskiplist *zsl = (zskiplist *)idx;
+unsigned long skiplistDeleteRangeByLex(OrderedIndex *oi, const_sds min, const_sds max, int min_ex, int max_ex, OrderedIndexOnDelete on_delete, void *ctx) {
+    zskiplist *zsl = (zskiplist *)oi;
     zlexrangespec range = {.min = (sds)min, .max = (sds)max, .minex = min_ex, .maxex = max_ex};
     zskiplistNode *update[ZSKIPLIST_MAXLEVEL], *x;
     unsigned long removed = 0;
@@ -176,16 +176,16 @@ unsigned long skiplistDeleteRangeByLex(OrderedIndex *idx, const_sds min, const_s
 
 /* Query */
 
-unsigned long skiplistLength(OrderedIndex *idx) {
-    return zslGetLength((zskiplist *)idx);
+unsigned long skiplistLength(OrderedIndex *oi) {
+    return zslGetLength((zskiplist *)oi);
 }
 
-OrderedIndexItem *skiplistGetByRank(OrderedIndex *idx, unsigned long rank) {
-    return (OrderedIndexItem *)zslGetElementByRank((zskiplist *)idx, rank);
+OrderedIndexItem *skiplistGetByRank(OrderedIndex *oi, unsigned long rank) {
+    return (OrderedIndexItem *)zslGetElementByRank((zskiplist *)oi, rank);
 }
 
-unsigned long skiplistGetRank(OrderedIndex *idx, const OrderedIndexItem *node) {
-    return zslGetRank((zskiplist *)idx, (const zskiplistNode *)node);
+unsigned long skiplistGetRank(OrderedIndex *oi, const OrderedIndexItem *node) {
+    return zslGetRank((zskiplist *)oi, (const zskiplistNode *)node);
 }
 
 void skiplistGetElementRaw(const OrderedIndexItem *node, const char **ptr, size_t *len) {
@@ -199,8 +199,8 @@ double skiplistGetScore(const OrderedIndexItem *node) {
     return zslGetScore((const zskiplistNode *)node);
 }
 
-unsigned long skiplistCountScoreRange(OrderedIndex *idx, double min, double max, int min_ex, int max_ex) {
-    zskiplist *zsl = (zskiplist *)idx;
+unsigned long skiplistCountScoreRange(OrderedIndex *oi, double min, double max, int min_ex, int max_ex) {
+    zskiplist *zsl = (zskiplist *)oi;
     zrangespec range = {.min = min, .max = max, .minex = min_ex, .maxex = max_ex};
     long first_rank, last_rank;
 
@@ -215,8 +215,8 @@ unsigned long skiplistCountScoreRange(OrderedIndex *idx, double min, double max,
     return (unsigned long)(last_rank - first_rank + 1);
 }
 
-unsigned long skiplistCountLexRange(OrderedIndex *idx, const_sds min, const_sds max, int min_ex, int max_ex) {
-    zskiplist *zsl = (zskiplist *)idx;
+unsigned long skiplistCountLexRange(OrderedIndex *oi, const_sds min, const_sds max, int min_ex, int max_ex) {
+    zskiplist *zsl = (zskiplist *)oi;
     zlexrangespec range = {.min = (sds)min, .max = (sds)max, .minex = min_ex, .maxex = max_ex};
 
     /* Find first element in range. */
@@ -234,20 +234,22 @@ unsigned long skiplistCountLexRange(OrderedIndex *idx, const_sds min, const_sds 
 
 /* Iterator */
 
-void skiplistInitIterator(OrderedIndexIterator *iter, OrderedIndex *idx) {
-    zslInitIterator((zslIter *)iter, (zskiplist *)idx);
+void skiplistInitIterator(OrderedIndexIterator *iter, OrderedIndex *oi) {
+    zslInitIterator((zslIter *)iter, (zskiplist *)oi);
 }
 
 void skiplistResetIterator(OrderedIndexIterator *iter) {
     zslResetIterator((zslIter *)iter);
 }
 
-bool skiplistNext(OrderedIndexIterator *iter, OrderedIndexItem **pos) {
-    return zslNext((zslIter *)iter, (zskiplistNode **)pos);
+OrderedIndexItem *skiplistNext(OrderedIndexIterator *iter) {
+    zskiplistNode *node;
+    return zslNext((zslIter *)iter, &node) ? (OrderedIndexItem *)node : NULL;
 }
 
-bool skiplistPrev(OrderedIndexIterator *iter, OrderedIndexItem **pos) {
-    return zslPrev((zslIter *)iter, (zskiplistNode **)pos);
+OrderedIndexItem *skiplistPrev(OrderedIndexIterator *iter) {
+    zskiplistNode *node;
+    return zslPrev((zslIter *)iter, &node) ? (OrderedIndexItem *)node : NULL;
 }
 
 void skiplistSeekToRank(OrderedIndexIterator *iter, unsigned long rank) {
@@ -264,8 +266,8 @@ void skiplistSeekToLexRange(OrderedIndexIterator *iter, const_sds min, const_sds
 
 /* Memory */
 
-void skiplistDismissMemory(OrderedIndex *idx) {
-    zskiplist *zsl = (zskiplist *)idx;
+void skiplistDismissMemory(OrderedIndex *oi) {
+    zskiplist *zsl = (zskiplist *)oi;
     zskiplistNode *zn = zslGetTail(zsl);
     while (zn != NULL) {
         zskiplistNode *prev = zn->backward;
@@ -274,8 +276,8 @@ void skiplistDismissMemory(OrderedIndex *idx) {
     }
 }
 
-size_t skiplistEstimateMemory(OrderedIndex *idx, size_t sample_size) {
-    zskiplist *zsl = (zskiplist *)idx;
+size_t skiplistEstimateMemory(OrderedIndex *oi, size_t sample_size) {
+    zskiplist *zsl = (zskiplist *)oi;
     unsigned long length = zslGetLength(zsl);
     size_t asize = zslGetAllocSize();
 
@@ -295,9 +297,9 @@ size_t skiplistEstimateMemory(OrderedIndex *idx, size_t sample_size) {
 
 /* Defrag */
 
-OrderedIndex *skiplistDefragInternals(OrderedIndex *idx, void *(*defragfn)(void *)) {
-    OrderedIndex *newidx = defragfn(idx);
-    return newidx; /* NULL if no move needed */
+OrderedIndex *skiplistDefragInternals(OrderedIndex *oi, void *(*defragfn)(void *)) {
+    OrderedIndex *new_oi = defragfn(oi);
+    return new_oi; /* NULL if no move needed */
 }
 
 /* Patch skiplist pointers after a node has been reallocated to a new address.
@@ -322,8 +324,8 @@ static void skiplistPatchNodePointers(zskiplist *zsl, zskiplistNode *oldnode, zs
  *
  * Processes up to 16 nodes per call to bound latency, returning the
  * next cursor position (or 0 when complete). */
-unsigned long skiplistScanDefrag(OrderedIndex *idx, unsigned long cursor, void (*callback)(OrderedIndexItem *old_item, OrderedIndexItem *new_item, void *ctx), void *ctx, void *(*defragfn)(void *)) {
-    zskiplist *zsl = (zskiplist *)idx;
+unsigned long skiplistScanDefrag(OrderedIndex *oi, unsigned long cursor, void (*callback)(OrderedIndexItem *old_item, OrderedIndexItem *new_item, void *ctx), void *ctx, void *(*defragfn)(void *)) {
+    zskiplist *zsl = (zskiplist *)oi;
     zskiplistNode *header = zslGetHeader(zsl);
 
     /* cursor is the 1-based rank of the next node to process, 0 means start */
@@ -372,14 +374,14 @@ unsigned long skiplistScanDefrag(OrderedIndex *idx, unsigned long cursor, void (
 
 /* Debug */
 
-int skiplistGetHeight(OrderedIndex *idx) {
-    return zslGetHeight((zskiplist *)idx);
+int skiplistGetHeight(OrderedIndex *oi) {
+    return zslGetHeight((zskiplist *)oi);
 }
 
 /* Verify the structural integrity of the skiplist.
  * Returns 1 if valid, 0 if corrupt (with a description in errmsg). */
-int skiplistVerifyIntegrity(OrderedIndex *idx, char *errmsg, size_t errmsg_len) {
-    zskiplist *zsl = (zskiplist *)idx;
+int skiplistVerifyIntegrity(OrderedIndex *oi, char *errmsg, size_t errmsg_len) {
+    zskiplist *zsl = (zskiplist *)oi;
     zskiplistNode *header = zslGetHeader(zsl);
     int height = zslGetHeight(zsl);
     unsigned long length = zslGetLength(zsl);

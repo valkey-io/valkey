@@ -1,187 +1,176 @@
+/*
+ * Copyright (c) Valkey Contributors
+ * All rights reserved.
+ * SPDX-License-Identifier: BSD-3-Clause
+ */
+
 #ifndef ORDERED_INDEX_H
 #define ORDERED_INDEX_H
 
-#include "sds.h"
+/* OrderedIndex — a secondary data structure providing ordered access to
+ * (score, element) pairs.
+ *
+ * An OrderedIndex stores items ordered primarily by a double-precision score,
+ * with lexicographic ordering of the element string as a tiebreaker. It
+ * supports O(log N) insertion, deletion, score update, rank lookup, and
+ * range queries by score, rank, or lexicographic bounds.
+ *
+ * IMPORTANT: An OrderedIndex does NOT enforce element uniqueness. It is
+ * designed to be used alongside a companion hashtable that provides O(1)
+ * membership testing and prevents duplicate insertions. The caller is
+ * responsible for checking the hashtable before inserting.
+ *
+ * The interface is backend-agnostic. Currently the only backend is a skiplist
+ * (see skiplist_ordered_index.c). A B+ tree backend is planned. Backend
+ * selection is resolved at link time — all orderedIndex* functions are
+ * implemented in ordered_index.c which delegates to the active backend. */
 
-/* Opaque types for ordered index, positions, and iterators */
+#include "sds.h"
+#include <stddef.h>
+
+/* Opaque types. The concrete definitions are backend-specific. */
 typedef struct OrderedIndex OrderedIndex;
 typedef struct OrderedIndexItem OrderedIndexItem;
 typedef uint64_t OrderedIndexIterator[2];
 
-/* Callback invoked for each item removed during a range-delete operation. */
+/* Callback invoked for each item removed during a range-delete operation.
+ * The callback receives ownership of the item — it must free it or store it. */
 typedef void (*OrderedIndexOnDelete)(OrderedIndexItem *item, void *ctx);
 
-/* ---- Production inline wrappers ----
- *
- * Currently hardcoded to the skiplist implementation. When additional ordered
- * index backends are added (e.g. B-tree), a compile-time switch can select
- * the implementation here without changing any call sites. */
-#include "skiplist_ordered_index.h"
-
-/* Lifecycle */
-static inline OrderedIndex *orderedIndexCreate(void) {
-    return skiplistCreate();
-}
-
-static inline void orderedIndexFree(OrderedIndex *idx) {
-    skiplistFree(idx);
-}
-
-/* Modification */
-static inline OrderedIndexItem *orderedIndexInsertRaw(OrderedIndex *idx, double score, const char *ele, size_t len) {
-    return skiplistInsert(idx, score, ele, len);
-}
-
-static inline OrderedIndexItem *orderedIndexInsert(OrderedIndex *idx, double score, const_sds ele) {
-    return skiplistInsert(idx, score, ele, sdslen(ele));
-}
-
-static inline void orderedIndexDelete(OrderedIndex *idx, OrderedIndexItem *pos) {
-    skiplistDelete(idx, pos);
-}
-
-static inline OrderedIndexItem *orderedIndexUpdateScore(OrderedIndex *idx, OrderedIndexItem *pos, double newscore) {
-    return skiplistUpdateScore(idx, pos, newscore);
-}
-
-static inline OrderedIndexItem *orderedIndexPopFirst(OrderedIndex *idx) {
-    return skiplistPopFirst(idx);
-}
-
-static inline OrderedIndexItem *orderedIndexPopLast(OrderedIndex *idx) {
-    return skiplistPopLast(idx);
-}
-
-static inline void orderedIndexFreeItem(OrderedIndexItem *item) {
-    skiplistFreeItem(item);
-}
-
-static inline OrderedIndexItem *orderedIndexCreateDetached(double score, const char *ele, size_t len) {
-    return skiplistCreateDetached(score, ele, len);
-}
-
-/* Set the score on a detached item — one created via orderedIndexCreateDetached
- * but not yet inserted into an ordered index.  Items that live only in a
- * hashtable (e.g. during ZUNIONSTORE score accumulation) are still considered
- * "detached" for this purpose because they are not part of any ordered index.
- *
- * Do NOT use on items that have been inserted into an ordered index — doing so
- * would silently corrupt the sort order.  Use orderedIndexUpdateScore instead. */
-static inline void orderedIndexDetachedSetScore(OrderedIndexItem *item, double score) {
-    skiplistDetachedSetScore(item, score);
-}
-
-static inline OrderedIndexItem *orderedIndexInsertDetached(OrderedIndex *idx, OrderedIndexItem *item) {
-    return skiplistInsertDetached(idx, item);
-}
-
-static inline unsigned long orderedIndexDeleteRangeByScore(OrderedIndex *idx, double min, double max, int min_ex, int max_ex, OrderedIndexOnDelete on_delete, void *ctx) {
-    return skiplistDeleteRangeByScore(idx, min, max, min_ex, max_ex, on_delete, ctx);
-}
-
-static inline unsigned long orderedIndexDeleteRangeByRank(OrderedIndex *idx, unsigned long start, unsigned long end, OrderedIndexOnDelete on_delete, void *ctx) {
-    return skiplistDeleteRangeByRank(idx, start, end, on_delete, ctx);
-}
-
-static inline unsigned long orderedIndexDeleteRangeByLex(OrderedIndex *idx, const_sds min, const_sds max, int min_ex, int max_ex, OrderedIndexOnDelete on_delete, void *ctx) {
-    return skiplistDeleteRangeByLex(idx, min, max, min_ex, max_ex, on_delete, ctx);
-}
-
-/* Query */
-static inline unsigned long orderedIndexLength(OrderedIndex *idx) {
-    return skiplistLength(idx);
-}
-
-static inline OrderedIndexItem *orderedIndexGetByRank(OrderedIndex *idx, unsigned long rank) {
-    return skiplistGetByRank(idx, rank);
-}
-
-static inline unsigned long orderedIndexGetRank(OrderedIndex *idx, const OrderedIndexItem *pos) {
-    return skiplistGetRank(idx, pos);
-}
-
-static inline void orderedIndexGetElementRaw(const OrderedIndexItem *pos, const char **ptr, size_t *len) {
-    skiplistGetElementRaw(pos, ptr, len);
-}
-
-static inline double orderedIndexGetScore(const OrderedIndexItem *pos) {
-    return skiplistGetScore(pos);
-}
-
-static inline unsigned long orderedIndexCountScoreRange(OrderedIndex *idx, double min, double max, int min_ex, int max_ex) {
-    return skiplistCountScoreRange(idx, min, max, min_ex, max_ex);
-}
-
-static inline unsigned long orderedIndexCountLexRange(OrderedIndex *idx, const_sds min, const_sds max, int min_ex, int max_ex) {
-    return skiplistCountLexRange(idx, min, max, min_ex, max_ex);
-}
-
-/* Iterator */
-static inline void orderedIndexInitIterator(OrderedIndexIterator *iter, OrderedIndex *idx) {
-    skiplistInitIterator(iter, idx);
-}
-
-static inline void orderedIndexResetIterator(OrderedIndexIterator *iter) {
-    skiplistResetIterator(iter);
-}
-
-static inline bool orderedIndexNext(OrderedIndexIterator *iter, OrderedIndexItem **pos) {
-    return skiplistNext(iter, pos);
-}
-
-static inline bool orderedIndexPrev(OrderedIndexIterator *iter, OrderedIndexItem **pos) {
-    return skiplistPrev(iter, pos);
-}
-
-static inline void orderedIndexSeekToRank(OrderedIndexIterator *iter, unsigned long rank) {
-    skiplistSeekToRank(iter, rank);
-}
-
-/* Seek to a position within a score/lex range.
- *
- * offset >= 0: positions for forward iteration (next() returns the element).
- *   offset 0 = first element in range, 1 = second, etc.
- * offset < 0:  positions for reverse iteration (prev() returns the element).
- *   offset -1 = last element in range, -2 = second-to-last, etc. */
-static inline void orderedIndexSeekToScoreRange(OrderedIndexIterator *iter, double min, double max, int min_ex, int max_ex, long offset) {
-    skiplistSeekToScoreRange(iter, min, max, min_ex, max_ex, offset);
-}
-
-static inline void orderedIndexSeekToLexRange(OrderedIndexIterator *iter, const_sds min, const_sds max, int min_ex, int max_ex, long offset) {
-    skiplistSeekToLexRange(iter, min, max, min_ex, max_ex, offset);
-}
-
-/* Memory */
-static inline void orderedIndexDismissMemory(OrderedIndex *idx) {
-    skiplistDismissMemory(idx);
-}
-
-static inline size_t orderedIndexEstimateMemory(OrderedIndex *idx, size_t sample_size) {
-    return skiplistEstimateMemory(idx, sample_size);
-}
-
-/* Defrag */
+/* Callback invoked during defrag when an item is reallocated. Allows the
+ * caller to update external references (e.g. hashtable pointers). */
 typedef void (*OrderedIndexDefragCallback)(OrderedIndexItem *old_item, OrderedIndexItem *new_item, void *ctx);
 
-static inline OrderedIndex *orderedIndexDefragInternals(OrderedIndex *idx, void *(*defragfn)(void *)) {
-    return skiplistDefragInternals(idx, defragfn);
-}
+/* ============================================================
+ * Lifecycle
+ * ============================================================ */
 
-/* Cursor-based incremental defrag.  Walks the ordered index in batches,
- * calling defragfn on each item.  When an item is reallocated, the callback
- * is invoked so the caller can update external references (e.g. hashtable).
- * Returns the next cursor, or 0 when the scan is complete. */
-static inline unsigned long orderedIndexScanDefrag(OrderedIndex *idx, unsigned long cursor, OrderedIndexDefragCallback callback, void *ctx, void *(*defragfn)(void *)) {
-    return skiplistScanDefrag(idx, cursor, callback, ctx, defragfn);
-}
+/* Create a new empty ordered index. */
+OrderedIndex *orderedIndexCreate(void);
 
-/* Debug */
-static inline int orderedIndexGetHeight(OrderedIndex *idx) {
-    return skiplistGetHeight(idx);
-}
+/* Free an ordered index and all items it contains. */
+void orderedIndexFree(OrderedIndex *oi);
 
-static inline int orderedIndexVerifyIntegrity(OrderedIndex *idx, char *errmsg, size_t errmsg_len) {
-    return skiplistVerifyIntegrity(idx, errmsg, errmsg_len);
-}
+/* ============================================================
+ * Modification
+ * ============================================================ */
+
+/* Insert a new item with the given score and element (copied).
+ * Returns a pointer to the inserted item (for storing in a companion HT).
+ * The caller must ensure the element is not already present. */
+OrderedIndexItem *orderedIndexInsert(OrderedIndex *oi, double score, const char *ele, size_t len);
+
+/* Remove an item from the index and free it. */
+void orderedIndexDelete(OrderedIndex *oi, OrderedIndexItem *item);
+
+/* Update the score of an existing item. May reposition it in the index.
+ * Returns the (possibly new) item pointer — the old pointer may be invalid.
+ * Returns NULL if the item stayed in place (score updated in-place). */
+OrderedIndexItem *orderedIndexUpdateScore(OrderedIndex *oi, OrderedIndexItem *item, double newscore);
+
+/* Remove and return the first (lowest-score) item without freeing it. */
+OrderedIndexItem *orderedIndexPopFirst(OrderedIndex *oi);
+
+/* Remove and return the last (highest-score) item without freeing it. */
+OrderedIndexItem *orderedIndexPopLast(OrderedIndex *oi);
+
+/* Free a detached item (one that is not in any index). */
+void orderedIndexFreeItem(OrderedIndexItem *item);
+
+/* Create an item that is not inserted into any index. Used for multi-set
+ * operations (e.g. ZUNIONSTORE) where scores are accumulated in a hashtable
+ * before final insertion, avoiding repeated delete+reinsert costs. */
+OrderedIndexItem *orderedIndexCreateDetached(double score, const char *ele, size_t len);
+
+/* Set the score on a detached item. Do NOT use on items that are currently
+ * in an index — that would corrupt sort order. Use orderedIndexUpdateScore
+ * for items that are in an index. */
+void orderedIndexDetachedSetScore(OrderedIndexItem *item, double score);
+
+/* Insert a previously-detached item into the index. The index takes ownership. */
+OrderedIndexItem *orderedIndexInsertDetached(OrderedIndex *oi, OrderedIndexItem *item);
+
+/* Delete all items with score in [min, max] (exclusive if min_ex/max_ex set).
+ * Calls on_delete for each removed item. Returns count of items removed. */
+unsigned long orderedIndexDeleteRangeByScore(OrderedIndex *oi, double min, double max, int min_ex, int max_ex, OrderedIndexOnDelete on_delete, void *ctx);
+
+/* Delete all items with rank in [start, end] (1-based, inclusive).
+ * Calls on_delete for each removed item. Returns count of items removed. */
+unsigned long orderedIndexDeleteRangeByRank(OrderedIndex *oi, unsigned long start, unsigned long end, OrderedIndexOnDelete on_delete, void *ctx);
+
+/* Delete all items with element in lex range [min, max].
+ * Calls on_delete for each removed item. Returns count of items removed. */
+unsigned long orderedIndexDeleteRangeByLex(OrderedIndex *oi, const_sds min, const_sds max, int min_ex, int max_ex, OrderedIndexOnDelete on_delete, void *ctx);
+
+/* ============================================================
+ * Query
+ * ============================================================ */
+
+/* Return the number of items in the index. */
+unsigned long orderedIndexLength(OrderedIndex *oi);
+
+/* Return the item at the given 1-based rank, or NULL if out of range. */
+OrderedIndexItem *orderedIndexGetByRank(OrderedIndex *oi, unsigned long rank);
+
+/* Return the 1-based rank of an item. The item must be in the index. */
+unsigned long orderedIndexGetRank(OrderedIndex *oi, const OrderedIndexItem *item);
+
+/* Get the element data from an item as a raw pointer + length. */
+void orderedIndexGetElementRaw(const OrderedIndexItem *item, const char **ptr, size_t *len);
+
+/* Get the score of an item. */
+double orderedIndexGetScore(const OrderedIndexItem *item);
+
+/* Count items with score in [min, max] (exclusive if min_ex/max_ex set). */
+unsigned long orderedIndexCountScoreRange(OrderedIndex *oi, double min, double max, int min_ex, int max_ex);
+
+/* Count items with element in lex range [min, max]. */
+unsigned long orderedIndexCountLexRange(OrderedIndex *oi, const_sds min, const_sds max, int min_ex, int max_ex);
+
+/* ============================================================
+ * Iterator
+ * ============================================================ */
+
+/* Initialize a stack-allocated iterator. Must call a seek function before
+ * iterating, or next()/prev() will start from the beginning/end. */
+void orderedIndexInitIterator(OrderedIndexIterator *iter, OrderedIndex *oi);
+
+/* Reset iterator position (keeps the index association). */
+void orderedIndexResetIterator(OrderedIndexIterator *iter);
+
+/* Advance iterator forward. Returns the next item, or NULL at end. */
+OrderedIndexItem *orderedIndexNext(OrderedIndexIterator *iter);
+
+/* Advance iterator backward. Returns the previous item, or NULL at start. */
+OrderedIndexItem *orderedIndexPrev(OrderedIndexIterator *iter);
+
+/* Position iterator at the given rank. next() returns rank+1, prev() returns rank. */
+void orderedIndexSeekToRank(OrderedIndexIterator *iter, unsigned long rank);
+
+/* Position iterator within a score range.
+ * offset >= 0: next() returns the (offset)th element in range.
+ * offset < 0:  prev() returns the (-offset-1)th element from end of range. */
+void orderedIndexSeekToScoreRange(OrderedIndexIterator *iter, double min, double max, int min_ex, int max_ex, long offset);
+
+/* Position iterator within a lex range. Offset semantics same as score range. */
+void orderedIndexSeekToLexRange(OrderedIndexIterator *iter, const_sds min, const_sds max, int min_ex, int max_ex, long offset);
+
+/* ============================================================
+ * Memory
+ * ============================================================ */
+
+/* Hint to the OS that the index memory can be reclaimed (e.g. via madvise). */
+void orderedIndexDismissMemory(OrderedIndex *oi);
+
+/* Estimate total memory usage by sampling. */
+size_t orderedIndexEstimateMemory(OrderedIndex *oi, size_t sample_size);
+
+/* Defrag the index header/metadata. Returns new pointer if reallocated. */
+OrderedIndex *orderedIndexDefragInternals(OrderedIndex *oi, void *(*defragfn)(void *));
+
+/* Incremental defrag scan. Walks items in batches, calling defragfn on each.
+ * When an item is reallocated, callback is invoked to update external refs.
+ * Returns next cursor, or 0 when complete. */
+unsigned long orderedIndexScanDefrag(OrderedIndex *oi, unsigned long cursor, OrderedIndexDefragCallback callback, void *ctx, void *(*defragfn)(void *));
 
 #endif /* ORDERED_INDEX_H */

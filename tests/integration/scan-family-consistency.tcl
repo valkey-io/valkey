@@ -74,6 +74,10 @@ test {hash-seed uses full bytes including embedded NULL for seeding} {
             set primary [srv -1 client]
             set replica [srv 0 client]
 
+            set primary_seed [lindex [$primary config get hash-seed] 1]
+            set replica_seed [lindex [$replica config get hash-seed] 1]
+            assert_not_equal $primary_seed $replica_seed
+
             $replica replicaof [srv -1 host] [srv -1 port]
             wait_for_sync $replica
 

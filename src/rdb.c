@@ -1933,15 +1933,11 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
     /* Set default error of load object, it will be set to 0 on success. */
     if (error) *error = RDB_LOAD_ERR_OTHER;
 
-    int deep_integrity_validation = server.sanitize_dump_payload == SANITIZE_DUMP_YES;
-    if (server.sanitize_dump_payload == SANITIZE_DUMP_CLIENTS) {
-        /* Skip sanitization when loading (an RDB), or getting a RESTORE command
-         * from either the primary or a client using an ACL user with the skip-sanitize-payload flag. */
-        int skip = server.loading || (server.current_client && (server.current_client->flag.primary));
-        if (!skip && server.current_client && server.current_client->user)
-            skip = !!(server.current_client->user->flags & USER_FLAG_SANITIZE_PAYLOAD_SKIP);
-        deep_integrity_validation = !skip;
-    }
+    /* Always validate integrity of loaded data structures. Runtime traversal
+     * assertions (lpAssertValidEntry) have been removed for performance, so
+     * we must catch corruption at load time unconditionally. This makes the
+     * sanitize-dump-payload config effectively a no-op. */
+    int deep_integrity_validation = 1;
 
     if (rdbtype == RDB_TYPE_STRING) {
         /* Read string value */

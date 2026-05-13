@@ -109,6 +109,7 @@ void notifyKeyspaceEvent(int type, char *event, robj *key, int dbid) {
     char buf[24];
     client *c = server.executing_client;
     debugServerAssert(moduleNotifyKeyspaceSubscribersCnt() == 0 ||
+                      !isPrimaryDurabilityEnabled() ||
                       (type & (NOTIFY_GENERIC | NOTIFY_STRING | NOTIFY_LIST | NOTIFY_SET | NOTIFY_HASH | NOTIFY_ZSET | NOTIFY_STREAM)) == 0 ||
                       c == NULL ||
                       c->cmd == NULL ||

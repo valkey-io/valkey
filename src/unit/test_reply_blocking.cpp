@@ -1029,6 +1029,20 @@ TEST_F(FullDurabilityTest, KeyspaceNotifyTaskCopiesEventString) {
     decrRefCount(key_obj);
 }
 
+/* Test that invalid task types are rejected by durabilityRegisterDeferredTask */
+TEST_F(FullDurabilityTest, RegisterDeferredTaskRejectsInvalidType) {
+    server.primary_repl_offset = 100;
+
+    /* Negative type should be rejected */
+    ASSERT_FALSE(durabilityRegisterDeferredTask(-1, (void *)0));
+
+    /* Type == MAX should be rejected */
+    ASSERT_FALSE(durabilityRegisterDeferredTask(DURABLE_TASK_TYPE_MAX, (void *)0));
+
+    /* Type > MAX should be rejected */
+    ASSERT_FALSE(durabilityRegisterDeferredTask(DURABLE_TASK_TYPE_MAX + 1, (void *)0));
+}
+
 /* Test durabilityClientInit is idempotent */
 TEST_F(SyncReplicationTest, ClientInitIdempotent) {
     initDurabilityForTest();

@@ -3880,7 +3880,7 @@ void call(client *c, int flags) {
     struct ClientFlags client_old_flags = c->flag;
 
     struct serverCommand *real_cmd = c->realcmd;
-    beforeCommandTrackReplOffset(c);
+    if (server.bio_aof_offload_enabled) beforeCommandTrackReplOffset(c);
     client *prev_client = server.executing_client;
     server.executing_client = c;
 

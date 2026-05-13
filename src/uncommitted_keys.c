@@ -32,7 +32,7 @@ static list *pending_uncommitted_dbs;
 
 /*================================= Internal Prototypes ====================== */
 
-static void addUncommittedKey(sds key, long long offset, hashtable *uncommittedKeys);
+static bool addUncommittedKey(sds key, long long offset, hashtable *uncommittedKeys);
 static void pendingUncommittedKeyDestructor(void *entry);
 static uint64_t uncommittedKeysHash(const void *key);
 static int uncommittedKeysKeyCompare(const void *key1, const void *key2);
@@ -98,21 +98,24 @@ unsigned long long getNumberOfUncommittedKeys(void) {
  * Mark a key as uncommitted at a particular replication offset.
  * If the key already exists in the hashtable, update its offset.
  */
-static void addUncommittedKey(const sds key, const long long offset, hashtable *uncommittedKeys) {
+static bool addUncommittedKey(const sds key, const long long offset, hashtable *uncommittedKeys) {
     uncommittedKeyEntry *entry = zmalloc(sizeof(*entry));
     entry->key = sdsdup(key);
     entry->offset = offset;
 
     void *existing = NULL;
     if (hashtableAddOrFind(uncommittedKeys, entry, &existing)) {
-        return; /* newly added */
+        return true; /* newly added — caller should enqueue pending record */
     }
 
     /* Key already tracked — update to the latest offset */
     uncommittedKeyEntry *existing_entry = existing;
+    bool was_placeholder = (existing_entry->offset == LLONG_MAX);
     existing_entry->offset = offset;
     sdsfree(entry->key);
     zfree(entry);
+    /* Only need a new pending record if the existing entry wasn't already a placeholder */
+    return !was_placeholder;
 }
 
 /**
@@ -153,22 +156,24 @@ long long durabilityPurgeAndGetUncommittedKeyOffset(const sds key, serverDb *db)
 void handleUncommittedKeyForClient(const client *c, robj *key, serverDb *db) {
     sds keystr = objectGetVal(key);
 
-    if ((c != NULL) && ((c->flag.multi) || scriptIsRunning())) {
+    if (scriptIsRunning() || ((c != NULL) && c->flag.multi)) {
         if (server.durability.all_dbs_dirty_in_current_cmd) return;
 
         /* Mark dirty immediately with placeholder offset */
-        addUncommittedKey(keystr, LLONG_MAX, db->uncommitted_keys);
+        bool needs_pending = addUncommittedKey(keystr, LLONG_MAX, db->uncommitted_keys);
 
-        /* Buffer a reference so we can update offset later */
-        if (pending_uncommitted_keys == NULL) {
-            pending_uncommitted_keys = listCreate();
-            listSetFreeMethod(pending_uncommitted_keys, pendingUncommittedKeyDestructor);
+        /* Buffer a reference so we can update offset later (only if not already pending) */
+        if (needs_pending) {
+            if (pending_uncommitted_keys == NULL) {
+                pending_uncommitted_keys = listCreate();
+                listSetFreeMethod(pending_uncommitted_keys, pendingUncommittedKeyDestructor);
+            }
+            pendingUncommittedKey *dirty_key = zmalloc(sizeof(pendingUncommittedKey));
+            incrRefCount(key);
+            dirty_key->key = key;
+            dirty_key->uncommitted_keys = db->uncommitted_keys;
+            listAddNodeTail(pending_uncommitted_keys, dirty_key);
         }
-        pendingUncommittedKey *dirty_key = zmalloc(sizeof(pendingUncommittedKey));
-        incrRefCount(key);
-        dirty_key->key = key;
-        dirty_key->uncommitted_keys = db->uncommitted_keys;
-        listAddNodeTail(pending_uncommitted_keys, dirty_key);
     } else {
         /* Single command: mark dirty with real offset */
         addUncommittedKey(keystr, server.primary_repl_offset, db->uncommitted_keys);
@@ -320,6 +325,10 @@ void clearAllUncommittedKeys(void) {
     if (pending_uncommitted_keys != NULL) {
         listEmpty(pending_uncommitted_keys);
     }
+    if (pending_uncommitted_dbs != NULL) {
+        listEmpty(pending_uncommitted_dbs);
+    }
+    server.durability.all_dbs_dirty_in_current_cmd = false;
     for (int i = 0; i < server.dbnum; i++) {
         serverDb *db = server.db[i];
         if (db == NULL) continue;

@@ -40,6 +40,16 @@ start_cluster 1 0 {tags {external:skip cluster}} {
         assert_error "*unknown type name*" {R 0 clusterscan 0 TYPE notatype}
     }
 
+    test "CLUSTERSCAN cursor is not tracked by client tracking" {
+        R 0 client tracking on
+        assert_equal 0 [s 0 tracking_total_keys]
+
+        R 0 clusterscan "0-{06S}-0"
+        assert_equal 0 [s 0 tracking_total_keys]
+
+        R 0 client tracking off
+    }
+
     test "CLUSTERSCAN with SLOT restricts to single slot" {
         # When SLOT X is provided, clusterscan should only iterate on slot X
         # and return "0" when exhausted and not advance to slot X+1.

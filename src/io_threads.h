@@ -10,7 +10,6 @@ typedef enum {
     JOB_REQ_FREE_OBJ,
     JOB_REQ_POLL,
     JOB_REQ_ACCEPT,
-    JOB_REQ_GENERIC,
     JOB_REQ_COUNT
 } JobRequest;
 _Static_assert(JOB_REQ_COUNT <= 8, "JOB_REQ_COUNT must not exceed 8 for pointer arithmetic");
@@ -25,7 +24,6 @@ _Static_assert(JOB_RES_COUNT <= 8, "JOB_RES_COUNT must not exceed 8 for pointer 
 void initIOThreads(int prev_threads_num);
 void killIOThreads(void);
 int inMainThread(void);
-int trySendJobToIOThreads(void (*handler)(void *), void *data);
 int trySendReadToIOThreads(client *c);
 int trySendWriteToIOThreads(client *c);
 int tryOffloadFreeObjToIOThreads(robj *o);

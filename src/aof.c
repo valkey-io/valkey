@@ -29,7 +29,6 @@
 
 #include "server.h"
 #include "bio.h"
-#include "io_threads.h"
 #include "rio.h"
 #include "functions.h"
 #include "module.h"
@@ -52,22 +51,8 @@ aofManifest *aofLoadManifestFromFile(sds am_filepath);
 void aofManifestFreeAndUpdate(aofManifest *am);
 void aof_background_fsync_and_close(int fd);
 
-enum {
-    AOF_IO_FLUSH_IDLE = 0,
-    AOF_IO_FLUSH_PENDING,
-    AOF_IO_FLUSH_DONE,
-    AOF_IO_FLUSH_ERR,
-};
-
-typedef struct aofIOFlushJob {
-    int fd;
-    sds buf;
-    size_t len;
-    long long reploff;
-} aofIOFlushJob;
-
-static void processAofIOThreadFlushResult(void);
-static int tryOffloadAofAlwaysFlushToIOThreads(void);
+static void processAofBioFlushResult(void);
+static int tryOffloadAofFlushToBio(void);
 
 /* ----------------------------------------------------------------------------
  * AOF Manifest file implementation.
@@ -1180,39 +1165,11 @@ ssize_t aofWrite(int fd, const char *buf, size_t len) {
     return totwritten;
 }
 
-static void aofIOThreadFlushJobHandler(void *data) {
-    aofIOFlushJob *job = data;
-    int err = 0;
-    ssize_t nwritten = aofWrite(job->fd, job->buf, job->len);
-    if (nwritten != (ssize_t)job->len) {
-        err = (nwritten == -1) ? errno : ENOSPC;
-        goto done;
-    }
-
-    if (valkey_fsync(job->fd) == -1) {
-        err = errno;
-        goto done;
-    }
-
-    atomic_store_explicit(&server.fsynced_reploff_pending, job->reploff, memory_order_relaxed);
-    atomic_store_explicit(&server.aof_io_flush_size, job->len, memory_order_relaxed);
-    atomic_store_explicit(&server.aof_io_flush_state, AOF_IO_FLUSH_DONE, memory_order_release);
-    sdsfree(job->buf);
-    zfree(job);
-    return;
-
-done:
-    atomic_store_explicit(&server.aof_io_flush_errno, err, memory_order_relaxed);
-    atomic_store_explicit(&server.aof_io_flush_state, AOF_IO_FLUSH_ERR, memory_order_release);
-    sdsfree(job->buf);
-    zfree(job);
-}
-
 int aofIOFlushInProgress(void) {
     return atomic_load_explicit(&server.aof_io_flush_state, memory_order_acquire) == AOF_IO_FLUSH_PENDING;
 }
 
-static void processAofIOThreadFlushResult(void) {
+static void processAofBioFlushResult(void) {
     int state = atomic_load_explicit(&server.aof_io_flush_state, memory_order_acquire);
     if (state == AOF_IO_FLUSH_IDLE || state == AOF_IO_FLUSH_PENDING) return;
 
@@ -1222,13 +1179,7 @@ static void processAofIOThreadFlushResult(void) {
         server.aof_last_incr_size += nwritten;
         server.aof_last_incr_fsync_offset = server.aof_last_incr_size;
         server.aof_last_fsync = server.mstime;
-        if (server.aof_last_write_status == C_ERR) {
-            serverLog(LL_NOTICE, "AOF write error looks solved. The server can write again.");
-            server.aof_last_write_status = C_OK;
-        }
         atomic_store_explicit(&server.aof_io_flush_state, AOF_IO_FLUSH_IDLE, memory_order_release);
-
-        /* Notify sync replication that AOF fsync completed so blocked clients can be unblocked */
         notifyDurabilityProgress();
         return;
     }
@@ -1237,59 +1188,38 @@ static void processAofIOThreadFlushResult(void) {
     server.aof_last_write_errno = err;
     atomic_store_explicit(&server.aof_io_flush_state, AOF_IO_FLUSH_IDLE, memory_order_release);
 
-    /* IO thread flush is only used with appendfsync=always, so an error here
-     * is always fatal. We cannot guarantee durability. */
     serverLog(LL_WARNING,
-              "Can't persist AOF from IO thread for "
-              "AOF fsync policy 'always': %s. Exiting...",
+              "Can't persist AOF for fsync policy 'always': %s. Exiting...",
               strerror(err));
     exit(1);
 }
 
-static int tryOffloadAofAlwaysFlushToIOThreads(void) {
+void aofPipeReadable(aeEventLoop *el, int fd, void *privdata, int mask) {
+    UNUSED(el);
+    UNUSED(privdata);
+    UNUSED(mask);
+    char buf[64];
+    while (read(fd, buf, sizeof(buf)) == (ssize_t)sizeof(buf));
+    processAofBioFlushResult();
+}
+
+static int tryOffloadAofFlushToBio(void) {
     if (server.aof_fsync != AOF_FSYNC_ALWAYS || sdslen(server.aof_buf) == 0 || aofIOFlushInProgress()) {
         return C_ERR;
     }
 
-    /* Ensure the previous IO thread result has been fully processed.
-     * aofIOFlushInProgress() only checks for PENDING; the state could also
-     * be DONE or ERR if processAofIOThreadFlushResult() hasn't run yet. */
     if (atomic_load_explicit(&server.aof_io_flush_state, memory_order_acquire) != AOF_IO_FLUSH_IDLE) {
         return C_ERR;
     }
 
-    /* If IO threads are configured but not active, we can't offload.
-     * Note: Thread activation based on AOF workload is handled by
-     * adjustIOThreadsByEventLoad() via the has_background_work parameter. */
-    if (server.io_threads_num <= 1 || server.active_io_threads_num <= 1) {
-        return C_ERR;
-    }
-
-    /* NOTE: With sync replication enabled, we still want to offload fsync to
-     * IO threads to avoid blocking the main thread. The notifyDurabilityProgress()
-     * callback will be invoked in beforeSleep() when we check for completed IO thread
-     * jobs, which will then unblock waiting clients. This adds at most one
-     * event loop iteration of latency but keeps the main thread responsive. */
-
-    aofIOFlushJob *job = zmalloc(sizeof(*job));
-    job->fd = server.aof_fd;
-    job->buf = server.aof_buf;
-    job->len = sdslen(job->buf);
-    job->reploff = server.primary_repl_offset;
-
     atomic_store_explicit(&server.aof_io_flush_errno, 0, memory_order_relaxed);
     atomic_store_explicit(&server.aof_io_flush_size, 0, memory_order_relaxed);
     atomic_store_explicit(&server.aof_io_flush_state, AOF_IO_FLUSH_PENDING, memory_order_release);
-    if (trySendJobToIOThreads(aofIOThreadFlushJobHandler, job) == C_OK) {
-        /* Hand off the buffer to the IO thread; allocate a fresh one for new writes. */
-        server.aof_buf = sdsempty();
-        server.aof_flush_postponed_start = 0;
-        return C_OK;
-    }
 
-    atomic_store_explicit(&server.aof_io_flush_state, AOF_IO_FLUSH_IDLE, memory_order_release);
-    zfree(job);
-    return C_ERR;
+    bioCreateAofAlwaysFlushJob(server.aof_fd, server.aof_buf, server.primary_repl_offset);
+    server.aof_buf = sdsempty();
+    server.aof_flush_postponed_start = 0;
+    return C_OK;
 }
 
 /* Write the append only file buffer on disk.
@@ -1316,21 +1246,11 @@ void flushAppendOnlyFile(int force) {
     int sync_in_progress = 0;
     mstime_t latency;
 
-    processAofIOThreadFlushResult();
+    processAofBioFlushResult();
     if (aofIOFlushInProgress()) {
         if (!force) return;
-        /* Busy-wait for the IO thread to finish. Timeout after 30 seconds
-         * to prevent hanging indefinitely. */
-        monotime wait_start = getMonotonicUs();
-        while (aofIOFlushInProgress()) {
-            usleep(100);
-            processAofIOThreadFlushResult();
-            if (getMonotonicUs() - wait_start > 30 * 1000000ULL) {
-                serverLog(LL_WARNING,
-                          "Timed out waiting for AOF IO thread flush to complete. Exiting...");
-                exit(1);
-            }
-        }
+        bioDrainWorker(BIO_AOF_ALWAYS_FLUSH);
+        processAofBioFlushResult();
     }
 
     if (sdslen(server.aof_buf) == 0) {
@@ -1388,7 +1308,7 @@ void flushAppendOnlyFile(int force) {
         }
     }
 
-    if (server.bio_aof_offload_enabled && server.aof_fsync == AOF_FSYNC_ALWAYS && !force && tryOffloadAofAlwaysFlushToIOThreads() == C_OK) {
+    if (server.bio_aof_offload_enabled && server.aof_fsync == AOF_FSYNC_ALWAYS && !force && tryOffloadAofFlushToBio() == C_OK) {
         return;
     }
 

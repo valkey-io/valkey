@@ -507,6 +507,13 @@ typedef enum {
 #define AOF_FSYNC_ALWAYS 1
 #define AOF_FSYNC_EVERYSEC 2
 
+enum {
+    AOF_IO_FLUSH_IDLE = 0,
+    AOF_IO_FLUSH_PENDING,
+    AOF_IO_FLUSH_DONE,
+    AOF_IO_FLUSH_ERR,
+};
+
 /* Replication diskless load defines */
 #define REPL_DISKLESS_LOAD_DISABLED 0
 #define REPL_DISKLESS_LOAD_WHEN_DB_EMPTY 1
@@ -1809,6 +1816,7 @@ struct valkeyServer {
                                           during startup or arguments to loadex. */
     list *loadmodule_queue;            /* List of modules to load at startup. */
     int module_pipe[2];                /* Pipe used to awake the event loop by module threads. */
+    int aof_pipe[2];                   /* Pipe used by BIO to wake event loop after AOF flush. */
     pid_t child_pid;                   /* PID of current child */
     int child_type;                    /* Type of current child */
     _Atomic(int) module_gil_acquiring; /* Indicates whether the GIL is being acquiring by the main thread. */
@@ -3309,6 +3317,7 @@ int aofDelHistoryFiles(void);
 int aofRewriteLimited(void);
 int rewriteSlotToAppendOnlyFileRio(rio *aof, int db_num, int hashslot, size_t *key_count);
 int aofIOFlushInProgress(void);
+void aofPipeReadable(aeEventLoop *el, int fd, void *privdata, int mask);
 
 /* Child info */
 void openChildInfoPipe(void);

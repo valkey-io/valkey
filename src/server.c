@@ -3102,6 +3102,14 @@ void initServer(void) {
         serverPanic("Error registering the readable event for the module pipe.");
     }
 
+    /* Create pipe for BIO AOF flush completion wakeup. */
+    if (anetPipe(server.aof_pipe, O_CLOEXEC | O_NONBLOCK, O_CLOEXEC | O_NONBLOCK) == -1) {
+        serverPanic("Error creating the AOF pipe: %s", strerror(errno));
+    }
+    if (aeCreateFileEvent(server.el, server.aof_pipe[0], AE_READABLE, aofPipeReadable, NULL) == AE_ERR) {
+        serverPanic("Error registering the readable event for the AOF pipe.");
+    }
+
     /* Register before and after sleep handlers (note this needs to be done
      * before loading persistence since it is used by processEventsWhileBlocked. */
     aeSetBeforeSleepProc(server.el, beforeSleep);

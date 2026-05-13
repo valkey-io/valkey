@@ -73,6 +73,8 @@
 #include "tls.h"
 #include <stdatomic.h>
 
+ssize_t aofWrite(int fd, const char *buf, size_t len);
+
 static unsigned int bio_job_to_worker[] = {
     [BIO_CLOSE_FILE] = 0,
     [BIO_AOF_FSYNC] = 1,
@@ -80,6 +82,7 @@ static unsigned int bio_job_to_worker[] = {
     [BIO_LAZY_FREE] = 2,
     [BIO_RDB_SAVE] = 3,
     [BIO_TLS_RELOAD] = 4, /* only used when BUILD_TLS=yes */
+    [BIO_AOF_ALWAYS_FLUSH] = 1,    /* same worker as BIO_AOF_FSYNC */
 };
 
 typedef struct {
@@ -140,6 +143,13 @@ typedef union bio_job {
     struct {
         int type;
     } tls_reload_args;
+
+    struct {
+        int type;
+        int fd;
+        sds buf;
+        long long reploff;
+    } aof_flush_args;
 } bio_job;
 
 void *bioProcessBackgroundJobs(void *arg);
@@ -245,6 +255,14 @@ void bioCreateTlsReloadJob(void) {
     bioSubmitJob(BIO_TLS_RELOAD, job);
 }
 
+void bioCreateAofAlwaysFlushJob(int fd, sds buf, long long reploff) {
+    bio_job *job = allocBioJob(0);
+    job->aof_flush_args.fd = fd;
+    job->aof_flush_args.buf = buf;
+    job->aof_flush_args.reploff = reploff;
+    bioSubmitJob(BIO_AOF_ALWAYS_FLUSH, job);
+}
+
 void *bioProcessBackgroundJobs(void *arg) {
     bio_worker_data *const bwd = arg;
     sigset_t sigset;
@@ -314,6 +332,26 @@ void *bioProcessBackgroundJobs(void *arg) {
 #else
             serverPanic("BIO_TLS_RELOAD job type requires built-in TLS (BUILD_TLS=yes).");
 #endif
+        } else if (job_type == BIO_AOF_ALWAYS_FLUSH) {
+            int err = 0;
+            size_t len = sdslen(job->aof_flush_args.buf);
+            ssize_t nwritten = aofWrite(job->aof_flush_args.fd, job->aof_flush_args.buf, len);
+            if (nwritten != (ssize_t)len) {
+                err = (nwritten == -1) ? errno : ENOSPC;
+            } else if (valkey_fsync(job->aof_flush_args.fd) == -1) {
+                err = errno;
+            }
+
+            if (err) {
+                atomic_store_explicit(&server.aof_io_flush_errno, err, memory_order_relaxed);
+                atomic_store_explicit(&server.aof_io_flush_state, AOF_IO_FLUSH_ERR, memory_order_release);
+            } else {
+                atomic_store_explicit(&server.fsynced_reploff_pending, job->aof_flush_args.reploff, memory_order_relaxed);
+                atomic_store_explicit(&server.aof_io_flush_size, len, memory_order_relaxed);
+                atomic_store_explicit(&server.aof_io_flush_state, AOF_IO_FLUSH_DONE, memory_order_release);
+            }
+            sdsfree(job->aof_flush_args.buf);
+            if (write(server.aof_pipe[1], "x", 1) == -1) { /* best-effort wakeup */ }
         } else {
             serverPanic("Wrong job type in bioProcessBackgroundJobs().");
         }

@@ -1726,6 +1726,11 @@ static int ACLSelectorCheckKey(aclSelector *selector, const char *key, int keyle
     /* The selector can access any key */
     if (selector->flags & SELECTOR_FLAG_ALLKEYS) return ACL_OK;
 
+    /* NOT_KEY entries are routing-only tokens (e.g. CLUSTERSCAN cursor,
+     * pub/sub channels); they are not real user keys and should bypass
+     * key-pattern ACL checks, consistent with how keyspecs skip them. */
+    if (keyspec_flags & CMD_KEY_NOT_KEY) return ACL_OK;
+
     listIter li;
     listNode *ln;
     listRewind(selector->patterns, &li);

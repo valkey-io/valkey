@@ -63,6 +63,35 @@ start_cluster 1 0 {tags {external:skip cluster}} {
         
         assert_equal $cursor "0"
     }
+
+    test "CLUSTERSCAN cursor is NOT_KEY and does not break ACL key checks" {
+        # The CLUSTERSCAN cursor (e.g. "0" or "0-{06S}-0") is a routing token,
+        # not a real user key. A user with restricted key permissions (+clusterscan
+        # but only ~foo:*) must still be able to use CLUSTERSCAN without getting
+        # "NOPERM No permissions to access a key" on the cursor itself.
+
+        # Create a user with limited key access but allowed to run clusterscan
+        R 0 ACL SETUSER scan_acl_leak on >pass resetkeys ~foo:* resetchannels -@all +clusterscan
+        set rd [valkey_deferring_client 0]
+        $rd AUTH scan_acl_leak pass
+        $rd read
+
+        # Test 1: Initial cursor "0" should work (no key access needed)
+        $rd clusterscan 0
+        # Should not error
+        $rd read
+
+        # Test 2: Non-"0" cursor (contains {hashtag}) should also work.
+        # The cursor is a routing token marked NOT_KEY, not a real key,
+        # so ACL should not validate it against key patterns.
+        $rd clusterscan 0-{06S}-0
+        $rd clusterscan 0-{6ZJ}-0
+        # Should not error
+        $rd read
+        $rd read
+
+        $rd close
+    }
 }
 
 # CLUSTERSCAN Tests - 3-node cluster tests

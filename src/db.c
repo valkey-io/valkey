@@ -3047,7 +3047,7 @@ int clusterscanGetKeys(struct serverCommand *cmd, robj **argv, int argc, getKeys
     /* Non-"0" cursor contains {hashtag} for routing. */
     keyReference *keys = getKeysPrepareResult(result, 1);
     keys[0].pos = 1;
-    keys[0].flags = 0;
+    keys[0].flags = CMD_KEY_NOT_KEY;
     result->numkeys = 1;
     return 1;
 }

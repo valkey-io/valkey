@@ -277,7 +277,7 @@ bool durabilitySignalModifiedKey(struct client *c, struct serverDb *db, struct s
 bool durabilitySignalFlushedDb(int dbid) {
     /* Defer flush invalidation messages until the durability providers acknowledge. */
     return durabilityRegisterDeferredTask(DURABLE_FLUSH_INVALIDATION_TASK,
-                                          (void *)(long long)(dbid == -1));
+                                          (void *)(intptr_t)(dbid == -1));
 }
 
 /*================================= Task Execution =========================== */

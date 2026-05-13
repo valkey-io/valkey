@@ -63,6 +63,7 @@ else
 	# Clang: disable warnings that are errors in gtest/gmock
 	MORE_WARNINGS += -Wno-deprecated-copy
 	MORE_WARNINGS += -Wno-keyword-macro
+	MORE_WARNINGS += -Wno-character-conversion
 endif
 
 # Enable -Werror=float-equal only for non-32bit builds.

@@ -612,6 +612,7 @@ char *preScriptCmd(client *c) {
  * Perform pre-processing before command execution for a given client.
  */
 int preCommandExec(client *c) {
+    c->clientDurabilityInfo.durability_flags = 0;
     c->clientDurabilityInfo.current_command_repl_offset = -1;
     c->clientDurabilityInfo.module_cmd_blocking_offset = -1;
 

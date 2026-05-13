@@ -6983,7 +6983,7 @@ static void moduleCallCommandHelper(ValkeyModuleCtx *ctx, client *c, robj **argv
     }
 
 cleanup:
-    if ((flags & VALKEYMODULE_CALL_ARGV_SCRIPT_MODE) && errno) {
+    if ((flags & VALKEYMODULE_CALL_ARGV_SCRIPT_MODE) && errno && reply_error_msg) {
         afterErrorReply(c, reply_error_msg, sdslen(reply_error_msg), 0);
         incrCommandStatsOnError(c->cmd, ERROR_COMMAND_REJECTED);
     }

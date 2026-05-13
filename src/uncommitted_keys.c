@@ -68,7 +68,7 @@ static uint64_t uncommittedKeysHash(const void *key) {
 static int uncommittedKeysKeyCompare(const void *key1, const void *key2) {
     const sds s1 = (const sds)key1;
     const sds s2 = (const sds)key2;
-    return sdslen(s1) != sdslen(s2) || memcmp(s1, s2, sdslen(s1));
+    return sdslen(s1) == sdslen(s2) && memcmp(s1, s2, sdslen(s1)) == 0;
 }
 
 static const void *uncommittedKeyEntryGetKey(const void *entry) {

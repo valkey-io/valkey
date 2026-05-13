@@ -236,7 +236,7 @@ void initTaskTypes(void) {
  */
 bool durabilityRegisterDeferredTask(int type, ...) {
     /* Check durability is active and the type is valid */
-    if (!isPrimaryDurabilityEnabled() || (type == DURABLE_TASK_TYPE_MAX)) {
+    if (!isPrimaryDurabilityEnabled() || type < 0 || type >= DURABLE_TASK_TYPE_MAX) {
         return false;
     }
 
@@ -311,7 +311,14 @@ void certifyPendingDeferredTasks(void) {
     listIter li;
     listNode *ln;
     for (int i = 0; i < DURABLE_TASK_TYPE_MAX; i++) {
-        listRewind(server.durability.pending_tasks_waiting_ack[i], &li);
+        /* Splice pending tasks into a local list so module callbacks that
+         * register new deferred tasks don't corrupt our iteration. */
+        list *pending = server.durability.pending_tasks_waiting_ack[i];
+        if (listLength(pending) == 0) continue;
+        list local;
+        memset(&local, 0, sizeof(local));
+        listJoin(&local, pending);
+        listRewind(&local, &li);
         while ((ln = listNext(&li))) {
             taskWaitingAck *task = listNodeValue(ln);
             serverAssert(task->offset == 0);
@@ -324,10 +331,7 @@ void certifyPendingDeferredTasks(void) {
                     /*dbid*/ (intptr_t)task->argv[3]);
             }
         }
-        if (listLength(server.durability.pending_tasks_waiting_ack[i]) > 0) {
-            listJoin(server.durability.tasks_waiting_ack[i], server.durability.pending_tasks_waiting_ack[i]);
-        }
-        serverAssert(listLength(server.durability.pending_tasks_waiting_ack[i]) == 0);
+        listJoin(server.durability.tasks_waiting_ack[i], &local);
     }
 }
 

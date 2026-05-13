@@ -314,6 +314,7 @@ start_server {overrides {save "" enable-debug-command local}} {
 
         catch {r debug reload nosave} err
         assert_match "*Error*" $err
+        verify_log_message 0 "*Invalid or unsupported RDB stream envelope*" 0
     }
 
     test {LZ4 compressed RDB detects corruption in compressed payload} {

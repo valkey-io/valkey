@@ -629,7 +629,9 @@ int redis_check_rdb(char *rdbfilename, FILE *fp) {
     /* Support both plain RDB files and VKCS-wrapped streaming-compressed RDBs. */
     decompressRioInitResult init_rc = rdbInputStreamPrepare(&input);
     if (init_rc == DECOMPRESS_RIO_INIT_INCOMPATIBLE) {
-        rdbCheckError("Invalid RDB stream envelope");
+        rdbCheckError("Invalid or unsupported RDB stream envelope. "
+                      "File may require a Valkey version with streaming RDB "
+                      "compression support.");
         goto err;
     }
     if (init_rc != DECOMPRESS_RIO_INIT_OK) {

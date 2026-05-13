@@ -3760,7 +3760,11 @@ int rdbLoad(char *filename, rdbSaveInfo *rsi, int rdbflags) {
 
     decompressRioInitResult init_rc = rdbInputStreamPrepare(&input);
     if (init_rc == DECOMPRESS_RIO_INIT_INCOMPATIBLE) {
-        serverLog(LL_WARNING, "Invalid RDB stream envelope in %s", filename);
+        serverLog(LL_WARNING,
+                  "Invalid or unsupported RDB stream envelope in %s. "
+                  "The file may require a Valkey version with streaming RDB "
+                  "compression support.",
+                  filename);
         retval = RDB_INCOMPATIBLE;
         goto done;
     }

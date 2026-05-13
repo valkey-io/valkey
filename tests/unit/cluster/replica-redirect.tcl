@@ -64,6 +64,11 @@ start_cluster 1 1 {tags {external:skip cluster}} {
         $rd SCAN 0
         set reply [$rd read]
         assert_match "0 *" $reply
+
+        # Write keyless commands rejected regardless
+        $rd FLUSHDB
+        assert_error "READONLY You can't write against a read only replica." {$rd read}
+        
         $rd close
     }
 
@@ -134,6 +139,9 @@ start_cluster 1 1 {tags {external:skip cluster}} {
         assert_error "REDIRECT *" {$rd read}
         $rd RANDOMKEY
         assert_error "REDIRECT *" {$rd read}
+        # Write keyless commands rejected regardless
+        $rd FLUSHDB
+        assert_error "READONLY You can't write against a read only replica." {$rd read}
         # Transaction was flagged dirty, EXEC returns EXECABORT
         $rd EXEC
         assert_error "EXECABORT *" {$rd read}

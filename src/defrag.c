@@ -1006,7 +1006,7 @@ static void defragEvalScriptCallback(void *privdata, void *entry) {
     UNUSED(privdata);
     evalScript *es = (evalScript *)entry;
     /* Defrag internal pointers. The entry itself is relocated by hashtableScanDefrag. */
-    compiledFunction *func = activeDefragAlloc(es->script);
+    void *func = activeDefragAlloc(es->script);
     if (func) es->script = func;
     robj *ob = activeDefragStringOb(es->body);
     if (ob) es->body = ob;

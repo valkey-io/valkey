@@ -1,18 +1,18 @@
 #ifndef _EVAL_H_
 #define _EVAL_H_
 
-typedef struct scriptingEngine scriptingEngine;
-typedef struct serverObject robj;
+#include <stdint.h>
+
 typedef struct listNode listNode;
-typedef struct ValkeyModuleScriptingEngineCompiledFunction compiledFunction;
+typedef struct scriptingEngine scriptingEngine;
 
 typedef struct evalScript {
-    char sha[41];               /* SHA1 hex string (null-terminated key) */
-    compiledFunction *script;
-    scriptingEngine *engine;
-    robj *body;
+    void *script;               /* compiledFunction* */
+    void *engine;               /* scriptingEngine* */
+    void *body;                 /* robj* */
     uint64_t flags;
-    listNode *node; /* list node in scripts_lru_list list. */
+    listNode *node;             /* list node in scripts_lru_list list. */
+    char sha[40];               /* SHA1 hex, no null terminator (use memcmp/memcpy with length 40) */
 } evalScript;
 
 void evalInit(void);

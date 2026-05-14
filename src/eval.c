@@ -75,7 +75,7 @@ static uint64_t evalScriptHashFunction(const void *key) {
 }
 
 static int evalScriptKeyCompare(const void *key1, const void *key2) {
-    return strcasecmp(key1, key2);
+    return strncasecmp(key1, key2, 40) == 0;
 }
 
 hashtableType evalScriptsHashtableType = {
@@ -444,7 +444,7 @@ static int evalRegisterNewScript(client *c, robj *body, char **sha) {
 
     /* Store the script in the hashtable with the SHA1 embedded in the entry. */
     evalScript *es = zcalloc(sizeof(evalScript));
-    memcpy(es->sha, *sha, 41);
+    memcpy(es->sha, *sha, 40);
     es->script = functions[0];
     es->engine = engine;
     es->flags = script_flags;
@@ -478,7 +478,8 @@ static void evalGenericCommand(client *c, int evalsha) {
 
     if (c->cur_script) {
         evalScript *cached = (evalScript *)c->cur_script;
-        memcpy(sha, cached->sha, 41);
+        memcpy(sha, cached->sha, 40);
+        sha[40] = '\0';
     } else {
         evalCalcScriptHash(evalsha, objectGetVal(c->argv[1]), sha);
     }

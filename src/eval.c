@@ -80,7 +80,7 @@ static void dictEntryDestructorSdsKeyScriptValue(void *entry) {
 }
 
 /* evalCtx.scripts sha (as sds string) -> scripts (as evalScript) cache. */
-dictType shaScriptObjectDictType = {
+hashtableType shaScriptObjectDictType = {
     .entryGetKey = dictEntryGetKey,
     .hashFunction = dictCStrCaseHash,
     .keyCompare = dictSdsKeyCaseCompare,
@@ -89,7 +89,7 @@ dictType shaScriptObjectDictType = {
 
 /* Eval context */
 struct evalCtx {
-    dict *scripts;                  /* A dictionary of SHA1 -> evalScript */
+    hashtable *scripts;             /* A dictionary of SHA1 -> evalScript */
     list *scripts_lru_list;         /* A list of SHA1, first in first out LRU eviction. */
     unsigned long long scripts_mem; /* Cached scripts' memory + oh */
 } evalCtx;
@@ -139,7 +139,7 @@ void sha1hex(char *digest, char *script, size_t len) {
 }
 
 /* Free lua_scripts dict and close lua interpreter. */
-void freeEvalScripts(dict *scripts, list *scripts_lru_list, list *engine_callbacks) {
+void freeEvalScripts(hashtable *scripts, list *scripts_lru_list, list *engine_callbacks) {
     dictRelease(scripts);
 
     listRelease(scripts_lru_list);
@@ -185,7 +185,7 @@ void evalRelease(int async) {
  * Called when a scripting engine is unregistered to avoid dangling engine
  * pointers in the eval script cache. */
 void evalRemoveScriptsFromEngine(scriptingEngine *engine) {
-    dictIterator *iter = dictGetSafeIterator(evalCtx.scripts);
+    hashtableIterator *iter = dictGetSafeIterator(evalCtx.scripts);
     dictEntry *entry;
     while ((entry = dictNext(iter))) {
         evalScript *es = entry->v.val;
@@ -697,7 +697,7 @@ unsigned long evalMemory(void) {
     return memory;
 }
 
-dict *evalScriptsDict(void) {
+hashtable *evalScriptsDict(void) {
     return evalCtx.scripts;
 }
 

@@ -76,7 +76,7 @@ typedef struct functionInfo {
  * Used on rdb.c so it must be declared here. */
 struct functionLibInfo {
     sds name;                /* Library name */
-    dict *functions;         /* Functions dictionary */
+    hashtable *functions;    /* Functions dictionary */
     scriptingEngine *engine; /* Pointer to the scripting engine */
     sds code;                /* Library code */
 };
@@ -86,14 +86,14 @@ unsigned long functionsMemory(void);
 unsigned long functionsMemoryOverhead(void);
 unsigned long functionsNum(void);
 unsigned long functionsLibNum(void);
-dict *functionsLibGet(void);
+hashtable *functionsLibGet(void);
 size_t functionsLibCtxFunctionsLen(functionsLibCtx *functions_ctx);
 functionsLibCtx *functionsLibCtxGetCurrent(void);
 functionsLibCtx *functionsLibCtxCreate(void);
-void functionsLibCtxFree(functionsLibCtx *functions_lib_ctx, void(callback)(dict *), list *engine_callbacks);
-void functionsLibCtxClear(functionsLibCtx *lib_ctx, void(callback)(dict *));
+void functionsLibCtxFree(functionsLibCtx *functions_lib_ctx, void(callback)(hashtable *), list *engine_callbacks);
+void functionsLibCtxClear(functionsLibCtx *lib_ctx, void(callback)(hashtable *));
 void functionsLibCtxSwapWithCurrent(functionsLibCtx *new_lib_ctx, int async);
-void functionReset(int async, void(callback)(dict *));
+void functionReset(int async, void(callback)(hashtable *));
 
 void functionsRemoveLibFromEngine(scriptingEngine *engine);
 

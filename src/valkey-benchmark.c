@@ -316,7 +316,7 @@ static int dictSdsKeyCompare(const void *key1, const void *key2) {
     return memcmp(key1, key2, l1) == 0;
 }
 
-static dictType dtype = {
+static hashtableType dtype = {
     .entryGetKey = dictEntryGetKey,
     .hashFunction = dictSdsHash,
     .keyCompare = dictSdsKeyCompare,
@@ -1437,7 +1437,7 @@ static int fetchClusterConfiguration(void) {
     int success = 1;
     valkeyContext *ctx = NULL;
     valkeyReply *reply = NULL;
-    dict *nodes = NULL;
+    hashtable *nodes = NULL;
     const char *errmsg = "Failed to fetch cluster configuration";
     size_t i, j;
     ctx = getValkeyContext(config.ct, config.conn_info.hostip, config.conn_info.hostport);
@@ -1548,7 +1548,7 @@ static int fetchClusterSlotsConfiguration(client c) {
     const char *errmsg = "Failed to update cluster slots configuration";
 
     /* printf("[%d] fetchClusterSlotsConfiguration\n", c->thread_id); */
-    dict *nodes = dictCreate(&dtype);
+    hashtable *nodes = dictCreate(&dtype);
     valkeyContext *ctx = NULL;
     for (i = 0; i < (size_t)config.cluster_node_count; i++) {
         clusterNode *node = config.cluster_nodes[i];

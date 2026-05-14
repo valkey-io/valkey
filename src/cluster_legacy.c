@@ -246,7 +246,7 @@ static_assert(offsetof(clusterMsg, type) + sizeof(uint16_t) == RCVBUF_MIN_READ_L
 
 /* Cluster nodes hash table, mapping nodes addresses 1.2.3.4:6379 to
  * clusterNode structures. */
-dictType clusterNodesDictType = {
+hashtableType clusterNodesDictType = {
     .entryGetKey = dictEntryGetKey,
     .hashFunction = dictSdsHash,
     .keyCompare = dictSdsKeyCompare,
@@ -256,7 +256,7 @@ dictType clusterNodesDictType = {
 /* Cluster re-addition blacklist. This maps node IDs to the time
  * we can re-add this node. The goal is to avoid reading a removed
  * node for some time. */
-dictType clusterNodesBlackListDictType = {
+hashtableType clusterNodesBlackListDictType = {
     .entryGetKey = dictEntryGetKey,
     .hashFunction = dictSdsCaseHash,
     .keyCompare = dictSdsKeyCaseCompare,
@@ -264,7 +264,7 @@ dictType clusterNodesBlackListDictType = {
 };
 
 /* Cluster shards hash table, mapping shard id to list of nodes */
-dictType clusterSdsToListType = {
+hashtableType clusterSdsToListType = {
     .entryGetKey = dictEntryGetKey,
     .hashFunction = dictSdsHash,
     .keyCompare = dictSdsKeyCompare,
@@ -282,7 +282,7 @@ static int dictPtrCompare(const void *key1, const void *key2) {
 
 /* Dictionary type for mapping hash slots to cluster nodes.
  * Keys are slot numbers encoded directly as pointer values, values are clusterNode pointers. */
-dictType clusterSlotDictType = {
+hashtableType clusterSlotDictType = {
     .entryGetKey = dictEntryGetKey,
     .hashFunction = dictPtrHash,
     .keyCompare = dictPtrCompare,
@@ -296,7 +296,7 @@ typedef struct {
         ITER_NODE,
     } type;
     union {
-        dictIterator di;
+        hashtableIterator di;
         listIter li;
         clusterNode *node;
     };
@@ -672,7 +672,7 @@ int clusterLoadConfig(char *filename) {
     struct stat sb;
     char *line;
     int maxline, j;
-    dict *tmp_cluster_nodes;
+    hashtable *tmp_cluster_nodes;
 
     if (fp == NULL) {
         if (errno == ENOENT) {
@@ -1649,7 +1649,7 @@ void clusterHandleServerShutdown(bool auto_failover) {
  * 7) If the node was a replica, the whole data set is flushed away.
  * 8) If it is a hard reset or the node was a replica: a new Shard ID is generated. */
 void clusterReset(int hard) {
-    dictIterator *di;
+    hashtableIterator *di;
     dictEntry *de;
     int j;
     bool new_shard = false;
@@ -1661,7 +1661,7 @@ void clusterReset(int hard) {
     /* Unassign all the slots. */
     for (j = 0; j < CLUSTER_SLOTS; j++) clusterDelSlot(j);
 
-    /* Recreate shards dict */
+    /* Recreate shards hashtable */
     dictEmpty(server.cluster->shards, NULL);
 
     /* Forget all the nodes, but myself. */
@@ -2229,7 +2229,7 @@ void clusterDelNode(clusterNode *delnode) {
     serverLog(LL_DEBUG, "Deleting node %.40s (%s) from cluster view", delnode->name, humanNodename(delnode));
 
     int j;
-    dictIterator *di;
+    hashtableIterator *di;
     dictEntry *de;
 
     /* 1) Mark slots as unassigned. */
@@ -2336,7 +2336,7 @@ void clusterRemoveNodeFromShard(clusterNode *node) {
  * epoch if greater than any node configEpoch. */
 uint64_t clusterGetMaxEpoch(void) {
     uint64_t max = 0;
-    dictIterator *di;
+    hashtableIterator *di;
     dictEntry *de;
 
     di = dictGetSafeIterator(server.cluster->nodes);
@@ -2481,7 +2481,7 @@ void clusterHandleConfigEpochCollision(clusterNode *sender) {
  * However without the cleanup during long uptime and with some automated
  * node add/removal procedures, entries could accumulate. */
 void clusterBlacklistCleanup(void) {
-    dictIterator *di;
+    hashtableIterator *di;
     dictEntry *de;
 
     di = dictGetSafeIterator(server.cluster->nodes_black_list);
@@ -2634,7 +2634,7 @@ void clearNodeFailureIfNeeded(clusterNode *node) {
  * specified ip address and port number. This function is used in order to
  * avoid adding a new handshake node for the same address multiple times. */
 static int clusterHandshakeInProgress(char *ip, int port, int cport) {
-    dictIterator *di;
+    hashtableIterator *di;
     dictEntry *de;
 
     di = dictGetSafeIterator(server.cluster->nodes);
@@ -3435,7 +3435,7 @@ static uint32_t writePingExtensions(clusterMsg *hdr, int gossipcount) {
 
     /* Gossip forgotten nodes */
     if (dictSize(server.cluster->nodes_black_list) > 0) {
-        dictIterator *di = dictGetIterator(server.cluster->nodes_black_list);
+        hashtableIterator *di = dictGetIterator(server.cluster->nodes_black_list);
         dictEntry *de;
         while ((de = dictNext(di)) != NULL) {
             if (cursor != NULL) {
@@ -4691,7 +4691,7 @@ void clusterSendMessage(clusterLink *link, clusterMsgSendBlock *msgblock) {
  * some node->link to be invalidated, so it is safe to call this function
  * from event handlers that will do stuff with node links later. */
 void clusterBroadcastMessage(clusterMsgSendBlock *msgblock) {
-    dictIterator *di;
+    hashtableIterator *di;
     dictEntry *de;
 
     di = dictGetSafeIterator(server.cluster->nodes);
@@ -4925,7 +4925,7 @@ void clusterSendPing(clusterLink *link, int type) {
 
     /* If there are PFAIL nodes, add them at the end. */
     if (pfail_wanted) {
-        dictIterator *di;
+        hashtableIterator *di;
         dictEntry *de;
 
         di = dictGetSafeIterator(server.cluster->nodes);
@@ -4980,7 +4980,7 @@ void clusterSendPing(clusterLink *link, int type) {
 #define CLUSTER_BROADCAST_ALL 0
 #define CLUSTER_BROADCAST_LOCAL_REPLICAS 1
 void clusterBroadcastPong(int target) {
-    dictIterator *di;
+    hashtableIterator *di;
     dictEntry *de;
 
     di = dictGetSafeIterator(server.cluster->nodes);
@@ -5432,7 +5432,7 @@ int clusterGetFailedPrimaryRank(void) {
 
     int rank = 0;
     mstime_t now = mstime();
-    dictIterator *di;
+    hashtableIterator *di;
     dictEntry *de;
 
     di = dictGetSafeIterator(server.cluster->nodes);
@@ -5838,7 +5838,7 @@ void clusterHandleReplicaFailover(void) {
 void clusterHandleReplicaMigration(int max_replicas) {
     int j, ok_replicas = 0;
     clusterNode *my_primary = myself->replicaof, *target = NULL, *candidate = NULL;
-    dictIterator *di;
+    hashtableIterator *di;
     dictEntry *de;
 
     /* Step 1: Don't migrate if the cluster state is not ok. */
@@ -6141,7 +6141,7 @@ static long long maxConnectionAttemptsPerCron(void) {
 
 /* This is executed 10 times every second */
 void clusterCron(void) {
-    dictIterator *di;
+    hashtableIterator *di;
     dictEntry *de;
     int update_state = 0;
     int orphaned_primaries; /* How many primaries there are without ok replicas. */
@@ -6416,7 +6416,7 @@ void bitmapClearBit(unsigned char *bitmap, int pos) {
  * Otherwise zero is returned. Used by clusterNodeSetSlotBit() to set the
  * MIGRATE_TO flag the when a primary gets the first slot. */
 int clusterPrimariesHaveReplicas(void) {
-    dictIterator di;
+    hashtableIterator di;
     dictInitIterator(&di, server.cluster->nodes);
     dictEntry *de;
     while ((de = dictNext(&di)) != NULL) {
@@ -6640,7 +6640,7 @@ void clusterUpdateState(void) {
      * At the same time count the number of reachable primaries having
      * at least one slot. */
     {
-        dictIterator *di;
+        hashtableIterator *di;
         dictEntry *de;
 
         server.cluster->size = 0;
@@ -7031,7 +7031,7 @@ void clusterFreeNodesSlotsInfo(clusterNode *n) {
  * configuration file (nodes.conf) for a given node. */
 sds clusterGenNodesDescription(client *c, int filter, int tls_primary) {
     sds ci = sdsempty(), ni;
-    dictIterator *di;
+    hashtableIterator *di;
     dictEntry *de;
 
     /* Generate all nodes slots info firstly. */
@@ -7094,7 +7094,7 @@ void addReplyClusterLinkDescription(client *c, clusterLink *link) {
 /* Add to the output buffer of the given client an array of cluster link descriptions,
  * with array entry being a description of a single current cluster link. */
 void addReplyClusterLinksDescription(client *c) {
-    dictIterator *di;
+    hashtableIterator *di;
     dictEntry *de;
     void *arraylen_ptr = NULL;
     int num_links = 0;
@@ -7271,7 +7271,7 @@ void clusterCommandShards(client *c) {
     addReplyArrayLen(c, dictSize(server.cluster->shards));
     /* This call will add slot_info_pairs to all nodes */
     clusterGenNodesSlotsInfo(0);
-    dictIterator *di = dictGetSafeIterator(server.cluster->shards);
+    hashtableIterator *di = dictGetSafeIterator(server.cluster->shards);
     for (dictEntry *de = dictNext(di); de != NULL; de = dictNext(di)) {
         list *nodes = de->v.val;
         serverAssert(listLength(nodes) > 0);
@@ -7319,7 +7319,7 @@ sds genClusterInfoString(sds info) {
     int slots_assigned = 0, slots_ok = 0, slots_pfail = 0, slots_fail = 0;
     uint64_t my_epoch = myself ? nodeEpoch(myself) : 0;
 
-    dictIterator *di = dictGetIterator(server.cluster->nodes);
+    hashtableIterator *di = dictGetIterator(server.cluster->nodes);
     dictEntry *de;
     unsigned nodes_pfail = 0, nodes_fail = 0, voting_nodes_pfail = 0, voting_nodes_fail = 0;
     while ((de = dictNext(di)) != NULL) {
@@ -7498,7 +7498,7 @@ int getMyShardSlotCount(void) {
 char **getClusterNodesList(size_t *numnodes) {
     size_t count = dictSize(server.cluster->nodes);
     char **ids = zmalloc((count + 1) * sizeof(char *));
-    dictIterator *di = dictGetIterator(server.cluster->nodes);
+    hashtableIterator *di = dictGetIterator(server.cluster->nodes);
     dictEntry *de;
     int j = 0;
     while ((de = dictNext(di)) != NULL) {
@@ -8399,7 +8399,7 @@ void clusterPromoteSelfToPrimary(void) {
 }
 
 int detectAndUpdateCachedNodeHealth(void) {
-    dictIterator di;
+    hashtableIterator di;
     dictInitIterator(&di, server.cluster->nodes);
     dictEntry *de;
     clusterNode *node;
@@ -8426,8 +8426,8 @@ sds clusterEncodeOpenSlotsAuxField(int rdbflags) {
     sds s = NULL;
 
     for (int i = 0; i < 2; i++) {
-        dict *d = (i == 0) ? server.cluster->importing_slots_from : server.cluster->migrating_slots_to;
-        dictIterator *di = dictGetIterator(d);
+        hashtable *d = (i == 0) ? server.cluster->importing_slots_from : server.cluster->migrating_slots_to;
+        hashtableIterator *di = dictGetIterator(d);
         dictEntry *de;
         while ((de = dictNext(di)) != NULL) {
             int slot = (int)(uintptr_t)de->key;

@@ -71,6 +71,6 @@ void rememberReplicaKeyWithExpire(serverDb *db, robj *key);
 void flushReplicaKeysWithExpireList(int async);
 size_t getReplicaKeyWithExpireCount(void);
 bool timestampIsExpired(mstime_t when);
-void freeReplicaKeysWithExpireAsync(dict *replica_keys_with_expire);
+void freeReplicaKeysWithExpireAsync(hashtable *replica_keys_with_expire);
 
 #endif

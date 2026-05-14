@@ -89,11 +89,11 @@ struct moduleLoadQueueEntry {
 
 struct ValkeyModuleInfoCtx {
     struct ValkeyModule *module;
-    dict *requested_sections;
+    hashtable *requested_sections;
     sds info;          /* info string we collected so far */
     int sections;      /* number of sections we collected so far */
     int in_section;    /* indication if we're in an active section or not */
-    int in_dict_field; /* indication that we're currently appending to a dict */
+    int in_dict_field; /* indication that we're currently appending to a hashtable */
 };
 
 /* This represents a shared API. Shared APIs will be used to populate
@@ -106,7 +106,7 @@ struct ValkeyModuleSharedAPI {
 };
 typedef struct ValkeyModuleSharedAPI ValkeyModuleSharedAPI;
 
-dict *modules; /* Hash table of modules. SDS -> ValkeyModule ptr.*/
+hashtable *modules; /* Hash table of modules. SDS -> ValkeyModule ptr.*/
 
 /* Entries in the context->amqueue array, representing objects to free
  * when the callback returns. */
@@ -7195,7 +7195,7 @@ uint64_t moduleTypeEncodeId(const char *name, int encver) {
  * a type with the same name as the one given. Returns the moduleType
  * structure pointer if such a module is found, or NULL otherwise. */
 moduleType *moduleTypeLookupModuleByNameInternal(const char *name, int ignore_case) {
-    dictIterator *di = dictGetIterator(modules);
+    hashtableIterator *di = dictGetIterator(modules);
     dictEntry *de;
 
     while ((de = dictNext(di)) != NULL) {
@@ -7244,7 +7244,7 @@ moduleType *moduleTypeLookupModuleByID(uint64_t id) {
 
     /* Slow module by module lookup. */
     moduleType *mt = NULL;
-    dictIterator *di = dictGetIterator(modules);
+    hashtableIterator *di = dictGetIterator(modules);
     dictEntry *de;
 
     while ((de = dictNext(di)) != NULL && mt == NULL) {
@@ -7589,7 +7589,7 @@ void moduleRDBLoadError(ValkeyModuleIO *io) {
  * VALKEYMODULE_OPTIONS_HANDLE_IO_ERRORS, in which case diskless loading should
  * be avoided since it could cause data loss. */
 int moduleAllDatatypesHandleErrors(void) {
-    dictIterator *di = dictGetIterator(modules);
+    hashtableIterator *di = dictGetIterator(modules);
     dictEntry *de;
 
     while ((de = dictNext(di)) != NULL) {
@@ -7607,7 +7607,7 @@ int moduleAllDatatypesHandleErrors(void) {
  * diskless async loading should be avoided because module doesn't know there can be traffic during
  * database full resynchronization. */
 int moduleAllModulesHandleReplAsyncLoad(void) {
-    dictIterator *di = dictGetIterator(modules);
+    hashtableIterator *di = dictGetIterator(modules);
     dictEntry *de;
 
     while ((de = dictNext(di)) != NULL) {
@@ -7622,7 +7622,7 @@ int moduleAllModulesHandleReplAsyncLoad(void) {
 }
 
 int moduleVerifyAllAllowAtomicSlotMigrationOrReply(client *c) {
-    dictIterator *di = dictGetIterator(modules);
+    hashtableIterator *di = dictGetIterator(modules);
     dictEntry *de;
 
     while ((de = dictNext(di)) != NULL) {
@@ -7898,7 +7898,7 @@ long double VM_LoadLongDouble(ValkeyModuleIO *io) {
  * who asked for it. */
 ssize_t rdbSaveModulesAux(rio *rdb, int when) {
     size_t total_written = 0;
-    dictIterator *di = dictGetIterator(modules);
+    hashtableIterator *di = dictGetIterator(modules);
     dictEntry *de;
 
     while ((de = dictNext(di)) != NULL) {
@@ -11152,8 +11152,8 @@ int VM_RegisterInfoFunc(ValkeyModuleCtx *ctx, ValkeyModuleInfoFunc cb) {
     return VALKEYMODULE_OK;
 }
 
-sds modulesCollectInfo(sds info, dict *sections_dict, int for_crash_report, int sections) {
-    dictIterator *di = dictGetIterator(modules);
+sds modulesCollectInfo(sds info, hashtable *sections_dict, int for_crash_report, int sections) {
+    hashtableIterator *di = dictGetIterator(modules);
     dictEntry *de;
 
     while ((de = dictNext(di)) != NULL) {
@@ -11183,7 +11183,7 @@ ValkeyModuleServerInfoData *VM_GetServerInfo(ValkeyModuleCtx *ctx, const char *s
     int all = 0, everything = 0;
     robj *argv[1];
     argv[0] = section ? createStringObject(section, strlen(section)) : NULL;
-    dict *section_dict = genInfoSectionDict(argv, section ? 1 : 0, NULL, &all, &everything);
+    hashtable *section_dict = genInfoSectionDict(argv, section ? 1 : 0, NULL, &all, &everything);
     sds info = genValkeyInfoString(section_dict, all, everything);
     int totlines, i;
     sds *lines = sdssplitlen(info, sdslen(info), "\r\n", 2, &totlines);
@@ -11388,7 +11388,7 @@ void *VM_GetSharedAPI(ValkeyModuleCtx *ctx, const char *apiname) {
  * The number of unregistered APIs is returned. */
 int moduleUnregisterSharedAPI(ValkeyModule *module) {
     int count = 0;
-    dictIterator *di = dictGetSafeIterator(server.sharedapi);
+    hashtableIterator *di = dictGetSafeIterator(server.sharedapi);
     dictEntry *de;
     while ((de = dictNext(di)) != NULL) {
         const char *apiname = de->key;
@@ -12985,7 +12985,7 @@ size_t moduleGetMemUsage(robj *key, robj *val, size_t sample_size, int dbid) {
 /* server.moduleapi dictionary type. Only uses plain C strings since
  * this gets queries from modules. */
 
-dictType moduleAPIDictType = {
+hashtableType moduleAPIDictType = {
     .entryGetKey = dictEntryGetKey,
     .hashFunction = dictCStrHash,
     .keyCompare = dictCStrKeyCompare,
@@ -13012,7 +13012,7 @@ void moduleRegisterCoreAPI(void);
 void moduleInitModulesSystemLast(void) {
 }
 
-dictType sdsKeyValueHashDictType = {
+hashtableType sdsKeyValueHashDictType = {
     .entryGetKey = dictEntryGetKey,
     .hashFunction = dictSdsCaseHash,
     .keyCompare = dictSdsKeyCaseCompare,
@@ -13143,7 +13143,7 @@ void moduleLoadFromQueue(void) {
         listDelNode(server.loadmodule_queue, ln);
     }
     if (dictSize(server.module_configs_queue)) {
-        dictIterator *di = dictGetSafeIterator(server.module_configs_queue);
+        hashtableIterator *di = dictGetSafeIterator(server.module_configs_queue);
         dictEntry *de;
         while ((de = dictNext(di)) != NULL) {
             const char *moduleConfigName = de->key;
@@ -13649,7 +13649,7 @@ int moduleUnload(sds name, const char **errmsg) {
  * by module unload failures.
  */
 void moduleUnloadAllModules(void) {
-    dictIterator *di = dictGetSafeIterator(modules);
+    hashtableIterator *di = dictGetSafeIterator(modules);
     dictEntry *de;
 
     while ((de = dictNext(di)) != NULL) {
@@ -13679,7 +13679,7 @@ void modulePipeReadable(aeEventLoop *el, int fd, void *privdata, int mask) {
 /* Helper function for the MODULE and HELLO command: send the list of the
  * loaded modules to the client. */
 void addReplyLoadedModules(client *c) {
-    dictIterator *di = dictGetIterator(modules);
+    hashtableIterator *di = dictGetIterator(modules);
     dictEntry *de;
 
     addReplyArrayLen(c, dictSize(modules));
@@ -13742,7 +13742,7 @@ sds genModulesInfoStringRenderModuleOptions(struct ValkeyModule *module) {
  *
  * references must be substituted with the new pointer returned by the call. */
 sds genModulesInfoString(sds info) {
-    dictIterator *di = dictGetIterator(modules);
+    hashtableIterator *di = dictGetIterator(modules);
     dictEntry *de;
 
     while ((de = dictNext(di)) != NULL) {
@@ -15019,7 +15019,7 @@ int moduleDefragValue(robj *key, robj *value, int dbid) {
 
 /* Call registered module API defrag functions */
 void moduleDefragGlobals(void) {
-    dictIterator *di = dictGetIterator(modules);
+    hashtableIterator *di = dictGetIterator(modules);
     dictEntry *de;
 
     while ((de = dictNext(di)) != NULL) {

@@ -306,7 +306,7 @@ struct standardConfig {
     void *privdata;          /* privdata for this config, for module configs this is a ModuleConfig struct */
 };
 
-static dict *configs = NULL; /* Runtime config values */
+static hashtable *configs = NULL; /* Runtime config values */
 
 /* Lookup a config by the provided sds string name, or return NULL
  * if the config does not exist */
@@ -971,9 +971,9 @@ static int configKeyCompare(const void *a, const void *b) {
 void configGetCommand(client *c) {
     int i;
     dictEntry *de;
-    dictIterator *di;
+    hashtableIterator *di;
     /* Create a dictionary to store the matched configs */
-    dict *matches = dictCreate(&externalStringType);
+    hashtable *matches = dictCreate(&externalStringType);
     for (i = 0; i < c->argc - 2; i++) {
         robj *o = c->argv[2 + i];
         sds name = objectGetVal(o);
@@ -1046,14 +1046,14 @@ void rewriteConfigSentinelOption(struct rewriteConfigState *state);
  * option is mentioned in the old configuration file, so it's
  * like "maxmemory" -> list of line numbers (first line is zero).
  */
-dictType optionToLineDictType = {
+hashtableType optionToLineDictType = {
     .entryGetKey = dictEntryGetKey,
     .hashFunction = dictSdsCaseHash,
     .keyCompare = dictSdsKeyCaseCompare,
     .entryDestructor = dictEntryDestructorSdsKeyListValue,
 };
 
-dictType optionSetDictType = {
+hashtableType optionSetDictType = {
     .entryGetKey = dictEntryGetKey,
     .hashFunction = dictSdsCaseHash,
     .keyCompare = dictSdsKeyCaseCompare,
@@ -1062,15 +1062,15 @@ dictType optionSetDictType = {
 
 /* The config rewrite state. */
 struct rewriteConfigState {
-    dict *option_to_line; /* Option -> list of config file lines map */
-    dict *rewritten;      /* Dictionary of already processed options */
-    int numlines;         /* Number of lines in current config */
-    sds *lines;           /* Current lines as an array of sds strings */
-    int needs_signature;  /* True if we need to append the rewrite
-                             signature. */
-    int force_write;      /* True if we want all keywords to be force
-                             written. Currently only used for testing
-                             and debug information. */
+    hashtable *option_to_line; /* Option -> list of config file lines map */
+    hashtable *rewritten;      /* Dictionary of already processed options */
+    int numlines;              /* Number of lines in current config */
+    sds *lines;                /* Current lines as an array of sds strings */
+    int needs_signature;       /* True if we need to append the rewrite
+                                  signature. */
+    int force_write;           /* True if we want all keywords to be force
+                                  written. Currently only used for testing
+                                  and debug information. */
 };
 
 /* Free the configuration rewrite state. */
@@ -1615,7 +1615,7 @@ static void rewriteConfigSocketBindOption(standardConfig *config, const char *na
 void rewriteConfigLoadmoduleOption(struct rewriteConfigState *state) {
     sds line;
 
-    dictIterator *di = dictGetIterator(modules);
+    hashtableIterator *di = dictGetIterator(modules);
     dictEntry *de;
     while ((de = dictNext(di)) != NULL) {
         struct ValkeyModule *module = de->v.val;
@@ -1657,7 +1657,7 @@ sds rewriteConfigGetContentFromState(struct rewriteConfigState *state) {
  * This function does just this, iterating all the option names and
  * blanking all the lines still associated. */
 void rewriteConfigRemoveOrphaned(struct rewriteConfigState *state) {
-    dictIterator *di = dictGetIterator(state->option_to_line);
+    hashtableIterator *di = dictGetIterator(state->option_to_line);
     dictEntry *de;
 
     while ((de = dictNext(di)) != NULL) {
@@ -1692,7 +1692,7 @@ sds getConfigDebugInfo(void) {
 
     /* Iterate the configs and "rewrite" the ones that have
      * the debug flag. */
-    dictIterator *di = dictGetIterator(configs);
+    hashtableIterator *di = dictGetIterator(configs);
     dictEntry *de;
     while ((de = dictNext(di)) != NULL) {
         standardConfig *config = de->v.val;
@@ -1792,7 +1792,7 @@ int rewriteConfig(char *path, int force_write) {
      * the rewrite state. */
 
     /* Iterate the configs that are standard */
-    dictIterator *di = dictGetIterator(configs);
+    hashtableIterator *di = dictGetIterator(configs);
     dictEntry *de;
     while ((de = dictNext(di)) != NULL) {
         standardConfig *config = de->v.val;

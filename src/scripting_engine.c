@@ -56,7 +56,7 @@ typedef struct scriptingEngine {
 
 
 typedef struct engineManager {
-    dict *engines;                /* engines dictionary */
+    hashtable *engines;           /* engines dictionary */
     size_t total_memory_overhead; /* the sum of the memory overhead of all registered scripting engines */
 } engineManager;
 
@@ -66,7 +66,7 @@ static engineManager engineMgr = {
     .total_memory_overhead = 0,
 };
 
-dictType engineDictType = {
+hashtableType engineDictType = {
     .entryGetKey = dictEntryGetKey,
     .hashFunction = dictCStrCaseHash,
     .keyCompare = dictSdsKeyCaseCompare,
@@ -239,7 +239,7 @@ uint64_t scriptingEngineGetAbiVersion(scriptingEngine *engine) {
  */
 void scriptingEngineManagerForEachEngine(engineIterCallback callback,
                                          void *context) {
-    dictIterator *iter = dictGetIterator(engineMgr.engines);
+    hashtableIterator *iter = dictGetIterator(engineMgr.engines);
     dictEntry *entry = NULL;
     while ((entry = dictNext(iter))) {
         scriptingEngine *e = entry->v.val;

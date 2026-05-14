@@ -54,7 +54,7 @@ void lazyFreeErrors(void *args[]) {
 
 /* Release the eval scripts data structures. */
 void lazyFreeEvalScripts(void *args[]) {
-    dict *scripts = args[0];
+    hashtable *scripts = args[0];
     list *scripts_lru_list = args[1];
     list *engine_callbacks = args[2];
     long long len = dictSize(scripts);
@@ -87,7 +87,7 @@ void lazyFreeReplicationBacklogRefMem(void *args[]) {
 
 /* Release the replicaKeysWithExpire dict. */
 void lazyFreeReplicaKeysWithExpire(void *args[]) {
-    dict *replica_keys_with_expire = args[0];
+    hashtable *replica_keys_with_expire = args[0];
     size_t len = dictSize(replica_keys_with_expire);
     dictRelease(replica_keys_with_expire);
     atomic_fetch_sub_explicit(&lazyfree_objects, len, memory_order_relaxed);
@@ -248,7 +248,7 @@ void freeErrorsRadixTreeAsync(rax *errors) {
 /* Free scripts dict, and lru list, if the dict is huge enough, free them in
  * async way.
  * Close lua interpreter, if there are a lot of lua scripts, close it in async way. */
-void freeEvalScriptsAsync(dict *scripts, list *scripts_lru_list, list *engine_callbacks) {
+void freeEvalScriptsAsync(hashtable *scripts, list *scripts_lru_list, list *engine_callbacks) {
     if (dictSize(scripts) > LAZYFREE_THRESHOLD) {
         atomic_fetch_add_explicit(&lazyfree_objects, dictSize(scripts), memory_order_relaxed);
         bioCreateLazyFreeJob(lazyFreeEvalScripts, 3, scripts, scripts_lru_list, engine_callbacks);
@@ -280,7 +280,7 @@ void freeReplicationBacklogRefMemAsync(list *blocks, rax *index) {
 }
 
 /* Free replicaKeysWithExpire dict, if the dict is huge enough, free it in async way. */
-void freeReplicaKeysWithExpireAsync(dict *replica_keys_with_expire) {
+void freeReplicaKeysWithExpireAsync(hashtable *replica_keys_with_expire) {
     if (dictSize(replica_keys_with_expire) > LAZYFREE_THRESHOLD) {
         atomic_fetch_add_explicit(&lazyfree_objects, dictSize(replica_keys_with_expire), memory_order_relaxed);
         bioCreateLazyFreeJob(lazyFreeReplicaKeysWithExpire, 1, replica_keys_with_expire);

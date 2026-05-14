@@ -432,15 +432,15 @@ typedef struct slotRange {
 struct clusterState {
     clusterNode *myself; /* This node */
     uint64_t currentEpoch;
-    int state;              /* CLUSTER_OK, CLUSTER_FAIL, ... */
-    int fail_reason;        /* Why the cluster state changes to fail. */
-    int safe_to_join;       /* Can the restarted node safely join the cluster? */
-    int size;               /* Num of primary nodes with at least one slot */
-    dict *nodes;            /* Hash table of name -> clusterNode structures */
-    dict *shards;           /* Hash table of shard_id -> list (of nodes) structures */
-    dict *nodes_black_list; /* Nodes we don't re-add for a few seconds. */
-    dict *migrating_slots_to;
-    dict *importing_slots_from;
+    int state;                   /* CLUSTER_OK, CLUSTER_FAIL, ... */
+    int fail_reason;             /* Why the cluster state changes to fail. */
+    int safe_to_join;            /* Can the restarted node safely join the cluster? */
+    int size;                    /* Num of primary nodes with at least one slot */
+    hashtable *nodes;            /* Hash table of name -> clusterNode structures */
+    hashtable *shards;           /* Hash table of shard_id -> list (of nodes) structures */
+    hashtable *nodes_black_list; /* Nodes we don't re-add for a few seconds. */
+    hashtable *migrating_slots_to;
+    hashtable *importing_slots_from;
     clusterNode *slots[CLUSTER_SLOTS];
     list *slot_migration_jobs; /* List storing all slot migration jobs. Stored
                                 * in order from most recent to least recently

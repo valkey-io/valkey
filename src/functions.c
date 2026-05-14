@@ -57,10 +57,10 @@ typedef struct functionsLibEngineStats {
 } functionsLibEngineStats;
 
 struct functionsLibCtx {
-    dict *libraries;     /* Library name -> Library object */
-    dict *functions;     /* Function name -> Function object that can be used to run the function */
-    size_t cache_memory; /* Overhead memory (structs, dictionaries, ..) used by all the functions */
-    dict *engines_stats; /* Per engine statistics */
+    hashtable *libraries;     /* Library name -> Library object */
+    hashtable *functions;     /* Function name -> Function object that can be used to run the function */
+    size_t cache_memory;      /* Overhead memory (structs, dictionaries, ..) used by all the functions */
+    hashtable *engines_stats; /* Per engine statistics */
 };
 
 typedef struct functionsLibMetaData {
@@ -69,7 +69,7 @@ typedef struct functionsLibMetaData {
     sds code;
 } functionsLibMetaData;
 
-dictType functionDictType = {
+hashtableType functionDictType = {
     .entryGetKey = dictEntryGetKey,
     .hashFunction = dictCStrCaseHash,
     .keyCompare = dictSdsKeyCaseCompare,
@@ -83,7 +83,7 @@ static void dictEntryDestructorSdsKeyEngineStatsValue(void *entry) {
     zfree(de);
 }
 
-dictType engineStatsDictType = {
+hashtableType engineStatsDictType = {
     .entryGetKey = dictEntryGetKey,
     .hashFunction = dictSdsCaseHash,
     .keyCompare = dictSdsKeyCaseCompare,
@@ -97,7 +97,7 @@ static void dictEntryDestructorSdsKeyEngineFunctionValue(void *entry) {
     zfree(de);
 }
 
-dictType libraryFunctionDictType = {
+hashtableType libraryFunctionDictType = {
     .entryGetKey = dictEntryGetKey,
     .hashFunction = dictSdsHash,
     .keyCompare = dictSdsKeyCompare,
@@ -111,7 +111,7 @@ static void dictEntryDestructorSdsKeyEngineLibraryValue(void *entry) {
     zfree(de);
 }
 
-dictType librariesDictType = {
+hashtableType librariesDictType = {
     .entryGetKey = dictEntryGetKey,
     .hashFunction = dictSdsHash,
     .keyCompare = dictSdsKeyCompare,
@@ -160,10 +160,10 @@ static void engineLibraryDispose(void *obj) {
 }
 
 /* Clear all the functions from the given library ctx */
-void functionsLibCtxClear(functionsLibCtx *lib_ctx, void(callback)(dict *)) {
+void functionsLibCtxClear(functionsLibCtx *lib_ctx, void(callback)(hashtable *)) {
     dictEmpty(lib_ctx->functions, callback);
     dictEmpty(lib_ctx->libraries, callback);
-    dictIterator *iter = dictGetIterator(lib_ctx->engines_stats);
+    hashtableIterator *iter = dictGetIterator(lib_ctx->engines_stats);
     dictEntry *entry = NULL;
     while ((entry = dictNext(iter))) {
         functionsLibEngineStats *stats = entry->v.val;
@@ -184,7 +184,7 @@ static void resetEngineOrCollectResetCallbacks(scriptingEngine *engine, void *co
     }
 }
 
-void functionsLibCtxReleaseCurrent(int async, void(callback)(dict *)) {
+void functionsLibCtxReleaseCurrent(int async, void(callback)(hashtable *)) {
     if (async) {
         list *engine_callbacks = listCreate();
         scriptingEngineManagerForEachEngine(resetEngineOrCollectResetCallbacks, engine_callbacks);
@@ -204,13 +204,13 @@ static void functionsLibCtxFreeGeneric(functionsLibCtx *functions_lib_ctx, int a
     }
 }
 
-void functionReset(int async, void(callback)(dict *)) {
+void functionReset(int async, void(callback)(hashtable *)) {
     functionsLibCtxReleaseCurrent(async, callback);
     functionsInit();
 }
 
 /* Free the given functions ctx */
-void functionsLibCtxFree(functionsLibCtx *functions_lib_ctx, void(callback)(dict *), list *engine_callbacks) {
+void functionsLibCtxFree(functionsLibCtx *functions_lib_ctx, void(callback)(hashtable *), list *engine_callbacks) {
     functionsLibCtxClear(functions_lib_ctx, callback);
     dictRelease(functions_lib_ctx->functions);
     dictRelease(functions_lib_ctx->libraries);
@@ -323,7 +323,7 @@ static functionLibInfo *engineLibraryCreate(sds name, scriptingEngine *e, sds co
 }
 
 static void libraryUnlink(functionsLibCtx *lib_ctx, functionLibInfo *li) {
-    dictIterator *iter = dictGetIterator(li->functions);
+    hashtableIterator *iter = dictGetIterator(li->functions);
     dictEntry *entry = NULL;
     while ((entry = dictNext(iter))) {
         functionInfo *fi = entry->v.val;
@@ -347,7 +347,7 @@ static void libraryUnlink(functionsLibCtx *lib_ctx, functionLibInfo *li) {
 }
 
 static void libraryLink(functionsLibCtx *lib_ctx, functionLibInfo *li) {
-    dictIterator *iter = dictGetIterator(li->functions);
+    hashtableIterator *iter = dictGetIterator(li->functions);
     dictEntry *entry = NULL;
     while ((entry = dictNext(iter))) {
         functionInfo *fi = entry->v.val;
@@ -377,7 +377,7 @@ static void libraryLink(functionsLibCtx *lib_ctx, functionLibInfo *li) {
 static int
 libraryJoin(functionsLibCtx *functions_lib_ctx_dst, functionsLibCtx *functions_lib_ctx_src, int replace, sds *err) {
     int ret = C_ERR;
-    dictIterator *iter = NULL;
+    hashtableIterator *iter = NULL;
     /* Stores the libraries we need to replace in case a revert is required.
      * Only initialized when needed */
     list *old_libraries_list = NULL;
@@ -465,7 +465,7 @@ static void replyEngineStats(scriptingEngine *engine, void *context) {
 }
 
 void functionsRemoveLibFromEngine(scriptingEngine *engine) {
-    dictIterator *iter = dictGetSafeIterator(curr_functions_lib_ctx->libraries);
+    hashtableIterator *iter = dictGetSafeIterator(curr_functions_lib_ctx->libraries);
     dictEntry *entry = NULL;
     while ((entry = dictNext(iter))) {
         functionLibInfo *li = entry->v.val;
@@ -569,7 +569,7 @@ void functionListCommand(client *c) {
         /* If no pattern is asked we know the reply len and we can just set it */
         addReplyArrayLen(c, dictSize(curr_functions_lib_ctx->libraries));
     }
-    dictIterator *iter = dictGetIterator(curr_functions_lib_ctx->libraries);
+    hashtableIterator *iter = dictGetIterator(curr_functions_lib_ctx->libraries);
     dictEntry *entry = NULL;
     while ((entry = dictNext(iter))) {
         functionLibInfo *li = entry->v.val;
@@ -588,7 +588,7 @@ void functionListCommand(client *c) {
 
         addReplyBulkCString(c, "functions");
         addReplyArrayLen(c, dictSize(li->functions));
-        dictIterator *functions_iter = dictGetIterator(li->functions);
+        hashtableIterator *functions_iter = dictGetIterator(li->functions);
         dictEntry *function_entry = NULL;
         while ((function_entry = dictNext(functions_iter))) {
             functionInfo *fi = function_entry->v.val;
@@ -1007,7 +1007,7 @@ static void freeCompiledFunctions(scriptingEngine *engine,
 /* Compile and save the given library, return the loaded library name on success
  * and NULL on failure. In case on failure the err out param is set with relevant error message */
 sds functionsCreateWithLibraryCtx(sds code, int replace, sds *err, functionsLibCtx *lib_ctx, size_t timeout) {
-    dictIterator *iter = NULL;
+    hashtableIterator *iter = NULL;
     dictEntry *entry = NULL;
     functionLibInfo *old_li = NULL;
     functionsLibMetaData md = {0};
@@ -1189,7 +1189,7 @@ unsigned long functionsLibNum(void) {
     return dictSize(curr_functions_lib_ctx->libraries);
 }
 
-dict *functionsLibGet(void) {
+hashtable *functionsLibGet(void) {
     return curr_functions_lib_ctx->libraries;
 }
 

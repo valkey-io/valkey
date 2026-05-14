@@ -151,14 +151,14 @@ static void dictEntryDestructorSdsKeyHeapValue(void *entry) {
     zfree(de);
 }
 
-dictType rdbAuxFieldDictType = {
+hashtableType rdbAuxFieldDictType = {
     .entryGetKey = dictEntryGetKey,
     .hashFunction = dictSdsCaseHash,
     .keyCompare = dictSdsKeyCaseCompare,
     .entryDestructor = dictEntryDestructorSdsKeyHeapValue,
 };
 
-dict *rdbAuxFields = NULL;
+hashtable *rdbAuxFields = NULL;
 
 int rdbRegisterAuxField(char *auxfield, rdbAuxFieldEncoder encoder, rdbAuxFieldDecoder decoder) {
     if (rdbAuxFields == NULL) rdbAuxFields = dictCreate(&rdbAuxFieldDictType);
@@ -1278,7 +1278,7 @@ int rdbSaveInfoAuxFields(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
 
     /* Handle additional dynamic aux fields */
     if (rdbAuxFields != NULL) {
-        dictIterator di;
+        hashtableIterator di;
         dictInitIterator(&di, rdbAuxFields);
         dictEntry *de;
         while ((de = dictNext(&di)) != NULL) {
@@ -1363,8 +1363,8 @@ error:
 }
 
 ssize_t rdbSaveFunctions(rio *rdb) {
-    dict *functions = functionsLibGet();
-    dictIterator *iter = dictGetIterator(functions);
+    hashtable *functions = functionsLibGet();
+    hashtableIterator *iter = dictGetIterator(functions);
     dictEntry *entry = NULL;
     ssize_t written = 0;
     ssize_t ret;

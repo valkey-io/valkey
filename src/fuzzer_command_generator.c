@@ -99,7 +99,7 @@ typedef struct {
     size_t commandRegistrySize;
     CommandEntry *subscribeCommandRegistry;
     size_t subscribeCommandRegistrySize;
-    dict *configDict;
+    hashtable *configDict;
     sds *aclCategories;
     size_t aclCategoriesCount;
     int max_keys;
@@ -307,14 +307,14 @@ static void dictEntryDestructorSdsKeyConfigVal(void *entry) {
 }
 
 /* Dictionary type for config entries */
-static dictType configDictType = {
+static hashtableType configDictType = {
     .entryGetKey = dictEntryGetKey,
     .hashFunction = sdsHash,
     .keyCompare = sdsKeyCompare,
     .entryDestructor = dictEntryDestructorSdsKeyConfigVal,
 };
 
-dict *initConfigDict(void) {
+hashtable *initConfigDict(void) {
     return dictCreate(&configDictType);
 }
 
@@ -413,7 +413,7 @@ static int shouldFilterConfig(const char *key) {
     return 0;
 }
 
-void addConfigEntry(dict *configDict, const char *key, const char *value) {
+void addConfigEntry(hashtable *configDict, const char *key, const char *value) {
     ConfigEntry *entry = zmalloc(sizeof(ConfigEntry));
     entry->value = sdsnew(value);
 
@@ -581,7 +581,7 @@ void generateRandomConfigValue(FuzzerCommand *cmd, ConfigEntry *entry) {
 }
 
 void generateConfigSetCommand(FuzzerCommand *cmd) {
-    dict *configDict = fuzz_ctx->configDict;
+    hashtable *configDict = fuzz_ctx->configDict;
 
     /* Get a random key from the dictionary */
     dictEntry *randomEntry = dictGetRandomKey(configDict);
@@ -618,8 +618,8 @@ static void freeAclCategories(void) {
     fuzz_ctx->aclCategoriesCount = 0;
 }
 
-dict *parseConfigOutput(valkeyReply *reply) {
-    dict *configDict = initConfigDict();
+hashtable *parseConfigOutput(valkeyReply *reply) {
+    hashtable *configDict = initConfigDict();
 
     /* `CONFIG GET *` returns an array of key-value pairs */
     for (size_t i = 0; i < reply->elements; i += 2) {

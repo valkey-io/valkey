@@ -608,7 +608,7 @@ static void cliFillInCommandHelpEntry(helpEntry *help, char *cmdname, char *subc
  * If the command has subcommands, this is called recursively for the subcommands.
  */
 static helpEntry *
-cliInitCommandHelpEntry(char *cmdname, char *subcommandname, helpEntry *next, valkeyReply *specs, dict *groups) {
+cliInitCommandHelpEntry(char *cmdname, char *subcommandname, helpEntry *next, valkeyReply *specs, hashtable *groups) {
     helpEntry *help = next++;
     cliFillInCommandHelpEntry(help, cmdname, subcommandname);
 
@@ -688,8 +688,8 @@ int helpEntryCompare(const void *entry1, const void *entry2) {
  * Called after the command help entries have already been filled in.
  * Extends the help table with new entries for the command groups.
  */
-void cliInitGroupHelpEntries(dict *groups) {
-    dictIterator *iter = dictGetIterator(groups);
+void cliInitGroupHelpEntries(hashtable *groups) {
+    hashtableIterator *iter = dictGetIterator(groups);
     dictEntry *entry;
     helpEntry tmp;
 
@@ -717,7 +717,7 @@ void cliInitGroupHelpEntries(dict *groups) {
 }
 
 /* Initializes help entries for all commands in the COMMAND DOCS reply. */
-void cliInitCommandHelpEntries(valkeyReply *commandTable, dict *groups) {
+void cliInitCommandHelpEntries(valkeyReply *commandTable, hashtable *groups) {
     helpEntry *next = helpEntries;
     for (size_t i = 0; i < commandTable->elements; i += 2) {
         assert(commandTable->element[i]->type == VALKEY_REPLY_STRING);
@@ -784,7 +784,7 @@ static helpEntry *cliLegacyInitCommandHelpEntry(char *cmdname,
                                                 char *subcommandname,
                                                 helpEntry *next,
                                                 struct commandDocs *command,
-                                                dict *groups,
+                                                hashtable *groups,
                                                 sds version) {
     helpEntry *help = next++;
     cliFillInCommandHelpEntry(help, cmdname, subcommandname);
@@ -816,7 +816,7 @@ static helpEntry *cliLegacyInitCommandHelpEntry(char *cmdname,
     return next;
 }
 
-int cliLegacyInitCommandHelpEntries(struct commandDocs *commands, dict *groups, sds version) {
+int cliLegacyInitCommandHelpEntries(struct commandDocs *commands, hashtable *groups, sds version) {
     helpEntry *next = helpEntries;
     for (size_t i = 0; commands[i].name != NULL; i++) {
         if (!version || versionIsSupported(version, commands[i].since)) {
@@ -881,7 +881,7 @@ static sds cliGetServerVersion(void) {
     return NULL;
 }
 
-static void cliLegacyInitHelp(dict *groups) {
+static void cliLegacyInitHelp(hashtable *groups) {
     sds serverVersion = cliGetServerVersion();
 
     /* Scan the commandDocs array and fill in the entries */
@@ -900,14 +900,14 @@ static void cliLegacyInitHelp(dict *groups) {
  */
 static void cliInitHelp(void) {
     /* Dict type for a set of strings, used to collect names of command groups. */
-    dictType groupsdt = {
+    hashtableType groupsdt = {
         .entryGetKey = dictEntryGetKey,
         .hashFunction = dictSdsHash,
         .keyCompare = dictSdsKeyCompare,
         .entryDestructor = dictEntryDestructorSdsKeyNoVal,
     };
     valkeyReply *commandTable;
-    dict *groups;
+    hashtable *groups;
 
     if (cliConnect(CC_QUIET) == VALKEY_ERR) {
         /* Can not connect to the server, but we still want to provide
@@ -3621,7 +3621,7 @@ static struct clusterManager {
 } cluster_manager;
 
 /* Used by clusterManagerFixSlotsCoverage */
-dict *clusterManagerUncoveredSlots = NULL;
+hashtable *clusterManagerUncoveredSlots = NULL;
 
 typedef struct clusterManagerNode {
     valkeyContext *context;
@@ -3679,14 +3679,14 @@ typedef struct clusterManagerLink {
     int handshaking;
 } clusterManagerLink;
 
-static dictType clusterManagerDictType = {
+static hashtableType clusterManagerDictType = {
     .entryGetKey = dictEntryGetKey,
     .hashFunction = dictSdsHash,
     .keyCompare = dictSdsKeyCompare,
     .entryDestructor = dictEntryDestructorSdsVal,
 };
 
-static dictType clusterManagerLinkDictType = {
+static hashtableType clusterManagerLinkDictType = {
     .entryGetKey = dictEntryGetKey,
     .hashFunction = dictSdsHash,
     .keyCompare = dictSdsKeyCompare,
@@ -3720,7 +3720,7 @@ static void clusterManagerWaitForClusterJoin(void);
 static int clusterManagerCheckCluster(int quiet);
 static void clusterManagerLog(int level, const char *fmt, ...);
 static int clusterManagerIsConfigConsistent(void);
-static dict *clusterManagerGetLinkStatus(void);
+static hashtable *clusterManagerGetLinkStatus(void);
 static void clusterManagerOnError(sds err);
 static void clusterManagerNodeArrayInit(clusterManagerNodeArray *array, int len);
 static void clusterManagerNodeArrayReset(clusterManagerNodeArray *array);
@@ -4231,7 +4231,7 @@ static int clusterManagerGetAntiAffinityScore(clusterManagerNodeArray *ipnodes,
      * replication of each other) */
     for (i = 0; i < ip_count; i++) {
         clusterManagerNodeArray *node_array = &(ipnodes[i]);
-        dict *related = dictCreate(&clusterManagerDictType);
+        hashtable *related = dictCreate(&clusterManagerDictType);
         char *ip = NULL;
         for (j = 0; j < node_array->len; j++) {
             clusterManagerNode *node = node_array->nodes[j];
@@ -4259,7 +4259,7 @@ static int clusterManagerGetAntiAffinityScore(clusterManagerNodeArray *ipnodes,
         }
         /* Now it's trivial to check, for each related group having the
          * same host, what is their local score. */
-        dictIterator *iter = dictGetIterator(related);
+        hashtableIterator *iter = dictGetIterator(related);
         dictEntry *entry;
         while ((entry = dictNext(iter)) != NULL) {
             sds types = (sds)entry->v.val;
@@ -5565,8 +5565,8 @@ static void clusterManagerWaitForClusterJoin(void) {
         fflush(stdout);
         sleep(1);
         if (++counter > check_after) {
-            dict *status = clusterManagerGetLinkStatus();
-            dictIterator *iter = NULL;
+            hashtable *status = clusterManagerGetLinkStatus();
+            hashtableIterator *iter = NULL;
             if (status != NULL && dictSize(status) > 0) {
                 printf("\n");
                 clusterManagerLogErr("Warning: %d node(s) may "
@@ -6072,9 +6072,9 @@ cleanup:
 /* Check for disconnected cluster links. It returns a dict whose keys
  * are the unreachable node addresses and the values are lists of
  * node addresses that cannot reach the unreachable node. */
-static dict *clusterManagerGetLinkStatus(void) {
+static hashtable *clusterManagerGetLinkStatus(void) {
     if (cluster_manager.nodes == NULL) return NULL;
-    dict *status = dictCreate(&clusterManagerLinkDictType);
+    hashtable *status = dictCreate(&clusterManagerLinkDictType);
     listIter li;
     listNode *ln;
     listRewind(cluster_manager.nodes, &li);
@@ -6289,7 +6289,7 @@ static int clusterManagerFixSlotsCoverage(char *all_slots) {
     none = listCreate();
     single = listCreate();
     multi = listCreate();
-    dictIterator *iter = dictGetIterator(clusterManagerUncoveredSlots);
+    hashtableIterator *iter = dictGetIterator(clusterManagerUncoveredSlots);
     dictEntry *entry;
     while ((entry = dictNext(iter)) != NULL) {
         sds slot = (sds)entry->key;
@@ -6809,7 +6809,7 @@ static int clusterManagerCheckCluster(int quiet) {
     listIter li;
     listRewind(cluster_manager.nodes, &li);
     int i;
-    dict *open_slots = NULL;
+    hashtable *open_slots = NULL;
     while ((ln = listNext(&li)) != NULL) {
         clusterManagerNode *n = ln->value;
         if (n->migrating != NULL) {
@@ -6847,7 +6847,7 @@ static int clusterManagerCheckCluster(int quiet) {
     }
     if (open_slots != NULL) {
         result = 0;
-        dictIterator *iter = dictGetIterator(open_slots);
+        hashtableIterator *iter = dictGetIterator(open_slots);
         dictEntry *entry;
         sds errstr = sdsnew("[WARNING] The following slots are open: ");
         i = 0;
@@ -9213,7 +9213,7 @@ typeinfo type_zset = {"zset", "ZCARD", "members"};
 typeinfo type_stream = {"stream", "XLEN", "entries"};
 typeinfo type_other = {"other", NULL, "?"};
 
-static typeinfo *typeinfo_add(dict *types, char *name, typeinfo *type_template) {
+static typeinfo *typeinfo_add(hashtable *types, char *name, typeinfo *type_template) {
     typeinfo *info = zmalloc(sizeof(typeinfo));
     *info = *type_template;
     info->name = sdsnew(name);
@@ -9234,14 +9234,14 @@ static void dictEntryDestructorTypeinfoVal(void *entry) {
     zfree(de);
 }
 
-static dictType typeinfoDictType = {
+static hashtableType typeinfoDictType = {
     .entryGetKey = dictEntryGetKey,
     .hashFunction = dictSdsHash,
     .keyCompare = dictSdsKeyCompare,
     .entryDestructor = dictEntryDestructorTypeinfoVal,
 };
 
-static void getKeyTypes(dict *types_dict, valkeyReply *keys, typeinfo **types) {
+static void getKeyTypes(hashtable *types_dict, valkeyReply *keys, typeinfo **types) {
     valkeyReply *reply;
     unsigned int i;
 
@@ -9359,12 +9359,12 @@ static void findBigKeys(int memkeys, unsigned memkeys_samples) {
     unsigned long long sampled = 0, total_keys, totlen = 0, *sizes = NULL, it = 0, scan_loops = 0;
     valkeyReply *reply, *keys;
     unsigned int arrsize = 0, i;
-    dictIterator *di;
+    hashtableIterator *di;
     dictEntry *de;
     typeinfo **types = NULL;
     double pct;
 
-    dict *types_dict = dictCreate(&typeinfoDictType);
+    hashtable *types_dict = dictCreate(&typeinfoDictType);
     typeinfo_add(types_dict, "string", &type_string);
     typeinfo_add(types_dict, "list", &type_list);
     typeinfo_add(types_dict, "set", &type_set);

@@ -509,7 +509,7 @@ int pubsubPublishMessageInternal(robj *channel, robj *message, pubsubtype type) 
     int receivers = 0;
     void *element;
     dictEntry *de;
-    dictIterator *di;
+    hashtableIterator *di;
     int slot = -1;
 
     /* Send to clients listening for that channel */
@@ -687,7 +687,7 @@ void pubsubCommand(client *c) {
         for (j = 2; j < c->argc; j++) {
             void *found = NULL;
             kvstoreHashtableFind(server.pubsub_channels, 0, c->argv[j], &found);
-            dict *d = found;
+            hashtable *d = found;
             addReplyBulk(c, c->argv[j]);
             addReplyLongLong(c, d ? dictSize(d) : 0);
         }

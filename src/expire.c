@@ -541,7 +541,7 @@ ustime_t activeExpireCycle(int type) {
  * with a DB id > 63 are not expired, but a trivial fix is to set the bitmap
  * to the max 64 bit unsigned value when we know there is a key with a DB
  * ID greater than 63, and check all the configured DBs in such a case. */
-dict *replicaKeysWithExpire = NULL;
+hashtable *replicaKeysWithExpire = NULL;
 
 /* Check the set of keys created by the primary with an expire set in order to
  * check if they should be evicted. */
@@ -608,7 +608,7 @@ void expireReplicaKeys(void) {
 
 void rememberReplicaKeyWithExpire(serverDb *db, robj *key) {
     if (replicaKeysWithExpire == NULL) {
-        static dictType dt = {
+        static hashtableType dt = {
             .entryGetKey = dictEntryGetKey,
             .hashFunction = dictSdsHash,
             .keyCompare = dictSdsKeyCompare,

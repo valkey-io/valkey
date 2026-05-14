@@ -687,7 +687,7 @@ long long emptyData(int dbnum, int flags, void(callback)(hashtable *)) {
     if (with_functions) {
         serverAssert(dbnum == -1);
         /* TODO: fix this callback incompatibility. The arg is not used. */
-        functionReset(async, (void (*)(dict *))callback);
+        functionReset(async, (void (*)(hashtable *))callback);
     }
 
     /* Also fire the end event. Note that this event will fire almost
@@ -981,7 +981,7 @@ void keysCommand(client *c) {
 
 /* Data used by the dict scan callback. */
 typedef struct {
-    vector *result; /* elements that collect from dict */
+    vector *result; /* elements that collect from hashtable */
     robj *o;        /* o must be a hash/set/zset object, NULL means current db */
     serverDb *db;   /* database currently being scanned */
     long long type; /* the particular type when scan the db */
@@ -1256,7 +1256,7 @@ void scanGenericCommandWithOptions(client *c, robj *o, unsigned long long cursor
     } else if (o->type == OBJ_ZSET && o->encoding == OBJ_ENCODING_SKIPLIST) {
         zset *zs = objectGetVal(o);
         ht = zs->ht;
-        /* scanning ZSET allocates temporary strings even though it's a dict */
+        /* scanning ZSET allocates temporary strings even though it's a hashtable */
         free_callback = sdsfree;
     }
     vectorInit(&result, SCAN_VECTOR_INITIAL_ALLOC, sizeof(stringRef));
@@ -1708,7 +1708,7 @@ void copyCommand(client *c) {
  * where the function is used for more info. */
 void scanDatabaseForReadyKeys(serverDb *db) {
     dictEntry *de;
-    dictIterator *di = dictGetSafeIterator(db->blocking_keys);
+    hashtableIterator *di = dictGetSafeIterator(db->blocking_keys);
     while ((de = dictNext(di)) != NULL) {
         robj *key = de->key;
         robj *value = dbFind(db, objectGetVal(key));
@@ -1724,7 +1724,7 @@ void scanDatabaseForReadyKeys(serverDb *db) {
  * database was flushed/swapped. */
 void scanDatabaseForDeletedKeys(serverDb *emptied, serverDb *replaced_with) {
     dictEntry *de;
-    dictIterator *di = dictGetSafeIterator(emptied->blocking_keys);
+    hashtableIterator *di = dictGetSafeIterator(emptied->blocking_keys);
     while ((de = dictNext(di)) != NULL) {
         robj *key = de->key;
         int existed = 0, exists = 0;

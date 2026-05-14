@@ -45,7 +45,7 @@ static void dictEntryDestructorHeapKeyValue(void *entry) {
     zfree(de);
 }
 
-dictType latencyTimeSeriesDictType = {
+hashtableType latencyTimeSeriesDictType = {
     .entryGetKey = dictEntryGetKey,
     .hashFunction = dictCStrHash,
     .keyCompare = dictCStrKeyCompare,
@@ -116,7 +116,7 @@ void latencyAddSample(const char *event, ustime_t latency_us) {
  * Note: this is O(N) even when event_to_reset is not NULL because makes
  * the code simpler and we have a small fixed max number of events. */
 int latencyResetEvent(char *event_to_reset) {
-    dictIterator *di;
+    hashtableIterator *di;
     dictEntry *de;
     int resets = 0;
 
@@ -225,7 +225,7 @@ sds createLatencyReport(void) {
 
     /* Show all the events stats and add for each event some event-related
      * comment depending on the values. */
-    dictIterator *di;
+    hashtableIterator *di;
     dictEntry *de;
     int eventnum = 0;
 
@@ -605,7 +605,7 @@ void latencyCommandReplyWithSamples(client *c, struct latencyTimeSeries *ts) {
 /* latencyCommand() helper to produce the reply for the LATEST subcommand,
  * listing the last latency sample for every event type registered so far. */
 void latencyCommandReplyWithLatestEvents(client *c) {
-    dictIterator *di;
+    hashtableIterator *di;
     dictEntry *de;
 
     addReplyArrayLen(c, dictSize(server.latency_events));

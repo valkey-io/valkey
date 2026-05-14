@@ -331,7 +331,7 @@ static void activeDefragDictCallback(void *privdata, void *entry_ref) {
 }
 
 /* Defrag a dict with sds key and optional value (either ptr, sds or robj string) */
-static void activeDefragSdsDict(dict *d, int val_type) {
+static void activeDefragSdsDict(hashtable *d, int val_type) {
     unsigned long cursor = 0;
     dictDefragFunctions defragfns = {
         .defragKey = (dictDefragAllocFunction *)activeDefragSds,

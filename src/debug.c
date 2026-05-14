@@ -1996,7 +1996,7 @@ void logServerInfo(void) {
     int all = 0, everything = 0;
     robj *argv[1];
     argv[0] = createStringObject("all", strlen("all"));
-    dict *section_dict = genInfoSectionDict(argv, 1, NULL, &all, &everything);
+    hashtable *section_dict = genInfoSectionDict(argv, 1, NULL, &all, &everything);
     infostring = genValkeyInfoString(section_dict, all, everything);
     if (server.cluster_enabled) {
         infostring = genClusterDebugString(infostring);

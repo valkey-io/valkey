@@ -899,16 +899,16 @@ typedef struct replBufBlock {
  * by integers from 0 (the default database) up to the max configured
  * database. The database number is the 'id' field in the structure. */
 typedef struct serverDb {
-    kvstore *keys;                        /* The keyspace for this DB */
-    kvstore *expires;                     /* Timeout of keys with a timeout set */
-    kvstore *keys_with_volatile_items;    /* Keys with volatile items */
-    dict *blocking_keys;                  /* Keys with clients waiting for data (BLPOP)*/
-    dict *blocking_keys_unblock_on_nokey; /* Keys with clients waiting for
-                                           * data, and should be unblocked if key is deleted (XREADEDGROUP).
-                                           * This is a subset of blocking_keys*/
-    dict *ready_keys;                     /* Blocked keys that received a PUSH */
-    dict *watched_keys;                   /* WATCHED keys for MULTI/EXEC CAS */
-    int id;                               /* Database ID */
+    kvstore *keys;                             /* The keyspace for this DB */
+    kvstore *expires;                          /* Timeout of keys with a timeout set */
+    kvstore *keys_with_volatile_items;         /* Keys with volatile items */
+    hashtable *blocking_keys;                  /* Keys with clients waiting for data (BLPOP)*/
+    hashtable *blocking_keys_unblock_on_nokey; /* Keys with clients waiting for
+                                                * data, and should be unblocked if key is deleted (XREADEDGROUP).
+                                                * This is a subset of blocking_keys*/
+    hashtable *ready_keys;                     /* Blocked keys that received a PUSH */
+    hashtable *watched_keys;                   /* WATCHED keys for MULTI/EXEC CAS */
+    int id;                                    /* Database ID */
     struct {
         long long avg_ttl;    /* Average TTL, just for stats */
         unsigned long cursor; /* Cursor of the active expire cycle. */
@@ -977,7 +977,7 @@ typedef struct blockingState {
     };
 
     /* BLOCKED_LIST, BLOCKED_ZSET and BLOCKED_STREAM or any other Keys related blocking */
-    dict *keys; /* The keys we are blocked on */
+    hashtable *keys; /* The keys we are blocked on */
 
     /* BLOCKED_WAIT */
     int numreplicas;      /* Number of replicas we are waiting for ACK. */
@@ -1788,11 +1788,11 @@ struct valkeyServer {
     int thp_enabled;                     /* If true, THP is enabled. */
     size_t page_size;                    /* The page size of OS. */
     /* Modules */
-    dict *moduleapi;                   /* Exported core APIs dictionary for modules. */
-    dict *sharedapi;                   /* Like moduleapi but containing the APIs that
-                                          modules share with each other. */
-    dict *module_configs_queue;        /* Dict that stores module configurations from .conf file until after modules are loaded
-                                          during startup or arguments to loadex. */
+    hashtable *moduleapi;              /* Exported core APIs dictionary for modules. */
+    hashtable *sharedapi;              /* Like moduleapi but containing the APIs that
+                                     modules share with each other. */
+    hashtable *module_configs_queue;   /* Dict that stores module configurations from .conf file until after modules are loaded
+                                     during startup or arguments to loadex. */
     list *loadmodule_queue;            /* List of modules to load at startup. */
     int module_pipe[2];                /* Pipe used to awake the event loop by module threads. */
     pid_t child_pid;                   /* PID of current child */
@@ -1840,7 +1840,7 @@ struct valkeyServer {
     list *postponed_clients;    /* List of postponed clients */
     pause_event client_pause_per_purpose[NUM_PAUSE_PURPOSES];
     char neterr[ANET_ERR_LEN];                /* Error buffer for anet.c */
-    dict *migrate_cached_sockets;             /* MIGRATE cached sockets */
+    hashtable *migrate_cached_sockets;        /* MIGRATE cached sockets */
     _Atomic(uint64_t) next_client_id;         /* Next client unique ID. Incremental. */
     int protected_mode;                       /* Don't accept external connections. */
     int io_threads_num;                       /* Number of IO threads to use. */
@@ -2256,7 +2256,7 @@ struct valkeyServer {
     long long blocked_last_cron;  /* Indicate the mstime of the last time we did cron jobs from a blocking operation */
     /* Pubsub */
     kvstore *pubsub_channels;      /* Map channels to list of subscribed clients */
-    dict *pubsub_patterns;         /* A dict of pubsub_patterns */
+    hashtable *pubsub_patterns;    /* A dict of pubsub_patterns */
     int notify_keyspace_events;    /* Events to propagate via Pub/Sub. This is an
                                       xor of NOTIFY_... flags. */
     kvstore *pubsubshard_channels; /* Map shard channels in every slot to list of subscribed clients */
@@ -2338,7 +2338,7 @@ struct valkeyServer {
     int lazyfree_lazy_user_flush;
     /* Latency monitor */
     long long latency_monitor_threshold;
-    dict *latency_events;
+    hashtable *latency_events;
     /* ACLs */
     char *acl_filename;           /* ACL Users file. NULL if not configured. */
     unsigned long acllog_max_len; /* Maximum length of the ACL LOG list. */
@@ -2819,9 +2819,9 @@ typedef struct clusterScanCtx {
 
 extern struct valkeyServer server;
 extern struct sharedObjectsStruct shared;
-extern dictType objectKeyPointerValueDictType;
+extern hashtableType objectKeyPointerValueDictType;
 extern hashtableType objectHashtableType;
-extern dictType objectKeyHeapPointerValueDictType;
+extern hashtableType objectKeyHeapPointerValueDictType;
 extern hashtableType setHashtableType;
 extern hashtableType zsetHashtableType;
 extern hashtableType kvstoreKeysHashtableType;
@@ -2829,15 +2829,15 @@ extern hashtableType kvstoreExpiresHashtableType;
 extern double R_Zero, R_PosInf, R_NegInf, R_Nan;
 extern hashtableType hashHashtableType;
 extern hashtableType hashWithVolatileItemsHashtableType;
-extern dictType stringSetDictType;
-extern dictType externalStringType;
-extern dictType sdsHashDictType;
+extern hashtableType stringSetDictType;
+extern hashtableType externalStringType;
+extern hashtableType sdsHashDictType;
 extern hashtableType clientHashtableType;
 extern hashtableType kvstoreChannelHashtableType;
-extern dictType modulesDictType;
+extern hashtableType modulesDictType;
 extern hashtableType sdsReplyHashtableType;
-extern dictType keylistDictType;
-extern dict *modules;
+extern hashtableType keylistDictType;
+extern hashtable *modules;
 
 /*-----------------------------------------------------------------------------
  * Functions prototypes
@@ -3849,12 +3849,12 @@ int redis_check_rdb_main(int argc, char **argv, FILE *fp);
 int redis_check_aof_main(int argc, char **argv);
 
 /* Scripting */
-void freeEvalScripts(dict *scripts, list *scripts_lru_list, list *engine_callbacks);
-void freeEvalScriptsAsync(dict *scripts, list *scripts_lru_list, list *engine_callbacks);
+void freeEvalScripts(hashtable *scripts, list *scripts_lru_list, list *engine_callbacks);
+void freeEvalScriptsAsync(hashtable *scripts, list *scripts_lru_list, list *engine_callbacks);
 void freeFunctionsAsync(functionsLibCtx *lib_ctx, list *engine_callbacks);
 void sha1hex(char *digest, char *script, size_t len);
 unsigned long evalMemory(void);
-dict *evalScriptsDict(void);
+hashtable *evalScriptsDict(void);
 unsigned long evalScriptsMemory(void);
 uint64_t evalGetCommandFlags(client *c, uint64_t orig_flags);
 uint64_t fcallGetCommandFlags(client *c, uint64_t orig_flags);
@@ -4257,9 +4257,9 @@ void setupDebugSigHandlers(void);
 void setupSigSegvHandler(void);
 void removeSigSegvHandlers(void);
 const char *getSafeInfoString(const char *s, size_t len, char **tmp);
-dict *genInfoSectionDict(robj **argv, int argc, char **defaults, int *out_all, int *out_everything);
-void releaseInfoSectionDict(dict *sec);
-sds genValkeyInfoString(dict *section_dict, int all_sections, int everything);
+hashtable *genInfoSectionDict(robj **argv, int argc, char **defaults, int *out_all, int *out_everything);
+void releaseInfoSectionDict(hashtable *sec);
+sds genValkeyInfoString(hashtable *section_dict, int all_sections, int everything);
 sds genModulesInfoString(sds info);
 void applyWatchdogPeriod(void);
 void watchdogScheduleSignal(int period);

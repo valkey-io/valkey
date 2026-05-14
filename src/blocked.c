@@ -489,7 +489,7 @@ void blockForKeys(client *c, int btype, robj **keys, int numkeys, mstime_t timeo
  * Internal function for unblockClient() */
 static void unblockClientWaitingData(client *c) {
     dictEntry *de;
-    dictIterator *di;
+    hashtableIterator *di;
 
     if (dictSize(c->bstate->keys) == 0) return;
 

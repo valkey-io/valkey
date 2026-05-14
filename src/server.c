@@ -596,7 +596,7 @@ void dictEntryDestructorSdsKeyHeapValue(void *entry) {
 
 /* Generic hash table type where keys are Objects, Values
  * dummy pointers. */
-dictType objectKeyPointerValueDictType = {
+hashtableType objectKeyPointerValueDictType = {
     .entryGetKey = dictEntryGetKey,
     .hashFunction = dictEncObjHash,
     .keyCompare = dictEncObjKeyCompare,
@@ -605,7 +605,7 @@ dictType objectKeyPointerValueDictType = {
 
 /* Like objectKeyPointerValueDictType(), but values can be destroyed, if
  * not NULL, calling zfree(). */
-dictType objectKeyHeapPointerValueDictType = {
+hashtableType objectKeyHeapPointerValueDictType = {
     .entryGetKey = dictEntryGetKey,
     .hashFunction = dictEncObjHash,
     .keyCompare = dictEncObjKeyCompare,
@@ -745,7 +745,7 @@ hashtableType sdsReplyHashtableType = {
 /* Keylist hash table type has unencoded Objects as keys and
  * lists as values. It's used for blocking operations (BLPOP) and to
  * map swapped keys to a list of clients waiting for this keys to be loaded. */
-dictType keylistDictType = {
+hashtableType keylistDictType = {
     .entryGetKey = dictEntryGetKey,
     .hashFunction = dictObjHash,
     .keyCompare = dictObjKeyCompare,
@@ -754,7 +754,7 @@ dictType keylistDictType = {
 
 /* objToHashtableDictType has unencoded Objects as keys and
  * hashtables as values. It's used for PUBSUB command to track clients subscribing the patterns. */
-dictType objToHashtableDictType = {
+hashtableType objToHashtableDictType = {
     .entryGetKey = dictEntryGetKey,
     .hashFunction = dictObjHash,
     .keyCompare = dictObjKeyCompare,
@@ -792,7 +792,7 @@ hashtableType kvstoreChannelHashtableType = {
 
 /* Modules system dictionary type. Keys are module name,
  * values are pointer to ValkeyModule struct. */
-dictType modulesDictType = {
+hashtableType modulesDictType = {
     .entryGetKey = dictEntryGetKey,
     .hashFunction = dictSdsCaseHash,
     .keyCompare = dictSdsKeyCaseCompare,
@@ -800,7 +800,7 @@ dictType modulesDictType = {
 };
 
 /* Migrate cache dict type. */
-dictType migrateCacheDictType = {
+hashtableType migrateCacheDictType = {
     .entryGetKey = dictEntryGetKey,
     .hashFunction = dictSdsHash,
     .keyCompare = dictSdsKeyCompare,
@@ -809,7 +809,7 @@ dictType migrateCacheDictType = {
 
 /* Dict for for case-insensitive search using null terminated C strings.
  * The keys stored in dict are sds though. */
-dictType stringSetDictType = {
+hashtableType stringSetDictType = {
     .entryGetKey = dictEntryGetKey,
     .hashFunction = dictCStrCaseHash,
     .keyCompare = dictCStrKeyCaseCompare,
@@ -818,7 +818,7 @@ dictType stringSetDictType = {
 
 /* Dict for for case-insensitive search using null terminated C strings.
  * The key and value do not have a destructor. */
-dictType externalStringType = {
+hashtableType externalStringType = {
     .entryGetKey = dictEntryGetKey,
     .hashFunction = dictCStrCaseHash,
     .keyCompare = dictCStrKeyCaseCompare,
@@ -827,7 +827,7 @@ dictType externalStringType = {
 
 /* Dict for case-insensitive search using sds objects with a zmalloc
  * allocated object as the value. */
-dictType sdsHashDictType = {
+hashtableType sdsHashDictType = {
     .entryGetKey = dictEntryGetKey,
     .hashFunction = dictSdsCaseHash,
     .keyCompare = dictSdsKeyCaseCompare,
@@ -5952,7 +5952,7 @@ sds genValkeyInfoStringLatencyStats(sds info, hashtable *commands) {
 }
 
 /* Takes a null terminated sections list, and adds them to the dict. */
-void addInfoSectionsToDict(dict *section_dict, char **sections) {
+void addInfoSectionsToDict(hashtable *section_dict, char **sections) {
     while (*sections) {
         sds section = sdsnew(*sections);
         if (dictAdd(section_dict, section, NULL) == DICT_ERR) sdsfree(section);
@@ -5961,9 +5961,9 @@ void addInfoSectionsToDict(dict *section_dict, char **sections) {
 }
 
 /* Cached copy of the default sections, as an optimization. */
-static dict *cached_default_info_sections = NULL;
+static hashtable *cached_default_info_sections = NULL;
 
-void releaseInfoSectionDict(dict *sec) {
+void releaseInfoSectionDict(hashtable *sec) {
     if (sec != cached_default_info_sections) dictRelease(sec);
 }
 
@@ -6028,7 +6028,7 @@ sds genValkeyInfoStringScriptingEngines(sds info) {
  * 'defaults' is an optional null terminated list of default sections.
  * 'out_all' and 'out_everything' are optional.
  * The resulting dictionary should be released with releaseInfoSectionDict. */
-dict *genInfoSectionDict(robj **argv, int argc, char **defaults, int *out_all, int *out_everything) {
+hashtable *genInfoSectionDict(robj **argv, int argc, char **defaults, int *out_all, int *out_everything) {
     char *default_sections[] = {
         "server",
         "clients",
@@ -6055,7 +6055,7 @@ dict *genInfoSectionDict(robj **argv, int argc, char **defaults, int *out_all, i
         return cached_default_info_sections;
     }
 
-    dict *section_dict = dictCreate(&stringSetDictType);
+    hashtable *section_dict = dictCreate(&stringSetDictType);
     dictExpand(section_dict, min(argc, 16));
     for (int i = 0; i < argc; i++) {
         if (!strcasecmp(objectGetVal(argv[i]), "default")) {
@@ -6095,7 +6095,7 @@ void totalNumberOfStatefulKeys(unsigned long *blocking_keys,
 /* Create the string returned by the INFO command. This is decoupled
  * by the INFO command itself as we need to report the same information
  * on memory corruption problems. */
-sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
+sds genValkeyInfoString(hashtable *section_dict, int all_sections, int everything) {
     sds info = sdsempty();
     time_t uptime = server.unixtime - server.stat_starttime;
     int j;
@@ -6808,7 +6808,7 @@ void infoCommand(client *c) {
     }
     int all_sections = 0;
     int everything = 0;
-    dict *sections_dict = genInfoSectionDict(c->argv + 1, c->argc - 1, NULL, &all_sections, &everything);
+    hashtable *sections_dict = genInfoSectionDict(c->argv + 1, c->argc - 1, NULL, &all_sections, &everything);
     sds info = genValkeyInfoString(sections_dict, all_sections, everything);
     addReplyVerbatim(c, info, sdslen(info), "txt");
     sdsfree(info);

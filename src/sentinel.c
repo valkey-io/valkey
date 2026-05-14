@@ -207,10 +207,10 @@ typedef struct sentinelValkeyInstance {
     mstime_t primary_reboot_down_after_period; /* Consider primary down after that period. */
     mstime_t primary_reboot_since_time;        /* primary reboot time since time. */
     mstime_t info_refresh;                     /* Time at which we received INFO output from it. */
-    dict *renamed_commands;                    /* Commands renamed in this instance:
-                                                  Sentinel will use the alternative commands
-                                                  mapped on this table to send things like
-                                                  REPLICAOF, CONFIG, INFO, ... */
+    hashtable *renamed_commands;               /* Commands renamed in this instance:
+                                             Sentinel will use the alternative commands
+                                             mapped on this table to send things like
+                                             REPLICAOF, CONFIG, INFO, ... */
 
     /* Role and the first time we observed it.
      * This is useful in order to delay replacing what the instance reports
@@ -225,12 +225,12 @@ typedef struct sentinelValkeyInstance {
     mstime_t monitored_instance_failover_change_time; /* Last time monitored_instance_failover_state changed. */
 
     /* Primary specific. */
-    dict *sentinels;     /* Other sentinels monitoring the same primary. */
-    dict *replicas;      /* Replicas for this primary instance. */
-    unsigned int quorum; /* Number of sentinels that need to agree on failure. */
-    int parallel_syncs;  /* How many replicas to reconfigure at same time. */
-    char *auth_pass;     /* Password to use for AUTH against primary & replica. */
-    char *auth_user;     /* Username for ACLs AUTH against primary & replica. */
+    hashtable *sentinels; /* Other sentinels monitoring the same primary. */
+    hashtable *replicas;  /* Replicas for this primary instance. */
+    unsigned int quorum;  /* Number of sentinels that need to agree on failure. */
+    int parallel_syncs;   /* How many replicas to reconfigure at same time. */
+    char *auth_pass;      /* Password to use for AUTH against primary & replica. */
+    char *auth_user;      /* Username for ACLs AUTH against primary & replica. */
 
     /* Replica specific. */
     mstime_t primary_link_down_time;        /* Replica replication link down time. */
@@ -267,9 +267,9 @@ typedef struct sentinelValkeyInstance {
 struct sentinelState {
     char myid[CONFIG_RUN_ID_SIZE + 1]; /* This sentinel ID. */
     uint64_t current_epoch;            /* Current epoch. */
-    dict *primaries;                   /* Dictionary of primary sentinelValkeyInstances.
-                                        Key is the instance name, value is the
-                                        sentinelValkeyInstance structure pointer. */
+    hashtable *primaries;              /* Dictionary of primary sentinelValkeyInstances.
+                                   Key is the instance name, value is the
+                                   sentinelValkeyInstance structure pointer. */
     int tilt;                          /* Are we in TILT mode? */
     int total_tilt;                    /* Number of tilt. */
     int running_scripts;               /* Number of scripts in execution right now. */
@@ -423,7 +423,7 @@ int sentinelFlushConfig(void);
 void sentinelGenerateInitialMonitorEvents(void);
 int sentinelSendPing(sentinelValkeyInstance *ri);
 int sentinelForceHelloUpdateForPrimary(sentinelValkeyInstance *primary);
-sentinelValkeyInstance *getSentinelValkeyInstanceByAddrAndRunID(dict *instances, char *ip, int port, char *runid);
+sentinelValkeyInstance *getSentinelValkeyInstanceByAddrAndRunID(hashtable *instances, char *ip, int port, char *runid);
 void sentinelSimFailureCrash(void);
 void sentinelAskPrimaryStateToOtherSentinels(sentinelValkeyInstance *primary, int flags);
 
@@ -446,7 +446,7 @@ static void dictEntryDestructorInstancesValue(void *entry) {
     zfree(de);
 }
 
-dictType instancesDictType = {
+hashtableType instancesDictType = {
     .entryGetKey = dictEntryGetKey,
     .hashFunction = dictSdsHash,
     .keyCompare = dictSdsKeyCompare,
@@ -457,7 +457,7 @@ dictType instancesDictType = {
  *
  * This is useful into sentinelGetObjectiveLeader() function in order to
  * count the votes and understand who is the leader. */
-dictType leaderVotesDictType = {
+hashtableType leaderVotesDictType = {
     .entryGetKey = dictEntryGetKey,
     .hashFunction = dictSdsHash,
     .keyCompare = dictSdsKeyCompare,
@@ -465,7 +465,7 @@ dictType leaderVotesDictType = {
 };
 
 /* Instance renamed commands table. */
-dictType renamedCommandsDictType = {
+hashtableType renamedCommandsDictType = {
     .entryGetKey = dictEntryGetKey,
     .hashFunction = dictSdsCaseHash,
     .keyCompare = dictSdsKeyCaseCompare,
@@ -731,7 +731,7 @@ void sentinelEvent(int level, char *type, sentinelValkeyInstance *ri, const char
  * generated when a primary to monitor is added at runtime via the
  * SENTINEL MONITOR command. */
 void sentinelGenerateInitialMonitorEvents(void) {
-    dictIterator *di;
+    hashtableIterator *di;
     dictEntry *de;
 
     di = dictGetIterator(sentinel.primaries);
@@ -1097,7 +1097,7 @@ instanceLink *releaseInstanceLink(instanceLink *link, sentinelValkeyInstance *ri
  * is returned. */
 int sentinelTryConnectionSharing(sentinelValkeyInstance *ri) {
     serverAssert(ri->flags & SRI_SENTINEL);
-    dictIterator *di;
+    hashtableIterator *di;
     dictEntry *de;
 
     if (ri->runid == NULL) return C_ERR;      /* No way to identify it. */
@@ -1134,7 +1134,7 @@ void dropInstanceConnections(sentinelValkeyInstance *ri) {
     instanceLinkCloseConnection(ri->link, ri->link->pc);
 
     /* Disconnect with all replicas. */
-    dictIterator *di;
+    hashtableIterator *di;
     dictEntry *de;
     sentinelValkeyInstance *repl_ri;
     di = dictGetIterator(ri->replicas);
@@ -1149,13 +1149,13 @@ void dropInstanceConnections(sentinelValkeyInstance *ri) {
 /* Drop all connections to other sentinels. Returns the number of connections
  * dropped.*/
 int sentinelDropConnections(void) {
-    dictIterator *di;
+    hashtableIterator *di;
     dictEntry *de;
     int dropped = 0;
 
     di = dictGetIterator(sentinel.primaries);
     while ((de = dictNext(di)) != NULL) {
-        dictIterator *sdi;
+        hashtableIterator *sdi;
         dictEntry *sde;
 
         sentinelValkeyInstance *ri = de->v.val;
@@ -1183,7 +1183,7 @@ int sentinelDropConnections(void) {
  * Return the number of updated Sentinel addresses. */
 int sentinelUpdateSentinelAddressInAllPrimaries(sentinelValkeyInstance *ri) {
     serverAssert(ri->flags & SRI_SENTINEL);
-    dictIterator *di;
+    hashtableIterator *di;
     dictEntry *de;
     int reconfigured = 0;
 
@@ -1276,7 +1276,7 @@ sentinelValkeyInstance *createSentinelValkeyInstance(char *name,
                                                      sentinelValkeyInstance *primary) {
     sentinelValkeyInstance *ri;
     sentinelAddr *addr;
-    dict *table = NULL;
+    hashtable *table = NULL;
     sds sdsname;
 
     serverAssert(flags & (SRI_PRIMARY | SRI_REPLICA | SRI_SENTINEL));
@@ -1448,7 +1448,7 @@ const char *sentinelValkeyInstanceTypeStr(sentinelValkeyInstance *ri) {
  * The function returns 1 if the matching Sentinel was removed, otherwise
  * 0 if there was no Sentinel with this ID. */
 int removeMatchingSentinelFromPrimary(sentinelValkeyInstance *primary, char *runid) {
-    dictIterator *di;
+    hashtableIterator *di;
     dictEntry *de;
     int removed = 0;
 
@@ -1473,8 +1473,8 @@ int removeMatchingSentinelFromPrimary(sentinelValkeyInstance *primary, char *run
  *
  * runid or addr can be NULL. In such a case the search is performed only
  * by the non-NULL field. */
-sentinelValkeyInstance *getSentinelValkeyInstanceByAddrAndRunID(dict *instances, char *addr, int port, char *runid) {
-    dictIterator *di;
+sentinelValkeyInstance *getSentinelValkeyInstanceByAddrAndRunID(hashtable *instances, char *addr, int port, char *runid) {
+    hashtableIterator *di;
     dictEntry *de;
     sentinelValkeyInstance *instance = NULL;
     sentinelAddr *ri_addr = NULL;
@@ -1561,7 +1561,7 @@ void sentinelResetPrimary(sentinelValkeyInstance *ri, int flags) {
 /* Call sentinelResetPrimary() on every primary with a name matching the specified
  * pattern. */
 int sentinelResetPrimariesByPattern(char *pattern, int flags) {
-    dictIterator *di;
+    hashtableIterator *di;
     dictEntry *de;
     int reset = 0;
 
@@ -1591,7 +1591,7 @@ int sentinelResetPrimaryAndChangeAddress(sentinelValkeyInstance *primary, char *
     sentinelAddr *oldaddr, *newaddr;
     sentinelAddr **replicas = NULL;
     int num_replicas = 0, j;
-    dictIterator *di;
+    hashtableIterator *di;
     dictEntry *de;
 
     newaddr = createSentinelAddr(hostname, port, 0);
@@ -1673,10 +1673,10 @@ sentinelAddr *sentinelGetCurrentPrimaryAddress(sentinelValkeyInstance *primary) 
 /* This function sets the down_after_period field value in 'primary' to all
  * the replicas and sentinel instances connected to this primary. */
 void sentinelPropagateDownAfterPeriod(sentinelValkeyInstance *primary) {
-    dictIterator *di;
+    hashtableIterator *di;
     dictEntry *de;
     int j;
-    dict *d[] = {primary->replicas, primary->sentinels, NULL};
+    hashtable *d[] = {primary->replicas, primary->sentinels, NULL};
 
     for (j = 0; d[j]; j++) {
         di = dictGetIterator(d[j]);
@@ -1991,7 +1991,7 @@ const char *sentinelHandleConfiguration(char **argv, int argc) {
  * Sentinel across restarts: config epoch of primaries, associated replicas
  * and sentinel instances, and so forth. */
 void rewriteConfigSentinelOption(struct rewriteConfigState *state) {
-    dictIterator *di, *di2;
+    hashtableIterator *di, *di2;
     dictEntry *de;
     sds line;
 
@@ -2802,7 +2802,7 @@ void sentinelProcessHelloMessage(char *hello, int hello_len) {
                     /* If there is already other sentinel with same address (but
                      * different runid) then remove the old one across all primaries */
                     sentinelEvent(LL_NOTICE, "+sentinel-invalid-addr", other, "%@");
-                    dictIterator *di;
+                    hashtableIterator *di;
                     dictEntry *de;
 
                     /* Keep a copy of runid. 'other' about to be deleted in loop. */
@@ -2950,8 +2950,8 @@ int sentinelSendHello(sentinelValkeyInstance *ri) {
 
 /* Reset last_pub_time in all the instances in the specified dictionary
  * in order to force the delivery of a Hello update ASAP. */
-void sentinelForceHelloUpdateDictOfValkeyInstances(dict *instances) {
-    dictIterator *di;
+void sentinelForceHelloUpdateDictOfValkeyInstances(hashtable *instances) {
+    hashtableIterator *di;
     dictEntry *de;
 
     di = dictGetSafeIterator(instances);
@@ -3065,7 +3065,7 @@ void sentinelSendPeriodicCommands(sentinelValkeyInstance *ri) {
 }
 
 /* =========================== SENTINEL command ============================= */
-static void populateDict(dict *options_dict, char **options) {
+static void populateDict(hashtable *options_dict, char **options) {
     for (int i = 0; options[i]; i++) {
         sds option = sdsnew(options[i]);
         if (dictAdd(options_dict, option, NULL) == DICT_ERR) sdsfree(option);
@@ -3099,12 +3099,12 @@ void sentinelConfigSetCommand(client *c) {
         "loglevel",
         NULL,
     };
-    static dict *options_dict = NULL;
+    static hashtable *options_dict = NULL;
     if (!options_dict) {
         options_dict = dictCreate(&stringSetDictType);
         populateDict(options_dict, options);
     }
-    dict *set_configs = dictCreate(&stringSetDictType);
+    hashtable *set_configs = dictCreate(&stringSetDictType);
 
     /* Validate arguments are valid */
     for (int i = 3; i < c->argc; i++) {
@@ -3213,7 +3213,7 @@ void sentinelConfigGetCommand(client *c) {
     void *replylen = addReplyDeferredLen(c);
     int matches = 0;
     /* Create a dictionary to store the input configs,to avoid adding duplicate twice */
-    dict *d = dictCreate(&externalStringType);
+    hashtable *d = dictCreate(&externalStringType);
     for (int i = 3; i < c->argc; i++) {
         pattern = objectGetVal(c->argv[i]);
         /* If the string doesn't contain glob patterns and available in dictionary, don't look further, just continue. */
@@ -3680,8 +3680,8 @@ void addReplySentinelDebugInfo(client *c) {
 
 /* Output a number of instances contained inside a dictionary as
  * RESP. */
-void addReplyDictOfValkeyInstances(client *c, dict *instances) {
-    dictIterator *di;
+void addReplyDictOfValkeyInstances(client *c, hashtable *instances) {
+    hashtableIterator *di;
     dictEntry *de;
     long replicas = 0;
     void *replylen = addReplyDeferredLen(c);
@@ -3717,7 +3717,7 @@ sentinelValkeyInstance *sentinelGetPrimaryByNameOrReplyError(client *c, robj *na
 #define SENTINEL_ISQR_NOQUORUM (1 << 0)
 #define SENTINEL_ISQR_NOAUTH (1 << 1)
 int sentinelIsQuorumReachable(sentinelValkeyInstance *primary, int *usableptr) {
-    dictIterator *di;
+    hashtableIterator *di;
     dictEntry *de;
     int usable = 1; /* Number of usable Sentinels. Init to 1 to count myself. */
     int result = SENTINEL_ISQR_OK;
@@ -4024,9 +4024,9 @@ void sentinelCommand(client *c) {
         /* Create an ad-hoc dictionary type so that we can iterate
          * a dictionary composed of just the primary groups the user
          * requested. */
-        dictType copy_keeper = instancesDictType;
+        hashtableType copy_keeper = instancesDictType;
         copy_keeper.entryDestructor = zfree;
-        dict *primaries_local = sentinel.primaries;
+        hashtable *primaries_local = sentinel.primaries;
         if (c->argc > 2) {
             primaries_local = dictCreate(&copy_keeper);
 
@@ -4051,7 +4051,7 @@ void sentinelCommand(client *c) {
          */
         addReplyArrayLen(c, dictSize(primaries_local) * 2);
 
-        dictIterator *di;
+        hashtableIterator *di;
         dictEntry *de;
         di = dictGetIterator(primaries_local);
         while ((de = dictNext(di)) != NULL) {
@@ -4065,7 +4065,7 @@ void sentinelCommand(client *c) {
             else
                 addReplyNull(c);
 
-            dictIterator *sdi;
+            hashtableIterator *sdi;
             dictEntry *sde;
             sdi = dictGetIterator(ri->replicas);
             while ((sde = dictNext(sdi)) != NULL) {
@@ -4121,20 +4121,20 @@ numargserr:
     addReplyErrorArity(c);
 }
 
-void addInfoSectionsToDict(dict *section_dict, char **sections);
+void addInfoSectionsToDict(hashtable *section_dict, char **sections);
 
 /* INFO [<section> [<section> ...]] */
 void sentinelInfoCommand(client *c) {
     char *sentinel_sections[] = {"server", "clients", "cpu", "stats", "sentinel", NULL};
     int sec_all = 0, sec_everything = 0;
-    static dict *cached_all_info_sections = NULL;
+    static hashtable *cached_all_info_sections = NULL;
 
     /* Get requested section list. */
-    dict *sections_dict = genInfoSectionDict(c->argv + 1, c->argc - 1, sentinel_sections, &sec_all, &sec_everything);
+    hashtable *sections_dict = genInfoSectionDict(c->argv + 1, c->argc - 1, sentinel_sections, &sec_all, &sec_everything);
 
     /* Purge unsupported sections from the requested ones. */
     dictEntry *de;
-    dictIterator *di = dictGetSafeIterator(sections_dict);
+    hashtableIterator *di = dictGetSafeIterator(sections_dict);
     while ((de = dictNext(di)) != NULL) {
         int i;
         sds sec = de->key;
@@ -4158,7 +4158,7 @@ void sentinelInfoCommand(client *c) {
 
     sds info = genValkeyInfoString(sections_dict, 0, 0);
     if (sec_all || (dictFind(sections_dict, "sentinel") != NULL)) {
-        dictIterator *di;
+        hashtableIterator *di;
         dictEntry *de;
         int primary_id = 0;
 
@@ -4201,7 +4201,7 @@ void sentinelInfoCommand(client *c) {
 /* Implements Sentinel version of the ROLE command. The output is
  * "sentinel" and the list of currently monitored primary names. */
 void sentinelRoleCommand(client *c) {
-    dictIterator *di;
+    hashtableIterator *di;
     dictEntry *de;
 
     addReplyArrayLen(c, 2);
@@ -4471,7 +4471,7 @@ void sentinelCheckSubjectivelyDown(sentinelValkeyInstance *ri) {
  * However messages can be delayed so there are no strong guarantees about
  * N instances agreeing at the same time about the down state. */
 void sentinelCheckObjectivelyDown(sentinelValkeyInstance *primary) {
-    dictIterator *di;
+    hashtableIterator *di;
     dictEntry *de;
     unsigned int quorum = 0, odown = 0;
 
@@ -4550,7 +4550,7 @@ void sentinelAskPrimaryStateToOtherSentinels(sentinelValkeyInstance *primary, in
     char port[32];
     ll2string(port, sizeof(port), primary->addr->port);
 
-    dictIterator *di;
+    hashtableIterator *di;
     dictEntry *de;
 
     di = dictGetIterator(primary->sentinels);
@@ -4630,7 +4630,7 @@ struct sentinelLeader {
 
 /* Helper function for sentinelGetLeader, increment the counter
  * relative to the specified runid. */
-int sentinelLeaderIncr(dict *counters, char *runid) {
+int sentinelLeaderIncr(hashtable *counters, char *runid) {
     dictEntry *existing, *de;
     uint64_t oldval;
 
@@ -4653,8 +4653,8 @@ int sentinelLeaderIncr(dict *counters, char *runid) {
  * the Sentinels we know (ever seen since the last SENTINEL RESET) that
  * reported the same instance as leader for the same epoch. */
 char *sentinelGetLeader(sentinelValkeyInstance *primary, uint64_t epoch) {
-    dict *counters;
-    dictIterator *di;
+    hashtable *counters;
+    hashtableIterator *di;
     dictEntry *de;
     unsigned int voters = 0, voters_quorum;
     char *myvote;
@@ -5011,7 +5011,7 @@ sentinelValkeyInstance *sentinelSelectReplica(sentinelValkeyInstance *primary) {
     sentinelValkeyInstance **instance = zmalloc(sizeof(instance[0]) * dictSize(primary->replicas));
     sentinelValkeyInstance *selected = NULL;
     int instances = 0;
-    dictIterator *di;
+    hashtableIterator *di;
     dictEntry *de;
     mstime_t max_primary_down_time = 0;
 
@@ -5169,7 +5169,7 @@ void sentinelFailoverWaitPromotion(sentinelValkeyInstance *ri) {
 
 void sentinelFailoverDetectEnd(sentinelValkeyInstance *primary) {
     int not_reconfigured = 0, timeout = 0;
-    dictIterator *di;
+    hashtableIterator *di;
     dictEntry *de;
     mstime_t elapsed = mstime() - primary->failover_state_change_time;
 
@@ -5206,7 +5206,7 @@ void sentinelFailoverDetectEnd(sentinelValkeyInstance *primary) {
      * command to all the replicas still not reconfigured to replicate with
      * the new primary. */
     if (timeout) {
-        dictIterator *di;
+        hashtableIterator *di;
         dictEntry *de;
 
         di = dictGetIterator(primary->replicas);
@@ -5230,7 +5230,7 @@ void sentinelFailoverDetectEnd(sentinelValkeyInstance *primary) {
 /* Send REPLICAOF <new primary address> to all the remaining replicas that
  * still don't appear to have the configuration updated. */
 void sentinelFailoverReconfNextReplica(sentinelValkeyInstance *primary) {
-    dictIterator *di;
+    hashtableIterator *di;
     dictEntry *de;
     int in_progress = 0;
 
@@ -5367,8 +5367,8 @@ void sentinelHandleValkeyInstance(sentinelValkeyInstance *ri) {
 
 /* Perform scheduled operations for all the instances in the dictionary.
  * Recursively call the function against dictionaries of replicas. */
-void sentinelHandleDictOfValkeyInstances(dict *instances) {
-    dictIterator *di;
+void sentinelHandleDictOfValkeyInstances(hashtable *instances) {
+    hashtableIterator *di;
     dictEntry *de;
     sentinelValkeyInstance *switch_to_promoted = NULL;
 

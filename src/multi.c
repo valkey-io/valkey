@@ -505,7 +505,7 @@ void touchAllWatchedKeysInDb(serverDb *emptied, serverDb *replaced_with) {
 
     if (dictSize(emptied->watched_keys) == 0) return;
 
-    dictIterator *di = dictGetSafeIterator(emptied->watched_keys);
+    hashtableIterator *di = dictGetSafeIterator(emptied->watched_keys);
     while ((de = dictNext(di)) != NULL) {
         robj *key = de->key;
         int exists_in_emptied = dbFind(emptied, objectGetVal(key)) != NULL;

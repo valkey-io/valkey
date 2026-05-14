@@ -2328,8 +2328,8 @@ int rewriteModuleObject(rio *r, robj *key, robj *o, int dbid) {
 }
 
 static int rewriteFunctions(rio *aof) {
-    dict *functions = functionsLibGet();
-    dictIterator *iter = dictGetIterator(functions);
+    hashtable *functions = functionsLibGet();
+    hashtableIterator *iter = dictGetIterator(functions);
     dictEntry *entry = NULL;
     while ((entry = dictNext(iter))) {
         functionLibInfo *li = entry->v.val;

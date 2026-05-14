@@ -405,7 +405,7 @@ void migrateCloseSocket(robj *host, robj *port) {
 }
 
 void migrateCloseTimedoutSockets(void) {
-    dictIterator *di = dictGetSafeIterator(server.migrate_cached_sockets);
+    hashtableIterator *di = dictGetSafeIterator(server.migrate_cached_sockets);
     dictEntry *de;
 
     while ((de = dictNext(di)) != NULL) {
@@ -1353,7 +1353,7 @@ int clusterRedirectBlockedClientIfNeeded(client *c) {
     if (c->flag.blocked && (c->bstate->btype == BLOCKED_LIST || c->bstate->btype == BLOCKED_ZSET ||
                             c->bstate->btype == BLOCKED_STREAM || c->bstate->btype == BLOCKED_MODULE)) {
         dictEntry *de;
-        dictIterator *di;
+        hashtableIterator *di;
 
         /* If the client is blocked on module, but not on a specific key,
          * don't unblock it. */

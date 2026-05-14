@@ -24,11 +24,6 @@
 #define DICT_OK 0
 #define DICT_ERR 1
 
-/* dict, dictType, and dictIterator are aliases for their hashtable equivalents. */
-typedef hashtable dict;
-typedef hashtableType dictType;
-typedef hashtableIterator dictIterator;
-
 /* dictEntry is a transparent key-value pair. Access fields directly:
  *   de->key       - the key pointer
  *   de->v.val     - value as void*
@@ -68,11 +63,11 @@ typedef struct dictEntry {
 /* Expand the hash table if needed. Returns DICT_OK if expand was performed
  * or if the dictionary is already large enough, DICT_ERR if expand was not
  * performed. */
-static inline int dictExpand(dict *d, unsigned long size) {
+static inline int dictExpand(hashtable *d, unsigned long size) {
     return hashtableExpand(d, size) ? DICT_OK : DICT_ERR;
 }
 
-/* Callback for dictType.entryGetKey, which expects void pointers. */
+/* Callback for hashtableType.entryGetKey, which expects void pointers. */
 static inline const void *dictEntryGetKey(const void *entry) {
     return ((const dictEntry *)entry)->key;
 }
@@ -81,47 +76,47 @@ static inline size_t dictEntryMemUsage(dictEntry *de) {
     return sizeof(*de);
 }
 
-static inline size_t dictMemUsage(const dict *d) {
+static inline size_t dictMemUsage(const hashtable *d) {
     return hashtableMemUsage(d) + hashtableSize(d) * sizeof(dictEntry);
 }
 
 /* Search for a key in the dictionary. Returns the dictEntry if found,
  * or NULL if the key doesn't exist. */
-static inline dictEntry *dictFind(dict *d, const void *key) {
+static inline dictEntry *dictFind(hashtable *d, const void *key) {
     void *found = NULL;
     return hashtableFind(d, key, &found) ? (dictEntry *)found : NULL;
 }
 
 /* Fetch the value associated with a key. Returns the value if the key exists,
  * or NULL if the key doesn't exist. */
-static inline void *dictFetchValue(dict *d, const void *key) {
+static inline void *dictFetchValue(hashtable *d, const void *key) {
     dictEntry *de = dictFind(d, key);
     return de ? de->v.val : NULL;
 }
 
 /* Remove a key from the dictionary. Returns DICT_OK if the key was found
  * and removed, DICT_ERR if the key was not found. */
-static inline int dictDelete(dict *d, const void *key) {
+static inline int dictDelete(hashtable *d, const void *key) {
     return hashtableDelete(d, key) ? DICT_OK : DICT_ERR;
 }
 
 /* Free an entry that was previously unlinked with dictUnlink().
  * It's safe to call this function with de = NULL. */
-static inline void dictFreeUnlinkedEntry(dict *d, dictEntry *de) {
+static inline void dictFreeUnlinkedEntry(hashtable *d, dictEntry *de) {
     if (de == NULL) return;
     hashtableType *type = hashtableGetType(d);
     type->entryDestructor(de);
 }
 
 /* Return a random entry from the hash table. */
-static inline dictEntry *dictGetRandomKey(dict *d) {
+static inline dictEntry *dictGetRandomKey(hashtable *d) {
     void *entry = NULL;
     return hashtableRandomEntry(d, &entry) ? (dictEntry *)entry : NULL;
 }
 
 /* A more fair random entry selection that considers chain lengths.
  * This provides better distribution than dictGetRandomKey(). */
-static inline dictEntry *dictGetFairRandomKey(dict *d) {
+static inline dictEntry *dictGetFairRandomKey(hashtable *d) {
     void *entry = NULL;
     return hashtableFairRandomEntry(d, &entry) ? (dictEntry *)entry : NULL;
 }
@@ -135,13 +130,13 @@ static inline dictEntry *dictGetFairRandomKey(dict *d) {
  * This function is useful when we want to remove something from the hash
  * table but want to use its value before actually deleting the entry.
  * Without this function the pattern would require two lookups. */
-static inline dictEntry *dictUnlink(dict *d, const void *key) {
+static inline dictEntry *dictUnlink(hashtable *d, const void *key) {
     void *entry = NULL;
     return hashtablePop(d, key, &entry) ? (dictEntry *)entry : NULL;
 }
 
 /* Add an entry to the dictionary. */
-static inline int dictAdd(dict *d, void *key, void *val) {
+static inline int dictAdd(hashtable *d, void *key, void *val) {
     hashtablePosition pos;
     void *existing = NULL;
 
@@ -163,7 +158,7 @@ static inline int dictAdd(dict *d, void *key, void *val) {
  *
  * If key was added, the dictEntry is returned to be manipulated by the
  * caller. */
-static inline dictEntry *dictAddRaw(dict *d, void *key, dictEntry **existing) {
+static inline dictEntry *dictAddRaw(hashtable *d, void *key, dictEntry **existing) {
     hashtablePosition pos;
     void *existing_entry = NULL;
 
@@ -181,7 +176,7 @@ static inline dictEntry *dictAddRaw(dict *d, void *key, dictEntry **existing) {
 
 /* Adds a key to the dictionary if it doesn't already exists. Returns the
  * dictEntry of the key, whether it was just added or not. */
-static inline dictEntry *dictAddOrFind(dict *d, void *key) {
+static inline dictEntry *dictAddOrFind(hashtable *d, void *key) {
     dictEntry *existing = NULL;
     dictEntry *entry = dictAddRaw(d, key, &existing);
     return entry ? entry : existing;
@@ -192,7 +187,7 @@ static inline dictEntry *dictAddOrFind(dict *d, void *key) {
  *
  * Always returns 1 to indicate the key was consumed (either added or used
  * to replace). The caller should not free the key after calling this. */
-static inline int dictReplace(dict *d, void *key, void *val) {
+static inline int dictReplace(hashtable *d, void *key, void *val) {
     dictEntry *entry = (dictEntry *)zmalloc(sizeof(*entry));
     entry->key = key;
     entry->v.val = val;
@@ -214,7 +209,7 @@ static inline int dictReplace(dict *d, void *key, void *val) {
 }
 
 /* Iterator operations */
-static inline dictEntry *dictNext(dictIterator *iter) {
+static inline dictEntry *dictNext(hashtableIterator *iter) {
     void *entry = NULL;
     if (hashtableNext(iter, &entry)) {
         return (dictEntry *)entry;

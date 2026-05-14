@@ -24,7 +24,7 @@ apply as soon as possible.
 * (CVE-2026-23631) Use-after-free when full sync occurs during a yielding Lua/function execution
 
 ### New Features and enhanced behavior
-* Add cluster bus network traffic usage metric in bytes by @@hpatro (#3396)
+* Add cluster bus network traffic usage metric in bytes by @hpatro (#3396)
 
 ### New Features and enhanced behavior
 * Reduce latency spikes during rehashing via incremental page release by @chzhoo (#3481)

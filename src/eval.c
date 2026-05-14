@@ -55,42 +55,40 @@
 
 void evalGenericCommandWithDebugging(client *c, int evalsha);
 
-typedef struct evalScript {
-    compiledFunction *script;
-    scriptingEngine *engine;
-    robj *body;
-    uint64_t flags;
-    listNode *node; /* list node in scripts_lru_list list. */
-} evalScript;
-
-static void dictScriptDestructor(void *val) {
-    if (val == NULL) return; /* Lazy freeing will set value to NULL. */
-    evalScript *es = (evalScript *)val;
+static void evalScriptDestructor(void *entry) {
+    if (entry == NULL) return;
+    evalScript *es = (evalScript *)entry;
     scriptingEngineCallFreeFunction(es->engine, VMSE_EVAL, es->script);
     decrRefCount(es->body);
     zfree(es);
 }
 
-/* Helper functions for eval.c */
-static void dictEntryDestructorSdsKeyScriptValue(void *entry) {
-    dictEntry *de = entry;
-    dictSdsDestructor(dictGetKey(de));
-    dictScriptDestructor(dictGetVal(de));
-    zfree(de);
+static const void *evalScriptGetKey(const void *entry) {
+    const evalScript *es = (const evalScript *)entry;
+    return es->sha;
 }
 
-/* evalCtx.scripts sha (as sds string) -> scripts (as evalScript) cache. */
-dictType shaScriptObjectDictType = {
-    .entryGetKey = dictEntryGetKey,
-    .hashFunction = dictCStrCaseHash,
-    .keyCompare = dictSdsKeyCaseCompare,
-    .entryDestructor = dictEntryDestructorSdsKeyScriptValue,
+static uint64_t evalScriptHashFunction(const void *key) {
+    /* SHA1 hex is already uniformly distributed. Use first 8 bytes directly
+     * as the hash, avoiding any hash computation on the hot path. */
+    return hashtableGenCaseHashFunction(key, 40);
+}
+
+static int evalScriptKeyCompare(const void *key1, const void *key2) {
+    return strcasecmp(key1, key2);
+}
+
+hashtableType evalScriptsHashtableType = {
+    .entryGetKey = evalScriptGetKey,
+    .hashFunction = evalScriptHashFunction,
+    .keyCompare = evalScriptKeyCompare,
+    .entryDestructor = evalScriptDestructor,
 };
 
 /* Eval context */
 struct evalCtx {
-    dict *scripts;                  /* A dictionary of SHA1 -> evalScript */
-    list *scripts_lru_list;         /* A list of SHA1, first in first out LRU eviction. */
+    hashtable *scripts;             /* A hashtable of evalScript entries, keyed by SHA1 hex */
+    list *scripts_lru_list;         /* A list of evalScript*, first in first out LRU eviction. */
     unsigned long long scripts_mem; /* Cached scripts' memory + oh */
 } evalCtx;
 
@@ -100,14 +98,8 @@ struct evalCtx {
  *
  */
 void evalInit(void) {
-    /* Initialize a dictionary we use to map SHAs to scripts.
-     *
-     * Initialize a list we use for script evictions.
-     * Note that we duplicate the sha when adding to the lru list due to defrag,
-     * and we need to free them respectively. */
-    evalCtx.scripts = dictCreate(&shaScriptObjectDictType);
+    evalCtx.scripts = hashtableCreate(&evalScriptsHashtableType);
     evalCtx.scripts_lru_list = listCreate();
-    listSetFreeMethod(evalCtx.scripts_lru_list, sdsfreeVoid);
     evalCtx.scripts_mem = 0;
 }
 
@@ -138,9 +130,9 @@ void sha1hex(char *digest, char *script, size_t len) {
     digest[40] = '\0';
 }
 
-/* Free lua_scripts dict and close lua interpreter. */
-void freeEvalScripts(dict *scripts, list *scripts_lru_list, list *engine_callbacks) {
-    dictRelease(scripts);
+/* Free eval scripts hashtable and close lua interpreter. */
+void freeEvalScripts(hashtable *scripts, list *scripts_lru_list, list *engine_callbacks) {
+    hashtableRelease(scripts);
 
     listRelease(scripts_lru_list);
     if (engine_callbacks) {
@@ -185,20 +177,19 @@ void evalRelease(int async) {
  * Called when a scripting engine is unregistered to avoid dangling engine
  * pointers in the eval script cache. */
 void evalRemoveScriptsFromEngine(scriptingEngine *engine) {
-    dictIterator *iter = dictGetSafeIterator(evalCtx.scripts);
-    dictEntry *entry;
-    while ((entry = dictNext(iter))) {
-        evalScript *es = dictGetVal(entry);
+    hashtableIterator iter;
+    hashtableInitIterator(&iter, evalCtx.scripts, HASHTABLE_ITER_SAFE);
+    void *entry;
+    while (hashtableNext(&iter, &entry)) {
+        evalScript *es = (evalScript *)entry;
         if (es->engine == engine) {
-            sds sha = dictGetKey(entry);
-            evalCtx.scripts_mem -= sdsAllocSize(sha) + getStringObjectSdsUsedMemory(es->body);
+            evalCtx.scripts_mem -= getStringObjectSdsUsedMemory(es->body);
             if (es->node) {
                 listDelNode(evalCtx.scripts_lru_list, es->node);
             }
-            dictDelete(evalCtx.scripts, sha);
+            hashtableDelete(evalCtx.scripts, es->sha);
         }
     }
-    dictReleaseIterator(iter);
 }
 
 void evalReset(int async) {
@@ -313,12 +304,14 @@ uint64_t evalGetCommandFlags(client *c, uint64_t cmd_flags) {
     if (evalsha && sdslen(objectGetVal(c->argv[1])) != 40) return cmd_flags;
     uint64_t script_flags;
     evalCalcScriptHash(evalsha, objectGetVal(c->argv[1]), sha);
-    c->cur_script = dictFind(evalCtx.scripts, sha);
+    void *found = NULL;
+    hashtableFind(evalCtx.scripts, sha, &found);
+    c->cur_script = found;
     if (!c->cur_script) {
         if (evalsha) return cmd_flags;
         if (evalExtractShebangFlags(objectGetVal(c->argv[1]), NULL, &script_flags, NULL, NULL) == C_ERR) return cmd_flags;
     } else {
-        evalScript *es = dictGetVal(c->cur_script);
+        evalScript *es = (evalScript *)c->cur_script;
         script_flags = es->flags;
     }
     if (script_flags & SCRIPT_FLAG_EVAL_COMPAT_MODE) return cmd_flags;
@@ -329,13 +322,13 @@ uint64_t evalGetCommandFlags(client *c, uint64_t cmd_flags) {
  *
  * This will delete the script from the scripting engine and delete the script
  * from server. */
-static void evalDeleteScript(client *c, sds sha) {
-    /* Delete the script from server. */
-    dictEntry *de = dictUnlink(evalCtx.scripts, sha);
-    serverAssertWithInfo(c, NULL, de);
-    evalScript *es = dictGetVal(de);
-    evalCtx.scripts_mem -= sdsAllocSize(sha) + getStringObjectSdsUsedMemory(es->body);
-    dictFreeUnlinkedEntry(evalCtx.scripts, de);
+static void evalDeleteScript(client *c, const char *sha) {
+    void *found = NULL;
+    hashtableFind(evalCtx.scripts, sha, &found);
+    serverAssertWithInfo(c, NULL, found);
+    evalScript *es = (evalScript *)found;
+    evalCtx.scripts_mem -= getStringObjectSdsUsedMemory(es->body);
+    hashtableDelete(evalCtx.scripts, sha);
 }
 
 /* Users who abuse EVAL will generate a new lua script on each call, which can
@@ -350,18 +343,18 @@ static void evalDeleteScript(client *c, sds sha) {
  * and use it for quick removal and re-insertion into an LRU list each time the
  * script is used. */
 #define LRU_LIST_LENGTH 500
-static listNode *scriptsLRUAdd(client *c, sds sha) {
+static listNode *scriptsLRUAdd(client *c, evalScript *es) {
     /* Evict oldest. */
     while (listLength(evalCtx.scripts_lru_list) >= LRU_LIST_LENGTH) {
         listNode *ln = listFirst(evalCtx.scripts_lru_list);
-        sds oldest = listNodeValue(ln);
-        evalDeleteScript(c, oldest);
+        evalScript *oldest = listNodeValue(ln);
+        evalDeleteScript(c, oldest->sha);
         listDelNode(evalCtx.scripts_lru_list, ln);
         server.stat_evictedscripts++;
     }
 
     /* Add current. */
-    listAddNodeTail(evalCtx.scripts_lru_list, sdsdup(sha));
+    listAddNodeTail(evalCtx.scripts_lru_list, es);
     return listLast(evalCtx.scripts_lru_list);
 }
 
@@ -378,9 +371,9 @@ static int evalRegisterNewScript(client *c, robj *body, char **sha) {
 
         /* If the script was previously added via EVAL, we promote it to
          * SCRIPT LOAD, prevent it from being evicted later. */
-        dictEntry *entry = dictFind(evalCtx.scripts, *sha);
-        if (entry != NULL) {
-            evalScript *es = dictGetVal(entry);
+        void *found = NULL;
+        if (hashtableFind(evalCtx.scripts, *sha, &found)) {
+            evalScript *es = (evalScript *)found;
             if (es->node) {
                 listDelNode(evalCtx.scripts_lru_list, es->node);
                 es->node = NULL;
@@ -449,22 +442,20 @@ static int evalRegisterNewScript(client *c, robj *body, char **sha) {
 
     serverAssert(num_compiled_functions == 1);
 
-    /* We also save a SHA1 -> Original script map in a dictionary
-     * so that we can replicate / write in the AOF all the
-     * EVALSHA commands as EVAL using the original script. */
+    /* Store the script in the hashtable with the SHA1 embedded in the entry. */
     evalScript *es = zcalloc(sizeof(evalScript));
+    memcpy(es->sha, *sha, 41);
     es->script = functions[0];
     es->engine = engine;
     es->flags = script_flags;
-    sds _sha = sdsnew(*sha);
     if (!is_script_load) {
         /* Script eviction only applies to EVAL, not SCRIPT LOAD. */
-        es->node = scriptsLRUAdd(c, _sha);
+        es->node = scriptsLRUAdd(c, es);
     }
     es->body = body;
-    int retval = dictAdd(evalCtx.scripts, _sha, es);
-    serverAssert(retval == DICT_OK);
-    evalCtx.scripts_mem += sdsAllocSize(_sha) + getStringObjectSdsUsedMemory(body);
+    int added = hashtableAdd(evalCtx.scripts, es);
+    serverAssert(added);
+    evalCtx.scripts_mem += getStringObjectSdsUsedMemory(body);
     incrRefCount(body);
     zfree(functions);
 
@@ -486,32 +477,33 @@ static void evalGenericCommand(client *c, int evalsha) {
     }
 
     if (c->cur_script) {
-        memcpy(sha, dictGetKey(c->cur_script), 40);
-        sha[40] = '\0';
+        evalScript *cached = (evalScript *)c->cur_script;
+        memcpy(sha, cached->sha, 41);
     } else {
         evalCalcScriptHash(evalsha, objectGetVal(c->argv[1]), sha);
     }
 
-    dictEntry *entry = dictFind(evalCtx.scripts, sha);
+    void *found = NULL;
+    hashtableFind(evalCtx.scripts, sha, &found);
+    evalScript *es = (evalScript *)found;
 
-    if (evalsha && entry == NULL) {
+    if (evalsha && es == NULL) {
         /* Calling EVALSHA using an hash that was never added to the scripts
          * cache. */
         addReplyErrorObject(c, shared.noscripterr);
         return;
     }
 
-    if (entry == NULL) {
+    if (es == NULL) {
         robj *body = c->argv[1];
         char *_sha = sha;
         if (evalRegisterNewScript(c, body, &_sha) != C_OK) {
             return;
         }
-        entry = dictFind(evalCtx.scripts, sha);
-        serverAssert(entry != NULL);
+        hashtableFind(evalCtx.scripts, sha, &found);
+        es = (evalScript *)found;
+        serverAssert(es != NULL);
     }
-
-    evalScript *es = dictGetVal(entry);
     int ro = c->cmd->proc == evalRoCommand || c->cmd->proc == evalShaRoCommand;
 
     scriptRunCtx rctx;
@@ -620,7 +612,7 @@ void scriptCommand(client *c) {
 
         addReplyArrayLen(c, c->argc - 2);
         for (j = 2; j < c->argc; j++) {
-            if (dictFind(evalCtx.scripts, objectGetVal(c->argv[j])))
+            if (hashtableFind(evalCtx.scripts, objectGetVal(c->argv[j]), NULL))
                 addReply(c, shared.cone);
             else
                 addReply(c, shared.czero);
@@ -671,11 +663,11 @@ void scriptCommand(client *c) {
             return;
         }
     } else if (c->argc == 3 && !strcasecmp(objectGetVal(c->argv[1]), "show")) {
-        dictEntry *de;
+        void *found = NULL;
         evalScript *es;
 
-        if (sdslen(objectGetVal(c->argv[2])) == 40 && (de = dictFind(evalCtx.scripts, objectGetVal(c->argv[2])))) {
-            es = dictGetVal(de);
+        if (sdslen(objectGetVal(c->argv[2])) == 40 && hashtableFind(evalCtx.scripts, objectGetVal(c->argv[2]), &found)) {
+            es = (evalScript *)found;
             addReplyBulk(c, es->body);
         } else {
             addReplyErrorObject(c, shared.noscripterr);
@@ -697,14 +689,14 @@ unsigned long evalMemory(void) {
     return memory;
 }
 
-dict *evalScriptsDict(void) {
+hashtable *evalScriptsDict(void) {
     return evalCtx.scripts;
 }
 
 unsigned long evalScriptsMemory(void) {
     return evalCtx.scripts_mem +
-           dictMemUsage(evalCtx.scripts) +
-           dictSize(evalCtx.scripts) * sizeof(evalScript) +
+           hashtableMemUsage(evalCtx.scripts) +
+           hashtableSize(evalCtx.scripts) * sizeof(evalScript) +
            listLength(evalCtx.scripts_lru_list) * sizeof(listNode);
 }
 

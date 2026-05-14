@@ -248,9 +248,9 @@ void freeErrorsRadixTreeAsync(rax *errors) {
 /* Free scripts dict, and lru list, if the dict is huge enough, free them in
  * async way.
  * Close lua interpreter, if there are a lot of lua scripts, close it in async way. */
-void freeEvalScriptsAsync(dict *scripts, list *scripts_lru_list, list *engine_callbacks) {
-    if (dictSize(scripts) > LAZYFREE_THRESHOLD) {
-        atomic_fetch_add_explicit(&lazyfree_objects, dictSize(scripts), memory_order_relaxed);
+void freeEvalScriptsAsync(hashtable *scripts, list *scripts_lru_list, list *engine_callbacks) {
+    if (hashtableSize(scripts) > LAZYFREE_THRESHOLD) {
+        atomic_fetch_add_explicit(&lazyfree_objects, hashtableSize(scripts), memory_order_relaxed);
         bioCreateLazyFreeJob(lazyFreeEvalScripts, 3, scripts, scripts_lru_list, engine_callbacks);
     } else {
         freeEvalScripts(scripts, scripts_lru_list, engine_callbacks);

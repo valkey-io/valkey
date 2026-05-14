@@ -1394,7 +1394,7 @@ typedef struct client {
     listNode *client_list_node;        /* list node in client list */
     mstime_t buf_peak_last_reset_time; /* keeps the last time the buffer peak value was reset */
     size_t querybuf_peak;              /* Recent (100ms or more) peak of querybuf size. */
-    dictEntry *cur_script;             /* Cached pointer to the dictEntry of the script being executed. */
+    void *cur_script;                  /* Cached pointer to the script entry being executed. */
     user *user;                        /* User associated with this connection */
     time_t obuf_soft_limit_reached_time;
     list *deferred_reply_errors;             /* Used for module thread safe contexts. */
@@ -3849,12 +3849,12 @@ int redis_check_rdb_main(int argc, char **argv, FILE *fp);
 int redis_check_aof_main(int argc, char **argv);
 
 /* Scripting */
-void freeEvalScripts(dict *scripts, list *scripts_lru_list, list *engine_callbacks);
-void freeEvalScriptsAsync(dict *scripts, list *scripts_lru_list, list *engine_callbacks);
+void freeEvalScripts(hashtable *scripts, list *scripts_lru_list, list *engine_callbacks);
+void freeEvalScriptsAsync(hashtable *scripts, list *scripts_lru_list, list *engine_callbacks);
 void freeFunctionsAsync(functionsLibCtx *lib_ctx, list *engine_callbacks);
 void sha1hex(char *digest, char *script, size_t len);
 unsigned long evalMemory(void);
-dict *evalScriptsDict(void);
+hashtable *evalScriptsDict(void);
 unsigned long evalScriptsMemory(void);
 uint64_t evalGetCommandFlags(client *c, uint64_t orig_flags);
 uint64_t fcallGetCommandFlags(client *c, uint64_t orig_flags);

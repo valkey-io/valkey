@@ -647,7 +647,7 @@ uint64_t fcallGetCommandFlags(client *c, uint64_t cmd_flags) {
     robj *function_name = c->argv[1];
     c->cur_script = dictFind(curr_functions_lib_ctx->functions, objectGetVal(function_name));
     if (!c->cur_script) return cmd_flags;
-    functionInfo *fi = dictGetVal(c->cur_script);
+    functionInfo *fi = dictGetVal((dictEntry *)c->cur_script);
     uint64_t script_flags = fi->compiled_function->f_flags;
     return scriptFlagsToCmdFlags(cmd_flags, script_flags);
 }
@@ -657,7 +657,7 @@ static void fcallCommandGeneric(client *c, int ro) {
     replicationFeedMonitors(c, server.monitors, c->db->id, c->argv, c->argc);
 
     robj *function_name = c->argv[1];
-    dictEntry *de = c->cur_script;
+    dictEntry *de = (dictEntry *)c->cur_script;
     if (!de) de = dictFind(curr_functions_lib_ctx->functions, objectGetVal(function_name));
     if (!de) {
         addReplyError(c, "Function not found");

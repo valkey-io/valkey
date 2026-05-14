@@ -392,20 +392,20 @@ static int dictSdsKeyCompare(const void *key1, const void *key2) {
 
 static void dictEntryDestructorSdsKeyNoVal(void *entry) {
     dictEntry *de = entry;
-    sdsfree(dictGetKey(de));
+    sdsfree(de->key);
     zfree(de);
 }
 
 static void dictEntryDestructorSdsVal(void *entry) {
     dictEntry *de = entry;
-    sdsfree(dictGetVal(de));
+    sdsfree(de->v.val);
     zfree(de);
 }
 
 static void dictEntryDestructorSdsKeyListVal(void *entry) {
     dictEntry *de = entry;
-    sdsfree(dictGetKey(de));
-    listRelease(dictGetVal(de));
+    sdsfree(de->key);
+    listRelease(de->v.val);
     zfree(de);
 }
 
@@ -701,7 +701,7 @@ void cliInitGroupHelpEntries(dict *groups) {
     for (entry = dictNext(iter); entry != NULL; entry = dictNext(iter)) {
         tmp.argc = 1;
         tmp.argv = zmalloc(sizeof(sds));
-        tmp.argv[0] = sdscatprintf(sdsempty(), "@%s", (char *)dictGetKey(entry));
+        tmp.argv[0] = sdscatprintf(sdsempty(), "@%s", (char *)entry->key);
         tmp.full = tmp.argv[0];
         tmp.type = CLI_HELP_GROUP;
         tmp.docs.name = NULL;
@@ -4243,7 +4243,7 @@ static int clusterManagerGetAntiAffinityScore(clusterManagerNodeArray *ipnodes,
             assert(key != NULL);
             dictEntry *entry = dictFind(related, key);
             if (entry)
-                types = sdsdup((sds)dictGetVal(entry));
+                types = sdsdup((sds)entry->v.val);
             else
                 types = sdsempty();
             /* Primary type 'm' is always set as the first character of the
@@ -4262,8 +4262,8 @@ static int clusterManagerGetAntiAffinityScore(clusterManagerNodeArray *ipnodes,
         dictIterator *iter = dictGetIterator(related);
         dictEntry *entry;
         while ((entry = dictNext(iter)) != NULL) {
-            sds types = (sds)dictGetVal(entry);
-            sds name = (sds)dictGetKey(entry);
+            sds types = (sds)entry->v.val;
+            sds name = (sds)entry->key;
             int typeslen = sdslen(types);
             if (typeslen < 2) continue;
             if (types[0] == 'm')
@@ -5575,10 +5575,10 @@ static void clusterManagerWaitForClusterJoin(void) {
                 iter = dictGetIterator(status);
                 dictEntry *entry;
                 while ((entry = dictNext(iter)) != NULL) {
-                    sds nodeaddr = (sds)dictGetKey(entry);
+                    sds nodeaddr = (sds)entry->key;
                     char *node_ip = NULL;
                     int node_port = 0, node_bus_port = 0;
-                    list *from = (list *)dictGetVal(entry);
+                    list *from = (list *)entry->v.val;
                     if (parseClusterNodeAddress(nodeaddr, &node_ip, &node_port, &node_bus_port) && node_bus_port) {
                         clusterManagerLogErr(" - The port %d of node %s may "
                                              "be unreachable from:\n",
@@ -6090,7 +6090,7 @@ static dict *clusterManagerGetLinkStatus(void) {
                 list *from = NULL;
                 dictEntry *entry = dictFind(status, link->node_addr);
                 if (entry)
-                    from = dictGetVal(entry);
+                    from = entry->v.val;
                 else {
                     from = listCreate();
                     dictAdd(status, sdsdup(link->node_addr), from);
@@ -6292,8 +6292,8 @@ static int clusterManagerFixSlotsCoverage(char *all_slots) {
     dictIterator *iter = dictGetIterator(clusterManagerUncoveredSlots);
     dictEntry *entry;
     while ((entry = dictNext(iter)) != NULL) {
-        sds slot = (sds)dictGetKey(entry);
-        list *nodes = (list *)dictGetVal(entry);
+        sds slot = (sds)entry->key;
+        list *nodes = (list *)entry->v.val;
         switch (listLength(nodes)) {
         case 0: listAddNodeTail(none, slot); break;
         case 1: listAddNodeTail(single, slot); break;
@@ -6344,7 +6344,7 @@ static int clusterManagerFixSlotsCoverage(char *all_slots) {
                 int s = atoi(slot);
                 dictEntry *entry = dictFind(clusterManagerUncoveredSlots, slot);
                 assert(entry != NULL);
-                list *nodes = (list *)dictGetVal(entry);
+                list *nodes = (list *)entry->v.val;
                 listNode *fn = listFirst(nodes);
                 assert(fn != NULL);
                 clusterManagerNode *n = fn->value;
@@ -6375,7 +6375,7 @@ static int clusterManagerFixSlotsCoverage(char *all_slots) {
                 sds slot = ln->value;
                 dictEntry *entry = dictFind(clusterManagerUncoveredSlots, slot);
                 assert(entry != NULL);
-                list *nodes = (list *)dictGetVal(entry);
+                list *nodes = (list *)entry->v.val;
                 int s = atoi(slot);
                 clusterManagerNode *target = clusterManagerGetNodeWithMostKeysInSlot(nodes, s, NULL);
                 if (target == NULL) {
@@ -6852,7 +6852,7 @@ static int clusterManagerCheckCluster(int quiet) {
         sds errstr = sdsnew("[WARNING] The following slots are open: ");
         i = 0;
         while ((entry = dictNext(iter)) != NULL) {
-            sds slot = (sds)dictGetKey(entry);
+            sds slot = (sds)entry->key;
             char *fmt = (i++ > 0 ? ",%S" : "%S");
             errstr = sdscatfmt(errstr, fmt, slot);
         }
@@ -6863,7 +6863,7 @@ static int clusterManagerCheckCluster(int quiet) {
             dictReleaseIterator(iter);
             iter = dictGetIterator(open_slots);
             while ((entry = dictNext(iter)) != NULL) {
-                sds slot = (sds)dictGetKey(entry);
+                sds slot = (sds)entry->key;
                 result = clusterManagerFixOpenSlot(atoi(slot));
                 if (!result) break;
             }
@@ -9230,7 +9230,7 @@ void type_free(void *val) {
 
 static void dictEntryDestructorTypeinfoVal(void *entry) {
     dictEntry *de = entry;
-    type_free(dictGetVal(de));
+    type_free(de->v.val);
     zfree(de);
 }
 
@@ -9272,7 +9272,7 @@ static void getKeyTypes(dict *types_dict, valkeyReply *keys, typeinfo **types) {
         sdsfree(typereply);
         typeinfo *type = NULL;
         if (de)
-            type = dictGetVal(de);
+            type = de->v.val;
         else if (strcmp(reply->str, "none")) /* create new types for modules, (but not for deleted keys) */
             type = typeinfo_add(types_dict, reply->str, &type_other);
         types[i] = type;
@@ -9464,7 +9464,7 @@ static void findBigKeys(int memkeys, unsigned memkeys_samples) {
     /* Output the biggest keys we found, for types we did find */
     di = dictGetIterator(types_dict);
     while ((de = dictNext(di))) {
-        typeinfo *type = dictGetVal(de);
+        typeinfo *type = de->v.val;
         if (type->biggest_key) {
             printf("Biggest %6s found '%s' has %llu %s\n", type->name, type->biggest_key, type->biggest,
                    !memkeys ? type->sizeunit : "bytes");
@@ -9476,7 +9476,7 @@ static void findBigKeys(int memkeys, unsigned memkeys_samples) {
 
     di = dictGetIterator(types_dict);
     while ((de = dictNext(di))) {
-        typeinfo *type = dictGetVal(de);
+        typeinfo *type = de->v.val;
         printf("%llu %ss with %llu %s (%05.2f%% of keys, avg size %.2f)\n", type->count, type->name, type->totalsize,
                !memkeys ? type->sizeunit : "bytes", sampled ? 100 * (double)type->count / sampled : 0,
                type->count ? (double)type->totalsize / type->count : 0);

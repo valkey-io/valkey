@@ -78,8 +78,8 @@ dictType functionDictType = {
 
 static void dictEntryDestructorSdsKeyEngineStatsValue(void *entry) {
     dictEntry *de = entry;
-    dictSdsDestructor(dictGetKey(de));
-    engineStatsDispose(dictGetVal(de));
+    dictSdsDestructor(de->key);
+    engineStatsDispose(de->v.val);
     zfree(de);
 }
 
@@ -92,8 +92,8 @@ dictType engineStatsDictType = {
 
 static void dictEntryDestructorSdsKeyEngineFunctionValue(void *entry) {
     dictEntry *de = entry;
-    dictSdsDestructor(dictGetKey(de));
-    engineFunctionDispose(dictGetVal(de));
+    dictSdsDestructor(de->key);
+    engineFunctionDispose(de->v.val);
     zfree(de);
 }
 
@@ -106,8 +106,8 @@ dictType libraryFunctionDictType = {
 
 static void dictEntryDestructorSdsKeyEngineLibraryValue(void *entry) {
     dictEntry *de = entry;
-    dictSdsDestructor(dictGetKey(de));
-    engineLibraryDispose(dictGetVal(de));
+    dictSdsDestructor(de->key);
+    engineLibraryDispose(de->v.val);
     zfree(de);
 }
 
@@ -166,7 +166,7 @@ void functionsLibCtxClear(functionsLibCtx *lib_ctx, void(callback)(dict *)) {
     dictIterator *iter = dictGetIterator(lib_ctx->engines_stats);
     dictEntry *entry = NULL;
     while ((entry = dictNext(iter))) {
-        functionsLibEngineStats *stats = dictGetVal(entry);
+        functionsLibEngineStats *stats = entry->v.val;
         stats->n_functions = 0;
         stats->n_lib = 0;
     }
@@ -326,7 +326,7 @@ static void libraryUnlink(functionsLibCtx *lib_ctx, functionLibInfo *li) {
     dictIterator *iter = dictGetIterator(li->functions);
     dictEntry *entry = NULL;
     while ((entry = dictNext(iter))) {
-        functionInfo *fi = dictGetVal(entry);
+        functionInfo *fi = entry->v.val;
         int ret = dictDelete(lib_ctx->functions,
                              objectGetVal(fi->compiled_function->name));
         serverAssert(ret == DICT_OK);
@@ -334,7 +334,7 @@ static void libraryUnlink(functionsLibCtx *lib_ctx, functionLibInfo *li) {
     }
     dictReleaseIterator(iter);
     entry = dictUnlink(lib_ctx->libraries, li->name);
-    dictSetVal(lib_ctx->libraries, entry, NULL);
+    entry->v.val = NULL;
     dictFreeUnlinkedEntry(lib_ctx->libraries, entry);
     lib_ctx->cache_memory -= libraryMallocSize(li);
 
@@ -350,7 +350,7 @@ static void libraryLink(functionsLibCtx *lib_ctx, functionLibInfo *li) {
     dictIterator *iter = dictGetIterator(li->functions);
     dictEntry *entry = NULL;
     while ((entry = dictNext(iter))) {
-        functionInfo *fi = dictGetVal(entry);
+        functionInfo *fi = entry->v.val;
         dictAdd(lib_ctx->functions,
                 sdsnew(objectGetVal(fi->compiled_function->name)),
                 fi);
@@ -384,7 +384,7 @@ libraryJoin(functionsLibCtx *functions_lib_ctx_dst, functionsLibCtx *functions_l
     dictEntry *entry = NULL;
     iter = dictGetIterator(functions_lib_ctx_src->libraries);
     while ((entry = dictNext(iter))) {
-        functionLibInfo *li = dictGetVal(entry);
+        functionLibInfo *li = entry->v.val;
         functionLibInfo *old_li = dictFetchValue(functions_lib_ctx_dst->libraries, li->name);
         if (old_li) {
             if (!replace) {
@@ -407,7 +407,7 @@ libraryJoin(functionsLibCtx *functions_lib_ctx_dst, functionsLibCtx *functions_l
     /* Make sure no functions collision */
     iter = dictGetIterator(functions_lib_ctx_src->functions);
     while ((entry = dictNext(iter))) {
-        functionInfo *fi = dictGetVal(entry);
+        functionInfo *fi = entry->v.val;
         if (dictFetchValue(functions_lib_ctx_dst->functions,
                            objectGetVal(fi->compiled_function->name))) {
             *err = sdscatfmt(sdsempty(),
@@ -422,9 +422,9 @@ libraryJoin(functionsLibCtx *functions_lib_ctx_dst, functionsLibCtx *functions_l
     /* No collision, it is safe to link all the new libraries. */
     iter = dictGetIterator(functions_lib_ctx_src->libraries);
     while ((entry = dictNext(iter))) {
-        functionLibInfo *li = dictGetVal(entry);
+        functionLibInfo *li = entry->v.val;
         libraryLink(functions_lib_ctx_dst, li);
-        dictSetVal(functions_lib_ctx_src->libraries, entry, NULL);
+        entry->v.val = NULL;
     }
     dictReleaseIterator(iter);
     iter = NULL;
@@ -468,7 +468,7 @@ void functionsRemoveLibFromEngine(scriptingEngine *engine) {
     dictIterator *iter = dictGetSafeIterator(curr_functions_lib_ctx->libraries);
     dictEntry *entry = NULL;
     while ((entry = dictNext(iter))) {
-        functionLibInfo *li = dictGetVal(entry);
+        functionLibInfo *li = entry->v.val;
         if (li->engine == engine) {
             libraryUnlink(curr_functions_lib_ctx, li);
             engineLibraryFree(li);
@@ -572,7 +572,7 @@ void functionListCommand(client *c) {
     dictIterator *iter = dictGetIterator(curr_functions_lib_ctx->libraries);
     dictEntry *entry = NULL;
     while ((entry = dictNext(iter))) {
-        functionLibInfo *li = dictGetVal(entry);
+        functionLibInfo *li = entry->v.val;
         if (library_name) {
             if (!stringmatchlen(library_name, sdslen(library_name), li->name, sdslen(li->name), 1)) {
                 continue;
@@ -591,7 +591,7 @@ void functionListCommand(client *c) {
         dictIterator *functions_iter = dictGetIterator(li->functions);
         dictEntry *function_entry = NULL;
         while ((function_entry = dictNext(functions_iter))) {
-            functionInfo *fi = dictGetVal(function_entry);
+            functionInfo *fi = function_entry->v.val;
             addReplyMapLen(c, 3);
             addReplyBulkCString(c, "name");
             addReplyBulkCString(c, objectGetVal(fi->compiled_function->name));
@@ -647,7 +647,7 @@ uint64_t fcallGetCommandFlags(client *c, uint64_t cmd_flags) {
     robj *function_name = c->argv[1];
     c->cur_script = dictFind(curr_functions_lib_ctx->functions, objectGetVal(function_name));
     if (!c->cur_script) return cmd_flags;
-    functionInfo *fi = dictGetVal(c->cur_script);
+    functionInfo *fi = c->cur_script->v.val;
     uint64_t script_flags = fi->compiled_function->f_flags;
     return scriptFlagsToCmdFlags(cmd_flags, script_flags);
 }
@@ -663,7 +663,7 @@ static void fcallCommandGeneric(client *c, int ro) {
         addReplyError(c, "Function not found");
         return;
     }
-    functionInfo *fi = dictGetVal(de);
+    functionInfo *fi = de->v.val;
     scriptingEngine *engine = fi->li->engine;
 
     long long numkeys;
@@ -1083,7 +1083,7 @@ sds functionsCreateWithLibraryCtx(sds code, int replace, sds *err, functionsLibC
     /* Verify no duplicate functions */
     iter = dictGetIterator(new_li->functions);
     while ((entry = dictNext(iter))) {
-        functionInfo *fi = dictGetVal(entry);
+        functionInfo *fi = entry->v.val;
         if (dictFetchValue(lib_ctx->functions,
                            objectGetVal(fi->compiled_function->name))) {
             /* functions name collision, abort. */

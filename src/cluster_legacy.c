@@ -325,7 +325,7 @@ static clusterNode *clusterNodeIterNext(ClusterNodeIterator *iter) {
         /* Get the next entry in the dictionary */
         dictEntry *de = dictNext(&iter->di);
         /* Return the value associated with the entry, or NULL if no more entries */
-        return de ? dictGetVal(de) : NULL;
+        return de ? de->v.val : NULL;
     }
     case ITER_LIST: {
         /* Get the next node in the list */
@@ -357,7 +357,7 @@ static void clusterNodeIterReset(ClusterNodeIterator *iter) {
 /* Helpers to access the migrating/importing slot dictionaries. */
 clusterNode *getMigratingSlotDest(int slot) {
     dictEntry *de = dictFind(server.cluster->migrating_slots_to, (void *)(intptr_t)slot);
-    return de ? dictGetVal(de) : NULL;
+    return de ? de->v.val : NULL;
 }
 
 static void setMigratingSlotDest(int slot, clusterNode *node) {
@@ -367,7 +367,7 @@ static void setMigratingSlotDest(int slot, clusterNode *node) {
         return;
     }
     if (de) {
-        dictSetVal(server.cluster->migrating_slots_to, de, node);
+        de->v.val = node;
     } else {
         dictAdd(server.cluster->migrating_slots_to, (void *)(intptr_t)slot, node);
     }
@@ -375,7 +375,7 @@ static void setMigratingSlotDest(int slot, clusterNode *node) {
 
 clusterNode *getImportingSlotSource(int slot) {
     dictEntry *de = dictFind(server.cluster->importing_slots_from, (void *)(intptr_t)slot);
-    return de ? dictGetVal(de) : NULL;
+    return de ? de->v.val : NULL;
 }
 
 static void setImportingSlotSource(int slot, clusterNode *node) {
@@ -385,7 +385,7 @@ static void setImportingSlotSource(int slot, clusterNode *node) {
         return;
     }
     if (de) {
-        dictSetVal(server.cluster->importing_slots_from, de, node);
+        de->v.val = node;
     } else {
         dictAdd(server.cluster->importing_slots_from, (void *)(intptr_t)slot, node);
     }
@@ -1667,7 +1667,7 @@ void clusterReset(int hard) {
     /* Forget all the nodes, but myself. */
     di = dictGetSafeIterator(server.cluster->nodes);
     while ((de = dictNext(di)) != NULL) {
-        clusterNode *node = dictGetVal(de);
+        clusterNode *node = de->v.val;
 
         if (node == myself) continue;
         clusterDelNode(node);
@@ -2242,7 +2242,7 @@ void clusterDelNode(clusterNode *delnode) {
     /* 2) Remove failure reports. */
     di = dictGetSafeIterator(server.cluster->nodes);
     while ((de = dictNext(di)) != NULL) {
-        clusterNode *node = dictGetVal(de);
+        clusterNode *node = de->v.val;
 
         if (node == delnode) continue;
         clusterNodeDelFailureReport(node, delnode);
@@ -2263,7 +2263,7 @@ clusterNode *clusterLookupNode(const char *name, int length) {
     dictEntry *de = dictFind(server.cluster->nodes, s);
     sdsfree(s);
     if (de == NULL) return NULL;
-    return dictGetVal(de);
+    return de->v.val;
 }
 
 /* Get all the nodes in my shard.
@@ -2276,7 +2276,7 @@ list *clusterGetNodesInMyShard(clusterNode *node) {
     sds s = sdsnewlen(node->shard_id, CLUSTER_NAMELEN);
     dictEntry *de = dictFind(server.cluster->shards, s);
     sdsfree(s);
-    return (de != NULL) ? dictGetVal(de) : NULL;
+    return (de != NULL) ? de->v.val : NULL;
 }
 
 /* This is only used after the handshake. When we connect a given IP/PORT
@@ -2304,7 +2304,7 @@ void clusterAddNodeToShard(const char *shard_id, clusterNode *node) {
         listAddNodeTail(l, node);
         serverAssert(dictAdd(server.cluster->shards, s, l) == DICT_OK);
     } else {
-        list *l = dictGetVal(de);
+        list *l = de->v.val;
         if (listSearchKey(l, node) == NULL) {
             listAddNodeTail(l, node);
         }
@@ -2316,7 +2316,7 @@ void clusterRemoveNodeFromShard(clusterNode *node) {
     sds s = sdsnewlen(node->shard_id, CLUSTER_NAMELEN);
     dictEntry *de = dictFind(server.cluster->shards, s);
     if (de != NULL) {
-        list *l = dictGetVal(de);
+        list *l = de->v.val;
         listNode *ln = listSearchKey(l, node);
         if (ln != NULL) {
             listDelNode(l, ln);
@@ -2341,7 +2341,7 @@ uint64_t clusterGetMaxEpoch(void) {
 
     di = dictGetSafeIterator(server.cluster->nodes);
     while ((de = dictNext(di)) != NULL) {
-        clusterNode *node = dictGetVal(de);
+        clusterNode *node = de->v.val;
         if (node->configEpoch > max) max = node->configEpoch;
     }
     dictReleaseIterator(di);
@@ -2486,9 +2486,9 @@ void clusterBlacklistCleanup(void) {
 
     di = dictGetSafeIterator(server.cluster->nodes_black_list);
     while ((de = dictNext(di)) != NULL) {
-        int64_t expire = dictGetUnsignedIntegerVal(de);
+        int64_t expire = de->v.u64;
 
-        if (expire < server.unixtime) dictDelete(server.cluster->nodes_black_list, dictGetKey(de));
+        if (expire < server.unixtime) dictDelete(server.cluster->nodes_black_list, de->key);
     }
     dictReleaseIterator(di);
 }
@@ -2505,7 +2505,7 @@ void clusterBlacklistAddNode(clusterNode *node) {
         id = sdsdup(id);
     }
     de = dictFind(server.cluster->nodes_black_list, id);
-    dictSetUnsignedIntegerVal(de, time(NULL) + server.cluster_blacklist_ttl);
+    de->v.u64 = time(NULL) + server.cluster_blacklist_ttl;
     sdsfree(id);
 }
 
@@ -2639,7 +2639,7 @@ static int clusterHandshakeInProgress(char *ip, int port, int cport) {
 
     di = dictGetSafeIterator(server.cluster->nodes);
     while ((de = dictNext(di)) != NULL) {
-        clusterNode *node = dictGetVal(de);
+        clusterNode *node = de->v.val;
 
         if (!nodeInHandshake(node)) continue;
         if (!strcasecmp(node->ip, ip) && getNodeDefaultClientPort(node) == port && node->cport == cport) break;
@@ -3439,12 +3439,12 @@ static uint32_t writePingExtensions(clusterMsg *hdr, int gossipcount) {
         dictEntry *de;
         while ((de = dictNext(di)) != NULL) {
             if (cursor != NULL) {
-                uint64_t expire = dictGetUnsignedIntegerVal(de);
+                uint64_t expire = de->v.u64;
                 if ((time_t)expire < server.unixtime) continue; /* already expired */
                 uint64_t ttl = expire - server.unixtime;
                 clusterMsgPingExtForgottenNode *ext =
                     preparePingExt(cursor, CLUSTERMSG_EXT_TYPE_FORGOTTEN_NODE, getForgottenNodeExtSize());
-                memcpy(ext->name, dictGetKey(de), CLUSTER_NAMELEN);
+                memcpy(ext->name, de->key, CLUSTER_NAMELEN);
                 ext->ttl = htonu64(ttl);
 
                 /* Move the write cursor */
@@ -3521,12 +3521,12 @@ void clusterProcessPingExtensions(clusterMsg *hdr, clusterLink *link) {
             if (n && n != myself && !(nodeIsReplica(myself) && myself->replicaof == n)) {
                 sds id = sdsnewlen(forgotten_node_ext->name, CLUSTER_NAMELEN);
                 dictEntry *de = dictAddOrFind(server.cluster->nodes_black_list, id);
-                if (dictGetKey(de) != id) {
+                if (de->key != id) {
                     /* The dict did not take ownership of the id string, so we need to free it. */
                     sdsfree(id);
                 }
                 uint64_t expire = server.unixtime + ntohu64(forgotten_node_ext->ttl);
-                dictSetUnsignedIntegerVal(de, expire);
+                de->v.u64 = expire;
                 clusterDelNode(n);
                 clusterDoBeforeSleep(CLUSTER_TODO_UPDATE_STATE | CLUSTER_TODO_SAVE_CONFIG);
             }
@@ -4696,7 +4696,7 @@ void clusterBroadcastMessage(clusterMsgSendBlock *msgblock) {
 
     di = dictGetSafeIterator(server.cluster->nodes);
     while ((de = dictNext(di)) != NULL) {
-        clusterNode *node = dictGetVal(de);
+        clusterNode *node = de->v.val;
 
         if (node->flags & (CLUSTER_NODE_MYSELF | CLUSTER_NODE_HANDSHAKE)) continue;
         clusterSendMessage(node->link, msgblock);
@@ -4892,7 +4892,7 @@ void clusterSendPing(clusterLink *link, int type) {
     unsigned int ncandidates = dictGetSomeKeys(server.cluster->nodes, candidates, candidates_wanted);
 
     for (unsigned int i = 0; i < ncandidates && gossipcount < wanted; i++) {
-        clusterNode *this = dictGetVal(candidates[i]);
+        clusterNode *this = ((dictEntry *)candidates[i])->v.val;
 
         /* Don't include this node: the whole packet header is about us
          * already, so we just gossip about other nodes.
@@ -4930,7 +4930,7 @@ void clusterSendPing(clusterLink *link, int type) {
 
         di = dictGetSafeIterator(server.cluster->nodes);
         while ((de = dictNext(di)) != NULL && pfail_wanted > 0) {
-            clusterNode *node = dictGetVal(de);
+            clusterNode *node = de->v.val;
             if (node->flags & CLUSTER_NODE_HANDSHAKE) continue;
             if (node->flags & CLUSTER_NODE_NOADDR) continue;
             if (!(node->flags & CLUSTER_NODE_PFAIL)) continue;
@@ -4985,7 +4985,7 @@ void clusterBroadcastPong(int target) {
 
     di = dictGetSafeIterator(server.cluster->nodes);
     while ((de = dictNext(di)) != NULL) {
-        clusterNode *node = dictGetVal(de);
+        clusterNode *node = de->v.val;
 
         if (!node->link) continue;
         if (node == myself || nodeInHandshake(node)) continue;
@@ -5437,7 +5437,7 @@ int clusterGetFailedPrimaryRank(void) {
 
     di = dictGetSafeIterator(server.cluster->nodes);
     while ((de = dictNext(di)) != NULL) {
-        clusterNode *node = dictGetVal(de);
+        clusterNode *node = de->v.val;
 
         /* Skip nodes that do not need to participate in the rank. */
         if (!nodeFailed(node) || !clusterNodeIsVotingPrimary(node) || node->num_replicas == 0) continue;
@@ -5864,7 +5864,7 @@ void clusterHandleReplicaMigration(int max_replicas) {
     candidate = myself;
     di = dictGetSafeIterator(server.cluster->nodes);
     while ((de = dictNext(di)) != NULL) {
-        clusterNode *node = dictGetVal(de);
+        clusterNode *node = de->v.val;
         int ok_replicas = 0, is_orphaned = 1;
 
         /* We want to migrate only if this primary is working, orphaned, and
@@ -6163,7 +6163,7 @@ void clusterCron(void) {
     di = dictGetSafeIterator(server.cluster->nodes);
     long long cluster_node_conn_attempts = maxConnectionAttemptsPerCron();
     while ((de = dictNext(di)) != NULL) {
-        clusterNode *node = dictGetVal(de);
+        clusterNode *node = de->v.val;
         /* We free the inbound or outbound link to the node if the link has an
          * oversized message send queue and immediately try reconnecting. */
         clusterNodeCronFreeLinkOnBufferLimitReached(node);
@@ -6183,7 +6183,7 @@ void clusterCron(void) {
          * pong_received time. */
         for (j = 0; j < 5; j++) {
             de = dictGetRandomKey(server.cluster->nodes);
-            clusterNode *this = dictGetVal(de);
+            clusterNode *this = de->v.val;
 
             /* Don't ping nodes disconnected or with a ping currently active. */
             if (this->link == NULL || this->ping_sent != 0) continue;
@@ -6210,7 +6210,7 @@ void clusterCron(void) {
     this_replicas = 0;
     di = dictGetSafeIterator(server.cluster->nodes);
     while ((de = dictNext(di)) != NULL) {
-        clusterNode *node = dictGetVal(de);
+        clusterNode *node = de->v.val;
         now = mstime(); /* Use an updated time at every iteration. */
 
         if (node->flags & (CLUSTER_NODE_MYSELF | CLUSTER_NODE_NOADDR | CLUSTER_NODE_HANDSHAKE)) continue;
@@ -6420,7 +6420,7 @@ int clusterPrimariesHaveReplicas(void) {
     dictInitIterator(&di, server.cluster->nodes);
     dictEntry *de;
     while ((de = dictNext(&di)) != NULL) {
-        clusterNode *node = dictGetVal(de);
+        clusterNode *node = de->v.val;
 
         if (nodeIsReplica(node)) continue;
         if (node->num_replicas) return 1;
@@ -6646,7 +6646,7 @@ void clusterUpdateState(void) {
         server.cluster->size = 0;
         di = dictGetSafeIterator(server.cluster->nodes);
         while ((de = dictNext(di)) != NULL) {
-            clusterNode *node = dictGetVal(de);
+            clusterNode *node = de->v.val;
 
             if (clusterNodeIsVotingPrimary(node)) {
                 server.cluster->size++;
@@ -7039,7 +7039,7 @@ sds clusterGenNodesDescription(client *c, int filter, int tls_primary) {
 
     di = dictGetSafeIterator(server.cluster->nodes);
     while ((de = dictNext(di)) != NULL) {
-        clusterNode *node = dictGetVal(de);
+        clusterNode *node = de->v.val;
 
         if (node->flags & filter) continue;
         ni = clusterGenNodeDescription(c, node, tls_primary);
@@ -7103,7 +7103,7 @@ void addReplyClusterLinksDescription(client *c) {
 
     di = dictGetSafeIterator(server.cluster->nodes);
     while ((de = dictNext(di)) != NULL) {
-        clusterNode *node = dictGetVal(de);
+        clusterNode *node = de->v.val;
         if (node->link) {
             num_links++;
             addReplyClusterLinkDescription(c, node->link);
@@ -7273,7 +7273,7 @@ void clusterCommandShards(client *c) {
     clusterGenNodesSlotsInfo(0);
     dictIterator *di = dictGetSafeIterator(server.cluster->shards);
     for (dictEntry *de = dictNext(di); de != NULL; de = dictNext(di)) {
-        list *nodes = dictGetVal(de);
+        list *nodes = de->v.val;
         serverAssert(listLength(nodes) > 0);
         addReplyMapLen(c, 3);
         addReplyBulkCString(c, "slots");
@@ -7309,7 +7309,7 @@ void clusterCommandShards(client *c) {
             clusterFreeNodesSlotsInfo(n);
         }
         addReplyBulkCString(c, "id");
-        addReplyBulkCBuffer(c, dictGetKey(de), CLUSTER_NAMELEN);
+        addReplyBulkCBuffer(c, de->key, CLUSTER_NAMELEN);
     }
     dictReleaseIterator(di);
 }
@@ -7323,7 +7323,7 @@ sds genClusterInfoString(sds info) {
     dictEntry *de;
     unsigned nodes_pfail = 0, nodes_fail = 0, voting_nodes_pfail = 0, voting_nodes_fail = 0;
     while ((de = dictNext(di)) != NULL) {
-        clusterNode *node = dictGetVal(de);
+        clusterNode *node = de->v.val;
         if (node->numslots) {
             slots_assigned += node->numslots;
             if (nodeFailed(node)) {
@@ -7502,7 +7502,7 @@ char **getClusterNodesList(size_t *numnodes) {
     dictEntry *de;
     int j = 0;
     while ((de = dictNext(di)) != NULL) {
-        clusterNode *node = dictGetVal(de);
+        clusterNode *node = de->v.val;
         if (node->flags & (CLUSTER_NODE_NOADDR | CLUSTER_NODE_HANDSHAKE)) continue;
         ids[j] = zmalloc(CLUSTER_NAMELEN);
         memcpy(ids[j], node->name, CLUSTER_NAMELEN);
@@ -8405,7 +8405,7 @@ int detectAndUpdateCachedNodeHealth(void) {
     clusterNode *node;
     int overall_health_changed = 0;
     while ((de = dictNext(&di)) != NULL) {
-        node = dictGetVal(de);
+        node = de->v.val;
         int present_is_node_healthy = isNodeAvailable(node);
         if (present_is_node_healthy != node->is_node_healthy) {
             overall_health_changed = 1;
@@ -8430,8 +8430,8 @@ sds clusterEncodeOpenSlotsAuxField(int rdbflags) {
         dictIterator *di = dictGetIterator(d);
         dictEntry *de;
         while ((de = dictNext(di)) != NULL) {
-            int slot = (int)(uintptr_t)dictGetKey(de);
-            clusterNode *node = dictGetVal(de);
+            int slot = (int)(uintptr_t)de->key;
+            clusterNode *node = de->v.val;
             if (s == NULL) s = sdsempty();
             s = sdscatfmt(s, "%i%s", slot, (i == 0) ? "<" : ">");
             s = sdscatlen(s, node->name, CLUSTER_NAMELEN);

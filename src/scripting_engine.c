@@ -176,7 +176,7 @@ int scriptingEngineManagerUnregister(const char *engine_name) {
         return C_ERR;
     }
 
-    scriptingEngine *e = dictGetVal(entry);
+    scriptingEngine *e = entry->v.val;
 
     functionsRemoveLibFromEngine(e);
     evalRemoveScriptsFromEngine(e);
@@ -214,7 +214,7 @@ int scriptingEngineManagerUnregister(const char *engine_name) {
 scriptingEngine *scriptingEngineManagerFind(const char *engine_name) {
     dictEntry *entry = dictFind(engineMgr.engines, engine_name);
     if (entry) {
-        return dictGetVal(entry);
+        return entry->v.val;
     }
     return NULL;
 }
@@ -242,7 +242,7 @@ void scriptingEngineManagerForEachEngine(engineIterCallback callback,
     dictIterator *iter = dictGetIterator(engineMgr.engines);
     dictEntry *entry = NULL;
     while ((entry = dictNext(iter))) {
-        scriptingEngine *e = dictGetVal(entry);
+        scriptingEngine *e = entry->v.val;
         callback(e, context);
     }
     dictReleaseIterator(iter);

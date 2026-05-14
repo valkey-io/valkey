@@ -536,61 +536,61 @@ const void *hashtableSubcommandGetKey(const void *element) {
 /* Entry destructor that frees object key and the dictEntry itself */
 void dictEntryDestructorObjectKey(void *entry) {
     dictEntry *de = entry;
-    dictObjectDestructor(dictGetKey(de));
+    dictObjectDestructor(de->key);
     zfree(de);
 }
 
 /* Entry destructor that frees object key, heap pointer value, and the dictEntry itself */
 void dictEntryDestructorObjectKeyHeapValue(void *entry) {
     dictEntry *de = entry;
-    dictObjectDestructor(dictGetKey(de));
-    zfree(dictGetVal(de));
+    dictObjectDestructor(de->key);
+    zfree(de->v.val);
     zfree(de);
 }
 
 /* Entry destructor that frees object key, list value, and the dictEntry itself */
 void dictEntryDestructorObjectKeyListValue(void *entry) {
     dictEntry *de = entry;
-    dictObjectDestructor(dictGetKey(de));
-    dictListDestructor(dictGetVal(de));
+    dictObjectDestructor(de->key);
+    dictListDestructor(de->v.val);
     zfree(de);
 }
 
 /* Entry destructor that frees object key, hashtable value, and the dictEntry itself */
 void dictEntryDestructorObjectKeyHashtableValue(void *entry) {
     dictEntry *de = entry;
-    dictObjectDestructor(dictGetKey(de));
-    dictHashtableDestructor(dictGetVal(de));
+    dictObjectDestructor(de->key);
+    dictHashtableDestructor(de->v.val);
     zfree(de);
 }
 
 /* Entry destructor that frees SDS key and the dictEntry itself */
 void dictEntryDestructorSdsKey(void *entry) {
     dictEntry *de = entry;
-    dictSdsDestructor(dictGetKey(de));
+    dictSdsDestructor(de->key);
     zfree(de);
 }
 
 void dictEntryDestructorSdsKeyValue(void *entry) {
     dictEntry *de = entry;
-    dictSdsDestructor(dictGetKey(de));
-    dictSdsDestructor(dictGetVal(de));
+    dictSdsDestructor(de->key);
+    dictSdsDestructor(de->v.val);
     zfree(de);
 }
 
 /* Entry destructor that frees SDS key, list value, and the dictEntry itself */
 void dictEntryDestructorSdsKeyListValue(void *entry) {
     dictEntry *de = entry;
-    dictSdsDestructor(dictGetKey(de));
-    dictListDestructor(dictGetVal(de));
+    dictSdsDestructor(de->key);
+    dictListDestructor(de->v.val);
     zfree(de);
 }
 
 /* Entry destructor that frees SDS key, heap pointer value, and the dictEntry itself */
 void dictEntryDestructorSdsKeyHeapValue(void *entry) {
     dictEntry *de = entry;
-    dictSdsDestructor(dictGetKey(de));
-    zfree(dictGetVal(de));
+    dictSdsDestructor(de->key);
+    zfree(de->v.val);
     zfree(de);
 }
 

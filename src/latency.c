@@ -40,8 +40,8 @@
 
 static void dictEntryDestructorHeapKeyValue(void *entry) {
     dictEntry *de = entry;
-    zfree(dictGetKey(de));
-    zfree(dictGetVal(de));
+    zfree(de->key);
+    zfree(de->v.val);
     zfree(de);
 }
 
@@ -122,7 +122,7 @@ int latencyResetEvent(char *event_to_reset) {
 
     di = dictGetSafeIterator(server.latency_events);
     while ((de = dictNext(di)) != NULL) {
-        char *event = dictGetKey(de);
+        char *event = de->key;
 
         if (event_to_reset == NULL || strcasecmp(event, event_to_reset) == 0) {
             dictDelete(server.latency_events, event);
@@ -231,8 +231,8 @@ sds createLatencyReport(void) {
 
     di = dictGetSafeIterator(server.latency_events);
     while ((de = dictNext(di)) != NULL) {
-        char *event = dictGetKey(de);
-        struct latencyTimeSeries *ts = dictGetVal(de);
+        char *event = de->key;
+        struct latencyTimeSeries *ts = de->v.val;
         struct latencyStats ls;
 
         if (ts == NULL) continue;
@@ -611,8 +611,8 @@ void latencyCommandReplyWithLatestEvents(client *c) {
     addReplyArrayLen(c, dictSize(server.latency_events));
     di = dictGetIterator(server.latency_events);
     while ((de = dictNext(di)) != NULL) {
-        char *event = dictGetKey(de);
-        struct latencyTimeSeries *ts = dictGetVal(de);
+        char *event = de->key;
+        struct latencyTimeSeries *ts = de->v.val;
         int last = (ts->idx + LATENCY_TS_LEN - 1) % LATENCY_TS_LEN;
 
         addReplyArrayLen(c, 6);
@@ -698,8 +698,8 @@ void latencyCommand(client *c) {
 
         de = dictFind(server.latency_events, objectGetVal(c->argv[2]));
         if (de == NULL) goto nodataerr;
-        ts = dictGetVal(de);
-        event = dictGetKey(de);
+        ts = de->v.val;
+        event = de->key;
 
         graph = latencyCommandGenSparkeline(event, ts);
         addReplyVerbatim(c, graph, sdslen(graph), "txt");

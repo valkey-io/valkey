@@ -312,7 +312,7 @@ static dict *configs = NULL; /* Runtime config values */
  * if the config does not exist */
 static standardConfig *lookupConfig(sds name) {
     dictEntry *de = dictFind(configs, name);
-    return de ? dictGetVal(de) : NULL;
+    return de ? de->v.val : NULL;
 }
 
 /*-----------------------------------------------------------------------------
@@ -994,12 +994,12 @@ void configGetCommand(client *c) {
         di = dictGetIterator(configs);
 
         while ((de = dictNext(di)) != NULL) {
-            standardConfig *config = dictGetVal(de);
+            standardConfig *config = de->v.val;
             /* Note that hidden configs require an exact match (not a pattern) */
             if (config->flags & HIDDEN_CONFIG) continue;
             if (dictFind(matches, config->name)) continue;
-            if (stringmatch(name, dictGetKey(de), 1)) {
-                dictAdd(matches, dictGetKey(de), config);
+            if (stringmatch(name, de->key, 1)) {
+                dictAdd(matches, de->key, config);
             }
         }
         dictReleaseIterator(di);
@@ -1016,8 +1016,8 @@ void configGetCommand(client *c) {
 
     i = 0;
     while ((de = dictNext(di)) != NULL) {
-        standardConfig *config = (standardConfig *)dictGetVal(de);
-        sorted[i].key = dictGetKey(de);
+        standardConfig *config = (standardConfig *)de->v.val;
+        sorted[i].key = de->key;
         sorted[i].value = config->interface.get(config);
         i++;
     }
@@ -1618,7 +1618,7 @@ void rewriteConfigLoadmoduleOption(struct rewriteConfigState *state) {
     dictIterator *di = dictGetIterator(modules);
     dictEntry *de;
     while ((de = dictNext(di)) != NULL) {
-        struct ValkeyModule *module = dictGetVal(de);
+        struct ValkeyModule *module = de->v.val;
         if (module->is_static_module) continue;
         line = moduleLoadQueueEntryToLoadmoduleOptionStr(module, "loadmodule");
         rewriteConfigRewriteLine(state, "loadmodule", line, 1);
@@ -1661,8 +1661,8 @@ void rewriteConfigRemoveOrphaned(struct rewriteConfigState *state) {
     dictEntry *de;
 
     while ((de = dictNext(di)) != NULL) {
-        list *l = dictGetVal(de);
-        sds option = dictGetKey(de);
+        list *l = de->v.val;
+        sds option = de->key;
 
         /* Don't blank lines about options the rewrite process
          * don't understand. */
@@ -1695,7 +1695,7 @@ sds getConfigDebugInfo(void) {
     dictIterator *di = dictGetIterator(configs);
     dictEntry *de;
     while ((de = dictNext(di)) != NULL) {
-        standardConfig *config = dictGetVal(de);
+        standardConfig *config = de->v.val;
         if (!(config->flags & DEBUG_CONFIG)) continue;
         config->interface.rewrite(config, config->name, state);
     }
@@ -1795,10 +1795,10 @@ int rewriteConfig(char *path, int force_write) {
     dictIterator *di = dictGetIterator(configs);
     dictEntry *de;
     while ((de = dictNext(di)) != NULL) {
-        standardConfig *config = dictGetVal(de);
+        standardConfig *config = de->v.val;
         /* Only rewrite the primary names */
         if (config->flags & ALIAS_CONFIG) continue;
-        if (config->interface.rewrite) config->interface.rewrite(config, dictGetKey(de), state);
+        if (config->interface.rewrite) config->interface.rewrite(config, de->key, state);
     }
     dictReleaseIterator(di);
 

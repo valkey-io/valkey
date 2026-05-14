@@ -359,10 +359,10 @@ migrateCachedSocket *migrateGetSocket(client *c, robj *host, robj *port, long ti
     if (dictSize(server.migrate_cached_sockets) == MIGRATE_SOCKET_CACHE_ITEMS) {
         /* Too many items, drop one at random. */
         dictEntry *de = dictGetRandomKey(server.migrate_cached_sockets);
-        cs = dictGetVal(de);
+        cs = de->v.val;
         connClose(cs->conn);
         zfree(cs);
-        dictDelete(server.migrate_cached_sockets, dictGetKey(de));
+        dictDelete(server.migrate_cached_sockets, de->key);
     }
 
     /* Create the connection */
@@ -409,12 +409,12 @@ void migrateCloseTimedoutSockets(void) {
     dictEntry *de;
 
     while ((de = dictNext(di)) != NULL) {
-        migrateCachedSocket *cs = dictGetVal(de);
+        migrateCachedSocket *cs = de->v.val;
 
         if ((server.unixtime - cs->last_use_time) > MIGRATE_SOCKET_CACHE_TTL) {
             connClose(cs->conn);
             zfree(cs);
-            dictDelete(server.migrate_cached_sockets, dictGetKey(de));
+            dictDelete(server.migrate_cached_sockets, de->key);
         }
     }
     dictReleaseIterator(di);
@@ -1371,7 +1371,7 @@ int clusterRedirectBlockedClientIfNeeded(client *c) {
         /* All keys must belong to the same slot, so check first key only. */
         di = dictGetIterator(c->bstate->keys);
         if ((de = dictNext(di)) != NULL) {
-            robj *key = dictGetKey(de);
+            robj *key = de->key;
             int slot = keyHashSlot((char *)objectGetVal(key), sdslen(objectGetVal(key)));
             serverAssert(slot == c->slot);
             clusterNode *node = getNodeBySlot(slot);

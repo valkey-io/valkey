@@ -2372,7 +2372,7 @@ static int zuiCompareByRevCardinality(const void *s1, const void *s2) {
 #define REDIS_AGGR_SUM 1
 #define REDIS_AGGR_MIN 2
 #define REDIS_AGGR_MAX 3
-#define zunionInterDictValue(_e) (dictGetVal(_e) == NULL ? 1.0 : *(double *)dictGetVal(_e))
+#define zunionInterDictValue(_e) (_e->v.val == NULL ? 1.0 : *(double *)_e->v.val)
 
 inline static void zunionInterAggregate(double *target, double val, int aggregate) {
     if (aggregate == REDIS_AGGR_SUM) {

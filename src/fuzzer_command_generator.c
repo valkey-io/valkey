@@ -301,8 +301,8 @@ static uint64_t sdsHash(const void *key) {
 
 static void dictEntryDestructorSdsKeyConfigVal(void *entry) {
     dictEntry *de = entry;
-    sdsfree(dictGetKey(de));
-    configDictValDestructor(dictGetVal(de));
+    sdsfree(de->key);
+    configDictValDestructor(de->v.val);
     zfree(de);
 }
 
@@ -585,8 +585,8 @@ void generateConfigSetCommand(FuzzerCommand *cmd) {
 
     /* Get a random key from the dictionary */
     dictEntry *randomEntry = dictGetRandomKey(configDict);
-    const char *key = dictGetKey(randomEntry);
-    ConfigEntry *entry = dictGetVal(randomEntry);
+    const char *key = randomEntry->key;
+    ConfigEntry *entry = randomEntry->v.val;
 
     /* Build the CONFIG SET command */
     appendArg(cmd, sdsnew("CONFIG"));

@@ -1,7 +1,11 @@
-/* Dict, a key-value hashtable API.
+/* Dict — convenience helpers for using hashtable as a key-value store.
  *
- * This file implements the dict API as a thin wrapper of the newer hashtable
- * API. The dictEntry struct is used as the entry type in underlying hashtable.
+ * dict is a typedef for hashtable. dictEntry is a transparent struct that
+ * callers allocate and access directly (de->key, de->v.val, de->v.u64, etc.).
+ *
+ * The helpers in this file handle dictEntry allocation and hashtable
+ * insertion/lookup/deletion so callers don't need to manage the two-step
+ * FindPositionForInsert + InsertAtPosition dance themselves.
  *
  * Copyright (c) 2006-2012, Redis Ltd.
  * All rights reserved.
@@ -41,12 +45,18 @@
 #define DICT_OK 0
 #define DICT_ERR 1
 
-/* dict is now an alias for hashtable */
+/* dict, dictType, and dictIterator are aliases for their hashtable equivalents. */
 typedef hashtable dict;
 typedef hashtableType dictType;
 typedef hashtableIterator dictIterator;
 
-/* dictEntry represents a key-value pair for use with hashtable */
+/* dictEntry is a transparent key-value pair. Access fields directly:
+ *   de->key       - the key pointer
+ *   de->v.val     - value as void*
+ *   de->v.u64     - value as uint64_t
+ *   de->v.s64     - value as int64_t
+ *   de->v.d       - value as double
+ */
 typedef struct dictEntry {
     void *key;
     union {
@@ -83,66 +93,9 @@ static inline int dictExpand(dict *d, unsigned long size) {
     return hashtableExpand(d, size) ? DICT_OK : DICT_ERR;
 }
 
-/* Entry accessor functions */
-static inline void dictSetVal(dict *d, dictEntry *de, void *val) {
-    UNUSED(d);
-    de->v.val = val;
-}
-
-static inline void dictSetSignedIntegerVal(dictEntry *de, int64_t val) {
-    de->v.s64 = val;
-}
-
-static inline void dictSetUnsignedIntegerVal(dictEntry *de, uint64_t val) {
-    de->v.u64 = val;
-}
-
-static inline void dictSetDoubleVal(dictEntry *de, double val) {
-    de->v.d = val;
-}
-
-static inline int64_t dictIncrSignedIntegerVal(dictEntry *de, int64_t val) {
-    de->v.s64 += val;
-    return de->v.s64;
-}
-
-static inline uint64_t dictIncrUnsignedIntegerVal(dictEntry *de, uint64_t val) {
-    de->v.u64 += val;
-    return de->v.u64;
-}
-
-static inline double dictIncrDoubleVal(dictEntry *de, double val) {
-    de->v.d += val;
-    return de->v.d;
-}
-
-static inline void *dictGetKey(const dictEntry *de) {
-    return de->key;
-}
-
 /* Callback for dictType.entryGetKey, which expects void pointers. */
 static inline const void *dictEntryGetKey(const void *entry) {
-    return dictGetKey((const dictEntry *)entry);
-}
-
-static inline void *dictGetVal(const dictEntry *de) {
-    return de->v.val;
-}
-
-static inline int64_t dictGetSignedIntegerVal(const dictEntry *de) {
-    return de->v.s64;
-}
-
-static inline uint64_t dictGetUnsignedIntegerVal(const dictEntry *de) {
-    return de->v.u64;
-}
-
-static inline double dictGetDoubleVal(const dictEntry *de) {
-    return de->v.d;
-}
-
-static inline double *dictGetDoubleValPtr(dictEntry *de) {
-    return &de->v.d;
+    return ((const dictEntry *)entry)->key;
 }
 
 static inline size_t dictEntryMemUsage(dictEntry *de) {

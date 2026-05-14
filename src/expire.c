@@ -552,8 +552,8 @@ void expireReplicaKeys(void) {
     mstime_t start = mstime();
     while (1) {
         dictEntry *de = dictGetRandomKey(replicaKeysWithExpire);
-        sds keyname = dictGetKey(de);
-        uint64_t dbids = dictGetUnsignedIntegerVal(de);
+        sds keyname = de->key;
+        uint64_t dbids = de->v.u64;
         uint64_t new_dbids = 0;
 
         /* Check the key against every database corresponding to the
@@ -590,7 +590,7 @@ void expireReplicaKeys(void) {
          * of keys with an expire set directly in the writable replica. Otherwise
          * if the bitmap is zero, we no longer need to keep track of it. */
         if (new_dbids)
-            dictSetUnsignedIntegerVal(de, new_dbids);
+            de->v.u64 = new_dbids;
         else
             dictDelete(replicaKeysWithExpire, keyname);
 

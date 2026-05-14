@@ -507,10 +507,10 @@ void touchAllWatchedKeysInDb(serverDb *emptied, serverDb *replaced_with) {
 
     dictIterator *di = dictGetSafeIterator(emptied->watched_keys);
     while ((de = dictNext(di)) != NULL) {
-        robj *key = dictGetKey(de);
+        robj *key = de->key;
         int exists_in_emptied = dbFind(emptied, objectGetVal(key)) != NULL;
         if (exists_in_emptied || (replaced_with && dbFind(replaced_with, objectGetVal(key)) != NULL)) {
-            list *clients = dictGetVal(de);
+            list *clients = de->v.val;
             if (!clients) continue;
             listRewind(clients, &li);
             while ((ln = listNext(&li))) {

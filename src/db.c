@@ -1710,7 +1710,7 @@ void scanDatabaseForReadyKeys(serverDb *db) {
     dictEntry *de;
     dictIterator *di = dictGetSafeIterator(db->blocking_keys);
     while ((de = dictNext(di)) != NULL) {
-        robj *key = dictGetKey(de);
+        robj *key = de->key;
         robj *value = dbFind(db, objectGetVal(key));
         if (value) {
             signalKeyAsReady(db, key, value->type);
@@ -1726,7 +1726,7 @@ void scanDatabaseForDeletedKeys(serverDb *emptied, serverDb *replaced_with) {
     dictEntry *de;
     dictIterator *di = dictGetSafeIterator(emptied->blocking_keys);
     while ((de = dictNext(di)) != NULL) {
-        robj *key = dictGetKey(de);
+        robj *key = de->key;
         int existed = 0, exists = 0;
         int original_type = -1, curr_type = -1;
 

@@ -74,8 +74,8 @@ static void dictScriptDestructor(void *val) {
 /* Helper functions for eval.c */
 static void dictEntryDestructorSdsKeyScriptValue(void *entry) {
     dictEntry *de = entry;
-    dictSdsDestructor(dictGetKey(de));
-    dictScriptDestructor(dictGetVal(de));
+    dictSdsDestructor(de->key);
+    dictScriptDestructor(de->v.val);
     zfree(de);
 }
 
@@ -188,9 +188,9 @@ void evalRemoveScriptsFromEngine(scriptingEngine *engine) {
     dictIterator *iter = dictGetSafeIterator(evalCtx.scripts);
     dictEntry *entry;
     while ((entry = dictNext(iter))) {
-        evalScript *es = dictGetVal(entry);
+        evalScript *es = entry->v.val;
         if (es->engine == engine) {
-            sds sha = dictGetKey(entry);
+            sds sha = entry->key;
             evalCtx.scripts_mem -= sdsAllocSize(sha) + getStringObjectSdsUsedMemory(es->body);
             if (es->node) {
                 listDelNode(evalCtx.scripts_lru_list, es->node);
@@ -318,7 +318,7 @@ uint64_t evalGetCommandFlags(client *c, uint64_t cmd_flags) {
         if (evalsha) return cmd_flags;
         if (evalExtractShebangFlags(objectGetVal(c->argv[1]), NULL, &script_flags, NULL, NULL) == C_ERR) return cmd_flags;
     } else {
-        evalScript *es = dictGetVal(c->cur_script);
+        evalScript *es = c->cur_script->v.val;
         script_flags = es->flags;
     }
     if (script_flags & SCRIPT_FLAG_EVAL_COMPAT_MODE) return cmd_flags;
@@ -333,7 +333,7 @@ static void evalDeleteScript(client *c, sds sha) {
     /* Delete the script from server. */
     dictEntry *de = dictUnlink(evalCtx.scripts, sha);
     serverAssertWithInfo(c, NULL, de);
-    evalScript *es = dictGetVal(de);
+    evalScript *es = de->v.val;
     evalCtx.scripts_mem -= sdsAllocSize(sha) + getStringObjectSdsUsedMemory(es->body);
     dictFreeUnlinkedEntry(evalCtx.scripts, de);
 }
@@ -380,7 +380,7 @@ static int evalRegisterNewScript(client *c, robj *body, char **sha) {
          * SCRIPT LOAD, prevent it from being evicted later. */
         dictEntry *entry = dictFind(evalCtx.scripts, *sha);
         if (entry != NULL) {
-            evalScript *es = dictGetVal(entry);
+            evalScript *es = entry->v.val;
             if (es->node) {
                 listDelNode(evalCtx.scripts_lru_list, es->node);
                 es->node = NULL;
@@ -486,7 +486,7 @@ static void evalGenericCommand(client *c, int evalsha) {
     }
 
     if (c->cur_script) {
-        memcpy(sha, dictGetKey(c->cur_script), 40);
+        memcpy(sha, c->cur_script->key, 40);
         sha[40] = '\0';
     } else {
         evalCalcScriptHash(evalsha, objectGetVal(c->argv[1]), sha);
@@ -511,7 +511,7 @@ static void evalGenericCommand(client *c, int evalsha) {
         serverAssert(entry != NULL);
     }
 
-    evalScript *es = dictGetVal(entry);
+    evalScript *es = entry->v.val;
     int ro = c->cmd->proc == evalRoCommand || c->cmd->proc == evalShaRoCommand;
 
     scriptRunCtx rctx;
@@ -675,7 +675,7 @@ void scriptCommand(client *c) {
         evalScript *es;
 
         if (sdslen(objectGetVal(c->argv[2])) == 40 && (de = dictFind(evalCtx.scripts, objectGetVal(c->argv[2])))) {
-            es = dictGetVal(de);
+            es = de->v.val;
             addReplyBulk(c, es->body);
         } else {
             addReplyErrorObject(c, shared.noscripterr);

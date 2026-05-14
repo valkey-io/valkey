@@ -410,7 +410,7 @@ bool pubsubSubscribePattern(client *c, robj *pattern) {
             dictAdd(server.pubsub_patterns, pattern, clients);
             incrRefCount(pattern);
         } else {
-            clients = dictGetVal(de);
+            clients = de->v.val;
         }
         serverAssert(hashtableAdd(clients, c));
     }
@@ -430,7 +430,7 @@ int pubsubUnsubscribePattern(client *c, robj *pattern, int notify) {
         /* Remove the client from the pattern -> clients list hash table */
         dictEntry *de = dictFind(server.pubsub_patterns, pattern);
         serverAssertWithInfo(c, NULL, de != NULL);
-        hashtable *clients = dictGetVal(de);
+        hashtable *clients = de->v.val;
         serverAssertWithInfo(c, NULL, hashtableDelete(clients, c));
         if (hashtableSize(clients) == 0) {
             /* Free the clients hashtable if this was the last client. */
@@ -540,8 +540,8 @@ int pubsubPublishMessageInternal(robj *channel, robj *message, pubsubtype type) 
     if (di) {
         channel = getDecodedObject(channel);
         while ((de = dictNext(di)) != NULL) {
-            robj *pattern = dictGetKey(de);
-            hashtable *clients = dictGetVal(de);
+            robj *pattern = de->key;
+            hashtable *clients = de->v.val;
             if (!stringmatchlen((char *)objectGetVal(pattern), sdslen(objectGetVal(pattern)),
                                 (char *)objectGetVal(channel), sdslen(objectGetVal(channel)), 0))
                 continue;

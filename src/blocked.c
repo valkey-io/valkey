@@ -457,13 +457,13 @@ void blockForKeys(client *c, int btype, robj **keys, int numkeys, mstime_t timeo
         /* In case key[j] did not have blocking clients yet, we need to create a new list */
         if (db_blocked_entry != NULL) {
             l = listCreate();
-            dictSetVal(c->db->blocking_keys, db_blocked_entry, l);
+            db_blocked_entry->v.val = l;
             incrRefCount(keys[j]);
         } else {
-            l = dictGetVal(db_blocked_existing_entry);
+            l = db_blocked_existing_entry->v.val;
         }
         listAddNodeTail(l, c);
-        dictSetVal(c->bstate->keys, client_blocked_entry, listLast(l));
+        client_blocked_entry->v.val = listLast(l);
 
         /* We need to add the key to blocking_keys_unblock_on_nokey, if the client
          * wants to be awakened if key is deleted (like XREADGROUP) */
@@ -471,9 +471,9 @@ void blockForKeys(client *c, int btype, robj **keys, int numkeys, mstime_t timeo
             db_blocked_entry = dictAddRaw(c->db->blocking_keys_unblock_on_nokey, keys[j], &db_blocked_existing_entry);
             if (db_blocked_entry) {
                 incrRefCount(keys[j]);
-                dictSetUnsignedIntegerVal(db_blocked_entry, 1);
+                db_blocked_entry->v.u64 = 1;
             } else {
-                dictIncrUnsignedIntegerVal(db_blocked_existing_entry, 1);
+                db_blocked_existing_entry->v.u64 += 1;
             }
         }
     }
@@ -582,8 +582,8 @@ static void releaseBlockedEntry(client *c, dictEntry *de, int remove_key) {
     void *key;
     dictEntry *unblock_on_nokey_entry;
 
-    key = dictGetKey(de);
-    pos = dictGetVal(de);
+    key = de->key;
+    pos = de->v.val;
     /* Remove this client from the list of clients waiting for this key. */
     l = dictFetchValue(c->db->blocking_keys, key);
     serverAssertWithInfo(c, key, l != NULL);
@@ -602,7 +602,7 @@ static void releaseBlockedEntry(client *c, dictEntry *de, int remove_key) {
         unblock_on_nokey_entry = dictFind(c->db->blocking_keys_unblock_on_nokey, key);
         /* it is not possible to have a client blocked on nokey with no matching entry */
         serverAssertWithInfo(c, key, unblock_on_nokey_entry != NULL);
-        if (!dictIncrUnsignedIntegerVal(unblock_on_nokey_entry, -1)) {
+        if (!--unblock_on_nokey_entry->v.u64) {
             /* in case the count is zero, we can delete the entry */
             dictDelete(c->db->blocking_keys_unblock_on_nokey, key);
         }
@@ -627,7 +627,7 @@ static void handleClientsBlockedOnKey(readyList *rl) {
     dictEntry *de = dictFind(rl->db->blocking_keys, rl->key);
 
     if (de) {
-        list *clients = dictGetVal(de);
+        list *clients = de->v.val;
         listNode *ln;
         listIter li;
         listRewind(clients, &li);

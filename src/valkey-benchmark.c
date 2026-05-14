@@ -1491,7 +1491,7 @@ static int fetchClusterConfiguration(void) {
                     if (!is_primary) node->replicate = sdsdup(primary);
                 }
             } else {
-                node = dictGetVal(entry);
+                node = entry->v.val;
                 sdsfree(ip);
                 sdsfree(name);
             }
@@ -1610,7 +1610,7 @@ static int fetchClusterSlotsConfiguration(client c) {
                 goto cleanup;
             }
             sdsfree(name);
-            clusterNode *node = dictGetVal(entry);
+            clusterNode *node = entry->v.val;
             if (node->updated_slots == NULL) node->updated_slots = zcalloc(CLUSTER_SLOTS * sizeof(int));
             for (slot = from; slot <= to; slot++) node->updated_slots[node->updated_slots_count++] = slot;
         }

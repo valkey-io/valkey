@@ -865,7 +865,7 @@ int VM_GetApi(const char *funcname, void **targetPtrPtr) {
      * used implicitly by including valkeymodule.h. */
     dictEntry *he = dictFind(server.moduleapi, funcname);
     if (!he) return VALKEYMODULE_ERR;
-    *targetPtrPtr = dictGetVal(he);
+    *targetPtrPtr = he->v.val;
     return VALKEYMODULE_OK;
 }
 
@@ -7199,7 +7199,7 @@ moduleType *moduleTypeLookupModuleByNameInternal(const char *name, int ignore_ca
     dictEntry *de;
 
     while ((de = dictNext(di)) != NULL) {
-        struct ValkeyModule *module = dictGetVal(de);
+        struct ValkeyModule *module = de->v.val;
         listIter li;
         listNode *ln;
 
@@ -7248,7 +7248,7 @@ moduleType *moduleTypeLookupModuleByID(uint64_t id) {
     dictEntry *de;
 
     while ((de = dictNext(di)) != NULL && mt == NULL) {
-        struct ValkeyModule *module = dictGetVal(de);
+        struct ValkeyModule *module = de->v.val;
         listIter li;
         listNode *ln;
 
@@ -7593,7 +7593,7 @@ int moduleAllDatatypesHandleErrors(void) {
     dictEntry *de;
 
     while ((de = dictNext(di)) != NULL) {
-        struct ValkeyModule *module = dictGetVal(de);
+        struct ValkeyModule *module = de->v.val;
         if (listLength(module->types) && !(module->options & VALKEYMODULE_OPTIONS_HANDLE_IO_ERRORS)) {
             dictReleaseIterator(di);
             return 0;
@@ -7611,7 +7611,7 @@ int moduleAllModulesHandleReplAsyncLoad(void) {
     dictEntry *de;
 
     while ((de = dictNext(di)) != NULL) {
-        struct ValkeyModule *module = dictGetVal(de);
+        struct ValkeyModule *module = de->v.val;
         if (!(module->options & VALKEYMODULE_OPTIONS_HANDLE_REPL_ASYNC_LOAD)) {
             dictReleaseIterator(di);
             return 0;
@@ -7626,7 +7626,7 @@ int moduleVerifyAllAllowAtomicSlotMigrationOrReply(client *c) {
     dictEntry *de;
 
     while ((de = dictNext(di)) != NULL) {
-        struct ValkeyModule *module = dictGetVal(de);
+        struct ValkeyModule *module = de->v.val;
         if (!(module->options & VALKEYMODULE_OPTIONS_HANDLE_ATOMIC_SLOT_MIGRATION)) {
             addReplyErrorFormat(c, "The module %s does not support atomic slot migrations. "
                                    "Please ensure all modules have declared support for "
@@ -7902,7 +7902,7 @@ ssize_t rdbSaveModulesAux(rio *rdb, int when) {
     dictEntry *de;
 
     while ((de = dictNext(di)) != NULL) {
-        struct ValkeyModule *module = dictGetVal(de);
+        struct ValkeyModule *module = de->v.val;
         listIter li;
         listNode *ln;
 
@@ -11157,7 +11157,7 @@ sds modulesCollectInfo(sds info, dict *sections_dict, int for_crash_report, int 
     dictEntry *de;
 
     while ((de = dictNext(di)) != NULL) {
-        struct ValkeyModule *module = dictGetVal(de);
+        struct ValkeyModule *module = de->v.val;
         if (!module->info_cb) continue;
         ValkeyModuleInfoCtx info_ctx = {module, sections_dict, info, sections, 0, 0};
         module->info_cb(&info_ctx, for_crash_report);
@@ -11372,7 +11372,7 @@ int VM_ExportSharedAPI(ValkeyModuleCtx *ctx, const char *apiname, void *func) {
 void *VM_GetSharedAPI(ValkeyModuleCtx *ctx, const char *apiname) {
     dictEntry *de = dictFind(server.sharedapi, apiname);
     if (de == NULL) return NULL;
-    ValkeyModuleSharedAPI *sapi = dictGetVal(de);
+    ValkeyModuleSharedAPI *sapi = de->v.val;
     if (listSearchKey(sapi->module->usedby, ctx->module) == NULL) {
         listAddNodeTail(sapi->module->usedby, ctx->module);
         listAddNodeTail(ctx->module->using, sapi->module);
@@ -11391,8 +11391,8 @@ int moduleUnregisterSharedAPI(ValkeyModule *module) {
     dictIterator *di = dictGetSafeIterator(server.sharedapi);
     dictEntry *de;
     while ((de = dictNext(di)) != NULL) {
-        const char *apiname = dictGetKey(de);
-        ValkeyModuleSharedAPI *sapi = dictGetVal(de);
+        const char *apiname = de->key;
+        ValkeyModuleSharedAPI *sapi = de->v.val;
         if (sapi->module == module) {
             dictDelete(server.sharedapi, apiname);
             zfree(sapi);
@@ -13146,7 +13146,7 @@ void moduleLoadFromQueue(void) {
         dictIterator *di = dictGetSafeIterator(server.module_configs_queue);
         dictEntry *de;
         while ((de = dictNext(di)) != NULL) {
-            const char *moduleConfigName = dictGetKey(de);
+            const char *moduleConfigName = de->key;
             serverLog(LL_WARNING, "Unused Module Configuration: %s", moduleConfigName);
         }
         dictReleaseIterator(di);
@@ -13653,7 +13653,7 @@ void moduleUnloadAllModules(void) {
     dictEntry *de;
 
     while ((de = dictNext(di)) != NULL) {
-        struct ValkeyModule *module = dictGetVal(de);
+        struct ValkeyModule *module = de->v.val;
 
         const char *errmsg = NULL;
         if (moduleUnloadInternal(module, &errmsg) == C_ERR) {
@@ -13684,8 +13684,8 @@ void addReplyLoadedModules(client *c) {
 
     addReplyArrayLen(c, dictSize(modules));
     while ((de = dictNext(di)) != NULL) {
-        sds name = dictGetKey(de);
-        struct ValkeyModule *module = dictGetVal(de);
+        sds name = de->key;
+        struct ValkeyModule *module = de->v.val;
         sds path = module->loadmod->path;
         addReplyMapLen(c, 4);
         addReplyBulkCString(c, "name");
@@ -13746,8 +13746,8 @@ sds genModulesInfoString(sds info) {
     dictEntry *de;
 
     while ((de = dictNext(di)) != NULL) {
-        sds name = dictGetKey(de);
-        struct ValkeyModule *module = dictGetVal(de);
+        sds name = de->key;
+        struct ValkeyModule *module = de->v.val;
 
         sds usedby = genModulesInfoStringRenderModulesList(module->usedby);
         sds using = genModulesInfoStringRenderModulesList(module->using);
@@ -13896,8 +13896,8 @@ int loadModuleConfigs(ValkeyModule *module) {
         sds config_name = sdscatfmt(sdsempty(), "%s.%s", module->name, module_config->name);
         dictEntry *config_argument = dictFind(server.module_configs_queue, config_name);
         if (config_argument) {
-            if (!performModuleConfigSetFromName(dictGetKey(config_argument), dictGetVal(config_argument), &err)) {
-                serverLog(LL_WARNING, "Issue during loading of configuration %s : %s", (sds)dictGetKey(config_argument),
+            if (!performModuleConfigSetFromName(config_argument->key, config_argument->v.val, &err)) {
+                serverLog(LL_WARNING, "Issue during loading of configuration %s : %s", (sds)config_argument->key,
                           err);
                 sdsfree(config_name);
                 dictEmpty(server.module_configs_queue, NULL);
@@ -15023,7 +15023,7 @@ void moduleDefragGlobals(void) {
     dictEntry *de;
 
     while ((de = dictNext(di)) != NULL) {
-        struct ValkeyModule *module = dictGetVal(de);
+        struct ValkeyModule *module = de->v.val;
         if (!module->defrag_cb) continue;
         ValkeyModuleDefragCtx defrag_ctx = {0, NULL, NULL, -1};
         module->defrag_cb(&defrag_ctx);

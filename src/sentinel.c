@@ -442,7 +442,7 @@ void dictInstancesValDestructor(void *obj) {
 
 static void dictEntryDestructorInstancesValue(void *entry) {
     dictEntry *de = entry;
-    dictInstancesValDestructor(dictGetVal(de));
+    dictInstancesValDestructor(de->v.val);
     zfree(de);
 }
 
@@ -736,7 +736,7 @@ void sentinelGenerateInitialMonitorEvents(void) {
 
     di = dictGetIterator(sentinel.primaries);
     while ((de = dictNext(di)) != NULL) {
-        sentinelValkeyInstance *ri = dictGetVal(de);
+        sentinelValkeyInstance *ri = de->v.val;
         sentinelEvent(LL_WARNING, "+monitor", ri, "%@ quorum %d", ri->quorum);
     }
     dictReleaseIterator(di);
@@ -1105,7 +1105,7 @@ int sentinelTryConnectionSharing(sentinelValkeyInstance *ri) {
 
     di = dictGetIterator(sentinel.primaries);
     while ((de = dictNext(di)) != NULL) {
-        sentinelValkeyInstance *primary = dictGetVal(de), *match;
+        sentinelValkeyInstance *primary = de->v.val, *match;
         /* We want to share with the same physical Sentinel referenced
          * in other primaries, so skip our primary. */
         if (primary == ri->primary) continue;
@@ -1139,7 +1139,7 @@ void dropInstanceConnections(sentinelValkeyInstance *ri) {
     sentinelValkeyInstance *repl_ri;
     di = dictGetIterator(ri->replicas);
     while ((de = dictNext(di)) != NULL) {
-        repl_ri = dictGetVal(de);
+        repl_ri = de->v.val;
         instanceLinkCloseConnection(repl_ri->link, repl_ri->link->cc);
         instanceLinkCloseConnection(repl_ri->link, repl_ri->link->pc);
     }
@@ -1158,10 +1158,10 @@ int sentinelDropConnections(void) {
         dictIterator *sdi;
         dictEntry *sde;
 
-        sentinelValkeyInstance *ri = dictGetVal(de);
+        sentinelValkeyInstance *ri = de->v.val;
         sdi = dictGetIterator(ri->sentinels);
         while ((sde = dictNext(sdi)) != NULL) {
-            sentinelValkeyInstance *si = dictGetVal(sde);
+            sentinelValkeyInstance *si = sde->v.val;
             if (!si->link->disconnected) {
                 instanceLinkCloseConnection(si->link, si->link->pc);
                 instanceLinkCloseConnection(si->link, si->link->cc);
@@ -1189,7 +1189,7 @@ int sentinelUpdateSentinelAddressInAllPrimaries(sentinelValkeyInstance *ri) {
 
     di = dictGetIterator(sentinel.primaries);
     while ((de = dictNext(di)) != NULL) {
-        sentinelValkeyInstance *primary = dictGetVal(de), *match;
+        sentinelValkeyInstance *primary = de->v.val, *match;
         match = getSentinelValkeyInstanceByAddrAndRunID(primary->sentinels, NULL, 0, ri->runid);
         /* If there is no match, this primary does not know about this
          * Sentinel, try with the next one. */
@@ -1456,7 +1456,7 @@ int removeMatchingSentinelFromPrimary(sentinelValkeyInstance *primary, char *run
 
     di = dictGetSafeIterator(primary->sentinels);
     while ((de = dictNext(di)) != NULL) {
-        sentinelValkeyInstance *ri = dictGetVal(de);
+        sentinelValkeyInstance *ri = de->v.val;
 
         if (ri->runid && strcmp(ri->runid, runid) == 0) {
             dictDelete(primary->sentinels, ri->name);
@@ -1489,7 +1489,7 @@ sentinelValkeyInstance *getSentinelValkeyInstanceByAddrAndRunID(dict *instances,
     }
     di = dictGetIterator(instances);
     while ((de = dictNext(di)) != NULL) {
-        sentinelValkeyInstance *ri = dictGetVal(de);
+        sentinelValkeyInstance *ri = de->v.val;
 
         if (runid && !ri->runid) continue;
         if ((runid == NULL || strcmp(ri->runid, runid) == 0) &&
@@ -1567,7 +1567,7 @@ int sentinelResetPrimariesByPattern(char *pattern, int flags) {
 
     di = dictGetIterator(sentinel.primaries);
     while ((de = dictNext(di)) != NULL) {
-        sentinelValkeyInstance *ri = dictGetVal(de);
+        sentinelValkeyInstance *ri = de->v.val;
 
         if (ri->name) {
             if (stringmatch(pattern, ri->name, 0)) {
@@ -1605,7 +1605,7 @@ int sentinelResetPrimaryAndChangeAddress(sentinelValkeyInstance *primary, char *
     /* Don't include the one having the address we are switching to. */
     di = dictGetIterator(primary->replicas);
     while ((de = dictNext(di)) != NULL) {
-        sentinelValkeyInstance *replica = dictGetVal(de);
+        sentinelValkeyInstance *replica = de->v.val;
 
         if (sentinelAddrOrHostnameEqual(replica->addr, newaddr)) continue;
         replicas[num_replicas++] = dupSentinelAddr(replica->addr);
@@ -1681,7 +1681,7 @@ void sentinelPropagateDownAfterPeriod(sentinelValkeyInstance *primary) {
     for (j = 0; d[j]; j++) {
         di = dictGetIterator(d[j]);
         while ((de = dictNext(di)) != NULL) {
-            sentinelValkeyInstance *ri = dictGetVal(de);
+            sentinelValkeyInstance *ri = de->v.val;
             ri->down_after_period = primary->down_after_period;
         }
         dictReleaseIterator(di);
@@ -2024,7 +2024,7 @@ void rewriteConfigSentinelOption(struct rewriteConfigState *state) {
         sentinelAddr *primary_addr;
 
         /* sentinel monitor */
-        primary = dictGetVal(de);
+        primary = de->v.val;
         primary_addr = sentinelGetCurrentPrimaryAddress(primary);
         line = sdscatprintf(sdsempty(), "sentinel monitor %s %s %d %d", primary->name,
                             announceSentinelAddr(primary_addr), primary_addr->port, primary->quorum);
@@ -2109,7 +2109,7 @@ void rewriteConfigSentinelOption(struct rewriteConfigState *state) {
         while ((de = dictNext(di2)) != NULL) {
             sentinelAddr *replica_addr;
 
-            ri = dictGetVal(de);
+            ri = de->v.val;
             replica_addr = ri->addr;
 
             /* If primary_addr (obtained using sentinelGetCurrentPrimaryAddress()
@@ -2133,7 +2133,7 @@ void rewriteConfigSentinelOption(struct rewriteConfigState *state) {
         /* sentinel known-sentinel */
         di2 = dictGetIterator(primary->sentinels);
         while ((de = dictNext(di2)) != NULL) {
-            ri = dictGetVal(de);
+            ri = de->v.val;
             if (ri->runid == NULL) continue;
             line = sdscatprintf(sdsempty(), "sentinel known-sentinel %s %s %d %s", primary->name,
                                 announceSentinelAddr(ri->addr), ri->addr->port, ri->runid);
@@ -2145,8 +2145,8 @@ void rewriteConfigSentinelOption(struct rewriteConfigState *state) {
         /* sentinel rename-command */
         di2 = dictGetIterator(primary->renamed_commands);
         while ((de = dictNext(di2)) != NULL) {
-            sds oldname = dictGetKey(de);
-            sds newname = dictGetVal(de);
+            sds oldname = de->key;
+            sds newname = de->v.val;
             line = sdscatprintf(sdsempty(), "sentinel rename-command %s %s %s", primary->name, oldname, newname);
             rewriteConfigRewriteLine(state, "sentinel rename-command", line, 1);
             /* rewriteConfigMarkAsProcessed is handled after the loop */
@@ -2810,7 +2810,7 @@ void sentinelProcessHelloMessage(char *hello, int hello_len) {
 
                     di = dictGetIterator(sentinel.primaries);
                     while ((de = dictNext(di)) != NULL) {
-                        sentinelValkeyInstance *primary = dictGetVal(de);
+                        sentinelValkeyInstance *primary = de->v.val;
                         removeMatchingSentinelFromPrimary(primary, runid_obsolete);
                     }
                     dictReleaseIterator(di);
@@ -2956,7 +2956,7 @@ void sentinelForceHelloUpdateDictOfValkeyInstances(dict *instances) {
 
     di = dictGetSafeIterator(instances);
     while ((de = dictNext(di)) != NULL) {
-        sentinelValkeyInstance *ri = dictGetVal(de);
+        sentinelValkeyInstance *ri = de->v.val;
         if (ri->last_pub_time >= (sentinel_publish_period + 1)) ri->last_pub_time -= (sentinel_publish_period + 1);
     }
     dictReleaseIterator(di);
@@ -3688,7 +3688,7 @@ void addReplyDictOfValkeyInstances(client *c, dict *instances) {
 
     di = dictGetIterator(instances);
     while ((de = dictNext(di)) != NULL) {
-        sentinelValkeyInstance *ri = dictGetVal(de);
+        sentinelValkeyInstance *ri = de->v.val;
 
         /* don't announce unannounced replicas */
         if (ri->flags & SRI_REPLICA && !ri->replica_announced) continue;
@@ -3725,7 +3725,7 @@ int sentinelIsQuorumReachable(sentinelValkeyInstance *primary, int *usableptr) {
 
     di = dictGetIterator(primary->sentinels);
     while ((de = dictNext(di)) != NULL) {
-        sentinelValkeyInstance *ri = dictGetVal(de);
+        sentinelValkeyInstance *ri = de->v.val;
 
         if (ri->flags & (SRI_S_DOWN | SRI_O_DOWN)) continue;
         usable++;
@@ -4055,7 +4055,7 @@ void sentinelCommand(client *c) {
         dictEntry *de;
         di = dictGetIterator(primaries_local);
         while ((de = dictNext(di)) != NULL) {
-            sentinelValkeyInstance *ri = dictGetVal(de);
+            sentinelValkeyInstance *ri = de->v.val;
             addReplyBulkCBuffer(c, ri->name, strlen(ri->name));
             addReplyArrayLen(c, dictSize(ri->replicas) + 1); /* +1 for self */
             addReplyArrayLen(c, 2);
@@ -4069,7 +4069,7 @@ void sentinelCommand(client *c) {
             dictEntry *sde;
             sdi = dictGetIterator(ri->replicas);
             while ((sde = dictNext(sdi)) != NULL) {
-                sentinelValkeyInstance *sri = dictGetVal(sde);
+                sentinelValkeyInstance *sri = sde->v.val;
                 addReplyArrayLen(c, 2);
                 addReplyLongLong(c, ri->info_refresh ? (now - sri->info_refresh) : 0);
                 if (sri->info)
@@ -4137,7 +4137,7 @@ void sentinelInfoCommand(client *c) {
     dictIterator *di = dictGetSafeIterator(sections_dict);
     while ((de = dictNext(di)) != NULL) {
         int i;
-        sds sec = dictGetKey(de);
+        sds sec = de->key;
         for (i = 0; sentinel_sections[i]; i++)
             if (!strcasecmp(sentinel_sections[i], sec)) break;
         /* section not found? remove it */
@@ -4179,7 +4179,7 @@ void sentinelInfoCommand(client *c) {
 
         di = dictGetIterator(sentinel.primaries);
         while ((de = dictNext(di)) != NULL) {
-            sentinelValkeyInstance *ri = dictGetVal(de);
+            sentinelValkeyInstance *ri = de->v.val;
             char *status = "ok";
 
             if (ri->flags & SRI_O_DOWN)
@@ -4210,7 +4210,7 @@ void sentinelRoleCommand(client *c) {
 
     di = dictGetIterator(sentinel.primaries);
     while ((de = dictNext(di)) != NULL) {
-        sentinelValkeyInstance *ri = dictGetVal(de);
+        sentinelValkeyInstance *ri = de->v.val;
 
         addReplyBulkCString(c, ri->name);
     }
@@ -4481,7 +4481,7 @@ void sentinelCheckObjectivelyDown(sentinelValkeyInstance *primary) {
         /* Count all the other sentinels. */
         di = dictGetIterator(primary->sentinels);
         while ((de = dictNext(di)) != NULL) {
-            sentinelValkeyInstance *ri = dictGetVal(de);
+            sentinelValkeyInstance *ri = de->v.val;
 
             if (ri->flags & SRI_PRIMARY_DOWN) quorum++;
         }
@@ -4555,7 +4555,7 @@ void sentinelAskPrimaryStateToOtherSentinels(sentinelValkeyInstance *primary, in
 
     di = dictGetIterator(primary->sentinels);
     while ((de = dictNext(di)) != NULL) {
-        sentinelValkeyInstance *ri = dictGetVal(de);
+        sentinelValkeyInstance *ri = de->v.val;
         mstime_t elapsed = mstime() - ri->last_primary_down_reply_time;
         int retval;
 
@@ -4636,12 +4636,12 @@ int sentinelLeaderIncr(dict *counters, char *runid) {
 
     de = dictAddRaw(counters, runid, &existing);
     if (existing) {
-        oldval = dictGetUnsignedIntegerVal(existing);
-        dictSetUnsignedIntegerVal(existing, oldval + 1);
+        oldval = existing->v.u64;
+        existing->v.u64 = oldval + 1;
         return oldval + 1;
     } else {
         serverAssert(de != NULL);
-        dictSetUnsignedIntegerVal(de, 1);
+        de->v.u64 = 1;
         return 1;
     }
 }
@@ -4670,7 +4670,7 @@ char *sentinelGetLeader(sentinelValkeyInstance *primary, uint64_t epoch) {
     /* Count other sentinels votes */
     di = dictGetIterator(primary->sentinels);
     while ((de = dictNext(di)) != NULL) {
-        sentinelValkeyInstance *ri = dictGetVal(de);
+        sentinelValkeyInstance *ri = de->v.val;
         if (ri->leader != NULL && ri->leader_epoch == sentinel.current_epoch) sentinelLeaderIncr(counters, ri->leader);
     }
     dictReleaseIterator(di);
@@ -4680,11 +4680,11 @@ char *sentinelGetLeader(sentinelValkeyInstance *primary, uint64_t epoch) {
      * 2) And anyway at least primary->quorum votes. */
     di = dictGetIterator(counters);
     while ((de = dictNext(di)) != NULL) {
-        uint64_t votes = dictGetUnsignedIntegerVal(de);
+        uint64_t votes = de->v.u64;
 
         if (votes > max_votes) {
             max_votes = votes;
-            winner = dictGetKey(de);
+            winner = de->key;
         }
     }
     dictReleaseIterator(di);
@@ -5021,7 +5021,7 @@ sentinelValkeyInstance *sentinelSelectReplica(sentinelValkeyInstance *primary) {
     di = dictGetIterator(primary->replicas);
 
     while ((de = dictNext(di)) != NULL) {
-        sentinelValkeyInstance *replica = dictGetVal(de);
+        sentinelValkeyInstance *replica = de->v.val;
         mstime_t info_validity_time;
 
         if (replica->flags & (SRI_S_DOWN | SRI_O_DOWN)) continue;
@@ -5181,7 +5181,7 @@ void sentinelFailoverDetectEnd(sentinelValkeyInstance *primary) {
      * configured. */
     di = dictGetIterator(primary->replicas);
     while ((de = dictNext(di)) != NULL) {
-        sentinelValkeyInstance *replica = dictGetVal(de);
+        sentinelValkeyInstance *replica = de->v.val;
 
         if (replica->flags & (SRI_PROMOTED | SRI_RECONF_DONE)) continue;
         if (replica->flags & SRI_S_DOWN) continue;
@@ -5211,7 +5211,7 @@ void sentinelFailoverDetectEnd(sentinelValkeyInstance *primary) {
 
         di = dictGetIterator(primary->replicas);
         while ((de = dictNext(di)) != NULL) {
-            sentinelValkeyInstance *replica = dictGetVal(de);
+            sentinelValkeyInstance *replica = de->v.val;
             int retval;
 
             if (replica->flags & (SRI_PROMOTED | SRI_RECONF_DONE | SRI_RECONF_SENT)) continue;
@@ -5236,7 +5236,7 @@ void sentinelFailoverReconfNextReplica(sentinelValkeyInstance *primary) {
 
     di = dictGetIterator(primary->replicas);
     while ((de = dictNext(di)) != NULL) {
-        sentinelValkeyInstance *replica = dictGetVal(de);
+        sentinelValkeyInstance *replica = de->v.val;
 
         if (replica->flags & (SRI_RECONF_SENT | SRI_RECONF_INPROG)) in_progress++;
     }
@@ -5244,7 +5244,7 @@ void sentinelFailoverReconfNextReplica(sentinelValkeyInstance *primary) {
 
     di = dictGetIterator(primary->replicas);
     while (in_progress < primary->parallel_syncs && (de = dictNext(di)) != NULL) {
-        sentinelValkeyInstance *replica = dictGetVal(de);
+        sentinelValkeyInstance *replica = de->v.val;
         int retval;
 
         /* Skip the promoted replica, and already configured replicas. */
@@ -5375,7 +5375,7 @@ void sentinelHandleDictOfValkeyInstances(dict *instances) {
     /* There are a number of things we need to perform against every primary. */
     di = dictGetIterator(instances);
     while ((de = dictNext(di)) != NULL) {
-        sentinelValkeyInstance *ri = dictGetVal(de);
+        sentinelValkeyInstance *ri = de->v.val;
 
         sentinelHandleValkeyInstance(ri);
         if (ri->flags & SRI_PRIMARY) {

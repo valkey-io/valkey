@@ -146,8 +146,8 @@ typedef struct {
 
 static void dictEntryDestructorSdsKeyHeapValue(void *entry) {
     dictEntry *de = entry;
-    dictSdsDestructor(dictGetKey(de));
-    dictVanillaFree(dictGetVal(de));
+    dictSdsDestructor(de->key);
+    dictVanillaFree(de->v.val);
     zfree(de);
 }
 
@@ -1282,10 +1282,10 @@ int rdbSaveInfoAuxFields(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
         dictInitIterator(&di, rdbAuxFields);
         dictEntry *de;
         while ((de = dictNext(&di)) != NULL) {
-            rdbAuxFieldCodec *codec = (rdbAuxFieldCodec *)dictGetVal(de);
+            rdbAuxFieldCodec *codec = (rdbAuxFieldCodec *)de->v.val;
             sds s = codec->encoder(rdbflags);
             if (s == NULL) continue;
-            if (rdbSaveAuxFieldStrStr(rdb, dictGetKey(de), s) == -1) {
+            if (rdbSaveAuxFieldStrStr(rdb, de->key, s) == -1) {
                 sdsfree(s);
                 return -1;
             }
@@ -1371,7 +1371,7 @@ ssize_t rdbSaveFunctions(rio *rdb) {
     while ((entry = dictNext(iter))) {
         if ((ret = rdbSaveType(rdb, RDB_OPCODE_FUNCTION2)) < 0) goto werr;
         written += ret;
-        functionLibInfo *li = dictGetVal(entry);
+        functionLibInfo *li = entry->v.val;
         if ((ret = rdbSaveRawString(rdb, (unsigned char *)li->code, sdslen(li->code))) < 0) goto werr;
         written += ret;
     }
@@ -3353,7 +3353,7 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
                     dictEntry *de = dictFind(rdbAuxFields, objectGetVal(auxkey));
                     if (de != NULL) {
                         handled = 1;
-                        rdbAuxFieldCodec *codec = (rdbAuxFieldCodec *)dictGetVal(de);
+                        rdbAuxFieldCodec *codec = (rdbAuxFieldCodec *)de->v.val;
                         if (codec->decoder(rdbflags, objectGetVal(auxval)) == C_ERR) {
                             decrRefCount(auxkey);
                             decrRefCount(auxval);

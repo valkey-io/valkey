@@ -4561,7 +4561,7 @@ void replicationHandlePrimaryDisconnection(void) {
 
     server.primary = NULL;
     /* freeClient(primary) can be deferred via freeClientAsync when the client
-     * has pending IO (since #3324). By the time we run in that deferred context,
+     * has pending IO. By the time we run in that deferred context,
      * replicationUnsetPrimary()/replicationSetPrimary() may have already
      * finalized replication state. If primary_host is NULL, a deliberate unset
      * is in progress (or complete), so avoid setting REPL_STATE_CONNECT which

@@ -7,6 +7,9 @@
 #include "mutexqueue.h"
 #include "server.h"
 
+// Just for the moment, until https://github.com/valkey-io/valkey/issues/3450 is resolved
+// clang-format off
+
 int getFlushCommandFlags(client *c, int *flags);                                                        // in db.c
 uint64_t dictObjHash(const void *key);                                                                  // in server.c
 int dictObjKeyCompare(const void *key1, const void *key2);                                              // in server.c

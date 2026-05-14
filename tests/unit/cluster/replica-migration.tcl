@@ -406,7 +406,7 @@ proc test_cluster_setslot {type} {
     }
 }
 
-start_cluster 4 4 {tags {external:skip cluster cluster-v2:skip} overrides {cluster-node-timeout 1000 cluster-migration-barrier 999}} {
+start_cluster 4 4 {tags {external:skip cluster} overrides {cluster-node-timeout 1000 cluster-migration-barrier 999}} {
     test_cluster_setslot "gossip"
 } my_slot_allocation cluster_allocate_replicas ;# start_cluster
 

@@ -1125,7 +1125,7 @@ int reblock_disconnect_cmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int 
     reblock_disconnect_called = 0;
     ValkeyModuleBlockedClient *bc = ValkeyModule_BlockClient(ctx, reblock_disconnect_reply, NULL, reblock_free, 0);
     ValkeyModule_SetDisconnectCallback(bc, reblock_disconnect);
-    /* Unblock once to trigger reply callback which returns REPLY_AGAIN */
+    /* Unblock once to trigger reply callback which then returns REPLY_AGAIN */
     ValkeyModule_UnblockClient(bc, NULL);
     return VALKEYMODULE_OK;
 }

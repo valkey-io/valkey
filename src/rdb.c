@@ -518,18 +518,16 @@ ssize_t rdbSaveRawString(rio *rdb, unsigned char *s, size_t len) {
         }
     }
 
-    /* Try LZF compression - under 20 bytes it's unable to compress even
-     * aaaaaaaaaaaaaaaaaa so skip it.
-     * Skip per-string LZF only when THIS rio has streaming compression
-     * active (RIO_FLAG_STREAMING_COMPRESSION). This avoids double-compression
-     * while preserving LZF for paths without a compress_rio wrapper
-     * (diskless sync, DUMP, AOF rewrite). */
+    /* Try LZF compression — values under 20 bytes don't compress, skip those.
+     * Skip per-string LZF when the rio has whole-stream compression so we
+     * don't compress twice; standalone rios (DUMP, AOF rewrite, diskless)
+     * still hit this path. */
     if (server.rdb_compression && len > 20 &&
         !(rdb && (rdb->flags & RIO_FLAG_STREAMING_COMPRESSION))) {
         n = rdbSaveLzfStringObject(rdb, s, len);
         if (n == -1) return -1;
         if (n > 0) return n;
-        /* Return value of 0 means data can't be compressed, save the old way */
+        /* 0 means data can't be compressed; fall through and store verbatim. */
     }
 
     /* Store verbatim */
@@ -1595,7 +1593,10 @@ static int rdbSaveInternal(int req, const char *filename, rdbSaveInfo *rsi, int 
 
     /* When streaming compression is enabled, wrap the file rio with
      * compressRio. rdbSaveRio writes through the compressor transparently.
-     * Per-string LZF is already disabled in rdbSaveRawString when algo != LZF. */
+     * Per-string LZF is gated on RIO_FLAG_STREAMING_COMPRESSION (set on
+     * the wrapper, not on the inner rio), so paths without a streaming
+     * wrapper — DUMP, AOF rewrite, diskless sync — keep using LZF as
+     * before. */
     rio *save_rio = &rdb;
     if (use_streaming_compression) {
         streamWriterConfig cfg = {
@@ -3153,6 +3154,8 @@ void rdbInputStreamInit(rdbInputStream *input, rio *raw_rio) {
     input->rdb_rio = raw_rio;
 }
 
+/* Synchronous: drives reads on the wrapped rio while probing the envelope.
+ * Only safe to call on rios that can block (file rios). */
 decompressRioInitResult rdbInputStreamPrepare(rdbInputStream *input) {
     streamReaderConfig reader_cfg = {
         .expected_stream_kind = STREAM_KIND_RDB,
@@ -3167,8 +3170,8 @@ decompressRioInitResult rdbInputStreamPrepare(rdbInputStream *input) {
     if (init_rc == DECOMPRESS_RIO_INIT_OK) {
         input->initialized = true;
         input->rdb_rio = (rio *)&input->decompressor;
-        /* Streaming compression validates the encoded frame; avoid also
-         * hashing decoded logical RDB bytes with CRC64. */
+        /* The codec already validates the encoded frame, so skip CRC64 over
+         * the decoded bytes. */
         if (input->stream_info.compressed) input->rdb_rio->flags |= RIO_FLAG_SKIP_RDB_CHECKSUM;
     }
     return init_rc;
@@ -3188,10 +3191,11 @@ int rdbInputStreamValidateEnd(rdbInputStream *input) {
     return decompressRioValidateEnd(&input->decompressor) == 0 ? C_OK : C_ERR;
 }
 
+/* The cast is sound today because RIO_FLAG_STREAMING_DECOMPRESSION is only
+ * set by rioInitWithDecompress on a decompressRio (whose first member is
+ * `rio base`). Anyone introducing a second producer of the flag must add a
+ * type discriminator before relying on this. */
 bool rdbRioHasCorruptCompressedInput(const rio *rdb) {
-    /* SAFETY: the cast is valid because RIO_FLAG_STREAMING_DECOMPRESSION is
-     * only set by rioInitWithDecompress() on a decompressRio whose first
-     * member is `rio base`, so the pointer identity is guaranteed. */
     return (rdb->flags & RIO_FLAG_STREAMING_DECOMPRESSION) &&
            decompressRioGetError((const decompressRio *)rdb) == STREAM_READER_ERROR_CORRUPT;
 }

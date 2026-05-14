@@ -40,6 +40,7 @@
      ((USE_OPENSSL == 2 /* BUILD_MODULE */) && \
       (defined(BUILD_TLS_MODULE) && BUILD_TLS_MODULE == 2)))
 
+#include <openssl/x509_vfy.h>
 #include <openssl/conf.h>
 #include <openssl/ssl.h>
 #include <openssl/x509.h>
@@ -56,7 +57,6 @@
 #include <arpa/inet.h>
 #include <dirent.h>
 #include <ctype.h>
-#include <limits.h>
 #include <stdint.h>
 #include <stdio.h>
 
@@ -564,9 +564,12 @@ static SSL_CTX *createSSLContext(serverTLSContextConfig *ctx_config, int protoco
     const char *cert_file = client ? ctx_config->client_cert_file : ctx_config->cert_file;
     const char *key_file = client ? ctx_config->client_key_file : ctx_config->key_file;
     const char *key_file_pass = client ? ctx_config->client_key_file_pass : ctx_config->key_file_pass;
+
+    const char *alt_cert_file = client ? NULL : ctx_config->alt_cert_file;
+    const char *alt_key_file = client ? NULL : ctx_config->alt_key_file;
     char errbuf[256];
     SSL_CTX *ctx = NULL;
-
+    unsigned char* psig_data = NULL;
     ctx = SSL_CTX_new(SSLv23_method());
     if (!ctx) goto error;
 
@@ -606,9 +609,45 @@ static SSL_CTX *createSSLContext(serverTLSContextConfig *ctx_config, int protoco
         goto error;
     }
 
+    if (alt_cert_file) {
+        const ASN1_BIT_STRING *primary_signature;
+        X509_get0_signature(&primary_signature, NULL, SSL_CTX_get0_certificate(ctx));
+        const int psig_length = primary_signature->length;
+        psig_data = zmalloc(psig_length);
+        memcpy(psig_data, primary_signature->data, psig_length);
+
+        if (SSL_CTX_use_certificate_chain_file(ctx, alt_cert_file) <= 0) {
+            ERR_error_string_n(ERR_get_error(), errbuf, sizeof(errbuf));
+            serverLog(LL_WARNING, "Failed to load certificate: %s: %s", alt_cert_file, errbuf);
+            goto error;
+        }
+
+        if (!isCertValid(SSL_CTX_get0_certificate(ctx))) {
+            serverLog(LL_WARNING, "Alternate server TLS certificate is invalid. Aborting TLS configuration.");
+            goto error;
+        }
+
+        const ASN1_BIT_STRING *alt_signature;
+        X509_get0_signature(&alt_signature, NULL, SSL_CTX_get0_certificate(ctx));
+        if (psig_length == alt_signature->length && memcmp(psig_data, alt_signature->data, psig_length) == 0) {
+            serverLog(LL_WARNING, "Primary and alternate certificates cannot be identical. Use two different ones with different algorithms");
+            goto error;
+        }
+    }
+
+    /* If the user tries to use a primary and alt cert of the same type, this will fail
+     * due to the first one being overwritten in the context, so it will attempt to load
+     * the first key for the second cert
+     */
     if (SSL_CTX_use_PrivateKey_file(ctx, key_file, SSL_FILETYPE_PEM) <= 0) {
         ERR_error_string_n(ERR_get_error(), errbuf, sizeof(errbuf));
         serverLog(LL_WARNING, "Failed to load private key: %s: %s", key_file, errbuf);
+        goto error;
+    }
+
+    if (alt_key_file && SSL_CTX_use_PrivateKey_file(ctx, alt_key_file, SSL_FILETYPE_PEM) <= 0) {
+        ERR_error_string_n(ERR_get_error(), errbuf, sizeof(errbuf));
+        serverLog(LL_WARNING, "Failed to load private key: %s: %s", alt_key_file, errbuf);
         goto error;
     }
 
@@ -642,10 +681,12 @@ static SSL_CTX *createSSLContext(serverTLSContextConfig *ctx_config, int protoco
     }
 #endif
 
+    zfree(psig_data);
     return ctx;
 
 error:
     if (ctx) SSL_CTX_free(ctx);
+    zfree(psig_data);
     return NULL;
 }
 
@@ -666,6 +707,16 @@ static int tlsCreateContexts(serverTLSContextConfig *ctx_config, SSL_CTX **out_c
 
     if (!ctx_config->key_file) {
         serverLog(LL_WARNING, "No tls-key-file configured!");
+        goto error;
+    }
+
+    if (ctx_config->alt_cert_file && !ctx_config->alt_key_file) {
+        serverLog(LL_WARNING, "tls-alt-cert-file provided without a key");
+        goto error;
+    }
+
+    if (ctx_config->alt_key_file && !ctx_config->alt_cert_file) {
+        serverLog(LL_WARNING, "tls-alt-key-file provided without a certificate");
         goto error;
     }
 

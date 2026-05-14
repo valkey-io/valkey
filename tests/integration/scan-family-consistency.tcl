@@ -95,6 +95,14 @@ test {hash-seed uses full bytes including embedded NULL for seeding} {
             set keys [scan_interleaved $primary $replica scan]
             set keys [lsort -unique $keys]
             assert_not_equal $n [llength $keys]
+
+            # Also use this opportunity to verify that the config rewrite works on NULL.
+            $primary config rewrite
+            restart_server -1 true false
+            assert_equal [lindex [[srv -1 client] config get hash-seed] 1] $primary_seed
+            $replica config rewrite
+            restart_server 0 true false
+            assert_equal [lindex [[srv 0 client] config get hash-seed] 1] $replica_seed
         }
     }
 } {} {external:skip}

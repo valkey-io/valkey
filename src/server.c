@@ -2053,7 +2053,10 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
     /* Before we are going to sleep, let the threads access the dataset by
      * releasing the GIL. The server main thread will not touch anything at this
      * time. */
-    if (moduleCount()) moduleReleaseGIL();
+    if (moduleCount()) {
+        atomic_store_explicit(&server.module_gil_acquired, 0, memory_order_relaxed);
+        moduleReleaseGIL();
+    }
     /********************* WARNING ********************
      * Do NOT add anything below moduleReleaseGIL !!! *
      ***************************** ********************/
@@ -2075,6 +2078,7 @@ void afterSleep(struct aeEventLoop *eventLoop, int numevents) {
             atomic_store_explicit(&server.module_gil_acquiring, 1, memory_order_relaxed);
             moduleAcquireGIL();
             atomic_store_explicit(&server.module_gil_acquiring, 0, memory_order_relaxed);
+            atomic_store_explicit(&server.module_gil_acquired, 1, memory_order_relaxed);
             moduleFireServerEvent(VALKEYMODULE_EVENT_EVENTLOOP, VALKEYMODULE_SUBEVENT_EVENTLOOP_AFTER_SLEEP, NULL);
             latencyEndMonitor(latency);
             latencyAddSampleIfNeeded("module-acquire-GIL", latency);

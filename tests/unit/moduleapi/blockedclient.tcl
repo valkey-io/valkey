@@ -312,44 +312,25 @@ foreach call_type {nested normal} {
     }
 
     test {REPLY_AGAIN disconnect fires disconnect callback} {
-        # Start reblock.disconnect on a separate client, then kill that client.
         set rd [valkey_deferring_client]
+        $rd client id
+        set client_id [$rd read]
         $rd reblock.disconnect
-        after 100
-        # Get the client id
-        set clients [r client list]
-        set target_id ""
-        foreach line [split $clients "\n"] {
-            if {[string match "*cmd=reblock.disconnect*" $line]} {
-                regexp {id=(\d+)} $line -> target_id
-            }
+        assert_equal 1 [r client kill id $client_id]
+        wait_for_condition 50 20 {
+            [r reblock.get_disconnect_called] eq 1
+        } else {
+            fail "Failed waiting for disconnect callback"
         }
-        # Kill the client
-        if {$target_id ne ""} {
-            r client kill id $target_id
-        }
-        after 200
-        # Verify disconnect callback was called
-        assert_equal 1 [r reblock.get_disconnect_called]
         $rd close
     }
 
     test {REPLY_AGAIN CLIENT UNBLOCK triggers timeout callback} {
-        # Block a client with reblock that always returns REPLY_AGAIN
-        # then use CLIENT UNBLOCK to abort it — should trigger timeout cb
         set rd [valkey_deferring_client]
+        $rd client id
+        set client_id [$rd read]
         $rd reblock.timeout
-        after 100
-        set clients [r client list]
-        set target_id ""
-        foreach line [split $clients "\n"] {
-            if {[string match "*cmd=reblock.timeout*" $line]} {
-                regexp {id=(\d+)} $line -> target_id
-            }
-        }
-        if {$target_id ne ""} {
-            r client unblock $target_id timeout
-        }
+        assert_equal 1 [r client unblock $client_id timeout]
         set result [$rd read]
         assert_match "*Timed out*" $result
         $rd close

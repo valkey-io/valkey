@@ -1024,7 +1024,6 @@ int unblock_by_timer(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc)
 
 static int reblock_reply_count = 0;
 static volatile int reblock_disconnect_called = 0;
-static volatile int reblock_free_called = 0;
 
 /* Reply callback that re-blocks twice, then replies on the third call. */
 int reblock_reply(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
@@ -1043,7 +1042,6 @@ int reblock_reply(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
 void reblock_free(ValkeyModuleCtx *ctx, void *privdata) {
     UNUSED(ctx);
     UNUSED(privdata);
-    reblock_free_called++;
 }
 
 void reblock_disconnect(ValkeyModuleCtx *ctx, ValkeyModuleBlockedClient *bc) {
@@ -1055,11 +1053,12 @@ void reblock_disconnect(ValkeyModuleCtx *ctx, ValkeyModuleBlockedClient *bc) {
 static ValkeyModuleBlockedClient *reblock_bc = NULL;
 
 void reblock_timer_cb(ValkeyModuleCtx *ctx, void *data) {
-    UNUSED(ctx);
     UNUSED(data);
-    /* Each timer fire triggers one UnblockClient. The reply callback
-     * returns REPLY_AGAIN for the first two, then replies on the third. */
     ValkeyModule_UnblockClient(reblock_bc, NULL);
+    /* If not done yet, schedule the next unblock from this timer */
+    if (reblock_reply_count < 2) {
+        ValkeyModule_CreateTimer(ctx, 10, reblock_timer_cb, NULL);
+    }
 }
 
 /* Command: reblock.test — blocks, re-blocks twice, replies on third unblock */
@@ -1068,48 +1067,49 @@ int reblock_test_cmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) 
     UNUSED(argc);
     reblock_reply_count = 0;
     reblock_bc = ValkeyModule_BlockClient(ctx, reblock_reply, NULL, reblock_free, 5000);
-    /* Schedule 3 timer callbacks at 10ms intervals */
     ValkeyModule_CreateTimer(ctx, 10, reblock_timer_cb, NULL);
-    ValkeyModule_CreateTimer(ctx, 30, reblock_timer_cb, NULL);
-    ValkeyModule_CreateTimer(ctx, 50, reblock_timer_cb, NULL);
     return VALKEYMODULE_OK;
 }
 
-/* Reply callback that always re-blocks (to test timeout while re-blocked) */
+/* Reply callback that always re-blocks (to test timeout while re-blocked).
+ * Called exactly once — the initial UnblockClient triggers it, then the client
+ * stays re-blocked until timeout fires. */
+static int reblock_timeout_reply_count = 0;
+
 int reblock_timeout_reply(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     UNUSED(ctx);
     UNUSED(argv);
     UNUSED(argc);
+    reblock_timeout_reply_count++;
+    assert(reblock_timeout_reply_count == 1);
     return VALKEYMODULE_REPLY_AGAIN;
 }
 
 int reblock_timeout_cb(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     UNUSED(argv);
     UNUSED(argc);
+    ValkeyModuleBlockedClient *bc = ValkeyModule_GetBlockedClientHandle(ctx);
     ValkeyModule_ReplyWithSimpleString(ctx, "Timed out while re-blocked");
+    ValkeyModule_UnblockClient(bc, NULL);
     return VALKEYMODULE_OK;
 }
 
 static ValkeyModuleBlockedClient *reblock_timeout_bc = NULL;
 
-void reblock_timeout_timer_cb(ValkeyModuleCtx *ctx, void *data) {
-    UNUSED(ctx);
-    UNUSED(data);
-    ValkeyModule_UnblockClient(reblock_timeout_bc, NULL);
-}
-
 /* Command: reblock.timeout — blocks, re-blocks forever, should timeout */
 int reblock_timeout_cmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     UNUSED(argv);
     UNUSED(argc);
+    reblock_timeout_reply_count = 0;
     reblock_timeout_bc = ValkeyModule_BlockClient(ctx, reblock_timeout_reply, reblock_timeout_cb, reblock_free, 500);
     /* Unblock once to trigger the reply callback (which returns REPLY_AGAIN).
      * After that, timeout at 500ms should fire. */
-    ValkeyModule_CreateTimer(ctx, 10, reblock_timeout_timer_cb, NULL);
+    ValkeyModule_UnblockClient(reblock_timeout_bc, NULL);
     return VALKEYMODULE_OK;
 }
 
-/* Reply callback that always re-blocks (for disconnect test) */
+/* Reply callback that re-blocks until disconnect (reply cb is never called
+ * after disconnect since c == NULL, so this always returns REPLY_AGAIN) */
 int reblock_disconnect_reply(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     UNUSED(ctx);
     UNUSED(argv);
@@ -1123,7 +1123,6 @@ int reblock_disconnect_cmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int 
     UNUSED(argv);
     UNUSED(argc);
     reblock_disconnect_called = 0;
-    reblock_free_called = 0;
     ValkeyModuleBlockedClient *bc = ValkeyModule_BlockClient(ctx, reblock_disconnect_reply, NULL, reblock_free, 0);
     ValkeyModule_SetDisconnectCallback(bc, reblock_disconnect);
     /* Unblock once to trigger reply callback which returns REPLY_AGAIN */
@@ -1136,14 +1135,6 @@ int reblock_get_disconnect_called(ValkeyModuleCtx *ctx, ValkeyModuleString **arg
     UNUSED(argv);
     UNUSED(argc);
     ValkeyModule_ReplyWithLongLong(ctx, reblock_disconnect_called);
-    return VALKEYMODULE_OK;
-}
-
-/* Command: reblock.get_free_called — returns free callback count */
-int reblock_get_free_called(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
-    UNUSED(argv);
-    UNUSED(argc);
-    ValkeyModule_ReplyWithLongLong(ctx, reblock_free_called);
     return VALKEYMODULE_OK;
 }
 
@@ -1251,9 +1242,6 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
         return VALKEYMODULE_ERR;
 
     if (ValkeyModule_CreateCommand(ctx, "reblock.get_disconnect_called", reblock_get_disconnect_called, "", 0, 0, 0) == VALKEYMODULE_ERR)
-        return VALKEYMODULE_ERR;
-
-    if (ValkeyModule_CreateCommand(ctx, "reblock.get_free_called", reblock_get_free_called, "", 0, 0, 0) == VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
 
     return VALKEYMODULE_OK;

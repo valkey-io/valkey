@@ -8997,12 +8997,15 @@ void moduleHandleBlockedClients(void) {
 
         /* If reply callback returned VALKEYMODULE_REPLY_AGAIN, keep the client
          * blocked. The module must not have written any reply before returning
-         * this value. The module will call UnblockClient again later. */
+         * this value. The module will call UnblockClient again later.
+         * The module must handle timeout/disconnect by calling UnblockClient
+         * from those callbacks (standard blocked client contract). */
         if (reply_ret == VALKEYMODULE_REPLY_AGAIN) {
             moduleReleaseTempClient(bc->reply_client);
             moduleReleaseTempClient(bc->thread_safe_ctx_client);
             bc->reply_client = moduleAllocTempClient();
             bc->thread_safe_ctx_client = moduleAllocTempClient();
+            if (c) bc->reply_client->resp = c->resp;
             bc->unblocked = 0;
             pthread_mutex_lock(&moduleUnblockedClientsMutex);
             continue;

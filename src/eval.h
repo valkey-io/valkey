@@ -3,7 +3,8 @@
 
 #include <stdint.h>
 
-typedef struct listNode listNode;
+/* Forward declarations - these must match the actual types.
+ * Files including eval.h must include server.h first (for listNode via adlist.h). */
 typedef struct scriptingEngine scriptingEngine;
 
 typedef struct evalScript {
@@ -11,8 +12,8 @@ typedef struct evalScript {
     void *engine; /* scriptingEngine* */
     void *body;   /* robj* */
     uint64_t flags;
-    listNode *node; /* list node in scripts_lru_list list. */
-    char sha[40];   /* SHA1 hex, no null terminator (use memcmp/memcpy with length 40) */
+    struct listNode *node; /* list node in scripts_lru_list list. */
+    char sha[40];          /* SHA1 hex, no null terminator (use memcmp/memcpy with length 40) */
 } evalScript;
 
 void evalInit(void);

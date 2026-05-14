@@ -10,17 +10,15 @@
 #include "compression_stream.h"
 #include "rio.h"
 
-/* Compression rio wrapper. */
 typedef struct {
-    rio base; /* Must be first — allows casting to (rio *) */
+    rio base; /* Must be first — allows casting to (rio *). */
     rio *inner;
     streamWriter *writer;
     bool finalized;
 } compressRio;
 
-/* Decompression rio wrapper. */
 typedef struct {
-    rio base; /* Must be first */
+    rio base; /* Must be first. */
     rio *inner;
     streamReader *reader;
 } decompressRio;
@@ -31,21 +29,18 @@ typedef enum {
     DECOMPRESS_RIO_INIT_INCOMPATIBLE = 1,
 } decompressRioInitResult;
 
-/* --- Rio Decorator API --- */
 int rioInitWithCompress(compressRio *cr, rio *inner, const streamWriterConfig *cfg);
 int compressRioFinish(compressRio *cr);
 void compressRioDestroy(compressRio *cr);
 
-/* Initialize and probe a decompression adapter in one step.
- * Returns OK for both passthrough and compressed streams, INCOMPATIBLE for
- * malformed/unexpected stream envelopes, and ERROR for I/O or setup failures. */
+/* Probes the wrapped rio so the caller learns up front whether it is plain,
+ * compressed, or carrying an envelope this build cannot read. */
 decompressRioInitResult rioInitWithDecompress(decompressRio *dr,
                                               rio *inner,
                                               const streamReaderConfig *cfg,
                                               streamReaderInfo *info);
 streamReaderError decompressRioGetError(const decompressRio *dr);
 int decompressRioValidateEnd(decompressRio *dr);
-/* Destroy the adapter without additional I/O. */
 void decompressRioDestroy(decompressRio *dr);
 
 #endif /* COMPRESSION_RIO_H */

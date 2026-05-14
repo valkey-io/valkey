@@ -618,19 +618,17 @@ void rememberReplicaKeyWithExpire(serverDb *db, robj *key) {
     }
     if (db->id > 63) return;
 
-    dictEntry *de = dictAddOrFind(replicaKeysWithExpire, objectGetVal(key));
-    /* If the entry was just created, set it to a copy of the SDS string
-     * representing the key: we don't want to need to take those keys
-     * in sync with the main DB. The keys will be removed by expireReplicaKeys()
-     * as it scans to find keys to remove. */
-    if (dictGetKey(de) == objectGetVal(key)) {
-        dictSetKey(replicaKeysWithExpire, de, sdsdup(objectGetVal(key)));
-        dictSetUnsignedIntegerVal(de, 0);
+    dictEntry *existing = NULL;
+    dictEntry *de = dictAddRaw(replicaKeysWithExpire, objectGetVal(key), &existing);
+    if (de) {
+        /* New entry: own the key and initialize the bitmap. */
+        de->key = sdsdup(objectGetVal(key));
+        de->v.u64 = 0;
+    } else {
+        de = existing;
     }
 
-    uint64_t dbids = dictGetUnsignedIntegerVal(de);
-    dbids |= (uint64_t)1 << db->id;
-    dictSetUnsignedIntegerVal(de, dbids);
+    de->v.u64 |= (uint64_t)1 << db->id;
 }
 
 /* Return the number of keys we are tracking. */

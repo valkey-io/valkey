@@ -11,7 +11,6 @@ The Valkey project is led by a Technical Steering Committee, whose responsibilit
 
 * Have a question? Ask it on
   [GitHub Discussions](https://github.com/valkey-io/valkey/discussions)
-  or [Valkey's Discord](https://discord.gg/zbcPa5umUB)
   or [Valkey's Matrix](https://matrix.to/#/#valkey:matrix.org)
 * Found a bug? [Report it here](https://github.com/valkey-io/valkey/issues/new?template=bug_report.md&title=%5BBUG%5D)
 * Valkey crashed? [Submit a crash report here](https://github.com/valkey-io/valkey/issues/new?template=crash_report.md&title=%5BCRASH%5D+%3Cshort+description%3E)

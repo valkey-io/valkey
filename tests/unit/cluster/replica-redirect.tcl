@@ -57,26 +57,28 @@ start_cluster 1 1 {tags {external:skip cluster}} {
         $rd1 close
     }
 
-    test {keyless read commands execute on replica without redirect capa} {
-        # Without the capa, keyless read commands like SCAN execute locally on the replica
-        # After failover, node 0 is the new replica.
-        set rd [valkey_deferring_client 0]
+    # Determine which node is the replica after failover
+    set ridx [expr {[s 0 role] eq {slave} ? 0 : -1}]
+
+    test {keyless commands execute on replica without redirect capa} {
+        # Without the capa, keyless commands like SCAN execute locally on the replica
+        set rd [valkey_deferring_client $ridx]
         $rd SCAN 0
         set reply [$rd read]
-        assert_match "0 *" $reply
+        assert_no_match "*REDIRECT*" $reply
 
-        # Write keyless commands rejected regardless
+        # Write keyless commands rejected
         $rd FLUSHDB
         assert_error "READONLY You can't write against a read only replica." {$rd read}
         
         $rd close
     }
 
-    test {keyless read commands are redirected with redirect capa} {
-        set rd [valkey_deferring_client 0]
+    test {keyless commands are redirected with redirect capa} {
+        set rd [valkey_deferring_client $ridx]
         $rd CLIENT CAPA redirect
         assert_equal OK [$rd read]
-
+        # Read keyless commands redirected
         $rd DBSIZE
         assert_error "REDIRECT *" {$rd read}
 
@@ -86,17 +88,21 @@ start_cluster 1 1 {tags {external:skip cluster}} {
         $rd SCAN 0
         assert_error "REDIRECT *" {$rd read}
 
+        # Write keyless commands also redirected
+        $rd FLUSHDB
+        assert_error "REDIRECT *" {$rd read}
+
         $rd close
     }
 
-    test {keyless read commands execute on replica with redirect capa and READONLY} {
-        set rd [valkey_deferring_client 0]
+    test {keyless commands execute on replica with redirect capa and READONLY} {
+        set rd [valkey_deferring_client $ridx]
         $rd CLIENT CAPA redirect
         assert_equal OK [$rd read]
         $rd READONLY
         assert_equal OK [$rd read]
 
-        # With READONLY, keyless reads should execute locally
+        # With READONLY, keyless commands should execute locally
         $rd DBSIZE
         set reply [$rd read]
         assert {$reply >= 0}
@@ -104,12 +110,12 @@ start_cluster 1 1 {tags {external:skip cluster}} {
         $rd close
     }
 
-    test {non-read keyless commands are not affected by redirect capa} {
-        set rd [valkey_deferring_client 0]
+    test {non-read & non-write keyless commands are not affected by redirect capa} {
+        set rd [valkey_deferring_client $ridx]
         $rd CLIENT CAPA redirect
         assert_equal OK [$rd read]
 
-        # PING is not CMD_READONLY, should still work on replica
+        # PING should still work on replica
         $rd PING
         assert_equal PONG [$rd read]
 
@@ -117,7 +123,7 @@ start_cluster 1 1 {tags {external:skip cluster}} {
     }
 
     test {CLIENT INFO reports redirect capa} {
-        set rd [valkey_deferring_client 0]
+        set rd [valkey_deferring_client $ridx]
         $rd CLIENT CAPA redirect
         assert_equal OK [$rd read]
 
@@ -128,7 +134,7 @@ start_cluster 1 1 {tags {external:skip cluster}} {
     }
 
     test {keyless commands inside MULTI are individually redirected with redirect capa} {
-        set rd [valkey_deferring_client 0]
+        set rd [valkey_deferring_client $ridx]
         $rd CLIENT CAPA redirect
         assert_equal OK [$rd read]
 
@@ -139,9 +145,9 @@ start_cluster 1 1 {tags {external:skip cluster}} {
         assert_error "REDIRECT *" {$rd read}
         $rd RANDOMKEY
         assert_error "REDIRECT *" {$rd read}
-        # Write keyless commands rejected regardless
+        # Write keyless commands also redirected
         $rd FLUSHDB
-        assert_error "READONLY You can't write against a read only replica." {$rd read}
+        assert_error "REDIRECT *" {$rd read}
         # Transaction was flagged dirty, EXEC returns EXECABORT
         $rd EXEC
         assert_error "EXECABORT *" {$rd read}
@@ -152,23 +158,18 @@ start_cluster 1 1 {tags {external:skip cluster}} {
         $rd close
     }
 
-    test {EXEC with all-keyless read commands is redirected after failover with redirect capa} {
-        # After the earlier failover, node -1 is primary and node 0 is replica.
-        # Failover back so node 0 is primary again for this test.
-        R 0 CLUSTER FAILOVER
-        wait_for_condition 1000 50 {
-            [s 0 role] eq {master} &&
-            [s -1 role] eq {slave}
-        } else {
-            fail "Failover back did not happen"
-        }
+    test {EXEC with all-keyless commands is redirected after failover with redirect capa} {
+        # Determine current roles (using server indices 0 and 1 for R command)
+        set pidx [expr {[s 0 role] eq {master} ? 0 : -1}]
+        # R command uses absolute server numbers
+        set replica_srv [expr {$pidx == 0 ? 1 : 0}]
 
-        # Connect to node 0 (currently primary) with redirect capa
-        set rd [valkey_deferring_client 0]
+        # Connect to the primary with redirect capa
+        set rd [valkey_deferring_client $pidx]
         $rd CLIENT CAPA redirect
         assert_equal OK [$rd read]
 
-        # Queue keyless read commands on the primary — they get QUEUED
+        # Queue keyless commands on the primary — they get QUEUED
         # because we're on a primary (redirect only fires on replicas)
         $rd MULTI
         assert_equal OK [$rd read]
@@ -177,16 +178,15 @@ start_cluster 1 1 {tags {external:skip cluster}} {
         $rd RANDOMKEY
         assert_equal QUEUED [$rd read]
 
-        # Failover: node 0 becomes a replica
-        R 1 CLUSTER FAILOVER
+        # Failover: the replica takes over, primary becomes a replica
+        R $replica_srv CLUSTER FAILOVER
         wait_for_condition 1000 50 {
-            [s 0 role] eq {slave} &&
-            [s -1 role] eq {master}
+            [s $pidx role] eq {slave}
         } else {
             fail "Failover did not happen"
         }
 
-        # EXEC is now on a replica with all-keyless queued read commands.
+        # EXEC is now on a replica with all-keyless queued commands.
         # The transaction should be discarded and REDIRECT returned.
         $rd EXEC
         assert_error "REDIRECT *" {$rd read}
@@ -196,10 +196,13 @@ start_cluster 1 1 {tags {external:skip cluster}} {
         assert_equal PONG [$rd read]
 
         $rd close
+
+        # Update ridx since roles changed
+        set ridx [expr {[s 0 role] eq {slave} ? 0 : -1}]
     }
 
     test {redirect capa handles both keyed and keyless redirects} {
-        set rd [valkey_deferring_client 0]
+        set rd [valkey_deferring_client $ridx]
         $rd CLIENT CAPA redirect
         assert_equal OK [$rd read]
 

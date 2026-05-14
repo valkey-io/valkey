@@ -4458,12 +4458,12 @@ int processCommand(client *c) {
     }
 
     /* If the client has the redirect capability, redirect keyless
-     * read commands to the primary when this is a replica and the client
+     * commands to the primary when this is a replica and the client
      * has not opted into replica reads with READONLY. EXEC with all-keyless
      * queued commands is also considered keyless (c->slot remains -1 as set
      * by prepareCommand when no keys are found). */
     int is_keyless_exec = is_exec && c->slot == -1;
-    if (server.cluster_enabled && !obey_client && (is_keyless || is_keyless_exec) && is_read_command &&
+    if (server.cluster_enabled && !obey_client && (is_keyless || is_keyless_exec) && (is_read_command || is_write_command) &&
         (c->capa & CLIENT_CAPA_REDIRECT) && !c->flag.readonly) {
         clusterNode *myself = getMyClusterNode();
         if (clusterNodeIsReplica(myself)) {

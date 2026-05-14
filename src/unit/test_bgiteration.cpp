@@ -245,16 +245,11 @@ class BgIterationTest : public ::testing::Test {
         }
 
 
-        void addKeyAndValObjsToDb(int dbid, sds key, sds val) {
-            robj *key_obj = createStringObjectFromSds(key);
-            robj *val_obj = createStringObjectFromSds(val);
+        void addKeyToDb(int dbid, const char *key, const char *val) {
+            robj *key_obj = createStringObject(key, strlen(key));
+            robj *val_obj = createStringObject(val, strlen(val));
             dbAdd(server.db[dbid], key_obj, &val_obj);
             decrRefCount(key_obj);
-        }
-
-
-        void addKeyToDb(int dbid, const char *key, const char *val) {
-            addKeyAndValObjsToDb(dbid, sdsnew(key), sdsnew(val));
         }
 
 

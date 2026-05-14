@@ -807,7 +807,7 @@ dictType migrateCacheDictType = {
     .entryDestructor = dictEntryDestructorSdsKey,
 };
 
-/* Dict for for case-insensitive search using null terminated C strings.
+/* Dict for case-insensitive search using null terminated C strings.
  * The keys stored in dict are sds though. */
 dictType stringSetDictType = {
     .entryGetKey = dictEntryGetKey,

@@ -55,6 +55,7 @@ extern clusterBusType clusterLegacyBus;
 clusterBusType *clusterCurrentBus = &clusterLegacyBus;
 
 static void clusterCommandFlushslot(client *c);
+static void clusterCheckReplicaMigration(void);
 
 /* -----------------------------------------------------------------------------
  * Cluster bus dispatchers
@@ -147,6 +148,7 @@ void clusterInitLast(void) {
 void clusterCron(void) {
     clusterSlotMigrationCron();
     clusterCurrentBus->cron();
+    clusterCheckReplicaMigration();
 }
 void clusterBeforeSleep(void) {
     if (server.cluster->before_sleep_handle_slot_migration) {
@@ -406,6 +408,139 @@ void clusterHandleLostLastSlot(clusterNode *target) {
                   "in shard %.40s. I am now an empty primary.",
                   target->name, humanNodename(target), target->shard_id);
     }
+}
+
+/* -----------------------------------------------------------------------------
+ * CLUSTER replica migration
+ *
+ * Replica migration is the process that allows a replica of a primary that is
+ * already covered by at least another replica, to "migrate" to a primary that
+ * is orphaned, that is, left with no working replicas.
+ * -------------------------------------------------------------------------- */
+
+#define CLUSTER_REPLICA_MIGRATION_DELAY 5000 /* Delay for replica migration. */
+
+/* This function is responsible to decide if this replica should be migrated
+ * to a different (orphaned) primary. It is called by the clusterCron() function
+ * only if:
+ *
+ * 1) We are a replica node.
+ * 2) It was detected that there is at least one orphaned primary in
+ *    the cluster.
+ * 3) We are a replica of one of the primaries with the greatest number of
+ *    replicas.
+ *
+ * This checks are performed by the caller since it requires to iterate
+ * the nodes anyway, so we spend time into clusterHandleReplicaMigration()
+ * if definitely needed.
+ *
+ * The function is called with a pre-computed max_replicas, that is the max
+ * number of working (not in FAIL state) replicas for a single primary.
+ *
+ * Additional conditions for migration are examined inside the function.
+ */
+static void clusterHandleReplicaMigration(int max_replicas) {
+    int j, ok_replicas = 0;
+    clusterNode *my_primary = myself->replicaof, *target = NULL, *candidate = NULL;
+    dictIterator *di;
+    dictEntry *de;
+
+    /* Step 1: Don't migrate if the cluster state is not ok. */
+    if (server.cluster->state != CLUSTER_OK) return;
+
+    /* Step 2: Don't migrate if my primary will not be left with at least
+     *         'migration-barrier' replicas after my migration. */
+    if (my_primary == NULL) return;
+    for (j = 0; j < my_primary->num_replicas; j++)
+        if (!nodeFailed(my_primary->replicas[j]) && !nodeTimedOut(my_primary->replicas[j])) ok_replicas++;
+    if (ok_replicas <= server.cluster_migration_barrier) return;
+
+    /* Step 3: Identify a candidate for migration, and check if among the
+     * primaries with the greatest number of ok replicas, I'm the one with the
+     * smallest node ID (the "candidate replica").
+     *
+     * Note: this means that eventually a replica migration will occur
+     * since replicas that are reachable again always have their FAIL flag
+     * cleared, so eventually there must be a candidate.
+     * There is a possible race condition causing multiple
+     * replicas to migrate at the same time, but this is unlikely to
+     * happen and relatively harmless when it does. */
+    candidate = myself;
+    di = dictGetSafeIterator(server.cluster->nodes);
+    while ((de = dictNext(di)) != NULL) {
+        clusterNode *node = dictGetVal(de);
+        int ok_replicas = 0, is_orphaned = 1;
+
+        /* We want to migrate only if this primary is working, orphaned, and
+         * used to have replicas or if failed over a primary that had replicas
+         * (MIGRATE_TO flag). This way we only migrate to instances that were
+         * supposed to have replicas. */
+        if (nodeIsReplica(node) || nodeFailed(node)) is_orphaned = 0;
+        if (!(node->flags & CLUSTER_NODE_MIGRATE_TO)) is_orphaned = 0;
+
+        /* Check number of working replicas. */
+        if (clusterNodeIsPrimary(node)) ok_replicas = clusterCountNonFailingReplicas(node);
+        if (ok_replicas > 0) is_orphaned = 0;
+
+        if (is_orphaned) {
+            if (!target && node->numslots > 0) target = node;
+
+            /* Track the starting time of the orphaned condition for this
+             * primary. */
+            if (!node->orphaned_time) node->orphaned_time = mstime();
+        } else {
+            node->orphaned_time = 0;
+        }
+
+        /* Check if I'm the replica candidate for the migration: attached
+         * to a primary with the maximum number of replicas and with the smallest
+         * node ID. */
+        if (ok_replicas == max_replicas) {
+            for (j = 0; j < node->num_replicas; j++) {
+                if (memcmp(node->replicas[j]->name, candidate->name, CLUSTER_NAMELEN) < 0) {
+                    candidate = node->replicas[j];
+                }
+            }
+        }
+    }
+    dictReleaseIterator(di);
+
+    /* Step 4: perform the migration if there is a target, and if I'm the
+     * candidate, but only if the primary is continuously orphaned for a
+     * couple of seconds, so that during failovers, we give some time to
+     * the natural replicas of this instance to advertise their switch from
+     * the old primary to the new one. */
+    if (target && candidate == myself && (mstime() - target->orphaned_time) > CLUSTER_REPLICA_MIGRATION_DELAY &&
+        !(server.cluster_module_flags & CLUSTER_MODULE_FLAG_NO_FAILOVER)) {
+        serverLog(LL_NOTICE, "Migrating to orphaned primary %.40s (%s) in shard %.40s", target->name,
+                  humanNodename(target), target->shard_id);
+        clusterCurrentBus->setReplicaOf(target, NULL, NULL);
+    }
+}
+
+/* Called periodically to check if this replica should migrate to an orphaned
+ * primary. Computes orphaned-primary stats and calls clusterHandleReplicaMigration
+ * if conditions are met. */
+static void clusterCheckReplicaMigration(void) {
+    if (!nodeIsReplica(myself) || !server.cluster_allow_replica_migration) return;
+
+    int orphaned_primaries = 0, max_replicas = 0, this_replicas = 0;
+    dictIterator *di = dictGetSafeIterator(server.cluster->nodes);
+    dictEntry *de;
+    while ((de = dictNext(di)) != NULL) {
+        clusterNode *node = dictGetVal(de);
+        if (node->flags & (CLUSTER_NODE_MYSELF | CLUSTER_NODE_NOADDR)) continue;
+        if (clusterNodeIsPrimary(node) && !nodeFailed(node)) {
+            int ok_replicas = clusterCountNonFailingReplicas(node);
+            if (ok_replicas == 0 && node->numslots > 0 && node->flags & CLUSTER_NODE_MIGRATE_TO)
+                orphaned_primaries++;
+            if (ok_replicas > max_replicas) max_replicas = ok_replicas;
+            if (myself->replicaof == node) this_replicas = ok_replicas;
+        }
+    }
+    dictReleaseIterator(di);
+    if (orphaned_primaries && max_replicas >= 2 && this_replicas == max_replicas)
+        clusterHandleReplicaMigration(max_replicas);
 }
 
 /* -----------------------------------------------------------------------------
@@ -1279,10 +1414,17 @@ void clusterKeySlotCommand(client *c) {
     addReplyLongLong(c, keyHashSlot(key, sdslen(key)));
 }
 
-/* Callback for CLUSTER ADDSLOTS/DELSLOTS/ADDSLOTSRANGE/DELSLOTSRANGE.
- * Called after the slot change is applied. This may be called inline
- * or asynchronously if the change goes through cluster consensus. */
-static void clusterAddDelSlotsCallback(void *ctx, const char *error) {
+/* Completion callback for async-capable cluster admin subcommands: ADDSLOTS,
+ * DELSLOTS, ADDSLOTSRANGE, DELSLOTSRANGE, SETSLOT NODE, MEET, FORGET,
+ * REPLICATE, FAILOVER.
+ *
+ * Called after the change is fully applied. This may be called inline or
+ * asynchronously if the change goes through cluster consensus.
+ *
+ * The ctx is the blocked client handle. If the client is still connected when
+ * the callback fires, an error reply is sent if error is non-NULL and an OK
+ * reply is sent otherwise. */
+static void clusterCommandCompletion(void *ctx, const char *error) {
     client *c = consumeBlockedClientAsyncHandle((blockedAsyncHandle *)ctx);
     if (!c) return;
     if (error) {
@@ -1293,16 +1435,20 @@ static void clusterAddDelSlotsCallback(void *ctx, const char *error) {
     unblockClientAsync(c);
 }
 
-/* Callback for CLUSTER SETSLOT NODE after the slot change is applied.
- * Handles replica migration if this shard lost its last slot. */
-static void clusterSetSlotNodeCallback(void *ctx, const char *error) {
+/* Completion callback for CLUSTER REPLICATE NO ONE. Ctx is blocked client handle. */
+static void clusterCommandPromoteCompletion(void *ctx, const char *error) {
     client *c = consumeBlockedClientAsyncHandle((blockedAsyncHandle *)ctx);
     if (!c) return;
     if (error) {
         addReplyError(c, error);
-    } else {
-        addReply(c, shared.ok);
+        unblockClientAsync(c);
+        return;
     }
+    flushAllDataAndResetRDB(server.repl_replica_lazy_flush ? EMPTYDB_ASYNC : EMPTYDB_NO_FLAGS);
+    verifyClusterConfigWithData();
+    clusterCloseAllSlots();
+    clusterCancelManualFailover();
+    addReply(c, shared.ok);
     unblockClientAsync(c);
 }
 
@@ -1565,77 +1711,12 @@ void clusterCommandSetSlot(client *c) {
             clusterSlotChange(&range, 1, n, NULL, NULL);
         } else {
             void *h = blockClientAsync(c);
-            clusterSlotChange(&range, 1, n, h, clusterSetSlotNodeCallback);
+            clusterSlotChange(&range, 1, n, h, clusterCommandCompletion);
         }
         return;
     }
 
     addReply(c, shared.ok);
-}
-
-
-/* Completion callbacks for async-capable cluster commands. The ctx is the
- * client. On error, an error reply is sent. On success, the command-specific
- * post-action work is done and an OK reply is sent. */
-
-static void clusterCommandMeetCompletion(void *ctx, const char *error) {
-    client *c = consumeBlockedClientAsyncHandle((blockedAsyncHandle *)ctx);
-    if (!c) return;
-    if (error) {
-        addReplyError(c, error);
-    } else {
-        addReply(c, shared.ok);
-    }
-    unblockClientAsync(c);
-}
-
-static void clusterCommandForgetCompletion(void *ctx, const char *error) {
-    client *c = consumeBlockedClientAsyncHandle((blockedAsyncHandle *)ctx);
-    if (!c) return;
-    if (error) {
-        addReplyError(c, error);
-    } else {
-        addReply(c, shared.ok);
-    }
-    unblockClientAsync(c);
-}
-
-static void clusterCommandReplicateCompletion(void *ctx, const char *error) {
-    client *c = consumeBlockedClientAsyncHandle((blockedAsyncHandle *)ctx);
-    if (!c) return;
-    if (error) {
-        addReplyError(c, error);
-    } else {
-        addReply(c, shared.ok);
-    }
-    unblockClientAsync(c);
-}
-
-static void clusterCommandPromoteCompletion(void *ctx, const char *error) {
-    client *c = consumeBlockedClientAsyncHandle((blockedAsyncHandle *)ctx);
-    if (!c) return;
-    if (error) {
-        addReplyError(c, error);
-        unblockClientAsync(c);
-        return;
-    }
-    flushAllDataAndResetRDB(server.repl_replica_lazy_flush ? EMPTYDB_ASYNC : EMPTYDB_NO_FLAGS);
-    verifyClusterConfigWithData();
-    clusterCloseAllSlots();
-    clusterCancelManualFailover();
-    addReply(c, shared.ok);
-    unblockClientAsync(c);
-}
-
-static void clusterCommandFailoverCompletion(void *ctx, const char *error) {
-    client *c = consumeBlockedClientAsyncHandle((blockedAsyncHandle *)ctx);
-    if (!c) return;
-    if (error) {
-        addReplyError(c, error);
-    } else {
-        addReply(c, shared.ok);
-    }
-    unblockClientAsync(c);
 }
 
 void clusterCommand(client *c) {
@@ -1755,7 +1836,7 @@ void clusterCommand(client *c) {
         void *h = blockClientAsync(c);
         clusterSlotChange(ranges, numslots,
                           del ? NULL : getMyClusterNode(),
-                          h, clusterAddDelSlotsCallback);
+                          h, clusterCommandCompletion);
         zfree(ranges);
     } else if ((!strcasecmp(objectGetVal(c->argv[1]), "addslotsrange") || !strcasecmp(objectGetVal(c->argv[1]), "delslotsrange")) &&
                c->argc >= 4) {
@@ -1802,7 +1883,7 @@ void clusterCommand(client *c) {
         void *h = blockClientAsync(c);
         clusterSlotChange(ranges, numranges,
                           del ? NULL : getMyClusterNode(),
-                          h, clusterAddDelSlotsCallback);
+                          h, clusterCommandCompletion);
         zfree(ranges);
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "flushslots") && c->argc == 2) {
         /* CLUSTER FLUSHSLOTS */
@@ -1832,7 +1913,7 @@ void clusterCommand(client *c) {
             if (in_range) numranges++;
             void *h = blockClientAsync(c);
             clusterSlotChange(ranges, numranges, NULL,
-                              h, clusterAddDelSlotsCallback);
+                              h, clusterCommandCompletion);
             zfree(ranges);
         }
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "setslot") && c->argc >= 4) {
@@ -1894,7 +1975,7 @@ void clusterCommand(client *c) {
                   (char *)objectGetVal(c->argv[2]), port, cl);
         sdsfree(cl);
         void *h = blockClientAsync(c);
-        clusterCurrentBus->meet(objectGetVal(c->argv[2]), port, cport, h, clusterCommandMeetCompletion);
+        clusterCurrentBus->meet(objectGetVal(c->argv[2]), port, cport, h, clusterCommandCompletion);
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "reset") && (c->argc == 2 || c->argc == 3)) {
         /* CLUSTER RESET [SOFT|HARD] */
         int hard = 0;
@@ -1981,7 +2062,7 @@ void clusterCommand(client *c) {
             clusterCurrentBus->failover(force, takeover, NULL, NULL);
         } else {
             void *h = blockClientAsync(c);
-            clusterCurrentBus->failover(force, takeover, h, clusterCommandFailoverCompletion);
+            clusterCurrentBus->failover(force, takeover, h, clusterCommandCompletion);
         }
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "replicate") &&
                (c->argc == 3 || c->argc == 4)) {
@@ -2036,7 +2117,7 @@ void clusterCommand(client *c) {
             return;
         }
         void *h = blockClientAsync(c);
-        clusterCurrentBus->setReplicaOf(n, h, clusterCommandReplicateCompletion);
+        clusterCurrentBus->setReplicaOf(n, h, clusterCommandCompletion);
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "forget") && c->argc == 3) {
         /* CLUSTER FORGET <NODE ID> */
         const char *node_id = objectGetVal(c->argv[2]);
@@ -2059,7 +2140,7 @@ void clusterCommand(client *c) {
             sdsfree(cl);
         }
         void *h = blockClientAsync(c);
-        clusterCurrentBus->forgetNode(node_id, id_len, h, clusterCommandForgetCompletion);
+        clusterCurrentBus->forgetNode(node_id, id_len, h, clusterCommandCompletion);
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "count-failure-reports") && c->argc == 3) {
         /* CLUSTER COUNT-FAILURE-REPORTS <NODE ID> */
         clusterNode *n = clusterLookupNode(objectGetVal(c->argv[2]),

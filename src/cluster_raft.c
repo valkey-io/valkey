@@ -841,7 +841,7 @@ static void raftLogApply(raftLogEntry *e) {
         if (argv && argc >= 2 && sdslen(argv[0]) == CLUSTER_NAMELEN) {
             clusterNode *existing = clusterLookupNode(argv[0], CLUSTER_NAMELEN);
             if (!existing) {
-                clusterNode *n = createClusterNode(argv[0], 0);
+                clusterNode *n = createClusterNode(argv[0], CLUSTER_NODE_PRIMARY);
                 if (clusterNodeParseAddressString(n, argv[1]) == C_OK) {
                     serverLog(LL_DEBUG, "TRACE NODE_JOIN parseAddr %.40s ip=%s", n->name, n->ip);
                     clusterAddNode(n);

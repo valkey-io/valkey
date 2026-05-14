@@ -57,7 +57,6 @@
 /* Legacy-specific defines. */
 #define CLUSTER_FAIL_REPORT_VALIDITY_MULT 2  /* Fail report validity. */
 #define CLUSTER_FAIL_UNDO_TIME_MULT 2        /* Undo fail if primary is back. */
-#define CLUSTER_REPLICA_MIGRATION_DELAY 5000 /* Delay for replica migration. */
 
 /* clusterState todo_before_sleep flags. */
 #define CLUSTER_TODO_HANDLE_FAILOVER (1 << 0)
@@ -98,7 +97,6 @@ typedef struct clusterNodeLegacyData {
     mstime_t pong_received;                 /* Unix time we received the pong */
     mstime_t meet_sent;                     /* Unix time we sent latest meet packet */
     mstime_t fail_time;                     /* Unix time when FAIL flag was set */
-    mstime_t orphaned_time;                 /* Starting time of orphaned primary condition */
     rax *fail_reports;                      /* Radix tree for failure reports with sorted order by timestamp */
 } clusterNodeLegacyData;
 
@@ -438,7 +436,6 @@ void clusterSendFail(char *nodename);
 void clusterSendFailoverAuthIfNeeded(clusterNode *node, clusterMsg *request);
 void clusterMoveNodeSlots(clusterNode *from_node, clusterNode *to_node, int *slots, int *importing_slots, int *migrating_slots);
 void clusterHandleReplicaFailover(void);
-void clusterHandleReplicaMigration(int max_replicas);
 void clusterSendUpdate(clusterLink *link, clusterNode *node);
 static void clusterLegacyCancelManualFailover(void);
 void clusterSetNodeAsPrimary(clusterNode *n);
@@ -1029,7 +1026,6 @@ static void clusterLegacyInitNodeData(clusterNode *node) {
     legacy->pong_received = 0;
     legacy->meet_sent = 0;
     legacy->fail_time = 0;
-    legacy->orphaned_time = 0;
     legacy->fail_reports = raxNew();
 }
 
@@ -4361,115 +4357,6 @@ void clusterHandleReplicaFailover(void) {
 }
 
 /* -----------------------------------------------------------------------------
- * CLUSTER replica migration
- *
- * Replica migration is the process that allows a replica of a primary that is
- * already covered by at least another replica, to "migrate" to a primary that
- * is orphaned, that is, left with no working replicas.
- * ------------------------------------------------------------------------- */
-
-/* This function is responsible to decide if this replica should be migrated
- * to a different (orphaned) primary. It is called by the clusterLegacyCron() function
- * only if:
- *
- * 1) We are a replica node.
- * 2) It was detected that there is at least one orphaned primary in
- *    the cluster.
- * 3) We are a replica of one of the primaries with the greatest number of
- *    replicas.
- *
- * This checks are performed by the caller since it requires to iterate
- * the nodes anyway, so we spend time into clusterHandleReplicaMigration()
- * if definitely needed.
- *
- * The function is called with a pre-computed max_replicas, that is the max
- * number of working (not in FAIL state) replicas for a single primary.
- *
- * Additional conditions for migration are examined inside the function.
- */
-void clusterHandleReplicaMigration(int max_replicas) {
-    int j, ok_replicas = 0;
-    clusterNode *my_primary = myself->replicaof, *target = NULL, *candidate = NULL;
-    dictIterator *di;
-    dictEntry *de;
-
-    /* Step 1: Don't migrate if the cluster state is not ok. */
-    if (server.cluster->state != CLUSTER_OK) return;
-
-    /* Step 2: Don't migrate if my primary will not be left with at least
-     *         'migration-barrier' replicas after my migration. */
-    if (my_primary == NULL) return;
-    for (j = 0; j < my_primary->num_replicas; j++)
-        if (!nodeFailed(my_primary->replicas[j]) && !nodeTimedOut(my_primary->replicas[j])) ok_replicas++;
-    if (ok_replicas <= server.cluster_migration_barrier) return;
-
-    /* Step 3: Identify a candidate for migration, and check if among the
-     * primaries with the greatest number of ok replicas, I'm the one with the
-     * smallest node ID (the "candidate replica").
-     *
-     * Note: this means that eventually a replica migration will occur
-     * since replicas that are reachable again always have their FAIL flag
-     * cleared, so eventually there must be a candidate.
-     * There is a possible race condition causing multiple
-     * replicas to migrate at the same time, but this is unlikely to
-     * happen and relatively harmless when it does. */
-    candidate = myself;
-    di = dictGetSafeIterator(server.cluster->nodes);
-    while ((de = dictNext(di)) != NULL) {
-        clusterNode *node = dictGetVal(de);
-        int ok_replicas = 0, is_orphaned = 1;
-
-        /* We want to migrate only if this primary is working, orphaned, and
-         * used to have replicas or if failed over a primary that had replicas
-         * (MIGRATE_TO flag). This way we only migrate to instances that were
-         * supposed to have replicas. */
-        if (nodeIsReplica(node) || nodeFailed(node)) is_orphaned = 0;
-        if (!(node->flags & CLUSTER_NODE_MIGRATE_TO)) is_orphaned = 0;
-
-        /* Check number of working replicas. */
-        if (clusterNodeIsPrimary(node)) ok_replicas = clusterCountNonFailingReplicas(node);
-        if (ok_replicas > 0) is_orphaned = 0;
-
-        if (is_orphaned) {
-            if (!target && node->numslots > 0) target = node;
-
-            /* Track the starting time of the orphaned condition for this
-             * primary. */
-            if (!LEGACY_DATA(node)->orphaned_time) LEGACY_DATA(node)->orphaned_time = mstime();
-        } else {
-            LEGACY_DATA(node)->orphaned_time = 0;
-        }
-
-        /* Check if I'm the replica candidate for the migration: attached
-         * to a primary with the maximum number of replicas and with the smallest
-         * node ID. */
-        if (ok_replicas == max_replicas) {
-            for (j = 0; j < node->num_replicas; j++) {
-                if (memcmp(node->replicas[j]->name, candidate->name, CLUSTER_NAMELEN) < 0) {
-                    candidate = node->replicas[j];
-                }
-            }
-        }
-    }
-    dictReleaseIterator(di);
-
-    /* Step 4: perform the migration if there is a target, and if I'm the
-     * candidate, but only if the primary is continuously orphaned for a
-     * couple of seconds, so that during failovers, we give some time to
-     * the natural replicas of this instance to advertise their switch from
-     * the old primary to the new one. */
-    if (target && candidate == myself && (mstime() - LEGACY_DATA(target)->orphaned_time) > CLUSTER_REPLICA_MIGRATION_DELAY &&
-        !(server.cluster_module_flags & CLUSTER_MODULE_FLAG_NO_FAILOVER)) {
-        serverLog(LL_NOTICE, "Migrating to orphaned primary %.40s (%s) in shard %.40s", target->name,
-                  humanNodename(target), target->shard_id);
-        /* We are migrating to a different shard that has a completely different
-         * replication history, so a full sync is required. */
-        clusterSetPrimary(target, 1, 1);
-        clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_FSYNC_CONFIG | CLUSTER_TODO_BROADCAST_ALL);
-    }
-}
-
-/* -----------------------------------------------------------------------------
  * CLUSTER manual failover
  *
  * This are the important steps performed by replicas during a manual failover:
@@ -4614,9 +4501,6 @@ static void clusterLegacyCron(void) {
     dictIterator *di;
     dictEntry *de;
     int update_state = 0;
-    int orphaned_primaries; /* How many primaries there are without ok replicas. */
-    int max_replicas;       /* Max number of ok replicas for a single primary. */
-    int this_replicas;      /* Number of ok replicas for our primary (if we are replica). */
     mstime_t min_pong = 0, now = mstime();
     clusterNode *min_pong_node = NULL;
     static unsigned long long iteration = 0;
@@ -4660,36 +4544,13 @@ static void clusterLegacyCron(void) {
         }
     }
 
-    /* Iterate nodes to check if we need to flag something as failing.
-     * This loop is also responsible to:
-     * 1) Check if there are orphaned primaries (primaries without non failing
-     *    replicas).
-     * 2) Count the max number of non failing replicas for a single primary.
-     * 3) Count the number of replicas for our primary, if we are a replica. */
-    orphaned_primaries = 0;
-    max_replicas = 0;
-    this_replicas = 0;
+    /* Iterate nodes to check if we need to flag something as failing. */
     di = dictGetSafeIterator(server.cluster->nodes);
     while ((de = dictNext(di)) != NULL) {
         clusterNode *node = dictGetVal(de);
         now = mstime(); /* Use an updated time at every iteration. */
 
         if (node->flags & (CLUSTER_NODE_MYSELF | CLUSTER_NODE_NOADDR | CLUSTER_NODE_HANDSHAKE)) continue;
-
-        /* Orphaned primary check, useful only if the current instance
-         * is a replica that may migrate to another primary. */
-        if (nodeIsReplica(myself) && clusterNodeIsPrimary(node) && !nodeFailed(node)) {
-            int ok_replicas = clusterCountNonFailingReplicas(node);
-
-            /* A primary is orphaned if it is serving a non-zero number of
-             * slots, have no working replicas, but used to have at least one
-             * replica, or failed over a primary that used to have replicas. */
-            if (ok_replicas == 0 && node->numslots > 0 && node->flags & CLUSTER_NODE_MIGRATE_TO) {
-                orphaned_primaries++;
-            }
-            if (ok_replicas > max_replicas) max_replicas = ok_replicas;
-            if (myself->replicaof == node) this_replicas = ok_replicas;
-        }
 
         /* If we are not receiving any data for more than half the cluster
          * timeout, reconnect the link: maybe there is a connection
@@ -4768,14 +4629,6 @@ static void clusterLegacyCron(void) {
     if (nodeIsReplica(myself)) {
         clusterHandleManualFailover();
         if (!(server.cluster_module_flags & CLUSTER_MODULE_FLAG_NO_FAILOVER)) clusterHandleReplicaFailover();
-        /* If there are orphaned replicas, and we are a replica among the primaries
-         * with the max number of non-failing replicas, consider migrating to
-         * the orphaned primaries. Note that it does not make sense to try
-         * a migration if there is no primary with at least *two* working
-         * replicas. */
-        if (orphaned_primaries && max_replicas >= 2 && this_replicas == max_replicas &&
-            server.cluster_allow_replica_migration)
-            clusterHandleReplicaMigration(max_replicas);
     }
 
     if (update_state || server.cluster->state == CLUSTER_FAIL) clusterUpdateState();

@@ -437,7 +437,7 @@ start_cluster 3 0 {tags {external:skip cluster cluster-v2:skip} overrides {clust
 # Replica migration test.
 # Check that orphaned primaries are joined by replicas of primaries having
 # multiple replicas attached, according to the migration barrier settings.
-start_cluster 5 10 {tags {external:skip cluster cluster-v2:skip} overrides {shutdown-timeout 0}} {
+start_cluster 5 10 {tags {external:skip cluster} overrides {shutdown-timeout 0}} {
     # Killing all the replicas of primary #0 and #1
     pause_process [srv -5 pid]
     pause_process [srv -10 pid]

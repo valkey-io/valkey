@@ -136,7 +136,7 @@ new features, performance improvements, and bug fixes.
 * Strictly check CRLF when parsing querybuf by @enjoy-binbin (#2872)
 
 ### Contributors
-* abmathur-ie @abmathur-ie
+* Abhishek Mathur @abmathur-ie
 * Adam Fowler @adam-fowler
 * Aditya Teltia @AdityaTeltia
 * Akash Kumar @akashkgit

@@ -54,10 +54,10 @@ void lazyFreeErrors(void *args[]) {
 
 /* Release the eval scripts data structures. */
 void lazyFreeEvalScripts(void *args[]) {
-    dict *scripts = args[0];
+    hashtable *scripts = args[0];
     list *scripts_lru_list = args[1];
     list *engine_callbacks = args[2];
-    long long len = dictSize(scripts);
+    long long len = hashtableSize(scripts);
     freeEvalScripts(scripts, scripts_lru_list, engine_callbacks);
     atomic_fetch_sub_explicit(&lazyfree_objects, len, memory_order_relaxed);
     atomic_fetch_add_explicit(&lazyfreed_objects, len, memory_order_relaxed);
@@ -245,9 +245,7 @@ void freeErrorsRadixTreeAsync(rax *errors) {
     }
 }
 
-/* Free scripts dict, and lru list, if the dict is huge enough, free them in
- * async way.
- * Close lua interpreter, if there are a lot of lua scripts, close it in async way. */
+/* Free eval scripts hashtable and lru list. If large enough, free in async. */
 void freeEvalScriptsAsync(hashtable *scripts, list *scripts_lru_list, list *engine_callbacks) {
     if (hashtableSize(scripts) > LAZYFREE_THRESHOLD) {
         atomic_fetch_add_explicit(&lazyfree_objects, hashtableSize(scripts), memory_order_relaxed);

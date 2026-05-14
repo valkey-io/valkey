@@ -296,7 +296,65 @@ foreach call_type {nested normal} {
         # when the client is unlock, we will get the OK reply from timer.
         assert_match "OK" [r unblock_by_timer 100 100]
     }
-    
+
+    test {REPLY_AGAIN re-blocks and eventually replies} {
+        # reblock.test: blocks, reply callback returns REPLY_AGAIN twice,
+        # then replies with the call count (3) on the third unblock.
+        set result [r reblock.test]
+        assert_equal 3 $result
+    }
+
+    test {REPLY_AGAIN with timeout fires timeout callback} {
+        # reblock.timeout: reply callback always returns REPLY_AGAIN,
+        # timeout is 500ms, should get timeout response.
+        set result [r reblock.timeout]
+        assert_match "*Timed out*" $result
+    }
+
+    test {REPLY_AGAIN disconnect fires disconnect callback} {
+        # Start reblock.disconnect on a separate client, then kill that client.
+        set rd [valkey_deferring_client]
+        $rd reblock.disconnect
+        after 100
+        # Get the client id
+        set clients [r client list]
+        set target_id ""
+        foreach line [split $clients "\n"] {
+            if {[string match "*cmd=reblock.disconnect*" $line]} {
+                regexp {id=(\d+)} $line -> target_id
+            }
+        }
+        # Kill the client
+        if {$target_id ne ""} {
+            r client kill id $target_id
+        }
+        after 200
+        # Verify disconnect callback was called
+        assert_equal 1 [r reblock.get_disconnect_called]
+        $rd close
+    }
+
+    test {REPLY_AGAIN CLIENT UNBLOCK triggers timeout callback} {
+        # Block a client with reblock that always returns REPLY_AGAIN
+        # then use CLIENT UNBLOCK to abort it — should trigger timeout cb
+        set rd [valkey_deferring_client]
+        $rd reblock.timeout
+        after 100
+        set clients [r client list]
+        set target_id ""
+        foreach line [split $clients "\n"] {
+            if {[string match "*cmd=reblock.timeout*" $line]} {
+                regexp {id=(\d+)} $line -> target_id
+            }
+        }
+        if {$target_id ne ""} {
+            r client unblock $target_id timeout
+        }
+        set result [$rd read]
+        assert_match "*Timed out*" $result
+        $rd close
+    }
+
     test "Unload the module - blockedclient" {
         assert_equal {OK} [r module unload blockedclient]
     }

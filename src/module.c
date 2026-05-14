@@ -8980,6 +8980,7 @@ void moduleHandleBlockedClients(void) {
          * the key was signaled as ready. */
         long long prev_error_replies = server.stat_total_error_replies;
         uint64_t reply_us = 0;
+        int reply_ret = VALKEYMODULE_OK;
         if (c && !bc->blocked_on_keys && bc->reply_callback) {
             ValkeyModuleCtx ctx;
             moduleCreateContext(&ctx, bc->module, VALKEYMODULE_CTX_BLOCKED_REPLY);
@@ -8989,9 +8990,22 @@ void moduleHandleBlockedClients(void) {
             ctx.blocked_client = bc;
             monotime replyTimer;
             elapsedStart(&replyTimer);
-            bc->reply_callback(&ctx, (void **)c->argv, c->argc);
+            reply_ret = bc->reply_callback(&ctx, (void **)c->argv, c->argc);
             reply_us = elapsedUs(replyTimer);
             moduleFreeContext(&ctx);
+        }
+
+        /* If reply callback returned VALKEYMODULE_REPLY_AGAIN, keep the client
+         * blocked. The module must not have written any reply before returning
+         * this value. The module will call UnblockClient again later. */
+        if (reply_ret == VALKEYMODULE_REPLY_AGAIN) {
+            moduleReleaseTempClient(bc->reply_client);
+            moduleReleaseTempClient(bc->thread_safe_ctx_client);
+            bc->reply_client = moduleAllocTempClient();
+            bc->thread_safe_ctx_client = moduleAllocTempClient();
+            bc->unblocked = 0;
+            pthread_mutex_lock(&moduleUnblockedClientsMutex);
+            continue;
         }
         /* Hold onto the blocked client if module auth is in progress. The reply callback is invoked
          * when the client is reprocessed. */

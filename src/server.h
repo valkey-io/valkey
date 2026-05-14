@@ -1797,6 +1797,7 @@ struct valkeyServer {
     pid_t child_pid;                   /* PID of current child */
     int child_type;                    /* Type of current child */
     _Atomic(int) module_gil_acquiring; /* Indicates whether the GIL is being acquiring by the main thread. */
+    _Atomic(int) module_gil_acquired;  /* Indicates if the main thread has the GIL acquired. */
     /* Networking */
     int port;                              /* TCP listening port */
     int tls_port;                          /* TLS listening port */

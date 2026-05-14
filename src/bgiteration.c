@@ -58,7 +58,10 @@ static bool isDeleteCmd(struct serverCommand *cmd) {
 
 
 static bool onValkeyMainThread(void) {
-    return (pthread_equal(server.main_thread_id, pthread_self()) != 0);
+    // Modules interact with the main thread using a mutex.  If a module owns the mutex, consider
+    //  that equivalent to being on the main thread.
+    bool inModule = (atomic_load_explicit(&server.module_gil_acquired, memory_order_relaxed) == 0);
+    return (inModule || pthread_equal(server.main_thread_id, pthread_self()) != 0);
 }
 
 /* Parse a parameters robj, extracting a valid DBID.
@@ -1896,7 +1899,7 @@ static bool isDbSignificant(int dbid) {
 
 static void handleFlushdb(int dbid) {
     // Invoked BEFORE the actual flush.  -1 indicates FLUSHALL.
-    bool should_abort_iterators = server.cluster_enabled || dbid == -1 || isDbSignificant(dbid);
+    bool should_abort_iterators = (dbid == -1 || isDbSignificant(dbid));
 
     listIter li;
     listNode *node;

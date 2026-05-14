@@ -11,6 +11,31 @@ Upgrade urgency levels:
 | CRITICAL | There is a critical bug affecting MOST USERS. Upgrade ASAP.         |
 | SECURITY | There are security fixes in the release.                            |
 
+Valkey 9.1.0 GA - Released Tue May 14 2026
+---------------------
+
+Upgrade urgency SECURITY: This release includes security fixes we recommend you
+apply as soon as possible.
+
+### Security fixes
+
+* (CVE-2026-23479) Use-After-Free in unblock client flow
+* (CVE-2026-25243) Invalid Memory Access in RESTORE command
+* (CVE-2026-23631) Use-after-free when full sync occurs during a yielding Lua/function execution
+
+### New Features and enhanced behavior
+* Add cluster bus network traffic usage metric in bytes by @@hpatro (#3396)
+
+### New Features and enhanced behavior
+* Reduce latency spikes during rehashing via incremental page release by @chzhoo (#3481)
+
+### Bug Fixes
+* Fix(syncio): Set errno on EOF in syncRead and propagate to conn->last by @abmathur-ie (#3580)
+* Fix GEOSEARCH BYPOLYGON leak on invalid COUNT by @bandalgomsu (#3568)
+* Handle NULL pointer in streamTrim listpack delta calculation by @smkher (#3591)
+* Fixes server crash when RDMA benchmark clients disconnect by @quanyeyang (#3448)
+* Fix the memory leak in valkey-benchmark by @nmvk (#3643)
+
 Valkey 9.1.0-rc2 - Released Tue Apr 28 00:00:00 2026
 -------------------------------------
 
@@ -111,8 +136,10 @@ new features, performance improvements, and bug fixes.
 * Strictly check CRLF when parsing querybuf by @enjoy-binbin (#2872)
 
 ### Contributors
+* abmathur-ie @abmathur-ie
 * Adam Fowler @adam-fowler
 * Aditya Teltia @AdityaTeltia
+* Akash Kumar @akashkgit
 * Alina Liu @asagege
 * Allen Samuels @allenss-amazon
 * Alon Arenberg @alon-arenberg
@@ -124,13 +151,16 @@ new features, performance improvements, and bug fixes.
 * Binbin @enjoy-binbin
 * Björn Svensson @bjosv
 * bpint @bpint
+* chenshi @chenshi5012
 * chzhoo @chzhoo
 * cjx-zar @cjx-zar
+* Daejun Kim @djk1027
 * Daniil Kashapov @dvkashapov
 * Deepak Nandihalli @deepakrn
 * Diego Ciciani @diegociciani
 * eifrah-aws @eifrah-aws
 * Evgeny Barskiy @ebarskiy
+* FAN PEI @fanpei91
 * Gabi Ganam @gabiganam
 * Gagan H R @gaganhr94
 * Hanxi Zhang @hanxizh9910
@@ -138,11 +168,13 @@ new features, performance improvements, and bug fixes.
 * Harry Lin @harrylin98
 * hieu2102 @hieu2102
 * Jacob Murphy @murphyjacob4
+* Jeff Duffy @jaduffy
 * jiegang0219 @jiegang0219
 * Jim Brunner @JimB123
 * Johan Bergström @jbergstroem
 * John @johnufida
 * Joseph Heyburn @jdheyburn
+* Jun Yeong Kim @junyeong0619
 * Katie Holly @Fusl
 * Ken @otherscase
 * korjeek @korjeek
@@ -162,6 +194,8 @@ new features, performance improvements, and bug fixes.
 * Patrik Hermansson @phermansson
 * Ping Xie @PingXie
 * Quanye Yang @Ada-Church-Closure
+* Quanye Yang @quanyeyang
+* Raghav Muddur @nmvk
 * Rain Valentine @rainsupreme
 * Ran Shidlansik @ranshid
 * Ricardo Dias @rjd15372
@@ -169,8 +203,10 @@ new features, performance improvements, and bug fixes.
 * Roshan Khatri @roshkhatri
 * ruihong123 @ruihong123
 * Sachin Venkatesha Murthy @sachinvmurthy
+* sananes @yaronsananes
 * Sarthak Aggarwal @sarthakaggarwal97
 * Satheesha CH Gowda @satheesha
+* Saurabh K @smkher
 * Seungmin Lee @sungming2
 * Shinobu Nunotaba @Ada-Church-Closure
 * Simon Baatz @gmbnomis

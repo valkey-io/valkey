@@ -16,9 +16,6 @@
  *
  * Iteration clients are expected to read through the keyspace until the iteration is complete or
  * terminated.  An iteration client may not perform modifications on a key.
- *
- * Future enhancement:  Certain types of modifications may be passed back to the Valkey main thread.
- *                      Use case: A background compression thread wants to compress a string value.
  */
 
 /* Avoids dependency on server.h */

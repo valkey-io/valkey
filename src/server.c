@@ -3726,8 +3726,8 @@ static int lastDbidSentToBgIterator;
 void alsoPropagate(int dbid, robj **argv, int argc, int target, int slot) {
     if (target & PROPAGATE_REPL && bgIteration_iterationActive()) {
         // Note that bgIterator must be invoked immediately after each command.  This is required
-        //  for proper processing in the bgIterator state machine.  It's NOT ok to call bgIterator
-        //  from propagateNow as that handles all of the commands for a transaction at the end.
+        //  by the bgIterator state machine.  It's NOT ok to call bgIterator from propagateNow as
+        //  that handles all of the commands for a transaction at the end.
         // THIS FUNCTION (alsoPropagate) is called after each command.
         if (!sentMultiToBgIterator && (scriptIsRunning() || server.in_exec)) {
             // For a script or multi/exec, we should be sending the MULTI at the beginning of the

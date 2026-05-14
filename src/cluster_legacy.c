@@ -7660,6 +7660,10 @@ int clusterParseSetSlotCommand(client *c, int *slot_out, clusterNode **node_out,
             addReplyErrorFormat(c, "I don't know about node %s", (char *)objectGetVal(c->argv[4]));
             return 0;
         }
+        if (n == myself) {
+            addReplyError(c, "Target node is myself");
+            return 0;
+        }
         if (nodeIsReplica(n)) {
             addReplyError(c, "Target node is not a master");
             return 0;
@@ -7674,6 +7678,10 @@ int clusterParseSetSlotCommand(client *c, int *slot_out, clusterNode **node_out,
         n = clusterLookupNode(objectGetVal(c->argv[4]), sdslen(objectGetVal(c->argv[4])));
         if (n == NULL) {
             addReplyErrorFormat(c, "I don't know about node %s", (char *)objectGetVal(c->argv[4]));
+            return 0;
+        }
+        if (n == myself) {
+            addReplyError(c, "Target node is myself");
             return 0;
         }
         if (nodeIsReplica(n)) {

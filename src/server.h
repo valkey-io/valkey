@@ -522,11 +522,6 @@ typedef enum {
 #define TLS_CLIENT_FIELD_CN 1
 #define TLS_CLIENT_FIELD_URI 2
 
-/* Sanitize dump payload */
-#define SANITIZE_DUMP_NO 0
-#define SANITIZE_DUMP_YES 1
-#define SANITIZE_DUMP_CLIENTS 2
-
 /* Enable protected config/command */
 #define PROTECTED_ACTION_ALLOWED_NO 0
 #define PROTECTED_ACTION_ALLOWED_YES 1
@@ -1014,23 +1009,18 @@ typedef struct readyList {
 /* This structure represents a user. This is useful for ACLs, the
  * user is associated to the connection after the connection is authenticated.
  * If there is no associated user, the connection uses the default user. */
-#define USER_COMMAND_BITS_COUNT 1024             /* The total number of command bits     \
-                                                   in the user structure. The last valid \
-                                                   command ID we can set in the user     \
-                                                   is USER_COMMAND_BITS_COUNT-1. */
-#define USER_FLAG_ENABLED (1 << 0)               /* The user is active. */
-#define USER_FLAG_DISABLED (1 << 1)              /* The user is disabled. */
-#define USER_FLAG_NOPASS (1 << 2)                /* The user requires no password, any   \
-                                                    provided password will work. For the \
-                                                    default user, this also means that   \
-                                                    no AUTH is needed, and every         \
-                                                    connection is immediately            \
-                                                    authenticated. */
-#define USER_FLAG_SANITIZE_PAYLOAD (1 << 3)      /* The user require a deep RESTORE \
-                                                  * payload sanitization. */
-#define USER_FLAG_SANITIZE_PAYLOAD_SKIP (1 << 4) /* The user should skip the     \
-                                                  * deep sanitization of RESTORE \
-                                                  * payload. */
+#define USER_COMMAND_BITS_COUNT 1024 /* The total number of command bits     \
+                                       in the user structure. The last valid \
+                                       command ID we can set in the user     \
+                                       is USER_COMMAND_BITS_COUNT-1. */
+#define USER_FLAG_ENABLED (1 << 0)   /* The user is active. */
+#define USER_FLAG_DISABLED (1 << 1)  /* The user is disabled. */
+#define USER_FLAG_NOPASS (1 << 2)    /* The user requires no password, any   \
+                                        provided password will work. For the \
+                                        default user, this also means that   \
+                                        no AUTH is needed, and every         \
+                                        connection is immediately            \
+                                        authenticated. */
 
 #define SELECTOR_FLAG_ROOT (1 << 0)        /* This is the root user permission \
                                             * selector. */
@@ -1973,7 +1963,6 @@ struct valkeyServer {
     int active_expire_effort;    /* From 1 (default) to 10, active effort. */
     int lazy_expire_disabled;    /* If > 0, don't trigger lazy expire */
     int active_defrag_enabled;
-    int sanitize_dump_payload;                   /* Enables deep sanitization for ziplist and listpack in RDB and RESTORE. */
     int skip_checksum_validation;                /* Disable checksum validation for RDB and RESTORE payload. */
     int rdb_version_check;                       /* Try to load RDB produced by a future version. */
     int jemalloc_bg_thread;                      /* Enable jemalloc background thread */

@@ -2132,6 +2132,14 @@ void freeClient(client *c) {
         return;
     }
 
+    /* Debug: force async free for the primary client to deterministically
+     * reproduce the deferred-free replication state clobber race. */
+    if (server.debug_force_free_primary_async && c->flag.primary) {
+        server.debug_force_free_primary_async = 0;
+        freeClientAsync(c);
+        return;
+    }
+
     /* Wait for IO operations to be done before proceeding */
     waitForClientIO(c);
 

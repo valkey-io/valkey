@@ -68,6 +68,7 @@ tre = "tre"
 dbe = "dbe"
 
 [type.cpp.extend-words]
+fo = "fo"
 dbe = "dbe"
 
 [type.systemd.extend-words]
@@ -77,6 +78,3 @@ ake = "ake"
 [type.tcl.extend-words]
 fo = "fo"
 tre = "tre"
-
-[type.cpp.extend-words]
-fo = "fo"

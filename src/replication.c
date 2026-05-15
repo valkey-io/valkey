@@ -4574,6 +4574,7 @@ void replicationHandlePrimaryDisconnection(void) {
     } else if (server.repl_state == REPL_STATE_CONNECTED) {
         /* primary_host is NULL: deliberate unset in progress. */
         server.repl_state = REPL_STATE_NONE;
+        server.repl_down_since = server.unixtime;
     }
     /* Any other repl_state means the state machine already moved on
      * (e.g. REPL_STATE_CONNECT, CONNECTING, NONE) — leave it untouched. */

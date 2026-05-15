@@ -425,6 +425,10 @@ void setConfigurableHashSeed(uint8_t *seed) {
     memcpy(configurable_hash_seed, seed, sizeof(configurable_hash_seed));
 }
 
+uint8_t *getConfigurableHashSeed(void) {
+    return configurable_hash_seed;
+}
+
 uint64_t genHashFunctionConfigurableSeed(const char *buf, size_t len) {
     return siphash((const uint8_t *)buf, len, configurable_hash_seed);
 }
@@ -2963,6 +2967,7 @@ void initServer(void) {
     server.reply_buffer_resizing_enabled = 1;
     server.client_mem_usage_buckets = NULL;
     server.debug_client_enforce_reply_list = 0;
+    server.debug_force_free_primary_async = 0;
     resetReplicationBuffer();
 
     /* Make sure the locale is set on startup based on the config file. */

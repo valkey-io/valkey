@@ -4287,6 +4287,7 @@ static bool readToQueryBuf(client *c) {
 #define REPL_MAX_READS_PER_IO_EVENT 25
 void readQueryFromClient(connection *conn) {
     client *c = connGetPrivateData(conn);
+    bool was_primary = (c == server.primary);
     /* Check if we can send the client to be handled by the IO-thread */
     if (postponeClientRead(c)) return;
 
@@ -4307,7 +4308,7 @@ void readQueryFromClient(connection *conn) {
         beforeNextClient(c);
     } while (repeat);
 
-    if (c == server.primary) replicationMaybeSwitchToPrimaryAfterSiblingSync();
+    if (was_primary) replicationMaybeSwitchToPrimaryAfterSiblingSync();
 }
 
 /* An "Address String" is a colon separated ip:port pair.

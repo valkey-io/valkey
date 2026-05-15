@@ -3200,9 +3200,13 @@ void freeReplicaReferencedReplBuffer(client *replica);
 void replicationFeedMonitors(client *c, list *monitors, int dictid, robj **argv, int argc);
 void updateReplicasWaitingBgsave(int bgsaveerr, int type);
 void replicationCron(void);
+/* Abort an in-progress sibling sync and retarget replication to the cluster primary. */
 int replicationAbortSiblingSync(void);
+/* Switch from the sibling back to the primary after the sibling stream drains. */
 void replicationMaybeSwitchToPrimaryAfterSiblingSync(void);
+/* Cancel an active replication handshake; reconnect when requested and possible. */
 int cancelReplicationHandshake(int reconnect);
+/* Start connecting to the configured primary endpoint. */
 int connectWithPrimary(void);
 void replicationStartPendingFork(void);
 void replicationHandlePrimaryDisconnection(void);

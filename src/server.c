@@ -6123,9 +6123,9 @@ void totalNumberOfStatefulKeys(unsigned long *blocking_keys,
     if (watched_keys) *watched_keys = wkeys;
 }
 
-/* Create the string returned by the INFO command. This is decoupled
- * by the INFO command itself as we need to report the same information
- * on memory corruption problems. */
+/* Report coarse sync-from-replica phases from server.repl_state. The default
+ * "rdb_loading" covers local loading states between transfer completion and
+ * connected stream catch-up that are not represented by a single repl_state. */
 static const char *syncFromReplicaPhase(void) {
     if (!server.cluster_syncing_from_sibling) return "none";
     if (server.repl_state == REPL_STATE_TRANSFER) return "rdb_transfer";
@@ -6134,6 +6134,9 @@ static const char *syncFromReplicaPhase(void) {
     return "rdb_loading";
 }
 
+/* Create the string returned by the INFO command. This is decoupled
+ * by the INFO command itself as we need to report the same information
+ * on memory corruption problems. */
 sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
     sds info = sdsempty();
     time_t uptime = server.unixtime - server.stat_starttime;

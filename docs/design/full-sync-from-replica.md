@@ -21,7 +21,7 @@ Allow a new replica to get its initial dataset from an **existing sibling replic
 
 The new node N performs standard replication from sibling S (chain: P->S->N). After syncing, N switches to the real primary P with a partial resync.
 
-```
+```text
                     ┌─────────────┐
                     │  Primary P  │
                     │  (no BGSAVE)│
@@ -37,7 +37,9 @@ The new node N performs standard replication from sibling S (chain: P->S->N). Af
 1. N does `CLUSTER REPLICATE <P>` - cluster topology says N->P (gossip, shard_id, flags)
 2. Internally, N redirects `server.primary_host` to S (not P)
 3. N does standard replication from S: PSYNC handshake, RDB transfer, stream forwarding
-4. S does BGSAVE, sends RDB snapshot to N
+4. S does BGSAVE, sends RDB snapshot to N. If both N and S have dual-channel
+   replication enabled, this temporary N<->S sync can use the existing
+   dual-channel full-sync protocol.
 5. S forwards P's replication stream to N (built-in replica-of-replica behavior)
 6. N loads the RDB and reaches CONNECTED state with S
 
@@ -89,6 +91,8 @@ Since `myself->replicaof = P` (a primary), `P->replicaof = NULL`. The condition 
 The switch is intentionally delayed after RDB load:
 
 - `replicaAfterLoadPrimaryRDB()` records S's FULLRESYNC offset and flushes N's ACK to S
+- When the temporary sync uses dual-channel replication, the same handoff is
+  armed after the dual-channel RDB and main PSYNC channels have both completed
 - S starts streaming commands queued during the RDB transfer after it receives N's ACK
 - `replicationMaybeSwitchToPrimaryAfterSiblingSync()` waits for N to apply data beyond the recorded offset and reach a drained command boundary
 - The drained-boundary check runs after direct reads and after I/O-thread read completion
@@ -215,7 +219,7 @@ near baseline.
 | `cluster_legacy.c` | `CLUSTER REPLICATE` handler | After `clusterSetPrimary(P)`, cancel connection to P, redirect to S, reconnect | S |
 | `cluster_legacy.c` | `CLUSTER FAILOVER` handler | Block FORCE/TAKEOVER during sibling sync | S |
 | `networking.c` / `memory_prefetch.c` | Primary read completion | Re-check whether S's post-RDB stream has drained after direct and I/O-thread primary-client reads | S |
-| `replication.c` | `replicaAfterLoadPrimaryRDB` | Flush ACK to S and start delayed stream catch-up before switching to P | S |
+| `replication.c` | full-sync completion | Flush ACK to S and start delayed stream catch-up before switching to P, including dual-channel completion races | S |
 | `replication.c` | `replicationMaybeSwitchToPrimaryAfterSiblingSync` | Switch to P only after S's stream advances beyond the FULLRESYNC offset and drains at a command boundary | S |
 | `replication.c` | `replicationAbortSiblingSync` | Clear flag, redirect primary_host to real primary from cluster topology | S |
 | `replication.c` | `cancelReplicationHandshake` | Call `replicationAbortSiblingSync` on abort during sibling sync | S |
@@ -229,7 +233,7 @@ near baseline.
 
 ### New configuration
 
-```
+```conf
 # Enable sync-from-replica optimization (default: no)
 repl-prefer-sync-from-replica yes
 ```
@@ -237,13 +241,13 @@ repl-prefer-sync-from-replica yes
 ### Observability
 
 **INFO replication additions:**
-```
+```text
 sync_from_replica_in_progress:1
 sync_from_replica_phase:handshake|rdb_transfer|rdb_loading|stream_catchup|none
 ```
 
 **Log messages:**
-```
+```text
 [NOTICE] Sync-from-replica: selected sibling <node-id> at offset <X> (primary at <Y>, gap <delta>)
 [NOTICE] Sync-from-replica: redirecting replication to sibling <host>:<port>
 [NOTICE] Sync-from-replica: sibling stream drained (replid=<id> offset=<X>), switching to primary <node-id>

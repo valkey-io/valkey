@@ -4306,6 +4306,8 @@ void readQueryFromClient(connection *conn) {
                   full_read);
         beforeNextClient(c);
     } while (repeat);
+
+    if (c == server.primary) replicationMaybeSwitchToPrimaryAfterSiblingSync();
 }
 
 /* An "Address String" is a colon separated ip:port pair.
@@ -6497,7 +6499,11 @@ void processClientIOReadsDone(client *c) {
     int ret = addCommandToBatchAndProcessIfFull(c);
     /* If the command was not added to the commands batch, process it immediately */
     if (ret == C_ERR) {
-        if (processPendingCommandAndInputBuffer(c) == C_OK) beforeNextClient(c);
+        int was_primary = c == server.primary;
+        if (processPendingCommandAndInputBuffer(c) == C_OK) {
+            beforeNextClient(c);
+            if (was_primary) replicationMaybeSwitchToPrimaryAfterSiblingSync();
+        }
     }
 }
 

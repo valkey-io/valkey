@@ -61,10 +61,13 @@ int replicaPutOnline(client *replica);
 void replicaStartCommandStream(client *replica);
 int cancelReplicationHandshake(int reconnect);
 void replicationSteadyStateInit(void);
+void resetBioRDBSaveState(void);
 void dualChannelSetupMainConnForPsync(connection *conn);
 void dualChannelSyncHandleRdbLoadCompletion(void);
 static void dualChannelFullSyncWithPrimary(connection *conn);
 void syncWithPrimary(connection *conn);
+int connectWithPrimary(void);
+void replicationMaybeSwitchToPrimaryAfterSiblingSync(void);
 
 /* We take a global flag to remember if this instance generated an RDB
  * because of replication, so that we can remove the RDB file in case
@@ -1235,12 +1238,21 @@ void syncCommand(client *c) {
          * and its exact requirements. */
         if (ln && ((c->repl_data->replica_capa & replica->repl_data->replica_capa) == replica->repl_data->replica_capa) &&
             c->repl_data->replica_req == replica->repl_data->replica_req) {
-            /* Perfect, the server is already registering differences for
-             * another replica. Set the right state, and copy the buffer.
-             * We don't copy buffer if clients don't want. */
-            if (!c->flag.repl_rdbonly) copyReplicaOutputBuffer(c, replica);
-            replicationSetupReplicaForFullResync(c, replica->repl_data->psync_initial_offset);
-            serverLog(LL_NOTICE, "Waiting for end of BGSAVE for SYNC");
+            /* The FULLRESYNC offset must describe the RDB snapshot being sent.
+             * rdb-only and non-rdb-only replicas handle buffered changes
+             * differently, so they cannot share a BGSAVE. */
+            if (c->flag.repl_rdbonly != replica->flag.repl_rdbonly) {
+                serverLog(LL_NOTICE,
+                          "rdb-only and non-rdb-only sync cannot share the same BGSAVE. "
+                          "Waiting for next BGSAVE for SYNC");
+            } else {
+                /* Perfect, the server is already registering differences for
+                 * another replica. Set the right state, and copy the buffer.
+                 * We don't copy buffer if clients don't want. */
+                if (!c->flag.repl_rdbonly) copyReplicaOutputBuffer(c, replica);
+                replicationSetupReplicaForFullResync(c, replica->repl_data->psync_initial_offset);
+                serverLog(LL_NOTICE, "Waiting for end of BGSAVE for SYNC");
+            }
         } else {
             /* No way, we need to wait for the next BGSAVE in order to
              * register differences. */
@@ -2407,6 +2419,29 @@ void replicaAfterLoadPrimaryRDB(connection *conn, rdbSaveInfo *rsi, int disk_bas
         connClose(conn);
         server.repl_rdb_transfer_s = NULL;
     }
+
+    /* After loading S's RDB, flush ACK so S can stream commands queued during
+     * the transfer. With I/O threads enabled, readQueryFromClient() can enqueue
+     * the read; the switch to P runs after the main thread applies S's stream. */
+    if (server.cluster_syncing_from_sibling && server.cluster_enabled &&
+        server.primary != NULL) {
+        server.cluster_sync_sibling_initial_offset = server.primary->repl_data->reploff;
+        /* Freeze the catch-up target once. Any primary writes after this point
+         * are covered by the final PSYNC to the real primary. */
+        server.cluster_sync_sibling_target_offset = server.cluster_sync_sibling_initial_offset;
+        clusterNode *pn = server.cluster->myself->replicaof;
+        if (pn && pn->repl_offset > server.cluster_sync_sibling_target_offset) {
+            server.cluster_sync_sibling_target_offset = pn->repl_offset;
+        }
+        server.cluster_sync_sibling_last_offset = server.cluster_sync_sibling_initial_offset;
+        server.cluster_sync_sibling_last_progress = server.mstime;
+        if (clientHasPendingReplies(server.primary) &&
+            writeToClient(server.primary) == C_ERR) {
+            replicationAbortSiblingSync();
+            return;
+        }
+        readQueryFromClient(server.primary->conn);
+    }
 }
 
 int replicaLoadPrimaryRDBFromSocket(connection *conn, char *buf, char *eofmark, int *usemark, rdbSaveInfo *rsi) {
@@ -2997,6 +3032,110 @@ void replicationAbortDualChannelSyncTransfer(void) {
     return;
 }
 
+/* ---------------------------------------------------------------------------
+ * Sync-from-replica: chain approach (P->S->N).
+ *
+ * Instead of a separate side-channel, N does standard replication from S.
+ * S does BGSAVE, sends RDB, and forwards P's stream.
+ * After N reaches steady state with S, it switches to P via partial resync.
+ * S's replid is P's replid, so P recognizes the PSYNC.
+ * --------------------------------------------------------------------------- */
+
+#define SYNC_FROM_REPLICA_DRAIN_GRACE_MS 100
+
+static void replicationClearSiblingSyncState(void) {
+    server.cluster_syncing_from_sibling = 0;
+    server.cluster_sync_sibling_initial_offset = -1;
+    server.cluster_sync_sibling_target_offset = -1;
+    server.cluster_sync_sibling_last_offset = -1;
+    server.cluster_sync_sibling_last_progress = 0;
+}
+
+/* Cancel an in-progress sibling sync and redirect primary_host back to the
+ * primary in the cluster topology. Safe if no sibling sync is active; outside
+ * cluster mode there is no topology primary to redirect to. */
+int replicationAbortSiblingSync(void) {
+    if (!server.cluster_syncing_from_sibling) return C_OK;
+
+    serverLog(LL_NOTICE,
+              "Sync-from-replica: aborting sibling sync, falling back to primary");
+    replicationClearSiblingSyncState();
+
+    clusterNode *pn = NULL;
+    if (server.cluster_enabled && server.cluster)
+        pn = server.cluster->myself->replicaof;
+    if (pn == NULL) {
+        serverLog(LL_WARNING,
+                  "Sync-from-replica: cannot fall back because no cluster primary is known");
+        sdsfree(server.primary_host);
+        server.primary_host = NULL;
+        server.primary_port = 0;
+        return C_ERR;
+    }
+
+    sdsfree(server.primary_host);
+    server.primary_host = sdsnew(pn->ip);
+    server.primary_port = getNodeDefaultReplicationPort(pn);
+    return C_OK;
+}
+
+static int primaryInputBufferDrained(client *c) {
+    if (c == NULL || c->flag.close_asap || c->flag.blocked) return 0;
+    /* Queued commands, a parsed command, or unread query buffer bytes all mean
+     * S may still have post-RDB stream data pending on N. */
+    if (c->cmd_queue.off < c->cmd_queue.len) return 0;
+    if (c->argc != 0) return 0;
+    if (c->querybuf && c->qb_pos < sdslen(c->querybuf)) return 0;
+    return 1;
+}
+
+/* Switch from S to P after N has applied S's post-RDB stream at a command
+ * boundary. */
+void replicationMaybeSwitchToPrimaryAfterSiblingSync(void) {
+    if (!server.cluster_syncing_from_sibling || !server.cluster_enabled ||
+        server.primary == NULL)
+        return;
+
+    long long sibling_offset = server.primary->repl_data->reploff;
+    if (sibling_offset != server.cluster_sync_sibling_last_offset) {
+        server.cluster_sync_sibling_last_offset = sibling_offset;
+        server.cluster_sync_sibling_last_progress = server.mstime;
+    }
+
+    if (server.cluster_sync_sibling_initial_offset == -1 ||
+        sibling_offset <= server.cluster_sync_sibling_initial_offset)
+        return;
+
+    clusterNode *pn = server.cluster->myself->replicaof;
+    if (pn == NULL) {
+        serverLog(LL_WARNING,
+                  "Sync-from-replica: no primary in cluster topology, staying connected to sibling");
+        replicationClearSiblingSyncState();
+        return;
+    }
+
+    if (sibling_offset < server.cluster_sync_sibling_target_offset) return;
+    if (!primaryInputBufferDrained(server.primary)) return;
+    if (server.cluster_sync_sibling_last_progress &&
+        server.mstime - server.cluster_sync_sibling_last_progress < SYNC_FROM_REPLICA_DRAIN_GRACE_MS)
+        return;
+
+    serverLog(LL_NOTICE,
+              "Sync-from-replica: sibling stream drained (replid=%s offset=%lld), "
+              "switching to primary %.40s",
+              server.replid, sibling_offset, pn->name);
+    replicationClearSiblingSyncState();
+    /* Set primary_host before caching; replicationCachePrimary() reconnects
+     * through replicationHandlePrimaryDisconnection(). */
+    sdsfree(server.primary_host);
+    server.primary_host = sdsnew(pn->ip);
+    server.primary_port = getNodeDefaultReplicationPort(pn);
+    /* replicationCachePrimary() unlinks the current server.primary client and
+     * reconnects through replicationHandlePrimaryDisconnection(); callers must
+     * not access that client after this helper returns. */
+    replicationCachePrimary(server.primary);
+}
+
 /* Replication: Primary side.
  * Send current replication offset to replica. Use the following structure:
  * $ENDOFF:<repl-offset> <primary-repl-id> <current-db-id> <client-id> */
@@ -3303,6 +3442,9 @@ void bufferReplData(connection *conn) {
     size_t readlen = PROTO_IOBUF_LEN;
     int remaining_bytes = 0;
 
+    /* Keep transfer timeout from firing while we're actively buffering. */
+    server.repl_transfer_lastio = server.unixtime;
+
     while (readlen > 0) {
         listNode *ln = listLast(server.pending_repl_data.blocks);
         replDataBufBlock *tail = ln ? listNodeValue(ln) : NULL;
@@ -3356,13 +3498,14 @@ void bufferReplData(connection *conn) {
 }
 
 /* Replication: Replica side.
- * Streams accumulated replication data into the database while freeing read nodes */
+ * Streams accumulated replication data into the database while freeing read nodes. */
 int streamReplDataBufToDb(client *c) {
     serverAssert(c->flag.primary);
     blockingOperationStarts();
     size_t used, offset = 0;
     listNode *cur = NULL;
     time_t last_progress_callback = mstime();
+
     while (server.pending_repl_data.blocks && (cur = listFirst(server.pending_repl_data.blocks))) {
         /* Read and process repl data block */
         replDataBufBlock *o = listNodeValue(cur);
@@ -3376,14 +3519,19 @@ int streamReplDataBufToDb(client *c) {
         listDelNode(server.pending_repl_data.blocks, cur);
         replStreamProgressCallback(offset, used, &last_progress_callback);
     }
+
+    /* Check if the list was destroyed during processEventsWhileBlocked. */
+    if (!server.pending_repl_data.blocks) goto aborted;
+
     blockingOperationEnds();
-    if (!server.pending_repl_data.blocks) {
-        /* If we encounter a `replicaof` command during the replStreamProgressCallback,
-         * pending_repl_data.blocks will be NULL, and we should return an error and
-         * abort the current sync session. */
-        return C_ERR;
-    }
     return C_OK;
+
+aborted:
+    blockingOperationEnds();
+    /* If we encounter a `replicaof` command during the replStreamProgressCallback,
+     * pending_repl_data.blocks will be NULL, and we should return an error and
+     * abort the current sync session. */
+    return C_ERR;
 }
 
 /* Replication: Replica side.
@@ -4006,6 +4154,11 @@ void syncWithPrimaryHandleError(connection **conn) {
         server.repl_rdb_transfer_s = NULL;
     }
     replicationAbortSyncTransfer();
+    /* Handshake failure on the transient sibling target falls back to the
+     * cluster primary. */
+    if (server.cluster_syncing_from_sibling && server.cluster_enabled) {
+        replicationAbortSiblingSync();
+    }
     server.repl_state = REPL_STATE_CONNECT;
 }
 
@@ -4243,6 +4396,7 @@ void syncWithPrimary(connection *conn) {
             serverCommunicateSystemd("STATUS=PRIMARY <-> REPLICA sync: Partial Resynchronization accepted. Ready to "
                                      "accept connections in read-write mode.\n");
         }
+
         return;
     }
 
@@ -4424,6 +4578,11 @@ int cancelReplicationHandshake(int reconnect) {
         return 0;
     }
 
+    /* Abort the transient sibling target before reconnecting. */
+    if (server.cluster_syncing_from_sibling && server.cluster_enabled) {
+        replicationAbortSiblingSync();
+    }
+
     if (!reconnect) return 1;
 
     /* try to re-connect without waiting for replicationCron, this is needed
@@ -4555,6 +4714,12 @@ void replicationUnsetPrimary(void) {
 /* This function is called when the replica lose the connection with the
  * primary into an unexpected way. */
 void replicationHandlePrimaryDisconnection(void) {
+    /* If the transient sibling connection drops after RDB load, reconnect to
+     * the real primary immediately instead of retrying the sibling. */
+    if (server.cluster_syncing_from_sibling && server.cluster_enabled) {
+        replicationAbortSiblingSync();
+    }
+
     /* Fire the primary link modules event. */
     if (server.repl_state == REPL_STATE_CONNECTED)
         moduleFireServerEvent(VALKEYMODULE_EVENT_PRIMARY_LINK_CHANGE, VALKEYMODULE_SUBEVENT_PRIMARY_LINK_DOWN, NULL);
@@ -5293,6 +5458,7 @@ void replicationCron(void) {
      * Note that we do not send periodic acks to primary that don't
      * support PSYNC and replication offsets. */
     if (server.primary_host && server.primary && !(server.primary->flag.pre_psync)) replicationSendAck();
+    replicationMaybeSwitchToPrimaryAfterSiblingSync();
 
     /* If we have attached replicas, PING them from time to time.
      * So replicas can implement an explicit timeout to primaries, and will

@@ -613,7 +613,8 @@ void scriptCommand(client *c) {
 
         addReplyArrayLen(c, c->argc - 2);
         for (j = 2; j < c->argc; j++) {
-            if (hashtableFind(evalCtx.scripts, objectGetVal(c->argv[j]), NULL))
+            if (sdslen(objectGetVal(c->argv[j])) == 40 &&
+                hashtableFind(evalCtx.scripts, objectGetVal(c->argv[j]), NULL))
                 addReply(c, shared.cone);
             else
                 addReply(c, shared.czero);

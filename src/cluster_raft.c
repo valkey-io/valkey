@@ -492,8 +492,10 @@ static int clusterRaftProcessHello(clusterLink *link, int argc, sds *argv) {
     /* Reply HI on the same inbound link. */
     clusterRaftSendGreeting(link, "HI");
 
-    /* Add the peer to the cluster, if it's new and we're not new. */
-    clusterRaftMaybeInvitePeer(sender);
+    /* If we're a non-singleton, invite the peer to join our cluster.
+     * Singletons don't invite — they step down (Rule 1 above) and wait
+     * to be invited via the HI handler instead. */
+    if (server.cluster->size > 1) clusterRaftMaybeInvitePeer(sender);
 
     return 1;
 }

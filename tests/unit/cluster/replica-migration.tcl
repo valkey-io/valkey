@@ -438,6 +438,8 @@ start_cluster 3 0 {tags {external:skip cluster cluster-v2:skip} overrides {clust
 # Check that orphaned primaries are joined by replicas of primaries having
 # multiple replicas attached, according to the migration barrier settings.
 start_cluster 5 10 {tags {external:skip cluster} overrides {shutdown-timeout 0}} {
+test "Replica migration to orphaned primaries" {
+
     # Killing all the replicas of primary #0 and #1
     pause_process [srv -5 pid]
     pause_process [srv -10 pid]
@@ -469,6 +471,7 @@ start_cluster 5 10 {tags {external:skip cluster} overrides {shutdown-timeout 0}}
     resume_process [srv -10 pid]
     resume_process [srv -6 pid]
     resume_process [srv -11 pid]
+} ;# test
 } ;# start_cluster
 
 # Now test the migration to a primary which used to be a replica, after

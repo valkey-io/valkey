@@ -67,6 +67,9 @@ seeked = "seeked"
 tre = "tre"
 dbe = "dbe"
 
+[type.cpp.extend-words]
+dbe = "dbe"
+
 [type.systemd.extend-words]
 # systemd = .conf
 ake = "ake"

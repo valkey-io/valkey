@@ -1,3 +1,5 @@
+// Just for the moment, until https://github.com/valkey-io/valkey/issues/3450 is resolved
+// clang-format off
 //#include <algorithm>
 #include "generated_wrappers.hpp"
 #include <vector>
@@ -1841,7 +1843,7 @@ TEST_F(BgIterationTest, modPastFutureItem_NoReplication_NoConsistent) {
 //    * In a non-consistent iteration with replication:
 //        * If the key location is already passed, the replication is sent, allowing the key to be
 //          created (or not) based on the replication.
-//        * If the key location is in the furure, we can allow the command to proceed, without
+//        * If the key location is in the future, we can allow the command to proceed, without
 //          replication.  If the key is created, we will process it when the iterator gets to it.
 //
 // We expect:

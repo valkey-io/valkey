@@ -343,7 +343,7 @@ tags {"wait aof network external:skip"} {
                 set rd [valkey_deferring_client -1]
                 $rd incr foo
                 $rd read
-                $rd waitaof 0 1 0
+                $rd waitaof 0 1 10000
                 wait_for_blocked_client -1
                 $replica replicaof $master_host $master_port
                 assert_equal [$rd read] {1 1}
@@ -528,6 +528,52 @@ start_server {} {
 
         $rd close
         $rd2 close
+    }
+}
+}
+}
+
+start_server {tags {"wait network external:skip"}} {
+start_server {} {
+start_server {} {
+    set master1 [srv -2 client]
+    set master1_host [srv -2 host]
+    set master1_port [srv -2 port]
+
+    set master2 [srv -1 client]
+    set master2_host [srv -1 host]
+    set master2_port [srv -1 port]
+
+    set replica [srv 0 client]
+
+    test {Repoint replica with deferred freeClient does not double-connect} {
+        $replica replicaof $master1_host $master1_port
+        wait_for_condition 50 100 {
+            [s 0 master_link_status] eq {up}
+        } else {
+            fail "Replication to master1 not established"
+        }
+
+        $replica debug force-free-primary-async 1
+
+        set log_lines [count_log_lines 0]
+        $replica replicaof $master2_host $master2_port
+        wait_for_condition 50 200 {
+            [s 0 master_link_status] eq {up}
+        } else {
+            fail "Replication to master2 not established after repoint"
+        }
+        after 2000
+
+        set logfile [srv 0 stdout]
+        set lines [split [exec tail -n +[expr {$log_lines + 1}] < $logfile] "\n"]
+        set sync_count 0
+        foreach line $lines {
+            if {[string match "*Connecting to PRIMARY $master2_host:$master2_port*" $line]} {
+                incr sync_count
+            }
+        }
+        assert_equal 1 $sync_count
     }
 }
 }

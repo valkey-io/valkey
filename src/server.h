@@ -1769,6 +1769,7 @@ struct valkeyServer {
     int enable_module_cmd;        /* Enable MODULE commands, see PROTECTED_ACTION_ALLOWED_* */
     int enable_debug_assert;      /* Enable debug asserts */
     int debug_client_enforce_reply_list; /* Force client to always use the reply list */
+    int debug_force_free_primary_async;  /* Force freeClient on primary to use async path */
     /* RDB / AOF loading information */
     volatile sig_atomic_t loading;       /* We are loading data from disk if true */
     volatile sig_atomic_t async_loading; /* We are loading data without blocking the db being served */

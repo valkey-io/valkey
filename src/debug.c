@@ -1077,6 +1077,9 @@ void debugCommand(client *c) {
 #else
         addReplyError(c, "TLS is not enabled");
 #endif
+    } else if (!strcasecmp(c->argv[1]->ptr, "force-free-primary-async") && c->argc == 3) {
+        server.debug_force_free_primary_async = atoi(c->argv[2]->ptr);
+        addReply(c, shared.ok);
     } else if (!handleDebugClusterCommand(c)) {
         addReplySubcommandSyntaxError(c);
         return;

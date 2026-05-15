@@ -418,7 +418,7 @@ void sortCommandGeneric(client *c, int readonly) {
          * way, just getting the required range, as an optimization. */
 
         zset *zs = objectGetVal(sortval);
-        zskiplist *zsl = zs->zsl;
+        zskiplist *zsl = (zskiplist *)zs->oi;
         zskiplistNode *ln;
         sds sdsele;
         int rangelen = vectorlen;

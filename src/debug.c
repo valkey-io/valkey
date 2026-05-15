@@ -1185,7 +1185,7 @@ void serverLogObjectDebugInfo(const robj *o) {
     } else if (o->type == OBJ_ZSET) {
         serverLog(LL_WARNING, "Sorted set size: %d", (int)zsetLength(o));
         if (o->encoding == OBJ_ENCODING_SKIPLIST)
-            serverLog(LL_WARNING, "Skiplist level: %d", (int)((const zset *)o->ptr)->zsl->level);
+            serverLog(LL_WARNING, "Skiplist level: %d", (int)((const zset *)o->ptr)->oi->level);
     } else if (o->type == OBJ_STREAM) {
         serverLog(LL_WARNING, "Stream size: %d", (int)streamLength(o));
     }

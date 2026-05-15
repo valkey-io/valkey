@@ -144,7 +144,7 @@ size_t lazyfreeGetFreeEffort(robj *key, robj *obj, int dbid) {
         return hashtableSize(ht);
     } else if (obj->type == OBJ_ZSET && obj->encoding == OBJ_ENCODING_SKIPLIST) {
         zset *zs = objectGetVal(obj);
-        return zslGetLength(zs->zsl);
+        return zslGetLength((zskiplist *)zs->oi);
     } else if (obj->type == OBJ_HASH && obj->encoding == OBJ_ENCODING_HASHTABLE) {
         hashtable *ht = objectGetVal(obj);
         return hashtableSize(ht);

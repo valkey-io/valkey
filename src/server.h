@@ -1491,9 +1491,12 @@ struct sharedObjectsStruct {
 /* Skiplist types - full definitions in skiplist.h */
 struct zskiplist;
 
+/* OrderedIndex - full definition in ordered_index.h */
+typedef struct OrderedIndex OrderedIndex;
+
 typedef struct zset {
     hashtable *ht;
-    struct zskiplist *zsl;
+    OrderedIndex *oi;
 } zset;
 
 typedef struct clientBufferLimitsConfig {

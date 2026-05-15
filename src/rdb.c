@@ -957,7 +957,7 @@ ssize_t rdbSaveObject(rio *rdb, robj *o, robj *key, int dbid, unsigned char rdbt
             nwritten += n;
         } else if (o->encoding == OBJ_ENCODING_SKIPLIST) {
             zset *zs = objectGetVal(o);
-            zskiplist *zsl = zs->zsl;
+            zskiplist *zsl = (zskiplist *)zs->oi;
 
             if ((n = rdbSaveLen(rdb, zslGetLength(zsl))) == -1) return -1;
             nwritten += n;
@@ -2116,7 +2116,7 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
             if (sdslen(sdsele) > maxelelen) maxelelen = sdslen(sdsele);
             totelelen += sdslen(sdsele);
 
-            znode = zslInsert(zs->zsl, score, sdsele);
+            znode = zslInsert((zskiplist *)zs->oi, score, sdsele);
             sdsfree(sdsele);
             if (!hashtableAdd(zs->ht, znode)) {
                 rdbReportCorruptRDB("Duplicate zset fields detected");

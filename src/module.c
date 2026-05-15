@@ -5129,7 +5129,7 @@ int zsetInitScoreRange(ValkeyModuleKey *key, double min, double max, int minex, 
         key->u.zset.current = first ? zzlFirstInRange(objectGetVal(key->value), zrs) : zzlLastInRange(objectGetVal(key->value), zrs);
     } else if (key->value->encoding == OBJ_ENCODING_SKIPLIST) {
         zset *zs = objectGetVal(key->value);
-        zskiplist *zsl = zs->zsl;
+        zskiplist *zsl = (zskiplist *)zs->oi;
         key->u.zset.current = first ? zslNthInRange(zsl, zrs, 0, NULL) : zslNthInRange(zsl, zrs, -1, NULL);
     } else {
         serverPanic("Unsupported zset encoding");
@@ -5192,7 +5192,7 @@ int zsetInitLexRange(ValkeyModuleKey *key, ValkeyModuleString *min, ValkeyModule
             first ? zzlFirstInLexRange(objectGetVal(key->value), zlrs) : zzlLastInLexRange(objectGetVal(key->value), zlrs);
     } else if (key->value->encoding == OBJ_ENCODING_SKIPLIST) {
         zset *zs = objectGetVal(key->value);
-        zskiplist *zsl = zs->zsl;
+        zskiplist *zsl = (zskiplist *)zs->oi;
         key->u.zset.current = first ? zslNthInLexRange(zsl, zlrs, 0) : zslNthInLexRange(zsl, zlrs, -1);
     } else {
         serverPanic("Unsupported zset encoding");

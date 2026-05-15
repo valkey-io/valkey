@@ -308,7 +308,7 @@ int geoGetPointsInRange(robj *zobj, double min, double max, GeoShape *shape, geo
         }
     } else if (zobj->encoding == OBJ_ENCODING_SKIPLIST) {
         zset *zs = objectGetVal(zobj);
-        zskiplist *zsl = zs->zsl;
+        zskiplist *zsl = (zskiplist *)zs->oi;
         zskiplistNode *ln;
 
         if ((ln = zslNthInRange(zsl, &range, 0, NULL)) == NULL) {
@@ -841,7 +841,7 @@ void georadiusGeneric(client *c, int srcKeyIndex, int flags) {
 
             if (maxelelen < elelen) maxelelen = elelen;
             totelelen += elelen;
-            znode = zslInsert(zs->zsl, score, gp->member);
+            znode = zslInsert((zskiplist *)zs->oi, score, gp->member);
             serverAssert(hashtableAdd(zs->ht, znode));
             sdsfree(gp->member);
             gp->member = NULL;

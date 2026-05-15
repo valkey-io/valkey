@@ -442,7 +442,7 @@ static void scanLaterZsetCallback(void *privdata, void *element_ref) {
 static void scanLaterZset(robj *ob, unsigned long *cursor) {
     serverAssert(ob->type == OBJ_ZSET && ob->encoding == OBJ_ENCODING_SKIPLIST);
     zset *zs = (zset *)objectGetVal(ob);
-    *cursor = hashtableScanDefrag(zs->ht, *cursor, scanLaterZsetCallback, zs->zsl, activeDefragAlloc, HASHTABLE_SCAN_EMIT_REF);
+    *cursor = hashtableScanDefrag(zs->ht, *cursor, scanLaterZsetCallback, (zskiplist *)zs->oi, activeDefragAlloc, HASHTABLE_SCAN_EMIT_REF);
 }
 
 /* Used as hashtable scan callback when all we need is to defrag the hashtable
@@ -487,7 +487,7 @@ static void defragZsetSkiplist(robj *ob) {
         objectSetVal(ob, newzs);
         zs = newzs;
     }
-    if ((newzsl = activeDefragAlloc(zs->zsl))) zs->zsl = newzsl;
+    if ((newzsl = activeDefragAlloc((zskiplist *)zs->oi))) zs->oi = (OrderedIndex *)newzsl;
 
     hashtable *newtable;
     if ((newtable = hashtableDefragTables(zs->ht, activeDefragAlloc))) zs->ht = newtable;
@@ -497,7 +497,7 @@ static void defragZsetSkiplist(robj *ob) {
     else {
         unsigned long cursor = 0;
         do {
-            cursor = hashtableScanDefrag(zs->ht, cursor, activeDefragZsetNode, zs->zsl, activeDefragAlloc, HASHTABLE_SCAN_EMIT_REF);
+            cursor = hashtableScanDefrag(zs->ht, cursor, activeDefragZsetNode, (zskiplist *)zs->oi, activeDefragAlloc, HASHTABLE_SCAN_EMIT_REF);
         } while (cursor != 0);
     }
 }

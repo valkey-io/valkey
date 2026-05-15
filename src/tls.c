@@ -1505,6 +1505,7 @@ static int connTLSConnect(connection *conn_,
     unsigned char addr_buf[sizeof(struct in6_addr)];
 
     if (conn->c.state != CONN_STATE_NONE) return C_ERR;
+    if (addr == NULL) return C_ERR;
     ERR_clear_error();
 
     /* Check whether addr is an IP address, if not, use the value for Server Name Indication */

@@ -2933,6 +2933,7 @@ void initServer(void) {
     server.reply_buffer_resizing_enabled = 1;
     server.client_mem_usage_buckets = NULL;
     server.debug_client_enforce_reply_list = 0;
+    server.debug_force_free_primary_async = 0;
     resetReplicationBuffer();
 
     /* Make sure the locale is set on startup based on the config file. */

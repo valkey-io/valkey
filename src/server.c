@@ -3741,12 +3741,12 @@ void alsoPropagate(int dbid, robj **argv, int argc, int target, int slot) {
             //  It may turn out that there is only 1 command in the MULTI block, but we can't know
             //  that now.  Unlike regular replication, we can't defer all of the replication until
             //  we know for sure.  We must call bgIterator after each command.
-            static struct serverCommand* cmd_multi = NULL;   // STATIC to avoid repeated lookups
+            static struct serverCommand *cmd_multi = NULL; // STATIC to avoid repeated lookups
             if (cmd_multi == NULL) cmd_multi = lookupCommandOrOriginal(&shared.multi, 1);
             bgIteration_handleCommandReplication(dbid, cmd_multi, 1, &shared.multi);
             sentMultiToBgIterator = true;
         }
-        struct serverCommand* cmd = lookupCommandOrOriginal(argv, argc);
+        struct serverCommand *cmd = lookupCommandOrOriginal(argv, argc);
         bgIteration_handleCommandReplication(dbid, cmd, argc, argv);
         lastDbidSentToBgIterator = dbid;
     }
@@ -3822,7 +3822,7 @@ static void propagatePendingCommands(void) {
     //       replication.  If we sent the multi (to bgIteration), we need to send the matching exec.
     if (sentMultiToBgIterator) {
         // If a MULTI was sent to bgIterator via alsoPropagate(), then send the matching EXEC.
-        static struct serverCommand* cmd_exec = NULL;    // STATIC to avoid repeated lookups
+        static struct serverCommand *cmd_exec = NULL; // STATIC to avoid repeated lookups
         if (cmd_exec == NULL) cmd_exec = lookupCommandOrOriginal(&shared.exec, 1);
         bgIteration_handleCommandReplication(lastDbidSentToBgIterator, cmd_exec, 1, &shared.exec);
         sentMultiToBgIterator = false;

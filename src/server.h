@@ -113,8 +113,8 @@ static_assert(sizeof(off_t) >= 8, "off_t must be 64-bit; ensure _FILE_OFFSET_BIT
  * pair which is suitable to exist in the DB.  It might be active in the DB, or may be unlinked from
  * the DB (but still contains a key/value).  The value may be any of the Valkey data types/encodings.
  */
-typedef struct serverObject robj;       // A keyless string OR a key/value pair
-typedef struct serverObject dbEntry;    // Explicitly a key/value pair
+typedef struct serverObject robj;    // A keyless string OR a key/value pair
+typedef struct serverObject dbEntry; // Explicitly a key/value pair
 
 #include "valkeymodule.h" /* Modules API defines. */
 

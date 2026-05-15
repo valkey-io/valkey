@@ -133,17 +133,16 @@ sudo apt-get install clang-format-18 -y
 
 ### Format your changes
 
-From the repository root, run clang-format on the `src/` directory:
+Run clang-format on the files you modified:
 
 ```bash
-cd src
-clang-format-18 -i **/*.c **/*.h **/*.cpp **/*.hpp
+clang-format-18 -i src/file_you_changed.c src/file_you_changed.h
 ```
 
-Or format only the files you changed:
+To format all source files at once:
 
 ```bash
-clang-format-18 -i src/file_you_changed.c
+clang-format-18 -i src/*.c src/*.h
 ```
 
 The formatting configuration lives in `src/.clang-format`. Use version 18

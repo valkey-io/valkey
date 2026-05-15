@@ -41,8 +41,8 @@
  *                      It is also invoked between 2 eval invocations to reset Lua.
  */
 
-#include "eval.h"
 #include "server.h"
+#include "eval.h"
 #include "sha1.h"
 #include "rand.h"
 #include "cluster.h"

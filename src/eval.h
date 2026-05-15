@@ -1,10 +1,10 @@
 #ifndef _EVAL_H_
 #define _EVAL_H_
 
-#include <stdint.h>
+/* Note: this header requires server.h to be included first (provides uint64_t,
+ * struct listNode, and sets _FILE_OFFSET_BITS=64 before system headers). */
 
-/* Forward declarations - these must match the actual types.
- * Files including eval.h must include server.h first (for listNode via adlist.h). */
+/* Forward declarations */
 typedef struct scriptingEngine scriptingEngine;
 
 typedef struct evalScript {

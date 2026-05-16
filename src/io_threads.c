@@ -504,8 +504,11 @@ int trySendReadToIOThreads(client *c) {
     if (server.active_io_threads_num <= 1) return C_ERR;
     /* Fake/teardown clients may have no connection; never offload those. */
     if (!c->conn) return C_ERR;
-    /* If IO thread is already reading, return C_OK to make sure the main thread will not handle it. */
-    if (c->io_read_state != CLIENT_IDLE) return C_OK;
+    /* If IO thread is still reading, return C_OK so the main thread does not race it. */
+    if (c->io_read_state == CLIENT_PENDING_IO) return C_OK;
+    /* A completed read must be finished by processClientIOReadsDone on the main thread
+     * before we try to offload another read; do not treat it like PENDING_IO. */
+    if (c->io_read_state == CLIENT_COMPLETED_IO) return C_ERR;
     if (c->io_write_state == CLIENT_PENDING_IO) return C_OK;
     /* For simplicity, don't offload replica clients reads as read traffic from replica is negligible */
     if (getClientType(c) == CLIENT_TYPE_REPLICA) return C_ERR;

@@ -734,6 +734,12 @@ static void connRdmaEventHandler(struct aeEventLoop *el, int fd, void *clientDat
 
     /* uplayer should read all */
     while (!(rdma_conn->flags & RDMA_CONN_FLAG_POSTPONE_UPDATE_STATE) && ctx->rx.pos < ctx->rx.offset) {
+        /* When an IO-thread read completed but processClientIOReadsDone has not run yet,
+         * readQueryFromClient cannot consume RDMA RX; without this break the read_handler
+         * would be re-invoked in a tight loop (see trySendReadToIOThreads + postponeClientRead). */
+        client *c = connGetPrivateData(conn);
+        if (c && c->io_read_state == CLIENT_COMPLETED_IO) break;
+
         if (conn->read_handler && (callHandler(conn, conn->read_handler) == C_ERR)) {
             return;
         }

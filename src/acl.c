@@ -1409,6 +1409,9 @@ int ACLSetUser(user *u, const char *op, ssize_t oplen) {
     } else if (!strcasecmp(op, "off")) {
         u->flags |= USER_FLAG_DISABLED;
         u->flags &= ~USER_FLAG_ENABLED;
+    } else if (!strcasecmp(op, "skip-sanitize-payload") || !strcasecmp(op, "sanitize-payload")) {
+        /* These flags are deprecated and have no effect. Accept them silently
+         * for backwards compatibility with old ACL files. */
     } else if (!strcasecmp(op, "nopass")) {
         u->flags |= USER_FLAG_NOPASS;
         listEmpty(u->passwords);

@@ -1902,9 +1902,7 @@ static int _lpEntryValidation(unsigned char *p, unsigned int head_count, void *u
  * when `deep` is 1, we scan all the entries one by one.
  * when `pairs` is 0, all elements need to be unique (it's a set)
  * when `pairs` is 1, odd elements need to be unique (it's a key-value map) */
-int lpValidateIntegrityAndDups(unsigned char *lp, size_t size, int deep, int pairs) {
-    if (!deep) return lpValidateIntegrity(lp, size, 0, NULL, NULL);
-
+int lpValidateIntegrityAndDups(unsigned char *lp, size_t size, int pairs) {
     /* Keep track of the field names to locate duplicate ones */
     struct {
         int pairs;
@@ -1912,7 +1910,7 @@ int lpValidateIntegrityAndDups(unsigned char *lp, size_t size, int deep, int pai
         hashtable *fields; /* Initialisation at the first callback. */
     } data = {pairs, 0, NULL};
 
-    int ret = lpValidateIntegrity(lp, size, 1, _lpEntryValidation, &data);
+    int ret = lpValidateIntegrity(lp, size, _lpEntryValidation, &data);
 
     /* make sure we have an even number of records. */
     if (pairs && data.count & 1) ret = 0;
@@ -2327,7 +2325,7 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
             if (rdbtype == RDB_TYPE_LIST_QUICKLIST_2) {
                 lp = data;
                 if (deep_integrity_validation) server.stat_dump_payload_sanitizations++;
-                if (!lpValidateIntegrity(lp, encoded_len, deep_integrity_validation, NULL, NULL)) {
+                if (!lpValidateIntegrity(lp, encoded_len, NULL, NULL)) {
                     rdbReportCorruptRDB("Listpack integrity check failed.");
                     decrRefCount(o);
                     zfree(lp);
@@ -2472,7 +2470,7 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
             break;
         case RDB_TYPE_SET_LISTPACK:
             if (deep_integrity_validation) server.stat_dump_payload_sanitizations++;
-            if (!lpValidateIntegrityAndDups(encoded, encoded_len, deep_integrity_validation, 0)) {
+            if (!lpValidateIntegrityAndDups(encoded, encoded_len, 0)) {
                 rdbReportCorruptRDB("Set listpack integrity check failed.");
                 zfree(encoded);
                 objectSetVal(o, NULL);
@@ -2518,7 +2516,7 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
         }
         case RDB_TYPE_ZSET_LISTPACK:
             if (deep_integrity_validation) server.stat_dump_payload_sanitizations++;
-            if (!lpValidateIntegrityAndDups(encoded, encoded_len, deep_integrity_validation, 1)) {
+            if (!lpValidateIntegrityAndDups(encoded, encoded_len, 1)) {
                 rdbReportCorruptRDB("Zset listpack integrity check failed.");
                 zfree(encoded);
                 objectSetVal(o, NULL);
@@ -2562,7 +2560,7 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
         }
         case RDB_TYPE_HASH_LISTPACK:
             if (deep_integrity_validation) server.stat_dump_payload_sanitizations++;
-            if (!lpValidateIntegrityAndDups(encoded, encoded_len, deep_integrity_validation, 1)) {
+            if (!lpValidateIntegrityAndDups(encoded, encoded_len, 1)) {
                 rdbReportCorruptRDB("Hash listpack integrity check failed.");
                 zfree(encoded);
                 objectSetVal(o, NULL);
@@ -2622,7 +2620,7 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
                 return NULL;
             }
             if (deep_integrity_validation) server.stat_dump_payload_sanitizations++;
-            if (!streamValidateListpackIntegrity(lp, lp_size, deep_integrity_validation)) {
+            if (!streamValidateListpackIntegrity(lp, lp_size)) {
                 rdbReportCorruptRDB("Stream listpack integrity check failed.");
                 sdsfree(nodekey);
                 decrRefCount(o);

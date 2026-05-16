@@ -1240,9 +1240,8 @@ int lpValidateNext(unsigned char *lp, unsigned char **pp, size_t lpbytes) {
 }
 
 /* Validate the integrity of the data structure.
- * when `deep` is 0, only the integrity of the header is validated.
- * when `deep` is 1, we scan all the entries one by one. */
-int lpValidateIntegrity(unsigned char *lp, size_t size, int deep, listpackValidateEntryCB entry_cb, void *cb_userdata) {
+ * Validates the header and scans all entries one by one. */
+int lpValidateIntegrity(unsigned char *lp, size_t size, listpackValidateEntryCB entry_cb, void *cb_userdata) {
     /* Check that we can actually read the header. (and EOF) */
     if (size < LP_HDR_SIZE + 1) return 0;
 
@@ -1252,8 +1251,6 @@ int lpValidateIntegrity(unsigned char *lp, size_t size, int deep, listpackValida
 
     /* The last byte must be the terminator. */
     if (lp[size - 1] != LP_EOF) return 0;
-
-    if (!deep) return 1;
 
     /* Validate the individual entries. */
     uint32_t count = 0;

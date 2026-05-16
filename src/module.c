@@ -49,7 +49,7 @@
  * (with the exception of a ----- line which can appear first). Other comment
  * blocks, which are not intended for the modules API user, such as this comment
  * block, do NOT start with a markdown level 2 heading, so they are included in
- * the generated a API documentation.
+ * the generated API documentation.
  *
  * The documentation comments may contain markdown formatting. Some automatic
  * replacements are done, such as the replacement of RM with ValkeyModule in
@@ -11403,7 +11403,7 @@ int moduleUnregisterSharedAPI(ValkeyModule *module) {
     return count;
 }
 
-/* Remove the specified module as an user of APIs of ever other module.
+/* Remove the specified module as a user of APIs of every other module.
  * This is usually called when a module is unloaded.
  *
  * Returns the number of modules this module was using APIs from. */

@@ -1748,7 +1748,7 @@ size_t streamReplyWithRange(client *c,
 
             /* Try to add a new NACK. Most of the time this will work and
              * will not require extra lookups. We'll fix the problem later
-             * if we find that there is already a entry for this ID. */
+             * if we find that there is already an entry for this ID. */
             streamNACK *nack = streamCreateNACK(consumer);
             int group_inserted = raxTryInsert(group->pel, buf, sizeof(buf), nack, NULL);
             int consumer_inserted = raxTryInsert(consumer->pel, buf, sizeof(buf), nack, NULL);

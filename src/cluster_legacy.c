@@ -3283,7 +3283,7 @@ void clusterUpdateSlotsConfigWith(clusterNode *sender, uint64_t senderConfigEpoc
             serverLog(LL_NOTICE,
                       "My last slot was migrated to node %.40s (%s) in shard %.40s. I am now an empty primary.",
                       sender->name, humanNodename(sender), sender->shard_id);
-            /* We may still have dirty slots when we became a empty primary due to
+            /* We may still have dirty slots when we became an empty primary due to
              * a bad migration.
              *
              * In order to maintain a consistent state between keys and slots

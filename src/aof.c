@@ -601,7 +601,7 @@ int persistAofManifest(aofManifest *am) {
     return ret;
 }
 
-/* Called in `loadAppendOnlyFiles` when we upgrade from a old version of the server.
+/* Called in `loadAppendOnlyFiles` when we upgrade from an old version of the server.
  *
  * 1) Create AOF directory use 'server.aof_dirname' as the name.
  * 2) Use 'server.aof_filename' to construct a BASE type aofInfo and add it to

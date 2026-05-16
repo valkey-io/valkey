@@ -687,7 +687,7 @@ zskiplistNode *zslDetachNode(zskiplist *zsl, zskiplistNode *node) {
     zskiplistNode *update[ZSKIPLIST_MAXLEVEL];
     zskiplistNode *x = zslGetHeader(zsl);
     for (int i = zslGetHeight(zsl) - 1; i >= 0; i--) {
-        while (x->level[i].forward && x->level[i].forward != node) {
+        while (zslCompareNodes(x->level[i].forward, node) < 0) {
             x = x->level[i].forward;
         }
         update[i] = x;

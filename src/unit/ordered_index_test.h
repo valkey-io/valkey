@@ -75,7 +75,7 @@ class OrderedIndexTestApi {
         OrderedIndexIterator iter;
         OrderedIndexItem *pos;
         initIterator(&iter, oi);
-        while (next(&iter, &pos)) {
+        while ((pos = next(&iter)) != NULL) {
             const char *ptr;
             size_t len;
             getElementRaw(pos, &ptr, &len);

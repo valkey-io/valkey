@@ -1437,6 +1437,7 @@ typedef struct {
             } zl;
             struct {
                 zset *zs;
+                OrderedIndexIterator iter;
                 OrderedIndexItem *node;
             } sl;
         } zset;
@@ -1498,7 +1499,9 @@ static void zuiInitIterator(zsetopsrc *op) {
             }
         } else if (op->encoding == OBJ_ENCODING_SKIPLIST) {
             it->sl.zs = objectGetVal(op->subject);
-            it->sl.node = orderedIndexGetByRank(it->sl.zs->oi, orderedIndexLength(it->sl.zs->oi));
+            orderedIndexInitIterator(&it->sl.iter, it->sl.zs->oi);
+            orderedIndexSeekToRank(&it->sl.iter, orderedIndexLength(it->sl.zs->oi));
+            it->sl.node = NULL;
         } else {
             serverPanic("Unknown sorted set encoding");
         }
@@ -1609,15 +1612,13 @@ static int zuiNext(zsetopsrc *op, zsetopval *val) {
             /* Move to next element (going backwards, see zuiInitIterator). */
             zzlPrev(it->zl.zl, &it->zl.eptr, &it->zl.sptr);
         } else if (op->encoding == OBJ_ENCODING_SKIPLIST) {
+            it->sl.node = orderedIndexPrev(&it->sl.iter);
             if (it->sl.node == NULL) return 0;
             const char *val_ele_ptr;
             size_t val_ele_len;
             orderedIndexGetElementRaw(it->sl.node, &val_ele_ptr, &val_ele_len);
             val->ele = (sds)val_ele_ptr;
             val->score = orderedIndexGetScore(it->sl.node);
-
-            /* Move to next element. (going backwards, see zuiInitIterator) */
-            it->sl.node = (OrderedIndexItem *)((zskiplistNode *)it->sl.node)->backward;
         } else {
             serverPanic("Unknown sorted set encoding");
         }
@@ -2131,7 +2132,7 @@ static void zunionInterDiffGenericCommand(client *c, robj *dstkey, int numkeysIn
                 void *existing;
                 if (hashtableFindPositionForInsert(dstzset->ht, sdsval, &position, &existing)) {
                     sds tmp_ele = zuiNewSdsFromValue(&zval);
-                    OrderedIndexItem *new_node = zslCreateNode(zslRandomLevel(), score, tmp_ele, sdslen(tmp_ele));
+                    OrderedIndexItem *new_node = orderedIndexCreateDetached(score, tmp_ele, sdslen(tmp_ele));
                     sdsfree(tmp_ele);
                     hashtableInsertAtPosition(dstzset->ht, new_node, &position);
                     /* Remember the longest single element encountered,
@@ -2149,20 +2150,22 @@ static void zunionInterDiffGenericCommand(client *c, robj *dstkey, int numkeysIn
                     /* Update the score with the score of the new instance
                      * of the element found in the current sorted set. */
                     OrderedIndexItem *node = existing;
-                    zunionInterAggregate(&((zskiplistNode *)node)->score, score, aggregate);
+                    double cur = orderedIndexGetScore(node);
+                    zunionInterAggregate(&cur, score, aggregate);
+                    orderedIndexDetachedSetScore(node, cur);
                 }
             }
             zuiClearIterator(&src[i]);
         }
 
-        /* Step 2: Create the skiplist using final score ordering */
+        /* Step 2: Insert all detached items into the ordered index */
         hashtableIterator iter;
         hashtableInitIterator(&iter, dstzset->ht, 0);
 
         void *next;
         while (hashtableNext(&iter, &next)) {
             OrderedIndexItem *node = next;
-            zslInsertNode((zskiplist *)dstzset->oi, (zskiplistNode *)node);
+            orderedIndexInsertDetached(dstzset->oi, node);
         }
         hashtableCleanupIterator(&iter);
     } else if (op == SET_OP_DIFF) {

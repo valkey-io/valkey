@@ -4439,7 +4439,7 @@ int processCommand(client *c) {
      * However we don't perform the redirection if:
      * 1) The sender of this command is our primary.
      * 2) The command has no key arguments. */
-    int is_keyless = !(c->cmd->flags & CMD_MOVABLE_KEYS) && c->cmd->key_specs_num == 0 && c->cmd->proc != execCommand;
+    int is_keyless = (c->read_flags & READ_FLAGS_NO_KEYS) && c->cmd->proc != execCommand;
     if (server.cluster_enabled && !obey_client && !is_keyless) {
         int error_code;
         clusterNode *n = getNodeByQuery(c, &error_code);

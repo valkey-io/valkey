@@ -1,5 +1,7 @@
 // Just for the moment, until https://github.com/valkey-io/valkey/issues/3450 is resolved
 // clang-format off
+// The hashtable uses different ordering for 32-bit.  Need consider mocking.
+#if SIZE_MAX == UINT64_MAX /* 64-bit version */
 //#include <algorithm>
 #include "generated_wrappers.hpp"
 #include <vector>
@@ -247,9 +249,14 @@ class BgIterationTest : public ::testing::Test {
         }
 
 
+        robj *createStringObjectFromCString(const char *s) {
+            return createStringObject(s, strlen(s));
+        }
+
+
         void addKeyToDb(int dbid, const char *key, const char *val) {
-            robj *key_obj = createStringObject(key, strlen(key));
-            robj *val_obj = createStringObject(val, strlen(val));
+            robj *key_obj = createStringObjectFromCString(key);
+            robj *val_obj = createStringObjectFromCString(val);
             dbAdd(server.db[dbid], key_obj, &val_obj);
             decrRefCount(key_obj);
         }
@@ -705,9 +712,9 @@ class BgIterationTest : public ::testing::Test {
 
             c->argc = 3;
             c->argv = static_cast<robj**>(zcalloc(sizeof(robj*) * c->argc));
-            c->argv[0] = createStringObjectFromSds(sdsnew(c->cmd->fullname));
-            c->argv[1] = createStringObjectFromSds(sdsnew(keyStr(itemNum)));
-            c->argv[2] = createStringObjectFromSds(sdsnew(value));
+            c->argv[0] = createStringObjectFromCString(c->cmd->fullname);
+            c->argv[1] = createStringObjectFromCString(keyStr(itemNum));
+            c->argv[2] = createStringObjectFromCString(value);
 
             return c;
         }
@@ -734,10 +741,10 @@ class BgIterationTest : public ::testing::Test {
 
             c->argc = 2 + srcItemsNum.size();
             c->argv = static_cast<robj**>(zcalloc(sizeof(robj*) * c->argc));
-            c->argv[0] = createStringObjectFromSds(sdsnew(c->cmd->fullname));
-            c->argv[1] = createStringObjectFromSds(sdsnew(keyStr(dstItemNum)));
+            c->argv[0] = createStringObjectFromCString(c->cmd->fullname);
+            c->argv[1] = createStringObjectFromCString(keyStr(dstItemNum));
             for (unsigned int i = 0;  i < srcItemsNum.size();  i++) {
-                c->argv[2 + i] = createStringObjectFromSds(sdsnew(keyStr(srcItemsNum[i])));
+                c->argv[2 + i] = createStringObjectFromCString(keyStr(srcItemsNum[i]));
             }
 
             return c;
@@ -778,7 +785,7 @@ class BgIterationTest : public ::testing::Test {
                 c->argv = static_cast<robj**>(zcalloc(sizeof(robj*) * 5));   // command + 4 args
 
                 for (int i = 0;  token != NULL;  i++) {
-                    c->argv[i] = createStringObject(token, strlen(token));
+                    c->argv[i] = createStringObjectFromCString(token);
                     c->argc = i+1;
                     token = strtok_r(NULL, " ", &tokenSave);
                 }
@@ -792,7 +799,7 @@ class BgIterationTest : public ::testing::Test {
             c->cmd = lookupCommandByCString("exec");
             c->argc = 1;
             c->argv = static_cast<robj**>(zcalloc(sizeof(robj*) * c->argc));
-            c->argv[0] = createStringObjectFromSds(sdsnew("EXEC"));
+            c->argv[0] = createStringObjectFromCString("EXEC");
 
             zfree(commandsCopy);
             return c;
@@ -838,10 +845,10 @@ class BgIterationTest : public ::testing::Test {
 
             c->argc = 4;
             c->argv = static_cast<robj**>(zcalloc(sizeof(robj*) * c->argc));
-            c->argv[0] = createStringObjectFromSds(sdsnew(cmd->fullname));
-            c->argv[1] = createStringObjectFromSds(sdsnew(keyStr(itemNum1)));
-            c->argv[2] = createStringObjectFromSds(sdsnew(value1));
-            c->argv[3] = createStringObjectFromSds(sdsnew(keyStr(itemNum2)));
+            c->argv[0] = createStringObjectFromCString(cmd->fullname);
+            c->argv[1] = createStringObjectFromCString(keyStr(itemNum1));
+            c->argv[2] = createStringObjectFromCString(value1);
+            c->argv[3] = createStringObjectFromCString(keyStr(itemNum2));
 
             return c;
         }
@@ -865,7 +872,7 @@ class BgIterationTest : public ::testing::Test {
 
             c->argc = 1;
             c->argv = static_cast<robj**>(zcalloc(sizeof(robj*) * c->argc));
-            c->argv[0] = createStringObjectFromSds(sdsnew(cmd->fullname));
+            c->argv[0] = createStringObjectFromCString(cmd->fullname);
 
             return c;
         }
@@ -977,7 +984,7 @@ class BgIterationTest : public ::testing::Test {
                 // Replicate MULTI if this is the first instruction inside MULTI/EXEC
                 if (i == 0) {
                     robj *argv[1];
-                    argv[0] = createStringObjectFromSds(sdsnew("multi"));
+                    argv[0] = createStringObjectFromCString("multi");
                     bgIteration_handleCommandReplication(c->db->id, lookupCommandByCString("multi"), 1, argv);
                     decrRefCount(argv[0]);
                 }
@@ -986,7 +993,7 @@ class BgIterationTest : public ::testing::Test {
 
             // Call handleCommandReplication for EXEC
             robj *argv[1];
-            argv[0] = createStringObjectFromSds(sdsnew("EXEC"));
+            argv[0] = createStringObjectFromCString("EXEC");
             bgIteration_handleCommandReplication(c->db->id, lookupCommandByCString("exec"), 1, argv);
             server.in_exec = 0;
             decrRefCount(argv[0]);
@@ -1005,8 +1012,8 @@ class BgIterationTest : public ::testing::Test {
             int db = getDbFromItemNum(itemNum);
             sds sdsKey = sdsnew(keyStr(itemNum));
             robj *argv[2];
-            argv[0] = createStringObjectFromSds(sdsnew("DEL"));
-            argv[1] = createStringObjectFromSds(sdsdup(sdsKey));
+            argv[0] = createStringObjectFromCString("DEL");
+            argv[1] = createStringObjectFromCString(sdsKey);
             serverCommand *cmd = lookupCommandByCString("DEL");
             bgIteration_handleCommandReplication(db, cmd, 2, argv);
             decrRefCount(argv[0]);
@@ -1067,11 +1074,11 @@ class BgIterationTest : public ::testing::Test {
 
             c->argc = 3;
             c->argv = static_cast<robj**>(zcalloc(sizeof(robj*) * c->argc));
-            c->argv[0] = createStringObjectFromSds(sdsnew(c->cmd->fullname));
+            c->argv[0] = createStringObjectFromCString(c->cmd->fullname);
             dbStr[0] = '0' + dbid0;
-            c->argv[1] = createStringObjectFromSds(sdsnew(dbStr));
+            c->argv[1] = createStringObjectFromCString(dbStr);
             dbStr[0] = '0' + dbid1;
-            c->argv[2] = createStringObjectFromSds(sdsnew(dbStr));
+            c->argv[2] = createStringObjectFromCString(dbStr);
 
             bool blocked = bgIteration_blockClientIfRequired(c);
             EXPECT_FALSE(blocked);  // SWAPDB should never block
@@ -1101,7 +1108,7 @@ class BgIterationTest : public ::testing::Test {
 
             c->argc = 1;
             c->argv = static_cast<robj**>(zcalloc(sizeof(robj*) * c->argc));
-            c->argv[0] = createStringObjectFromSds(sdsnew(c->cmd->fullname));
+            c->argv[0] = createStringObjectFromCString(c->cmd->fullname);
 
             dbEntry *de_in_use = getItem(anInUseItem);
             EXPECT_EQ(de_in_use->refcount, 2u);
@@ -2146,7 +2153,7 @@ TEST_F(BgIterationTest, expireKeys_Replication_NoConsistent_FutureKeyCreatedThen
     // Now, as the SET command tries to execute, simulate that the key is expired.  Expiration
     //  processing sends the replication FIRST!
     robj *argv[2];
-    argv[0] = createStringObjectFromSds(sdsnew("DEL"));
+    argv[0] = createStringObjectFromCString("DEL");
     argv[1] = c->argv[1];
     serverCommand *cmd = lookupCommandByCString("DEL");
     bgIteration_handleCommandReplication(getDbFromItemNum(8), cmd, 2, argv);
@@ -2277,7 +2284,7 @@ TEST_F(BgIterationTest, writeWith2Keys_Replication_NoConsistent_keyDeletedDuring
 
     // Now the write will run, re-creating the item (which is still a future item)
     const char * const newValueStr = "new value";
-    robj *newValueRobj = createStringObjectFromSds(sdsnew(newValueStr));
+    robj *newValueRobj = createStringObjectFromCString(newValueStr);
     setKey(c, c->db, c->argv[1], &newValueRobj, SETKEY_ADD_OR_UPDATE);
 
     // Finally, we are letting bgIteration know that the write command was executed
@@ -2734,12 +2741,12 @@ TEST_F(BgIterationTest, copyHandlesProperDb_Replication_NoConsistent) {
     c->db = server.db[0];
     c->argc = 6;
     c->argv = static_cast<robj**>(zcalloc(sizeof(robj*) * c->argc));
-    c->argv[0] = createStringObjectFromSds(sdsnew(c->cmd->fullname));
-    c->argv[1] = createStringObjectFromSds(sdsnew("C0"));
-    c->argv[2] = createStringObjectFromSds(sdsnew("E0"));
-    c->argv[3] = createStringObjectFromSds(sdsnew("DB"));
-    c->argv[4] = createStringObjectFromSds(sdsnew("1"));
-    c->argv[5] = createStringObjectFromSds(sdsnew("REPLACE"));
+    c->argv[0] = createStringObjectFromCString(c->cmd->fullname));
+    c->argv[1] = createStringObjectFromCString("C0");
+    c->argv[2] = createStringObjectFromCString("E0");
+    c->argv[3] = createStringObjectFromCString("DB");
+    c->argv[4] = createStringObjectFromCString("1");
+    c->argv[5] = createStringObjectFromCString("REPLACE");
 
     // This should block on 2 keys.  DB0:C0 is in queue.  DB1:E0 needs to be expedited.
     simulateBlockedWrite(c, 2);
@@ -3742,3 +3749,5 @@ TEST_F(BgIterationTestCluster, modFutureItem_YesReplication_YesConsistent_cluste
 
 
 // JHB - need test that hashing is paused when an entry is in use.
+
+#endif // if SIZE_MAX == UINT64_MAX /* 64-bit version */

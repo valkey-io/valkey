@@ -713,28 +713,33 @@ void evalGenericCommandWithDebugging(client *c, int evalsha) {
     }
 }
 
-/* Defrag helper for EVAL scripts
- *
- * returns NULL in case the allocation wasn't moved.
- * when it returns a non-null value, the old pointer was already released
- * and should NOT be accessed. */
-void *evalActiveDefragScript(void *ptr) {
-    evalScript *es = ptr;
-    void *ret = NULL;
+/* Defrag callback for eval script hashtable entries. */
+static void defragEvalScriptCallback(void *privdata, void *entry_ref) {
+    UNUSED(privdata);
+    evalScript **es_ref = (evalScript **)entry_ref;
+    evalScript *es = *es_ref;
 
-    compiledFunction *func = es->script;
-    if ((func = activeDefragAlloc(func))) {
-        es->script = func;
+    /* Try to relocate the evalScript entry itself. */
+    evalScript *newes = activeDefragAlloc(es);
+    if (newes) {
+        *es_ref = newes;
+        es = newes;
+        /* Repair LRU list back-pointer. */
+        if (es->node) es->node->value = es;
     }
 
-    /* try to defrag script struct */
-    if ((ret = activeDefragAlloc(es))) {
-        es = ret;
-    }
-
-    /* try to defrag actual script object */
+    /* Defrag internal pointers. */
+    void *func = activeDefragAlloc(es->script);
+    if (func) es->script = func;
     robj *ob = activeDefragStringOb(es->body);
     if (ob) es->body = ob;
+}
 
-    return ret;
+/* Defrag all cached eval scripts. Called from the defrag module. */
+void evalDefragScripts(void *(*defragfn)(void *)) {
+    if (scriptIsRunning()) return;
+    size_t cursor = 0;
+    do {
+        cursor = hashtableScanDefrag(evalScriptsDict(), cursor, defragEvalScriptCallback, NULL, defragfn, HASHTABLE_SCAN_EMIT_REF);
+    } while (cursor != 0);
 }

@@ -949,39 +949,11 @@ static doneStatus defragStagePubsubKvstore(monotime endtime, void *target, void 
 }
 
 
-static void defragEvalScriptCallback(void *privdata, void *entry_ref) {
-    UNUSED(privdata);
-    evalScript **es_ref = (evalScript **)entry_ref;
-    evalScript *es = *es_ref;
-
-    /* Try to relocate the evalScript entry itself. */
-    evalScript *newes = activeDefragAlloc(es);
-    if (newes) {
-        *es_ref = newes;
-        es = newes;
-        /* Repair LRU list back-pointer. */
-        if (es->node) es->node->value = es;
-    }
-
-    /* Defrag internal pointers. */
-    void *func = activeDefragAlloc(es->script);
-    if (func) es->script = func;
-    robj *ob = activeDefragStringOb(es->body);
-    if (ob) es->body = ob;
-}
-
 static doneStatus defragLuaScripts(monotime endtime, void *target, void *privdata) {
     UNUSED(target);
     UNUSED(privdata);
     if (endtime == 0) return DEFRAG_NOT_DONE; // required initialization
-    /* In case we are in the process of eval some script we do not want to replace the script being run
-     * so we just bail out without really defragging here. */
-    if (scriptIsRunning()) return DEFRAG_DONE;
-    /* Defrag eval script entries and their internal allocations. */
-    size_t cursor = 0;
-    do {
-        cursor = hashtableScanDefrag(evalScriptsDict(), cursor, defragEvalScriptCallback, NULL, activeDefragAlloc, HASHTABLE_SCAN_EMIT_REF);
-    } while (cursor != 0);
+    evalDefragScripts(activeDefragAlloc);
     return DEFRAG_DONE;
 }
 

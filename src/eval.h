@@ -19,6 +19,6 @@ typedef struct evalScript {
 void evalInit(void);
 void evalReset(int async);
 void evalRemoveScriptsFromEngine(scriptingEngine *engine);
-void *evalActiveDefragScript(void *ptr);
+void evalDefragScripts(void *(*defragfn)(void *));
 
 #endif /* _EVAL_H_ */

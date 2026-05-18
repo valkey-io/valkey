@@ -169,7 +169,8 @@ bool getParamsForSelect(int argc, robj **argv, client *permission_client, int *d
 static dictType sdsrefToPtrDictType = {
     .entryGetKey = dictEntryGetKey,
     .hashFunction = dictSdsHash,
-    .keyCompare = dictSdsKeyCompare
+    .keyCompare = dictSdsKeyCompare,
+    .entryDestructor = zfree
 };
 
 
@@ -275,13 +276,13 @@ static dictType dictEntryPtrDictType = {
     .entryGetKey = dictEntryGetKey,
     .hashFunction = pointerHash,
     .keyCompare = pointerCompare,
-    .resizeAllowed = neverShrink
+    .resizeAllowed = neverShrink,
+    .entryDestructor = zfree
 };
 
 // A TEMP set of robj's (of type sds).  This is only for temporary sets as the robj's are not
-//  ref-counted at insertion/deletion.  Used for robj->NULL.
-static dictType tempKeysetDictType = {
-    .entryGetKey = dictEntryGetKey,
+//  ref-counted at insertion/deletion.
+static hashtableType tempKeysetHashtableType = {
     .hashFunction = dictObjHash,
     .keyCompare = dictObjKeyCompare
 };
@@ -1101,7 +1102,7 @@ static bool expediteSingleKeyWithoutOptimization(
         bgIterator *it,
         int dbid,
         robj *oKey,
-        dict *waitingOnKeys) {
+        hashtable *waitingOnKeys) {
 
     bool mustBlock = false;
 
@@ -1114,12 +1115,12 @@ static bool expediteSingleKeyWithoutOptimization(
                 && (dictFind(it->early_iterate_entries, de) == NULL)) {
             if (addEarlyIterationKey(it, de, dbid)) {
                 mustBlock = true;
-                dictAdd(waitingOnKeys, oKey, NULL); 
+                hashtableAdd(waitingOnKeys, oKey); 
             }
         } else {
             if (isEntryInuseByAnyIterator(de)) {
                 mustBlock = true;
-                dictAdd(waitingOnKeys, oKey, NULL);
+                hashtableAdd(waitingOnKeys, oKey);
             }
         }
     }
@@ -1135,7 +1136,7 @@ static bool expediteKeysForMove(
         int dbid,
         int argc,
         robj **argv,
-        dict *waitingOnKeys) {
+        hashtable *waitingOnKeys) {
     if (argc <= MOVE_COMMAND_DBID_ARG_INDEX) return false;
 
     int destDbid;
@@ -1162,7 +1163,7 @@ static bool expediteKeysForCopy(
         int dbid,
         int argc,
         robj **argv,
-        dict *waitingOnKeys) {
+        hashtable *waitingOnKeys) {
 
     int destDbid;
     if (!getTargetDbIdForCopyCommand(argc, argv, dbid, &destDbid)) return false;
@@ -1221,7 +1222,7 @@ static bool expediteKeysForWrite(
         robj **argv,
         keyReference *keyrefs,
         int numKeys,
-        dict *waitingOnKeys) {
+        hashtable *waitingOnKeys) {
     serverAssert(numKeys > 0);
 
     bool mustBlock = false;
@@ -1267,12 +1268,12 @@ static bool expediteKeysForWrite(
                     && ((bgIterationEntryMetadata *)objectGetMetadata(de))->iterator_epoch <= it->consistent_modification_id) {
                 if (addEarlyIterationKey(it, de, dbid)) {
                     mustBlock = true;
-                    dictAdd(waitingOnKeys, oKey, NULL); 
+                    hashtableAdd(waitingOnKeys, oKey); 
                 }
             } else {
                 if (isEntryInuseByAnyIterator(de)) {
                     mustBlock = true;
-                    dictAdd(waitingOnKeys, oKey, NULL);
+                    hashtableAdd(waitingOnKeys, oKey);
                 }
             }
         }
@@ -1309,7 +1310,7 @@ static bool expediteKeysForWrite(
                 }
                 if (isEntryInuseByAnyIterator(de)) {
                     mustBlock = true;
-                    dictAdd(waitingOnKeys, oKey, NULL);
+                    hashtableAdd(waitingOnKeys, oKey);
                 }
             }
 
@@ -1346,7 +1347,7 @@ static bool expediteKeysForWrite(
 
                     if (addEarlyIterationKey(it, notIteratedEntry, dbid)) {
                         mustBlock = true;
-                        dictAdd(waitingOnKeys, oKey, NULL); 
+                        hashtableAdd(waitingOnKeys, oKey); 
                     }
                 }
                 dictReleaseIterator(di);
@@ -1367,7 +1368,7 @@ static bool expediteKeysForWrite(
                 }
                 if (isEntryInuseByAnyIterator(de)) {
                     mustBlock = true;
-                    dictAdd(waitingOnKeys, oKey, NULL);
+                    hashtableAdd(waitingOnKeys, oKey);
                 }
             }
         }
@@ -1943,7 +1944,7 @@ static bool expediteKeysForWriteOnAllIterators(
         robj **argv,
         keyReference *keyrefs,
         int numKeys,
-        dict *waitingOnKeys) {
+        hashtable *waitingOnKeys) {
     bool mustBlock = false;
 
     listIter li;
@@ -1971,7 +1972,7 @@ static bool anIteratorWillReplicateForThisCommand(void) {
 }
 
 
-static bool expediteKeysForMultiExec(client *c, dict *waitingOnKeys) {
+static bool expediteKeysForMultiExec(client *c, hashtable *waitingOnKeys) {
     serverAssert(c->cmd->proc == execCommand);
 
     /* For MULTI/EXEC, Valkey buffers all of the commands until hitting the EXEC.
@@ -2404,7 +2405,7 @@ bool bgIteration_blockClientIfRequired(client *c) {
     }
 
     bool mustBlock = false;
-    dict *waitOnKeys = dictCreate(&tempKeysetDictType); // dict of robj(sds)->NULL
+    hashtable *waitOnKeys = hashtableCreate(&tempKeysetHashtableType); // set of robj(sds)
     listEmpty(curCmdMissingKeys);
 
     if (c->cmd->proc == execCommand) {
@@ -2428,7 +2429,7 @@ bool bgIteration_blockClientIfRequired(client *c) {
                  *  (Yuck.)  */
                 while (mustBlock) {
                     receiveItemsBackFromIterators(true); // Blocking
-                    dictEmpty(waitOnKeys, NULL);
+                    hashtableEmpty(waitOnKeys, NULL);
                     mustBlock = expediteKeysForWriteOnAllIterators(
                                     c->db->id, c->cmd, c->argc, c->argv, keyrefs, numkeys, waitOnKeys);
                 }
@@ -2447,24 +2448,25 @@ bool bgIteration_blockClientIfRequired(client *c) {
     }
 
     if (mustBlock) {
-        serverAssert(dictSize(waitOnKeys) > 0);
-        robj **waitKeysArgv = zmalloc(sizeof(robj*) * dictSize(waitOnKeys));
+        serverAssert(hashtableSize(waitOnKeys) > 0);
+        robj **waitKeysArgv = zmalloc(sizeof(robj*) * hashtableSize(waitOnKeys));
 
-        dictEntry *de;
-        dictIterator *di = dictGetIterator(waitOnKeys);
+        robj *key;
+        hashtableIterator hi;
+        hashtableInitIterator(&hi, waitOnKeys, 0);
         unsigned long argvCount = 0;
-        while((de = dictNext(di)) != NULL) {
-            waitKeysArgv[argvCount++] = dictGetKey(de);
+        while (hashtableNext(&hi, (void **)&key)) {
+            waitKeysArgv[argvCount++] = key;
         }
-        dictReleaseIterator(di);
-        serverAssert(argvCount == dictSize(waitOnKeys));
+        hashtableCleanupIterator(&hi);
+        serverAssert(argvCount == hashtableSize(waitOnKeys));
 
         blockClientInUseOnKeys(c, argvCount, waitKeysArgv);
 
         zfree(waitKeysArgv);
     }
 
-    dictRelease(waitOnKeys);
+    hashtableRelease(waitOnKeys);
 
     if (BGITERATION_DEBUG) {
         if (mustBlock) debugBuffer = sdscat(debugBuffer, " (blocked)\n");

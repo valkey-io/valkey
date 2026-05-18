@@ -25,8 +25,6 @@ apply as soon as possible.
 
 ### New Features and enhanced behavior
 * Add cluster bus network traffic usage metric in bytes by @hpatro (#3396)
-
-### New Features and enhanced behavior
 * Reduce latency spikes during rehashing via incremental page release by @chzhoo (#3481)
 
 ### Bug Fixes

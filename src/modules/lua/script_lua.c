@@ -775,14 +775,11 @@ static void luaProcessReplyError(const char *err, lua_State *lua) {
         }
     }
 
-    if (push_error) {
         /* The reply parser strips the leading '-' from the RESP error, so `err`
          * is of the form "CODE msg" (e.g. "OOM command not allowed..."). Re-add
          * the '-' so luaPushErrorBuff() treats the leading word as the error
-         * code and preserves it, instead of falling through to the generic-ERR
-         * branch which would emit "ERR OOM command not allowed...". */
-        const char *err_no_dash = (err[0] == '-') ? err + 1 : err;
-        char *err_with_dash = lm_asprintf("-%s", err_no_dash);
+         * code and doesn't prepend another "ERR" code. */
+        char *err_with_dash = lm_asprintf("-%s", err);
         luaPushError(lua, err_with_dash);
         ValkeyModule_Free(err_with_dash);
     }

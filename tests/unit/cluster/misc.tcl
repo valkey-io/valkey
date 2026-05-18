@@ -104,6 +104,7 @@ start_cluster 1 1 {tags {external:skip cluster} overrides {cluster-config-save-b
 
         # Make sure relevant logs are printed.
         R 0 debug bio-drain $BIO_CLUSTER_SAVE
+        R 1 debug bio-drain $BIO_CLUSTER_SAVE
         verify_log_message 0 "*Could not rename tmp cluster config file*" 0
         verify_log_message -1 "*Could not rename tmp cluster config file*" 0
         verify_log_message 0 "*Cluster config updated even though writing the cluster config file to disk failed*" 0
@@ -119,6 +120,7 @@ start_cluster 1 1 {tags {external:skip cluster} overrides {cluster-config-save-b
             fail "The failover does not happen"
         }
         R 0 debug bio-drain $BIO_CLUSTER_SAVE
+        R 1 debug bio-drain $BIO_CLUSTER_SAVE
         assert_morethan_equal [count_log_message 0 "Could not rename tmp cluster config file"] 2
         assert_equal [count_log_message 0 "Cluster config updated even though writing the cluster config file to disk failed"] 1
         assert_morethan_equal [count_log_message -1 "Could not rename tmp cluster config file"] 2

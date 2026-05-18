@@ -343,6 +343,7 @@ void *bioProcessBackgroundJobs(void *arg) {
                 atomic_store_explicit(&server.cluster_config_bio_save_status, C_ERR, memory_order_relaxed);
             } else {
                 atomic_store_explicit(&server.cluster_config_bio_save_status, C_OK, memory_order_relaxed);
+                last_save_error_log = 0;
             }
         } else {
             serverPanic("Wrong job type in bioProcessBackgroundJobs().");

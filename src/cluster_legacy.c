@@ -1038,7 +1038,7 @@ fmterr:
 
 /* Get the nodes description and concatenate our "vars" directive to
  * save currentEpoch and lastVoteEpoch. */
-sds clusterGenNodesConfContent(void) {
+static sds clusterGenNodesConfContent(void) {
     sds content = clusterGenNodesDescription(NULL, CLUSTER_NODE_HANDSHAKE, 0);
     content = sdscatfmt(content, "vars currentEpoch %U lastVoteEpoch %U\n",
                         (unsigned long long)server.cluster->currentEpoch,
@@ -1153,13 +1153,13 @@ cleanup:
  * This function writes the node config and returns C_OK, on error C_ERR
  * is returned. It is possible to use bio, which can move I/O latency into
  * the bio thread. If bio is used, it always returns C_OK. */
-static int clusterSaveConfig(bool bio, bool do_fsync) {
+static int clusterSaveConfig(bool use_bio, bool do_fsync) {
     server.cluster->todo_before_sleep &= ~CLUSTER_TODO_SAVE_CONFIG;
     if (do_fsync) server.cluster->todo_before_sleep &= ~CLUSTER_TODO_FSYNC_CONFIG;
 
     /* The subsequent function will take ownership of the string and be responsible for freeing it. */
     sds content = clusterGenNodesConfContent();
-    if (bio) {
+    if (use_bio) {
         /* We can actually always fsync the file in bio, but anyway lets follow the old code. */
         bioCreateClusterConfigSaveJob(content, do_fsync);
         return C_OK;
@@ -6391,6 +6391,7 @@ void clusterBeforeSleep(void) {
         bool fsync = flags & CLUSTER_TODO_FSYNC_CONFIG;
         if (server.cluster_configfile_save_behavior == CLUSTER_CONFIGFILE_SAVE_BEHAVIOR_SYNC) {
             /* Sync mode: exit the process if saving fails. */
+            bioDrainWorker(BIO_CLUSTER_SAVE);
             clusterSaveConfigOrDie(fsync);
         } else if (server.cluster_configfile_save_behavior == CLUSTER_CONFIGFILE_SAVE_BEHAVIOR_BEST_EFFORT) {
             /* Best-effort mode: save asynchronously via BIO thread; failures are logged (not fatal)

@@ -8907,6 +8907,7 @@ int VM_UnblockClient(ValkeyModuleBlockedClient *bc, void *privdata) {
         errno = EINVAL;
         return VALKEYMODULE_ERR;
     }
+    if (bc->unblocked) return VALKEYMODULE_OK;
     if (bc->blocked_on_keys) {
         /* In theory the user should always pass the timeout handler as an
          * argument, but better to be safe than sorry. */
@@ -8914,7 +8915,6 @@ int VM_UnblockClient(ValkeyModuleBlockedClient *bc, void *privdata) {
             errno = ENOTSUP;
             return VALKEYMODULE_ERR;
         }
-        if (bc->unblocked) return VALKEYMODULE_OK;
         if (bc->client) moduleBlockedClientTimedOut(bc->client, 1);
     }
     moduleUnblockClientByHandle(bc, privdata);

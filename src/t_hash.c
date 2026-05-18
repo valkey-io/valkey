@@ -1831,6 +1831,8 @@ void hexpireGenericCommand(client *c, long long basetime, int unit) {
 
     bool has_volatile_fields = hashTypeHasVolatileFields(obj);
 
+    initDeferredReplyBuffer(c);
+
     /* From this point we would return array reply */
     addReplyArrayLen(c, num_fields);
 
@@ -1888,6 +1890,8 @@ void hexpireGenericCommand(client *c, long long basetime, int unit) {
             notifyKeyspaceEvent(NOTIFY_GENERIC, "del", c->argv[1], c->db->id);
         }
     }
+
+    commitDeferredReplyBuffer(c, 1);
 }
 
 void hexpireCommand(client *c) {
@@ -1939,6 +1943,8 @@ void hpersistCommand(client *c) {
     if (checkType(c, hash, OBJ_HASH))
         return;
 
+    initDeferredReplyBuffer(c);
+
     /* From this point we would return array reply */
     addReplyArrayLen(c, num_fields);
 
@@ -1959,6 +1965,8 @@ void hpersistCommand(client *c) {
         notifyKeyspaceEvent(NOTIFY_HASH, "hpersist", c->argv[1], c->db->id);
         signalModifiedKey(c, c->db, c->argv[1]);
     }
+
+    commitDeferredReplyBuffer(c, 1);
 }
 
 /* High-Level Algorithm of HTTL / HPTTL / HEXPIRETIME / HPEXPIRETIME Commands:

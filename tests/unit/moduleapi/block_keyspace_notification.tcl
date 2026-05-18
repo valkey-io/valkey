@@ -119,6 +119,34 @@ start_server {tags {"modules"}} {
             fail "Expired event not propagated within 5 seconds"
         }
     }
+
+    test {HFE commands with blocking keyspace notify} {
+        r del h1
+
+        wait_for_blocked_clients_count 0
+        r b_keyspace.clear
+        r hset h1 f1 v1 f2 v2
+        wait_for_blocked_clients_count 0
+
+        # HEXPIRE: updated + expired(del)
+        r b_keyspace.clear
+        assert_equal "1" [r hexpire h1 100 FIELDS 1 f1]
+        assert_equal {{event hexpire key h1}} [r b_keyspace.events]
+        r b_keyspace.clear
+        assert_equal "2" [r hexpire h1 0 FIELDS 1 f1]
+        assert_equal {{event hexpired key h1}} [r b_keyspace.events]
+
+        # HPERSIST
+        r hset h1 f1 v1
+        r hexpire h1 100 FIELDS 1 f1
+        wait_for_blocked_clients_count 0
+        r b_keyspace.clear
+        assert_equal "1" [r hpersist h1 FIELDS 1 f1]
+        assert_equal {{event hpersist key h1}} [r b_keyspace.events]
+
+        r del h1
+    }
+
     test "Unload the module - testblockingkeyspacenotif" {
         assert_equal {OK} [r module unload testblockingkeyspacenotif]
     }

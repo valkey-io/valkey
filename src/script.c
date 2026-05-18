@@ -342,6 +342,16 @@ int scriptAllowsCrossSlot(void) {
     return curr_run_ctx->flags & SCRIPT_ALLOW_CROSS_SLOT;
 }
 
+int scriptIsFailoverKilled(void) {
+    serverAssert(scriptIsRunning());
+    return curr_run_ctx->flags & SCRIPT_FAILOVER_KILLED;
+}
+
+void scriptSetFailoverKilled(void) {
+    serverAssert(scriptIsRunning());
+    curr_run_ctx->flags |= (SCRIPT_KILLED | SCRIPT_FAILOVER_KILLED);
+}
+
 int scriptGetSlot(void) {
     serverAssert(scriptIsRunning());
     return curr_run_ctx->slot;

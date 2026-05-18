@@ -14472,14 +14472,29 @@ int VM_UnregisterScriptingEngine(ValkeyModuleCtx *ctx, const char *engine_name) 
  *
  * `server_ctx` is the server runtime context.
  *
+ * It will return VMSE_STATE_EXECUTING if the function is still executing.
+ *
  * It will return VMSE_STATE_KILLED if the function was already killed either by
  * a `SCRIPT KILL`, or `FUNCTION KILL`.
+ *
+ * It will return VMSE_STATE_FAILOVER_KILLED if the function was already killed
+ * due to a failover.
  */
 ValkeyModuleScriptingEngineExecutionState VM_GetFunctionExecutionState(
     ValkeyModuleScriptingEngineServerRuntimeCtx *server_ctx) {
     int ret = scriptInterrupt(server_ctx);
     serverAssert(ret == SCRIPT_CONTINUE || ret == SCRIPT_KILL);
-    return ret == SCRIPT_CONTINUE ? VMSE_STATE_EXECUTING : VMSE_STATE_KILLED;
+    if (ret == SCRIPT_CONTINUE) {
+        return VMSE_STATE_EXECUTING;
+    } else if (ret == SCRIPT_KILL) {
+        if (scriptIsFailoverKilled()) {
+            return VMSE_STATE_FAILOVER_KILLED;
+        } else {
+            return VMSE_STATE_KILLED;
+        }
+    } else {
+        serverPanic("Unknown scriptInterrupt return value");
+    }
 }
 
 /* Function to send string messages to the client during a debug session.

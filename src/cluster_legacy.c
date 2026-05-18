@@ -41,6 +41,7 @@
 #include "cluster_legacy.h"
 #include "cluster_slot_stats.h"
 #include "cluster_migrateslots.h"
+#include "script.h"
 #include "endianconv.h"
 #include "connection.h"
 #include "module.h"
@@ -6803,6 +6804,26 @@ static void clusterSetPrimary(clusterNode *n, int closeSlots, int full_sync_requ
     if (clusterNodeIsPrimary(myself)) {
         myself->flags &= ~(CLUSTER_NODE_PRIMARY | CLUSTER_NODE_MIGRATE_TO);
         myself->flags |= CLUSTER_NODE_REPLICA;
+
+        if (scriptIsTimedout()) {
+            /* If a failover occurs during a busy script execution, we need to kill
+             * the script to avoid inconsistent data after becoming a new replica.
+             * Otherwise, after the final script execution ends, whether it ends
+             * normally or ends with a `CLUSTER_REDIR*` error, the new replica will
+             * retain the keys written during the execution, resulting in inconsistent
+             * data with the primary node and cannot be recovered. */
+            scriptSetFailoverKilled();
+
+            /* If the script has not generated any writes so far, we can try to
+             * perform psync after killing it. Otherwise, a full sync is required
+             * to ensure consistency with the data on the primary node. */
+            if (scriptIsWriteDirty()) full_sync_required = 1;
+
+            serverLog(LL_WARNING,
+                      "Slow script detected during the failover. "
+                      "Mark the script to be killed to ensure data consistency. Script name is %s.",
+                      scriptCurrFunction());
+        }
     } else {
         if (myself->replicaof) clusterNodeRemoveReplica(myself->replicaof, myself);
     }

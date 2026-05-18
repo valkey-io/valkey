@@ -1913,12 +1913,16 @@ static void luaMaskCountHook(lua_State *lua, lua_Debug *ar) {
     ValkeyModule_Assert(rctx); /* Only supported inside script invocation */
 
     ValkeyModuleScriptingEngineExecutionState state = ValkeyModule_GetFunctionExecutionState(rctx->run_ctx);
-    if (state == VMSE_STATE_KILLED) {
+    if (state == VMSE_STATE_KILLED || state == VMSE_STATE_FAILOVER_KILLED) {
         char *err = NULL;
-        if (rctx->type == VMSE_EVAL) {
-            err = "ERR Script killed by user with SCRIPT KILL.";
+        if (state == VMSE_STATE_FAILOVER_KILLED) {
+            err = "ERR Script killed due to cluster failover.";
         } else {
-            err = "ERR Script killed by user with FUNCTION KILL.";
+            if (rctx->type == VMSE_EVAL) {
+                err = "ERR Script killed by user with SCRIPT KILL.";
+            } else {
+                err = "ERR Script killed by user with FUNCTION KILL.";
+            }
         }
         ValkeyModule_Log(NULL, "notice", "%s", err);
 

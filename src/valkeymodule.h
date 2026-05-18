@@ -976,6 +976,7 @@ typedef enum ValkeyModuleScriptingEngineSubsystemType {
 typedef enum ValkeyModuleScriptingEngineExecutionState {
     VMSE_STATE_EXECUTING,
     VMSE_STATE_KILLED,
+    VMSE_STATE_FAILOVER_KILLED,
 } ValkeyModuleScriptingEngineExecutionState;
 
 typedef enum ValkeyModuleScriptingEngineScriptFlag {

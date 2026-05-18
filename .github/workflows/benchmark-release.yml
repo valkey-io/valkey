@@ -102,7 +102,8 @@ jobs:
               python3-devel \
               openssl-devel \
               bzip2-devel \
-              libffi-devel
+              libffi-devel \
+              jq
           pip install --require-hashes -r requirements.txt
 
       - name: Build latest valkey_latest
@@ -134,31 +135,25 @@ jobs:
           echo "VALKEY_BENCHMARK_PATH=$VALKEY_BENCHMARK_PATH" >> $GITHUB_ENV
           echo "Latest valkey-benchmark path: $VALKEY_BENCHMARK_PATH"
 
-      - name: Override CPU ranges for x86
-        if: matrix.arch == 'x86'
-        working-directory: valkey-perf-benchmark
-        run: |
-          CONFIG_FILE="configs/benchmark-config-arm.json"
-          jq '[.[] | .client_cpu_range = "144-191,48-95"]' "$CONFIG_FILE" > tmp.json && mv tmp.json "$CONFIG_FILE"
-
       - name: Run benchmarks
         working-directory: valkey-perf-benchmark
         env:
           EC2_X86_IP: ${{ secrets.EC2_X86_IP }}
           EC2_ARM64_IP: ${{ secrets.EC2_ARM64_IP }}
         run: |
-          # Set the target IP based on the matrix architecture
+          CONFIG_FILE="configs/benchmark-config-arm.json"
+
+          # Set the target IP and override config based on architecture
           if [[ "${{ matrix.arch }}" == "x86" ]]; then
             TARGET_IP=$EC2_X86_IP
-            echo "Using x86 machine IP"
+            # Override client_cpu_range for x86 due to different NUMA node core allocation
+            jq '[.[] | .client_cpu_range = "144-191,48-95"]' "$CONFIG_FILE" > tmp.json && mv tmp.json "$CONFIG_FILE"
           elif [[ "${{ matrix.arch }}" == "arm64" ]]; then
             TARGET_IP=$EC2_ARM64_IP
-            echo "Using ARM64 machine IP"
           else
             echo "Error: Unknown architecture: ${{ matrix.arch }}"
             exit 1
           fi
-          CONFIG_FILE="configs/benchmark-config-arm.json"
 
           # Verify our custom valkey-benchmark exists
           if [[ ! -f "$VALKEY_BENCHMARK_PATH" ]]; then

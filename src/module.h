@@ -23,6 +23,7 @@ struct ValkeyModuleCtx;
 struct moduleLoadQueueEntry;
 struct ValkeyModuleKeyOptCtx;
 struct ValkeyModuleCommand;
+struct ValkeyModuleCommandResult;
 struct clusterState;
 
 /* Each module type implementation should export a set of methods in order
@@ -95,6 +96,9 @@ typedef struct moduleValue {
     void *value;
 } moduleValue;
 
+typedef int (*ModuleLoadFunc)(void *, void **, int);
+typedef int (*ModuleUnLoadFunc)(void *);
+
 /* This structure represents a module inside the system. */
 typedef struct ValkeyModule {
     void *handle;                         /* Module dlopen() handle. */
@@ -117,6 +121,7 @@ typedef struct ValkeyModule {
     int num_commands_with_acl_categories; /* Number of commands in this module included in acl categories */
     int onload;                           /* Flag to identify if the call is being made from Onload (0 or 1) */
     size_t num_acl_categories_added;      /* Number of acl categories added by this module. */
+    int is_static_module;                 /* 1 if this is a static module, 0 otherwise */
 } ValkeyModule;
 
 /* This is a wrapper for the 'rio' streams used inside rdb.c in the server, so that
@@ -182,6 +187,7 @@ void moduleInitModulesSystem(void);
 void moduleInitModulesSystemLast(void);
 void modulesCron(void);
 int moduleLoad(const char *path, void **argv, int argc, int is_loadex);
+int moduleLoadStatic(const char *path, void **argv, int argc, int is_loadex);
 int moduleUnload(sds name, const char **errmsg);
 void moduleUnloadAllModules(void);
 void moduleLoadFromQueue(void);
@@ -208,6 +214,13 @@ void moduleNotifyKeyspaceEvent(int type, const char *event, robj *key, int dbid)
 unsigned long moduleNotifyKeyspaceSubscribersCnt(void);
 void firePostExecutionUnitJobs(void);
 void moduleCallCommandFilters(client *c);
+void moduleFireCommandResultEvent(client *c,
+                                  struct serverCommand *cmd,
+                                  int command_failed,
+                                  long long duration,
+                                  long long dirty);
+void moduleFireCommandRejectedEvent(client *c, const char *reply_str);
+void moduleFireCommandACLRejectedEvent(client *c, uint64_t subevent, int errpos);
 void modulePostExecutionUnitOperations(void);
 void ModuleForkDoneHandler(int exitcode, int bysignal);
 int TerminateModuleForkChild(int child_pid, int wait);

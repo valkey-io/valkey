@@ -1073,6 +1073,9 @@ void debugCommand(client *c) {
         if (getRangeLongFromObjectOrReply(c, c->argv[2], 0, BIO_NUM_OPS - 1, &type, NULL) != C_OK) return;
         bioDrainWorker((int)type);
         addReply(c, shared.ok);
+    } else if (!strcasecmp(objectGetVal(c->argv[1]), "force-free-primary-async") && c->argc == 3) {
+        server.debug_force_free_primary_async = atoi(objectGetVal(c->argv[2]));
+        addReply(c, shared.ok);
     } else if (!handleDebugClusterCommand(c)) {
         addReplySubcommandSyntaxError(c);
         return;
@@ -1124,7 +1127,7 @@ void _serverAssertPrintClientInfo(const client *c) {
 
     bugReportStart();
     serverLog(LL_WARNING, "=== ASSERTION FAILED CLIENT CONTEXT ===");
-    serverLog(LL_WARNING, "client->flags = %llu", (unsigned long long)c->raw_flag);
+    serverLog(LL_WARNING, "client->flags = %llu(0-63) %llu(64-127)", (unsigned long long)c->raw_flag1, (unsigned long long)c->raw_flag2);
     serverLog(LL_WARNING, "client->conn = %s", connGetInfo(c->conn, conninfo, sizeof(conninfo)));
     serverLog(LL_WARNING, "client->argc = %d", c->argc);
     for (j = 0; j < c->argc; j++) {

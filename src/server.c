@@ -4439,8 +4439,8 @@ int processCommand(client *c) {
      * However we don't perform the redirection if:
      * 1) The sender of this command is our primary.
      * 2) The command has no key arguments. */
-    if (server.cluster_enabled && !obey_client &&
-        !(!(c->cmd->flags & CMD_MOVABLE_KEYS) && c->cmd->key_specs_num == 0 && c->cmd->proc != execCommand)) {
+    int is_keyless = (c->read_flags & READ_FLAGS_NO_KEYS) && c->cmd->proc != execCommand;
+    if (server.cluster_enabled && !obey_client && !is_keyless) {
         int error_code;
         clusterNode *n = getNodeByQuery(c, &error_code);
         if (n == NULL || !clusterNodeIsMyself(n)) {
@@ -4453,6 +4453,32 @@ int processCommand(client *c) {
             c->duration = 0;
             c->cmd->rejected_calls++;
             moduleFireCommandRejectedEvent(c, NULL);
+            return C_OK;
+        }
+    }
+
+    /* If the client has the redirect capability, redirect keyless
+     * commands to the primary when this is a replica and the client
+     * has not opted into replica reads with READONLY. EXEC with all-keyless
+     * queued commands is also considered keyless (c->slot remains -1 as set
+     * by prepareCommand when no keys are found). */
+    int is_keyless_exec = is_exec && c->slot == -1;
+    if (server.cluster_enabled && !obey_client && (is_keyless || is_keyless_exec) && (is_read_command || is_write_command) &&
+        (c->capa & CLIENT_CAPA_REDIRECT) && !c->flag.readonly) {
+        clusterNode *myself = getMyClusterNode();
+        if (clusterNodeIsReplica(myself)) {
+            clusterNode *primary = clusterNodeGetPrimary(myself);
+            if (is_keyless_exec) {
+                discardTransaction(c);
+            } else {
+                flagTransaction(c);
+            }
+            int port = clusterNodeClientPort(primary, connIsTLS(c->conn), c);
+            addReplyErrorSds(c, sdscatprintf(sdsempty(), "-REDIRECT %s:%d",
+                                             clusterNodePreferredEndpoint(primary, c), port));
+            c->duration = 0;
+            c->cmd->rejected_calls++;
+            moduleFireCommandRejectedEvent(c, "-REDIRECT");
             return C_OK;
         }
     }
@@ -7659,7 +7685,7 @@ __attribute__((weak)) int main(int argc, char **argv) {
      * hashes) or use the random seed if not configured. */
     if (server.hash_seed) {
         uint8_t seed[16] = {0};
-        getHashSeedFromString(seed, sizeof(seed), server.hash_seed);
+        getHashSeedFromString(seed, sizeof(seed), server.hash_seed, sdslen(server.hash_seed));
         setConfigurableHashSeed(seed);
     } else {
         setConfigurableHashSeed(hashtableGetHashFunctionSeed());

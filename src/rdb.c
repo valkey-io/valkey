@@ -1613,8 +1613,8 @@ static int rdbSaveInternal(int req, const char *filename, rdbSaveInfo *rsi, int 
         save_rio = (rio *)&cr;
         cr_initialized = true;
     }
-    /* Streaming-compressed RDBs rely on codec checksums and clean frame-end
-     * validation instead of the logical RDB CRC64 trailer. */
+    /* Streaming-compressed RDBs use the frame checksum policy recorded in the
+     * VKCS envelope instead of the logical RDB CRC64 trailer. */
     if (use_streaming_compression || !server.rdb_checksum) {
         save_rio->flags |= RIO_FLAG_SKIP_RDB_CHECKSUM;
         save_rio->update_cksum = NULL;
@@ -3170,8 +3170,8 @@ decompressRioInitResult rdbInputStreamPrepare(rdbInputStream *input) {
     if (init_rc == DECOMPRESS_RIO_INIT_OK) {
         input->initialized = true;
         input->rdb_rio = (rio *)&input->decompressor;
-        /* The codec already validates the encoded frame, so skip CRC64 over
-         * the decoded bytes. */
+        /* The VKCS frame carries its own checksum policy, so there is no
+         * logical RDB CRC64 to validate over the decoded stream. */
         if (input->stream_info.compressed) input->rdb_rio->flags |= RIO_FLAG_SKIP_RDB_CHECKSUM;
     }
     return init_rc;

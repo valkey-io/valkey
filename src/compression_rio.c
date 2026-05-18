@@ -56,7 +56,7 @@ static int compressRioEmit(void *ctx, const uint8_t *data, size_t len) {
 
 static size_t compressRioWrite(rio *r, const void *buf, size_t len) {
     compressRio *cr = (compressRio *)r;
-    if (!cr->writer || cr->finalized || streamWriterIsErrored(cr->writer)) {
+    if (!cr->writer || cr->finalized) {
         r->flags |= RIO_FLAG_WRITE_ERROR;
         return 0;
     }

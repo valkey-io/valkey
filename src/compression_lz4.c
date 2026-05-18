@@ -13,9 +13,9 @@
 static const LZ4F_preferences_t lz4f_prefs = {
     .frameInfo = {
         .blockChecksumFlag = LZ4F_blockChecksumEnabled,
-        .contentChecksumFlag = LZ4F_noContentChecksum,
+        .contentChecksumFlag = LZ4F_contentChecksumEnabled,
         .blockSizeID = LZ4F_max64KB,
-        .blockMode = LZ4F_blockIndependent,
+        .blockMode = LZ4F_blockLinked,
     },
     .compressionLevel = 0,
 };
@@ -75,6 +75,9 @@ ssize_t compressionLz4CompressFeed(streamCompressor *sc,
         prefs.frameInfo.blockChecksumFlag = sc->codec_checksum
                                                 ? LZ4F_blockChecksumEnabled
                                                 : LZ4F_noBlockChecksum;
+        prefs.frameInfo.contentChecksumFlag = sc->codec_checksum
+                                                  ? LZ4F_contentChecksumEnabled
+                                                  : LZ4F_noContentChecksum;
         size_t r = LZ4F_compressBegin(cctx, output, output_capacity, &prefs);
         if (LZ4F_isError(r)) return -1;
         offset = r;
@@ -88,17 +91,26 @@ ssize_t compressionLz4CompressFeed(streamCompressor *sc,
         offset += r;
     }
 
-    if (flush_mode == FLUSH_SYNC) {
+    switch (flush_mode) {
+    case FLUSH_CONTINUE:
+        break;
+    case FLUSH_SYNC: {
         if (offset >= output_capacity) return -1;
         size_t r = LZ4F_flush(cctx, output + offset, output_capacity - offset, NULL);
         if (LZ4F_isError(r)) goto lz4_error;
         offset += r;
-    } else if (flush_mode == FLUSH_END) {
+        break;
+    }
+    case FLUSH_END: {
         if (offset >= output_capacity) return -1;
         size_t r = LZ4F_compressEnd(cctx, output + offset, output_capacity - offset, NULL);
         if (LZ4F_isError(r)) goto lz4_error;
         offset += r;
         sc->stream_started = false;
+        break;
+    }
+    default:
+        goto lz4_error;
     }
 
     if (offset > (size_t)SSIZE_MAX) goto lz4_error;

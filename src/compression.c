@@ -38,42 +38,39 @@ static const compressionCodecImpl compressionLz4CodecImpl = {
     .decompress_feed = compressionLz4DecompressFeed,
 };
 
-static const char *const compressionAlgoNameByAlgo[] = {
-    [ALGO_NONE] = "none",
-    [ALGO_LZF] = "lzf",
-    [ALGO_LZ4] = "lz4",
+typedef struct {
+    const char *name;
+    const compressionCodecImpl *impl;
+} compressionAlgoEntry;
+
+static const compressionAlgoEntry compressionAlgoTable[] = {
+    [ALGO_NONE] = {"none", NULL},
+    [ALGO_LZF] = {"lzf", NULL},
+    [ALGO_LZ4] = {"lz4", &compressionLz4CodecImpl},
 };
 
-static const compressionCodecImpl *const compressionCodecImplByAlgo[] = {
-    [ALGO_LZ4] = &compressionLz4CodecImpl,
-};
-
-static const char *compressionAlgoNameForAlgo(compressionAlgo algo) {
+static const compressionAlgoEntry *compressionAlgoEntryForAlgo(compressionAlgo algo) {
     unsigned int i = (unsigned int)algo;
-    if (i >= sizeof(compressionAlgoNameByAlgo) / sizeof(compressionAlgoNameByAlgo[0])) return NULL;
-    return compressionAlgoNameByAlgo[i];
-}
-
-static const compressionCodecImpl *compressionCodecImplForAlgo(compressionAlgo algo) {
-    unsigned int i = (unsigned int)algo;
-    if (i >= sizeof(compressionCodecImplByAlgo) / sizeof(compressionCodecImplByAlgo[0])) return NULL;
-    return compressionCodecImplByAlgo[i];
+    if (i >= sizeof(compressionAlgoTable) / sizeof(compressionAlgoTable[0])) return NULL;
+    return &compressionAlgoTable[i];
 }
 
 bool compressionAlgoSupportsStreaming(compressionAlgo algo) {
-    return compressionCodecImplForAlgo(algo) != NULL;
+    const compressionAlgoEntry *entry = compressionAlgoEntryForAlgo(algo);
+    return entry && entry->impl;
 }
 
 const char *compressionAlgoName(compressionAlgo algo) {
-    const char *name = compressionAlgoNameForAlgo(algo);
-    return name ? name : "unknown";
+    const compressionAlgoEntry *entry = compressionAlgoEntryForAlgo(algo);
+    return entry && entry->name ? entry->name : "unknown";
 }
 
 int streamCompressorInit(streamCompressor *sc, compressionAlgo algo, int level) {
     if (!sc) return -1;
     memset(sc, 0, sizeof(*sc));
 
-    const compressionCodecImpl *impl = compressionCodecImplForAlgo(algo);
+    const compressionAlgoEntry *entry = compressionAlgoEntryForAlgo(algo);
+    const compressionCodecImpl *impl = entry ? entry->impl : NULL;
     if (!impl || !impl->compressor_init) return -1;
 
     sc->algo = algo;
@@ -88,7 +85,8 @@ int streamCompressorInit(streamCompressor *sc, compressionAlgo algo, int level) 
 
 void streamCompressorDestroy(streamCompressor *sc) {
     if (!sc) return;
-    const compressionCodecImpl *impl = compressionCodecImplForAlgo(sc->algo);
+    const compressionAlgoEntry *entry = compressionAlgoEntryForAlgo(sc->algo);
+    const compressionCodecImpl *impl = entry ? entry->impl : NULL;
     if (impl && impl->compressor_destroy) impl->compressor_destroy(sc);
     memset(sc, 0, sizeof(*sc));
 }
@@ -97,7 +95,8 @@ int streamDecompressorInit(streamDecompressor *sd, compressionAlgo algo) {
     if (!sd) return -1;
     memset(sd, 0, sizeof(*sd));
 
-    const compressionCodecImpl *impl = compressionCodecImplForAlgo(algo);
+    const compressionAlgoEntry *entry = compressionAlgoEntryForAlgo(algo);
+    const compressionCodecImpl *impl = entry ? entry->impl : NULL;
     if (!impl || !impl->decompressor_init) return -1;
 
     sd->algo = algo;
@@ -111,7 +110,8 @@ int streamDecompressorInit(streamDecompressor *sd, compressionAlgo algo) {
 
 void streamDecompressorDestroy(streamDecompressor *sd) {
     if (!sd) return;
-    const compressionCodecImpl *impl = compressionCodecImplForAlgo(sd->algo);
+    const compressionAlgoEntry *entry = compressionAlgoEntryForAlgo(sd->algo);
+    const compressionCodecImpl *impl = entry ? entry->impl : NULL;
     if (impl && impl->decompressor_destroy) impl->decompressor_destroy(sd);
     memset(sd, 0, sizeof(*sd));
 }
@@ -126,7 +126,8 @@ size_t streamDecompressorInputHint(const streamDecompressor *sd) {
 
 size_t streamCompressOutputBound(const streamCompressor *sc, size_t input_len) {
     if (!sc) return 0;
-    const compressionCodecImpl *impl = compressionCodecImplForAlgo(sc->algo);
+    const compressionAlgoEntry *entry = compressionAlgoEntryForAlgo(sc->algo);
+    const compressionCodecImpl *impl = entry ? entry->impl : NULL;
     if (!impl || !impl->compress_output_bound) return 0;
     return impl->compress_output_bound(input_len);
 }
@@ -141,7 +142,8 @@ ssize_t streamCompressFeed(streamCompressor *sc,
     if (sc->errored) return -1;
     if (input_len > 0 && !input) return -1;
 
-    const compressionCodecImpl *impl = compressionCodecImplForAlgo(sc->algo);
+    const compressionAlgoEntry *entry = compressionAlgoEntryForAlgo(sc->algo);
+    const compressionCodecImpl *impl = entry ? entry->impl : NULL;
     if (!impl || !impl->compress_feed) return -1;
 
     return impl->compress_feed(sc, output, output_capacity, input, input_len, flush_mode);
@@ -167,7 +169,8 @@ ssize_t streamDecompressFeed(streamDecompressor *sd,
         return -1;
     }
 
-    const compressionCodecImpl *impl = compressionCodecImplForAlgo(sd->algo);
+    const compressionAlgoEntry *entry = compressionAlgoEntryForAlgo(sd->algo);
+    const compressionCodecImpl *impl = entry ? entry->impl : NULL;
     if (!impl || !impl->decompress_feed) {
         sd->errored = true;
         return -1;

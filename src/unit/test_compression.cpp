@@ -84,7 +84,7 @@ static bool lz4FrameHasBlockChecksum(const uint8_t *data, size_t len) {
     return has_block_checksum;
 }
 
-static bool lz4FrameUsesIndependentBlocks(const uint8_t *data, size_t len) {
+static bool lz4FrameHasContentChecksum(const uint8_t *data, size_t len) {
     LZ4F_dctx *dctx = nullptr;
     EXPECT_FALSE(LZ4F_isError(LZ4F_createDecompressionContext(&dctx, LZ4F_VERSION)));
     if (dctx == nullptr) return false;
@@ -92,10 +92,24 @@ static bool lz4FrameUsesIndependentBlocks(const uint8_t *data, size_t len) {
     LZ4F_frameInfo_t frame_info = {};
     size_t src_size = len;
     size_t ret = LZ4F_getFrameInfo(dctx, &frame_info, data, &src_size);
-    bool has_independent_blocks = !LZ4F_isError(ret) &&
-                                  frame_info.blockMode == LZ4F_blockIndependent;
+    bool has_content_checksum = !LZ4F_isError(ret) &&
+                                frame_info.contentChecksumFlag == LZ4F_contentChecksumEnabled;
     LZ4F_freeDecompressionContext(dctx);
-    return has_independent_blocks;
+    return has_content_checksum;
+}
+
+static bool lz4FrameUsesLinkedBlocks(const uint8_t *data, size_t len) {
+    LZ4F_dctx *dctx = nullptr;
+    EXPECT_FALSE(LZ4F_isError(LZ4F_createDecompressionContext(&dctx, LZ4F_VERSION)));
+    if (dctx == nullptr) return false;
+
+    LZ4F_frameInfo_t frame_info = {};
+    size_t src_size = len;
+    size_t ret = LZ4F_getFrameInfo(dctx, &frame_info, data, &src_size);
+    bool has_linked_blocks = !LZ4F_isError(ret) &&
+                             frame_info.blockMode == LZ4F_blockLinked;
+    LZ4F_freeDecompressionContext(dctx);
+    return has_linked_blocks;
 }
 
 static ssize_t memReaderRead(void *ctx, void *buf, size_t len) {
@@ -953,7 +967,7 @@ TEST_F(CompressionTest, streamWriterFlushAfterFinishIsNoop) {
 }
 
 TEST_F(CompressionTest, streamWriterCodecChecksumToggle) {
-    const char *payload = "block checksum payload block checksum payload";
+    const char *payload = "codec checksum payload codec checksum payload";
 
     for (bool codec_checksum : {false, true}) {
         DynamicBuf db;
@@ -970,7 +984,11 @@ TEST_F(CompressionTest, streamWriterCodecChecksumToggle) {
         ASSERT_EQ(lz4FrameHasBlockChecksum(db.data + VKCS_ENVELOPE_SIZE,
                                            sdslen((const char *)db.data) - VKCS_ENVELOPE_SIZE),
                   codec_checksum)
-            << "LZ4 frame should reflect configured codec checksum setting";
+            << "LZ4 block checksum should reflect configured codec checksum setting";
+        ASSERT_EQ(lz4FrameHasContentChecksum(db.data + VKCS_ENVELOPE_SIZE,
+                                             sdslen((const char *)db.data) - VKCS_ENVELOPE_SIZE),
+                  codec_checksum)
+            << "LZ4 content checksum should reflect configured codec checksum setting";
 
         streamWriterDestroy(t);
         dynamicBufFree(&db);
@@ -1731,7 +1749,7 @@ TEST_F(CompressionTest, independentStreamsCoexist) {
 }
 
 TEST_F(CompressionTest, streamWriterRepetitivePayloadRoundTrip) {
-    /* Default block mode is independent.
+    /* Default block mode is linked.
      * Verify repetitive data still round-trips correctly. */
     DynamicBuf db;
     dynamicBufInit(&db);
@@ -1747,9 +1765,9 @@ TEST_F(CompressionTest, streamWriterRepetitivePayloadRoundTrip) {
         ASSERT_GE(streamWriterWrite(t, pattern, sizeof(pattern)), 0);
     }
     ASSERT_EQ(streamWriterFinish(t), 0);
-    ASSERT_TRUE(lz4FrameUsesIndependentBlocks(db.data + VKCS_ENVELOPE_SIZE,
-                                              sdslen((const char *)db.data) - VKCS_ENVELOPE_SIZE))
-        << "stream writer should use independent LZ4 blocks";
+    ASSERT_TRUE(lz4FrameUsesLinkedBlocks(db.data + VKCS_ENVELOPE_SIZE,
+                                         sdslen((const char *)db.data) - VKCS_ENVELOPE_SIZE))
+        << "stream writer should use linked LZ4 blocks";
 
     sds comp = sdsnewlen(db.data, sdslen((const char *)db.data));
     rio buf_rio;

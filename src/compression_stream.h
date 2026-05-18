@@ -19,6 +19,7 @@
 #define VKCS_MAGIC_1 0x4B /* 'K' */
 #define VKCS_MAGIC_2 0x43 /* 'C' */
 #define VKCS_MAGIC_3 0x53 /* 'S' */
+#define VKCS_MAGIC_SIZE 4
 #define VKCS_ENVELOPE_SIZE 8
 #define VKCS_VERSION 1
 #define VKCS_FLAG_CODEC_CHECKSUM (1 << 0)
@@ -55,10 +56,10 @@ typedef struct streamWriter streamWriter;
 typedef struct streamReader streamReader;
 
 typedef struct {
-    bool compressed;
-    bool codec_checksum_enabled;
     compressionAlgo algo;
     uint8_t stream_kind;
+    bool compressed;
+    bool codec_checksum_enabled;
 } streamReaderInfo;
 
 typedef enum {

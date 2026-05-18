@@ -14,9 +14,9 @@
 #include <sys/types.h>
 
 typedef enum {
-    ALGO_NONE = 0x00,
-    ALGO_LZF = 0x01, /* Per-string LZF inside the RDB payload (legacy). */
-    ALGO_LZ4 = 0x02,
+    ALGO_NONE = 0,
+    ALGO_LZF = 1, /* Per-string LZF inside the RDB payload (legacy). */
+    ALGO_LZ4 = 2,
 } compressionAlgo;
 
 typedef enum {
@@ -38,9 +38,9 @@ typedef struct {
 
 typedef struct {
     compressionAlgo algo;
-    void *ctx;
     bool errored;
     bool frame_done;
+    void *ctx;
     size_t input_hint; /* Preferred compressed bytes for next feed, 0 if unknown. */
 } streamDecompressor;
 

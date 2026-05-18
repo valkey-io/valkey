@@ -39,7 +39,7 @@ static bool vkcsCodecIsSupported(vkcsCodec codec) {
 
 static bool vkcsProbeHasMagicPrefix(const vkcsProbe *probe) {
     if (probe->header_len == 0) return false;
-    size_t magic_prefix_len = probe->header_len < 4 ? probe->header_len : 4;
+    size_t magic_prefix_len = probe->header_len < VKCS_MAGIC_SIZE ? probe->header_len : VKCS_MAGIC_SIZE;
     return memcmp(probe->header, "VKCS", magic_prefix_len) == 0;
 }
 
@@ -105,8 +105,7 @@ static int readVkcsEnvelope(const uint8_t *buf,
                             bool *codec_checksum_enabled) {
     if (!buf || len < VKCS_ENVELOPE_SIZE) return -1;
 
-    if (buf[0] != VKCS_MAGIC_0 || buf[1] != VKCS_MAGIC_1 ||
-        buf[2] != VKCS_MAGIC_2 || buf[3] != VKCS_MAGIC_3) return -1;
+    if (memcmp(buf, "VKCS", VKCS_MAGIC_SIZE) != 0) return -1;
     if (buf[4] != VKCS_VERSION) return -1;
 
     vkcsCodec parsed_codec = (vkcsCodec)buf[5];
@@ -165,7 +164,7 @@ static vkcsProbeResult vkcsProbeFeed(vkcsProbe *probe,
     }
 
     while (consumed < src_len) {
-        size_t target = probe->header_len < 4 ? 4 : VKCS_ENVELOPE_SIZE;
+        size_t target = probe->header_len < VKCS_MAGIC_SIZE ? VKCS_MAGIC_SIZE : VKCS_ENVELOPE_SIZE;
         size_t need = target - probe->header_len;
         size_t take = src_len - consumed < need ? src_len - consumed : need;
 
@@ -173,7 +172,7 @@ static vkcsProbeResult vkcsProbeFeed(vkcsProbe *probe,
         probe->header_len += take;
         consumed += take;
 
-        if (probe->header_len >= 4 && memcmp(probe->header, "VKCS", 4) != 0) {
+        if (probe->header_len >= VKCS_MAGIC_SIZE && memcmp(probe->header, "VKCS", VKCS_MAGIC_SIZE) != 0) {
             *src_consumed = consumed;
             if (!cfg->allow_passthrough) return VKCS_PROBE_ERROR;
             vkcsProbeSetPassthrough(probe);
@@ -452,8 +451,7 @@ streamReader *streamReaderCreate(const streamReaderConfig *cfg,
                                  void *read_ctx) {
     if (!cfg || !read_cb) return NULL;
 
-    streamReader *t = zmalloc(sizeof(*t));
-    memset(t, 0, sizeof(*t));
+    streamReader *t = zcalloc(sizeof(*t));
     t->read_cb = read_cb;
     t->read_ctx = read_ctx;
     t->probe_cfg.allow_passthrough = cfg->allow_passthrough;
@@ -467,7 +465,7 @@ streamReader *streamReaderCreate(const streamReaderConfig *cfg,
 }
 
 static size_t streamReaderProbeBytesNeeded(const streamReader *t) {
-    if (t->probe.header_len < 4) return 4 - t->probe.header_len;
+    if (t->probe.header_len < VKCS_MAGIC_SIZE) return VKCS_MAGIC_SIZE - t->probe.header_len;
     return VKCS_ENVELOPE_SIZE - t->probe.header_len;
 }
 
@@ -489,15 +487,23 @@ int streamReaderProbe(streamReader *t) {
         vkcsProbeResult status = vkcsProbeFeed(&t->probe, &t->probe_cfg, buf,
                                                got > 0 ? (size_t)got : 0,
                                                got == 0, &consumed);
-        if (status == VKCS_PROBE_ERROR) {
+        switch (status) {
+        case VKCS_PROBE_ERROR:
             streamReaderSetError(t, STREAM_READER_ERROR_INCOMPATIBLE);
             return -1;
-        }
-        if (status == VKCS_PROBE_NEED_INPUT) continue;
-        if (status == VKCS_PROBE_COMPRESSED &&
-            !t->decompressor_initialized &&
-            streamReaderInitCompressedState(t, t->buffer_size) != 0) {
-            streamReaderSetError(t, STREAM_READER_ERROR_IO);
+        case VKCS_PROBE_NEED_INPUT:
+            continue;
+        case VKCS_PROBE_COMPRESSED:
+            if (!t->decompressor_initialized &&
+                streamReaderInitCompressedState(t, t->buffer_size) != 0) {
+                streamReaderSetError(t, STREAM_READER_ERROR_IO);
+                return -1;
+            }
+            break;
+        case VKCS_PROBE_PASSTHROUGH:
+            break;
+        default:
+            streamReaderSetError(t, STREAM_READER_ERROR_INCOMPATIBLE);
             return -1;
         }
     }
@@ -680,7 +686,7 @@ ssize_t streamReaderRead(streamReader *t, void *buf, size_t len) {
     if (len == 0) return 0;
     if (len > (size_t)SSIZE_MAX) return -1;
 
-    if (streamReaderProbe(t) != 0) return -1;
+    if (!t->probe.ready && streamReaderProbe(t) != 0) return -1;
 
     if (!t->probe.compressed) {
         return streamReaderReadPassthrough(t, (uint8_t *)buf, len);

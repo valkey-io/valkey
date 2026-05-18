@@ -542,7 +542,7 @@ static int streamReaderDrainCompressedBuf(streamReader *t,
     while (t->compressed_buf_len > 0 && *out_written < out_size) {
         size_t consumed = 0;
         size_t feed_len = t->compressed_buf_len;
-        size_t input_hint = streamDecompressorInputHint(&t->decompressor);
+        size_t input_hint = t->decompressor.input_hint;
         if (input_hint > 0 && feed_len > input_hint) feed_len = input_hint;
         ssize_t produced = streamDecompressFeed(
             &t->decompressor,
@@ -558,7 +558,7 @@ static int streamReaderDrainCompressedBuf(streamReader *t,
         *out_written += (size_t)produced;
         t->compressed_buf_pos += consumed;
         t->compressed_buf_len -= consumed;
-        if (streamDecompressorFrameDone(&t->decompressor)) break;
+        if (t->decompressor.frame_done) break;
         if (consumed == 0 && produced == 0) break;
     }
     if (t->compressed_buf_len == 0) t->compressed_buf_pos = 0;
@@ -587,10 +587,10 @@ static size_t streamReaderCompressedBufTailSpace(streamReader *t) {
 }
 
 static int streamReaderRefillCompressedBuf(streamReader *t) {
-    if (streamDecompressorFrameDone(&t->decompressor)) return 0;
+    if (t->decompressor.frame_done) return 0;
 
     size_t read_size = streamReaderCompressedBufTailSpace(t);
-    size_t input_hint = streamDecompressorInputHint(&t->decompressor);
+    size_t input_hint = t->decompressor.input_hint;
     if (input_hint > 0 && read_size > input_hint) read_size = input_hint;
     if (read_size > (size_t)SSIZE_MAX) read_size = (size_t)SSIZE_MAX;
     if (read_size == 0) return -1;
@@ -668,7 +668,7 @@ static ssize_t streamReaderReadCompressed(streamReader *t, uint8_t *dst, size_t 
                     t->error_kind == STREAM_READER_ERROR_NONE ? STREAM_READER_ERROR_IO
                                                               : t->error_kind);
             }
-            if (filled == 0 && !streamDecompressorFrameDone(&t->decompressor)) {
+            if (filled == 0 && !t->decompressor.frame_done) {
                 return streamReaderFailWithError(t, total, STREAM_READER_ERROR_CORRUPT);
             }
             if (filled == 0) break;
@@ -720,7 +720,7 @@ int streamReaderValidateEnd(streamReader *t) {
         return -1;
     }
 
-    while (!streamDecompressorFrameDone(&t->decompressor)) {
+    while (!t->decompressor.frame_done) {
         ssize_t nread = streamReaderRead(t, buf, sizeof(buf));
         if (nread < 0) return -1;
         if (nread > 0) {

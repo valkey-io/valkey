@@ -53,9 +53,6 @@ void streamCompressorDestroy(streamCompressor *sc);
 int streamDecompressorInit(streamDecompressor *sd, compressionAlgo algo);
 void streamDecompressorDestroy(streamDecompressor *sd);
 
-bool streamDecompressorFrameDone(const streamDecompressor *sd);
-size_t streamDecompressorInputHint(const streamDecompressor *sd);
-
 /* Conservative bound covering header + data + flush/end overhead, so the
  * caller can size one scratch buffer for all flush modes. */
 size_t streamCompressOutputBound(const streamCompressor *sc, size_t input_len);

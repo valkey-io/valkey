@@ -140,9 +140,5 @@ ssize_t compressionLz4DecompressFeed(streamDecompressor *sd,
     *input_consumed = src_size;
     sd->input_hint = ret;
     if (ret == 0) sd->frame_done = true;
-    if (dst_size > (size_t)SSIZE_MAX) {
-        sd->errored = true;
-        return -1;
-    }
     return (ssize_t)dst_size;
 }

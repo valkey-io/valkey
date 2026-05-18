@@ -2745,7 +2745,7 @@ static int applyBind(const char **err) {
 
 static int updateClusterState(const char **err) {
     UNUSED(err);
-    clusterDoBeforeSleep(CLUSTER_TODO_UPDATE_STATE);
+    if (server.cluster_enabled) clusterDoBeforeSleep(CLUSTER_TODO_UPDATE_STATE);
     return 1;
 }
 

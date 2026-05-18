@@ -247,6 +247,7 @@ start_server {tags {"introspection"}} {
 
         set output [r client list capa r capa r]
         assert_match *client-with-r* $output
+
         catch {$c1 close}
     }
 
@@ -285,9 +286,8 @@ start_server {tags {"introspection"}} {
         $c1 client setname "killme-capa"
         $c1 client capa redirect
 
-        # Kill using capa filter
+        # Kill using capa r filter
         r client kill capa r skipme yes
-
         assert_error "*I/O error*" {$c1 ping}
     } {}
 

@@ -93,5 +93,7 @@ unsigned long luaMemory(lua_State *lua);
 
 char *lm_strcpy(const char *str);
 
+void clearCallArgvCache(void);
+
 
 #endif /* __SCRIPT_LUA_H_ */

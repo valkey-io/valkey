@@ -38,10 +38,6 @@ EXPECT CLOSE
 EXPECT CONNECT
 EXPECT ["GET", "foo"]
 SEND "bar"
-
-# Test 3: Handle truncated errors (no heap-buffer-overflow).
-EXPECT ["GET", "foo"]
-SEND -MO
 EXPECT CLOSE
 EOF
 server1=$!
@@ -73,8 +69,6 @@ GET foo
 GET foo
 !sleep
 GET foo
-# Test 3
-GET foo
 EOF
 clientexit=$?
 
@@ -104,7 +98,6 @@ Event: slotmap-updated
 bar
 Event: slotmap-updated
 bar
-Error: MO
 Event: free-context"
 
 echo "$expected" | diff -u - "$testname.out" || exit 99

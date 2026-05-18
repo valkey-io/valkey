@@ -697,26 +697,16 @@ void valkeySetError(valkeyContext *c, int type, const char *str) {
     size_t len;
 
     c->err = type;
-    len = strlen(str);
-    len = len < (sizeof(c->errstr) - 1) ? len : (sizeof(c->errstr) - 1);
-    memcpy(c->errstr, str, len);
-    c->errstr[len] = '\0';
-}
-
-void valkeySetErrorFromErrno(valkeyContext *c, int type, const char *prefix) {
-    int errorno = errno; /* snprintf() may change errno */
-    char buf[128] = {0};
-    size_t len = 0;
-
-    if (prefix != NULL)
-        len = snprintf(buf, sizeof(buf), "%s: ", prefix);
-    strerror_r(errorno, (char *)(buf + len), sizeof(buf) - len);
-    valkeySetError(c, type, buf);
-}
-
-void valkeyClearError(valkeyContext *c) {
-    c->err = 0;
-    memset(c->errstr, '\0', strlen(c->errstr));
+    if (str != NULL) {
+        len = strlen(str);
+        len = len < (sizeof(c->errstr) - 1) ? len : (sizeof(c->errstr) - 1);
+        memcpy(c->errstr, str, len);
+        c->errstr[len] = '\0';
+    } else {
+        /* Only VALKEY_ERR_IO may lack a description! */
+        assert(type == VALKEY_ERR_IO);
+        strerror_r(errno, c->errstr, sizeof(c->errstr));
+    }
 }
 
 valkeyReader *valkeyReaderCreate(void) {
@@ -784,7 +774,8 @@ valkeyFD valkeyFreeKeepFd(valkeyContext *c) {
 int valkeyReconnect(valkeyContext *c) {
     valkeyOptions options = {.connect_timeout = c->connect_timeout};
 
-    valkeyClearError(c);
+    c->err = 0;
+    memset(c->errstr, '\0', strlen(c->errstr));
 
     assert(c->funcs);
     if (c->funcs && c->funcs->close)
@@ -1011,7 +1002,8 @@ valkeyPushFn *valkeySetPushCallback(valkeyContext *c, valkeyPushFn *fn) {
  * After this function is called, you may use valkeyGetReplyFromReader to
  * see if there is a reply available. */
 int valkeyBufferRead(valkeyContext *c) {
-    ssize_t nread;
+    char buf[1024 * 16];
+    int nread;
 
     /* Return early when the context has seen an error. */
     if (c->err)
@@ -1029,20 +1021,13 @@ int valkeyBufferRead(valkeyContext *c) {
         }
         return c->funcs->read_zc_done(c);
     }
-
-    /* Read directly into the reader's buffer to avoid a memcpy. */
-    char *buf;
-    size_t cap;
-    if (valkeyReaderGetReadBuf(c->reader, &buf, &cap, 1024 * 16) != VALKEY_OK) {
-        valkeySetError(c, c->reader->err, c->reader->errstr);
-        return VALKEY_ERR;
-    }
-    nread = c->funcs->read(c, buf, cap);
+    nread = c->funcs->read(c, buf, sizeof(buf));
     if (nread < 0) {
         return VALKEY_ERR;
     }
-    if (nread > 0) {
-        valkeyReaderCommitRead(c->reader, nread);
+    if (nread > 0 && valkeyReaderFeed(c->reader, buf, nread) != VALKEY_OK) {
+        valkeySetError(c, c->reader->err, c->reader->errstr);
+        return VALKEY_ERR;
     }
     return VALKEY_OK;
 }

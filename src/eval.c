@@ -55,12 +55,15 @@
 
 void evalGenericCommandWithDebugging(client *c, int evalsha);
 
-static void evalScriptDestructor(void *entry) {
-    if (entry == NULL) return;
-    evalScript *es = (evalScript *)entry;
+static void freeEvalScript(evalScript *es) {
     scriptingEngineCallFreeFunction(es->engine, VMSE_EVAL, es->script);
     decrRefCount(es->body);
     zfree(es);
+}
+
+static void evalScriptDestructor(void *entry) {
+    if (entry == NULL) return;
+    freeEvalScript((evalScript *)entry);
 }
 
 static const void *evalScriptGetKey(const void *entry) {
@@ -187,9 +190,11 @@ void evalRemoveScriptsFromEngine(scriptingEngine *engine) {
             if (es->node) {
                 listDelNode(evalCtx.scripts_lru_list, es->node);
             }
-            hashtableDelete(evalCtx.scripts, es->sha);
+            hashtablePop(evalCtx.scripts, es->sha, NULL);
+            freeEvalScript(es);
         }
     }
+    hashtableCleanupIterator(&iter);
 }
 
 void evalReset(int async) {
@@ -324,11 +329,11 @@ uint64_t evalGetCommandFlags(client *c, uint64_t cmd_flags) {
  * from server. */
 static void evalDeleteScript(client *c, const char *sha) {
     void *found = NULL;
-    hashtableFind(evalCtx.scripts, sha, &found);
+    hashtablePop(evalCtx.scripts, sha, &found);
     serverAssertWithInfo(c, NULL, found);
     evalScript *es = (evalScript *)found;
     evalCtx.scripts_mem -= getStringObjectSdsUsedMemory(es->body);
-    hashtableDelete(evalCtx.scripts, sha);
+    freeEvalScript(es);
 }
 
 /* Users who abuse EVAL will generate a new lua script on each call, which can

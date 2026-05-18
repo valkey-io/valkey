@@ -121,6 +121,8 @@ start_server {tags {"modules"}} {
     }
 
     test {HFE commands with blocking keyspace notify} {
+        r del h1
+
         wait_for_blocked_clients_count 0
         r b_keyspace.clear
         r hset h1 f1 v1 f2 v2

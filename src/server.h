@@ -2272,6 +2272,7 @@ struct valkeyServer {
     char *cluster_configfile;                              /* Cluster auto-generated config file name. */
     int cluster_configfile_save_behavior;                  /* Cluster config file save behavior. */
     _Atomic(int) cluster_config_bio_save_status;           /* Status of cluster config save in bio job. */
+    _Atomic(time_t) cluster_config_last_save_time;         /* Unix time of last successful cluster config save. */
     struct clusterState *cluster;                          /* State of the cluster */
     int cluster_migration_barrier;                         /* Cluster replicas migration barrier. */
     int cluster_allow_replica_migration;                   /* Automatic replica migrations to orphaned primaries and from empty primaries */

@@ -83,6 +83,12 @@ start_cluster 1 1 {tags {external:skip cluster} overrides {cluster-config-save-b
         assert_equal "ok" [getInfoProperty [R 0 cluster info] cluster_config_save_status]
         assert_equal "ok" [getInfoProperty [R 1 cluster info] cluster_config_save_status]
 
+        # cluster_config_last_save_time should be set to a non-zero unix time on startup.
+        set last_save_time_0 [getInfoProperty [R 0 cluster info] cluster_config_last_save_time]
+        set last_save_time_1 [getInfoProperty [R 1 cluster info] cluster_config_last_save_time]
+        assert_morethan $last_save_time_0 0
+        assert_morethan $last_save_time_1 0
+
         # Create folder that can cause the rename fail.
         create_nodes_conf_folder 0
         create_nodes_conf_folder 1
@@ -170,5 +176,9 @@ start_cluster 1 1 {tags {external:skip cluster} overrides {cluster-config-save-b
         assert_equal {OK} [R 1 CLUSTER saveconfig]
         assert_equal "ok" [getInfoProperty [R 0 cluster info] cluster_config_save_status]
         assert_equal "ok" [getInfoProperty [R 1 cluster info] cluster_config_save_status]
+
+        # cluster_config_last_save_time must have advanced after a successful save.
+        assert_morethan_equal [getInfoProperty [R 0 cluster info] cluster_config_last_save_time] $last_save_time_0
+        assert_morethan_equal [getInfoProperty [R 1 cluster info] cluster_config_last_save_time] $last_save_time_1
     }
 }

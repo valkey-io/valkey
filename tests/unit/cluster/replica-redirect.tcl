@@ -140,7 +140,7 @@ start_cluster 1 1 {tags {external:skip cluster}} {
 
         $rd MULTI
         assert_equal OK [$rd read]
-        # Individual keyless commands get MOVED, consistent with keyed commands
+       # Individual keyless commands get REDIRECT (similar to how keyed commands get MOVED)
         $rd DBSIZE
         assert_error "REDIRECT *" {$rd read}
         $rd RANDOMKEY

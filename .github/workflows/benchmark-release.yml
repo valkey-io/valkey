@@ -94,7 +94,8 @@ jobs:
               python3-devel \
               openssl-devel \
               bzip2-devel \
-              libffi-devel
+              libffi-devel \
+              jq
           pip install -r requirements.txt
 
       - name: Build latest valkey_latest

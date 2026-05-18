@@ -28,7 +28,7 @@
  */
 
 #include "server.h"
-#include "skiplist.h"
+#include "ordered_index.h"
 #include "util.h"
 #include "sha1.h" /* SHA1 is used for DEBUG DIGEST */
 #include "crc64.h"
@@ -217,12 +217,14 @@ void xorObjectDigest(serverDb *db, robj *keyobj, unsigned char *digest, robj *o)
 
             void *next;
             while (hashtableNext(&iter, &next)) {
-                zskiplistNode *node = next;
-                const int len = fpconv_dtoa(node->score, buf);
+                OrderedIndexItem *node = next;
+                const char *ele;
+                size_t ele_len;
+                orderedIndexGetElementRaw(node, &ele, &ele_len);
+                const int len = fpconv_dtoa(orderedIndexGetScore(node), buf);
                 buf[len] = '\0';
                 memset(eledigest, 0, 20);
-                sds ele = zslGetNodeElement(node);
-                mixDigest(eledigest, ele, sdslen(ele));
+                mixDigest(eledigest, ele, ele_len);
                 mixDigest(eledigest, buf, strlen(buf));
                 xorDigest(digest, eledigest, 20);
             }

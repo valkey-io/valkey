@@ -32,7 +32,7 @@
  * SPDX-License-Identifier: BSD-3-Clause
  */
 #include "server.h"
-#include "skiplist.h"
+#include "ordered_index.h"
 #include "connection.h"
 #include "monotonic.h"
 #include "cluster.h"
@@ -627,8 +627,10 @@ hashtableType setHashtableType = {
     .entryDestructor = dictSdsDestructor};
 
 const void *zsetHashtableGetKey(const void *element) {
-    const zskiplistNode *node = element;
-    return zslGetNodeElement(node);
+    const char *ptr;
+    size_t len;
+    orderedIndexGetElementRaw((const OrderedIndexItem *)element, &ptr, &len);
+    return ptr;
 }
 
 /* Sorted sets hash (note: a skiplist is used in addition to the hash table) */

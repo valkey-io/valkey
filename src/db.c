@@ -28,7 +28,7 @@
  */
 
 #include "server.h"
-#include "skiplist.h"
+#include "ordered_index.h"
 #include "cluster.h"
 #include "cluster_migrateslots.h"
 #include "latency.h"
@@ -1064,8 +1064,10 @@ void hashtableScanCallback(void *privdata, void *entry) {
     if (o->type == OBJ_SET) {
         key = (sds)entry;
     } else if (o->type == OBJ_ZSET) {
-        zskiplistNode *node = (zskiplistNode *)entry;
-        key = zslGetNodeElement(node);
+        const char *ptr;
+        size_t ele_len;
+        orderedIndexGetElementRaw((const OrderedIndexItem *)entry, &ptr, &ele_len);
+        key = (sds)ptr;
         /* zset data is copied after filtering by key */
     } else if (o->type == OBJ_HASH) {
         key = entryGetField(entry);
@@ -1087,11 +1089,13 @@ void hashtableScanCallback(void *privdata, void *entry) {
      * allocations. */
     if (o->type == OBJ_ZSET) {
         /* zset data is copied */
-        zskiplistNode *node = (zskiplistNode *)entry;
-        key = sdsdup(zslGetNodeElement(node));
+        const char *ptr;
+        size_t ele_len;
+        orderedIndexGetElementRaw((const OrderedIndexItem *)entry, &ptr, &ele_len);
+        key = sdsdup((sds)ptr);
         if (!data->only_keys) {
             char buf[MAX_LONG_DOUBLE_CHARS];
-            int len = ld2string(buf, sizeof(buf), node->score, LD_STR_AUTO);
+            int len = ld2string(buf, sizeof(buf), orderedIndexGetScore((const OrderedIndexItem *)entry), LD_STR_AUTO);
             sds tmp = sdsnewlen(buf, len);
             val.buf = (const char *)tmp;
             val.len = sdslen(tmp);

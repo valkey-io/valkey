@@ -30,6 +30,7 @@
 
 #include "geo.h"
 #include "skiplist.h"
+#include "ordered_index.h"
 #include "geohash_helper.h"
 #include "debugmacro.h"
 #include "pqsort.h"
@@ -308,27 +309,31 @@ int geoGetPointsInRange(robj *zobj, double min, double max, GeoShape *shape, geo
         }
     } else if (zobj->encoding == OBJ_ENCODING_SKIPLIST) {
         zset *zs = objectGetVal(zobj);
-        zskiplist *zsl = (zskiplist *)zs->oi;
-        zskiplistNode *ln;
+        OrderedIndexIterator iter;
+        orderedIndexInitIterator(&iter, zs->oi);
+        orderedIndexSeekToScoreRange(&iter, range.min, range.max, range.minex, range.maxex, 0);
+        OrderedIndexItem *ln;
 
-        if ((ln = zslNthInRange(zsl, &range, 0, NULL)) == NULL) {
+        if ((ln = orderedIndexNext(&iter)) == NULL) {
             /* Nothing exists starting at our min.  No results. */
             return 0;
         }
 
-        while (ln) {
+        do {
             double xy[2];
             double distance = 0;
+            double score = orderedIndexGetScore(ln);
             /* Abort when the node is no longer in range. */
-            if (!zslValueLteMax(ln->score, &range)) break;
-            if (geoWithinShape(shape, ln->score, xy, &distance) == C_OK) {
+            if (!zslValueLteMax(score, &range)) break;
+            if (geoWithinShape(shape, score, xy, &distance) == C_OK) {
                 /* Append the new element. */
-                sds ele = zslGetNodeElement(ln);
-                geoArrayAppend(ga, xy, distance, ln->score, sdsdup(ele));
+                const char *ele;
+                size_t ele_len;
+                orderedIndexGetElementRaw(ln, &ele, &ele_len);
+                geoArrayAppend(ga, xy, distance, score, sdsnewlen(ele, ele_len));
             }
             if (ga->used && limit && ga->used >= limit) break;
-            ln = ln->level[0].forward;
-        }
+        } while ((ln = orderedIndexNext(&iter)) != NULL);
     }
     return ga->used - origincount;
 }
@@ -833,7 +838,7 @@ void georadiusGeneric(client *c, int srcKeyIndex, int flags) {
         }
 
         for (i = 0; i < returned_items; i++) {
-            zskiplistNode *znode;
+            OrderedIndexItem *znode;
             geoPoint *gp = ga.array + i;
             gp->dist /= shape.conversion; /* Fix according to unit. */
             double score = storedist ? gp->dist : gp->score;
@@ -841,7 +846,7 @@ void georadiusGeneric(client *c, int srcKeyIndex, int flags) {
 
             if (maxelelen < elelen) maxelelen = elelen;
             totelelen += elelen;
-            znode = zslInsert((zskiplist *)zs->oi, score, gp->member);
+            znode = orderedIndexInsert(zs->oi, score, gp->member, elelen);
             serverAssert(hashtableAdd(zs->ht, znode));
             sdsfree(gp->member);
             gp->member = NULL;

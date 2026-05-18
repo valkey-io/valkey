@@ -6,7 +6,7 @@
  *
  * Defines an abstract C++ interface that each implementation subclasses.
  * Production code uses the functions declared in ordered_index.h
- * (implemented in ordered_index.c) which delegate to the active backend.
+ * (implemented in ordered_index.c) which delegate to the active implementation.
  */
 
 extern "C" {

@@ -234,7 +234,7 @@ zskiplistNode *zslInsert(zskiplist *zsl, double score, const_sds ele) {
 
 /* Internal function used by zslDelete, zslDeleteRangeByScore and
  * zslDeleteRangeByRank. */
-void zslDeleteNode(zskiplist *zsl, zskiplistNode *x, zskiplistNode **update) {
+void zslUnlinkNode(zskiplist *zsl, zskiplistNode *x, zskiplistNode **update) {
     int i;
     for (i = 0; i < zslGetHeight(zsl); i++) {
         if (update[i]->level[i].forward == x) {
@@ -270,7 +270,7 @@ void zslDelete(zskiplist *zsl, zskiplistNode *node) {
     /* We should have arrived at the correct node */
     serverAssert(x->level[0].forward == node);
 
-    zslDeleteNode(zsl, node, update);
+    zslUnlinkNode(zsl, node, update);
     zslFreeNode(node);
 }
 
@@ -304,7 +304,7 @@ zskiplistNode *zslUpdateScore(zskiplist *zsl, zskiplistNode *node, double newsco
     /* We assume that the node exists in the skiplist */
     serverAssert(x->level[0].forward == node);
 
-    zslDeleteNode(zsl, node, update);
+    zslUnlinkNode(zsl, node, update);
     node->score = newscore; /* reuse existing node to avoid memory allocation */
     zslInsertNode(zsl, node);
     return node;
@@ -431,7 +431,7 @@ unsigned long zslDeleteRangeByScore(zskiplist *zsl, zrangespec *range, hashtable
     /* Delete nodes while in range. */
     while (x && zslValueLteMax(x->score, range)) {
         zskiplistNode *next = x->level[0].forward;
-        zslDeleteNode(zsl, x, update);
+        zslUnlinkNode(zsl, x, update);
         sds ele = zslGetNodeElement(x);
         hashtablePop(ht, ele, NULL);
         zslFreeNode(x);
@@ -462,7 +462,7 @@ unsigned long zslDeleteRangeByLex(zskiplist *zsl, zlexrangespec *range, hashtabl
     /* Delete nodes while in range. */
     while (x && zslLexValueLteMax(zslGetNodeElement(x), range)) {
         zskiplistNode *next = x->level[0].forward;
-        zslDeleteNode(zsl, x, update);
+        zslUnlinkNode(zsl, x, update);
         hashtableDelete(ht, zslGetNodeElement(x));
         zslFreeNode(x); /* Here is where x->ele is actually released. */
         removed++;
@@ -491,7 +491,7 @@ unsigned long zslDeleteRangeByRank(zskiplist *zsl, unsigned int start, unsigned 
     x = x->level[0].forward;
     while (x && traversed <= end) {
         zskiplistNode *next = x->level[0].forward;
-        zslDeleteNode(zsl, x, update);
+        zslUnlinkNode(zsl, x, update);
         hashtableDelete(ht, zslGetNodeElement(x));
         zslFreeNode(x);
         removed++;
@@ -672,7 +672,6 @@ zskiplistNode *zslNthInLexRange(zskiplist *zsl, zlexrangespec *range, long n) {
     return x;
 }
 
-/* --- Accessors added for OrderedIndex --- */
 
 zskiplistNode *zslGetFirst(const zskiplist *zsl) {
     return ((zskiplist *)zsl)->header.level[0].forward;
@@ -693,7 +692,7 @@ zskiplistNode *zslDetachNode(zskiplist *zsl, zskiplistNode *node) {
         update[i] = x;
     }
     serverAssert(x->level[0].forward == node);
-    zslDeleteNode(zsl, node, update);
+    zslUnlinkNode(zsl, node, update);
     return node;
 }
 

@@ -138,7 +138,7 @@ zskiplistNode *zslInsertNode(zskiplist *zsl, zskiplistNode *node);
 zskiplistNode *zslInsert(zskiplist *zsl, double score, const_sds ele);
 
 /* Deletion */
-void zslDeleteNode(zskiplist *zsl, zskiplistNode *x, zskiplistNode **update);
+void zslUnlinkNode(zskiplist *zsl, zskiplistNode *x, zskiplistNode **update);
 void zslDelete(zskiplist *zsl, zskiplistNode *node);
 void zslFreeNode(zskiplistNode *node);
 unsigned long zslDeleteRangeByScore(zskiplist *zsl, zrangespec *range, hashtable *ht);

@@ -20,10 +20,10 @@
  * membership testing and prevents duplicate insertions. The caller is
  * responsible for checking the hashtable before inserting.
  *
- * The interface is backend-agnostic. Currently the only backend is a skiplist
- * (see skiplist_ordered_index.c). A B+ tree backend is planned. Backend
+ * The interface is implementation-agnostic. Currently implemented as a skiplist
+ * (see skiplist_ordered_index.c). A B+ tree implementation is planned. Implementation
  * selection is resolved at link time — all orderedIndex* functions are
- * implemented in ordered_index.c which delegates to the active backend. */
+ * implemented in ordered_index.c which delegates to the active implementation. */
 
 #include "sds.h"
 #include <stddef.h>
@@ -90,7 +90,7 @@ void orderedIndexDetachedSetScore(OrderedIndexItem *item, double score);
 /* Insert a previously-detached item into the index. The index takes ownership. */
 OrderedIndexItem *orderedIndexInsertDetached(OrderedIndex *oi, OrderedIndexItem *item);
 
-/* Delete all items with score in [min, max] (exclusive if min_ex/max_ex set).
+/* Delete all items with score in [min, max]. If min_ex is set, min is exclusive; if max_ex is set, max is exclusive.
  * Calls on_delete for each removed item. Returns count of items removed. */
 unsigned long orderedIndexDeleteRangeByScore(OrderedIndex *oi, double min, double max, int min_ex, int max_ex, OrderedIndexOnDelete on_delete, void *ctx);
 
@@ -98,7 +98,7 @@ unsigned long orderedIndexDeleteRangeByScore(OrderedIndex *oi, double min, doubl
  * Calls on_delete for each removed item. Returns count of items removed. */
 unsigned long orderedIndexDeleteRangeByRank(OrderedIndex *oi, unsigned long start, unsigned long end, OrderedIndexOnDelete on_delete, void *ctx);
 
-/* Delete all items with element in lex range [min, max].
+/* Delete all items with element in lex range [min, max]. If min_ex is set, min is exclusive; if max_ex is set, max is exclusive.
  * Calls on_delete for each removed item. Returns count of items removed. */
 unsigned long orderedIndexDeleteRangeByLex(OrderedIndex *oi, const_sds min, const_sds max, int min_ex, int max_ex, OrderedIndexOnDelete on_delete, void *ctx);
 
@@ -121,18 +121,19 @@ void orderedIndexGetElementRaw(const OrderedIndexItem *item, const char **ptr, s
 /* Get the score of an item. */
 double orderedIndexGetScore(const OrderedIndexItem *item);
 
-/* Count items with score in [min, max] (exclusive if min_ex/max_ex set). */
+/* Count items with score in [min, max]. If min_ex is set, min is exclusive; if max_ex is set, max is exclusive. */
 unsigned long orderedIndexCountScoreRange(OrderedIndex *oi, double min, double max, int min_ex, int max_ex);
 
-/* Count items with element in lex range [min, max]. */
+/* Count items with element in lex range [min, max]. If min_ex is set, min is exclusive; if max_ex is set, max is exclusive. */
 unsigned long orderedIndexCountLexRange(OrderedIndex *oi, const_sds min, const_sds max, int min_ex, int max_ex);
 
 /* ============================================================
  * Iterator
  * ============================================================ */
 
-/* Initialize a stack-allocated iterator. Must call a seek function before
- * iterating, or next()/prev() will start from the beginning/end. */
+/* Initialize a stack-allocated iterator. If no seek function is called,
+ * next() starts from the beginning and prev() starts from the end.
+ * Use orderedIndexSeekToRank/ScoreRange/LexRange to start elsewhere. */
 void orderedIndexInitIterator(OrderedIndexIterator *iter, OrderedIndex *oi);
 
 /* Reset iterator position (keeps the index association). */
@@ -162,10 +163,10 @@ void orderedIndexSeekToLexRange(OrderedIndexIterator *iter, const_sds min, const
 /* Hint to the OS that the index memory can be reclaimed (e.g. via madvise). */
 void orderedIndexDismissMemory(OrderedIndex *oi);
 
-/* Estimate total memory usage by sampling. */
+/* Estimate total memory usage by averaging the specified number of sample elements. */
 size_t orderedIndexEstimateMemory(OrderedIndex *oi, size_t sample_size);
 
-/* Defrag the index header/metadata. Returns new pointer if reallocated. */
+/* Defrag data structure internals. Returns new pointer if reallocated. */
 OrderedIndex *orderedIndexDefragInternals(OrderedIndex *oi, void *(*defragfn)(void *));
 
 /* Incremental defrag scan. Walks items in batches, calling defragfn on each.

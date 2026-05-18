@@ -1,3 +1,9 @@
+/*
+ * Copyright (c) Valkey Contributors
+ * All rights reserved.
+ * SPDX-License-Identifier: BSD-3-Clause
+ */
+
 #include "server.h"
 #include "ordered_index.h"
 #include "skiplist.h"
@@ -96,11 +102,8 @@ unsigned long skiplistDeleteRangeByScore(OrderedIndex *oi, double min, double ma
     /* Delete nodes while in range. */
     while (x && zslValueLteMax(x->score, &range)) {
         zskiplistNode *next = x->level[0].forward;
-        zslDeleteNode(zsl, x, update);
+        zslUnlinkNode(zsl, x, update);
         if (on_delete) { on_delete((OrderedIndexItem *)x, ctx); } else { zslFreeNode(x); }
-
-
-
 
         removed++;
         x = next;
@@ -127,11 +130,8 @@ unsigned long skiplistDeleteRangeByRank(OrderedIndex *oi, unsigned long start, u
     x = x->level[0].forward;
     while (x && traversed <= end) {
         zskiplistNode *next = x->level[0].forward;
-        zslDeleteNode(zsl, x, update);
+        zslUnlinkNode(zsl, x, update);
         if (on_delete) { on_delete((OrderedIndexItem *)x, ctx); } else { zslFreeNode(x); }
-
-
-
 
         removed++;
         traversed++;
@@ -165,11 +165,8 @@ unsigned long skiplistDeleteRangeByLex(OrderedIndex *oi, const_sds min, const_sd
         sds ele = zslGetNodeElement(x);
         if (!zslLexValueLteMax(ele, &range)) break;
         zskiplistNode *next = x->level[0].forward;
-        zslDeleteNode(zsl, x, update);
+        zslUnlinkNode(zsl, x, update);
         if (on_delete) { on_delete((OrderedIndexItem *)x, ctx); } else { zslFreeNode(x); }
-
-
-
 
         removed++;
         x = next;

@@ -42,8 +42,6 @@
 #include <string.h>
 
 LIBVALKEY_API void valkeySetError(valkeyContext *c, int type, const char *str);
-LIBVALKEY_API void valkeySetErrorFromErrno(valkeyContext *c, int type, const char *prefix);
-void valkeyClearError(valkeyContext *c);
 
 /* Helper function. Convert struct timeval to millisecond. */
 static inline int valkeyContextTimeoutMsec(const struct timeval *timeout, long *result) {

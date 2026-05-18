@@ -64,7 +64,7 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Build in FreeBSD
-        uses: vmactions/freebsd-vm@d1e65811565151536c0c894fff74f06351ed26e6 # v1.4.5
+        uses: vmactions/freebsd-vm@c9f815bc7aa0d34c9fdd0619b034a32d6ca7b57e # v1.4.2
         with:
           prepare: pkg install -y gmake cmake
           run: |
@@ -77,7 +77,7 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - name: Build on Solaris
-        uses: vmactions/solaris-vm@c20562b2c69737b06be9e828915761703e487373 # v1.3.3
+        uses: vmactions/solaris-vm@69d382b4a775b25ea5955e6c1730e9d05047ca0d # v1.3.1
         with:
           prepare: pkgutil -y -i gmake gcc5core openssl_utils
           run: USE_TLS=1 gmake
@@ -108,7 +108,7 @@ jobs:
              > pkg.oracle.com.key.pem
 
        - name: Build on Solaris
-         uses: vmactions/solaris-vm@c20562b2c69737b06be9e828915761703e487373 # v1.3.3
+         uses: vmactions/solaris-vm@69d382b4a775b25ea5955e6c1730e9d05047ca0d # v1.3.1
          with:
            usesh: true
            prepare: |

@@ -12,7 +12,7 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - name: Run spellcheck
-        uses: rojopolis/spellcheck-github-actions@e3cd8e9aec4587ec73bc0e60745aafd45c37aa2e # 0.60.0
+        uses: rojopolis/spellcheck-github-actions@0bf4b2f91efa259b52c202b09b0c3845c524ff36 # 0.58.0
         with:
           config_path: .github/spellcheck-settings.yml
           task_name: Markdown
@@ -21,7 +21,7 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - name: Install typos
-        uses: taiki-e/install-action@db5fb34fa772531a3ece57ca434f579eb334e0fb # v2.75.30
+        uses: taiki-e/install-action@288875dd3d64326724fa6d9593062d9f8ba0b131 # v2.67.30
         with:
           tool: typos
       - name: Run typos

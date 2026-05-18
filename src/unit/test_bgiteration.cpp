@@ -2129,7 +2129,7 @@ TEST_F(BgIterationTest, expireKeys_NoReplication_YesConsistent) {
 //  2. Later the key is expired and deleted during command processing (causes DEL to be sent) - no longer early iterated
 //  3. The key is recreated as part of the command processing (and this command was replicated) - again early iterated
 //  4. Finally, when we iterate to the key, it shouldn't be sent, because it was replicated in step 3.
-TEST_F(BgIterationTest, expireKeys_Replication_NoConsistent_FutureKeyCreatedThenExipredDuringSet) {
+TEST_F(BgIterationTest, expireKeys_Replication_NoConsistent_FutureKeyCreatedThenExpiredDuringSet) {
     simpleDelItem(8);   // Start with a missing future item
     bgIterator *it = bgIteratorCreateFullScanIter("iter",
             BGITERATOR_FLAG_REPLICATION, NULL, iteratorCleanupFn, PRIVDATA);

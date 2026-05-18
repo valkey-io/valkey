@@ -19,8 +19,8 @@
  */
 
 /* Avoids dependency on server.h */
-typedef struct serverObject dbEntry;    // An object with key/value inserted into main dictionary
-typedef struct serverObject robj;       // An object with a value used for command parameters
+typedef struct serverObject dbEntry; // An object with key/value inserted into main dictionary
+typedef struct serverObject robj;    // An object with a value used for command parameters
 typedef struct client client;
 
 /* The bgIterator is an opaque structure.  */
@@ -87,11 +87,11 @@ typedef void (*bgIteratorCleanupFunc)(bool terminated, void *privdata);
  * last item is read.
  */
 bgIterator * bgIteratorCreateFullScanIter(
-        const char *name,
-        int flags,
-        bgIteratorReplDoneFunc repldone,
-        bgIteratorCleanupFunc cleanup,
-        void *privdata);
+    const char *name,
+    int flags,
+    bgIteratorReplDoneFunc repldone,
+    bgIteratorCleanupFunc cleanup,
+    void *privdata);
 
 
 /* Create a background slots iterator (bgIterator).
@@ -116,23 +116,23 @@ bgIterator * bgIteratorCreateFullScanIter(
  * last item is read.
  */
 bgIterator * bgIteratorCreateSlotsIter(
-        const char *name,
-        int flags,
-        const int *slots,
-        int slots_count,
-        bgIteratorReplDoneFunc repldone,
-        bgIteratorCleanupFunc cleanup,
-        void *privdata);
+    const char *name,
+    int flags,
+    const int *slots,
+    int slots_count,
+    bgIteratorReplDoneFunc repldone,
+    bgIteratorCleanupFunc cleanup,
+    void *privdata);
 
 
 /* Find an existing bgIterator by name.
  * Returns NULL if the iterator does not exist (or has completed).
  */
-bgIterator * bgIteratorFind(const char *name);
+bgIterator *bgIteratorFind(const char *name);
 
 
 /* Get the name of an existing iterator.  */
-const char * bgIteratorName(bgIterator *iter);
+const char *bgIteratorName(bgIterator *iter);
 
 
 /* Struct to retrieve status information for an active iteration client.  */
@@ -225,12 +225,12 @@ typedef struct {
 
 typedef struct {
     bgIteratorItemType type;
-    int dbid;       /* orig DB ID for CONSISTENT, queue-time DB ID for !CONSISTENT.  */
+    int dbid; // orig DB ID for CONSISTENT, queue-time DB ID for !CONSISTENT.
     union {
-        dbEntryData dbe;                // for BGITERATOR_ITEM_DBENTRY
-        replicationData repl;           // for BGITERATOR_ITEM_REPLICATION
-        long long master_repl_offset;   // for BGITERATOR_ITEM_COMPLETE
-        int dbid2;                      // for BGITERATOR_ITEM_SWAPDB
+        dbEntryData dbe;              // for BGITERATOR_ITEM_DBENTRY
+        replicationData repl;         // for BGITERATOR_ITEM_REPLICATION
+        long long master_repl_offset; // for BGITERATOR_ITEM_COMPLETE
+        int dbid2;                    // for BGITERATOR_ITEM_SWAPDB
     } u;
 } bgIteratorItem;
 
@@ -250,7 +250,7 @@ typedef struct {
  *
  * (All memory management is the responsibility of the bgIterator - not the reader.)
  */
-bgIteratorItem * bgIteratorRead(bgIterator *iter);
+bgIteratorItem *bgIteratorRead(bgIterator *iter);
 
 
 /* Close the bgIterator, allowing the bgIterator to be deallocated.
@@ -271,7 +271,7 @@ void bgIteratorClose(bgIterator *iter);
  ********************************************************************************************/
 
 typedef struct {
-    uint32_t iterator_epoch;    // iterator epoch of last modification
+    uint32_t iterator_epoch; // iterator epoch of last modification
 } bgIterationEntryMetadata;
 
 
@@ -302,7 +302,7 @@ void bgIteration_flushall(void);
  * BgIteration keeps track of expedited keys (by pointer) to avoid repeated iteration.  BgIteration
  * must be notified when dbEntries are reallocated.  BgIteration will not dereference the pointers;
  * it is safe to have deallocated the old dbEntry before calling this function.
- * 
+ *
  * We can't update the dbEntry if the entry is actually in use (bgIteration_isEntryInuse)!
  *
  * To simplify calling code, this function does nothing if old_entry == new_entry.
@@ -337,10 +337,10 @@ bool bgIteration_blockClientIfRequired(client *c);
  * re-written for propagation.
  */
 void bgIteration_handleCommandReplication(
-        int dbid,
-        struct serverCommand *cmd,
-        int argc,
-        robj **argv);
+    int dbid,
+    struct serverCommand *cmd,
+    int argc,
+    robj **argv);
 
 
 /* The memory that bgIteration uses while temporarily buffering replication data is not included in

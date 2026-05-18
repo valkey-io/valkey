@@ -17,6 +17,9 @@ Parth = "Parth" # seems like the spellchecker does not like it is similar to "Pa
 nd = "nd"
 threadsave = "threadsave"
 
+[default.extend-identifiers]
+dbe = "dbe"
+
 [default]
 extend-ignore-re = [
     "[A-Z]{2,}ed", # SELECTed, WATCHed, etc.
@@ -65,11 +68,9 @@ pathc = "pathc"
 pn = "pn"
 seeked = "seeked"
 tre = "tre"
-dbe = "dbe"
 
 [type.cpp.extend-words]
 fo = "fo"
-dbe = "dbe"
 
 [type.systemd.extend-words]
 # systemd = .conf

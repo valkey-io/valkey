@@ -775,7 +775,7 @@ static void luaProcessReplyError(const char *err, lua_State *lua) {
         }
     }
 
-    if (push_error) { 
+    if (push_error) {
         /* The reply parser strips the leading '-' from the RESP error, so `err`
          * is of the form "CODE msg" (e.g. "OOM command not allowed..."). Re-add
          * the '-' so luaPushErrorBuff() treats the leading word as the error

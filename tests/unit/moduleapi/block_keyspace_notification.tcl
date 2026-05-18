@@ -129,18 +129,28 @@ start_server {tags {"modules"}} {
         wait_for_blocked_clients_count 0
 
         # HEXPIRE: updated + expired(del)
+        r b_keyspace.clear
         assert_equal "1" [r hexpire h1 100 FIELDS 1 f1]
+        assert_equal {{event hexpire key h1}} [r b_keyspace.events]
+        r b_keyspace.clear
         assert_equal "2" [r hexpire h1 0 FIELDS 1 f1]
+        assert_equal {{event hexpired key h1}} [r b_keyspace.events]
 
         # HGETDEL
+        r b_keyspace.clear
         assert_equal "v2" [r hgetdel h1 FIELDS 1 f2]
+        # "hdel" and "del" notifications can be recorded in either order
+        # because they run on independent background threads.
+        assert_equal [lsort {{event hdel key h1} {event del key h1}}] [lsort [r b_keyspace.events]]
         assert_equal "0" [r exists h1]
 
         # HPERSIST
         r hset h1 f1 v1
         r hexpire h1 100 FIELDS 1 f1
         wait_for_blocked_clients_count 0
+        r b_keyspace.clear
         assert_equal "1" [r hpersist h1 FIELDS 1 f1]
+        assert_equal {{event hpersist key h1}} [r b_keyspace.events]
 
         r del h1
     }

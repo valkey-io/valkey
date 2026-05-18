@@ -763,7 +763,7 @@ static void luaProcessReplyError(const char *err, lua_State *lua) {
         }
     } else if (errno == EACCES) {
         if (strncmp(err, "NOPERM ", strlen("NOPERM ")) == 0) {
-            const char *err_prefix = "ERR ACL failure in script: ";
+            const char *err_prefix = "ACL failure in script: ";
             size_t err_len = strlen(err_prefix) + strlen(err + strlen("NOPERM ")) + 1;
             char *err_msg = ValkeyModule_Alloc(err_len * sizeof(char));
             bzero(err_msg, err_len);
@@ -780,8 +780,7 @@ static void luaProcessReplyError(const char *err, lua_State *lua) {
          * is of the form "CODE msg" (e.g. "OOM command not allowed..."). Re-add
          * the '-' so luaPushErrorBuff() treats the leading word as the error
          * code and preserves it, instead of falling through to the generic-ERR
-         * branch which would emit "ERR OOM command not allowed..." (issue
-         * #3663). */
+         * branch which would emit "ERR OOM command not allowed...". */
         const char *err_no_dash = (err[0] == '-') ? err + 1 : err;
         char *err_with_dash = lm_asprintf("-%s", err_no_dash);
         luaPushError(lua, err_with_dash);
@@ -955,8 +954,7 @@ static void errorCallback(void *ctx, const char *msg, size_t len) {
          * `msg` is of the form "CODE rest" (e.g. "WRONGTYPE Operation..."
          * or "ERR DB index is out of range"). Re-add the '-' so
          * luaPushErrorBuff() goes through its "-CODE msg" branch and
-         * preserves the code instead of double-prefixing with "ERR "
-         * (issue #3663). */
+         * preserves the code instead of double-prefixing with "ERR ". */
         char *msg_with_dash = lm_asprintf("-%s", msg);
         luaPushErrorBuff(lua, msg_with_dash);
         ValkeyModule_Free(msg_with_dash);

@@ -255,7 +255,7 @@ void bioCreateTlsReloadJob(void) {
 }
 
 void bioCreateClusterConfigSaveJob(sds content, bool do_fsync) {
-    bio_job *job = zmalloc(sizeof(*job));
+    bio_job *job = allocBioJob(0);
     job->cluster_save_args.content = content;
     job->cluster_save_args.do_fsync = do_fsync;
     bioSubmitJob(BIO_CLUSTER_SAVE, job);

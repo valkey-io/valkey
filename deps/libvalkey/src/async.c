@@ -44,7 +44,7 @@
 
 #include "async.h"
 #include "async_private.h"
-#include "dict.h"
+#include <dict.h>
 #include "net.h"
 #include "valkey_private.h"
 #include "vkutil.h"

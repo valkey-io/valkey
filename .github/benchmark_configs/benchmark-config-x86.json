@@ -2,7 +2,7 @@
   {
     "duration": 180,
     "keyspacelen": [3000000],
-    "data_sizes": [16,96],
+    "data_sizes": [16,128],
     "pipelines": [1, 10],
     "clients": [1600],
     "commands": [

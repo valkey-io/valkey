@@ -48,6 +48,7 @@
 #include "fmtargs.h"
 #include "io_threads.h"
 #include "tls.h"
+#include "workload_trace.h"
 #include "sds.h"
 #include "module.h"
 #include "scripting_engine.h"
@@ -2952,6 +2953,7 @@ void initServer(void) {
     server.clients_to_close = listCreate();
     server.replicas = listCreate();
     server.monitors = listCreate();
+    workloadTraceInit();
     server.replicas_waiting_psync = raxNew();
     server.wait_before_rdb_client_free = DEFAULT_WAIT_BEFORE_RDB_CLIENT_FREE;
     server.clients_pending_write = listCreate();
@@ -3939,7 +3941,16 @@ void call(client *c, int flags) {
         }
     }
 
+    workloadTraceContext prev_trace_ctx;
+    bool trace_was_active = workloadTraceActive();
+    if (trace_was_active) {
+        prev_trace_ctx = workloadTraceSaveContext();
+        workloadTraceBeginCommand(c);
+    }
     c->cmd->proc(c);
+    if (trace_was_active) {
+        workloadTraceEndCommand(&prev_trace_ctx);
+    }
 
     if (c->flag.argv_borrowed && server.enable_debug_assert) {
         robj **argv = c->original_argv ? c->original_argv : c->argv;
@@ -4634,6 +4645,17 @@ int processCommand(client *c) {
                                       c->cmd->fullname);
         sdsmapchars(pubsub_err, "\r\n", "  ", 2);
         rejectCommandSds(c, pubsub_err, 1);
+        return C_OK;
+    }
+
+    /* Workload tracer clients are in streaming mode like MONITOR.
+     * Only allow PING, QUIT, and RESET. */
+    if (c->flag.workload_tracer && c->cmd->proc != pingCommand && c->cmd->proc != quitCommand &&
+        c->cmd->proc != resetCommand) {
+        rejectCommandSds(c,
+                         sdsnew("Can't execute commands while in MONITOR TRACE mode: "
+                                "only PING / QUIT / RESET are allowed"),
+                         1);
         return C_OK;
     }
 
@@ -6864,6 +6886,23 @@ void monitorCommand(client *c) {
          * A client that has CLIENT_DENY_BLOCKING flag on
          * expects a reply per command and so can't execute MONITOR. */
         addReplyError(c, "MONITOR isn't allowed for DENY BLOCKING client");
+        return;
+    }
+
+    /* MONITOR TRACE [SAMPLES n] [NEGATIVE-LOOKUPS yes|no] [FORMAT resp|csv] */
+    if (c->argc >= 2 && !strcasecmp(objectGetVal(c->argv[1]), "trace")) {
+        if (monitorTraceSetup(c, 2) == C_OK) {
+            workloadTracerConfig *cfg = c->workload_tracer_config;
+            if (cfg->sample_rate < 1.0) {
+                sds msg = sdscatprintf(sdsempty(),
+                                       "+OK sample_mode=key-hash rate=%.10g seed=%llu threshold=%llu\r\n",
+                                       cfg->sample_rate, (unsigned long long)cfg->sample_seed,
+                                       (unsigned long long)cfg->sample_threshold);
+                addReplySds(c, msg);
+            } else {
+                addReply(c, shared.ok);
+            }
+        }
         return;
     }
 

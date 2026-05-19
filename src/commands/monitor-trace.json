@@ -1,0 +1,78 @@
+{
+    "TRACE": {
+        "summary": "Streams key-level access events for workload analysis.",
+        "complexity": "O(1) to subscribe, then O(N) with the number of key accesses.",
+        "group": "server",
+        "since": "9.0.0",
+        "arity": -2,
+        "container": "MONITOR",
+        "function": "monitorCommand",
+        "command_flags": [
+            "ADMIN",
+            "NOSCRIPT",
+            "LOADING",
+            "STALE"
+        ],
+        "acl_categories": [
+            "ADMIN",
+            "DANGEROUS",
+            "SLOW"
+        ],
+        "arguments": [
+            {
+                "name": "samples",
+                "token": "SAMPLES",
+                "type": "integer",
+                "optional": true
+            },
+            {
+                "name": "negative-lookups",
+                "token": "NEGATIVE-LOOKUPS",
+                "type": "oneof",
+                "optional": true,
+                "arguments": [
+                    {
+                        "name": "yes",
+                        "type": "pure-token",
+                        "token": "YES"
+                    },
+                    {
+                        "name": "no",
+                        "type": "pure-token",
+                        "token": "NO"
+                    }
+                ]
+            },
+            {
+                "name": "format",
+                "token": "FORMAT",
+                "type": "oneof",
+                "optional": true,
+                "arguments": [
+                    {
+                        "name": "resp",
+                        "type": "pure-token",
+                        "token": "RESP"
+                    },
+                    {
+                        "name": "csv",
+                        "type": "pure-token",
+                        "token": "CSV"
+                    }
+                ]
+            },
+            {
+                "name": "rate",
+                "token": "RATE",
+                "type": "double",
+                "optional": true
+            },
+            {
+                "name": "seed",
+                "token": "SEED",
+                "type": "integer",
+                "optional": true
+            }
+        ]
+    }
+}

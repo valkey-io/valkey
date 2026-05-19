@@ -1193,6 +1193,7 @@ typedef struct ClientFlags {
     uint64_t keyspace_notified : 1;        /* Indicates that a keyspace notification was triggered during the execution of the
                                               current command. */
     uint64_t argv_borrowed : 1;            /* The argv array and its elements are borrowed from the caller (VM_CallArgv) and must not be freed. */
+    uint64_t workload_tracer : 1;          /* This client is subscribed to MONITOR TRACE events. */
 } ClientFlags;
 /* Ensure ClientFlags never silently grows beyond two uint64_t words.
  * If this fires, move a flag to a separate field or widen the limit. */
@@ -1323,6 +1324,7 @@ typedef struct client {
     serverDb *db;                     /* Pointer to currently SELECTed DB. */
     /* Client state structs. */
     ClientPubSubData *pubsub_data;    /* Required for: pubsub commands and tracking. lazily initialized when first needed */
+    void *workload_tracer_config;     /* workloadTracerConfig* when flag.workload_tracer is set */
     ClientReplicationData *repl_data; /* Required for Replication operations. lazily initialized when first needed */
     ClientModuleData *module_data;    /* Required for Module operations. lazily initialized when first needed */
     multiState *mstate;               /* MULTI/EXEC state, lazily initialized when first needed */
@@ -1808,6 +1810,7 @@ struct valkeyServer {
     list *clients_to_close;                /* Clients to close asynchronously */
     list *clients_pending_write;           /* There is to write or install handler. */
     list *replicas, *monitors;             /* List of replicas and MONITORs */
+    list *workload_tracers;                /* List of MONITOR TRACE subscribers */
     rax *replicas_waiting_psync;           /* Radix tree for tracking replicas awaiting partial synchronization.
                                             * Key: RDB client ID
                                             * Value: RDB client object
@@ -4166,6 +4169,7 @@ int verifyDumpPayload(unsigned char *p, size_t len, uint16_t *rdbver_ptr);
 void dumpCommand(client *c);
 void objectCommand(client *c);
 void memoryCommand(client *c);
+size_t objectComputeSize(robj *key, robj *o, size_t sample_size, int dbid);
 void clientCommand(client *c);
 void clientHelpCommand(client *c);
 void clientIDCommand(client *c);

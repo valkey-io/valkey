@@ -534,6 +534,7 @@ ENGINE_SERVER_OBJ = \
     networking.o \
     notify.o \
     object.o \
+    workload_trace.o \
     pqsort.o \
     pubsub.o \
     quicklist.o \

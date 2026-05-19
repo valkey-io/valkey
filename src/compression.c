@@ -121,7 +121,7 @@ size_t streamCompressOutputBound(const streamCompressor *sc, size_t input_len) {
     if (!sc) return 0;
     const compressionAlgoEntry *entry = compressionAlgoEntryForAlgo(sc->algo);
     const compressionCodecImpl *impl = entry ? entry->impl : NULL;
-    if (!impl || !impl->compress_output_bound) return 0;
+    if (!impl) return 0;
     return impl->compress_output_bound(input_len);
 }
 
@@ -137,7 +137,7 @@ ssize_t streamCompressFeed(streamCompressor *sc,
 
     const compressionAlgoEntry *entry = compressionAlgoEntryForAlgo(sc->algo);
     const compressionCodecImpl *impl = entry ? entry->impl : NULL;
-    if (!impl || !impl->compress_feed) return -1;
+    if (!impl) return -1;
 
     return impl->compress_feed(sc, output, output_capacity, input, input_len, flush_mode);
 }
@@ -168,7 +168,7 @@ ssize_t streamDecompressFeed(streamDecompressor *sd,
 
     const compressionAlgoEntry *entry = compressionAlgoEntryForAlgo(sd->algo);
     const compressionCodecImpl *impl = entry ? entry->impl : NULL;
-    if (!impl || !impl->decompress_feed) {
+    if (!impl) {
         sd->errored = true;
         return -1;
     }

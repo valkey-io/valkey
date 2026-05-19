@@ -21,7 +21,6 @@ static const LZ4F_preferences_t lz4f_prefs = {
 };
 
 int compressionLz4CompressorInit(streamCompressor *sc) {
-    if (!sc) return -1;
     LZ4F_cctx *cctx = NULL;
     if (LZ4F_isError(LZ4F_createCompressionContext(&cctx, LZ4F_VERSION))) return -1;
     sc->ctx = cctx;
@@ -35,7 +34,6 @@ void compressionLz4CompressorDestroy(streamCompressor *sc) {
 }
 
 int compressionLz4DecompressorInit(streamDecompressor *sd) {
-    if (!sd) return -1;
     LZ4F_dctx *dctx = NULL;
     if (LZ4F_isError(LZ4F_createDecompressionContext(&dctx, LZ4F_VERSION))) return -1;
     sd->ctx = dctx;
@@ -59,7 +57,7 @@ ssize_t compressionLz4CompressFeed(streamCompressor *sc,
                                    const uint8_t *input,
                                    size_t input_len,
                                    compressFlushMode flush_mode) {
-    if (!sc || !sc->ctx) return -1;
+    if (!sc->ctx) return -1;
 
     LZ4F_cctx *cctx = (LZ4F_cctx *)sc->ctx;
     size_t offset = 0;
@@ -127,7 +125,7 @@ ssize_t compressionLz4DecompressFeed(streamDecompressor *sd,
                                      const uint8_t *input,
                                      size_t input_len,
                                      size_t *input_consumed) {
-    if (!sd || !sd->ctx || !input_consumed) return -1;
+    if (!sd->ctx) return -1;
 
     LZ4F_dctx *dctx = (LZ4F_dctx *)sd->ctx;
     size_t dst_size = output_capacity;

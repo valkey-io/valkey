@@ -42,9 +42,12 @@ test {modules config rewrite preserves load order} {
         r config rewrite
 
         set lines [loadmodule_lines_from_config]
-        # Static-module filter check: zero `loadmodule lua` lines.
+        # Static-module filter check: zero `loadmodule lua` lines should appear in the
+        # rewritten conf. This guards the rewritten-line SHAPE after is_static_module
+        # filter at src/config.c:1622 — not the NULL-deref path at module.c:702
+        # (a filter regression would crash `r config rewrite` before reaching here).
         foreach line $lines {
-            assert {![regexp {^\s*loadmodule\s+\S*lua} $line]}
+            assert {![regexp {^\s*loadmodule\s+lua(\s|$)} $line]}
         }
         set idx_info [lsearch -regexp $lines {infotest}]
         set idx_data [lsearch -regexp $lines {datatype}]

@@ -13022,6 +13022,7 @@ dictType sdsKeyValueHashDictType = {
 void moduleInitModulesSystem(void) {
     moduleUnblockedClients = listCreate();
     server.loadmodule_queue = listCreate();
+    server.module_load_order = listCreate();
     server.module_configs_queue = dictCreate(&sdsKeyValueHashDictType);
     server.module_gil_acquiring = 0;
     modules = dictCreate(&modulesDictType);
@@ -13362,7 +13363,9 @@ static int moduleInitPostOnLoadResolved(ModuleLoadFunc onload,
     }
 
     /* Module loaded! Register it. */
+    /* keep in sync with module_load_order list */
     dictAdd(modules, ctx.module->name, ctx.module);
+    listAddNodeTail(server.module_load_order, ctx.module);
     ctx.module->blocked_clients = 0;
     ctx.module->handle = handle;
     ctx.module->is_static_module = is_static;
@@ -13611,6 +13614,11 @@ static int moduleUnloadInternal(struct ValkeyModule *module, const char **errmsg
 
     /* Remove from list of modules. */
     serverLog(LL_NOTICE, "Module %s unloaded", module->name);
+    /* listSearchKey uses pointer equality here (no match method on module_load_order). */
+    listNode *ln = listSearchKey(server.module_load_order, module);
+    serverAssert(ln != NULL);
+    listDelNode(server.module_load_order, ln);
+    /* keep in sync with module_load_order list */
     dictDelete(modules, module->name);
     module->name = NULL; /* The name was already freed by dictDelete(). */
     moduleFreeModuleStructure(module);

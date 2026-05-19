@@ -1795,6 +1795,11 @@ struct valkeyServer {
     dict *module_configs_queue;        /* Dict that stores module configurations from .conf file until after modules are loaded
                                           during startup or arguments to loadex. */
     list *loadmodule_queue;            /* List of modules to load at startup. */
+    /* Modules in load order, used by CONFIG REWRITE to emit loadmodule
+     * lines in deterministic order. Holds non-owning ValkeyModule* values;
+     * lifetime is managed explicitly by moduleFreeModuleStructure() in
+     * moduleUnloadInternal(). */
+    list *module_load_order;
     int module_pipe[2];                /* Pipe used to awake the event loop by module threads. */
     pid_t child_pid;                   /* PID of current child */
     int child_type;                    /* Type of current child */

@@ -102,6 +102,14 @@ start_server {config "minimal.conf" tags {"external:skip" "valgrind:skip"} overr
         # Sleep for a time duration that is significantly longer than how much
         # time each of the io_threads would be active again when reactivated.
         set sleep_time_ms 1000
+        # Snapshot per-thread active times immediately before the sleep so the
+        # post-sleep bound measures only this reactivation. The counter at
+        # src/io_threads.c is monotonic across the server lifetime.
+        array set pre_sleep_active_times {}
+        set info [r info]
+        for {set i 1} {$i < $io_threads_count} {incr i} {
+            set pre_sleep_active_times($i) [getInfoProperty $info used_active_time_io_thread_$i]
+        }
         after $sleep_time_ms
 
         # Reactivate io-threads and wait for execution
@@ -111,9 +119,10 @@ start_server {config "minimal.conf" tags {"external:skip" "valgrind:skip"} overr
         for {set i 1} {$i <= $io_threads_count} {incr i} {
             set used_active_time [getInfoProperty $info used_active_time_io_thread_$i]
             if {$i < $io_threads_count} {
-                assert {($used_active_time - $initial_active_times($i)) < ($sleep_time_ms/1000)}
-                # Assert that total active time is lower than the sleep duration assumed
-                assert {$used_active_time < ($sleep_time_ms/1000)}
+                assert {($used_active_time - $initial_active_times($i)) < ($sleep_time_ms/1000.0)}
+                # Bound activity attributable to this reactivation only; the
+                # counter is monotonic across the server lifetime (#3727).
+                assert {($used_active_time - $pre_sleep_active_times($i)) < ($sleep_time_ms/1000.0)}
             } else {
                 assert_equal $used_active_time {}
             }

@@ -84,6 +84,60 @@ uint8_t geohashEstimateStepsByRadius(double range_meters, double lat) {
     return step;
 }
 
+/* Compute the bounding box and centroid for a set of points.
+ * If buffer_m > 0, the bounding box is expanded by that distance in all directions (used for bypath).
+ * The centroid is stored in shape->xy[] and the bounding box in bounds[]. */
+static int computeBoundingBoxAndCentroid(double (*points)[2], int count, double buffer_m, GeoShape *shape, double *bounds) {
+    double x = 0.0, y = 0.0, z = 0.0;
+    double min_lon = GEO_LONG_MAX, max_lon = GEO_LONG_MIN;
+    double min_lat = GEO_LAT_MAX, max_lat = GEO_LAT_MIN;
+    for (int i = 0; i < count; i++) {
+        double longitude = points[i][0];
+        double latitude = points[i][1];
+        if (longitude < min_lon) min_lon = longitude;
+        if (longitude > max_lon) max_lon = longitude;
+        if (latitude < min_lat) min_lat = latitude;
+        if (latitude > max_lat) max_lat = latitude;
+        /* Accumulate cartesian coordinates for centroid calculation.
+         * We do not need to divide by count because only the direction
+         * (angle) matters, not the magnitude. */
+        double lon_rad = deg_rad(longitude);
+        double lat_rad = deg_rad(latitude);
+        x += cos(lat_rad) * cos(lon_rad);
+        y += cos(lat_rad) * sin(lon_rad);
+        z += sin(lat_rad);
+    }
+    if (buffer_m > 0) {
+        /* Expand bounding box by the buffer distance. Use the latitude with
+         * the smallest cosine (highest absolute value) to ensure the longitude
+         * expansion is never underestimated. */
+        double lat_delta = rad_deg(buffer_m / EARTH_RADIUS_IN_METERS);
+        double extreme_lat = fabs(min_lat) > fabs(max_lat) ? min_lat : max_lat;
+        double lon_delta = rad_deg(buffer_m / EARTH_RADIUS_IN_METERS / cos(deg_rad(extreme_lat)));
+        min_lon -= lon_delta;
+        min_lat -= lat_delta;
+        max_lon += lon_delta;
+        max_lat += lat_delta;
+    }
+    bounds[0] = min_lon;
+    bounds[1] = min_lat;
+    bounds[2] = max_lon;
+    bounds[3] = max_lat;
+    /* Compute centroid from cartesian coords. */
+    double central_lon = atan2(y, x);
+    double central_hyp = sqrt(x * x + y * y);
+    double central_lat = atan2(z, central_hyp);
+    shape->xy[0] = rad_deg(central_lon);
+    shape->xy[1] = rad_deg(central_lat);
+    /* When a shape crosses the antimeridian, the cartesian centroid longitude
+     * can land at exactly ±180° which overflows geohashEncode (it treats 180°
+     * as the exclusive upper bound). Nudge it slightly into valid range.
+     * This is equivalent to ~1cm on the Earth's surface. */
+    if (shape->xy[0] >= GEO_LONG_MAX) shape->xy[0] = GEO_LONG_MAX - 1e-10;
+    if (shape->xy[0] < GEO_LONG_MIN) shape->xy[0] = GEO_LONG_MIN;
+    return 1;
+}
+
 /* Return the bounding box of the search area by shape (see geohash.h GeoShape)
  * bounds[0] - bounds[2] is the minimum and maximum longitude
  * while bounds[1] - bounds[3] is the minimum and maximum latitude.
@@ -97,7 +151,7 @@ uint8_t geohashEstimateStepsByRadius(double range_meters, double lat) {
  *         ---------          /----------------\           /---------------\
  *  Northern Hemisphere       Southern Hemisphere         Around the equator
  *
- * Note: In case of the BYPOLYGON search, this function also sets the centroid coordinates in the shape.
+ * Note: In case of the BYPOLYGON or BYPATH search, this function also sets the centroid coordinates in the shape.
  */
 int geohashBoundingBox(GeoShape *shape, double *bounds) {
     if (!bounds) return 0;
@@ -109,44 +163,10 @@ int geohashBoundingBox(GeoShape *shape, double *bounds) {
         height = shape->conversion * shape->t.r.height / 2;
         width = shape->conversion * shape->t.r.width / 2;
     } else if (shape->type == POLYGON_TYPE) {
-        int num_vertices = shape->t.polygon.num_vertices;
-        double x = 0.0, y = 0.0, z = 0.0;
-        /* Bounding box directly from lon & lat. */
-        double min_lon = GEO_LONG_MAX, max_lon = GEO_LONG_MIN;
-        double min_lat = GEO_LAT_MAX, max_lat = GEO_LAT_MIN;
-        for (int i = 0; i < num_vertices; i++) {
-            double longitude = shape->t.polygon.points[i][0];
-            double latitude = shape->t.polygon.points[i][1];
-            /* Calculate the bounding box (in LON/LAT). */
-            if (longitude < min_lon) min_lon = longitude;
-            if (longitude > max_lon) max_lon = longitude;
-            if (latitude < min_lat) min_lat = latitude;
-            if (latitude > max_lat) max_lat = latitude;
-            /* Convert to cartesian coordinates and accumulate for centroid.
-             * Note: We do not need to divide the x, y & z values by num_vertices because the magnitude is not needed
-             * for centroid calculation. Summing the cartesian coordinates is all that is needed for computing the angle
-             * which can be converted back into the LON/LAT format. */
-            double lon_rad = deg_rad(longitude);
-            double lat_rad = deg_rad(latitude);
-            double cur_x = cos(lat_rad) * cos(lon_rad);
-            double cur_y = cos(lat_rad) * sin(lon_rad);
-            double cur_z = sin(lat_rad);
-            x += cur_x;
-            y += cur_y;
-            z += cur_z;
-        }
-        /* Set bounding box. */
-        bounds[0] = min_lon;
-        bounds[1] = min_lat;
-        bounds[2] = max_lon;
-        bounds[3] = max_lat;
-        /* Compute centroid radians from the summed cartesian coords. The centroid is used as the starting coord. */
-        double central_lon = atan2(y, x);
-        double central_hyp = sqrt(x * x + y * y);
-        double central_lat = atan2(z, central_hyp);
-        shape->xy[0] = rad_deg(central_lon);
-        shape->xy[1] = rad_deg(central_lat);
-        return 1;
+        return computeBoundingBoxAndCentroid(shape->t.polygon.points, shape->t.polygon.num_vertices, 0, shape, bounds);
+    } else if (shape->type == PATH_TYPE) {
+        double buffer_m = shape->conversion * shape->t.path.radius;
+        return computeBoundingBoxAndCentroid(shape->t.path.points, shape->t.path.num_points, buffer_m, shape, bounds);
     }
     double longitude = shape->xy[0];
     double latitude = shape->xy[1];
@@ -196,19 +216,24 @@ GeoHashRadius geohashCalculateAreasByShapeWGS84(GeoShape *shape) {
     } else if (shape->type == RECTANGLE_TYPE) {
         /* For rectangles, calculate the diagonal as the radius. */
         radius_meters = sqrt((shape->t.r.width / 2) * (shape->t.r.width / 2) + (shape->t.r.height / 2) * (shape->t.r.height / 2));
-    } else if (shape->type == POLYGON_TYPE) {
-        /* For polygons, use max distance from the centroid to the bounding box. */
+    } else if (shape->type == POLYGON_TYPE || shape->type == PATH_TYPE) {
+        /* For polygons and paths, use max distance from the centroid to the bounding box corners.
+         * For paths, the bounding box already includes the buffer expansion. */
         double dist_top_left = geohashGetDistance(longitude, latitude, min_lon, max_lat);
         double dist_top_right = geohashGetDistance(longitude, latitude, max_lon, max_lat);
         double dist_bottom_left = geohashGetDistance(longitude, latitude, min_lon, min_lat);
         double dist_bottom_right = geohashGetDistance(longitude, latitude, max_lon, min_lat);
-        /* Find the maximum distance (which will be the radius that covers the whole bounding box). */
         radius_meters = dist_top_left;
         if (dist_top_right > radius_meters) radius_meters = dist_top_right;
         if (dist_bottom_left > radius_meters) radius_meters = dist_bottom_left;
         if (dist_bottom_right > radius_meters) radius_meters = dist_bottom_right;
     }
-    radius_meters *= shape->conversion;
+    /* For CIRCULAR and RECTANGLE types, radius_meters is in the shape's unit
+     * and needs conversion to meters. For POLYGON and PATH types, the distance
+     * is already computed in meters via geohashGetDistance(). */
+    if (shape->type == CIRCULAR_TYPE || shape->type == RECTANGLE_TYPE) {
+        radius_meters *= shape->conversion;
+    }
 
     steps = geohashEstimateStepsByRadius(radius_meters, latitude);
 
@@ -365,4 +390,94 @@ int geohashGetDistanceIfInPolygon(double centroidLon, double centroidLat, double
         *distance = geohashGetDistance(centroidLon, centroidLat, point[0], point[1]);
     }
     return inside;
+}
+
+/* Check if a point is within a given buffer distance of a polyline (path).
+ * The algorithm computes the minimum distance from the point to any segment
+ * of the path. If that distance is <= radius_m, the point is considered
+ * within the path corridor.
+ *
+ * For each segment A->B, we project the point P onto the line and clamp
+ * the parameter t to [0,1] to find the closest point on the segment.
+ * We then use Haversine to compute the great-circle distance.
+ *
+ * Returns 1 if the point is within the path buffer, 0 otherwise.
+ * Sets *buffdist to the minimum cross-track distance from the point to the path.
+ * Sets *pathdist to the along-track distance from the first vertex to the
+ * closest point on the path (cumulative segment lengths + fractional segment). */
+int geohashGetDistanceIfInPath(double *point,
+                               double (*pathPoints)[2],
+                               int num_points,
+                               double radius_m,
+                               double *buffdist,
+                               double *pathdist) {
+    double min_dist = INFINITY;
+    double along_path_at_min = 0.0;
+    double cumulative_len = 0.0;
+
+    for (int i = 0; i < num_points - 1; i++) {
+        double ax = pathPoints[i][0], ay = pathPoints[i][1];
+        double bx = pathPoints[i + 1][0], by = pathPoints[i + 1][1];
+
+        /* Compute the full segment length via Haversine for along-path distance. */
+        double seg_len = geohashGetDistance(ax, ay, bx, by);
+
+        /* Project point onto the segment using equirectangular approximation.
+         * Scale longitude differences by cos(latitude) to account for the
+         * convergence of meridians at higher latitudes. This gives a locally
+         * correct metric for finding the nearest point on the segment. */
+        double cos_lat = cos(deg_rad((ay + by) / 2.0));
+
+        /* Normalize longitude differences to handle antimeridian crossing.
+         * Without this, a segment from 179° to -179° would compute dx as
+         * -358° instead of the correct +2°. */
+        double raw_dx = bx - ax;
+        if (raw_dx > 180.0) raw_dx -= 360.0;
+        if (raw_dx < -180.0) raw_dx += 360.0;
+        double dx = raw_dx * cos_lat;
+        double dy = by - ay;
+        double len_sq = dx * dx + dy * dy;
+        double t;
+
+        if (len_sq < 1e-20) {
+            /* Degenerate segment (A == B), use endpoint. */
+            t = 0.0;
+        } else {
+            double raw_px = point[0] - ax;
+            if (raw_px > 180.0) raw_px -= 360.0;
+            if (raw_px < -180.0) raw_px += 360.0;
+            double px = raw_px * cos_lat;
+            double py = (point[1] - ay);
+            t = (px * dx + py * dy) / len_sq;
+            if (t < 0.0) t = 0.0;
+            if (t > 1.0) t = 1.0;
+        }
+
+        /* Closest point on segment (in lon/lat for Haversine).
+         * Use the normalized longitude difference for interpolation to
+         * correctly handle antimeridian crossing. */
+        double cx = ax + t * raw_dx;
+        /* Wrap cx back into [-180, 180] range. */
+        if (cx > 180.0) cx -= 360.0;
+        if (cx < -180.0) cx += 360.0;
+        double cy = ay + t * (by - ay);
+
+        /* Haversine distance from point to closest point on segment. */
+        double dist = geohashGetDistance(point[0], point[1], cx, cy);
+        if (dist < min_dist) {
+            min_dist = dist;
+            /* Along-path distance: cumulative length of previous segments
+             * plus the fraction of this segment up to the projection point. */
+            along_path_at_min = cumulative_len + t * seg_len;
+        }
+
+        cumulative_len += seg_len;
+    }
+
+    if (min_dist <= radius_m) {
+        *buffdist = min_dist;
+        *pathdist = along_path_at_min;
+        return 1;
+    }
+    return 0;
 }

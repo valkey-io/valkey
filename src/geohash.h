@@ -92,6 +92,7 @@ typedef struct {
 #define CIRCULAR_TYPE 1
 #define RECTANGLE_TYPE 2
 #define POLYGON_TYPE 3
+#define PATH_TYPE 4
 typedef struct {
     int type;          /* search type */
     double xy[2];      /* search center point, xy[0]: lon, xy[1]: lat */
@@ -106,10 +107,17 @@ typedef struct {
             double height;
             double width;
         } r;
+        /* POLYGON_TYPE */
         struct {
             int num_vertices;
             double (*points)[2];
         } polygon;
+        /* PATH_TYPE */
+        struct {
+            int num_points;      /* number of waypoints in the path */
+            double (*points)[2]; /* array of [lon, lat] waypoints */
+            double radius;       /* buffer distance in the unit before conversion */
+        } path;
     } t;
 } GeoShape;
 

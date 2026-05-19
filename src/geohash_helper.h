@@ -62,5 +62,6 @@ int geohashGetDistanceIfInRectangle(double width_m,
                                     double y2,
                                     double *distance);
 int geohashGetDistanceIfInPolygon(double centroidLon, double centroidLat, double *point, double (*vertices)[2], int num_vertices, double *distance);
+int geohashGetDistanceIfInPath(double *point, double (*pathPoints)[2], int num_points, double radius_m, double *buffdist, double *pathdist);
 
 #endif /* GEOHASH_HELPER_HPP_ */

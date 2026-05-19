@@ -1778,7 +1778,7 @@ TEST_P(OrderedIndexTest, RandomizedForwardBackwardMirror) {
         ASSERT_EQ(forwardScores.size(), backwardScores.size());
         std::reverse(backwardScores.begin(), backwardScores.end());
         for (size_t i = 0; i < forwardScores.size(); i++) {
-            ASSERT_EQ(forwardScores[i], backwardScores[i]);
+            TEST_ASSERT_SCORE_EQ(forwardScores[i], backwardScores[i]);
         }
         api.free(oi);
     }

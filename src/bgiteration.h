@@ -86,7 +86,7 @@ typedef void (*bgIteratorCleanupFunc)(bool terminated, void *privdata);
  * There is no need to delete/destroy a bgIterator.  It will automatically be cleaned up after the
  * last item is read.
  */
-bgIterator * bgIteratorCreateFullScanIter(
+bgIterator *bgIteratorCreateFullScanIter(
     const char *name,
     int flags,
     bgIteratorReplDoneFunc repldone,
@@ -115,7 +115,7 @@ bgIterator * bgIteratorCreateFullScanIter(
  * There is no need to delete/destroy a bgIterator.  It will automatically be cleaned up after the
  * last item is read.
  */
-bgIterator * bgIteratorCreateSlotsIter(
+bgIterator *bgIteratorCreateSlotsIter(
     const char *name,
     int flags,
     const int *slots,

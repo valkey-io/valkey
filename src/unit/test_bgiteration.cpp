@@ -1,6 +1,7 @@
 // Just for the moment, until https://github.com/valkey-io/valkey/issues/3450 is resolved
 // clang-format off
 // The hashtable uses different ordering for 32-bit.  Need consider mocking.
+#include <stdint.h>
 #if SIZE_MAX == UINT64_MAX /* 64-bit version */
 //#include <algorithm>
 #include "generated_wrappers.hpp"

@@ -2246,7 +2246,7 @@ bool hashtableNext(hashtableIterator *iterator, void **elemptr) {
     /* Check if iterator has been invalidated */
     if (iter->hashtable == NULL) return false;
 
-    // clang format off
+    // clang-format off
     while (1) {
         if (iter->index == -1 && iter->table == 0) {
             /* It's the first call to next. */
@@ -2326,7 +2326,7 @@ bool hashtableNext(hashtableIterator *iterator, void **elemptr) {
         }
         return true;
     }
-    // clang format on
+    // clang-format on
     return false;
 }
 

@@ -14,8 +14,7 @@ Upgrade urgency levels:
 Valkey 9.1.0 GA - Released Tue May 14 2026
 ---------------------
 
-Upgrade urgency SECURITY: This release includes security fixes we recommend you
-apply as soon as possible.
+Upgrade urgency LOW: This is the first stable release of Valkey 9.1.
 
 ### Security fixes
 

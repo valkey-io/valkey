@@ -915,25 +915,43 @@ sds *sdssplitlen(const char *s, int len, const char *sep, int seplen, int *count
         *count = 0;
         return tokens;
     }
-    for (j = 0; j < (len - (seplen - 1)); j++) {
-        /* make sure there is room for the next element and the final one */
-        if (slots < elements + 2) {
-            sds *newtokens;
-
-            slots *= 2;
-            newtokens = s_realloc(tokens, sizeof(sds) * slots);
-            if (newtokens == NULL)
-                goto cleanup;
-            tokens = newtokens;
-        }
-        /* search the separator */
-        if (seplen == 1 ? (*(s + j) == sep[0]) : (memcmp(s + j, sep, seplen) == 0)) {
+    if (seplen == 1) {
+        for (; start < len; start = j + 1) {
+            const char *p = memchr(s + start, sep[0], len - start);
+            if (!p) break; 
+            
+            j = p - s; 
+            
+            if (slots < elements + 2) {
+            /* make sure there is room for the next element and the final one */
+                sds *newtokens;
+                slots *= 2;
+                newtokens = s_realloc(tokens, sizeof(sds) * slots);
+                if (newtokens == NULL) goto cleanup;
+                tokens = newtokens;
+            }
+            
             tokens[elements] = sdsnewlen(s + start, j - start);
-            if (tokens[elements] == NULL)
-                goto cleanup;
+            if (tokens[elements] == NULL) goto cleanup;
             elements++;
-            start = j + seplen;
-            j = j + seplen - 1; /* skip the separator */
+        }
+    } else {
+        for (j = 0; j < (len - (seplen - 1)); j++) {
+            if (slots < elements + 2) {
+            /* make sure there is room for the next element and the final one */
+                sds *newtokens;
+                slots *= 2;
+                newtokens = s_realloc(tokens, sizeof(sds) * slots);
+                if (newtokens == NULL) goto cleanup;
+                tokens = newtokens;
+            }
+            if (memcmp(s + j, sep, seplen) == 0) {
+                tokens[elements] = sdsnewlen(s + start, j - start);
+                if (tokens[elements] == NULL) goto cleanup;
+                elements++;
+                start = j + seplen;
+                j = j + seplen - 1; 
+            }
         }
     }
     /* Add the final element. We are sure there is room in the tokens array. */

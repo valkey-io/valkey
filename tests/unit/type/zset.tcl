@@ -2950,7 +2950,7 @@ start_server [list overrides [list save ""] tags {"zset needs:debug external:ski
     }
 }
 
-start_server {tags {"zset"}} {
+start_server {tags {"zset" "cluster:skip"}} {
     test {ZUNIONSTORE with skiplist-encoded inputs} {
         set original_max [lindex [r config get zset-max-ziplist-entries] 1]
         r config set zset-max-ziplist-entries 0

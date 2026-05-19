@@ -67,12 +67,10 @@ start_server {config "minimal.conf" tags {"external:skip" "valgrind:skip"} overr
         activate_io_threads_and_wait
         set info [r info]
         set io_threads_count [dict get [r config get io-threads] io-threads]
-        array set initial_active_times {}
         for {set i 1} {$i <= $io_threads_count} {incr i} {
             set used_active_time [getInfoProperty $info used_active_time_io_thread_$i]
             if {$i < $io_threads_count} {
                 assert_morethan $used_active_time 0
-                set initial_active_times($i) $used_active_time
             } else {
                 assert_equal $used_active_time {}
             }
@@ -119,7 +117,6 @@ start_server {config "minimal.conf" tags {"external:skip" "valgrind:skip"} overr
         for {set i 1} {$i <= $io_threads_count} {incr i} {
             set used_active_time [getInfoProperty $info used_active_time_io_thread_$i]
             if {$i < $io_threads_count} {
-                assert {($used_active_time - $initial_active_times($i)) < ($sleep_time_ms/1000.0)}
                 # Bound activity attributable to this reactivation only; the
                 # counter is monotonic across the server lifetime (#3727).
                 assert {($used_active_time - $pre_sleep_active_times($i)) < ($sleep_time_ms/1000.0)}

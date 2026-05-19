@@ -83,12 +83,9 @@ if {$::accurate} {
     set min_cycles 10 ; # run at least 10 cycles
 }
 
-# Don't execute this on FreeBSD due to a yet-undiscovered memory issue
+# Skip entirely on FreeBSD due to a yet-undiscovered memory issue
 # which causes tclsh to bloat.
-if {[exec uname] == "FreeBSD"} {
-    set min_cycles 1
-    set min_duration 1
-}
+if {[exec uname] ne "FreeBSD"} {
 
 test "Fuzzer corrupt restore payloads" {
     if {$min_duration * 2 > $::timeout} {
@@ -109,6 +106,7 @@ test "Fuzzer corrupt restore payloads" {
         set stat_successful_restore 0
         set stat_rejected_restore 0
         set stat_traffic_commands_sent 0
+        set stat_sanitizer_findings 0
         # repeatedly DUMP a random key, corrupt it and try RESTORE into a new key
         while true {
             set k [r randomkey]
@@ -186,6 +184,7 @@ test "Fuzzer corrupt restore payloads" {
             set asan_errors [sanitizer_errors_from_file [srv 0 stderr]]
             if {$valgrind_errors != "" || $asan_errors != ""} {
                 puts "valgrind or asan found an issue for payload: $printable_dump"
+                incr stat_sanitizer_findings
                 set report_and_restart true
                 set print_commands true
             }
@@ -223,8 +222,11 @@ test "Fuzzer corrupt restore payloads" {
     assert_equal $stat_terminated_in_traffic 0
     # make sure all terminations where due to assertion and not a SIGSEGV
     assert_equal $stat_terminated_by_signal 0
+    # fail the test if valgrind/asan reported any findings during the run
+    assert_equal $stat_sanitizer_findings 0
 }
 
+} ;# uname FreeBSD
 
 
 } ;# tags

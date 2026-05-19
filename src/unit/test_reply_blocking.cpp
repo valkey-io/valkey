@@ -709,7 +709,6 @@ TEST_F(SyncReplicationTest, GenInfoStringDisabled) {
 TEST_F(SyncReplicationTest, GenInfoStringEnabled) {
     initDurabilityForTest();
     server.aof_state = AOF_ON; server.aof_fsync = AOF_FSYNC_ALWAYS;
-    server.durability.clients_waiting_ack = listCreate();
     server.durability.read_responses_blocked = 5;
     server.durability.write_responses_blocked = 3;
     server.durability.previous_acked_offset = 42;
@@ -724,8 +723,6 @@ TEST_F(SyncReplicationTest, GenInfoStringEnabled) {
     ASSERT_NE(strstr(info, "durability_primary_repl_offset:100"), nullptr);
 
     sdsfree(info);
-    listRelease(server.durability.clients_waiting_ack);
-    server.durability.clients_waiting_ack = nullptr;
     server.aof_state = AOF_OFF; server.aof_fsync = AOF_FSYNC_EVERYSEC;
     cleanupDurabilityForTest();
 }

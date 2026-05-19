@@ -640,6 +640,14 @@ foreach provider_mode {aof} {
                 $writer client reply off
                 $writer set durable:blocked dirty
 
+                # Barrier: ensure the writer's SET is processed before the reader's GET.
+                # Different TCP connections have no ordering guarantee.
+                wait_for_condition 50 10 {
+                    [catch {$primary debug object durable:blocked}] == 0
+                } else {
+                    fail "Writer's SET was not processed in time"
+                }
+
                 set rd [valkey_deferring_client -1]
                 $rd get durable:blocked
 
@@ -721,14 +729,17 @@ foreach provider_mode {aof} {
                 assert_equal "everysec" [lindex [$primary config get appendfsync] 1]
 
                 set writer [valkey_deferring_client -1]
-                $writer client reply off
                 $writer set durable:toggle value
+                # Durability is off (everysec), so SET reply arrives immediately.
+                # Reading it also serves as a barrier ensuring the key exists.
+                assert_equal "OK" [$writer read]
 
                 set rd [valkey_deferring_client -1]
                 $rd get durable:toggle
                 assert_equal "value" [$rd read]
 
                 $rd close
+                $writer close
                 assert_equal "OK" [$primary config set appendfsync always]
             }
 
@@ -1076,6 +1087,13 @@ foreach provider_mode {aof} {
                 set writer [valkey_deferring_client -1]
                 $writer client reply off
                 $writer set durable:inject-key value
+
+                # Barrier: ensure the writer's SET is processed before the reader's GET.
+                wait_for_condition 50 10 {
+                    [catch {$primary debug object durable:inject-key}] == 0
+                } else {
+                    fail "Writer's SET was not processed in time"
+                }
 
                 # Reader: issue GET on the dirty key — reply will be blocked
                 set rd [valkey_deferring_client -1]

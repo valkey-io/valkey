@@ -2184,6 +2184,7 @@ TEST_F(BgIterationTest, expireKeys_Replication_NoConsistent_FutureKeyCreatedThen
     expectReadKeySequence(it, 9, LAST_ITEM);
 
     expectReadComplete(it);
+    freeTestClient(c);
 }
 
 

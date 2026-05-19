@@ -495,10 +495,10 @@ void blockForKeys(client *c, int btype, robj **keys, int numkeys, mstime_t timeo
         }
     }
     c->bstate->unblock_on_nokey = unblock_on_nokey;
-    /* Currently we assume key blocking will require reprocessing the command.
-     * However in case of modules, they have a different way to handle the reprocessing
-     * which does not require setting the pending command flag */
-    if (btype != BLOCKED_MODULE) c->flag.pending_command = 1;
+    /* Key-blocked clients require pending_command for reprocessing on unblock.
+     * The caller must have set it (processInputBuffer for real clients,
+     * RM_Call for module fake clients). */
+    serverAssert(c->flag.pending_command == 1);
     blockClient(c, btype);
 }
 
@@ -699,8 +699,7 @@ void blockPostponeClient(client *c) {
     listAddNodeTail(server.postponed_clients, c);
     serverAssert(c->bstate->postponed_list_node == NULL);
     c->bstate->postponed_list_node = listLast(server.postponed_clients);
-    /* Mark this client to execute its command */
-    c->flag.pending_command = 1;
+    serverAssert(c->flag.pending_command == 1);
 }
 
 /* Block client due to shutdown command */

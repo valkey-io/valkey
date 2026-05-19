@@ -1486,7 +1486,7 @@ TEST_P(OrderedIndexTest, RandomizedInsertAndTraversal) {
         OrderedIndexItem *pos;
         api.initIterator(&iter, oi);
         int count = 0;
-        double prevScore = -INFINITY;
+        double prevScore = NEG_INF;
         while (((pos = api.next(&iter)) != NULL)) {
             double s = api.getScore(pos);
             ASSERT_GE(s, prevScore);
@@ -1512,7 +1512,7 @@ TEST_P(OrderedIndexTest, RandomizedBackwardTraversal) {
         OrderedIndexItem *pos;
         api.initIterator(&iter, oi);
         int count = 0;
-        double prevScore = INFINITY;
+        double prevScore = POS_INF;
         while (((pos = api.prev(&iter)) != NULL)) {
             double s = api.getScore(pos);
             ASSERT_LE(s, prevScore);
@@ -1535,7 +1535,7 @@ TEST_P(OrderedIndexTest, RandomizedScoreRetrieval) {
         auto entries = test_build_random_index(api, oi, rng, n);
 
         for (auto &e : entries) {
-            ASSERT_EQ(api.getScore(e.node), e.score);
+            TEST_ASSERT_SCORE_EQ(api.getScore(e.node), e.score);
         }
         api.free(oi);
     }
@@ -1587,7 +1587,7 @@ TEST_P(OrderedIndexTest, RandomizedDelete) {
         OrderedIndexItem *pos;
         api.initIterator(&iter, oi);
         int count = 0;
-        double prevScore = -INFINITY;
+        double prevScore = NEG_INF;
         while (((pos = api.next(&iter)) != NULL)) {
             ASSERT_GE(api.getScore(pos), prevScore);
             prevScore = api.getScore(pos);
@@ -1614,14 +1614,14 @@ TEST_P(OrderedIndexTest, RandomizedUpdateScore) {
 
         OrderedIndexItem *updated = api.updateScore(oi, entries[updIdx].node, newScore);
         ASSERT_NE(updated, nullptr);
-        ASSERT_EQ(api.getScore(updated), newScore);
+        TEST_ASSERT_SCORE_EQ(api.getScore(updated), newScore);
         ASSERT_EQ(api.length(oi), (unsigned long)n);
         VERIFY_INTEGRITY(api, oi);
 
         OrderedIndexIterator iter;
         OrderedIndexItem *pos;
         api.initIterator(&iter, oi);
-        double prevScore = -INFINITY;
+        double prevScore = NEG_INF;
         while (((pos = api.next(&iter)) != NULL)) {
             ASSERT_GE(api.getScore(pos), prevScore);
             prevScore = api.getScore(pos);
@@ -1654,20 +1654,20 @@ TEST_P(OrderedIndexTest, RandomizedPop) {
 
         OrderedIndexItem *first = api.popFirst(oi);
         ASSERT_NE(first, nullptr);
-        ASSERT_EQ(api.getScore(first), minScore);
+        TEST_ASSERT_SCORE_EQ(api.getScore(first), minScore);
         ASSERT_EQ(api.length(oi), (unsigned long)(n - 1));
         api.freeItem(first);
         VERIFY_INTEGRITY(api, oi);
 
         OrderedIndexItem *last = api.popLast(oi);
         ASSERT_NE(last, nullptr);
-        ASSERT_EQ(api.getScore(last), maxScore);
+        TEST_ASSERT_SCORE_EQ(api.getScore(last), maxScore);
         ASSERT_EQ(api.length(oi), (unsigned long)(n - 2));
         api.freeItem(last);
         VERIFY_INTEGRITY(api, oi);
 
         api.initIterator(&iter, oi);
-        double prevScore = -INFINITY;
+        double prevScore = NEG_INF;
         while (((pos = api.next(&iter)) != NULL)) {
             ASSERT_GE(api.getScore(pos), prevScore);
             prevScore = api.getScore(pos);
@@ -1702,7 +1702,7 @@ TEST_P(OrderedIndexTest, RandomizedDeleteRangeByScore) {
         OrderedIndexIterator iter;
         OrderedIndexItem *pos;
         api.initIterator(&iter, oi);
-        double prevScore = -INFINITY;
+        double prevScore = NEG_INF;
         while (((pos = api.next(&iter)) != NULL)) {
             double s = api.getScore(pos);
             ASSERT_TRUE(s < lo || s > hi);
@@ -1738,7 +1738,7 @@ TEST_P(OrderedIndexTest, RandomizedDeleteRangeByRank) {
         OrderedIndexItem *pos;
         api.initIterator(&iter, oi);
         int remaining = 0;
-        double prevScore = -INFINITY;
+        double prevScore = NEG_INF;
         while (((pos = api.next(&iter)) != NULL)) {
             ASSERT_GE(api.getScore(pos), prevScore);
             prevScore = api.getScore(pos);
@@ -1915,6 +1915,7 @@ static void testOnDeleteCallback(OrderedIndexItem *item, void *ctx) {
     size_t len;
     skiplistGetElementRaw(item, &ptr, &len);
     rec->elements.emplace_back(ptr, len);
+    orderedIndexFreeItem(item);
 }
 
 class OnDeleteCallbackTest : public ::testing::Test {
@@ -2270,6 +2271,7 @@ static void hashtableConsistencyOnDelete(OrderedIndexItem *item, void *ctx) {
     size_t len;
     skiplistGetElementRaw(item, &ptr, &len);
     ht->erase(std::string(ptr, len));
+    orderedIndexFreeItem(item);
 }
 
 class RangeDeleteHashtableConsistencyTest : public ::testing::Test {

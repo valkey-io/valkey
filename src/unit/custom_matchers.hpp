@@ -17,7 +17,7 @@ MATCHER_P(robjEqualsStr, str, "robj string matcher") {
 
     if (strcmp(static_cast<const char *>(objectGetVal(arg)), str) == 0) return true;
 
-    *result_listener << "robj(\"" << (char*)objectGetVal(arg) << "\") doesn't match \"" << str << "\"";
+    *result_listener << "robj(\"" << (char *)objectGetVal(arg) << "\") doesn't match \"" << str << "\"";
     return false;
 }
 

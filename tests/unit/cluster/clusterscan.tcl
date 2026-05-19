@@ -582,30 +582,79 @@ start_cluster 2 0 {tags {external:skip cluster}} {
     }
 }
 
-# CLUSTERSCAN CLUSTERDOWN test - separate cluster to test unassigned slots
-start_cluster 2 0 {tags {external:skip cluster}} {
-    test "CLUSTERSCAN returns CLUSTERDOWN for unassigned slot" {
-        # This test covers the case when a slot is not served by any node.
-        # When a cursor pointing to that slot is used we would get -CLUSTERDOWN
-        # This helps with error handling rather than a crash or silent failure.
-        set cursor_slot_0 ""
-        set slot0_owner -1
-        foreach n {0 1} {
-            if {[catch {R $n clusterscan 0-{06S}-0 SLOT 0} res] == 0} {
-                set cursor_slot_0 [lindex $res 0]
-                set slot0_owner $n
-                break
-            }
-        }
+start_cluster 3 0 {tags {external:skip cluster}} {
+    test "CLUSTERSCAN returns correct errors on cluster down and unassigned slots" {
+        # Hashtag reference: {06S} -> slot 0 -> R0, {6ZJ} -> slot 16383 -> R2.
 
-        R $slot0_owner CLUSTER DELSLOTS 0
-        set other_node [expr {1 - $slot0_owner}]
-        catch {R $other_node CLUSTER DELSLOTS 0}
+        # Case 1: Node 0 is paused, cluster enters FAIL state.
+        # With cluster-require-full-coverage=yes (default), any CLUSTERSCAN
+        # should get CLUSTERDOWN because the cluster cannot serve all slots.
+        pause_process [srv 0 pid]
+        wait_for_cluster_state fail
+        assert_error {CLUSTERDOWN The cluster is down} {R 1 clusterscan "0-{06S}-0"}
+        assert_error {CLUSTERDOWN The cluster is down} {R 1 clusterscan "0-{6ZJ}-0"}
+        assert_error {CLUSTERDOWN The cluster is down} {R 2 clusterscan "0-{06S}-0"}
+        assert_error {CLUSTERDOWN The cluster is down} {R 2 clusterscan "0-{6ZJ}-0"}
 
-        wait_for_condition 1000 50 {
-            [catch {R $slot0_owner clusterscan $cursor_slot_0} res] && [string match "*CLUSTERDOWN*" $res]
-        } else {
-            fail "Expected CLUSTERDOWN error"
-        }
+        # Case 2: Node 0 is paused, cluster enters FAIL state.
+        # With cluster-require-full-coverage=no, full-coverage requirement disabled.
+        # Now the cluster is "ok" even though node 0's slots are unreachable.
+        # Cursors for slot 0 should get MOVED.
+        R 1 config set cluster-require-full-coverage no
+        R 2 config set cluster-require-full-coverage no
+        wait_for_cluster_state ok
+        # Node 0 owns slot 0, so this should get MOVED.
+        assert_error {MOVED 0 *} {R 1 clusterscan "0-{06S}-0"}
+        assert_error {MOVED 0 *} {R 2 clusterscan "0-{06S}-0"}
+        # Slot 16383: assigned to node 2. Nodes that don't own it get MOVED;
+        # node 2 handles it locally.
+        assert_error {MOVED 16383 *} {R 1 clusterscan "0-{6ZJ}-0"}
+        assert_equal [R 2 clusterscan "0-{6ZJ}-0"] {0 {}}
+
+        # Restore full-coverage and bring node 0 back.
+        R 1 config set cluster-require-full-coverage yes
+        R 2 config set cluster-require-full-coverage yes
+        resume_process [srv 0 pid]
+        wait_for_cluster_state ok
+
+        # Case 3: Delete slot 0 from all nodes, slot 0 is now unassigned.
+        # With full-coverage=yes the cluster enters FAIL state.
+        # Cursors for slot 0 should get "Hash slot not served".
+        # Cursors for assigned but remote slots should get "cluster is down".
+        R 0 CLUSTER DELSLOTS 0
+        catch {R 1 CLUSTER DELSLOTS 0}
+        catch {R 2 CLUSTER DELSLOTS 0}
+        wait_for_cluster_state fail
+
+        # Unassigned slot -> specific error.
+        assert_error {CLUSTERDOWN Hash slot not served} {R 0 clusterscan "0-{06S}-0"}
+        assert_error {CLUSTERDOWN Hash slot not served} {R 1 clusterscan "0-{06S}-0"}
+        assert_error {CLUSTERDOWN Hash slot not served} {R 2 clusterscan "0-{06S}-0"}
+
+        # Other slots are still assigned but cluster is in FAIL state.
+        assert_error {CLUSTERDOWN The cluster is down} {R 0 clusterscan "0-{6ZJ}-0"}
+        assert_error {CLUSTERDOWN The cluster is down} {R 1 clusterscan "0-{6ZJ}-0"}
+        assert_error {CLUSTERDOWN The cluster is down} {R 2 clusterscan "0-{6ZJ}-0"}
+
+        # Case 4: Disable full-coverage again with slot 0 still unassigned.
+        # The cluster is "ok" but slot 0 remains unassigned.
+        # Cursors for slot 0 should still get "Hash slot not served".
+        # Cursors for assigned but remote slots should now get MOVED.
+        R 0 config set cluster-require-full-coverage no
+        R 1 config set cluster-require-full-coverage no
+        R 2 config set cluster-require-full-coverage no
+        wait_for_cluster_state ok
+
+        # Slot 0: unassigned -> "Hash slot not served" regardless of node.
+        assert_error {CLUSTERDOWN Hash slot not served} {R 0 clusterscan "0-{06S}-0"}
+        assert_error {CLUSTERDOWN Hash slot not served} {R 1 clusterscan "0-{06S}-0"}
+        assert_error {CLUSTERDOWN Hash slot not served} {R 2 clusterscan "0-{06S}-0"}
+
+        # Slot 16383: assigned to node 2. Nodes that don't own it get MOVED;
+        # node 2 handles it locally.
+        assert_error {MOVED 16383 *} {R 0 clusterscan "0-{6ZJ}-0"}
+        assert_error {MOVED 16383 *} {R 1 clusterscan "0-{6ZJ}-0"}
+        # Node 2 owns slot 16383, so this should work.
+        assert_equal [R 2 clusterscan "0-{6ZJ}-0"] {0 {}}
     }
 }

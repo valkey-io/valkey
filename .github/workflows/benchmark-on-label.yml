@@ -66,7 +66,8 @@ jobs:
               python3-devel \
               openssl-devel \
               bzip2-devel \
-              libffi-devel
+              libffi-devel \
+              jq
           pip install --require-hashes -r requirements.txt
 
       - name: Build latest valkey_latest
@@ -87,11 +88,17 @@ jobs:
           echo "VALKEY_BENCHMARK_PATH=$VALKEY_BENCHMARK_PATH" >> $GITHUB_ENV
           echo "Latest valkey-benchmark path: $VALKEY_BENCHMARK_PATH"
 
+      - name: Filter data_sizes > 1024 from benchmark config
+        working-directory: valkey-perf-benchmark
+        run: |
+          CONFIG_FILE="configs/benchmark-config-arm.json"
+          jq '[.[] | .data_sizes = [.data_sizes[] | select(. <= 1024)]]' "$CONFIG_FILE" > tmp.json && mv tmp.json "$CONFIG_FILE"
+
       - name: Enable cluster mode in benchmark config
         working-directory: valkey-perf-benchmark
         if: github.event.label.name == 'run-cluster-benchmark'
         run: |
-          CONFIG_FILE="../valkey/.github/benchmark_configs/benchmark-config-arm.json"
+          CONFIG_FILE="configs/benchmark-config-arm.json"
           sed -i 's/"cluster_mode": false/"cluster_mode": true/g' "$CONFIG_FILE"
           echo "Updated config for cluster mode:"
           cat "$CONFIG_FILE"
@@ -99,7 +106,7 @@ jobs:
       - name: Run benchmarks
         working-directory: valkey-perf-benchmark
         run: |
-          CONFIG_FILE="../valkey/.github/benchmark_configs/benchmark-config-arm.json"
+          CONFIG_FILE="configs/benchmark-config-arm.json"
 
           # Base benchmark arguments
           BENCHMARK_ARGS=(

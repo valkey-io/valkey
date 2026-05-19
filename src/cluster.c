@@ -80,7 +80,7 @@ unsigned int keyHashSlot(const char *key, int keylen) {
  * stringmatchlen() in util.c, only can match keys belonging to a single slot,
  * that slot is returned. Otherwise -1 is returned. */
 int patternHashSlot(char *pattern, int length) {
-    int s = -1; /* index of the first '{' */
+    int s = -1; /* index of the first opening brace */
 
     for (int i = 0; i < length; i++) {
         if (pattern[i] == '*' || pattern[i] == '?' || pattern[i] == '[') {

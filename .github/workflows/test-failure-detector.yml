@@ -1,0 +1,273 @@
+name: Test Failure Detector
+
+on:
+  workflow_run:
+    workflows: ["Daily"]
+    branches:
+      - unstable
+    types:
+      - completed
+
+permissions:
+  contents: read
+  issues: write
+  actions: read
+
+jobs:
+  detect-test-failures:
+    runs-on: ubuntu-latest
+    if: >
+      (github.event.workflow_run.event == 'workflow_dispatch' ||
+       (github.event.workflow_run.event == 'schedule' && github.repository == 'valkey-io/valkey')) &&
+      github.event.workflow_run.conclusion != 'cancelled'
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      # Step 1: Download consolidated artifact
+      - name: Download failures
+        id: download
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        with:
+          script: |
+            const fs = require('fs');
+            const runId = context.payload.workflow_run.id;
+            console.log(`Fetching artifacts from run ${runId}`);
+
+            const artifacts = await github.paginate(
+              github.rest.actions.listWorkflowRunArtifacts,
+              {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                run_id: runId,
+              },
+              (response) => response.data
+            );
+
+            const matched = artifacts.find(a => a.name === 'all-test-failures');
+            if (!matched) {
+              console.log('No all-test-failures artifact found');
+              core.setOutput('found', 'false');
+              return;
+            }
+
+            console.log(`Downloading: ${matched.name}`);
+            const download = await github.rest.actions.downloadArtifact({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              artifact_id: matched.id,
+              archive_format: 'zip',
+            });
+            fs.writeFileSync('all-test-failures.zip', Buffer.from(download.data));
+            core.setOutput('found', 'true');
+
+      - name: Unzip artifact
+        if: steps.download.outputs.found == 'true'
+        run: |
+          unzip -o all-test-failures.zip
+          echo "=== Content ==="
+          cat all-test-failures.json
+
+      # Step 2: Get per-job URLs
+      - name: Get job URLs
+        if: steps.download.outputs.found == 'true'
+        id: jobs
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        with:
+          script: |
+            const fs = require('fs');
+            const runId = context.payload.workflow_run.id;
+
+            const jobs = await github.paginate(
+              github.rest.actions.listJobsForWorkflowRun,
+              {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                run_id: runId,
+              },
+              (response) => response.data
+            );
+
+            console.log(`Found ${jobs.length} jobs`);
+
+            const jobUrlMap = {};
+            for (const job of jobs) {
+              jobUrlMap[job.name] = job.html_url;
+
+              const normalized = job.name
+                .replace(/\s*\(([^)]+)\)/g, '-$1')
+                .replace(/\s+/g, '-');
+              if (normalized !== job.name) {
+                jobUrlMap[normalized] = job.html_url;
+                console.log(`${job.name} -> ${job.html_url} (also: ${normalized})`);
+              } else {
+                console.log(`${job.name} -> ${job.html_url}`);
+              }
+            }
+
+            fs.writeFileSync('job-urls.json', JSON.stringify(jobUrlMap, null, 2));
+
+      # Step 3: Parse and merge failures
+      - name: Merge failures
+        if: steps.download.outputs.found == 'true'
+        id: merge
+        run: |
+          python3 << 'EOF'
+          import json, os, sys
+
+          with open("job-urls.json") as f:
+              job_urls = json.load(f)
+
+          with open("all-test-failures.json") as f:
+              all_failures = json.load(f)
+
+          grouped = {}
+
+          for job_name, suites in all_failures.items():
+              for suite_name, entries in suites.items():
+                  for entry in entries:
+                      name = f"{entry['test_name']} in {entry['test_file']}"
+
+                      if name not in grouped:
+                          grouped[name] = {
+                              "name": name,
+                              "test_name": entry["test_name"],
+                              "test_file": entry["test_file"],
+                              "error": entry.get("error", ""),
+                              "jobs": []
+                          }
+                      # Deduplicate: skip if this job already recorded for this test
+                      if job_name not in [j["job"] for j in grouped[name]["jobs"]]:
+                          grouped[name]["jobs"].append({
+                              "job": job_name,
+                              "suite": suite_name,
+                              "url": job_urls.get(job_name, "")
+                          })
+                      print(f"{name} in {job_name}/{suite_name}")
+
+          unique_failures = list(grouped.values())
+          print(f"\nTotal unique failures: {len(unique_failures)}")
+
+          with open("failures.json", "w") as f:
+              json.dump(unique_failures, f, indent=2)
+
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+              f.write(f"has_failures={'true' if unique_failures else 'false'}\n")
+          EOF
+
+      # Step 4: Create or update issues
+      - name: Create or update issues
+        if: steps.merge.outputs.has_failures == 'true'
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        with:
+          script: |
+            const fs = require('fs');
+            const failures = JSON.parse(fs.readFileSync('failures.json', 'utf8'));
+            const label = 'test-failure';
+
+            // Ensure label exists
+            try {
+              await github.rest.issues.getLabel({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                name: label,
+              });
+            } catch (e) {
+              if (e.status === 404) {
+                await github.rest.issues.createLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  name: label,
+                  color: 'e11d48',
+                  description: 'Test failure detected by CI',
+                });
+              }
+            }
+
+            const existingIssues = await github.paginate(
+              github.rest.issues.listForRepo,
+              {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                labels: label,
+                state: 'open',
+              },
+              (response) => response.data
+            );
+
+            const today = new Date().toISOString().split('T')[0];
+
+            for (const failure of failures) {
+              const title = `[TEST-FAILURE] ${failure.test_name} in ${failure.test_file}`;
+              const envList = failure.jobs.map(j => j.job);
+              const ciLinks = failure.jobs.map(j => `- \`${j.job}\`: [CI link](${j.url})`).join('\n');
+              const envLine = `**Environments:** ${envList.map(e => '`' + e + '`').join(', ')}`;
+
+              const existing = existingIssues.find(i => i.title === title);
+
+              if (existing) {
+                console.log(`Found existing issue #${existing.number} for ${failure.name}`);
+
+                const envMatch = existing.body.match(/\*\*Environments:\*\*\s*(.+)/);
+                const envInner = envMatch ? envMatch[1].match(/`([^`]+)`/g) : null;
+                const existingEnvs = envInner
+                  ? envInner.map(e => e.replace(/`/g, ''))
+                  : [];
+
+                const newEnvs = envList.filter(e => !existingEnvs.includes(e));
+
+                if (newEnvs.length > 0) {
+                  console.log(`  New environments: ${newEnvs.join(', ')}`);
+                  const allEnvs = [...existingEnvs, ...newEnvs];
+                  const newEnvLine = `**Environments:** ${allEnvs.map(e => '`' + e + '`').join(', ')}`;
+                  const updatedBody = existing.body.replace(/\*\*Environments:\*\*\s*.+/, newEnvLine);
+
+                  await github.rest.issues.update({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    issue_number: existing.number,
+                    body: updatedBody,
+                  });
+                }
+
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: existing.number,
+                  body: `Test failed again on ${today}.\n\n**Failed in:**\n${ciLinks}`,
+                });
+
+              } else {
+                console.log(`Creating issue for ${failure.name}`);
+                await github.rest.issues.create({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  title: title,
+                  labels: [label],
+                  body: [
+                    `**Summary**`,
+                    ``,
+                    `\`${failure.test_name}\` in \`${failure.test_file}\` is failing in CI.`,
+                    ``,
+                    `**Failing test(s)**`,
+                    ``,
+                    `- Test name: \`${failure.test_name}\``,
+                    `- Test file: \`${failure.test_file}\``,
+                    `- CI link(s):`,
+                    ciLinks,
+                    ``,
+                    `**Error stack trace**`,
+                    ``,
+                    '```',
+                    failure.error || 'N/A',
+                    '```',
+                    ``,
+                    envLine,
+                    ``,
+                    `---`,
+                    `*Auto-created by Test Failure Detector*`,
+                  ].join('\n'),
+                });
+              }
+            }
+
+            console.log(`Done. Processed ${failures.length} failure(s).`);

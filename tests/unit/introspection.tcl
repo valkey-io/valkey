@@ -247,6 +247,7 @@ start_server {tags {"introspection"}} {
 
         set output [r client list capa r capa r]
         assert_match *client-with-r* $output
+
         catch {$c1 close}
     }
 
@@ -285,9 +286,8 @@ start_server {tags {"introspection"}} {
         $c1 client setname "killme-capa"
         $c1 client capa redirect
 
-        # Kill using capa filter
+        # Kill using capa r filter
         r client kill capa r skipme yes
-
         assert_error "*I/O error*" {$c1 ping}
     } {}
 
@@ -1086,8 +1086,14 @@ start_server {tags {"introspection"}} {
         wait_for_blocked_clients_count 0
         r lpush mylist 2
 
+        # we scan out all the info commands
+        set monitor_output [$rd read]
+        while { [string match {*"info"*} $monitor_output] } {
+            set monitor_output [$rd read]
+        }
+
         # we expect to see the blpop on the monitor first
-        assert_match {*"blpop"*"mylist"*"0"*} [$rd read]
+        assert_match {*"blpop"*"mylist"*"0"*} $monitor_output
 
         # we scan out all the info commands on the monitor
         set monitor_output [$rd read]
@@ -1373,7 +1379,7 @@ start_server {tags {"introspection"}} {
             lappend backups $c [lindex [r config get $c] 1]
         }
 
-        # multi config set and veirfy
+        # multi config set and verify
         assert_equal [eval "r config set $some_configs"] "OK"
         dict for {c val} $some_configs {
             assert_equal [lindex [r config get $c] 1] $val
@@ -1955,6 +1961,31 @@ test {CONFIG REWRITE handles alias config properly} {
         restart_server 0 true false
 
         assert_equal [r config get hash-max-listpack-entries] {hash-max-listpack-entries 100}
+    }
+} {} {external:skip}
+
+test {CONFIG REWRITE handles large unsigned memory config values} {
+    start_server {tags {"introspection"}} {
+        r config set maxmemory 9223372036854775808
+        r config set maxmemory-clients 100%
+
+        r config rewrite
+        restart_server 0 true false
+
+        assert_equal [lindex [r config get maxmemory] 1] 9223372036854775808
+        assert_equal [lindex [r config get maxmemory-clients] 1] 100%
+    }
+} {} {external:skip}
+
+test {SIGNED MEMORY CONFIG allows negative number} {
+    start_server {tags {"introspection"}} {
+        r config set slot-migration-max-failover-repl-bytes -1
+        assert_equal [lindex [r config get slot-migration-max-failover-repl-bytes] 1] -1
+        assert_error {*argument must be between -1 and *} {r config set slot-migration-max-failover-repl-bytes -2}
+
+        r config rewrite
+        restart_server 0 true false
+        assert_equal [lindex [r config get slot-migration-max-failover-repl-bytes] 1] -1
     }
 } {} {external:skip}
 

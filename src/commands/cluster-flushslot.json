@@ -1,6 +1,6 @@
 {
     "FLUSHSLOT": {
-        "summary": "Remove all keys from the target slot.",
+        "summary": "Removes all keys from the target slot.",
         "complexity": "O(N) where N is the number of keys in the target slot",
         "group": "cluster",
         "since": "9.0.0",

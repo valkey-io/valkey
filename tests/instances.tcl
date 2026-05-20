@@ -19,10 +19,13 @@ set ::valgrind 0
 set ::tls 0
 set ::tls_module 0
 set ::io_threads 0
+set ::leaks 1
 set ::pause_on_error 0
 set ::dont_clean 0
 set ::simulate_error 0
 set ::failed 0
+set ::failed_tests {}
+set ::failures_output_file ""
 set ::sentinel_instances {}
 set ::valkey_instances {}
 set ::global_config {}
@@ -37,6 +40,10 @@ set ::run_matching {} ; # If non empty, only tests matching pattern are run.
 set ::exit_on_failure 0
 set ::stop_on_failure 0
 set ::loop 0
+
+# Save project root before cd'ing into tmp.
+# At this point we're in tests/<suite>/ (e.g., tests/sentinel/).
+set ::project_root [file normalize "../.."]
 
 if {[catch {cd tmp}]} {
     puts "tmp directory not found."
@@ -87,7 +94,7 @@ proc spawn_instance {type base_port count {conf {}} {base_conf_file ""}} {
 
         if {$::tls} {
             if {$::tls_module} {
-                puts $cfg [format "loadmodule %s/../../../src/valkey-tls.so" [pwd]]
+                puts $cfg "loadmodule $::VALKEY_TLS_MODULE"
             }
 
             puts $cfg "tls-port $port"
@@ -108,7 +115,7 @@ proc spawn_instance {type base_port count {conf {}} {base_conf_file ""}} {
 
         if {$::io_threads} {
             puts $cfg "io-threads 2"
-            puts $cfg "events-per-io-thread 0"
+            puts $cfg "io-threads-always-active yes"
             puts $cfg "min-io-threads-avoid-copy-reply 2"
         }
 
@@ -285,6 +292,8 @@ proc parse_options {} {
             set ::dont_clean 1
         } elseif {$opt eq "--fail"} {
             set ::simulate_error 1
+        } elseif {$opt eq {--skip-leaks}} {
+            set ::leaks 0
         } elseif {$opt eq {--valgrind}} {
             set ::valgrind 1
         } elseif {$opt eq {--host}} {
@@ -312,6 +321,9 @@ proc parse_options {} {
             set ::stop_on_failure 1
         } elseif {$opt eq {--loop}} {
             set ::loop 1
+        } elseif {$opt eq {--failures-output}} {
+            set ::failures_output_file [file normalize [file join $::project_root $val]]
+            incr j
         } elseif {$opt eq {--log-req-res}} {
             set ::log_req_res 1
         } elseif {$opt eq {--force-resp3}} {
@@ -321,6 +333,7 @@ proc parse_options {} {
             puts "--dont-clean            Keep log files on exit."
             puts "--pause-on-error        Pause for manual inspection on error."
             puts "--fail                  Simulate a test failure."
+            puts "--skip-leaks            Disable macOS leaks verification."
             puts "--valgrind              Run with valgrind."
             puts "--tls                   Run tests in TLS mode."
             puts "--tls-module            Run tests in TLS mode with Valkey module."
@@ -330,6 +343,7 @@ proc parse_options {} {
             puts "--fast-fail             Exit immediately once the first test fails."
             puts "--stop                  Blocks once the first test fails."
             puts "--loop                  Execute the specified set of tests forever."
+            puts "--failures-output <path>  Write test failures to the specified JSON file."
             puts "--help                  Shows this help."
             exit 0
         } else {
@@ -428,8 +442,9 @@ proc test {descr code} {
     if {[catch {set retval [uplevel 1 $code]} error]} {
         incr ::failed
         if {[string match "assertion:*" $error]} {
-            set msg "FAILED: [string range $error 10 end]"
-            puts [colorstr red $msg]
+            set msg [string range $error 10 end]
+            puts [colorstr red "FAILED: $msg"]
+            lappend ::failed_tests [list $descr $::cur_test_file $msg]
             if {$::pause_on_error} pause_on_error
             puts [colorstr red "(Jumping to next unit after error)"]
             return -code continue
@@ -444,7 +459,7 @@ proc test {descr code} {
 
 # Check memory leaks when running on macOS using the "leaks" utility.
 proc check_leaks instance_types {
-    if {[string match {*Darwin*} [exec uname -a]]} {
+    if {$::leaks && [string match {*Darwin*} [exec uname -a]]} {
         puts -nonewline "Testing for memory leaks..."; flush stdout
         foreach type $instance_types {
             foreach_instance_id [set ::${type}_instances] id {
@@ -488,6 +503,14 @@ while 1 {
             continue
         }
         if {[file isdirectory $test]} continue
+        # Convert relative path (../tests/...) to project-relative path (tests/<suite>/tests/...)
+        set normalized [file normalize $test]
+        set project_root [file normalize "../../.."]
+        if {[string match "${project_root}/*" $normalized]} {
+            set ::cur_test_file [string range $normalized [expr {[string length $project_root] + 1}] end]
+        } else {
+            set ::cur_test_file $test
+        }
         puts [colorstr yellow "Testing unit: [lindex [file split $test] end]"]
         if {[catch { source $test } err]} {
             puts "FAILED: caught an error in the test $err"
@@ -520,8 +543,39 @@ while 1 {
 } ;# while 1
 }
 
-# Print a message and exists with 0 / 1 according to zero or more failures.
+proc write_test_failures {} {
+    if {$::failures_output_file eq ""} {
+        return
+    }
+
+    set failures {}
+    foreach entry $::failed_tests {
+        set test_name [lindex $entry 0]
+        set test_file [lindex $entry 1]
+        set error_msg [lindex $entry 2]
+
+        set test_name [string map {"\\" "\\\\" "\"" "\\\"" "\n" "\\n" "\r" "\\r" "\t" "\\t" "\b" "\\b" "\f" "\\f"} $test_name]
+        set test_file [string map {"\\" "\\\\" "\"" "\\\"" "\n" "\\n" "\r" "\\r" "\t" "\\t" "\b" "\\b" "\f" "\\f"} $test_file]
+        set error_msg [string map {"\\" "\\\\" "\"" "\\\"" "\n" "\\n" "\r" "\\r" "\t" "\\t" "\b" "\\b" "\f" "\\f"} $error_msg]
+
+        lappend failures "\{\"test_name\":\"$test_name\",\"test_file\":\"$test_file\",\"status\":\"err\",\"error\":\"$error_msg\"\}"
+    }
+
+    set outdir [file dirname $::failures_output_file]
+    if {$outdir ne "."} {
+        file mkdir $outdir
+    }
+    set fp [open $::failures_output_file w]
+    puts $fp "\[[join $failures ","]\]"
+    close $fp
+}
+
+# Print a message and exits with 0 / 1 according to zero or more failures.
 proc end_tests {} {
+    if {[catch {write_test_failures} err]} {
+        puts "Warning: Failed to write test failures: $err"
+    }
+
     if {$::failed == 0 } {
         puts [colorstr green "GOOD! No errors."]
         exit 0

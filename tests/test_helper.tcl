@@ -55,6 +55,7 @@ set ::durable 0
 set ::tls 0
 set ::io_threads 0
 set ::tls_module 0
+set ::leaks 1
 set ::stack_logging 0
 set ::verbose 0
 set ::quiet 0
@@ -73,6 +74,7 @@ set ::file ""; # If set, runs only the tests in this comma separated list
 set ::curfile ""; # Hold the filename of the current suite
 set ::accurate 0; # If true runs fuzz tests with more iterations
 set ::force_failure 0
+set ::failures_output_file ""; # If set, write failures JSON to this path
 set ::timeout 1200; # 20 minutes without progresses will quit the test.
 set ::last_progress [clock seconds]
 set ::active_servers {} ; # Pids of active server instances.
@@ -139,6 +141,8 @@ set ::numclients 16
 proc execute_test_file __testname {
     set path "tests/$__testname.tcl"
     set ::curfile $path
+    # Reset tags at the start of each test file
+    set ::tags {}
     source $path
     send_data_packet $::test_server_fd done "$__testname"
 }
@@ -150,6 +154,8 @@ proc execute_test_file __testname {
 # finished.
 proc execute_test_code {__testname filename code} {
     set ::curfile $filename
+    # Reset tags at the start of each test code execution
+    set ::tags {}
     eval $code
     send_data_packet $::test_server_fd done "$__testname"
 }
@@ -492,6 +498,9 @@ proc read_from_test_client fd {
         }
     } elseif {$status eq {exception}} {
         puts "\[[colorstr red $status]\]: $data"
+        if {[catch {write_test_failures} err]} {
+            puts "Warning: Failed to write test failures: $err"
+        }
         kill_clients
         force_kill_all_servers
         exit 1
@@ -603,6 +612,49 @@ proc print_test_summary {} {
     puts "\nTest Summary: [colorstr bold-green $::ok_count] passed, [colorstr bold-red $::err_count] failed"
 }
 
+proc write_test_failures {} {
+    if {$::failures_output_file eq ""} {
+        return
+    }
+
+    set failures {}
+    foreach failed $::failed_tests {
+        if {[string match {*\[*TIMEOUT*\]*} $failed]} continue
+        if {[string match {*Sanitizer error*} $failed]} continue
+        if {[string match {*Valgrind error*} $failed]} continue
+        if {[string match {*Can't start*} $failed]} continue
+        if {[string match {*Check for memory leaks*} $failed]} continue
+
+        set status "err"
+        set test_name ""
+        set test_file ""
+        set error_msg ""
+
+        if {[regexp {\[(\w+)\]:\s*(.+?)\s+in\s+(tests/\S+\.tcl)\s*(.*)} $failed -> status test_name test_file error_msg]} {
+            # Successfully parsed
+        } else {
+            set test_name $failed
+            set test_file "unknown"
+            set error_msg $failed
+        }
+
+        set test_name [string map {"\\" "\\\\" "\"" "\\\"" "\n" "\\n" "\r" "\\r" "\t" "\\t" "\b" "\\b" "\f" "\\f"} $test_name]
+        set test_file [string map {"\\" "\\\\" "\"" "\\\"" "\n" "\\n" "\r" "\\r" "\t" "\\t" "\b" "\\b" "\f" "\\f"} $test_file]
+        set error_msg [string map {"\\" "\\\\" "\"" "\\\"" "\n" "\\n" "\r" "\\r" "\t" "\\t" "\b" "\\b" "\f" "\\f"} $error_msg]
+        set status [string map {"\\" "\\\\" "\"" "\\\"" "\n" "\\n" "\r" "\\r" "\t" "\\t" "\b" "\\b" "\f" "\\f"} $status]
+
+        lappend failures "\{\"test_name\":\"$test_name\",\"test_file\":\"$test_file\",\"status\":\"$status\",\"error\":\"$error_msg\"\}"
+    }
+
+    set outdir [file dirname $::failures_output_file]
+    if {$outdir ne "."} {
+        file mkdir $outdir
+    }
+    set fp [open $::failures_output_file w]
+    puts $fp "\[[join $failures ","]\]"
+    close $fp
+}
+
 proc the_end {} {
     # TODO: print the status, exit with the right exit code.
     puts "\n                   The End\n"
@@ -611,6 +663,12 @@ proc the_end {} {
         puts "  $time seconds - $name"
     }
     print_test_summary
+
+    # Write structured failures for automated detection
+    if {[catch {write_test_failures} err]} {
+        puts "Warning: Failed to write test failures: $err"
+    }
+
     if {[llength $::failed_tests]} {
         puts "\n[colorstr bold-red {!!! WARNING}] The following tests failed:\n"
         foreach failed $::failed_tests {
@@ -660,6 +718,7 @@ proc print_help_screen {} {
         "                   with all tests."
         "--moduleapi        Run the module API tests, this option should only be used in"
         "                   runtest-moduleapi which will build the test module."
+        "--skip-leaks       Disable macOS leaks verification."
         "--valgrind         Run the test over valgrind."
         "--durable          suppress test crashes and keep running"
         "--stack-logging    Enable macOS leaks/malloc stack logging."
@@ -677,14 +736,17 @@ proc print_help_screen {} {
         "--clients <num>    Number of test clients (default 16)."
         "--timeout <sec>    Test timeout in seconds (default 20 min)."
         "--force-failure    Force the execution of a test that always fails."
+        "--failures-output <path>"
+        "                   Write test failures to the specified JSON file."
         "--config <k> <v>   Extra config file argument."
         "--skipfile <file>  Name of a file containing test names or regexp patterns (if"
         "                   <test> starts with '/') that should be skipped (one per"
         "                   line). This option can be repeated."
         "--skiptest <test>  Test name or regexp pattern (if <test> starts with '/') to"
         "                   skip. This option can be repeated."
-        "--tags <tags>      Run only tests having specified tags or not having '-'"
-        "                   prefixed tags."
+        "--tags <tags>      Run only tests having specified tags (allow list) or, for '-'"
+        "                   prefixed tags, skip tests with the tag (deny list). Only"
+        "                   top-level-only tags are possible in the allow list."
         "--dont-clean       Don't delete valkey log files after the run."
         "--dont-pre-clean   Don't delete existing valkey log files before the run."
         "--no-latency       Skip latency measurements and validation by some tests."
@@ -727,6 +789,12 @@ for {set j 0} {$j < [llength $argv]} {incr j} {
             if {[string index $tag 0] eq "-"} {
                 lappend ::denytags [string range $tag 1 end]
             } else {
+                # Validate that allowtags only use top-level tags
+                if {[lsearch -exact $::toplevel_only_tags $tag] < 0} {
+                    puts "Error: --tags allowlist can only use top-level-only tags: large-memory, needs:other-server, compatible-redis, network"
+                    puts "Invalid tag: $tag"
+                    exit 1
+                }
                 lappend ::allowtags $tag
             }
         }
@@ -753,10 +821,13 @@ for {set j 0} {$j < [llength $argv]} {incr j} {
     } elseif {$opt eq {--skiptest}} {
         lappend ::skiptests $arg
         incr j
+    } elseif {$opt eq {--skip-leaks}} {
+        set ::leaks 0
     } elseif {$opt eq {--valgrind}} {
         set ::valgrind 1
     } elseif {$opt eq {--stack-logging}} {
         if {[string match {*Darwin*} [exec uname -a]]} {
+            set ::leaks 1
             set ::stack_logging 1
         }
     } elseif {$opt eq {--quiet}} {
@@ -793,6 +864,9 @@ for {set j 0} {$j < [llength $argv]} {incr j} {
         set ::accurate 1
     } elseif {$opt eq {--force-failure}} {
         set ::force_failure 1
+    } elseif {$opt eq {--failures-output}} {
+        set ::failures_output_file $arg
+        incr j
     } elseif {$opt eq {--single}} {
         foreach unit [expand_unit_spec $arg] {
             lappend ::single_tests $unit
@@ -986,6 +1060,13 @@ proc assert_replication_stream {s patterns} {
         set pattern [lindex $patterns $j]
         lappend patterns_list $pattern
         set value [read_from_replication_stream $s]
+        # Skip pings that can appear depending on timing. The primary sends
+        # pings at regular intervals when the replication stream is idle. In
+        # cluster mode, a ping is sent immediately when the first replica comes
+        # online, to bump the replication offset to non-zero.
+        while {$value eq "ping"} {
+            set value [read_from_replication_stream $s]
+        }
         lappend values_list $value
         if {![string match $pattern $value]} { incr errors }
     }
@@ -1016,6 +1097,17 @@ proc is_ipv6_available {} {
         return 1
     }
     return 0
+}
+
+# MPTCP detection
+proc is_mptcp_available {} {
+    # Typical error output from valkey-cli --mptcp:
+    # Could not connect to Valkey at 127.0.0.1:6379: MPTCP is not supported on this platform
+    if {[catch {exec $::VALKEY_CLI_BIN --mptcp ping} e] &&
+        [string match "*MPTCP is not supported on this platform*" $e]} {
+        return 0
+    }
+    return 1
 }
 
 # With the parallel test running multiple server instances at the same time

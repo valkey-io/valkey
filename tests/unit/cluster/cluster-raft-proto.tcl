@@ -107,7 +107,7 @@ test "Raft proto: connect to cluster bus and exchange HELLO" {
         set fd [raft_connect 127.0.0.1 $cport]
 
         # Send HELLO.
-        raft_send $fd "HELLO $fake_id $fake_addr 1 3 1"
+        raft_send $fd "HELLO $fake_id $fake_addr singleton"
 
         # Expect HI back (response to our HELLO).
         set reply [raft_recv $fd]
@@ -117,7 +117,7 @@ test "Raft proto: connect to cluster bus and exchange HELLO" {
     }
 }
 
-test "Raft proto: singleton clears leader on step-down from HELLO" {
+test "Raft proto: singleton steps down on MEET from singleton" {
     start_server {overrides {cluster-enabled yes cluster-protocol raft}} {
         set port [srv 0 port]
         set cport [expr {$port + 10000}]
@@ -125,22 +125,26 @@ test "Raft proto: singleton clears leader on step-down from HELLO" {
         # Singleton is its own leader.
         assert_equal [R 0 CLUSTER MYID] [CI 0 cluster_raft_leader]
 
-        # Send HELLO from a fake node (simulating a MEET target receiving HELLO).
+        # Send HELLO + MEET(singleton) from a fake singleton.
         set fake_id [string repeat "c" 40]
         set fake_addr "127.0.0.1:9998@19998,,tls-port=0,shard-id=[string repeat d 40]"
         set fd [raft_connect 127.0.0.1 $cport]
-        raft_send $fd "HELLO $fake_id $fake_addr 1 3 1"
+        raft_send $fd "HELLO $fake_id $fake_addr"
+        raft_send $fd "MEET singleton"
         set reply [raft_recv $fd]
         assert_match "HI *" $reply
-        close $fd
+        set reply [raft_recv $fd]
+        assert_match "ADD_ME" $reply
 
         # After step-down, leader should be empty (unknown).
         assert_equal "" [CI 0 cluster_raft_leader]
         assert_equal "learner" [CI 0 cluster_raft_role]
+
+        close $fd
     }
 }
 
-test "Raft proto: singleton clears leader on step-down from HI" {
+test "Raft proto: singleton steps down on MEET from cluster" {
     start_server {overrides {cluster-enabled yes cluster-protocol raft}} {
         set port [srv 0 port]
         set cport [expr {$port + 10000}]
@@ -148,14 +152,18 @@ test "Raft proto: singleton clears leader on step-down from HI" {
         # Singleton is its own leader.
         assert_equal [R 0 CLUSTER MYID] [CI 0 cluster_raft_leader]
 
-        # Send HI from a fake non-singleton (cluster_size=3).
+        # Simulate a cluster member connecting and sending HELLO + MEET(cluster).
         set fake_id [string repeat "e" 40]
         set fake_addr "127.0.0.1:9997@19997,,tls-port=0,shard-id=[string repeat f 40]"
         set fd [raft_connect 127.0.0.1 $cport]
-        raft_send $fd "HI $fake_id $fake_addr 1 1 3"
+        raft_send $fd "HELLO $fake_id $fake_addr"
+        raft_send $fd "MEET cluster"
+        set reply [raft_recv $fd]
+        assert_match "HI *" $reply
+        set reply [raft_recv $fd]
+        assert_match "ADD_ME" $reply
 
         # After step-down, leader should be empty (unknown).
-        after 100
         assert_equal "" [CI 0 cluster_raft_leader]
         assert_equal "learner" [CI 0 cluster_raft_role]
 
@@ -260,16 +268,19 @@ test "Raft proto: leader sends REPL_OFFSETS after follower offset changes" {
         assert {$::_raft_accepted ne "timeout"}
         set fd $::_raft_accepted
 
-        # Leader sends HELLO.
+        # Leader sends HELLO + MEET(singleton).
         set reply [raft_recv $fd 5000]
         assert_match "HELLO *" $reply
+        set reply [raft_recv $fd 5000]
+        assert_match "MEET *" $reply
 
-        # Reply with HI.
-        raft_send $fd "HI $fake_id $fake_addr 1 1 1"
+        # Reply with HI + ADD_ME (fake node steps down, asks to be added).
+        raft_send $fd "HI $fake_id $fake_addr"
+        raft_send $fd "ADD_ME"
 
-        # Leader commits NODE_JOIN (quorum=1 before we join) and sends WELCOME.
+        # Leader invites us, commits NODE_JOIN (quorum=1), sends WELCOME.
         set reply [raft_recv $fd 10000]
-        assert_match "WELCOME *" $reply
+        assert_equal "WELCOME" $reply
 
         # Leader sends AE with committed entries. Reply with offset=0.
         set reply [raft_recv $fd 5000]

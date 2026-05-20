@@ -123,7 +123,8 @@ typedef struct {
     list *pending_proposals; /* list of raftPendingProposal */
 
     /* Pending MEET callbacks waiting for NODE_JOIN commit. */
-    list *pending_meets; /* list of raftPendingMeet */
+    list *pending_meets;  /* CLUSTER MEET commands waiting for OK reply */
+    list *deferred_meets; /* Inbound MEET messages deferred until size > 1 */
 
     /* Deferred work for beforeSleep. */
     unsigned int todo_update_slot_coverage : 1;
@@ -324,7 +325,6 @@ static void clusterRaftSingletonStepDown(clusterRaftState *rs) {
     memset(rs->voted_for, 0, CLUSTER_NAMELEN);
     clusterRaftRandomizeElectionTimeout(rs);
     rs->last_heartbeat = monotonicMs();
-    rs->todo_connect_nodes = 1;
     /* Clear singleton log — the leader's log is authoritative. */
     raftLogTruncateFrom(rs, 1);
     rs->last_applied = 0;
@@ -368,32 +368,25 @@ static void clusterRaftMaybeSelfJoin(void) {
 }
 
 /* Propose NODE_JOIN if sender is new to the cluster and I'm not new. */
-static void clusterRaftMaybeInvitePeer(clusterNode *sender) {
+static void clusterRaftInvitePeer(clusterNode *node) {
     clusterRaftState *rs = RAFT_STATE();
-    if (myself->flags & CLUSTER_NODE_MEET) {
-        return;
-    }
-    if (!(sender->flags & CLUSTER_NODE_MEET)) {
-        return;
-    }
 
-    /* Check if a NODE_JOIN entry for the sender is already in the log
-     * (uncommitted) to avoid adding a duplicate. */
+    /* Avoid duplicate NODE_JOIN in the log. */
     for (uint64_t i = 0; i < rs->log_count; i++) {
         if (rs->log[i]->type == RAFT_ENTRY_NODE_JOIN &&
             sdslen(rs->log[i]->data) >= CLUSTER_NAMELEN &&
-            memcmp(rs->log[i]->data, sender->name, CLUSTER_NAMELEN) == 0) {
+            memcmp(rs->log[i]->data, node->name, CLUSTER_NAMELEN) == 0) {
             return;
         }
     }
 
     sds entry = sdsnew("NODE_JOIN ");
-    entry = sdscatlen(entry, sender->name, CLUSTER_NAMELEN);
+    entry = sdscatlen(entry, node->name, CLUSTER_NAMELEN);
     entry = sdscatlen(entry, " ", 1);
-    entry = clusterNodeAppendAddressString(entry, sender, server.tls_cluster);
+    entry = clusterNodeAppendAddressString(entry, node, server.tls_cluster);
 
     raftJoinCallbackCtx *jc = zmalloc(sizeof(*jc));
-    jc->node_name = sdsnewlen(sender->name, CLUSTER_NAMELEN);
+    jc->node_name = sdsnewlen(node->name, CLUSTER_NAMELEN);
     clusterRaftPropose(entry, jc, clusterRaftJoinCallback);
     sdsfree(entry);
 }
@@ -405,71 +398,79 @@ static void clusterRaftMaybeInvitePeer(clusterNode *sender) {
  *   ip:port@cport[,hostname][,aux=val]*
  * -------------------------------------------------------------------------- */
 
-/* HELLO format: HELLO <node-id> <address> <term> <role> <cluster-size> */
+/* --------------------------------------------------------------------------
+ * Cluster bus greeting messages
+ *
+ * HELLO <node-id> <address>
+ *   First message on every new outbound connection. Identifies the sender
+ *   so the receiver can bind the inbound link. On MEET-initiated connections,
+ *   HELLO is immediately followed by MEET.
+ *
+ * MEET singleton|cluster
+ *   Sent after HELLO on MEET-initiated connections. Declares the sender's
+ *   cluster status. The receiver decides based on its own status:
+ *   - Receiver is non-singleton: invites sender (proposes NODE_JOIN),
+ *     sends WELCOME after commit.
+ *   - Receiver is singleton: steps down, replies ADDME.
+ *
+ * ADDME
+ *   Reply to MEET: "I stepped down, please add me to your cluster."
+ *   The MEET sender (now the leader) invites the peer.
+ *
+ * WELCOME
+ *   Sent after NODE_JOIN is committed. Unblocks the CLUSTER MEET client
+ *   on the joined node.
+ * -------------------------------------------------------------------------- */
 
+/* Send a greeting (HELLO or HI): verb + node-id + address. */
 static void clusterRaftSendGreeting(clusterLink *link, const char *verb) {
-    clusterRaftState *rs = RAFT_STATE();
     sds msg = wireNewMsg(verb);
     msg = sdscatlen(msg, " ", 1);
     msg = sdscatlen(msg, myself->name, CLUSTER_NAMELEN);
     msg = sdscatlen(msg, " ", 1);
     msg = clusterNodeAppendAddressString(msg, myself, server.tls_cluster);
-    msg = sdscatfmt(msg, " %U %i %U", (unsigned long long)rs->current_term, rs->role,
-                    (unsigned long long)server.cluster->size);
     msg = wireFinishMsg(msg);
-    serverLog(LL_DEBUG, "Sending %s to %.40s on %s link.", verb,
-              link->node ? link->node->name : "?",
-              link->inbound ? "inbound" : "outbound");
     clusterRaftSendMsg(link, msg);
 }
 
-static void clusterRaftSendHello(clusterLink *link) {
-    clusterRaftSendGreeting(link, "HELLO");
+/* Send MEET with singleton|cluster flag. */
+static void clusterRaftSendMeet(clusterLink *link) {
+    const char *flag = (server.cluster->size > 1) ? "cluster" : "singleton";
+    sds msg = wireNewMsg("MEET");
+    msg = sdscatfmt(msg, " %s", flag);
+    msg = wireFinishMsg(msg);
+    clusterRaftSendMsg(link, msg);
 }
 
-/* Parse sender identity from a greeting message (HELLO/HI/WELCOME).
- * Returns the sender name from argv[1], or NULL on parse error. */
-static char *clusterRaftGreetingSender(int argc, sds *argv) {
-    if (argc < 6) return NULL;
-    if (sdslen(argv[1]) != CLUSTER_NAMELEN) return NULL;
-    return argv[1];
+/* Send a bare message (no payload): ADDME or WELCOME. */
+static void clusterRaftSendBare(clusterLink *link, const char *verb) {
+    sds msg = wireNewMsg(verb);
+    msg = wireFinishMsg(msg);
+    serverLog(LL_NOTICE, "Sending %s on %s link (conn=%p).", verb,
+              link->inbound ? "inbound" : "outbound", (void *)link->conn);
+    clusterRaftSendMsg(link, msg);
 }
 
-/* HELLO: received on an inbound link. The sender identifies itself.
- * Step-down rule 1: singleton leader always steps down on receiving HELLO.
- * If we're still leader after step-down and sender is unknown, propose
- * NODE_JOIN. Always reply HI on the same inbound link. */
+/* HELLO handler: received on an inbound link. Binds the link to the sender. */
 static int clusterRaftProcessHello(clusterLink *link, int argc, sds *argv) {
-    char *sender_name = clusterRaftGreetingSender(argc, argv);
-    if (!sender_name) return 1;
-    serverLog(LL_DEBUG, "Received HELLO from %.40s on %s link.",
-              sender_name, link->inbound ? "inbound" : "outbound");
+    if (argc < 3 || sdslen(argv[1]) != CLUSTER_NAMELEN) return 1;
+    char *sender_name = argv[1];
 
-    clusterRaftState *rs = RAFT_STATE();
+    serverLog(LL_DEBUG, "Received HELLO from %.40s.", sender_name);
 
-    /* Look up or create the sender node. */
     clusterNode *sender = clusterLookupNode(sender_name, CLUSTER_NAMELEN);
-
-    /* Rule 1: singleton leader steps down on HELLO from an unknown node.
-     * This means we're the MEET target — the sender will stay leader.
-     * If the sender is already known, this is just a reconnect HELLO. */
-    if (rs->role == RAFT_ROLE_LEADER && server.cluster->size <= 1 && !sender) {
-        clusterRaftSingletonStepDown(rs);
-        serverLog(LL_NOTICE, "Singleton stepping down on HELLO from %.40s.", sender_name);
-    }
     if (!sender) {
-        sender = createClusterNode(sender_name, CLUSTER_NODE_MEET);
-        if (clusterNodeParseAddressString(sender, argv[2]) == C_ERR) {
-            serverLog(LL_WARNING, "Bad address in HELLO from %.40s", sender_name);
-            freeClusterNode(sender);
-            return 1;
-        }
+        sender = createClusterNode(sender_name, CLUSTER_NODE_MEET | CLUSTER_NODE_PRIMARY);
         clusterAddNode(sender);
-        if (sender->ip[0] == '\0') {
-            connAddrPeerName(link->conn, sender->ip, sizeof(sender->ip), NULL);
-        }
-        serverLog(LL_NOTICE, "New node %.40s (%s:%d) discovered via HELLO.",
-                  sender->name, sender->ip, (int)sender->cport);
+    }
+
+    /* Update sender address. */
+    if (clusterNodeParseAddressString(sender, argv[2]) == C_ERR) {
+        serverLog(LL_WARNING, "Bad address in HELLO from %.40s", sender_name);
+        return 1;
+    }
+    if (sender->ip[0] == '\0') {
+        connAddrPeerName(link->conn, sender->ip, sizeof(sender->ip), NULL);
     }
 
     /* Learn our own IP from the inbound connection if not yet known. */
@@ -489,52 +490,24 @@ static int clusterRaftProcessHello(clusterLink *link, int argc, sds *argv) {
         setClusterNodeToInboundClusterLink(sender, link);
     }
 
-    /* Reply HI on the same inbound link. */
     clusterRaftSendGreeting(link, "HI");
-
-    /* If we're a non-singleton, invite the peer to join our cluster.
-     * Singletons don't invite — they step down (Rule 1 above) and wait
-     * to be invited via the HI handler instead. */
-    if (server.cluster->size > 1) clusterRaftMaybeInvitePeer(sender);
-
     return 1;
 }
 
-/* HI: received on an outbound link as reply to our HELLO.
- * Completes the handshake (renames handshake node to real ID).
- * Step-down rule 2: singleton leader steps down on HI from non-singleton.
- * If we're leader, propose NODE_JOIN for the sender. */
+/* HI handler: received on an outbound link as reply to HELLO.
+ * Completes the handshake (renames handshake node to real ID). */
 static int clusterRaftProcessHi(clusterLink *link, int argc, sds *argv) {
-    char *sender_name = clusterRaftGreetingSender(argc, argv);
-    if (!sender_name) return 1;
-    serverLog(LL_DEBUG, "Received HI from %.40s on %s link.",
-              sender_name, link->inbound ? "inbound" : "outbound");
+    if (argc < 3 || sdslen(argv[1]) != CLUSTER_NAMELEN) return 1;
+    char *sender_name = argv[1];
 
-    clusterRaftState *rs = RAFT_STATE();
-    uint64_t sender_cluster_size = strtoull(argv[5], NULL, 10);
-
-    /* Rule 2: singleton leader steps down on HI from non-singleton. */
-    if (rs->role == RAFT_ROLE_LEADER && server.cluster->size <= 1 && sender_cluster_size > 1) {
-        clusterRaftSingletonStepDown(rs);
-        serverLog(LL_NOTICE, "Singleton stepping down on HI from non-singleton %.40s.", sender_name);
-    }
-
-    /* Complete handshake: rename handshake node or transfer link. */
     clusterNode *sender = clusterLookupNode(sender_name, CLUSTER_NAMELEN);
     if (link->node && nodeInHandshake(link->node)) {
         if (!sender) {
-            /* Normal: rename handshake node to real ID. */
             clusterRenameNode(link->node, sender_name);
             link->node->flags &= ~CLUSTER_NODE_HANDSHAKE;
-            if (clusterNodeParseAddressString(link->node, argv[2]) == C_ERR) {
-                serverLog(LL_WARNING, "Bad address in HI from %.40s", sender_name);
-                return 1;
-            }
-            serverLog(LL_DEBUG, "TRACE HI parseAddr %.40s ip=%s", link->node->name, link->node->ip);
+            clusterNodeParseAddressString(link->node, argv[2]);
             sender = link->node;
         } else if (sender != link->node) {
-            /* Real node already exists (from NODE_JOIN apply).
-             * Delete handshake node and transfer the link. */
             clusterNode *handshake = link->node;
             link->node = sender;
             sender->link = link;
@@ -543,37 +516,64 @@ static int clusterRaftProcessHi(clusterLink *link, int argc, sds *argv) {
         }
         serverLog(LL_NOTICE, "Handshake with node %.40s completed.", sender_name);
     }
+    return 1;
+}
 
-    if (!sender) return 1;
+/* MEET handler: received after HELLO on a MEET-initiated connection.
+ * The link is already bound to the sender by the HELLO handler. */
+static int clusterRaftProcessMeet(clusterLink *link, int argc, sds *argv) {
+    if (argc < 2) return 1;
+    if (!link->node) return 1; /* HELLO must come first. */
 
-    /* Add the peer to the cluster, if it's new and we're not new. */
-    clusterRaftMaybeInvitePeer(sender);
+    clusterNode *sender = link->node;
+    const char *flag = argv[1];
+    int sender_is_singleton = !strcasecmp(flag, "singleton");
+    UNUSED(sender_is_singleton);
 
-    /* Send AE immediately to catch up the peer. */
-    if (rs->role == RAFT_ROLE_LEADER && sender->link) {
-        rs->todo_broadcast_ae = 1;
-        /* Send REPL_OFFSETS so the peer has accurate data for
-         * CLUSTER SLOTS/SHARDS immediately after connecting. */
-        clusterMsgSendBlock *block = clusterRaftBuildAllOffsetsMsg();
-        if (block) {
-            clusterLinkSendBlock(sender->link, block);
-            clusterMsgSendBlockDecrRefCount(block);
-        }
+    serverLog(LL_NOTICE, "Received MEET %s from %.40s.", flag, sender->name);
+
+    clusterRaftState *rs = RAFT_STATE();
+
+    if (server.cluster->size > 1) {
+        /* I'm in a cluster — invite the sender. WELCOME sent after commit. */
+        clusterRaftInvitePeer(sender);
+    } else if (rs->role == RAFT_ROLE_LEADER) {
+        /* I'm a singleton leader — step down, reply ADD_ME. */
+        clusterRaftSingletonStepDown(rs);
+        serverLog(LL_NOTICE, "Singleton stepping down on MEET from %.40s.", sender->name);
+        clusterRaftSendBare(link, "ADD_ME");
+    } else {
+        /* Already a learner (stepped down for another node). Defer until
+         * we join a cluster and can invite the sender. */
+        listAddNodeTail(rs->deferred_meets, link);
+        serverLog(LL_NOTICE, "Deferring MEET from %.40s (waiting to join cluster).", sender->name);
     }
 
     return 1;
 }
 
-/* WELCOME: received after NODE_JOIN committed.
- * Fires the pending MEET callback. */
-static int clusterRaftProcessWelcome(clusterLink *link, int argc, sds *argv) {
-    UNUSED(link);
-    char *sender_name = clusterRaftGreetingSender(argc, argv);
-    if (!sender_name) return 1;
-    serverLog(LL_DEBUG, "Received WELCOME from %.40s.", sender_name);
+/* ADDME handler: the peer stepped down and wants us to add them. */
+static int clusterRaftProcessAddme(clusterLink *link, int argc, sds *argv) {
+    UNUSED(argc);
+    UNUSED(argv);
+    if (!link->node) return 1;
 
-    clusterNode *sender = clusterLookupNode(sender_name, CLUSTER_NAMELEN);
-    if (!sender) return 1;
+    clusterNode *sender = link->node;
+    serverLog(LL_NOTICE, "Received ADDME from %.40s.", sender->name);
+
+    clusterRaftInvitePeer(sender);
+    return 1;
+}
+
+/* WELCOME: received after NODE_JOIN committed.
+ * Fires the pending MEET callback (unblocks CLUSTER MEET client). */
+static int clusterRaftProcessWelcome(clusterLink *link, int argc, sds *argv) {
+    UNUSED(argc);
+    UNUSED(argv);
+    if (!link->node) return 1;
+
+    clusterNode *sender = link->node;
+    serverLog(LL_DEBUG, "Received WELCOME from %.40s.", sender->name);
 
     raftPendingMeet *pm = clusterRaftConsumePendingMeet(sender);
     if (pm) {
@@ -584,6 +584,7 @@ static int clusterRaftProcessWelcome(clusterLink *link, int argc, sds *argv) {
 
     return 1;
 }
+
 
 /* --------------------------------------------------------------------------
  * PROPOSE message: PROPOSE <entry-type-name> <data...>
@@ -597,7 +598,6 @@ static int clusterRaftProcessWelcome(clusterLink *link, int argc, sds *argv) {
  *   PROPOSE NODE_JOIN <node-id> <address>
  *   PROPOSE SLOT_CHANGE <node-id-or-dash> <range> [<range> ...]
  * -------------------------------------------------------------------------- */
-
 static int raftEntryTypeByName(const char *name) {
     if (!strcasecmp(name, "NODE_JOIN")) return RAFT_ENTRY_NODE_JOIN;
     if (!strcasecmp(name, "NODE_FORGET")) return RAFT_ENTRY_NODE_FORGET;
@@ -864,6 +864,18 @@ static void raftLogApply(raftLogEntry *e) {
                 if (!existing || (joined->flags & CLUSTER_NODE_MEET)) {
                     joined->flags &= ~CLUSTER_NODE_MEET;
                     server.cluster->size++;
+
+                    /* Process deferred MEET messages now that we're in a cluster. */
+                    if (server.cluster->size > 1 && listLength(rs->deferred_meets) > 0) {
+                        listIter dli;
+                        listNode *dln;
+                        listRewind(rs->deferred_meets, &dli);
+                        while ((dln = listNext(&dli)) != NULL) {
+                            clusterLink *mlink = listNodeValue(dln);
+                            if (mlink->node) clusterRaftInvitePeer(mlink->node);
+                        }
+                        listEmpty(rs->deferred_meets);
+                    }
                 }
             }
             rs->todo_invalidate_slots_cache = 1;
@@ -1440,6 +1452,7 @@ static void clusterRaftInit(void) {
     rs->last_heartbeat = monotonicMs();
     rs->pending_proposals = listCreate();
     rs->pending_meets = listCreate();
+    rs->deferred_meets = listCreate();
     rs->my_last_committed_info = sdsempty();
     rs->last_node_info_check = monotonicMs();
     server.cluster->protocol_data = rs;
@@ -1657,9 +1670,9 @@ static void clusterRaftCron(void) {
             current = sdscatfmt(current, " %s",
                                 (myself->flags & CLUSTER_NODE_NOFAILOVER) ? "nofailover" : "noflags");
             if (sdscmp(current, rs->my_last_committed_info) != 0) {
-                serverLog(LL_NOTICE, "NODE_INFO diverged from last commit, re-proposing.");
-                serverLog(LL_DEBUG, "Old node-info: %s", rs->my_last_committed_info);
-                serverLog(LL_DEBUG, "New node-info: %s", current);
+                serverLog(LL_NOTICE, "NODE_INFO diverged from last commit. Re-proposing.");
+                serverLog(LL_NOTICE, "Old committed and new proposed node-info: %s -> %s",
+                          rs->my_last_committed_info, current);
                 clusterRaftUpdateMyself(0);
             }
             sdsfree(current);
@@ -1889,6 +1902,7 @@ static void clusterRaftHandleServerShutdown(void) {
         zfree(pm);
     }
     listRelease(rs->pending_meets);
+    listRelease(rs->deferred_meets);
     /* Free raft log. */
     for (uint64_t i = 0; i < rs->log_count; i++) {
         sdsfree(rs->log[i]->data);
@@ -1916,6 +1930,18 @@ static uint32_t clusterRaftValidateMessageHeader(char *header) {
 static int clusterRaftProcessMessage(struct clusterLink *link) {
     RAFT_STATE()->stats_bytes_received += link->rcvbuf_len;
 
+    /* Temporary debug: log first word of every received message. */
+    if (link->rcvbuf_len > RAFT_HDR_SIZE) {
+        char *p = link->rcvbuf + RAFT_HDR_SIZE;
+        size_t plen = link->rcvbuf_len - RAFT_HDR_SIZE;
+        char *sp = memchr(p, ' ', plen);
+        if (!sp) sp = memchr(p, '\n', plen);
+        int wlen = sp ? (int)(sp - p) : (int)plen;
+        serverLog(LL_NOTICE, "TRACE processMessage: %.20s (%s link)", p,
+                  link->inbound ? "inbound" : "outbound");
+        UNUSED(wlen);
+    }
+
     /* Parse the text payload after the binary header.
      * Split by \n first (AE messages have entry lines), then split
      * the first line by space for the header fields. */
@@ -1939,6 +1965,10 @@ static int clusterRaftProcessMessage(struct clusterLink *link) {
         ret = clusterRaftProcessHello(link, argc, argv);
     } else if (!strcasecmp(argv[0], "HI")) {
         ret = clusterRaftProcessHi(link, argc, argv);
+    } else if (!strcasecmp(argv[0], "MEET")) {
+        ret = clusterRaftProcessMeet(link, argc, argv);
+    } else if (!strcasecmp(argv[0], "ADD_ME")) {
+        ret = clusterRaftProcessAddme(link, argc, argv);
     } else if (!strcasecmp(argv[0], "WELCOME")) {
         ret = clusterRaftProcessWelcome(link, argc, argv);
     } else if (!strcasecmp(argv[0], "PROPOSE")) {
@@ -2055,24 +2085,21 @@ static void clusterRaftJoinCallback(void *ctx, const char *error) {
     /* Send WELCOME to the joined node. */
     if (!error) {
         clusterNode *n = clusterLookupNode(jc->node_name, sdslen(jc->node_name));
-        if (n && n->link) clusterRaftSendGreeting(n->link, "WELCOME");
+        if (n && n->link) clusterRaftSendBare(n->link, "WELCOME");
     }
     sdsfree(jc->node_name);
     zfree(jc);
 }
 
 static void clusterRaftPostConnect(struct clusterLink *link) {
-    /* Learn our own IP from the outbound connection if not yet known. */
     if (myself->ip[0] == '\0' && server.cluster_announce_ip == NULL) {
         connAddrSockName(link->conn, myself->ip, sizeof(myself->ip), NULL);
         serverLog(LL_NOTICE, "IP address for this node updated to %s", myself->ip);
     }
-    /* Commit NODE_JOIN for ourselves once we know our IP. */
-    if ((myself->flags & CLUSTER_NODE_MEET) && myself->ip[0] != '\0') {
-        clusterRaftMaybeSelfJoin();
+    clusterRaftSendGreeting(link, "HELLO");
+    if (link->node && nodeInHandshake(link->node)) {
+        clusterRaftSendMeet(link);
     }
-    /* Send HELLO on every new outbound link for identification. */
-    clusterRaftSendHello(link);
 }
 
 /* --------------------------------------------------------------------------

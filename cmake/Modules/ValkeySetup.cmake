@@ -236,7 +236,7 @@ if (BUILDING_ARM64)
 endif ()
 
 if (APPLE)
-    add_valkey_server_linker_option("-rdynamic")
+    add_valkey_server_linker_option("-Wl,-export_dynamic")
     add_valkey_server_linker_option("-ldl")
 elseif (UNIX)
     add_valkey_server_linker_option("-rdynamic")

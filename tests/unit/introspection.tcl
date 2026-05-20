@@ -247,6 +247,7 @@ start_server {tags {"introspection"}} {
 
         set output [r client list capa r capa r]
         assert_match *client-with-r* $output
+
         catch {$c1 close}
     }
 
@@ -285,9 +286,8 @@ start_server {tags {"introspection"}} {
         $c1 client setname "killme-capa"
         $c1 client capa redirect
 
-        # Kill using capa filter
+        # Kill using capa r filter
         r client kill capa r skipme yes
-
         assert_error "*I/O error*" {$c1 ping}
     } {}
 
@@ -1961,6 +1961,31 @@ test {CONFIG REWRITE handles alias config properly} {
         restart_server 0 true false
 
         assert_equal [r config get hash-max-listpack-entries] {hash-max-listpack-entries 100}
+    }
+} {} {external:skip}
+
+test {CONFIG REWRITE handles large unsigned memory config values} {
+    start_server {tags {"introspection"}} {
+        r config set maxmemory 9223372036854775808
+        r config set maxmemory-clients 100%
+
+        r config rewrite
+        restart_server 0 true false
+
+        assert_equal [lindex [r config get maxmemory] 1] 9223372036854775808
+        assert_equal [lindex [r config get maxmemory-clients] 1] 100%
+    }
+} {} {external:skip}
+
+test {SIGNED MEMORY CONFIG allows negative number} {
+    start_server {tags {"introspection"}} {
+        r config set slot-migration-max-failover-repl-bytes -1
+        assert_equal [lindex [r config get slot-migration-max-failover-repl-bytes] 1] -1
+        assert_error {*argument must be between -1 and *} {r config set slot-migration-max-failover-repl-bytes -2}
+
+        r config rewrite
+        restart_server 0 true false
+        assert_equal [lindex [r config get slot-migration-max-failover-repl-bytes] 1] -1
     }
 } {} {external:skip}
 

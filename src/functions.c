@@ -69,44 +69,53 @@ typedef struct functionsLibMetaData {
     sds code;
 } functionsLibMetaData;
 
-static uint64_t dictStrCaseHash(const void *key) {
-    return dictGenCaseHashFunction((unsigned char *)key, strlen((char *)key));
+dictType functionDictType = {
+    .entryGetKey = dictEntryGetKey,
+    .hashFunction = dictCStrCaseHash,
+    .keyCompare = dictSdsKeyCaseCompare,
+    .entryDestructor = dictEntryDestructorSdsKey,
+};
+
+static void dictEntryDestructorSdsKeyEngineStatsValue(void *entry) {
+    dictEntry *de = entry;
+    dictSdsDestructor(dictGetKey(de));
+    engineStatsDispose(dictGetVal(de));
+    zfree(de);
 }
 
-dictType functionDictType = {
-    dictStrCaseHash,       /* hash function */
-    NULL,                  /* key dup */
-    dictSdsKeyCaseCompare, /* key compare */
-    dictSdsDestructor,     /* key destructor */
-    NULL,                  /* val destructor */
-    NULL                   /* allow to expand */
+dictType engineStatsDictType = {
+    .entryGetKey = dictEntryGetKey,
+    .hashFunction = dictSdsCaseHash,
+    .keyCompare = dictSdsKeyCaseCompare,
+    .entryDestructor = dictEntryDestructorSdsKeyEngineStatsValue,
 };
 
-dictType engineStatsDictType = {
-    dictSdsCaseHash,       /* hash function */
-    dictSdsDup,            /* key dup */
-    dictSdsKeyCaseCompare, /* key compare */
-    dictSdsDestructor,     /* key destructor */
-    engineStatsDispose,    /* val destructor */
-    NULL                   /* allow to expand */
-};
+static void dictEntryDestructorSdsKeyEngineFunctionValue(void *entry) {
+    dictEntry *de = entry;
+    dictSdsDestructor(dictGetKey(de));
+    engineFunctionDispose(dictGetVal(de));
+    zfree(de);
+}
 
 dictType libraryFunctionDictType = {
-    dictSdsHash,           /* hash function */
-    NULL,                  /* key dup */
-    dictSdsKeyCompare,     /* key compare */
-    dictSdsDestructor,     /* key destructor */
-    engineFunctionDispose, /* val destructor */
-    NULL                   /* allow to expand */
+    .entryGetKey = dictEntryGetKey,
+    .hashFunction = dictSdsHash,
+    .keyCompare = dictSdsKeyCompare,
+    .entryDestructor = dictEntryDestructorSdsKeyEngineFunctionValue,
 };
 
+static void dictEntryDestructorSdsKeyEngineLibraryValue(void *entry) {
+    dictEntry *de = entry;
+    dictSdsDestructor(dictGetKey(de));
+    engineLibraryDispose(dictGetVal(de));
+    zfree(de);
+}
+
 dictType librariesDictType = {
-    dictSdsHash,          /* hash function */
-    dictSdsDup,           /* key dup */
-    dictSdsKeyCompare,    /* key compare */
-    dictSdsDestructor,    /* key destructor */
-    engineLibraryDispose, /* val destructor */
-    NULL                  /* allow to expand */
+    .entryGetKey = dictEntryGetKey,
+    .hashFunction = dictSdsHash,
+    .keyCompare = dictSdsKeyCompare,
+    .entryDestructor = dictEntryDestructorSdsKeyEngineLibraryValue,
 };
 
 /* Libraries Ctx. */
@@ -239,7 +248,7 @@ static void initializeFunctionsLibEngineStats(scriptingEngine *engine,
                                               void *context) {
     functionsLibCtx *lib_ctx = (functionsLibCtx *)context;
     functionsLibEngineStats *stats = zcalloc(sizeof(*stats));
-    dictAdd(lib_ctx->engines_stats, scriptingEngineGetName(engine), stats);
+    dictAdd(lib_ctx->engines_stats, sdsdup(scriptingEngineGetName(engine)), stats);
 }
 
 /* Create a new functions ctx */
@@ -258,7 +267,7 @@ void functionsAddEngineStats(sds engine_name) {
     dictEntry *entry = dictFind(curr_functions_lib_ctx->engines_stats, engine_name);
     if (entry == NULL) {
         functionsLibEngineStats *stats = zcalloc(sizeof(*stats));
-        dictAdd(curr_functions_lib_ctx->engines_stats, engine_name, stats);
+        dictAdd(curr_functions_lib_ctx->engines_stats, sdsdup(engine_name), stats);
     }
 }
 
@@ -349,7 +358,7 @@ static void libraryLink(functionsLibCtx *lib_ctx, functionLibInfo *li) {
     }
     dictReleaseIterator(iter);
 
-    dictAdd(lib_ctx->libraries, li->name, li);
+    dictAdd(lib_ctx->libraries, sdsdup(li->name), li);
     lib_ctx->cache_memory += libraryMallocSize(li);
 
     /* update stats */

@@ -1173,6 +1173,9 @@ void hgetdelCommand(client *c) {
     if (checkType(c, o, OBJ_HASH)) return;
 
     bool hash_volatile_items = hashTypeHasVolatileFields(o);
+    if (o && o->encoding == OBJ_ENCODING_HASHTABLE) hashtablePauseAutoShrink(objectGetVal(o));
+
+    initDeferredReplyBuffer(c);
 
     /* Reply with array of values and delete at the same time */
     addReplyArrayLen(c, num_fields);
@@ -1191,6 +1194,7 @@ void hgetdelCommand(client *c) {
             }
         }
     }
+    if (!keyremoved && o && o->encoding == OBJ_ENCODING_HASHTABLE) hashtableResumeAutoShrink(objectGetVal(o));
 
     if (deleted) {
         if (!keyremoved && hash_volatile_items != hashTypeHasVolatileFields(o)) {
@@ -1201,6 +1205,8 @@ void hgetdelCommand(client *c) {
         if (keyremoved) notifyKeyspaceEvent(NOTIFY_GENERIC, "del", c->argv[1], c->db->id);
         server.dirty += deleted;
     }
+
+    commitDeferredReplyBuffer(c, 1);
 }
 
 void hlenCommand(client *c) {
@@ -1790,8 +1796,7 @@ void genericHgetallCommand(client *c, int flags) {
     hashTypeResetIterator(&hi);
     /* Make sure we returned the right number of elements. */
     if (flags & OBJ_HASH_FIELD && flags & OBJ_HASH_VALUE) {
-        setDeferredMapLen(c, replylen, count /= 2);
-        count /= 2;
+        setDeferredMapLen(c, replylen, count / 2);
     } else {
         setDeferredArrayLen(c, replylen, count);
     }
@@ -1821,7 +1826,7 @@ void hscanCommand(client *c) {
 
     if (parseScanCursorOrReply(c, objectGetVal(c->argv[2]), &cursor) == C_ERR) return;
     if ((o = lookupKeyReadOrReply(c, c->argv[1], shared.emptyscan)) == NULL || checkType(c, o, OBJ_HASH)) return;
-    scanGenericCommand(c, o, cursor, -1, NULL, NULL);
+    scanGenericCommand(c, o, cursor);
 }
 
 static void hrandfieldReplyWithListpack(writePreparedClient *wpc, unsigned int count, listpackEntry *fields, listpackEntry *vals) {
@@ -1914,6 +1919,8 @@ void hexpireGenericCommand(client *c, mstime_t basetime, int unit) {
 
     bool has_volatile_fields = hashTypeHasVolatileFields(obj);
 
+    initDeferredReplyBuffer(c);
+
     /* From this point we would return array reply */
     addReplyArrayLen(c, num_fields);
 
@@ -1971,6 +1978,8 @@ void hexpireGenericCommand(client *c, mstime_t basetime, int unit) {
             notifyKeyspaceEvent(NOTIFY_GENERIC, "del", c->argv[1], c->db->id);
         }
     }
+
+    commitDeferredReplyBuffer(c, 1);
 }
 
 void hexpireCommand(client *c) {
@@ -2018,12 +2027,14 @@ void hpersistCommand(client *c) {
         return;
     }
 
-    /* From this point we would return array reply */
-    addReplyArrayLen(c, num_fields);
-
     robj *hash = lookupKeyWrite(c->db, c->argv[1]);
     if (checkType(c, hash, OBJ_HASH))
         return;
+
+    initDeferredReplyBuffer(c);
+
+    /* From this point we would return array reply */
+    addReplyArrayLen(c, num_fields);
 
     bool has_volatile_fields = hashTypeHasVolatileFields(hash);
 
@@ -2042,6 +2053,8 @@ void hpersistCommand(client *c) {
         notifyKeyspaceEvent(NOTIFY_HASH, "hpersist", c->argv[1], c->db->id);
         signalModifiedKey(c, c->db, c->argv[1]);
     }
+
+    commitDeferredReplyBuffer(c, 1);
 }
 
 /* High-Level Algorithm of HTTL / HPTTL / HEXPIRETIME / HPEXPIRETIME Commands:

@@ -62,6 +62,7 @@
 
 #include "server.h"
 #include "intset.h" /* Compact integer set structure */
+#include "mt19937-64.h"
 #include <math.h>
 
 #include "valkey_strtod.h"
@@ -3830,7 +3831,7 @@ void zscanCommand(client *c) {
 
     if (parseScanCursorOrReply(c, objectGetVal(c->argv[2]), &cursor) == C_ERR) return;
     if ((o = lookupKeyReadOrReply(c, c->argv[1], shared.emptyscan)) == NULL || checkType(c, o, OBJ_ZSET)) return;
-    scanGenericCommand(c, o, cursor, -1, NULL, NULL);
+    scanGenericCommand(c, o, cursor);
 }
 
 void addZpopInitialReply(client *c, int emitkey, int use_nested_array, long rangelen, robj *key) {

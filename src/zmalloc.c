@@ -576,7 +576,7 @@ void zmadvise_dontneed(void *ptr, size_t size_hint) {
  * This is useful when we want to release a portion of a larger allocation that
  * is no longer needed. */
 void zmadvise_dontneed_range(void *ptr, size_t size) {
-#if defined(__linux__)
+#if defined(USE_JEMALLOC) && defined(__linux__)
     if (ptr == NULL || size == 0) return;
     madvise(ptr, size, MADV_DONTNEED);
 #else

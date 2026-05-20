@@ -893,9 +893,9 @@ sds *sdssplitlen(const char *s, ssize_t len, const char *sep, int seplen, int *c
         for (; start < len; start = j + 1) {
             const char *p = memchr(s + start, sep[0], len - start);
             if (!p) break;
-            
+
             j = p - s;
-            
+
             if (slots < elements + 2) {
                 /* make sure there is room for the next element and the final one */
                 sds *newtokens;
@@ -904,7 +904,7 @@ sds *sdssplitlen(const char *s, ssize_t len, const char *sep, int seplen, int *c
                 if (newtokens == NULL) goto cleanup;
                 tokens = newtokens;
             }
-            
+
             tokens[elements] = sdsnewlen(s + start, j - start);
             if (tokens[elements] == NULL) goto cleanup;
             elements++;
@@ -924,7 +924,7 @@ sds *sdssplitlen(const char *s, ssize_t len, const char *sep, int seplen, int *c
                 if (tokens[elements] == NULL) goto cleanup;
                 elements++;
                 start = j + seplen;
-                j = j + seplen - 1; 
+                j = j + seplen - 1;
             }
         }
     }

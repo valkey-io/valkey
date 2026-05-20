@@ -84,7 +84,7 @@ static inline char sdsReqType(size_t string_size) {
  * end of the string. However the string is binary safe and can contain
  * \0 characters in the middle, as the length is stored in the sds header. */
 sds sdsnewlen(const void *init, size_t initlen) {
-    void *sh;
+    void *s_hdr;
     sds s;
     char type = sdsReqType(initlen);
     /* Empty strings are usually created in order to append. Use type 8
@@ -96,12 +96,12 @@ sds sdsnewlen(const void *init, size_t initlen) {
 
     if (hdrlen + initlen + 1 <= initlen)
         return NULL; /* Catch size_t overflow */
-    sh = s_malloc(hdrlen + initlen + 1);
-    if (sh == NULL)
+    s_hdr = s_malloc(hdrlen + initlen + 1);
+    if (s_hdr == NULL)
         return NULL;
     if (!init)
-        memset(sh, 0, hdrlen + initlen + 1);
-    s = (char *)sh + hdrlen;
+        memset(s_hdr, 0, hdrlen + initlen + 1);
+    s = (char *)s_hdr + hdrlen;
     fp = ((unsigned char *)s) - 1;
     switch (type) {
     case SDS_TYPE_5: {
@@ -329,7 +329,7 @@ void *sdsAllocPtr(sds s) {
  * ... check for nread <= 0 and handle it ...
  * sdsIncrLen(s, nread);
  */
-void sdsIncrLen(sds s, int incr) {
+void sdsIncrLen(sds s, ssize_t incr) {
     unsigned char flags = s[-1];
     size_t len;
     switch (flags & SDS_TYPE_MASK) {
@@ -915,43 +915,25 @@ sds *sdssplitlen(const char *s, int len, const char *sep, int seplen, int *count
         *count = 0;
         return tokens;
     }
-    if (seplen == 1) {
-        for (; start < len; start = j + 1) {
-            const char *p = memchr(s + start, sep[0], len - start);
-            if (!p) break; 
-            
-            j = p - s; 
-            
-            if (slots < elements + 2) {
-            /* make sure there is room for the next element and the final one */
-                sds *newtokens;
-                slots *= 2;
-                newtokens = s_realloc(tokens, sizeof(sds) * slots);
-                if (newtokens == NULL) goto cleanup;
-                tokens = newtokens;
-            }
-            
-            tokens[elements] = sdsnewlen(s + start, j - start);
-            if (tokens[elements] == NULL) goto cleanup;
-            elements++;
+    for (j = 0; j < (len - (seplen - 1)); j++) {
+        /* make sure there is room for the next element and the final one */
+        if (slots < elements + 2) {
+            sds *newtokens;
+
+            slots *= 2;
+            newtokens = s_realloc(tokens, sizeof(sds) * slots);
+            if (newtokens == NULL)
+                goto cleanup;
+            tokens = newtokens;
         }
-    } else {
-        for (j = 0; j < (len - (seplen - 1)); j++) {
-            if (slots < elements + 2) {
-            /* make sure there is room for the next element and the final one */
-                sds *newtokens;
-                slots *= 2;
-                newtokens = s_realloc(tokens, sizeof(sds) * slots);
-                if (newtokens == NULL) goto cleanup;
-                tokens = newtokens;
-            }
-            if (memcmp(s + j, sep, seplen) == 0) {
-                tokens[elements] = sdsnewlen(s + start, j - start);
-                if (tokens[elements] == NULL) goto cleanup;
-                elements++;
-                start = j + seplen;
-                j = j + seplen - 1; 
-            }
+        /* search the separator */
+        if ((seplen == 1 && *(s + j) == sep[0]) || (memcmp(s + j, sep, seplen) == 0)) {
+            tokens[elements] = sdsnewlen(s + start, j - start);
+            if (tokens[elements] == NULL)
+                goto cleanup;
+            elements++;
+            start = j + seplen;
+            j = j + seplen - 1; /* skip the separator */
         }
     }
     /* Add the final element. We are sure there is room in the tokens array. */

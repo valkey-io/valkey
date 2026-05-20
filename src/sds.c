@@ -892,12 +892,12 @@ sds *sdssplitlen(const char *s, ssize_t len, const char *sep, int seplen, int *c
     if (seplen == 1) {
         for (; start < len; start = j + 1) {
             const char *p = memchr(s + start, sep[0], len - start);
-            if (!p) break; 
+            if (!p) break;
             
-            j = p - s; 
+            j = p - s;
             
             if (slots < elements + 2) {
-            /* make sure there is room for the next element and the final one */
+                /* make sure there is room for the next element and the final one */
                 sds *newtokens;
                 slots *= 2;
                 newtokens = s_realloc(tokens, sizeof(sds) * slots);
@@ -912,7 +912,7 @@ sds *sdssplitlen(const char *s, ssize_t len, const char *sep, int seplen, int *c
     } else {
         for (j = 0; j < (len - (seplen - 1)); j++) {
             if (slots < elements + 2) {
-            /* make sure there is room for the next element and the final one */
+                /* make sure there is room for the next element and the final one */
                 sds *newtokens;
                 slots *= 2;
                 newtokens = s_realloc(tokens, sizeof(sds) * slots);

@@ -1138,7 +1138,7 @@ start_server [list overrides [list "dir" $server_path "acl-pubsub-default" "allc
         # CLIENT LIST will dereference c->user->name via catClientInfoString.
         # Under ASAN this would fire heap-use-after-free without the fix.
         set cl [r CLIENT LIST]
-        assert {[string length $cl] > 0}
+        assert_match "*id=$cid*" $cl
 
         $rd close
         set _ {}

@@ -1685,4 +1685,3 @@ TEST_F(HashtableTest, scan_has_passed_key_fuzz) {
     }
     hashtableSetResizePolicy(HASHTABLE_RESIZE_ALLOW);
 }
-

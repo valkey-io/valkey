@@ -154,7 +154,8 @@ static int parseMultibulk(client *c,
                           robj ***argv,
                           int *argv_len,
                           size_t *argv_len_sum,
-                          unsigned long long *net_input_bytes_curr_cmd);
+                          unsigned long long *net_input_bytes_curr_cmd,
+                          int allow_trim);
 
 int ProcessingEventsWhileBlocked = 0; /* See processEventsWhileBlocked(). */
 _Thread_local sds thread_shared_qb = NULL;
@@ -3556,7 +3557,7 @@ static void setProtocolError(const char *errstr, client *c) {
  * to be '*'. Otherwise for inline commands parseInlineBuffer() is called. */
 void parseMultibulkBuffer(client *c) {
     int flag = parseMultibulk(c, &c->argc, &c->argv, &c->argv_len,
-                              &c->argv_len_sum, &c->net_input_bytes_curr_cmd);
+                              &c->argv_len_sum, &c->net_input_bytes_curr_cmd, 1);
     c->read_flags |= flag;
 
     if (c->read_flags & READ_FLAGS_AUTH_REQUIRED) {
@@ -3592,8 +3593,22 @@ void parseMultibulkBuffer(client *c) {
         }
         parsedCommand *p = &queue->cmds[queue->len++];
         memset(p, 0, sizeof(*p));
+        size_t qb_pos_before = c->qb_pos;
         flag = parseMultibulk(c, &p->argc, &p->argv, &p->argv_len,
-                              &p->argv_len_sum, &p->input_bytes);
+                              &p->argv_len_sum, &p->input_bytes, 0);
+        if (!(flag & READ_FLAGS_PARSING_COMPLETED)) {
+            /* Parsing incomplete — the command spans a packet boundary.
+             * Free partially parsed args, remove from queue, and reset
+             * parse state so the command is re-parsed when data arrives. */
+            for (int j = 0; j < p->argc; j++) decrRefCount(p->argv[j]);
+            zfree(p->argv);
+            queue->len--;
+            c->qb_pos = qb_pos_before;
+            c->multibulklen = 0;
+            c->bulklen = -1;
+            c->reqtype = 0;
+            break;
+        }
         p->read_flags = flag;
         p->slot = -1;
     }
@@ -3618,7 +3633,8 @@ static int parseMultibulk(client *c,
                           robj ***argv,
                           int *argv_len,
                           size_t *argv_len_sum,
-                          unsigned long long *net_input_bytes_curr_cmd) {
+                          unsigned long long *net_input_bytes_curr_cmd,
+                          int allow_trim) {
     char *newline = NULL;
     int ok;
     long long ll;
@@ -3739,7 +3755,7 @@ static int parseMultibulk(client *c,
             }
 
             c->qb_pos = newline - c->querybuf + 2;
-            if (!(is_replicated) && ll >= PROTO_MBULK_BIG_ARG) {
+            if (!(is_replicated) && allow_trim && ll >= PROTO_MBULK_BIG_ARG) {
                 /* When the client is not a replicated client (because replicated
                  * client's querybuf can only be trimmed after data applied
                  * and sent to replicas).

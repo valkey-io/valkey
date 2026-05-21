@@ -1069,6 +1069,15 @@ void debugCommand(client *c) {
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "force-free-primary-async") && c->argc == 3) {
         server.debug_force_free_primary_async = atoi(objectGetVal(c->argv[2]));
         addReply(c, shared.ok);
+    } else if (!strcasecmp(objectGetVal(c->argv[1]), "protect-client") && c->argc == 3) {
+        uint64_t id = strtoull(objectGetVal(c->argv[2]), NULL, 10);
+        client *target = lookupClientByID(id);
+        if (target) {
+            protectClient(target);
+            addReply(c, shared.ok);
+        } else {
+            addReplyError(c, "No such client");
+        }
     } else if (!handleDebugClusterCommand(c)) {
         addReplySubcommandSyntaxError(c);
         return;

@@ -525,6 +525,10 @@ void debugCommand(client *c) {
             "    When set to 1, slot migrations will be prevented from pausing on the source node.",
             "SLOTMIGRATION PREVENT-FAILOVER <0|1>",
             "    When set to 1, slot migrations will be prevented from performing the slot-level failover on the target node.",
+            "FORCE-FREE-PRIMARY-ASYNC <0|1>",
+            "    Force freeClient on primary to use async path.",
+            "PROTECT-CLIENT <id>",
+            "    Protect a client from being freed, forcing deferred close.",
             NULL};
         addExtendedReplyHelp(c, help, clusterDebugCommandExtendedHelp());
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "segfault")) {
@@ -1069,6 +1073,21 @@ void debugCommand(client *c) {
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "force-free-primary-async") && c->argc == 3) {
         server.debug_force_free_primary_async = atoi(objectGetVal(c->argv[2]));
         addReply(c, shared.ok);
+    } else if (!strcasecmp(objectGetVal(c->argv[1]), "protect-client") && c->argc == 3) {
+        char *endptr;
+        errno = 0;
+        uint64_t id = strtoull(objectGetVal(c->argv[2]), &endptr, 10);
+        if (errno == ERANGE || endptr == objectGetVal(c->argv[2]) || *endptr != '\0') {
+            addReplyError(c, "Invalid client id");
+            return;
+        }
+        client *target = lookupClientByID(id);
+        if (target) {
+            protectClient(target);
+            addReply(c, shared.ok);
+        } else {
+            addReplyError(c, "No such client");
+        }
     } else if (!handleDebugClusterCommand(c)) {
         addReplySubcommandSyntaxError(c);
         return;

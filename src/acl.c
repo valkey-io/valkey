@@ -2447,6 +2447,7 @@ static sds ACLLoadFromFile(const char *filename) {
             /* When the new channel list is NULL, it means the new user's channel list is a superset of the old user's
              * list. */
             if (!new_user || (channels && ACLShouldKillPubsubClient(c, channels))) {
+                clientSetUser(c, DefaultUser, 0);
                 freeClientOrCloseLater(c, 0);
                 continue;
             }

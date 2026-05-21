@@ -511,6 +511,8 @@ void debugCommand(client *c) {
             "CLIENT-ENFORCE-REPLY-LIST <0|1>",
             "When set to 1, it enforces the use of the client reply list directly",
             "    and avoids using the client's static buffer.",
+            "PROTECT-CLIENT <id>",
+            "    Protect a client from being freed, forcing deferred close.",
             NULL};
         addExtendedReplyHelp(c, help, clusterDebugCommandExtendedHelp());
     } else if (!strcasecmp(c->argv[1]->ptr, "segfault")) {
@@ -1026,6 +1028,21 @@ void debugCommand(client *c) {
     } else if (!strcasecmp(c->argv[1]->ptr, "client-enforce-reply-list") && c->argc == 3) {
         server.debug_client_enforce_reply_list = atoi(c->argv[2]->ptr);
         addReply(c, shared.ok);
+    } else if (!strcasecmp(c->argv[1]->ptr, "protect-client") && c->argc == 3) {
+        char *endptr;
+        errno = 0;
+        uint64_t id = strtoull(c->argv[2]->ptr, &endptr, 10);
+        if (errno == ERANGE || endptr == c->argv[2]->ptr || *endptr != '\0') {
+            addReplyError(c, "Invalid client id");
+            return;
+        }
+        client *target = lookupClientByID(id);
+        if (target) {
+            protectClient(target);
+            addReply(c, shared.ok);
+        } else {
+            addReplyError(c, "No such client");
+        }
     } else if (!handleDebugClusterCommand(c)) {
         addReplySubcommandSyntaxError(c);
         return;

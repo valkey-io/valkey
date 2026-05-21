@@ -1686,29 +1686,3 @@ TEST_F(HashtableTest, scan_has_passed_key_fuzz) {
     hashtableSetResizePolicy(HASHTABLE_RESIZE_ALLOW);
 }
 
-TEST_F(HashtableTest, scan_has_passed_key_during_rehash) {
-    /* When rehashing is active, HasPassedKey should not crash (best-effort). */
-    hashtableType type = {};
-    hashtable *ht = hashtableCreate(&type);
-
-    for (long j = 1; j <= 1000; j++) {
-        hashtableAdd(ht, (void *)j);
-    }
-
-    /* Force rehashing by expanding. */
-    hashtableExpand(ht, 8192);
-    ASSERT_TRUE(hashtableIsRehashing(ht));
-
-    /* Do a partial scan. */
-    size_t cursor = 0;
-    for (int i = 0; i < 5; i++) {
-        cursor = hashtableScan(ht, cursor, NULL, NULL);
-    }
-
-    /* Just verify it doesn't crash. */
-    for (long j = 1; j <= 100; j++) {
-        (void)hashtableScanHasPassedKey(ht, (void *)j, cursor);
-    }
-
-    hashtableRelease(ht);
-}

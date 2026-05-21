@@ -1082,6 +1082,47 @@ start_server [list overrides [list "dir" $server_path "acl-pubsub-default" "allc
         $rd2 close
     }
 
+    test {ACL LOAD does not leave dangling user pointer on protected clients} {
+        # Create a user that will be deleted on ACL LOAD
+        r ACL SETUSER tempuser on >temppass ~* &* +@all
+        r ACL SAVE
+
+        # Connect as tempuser
+        set rd [valkey_deferring_client]
+        $rd AUTH tempuser temppass
+        $rd read ;# consume OK
+        $rd CLIENT ID
+        set cid [$rd read]
+
+        # Protect the client so freeClient defers to async
+        r DEBUG PROTECT-CLIENT $cid
+
+        # Remove tempuser from ACL file and reload
+        set aclfile [file join [lindex [r CONFIG GET dir] 1] [lindex [r CONFIG GET aclfile] 1]]
+        set fd [open $aclfile r]
+        set content [read $fd]
+        close $fd
+        # Rewrite without tempuser
+        set fd [open $aclfile w]
+        foreach line [split $content "\n"] {
+            if {![string match "*tempuser*" $line]} {
+                puts $fd $line
+            }
+        }
+        close $fd
+
+        r ACL LOAD
+
+        # The protected client is still in server.clients with a dangling c->user.
+        # CLIENT LIST will dereference c->user->name via catClientInfoString.
+        # Under ASAN this would fire heap-use-after-free without the fix.
+        set cl [r CLIENT LIST]
+        assert_match "*id=$cid *" $cl
+
+        $rd close
+        set _ {}
+    } {} {needs:debug}
+
     test {ACL load and save} {
         r ACL setuser eve +get allkeys >eve on
         r ACL save

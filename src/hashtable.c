@@ -2035,9 +2035,10 @@ size_t hashtableScan(hashtable *ht, size_t cursor, hashtableScanFunction fn, voi
     return hashtableScanDefrag(ht, cursor, fn, privdata, NULL, 0);
 }
 
-/* Given a scan cursor, determines whether the bucket containing 'key' has
- * already been visited by the scan. Returns 1 if the key's bucket has been
- * passed (i.e. the key would have been emitted already), 0 if not yet visited.
+/* Given a scan cursor, determines whether a key's hashtable position has
+ * already been visited by the scan. Returns true if the position has been
+ * passed (i.e. the key would have been emitted already), false if not yet
+ * visited.
  *
  * When rehashing is not active, this is an exact answer. When rehashing is
  * active, the result is best-effort and not guaranteed to be correct.

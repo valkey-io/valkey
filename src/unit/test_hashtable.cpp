@@ -1391,7 +1391,7 @@ TEST_F(HashtableTest, safe_iterator_release_before_cleanup) {
     hashtableCleanupIterator(&iter);
 }
 
-/* --- Scan contract tests: no duplicates when rehashing is not active --- */
+/* Scan contract tests: no duplicates when rehashing is not active */
 
 /* Scan callback that records entries in a set for duplicate detection. */
 struct ScanContractData {
@@ -1547,7 +1547,7 @@ TEST_F(HashtableTest, scan_no_duplicates_fuzz) {
     hashtableSetResizePolicy(HASHTABLE_RESIZE_ALLOW);
 }
 
-/* --- hashtableScanHasPassedKey tests --- */
+/* hashtableScanHasPassedKey tests */
 
 TEST_F(HashtableTest, scan_has_passed_key_correctness) {
     /* After each scan step, HasPassedKey should return true for all emitted

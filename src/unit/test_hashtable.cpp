@@ -1416,7 +1416,7 @@ TEST_F(HashtableTest, scan_no_duplicates_static) {
 
     long count = 5000;
     for (long j = 1; j <= count; j++) {
-        hashtableAdd(ht, (void *)j);
+        ASSERT_TRUE(hashtableAdd(ht, (void *)j));
     }
     ASSERT_FALSE(hashtableIsRehashing(ht));
 
@@ -1441,7 +1441,7 @@ TEST_F(HashtableTest, scan_no_duplicates_with_deletions) {
 
     long count = 5000;
     for (long j = 1; j <= count; j++) {
-        hashtableAdd(ht, (void *)j);
+        ASSERT_TRUE(hashtableAdd(ht, (void *)j));
     }
 
     ScanContractData data = {};
@@ -1473,7 +1473,7 @@ TEST_F(HashtableTest, scan_no_duplicates_with_insertions) {
     hashtableExpand(ht, 16384);
     long count = 2000;
     for (long j = 1; j <= count; j++) {
-        hashtableAdd(ht, (void *)j);
+        ASSERT_TRUE(hashtableAdd(ht, (void *)j));
     }
 
     ScanContractData data = {};
@@ -1485,7 +1485,7 @@ TEST_F(HashtableTest, scan_no_duplicates_with_insertions) {
         /* Insert new entries every few steps. */
         if (++step % 10 == 0) {
             for (int i = 0; i < 5; i++) {
-                hashtableAdd(ht, (void *)next_insert++);
+                ASSERT_TRUE(hashtableAdd(ht, (void *)next_insert++));
             }
         }
     } while (cursor != 0);
@@ -1516,7 +1516,7 @@ TEST_F(HashtableTest, scan_no_duplicates_fuzz) {
         /* Fill to random factor between 25% and 90%. */
         long count = table_size;
         for (long j = 1; j <= count; j++) {
-            hashtableAdd(ht, (void *)j);
+            ASSERT_TRUE(hashtableAdd(ht, (void *)j));
         }
         ASSERT_FALSE(hashtableIsRehashing(ht));
 
@@ -1533,7 +1533,7 @@ TEST_F(HashtableTest, scan_no_duplicates_fuzz) {
                 hashtableDelete(ht, (void *)target);
             } else if (op < 6) {
                 /* Insert a new entry. */
-                hashtableAdd(ht, (void *)next_val++);
+                ASSERT_TRUE(hashtableAdd(ht, (void *)next_val++));
             }
         } while (cursor != 0);
 
@@ -1558,7 +1558,7 @@ TEST_F(HashtableTest, scan_has_passed_key_correctness) {
 
     long count = 1000;
     for (long j = 1; j <= count; j++) {
-        hashtableAdd(ht, (void *)j);
+        ASSERT_TRUE(hashtableAdd(ht, (void *)j));
     }
     ASSERT_FALSE(hashtableIsRehashing(ht));
 
@@ -1598,7 +1598,7 @@ TEST_F(HashtableTest, scan_has_passed_key_cursor_zero) {
     hashtable *ht = hashtableCreate(&type);
 
     for (long j = 1; j <= 100; j++) {
-        hashtableAdd(ht, (void *)j);
+        ASSERT_TRUE(hashtableAdd(ht, (void *)j));
     }
 
     /* Every key should be "passed" when cursor is 0. */
@@ -1617,7 +1617,7 @@ TEST_F(HashtableTest, scan_has_passed_key_nonexistent) {
 
     hashtableExpand(ht, 16384);
     for (long j = 1; j <= 5000; j++) {
-        hashtableAdd(ht, (void *)j);
+        ASSERT_TRUE(hashtableAdd(ht, (void *)j));
     }
 
     /* Do a partial scan (just one step). */
@@ -1650,7 +1650,7 @@ TEST_F(HashtableTest, scan_has_passed_key_fuzz) {
         long count = 100 + (rand() % 2000);
         hashtableExpand(ht, count * 2);
         for (long j = 1; j <= count; j++) {
-            hashtableAdd(ht, (void *)j);
+            ASSERT_TRUE(hashtableAdd(ht, (void *)j));
         }
         ASSERT_FALSE(hashtableIsRehashing(ht));
 

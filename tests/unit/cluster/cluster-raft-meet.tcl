@@ -14,8 +14,7 @@ proc get_cluster_info_field {client field} {
 tags {external:skip cluster singledb} {
 
 test "Raft MEET: two singletons" {
-    start_server {overrides {cluster-enabled yes cluster-protocol raft}} {
-    start_server {overrides {cluster-enabled yes cluster-protocol raft}} {
+    start_multiple_servers 2 {overrides {cluster-enabled yes cluster-protocol raft}} {
         set r0 [srv 0 client]
         set r1 [srv -1 client]
 
@@ -27,87 +26,65 @@ test "Raft MEET: two singletons" {
         } else {
             fail "Cluster size: [get_cluster_info_field $r0 cluster_size] [get_cluster_info_field $r1 cluster_size]"
         }
-    }}
+    }
 }
 
 test "Raft MEET: star formation - first node meets each node" {
-    start_server {overrides {cluster-enabled yes cluster-protocol raft}} {
-    start_server {overrides {cluster-enabled yes cluster-protocol raft}} {
-    start_server {overrides {cluster-enabled yes cluster-protocol raft}} {
+    start_multiple_servers 5 {overrides {cluster-enabled yes cluster-protocol raft}} {
         set r0 [srv 0 client]
-        set r1 [srv -1 client]
-        set r2 [srv -2 client]
 
-        $r0 CLUSTER MEET [srv -1 host] [srv -1 port]
-        wait_for_condition 50 100 {
-            [get_cluster_info_field $r0 cluster_size] == 2
-        } else {
-            fail "2-node cluster did not form"
+        for {set i 1} {$i < 5} {incr i} {
+            $r0 CLUSTER MEET [srv -$i host] [srv -$i port]
         }
 
-        $r0 CLUSTER MEET [srv -2 host] [srv -2 port]
-        wait_for_condition 50 100 {
-            [get_cluster_info_field $r0 cluster_size] == 3 &&
-            [get_cluster_info_field $r1 cluster_size] == 3 &&
-            [get_cluster_info_field $r2 cluster_size] == 3
+        wait_for_condition 50 200 {
+            [get_cluster_info_field $r0 cluster_size] == 5 &&
+            [get_cluster_info_field [srv -1 client] cluster_size] == 5 &&
+            [get_cluster_info_field [srv -4 client] cluster_size] == 5
         } else {
-            fail "Sizes: [get_cluster_info_field $r0 cluster_size] [get_cluster_info_field $r1 cluster_size] [get_cluster_info_field $r2 cluster_size]"
+            fail "Sizes: [get_cluster_info_field $r0 cluster_size] [get_cluster_info_field [srv -1 client] cluster_size] [get_cluster_info_field [srv -4 client] cluster_size]"
         }
-    }}}
+    }
 }
 
 test "Raft MEET: reverse star formation - each node meets the first node" {
-    start_server {overrides {cluster-enabled yes cluster-protocol raft}} {
-    start_server {overrides {cluster-enabled yes cluster-protocol raft}} {
-    start_server {overrides {cluster-enabled yes cluster-protocol raft}} {
+    start_multiple_servers 5 {overrides {cluster-enabled yes cluster-protocol raft}} {
         set r0 [srv 0 client]
-        set r1 [srv -1 client]
-        set r2 [srv -2 client]
 
-        # Each singleton meets node A (like valkey-cli --cluster create).
-        $r1 CLUSTER MEET [srv 0 host] [srv 0 port]
-        $r2 CLUSTER MEET [srv 0 host] [srv 0 port]
-
-        wait_for_condition 50 100 {
-            [get_cluster_info_field $r0 cluster_size] == 3 &&
-            [get_cluster_info_field $r1 cluster_size] == 3 &&
-            [get_cluster_info_field $r2 cluster_size] == 3
-        } else {
-            fail "Sizes: [get_cluster_info_field $r0 cluster_size] [get_cluster_info_field $r1 cluster_size] [get_cluster_info_field $r2 cluster_size]"
+        for {set i 1} {$i < 5} {incr i} {
+            [srv -$i client] CLUSTER MEET [srv 0 host] [srv 0 port]
         }
-    }}}
+
+        wait_for_condition 50 200 {
+            [get_cluster_info_field $r0 cluster_size] == 5 &&
+            [get_cluster_info_field [srv -1 client] cluster_size] == 5 &&
+            [get_cluster_info_field [srv -4 client] cluster_size] == 5
+        } else {
+            fail "Sizes: [get_cluster_info_field $r0 cluster_size] [get_cluster_info_field [srv -1 client] cluster_size] [get_cluster_info_field [srv -4 client] cluster_size]"
+        }
+    }
 }
 
-test "Raft MEET: chain meet via follower" {
-    start_server {overrides {cluster-enabled yes cluster-protocol raft}} {
-    start_server {overrides {cluster-enabled yes cluster-protocol raft}} {
-    start_server {overrides {cluster-enabled yes cluster-protocol raft}} {
+test "Raft MEET: chain formation - each node meets the next" {
+    start_multiple_servers 5 {overrides {cluster-enabled yes cluster-protocol raft}} {
         set r0 [srv 0 client]
-        set r1 [srv -1 client]
-        set r2 [srv -2 client]
 
-        $r0 CLUSTER MEET [srv -1 host] [srv -1 port]
-        wait_for_condition 50 100 {
-            [get_cluster_info_field $r0 cluster_size] == 2
-        } else {
-            fail "2-node cluster did not form"
+        for {set i 0} {$i < 4} {incr i} {
+            [srv -$i client] CLUSTER MEET [srv -[expr {$i+1}] host] [srv -[expr {$i+1}] port]
         }
 
-        # r1 (follower) meets r2 — should forward to leader.
-        $r1 CLUSTER MEET [srv -2 host] [srv -2 port]
-        wait_for_condition 50 100 {
-            [get_cluster_info_field $r0 cluster_size] == 3 &&
-            [get_cluster_info_field $r1 cluster_size] == 3 &&
-            [get_cluster_info_field $r2 cluster_size] == 3
+        wait_for_condition 50 200 {
+            [get_cluster_info_field $r0 cluster_size] == 5 &&
+            [get_cluster_info_field [srv -1 client] cluster_size] == 5 &&
+            [get_cluster_info_field [srv -4 client] cluster_size] == 5
         } else {
-            fail "Sizes: [get_cluster_info_field $r0 cluster_size] [get_cluster_info_field $r1 cluster_size] [get_cluster_info_field $r2 cluster_size]"
+            fail "Sizes: [get_cluster_info_field $r0 cluster_size] [get_cluster_info_field [srv -1 client] cluster_size] [get_cluster_info_field [srv -4 client] cluster_size]"
         }
-    }}}
+    }
 }
 
 test "Raft MEET: addslots after meet" {
-    start_server {overrides {cluster-enabled yes cluster-protocol raft}} {
-    start_server {overrides {cluster-enabled yes cluster-protocol raft}} {
+    start_multiple_servers 2 {overrides {cluster-enabled yes cluster-protocol raft}} {
         set r0 [srv 0 client]
         set r1 [srv -1 client]
 
@@ -129,7 +106,7 @@ test "Raft MEET: addslots after meet" {
 
         assert_equal ok [get_cluster_info_field $r0 cluster_state]
         assert_equal ok [get_cluster_info_field $r1 cluster_state]
-    }}
+    }
 }
 
 } ;# tags

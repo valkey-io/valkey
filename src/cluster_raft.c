@@ -72,7 +72,7 @@ typedef struct {
  * -------------------------------------------------------------------------- */
 
 enum raftRole {
-    RAFT_ROLE_LEARNER = 0, /* Receives log but doesn't vote or count for quorum */
+    RAFT_ROLE_JOINER = 0, /* Stepped down singleton waiting to be added to a cluster */
     RAFT_ROLE_FOLLOWER = 1,
     RAFT_ROLE_CANDIDATE = 2,
     RAFT_ROLE_LEADER = 3,
@@ -144,6 +144,7 @@ typedef struct {
     mstime_t election_timeout;            /* Randomized timeout */
     mstime_t last_heartbeat;              /* Last time we heard from leader */
     mstime_t last_repl_offsets_broadcast; /* Last REPL_OFFSETS broadcast */
+    mstime_t joiner_since;                /* When we became a joiner (for timeout) */
 
     /* Leader identity */
     char leader[CLUSTER_NAMELEN]; /* All zeros = unknown */
@@ -292,14 +293,7 @@ static void clusterRaftUpdateMyself(int old_flags);
 static void clusterRaftCheckSlotCoverage(void);
 static void clusterRaftBroadcastAppendEntries(clusterRaftState *rs);
 static void clusterRaftSendAppendEntries(clusterLink *link, clusterNode *node);
-
-/* Context for NODE_JOIN callback that sends WELCOME. */
-typedef struct {
-    sds node_name;
-} raftJoinCallbackCtx;
-
-static void clusterRaftJoinCallback(void *ctx, const char *error);
-static raftPendingMeet *clusterRaftConsumePendingMeet(clusterNode *node);
+static void clusterRaftUnblockMeet(clusterNode *node);
 static void clusterRaftApplySlotChange(sds data);
 static void clusterRaftApplySetReplica(sds data);
 static void clusterRaftApplyFailover(sds data);
@@ -317,10 +311,11 @@ static void clusterRaftRandomizeElectionTimeout(clusterRaftState *rs) {
     rs->election_timeout = base + (rand() % base);
 }
 
-/* Singleton leader steps down to learner when joining another cluster. */
+/* Singleton leader steps down to joiner when joining another cluster. */
 static void clusterRaftSingletonStepDown(clusterRaftState *rs) {
     clusterRaftDeferPendingProposals(rs);
-    rs->role = RAFT_ROLE_LEARNER;
+    rs->role = RAFT_ROLE_JOINER;
+    rs->joiner_since = monotonicMs();
     memset(rs->leader, 0, CLUSTER_NAMELEN);
     memset(rs->voted_for, 0, CLUSTER_NAMELEN);
     clusterRaftRandomizeElectionTimeout(rs);
@@ -385,9 +380,7 @@ static void clusterRaftInvitePeer(clusterNode *node) {
     entry = sdscatlen(entry, " ", 1);
     entry = clusterNodeAppendAddressString(entry, node, server.tls_cluster);
 
-    raftJoinCallbackCtx *jc = zmalloc(sizeof(*jc));
-    jc->node_name = sdsnewlen(node->name, CLUSTER_NAMELEN);
-    clusterRaftPropose(entry, jc, clusterRaftJoinCallback);
+    clusterRaftPropose(entry, NULL, NULL);
     sdsfree(entry);
 }
 
@@ -535,15 +528,21 @@ static int clusterRaftProcessMeet(clusterLink *link, int argc, sds *argv) {
     clusterRaftState *rs = RAFT_STATE();
 
     if (server.cluster->size > 1) {
-        /* I'm in a cluster — invite the sender. WELCOME sent after commit. */
+        /* I'm in a cluster — reply WELCOME immediately and invite the sender.
+         * WELCOME tells the sender to step down; the actual NODE_JOIN commit
+         * happens asynchronously. */
+        clusterRaftSendBare(link, "WELCOME");
         clusterRaftInvitePeer(sender);
     } else if (rs->role == RAFT_ROLE_LEADER) {
         /* I'm a singleton leader — step down, reply ADD_ME. */
         clusterRaftSingletonStepDown(rs);
         serverLog(LL_NOTICE, "Singleton stepping down on MEET from %.40s.", sender->name);
         clusterRaftSendBare(link, "ADD_ME");
+        /* Unblock any pending CLUSTER MEET client — we've stepped down to
+         * joiner, so we can't form a competing cluster. */
+        clusterRaftUnblockMeet(sender);
     } else {
-        /* Already a learner (stepped down for another node). Defer until
+        /* Already a joiner (stepped down for another node). Defer until
          * we join a cluster and can invite the sender. */
         listAddNodeTail(rs->deferred_meets, link);
         serverLog(LL_NOTICE, "Deferring MEET from %.40s (waiting to join cluster).", sender->name);
@@ -561,26 +560,30 @@ static int clusterRaftProcessAddme(clusterLink *link, int argc, sds *argv) {
     clusterNode *sender = link->node;
     serverLog(LL_NOTICE, "Received ADDME from %.40s.", sender->name);
 
+    /* Unblock CLUSTER MEET client — the peer has stepped down to joiner,
+     * so it can't form a competing cluster. */
+    clusterRaftUnblockMeet(sender);
+
     clusterRaftInvitePeer(sender);
     return 1;
 }
 
-/* WELCOME: received after NODE_JOIN committed.
- * Fires the pending MEET callback (unblocks CLUSTER MEET client). */
+/* WELCOME: reply to MEET from a cluster member.
+ * The sender will add us — step down to joiner and unblock CLUSTER MEET. */
 static int clusterRaftProcessWelcome(clusterLink *link, int argc, sds *argv) {
     UNUSED(argc);
     UNUSED(argv);
     if (!link->node) return 1;
 
     clusterNode *sender = link->node;
-    serverLog(LL_DEBUG, "Received WELCOME from %.40s.", sender->name);
+    serverLog(LL_NOTICE, "Received WELCOME from %.40s, stepping down.", sender->name);
 
-    raftPendingMeet *pm = clusterRaftConsumePendingMeet(sender);
-    if (pm) {
-        pm->callback(pm->ctx, NULL);
-        sdsfree(pm->addr);
-        zfree(pm);
+    clusterRaftState *rs = RAFT_STATE();
+    if (rs->role == RAFT_ROLE_LEADER && server.cluster->size <= 1) {
+        clusterRaftSingletonStepDown(rs);
     }
+
+    clusterRaftUnblockMeet(sender);
 
     return 1;
 }
@@ -589,7 +592,7 @@ static int clusterRaftProcessWelcome(clusterLink *link, int argc, sds *argv) {
 /* --------------------------------------------------------------------------
  * PROPOSE message: PROPOSE <entry-type-name> <data...>
  *
- * Sent by a follower/learner to the leader to propose a log entry.
+ * Sent by a follower to the leader to propose a log entry.
  * The leader appends it to the Raft log and replicates via AE.
  * The payload after PROPOSE is the same as an AE entry line without
  * the term prefix: "<type-name> <data...>"
@@ -872,7 +875,10 @@ static void raftLogApply(raftLogEntry *e) {
                         listRewind(rs->deferred_meets, &dli);
                         while ((dln = listNext(&dli)) != NULL) {
                             clusterLink *mlink = listNodeValue(dln);
-                            if (mlink->node) clusterRaftInvitePeer(mlink->node);
+                            if (mlink->node) {
+                                clusterRaftSendBare(mlink, "WELCOME");
+                                clusterRaftInvitePeer(mlink->node);
+                            }
                         }
                         listEmpty(rs->deferred_meets);
                     }
@@ -893,11 +899,11 @@ static void raftLogApply(raftLogEntry *e) {
                 }
             }
 
-            /* If this entry is about us, promote from learner to follower. */
+            /* If this entry is about us, promote from joiner to follower. */
             if (memcmp(argv[0], myself->name, CLUSTER_NAMELEN) == 0) {
-                if (rs->role == RAFT_ROLE_LEARNER) {
+                if (rs->role == RAFT_ROLE_JOINER) {
                     rs->role = RAFT_ROLE_FOLLOWER;
-                    serverLog(LL_NOTICE, "Promoted from learner to follower.");
+                    serverLog(LL_NOTICE, "Promoted from joiner to follower.");
 
                     /* Propose SLOT_CHANGE for slots assigned before joining
                      * the cluster (from our singleton state). */
@@ -926,12 +932,7 @@ static void raftLogApply(raftLogEntry *e) {
             {
                 clusterNode *node = clusterLookupNode(argv[0], CLUSTER_NAMELEN);
                 if (node) {
-                    raftPendingMeet *pm = clusterRaftConsumePendingMeet(node);
-                    if (pm) {
-                        pm->callback(pm->ctx, NULL);
-                        sdsfree(pm->addr);
-                        zfree(pm);
-                    }
+                    clusterRaftUnblockMeet(node);
                 }
             }
         }
@@ -1122,6 +1123,7 @@ static void clusterRaftBroadcastAppendEntries(clusterRaftState *rs) {
     while ((de = dictNext(di)) != NULL) {
         clusterNode *node = dictGetVal(de);
         if (node == myself) continue;
+        if (node->flags & CLUSTER_NODE_MEET) continue;
         if (!node->link) {
             pending = 1;
             continue;
@@ -1166,7 +1168,7 @@ static int clusterRaftProcessAppendEntries(clusterLink *link, int argc, sds *arg
     clusterRaftMaybeStepDown(rs, msg_term);
 
     /* Accept heartbeat. */
-    if (rs->role != RAFT_ROLE_LEARNER) rs->role = RAFT_ROLE_FOLLOWER;
+    if (rs->role != RAFT_ROLE_JOINER) rs->role = RAFT_ROLE_FOLLOWER;
     rs->last_heartbeat = monotonicMs();
     memcpy(rs->leader, argv[1], CLUSTER_NAMELEN);
 
@@ -1427,6 +1429,7 @@ static void clusterRaftStartElection(clusterRaftState *rs) {
     while ((de = dictNext(di)) != NULL) {
         clusterNode *node = dictGetVal(de);
         if (node == myself || !node->link) continue;
+        if (node->flags & CLUSTER_NODE_MEET) continue;
         clusterRaftSendRequestVote(node->link, rs);
     }
     dictReleaseIterator(di);
@@ -1589,6 +1592,17 @@ static void clusterRaftCron(void) {
     mstime_t now = monotonicMs();
 
     clusterConnectNodes();
+
+    /* Joiner timeout: if we stepped down to join a cluster but never
+     * received AE, revert to singleton leader so the admin can retry. */
+    if (rs->role == RAFT_ROLE_JOINER &&
+        now - rs->joiner_since > server.cluster_node_timeout * 3) {
+        serverLog(LL_NOTICE, "Joiner timed out waiting to be added, reverting to singleton leader.");
+        rs->role = RAFT_ROLE_LEADER;
+        rs->current_term++;
+        memcpy(rs->voted_for, myself->name, CLUSTER_NAMELEN);
+        memcpy(rs->leader, myself->name, CLUSTER_NAMELEN);
+    }
 
     if (dictSize(server.cluster->nodes) > 1) {
         /* Follower/candidate: check election timeout. */
@@ -2060,10 +2074,10 @@ done:
     return ret;
 }
 
-/* Look up and consume a pending MEET callback by node address. */
-static raftPendingMeet *clusterRaftConsumePendingMeet(clusterNode *node) {
+/* Look up a pending CLUSTER MEET for this node and unblock the client. */
+static void clusterRaftUnblockMeet(clusterNode *node) {
     clusterRaftState *rs = RAFT_STATE();
-    if (listLength(rs->pending_meets) == 0) return NULL;
+    if (listLength(rs->pending_meets) == 0) return;
     sds addr = sdscatfmt(sdsempty(), "%s:%i", node->ip, node->cport);
     listIter li;
     listNode *ln;
@@ -2073,22 +2087,13 @@ static raftPendingMeet *clusterRaftConsumePendingMeet(clusterNode *node) {
         if (!sdscmp(pm->addr, addr)) {
             sdsfree(addr);
             listDelNode(rs->pending_meets, ln);
-            return pm;
+            pm->callback(pm->ctx, NULL);
+            sdsfree(pm->addr);
+            zfree(pm);
+            return;
         }
     }
     sdsfree(addr);
-    return NULL;
-}
-
-static void clusterRaftJoinCallback(void *ctx, const char *error) {
-    raftJoinCallbackCtx *jc = ctx;
-    /* Send WELCOME to the joined node. */
-    if (!error) {
-        clusterNode *n = clusterLookupNode(jc->node_name, sdslen(jc->node_name));
-        if (n && n->link) clusterRaftSendBare(n->link, "WELCOME");
-    }
-    sdsfree(jc->node_name);
-    zfree(jc);
 }
 
 static void clusterRaftPostConnect(struct clusterLink *link) {
@@ -2289,7 +2294,7 @@ static sds clusterRaftAppendInfoFields(sds info) {
     /* Raft-specific fields. */
     const char *role_str = rs->role == RAFT_ROLE_LEADER      ? "leader"
                            : rs->role == RAFT_ROLE_CANDIDATE ? "candidate"
-                           : rs->role == RAFT_ROLE_LEARNER   ? "learner"
+                           : rs->role == RAFT_ROLE_JOINER    ? "joiner"
                                                              : "follower";
     info = sdscatprintf(info,
                         "cluster_raft_role:%s\r\n"

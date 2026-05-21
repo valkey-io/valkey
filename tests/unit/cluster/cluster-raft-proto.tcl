@@ -138,7 +138,7 @@ test "Raft proto: singleton steps down on MEET from singleton" {
 
         # After step-down, leader should be empty (unknown).
         assert_equal "" [CI 0 cluster_raft_leader]
-        assert_equal "learner" [CI 0 cluster_raft_role]
+        assert_equal "joiner" [CI 0 cluster_raft_role]
 
         close $fd
     }
@@ -165,9 +165,32 @@ test "Raft proto: singleton steps down on MEET from cluster" {
 
         # After step-down, leader should be empty (unknown).
         assert_equal "" [CI 0 cluster_raft_leader]
-        assert_equal "learner" [CI 0 cluster_raft_role]
+        assert_equal "joiner" [CI 0 cluster_raft_role]
 
         close $fd
+    }
+}
+
+test "Raft proto: joiner reverts to leader after timeout" {
+    start_server {overrides {cluster-enabled yes cluster-protocol raft cluster-node-timeout 500}} {
+        set port [srv 0 port]
+        set cport [expr {$port + 10000}]
+
+        set fake_id [string repeat "f" 40]
+        set fake_addr "127.0.0.1:9996@19996,,tls-port=0,shard-id=[string repeat a 40]"
+        set fd [raft_connect 127.0.0.1 $cport]
+        raft_send $fd "HELLO $fake_id $fake_addr"
+        raft_send $fd "MEET singleton"
+        raft_recv $fd; raft_recv $fd
+        assert_equal "joiner" [CI 0 cluster_raft_role]
+        close $fd
+
+        # Timeout is 3x500ms = 1.5s. Wait up to 5s for slow CI.
+        wait_for_condition 50 100 {
+            [CI 0 cluster_raft_role] eq "leader"
+        } else {
+            fail "Joiner did not revert to leader"
+        }
     }
 }
 
@@ -278,11 +301,8 @@ test "Raft proto: leader sends REPL_OFFSETS after follower offset changes" {
         raft_send $fd "HI $fake_id $fake_addr"
         raft_send $fd "ADD_ME"
 
-        # Leader invites us, commits NODE_JOIN (quorum=1), sends WELCOME.
-        set reply [raft_recv $fd 10000]
-        assert_equal "WELCOME" $reply
-
-        # Leader sends AE with committed entries. Reply with offset=0.
+        # Leader receives ADD_ME, invites us, commits NODE_JOIN, sends AE.
+        # Reply with offset=0.
         set reply [raft_recv $fd 5000]
         assert_match "AE *" $reply
         raft_reply_ae_ack $fd $reply 0

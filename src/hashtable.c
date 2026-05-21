@@ -2012,7 +2012,7 @@ bool hashtableIncrementalFindGetResult(hashtableIncrementalFindState *state, voi
  * - An entry that is inserted or deleted during a full scan may or may not be
  *   returned during the scan.
  *
- * Additional guarantees when rehashing is paused (or not active):
+ * Additional guarantees when rehashing is paused:
  *
  * - An entry will never be returned more than once.
  *

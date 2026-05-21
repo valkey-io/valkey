@@ -3070,17 +3070,44 @@ int *moveDbIdArgs(robj **argv, int argc, int *count) {
     return result;
 }
 
+/* COPY source destination [ DB destination-db ] [ REPLACE ]
+ *
+ * Note that the DB and REPLACE tokens are optional and order-independent.
+ * Also if the DB token appears more than once, copyCommand keeps overwriting
+ * the destination DB, so ACL must validate every occurrence: a permission
+ * check against only the first or only the last value would let a user craft
+ * 'COPY src dst DB <allowed> DB <denied>' (or vice versa) to bypass the ACL. */
 int *copyDbIdArgs(robj **argv, int argc, int *count) {
     if (argc < 5) return NULL;
 
-    if (strcasecmp(objectGetVal(argv[3]), "db") != 0) return NULL;
+    /* First pass: validate syntax and count DB clauses. */
+    int n = 0;
+    for (int j = 3; j < argc; j++) {
+        int additional = argc - j - 1;
+        if (!strcasecmp(objectGetVal(argv[j]), "replace")) {
+            continue;
+        } else if (!strcasecmp(objectGetVal(argv[j]), "db") && additional >= 1) {
+            long long dbid;
+            if (getLongLongFromObject(argv[j + 1], &dbid) != C_OK) return NULL;
+            if (dbid < 0 || dbid >= server.dbnum) return NULL;
+            n++;
+            j++;
+        } else {
+            return NULL;
+        }
+    }
+    if (n == 0) return NULL;
 
-    long long dbid;
-    if (getLongLongFromObject(argv[4], &dbid) != C_OK) return NULL;
-    if (dbid < 0 || dbid >= server.dbnum) return NULL;
-
-    int *result = zmalloc(sizeof(int));
-    result[0] = (int)dbid;
-    *count = 1;
+    /* Second pass: collect the dbids now that we know the exact size. */
+    int *result = zmalloc(n * sizeof(int));
+    *count = 0;
+    for (int j = 3; j < argc; j++) {
+        if (!strcasecmp(objectGetVal(argv[j]), "db")) {
+            long long dbid;
+            getLongLongFromObject(argv[j + 1], &dbid);
+            result[(*count)++] = (int)dbid;
+            j++;
+        }
+    }
     return result;
 }

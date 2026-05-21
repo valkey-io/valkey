@@ -2012,6 +2012,16 @@ bool hashtableIncrementalFindGetResult(hashtableIncrementalFindState *state, voi
  * - An entry that is inserted or deleted during a full scan may or may not be
  *   returned during the scan.
  *
+ * Additional guarantees when rehashing is paused (or not active):
+ *
+ * - An entry will never be returned more than once.
+ *
+ * - An entry that exists throughout the entire scan is guaranteed to be
+ *   returned.
+ *
+ * - An entry that is created, destroyed, or re-created during the scan may or
+ *   may not be returned, but will never be returned more than once.
+ *
  * Scan callback rules:
  *
  * - The scan callback may delete the entry that was passed to it.
@@ -2023,6 +2033,25 @@ bool hashtableIncrementalFindGetResult(hashtableIncrementalFindState *state, voi
  */
 size_t hashtableScan(hashtable *ht, size_t cursor, hashtableScanFunction fn, void *privdata) {
     return hashtableScanDefrag(ht, cursor, fn, privdata, NULL, 0);
+}
+
+/* Given a scan cursor, determines whether the bucket containing 'key' has
+ * already been visited by the scan. Returns 1 if the key's bucket has been
+ * passed (i.e. the key would have been emitted already), 0 if not yet visited.
+ *
+ * When rehashing is not active, this is an exact answer. When rehashing is
+ * active, the result is best-effort and not guaranteed to be correct.
+ *
+ * A cursor of 0 means the scan is complete, so all keys have been passed. */
+int hashtableScanHasPassedKey(hashtable *ht, const void *key, size_t cursor) {
+    if (cursor == 0) return 1;
+    size_t mask = expToMask(ht->bucket_exp[0]);
+    uint64_t hash = hashKey(ht, key);
+    size_t bucket_idx = hash & mask;
+    size_t cursor_idx = cursor & mask;
+    /* In reverse-bit-increment order, a bucket has been visited if its
+     * reversed index is less than the reversed cursor index. */
+    return rev(bucket_idx) < rev(cursor_idx);
 }
 
 /* Like hashtableScan, but additionally reallocates the memory used by the dict

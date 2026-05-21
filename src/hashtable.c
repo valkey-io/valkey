@@ -2043,7 +2043,7 @@ size_t hashtableScan(hashtable *ht, size_t cursor, hashtableScanFunction fn, voi
  * active, the result is best-effort and not guaranteed to be correct.
  *
  * A cursor of 0 means the scan is complete, so all keys have been passed. */
-int hashtableScanHasPassedKey(hashtable *ht, const void *key, size_t cursor) {
+bool hashtableScanHasPassedKey(hashtable *ht, const void *key, size_t cursor) {
     if (cursor == 0) return 1;
     size_t mask = expToMask(ht->bucket_exp[0]);
     uint64_t hash = hashKey(ht, key);

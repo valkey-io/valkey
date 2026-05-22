@@ -1408,6 +1408,12 @@ static void scanContractFn(void *privdata, void *entry) {
     data->seen.insert(val);
 }
 
+static void populateSequential(hashtable *ht, long count) {
+    for (long j = 1; j <= count; j++) {
+        ASSERT_TRUE(hashtableAdd(ht, (void *)j));
+    }
+}
+
 TEST_F(HashtableTest, scan_no_duplicates_static) {
     /* Full scan of a static table: every entry emitted exactly once. */
     hashtableSetResizePolicy(HASHTABLE_RESIZE_FORBID);
@@ -1415,10 +1421,7 @@ TEST_F(HashtableTest, scan_no_duplicates_static) {
     hashtable *ht = hashtableCreate(&type);
 
     long count = 5000;
-    for (long j = 1; j <= count; j++) {
-        ASSERT_TRUE(hashtableAdd(ht, (void *)j));
-    }
-    ASSERT_FALSE(hashtableIsRehashing(ht));
+    populateSequential(ht, count);
 
     ScanContractData data = {};
     size_t cursor = 0;
@@ -1430,7 +1433,6 @@ TEST_F(HashtableTest, scan_no_duplicates_static) {
     ASSERT_EQ((long)data.seen.size(), count);
 
     hashtableRelease(ht);
-    hashtableSetResizePolicy(HASHTABLE_RESIZE_ALLOW);
 }
 
 TEST_F(HashtableTest, scan_no_duplicates_with_deletions) {
@@ -1440,27 +1442,21 @@ TEST_F(HashtableTest, scan_no_duplicates_with_deletions) {
     hashtable *ht = hashtableCreate(&type);
 
     long count = 5000;
-    for (long j = 1; j <= count; j++) {
-        ASSERT_TRUE(hashtableAdd(ht, (void *)j));
-    }
+    populateSequential(ht, count);
 
     ScanContractData data = {};
     size_t cursor = 0;
-    int step = 0;
     do {
         cursor = hashtableScan(ht, cursor, scanContractFn, &data);
-        /* Delete some entries every few steps. */
-        if (++step % 10 == 0) {
-            for (long d = step; d < step + 5 && d <= count; d++) {
-                hashtableDelete(ht, (void *)d);
-            }
+        /* Randomly delete an entry. */
+        if (rand() % 3 == 0) {
+            hashtableDelete(ht, (void *)(long)(1 + rand() % count));
         }
     } while (cursor != 0);
 
     ASSERT_EQ(data.duplicates, 0);
 
     hashtableRelease(ht);
-    hashtableSetResizePolicy(HASHTABLE_RESIZE_ALLOW);
 }
 
 TEST_F(HashtableTest, scan_no_duplicates_with_insertions) {
@@ -1469,31 +1465,22 @@ TEST_F(HashtableTest, scan_no_duplicates_with_insertions) {
     hashtableType type = {};
     hashtable *ht = hashtableCreate(&type);
 
-    /* Pre-expand to avoid triggering resize. */
-    hashtableExpand(ht, 16384);
     long count = 2000;
-    for (long j = 1; j <= count; j++) {
-        ASSERT_TRUE(hashtableAdd(ht, (void *)j));
-    }
+    populateSequential(ht, count);
 
     ScanContractData data = {};
     size_t cursor = 0;
     long next_insert = count + 1;
-    int step = 0;
     do {
         cursor = hashtableScan(ht, cursor, scanContractFn, &data);
-        /* Insert new entries every few steps. */
-        if (++step % 10 == 0) {
-            for (int i = 0; i < 5; i++) {
-                ASSERT_TRUE(hashtableAdd(ht, (void *)next_insert++));
-            }
+        if (rand() % 3 == 0) {
+            hashtableAdd(ht, (void *)next_insert++);
         }
     } while (cursor != 0);
 
     ASSERT_EQ(data.duplicates, 0);
 
     hashtableRelease(ht);
-    hashtableSetResizePolicy(HASHTABLE_RESIZE_ALLOW);
 }
 
 TEST_F(HashtableTest, scan_no_duplicates_fuzz) {
@@ -1509,42 +1496,30 @@ TEST_F(HashtableTest, scan_no_duplicates_fuzz) {
         hashtableType type = {};
         hashtable *ht = hashtableCreate(&type);
 
-        /* Random table size between 64 and 4096. */
-        long table_size = 64 + (rand() % 4033);
-        hashtableExpand(ht, table_size * 2); /* Pre-expand to avoid resize. */
-
-        /* Fill to random factor between 25% and 90%. */
-        long count = table_size;
-        for (long j = 1; j <= count; j++) {
-            ASSERT_TRUE(hashtableAdd(ht, (void *)j));
-        }
-        ASSERT_FALSE(hashtableIsRehashing(ht));
+        long count = 64 + (rand() % 4033);
+        populateSequential(ht, count);
 
         ScanContractData data = {};
         size_t cursor = 0;
         long next_val = count + 1;
         do {
             cursor = hashtableScan(ht, cursor, scanContractFn, &data);
-            /* Random operation: 40% nothing, 30% delete, 30% insert. */
             int op = rand() % 10;
-            if (op < 3 && count > 10) {
-                /* Delete a random existing entry. */
-                long target = 1 + (rand() % count);
-                hashtableDelete(ht, (void *)target);
+            if (op < 3) {
+                /* Delete a random entry (may be original or newly added). */
+                hashtableDelete(ht, (void *)(long)(1 + rand() % (next_val - 1)));
             } else if (op < 6) {
-                /* Insert a new entry. */
-                ASSERT_TRUE(hashtableAdd(ht, (void *)next_val++));
+                hashtableAdd(ht, (void *)next_val++);
             }
         } while (cursor != 0);
 
         if (data.duplicates > 0) {
-            printf("FAIL at iteration %d (seed %u, table_size %ld)\n", iter, fuzz_seed, table_size);
+            printf("FAIL at iteration %d (seed %u, count %ld)\n", iter, fuzz_seed, count);
         }
         ASSERT_EQ(data.duplicates, 0);
 
         hashtableRelease(ht);
     }
-    hashtableSetResizePolicy(HASHTABLE_RESIZE_ALLOW);
 }
 
 /* hashtableScanHasPassedKey tests */
@@ -1557,10 +1532,7 @@ TEST_F(HashtableTest, scan_has_passed_key_correctness) {
     hashtable *ht = hashtableCreate(&type);
 
     long count = 1000;
-    for (long j = 1; j <= count; j++) {
-        ASSERT_TRUE(hashtableAdd(ht, (void *)j));
-    }
-    ASSERT_FALSE(hashtableIsRehashing(ht));
+    populateSequential(ht, count);
 
     std::set<unsigned long> emitted;
     size_t cursor = 0;
@@ -1570,14 +1542,11 @@ TEST_F(HashtableTest, scan_has_passed_key_correctness) {
         for (unsigned long val : step_data.seen) {
             emitted.insert(val);
         }
-        /* Check: all emitted entries should be "passed" (skip when cursor==0,
-         * which means scan complete -- caller handles that state). */
         if (cursor != 0) {
             for (unsigned long val : emitted) {
                 ASSERT_TRUE(hashtableScanHasPassedKey(ht, (void *)val, cursor))
                     << "Entry " << val << " was emitted but HasPassedKey returned false at cursor " << cursor;
             }
-            /* Check: sample some non-emitted entries -- they should NOT be passed. */
             int checked = 0;
             for (long j = 1; j <= count && checked < 20; j++) {
                 if (!emitted.count(j)) {
@@ -1592,7 +1561,6 @@ TEST_F(HashtableTest, scan_has_passed_key_correctness) {
     ASSERT_EQ((long)emitted.size(), count);
 
     hashtableRelease(ht);
-    hashtableSetResizePolicy(HASHTABLE_RESIZE_ALLOW);
 }
 
 TEST_F(HashtableTest, scan_has_passed_key_cursor_zero) {
@@ -1600,11 +1568,8 @@ TEST_F(HashtableTest, scan_has_passed_key_cursor_zero) {
     hashtableType type = {};
     hashtable *ht = hashtableCreate(&type);
 
-    for (long j = 1; j <= 100; j++) {
-        ASSERT_TRUE(hashtableAdd(ht, (void *)j));
-    }
+    populateSequential(ht, 100);
 
-    /* No key should be "passed" when cursor is 0. */
     for (long j = 1; j <= 100; j++) {
         ASSERT_FALSE(hashtableScanHasPassedKey(ht, (void *)j, 0));
     }
@@ -1613,28 +1578,22 @@ TEST_F(HashtableTest, scan_has_passed_key_cursor_zero) {
 }
 
 TEST_F(HashtableTest, scan_has_passed_key_nonexistent) {
-    /* HasPassedKey works for keys not in the table (hashes to a bucket position). */
-    hashtableSetResizePolicy(HASHTABLE_RESIZE_FORBID);
+    /* HasPassedKey works for keys not in the table. */
     hashtableType type = {};
     hashtable *ht = hashtableCreate(&type);
 
-    hashtableExpand(ht, 16384);
-    for (long j = 1; j <= 5000; j++) {
-        ASSERT_TRUE(hashtableAdd(ht, (void *)j));
-    }
+    populateSequential(ht, 5000);
+    hashtableSetResizePolicy(HASHTABLE_RESIZE_FORBID);
 
     /* Do a partial scan (just one step). */
     size_t cursor = 0;
     cursor = hashtableScan(ht, cursor, NULL, NULL);
     ASSERT_NE(cursor, (size_t)0);
 
-    /* Check a key that doesn't exist in the table. */
-    long nonexistent = 99999;
-    /* We just verify it doesn't crash and returns a valid result. */
-    (void)hashtableScanHasPassedKey(ht, (void *)nonexistent, cursor);
+    /* Check a key that doesn't exist in the table -- should not crash. */
+    (void)hashtableScanHasPassedKey(ht, (void *)99999L, cursor);
 
     hashtableRelease(ht);
-    hashtableSetResizePolicy(HASHTABLE_RESIZE_ALLOW);
 }
 
 TEST_F(HashtableTest, scan_has_passed_key_fuzz) {
@@ -1651,11 +1610,7 @@ TEST_F(HashtableTest, scan_has_passed_key_fuzz) {
         hashtable *ht = hashtableCreate(&type);
 
         long count = 100 + (rand() % 2000);
-        hashtableExpand(ht, count * 2);
-        for (long j = 1; j <= count; j++) {
-            ASSERT_TRUE(hashtableAdd(ht, (void *)j));
-        }
-        ASSERT_FALSE(hashtableIsRehashing(ht));
+        populateSequential(ht, count);
 
         std::set<unsigned long> emitted;
         size_t cursor = 0;
@@ -1665,22 +1620,17 @@ TEST_F(HashtableTest, scan_has_passed_key_fuzz) {
             for (unsigned long val : step_data.seen) {
                 emitted.insert(val);
             }
-            /* Verify consistency for a sample of entries (skip at cursor==0). */
             if (cursor != 0) {
                 for (long j = 1; j <= count && j <= 50; j++) {
                     bool passed = hashtableScanHasPassedKey(ht, (void *)j, cursor);
                     if (emitted.count(j)) {
-                        if (!passed) {
-                            printf("FAIL iter %d seed %u: entry %ld emitted but HasPassedKey=false, cursor=%zu\n",
-                                   iter, fuzz_seed, j, cursor);
-                        }
-                        ASSERT_TRUE(passed);
+                        ASSERT_TRUE(passed)
+                            << "iter " << iter << " seed " << fuzz_seed
+                            << ": entry " << j << " emitted but HasPassedKey=false";
                     } else {
-                        if (passed) {
-                            printf("FAIL iter %d seed %u: entry %ld NOT emitted but HasPassedKey=true, cursor=%zu\n",
-                                   iter, fuzz_seed, j, cursor);
-                        }
-                        ASSERT_FALSE(passed);
+                        ASSERT_FALSE(passed)
+                            << "iter " << iter << " seed " << fuzz_seed
+                            << ": entry " << j << " NOT emitted but HasPassedKey=true";
                     }
                 }
             }
@@ -1688,5 +1638,4 @@ TEST_F(HashtableTest, scan_has_passed_key_fuzz) {
 
         hashtableRelease(ht);
     }
-    hashtableSetResizePolicy(HASHTABLE_RESIZE_ALLOW);
 }

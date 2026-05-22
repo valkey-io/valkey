@@ -1433,6 +1433,7 @@ TEST_F(HashtableTest, scan_no_duplicates_static) {
     ASSERT_EQ(data.duplicates, 0);
     ASSERT_EQ((long)data.seen.size(), count);
 
+    hashtableResumeAutoShrink(ht);
     hashtableRelease(ht);
 }
 
@@ -1458,6 +1459,7 @@ TEST_F(HashtableTest, scan_no_duplicates_with_deletions) {
 
     ASSERT_EQ(data.duplicates, 0);
 
+    hashtableResumeAutoShrink(ht);
     hashtableRelease(ht);
 }
 
@@ -1483,6 +1485,7 @@ TEST_F(HashtableTest, scan_no_duplicates_with_insertions) {
 
     ASSERT_EQ(data.duplicates, 0);
 
+    hashtableResumeAutoShrink(ht);
     hashtableRelease(ht);
 }
 
@@ -1520,6 +1523,7 @@ TEST_F(HashtableTest, scan_no_duplicates_fuzz) {
         }
         ASSERT_EQ(data.duplicates, 0);
 
+        hashtableResumeAutoShrink(ht);
         hashtableRelease(ht);
     }
 }
@@ -1563,6 +1567,7 @@ TEST_F(HashtableTest, scan_has_passed_key_correctness) {
 
     ASSERT_EQ((long)emitted.size(), count);
 
+    hashtableResumeAutoShrink(ht);
     hashtableRelease(ht);
 }
 
@@ -1578,6 +1583,7 @@ TEST_F(HashtableTest, scan_has_passed_key_cursor_zero) {
         ASSERT_FALSE(hashtableScanHasPassedKey(ht, (void *)j, 0));
     }
 
+    hashtableResumeAutoShrink(ht);
     hashtableRelease(ht);
 }
 
@@ -1596,6 +1602,7 @@ TEST_F(HashtableTest, scan_has_passed_key_nonexistent) {
     /* Check a key that doesn't exist in the table -- should not crash. */
     (void)hashtableScanHasPassedKey(ht, (void *)99999L, cursor);
 
+    hashtableResumeAutoShrink(ht);
     hashtableRelease(ht);
 }
 
@@ -1638,6 +1645,7 @@ TEST_F(HashtableTest, scan_has_passed_key_fuzz) {
             }
         } while (cursor != 0);
 
+        hashtableResumeAutoShrink(ht);
         hashtableRelease(ht);
     }
 }

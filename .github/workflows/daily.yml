@@ -2038,7 +2038,7 @@ jobs:
             -e SKIPTESTS \
             -e TEST_ARGS \
             -e CLUSTER_TEST_ARGS \
-            i386/alpine:3.23 \
+            i386/alpine:latest \
             sh -euxc '
               apk add --no-cache bash build-base git gtest-dev linux-headers procps python3 tcl tclx
 

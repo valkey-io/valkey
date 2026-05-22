@@ -1416,9 +1416,10 @@ static void populateSequential(hashtable *ht, long count) {
 
 TEST_F(HashtableTest, scan_no_duplicates_static) {
     /* Full scan of a static table: every entry emitted exactly once. */
-    hashtableSetResizePolicy(HASHTABLE_RESIZE_FORBID);
+
     hashtableType type = {};
     hashtable *ht = hashtableCreate(&type);
+    hashtablePauseAutoShrink(ht);
 
     long count = 5000;
     populateSequential(ht, count);
@@ -1437,9 +1438,10 @@ TEST_F(HashtableTest, scan_no_duplicates_static) {
 
 TEST_F(HashtableTest, scan_no_duplicates_with_deletions) {
     /* Scan with deletions mid-scan: no duplicates, some entries may be missed. */
-    hashtableSetResizePolicy(HASHTABLE_RESIZE_FORBID);
+
     hashtableType type = {};
     hashtable *ht = hashtableCreate(&type);
+    hashtablePauseAutoShrink(ht);
 
     long count = 5000;
     populateSequential(ht, count);
@@ -1461,9 +1463,10 @@ TEST_F(HashtableTest, scan_no_duplicates_with_deletions) {
 
 TEST_F(HashtableTest, scan_no_duplicates_with_insertions) {
     /* Scan with insertions mid-scan: no duplicates. */
-    hashtableSetResizePolicy(HASHTABLE_RESIZE_FORBID);
+
     hashtableType type = {};
     hashtable *ht = hashtableCreate(&type);
+    hashtablePauseAutoShrink(ht);
 
     long count = 2000;
     populateSequential(ht, count);
@@ -1488,13 +1491,12 @@ TEST_F(HashtableTest, scan_no_duplicates_fuzz) {
     unsigned int fuzz_seed = (unsigned int)time(NULL);
     printf("scan_no_duplicates_fuzz seed: %u\n", fuzz_seed);
     srand(fuzz_seed);
-
-    hashtableSetResizePolicy(HASHTABLE_RESIZE_FORBID);
     int iterations = 50;
 
     for (int iter = 0; iter < iterations; iter++) {
         hashtableType type = {};
         hashtable *ht = hashtableCreate(&type);
+        hashtablePauseAutoShrink(ht);
 
         long count = 64 + (rand() % 4033);
         populateSequential(ht, count);
@@ -1527,9 +1529,10 @@ TEST_F(HashtableTest, scan_no_duplicates_fuzz) {
 TEST_F(HashtableTest, scan_has_passed_key_correctness) {
     /* After each scan step, HasPassedKey should return true for all emitted
      * entries and false for entries not yet emitted (on a static table). */
-    hashtableSetResizePolicy(HASHTABLE_RESIZE_FORBID);
+
     hashtableType type = {};
     hashtable *ht = hashtableCreate(&type);
+    hashtablePauseAutoShrink(ht);
 
     long count = 1000;
     populateSequential(ht, count);
@@ -1567,6 +1570,7 @@ TEST_F(HashtableTest, scan_has_passed_key_cursor_zero) {
     /* Cursor 0 means scan has not started -- no keys have been passed. */
     hashtableType type = {};
     hashtable *ht = hashtableCreate(&type);
+    hashtablePauseAutoShrink(ht);
 
     populateSequential(ht, 100);
 
@@ -1581,10 +1585,9 @@ TEST_F(HashtableTest, scan_has_passed_key_nonexistent) {
     /* HasPassedKey works for keys not in the table. */
     hashtableType type = {};
     hashtable *ht = hashtableCreate(&type);
+    hashtablePauseAutoShrink(ht);
 
     populateSequential(ht, 5000);
-    hashtableSetResizePolicy(HASHTABLE_RESIZE_FORBID);
-
     /* Do a partial scan (just one step). */
     size_t cursor = 0;
     cursor = hashtableScan(ht, cursor, NULL, NULL);
@@ -1601,13 +1604,12 @@ TEST_F(HashtableTest, scan_has_passed_key_fuzz) {
     unsigned int fuzz_seed = (unsigned int)time(NULL);
     printf("scan_has_passed_key_fuzz seed: %u\n", fuzz_seed);
     srand(fuzz_seed);
-
-    hashtableSetResizePolicy(HASHTABLE_RESIZE_FORBID);
     int iterations = 50;
 
     for (int iter = 0; iter < iterations; iter++) {
         hashtableType type = {};
         hashtable *ht = hashtableCreate(&type);
+        hashtablePauseAutoShrink(ht);
 
         long count = 100 + (rand() % 2000);
         populateSequential(ht, count);
@@ -1656,6 +1658,7 @@ TEST_F(HashtableTest, scan_no_shrink_during_callback) {
      * hashtablePauseRehashing (called by scan) which also pauses auto-shrink. */
     hashtableType type = {};
     hashtable *ht = hashtableCreate(&type);
+    hashtablePauseAutoShrink(ht);
 
     populateSequential(ht, 5000);
     ASSERT_FALSE(hashtableIsRehashing(ht));
@@ -1671,7 +1674,11 @@ TEST_F(HashtableTest, scan_no_shrink_during_callback) {
      * entries were actually deleted (shrink threshold was crossed). */
     ASSERT_LT(hashtableSize(ht), size_before / 2);
 
-    /* Rehashing (shrink) started on resume -- this is correct. */
+    /* Shrink is still blocked by our external PauseAutoShrink. */
+    ASSERT_FALSE(hashtableIsRehashing(ht));
+
+    /* Resume auto-shrink -- shrink should trigger immediately. */
+    hashtableResumeAutoShrink(ht);
     ASSERT_TRUE(hashtableIsRehashing(ht));
 
     hashtableRelease(ht);

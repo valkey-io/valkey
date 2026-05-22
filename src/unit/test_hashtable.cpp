@@ -1391,7 +1391,7 @@ TEST_F(HashtableTest, safe_iterator_release_before_cleanup) {
     hashtableCleanupIterator(&iter);
 }
 
-/* Scan contract tests: no duplicates when rehashing is not active */
+/* Scan contract tests: no duplicates when shrinking is blocked */
 
 /* Scan callback that records entries in a set for duplicate detection. */
 struct ScanContractData {
@@ -1414,65 +1414,71 @@ static void populateSequential(hashtable *ht, long count) {
     }
 }
 
+/* Finish any in-progress rehashing via lookups. */
+static void completeRehashing(hashtable *ht) {
+    while (hashtableIsRehashing(ht)) {
+        hashtableRehashMicroseconds(ht, 1000);
+    }
+}
+
 TEST_F(HashtableTest, scan_no_duplicates_static) {
     /* Full scan of a static table: every entry emitted exactly once. */
-
     hashtableType type = {};
     hashtable *ht = hashtableCreate(&type);
-    hashtablePauseAutoShrink(ht);
 
     long count = 5000;
     populateSequential(ht, count);
+    completeRehashing(ht);
 
+    hashtablePauseAutoShrink(ht);
     ScanContractData data = {};
     size_t cursor = 0;
     do {
         cursor = hashtableScan(ht, cursor, scanContractFn, &data);
     } while (cursor != 0);
+    hashtableResumeAutoShrink(ht);
 
     ASSERT_EQ(data.duplicates, 0);
     ASSERT_EQ((long)data.seen.size(), count);
 
-    hashtableResumeAutoShrink(ht);
     hashtableRelease(ht);
 }
 
 TEST_F(HashtableTest, scan_no_duplicates_with_deletions) {
     /* Scan with deletions mid-scan: no duplicates, some entries may be missed. */
-
     hashtableType type = {};
     hashtable *ht = hashtableCreate(&type);
-    hashtablePauseAutoShrink(ht);
 
     long count = 5000;
     populateSequential(ht, count);
+    completeRehashing(ht);
 
+    hashtablePauseAutoShrink(ht);
     ScanContractData data = {};
     size_t cursor = 0;
     do {
         cursor = hashtableScan(ht, cursor, scanContractFn, &data);
-        /* Randomly delete an entry. */
         if (rand() % 3 == 0) {
             hashtableDelete(ht, (void *)(long)(1 + rand() % count));
         }
     } while (cursor != 0);
+    hashtableResumeAutoShrink(ht);
 
     ASSERT_EQ(data.duplicates, 0);
 
-    hashtableResumeAutoShrink(ht);
     hashtableRelease(ht);
 }
 
 TEST_F(HashtableTest, scan_no_duplicates_with_insertions) {
     /* Scan with insertions mid-scan: no duplicates. */
-
     hashtableType type = {};
     hashtable *ht = hashtableCreate(&type);
-    hashtablePauseAutoShrink(ht);
 
     long count = 2000;
     populateSequential(ht, count);
+    completeRehashing(ht);
 
+    hashtablePauseAutoShrink(ht);
     ScanContractData data = {};
     size_t cursor = 0;
     long next_insert = count + 1;
@@ -1482,10 +1488,10 @@ TEST_F(HashtableTest, scan_no_duplicates_with_insertions) {
             hashtableAdd(ht, (void *)next_insert++);
         }
     } while (cursor != 0);
+    hashtableResumeAutoShrink(ht);
 
     ASSERT_EQ(data.duplicates, 0);
 
-    hashtableResumeAutoShrink(ht);
     hashtableRelease(ht);
 }
 
@@ -1499,11 +1505,12 @@ TEST_F(HashtableTest, scan_no_duplicates_fuzz) {
     for (int iter = 0; iter < iterations; iter++) {
         hashtableType type = {};
         hashtable *ht = hashtableCreate(&type);
-        hashtablePauseAutoShrink(ht);
 
         long count = 64 + (rand() % 4033);
         populateSequential(ht, count);
+        completeRehashing(ht);
 
+        hashtablePauseAutoShrink(ht);
         ScanContractData data = {};
         size_t cursor = 0;
         long next_val = count + 1;
@@ -1511,19 +1518,18 @@ TEST_F(HashtableTest, scan_no_duplicates_fuzz) {
             cursor = hashtableScan(ht, cursor, scanContractFn, &data);
             int op = rand() % 10;
             if (op < 3) {
-                /* Delete a random entry (may be original or newly added). */
                 hashtableDelete(ht, (void *)(long)(1 + rand() % (next_val - 1)));
             } else if (op < 6) {
                 hashtableAdd(ht, (void *)next_val++);
             }
         } while (cursor != 0);
+        hashtableResumeAutoShrink(ht);
 
         if (data.duplicates > 0) {
             printf("FAIL at iteration %d (seed %u, count %ld)\n", iter, fuzz_seed, count);
         }
         ASSERT_EQ(data.duplicates, 0);
 
-        hashtableResumeAutoShrink(ht);
         hashtableRelease(ht);
     }
 }
@@ -1533,14 +1539,14 @@ TEST_F(HashtableTest, scan_no_duplicates_fuzz) {
 TEST_F(HashtableTest, scan_has_passed_key_correctness) {
     /* After each scan step, HasPassedKey should return true for all emitted
      * entries and false for entries not yet emitted (on a static table). */
-
     hashtableType type = {};
     hashtable *ht = hashtableCreate(&type);
-    hashtablePauseAutoShrink(ht);
 
     long count = 1000;
     populateSequential(ht, count);
+    completeRehashing(ht);
 
+    hashtablePauseAutoShrink(ht);
     std::set<unsigned long> emitted;
     size_t cursor = 0;
     do {
@@ -1564,10 +1570,10 @@ TEST_F(HashtableTest, scan_has_passed_key_correctness) {
             }
         }
     } while (cursor != 0);
+    hashtableResumeAutoShrink(ht);
 
     ASSERT_EQ((long)emitted.size(), count);
 
-    hashtableResumeAutoShrink(ht);
     hashtableRelease(ht);
 }
 
@@ -1575,7 +1581,6 @@ TEST_F(HashtableTest, scan_has_passed_key_cursor_zero) {
     /* Cursor 0 means scan has not started -- no keys have been passed. */
     hashtableType type = {};
     hashtable *ht = hashtableCreate(&type);
-    hashtablePauseAutoShrink(ht);
 
     populateSequential(ht, 100);
 
@@ -1583,24 +1588,50 @@ TEST_F(HashtableTest, scan_has_passed_key_cursor_zero) {
         ASSERT_FALSE(hashtableScanHasPassedKey(ht, (void *)j, 0));
     }
 
-    hashtableResumeAutoShrink(ht);
     hashtableRelease(ht);
 }
 
-TEST_F(HashtableTest, scan_has_passed_key_nonexistent) {
-    /* HasPassedKey works for keys not in the table. */
+TEST_F(HashtableTest, scan_has_passed_key_deleted) {
+    /* HasPassedKey works correctly for keys that have been deleted. */
     hashtableType type = {};
     hashtable *ht = hashtableCreate(&type);
+
+    long count = 5000;
+    populateSequential(ht, count);
+    completeRehashing(ht);
+
+    /* Scan partway. */
     hashtablePauseAutoShrink(ht);
-
-    populateSequential(ht, 5000);
-    /* Do a partial scan (just one step). */
+    std::set<unsigned long> emitted;
     size_t cursor = 0;
-    cursor = hashtableScan(ht, cursor, NULL, NULL);
+    for (int i = 0; i < 10; i++) {
+        ScanContractData step_data = {};
+        cursor = hashtableScan(ht, cursor, scanContractFn, &step_data);
+        for (unsigned long val : step_data.seen) {
+            emitted.insert(val);
+        }
+    }
     ASSERT_NE(cursor, (size_t)0);
+    ASSERT_GT(emitted.size(), 0u);
 
-    /* Check a key that doesn't exist in the table -- should not crash. */
-    (void)hashtableScanHasPassedKey(ht, (void *)99999L, cursor);
+    /* Pick one emitted key and one non-emitted key. */
+    unsigned long emitted_key = *emitted.begin();
+    unsigned long nonemitted_key = 0;
+    for (long j = 1; j <= count; j++) {
+        if (!emitted.count(j)) {
+            nonemitted_key = j;
+            break;
+        }
+    }
+    ASSERT_NE(nonemitted_key, 0u);
+
+    /* Delete both. */
+    hashtableDelete(ht, (void *)emitted_key);
+    hashtableDelete(ht, (void *)nonemitted_key);
+
+    /* HasPassedKey should still reflect their original positions. */
+    ASSERT_TRUE(hashtableScanHasPassedKey(ht, (void *)emitted_key, cursor));
+    ASSERT_FALSE(hashtableScanHasPassedKey(ht, (void *)nonemitted_key, cursor));
 
     hashtableResumeAutoShrink(ht);
     hashtableRelease(ht);
@@ -1616,11 +1647,12 @@ TEST_F(HashtableTest, scan_has_passed_key_fuzz) {
     for (int iter = 0; iter < iterations; iter++) {
         hashtableType type = {};
         hashtable *ht = hashtableCreate(&type);
-        hashtablePauseAutoShrink(ht);
 
         long count = 100 + (rand() % 2000);
         populateSequential(ht, count);
+        completeRehashing(ht);
 
+        hashtablePauseAutoShrink(ht);
         std::set<unsigned long> emitted;
         size_t cursor = 0;
         do {
@@ -1644,8 +1676,8 @@ TEST_F(HashtableTest, scan_has_passed_key_fuzz) {
                 }
             }
         } while (cursor != 0);
-
         hashtableResumeAutoShrink(ht);
+
         hashtableRelease(ht);
     }
 }
@@ -1654,7 +1686,6 @@ TEST_F(HashtableTest, scan_has_passed_key_fuzz) {
 static void scanDeleteManyCb(void *privdata, void *entry) {
     hashtable *ht = (hashtable *)privdata;
     (void)entry;
-    /* Delete most entries to drop well below shrink threshold (13%). */
     for (long j = 50; j <= 5000; j++) {
         hashtableDelete(ht, (void *)j);
     }
@@ -1662,32 +1693,65 @@ static void scanDeleteManyCb(void *privdata, void *entry) {
 
 TEST_F(HashtableTest, scan_no_shrink_during_callback) {
     /* Verify that shrink doesn't start during a scan callback even when the
-     * fill factor drops below the threshold. This is guaranteed by
-     * hashtablePauseRehashing (called by scan) which also pauses auto-shrink. */
+     * fill factor drops below the threshold. */
     hashtableType type = {};
     hashtable *ht = hashtableCreate(&type);
-    hashtablePauseAutoShrink(ht);
 
     populateSequential(ht, 5000);
+    completeRehashing(ht);
     ASSERT_FALSE(hashtableIsRehashing(ht));
 
-    /* Record table size before scan. */
+    hashtablePauseAutoShrink(ht);
     size_t size_before = hashtableSize(ht);
-
-    /* Scan one step -- the callback deletes most entries. */
     size_t cursor = hashtableScan(ht, 0, scanDeleteManyCb, ht);
     (void)cursor;
 
-    /* Shrink was deferred until after scan resumed auto-shrink. Verify that
-     * entries were actually deleted (shrink threshold was crossed). */
+    /* Shrink is still blocked by PauseAutoShrink. */
     ASSERT_LT(hashtableSize(ht), size_before / 2);
-
-    /* Shrink is still blocked by our external PauseAutoShrink. */
     ASSERT_FALSE(hashtableIsRehashing(ht));
 
-    /* Resume auto-shrink -- shrink should trigger immediately. */
+    /* Resume -- shrink triggers immediately. */
     hashtableResumeAutoShrink(ht);
     ASSERT_TRUE(hashtableIsRehashing(ht));
 
+    hashtableRelease(ht);
+}
+
+TEST_F(HashtableTest, scan_no_duplicates_during_expand_rehash) {
+    /* Verify no duplicates when expansion starts and rehashing completes
+     * during an ongoing scan. Lookups between scan calls drive rehash steps. */
+    hashtableType type = {};
+    hashtable *ht = hashtableCreate(&type);
+
+    long count = 5000;
+    populateSequential(ht, count);
+    completeRehashing(ht);
+
+    /* Start scanning. */
+    hashtablePauseAutoShrink(ht);
+    ScanContractData data = {};
+    size_t cursor = hashtableScan(ht, 0, scanContractFn, &data);
+    ASSERT_NE(cursor, (size_t)0);
+
+    /* Trigger expansion by adding entries until rehashing starts. */
+    long next = count + 1;
+    while (!hashtableIsRehashing(ht)) {
+        hashtableAdd(ht, (void *)next++);
+    }
+
+    /* Continue scanning while driving rehash to completion with lookups. */
+    while (cursor != 0) {
+        cursor = hashtableScan(ht, cursor, scanContractFn, &data);
+        for (int i = 0; i < 200; i++) {
+            void *found;
+            hashtableFind(ht, (void *)(long)(1 + rand() % (next - 1)), &found);
+        }
+    }
+
+    /* Rehash should have completed during the scan. */
+    ASSERT_FALSE(hashtableIsRehashing(ht));
+    ASSERT_EQ(data.duplicates, 0);
+
+    hashtableResumeAutoShrink(ht);
     hashtableRelease(ht);
 }

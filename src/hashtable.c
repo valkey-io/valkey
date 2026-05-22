@@ -1090,7 +1090,7 @@ static bucket *findBucketForInsert(hashtable *ht, uint64_t hash, int *pos_in_buc
 /* Helper to insert an entry. Doesn't check if an entry with a matching key
  * already exists. This must be ensured by the caller. */
 static void insert(hashtable *ht, uint64_t hash, void *entry) {
-    assert(!ht->safe_iterators && "Inserting during safe iteration is not supported.");
+    assert(ht->safe_iterators == NULL);
     hashtableExpandIfNeeded(ht);
     rehashStepOnWriteIfNeeded(ht);
     int pos_in_bucket;

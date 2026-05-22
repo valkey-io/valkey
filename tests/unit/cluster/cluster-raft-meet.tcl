@@ -109,4 +109,23 @@ start_multiple_servers 2 {overrides {cluster-enabled yes cluster-protocol raft}}
     }
 }
 
+start_multiple_servers 4 {overrides {cluster-enabled yes cluster-protocol raft}} {
+    test "Raft MEET: merging two clusters is rejected" {
+        # Form two separate 2-node clusters.
+        [srv 0 client] CLUSTER MEET [srv -1 host] [srv -1 port]
+        [srv -2 client] CLUSTER MEET [srv -3 host] [srv -3 port]
+
+        wait_for_condition 50 100 {
+            [get_cluster_info_field [srv 0 client] cluster_size] == 2 &&
+            [get_cluster_info_field [srv -2 client] cluster_size] == 2
+        } else {
+            fail "Two clusters did not form"
+        }
+
+        # Attempting to merge them should fail.
+        catch {[srv 0 client] CLUSTER MEET [srv -2 host] [srv -2 port]} err
+        assert_match "ERR Cannot merge*" $err
+    }
+}
+
 } ;# tags

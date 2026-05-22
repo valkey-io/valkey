@@ -538,16 +538,19 @@ static int clusterRaftProcessMeet(clusterLink *link, int argc, sds *argv) {
     clusterNode *sender = link->node;
     const char *flag = argv[1];
     int sender_is_singleton = !strcasecmp(flag, "singleton");
-    UNUSED(sender_is_singleton);
 
     serverLog(LL_NOTICE, "Received MEET %s from %.40s.", flag, sender->name);
 
     clusterRaftState *rs = RAFT_STATE();
 
-    if (server.cluster->size > 1) {
-        /* I'm in a cluster — reply WELCOME immediately and invite the sender.
-         * WELCOME tells the sender to step down; the actual NODE_JOIN commit
-         * happens asynchronously. */
+    if (server.cluster->size > 1 && !sender_is_singleton) {
+        /* Both sides are in a cluster — reject. Merging non-singleton
+         * clusters is not supported. */
+        serverLog(LL_WARNING, "Rejecting MEET from %.40s: both sides are in a cluster.", sender->name);
+        clusterRaftSendBare(link, "MEET_REJECTED");
+    } else if (server.cluster->size > 1) {
+        /* I'm in a cluster, sender is a singleton — reply WELCOME and
+         * invite the sender. WELCOME tells the sender to step down. */
         clusterRaftSendBare(link, "WELCOME");
         clusterRaftInvitePeer(sender);
     } else if (rs->role == RAFT_ROLE_LEADER) {
@@ -602,6 +605,38 @@ static int clusterRaftProcessWelcome(clusterLink *link, int argc, sds *argv) {
 
     clusterRaftUnblockMeet(sender);
 
+    return 1;
+}
+
+/* MEET_REJECTED: the peer refused to merge because both sides are
+ * already in a cluster. Unblock CLUSTER MEET with an error. */
+static int clusterRaftProcessMeetRejected(clusterLink *link, int argc, sds *argv) {
+    UNUSED(argc);
+    UNUSED(argv);
+    if (!link->node) return 1;
+
+    clusterNode *sender = link->node;
+    serverLog(LL_WARNING, "MEET rejected by %.40s: cannot merge two clusters.", sender->name);
+
+    clusterRaftState *rs = RAFT_STATE();
+    if (listLength(rs->pending_meets) == 0) return 1;
+    /* Unblock with error. Find by address. */
+    sds addr = sdscatfmt(sdsempty(), "%s:%i", sender->ip, sender->cport);
+    listIter li;
+    listNode *ln;
+    listRewind(rs->pending_meets, &li);
+    while ((ln = listNext(&li)) != NULL) {
+        raftPendingMeet *pm = listNodeValue(ln);
+        if (!sdscmp(pm->addr, addr)) {
+            sdsfree(addr);
+            listDelNode(rs->pending_meets, ln);
+            pm->callback(pm->ctx, "Cannot merge two existing clusters");
+            sdsfree(pm->addr);
+            zfree(pm);
+            return 1;
+        }
+    }
+    sdsfree(addr);
     return 1;
 }
 
@@ -2009,6 +2044,8 @@ static int clusterRaftProcessMessage(struct clusterLink *link) {
         ret = clusterRaftProcessAddme(link, argc, argv);
     } else if (!strcasecmp(argv[0], "WELCOME")) {
         ret = clusterRaftProcessWelcome(link, argc, argv);
+    } else if (!strcasecmp(argv[0], "MEET_REJECTED")) {
+        ret = clusterRaftProcessMeetRejected(link, argc, argv);
     } else if (!strcasecmp(argv[0], "PROPOSE")) {
         ret = clusterRaftProcessPropose(link, argc, argv);
     } else if (!strcasecmp(argv[0], "AE")) {

@@ -1136,8 +1136,8 @@ static aclSelector *aclCreateSelectorFromOpSet(const char *opset, size_t opsetle
  *              It is possible to specify multiple patterns.
  * allchannels              Alias for &*
  * resetchannels            Flush the list of allowed channel patterns.
- * db=<dbid>    Add database ID(s) to the set of allowed database IDs. May be used
- *              with `,` for adding multiple IDs (e.g "db=1,2,3").
+ * db=<dbid>    Sets the specified database id(s) as the databases the selector is allowed to access.
+ *              May be used with `,` for adding multiple IDs (e.g "db=1,2,3").
  * alldbs       Allow access to all databases.
  * resetdbs     Flush the set of allowed database IDs.
  */

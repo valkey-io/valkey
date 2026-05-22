@@ -1359,7 +1359,8 @@ static int ACLSetSelector(aclSelector *selector, const char *op, size_t oplen) {
  *              passwords and there is no way to authenticate without adding
  *              some password (or setting it as "nopass" later).
  * reset        Performs the following actions: resetpass, resetkeys, resetchannels,
- *              allchannels (if acl-pubsub-default is set), off, clearselectors, -@all.
+ *              allchannels (if acl-pubsub-default is set), alldbs (for backwards compatibility),
+ *              off, sanitize-payload, clearselectors, -@all.
  *              The user returns to the same state it has immediately after its creation.
  * (<options>)  Create a new selector with the options specified within the
  *              parentheses and attach it to the user. Each option should be
@@ -1396,6 +1397,7 @@ static int ACLSetSelector(aclSelector *selector, const char *op, size_t oplen) {
  * ENODEV: The password you are trying to remove from the user does not exist.
  * EBADMSG: The hash you are trying to add is not a valid hash.
  * ECHILD: Attempt to allow a specific first argument of a subcommand
+ * ERANGE: A database ID provided with the db= rule is out of the supported range.
  */
 int ACLSetUser(user *u, const char *op, ssize_t oplen) {
     /* as we are changing the ACL, the old generated string is now invalid */

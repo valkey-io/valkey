@@ -1740,16 +1740,20 @@ TEST_F(HashtableTest, scan_no_duplicates_during_expand_rehash) {
     }
 
     /* Continue scanning while driving rehash to completion with lookups. */
+    bool rehash_completed_during_scan = false;
     while (cursor != 0) {
         cursor = hashtableScan(ht, cursor, scanContractFn, &data);
         for (int i = 0; i < 200; i++) {
             void *found;
             hashtableFind(ht, (void *)(long)(1 + rand() % (next - 1)), &found);
         }
+        if (!hashtableIsRehashing(ht)) {
+            rehash_completed_during_scan = true;
+        }
     }
 
-    /* Rehash should have completed during the scan. */
-    ASSERT_FALSE(hashtableIsRehashing(ht));
+    /* Rehash must have completed while the scan was still in progress. */
+    ASSERT_TRUE(rehash_completed_during_scan);
     ASSERT_EQ(data.duplicates, 0);
 
     hashtableResumeAutoShrink(ht);

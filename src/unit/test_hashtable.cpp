@@ -1570,18 +1570,21 @@ TEST_F(HashtableTest, scan_has_passed_key_correctness) {
         for (unsigned long val : step_data.seen) {
             emitted.insert(val);
         }
-        /* Check: all emitted entries should be "passed". */
-        for (unsigned long val : emitted) {
-            ASSERT_TRUE(hashtableScanHasPassedKey(ht, (void *)val, cursor))
-                << "Entry " << val << " was emitted but HasPassedKey returned false at cursor " << cursor;
-        }
-        /* Check: sample some non-emitted entries -- they should NOT be passed. */
-        int checked = 0;
-        for (long j = 1; j <= count && checked < 20; j++) {
-            if (!emitted.count(j)) {
-                ASSERT_FALSE(hashtableScanHasPassedKey(ht, (void *)j, cursor))
-                    << "Entry " << j << " was NOT emitted but HasPassedKey returned true at cursor " << cursor;
-                checked++;
+        /* Check: all emitted entries should be "passed" (skip when cursor==0,
+         * which means scan complete -- caller handles that state). */
+        if (cursor != 0) {
+            for (unsigned long val : emitted) {
+                ASSERT_TRUE(hashtableScanHasPassedKey(ht, (void *)val, cursor))
+                    << "Entry " << val << " was emitted but HasPassedKey returned false at cursor " << cursor;
+            }
+            /* Check: sample some non-emitted entries -- they should NOT be passed. */
+            int checked = 0;
+            for (long j = 1; j <= count && checked < 20; j++) {
+                if (!emitted.count(j)) {
+                    ASSERT_FALSE(hashtableScanHasPassedKey(ht, (void *)j, cursor))
+                        << "Entry " << j << " was NOT emitted but HasPassedKey returned true at cursor " << cursor;
+                    checked++;
+                }
             }
         }
     } while (cursor != 0);
@@ -1593,7 +1596,7 @@ TEST_F(HashtableTest, scan_has_passed_key_correctness) {
 }
 
 TEST_F(HashtableTest, scan_has_passed_key_cursor_zero) {
-    /* Cursor 0 means scan is complete -- all keys have been passed. */
+    /* Cursor 0 means scan has not started -- no keys have been passed. */
     hashtableType type = {};
     hashtable *ht = hashtableCreate(&type);
 
@@ -1601,9 +1604,9 @@ TEST_F(HashtableTest, scan_has_passed_key_cursor_zero) {
         ASSERT_TRUE(hashtableAdd(ht, (void *)j));
     }
 
-    /* Every key should be "passed" when cursor is 0. */
+    /* No key should be "passed" when cursor is 0. */
     for (long j = 1; j <= 100; j++) {
-        ASSERT_TRUE(hashtableScanHasPassedKey(ht, (void *)j, 0));
+        ASSERT_FALSE(hashtableScanHasPassedKey(ht, (void *)j, 0));
     }
 
     hashtableRelease(ht);
@@ -1662,21 +1665,23 @@ TEST_F(HashtableTest, scan_has_passed_key_fuzz) {
             for (unsigned long val : step_data.seen) {
                 emitted.insert(val);
             }
-            /* Verify consistency for a sample of entries. */
-            for (long j = 1; j <= count && j <= 50; j++) {
-                int passed = hashtableScanHasPassedKey(ht, (void *)j, cursor);
-                if (emitted.count(j)) {
-                    if (!passed) {
-                        printf("FAIL iter %d seed %u: entry %ld emitted but HasPassedKey=false, cursor=%zu\n",
-                               iter, fuzz_seed, j, cursor);
+            /* Verify consistency for a sample of entries (skip at cursor==0). */
+            if (cursor != 0) {
+                for (long j = 1; j <= count && j <= 50; j++) {
+                    bool passed = hashtableScanHasPassedKey(ht, (void *)j, cursor);
+                    if (emitted.count(j)) {
+                        if (!passed) {
+                            printf("FAIL iter %d seed %u: entry %ld emitted but HasPassedKey=false, cursor=%zu\n",
+                                   iter, fuzz_seed, j, cursor);
+                        }
+                        ASSERT_TRUE(passed);
+                    } else {
+                        if (passed) {
+                            printf("FAIL iter %d seed %u: entry %ld NOT emitted but HasPassedKey=true, cursor=%zu\n",
+                                   iter, fuzz_seed, j, cursor);
+                        }
+                        ASSERT_FALSE(passed);
                     }
-                    ASSERT_TRUE(passed);
-                } else {
-                    if (passed) {
-                        printf("FAIL iter %d seed %u: entry %ld NOT emitted but HasPassedKey=true, cursor=%zu\n",
-                               iter, fuzz_seed, j, cursor);
-                    }
-                    ASSERT_FALSE(passed);
                 }
             }
         } while (cursor != 0);

@@ -2043,9 +2043,9 @@ size_t hashtableScan(hashtable *ht, size_t cursor, hashtableScanFunction fn, voi
  * When rehashing is not active, this is an exact answer. When rehashing is
  * active, the result is best-effort and not guaranteed to be correct.
  *
- * A cursor of 0 means the scan is complete, so all keys have been passed. */
+ * A cursor of 0 means the scan has not started, so no keys have been passed. */
 bool hashtableScanHasPassedKey(hashtable *ht, const void *key, size_t cursor) {
-    if (cursor == 0) return 1;
+    if (cursor == 0) return false;
     size_t mask = expToMask(ht->bucket_exp[0]);
     uint64_t hash = hashKey(ht, key);
     size_t bucket_idx = hash & mask;

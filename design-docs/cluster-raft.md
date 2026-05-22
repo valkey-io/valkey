@@ -35,8 +35,13 @@ ADD_ME
 
 WELCOME
     Reply to MEET: "I'm in a cluster and will add you." Sent by a
-    cluster member that received MEET. The receiver steps down to
-    joiner on receiving WELCOME.
+    cluster member that received MEET from a singleton. The receiver
+    steps down to joiner on receiving WELCOME.
+
+MEET_REJECTED
+    Reply to MEET: both sides are already in a non-singleton cluster.
+    Merging clusters is not supported. The CLUSTER MEET client
+    receives an error.
 
 AE <leader-id> <term> <prev-log-idx> <prev-log-term> <commit> <count>
     AppendEntries. Carries log entries from leader to followers.

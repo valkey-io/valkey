@@ -17,25 +17,36 @@ Multi-line messages use `\n` to separate the header line from entry lines.
 Messages:
 
 ```
-HELLO <node-id> <address> <term> <role> <cluster-size>
+HELLO <node-id> <address>
     First message on every outbound link. Identifies the sender.
 
-HI <node-id> <address> <term> <role> <cluster-size>
+HI <node-id> <address>
     Immediate reply to HELLO, sent on the same inbound link.
-    Identifies the receiver back to the sender.
+    Completes the identification handshake.
 
-WELCOME <node-id>
-    Sent on the outbound link after a NODE_JOIN entry commits.
-    Fires the pending MEET callback on the target node.
+MEET singleton|cluster
+    Sent after HELLO on CLUSTER MEET-initiated connections. Declares
+    the sender's cluster status. The receiver decides based on its
+    own status (see Cluster Formation below).
+
+ADD_ME
+    Reply to MEET: "I stepped down to joiner, please add me to your
+    cluster." Sent by a singleton that received MEET.
+
+WELCOME
+    Reply to MEET: "I'm in a cluster and will add you." Sent by a
+    cluster member that received MEET. The receiver steps down to
+    joiner on receiving WELCOME.
 
 AE <leader-id> <term> <prev-log-idx> <prev-log-term> <commit> <count>
     AppendEntries. Carries log entries from leader to followers.
     Followed by <count> entry lines: <term> <type> <data>.
     With zero entries, serves as a heartbeat.
 
-AE_ACK <term> <success> <last-log-index>
-    Response to AE. Reports whether entries were accepted and the
-    follower's last log index for matchIndex tracking.
+AE_ACK <term> <success> <last-log-index> <repl-offset>
+    Response to AE. Reports whether entries were accepted, the
+    follower's last log index for matchIndex tracking, and the
+    node's replication offset.
 
 VOTE_REQ <candidate-id> <term> <last-log-index> <last-log-term>
     RequestVote. Sent by candidates during elections.
@@ -67,10 +78,12 @@ The address string uses the nodes.conf format:
 
 ## Roles
 
-- **Learner**: Receives log entries but doesn't vote or count for quorum.
-  New nodes joining an existing cluster start as learners.
+- **Joiner**: A singleton that stepped down to join another cluster.
+  Cannot vote, propose, or form a cluster. Waits for AE from the
+  leader to receive its NODE_JOIN entry. Reverts to singleton leader
+  after 3× cluster-node-timeout if no AE arrives.
 - **Follower**: Participates in elections and counts for quorum.
-  Promoted from learner when the node's NODE_JOIN entry is committed.
+  Promoted from joiner when the node's NODE_JOIN entry is applied.
 - **Candidate**: Requesting votes after election timeout.
 - **Leader**: Accepts proposals, replicates log, sends heartbeats.
 
@@ -188,28 +201,63 @@ was successfully sent but the leader died before committing, the
 proposal is retried. Duplicate proposals are harmless because all
 entry types are idempotent at apply time.
 
-## Synchronous MEET (HELLO/HI/WELCOME Protocol)
+## Link Identification (HELLO/HI)
+
+HELLO is sent on every new outbound connection. HI is the reply on
+the same link. This exchange identifies both sides and occurs on
+every connection: initial joins, reconnections, and new links to
+nodes learned via AE.
+
+After HI completes, the leader sends AE to bring the peer up to
+date. A follower retries any deferred proposals to the leader.
+
+## Cluster Formation (MEET/ADD_ME/WELCOME)
 
 CLUSTER MEET is synchronous from the client's perspective: the command
-blocks until the new node is part of the cluster. This is achieved
-using the BLOCKED_ASYNC mechanism, which defers the reply until the
-NODE_JOIN entry is committed.
+blocks until the target node has stepped down (can't form a competing
+cluster) or until the node is committed in the raft log.
 
-### Message flow
+MEET is sent immediately after HELLO on CLUSTER MEET-initiated
+connections. The reply is either ADD_ME or WELCOME:
 
-All messages are sent on outbound links, except HI which is sent as
-a reply on the inbound link.
+- **MEET → ADD_ME**: The receiver is a singleton leader. It steps
+  down to joiner and replies ADD_ME. The sender invites it.
+- **MEET → WELCOME**: The receiver is in a cluster (size > 1). It
+  replies WELCOME immediately and invites the sender. The sender
+  steps down to joiner on receiving WELCOME.
 
-**HELLO** is the first message on every outbound link (sent by
-postConnect). It carries the sender's node-id, address, term, role,
-and cluster size.
+### Unblock conditions for CLUSTER MEET
 
-**HI** is the immediate reply to HELLO, sent on the same inbound link.
-It serves as identification so the receiver can bind the link to a
-known node.
+The client is unblocked when any of these occur:
+- **ADD_ME received**: The peer stepped down to joiner — it can't
+  form a competing cluster. Safe to proceed with the next MEET.
+- **WELCOME received**: We stepped down to joiner — we'll be added
+  by the peer's cluster.
+- **NODE_JOIN applied** (fallback): When the target node's NODE_JOIN
+  entry is applied locally (e.g., for deferred meets forwarded via
+  a follower).
 
-**WELCOME** is sent on the outbound link after a NODE_JOIN entry
-commits. It fires the pending MEET callback, unblocking the client.
+### Why early unblock is safe
+
+The blocking requirement prevents disjoint non-singleton clusters
+from forming during chained MEET commands (A→B, B→C, C→D). Early
+unblock (on ADD_ME/WELCOME) is safe because once a node steps down
+to joiner, it cannot:
+- Win an election (no voters know it)
+- Commit entries (not a leader)
+- Form a cluster independently
+
+The worst case on crash is liveness failure (orphaned joiners), not
+safety violation (disjoint clusters). Joiners revert to singleton
+leader after 3× cluster-node-timeout.
+
+### Deferred MEET
+
+When a joiner receives MEET (e.g., in reverse star formation where
+multiple nodes MEET the same target), the MEET is deferred until the
+joiner promotes to follower (applies its own NODE_JOIN). At that
+point, the node has size > 1 and processes deferred meets by sending
+WELCOME and inviting the sender.
 
 ### Two singletons meeting
 
@@ -219,60 +267,50 @@ commits. It fires the pending MEET callback, unblocking the client.
     |                       |                     |
     |--- CLUSTER MEET B --->|                     |
     |                       |--- HELLO ---------->|
-    |                       |                     |  Unknown sender
-    |                       |                     |  Step down to learner
     |                       |<------- HI ---------|
-    |                       |                     |
-    |             Propose NODE_JOIN               |
-    |             Commit (single node)            |
-    |             Apply: B joins cluster          |
-    |                       |                     |
+    |                       |--- MEET singleton ->|
+    |                       |                     |  Step down to joiner
+    |                       |<------ ADD_ME ------|
     |<------- OK -----------|                     |
-    |                       |---- WELCOME ------->|  No-op in this case
     |                       |                     |
-    |                       |--- AppendEntries -->|  Apply: promote
-    |                       |                     |  to follower
-    |                       |<-- AppendEntriesAck-|
+    |             Propose NODE_JOIN(A) + NODE_JOIN(B)
+    |             Commit (quorum=1)               |
+    |             Apply: size=2                   |
+    |                       |                     |
+    |                       |--- AE ------------->|  Apply: promote
+    |                       |<-- AE_ACK ----------|  to follower
 ```
 
 ### Singleton joining an existing cluster
 
 ```
-  Admin                   Node A               Node B          Node C
-  client               singleton leader      follower          leader
-    |                       |                     |               |
-    |--- CLUSTER MEET B --->|                     |               |
-    |                       |--- HELLO ---------->|               |
-    |                       |                     |  Unknown sender
-    |                       |<------- HI ---------|               |
-    |                       |                     |               |
-    |          Step down (rule 2: HI              |               |
-    |          from non-singleton)                |               |
-    |                       |          PROPOSE NODE_JOIN(A) ----->|  Append to Raft log
-    |                       |                     |               |
-    |                       |              +--------------------------+
-    |                       |              |  NODE_JOIN(A) committed  |
-    |                       |              |  via Raft (B+C quorum)   |
-    |                       |              +--------------------------+
-    |                       |                     |               |
-    |                       |<------- WELCOME ----|               |
-    |<------- OK -----------|                     |               |
-    |                       |                     |               |  Eventually,
-    |                       |<---- AppendEntries -----------------|  when link to A
-    |              Apply: A joins                 |               |  is established
-    |              Promote to follower            |               |
+  Admin                   Node A               Node B
+  client               singleton leader       in cluster
+    |                       |                     |
+    |--- CLUSTER MEET B --->|                     |
+    |                       |--- HELLO ---------->|
+    |                       |<------- HI ---------|
+    |                       |--- MEET singleton ->|
+    |                       |                     |  size > 1
+    |                       |<----- WELCOME ------|  Invites A
+    |                       |                     |
+    |              Step down to joiner            |
+    |<------- OK -----------|                     |
+    |                       |                     |  Leader commits
+    |                       |                     |  NODE_JOIN(A)
+    |                       |<---- AE ------------|
+    |                       |                     |
+    |              Apply NODE_JOIN(A)             |
+    |              promotes A to follower         |
+
 ```
 
-### Step-down rules
+### AE suppression during joining
 
-- **Rule 1**: A singleton leader steps down on HELLO from an *unknown*
-  node (this is the MEET target side). A HELLO from a known node is
-  just a reconnect and doesn't trigger step-down.
-- **Rule 2**: A singleton leader steps down on HI from a non-singleton
-  (joining an existing cluster).
-
-Both rules set `rs->leader` to the sender's name so the follower
-knows where to send PROPOSE.
+AE and VOTE_REQ are not sent to nodes with the CLUSTER_NODE_MEET
+flag (not yet in the raft log). This prevents a race where AE
+arrives before MEET on the same link, causing the receiver to step
+down prematurely and defer the MEET.
 
 ### Membership changes
 
@@ -462,7 +500,6 @@ Entries that don't need a shard-epoch:
 - Pre-vote protocol to avoid term inflation from partitioned nodes.
 - Log compaction / snapshotting for lagging followers.
 - Persistence of Raft log to disk.
-- Broadcast REPL_OFFSETS to all nodes when a replica finishes sync.
 - Permanent learners: in large clusters, some nodes may stay as
   non-voting learners to reduce election and commit overhead. The
   NODE_JOIN entry would include the intended role (follower or learner).

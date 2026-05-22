@@ -1639,3 +1639,40 @@ TEST_F(HashtableTest, scan_has_passed_key_fuzz) {
         hashtableRelease(ht);
     }
 }
+
+/* Callback that deletes many entries, attempting to trigger shrink. */
+static void scanDeleteManyCb(void *privdata, void *entry) {
+    hashtable *ht = (hashtable *)privdata;
+    (void)entry;
+    /* Delete most entries to drop well below shrink threshold (13%). */
+    for (long j = 50; j <= 5000; j++) {
+        hashtableDelete(ht, (void *)j);
+    }
+}
+
+TEST_F(HashtableTest, scan_no_shrink_during_callback) {
+    /* Verify that shrink doesn't start during a scan callback even when the
+     * fill factor drops below the threshold. This is guaranteed by
+     * hashtablePauseRehashing (called by scan) which also pauses auto-shrink. */
+    hashtableType type = {};
+    hashtable *ht = hashtableCreate(&type);
+
+    populateSequential(ht, 5000);
+    ASSERT_FALSE(hashtableIsRehashing(ht));
+
+    /* Record table size before scan. */
+    size_t size_before = hashtableSize(ht);
+
+    /* Scan one step -- the callback deletes most entries. */
+    size_t cursor = hashtableScan(ht, 0, scanDeleteManyCb, ht);
+    (void)cursor;
+
+    /* Shrink was deferred until after scan resumed auto-shrink. Verify that
+     * entries were actually deleted (shrink threshold was crossed). */
+    ASSERT_LT(hashtableSize(ht), size_before / 2);
+
+    /* Rehashing (shrink) started on resume -- this is correct. */
+    ASSERT_TRUE(hashtableIsRehashing(ht));
+
+    hashtableRelease(ht);
+}

@@ -2012,7 +2012,9 @@ bool hashtableIncrementalFindGetResult(hashtableIncrementalFindState *state, voi
  * - An entry that is inserted or deleted during a full scan may or may not be
  *   returned during the scan.
  *
- * Additional guarantees when rehashing is paused for the duration of the scan:
+ * Additional guarantees when shrinking is blocked for the duration of the scan
+ * (e.g. by calling hashtablePauseAutoShrink before starting and
+ * hashtableResumeAutoShrink after finishing):
  *
  * - An entry will never be returned more than once.
  *
@@ -2021,6 +2023,10 @@ bool hashtableIncrementalFindGetResult(hashtableIncrementalFindState *state, voi
  *
  * - An entry that is created, destroyed, or re-created during the scan may or
  *   may not be returned, but will never be returned more than once.
+ *
+ * Expansion and rehashing may occur freely without breaking these guarantees.
+ * Only a shrink is problematic: it introduces a smaller table whose bucket
+ * boundaries don't align with the existing cursor position.
  *
  * Scan callback rules:
  *
@@ -2042,6 +2048,9 @@ size_t hashtableScan(hashtable *ht, size_t cursor, hashtableScanFunction fn, voi
  *
  * When rehashing is not active, this is an exact answer. When rehashing is
  * active, the result is best-effort and not guaranteed to be correct.
+ *
+ * When shrinking is blocked (see scan guarantees above), the result is exact
+ * regardless of whether rehashing is active.
  *
  * A cursor of 0 means the scan has not started, so no keys have been passed. */
 bool hashtableScanHasPassedKey(hashtable *ht, const void *key, size_t cursor) {

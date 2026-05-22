@@ -13,8 +13,8 @@ proc get_cluster_info_field {client field} {
 
 tags {external:skip cluster singledb} {
 
-test "Raft MEET: two singletons" {
-    start_multiple_servers 2 {overrides {cluster-enabled yes cluster-protocol raft}} {
+start_multiple_servers 2 {overrides {cluster-enabled yes cluster-protocol raft}} {
+    test "Raft MEET: two singletons" {
         set r0 [srv 0 client]
         set r1 [srv -1 client]
 
@@ -29,8 +29,8 @@ test "Raft MEET: two singletons" {
     }
 }
 
-test "Raft MEET: star formation - first node meets each node" {
-    start_multiple_servers 5 {overrides {cluster-enabled yes cluster-protocol raft}} {
+start_multiple_servers 5 {overrides {cluster-enabled yes cluster-protocol raft}} {
+    test "Raft MEET: star formation - first node meets each node" {
         set r0 [srv 0 client]
 
         for {set i 1} {$i < 5} {incr i} {
@@ -47,8 +47,8 @@ test "Raft MEET: star formation - first node meets each node" {
     }
 }
 
-test "Raft MEET: reverse star formation - each node meets the first node" {
-    start_multiple_servers 5 {overrides {cluster-enabled yes cluster-protocol raft}} {
+start_multiple_servers 5 {overrides {cluster-enabled yes cluster-protocol raft}} {
+    test "Raft MEET: reverse star formation - each node meets the first node" {
         set r0 [srv 0 client]
 
         for {set i 1} {$i < 5} {incr i} {
@@ -65,8 +65,8 @@ test "Raft MEET: reverse star formation - each node meets the first node" {
     }
 }
 
-test "Raft MEET: chain formation - each node meets the next" {
-    start_multiple_servers 5 {overrides {cluster-enabled yes cluster-protocol raft}} {
+start_multiple_servers 5 {overrides {cluster-enabled yes cluster-protocol raft}} {
+    test "Raft MEET: chain formation - each node meets the next" {
         set r0 [srv 0 client]
 
         for {set i 0} {$i < 4} {incr i} {
@@ -83,8 +83,8 @@ test "Raft MEET: chain formation - each node meets the next" {
     }
 }
 
-test "Raft MEET: addslots after meet" {
-    start_multiple_servers 2 {overrides {cluster-enabled yes cluster-protocol raft}} {
+start_multiple_servers 2 {overrides {cluster-enabled yes cluster-protocol raft}} {
+    test "Raft MEET: addslots after meet" {
         set r0 [srv 0 client]
         set r1 [srv -1 client]
 

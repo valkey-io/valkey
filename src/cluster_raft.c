@@ -509,6 +509,23 @@ static int clusterRaftProcessHi(clusterLink *link, int argc, sds *argv) {
         }
         serverLog(LL_NOTICE, "Handshake with node %.40s completed.", sender_name);
     }
+
+    clusterRaftState *rs = RAFT_STATE();
+
+    /* If we just established a link to the leader and have deferred
+     * proposals, trigger retry in the next beforeSleep. */
+    if (rs->role == RAFT_ROLE_FOLLOWER && listLength(rs->pending_proposals) > 0 &&
+        link->node && memcmp(link->node->name, rs->leader, CLUSTER_NAMELEN) == 0) {
+        rs->todo_retry_proposals = 1;
+    }
+
+    /* If we're the leader, send AE immediately to minimize commit latency
+     * after a reconnection (especially in 2-node clusters). */
+    if (rs->role == RAFT_ROLE_LEADER && link->node &&
+        !(link->node->flags & CLUSTER_NODE_MEET)) {
+        clusterRaftSendAppendEntries(link, link->node);
+    }
+
     return 1;
 }
 
@@ -680,6 +697,8 @@ static void clusterRaftPropose(sds entry, void *ctx, void (*callback)(void *ctx,
                 raftLogEntry *e = raftLogGet(rs, rs->last_applied);
                 if (e) raftLogApply(e);
             }
+            /* If we just grew beyond singleton, replicate to the new peer. */
+            if (server.cluster->size > 1) rs->todo_broadcast_ae = 1;
         } else {
             /* Replicate to followers immediately. */
             rs->todo_broadcast_ae = 1;
@@ -688,8 +707,9 @@ static void clusterRaftPropose(sds entry, void *ctx, void (*callback)(void *ctx,
         sdsfree(data);
         clusterNode *leader = clusterLookupNode(rs->leader, CLUSTER_NAMELEN);
         if (!leader || !leader->link) {
-            /* Can't reach leader yet — defer for retry. */
+            /* Can't reach leader yet — defer for retry in beforeSleep. */
             rs->todo_retry_proposals = 1;
+            rs->todo_connect_nodes = 1;
             serverLog(LL_NOTICE, "PROPOSE deferred: no outbound link to leader.");
             return;
         }
@@ -1587,6 +1607,45 @@ static void clusterRaftDetectFailures(mstime_t now) {
     dictReleaseIterator(di);
 }
 
+/* Retry deferred proposals: forward to leader or append locally. */
+static void clusterRaftRetryProposals(clusterRaftState *rs) {
+    if (listLength(rs->pending_proposals) == 0) return;
+
+    if (rs->role == RAFT_ROLE_LEADER) {
+        listIter li;
+        listNode *ln;
+        listRewind(rs->pending_proposals, &li);
+        while ((ln = listNext(&li)) != NULL) {
+            raftPendingProposal *pp = listNodeValue(ln);
+            uint64_t idx = raftLogLastIndex(rs) + 1;
+            raftLogAppend(rs, raftLogCreate(rs->current_term, idx, pp->type, sdsdup(pp->data)));
+            serverLog(LL_NOTICE, "Leader appended deferred %s (index %llu).",
+                      raftEntryTypeName(pp->type), (unsigned long long)idx);
+        }
+        rs->todo_broadcast_ae = 1;
+    } else if (rs->role == RAFT_ROLE_FOLLOWER) {
+        clusterNode *leader = clusterLookupNode(rs->leader, CLUSTER_NAMELEN);
+        if (leader && leader->link) {
+            listIter li;
+            listNode *ln;
+            listRewind(rs->pending_proposals, &li);
+            while ((ln = listNext(&li)) != NULL) {
+                raftPendingProposal *pp = listNodeValue(ln);
+                sds entry = sdscatfmt(sdsempty(), "%s %S",
+                                      raftEntryTypeName(pp->type), pp->data);
+                sds msg = wireNewMsg("PROPOSE");
+                msg = sdscatlen(msg, " ", 1);
+                msg = sdscatlen(msg, entry, sdslen(entry));
+                msg = wireFinishMsg(msg);
+                clusterRaftSendMsg(leader->link, msg);
+                sdsfree(entry);
+            }
+            serverLog(LL_NOTICE, "Forwarded %lu deferred proposals to leader.",
+                      listLength(rs->pending_proposals));
+        }
+    }
+}
+
 static void clusterRaftCron(void) {
     clusterRaftState *rs = RAFT_STATE();
     mstime_t now = monotonicMs();
@@ -1633,45 +1692,7 @@ static void clusterRaftCron(void) {
         }
 
         /* Retry deferred proposals when leader link becomes available. */
-        if (rs->todo_retry_proposals && listLength(rs->pending_proposals) > 0) {
-            if (rs->role == RAFT_ROLE_LEADER) {
-                /* We became leader — append to our own log. */
-                rs->todo_retry_proposals = 0;
-                listIter li;
-                listNode *ln;
-                listRewind(rs->pending_proposals, &li);
-                while ((ln = listNext(&li)) != NULL) {
-                    raftPendingProposal *pp = listNodeValue(ln);
-                    uint64_t idx = raftLogLastIndex(rs) + 1;
-                    raftLogAppend(rs, raftLogCreate(rs->current_term, idx, pp->type, sdsdup(pp->data)));
-                    serverLog(LL_NOTICE, "Leader appended deferred %s (index %llu).",
-                              raftEntryTypeName(pp->type), (unsigned long long)idx);
-                }
-                rs->todo_broadcast_ae = 1;
-            } else if (rs->role == RAFT_ROLE_FOLLOWER) {
-                clusterNode *leader = clusterLookupNode(rs->leader, CLUSTER_NAMELEN);
-                if (leader && leader->link) {
-                    /* Forward to new leader. */
-                    rs->todo_retry_proposals = 0;
-                    listIter li;
-                    listNode *ln;
-                    listRewind(rs->pending_proposals, &li);
-                    while ((ln = listNext(&li)) != NULL) {
-                        raftPendingProposal *pp = listNodeValue(ln);
-                        sds entry = sdscatfmt(sdsempty(), "%s %S",
-                                              raftEntryTypeName(pp->type), pp->data);
-                        sds msg = wireNewMsg("PROPOSE");
-                        msg = sdscatlen(msg, " ", 1);
-                        msg = sdscatlen(msg, entry, sdslen(entry));
-                        msg = wireFinishMsg(msg);
-                        clusterRaftSendMsg(leader->link, msg);
-                        sdsfree(entry);
-                    }
-                    serverLog(LL_NOTICE, "Retried %lu deferred proposals to new leader.",
-                              listLength(rs->pending_proposals));
-                }
-            }
-        }
+        clusterRaftRetryProposals(rs);
 
         /* Periodically check if our NODE_INFO diverged from what was last
          * committed (e.g. a CONFIG SET succeeded but the proposal timed
@@ -1799,11 +1820,14 @@ static void clusterRaftBeforeSleep(void) {
         clusterConnectNodes();
     }
 
-    if (rs->todo_broadcast_ae && rs->role == RAFT_ROLE_LEADER) {
+    if (rs->todo_broadcast_ae) {
         rs->todo_broadcast_ae = 0;
-        clusterRaftBroadcastAppendEntries(rs);
-    } else {
-        rs->todo_broadcast_ae = 0;
+        if (rs->role == RAFT_ROLE_LEADER) clusterRaftBroadcastAppendEntries(rs);
+    }
+
+    if (rs->todo_retry_proposals) {
+        rs->todo_retry_proposals = 0;
+        clusterRaftRetryProposals(rs);
     }
 
     if (rs->todo_update_slot_coverage) {

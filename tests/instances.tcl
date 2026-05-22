@@ -517,7 +517,7 @@ proc end_tests {} {
         }
         set fp [open $::failures_output_file w]
         if {$::failed > 0} {
-            puts $fp "\[\{\"test_name\":\"sentinel/cluster tests\",\"test_file\":\"unknown\",\"status\":\"err\",\"error\":\"$::failed test(s) failed\"\}\]"
+            puts $fp "\[\{\"test_name\":\"sentinel tests\",\"test_file\":\"unknown\",\"status\":\"err\",\"error\":\"$::failed test(s) failed\"\}\]"
         } else {
             puts $fp "\[\]"
         }

@@ -472,6 +472,9 @@ proc read_from_test_client fd {
         }
     } elseif {$status eq {exception}} {
         puts "\[[colorstr red $status]\]: $data"
+        if {[catch {write_test_failures} err]} {
+            puts "Warning: Failed to write test failures: $err"
+        }
         kill_clients
         force_kill_all_servers
         exit 1

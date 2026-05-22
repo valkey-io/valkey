@@ -2046,11 +2046,9 @@ size_t hashtableScan(hashtable *ht, size_t cursor, hashtableScanFunction fn, voi
  * passed (i.e. the key would have been emitted already), false if not yet
  * visited.
  *
- * When rehashing is not active, this is an exact answer. When rehashing is
- * active, the result is best-effort and not guaranteed to be correct.
- *
- * When shrinking is blocked (see scan guarantees above), the result is exact
- * regardless of whether rehashing is active.
+ * The result is exact when shrinking is blocked (see scan guarantees above).
+ * If a shrink has been initiated since the cursor was obtained, the result is
+ * best-effort and not guaranteed to be correct.
  *
  * A cursor of 0 means the scan has not started, so no keys have been passed. */
 bool hashtableScanHasPassedKey(hashtable *ht, const void *key, size_t cursor) {

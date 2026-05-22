@@ -1410,7 +1410,7 @@ static void scanContractFn(void *privdata, void *entry) {
 
 static void populateSequential(hashtable *ht, long count) {
     for (long j = 1; j <= count; j++) {
-        ASSERT_TRUE(hashtableAdd(ht, (void *)j));
+        EXPECT_TRUE(hashtableAdd(ht, (void *)j));
     }
 }
 

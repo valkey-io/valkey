@@ -508,10 +508,10 @@ typedef enum {
 #define AOF_FSYNC_EVERYSEC 2
 
 enum {
-    AOF_IO_FLUSH_IDLE = 0,
-    AOF_IO_FLUSH_PENDING,
-    AOF_IO_FLUSH_DONE,
-    AOF_IO_FLUSH_ERR,
+    AOF_BIO_FLUSH_IDLE = 0,
+    AOF_BIO_FLUSH_PENDING,
+    AOF_BIO_FLUSH_DONE,
+    AOF_BIO_FLUSH_ERR,
 };
 
 /* Replication diskless load defines */
@@ -1427,7 +1427,7 @@ typedef struct client {
 #ifdef LOG_REQ_RES
     clientReqResInfo reqres;
 #endif
-    struct clientDurabilityInfo clientDurabilityInfo;
+    struct clientReplyBlockingState reply_blocking_state;
 } client;
 
 /* Forward declaration */
@@ -1767,8 +1767,6 @@ typedef enum childInfoType {
 } childInfoType;
 
 struct valkeyServer {
-    durable_t durability;
-    int bio_aof_offload_enabled; /* Hidden feature flag to enable/disable BIO AOF offload + dirty key tracking */
     /* General */
     pid_t pid;                                        /* Main process pid. */
     pthread_t main_thread_id;                         /* Main thread id */
@@ -2060,14 +2058,17 @@ struct valkeyServer {
     int aof_load_truncated;             /* Don't stop on unexpected AOF EOF. */
     int aof_use_rdb_preamble;           /* Specify base AOF to use RDB encoding on AOF rewrites. */
     int aof_rewrite_use_rdb_preamble;   /* Base AOF to use RDB encoding on AOF rewrites start. */
-    _Atomic(int) aof_io_flush_state;    /* AOF always-fsync IO-thread flush state. */
-    _Atomic(int) aof_io_flush_errno;    /* Errno of AOF always-fsync IO-thread flush. */
-    _Atomic(off_t) aof_io_flush_size;   /* Bytes written by the last IO-thread flush. */
+    _Atomic(int) aof_bio_flush_state;   /* AOF always-fsync BIO-thread flush state. */
+    _Atomic(int) aof_bio_flush_errno;   /* Errno of AOF always-fsync BIO-thread flush. */
+    _Atomic(off_t) aof_bio_flush_size;  /* Bytes written by the last BIO-thread flush. */
     _Atomic(int) aof_bio_fsync_status;  /* Status of AOF fsync in bio job. */
     _Atomic(int) aof_bio_fsync_errno;   /* Errno of AOF fsync in bio job. */
     aofManifest *aof_manifest;          /* Used to track AOFs. */
     int aof_disable_auto_gc;            /* If disable automatically deleting HISTORY type AOFs?
                                            default no. (for testings). */
+    int bio_aof_offload_enabled;        /* Hidden feature flag to enable/disable BIO AOF offload
+                                         * and dirty key tracking. */
+    durable_t durability;               /* Durability container for reply-blocking state. */
 
     /* RDB persistence */
     long long dirty;                      /* Changes to DB from the last save */

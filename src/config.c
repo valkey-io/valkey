@@ -2621,7 +2621,7 @@ static int updateAppendOnly(const char **err) {
     }
     /* Durability is implied by appendfsync always + AOF on, so toggling
      * appendonly may enable or disable it. */
-    durabilityReset();
+    replyBlockingReset();
     return 1;
 }
 
@@ -2713,13 +2713,13 @@ int updateAppendFsync(const char **err) {
     }
     /* Durability is implied by appendfsync always + AOF on, so toggling
      * appendfsync may enable or disable it. */
-    durabilityReset();
+    replyBlockingReset();
     return 1;
 }
 
 static int updateBioAofOffloadEnabled(const char **err) {
     UNUSED(err);
-    durabilityReset();
+    replyBlockingReset();
     return 1;
 }
 

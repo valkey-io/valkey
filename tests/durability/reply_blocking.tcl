@@ -12,7 +12,7 @@ foreach provider_mode {aof} {
         set server_overrides {appendonly yes appendfsync always bio-aof-offload-enabled yes}
     } else {
         # Durability is implied by appendonly + appendfsync always.
-        # We use DEBUG durability-provider-pause/resume to control blocking
+        # We use DEBUG reply-blocking-pause/resume to control blocking
         # instead of toggling appendfsync, which avoids the issue where the
         # provider reports as disabled when appendfsync != always.
         set server_overrides {appendonly yes appendfsync always bio-aof-offload-enabled yes}
@@ -46,7 +46,7 @@ foreach provider_mode {aof} {
                     }
                 } else {
                     # Pause the AOF provider so the next write will block
-                    $primary DEBUG durability-provider-pause aof
+                    $primary DEBUG reply-blocking-pause aof
                 }
             }
 
@@ -68,7 +68,7 @@ foreach provider_mode {aof} {
                     wait_replica_acked_ofs $primary $replica $replica_host $replica_port
                 } else {
                     # Resume the AOF provider so it reports real fsynced offsets
-                    $primary DEBUG durability-provider-resume aof
+                    $primary DEBUG reply-blocking-resume aof
                     # Issue a PING to force a beforeSleep cycle that fsyncs the AOF
                     $primary ping
                 }
@@ -776,7 +776,7 @@ foreach provider_mode {aof} {
 
                 # Resume the provider so subsequent tests aren't affected
                 # (disabling sync-replication unblocked the client but didn't resume the provider)
-                $primary DEBUG durability-provider-resume aof
+                $primary DEBUG reply-blocking-resume aof
 
                 assert_equal "OK" [$primary config set appendfsync always]
             }
@@ -1004,12 +1004,12 @@ foreach provider_mode {aof} {
             # ==================== Durability provider edge cases ====================
 
             test "($provider_mode) Pause unknown provider returns error" {
-                catch {$primary DEBUG durability-provider-pause nonexistent} err
+                catch {$primary DEBUG reply-blocking-pause nonexistent} err
                 assert_match "*No such durability provider*" $err
             }
 
             test "($provider_mode) Resume unknown provider returns error" {
-                catch {$primary DEBUG durability-provider-resume nonexistent} err
+                catch {$primary DEBUG reply-blocking-resume nonexistent} err
                 assert_match "*No such durability provider*" $err
             }
 
@@ -1017,8 +1017,8 @@ foreach provider_mode {aof} {
                 assert_equal "always" [lindex [$primary config get appendfsync] 1]
 
                 # Pause twice
-                $primary DEBUG durability-provider-pause aof
-                $primary DEBUG durability-provider-pause aof
+                $primary DEBUG reply-blocking-pause aof
+                $primary DEBUG reply-blocking-pause aof
 
                 # Write should still block
                 set rd [valkey_deferring_client -1]
@@ -1031,7 +1031,7 @@ foreach provider_mode {aof} {
                 assert_equal "" $early_reply
 
                 # Resume once should unblock
-                $primary DEBUG durability-provider-resume aof
+                $primary DEBUG reply-blocking-resume aof
                 $primary ping
 
                 assert_equal "OK" [$rd read]
@@ -1042,7 +1042,7 @@ foreach provider_mode {aof} {
                 assert_equal "always" [lindex [$primary config get appendfsync] 1]
 
                 # Resume when not paused should succeed without issue
-                assert_equal "OK" [$primary DEBUG durability-provider-resume aof]
+                assert_equal "OK" [$primary DEBUG reply-blocking-resume aof]
 
                 # Writes should still work normally
                 set rd [valkey_deferring_client -1]

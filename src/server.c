@@ -2338,9 +2338,9 @@ void initServerConfig(void) {
     server.aof_flush_sleep = 0;
     server.aof_last_fsync = time(NULL) * 1000;
     server.aof_cur_timestamp = 0;
-    atomic_store_explicit(&server.aof_io_flush_state, 0, memory_order_relaxed);
-    atomic_store_explicit(&server.aof_io_flush_errno, 0, memory_order_relaxed);
-    atomic_store_explicit(&server.aof_io_flush_size, 0, memory_order_relaxed);
+    atomic_store_explicit(&server.aof_bio_flush_state, 0, memory_order_relaxed);
+    atomic_store_explicit(&server.aof_bio_flush_errno, 0, memory_order_relaxed);
+    atomic_store_explicit(&server.aof_bio_flush_size, 0, memory_order_relaxed);
     atomic_store_explicit(&server.aof_bio_fsync_status, C_OK, memory_order_relaxed);
     server.bio_aof_offload_enabled = 0;
     server.aof_rewrite_time_last = -1;
@@ -3149,7 +3149,7 @@ void initServer(void) {
     /* Initialize the EVAL scripting component. */
     evalInit();
 
-    durabilityInit();
+    replyBlockingInit();
 
     applyWatchdogPeriod();
 
@@ -4989,7 +4989,7 @@ int finishShutdown(void) {
     moduleFireServerEvent(VALKEYMODULE_EVENT_SHUTDOWN, 0, NULL);
 
     /* Cleanup durability tracking resources. */
-    durabilityCleanup();
+    replyBlockingCleanup();
 
     /* Remove the pid file if possible and needed. */
     if (server.daemonize || server.pidfile) {

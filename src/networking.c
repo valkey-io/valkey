@@ -377,7 +377,7 @@ client *createClient(connection *conn) {
     c->io_last_written.buf = NULL;
     c->io_last_written.bufpos = 0;
     c->io_last_written.data_len = 0;
-    memset(&c->clientDurabilityInfo, 0, sizeof(c->clientDurabilityInfo));
+    memset(&c->reply_blocking_state, 0, sizeof(c->reply_blocking_state));
     durabilityClientInit(c);
 
     return c;
@@ -1758,13 +1758,13 @@ void copyReplicaOutputBuffer(client *dst, client *src) {
  * the socket. */
 int clientHasPendingReplies(client *c) {
     if (isClientReplyBufferLimited(c)) {
-        // Check if our first allowed reply boundary is in a position that comes
-        // after the current position that valkey has written up to in the COB.
-        const blockedResponse *n = listNodeValue(listFirst(c->clientDurabilityInfo.blocked_responses));
+        /* Check if our first allowed reply boundary is in a position that comes
+         * after the current position that valkey has written up to in the COB. */
+        const blockedResponse *n = listNodeValue(listFirst(c->reply_blocking_state.blocked_responses));
         if ((c->bufpos && n->disallowed_reply_block == NULL) ||
             (c->bufpos == 0 && n->disallowed_reply_block != NULL && listFirst(c->reply) == n->disallowed_reply_block)) {
-            // Both positions are pointing both at the initial 16KB buffer or the
-            // first reply block, compare the sentlen with the last allowed byte offset
+            /* Both positions are pointing both at the initial 16KB buffer or the
+             * first reply block, compare the sentlen with the last allowed byte offset */
             return c->io_last_written.bufpos < n->disallowed_byte_offset;
         }
     }

@@ -955,9 +955,9 @@ void stopAppendOnly(void) {
     server.aof_last_incr_size = 0;
     server.aof_last_incr_fsync_offset = 0;
     server.fsynced_reploff = -1;
-    atomic_store_explicit(&server.aof_io_flush_state, AOF_IO_FLUSH_IDLE, memory_order_relaxed);
-    atomic_store_explicit(&server.aof_io_flush_errno, 0, memory_order_relaxed);
-    atomic_store_explicit(&server.aof_io_flush_size, 0, memory_order_relaxed);
+    atomic_store_explicit(&server.aof_bio_flush_state, AOF_BIO_FLUSH_IDLE, memory_order_relaxed);
+    atomic_store_explicit(&server.aof_bio_flush_errno, 0, memory_order_relaxed);
+    atomic_store_explicit(&server.aof_bio_flush_size, 0, memory_order_relaxed);
     atomic_store_explicit(&server.fsynced_reploff_pending, 0, memory_order_relaxed);
     killAppendOnlyChild();
     sdsfree(server.aof_buf);
@@ -1008,9 +1008,9 @@ int startAppendOnly(void) {
         serverLog(LL_WARNING, "AOF reopen, just ignore the last error.");
         server.aof_last_write_status = C_OK;
     }
-    atomic_store_explicit(&server.aof_io_flush_state, AOF_IO_FLUSH_IDLE, memory_order_relaxed);
-    atomic_store_explicit(&server.aof_io_flush_errno, 0, memory_order_relaxed);
-    atomic_store_explicit(&server.aof_io_flush_size, 0, memory_order_relaxed);
+    atomic_store_explicit(&server.aof_bio_flush_state, AOF_BIO_FLUSH_IDLE, memory_order_relaxed);
+    atomic_store_explicit(&server.aof_bio_flush_errno, 0, memory_order_relaxed);
+    atomic_store_explicit(&server.aof_bio_flush_size, 0, memory_order_relaxed);
     return C_OK;
 }
 
@@ -1166,27 +1166,27 @@ ssize_t aofWrite(int fd, const char *buf, size_t len) {
 }
 
 int aofIOFlushInProgress(void) {
-    return atomic_load_explicit(&server.aof_io_flush_state, memory_order_acquire) == AOF_IO_FLUSH_PENDING;
+    return atomic_load_explicit(&server.aof_bio_flush_state, memory_order_acquire) == AOF_BIO_FLUSH_PENDING;
 }
 
 static void processAofBioFlushResult(void) {
-    int state = atomic_load_explicit(&server.aof_io_flush_state, memory_order_acquire);
-    if (state == AOF_IO_FLUSH_IDLE || state == AOF_IO_FLUSH_PENDING) return;
+    int state = atomic_load_explicit(&server.aof_bio_flush_state, memory_order_acquire);
+    if (state == AOF_BIO_FLUSH_IDLE || state == AOF_BIO_FLUSH_PENDING) return;
 
-    if (state == AOF_IO_FLUSH_DONE) {
-        off_t nwritten = atomic_load_explicit(&server.aof_io_flush_size, memory_order_relaxed);
+    if (state == AOF_BIO_FLUSH_DONE) {
+        off_t nwritten = atomic_load_explicit(&server.aof_bio_flush_size, memory_order_relaxed);
         server.aof_current_size += nwritten;
         server.aof_last_incr_size += nwritten;
         server.aof_last_incr_fsync_offset = server.aof_last_incr_size;
         server.aof_last_fsync = server.mstime;
-        atomic_store_explicit(&server.aof_io_flush_state, AOF_IO_FLUSH_IDLE, memory_order_release);
+        atomic_store_explicit(&server.aof_bio_flush_state, AOF_BIO_FLUSH_IDLE, memory_order_release);
         notifyDurabilityProgress();
         return;
     }
 
-    int err = atomic_load_explicit(&server.aof_io_flush_errno, memory_order_relaxed);
+    int err = atomic_load_explicit(&server.aof_bio_flush_errno, memory_order_relaxed);
     server.aof_last_write_errno = err;
-    atomic_store_explicit(&server.aof_io_flush_state, AOF_IO_FLUSH_IDLE, memory_order_release);
+    atomic_store_explicit(&server.aof_bio_flush_state, AOF_BIO_FLUSH_IDLE, memory_order_release);
 
     serverLog(LL_WARNING,
               "Can't persist AOF for fsync policy 'always': %s. Exiting...",
@@ -1208,15 +1208,15 @@ static int tryOffloadAofFlushToBio(void) {
         return C_ERR;
     }
 
-    if (atomic_load_explicit(&server.aof_io_flush_state, memory_order_acquire) != AOF_IO_FLUSH_IDLE) {
+    if (atomic_load_explicit(&server.aof_bio_flush_state, memory_order_acquire) != AOF_BIO_FLUSH_IDLE) {
         return C_ERR;
     }
 
-    atomic_store_explicit(&server.aof_io_flush_errno, 0, memory_order_relaxed);
-    atomic_store_explicit(&server.aof_io_flush_size, 0, memory_order_relaxed);
-    atomic_store_explicit(&server.aof_io_flush_state, AOF_IO_FLUSH_PENDING, memory_order_release);
+    atomic_store_explicit(&server.aof_bio_flush_errno, 0, memory_order_relaxed);
+    atomic_store_explicit(&server.aof_bio_flush_size, 0, memory_order_relaxed);
+    atomic_store_explicit(&server.aof_bio_flush_state, AOF_BIO_FLUSH_PENDING, memory_order_release);
 
-    bioCreateAofAlwaysFlushJob(server.aof_fd, server.aof_buf, server.primary_repl_offset);
+    bioCreateAofFsyncNotifyJob(server.aof_fd, server.aof_buf, server.primary_repl_offset);
     server.aof_buf = sdsempty();
     server.aof_flush_postponed_start = 0;
     return C_OK;
@@ -1249,7 +1249,7 @@ void flushAppendOnlyFile(int force) {
     processAofBioFlushResult();
     if (aofIOFlushInProgress()) {
         if (!force) return;
-        bioDrainWorker(BIO_AOF_ALWAYS_FLUSH);
+        bioDrainWorker(BIO_AOF_FSYNC);
         processAofBioFlushResult();
     }
 

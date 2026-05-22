@@ -202,7 +202,7 @@ int scriptPrepareForRun(scriptRunCtx *run_ctx,
             return C_ERR;
         }
 
-        // check if sync replication would want to stop the execution.
+        /* check if sync replication would want to stop the execution. */
         const char *pre_script_err = preScriptCmd(caller);
         if (pre_script_err != NULL) {
             addReplyError(caller, pre_script_err);

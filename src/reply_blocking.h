@@ -11,7 +11,6 @@
 #include "expire.h"
 #include "monotonic.h"
 #include "sds.h"
-#include "durability_provider.h"
 #include "uncommitted_keys.h"
 #include "durable_task.h"
 
@@ -49,14 +48,12 @@ typedef long long mstime_t;
 /* Indicate this type of notification is called inside of a durable task,
  * which is used by the durability feature to defer notifications. */
 #define NOTIFY_IN_DURABLE_TASK (1 << 30)
-/**
- * Durability container to house all the durability related fields.
- */
+/* Durability container to house all the durability related fields. */
 typedef struct durable_t {
-    /* Clients waiting for offset acknowledgement from durability providers */
+    /* Clients waiting for the durably-committed offset to advance */
     struct list *clients_waiting_ack;
 
-    /* Deferred tasks waiting for offset acknowledgement from durability providers */
+    /* Deferred tasks waiting for the durably-committed offset to advance */
     struct list *tasks_waiting_ack[DURABLE_TASK_TYPE_MAX];
 
     /* Pending lists of tasks waiting for durability ack. This list is populated
@@ -68,7 +65,7 @@ typedef struct durable_t {
      */
     struct list *pending_tasks_waiting_ack[DURABLE_TASK_TYPE_MAX];
 
-    /* Previously acknowledged replication offset by durability providers */
+    /* Previously acknowledged durably-committed replication offset */
     long long previous_acked_offset;
 
     /* Track the replication offset prior to executing a single command in call() */
@@ -113,11 +110,18 @@ typedef struct durable_t {
     /* Flag indicating a function write occurred inside a transaction, so the
      * blocking offset should be updated when the transaction completes. */
     bool processed_func_write_in_transaction;
+
+    /* When true (set via DEBUG reply-blocking-pause aof), the durably
+     * committed offset is frozen at aof_paused_offset to halt durability
+     * progress for testing. */
+    bool aof_paused;
+
+    /* Snapshot of the AOF-acked offset captured at pause time so that writes
+     * already acknowledged remain unblocked while new writes block. */
+    long long aof_paused_offset;
 } durable_t;
 
-/**
- * Define the type of command being blocked
- */
+/* Define the type of command being blocked */
 typedef enum {
     DURABLE_BLOCKED_CMD_OTHER = 0,
     DURABLE_BLOCKED_CMD_WRITE,
@@ -132,7 +136,7 @@ typedef struct blockedResponse {
     struct listNode *disallowed_reply_block;
     /* The boundary in the reply buffer where the blocked response starts. */
     size_t disallowed_byte_offset;
-    /* The replication offset to wait for acknowledgement from durability providers */
+    /* The replication offset to wait for the durably-committed offset to reach */
     long long primary_repl_offset;
 
     /* Enum to store the type of blocked command */
@@ -151,7 +155,7 @@ typedef struct preExecutionOffsetPosition {
     size_t byte_offset;
 } preExecutionOffsetPosition;
 
-typedef struct clientDurabilityInfo {
+typedef struct clientReplyBlockingState {
     /* Blocked client responses list for durability */
     struct list *blocked_responses;
 
@@ -172,21 +176,17 @@ typedef struct clientDurabilityInfo {
     long long module_cmd_blocking_offset;
 
     uint64_t durability_flags;
-} clientDurableInfo;
+} clientReplyBlockingState;
 
-/**
- * Init / Lifecycle
- */
-void durabilityInit(void);
-void durabilityCleanup(void);
-void durabilityReset(void);
+/* Init / Lifecycle */
+void replyBlockingInit(void);
+void replyBlockingCleanup(void);
+void replyBlockingReset(void);
 void durabilityClientInit(struct client *c);
 void durabilityClientReset(struct client *c);
 void durabilityClearPrimaryState(void);
 
-/**
- * Command processing hooks for offset and COB tracking
- */
+/* Command processing hooks for offset and COB tracking */
 void beforeCommandTrackReplOffset(client *c);
 void afterCommandTrackReplOffset(client *c);
 int preCommandExec(client *c);
@@ -194,23 +194,21 @@ char *preScriptCmd(client *c);
 void postCommandExec(client *c);
 void notifyDurabilityProgress(void);
 
-/**
- * Response blocking
- */
+/* Response blocking */
 void blockClientOnReplOffset(client *c, long long blockingReplOffset);
 void unblockResponsesWithAckOffset(const durable_t *durability, long long consensus_ack_offset);
 
-/**
- * Utils
- */
+/* Utils */
 int isPrimaryDurabilityEnabled(void);
 int isDurabilityEnabled(void);
+int isAofDurabilityEnabled(void);
+long long getDurablyCommittedOffset(void);
+void pauseAofDurability(void);
+void resumeAofDurability(void);
 bool isClientReplyBufferLimited(client *c);
 sds genDurabilityInfoString(sds info);
 
-/**
- * Function store dirty tracking (durability blocking for function store writes)
- */
+/* Function store dirty tracking (durability blocking for function store writes) */
 bool isFunctionRWCommand(struct client *c);
 bool isFunctionStoreRWCommand(struct client *c);
 bool isDurableFunctionStoreUncommitted(void);

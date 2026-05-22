@@ -10,12 +10,10 @@ typedef struct uncommittedKeyEntry {
     long long offset;
 } uncommittedKeyEntry;
 
-/**
- * Pending key reference used during multi-command blocks (MULTI/EXEC, Lua).
+/* Pending key reference used during multi-command blocks (MULTI/EXEC, Lua).
  * We mark keys dirty immediately but don't yet know the final replication
  * offset, so we keep a reference to update the offset after the transaction
- * completes.
- */
+ * completes. */
 typedef struct pendingUncommittedKey {
     robj *key;
     hashtable *uncommitted_keys;
@@ -94,10 +92,8 @@ unsigned long long getNumberOfUncommittedKeys(void) {
 
 /*================================= Key Tracking ============================= */
 
-/**
- * Mark a key as uncommitted at a particular replication offset.
- * If the key already exists in the hashtable, update its offset.
- */
+/* Mark a key as uncommitted at a particular replication offset.
+ * If the key already exists in the hashtable, update its offset. */
 static bool addUncommittedKey(const sds key, const long long offset, hashtable *uncommittedKeys) {
     uncommittedKeyEntry *entry = zmalloc(sizeof(*entry));
     entry->key = sdsdup(key);
@@ -118,10 +114,8 @@ static bool addUncommittedKey(const sds key, const long long offset, hashtable *
     return !was_placeholder;
 }
 
-/**
- * Retrieve the uncommitted replication offset for a given key, purge the given
- * key from uncommitted keys set if the replication offset has been committed.
- */
+/* Retrieve the uncommitted replication offset for a given key, purge the given
+ * key from uncommitted keys set if the replication offset has been committed. */
 long long durabilityPurgeAndGetUncommittedKeyOffset(const sds key, serverDb *db) {
     serverAssert(iAmPrimary());
     uncommittedKeyEntry *entry = NULL;
@@ -139,8 +133,7 @@ long long durabilityPurgeAndGetUncommittedKeyOffset(const sds key, serverDb *db)
     return key_offset;
 }
 
-/**
- * Handle a dirty key for a given client.
+/* Handle a dirty key for a given client.
  *
  * Keys are marked dirty immediately in db->uncommitted_keys.  For single
  * commands outside a transaction the real replication offset is known.
@@ -151,8 +144,7 @@ long long durabilityPurgeAndGetUncommittedKeyOffset(const sds key, serverDb *db)
  * update the offset once the transaction completes.
  *
  * Cleanup happens in drainCommittedKeys() which iterates the hashtable
- * and removes entries whose offset has been committed.
- */
+ * and removes entries whose offset has been committed. */
 void handleUncommittedKeyForClient(const client *c, robj *key, serverDb *db) {
     sds keystr = objectGetVal(key);
 
@@ -274,15 +266,13 @@ bool getTargetDbIdForCopyCommand(int argc, robj **argv, int selected_dbid, int *
 
 /*================================= Drain / Cleanup ========================== */
 
-/**
- * Remove committed entries from the per-DB uncommitted_keys hashtables.
+/* Remove committed entries from the per-DB uncommitted_keys hashtables.
  *
  * Iterates each database's uncommitted_keys hashtable with a safe iterator
  * and deletes entries whose offset has been durably committed.
  *
  * With appendfsync=always the uncommitted set stays small (bounded by keys
- * written between fsyncs), so the full-scan cost is smaller than the fsync.
- */
+ * written between fsyncs), so the full-scan cost is smaller than the fsync. */
 void drainCommittedKeys(long long committed_offset) {
     for (int i = 0; i < server.dbnum; i++) {
         serverDb *db = server.db[i];
@@ -307,17 +297,13 @@ void drainCommittedKeys(long long committed_offset) {
     }
 }
 
-/**
- * Initialize sync replication related fields for a database.
- */
+/* Initialize sync replication related fields for a database. */
 void durabilityInitDatabase(serverDb *db) {
     db->uncommitted_keys = hashtableCreate(&uncommittedKeysHashtableType);
     db->dirty_repl_offset = -1;
 }
 
-/**
- * Clear all uncommitted keys for each database.
- */
+/* Clear all uncommitted keys for each database. */
 void clearAllUncommittedKeys(void) {
     serverLog(LL_NOTICE, "Clearing all uncommitted keys for sync replication");
     /* Clear pending list first — entries hold raw pointers to db->uncommitted_keys
@@ -339,9 +325,7 @@ void clearAllUncommittedKeys(void) {
 
 /*================================= Access Validation ======================== */
 
-/**
- * Determine if there are uncommitted keys in the server.
- */
+/* Determine if there are uncommitted keys in the server. */
 int hasUncommittedKeys(void) {
     for (int i = 0; i < server.dbnum; i++) {
         if (server.db[i] && (hashtableSize(server.db[i]->uncommitted_keys) > 0))
@@ -370,11 +354,9 @@ void uncommittedKeysCleanupPending(void) {
     }
 }
 
-/**
- * After a transaction completes, update the placeholder offsets on keys
+/* After a transaction completes, update the placeholder offsets on keys
  * that were dirtied during the transaction to the real replication offset.
- * Cleanup will happen when drainCommittedKeys() iterates the hashtable.
- */
+ * Cleanup will happen when drainCommittedKeys() iterates the hashtable. */
 void processPendingUncommittedData(long long blocking_repl_offset) {
     if (listLength(pending_uncommitted_keys) > 0) {
         listIter li;

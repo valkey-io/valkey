@@ -419,6 +419,11 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
         catch {R 0 CLUSTER SETSLOT 609 TIMEOUT 100 MIGRATING $R1_id} e
         assert_equal $e "ERR Invalid CLUSTER SETSLOT action or number of arguments. Try CLUSTER HELP"
     }
+
+    test "CLUSTER SETSLOT MIGRATING/IMPORTING should not be allowed to target self" {
+        assert_error {ERR Target node is myself} {R 0 CLUSTER SETSLOT 609 MIGRATING [R 0 CLUSTER MYID]}
+        assert_error {ERR Target node is myself} {R 1 CLUSTER SETSLOT 609 IMPORTING [R 1 CLUSTER MYID]}
+    }
 }
 
 start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica-migration no cluster-node-timeout 1000} } {

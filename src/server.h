@@ -1377,6 +1377,7 @@ typedef struct client {
     unsigned long long net_output_bytes;          /* Total network output bytes sent to this client. */
     unsigned long long commands_processed;        /* Total count of commands this client executed. */
     unsigned long long net_output_bytes_curr_cmd; /* Total network output bytes sent to this client, by the current command. */
+    _Atomic(size_t) io_tracked_reply_len;         /* Total size of BULK_STR_REF replies tracked by I/O threads. */
     size_t buf_peak;                              /* Peak used size of buffer in last 5 sec interval. */
     int nwritten;                                 /* Number of bytes of the last write. */
     int nread;                                    /* Number of bytes of the last read. */
@@ -1853,6 +1854,7 @@ struct valkeyServer {
     int enable_module_cmd;                    /* Enable MODULE commands, see PROTECTED_ACTION_ALLOWED_* */
     int enable_debug_assert;                  /* Enable debug asserts */
     int debug_client_enforce_reply_list;      /* Force client to always use the reply list */
+    int debug_force_free_primary_async;       /* Force freeClient on primary to use async path */
     /* Reply construction copy avoidance */
     int min_io_threads_copy_avoid;           /* Minimum number of IO threads for copy avoidance in reply construction */
     int min_string_size_copy_avoid_threaded; /* Minimum bulk string size for copy avoidance in reply construction when IO threads enabled */
@@ -2790,6 +2792,24 @@ typedef struct {
 
 } hashTypeIterator;
 
+typedef struct scanOptions {
+    long count;      /* COUNT option. */
+    sds pat;         /* MATCH pattern. */
+    long long type;  /* TYPE filter. */
+    int patlen;      /* MATCH pattern length. */
+    int use_pattern; /* MATCH is active. */
+    int only_keys;   /* NOVALUES/NOSCORES option. */
+    int input_slot;  /* SLOT option, or -1. */
+    int match_slot;  /* MATCH hashtag slot, or -1. */
+} scanOptions;
+
+typedef struct clusterScanCtx {
+    int slot;
+    int final_slot;
+    bool advance_to_next_slot;
+    const char *fp;
+} clusterScanCtx;
+
 #include "stream.h" /* Stream data type header file. */
 
 #define OBJ_HASH_FIELD 1
@@ -3498,7 +3518,7 @@ struct serverMemOverhead *getMemoryOverheadData(void);
 void freeMemoryOverheadData(struct serverMemOverhead *mh);
 void checkChildrenDone(void);
 int setOOMScoreAdj(int process_class);
-void rejectCommandFormat(client *c, const char *fmt, ...);
+void rejectCommandFormat(client *c, int notify_modules, const char *fmt, ...);
 void *activeDefragAlloc(void *ptr);
 sds activeDefragSds(sds sdsptr);
 robj *activeDefragStringOb(robj *ob);
@@ -3760,7 +3780,9 @@ void discardTempDb(serverDb **tempDb);
 int selectDb(client *c, int id);
 void signalModifiedKey(client *c, serverDb *db, robj *key);
 void signalFlushedDb(int dbid, int async);
-void scanGenericCommand(client *c, robj *o, unsigned long long cursor, int slot, sds cursor_prefix, sds finished_cursor_prefix);
+int parseScanOptionsOrReply(client *c, robj *o, int start_idx, bool allow_slot, scanOptions *opts);
+void scanGenericCommand(client *c, robj *o, unsigned long long cursor);
+void scanGenericCommandWithOptions(client *c, robj *o, unsigned long long cursor, const scanOptions *opts, const clusterScanCtx *cluster_ctx);
 int parseScanCursorOrReply(client *c, sds buf, unsigned long long *cursor);
 int dbAsyncDelete(serverDb *db, robj *key);
 void emptyDbAsync(serverDb *db);
@@ -3877,6 +3899,8 @@ void blockedBeforeSleep(void);
 void addClientToTimeoutTable(client *c);
 void removeClientFromTimeoutTable(client *c);
 void handleBlockedClientsTimeout(void);
+void encodeTimeoutKey(client *c, uint64_t timeout, unsigned char *buf_out);
+void decodeTimeoutKey(unsigned char *buf, uint64_t *timeout_ptr, client **client_ptr);
 int clientsCronHandleTimeout(client *c, mstime_t now_ms);
 
 /* evict.c -- maxmemory handling and LRU eviction. */
@@ -3888,6 +3912,7 @@ int performEvictions(void);
 void startEvictionTimeProc(void);
 
 /* Keys hashing/comparison functions for dict.c and hashtable.c hash tables. */
+uint8_t *getConfigurableHashSeed(void);
 uint64_t dictSdsHash(const void *key);
 uint64_t dictSdsCaseHash(const void *key);
 uint64_t dictCStrHash(const void *key);

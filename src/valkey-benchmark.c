@@ -61,6 +61,7 @@
 #include "hdr_histogram.h"
 #include "cli_common.h"
 #include "mt19937-64.h"
+#include "valkey-benchmark-dataset.h"
 
 #define UNUSED(V) ((void)V)
 #define RANDPTR_INITIAL_SIZE 8
@@ -160,6 +161,14 @@ static struct config {
     atomic_uint_fast64_t last_time_ns;
     uint64_t time_per_token;
     uint64_t time_per_burst;
+    /* Dataset support */
+    sds dataset_file;
+    int max_documents;        /* Maximum documents to load from dataset */
+    dataset *current_dataset; /* Current loaded dataset */
+    /* Command template for dataset mode */
+    int template_argc;
+    sds *template_argv;
+    int has_field_placeholders;
 } config;
 
 /* Locations of the placeholders __rand_int__, __rand_1st__,
@@ -170,6 +179,9 @@ static struct placeholders {
     size_t *indices[PLACEHOLDER_COUNT]; /* pointer to indices for each placeholder */
     size_t *index_data;                 /* allocation holding all index data */
 } placeholders;
+
+/* Sequence keys for dataset command generation */
+static _Atomic uint64_t dataset_seq_key[PLACEHOLDER_COUNT] = {0};
 
 typedef struct _client {
     valkeyContext *context;
@@ -222,6 +234,19 @@ typedef struct serverConfig {
     sds appendonly;
 } serverConfig;
 
+/* Register a file event. For RDMA with AE_WRITABLE, invoke the handler once after
+ * registering: this fd is not POLLOUT-driven like TCP, so the loop may never deliver
+ * AE_WRITABLE without an explicit kick.
+ *
+ * Non-RDMA: same as aeCreateFileEvent. Read-side wakeups when libvalkey drains the CQ on
+ * the write path require libvalkey to notify the outer poll (valkey-io/libvalkey#301). */
+static inline void createFileEvent(aeEventLoop *eventLoop, int fd, int mask, aeFileProc *proc, void *clientData) {
+    aeCreateFileEvent(eventLoop, fd, mask, proc, clientData);
+    if (config.ct == VALKEY_CONN_RDMA && (mask & AE_WRITABLE)) {
+        proc(eventLoop, fd, clientData, mask);
+    }
+}
+
 /* Prototypes */
 static void writeHandler(aeEventLoop *el, int fd, void *privdata, int mask);
 static void createMissingClients(client c);
@@ -237,6 +262,7 @@ static int fetchClusterSlotsConfiguration(client c);
 static void updateClusterSlotsConfiguration(void);
 static long long showThroughput(struct aeEventLoop *eventLoop, long long id, void *clientData);
 int runFuzzerClients(const char *host, int port, int max_commands, int parallel_clients, int cluster_mode, int num_keys, cliSSLconfig *ssl_config, const char *log_level, int fuzz_flags);
+static int parseCommandTemplate(int argc, char **argv);
 
 /* Dict callbacks */
 static uint64_t dictSdsHash(const void *key);
@@ -558,13 +584,32 @@ static void resetClient(client c) {
     aeEventLoop *el = CLIENT_GET_EVENTLOOP(c);
     aeDeleteFileEvent(el, c->context->fd, AE_WRITABLE);
     aeDeleteFileEvent(el, c->context->fd, AE_READABLE);
-    if (config.ct == VALKEY_CONN_RDMA) {
-        writeHandler(el, c->context->fd, c, 0); /* RDMA context always writable, but it can't be invoked by AE_WRITABLE */
-    } else {
-        aeCreateFileEvent(el, c->context->fd, AE_WRITABLE, writeHandler, c);
-    }
+    createFileEvent(el, c->context->fd, AE_WRITABLE, writeHandler, c);
     c->written = 0;
     c->pending = config.pipeline * c->seqlen;
+}
+
+/* Scan buffer for {tag} placeholders and store positions */
+static void scanClusterTags(client c, char *buffer_start) {
+    if (!config.cluster_mode) return;
+
+    /* Preserve the total capacity across scans so we don't accidentally
+     * shrink the allocation when staglen is reset to zero. */
+    size_t total_cap = c->staglen + c->stagfree;
+    c->staglen = 0;
+    c->stagfree = total_cap;
+    char *p = buffer_start;
+    while ((p = strstr(p, "{tag}")) != NULL) {
+        if (c->stagfree == 0) {
+            size_t new_size = total_cap ? total_cap * 2 : RANDPTR_INITIAL_SIZE;
+            c->stagptr = zrealloc(c->stagptr, new_size * sizeof(char *));
+            total_cap = new_size;
+            c->stagfree = new_size - c->staglen;
+        }
+        c->stagptr[c->staglen++] = p;
+        c->stagfree--;
+        p += 5;
+    }
 }
 
 static void setClusterKeyHashTag(client c) {
@@ -864,8 +909,33 @@ static void writeHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
             return;
         }
 
-        /* Really initialize: replace keys and set start time. */
-        if (config.replace_placeholders) replacePlaceholders(c->obuf + c->prefixlen, config.pipeline);
+        /* Dataset field access mode - completely independent command generation */
+        if (config.has_field_placeholders && config.current_dataset && config.current_dataset->record_count > 0) {
+            static _Atomic uint64_t record_counter = 0;
+
+            /* Generate complete pipeline commands for dataset placeholders */
+            sdssetlen(c->obuf, c->prefixlen);
+            for (int p = 0; p < config.pipeline; p++) {
+                uint64_t record_index = atomic_fetch_add_explicit(&record_counter, 1, memory_order_relaxed) % config.current_dataset->record_count;
+                sds complete_cmd = datasetGenerateCommand(config.current_dataset, record_index,
+                                                          config.template_argv, config.template_argc,
+                                                          dataset_seq_key, config.replace_placeholders,
+                                                          config.keyspacelen, config.sequential_replacement);
+                c->obuf = sdscatlen(c->obuf, complete_cmd, sdslen(complete_cmd));
+                sdsfree(complete_cmd);
+            }
+
+            /* Scan generated commands for {tag} in cluster mode */
+            if (config.cluster_mode && c->stagptr) {
+                scanClusterTags(c, c->obuf + c->prefixlen);
+            }
+        } else {
+            /* Standard mode */
+            if (config.replace_placeholders) {
+                replacePlaceholders(c->obuf + c->prefixlen, config.pipeline);
+            }
+        }
+
         if (config.cluster_mode && c->staglen > 0) setClusterKeyHashTag(c);
         c->slots_last_update = atomic_load_explicit(&config.slots_last_update, memory_order_relaxed);
         c->start = ustime();
@@ -890,7 +960,7 @@ static void writeHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
                 }
             } else {
                 aeDeleteFileEvent(el, c->context->fd, AE_WRITABLE);
-                aeCreateFileEvent(el, c->context->fd, AE_READABLE, readHandler, c);
+                createFileEvent(el, c->context->fd, AE_READABLE, readHandler, c);
                 return;
             }
         }
@@ -1048,20 +1118,9 @@ static client createClient(char *cmd, int len, int seqlen, client from, int thre
                 c->stagptr[j] += c->prefixlen - from->prefixlen;
             }
         } else {
-            char *p = c->obuf;
-
-            c->staglen = 0;
             c->stagfree = RANDPTR_INITIAL_SIZE;
             c->stagptr = zmalloc(sizeof(char *) * c->stagfree);
-            while ((p = strstr(p, "{tag}")) != NULL) {
-                if (c->stagfree == 0) {
-                    c->stagptr = zrealloc(c->stagptr, sizeof(char *) * c->staglen * 2);
-                    c->stagfree += c->staglen;
-                }
-                c->stagptr[c->staglen++] = p;
-                c->stagfree--;
-                p += 5; /* 5 is strlen("{tag}"). */
-            }
+            scanClusterTags(c, c->obuf);
         }
     }
     aeEventLoop *el = NULL;
@@ -1072,9 +1131,7 @@ static client createClient(char *cmd, int len, int seqlen, client from, int thre
         el = thread->el;
     }
     if (config.idlemode == 0) {
-        if (config.ct != VALKEY_CONN_RDMA) {
-            aeCreateFileEvent(el, c->context->fd, AE_WRITABLE, writeHandler, c);
-        }
+        createFileEvent(el, c->context->fd, AE_WRITABLE, writeHandler, c);
     } else
         /* In idle mode, clients still need to register readHandler for catching errors */
         aeCreateFileEvent(el, c->context->fd, AE_READABLE, readHandler, c);
@@ -1237,20 +1294,6 @@ static void startBenchmarkThreads(void) {
     for (i = 0; i < config.num_threads; i++) pthread_join(config.threads[i]->thread, NULL);
 }
 
-#ifdef USE_RDMA
-static void issueFirstRequestForClients(aeEventLoop *el, int this_thread, int nt) {
-    listNode *ln = config.clients->head;
-    int count = 0;
-    while (ln) {
-        if (count++ % nt == this_thread) {
-            client c = ln->value;
-            writeHandler(el, c->context->fd, c, 0);
-        }
-        ln = ln->next;
-    }
-}
-#endif
-
 /* Benchmark a sequence of commands. The cmd is RESP encoded of length len and
  * seqlen is the number of commands included in cmd. */
 static void benchmarkSequence(const char *title, char *cmd, int len, int seqlen) {
@@ -1293,11 +1336,6 @@ static void benchmarkSequence(const char *title, char *cmd, int len, int seqlen)
 
     config.start = mstime();
     if (!config.num_threads) {
-#ifdef USE_RDMA
-        if (config.idlemode == 0 && config.ct == VALKEY_CONN_RDMA) {
-            issueFirstRequestForClients(config.el, 0, 1);
-        }
-#endif
         aeMain(config.el);
     } else
         startBenchmarkThreads();
@@ -1345,11 +1383,6 @@ static void freeBenchmarkThreads(void) {
 
 static void *execBenchmarkThread(void *ptr) {
     benchmarkThread *thread = (benchmarkThread *)ptr;
-#ifdef USE_RDMA
-    if (config.idlemode == 0 && config.ct == VALKEY_CONN_RDMA) {
-        issueFirstRequestForClients(thread->el, thread->index, config.num_threads);
-    }
-#endif
     aeMain(thread->el);
     return NULL;
 }
@@ -1376,10 +1409,7 @@ static clusterNode *createClusterNode(char *ip, int port) {
 static void freeClusterNode(clusterNode *node) {
     if (node->name) sdsfree(node->name);
     if (node->replicate) sdsfree(node->replicate);
-    /* If the node is not the reference node, that uses the address from
-     * config.conn_info.hostip and config.conn_info.hostport, then the node ip has been
-     * allocated by fetchClusterConfiguration, so it must be freed. */
-    if (node->ip && strcmp(node->ip, config.conn_info.hostip) != 0) sdsfree(node->ip);
+    if (node->ip) sdsfree(node->ip);
     if (node->server_config != NULL) freeServerConfig(node->server_config);
     zfree(node->slots);
     zfree(node);
@@ -1450,9 +1480,11 @@ static int fetchClusterConfiguration(void) {
             clusterNode *node = NULL;
             dictEntry *entry = dictFind(nodes, name);
             if (entry == NULL) {
-                node = createClusterNode(sdsnew(ip), port);
+                node = createClusterNode(ip, port);
                 if (node == NULL) {
                     success = 0;
+                    sdsfree(ip);
+                    sdsfree(name);
                     goto cleanup;
                 } else {
                     node->name = name;
@@ -1460,6 +1492,8 @@ static int fetchClusterConfiguration(void) {
                 }
             } else {
                 node = dictGetVal(entry);
+                sdsfree(ip);
+                sdsfree(name);
             }
             if (slot_start == slot_end) {
                 node->slots[node->slots_count++] = slot_start;
@@ -1611,6 +1645,55 @@ static void updateClusterSlotsConfiguration(void) {
     atomic_fetch_add_explicit(&config.slots_last_update, 1, memory_order_relaxed);
     pthread_mutex_unlock(&config.is_updating_slots_mutex);
 }
+
+/* Free dataset memory */
+static void cleanupDataset(void) {
+    if (config.current_dataset) {
+        datasetFree(config.current_dataset);
+        config.current_dataset = NULL;
+    }
+}
+
+/* Add RESP command to sequence with repeat count */
+static void addRespCommandToSequence(sds *sds_args, size_t *argvlen, int start, int end, int repeat, sds *cmd_seq, int *seq_len) {
+    char *cmd = NULL;
+    int len = valkeyFormatCommandArgv(&cmd, end - start, (const char **)sds_args + start, argvlen + start);
+    for (int j = 0; j < repeat; j++) {
+        *cmd_seq = sdscatlen(*cmd_seq, cmd, len);
+    }
+    *seq_len += repeat;
+    free(cmd);
+}
+
+/* Parse and setup command template for dataset field validation */
+static int parseCommandTemplate(int argc, char **argv) {
+    sds *sds_args = getSdsArrayFromArgv(argc, argv, 0);
+    if (!sds_args) {
+        fprintf(stderr, "Invalid quoted string\n");
+        return 0;
+    }
+
+    /* Detect field placeholders */
+    config.has_field_placeholders = 0;
+    for (int i = 0; i < argc; i++) {
+        if (strstr(sds_args[i], FIELD_PREFIX)) {
+            config.has_field_placeholders = 1;
+            break;
+        }
+    }
+
+    if (config.has_field_placeholders) {
+        config.template_argc = argc;
+        config.template_argv = zmalloc(argc * sizeof(sds));
+        for (int i = 0; i < argc; i++) {
+            config.template_argv[i] = sdsdup(sds_args[i]);
+        }
+    }
+
+    sdsfreesplitres(sds_args, argc);
+    return 1;
+}
+
 
 /* Generate random data for the benchmark. See #7196. */
 static void genBenchmarkRandomData(char *data, int count) {
@@ -1785,6 +1868,13 @@ int parseOptions(int argc, char **argv) {
             config.num_functions = atoi(argv[++i]);
         } else if (!strcmp(argv[i], "--num-keys-in-fcall")) {
             config.num_keys_in_fcall = atoi(argv[++i]);
+        } else if (!strcmp(argv[i], "--dataset")) {
+            if (lastarg) goto invalid;
+            config.dataset_file = sdsnew(argv[++i]);
+        } else if (!strcmp(argv[i], "--maxdocs")) {
+            if (lastarg) goto invalid;
+            config.max_documents = atoi(argv[++i]);
+            if (config.max_documents <= 0) config.max_documents = -1;
         } else if (!strcmp(argv[i], "--help")) {
             exit_status = 0;
             goto usage;
@@ -1915,6 +2005,8 @@ usage:
         "__rand_1st__        Like __rand_int__ but multiple occurrences will have the same\n"
         "                    value. __rand_2nd__ through __rand_9th__ are also available.\n"
         " __data__           Replaced with data of the size specified by the -d option.\n"
+        " __field:name__     Replaced with data from the specified field/column in the\n"
+        "                    dataset. Requires --dataset option.\n"
         " {tag}              Replaced with a tag that routes the command to each node in\n"
         "                    a cluster. Include this in key names when running in cluster\n"
         "                    mode.\n"
@@ -2000,7 +2092,11 @@ usage:
         "                    loaded when running the 'function_load' test. (default 10).\n"
         " --num-keys-in-fcall <num>\n"
         "                    Sets the number of keys passed to FCALL command when running\n"
-        "                    the 'fcall' test. (default 1)\n",
+        "                    the 'fcall' test. (default 1)\n"
+        " --dataset <file>   Path to CSV/TSV dataset file for field placeholder replacement.\n"
+        "                    All fields auto-detected with natural content lengths.\n"
+        " --maxdocs <num>    Maximum number of documents to load from dataset file.\n"
+        "                    Default: unlimited.\n",
         tls_usage,
         rdma_usage,
         " --mptcp            Enable an MPTCP connection.\n"
@@ -2218,12 +2314,54 @@ int main(int argc, char **argv) {
     config.num_functions = 10;
     config.num_keys_in_fcall = 1;
     config.resp3 = 0;
+    config.dataset_file = NULL;
+    config.max_documents = -1; /* -1 = unlimited */
+    config.current_dataset = NULL;
+    config.template_argc = 0;
+    config.template_argv = NULL;
+    config.has_field_placeholders = 0;
     resetPlaceholders();
 
     i = parseOptions(argc, argv);
     argc -= i;
     argv += i;
 
+    /* Setup dataset if specified */
+    if (config.dataset_file) {
+        if (argc == 0) {
+            fprintf(stderr, "Error: Dataset mode requires a command with field placeholders\n");
+            fprintf(stderr, "Example: SET doc:__rand_int__ \"__field:content__\"\n");
+            exit(1);
+        }
+
+        /* Parse command template and setup field placeholder detection */
+        if (!parseCommandTemplate(argc, argv)) {
+            exit(1);
+        }
+
+        /* Dataset mode requires at least one field placeholder in the command
+         * template. Without it, the dataset would be initialized and reported
+         * but never used for command generation. */
+        if (!config.has_field_placeholders) {
+            fprintf(stderr,
+                    "Error: Dataset mode requires at least one field placeholder\n");
+            fprintf(stderr,
+                    "Example: SET doc:__rand_int__ \"__field:content__\"\n");
+            exit(1);
+        }
+
+        /* Initialize dataset - single call does everything atomically */
+        int verbose = !config.csv && !config.quiet;
+        config.current_dataset = datasetInit(config.dataset_file,
+                                             config.max_documents,
+                                             config.has_field_placeholders,
+                                             config.template_argv, config.template_argc,
+                                             verbose);
+        if (!config.current_dataset) {
+            fprintf(stderr, "Failed to initialize dataset\n");
+            exit(1);
+        }
+    }
     /* Set default for requests if not specified */
     if (config.requests < 0) config.requests = 100000;
 
@@ -2382,18 +2520,15 @@ int main(int argc, char **argv) {
             } else if (i == argc || strcmp(";", sds_args[i]) == 0) {
                 cmd = NULL;
                 if (i == start) continue;
-                /* End of command. RESP-encode and append to sequence. */
-                len = valkeyFormatCommandArgv(&cmd, i - start,
-                                              (const char **)sds_args + start,
-                                              argvlen + start);
-                for (int j = 0; j < repeat; j++) {
-                    cmd_seq = sdscatlen(cmd_seq, cmd, len);
-                }
-                seq_len += repeat;
-                free(cmd);
+
+                addRespCommandToSequence(sds_args, argvlen, start, i, repeat, &cmd_seq, &seq_len);
                 start = i + 1;
                 repeat = 1;
             } else if (strstr(sds_args[i], "__data__")) {
+                if (config.current_dataset) {
+                    fprintf(stderr, "Error: __data__ placeholders cannot be used with --dataset option\n");
+                    exit(1);
+                }
                 /* Replace data placeholders with data of length given by -d. */
                 int num_parts;
                 sds *parts = sdssplitlen(sds_args[i], sdslen(sds_args[i]),
@@ -2412,6 +2547,7 @@ int main(int argc, char **argv) {
                 sds_args[i] = newarg;
                 argvlen[i] = sdslen(sds_args[i]);
             }
+            /* NOTE: Field placeholder processing is handled above in the command-level loop to ensure row consistency */
         }
         len = sdslen(cmd_seq);
         /* adjust the datasize to the parsed command */
@@ -2632,6 +2768,15 @@ int main(int argc, char **argv) {
     freeCliConnInfo(config.conn_info);
     if (config.server_config != NULL) freeServerConfig(config.server_config);
     resetPlaceholders();
+    cleanupDataset();
+
+    /* Clean up command template */
+    if (config.template_argv) {
+        for (int i = 0; i < config.template_argc; i++) {
+            sdsfree(config.template_argv[i]);
+        }
+        zfree(config.template_argv);
+    }
 
     return 0;
 }

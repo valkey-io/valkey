@@ -680,8 +680,8 @@ TEST_F(HashtableTest, iterator) {
 
 TEST_F(HashtableTest, safe_iterator) {
     size_t count = 1000;
-    uint8_t *entry_counts = (uint8_t *)malloc(count * 2);
-    memset(entry_counts, 0, count * 2);
+    uint8_t *entry_counts = (uint8_t *)malloc(count);
+    memset(entry_counts, 0, count);
 
     /* A set of pointers into the uint8_t array. */
     hashtableType type = {};
@@ -692,7 +692,7 @@ TEST_F(HashtableTest, safe_iterator) {
         ASSERT_TRUE(hashtableAdd(ht, entry_counts + j));
     }
 
-    /* Iterate */
+    /* Iterate with deletes (the supported safe iterator contract) */
     size_t num_returned = 0;
     hashtableIterator iter;
     void *next;
@@ -702,33 +702,24 @@ TEST_F(HashtableTest, safe_iterator) {
         size_t index = entry - entry_counts;
         num_returned++;
         ASSERT_GE(entry, entry_counts);
-        ASSERT_LT(entry, entry_counts + count * 2);
+        ASSERT_LT(entry, entry_counts + count);
         /* increment entry at this position as a counter */
         (*entry)++;
+        /* Delete every 4th entry after returning it */
         if (index % 4 == 0) {
             ASSERT_TRUE(hashtableDelete(ht, entry));
-        }
-        /* Add new item each time we see one of the original items */
-        if (index < count) {
-            ASSERT_TRUE(hashtableAdd(ht, entry + count));
         }
     }
     hashtableCleanupIterator(&iter);
 
-    /* Check that all entries present during the whole iteration were returned
-     * exactly once. (Some are deleted after being returned.) */
-    ASSERT_GE(num_returned, count);
+    /* All entries must be returned exactly once */
+    ASSERT_EQ(num_returned, count);
     for (size_t j = 0; j < count; j++) {
         ASSERT_EQ(entry_counts[j], 1u) << "Entry " << j << " returned " << (int)entry_counts[j] << " times";
     }
-    /* Check that entries inserted during the iteration were returned at most
-     * once. */
-    unsigned long num_optional_returned = 0;
-    for (size_t j = count; j < count * 2; j++) {
-        ASSERT_LE(entry_counts[j], 1u);
-        num_optional_returned += entry_counts[j];
-    }
-    printf("Safe iterator returned %lu of the %zu entries inserted while iterating.\n", num_optional_returned, count);
+
+    /* Verify correct number of entries remain */
+    ASSERT_EQ(hashtableSize(ht), count - count / 4);
 
     hashtableRelease(ht);
     free(entry_counts);
@@ -1298,5 +1289,93 @@ TEST_F(HashtableTest, hashtable_retarget_iterator) {
 
     ASSERT_FALSE(hashtableNext(&iter, &entry));
 
+    hashtableCleanupIterator(&iter);
+}
+
+TEST_F(HashtableTest, iterator_next_after_exhaustion) {
+    hashtableType type = {};
+    hashtable *ht = hashtableCreate(&type);
+
+    for (int i = 0; i < 100; i++) {
+        ASSERT_TRUE(hashtableAdd(ht, (void *)(long)i));
+    }
+
+    /* Exhaust the iterator. */
+    hashtableIterator iter;
+    void *entry;
+    hashtableInitIterator(&iter, ht, 0);
+
+    size_t count = 0;
+    while (hashtableNext(&iter, &entry)) count++;
+    ASSERT_EQ(count, 100u);
+
+    /* Repeated calls after exhaustion should return false. */
+    ASSERT_FALSE(hashtableNext(&iter, &entry));
+    ASSERT_FALSE(hashtableNext(&iter, &entry));
+
+    /* Cleanup should still be safe (no-op). */
+    hashtableCleanupIterator(&iter);
+    hashtableRelease(ht);
+}
+
+TEST_F(HashtableTest, safe_iterator_cleanup_on_exhaustion) {
+    hashtableType type = {};
+    hashtable *ht = hashtableCreate(&type);
+
+    /* Add entries until rehashing starts so we can observe pause/resume. */
+    long j = 0;
+    while (!hashtableIsRehashing(ht)) {
+        j++;
+        ASSERT_TRUE(hashtableAdd(ht, (void *)j));
+    }
+
+    hashtableIterator iter;
+    void *entry;
+    hashtableInitIterator(&iter, ht, HASHTABLE_ITER_SAFE);
+
+    /* First call pauses rehashing. */
+    ASSERT_TRUE(hashtableNext(&iter, &entry));
+    ASSERT_TRUE(hashtableIsRehashingPaused(ht));
+
+    /* Exhaust the iterator. */
+    while (hashtableNext(&iter, &entry)) {
+    }
+
+    /* Rehashing should already be resumed by the exhaustion path,
+     * before the caller's explicit cleanup call. */
+    ASSERT_FALSE(hashtableIsRehashingPaused(ht));
+
+    /* Repeated calls should return false safely. */
+    ASSERT_FALSE(hashtableNext(&iter, &entry));
+
+    /* Cleanup is a no-op but must not crash. */
+    hashtableCleanupIterator(&iter);
+    hashtableRelease(ht);
+}
+
+TEST_F(HashtableTest, safe_iterator_release_before_cleanup) {
+    hashtableType type = {};
+    hashtable *ht = hashtableCreate(&type);
+
+    /* Add entries until rehashing starts. */
+    long j = 0;
+    while (!hashtableIsRehashing(ht)) {
+        j++;
+        ASSERT_TRUE(hashtableAdd(ht, (void *)j));
+    }
+
+    hashtableIterator iter;
+    void *entry;
+    hashtableInitIterator(&iter, ht, HASHTABLE_ITER_SAFE);
+
+    /* Exhaust the iterator. */
+    while (hashtableNext(&iter, &entry)) {
+    }
+
+    /* Release the hashtable before calling cleanup. The iterator was already
+     * untracked by exhaustion, so this should not access freed memory. */
+    hashtableRelease(ht);
+
+    /* Cleanup should be a no-op (hashtable == NULL). */
     hashtableCleanupIterator(&iter);
 }

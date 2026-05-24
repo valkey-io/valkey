@@ -1284,12 +1284,6 @@ typedef struct parsedCommand {
     size_t argv_len_sum;
     unsigned long long input_bytes;
     struct serverCommand *cmd;
-    size_t qb_end_pos; /* querybuf position right after this command (snapshot
-                        * of c->qb_pos taken when the parser finished parsing
-                        * this command). When this command is popped from the
-                        * queue, this value is copied into client->qb_applied
-                        * so commandProcessed() can update reploff precisely.
-                        * Set to 0 if parsing wasn't completed. */
 } parsedCommand;
 
 /* Queue of parsed commands. */
@@ -1318,12 +1312,10 @@ typedef struct client {
     /* Input buffer and command parsing fields */
     sds querybuf;        /* Buffer we use to accumulate client queries. */
     size_t qb_pos;       /* The position we have read in querybuf. */
-    size_t qb_applied;   /* Snapshot of qb_pos taken right after the *current*
-                          * command was parsed. qb_pos may run ahead due to
-                          * multi-command parsing, so commandProcessed() uses
-                          * qb_applied (only for replicated clients) to advance
-                          * reploff by exactly this command's bytes. Updated by
-                          * the parsers and by consumeCommandQueue(). */
+    size_t qb_applied;   /* Right boundary of the *current* command in querybuf.
+                          * qb_pos may run ahead due to multi-command parsing, so
+                          * we use qb_applied (replicated clients only) to advance
+                          * reploff by exactly this command's bytes. */
     robj **argv;         /* Arguments of current command. */
     int argc;            /* Num of arguments of current command. */
     int argv_len;        /* Size of argv array (may be more than argc) */

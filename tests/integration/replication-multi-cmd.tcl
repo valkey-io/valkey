@@ -1,7 +1,8 @@
 # Tests for multi-command parsing on the replication stream.
 # Verifies that pipelined commands replicated to a replica are parsed in
-# batches into c->cmd_queue while keeping per-command qb_end_pos tracking,
-# so the replication offset stays exact and chained replication converges.
+# batches into c->cmd_queue while keeping per-command qb_applied tracking
+# (advanced by parsedCommand.input_bytes), so the replication offset stays
+# exact and chained replication converges.
 
 # Assert primary and replica converge: same digest, dbsize, reploff.
 proc assert_primary_replica_consistent {primary replica} {
@@ -61,6 +62,31 @@ start_server {tags {"repl external:skip"}} {
             for {set i 0} {$i < 100} {incr i} {
                 $rd read
             }
+            assert_primary_replica_consistent $primary $replica
+            $rd close
+        }
+
+        test {Multi-command parsing: pipeline survives PSYNC reconnect} {
+            set rd [valkey_deferring_client -1]
+            for {set i 0} {$i < 200} {incr i} {
+                $rd set kx$i vx$i
+            }
+            for {set i 0} {$i < 200} {incr i} {
+                $rd read
+            }
+
+            # Force replica to drop the primary connection.
+            $replica client kill type primary
+            wait_for_sync $replica
+
+            # Push another batch of pipelined writes after the reconnect.
+            for {set i 0} {$i < 200} {incr i} {
+                $rd set ky$i vy$i
+            }
+            for {set i 0} {$i < 200} {incr i} {
+                $rd read
+            }
+
             assert_primary_replica_consistent $primary $replica
             $rd close
         }
@@ -128,6 +154,58 @@ start_server {tags {"repl external:skip"}} {
                 for {set i 0} {$i < 100} {incr i} {
                     $rd read
                 }
+                assert_primary_replica_consistent $primary $replica
+                assert_primary_replica_consistent $replica $subreplica
+                $rd close
+            }
+
+            test {Chained replication: pipeline survives PSYNC reconnect} {
+                set rd [valkey_deferring_client -2]
+                for {set i 0} {$i < 200} {incr i} {
+                    $rd set kx$i vx$i
+                }
+                for {set i 0} {$i < 200} {incr i} {
+                    $rd read
+                }
+
+                # Force replica to drop the primary connection.
+                $replica client kill type primary
+                wait_for_sync $replica
+
+                # Push another batch of pipelined writes after the reconnect.
+                for {set i 0} {$i < 200} {incr i} {
+                    $rd set ky$i vy$i
+                }
+                for {set i 0} {$i < 200} {incr i} {
+                    $rd read
+                }
+
+                assert_primary_replica_consistent $primary $replica
+                assert_primary_replica_consistent $replica $subreplica
+                $rd close
+            }
+
+            test {Chained replication: pipeline survives subreplica<-replica reconnect} {
+                set rd [valkey_deferring_client -2]
+                for {set i 0} {$i < 200} {incr i} {
+                    $rd set kp$i vp$i
+                }
+                for {set i 0} {$i < 200} {incr i} {
+                    $rd read
+                }
+
+                # Force replica to drop the primary connection.
+                $subreplica client kill type primary
+                wait_for_sync $subreplica
+
+                # Push another batch of pipelined writes after the reconnect.
+                for {set i 0} {$i < 200} {incr i} {
+                    $rd set kq$i vq$i
+                }
+                for {set i 0} {$i < 200} {incr i} {
+                    $rd read
+                }
+
                 assert_primary_replica_consistent $primary $replica
                 assert_primary_replica_consistent $replica $subreplica
                 $rd close

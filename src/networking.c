@@ -2245,6 +2245,7 @@ void resetSharedQueryBuf(client *c) {
     c->querybuf = NULL;
     sdsclear(thread_shared_qb);
     c->qb_pos = 0;
+    c->qb_applied = 0;
 }
 
 /* Trims the client query buffer to the current position. */
@@ -2262,6 +2263,7 @@ void trimClientQueryBuffer(client *c) {
     if (c->qb_pos > 0) {
         sdsrange(c->querybuf, c->qb_pos, -1);
         c->qb_pos = 0;
+        c->qb_applied = 0;
     }
 }
 
@@ -2292,19 +2294,14 @@ void beforeNextClient(client *c) {
         if (c->repl_data->repl_applied) {
             sdsrange(c->querybuf, c->repl_data->repl_applied, -1);
             c->qb_pos -= c->repl_data->repl_applied;
-            /* Shift qb_end_pos of pending parsed commands (recorded against
-             * the un-trimmed querybuf) so commandProcessed() stays consistent. */
-            cmdQueue *queue = &c->cmd_queue;
-            for (uint16_t i = queue->off; i < queue->len; i++) {
-                /* Skip entries with qb_end_pos == 0 (parsing not completed) */
-                if (queue->cmds[i].qb_end_pos == 0) continue;
-
-                queue->cmds[i].qb_end_pos -= c->repl_data->repl_applied;
-            }
+            /* qb_applied is an absolute offset, shift it together with the trimmed
+             * querybuf. commandProcessed() advances repl_applied to qb_applied after
+             * each command, so qb_applied >= repl_applied should always true here. */
+            serverAssert(c->qb_applied >= (size_t)c->repl_data->repl_applied);
+            c->qb_applied -= c->repl_data->repl_applied;
             c->repl_data->repl_applied = 0;
         }
     } else {
-        /* Non-replicated clients don't read qb_applied, so no shift needed. */
         trimClientQueryBuffer(c);
     }
     /* Handle async frees */
@@ -3538,7 +3535,9 @@ void parseMultibulkBuffer(client *c) {
                               &c->argv_len_sum, &c->net_input_bytes_curr_cmd);
     c->read_flags |= flag;
 
-    /* Record qb_pos so commandProcessed() can update reploff precisely. */
+    /* Record qb_pos for commandProcessed(). Written unconditionally because a
+     * client may become replicated mid-command (e.g. CLUSTER SYNCSLOTS ESTABLISH
+     * installs slot_migration_job inside its own handler). */
     if (c->read_flags & READ_FLAGS_PARSING_COMPLETED) c->qb_applied = c->qb_pos;
 
     if (c->read_flags & READ_FLAGS_AUTH_REQUIRED) {
@@ -3570,8 +3569,6 @@ void parseMultibulkBuffer(client *c) {
         flag = parseMultibulk(c, &p->argc, &p->argv, &p->argv_len,
                               &p->argv_len_sum, &p->input_bytes);
         p->read_flags = flag;
-        /* Record qb_pos so commandProcessed() can update reploff precisely. */
-        if (p->read_flags & READ_FLAGS_PARSING_COMPLETED) p->qb_end_pos = c->qb_pos;
         p->slot = -1;
     }
 }
@@ -3737,6 +3734,7 @@ static int parseMultibulk(client *c,
                     }
                     sdsrange(c->querybuf, c->qb_pos, -1);
                     c->qb_pos = 0;
+                    c->qb_applied = 0;
                     /* Hint the sds library about the amount of bytes this string is
                      * going to contain. */
                     c->querybuf = sdsMakeRoomForNonGreedy(c->querybuf, ll + 2 - sdslen(c->querybuf));
@@ -4002,8 +4000,7 @@ static bool consumeCommandQueue(client *c) {
     c->net_input_bytes_curr_cmd = p->input_bytes;
     c->parsed_cmd = p->cmd;
     c->slot = p->slot;
-    /* Restore qb_pos snapshot so commandProcessed() can update reploff precisely. */
-    c->qb_applied = p->qb_end_pos;
+    c->qb_applied += p->input_bytes;
     if (queue->off == queue->len) {
         /* The queue is empty. Don't free it here, because if parsing is done in
          * I/O threads, we want to free it in I/O threads too, to avoid

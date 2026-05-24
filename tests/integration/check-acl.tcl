@@ -77,6 +77,12 @@ tags {"check-acl external:skip logreqres:skip"} {
         assert_match "*ACL file is valid*" $result
     }
 
+    test {check-acl: TAB after user keyword is accepted} {
+        set path [write_acl_file "user\talice on >pass ~* +@all\n"]
+        set result [exec $::VALKEY_CHECK_ACL_BIN $path]
+        assert_match "*ACL file is valid*" $result
+    }
+
     test {check-acl: selectors are validated} {
         set path [write_acl_file "user alice on >pass (~cache:* +get +set) (~logs:* +get)\n"]
         set result [exec $::VALKEY_CHECK_ACL_BIN $path]

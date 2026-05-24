@@ -23,39 +23,17 @@ extern dictType objToHashtableDictType;
  * Error collection
  * --------------------------------------------------------------------------- */
 
-typedef struct {
-    sds *entries;
-    int count;
-    int capacity;
-} checkAclErrors;
-
-static void checkAclErrorsInit(checkAclErrors *e) {
-    e->entries = NULL;
-    e->count = 0;
-    e->capacity = 0;
-}
-
-static void checkAclErrorsAdd(checkAclErrors *e, sds msg) {
-    if (e->count == e->capacity) {
-        e->capacity = e->capacity ? e->capacity * 2 : 16;
-        e->entries = zrealloc(e->entries, sizeof(sds) * e->capacity);
+/* We use Valkey's built-in list for error/warning collection.
+ * Each node value is an sds string. */
+static void aclCheckerListFree(list *l) {
+    listIter li;
+    listNode *ln;
+    listRewind(l, &li);
+    while ((ln = listNext(&li)) != NULL) {
+        sdsfree(listNodeValue(ln));
     }
-    e->entries[e->count++] = msg;
+    listRelease(l);
 }
-
-static void checkAclErrorsFree(checkAclErrors *e) {
-    for (int i = 0; i < e->count; i++) sdsfree(e->entries[i]);
-    zfree(e->entries);
-}
-
-/* ---------------------------------------------------------------------------
- * Warning collection (--level full)
- * --------------------------------------------------------------------------- */
-
-typedef checkAclErrors checkAclWarnings;
-#define checkAclWarningsInit checkAclErrorsInit
-#define checkAclWarningsAdd checkAclErrorsAdd
-#define checkAclWarningsFree checkAclErrorsFree
 
 /* ---------------------------------------------------------------------------
  * Validation levels and options
@@ -69,12 +47,16 @@ typedef struct {
     int major;
     int minor;
     int patch; /* 0 if not specified */
-} checkAclVersion;
+} aclCheckerVersion;
 
 /* Returns 1 if v >= o. */
-static inline int versionGE(const checkAclVersion *v, const checkAclVersion *o) {
-    if (v->major != o->major) return v->major > o->major;
-    if (v->minor != o->minor) return v->minor > o->minor;
+static inline int versionGE(const aclCheckerVersion *v, const aclCheckerVersion *o) {
+    if (v->major != o->major) {
+        return v->major > o->major;
+    }
+    if (v->minor != o->minor) {
+        return v->minor > o->minor;
+    }
     return v->patch >= o->patch;
 }
 
@@ -87,19 +69,22 @@ typedef struct {
     int ignore_unknown_commands;
     int simplify;
     const char *filename; /* NULL means stdin */
-    int is_stdin;
-    checkAclVersion version;
+    aclCheckerVersion version;
     int version_set;                /* 1 if --version was provided */
     const char *commands_files[16]; /* --commands-file paths (max 16) */
     int num_commands_files;
-} checkAclConfig;
+} aclCheckerConfig;
 
 /* Parse a version string like "7.0" or "7.2.1". Returns 0 on success, -1 on error. */
-static int parseVersion(const char *str, checkAclVersion *v) {
+static int parseVersion(const char *str, aclCheckerVersion *v) {
     v->patch = 0;
     int n = sscanf(str, "%d.%d.%d", &v->major, &v->minor, &v->patch);
-    if (n < 2) return -1;
-    if (v->major < 0 || v->minor < 0 || v->patch < 0) return -1;
+    if (n < 2) {
+        return -1;
+    }
+    if (v->major < 0 || v->minor < 0 || v->patch < 0) {
+        return -1;
+    }
     return 0;
 }
 
@@ -111,49 +96,46 @@ static int parseVersion(const char *str, checkAclVersion *v) {
  * Lines starting with # are comments. Empty lines are ignored.
  * --------------------------------------------------------------------------- */
 
-typedef struct {
-    sds name;
-    checkAclVersion since;
-} checkAclExtCommand;
+/* Dict of external commands: key = sds command name, value = aclCheckerVersion* (heap-allocated). */
 
-/* Simple hashtable of external commands keyed by name. */
-typedef struct {
-    checkAclExtCommand *entries;
-    int count;
-    int capacity;
-} checkAclExtCommands;
-
-static void extCommandsInit(checkAclExtCommands *ext) {
-    ext->entries = NULL;
-    ext->count = 0;
-    ext->capacity = 0;
+static void extCommandsEntryDestructor(void *entry) {
+    dictEntry *de = entry;
+    sdsfree(dictGetKey(de));
+    zfree(dictGetVal(de));
+    zfree(de);
 }
 
-static void extCommandsAdd(checkAclExtCommands *ext, sds name, checkAclVersion since) {
-    if (ext->count == ext->capacity) {
-        ext->capacity = ext->capacity ? ext->capacity * 2 : 64;
-        ext->entries = zrealloc(ext->entries, sizeof(checkAclExtCommand) * ext->capacity);
-    }
-    ext->entries[ext->count].name = name;
-    ext->entries[ext->count].since = since;
-    ext->count++;
+static dictType extCommandsDictType = {
+    .entryGetKey = dictEntryGetKey,
+    .hashFunction = dictSdsCaseHash,
+    .keyCompare = dictSdsKeyCaseCompare,
+    .entryDestructor = extCommandsEntryDestructor,
+};
+
+static void extCommandsAdd(dict *ext, sds name, aclCheckerVersion since) {
+    aclCheckerVersion *v = zmalloc(sizeof(*v));
+    *v = since;
+    dictReplace(ext, name, v);
 }
 
-static checkAclExtCommand *extCommandsLookup(checkAclExtCommands *ext, const char *name, size_t len) {
-    for (int i = ext->count - 1; i >= 0; i--) {
-        if (sdslen(ext->entries[i].name) == len && !strncasecmp(ext->entries[i].name, name, len))
-            return &ext->entries[i];
+static aclCheckerVersion *extCommandsLookup(dict *ext, const char *name, size_t len) {
+    sds key = sdsnewlen(name, len);
+    dictEntry *de = dictFind(ext, key);
+    sdsfree(key);
+    if (de) {
+        return dictGetVal(de);
     }
     return NULL;
 }
 
-static void extCommandsFree(checkAclExtCommands *ext) {
-    for (int i = 0; i < ext->count; i++) sdsfree(ext->entries[i].name);
-    zfree(ext->entries);
-}
-
-/* Load a commands file. Returns 0 on success, -1 on error. */
-static int loadCommandsFile(const char *path, checkAclExtCommands *ext) {
+/* Load a commands file. Returns 0 on success, -1 on error.
+ * Expected format: one command per line as "command_name [since_version]".
+ * Lines starting with '#' are comments. Blank lines are ignored.
+ * Example:
+ *   mymodule.cmd 7.2.0
+ *   mymodule.other
+ */
+static int loadCommandsFile(const char *path, dict *ext) {
     FILE *fp = fopen(path, "r");
     if (!fp) {
         fprintf(stderr, "Error opening commands file '%s': %s\n", path, strerror(errno));
@@ -167,19 +149,23 @@ static int loadCommandsFile(const char *path, checkAclExtCommands *ext) {
         /* Trim and skip comments/empty lines. */
         char *p = buf;
         while (*p == ' ' || *p == '\t') p++;
-        if (*p == '#' || *p == '\n' || *p == '\0') continue;
+        if (*p == '#' || *p == '\n' || *p == '\0') {
+            continue;
+        }
 
         /* Parse: name since categories */
         int argc;
         sds *argv = sdssplitargs(p, &argc);
         if (!argv || argc < 2) {
             fprintf(stderr, "%s:%d: Invalid format (expected: name since [categories])\n", path, linenum);
-            if (argv) sdsfreesplitres(argv, argc);
+            if (argv) {
+                sdsfreesplitres(argv, argc);
+            }
             fclose(fp);
             return -1;
         }
 
-        checkAclVersion since;
+        aclCheckerVersion since;
         if (parseVersion(argv[1], &since) != 0) {
             fprintf(stderr, "%s:%d: Invalid version '%s'\n", path, linenum, argv[1]);
             sdsfreesplitres(argv, argc);
@@ -205,10 +191,10 @@ static int loadCommandsFile(const char *path, checkAclExtCommands *ext) {
  * or an error string (caller must sdsfree) if it's not.
  * --------------------------------------------------------------------------- */
 
-static sds checkTokenVersion(const char *op, size_t oplen, const checkAclVersion *ver) {
-    static const checkAclVersion v6_2 = {6, 2, 0};
-    static const checkAclVersion v7_0 = {7, 0, 0};
-    static const checkAclVersion v9_1 = {9, 1, 0};
+static sds checkTokenVersion(const char *op, size_t oplen, const aclCheckerVersion *ver) {
+    static const aclCheckerVersion v6_2 = {6, 2, 0};
+    static const aclCheckerVersion v7_0 = {7, 0, 0};
+    static const aclCheckerVersion v9_1 = {9, 1, 0};
 
     /* Channels: introduced in 6.2 */
     if (!versionGE(ver, &v6_2)) {
@@ -263,20 +249,20 @@ static sds checkTokenVersion(const char *op, size_t oplen, const checkAclVersion
 
 /* Validate a single user line. Returns the validated user on success (caller
  * must free with ACLFreeUser), or NULL on error. */
-static user *validateUserLine(sds *argv, int argc, int linenum, const char *filename, checkAclConfig *config, checkAclExtCommands *ext_commands, checkAclErrors *errors) {
+static user *validateUserLine(sds *argv, int argc, int linenum, const char *filename, aclCheckerConfig *config, dict *ext_commands, list *errors) {
     if (argc < 2 || strcasecmp(argv[0], "user")) {
-        checkAclErrorsAdd(errors,
-                          sdscatprintf(sdsempty(), "%s:%d: Line should start with 'user' keyword followed by the username.",
-                                       filename, linenum));
+        listAddNodeTail(errors,
+                        sdscatprintf(sdsempty(), "%s:%d: Line should start with 'user' keyword followed by the username.",
+                                     filename, linenum));
         return NULL;
     }
 
     /* Check for spaces in username. */
     for (size_t k = 0; k < sdslen(argv[1]); k++) {
         if (argv[1][k] == ' ') {
-            checkAclErrorsAdd(errors,
-                              sdscatprintf(sdsempty(), "%s:%d: Username '%s' contains invalid characters.",
-                                           filename, linenum, argv[1]));
+            listAddNodeTail(errors,
+                            sdscatprintf(sdsempty(), "%s:%d: Username '%s' contains invalid characters.",
+                                         filename, linenum, argv[1]));
             return NULL;
         }
     }
@@ -291,8 +277,8 @@ static user *validateUserLine(sds *argv, int argc, int linenum, const char *file
         if (config->version_set) {
             sds err = checkTokenVersion(op, oplen, &config->version);
             if (err) {
-                checkAclErrorsAdd(errors,
-                                  sdscatprintf(sdsempty(), "%s:%d: %s", filename, linenum, err));
+                listAddNodeTail(errors,
+                                sdscatprintf(sdsempty(), "%s:%d: %s", filename, linenum, err));
                 sdsfree(err);
                 return NULL;
             }
@@ -313,12 +299,12 @@ static user *validateUserLine(sds *argv, int argc, int linenum, const char *file
         int is_unknown = strstr(err, "Unknown command or category name in ACL") != NULL;
         int is_category = strstr(err, "modifier '+@") || strstr(err, "modifier '-@");
         if (is_unknown && !is_category &&
-            (config->ignore_unknown_commands || ext_commands->count > 0 ||
+            (config->ignore_unknown_commands || dictSize(ext_commands) > 0 ||
              config->level == CHECK_ACL_LEVEL_SYNTAX)) {
             sdsfree(err);
         } else {
-            checkAclErrorsAdd(errors,
-                              sdscatprintf(sdsempty(), "%s:%d: %s", filename, linenum, err));
+            listAddNodeTail(errors,
+                            sdscatprintf(sdsempty(), "%s:%d: %s", filename, linenum, err));
             sdsfree(err);
             ACLFreeUser(fakeuser);
             return NULL;
@@ -328,7 +314,7 @@ static user *validateUserLine(sds *argv, int argc, int linenum, const char *file
     /* Post-validation: check command versions and unknown commands.
      * Skip when --level syntax (only checking syntax, not command existence). */
     if (config->level > CHECK_ACL_LEVEL_SYNTAX &&
-        (config->version_set || ext_commands->count > 0 || !config->ignore_unknown_commands)) {
+        (config->version_set || dictSize(ext_commands) > 0 || !config->ignore_unknown_commands)) {
         for (int i = 2; i < argc; i++) {
             const char *op = argv[i];
             size_t oplen = sdslen(argv[i]);
@@ -338,17 +324,29 @@ static user *validateUserLine(sds *argv, int argc, int linenum, const char *file
                 op++;
                 oplen--;
             }
-            if (oplen > 0 && op[oplen - 1] == ')') oplen--;
-            if (oplen == 0) continue;
+            if (oplen > 0 && op[oplen - 1] == ')') {
+                oplen--;
+            }
+            if (oplen == 0) {
+                continue;
+            }
 
             /* Only check +cmd/-cmd tokens. */
-            if (op[0] != '+' && op[0] != '-') continue;
-            if (oplen == 1) continue;
-            if (op[1] == '@') continue;
+            if (op[0] != '+' && op[0] != '-') {
+                continue;
+            }
+            if (oplen == 1) {
+                continue;
+            }
+            if (op[1] == '@') {
+                continue;
+            }
 
             const char *cmdname = op + 1;
             size_t cmdlen = oplen - 1;
-            if (cmdlen == 0) continue;
+            if (cmdlen == 0) {
+                continue;
+            }
 
             sds lookup = sdsnewlen(cmdname, cmdlen);
             struct serverCommand *cmd = lookupCommandBySds(lookup);
@@ -356,31 +354,31 @@ static user *validateUserLine(sds *argv, int argc, int linenum, const char *file
 
             if (cmd == NULL) {
                 /* Check external commands files. */
-                checkAclExtCommand *ext = extCommandsLookup(ext_commands, cmdname, cmdlen);
-                if (ext) {
+                aclCheckerVersion *ext_ver = extCommandsLookup(ext_commands, cmdname, cmdlen);
+                if (ext_ver) {
                     if (config->version_set &&
-                        !versionGE(&config->version, &ext->since)) {
-                        checkAclErrorsAdd(errors,
-                                          sdscatprintf(sdsempty(), "%s:%d: Command '%.*s' requires version >= %d.%d",
-                                                       filename, linenum, (int)cmdlen, cmdname,
-                                                       ext->since.major, ext->since.minor));
+                        !versionGE(&config->version, ext_ver)) {
+                        listAddNodeTail(errors,
+                                        sdscatprintf(sdsempty(), "%s:%d: Command '%.*s' requires version >= %d.%d",
+                                                     filename, linenum, (int)cmdlen, cmdname,
+                                                     ext_ver->major, ext_ver->minor));
                         ACLFreeUser(fakeuser);
                         return NULL;
                     }
                 } else if (!config->ignore_unknown_commands) {
-                    checkAclErrorsAdd(errors,
-                                      sdscatprintf(sdsempty(), "%s:%d: Unknown command '%.*s'",
-                                                   filename, linenum, (int)cmdlen, cmdname));
+                    listAddNodeTail(errors,
+                                    sdscatprintf(sdsempty(), "%s:%d: Unknown command '%.*s'",
+                                                 filename, linenum, (int)cmdlen, cmdname));
                     ACLFreeUser(fakeuser);
                     return NULL;
                 }
             } else if (config->version_set && cmd->since) {
-                checkAclVersion cmd_ver;
+                aclCheckerVersion cmd_ver;
                 if (parseVersion(cmd->since, &cmd_ver) == 0 &&
                     !versionGE(&config->version, &cmd_ver)) {
-                    checkAclErrorsAdd(errors,
-                                      sdscatprintf(sdsempty(), "%s:%d: Command '%s' requires version >= %d.%d (introduced in %s)",
-                                                   filename, linenum, cmd->fullname, cmd_ver.major, cmd_ver.minor, cmd->since));
+                    listAddNodeTail(errors,
+                                    sdscatprintf(sdsempty(), "%s:%d: Command '%s' requires version >= %d.%d (introduced in %s)",
+                                                 filename, linenum, cmd->fullname, cmd_ver.major, cmd_ver.minor, cmd->since));
                     ACLFreeUser(fakeuser);
                     return NULL;
                 }
@@ -402,7 +400,9 @@ static user *validateUserLine(sds *argv, int argc, int linenum, const char *file
 static sds simplifyCommandRules(sds rules) {
     int argc;
     sds *argv = sdssplitargs(rules, &argc);
-    if (!argv || argc == 0) return sdsdup(rules);
+    if (!argv || argc == 0) {
+        return sdsdup(rules);
+    }
 
     /* First token should be +@all or -@all. */
     int base_allow = !strcasecmp(argv[0], "+@all");
@@ -426,7 +426,9 @@ static sds simplifyCommandRules(sds rules) {
     sds result = sdsdup(argv[0]);
 
     for (int i = 1; i < argc; i++) {
-        if (sdslen(argv[i]) < 2) continue;
+        if (sdslen(argv[i]) < 2) {
+            continue;
+        }
         char sign = argv[i][0];
         int is_additive = (sign == '+');
 
@@ -482,8 +484,12 @@ static sds simplifyCommandRules(sds rules) {
 static sds simplifyAclDescription(sds descr) {
     /* Find the command rules section: starts with "+@all " or "-@all ". */
     char *cmd_start = strstr(descr, "+@all");
-    if (!cmd_start) cmd_start = strstr(descr, "-@all");
-    if (!cmd_start) return sdsdup(descr); /* No command rules found. */
+    if (!cmd_start) {
+        cmd_start = strstr(descr, "-@all");
+    }
+    if (!cmd_start) {
+        return sdsdup(descr); /* No command rules found. */
+    }
 
     /* Everything before the command rules. */
     size_t prefix_len = cmd_start - descr;
@@ -515,7 +521,9 @@ static sds simplifyAclDescription(sds descr) {
             sds inner = sdsnewlen(open + 1, close - open - 1);
             /* Find command rules inside selector. */
             char *inner_cmd = strstr(inner, "+@all");
-            if (!inner_cmd) inner_cmd = strstr(inner, "-@all");
+            if (!inner_cmd) {
+                inner_cmd = strstr(inner, "-@all");
+            }
             if (inner_cmd) {
                 size_t inner_prefix_len = inner_cmd - inner;
                 sds inner_prefix = sdsnewlen(inner, inner_prefix_len);
@@ -555,7 +563,9 @@ static sds readFileContent(const char *filename) {
         fp = stdin;
     } else {
         fp = fopen(filename, "r");
-        if (!fp) return NULL;
+        if (!fp) {
+            return NULL;
+        }
     }
 
     sds content = sdsempty();
@@ -563,7 +573,9 @@ static sds readFileContent(const char *filename) {
     while (fgets(buf, sizeof(buf), fp) != NULL) {
         content = sdscat(content, buf);
     }
-    if (fp != stdin) fclose(fp);
+    if (fp != stdin) {
+        fclose(fp);
+    }
     return content;
 }
 
@@ -577,8 +589,10 @@ static int detectIsConfig(sds content) {
 
     for (int i = 0; i < totlines; i++) {
         lines[i] = sdstrim(lines[i], " \t\r\n");
-        if (lines[i][0] == '\0' || lines[i][0] == '#') continue;
-        if (strncasecmp(lines[i], "user ", 5) == 0)
+        if (lines[i][0] == '\0' || lines[i][0] == '#') {
+            continue;
+        }
+        if (strncasecmp(lines[i], "user ", 5) == 0 || strncasecmp(lines[i], "user\t", 5) == 0)
             has_user_lines = 1;
         else
             has_other_lines = 1;
@@ -587,7 +601,8 @@ static int detectIsConfig(sds content) {
     return has_user_lines && has_other_lines;
 }
 
-static int validateContent(sds content, const char *display_name, checkAclConfig *config, checkAclExtCommands *ext_commands, checkAclErrors *errors, checkAclWarnings *warnings, sds *simplified_out) {
+/* Validate ACL content. Returns: 0 = no errors, 1 = syntax errors, 2 = semantic errors. */
+static int validateContent(sds content, const char *display_name, aclCheckerConfig *config, dict *ext_commands, list *errors, list *warnings, sds *simplified_out) {
     int totlines;
     sds *lines = sdssplitlen(content, sdslen(content), "\n", 1, &totlines);
     int is_config = detectIsConfig(content);
@@ -597,28 +612,33 @@ static int validateContent(sds content, const char *display_name, checkAclConfig
     int has_semantic_error = 0; /* For exit code 2 vs 1 */
 
     /* Track seen usernames for duplicate detection. */
-    int seen_cap = 0, seen_count = 0;
-    sds *seen_users = NULL;
+    dict *seen_users = dictCreate(&stringSetDictType);
 
     for (int i = 0; i < totlines; i++) {
         int linenum = i + 1;
         lines[i] = sdstrim(lines[i], " \t\r\n");
 
         /* Skip blank lines and comments. */
-        if (lines[i][0] == '\0' || lines[i][0] == '#') continue;
+        if (lines[i][0] == '\0' || lines[i][0] == '#') {
+            continue;
+        }
 
         /* In config mode, skip non-user lines. */
-        if (is_config && strncasecmp(lines[i], "user ", 5) != 0) continue;
+        if (is_config && strncasecmp(lines[i], "user ", 5) != 0 && strncasecmp(lines[i], "user\t", 5) != 0) {
+            continue;
+        }
 
         /* Split line into arguments. */
         int argc;
         sds *argv = sdssplitargs(lines[i], &argc);
         if (!argv) {
-            checkAclErrorsAdd(errors,
-                              sdscatprintf(sdsempty(), "%s:%d: Unbalanced quotes in ACL line.",
-                                           display_name, linenum));
+            listAddNodeTail(errors,
+                            sdscatprintf(sdsempty(), "%s:%d: Unbalanced quotes in ACL line.",
+                                         display_name, linenum));
             error_count++;
-            if (config->fail_fast) break;
+            if (config->fail_fast) {
+                break;
+            }
             continue;
         }
         if (argc == 0) {
@@ -628,37 +648,28 @@ static int validateContent(sds content, const char *display_name, checkAclConfig
 
         /* Duplicate user detection (matches Valkey behavior: reject duplicates). */
         if (argc >= 2 && !strcasecmp(argv[0], "user")) {
-            int is_dup = 0;
-            for (int s = 0; s < seen_count; s++) {
-                if (!strcasecmp(seen_users[s], argv[1])) {
-                    is_dup = 1;
-                    break;
-                }
-            }
-            if (is_dup) {
-                checkAclErrorsAdd(errors,
-                                  sdscatprintf(sdsempty(), "%s:%d: Duplicate user '%s'. A user can only be defined once.",
-                                               display_name, linenum, argv[1]));
+            if (dictFind(seen_users, argv[1])) {
+                listAddNodeTail(errors,
+                                sdscatprintf(sdsempty(), "%s:%d: Duplicate user '%s'. A user can only be defined once.",
+                                             display_name, linenum, argv[1]));
                 has_semantic_error = 1;
                 error_count++;
                 sdsfreesplitres(argv, argc);
-                if (config->fail_fast) break;
+                if (config->fail_fast) {
+                    break;
+                }
                 continue;
             }
             /* Track this username. */
-            if (seen_count == seen_cap) {
-                seen_cap = seen_cap ? seen_cap * 2 : 16;
-                seen_users = zrealloc(seen_users, sizeof(sds) * seen_cap);
-            }
-            seen_users[seen_count++] = sdsdup(argv[1]);
+            dictAdd(seen_users, sdsdup(argv[1]), NULL);
         }
 
         user *validated_user = validateUserLine(argv, argc, linenum, display_name, config, ext_commands, errors);
         if (!validated_user) {
             /* Errors from version gating or unknown commands are semantic (exit 2).
              * We detect this by checking if the error message mentions version or unknown. */
-            if (errors->count > 0) {
-                sds last_err = errors->entries[errors->count - 1];
+            if (listLength(errors) > 0) {
+                sds last_err = listNodeValue(listLast(errors));
                 if (strstr(last_err, "requires version") || strstr(last_err, "Unknown command"))
                     has_semantic_error = 1;
             }
@@ -669,7 +680,9 @@ static int validateContent(sds content, const char *display_name, checkAclConfig
             }
         } else {
             user_count++;
-            if (!strcasecmp(argv[1], "default")) has_default = 1;
+            if (!strcasecmp(argv[1], "default")) {
+                has_default = 1;
+            }
 
             /* Collect simplified output if --simplify is set. */
             if (config->simplify && simplified_out) {
@@ -687,10 +700,10 @@ static int validateContent(sds content, const char *display_name, checkAclConfig
                 if ((validated_user->flags & USER_FLAG_ENABLED) &&
                     !(validated_user->flags & USER_FLAG_NOPASS) &&
                     listLength(validated_user->passwords) == 0) {
-                    checkAclWarningsAdd(warnings,
-                                        sdscatprintf(sdsempty(),
-                                                     "%s:%d: User '%s' is enabled but has no passwords and is not set to 'nopass'.",
-                                                     display_name, linenum, argv[1]));
+                    listAddNodeTail(warnings,
+                                    sdscatprintf(sdsempty(),
+                                                 "%s:%d: User '%s' is enabled but has no passwords and is not set to 'nopass'.",
+                                                 display_name, linenum, argv[1]));
                 }
 
                 /* Warn: non-default user with overly permissive rules.
@@ -704,10 +717,10 @@ static int validateContent(sds content, const char *display_name, checkAclConfig
                             has_allcommands = 1;
                     }
                     if (has_allkeys && has_allcommands) {
-                        checkAclWarningsAdd(warnings,
-                                            sdscatprintf(sdsempty(),
-                                                         "%s:%d: User '%s' has full access (~* +@all).",
-                                                         display_name, linenum, argv[1]));
+                        listAddNodeTail(warnings,
+                                        sdscatprintf(sdsempty(),
+                                                     "%s:%d: User '%s' has full access (~* +@all).",
+                                                     display_name, linenum, argv[1]));
                     }
                 }
             }
@@ -720,19 +733,19 @@ static int validateContent(sds content, const char *display_name, checkAclConfig
 
     /* Completeness: missing default user. */
     if (config->level >= CHECK_ACL_LEVEL_FULL && !has_default && error_count == 0) {
-        checkAclWarningsAdd(warnings,
-                            sdscatprintf(sdsempty(), "%s: No 'default' user defined.", display_name));
+        listAddNodeTail(warnings,
+                        sdscatprintf(sdsempty(), "%s: No 'default' user defined.", display_name));
     }
 
-    for (int s = 0; s < seen_count; s++) sdsfree(seen_users[s]);
-    zfree(seen_users);
+    dictRelease(seen_users);
     sdsfreesplitres(lines, totlines);
 
     if (config->verbose && error_count == 0)
         fprintf(stderr, "Validated %d user(s).\n", user_count);
 
-    /* Return: 0 = no errors, 1 = syntax errors, 2 = semantic errors */
-    if (error_count == 0) return 0;
+    if (error_count == 0) {
+        return 0;
+    }
     return has_semantic_error ? 2 : 1;
 }
 
@@ -740,26 +753,34 @@ static int validateContent(sds content, const char *display_name, checkAclConfig
  * Output formatting
  * --------------------------------------------------------------------------- */
 
-static void printResultsText(checkAclErrors *errors, checkAclWarnings *warnings, checkAclConfig *config) {
-    if (errors->count == 0 && warnings->count == 0) {
+static void printResultsText(list *errors, list *warnings, aclCheckerConfig *config) {
+    if (listLength(errors) == 0 && listLength(warnings) == 0) {
         return;
     }
 
-    for (int i = 0; i < errors->count; i++) {
-        fprintf(stderr, "Error: %s\n", errors->entries[i]);
-        if (config->verbose && i < errors->count - 1)
+    listIter li;
+    listNode *ln;
+    int i = 0;
+    listRewind(errors, &li);
+    while ((ln = listNext(&li)) != NULL) {
+        fprintf(stderr, "Error: %s\n", (char *)listNodeValue(ln));
+        if (config->verbose && i < (int)listLength(errors) - 1) {
             fprintf(stderr, "\n");
+        }
+        i++;
     }
-    for (int i = 0; i < warnings->count; i++) {
-        if (!config->quiet)
-            fprintf(stderr, "Warning: %s\n", warnings->entries[i]);
+    listRewind(warnings, &li);
+    while ((ln = listNext(&li)) != NULL) {
+        if (!config->quiet) {
+            fprintf(stderr, "Warning: %s\n", (char *)listNodeValue(ln));
+        }
     }
 
     if (!config->quiet) {
-        if (errors->count > 0)
-            fprintf(stderr, "\n%d error(s) found.\n", errors->count);
-        if (warnings->count > 0)
-            fprintf(stderr, "%d warning(s) found.\n", warnings->count);
+        if (listLength(errors) > 0)
+            fprintf(stderr, "\n%d error(s) found.\n", (int)listLength(errors));
+        if (listLength(warnings) > 0)
+            fprintf(stderr, "%d warning(s) found.\n", (int)listLength(warnings));
     }
 }
 
@@ -785,16 +806,24 @@ static void printJsonEscapedString(const char *s, size_t len) {
     putchar('"');
 }
 
-static void printJsonStringArray(checkAclErrors *arr) {
+static void printJsonStringArray(list *arr) {
     printf("[");
-    for (int i = 0; i < arr->count; i++) {
-        if (i) putchar(',');
-        printJsonEscapedString(arr->entries[i], sdslen(arr->entries[i]));
+    listIter li;
+    listNode *ln;
+    int first = 1;
+    listRewind(arr, &li);
+    while ((ln = listNext(&li)) != NULL) {
+        if (!first) {
+            putchar(',');
+        }
+        sds s = listNodeValue(ln);
+        printJsonEscapedString(s, sdslen(s));
+        first = 0;
     }
     printf("]");
 }
 
-static void printResultsJson(checkAclErrors *errors, checkAclWarnings *warnings, checkAclConfig *config) {
+static void printResultsJson(list *errors, list *warnings, aclCheckerConfig *config) {
     printf("{");
     if (config->version_set) {
         printf("\"version\":\"%d.%d.%d\",", config->version.major, config->version.minor, config->version.patch);
@@ -803,14 +832,14 @@ static void printResultsJson(checkAclErrors *errors, checkAclWarnings *warnings,
     printJsonStringArray(errors);
     printf(",\"warnings\":");
     printJsonStringArray(warnings);
-    printf(",\"valid\":%s}\n", errors->count == 0 ? "true" : "false");
+    printf(",\"valid\":%s}\n", listLength(errors) == 0 ? "true" : "false");
 }
 
 /* ---------------------------------------------------------------------------
  * Usage and argument parsing
  * --------------------------------------------------------------------------- */
 
-static void checkAclUsage(void) {
+static void aclCheckerUsage(void) {
     printf(
         "Usage: valkey-check-acl [OPTIONS] <file|->\n"
         "\n"
@@ -840,21 +869,15 @@ static void checkAclUsage(void) {
         "  3  Warnings only (--level full)\n");
 }
 
-static int parseArgs(int argc, char **argv, checkAclConfig *config) {
+static void aclCheckerConfigInit(aclCheckerConfig *config) {
+    serverAssert(config != NULL);
+    memset(config, 0, sizeof(*config));
     config->level = CHECK_ACL_LEVEL_SEMANTIC;
-    config->json = 0;
-    config->verbose = 0;
-    config->quiet = 0;
-    config->fail_fast = 0;
-    config->ignore_unknown_commands = 0;
-    config->simplify = 0;
-    config->num_commands_files = 0;
-    config->filename = NULL;
-    config->is_stdin = 0;
-    config->version_set = 0;
-    config->version.major = 0;
-    config->version.minor = 0;
-    config->version.patch = 0;
+}
+
+static int parseArgs(int argc, char **argv, aclCheckerConfig *config) {
+    aclCheckerConfigInit(config);
+    int has_input = 0;
 
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--level") && i + 1 < argc) {
@@ -900,24 +923,27 @@ static int parseArgs(int argc, char **argv, checkAclConfig *config) {
             }
             config->commands_files[config->num_commands_files++] = argv[i];
         } else if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help")) {
-            checkAclUsage();
+            aclCheckerUsage();
             return 1; /* Signal to exit with 0. */
         } else if (argv[i][0] == '-' && strcmp(argv[i], "-")) {
             fprintf(stderr, "Unknown option: %s\n", argv[i]);
             return -1;
         } else {
-            if (config->filename) {
+            if (config->filename != NULL) {
                 fprintf(stderr, "Multiple input files not supported.\n");
                 return -1;
             }
-            config->filename = argv[i];
-            if (!strcmp(argv[i], "-")) config->is_stdin = 1;
+            /* "-" means stdin (filename stays NULL), otherwise store the path */
+            if (strcmp(argv[i], "-") != 0) {
+                config->filename = argv[i];
+            }
+            has_input = 1;
         }
     }
 
-    if (!config->filename) {
+    if (!has_input) {
         fprintf(stderr, "No input file specified. Use '-' for stdin.\n\n");
-        checkAclUsage();
+        aclCheckerUsage();
         return -1;
     }
 
@@ -929,15 +955,17 @@ static int parseArgs(int argc, char **argv, checkAclConfig *config) {
  * --------------------------------------------------------------------------- */
 
 int valkey_check_acl_main(int argc, char **argv) {
-    checkAclConfig config;
+    aclCheckerConfig config;
     int ret = parseArgs(argc, argv, &config);
-    if (ret != 0) return ret < 0 ? 1 : 0;
+    if (ret != 0) {
+        return ret < 0 ? 1 : 0;
+    }
 
     /* Load external commands files. */
-    checkAclExtCommands ext_commands;
-    extCommandsInit(&ext_commands);
+    dict *ext_commands;
+    ext_commands = dictCreate(&extCommandsDictType);
     for (int i = 0; i < config.num_commands_files; i++) {
-        if (loadCommandsFile(config.commands_files[i], &ext_commands) != 0)
+        if (loadCommandsFile(config.commands_files[i], ext_commands) != 0)
             return 1;
     }
 
@@ -965,46 +993,48 @@ int valkey_check_acl_main(int argc, char **argv) {
         return 0;
     }
 
-    const char *display_name = config.is_stdin ? "<stdin>" : config.filename;
+    const char *display_name = config.filename == NULL ? "<stdin>" : config.filename;
 
-    checkAclErrors errors;
-    checkAclWarnings warnings;
-    checkAclErrorsInit(&errors);
-    checkAclWarningsInit(&warnings);
+    list *errors;
+    list *warnings;
+    errors = listCreate();
+    warnings = listCreate();
 
     sds simplified = config.simplify ? sdsempty() : NULL;
 
-    int validation_result = validateContent(content, display_name, &config, &ext_commands, &errors, &warnings, &simplified);
+    int validation_result = validateContent(content, display_name, &config, ext_commands, errors, warnings, &simplified);
     sdsfree(content);
-    extCommandsFree(&ext_commands);
+    dictRelease(ext_commands);
 
     /* If --simplify and validation passed, output simplified rules. */
-    if (config.simplify && errors.count == 0 && simplified) {
+    if (config.simplify && listLength(errors) == 0 && simplified) {
         if (config.json) {
             printf("{\"simplified\":");
             printJsonEscapedString(simplified, sdslen(simplified));
             printf(",\"warnings\":");
-            printJsonStringArray(&warnings);
+            printJsonStringArray(warnings);
             printf(",\"valid\":true}\n");
         } else {
             printf("%s", simplified);
             /* Print warnings to stderr in text mode. */
-            if (warnings.count > 0)
-                printResultsText(&errors, &warnings, &config);
+            if (listLength(warnings) > 0)
+                printResultsText(errors, warnings, &config);
         }
     }
-    if (simplified) sdsfree(simplified);
+    if (simplified) {
+        sdsfree(simplified);
+    }
 
     /* Output validation results (errors/warnings) when not in simplify mode. */
-    if (!config.simplify || errors.count > 0) {
-        if (errors.count > 0 || warnings.count > 0) {
+    if (!config.simplify || listLength(errors) > 0) {
+        if (listLength(errors) > 0 || listLength(warnings) > 0) {
             if (config.json)
-                printResultsJson(&errors, &warnings, &config);
+                printResultsJson(errors, warnings, &config);
             else
-                printResultsText(&errors, &warnings, &config);
+                printResultsText(errors, warnings, &config);
         } else if (!config.simplify) {
             if (config.json)
-                printResultsJson(&errors, &warnings, &config);
+                printResultsJson(errors, warnings, &config);
             else if (!config.quiet)
                 printf("ACL file is valid.\n");
         }
@@ -1014,12 +1044,12 @@ int valkey_check_acl_main(int argc, char **argv) {
     int exit_code = 0;
     if (validation_result == 2)
         exit_code = 2;
-    else if (errors.count > 0)
+    else if (listLength(errors) > 0)
         exit_code = 1;
-    else if (warnings.count > 0)
+    else if (listLength(warnings) > 0)
         exit_code = 3;
 
-    checkAclErrorsFree(&errors);
-    checkAclWarningsFree(&warnings);
+    aclCheckerListFree(errors);
+    aclCheckerListFree(warnings);
     return exit_code;
 }

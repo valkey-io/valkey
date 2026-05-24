@@ -965,8 +965,10 @@ int valkey_check_acl_main(int argc, char **argv) {
     dict *ext_commands;
     ext_commands = dictCreate(&extCommandsDictType);
     for (int i = 0; i < config.num_commands_files; i++) {
-        if (loadCommandsFile(config.commands_files[i], ext_commands) != 0)
+        if (loadCommandsFile(config.commands_files[i], ext_commands) != 0) {
+            dictRelease(ext_commands);
             return 1;
+        }
     }
 
     /* Initialize pubsub structures needed by ACLStringSetUser's
@@ -981,11 +983,13 @@ int valkey_check_acl_main(int argc, char **argv) {
     sds content = readFileContent(config.filename);
     if (!content) {
         fprintf(stderr, "Error opening '%s': %s\n", config.filename, strerror(errno));
+        dictRelease(ext_commands);
         return 1;
     }
 
     if (sdslen(content) == 0) {
         sdsfree(content);
+        dictRelease(ext_commands);
         if (config.json)
             printf("{\"errors\":[],\"warnings\":[],\"valid\":true}\n");
         else if (!config.quiet)

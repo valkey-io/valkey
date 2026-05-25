@@ -565,6 +565,31 @@ static void rehashEntry(hashtable *ht, void *entry, uint64_t hash, uint8_t h2) {
     ht->used[1]++;
 }
 
+/* Release memory pages of rehashed buckets back to the OS incrementally.
+ * This function is called after each bucket is rehashed. When an entire range
+ * worth of buckets has been processed, it advises the OS that the pages
+ * are no longer needed (MADV_DONTNEED). This spreads the memory release over
+ * the entire rehashing process, avoiding a latency spike that would occur if
+ * we released all the old table's memory at once when rehashing completes. */
+static void dismissRehashedBucketsIfNeeded(hashtable *ht) {
+    static size_t page_size = 0;
+    if (page_size == 0) page_size = sysconf(_SC_PAGESIZE);
+
+    size_t buckets_per_page = page_size / sizeof(bucket);
+    const size_t pages_per_dismiss = 16;
+    size_t buckets_per_dismiss = buckets_per_page * pages_per_dismiss;
+    if (ht->rehash_idx % buckets_per_dismiss != 0) {
+        return;
+    }
+
+    bucket *ptr = ht->tables[0] + ht->rehash_idx - buckets_per_dismiss;
+    ptr = (bucket *)((size_t)ptr & ~(page_size - 1));
+    if (ptr < ht->tables[0]) {
+        return;
+    }
+    zmadvise_dontneed_range(ptr, pages_per_dismiss * page_size);
+}
+
 /* After migrating entries in a bucket chain from the old table
  * to the new one, this function should be called immediately to
  * handle the cleanup of old buckets, such as clearing presence bits. */
@@ -587,6 +612,9 @@ static void rehashStepFinalize(hashtable *ht) {
 
     /* Advance to the next bucket. */
     ht->rehash_idx++;
+
+    /* Release page back to OS incrementally. */
+    dismissRehashedBucketsIfNeeded(ht);
 
     /* Check if we already rehashed the whole table. */
     if (ht->used[0] == 0 && ht->child_buckets[0] == 0) {
@@ -1062,6 +1090,7 @@ static bucket *findBucketForInsert(hashtable *ht, uint64_t hash, int *pos_in_buc
 /* Helper to insert an entry. Doesn't check if an entry with a matching key
  * already exists. This must be ensured by the caller. */
 static void insert(hashtable *ht, uint64_t hash, void *entry) {
+    assert(ht->safe_iterators == NULL);
     hashtableExpandIfNeeded(ht);
     rehashStepOnWriteIfNeeded(ht);
     int pos_in_bucket;
@@ -2156,13 +2185,14 @@ size_t hashtableScanDefrag(hashtable *ht, size_t cursor, hashtableScanFunction f
  * is returned exactly once.
  *
  * For a safe iterator (when HASHTABLE_ITER_SAFE is set):
- * It is allowed to modify the hash table while iterating. It pauses incremental
- * rehashing to prevent entries from moving around. It's allowed to insert and
- * replace entries. Deleting entries is only allowed for the entry that was just
- * returned by hashtableNext. Deleting other entries is possible, but doing so
- * can cause internal fragmentation, so don't. The hash table itself can be
- * safely deleted while safe iterators exist - they will be invalidated and
- * subsequent calls to hashtableNext will return false.
+ * It is allowed to delete and replace entries while iterating. It pauses
+ * incremental rehashing to prevent entries from moving around. Inserting new
+ * entries during safe iteration is NOT supported.
+ * Deleting entries is only allowed for the entry that was just returned by
+ * hashtableNext. Deleting other entries is possible, but doing so can cause
+ * internal fragmentation, so don't. The hash table itself can be safely deleted
+ * while safe iterators exist - they will be invalidated and subsequent calls to
+ * hashtableNext will return false.
  *
  * Guarantees for safe iterators:
  *
@@ -2174,9 +2204,6 @@ size_t hashtableScanDefrag(hashtable *ht, size_t cursor, hashtableScanFunction f
  *
  * - Entries that are replaced before they've been returned by the iterator will
  *   be returned.
- *
- * - Entries that are inserted during the iteration may or may not be returned
- *   by the iterator.
  *
  * Call hashtableNext to fetch each entry. You must call hashtableCleanupIterator
  * when you are done with the iterator.

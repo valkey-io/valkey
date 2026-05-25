@@ -31,11 +31,11 @@ jobs:
       matrix:
         include:
           # New compilers
-          - compiler: 'clang-20'
-            cmake-version: '4.0'
+          - compiler: 'clang-22'
+            cmake-version: '4.2'
             cmake-build-type: Release
-          - compiler: 'gcc-14'
-            cmake-version: '4.0'
+          - compiler: 'gcc-15'
+            cmake-version: '4.2'
             cmake-build-type: Release
           # Old compilers
           - compiler: 'clang-14'
@@ -45,10 +45,12 @@ jobs:
             cmake-version: '3.13'
             cmake-build-type: Release
         # Sanitizers enabled
-        compiler: ['gcc-14', 'clang-20']
-        cmake-version: ['4.0']
+        compiler: ['clang-22', 'gcc-15']
+        cmake-version: ['4.2']
         cmake-build-type: [RelWithDebInfo]
         sanitizer: [thread, undefined, leak, address]
+    env:
+      CC: ${{ matrix.compiler }}
     steps:
     - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
     - name: Prepare
@@ -57,13 +59,27 @@ jobs:
         packages: libevent-dev libuv1-dev libev-dev libglib2.0-dev valkey-server
         version: 1.0
     - name: Setup compiler
-      uses: aminya/setup-cpp@1f17f92d6a52bfcb1a25348e2c526c2e5cbb1134 # v1.8.0
-      with:
-        compiler: ${{ matrix.compiler }}
+      run: |
+        COMP="${{ matrix.compiler }}"
+        TYPE="${COMP%%-*}"
+        VERSION="${COMP##*-}"
+        echo "Installing $TYPE version $VERSION"
+
+        if [ "$TYPE" = "clang" ]; then
+          wget https://apt.llvm.org/llvm.sh
+          chmod +x llvm.sh
+          # Temporary fix to install clang-22
+          sed -i 's/LLVM_VERSION_PATTERNS\[22\]=\"\"/LLVM_VERSION_PATTERNS[22]=\"-22\"/' llvm.sh
+          sudo apt-get install -y "${{ matrix.compiler }}" || sudo ./llvm.sh "$VERSION"
+        else
+          sudo add-apt-repository -y ppa:ubuntu-toolchain-r/test
+          sudo apt-get update
+          sudo apt-get install -y "${{ matrix.compiler }}"
+        fi
     - name: Setup CMake
-      uses: jwlawson/actions-setup-cmake@3a6cbe35ba64df7ca70c51365c4aff65db9a9037 # v2.1.1
+      uses: lukka/get-cmake@7bfc9baacbbdcb5e37957ad05c3546b3e222be3c # v4.3.2
       with:
-        cmake-version: ${{ matrix.cmake-version }}
+        cmakeVersion: ${{ matrix.cmake-version }}
     - name: Generate makefiles
       run: |
         if [ -n "${{ matrix.sanitizer }}" ]; then
@@ -207,9 +223,9 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - name: Setup CMake
-        uses: jwlawson/actions-setup-cmake@3a6cbe35ba64df7ca70c51365c4aff65db9a9037 # v2.1.1
+        uses: lukka/get-cmake@7bfc9baacbbdcb5e37957ad05c3546b3e222be3c # v4.3.2
         with:
-          cmake-version: '3.7.0'
+          cmakeVersion: '3.7.0'
       - name: Generate makefiles
         run: |
           mkdir build && cd build
@@ -251,7 +267,7 @@ jobs:
         run: |
           choco install -y memurai-developer
       - name: Install dependencies (vcpkg)
-        uses: johnwason/vcpkg-action@caa1c94fbb94d8b023a0cc93edf10cd3791349a7 # v7.0.1
+        uses: johnwason/vcpkg-action@04c68c847bf5196ecaa72331ecf51208583916ef # v8.0.0
         with:
           pkgs: pkgconf libevent openssl
           triplet: x64-windows
@@ -293,7 +309,7 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - name: Set up MinGW
-        uses: msys2/setup-msys2@4f806de0a5a7294ffabaff804b38a9b435a73bda # v2.30.0
+        uses: msys2/setup-msys2@e9898307ac31d1a803454791be09ab9973336e1c # v2.31.1
         with:
           msystem: mingw64
           install: |

@@ -17,6 +17,7 @@
 #include <time.h>
 #include <ctype.h>
 #include <stdlib.h>
+#include <stdint.h>
 #include <unistd.h>
 #include <sys/time.h>
 #include <pthread.h>
@@ -1658,7 +1659,7 @@ static void addArgumentToCommand(FuzzerCommand *cmd, CommandArgument *arg) {
             time_t currentTime = time(NULL);
             /* add a random number of seconds to the current time */
             currentTime += rand() % RANDOM_TIME_VARIANCE;
-            appendArg(cmd, sdscatprintf(sdsempty(), "%ld", currentTime));
+            appendArg(cmd, sdscatprintf(sdsempty(), "%jd", (intmax_t)currentTime));
         } else if (arg->type == ARG_TYPE_PATTERN) {
             appendArg(cmd, sdsnew("*"));
         } else if (arg->type == ARG_TYPE_KEY) {

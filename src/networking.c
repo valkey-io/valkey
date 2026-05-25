@@ -522,6 +522,20 @@ void deleteCachedResponseClient(client *recording_client) {
     freeClient(recording_client);
 }
 
+/* Return the reply list that new reply data should be appended to.
+ * When the deferred reply buffer is active, replies go to
+ * c->deferred_reply; otherwise they go to c->reply. */
+static inline list *clientGetReplyList(client *c) {
+    return isDeferredReplyEnabled(c) ? c->deferred_reply : c->reply;
+}
+
+/* Return the reply bytes for the client.
+ * When the deferred reply buffer is active, replies go to
+ * c->deferred_reply_bytes; otherwise they go to c->reply_bytes. */
+static inline unsigned long long *clientGetReplyBytesPtr(client *c) {
+    return isDeferredReplyEnabled(c) ? &c->deferred_reply_bytes : &c->reply_bytes;
+}
+
 /* -----------------------------------------------------------------------------
  * Low level functions to add more data to output buffers.
  * -------------------------------------------------------------------------- */
@@ -676,7 +690,7 @@ static void _addReplyPayloadToList(client *c, list *reply_list, const char *payl
         memcpy(tail->buf + tail->used, payload, len);
         tail->used += len;
         listAddNodeTail(reply_list, tail);
-        unsigned long long *reply_bytes = (isDeferredReplyEnabled(c)) ? &c->deferred_reply_bytes : &c->reply_bytes;
+        unsigned long long *reply_bytes = clientGetReplyBytesPtr(c);
         *reply_bytes += tail->size;
 
         closeClientOnOutputBufferLimitReached(c, 1);
@@ -1066,8 +1080,9 @@ void addReplyStatusFormat(client *c, const char *fmt, ...) {
  * the previous one, when that happens, we wanna try to trim the unused space
  * at the end of the last reply node which we won't use anymore. */
 void trimReplyUnusedTailSpace(client *c) {
-    listNode *ln = listLast(c->reply);
+    listNode *ln = listLast(clientGetReplyList(c));
     clientReplyBlock *tail = ln ? listNodeValue(ln) : NULL;
+    unsigned long long *reply_bytes = clientGetReplyBytesPtr(c);
 
     /* Note that 'tail' may be NULL even if we have a tail node, because when
      * addReplyDeferredLen() is used */
@@ -1085,7 +1100,7 @@ void trimReplyUnusedTailSpace(client *c) {
         /* take over the allocation's internal fragmentation (at least for
          * memory usage tracking) */
         tail->size = usable_size - sizeof(clientReplyBlock);
-        c->reply_bytes = c->reply_bytes + tail->size - old_size;
+        *reply_bytes = *reply_bytes + tail->size - old_size;
         listNodeValue(ln) = tail;
     }
 }
@@ -1113,9 +1128,15 @@ void *addReplyDeferredLen(client *c) {
      * buffer offset (see function comment) */
     reqresSaveClientReplyOffset(c);
 
+    /* When the deferred reply buffer is active, the placeholder must go into
+     * the same list that subsequent ReplyWith* calls will append to.
+     * Otherwise setDeferredReply will fill the placeholder in c->reply while
+     * the array elements live in c->deferred_reply, producing a malformed
+     * response after commitDeferredReplyBuffer joins the two lists. */
+    list *reply_list = clientGetReplyList(c);
     trimReplyUnusedTailSpace(c);
-    listAddNodeTail(c->reply, NULL); /* NULL is our placeholder. */
-    return listLast(c->reply);
+    listAddNodeTail(reply_list, NULL); /* NULL is our placeholder. */
+    return listLast(reply_list);
 }
 
 void setDeferredReply(client *c, void *node, const char *s, size_t length) {
@@ -1126,6 +1147,11 @@ void setDeferredReply(client *c, void *node, const char *s, size_t length) {
      * we return NULL in addReplyDeferredLen() */
     if (node == NULL) return;
     serverAssert(!listNodeValue(ln));
+
+    /* The placeholder node may live in c->deferred_reply when the deferred
+     * reply buffer is active.  Use the same list for deletion/accounting. */
+    list *reply_list = clientGetReplyList(c);
+    unsigned long long *reply_bytes = clientGetReplyBytesPtr(c);
 
     /* Normally we fill this dummy NULL node, added by addReplyDeferredLen(),
      * with a new buffer structure containing the protocol needed to specify
@@ -1148,7 +1174,7 @@ void setDeferredReply(client *c, void *node, const char *s, size_t length) {
         prev->used += len_to_copy;
         length -= len_to_copy;
         if (length == 0) {
-            listDelNode(c->reply, ln);
+            listDelNode(reply_list, ln);
             return;
         }
         s += len_to_copy;
@@ -1160,7 +1186,7 @@ void setDeferredReply(client *c, void *node, const char *s, size_t length) {
         memcpy(next->buf, s, length);
         c->net_output_bytes_curr_cmd += length;
         next->used += length;
-        listDelNode(c->reply, ln);
+        listDelNode(reply_list, ln);
     } else {
         /* Create a new node */
         size_t usable_size;
@@ -1172,7 +1198,7 @@ void setDeferredReply(client *c, void *node, const char *s, size_t length) {
         memcpy(buf->buf, s, length);
         c->net_output_bytes_curr_cmd += length;
         listNodeValue(ln) = buf;
-        c->reply_bytes += buf->size;
+        *reply_bytes += buf->size;
 
         closeClientOnOutputBufferLimitReached(c, 1);
     }
@@ -2073,6 +2099,14 @@ int freeClient(client *c) {
     /* If a client is protected, yet we need to free it right now, make sure
      * to at least use asynchronous freeing. */
     if (c->flag.protected || c->flag.protected_rdb_channel || clientHasPendingIO(c)) {
+        freeClientAsync(c);
+        return 0;
+    }
+
+    /* Debug: force async free for the primary client to deterministically
+     * reproduce the deferred-free replication state clobber race. */
+    if (server.debug_force_free_primary_async && c->flag.primary) {
+        server.debug_force_free_primary_async = 0;
         freeClientAsync(c);
         return 0;
     }
@@ -5090,7 +5124,7 @@ void clientHelpCommand(client *c) {
         "CAPA <option> [options...]",
         "    The client claims its some capability options. Options are:",
         "    * REDIRECT",
-        "      The client can handle redirection during primary and replica failover in standalone mode.",
+        "      The client can handle redirection (standalone failover and keyless commands on replicas).",
         "GETREDIR",
         "    Return the client ID we are redirecting to when tracking is enabled.",
         "GETNAME",

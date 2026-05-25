@@ -1136,8 +1136,8 @@ static aclSelector *aclCreateSelectorFromOpSet(const char *opset, size_t opsetle
  *              It is possible to specify multiple patterns.
  * allchannels              Alias for &*
  * resetchannels            Flush the list of allowed channel patterns.
- * db=<dbid>    Add database ID(s) to the set of allowed database IDs. May be used
- *              with `,` for adding multiple IDs (e.g "db=1,2,3").
+ * db=<dbid>    Sets the specified database id(s) as the databases the selector is allowed to access.
+ *              May be used with `,` for adding multiple IDs (e.g "db=1,2,3").
  * alldbs       Allow access to all databases.
  * resetdbs     Flush the set of allowed database IDs.
  */
@@ -1359,7 +1359,8 @@ static int ACLSetSelector(aclSelector *selector, const char *op, size_t oplen) {
  *              passwords and there is no way to authenticate without adding
  *              some password (or setting it as "nopass" later).
  * reset        Performs the following actions: resetpass, resetkeys, resetchannels,
- *              allchannels (if acl-pubsub-default is set), off, clearselectors, -@all.
+ *              allchannels (if acl-pubsub-default is set), alldbs (for backwards compatibility),
+ *              off, sanitize-payload, clearselectors, -@all.
  *              The user returns to the same state it has immediately after its creation.
  * (<options>)  Create a new selector with the options specified within the
  *              parentheses and attach it to the user. Each option should be
@@ -1396,6 +1397,7 @@ static int ACLSetSelector(aclSelector *selector, const char *op, size_t oplen) {
  * ENODEV: The password you are trying to remove from the user does not exist.
  * EBADMSG: The hash you are trying to add is not a valid hash.
  * ECHILD: Attempt to allow a specific first argument of a subcommand
+ * ERANGE: A database ID provided with the db= rule is out of the supported range.
  */
 int ACLSetUser(user *u, const char *op, ssize_t oplen) {
     /* as we are changing the ACL, the old generated string is now invalid */
@@ -1874,8 +1876,6 @@ static int ACLSelectorCheckCmd(aclSelector *selector,
                             *keyidxptr = 2;
                         else if (cmd->proc == swapdbCommand)
                             *keyidxptr = (i == 0) ? 1 : 2;
-                        else if (cmd->proc == migrateCommand)
-                            *keyidxptr = 4;
                         else
                             *keyidxptr = 0;
                     }
@@ -2670,6 +2670,7 @@ static sds ACLLoadFromFile(const char *filename) {
             /* When the new channel list is NULL, it means the new user's channel list is a superset of the old user's
              * list. */
             if (!new_user || (channels && ACLShouldKillPubsubClient(c, channels))) {
+                clientSetUser(c, DefaultUser, 0);
                 freeClientOrCloseLater(c, 0);
                 continue;
             }

@@ -4300,7 +4300,6 @@ static void clusterManagerOptimizeAntiAffinity(clusterManagerNodeArray *ipnodes,
                           "for anti-affinity\n");
     int node_len = cluster_manager.nodes->len;
     int maxiter = 500 * node_len; // Effort is proportional to cluster size...
-    srand(time(NULL));
     while (maxiter > 0) {
         int offending_len = 0;
         if (offenders != NULL) {
@@ -6219,7 +6218,6 @@ static clusterManagerNode *clusterManagerNodePrimaryRandom(void) {
     }
 
     assert(primary_count > 0);
-    srand(time(NULL));
     idx = rand() % primary_count;
     listRewind(cluster_manager.nodes, &li);
     while ((ln = listNext(&li)) != NULL) {
@@ -8976,8 +8974,6 @@ static void pipeMode(void) {
     char magic[20]; /* Special reply we recognize. */
     time_t last_read_time = time(NULL);
 
-    srand(time(NULL));
-
     /* Use non blocking I/O. */
     if (anetNonBlock(aneterr, context->fd) == ANET_ERR) {
         fprintf(stderr, "Can't set the socket in non blocking mode: %s\n", aneterr);
@@ -9835,7 +9831,6 @@ static void LRUTestMode(void) {
     long long start_cycle;
     int j;
 
-    srand(time(NULL) ^ getpid());
     while (1) {
         /* Perform cycles of 1 second with 50% writes and 50% reads.
          * We use pipelining batching writes / reads N times per cycle in order
@@ -10054,6 +10049,8 @@ void testHintSuite(char *filename) {
 int main(int argc, char **argv) {
     int firstarg;
     struct timeval tv;
+
+    srand(time(NULL) ^ getpid());
 
     /* Valkey defaults */
     memset(&config.sslconfig, 0, sizeof(config.sslconfig));

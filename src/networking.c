@@ -3859,6 +3859,12 @@ void commandProcessed(client *c) {
          * (current command's right boundary) instead of qb_pos, which may
          * have run ahead due to multi-command parsing. */
         c->repl_data->reploff = c->repl_data->read_reploff - sdslen(c->querybuf) + c->qb_applied;
+        /* Every applied non-MULTI command should consume >0 bytes from the
+         * replication stream, so reploff must strictly advance. A no-op
+         * advance means qb_applied was not maintained for the command we
+         * just processed (e.g. a command was backfilled into querybuf without
+         * updating qb_applied). */
+        serverAssert(c->repl_data->reploff > prev_offset);
     }
 
     /* If the client is replicated we need to compute the difference

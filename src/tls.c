@@ -399,9 +399,20 @@ static int tlsUpdateCertInfoFromDir(const char *path, long long *expiry, sds *se
 }
 
 static void tlsRefreshServerCertInfo(void) {
+    /* Cycle through both certificates to get the correct info for each */
     if (!(server.tls_port || server.tls_replication || server.tls_cluster) || !valkey_tls_ctx ||
+        SSL_CTX_set_current_cert(valkey_tls_ctx, SSL_CERT_SET_FIRST) != 1 ||
         tlsUpdateCertInfoFromCtx(valkey_tls_ctx, &server.tls_server_cert_expire_time, &server.tls_server_cert_serial) == C_ERR) {
         tlsClearCertInfo(&server.tls_server_cert_expire_time, &server.tls_server_cert_serial);
+    }
+    if (SSL_CTX_set_current_cert(valkey_tls_ctx, SSL_CERT_SET_NEXT) != 1 ||
+        tlsUpdateCertInfoFromCtx(valkey_tls_ctx, &server.tls_server_alt_cert_expire_time, &server.tls_server_alt_cert_serial) == C_ERR) {
+        tlsClearCertInfo(&server.tls_server_alt_cert_expire_time, &server.tls_server_alt_cert_serial);
+    }
+    if (SSL_CTX_set_current_cert(valkey_tls_ctx, SSL_CERT_SET_FIRST) != 1) {
+        serverLog(LL_WARNING, "Certificate unset during refresh, clearing all server certificate info");
+        tlsClearCertInfo(&server.tls_server_cert_expire_time, &server.tls_server_cert_serial);
+        tlsClearCertInfo(&server.tls_server_alt_cert_expire_time, &server.tls_server_alt_cert_serial);
     }
 }
 
@@ -832,6 +843,8 @@ error:
 typedef struct {
     unsigned char cert_fingerprint[EVP_MAX_MD_SIZE];
     unsigned int cert_fingerprint_len;
+    unsigned char alt_cert_fingerprint[EVP_MAX_MD_SIZE];
+    unsigned int alt_cert_fingerprint_len;
     unsigned char client_cert_fingerprint[EVP_MAX_MD_SIZE];
     unsigned int client_cert_fingerprint_len;
     unsigned char ca_cert_fingerprint[EVP_MAX_MD_SIZE];
@@ -889,6 +902,7 @@ static void captureMetadata(serverTLSContextConfig *ctx_config, tlsMaterialsMeta
 
     /* Certificate files: fingerprint-based detection */
     getCertFingerprint(ctx_config->cert_file, metadata->cert_fingerprint, &metadata->cert_fingerprint_len);
+    getCertFingerprint(ctx_config->alt_cert_file, metadata->alt_cert_fingerprint, &metadata->alt_cert_fingerprint_len);
     getCertFingerprint(ctx_config->client_cert_file, metadata->client_cert_fingerprint, &metadata->client_cert_fingerprint_len);
     getCertFingerprint(ctx_config->ca_cert_file, metadata->ca_cert_fingerprint, &metadata->ca_cert_fingerprint_len);
 
@@ -913,6 +927,11 @@ static int metadataChanged(const tlsMaterialsMetadata *old, const tlsMaterialsMe
     /* Check certificate fingerprints */
     if (old->cert_fingerprint_len != new->cert_fingerprint_len ||
         (new->cert_fingerprint_len > 0 && memcmp(old->cert_fingerprint, new->cert_fingerprint, new->cert_fingerprint_len) != 0)) {
+        return 1;
+    }
+
+    if (old->alt_cert_fingerprint_len != new->alt_cert_fingerprint_len ||
+        (new->alt_cert_fingerprint_len > 0 && memcmp(old->alt_cert_fingerprint, new->alt_cert_fingerprint, new->alt_cert_fingerprint_len) != 0)) {
         return 1;
     }
 
@@ -2110,6 +2129,7 @@ static void tlsClearCACertInfo(void) {
 
 static void tlsClearAllCertInfo(void) {
     tlsClearCertInfo(&server.tls_server_cert_expire_time, &server.tls_server_cert_serial);
+    tlsClearCertInfo(&server.tls_server_alt_cert_expire_time, &server.tls_server_alt_cert_serial);
     tlsClearCertInfo(&server.tls_client_cert_expire_time, &server.tls_client_cert_serial);
     tlsClearCACertInfo();
 }

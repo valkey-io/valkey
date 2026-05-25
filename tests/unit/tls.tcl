@@ -139,17 +139,19 @@ start_server {tags {"tls"}} {
             set valkey_key [format "%s/tests/tls/valkey.key" [pwd]]
             set valkey_pqc_crt [format "%s/tests/tls/valkey-mldsa.crt" [pwd]]
             set valkey_pqc_key [format "%s/tests/tls/valkey-mldsa.key" [pwd]]
-            r CONFIG SET tls-cert-file $valkey_pqc_crt tls-key-file $valkey_pqc_key tls-alt-cert-file $valkey_crt tls-alt-key-file $valkey_key
-            set s [valkey_client]
-            assert_equal "PONG" [$s PING]
-            $s close
-            # also test connecting with openssl without pqc ciphers support
-            set port [lindex [r config get tls-port] 1]
-            catch {exec /usr/bin/openssl s_client -connect localhost:$port -CAfile $valkey_crt -sigalgs "rsa_pss_pss_sha256:rsa_pss_rsae_sha256" < /dev/null} out
-            assert_match {*Peer signature type: rsa_pss_rsae_sha256*} $out
-
-            #cleanup
-            r CONFIG SET tls-cert-file $orig_server_crt tls-key-file $orig_server_key tls-alt-cert-file $orig_server_alt_crt tls-alt-key-file $orig_server_alt_key
+            try {
+                r CONFIG SET tls-cert-file $valkey_pqc_crt tls-key-file $valkey_pqc_key tls-alt-cert-file $valkey_crt tls-alt-key-file $valkey_key
+                set s [valkey_client]
+                assert_equal "PONG" [$s PING]
+                $s close
+                # also test connecting with openssl without pqc ciphers support
+                set port [lindex [r config get tls-port] 1]
+                catch {exec openssl s_client -connect localhost:$port -CAfile $valkey_crt -sigalgs "rsa_pss_pss_sha256:rsa_pss_rsae_sha256" < /dev/null} out
+                assert_match {*Peer signature type: rsa_pss_rsae_sha256*} $out
+            } finally {
+                #cleanup
+                r CONFIG SET tls-cert-file $orig_server_crt tls-key-file $orig_server_key tls-alt-cert-file $orig_server_alt_crt tls-alt-key-file $orig_server_alt_key
+            }
         }
 
         test {TLS: alt cert and key files must be provided together} {
@@ -159,15 +161,17 @@ start_server {tags {"tls"}} {
             set orig_server_alt_crt [lindex [r config get tls-alt-cert-file] 1]
             set orig_server_alt_key [lindex [r config get tls-alt-key-file] 1]
 
-            r CONFIG SET tls-cert-file $orig_server_crt tls-key-file $orig_server_key tls-alt-cert-file "" tls-alt-key-file ""
+            try {
+                r CONFIG SET tls-cert-file $orig_server_crt tls-key-file $orig_server_key tls-alt-cert-file "" tls-alt-key-file ""
 
-            catch {r CONFIG SET tls-alt-cert-file $orig_server_crt} e
-            assert_match {*related to argument 'tls-alt-cert-file'*} $e
-            catch {r CONFIG SET tls-alt-key-file $orig_server_key} e
-            assert_match {**related to argument 'tls-alt-key-file'*} $e
-
-            #cleanup
-            r CONFIG SET tls-cert-file $orig_server_crt tls-key-file $orig_server_key tls-alt-cert-file $orig_server_alt_crt tls-alt-key-file $orig_server_alt_key
+                catch {r CONFIG SET tls-alt-cert-file $orig_server_crt} e
+                assert_match {*related to argument 'tls-alt-cert-file'*} $e
+                catch {r CONFIG SET tls-alt-key-file $orig_server_key} e
+                assert_match {*related to argument 'tls-alt-key-file'*} $e
+            } finally {
+                #cleanup
+                r CONFIG SET tls-cert-file $orig_server_crt tls-key-file $orig_server_key tls-alt-cert-file $orig_server_alt_crt tls-alt-key-file $orig_server_alt_key
+            }
         }
 
         test {TLS: the same certificate twice not allowed} {
@@ -177,11 +181,13 @@ start_server {tags {"tls"}} {
             set orig_server_alt_crt [lindex [r config get tls-alt-cert-file] 1]
             set orig_server_alt_key [lindex [r config get tls-alt-key-file] 1]
 
-            catch {r CONFIG SET tls-alt-cert-file $orig_server_crt tls-alt-key-file $orig_server_key} e
-            assert_match {*Unable to update TLS configuration*} $e
-
-            #cleanup
-            r CONFIG SET tls-cert-file $orig_server_crt tls-key-file $orig_server_key tls-alt-cert-file $orig_server_alt_crt tls-alt-key-file $orig_server_alt_key
+            try {
+                catch {r CONFIG SET tls-alt-cert-file $orig_server_crt tls-alt-key-file $orig_server_key} e
+                assert_match {*Unable to update TLS configuration*} $e
+            } finally {
+                #cleanup
+                r CONFIG SET tls-cert-file $orig_server_crt tls-key-file $orig_server_key tls-alt-cert-file $orig_server_alt_crt tls-alt-key-file $orig_server_alt_key
+            }
         }
 
         test {TLS: Two certificates of the same type not allowed} {
@@ -200,17 +206,19 @@ start_server {tags {"tls"}} {
             set valkey_pqc_pw_crt [format "%s/tests/tls/valkey-mldsa-pw.crt" [pwd]]
             set valkey_pqc_pw_key [format "%s/tests/tls/valkey-mldsa-pw.key" [pwd]]
 
-            r CONFIG SET tls-cert-file $valkey_pqc_crt tls-key-file $valkey_pqc_key tls-alt-cert-file $valkey_crt tls-alt-key-file $valkey_key
-            set s [valkey_client]
-            assert_equal "PONG" [$s PING]
-            $s close
-            catch {r CONFIG SET tls-alt-cert-file $valkey_pqc_pw_crt tls-alt-key-file $valkey_pqc_pw_key tls-key-file-pass 1234} e
-            assert_match {*Unable to update TLS configuration*} $e
-            catch {r CONFIG SET tls-cert-file $valkey_pw_crt tls-key-file $valkey_pw_key tls-key-file-pass 1234} e
-            assert_match {*Unable to update TLS configuration*} $e
-
-            #cleanup
-            r CONFIG SET tls-cert-file $orig_server_crt tls-key-file $orig_server_key tls-alt-cert-file $orig_server_alt_crt tls-alt-key-file $orig_server_alt_key tls-key-file-pass ""
+            try {
+                r CONFIG SET tls-cert-file $valkey_pqc_crt tls-key-file $valkey_pqc_key tls-alt-cert-file $valkey_crt tls-alt-key-file $valkey_key
+                set s [valkey_client]
+                assert_equal "PONG" [$s PING]
+                $s close
+                catch {r CONFIG SET tls-alt-cert-file $valkey_pqc_pw_crt tls-alt-key-file $valkey_pqc_pw_key tls-key-file-pass 1234} e
+                assert_match {*Unable to update TLS configuration*} $e
+                catch {r CONFIG SET tls-cert-file $valkey_pw_crt tls-key-file $valkey_pw_key tls-key-file-pass 1234} e
+                assert_match {*Unable to update TLS configuration*} $e
+            } finally {
+                #cleanup
+                r CONFIG SET tls-cert-file $orig_server_crt tls-key-file $orig_server_key tls-alt-cert-file $orig_server_alt_crt tls-alt-key-file $orig_server_alt_key tls-key-file-pass ""
+            }
         }
 
         test {TLS: Dual certificates with passphrases} {
@@ -229,15 +237,17 @@ start_server {tags {"tls"}} {
             set valkey_pqc_pw_crt [format "%s/tests/tls/valkey-mldsa-pw.crt" [pwd]]
             set valkey_pqc_pw_key [format "%s/tests/tls/valkey-mldsa-pw.key" [pwd]]
 
-            r CONFIG SET tls-cert-file $valkey_pqc_pw_crt tls-key-file $valkey_pqc_pw_key tls-alt-cert-file $valkey_crt tls-alt-key-file $valkey_key tls-key-file-pass 1234
-            set s [valkey_client]
-            assert_equal "PONG" [$s PING]
-            $s close
-            r CONFIG SET tls-cert-file $valkey_pqc_pw_crt tls-key-file $valkey_pqc_pw_key tls-alt-cert-file $valkey_pw_crt tls-alt-key-file $valkey_pw_key
-            r CONFIG SET tls-cert-file $valkey_pqc_crt tls-key-file $valkey_pqc_key tls-alt-cert-file $valkey_pw_crt tls-alt-key-file $valkey_pw_key
-
-            #cleanup
-            r CONFIG SET tls-cert-file $orig_server_crt tls-key-file $orig_server_key tls-alt-cert-file $orig_server_alt_crt tls-alt-key-file $orig_server_alt_key tls-key-file-pass ""
+            try {
+                r CONFIG SET tls-cert-file $valkey_pqc_pw_crt tls-key-file $valkey_pqc_pw_key tls-alt-cert-file $valkey_crt tls-alt-key-file $valkey_key tls-key-file-pass 1234
+                set s [valkey_client]
+                assert_equal "PONG" [$s PING]
+                $s close
+                r CONFIG SET tls-cert-file $valkey_pqc_pw_crt tls-key-file $valkey_pqc_pw_key tls-alt-cert-file $valkey_pw_crt tls-alt-key-file $valkey_pw_key
+                r CONFIG SET tls-cert-file $valkey_pqc_crt tls-key-file $valkey_pqc_key tls-alt-cert-file $valkey_pw_crt tls-alt-key-file $valkey_pw_key
+            } finally {
+                #cleanup
+                r CONFIG SET tls-cert-file $orig_server_crt tls-key-file $orig_server_key tls-alt-cert-file $orig_server_alt_crt tls-alt-key-file $orig_server_alt_key tls-key-file-pass ""
+            }
         }
 
         test {TLS: switch between tcp and tls ports} {
@@ -371,17 +381,25 @@ start_server {tags {"tls"}} {
             # Get current certificate files
             set orig_server_crt [lindex [r config get tls-cert-file] 1]
             set orig_server_key [lindex [r config get tls-key-file] 1]
+            set orig_server_alt_crt [lindex [r config get tls-alt-cert-file] 1]
+            set orig_server_alt_key [lindex [r config get tls-alt-key-file] 1]
+            set valkey_alt_crt [format "%s/tests/tls/valkey-mldsa.crt" [pwd]]
+            set valkey_alt_key [format "%s/tests/tls/valkey-mldsa.key" [pwd]]
 
             # Create temporary certificate files (copies of current ones)
             set temp_crt "$orig_server_crt.temp"
             set temp_key "$orig_server_key.temp"
             file copy -force $orig_server_crt $temp_crt
             file copy -force $orig_server_key $temp_key
+            set temp_alt_crt "$valkey_alt_crt.temp"
+            set temp_alt_key "$valkey_alt_key.temp"
+            file copy -force $valkey_alt_crt $temp_alt_crt
+            file copy -force $valkey_alt_key $temp_alt_key
 
             # Ensure cleanup happens even if test fails
             try {
                 # Update server to use temporary certificate files
-                r CONFIG SET tls-cert-file $temp_crt tls-key-file $temp_key
+                r CONFIG SET tls-cert-file $temp_crt tls-key-file $temp_key tls-alt-cert-file $temp_alt_crt tls-alt-key-file $temp_alt_key
 
                 # Enable auto-reload with 1 second interval for faster testing
                 r CONFIG SET tls-auto-reload-interval 1
@@ -394,7 +412,11 @@ start_server {tags {"tls"}} {
                 if {![regexp {tls_server_cert_serial:([^\r\n]+)} $info1 -> serial1]} {
                     fail "INFO tls missing tls_server_cert_serial"
                 }
+                if {![regexp {tls_server_alt_cert_serial:([^\r\n]+)} $info1 -> alt_serial1]} {
+                    fail "INFO tls missing tls_server_alt_cert_serial"
+                }
                 assert {$serial1 ne "none"}
+                assert {$alt_serial1 ne "none"}
 
                 # Wait for at least one auto-reload cycle to complete
                 after 1100
@@ -420,6 +442,29 @@ start_server {tags {"tls"}} {
                 assert {$serial2 ne "none"}
                 assert {$serial1 ne $serial2}
 
+                set valkey_alt_crt [format "%s/tests/tls/valkey-mldsa-pw.crt" [pwd]]
+                set valkey_alt_key [format "%s/tests/tls/valkey-mldsa-pw.key" [pwd]]
+                file copy -force $valkey_alt_crt $temp_alt_crt
+                file copy -force $valkey_alt_key $temp_alt_key
+
+                # Wait for another auto-reload cycle to complete
+                after 2100
+
+                # Wait for reload to actually complete by checking server logs
+                # Use generous timeout for slow/busy CI systems
+                wait_for_log_messages 0 {"*TLS materials reloaded successfully*"} 0 150 100
+
+                # Verify connection still works after reload
+                set s [valkey_client]
+                assert_equal "PONG" [$s PING]
+                $s close
+                set info3 [r info tls]
+                if {![regexp {tls_server_alt_cert_serial:([^\r\n]+)} $info3 -> alt_serial2]} {
+                    fail "INFO tls missing tls_server_alt_cert_serial"
+                }
+                assert {$alt_serial2 ne "none"}
+                assert {$alt_serial1 ne $alt_serial2}
+
                 # Wait again to ensure filesystem timestamp will be different
                 # for the second modification and next reload cycle can detect it
                 after 1100
@@ -427,6 +472,8 @@ start_server {tags {"tls"}} {
                 # Restore original certificate content to temporary files
                 file copy -force $orig_server_crt $temp_crt
                 file copy -force $orig_server_key $temp_key
+                file copy -force $valkey_alt_crt $temp_alt_crt
+                file copy -force $valkey_alt_key $temp_alt_key
 
                 # Wait for second reload to complete
                 # Use generous timeout for slow/busy CI systems
@@ -438,13 +485,13 @@ start_server {tags {"tls"}} {
                 $s close
             } finally {
                 # Restore original configuration
-                r CONFIG SET tls-cert-file $orig_server_crt tls-key-file $orig_server_key
+                r CONFIG SET tls-cert-file $orig_server_crt tls-key-file $orig_server_key tls-alt-cert-file $orig_server_alt_crt tls-alt-key-file $orig_server_alt_key
 
                 # Disable auto-reload
                 r CONFIG SET tls-auto-reload-interval 0
 
                 # Clean up temporary files
-                file delete -force $temp_crt $temp_key
+                file delete -force $temp_crt $temp_key $temp_alt_crt $temp_alt_key
             }
         }
 

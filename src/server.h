@@ -2424,9 +2424,11 @@ struct valkeyServer {
     int tls_auth_clients;
     serverTLSContextConfig tls_ctx_config;
     long long tls_server_cert_expire_time;
+    long long tls_server_alt_cert_expire_time;
     long long tls_client_cert_expire_time;
     long long tls_ca_cert_expire_time;
     sds tls_server_cert_serial;
+    sds tls_server_alt_cert_serial;
     sds tls_client_cert_serial;
     sds tls_ca_cert_serial;
     serverUnixContextConfig unix_ctx_config;

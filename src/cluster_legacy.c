@@ -1256,6 +1256,13 @@ void clusterUpdateMyselfFlags(void) {
                      CLUSTER_NODE_MULTI_MEET_SUPPORTED;
     if (myself->flags != oldflags) {
         clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_UPDATE_STATE);
+
+        /* If NOFAILOVER was just cleared (i.e. cluster-replica-no-failover
+         * was turned off at runtime), trigger a failover check ASAP instead
+         * of waiting for the next clusterCron tick. */
+        if ((oldflags & CLUSTER_NODE_NOFAILOVER) && !nofailover) {
+            clusterDoBeforeSleep(CLUSTER_TODO_HANDLE_FAILOVER);
+        }
     }
 }
 

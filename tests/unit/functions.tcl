@@ -1307,6 +1307,7 @@ start_server {tags {"repl scripting external:skip"}} {
             # Replica is still running the function and it is OK
             assert_error {BUSY*} {$replica ping}
             $replica function kill
+            after 200 ; # Give some time to Lua to call the hook again...
             wait_for_sync $replica
             $replica ping
 

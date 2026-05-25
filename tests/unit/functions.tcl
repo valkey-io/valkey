@@ -1274,7 +1274,7 @@ start_server {tags {"scripting"}} {
 
 }
 
-start_multiple_servers 2 {tags {"repl scripting external:skip"}} {
+start_multiple_servers 2 {tags {"repl scripting external:skip needs:debug"}} {
     test "Full sync events are not processed during the replica slow script" {
         set primary [srv -1 client]
         set primary_host [srv -1 host]

@@ -62,7 +62,14 @@ proc assert_empty_slot_stats_with_exception {slot_stats exception_slots metrics_
             }
         } else {
             dict for {metric value} $stats {
-                assert {$value == 0}
+                if {$metric eq "data-bytes"} {
+                    # data-bytes is a nested map; assert all type values are 0.
+                    dict for {type_name type_value} $value {
+                        assert {$type_value == 0}
+                    }
+                } else {
+                    assert {$value == 0}
+                }
             }
         }
     }

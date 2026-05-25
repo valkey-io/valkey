@@ -336,6 +336,7 @@ client *createClient(connection *conn) {
     c->raw_flag2 = 0;
     c->capa = 0;
     c->slot = -1;
+    clusterSlotStatsInitSnapshot(c);
     c->ctime = c->last_interaction = server.unixtime;
     c->duration = 0;
     clientSetDefaultAuth(c);
@@ -2212,6 +2213,7 @@ int freeClient(client *c) {
     if (c->name) decrRefCount(c->name);
     if (c->lib_name) decrRefCount(c->lib_name);
     if (c->lib_ver) decrRefCount(c->lib_ver);
+    clusterSlotStatsFreeSnapshot(c);
     freeClientMultiState(c);
     sdsfree(c->peerid);
     sdsfree(c->sockname);
@@ -3329,6 +3331,7 @@ void resetClient(client *c) {
     c->cur_script = NULL;
     c->net_input_bytes_curr_cmd = 0;
     c->slot = -1;
+    clusterSlotStatsClearSnapshot(c);
     c->flag.executing_command = 0;
     c->flag.replication_done = 0;
     c->flag.buffered_reply = 0;

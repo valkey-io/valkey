@@ -12,9 +12,312 @@ typedef enum {
     CPU_USEC,
     NETWORK_BYTES_IN,
     NETWORK_BYTES_OUT,
+    DATA_BYTES,
     SLOT_STAT_COUNT,
     INVALID
 } slotStatType;
+
+/* -----------------------------------------------------------------------------
+ * Per-type byte accounting (data-bytes metric).
+ *
+ * Adding a new type later means: (1) add a case to slotStatsObjectSize() that
+ * returns its logical byte size, and (2) add a friendly name in
+ * slotStatsObjectTypeName(). All the wiring in db.c stays type-agnostic.
+ * -------------------------------------------------------------------------- */
+
+/* Returns 1 when per-slot data-bytes accounting is active. We gate this on
+ * cluster_enabled only (not cluster_slot_stats_enabled), because data_bytes
+ * is a state metric that must remain consistent with the database contents
+ * regardless of the more expensive cumulative metrics being toggled. */
+static inline int dataBytesAccountingEnabled(int slot) {
+    return server.cluster_enabled && slot >= 0 && slot < CLUSTER_SLOTS;
+}
+
+/* Logical size to attribute to (key, val) for the slot's data_bytes counter.
+ * Returns 0 for any type that we are not yet tracking. Adding a new type is
+ * just adding a new case here.
+ *
+ * Note: stringObjectLen() returns the digit count for OBJ_ENCODING_INT values,
+ * which matches the user-facing "logical bytes" semantics (e.g. SET k 12345
+ * counts as 5 bytes for the value, regardless of internal encoding). */
+static uint64_t slotStatsObjectSize(sds key, robj *val) {
+    uint64_t key_bytes = sdslen(key);
+    switch (val->type) {
+    case OBJ_STRING:
+        return key_bytes + stringObjectLen(val);
+    case OBJ_STREAM: {
+        stream *s = objectGetVal(val);
+        return key_bytes + s->tracked_data_bytes;
+    }
+
+    /* Future extensions:
+     * case OBJ_LIST:   return key_bytes + listTypeBytes(val);
+     * case OBJ_HASH:   return key_bytes + hashTypeBytes(val);
+     * case OBJ_SET:    return key_bytes + setTypeBytes(val);
+     * case OBJ_ZSET:   return key_bytes + zsetTypeBytes(val);
+     * case OBJ_MODULE: return key_bytes + moduleTypeBytes(val);
+     */
+    default:
+        return 0;
+    }
+}
+
+/* Friendly type names emitted in CLUSTER SLOT-STATS replies. Untracked types
+ * still appear in the per-type breakdown with a value of zero so the reply
+ * shape is predictable. */
+static const char *slotStatsObjectTypeName(int type) {
+    switch (type) {
+    case OBJ_STRING: return "string";
+    case OBJ_LIST: return "list";
+    case OBJ_SET: return "set";
+    case OBJ_ZSET: return "zset";
+    case OBJ_HASH: return "hash";
+    case OBJ_MODULE: return "module";
+    case OBJ_STREAM: return "stream";
+    default: return "unknown";
+    }
+}
+
+void clusterSlotStatsAddMemory(int slot, sds key, robj *val) {
+    if (!dataBytesAccountingEnabled(slot)) return;
+    uint64_t sz = slotStatsObjectSize(key, val);
+    if (sz == 0) return;
+    serverAssert(val->type < OBJ_TYPE_MAX);
+    server.cluster->slot_stats[slot].data_bytes[val->type] += sz;
+}
+
+void clusterSlotStatsSubMemory(int slot, sds key, robj *val) {
+    if (!dataBytesAccountingEnabled(slot)) return;
+    uint64_t sz = slotStatsObjectSize(key, val);
+    if (sz == 0) return;
+    serverAssert(val->type >= 0 && val->type < OBJ_TYPE_MAX);
+    saturated_sub(&server.cluster->slot_stats[slot].data_bytes[val->type], sz);
+}
+
+/* Convenience wrappers that accept the key as a `robj *`. They derive the
+ * slot from the key and forward to the lower-level slot/sds variants. Use
+ * these from command-level code that doesn't already have dict_index in
+ * hand; the slot/sds variants stay the right choice in db.c primitives. */
+void clusterSlotStatsAddMemoryForKey(robj *key, robj *val) {
+    sds skey = objectGetVal(key);
+    clusterSlotStatsAddMemory(getSlotForKey(skey), skey, val);
+}
+
+void clusterSlotStatsSubMemoryForKey(robj *key, robj *val) {
+    sds skey = objectGetVal(key);
+    clusterSlotStatsSubMemory(getSlotForKey(skey), skey, val);
+}
+
+uint64_t clusterSlotStatsGetObjectSize(sds key, robj *val) {
+    return slotStatsObjectSize(key, val);
+}
+
+/* -----------------------------------------------------------------------------
+ * Per-key in-place mutation snapshot.
+ *
+ * The set lives on the client (client.slot_data_bytes). Two entries are stored
+ * inline; a third distinct key migrates the inline entries into an overflow
+ * list and everything is then kept there. Cluster rejects cross-slot commands,
+ * so all entries share a single slot, recorded once.
+ * -------------------------------------------------------------------------- */
+
+#define SLOT_DATA_BYTES_INLINE 2
+
+/* listRelease/listEmpty free callback for overflow entries. */
+static void slotSnapFreeEntry(void *p) {
+    slotDataBytesSnap *e = p;
+    decrRefCount(e->key);
+    zfree(e);
+}
+
+/* Find the entry tracking `key`, or NULL. Searches the overflow list when
+ * spilled, otherwise the inline array. */
+static slotDataBytesSnap *slotSnapFind(slotDataBytesSnapshot *s, robj *key) {
+    sds skey = objectGetVal(key);
+    if (s->overflow != NULL) {
+        listIter li;
+        listNode *ln;
+        listRewind(s->overflow, &li);
+        while ((ln = listNext(&li)) != NULL) {
+            slotDataBytesSnap *e = listNodeValue(ln);
+            if (sdscmp(objectGetVal(e->key), skey) == 0) return e;
+        }
+        return NULL;
+    }
+    for (int i = 0; i < s->inlined_count; i++) {
+        if (sdscmp(objectGetVal(s->inlined[i].key), skey) == 0) return &s->inlined[i];
+    }
+    return NULL;
+}
+
+/* Remove the entry tracking `key`, if any. Resets the shared slot to -1 once
+ * the set becomes empty so the cheap `slot < 0` guards short-circuit. */
+static void slotSnapRemove(slotDataBytesSnapshot *s, robj *key) {
+    sds skey = objectGetVal(key);
+    if (s->overflow != NULL) {
+        listIter li;
+        listNode *ln;
+        listRewind(s->overflow, &li);
+        while ((ln = listNext(&li)) != NULL) {
+            slotDataBytesSnap *e = listNodeValue(ln);
+            if (sdscmp(objectGetVal(e->key), skey) == 0) {
+                listDelNode(s->overflow, ln); /* free method decrefs the key */
+                break;
+            }
+        }
+        if (listLength(s->overflow) == 0) s->slot = -1;
+        return;
+    }
+    for (int i = 0; i < s->inlined_count; i++) {
+        if (sdscmp(objectGetVal(s->inlined[i].key), skey) == 0) {
+            decrRefCount(s->inlined[i].key);
+            s->inlined[i] = s->inlined[s->inlined_count - 1]; /* swap with last */
+            s->inlined_count--;
+            break;
+        }
+    }
+    if (s->inlined_count == 0) s->slot = -1;
+}
+
+/* Record (or refresh) the "before" size for `key` at `slot`. Called from
+ * lookupKeyWrite. Creates a new entry if the key isn't tracked yet. */
+void clusterSlotStatsSnapshotKey(client *c, int slot, robj *key, robj *val) {
+    if (c == NULL || !dataBytesAccountingEnabled(slot)) return;
+    slotDataBytesSnapshot *s = &c->slot_data_bytes;
+    uint64_t before = val ? slotStatsObjectSize(objectGetVal(key), val) : 0;
+
+    slotDataBytesSnap *e = slotSnapFind(s, key);
+    if (e != NULL) { /* refresh existing */
+        e->before = before;
+        s->slot = slot;
+        return;
+    }
+
+    s->slot = slot;
+    if (s->overflow == NULL && s->inlined_count < SLOT_DATA_BYTES_INLINE) {
+        e = &s->inlined[s->inlined_count++];
+        e->key = key;
+        incrRefCount(key);
+        e->before = before;
+        return;
+    }
+
+    /* Spill: on first overflow migrate the inline entries into the list
+     * (ownership of their key refs transfers to the heap entries), then append
+     * the new key. */
+    if (s->overflow == NULL) {
+        s->overflow = listCreate();
+        listSetFreeMethod(s->overflow, slotSnapFreeEntry);
+        for (int i = 0; i < s->inlined_count; i++) {
+            slotDataBytesSnap *moved = zmalloc(sizeof(*moved));
+            *moved = s->inlined[i];
+            listAddNodeTail(s->overflow, moved);
+        }
+        s->inlined_count = 0;
+    }
+    slotDataBytesSnap *ne = zmalloc(sizeof(*ne));
+    ne->key = key;
+    incrRefCount(key);
+    ne->before = before;
+    listAddNodeTail(s->overflow, ne);
+}
+
+/* Refresh the "before" size for `key` to the new value's size, but only if the
+ * key is already snapshotted. Called from db-hooks (dbAdd / dbSetValue) after
+ * they account the change themselves, so a later signalModifiedKey computes a
+ * zero delta instead of double counting. Never creates an entry, so bulk write
+ * paths (e.g. MSET) that never snapshotted don't allocate. */
+void clusterSlotStatsRefreshKey(client *c, robj *key, robj *val) {
+    if (c == NULL || !server.cluster_enabled) return;
+    slotDataBytesSnapshot *s = &c->slot_data_bytes;
+    if (s->slot < 0) return;
+    slotDataBytesSnap *e = slotSnapFind(s, key);
+    if (e != NULL) e->before = val ? slotStatsObjectSize(objectGetVal(key), val) : 0;
+}
+
+/* Drop any pending snapshot for `key`. Called from the delete path, where the
+ * db-hook has already subtracted the key's size explicitly. */
+void clusterSlotStatsForgetKey(client *c, robj *key) {
+    if (c == NULL || !server.cluster_enabled) return;
+    slotDataBytesSnapshot *s = &c->slot_data_bytes;
+    if (s->slot < 0) return;
+    slotSnapRemove(s, key);
+}
+
+/* Apply the in-place delta for `key` and drop its snapshot. Called from
+ * signalModifiedKey. */
+void clusterSlotStatsCommitKey(client *c, serverDb *db, robj *key) {
+    if (c == NULL || !server.cluster_enabled) return;
+    slotDataBytesSnapshot *s = &c->slot_data_bytes;
+    if (s->slot < 0) return;
+    slotDataBytesSnap *e = slotSnapFind(s, key);
+    if (e == NULL) return;
+
+    int slot = s->slot;
+    uint64_t before = e->before;
+    /* Re-read the value to get the post-mutation size. Use read-only flags so
+     * this lookup does not itself take a new write snapshot. */
+    robj *val = lookupKeyReadWithFlags(db, key, LOOKUP_NOTOUCH | LOOKUP_NOSTATS | LOOKUP_NOEXPIRE | LOOKUP_NONOTIFY);
+    if (val != NULL) {
+        uint64_t after = slotStatsObjectSize(objectGetVal(key), val);
+        if (after != before) {
+            if (before > 0) saturated_sub(&server.cluster->slot_stats[slot].data_bytes[val->type], before);
+            if (after > 0) server.cluster->slot_stats[slot].data_bytes[val->type] += after;
+        }
+    }
+    slotSnapRemove(s, key);
+}
+
+/* Initialize the snapshot on a freshly allocated client. createClient() uses
+ * zmalloc (not zeroed), so every field must be set explicitly. This must not
+ * read `overflow` -- unlike clusterSlotStatsClearSnapshot() -- because it is
+ * uninitialized at this point. */
+void clusterSlotStatsInitSnapshot(client *c) {
+    slotDataBytesSnapshot *s = &c->slot_data_bytes;
+    s->inlined_count = 0;
+    s->slot = -1;
+    s->overflow = NULL;
+}
+
+/* Clear all pending snapshots. Called at each command boundary (afterCommand)
+ * and from resetClient, so a snapshot can never leak across commands (which
+ * also makes a per-entry db-id unnecessary: c->db is fixed within a command). */
+void clusterSlotStatsClearSnapshot(client *c) {
+    slotDataBytesSnapshot *s = &c->slot_data_bytes;
+    if (s->overflow != NULL) listEmpty(s->overflow); /* keep header for reuse */
+    for (int i = 0; i < s->inlined_count; i++) decrRefCount(s->inlined[i].key);
+    s->inlined_count = 0;
+    s->slot = -1;
+}
+
+/* Release the snapshot, including the overflow list header. Called on client
+ * free. */
+void clusterSlotStatsFreeSnapshot(client *c) {
+    clusterSlotStatsClearSnapshot(c);
+    slotDataBytesSnapshot *s = &c->slot_data_bytes;
+    if (s->overflow != NULL) {
+        listRelease(s->overflow);
+        s->overflow = NULL;
+    }
+}
+
+/* Returns the total data_bytes for a slot summed across all tracked types.
+ * Used as the sort key when ORDERBY data-bytes is requested. */
+static uint64_t slotStatsDataBytesTotal(int slot) {
+    uint64_t total = 0;
+    for (int t = 0; t < OBJ_TYPE_MAX; t++) {
+        total += server.cluster->slot_stats[slot].data_bytes[t];
+    }
+    return total;
+}
+
+void clusterSlotStatsResetDataBytesAll(void) {
+    if (!server.cluster_enabled) return;
+    for (int slot = 0; slot < CLUSTER_SLOTS; slot++) {
+        memset(server.cluster->slot_stats[slot].data_bytes, 0,
+               sizeof(server.cluster->slot_stats[slot].data_bytes));
+    }
+}
 
 /* -----------------------------------------------------------------------------
  * CLUSTER SLOT-STATS command
@@ -51,6 +354,7 @@ static uint64_t getSlotStat(int slot, slotStatType stat_type) {
     case CPU_USEC: slot_stat = server.cluster->slot_stats[slot].cpu_usec; break;
     case NETWORK_BYTES_IN: slot_stat = server.cluster->slot_stats[slot].network_bytes_in; break;
     case NETWORK_BYTES_OUT: slot_stat = server.cluster->slot_stats[slot].network_bytes_out; break;
+    case DATA_BYTES: slot_stat = slotStatsDataBytesTotal(slot); break;
     case SLOT_STAT_COUNT:
     case INVALID: serverPanic("Invalid slot stat type %d was found.", stat_type);
     }
@@ -94,13 +398,27 @@ static void addReplySlotStat(client *c, int slot) {
     addReplyArrayLen(c, 2); /* Array of size 2, where 0th index represents (int) slot,
                              * and 1st index represents (map) usage statistics. */
     addReplyLongLong(c, slot);
-    addReplyMapLen(c, (server.cluster_slot_stats_enabled) ? SLOT_STAT_COUNT
-                                                          : 1); /* Nested map representing slot usage statistics. */
+    /* The map always carries key-count and data-bytes (state metrics), and
+     * additionally carries cpu-usec / network-bytes-in / network-bytes-out
+     * when the cumulative stats are enabled. */
+    int map_len = server.cluster_slot_stats_enabled ? SLOT_STAT_COUNT : 2;
+    addReplyMapLen(c, map_len);
+
     addReplyBulkCString(c, "key-count");
     addReplyLongLong(c, countKeysInSlot(slot));
 
-    /* Any additional metrics aside from key-count come with a performance trade-off,
-     * and are aggregated and returned based on its server config. */
+    /* data-bytes is exposed as a nested map of type-name -> bytes so the
+     * structure stays predictable as more types are wired up. */
+    addReplyBulkCString(c, "data-bytes");
+    addReplyMapLen(c, OBJ_TYPE_MAX);
+    for (int t = 0; t < OBJ_TYPE_MAX; t++) {
+        addReplyBulkCString(c, slotStatsObjectTypeName(t));
+        addReplyLongLong(c, server.cluster->slot_stats[slot].data_bytes[t]);
+    }
+
+    /* Any additional metrics aside from key-count/data-bytes come with a
+     * performance trade-off, and are aggregated and returned based on its
+     * server config. */
     if (server.cluster_slot_stats_enabled) {
         addReplyBulkCString(c, "cpu-usec");
         addReplyLongLong(c, server.cluster->slot_stats[slot].cpu_usec);
@@ -198,12 +516,25 @@ static void addReplyOrderBy(client *c, slotStatType order_by, long limit, int de
 
 /* Resets applicable slot statistics. */
 void clusterSlotStatReset(int slot) {
-    /* key-count is exempt, as it is queried separately through `countKeysInSlot()`. */
+    /* key-count is exempt, as it is queried separately through
+     * `countKeysInSlot()`. data_bytes is intentionally cleared here because
+     * this entry point is invoked from clusterAddSlot() / clusterDelSlot()
+     * where the keys for the slot are gone (or about to be) and the
+     * accounting must follow the data. */
     memset(&server.cluster->slot_stats[slot], 0, sizeof(slotStat));
 }
 
 void clusterSlotStatResetAll(void) {
-    memset(server.cluster->slot_stats, 0, sizeof(server.cluster->slot_stats));
+    /* This is invoked from CONFIG RESETSTAT (cumulative reset). data_bytes
+     * is a state metric reflecting current key memory usage, so we preserve
+     * it here. FLUSHDB / FLUSHALL paths use clusterSlotStatsResetDataBytesAll
+     * to clear the state metric in step with the data being removed. */
+    for (int slot = 0; slot < CLUSTER_SLOTS; slot++) {
+        slotStat *s = &server.cluster->slot_stats[slot];
+        s->cpu_usec = 0;
+        s->network_bytes_in = 0;
+        s->network_bytes_out = 0;
+    }
 }
 
 /* For cpu-usec accumulation, nested commands within EXEC, EVAL, FCALL are skipped.
@@ -287,6 +618,9 @@ void clusterSlotStatsCommand(client *c) {
             order_by = NETWORK_BYTES_IN;
         } else if (!strcasecmp(objectGetVal(c->argv[3]), "network-bytes-out") && server.cluster_slot_stats_enabled) {
             order_by = NETWORK_BYTES_OUT;
+        } else if (!strcasecmp(objectGetVal(c->argv[3]), "data-bytes")) {
+            /* data-bytes is a state metric, always available when cluster is enabled. */
+            order_by = DATA_BYTES;
         } else {
             addReplyError(c, "Unrecognized sort metric for ORDERBY.");
             return;

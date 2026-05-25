@@ -422,6 +422,12 @@ typedef struct slotStat {
     uint64_t cpu_usec;
     uint64_t network_bytes_in;
     uint64_t network_bytes_out;
+    /* Per-object-type logical byte accounting (sum of key length plus the
+     * value's logical content size). Indexed by OBJ_* type constants from
+     * server.h. This is a state metric that reflects the current contents
+     * of the slot, not a cumulative counter; see clusterSlotStatsAddMemory /
+     * clusterSlotStatsSubMemory in cluster_slot_stats.c. */
+    uint64_t data_bytes[OBJ_TYPE_MAX];
 } slotStat;
 
 typedef struct slotRange {

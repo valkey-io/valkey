@@ -30,6 +30,7 @@
 #include "server.h"
 #include "cluster.h"
 #include "cluster_migrateslots.h"
+#include "cluster_slot_stats.h"
 #include "latency.h"
 #include "script.h"
 #include "functions.h"
@@ -79,7 +80,7 @@ static robj *dbFindWithDictIndex(serverDb *db, sds key, int dict_index);
  * expired on replicas even if the primary is lagging expiring our key via DELs
  * in the replication link. */
 robj *lookupKey(serverDb *db, robj *key, int flags) {
-    int dict_index = getKVStoreIndexForKey(objectGetVal(key));
+    int dict_index = getSlotForKey(objectGetVal(key));
     robj *val = dbFindWithDictIndex(db, objectGetVal(key), dict_index);
     if (val) {
         /* Forcing deletion of expired keys on a replica makes the replica
@@ -120,6 +121,14 @@ robj *lookupKey(serverDb *db, robj *key, int flags) {
         if (!(flags & (LOOKUP_NONOTIFY | LOOKUP_WRITE))) notifyKeyspaceEvent(NOTIFY_KEY_MISS, "keymiss", key, db->id);
         if (!(flags & (LOOKUP_NOSTATS | LOOKUP_WRITE))) server.stat_keyspace_misses++;
         /* TODO: Use separate misses stats and notify event for WRITE */
+    }
+
+    /* Snapshot data-bytes for in-place mutation tracking. When a command does
+     * lookupKeyWrite followed by an in-place mutation and then signalModifiedKey,
+     * the delta is computed from this snapshot. The snapshot is per-key, so a
+     * command may safely look up several keys for write (e.g. SMOVE). */
+    if ((flags & LOOKUP_WRITE) && server.cluster_enabled && server.current_client) {
+        clusterSlotStatsSnapshotKey(server.current_client, getSlotForKey(objectGetVal(key)), key, val);
     }
 
     return val;
@@ -200,7 +209,7 @@ void dbUpdateObjectWithVolatileItemsTracking(serverDb *db, robj *o) {
  * If the update_if_existing argument is false, the program is aborted
  * if the key already exists, otherwise, it can fall back to dbOverwrite. */
 static void dbAddInternal(serverDb *db, robj *key, robj **valref, int update_if_existing) {
-    int dict_index = getKVStoreIndexForKey(objectGetVal(key));
+    int dict_index = getSlotForKey(objectGetVal(key));
     void **oldref = NULL;
     if (update_if_existing) {
         oldref = kvstoreHashtableFindRef(db->keys, dict_index, objectGetVal(key));
@@ -220,6 +229,8 @@ static void dbAddInternal(serverDb *db, robj *key, robj **valref, int update_if_
     dbTrackKeyWithVolatileItems(db, val);
     initObjectLRUOrLFU(val);
     kvstoreHashtableAdd(db->keys, dict_index, val);
+    clusterSlotStatsAddMemory(dict_index, objectGetVal(key), val);
+    clusterSlotStatsRefreshKey(server.current_client, key, val);
     signalKeyAsReady(db, key, val->type);
     notifyKeyspaceEvent(NOTIFY_NEW, "new", key, db->id);
     *valref = val;
@@ -229,8 +240,8 @@ void dbAdd(serverDb *db, robj *key, robj **valref) {
     dbAddInternal(db, key, valref, 0);
 }
 
-/* Returns which dict index should be used with kvstore for a given key. */
-int getKVStoreIndexForKey(sds key) {
+/* Returns the cluster hash slot for a key, or 0 when clustering is disabled. */
+int getSlotForKey(sds key) {
     return server.cluster_enabled ? getKeySlot(key) : 0;
 }
 
@@ -276,7 +287,7 @@ int getKeySlot(sds key) {
  * The function returns 1 if the key was added to the database, otherwise 0 is returned.
  */
 int dbAddRDBLoad(serverDb *db, sds key, robj **valref) {
-    int dict_index = getKVStoreIndexForKey(key);
+    int dict_index = getSlotForKey(key);
     hashtablePosition pos;
     if (!kvstoreHashtableFindPositionForInsert(db->keys, dict_index, key, &pos, NULL)) {
         return 0;
@@ -285,6 +296,8 @@ int dbAddRDBLoad(serverDb *db, sds key, robj **valref) {
     val = objectSetKeyAndExpire(val, key, -1);
     kvstoreHashtableInsertAtPosition(db->keys, dict_index, val, &pos);
     initObjectLRUOrLFU(val);
+
+    clusterSlotStatsAddMemory(dict_index, key, val);
 
     /* Track hash objects containing volatile items, created by rdbLoadObject (which lacks DB context). */
     dbTrackKeyWithVolatileItems(db, val);
@@ -318,13 +331,15 @@ int dbAddRDBLoad(serverDb *db, sds key, robj **valref) {
  * The program is aborted if the key was not already present. */
 static void dbSetValue(serverDb *db, robj *key, robj **valref, int overwrite, void **oldref) {
     robj *val = *valref;
+    int dict_index = getSlotForKey(objectGetVal(key));
     if (oldref == NULL) {
-        int dict_index = getKVStoreIndexForKey(objectGetVal(key));
         oldref = kvstoreHashtableFindRef(db->keys, dict_index, objectGetVal(key));
     }
     serverAssertWithInfo(NULL, key, oldref != NULL);
     robj *old = *oldref;
     robj *new;
+
+    clusterSlotStatsSubMemory(dict_index, objectGetVal(key), old);
 
     if (overwrite) {
         /* VM_StringDMA may call dbUnshareStringValue which may free val, so we
@@ -365,7 +380,6 @@ static void dbSetValue(serverDb *db, robj *key, robj **valref, int overwrite, vo
         *oldref = new;
         /* Replace the old value at its location in the expire space. */
         if (expire >= 0) {
-            int dict_index = getKVStoreIndexForKey(objectGetVal(key));
             void **expireref = kvstoreHashtableFindRef(db->expires, dict_index, objectGetVal(key));
             serverAssert(expireref != NULL);
             *expireref = new;
@@ -390,6 +404,11 @@ static void dbSetValue(serverDb *db, robj *key, robj **valref, int overwrite, vo
     } else {
         decrRefCount(old);
     }
+    clusterSlotStatsAddMemory(dict_index, objectGetVal(key), new);
+    /* Refresh snapshot so signalModifiedKey computes a zero delta instead of
+     * double counting an overwrite the caller may follow with an in-place
+     * mutation (e.g. dbUnshareStringValue before APPEND). */
+    clusterSlotStatsRefreshKey(server.current_client, key, new);
     *valref = new;
 }
 
@@ -488,6 +507,8 @@ int dbGenericDeleteWithDictIndex(serverDb *db, robj *key, int async, int flags, 
         decrRefCount(val);
         /* Because of dbUnshareStringValue, the val in de may change. */
         val = *ref;
+        clusterSlotStatsSubMemory(dict_index, objectGetVal(key), val);
+        clusterSlotStatsForgetKey(server.current_client, key);
 
         /* Delete from keys and expires tables. This will not free the object.
          * (The expires table has no destructor callback.) */
@@ -518,7 +539,7 @@ int dbGenericDeleteWithDictIndex(serverDb *db, robj *key, int async, int flags, 
 
 /* Helper for sync and async delete. */
 int dbGenericDelete(serverDb *db, robj *key, int async, int flags) {
-    int dict_index = getKVStoreIndexForKey(objectGetVal(key));
+    int dict_index = getSlotForKey(objectGetVal(key));
     return dbGenericDeleteWithDictIndex(db, key, async, flags, dict_index);
 }
 
@@ -526,7 +547,7 @@ int dbGenericDelete(serverDb *db, robj *key, int async, int flags) {
 void dbTrackKeyWithVolatileItems(serverDb *db, robj *o) {
     serverAssert(objectGetKey(o));
     if (o->type == OBJ_HASH && hashTypeHasVolatileFields(o)) {
-        int dict_index = getKVStoreIndexForKey(objectGetKey(o));
+        int dict_index = getSlotForKey(objectGetKey(o));
         kvstoreHashtableAdd(db->keys_with_volatile_items, dict_index, o);
     }
 }
@@ -534,7 +555,7 @@ void dbTrackKeyWithVolatileItems(serverDb *db, robj *o) {
 /* Delete a key from the keys with volatile entries tracking kvstore */
 void dbUntrackKeyWithVolatileItems(serverDb *db, robj *o) {
     serverAssert(objectGetKey(o));
-    int dict_index = getKVStoreIndexForKey(objectGetKey(o));
+    int dict_index = getSlotForKey(objectGetKey(o));
     kvstoreHashtableDelete(db->keys_with_volatile_items, dict_index, objectGetKey(o));
 }
 
@@ -634,6 +655,11 @@ long long emptyDbStructure(serverDb **dbarray, int dbnum, int async, void(callba
         }
         /* Because all keys of database are removed, reset average ttl. */
         resetDbExpiryState(dbarray[j]);
+    }
+
+    /* Only reset data_bytes for the real server DBs, not temp DBs. */
+    if (dbarray == server.db) {
+        clusterSlotStatsResetDataBytesAll();
     }
 
     return removed;
@@ -756,6 +782,13 @@ long long dbTotalServerKeyCount(void) {
 void signalModifiedKey(client *c, serverDb *db, robj *key) {
     touchWatchedKey(db, key);
     trackingInvalidateKey(c, key, 1);
+
+    /* Per-slot data-bytes: apply the delta for this key from the snapshot taken
+     * at lookupKeyWrite. This covers in-place mutations (APPEND, INCR, XADD on
+     * an existing stream, ...) that don't go through dbSetValue. The snapshot is
+     * keyed per-key, so multi-key in-place commands (e.g. SMOVE) are accounted
+     * correctly. */
+    clusterSlotStatsCommitKey(c, db, key);
 }
 
 void signalFlushedDb(int dbid, int async) {
@@ -1891,7 +1924,7 @@ void swapdbCommand(client *c) {
  *----------------------------------------------------------------------------*/
 
 int removeExpire(serverDb *db, robj *key) {
-    int dict_index = getKVStoreIndexForKey(objectGetVal(key));
+    int dict_index = getSlotForKey(objectGetVal(key));
     void *popped;
     if (kvstoreHashtablePop(db->expires, dict_index, objectGetVal(key), &popped)) {
         robj *val = popped;
@@ -1917,7 +1950,7 @@ robj *setExpire(client *c, serverDb *db, robj *key, long long when) {
     /* Reuse the object from the main dict in the expire dict. When setting
      * expire in an robj, it's potentially reallocated. We need to updates the
      * pointer(s) to it. */
-    int dict_index = getKVStoreIndexForKey(objectGetVal(key));
+    int dict_index = getSlotForKey(objectGetVal(key));
     void **valref = kvstoreHashtableFindRef(db->keys, dict_index, objectGetVal(key));
     serverAssertWithInfo(NULL, key, valref != NULL);
     val = *valref;
@@ -1926,7 +1959,7 @@ robj *setExpire(client *c, serverDb *db, robj *key, long long when) {
     robj *newval = objectSetExpire(val, when);
     if (newval->type == OBJ_HASH && hashTypeHasVolatileFields(newval)) {
         /* Replace the pointer in the keys_with_volatile_items table without accessing the old pointer. */
-        int dict_index = getKVStoreIndexForKey(objectGetKey(newval));
+        int dict_index = getSlotForKey(objectGetKey(newval));
         hashtable *volatile_items_ht = kvstoreGetHashtable(db->keys_with_volatile_items, dict_index);
         bool replaced = hashtableReplaceReallocatedEntry(volatile_items_ht, val, newval);
         serverAssert(replaced);
@@ -1964,7 +1997,7 @@ long long getExpireWithDictIndex(serverDb *db, robj *key, int dict_index) {
 /* Return the expire time of the specified key, or -1 if no expire
  * is associated with this key (i.e. the key is non volatile) */
 long long getExpire(serverDb *db, robj *key) {
-    int dict_index = getKVStoreIndexForKey(objectGetVal(key));
+    int dict_index = getSlotForKey(objectGetVal(key));
     return getExpireWithDictIndex(db, key, dict_index);
 }
 
@@ -1983,7 +2016,7 @@ void deleteExpiredKeyAndPropagateWithDictIndex(serverDb *db, robj *keyobj, int d
 
 /* Delete the specified expired key and propagate expire. */
 void deleteExpiredKeyAndPropagate(serverDb *db, robj *keyobj) {
-    int dict_index = getKVStoreIndexForKey(objectGetVal(keyobj));
+    int dict_index = getSlotForKey(objectGetVal(keyobj));
     deleteExpiredKeyAndPropagateWithDictIndex(db, keyobj, dict_index);
 }
 
@@ -2151,7 +2184,7 @@ static int keyIsExpiredWithDictIndex(serverDb *db, robj *key, int dict_index) {
 
 /* Check if the key is expired. */
 int keyIsExpired(serverDb *db, robj *key) {
-    int dict_index = getKVStoreIndexForKey(objectGetVal(key));
+    int dict_index = getSlotForKey(objectGetVal(key));
     return keyIsExpiredWithDictIndex(db, key, dict_index);
 }
 
@@ -2218,7 +2251,7 @@ static keyStatus expireIfNeededWithDictIndex(serverDb *db, robj *key, robj *val,
  * or returns KEY_DELETED if the key is expired and deleted. */
 static keyStatus expireIfNeeded(serverDb *db, robj *key, robj *val, int flags) {
     if (val != NULL && !objectIsExpired(val)) return KEY_VALID; /* shortcut */
-    int dict_index = getKVStoreIndexForKey(objectGetVal(key));
+    int dict_index = getSlotForKey(objectGetVal(key));
     return expireIfNeededWithDictIndex(db, key, val, flags, dict_index);
 }
 
@@ -2271,7 +2304,7 @@ static robj *dbFindWithDictIndex(serverDb *db, sds key, int dict_index) {
 }
 
 robj *dbFind(serverDb *db, sds key) {
-    int dict_index = getKVStoreIndexForKey(key);
+    int dict_index = getSlotForKey(key);
     return dbFindWithDictIndex(db, key, dict_index);
 }
 
@@ -2282,7 +2315,7 @@ robj *dbFindExpiresWithDictIndex(serverDb *db, sds key, int dict_index) {
 }
 
 robj *dbFindExpires(serverDb *db, sds key) {
-    int dict_index = getKVStoreIndexForKey(key);
+    int dict_index = getSlotForKey(key);
     return dbFindExpiresWithDictIndex(db, key, dict_index);
 }
 

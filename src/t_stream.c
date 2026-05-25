@@ -81,6 +81,7 @@ stream *streamNew(void) {
     s->max_deleted_entry_id.seq = 0;
     s->max_deleted_entry_id.ms = 0;
     s->entries_added = 0;
+    s->tracked_data_bytes = 0;
     s->cgroups = NULL; /* Created on demand to save memory when not used. */
     return s;
 }
@@ -193,6 +194,7 @@ robj *streamDup(robj *o) {
     new_s->last_id = s->last_id;
     new_s->max_deleted_entry_id = s->max_deleted_entry_id;
     new_s->entries_added = s->entries_added;
+    new_s->tracked_data_bytes = s->tracked_data_bytes;
     raxStop(&ri);
 
     if (s->cgroups == NULL) return sobj;
@@ -549,6 +551,7 @@ int streamAppendItem(stream *s, robj **argv, int64_t numfields, streamID *added_
 
     int flags = STREAM_ITEM_FLAG_NONE;
     if (lp == NULL) {
+        lp_bytes = 0; /* New listpack — old node's size is unchanged. */
         primary_id = id;
         streamEncodeID(rax_key, &id);
         /* Create the listpack having the primary entry ID and fields.
@@ -654,6 +657,7 @@ int streamAppendItem(stream *s, robj **argv, int64_t numfields, streamID *added_
     if (ri.data != lp) raxInsert(s->rax, (unsigned char *)&rax_key, sizeof(rax_key), lp, NULL);
     s->length++;
     s->entries_added++;
+    s->tracked_data_bytes += lpBytes(lp) - lp_bytes;
     s->last_id = id;
     if (s->length == 1) s->first_id = id;
     if (added_id) *added_id = id;
@@ -749,6 +753,7 @@ int64_t streamTrim(stream *s, streamAddTrimArgs *args) {
         }
 
         if (remove_node) {
+            s->tracked_data_bytes -= lpBytes(lp);
             lpFree(lp);
             raxRemove(s->rax, ri.key, ri.key_len, NULL);
             raxSeek(&ri, ">=", ri.key, ri.key_len);
@@ -762,6 +767,7 @@ int64_t streamTrim(stream *s, streamAddTrimArgs *args) {
         if (approx) break;
 
         /* Now we have to trim entries from within 'lp' */
+        size_t lp_bytes_before_trim = lpBytes(lp);
         int64_t deleted_from_lp = 0;
 
         p = lpNext(lp, p); /* Skip deleted field. */
@@ -846,6 +852,7 @@ int64_t streamTrim(stream *s, streamAddTrimArgs *args) {
         }
 
         /* Update the listpack with the new pointer. */
+        s->tracked_data_bytes += lpBytes(lp) - lp_bytes_before_trim;
         raxInsert(s->rax, ri.key, ri.key_len, lp, NULL);
 
         break; /* If we are here, there was enough to delete in the current
@@ -1264,6 +1271,7 @@ void streamIteratorRemoveEntry(streamIterator *si, streamID *current) {
      * We start flagging: */
     int64_t flags = lpGetInteger(si->lp_flags);
     flags |= STREAM_ITEM_FLAG_DELETED;
+    size_t lp_bytes_before = lpBytes(lp);
     lp = lpReplaceInteger(lp, &si->lp_flags, flags);
 
     /* Change the valid/deleted entries count in the primary entry. */
@@ -1273,6 +1281,7 @@ void streamIteratorRemoveEntry(streamIterator *si, streamID *current) {
     if (aux == 1) {
         /* If this is the last element in the listpack, we can remove the whole
          * node. */
+        si->stream->tracked_data_bytes -= lp_bytes_before;
         lpFree(lp);
         raxRemove(si->stream->rax, si->ri.key, si->ri.key_len, NULL);
     } else {
@@ -1283,6 +1292,7 @@ void streamIteratorRemoveEntry(streamIterator *si, streamID *current) {
         lp = lpReplaceInteger(lp, &p, aux + 1);
 
         /* Update the listpack with the new pointer. */
+        si->stream->tracked_data_bytes += lpBytes(lp) - lp_bytes_before;
         if (si->lp != lp) raxInsert(si->stream->rax, si->ri.key, si->ri.key_len, lp, NULL);
     }
 

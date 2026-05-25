@@ -2638,6 +2638,7 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
 
             /* Insert the key in the radix tree. */
             int retval = raxTryInsert(s->rax, (unsigned char *)nodekey, sizeof(streamID), lp, NULL);
+            if (retval) s->tracked_data_bytes += lpBytes(lp);
             sdsfree(nodekey);
             if (!retval) {
                 rdbReportCorruptRDB("Listpack re-added with existing key");

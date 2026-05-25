@@ -4180,6 +4180,12 @@ void afterCommand(client *c) {
 
     clusterSlotStatsAddNetworkBytesOutForUserClient(c);
 
+    /* Clear any data-bytes snapshots left by this command so nothing leaks into
+     * the next command. afterCommand runs at every command boundary (including
+     * EXEC sub-commands and scripted calls), which guarantees a snapshot never
+     * spans a SELECT and lets the snapshot stay db-id-agnostic. */
+    if (server.cluster_enabled) clusterSlotStatsClearSnapshot(c);
+
     /* Flush other pending push messages. only when we are not in nested call.
      * So the messages are not interleaved with transaction response. */
     if (!server.execution_nesting) listJoin(c->reply, server.pending_push_messages);

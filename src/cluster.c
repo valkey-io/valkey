@@ -774,16 +774,19 @@ int verifyClusterNodeId(const char *name, int length) {
 }
 
 int isValidAuxChar(int c) {
-    /* Return true if the character is alphanumeric */
-    if (isalnum(c)) {
-        return 1;
-    }
+    unsigned char ch = (unsigned char)c;
 
-    /* List of invalid characters */
-    static const char *invalid_charset = "!#$%&()*+;<>?@[]^{|}~";
+    /* Reject control characters (0x00-0x1F) and DEL (0x7F). */
+    if (ch <= 0x1F || ch == 0x7F) return 0;
 
-    /* Return true if the character is NOT in the invalid charset */
-    return strchr(invalid_charset, c) == NULL;
+    /* Allow alphanumeric characters. */
+    if (isalnum(ch)) return 1;
+
+    /* Reject characters that are format-significant in nodes.conf or could
+     * break parsing: delimiters, quotes, backslash, and other specials. */
+    static const char *invalid_charset = "!#$%&()*+,;<=>?@[]^{|}~\"'\\ ";
+
+    return strchr(invalid_charset, ch) == NULL;
 }
 
 int isValidAuxString(char *s, unsigned int length) {

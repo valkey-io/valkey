@@ -32,6 +32,7 @@
  * SPDX-License-Identifier: BSD-3-Clause
  */
 #include "server.h"
+#include "skiplist.h"
 #include "connection.h"
 #include "monotonic.h"
 #include "cluster.h"

@@ -39,6 +39,7 @@
  */
 
 #include "server.h"
+#include "skiplist.h"
 #include "hashtable.h"
 #include "eval.h"
 #include "script.h"

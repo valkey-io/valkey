@@ -33,6 +33,7 @@ set(VALKEY_SERVER_SRCS
     ${CMAKE_SOURCE_DIR}/src/t_list.c
     ${CMAKE_SOURCE_DIR}/src/t_set.c
     ${CMAKE_SOURCE_DIR}/src/t_zset.c
+    ${CMAKE_SOURCE_DIR}/src/skiplist.c
     ${CMAKE_SOURCE_DIR}/src/t_hash.c
     ${CMAKE_SOURCE_DIR}/src/config.c
     ${CMAKE_SOURCE_DIR}/src/aof.c

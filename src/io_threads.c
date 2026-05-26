@@ -8,6 +8,7 @@
 #include "cluster_migrateslots.h"
 #include "connection.h"
 #include "queues.h"
+#include "server.h"
 #include <sys/resource.h>
 
 #define IO_MPSC_QUEUE_SIZE 16384
@@ -523,7 +524,7 @@ int trySendReadToIOThreads(client *c) {
     c->read_flags |= isReplicatedClient(c) ? READ_FLAGS_REPLICATED : 0;
 
     c->io_read_state = CLIENT_PENDING_IO;
-    connSetPostponeUpdateState(c->conn, 1);
+    connSetPostponeUpdateState(c->conn, clientConnPostponeMaskFromIOState(c));
 
     if (unlikely(spmcEnqueue(&io_shared_inbox, tagJob(c, JOB_REQ_READ_CLIENT)) == false)) {
         c->read_flags = 0;
@@ -582,9 +583,9 @@ int trySendWriteToIOThreads(client *c) {
     serverAssert(c->bufpos > 0 || c->io_last_bufpos > 0 || is_replica);
 
     /* The main-thread will update the client state after the I/O thread completes the write. */
-    connSetPostponeUpdateState(c->conn, 1);
     c->write_flags = is_replica ? WRITE_FLAGS_IS_REPLICA : 0;
     c->io_write_state = CLIENT_PENDING_IO;
+    connSetPostponeUpdateState(c->conn, clientConnPostponeMaskFromIOState(c));
     void *job = tagJob(c, JOB_REQ_WRITE_CLIENT);
     if (unlikely(spmcEnqueue(&io_shared_inbox, job) == false)) {
         c->io_write_state = CLIENT_IDLE;
@@ -823,7 +824,7 @@ int trySendAcceptToIOThreads(connection *conn) {
 
     c->io_read_state = CLIENT_PENDING_IO;
     c->flag.pending_read = 1;
-    connSetPostponeUpdateState(c->conn, 1);
+    connSetPostponeUpdateState(c->conn, clientConnPostponeMaskFromIOState(c));
 
     void *job = tagJob(c, JOB_REQ_ACCEPT);
     if (unlikely(spmcEnqueue(&io_shared_inbox, job) == false)) {
@@ -859,17 +860,17 @@ static void handleReadJobs(client **read_jobs, int read_count) {
         server.stat_io_reads_processed += read_count;
         processClientsCommandsBatch();
 
-        /* RDMA is edge-triggered, so resume its transport after the batch and
-         * synchronously drain anything that arrived while updates were postponed. */
+        /* Resume transport after draining pending input and command queue. */
         for (int i = 0; i < id_count; i++) {
             client *c = lookupClientByID(read_client_ids[i]);
-            if (!c || !c->conn || !connUpdateStateMayInvokeHandlers(c->conn)) continue;
+            if (!c || !c->conn) continue;
 
-            connUpdateState(c->conn);
+            if (processPendingCommandAndInputBuffer(c) == C_OK) beforeNextClient(c);
 
             c = lookupClientByID(read_client_ids[i]);
             if (!c || !c->conn) continue;
-            if (processPendingCommandAndInputBuffer(c) == C_OK) beforeNextClient(c);
+            connSetPostponeUpdateState(c->conn, clientConnPostponeMask(c));
+            connUpdateState(c->conn);
         }
     }
 }

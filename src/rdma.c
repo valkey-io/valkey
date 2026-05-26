@@ -82,13 +82,13 @@ typedef enum ValkeyRdmaOpcode {
 #define VALKEY_RDMA_INVALID_OPCODE 0xffff
 #define VALKEY_RDMA_KEEPALIVE_MS 3000
 
-#define RDMA_CONN_FLAG_POSTPONE_UPDATE_STATE (1 << 0)
 
 typedef struct rdma_connection {
     connection c;
     struct rdma_cm_id *cm_id;
     int flags;
     int last_errno;
+    int postpone_mask;
     listNode *pending_list_node;
 } rdma_connection;
 
@@ -733,7 +733,7 @@ static void connRdmaEventHandler(struct aeEventLoop *el, int fd, void *clientDat
     }
 
     /* uplayer should read all */
-    while (!(rdma_conn->flags & RDMA_CONN_FLAG_POSTPONE_UPDATE_STATE) && ctx->rx.pos < ctx->rx.offset) {
+    while (!(rdma_conn->postpone_mask & CONN_POSTPONE_READ) && ctx->rx.pos < ctx->rx.offset) {
         /* When an IO-thread read completed but processClientIOReadsDone has not run yet,
          * readQueryFromClient cannot consume RDMA RX; without this break the read_handler
          * would be re-invoked in a tight loop (see trySendReadToIOThreads + postponeClientRead). */
@@ -751,7 +751,7 @@ static void connRdmaEventHandler(struct aeEventLoop *el, int fd, void *clientDat
     }
 
     /* RDMA comp channel has no POLLOUT event, try to send remaining buffer */
-    if (!(rdma_conn->flags & RDMA_CONN_FLAG_POSTPONE_UPDATE_STATE) && ctx->tx.offset < ctx->tx.length && conn->write_handler) {
+    if (!(rdma_conn->postpone_mask & CONN_POSTPONE_WRITE) && ctx->tx.offset < ctx->tx.length && conn->write_handler) {
         callHandler(conn, conn->write_handler);
     }
 }
@@ -931,7 +931,7 @@ static void connRdmaAcceptHandler(aeEventLoop *el, int fd, void *privdata, int m
 
 static int connRdmaSetRwHandler(connection *conn) {
     rdma_connection *rdma_conn = (rdma_connection *)conn;
-    if (rdma_conn->flags & RDMA_CONN_FLAG_POSTPONE_UPDATE_STATE) return C_OK;
+    if (rdma_conn->postpone_mask) return C_OK;
 
     /* IB channel only has POLLIN event */
     if (conn->read_handler || conn->write_handler) {
@@ -1780,7 +1780,7 @@ static int rdmaProcessPendingData(void) {
     listRewind(pending_list, &li);
     while ((ln = listNext(&li))) {
         rdma_conn = listNodeValue(ln);
-        if (rdma_conn->flags & RDMA_CONN_FLAG_POSTPONE_UPDATE_STATE) continue;
+        if (rdma_conn->postpone_mask) continue;
         conn = &rdma_conn->c;
 
         /* a connection can be disconnected by remote peer, CM event mark state as CONN_STATE_CLOSED, kick connection
@@ -1807,13 +1807,16 @@ static int rdmaProcessPendingData(void) {
     return processed;
 }
 
-static void postPoneUpdateRdmaState(struct connection *conn, int postpone) {
+static void postPoneUpdateRdmaState(struct connection *conn, int postpone_mask) {
     rdma_connection *rdma_conn = (rdma_connection *)conn;
-    if (postpone) {
-        rdma_conn->flags |= RDMA_CONN_FLAG_POSTPONE_UPDATE_STATE;
-    } else {
-        rdma_conn->flags &= ~RDMA_CONN_FLAG_POSTPONE_UPDATE_STATE;
-    }
+    rdma_conn->postpone_mask = postpone_mask;
+}
+
+static int rdmaPostReadDonePostponeMask(struct connection *conn, client *c) {
+    UNUSED(conn);
+    int mask = CONN_POSTPONE_READ;
+    if (c && c->io_write_state != CLIENT_IDLE) mask |= CONN_POSTPONE_WRITE;
+    return mask;
 }
 
 static void updateRdmaState(struct connection *conn) {
@@ -1866,7 +1869,7 @@ static ConnectionType CT_RDMA = {
     .process_pending_data = rdmaProcessPendingData,
     .postpone_update_state = postPoneUpdateRdmaState,
     .update_state = updateRdmaState,
-    .update_state_may_invoke_handlers = 1,
+    .post_read_done_postpone_mask = rdmaPostReadDonePostponeMask,
 
     /* Miscellaneous */
     .connIntegrityChecked = NULL,

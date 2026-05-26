@@ -65,6 +65,9 @@ typedef enum {
 #define CONN_FLAG_WRITE_BARRIER (1 << 1)        /* Write barrier requested */
 #define CONN_FLAG_ALLOW_ACCEPT_OFFLOAD (1 << 2) /* Connection accept can be offloaded to IO threads. */
 
+#define CONN_POSTPONE_READ (1 << 0) // flags that if we should postpone read or write.
+#define CONN_POSTPONE_WRITE (1 << 1)
+
 typedef enum {
     CONN_TYPE_INVALID = -1,
     CONN_TYPE_SOCKET,
@@ -90,6 +93,8 @@ static inline const char *getConnectionTypeName(int type) {
 }
 
 typedef void (*ConnectionCallbackFunc)(struct connection *conn);
+
+struct client;
 
 typedef struct ConnectionType {
     /* connection type */
@@ -141,12 +146,11 @@ typedef struct ConnectionType {
 
     /* Postpone update state - with IO threads & TLS we don't want the IO threads to update the event loop events - let
      * the main-thread do it */
-    void (*postpone_update_state)(struct connection *conn, int);
+    void (*postpone_update_state)(struct connection *conn, int postpone_mask);
     /* Called by the main-thread */
     void (*update_state)(struct connection *conn);
-    /* If true, update_state() may synchronously invoke read/write handlers (or
-     * equivalent). Networking defers/reschedules work around connUpdateState(). */
-    int update_state_may_invoke_handlers;
+    /* Absolute postpone mask after IO-thread read completes (NULL => 0). */
+    int (*post_read_done_postpone_mask)(struct connection *conn, struct client *c);
 
     /* TLS specified methods */
     sds (*get_peer_cert)(struct connection *conn);
@@ -514,21 +518,21 @@ static inline int connIsTLS(connection *conn) {
     return conn && conn->type == connectionTypeTls();
 }
 
-/* Return non-zero if this connection type's update_state may re-enter handlers. */
-static inline int connUpdateStateMayInvokeHandlers(connection *conn) {
-    return conn && conn->type && conn->type->update_state_may_invoke_handlers;
-}
-
 static inline void connUpdateState(connection *conn) {
     if (conn->type->update_state) {
         conn->type->update_state(conn);
     }
 }
 
-static inline void connSetPostponeUpdateState(connection *conn, int on) {
-    if (conn->type->postpone_update_state) {
-        conn->type->postpone_update_state(conn, on);
+static inline void connSetPostponeUpdateState(connection *conn, int postpone_mask) {
+    if (conn && conn->type && conn->type->postpone_update_state) {
+        conn->type->postpone_update_state(conn, postpone_mask);
     }
+}
+
+static inline int connPostReadDonePostponeMask(connection *conn, struct client *c) {
+    if (!conn || !conn->type || !conn->type->post_read_done_postpone_mask) return 0;
+    return conn->type->post_read_done_postpone_mask(conn, c);
 }
 
 static inline int connIsIntegrityChecked(connection *conn) {

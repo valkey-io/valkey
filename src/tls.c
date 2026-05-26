@@ -1211,9 +1211,9 @@ static void registerSSLEvent(tls_connection *conn) {
     }
 }
 
-static void postPoneUpdateSSLState(connection *conn_, int postpone) {
+static void postPoneUpdateSSLState(connection *conn_, int postpone_mask) {
     tls_connection *conn = (tls_connection *)conn_;
-    if (postpone) {
+    if (postpone_mask) {
         conn->flags |= TLS_CONN_FLAG_POSTPONE_UPDATE_STATE;
     } else {
         conn->flags &= ~TLS_CONN_FLAG_POSTPONE_UPDATE_STATE;
@@ -1993,7 +1993,6 @@ static ConnectionType CT_TLS = {
     .process_pending_data = tlsProcessPendingData,
     .postpone_update_state = postPoneUpdateSSLState,
     .update_state = updateSSLState,
-    .update_state_may_invoke_handlers = 0,
 
     /* TLS specified methods */
     .get_peer_cert = connTLSGetPeerCert,

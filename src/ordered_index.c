@@ -148,3 +148,8 @@ OrderedIndex *orderedIndexDefragInternals(OrderedIndex *oi, void *(*defragfn)(vo
 unsigned long orderedIndexScanDefrag(OrderedIndex *oi, unsigned long cursor, OrderedIndexDefragCallback callback, void *ctx, void *(*defragfn)(void *)) {
     return skiplistScanDefrag(oi, cursor, callback, ctx, defragfn);
 }
+
+/* Not declared in ordered_index.h — debug-only introspection. */
+int orderedIndexGetDepth(OrderedIndex *oi) {
+    return skiplistGetHeight(oi);
+}

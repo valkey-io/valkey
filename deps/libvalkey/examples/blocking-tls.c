@@ -15,7 +15,7 @@ int main(int argc, char **argv) {
     valkeyTLSContextError tls_error = VALKEY_TLS_CTX_NONE;
     valkeyContext *c;
     valkeyReply *reply;
-    if (argc < 4) {
+    if (argc < 5) {
         printf("Usage: %s <host> <port> <cert> <key> [ca]\n", argv[0]);
         exit(1);
     }
@@ -23,7 +23,7 @@ int main(int argc, char **argv) {
     int port = atoi(argv[2]);
     const char *cert = argv[3];
     const char *key = argv[4];
-    const char *ca = argc > 4 ? argv[5] : NULL;
+    const char *ca = argc > 5 ? argv[5] : NULL;
 
     valkeyInitOpenSSL();
     tls = valkeyCreateTLSContext(ca, NULL, cert, key, NULL, &tls_error);

@@ -41,7 +41,7 @@ int main(int argc, char **argv) {
 #endif
 
     struct event_base *base = event_base_new();
-    if (argc < 5) {
+    if (argc < 6) {
         fprintf(stderr,
                 "Usage: %s <key> <host> <port> <cert> <certKey> [ca]\n", argv[0]);
         exit(1);
@@ -55,7 +55,7 @@ int main(int argc, char **argv) {
 
     const char *cert = argv[4];
     const char *certKey = argv[5];
-    const char *caCert = argc > 5 ? argv[6] : NULL;
+    const char *caCert = argc > 6 ? argv[6] : NULL;
 
     valkeyTLSContext *tls;
     valkeyTLSContextError tls_error = VALKEY_TLS_CTX_NONE;

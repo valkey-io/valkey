@@ -157,15 +157,23 @@ jobs:
           echo "Latest valkey-benchmark path: $VALKEY_BENCHMARK_PATH"
 
       - name: Generate benchmark config
+        env:
+          INPUT_COMMANDS: ${{ github.event.inputs.commands }}
+          INPUT_DATA_SIZE: ${{ github.event.inputs.data_size }}
+          INPUT_IO_THREADS: ${{ github.event.inputs.io_threads }}
+          INPUT_PIPELINES: ${{ github.event.inputs.pipelines }}
+          INPUT_CLUSTER_MODE: ${{ github.event.inputs.cluster_mode }}
         run: |
           CONFIG_FILE="valkey/.github/benchmark_configs/benchmark-config-arm.json"
 
-          # Read user inputs (empty means use default from config)
-          COMMANDS='${{ github.event.inputs.commands }}'
-          DATA_SIZE='${{ github.event.inputs.data_size }}'
-          IO_THREADS='${{ github.event.inputs.io_threads }}'
-          PIPELINES='${{ github.event.inputs.pipelines }}'
-          CLUSTER_MODE=${{ github.event.inputs.cluster_mode }}
+          # Read user inputs from environment (safer than direct interpolation
+          # of ${{ github.event.inputs.* }} which can break quoting).
+          # Empty means use default from config.
+          COMMANDS="$INPUT_COMMANDS"
+          DATA_SIZE="$INPUT_DATA_SIZE"
+          IO_THREADS="$INPUT_IO_THREADS"
+          PIPELINES="$INPUT_PIPELINES"
+          CLUSTER_MODE="$INPUT_CLUSTER_MODE"
 
           # Validate input bounds
           if [[ -n "$DATA_SIZE" ]]; then
@@ -272,6 +280,13 @@ jobs:
             comparison.md
 
       - name: Comment PR with results
+        env:
+          INPUT_PR_NUMBER: ${{ github.event.inputs.pr_number }}
+          INPUT_COMMANDS: ${{ github.event.inputs.commands }}
+          INPUT_DATA_SIZE: ${{ github.event.inputs.data_size }}
+          INPUT_IO_THREADS: ${{ github.event.inputs.io_threads }}
+          INPUT_PIPELINES: ${{ github.event.inputs.pipelines }}
+          INPUT_CLUSTER_MODE: ${{ github.event.inputs.cluster_mode }}
         uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
@@ -282,8 +297,11 @@ jobs:
             const sha = '${{ needs.resolve-pr.outputs.head_sha }}';
             const short = sha.slice(0,7);
             const link = `[\`${short}\`](https://github.com/${owner}/${repo}/commit/${sha})`;
-            const commands = '${{ github.event.inputs.commands }}';
-            const cluster = '${{ github.event.inputs.cluster_mode }}' === 'true' ? ' (Cluster Mode)' : '';
+            // Read user inputs from process.env (safer than direct
+            // interpolation of ${{ github.event.inputs.* }} into JS strings).
+            const prNumber = Number(process.env.INPUT_PR_NUMBER);
+            const commands = process.env.INPUT_COMMANDS;
+            const cluster = process.env.INPUT_CLUSTER_MODE === 'true' ? ' (Cluster Mode)' : '';
             const runUrl = `https://github.com/${owner}/${repo}/actions/runs/${{ github.run_id }}`;
 
             let header = `**On-Demand Benchmark${cluster} ran on commit:** ${link}\n`;
@@ -291,9 +309,9 @@ jobs:
 
             // Show overridden configs
             const overrides = [];
-            const dataSize = '${{ github.event.inputs.data_size }}';
-            const ioThreads = '${{ github.event.inputs.io_threads }}';
-            const pipelines = '${{ github.event.inputs.pipelines }}';
+            const dataSize = process.env.INPUT_DATA_SIZE;
+            const ioThreads = process.env.INPUT_IO_THREADS;
+            const pipelines = process.env.INPUT_PIPELINES;
             if (dataSize) overrides.push(`**Data Size:** \`${dataSize}\``);
             if (ioThreads) overrides.push(`**IO Threads:** \`${ioThreads}\``);
             if (pipelines) overrides.push(`**Pipelines:** \`${pipelines}\``);
@@ -304,7 +322,7 @@ jobs:
             header += `**Runs:** 3 | [Workflow Run](${runUrl})\n\n`;
 
             await github.rest.issues.createComment({
-              issue_number: ${{ github.event.inputs.pr_number }},
+              issue_number: prNumber,
               owner,
               repo,
               body: header + body

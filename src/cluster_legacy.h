@@ -69,6 +69,7 @@ typedef struct clusterLink {
                                                                                    * myself will gossip this flag to other replica in the   \
                                                                                    * shard so that the replicas can make a better ranking   \
                                                                                    * decisions to help with the failover. */
+#define CLUSTER_NODE_FAILOVER_AUTH_NACK_SUPPORTED (1 << 14)                       /* This node understands FAILOVER_AUTH_NACK messages. */
 
 #define CLUSTER_NODE_NULL_NAME                                                                                         \
     "\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000" \
@@ -86,6 +87,7 @@ typedef struct clusterLink {
 #define nodeSupportsMultiMeet(n) ((n)->flags & CLUSTER_NODE_MULTI_MEET_SUPPORTED)
 #define nodeInNormalState(n) (!((n)->flags & (CLUSTER_NODE_HANDSHAKE | CLUSTER_NODE_MEET | CLUSTER_NODE_PFAIL | CLUSTER_NODE_FAIL)))
 #define nodePrimaryIsFail(n) ((n)->flags & CLUSTER_NODE_MY_PRIMARY_FAIL)
+#define nodeSupportsFailoverAuthNack(n) ((n)->flags & CLUSTER_NODE_FAILOVER_AUTH_NACK_SUPPORTED)
 
 /* Cluster messages header */
 
@@ -106,7 +108,8 @@ typedef struct clusterLink {
 #define CLUSTERMSG_TYPE_MFSTART 8               /* Pause clients for manual failover */
 #define CLUSTERMSG_TYPE_MODULE 9                /* Module cluster API message. */
 #define CLUSTERMSG_TYPE_PUBLISHSHARD 10         /* Pub/Sub Publish shard propagation */
-#define CLUSTERMSG_TYPE_COUNT 11                /* Total number of message types. */
+#define CLUSTERMSG_TYPE_FAILOVER_AUTH_NACK 11   /* No, you don't have my vote. */
+#define CLUSTERMSG_TYPE_COUNT 12                /* Total number of message types. */
 
 #define CLUSTERMSG_LIGHT 0x8000 /* Modifier bit for message types that support light header */
 
@@ -140,6 +143,11 @@ typedef struct {
 typedef struct {
     char nodename[CLUSTER_NAMELEN];
 } clusterMsgDataFail;
+
+typedef struct {
+    uint8_t reason;
+    char notused1[24];
+} clusterMsgDataFailoverNack;
 
 typedef struct {
     uint32_t channel_len;
@@ -264,6 +272,11 @@ union clusterMsgData {
     struct {
         clusterMsgModule msg;
     } module;
+
+    /* FAILOVER_AUTH_NACK */
+    struct {
+        clusterMsgDataFailoverNack nack;
+    } failover_nack;
 };
 
 #define CLUSTER_PROTO_VER 1 /* Cluster bus protocol version. */
@@ -335,6 +348,13 @@ static_assert(offsetof(clusterMsg, data) == 2256, "unexpected field offset");
 #define CLUSTERMSG_FLAG0_FORCEACK (1 << 1) /* Give ACK to AUTH_REQUEST even if \
                                               primary is up. */
 #define CLUSTERMSG_FLAG0_EXT_DATA (1 << 2) /* Message contains extension data */
+
+/* Reason values carried in clusterMsgDataFailoverNack.reason. */
+#define CLUSTERMSG_FAILOVER_AUTH_NACK_REASON_NOT_SAFE 1      /* Voter is not safe to vote yet. */
+#define CLUSTERMSG_FAILOVER_AUTH_NACK_REASON_REQ_EPOCH_OLD 2 /* Request epoch < voter's currentEpoch. */
+#define CLUSTERMSG_FAILOVER_AUTH_NACK_REASON_ALREADY_VOTED 3 /* Voter already voted in this epoch. */
+#define CLUSTERMSG_FAILOVER_AUTH_NACK_REASON_PRIMARY_UP 4    /* Replica's primary is not failed. */
+#define CLUSTERMSG_FAILOVER_AUTH_NACK_REASON_STALE_CONFIG 5  /* Replica's slot config is stale. */
 
 typedef struct {
     char sig[4];     /* Signature "RCmb" (Cluster message bus). */
@@ -448,6 +468,7 @@ struct clusterState {
     /* The following fields are used to take the replica state on elections. */
     mstime_t failover_auth_time;      /* Time of previous or next election. */
     int failover_auth_count;          /* Number of votes received so far. */
+    int failover_auth_nack_count;     /* Number of rejected votes received so far. */
     int failover_auth_sent;           /* True if we already asked for votes. */
     int failover_auth_rank;           /* This replica rank for current auth request. */
     int failover_failed_primary_rank; /* The rank of this instance in the context of all failed primary list. */

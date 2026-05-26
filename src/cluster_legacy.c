@@ -67,6 +67,9 @@ void clusterReadHandler(connection *conn);
 void clusterSendPing(clusterLink *link, int type);
 void clusterSendFail(char *nodename);
 void clusterSendFailoverAuthIfNeeded(clusterNode *node, clusterMsg *request);
+void clusterProcessFailoverAuthNack(clusterNode *sender, clusterMsg *request);
+void clusterSendFailoverNack(clusterNode *node, uint8_t reason);
+static const char *clusterNackReasonString(uint8_t reason);
 void clusterUpdateState(void);
 list *clusterGetNodesInMyShard(clusterNode *node);
 int clusterNodeAddReplica(clusterNode *primary, clusterNode *replica);
@@ -1253,7 +1256,8 @@ void clusterUpdateMyselfFlags(void) {
     myself->flags |= CLUSTER_NODE_EXTENSIONS_SUPPORTED |
                      CLUSTER_NODE_LIGHT_HDR_PUBLISH_SUPPORTED |
                      CLUSTER_NODE_LIGHT_HDR_MODULE_SUPPORTED |
-                     CLUSTER_NODE_MULTI_MEET_SUPPORTED;
+                     CLUSTER_NODE_MULTI_MEET_SUPPORTED |
+                     CLUSTER_NODE_FAILOVER_AUTH_NACK_SUPPORTED;
     if (myself->flags != oldflags) {
         clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_UPDATE_STATE);
 
@@ -1455,6 +1459,7 @@ void clusterInit(void) {
     server.cluster->importing_slots_from = dictCreate(&clusterSlotDictType);
     server.cluster->failover_auth_time = 0;
     server.cluster->failover_auth_count = 0;
+    server.cluster->failover_auth_nack_count = 0;
     server.cluster->failover_auth_rank = 0;
     server.cluster->failover_auth_sent = 0;
     server.cluster->failover_failed_primary_rank = 0;
@@ -3772,6 +3777,9 @@ int clusterIsValidPacket(clusterLink *link) {
     } else if (type == CLUSTERMSG_TYPE_FAILOVER_AUTH_REQUEST || type == CLUSTERMSG_TYPE_FAILOVER_AUTH_ACK ||
                type == CLUSTERMSG_TYPE_MFSTART) {
         explen = sizeof(clusterMsg) - sizeof(union clusterMsgData);
+    } else if (type == CLUSTERMSG_TYPE_FAILOVER_AUTH_NACK) {
+        explen = sizeof(clusterMsg) - sizeof(union clusterMsgData);
+        explen += sizeof(clusterMsgDataFailoverNack);
     } else if (type == CLUSTERMSG_TYPE_UPDATE) {
         explen = sizeof(clusterMsg) - sizeof(union clusterMsgData);
         explen += sizeof(clusterMsgDataUpdate);
@@ -3901,6 +3909,13 @@ int clusterProcessPacket(clusterLink *link) {
             sender->flags |= CLUSTER_NODE_MY_PRIMARY_FAIL;
         } else {
             sender->flags &= ~CLUSTER_NODE_MY_PRIMARY_FAIL;
+        }
+
+        /* Check if the node understands FAILOVER_AUTH_NACK packets. */
+        if (flags & CLUSTER_NODE_FAILOVER_AUTH_NACK_SUPPORTED) {
+            sender->flags |= CLUSTER_NODE_FAILOVER_AUTH_NACK_SUPPORTED;
+        } else {
+            sender->flags &= ~CLUSTER_NODE_FAILOVER_AUTH_NACK_SUPPORTED;
         }
     }
 
@@ -4418,6 +4433,16 @@ int clusterProcessPacket(clusterLink *link) {
             /* Maybe we reached a quorum here, set a flag to make sure
              * we check ASAP. */
             clusterDoBeforeSleep(CLUSTER_TODO_HANDLE_FAILOVER);
+        }
+    } else if (type == CLUSTERMSG_TYPE_FAILOVER_AUTH_NACK) {
+        if (!sender) return 1; /* We don't know that node. */
+
+        /* We consider this nack only if the sender is a primary serving
+         * a non zero number of slots, and its currentEpoch is greater or
+         * equal to epoch where this node started the election. */
+        if (server.cluster->failover_auth_time && clusterNodeIsVotingPrimary(sender) &&
+            sender_claimed_current_epoch >= server.cluster->failover_auth_epoch) {
+            clusterProcessFailoverAuthNack(sender, msg);
         }
     } else if (type == CLUSTERMSG_TYPE_MFSTART) {
         /* This message is acceptable only if I'm a primary and the sender
@@ -5272,6 +5297,32 @@ void clusterSendFailoverAuth(clusterNode *node) {
     clusterMsgSendBlockDecrRefCount(msgblock);
 }
 
+static const char *clusterNackReasonString(uint8_t reason) {
+    switch (reason) {
+    case CLUSTERMSG_FAILOVER_AUTH_NACK_REASON_NOT_SAFE:      return "not-safe";
+    case CLUSTERMSG_FAILOVER_AUTH_NACK_REASON_REQ_EPOCH_OLD: return "req-epoch-old";
+    case CLUSTERMSG_FAILOVER_AUTH_NACK_REASON_ALREADY_VOTED: return "already-voted";
+    case CLUSTERMSG_FAILOVER_AUTH_NACK_REASON_PRIMARY_UP:    return "primary-up";
+    case CLUSTERMSG_FAILOVER_AUTH_NACK_REASON_STALE_CONFIG:  return "stale-config";
+    default:                                                 return "unknown";
+    }
+}
+
+/* Send a FAILOVER_AUTH_NACK message to the specified node. */
+void clusterSendFailoverNack(clusterNode *node, uint8_t reason) {
+    if (!node->link) return;
+    if (!nodeSupportsFailoverAuthNack(node)) return;
+
+    uint32_t msglen = sizeof(clusterMsg) - sizeof(union clusterMsgData) + sizeof(clusterMsgDataFailoverNack);
+    clusterMsgSendBlock *msgblock = createClusterMsgSendBlock(CLUSTERMSG_TYPE_FAILOVER_AUTH_NACK, msglen);
+
+    clusterMsg *hdr = getMessageFromSendBlock(msgblock);
+    hdr->data.failover_nack.nack.reason = reason;
+
+    clusterSendMessage(node->link, msgblock);
+    clusterMsgSendBlockDecrRefCount(msgblock);
+}
+
 /* Send a MFSTART message to the specified node. */
 void clusterSendMFStart(clusterNode *node) {
     if (!node->link) return;
@@ -5302,6 +5353,7 @@ void clusterSendFailoverAuthIfNeeded(clusterNode *node, clusterMsg *request) {
     if (!server.cluster->safe_to_join) {
         serverLog(LL_WARNING, "Failover auth denied to %.40s (%s): it is not safe to vote in this moment)",
                   node->name, humanNodename(node));
+        clusterSendFailoverNack(node, CLUSTERMSG_FAILOVER_AUTH_NACK_REASON_NOT_SAFE);
         return;
     }
 
@@ -5313,6 +5365,7 @@ void clusterSendFailoverAuthIfNeeded(clusterNode *node, clusterMsg *request) {
         serverLog(LL_WARNING, "Failover auth denied to %.40s (%s): reqEpoch (%llu) < curEpoch(%llu)", node->name,
                   humanNodename(node), (unsigned long long)requestCurrentEpoch,
                   (unsigned long long)server.cluster->currentEpoch);
+        clusterSendFailoverNack(node, CLUSTERMSG_FAILOVER_AUTH_NACK_REASON_REQ_EPOCH_OLD);
         return;
     }
 
@@ -5320,6 +5373,7 @@ void clusterSendFailoverAuthIfNeeded(clusterNode *node, clusterMsg *request) {
     if (server.cluster->lastVoteEpoch == server.cluster->currentEpoch) {
         serverLog(LL_WARNING, "Failover auth denied to %.40s (%s): already voted for epoch %llu", node->name,
                   humanNodename(node), (unsigned long long)server.cluster->currentEpoch);
+        clusterSendFailoverNack(node, CLUSTERMSG_FAILOVER_AUTH_NACK_REASON_ALREADY_VOTED);
         return;
     }
 
@@ -5337,6 +5391,7 @@ void clusterSendFailoverAuthIfNeeded(clusterNode *node, clusterMsg *request) {
             serverLog(LL_WARNING, "Failover auth denied to %.40s (%s) for epoch %llu: its primary is up", node->name,
                       humanNodename(node), (unsigned long long)requestCurrentEpoch);
         }
+        clusterSendFailoverNack(node, CLUSTERMSG_FAILOVER_AUTH_NACK_REASON_PRIMARY_UP);
         return;
     }
 
@@ -5371,6 +5426,7 @@ void clusterSendFailoverAuthIfNeeded(clusterNode *node, clusterMsg *request) {
                       "an UPDATE message about %.40s (%s)",
                       node->name, humanNodename(node), slot_owner->name, humanNodename(slot_owner));
             clusterSendUpdate(node->link, slot_owner);
+            clusterSendFailoverNack(node, CLUSTERMSG_FAILOVER_AUTH_NACK_REASON_STALE_CONFIG);
             return;
         }
     }
@@ -5381,6 +5437,37 @@ void clusterSendFailoverAuthIfNeeded(clusterNode *node, clusterMsg *request) {
     clusterSendFailoverAuth(node);
     serverLog(LL_NOTICE, "Failover auth granted to %.40s (%s) for epoch %llu", node->name, humanNodename(node),
               (unsigned long long)server.cluster->currentEpoch);
+}
+
+/* Handle a FAILOVER_AUTH_NACK from a voter. */
+void clusterProcessFailoverAuthNack(clusterNode *sender, clusterMsg *request) {
+    /* The reason is bracketed up front so operators can quickly grep
+     * for a specific cause; the trailing NACKs k/N gives at-a-glance
+     * progress towards the fast-fail threshold. */
+    server.cluster->failover_auth_nack_count++;
+    serverLog(LL_WARNING,
+              "Failover auth NACK [%s] from %.40s (%s) for epoch %llu (NACKs %d/%d)",
+              clusterNackReasonString(request->data.failover_nack.nack.reason),  sender->name,
+              humanNodename(sender), (unsigned long long)server.cluster->failover_auth_epoch,
+              server.cluster->failover_auth_nack_count, server.cluster->size);
+
+    /* A voter that NACKed us in this epoch will not change its mind, so
+     * the upper bound on the votes we can ever collect is the voters that
+     * have not (yet) NACKed. Fast-fail once that bound drops below the
+     * quorum we need to win. */
+    int needed_quorum = (server.cluster->size / 2) + 1;
+    int max_possible_acks = server.cluster->size - server.cluster->failover_auth_nack_count;
+    if (max_possible_acks < needed_quorum) {
+        serverLog(LL_WARNING,
+                  "Failover election for epoch %llu cannot reach quorum %d (NACKs %d/%d). "
+                  "Resetting the election since we cannot win an election without quorum.",
+                  (unsigned long long)server.cluster->failover_auth_epoch, needed_quorum,
+                  server.cluster->failover_auth_nack_count, server.cluster->size);
+        server.cluster->failover_auth_time = 0;
+        /* Maybe we could start a new election, set a flag here to make sure
+         * we check as soon as possible, instead of waiting for a cron. */
+        clusterDoBeforeSleep(CLUSTER_TODO_HANDLE_FAILOVER);
+    }
 }
 
 /* This function returns the "rank" of this instance, a replica, in the context
@@ -5626,6 +5713,7 @@ void clusterHandleReplicaFailover(void) {
     /* Use a failover delay relative to node timeout: 500 for the default node
      * timeout of 15000, less for lower node timeout, but not more. */
     long long delay = min(server.cluster_node_timeout / 30, 500);
+    if (server.debug_cluster_failover_delay >= 0) delay = server.debug_cluster_failover_delay;
 
     /* Pre conditions to run the function, that must be met both in case
      * of an automatic or manual failover:
@@ -5674,7 +5762,9 @@ void clusterHandleReplicaFailover(void) {
         server.cluster->failover_auth_time = now +
                                              delay +           /* Fixed delay to let FAIL msg propagate. */
                                              random() % delay; /* Random delay between 0 and the fixed delay. */
+        if (server.debug_cluster_failover_delay >= 0) server.cluster->failover_auth_time = now + delay;
         server.cluster->failover_auth_count = 0;
+        server.cluster->failover_auth_nack_count = 0;
         server.cluster->failover_auth_sent = 0;
         server.cluster->failover_auth_rank = clusterGetReplicaRank();
         /* We add another delay that is proportional to the replica rank.
@@ -7139,6 +7229,7 @@ const char *clusterGetMessageTypeString(int type) {
     case CLUSTERMSG_TYPE_PUBLISHSHARD: return "publishshard";
     case CLUSTERMSG_TYPE_FAILOVER_AUTH_REQUEST: return "auth-req";
     case CLUSTERMSG_TYPE_FAILOVER_AUTH_ACK: return "auth-ack";
+    case CLUSTERMSG_TYPE_FAILOVER_AUTH_NACK: return "auth-nack";
     case CLUSTERMSG_TYPE_UPDATE: return "update";
     case CLUSTERMSG_TYPE_MFSTART: return "mfstart";
     case CLUSTERMSG_TYPE_MODULE: return "module";

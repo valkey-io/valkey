@@ -448,6 +448,9 @@ void debugCommand(client *c) {
             "    Disable sending cluster ping to a random node every second.",
             "DISABLE-CLUSTER-RECONNECTION <0|1>",
             "    Disable cluster reconnection of cluster nodes.",
+            "CLUSTER-FAILOVER-DELAY <delay-ms>",
+            "    Override the failover delay. -1 is the default value, meaning disabled,",
+            "    values >= 0 will be used for the failover delay.",
             "OOM",
             "    Crash the server simulating an out-of-memory error.",
             "PANIC",
@@ -637,6 +640,15 @@ void debugCommand(client *c) {
         addReply(c, shared.ok);
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "disable-cluster-reconnection") && c->argc == 3) {
         server.debug_cluster_disable_reconnection = atoi(objectGetVal(c->argv[2]));
+        addReply(c, shared.ok);
+    } else if (!strcasecmp(objectGetVal(c->argv[1]), "cluster-failover-delay") && c->argc == 3) {
+        int delay_ms;
+        if (getIntFromObjectOrReply(c, c->argv[2], &delay_ms, NULL) != C_OK) return;
+        if (delay_ms < -1) {
+            addReplyError(c, "delay-ms must be -1 (default) or a non-negative value in ms");
+            return;
+        }
+        server.debug_cluster_failover_delay = delay_ms;
         addReply(c, shared.ok);
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "slotmigration")) {
         if (!strcasecmp(objectGetVal(c->argv[2]), "prevent-pause")) {

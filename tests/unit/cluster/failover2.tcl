@@ -64,16 +64,19 @@ start_cluster 3 4 {tags {external:skip cluster} overrides {cluster-ping-interval
     }
 } ;# start_cluster
 
-start_cluster 7 3 {tags {external:skip cluster} overrides {cluster-ping-interval 1000}} {
-    test "Primaries will not time out then they are elected in the same epoch" {
+# Needs to run in the body of
+# start_cluster 7 3 {tags {external:skip cluster} overrides {cluster-ping-interval 1000}}
+proc test_same_epoch {delay} {
+    test "Primaries will not time out then they are elected in the same epoch - delay $delay" {
         # Since we have the delay time, so these node may not initiate the
         # election at the same time (same epoch). But if they do, we make
         # sure there is no failover timeout.
+        R 7 DEBUG CLUSTER-FAILOVER-DELAY $delay
+        R 8 DEBUG CLUSTER-FAILOVER-DELAY $delay
+        R 9 DEBUG CLUSTER-FAILOVER-DELAY $delay
 
         # Killing there primary nodes.
-        pause_process [srv 0 pid]
-        pause_process [srv -1 pid]
-        pause_process [srv -2 pid]
+        exec kill -SIGSTOP [srv 0 pid] [srv -1 pid] [srv -2 pid]
 
         # Wait for the failover
         wait_for_condition 1000 50 {
@@ -99,6 +102,14 @@ start_cluster 7 3 {tags {external:skip cluster} overrides {cluster-ping-interval
         resume_process [srv -1 pid]
         resume_process [srv -2 pid]
     }
+}
+
+start_cluster 7 3 {tags {external:skip cluster} overrides {cluster-ping-interval 1000}} {
+    test_same_epoch 500
+} ;# start_cluster
+
+start_cluster 7 3 {tags {external:skip cluster} overrides {cluster-ping-interval 1000}} {
+    test_same_epoch 0
 } ;# start_cluster
 
 run_solo {cluster} {

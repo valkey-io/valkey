@@ -1488,8 +1488,6 @@ struct sharedObjectsStruct {
     sds minstring, maxstring;
 };
 
-/* OrderedIndex types - full definitions in ordered_index.h */
-
 /* OrderedIndex - full definition in ordered_index.h */
 typedef struct OrderedIndex OrderedIndex;
 

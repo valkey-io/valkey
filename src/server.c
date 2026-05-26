@@ -633,7 +633,7 @@ const void *zsetHashtableGetKey(const void *element) {
     return ptr;
 }
 
-/* Sorted sets hash (note: a skiplist is used in addition to the hash table) */
+/* Sorted sets hash (an ordered index is used in addition to the hash table) */
 hashtableType zsetHashtableType = {
     .hashFunction = sdsHashConfigurableSeed,
     .entryGetKey = zsetHashtableGetKey,

@@ -37,7 +37,6 @@
 #define SKIPLIST_H
 
 #include "server.h"
-#include <stdbool.h>
 
 /*
  * This skiplist implementation is almost a C translation of the original

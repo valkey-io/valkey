@@ -255,13 +255,11 @@ void skiplistResetIterator(OrderedIndexIterator *iter) {
 }
 
 OrderedIndexItem *skiplistNext(OrderedIndexIterator *iter) {
-    zskiplistNode *node;
-    return zslNext((zslIter *)iter, &node) ? (OrderedIndexItem *)node : NULL;
+    return (OrderedIndexItem *)zslNext((zslIter *)iter);
 }
 
 OrderedIndexItem *skiplistPrev(OrderedIndexIterator *iter) {
-    zskiplistNode *node;
-    return zslPrev((zslIter *)iter, &node) ? (OrderedIndexItem *)node : NULL;
+    return (OrderedIndexItem *)zslPrev((zslIter *)iter);
 }
 
 void skiplistSeekToRank(OrderedIndexIterator *iter, unsigned long rank) {

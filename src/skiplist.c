@@ -717,48 +717,40 @@ void zslReleaseIterator(zslIter *iter) {
     zfree(iter);
 }
 
-bool zslNext(zslIter *iter, zskiplistNode **nodeptr) {
+zskiplistNode *zslNext(zslIter *iter) {
     if (iter->zsl == NULL) {
-        *nodeptr = NULL;
-        return false;
+        return NULL;
     }
     if (iter->node == NULL) {
         iter->node = zslGetHeader(iter->zsl)->level[0].forward;
     } else if (iter->node == zslGetTail(iter->zsl)) {
-        *nodeptr = NULL;
-        return false;
+        return NULL;
     } else {
         iter->node = iter->node->level[0].forward;
     }
     if (iter->node == NULL) {
-        *nodeptr = NULL;
-        return false;
+        return NULL;
     }
-    *nodeptr = iter->node;
-    return true;
+    return iter->node;
 }
 
-bool zslPrev(zslIter *iter, zskiplistNode **nodeptr) {
+zskiplistNode *zslPrev(zslIter *iter) {
     if (iter->zsl == NULL) {
-        *nodeptr = NULL;
-        return false;
+        return NULL;
     }
     if (iter->node == zslGetHeader(iter->zsl)) {
-        *nodeptr = NULL;
-        return false;
+        return NULL;
     }
     if (iter->node == NULL) {
         iter->node = zslGetTail(iter->zsl);
         if (iter->node == NULL) {
-            *nodeptr = NULL;
-            return false;
+            return NULL;
         }
     }
     zskiplistNode *ret = iter->node;
     iter->node = iter->node->backward;
     if (iter->node == NULL) iter->node = zslGetHeader(iter->zsl);
-    *nodeptr = ret;
-    return true;
+    return ret;
 }
 
 void zslSeekToRank(zslIter *iter, unsigned long rank) {

@@ -40,25 +40,15 @@
  * in order to get O(log(N)) INSERT and REMOVE operations into a sorted
  * data structure.
  *
- * The elements are added to a hash table mapping Objects to scores.
- * At the same time the elements are added to a skip list mapping scores
- * to Objects (so objects are sorted by scores in this "view").
+ * The elements are added to a hash table mapping elements to scores.
+ * At the same time the elements are added to an ordered index mapping scores
+ * to elements (so elements are sorted by scores in this "view").
  *
- * Note that the SDS string representing the element is the same in both
- * the hash table and skiplist in order to save memory. What we do in order
- * to manage the shared SDS string more easily is to free the SDS string
- * only in orderedIndexFreeItem(). The dictionary has no value free method set.
- * So we should always remove an element from the dictionary, and later from
- * the skiplist.
- *
- * This skiplist implementation is almost a C translation of the original
- * algorithm described by William Pugh in "Skip Lists: A Probabilistic
- * Alternative to Balanced Trees", modified in three ways:
- * a) this implementation allows for repeated scores.
- * b) the comparison is not just by key (our 'score') but by satellite data.
- * c) there is a back pointer, so it's a doubly linked list with the back
- * pointers being only at "level 1". This allows to traverse the list
- * from tail to head, useful for ZREVRANGE. */
+ * Note that the element string is shared between the hash table and the
+ * ordered index in order to save memory. The element is freed only in
+ * orderedIndexFreeItem(). The hash table has no value free method set.
+ * So we should always remove an element from the hash table, and later from
+ * the ordered index. */
 
 #include "server.h"
 #include "skiplist.h"
@@ -568,7 +558,7 @@ static unsigned char *zzlDeleteRangeByLex(unsigned char *zl, zlexrangespec *rang
     return zl;
 }
 
-/* Delete all the elements with rank between start and end from the skiplist.
+/* Delete all the elements with rank between start and end from the listpack.
  * Start and end are inclusive. Note that start and end need to be 1-based */
 unsigned char *zzlDeleteRangeByRank(unsigned char *zl, unsigned int start, unsigned int end, unsigned long *deleted) {
     unsigned int num = (end - start) + 1;
@@ -621,9 +611,9 @@ void zsetTypeMaybeConvert(robj *zobj, size_t size_hint, size_t value_len_hint) {
     }
 }
 
-/* Convert the zset to specified encoding. The zset dict (when converting
- * to a skiplist) is presized to hold the number of elements in the original
- * zset. */
+/* Convert the zset to specified encoding. The hashtable (when converting
+ * to ordered index encoding) is presized to hold the number of elements in
+ * the original zset. */
 void zsetConvert(robj *zobj, int encoding) {
     zsetConvertAndExpand(zobj, encoding, zsetLength(zobj));
 }
@@ -680,7 +670,7 @@ void zsetConvertAndExpand(robj *zobj, int encoding, unsigned long cap) {
 
         if (encoding != OBJ_ENCODING_LISTPACK) serverPanic("Unknown target encoding");
 
-        /* Free the skiplist by popping items one at a time into the listpack. */
+        /* Free the ordered index by popping items one at a time into the listpack. */
         zs = objectGetVal(zobj);
         hashtableRelease(zs->ht);
 
@@ -777,7 +767,7 @@ int zsetScore(robj *zobj, sds member, double *score) {
  * start.
  *
  * The command as a side effect of adding a new element may convert the sorted
- * set internal encoding from listpack to hashtable+skiplist.
+ * set internal encoding from listpack to hashtable+ordered index.
  *
  * Memory management of 'ele':
  *
@@ -853,7 +843,7 @@ int zsetAdd(robj *zobj, double score, sds ele, int in_flags, int *out_flags, dou
     }
 
     /* Note that the above block handling listpack would have either returned or
-     * converted the key to skiplist. */
+     * converted the key to ordered index encoding. */
     if (zobj->encoding == OBJ_ENCODING_SKIPLIST) {
         zset *zs = objectGetVal(zobj);
 
@@ -910,7 +900,7 @@ int zsetAdd(robj *zobj, double score, sds ele, int in_flags, int *out_flags, dou
     return 0; /* Never reached. */
 }
 
-/* Deletes the element 'ele' from the sorted set encoded as a skiplist+hashtable,
+/* Deletes the element 'ele' from the sorted set encoded as ordered index+hashtable,
  * returning 1 if the element existed and was deleted, 0 otherwise (the
  * element was not there). */
 static int zsetRemoveFromSkiplist(zset *zs, sds ele) {
@@ -918,9 +908,9 @@ static int zsetRemoveFromSkiplist(zset *zs, sds ele) {
     if (!hashtablePop(zs->ht, ele, &entry)) return 0;
     OrderedIndexItem *node = entry;
 
-    /* hashtable only contains pointers to skiplist nodes. Nothing to free. */
+    /* hashtable only contains pointers to ordered index items. Nothing to free. */
 
-    /* Delete from skiplist. */
+    /* Delete from ordered index. */
     orderedIndexDelete(zs->oi, node);
 
     return 1;
@@ -1038,12 +1028,11 @@ robj *zsetDup(robj *o) {
         OrderedIndexItem *ln;
         long llen = zsetLength(o);
 
-        /* We copy the skiplist elements from the greatest to the
-         * smallest (that's trivial since the elements are already ordered in
-         * the skiplist): this improves the load process, since the next loaded
-         * element will always be the smaller, so adding to the skiplist
-         * will always immediately stop at the head, making the insertion
-         * O(1) instead of O(log(N)). */
+        /* We copy elements from the greatest to the smallest (that's trivial
+         * since the elements are already ordered in the index): this improves
+         * the load process, since the next loaded element will always be the
+         * smallest, so adding to the ordered index will always immediately
+         * stop at the head, making the insertion O(1) instead of O(log(N)). */
         OrderedIndexIterator iter;
         orderedIndexInitIterator(&iter, oi);
         orderedIndexSeekToRank(&iter, orderedIndexLength(oi));
@@ -2106,8 +2095,8 @@ static void zunionInterDiffGenericCommand(client *c, robj *dstkey, int numkeysIn
         }
     } else if (op == SET_OP_UNION) {
         /* Step 1: Create the hash table first by iterating one sorted set after
-         * the other. We wait to create the skiplist until scores/ordering are
-         * finalized. */
+         * the other. We wait to create the ordered index until scores/ordering
+         * are finalized. */
         if (setnum) {
             /* Our union is at least as large as the largest set.
              * Resize the dictionary ASAP to avoid useless rehashing. */

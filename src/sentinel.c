@@ -4217,6 +4217,14 @@ void sentinelRoleCommand(client *c) {
     dictReleaseIterator(di);
 }
 
+static int containsControlChars(const char *s, size_t len) {
+    for (size_t i = 0; i < len; i++) {
+        unsigned char ch = (unsigned char)s[i];
+        if (ch <= 0x1F || ch == 0x7F) return 1;
+    }
+    return 0;
+}
+
 /* SENTINEL SET <primaryname> [<option> <value> ...] */
 void sentinelSetCommand(client *c) {
     sentinelValkeyInstance *ri;
@@ -4226,6 +4234,15 @@ void sentinelSetCommand(client *c) {
     int redacted;
 
     if ((ri = sentinelGetPrimaryByNameOrReplyError(c, c->argv[2])) == NULL) return;
+
+    /* Reject control characters to prevent CRLF injection into the config file. */
+    for (j = 3; j < c->argc; j++) {
+        sds val = objectGetVal(c->argv[j]);
+        if (containsControlChars(val, sdslen(val))) {
+            addReplyError(c, "Invalid argument: control characters are not allowed in SENTINEL SET arguments");
+            return;
+        }
+    }
 
     /* Process option - value pairs. */
     for (j = 3; j < c->argc; j++) {

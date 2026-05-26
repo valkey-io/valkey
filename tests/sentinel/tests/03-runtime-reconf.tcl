@@ -198,3 +198,20 @@ test "Sentinel Set with other error situations" {
 
    assert_match "ERR Failed to save config file*" $err
 }
+
+test "SENTINEL SET rejects values containing control characters" {
+    # CRLF injection into auth-pass
+    assert_error "ERR Invalid argument*" {S 0 SENTINEL SET mymaster auth-pass "pass\r\nsentinel notification-script mymaster /tmp/evil.sh"}
+    # Newline in auth-user
+    assert_error "ERR Invalid argument*" {S 0 SENTINEL SET mymaster auth-user "user\ninjected"}
+    # Carriage return alone
+    assert_error "ERR Invalid argument*" {S 0 SENTINEL SET mymaster auth-pass "has\rcr"}
+    # Null byte
+    assert_error "ERR Invalid argument*" {S 0 SENTINEL SET mymaster auth-user "has\x00null"}
+    # Tab character (0x09)
+    assert_error "ERR Invalid argument*" {S 0 SENTINEL SET mymaster auth-pass "has\ttab"}
+    # DEL character (0x7F)
+    assert_error "ERR Invalid argument*" {S 0 SENTINEL SET mymaster auth-pass "has\x7F"}
+    # Control char in option name is also rejected
+    assert_error "ERR Invalid argument*" {S 0 SENTINEL SET mymaster "bad\noption" value}
+}

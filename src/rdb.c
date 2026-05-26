@@ -1931,12 +1931,6 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
     /* Set default error of load object, it will be set to 0 on success. */
     if (error) *error = RDB_LOAD_ERR_OTHER;
 
-    /* Always validate integrity of loaded data structures. Runtime traversal
-     * assertions (lpAssertValidEntry) have been removed for performance, so
-     * we must catch corruption at load time unconditionally. This makes the
-     * sanitize-dump-payload config effectively a no-op. */
-    int deep_integrity_validation = 1;
-
     if (rdbtype == RDB_TYPE_STRING) {
         /* Read string value */
         if ((o = rdbLoadEncodedStringObject(rdb)) == NULL) return NULL;
@@ -2138,11 +2132,11 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
         /* Too many entries or hash object contains elements with expiry? Use a hash table right from the start. */
         if (len > server.hash_max_listpack_entries || rdbtype == RDB_TYPE_HASH_2)
             hashTypeConvert(o, OBJ_ENCODING_HASHTABLE);
-        else if (deep_integrity_validation) {
-            /* In this mode, we need to guarantee that the server won't crash
-             * later when the ziplist is converted to a hashtable.
-             * Create a set (hashtable with no values) to for a dup search.
-             * We can dismiss it as soon as we convert the ziplist to a hash. */
+        else {
+            /* Guarantee that the server won't crash later when the listpack
+             * is converted to a hashtable.
+             * Create a set (hashtable with no values) for a dup search.
+             * We can dismiss it as soon as we convert the listpack to a hash. */
             dupSearchHashtable = hashtableCreate(&setHashtableType);
         }
 
@@ -2324,7 +2318,7 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
 
             if (rdbtype == RDB_TYPE_LIST_QUICKLIST_2) {
                 lp = data;
-                if (deep_integrity_validation) server.stat_dump_payload_sanitizations++;
+                server.stat_dump_payload_sanitizations++;
                 if (!lpValidateIntegrity(lp, encoded_len, NULL, NULL)) {
                     rdbReportCorruptRDB("Listpack integrity check failed.");
                     decrRefCount(o);
@@ -2456,8 +2450,8 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
             break;
         }
         case RDB_TYPE_SET_INTSET:
-            if (deep_integrity_validation) server.stat_dump_payload_sanitizations++;
-            if (!intsetValidateIntegrity(encoded, encoded_len, deep_integrity_validation)) {
+            server.stat_dump_payload_sanitizations++;
+            if (!intsetValidateIntegrity(encoded, encoded_len, 1)) {
                 rdbReportCorruptRDB("Intset integrity check failed.");
                 zfree(encoded);
                 objectSetVal(o, NULL);
@@ -2469,7 +2463,7 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
             if (intsetLen(objectGetVal(o)) > server.set_max_intset_entries) setTypeConvert(o, OBJ_ENCODING_HASHTABLE);
             break;
         case RDB_TYPE_SET_LISTPACK:
-            if (deep_integrity_validation) server.stat_dump_payload_sanitizations++;
+            server.stat_dump_payload_sanitizations++;
             if (!lpValidateIntegrityAndDups(encoded, encoded_len, 0)) {
                 rdbReportCorruptRDB("Set listpack integrity check failed.");
                 zfree(encoded);
@@ -2515,7 +2509,7 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
             break;
         }
         case RDB_TYPE_ZSET_LISTPACK:
-            if (deep_integrity_validation) server.stat_dump_payload_sanitizations++;
+            server.stat_dump_payload_sanitizations++;
             if (!lpValidateIntegrityAndDups(encoded, encoded_len, 1)) {
                 rdbReportCorruptRDB("Zset listpack integrity check failed.");
                 zfree(encoded);
@@ -2559,7 +2553,7 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
             break;
         }
         case RDB_TYPE_HASH_LISTPACK:
-            if (deep_integrity_validation) server.stat_dump_payload_sanitizations++;
+            server.stat_dump_payload_sanitizations++;
             if (!lpValidateIntegrityAndDups(encoded, encoded_len, 1)) {
                 rdbReportCorruptRDB("Hash listpack integrity check failed.");
                 zfree(encoded);
@@ -2619,7 +2613,7 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
                 decrRefCount(o);
                 return NULL;
             }
-            if (deep_integrity_validation) server.stat_dump_payload_sanitizations++;
+            server.stat_dump_payload_sanitizations++;
             if (!streamValidateListpackIntegrity(lp, lp_size)) {
                 rdbReportCorruptRDB("Stream listpack integrity check failed.");
                 sdsfree(nodekey);
@@ -2861,21 +2855,19 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
             }
 
             /* Verify that each PEL eventually got a consumer assigned to it. */
-            if (deep_integrity_validation) {
-                raxIterator ri_cg_pel;
-                raxStart(&ri_cg_pel, cgroup->pel);
-                raxSeek(&ri_cg_pel, "^", NULL, 0);
-                while (raxNext(&ri_cg_pel)) {
-                    streamNACK *nack = ri_cg_pel.data;
-                    if (!nack->consumer) {
-                        raxStop(&ri_cg_pel);
-                        rdbReportCorruptRDB("Stream CG PEL entry without consumer");
-                        decrRefCount(o);
-                        return NULL;
-                    }
+            raxIterator ri_cg_pel;
+            raxStart(&ri_cg_pel, cgroup->pel);
+            raxSeek(&ri_cg_pel, "^", NULL, 0);
+            while (raxNext(&ri_cg_pel)) {
+                streamNACK *nack = ri_cg_pel.data;
+                if (!nack->consumer) {
+                    raxStop(&ri_cg_pel);
+                    rdbReportCorruptRDB("Stream CG PEL entry without consumer");
+                    decrRefCount(o);
+                    return NULL;
                 }
-                raxStop(&ri_cg_pel);
             }
+            raxStop(&ri_cg_pel);
         }
     } else if (rdbtype == RDB_TYPE_MODULE_PRE_GA) {
         rdbReportCorruptRDB("Pre-release module format not supported");

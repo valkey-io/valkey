@@ -314,12 +314,7 @@ int geoGetPointsInRange(robj *zobj, double min, double max, GeoShape *shape, geo
         orderedIndexSeekToScoreRange(&iter, range.min, range.max, range.minex, range.maxex, 0);
         OrderedIndexItem *ln;
 
-        if ((ln = orderedIndexNext(&iter)) == NULL) {
-            /* Nothing exists starting at our min.  No results. */
-            return 0;
-        }
-
-        do {
+        while ((ln = orderedIndexNext(&iter)) != NULL) {
             double xy[2];
             double distance = 0;
             double score = orderedIndexGetScore(ln);
@@ -333,7 +328,7 @@ int geoGetPointsInRange(robj *zobj, double min, double max, GeoShape *shape, geo
                 geoArrayAppend(ga, xy, distance, score, sdsnewlen(ele, ele_len));
             }
             if (ga->used && limit && ga->used >= limit) break;
-        } while ((ln = orderedIndexNext(&iter)) != NULL);
+        }
     }
     return ga->used - origincount;
 }

@@ -157,6 +157,7 @@ jobs:
           echo "Latest valkey-benchmark path: $VALKEY_BENCHMARK_PATH"
 
       - name: Generate benchmark config
+        working-directory: valkey-perf-benchmark
         env:
           INPUT_COMMANDS: ${{ github.event.inputs.commands }}
           INPUT_DATA_SIZE: ${{ github.event.inputs.data_size }}
@@ -164,7 +165,7 @@ jobs:
           INPUT_PIPELINES: ${{ github.event.inputs.pipelines }}
           INPUT_CLUSTER_MODE: ${{ github.event.inputs.cluster_mode }}
         run: |
-          CONFIG_FILE="valkey/.github/benchmark_configs/benchmark-config-arm.json"
+          CONFIG_FILE="configs/benchmark-config-arm.json"
 
           # Read user inputs from environment (safer than direct interpolation
           # of ${{ github.event.inputs.* }} which can break quoting).
@@ -245,7 +246,7 @@ jobs:
       - name: Run benchmarks
         working-directory: valkey-perf-benchmark
         run: |
-          CONFIG_FILE="../valkey/.github/benchmark_configs/benchmark-config-arm.json"
+          CONFIG_FILE="configs/benchmark-config-arm.json"
 
           BENCHMARK_ARGS=(
             --config "$CONFIG_FILE"

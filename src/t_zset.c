@@ -1088,9 +1088,8 @@ static void zsetTypeRandomElement(robj *zsetobj, unsigned long zsetsize, listpac
         const char *ele_ptr_tmp;
         size_t ele_len_tmp;
         orderedIndexGetElementRaw(node, &ele_ptr_tmp, &ele_len_tmp);
-        sds ele = (sds)ele_ptr_tmp;
-        key->sval = (unsigned char *)ele;
-        key->slen = sdslen(ele);
+        key->sval = (unsigned char *)ele_ptr_tmp;
+        key->slen = ele_len_tmp;
         if (score) *score = orderedIndexGetScore(node);
     } else if (zsetobj->encoding == OBJ_ENCODING_LISTPACK) {
         listpackEntry val;
@@ -1745,10 +1744,8 @@ static size_t zsetHashtableGetMaxElementLength(hashtable *ht, size_t *totallen) 
         const char *ele_ptr_tmp;
         size_t ele_len_tmp;
         orderedIndexGetElementRaw(node, &ele_ptr_tmp, &ele_len_tmp);
-        sds ele = (sds)ele_ptr_tmp;
-        size_t elelen = sdslen(ele);
-        if (elelen > maxelelen) maxelelen = elelen;
-        if (totallen) (*totallen) += elelen;
+        if (ele_len_tmp > maxelelen) maxelelen = ele_len_tmp;
+        if (totallen) (*totallen) += ele_len_tmp;
     }
     hashtableCleanupIterator(&iter);
 
@@ -2141,10 +2138,9 @@ static void zunionInterDiffGenericCommand(client *c, robj *dstkey, int numkeysIn
                     const char *ele_ptr_tmp;
                     size_t ele_len_tmp;
                     orderedIndexGetElementRaw(new_node, &ele_ptr_tmp, &ele_len_tmp);
-                    sds ele = (sds)ele_ptr_tmp;
-                    totelelen += sdslen(ele);
-                    if (sdslen(ele) > maxelelen) {
-                        maxelelen = sdslen(ele);
+                    totelelen += ele_len_tmp;
+                    if (ele_len_tmp > maxelelen) {
+                        maxelelen = ele_len_tmp;
                     }
                 } else {
                     /* Update the score with the score of the new instance
@@ -3491,8 +3487,7 @@ void zrandmemberWithCountCommand(client *c, long l, int withscores) {
                 const char *ele_ptr_tmp;
                 size_t ele_len_tmp;
                 orderedIndexGetElementRaw(node, &ele_ptr_tmp, &ele_len_tmp);
-                sds ele = (sds)ele_ptr_tmp;
-                addReplyBulkCBuffer(c, ele, sdslen(ele));
+                addReplyBulkCBuffer(c, ele_ptr_tmp, ele_len_tmp);
                 if (withscores) addReplyDouble(c, orderedIndexGetScore(node));
                 if (c->flag.close_asap) break;
             }
@@ -3607,9 +3602,8 @@ void zrandmemberWithCountCommand(client *c, long l, int withscores) {
             const char *key_ptr_tmp;
             size_t key_len_tmp;
             orderedIndexGetElementRaw(node, &key_ptr_tmp, &key_len_tmp);
-            sds key = (sds)key_ptr_tmp;
             if (withscores && c->resp > 2) addReplyArrayLen(c, 2);
-            addReplyBulkCBuffer(c, key, sdslen(key));
+            addReplyBulkCBuffer(c, key_ptr_tmp, key_len_tmp);
             if (withscores) addReplyDouble(c, orderedIndexGetScore(node));
         }
 

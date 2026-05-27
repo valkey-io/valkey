@@ -462,8 +462,7 @@ proc read_from_test_client fd {
     } elseif {$status eq {err}} {
         set err "\[[colorstr red $status]\]: $data"
         puts $err
-        set test_name [lindex [split $data "\n"] 0]
-        lappend ::failed_tests $test_name
+        lappend ::failed_tests $err
         set ::active_clients_task($fd) "(ERR) $data"
         if {$::stop_on_failure} {
             puts -nonewline "(Test stopped, press enter to resume the tests)"

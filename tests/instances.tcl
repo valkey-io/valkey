@@ -36,6 +36,8 @@ set ::run_matching {} ; # If non empty, only tests matching pattern are run.
 set ::stop_on_failure 0
 set ::loop 0
 set ::failures_output_file ""; # If set, write failures JSON to this path
+set ::failed_tests {}; # List of individual test failures [name, file, error]
+set ::cur_test_file ""; # Currently executing test file
 
 if {[catch {cd tmp}]} {
     puts "tmp directory not found."
@@ -419,8 +421,9 @@ proc test {descr code} {
     if {[catch {set retval [uplevel 1 $code]} error]} {
         incr ::failed
         if {[string match "assertion:*" $error]} {
-            set msg "FAILED: [string range $error 10 end]"
-            puts [colorstr red $msg]
+            set msg [string range $error 10 end]
+            puts [colorstr red "FAILED: $msg"]
+            lappend ::failed_tests [list $descr $::cur_test_file $msg]
             if {$::pause_on_error} pause_on_error
             puts [colorstr red "(Jumping to next unit after error)"]
             return -code continue
@@ -479,6 +482,14 @@ while 1 {
             continue
         }
         if {[file isdirectory $test]} continue
+        # Track current test file for failure reporting
+        set normalized [file normalize $test]
+        set project_root [file normalize "../../.."]
+        if {[string match "${project_root}/*" $normalized]} {
+            set ::cur_test_file [string range $normalized [expr {[string length $project_root] + 1}] end]
+        } else {
+            set ::cur_test_file $test
+        }
         puts [colorstr yellow "Testing unit: [lindex [file split $test] end]"]
         if {[catch { source $test } err]} {
             puts "FAILED: caught an error in the test $err"
@@ -507,21 +518,37 @@ while 1 {
 } ;# while 1
 }
 
-# Print a message and exists with 0 / 1 according to zero or more failures.
+proc write_test_failures {} {
+    if {$::failures_output_file eq ""} {
+        return
+    }
+
+    set failures {}
+    foreach entry $::failed_tests {
+        set test_name [lindex $entry 0]
+        set test_file [lindex $entry 1]
+        set error_msg [lindex $entry 2]
+
+        set test_name [string map {"\\" "\\\\" "\"" "\\\"" "\n" "\\n" "\r" "\\r" "\t" "\\t" "\b" "\\b" "\f" "\\f"} $test_name]
+        set test_file [string map {"\\" "\\\\" "\"" "\\\"" "\n" "\\n" "\r" "\\r" "\t" "\\t" "\b" "\\b" "\f" "\\f"} $test_file]
+        set error_msg [string map {"\\" "\\\\" "\"" "\\\"" "\n" "\\n" "\r" "\\r" "\t" "\\t" "\b" "\\b" "\f" "\\f"} $error_msg]
+
+        lappend failures "\{\"test_name\":\"$test_name\",\"test_file\":\"$test_file\",\"status\":\"err\",\"error\":\"$error_msg\"\}"
+    }
+
+    set outdir [file dirname $::failures_output_file]
+    if {$outdir ne "."} {
+        file mkdir $outdir
+    }
+    set fp [open $::failures_output_file w]
+    puts $fp "\[[join $failures ","]\]"
+    close $fp
+}
+
+# Print a message and exits with 0 / 1 according to zero or more failures.
 proc end_tests {} {
-    # Write failures output file if requested
-    if {$::failures_output_file ne ""} {
-        set outdir [file dirname $::failures_output_file]
-        if {$outdir ne "." && $outdir ne ""} {
-            file mkdir $outdir
-        }
-        set fp [open $::failures_output_file w]
-        if {$::failed > 0} {
-            puts $fp "\[\{\"test_name\":\"sentinel tests\",\"test_file\":\"unknown\",\"status\":\"err\",\"error\":\"$::failed test(s) failed\"\}\]"
-        } else {
-            puts $fp "\[\]"
-        }
-        close $fp
+    if {[catch {write_test_failures} err]} {
+        puts "Warning: Failed to write test failures: $err"
     }
 
     if {$::failed == 0 } {

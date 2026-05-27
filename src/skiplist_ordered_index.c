@@ -334,7 +334,7 @@ static void skiplistPatchNodePointers(zskiplist *zsl, zskiplistNode *oldnode, zs
  *
  * Processes up to 16 nodes per call to bound latency, returning the
  * next cursor position (or 0 when complete). */
-unsigned long skiplistScanDefrag(OrderedIndex *oi, unsigned long cursor, void (*callback)(OrderedIndexItem *old_item, OrderedIndexItem *new_item, void *ctx), void *ctx, void *(*defragfn)(void *)) {
+unsigned long skiplistScanDefrag(OrderedIndex *oi, unsigned long cursor, OrderedIndexDefragCallback callback, void *ctx, void *(*defragfn)(void *)) {
     zskiplist *zsl = (zskiplist *)oi;
     zskiplistNode *header = zslGetHeader(zsl);
 

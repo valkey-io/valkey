@@ -476,7 +476,7 @@ static unsigned char *zzlDelete(unsigned char *zl, unsigned char *eptr) {
     return lpDeleteRangeWithEntry(zl, &eptr, 2);
 }
 
-static unsigned char *zzlInsertAt(unsigned char *zl, unsigned char *eptr, sds ele, double score) {
+static unsigned char *zzlInsertAt(unsigned char *zl, unsigned char *eptr, const char *ele, size_t ele_len, double score) {
     unsigned char *sptr;
     char scorebuf[MAX_D2STRING_CHARS];
     int scorelen = 0;
@@ -484,14 +484,14 @@ static unsigned char *zzlInsertAt(unsigned char *zl, unsigned char *eptr, sds el
     int score_is_long = double2ll(score, &lscore);
     if (!score_is_long) scorelen = d2string(scorebuf, sizeof(scorebuf), score);
     if (eptr == NULL) {
-        zl = lpAppend(zl, (unsigned char *)ele, sdslen(ele));
+        zl = lpAppend(zl, (unsigned char *)ele, ele_len);
         if (score_is_long)
             zl = lpAppendInteger(zl, lscore);
         else
             zl = lpAppend(zl, (unsigned char *)scorebuf, scorelen);
     } else {
         /* Insert member before the element 'eptr'. */
-        zl = lpInsertString(zl, (unsigned char *)ele, sdslen(ele), eptr, LP_BEFORE, &sptr);
+        zl = lpInsertString(zl, (unsigned char *)ele, ele_len, eptr, LP_BEFORE, &sptr);
 
         /* Insert score after the member. */
         if (score_is_long)
@@ -517,12 +517,12 @@ static unsigned char *zzlInsert(unsigned char *zl, sds ele, double score) {
             /* First element with score larger than score for element to be
              * inserted. This means we should take its spot in the list to
              * maintain ordering. */
-            zl = zzlInsertAt(zl, eptr, ele, score);
+            zl = zzlInsertAt(zl, eptr, ele, sdslen(ele), score);
             break;
         } else if (s == score) {
             /* Ensure lexicographical ordering for elements. */
             if (zzlCompareElements(eptr, (unsigned char *)ele, sdslen(ele)) > 0) {
-                zl = zzlInsertAt(zl, eptr, ele, score);
+                zl = zzlInsertAt(zl, eptr, ele, sdslen(ele), score);
                 break;
             }
         }
@@ -532,7 +532,7 @@ static unsigned char *zzlInsert(unsigned char *zl, sds ele, double score) {
     }
 
     /* Push on tail of list when it was not yet inserted. */
-    if (eptr == NULL) zl = zzlInsertAt(zl, NULL, ele, score);
+    if (eptr == NULL) zl = zzlInsertAt(zl, NULL, ele, sdslen(ele), score);
     return zl;
 }
 
@@ -709,9 +709,7 @@ void zsetConvertAndExpand(robj *zobj, int encoding, unsigned long cap) {
             const char *ele_ptr;
             size_t ele_len;
             orderedIndexGetElementRaw(node, &ele_ptr, &ele_len);
-            sds ele = sdsnewlen(ele_ptr, ele_len);
-            zl = zzlInsertAt(zl, NULL, ele, orderedIndexGetScore(node));
-            sdsfree(ele);
+            zl = zzlInsertAt(zl, NULL, ele_ptr, ele_len, orderedIndexGetScore(node));
             orderedIndexFreeItem(node);
         }
         orderedIndexFree(zs->oi);
@@ -1056,18 +1054,13 @@ robj *zsetDup(robj *o) {
         hashtableExpand(new_zs->ht, hashtableSize(zs->ht));
         OrderedIndex *oi = zs->oi;
         OrderedIndexItem *ln;
-        long llen = zsetLength(o);
 
         /* We copy elements from the greatest to the smallest (that's trivial
-         * since the elements are already ordered in the index): this improves
-         * the load process, since the next loaded element will always be the
-         * smallest, so adding to the ordered index will always immediately
-         * stop at the head, making the insertion O(1) instead of O(log(N)). */
+         * since the elements are already ordered in the index): inserting in
+         * descending order is optimal for the ordered index backend. */
         OrderedIndexIterator iter;
         orderedIndexInitIterator(&iter, oi);
-        orderedIndexSeekToRank(&iter, orderedIndexLength(oi));
-        while (llen--) {
-            ln = orderedIndexPrev(&iter);
+        while ((ln = orderedIndexPrev(&iter)) != NULL) {
             const char *ele_ptr;
             size_t ele_len;
             orderedIndexGetElementRaw(ln, &ele_ptr, &ele_len);

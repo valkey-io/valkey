@@ -681,13 +681,18 @@ void zsetConvertAndExpand(robj *zobj, int encoding, unsigned long cap) {
         while (eptr != NULL) {
             score = zzlGetScore(sptr);
             vstr = lpGetValue(eptr, &vlen, &vlong);
-            if (vstr == NULL)
-                ele = sdsfromlonglong(vlong);
-            else
-                ele = sdsnewlen((char *)vstr, vlen);
+            char buf[LONG_STR_SIZE];
+            const char *ele_ptr;
+            size_t ele_len;
+            if (vstr == NULL) {
+                ele_len = ll2string(buf, sizeof(buf), vlong);
+                ele_ptr = buf;
+            } else {
+                ele_ptr = (char *)vstr;
+                ele_len = vlen;
+            }
 
-            node = orderedIndexInsert(zs->oi, score, ele, sdslen(ele));
-            sdsfree(ele);
+            node = orderedIndexInsert(zs->oi, score, ele_ptr, ele_len);
             serverAssert(hashtableAdd(zs->ht, node));
             zzlNext(zl, &eptr, &sptr);
         }

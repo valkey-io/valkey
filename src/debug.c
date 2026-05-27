@@ -1188,7 +1188,7 @@ void serverLogObjectDebugInfo(const robj *o) {
         serverLog(LL_WARNING, "Sorted set size: %d", (int)zsetLength(o));
         if (o->encoding == OBJ_ENCODING_SKIPLIST) {
             /* Not declared in ordered_index.h — debug-only introspection. */
-            extern int orderedIndexGetDepth(OrderedIndex *oi);
+            extern int orderedIndexGetDepth(OrderedIndex * oi);
             serverLog(LL_WARNING, "Index depth: %d", orderedIndexGetDepth(((const zset *)o->ptr)->oi));
         }
     } else if (o->type == OBJ_STREAM) {

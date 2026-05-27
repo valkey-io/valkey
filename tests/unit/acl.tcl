@@ -179,7 +179,7 @@ start_server {tags {"acl external:skip"}} {
         set curruser "hpuser"
         foreach user [lshuffle $users] {
             if {[string first $curruser $user] != -1} {
-                assert_equal {user hpuser on nopass sanitize-payload resetchannels &foo +@all} $user
+                assert_equal {user hpuser on nopass resetchannels &foo +@all} $user
             }
         }
 
@@ -1171,3 +1171,17 @@ start_server {overrides {user "default on nopass ~* +@all -flushdb"} tags {acl e
     }
 }
 
+start_server {tags {"acl"}} {
+    test {Deprecated ACL flags skip-sanitize-payload and sanitize-payload are accepted as no-ops} {
+        r ACL setuser testuser on nopass skip-sanitize-payload ~* +@all
+        set user_info [r ACL getuser testuser]
+        assert {[string first "skip-sanitize-payload" [dict get $user_info flags]] == -1}
+        assert {[string first "sanitize-payload" [dict get $user_info flags]] == -1}
+
+        r ACL setuser testuser2 on nopass sanitize-payload ~* +@all
+        set user_info2 [r ACL getuser testuser2]
+        assert {[string first "sanitize-payload" [dict get $user_info2 flags]] == -1}
+
+        r ACL deluser testuser testuser2
+    }
+}

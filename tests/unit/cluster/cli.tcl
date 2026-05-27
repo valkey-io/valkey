@@ -705,8 +705,8 @@ proc write_keys_to_master0 {} {
         set end [lindex $parts 1]
         if {$end eq ""} {set end $start}
         for {set s $start} {$s <= $end} {incr s} {
-            exec $::VALKEY_CLI_BIN -c -p [srv 0 port] SET "key:$s:a" "value:$s"
-            exec $::VALKEY_CLI_BIN -c -p [srv 0 port] SET "key:$s:b" "value:$s"
+            exec $::VALKEY_CLI_BIN -c -p [srv 0 port] SET "{$s}key:$s:a" "value:$s"
+            exec $::VALKEY_CLI_BIN -c -p [srv 0 port] SET "{$s}key:$s:b" "value:$s"
             incr count 2
             if {$count >= 100} break
         }
@@ -750,12 +750,13 @@ start_multiple_servers 6 [list overrides $base_conf] {
 
     test {Rebalance without --user and without -a should succeed} {
         set master0_id [$node0 CLUSTER MYID]
-        catch {
+        set rc [catch {
             exec $::VALKEY_CLI_BIN --cluster-yes --cluster rebalance \
                                127.0.0.1:[srv 0 port] \
                                --cluster-weight ${master0_id}=0 \
                                --cluster-timeout 10000
-        } e
+        } e]
+        assert_equal 0 $rc "Rebalance command failed: $e"
         assert_no_match "*CROSSSLOT*" $e
         assert_no_match "*CROSS*SLOT*" $e
     }
@@ -804,13 +805,14 @@ start_multiple_servers 6 [list overrides $base_conf] {
         # This used to fail with CROSSSLOT because the empty string
         # argument in MIGRATE was treated as a key with slot 0
         set master0_id [$node0 CLUSTER MYID]
-        catch {
+        set rc [catch {
             exec $::VALKEY_CLI_BIN --cluster-yes --cluster rebalance \
                                127.0.0.1:[srv 0 port] \
                                --user testuser \
                                --cluster-weight ${master0_id}=0 \
                                --cluster-timeout 10000
-        } e
+        } e]
+        assert_equal 0 $rc "Rebalance command failed: $e"
         assert_no_match "*CROSSSLOT*" $e
         assert_no_match "*CROSS*SLOT*" $e
     }
@@ -857,7 +859,7 @@ start_multiple_servers 6 [list overrides $base_conf] {
 
     test {Rebalance with --user and -a should succeed} {
         set master0_id [$node0 CLUSTER MYID]
-        catch {
+        set rc [catch {
             exec $::VALKEY_CLI_BIN --cluster-yes --cluster rebalance \
                                127.0.0.1:[srv 0 port] \
                                --user testuser2 \
@@ -865,7 +867,8 @@ start_multiple_servers 6 [list overrides $base_conf] {
                                --no-auth-warning \
                                --cluster-weight ${master0_id}=0 \
                                --cluster-timeout 10000
-        } e
+        } e]
+        assert_equal 0 $rc "Rebalance command failed: $e"
         assert_no_match "*CROSSSLOT*" $e
         assert_no_match "*CROSS*SLOT*" $e
     }

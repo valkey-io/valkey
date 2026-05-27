@@ -5017,7 +5017,10 @@ void waitCommand(client *c) {
     }
 
     /* Otherwise block the client and put it into our list of clients
-     * waiting for ack from replicas. */
+     * waiting for ack from replicas. WAIT handles its own reply in
+     * processClientsWaitingReplicas, so clear pending_command to avoid
+     * being mistaken for a command that needs re-execution. */
+    c->flag.pending_command = 0;
     blockClientForReplicaAck(c, timeout, offset, numreplicas, 0);
 
     /* Make sure that the server will send an ACK request to all the replicas
@@ -5059,7 +5062,10 @@ void waitaofCommand(client *c) {
     }
 
     /* Otherwise block the client and put it into our list of clients
-     * waiting for ack from replicas. */
+     * waiting for ack from replicas. WAITAOF handles its own reply in
+     * processClientsWaitingReplicas, so clear pending_command to avoid
+     * being mistaken for a command that needs re-execution. */
+    c->flag.pending_command = 0;
     blockClientForReplicaAck(c, timeout, offset, numreplicas, numlocal);
 
     /* Make sure that the server will send an ACK request to all the replicas

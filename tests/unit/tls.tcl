@@ -238,7 +238,7 @@ start_server {tags {"tls"}} {
             set valkey_pqc_pw_key [format "%s/tests/tls/valkey-mldsa-pw.key" [pwd]]
 
             try {
-                r CONFIG SET tls-cert-file $valkey_pqc_pw_crt tls-key-file $valkey_pqc_pw_key tls-alt-cert-file $valkey_crt tls-alt-key-file $valkey_key tls-key-file-pass 1234
+                r CONFIG SET tls-cert-file $valkey_pqc_pw_crt tls-key-file $valkey_pqc_pw_key tls-alt-cert-file $valkey_crt tls-alt-key-file $valkey_key tls-key-file-pass asdf tls-alt-key-file-pass 1234
                 set s [valkey_client]
                 assert_equal "PONG" [$s PING]
                 $s close
@@ -246,7 +246,7 @@ start_server {tags {"tls"}} {
                 r CONFIG SET tls-cert-file $valkey_pqc_crt tls-key-file $valkey_pqc_key tls-alt-cert-file $valkey_pw_crt tls-alt-key-file $valkey_pw_key
             } finally {
                 #cleanup
-                r CONFIG SET tls-cert-file $orig_server_crt tls-key-file $orig_server_key tls-alt-cert-file $orig_server_alt_crt tls-alt-key-file $orig_server_alt_key tls-key-file-pass ""
+                r CONFIG SET tls-cert-file $orig_server_crt tls-key-file $orig_server_key tls-alt-cert-file $orig_server_alt_crt tls-alt-key-file $orig_server_alt_key tls-key-file-pass "" tls-alt-key-file-pass ""
             }
         }
 
@@ -385,6 +385,7 @@ start_server {tags {"tls"}} {
             set orig_server_alt_key [lindex [r config get tls-alt-key-file] 1]
             set valkey_alt_crt [format "%s/tests/tls/valkey-mldsa.crt" [pwd]]
             set valkey_alt_key [format "%s/tests/tls/valkey-mldsa.key" [pwd]]
+            set orig_server_key_pass [lindex [r config get tls-alt-key-file-pass] 1]
 
             # Create temporary certificate files (copies of current ones)
             set temp_crt "$orig_server_crt.temp"
@@ -399,7 +400,7 @@ start_server {tags {"tls"}} {
             # Ensure cleanup happens even if test fails
             try {
                 # Update server to use temporary certificate files
-                r CONFIG SET tls-cert-file $temp_crt tls-key-file $temp_key tls-alt-cert-file $temp_alt_crt tls-alt-key-file $temp_alt_key
+                r CONFIG SET tls-cert-file $temp_crt tls-key-file $temp_key tls-alt-cert-file $temp_alt_crt tls-alt-key-file $temp_alt_key tls-alt-key-file-pass "asdf"
 
                 # Enable auto-reload with 1 second interval for faster testing
                 r CONFIG SET tls-auto-reload-interval 1
@@ -485,7 +486,7 @@ start_server {tags {"tls"}} {
                 $s close
             } finally {
                 # Restore original configuration
-                r CONFIG SET tls-cert-file $orig_server_crt tls-key-file $orig_server_key tls-alt-cert-file $orig_server_alt_crt tls-alt-key-file $orig_server_alt_key
+                r CONFIG SET tls-cert-file $orig_server_crt tls-key-file $orig_server_key tls-alt-cert-file $orig_server_alt_crt tls-alt-key-file $orig_server_alt_key tls-alt-key-file-pass $orig_server_key_pass
 
                 # Disable auto-reload
                 r CONFIG SET tls-auto-reload-interval 0

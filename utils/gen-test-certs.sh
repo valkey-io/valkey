@@ -96,7 +96,7 @@ openssl req \
     -CA tests/tls/ca.crt \
     -CAkey tests/tls/ca.key \
     -days 365 \
-    -passout pass:1234 \
+    -passout pass:asdf \
     -out tests/tls/valkey-mldsa-pw.crt
 
 # Create a CA bundle and hashed CA directory used by TLS tests.

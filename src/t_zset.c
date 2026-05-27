@@ -1305,7 +1305,6 @@ typedef enum {
     ZRANGE_LEX,
 } zrange_type;
 
-/* Implements ZREMRANGEBYRANK, ZREMRANGEBYSCORE, ZREMRANGEBYLEX commands. */
 /* Callback for orderedIndexDeleteRangeBy* — removes the item from the hashtable
  * and frees it. The callback receives ownership per the API contract. */
 static void zsetIndexDeleteCallback(OrderedIndexItem *item, void *ctx) {
@@ -1317,6 +1316,7 @@ static void zsetIndexDeleteCallback(OrderedIndexItem *item, void *ctx) {
     orderedIndexFreeItem(item);
 }
 
+/* Implements ZREMRANGEBYRANK, ZREMRANGEBYSCORE, ZREMRANGEBYLEX commands. */
 void zremrangeGenericCommand(client *c, zrange_type rangetype) {
     robj *key = c->argv[1];
     robj *zobj;

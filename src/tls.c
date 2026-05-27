@@ -578,9 +578,11 @@ static SSL_CTX *createSSLContext(serverTLSContextConfig *ctx_config, int protoco
 
     const char *alt_cert_file = client ? NULL : ctx_config->alt_cert_file;
     const char *alt_key_file = client ? NULL : ctx_config->alt_key_file;
+    const char *alt_key_file_pass = client ? NULL : ctx_config->alt_key_file_pass;
     char errbuf[256];
     SSL_CTX *ctx = NULL;
-    unsigned char* psig_data = NULL;
+    EVP_PKEY *primary_pkey = NULL;
+    EVP_PKEY *alt_pkey = NULL;
     ctx = SSL_CTX_new(SSLv23_method());
     if (!ctx) goto error;
 
@@ -621,11 +623,11 @@ static SSL_CTX *createSSLContext(serverTLSContextConfig *ctx_config, int protoco
     }
 
     if (alt_cert_file) {
-        const ASN1_BIT_STRING *primary_signature;
-        X509_get0_signature(&primary_signature, NULL, SSL_CTX_get0_certificate(ctx));
-        const int psig_length = primary_signature->length;
-        psig_data = zmalloc(psig_length);
-        memcpy(psig_data, primary_signature->data, psig_length);
+        primary_pkey = X509_get_pubkey(SSL_CTX_get0_certificate(ctx));
+        if (!primary_pkey) {
+            serverLog(LL_WARNING, "Could not get public key from primary certificate");
+            goto error;
+        }
 
         if (SSL_CTX_use_certificate_chain_file(ctx, alt_cert_file) <= 0) {
             ERR_error_string_n(ERR_get_error(), errbuf, sizeof(errbuf));
@@ -638,28 +640,30 @@ static SSL_CTX *createSSLContext(serverTLSContextConfig *ctx_config, int protoco
             goto error;
         }
 
-        const ASN1_BIT_STRING *alt_signature;
-        X509_get0_signature(&alt_signature, NULL, SSL_CTX_get0_certificate(ctx));
-        if (psig_length == alt_signature->length && memcmp(psig_data, alt_signature->data, psig_length) == 0) {
-            serverLog(LL_WARNING, "Primary and alternate certificates cannot be identical. Use two different ones with different algorithms");
+        alt_pkey = X509_get_pubkey(SSL_CTX_get0_certificate(ctx));
+        if (!alt_pkey) {
+            serverLog(LL_WARNING, "Could not get public key from alternate certificate");
+            goto error;
+        }
+
+        if (EVP_PKEY_base_id(primary_pkey) == EVP_PKEY_base_id(alt_pkey)) {
+            serverLog(LL_WARNING, "Primary and alternate certificates must use different key algorithms");
             goto error;
         }
     }
 
-    /* If the user tries to use a primary and alt cert of the same type, this will fail
-     * due to the first one being overwritten in the context, so it will attempt to load
-     * the first key for the second cert
-     */
     if (SSL_CTX_use_PrivateKey_file(ctx, key_file, SSL_FILETYPE_PEM) <= 0) {
         ERR_error_string_n(ERR_get_error(), errbuf, sizeof(errbuf));
         serverLog(LL_WARNING, "Failed to load private key: %s: %s", key_file, errbuf);
         goto error;
     }
-
-    if (alt_key_file && SSL_CTX_use_PrivateKey_file(ctx, alt_key_file, SSL_FILETYPE_PEM) <= 0) {
-        ERR_error_string_n(ERR_get_error(), errbuf, sizeof(errbuf));
-        serverLog(LL_WARNING, "Failed to load private key: %s: %s", alt_key_file, errbuf);
-        goto error;
+    if (alt_key_file) {
+        SSL_CTX_set_default_passwd_cb_userdata(ctx, (void *)alt_key_file_pass);
+        if (SSL_CTX_use_PrivateKey_file(ctx, alt_key_file, SSL_FILETYPE_PEM) <= 0) {
+            ERR_error_string_n(ERR_get_error(), errbuf, sizeof(errbuf));
+            serverLog(LL_WARNING, "Failed to load private key: %s: %s", alt_key_file, errbuf);
+            goto error;
+        }
     }
 
     if (ctx_config->ca_cert_file || ctx_config->ca_cert_dir) {
@@ -692,12 +696,14 @@ static SSL_CTX *createSSLContext(serverTLSContextConfig *ctx_config, int protoco
     }
 #endif
 
-    zfree(psig_data);
+    EVP_PKEY_free(primary_pkey);
+    EVP_PKEY_free(alt_pkey);
     return ctx;
 
 error:
+    EVP_PKEY_free(primary_pkey);
+    EVP_PKEY_free(alt_pkey);
     if (ctx) SSL_CTX_free(ctx);
-    zfree(psig_data);
     return NULL;
 }
 

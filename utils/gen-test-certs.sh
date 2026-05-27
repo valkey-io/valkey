@@ -97,7 +97,7 @@ openssl req \
     -CA tests/tls/ca.crt \
     -CAkey tests/tls/ca.key \
     -days 365 \
-    -passout pass:1234 \
+    -passout pass:asdf \
     -out tests/tls/valkey-mldsa-pw.crt
 
 # A client certificate with the CN "Client-only\0attacker", which anything

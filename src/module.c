@@ -5315,7 +5315,7 @@ int VM_ZsetRangeNext(ValkeyModuleKey *key) {
                 const char *ele;
                 size_t ele_len;
                 orderedIndexGetElementRaw(next, &ele, &ele_len);
-                if (!zsetLexLteMax((sds)ele, &key->u.zset.lrs)) {
+                if (!zsetLexLteMax(ele, ele_len, &key->u.zset.lrs)) {
                     key->u.zset.er = 1;
                     return 0;
                 }
@@ -5380,7 +5380,7 @@ int VM_ZsetRangePrev(ValkeyModuleKey *key) {
                 const char *ele;
                 size_t ele_len;
                 orderedIndexGetElementRaw(prev, &ele, &ele_len);
-                if (!zsetLexGteMin((sds)ele, &key->u.zset.lrs)) {
+                if (!zsetLexGteMin(ele, ele_len, &key->u.zset.lrs)) {
                     key->u.zset.er = 1;
                     return 0;
                 }

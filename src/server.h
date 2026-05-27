@@ -3369,9 +3369,9 @@ typedef struct {
 /* Zset range comparison utilities (used by both listpack and ordered index encodings) */
 int zsetScoreGteMin(double value, zrangespec *spec);
 int zsetScoreLteMax(double value, zrangespec *spec);
-int zsetLexCompare(sds a, sds b);
-int zsetLexGteMin(sds value, zlexrangespec *spec);
-int zsetLexLteMax(sds value, zlexrangespec *spec);
+int zsetLexCompare(const char *a, size_t alen, sds b);
+int zsetLexGteMin(const char *value, size_t len, zlexrangespec *spec);
+int zsetLexLteMax(const char *value, size_t len, zlexrangespec *spec);
 
 /* flags for incrCommandFailedCalls */
 #define ERROR_COMMAND_REJECTED (1 << 0) /* Indicate to update the command rejected stats */

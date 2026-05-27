@@ -159,7 +159,7 @@ unsigned long skiplistDeleteRangeByLex(OrderedIndex *oi, const_sds min, const_sd
     for (i = zslGetHeight(zsl) - 1; i >= 0; i--) {
         while (x->level[i].forward) {
             sds fwd_ele = zslGetNodeElement(x->level[i].forward);
-            if (zsetLexGteMin(fwd_ele, &range)) break;
+            if (zsetLexGteMin(fwd_ele, sdslen(fwd_ele), &range)) break;
             x = x->level[i].forward;
         }
         update[i] = x;
@@ -171,7 +171,7 @@ unsigned long skiplistDeleteRangeByLex(OrderedIndex *oi, const_sds min, const_sd
     /* Delete nodes while in range. */
     while (x) {
         sds ele = zslGetNodeElement(x);
-        if (!zsetLexLteMax(ele, &range)) break;
+        if (!zsetLexLteMax(ele, sdslen(ele), &range)) break;
         zskiplistNode *next = x->level[0].forward;
         zslUnlinkNode(zsl, x, update);
         if (on_delete) {

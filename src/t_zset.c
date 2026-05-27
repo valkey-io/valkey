@@ -74,19 +74,23 @@ int zsetScoreLteMax(double value, zrangespec *spec) {
 }
 
 /* Compare two sds strings handling shared.minstring/maxstring as -inf/+inf. */
-int zsetLexCompare(sds a, sds b) {
-    if (a == b) return 0;
+/* Compare a raw element (ptr+len) against an sds range bound.
+ * Either side may be shared.minstring/maxstring as -inf/+inf sentinels. */
+int zsetLexCompare(const char *a, size_t alen, sds b) {
+    if ((const char *)a == (const char *)b) return 0;
     if (a == shared.minstring || b == shared.maxstring) return -1;
     if (a == shared.maxstring || b == shared.minstring) return 1;
-    return sdscmp(a, b);
+    int cmp = memcmp(a, b, alen < sdslen(b) ? alen : sdslen(b));
+    if (cmp != 0) return cmp;
+    return alen < sdslen(b) ? -1 : (alen > sdslen(b) ? 1 : 0);
 }
 
-int zsetLexGteMin(sds value, zlexrangespec *spec) {
-    return spec->minex ? (zsetLexCompare(value, spec->min) > 0) : (zsetLexCompare(value, spec->min) >= 0);
+int zsetLexGteMin(const char *value, size_t len, zlexrangespec *spec) {
+    return spec->minex ? (zsetLexCompare(value, len, spec->min) > 0) : (zsetLexCompare(value, len, spec->min) >= 0);
 }
 
-int zsetLexLteMax(sds value, zlexrangespec *spec) {
-    return spec->maxex ? (zsetLexCompare(value, spec->max) < 0) : (zsetLexCompare(value, spec->max) <= 0);
+int zsetLexLteMax(const char *value, size_t len, zlexrangespec *spec) {
+    return spec->maxex ? (zsetLexCompare(value, len, spec->max) < 0) : (zsetLexCompare(value, len, spec->max) <= 0);
 }
 
 void zsetConvertAndExpand(robj *zobj, int encoding, unsigned long cap);
@@ -369,17 +373,29 @@ unsigned char *zzlLastInRange(unsigned char *zl, zrangespec *range) {
 }
 
 int zzlLexValueGteMin(unsigned char *p, zlexrangespec *spec) {
-    sds value = lpGetObject(p);
-    int res = zsetLexGteMin(value, spec);
-    sdsfree(value);
-    return res;
+    unsigned int len;
+    long long lval;
+    unsigned char *vstr = lpGetValue(p, &len, &lval);
+    if (vstr) {
+        return zsetLexGteMin((char *)vstr, len, spec);
+    } else {
+        char buf[LONG_STR_SIZE];
+        int blen = ll2string(buf, sizeof(buf), lval);
+        return zsetLexGteMin(buf, blen, spec);
+    }
 }
 
 int zzlLexValueLteMax(unsigned char *p, zlexrangespec *spec) {
-    sds value = lpGetObject(p);
-    int res = zsetLexLteMax(value, spec);
-    sdsfree(value);
-    return res;
+    unsigned int len;
+    long long lval;
+    unsigned char *vstr = lpGetValue(p, &len, &lval);
+    if (vstr) {
+        return zsetLexLteMax((char *)vstr, len, spec);
+    } else {
+        char buf[LONG_STR_SIZE];
+        int blen = ll2string(buf, sizeof(buf), lval);
+        return zsetLexLteMax(buf, blen, spec);
+    }
 }
 
 /* Returns if there is a part of the zset is in range. Should only be used
@@ -388,7 +404,7 @@ int zzlIsInLexRange(unsigned char *zl, zlexrangespec *range) {
     unsigned char *p;
 
     /* Test for ranges that will always be empty. */
-    int cmp = zsetLexCompare(range->min, range->max);
+    int cmp = zsetLexCompare(range->min, sdslen(range->min), range->max);
     if (cmp > 0 || (cmp == 0 && (range->minex || range->maxex))) return 0;
 
     p = lpSeek(zl, -2); /* Last element. */
@@ -2878,22 +2894,14 @@ void genericZrangebylexCommand(zrange_result_handler *handler,
             const char *ele_ptr;
             size_t ele_len;
             orderedIndexGetElementRaw(ln, &ele_ptr, &ele_len);
-            sds ele = sdsnewlen(ele_ptr, ele_len);
             if (reverse) {
-                if (!zsetLexGteMin(ele, range)) {
-                    sdsfree(ele);
-                    break;
-                }
+                if (!zsetLexGteMin(ele_ptr, ele_len, range)) break;
             } else {
-                if (!zsetLexLteMax(ele, range)) {
-                    sdsfree(ele);
-                    break;
-                }
+                if (!zsetLexLteMax(ele_ptr, ele_len, range)) break;
             }
 
             rangelen++;
             handler->emitResultFromCBuffer(handler, ele_ptr, ele_len, orderedIndexGetScore(ln));
-            sdsfree(ele);
         }
     } else {
         serverPanic("Unknown sorted set encoding");

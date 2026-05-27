@@ -1897,9 +1897,7 @@ static int _lpEntryValidation(unsigned char *p, unsigned int head_count, void *u
     return 1;
 }
 
-/* Validate the integrity of the listpack structure.
- * when `deep` is 0, only the integrity of the header is validated.
- * when `deep` is 1, we scan all the entries one by one.
+/* Validate the integrity of the listpack structure and check for duplicates.
  * when `pairs` is 0, all elements need to be unique (it's a set)
  * when `pairs` is 1, odd elements need to be unique (it's a key-value map) */
 int lpValidateIntegrityAndDups(unsigned char *lp, size_t size, int pairs) {

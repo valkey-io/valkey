@@ -394,8 +394,8 @@ unsigned char *lpSkip(unsigned char *p) {
 unsigned char *lpNext(unsigned char *lp, unsigned char *p) {
     assert(p);
     p = lpSkip(p);
-    size_t bytes = lpBytes(lp);
     if (unlikely(p[0] == LP_EOF)) {
+        size_t bytes = lpBytes(lp);
         /* EOF must only appear at the end of a listpack. */
         assert(p + 1 == lp + bytes);
         return NULL;
@@ -420,8 +420,8 @@ unsigned char *lpPrev(unsigned char *lp, unsigned char *p) {
  * listpack has no elements. */
 unsigned char *lpFirst(unsigned char *lp) {
     unsigned char *p = lp + LP_HDR_SIZE; /* Skip the header. */
-    size_t bytes = lpBytes(lp);
     if (unlikely(p[0] == LP_EOF)) {
+        size_t bytes = lpBytes(lp);
         /* EOF must only appear at the end of a listpack. */
         assert(p + 1 == lp + bytes);
         return NULL;
@@ -647,7 +647,7 @@ unsigned char *lpFind(unsigned char *lp, unsigned char *p, unsigned char *s, uin
             /* Skip entry */
             skipcnt--;
 
-            /* Move to next entry, avoid use `lpNext` due to performance degradation */
+            /* Move to next entry. */
             p = lpSkip(p);
         }
 

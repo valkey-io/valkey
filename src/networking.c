@@ -3920,6 +3920,7 @@ void commandProcessed(client *c) {
      *    since we have not applied the command. */
     if (c->flag.blocked) return;
 
+    c->flag.pending_command = 0;
     reqresAppendResponse(c);
     clusterSlotStatsAddNetworkBytesInForUserClient(c);
     resetClient(c);
@@ -4004,7 +4005,6 @@ int processPendingCommandAndInputBuffer(client *c) {
      * blocked client as well */
     if (c->flag.close_asap) return C_ERR;
     if (c->flag.pending_command) {
-        c->flag.pending_command = 0;
         if (processCommandAndResetClient(c) == C_ERR) {
             return C_ERR;
         }
@@ -4286,6 +4286,7 @@ int processInputBuffer(client *c) {
         }
 
         /* We are finally ready to execute the command. */
+        c->flag.pending_command = 1;
         if (processCommandAndResetClient(c) == C_ERR) {
             /* If the client is no longer valid, we avoid exiting this
              * loop and trimming the client buffer later. So we return

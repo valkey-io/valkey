@@ -3916,18 +3916,13 @@ NULL
  * If 'valid_count' is not NULL, the number of non-deleted (non-tombstone)
  * entries in this listpack is added to it. Callers use this to validate the
  * stream length loaded from an RDB payload against the entries actually
- * present. It is only accumulated in deep mode, since only then the master
- * entry is parsed. */
-int streamValidateListpackIntegrity(unsigned char *lp, size_t size, int deep, uint64_t *valid_count) {
+ * present. */
+int streamValidateListpackIntegrity(unsigned char *lp, size_t size, uint64_t *valid_count) {
     int valid_record;
     unsigned char *p, *next;
 
-    /* Since we don't want to run validation of all records twice, we'll
-     * run the listpack validation of just the header and do the rest here. */
-    if (!lpValidateIntegrity(lp, size, 0, NULL, NULL)) return 0;
-
-    /* In non-deep mode we just validated the listpack header (encoded size) */
-    if (!deep) return 1;
+    /* Validate the listpack structure (header + all entries). */
+    if (!lpValidateIntegrity(lp, size, NULL, NULL)) return 0;
 
     next = p = lpValidateFirst(lp);
     if (!lpValidateNext(lp, &next, size)) return 0;

@@ -512,11 +512,6 @@ typedef enum {
 #define TLS_CLIENT_AUTH_YES 1
 #define TLS_CLIENT_AUTH_OPTIONAL 2
 
-/* Sanitize dump payload */
-#define SANITIZE_DUMP_NO 0
-#define SANITIZE_DUMP_YES 1
-#define SANITIZE_DUMP_CLIENTS 2
-
 /* Enable protected config/command */
 #define PROTECTED_ACTION_ALLOWED_NO 0
 #define PROTECTED_ACTION_ALLOWED_YES 1
@@ -1072,13 +1067,6 @@ typedef struct readyList {
                 no AUTH is needed, and every                                                                           \
                 connection is immediately                                                                              \
                 authenticated. */
-#define USER_FLAG_SANITIZE_PAYLOAD                                                                                     \
-    (1 << 3) /* The user require a deep RESTORE                                                                        \
-              * payload sanitization. */
-#define USER_FLAG_SANITIZE_PAYLOAD_SKIP                                                                                \
-    (1 << 4) /* The user should skip the                                                                               \
-              * deep sanitization of RESTORE                                                                           \
-              * payload. */
 
 #define SELECTOR_FLAG_ROOT                                                                                             \
     (1 << 0)                               /* This is the root user permission                                         \
@@ -1885,7 +1873,6 @@ struct valkeyServer {
     int active_expire_effort;    /* From 1 (default) to 10, active effort. */
     int lazy_expire_disabled;    /* If > 0, don't trigger lazy expire */
     int active_defrag_enabled;
-    int sanitize_dump_payload;    /* Enables deep sanitization for ziplist and listpack in RDB and RESTORE. */
     int skip_checksum_validation; /* Disable checksum validation for RDB and RESTORE payload. */
     int jemalloc_bg_thread;       /* Enable jemalloc background thread */
     int active_defrag_configuration_changed; /* defrag configuration has been changed and need to reconsider

@@ -1334,8 +1334,6 @@ static int ACLSetSelector(aclSelector *selector, const char *op, size_t oplen) {
  * off          Disable the user: it's no longer possible to authenticate
  *              with this user, however the already authenticated connections
  *              will still work.
- * skip-sanitize-payload    RESTORE dump-payload sanitization is skipped.
- * sanitize-payload         RESTORE dump-payload is sanitized (default).
  * ><password>  Add this password to the list of valid password for the user.
  *              For example >mypass will add "mypass" to the list.
  *              This directive clears the "nopass" flag (see later).

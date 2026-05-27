@@ -326,7 +326,6 @@ static int isEnumConfig(const char *key) {
         "appendfsync",
         "oom-score-adj",
         "acl-pubsub-default",
-        "sanitize-dump-payload",
         "cluster-preferred-endpoint-type",
         "propagation-error-behavior",
         "shutdown-on-sigint",
@@ -448,9 +447,6 @@ void generateRandomEnumValue(FuzzerCommand *cmd, ConfigEntry *entry, const char 
     } else if (strcasecmp(config_name, "acl-pubsub-default") == 0) {
         static const char *options[] = {"allchannels", "resetchannels"};
         appendArg(cmd, sdsnew(options[rand() % 2]));
-    } else if (strcasecmp(config_name, "sanitize-dump-payload") == 0) {
-        static const char *options[] = {"no", "yes", "clients"};
-        appendArg(cmd, sdsnew(options[rand() % 3]));
     } else if (strcasecmp(config_name, "propagation-error-behavior") == 0) {
         static const char *options[] = {"ignore", "panic", "panic-on-replicas"};
         appendArg(cmd, sdsnew(options[rand() % 3]));

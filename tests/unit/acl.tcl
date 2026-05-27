@@ -1438,6 +1438,25 @@ tags {acl external:skip} {
     }
 }
 
+start_server {tags {"acl"}} {
+    test {ACL flags skip-sanitize-payload and sanitize-payload are accepted but have no effect on validation} {
+        # These flags are still accepted and serialized for backwards compatibility,
+        # but they have no effect on RDB/RESTORE validation which is now unconditional.
+        r ACL setuser testuser on nopass skip-sanitize-payload ~* +@all
+        set user_info [r ACL getuser testuser]
+        # Flag should appear in the user's flags (it is still tracked)
+        assert {[string first "skip-sanitize-payload" [dict get $user_info flags]] != -1}
+
+        # sanitize-payload should also be accepted and appear
+        r ACL setuser testuser2 on nopass sanitize-payload ~* +@all
+        set user_info2 [r ACL getuser testuser2]
+        assert {[string first "sanitize-payload" [dict get $user_info2 flags]] != -1}
+
+        # Clean up
+        r ACL deluser testuser testuser2
+    }
+}
+
 set server_path [tmpdir "server.acl"]
 exec cp -f tests/assets/user.acl $server_path
 start_server [list overrides [list "dir" $server_path "aclfile" "user.acl"] tags {"repl external:skip"}] {

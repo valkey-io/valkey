@@ -137,15 +137,15 @@ configEnum oom_score_adj_enum[] = {
     {"absolute", OOM_SCORE_ADJ_ABSOLUTE},
     {NULL, 0}};
 
-configEnum acl_pubsub_default_enum[] = {
-    {"allchannels", SELECTOR_FLAG_ALLCHANNELS},
-    {"resetchannels", 0},
-    {NULL, 0}};
-
 configEnum sanitize_dump_payload_enum[] = {
     {"no", SANITIZE_DUMP_NO},
     {"yes", SANITIZE_DUMP_YES},
     {"clients", SANITIZE_DUMP_CLIENTS},
+    {NULL, 0}};
+
+configEnum acl_pubsub_default_enum[] = {
+    {"allchannels", SELECTOR_FLAG_ALLCHANNELS},
+    {"resetchannels", 0},
     {NULL, 0}};
 
 configEnum protected_action_enum[] = {

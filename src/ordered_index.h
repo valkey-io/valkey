@@ -94,9 +94,9 @@ OrderedIndexItem *orderedIndexInsertDetached(OrderedIndex *oi, OrderedIndexItem 
  * Calls on_delete for each removed item. Returns count of items removed. */
 unsigned long orderedIndexDeleteRangeByScore(OrderedIndex *oi, double min, double max, int min_ex, int max_ex, OrderedIndexOnDelete on_delete, void *ctx);
 
-/* Delete all items with rank in [start, end] (1-based, inclusive).
+/* Delete all items with index in [start, end] (0-based, inclusive).
  * Calls on_delete for each removed item. Returns count of items removed. */
-unsigned long orderedIndexDeleteRangeByRank(OrderedIndex *oi, unsigned long start, unsigned long end, OrderedIndexOnDelete on_delete, void *ctx);
+unsigned long orderedIndexDeleteRangeByIndex(OrderedIndex *oi, unsigned long start, unsigned long end, OrderedIndexOnDelete on_delete, void *ctx);
 
 /* Delete all items with element in lex range [min, max]. If min_ex is set, min is exclusive; if max_ex is set, max is exclusive.
  * Calls on_delete for each removed item. Returns count of items removed. */
@@ -109,11 +109,11 @@ unsigned long orderedIndexDeleteRangeByLex(OrderedIndex *oi, const_sds min, cons
 /* Return the number of items in the index. */
 unsigned long orderedIndexLength(OrderedIndex *oi);
 
-/* Return the item at the given 1-based rank, or NULL if out of range. */
-OrderedIndexItem *orderedIndexGetByRank(OrderedIndex *oi, unsigned long rank);
+/* Return the item at the given 0-based index, or NULL if out of range. */
+OrderedIndexItem *orderedIndexGetByIndex(OrderedIndex *oi, unsigned long index);
 
-/* Return the 1-based rank of an item. The item must be in the index. */
-unsigned long orderedIndexGetRank(OrderedIndex *oi, const OrderedIndexItem *item);
+/* Return the 0-based index of an item. The item must be in the index. */
+unsigned long orderedIndexGetIndex(OrderedIndex *oi, const OrderedIndexItem *item);
 
 /* Get the element data from an item as a raw pointer + length. */
 void orderedIndexGetElementRaw(const OrderedIndexItem *item, const char **ptr, size_t *len);
@@ -133,7 +133,7 @@ unsigned long orderedIndexCountLexRange(OrderedIndex *oi, const_sds min, const_s
 
 /* Initialize a stack-allocated iterator. If no seek function is called,
  * next() starts from the beginning and prev() starts from the end.
- * Use orderedIndexSeekToRank/ScoreRange/LexRange to start elsewhere. */
+ * Use orderedIndexSeekToIndex/ScoreRange/LexRange to start elsewhere. */
 void orderedIndexInitIterator(OrderedIndexIterator *iter, OrderedIndex *oi);
 
 /* Reset iterator position (keeps the index association). */
@@ -145,8 +145,8 @@ OrderedIndexItem *orderedIndexNext(OrderedIndexIterator *iter);
 /* Advance iterator backward. Returns the previous item, or NULL at start. */
 OrderedIndexItem *orderedIndexPrev(OrderedIndexIterator *iter);
 
-/* Position iterator at the given rank. next() returns rank+1, prev() returns rank. */
-void orderedIndexSeekToRank(OrderedIndexIterator *iter, unsigned long rank);
+/* Position iterator at the given 0-based index. next() returns index+1, prev() returns index. */
+void orderedIndexSeekToIndex(OrderedIndexIterator *iter, unsigned long index);
 
 /* Position iterator within a score range.
  * offset >= 0: next() returns the (offset)th element in range.

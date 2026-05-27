@@ -36,13 +36,13 @@ class OrderedIndexTestApi {
     virtual OrderedIndexItem *popLast(OrderedIndex *oi) = 0;
     virtual void freeItem(OrderedIndexItem *item) = 0;
     virtual unsigned long deleteRangeByScore(OrderedIndex *oi, double min, double max, int min_ex, int max_ex, OrderedIndexOnDelete on_delete, void *ctx) = 0;
-    virtual unsigned long deleteRangeByRank(OrderedIndex *oi, unsigned long start, unsigned long end, OrderedIndexOnDelete on_delete, void *ctx) = 0;
+    virtual unsigned long deleteRangeByIndex(OrderedIndex *oi, unsigned long start, unsigned long end, OrderedIndexOnDelete on_delete, void *ctx) = 0;
     virtual unsigned long deleteRangeByLex(OrderedIndex *oi, const_sds min, const_sds max, int min_ex, int max_ex, OrderedIndexOnDelete on_delete, void *ctx) = 0;
 
     /* Query */
     virtual unsigned long length(OrderedIndex *oi) = 0;
-    virtual OrderedIndexItem *getByRank(OrderedIndex *oi, unsigned long rank) = 0;
-    virtual unsigned long getRank(OrderedIndex *oi, const OrderedIndexItem *pos) = 0;
+    virtual OrderedIndexItem *getByIndex(OrderedIndex *oi, unsigned long rank) = 0;
+    virtual unsigned long getIndex(OrderedIndex *oi, const OrderedIndexItem *pos) = 0;
     virtual void getElementRaw(const OrderedIndexItem *pos, const char **ptr, size_t *len) = 0;
     virtual double getScore(const OrderedIndexItem *pos) = 0;
 
@@ -61,7 +61,7 @@ class OrderedIndexTestApi {
     virtual void resetIterator(OrderedIndexIterator *iter) = 0;
     virtual OrderedIndexItem *next(OrderedIndexIterator *iter) = 0;
     virtual OrderedIndexItem *prev(OrderedIndexIterator *iter) = 0;
-    virtual void seekToRank(OrderedIndexIterator *iter, unsigned long rank) = 0;
+    virtual void seekToIndex(OrderedIndexIterator *iter, unsigned long rank) = 0;
     virtual void seekToScoreRange(OrderedIndexIterator *iter, double min, double max, int min_ex, int max_ex, long offset) = 0;
     virtual void seekToLexRange(OrderedIndexIterator *iter, const_sds min, const_sds max, int min_ex, int max_ex, long offset) = 0;
 
@@ -118,8 +118,8 @@ class SkiplistOrderedIndex : public OrderedIndexTestApi {
     unsigned long deleteRangeByScore(OrderedIndex *oi, double min, double max, int min_ex, int max_ex, OrderedIndexOnDelete on_delete, void *ctx) override {
         return skiplistDeleteRangeByScore(oi, min, max, min_ex, max_ex, on_delete, ctx);
     }
-    unsigned long deleteRangeByRank(OrderedIndex *oi, unsigned long start, unsigned long end, OrderedIndexOnDelete on_delete, void *ctx) override {
-        return skiplistDeleteRangeByRank(oi, start, end, on_delete, ctx);
+    unsigned long deleteRangeByIndex(OrderedIndex *oi, unsigned long start, unsigned long end, OrderedIndexOnDelete on_delete, void *ctx) override {
+        return skiplistDeleteRangeByIndex(oi, start, end, on_delete, ctx);
     }
     unsigned long deleteRangeByLex(OrderedIndex *oi, const_sds min, const_sds max, int min_ex, int max_ex, OrderedIndexOnDelete on_delete, void *ctx) override {
         return skiplistDeleteRangeByLex(oi, min, max, min_ex, max_ex, on_delete, ctx);
@@ -128,11 +128,11 @@ class SkiplistOrderedIndex : public OrderedIndexTestApi {
     unsigned long length(OrderedIndex *oi) override {
         return skiplistLength(oi);
     }
-    OrderedIndexItem *getByRank(OrderedIndex *oi, unsigned long rank) override {
-        return skiplistGetByRank(oi, rank);
+    OrderedIndexItem *getByIndex(OrderedIndex *oi, unsigned long rank) override {
+        return skiplistGetByIndex(oi, rank);
     }
-    unsigned long getRank(OrderedIndex *oi, const OrderedIndexItem *pos) override {
-        return skiplistGetRank(oi, pos);
+    unsigned long getIndex(OrderedIndex *oi, const OrderedIndexItem *pos) override {
+        return skiplistGetIndex(oi, pos);
     }
     void getElementRaw(const OrderedIndexItem *pos, const char **ptr, size_t *len) override {
         skiplistGetElementRaw(pos, ptr, len);
@@ -168,8 +168,8 @@ class SkiplistOrderedIndex : public OrderedIndexTestApi {
     OrderedIndexItem *prev(OrderedIndexIterator *iter) override {
         return skiplistPrev(iter);
     }
-    void seekToRank(OrderedIndexIterator *iter, unsigned long rank) override {
-        skiplistSeekToRank(iter, rank);
+    void seekToIndex(OrderedIndexIterator *iter, unsigned long rank) override {
+        skiplistSeekToIndex(iter, rank);
     }
     void seekToScoreRange(OrderedIndexIterator *iter, double min, double max, int min_ex, int max_ex, long offset) override {
         skiplistSeekToScoreRange(iter, min, max, min_ex, max_ex, offset);

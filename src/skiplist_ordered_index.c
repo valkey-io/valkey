@@ -115,11 +115,15 @@ unsigned long skiplistDeleteRangeByScore(OrderedIndex *oi, double min, double ma
     return removed;
 }
 
-unsigned long skiplistDeleteRangeByRank(OrderedIndex *oi, unsigned long start, unsigned long end, OrderedIndexOnDelete on_delete, void *ctx) {
+unsigned long skiplistDeleteRangeByIndex(OrderedIndex *oi, unsigned long start, unsigned long end, OrderedIndexOnDelete on_delete, void *ctx) {
     zskiplist *zsl = (zskiplist *)oi;
     zskiplistNode *update[ZSKIPLIST_MAXLEVEL], *x;
     unsigned long traversed = 0, removed = 0;
     int i;
+
+    /* Convert 0-based inclusive range to 1-based for internal traversal. */
+    start++;
+    end++;
 
     x = zslGetHeader(zsl);
     for (i = zslGetHeight(zsl) - 1; i >= 0; i--) {
@@ -192,12 +196,12 @@ unsigned long skiplistLength(OrderedIndex *oi) {
     return zslGetLength((zskiplist *)oi);
 }
 
-OrderedIndexItem *skiplistGetByRank(OrderedIndex *oi, unsigned long rank) {
-    return (OrderedIndexItem *)zslGetElementByRank((zskiplist *)oi, rank);
+OrderedIndexItem *skiplistGetByIndex(OrderedIndex *oi, unsigned long index) {
+    return (OrderedIndexItem *)zslGetElementByRank((zskiplist *)oi, index + 1);
 }
 
-unsigned long skiplistGetRank(OrderedIndex *oi, const OrderedIndexItem *node) {
-    return zslGetRank((zskiplist *)oi, (const zskiplistNode *)node);
+unsigned long skiplistGetIndex(OrderedIndex *oi, const OrderedIndexItem *node) {
+    return zslGetRank((zskiplist *)oi, (const zskiplistNode *)node) - 1;
 }
 
 void skiplistGetElementRaw(const OrderedIndexItem *node, const char **ptr, size_t *len) {
@@ -262,8 +266,8 @@ OrderedIndexItem *skiplistPrev(OrderedIndexIterator *iter) {
     return (OrderedIndexItem *)zslPrev((zslIter *)iter);
 }
 
-void skiplistSeekToRank(OrderedIndexIterator *iter, unsigned long rank) {
-    zslSeekToRank((zslIter *)iter, rank);
+void skiplistSeekToIndex(OrderedIndexIterator *iter, unsigned long index) {
+    zslSeekToRank((zslIter *)iter, index + 1);
 }
 
 void skiplistSeekToScoreRange(OrderedIndexIterator *iter, double min, double max, int min_ex, int max_ex, long offset) {

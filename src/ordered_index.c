@@ -63,8 +63,8 @@ unsigned long orderedIndexDeleteRangeByScore(OrderedIndex *oi, double min, doubl
     return skiplistDeleteRangeByScore(oi, min, max, min_ex, max_ex, on_delete, ctx);
 }
 
-unsigned long orderedIndexDeleteRangeByRank(OrderedIndex *oi, unsigned long start, unsigned long end, OrderedIndexOnDelete on_delete, void *ctx) {
-    return skiplistDeleteRangeByRank(oi, start, end, on_delete, ctx);
+unsigned long orderedIndexDeleteRangeByIndex(OrderedIndex *oi, unsigned long start, unsigned long end, OrderedIndexOnDelete on_delete, void *ctx) {
+    return skiplistDeleteRangeByIndex(oi, start, end, on_delete, ctx);
 }
 
 unsigned long orderedIndexDeleteRangeByLex(OrderedIndex *oi, const_sds min, const_sds max, int min_ex, int max_ex, OrderedIndexOnDelete on_delete, void *ctx) {
@@ -77,12 +77,12 @@ unsigned long orderedIndexLength(OrderedIndex *oi) {
     return skiplistLength(oi);
 }
 
-OrderedIndexItem *orderedIndexGetByRank(OrderedIndex *oi, unsigned long rank) {
-    return skiplistGetByRank(oi, rank);
+OrderedIndexItem *orderedIndexGetByIndex(OrderedIndex *oi, unsigned long rank) {
+    return skiplistGetByIndex(oi, rank);
 }
 
-unsigned long orderedIndexGetRank(OrderedIndex *oi, const OrderedIndexItem *item) {
-    return skiplistGetRank(oi, item);
+unsigned long orderedIndexGetIndex(OrderedIndex *oi, const OrderedIndexItem *item) {
+    return skiplistGetIndex(oi, item);
 }
 
 void orderedIndexGetElementRaw(const OrderedIndexItem *item, const char **ptr, size_t *len) {
@@ -119,8 +119,8 @@ OrderedIndexItem *orderedIndexPrev(OrderedIndexIterator *iter) {
     return skiplistPrev(iter);
 }
 
-void orderedIndexSeekToRank(OrderedIndexIterator *iter, unsigned long rank) {
-    skiplistSeekToRank(iter, rank);
+void orderedIndexSeekToIndex(OrderedIndexIterator *iter, unsigned long rank) {
+    skiplistSeekToIndex(iter, rank);
 }
 
 void orderedIndexSeekToScoreRange(OrderedIndexIterator *iter, double min, double max, int min_ex, int max_ex, long offset) {

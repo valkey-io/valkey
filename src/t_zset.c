@@ -951,7 +951,7 @@ int zsetAdd(robj *zobj, double score, sds ele, int in_flags, int *out_flags, dou
 /* Deletes the element 'ele' from the sorted set encoded as ordered index+hashtable,
  * returning 1 if the element existed and was deleted, 0 otherwise (the
  * element was not there). */
-static int zsetRemoveFromSkiplist(zset *zs, sds ele) {
+static int zsetRemoveFromIndex(zset *zs, sds ele) {
     void *entry;
     if (!hashtablePop(zs->ht, ele, &entry)) return 0;
     OrderedIndexItem *node = entry;
@@ -976,7 +976,7 @@ int zsetDel(robj *zobj, sds ele) {
         }
     } else if (zobj->encoding == OBJ_ENCODING_SKIPLIST) {
         zset *zs = objectGetVal(zobj);
-        if (zsetRemoveFromSkiplist(zs, ele)) {
+        if (zsetRemoveFromIndex(zs, ele)) {
             return 1;
         }
     } else {
@@ -1034,14 +1034,12 @@ static long zsetRank(robj *zobj, sds ele, int reverse, double *output_score) {
         if (!hashtableFind(zs->ht, ele, &entry)) return -1;
         OrderedIndexItem *node = entry;
 
-        rank = orderedIndexGetRank(zs->oi, node);
-        /* Existing elements always have a rank. */
-        serverAssert(rank != 0);
+        rank = orderedIndexGetIndex(zs->oi, node);
         if (output_score) *output_score = orderedIndexGetScore(node);
         if (reverse)
-            return llen - rank;
+            return llen - rank - 1;
         else
-            return rank - 1;
+            return rank;
     } else {
         serverPanic("Unknown sorted set encoding");
     }
@@ -1400,7 +1398,7 @@ void zremrangeGenericCommand(client *c, zrange_type rangetype) {
         hashtablePauseAutoShrink(zs->ht);
         switch (rangetype) {
         case ZRANGE_AUTO:
-        case ZRANGE_RANK: deleted = orderedIndexDeleteRangeByRank(zs->oi, start + 1, end + 1, zsetIndexDeleteCallback, zs->ht); break;
+        case ZRANGE_RANK: deleted = orderedIndexDeleteRangeByIndex(zs->oi, start, end, zsetIndexDeleteCallback, zs->ht); break;
         case ZRANGE_SCORE: deleted = orderedIndexDeleteRangeByScore(zs->oi, range.min, range.max, range.minex, range.maxex, zsetIndexDeleteCallback, zs->ht); break;
         case ZRANGE_LEX: deleted = orderedIndexDeleteRangeByLex(zs->oi, lexrange.min, lexrange.max, lexrange.minex, lexrange.maxex, zsetIndexDeleteCallback, zs->ht); break;
         }
@@ -1531,7 +1529,7 @@ static void zuiInitIterator(zsetopsrc *op) {
         } else if (op->encoding == OBJ_ENCODING_SKIPLIST) {
             it->sl.zs = objectGetVal(op->subject);
             orderedIndexInitIterator(&it->sl.iter, it->sl.zs->oi);
-            orderedIndexSeekToRank(&it->sl.iter, orderedIndexLength(it->sl.zs->oi));
+            orderedIndexSeekToIndex(&it->sl.iter, orderedIndexLength(it->sl.zs->oi) - 1);
             it->sl.node = NULL;
         } else {
             serverPanic("Unknown sorted set encoding");
@@ -1849,7 +1847,7 @@ static void zdiffAlgorithm2(zsetopsrc *src, long setnum, zset *dstzset, size_t *
      * This is O(L + (N-K)log(N)) where L is the sum of all the elements in every
      * set, N is the size of the first set, and K is the size of the result set.
      *
-     * Note that from the (L-N) dict searches, (N-K) got to the zsetRemoveFromSkiplist
+     * Note that from the (L-N) dict searches, (N-K) got to the zsetRemoveFromIndex
      * which costs log(N)
      *
      * There is also a O(K) cost at the end for finding the largest element
@@ -1876,7 +1874,7 @@ static void zdiffAlgorithm2(zsetopsrc *src, long setnum, zset *dstzset, size_t *
                 cardinality++;
             } else {
                 tmp = zuiSdsFromValue(&zval);
-                if (zsetRemoveFromSkiplist(dstzset, tmp)) {
+                if (zsetRemoveFromIndex(dstzset, tmp)) {
                     cardinality--;
                 }
             }
@@ -2533,10 +2531,10 @@ void genericZrangebyrankCommand(zrange_result_handler *handler,
 
         /* Seek to starting position */
         if (reverse) {
-            unsigned long seek_rank = (start > 0) ? (unsigned long)(llen - start) : orderedIndexLength(oi);
-            orderedIndexSeekToRank(&iter, seek_rank);
+            unsigned long seek_idx = (start > 0) ? (unsigned long)(llen - start - 1) : orderedIndexLength(oi) - 1;
+            orderedIndexSeekToIndex(&iter, seek_idx);
         } else {
-            orderedIndexSeekToRank(&iter, (unsigned long)start);
+            if (start > 0) orderedIndexSeekToIndex(&iter, (unsigned long)(start - 1));
         }
 
         while (rangelen--) {
@@ -3291,7 +3289,7 @@ void genericZpopCommand(client *c,
             OrderedIndexItem *zln;
 
             /* Get the first or last element in the sorted set. */
-            zln = (where == ZSET_MAX ? orderedIndexGetByRank(oi, orderedIndexLength(oi)) : orderedIndexGetByRank(oi, 1));
+            zln = (where == ZSET_MAX ? orderedIndexGetByIndex(oi, orderedIndexLength(oi) - 1) : orderedIndexGetByIndex(oi, 0));
 
             /* There must be an element in the sorted set. */
             serverAssertWithInfo(c, zobj, zln != NULL);

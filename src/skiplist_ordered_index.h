@@ -33,13 +33,13 @@ OrderedIndexItem *skiplistCreateDetached(double score, const char *ele, size_t l
 void skiplistDetachedSetScore(OrderedIndexItem *item, double score);
 OrderedIndexItem *skiplistInsertDetached(OrderedIndex *oi, OrderedIndexItem *item);
 unsigned long skiplistDeleteRangeByScore(OrderedIndex *oi, double min, double max, int min_ex, int max_ex, OrderedIndexOnDelete on_delete, void *ctx);
-unsigned long skiplistDeleteRangeByRank(OrderedIndex *oi, unsigned long start, unsigned long end, OrderedIndexOnDelete on_delete, void *ctx);
+unsigned long skiplistDeleteRangeByIndex(OrderedIndex *oi, unsigned long start, unsigned long end, OrderedIndexOnDelete on_delete, void *ctx);
 unsigned long skiplistDeleteRangeByLex(OrderedIndex *oi, const_sds min, const_sds max, int min_ex, int max_ex, OrderedIndexOnDelete on_delete, void *ctx);
 
 /* Query */
 unsigned long skiplistLength(OrderedIndex *oi);
-OrderedIndexItem *skiplistGetByRank(OrderedIndex *oi, unsigned long rank);
-unsigned long skiplistGetRank(OrderedIndex *oi, const OrderedIndexItem *item);
+OrderedIndexItem *skiplistGetByIndex(OrderedIndex *oi, unsigned long rank);
+unsigned long skiplistGetIndex(OrderedIndex *oi, const OrderedIndexItem *item);
 void skiplistGetElementRaw(const OrderedIndexItem *item, const char **ptr, size_t *len);
 double skiplistGetScore(const OrderedIndexItem *item);
 unsigned long skiplistCountScoreRange(OrderedIndex *oi, double min, double max, int min_ex, int max_ex);
@@ -50,7 +50,7 @@ void skiplistInitIterator(OrderedIndexIterator *iter, OrderedIndex *oi);
 void skiplistResetIterator(OrderedIndexIterator *iter);
 OrderedIndexItem *skiplistNext(OrderedIndexIterator *iter);
 OrderedIndexItem *skiplistPrev(OrderedIndexIterator *iter);
-void skiplistSeekToRank(OrderedIndexIterator *iter, unsigned long rank);
+void skiplistSeekToIndex(OrderedIndexIterator *iter, unsigned long rank);
 void skiplistSeekToScoreRange(OrderedIndexIterator *iter, double min, double max, int min_ex, int max_ex, long offset);
 void skiplistSeekToLexRange(OrderedIndexIterator *iter, const_sds min, const_sds max, int min_ex, int max_ex, long offset);
 

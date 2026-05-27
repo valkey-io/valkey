@@ -65,7 +65,7 @@ typedef enum {
 #define CONN_FLAG_WRITE_BARRIER (1 << 1)        /* Write barrier requested */
 #define CONN_FLAG_ALLOW_ACCEPT_OFFLOAD (1 << 2) /* Connection accept can be offloaded to IO threads. */
 
-#define CONN_POSTPONE_READ (1 << 0) // flags that if we should postpone read or write.
+#define CONN_POSTPONE_READ (1 << 0)
 #define CONN_POSTPONE_WRITE (1 << 1)
 
 typedef enum {

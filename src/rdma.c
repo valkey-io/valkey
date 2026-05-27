@@ -930,9 +930,6 @@ static void connRdmaAcceptHandler(aeEventLoop *el, int fd, void *privdata, int m
 }
 
 static int connRdmaSetRwHandler(connection *conn) {
-    rdma_connection *rdma_conn = (rdma_connection *)conn;
-    if (rdma_conn->postpone_mask) return C_OK;
-
     /* IB channel only has POLLIN event */
     if (conn->read_handler || conn->write_handler) {
         if (aeCreateFileEvent(server.el, conn->fd, AE_READABLE, conn->type->ae_handler, conn) == AE_ERR) {
@@ -1780,7 +1777,6 @@ static int rdmaProcessPendingData(void) {
     listRewind(pending_list, &li);
     while ((ln = listNext(&li))) {
         rdma_conn = listNodeValue(ln);
-        if (rdma_conn->postpone_mask) continue;
         conn = &rdma_conn->c;
 
         /* a connection can be disconnected by remote peer, CM event mark state as CONN_STATE_CLOSED, kick connection

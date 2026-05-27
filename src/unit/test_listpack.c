@@ -544,7 +544,7 @@ int test_listpackBatchDelete(int argc, char **argv, int flags) {
     lp = lpBatchDelete(lp, ps, 3);
     TEST_ASSERT(lpLength(lp) == 1);
     verifyEntry(lpFirst(lp), (unsigned char *)mixlist[2], strlen(mixlist[2]));
-    TEST_ASSERT(lpValidateIntegrity(lp, lpBytes(lp), 1, NULL, NULL) == 1);
+    TEST_ASSERT(lpValidateIntegrity(lp, lpBytes(lp), NULL, NULL) == 1);
     lpFree(lp);
 
     return 0;
@@ -1131,7 +1131,7 @@ int test_listpackLpValidateIntegrity(int argc, char **argv, int flags) {
 
     lp = createList();
     long count = 0;
-    TEST_ASSERT(lpValidateIntegrity(lp, lpBytes(lp), 1, lpValidation, &count) == 1);
+    TEST_ASSERT(lpValidateIntegrity(lp, lpBytes(lp), lpValidation, &count) == 1);
     lpFree(lp);
 
     return 0;
@@ -1344,7 +1344,7 @@ int test_listpackBenchmarkLpValidateIntegrity(int argc, char **argv, int flags) 
 
     unsigned long long start = usec();
     for (int i = 0; i < 2000; i++) {
-        lpValidateIntegrity(lp, lpBytes(lp), 1, NULL, NULL);
+        lpValidateIntegrity(lp, lpBytes(lp), NULL, NULL);
     }
     printf("Done. usec=%lld\n", usec() - start);
     return 0;

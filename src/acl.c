@@ -150,8 +150,6 @@ struct ACLUserFlag {
     {"on", USER_FLAG_ENABLED},
     {"off", USER_FLAG_DISABLED},
     {"nopass", USER_FLAG_NOPASS},
-    {"skip-sanitize-payload", USER_FLAG_SANITIZE_PAYLOAD_SKIP},
-    {"sanitize-payload", USER_FLAG_SANITIZE_PAYLOAD},
     {NULL, 0} /* Terminator. */
 };
 
@@ -436,7 +434,6 @@ static user *ACLCreateUser(const char *name, size_t namelen) {
     user *u = zmalloc(sizeof(*u));
     u->name = sdsnewlen(name, namelen);
     u->flags = USER_FLAG_DISABLED;
-    u->flags |= USER_FLAG_SANITIZE_PAYLOAD;
     u->passwords = listCreate();
     u->acl_string = NULL;
     listSetMatchMethod(u->passwords, ACLListMatchSds);
@@ -1334,8 +1331,6 @@ static int ACLSetSelector(aclSelector *selector, const char *op, size_t oplen) {
  * off          Disable the user: it's no longer possible to authenticate
  *              with this user, however the already authenticated connections
  *              will still work.
- * skip-sanitize-payload    RESTORE dump-payload sanitization is skipped.
- * sanitize-payload         RESTORE dump-payload is sanitized (default).
  * ><password>  Add this password to the list of valid password for the user.
  *              For example >mypass will add "mypass" to the list.
  *              This directive clears the "nopass" flag (see later).
@@ -1414,12 +1409,9 @@ int ACLSetUser(user *u, const char *op, ssize_t oplen) {
     } else if (!strcasecmp(op, "off")) {
         u->flags |= USER_FLAG_DISABLED;
         u->flags &= ~USER_FLAG_ENABLED;
-    } else if (!strcasecmp(op, "skip-sanitize-payload")) {
-        u->flags |= USER_FLAG_SANITIZE_PAYLOAD_SKIP;
-        u->flags &= ~USER_FLAG_SANITIZE_PAYLOAD;
-    } else if (!strcasecmp(op, "sanitize-payload")) {
-        u->flags &= ~USER_FLAG_SANITIZE_PAYLOAD_SKIP;
-        u->flags |= USER_FLAG_SANITIZE_PAYLOAD;
+    } else if (!strcasecmp(op, "skip-sanitize-payload") || !strcasecmp(op, "sanitize-payload")) {
+        /* These flags are deprecated and have no effect. Accept them silently
+         * for backwards compatibility with old ACL files. */
     } else if (!strcasecmp(op, "nopass")) {
         u->flags |= USER_FLAG_NOPASS;
         listEmpty(u->passwords);
@@ -1491,7 +1483,6 @@ int ACLSetUser(user *u, const char *op, ssize_t oplen) {
         /* Reset to `alldbs` for backwards compatibility */
         serverAssert(ACLSetUser(u, "alldbs", -1) == C_OK);
         serverAssert(ACLSetUser(u, "off", -1) == C_OK);
-        serverAssert(ACLSetUser(u, "sanitize-payload", -1) == C_OK);
         serverAssert(ACLSetUser(u, "clearselectors", -1) == C_OK);
         serverAssert(ACLSetUser(u, "-@all", -1) == C_OK);
     } else {

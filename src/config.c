@@ -136,13 +136,6 @@ configEnum acl_pubsub_default_enum[] = {
     {NULL, 0}
 };
 
-configEnum sanitize_dump_payload_enum[] = {
-    {"no", SANITIZE_DUMP_NO},
-    {"yes", SANITIZE_DUMP_YES},
-    {"clients", SANITIZE_DUMP_CLIENTS},
-    {NULL, 0}
-};
-
 configEnum protected_action_enum[] = {
     {"no", PROTECTED_ACTION_ALLOWED_NO},
     {"yes", PROTECTED_ACTION_ALLOWED_YES},
@@ -449,6 +442,7 @@ void loadServerConfigFromString(char *config) {
         {"list-max-ziplist-entries", 2, 2},
         {"list-max-ziplist-value", 2, 2},
         {"lua-replicate-commands", 2, 2},
+        {"sanitize-dump-payload", 2, 2},
         {NULL, 0},
     };
     char buf[1024];
@@ -3159,7 +3153,6 @@ standardConfig static_configs[] = {
     createEnumConfig("appendfsync", NULL, MODIFIABLE_CONFIG, aof_fsync_enum, server.aof_fsync, AOF_FSYNC_EVERYSEC, NULL, updateAppendFsync),
     createEnumConfig("oom-score-adj", NULL, MODIFIABLE_CONFIG, oom_score_adj_enum, server.oom_score_adj, OOM_SCORE_ADJ_NO, NULL, updateOOMScoreAdj),
     createEnumConfig("acl-pubsub-default", NULL, MODIFIABLE_CONFIG, acl_pubsub_default_enum, server.acl_pubsub_default, 0, NULL, NULL),
-    createEnumConfig("sanitize-dump-payload", NULL, DEBUG_CONFIG | MODIFIABLE_CONFIG, sanitize_dump_payload_enum, server.sanitize_dump_payload, SANITIZE_DUMP_NO, NULL, NULL),
     createEnumConfig("enable-protected-configs", NULL, IMMUTABLE_CONFIG, protected_action_enum, server.enable_protected_configs, PROTECTED_ACTION_ALLOWED_NO, NULL, NULL),
     createEnumConfig("enable-debug-command", NULL, IMMUTABLE_CONFIG, protected_action_enum, server.enable_debug_cmd, PROTECTED_ACTION_ALLOWED_NO, NULL, NULL),
     createEnumConfig("enable-module-command", NULL, IMMUTABLE_CONFIG, protected_action_enum, server.enable_module_cmd, PROTECTED_ACTION_ALLOWED_NO, NULL, NULL),

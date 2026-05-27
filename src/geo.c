@@ -29,7 +29,6 @@
  */
 
 #include "geo.h"
-#include "skiplist.h"
 #include "ordered_index.h"
 #include "geohash_helper.h"
 #include "debugmacro.h"
@@ -38,7 +37,6 @@
 /* Things exported from t_zset.c only for geo.c, since it is the only other
  * part of the server that requires close zset introspection. */
 unsigned char *zzlFirstInRange(unsigned char *zl, zrangespec *range);
-int zslValueLteMax(double value, zrangespec *spec);
 
 /* ====================================================================
  * This file implements the following commands:
@@ -296,7 +294,7 @@ int geoGetPointsInRange(robj *zobj, double min, double max, GeoShape *shape, geo
             score = zzlGetScore(sptr);
 
             /* If we fell out of range, break. */
-            if (!zslValueLteMax(score, &range)) break;
+            if (!zsetScoreLteMax(score, &range)) break;
 
             vstr = lpGetValue(eptr, &vlen, &vlong);
             if (geoWithinShape(shape, score, xy, &distance) == C_OK) {
@@ -319,7 +317,7 @@ int geoGetPointsInRange(robj *zobj, double min, double max, GeoShape *shape, geo
             double distance = 0;
             double score = orderedIndexGetScore(ln);
             /* Abort when the node is no longer in range. */
-            if (!zslValueLteMax(score, &range)) break;
+            if (!zsetScoreLteMax(score, &range)) break;
             if (geoWithinShape(shape, score, xy, &distance) == C_OK) {
                 /* Append the new element. */
                 const char *ele;

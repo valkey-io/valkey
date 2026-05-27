@@ -51,13 +51,43 @@
  * the ordered index. */
 
 #include "server.h"
-#include "skiplist.h"
 #include "ordered_index.h"
 #include "intset.h" /* Compact integer set structure */
 #include "mt19937-64.h"
 #include <math.h>
 
 #include "valkey_strtod.h"
+
+/*-----------------------------------------------------------------------------
+ * Zset range comparison utilities
+ *
+ * These are generic range-spec helpers used by both listpack and ordered index
+ * encoded zsets. They have no dependency on any specific data structure.
+ *----------------------------------------------------------------------------*/
+
+int zsetScoreGteMin(double value, zrangespec *spec) {
+    return spec->minex ? (value > spec->min) : (value >= spec->min);
+}
+
+int zsetScoreLteMax(double value, zrangespec *spec) {
+    return spec->maxex ? (value < spec->max) : (value <= spec->max);
+}
+
+/* Compare two sds strings handling shared.minstring/maxstring as -inf/+inf. */
+int zsetLexCompare(sds a, sds b) {
+    if (a == b) return 0;
+    if (a == shared.minstring || b == shared.maxstring) return -1;
+    if (a == shared.maxstring || b == shared.minstring) return 1;
+    return sdscmp(a, b);
+}
+
+int zsetLexGteMin(sds value, zlexrangespec *spec) {
+    return spec->minex ? (zsetLexCompare(value, spec->min) > 0) : (zsetLexCompare(value, spec->min) >= 0);
+}
+
+int zsetLexLteMax(sds value, zlexrangespec *spec) {
+    return spec->maxex ? (zsetLexCompare(value, spec->max) < 0) : (zsetLexCompare(value, spec->max) <= 0);
+}
 
 void zsetConvertAndExpand(robj *zobj, int encoding, unsigned long cap);
 
@@ -269,12 +299,12 @@ int zzlIsInRange(unsigned char *zl, zrangespec *range) {
     p = lpSeek(zl, -1);      /* Last score. */
     if (p == NULL) return 0; /* Empty sorted set */
     score = zzlGetScore(p);
-    if (!zslValueGteMin(score, range)) return 0;
+    if (!zsetScoreGteMin(score, range)) return 0;
 
     p = lpSeek(zl, 1); /* First score. */
     serverAssert(p != NULL);
     score = zzlGetScore(p);
-    if (!zslValueLteMax(score, range)) return 0;
+    if (!zsetScoreLteMax(score, range)) return 0;
 
     return 1;
 }
@@ -293,9 +323,9 @@ unsigned char *zzlFirstInRange(unsigned char *zl, zrangespec *range) {
         serverAssert(sptr != NULL);
 
         score = zzlGetScore(sptr);
-        if (zslValueGteMin(score, range)) {
+        if (zsetScoreGteMin(score, range)) {
             /* Check if score <= max. */
-            if (zslValueLteMax(score, range)) return eptr;
+            if (zsetScoreLteMax(score, range)) return eptr;
             return NULL;
         }
 
@@ -320,9 +350,9 @@ unsigned char *zzlLastInRange(unsigned char *zl, zrangespec *range) {
         serverAssert(sptr != NULL);
 
         score = zzlGetScore(sptr);
-        if (zslValueLteMax(score, range)) {
+        if (zsetScoreLteMax(score, range)) {
             /* Check if score >= min. */
-            if (zslValueGteMin(score, range)) return eptr;
+            if (zsetScoreGteMin(score, range)) return eptr;
             return NULL;
         }
 
@@ -340,14 +370,14 @@ unsigned char *zzlLastInRange(unsigned char *zl, zrangespec *range) {
 
 int zzlLexValueGteMin(unsigned char *p, zlexrangespec *spec) {
     sds value = lpGetObject(p);
-    int res = zslLexValueGteMin(value, spec);
+    int res = zsetLexGteMin(value, spec);
     sdsfree(value);
     return res;
 }
 
 int zzlLexValueLteMax(unsigned char *p, zlexrangespec *spec) {
     sds value = lpGetObject(p);
-    int res = zslLexValueLteMax(value, spec);
+    int res = zsetLexLteMax(value, spec);
     sdsfree(value);
     return res;
 }
@@ -358,7 +388,7 @@ int zzlIsInLexRange(unsigned char *zl, zlexrangespec *range) {
     unsigned char *p;
 
     /* Test for ranges that will always be empty. */
-    int cmp = sdscmplex(range->min, range->max);
+    int cmp = zsetLexCompare(range->min, range->max);
     if (cmp > 0 || (cmp == 0 && (range->minex || range->maxex))) return 0;
 
     p = lpSeek(zl, -2); /* Last element. */
@@ -519,7 +549,7 @@ static unsigned char *zzlDeleteRangeByScore(unsigned char *zl, zrangespec *range
     /* When the tail of the listpack is deleted, eptr will be NULL. */
     while (eptr && (sptr = lpNext(zl, eptr)) != NULL) {
         score = zzlGetScore(sptr);
-        if (zslValueLteMax(score, range)) {
+        if (zsetScoreLteMax(score, range)) {
             /* Delete both the element and the score. */
             zl = lpDeleteRangeWithEntry(zl, &eptr, 2);
             num++;
@@ -2583,9 +2613,9 @@ void genericZrangebyscoreCommand(zrange_result_handler *handler,
 
             /* Abort when the node is no longer in range. */
             if (reverse) {
-                if (!zslValueGteMin(score, range)) break;
+                if (!zsetScoreGteMin(score, range)) break;
             } else {
-                if (!zslValueLteMax(score, range)) break;
+                if (!zsetScoreLteMax(score, range)) break;
             }
 
             vstr = lpGetValue(eptr, &vlen, &vlong);
@@ -2618,9 +2648,9 @@ void genericZrangebyscoreCommand(zrange_result_handler *handler,
             if (ln == NULL) break;
             /* Abort when the node is no longer in range. */
             if (reverse) {
-                if (!zslValueGteMin(orderedIndexGetScore(ln), range)) break;
+                if (!zsetScoreGteMin(orderedIndexGetScore(ln), range)) break;
             } else {
-                if (!zslValueLteMax(orderedIndexGetScore(ln), range)) break;
+                if (!zsetScoreLteMax(orderedIndexGetScore(ln), range)) break;
             }
 
             rangelen++;
@@ -2682,14 +2712,14 @@ void zcountCommand(client *c) {
         /* First element is in range */
         sptr = lpNext(zl, eptr);
         score = zzlGetScore(sptr);
-        serverAssertWithInfo(c, zobj, zslValueLteMax(score, &range));
+        serverAssertWithInfo(c, zobj, zsetScoreLteMax(score, &range));
 
         /* Iterate over elements in range */
         while (eptr) {
             score = zzlGetScore(sptr);
 
             /* Abort when the node is no longer in range. */
-            if (!zslValueLteMax(score, &range)) {
+            if (!zsetScoreLteMax(score, &range)) {
                 break;
             } else {
                 count++;
@@ -2852,12 +2882,12 @@ void genericZrangebylexCommand(zrange_result_handler *handler,
             orderedIndexGetElementRaw(ln, &ele_ptr, &ele_len);
             sds ele = sdsnewlen(ele_ptr, ele_len);
             if (reverse) {
-                if (!zslLexValueGteMin(ele, range)) {
+                if (!zsetLexGteMin(ele, range)) {
                     sdsfree(ele);
                     break;
                 }
             } else {
-                if (!zslLexValueLteMax(ele, range)) {
+                if (!zsetLexLteMax(ele, range)) {
                     sdsfree(ele);
                     break;
                 }

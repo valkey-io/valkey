@@ -56,7 +56,6 @@
  * function names. For details, see the script src/modules/gendoc.rb.
  * -------------------------------------------------------------------------- */
 #include "server.h"
-#include "skiplist.h"
 #include "ordered_index.h"
 #include "cluster.h"
 #include "commandlog.h"
@@ -5288,7 +5287,7 @@ int VM_ZsetRangeNext(ValkeyModuleKey *key) {
                 unsigned char *saved_next = next;
                 next = lpNext(zl, next);          /* Skip next element. */
                 double score = zzlGetScore(next); /* Obtain the next score. */
-                if (!zslValueLteMax(score, &key->u.zset.rs)) {
+                if (!zsetScoreLteMax(score, &key->u.zset.rs)) {
                     key->u.zset.er = 1;
                     return 0;
                 }
@@ -5309,14 +5308,14 @@ int VM_ZsetRangeNext(ValkeyModuleKey *key) {
             return 0;
         } else {
             /* Are we still within the range? */
-            if (key->u.zset.type == VALKEYMODULE_ZSET_RANGE_SCORE && !zslValueLteMax(orderedIndexGetScore(next), &key->u.zset.rs)) {
+            if (key->u.zset.type == VALKEYMODULE_ZSET_RANGE_SCORE && !zsetScoreLteMax(orderedIndexGetScore(next), &key->u.zset.rs)) {
                 key->u.zset.er = 1;
                 return 0;
             } else if (key->u.zset.type == VALKEYMODULE_ZSET_RANGE_LEX) {
                 const char *ele;
                 size_t ele_len;
                 orderedIndexGetElementRaw(next, &ele, &ele_len);
-                if (!zslLexValueLteMax((sds)ele, &key->u.zset.lrs)) {
+                if (!zsetLexLteMax((sds)ele, &key->u.zset.lrs)) {
                     key->u.zset.er = 1;
                     return 0;
                 }
@@ -5353,7 +5352,7 @@ int VM_ZsetRangePrev(ValkeyModuleKey *key) {
                 unsigned char *saved_prev = prev;
                 prev = lpNext(zl, prev);          /* Skip element to get the score.*/
                 double score = zzlGetScore(prev); /* Obtain the prev score. */
-                if (!zslValueGteMin(score, &key->u.zset.rs)) {
+                if (!zsetScoreGteMin(score, &key->u.zset.rs)) {
                     key->u.zset.er = 1;
                     return 0;
                 }
@@ -5374,14 +5373,14 @@ int VM_ZsetRangePrev(ValkeyModuleKey *key) {
             return 0;
         } else {
             /* Are we still within the range? */
-            if (key->u.zset.type == VALKEYMODULE_ZSET_RANGE_SCORE && !zslValueGteMin(orderedIndexGetScore(prev), &key->u.zset.rs)) {
+            if (key->u.zset.type == VALKEYMODULE_ZSET_RANGE_SCORE && !zsetScoreGteMin(orderedIndexGetScore(prev), &key->u.zset.rs)) {
                 key->u.zset.er = 1;
                 return 0;
             } else if (key->u.zset.type == VALKEYMODULE_ZSET_RANGE_LEX) {
                 const char *ele;
                 size_t ele_len;
                 orderedIndexGetElementRaw(prev, &ele, &ele_len);
-                if (!zslLexValueGteMin((sds)ele, &key->u.zset.lrs)) {
+                if (!zsetLexGteMin((sds)ele, &key->u.zset.lrs)) {
                     key->u.zset.er = 1;
                     return 0;
                 }

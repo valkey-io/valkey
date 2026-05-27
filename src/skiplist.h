@@ -148,17 +148,12 @@ unsigned long zslDeleteRangeByRank(zskiplist *zsl, unsigned int start, unsigned 
 zskiplistNode *zslUpdateScore(zskiplist *zsl, zskiplistNode *node, double newscore);
 
 /* Queries */
-int zslValueGteMin(double value, zrangespec *spec);
-int zslValueLteMax(double value, zrangespec *spec);
 int zslIsInRange(zskiplist *zsl, zrangespec *range);
 zskiplistNode *zslNthInRange(zskiplist *zsl, zrangespec *range, long n, long *rank);
 unsigned long zslGetRank(zskiplist *zsl, const zskiplistNode *node);
 zskiplistNode *zslGetElementByRank(zskiplist *zsl, unsigned long rank);
 
 /* Lex queries */
-int zslLexValueGteMin(sds value, zlexrangespec *spec);
-int zslLexValueLteMax(sds value, zlexrangespec *spec);
-int sdscmplex(sds a, sds b);
 zskiplistNode *zslNthInLexRange(zskiplist *zsl, zlexrangespec *range, long n);
 
 /* Iterator */

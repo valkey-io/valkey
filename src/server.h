@@ -1893,6 +1893,8 @@ struct valkeyServer {
     long long stat_sync_full;                      /* Number of full resyncs with replicas. */
     long long stat_sync_partial_ok;                /* Number of accepted PSYNC requests. */
     long long stat_sync_partial_err;               /* Number of unaccepted PSYNC requests. */
+    long long stat_sync_full_denied;               /* Number of full resyncs refused due to
+                                                      repl-disable-full-resync-until. */
     commandlog commandlog[COMMANDLOG_TYPE_NUM];    /* Logs of commands. */
     struct malloc_stats cron_malloc_stats;         /* sampled in serverCron(). */
     long long stat_net_input_bytes;                /* Bytes read from network. */
@@ -2111,6 +2113,9 @@ struct valkeyServer {
     replDataBuf pending_repl_data;              /* Replication data buffer for dual-channel-replication */
     time_t repl_backlog_time_limit;             /* Time without replicas after the backlog
                                                    gets released. */
+    time_t repl_disable_full_resync_until;      /* If non-zero, refuse full resync as a
+                                                   primary while server.unixtime is less
+                                                   than this unix timestamp. */
     time_t repl_no_replicas_since;              /* We have no replicas since that time.
                                                  Only valid if server.replicas len is 0. */
     int repl_min_replicas_to_write;             /* Min number of replicas to write. */

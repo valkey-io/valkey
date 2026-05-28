@@ -215,3 +215,29 @@ test "SENTINEL SET rejects values containing control characters" {
     # Control char in option name is also rejected
     assert_error "ERR Invalid argument*" {S 0 SENTINEL SET mymaster "bad\noption" value}
 }
+
+test "SENTINEL MONITOR rejects values containing control characters" {
+    # CRLF in name
+    assert_error "ERR Invalid argument*" {S 0 SENTINEL MONITOR "bad\r\nname" 127.0.0.1 6379 2}
+    # Newline in hostname
+    assert_error "ERR Invalid argument*" {S 0 SENTINEL MONITOR testprimary "127.0.0.1\ninjected" 6379 2}
+    # Null byte in name
+    assert_error "ERR Invalid argument*" {S 0 SENTINEL MONITOR "has\x00null" 127.0.0.1 6379 2}
+    # Tab in name
+    assert_error "ERR Invalid argument*" {S 0 SENTINEL MONITOR "has\ttab" 127.0.0.1 6379 2}
+    # DEL in hostname
+    assert_error "ERR Invalid argument*" {S 0 SENTINEL MONITOR testprimary "host\x7F" 6379 2}
+}
+
+test "SENTINEL CONFIG SET rejects values containing control characters" {
+    # CRLF in announce-ip
+    assert_error "ERR Invalid argument*" {S 0 SENTINEL CONFIG SET announce-ip "1.2.3.4\r\ninjected"}
+    # Newline in sentinel-user
+    assert_error "ERR Invalid argument*" {S 0 SENTINEL CONFIG SET sentinel-user "user\ninjected"}
+    # Null byte in sentinel-pass
+    assert_error "ERR Invalid argument*" {S 0 SENTINEL CONFIG SET sentinel-pass "pass\x00word"}
+    # Tab in announce-ip
+    assert_error "ERR Invalid argument*" {S 0 SENTINEL CONFIG SET announce-ip "1.2\t.3.4"}
+    # DEL in sentinel-pass
+    assert_error "ERR Invalid argument*" {S 0 SENTINEL CONFIG SET sentinel-pass "pass\x7F"}
+}

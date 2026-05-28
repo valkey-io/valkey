@@ -3083,6 +3083,27 @@ const char *getLogLevel(void) {
     return "unknown";
 }
 
+static int containsControlChars(const char *s, size_t len) {
+    for (size_t i = 0; i < len; i++) {
+        unsigned char ch = (unsigned char)s[i];
+        if (ch <= 0x1F || ch == 0x7F) return 1;
+    }
+    return 0;
+}
+
+/* Validate that arguments starting from 'first_arg' contain no control characters.
+ * Returns C_OK if all arguments are clean, or C_ERR after sending an error reply. */
+static int sentinelValidateArgs(client *c, int first_arg, const char *cmd) {
+    for (int i = first_arg; i < c->argc; i++) {
+        sds arg = objectGetVal(c->argv[i]);
+        if (containsControlChars(arg, sdslen(arg))) {
+            addReplyErrorFormat(c, "Invalid argument at index %d for %s: control characters are not allowed", i, cmd);
+            return C_ERR;
+        }
+    }
+    return C_OK;
+}
+
 /* SENTINEL CONFIG SET option value [option value ...] */
 void sentinelConfigSetCommand(client *c) {
     long long numval;
@@ -3105,6 +3126,8 @@ void sentinelConfigSetCommand(client *c) {
         populateDict(options_dict, options);
     }
     dict *set_configs = dictCreate(&stringSetDictType);
+
+    if (sentinelValidateArgs(c, 3, "SENTINEL CONFIG SET") == C_ERR) goto exit;
 
     /* Validate arguments are valid */
     for (int i = 3; i < c->argc; i++) {
@@ -3942,6 +3965,9 @@ void sentinelCommand(client *c) {
         char ip[NET_IP_STR_LEN];
 
         if (c->argc != 6) goto numargserr;
+
+        if (sentinelValidateArgs(c, 2, "SENTINEL MONITOR") == C_ERR) return;
+
         if (getLongFromObjectOrReply(c, c->argv[5], &quorum, "Invalid quorum") != C_OK) return;
         if (getLongFromObjectOrReply(c, c->argv[4], &port, "Invalid port") != C_OK) return;
 
@@ -4217,14 +4243,6 @@ void sentinelRoleCommand(client *c) {
     dictReleaseIterator(di);
 }
 
-static int containsControlChars(const char *s, size_t len) {
-    for (size_t i = 0; i < len; i++) {
-        unsigned char ch = (unsigned char)s[i];
-        if (ch <= 0x1F || ch == 0x7F) return 1;
-    }
-    return 0;
-}
-
 /* SENTINEL SET <primaryname> [<option> <value> ...] */
 void sentinelSetCommand(client *c) {
     sentinelValkeyInstance *ri;
@@ -4235,14 +4253,7 @@ void sentinelSetCommand(client *c) {
 
     if ((ri = sentinelGetPrimaryByNameOrReplyError(c, c->argv[2])) == NULL) return;
 
-    /* Reject control characters to prevent CRLF injection into the config file. */
-    for (j = 3; j < c->argc; j++) {
-        sds val = objectGetVal(c->argv[j]);
-        if (containsControlChars(val, sdslen(val))) {
-            addReplyError(c, "Invalid argument: control characters are not allowed in SENTINEL SET arguments");
-            return;
-        }
-    }
+    if (sentinelValidateArgs(c, 3, "SENTINEL SET") == C_ERR) return;
 
     /* Process option - value pairs. */
     for (j = 3; j < c->argc; j++) {

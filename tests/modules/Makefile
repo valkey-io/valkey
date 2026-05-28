@@ -25,6 +25,7 @@ endif
 
 TEST_MODULES = \
     commandfilter.so \
+    commandresult.so \
     basics.so \
     testrdb.so \
     fork.so \
@@ -48,6 +49,7 @@ TEST_MODULES = \
     defragtest.so \
     keyspecs.so \
     hash.so \
+    hash_stringref.so \
     zset.so \
     stream.so \
     mallocsize.so \
@@ -67,7 +69,9 @@ TEST_MODULES = \
     rdbloadsave.so \
     crash.so \
     cluster.so \
-    helloscripting.so
+    helloscripting.so \
+    unsupported_features.so \
+    deferred_reply.so
 
 .PHONY: all
 

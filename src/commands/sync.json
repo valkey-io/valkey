@@ -10,6 +10,11 @@
             "ADMIN",
             "NO_MULTI",
             "NOSCRIPT"
+        ],
+        "acl_categories": [
+            "ADMIN",
+            "DANGEROUS",
+            "SLOW"
         ]
     }
 }

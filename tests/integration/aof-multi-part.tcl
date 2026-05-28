@@ -1062,7 +1062,7 @@ tags {"external:skip"} {
             }
         }
 
-        test "AOF enable during BGSAVE will not write data util AOFRW finish" {
+        test "AOF enable during BGSAVE will not write data until AOFRW finish" {
             r config set appendonly no
             r config set save ""
             r config set rdb-key-save-delay 10000000

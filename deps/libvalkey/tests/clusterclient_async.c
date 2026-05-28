@@ -57,13 +57,15 @@ int num_running = 0;
 int resend_failed_cmd = 0;
 int send_to_all = 0;
 int show_events = 0;
-int async_initial_update = 0;
+int blocking_initial_update = 0;
 
 void sendNextCommand(evutil_socket_t, short, void *);
 
 void printReply(const valkeyReply *reply) {
     switch (reply->type) {
     case VALKEY_REPLY_ERROR:
+        printf("Error: %s\n", reply->str);
+        break;
     case VALKEY_REPLY_STATUS:
     case VALKEY_REPLY_STRING:
     case VALKEY_REPLY_VERB:
@@ -80,7 +82,7 @@ void printReply(const valkeyReply *reply) {
 
 void replyCallback(valkeyClusterAsyncContext *acc, void *r, void *privdata) {
     valkeyReply *reply = (valkeyReply *)r;
-    intptr_t cmd_id = (intptr_t)privdata; /* Id to corresponding cmd */
+    intptr_t cmd_id = (intptr_t)privdata; /* ID for corresponding cmd */
 
     if (reply == NULL) {
         if (acc->err) {
@@ -242,6 +244,7 @@ void disconnectCallback(const valkeyAsyncContext *ac, int status) {
 int main(int argc, char **argv) {
     int use_cluster_nodes = 0;
     int show_connection_events = 0;
+    int select_db = 0;
 
     int optind;
     for (optind = 1; optind < argc && argv[optind][0] == '-'; optind++) {
@@ -251,8 +254,15 @@ int main(int argc, char **argv) {
             show_events = 1;
         } else if (strcmp(argv[optind], "--connection-events") == 0) {
             show_connection_events = 1;
-        } else if (strcmp(argv[optind], "--async-initial-update") == 0) {
-            async_initial_update = 1;
+        } else if (strcmp(argv[optind], "--blocking-initial-update") == 0) {
+            blocking_initial_update = 1;
+        } else if (strcmp(argv[optind], "--select-db") == 0) {
+            if (++optind < argc) /* Need an additional argument */
+                select_db = atoi(argv[optind]);
+            if (select_db == 0) {
+                fprintf(stderr, "Missing or faulty argument for --select-db\n");
+                exit(1);
+            }
         } else {
             fprintf(stderr, "Unknown argument: '%s'\n", argv[optind]);
         }
@@ -260,7 +270,8 @@ int main(int argc, char **argv) {
 
     if (optind >= argc) {
         fprintf(stderr,
-                "Usage: clusterclient_async [--use-cluster-nodes] HOST:PORT\n");
+                "Usage: clusterclient_async [--events] [--connection-events] "
+                "[--use-cluster-nodes] [--select-db NUM] HOST:PORT\n");
         exit(1);
     }
     const char *initnode = argv[optind];
@@ -273,7 +284,7 @@ int main(int argc, char **argv) {
     options.command_timeout = &timeout;
     options.event_callback = eventCallback;
     options.max_retry = 1;
-    if (!async_initial_update) {
+    if (blocking_initial_update) {
         options.options = VALKEY_OPT_BLOCKING_INITIAL_UPDATE;
     }
     if (use_cluster_nodes) {
@@ -282,6 +293,9 @@ int main(int argc, char **argv) {
     if (show_connection_events) {
         options.async_connect_callback = connectCallback;
         options.async_disconnect_callback = disconnectCallback;
+    }
+    if (select_db > 0) {
+        options.select_db = select_db;
     }
     valkeyClusterOptionsUseLibevent(&options, base);
 

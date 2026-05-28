@@ -182,6 +182,16 @@
 #endif
 #endif
 
+#if defined(__SANITIZE_THREAD__)
+/* GCC */
+#define VALKEY_THREAD_SANITIZER 1
+#elif defined(__has_feature)
+#if __has_feature(thread_sanitizer)
+/* Clang */
+#define VALKEY_THREAD_SANITIZER 1
+#endif
+#endif
+
 /* Define rdb_fsync_range to sync_file_range() on Linux, otherwise we use
  * the plain fsync() call. */
 #if (defined(__linux__) && defined(SYNC_FILE_RANGE_WAIT_BEFORE))
@@ -374,7 +384,7 @@ void setcpuaffinity(const char *cpulist);
 #define valkey_prefetch(addr) ((void)(addr))
 #endif
 
-/* Check if we can compile SIMD code */
+/* Check if we can compile x86 SIMD code */
 #if defined(__x86_64__) && ((defined(__GNUC__) && __GNUC__ >= 5) || (defined(__clang__) && __clang_major__ >= 4)) && defined(__has_attribute) && __has_attribute(target)
 #define HAVE_X86_SIMD 1
 #else
@@ -389,6 +399,13 @@ void setcpuaffinity(const char *cpulist);
 #define ATTRIBUTE_TARGET_SSE2
 #define ATTRIBUTE_TARGET_AVX2
 #define ATTRIBUTE_TARGET_AVX512
+#endif
+
+/* Check if we can compile ARM SIMD code */
+#if defined(__aarch64__) && (defined(__ARM_NEON) || defined(__ARM_NEON__))
+#define HAVE_ARM_NEON 1
+#else
+#define HAVE_ARM_NEON 0
 #endif
 
 #if defined(__linux__) && defined(__GLIBC__) && (defined(__GNUC__) && (__GNUC__ > 4) || defined(__clang__) && (__clang_major__) > 5)

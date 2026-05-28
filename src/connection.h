@@ -38,6 +38,7 @@
 #include <sys/uio.h>
 
 #include "ae.h"
+#include "sds.h"
 
 #define CONN_INFO_LEN 32
 #define CONN_ADDR_STR_LEN 128
@@ -47,6 +48,7 @@
 #define NET_HOST_PORT_STR_LEN (NET_HOST_STR_LEN + 32) /* Must be enough for hostname:port */
 
 struct aeEventLoop;
+struct user;
 typedef struct connection connection;
 typedef struct connListener connListener;
 
@@ -64,25 +66,34 @@ typedef enum {
 #define CONN_FLAG_ALLOW_ACCEPT_OFFLOAD (1 << 2) /* Connection accept can be offloaded to IO threads. */
 
 typedef enum {
-    CONN_TYPE_ID_INVALID = 0,
-    CONN_TYPE_ID_SOCKET,
-    CONN_TYPE_ID_UNIX,
-    CONN_TYPE_ID_TLS,
-    CONN_TYPE_ID_RDMA,
+    CONN_TYPE_INVALID = -1,
+    CONN_TYPE_SOCKET,
+    CONN_TYPE_UNIX,
+    CONN_TYPE_TLS,
+    CONN_TYPE_RDMA,
+    CONN_TYPE_MAX,
 } ConnectionTypeId;
 
-#define CONN_TYPE_SOCKET "tcp"
-#define CONN_TYPE_UNIX "unix"
-#define CONN_TYPE_TLS "tls"
-#define CONN_TYPE_RDMA "rdma"
-#define CONN_TYPE_MAX 8 /* 8 is enough to be extendable */
+static inline const char *getConnectionTypeName(int type) {
+    switch (type) {
+    case CONN_TYPE_SOCKET:
+        return "tcp";
+    case CONN_TYPE_UNIX:
+        return "unix";
+    case CONN_TYPE_TLS:
+        return "tls";
+    case CONN_TYPE_RDMA:
+        return "rdma";
+    default:
+        return "invalid type";
+    }
+}
 
 typedef void (*ConnectionCallbackFunc)(struct connection *conn);
 
 typedef struct ConnectionType {
     /* connection type */
-    int (*get_type_id)(struct connection *conn);
-    const char *(*get_type)(struct connection *conn);
+    int (*get_type)(void);
 
     /* connection type initialize & finalize & configure */
     void (*init)(void); /* auto-call during register */
@@ -137,8 +148,9 @@ typedef struct ConnectionType {
     /* TLS specified methods */
     sds (*get_peer_cert)(struct connection *conn);
 
-    /* Get peer username based on connection type */
-    sds (*get_peer_username)(connection *conn);
+    /* Get peer user based on connection type. If cert_username is non-NULL,
+     * it is set to the extracted certificate field value. */
+    struct user *(*get_peer_user)(connection *conn, sds *cert_username);
 
     /* Miscellaneous */
     int (*connIntegrityChecked)(void); // return 1 if connection type has built-in integrity checks
@@ -307,16 +319,11 @@ static inline ssize_t connSyncReadLine(connection *conn, char *ptr, ssize_t size
     return conn->type->sync_readline(conn, ptr, size, timeout);
 }
 
-/* Return CONN_TYPE_* for the specified connection */
-static inline const char *connGetType(connection *conn) {
-    return conn->type->get_type(conn);
-}
-
-static inline int connGetTypeId(connection *conn) {
-    if (!conn || conn->type->get_type_id == NULL) {
-        return CONN_TYPE_ID_INVALID;
+static inline int connGetType(connection *conn) {
+    if (!conn || conn->type->get_type == NULL) {
+        return CONN_TYPE_INVALID;
     }
-    return conn->type->get_type_id(conn);
+    return conn->type->get_type();
 }
 
 static inline int connLastErrorRetryable(connection *conn) {
@@ -419,10 +426,11 @@ static inline sds connGetPeerCert(connection *conn) {
     return NULL;
 }
 
-/* Get Peer username based on connection type */
-static inline sds connGetPeerUsername(connection *conn) {
-    if (conn->type && conn->type->get_peer_username) {
-        return conn->type->get_peer_username(conn);
+/* Get peer user based on connection type. If cert_username is non-NULL,
+ * it is set to the extracted certificate field value. */
+static inline struct user *connGetPeerUser(connection *conn, sds *cert_username) {
+    if (conn->type && conn->type->get_peer_user) {
+        return conn->type->get_peer_user(conn, cert_username);
     }
     return NULL;
 }
@@ -434,7 +442,7 @@ int connTypeInitialize(void);
 int connTypeRegister(ConnectionType *ct);
 
 /* Lookup a connection type by type name */
-ConnectionType *connectionByType(const char *typename);
+ConnectionType *connectionByType(int type);
 
 /* Fast path to get TCP connection type */
 ConnectionType *connectionTypeTcp(void);
@@ -444,9 +452,6 @@ ConnectionType *connectionTypeTls(void);
 
 /* Fast path to get Unix connection type */
 ConnectionType *connectionTypeUnix(void);
-
-/* Lookup the index of a connection type by type name, return -1 if not found */
-int connectionIndexByType(const char *typename);
 
 /* Create a connection of specified type */
 static inline connection *connCreate(ConnectionType *ct) {

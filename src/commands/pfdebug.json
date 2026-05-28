@@ -15,7 +15,11 @@
             "ADMIN"
         ],
         "acl_categories": [
-            "HYPERLOGLOG"
+            "ADMIN",
+            "DANGEROUS",
+            "HYPERLOGLOG",
+            "SLOW",
+            "WRITE"
         ],
         "key_specs": [
             {

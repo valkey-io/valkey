@@ -18,7 +18,9 @@
             "FAST"
         ],
         "acl_categories": [
-            "SET"
+            "FAST",
+            "SET",
+            "WRITE"
         ],
         "key_specs": [
             {

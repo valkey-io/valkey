@@ -33,6 +33,11 @@
                 "optional": true,
                 "since": "9.0.0"
             }
+        ],
+        "acl_categories": [
+            "ADMIN",
+            "DANGEROUS",
+            "SLOW"
         ]
     }
 }

@@ -20,9 +20,6 @@ timeout 5s ./simulated-valkey.pl -p 7401 -d --sigcont $syncpid1 <<'EOF' &
 EXPECT CONNECT
 EXPECT ["CLUSTER", "SLOTS"]
 SEND [[0, 16383, ["127.0.0.1", 7401, "nodeid123"]]]
-EXPECT CLOSE
-
-EXPECT CONNECT
 EXPECT ["SET", "foo", "initial"]
 SEND +OK
 
@@ -50,6 +47,7 @@ wait $syncpid1;
 # Run client
 timeout 4s "$clientprog" 127.0.0.1:7401 > "$testname.out" <<'EOF'
 SET foo initial
+!sleep
 
 !async
 SET foo timeout1

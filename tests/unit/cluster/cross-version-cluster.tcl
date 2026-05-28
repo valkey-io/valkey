@@ -9,14 +9,19 @@
 tags {external:skip needs:other-server cluster singledb} {
     test "Cross version cluster - failover" {
 
-        # Test cross version compatibility of cluster module send message API.
-        start_cluster 3 1 {tags {external:skip cluster} overrides {auto-failover-on-shutdown yes cluster-ping-interval 1000}} {
+        # Test cluster failover on shutdown is prevented when old replicas exist
+        start_cluster 3 1 {tags {external:skip cluster} overrides {cluster-ping-interval 1000}} {
             set primary [srv 0 client]
             set primary_host [srv 0 host]
             set primary_port [srv 0 port]
             set primary_id [$primary cluster myid]
 
             start_server {config "minimal-cluster.conf" start-other-server 1 overrides {cluster-ping-interval 1000}} {
+                set version [dict get [r hello] version]
+                if {![version_greater_or_equal $version 8.1.0]} {
+                    skip "Requires Valkey 8.1 or above"
+                }
+                r config set rdb-version-check relaxed
                 # Add a replica of the old version to the cluster
                 r cluster meet $primary_host $primary_port
                 wait_for_cluster_propagation
@@ -24,7 +29,7 @@ tags {external:skip needs:other-server cluster singledb} {
                 wait_for_cluster_state "ok"
 
                 # Make sure the primary won't do the auto-failover.
-                catch {$primary shutdown nosave}
+                catch {$primary shutdown nosave failover}
                 verify_log_message -1 "*Unable to perform auto failover on shutdown since there are legacy replicas*" 0
             }
         }

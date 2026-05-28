@@ -11,7 +11,9 @@
             "DENYOOM"
         ],
         "acl_categories": [
-            "LIST"
+            "LIST",
+            "SLOW",
+            "WRITE"
         ],
         "key_specs": [
             {
@@ -53,8 +55,16 @@
             }
         ],
         "reply_schema": {
-            "description": "The element being popped and pushed.",
-            "type": "string"
+            "oneOf": [
+                {
+                    "description": "The element being popped and pushed.",
+                    "type": "string"
+                },
+                {
+                    "description": "Source does not exist.",
+                    "type": "null"
+                }
+            ]
         },
         "arguments": [
             {

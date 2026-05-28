@@ -20,6 +20,10 @@
                 "optional": true,
                 "multiple": true
             }
+        ],
+        "acl_categories": [
+            "PUBSUB",
+            "SLOW"
         ]
     }
 }

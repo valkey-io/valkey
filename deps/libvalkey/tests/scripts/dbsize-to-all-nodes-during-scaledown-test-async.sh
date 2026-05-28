@@ -53,7 +53,7 @@ server2=$!
 wait $syncpid1 $syncpid2;
 
 # Run client
-timeout 5s "$clientprog" 127.0.0.1:7401 > "$testname.out" <<'EOF'
+timeout 5s "$clientprog" --blocking-initial-update 127.0.0.1:7401 > "$testname.out" <<'EOF'
 !all
 DBSIZE
 DBSIZE

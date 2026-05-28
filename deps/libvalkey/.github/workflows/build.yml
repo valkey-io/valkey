@@ -8,7 +8,7 @@ jobs:
     runs-on: ubuntu-latest
     container: almalinux:8
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Install dependencies
         run: |
@@ -35,24 +35,21 @@ jobs:
     runs-on: ubuntu-latest
     container: rockylinux:8
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - name: Install dependencies
         run: |
           dnf -y upgrade --refresh
           dnf -y install https://rpms.remirepo.net/enterprise/remi-release-8.rpm
-          dnf -y module install redis:remi-6.0
           dnf -y group install "Development Tools"
           dnf -y install openssl-devel cmake libevent-devel valkey
-
-      - name: Build using cmake
+      - name: Build using CMake
         env:
           EXTRA_CMAKE_OPTS: -DENABLE_EXAMPLES:BOOL=ON -DENABLE_TLS:BOOL=ON
-        run: mkdir build && cd build && cmake .. && make
-
+        run: |
+          mkdir build && cd build && cmake .. && make
+          cpack -G RPM
       - name: Build using Makefile
         run: USE_TLS=1 TEST_ASYNC=1 make
-
       - name: Run tests
         working-directory: tests
         env:
@@ -64,15 +61,78 @@ jobs:
     runs-on: ubuntu-latest
     name:  FreeBSD
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Build in FreeBSD
-        uses: vmactions/freebsd-vm@c3ae29a132c8ef1924775414107a97cac042aad5 # v1.2.0
+        uses: vmactions/freebsd-vm@d1e65811565151536c0c894fff74f06351ed26e6 # v1.4.5
         with:
           prepare: pkg install -y gmake cmake
           run: |
             gmake
             mkdir build && cd build && cmake .. && gmake
+
+  solaris:
+    runs-on: ubuntu-latest
+    name:  Solaris
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Build on Solaris
+        uses: vmactions/solaris-vm@c20562b2c69737b06be9e828915761703e487373 # v1.3.3
+        with:
+          prepare: pkgutil -y -i gmake gcc5core openssl_utils
+          run: USE_TLS=1 gmake
+
+  solaris-developer-studio:
+     name: Oracle DeveloperStudio
+     runs-on: ubuntu-24.04
+     # Secrets containing certificates are not available in forks,
+     # or for PRs created by dependabot or externally.
+     if: |
+       github.repository == 'valkey-io/libvalkey' &&
+       github.actor != 'dependabot[bot]' &&
+       (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository)
+     env:
+       PKG_ORACLE_CERT: ${{ secrets.PKG_ORACLE_CERT }}
+       PKG_ORACLE_KEY: ${{ secrets.PKG_ORACLE_KEY }}
+
+     steps:
+       - name: Checkout
+         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+       - name: Transfer Oracle Studio certificates
+         run: |
+           set -e
+           printf '%s\n' "$PKG_ORACLE_CERT" \
+             > pkg.oracle.com.certificate.pem
+           printf '%s\n' "$PKG_ORACLE_KEY" \
+             > pkg.oracle.com.key.pem
+
+       - name: Build on Solaris
+         uses: vmactions/solaris-vm@c20562b2c69737b06be9e828915761703e487373 # v1.3.3
+         with:
+           usesh: true
+           prepare: |
+             set -e
+
+             cp "$GITHUB_WORKSPACE/pkg.oracle.com.key.pem" \
+               /root/pkg.oracle.com.key.pem
+             cp "$GITHUB_WORKSPACE/pkg.oracle.com.certificate.pem" \
+               /root/pkg.oracle.com.certificate.pem
+
+             sudo pkg set-publisher \
+               -k /root/pkg.oracle.com.key.pem \
+               -c /root/pkg.oracle.com.certificate.pem \
+               -G "*" \
+               -g https://pkg.oracle.com/solarisstudio/release \
+               solarisstudio
+
+             sudo pkg install --accept developerstudio-126/cc
+
+           run: |
+             set -e
+             PATH=/opt/developerstudio12.6/bin:"$PATH"
+             export PATH
+             gmake USE_THREADS=1 USE_TLS=1 -j"$(psrinfo -p)"
 
   build-cross:
     name: Cross-compile ${{ matrix.config.target }}
@@ -94,9 +154,9 @@ jobs:
           - {target: mipsel,   host: mipsel-linux-gnu,        qemu: mipsel,   gccver: 10 }
           - {target: mips64el, host: mips64el-linux-gnuabi64, qemu: mips64el, gccver: 10 }
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - name: Prepare
-        uses: awalsh128/cache-apt-pkgs-action@7ca5f46d061ad9aa95863cd9b214dd48edef361d # v1.5.0
+        uses: awalsh128/cache-apt-pkgs-action@acb598e5ddbc6f68a970c5da0688d2f3a9f04d05 # v1.6.0
         with:
           packages: gcc-${{ matrix.config.gccver }}-${{ matrix.config.host }}
           version: ${{ matrix.config.target }}-1.0

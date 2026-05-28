@@ -1,9 +1,12 @@
 CC?=gcc
 CXX?=g++
 
-WARNINGS=-Wall -Wextra
-CFLAGS?=-fPIC -g -O2 $(WARNINGS) -I../include
 STLIBNAME?=../lib/libvalkey.a
+TLS_STLIBNAME?=../lib/libvalkey_tls.a
+INCLUDE_DIR?=../include
+
+WARNINGS=-Wall -Wextra
+CFLAGS?=-fPIC -g -O2 $(WARNINGS) -I $(INCLUDE_DIR)
 
 USE_WERROR?=1
 ifeq ($(USE_WERROR),1)
@@ -19,7 +22,6 @@ EXAMPLES=example-blocking example-blocking-push example-async-libevent \
 ifeq ($(USE_TLS),1)
   EXAMPLES+=example-blocking-tls example-async-libevent-tls \
 	    example-cluster-async-tls example-cluster-tls
-  TLS_STLIBNAME=../lib/libvalkey_tls.a
   TLS_LDFLAGS=-lssl -lcrypto
 endif
 

@@ -38,31 +38,6 @@ proc server_reset_acl {id} {
     assert_equal {OK} [R $id CONFIG SET primaryauth ""]
 }
 
-proc verify_sentinel_connect_replicas {id} {
-    foreach replica [S $id SENTINEL REPLICAS mymaster] {
-        if {[string match "*disconnected*" [dict get $replica flags]]} {
-            return 0
-        }
-    }
-    return 1
-}
-
-proc wait_for_sentinels_connect_servers { {is_connect 1} } {
-    foreach_sentinel_id id {
-        wait_for_condition 1000 50 {
-            [string match "*disconnected*" [dict get [S $id SENTINEL PRIMARY mymaster] flags]] != $is_connect
-        } else {
-            fail "At least some sentinel can't connect to master"
-        }
-
-        wait_for_condition 1000 50 {
-            [verify_sentinel_connect_replicas $id] == $is_connect
-        } else {
-            fail "At least some sentinel can't connect to replica"
-        }
-    }
-}
-
 test "Sentinels (re)connection following SENTINEL SET myprimary auth-pass" {
     # 3 types of sentinels to test:
     # (re)started while primary changed pwd. Manage to connect only after setting pwd

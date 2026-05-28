@@ -29,11 +29,15 @@
  */
 
 #include "io_threads.h"
+#include "sds.h"
 #include "server.h"
 #include "cluster.h"
 #include "connection.h"
 #include "bio.h"
 #include "module.h"
+#include "cluster_migrateslots.h"
+#include "eval.h"
+#include "lrulfu.h"
 
 #include <fcntl.h>
 #include <sys/stat.h>
@@ -104,6 +108,7 @@ configEnum shutdown_on_sig_enum[] = {
     {"now", SHUTDOWN_NOW},
     {"force", SHUTDOWN_FORCE},
     {"safe", SHUTDOWN_SAFE},
+    {"failover", SHUTDOWN_FAILOVER},
     {NULL, 0}};
 
 configEnum repl_diskless_load_enum[] = {
@@ -121,9 +126,9 @@ configEnum tls_auth_clients_enum[] = {
 
 configEnum tls_client_auth_user_enum[] = {
     {"CN", TLS_CLIENT_FIELD_CN},
+    {"URI", TLS_CLIENT_FIELD_URI},
     {"off", TLS_CLIENT_FIELD_OFF},
-    {NULL, 0} // terminator
-};
+    {NULL, 0}};
 
 configEnum oom_score_adj_enum[] = {
     {"no", OOM_SCORE_ADJ_NO},
@@ -135,12 +140,6 @@ configEnum oom_score_adj_enum[] = {
 configEnum acl_pubsub_default_enum[] = {
     {"allchannels", SELECTOR_FLAG_ALLCHANNELS},
     {"resetchannels", 0},
-    {NULL, 0}};
-
-configEnum sanitize_dump_payload_enum[] = {
-    {"no", SANITIZE_DUMP_NO},
-    {"yes", SANITIZE_DUMP_YES},
-    {"clients", SANITIZE_DUMP_CLIENTS},
     {NULL, 0}};
 
 configEnum protected_action_enum[] = {
@@ -155,13 +154,18 @@ configEnum cluster_preferred_endpoint_type_enum[] = {
     {"unknown-endpoint", CLUSTER_ENDPOINT_TYPE_UNKNOWN_ENDPOINT},
     {NULL, 0}};
 
+configEnum cluster_configfile_save_behavior_enum[] = {
+    {"sync", CLUSTER_CONFIGFILE_SAVE_BEHAVIOR_SYNC},
+    {"best-effort", CLUSTER_CONFIGFILE_SAVE_BEHAVIOR_BEST_EFFORT},
+    {NULL, 0}};
+
 configEnum propagation_error_behavior_enum[] = {
     {"ignore", PROPAGATION_ERR_BEHAVIOR_IGNORE},
     {"panic", PROPAGATION_ERR_BEHAVIOR_PANIC},
     {"panic-on-replicas", PROPAGATION_ERR_BEHAVIOR_PANIC_ON_REPLICAS},
     {NULL, 0}};
 
-configEnum log_format_enum[] = {{"legacy", LOG_FORMAT_LEGACY}, {"logfmt", LOG_FORMAT_LOGFMT}, {NULL, 0}};
+configEnum log_format_enum[] = {{"legacy", LOG_FORMAT_LEGACY}, {"logfmt", LOG_FORMAT_LOGFMT}, {"json", LOG_FORMAT_JSON}, {NULL, 0}};
 
 configEnum log_timestamp_format_enum[] = {{"legacy", LOG_TIMESTAMP_LEGACY},
                                           {"iso8601", LOG_TIMESTAMP_ISO8601},
@@ -453,6 +457,8 @@ void loadServerConfigFromString(sds config) {
         {"lua-replicate-commands", 2, 2},
         {"io-threads-do-reads", 2, 2},
         {"dynamic-hz", 2, 2},
+        {"events-per-io-thread", 2, 2},
+        {"sanitize-dump-payload", 2, 2},
         {NULL, 0},
     };
     char buf[1024];
@@ -814,11 +820,11 @@ void configSetCommand(client *c) {
 
     /* Find all relevant configs */
     for (i = 0; i < config_count; i++) {
-        standardConfig *config = lookupConfig(c->argv[2 + i * 2]->ptr);
+        standardConfig *config = lookupConfig(objectGetVal(c->argv[2 + i * 2]));
         /* Fail if we couldn't find this config */
         if (!config) {
             if (!invalid_args) {
-                invalid_arg_name = c->argv[2 + i * 2]->ptr;
+                invalid_arg_name = objectGetVal(c->argv[2 + i * 2]);
                 invalid_args = 1;
             }
             continue;
@@ -839,7 +845,7 @@ void configSetCommand(client *c) {
             (config->flags & PROTECTED_CONFIG && !allowProtectedAction(server.enable_protected_configs, c))) {
             /* Note: we don't abort the loop since we still want to handle redacting sensitive configs (above) */
             errstr = (config->flags & IMMUTABLE_CONFIG) ? "can't set immutable config" : "can't set protected config";
-            err_arg_name = c->argv[2 + i * 2]->ptr;
+            err_arg_name = objectGetVal(c->argv[2 + i * 2]);
             invalid_args = 1;
             continue;
         }
@@ -856,14 +862,14 @@ void configSetCommand(client *c) {
             if (set_configs[j] == config) {
                 /* Note: we don't abort the loop since we still want to handle redacting sensitive configs (above) */
                 errstr = "duplicate parameter";
-                err_arg_name = c->argv[2 + i * 2]->ptr;
+                err_arg_name = objectGetVal(c->argv[2 + i * 2]);
                 invalid_args = 1;
                 break;
             }
         }
         set_configs[i] = config;
         config_names[i] = config->name;
-        new_values[i] = c->argv[2 + i * 2 + 1]->ptr;
+        new_values[i] = objectGetVal(c->argv[2 + i * 2 + 1]);
     }
 
     if (invalid_args) goto err;
@@ -946,6 +952,13 @@ end:
     listRelease(module_configs_apply);
 }
 
+/* Used by configGetCommand */
+static int configKeyCompare(const void *a, const void *b) {
+    const char *key_a = *(const char **)a;
+    const char *key_b = *(const char **)b;
+    return strcmp(key_a, key_b);
+}
+
 /*-----------------------------------------------------------------------------
  * CONFIG GET implementation
  *----------------------------------------------------------------------------*/
@@ -958,7 +971,7 @@ void configGetCommand(client *c) {
     dict *matches = dictCreate(&externalStringType);
     for (i = 0; i < c->argc - 2; i++) {
         robj *o = c->argv[2 + i];
-        sds name = o->ptr;
+        sds name = objectGetVal(o);
 
         /* If the string doesn't contain glob patterns, just directly
          * look up the key in the dictionary. */
@@ -988,14 +1001,30 @@ void configGetCommand(client *c) {
     }
 
     di = dictGetIterator(matches);
-    addReplyMapLen(c, dictSize(matches));
+    int n = dictSize(matches);
+    addReplyMapLen(c, n);
+
+    struct {
+        const char *key;
+        sds value;
+    } *sorted = zmalloc(sizeof(*sorted) * n);
+
+    i = 0;
     while ((de = dictNext(di)) != NULL) {
         standardConfig *config = (standardConfig *)dictGetVal(de);
-        addReplyBulkCString(c, dictGetKey(de));
-        addReplyBulkSds(c, config->interface.get(config));
+        sorted[i].key = dictGetKey(de);
+        sorted[i].value = config->interface.get(config);
+        i++;
     }
     dictReleaseIterator(di);
     dictRelease(matches);
+
+    qsort(sorted, n, sizeof(*sorted), configKeyCompare);
+    for (i = 0; i < n; i++) {
+        addReplyBulkCString(c, sorted[i].key);
+        addReplyBulkSds(c, sorted[i].value);
+    }
+    zfree(sorted);
 }
 
 /*-----------------------------------------------------------------------------
@@ -1013,21 +1042,17 @@ void rewriteConfigSentinelOption(struct rewriteConfigState *state);
  * like "maxmemory" -> list of line numbers (first line is zero).
  */
 dictType optionToLineDictType = {
-    dictSdsCaseHash,       /* hash function */
-    NULL,                  /* key dup */
-    dictSdsKeyCaseCompare, /* key compare */
-    dictSdsDestructor,     /* key destructor */
-    dictListDestructor,    /* val destructor */
-    NULL                   /* allow to expand */
+    .entryGetKey = dictEntryGetKey,
+    .hashFunction = dictSdsCaseHash,
+    .keyCompare = dictSdsKeyCaseCompare,
+    .entryDestructor = dictEntryDestructorSdsKeyListValue,
 };
 
 dictType optionSetDictType = {
-    dictSdsCaseHash,       /* hash function */
-    NULL,                  /* key dup */
-    dictSdsKeyCaseCompare, /* key compare */
-    dictSdsDestructor,     /* key destructor */
-    NULL,                  /* val destructor */
-    NULL                   /* allow to expand */
+    .entryGetKey = dictEntryGetKey,
+    .hashFunction = dictSdsCaseHash,
+    .keyCompare = dictSdsKeyCaseCompare,
+    .entryDestructor = dictEntryDestructorSdsKey,
 };
 
 /* The config rewrite state. */
@@ -1248,29 +1273,29 @@ int rewriteConfigRewriteLine(struct rewriteConfigState *state, const char *optio
     return 1;
 }
 
-/* Write the long long 'bytes' value as a string in a way that is parsable
+/* Write the unsigned long long 'bytes' value as a string in a way that is parsable
  * inside valkey.conf. If possible uses the GB, MB, KB notation. */
-int rewriteConfigFormatMemory(char *buf, size_t len, long long bytes) {
+int rewriteConfigFormatMemory(char *buf, size_t len, unsigned long long bytes) {
     int gb = 1024 * 1024 * 1024;
     int mb = 1024 * 1024;
     int kb = 1024;
 
     if (bytes && (bytes % gb) == 0) {
-        return snprintf(buf, len, "%lldgb", bytes / gb);
+        return snprintf(buf, len, "%llugb", bytes / gb);
     } else if (bytes && (bytes % mb) == 0) {
-        return snprintf(buf, len, "%lldmb", bytes / mb);
+        return snprintf(buf, len, "%llumb", bytes / mb);
     } else if (bytes && (bytes % kb) == 0) {
-        return snprintf(buf, len, "%lldkb", bytes / kb);
+        return snprintf(buf, len, "%llukb", bytes / kb);
     } else {
-        return snprintf(buf, len, "%lld", bytes);
+        return snprintf(buf, len, "%llu", bytes);
     }
 }
 
 /* Rewrite a simple "option-name <bytes>" configuration option. */
 void rewriteConfigBytesOption(struct rewriteConfigState *state,
                               const char *option,
-                              long long value,
-                              long long defvalue) {
+                              unsigned long long value,
+                              unsigned long long defvalue) {
     char buf[64];
     int force = value != defvalue;
     sds line;
@@ -1365,6 +1390,17 @@ void rewriteConfigOctalOption(struct rewriteConfigState *state,
     rewriteConfigRewriteLine(state, option, line, force);
 }
 
+/* Rewrite an unsigned number option. */
+void rewriteConfigUnsignedOption(struct rewriteConfigState *state,
+                                 const char *option,
+                                 unsigned long long value,
+                                 unsigned long long defvalue) {
+    int force = value != defvalue;
+    sds line = sdscatprintf(sdsempty(), "%s %llu", option, value);
+
+    rewriteConfigRewriteLine(state, option, line, force);
+}
+
 /* Rewrite an enumeration option. It takes as usually state and option name,
  * and in addition the enumeration array and the default value for the
  * option. */
@@ -1429,7 +1465,7 @@ void rewriteConfigUserOption(struct rewriteConfigState *state) {
         line = sdscatsds(line, u->name);
         line = sdscatlen(line, " ", 1);
         robj *descr = ACLDescribeUser(u);
-        line = sdscatsds(line, descr->ptr);
+        line = sdscatsds(line, objectGetVal(descr));
         decrRefCount(descr);
         rewriteConfigRewriteLine(state, "user", line, 1);
     }
@@ -1578,6 +1614,7 @@ void rewriteConfigLoadmoduleOption(struct rewriteConfigState *state) {
     dictEntry *de;
     while ((de = dictNext(di)) != NULL) {
         struct ValkeyModule *module = dictGetVal(de);
+        if (module->is_static_module) continue;
         line = moduleLoadQueueEntryToLoadmoduleOptionStr(module, "loadmodule");
         rewriteConfigRewriteLine(state, "loadmodule", line, 1);
     }
@@ -2034,7 +2071,10 @@ int setNumericType(standardConfig *config, long long val, const char **err) {
         else
             *(config->data.numeric.config.ll) = (long long)val;
     } else if (config->data.numeric.numeric_type == NUMERIC_TYPE_ULONG_LONG) {
-        *(config->data.numeric.config.ull) = (unsigned long long)val;
+        if (config->flags & MODULE_CONFIG)
+            return setModuleUnsignedNumericConfig(config->privdata, (unsigned long long)val, err);
+        else
+            *(config->data.numeric.config.ull) = (unsigned long long)val;
     } else if (config->data.numeric.numeric_type == NUMERIC_TYPE_SIZE_T) {
         *(config->data.numeric.config.st) = (size_t)val;
     } else if (config->data.numeric.numeric_type == NUMERIC_TYPE_SSIZE_T) {
@@ -2064,7 +2104,10 @@ int setNumericType(standardConfig *config, long long val, const char **err) {
         else                                                                   \
             val = *(config->data.numeric.config.ll);                           \
     } else if (config->data.numeric.numeric_type == NUMERIC_TYPE_ULONG_LONG) { \
-        val = *(config->data.numeric.config.ull);                              \
+        if (config->flags & MODULE_CONFIG)                                     \
+            val = getModuleUnsignedNumericConfig(config->privdata);            \
+        else                                                                   \
+            val = *(config->data.numeric.config.ull);                          \
     } else if (config->data.numeric.numeric_type == NUMERIC_TYPE_SIZE_T) {     \
         val = *(config->data.numeric.config.st);                               \
     } else if (config->data.numeric.numeric_type == NUMERIC_TYPE_SSIZE_T) {    \
@@ -2127,6 +2170,13 @@ static int numericParseString(standardConfig *config, sds value, const char **er
         int memerr;
         *res = memtoull(value, &memerr);
         if (!memerr) return 1;
+
+        /* memtoull rejects negative values, but some memory configs accept
+         * special negative values (e.g. -1 to disable a limit). Fall back
+         * to plain integer parsing for those. */
+        if (config->data.numeric.flags & SIGNED_MEMORY_CONFIG) {
+            if (string2ll(value, sdslen(value), res)) return 1;
+        }
     }
 
     /* Attempt to parse as percent */
@@ -2145,6 +2195,16 @@ static int numericParseString(standardConfig *config, sds value, const char **er
         if (errno == 0 && *endptr == '\0') return 1; /* No overflow or invalid characters */
     }
 
+    /* Attempt to parse as an unsigned number */
+    if (config->data.numeric.flags & UNSIGNED_CONFIG) {
+        unsigned long long ull;
+        int ok = string2ull(value, sdslen(value), &ull);
+        if (ok) {
+            *res = (long long)ull;
+            return 1; /* No overflow or invalid characters */
+        }
+    }
+
     /* Attempt a simple number (no special flags set) */
     if (!config->data.numeric.flags && string2ll(value, sdslen(value), res)) return 1;
 
@@ -2155,6 +2215,8 @@ static int numericParseString(standardConfig *config, sds value, const char **er
         *err = "argument must be a memory value";
     else if (config->data.numeric.flags & OCTAL_CONFIG)
         *err = "argument couldn't be parsed as an octal number";
+    else if (config->data.numeric.flags & UNSIGNED_CONFIG)
+        *err = "argument couldn't be parsed as an unsigned number";
     else
         *err = "argument couldn't be parsed into an integer";
     return 0;
@@ -2188,10 +2250,14 @@ static sds numericConfigGet(standardConfig *config) {
         int len = ll2string(buf, sizeof(buf), -value);
         buf[len] = '%';
         buf[len + 1] = '\0';
+    } else if (config->data.numeric.flags & SIGNED_MEMORY_CONFIG && value < 0) {
+        ll2string(buf, sizeof(buf), value);
     } else if (config->data.numeric.flags & MEMORY_CONFIG) {
         ull2string(buf, sizeof(buf), value);
     } else if (config->data.numeric.flags & OCTAL_CONFIG) {
         snprintf(buf, sizeof(buf), "%llo", value);
+    } else if (config->data.numeric.flags & UNSIGNED_CONFIG) {
+        ull2string(buf, sizeof(buf), (unsigned long long)value);
     } else {
         ll2string(buf, sizeof(buf), value);
     }
@@ -2205,10 +2271,14 @@ static void numericConfigRewrite(standardConfig *config, const char *name, struc
 
     if (config->data.numeric.flags & PERCENT_CONFIG && value < 0) {
         rewriteConfigPercentOption(state, name, -value, config->data.numeric.default_value);
+    } else if (config->data.numeric.flags & SIGNED_MEMORY_CONFIG && value < 0) {
+        rewriteConfigNumericalOption(state, name, value, config->data.numeric.default_value);
     } else if (config->data.numeric.flags & MEMORY_CONFIG) {
         rewriteConfigBytesOption(state, name, value, config->data.numeric.default_value);
     } else if (config->data.numeric.flags & OCTAL_CONFIG) {
         rewriteConfigOctalOption(state, name, value, config->data.numeric.default_value);
+    } else if (config->data.numeric.flags & UNSIGNED_CONFIG) {
+        rewriteConfigUnsignedOption(state, name, value, config->data.numeric.default_value);
     } else {
         rewriteConfigNumericalOption(state, name, value, config->data.numeric.default_value);
     }
@@ -2606,6 +2676,15 @@ int invalidateClusterSlotsResp(const char **err) {
     return 1;
 }
 
+static int updateLuaEnableInsecureApi(const char **err) {
+    UNUSED(err);
+    if (server.lua_insecure_api_current != server.lua_enable_insecure_api) {
+        evalReset(server.lazyfree_lazy_user_flush ? 1 : 0);
+    }
+    server.lua_insecure_api_current = server.lua_enable_insecure_api;
+    return 1;
+}
+
 int updateRequirePass(const char **err) {
     UNUSED(err);
     /* The old "requirepass" directive just translates to setting
@@ -2659,6 +2738,12 @@ static int applyBind(const char **err) {
     return 1;
 }
 
+static int updateClusterState(const char **err) {
+    UNUSED(err);
+    if (server.cluster_enabled) clusterDoBeforeSleep(CLUSTER_TODO_UPDATE_STATE);
+    return 1;
+}
+
 int updateClusterFlags(const char **err) {
     UNUSED(err);
     clusterUpdateMyselfFlags();
@@ -2701,6 +2786,13 @@ int updateClusterHumanNodename(const char **err) {
     return 1;
 }
 
+static int updateClusterAvailabilityZone(const char **err) {
+    UNUSED(err);
+    clusterUpdateMyselfAvailabilityZone();
+    invalidateClusterSlotsResp(err);
+    return 1;
+}
+
 static int applyTlsCfg(const char **err) {
     UNUSED(err);
 
@@ -2710,6 +2802,7 @@ static int applyTlsCfg(const char **err) {
         *err = "Unable to update TLS configuration. Check server logs.";
         return 0;
     }
+    tlsResetCertInfo();
     return 1;
 }
 
@@ -2731,7 +2824,7 @@ static int applyTLSPort(const char **err) {
         *err = "Unable to listen on this port. Check server logs.";
         return 0;
     }
-
+    tlsResetCertInfo();
     return 1;
 }
 
@@ -3152,6 +3245,15 @@ static int applyClientMaxMemoryUsage(const char **err) {
     return 1;
 }
 
+#define HASH_SEED_MAX_LEN 256
+static int isValidDbHashSeed(sds val, const char **err) {
+    if (sdslen(val) > HASH_SEED_MAX_LEN) {
+        *err = "hash-seed must be less than or equal to " STRINGIFY(HASH_SEED_MAX_LEN) " characters";
+        return 0;
+    }
+    return 1;
+}
+
 standardConfig static_configs[] = {
     /* Bool configs */
     createBoolConfig("rdbchecksum", NULL, IMMUTABLE_CONFIG, server.rdb_checksum, 1, NULL, NULL),
@@ -3174,7 +3276,7 @@ standardConfig static_configs[] = {
     createBoolConfig("dual-channel-replication-enabled", NULL, DEBUG_CONFIG | MODIFIABLE_CONFIG, server.dual_channel_replication, 0, NULL, NULL),
     createBoolConfig("aof-rewrite-incremental-fsync", NULL, MODIFIABLE_CONFIG, server.aof_rewrite_incremental_fsync, 1, NULL, NULL),
     createBoolConfig("no-appendfsync-on-rewrite", NULL, MODIFIABLE_CONFIG, server.aof_no_fsync_on_rewrite, 0, NULL, NULL),
-    createBoolConfig("cluster-require-full-coverage", NULL, MODIFIABLE_CONFIG, server.cluster_require_full_coverage, 1, NULL, NULL),
+    createBoolConfig("cluster-require-full-coverage", NULL, MODIFIABLE_CONFIG, server.cluster_require_full_coverage, 1, NULL, updateClusterState),
     createBoolConfig("rdb-save-incremental-fsync", NULL, MODIFIABLE_CONFIG, server.rdb_save_incremental_fsync, 1, NULL, NULL),
     createBoolConfig("aof-load-truncated", NULL, MODIFIABLE_CONFIG, server.aof_load_truncated, 1, NULL, NULL),
     createBoolConfig("aof-use-rdb-preamble", NULL, MODIFIABLE_CONFIG, server.aof_use_rdb_preamble, 1, NULL, NULL),
@@ -3204,8 +3306,9 @@ standardConfig static_configs[] = {
     createBoolConfig("enable-debug-assert", NULL, IMMUTABLE_CONFIG | HIDDEN_CONFIG, server.enable_debug_assert, 0, NULL, NULL),
     createBoolConfig("cluster-slot-stats-enabled", NULL, MODIFIABLE_CONFIG, server.cluster_slot_stats_enabled, 0, NULL, NULL),
     createBoolConfig("hide-user-data-from-log", NULL, MODIFIABLE_CONFIG, server.hide_user_data_from_log, 1, NULL, NULL),
+    createBoolConfig("lua-enable-insecure-api", "lua-enable-deprecated-api", MODIFIABLE_CONFIG | HIDDEN_CONFIG | PROTECTED_CONFIG, server.lua_enable_insecure_api, 0, NULL, updateLuaEnableInsecureApi),
     createBoolConfig("import-mode", NULL, DEBUG_CONFIG | MODIFIABLE_CONFIG, server.import_mode, 0, NULL, NULL),
-    createBoolConfig("auto-failover-on-shutdown", NULL, MODIFIABLE_CONFIG, server.auto_failover_on_shutdown, 0, NULL, NULL),
+    createBoolConfig("io-threads-always-active", NULL, MODIFIABLE_CONFIG | HIDDEN_CONFIG, server.io_threads_always_active, 0, NULL, NULL),
 
     /* String Configs */
     createStringConfig("aclfile", NULL, IMMUTABLE_CONFIG, ALLOW_EMPTY_STRING, server.acl_filename, "", NULL, NULL),
@@ -3241,7 +3344,8 @@ standardConfig static_configs[] = {
     /* SDS Configs */
     createSDSConfig("primaryauth", "masterauth", MODIFIABLE_CONFIG | SENSITIVE_CONFIG, EMPTY_STRING_IS_NULL, server.primary_auth, NULL, NULL, NULL),
     createSDSConfig("requirepass", NULL, MODIFIABLE_CONFIG | SENSITIVE_CONFIG, EMPTY_STRING_IS_NULL, server.requirepass, NULL, NULL, updateRequirePass),
-    createSDSConfig("availability-zone", NULL, MODIFIABLE_CONFIG, ALLOW_EMPTY_STRING, server.availability_zone, "", NULL, NULL),
+    createSDSConfig("availability-zone", NULL, MODIFIABLE_CONFIG, ALLOW_EMPTY_STRING, server.availability_zone, "", NULL, updateClusterAvailabilityZone),
+    createSDSConfig("hash-seed", NULL, IMMUTABLE_CONFIG, EMPTY_STRING_IS_NULL, server.hash_seed, NULL, isValidDbHashSeed, NULL),
 
     /* Enum Configs */
     createEnumConfig("supervised", NULL, IMMUTABLE_CONFIG, supervised_mode_enum, server.supervised_mode, SUPERVISED_NONE, NULL, NULL),
@@ -3252,11 +3356,11 @@ standardConfig static_configs[] = {
     createEnumConfig("appendfsync", NULL, MODIFIABLE_CONFIG, aof_fsync_enum, server.aof_fsync, AOF_FSYNC_EVERYSEC, NULL, updateAppendFsync),
     createEnumConfig("oom-score-adj", NULL, MODIFIABLE_CONFIG, oom_score_adj_enum, server.oom_score_adj, OOM_SCORE_ADJ_NO, NULL, updateOOMScoreAdj),
     createEnumConfig("acl-pubsub-default", NULL, MODIFIABLE_CONFIG, acl_pubsub_default_enum, server.acl_pubsub_default, 0, NULL, NULL),
-    createEnumConfig("sanitize-dump-payload", NULL, DEBUG_CONFIG | MODIFIABLE_CONFIG, sanitize_dump_payload_enum, server.sanitize_dump_payload, SANITIZE_DUMP_NO, NULL, NULL),
     createEnumConfig("enable-protected-configs", NULL, IMMUTABLE_CONFIG, protected_action_enum, server.enable_protected_configs, PROTECTED_ACTION_ALLOWED_NO, NULL, NULL),
     createEnumConfig("enable-debug-command", NULL, IMMUTABLE_CONFIG, protected_action_enum, server.enable_debug_cmd, PROTECTED_ACTION_ALLOWED_NO, NULL, NULL),
     createEnumConfig("enable-module-command", NULL, IMMUTABLE_CONFIG, protected_action_enum, server.enable_module_cmd, PROTECTED_ACTION_ALLOWED_NO, NULL, NULL),
     createEnumConfig("cluster-preferred-endpoint-type", NULL, MODIFIABLE_CONFIG, cluster_preferred_endpoint_type_enum, server.cluster_preferred_endpoint_type, CLUSTER_ENDPOINT_TYPE_IP, NULL, invalidateClusterSlotsResp),
+    createEnumConfig("cluster-config-save-behavior", NULL, MODIFIABLE_CONFIG, cluster_configfile_save_behavior_enum, server.cluster_configfile_save_behavior, CLUSTER_CONFIGFILE_SAVE_BEHAVIOR_SYNC, NULL, NULL),
     createEnumConfig("propagation-error-behavior", NULL, MODIFIABLE_CONFIG, propagation_error_behavior_enum, server.propagation_error_behavior, PROPAGATION_ERR_BEHAVIOR_IGNORE, NULL, NULL),
     createEnumConfig("shutdown-on-sigint", NULL, MODIFIABLE_CONFIG | MULTI_ARG_CONFIG, shutdown_on_sig_enum, server.shutdown_on_sigint, 0, isValidShutdownOnSigFlags, NULL),
     createEnumConfig("shutdown-on-sigterm", NULL, MODIFIABLE_CONFIG | MULTI_ARG_CONFIG, shutdown_on_sig_enum, server.shutdown_on_sigterm, 0, isValidShutdownOnSigFlags, NULL),
@@ -3269,7 +3373,6 @@ standardConfig static_configs[] = {
     createIntConfig("cluster-databases", NULL, IMMUTABLE_CONFIG, 1, INT_MAX, server.config_databases_cluster, 1, INTEGER_CONFIG, NULL, NULL),
     createIntConfig("port", NULL, MODIFIABLE_CONFIG, 0, 65535, server.port, 6379, INTEGER_CONFIG, NULL, updatePort),                                               /* TCP port. */
     createIntConfig("io-threads", NULL, DEBUG_CONFIG | MODIFIABLE_CONFIG, 1, IO_THREADS_MAX_NUM, server.io_threads_num, 1, INTEGER_CONFIG, NULL, updateIOThreads), /* Single threaded by default */
-    createIntConfig("events-per-io-thread", NULL, MODIFIABLE_CONFIG | HIDDEN_CONFIG, 0, INT_MAX, server.events_per_io_thread, 2, INTEGER_CONFIG, NULL, NULL),
     createIntConfig("min-io-threads-avoid-copy-reply", NULL, MODIFIABLE_CONFIG | HIDDEN_CONFIG, 0, INT_MAX, server.min_io_threads_copy_avoid, 7, INTEGER_CONFIG, NULL, NULL),
     createIntConfig("min-string-size-avoid-copy-reply", NULL, MODIFIABLE_CONFIG | HIDDEN_CONFIG, 0, INT_MAX, server.min_string_size_copy_avoid, 16384, INTEGER_CONFIG, NULL, NULL),
     createIntConfig("min-string-size-avoid-copy-reply-threaded", NULL, MODIFIABLE_CONFIG | HIDDEN_CONFIG, 0, INT_MAX, server.min_string_size_copy_avoid_threaded, 65536, INTEGER_CONFIG, NULL, NULL),
@@ -3284,8 +3387,8 @@ standardConfig static_configs[] = {
     createIntConfig("active-defrag-threshold-lower", NULL, MODIFIABLE_CONFIG, 0, 1000, server.active_defrag_threshold_lower, 10, INTEGER_CONFIG, NULL, NULL),                       /* Default: don't defrag when fragmentation is below 10% */
     createIntConfig("active-defrag-threshold-upper", NULL, MODIFIABLE_CONFIG, 0, 1000, server.active_defrag_threshold_upper, 100, INTEGER_CONFIG, NULL, updateDefragConfiguration), /* Default: maximum defrag force at 100% fragmentation */
     createIntConfig("active-defrag-cycle-us", NULL, MODIFIABLE_CONFIG, 0, 100000, server.active_defrag_cycle_us, 500, INTEGER_CONFIG, NULL, updateDefragConfiguration),
-    createIntConfig("lfu-log-factor", NULL, MODIFIABLE_CONFIG, 0, INT_MAX, server.lfu_log_factor, 10, INTEGER_CONFIG, NULL, NULL),
-    createIntConfig("lfu-decay-time", NULL, MODIFIABLE_CONFIG, 0, INT_MAX, server.lfu_decay_time, 1, INTEGER_CONFIG, NULL, NULL),
+    createIntConfig("lfu-log-factor", NULL, MODIFIABLE_CONFIG, 0, INT_MAX, lfu_config_log_factor, 10, INTEGER_CONFIG, NULL, NULL),
+    createIntConfig("lfu-decay-time", NULL, MODIFIABLE_CONFIG, 0, INT_MAX, lfu_config_decay_time, 1, INTEGER_CONFIG, NULL, NULL),
     createIntConfig("replica-priority", "slave-priority", MODIFIABLE_CONFIG, 0, INT_MAX, server.replica_priority, 100, INTEGER_CONFIG, NULL, NULL),
     createIntConfig("repl-diskless-sync-delay", NULL, MODIFIABLE_CONFIG, 0, INT_MAX, server.repl_diskless_sync_delay, 5, INTEGER_CONFIG, NULL, NULL),
     createIntConfig("maxmemory-samples", NULL, MODIFIABLE_CONFIG, 1, 64, server.maxmemory_samples, 5, INTEGER_CONFIG, NULL, NULL),
@@ -3298,6 +3401,8 @@ standardConfig static_configs[] = {
     createIntConfig("cluster-announce-bus-port", NULL, MODIFIABLE_CONFIG, 0, 65535, server.cluster_announce_bus_port, 0, INTEGER_CONFIG, NULL, updateClusterAnnouncedPort), /* Default: Use +10000 offset. */
     createIntConfig("cluster-announce-port", NULL, MODIFIABLE_CONFIG, 0, 65535, server.cluster_announce_port, 0, INTEGER_CONFIG, NULL, updateClusterAnnouncedPort),         /* Use server.port */
     createIntConfig("cluster-announce-tls-port", NULL, MODIFIABLE_CONFIG, 0, 65535, server.cluster_announce_tls_port, 0, INTEGER_CONFIG, NULL, updateClusterAnnouncedPort), /* Use server.tls_port */
+    createIntConfig("cluster-announce-client-port", NULL, MODIFIABLE_CONFIG, 0, 65535, server.cluster_announce_client_port, 0, INTEGER_CONFIG, NULL, updateClusterAnnouncedPort),
+    createIntConfig("cluster-announce-client-tls-port", NULL, MODIFIABLE_CONFIG, 0, 65535, server.cluster_announce_client_tls_port, 0, INTEGER_CONFIG, NULL, updateClusterAnnouncedPort),
     createIntConfig("repl-timeout", NULL, MODIFIABLE_CONFIG, 1, INT_MAX, server.repl_timeout, 60, INTEGER_CONFIG, NULL, NULL),
     createIntConfig("repl-ping-replica-period", "repl-ping-slave-period", MODIFIABLE_CONFIG, 1, INT_MAX, server.repl_ping_replica_period, 10, INTEGER_CONFIG, NULL, NULL),
     createIntConfig("list-compress-depth", NULL, DEBUG_CONFIG | MODIFIABLE_CONFIG, 0, INT_MAX, server.list_compress_depth, 0, INTEGER_CONFIG, NULL, NULL),
@@ -3313,6 +3418,7 @@ standardConfig static_configs[] = {
     createIntConfig("rdma-port", NULL, MODIFIABLE_CONFIG, 0, 65535, server.rdma_ctx_config.port, 0, INTEGER_CONFIG, NULL, updateRdmaPort),
     createIntConfig("rdma-rx-size", NULL, IMMUTABLE_CONFIG, 64 * 1024, 16 * 1024 * 1024, server.rdma_ctx_config.rx_size, 1024 * 1024, INTEGER_CONFIG, NULL, NULL),
     createIntConfig("rdma-completion-vector", NULL, IMMUTABLE_CONFIG, -1, 1024, server.rdma_ctx_config.completion_vector, -1, INTEGER_CONFIG, NULL, NULL),
+    createIntConfig("cluster-message-gossip-perc", NULL, MODIFIABLE_CONFIG | HIDDEN_CONFIG, 1, 100, server.cluster_message_gossip_perc, 10, INTEGER_CONFIG, NULL, NULL),
 
     /* Unsigned int configs */
     createUIntConfig("maxclients", NULL, MODIFIABLE_CONFIG, 1, UINT_MAX, server.maxclients, 10000, INTEGER_CONFIG, NULL, updateMaxclients),
@@ -3320,6 +3426,7 @@ standardConfig static_configs[] = {
     createUIntConfig("socket-mark-id", NULL, IMMUTABLE_CONFIG, 0, UINT_MAX, server.socket_mark_id, 0, INTEGER_CONFIG, NULL, NULL),
     createUIntConfig("max-new-connections-per-cycle", NULL, MODIFIABLE_CONFIG, 1, 1000, server.max_new_conns_per_cycle, 10, INTEGER_CONFIG, NULL, NULL),
     createUIntConfig("max-new-tls-connections-per-cycle", NULL, MODIFIABLE_CONFIG, 1, 1000, server.max_new_tls_conns_per_cycle, 1, INTEGER_CONFIG, NULL, NULL),
+
 #ifdef LOG_REQ_RES
     createUIntConfig("client-default-resp", NULL, IMMUTABLE_CONFIG | HIDDEN_CONFIG, 2, 3, server.client_default_resp, 2, INTEGER_CONFIG, NULL, NULL),
 #endif
@@ -3331,6 +3438,7 @@ standardConfig static_configs[] = {
     createULongConfig("commandlog-large-reply-max-len", NULL, MODIFIABLE_CONFIG, 0, LONG_MAX, server.commandlog[COMMANDLOG_TYPE_LARGE_REPLY].max_len, 128, INTEGER_CONFIG, NULL, NULL),
     createULongConfig("acllog-max-len", NULL, MODIFIABLE_CONFIG, 0, LONG_MAX, server.acllog_max_len, 128, INTEGER_CONFIG, NULL, NULL),
     createULongConfig("cluster-blacklist-ttl", NULL, MODIFIABLE_CONFIG, 0, ULONG_MAX, server.cluster_blacklist_ttl, 60, INTEGER_CONFIG, NULL, NULL),
+    createULongConfig("cluster-slot-migration-log-max-len", NULL, MODIFIABLE_CONFIG, 0, LONG_MAX, server.cluster_slot_migration_log_max_len, 1000, INTEGER_CONFIG, NULL, NULL),
 
     /* Long Long configs */
     createLongLongConfig("busy-reply-threshold", "lua-time-limit", MODIFIABLE_CONFIG, 0, LONG_MAX, server.busy_reply_threshold, 5000, INTEGER_CONFIG, NULL, NULL), /* milliseconds */
@@ -3363,6 +3471,7 @@ standardConfig static_configs[] = {
     createSizeTConfig("tracking-table-max-keys", NULL, MODIFIABLE_CONFIG, 0, LONG_MAX, server.tracking_table_max_keys, 1000000, INTEGER_CONFIG, NULL, NULL),                                      /* Default: 1 million keys max. */
     createSizeTConfig("client-query-buffer-limit", NULL, DEBUG_CONFIG | MODIFIABLE_CONFIG, 1024 * 1024, LONG_MAX, server.client_max_querybuf_len, 1024 * 1024 * 1024, MEMORY_CONFIG, NULL, NULL), /* Default: 1GB max query buffer. */
     createSSizeTConfig("maxmemory-clients", NULL, MODIFIABLE_CONFIG, -100, SSIZE_MAX, server.maxmemory_clients, 0, MEMORY_CONFIG | PERCENT_CONFIG, NULL, applyClientMaxMemoryUsage),
+    createSSizeTConfig("slot-migration-max-failover-repl-bytes", NULL, MODIFIABLE_CONFIG, -1, SSIZE_MAX, server.slot_migration_max_failover_repl_bytes, 0, MEMORY_CONFIG | SIGNED_MEMORY_CONFIG, NULL, NULL),
 
     /* Other configs */
     createTimeTConfig("repl-backlog-ttl", NULL, MODIFIABLE_CONFIG, 0, LONG_MAX, server.repl_backlog_time_limit, 60 * 60, INTEGER_CONFIG, NULL, NULL), /* Default: 1 hour */
@@ -3373,6 +3482,7 @@ standardConfig static_configs[] = {
     createIntConfig("tls-port", NULL, MODIFIABLE_CONFIG, 0, 65535, server.tls_port, 0, INTEGER_CONFIG, NULL, applyTLSPort), /* TCP port. */
     createIntConfig("tls-session-cache-size", NULL, MODIFIABLE_CONFIG, 0, INT_MAX, server.tls_ctx_config.session_cache_size, 20 * 1024, INTEGER_CONFIG, NULL, applyTlsCfg),
     createIntConfig("tls-session-cache-timeout", NULL, MODIFIABLE_CONFIG, 0, INT_MAX, server.tls_ctx_config.session_cache_timeout, 300, INTEGER_CONFIG, NULL, applyTlsCfg),
+    createIntConfig("tls-auto-reload-interval", NULL, MODIFIABLE_CONFIG, 0, INT_MAX, server.tls_ctx_config.auto_reload_interval, 0, INTEGER_CONFIG, NULL, applyTlsCfg),
     createBoolConfig("tls-cluster", NULL, MODIFIABLE_CONFIG, server.tls_cluster, 0, NULL, applyTlsCfg),
     createBoolConfig("tls-replication", NULL, MODIFIABLE_CONFIG, server.tls_replication, 0, NULL, applyTlsCfg),
     createEnumConfig("tls-auth-clients", NULL, MODIFIABLE_CONFIG, tls_auth_clients_enum, server.tls_auth_clients, TLS_CLIENT_AUTH_YES, NULL, NULL),
@@ -3428,6 +3538,18 @@ void initConfigValues(void) {
     dictExpand(configs, sizeof(static_configs) / sizeof(standardConfig));
     for (standardConfig *config = static_configs; config->name != NULL; config++) {
         if (config->interface.init) config->interface.init(config);
+
+        if (config->type == NUMERIC_CONFIG) {
+            /* SIGNED_MEMORY_CONFIG must be used together with MEMORY_CONFIG. */
+            serverAssert(!(config->data.numeric.flags & SIGNED_MEMORY_CONFIG) ||
+                         (config->data.numeric.flags & MEMORY_CONFIG));
+
+            /* PERCENT_CONFIG and SIGNED_MEMORY_CONFIG both use negative values
+             * with different semantics, so they must not be combined. */
+            serverAssert(!((config->data.numeric.flags & PERCENT_CONFIG) &&
+                           (config->data.numeric.flags & SIGNED_MEMORY_CONFIG)));
+        }
+
         /* Add the primary config to the dictionary. */
         int ret = registerConfigValue(config->name, config, 0);
         serverAssert(ret);
@@ -3514,6 +3636,23 @@ void addModuleNumericConfig(const char *module_name,
     standardConfig module_config = createLongLongConfig(config_name, NULL, flags | MODULE_CONFIG, lower, upper,
                                                         config_dummy_address, default_val, conf_flags, NULL, NULL);
     module_config.data.numeric.config.ll = NULL;
+    module_config.privdata = privdata;
+    registerConfigValue(config_name, &module_config, 0);
+}
+
+void addModuleUnsignedNumericConfig(const char *module_name,
+                                    const char *name,
+                                    int flags,
+                                    void *privdata,
+                                    unsigned long long default_val,
+                                    int conf_flags,
+                                    unsigned long long lower,
+                                    unsigned long long upper) {
+    sds config_name = sdscatfmt(sdsempty(), "%s.%s", module_name, name);
+    unsigned long long config_dummy_address;
+    standardConfig module_config = createULongLongConfig(config_name, NULL, flags | MODULE_CONFIG, lower, upper,
+                                                         config_dummy_address, default_val, conf_flags, NULL, NULL);
+    module_config.data.numeric.config.ull = NULL;
     module_config.privdata = privdata;
     registerConfigValue(config_name, &module_config, 0);
 }

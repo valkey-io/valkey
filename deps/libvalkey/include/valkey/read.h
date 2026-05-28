@@ -31,6 +31,8 @@
 
 #ifndef VALKEY_READ_H
 #define VALKEY_READ_H
+#include "visibility.h"
+
 #include <stdio.h> /* for size_t */
 
 #define VALKEY_ERR -1
@@ -112,10 +114,12 @@ typedef struct valkeyReader {
 } valkeyReader;
 
 /* Public API for the protocol parser. */
-valkeyReader *valkeyReaderCreateWithFunctions(valkeyReplyObjectFunctions *fn);
-void valkeyReaderFree(valkeyReader *r);
-int valkeyReaderFeed(valkeyReader *r, const char *buf, size_t len);
-int valkeyReaderGetReply(valkeyReader *r, void **reply);
+LIBVALKEY_API valkeyReader *valkeyReaderCreateWithFunctions(valkeyReplyObjectFunctions *fn);
+LIBVALKEY_API void valkeyReaderFree(valkeyReader *r);
+LIBVALKEY_API int valkeyReaderFeed(valkeyReader *r, const char *buf, size_t len);
+LIBVALKEY_API int valkeyReaderGetReadBuf(valkeyReader *r, char **buf, size_t *cap, size_t minbytes);
+LIBVALKEY_API void valkeyReaderCommitRead(valkeyReader *r, size_t nread);
+LIBVALKEY_API int valkeyReaderGetReply(valkeyReader *r, void **reply);
 
 #define valkeyReaderSetPrivdata(_r, _p) (int)(((valkeyReader *)(_r))->privdata = (_p))
 #define valkeyReaderGetObject(_r) (((valkeyReader *)(_r))->reply)

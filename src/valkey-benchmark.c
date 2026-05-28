@@ -61,6 +61,7 @@
 #include "hdr_histogram.h"
 #include "cli_common.h"
 #include "mt19937-64.h"
+#include "valkey-benchmark-dataset.h"
 
 #define UNUSED(V) ((void)V)
 #define RANDPTR_INITIAL_SIZE 8
@@ -92,6 +93,10 @@ typedef enum readFromReplica {
     FROM_ALL
 } readFromReplica;
 
+/* Fuzz mode flags */
+#define FUZZ_MODE_MALFORMED_COMMANDS (1 << 0)
+#define FUZZ_MODE_CONFIG_COMMANDS (1 << 1)
+
 static struct config {
     aeEventLoop *el;
     enum valkeyConnectionType ct;
@@ -102,6 +107,9 @@ static struct config {
     int numclients;
     _Atomic int liveclients;
     int requests;
+    int duration;
+    int warmup_duration;
+    _Atomic int current_warmup_duration;
     _Atomic int requests_issued;
     _Atomic int requests_finished;
     _Atomic int previous_requests_finished;
@@ -130,12 +138,16 @@ static struct config {
     int num_threads;
     struct benchmarkThread **threads;
     int cluster_mode;
+    int fuzz_mode; /* Boolean flag to enable fuzzing */
+    const char *fuzz_log_level;
+    int fuzz_flags; /* Bit flags for fuzzing modes */
     readFromReplica read_from_replica;
     int cluster_node_count;
     struct clusterNode **cluster_nodes;
     struct serverConfig *server_config;
     struct hdr_histogram *latency_histogram;
     struct hdr_histogram *current_sec_latency_histogram;
+    struct hdr_histogram *rps_histogram;
     _Atomic int is_fetching_slots;
     _Atomic int is_updating_slots;
     _Atomic int slots_last_update;
@@ -149,6 +161,14 @@ static struct config {
     atomic_uint_fast64_t last_time_ns;
     uint64_t time_per_token;
     uint64_t time_per_burst;
+    /* Dataset support */
+    sds dataset_file;
+    int max_documents;        /* Maximum documents to load from dataset */
+    dataset *current_dataset; /* Current loaded dataset */
+    /* Command template for dataset mode */
+    int template_argc;
+    sds *template_argv;
+    int has_field_placeholders;
 } config;
 
 /* Locations of the placeholders __rand_int__, __rand_1st__,
@@ -159,6 +179,9 @@ static struct placeholders {
     size_t *indices[PLACEHOLDER_COUNT]; /* pointer to indices for each placeholder */
     size_t *index_data;                 /* allocation holding all index data */
 } placeholders;
+
+/* Sequence keys for dataset command generation */
+static _Atomic uint64_t dataset_seq_key[PLACEHOLDER_COUNT] = {0};
 
 typedef struct _client {
     valkeyContext *context;
@@ -211,6 +234,19 @@ typedef struct serverConfig {
     sds appendonly;
 } serverConfig;
 
+/* Register a file event. For RDMA with AE_WRITABLE, invoke the handler once after
+ * registering: this fd is not POLLOUT-driven like TCP, so the loop may never deliver
+ * AE_WRITABLE without an explicit kick.
+ *
+ * Non-RDMA: same as aeCreateFileEvent. Read-side wakeups when libvalkey drains the CQ on
+ * the write path require libvalkey to notify the outer poll (valkey-io/libvalkey#301). */
+static inline void createFileEvent(aeEventLoop *eventLoop, int fd, int mask, aeFileProc *proc, void *clientData) {
+    aeCreateFileEvent(eventLoop, fd, mask, proc, clientData);
+    if (config.ct == VALKEY_CONN_RDMA && (mask & AE_WRITABLE)) {
+        proc(eventLoop, fd, clientData, mask);
+    }
+}
+
 /* Prototypes */
 static void writeHandler(aeEventLoop *el, int fd, void *privdata, int mask);
 static void createMissingClients(client c);
@@ -225,6 +261,8 @@ static void freeServerConfig(serverConfig *cfg);
 static int fetchClusterSlotsConfiguration(client c);
 static void updateClusterSlotsConfiguration(void);
 static long long showThroughput(struct aeEventLoop *eventLoop, long long id, void *clientData);
+int runFuzzerClients(const char *host, int port, int max_commands, int parallel_clients, int cluster_mode, int num_keys, cliSSLconfig *ssl_config, const char *log_level, int fuzz_flags);
+static int parseCommandTemplate(int argc, char **argv);
 
 /* Dict callbacks */
 static uint64_t dictSdsHash(const void *key);
@@ -251,8 +289,23 @@ static long long nstime(void) {
     return (long long)ts.tv_sec * 1000000000LL + ts.tv_nsec;
 }
 
+static bool isBenchmarkFinished(int request_count) {
+    /* don't end in warmup period */
+    int warmup_duration = atomic_load_explicit(&config.current_warmup_duration, memory_order_relaxed);
+    if (warmup_duration > 0) return false;
+
+    if (config.duration > 0) {
+        /* end after the specified duration */
+        if ((mstime() - config.start) >= (config.duration * 1000LL)) return true;
+    } else {
+        /* end after the specified number of requests */
+        if (request_count >= config.requests) return true;
+    }
+    return false;
+}
+
 static uint64_t dictSdsHash(const void *key) {
-    return dictGenHashFunction((unsigned char *)key, sdslen((char *)key));
+    return dictGenHashFunction(key, sdslen(key));
 }
 
 static int dictSdsKeyCompare(const void *key1, const void *key2) {
@@ -264,12 +317,10 @@ static int dictSdsKeyCompare(const void *key1, const void *key2) {
 }
 
 static dictType dtype = {
-    dictSdsHash,       /* hash function */
-    NULL,              /* key dup */
-    dictSdsKeyCompare, /* key compare */
-    NULL,              /* key destructor */
-    NULL,              /* val destructor */
-    NULL               /* allow to expand */
+    .entryGetKey = dictEntryGetKey,
+    .hashFunction = dictSdsHash,
+    .keyCompare = dictSdsKeyCompare,
+    .entryDestructor = zfree,
 };
 
 static valkeyContext *getValkeyContext(enum valkeyConnectionType ct, const char *ip_or_path, int port) {
@@ -502,7 +553,7 @@ static void freeClient(client c) {
     aeDeleteFileEvent(el, c->context->fd, AE_READABLE);
     if (c->thread_id >= 0) {
         int requests_finished = atomic_load_explicit(&config.requests_finished, memory_order_relaxed);
-        if (requests_finished >= config.requests) {
+        if (isBenchmarkFinished(requests_finished)) {
             aeStop(el);
         }
     }
@@ -533,13 +584,32 @@ static void resetClient(client c) {
     aeEventLoop *el = CLIENT_GET_EVENTLOOP(c);
     aeDeleteFileEvent(el, c->context->fd, AE_WRITABLE);
     aeDeleteFileEvent(el, c->context->fd, AE_READABLE);
-    if (config.ct == VALKEY_CONN_RDMA) {
-        writeHandler(el, c->context->fd, c, 0); /* RDMA context always writable, but it can't be invoked by AE_WRITABLE */
-    } else {
-        aeCreateFileEvent(el, c->context->fd, AE_WRITABLE, writeHandler, c);
-    }
+    createFileEvent(el, c->context->fd, AE_WRITABLE, writeHandler, c);
     c->written = 0;
     c->pending = config.pipeline * c->seqlen;
+}
+
+/* Scan buffer for {tag} placeholders and store positions */
+static void scanClusterTags(client c, char *buffer_start) {
+    if (!config.cluster_mode) return;
+
+    /* Preserve the total capacity across scans so we don't accidentally
+     * shrink the allocation when staglen is reset to zero. */
+    size_t total_cap = c->staglen + c->stagfree;
+    c->staglen = 0;
+    c->stagfree = total_cap;
+    char *p = buffer_start;
+    while ((p = strstr(p, "{tag}")) != NULL) {
+        if (c->stagfree == 0) {
+            size_t new_size = total_cap ? total_cap * 2 : RANDPTR_INITIAL_SIZE;
+            c->stagptr = zrealloc(c->stagptr, new_size * sizeof(char *));
+            total_cap = new_size;
+            c->stagfree = new_size - c->staglen;
+        }
+        c->stagptr[c->staglen++] = p;
+        c->stagfree--;
+        p += 5;
+    }
 }
 
 static void setClusterKeyHashTag(client c) {
@@ -626,7 +696,7 @@ static long long acquireTokenOrWait(int tokens) {
 
 static void clientDone(client c) {
     int requests_finished = atomic_load_explicit(&config.requests_finished, memory_order_relaxed);
-    if (requests_finished >= config.requests) {
+    if (isBenchmarkFinished(requests_finished)) {
         freeClient(c);
         if (!config.num_threads && config.el) aeStop(config.el);
         return;
@@ -717,7 +787,7 @@ static void readHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
                     continue;
                 }
                 int requests_finished = atomic_fetch_add_explicit(&config.requests_finished, 1, memory_order_relaxed);
-                if (requests_finished < config.requests) {
+                if (!isBenchmarkFinished(requests_finished)) {
                     if (config.num_threads == 0) {
                         hdr_record_value(config.latency_histogram, // Histogram to record to
                                          (long)c->latency <= CONFIG_LATENCY_HISTOGRAM_MAX_VALUE
@@ -835,12 +905,37 @@ static void writeHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
         int requests_issued = atomic_fetch_add_explicit(&config.requests_issued,
                                                         config.pipeline * c->seqlen,
                                                         memory_order_relaxed);
-        if (requests_issued >= config.requests) {
+        if (isBenchmarkFinished(requests_issued)) {
             return;
         }
 
-        /* Really initialize: replace keys and set start time. */
-        if (config.replace_placeholders) replacePlaceholders(c->obuf + c->prefixlen, config.pipeline);
+        /* Dataset field access mode - completely independent command generation */
+        if (config.has_field_placeholders && config.current_dataset && config.current_dataset->record_count > 0) {
+            static _Atomic uint64_t record_counter = 0;
+
+            /* Generate complete pipeline commands for dataset placeholders */
+            sdssetlen(c->obuf, c->prefixlen);
+            for (int p = 0; p < config.pipeline; p++) {
+                uint64_t record_index = atomic_fetch_add_explicit(&record_counter, 1, memory_order_relaxed) % config.current_dataset->record_count;
+                sds complete_cmd = datasetGenerateCommand(config.current_dataset, record_index,
+                                                          config.template_argv, config.template_argc,
+                                                          dataset_seq_key, config.replace_placeholders,
+                                                          config.keyspacelen, config.sequential_replacement);
+                c->obuf = sdscatlen(c->obuf, complete_cmd, sdslen(complete_cmd));
+                sdsfree(complete_cmd);
+            }
+
+            /* Scan generated commands for {tag} in cluster mode */
+            if (config.cluster_mode && c->stagptr) {
+                scanClusterTags(c, c->obuf + c->prefixlen);
+            }
+        } else {
+            /* Standard mode */
+            if (config.replace_placeholders) {
+                replacePlaceholders(c->obuf + c->prefixlen, config.pipeline);
+            }
+        }
+
         if (config.cluster_mode && c->staglen > 0) setClusterKeyHashTag(c);
         c->slots_last_update = atomic_load_explicit(&config.slots_last_update, memory_order_relaxed);
         c->start = ustime();
@@ -865,7 +960,7 @@ static void writeHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
                 }
             } else {
                 aeDeleteFileEvent(el, c->context->fd, AE_WRITABLE);
-                aeCreateFileEvent(el, c->context->fd, AE_READABLE, readHandler, c);
+                createFileEvent(el, c->context->fd, AE_READABLE, readHandler, c);
                 return;
             }
         }
@@ -1023,20 +1118,9 @@ static client createClient(char *cmd, int len, int seqlen, client from, int thre
                 c->stagptr[j] += c->prefixlen - from->prefixlen;
             }
         } else {
-            char *p = c->obuf;
-
-            c->staglen = 0;
             c->stagfree = RANDPTR_INITIAL_SIZE;
             c->stagptr = zmalloc(sizeof(char *) * c->stagfree);
-            while ((p = strstr(p, "{tag}")) != NULL) {
-                if (c->stagfree == 0) {
-                    c->stagptr = zrealloc(c->stagptr, sizeof(char *) * c->staglen * 2);
-                    c->stagfree += c->staglen;
-                }
-                c->stagptr[c->staglen++] = p;
-                c->stagfree--;
-                p += 5; /* 5 is strlen("{tag}"). */
-            }
+            scanClusterTags(c, c->obuf);
         }
     }
     aeEventLoop *el = NULL;
@@ -1047,11 +1131,7 @@ static client createClient(char *cmd, int len, int seqlen, client from, int thre
         el = thread->el;
     }
     if (config.idlemode == 0) {
-        if (config.ct == VALKEY_CONN_RDMA) {
-            writeHandler(el, c->context->fd, c, 0);
-        } else {
-            aeCreateFileEvent(el, c->context->fd, AE_WRITABLE, writeHandler, c);
-        }
+        createFileEvent(el, c->context->fd, AE_WRITABLE, writeHandler, c);
     } else
         /* In idle mode, clients still need to register readHandler for catching errors */
         aeCreateFileEvent(el, c->context->fd, AE_READABLE, readHandler, c);
@@ -1078,7 +1158,27 @@ static void createMissingClients(client c) {
     }
 }
 
-static void showLatencyReport(void) {
+static void showRPSReport(void) {
+    if (config.rps_histogram && config.rps_histogram->total_count > 0) {
+        const float target_rps = (float)config.rps;
+
+        const float avg_rps = hdr_mean(config.rps_histogram);
+        const float p0 = (float)hdr_min(config.rps_histogram);
+        const float p50 = (float)hdr_value_at_percentile(config.rps_histogram, 50.0);
+        const float p95 = (float)hdr_value_at_percentile(config.rps_histogram, 95.0);
+        const float p99 = (float)hdr_value_at_percentile(config.rps_histogram, 99.0);
+        const float p100 = (float)hdr_max(config.rps_histogram);
+
+        printf("\n");
+        printf("RPS Summary:\n");
+        printf("  target RPS: %.2f\n", target_rps);
+        printf("  RPS distribution (reqs/sec):\n");
+        printf("    %9s %9s %9s %9s %9s %9s\n", "avg", "min", "p50", "p95", "p99", "max");
+        printf("    %9.3f %9.3f %9.3f %9.3f %9.3f %9.3f\n", avg_rps, p0, p50, p95, p99, p100);
+    }
+}
+
+static void showReport(void) {
     const float reqpersec = (float)config.requests_finished / ((float)config.totlatency / 1000.0f);
     const float p0 = ((float)hdr_min(config.latency_histogram)) / 1000.0f;
     const float p50 = hdr_value_at_percentile(config.latency_histogram, 50.0) / 1000.0f;
@@ -1121,7 +1221,8 @@ static void showLatencyReport(void) {
         }
         printf("  multi-thread: %s\n", (config.num_threads ? "yes" : "no"));
         if (config.num_threads) printf("  threads: %d\n", config.num_threads);
-
+        /* Show the RPS Report */
+        showRPSReport();
         printf("\n");
         printf("Latency by percentile distribution:\n");
         struct hdr_iter iter;
@@ -1203,6 +1304,7 @@ static void benchmarkSequence(const char *title, char *cmd, int len, int seqlen)
     config.requests_finished = 0;
     config.previous_requests_finished = 0;
     config.last_printed_bytes = 0;
+    config.current_warmup_duration = config.warmup_duration;
     hdr_init(CONFIG_LATENCY_HISTOGRAM_MIN_VALUE,         // Minimum value
              CONFIG_LATENCY_HISTOGRAM_MAX_VALUE,         // Maximum value
              config.precision,                           // Number of significant figures
@@ -1211,6 +1313,13 @@ static void benchmarkSequence(const char *title, char *cmd, int len, int seqlen)
              CONFIG_LATENCY_HISTOGRAM_INSTANT_MAX_VALUE, // Maximum value
              config.precision,                           // Number of significant figures
              &config.current_sec_latency_histogram);     // Pointer to initialise
+
+    if (config.rps > 0) {
+        hdr_init(1,
+                 config.rps * 2,
+                 config.precision,
+                 &config.rps_histogram);
+    }
 
     initPlaceholders(cmd, len);
     if (config.num_threads) initBenchmarkThreads();
@@ -1226,17 +1335,17 @@ static void benchmarkSequence(const char *title, char *cmd, int len, int seqlen)
     createMissingClients(c);
 
     config.start = mstime();
-    if (!config.num_threads)
+    if (!config.num_threads) {
         aeMain(config.el);
-    else
+    } else
         startBenchmarkThreads();
     config.totlatency = mstime() - config.start;
-
-    showLatencyReport();
+    showReport();
     freeAllClients();
     if (config.threads) freeBenchmarkThreads();
     if (config.current_sec_latency_histogram) hdr_close(config.current_sec_latency_histogram);
     if (config.latency_histogram) hdr_close(config.latency_histogram);
+    if (config.rps_histogram) hdr_close(config.rps_histogram);
 }
 
 /* Benchmark a single RESP-encoded command of length len. */
@@ -1300,10 +1409,7 @@ static clusterNode *createClusterNode(char *ip, int port) {
 static void freeClusterNode(clusterNode *node) {
     if (node->name) sdsfree(node->name);
     if (node->replicate) sdsfree(node->replicate);
-    /* If the node is not the reference node, that uses the address from
-     * config.conn_info.hostip and config.conn_info.hostport, then the node ip has been
-     * allocated by fetchClusterConfiguration, so it must be freed. */
-    if (node->ip && strcmp(node->ip, config.conn_info.hostip) != 0) sdsfree(node->ip);
+    if (node->ip) sdsfree(node->ip);
     if (node->server_config != NULL) freeServerConfig(node->server_config);
     zfree(node->slots);
     zfree(node);
@@ -1374,9 +1480,11 @@ static int fetchClusterConfiguration(void) {
             clusterNode *node = NULL;
             dictEntry *entry = dictFind(nodes, name);
             if (entry == NULL) {
-                node = createClusterNode(sdsnew(ip), port);
+                node = createClusterNode(ip, port);
                 if (node == NULL) {
                     success = 0;
+                    sdsfree(ip);
+                    sdsfree(name);
                     goto cleanup;
                 } else {
                     node->name = name;
@@ -1384,6 +1492,8 @@ static int fetchClusterConfiguration(void) {
                 }
             } else {
                 node = dictGetVal(entry);
+                sdsfree(ip);
+                sdsfree(name);
             }
             if (slot_start == slot_end) {
                 node->slots[node->slots_count++] = slot_start;
@@ -1536,6 +1646,55 @@ static void updateClusterSlotsConfiguration(void) {
     pthread_mutex_unlock(&config.is_updating_slots_mutex);
 }
 
+/* Free dataset memory */
+static void cleanupDataset(void) {
+    if (config.current_dataset) {
+        datasetFree(config.current_dataset);
+        config.current_dataset = NULL;
+    }
+}
+
+/* Add RESP command to sequence with repeat count */
+static void addRespCommandToSequence(sds *sds_args, size_t *argvlen, int start, int end, int repeat, sds *cmd_seq, int *seq_len) {
+    char *cmd = NULL;
+    int len = valkeyFormatCommandArgv(&cmd, end - start, (const char **)sds_args + start, argvlen + start);
+    for (int j = 0; j < repeat; j++) {
+        *cmd_seq = sdscatlen(*cmd_seq, cmd, len);
+    }
+    *seq_len += repeat;
+    free(cmd);
+}
+
+/* Parse and setup command template for dataset field validation */
+static int parseCommandTemplate(int argc, char **argv) {
+    sds *sds_args = getSdsArrayFromArgv(argc, argv, 0);
+    if (!sds_args) {
+        fprintf(stderr, "Invalid quoted string\n");
+        return 0;
+    }
+
+    /* Detect field placeholders */
+    config.has_field_placeholders = 0;
+    for (int i = 0; i < argc; i++) {
+        if (strstr(sds_args[i], FIELD_PREFIX)) {
+            config.has_field_placeholders = 1;
+            break;
+        }
+    }
+
+    if (config.has_field_placeholders) {
+        config.template_argc = argc;
+        config.template_argv = zmalloc(argc * sizeof(sds));
+        for (int i = 0; i < argc; i++) {
+            config.template_argv[i] = sdsdup(sds_args[i]);
+        }
+    }
+
+    sdsfreesplitres(sds_args, argc);
+    return 1;
+}
+
+
 /* Generate random data for the benchmark. See #7196. */
 static void genBenchmarkRandomData(char *data, int count) {
     static uint32_t state = 1234;
@@ -1568,7 +1727,22 @@ int parseOptions(int argc, char **argv) {
             exit(0);
         } else if (!strcmp(argv[i], "-n")) {
             if (lastarg) goto invalid;
+            if (config.duration > 0) {
+                fprintf(stderr, "Options -n and --duration are mutually exclusive.\n");
+                exit(1);
+            }
             config.requests = atoi(argv[++i]);
+        } else if (!strcmp(argv[i], "--duration")) {
+            if (lastarg) goto invalid;
+            if (config.requests > 0) {
+                fprintf(stderr, "Options -n and --duration are mutually exclusive.\n");
+                exit(1);
+            }
+            config.duration = atoi(argv[++i]);
+        } else if (!strcmp(argv[i], "--warmup")) {
+            if (lastarg) goto invalid;
+            config.warmup_duration = atoi(argv[++i]);
+
         } else if (!strcmp(argv[i], "-k")) {
             if (lastarg) goto invalid;
             config.keepalive = atoi(argv[++i]);
@@ -1694,6 +1868,13 @@ int parseOptions(int argc, char **argv) {
             config.num_functions = atoi(argv[++i]);
         } else if (!strcmp(argv[i], "--num-keys-in-fcall")) {
             config.num_keys_in_fcall = atoi(argv[++i]);
+        } else if (!strcmp(argv[i], "--dataset")) {
+            if (lastarg) goto invalid;
+            config.dataset_file = sdsnew(argv[++i]);
+        } else if (!strcmp(argv[i], "--maxdocs")) {
+            if (lastarg) goto invalid;
+            config.max_documents = atoi(argv[++i]);
+            if (config.max_documents <= 0) config.max_documents = -1;
         } else if (!strcmp(argv[i], "--help")) {
             exit_status = 0;
             goto usage;
@@ -1734,6 +1915,28 @@ int parseOptions(int argc, char **argv) {
             }
             config.ct = VALKEY_CONN_RDMA;
 #endif
+        } else if (!strcmp(argv[i], "--fuzz")) {
+            config.fuzz_mode = 1;
+        } else if (!strcmp(argv[i], "--fuzz-loglevel")) {
+            if (lastarg) goto invalid;
+            config.fuzz_log_level = argv[++i];
+        } else if (!strcmp(argv[i], "--fuzz-mode")) {
+            if (lastarg) goto invalid;
+            int count = 0;
+            const char *modes_arg = argv[++i];
+            sds *modes = sdssplitlen(modes_arg, strlen(modes_arg), ",", 1, &count);
+            for (int j = 0; j < count; j++) {
+                if (!strcmp(modes[j], "malformed-commands"))
+                    config.fuzz_flags |= FUZZ_MODE_MALFORMED_COMMANDS;
+                else if (!strcmp(modes[j], "config-commands"))
+                    config.fuzz_flags |= FUZZ_MODE_CONFIG_COMMANDS;
+                else {
+                    fprintf(stderr, "Invalid fuzz mode: %s\n", modes[j]);
+                    sdsfreesplitres(modes, count);
+                    exit(1);
+                }
+            }
+            sdsfreesplitres(modes, count);
         } else if (!strcmp(argv[i], "--mptcp")) {
             config.mptcp = 1;
         } else if (!strcmp(argv[i], "--")) {
@@ -1766,13 +1969,15 @@ usage:
         " --cert <file>      Client certificate to authenticate with.\n"
         " --key <file>       Private key file to authenticate with.\n"
         " --tls-ciphers <list> Sets the list of preferred ciphers (TLSv1.2 and below)\n"
-        "                    in order of preference from highest to lowest separated by colon (\":\").\n"
-        "                    See the ciphers(1ssl) manpage for more information about the syntax of this string.\n"
+        "                    in order of preference from highest to lowest separated by\n"
+        "                    colon (\":\"). See the ciphers(1ssl) manpage for more\n"
+        "                    information about the syntax of this string.\n"
 #ifdef TLS1_3_VERSION
         " --tls-ciphersuites <list> Sets the list of preferred ciphersuites (TLSv1.3)\n"
-        "                    in order of preference from highest to lowest separated by colon (\":\").\n"
-        "                    See the ciphers(1ssl) manpage for more information about the syntax of this string,\n"
-        "                    and specifically for TLSv1.3 ciphersuites.\n"
+        "                    in order of preference from highest to lowest separated by\n"
+        "                    colon (\":\"). See the ciphers(1ssl) manpage for more\n"
+        "                    information about the syntax of this string, and\n"
+        "                    specifically for TLSv1.3 ciphersuites.\n"
 #endif
 #endif
         "";
@@ -1800,6 +2005,8 @@ usage:
         "__rand_1st__        Like __rand_int__ but multiple occurrences will have the same\n"
         "                    value. __rand_2nd__ through __rand_9th__ are also available.\n"
         " __data__           Replaced with data of the size specified by the -d option.\n"
+        " __field:name__     Replaced with data from the specified field/column in the\n"
+        "                    dataset. Requires --dataset option.\n"
         " {tag}              Replaced with a tag that routes the command to each node in\n"
         "                    a cluster. Include this in key names when running in cluster\n"
         "                    mode.\n"
@@ -1819,6 +2026,11 @@ usage:
         "                    Note: If --cluster is used then number of clients has to be\n"
         "                    the same or higher than the number of nodes.\n"
         " -n <requests>      Total number of requests (default 100000)\n"
+        " --duration <seconds>\n"
+        "                    Run benchmark for specified number of seconds\n"
+        "                    (mutually exclusive with -n)\n"
+        " --warmup <seconds> Run benchmark for specified warmup period before\n"
+        "                    recording data\n"
         " -d <size>          Data size of SET/GET value in bytes (default 3)\n"
         " --dbnum <db>       SELECT the specified db number (default 0)\n"
         " -3                 Start session in RESP3 protocol mode.\n"
@@ -1850,9 +2062,9 @@ usage:
         "                    use the same key.\n"
         " --sequential       Modifies the -r argument to replace the string __rand_int__\n"
         "                    with 12 digit numbers sequentially instead of randomly.\n"
-        "                    __rand_1st__ through __rand_9th__ are available with independent\n"
-        "                    counters. Used to create expected number of elements with multiple\n"
-        "                    replacements.\n"
+        "                    __rand_1st__ through __rand_9th__ are available with\n"
+        "                    independent counters. Used to create expected number of\n"
+        "                    elements with multiple replacements.\n"
         "                    example: ZADD myzset __rand_int__ element:__rand_1st__\n"
         " -P <numreq>        Pipeline <numreq> requests. That is, send multiple requests\n"
         "                    before waiting for the replies. Default 1 (no pipeline).\n"
@@ -1861,7 +2073,8 @@ usage:
         "                    the number of times the command sequence is sent in each\n"
         "                    pipeline.\n",
         " -q                 Quiet. Just show query/sec values\n"
-        " --precision        Number of decimal places to display in latency output (default 0)\n"
+        " --precision        Number of decimal places to display in latency output\n"
+        "                    (default 0)\n"
         " --csv              Output in CSV format\n"
         " -l                 Loop. Run the tests forever\n"
         " -t <tests>         Only run the comma separated list of tests. The test\n"
@@ -1870,17 +2083,31 @@ usage:
         "                    on the command line.\n"
         " -I                 Idle mode. Just open N idle connections and wait.\n"
         " -x                 Read last argument from STDIN.\n"
-        " --rps <requests>   Limit the total number of requests per second. Default 0 (no limit)\n"
-        " --seed <num>       Set the seed for random number generator. Default seed is based on time.\n"
+        " --rps <requests>   Limit the total number of requests per second.\n"
+        "                    Default 0 (no limit)\n"
+        " --seed <num>       Set the seed for random number generator.\n"
+        "                    Default seed is based on time.\n"
         " --num-functions <num>\n"
         "                    Sets the number of functions present in the Lua lib that is\n"
         "                    loaded when running the 'function_load' test. (default 10).\n"
         " --num-keys-in-fcall <num>\n"
         "                    Sets the number of keys passed to FCALL command when running\n"
-        "                    the 'fcall' test. (default 1)\n",
+        "                    the 'fcall' test. (default 1)\n"
+        " --dataset <file>   Path to CSV/TSV dataset file for field placeholder replacement.\n"
+        "                    All fields auto-detected with natural content lengths.\n"
+        " --maxdocs <num>    Maximum number of documents to load from dataset file.\n"
+        "                    Default: unlimited.\n",
         tls_usage,
         rdma_usage,
         " --mptcp            Enable an MPTCP connection.\n"
+        " --fuzz             Enable fuzzy mode to generate random commands. WARNING: Recommended for testing only, not for use with production data.\n"
+        " --fuzz-mode <modes> Set fuzzing modes (comma-separated): malformed-commands, config-commands.\n"
+        "                    malformed-commands: Generates also malformed commands.\n"
+        "                    config-commands: Allows CONFIG SET commands.\n"
+        "                    Default: valid commands only.\n"
+        " --fuzz-loglevel <level>\n"
+        "                    Set log level for fuzzer (none, error, info, debug).\n"
+        "                    Default is 'info'.\n"
         " --help             Output this help and exit.\n"
         " --version          Output version and exit.\n\n"
         "Examples:\n\n"
@@ -1906,18 +2133,35 @@ long long showThroughput(struct aeEventLoop *eventLoop, long long id, void *clie
     UNUSED(eventLoop);
     UNUSED(id);
     benchmarkThread *thread = (benchmarkThread *)clientData;
-    int liveclients = atomic_load_explicit(&config.liveclients, memory_order_relaxed);
     int requests_finished = atomic_load_explicit(&config.requests_finished, memory_order_relaxed);
     int previous_requests_finished = atomic_load_explicit(&config.previous_requests_finished, memory_order_relaxed);
     long long current_tick = mstime();
 
-    if (liveclients == 0 && requests_finished != config.requests) {
+    int liveclients = atomic_load_explicit(&config.liveclients, memory_order_relaxed);
+    if (liveclients == 0 && !isBenchmarkFinished(requests_finished)) {
         fprintf(stderr, "All clients disconnected... aborting.\n");
         exit(1);
     }
-    if (config.num_threads && requests_finished >= config.requests) {
+    int warmup_duration = atomic_load_explicit(&config.current_warmup_duration, memory_order_relaxed);
+    if (warmup_duration > 0) {
+        if ((current_tick - config.start) >= (warmup_duration * 1000LL)) {
+            /* exit the warmup period, clear all stats */
+            atomic_store_explicit(&config.current_warmup_duration, 0, memory_order_relaxed);
+
+            config.start = current_tick;
+            atomic_store_explicit(&config.requests_finished, 0, memory_order_relaxed);
+            atomic_store_explicit(&config.requests_issued, 0, memory_order_relaxed);
+            atomic_store_explicit(&config.previous_requests_finished, 0, memory_order_relaxed);
+            hdr_reset(config.latency_histogram);
+        }
+    } else if (isBenchmarkFinished(requests_finished)) {
         aeStop(eventLoop);
-        return AE_NOMORE;
+        /* In multi-threaded mode, return AE_NOMORE to delete the timer since
+         * the thread's event loop will be destroyed. In single-threaded mode,
+         * we must keep the timer alive for subsequent benchmark tests */
+        if (config.num_threads) {
+            return AE_NOMORE;
+        }
     }
     if (config.csv) return SHOW_THROUGHPUT_INTERVAL;
     /* only first thread output throughput */
@@ -1933,13 +2177,28 @@ long long showThroughput(struct aeEventLoop *eventLoop, long long id, void *clie
     const float rps = (float)requests_finished / dt;
     const float instantaneous_dt = (float)(current_tick - config.previous_tick) / 1000.0;
     const float instantaneous_rps = (float)(requests_finished - previous_requests_finished) / instantaneous_dt;
+
+    if (config.rps_histogram) {
+        hdr_record_value(config.rps_histogram, (int64_t)instantaneous_rps);
+    }
+
     config.previous_tick = current_tick;
     atomic_store_explicit(&config.previous_requests_finished, requests_finished, memory_order_relaxed);
+
     printf("%*s\r", config.last_printed_bytes, " "); /* ensure there is a clean line */
-    int printed_bytes =
-        printf("%s: rps=%.1f (overall: %.1f) avg_msec=%.3f (overall: %.3f)\r", config.title, instantaneous_rps, rps,
+    config.last_printed_bytes = 0;
+    if (warmup_duration > 0) {
+        config.last_printed_bytes += printf("Warming up ");
+    }
+    config.last_printed_bytes +=
+        printf("%s: rps=%.1f (overall: %.1f) avg_msec=%.3f (overall: %.3f)", config.title, instantaneous_rps, rps,
                hdr_mean(config.current_sec_latency_histogram) / 1000.0f, hdr_mean(config.latency_histogram) / 1000.0f);
-    config.last_printed_bytes = printed_bytes;
+    if (warmup_duration > 0 || config.duration > 0) {
+        config.last_printed_bytes += printf(" %.1f seconds\r", dt);
+    } else {
+        config.last_printed_bytes += printf(" %d requests\r", requests_finished);
+    }
+
     hdr_reset(config.current_sec_latency_histogram);
     fflush(stdout);
     return SHOW_THROUGHPUT_INTERVAL;
@@ -2011,7 +2270,10 @@ int main(int argc, char **argv) {
     memset(&config.sslconfig, 0, sizeof(config.sslconfig));
     config.ct = VALKEY_CONN_TCP;
     config.numclients = 50;
-    config.requests = 100000;
+    config.requests = -1;
+    config.duration = -1;
+    config.warmup_duration = -1;
+    config.current_warmup_duration = -1;
     config.liveclients = 0;
     config.el = aeCreateEventLoop(1024 * 10);
     aeCreateTimeEvent(config.el, 1, showThroughput, NULL, NULL);
@@ -2037,6 +2299,9 @@ int main(int argc, char **argv) {
     config.num_threads = 0;
     config.threads = NULL;
     config.cluster_mode = 0;
+    config.fuzz_mode = 0;
+    config.fuzz_log_level = "info";
+    config.fuzz_flags = 0;
     config.rps = 0;
     config.read_from_replica = FROM_PRIMARY_ONLY;
     config.cluster_node_count = 0;
@@ -2049,11 +2314,56 @@ int main(int argc, char **argv) {
     config.num_functions = 10;
     config.num_keys_in_fcall = 1;
     config.resp3 = 0;
+    config.dataset_file = NULL;
+    config.max_documents = -1; /* -1 = unlimited */
+    config.current_dataset = NULL;
+    config.template_argc = 0;
+    config.template_argv = NULL;
+    config.has_field_placeholders = 0;
     resetPlaceholders();
 
     i = parseOptions(argc, argv);
     argc -= i;
     argv += i;
+
+    /* Setup dataset if specified */
+    if (config.dataset_file) {
+        if (argc == 0) {
+            fprintf(stderr, "Error: Dataset mode requires a command with field placeholders\n");
+            fprintf(stderr, "Example: SET doc:__rand_int__ \"__field:content__\"\n");
+            exit(1);
+        }
+
+        /* Parse command template and setup field placeholder detection */
+        if (!parseCommandTemplate(argc, argv)) {
+            exit(1);
+        }
+
+        /* Dataset mode requires at least one field placeholder in the command
+         * template. Without it, the dataset would be initialized and reported
+         * but never used for command generation. */
+        if (!config.has_field_placeholders) {
+            fprintf(stderr,
+                    "Error: Dataset mode requires at least one field placeholder\n");
+            fprintf(stderr,
+                    "Example: SET doc:__rand_int__ \"__field:content__\"\n");
+            exit(1);
+        }
+
+        /* Initialize dataset - single call does everything atomically */
+        int verbose = !config.csv && !config.quiet;
+        config.current_dataset = datasetInit(config.dataset_file,
+                                             config.max_documents,
+                                             config.has_field_placeholders,
+                                             config.template_argv, config.template_argc,
+                                             verbose);
+        if (!config.current_dataset) {
+            fprintf(stderr, "Failed to initialize dataset\n");
+            exit(1);
+        }
+    }
+    /* Set default for requests if not specified */
+    if (config.requests < 0) config.requests = 100000;
 
     tag = "";
 
@@ -2068,7 +2378,7 @@ int main(int argc, char **argv) {
         exit(1);
     }
 
-    if (config.cluster_mode) {
+    if (config.cluster_mode && !config.fuzz_mode) {
         // We only include the slot placeholder {tag} if cluster mode is enabled
         tag = ":{tag}";
 
@@ -2160,6 +2470,20 @@ int main(int argc, char **argv) {
         printf("\"test\",\"rps\",\"avg_latency_ms\",\"min_latency_ms\",\"p50_latency_ms\",\"p95_latency_ms\",\"p99_"
                "latency_ms\",\"max_latency_ms\"\n");
     }
+
+    if (config.fuzz_mode) {
+        return runFuzzerClients(
+            config.conn_info.hostip,
+            config.conn_info.hostport,
+            config.requests,
+            config.numclients,
+            config.cluster_mode,
+            config.keyspacelen,
+            config.tls ? &config.sslconfig : NULL,
+            config.fuzz_log_level,
+            config.fuzz_flags);
+    }
+
     /* Run benchmark with command in the remainder of the arguments. */
     if (argc) {
         sds title = sdsnew(argv[0]);
@@ -2196,18 +2520,15 @@ int main(int argc, char **argv) {
             } else if (i == argc || strcmp(";", sds_args[i]) == 0) {
                 cmd = NULL;
                 if (i == start) continue;
-                /* End of command. RESP-encode and append to sequence. */
-                len = valkeyFormatCommandArgv(&cmd, i - start,
-                                              (const char **)sds_args + start,
-                                              argvlen + start);
-                for (int j = 0; j < repeat; j++) {
-                    cmd_seq = sdscatlen(cmd_seq, cmd, len);
-                }
-                seq_len += repeat;
-                free(cmd);
+
+                addRespCommandToSequence(sds_args, argvlen, start, i, repeat, &cmd_seq, &seq_len);
                 start = i + 1;
                 repeat = 1;
             } else if (strstr(sds_args[i], "__data__")) {
+                if (config.current_dataset) {
+                    fprintf(stderr, "Error: __data__ placeholders cannot be used with --dataset option\n");
+                    exit(1);
+                }
                 /* Replace data placeholders with data of length given by -d. */
                 int num_parts;
                 sds *parts = sdssplitlen(sds_args[i], sdslen(sds_args[i]),
@@ -2226,6 +2547,7 @@ int main(int argc, char **argv) {
                 sds_args[i] = newarg;
                 argvlen[i] = sdslen(sds_args[i]);
             }
+            /* NOTE: Field placeholder processing is handled above in the command-level loop to ensure row consistency */
         }
         len = sdslen(cmd_seq);
         /* adjust the datasize to the parsed command */
@@ -2446,6 +2768,15 @@ int main(int argc, char **argv) {
     freeCliConnInfo(config.conn_info);
     if (config.server_config != NULL) freeServerConfig(config.server_config);
     resetPlaceholders();
+    cleanupDataset();
+
+    /* Clean up command template */
+    if (config.template_argv) {
+        for (int i = 0; i < config.template_argc; i++) {
+            sdsfree(config.template_argv[i]);
+        }
+        zfree(config.template_argv);
+    }
 
     return 0;
 }

@@ -1,3 +1,9 @@
+/*
+ * Copyright Valkey Contributors.
+ * All rights reserved.
+ * SPDX-License-Identifier: BSD 3-Clause
+ */
+
 #ifndef __BGITERATION_H
 #define __BGITERATION_H
 

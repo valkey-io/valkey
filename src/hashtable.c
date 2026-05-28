@@ -2578,4 +2578,3 @@ bool hashtableScanHasPassedKey(hashtable *ht, const void *key, size_t cursor) {
     size_t bucket_idx = hashKey(ht, key) & mask;
     return rev(bucket_idx) < rev(cursor & mask);
 }
-

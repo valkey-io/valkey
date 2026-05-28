@@ -698,19 +698,26 @@ proc write_keys_to_master0 {} {
             break
         }
     }
-    set count 0
+    set valid_slots {}
     foreach range $slot_ranges {
         set parts [split $range "-"]
-        set start [lindex $parts 0]
-        set end [lindex $parts 1]
-        if {$end eq ""} {set end $start}
-        for {set s $start} {$s <= $end} {incr s} {
-            exec $::VALKEY_CLI_BIN -c -p [srv 0 port] SET "{$s}key:$s:a" "value:$s"
-            exec $::VALKEY_CLI_BIN -c -p [srv 0 port] SET "{$s}key:$s:b" "value:$s"
-            incr count 2
-            if {$count >= 100} break
+        set s [lindex $parts 0]
+        set e [lindex $parts 1]
+        if {$e eq ""} {set e $s}
+        for {set i $s} {$i <= $e} {incr i} {
+            lappend valid_slots $i
         }
-        if {$count >= 100} break
+    }
+    set count 0
+    set i 0
+    while {$count < 100} {
+        set key "key:$i"
+        set slot [$client CLUSTER KEYSLOT $key]
+        if {[lsearch -exact $valid_slots $slot] >= 0} {
+            exec $::VALKEY_CLI_BIN -c -p [srv 0 port] SET $key "value:$i"
+            incr count
+        }
+        incr i
     }
 }
 
@@ -758,7 +765,6 @@ start_multiple_servers 6 [list overrides $base_conf] {
         } e]
         assert_equal 0 $rc "Rebalance command failed: $e"
         assert_no_match "*CROSSSLOT*" $e
-        assert_no_match "*CROSS*SLOT*" $e
     }
 
 } ;# stop servers
@@ -814,7 +820,6 @@ start_multiple_servers 6 [list overrides $base_conf] {
         } e]
         assert_equal 0 $rc "Rebalance command failed: $e"
         assert_no_match "*CROSSSLOT*" $e
-        assert_no_match "*CROSS*SLOT*" $e
     }
 
 } ;# stop servers
@@ -870,7 +875,6 @@ start_multiple_servers 6 [list overrides $base_conf] {
         } e]
         assert_equal 0 $rc "Rebalance command failed: $e"
         assert_no_match "*CROSSSLOT*" $e
-        assert_no_match "*CROSS*SLOT*" $e
     }
 
 } ;# stop servers

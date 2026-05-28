@@ -64,8 +64,9 @@ OrderedIndexItem *orderedIndexInsert(OrderedIndex *oi, double score, const char 
 void orderedIndexDelete(OrderedIndex *oi, OrderedIndexItem *item);
 
 /* Update the score of an existing item. May reposition it in the index.
- * Returns the (possibly new) item pointer — the old pointer may be invalid.
- * Returns NULL if the item stayed in place (score updated in-place). */
+ * Returns the (possibly new) item pointer — the old pointer may be invalid
+ * if the item was repositioned. Always returns a valid pointer; callers can
+ * compare old vs returned to detect whether the item moved. */
 OrderedIndexItem *orderedIndexUpdateScore(OrderedIndex *oi, OrderedIndexItem *item, double newscore);
 
 /* Remove and return the first (lowest-score) item without freeing it. */

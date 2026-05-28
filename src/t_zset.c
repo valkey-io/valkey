@@ -926,9 +926,8 @@ int zsetAdd(robj *zobj, double score, sds ele, int in_flags, int *out_flags, dou
             /* Remove and re-insert when score changes. */
             if (score != curscore) {
                 OrderedIndexItem *new_node = orderedIndexUpdateScore(zs->oi, old_node, score);
-                /* Note that this assignment updates the node pointer stored in
-                 * the hashtable */
-                if (new_node) *node_ref_in_hashtable = new_node;
+                /* Update the node pointer stored in the hashtable. */
+                *node_ref_in_hashtable = new_node;
                 *out_flags |= ZADD_OUT_UPDATED;
             }
             return 1;

@@ -2570,67 +2570,19 @@ int hashtableLongestBucketChain(hashtable *ht) {
     return maxlen;
 }
 
-/* This is an internal function - not part of the standard API.  It must be explicitly declared
- * where used.  It shouldn't be included in any .h (API) file.  Use of this interface is discouraged
- * as it depends on the internal structure, which may change.
- *
- * For a given key, return:
- *   table_idx - the index of the internal table (0 or 1)
- *   bucket_idx - the bucket index within the table (0..n)
- *
- * Returns TRUE if the the key exists in the table.
- * Returns FALSE if the key doesn't exist (and table/index are undefined)
- */
-bool hashtableInternalFindBucketIdx(hashtable *ht, void *key, int *table_idx, size_t *bucket_idx) {
-    uint64_t hash = hashKey(ht, key);
-    int pos_in_bucket;
-    int table;
-    bucket *b = findBucket(ht, hash, key, &pos_in_bucket, &table);
-    if (!b) return false;
+// Temporary, waiting on PR #3803
+bool hashtableScanHasPassedKey(hashtable *ht, const void *key, size_t cursor) {
+    if (cursor == 0) return false;
+    if (hashtableSize(ht) == 0) return true;
 
-    *table_idx = table;
-    *bucket_idx = hash & expToMask(ht->bucket_exp[table]);
-    return true;
+    /* The scan visits buckets in reverse-binary order based on the smallest
+     * table. During rehashing, a small-table bucket and its corresponding
+     * large-table buckets are processed together, so the small-table mask
+     * determines ordering in both cases. */
+    int exp = ht->bucket_exp[0];
+    if (hashtableIsRehashing(ht) && ht->bucket_exp[1] < exp) exp = ht->bucket_exp[1];
+    size_t mask = expToMask(exp);
+    size_t bucket_idx = hashKey(ht, key) & mask;
+    return rev(bucket_idx) < rev(cursor & mask);
 }
 
-/* This is an internal function - not part of the standard API.  It must be explicitly declared
- * where used.  It shouldn't be included in any .h (API) file.  Use of this interface is discouraged
- * as it depends on the internal structure, which may change.
- *
- * For a given iterator, return:
- *   table_idx - the index of the internal table (0 or 1)
- *   bucket_idx - the bucket index within the table (0..n)
- *
- * NOTE: hashtableIterator position is based on the LAST item returned.
- */
-void hashtableInternalIteratorGetBucketIdx(hashtableIterator *iterator, int *table_idx, size_t *bucket_idx) {
-    iter *it = iteratorFromOpaque(iterator);
-    *table_idx = it->table;
-    *bucket_idx = it->index;
-}
-
-/* This is an internal function - not part of the standard API.  It must be explicitly declared
- * where used.  It shouldn't be included in any .h (API) file.  Use of this interface is discouraged
- * as it depends on the internal structure, which may change.
- *
- * Returns TRUE if the iterator is ready to move to the next bucket index (if it has completed the
- * current bucket index).  Note: hashtableIterator bucket_idx is the bucket index of the last item
- * returned by hashtableNext.
- *
- * Note: If this function returns true, the iterator commits to move onto the next bucket index,
- * even if something new is added to the end of the current bucket before hashtableNext is called.
- */
-bool hashtableInternalIteratorIsBucketIdxComplete(hashtableIterator *iterator) {
-    iter *it = iteratorFromOpaque(iterator);
-
-    if (it->bucket->chained) return false;
-
-    if (!(it->bucket->presence >> (it->pos_in_bucket + 1))) {
-        /* There's CURRENTLY nothing else to return at this bucket index.  Mark pos_in_bucket so
-         * so that hashtableNext will move to the next bucket index, regardless of items which may
-         * be added in the future. */
-        it->pos_in_bucket = ITERATOR_DONE_WITH_BUCKET_IDX;
-        return true;
-    }
-    return false;
-}

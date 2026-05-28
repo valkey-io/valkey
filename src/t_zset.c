@@ -1646,7 +1646,8 @@ static int zuiNext(zsetopsrc *op, zsetopval *val) {
             const char *val_ele_ptr;
             size_t val_ele_len;
             orderedIndexGetElementRaw(it->sl.node, &val_ele_ptr, &val_ele_len);
-            val->ele = (sds)val_ele_ptr;
+            val->estr = (unsigned char *)val_ele_ptr;
+            val->elen = val_ele_len;
             val->score = orderedIndexGetScore(it->sl.node);
         } else {
             serverPanic("Unknown sorted set encoding");

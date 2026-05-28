@@ -76,6 +76,21 @@ REPL_OFFSETS <node-id> <offset> [<node-id> <offset> ...]
     provide replicas with sibling offsets for failover ranking.
     Recipients update node->repl_offset for CLUSTER SLOTS/SHARDS
     health reporting.
+
+TIMEOUT_NOW <term>
+    Sent by the leader to a follower to trigger immediate election
+    (leader transfer). The recipient starts an election without
+    waiting for the election timeout. Used during graceful shutdown.
+
+PUBLISH <sharded> <chan_len> <msg_len>
+    Propagates a Pub/Sub message to all cluster nodes. The channel
+    and message data follow the header fields. <sharded> is 1 for
+    shard channel messages, 0 for global.
+
+MODULE <module_id> <type> <len>
+    Propagates a module-to-module cluster message. The payload
+    (binary, <len> bytes) follows on the next line. Delivered to
+    module cluster message receivers.
 ```
 
 The address string uses the nodes.conf format:
@@ -593,29 +608,31 @@ Entries that don't need a shard-epoch:
 - NODE_FAIL / NODE_RECOVER (liveness, not topology)
 - NODE_INFO / NODE_JOIN / NODE_FORGET (node-level, not shard-level)
 
+## Leader Transfer
+
+On graceful shutdown, the leader sends a `TIMEOUT_NOW` message to the
+follower with the highest `match_index`. The message is flushed
+synchronously to the socket before shutdown proceeds. The target
+immediately starts an election without waiting for the election timeout.
+(See Ongaro dissertation §3.10.)
+
+Nodes in handshake or with the MEET flag are excluded as transfer
+targets.
+
 ## Future Work
 
 - Pre-vote protocol to avoid term inflation from partitioned nodes.
+- Minotity partition detection and leader step-down (prevents append
+  entries, especially don't trigger primary/replica failovers in a
+  minority partition).
 - Log compaction / snapshotting for lagging followers.
 - Persistence of Raft log to disk.
-- Permanent learners: in large clusters, some nodes may stay as
-  non-voting learners to reduce election and commit overhead. The
-  NODE_JOIN entry would include the intended role (follower or learner).
-- Leader transfer, in particular on graceful shutdown.
+- Lerners (non-voting members): reduces the risk for split-vote for
+  leader election in large clusters and reduces commit overhead.
+- Leader transfer on CLUSTER FORGET where the target is the leader.
+- Safety regarding membership changes (use new quorum).
 - Cluster merging via MEET: when two independently configured clusters
-  are joined via CLUSTER MEET, the joining node's state (slots,
-  replicas) should be carried in the HELLO/HI handshake and
-  incorporated into the leader's log. This makes raft compatible with
-  the existing admin workflow of configuring each node independently
-  (ADDSLOTS, REPLICATE) and then connecting them with MEET.
-- Non-blocking cluster commands: make MEET, ADDSLOTS, REPLICATE and
-  other cluster mutation commands return OK immediately (like gossip)
-  instead of blocking until committed. This enables MULTI/EXEC
-  compatibility and works with existing admin tools (valkey-cli
-  --cluster, third-party tools). Convergence is checked externally
-  via CLUSTER INFO / CLUSTER NODES. Optionally, blocking variants
-  can be offered for scripts that want commit confirmation.
-- Automatic replica migration: when a primary becomes orphaned (no
-  replicas), a replica from a shard with excess replicas should migrate
-  to it. In raft, this is a leader-driven decision (the leader detects
-  orphaned primaries and proposes SET_REPLICA_OF to move a replica).
+  are joined via CLUSTER MEET, the clusters should merge, either
+  atomically or not.
+- `valkey-cli --cluster` tooling compatibility (uses MULTI internally in
+  some cases, which is doesn't work with blocking admin commands).

@@ -1065,6 +1065,14 @@ TEST_P(OrderedIndexTest, DeleteRangeByLexPreservesOutside) {
 
 /* ========== Randomized property tests ========== */
 
+/* Default fuzz seed — overridden by --seed flag if provided. */
+extern char *seed;
+static uint32_t test_fuzz_seed(void) {
+    uint32_t s = seed ? (uint32_t)atoi(seed) : 42;
+    printf("  [fuzz seed: %u]\n", s);
+    return s;
+}
+
 /* Simple xorshift32 PRNG — deterministic, seedable, no STL. */
 static uint32_t test_rand_next(uint32_t *state) {
     *state ^= *state << 13;
@@ -1110,7 +1118,7 @@ static std::vector<RandomIndexEntry> test_build_random_index(OrderedIndexTestApi
 }
 
 TEST_P(OrderedIndexTest, RandomizedInsertAndTraversal) {
-    uint32_t rng = 42;
+    uint32_t rng = test_fuzz_seed();
     for (int trial = 0; trial < 20; trial++) {
         int n = test_rand_range(&rng, 1, 50);
 
@@ -1138,7 +1146,7 @@ TEST_P(OrderedIndexTest, RandomizedInsertAndTraversal) {
 }
 
 TEST_P(OrderedIndexTest, RandomizedBackwardTraversal) {
-    uint32_t rng = 42;
+    uint32_t rng = test_fuzz_seed();
     for (int trial = 0; trial < 20; trial++) {
         int n = test_rand_range(&rng, 1, 50);
 
@@ -1163,7 +1171,7 @@ TEST_P(OrderedIndexTest, RandomizedBackwardTraversal) {
 }
 
 TEST_P(OrderedIndexTest, RandomizedScoreRetrieval) {
-    uint32_t rng = 42;
+    uint32_t rng = test_fuzz_seed();
     for (int trial = 0; trial < 20; trial++) {
         int n = test_rand_range(&rng, 1, 50);
 
@@ -1178,7 +1186,7 @@ TEST_P(OrderedIndexTest, RandomizedScoreRetrieval) {
 }
 
 TEST_P(OrderedIndexTest, RandomizedIndexConsistency) {
-    uint32_t rng = 42;
+    uint32_t rng = test_fuzz_seed();
     for (int trial = 0; trial < 20; trial++) {
         int n = test_rand_range(&rng, 1, 50);
 
@@ -1203,7 +1211,7 @@ TEST_P(OrderedIndexTest, RandomizedIndexConsistency) {
 }
 
 TEST_P(OrderedIndexTest, RandomizedDelete) {
-    uint32_t rng = 42;
+    uint32_t rng = test_fuzz_seed();
     for (int trial = 0; trial < 20; trial++) {
         int n = test_rand_range(&rng, 2, 30);
 
@@ -1233,7 +1241,7 @@ TEST_P(OrderedIndexTest, RandomizedDelete) {
 }
 
 TEST_P(OrderedIndexTest, RandomizedUpdateScore) {
-    uint32_t rng = 42;
+    uint32_t rng = test_fuzz_seed();
     for (int trial = 0; trial < 20; trial++) {
         int n = test_rand_range(&rng, 2, 30);
 
@@ -1263,7 +1271,7 @@ TEST_P(OrderedIndexTest, RandomizedUpdateScore) {
 }
 
 TEST_P(OrderedIndexTest, RandomizedPop) {
-    uint32_t rng = 42;
+    uint32_t rng = test_fuzz_seed();
     for (int trial = 0; trial < 10; trial++) {
         int n = test_rand_range(&rng, 3, 30);
 
@@ -1308,7 +1316,7 @@ TEST_P(OrderedIndexTest, RandomizedPop) {
 }
 
 TEST_P(OrderedIndexTest, RandomizedDeleteRangeByScore) {
-    uint32_t rng = 42;
+    uint32_t rng = test_fuzz_seed();
     for (int trial = 0; trial < 20; trial++) {
         int n = test_rand_range(&rng, 5, 40);
 
@@ -1344,7 +1352,7 @@ TEST_P(OrderedIndexTest, RandomizedDeleteRangeByScore) {
 }
 
 TEST_P(OrderedIndexTest, RandomizedDeleteRangeByIndex) {
-    uint32_t rng = 42;
+    uint32_t rng = test_fuzz_seed();
     for (int trial = 0; trial < 20; trial++) {
         int n = test_rand_range(&rng, 5, 40);
 
@@ -1378,7 +1386,7 @@ TEST_P(OrderedIndexTest, RandomizedDeleteRangeByIndex) {
 }
 
 TEST_P(OrderedIndexTest, RandomizedForwardBackwardMirror) {
-    uint32_t rng = 42;
+    uint32_t rng = test_fuzz_seed();
     for (int trial = 0; trial < 20; trial++) {
         int n = test_rand_range(&rng, 1, 50);
 

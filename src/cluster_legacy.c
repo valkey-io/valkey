@@ -55,9 +55,8 @@
 #define LEGACY_STATE() ((clusterLegacyState *)server.cluster->protocol_data)
 
 /* Legacy-specific defines. */
-#define CLUSTER_FAIL_REPORT_VALIDITY_MULT 2  /* Fail report validity. */
-#define CLUSTER_FAIL_UNDO_TIME_MULT 2        /* Undo fail if primary is back. */
-#define CLUSTER_REPLICA_MIGRATION_DELAY 5000 /* Delay for replica migration. */
+#define CLUSTER_FAIL_REPORT_VALIDITY_MULT 2 /* Fail report validity. */
+#define CLUSTER_FAIL_UNDO_TIME_MULT 2       /* Undo fail if primary is back. */
 
 /* clusterState todo_before_sleep flags. */
 #define CLUSTER_TODO_HANDLE_FAILOVER (1 << 0)
@@ -98,7 +97,6 @@ typedef struct clusterNodeLegacyData {
     mstime_t pong_received;                 /* Unix time we received the pong */
     mstime_t meet_sent;                     /* Unix time we sent latest meet packet */
     mstime_t fail_time;                     /* Unix time when FAIL flag was set */
-    mstime_t orphaned_time;                 /* Starting time of orphaned primary condition */
     rax *fail_reports;                      /* Radix tree for failure reports with sorted order by timestamp */
 } clusterNodeLegacyData;
 
@@ -438,7 +436,6 @@ void clusterSendFail(char *nodename);
 void clusterSendFailoverAuthIfNeeded(clusterNode *node, clusterMsg *request);
 void clusterMoveNodeSlots(clusterNode *from_node, clusterNode *to_node, int *slots, int *importing_slots, int *migrating_slots);
 void clusterHandleReplicaFailover(void);
-void clusterHandleReplicaMigration(int max_replicas);
 void clusterSendUpdate(clusterLink *link, clusterNode *node);
 static void clusterLegacyCancelManualFailover(void);
 void clusterSetNodeAsPrimary(clusterNode *n);
@@ -688,73 +685,11 @@ static void clusterLegacyResetStats(void) {
     LEGACY_STATE()->stats_bus_module_bytes_received = 0;
 }
 
-
 static void clusterLegacyInitLast(void) {
     clusterListenerInit();
 }
 
-void clusterAutoFailoverOnShutdown(void) {
-    if (!nodeIsPrimary(myself)) return;
-
-    /* Find the first best replica, that is, the replica with the largest offset. */
-    int legacy_replica = 0;
-    client *best_replica = NULL;
-    listIter replicas_iter;
-    listNode *replicas_list_node;
-    listRewind(server.replicas, &replicas_iter);
-    while ((replicas_list_node = listNext(&replicas_iter)) != NULL) {
-        client *replica = listNodeValue(replicas_list_node);
-        /* This is done only when the replica offset is caught up, to avoid data loss.
-         * And 0x90000 is 9.0.0, we only support this feature in this version. */
-        if (replica->repl_data->replica_version < 0x90000) {
-            legacy_replica = 1;
-            best_replica = NULL;
-            break;
-        }
-        if (replica->repl_data->repl_state == REPLICA_STATE_ONLINE &&
-            replica->repl_data->repl_ack_off == server.primary_repl_offset &&
-            replica->repl_data->replica_nodeid && sdslen(replica->repl_data->replica_nodeid) == CLUSTER_NAMELEN) {
-            best_replica = replica;
-        }
-    }
-
-    /* We are not able to find the replica to do the auto failover. */
-    if (best_replica == NULL) {
-        if (legacy_replica) {
-            serverLog(LL_NOTICE, "Unable to perform auto failover on shutdown since there are legacy replicas.");
-        } else {
-            serverLog(LL_NOTICE, "Unable to find a replica to perform the auto failover on shutdown.");
-        }
-        return;
-    }
-
-    /* Send the CLUSTER FAILOVER FORCE REPLICAID node-id to all replicas since
-     * it is a shared replication buffer, but only the replica with the matching
-     * node-id will execute it. The caller will call flushReplicasOutputBuffers,
-     * so in here it is a best effort. */
-    char buf[128];
-    size_t buflen = snprintf(buf, sizeof(buf),
-                             "*5\r\n$7\r\nCLUSTER\r\n"
-                             "$8\r\nFAILOVER\r\n"
-                             "$5\r\nFORCE\r\n"
-                             "$9\r\nREPLICAID\r\n"
-                             "$%d\r\n%.*s\r\n",
-                             CLUSTER_NAMELEN,
-                             CLUSTER_NAMELEN,
-                             best_replica->repl_data->replica_nodeid);
-    serverAssert(buflen <= 128);
-    /* Must install write handler for all replicas first before feeding
-     * replication stream. */
-    prepareReplicasToWrite();
-    feedReplicationBuffer(buf, buflen);
-    serverLog(LL_NOTICE, "Perform auto failover to replica %s on shutdown.", best_replica->repl_data->replica_nodeid);
-}
-
-/* Called when a cluster node receives SHUTDOWN. */
-static void clusterLegacyHandleServerShutdown(bool auto_failover) {
-    /* Check if we are able to do the auto failover on shutdown. */
-    if (auto_failover) clusterAutoFailoverOnShutdown();
-
+static void clusterLegacyHandleServerShutdown(void) {
     /* The error logs have been logged in the save function if the save fails. */
     serverLog(LL_NOTICE, "Saving the cluster configuration file before exiting.");
     clusterSaveConfig(1);
@@ -1102,7 +1037,6 @@ static void clusterLegacyInitNodeData(clusterNode *node) {
     legacy->pong_received = 0;
     legacy->meet_sent = 0;
     legacy->fail_time = 0;
-    legacy->orphaned_time = 0;
     legacy->fail_reports = raxNew();
 }
 
@@ -4469,115 +4403,6 @@ void clusterHandleReplicaFailover(void) {
 }
 
 /* -----------------------------------------------------------------------------
- * CLUSTER replica migration
- *
- * Replica migration is the process that allows a replica of a primary that is
- * already covered by at least another replica, to "migrate" to a primary that
- * is orphaned, that is, left with no working replicas.
- * ------------------------------------------------------------------------- */
-
-/* This function is responsible to decide if this replica should be migrated
- * to a different (orphaned) primary. It is called by the clusterLegacyCron() function
- * only if:
- *
- * 1) We are a replica node.
- * 2) It was detected that there is at least one orphaned primary in
- *    the cluster.
- * 3) We are a replica of one of the primaries with the greatest number of
- *    replicas.
- *
- * This checks are performed by the caller since it requires to iterate
- * the nodes anyway, so we spend time into clusterHandleReplicaMigration()
- * if definitely needed.
- *
- * The function is called with a pre-computed max_replicas, that is the max
- * number of working (not in FAIL state) replicas for a single primary.
- *
- * Additional conditions for migration are examined inside the function.
- */
-void clusterHandleReplicaMigration(int max_replicas) {
-    int j, ok_replicas = 0;
-    clusterNode *my_primary = myself->replicaof, *target = NULL, *candidate = NULL;
-    dictIterator *di;
-    dictEntry *de;
-
-    /* Step 1: Don't migrate if the cluster state is not ok. */
-    if (server.cluster->state != CLUSTER_OK) return;
-
-    /* Step 2: Don't migrate if my primary will not be left with at least
-     *         'migration-barrier' replicas after my migration. */
-    if (my_primary == NULL) return;
-    for (j = 0; j < my_primary->num_replicas; j++)
-        if (!nodeFailed(my_primary->replicas[j]) && !nodeTimedOut(my_primary->replicas[j])) ok_replicas++;
-    if (ok_replicas <= server.cluster_migration_barrier) return;
-
-    /* Step 3: Identify a candidate for migration, and check if among the
-     * primaries with the greatest number of ok replicas, I'm the one with the
-     * smallest node ID (the "candidate replica").
-     *
-     * Note: this means that eventually a replica migration will occur
-     * since replicas that are reachable again always have their FAIL flag
-     * cleared, so eventually there must be a candidate.
-     * There is a possible race condition causing multiple
-     * replicas to migrate at the same time, but this is unlikely to
-     * happen and relatively harmless when it does. */
-    candidate = myself;
-    di = dictGetSafeIterator(server.cluster->nodes);
-    while ((de = dictNext(di)) != NULL) {
-        clusterNode *node = dictGetVal(de);
-        int ok_replicas = 0, is_orphaned = 1;
-
-        /* We want to migrate only if this primary is working, orphaned, and
-         * used to have replicas or if failed over a primary that had replicas
-         * (MIGRATE_TO flag). This way we only migrate to instances that were
-         * supposed to have replicas. */
-        if (nodeIsReplica(node) || nodeFailed(node)) is_orphaned = 0;
-        if (!(node->flags & CLUSTER_NODE_MIGRATE_TO)) is_orphaned = 0;
-
-        /* Check number of working replicas. */
-        if (clusterNodeIsPrimary(node)) ok_replicas = clusterCountNonFailingReplicas(node);
-        if (ok_replicas > 0) is_orphaned = 0;
-
-        if (is_orphaned) {
-            if (!target && node->numslots > 0) target = node;
-
-            /* Track the starting time of the orphaned condition for this
-             * primary. */
-            if (!LEGACY_DATA(node)->orphaned_time) LEGACY_DATA(node)->orphaned_time = mstime();
-        } else {
-            LEGACY_DATA(node)->orphaned_time = 0;
-        }
-
-        /* Check if I'm the replica candidate for the migration: attached
-         * to a primary with the maximum number of replicas and with the smallest
-         * node ID. */
-        if (ok_replicas == max_replicas) {
-            for (j = 0; j < node->num_replicas; j++) {
-                if (memcmp(node->replicas[j]->name, candidate->name, CLUSTER_NAMELEN) < 0) {
-                    candidate = node->replicas[j];
-                }
-            }
-        }
-    }
-    dictReleaseIterator(di);
-
-    /* Step 4: perform the migration if there is a target, and if I'm the
-     * candidate, but only if the primary is continuously orphaned for a
-     * couple of seconds, so that during failovers, we give some time to
-     * the natural replicas of this instance to advertise their switch from
-     * the old primary to the new one. */
-    if (target && candidate == myself && (mstime() - LEGACY_DATA(target)->orphaned_time) > CLUSTER_REPLICA_MIGRATION_DELAY &&
-        !(server.cluster_module_flags & CLUSTER_MODULE_FLAG_NO_FAILOVER)) {
-        serverLog(LL_NOTICE, "Migrating to orphaned primary %.40s (%s) in shard %.40s", target->name,
-                  humanNodename(target), target->shard_id);
-        /* We are migrating to a different shard that has a completely different
-         * replication history, so a full sync is required. */
-        clusterSetPrimary(target, 1, 1);
-        clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_FSYNC_CONFIG | CLUSTER_TODO_BROADCAST_ALL);
-    }
-}
-
-/* -----------------------------------------------------------------------------
  * CLUSTER manual failover
  *
  * This are the important steps performed by replicas during a manual failover:
@@ -4697,95 +4522,24 @@ static int nodeExceedsHandshakeTimeout(clusterNode *node, mstime_t now) {
     return now - node->ctime > getHandshakeTimeout() ? 1 : 0;
 }
 
-#define NODE_CONNECTION_RETRIES_PER_TIMEOUT 10
-
-/* Check if the node is disconnected and re-establish the connection.
- * Also update a few stats while we are here, that can be used to make
- * better decisions in other part of the code. */
-static int clusterNodeCronHandleReconnect(clusterNode *node, mstime_t now, long long *cluster_conn_attempts) {
-    /* Not interested in reconnecting the link with myself or nodes
-     * for which we have no address. */
-    if (node->flags & (CLUSTER_NODE_MYSELF | CLUSTER_NODE_NOADDR)) return 1;
+/* Gossip-specific per-node maintenance: count PFAIL nodes and send MEET
+ * to peers that have an outbound link but no inbound link. */
+static void clusterNodeCronGossipMaintenance(clusterNode *node, mstime_t now) {
+    if (node->flags & (CLUSTER_NODE_MYSELF | CLUSTER_NODE_NOADDR)) return;
 
     if (node->flags & CLUSTER_NODE_PFAIL) LEGACY_STATE()->stats_pfail_nodes++;
 
-    /* A Node in HANDSHAKE state has a limited lifespan equal to the
-     * configured node timeout. */
-    if (nodeInHandshake(node) && nodeExceedsHandshakeTimeout(node, now)) {
-        serverLog(LL_WARNING, "Clusterbus handshake timeout %s:%d", node->ip, node->cport);
-        clusterDelNode(node);
-        return 1;
-    }
+    /* If we have an outbound link but no inbound link for longer than the
+     * handshake timeout, the peer probably doesn't know us. Send MEET. */
     if (nodeInNormalState(node) && node->link != NULL && node->inbound_link == NULL &&
         now - node->inbound_link_freed_time > getHandshakeTimeout() &&
         now - LEGACY_DATA(node)->meet_sent > getHandshakeTimeout() &&
         nodeSupportsMultiMeet(node)) {
-        /* Node has an outbound link, but no inbound link for more than the handshake timeout.
-         * This probably means this node does not know us yet, whereas we know it.
-         * So we send it a MEET packet to do a handshake with it and correct the inconsistent cluster view.
-         * We make sure to not re-send a MEET packet more than once every handshake timeout period, so as to
-         * leave the other node time to complete the handshake. */
         node->flags |= CLUSTER_NODE_MEET;
         serverLog(LL_NOTICE, "Sending MEET packet to node %.40s (%s) because there is no inbound link for it",
                   node->name, humanNodename(node));
         clusterSendPing(node->link, CLUSTERMSG_TYPE_MEET);
     }
-
-    if (node->link == NULL) {
-        mstime_t reconnect_interval = server.cluster_node_timeout / 2;
-        /* Skip this outbound connection attempt when all these conditions are true:
-         *  1. No inbound link from the peer exists.
-         *  2. The back‑off window since the last try is still active
-         *  3. The node has already exceeded its retry budget for this cron cycle
-         */
-        if (!node->inbound_link && (now - node->outbound_link_attempt_time < reconnect_interval / NODE_CONNECTION_RETRIES_PER_TIMEOUT && *cluster_conn_attempts == 0)) {
-            return 1;
-        }
-        node->outbound_link_attempt_time = now;
-        (*cluster_conn_attempts)--;
-        clusterLink *link = createClusterLink(node);
-        link->conn = connCreate(connTypeOfCluster());
-        connSetPrivateData(link->conn, link);
-        if (connConnect(link->conn, node->ip, node->cport, server.bind_source_addr, 0, clusterLinkConnectHandler) ==
-            C_ERR) {
-            /* We got a synchronous error from connect before
-             * clusterSendPing() had a chance to be called.
-             * If LEGACY_DATA(node)->ping_sent is zero, failure detection can't work,
-             * so we claim we actually sent a ping now (that will
-             * be really sent as soon as the link is obtained). */
-            if (LEGACY_DATA(node)->ping_sent == 0) LEGACY_DATA(node)->ping_sent = mstime();
-            serverLog(LL_DEBUG,
-                      "Unable to connect to "
-                      "Cluster Node [%s]:%d -> %s",
-                      node->ip, node->cport, server.neterr);
-
-            freeClusterLink(link);
-            return 0;
-        }
-    }
-    return 0;
-}
-
-/* Free outbound link to a node if its send buffer size exceeded limit. */
-static void clusterNodeCronFreeLinkOnBufferLimitReached(clusterNode *node) {
-    freeClusterLinkOnBufferLimitReached(node->link);
-    freeClusterLinkOnBufferLimitReached(node->inbound_link);
-}
-
-/* Compute the maximum number of connection attempts the clusterLegacyCron
- * loop should schedule in a single cron.
- *
- * We want to guarantee that every node is contacted 10 times within node timeout. */
-static long long maxConnectionAttemptsPerCron(void) {
-    long long reconnect_interval = server.cluster_node_timeout / 2;
-    if (reconnect_interval <= 0)
-        return 0;
-    /* We run the cron loop every 100 ms.  To reach 100 % of the nodes
-     * within the timeout, we need: ceil(nodes * 100 / reconnect_interval) */
-    const long long min_nodes_for_coverage = dictSize(server.cluster->nodes) * CLUSTER_CRON_PERIOD_MS / reconnect_interval;
-    /* Increase the coverage budget so each node can be probed 10 times
-     * inside the timeout. */
-    return min_nodes_for_coverage * NODE_CONNECTION_RETRIES_PER_TIMEOUT;
 }
 
 /* This is executed 10 times every second */
@@ -4793,30 +4547,23 @@ static void clusterLegacyCron(void) {
     dictIterator *di;
     dictEntry *de;
     int update_state = 0;
-    int orphaned_primaries; /* How many primaries there are without ok replicas. */
-    int max_replicas;       /* Max number of ok replicas for a single primary. */
-    int this_replicas;      /* Number of ok replicas for our primary (if we are replica). */
     mstime_t min_pong = 0, now = mstime();
     clusterNode *min_pong_node = NULL;
     static unsigned long long iteration = 0;
     iteration++; /* Number of times this function was called so far. */
 
-    /* Clear so clusterNodeCronHandleReconnect can count the number of nodes in PFAIL. */
+    /* Clear pfail counter before iterating. */
     LEGACY_STATE()->stats_pfail_nodes = 0;
     /* Run through some of the operations we want to do on each cluster node. */
     di = dictGetSafeIterator(server.cluster->nodes);
-    long long cluster_node_conn_attempts = maxConnectionAttemptsPerCron();
     while ((de = dictNext(di)) != NULL) {
         clusterNode *node = dictGetVal(de);
-        /* We free the inbound or outbound link to the node if the link has an
-         * oversized message send queue and immediately try reconnecting. */
-        clusterNodeCronFreeLinkOnBufferLimitReached(node);
-        /* The protocol is that function(s) below return non-zero if the node was
-         * terminated.
-         */
-        if (!server.debug_cluster_disable_reconnection && clusterNodeCronHandleReconnect(node, now, &cluster_node_conn_attempts)) continue;
+        clusterNodeCronGossipMaintenance(node, now);
     }
     dictReleaseIterator(di);
+
+    /* Reconnect nodes with no outbound link (shared with raft). */
+    if (!server.debug_cluster_disable_reconnection) clusterConnectNodes();
 
     /* Ping some random node 1 time every 10 iterations, so that we usually ping
      * one random node every second. */
@@ -4843,36 +4590,13 @@ static void clusterLegacyCron(void) {
         }
     }
 
-    /* Iterate nodes to check if we need to flag something as failing.
-     * This loop is also responsible to:
-     * 1) Check if there are orphaned primaries (primaries without non failing
-     *    replicas).
-     * 2) Count the max number of non failing replicas for a single primary.
-     * 3) Count the number of replicas for our primary, if we are a replica. */
-    orphaned_primaries = 0;
-    max_replicas = 0;
-    this_replicas = 0;
+    /* Iterate nodes to check if we need to flag something as failing. */
     di = dictGetSafeIterator(server.cluster->nodes);
     while ((de = dictNext(di)) != NULL) {
         clusterNode *node = dictGetVal(de);
         now = mstime(); /* Use an updated time at every iteration. */
 
         if (node->flags & (CLUSTER_NODE_MYSELF | CLUSTER_NODE_NOADDR | CLUSTER_NODE_HANDSHAKE)) continue;
-
-        /* Orphaned primary check, useful only if the current instance
-         * is a replica that may migrate to another primary. */
-        if (nodeIsReplica(myself) && clusterNodeIsPrimary(node) && !nodeFailed(node)) {
-            int ok_replicas = clusterCountNonFailingReplicas(node);
-
-            /* A primary is orphaned if it is serving a non-zero number of
-             * slots, have no working replicas, but used to have at least one
-             * replica, or failed over a primary that used to have replicas. */
-            if (ok_replicas == 0 && node->numslots > 0 && node->flags & CLUSTER_NODE_MIGRATE_TO) {
-                orphaned_primaries++;
-            }
-            if (ok_replicas > max_replicas) max_replicas = ok_replicas;
-            if (myself->replicaof == node) this_replicas = ok_replicas;
-        }
 
         /* If we are not receiving any data for more than half the cluster
          * timeout, reconnect the link: maybe there is a connection
@@ -4951,14 +4675,6 @@ static void clusterLegacyCron(void) {
     if (nodeIsReplica(myself)) {
         clusterHandleManualFailover();
         if (!(server.cluster_module_flags & CLUSTER_MODULE_FLAG_NO_FAILOVER)) clusterHandleReplicaFailover();
-        /* If there are orphaned replicas, and we are a replica among the primaries
-         * with the max number of non-failing replicas, consider migrating to
-         * the orphaned primaries. Note that it does not make sense to try
-         * a migration if there is no primary with at least *two* working
-         * replicas. */
-        if (orphaned_primaries && max_replicas >= 2 && this_replicas == max_replicas &&
-            server.cluster_allow_replica_migration)
-            clusterHandleReplicaMigration(max_replicas);
     }
 
     if (update_state || server.cluster->state == CLUSTER_FAIL) clusterUpdateState();
@@ -5036,6 +4752,8 @@ static void clusterLegacySlotChange(slotRange *ranges, int numranges, clusterNod
 
     if (claiming) clusterBumpConfigEpochWithoutConsensus();
 
+    clusterNode *my_primary = clusterNodeGetPrimary(myself);
+    int num_slots_before = my_primary->numslots;
     for (int i = 0; i < numranges; i++) {
         for (int j = ranges[i].start_slot; j <= ranges[i].end_slot; j++) {
             if (target) {
@@ -5050,6 +4768,14 @@ static void clusterLegacySlotChange(slotRange *ranges, int numranges, clusterNod
                 clusterDelSlot(j);
             }
         }
+    }
+    if (num_slots_before > 0 && my_primary->numslots == 0 && target) {
+        /* Lost the last slot. If this is a replicated SETSLOT command, protect
+         * the primary client so it doesn't get freed by the replica migration. */
+        int is_replicated = server.primary && (server.current_client == server.primary);
+        if (is_replicated) protectClient(server.primary);
+        clusterHandleLostLastSlot(target);
+        if (is_replicated) unprotectClient(server.primary);
     }
 
     if (claiming) {
@@ -5443,7 +5169,7 @@ static void clusterLegacySetReplicaOf(clusterNode *primary, void *ctx, void (*ca
     clusterDoBeforeSleep(CLUSTER_TODO_UPDATE_STATE |
                          CLUSTER_TODO_SAVE_CONFIG |
                          CLUSTER_TODO_BROADCAST_ALL);
-    callback(ctx, NULL);
+    if (callback) callback(ctx, NULL);
 }
 
 static void clusterLegacyForgetNode(const char *node_id, size_t id_len, void *ctx, void (*callback)(void *ctx, const char *error)) {
@@ -5513,7 +5239,7 @@ static void clusterLegacyFailover(int force, int takeover, void *ctx, void (*cal
     } else {
         clusterSendMFStart(myself->replicaof);
     }
-    callback(ctx, NULL);
+    if (callback) callback(ctx, NULL);
 }
 
 

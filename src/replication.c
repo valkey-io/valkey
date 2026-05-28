@@ -1187,6 +1187,23 @@ void syncCommand(client *c) {
         c->flag.pre_psync = 1;
     }
 
+    /* Full resynchronization is gated by repl-disable-full-resync-until.
+     * If configured, refuse full resync requests while wall-clock time is
+     * earlier than the configured unix timestamp. Partial resynchronization
+     * (handled above) is intentionally not affected. */
+    if (server.repl_disable_full_resync_until &&
+        server.unixtime < server.repl_disable_full_resync_until) {
+        server.stat_sync_full_denied++;
+        serverLog(LL_NOTICE,
+                  "Full resync from replica %s denied: "
+                  "repl-disable-full-resync-until=%lld, now=%lld",
+                  replicationGetReplicaName(c),
+                  (long long)server.repl_disable_full_resync_until,
+                  (long long)server.unixtime);
+        addReplyError(c, "-NOMASTERLINK Full resynchronization is temporarily disabled on this primary");
+        return;
+    }
+
     /* Full resynchronization. */
     server.stat_sync_full++;
 

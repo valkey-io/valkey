@@ -2822,6 +2822,7 @@ void resetServerStats(void) {
     server.stat_sync_full = 0;
     server.stat_sync_partial_ok = 0;
     server.stat_sync_partial_err = 0;
+    server.stat_sync_full_denied = 0;
     server.stat_io_reads_processed = 0;
     server.stat_total_reads_processed = 0;
     server.stat_io_writes_processed = 0;
@@ -6500,6 +6501,7 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                 "sync_full:%lld\r\n", server.stat_sync_full,
                 "sync_partial_ok:%lld\r\n", server.stat_sync_partial_ok,
                 "sync_partial_err:%lld\r\n", server.stat_sync_partial_err,
+                "sync_full_denied:%lld\r\n", server.stat_sync_full_denied,
                 "expired_keys:%lld\r\n", server.stat_expiredkeys,
                 "expired_fields:%lld\r\n", server.stat_expiredfields,
                 "expired_stale_perc:%.2f\r\n", server.stat_expired_keys_stale_perc * 100,

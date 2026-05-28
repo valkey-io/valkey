@@ -1647,3 +1647,61 @@ start_server {tags {"repl external:skip"}} {
         }
     }
 }
+
+# Tests for repl-disable-full-resync-until: a primary-side gate that refuses
+# full resynchronization while wall-clock time is earlier than the configured
+# unix timestamp, accounted via INFO Stats sync_full_denied.
+start_server {tags {"repl external:skip"} overrides {save {}}} {
+    set primary [srv 0 client]
+    set primary_host [srv 0 host]
+    set primary_port [srv 0 port]
+    $primary set primary_key primary_value
+
+    start_server {overrides {save {}}} {
+        set replica [srv 0 client]
+
+        test {repl-disable-full-resync-until refuses full resync before deadline} {
+            # Set the deadline far enough in the future to cover the whole test.
+            set future_ts [expr {[clock seconds] + 3600}]
+            $primary config set repl-disable-full-resync-until $future_ts
+
+            set baseline_full [s -1 sync_full]
+            set baseline_denied [s -1 sync_full_denied]
+
+            $replica replicaof $primary_host $primary_port
+
+            # Wait until at least one full resync attempt is denied and
+            # logged on the primary.
+            wait_for_condition 100 100 {
+                [s -1 sync_full_denied] > $baseline_denied
+            } else {
+                fail "Primary did not deny full resync before the configured deadline"
+            }
+
+            # The replica must NOT have completed full sync, so its data
+            # remains untouched (no primary_key replicated).
+            assert_equal {} [$replica get primary_key]
+
+            # The successful full-sync counter must stay unchanged.
+            assert_equal $baseline_full [s -1 sync_full]
+
+            # Replica must keep retrying (-NOMASTERLINK is treated as
+            # transient), so it stays in a non-connected replication state.
+            assert_equal {down} [s 0 master_link_status]
+        }
+
+        test {repl-disable-full-resync-until allows full resync once disabled} {
+            # Disable the gate; the replica should now finish full sync.
+            $primary config set repl-disable-full-resync-until 0
+
+            wait_for_condition 100 100 {
+                [s 0 master_link_status] eq {up} &&
+                [$replica get primary_key] eq {primary_value}
+            } else {
+                fail "Replica failed to perform full resync after gate was disabled"
+            }
+
+            assert {[s -1 sync_full] >= 1}
+        }
+    }
+}

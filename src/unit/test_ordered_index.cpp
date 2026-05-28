@@ -19,7 +19,6 @@ extern "C" {
 #include <algorithm>
 #include <cmath>
 #include <cstring>
-#include <random>
 #include <set>
 #include <string>
 #include <vector>
@@ -110,38 +109,8 @@ class OrderedIndexTest : public ::testing::TestWithParam<OrderedIndexTestApi *> 
         ASSERT_DOUBLE_EQ(api.getScore(node), expected);
     }
 
-    /* RAII scoped iterator — auto-inits on construction, resets on destruction. */
-    struct ScopedIter {
-        OrderedIndexTestApi &api;
-        OrderedIndexIterator iter;
-        ScopedIter(OrderedIndexTestApi &a, OrderedIndex *oi) :
-            api(a) {
-            api.initIterator(&iter, oi);
-        }
-        ~ScopedIter() {
-            api.resetIterator(&iter);
-        }
-        OrderedIndexItem *next() {
-            return api.next(&iter);
-        }
-        OrderedIndexItem *prev() {
-            return api.prev(&iter);
-        }
-        OrderedIndexIterator *operator->() {
-            return &iter;
-        }
-        OrderedIndexIterator *get() {
-            return &iter;
-        }
-    };
-
-    /* Create a scoped iterator for this fixture's oi. */
-    ScopedIter iter() {
-        return ScopedIter(api, oi);
-    }
-
     /* Delete lex range using const char* (handles sds lifecycle). */
-    unsigned long deleteLexRange(const char *min_str, const char *max_str, int min_ex = 0, int max_ex = 0, OrderedIndexOnDelete cb = NULL, void *ctx = NULL) {
+    unsigned long deleteLexRange(const char *min_str, const char *max_str, int min_ex, int max_ex, OrderedIndexOnDelete cb, void *ctx) {
         sds min = sdsnew(min_str);
         sds max = sdsnew(max_str);
         unsigned long deleted = api.deleteRangeByLex(oi, min, max, min_ex, max_ex, cb, ctx);
@@ -151,7 +120,7 @@ class OrderedIndexTest : public ::testing::TestWithParam<OrderedIndexTestApi *> 
     }
 
     /* Count lex range using const char*. */
-    unsigned long countLexRange(const char *min_str, const char *max_str, int min_ex = 0, int max_ex = 0) {
+    unsigned long countLexRange(const char *min_str, const char *max_str, int min_ex, int max_ex) {
         sds min = sdsnew(min_str);
         sds max = sdsnew(max_str);
         unsigned long count = api.countLexRange(oi, min, max, min_ex, max_ex);
@@ -170,16 +139,18 @@ class OrderedIndexTest : public ::testing::TestWithParam<OrderedIndexTestApi *> 
     }
 
     /* Assert full forward traversal matches expected element names. */
-    void assertAllElements(std::initializer_list<const char *> expected) {
-        auto it = iter();
+    void assertAllElements(const char *expected[], size_t count) {
+        OrderedIndexIterator it;
+        api.initIterator(&it, oi);
         OrderedIndexItem *pos;
-        auto exp = expected.begin();
-        while ((pos = it.next()) != NULL) {
-            ASSERT_NE(exp, expected.end()) << "More elements than expected";
-            assertElement(pos, *exp);
-            ++exp;
+        size_t i = 0;
+        while ((pos = api.next(&it)) != NULL) {
+            ASSERT_LT(i, count) << "More elements than expected";
+            assertElement(pos, expected[i]);
+            i++;
         }
-        ASSERT_EQ(exp, expected.end()) << "Fewer elements than expected";
+        api.resetIterator(&it);
+        ASSERT_EQ(i, count) << "Fewer elements than expected";
     }
 
     /* Verify structural integrity. */
@@ -187,6 +158,13 @@ class OrderedIndexTest : public ::testing::TestWithParam<OrderedIndexTestApi *> 
         ASSERT_TRUE(verifyIntegrity(api, oi));
     }
 };
+
+/* Variadic macro for clean assertAllElements call sites. */
+#define ASSERT_ALL_ELEMENTS(...)                                     \
+    do {                                                             \
+        const char *_elems[] = {__VA_ARGS__};                        \
+        assertAllElements(_elems, sizeof(_elems) / sizeof(*_elems)); \
+    } while (0)
 
 /* ========== Basic tests ========== */
 
@@ -1025,55 +1003,57 @@ TEST_P(OrderedIndexTest, SeekToLexRange) {
 TEST_P(OrderedIndexTest, DeleteRangeByLexInclusive) {
     for (int i = 0; i < FRUITS_COUNT; i++) insert(1.0, FRUITS[i]);
 
-    ASSERT_EQ(deleteLexRange("banana", "date"), 3UL);
+    ASSERT_EQ(deleteLexRange("banana", "date", 0, 0, NULL, NULL), 3UL);
     ASSERT_EQ(api.length(oi), 2UL);
     verifyOI();
-    assertAllElements({"apple", "elderberry"});
+    ASSERT_ALL_ELEMENTS("apple", "elderberry");
 }
 
 TEST_P(OrderedIndexTest, DeleteRangeByLexExclusive) {
     for (int i = 0; i < FRUITS_COUNT; i++) insert(1.0, FRUITS[i]);
 
-    ASSERT_EQ(deleteLexRange("banana", "date", 1, 1), 1UL);
+    ASSERT_EQ(deleteLexRange("banana", "date", 1, 1, NULL, NULL), 1UL);
     ASSERT_EQ(api.length(oi), 4UL);
-    assertAllElements({"apple", "banana", "date", "elderberry"});
+    ASSERT_ALL_ELEMENTS("apple", "banana", "date", "elderberry");
 }
 
 TEST_P(OrderedIndexTest, DeleteRangeByLex_EmptyRange) {
     for (int i = 0; i < 3; i++) insert(1.0, FRUITS[i]);
 
-    ASSERT_EQ(deleteLexRange("zzz", "aaa"), 0UL);
+    ASSERT_EQ(deleteLexRange("zzz", "aaa", 0, 0, NULL, NULL), 0UL);
     ASSERT_EQ(api.length(oi), 3UL);
 }
 
 TEST_P(OrderedIndexTest, DeleteRangeByLex_All) {
     for (int i = 0; i < 3; i++) insert(1.0, FRUITS[i]);
 
-    ASSERT_EQ(deleteLexRange("a", "z"), 3UL);
+    ASSERT_EQ(deleteLexRange("a", "z", 0, 0, NULL, NULL), 3UL);
     ASSERT_EQ(api.length(oi), 0UL);
 }
 
 TEST_P(OrderedIndexTest, DeleteRangeByLex_SingleElement) {
     for (int i = 0; i < 3; i++) insert(1.0, FRUITS[i]);
 
-    ASSERT_EQ(deleteLexRange("banana", "banana"), 1UL);
+    ASSERT_EQ(deleteLexRange("banana", "banana", 0, 0, NULL, NULL), 1UL);
     ASSERT_EQ(api.length(oi), 2UL);
-    assertAllElements({"apple", "cherry"});
+    ASSERT_ALL_ELEMENTS("apple", "cherry");
 }
 
 TEST_P(OrderedIndexTest, DeleteRangeByLexPreservesOutside) {
     for (int i = 0; i < NATO_COUNT; i++) insert(1.0, NATO[i]);
 
-    ASSERT_EQ(deleteLexRange("charlie", "delta"), 2UL);
+    ASSERT_EQ(deleteLexRange("charlie", "delta", 0, 0, NULL, NULL), 2UL);
     ASSERT_EQ(api.length(oi), 4UL);
-    assertAllElements({"alpha", "bravo", "echo", "foxtrot"});
+    ASSERT_ALL_ELEMENTS("alpha", "bravo", "echo", "foxtrot");
 
     /* Verify scores are preserved */
-    auto it = iter();
+    OrderedIndexIterator it;
+    api.initIterator(&it, oi);
     OrderedIndexItem *pos;
-    while ((pos = it.next()) != NULL) {
+    while ((pos = api.next(&it)) != NULL) {
         assertScore(pos, 1.0);
     }
+    api.resetIterator(&it);
 
     /* Verify indices are correct after deletion */
     for (unsigned long r = 0; r < 4; r++) {
@@ -1085,31 +1065,44 @@ TEST_P(OrderedIndexTest, DeleteRangeByLexPreservesOutside) {
 
 /* ========== Randomized property tests ========== */
 
+/* Simple xorshift32 PRNG — deterministic, seedable, no STL. */
+static uint32_t test_rand_next(uint32_t *state) {
+    *state ^= *state << 13;
+    *state ^= *state >> 17;
+    *state ^= *state << 5;
+    return *state;
+}
+
+static int test_rand_range(uint32_t *state, int min, int max) {
+    return min + (int)(test_rand_next(state) % (uint32_t)(max - min + 1));
+}
+
+static double test_rand_double(uint32_t *state, double lo, double hi) {
+    return lo + (hi - lo) * ((double)test_rand_next(state) / (double)UINT32_MAX);
+}
+
 struct RandomIndexEntry {
     OrderedIndexItem *node;
     double score;
     std::string element;
 };
 
-static std::string test_random_element(std::mt19937 &rng, int maxLen = 16) {
-    std::uniform_int_distribution<int> lenDist(1, maxLen);
-    std::uniform_int_distribution<int> charDist('a', 'z');
-    int len = lenDist(rng);
+static std::string test_random_element(uint32_t *state, int maxLen) {
+    int len = test_rand_range(state, 1, maxLen);
     std::string s(len, ' ');
-    for (int i = 0; i < len; i++) s[i] = (char)charDist(rng);
+    for (int i = 0; i < len; i++) s[i] = (char)test_rand_range(state, 'a', 'z');
     return s;
 }
 
-static double test_random_score(std::mt19937 &rng) {
-    std::uniform_real_distribution<double> dist(-1e6, 1e6);
-    return dist(rng);
+static double test_random_score(uint32_t *state) {
+    return test_rand_double(state, -1e6, 1e6);
 }
 
-static std::vector<RandomIndexEntry> test_build_random_index(OrderedIndexTestApi &api, OrderedIndex *oi, std::mt19937 &rng, int count) {
+static std::vector<RandomIndexEntry> test_build_random_index(OrderedIndexTestApi &api, OrderedIndex *oi, uint32_t *state, int count) {
     std::vector<RandomIndexEntry> entries;
     for (int i = 0; i < count; i++) {
-        double score = test_random_score(rng);
-        std::string elem = test_random_element(rng) + std::to_string(i);
+        double score = test_random_score(state);
+        std::string elem = test_random_element(state, 16) + std::to_string(i);
         OrderedIndexItem *node = api.insert(oi, score, elem.c_str(), elem.size());
         entries.push_back({node, score, elem});
     }
@@ -1117,12 +1110,11 @@ static std::vector<RandomIndexEntry> test_build_random_index(OrderedIndexTestApi
 }
 
 TEST_P(OrderedIndexTest, RandomizedInsertAndTraversal) {
-    std::mt19937 rng(42);
+    uint32_t rng = 42;
     for (int trial = 0; trial < 20; trial++) {
-        std::uniform_int_distribution<int> sizeDist(1, 50);
-        int n = sizeDist(rng);
+        int n = test_rand_range(&rng, 1, 50);
 
-        test_build_random_index(api, oi, rng, n);
+        test_build_random_index(api, oi, &rng, n);
 
         ASSERT_EQ(api.length(oi), (unsigned long)n);
         verifyOI();
@@ -1146,12 +1138,11 @@ TEST_P(OrderedIndexTest, RandomizedInsertAndTraversal) {
 }
 
 TEST_P(OrderedIndexTest, RandomizedBackwardTraversal) {
-    std::mt19937 rng(42);
+    uint32_t rng = 42;
     for (int trial = 0; trial < 20; trial++) {
-        std::uniform_int_distribution<int> sizeDist(1, 50);
-        int n = sizeDist(rng);
+        int n = test_rand_range(&rng, 1, 50);
 
-        test_build_random_index(api, oi, rng, n);
+        test_build_random_index(api, oi, &rng, n);
 
         OrderedIndexIterator iter;
         OrderedIndexItem *pos;
@@ -1172,12 +1163,11 @@ TEST_P(OrderedIndexTest, RandomizedBackwardTraversal) {
 }
 
 TEST_P(OrderedIndexTest, RandomizedScoreRetrieval) {
-    std::mt19937 rng(42);
+    uint32_t rng = 42;
     for (int trial = 0; trial < 20; trial++) {
-        std::uniform_int_distribution<int> sizeDist(1, 50);
-        int n = sizeDist(rng);
+        int n = test_rand_range(&rng, 1, 50);
 
-        auto entries = test_build_random_index(api, oi, rng, n);
+        auto entries = test_build_random_index(api, oi, &rng, n);
 
         for (auto &e : entries) {
             assertScore(e.node, e.score);
@@ -1188,12 +1178,11 @@ TEST_P(OrderedIndexTest, RandomizedScoreRetrieval) {
 }
 
 TEST_P(OrderedIndexTest, RandomizedIndexConsistency) {
-    std::mt19937 rng(42);
+    uint32_t rng = 42;
     for (int trial = 0; trial < 20; trial++) {
-        std::uniform_int_distribution<int> sizeDist(1, 50);
-        int n = sizeDist(rng);
+        int n = test_rand_range(&rng, 1, 50);
 
-        test_build_random_index(api, oi, rng, n);
+        test_build_random_index(api, oi, &rng, n);
 
         OrderedIndexIterator iter;
         OrderedIndexItem *pos;
@@ -1214,15 +1203,13 @@ TEST_P(OrderedIndexTest, RandomizedIndexConsistency) {
 }
 
 TEST_P(OrderedIndexTest, RandomizedDelete) {
-    std::mt19937 rng(42);
+    uint32_t rng = 42;
     for (int trial = 0; trial < 20; trial++) {
-        std::uniform_int_distribution<int> sizeDist(2, 30);
-        int n = sizeDist(rng);
+        int n = test_rand_range(&rng, 2, 30);
 
-        auto entries = test_build_random_index(api, oi, rng, n);
+        auto entries = test_build_random_index(api, oi, &rng, n);
 
-        std::uniform_int_distribution<int> pickDist(0, n - 1);
-        int delIdx = pickDist(rng);
+        int delIdx = test_rand_range(&rng, 0, n - 1);
         api.deleteItem(oi, entries[delIdx].node);
 
         ASSERT_EQ(api.length(oi), (unsigned long)(n - 1));
@@ -1246,16 +1233,14 @@ TEST_P(OrderedIndexTest, RandomizedDelete) {
 }
 
 TEST_P(OrderedIndexTest, RandomizedUpdateScore) {
-    std::mt19937 rng(42);
+    uint32_t rng = 42;
     for (int trial = 0; trial < 20; trial++) {
-        std::uniform_int_distribution<int> sizeDist(2, 30);
-        int n = sizeDist(rng);
+        int n = test_rand_range(&rng, 2, 30);
 
-        auto entries = test_build_random_index(api, oi, rng, n);
+        auto entries = test_build_random_index(api, oi, &rng, n);
 
-        std::uniform_int_distribution<int> pickDist(0, n - 1);
-        int updIdx = pickDist(rng);
-        double newScore = test_random_score(rng);
+        int updIdx = test_rand_range(&rng, 0, n - 1);
+        double newScore = test_random_score(&rng);
 
         OrderedIndexItem *updated = api.updateScore(oi, entries[updIdx].node, newScore);
         ASSERT_NE(updated, nullptr);
@@ -1278,12 +1263,11 @@ TEST_P(OrderedIndexTest, RandomizedUpdateScore) {
 }
 
 TEST_P(OrderedIndexTest, RandomizedPop) {
-    std::mt19937 rng(42);
+    uint32_t rng = 42;
     for (int trial = 0; trial < 10; trial++) {
-        std::uniform_int_distribution<int> sizeDist(3, 30);
-        int n = sizeDist(rng);
+        int n = test_rand_range(&rng, 3, 30);
 
-        test_build_random_index(api, oi, rng, n);
+        test_build_random_index(api, oi, &rng, n);
 
         OrderedIndexIterator iter;
         OrderedIndexItem *pos;
@@ -1324,14 +1308,13 @@ TEST_P(OrderedIndexTest, RandomizedPop) {
 }
 
 TEST_P(OrderedIndexTest, RandomizedDeleteRangeByScore) {
-    std::mt19937 rng(42);
+    uint32_t rng = 42;
     for (int trial = 0; trial < 20; trial++) {
-        std::uniform_int_distribution<int> sizeDist(5, 40);
-        int n = sizeDist(rng);
+        int n = test_rand_range(&rng, 5, 40);
 
-        auto entries = test_build_random_index(api, oi, rng, n);
+        auto entries = test_build_random_index(api, oi, &rng, n);
 
-        double s1 = test_random_score(rng), s2 = test_random_score(rng);
+        double s1 = test_random_score(&rng), s2 = test_random_score(&rng);
         double lo = (std::min)(s1, s2), hi = (std::max)(s1, s2);
 
         int expectedDeleted = 0;
@@ -1361,15 +1344,13 @@ TEST_P(OrderedIndexTest, RandomizedDeleteRangeByScore) {
 }
 
 TEST_P(OrderedIndexTest, RandomizedDeleteRangeByIndex) {
-    std::mt19937 rng(42);
+    uint32_t rng = 42;
     for (int trial = 0; trial < 20; trial++) {
-        std::uniform_int_distribution<int> sizeDist(5, 40);
-        int n = sizeDist(rng);
+        int n = test_rand_range(&rng, 5, 40);
 
-        test_build_random_index(api, oi, rng, n);
+        test_build_random_index(api, oi, &rng, n);
 
-        std::uniform_int_distribution<int> idxDist(0, n - 1);
-        int r1 = idxDist(rng), r2 = idxDist(rng);
+        int r1 = test_rand_range(&rng, 0, n - 1), r2 = test_rand_range(&rng, 0, n - 1);
         unsigned long start = (unsigned long)(std::min)(r1, r2);
         unsigned long end = (unsigned long)(std::max)(r1, r2);
         unsigned long expectedDeleted = end - start + 1;
@@ -1397,12 +1378,11 @@ TEST_P(OrderedIndexTest, RandomizedDeleteRangeByIndex) {
 }
 
 TEST_P(OrderedIndexTest, RandomizedForwardBackwardMirror) {
-    std::mt19937 rng(42);
+    uint32_t rng = 42;
     for (int trial = 0; trial < 20; trial++) {
-        std::uniform_int_distribution<int> sizeDist(1, 50);
-        int n = sizeDist(rng);
+        int n = test_rand_range(&rng, 1, 50);
 
-        test_build_random_index(api, oi, rng, n);
+        test_build_random_index(api, oi, &rng, n);
 
         std::vector<double> forwardScores;
         OrderedIndexIterator iter;
@@ -1473,15 +1453,15 @@ TEST_P(OrderedIndexTest, CountScoreRangeEmpty) {
 TEST_P(OrderedIndexTest, CountLexRange) {
     for (int i = 0; i < FRUITS_COUNT; i++) insert(1.0, FRUITS[i]);
 
-    ASSERT_EQ(countLexRange("banana", "date"), 3UL);       /* Inclusive [banana, date] */
-    ASSERT_EQ(countLexRange("banana", "date", 1, 1), 1UL); /* Exclusive (banana, date) */
-    ASSERT_EQ(countLexRange("cherry", "cherry"), 1UL);     /* Single element */
-    ASSERT_EQ(countLexRange("fig", "grape"), 0UL);         /* No match */
-    ASSERT_EQ(countLexRange("a", "z"), 5UL);               /* All elements */
+    ASSERT_EQ(countLexRange("banana", "date", 0, 0), 3UL);   /* Inclusive [banana, date] */
+    ASSERT_EQ(countLexRange("banana", "date", 1, 1), 1UL);   /* Exclusive (banana, date) */
+    ASSERT_EQ(countLexRange("cherry", "cherry", 0, 0), 1UL); /* Single element */
+    ASSERT_EQ(countLexRange("fig", "grape", 0, 0), 0UL);     /* No match */
+    ASSERT_EQ(countLexRange("a", "z", 0, 0), 5UL);           /* All elements */
 }
 
 TEST_P(OrderedIndexTest, CountLexRangeEmpty) {
-    ASSERT_EQ(countLexRange("a", "z"), 0UL);
+    ASSERT_EQ(countLexRange("a", "z", 0, 0), 0UL);
 }
 
 /* ========== Instantiate parameterized tests for all implementations ========== */

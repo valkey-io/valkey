@@ -522,6 +522,7 @@ clusterNode *createClusterNode(char *nodename, int flags) {
     node->num_replicas = 0;
     node->replicas = NULL;
     node->replicaof = NULL;
+    node->orphaned_time = 0;
     node->outbound_link_attempt_time = 0;
     node->data_received = 0;
     node->link = NULL;

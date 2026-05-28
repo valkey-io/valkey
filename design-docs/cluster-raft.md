@@ -86,7 +86,7 @@ The address string uses the nodes.conf format:
 - **Joiner**: A singleton that stepped down to join another cluster.
   Cannot vote, propose, or form a cluster. Waits for AE from the
   leader to receive its NODE_JOIN entry. Reverts to singleton leader
-  after 3× cluster-node-timeout if no AE arrives.
+  after 4× cluster-node-timeout if no AE arrives.
 - **Follower**: Participates in elections and counts for quorum.
   Promoted from joiner when the node's NODE_JOIN entry is applied.
 - **Candidate**: Requesting votes after election timeout.
@@ -206,6 +206,11 @@ was successfully sent but the leader died before committing, the
 proposal is retried. Duplicate proposals are harmless because all
 entry types are idempotent at apply time.
 
+Pending proposals expire after 3× cluster-node-timeout. This covers
+election detection (1–2× node-timeout), the election itself (~1×),
+plus margin. If a proposal expires, the client receives a timeout
+error.
+
 ## Link Identification (HELLO/HI)
 
 HELLO is sent on every new outbound connection. HI is the reply on
@@ -254,7 +259,11 @@ to joiner, it cannot:
 
 The worst case on crash is liveness failure (orphaned joiners), not
 safety violation (disjoint clusters). Joiners revert to singleton
-leader after 3× cluster-node-timeout.
+leader after 4× cluster-node-timeout — intentionally longer than
+the proposal expiry (3× cluster-node-timeout) to avoid a race: if
+a re-proposed NODE_JOIN commits and AE is sent to the joiner, the
+joiner must still be waiting. If it reverts first, it bumps its
+term and rejects AE, potentially disrupting the cluster's leader.
 
 ### Deferred MEET
 

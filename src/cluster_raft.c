@@ -1690,7 +1690,7 @@ static void clusterRaftCron(void) {
     /* Joiner timeout: if we stepped down to join a cluster but never
      * received AE, revert to singleton leader so the admin can retry. */
     if (rs->role == RAFT_ROLE_JOINER &&
-        now - rs->joiner_since > server.cluster_node_timeout * 3) {
+        now - rs->joiner_since > server.cluster_node_timeout * 4) {
         serverLog(LL_NOTICE, "Joiner timed out waiting to be added, reverting to singleton leader.");
         rs->role = RAFT_ROLE_LEADER;
         rs->current_term++;

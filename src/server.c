@@ -4763,6 +4763,9 @@ int prepareForShutdown(client *c, int flags) {
     }
     if (server.supervised_mode == SUPERVISED_SYSTEMD) serverCommunicateSystemd("STOPPING=1\n");
 
+    /* Allow the cluster protocol to initiate graceful handoff (e.g. leader transfer). */
+    if (server.cluster_enabled) clusterPrepareShutdown();
+
     /* If we have any replicas, let them catch up the replication offset before
      * we shut down, to avoid data loss. */
     if (!(flags & SHUTDOWN_NOW) && server.shutdown_timeout != 0 && !isReadyToShutdown()) {

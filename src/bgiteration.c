@@ -18,9 +18,6 @@ robj *createStringObjectWithKeyAndExpire(const char *ptr, size_t len, const sds 
 
 
 // Non-public hashtable/kvstore functions...
-bool hashtableInternalFindBucketIdx(hashtable *ht, void *key, int *table_idx, size_t *bucket_idx);
-void hashtableInternalIteratorGetBucketIdx(hashtableIterator *iterator, int *table_idx, size_t *bucket_idx);
-bool hashtableInternalIteratorIsBucketIdxComplete(hashtableIterator *iterator);
 hashtableIterator *kvstoreInternalIteratorGetCurrentHashtableIterator(kvstoreIterator *kvs_it);
 
 
@@ -107,7 +104,7 @@ static bool getTargetDbIdForCopyCommand(int argc, robj **argv, int selected_dbid
  * The optional permission_client allows for checking of a client's permission for swapdb.
  * Returns true if command would be executed.
  */
-bool getParamsForSwapdb(int argc, robj **argv, client *permission_client, int *id1_p, int *id2_p) {
+static bool getParamsForSwapdb(int argc, robj **argv, client *permission_client, int *id1_p, int *id2_p) {
     static struct serverCommand *swapdb_cmd = NULL;
 
     // We don't need to check permissions in the replication phase
@@ -140,7 +137,7 @@ bool getParamsForSwapdb(int argc, robj **argv, client *permission_client, int *i
  * The optional permission_client allows for checking of a client's permission for select.
  * Returns true if command would be executed.
  */
-bool getParamsForSelect(int argc, robj **argv, client *permission_client, int *dbid_p) {
+static bool getParamsForSelect(int argc, robj **argv, client *permission_client, int *dbid_p) {
     static struct serverCommand *select_cmd = NULL;
 
     // We don't need to check permissions in the replication phase
@@ -164,6 +161,15 @@ bool getParamsForSelect(int argc, robj **argv, client *permission_client, int *d
     return true;
 }
 
+static void pauseReshahForKvsHashtable(kvstore *kvs, int didx) {
+    hashtable *ht = kvstoreGetHashtable(kvs, didx);
+    if (ht != NULL) hashtablePauseRehashing(ht);
+}
+
+static void resumeReshahForKvsHashtable(kvstore *kvs, int didx) {
+    hashtable *ht = kvstoreGetHashtable(kvs, didx);
+    if (ht != NULL) hashtableResumeRehashing(ht);
+}
 
 /* DictType for SDS->ptr.  The SDS is referenced, no destructor. */
 static dictType sdsrefToPtrDictType = {
@@ -482,25 +488,34 @@ struct fullScanIterator {
     int iter_db;
 
     // Iterator for the DB orig_to_cur_db[iter_db]
-    kvstore *kvs; // keep track of kvs associated with iter_dbi
-    kvstoreIterator *iter_dbi;
+    kvstore *kvs;     // keep track of kvs associated with iter_dbi
+    int kvs_didx;     // hashtable index within the kvstore
+    size_t ht_cursor; // cursor for scanning hashtable
 };
 
 static void fullScanIteratorRelease(genericIterator *genIt) {
     struct fullScanIterator *it = (struct fullScanIterator *)genIt;
-    if (it->iter_dbi) kvstoreIteratorRelease(it->iter_dbi);
+    if (it->kvs) resumeReshahForKvsHashtable(it->kvs, it->kvs_didx);
     zfree(it->orig_to_cur_db);
     zfree(it->cur_to_orig_db);
     zfree(it);
 }
 
-static fifo * fullScanIteratorGetEntries(genericIterator *genIt, int *orig_dbid, int *cur_dbid) {
+/* Scan callback used by fullScanIteratorGetEntries2 to collect entries into a fifo. */
+static void fullScanIteratorScanCallback(void *privdata, void *entry) {
+    fifo *dbEntryFifo = (fifo *)privdata;
+    dbEntry *de = (dbEntry *)entry;
+    if (ignoreKeyForSave(objectGetKey(de))) return; // slot migration: keys being purged
+    fifoPush(dbEntryFifo, de);
+}
+
+static fifo *fullScanIteratorGetEntries(genericIterator *genIt, int *orig_dbid, int *cur_dbid) {
     struct fullScanIterator *it = (struct fullScanIterator *)genIt;
     if (it->iter_db >= server.dbnum) return NULL; // Finished scanning
 
     fifo *dbEntryFifo = fifoCreate();
     while (fifoLength(dbEntryFifo) == 0) {
-        while (it->iter_dbi == NULL) {
+        while (it->kvs == NULL) {
             if (++it->iter_db >= server.dbnum) {
                 fifoRelease(dbEntryFifo);
                 return NULL; // Iteration complete
@@ -508,23 +523,27 @@ static fifo * fullScanIteratorGetEntries(genericIterator *genIt, int *orig_dbid,
             serverDb *db = server.db[it->orig_to_cur_db[it->iter_db]];
             if (db != NULL) {
                 it->kvs = db->keys;
-                it->iter_dbi = kvstoreIteratorInit(it->kvs, HASHTABLE_ITER_SAFE);
+                it->kvs_didx = kvstoreGetFirstNonEmptyHashtableIndex(it->kvs);
+                it->ht_cursor = 0;
+                if (it->kvs_didx == KVSTORE_INDEX_NOT_FOUND) it->kvs = NULL;
+                if (it->kvs != NULL) pauseReshahForKvsHashtable(it->kvs, it->kvs_didx);
             }
         }
 
-        hashtableIterator *ht_it = NULL;
-        do {
-            dbEntry *de;
-            if (!kvstoreIteratorNext(it->iter_dbi, (void **)&de)) {
-                kvstoreIteratorRelease(it->iter_dbi);
-                it->kvs = NULL, it->iter_dbi = NULL;
-                break;
-            }
+        hashtable *ht = kvstoreGetHashtable(it->kvs, it->kvs_didx);
+        if (ht) {
+            it->ht_cursor = hashtableScan(ht, it->ht_cursor, fullScanIteratorScanCallback, dbEntryFifo);
+        } else {
+            it->ht_cursor = 0;
+        }
 
-            ht_it = kvstoreInternalIteratorGetCurrentHashtableIterator(it->iter_dbi);
-            if (ignoreKeyForSave(objectGetKey(de))) continue; // slot migration: keys being purged
-            fifoPush(dbEntryFifo, de);
-        } while (!hashtableInternalIteratorIsBucketIdxComplete(ht_it));
+        if (it->ht_cursor == 0) {
+            /* Done with this hashtable, move to next. */
+            resumeReshahForKvsHashtable(it->kvs, it->kvs_didx);
+            it->kvs_didx = kvstoreGetNextNonEmptyHashtableIndex(it->kvs, it->kvs_didx);
+            if (it->kvs_didx == KVSTORE_INDEX_NOT_FOUND) it->kvs = NULL;
+            if (it->kvs != NULL) pauseReshahForKvsHashtable(it->kvs, it->kvs_didx);
+        }
     }
     *orig_dbid = it->iter_db;
     *cur_dbid = it->orig_to_cur_db[*orig_dbid];
@@ -546,8 +565,7 @@ static void fullScanIteratorFlushDb(genericIterator *genIt, int cur_dbid) {
     int orig_db = it->cur_to_orig_db[cur_dbid];
     if (orig_db == it->iter_db) {
         // We are currently iterating on the DB that's being flushed.
-        kvstoreIteratorRelease(it->iter_dbi);
-        it->kvs = NULL, it->iter_dbi = NULL;
+        it->kvs = NULL;
         // Iteration will continue with the next DB.
     }
 }
@@ -560,33 +578,22 @@ static bool fullScanIteratorHasPassedItem(genericIterator *genIt, const_sds key,
     if (orig_dbid > it->iter_db) return false; // Haven't started this DB yet
     // Now, orig_dbid == it->iter_db
 
-    if (it->iter_dbi == NULL) return true; // just finished this DB
+    if (it->kvs == NULL) return true; // just finished this DB
 
     // We're in the middle of processing a DB.  In cluster-mode, the DB is divided into 1 hashtable
     //  per slot.  In cluster-mode-disabled, we treat all keys as in slot 0.
     int keySlot = server.cluster_enabled ? getKeySlot((sds)key) : 0;
-    if (keySlot < kvstoreIteratorGetCurrentHashtableIndex(it->iter_dbi)) return true;
-    if (keySlot > kvstoreIteratorGetCurrentHashtableIndex(it->iter_dbi)) return false;
+    if (keySlot < it->kvs_didx) return true;
+    if (keySlot > it->kvs_didx) return false;
 
     // At this point, we're down to a specific hashtable.
 
-    hashtable *iter_current_ht = kvstoreGetHashtable(it->kvs, keySlot);
-    int table; // 0 or 1 (supporting rehashing)
-    size_t index; // bucket number within the hashtable
+    hashtable *ht = kvstoreGetHashtable(it->kvs, keySlot);
     // If key doesn't exist, we consider it passed - we MIGHT have iterated over it had it existed.
-    if (!hashtableInternalFindBucketIdx(iter_current_ht, (void *)key, &table, &index)) return true;
+    if (!hashtableFind(ht, key, NULL)) return true;
 
-    hashtableIterator *htIter = kvstoreInternalIteratorGetCurrentHashtableIterator(it->iter_dbi);
-    int iter_table;
-    size_t iter_index;
-    hashtableInternalIteratorGetBucketIdx(htIter, &iter_table, &iter_index);
-    if (table < iter_table) return true;  // iteration in table 1, but item is in table 0
-    if (table > iter_table) return false; // iteration in table 0, but item is in table 1
-    // if index <= iterator index, it has been passed. bgIterator
-    // processes buckets atomically. hashtableIterator points to the
-    // last returned position. It means bucket at iter_index has
-    // already been processed.
-    if (index <= iter_index) return true;
+    if (hashtableScanHasPassedKey(ht, key, it->ht_cursor)) return true;
+
     if (ignoreKeyForSave(key)) return true; // if slot being purged, pretend we have passed it
     return false;
 }
@@ -612,7 +619,6 @@ static genericIterator * fullScanIteratorCreate(void) {
     }
     it->iter_db = -1;
     it->kvs = NULL;
-    it->iter_dbi = NULL;
 
     it->callbacks.release = fullScanIteratorRelease;
     it->callbacks.getEntries = fullScanIteratorGetEntries;
@@ -1037,7 +1043,6 @@ static void feedIterator(bgIterator *it, monotime end_time_us) {
             }
 
             bgIteratorItem *item = makeDbEntryItem(de, dbid, false);
-
             fifoPush(itemsToAdd, item);
         }
         fifoRelease(dbEntryFifo);

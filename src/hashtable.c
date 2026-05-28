@@ -214,8 +214,6 @@ static_assert(100 * BUCKET_DIVISOR / BUCKET_FACTOR / ENTRIES_PER_BUCKET <= MAX_F
               "Expand must result in a fill below the soft max fill factor");
 static_assert(MAX_FILL_PERCENT_SOFT <= MAX_FILL_PERCENT_HARD, "Soft vs hard fill factor");
 
-#define ITERATOR_DONE_WITH_BUCKET_IDX (ENTRIES_PER_BUCKET + 1)
-
 /* --- Random entry --- */
 
 #define FAIR_RANDOM_SAMPLE_SIZE (ENTRIES_PER_BUCKET * 10)
@@ -2246,7 +2244,6 @@ bool hashtableNext(hashtableIterator *iterator, void **elemptr) {
     /* Check if iterator has been invalidated */
     if (iter->hashtable == NULL) return false;
 
-    // clang-format off
     while (1) {
         if (iter->index == -1 && iter->table == 0) {
             /* It's the first call to next. */
@@ -2272,9 +2269,7 @@ bool hashtableNext(hashtableIterator *iterator, void **elemptr) {
              * child bucket in a chain, or to the next bucket index, or to the
              * next table. */
             iter->pos_in_bucket++;
-            if (iter->bucket->chained
-                    && iter->pos_in_bucket >= ENTRIES_PER_BUCKET - 1
-                    && iter->pos_in_bucket != ITERATOR_DONE_WITH_BUCKET_IDX + 1) {
+            if (iter->bucket->chained && iter->pos_in_bucket >= ENTRIES_PER_BUCKET - 1) {
                 iter->pos_in_bucket = 0;
                 iter->bucket = getChildBucket(iter->bucket);
             } else if (iter->pos_in_bucket >= ENTRIES_PER_BUCKET) {
@@ -2326,7 +2321,6 @@ bool hashtableNext(hashtableIterator *iterator, void **elemptr) {
         }
         return true;
     }
-    // clang-format on
     return false;
 }
 

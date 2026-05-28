@@ -241,7 +241,8 @@ robj *activeDefragStringOb(robj *ob) {
  * the hashtable's pointer to it. */
 static void defragZsetNodeCallback(OrderedIndexItem *old_item, OrderedIndexItem *new_item, void *ctx) {
     hashtable *ht = ctx;
-    hashtableReplaceReallocatedEntry(ht, old_item, new_item);
+    bool replaced = hashtableReplaceReallocatedEntry(ht, old_item, new_item);
+    serverAssert(replaced);
     server.stat_active_defrag_scanned++;
 }
 

@@ -517,6 +517,6 @@ int skiplistVerifyIntegrity(OrderedIndex *oi, char *errmsg, size_t errmsg_len) {
     }
 
 #undef FAIL
-    errmsg[0] = '\0';
+    if (errmsg_len > 0) errmsg[0] = '\0';
     return 1;
 }

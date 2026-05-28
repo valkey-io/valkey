@@ -319,11 +319,95 @@ down prematurely and defer the MEET.
 
 ### Membership changes
 
-Nodes are added and removed one at a time using NODE_JOIN and
-NODE_FORGET log entries. Adding or removing a single server at a
-time is safe without joint consensus, as described in the Raft
-dissertation (Ongaro, 2014, p. 51):
-https://web.stanford.edu/~ouster/cgi-bin/papers/OngaroPhD.pdf
+Nodes are added and removed using NODE_JOIN and NODE_FORGET log
+entries.
+
+**Config takes effect on apply, not on append.** Quorum is computed
+from `server.cluster->size`, which is updated when NODE_JOIN is
+applied (after commit). This differs from Ongaro's single-server
+approach (§4.1) where the new configuration takes effect when the
+entry is appended to the log.
+
+**Implications of config-on-apply:**
+
+1. Multiple NODE_JOINs can be in flight simultaneously. The leader
+   does not need to wait for one to commit before proposing the next.
+   This enables fast cluster formation (all nodes invited in one
+   batch).
+
+2. NODE_JOIN is committed using the **old** quorum (the cluster size
+   before the new node is added). For example, adding D to {A,B,C}
+   requires 2 ACKs (majority of 3), not 3 ACKs (majority of 4).
+
+3. If a leader election truncates uncommitted NODE_JOINs, no
+   configuration rollback is needed — the config never took effect.
+   Affected nodes time out as joiners and revert to singleton leaders.
+
+4. Joint consensus is not needed. The quorum transitions atomically
+   at apply time in a single step.
+
+**Comparison to config-on-append (Ongaro §4.1):**
+
+With config-on-append, the new quorum is used to commit the
+membership entry itself. This guarantees the new node has the entry
+before it takes effect, eliminating any window of reduced redundancy.
+However, it adds complexity:
+
+- Only one membership change can be in flight at a time (the leader
+  must wait for commit before proposing the next change).
+- If the entry is truncated after append but before commit, nodes
+  must roll back to the previous configuration.
+- The new node must be caught up before the entry is proposed
+  (otherwise it can't ACK in time, stalling the commit).
+
+**Safety of committing with old quorum — known limitation:**
+
+After committing NODE_JOIN(F) to {A,B,C,D,E} with old quorum
+(3 ACKs), the nodes that have the entry operate at size=6
+(quorum=4), while nodes that don't have it still believe size=5
+(quorum=3). This split in quorum views can violate safety:
+
+Example (size 5→6): 3 nodes have the entry (size=6 view). The
+other 3 nodes don't have it (size=5 view, quorum=3). If 2 of the
+3 nodes with the entry crash, the 3 nodes without it can elect a
+leader among themselves (they have quorum=3 under their view). That
+leader overwrites the entry via log truncation. The committed
+NODE_JOIN is lost.
+
+For size 3→4: 2 nodes have the entry (size=4 view). The other 2
+don't (size=3 view, quorum=2). If 1 node with the entry crashes,
+the 2 without can elect a leader (quorum=2 under their view).
+
+The root cause: nodes disagree on cluster size, leading to two
+different quorum calculations coexisting. This is exactly what
+Ongaro's config-on-append prevents — by making all nodes adopt the
+new config immediately on append, they all agree on quorum.
+
+In practice, this requires crashes within the brief window between
+commit and AE delivery. The leader sends AE immediately after
+commit, so the window is one network round-trip. Once AE is
+delivered, all nodes agree on the new size and the split disappears.
+
+**Worst case if this occurs:** The new node is orphaned — it stepped
+down to joiner but its NODE_JOIN was lost. It reverts to singleton
+leader after timeout. The CLUSTER MEET client already returned OK,
+so the admin believes the node joined. No data loss or split brain
+occurs (the node never had slots). The admin can detect the issue
+via CLUSTER NODES and retry CLUSTER MEET.
+
+**Accepted tradeoff:** We accept this limitation because:
+- The window is extremely brief (one AE round-trip after commit).
+- It enables fast cluster formation (multiple NODE_JOINs in flight,
+  no need to catch up the new node before committing).
+- It avoids the complexity of config-on-append or joint consensus.
+- Kafka's KRaft uses the same approach.
+
+**Future fix:** To eliminate this window entirely, use either
+config-on-append (Ongaro §4.1, where the new configuration takes
+effect on append and its quorum is used for commit) or joint
+consensus (§4.3). Both require the new node to receive AE as a
+non-voting member before its NODE_JOIN is committed, adding
+complexity to the leader's replication logic.
 
 ## Failure Detection
 

@@ -612,8 +612,7 @@ static bucket *fetchEntriesForExpand(bucket *b, void *buf[], int *size, int max_
 
 /* Processes one bucket chain during incremental table expansion.
  * Uses batch processing to optimize memory access patterns. */
-// Not API, but not static - used in unit testing
-void rehashStepExpand(hashtable *ht) {
+static void rehashStepExpand(hashtable *ht) {
     void *entry_buf[FETCH_ENTRY_BUFFER_SIZE_WHEN_EXPAND];
     const void *key_buf[FETCH_ENTRY_BUFFER_SIZE_WHEN_EXPAND];
     size_t idx = ht->rehash_idx;

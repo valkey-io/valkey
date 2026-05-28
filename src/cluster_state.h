@@ -67,6 +67,7 @@ struct clusterNode {
     clusterLink *inbound_link;              /* TCP/IP link accepted from this node */
     int is_node_healthy;                    /* Boolean indicating the cached node health.
                                                Update with updateAndCountChangedNodeHealth(). */
+    mstime_t orphaned_time;                 /* Starting time of orphaned primary condition */
     void *protocol_data;                    /* Protocol-specific data (e.g. clusterNodeLegacyData) */
 };
 

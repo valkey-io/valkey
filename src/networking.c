@@ -6532,31 +6532,16 @@ void evictClients(void) {
     size_t client_eviction_limit = getClientEvictionLimit();
     if (client_eviction_limit == 0) return;
 
-    /* Variable to track memory of clients marked for close but not yet freed */
-    size_t pending_freed = 0;
-
     while (server.stat_clients_type_memory[CLIENT_TYPE_NORMAL] +
-               server.stat_clients_type_memory[CLIENT_TYPE_PUBSUB] -
-               pending_freed >
+               server.stat_clients_type_memory[CLIENT_TYPE_PUBSUB] >
            client_eviction_limit) {
         listNode *ln = listNext(&bucket_iter);
         if (ln) {
             client *c = ln->value;
-            if (c->flag.close_asap) {
-                /* Already scheduled to close. Count memory as freed and skip. */
-                pending_freed += getClientMemoryUsage(c, NULL);
-                continue;
-            }
             sds ci = catClientInfoString(sdsempty(), c, server.hide_user_data_from_log);
             serverLog(LL_NOTICE, "Evicting client: %s", ci);
+            if (freeClient(c)) server.stat_evictedclients++;
             sdsfree(ci);
-            server.stat_evictedclients++;
-
-            if (freeClient(c) == 0) {
-                /* Protected client (async close). Count memory as freed and skip. */
-                pending_freed += getClientMemoryUsage(c, NULL);
-                continue;
-            }
         } else {
             curr_bucket--;
             if (curr_bucket < 0) {

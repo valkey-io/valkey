@@ -2733,7 +2733,11 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
 
             streamCG *cgroup = streamCreateCG(s, cgname, sdslen(cgname), &cg_id, cg_offset);
             if (cgroup == NULL) {
-                rdbReportCorruptRDB("Duplicated consumer group name %s", cgname);
+                if (server.hide_user_data_from_log) {
+                    rdbReportCorruptRDB("Duplicated consumer group name");
+                } else {
+                    rdbReportCorruptRDB("Duplicated consumer group name %s", cgname);
+                }
                 decrRefCount(o);
                 sdsfree(cgname);
                 return NULL;

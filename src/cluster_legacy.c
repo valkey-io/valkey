@@ -55,8 +55,8 @@
 #define LEGACY_STATE() ((clusterLegacyState *)server.cluster->protocol_data)
 
 /* Legacy-specific defines. */
-#define CLUSTER_FAIL_REPORT_VALIDITY_MULT 2  /* Fail report validity. */
-#define CLUSTER_FAIL_UNDO_TIME_MULT 2        /* Undo fail if primary is back. */
+#define CLUSTER_FAIL_REPORT_VALIDITY_MULT 2 /* Fail report validity. */
+#define CLUSTER_FAIL_UNDO_TIME_MULT 2       /* Undo fail if primary is back. */
 
 /* clusterState todo_before_sleep flags. */
 #define CLUSTER_TODO_HANDLE_FAILOVER (1 << 0)

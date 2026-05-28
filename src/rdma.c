@@ -1808,13 +1808,6 @@ static void postPoneUpdateRdmaState(struct connection *conn, int postpone_mask) 
     rdma_conn->postpone_mask = postpone_mask;
 }
 
-static int rdmaPostReadDonePostponeMask(struct connection *conn, client *c) {
-    UNUSED(conn);
-    int mask = CONN_POSTPONE_READ;
-    if (c && c->io_write_state != CLIENT_IDLE) mask |= CONN_POSTPONE_WRITE;
-    return mask;
-}
-
 static void updateRdmaState(struct connection *conn) {
     rdma_connection *rdma_conn = (rdma_connection *)conn;
     connRdmaSetRwHandler(conn);
@@ -1865,7 +1858,6 @@ static ConnectionType CT_RDMA = {
     .process_pending_data = rdmaProcessPendingData,
     .postpone_update_state = postPoneUpdateRdmaState,
     .update_state = updateRdmaState,
-    .post_read_done_postpone_mask = rdmaPostReadDonePostponeMask,
 
     /* Miscellaneous */
     .connIntegrityChecked = NULL,

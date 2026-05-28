@@ -199,14 +199,6 @@ static size_t clientReplyAllocSize(clientReplyBlock *block) {
     return sizeof(clientReplyBlock) + block->size;
 }
 
-/* Absolute postpone mask from client IO offload state (not artificial READ hold). */
-int clientConnPostponeMaskFromIOState(client *c) {
-    int mask = 0;
-    if (c->io_read_state != CLIENT_IDLE) mask |= CONN_POSTPONE_READ;
-    if (c->io_write_state != CLIENT_IDLE) mask |= CONN_POSTPONE_WRITE;
-    return mask;
-}
-
 /* Postpone mask from client input/command state. Hold READ only while parsed pipeline
  * commands are still in cmd_queue (must be consumed via processInputBuffer, not a new
  * parseInputBuffer). Do not use multibulklen or pending_command here: incomplete parses
@@ -6568,7 +6560,8 @@ int processClientIOReadsDone(client *c) {
     int needs_post_read_update = 0;
 
     if (!in_accept_state && c->conn) {
-        int mask = connPostReadDonePostponeMask(c->conn, c);
+        int mask = CONN_POSTPONE_READ;
+        if (c->io_write_state != CLIENT_IDLE) mask |= CONN_POSTPONE_WRITE;
         needs_post_read_update = (mask & CONN_POSTPONE_READ) != 0;
         connSetPostponeUpdateState(c->conn, mask);
         connUpdateState(c->conn);

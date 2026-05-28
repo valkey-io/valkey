@@ -94,8 +94,6 @@ static inline const char *getConnectionTypeName(int type) {
 
 typedef void (*ConnectionCallbackFunc)(struct connection *conn);
 
-struct client;
-
 typedef struct ConnectionType {
     /* connection type */
     int (*get_type)(void);
@@ -149,8 +147,6 @@ typedef struct ConnectionType {
     void (*postpone_update_state)(struct connection *conn, int postpone_mask);
     /* Called by the main-thread */
     void (*update_state)(struct connection *conn);
-    /* Absolute postpone mask after IO-thread read completes (NULL => 0). */
-    int (*post_read_done_postpone_mask)(struct connection *conn, struct client *c);
 
     /* TLS specified methods */
     sds (*get_peer_cert)(struct connection *conn);
@@ -528,11 +524,6 @@ static inline void connSetPostponeUpdateState(connection *conn, int postpone_mas
     if (conn && conn->type && conn->type->postpone_update_state) {
         conn->type->postpone_update_state(conn, postpone_mask);
     }
-}
-
-static inline int connPostReadDonePostponeMask(connection *conn, struct client *c) {
-    if (!conn || !conn->type || !conn->type->post_read_done_postpone_mask) return 0;
-    return conn->type->post_read_done_postpone_mask(conn, c);
 }
 
 static inline int connIsIntegrityChecked(connection *conn) {

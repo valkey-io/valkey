@@ -2641,7 +2641,11 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error) {
 
             streamCG *cgroup = streamCreateCG(s, cgname, sdslen(cgname), &cg_id, cg_offset);
             if (cgroup == NULL) {
-                rdbReportCorruptRDB("Duplicated consumer group name %s", cgname);
+                if (server.hide_user_data_from_log) {
+                    rdbReportCorruptRDB("Duplicated consumer group name");
+                } else {
+                    rdbReportCorruptRDB("Duplicated consumer group name %s", cgname);
+                }
                 decrRefCount(o);
                 sdsfree(cgname);
                 return NULL;
@@ -3311,7 +3315,13 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
              * in an RDB file, instead we will silently discard it and
              * continue loading. */
             if (error == RDB_LOAD_ERR_EMPTY_KEY) {
-                if (empty_keys_skipped++ < 10) serverLog(LL_NOTICE, "rdbLoadObject skipping empty key: %s", key);
+                if (empty_keys_skipped++ < 10) {
+                    if (server.hide_user_data_from_log) {
+                        serverLog(LL_NOTICE, "rdbLoadObject skipping empty key");
+                    } else {
+                        serverLog(LL_NOTICE, "rdbLoadObject skipping empty key: %s", key);
+                    }
+                }
                 sdsfree(key);
             } else {
                 sdsfree(key);
@@ -3349,7 +3359,11 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
                     added = dbAddRDBLoad(db, key, &val);
                     serverAssert(added);
                 } else {
-                    serverLog(LL_WARNING, "RDB has duplicated key '%s' in DB %d", key, db->id);
+                    if (server.hide_user_data_from_log) {
+                        serverLog(LL_WARNING, "RDB has duplicated key in DB %d", db->id);
+                    } else {
+                        serverLog(LL_WARNING, "RDB has duplicated key '%s' in DB %d", key, db->id);
+                    }
                     serverPanic("Duplicated key found in RDB file");
                 }
             }

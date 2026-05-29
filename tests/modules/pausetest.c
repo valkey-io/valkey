@@ -47,7 +47,7 @@ void timerReplicateHandler(ValkeyModuleCtx *ctx, void *data) {
 }
 
 /* Timer callback: VM_ReplicateVerbatim.
- * We need to execute a command first so there's something to replicate verbatim. */
+ * Tests that ReplicateVerbatim is rejected when replica traffic is paused. */
 void timerVerbatimHandler(ValkeyModuleCtx *ctx, void *data) {
     UNUSED(data);
     int ret = ValkeyModule_ReplicateVerbatim(ctx);

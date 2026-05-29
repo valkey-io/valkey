@@ -17,7 +17,7 @@ start_server {tags {"modules needs:repl"}} {
             fail "Replica did not connect"
         }
 
-        test {Module timer VM_Call crashes server during CLIENT PAUSE WRITE with replica} {
+        test {VM_Call write command returns error during CLIENT PAUSE WRITE with replica} {
             $primary PAUSETEST.TIMER_CALL 200
             $primary CLIENT PAUSE 60000 WRITE
             after 500
@@ -45,7 +45,7 @@ start_server {tags {"modules needs:repl"}} {
             fail "Replica did not connect"
         }
 
-        test {Module timer VM_Replicate crashes server during CLIENT PAUSE WRITE with replica} {
+        test {VM_Replicate returns error during CLIENT PAUSE WRITE with replica} {
             $primary PAUSETEST.TIMER_REPLICATE 200
             $primary CLIENT PAUSE 60000 WRITE
             after 500
@@ -71,7 +71,7 @@ start_server {tags {"modules needs:repl"}} {
             fail "Replica did not connect"
         }
 
-        test {Module timer VM_ReplicateVerbatim crashes server during CLIENT PAUSE WRITE with replica} {
+        test {VM_ReplicateVerbatim returns error during CLIENT PAUSE WRITE with replica} {
             $primary PAUSETEST.TIMER_VERBATIM 200
             $primary CLIENT PAUSE 60000 WRITE
             after 500

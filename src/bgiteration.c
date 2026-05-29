@@ -218,6 +218,13 @@ enum {
     BGITER_CYCLE_BUDGET_MAX_MS = 10                    // Maximum time limit when starvation seen
 };
 
+// dbEntry metadata
+typedef struct {
+    uint32_t iterator_epoch; // iterator epoch of last modification
+} bgIterationEntryMetadata;
+static_assert(sizeof(bgIterationEntryMetadata) == BGITERATION_ENTRY_METADATA_SIZE, "");
+
+
 // These can be tweaked by unit tests
 static int bgiter_max_clone_item_bytes = BGITER_MAX_CLONE_ITEM_BYTES;
 static int bgiter_max_clone_pool_bytes = BGITER_MAX_CLONE_POOL_BYTES;
@@ -2721,8 +2728,20 @@ bool bgIteration_isEntryInuse(dbEntry *de) {
 
 
 // PUBLIC API
-uint32_t bgIteration_getEpoch(void) {
-    return bgIteration_epoch;
+void bgIteration_dbEntryModified(dbEntry *de) {
+    if (bgIteration_iterationActive()) {
+        bgIterationEntryMetadata *md = (bgIterationEntryMetadata *)objectGetMetadata(de);
+        if (md) md->iterator_epoch = bgIteration_epoch;
+    }
+}
+
+
+// PUBLIC API
+void bgIteration_keyModified(int dbid, const_sds key) {
+    if (bgIteration_iterationActive()) {
+        dbEntry *de = dbFind(server.db[dbid], (sds)key);
+        if (de) bgIteration_dbEntryModified(de);
+    }
 }
 
 

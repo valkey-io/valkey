@@ -3027,7 +3027,7 @@ void initServer(void) {
          * if/when new metadata options are added, we will need to compute the size of a variable
          * size metadata, and provide appropriate accessors to access the specific portion of the
          * metadata (each of which may/may not exist, based on immutable startup parameters).  */
-        objectSetMetadataSize(sizeof(bgIterationEntryMetadata));
+        objectSetMetadataSize(BGITERATION_ENTRY_METADATA_SIZE);
     }
 
     createDatabaseIfNeeded(0); /* The default database should always exist */

@@ -15,11 +15,15 @@ optin = "optin"
 smove = "smove"
 Parth = "Parth" # seems like the spellchecker does not like it is similar to "Path"
 nd = "nd"
+threadsave = "threadsave"
+
+[default.extend-identifiers]
+dbe = "dbe"
 
 [default]
 extend-ignore-re = [
-    "SELECTed",
-    "WATCHed",
+    "[A-Z]{2,}ed", # SELECTed, WATCHed, etc.
+    "[A-Z]{2,}s",  # SELECTs, etc.
 ]
 
 [type.c]
@@ -65,6 +69,9 @@ pn = "pn"
 seeked = "seeked"
 tre = "tre"
 
+[type.cpp.extend-words]
+fo = "fo"
+
 [type.systemd.extend-words]
 # systemd = .conf
 ake = "ake"
@@ -72,6 +79,3 @@ ake = "ake"
 [type.tcl.extend-words]
 fo = "fo"
 tre = "tre"
-
-[type.cpp.extend-words]
-fo = "fo"

@@ -6559,10 +6559,13 @@ int processClientIOReadsDone(client *c) {
     int in_accept_state = (connGetState(c->conn) == CONN_STATE_ACCEPTING);
     int needs_post_read_update = 0;
 
-    if (!in_accept_state && c->conn) {
-        int mask = CONN_POSTPONE_READ;
-        if (c->io_write_state != CLIENT_IDLE) mask |= CONN_POSTPONE_WRITE;
-        needs_post_read_update = (mask & CONN_POSTPONE_READ) != 0;
+    if (c->conn) {
+        int mask = 0;
+        if (!in_accept_state) {
+            mask |= CONN_POSTPONE_READ;
+            if (c->io_write_state != CLIENT_IDLE) mask |= CONN_POSTPONE_WRITE;
+            needs_post_read_update = 1;
+        }
         connSetPostponeUpdateState(c->conn, mask);
         connUpdateState(c->conn);
     }

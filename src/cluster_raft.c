@@ -13,24 +13,23 @@
  * Invariants:
  * - server.cluster->size counts nodes with a committed NODE_JOIN entry.
  *   Initialized to 0; incremented by NODE_JOIN apply, decremented by
- *   NODE_FORGET apply.
- * - Every node in the cluster has a NODE_JOIN entry in the log, including
- *   the singleton leader (committed when it first learns its own IP).
+ *   NODE_FORGET apply. (This is used for computing the quorum.)
+ * - The first log entry referencing any node is its NODE_JOIN. Other
+ *   entry types (SLOT_CHANGE, SET_REPLICA_OF, etc.) are only proposed
+ *   after the node's NODE_JOIN is in the log.
  * - CLUSTER_NODE_MEET means "not yet in the raft log" — set on all
  *   nodes (including myself) at creation, cleared on NODE_JOIN apply.
- * - NODE_INFO is not proposed while MEET is set or myself->ip is
- *   empty, to avoid overwriting correct IPs on other nodes.
  *
- * Wire protocol:
- *   Header: "RAFT" (4 bytes) + totlen (uint32 big-endian) = 8 bytes.
- *   Payload: space-separated text fields. First field is the message type.
+ * Constraints:
+ * - AE and VOTE_REQ are never sent to nodes with CLUSTER_NODE_MEET.
+ *   This prevents AE from arriving before MEET on the same link.
+ * - Configuration (quorum) takes effect on apply, not on append.
+ *   This allows multiple NODE_JOINs in flight simultaneously.
+ * - A singleton leader keeps its log empty until it proposes its first
+ *   real entry (inviting another node). This prevents log conflicts
+ *   when two singletons at the same term merge via MEET.
  *
- * Message types:
- *   HELLO <node-id> <address-string>
- *   VOTE_REQ <candidate-id> <term> <last-log-index> <last-log-term>
- *   VOTE <term> <granted>
- *   AE <leader-id> <term> <prev-log-index> <prev-log-term> <leader-commit>
- *   AE_ACK <term> <success>
+ * See design-docs/cluster-raft.md for wire protocol and message details.
  */
 
 #include "server.h"
@@ -50,14 +49,14 @@ void moduleCallClusterReceivers(const char *sender_id, uint64_t module_id, uint8
  * -------------------------------------------------------------------------- */
 
 enum raftEntryType {
-    RAFT_ENTRY_NODE_JOIN = 1,      /* MEET */
-    RAFT_ENTRY_NODE_FORGET = 2,    /* FORGET */
+    RAFT_ENTRY_NODE_JOIN = 1,      /* Add a node */
+    RAFT_ENTRY_NODE_FORGET = 2,    /* Remove a node */
     RAFT_ENTRY_SLOT_CHANGE = 3,    /* Slot ownership */
     RAFT_ENTRY_SET_REPLICA_OF = 4, /* Replication topology */
-    RAFT_ENTRY_FAILOVER = 5,       /* Manual failover */
+    RAFT_ENTRY_FAILOVER = 5,       /* Failover (manual or automatic) */
     RAFT_ENTRY_NODE_INFO = 6,      /* IP, port, hostname, etc. */
-    RAFT_ENTRY_NODE_FAIL = 7,      /* Node failure detected by leader */
-    RAFT_ENTRY_NODE_RECOVER = 8,   /* Node recovery detected by leader */
+    RAFT_ENTRY_NODE_FAIL = 7,      /* Node failure detected */
+    RAFT_ENTRY_NODE_RECOVER = 8,   /* Node recovery detected */
 };
 
 typedef struct {
@@ -193,7 +192,7 @@ typedef struct {
 #define REPL_OFFSETS_BROADCAST_PERIOD_MS 10000
 
 /* Monotonic millisecond clock for timeouts and failure detection.
- * Unlike monotonicMs(), this is not affected by system clock adjustments. */
+ * Unlike gettimeofday(), this is not affected by system clock adjustments. */
 static mstime_t monotonicMs(void) {
     return (mstime_t)(getMonotonicUs() / 1000);
 }
@@ -230,25 +229,35 @@ static void clusterRaftSendMsg(clusterLink *link, sds msg) {
 }
 
 /* Broadcast a single node's replication offset to all connected peers. */
+/* Broadcast a message to all connected peers (excluding myself).
+ * If shard_filter is non-NULL, only send to nodes in that shard. */
+static int clusterRaftBroadcast(sds msg, const char *shard_filter) {
+    size_t msg_len = sdslen(msg);
+    clusterMsgSendBlock *block = clusterAllocMsgSendBlock(msg_len);
+    memcpy(block->data, msg, msg_len);
+    dictIterator *di = dictGetSafeIterator(server.cluster->nodes);
+    dictEntry *de;
+    int sent = 0;
+    while ((de = dictNext(di)) != NULL) {
+        clusterNode *n = dictGetVal(de);
+        if (n == myself || !n->link) continue;
+        if (shard_filter && memcmp(n->shard_id, shard_filter, CLUSTER_NAMELEN) != 0) continue;
+        clusterLinkSendBlock(n->link, block);
+        sent++;
+    }
+    dictReleaseIterator(di);
+    clusterMsgSendBlockDecrRefCount(block);
+    return sent;
+}
+
 static void clusterRaftBroadcastNodeOffset(clusterNode *node, long long offset) {
     sds msg = wireNewMsg("REPL_OFFSETS");
     msg = sdscatlen(msg, " ", 1);
     msg = sdscatlen(msg, node->name, CLUSTER_NAMELEN);
     msg = sdscatfmt(msg, " %I", offset);
     msg = wireFinishMsg(msg);
-    size_t msg_len = sdslen(msg);
-    clusterMsgSendBlock *block = clusterAllocMsgSendBlock(msg_len);
-    memcpy(block->data, msg, msg_len);
+    clusterRaftBroadcast(msg, NULL);
     sdsfree(msg);
-    dictIterator *di = dictGetSafeIterator(server.cluster->nodes);
-    dictEntry *de;
-    while ((de = dictNext(di)) != NULL) {
-        clusterNode *n = dictGetVal(de);
-        if (n == myself || !n->link) continue;
-        clusterLinkSendBlock(n->link, block);
-    }
-    dictReleaseIterator(di);
-    clusterMsgSendBlockDecrRefCount(block);
 }
 
 /* Build a REPL_OFFSETS message containing all known non-zero offsets.
@@ -326,13 +335,12 @@ static void clusterRaftSingletonStepDown(clusterRaftState *rs) {
     rs->commit_index = 0;
 }
 
-/* If we're a leader with an empty log (singleton that hasn't added itself yet),
- * propose and commit NODE_JOIN + SLOT_CHANGE for ourselves. This ensures the
- * leader's NODE_JOIN is first in the log and the followers can look up the
- * leader before applying any other entry. */
-static void clusterRaftMaybeSelfJoin(void) {
+/* Propose NODE_JOIN + SLOT_CHANGE for ourselves. Called once, before the
+ * leader appends its first real entry. Ensures the leader's NODE_JOIN is
+ * first in the log so followers can look up the leader on apply. */
+static void clusterRaftSelfJoin(void) {
     clusterRaftState *rs = RAFT_STATE();
-    if (rs->role != RAFT_ROLE_LEADER || raftLogLastIndex(rs) != 0) return;
+    serverAssert(rs->role == RAFT_ROLE_LEADER && raftLogLastIndex(rs) == 0);
 
     sds entry = sdsnew("NODE_JOIN ");
     entry = sdscatlen(entry, myself->name, CLUSTER_NAMELEN);
@@ -435,7 +443,7 @@ static void clusterRaftSendMeet(clusterLink *link) {
     clusterRaftSendMsg(link, msg);
 }
 
-/* Send a bare message (no payload): ADDME or WELCOME. */
+/* Send a bare message (no payload): ADD_ME, WELCOME or MEET_REJECTED. */
 static void clusterRaftSendBare(clusterLink *link, const char *verb) {
     sds msg = wireNewMsg(verb);
     msg = wireFinishMsg(msg);
@@ -716,7 +724,7 @@ static void clusterRaftPropose(sds entry, void *ctx, void (*callback)(void *ctx,
             !(type == RAFT_ENTRY_NODE_JOIN &&
               sdslen(data) >= CLUSTER_NAMELEN &&
               memcmp(data, myself->name, CLUSTER_NAMELEN) == 0)) {
-            clusterRaftMaybeSelfJoin();
+            clusterRaftSelfJoin();
         }
 
         uint64_t idx = raftLogLastIndex(rs) + 1;
@@ -1784,8 +1792,6 @@ static void clusterRaftCron(void) {
                 }
             }
             myself->repl_offset = my_offset;
-
-
             clusterRaftDetectFailures(now);
         }
     }
@@ -2250,20 +2256,9 @@ static void clusterRaftPropagatePublish(robj *channel, robj *message, int sharde
     msg = sdscatlen(msg, data, sdslen(data));
     msg = wireFinishMsg(msg);
 
-    dictIterator *di = dictGetSafeIterator(server.cluster->nodes);
-    dictEntry *de;
-    int sent = 0;
-    size_t msg_len = sdslen(msg);
-    while ((de = dictNext(di)) != NULL) {
-        clusterNode *node = dictGetVal(de);
-        if (node == myself || !node->link) continue;
-        if (sharded && memcmp(node->shard_id, myself->shard_id, CLUSTER_NAMELEN) != 0) continue;
-        clusterRaftSendMsg(node->link, sdsdup(msg));
-        sent++;
-    }
-    dictReleaseIterator(di);
+    int sent = clusterRaftBroadcast(msg, sharded ? myself->shard_id : NULL);
     RAFT_STATE()->stats_publish_messages_sent += sent;
-    RAFT_STATE()->stats_pubsub_bytes_sent += msg_len * sent;
+    RAFT_STATE()->stats_pubsub_bytes_sent += sdslen(msg) * sent;
     sdsfree(msg);
 }
 
@@ -2284,16 +2279,7 @@ static int clusterRaftSendModuleMessage(const char *target, uint64_t module_id, 
         RAFT_STATE()->stats_module_messages_sent++;
         RAFT_STATE()->stats_module_bytes_sent += msg_len;
     } else {
-        dictIterator *di = dictGetSafeIterator(server.cluster->nodes);
-        dictEntry *de;
-        int sent = 0;
-        while ((de = dictNext(di)) != NULL) {
-            clusterNode *node = dictGetVal(de);
-            if (node == myself || !node->link) continue;
-            clusterRaftSendMsg(node->link, sdsdup(msg));
-            sent++;
-        }
-        dictReleaseIterator(di);
+        int sent = clusterRaftBroadcast(msg, NULL);
         sdsfree(msg);
         RAFT_STATE()->stats_module_messages_sent += sent;
         RAFT_STATE()->stats_module_bytes_sent += msg_len * sent;

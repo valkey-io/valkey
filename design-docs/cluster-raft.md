@@ -22,12 +22,14 @@ HELLO <node-id> <address>
 
 HI <node-id> <address>
     Immediate reply to HELLO, sent on the same inbound link.
-    Completes the identification handshake.
+    Identifies the sender and completes the identification handshake.
 
 MEET singleton|cluster
     Sent after HELLO on CLUSTER MEET-initiated connections. Declares
-    the sender's cluster status. The receiver decides based on its
-    own status (see Cluster Formation below).
+    the sender's cluster status: "signleton" means it's alone and
+    "cluster" means that it's in a cluster with other nodes. The
+    receiver decides based on its own status (see Cluster Formation
+    below).
 
 ADD_ME
     Reply to MEET: "I stepped down to joiner, please add me to your
@@ -97,6 +99,9 @@ The address string uses the nodes.conf format:
 `ip:port@cport[,hostname][,aux=val]*`
 
 ## Roles
+
+A new node starts up as leader of its own singleton cluster, meaning a
+cluster with only one member. Singleton means that it's alone.
 
 - **Joiner**: A singleton that stepped down to join another cluster.
   Cannot vote, propose, or form a cluster. Waits for AE from the

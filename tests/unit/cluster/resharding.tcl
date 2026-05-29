@@ -3,7 +3,7 @@
 # that certain properties are preserved across the operation.
 tags {"slow valgrind:skip"} {
 run_solo {cluster-resharding} {
-start_cluster 5 5 {tags {external:skip cluster cluster-v2:skip}} { ;# Restarts servers (needs raft persistence)
+start_cluster 5 5 {tags {external:skip cluster cluster-raft:skip}} { ;# Restarts servers (needs raft persistence)
     test "Enable AOF in all the instances" {
         for {set id 0} {$id < [llength $::servers]} {incr id} {
             R $id config set appendonly yes

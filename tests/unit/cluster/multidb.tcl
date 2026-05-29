@@ -16,7 +16,7 @@ proc get_my_replica {cluster_nodes} {
     return [valkey_client_by_addr $ip $port]
 }
 
-start_cluster 1 1 {tags {external:skip cluster cluster-v2:skip} } {
+start_cluster 1 1 {tags {external:skip cluster cluster-raft:skip} } {
     config_set_all_nodes cluster-allow-replica-migration no
 
     set primary_id 0

@@ -39,7 +39,7 @@ test "Wait for failover" {
 
 test "Epoch increased after failover" {
     assert {[CI 1 cluster_current_epoch] > $current_epoch}
-} {} {cluster-v2:skip}
+} {} {cluster-raft:skip}
 
 test "Cluster should eventually be up again" {
     for {set j 0} {$j < [llength $::servers]} {incr j} {
@@ -102,7 +102,7 @@ start_cluster 3 6 {tags {external:skip cluster}} {
 
     test "Epoch increased after failover" {
         assert {[CI 1 cluster_current_epoch] > $current_epoch}
-    } {} {cluster-v2:skip}
+    } {} {cluster-raft:skip}
 
     test "Cluster should eventually be up again" {
         for {set j 0} {$j < [llength $::servers]} {incr j} {
@@ -141,7 +141,7 @@ start_cluster 3 6 {tags {external:skip cluster}} {
         if {!(($srv3_has_rank0 && $srv6_has_rank1) || ($srv3_has_rank1 && $srv6_has_rank0))} {
             fail "Replicas should have different ranks: srv3_rank0=$srv3_has_rank0, srv3_rank1=$srv3_has_rank1, srv6_rank0=$srv6_has_rank0, srv6_rank1=$srv6_has_rank1"
         }
-    } {} {cluster-v2:skip} ;# Checks gossip election log messages
+    } {} {cluster-raft:skip} ;# Checks gossip election log messages
 
 } ;# start_cluster
 
@@ -165,7 +165,7 @@ start_cluster 3 1 {tags {external:skip cluster}} {
 # In this test a different node is killed in a loop for N
 # iterations. The test checks that certain properties
 # are preserved across iterations.
-start_cluster 5 5 {tags {external:skip cluster cluster-v2:skip}} { ;# Restarts servers (needs raft persistence)
+start_cluster 5 5 {tags {external:skip cluster cluster-raft:skip}} { ;# Restarts servers (needs raft persistence)
     set iterations 10
     set cluster [valkey_cluster 127.0.0.1:[srv 0 port]]
 

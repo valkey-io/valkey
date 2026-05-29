@@ -199,7 +199,7 @@ test "Verify the nodes configured with prefer hostname only show hostname for ne
             fail "hostname information for shard-$j didn't reach node 6"
         }
     }
-} {} {cluster-v2:skip} ;# Uses DEBUG DROP-CLUSTER-PACKET-FILTER (gossip-specific)
+} {} {cluster-raft:skip} ;# Uses DEBUG DROP-CLUSTER-PACKET-FILTER (gossip-specific)
 
 test "Test restart will keep hostname information" {
     # Set a new hostname, reboot and make sure it sticks
@@ -214,7 +214,7 @@ test "Test restart will keep hostname information" {
 
     # As a sanity check, make sure everyone eventually agrees
     wait_for_cluster_propagation
-} {} {cluster-v2:skip} ;# Raft persistence not yet implemented
+} {} {cluster-raft:skip} ;# Raft persistence not yet implemented
 
 test "Test hostname validation" {
     catch {R 0 config set cluster-announce-hostname [string repeat x 256]} err

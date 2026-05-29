@@ -266,8 +266,8 @@ proc tags_acceptable {tags err_return} {
         return 0
     }
 
-    if {$::cluster_v2 && [lsearch -exact $tags "cluster-v2:skip"] >= 0} {
-        set err "Not supported with cluster-v2 (raft)"
+    if {$::cluster_raft && [lsearch -exact $tags "cluster-raft:skip"] >= 0} {
+        set err "Not supported with Raft cluster"
         return 0
     }
 

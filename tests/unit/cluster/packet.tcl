@@ -80,7 +80,7 @@ proc create_cluster_meet_packet {sender_name sender_port sender_cport {count 0} 
     return $packet
 }
 
-start_cluster 1 0 {tags {external:skip cluster tls:skip cluster-v2:skip}} {
+start_cluster 1 0 {tags {external:skip cluster tls:skip cluster-raft:skip}} {
     test "Packet with missing gossip messages don't cause invalid read" {
         set base_port [srv 0 port]
         set cluster_port [expr {$base_port + 10000}]
@@ -110,7 +110,7 @@ start_cluster 1 0 {tags {external:skip cluster tls:skip cluster-v2:skip}} {
     }
 }
 
-start_cluster 10 0 {tags {external:skip cluster tls:skip cluster-v2:skip}} {
+start_cluster 10 0 {tags {external:skip cluster tls:skip cluster-raft:skip}} {
     test "Gossip count scales with higher percentage of `cluster-message-gossip-perc`" {
         R 0 config set cluster-message-gossip-perc 80
 

@@ -364,13 +364,13 @@ test {Migrate the last slot away from a node using valkey-cli} {
         wait_for_cluster_propagation
         assert_match *master* [$owner_r role]
     }
-} {} {cluster-v2:skip} ; # needs investigation for cluster-v2
+} {} {cluster-raft:skip} ; # needs investigation for cluster-raft
 
 foreach ip_or_localhost {127.0.0.1 localhost} {
 
 # Test valkey-cli --cluster create, add-node with cluster-port.
 # Create five nodes, three with custom cluster_port and two with default values.
-start_server [list overrides [list cluster-enabled yes cluster-node-timeout 1 cluster-port [find_available_port $::baseport $::portcount]] tags {cluster-v2:skip}] {
+start_server [list overrides [list cluster-enabled yes cluster-node-timeout 1 cluster-port [find_available_port $::baseport $::portcount]] tags {cluster-raft:skip}] {
 start_server [list overrides [list cluster-enabled yes cluster-node-timeout 1]] {
 start_server [list overrides [list cluster-enabled yes cluster-node-timeout 1 cluster-port [find_available_port $::baseport $::portcount]]] {
 start_server [list overrides [list cluster-enabled yes cluster-node-timeout 1]] {
@@ -563,9 +563,9 @@ start_multiple_servers 3 [list overrides $base_conf] {
 } ;# foreach use_atomic_slot_migration
 
 # Test valkey-cli --cluster del-node
-# For cluster-v2 we need to handle leader transfer when FORGET targets the leader.
+# For cluster-raft we need to handle leader transfer when FORGET targets the leader.
 set base_conf [list cluster-enabled yes cluster-node-timeout 1000]
-start_multiple_servers 3 [list overrides $base_conf tags {cluster-v2:skip}] {
+start_multiple_servers 3 [list overrides $base_conf tags {cluster-raft:skip}] {
 
     # Create cluster with 1 primary and 2 replicas for del-node tests
     exec $::VALKEY_CLI_BIN --cluster-yes --cluster create \

@@ -3,7 +3,7 @@
 # other primaries have replicas.
 tags {"slow valgrind:skip"} {
 run_solo {cluster-replica-migration-slow} {
-start_cluster 5 15 {tags {external:skip cluster cluster-v2:skip} overrides {cluster-allow-replica-migration yes}} {
+start_cluster 5 15 {tags {external:skip cluster cluster-raft:skip} overrides {cluster-allow-replica-migration yes}} {
     test "Primary #0 should re-acquire one or more replicas" {
         # Resharding all the primary #0 slots away from it
         set primary0_id [dict get [cluster_get_myself 0] id]
@@ -46,7 +46,7 @@ start_cluster 5 15 {tags {external:skip cluster cluster-v2:skip} overrides {clus
 # migrate when primary becomes empty.
 tags {"slow valgrind:skip"} {
 run_solo {cluster-replica-migration-slow} {
-start_cluster 5 15 {tags {external:skip cluster cluster-v2:skip} overrides {cluster-allow-replica-migration no}} {
+start_cluster 5 15 {tags {external:skip cluster cluster-raft:skip} overrides {cluster-allow-replica-migration no}} {
     test "Each primary should have at least two replicas attached" {
         # Resharding all the primary #0 slots away from it
         set primary0_id [dict get [cluster_get_myself 0] id]

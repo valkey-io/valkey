@@ -101,7 +101,7 @@ proc count_bound_slots {n} {
      } else {
          fail "Cluster slot deletion should not be propagated to all nodes in the cluster"
      }
- } {} {cluster-v2:skip} ;# Raft propagates DELSLOTS to all nodes
+ } {} {cluster-raft:skip} ;# Raft propagates DELSLOTS to all nodes
 
 if {$::tls} {
     test {CLUSTER SLOTS from non-TLS client in TLS cluster} {

@@ -7,9 +7,9 @@
 
 source tests/support/cluster_util.tcl
 
-# cluster-v2:skip because valkey-cli --cluster fix uses MULTI internally,
+# cluster-raft:skip because valkey-cli --cluster fix uses MULTI internally,
 # which is not supported for cluster mutation commands in raft mode.
-start_cluster 2 0 {tags {external:skip cluster cluster-v2:skip}} {
+start_cluster 2 0 {tags {external:skip cluster cluster-raft:skip}} {
 
 config_set_all_nodes cluster-allow-replica-migration no
 

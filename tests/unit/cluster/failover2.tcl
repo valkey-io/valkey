@@ -64,7 +64,7 @@ start_cluster 3 4 {tags {external:skip cluster} overrides {cluster-ping-interval
     }
 } ;# start_cluster
 
-start_cluster 7 3 {tags {external:skip cluster cluster-v2:skip} overrides {cluster-ping-interval 1000}} {
+start_cluster 7 3 {tags {external:skip cluster cluster-raft:skip} overrides {cluster-ping-interval 1000}} {
     test "Primaries will not time out then they are elected in the same epoch" {
         # Since we have the delay time, so these node may not initiate the
         # election at the same time (same epoch). But if they do, we make
@@ -135,7 +135,7 @@ run_solo {cluster} {
 } ;# run_solo
 
 # Needs to run in the body of
-# start_cluster 3 1 {tags {external:skip cluster cluster-v2:skip} overrides {cluster-replica-validity-factor 0}}
+# start_cluster 3 1 {tags {external:skip cluster cluster-raft:skip} overrides {cluster-replica-validity-factor 0}}
 proc test_replica_config_epoch_failover {type} {
     test "Replica can update the config epoch when trigger the failover - $type" {
         set CLUSTER_PACKET_TYPE_NONE -1
@@ -227,10 +227,10 @@ proc test_replica_config_epoch_failover {type} {
     }
 }
 
-start_cluster 3 1 {tags {external:skip cluster cluster-v2:skip} overrides {cluster-replica-validity-factor 0}} {
+start_cluster 3 1 {tags {external:skip cluster cluster-raft:skip} overrides {cluster-replica-validity-factor 0}} {
     test_replica_config_epoch_failover "automatic"
 }
 
-start_cluster 3 1 {tags {external:skip cluster cluster-v2:skip} overrides {cluster-replica-validity-factor 0}} {
+start_cluster 3 1 {tags {external:skip cluster cluster-raft:skip} overrides {cluster-replica-validity-factor 0}} {
     test_replica_config_epoch_failover "manual"
 }

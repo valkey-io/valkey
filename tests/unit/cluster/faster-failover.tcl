@@ -1,6 +1,6 @@
 # Check the faster failover is working.
 
-tags {cluster external:skip cluster-v2:skip} {
+tags {cluster external:skip cluster-raft:skip} {
 
 # Test 0: Single replica is always the best ranked replica.
 # Minimal deployment: 3 primaries + 1 replica.

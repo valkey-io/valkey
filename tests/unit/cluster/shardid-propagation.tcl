@@ -1,4 +1,4 @@
-tags {tls:skip external:skip cluster singledb cluster-v2:skip} {
+tags {tls:skip external:skip cluster singledb cluster-raft:skip} {
     set base_conf [list cluster-enabled yes save ""] 
     start_multiple_servers 2 [list overrides $base_conf] {
         test "Cluster nodes are reachable" {
@@ -53,7 +53,7 @@ tags {tls:skip external:skip cluster singledb cluster-v2:skip} {
     }
 }
 
-start_cluster 3 1 {tags {external:skip cluster cluster-v2:skip}} {
+start_cluster 3 1 {tags {external:skip cluster cluster-raft:skip}} {
     test "The replica will have a new shard_id after cluster reset soft" {
         assert_equal [R 0 cluster myshardid] [R 3 cluster myshardid]
 

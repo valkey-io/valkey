@@ -1,10 +1,10 @@
 /* A module that implements defrag callback mechanisms.
  */
 
-#include "redismodule.h"
+#include "valkeymodule.h"
 #include <stdlib.h>
 
-static RedisModuleType *FragType;
+static ValkeyModuleType *FragType;
 
 struct FragObject {
     unsigned long len;
@@ -23,22 +23,22 @@ unsigned long int global_attempts = 0;
 unsigned long int global_defragged = 0;
 
 int global_strings_len = 0;
-RedisModuleString **global_strings = NULL;
+ValkeyModuleString **global_strings = NULL;
 
-static void createGlobalStrings(RedisModuleCtx *ctx, int count)
+static void createGlobalStrings(ValkeyModuleCtx *ctx, int count)
 {
     global_strings_len = count;
-    global_strings = RedisModule_Alloc(sizeof(RedisModuleString *) * count);
+    global_strings = ValkeyModule_Alloc(sizeof(ValkeyModuleString *) * count);
 
     for (int i = 0; i < count; i++) {
-        global_strings[i] = RedisModule_CreateStringFromLongLong(ctx, i);
+        global_strings[i] = ValkeyModule_CreateStringFromLongLong(ctx, i);
     }
 }
 
-static void defragGlobalStrings(RedisModuleDefragCtx *ctx)
+static void defragGlobalStrings(ValkeyModuleDefragCtx *ctx)
 {
     for (int i = 0; i < global_strings_len; i++) {
-        RedisModuleString *new = RedisModule_DefragRedisModuleString(ctx, global_strings[i]);
+        ValkeyModuleString *new = ValkeyModule_DefragValkeyModuleString(ctx, global_strings[i]);
         global_attempts++;
         if (new != NULL) {
             global_strings[i] = new;
@@ -47,35 +47,35 @@ static void defragGlobalStrings(RedisModuleDefragCtx *ctx)
     }
 }
 
-static void FragInfo(RedisModuleInfoCtx *ctx, int for_crash_report) {
-    REDISMODULE_NOT_USED(for_crash_report);
+static void FragInfo(ValkeyModuleInfoCtx *ctx, int for_crash_report) {
+    VALKEYMODULE_NOT_USED(for_crash_report);
 
-    RedisModule_InfoAddSection(ctx, "stats");
-    RedisModule_InfoAddFieldLongLong(ctx, "datatype_attempts", datatype_attempts);
-    RedisModule_InfoAddFieldLongLong(ctx, "datatype_defragged", datatype_defragged);
-    RedisModule_InfoAddFieldLongLong(ctx, "datatype_resumes", datatype_resumes);
-    RedisModule_InfoAddFieldLongLong(ctx, "datatype_wrong_cursor", datatype_wrong_cursor);
-    RedisModule_InfoAddFieldLongLong(ctx, "global_attempts", global_attempts);
-    RedisModule_InfoAddFieldLongLong(ctx, "global_defragged", global_defragged);
+    ValkeyModule_InfoAddSection(ctx, "stats");
+    ValkeyModule_InfoAddFieldLongLong(ctx, "datatype_attempts", datatype_attempts);
+    ValkeyModule_InfoAddFieldLongLong(ctx, "datatype_defragged", datatype_defragged);
+    ValkeyModule_InfoAddFieldLongLong(ctx, "datatype_resumes", datatype_resumes);
+    ValkeyModule_InfoAddFieldLongLong(ctx, "datatype_wrong_cursor", datatype_wrong_cursor);
+    ValkeyModule_InfoAddFieldLongLong(ctx, "global_attempts", global_attempts);
+    ValkeyModule_InfoAddFieldLongLong(ctx, "global_defragged", global_defragged);
 }
 
 struct FragObject *createFragObject(unsigned long len, unsigned long size, int maxstep) {
-    struct FragObject *o = RedisModule_Alloc(sizeof(*o));
+    struct FragObject *o = ValkeyModule_Alloc(sizeof(*o));
     o->len = len;
-    o->values = RedisModule_Alloc(sizeof(RedisModuleString*) * len);
+    o->values = ValkeyModule_Alloc(sizeof(ValkeyModuleString*) * len);
     o->maxstep = maxstep;
 
     for (unsigned long i = 0; i < len; i++) {
-        o->values[i] = RedisModule_Calloc(1, size);
+        o->values[i] = ValkeyModule_Calloc(1, size);
     }
 
     return o;
 }
 
 /* FRAG.RESETSTATS */
-static int fragResetStatsCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
-    REDISMODULE_NOT_USED(argv);
-    REDISMODULE_NOT_USED(argc);
+static int fragResetStatsCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    VALKEYMODULE_NOT_USED(argv);
+    VALKEYMODULE_NOT_USED(argc);
 
     datatype_attempts = 0;
     datatype_defragged = 0;
@@ -84,72 +84,72 @@ static int fragResetStatsCommand(RedisModuleCtx *ctx, RedisModuleString **argv, 
     global_attempts = 0;
     global_defragged = 0;
 
-    RedisModule_ReplyWithSimpleString(ctx, "OK");
-    return REDISMODULE_OK;
+    ValkeyModule_ReplyWithSimpleString(ctx, "OK");
+    return VALKEYMODULE_OK;
 }
 
 /* FRAG.CREATE key len size maxstep */
-static int fragCreateCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
+static int fragCreateCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     if (argc != 5)
-        return RedisModule_WrongArity(ctx);
+        return ValkeyModule_WrongArity(ctx);
 
-    RedisModuleKey *key = RedisModule_OpenKey(ctx,argv[1],
-                                              REDISMODULE_READ|REDISMODULE_WRITE);
-    int type = RedisModule_KeyType(key);
-    if (type != REDISMODULE_KEYTYPE_EMPTY)
+    ValkeyModuleKey *key = ValkeyModule_OpenKey(ctx,argv[1],
+                                              VALKEYMODULE_READ|VALKEYMODULE_WRITE);
+    int type = ValkeyModule_KeyType(key);
+    if (type != VALKEYMODULE_KEYTYPE_EMPTY)
     {
-        return RedisModule_ReplyWithError(ctx, "ERR key exists");
+        return ValkeyModule_ReplyWithError(ctx, "ERR key exists");
     }
 
     long long len;
-    if ((RedisModule_StringToLongLong(argv[2], &len) != REDISMODULE_OK)) {
-        return RedisModule_ReplyWithError(ctx, "ERR invalid len");
+    if ((ValkeyModule_StringToLongLong(argv[2], &len) != VALKEYMODULE_OK)) {
+        return ValkeyModule_ReplyWithError(ctx, "ERR invalid len");
     }
 
     long long size;
-    if ((RedisModule_StringToLongLong(argv[3], &size) != REDISMODULE_OK)) {
-        return RedisModule_ReplyWithError(ctx, "ERR invalid size");
+    if ((ValkeyModule_StringToLongLong(argv[3], &size) != VALKEYMODULE_OK)) {
+        return ValkeyModule_ReplyWithError(ctx, "ERR invalid size");
     }
 
     long long maxstep;
-    if ((RedisModule_StringToLongLong(argv[4], &maxstep) != REDISMODULE_OK)) {
-        return RedisModule_ReplyWithError(ctx, "ERR invalid maxstep");
+    if ((ValkeyModule_StringToLongLong(argv[4], &maxstep) != VALKEYMODULE_OK)) {
+        return ValkeyModule_ReplyWithError(ctx, "ERR invalid maxstep");
     }
 
     struct FragObject *o = createFragObject(len, size, maxstep);
-    RedisModule_ModuleTypeSetValue(key, FragType, o);
-    RedisModule_ReplyWithSimpleString(ctx, "OK");
-    RedisModule_CloseKey(key);
+    ValkeyModule_ModuleTypeSetValue(key, FragType, o);
+    ValkeyModule_ReplyWithSimpleString(ctx, "OK");
+    ValkeyModule_CloseKey(key);
 
-    return REDISMODULE_OK;
+    return VALKEYMODULE_OK;
 }
 
 void FragFree(void *value) {
     struct FragObject *o = value;
 
     for (unsigned long i = 0; i < o->len; i++)
-        RedisModule_Free(o->values[i]);
-    RedisModule_Free(o->values);
-    RedisModule_Free(o);
+        ValkeyModule_Free(o->values[i]);
+    ValkeyModule_Free(o->values);
+    ValkeyModule_Free(o);
 }
 
-size_t FragFreeEffort(RedisModuleString *key, const void *value) {
-    REDISMODULE_NOT_USED(key);
+size_t FragFreeEffort(ValkeyModuleString *key, const void *value) {
+    VALKEYMODULE_NOT_USED(key);
 
     const struct FragObject *o = value;
     return o->len;
 }
 
-int FragDefrag(RedisModuleDefragCtx *ctx, RedisModuleString *key, void **value) {
-    REDISMODULE_NOT_USED(key);
+int FragDefrag(ValkeyModuleDefragCtx *ctx, ValkeyModuleString *key, void **value) {
+    VALKEYMODULE_NOT_USED(key);
     unsigned long i = 0;
     int steps = 0;
 
-    int dbid = RedisModule_GetDbIdFromDefragCtx(ctx);
-    RedisModule_Assert(dbid != -1);
+    int dbid = ValkeyModule_GetDbIdFromDefragCtx(ctx);
+    ValkeyModule_Assert(dbid != -1);
 
     /* Attempt to get cursor, validate it's what we're exepcting */
-    if (RedisModule_DefragCursorGet(ctx, &i) == REDISMODULE_OK) {
+    if (ValkeyModule_DefragCursorGet(ctx, &i) == VALKEYMODULE_OK) {
         if (i > 0) datatype_resumes++;
 
         /* Validate we're expecting this cursor */
@@ -160,7 +160,7 @@ int FragDefrag(RedisModuleDefragCtx *ctx, RedisModuleString *key, void **value) 
 
     /* Attempt to defrag the object itself */
     datatype_attempts++;
-    struct FragObject *o = RedisModule_DefragAlloc(ctx, *value);
+    struct FragObject *o = ValkeyModule_DefragAlloc(ctx, *value);
     if (o == NULL) {
         /* Not defragged */
         o = *value;
@@ -173,16 +173,16 @@ int FragDefrag(RedisModuleDefragCtx *ctx, RedisModuleString *key, void **value) 
     /* Deep defrag now */
     for (; i < o->len; i++) {
         datatype_attempts++;
-        void *new = RedisModule_DefragAlloc(ctx, o->values[i]);
+        void *new = ValkeyModule_DefragAlloc(ctx, o->values[i]);
         if (new) {
             o->values[i] = new;
             datatype_defragged++;
         }
 
         if ((o->maxstep && ++steps > o->maxstep) ||
-            ((i % 64 == 0) && RedisModule_DefragShouldStop(ctx)))
+            ((i % 64 == 0) && ValkeyModule_DefragShouldStop(ctx)))
         {
-            RedisModule_DefragCursorSet(ctx, i);
+            ValkeyModule_DefragCursorSet(ctx, i);
             last_set_cursor = i;
             return 1;
         }
@@ -192,44 +192,44 @@ int FragDefrag(RedisModuleDefragCtx *ctx, RedisModuleString *key, void **value) 
     return 0;
 }
 
-int RedisModule_OnLoad(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
-    REDISMODULE_NOT_USED(argv);
-    REDISMODULE_NOT_USED(argc);
+int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    VALKEYMODULE_NOT_USED(argv);
+    VALKEYMODULE_NOT_USED(argc);
 
-    if (RedisModule_Init(ctx, "defragtest", 1, REDISMODULE_APIVER_1)
-        == REDISMODULE_ERR) return REDISMODULE_ERR;
+    if (ValkeyModule_Init(ctx, "defragtest", 1, VALKEYMODULE_APIVER_1)
+        == VALKEYMODULE_ERR) return VALKEYMODULE_ERR;
 
-    if (RedisModule_GetTypeMethodVersion() < REDISMODULE_TYPE_METHOD_VERSION) {
-        return REDISMODULE_ERR;
+    if (ValkeyModule_GetTypeMethodVersion() < VALKEYMODULE_TYPE_METHOD_VERSION) {
+        return VALKEYMODULE_ERR;
     }
 
     long long glen;
-    if (argc != 1 || RedisModule_StringToLongLong(argv[0], &glen) == REDISMODULE_ERR) {
-        return REDISMODULE_ERR;
+    if (argc != 1 || ValkeyModule_StringToLongLong(argv[0], &glen) == VALKEYMODULE_ERR) {
+        return VALKEYMODULE_ERR;
     }
 
     createGlobalStrings(ctx, glen);
 
-    RedisModuleTypeMethods tm = {
-            .version = REDISMODULE_TYPE_METHOD_VERSION,
+    ValkeyModuleTypeMethods tm = {
+            .version = VALKEYMODULE_TYPE_METHOD_VERSION,
             .free = FragFree,
             .free_effort = FragFreeEffort,
             .defrag = FragDefrag
     };
 
-    FragType = RedisModule_CreateDataType(ctx, "frag_type", 0, &tm);
-    if (FragType == NULL) return REDISMODULE_ERR;
+    FragType = ValkeyModule_CreateDataType(ctx, "frag_type", 0, &tm);
+    if (FragType == NULL) return VALKEYMODULE_ERR;
 
-    if (RedisModule_CreateCommand(ctx, "frag.create",
-                                  fragCreateCommand, "write deny-oom", 1, 1, 1) == REDISMODULE_ERR)
-        return REDISMODULE_ERR;
+    if (ValkeyModule_CreateCommand(ctx, "frag.create",
+                                  fragCreateCommand, "write deny-oom", 1, 1, 1) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
 
-    if (RedisModule_CreateCommand(ctx, "frag.resetstats",
-                                  fragResetStatsCommand, "write deny-oom", 1, 1, 1) == REDISMODULE_ERR)
-        return REDISMODULE_ERR;
+    if (ValkeyModule_CreateCommand(ctx, "frag.resetstats",
+                                  fragResetStatsCommand, "write deny-oom", 1, 1, 1) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
 
-    RedisModule_RegisterInfoFunc(ctx, FragInfo);
-    RedisModule_RegisterDefragFunc(ctx, defragGlobalStrings);
+    ValkeyModule_RegisterInfoFunc(ctx, FragInfo);
+    ValkeyModule_RegisterDefragFunc(ctx, defragGlobalStrings);
 
-    return REDISMODULE_OK;
+    return VALKEYMODULE_OK;
 }

@@ -1,4 +1,4 @@
-#include "redismodule.h"
+#include "valkeymodule.h"
 #include <strings.h>
 
 /* Second module configs module, for testing.
@@ -6,34 +6,34 @@
 int bool_config;
 
 int getBoolConfigCommand(const char *name, void *privdata) {
-    REDISMODULE_NOT_USED(privdata);
+    VALKEYMODULE_NOT_USED(privdata);
     if (!strcasecmp(name, "test")) {
         return bool_config;
     }
     return 0;
 }
 
-int setBoolConfigCommand(const char *name, int new, void *privdata, RedisModuleString **err) {
-    REDISMODULE_NOT_USED(privdata);
-    REDISMODULE_NOT_USED(err);
+int setBoolConfigCommand(const char *name, int new, void *privdata, ValkeyModuleString **err) {
+    VALKEYMODULE_NOT_USED(privdata);
+    VALKEYMODULE_NOT_USED(err);
     if (!strcasecmp(name, "test")) {
         bool_config = new;
-        return REDISMODULE_OK;
+        return VALKEYMODULE_OK;
     }
-    return REDISMODULE_ERR;
+    return VALKEYMODULE_ERR;
 }
 
 /* No arguments are expected */ 
-int RedisModule_OnLoad(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
-    REDISMODULE_NOT_USED(argv);
-    REDISMODULE_NOT_USED(argc);
-    if (RedisModule_Init(ctx, "configs", 1, REDISMODULE_APIVER_1) == REDISMODULE_ERR) return REDISMODULE_ERR;
+int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    VALKEYMODULE_NOT_USED(argv);
+    VALKEYMODULE_NOT_USED(argc);
+    if (ValkeyModule_Init(ctx, "configs", 1, VALKEYMODULE_APIVER_1) == VALKEYMODULE_ERR) return VALKEYMODULE_ERR;
 
-    if (RedisModule_RegisterBoolConfig(ctx, "test", 1, REDISMODULE_CONFIG_DEFAULT, getBoolConfigCommand, setBoolConfigCommand, NULL, &argc) == REDISMODULE_ERR) {
-        return REDISMODULE_ERR;
+    if (ValkeyModule_RegisterBoolConfig(ctx, "test", 1, VALKEYMODULE_CONFIG_DEFAULT, getBoolConfigCommand, setBoolConfigCommand, NULL, &argc) == VALKEYMODULE_ERR) {
+        return VALKEYMODULE_ERR;
     }
-    if (RedisModule_LoadConfigs(ctx) == REDISMODULE_ERR) {
-        return REDISMODULE_ERR;
+    if (ValkeyModule_LoadConfigs(ctx) == VALKEYMODULE_ERR) {
+        return VALKEYMODULE_ERR;
     }
-    return REDISMODULE_OK;
+    return VALKEYMODULE_OK;
 }

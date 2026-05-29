@@ -1,112 +1,112 @@
-#include "redismodule.h"
+#include "valkeymodule.h"
 
 #define UNUSED(V) ((void) V)
 
-int cmd_set(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
+int cmd_set(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     UNUSED(argv);
     UNUSED(argc);
-    RedisModule_ReplyWithSimpleString(ctx, "OK");
-    return REDISMODULE_OK;
+    ValkeyModule_ReplyWithSimpleString(ctx, "OK");
+    return VALKEYMODULE_OK;
 }
 
-int cmd_get(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
+int cmd_get(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     UNUSED(argv);
 
     if (argc > 4) /* For testing */
-        return RedisModule_WrongArity(ctx);
+        return ValkeyModule_WrongArity(ctx);
 
-    RedisModule_ReplyWithSimpleString(ctx, "OK");
-    return REDISMODULE_OK;
+    ValkeyModule_ReplyWithSimpleString(ctx, "OK");
+    return VALKEYMODULE_OK;
 }
 
-int cmd_get_fullname(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
+int cmd_get_fullname(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     UNUSED(argv);
     UNUSED(argc);
 
-    const char *command_name = RedisModule_GetCurrentCommandName(ctx);
-    RedisModule_ReplyWithSimpleString(ctx, command_name);
-    return REDISMODULE_OK;
+    const char *command_name = ValkeyModule_GetCurrentCommandName(ctx);
+    ValkeyModule_ReplyWithSimpleString(ctx, command_name);
+    return VALKEYMODULE_OK;
 }
 
-int RedisModule_OnLoad(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
-    REDISMODULE_NOT_USED(argv);
-    REDISMODULE_NOT_USED(argc);
+int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    VALKEYMODULE_NOT_USED(argv);
+    VALKEYMODULE_NOT_USED(argc);
 
-    if (RedisModule_Init(ctx, "subcommands", 1, REDISMODULE_APIVER_1) == REDISMODULE_ERR)
-        return REDISMODULE_ERR;
+    if (ValkeyModule_Init(ctx, "subcommands", 1, VALKEYMODULE_APIVER_1) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
 
     /* Module command names cannot contain special characters. */
-    RedisModule_Assert(RedisModule_CreateCommand(ctx,"subcommands.char\r",NULL,"",0,0,0) == REDISMODULE_ERR);
-    RedisModule_Assert(RedisModule_CreateCommand(ctx,"subcommands.char\n",NULL,"",0,0,0) == REDISMODULE_ERR);
-    RedisModule_Assert(RedisModule_CreateCommand(ctx,"subcommands.char ",NULL,"",0,0,0) == REDISMODULE_ERR);
+    ValkeyModule_Assert(ValkeyModule_CreateCommand(ctx,"subcommands.char\r",NULL,"",0,0,0) == VALKEYMODULE_ERR);
+    ValkeyModule_Assert(ValkeyModule_CreateCommand(ctx,"subcommands.char\n",NULL,"",0,0,0) == VALKEYMODULE_ERR);
+    ValkeyModule_Assert(ValkeyModule_CreateCommand(ctx,"subcommands.char ",NULL,"",0,0,0) == VALKEYMODULE_ERR);
 
-    if (RedisModule_CreateCommand(ctx,"subcommands.bitarray",NULL,"",0,0,0) == REDISMODULE_ERR)
-        return REDISMODULE_ERR;
-    RedisModuleCommand *parent = RedisModule_GetCommand(ctx,"subcommands.bitarray");
+    if (ValkeyModule_CreateCommand(ctx,"subcommands.bitarray",NULL,"",0,0,0) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
+    ValkeyModuleCommand *parent = ValkeyModule_GetCommand(ctx,"subcommands.bitarray");
 
-    if (RedisModule_CreateSubcommand(parent,"set",cmd_set,"",0,0,0) == REDISMODULE_ERR)
-        return REDISMODULE_ERR;
+    if (ValkeyModule_CreateSubcommand(parent,"set",cmd_set,"",0,0,0) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
 
     /* Module subcommand names cannot contain special characters. */
-    RedisModule_Assert(RedisModule_CreateSubcommand(parent,"char|",cmd_set,"",0,0,0) == REDISMODULE_ERR);
-    RedisModule_Assert(RedisModule_CreateSubcommand(parent,"char@",cmd_set,"",0,0,0) == REDISMODULE_ERR);
-    RedisModule_Assert(RedisModule_CreateSubcommand(parent,"char=",cmd_set,"",0,0,0) == REDISMODULE_ERR);
+    ValkeyModule_Assert(ValkeyModule_CreateSubcommand(parent,"char|",cmd_set,"",0,0,0) == VALKEYMODULE_ERR);
+    ValkeyModule_Assert(ValkeyModule_CreateSubcommand(parent,"char@",cmd_set,"",0,0,0) == VALKEYMODULE_ERR);
+    ValkeyModule_Assert(ValkeyModule_CreateSubcommand(parent,"char=",cmd_set,"",0,0,0) == VALKEYMODULE_ERR);
 
-    RedisModuleCommand *subcmd = RedisModule_GetCommand(ctx,"subcommands.bitarray|set");
-    RedisModuleCommandInfo cmd_set_info = {
-        .version = REDISMODULE_COMMAND_INFO_VERSION,
-        .key_specs = (RedisModuleCommandKeySpec[]){
+    ValkeyModuleCommand *subcmd = ValkeyModule_GetCommand(ctx,"subcommands.bitarray|set");
+    ValkeyModuleCommandInfo cmd_set_info = {
+        .version = VALKEYMODULE_COMMAND_INFO_VERSION,
+        .key_specs = (ValkeyModuleCommandKeySpec[]){
             {
-                .flags = REDISMODULE_CMD_KEY_RW | REDISMODULE_CMD_KEY_UPDATE,
-                .begin_search_type = REDISMODULE_KSPEC_BS_INDEX,
+                .flags = VALKEYMODULE_CMD_KEY_RW | VALKEYMODULE_CMD_KEY_UPDATE,
+                .begin_search_type = VALKEYMODULE_KSPEC_BS_INDEX,
                 .bs.index.pos = 1,
-                .find_keys_type = REDISMODULE_KSPEC_FK_RANGE,
+                .find_keys_type = VALKEYMODULE_KSPEC_FK_RANGE,
                 .fk.range = {0,1,0}
             },
             {0}
         }
     };
-    if (RedisModule_SetCommandInfo(subcmd, &cmd_set_info) == REDISMODULE_ERR)
-        return REDISMODULE_ERR;
+    if (ValkeyModule_SetCommandInfo(subcmd, &cmd_set_info) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
 
-    if (RedisModule_CreateSubcommand(parent,"get",cmd_get,"",0,0,0) == REDISMODULE_ERR)
-        return REDISMODULE_ERR;
-    subcmd = RedisModule_GetCommand(ctx,"subcommands.bitarray|get");
-    RedisModuleCommandInfo cmd_get_info = {
-        .version = REDISMODULE_COMMAND_INFO_VERSION,
-        .key_specs = (RedisModuleCommandKeySpec[]){
+    if (ValkeyModule_CreateSubcommand(parent,"get",cmd_get,"",0,0,0) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
+    subcmd = ValkeyModule_GetCommand(ctx,"subcommands.bitarray|get");
+    ValkeyModuleCommandInfo cmd_get_info = {
+        .version = VALKEYMODULE_COMMAND_INFO_VERSION,
+        .key_specs = (ValkeyModuleCommandKeySpec[]){
             {
-                .flags = REDISMODULE_CMD_KEY_RO | REDISMODULE_CMD_KEY_ACCESS,
-                .begin_search_type = REDISMODULE_KSPEC_BS_INDEX,
+                .flags = VALKEYMODULE_CMD_KEY_RO | VALKEYMODULE_CMD_KEY_ACCESS,
+                .begin_search_type = VALKEYMODULE_KSPEC_BS_INDEX,
                 .bs.index.pos = 1,
-                .find_keys_type = REDISMODULE_KSPEC_FK_RANGE,
+                .find_keys_type = VALKEYMODULE_KSPEC_FK_RANGE,
                 .fk.range = {0,1,0}
             },
             {0}
         }
     };
-    if (RedisModule_SetCommandInfo(subcmd, &cmd_get_info) == REDISMODULE_ERR)
-        return REDISMODULE_ERR;
+    if (ValkeyModule_SetCommandInfo(subcmd, &cmd_get_info) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
 
     /* Get the name of the command currently running. */
-    if (RedisModule_CreateCommand(ctx,"subcommands.parent_get_fullname",cmd_get_fullname,"",0,0,0) == REDISMODULE_ERR)
-        return REDISMODULE_ERR;
+    if (ValkeyModule_CreateCommand(ctx,"subcommands.parent_get_fullname",cmd_get_fullname,"",0,0,0) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
 
     /* Get the name of the subcommand currently running. */
-    if (RedisModule_CreateCommand(ctx,"subcommands.sub",NULL,"",0,0,0) == REDISMODULE_ERR)
-        return REDISMODULE_ERR;
+    if (ValkeyModule_CreateCommand(ctx,"subcommands.sub",NULL,"",0,0,0) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
 
-    RedisModuleCommand *fullname_parent = RedisModule_GetCommand(ctx,"subcommands.sub");
-    if (RedisModule_CreateSubcommand(fullname_parent,"get_fullname",cmd_get_fullname,"",0,0,0) == REDISMODULE_ERR)
-        return REDISMODULE_ERR;
+    ValkeyModuleCommand *fullname_parent = ValkeyModule_GetCommand(ctx,"subcommands.sub");
+    if (ValkeyModule_CreateSubcommand(fullname_parent,"get_fullname",cmd_get_fullname,"",0,0,0) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
 
     /* Sanity */
 
     /* Trying to create the same subcommand fails */
-    RedisModule_Assert(RedisModule_CreateSubcommand(parent,"get",NULL,"",0,0,0) == REDISMODULE_ERR);
+    ValkeyModule_Assert(ValkeyModule_CreateSubcommand(parent,"get",NULL,"",0,0,0) == VALKEYMODULE_ERR);
 
     /* Trying to create a sub-subcommand fails */
-    RedisModule_Assert(RedisModule_CreateSubcommand(subcmd,"get",NULL,"",0,0,0) == REDISMODULE_ERR);
+    ValkeyModule_Assert(ValkeyModule_CreateSubcommand(subcmd,"get",NULL,"",0,0,0) == VALKEYMODULE_ERR);
 
-    return REDISMODULE_OK;
+    return VALKEYMODULE_OK;
 }

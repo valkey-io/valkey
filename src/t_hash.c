@@ -468,7 +468,9 @@ void hashTypeConvertListpack(robj *o, int enc) {
                 sdsfree(key);
                 sdsfree(value);              /* Needed for gcc ASAN */
                 hashTypeReleaseIterator(hi); /* Needed for gcc ASAN */
-                serverLogHexDump(LL_WARNING, "listpack with dup elements dump", o->ptr, lpBytes(o->ptr));
+                if (!server.hide_user_data_from_log) {
+                    serverLogHexDump(LL_WARNING, "listpack with dup elements dump", o->ptr, lpBytes(o->ptr));
+                }
                 serverPanic("Listpack corruption detected");
             }
         }

@@ -33,21 +33,30 @@ typedef struct client client;
 typedef struct bgIterator bgIterator;
 
 
-/* Flag indicates that a consistent iteration is required.  This is used to create a point-in-time
- * iteration.  The iteration client will see all keys AS THEY EXISTED at the time when the iterator
- * was created.
- * Note:  The DBID provided with the DICTENTRY events is the original DBID (at the time of iteration
- *        start).  SWAPDB events are NOT provided during a consistent iteration.  */
-#define BGITERATOR_FLAG_CONSISTENT (1 << 0)
+/* Consistency type for iteration. */
+typedef enum {
+    /* With no consistency requirements, dbEntries are provided to the iteration client as they
+     * appear at the time of iteration.  No replication is provided.  The only guarantee is that
+     * dbEntries which existed at the start of iteration, and remained through the duration of
+     * iteration, will be provided to the iteration client once (and only once).  If a dbEntry is
+     * modified during iteration, either the old or the new value may be provided. */
+    BGITERATOR_CONSISTENCY_NONE = 0,
 
-/* Flag indicating that the replication stream for keys which have already been processed should be
- * forwarded to the iteration client.  Most useful for non-consistent iteration to track changes
- * to keys already processed.  By tracking changes, this allows an non-consistent iteration client
- * to achieve a consistent view at the END of the iteration.
- * NOTE:  Replication events will be provided ordered and synchronized with any SWAPDB events.
- * LIMITATION:  Since SWAPDB events are not provided during CONSISTENT iteration, it is not
- *              permitted to use both CONSISTENT and REPLICATION on a non-clustermode instance.  */
-#define BGITERATOR_FLAG_REPLICATION (1 << 1)
+    /* With consistency at the start of iteration, a point-in-time iteration is performed.  The
+     * iteration client will see all keys AS THEY EXISTED at the time when the iterator was created.
+     * Note:  The DBID provided with the DICTENTRY events is the original DBID (at the time of iteration
+     *        start).  SWAPDB events will not be provided.  */
+    BGITERATOR_CONSISTENCY_START = 1,
+
+    /* With an eventually consistent iteration, dbEntries will be followed by relevant replication.
+     * This will allow a client to achieve a consistent state at the END of the iteration.  Once a
+     * dbEntry has been provided to the iteration client, any replication related to that entry will
+     * also be forwarded to the iteration client.  With eventual consistency, keys are provided as
+     * they are at the time of iteration.  This mode requires that the iteration client be aware of
+     * SWAPDB events.  If a SWAPDB is performed, the client will receive a SWAPDB event.
+     * Replication events will be provided ordered and synchronized with any SWAPDB events. */
+    BGITERATOR_CONSISTENCY_EVENTUAL = 2
+} bgIteratorConsistency;
 
 
 /* When running an iterator with replication, a replication-done function (callback) may be
@@ -94,7 +103,7 @@ typedef void (*bgIteratorCleanupFunc)(bool terminated, void *privdata);
  */
 bgIterator *bgIteratorCreateFullScanIter(
     const char *name,
-    int flags,
+    bgIteratorConsistency consistency,
     bgIteratorReplDoneFunc repldone,
     bgIteratorCleanupFunc cleanup,
     void *privdata);
@@ -123,7 +132,7 @@ bgIterator *bgIteratorCreateFullScanIter(
  */
 bgIterator *bgIteratorCreateSlotsIter(
     const char *name,
-    int flags,
+    bgIteratorConsistency consistency,
     const int *slots,
     int slots_count,
     bgIteratorReplDoneFunc repldone,

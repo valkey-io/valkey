@@ -244,6 +244,20 @@ typedef enum {
     BGITERATION_TYPE_CLUSTERSLOT
 } bgIterationType;
 
+/* Flag indicates that a consistent iteration is required.  This is used to create a point-in-time
+ * iteration.  The iteration client will see all keys AS THEY EXISTED at the time when the iterator
+ * was created.
+ * Note:  The DBID provided with the DICTENTRY events is the original DBID (at the time of iteration
+ *        start).  SWAPDB events are NOT provided during a consistent iteration.  */
+#define BGITERATOR_FLAG_CONSISTENT (1 << 0)
+
+/* Flag indicating that the replication stream for keys which have already been processed should be
+ * forwarded to the iteration client.  Used for non-consistent iteration to track changes
+ * to keys already processed.  By tracking changes, this allows an non-consistent iteration client
+ * to achieve a consistent view at the END of the iteration.
+ * NOTE:  Replication events will be provided ordered and synchronized with any SWAPDB events. */
+#define BGITERATOR_FLAG_REPLICATION (1 << 1)
+
 /* Extensions to bgIteratorItemType.  These enumerations are used internally, and are not part of
  *  the published interface.  These allow for extensibility in the internal information-passing
  *  between the Valkey main thread and the iteration client thread. */
@@ -2087,7 +2101,7 @@ static bool expediteKeysForMultiExec(client *c, hashtable *waitingOnKeys) {
 
 static bgIterator * bgIteratorCreate(
         const char *name,
-        int flags,
+        bgIteratorConsistency consistency,
         bgIteratorReplDoneFunc repldone,
         bgIteratorCleanupFunc cleanup,
         void *privdata,
@@ -2095,9 +2109,16 @@ static bgIterator * bgIteratorCreate(
         genericIterator *keyset_iter) {
     serverAssert(onValkeyMainThread());
     serverAssert(server.cluster_enabled || iter_type == BGITERATION_TYPE_FULLSCAN);
-    serverAssert(server.cluster_enabled                 // Don't allow CONSISTENT & REPLICATION
-            || !(flags & BGITERATOR_FLAG_CONSISTENT)    //  unless cluster mode (avoids
-            || !(flags & BGITERATOR_FLAG_REPLICATION)); //  complications with SWAPDB & FLUSHDB)
+
+    int flags;
+    switch (consistency) {
+        case BGITERATOR_CONSISTENCY_NONE: flags = 0; break;
+        case BGITERATOR_CONSISTENCY_START: flags = BGITERATOR_FLAG_CONSISTENT; break;
+        case BGITERATOR_CONSISTENCY_EVENTUAL: flags = BGITERATOR_FLAG_REPLICATION; break;
+        default: serverAssert(false);
+    }
+    // Consistent, with replication - doesn't make sense.
+    serverAssert(!((flags & BGITERATOR_FLAG_CONSISTENT) && (flags & BGITERATOR_FLAG_REPLICATION)));
 
     bgIterator *it = zmalloc(sizeof(bgIterator));
     it->name = sdsnew(name);
@@ -2164,27 +2185,27 @@ static bgIterator * bgIteratorCreate(
 //=============================================================================================
 
 // PUBLIC API
-bgIterator * bgIteratorCreateFullScanIter(
+bgIterator *bgIteratorCreateFullScanIter(
         const char *name,
-        int flags,
+        bgIteratorConsistency consistency,
         bgIteratorReplDoneFunc repldone,
         bgIteratorCleanupFunc cleanup,
         void *privdata) {
-    return bgIteratorCreate(name, flags, repldone, cleanup, privdata, BGITERATION_TYPE_FULLSCAN,
-                            fullScanIteratorCreate());
+    return bgIteratorCreate(name, consistency, repldone, cleanup, privdata,
+                            BGITERATION_TYPE_FULLSCAN, fullScanIteratorCreate());
 }
 
 // PUBLIC API
-bgIterator * bgIteratorCreateSlotsIter(
+bgIterator *bgIteratorCreateSlotsIter(
         const char *name,
-        int flags,
+        bgIteratorConsistency consistency,
         const int *slots,
         int slots_count,
         bgIteratorReplDoneFunc repldone,
         bgIteratorCleanupFunc cleanup,
         void *privdata) {
-    return bgIteratorCreate(name, flags, repldone, cleanup, privdata, BGITERATION_TYPE_CLUSTERSLOT,
-                            clusterSlotIteratorCreate(slots, slots_count));
+    return bgIteratorCreate(name, consistency, repldone, cleanup, privdata,
+                            BGITERATION_TYPE_CLUSTERSLOT, clusterSlotIteratorCreate(slots, slots_count));
 }
 
 // PUBLIC API

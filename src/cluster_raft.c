@@ -182,7 +182,7 @@ typedef struct {
     unsigned int pending_fail_change : 1; /* NODE_FAIL or NODE_RECOVER in flight */
 } clusterNodeRaftData;
 
-#define RAFT_DATA(n) ((clusterNodeRaftData *)(n)->protocol_data)
+#define RAFT_NODE(n) ((clusterNodeRaftData *)(n)->protocol_data)
 
 /* --------------------------------------------------------------------------
  * Wire format helpers
@@ -956,9 +956,9 @@ static void raftLogApply(raftLogEntry *e) {
             if (rs->role == RAFT_ROLE_LEADER) {
                 clusterNode *joined = clusterLookupNode(argv[0], CLUSTER_NAMELEN);
                 if (joined && joined != myself) {
-                    RAFT_DATA(joined)->next_index = 1;
-                    RAFT_DATA(joined)->match_index = 0;
-                    RAFT_DATA(joined)->last_ack_time = monotonicMs();
+                    RAFT_NODE(joined)->next_index = 1;
+                    RAFT_NODE(joined)->match_index = 0;
+                    RAFT_NODE(joined)->last_ack_time = monotonicMs();
                 }
             }
 
@@ -1040,7 +1040,7 @@ static void raftLogApply(raftLogEntry *e) {
         clusterNode *node = clusterLookupNode(e->data, sdslen(e->data));
         if (node && node != myself) {
             node->flags |= CLUSTER_NODE_FAIL;
-            RAFT_DATA(node)->pending_fail_change = 0;
+            RAFT_NODE(node)->pending_fail_change = 0;
             rs->todo_update_slot_coverage = 1;
             rs->todo_invalidate_slots_cache = 1;
         }
@@ -1061,7 +1061,7 @@ static void raftLogApply(raftLogEntry *e) {
         clusterNode *node = clusterLookupNode(e->data, sdslen(e->data));
         if (node) {
             node->flags &= ~CLUSTER_NODE_FAIL;
-            RAFT_DATA(node)->pending_fail_change = 0;
+            RAFT_NODE(node)->pending_fail_change = 0;
             rs->todo_update_slot_coverage = 1;
             rs->todo_invalidate_slots_cache = 1;
             /* Cancel deferred failover if the recovered node is my primary. */
@@ -1145,7 +1145,7 @@ static void raftLogApply(raftLogEntry *e) {
 
 static void clusterRaftSendAppendEntries(clusterLink *link, clusterNode *node) {
     clusterRaftState *rs = RAFT_STATE();
-    clusterNodeRaftData *rd = RAFT_DATA(node);
+    clusterNodeRaftData *rd = RAFT_NODE(node);
 
     uint64_t next = rd->next_index;
     uint64_t prev_index = next > 0 ? next - 1 : 0;
@@ -1305,7 +1305,7 @@ static int clusterRaftProcessAppendEntriesResponse(clusterLink *link, int argc, 
 
     clusterNode *node = link->node;
     if (!node) return 1;
-    clusterNodeRaftData *rd = RAFT_DATA(node);
+    clusterNodeRaftData *rd = RAFT_NODE(node);
     rd->last_ack_time = monotonicMs();
     /* Keep node->repl_offset in sync for CLUSTER SLOTS/SHARDS on the leader. */
     long long prev_offset = node->repl_offset;
@@ -1346,7 +1346,7 @@ static int clusterRaftProcessAppendEntriesResponse(clusterLink *link, int argc, 
             while ((de = dictNext(di)) != NULL) {
                 clusterNode *peer = dictGetVal(de);
                 if (peer == myself) continue;
-                if (RAFT_DATA(peer)->match_index >= idx) matches++;
+                if (RAFT_NODE(peer)->match_index >= idx) matches++;
             }
             dictReleaseIterator(di);
 
@@ -1457,16 +1457,16 @@ static int clusterRaftProcessRequestVoteResponse(clusterLink *link, int argc, sd
             while ((de = dictNext(di)) != NULL) {
                 clusterNode *peer = dictGetVal(de);
                 if (peer == myself) continue;
-                RAFT_DATA(peer)->next_index = last + 1;
-                RAFT_DATA(peer)->match_index = 0;
-                RAFT_DATA(peer)->pending_fail_change = 0;
+                RAFT_NODE(peer)->next_index = last + 1;
+                RAFT_NODE(peer)->match_index = 0;
+                RAFT_NODE(peer)->pending_fail_change = 0;
                 /* For the old leader, backdate last_ack_time to when we last
                  * heard from it, so failure detection kicks in faster. This
                  * matters if the old leader is also a primary. */
                 if (memcmp(peer->name, old_leader, CLUSTER_NAMELEN) == 0) {
-                    RAFT_DATA(peer)->last_ack_time = rs->last_heartbeat;
+                    RAFT_NODE(peer)->last_ack_time = rs->last_heartbeat;
                 } else {
-                    RAFT_DATA(peer)->last_ack_time = monotonicMs();
+                    RAFT_NODE(peer)->last_ack_time = monotonicMs();
                 }
             }
             dictReleaseIterator(di);
@@ -1557,7 +1557,7 @@ static void clusterRaftDetectFailures(mstime_t now) {
         clusterNode *n = dictGetVal(de);
         if (n == myself) continue;
         total++;
-        clusterNodeRaftData *rd = RAFT_DATA(n);
+        clusterNodeRaftData *rd = RAFT_NODE(n);
         if (rd->last_ack_time > 0 &&
             now - rd->last_ack_time > node_timeout) {
             overdue++;
@@ -1571,7 +1571,7 @@ static void clusterRaftDetectFailures(mstime_t now) {
         while ((de = dictNext(di)) != NULL) {
             clusterNode *n = dictGetVal(de);
             if (n == myself) continue;
-            RAFT_DATA(n)->last_ack_time = now;
+            RAFT_NODE(n)->last_ack_time = now;
         }
         dictReleaseIterator(di);
         return;
@@ -1588,7 +1588,7 @@ static void clusterRaftDetectFailures(mstime_t now) {
              * clusterConnectNodes can establish a fresh connection.
              * This allows the leader to detect recovery via AE_ACK. */
             if (node->link) {
-                clusterNodeRaftData *rd = RAFT_DATA(node);
+                clusterNodeRaftData *rd = RAFT_NODE(node);
                 if (rd->last_ack_time > 0 &&
                     now - rd->last_ack_time > node_timeout) {
                     freeClusterLink(node->link);
@@ -1597,7 +1597,7 @@ static void clusterRaftDetectFailures(mstime_t now) {
             }
             continue;
         }
-        clusterNodeRaftData *rd = RAFT_DATA(node);
+        clusterNodeRaftData *rd = RAFT_NODE(node);
         if (rd->pending_fail_change) continue;
         if (rd->last_ack_time > 0 &&
             now - rd->last_ack_time > node_timeout) {
@@ -1942,7 +1942,7 @@ static void clusterRaftPrepareShutdown(void) {
         if (node == myself || !node->link) continue;
         if (nodeFailed(node)) continue;
         if (node->flags & (CLUSTER_NODE_MEET | CLUSTER_NODE_HANDSHAKE)) continue;
-        uint64_t mi = RAFT_DATA(node)->match_index;
+        uint64_t mi = RAFT_NODE(node)->match_index;
         if (!best || mi > best_match) {
             best = node;
             best_match = mi;

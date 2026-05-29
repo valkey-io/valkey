@@ -179,7 +179,7 @@ start_server {tags {"acl external:skip"}} {
         set curruser "hpuser"
         foreach user [lshuffle $users] {
             if {[string first $curruser $user] != -1} {
-                assert_equal {user hpuser on nopass sanitize-payload resetchannels &foo alldbs +@all} $user
+                assert_equal {user hpuser on nopass resetchannels &foo alldbs +@all} $user
             }
         }
 
@@ -1422,6 +1422,26 @@ tags {acl external:skip} {
             r ACL SETUSER adv-test -@all +client|list +client|list +config|get +config +acl|list -acl
             assert_equal "-@all +client|list +config -acl" [dict get [r ACL getuser adv-test] commands]
         }
+    }
+}
+
+start_server {tags {"acl"}} {
+    test {Deprecated ACL flags skip-sanitize-payload and sanitize-payload are accepted as no-ops} {
+        # These flags existed in Valkey 9 but are deprecated in Valkey 10.
+        # They should be accepted without error but not emitted in ACL output.
+        r ACL setuser testuser on nopass skip-sanitize-payload ~* +@all
+        set user_info [r ACL getuser testuser]
+        # Flag should not appear in the user's flags
+        assert {[string first "skip-sanitize-payload" [dict get $user_info flags]] == -1}
+        assert {[string first "sanitize-payload" [dict get $user_info flags]] == -1}
+
+        # sanitize-payload should also be accepted
+        r ACL setuser testuser2 on nopass sanitize-payload ~* +@all
+        set user_info2 [r ACL getuser testuser2]
+        assert {[string first "sanitize-payload" [dict get $user_info2 flags]] == -1}
+
+        # Clean up
+        r ACL deluser testuser testuser2
     }
 }
 

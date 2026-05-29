@@ -2084,7 +2084,11 @@ void logCurrentClient(client *cc, const char *title) {
         key = getDecodedObject(cc->argv[1]);
         val = dbFind(cc->db, objectGetVal(key));
         if (val) {
-            serverLog(LL_WARNING, "key '%s' found in DB containing the following object:", (char *)objectGetVal(key));
+            if (server.hide_user_data_from_log) {
+                serverLog(LL_WARNING, "key '*redacted*' found in DB containing the following object:");
+            } else {
+                serverLog(LL_WARNING, "key '%s' found in DB containing the following object:", (char *)objectGetVal(key));
+            }
             serverLogObjectDebugInfo(val);
         }
         decrRefCount(key);

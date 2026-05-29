@@ -3080,9 +3080,13 @@ void sendReplyToClient(connection *conn) {
 
 void handleQbLimitReached(client *c) {
     sds ci = catClientInfoString(sdsempty(), c, server.hide_user_data_from_log), bytes = sdsempty();
-    bytes = sdscatrepr(bytes, c->querybuf, 64);
-    serverLog(LL_WARNING, "Closing client that reached max query buffer length: %s (qbuf initial bytes: %s)", ci,
-              bytes);
+    if (server.hide_user_data_from_log) {
+        serverLog(LL_WARNING, "Closing client that reached max query buffer length: %s", ci);
+    } else {
+        bytes = sdscatrepr(bytes, c->querybuf, 64);
+        serverLog(LL_WARNING, "Closing client that reached max query buffer length: %s (qbuf initial bytes: %s)", ci,
+                  bytes);
+    }
     sdsfree(ci);
     sdsfree(bytes);
     freeClientAsync(c);

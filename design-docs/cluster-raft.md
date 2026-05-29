@@ -26,7 +26,7 @@ HI <node-id> <address>
 
 MEET singleton|cluster
     Sent after HELLO on CLUSTER MEET-initiated connections. Declares
-    the sender's cluster status: "signleton" means it's alone and
+    the sender's cluster status: "singleton" means it's alone and
     "cluster" means that it's in a cluster with other nodes. The
     receiver decides based on its own status (see Cluster Formation
     below).
@@ -627,12 +627,12 @@ targets.
 ## Future Work
 
 - Pre-vote protocol to avoid term inflation from partitioned nodes.
-- Minotity partition detection and leader step-down (prevents append
+- Minority partition detection and leader step-down (prevents append
   entries, especially don't trigger primary/replica failovers in a
   minority partition).
 - Log compaction / snapshotting for lagging followers.
 - Persistence of Raft log to disk.
-- Lerners (non-voting members): reduces the risk for split-vote for
+- Learners (non-voting members): reduces the risk for split-vote for
   leader election in large clusters and reduces commit overhead.
 - Leader transfer on CLUSTER FORGET where the target is the leader.
 - Safety regarding membership changes (use new quorum).
@@ -640,4 +640,4 @@ targets.
   are joined via CLUSTER MEET, the clusters should merge, either
   atomically or not.
 - `valkey-cli --cluster` tooling compatibility (uses MULTI internally in
-  some cases, which is doesn't work with blocking admin commands).
+  some cases, which doesn't work with blocking admin commands).

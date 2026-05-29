@@ -1068,17 +1068,17 @@ void debugCommand(client *c) {
         addReply(c, shared.ok);
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "reply-blocking-pause") && c->argc == 3) {
         if (!strcasecmp(objectGetVal(c->argv[2]), "aof")) {
-            pauseAofDurability();
+            pauseAofReplyBlocking();
             addReply(c, shared.ok);
         } else {
-            addReplyError(c, "No such durability provider");
+            addReplyError(c, "No such reply-blocking provider");
         }
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "reply-blocking-resume") && c->argc == 3) {
         if (!strcasecmp(objectGetVal(c->argv[2]), "aof")) {
-            resumeAofDurability();
+            resumeAofReplyBlocking();
             addReply(c, shared.ok);
         } else {
-            addReplyError(c, "No such durability provider");
+            addReplyError(c, "No such reply-blocking provider");
         }
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "set-io-last-written") && c->argc == 5) {
         /* DEBUG set-io-last-written <client-id> <bufpos> <data_len>

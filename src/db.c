@@ -757,7 +757,7 @@ long long dbTotalServerKeyCount(void) {
  * a context of a client. */
 void signalModifiedKey(client *c, serverDb *db, robj *key) {
     touchWatchedKey(db, key);
-    if (durabilitySignalModifiedKey(c, db, key)) {
+    if (replyBlockingSignalModifiedKey(c, db, key)) {
         return;
     }
     trackingInvalidateKey(c, key, 1);
@@ -778,7 +778,7 @@ void signalFlushedDb(int dbid, int async) {
         touchAllWatchedKeysInDb(server.db[j], NULL);
     }
 
-    if (durabilitySignalFlushedDb(dbid)) {
+    if (replyBlockingSignalFlushedDb(dbid)) {
         return;
     }
 
@@ -2001,7 +2001,7 @@ void deleteExpiredKeyAndPropagateWithDictIndex(serverDb *db, robj *keyobj, int d
     notifyKeyspaceEvent(NOTIFY_EXPIRED, "expired", keyobj, db->id);
     signalModifiedKey(NULL, db, keyobj);
     propagateDeletion(db, keyobj, server.lazyfree_lazy_expire, dict_index);
-    if (isPrimaryDurabilityEnabled()) handleUncommittedKeyForClient(NULL, keyobj, db);
+    if (isPrimaryReplyBlockingEnabled()) handleUncommittedKeyForClient(NULL, keyobj, db);
     server.stat_expiredkeys++;
 }
 
@@ -2133,7 +2133,7 @@ size_t dbReclaimExpiredFields(robj *o, serverDb *db, mstime_t now, unsigned long
             if (!hashTypeHasVolatileFields(o)) dbUntrackKeyWithVolatileItems(db, o);
         }
         signalModifiedKey(NULL, db, keyobj);
-        if (isPrimaryDurabilityEnabled()) handleUncommittedKeyForClient(NULL, keyobj, db);
+        if (isPrimaryReplyBlockingEnabled()) handleUncommittedKeyForClient(NULL, keyobj, db);
         exitExecutionUnit();
         postExecutionUnitOperations();
         decrRefCount(keyobj);

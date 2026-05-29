@@ -17,7 +17,7 @@ typedef struct taskWaitingAck {
     void **argv;
 } taskWaitingAck;
 
-/* Internal structure used to define all handlers for a task type */
+// Internal structure used to define all handlers for a task type
 typedef struct taskWaitingAckType {
     taskWaitingAck *(*create_task)(va_list);
     void (*destroy_task)(void *);
@@ -25,11 +25,11 @@ typedef struct taskWaitingAckType {
     void (*on_client_destroy)(void *);
 } taskWaitingAckType;
 
-static taskWaitingAckType taskTypes[DURABLE_TASK_TYPE_MAX];
+static taskWaitingAckType taskTypes[POST_COMMIT_TASK_TYPE_MAX];
 
 /*================================= Keyspace Notify Task ===================== */
 
-/* Create the keyspace notify task. */
+// Create the keyspace notify task.
 static taskWaitingAck *createKeyspaceNotifyTask(va_list ap) {
     int argc = 4; /* 4 arguments for notify function: type, event, key, dbid */
     taskWaitingAck *task = zcalloc(sizeof(taskWaitingAck));
@@ -45,7 +45,7 @@ static taskWaitingAck *createKeyspaceNotifyTask(va_list ap) {
         task->argv[1] = zstrdup(event);
     }
 
-    /* Increase reference count to avoid the key from being deleted */
+    // Increase reference count to avoid the key from being deleted
     robj *key = (robj *)task->argv[2];
     if (key) {
         incrRefCount(key);
@@ -53,10 +53,10 @@ static taskWaitingAck *createKeyspaceNotifyTask(va_list ap) {
     return task;
 }
 
-/* Destroy the keyspace notify task. */
+// Destroy the keyspace notify task.
 static void destroyKeyspaceNotifyTask(void *ptr) {
     taskWaitingAck *task = (taskWaitingAck *)ptr;
-    /* Free the copied event string (argv[1]) */
+    // Free the copied event string (argv[1])
     if (task->argv[1]) {
         zfree(task->argv[1]);
     }
@@ -68,7 +68,7 @@ static void destroyKeyspaceNotifyTask(void *ptr) {
     zfree(task);
 }
 
-/* Execute the keyspace notify task. */
+// Execute the keyspace notify task.
 static void executeKeyspaceNotifyTask(const taskWaitingAck *task) {
     notifyKeyspaceEvent((int)(intptr_t)task->argv[0],
                         (char *)task->argv[1],
@@ -78,7 +78,7 @@ static void executeKeyspaceNotifyTask(const taskWaitingAck *task) {
 
 /*================================= Key Invalidation Task ==================== */
 
-/* Create the key invalidation task. */
+// Create the key invalidation task.
 static taskWaitingAck *createKeyInvalidationTask(va_list ap) {
     /* A key invalidation task has 2 arguments:
      * 1. client* which generated the modification on the key
@@ -90,13 +90,13 @@ static taskWaitingAck *createKeyInvalidationTask(va_list ap) {
         task->argv[i] = va_arg(ap, void *);
     }
 
-    /* Track the pending notification task in the referenced client */
+    // Track the pending notification task in the referenced client
     client *c = (client *)task->argv[0];
     if (c != NULL) {
         listAddNodeTail(c->reply_blocking_state.pending_notify_tasks, task);
     }
 
-    /* Increase reference count to avoid the key from being deleted */
+    // Increase reference count to avoid the key from being deleted
     robj *key = (robj *)task->argv[1];
     if (key) {
         incrRefCount(key);
@@ -104,7 +104,7 @@ static taskWaitingAck *createKeyInvalidationTask(va_list ap) {
     return task;
 }
 
-/* Destroy the key invalidation task. */
+// Destroy the key invalidation task.
 static void destroyKeyInvalidationTask(void *ptr) {
     taskWaitingAck *task = (taskWaitingAck *)ptr;
     /* Remove the current task from the list of pending tasks for the client.
@@ -117,7 +117,7 @@ static void destroyKeyInvalidationTask(void *ptr) {
         listDelNode(c->reply_blocking_state.pending_notify_tasks, first);
     }
 
-    /* Decrement the refcount for the key */
+    // Decrement the refcount for the key
     if (task->argv[1]) {
         robj *key = (robj *)task->argv[1];
         decrRefCount(key);
@@ -126,23 +126,23 @@ static void destroyKeyInvalidationTask(void *ptr) {
     zfree(task);
 }
 
-/* De-reference the client argument from the key invalidation task */
+// De-reference the client argument from the key invalidation task
 static void destroyClientForKeyInvalidationTask(void *task_ptr) {
     taskWaitingAck *task = (taskWaitingAck *)task_ptr;
-    /* The first argument is the client pointer */
+    // The first argument is the client pointer
     task->argv[0] = NULL;
 }
 
-/* Execute the key invalidation task. */
+// Execute the key invalidation task.
 static void executeKeyInvalidationTask(const taskWaitingAck *task) {
     trackingInvalidateKey((client *)task->argv[0], (robj *)task->argv[1], 1);
 }
 
 /*================================= Flush Invalidation Task ================== */
 
-/* Create the flush invalidation task. */
+// Create the flush invalidation task.
 static taskWaitingAck *createFlushInvalidationTask(va_list ap) {
-    /* Flush invalidation task has database ID as argument */
+    // Flush invalidation task has database ID as argument
     int argc = 1;
     taskWaitingAck *task = zcalloc(sizeof(taskWaitingAck));
     task->argv = zmalloc(argc * sizeof(void *));
@@ -152,14 +152,14 @@ static taskWaitingAck *createFlushInvalidationTask(va_list ap) {
     return task;
 }
 
-/* Destroy the flush invalidation task. */
+// Destroy the flush invalidation task.
 static void destroyFlushInvalidationTask(void *ptr) {
     taskWaitingAck *task = (taskWaitingAck *)ptr;
     zfree(task->argv);
     zfree(task);
 }
 
-/* Execute the flush invalidation task. */
+// Execute the flush invalidation task.
 static void executeFlushInvalidationTask(const taskWaitingAck *task) {
     bool is_flush_all = (bool)task->argv[0];
     /* Use DBID -1 for FLUSHALL, otherwise use 0 for DBID.
@@ -170,7 +170,7 @@ static void executeFlushInvalidationTask(const taskWaitingAck *task) {
 
 /*================================= Default callback ========================= */
 
-/* Default callback on client destroy doing no-op */
+// Default callback on client destroy doing no-op
 static void destroyClientDefaultCallback(void *task) {
     UNUSED(task);
     return;
@@ -179,17 +179,17 @@ static void destroyClientDefaultCallback(void *task) {
 /*================================= Task Type Registry ======================= */
 
 void initTaskTypes(void) {
-    taskTypes[DURABLE_KEYSPACE_NOTIFY_TASK] = (taskWaitingAckType){
+    taskTypes[POST_COMMIT_KEYSPACE_NOTIFY_TASK] = (taskWaitingAckType){
         createKeyspaceNotifyTask,
         destroyKeyspaceNotifyTask,
         executeKeyspaceNotifyTask,
         destroyClientDefaultCallback};
-    taskTypes[DURABLE_KEY_INVALIDATION_TASK] = (taskWaitingAckType){
+    taskTypes[POST_COMMIT_KEY_INVALIDATION_TASK] = (taskWaitingAckType){
         createKeyInvalidationTask,
         destroyKeyInvalidationTask,
         executeKeyInvalidationTask,
         destroyClientForKeyInvalidationTask};
-    taskTypes[DURABLE_FLUSH_INVALIDATION_TASK] = (taskWaitingAckType){
+    taskTypes[POST_COMMIT_FLUSH_INVALIDATION_TASK] = (taskWaitingAckType){
         createFlushInvalidationTask,
         destroyFlushInvalidationTask,
         executeFlushInvalidationTask,
@@ -205,9 +205,9 @@ void initTaskTypes(void) {
  * offset we want to configure this task with so we put it onto a pending list.
  * And at a later point in time, when we know the replication offset, we would
  * set it and move the task to the official tasks list. */
-bool durabilityRegisterDeferredTask(int type, ...) {
-    /* Check durability is active and the type is valid */
-    if (!isPrimaryDurabilityEnabled() || type < 0 || type >= DURABLE_TASK_TYPE_MAX) {
+bool replyBlockingRegisterPostCommitTask(int type, ...) {
+    // Check reply-blocking is active and the type is valid
+    if (!isPrimaryReplyBlockingEnabled() || type < 0 || type >= POST_COMMIT_TASK_TYPE_MAX) {
         return false;
     }
 
@@ -221,13 +221,13 @@ bool durabilityRegisterDeferredTask(int type, ...) {
             /* Here the notification is triggered by an incoming client request when we
              * don't yet know the actual replication offset after command is applied,
              * so we need to put it onto a pending tasks list. */
-            listAddNodeTail(server.durability.pending_tasks_waiting_ack[type], task);
+            listAddNodeTail(server.reply_blocking.pending_tasks_waiting_ack[type], task);
         } else {
             /* This notification is triggered from a background job such as
              * active expiry or eviction outside of a regular client command.
              * The replication offset is already updated so we use it directly. */
             task->offset = server.primary_repl_offset;
-            listAddNodeTail(server.durability.tasks_waiting_ack[type], task);
+            listAddNodeTail(server.reply_blocking.tasks_waiting_ack[type], task);
         }
         return_code = true;
     }
@@ -237,35 +237,35 @@ bool durabilityRegisterDeferredTask(int type, ...) {
 
 /*================================= Signal Handlers ========================== */
 
-bool durabilitySignalModifiedKey(struct client *c, struct serverDb *db, struct serverObject *key) {
+bool replyBlockingSignalModifiedKey(struct client *c, struct serverDb *db, struct serverObject *key) {
     UNUSED(db);
-    /* Defer key invalidation messages until the durability providers acknowledge. */
-    return durabilityRegisterDeferredTask(DURABLE_KEY_INVALIDATION_TASK,
+    // Defer key invalidation messages until the reply-blocking providers acknowledge.
+    return replyBlockingRegisterPostCommitTask(POST_COMMIT_KEY_INVALIDATION_TASK,
                                           (void *)c, (void *)key);
 }
 
 
-bool durabilitySignalFlushedDb(int dbid) {
-    /* Defer flush invalidation messages until the durability providers acknowledge. */
-    return durabilityRegisterDeferredTask(DURABLE_FLUSH_INVALIDATION_TASK,
+bool replyBlockingSignalFlushedDb(int dbid) {
+    // Defer flush invalidation messages until the reply-blocking providers acknowledge.
+    return replyBlockingRegisterPostCommitTask(POST_COMMIT_FLUSH_INVALIDATION_TASK,
                                           (void *)(intptr_t)(dbid == -1));
 }
 
 /*================================= Task Execution =========================== */
 
-/* Find and execute deferred tasks when 'consensus_ack_offset' is acked. */
+// Find and execute deferred tasks when 'consensus_ack_offset' is acked.
 void executeDeferredTasksForAck(const long long consensus_ack_offset) {
     listIter li;
     listNode *ln;
-    struct durable_t *durability = &server.durability;
+    struct reply_blocking_t *rb_state = &server.reply_blocking;
 
-    for (int i = 0; i < DURABLE_TASK_TYPE_MAX; i++) {
-        listRewind(durability->tasks_waiting_ack[i], &li);
+    for (int i = 0; i < POST_COMMIT_TASK_TYPE_MAX; i++) {
+        listRewind(rb_state->tasks_waiting_ack[i], &li);
         while ((ln = listNext(&li))) {
             taskWaitingAck *task = listNodeValue(ln);
             if (task->offset <= consensus_ack_offset) {
                 taskTypes[i].execute_task(task);
-                listDelNode(durability->tasks_waiting_ack[i], ln);
+                listDelNode(rb_state->tasks_waiting_ack[i], ln);
             } else {
                 break;
             }
@@ -273,14 +273,14 @@ void executeDeferredTasksForAck(const long long consensus_ack_offset) {
     }
 }
 
-/* Move pending deferred tasks to the official list with the current replication offset. */
+// Move pending deferred tasks to the official list with the current replication offset.
 void certifyPendingDeferredTasks(void) {
     listIter li;
     listNode *ln;
-    for (int i = 0; i < DURABLE_TASK_TYPE_MAX; i++) {
+    for (int i = 0; i < POST_COMMIT_TASK_TYPE_MAX; i++) {
         /* Splice pending tasks into a local list so module callbacks that
          * register new deferred tasks don't corrupt our iteration. */
-        list *pending = server.durability.pending_tasks_waiting_ack[i];
+        list *pending = server.reply_blocking.pending_tasks_waiting_ack[i];
         if (listLength(pending) == 0) continue;
         list local;
         memset(&local, 0, sizeof(local));
@@ -290,7 +290,7 @@ void certifyPendingDeferredTasks(void) {
             taskWaitingAck *task = listNodeValue(ln);
             serverAssert(task->offset == 0);
             task->offset = server.primary_repl_offset;
-            if (task->type == DURABLE_KEYSPACE_NOTIFY_TASK) {
+            if (task->type == POST_COMMIT_KEYSPACE_NOTIFY_TASK) {
                 moduleNotifyKeyspaceEvent(
                     /*type*/ (intptr_t)task->argv[0],
                     /*event*/ (char *)task->argv[1],
@@ -298,7 +298,7 @@ void certifyPendingDeferredTasks(void) {
                     /*dbid*/ (intptr_t)task->argv[3]);
             }
         }
-        listJoin(server.durability.tasks_waiting_ack[i], &local);
+        listJoin(server.reply_blocking.tasks_waiting_ack[i], &local);
     }
 }
 
@@ -306,7 +306,7 @@ void certifyPendingDeferredTasks(void) {
 
 /* Notify the task system that a client is being destroyed so that
  * any tasks referencing it can de-reference the client pointer. */
-void durableTaskNotifyClientDestroy(struct list *pending_notify_tasks) {
+void postCommitTaskNotifyClientDestroy(struct list *pending_notify_tasks) {
     listIter li;
     listNode *ln;
     listRewind(pending_notify_tasks, &li);
@@ -320,33 +320,33 @@ void durableTaskNotifyClientDestroy(struct list *pending_notify_tasks) {
 
 /*================================= Init / Cleanup =========================== */
 
-/* Initialize the task lists in the durability structure.
+/* Initialize the task lists in the reply-blocking structure.
  * Called from replyBlockingInit(). */
-void durableTaskInitLists(void) {
-    for (int i = 0; i < DURABLE_TASK_TYPE_MAX; i++) {
-        server.durability.tasks_waiting_ack[i] = listCreate();
-        server.durability.pending_tasks_waiting_ack[i] = listCreate();
-        listSetFreeMethod(server.durability.tasks_waiting_ack[i],
+void postCommitTaskInitLists(void) {
+    for (int i = 0; i < POST_COMMIT_TASK_TYPE_MAX; i++) {
+        server.reply_blocking.tasks_waiting_ack[i] = listCreate();
+        server.reply_blocking.pending_tasks_waiting_ack[i] = listCreate();
+        listSetFreeMethod(server.reply_blocking.tasks_waiting_ack[i],
                           taskTypes[i].destroy_task);
-        listSetFreeMethod(server.durability.pending_tasks_waiting_ack[i],
+        listSetFreeMethod(server.reply_blocking.pending_tasks_waiting_ack[i],
                           taskTypes[i].destroy_task);
     }
 }
 
-/* Release (free) all task lists. Called from replyBlockingCleanup(). */
-void durableTaskCleanupLists(void) {
-    for (int i = 0; i < DURABLE_TASK_TYPE_MAX; i++) {
-        listRelease(server.durability.tasks_waiting_ack[i]);
-        server.durability.tasks_waiting_ack[i] = NULL;
-        listRelease(server.durability.pending_tasks_waiting_ack[i]);
-        server.durability.pending_tasks_waiting_ack[i] = NULL;
+// Release (free) all task lists. Called from replyBlockingCleanup().
+void postCommitTaskCleanupLists(void) {
+    for (int i = 0; i < POST_COMMIT_TASK_TYPE_MAX; i++) {
+        listRelease(server.reply_blocking.tasks_waiting_ack[i]);
+        server.reply_blocking.tasks_waiting_ack[i] = NULL;
+        listRelease(server.reply_blocking.pending_tasks_waiting_ack[i]);
+        server.reply_blocking.pending_tasks_waiting_ack[i] = NULL;
     }
 }
 
-/* Empty (but don't free) all task lists. Called during primary state reset. */
-void durableTaskEmptyLists(void) {
-    for (int i = 0; i < DURABLE_TASK_TYPE_MAX; i++) {
-        listEmpty(server.durability.tasks_waiting_ack[i]);
-        listEmpty(server.durability.pending_tasks_waiting_ack[i]);
+// Empty (but don't free) all task lists. Called during primary state reset.
+void postCommitTaskEmptyLists(void) {
+    for (int i = 0; i < POST_COMMIT_TASK_TYPE_MAX; i++) {
+        listEmpty(server.reply_blocking.tasks_waiting_ack[i]);
+        listEmpty(server.reply_blocking.pending_tasks_waiting_ack[i]);
     }
 }

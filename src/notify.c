@@ -109,7 +109,7 @@ void notifyKeyspaceEvent(int type, char *event, robj *key, int dbid) {
     char buf[24];
     client *c = server.executing_client;
     debugServerAssert(moduleNotifyKeyspaceSubscribersCnt() == 0 ||
-                      !isPrimaryDurabilityEnabled() ||
+                      !isPrimaryReplyBlockingEnabled() ||
                       (type & (NOTIFY_GENERIC | NOTIFY_STRING | NOTIFY_LIST | NOTIFY_SET | NOTIFY_HASH | NOTIFY_ZSET | NOTIFY_STREAM)) == 0 ||
                       c == NULL ||
                       c->cmd == NULL ||
@@ -119,17 +119,17 @@ void notifyKeyspaceEvent(int type, char *event, robj *key, int dbid) {
                       c->id == UINT64_MAX || // AOF client
                       getClientType(c) != CLIENT_TYPE_NORMAL);
 
-    if (!(type & NOTIFY_IN_DURABLE_TASK)) {
-        if (isPrimaryDurabilityEnabled()) {
+    if (!(type & NOTIFY_IN_POST_COMMIT_TASK)) {
+        if (isPrimaryReplyBlockingEnabled()) {
             bool shouldSendDelayedNotificationToClients = (server.notify_keyspace_events & type);
 
-            /* Defer client notifications until durability providers acknowledge the write. */
+            /* Defer client notifications until reply-blocking providers acknowledge the write. */
             if (shouldSendDelayedNotificationToClients) {
-                type = type | NOTIFY_IN_DURABLE_TASK;
+                type = type | NOTIFY_IN_POST_COMMIT_TASK;
                 /* Register deferred task, executed when offset is acknowledged
-                 * by durability providers */
-                durabilityRegisterDeferredTask(
-                    DURABLE_KEYSPACE_NOTIFY_TASK,
+                 * by reply-blocking providers */
+                replyBlockingRegisterPostCommitTask(
+                    POST_COMMIT_KEYSPACE_NOTIFY_TASK,
                     (void *)(long)type,
                     (void *)event,
                     (void *)key,
@@ -149,7 +149,7 @@ void notifyKeyspaceEvent(int type, char *event, robj *key, int dbid) {
         }
     }
 
-    type = type & ~NOTIFY_IN_DURABLE_TASK;
+    type = type & ~NOTIFY_IN_POST_COMMIT_TASK;
 
     /* If notifications for this class of events are off, return ASAP. */
     if (!(server.notify_keyspace_events & type)) return;

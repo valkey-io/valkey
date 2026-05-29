@@ -1865,7 +1865,7 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
         /* When appendfsync=always and the AOF fsync has been offloaded to an
          * IO thread, skip flushing replies to clients until the fsync completes.
          * This ensures clients don't receive responses before their writes are
-         * durable on disk. The next beforeSleep iteration will flush replies
+         * durably committed. The next beforeSleep iteration will flush replies
          * once processAofIOThreadFlushResult() confirms the fsync is done. */
         if (!(server.bio_aof_offload_enabled && server.aof_fsync == AOF_FSYNC_ALWAYS && aofIOFlushInProgress())) {
             processed += handleClientsWithPendingWrites();
@@ -1976,7 +1976,7 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
          * wake them up ASAP. */
         if (listLength(server.clients_waiting_acks) && prev_fsynced_reploff != server.fsynced_reploff) dont_sleep = 1;
     }
-    notifyDurabilityProgress();
+    notifyReplyBlockingProgress();
 
     /* Handle writes with pending output buffers. */
     int client_writes = handleClientsWithPendingWrites();
@@ -2914,7 +2914,7 @@ serverDb *createDatabase(int id) {
     db->watched_keys = dictCreate(&keylistDictType);
     db->id = id;
 
-    durabilityInitDatabase(db);
+    replyBlockingInitDatabase(db);
     resetDbExpiryState(db);
     return db;
 }
@@ -4131,7 +4131,7 @@ void call(client *c, int flags) {
 
     /* Do some maintenance job and cleanup */
     afterCommand(c);
-    /* Track replication offset for durability blocking. This must stay
+    /* Track replication offset for reply-blocking. This must stay
      * here rather than inside afterCommand() because afterCommand() is
      * also invoked from nested call() contexts (e.g. propagatePendingCommands)
      * where the client argv may no longer be valid. */
@@ -4988,7 +4988,7 @@ int finishShutdown(void) {
     /* Fire the shutdown modules event. */
     moduleFireServerEvent(VALKEYMODULE_EVENT_SHUTDOWN, 0, NULL);
 
-    /* Cleanup durability tracking resources. */
+    /* Cleanup reply-blocking tracking resources. */
     replyBlockingCleanup();
 
     /* Remove the pid file if possible and needed. */
@@ -6834,11 +6834,11 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                 "io_threaded_writes_pending:%lld\r\n", server.stat_io_writes_pending));
     }
 
-    /* Sync replication / durability stats */
-    if (all_sections || (dictFind(section_dict, "durability") != NULL)) {
+    /* Sync replication / reply-blocking stats */
+    if (all_sections || (dictFind(section_dict, "reply_blocking") != NULL)) {
         if (sections++) info = sdscat(info, "\r\n");
-        info = sdscatprintf(info, "# Durability\r\n");
-        info = genDurabilityInfoString(info);
+        info = sdscatprintf(info, "# Reply_blocking\r\n");
+        info = genReplyBlockingInfoString(info);
     }
 
     return info;

@@ -716,7 +716,7 @@ foreach provider_mode {aof} {
                 after 200
 
                 set info [$primary info all]
-                assert_match "*durability_clients_waiting_ack:0*" $info
+                assert_match "*reply_blocking_clients_waiting_ack:0*" $info
 
                 # Resume the provider so subsequent tests aren't affected
                 unblock_with_provider
@@ -783,9 +783,9 @@ foreach provider_mode {aof} {
 
             test "($provider_mode) INFO reports sync replication stats" {
                 set info [$primary info all]
-                assert_match "*durability_enabled:1*" $info
-                assert_match "*durability_primary_repl_offset:*" $info
-                assert_match "*durability_previous_acked_offset:*" $info
+                assert_match "*reply_blocking_enabled:1*" $info
+                assert_match "*reply_blocking_primary_repl_offset:*" $info
+                assert_match "*reply_blocking_previous_acked_offset:*" $info
             }
 
             # ==================== Client tracking invalidation (deferred tasks) ====================
@@ -1005,12 +1005,12 @@ foreach provider_mode {aof} {
 
             test "($provider_mode) Pause unknown provider returns error" {
                 catch {$primary DEBUG reply-blocking-pause nonexistent} err
-                assert_match "*No such durability provider*" $err
+                assert_match "*No such reply-blocking provider*" $err
             }
 
             test "($provider_mode) Resume unknown provider returns error" {
                 catch {$primary DEBUG reply-blocking-resume nonexistent} err
-                assert_match "*No such durability provider*" $err
+                assert_match "*No such reply-blocking provider*" $err
             }
 
             test "($provider_mode) Double pause is idempotent - writes still block" {

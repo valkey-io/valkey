@@ -2619,7 +2619,7 @@ static int updateAppendOnly(const char **err) {
             return 0;
         }
     }
-    /* Durability is implied by appendfsync always + AOF on, so toggling
+    /* Reply-blocking is implied by appendfsync always + AOF on, so toggling
      * appendonly may enable or disable it. */
     replyBlockingReset();
     return 1;
@@ -2711,7 +2711,7 @@ int updateAppendFsync(const char **err) {
          * worker thread. */
         bioDrainWorker(BIO_AOF_FSYNC);
     }
-    /* Durability is implied by appendfsync always + AOF on, so toggling
+    /* Reply-blocking is implied by appendfsync always + AOF on, so toggling
      * appendfsync may enable or disable it. */
     replyBlockingReset();
     return 1;

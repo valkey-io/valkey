@@ -544,7 +544,7 @@ ENGINE_SERVER_OBJ = \
     release.o \
     replication.o \
     reply_blocking.o \
-    durable_task.o \
+    post_commit_task.o \
     uncommitted_keys.o \
     resp_parser.o \
     rio.o \

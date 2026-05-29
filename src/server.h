@@ -924,10 +924,10 @@ typedef struct serverDb {
     } expiry[ACTIVE_EXPIRY_TYPE_COUNT];
 
     /* fields related to dirty key tracking
-     * for consistent writes with durability */
+     * for consistent writes with reply-blocking */
     hashtable *uncommitted_keys; /* Map of dirty keys to the offset required by replica acknowledgement */
     long long dirty_repl_offset; /* Replication offset for a dirty DB */
-    rax *reply_duration;         /* Radix tree tracking reply durations for durable blocked clients */
+    rax *reply_duration;         /* Radix tree tracking reply durations for reply-blocked clients */
 } serverDb;
 
 /* forward declaration for functions ctx */
@@ -1217,7 +1217,7 @@ typedef struct ClientFlags {
                                               or client::buf. */
     uint64_t keyspace_notified : 1;        /* Indicates that a keyspace notification was triggered during the execution of the
                                               current command. */
-    uint64_t durable_blocked_client : 1;   /* This is a durable blocked client that is waiting for the server to
+    uint64_t reply_blocked_client : 1;   /* This is a reply-blocked client that is waiting for the server to
                                             * acknowledge the write of the command that caused it to be blocked. */
     uint64_t argv_borrowed : 1;            /* The argv array and its elements are borrowed from the caller (VM_CallArgv) and must not be freed. */
 } ClientFlags;
@@ -2068,7 +2068,7 @@ struct valkeyServer {
                                            default no. (for testings). */
     int bio_aof_offload_enabled;        /* Hidden feature flag to enable/disable BIO AOF offload
                                          * and dirty key tracking. */
-    durable_t durability;               /* Durability container for reply-blocking state. */
+    reply_blocking_t reply_blocking;               /* Reply-blocking state container. */
 
     /* RDB persistence */
     long long dirty;                      /* Changes to DB from the last save */

@@ -378,7 +378,7 @@ client *createClient(connection *conn) {
     c->io_last_written.bufpos = 0;
     c->io_last_written.data_len = 0;
     memset(&c->reply_blocking_state, 0, sizeof(c->reply_blocking_state));
-    durabilityClientInit(c);
+    replyBlockingClientInit(c);
 
     return c;
 }
@@ -1978,7 +1978,7 @@ void disconnectReplicas(void) {
 void unlinkClient(client *c) {
     listNode *ln;
 
-    durabilityClientReset(c);
+    replyBlockingClientReset(c);
 
 
     /* If this is marked as current client unset it. */
@@ -2741,6 +2741,24 @@ static int writevToClient(client *c) {
     replyIOV reply;
     initReplyIOV(c, iovmax, iov_arr, prefixes, crlf, &reply);
 
+    /* Cap the iov at disallowed_byte_offset when reply blocking is active. */
+    listNode *disallowed_block = NULL;
+    size_t disallowed_offset = 0;
+    if (isClientReplyBufferLimited(c)) {
+        const blockedResponse *br = listNodeValue(listFirst(c->reply_blocking_state.blocked_responses));
+        if (br->disallowed_reply_block == NULL) {
+            /* Boundary is in c->buf — cap bufpos and skip reply blocks. */
+            if (br->disallowed_byte_offset < bufpos) {
+                bufpos = br->disallowed_byte_offset;
+            }
+            lastblock = NULL;
+        } else {
+            /* Boundary is in a reply block — remember it for capping below. */
+            disallowed_block = br->disallowed_reply_block;
+            disallowed_offset = br->disallowed_byte_offset;
+        }
+    }
+
     /* If the static reply buffer is not empty,
      * add it to the iov array for writev() as well. */
     if (bufpos > 0) {
@@ -2764,8 +2782,13 @@ static int writevToClient(client *c) {
              * that may not yet be visible to the current thread*/
             if (!inMainThread() && next == lastblock) used = c->io_last_bufpos;
 
+            /* Cap at disallowed_byte_offset if this is the disallowed block. */
+            if (next == disallowed_block) {
+                if (disallowed_offset < used) used = disallowed_offset;
+            }
+
             if (used == 0) { /* empty node, skip over it. */
-                if (next == lastblock) break;
+                if (next == lastblock || next == disallowed_block) break;
                 continue;
             }
 
@@ -2777,7 +2800,7 @@ static int writevToClient(client *c) {
             if (!buf_metadata[bufcnt].data_len) break;
             bufcnt++;
 
-            if (next == lastblock) break;
+            if (next == lastblock || next == disallowed_block) break;
 
             if (reply.iovcnt == reply.iovsize) {
                 reply.limit_reached = 1;
@@ -2845,6 +2868,16 @@ int _writeToClient(client *c) {
 
     /* If io_last_written_data_len is nonzero it must relate to c->buf */
     serverAssert(c->io_last_written.data_len == 0 || c->io_last_written.buf == c->buf);
+
+    /* Cap bufpos at disallowed_byte_offset when reply blocking is active and
+     * the boundary is in c->buf (disallowed_reply_block == NULL). */
+    if (isClientReplyBufferLimited(c)) {
+        const blockedResponse *br = listNodeValue(listFirst(c->reply_blocking_state.blocked_responses));
+        if (br->disallowed_reply_block == NULL && br->disallowed_byte_offset < bufpos) {
+            bufpos = br->disallowed_byte_offset;
+        }
+    }
+
     ssize_t bytes_to_write = bufpos - c->io_last_written.data_len;
     ssize_t tot_written = 0;
 

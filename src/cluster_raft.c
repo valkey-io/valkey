@@ -1180,22 +1180,17 @@ static void clusterRaftSendAppendEntries(clusterLink *link, clusterNode *node) {
 }
 
 static void clusterRaftBroadcastAppendEntries(clusterRaftState *rs) {
+    UNUSED(rs);
     dictIterator *di = dictGetSafeIterator(server.cluster->nodes);
     dictEntry *de;
-    int pending = 0;
     while ((de = dictNext(di)) != NULL) {
         clusterNode *node = dictGetVal(de);
         if (node == myself) continue;
         if (node->flags & CLUSTER_NODE_MEET) continue;
-        if (!node->link) {
-            pending = 1;
-            continue;
-        }
+        if (!node->link) continue;
         clusterRaftSendAppendEntries(node->link, node);
     }
     dictReleaseIterator(di);
-    /* Retry in next beforeSleep if some nodes had no link yet. */
-    if (pending) rs->todo_broadcast_ae = 1;
 }
 
 /* AE_ACK <term> <success> <last-log-index> */

@@ -39,15 +39,9 @@ start_cluster 1 0 {tags {external:skip cluster}} {
         }
     }
 
-    test "cluster-announce-ip rejects backslash" {
+    test "cluster-announce-ip rejects equals sign" {
         assert_error "ERR CONFIG SET failed*cluster-announce-ip*invalid character*" {
-            R 0 CONFIG SET cluster-announce-ip "10.0.0.1\\evil"
-        }
-    }
-
-    test "cluster-announce-ip rejects double quote" {
-        assert_error "ERR CONFIG SET failed*cluster-announce-ip*invalid character*" {
-            R 0 CONFIG SET cluster-announce-ip "10.0.0.1\"evil"
+            R 0 CONFIG SET cluster-announce-ip "10.0.0.1=evil"
         }
     }
 

@@ -2465,6 +2465,10 @@ static int isValidAnnouncedNodename(char *val, const char **err) {
 }
 
 static int isValidAnnouncedIp(char *val, const char **err) {
+    if (sdslen(val) >= NET_IP_STR_LEN) {
+        *err = "cluster-announce-ip is too long";
+        return 0;
+    }
     if (!(isValidAuxString(val, sdslen(val)))) {
         *err = "cluster-announce-ip contains invalid character";
         return 0;

@@ -281,6 +281,28 @@ start_cluster 3 0 [list config_lines $modules] {
         assert_equal [lsort [$node2 cluster shards]] [lsort [$node2 test.cluster_shards]]
         assert_equal [lsort [$node3 cluster shards]] [lsort [$node3 test.cluster_shards]]
     }
+
+    test "VM_RegisterClusterMessageReceiver - unregister head and re-register does not crash" {
+        # Register a receiver for type 3 on node1
+        assert_equal OK [$node1 test.register_receiver]
+
+        # Unregister it (this is the head of the list for type 3)
+        assert_equal OK [$node1 test.unregister_receiver]
+
+        # Re-register - on the buggy code this traverses freed memory and crashes
+        assert_equal OK [$node1 test.register_receiver]
+
+        # Send from node2 so node1 receives it via the re-registered receiver
+        R 0 CONFIG RESETSTAT
+        assert_equal OK [$node2 test.send_msg_type3]
+
+        wait_for_condition 50 100 {
+            [CI 0 cluster_stats_messages_module_received] >= 1
+        } else {
+            fail "node1 didn't receive cluster module message after re-registration"
+        }
+        verify_log_message 0 "*DING (type 3) RECEIVED*TestUAF*" 0
+    }
 }
 
 } ;# end tag

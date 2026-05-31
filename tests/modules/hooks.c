@@ -31,6 +31,7 @@
  */
 
 #include "valkeymodule.h"
+#include <limits.h>
 #include <stdio.h>
 #include <string.h>
 #include <strings.h>
@@ -474,6 +475,22 @@ static int cmdKeyExpiry(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
     return VALKEYMODULE_OK;
 }
 
+/* Test command for exercising the slot importing module API with raw slot input. */
+static int cmdClusterIsSlotImporting(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    if (argc != 2) {
+        return ValkeyModule_WrongArity(ctx);
+    }
+
+    long long slot;
+    if (ValkeyModule_StringToLongLong(argv[1], &slot) == VALKEYMODULE_ERR || slot < 0 || slot > UINT_MAX) {
+        ValkeyModule_ReplyWithError(ctx, "ERR invalid slot");
+        return VALKEYMODULE_OK;
+    }
+
+    ValkeyModule_ReplyWithLongLong(ctx, ValkeyModule_ClusterIsSlotImporting((unsigned int)slot));
+    return VALKEYMODULE_OK;
+}
+
 /* This function must be present on each module. It is used in order to
  * register the commands into the server. */
 int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
@@ -548,6 +565,8 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
         return VALKEYMODULE_ERR;
     if (ValkeyModule_CreateCommand(ctx,"hooks.pexpireat", cmdKeyExpiry,"",0,0,0) == VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
+    if (ValkeyModule_CreateCommand(ctx,"hooks.cluster_is_slot_importing", cmdClusterIsSlotImporting,"",0,0,0) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
 
     if (argc == 1) {
         const char *ptr = ValkeyModule_StringPtrLen(argv[0], NULL);
@@ -595,4 +614,3 @@ int ValkeyModule_OnUnload(ValkeyModuleCtx *ctx) {
 
     return VALKEYMODULE_OK;
 }
-

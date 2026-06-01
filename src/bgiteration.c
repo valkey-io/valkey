@@ -589,7 +589,7 @@ static void fullScanIteratorSwapDb(genericIterator *genIt, int db1, int db2) {
 
 static void fullScanIteratorFlushDb(genericIterator *genIt, int cur_dbid) {
     struct fullScanIterator *it = (struct fullScanIterator *)genIt;
-    int orig_db = it->cur_to_orig_db[cur_dbid];
+    int orig_db = (cur_dbid == -1) ? it->iter_db : it->cur_to_orig_db[cur_dbid];
     if (orig_db == it->iter_db) {
         // We are currently iterating on the DB that's being flushed.
         it->kvs = NULL;

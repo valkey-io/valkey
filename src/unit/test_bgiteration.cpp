@@ -46,15 +46,6 @@ static void iteratorCleanupFn(bool terminated, void *privdata) {
 }
 
 
-// A bgIteration repldone function used for testing.
-static int repldoneCount;
-static bool iteratorRepldoneFn(void *privdata) {
-    EXPECT_EQ(privdata, PRIVDATA);
-    repldoneCount++;
-    return true;
-}
-
-
 /* This mock for hashtableScan will return the items in lexical order.  It assumes that the entries
  * are robjs containing an sds string for the key.  The key is expected to begin with a capital
  * letter [A-Z].  The caller passes 0 as the cursor to start the iteration.  The returned cursor
@@ -275,7 +266,6 @@ class BgIterationTest : public ::testing::Test {
             bgIteration_init();
 
             cleanupCount = 0;
-            repldoneCount = 0;
 
             // By default, do nothing for these
             EXPECT_CALL(mock, blockClientInUseOnKeys(_,_,_)).WillRepeatedly(Return());

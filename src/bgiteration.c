@@ -1940,6 +1940,9 @@ static void handleFlushdb(int dbid) {
     while ((node = listNext(&li)) != NULL) {
         bgIterator *it = listNodeValue(node);
 
+        // Let the low-level iterator know the DB is being flushed
+        it->keyset_iter->flushDb(it->keyset_iter, dbid);
+
         if (should_abort_iterators || it->iteration_flags & BGITERATOR_FLAG_CONSISTENT) {
             terminateIteratorForFlush(it, dbid);
         } else {
@@ -1951,7 +1954,6 @@ static void handleFlushdb(int dbid) {
             //  very rare condition, development is not justified to save off the DB for deferred
             //  delete.  This would add a lot of complexity as well as memory implications.
             preserveIteratorItemsForFlush(it, dbid);
-            it->keyset_iter->flushDb(it->keyset_iter, dbid);
 
             // Send a flushdb event to notify the client
             if (BGITERATION_DEBUG) {

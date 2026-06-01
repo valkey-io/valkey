@@ -90,6 +90,7 @@ set ::loop 0
 set ::tlsdir "tests/tls"
 set ::singledb 0
 set ::cluster_mode 0
+set ::cluster_raft 0
 set ::ignoreencoding 0
 set ::ignoredigest 0
 set ::large_memory 0
@@ -948,6 +949,9 @@ for {set j 0} {$j < [llength $argv]} {incr j} {
         set ::singledb 1
     } elseif {$opt eq {--cluster-mode}} {
         set ::cluster_mode 1
+    } elseif {$opt eq {--cluster-raft}} {
+        set ::cluster_raft 1
+        lappend ::global_overrides "cluster-protocol" "raft"
     } elseif {$opt eq {--large-memory}} {
         set ::large_memory 1
     } elseif {$opt eq {--ignore-encoding}} {

@@ -1,4 +1,4 @@
-tags {tls:skip external:skip cluster singledb} {
+tags {tls:skip external:skip cluster singledb cluster-raft:skip} {
     set CLUSTER_PACKET_TYPE_PING 0
     set CLUSTER_PACKET_TYPE_PONG 1
     set CLUSTER_PACKET_TYPE_MEET 2
@@ -111,7 +111,7 @@ proc cluster_nodes_all_know_each_other {num_nodes} {
     return 1
 }
 
-start_cluster 2 0 {tags {external:skip cluster} overrides {cluster-node-timeout 4000 cluster-replica-no-failover yes}} {
+start_cluster 2 0 {tags {external:skip cluster cluster-raft:skip} overrides {cluster-node-timeout 4000 cluster-replica-no-failover yes}} { ;# Gossip handshake mechanics
     set CLUSTER_PACKET_TYPE_PING 0
     set CLUSTER_PACKET_TYPE_PONG 1
     set CLUSTER_PACKET_TYPE_MEET 2
@@ -201,7 +201,7 @@ start_cluster 2 0 {tags {external:skip cluster} overrides {cluster-node-timeout 
     } ;# test
 } ;# stop cluster
 
-start_cluster 2 0 {tags {external:skip cluster} overrides {cluster-node-timeout 4000 cluster-replica-no-failover yes}} {
+start_cluster 2 0 {tags {external:skip cluster cluster-raft:skip} overrides {cluster-node-timeout 4000 cluster-replica-no-failover yes}} { ;# Gossip handshake mechanics
     set CLUSTER_PACKET_TYPE_PING 0
     set CLUSTER_PACKET_TYPE_PONG 1
     set CLUSTER_PACKET_TYPE_MEET 2

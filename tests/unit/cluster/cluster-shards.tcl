@@ -89,7 +89,7 @@ proc cluster_ensure_master {id} {
 # transiently-orphaned primary during the cluster restart test and change its
 # shard id. Migration semantics are not under test here (CLUSTER REPLICATE is
 # manual and unaffected).
-start_cluster 4 5 {tags {external:skip cluster} overrides {cluster-allow-replica-migration no}} {
+start_cluster 4 5 {tags {external:skip cluster cluster-raft:skip} overrides {cluster-allow-replica-migration no}} { ;# Restarts servers (needs raft persistence)
 
 # cluster_master_nodes and cluster_replica_nodes refer to the active cluster members.
 set ::cluster_master_nodes 4

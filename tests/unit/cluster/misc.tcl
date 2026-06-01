@@ -1,4 +1,4 @@
-start_cluster 2 2 {tags {external:skip cluster}} {
+start_cluster 2 2 {tags {external:skip cluster cluster-raft:skip}} {
     test {Key lazy expires during key migration} {
         R 0 DEBUG SET-ACTIVE-EXPIRE 0
 
@@ -32,7 +32,7 @@ start_cluster 2 2 {tags {external:skip cluster}} {
     }
 }
 
-start_cluster 1 1 {tags {external:skip cluster}} {
+start_cluster 1 1 {tags {external:skip cluster cluster-raft:skip}} {
     test {Cross-slot transaction} {
         assert_equal OK [R 0 multi]
         assert_equal QUEUED [r get foo]
@@ -51,7 +51,7 @@ proc create_nodes_conf_folder {srv_idx} {
     exec mkdir -p $cluster_conf_path
 }
 
-start_cluster 1 1 {tags {external:skip cluster} overrides {cluster-config-save-behavior sync}} {
+start_cluster 1 1 {tags {external:skip cluster cluster-raft:skip} overrides {cluster-config-save-behavior sync}} {
     test {cluster-config-save-behavior sync mode - node exits when config save fails} {
         # Create folder that can cause the rename fail.
         create_nodes_conf_folder 1
@@ -72,7 +72,7 @@ start_cluster 1 1 {tags {external:skip cluster} overrides {cluster-config-save-b
     }
 }
 
-start_cluster 1 1 {tags {external:skip cluster} overrides {cluster-config-save-behavior best-effort}} {
+start_cluster 1 1 {tags {external:skip cluster cluster-raft:skip} overrides {cluster-config-save-behavior best-effort}} {
     test {cluster-config-save-behavior best-effort mode - node continues running when config save fails} {
         # Create folder that can cause the rename fail.
         create_nodes_conf_folder 0

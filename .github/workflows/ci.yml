@@ -54,6 +54,19 @@ jobs:
         run: |
           make test-unit
 
+  test-cluster-raft:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Valkey
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: make
+        run: |
+          sudo apt-get install tcl8.6 tclx
+          make -j4 SERVER_CFLAGS='-Werror' BUILD_TLS=yes
+          make -j4 -C tests/modules
+      - name: cluster test with raft protocol
+        run: ./runtest --verbose --dump-logs --cluster-raft --single tests/unit/cluster --single tests/unit/moduleapi/cluster.tcl
+
   test-ubuntu-latest-compatibility:
     runs-on: ubuntu-latest
     strategy:

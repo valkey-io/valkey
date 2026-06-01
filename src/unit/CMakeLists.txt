@@ -86,8 +86,15 @@ target_compile_options(valkey-unit-gtests PRIVATE -Og -g)
 target_compile_options(valkey-unit-gtests PRIVATE
     -Wno-deprecated-declarations
     -Wno-write-strings
-    -fno-var-tracking-assignments
 )
+
+include(CheckCXXCompilerFlag)
+check_cxx_compiler_flag("-fno-var-tracking-assignments" HAS_FLAG_NO_VAR_TRACKING)
+if (HAS_FLAG_NO_VAR_TRACKING)
+    target_compile_options(valkey-unit-gtests PRIVATE
+        -fno-var-tracking-assignments
+    )
+endif ()
 
 # Include directories for C++ compilation
 target_include_directories(valkey-unit-gtests PRIVATE

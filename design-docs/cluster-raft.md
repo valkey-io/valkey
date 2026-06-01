@@ -723,21 +723,29 @@ reuse), but the vars and log lines are raft-specific. The file is not
 compatible between protocols — switching from gossip to raft (or vice
 versa) requires removing nodes.conf.
 
-## Shard Epoch (not yet implemented)
+## Shard Epoch
 
-A shard-epoch is a per-shard monotonically increasing counter, bumped
-on topology changes within the shard (FAILOVER, SET_REPLICA_OF,
-SLOT_CHANGE). Entries that modify shard topology include the current
-shard-epoch at proposal time. On apply, if the shard-epoch has
-advanced, the entry is stale and becomes a no-op.
+Raft ensures entries are applied in a total order, but ordering alone
+is not sufficient to prevent stale mutations from corrupting cluster
+state. When concurrent operations target the same shard (e.g., a slot
+migration racing with a failover), a committed entry may carry
+assumptions about shard topology that are no longer true by the time
+it is applied. Without additional application-level state to fence
+against these stale updates, the apply logic can produce
+inconsistencies — such as moving a slot to a node that no longer owns
+the corresponding keys.
 
-This prevents stale entries from causing inconsistencies when
-concurrent operations race in the log. Example:
+A shard-epoch is a per-shard monotonically increasing counter stored
+in `server.cluster->shard_epochs`. It is bumped each time a topology
+change is applied to the shard. Entries that modify shard topology
+include the shard's current epoch at proposal time. On apply, if the
+epoch has advanced past the value in the entry, the entry is stale
+and becomes a no-op.
+
+### Example: slot migration racing with failover
 
 ```
-Slot migration racing with failover:
-
-1. Atomic slot migration starts: keys transferred from shard A to B.
+1. Slot migration starts: keys transferred from shard A to shard B.
 2. Primary of shard A fails. FAILOVER entry is proposed.
 3. Migration is rolled back (keys stay on shard A's new primary).
 4. SLOT_CHANGE entry (assigning slot to shard B) was proposed before
@@ -748,14 +756,39 @@ Slot migration racing with failover:
    carries the old epoch, so it's a no-op. Slot stays on shard A.
 ```
 
-Entries that should carry a shard-epoch:
-- FAILOVER (bumps epoch of the shard)
-- SET_REPLICA_OF (bumps epoch when changing shard membership)
-- SLOT_CHANGE (checked against source and target shard epochs)
+### Entry formats with epoch
 
-Entries that don't need a shard-epoch:
-- NODE_FAIL / NODE_RECOVER (liveness, not topology)
-- NODE_INFO / NODE_JOIN / NODE_FORGET (node-level, not shard-level)
+```
+FAILOVER <replica-id> <primary-id> <epoch>
+SET_REPLICA_OF <replica-id> <primary-id-or-dash> <shard-id> <epoch>
+SLOT_CHANGE <target-id-or-dash> <ranges...> <source-epoch> <target-epoch>
+NODE_FORGET <node-id> <epoch>
+```
+
+SLOT_CHANGE carries two epochs because it involves two shards (source
+and target). NODE_FORGET carries the epoch of the departing node's
+shard to guard against removing a node whose role changed (e.g.,
+promoted to primary via a concurrent FAILOVER).
+
+### Validation
+
+Epoch validation happens at two points:
+
+1. **Pre-validation on the leader** — before appending to the log.
+   This is a best-effort optimization that rejects obviously stale
+   proposals early, saving log space and replication bandwidth. It
+   performs a read-only check without bumping the epoch.
+
+2. **Apply-time validation** — the authoritative check. Each apply
+   function validates the entry's epoch against the current shard
+   epoch. On match (or epoch 0 for a new shard), the epoch is bumped
+   and the entry is applied. On mismatch, the entry is a no-op and
+   the error is propagated to the caller's callback.
+
+### Entries that don't carry an epoch
+
+- NODE_FAIL / NODE_RECOVER 
+- NODE_INFO, NODE_JOIN
 
 ## Leader Transfer
 

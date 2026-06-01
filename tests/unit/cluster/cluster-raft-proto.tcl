@@ -515,4 +515,127 @@ test "Raft proto: leader sends REPL_OFFSETS after follower offset changes" {
     }
 }
 
+# --------------------------------------------------------------------------
+# Shard epoch: stale proposal rejection tests (parameterized).
+# These verify that the leader rejects stale proposals BEFORE appending
+# to the raft log (commit index unchanged, cluster state unchanged).
+# --------------------------------------------------------------------------
+
+proc get_cluster_info_field {client field} {
+    set info [$client CLUSTER INFO]
+    foreach line [split $info "\n"] {
+        set line [string trim $line "\r"]
+        if {[string match "${field}:*" $line]} {
+            return [lindex [split $line ":"] 1]
+        }
+    }
+    return ""
+}
+
+start_multiple_servers 2 {overrides {cluster-enabled yes cluster-protocol raft cluster-node-timeout 2000}} {
+    # Shared setup: form cluster and assign slots.
+    set r0 [srv 0 client]
+    set r1 [srv -1 client]
+
+    $r0 CLUSTER MEET [srv -1 host] [srv -1 port]
+
+    wait_for_condition 50 100 {
+        [get_cluster_info_field $r0 cluster_size] == 2 &&
+        [get_cluster_info_field $r1 cluster_size] == 2
+    } else {
+        fail "Cluster did not form"
+    }
+
+    $r0 CLUSTER ADDSLOTSRANGE 0 16383
+
+    wait_for_condition 50 100 {
+        [get_cluster_info_field $r0 cluster_slots_assigned] == 16384 &&
+        [get_cluster_info_field $r1 cluster_slots_assigned] == 16384
+    } else {
+        fail "Slots not assigned"
+    }
+
+    set node_id [$r0 CLUSTER MYID]
+    set node1_id [$r1 CLUSTER MYID]
+    set port [srv 0 port]
+    set cport [expr {$port + 10000}]
+
+    # Helper: connect to cluster bus and complete HELLO handshake.
+    proc connect_fake_node {cport} {
+        set fake_id [string repeat "f" 40]
+        set fake_shard [string repeat "e" 40]
+        set fake_addr "127.0.0.1:9999@19999,,tls-port=0,shard-id=$fake_shard"
+        set fd [raft_connect 127.0.0.1 $cport]
+        raft_send $fd "HELLO $fake_id $fake_addr"
+        set reply [raft_recv $fd]
+        assert_match "HI *" $reply
+        return $fd
+    }
+
+    # Each entry: {entry_type propose_msg state_check}
+    set stale_proposals [list \
+        [list "SLOT_CHANGE" "PROPOSE SLOT_CHANGE - 50 0 0" {
+            assert_equal 16384 [get_cluster_info_field $r0 cluster_slots_assigned]
+        }] \
+        [list "FAILOVER" "PROPOSE FAILOVER $node1_id $node_id 0" {
+            set nodes [$r0 CLUSTER NODES]
+            assert_match "*$node_id*myself,master*" $nodes
+            assert_equal 16384 [get_cluster_info_field $r0 cluster_slots_assigned]
+        }] \
+    ]
+
+    foreach case $stale_proposals {
+        lassign $case entry_type propose_msg state_check
+
+        test "Raft shard epoch: stale $entry_type is rejected (pre-validation, no log append)" {
+            # Record commit index before injection.
+            set commit_before [get_cluster_info_field $r0 cluster_raft_commit_index]
+
+            # Connect and inject stale PROPOSE.
+            set fd [connect_fake_node $cport]
+            raft_send $fd $propose_msg
+            after 500
+
+            # Verify log index unchanged (rejected at pre-validation).
+            set commit_after [get_cluster_info_field $r0 cluster_raft_commit_index]
+            assert_equal $commit_before $commit_after
+
+            # Verify cluster state unchanged.
+            eval $state_check
+
+            close $fd
+        }
+    }
+
+    # --------------------------------------------------------------------------
+    # Missing epoch: proposals without the required epoch field are rejected
+    # at pre-validation (never appended to the log).
+    # --------------------------------------------------------------------------
+
+    set missing_epoch_proposals [list \
+        [list "SLOT_CHANGE (missing epoch)" "PROPOSE SLOT_CHANGE - 50"] \
+        [list "FAILOVER (missing epoch)" "PROPOSE FAILOVER $node1_id $node_id"] \
+        [list "SET_REPLICA_OF (missing epoch)" "PROPOSE SET_REPLICA_OF $node1_id $node_id [string repeat a 40]"] \
+        [list "NODE_FORGET (missing epoch)" "PROPOSE NODE_FORGET $node1_id"] \
+    ]
+
+    foreach case $missing_epoch_proposals {
+        lassign $case label propose_msg
+
+        test "Raft shard epoch: $label is rejected (pre-validation, no log append)" {
+            set commit_before [get_cluster_info_field $r0 cluster_raft_commit_index]
+
+            set fd [connect_fake_node $cport]
+            raft_send $fd $propose_msg
+            after 500
+
+            # Verify log index unchanged (rejected at pre-validation).
+            set commit_after [get_cluster_info_field $r0 cluster_raft_commit_index]
+            assert_equal $commit_before $commit_after
+
+            close $fd
+        }
+    }
+}
+
 } ;# tags

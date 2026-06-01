@@ -11,6 +11,7 @@ typedef struct clusterLink clusterLink;
 extern dictType clusterNodesDictType;
 extern dictType clusterSdsToListType;
 extern dictType clusterSlotDictType;
+extern dictType clusterShardEpochDictType;
 
 /* Cluster node flags and macros. */
 #define CLUSTER_NODE_PRIMARY (1 << 0)    /* The node is a primary */
@@ -85,6 +86,7 @@ struct clusterState {
     int size;            /* Num of primary nodes with at least one slot */
     dict *nodes;         /* Hash table of name -> clusterNode structures */
     dict *shards;        /* Hash table of shard_id -> list (of nodes) structures */
+    dict *shard_epochs;  /* Hash table of shard_id -> uint64_t epoch */
     dict *migrating_slots_to;
     dict *importing_slots_from;
     clusterNode *slots[CLUSTER_SLOTS];
@@ -127,6 +129,9 @@ int clusterPrimariesHaveReplicas(void);
 int clusterNodeClearSlotBit(clusterNode *n, int slot);
 void clusterRemoveNodeFromShard(clusterNode *node);
 void clusterAddNodeToShard(const char *shard_id, clusterNode *node);
+uint64_t clusterGetShardEpoch(const char *shard_id);
+void clusterSetShardEpoch(const char *shard_id, uint64_t epoch);
+void clusterRemoveShardEpoch(const char *shard_id);
 void clusterAddNode(clusterNode *node);
 void clusterDelNode(clusterNode *node);
 void clusterRenameNode(clusterNode *node, char *newname);

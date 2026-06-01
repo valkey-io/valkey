@@ -62,6 +62,14 @@ dictType clusterSlotDictType = {
     .entryDestructor = zfree,
 };
 
+/* Shard epoch table, mapping shard_id to uint64_t epoch (stored inline). */
+dictType clusterShardEpochDictType = {
+    .entryGetKey = dictEntryGetKey,
+    .hashFunction = dictSdsHash,
+    .keyCompare = dictSdsKeyCompare,
+    .entryDestructor = dictEntryDestructorSdsKey,
+};
+
 /* -----------------------------------------------------------------------------
  * Bitmap helpers
  * -------------------------------------------------------------------------- */
@@ -362,6 +370,14 @@ void clusterAddNodeToShard(const char *shard_id, clusterNode *node) {
         list *l = listCreate();
         listAddNodeTail(l, node);
         serverAssert(dictAdd(server.cluster->shards, s, l) == DICT_OK);
+        /* Initialize shard epoch to 0 for the new shard. */
+        sds epoch_key = sdsnewlen(shard_id, CLUSTER_NAMELEN);
+        dictEntry *epoch_de = dictAddRaw(server.cluster->shard_epochs, epoch_key, NULL);
+        if (epoch_de) {
+            dictSetUnsignedIntegerVal(epoch_de, 0);
+        } else {
+            sdsfree(epoch_key);
+        }
     } else {
         list *l = dictGetVal(de);
         if (listSearchKey(l, node) == NULL) {
@@ -382,8 +398,43 @@ void clusterRemoveNodeFromShard(clusterNode *node) {
         }
         if (listLength(l) == 0) {
             dictDelete(server.cluster->shards, s);
+            /* Remove shard epoch when shard is destroyed. */
+            dictDelete(server.cluster->shard_epochs, s);
         }
     }
+    sdsfree(s);
+}
+
+/* --------------------------------------------------------------------------
+ * Shard epoch helpers
+ * -------------------------------------------------------------------------- */
+
+uint64_t clusterGetShardEpoch(const char *shard_id) {
+    sds s = sdsnewlen(shard_id, CLUSTER_NAMELEN);
+    dictEntry *de = dictFind(server.cluster->shard_epochs, s);
+    sdsfree(s);
+    return de ? dictGetUnsignedIntegerVal(de) : 0;
+}
+
+void clusterSetShardEpoch(const char *shard_id, uint64_t epoch) {
+    sds s = sdsnewlen(shard_id, CLUSTER_NAMELEN);
+    dictEntry *de = dictFind(server.cluster->shard_epochs, s);
+    if (de) {
+        dictSetUnsignedIntegerVal(de, epoch);
+        sdsfree(s);
+    } else {
+        de = dictAddRaw(server.cluster->shard_epochs, s, NULL);
+        if (de) {
+            dictSetUnsignedIntegerVal(de, epoch);
+        } else {
+            sdsfree(s);
+        }
+    }
+}
+
+void clusterRemoveShardEpoch(const char *shard_id) {
+    sds s = sdsnewlen(shard_id, CLUSTER_NAMELEN);
+    dictDelete(server.cluster->shard_epochs, s);
     sdsfree(s);
 }
 

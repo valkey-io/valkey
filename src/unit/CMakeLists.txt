@@ -134,6 +134,10 @@ if (USE_JEMALLOC)
     # Using jemalloc - link to both the static library and the executable
     target_link_libraries(valkeylib-gtest PRIVATE jemalloc)
     target_link_libraries(valkey-unit-gtests PRIVATE jemalloc)
+elseif (USE_TCMALLOC)
+    # Using tcmalloc - link to both the static library and the executable
+    target_link_libraries(valkeylib-gtest PRIVATE tcmalloc)
+    target_link_libraries(valkey-unit-gtests PRIVATE tcmalloc)
 endif ()
 
 if (IS_FREEBSD)

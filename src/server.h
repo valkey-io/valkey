@@ -4126,7 +4126,6 @@ void watchCommand(client *c);
 void unwatchCommand(client *c);
 void clusterCommand(client *c);
 void clusterKeySlotCommand(client *c);
-void clusterFlushslotCommand(client *c);
 void clusterSlotStatsCommand(client *c);
 void clusterscanCommand(client *c);
 void restoreCommand(client *c);

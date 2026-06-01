@@ -44,7 +44,7 @@ add_dependencies(valkeylib-gtest release_header)
 target_compile_options(valkeylib-gtest PRIVATE -Og -g -fno-lto)
 target_compile_definitions(valkeylib-gtest PRIVATE "${COMPILE_DEFINITIONS}")
 target_include_directories(valkeylib-gtest PRIVATE ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/deps)
-target_link_libraries(valkeylib-gtest ffc)
+target_link_libraries(valkeylib-gtest PRIVATE ffc)
 
 # Generate wrapper files from wrappers.h
 set(GENERATED_WRAPPERS_DIR ${CMAKE_BINARY_DIR}/gtest_generated)
@@ -125,17 +125,18 @@ endif ()
 
 if (USE_JEMALLOC)
     # Using jemalloc - link to both the static library and the executable
-    target_link_libraries(valkeylib-gtest jemalloc)
-    target_link_libraries(valkey-unit-gtests jemalloc)
+    target_link_libraries(valkeylib-gtest PRIVATE jemalloc)
+    target_link_libraries(valkey-unit-gtests PRIVATE jemalloc)
 endif ()
 
 if (IS_FREEBSD)
-    target_link_libraries(valkey-unit-gtests execinfo)
+    target_link_libraries(valkey-unit-gtests PRIVATE execinfo)
 endif ()
 
 # Link with GoogleTest using target names
 target_link_libraries(
     valkey-unit-gtests
+    PRIVATE
     valkeylib-gtest
     fpconv
     lualib
@@ -148,7 +149,7 @@ target_link_libraries(
 
 if (USE_TLS)
     # Add required libraries needed for TLS
-    target_link_libraries(valkey-unit-gtests OpenSSL::SSL valkey::valkey_tls)
+    target_link_libraries(valkey-unit-gtests PRIVATE OpenSSL::SSL valkey::valkey_tls)
 endif ()
 
 # Enable testing and discover tests

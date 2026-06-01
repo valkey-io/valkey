@@ -246,8 +246,8 @@ typedef struct sentinelRedisInstance {
     struct sentinelRedisInstance *promoted_slave; /* Promoted slave instance. */
     /* Scripts executed to notify admin or reconfigure clients: when they
      * are set to NULL no script is executed. */
-    char *notification_script;
-    char *client_reconfig_script;
+    sds notification_script;
+    sds client_reconfig_script;
     sds info; /* cached INFO output */
 } sentinelRedisInstance;
 
@@ -2101,8 +2101,8 @@ void rewriteConfigSentinelOption(struct rewriteConfigState *state) {
         /* sentinel notification-script */
         if (master->notification_script) {
             line = sdscatprintf(sdsempty(),
-                "sentinel notification-script %s %s",
-                master->name, master->notification_script);
+                "sentinel notification-script %s ", master->name);
+            line = sdscatrepr(line, master->notification_script, sdslen(master->notification_script));
             rewriteConfigRewriteLine(state,"sentinel notification-script",line,1);
             /* rewriteConfigMarkAsProcessed is handled after the loop */
         }
@@ -2110,8 +2110,8 @@ void rewriteConfigSentinelOption(struct rewriteConfigState *state) {
         /* sentinel client-reconfig-script */
         if (master->client_reconfig_script) {
             line = sdscatprintf(sdsempty(),
-                "sentinel client-reconfig-script %s %s",
-                master->name, master->client_reconfig_script);
+                "sentinel client-reconfig-script %s ", master->name);
+            line = sdscatrepr(line, master->client_reconfig_script, sdslen(master->client_reconfig_script));
             rewriteConfigRewriteLine(state,"sentinel client-reconfig-script",line,1);
             /* rewriteConfigMarkAsProcessed is handled after the loop */
         }
@@ -2119,16 +2119,16 @@ void rewriteConfigSentinelOption(struct rewriteConfigState *state) {
         /* sentinel auth-pass & auth-user */
         if (master->auth_pass) {
             line = sdscatprintf(sdsempty(),
-                "sentinel auth-pass %s %s",
-                master->name, master->auth_pass);
+                "sentinel auth-pass %s ", master->name);
+            line = sdscatrepr(line, master->auth_pass, sdslen(master->auth_pass));
             rewriteConfigRewriteLine(state,"sentinel auth-pass",line,1);
             /* rewriteConfigMarkAsProcessed is handled after the loop */
         }
 
         if (master->auth_user) {
             line = sdscatprintf(sdsempty(),
-                "sentinel auth-user %s %s",
-                master->name, master->auth_user);
+                "sentinel auth-user %s ", master->name);
+            line = sdscatrepr(line, master->auth_user, sdslen(master->auth_user));
             rewriteConfigRewriteLine(state,"sentinel auth-user",line,1);
             /* rewriteConfigMarkAsProcessed is handled after the loop */
         }
@@ -2191,8 +2191,9 @@ void rewriteConfigSentinelOption(struct rewriteConfigState *state) {
             ri = dictGetVal(de);
             if (ri->runid == NULL) continue;
             line = sdscatprintf(sdsempty(),
-                "sentinel known-sentinel %s %s %d %s",
-                master->name, announceSentinelAddr(ri->addr), ri->addr->port, ri->runid);
+                "sentinel known-sentinel %s %s %d ",
+                master->name, announceSentinelAddr(ri->addr), ri->addr->port);
+            line = sdscatrepr(line, ri->runid, sdslen(ri->runid));
             rewriteConfigRewriteLine(state,"sentinel known-sentinel",line,1);
             /* rewriteConfigMarkAsProcessed is handled after the loop */
         }
@@ -2204,8 +2205,11 @@ void rewriteConfigSentinelOption(struct rewriteConfigState *state) {
             sds oldname = dictGetKey(de);
             sds newname = dictGetVal(de);
             line = sdscatprintf(sdsempty(),
-                "sentinel rename-command %s %s %s",
-                master->name, oldname, newname);
+                "sentinel rename-command %s ",
+                master->name);
+            line = sdscatrepr(line, oldname, sdslen(oldname));
+            line = sdscatlen(line, " ", 1);
+            line = sdscatrepr(line, newname, sdslen(newname));
             rewriteConfigRewriteLine(state,"sentinel rename-command",line,1);
             /* rewriteConfigMarkAsProcessed is handled after the loop */
         }
@@ -2237,7 +2241,8 @@ void rewriteConfigSentinelOption(struct rewriteConfigState *state) {
 
     /* sentinel sentinel-user. */
     if (sentinel.sentinel_auth_user) {
-        line = sdscatprintf(sdsempty(), "sentinel sentinel-user %s", sentinel.sentinel_auth_user);
+        line = sdsnew("sentinel sentinel-user ");
+        line = sdscatrepr(line, sentinel.sentinel_auth_user, sdslen(sentinel.sentinel_auth_user));
         rewriteConfigRewriteLine(state,"sentinel sentinel-user",line,1);
     } else {
         rewriteConfigMarkAsProcessed(state,"sentinel sentinel-user");
@@ -2245,10 +2250,11 @@ void rewriteConfigSentinelOption(struct rewriteConfigState *state) {
 
     /* sentinel sentinel-pass. */
     if (sentinel.sentinel_auth_pass) {
-        line = sdscatprintf(sdsempty(), "sentinel sentinel-pass %s", sentinel.sentinel_auth_pass);
+        line = sdsnew("sentinel sentinel-pass ");
+        line = sdscatrepr(line, sentinel.sentinel_auth_pass, sdslen(sentinel.sentinel_auth_pass));
         rewriteConfigRewriteLine(state,"sentinel sentinel-pass",line,1);
     } else {
-        rewriteConfigMarkAsProcessed(state,"sentinel sentinel-pass");  
+        rewriteConfigMarkAsProcessed(state,"sentinel sentinel-pass");
     }
 
     dictReleaseIterator(di);
@@ -3196,6 +3202,27 @@ const char* getLogLevel(void) {
     return "unknown";
 }
 
+static int containsControlChars(const char *s, size_t len) {
+    for (size_t i = 0; i < len; i++) {
+        unsigned char ch = (unsigned char)s[i];
+        if (ch <= 0x1F || ch == 0x7F) return 1;
+    }
+    return 0;
+}
+
+/* Validate that arguments starting from 'first_arg' contain no control characters.
+ * Returns C_OK if all arguments are clean, or C_ERR after sending an error reply. */
+static int sentinelValidateArgs(client *c, int first_arg, const char *cmd) {
+    for (int i = first_arg; i < c->argc; i++) {
+        sds arg = c->argv[i]->ptr;
+        if (containsControlChars(arg, sdslen(arg))) {
+            addReplyErrorFormat(c, "Invalid argument at index %d for %s: control characters are not allowed", i, cmd);
+            return C_ERR;
+        }
+    }
+    return C_OK;
+}
+
 /* SENTINEL CONFIG SET option value [option value ...] */
 void sentinelConfigSetCommand(client *c) {
     long long numval;
@@ -3217,6 +3244,8 @@ void sentinelConfigSetCommand(client *c) {
         populateDict(options_dict, options);
     }
     dict *set_configs = dictCreate(&stringSetDictType);
+
+    if (sentinelValidateArgs(c, 3, "SENTINEL CONFIG SET") == C_ERR) goto exit;
 
     /* Validate arguments are valid */
     for (int i = 3; i < c->argc; i++) {
@@ -4051,6 +4080,9 @@ NULL
         char ip[NET_IP_STR_LEN];
 
         if (c->argc != 6) goto numargserr;
+
+        if (sentinelValidateArgs(c, 2, "SENTINEL MONITOR") == C_ERR) return;
+
         if (getLongFromObjectOrReply(c,c->argv[5],&quorum,"Invalid quorum")
             != C_OK) return;
         if (getLongFromObjectOrReply(c,c->argv[4],&port,"Invalid port")
@@ -4350,6 +4382,8 @@ void sentinelSetCommand(client *c) {
 
     if ((ri = sentinelGetMasterByNameOrReplyError(c,c->argv[2]))
         == NULL) return;
+
+    if (sentinelValidateArgs(c, 3, "SENTINEL SET") == C_ERR) return;
 
     /* Process option - value pairs. */
     for (j = 3; j < c->argc; j++) {

@@ -2289,7 +2289,8 @@ bgIteratorItem * bgIteratorRead(bgIterator *it) {
         // To support unit tests.  Normal clients call bgIteratorRead from an alternate thread.
         //  Without this, a unit test could get stuck waiting on the completion event because
         //  feed won't get invoked.  For production, this is called regularly from the main thread.
-        if (onValkeyMainThread()) bgIteration_feedIterators_task(NULL, 0, NULL);
+        // Note - this is checking that the exact same thread is used and shouldn't count modules.
+        if (pthread_equal(server.main_thread_id, pthread_self()) != 0) bgIteration_feedIterators_task(NULL, 0, NULL);
     } else {
         it->client_is_active = true;
     }

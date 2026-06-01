@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: BSD 3-Clause
  */
 
- // Just for the moment, until https://github.com/valkey-io/valkey/issues/3450 is resolved
+// Just for the moment, until https://github.com/valkey-io/valkey/issues/3450 is resolved
 // clang-format off
 #include "generated_wrappers.hpp"
 #include <vector>

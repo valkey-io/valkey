@@ -55,6 +55,22 @@ start_cluster 1 0 {tags {external:skip cluster}} {
         assert_equal "::1" [lindex [R 0 CONFIG GET cluster-announce-ip] 1]
     }
 
+    test "cluster-announce-ip rejects value exceeding length limit" {
+        assert_error "ERR CONFIG SET failed*cluster-announce-ip*too long*" {
+            R 0 CONFIG SET cluster-announce-ip [string repeat "a" 100]
+        }
+    }
+
+    test "cluster-announce-ip accepts hyphen, dot, colon, slash, underscore" {
+        R 0 CONFIG SET cluster-announce-ip "my-host_1.example:8080/path"
+        assert_equal "my-host_1.example:8080/path" [lindex [R 0 CONFIG GET cluster-announce-ip] 1]
+    }
+
+    test "cluster-announce-ip accepts high-byte UTF-8 characters" {
+        R 0 CONFIG SET cluster-announce-ip "\xc3\xa9"
+        assert_equal "\xc3\xa9" [lindex [R 0 CONFIG GET cluster-announce-ip] 1]
+    }
+
     test "cluster-announce-human-nodename rejects control characters" {
         assert_error "ERR CONFIG SET failed*cluster-announce-human-nodename*invalid character*" {
             R 0 CONFIG SET cluster-announce-human-nodename "node\ninjected"
@@ -64,6 +80,18 @@ start_cluster 1 0 {tags {external:skip cluster}} {
     test "cluster-announce-human-nodename rejects space" {
         assert_error "ERR CONFIG SET failed*cluster-announce-human-nodename*invalid character*" {
             R 0 CONFIG SET cluster-announce-human-nodename "node injected"
+        }
+    }
+
+    test "cluster-announce-human-nodename rejects comma" {
+        assert_error "ERR CONFIG SET failed*cluster-announce-human-nodename*invalid character*" {
+            R 0 CONFIG SET cluster-announce-human-nodename "node,injected"
+        }
+    }
+
+    test "cluster-announce-human-nodename rejects equals sign" {
+        assert_error "ERR CONFIG SET failed*cluster-announce-human-nodename*invalid character*" {
+            R 0 CONFIG SET cluster-announce-human-nodename "node=injected"
         }
     }
 }

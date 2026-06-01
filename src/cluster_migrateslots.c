@@ -1955,6 +1955,7 @@ void clusterUpdateSlotExportsOnOwnershipChange(void) {
 
 bool clusterIsAnySlotExporting(void) {
     if (!server.cluster_enabled || !server.cluster) return false;
+    if (!server.cluster->slot_migration_jobs) return false; /* not initialized, called by crash report INFO */
     listNode *ln;
     listIter li;
     listRewind(server.cluster->slot_migration_jobs, &li);

@@ -95,10 +95,10 @@ proc test_zero_offset_replica {sync_type} {
     }
 }
 
-start_cluster 3 1 {tags {external:skip cluster}} {
+start_cluster 3 1 {tags {external:skip cluster cluster-raft:skip}} {
     test_zero_offset_replica diskless
 } continuous_slot_allocation no_replica_allocation
 
-start_cluster 3 1 {tags {external:skip cluster}} {
+start_cluster 3 1 {tags {external:skip cluster cluster-raft:skip}} {
     test_zero_offset_replica disk-based
 } continuous_slot_allocation no_replica_allocation

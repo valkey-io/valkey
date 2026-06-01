@@ -9,7 +9,7 @@
 #    of the UPDATE messages it will receive from the other nodes when its
 #    configuration will be found to be outdated.
 
-start_cluster 5 5 {tags {external:skip cluster}} {
+start_cluster 5 5 {tags {external:skip cluster cluster-raft:skip}} {
 
 test "Cluster is up" {
     wait_for_cluster_state ok

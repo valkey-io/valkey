@@ -65,7 +65,7 @@ start_cluster 3 4 {tags {external:skip cluster} overrides {cluster-ping-interval
 } ;# start_cluster
 
 # Needs to run in the body of
-# start_cluster 7 3 {tags {external:skip cluster} overrides {cluster-ping-interval 1000 cluster-node-timeout 15000}}
+# start_cluster 7 3 {tags {external:skip cluster cluster-raft:skip} overrides {cluster-ping-interval 1000 cluster-node-timeout 15000}}
 proc test_same_epoch {delay} {
     test "Primaries will not time out then they are elected in the same epoch - delay $delay" {
         # Since we have the delay time, so these node may not initiate the
@@ -136,11 +136,11 @@ proc test_same_epoch {delay} {
     }
 }
 
-start_cluster 7 3 {tags {external:skip cluster} overrides {cluster-ping-interval 1000 cluster-replica-no-failover yes}} {
+start_cluster 7 3 {tags {external:skip cluster cluster-raft:skip} overrides {cluster-ping-interval 1000 cluster-replica-no-failover yes}} {
     test_same_epoch 500
 } ;# start_cluster
 
-start_cluster 7 3 {tags {external:skip cluster} overrides {cluster-ping-interval 1000 cluster-replica-no-failover yes}} {
+start_cluster 7 3 {tags {external:skip cluster cluster-raft:skip} overrides {cluster-ping-interval 1000 cluster-replica-no-failover yes}} {
     test_same_epoch 0
 } ;# start_cluster
 
@@ -191,7 +191,7 @@ run_solo {cluster} {
 #                    path that retries without waiting for the timeout.
 #
 # Needs to run in the body of
-# start_cluster 3 1 {tags {external:skip cluster} overrides {cluster-replica-validity-factor 0}}
+# start_cluster 3 1 {tags {external:skip cluster cluster-raft:skip} overrides {cluster-replica-validity-factor 0}}
 proc test_replica_config_epoch_failover {type drop_nack} {
     test "Replica can update the config epoch when trigger the failover - $type - drop_nack $drop_nack" {
         set CLUSTER_PACKET_TYPE_NONE -1
@@ -321,18 +321,18 @@ proc test_replica_config_epoch_failover {type drop_nack} {
     }
 }
 
-start_cluster 3 1 {tags {external:skip cluster} overrides {cluster-replica-validity-factor 0}} {
+start_cluster 3 1 {tags {external:skip cluster cluster-raft:skip} overrides {cluster-replica-validity-factor 0}} {
     test_replica_config_epoch_failover "automatic" 1
 }
 
-start_cluster 3 1 {tags {external:skip cluster} overrides {cluster-replica-validity-factor 0}} {
+start_cluster 3 1 {tags {external:skip cluster cluster-raft:skip} overrides {cluster-replica-validity-factor 0}} {
     test_replica_config_epoch_failover "manual" 1
 }
 
-start_cluster 3 1 {tags {external:skip cluster} overrides {cluster-replica-validity-factor 0}} {
+start_cluster 3 1 {tags {external:skip cluster cluster-raft:skip} overrides {cluster-replica-validity-factor 0}} {
     test_replica_config_epoch_failover "automatic" 0
 }
 
-start_cluster 3 1 {tags {external:skip cluster} overrides {cluster-replica-validity-factor 0}} {
+start_cluster 3 1 {tags {external:skip cluster cluster-raft:skip} overrides {cluster-replica-validity-factor 0}} {
     test_replica_config_epoch_failover "manual" 0
 }

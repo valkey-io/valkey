@@ -90,15 +90,18 @@ proc count_bound_slots {n} {
      } else {
          fail "Cluster slot deletion was not recorded on the node that owns the slot"
      }
+ }
 
-     # We don't propagate slot deletion across all nodes in the cluster.
+ test "slot deletion is not propagated to other nodes" {
+     # In gossip, slot deletion is not propagated across all nodes.
      # This can lead to extra redirect before the clients find out that the slot is unbound.
+     set node1 [Rn 1]
      wait_for_condition 1000 50 {
          [count_bound_slots $node1] == 16384
      } else {
          fail "Cluster slot deletion should not be propagated to all nodes in the cluster"
      }
- }
+ } {} {cluster-raft:skip} ;# Raft propagates DELSLOTS to all nodes
 
 if {$::tls} {
     test {CLUSTER SLOTS from non-TLS client in TLS cluster} {

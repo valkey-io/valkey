@@ -1,4 +1,4 @@
-start_cluster 2 2 {tags {external:skip cluster}} {
+start_cluster 2 2 {tags {external:skip cluster cluster-raft:skip}} {
     test {Key lazy expires during key migration} {
         R 0 DEBUG SET-ACTIVE-EXPIRE 0
 
@@ -32,7 +32,7 @@ start_cluster 2 2 {tags {external:skip cluster}} {
     }
 }
 
-start_cluster 1 1 {tags {external:skip cluster}} {
+start_cluster 1 1 {tags {external:skip cluster cluster-raft:skip}} {
     test {Cross-slot transaction} {
         assert_equal OK [R 0 multi]
         assert_equal QUEUED [r get foo]
@@ -229,7 +229,7 @@ proc wait_for_no_nodes_conf_tmp_files {srv_idx} {
     }
 }
 
-start_cluster 1 1 {tags {external:skip cluster} overrides {cluster-config-save-behavior sync}} {
+start_cluster 1 1 {tags {external:skip cluster cluster-raft:skip} overrides {cluster-config-save-behavior sync}} {
     test {cluster-config-save-behavior sync mode - node exits when config save fails} {
         # Create folder that can cause the rename fail.
         create_nodes_conf_folder 1
@@ -250,7 +250,7 @@ start_cluster 1 1 {tags {external:skip cluster} overrides {cluster-config-save-b
     }
 }
 
-start_cluster 1 1 {tags {external:skip cluster} overrides {cluster-config-save-behavior best-effort}} {
+start_cluster 1 1 {tags {external:skip cluster cluster-raft:skip} overrides {cluster-config-save-behavior best-effort}} {
     test {cluster-config-save-behavior best-effort mode - node continues running when config save fails} {
         assert_equal "ok" [getInfoProperty [R 0 cluster info] cluster_config_save_status]
         assert_equal "ok" [getInfoProperty [R 1 cluster info] cluster_config_save_status]
@@ -429,7 +429,7 @@ start_cluster 3 0 {tags {external:skip cluster} overrides {cluster-require-full-
     }
 }
 
-start_cluster 2 0 {tags {cluster external:skip needs:debug}} {
+start_cluster 2 0 {tags {cluster external:skip cluster-raft:skip needs:debug}} {
     test "A lost PING does not leave a node stuck in PFAIL when the peer keeps sending PINGs" {
         set CLUSTER_PACKET_TYPE_MEET 2
         set CLUSTER_PACKET_TYPE_NONE -1

@@ -1,5 +1,5 @@
 test "CLUSTER BUMPEPOCH is not stuck on a tie with a dead node" {
-    start_cluster 1 0 {tags {external:skip cluster}} {
+    start_cluster 1 0 {tags {external:skip cluster cluster-raft:skip}} {
         set R0_nodeid [R 0 CLUSTER MYID]
         set R0_epoch [CI 0 cluster_my_epoch]
         set dead_nodeid "0000000000000000000000000000000000000000"
@@ -38,7 +38,7 @@ test "CLUSTER BUMPEPOCH is not stuck on a tie with a dead node" {
 }
 
 test "CLUSTER BUMPEPOCH jumps above a dead node with a very large configEpoch" {
-    start_cluster 1 0 {tags {external:skip cluster}} {
+    start_cluster 1 0 {tags {external:skip cluster cluster-raft:skip}} {
         set R0_nodeid [R 0 CLUSTER MYID]
         set R0_epoch [CI 0 cluster_my_epoch]
         set dead_nodeid "0000000000000000000000000000000000000000"

@@ -234,17 +234,17 @@ proc test_nack_ignored_reasons {reason_list} {
     }
 }
 
-start_cluster 3 1 {tags {external:skip cluster tls:skip}} {
+start_cluster 3 1 {tags {external:skip cluster cluster-raft:skip tls:skip}} {
     set NACK_REASON_REQ_EPOCH_OLD 2
     test_nack_fast_fail_reason "req-epoch-old" $NACK_REASON_REQ_EPOCH_OLD
 }
 
-start_cluster 3 1 {tags {external:skip cluster tls:skip}} {
+start_cluster 3 1 {tags {external:skip cluster cluster-raft:skip tls:skip}} {
     set NACK_REASON_ALREADY_VOTED 3
     test_nack_fast_fail_reason "already-voted" $NACK_REASON_ALREADY_VOTED
 }
 
-start_cluster 3 1 {tags {external:skip cluster tls:skip}} {
+start_cluster 3 1 {tags {external:skip cluster cluster-raft:skip tls:skip}} {
     # stale-config is also covered end to end, by test_replica_config_epoch_failover
     # failover2.tcl; this is the injected-packet variant of the same reason.
     set NACK_REASON_STALE_CONFIG 7
@@ -255,7 +255,7 @@ start_cluster 3 1 {tags {external:skip cluster tls:skip}} {
 # every reason clusterNackIsPerRoundReason() rejects. No real voter state is
 # needed to produce them, so they share one frozen election. NO_PRIMARY among
 # them is also covered end to end by the block below.
-start_cluster 3 1 {tags {external:skip cluster tls:skip}} {
+start_cluster 3 1 {tags {external:skip cluster cluster-raft:skip tls:skip}} {
     test_nack_ignored_reasons {
         {"not-safe" 1}
         {"req-is-primary" 4}
@@ -274,7 +274,7 @@ start_cluster 3 1 {tags {external:skip cluster tls:skip}} {
 # that answer, so those NACKs must not be counted: the candidate stays on the
 # auth_retry_time cadence instead of resetting the election once per NACK,
 # which would retry at event-loop frequency.
-start_cluster 3 1 {tags {external:skip cluster} overrides {cluster-node-timeout 2000 cluster-ping-interval 100 cluster-replica-validity-factor 0}} {
+start_cluster 3 1 {tags {external:skip cluster cluster-raft:skip} overrides {cluster-node-timeout 2000 cluster-ping-interval 100 cluster-replica-validity-factor 0}} {
     test "NACK fast-fail ignores rejections that a new epoch cannot fix" {
         set primary0_id [R 0 CLUSTER MYID]
         set replica_id [R 3 CLUSTER MYID]
@@ -328,7 +328,7 @@ start_cluster 3 1 {tags {external:skip cluster} overrides {cluster-node-timeout 
 # subtracts every FAIL voter and every NACK from size counts V1 twice and
 # resets it. The FAIL is delivered as a crafted FAIL packet, which the
 # candidate applies to its own view immediately without re-broadcasting it.
-start_cluster 5 1 {tags {external:skip cluster tls:skip}} {
+start_cluster 5 1 {tags {external:skip cluster cluster-raft:skip tls:skip}} {
     set CLUSTERMSG_TYPE_FAILOVER_AUTH_REQUEST 5
     set NACK_REASON_ALREADY_VOTED 3
 
@@ -436,7 +436,7 @@ start_cluster 5 1 {tags {external:skip cluster tls:skip}} {
 # election start loses V1 and would need a third NACK. The retried election
 # is then answered only by R0, V1 and R4, so it can reach quorum only if the
 # ACK from V1, still FAIL in the candidate's view, is counted as a vote.
-start_cluster 5 1 {tags {external:skip cluster tls:skip}} {
+start_cluster 5 1 {tags {external:skip cluster cluster-raft:skip tls:skip}} {
     set CLUSTERMSG_TYPE_FAILOVER_AUTH_REQUEST 5
     set NACK_REASON_ALREADY_VOTED 3
 
@@ -522,7 +522,7 @@ start_cluster 5 1 {tags {external:skip cluster tls:skip}} {
 # on the candidate only, so with no NACK at most two ACKs look achievable.
 # They are up and vote, so the election must stay open and be won in the
 # epoch it started in.
-start_cluster 5 1 {tags {external:skip cluster tls:skip}} {
+start_cluster 5 1 {tags {external:skip cluster cluster-raft:skip tls:skip}} {
     set primary_id [R 0 cluster myid]
     set candidate_cport [expr {[srv -5 port] + 10000}]
     set r4_id [R 4 cluster myid]

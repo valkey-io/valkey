@@ -190,7 +190,7 @@ proc do_node_restart {idx} {
 }
 
 # Disable replica migration to prevent empty nodes from joining other shards.
-start_cluster 3 3 {tags {logreqres:skip external:skip cluster network} overrides {cluster-allow-replica-migration no cluster-node-timeout 15000 cluster-databases 16}} {
+start_cluster 3 3 {tags {logreqres:skip external:skip cluster network cluster-raft:skip} overrides {cluster-allow-replica-migration no cluster-node-timeout 15000 cluster-databases 16}} {
 
     set node0_id [R 0 CLUSTER MYID]
     set node1_id [R 1 CLUSTER MYID]
@@ -2522,13 +2522,19 @@ start_cluster 3 0 {tags {logreqres:skip external:skip cluster network}} {
         assert_match "1000" [R 0 CLUSTER COUNTKEYSINSLOT 16383]
         assert_match "0" [R 2 CLUSTER COUNTKEYSINSLOT 16383]
 
-        # Migration log shows success on both ends
-        assert {[dict get [get_migration_by_name 0 $jobname] state] eq "success"}
-        assert {[dict get [get_migration_by_name 2 $jobname] state] eq "success"}
+        # Migration log shows success on both ends. The exporting node detects
+        # slot loss in beforeSleep (checkSlotExportOwnership), which may not
+        # have run yet after the slot ownership is updated via the cluster bus.
+        wait_for_condition 50 100 {
+            [dict get [get_migration_by_name 0 $jobname] state] eq "success" &&
+            [dict get [get_migration_by_name 2 $jobname] state] eq "success"
+        } else {
+            fail "Migration did not reach success state on both nodes"
+        }
     }
 }
 
-start_cluster 3 6 {tags {logreqres:skip external:skip cluster network}} {
+start_cluster 3 6 {tags {logreqres:skip external:skip cluster network cluster-raft:skip}} {
     set node0_id [R 0 CLUSTER MYID]
     set node1_id [R 1 CLUSTER MYID]
     set node2_id [R 2 CLUSTER MYID]
@@ -2582,7 +2588,7 @@ start_cluster 3 6 {tags {logreqres:skip external:skip cluster network}} {
     }
 }
 
-start_cluster 3 0 {tags {logreqres:skip external:skip cluster network}} {
+start_cluster 3 0 {tags {logreqres:skip external:skip cluster network cluster-raft:skip}} {
 
     set node0_id [R 0 CLUSTER MYID]
     set node1_id [R 1 CLUSTER MYID]
@@ -2648,7 +2654,7 @@ start_cluster 3 0 {tags {logreqres:skip external:skip cluster network}} {
 
 }
 
-start_cluster 3 3 {tags {logreqres:skip external:skip cluster aofrw network} overrides {appendonly yes auto-aof-rewrite-percentage 0}} {
+start_cluster 3 3 {tags {logreqres:skip external:skip cluster cluster-raft:skip aofrw network} overrides {appendonly yes auto-aof-rewrite-percentage 0}} {
     set node0_id [R 0 CLUSTER MYID]
     set node1_id [R 1 CLUSTER MYID]
     set node2_id [R 2 CLUSTER MYID]
@@ -2795,7 +2801,7 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster aofrw network} ove
         assert_match "500" [R 5 CLUSTER COUNTKEYSINSLOT 16383]
         assert_equal $slots_start [R 0 CLUSTER SLOTS]
         assert_match "OK" [R 2 FLUSHDB SYNC]
-    }
+    } {} {cluster-raft:skip} ;# TODO: investigate AOF + migration with raft
 }
 
 start_cluster 3 0 {tags {logreqres:skip external:skip cluster network} overrides {cluster-require-full-coverage no slot-migration-max-failover-repl-bytes 0 repl-timeout 3600}} {

@@ -1,5 +1,5 @@
 # Check the manual failover
-start_cluster 5 5 {tags {external:skip cluster}} {
+start_cluster 5 5 {tags {external:skip cluster cluster-raft:skip}} {
 
 test "Cluster is up" {
     wait_for_cluster_state ok
@@ -94,7 +94,7 @@ test "Instance #0 gets converted into a slave" {
 } ;# start_cluster
 
 ## Check that manual failover does not happen if we can't talk with the master.
-start_cluster 5 5 {tags {external:skip cluster}} {
+start_cluster 5 5 {tags {external:skip cluster cluster-raft:skip}} {
 
 test "Cluster is up" {
     wait_for_cluster_state ok
@@ -138,7 +138,7 @@ test "Wait for instance #0 to return back alive" {
 } ;# start_cluster
 
 ## Check with "force" failover happens anyway.
-start_cluster 5 10 {tags {external:skip cluster}} {
+start_cluster 5 10 {tags {external:skip cluster cluster-raft:skip}} {
 
 test "Cluster is up" {
     wait_for_cluster_state ok
@@ -184,7 +184,7 @@ test "Wait for instance #0 to return back alive" {
 
 } ;# start_cluster
 
-start_cluster 3 1 {tags {external:skip cluster} overrides {cluster-ping-interval 1000 cluster-node-timeout 2000}} {
+start_cluster 3 1 {tags {external:skip cluster cluster-raft:skip} overrides {cluster-ping-interval 1000 cluster-node-timeout 2000}} {
     test "Manual failover vote is not limited by two times the node timeout - drop the auth ack" {
         set CLUSTER_PACKET_TYPE_FAILOVER_AUTH_ACK 6
         set CLUSTER_PACKET_TYPE_NONE -1
@@ -213,7 +213,7 @@ start_cluster 3 1 {tags {external:skip cluster} overrides {cluster-ping-interval
     }
 } ;# start_cluster
 
-start_cluster 3 1 {tags {external:skip cluster} overrides {cluster-ping-interval 1000 cluster-node-timeout 2000 cluster-replica-validity-factor 0}} {
+start_cluster 3 1 {tags {external:skip cluster cluster-raft:skip} overrides {cluster-ping-interval 1000 cluster-node-timeout 2000 cluster-replica-validity-factor 0}} {
     test "Manual failover vote is not limited by two times the node timeout - mixed failover" {
         # Make sure the failover is triggered by us.
         R 1 config set cluster-replica-validity-factor 0
@@ -263,7 +263,7 @@ start_cluster 3 1 {tags {external:skip cluster} overrides {cluster-ping-interval
     }
 } ;# start_cluster
 
-start_cluster 3 1 {tags {external:skip cluster} overrides {cluster-ping-interval 1000 cluster-node-timeout 2000 cluster-replica-validity-factor 0}} {
+start_cluster 3 1 {tags {external:skip cluster cluster-raft:skip} overrides {cluster-ping-interval 1000 cluster-node-timeout 2000 cluster-replica-validity-factor 0}} {
     test "Automatic failover vote is not limited by two times the node timeout - mixed failover" {
         R 3 cluster failover
         wait_for_condition 1000 50 {
@@ -293,7 +293,7 @@ start_cluster 3 1 {tags {external:skip cluster} overrides {cluster-ping-interval
     }
 } ;# start_cluster
 
-start_cluster 3 1 {tags {external:skip cluster} overrides {cluster-ping-interval 1000 cluster-node-timeout 15000}} {
+start_cluster 3 1 {tags {external:skip cluster cluster-raft:skip} overrides {cluster-ping-interval 1000 cluster-node-timeout 15000}} {
     test "Manual failover will reset the on-going election" {
         set CLUSTER_PACKET_TYPE_FAILOVER_AUTH_REQUEST 5
         set CLUSTER_PACKET_TYPE_NONE -1
@@ -335,7 +335,7 @@ start_cluster 3 1 {tags {external:skip cluster} overrides {cluster-ping-interval
     }
 } ;# start_cluster
 
-start_cluster 3 1 {tags {external:skip cluster} overrides {cluster-ping-interval 1000 cluster-node-timeout 1000}} {
+start_cluster 3 1 {tags {external:skip cluster cluster-raft:skip} overrides {cluster-ping-interval 1000 cluster-node-timeout 1000}} {
     test "Broadcast PONG to the cluster when the node role changes" {
         # R0 is a primary and R3 is a replica, we will do multiple cluster failover
         # and then check their role and flags.
@@ -396,7 +396,7 @@ start_cluster 3 1 {tags {external:skip cluster} overrides {cluster-ping-interval
     }
 } ;# start_cluster
 
-start_cluster 3 1 {tags {external:skip cluster}} {
+start_cluster 3 1 {tags {external:skip cluster cluster-raft:skip}} {
     # In the R0/R3 shard, R0 is the primary node and R3 is the replica.
     #
     # We trigger a manual failover on R3.
@@ -503,7 +503,7 @@ start_cluster 3 1 {tags {external:skip cluster}} {
     }
 }
 
-start_cluster 3 2 {tags {external:skip cluster}} {
+start_cluster 3 2 {tags {external:skip cluster cluster-raft:skip}} {
     # In the R0/R3/R4 shard, R0 is the primary node, R3 and R4 are the replicas.
     #
     # We trigger a manual failover on R3.
@@ -586,7 +586,7 @@ start_cluster 3 2 {tags {external:skip cluster}} {
 
 # Disable this test case due to #2441.
 if {false} {
-start_cluster 3 2 {tags {external:skip cluster}} {
+start_cluster 3 2 {tags {external:skip cluster cluster-raft:skip}} {
     # This test consists of two phases.
     # The first phase, we will create a scenario where two primary are on the same shard. See #2279 for more details.
     # The second phase, we will test the behavior of the node when packets arrive out of order. See #2301 for more details.

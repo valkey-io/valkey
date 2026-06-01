@@ -121,7 +121,7 @@ proc leave_last_slot_unassigned {masters replicas} {
     R 0 CLUSTER ADDSLOTSRANGE 0 16382
 }
 
-start_cluster 1 1 {tags {external:skip cluster} overrides {cluster-require-full-coverage no}} {
+start_cluster 1 1 {tags {external:skip cluster cluster-raft:skip} overrides {cluster-require-full-coverage no}} {
     test "Replica whose primary was deleted survives a primary claiming an unassigned slot" {
         # Replicate a node that is still in handshake. When the handshake
         # times out the node is deleted and R 1 is left with no primary.

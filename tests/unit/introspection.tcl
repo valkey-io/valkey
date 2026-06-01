@@ -1332,6 +1332,7 @@ start_server {tags {"introspection"}} {
             always-show-logo
             syslog-enabled
             cluster-enabled
+            cluster-protocol
             disable-thp
             aclfile
             unixsocket

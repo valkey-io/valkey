@@ -685,6 +685,12 @@ typedef enum {
     CLUSTER_CONFIGFILE_SAVE_BEHAVIOR_BEST_EFFORT, /* Save asynchronously via BIO thread on a "best-effort" basis, process will not exit if it fails. */
 } cluster_persist_config_mode;
 
+/* Cluster bus protocol. */
+enum {
+    CLUSTER_PROTOCOL_GOSSIP = 0,
+    CLUSTER_PROTOCOL_RAFT,
+};
+
 /* RDB write target type. */
 typedef enum {
     RDB_WRITE_TARGET_NONE = 0,
@@ -2434,6 +2440,7 @@ struct valkeyServer {
     unsigned int watching_clients; /* # of clients are watching keys */
     /* Cluster */
     int cluster_enabled;                                   /* Is cluster enabled? */
+    int cluster_protocol;                                  /* Cluster bus protocol (gossip or raft). */
     int cluster_port;                                      /* Set the cluster port for a node. */
     mstime_t cluster_node_timeout;                         /* Cluster node timeout. */
     mstime_t cluster_ping_interval;                        /* A debug configuration for setting how often cluster nodes send ping messages. */

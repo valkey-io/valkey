@@ -6,11 +6,11 @@
 #
 # ./runtest --single unit/cluster/cross-version-cluster --other-server-path tests/tmp/valkey-7-2/valkey-server
 
-tags {external:skip needs:other-server cluster singledb} {
+tags {external:skip needs:other-server cluster singledb cluster-raft:skip} {
     test "Cross version cluster - failover" {
 
         # Test cluster failover on shutdown is prevented when old replicas exist
-        start_cluster 3 1 {tags {external:skip cluster} overrides {cluster-ping-interval 1000}} {
+        start_cluster 3 1 {tags {external:skip cluster cluster-raft:skip} overrides {cluster-ping-interval 1000}} {
             set primary [srv 0 client]
             set primary_host [srv 0 host]
             set primary_port [srv 0 port]

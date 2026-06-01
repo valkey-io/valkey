@@ -43,8 +43,10 @@ start_cluster 3 4 {tags {external:skip cluster} overrides {cluster-ping-interval
         }
 
         # Make sure our rank and priority are correct.
-        verify_log_message -3 "*Start of election*rank #0*replica priority 0*" 0
-        verify_log_message -6 "*Start of election*rank #1*replica priority 10*" 0
+        if {!$::cluster_raft} {
+            verify_log_message -3 "*Start of election*rank #0*replica priority 0*" 0
+            verify_log_message -6 "*Start of election*rank #1*replica priority 10*" 0
+        }
 
         resume_process [srv 0 pid]
         wait_for_condition 1000 50 {
@@ -76,8 +78,10 @@ start_cluster 3 4 {tags {external:skip cluster} overrides {cluster-ping-interval
         }
 
         # Make sure our rank and priority are correct.
-        verify_log_message 0 "*Start of election*rank #1*replica priority 10*" 0
-        verify_log_message -6 "*Start of election*rank #0*replica priority 5*" 0
+        if {!$::cluster_raft} {
+            verify_log_message 0 "*Start of election*rank #1*replica priority 10*" 0
+            verify_log_message -6 "*Start of election*rank #0*replica priority 5*" 0
+        }
 
         resume_process [srv -3 pid]
         wait_for_condition 1000 50 {
@@ -98,12 +102,9 @@ start_cluster 3 4 {tags {external:skip cluster} overrides {cluster-ping-interval
         }
     }
 
+    set R0_nodeid [R 0 cluster myid]
+    set R6_nodeid [R 6 cluster myid]
     test "Non-zero replica priority is persisted in nodes.conf" {
-        set CLUSTER_PACKET_TYPE_NONE -1
-        set CLUSTER_PACKET_TYPE_ALL -2
-
-        set R0_nodeid [R 0 cluster myid]
-        set R6_nodeid [R 6 cluster myid]
 
         R 0 config set cluster-replica-priority 10
         R 3 config set cluster-replica-priority 20
@@ -115,6 +116,24 @@ start_cluster 3 4 {tags {external:skip cluster} overrides {cluster-ping-interval
 
         # Each node should learn its peers' non-zero priorities and write
         # them to its own nodes.conf via the replica-priority aux field.
+        # In raft mode, NODE_INFO propagation updates in-memory state but a
+        # full nodes.conf rewrite only happens on demand, so we first confirm
+        # propagation then force a save.
+        wait_for_condition 1000 50 {
+            [R 0 debug cluster-replica-priority [R 3 cluster myid]] == 20 &&
+            [R 0 debug cluster-replica-priority [R 6 cluster myid]] == 30 &&
+            [R 3 debug cluster-replica-priority [R 0 cluster myid]] == 10 &&
+            [R 3 debug cluster-replica-priority [R 6 cluster myid]] == 30 &&
+            [R 6 debug cluster-replica-priority [R 0 cluster myid]] == 10 &&
+            [R 6 debug cluster-replica-priority [R 3 cluster myid]] == 20
+        } else {
+            fail "Replica priority did not propagate"
+        }
+        if {$::cluster_raft} {
+            R 0 cluster saveconfig
+            R 3 cluster saveconfig
+            R 6 cluster saveconfig
+        }
         wait_for_condition 1000 50 {
             [file_has_pattern $nodes_conf0 {replica-priority=10}] &&
             [file_has_pattern $nodes_conf0 {replica-priority=20}] &&
@@ -133,6 +152,19 @@ start_cluster 3 4 {tags {external:skip cluster} overrides {cluster-ping-interval
         # be written to nodes.conf.
         R 0 config set cluster-replica-priority 0
         wait_for_condition 1000 50 {
+            [R 3 debug cluster-replica-priority [R 0 cluster myid]] == 0 &&
+            [R 6 debug cluster-replica-priority [R 0 cluster myid]] == 0
+        } else {
+            fail "Zero replica priority did not propagate"
+        }
+        if {$::cluster_raft} {
+            # In Raft mode, nodes.conf is not rewritten on every change. Force a
+            # rewrite to allow the check below.
+            R 0 cluster saveconfig
+            R 3 cluster saveconfig
+            R 6 cluster saveconfig
+        }
+        wait_for_condition 1000 50 {
             ![file_has_pattern $nodes_conf0 {replica-priority=0}] &&
             ![file_has_pattern $nodes_conf0 {replica-priority=10}] &&
             ![file_has_pattern $nodes_conf3 {replica-priority=0}] &&
@@ -142,27 +174,52 @@ start_cluster 3 4 {tags {external:skip cluster} overrides {cluster-ping-interval
         } else {
             fail "Zero replica priority was unexpectedly persisted to nodes.conf"
         }
+    }
 
-        # Restart node 3 and make sure it restores the learned peer priorities
-        # from nodes.conf.
-        R 3 DEBUG DROP-CLUSTER-PACKET-FILTER $CLUSTER_PACKET_TYPE_ALL
+    test "Restarted node restores peer replica priorities from nodes.conf" {
+        # Set priorities, wait for node 3 to learn them, persist, then restart
+        # node 3 with peers paused to confirm it restores from disk alone.
         R 0 config set cluster-replica-priority 100
         R 6 config set cluster-replica-priority 300
-        pause_process [srv 0 pid]
-        pause_process [srv -6 pid]
-        restart_server -3 true false
-        assert_equal [R 3 debug cluster-replica-priority $R0_nodeid] 0
-        assert_equal [R 3 debug cluster-replica-priority $R6_nodeid] 30
-
-        # Everything will be alright.
-        R 3 DEBUG DROP-CLUSTER-PACKET-FILTER $CLUSTER_PACKET_TYPE_NONE
-        resume_process [srv 0 pid]
-        resume_process [srv -6 pid]
         wait_for_condition 1000 50 {
             [R 3 debug cluster-replica-priority $R0_nodeid] == 100 &&
             [R 3 debug cluster-replica-priority $R6_nodeid] == 300
         } else {
-            fail "Replica priority did not propagate"
+            fail "Replica priority did not propagate before restart"
+        }
+        R 3 cluster saveconfig
+
+        if {!$::cluster_raft} {
+            # In gossip mode, additionally verify that a node that missed
+            # recent updates only sees stale (persisted) values until gossip
+            # catches up.
+            set CLUSTER_PACKET_TYPE_NONE -1
+            set CLUSTER_PACKET_TYPE_ALL -2
+            R 3 DEBUG DROP-CLUSTER-PACKET-FILTER $CLUSTER_PACKET_TYPE_ALL
+            R 0 config set cluster-replica-priority 200
+            R 6 config set cluster-replica-priority 400
+        }
+
+        pause_process [srv 0 pid]
+        pause_process [srv -6 pid]
+        restart_server -3 true false
+        assert_equal [R 3 debug cluster-replica-priority $R0_nodeid] 100
+        assert_equal [R 3 debug cluster-replica-priority $R6_nodeid] 300
+
+        if {!$::cluster_raft} {
+            R 3 DEBUG DROP-CLUSTER-PACKET-FILTER $CLUSTER_PACKET_TYPE_NONE
+        }
+        resume_process [srv 0 pid]
+        resume_process [srv -6 pid]
+
+        if {!$::cluster_raft} {
+            # Confirm gossip eventually delivers the newer values.
+            wait_for_condition 1000 50 {
+                [R 3 debug cluster-replica-priority $R0_nodeid] == 200 &&
+                [R 3 debug cluster-replica-priority $R6_nodeid] == 400
+            } else {
+                fail "Replica priority did not propagate after restart"
+            }
         }
     }
 } ;# start_cluster

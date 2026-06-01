@@ -1,5 +1,5 @@
 test "Recover primary role from noflags created via replica ref after nodes.conf edit" {
-    start_cluster 3 3 {tags {external:skip cluster}} {
+    start_cluster 3 3 {tags {external:skip cluster cluster-raft:skip}} {
         # R0 is a primary.
         set R0_nodeid [R 0 CLUSTER MYID]
 
@@ -34,7 +34,7 @@ test "Recover primary role from noflags created via replica ref after nodes.conf
 }
 
 test "Recover primary and replica roles from noflags after nodes.conf edit" {
-    start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-ping-interval 100 cluster-node-timeout 3000}} {
+    start_cluster 3 3 {tags {external:skip cluster cluster-raft:skip} overrides {cluster-ping-interval 100 cluster-node-timeout 3000}} {
         # R0 is a primary, and R4 is a replica, they are not in the same shard.
         set R0_nodeid [R 0 CLUSTER MYID]
         set R4_nodeid [R 4 CLUSTER MYID]
@@ -73,7 +73,7 @@ test "Recover primary and replica roles from noflags after nodes.conf edit" {
 }
 
 test "Recover replica role from noflags with residual slots after nodes.conf edit" {
-    start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-ping-interval 100 cluster-node-timeout 3000}} {
+    start_cluster 3 3 {tags {external:skip cluster cluster-raft:skip} overrides {cluster-ping-interval 100 cluster-node-timeout 3000}} {
         # R4 is a replica of R1 (a different shard than R5's primary R2).
         set R4_nodeid [R 4 CLUSTER MYID]
 

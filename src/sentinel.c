@@ -2056,29 +2056,31 @@ void rewriteConfigSentinelOption(struct rewriteConfigState *state) {
 
         /* sentinel notification-script */
         if (primary->notification_script) {
-            line = sdscatprintf(sdsempty(), "sentinel notification-script %s %s", primary->name,
-                                primary->notification_script);
+            line = sdscatprintf(sdsempty(), "sentinel notification-script %s ", primary->name);
+            line = sdscatrepr(line, primary->notification_script, strlen(primary->notification_script));
             rewriteConfigRewriteLine(state, "sentinel notification-script", line, 1);
             /* rewriteConfigMarkAsProcessed is handled after the loop */
         }
 
         /* sentinel client-reconfig-script */
         if (primary->client_reconfig_script) {
-            line = sdscatprintf(sdsempty(), "sentinel client-reconfig-script %s %s", primary->name,
-                                primary->client_reconfig_script);
+            line = sdscatprintf(sdsempty(), "sentinel client-reconfig-script %s ", primary->name);
+            line = sdscatrepr(line, primary->client_reconfig_script, strlen(primary->client_reconfig_script));
             rewriteConfigRewriteLine(state, "sentinel client-reconfig-script", line, 1);
             /* rewriteConfigMarkAsProcessed is handled after the loop */
         }
 
         /* sentinel auth-pass & auth-user */
         if (primary->auth_pass) {
-            line = sdscatprintf(sdsempty(), "sentinel auth-pass %s %s", primary->name, primary->auth_pass);
+            line = sdscatprintf(sdsempty(), "sentinel auth-pass %s ", primary->name);
+            line = sdscatrepr(line, primary->auth_pass, strlen(primary->auth_pass));
             rewriteConfigRewriteLine(state, "sentinel auth-pass", line, 1);
             /* rewriteConfigMarkAsProcessed is handled after the loop */
         }
 
         if (primary->auth_user) {
-            line = sdscatprintf(sdsempty(), "sentinel auth-user %s %s", primary->name, primary->auth_user);
+            line = sdscatprintf(sdsempty(), "sentinel auth-user %s ", primary->name);
+            line = sdscatrepr(line, primary->auth_user, strlen(primary->auth_user));
             rewriteConfigRewriteLine(state, "sentinel auth-user", line, 1);
             /* rewriteConfigMarkAsProcessed is handled after the loop */
         }
@@ -2135,8 +2137,9 @@ void rewriteConfigSentinelOption(struct rewriteConfigState *state) {
         while ((de = dictNext(di2)) != NULL) {
             ri = dictGetVal(de);
             if (ri->runid == NULL) continue;
-            line = sdscatprintf(sdsempty(), "sentinel known-sentinel %s %s %d %s", primary->name,
-                                announceSentinelAddr(ri->addr), ri->addr->port, ri->runid);
+            line = sdscatprintf(sdsempty(), "sentinel known-sentinel %s %s %d ", primary->name,
+                                announceSentinelAddr(ri->addr), ri->addr->port);
+            line = sdscatrepr(line, ri->runid, strlen(ri->runid));
             rewriteConfigRewriteLine(state, "sentinel known-sentinel", line, 1);
             /* rewriteConfigMarkAsProcessed is handled after the loop */
         }
@@ -2147,7 +2150,10 @@ void rewriteConfigSentinelOption(struct rewriteConfigState *state) {
         while ((de = dictNext(di2)) != NULL) {
             sds oldname = dictGetKey(de);
             sds newname = dictGetVal(de);
-            line = sdscatprintf(sdsempty(), "sentinel rename-command %s %s %s", primary->name, oldname, newname);
+            line = sdscatprintf(sdsempty(), "sentinel rename-command %s ", primary->name);
+            line = sdscatrepr(line, oldname, sdslen(oldname));
+            line = sdscatlen(line, " ", 1);
+            line = sdscatrepr(line, newname, sdslen(newname));
             rewriteConfigRewriteLine(state, "sentinel rename-command", line, 1);
             /* rewriteConfigMarkAsProcessed is handled after the loop */
         }
@@ -2177,7 +2183,8 @@ void rewriteConfigSentinelOption(struct rewriteConfigState *state) {
 
     /* sentinel sentinel-user. */
     if (sentinel.sentinel_auth_user) {
-        line = sdscatprintf(sdsempty(), "sentinel sentinel-user %s", sentinel.sentinel_auth_user);
+        line = sdsnew("sentinel sentinel-user ");
+        line = sdscatrepr(line, sentinel.sentinel_auth_user, strlen(sentinel.sentinel_auth_user));
         rewriteConfigRewriteLine(state, "sentinel sentinel-user", line, 1);
     } else {
         rewriteConfigMarkAsProcessed(state, "sentinel sentinel-user");
@@ -2185,7 +2192,8 @@ void rewriteConfigSentinelOption(struct rewriteConfigState *state) {
 
     /* sentinel sentinel-pass. */
     if (sentinel.sentinel_auth_pass) {
-        line = sdscatprintf(sdsempty(), "sentinel sentinel-pass %s", sentinel.sentinel_auth_pass);
+        line = sdsnew("sentinel sentinel-pass ");
+        line = sdscatrepr(line, sentinel.sentinel_auth_pass, strlen(sentinel.sentinel_auth_pass));
         rewriteConfigRewriteLine(state, "sentinel sentinel-pass", line, 1);
     } else {
         rewriteConfigMarkAsProcessed(state, "sentinel sentinel-pass");

@@ -241,3 +241,29 @@ test "SENTINEL CONFIG SET rejects values containing control characters" {
     # DEL in sentinel-pass
     assert_error "ERR Invalid argument*" {S 0 SENTINEL CONFIG SET sentinel-pass "pass\x7F"}
 }
+
+test "Config rewrite escapes special characters via sdscatrepr" {
+    set special_pass "my\"pass\\word with spaces"
+    S 0 SENTINEL SET mymaster auth-pass $special_pass
+
+    S 0 SENTINEL FLUSHCONFIG
+
+    # Verify the config file has the value properly quoted
+    set configfile [file join "sentinel_0" "sentinel.conf"]
+    set content [exec cat $configfile]
+    set expected {sentinel auth-pass mymaster "my\"pass\\word with spaces"}
+    assert {[string first $expected $content] >= 0}
+
+    # Restart sentinel and verify it reloads without error
+    restart_instance sentinel 0
+    wait_for_condition 200 50 {
+        [catch {S 0 PING}] == 0
+    } else {
+        fail "Sentinel 0 did not come back after restart"
+    }
+
+    assert_match {*} [S 0 SENTINEL GET-PRIMARY-ADDR-BY-NAME mymaster]
+
+    S 0 SENTINEL SET mymaster auth-pass ""
+    S 0 SENTINEL FLUSHCONFIG
+}

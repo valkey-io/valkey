@@ -884,20 +884,18 @@ class BgIterationTest : public ::testing::Test {
 
             // Send bgIteration the DEL
             int db = getDbFromItemNum(itemNum);
-            sds sdsKey = sdsnew(keyStr(itemNum));
             robj *argv[2];
             argv[0] = createStringObjectFromCString("DEL");
-            argv[1] = createStringObjectFromCString(sdsKey);
+            argv[1] = createStringObjectFromCString(keyStr(itemNum));
             serverCommand *cmd = lookupCommandByCString("DEL");
             bgIteration_handleCommandReplication(db, cmd, 2, argv);
+            bgIteration_keyDelete(db, static_cast<sds>(objectGetVal(argv[1])));
             decrRefCount(argv[0]);
             decrRefCount(argv[1]);
 
-            bgIteration_keyDelete(db, sdsKey);
             simpleDelItem(itemNum);     // Simulate the actual del
 
             EXPECT_EQ(getItem(itemNum), nullptr);
-            sdsfree(sdsKey);
         }
 
 
@@ -2004,7 +2002,9 @@ TEST_F(BgIterationTest, writeWith2Keys_eventual_keyDeletedDuringSetReplace) {
     simulateUnblockedWrite(c);
 
     // Now the call to keyDelete happens
-    bgIteration_keyDelete(getDbFromItemNum(12), keyStr(12));
+    sds sdskey = sdsnew(keyStr(12));
+    bgIteration_keyDelete(getDbFromItemNum(12), sdskey);
+    sdsfree(sdskey);
     simpleDelItem(12);     // So simulate the actual del
 
     // Now the write will run, re-creating the item (which is still a future item)
@@ -2336,7 +2336,9 @@ TEST_F(BgIterationTest, copyHandlesProperDb_eventual) {
 
     // Now, we'll simulate the actual activity of the COPY.  DB1:H0 will be deleted in order to
     //  be overwritten.
-    bgIteration_keyDelete(1, sdsnew("H0")); // bgIteration would be signaled about the deletion
+    sds sdskey = sdsnew("H0");
+    bgIteration_keyDelete(1, sdskey); // bgIteration would be signaled about the deletion
+    sdsfree(sdskey);
     // At this point the key would actually be deleted and recreated by COPY (no need to actually do this)
 
     // And finally the replication (this should queue replication)

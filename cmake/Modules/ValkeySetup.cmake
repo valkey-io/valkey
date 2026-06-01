@@ -78,24 +78,24 @@ macro (valkey_build_and_install_bin target sources ld_flags libs link_name)
         OR USE_TCMALLOC
         OR USE_TCMALLOC_MINIMAL)
         # Using custom allocator
-        target_link_libraries(${target} ${ALLOCATOR_LIB})
+        target_link_libraries(${target} PRIVATE ${ALLOCATOR_LIB})
     endif ()
 
     # Place this line last to ensure that ${ld_flags} is placed last on the linker line
-    target_link_libraries(${target} ${libs} ${ld_flags})
-    target_link_libraries(${target} valkey::valkey)
+    target_link_libraries(${target} PRIVATE ${libs} ${ld_flags})
+    target_link_libraries(${target} PRIVATE valkey::valkey)
     if (USE_TLS)
         # Add required libraries needed for TLS
-        target_link_libraries(${target} OpenSSL::SSL valkey::valkey_tls)
+        target_link_libraries(${target} PRIVATE OpenSSL::SSL valkey::valkey_tls)
     endif ()
 
     if (USE_RDMA)
         # Add required libraries needed for RDMA
-        target_link_libraries(${target} valkey::valkey_rdma)
+        target_link_libraries(${target} PRIVATE valkey::valkey_rdma)
     endif ()
 
     if (IS_FREEBSD)
-        target_link_libraries(${target} execinfo)
+        target_link_libraries(${target} PRIVATE execinfo)
     endif ()
 
     # Enable all warnings + fail on warning

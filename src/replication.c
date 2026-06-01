@@ -5036,7 +5036,7 @@ void waitCommand(client *c) {
     }
 
     /* Argument parsing. */
-    if (getLongFromObjectOrReply(c, c->argv[1], &numreplicas, NULL) != C_OK) return;
+    if (getRangeLongFromObjectOrReply(c, c->argv[1], 0, INT_MAX, &numreplicas, NULL) != C_OK) return;
     if (getTimeoutFromObjectOrReply(c, c->argv[2], &timeout, UNIT_MILLISECONDS) != C_OK) return;
 
     /* First try without blocking at all. */
@@ -5063,7 +5063,7 @@ void waitaofCommand(client *c) {
 
     /* Argument parsing. */
     if (getRangeLongFromObjectOrReply(c, c->argv[1], 0, 1, &numlocal, NULL) != C_OK) return;
-    if (getPositiveLongFromObjectOrReply(c, c->argv[2], &numreplicas, NULL) != C_OK) return;
+    if (getRangeLongFromObjectOrReply(c, c->argv[2], 0, INT_MAX, &numreplicas, NULL) != C_OK) return;
     if (getTimeoutFromObjectOrReply(c, c->argv[3], &timeout, UNIT_MILLISECONDS) != C_OK) return;
 
     if (server.primary_host) {

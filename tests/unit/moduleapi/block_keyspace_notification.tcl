@@ -139,8 +139,14 @@ start_server {tags {"modules"}} {
         # HGETDEL
         r b_keyspace.clear
         assert_equal "v2" [r hgetdel h1 FIELDS 1 f2]
-        # "hdel" and "del" notifications can be recorded in either order
-        # because they run on independent background threads.
+        # "hdel" and "del" notifications run on independent background threads.
+        # The client is unblocked by the "hdel" thread, so by the time HGETDEL
+        # returns the "del" thread may not have logged yet — wait for both.
+        wait_for_condition 50 100 {
+            [llength [r b_keyspace.events]] >= 2
+        } else {
+            fail "Did not see both hdel and del events: [r b_keyspace.events]"
+        }
         assert_equal [lsort {{event hdel key h1} {event del key h1}}] [lsort [r b_keyspace.events]]
         assert_equal "0" [r exists h1]
 

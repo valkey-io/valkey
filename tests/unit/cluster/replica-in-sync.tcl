@@ -1,6 +1,6 @@
 source tests/support/cluster.tcl
 
-start_cluster 1 1 {tags {external:skip cluster}} {
+start_cluster 1 1 {tags {external:skip cluster cluster-raft:skip}} {
 
 test "Cluster is up" {
     wait_for_cluster_state ok

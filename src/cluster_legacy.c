@@ -4494,12 +4494,15 @@ static void clusterNodeCronGossipMaintenance(clusterNode *node, mstime_t now) {
 
     if (node->flags & CLUSTER_NODE_PFAIL) LEGACY_STATE()->stats_pfail_nodes++;
 
-    /* If we have an outbound link but no inbound link for longer than the
-     * handshake timeout, the peer probably doesn't know us. Send MEET. */
     if (nodeInNormalState(node) && node->link != NULL && node->inbound_link == NULL &&
         now - node->inbound_link_freed_time > getHandshakeTimeout() &&
         now - LEGACY_DATA(node)->meet_sent > getHandshakeTimeout() &&
         nodeSupportsMultiMeet(node)) {
+        /* Node has an outbound link, but no inbound link for more than the handshake timeout.
+         * This probably means this node does not know us yet, whereas we know it.
+         * So we send it a MEET packet to do a handshake with it and correct the inconsistent cluster view.
+         * We make sure to not re-send a MEET packet more than once every handshake timeout period, so as to
+         * leave the other node time to complete the handshake. */
         node->flags |= CLUSTER_NODE_MEET;
         serverLog(LL_NOTICE, "Sending MEET packet to node %.40s (%s) because there is no inbound link for it",
                   node->name, humanNodename(node));

@@ -42,7 +42,7 @@ test "errorstats: rejected call due to MOVED Redirection" {
 
 } ;# start_cluster
 
-start_cluster 3 0 {tags {external:skip cluster} overrides {cluster-node-timeout 1000}} {
+start_cluster 3 0 {tags {external:skip cluster cluster-raft:skip} overrides {cluster-node-timeout 1000}} {
     test "cluster bus byte stats move on a healthy cluster" {
         wait_for_condition 1000 50 {
             [CI 0 cluster_stats_bytes_sent] >= 1 &&
@@ -104,7 +104,7 @@ start_cluster 3 0 {tags {external:skip cluster} overrides {cluster-node-timeout 
     }    
 }
 
-start_cluster 3 0 {tags {external:skip cluster} overrides {cluster-node-timeout 1000}} {
+start_cluster 3 0 {tags {external:skip cluster cluster-raft:skip} overrides {cluster-node-timeout 1000}} {
     # Kill two primaries to observe partial failure on the remaining one.
     pause_process [srv 0 pid]
     pause_process [srv -1 pid]

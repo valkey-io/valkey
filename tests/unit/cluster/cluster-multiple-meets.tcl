@@ -1,4 +1,4 @@
-tags {tls:skip external:skip cluster singledb} {
+tags {tls:skip external:skip cluster singledb cluster-raft:skip} { ;# Uses gossip-specific DEBUG DROP-CLUSTER-PACKET-FILTER
     set base_conf [list cluster-enabled yes]
     start_multiple_servers 2 [list overrides $base_conf] {
         test "Cluster nodes are reachable" {

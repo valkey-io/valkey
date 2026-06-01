@@ -59,4 +59,16 @@ test "Restarting the previously killed master node" {
     resume_process [srv 0 pid]
 }
 
+test "The previously killed master node recovers" {
+    set node0_id [dict get [cluster_get_myself 0] id]
+    # Wait for all nodes to clear the FAIL flag
+    for {set j 0} {$j < [llength $::servers]} {incr j} {
+        wait_for_condition 1000 50 {
+            ![cluster_has_flag [cluster_get_node_by_id $j $node0_id] fail]
+        } else {
+            fail "Instance $j still sees FAIL flag on recovered node"
+        }
+    }
+} ;# NODE_RECOVER propagation depends on outbound link timing
+
 } ;# start_cluster

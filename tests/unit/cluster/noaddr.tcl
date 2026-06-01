@@ -1,4 +1,4 @@
-start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-replica-no-failover yes}} {
+start_cluster 3 3 {tags {external:skip cluster cluster-raft:skip} overrides {cluster-replica-no-failover yes}} {
     test "NOADDR nodes will be marked as FAIL" {
         set primary0_id [R 0 CLUSTER MYID]
 

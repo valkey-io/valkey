@@ -485,6 +485,7 @@ ENGINE_SERVER_OBJ = \
     cluster.o \
     cluster_legacy.o \
     cluster_link.o \
+    cluster_raft.o \
     cluster_nodes.o \
     cluster_state.o \
     cluster_migrateslots.o \

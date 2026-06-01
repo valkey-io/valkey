@@ -422,7 +422,8 @@ void clusterConnectNodes(void) {
         clusterNode *node = dictGetVal(de);
         if (node->flags & (CLUSTER_NODE_MYSELF | CLUSTER_NODE_NOADDR)) continue;
 
-        /* Free links that exceeded the send buffer limit. */
+        /* We free the inbound or outbound link to the node if the link has an
+         * oversized message send queue and immediately try reconnecting. */
         freeClusterLinkOnBufferLimitReached(node->link);
         freeClusterLinkOnBufferLimitReached(node->inbound_link);
 

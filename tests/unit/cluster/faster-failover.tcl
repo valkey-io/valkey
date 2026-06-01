@@ -1,5 +1,7 @@
 # Check the faster failover is working.
 
+tags {cluster external:skip cluster-raft:skip} {
+
 # Test 0: Single replica is always the best ranked replica.
 # Minimal deployment: 3 primaries + 1 replica.
 #
@@ -12,7 +14,7 @@
 # With only one replica, auth_rank is always 0, failed_primary_rank is
 # always 0, and clusterAllReplicasThinkPrimaryIsFail() only checks itself.
 # So the sole replica R3 is always identified as the best ranked replica.
-start_cluster 3 1 {tags {external:skip cluster} overrides {cluster-ping-interval 1000 cluster-node-timeout 5000}} {
+start_cluster 3 1 {overrides {cluster-ping-interval 1000 cluster-node-timeout 5000}} {
     test "The sole replica is always the best ranked replica" {
         # Write some data to R0 so the replica has a non-zero offset.
         for {set i 0} {$i < 10} {incr i} {
@@ -60,7 +62,7 @@ proc single_primary_replica_allocation {masters replicas} {
 # However, in a bad case, R4 may not receive R3's MY_PRIMARY_FAIL flag
 # via gossip before starting the election. We run this test multiple times
 # and assert that the "best ranked replica" path is triggered at least once.
-start_cluster 3 2 {tags {external:skip cluster} overrides {cluster-ping-interval 1000 cluster-node-timeout 5000}} {
+start_cluster 3 2 {overrides {cluster-ping-interval 1000 cluster-node-timeout 5000}} {
     test "The best replica can initiate an election immediately in an automatic failover - single primary failure" {
         set best_ranked_triggered 0
         for {set attempt 1} {$attempt < 6} {incr attempt} {
@@ -178,7 +180,7 @@ proc two_primaries_slot_allocation {primaries replicas} {
 # test multiple times and assert that the "best ranked replica" path is triggered
 # at least once.
 #
-start_cluster 5 7 {tags {external:skip cluster tls:skip} overrides {cluster-ping-interval 1000 cluster-node-timeout 5000}} {
+start_cluster 5 7 {tags {tls:skip} overrides {cluster-ping-interval 1000 cluster-node-timeout 5000}} {
     test "The best replica can initiate an election immediately in an automatic failover - two primaries failure" {
         # We calculate their rankings so that we can make rank judgments later.
         set R0_failed_primary_rank [expr [expr [memcmp [R 0 cluster myshardid] [R 1 cluster myshardid]] < 0] ? 0 : 1]
@@ -315,3 +317,5 @@ start_cluster 5 7 {tags {external:skip cluster tls:skip} overrides {cluster-ping
         assert_morethan $best_ranked_triggered 0
     }
 } two_primaries_slot_allocation cluster_allocate_replicas ;# start_cluster
+
+} ;# tags

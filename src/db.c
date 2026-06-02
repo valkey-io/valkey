@@ -524,6 +524,7 @@ int dbGenericDelete(serverDb *db, robj *key, int async, int flags) {
 
 /* Add a key with volatile items to the tracking kvstore. */
 void dbTrackKeyWithVolatileItems(serverDb *db, robj *o) {
+    serverAssert(objectGetKey(o));
     if (o->type == OBJ_HASH && hashTypeHasVolatileFields(o)) {
         int dict_index = getKVStoreIndexForKey(objectGetKey(o));
         kvstoreHashtableAdd(db->keys_with_volatile_items, dict_index, o);
@@ -532,6 +533,7 @@ void dbTrackKeyWithVolatileItems(serverDb *db, robj *o) {
 
 /* Delete a key from the keys with volatile entries tracking kvstore */
 void dbUntrackKeyWithVolatileItems(serverDb *db, robj *o) {
+    serverAssert(objectGetKey(o));
     int dict_index = getKVStoreIndexForKey(objectGetKey(o));
     kvstoreHashtableDelete(db->keys_with_volatile_items, dict_index, objectGetKey(o));
 }

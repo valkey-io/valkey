@@ -777,11 +777,12 @@ static int isValidAuxChar(unsigned char c) {
     /* Reject control characters (0x00-0x1F) and DEL (0x7F). */
     if (c <= 0x1F || c == 0x7F) return 0;
 
-    /* Reject characters that are format-significant in nodes.conf:
-     * line/field separators that clusterLoadConfig parses on (newline
-     * via the control-char check above, plus space, comma, equals)
-     * and the historical legacy reserved set. */
-    static const char *invalid_charset = "!#$%&()*+,;<=>?@[]^{|}~ ";
+    /* Reject characters that are format-significant in nodes.conf, plus
+     * quotes, backslash, and the historical legacy reserved set.
+     * Format-significant characters are the line/field separators that
+     * clusterLoadConfig parses on: newline (via the control-char check
+     * above), space, comma, and equals. */
+    static const char *invalid_charset = "!#$%&()*+,;<=>?@[]^{|}~ \"'\\";
 
     return strchr(invalid_charset, c) == NULL;
 }

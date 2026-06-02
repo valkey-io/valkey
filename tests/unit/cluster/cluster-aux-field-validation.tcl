@@ -45,6 +45,24 @@ start_cluster 1 0 {tags {external:skip cluster}} {
         }
     }
 
+    test "cluster-announce-ip rejects double quote" {
+        assert_error "ERR CONFIG SET failed*cluster-announce-ip*invalid character*" {
+            R 0 CONFIG SET cluster-announce-ip "10.0.0.1\"evil"
+        }
+    }
+
+    test "cluster-announce-ip rejects single quote" {
+        assert_error "ERR CONFIG SET failed*cluster-announce-ip*invalid character*" {
+            R 0 CONFIG SET cluster-announce-ip "10.0.0.1'evil"
+        }
+    }
+
+    test "cluster-announce-ip rejects backslash" {
+        assert_error "ERR CONFIG SET failed*cluster-announce-ip*invalid character*" {
+            R 0 CONFIG SET cluster-announce-ip "10.0.0.1\\evil"
+        }
+    }
+
     test "cluster-announce-ip accepts valid IPv4" {
         R 0 CONFIG SET cluster-announce-ip "192.168.1.100"
         assert_equal "192.168.1.100" [lindex [R 0 CONFIG GET cluster-announce-ip] 1]
@@ -92,6 +110,24 @@ start_cluster 1 0 {tags {external:skip cluster}} {
     test "cluster-announce-human-nodename rejects equals sign" {
         assert_error "ERR CONFIG SET failed*cluster-announce-human-nodename*invalid character*" {
             R 0 CONFIG SET cluster-announce-human-nodename "node=injected"
+        }
+    }
+
+    test "cluster-announce-human-nodename rejects double quote" {
+        assert_error "ERR CONFIG SET failed*cluster-announce-human-nodename*invalid character*" {
+            R 0 CONFIG SET cluster-announce-human-nodename "node\"injected"
+        }
+    }
+
+    test "cluster-announce-human-nodename rejects single quote" {
+        assert_error "ERR CONFIG SET failed*cluster-announce-human-nodename*invalid character*" {
+            R 0 CONFIG SET cluster-announce-human-nodename "node'injected"
+        }
+    }
+
+    test "cluster-announce-human-nodename rejects backslash" {
+        assert_error "ERR CONFIG SET failed*cluster-announce-human-nodename*invalid character*" {
+            R 0 CONFIG SET cluster-announce-human-nodename "node\\injected"
         }
     }
 }

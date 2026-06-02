@@ -26,6 +26,7 @@ extern "C" {
     void bgIteration_unitTestDisableCloning(void);
     void bgIteration_unitTestEnableCloning(int item_bytes, int pool_bytes);
     static size_t mockHashtableScan(hashtable *ht, size_t cursor, hashtableScanFunction fn, void *privdata);
+    size_t objectComputeSize(robj *key, robj *o, size_t sample_size, int dbid);
 }
 
 
@@ -43,6 +44,27 @@ static void iteratorCleanupFn(bool terminated, void *privdata) {
     EXPECT_EQ(privdata, PRIVDATA);
     cleanupCount++;
     cleanupTerminated = terminated;
+}
+
+// A bgIteration repldone function used for testing.
+static int replDoneConfirmed;
+static bool iteratorRepldoneFn(void *privdata) {
+    EXPECT_EQ(privdata, PRIVDATA);
+    replDoneConfirmed++;
+    return true;
+}
+
+// A more complicated repldone function that can delay the replcation done condition.
+static int replDoneRejected;
+static bool iteratorRepldoneFnNotBeingReadyInitially(void *privdata) {
+    EXPECT_EQ(privdata, PRIVDATA);
+    // This is to test the behavior when Repl Done function is not ready to be executed.
+    if (replDoneRejected == 0) {
+        replDoneRejected++;
+        return false;
+    }
+    replDoneConfirmed++;
+    return true;
 }
 
 
@@ -266,6 +288,8 @@ class BgIterationTest : public ::testing::Test {
             bgIteration_init();
 
             cleanupCount = 0;
+            replDoneConfirmed = 0;
+            replDoneRejected = 0;
 
             // By default, do nothing for these
             EXPECT_CALL(mock, blockClientInUseOnKeys(_,_,_)).WillRepeatedly(Return());
@@ -2649,5 +2673,418 @@ TEST_F(BgIterationTest, multiBlocksOnFutureKey) {
     // and clean up the rest...
     expectReadKeySequence(it, 1, 5);
     expectReadKeySequence(it, 7, LAST_ITEM);
+    expectReadComplete(it);
+}
+
+
+// Scenario.  We have a multi that doesn't need to be replicated because all of the keys exist
+//  but are all future keys.  Note that missing keys are considered already-iterated, so all
+//  must exist for this test.  Then:
+//   - we delete a key
+//   - we re-create the deleted (future) key - normally this would be replicated
+//   - we access another (future) key - we don't expect to get blocked!
+TEST_F(BgIterationTest, multiNotReplicatedButDelRecreateAccess) {
+    bgIterator *it = bgIteratorCreateFullScanIter("iter",
+            BGITERATOR_CONSISTENCY_EVENTUAL, NULL, iteratorCleanupFn, PRIVDATA);
+
+    expectReadKey(it, 0);
+    // Keys 1 & 2 are in queue
+
+    c = getMultiClient("DEL H1; SET H1 xxx; SET H2 yyy");
+    // Now let's process the multi.  Since H1 & H2 are both future (existing) items, we shouldn't
+    //  block or replicate.
+    simulateUnblockedWrite(c);  // the EXEC
+
+    // Simulate the DEL H1
+    server.in_exec = 1;    // Simulate actual execution of the MULTI/EXEC
+    advanceMultiClientToCommand(c, 0);  // DEL H1
+    EXPECT_CALL(mock, blockClientInUseOnKeys(c,_,_)).Times(0);
+    bool blocked = bgIteration_blockClientIfRequired(c);
+    EXPECT_FALSE(blocked);
+    simpleDelItem(6); // H1
+    sds delKey = sdsnew(keyStr(6));
+    bgIteration_keyDelete(0, delKey);
+    sdsfree(delKey);
+    bgIteration_handleCommandReplication(c->db->id, c->cmd, c->argc, c->argv); // shouldn't replicate
+
+    // Simulate SET H1 - the key doesn't exist, and would normally replicate and mark early iterate,
+    //  but this is in a transaction, and we are not replicating this transaction.
+    advanceMultiClientToCommand(c, 1);  // SET H1 xxx
+    simulateUnblockedWriteWithModification(c);
+
+    // Now write to another existing future key - this should work if we weren't confused by the DEL
+    advanceMultiClientToCommand(c, 2);  // SET H2 yyy
+    simulateUnblockedWriteWithModification(c);
+    server.in_exec = 0;
+
+    // Now we can continue iterating, and we should pick up keys 1...  (and no replication!)
+    expectReadKeySequence(it, 1, 5);
+    expectReadKey(it, 6, "xxx");
+    expectReadKey(it, 7, "yyy");
+    expectReadKeySequence(it, 8, LAST_ITEM);
+    expectReadComplete(it);
+}
+
+
+// For this test, B0 is added into DB1 - so it exists in both DB 0 and 1.  We will process it
+//  in DB0, but it will be unprocessed in DB1.  See if we track SELECT properly.
+TEST_F(BgIterationTest, multiHandlesSelectProperly) {
+    addKeyToDb(1, "B0", "B0");
+
+    bgIterator *it = bgIteratorCreateFullScanIter("iter",
+            BGITERATOR_CONSISTENCY_START, NULL, iteratorCleanupFn, PRIVDATA);
+
+    // Read the 1st key - B0 in DB0.
+    expectReadKey(it, 0);
+    // Now, we are done with B0 in DB0, but not in DB1
+    expectReadKey(it, 1); // Reads B1, and releases B0 in DB0
+
+    // These cases should NOT block...  (they access B0 in DB0)
+    c = getMultiClient("SET B0 xxx");
+    simulateUnblockedWrite(c);
+    freeTestClient(c);
+    c = getMultiClient("SELECT 0; SET B0 xxx");
+    simulateUnblockedWrite(c);
+    freeTestClient(c);
+    c = getMultiClient("SET B0 xxx; SELECT 1");
+    simulateUnblockedWrite(c);
+    freeTestClient(c);
+    c = getMultiClient("SELECT 1; SELECT 0; SET B0 xxx; SELECT 1");
+    simulateUnblockedWrite(c);
+    freeTestClient(c);
+
+    // These cases SHOULD block...  (they access B0 in DB1)
+    c = getMultiClient("SET B0 xxx");
+    c->db = server.db[1];
+    simulateBlockedWrite(c);
+    freeTestClient(c);
+    c = getMultiClient("SELECT 1; SET B0 xxx");
+    simulateBlockedWrite(c);
+    freeTestClient(c);
+    c = getMultiClient("SELECT 1; SET B0 xxx; SELECT 0");
+    simulateBlockedWrite(c);
+    freeTestClient(c);
+    c = getMultiClient("SELECT 0; SELECT 1; SET B0 xxx; SELECT 1");
+    simulateBlockedWrite(c);
+
+    expectAnythingCleanup(it);
+}
+
+// For this test, B0 is added into DB1 - so it exists in both DB0 and DB1.  We will process it
+//  in DB0, but it will be unprocessed in DB1.  See if we track select properly - WHEN WE HAVE NO
+//  PERMISSION TO EXECUTE SELECT!
+TEST_F(BgIterationTest, multiHandlesSelectNoPermissionProperly) {
+    addKeyToDb(1, "B0", "B0");
+
+    bgIterator *it = bgIteratorCreateFullScanIter("iter",
+            BGITERATOR_CONSISTENCY_START, NULL, iteratorCleanupFn, PRIVDATA);
+
+    // Read the 1st key - B0 in DB0.
+    expectReadKey(it, 0);
+    // Now, we are done with B0 in DB0, but not in DB1
+    expectReadKey(it, 1); // Reads B1, and releases B0 in DB0
+
+    // No permission for any commands (specifically select/swapdb)
+    EXPECT_CALL(mock, ACLCheckAllUserCommandPerm(_,_,_,_,_,_))
+        .Times(AtLeast(1)).WillRepeatedly(Return(ACL_DENIED_CMD));
+
+    // These cases should NOT block...  (they access B0 in DB0)
+    //  The SELECTs below are inconsequential - with/without select, same result.
+    c = getMultiClient("SET B0 xxx");
+    simulateUnblockedWrite(c);
+    freeTestClient(c);
+    c = getMultiClient("SELECT 0; SET B0 xxx");
+    simulateUnblockedWrite(c);
+    freeTestClient(c);
+    c = getMultiClient("SET B0 xxx; SELECT 1");
+    simulateUnblockedWrite(c);
+    freeTestClient(c);
+    c = getMultiClient("SELECT 1; SELECT 0; SET B0 xxx; SELECT 1");
+    simulateUnblockedWrite(c);
+    freeTestClient(c);
+
+    // These cases SHOULD block IF SELECT IS WORKING...  (they access B0 in DB1)
+    c = getMultiClient("SET B0 xxx");
+    c->db = server.db[1];      // already starting on DB1
+    simulateBlockedWrite(c);    // will block, no select
+    freeTestClient(c);
+    c = getMultiClient("SELECT 1; SET B0 xxx");
+    simulateUnblockedWrite(c);  // will not block because accessing DB0 (select fails)
+    freeTestClient(c);
+    c = getMultiClient("SELECT 1; SET B0 xxx; SELECT 0");
+    simulateUnblockedWrite(c);  // will not block because accessing DB0 (select fails)
+    freeTestClient(c);
+    c = getMultiClient("SELECT 0; SELECT 1; SET B0 xxx; SELECT 1");
+    simulateUnblockedWrite(c);  // will not block because accessing DB0 (select fails)
+
+    expectAnythingCleanup(it);
+}
+
+// For this test, B0 is added into DB1 - so it exists in both DB0 and DB1.  We will process it
+//  in DB0, but it will be unprocessed in DB1.  See if we track SWAPDB properly.
+TEST_F(BgIterationTest, multiHandlesSwapdbProperly) {
+    addKeyToDb(1, "B0", "B0");
+
+    bgIterator *it = bgIteratorCreateFullScanIter("iter",
+            BGITERATOR_CONSISTENCY_START, NULL, iteratorCleanupFn, PRIVDATA);
+
+    // Read the 1st key - B0 in DB0.
+    expectReadKey(it, 0);
+    // Now, we are done with B0 in DB0, but not in DB1
+    expectReadKey(it, 1); // Reads B1, and releases B0 in DB0
+
+    // These cases should NOT block...  (they access B0 in DB0)
+    c = getMultiClient("SET B0 xxx");
+    simulateUnblockedWrite(c);
+    freeTestClient(c);
+    c = getMultiClient("SET B0 xxx; SWAPDB 0 1");
+    simulateUnblockedWrite(c);
+    freeTestClient(c);
+    c = getMultiClient("SET B0 xxx; SWAPDB 0 1; SWAPDB 0 1; SET B0 xxx");
+    simulateUnblockedWrite(c);
+    freeTestClient(c);
+    c = getMultiClient("SWAPDB 0 1; SELECT 1; SET B0 xxx");
+    simulateUnblockedWrite(c);
+    freeTestClient(c);
+
+    // These cases SHOULD block...  (they access B0 in DB1)
+    c = getMultiClient("SET B0 xxx");
+    c->db = server.db[1];
+    simulateBlockedWrite(c);
+    freeTestClient(c);
+    c = getMultiClient("SWAPDB 1 0; SET B0 xxx; SWAPDB 0 1");
+    simulateBlockedWrite(c);
+    freeTestClient(c);
+    c = getMultiClient("SWAPDB 1 0; SELECT 0; SET B0 xxx; SWAPDB 0 1");
+    simulateBlockedWrite(c);
+    freeTestClient(c);
+    c = getMultiClient("SWAPDB 1 0; SWAPDB 1 0; SELECT 1; SET B0 xxx; SELECT 1");
+    simulateBlockedWrite(c);
+
+    expectAnythingCleanup(it);
+}
+
+// For this test, B0 is added into DB1 - so it exists in both DB0 and DB1.  We will process it
+//  in DB0, but it will be unprocessed in DB1.  See if we track select properly - WHEN WE HAVE NO
+//  PERMISSION TO EXECUTE SWAPDB!
+TEST_F(BgIterationTest, multiHandlesSwapdbNoPermissionProperly) {
+    addKeyToDb(1, "B0", "B0");
+
+    bgIterator *it = bgIteratorCreateFullScanIter("iter",
+            BGITERATOR_CONSISTENCY_START, NULL, iteratorCleanupFn, PRIVDATA);
+
+    // Read the 1st key - B0 in DB0.
+    expectReadKey(it, 0);
+    // Now, we are done with B0 in DB0, but not in DB1
+    expectReadKey(it, 1); // Reads B1, and releases B0 in DB0
+
+    // No permission for any commands (specifically select/swapdb)
+    EXPECT_CALL(mock, ACLCheckAllUserCommandPerm(_,_,_,_,_,_))
+        .Times(AtLeast(1)).WillRepeatedly(Return(ACL_DENIED_CMD));
+
+    // These cases should NOT block...  (they access B0 in DB0)
+    //  The SELECTs & SWAPDBs below are inconsequential - with/without select/swapdb, same result.
+    c = getMultiClient("SET B0 xxx");
+    simulateUnblockedWrite(c);
+    freeTestClient(c);
+    c = getMultiClient("SET B0 xxx; SWAPDB 0 1");
+    simulateUnblockedWrite(c);
+    freeTestClient(c);
+    c = getMultiClient("SET B0 xxx; SWAPDB 0 1; SWAPDB 0 1; SET B0 xxx");
+    simulateUnblockedWrite(c);
+    freeTestClient(c);
+    c = getMultiClient("SWAPDB 0 1; SELECT 1; SET B0 xxx");
+    simulateUnblockedWrite(c);
+    freeTestClient(c);
+
+    // These cases SHOULD block IF SELECT/SWAPDB IS WORKING...  (they access B0 in DB1)
+    c = getMultiClient("SET B0 xxx");
+    c->db = server.db[1];
+    simulateBlockedWrite(c);
+    freeTestClient(c);
+    c = getMultiClient("SWAPDB 1 0; SET B0 xxx; SWAPDB 0 1");
+    simulateUnblockedWrite(c);  // will not block because accessing DB0 (swapdb fails)
+    freeTestClient(c);
+    c = getMultiClient("SWAPDB 1 0; SELECT 0; SET B0 xxx; SWAPDB 0 1");
+    simulateUnblockedWrite(c);  // will not block because accessing DB0 (swapdb/select fails)
+    freeTestClient(c);
+    c = getMultiClient("SWAPDB 1 0; SWAPDB 1 0; SELECT 1; SET B0 xxx; SELECT 1");
+    simulateUnblockedWrite(c);  // will not block because accessing DB0 (swapdb/select fails)
+
+    expectAnythingCleanup(it);
+}
+
+
+static void *pthreadWait200msAndReadTwoKeys(void *arg) {
+    bgIterator *it = static_cast<bgIterator*>(arg);
+
+    usleep(200000);
+    bgIteratorRead(it);
+    bgIteratorRead(it);
+    return nullptr;
+}
+
+static void asyncWait200msAndReadTwoKeys(bgIterator *it) {
+    int rc;
+    pthread_attr_t attr;
+    pthread_t thread;
+
+    rc = pthread_attr_init(&attr);
+    assert(rc == 0);
+    rc = pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+    assert(rc == 0);
+
+    rc = pthread_create(&thread, &attr, pthreadWait200msAndReadTwoKeys, it);
+    assert(rc == 0);
+
+    rc = pthread_attr_destroy(&attr);
+    assert(rc == 0);
+}
+
+TEST_F(BgIterationTest, testLuaWithUndeclaredKey) {
+    bgIterator *it = bgIteratorCreateFullScanIter("iter",
+            BGITERATOR_CONSISTENCY_START, NULL, iteratorCleanupFn, PRIVDATA);
+
+    // Read the 1st key - let's get the party started
+    expectReadKey(it, 0);
+
+    // At this point, key 0 is read.  Keys 1 & 2 are queued (they are all in the same bucket).
+    // If we fake a modification to key 3, we won't know if it's handled out of order.
+    // So we fake a modification to key 4
+    c = getWriteClient(4, "xxx");
+    c->flag.script = 1;
+
+    // Now for a LUA script, we have already blocked (on the eval/evalsha) for any declared keys
+    //  But here, we're about to modify an undeclared key.  We can't actually block in the middle
+    //  of the LUA script.  So this will behave as unblocked, but incur a synchronous wait.
+
+    // Key 4 will get expedited when we simulate the write.  After reading key 4, key 1 will need
+    //  to be read to return key 4 to Valkey, unblocking the synchronous wait.
+    asyncWait200msAndReadTwoKeys(it);
+
+    monotime blockTimer;
+    elapsedStart(&blockTimer);
+    simulateUnblockedWrite(c); // Not blocked, but delays internally
+    // Must have delayed at least 150ms (some time may have passed before timer start)
+    EXPECT_GT(elapsedMs(blockTimer), 150u);
+
+    // Continue...
+    expectReadKeySequence(it, 2, 3);
+    // 4 has already been processed
+    expectReadKeySequence(it, 5, LAST_ITEM);
+    expectReadComplete(it);
+}
+
+
+// Make sure that replication received while processing the last key is sent
+TEST_F(BgIterationTest, replicationReceivedWhileProcessingLastKey) {
+    bgIterator *it = bgIteratorCreateFullScanIter("iter",
+            BGITERATOR_CONSISTENCY_EVENTUAL, NULL, iteratorCleanupFn, PRIVDATA);
+
+    expectReadKeySequence(it, 0, LAST_ITEM);
+
+    c = getWriteClient(0, "xxx");
+    simulateUnblockedWriteWithModification(c);         // Wouldn't be blocked because done with key 0
+    expectReadReplication(it, c);   // Replication happened while processing the last item, should be here.
+
+    simulateUnblockedWriteWithModification(c);         // This won't replicate because we are done processing
+    expectReadComplete(it);         // We expect to see the completion instead
+}
+
+TEST_F(BgIterationTest, repldoneFunctionCalled) {
+    bgIterator *it = bgIteratorCreateFullScanIter("iter",
+            BGITERATOR_CONSISTENCY_EVENTUAL, iteratorRepldoneFn, iteratorCleanupFn, PRIVDATA);
+
+    expectReadKeySequence(it, 0, LAST_ITEM);
+    c = getWriteClient(0, "xxx");
+    simulateUnblockedWriteWithModification(c);         // Wouldn't be blocked because done with key 0
+
+    // Since in testing, we are only feeding one item at a time, and synchronously, we won't call
+    //  the repldone function until after we release the last item.
+    EXPECT_EQ(replDoneConfirmed, 0);
+    expectReadReplication(it, c);   // Replication happened while processing the last item, should be here.
+    EXPECT_EQ(replDoneConfirmed, 1);    // Last key released, now done feeding replication
+
+    simulateUnblockedWriteWithModification(c);         // This won't replicate because we are done processing
+    expectReadComplete(it);         // We expect to see the completion instead
+}
+
+TEST_F(BgIterationTest, repldoneFunctionCalledTwice) {
+    bgIterator *it = bgIteratorCreateFullScanIter("iter",
+            BGITERATOR_CONSISTENCY_EVENTUAL, iteratorRepldoneFnNotBeingReadyInitially, iteratorCleanupFn, PRIVDATA);
+
+    expectReadKeySequence(it, 0, LAST_ITEM);
+    c = getWriteClient(0, "xxx");
+    simulateUnblockedWriteWithModification(c);         // Wouldn't be blocked because done with key 0
+
+    // Won't signal replDone until we've released the final item (which happens when reading the replication)
+    EXPECT_EQ(replDoneRejected, 0);
+    EXPECT_EQ(replDoneConfirmed, 0);
+    expectReadReplication(it, c);   // Releases the final item
+    EXPECT_EQ(replDoneRejected, 1); // replDone called once (and rejected by client)
+    EXPECT_EQ(replDoneConfirmed, 0);
+    simulateUnblockedWriteWithModification(c); // This will replicate (because replDone returned false)
+    expectReadReplication(it, c);   // ReplDone gets called again (and accepted this time)
+    EXPECT_EQ(replDoneConfirmed, 1);
+
+    simulateUnblockedWriteWithModification(c);         // This won't replicate because replication is done
+    expectReadComplete(it);         // We expect to see the completion instead
+}
+
+// Check that the memory reported for replication is correct
+TEST_F(BgIterationTest, checkReplicationByteCount) {
+    bgIterator *it = bgIteratorCreateFullScanIter("iter",
+            BGITERATOR_CONSISTENCY_EVENTUAL, iteratorRepldoneFn, iteratorCleanupFn, PRIVDATA);
+
+    c = getWriteClient(0, "xxx");
+    int expectedReplicationSize = sizeof(bgIteratorItem);
+    for (int i = 0;  i < c->argc;  i++) {
+        expectedReplicationSize += objectComputeSize(NULL, c->argv[i], 0, 0);
+    }
+
+    expectReadKey(it, 0);
+    expectReadKey(it, 1);  // Releases and unblocks 0
+    EXPECT_EQ(bgIteration_memoryInuseForReplication(), 0u);
+
+    simulateUnblockedWriteWithModification(c);         // Wouldn't be blocked because done with key 0
+    EXPECT_EQ(bgIteration_memoryInuseForReplication(), expectedReplicationSize);
+    simulateUnblockedWriteWithModification(c);         // and write again (2nd replication)
+    EXPECT_EQ(bgIteration_memoryInuseForReplication(), 2 * expectedReplicationSize);
+
+    expectReadKey(it, 2);  // Keys 0..2 all in same bucket
+
+    expectReadReplication(it, c);
+    // After reading the 1st replication, it hasn't been returned yet (it's the active item)
+    EXPECT_EQ(bgIteration_memoryInuseForReplication(), 2 * expectedReplicationSize);
+    expectReadReplication(it, c);
+    // After reading the 2nd replication, the 1st has been returned
+    EXPECT_EQ(bgIteration_memoryInuseForReplication(), expectedReplicationSize);
+
+    expectReadKey(it, 3);
+    // Now all replication has been returned/freed
+    EXPECT_EQ(bgIteration_memoryInuseForReplication(), 0u);
+
+    expectReadKeySequence(it, 4, LAST_ITEM);
+    expectReadComplete(it);
+}
+
+// Test that for an arbitrary write command having no keys, replication should occur.
+TEST_F(BgIterationTest, checkNoKeysWriteIsReplicated) {
+    bgIterator *it = bgIteratorCreateFullScanIter("iter",
+            BGITERATOR_CONSISTENCY_EVENTUAL, NULL, iteratorCleanupFn, PRIVDATA);
+
+    expectReadKey(it, 0);
+
+    c = getNoKeysWriteClient();
+    EXPECT_CALL(mock, blockClientInUseOnKeys(c,_,_)).Times(0);
+    bool blocked = bgIteration_blockClientIfRequired(c);
+    EXPECT_FALSE(blocked);
+    bgIteration_handleCommandReplication(c->db->id, c->cmd, c->argc, c->argv);
+
+    expectReadKeySequence(it, 1, 2);    // These were already in queue
+
+    expectReadReplication(it, c);
+
+    expectReadKeySequence(it, 3, LAST_ITEM);
     expectReadComplete(it);
 }

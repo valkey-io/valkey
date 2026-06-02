@@ -23,10 +23,6 @@ size_t objectComputeSize(robj *key, robj *o, size_t sample_size, int dbid);     
 robj *createStringObjectWithKeyAndExpire(const char *ptr, size_t len, const sds key, long long expire); // in object.c
 
 
-// Non-public hashtable/kvstore functions...
-hashtableIterator *kvstoreInternalIteratorGetCurrentHashtableIterator(kvstoreIterator *kvs_it);
-
-
 static bool receiveItemsBackFromOneIterator(bgIterator *it); // in bgiteration.c - forward declaration
 
 // ################  TEMP COMPILE HACKS   ###########################

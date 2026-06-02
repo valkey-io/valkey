@@ -75,6 +75,7 @@
 #include <sys/utsname.h>
 #include <locale.h>
 #include <sys/socket.h>
+#include "tunnel.h"
 
 #ifdef __linux__
 #include <sys/mman.h>
@@ -1617,6 +1618,10 @@ long long serverCron(struct aeEventLoop *eventLoop, long long id, void *clientDa
     /* Handle background operations on databases. */
     databasesCron();
 
+    freeTunnelsInAsyncFreeQueue();
+
+    tunnelsCron();
+
     /* Start a scheduled AOF rewrite if this was requested by the user while
      * a BGSAVE was in progress. */
     if (!hasActiveChildProcess() && server.aof_rewrite_scheduled && !aofRewriteLimited()) {
@@ -2390,6 +2395,9 @@ void initServerConfig(void) {
     server.rdb_client_id = -1;
     server.loading_process_events_interval_ms = LOADING_PROCESS_EVENTS_INTERVAL_DEFAULT;
     server.loading_rio = NULL;
+    server.primary_endpoint_ip = NULL;
+    server.primary_endpoint_sa = NULL;
+    server.tunnel_activation_time = 0;
 
     /* Replication partial resync backlog */
     server.repl_backlog = NULL;
@@ -2426,6 +2434,9 @@ void initServerConfig(void) {
 
     /* Debugging */
     server.watchdog_period = 0;
+
+    server.active_tunnel_sessions = listCreate();
+    server.tunnels_to_close = listCreate();
 }
 
 extern char **environ;
@@ -2791,6 +2802,7 @@ void resetServerStats(void) {
 
     server.stat_numcommands = 0;
     server.stat_numconnections = 0;
+    server.stat_tunnel_sessions = 0;
     server.stat_expiredkeys = 0;
     server.stat_expiredfields = 0;
     server.stat_expired_keys_stale_perc = 0;
@@ -6213,7 +6225,9 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                 "total_blocking_keys_on_nokey:%lu\r\n", blocking_keys_on_nokey,
                 "paused_reason:%s\r\n", paused_reason,
                 "paused_actions:%s\r\n", paused_actions,
-                "paused_timeout_milliseconds:%lld\r\n", paused_timeout));
+                "paused_timeout_milliseconds:%lld\r\n", paused_timeout,
+                "total_tunnel_sessions:%lld\r\n", server.stat_tunnel_sessions,
+                "active_tunnel_sessions:%lld\r\n",listLength(server.active_tunnel_sessions)));
     }
 
     /* Memory */
@@ -7015,6 +7029,26 @@ void setupSignalHandlers(void) {
 
     setupDebugSigHandlers();
 }
+
+struct sockaddr_storage *createSockaddrFromIP(const char *ipstr) {
+    struct sockaddr_storage *sa = zmalloc(sizeof(*sa));
+    memset(sa, 0, sizeof(*sa));
+
+    if (inet_pton(AF_INET, ipstr, &((struct sockaddr_in *)sa)->sin_addr)) {
+        sa->ss_family = AF_INET;
+        return sa;
+    }
+
+    if (inet_pton(AF_INET6, ipstr, &((struct sockaddr_in6 *)sa)->sin6_addr)) {
+        sa->ss_family = AF_INET6;
+        return sa;
+    }
+
+    serverLog(LL_WARNING, "Invalid IP address format: %s", ipstr);
+    zfree(sa);
+    return NULL;
+}
+
 
 /* This is the signal handler for children process. It is currently useful
  * in order to track the SIGUSR1, that we send to a child in order to terminate

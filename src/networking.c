@@ -47,6 +47,8 @@
 #include <ctype.h>
 #include <stdatomic.h>
 #include <stdbool.h>
+#include <arpa/inet.h>
+#include "tunnel.h"
 
 /* This struct is used to encapsulate filtering criteria for operations on clients
  * such as identifying specific clients to kill or retrieve. Each field in the struct
@@ -1790,6 +1792,47 @@ void clientAcceptHandler(connection *conn) {
     moduleFireServerEvent(VALKEYMODULE_EVENT_CLIENT_CHANGE, VALKEYMODULE_SUBEVENT_CLIENT_CHANGE_CONNECTED, c);
 }
 
+static int equalIPs(const struct sockaddr_storage *a, const struct sockaddr_storage *b) {
+    if (a->ss_family != b->ss_family) return 0;
+
+    if (a->ss_family == AF_INET) {
+        struct sockaddr_in *a4 = (struct sockaddr_in *)a;
+        struct sockaddr_in *b4 = (struct sockaddr_in *)b;
+        return a4->sin_addr.s_addr == b4->sin_addr.s_addr;
+    }
+
+    if (a->ss_family == AF_INET6) {
+        struct sockaddr_in6 *a6 = (struct sockaddr_in6 *)a;
+        struct sockaddr_in6 *b6 = (struct sockaddr_in6 *)b;
+        return memcmp(&a6->sin6_addr, &b6->sin6_addr, sizeof(struct in6_addr)) == 0;
+    }
+
+    return 0;
+}
+
+static int shouldTunnelToPrimary(int fd) {
+    if (!server.enable_tunneling || !server.primary_host) {
+        return 0;
+    }
+
+    if (server.primary_endpoint_sa == NULL) {
+        return 0;
+    }
+
+    /* Logic to skip tunneling incase of connection is not to the primary endpoint */
+    struct sockaddr_storage dest_sa;
+    socklen_t dest_sa_len = sizeof(dest_sa);
+    if (getsockname(fd, (struct sockaddr *)&dest_sa, &dest_sa_len) != 0) {
+        return 0;
+    }
+
+    if (!equalIPs(&dest_sa, server.primary_endpoint_sa)) {
+        return 0;
+    }
+
+    return 1;
+}
+
 void acceptCommonHandler(connection *conn, struct ClientFlags flags, char *ip) {
     client *c;
     UNUSED(ip);
@@ -1828,6 +1871,12 @@ void acceptCommonHandler(connection *conn, struct ClientFlags flags, char *ip) {
         server.stat_rejected_conn++;
         connClose(conn);
         return;
+    }
+
+    if (shouldTunnelToPrimary(conn->fd)) {
+        /* Directly call tunnel logic — pass conn, and skip client creation */
+        establishTunnelOrClose(conn);
+        return; /* Skip everything else */
     }
 
     /* Create connection and client */

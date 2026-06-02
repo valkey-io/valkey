@@ -3029,7 +3029,7 @@ int bitfieldGetKeys(struct serverCommand *cmd, robj **argv, int argc, getKeysRes
     return 1;
 }
 
-int *selectDbIdArgs(robj **argv, int argc, int *count) {
+int *selectDbIdArgs(robj **argv, int argc, int *count, int **positions) {
     if (argc < 2) return NULL;
 
     long long dbid;
@@ -3039,10 +3039,14 @@ int *selectDbIdArgs(robj **argv, int argc, int *count) {
     int *result = zmalloc(sizeof(int));
     result[0] = (int)dbid;
     *count = 1;
+    if (positions) {
+        *positions = zmalloc(sizeof(int));
+        (*positions)[0] = 1;
+    }
     return result;
 }
 
-int *swapdbDbIdArgs(robj **argv, int argc, int *count) {
+int *swapdbDbIdArgs(robj **argv, int argc, int *count, int **positions) {
     if (argc < 3) return NULL;
 
     long long db1, db2;
@@ -3054,10 +3058,15 @@ int *swapdbDbIdArgs(robj **argv, int argc, int *count) {
     result[0] = (int)db1;
     result[1] = (int)db2;
     *count = 2;
+    if (positions) {
+        *positions = zmalloc(2 * sizeof(int));
+        (*positions)[0] = 1;
+        (*positions)[1] = 2;
+    }
     return result;
 }
 
-int *moveDbIdArgs(robj **argv, int argc, int *count) {
+int *moveDbIdArgs(robj **argv, int argc, int *count, int **positions) {
     if (argc < 3) return NULL;
 
     long long dbid;
@@ -3067,6 +3076,10 @@ int *moveDbIdArgs(robj **argv, int argc, int *count) {
     int *result = zmalloc(sizeof(int));
     result[0] = (int)dbid;
     *count = 1;
+    if (positions) {
+        *positions = zmalloc(sizeof(int));
+        (*positions)[0] = 2;
+    }
     return result;
 }
 
@@ -3077,7 +3090,7 @@ int *moveDbIdArgs(robj **argv, int argc, int *count) {
  * the destination DB, so ACL must validate every occurrence: a permission
  * check against only the first or only the last value would let a user craft
  * 'COPY src dst DB <allowed> DB <denied>' (or vice versa) to bypass the ACL. */
-int *copyDbIdArgs(robj **argv, int argc, int *count) {
+int *copyDbIdArgs(robj **argv, int argc, int *count, int **positions) {
     if (argc < 5) return NULL;
 
     /* First pass: validate syntax and count DB clauses. */
@@ -3098,14 +3111,17 @@ int *copyDbIdArgs(robj **argv, int argc, int *count) {
     }
     if (n == 0) return NULL;
 
-    /* Second pass: collect the dbids now that we know the exact size. */
+    /* Second pass: collect the dbids and their argv positions. */
     int *result = zmalloc(n * sizeof(int));
+    if (positions) *positions = zmalloc(n * sizeof(int));
     *count = 0;
     for (int j = 3; j < argc; j++) {
         if (!strcasecmp(objectGetVal(argv[j]), "db")) {
             long long dbid;
             getLongLongFromObject(argv[j + 1], &dbid);
-            result[(*count)++] = (int)dbid;
+            result[*count] = (int)dbid;
+            if (positions) (*positions)[*count] = j + 1;
+            (*count)++;
             j++;
         }
     }

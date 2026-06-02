@@ -116,9 +116,9 @@ void queueMultiCommand(client *c, uint64_t cmd_flags) {
 
     if (mc->cmd->get_dbid_args && mc->cmd->proc == selectCommand) {
         int count;
-        int *dbids = mc->cmd->get_dbid_args(mc->argv, mc->argc, &count);
-        if (dbids && count > 0) {
-            c->mstate->transaction_db_id = dbids[0];
+        int *dbids = mc->cmd->get_dbid_args(mc->argv, mc->argc, &count, NULL);
+        if (dbids) {
+            if (count > 0) c->mstate->transaction_db_id = dbids[0];
             zfree(dbids);
         }
     }

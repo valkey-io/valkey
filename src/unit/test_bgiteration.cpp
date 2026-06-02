@@ -3037,7 +3037,7 @@ TEST_F(BgIterationTest, checkReplicationByteCount) {
             BGITERATOR_CONSISTENCY_EVENTUAL, iteratorRepldoneFn, iteratorCleanupFn, PRIVDATA);
 
     c = getWriteClient(0, "xxx");
-    int expectedReplicationSize = sizeof(bgIteratorItem);
+    size_t expectedReplicationSize = sizeof(bgIteratorItem);
     for (int i = 0;  i < c->argc;  i++) {
         expectedReplicationSize += objectComputeSize(NULL, c->argv[i], 0, 0);
     }

@@ -3,6 +3,7 @@
 # more information.
 
 set tcl_precision 17
+source tests/support/set_executable_path.tcl
 source tests/support/valkey.tcl
 source tests/support/aofmanifest.tcl
 source tests/support/server.tcl

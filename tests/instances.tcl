@@ -8,6 +8,7 @@
 # more information.
 
 set tcl_precision 17
+source ../support/set_executable_path.tcl
 source ../support/valkey.tcl
 source ../support/util.tcl
 source ../support/aofmanifest.tcl

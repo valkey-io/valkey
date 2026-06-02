@@ -171,6 +171,9 @@ class BgIterationTest : public ::testing::Test {
         MockValkey mock;
         RealValkey real;
         client *c = nullptr; // for general use in the tests (with common cleanup)
+        robj **orig_argv = nullptr; // Used when simulating multi
+        int orig_argc = 0; // Used when simulating multi
+
 
         struct serverCommand dummy_cmd = {0};
 
@@ -707,6 +710,11 @@ class BgIterationTest : public ::testing::Test {
         //  the individual commands within the multi/exec block.
         void advanceMultiClientToCommand(client *c, int cmdNum) {
             assert(cmdNum >= 0 && cmdNum < c->mstate->count);
+            if (cmdNum == 0) {
+                // Save off the EXEC
+                orig_argc = c->argc;
+                orig_argv = c->argv;
+            }
             c->argc = c->mstate->commands[cmdNum].argc;
             c->argv = c->mstate->commands[cmdNum].argv;
             c->argv_len = c->mstate->commands[cmdNum].argv_len;
@@ -790,13 +798,15 @@ class BgIterationTest : public ::testing::Test {
 
 
         void freeTestClient(client *c) {
-            // If the current command references one of the multi commands,
-            //  null it out so we don't get a double-free.
+            // If the current command references one of the multi commands, set it back to the EXEC
             if (c->mstate != NULL) {
                 for (int i = 0; i < c->mstate->count; i++) {
                     if (c->argv == c->mstate->commands[i].argv) {
-                        c->argv = NULL;
-                        c->argc = 0;
+                        c->argc = orig_argc;
+                        c->argv = orig_argv;
+                        orig_argc = 0;
+                        orig_argv = nullptr;
+                        break;
                     }
                 }
             }

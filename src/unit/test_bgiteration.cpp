@@ -790,6 +790,16 @@ class BgIterationTest : public ::testing::Test {
 
 
         void freeTestClient(client *c) {
+            // If the current command references one of the multi commands,
+            //  null it out so we don't get a double-free.
+            if (c->mstate != NULL) {
+                for (int i = 0; i < c->mstate->count; i++) {
+                    if (c->argv == c->mstate->commands[i].argv) {
+                        c->argv = NULL;
+                        c->argc = 0;
+                    }
+                }
+            }
             freeClientMultiState(c);
             freeClientArgv(c);
 
@@ -861,40 +871,6 @@ class BgIterationTest : public ::testing::Test {
             EXPECT_EQ(md_after_setkey, *md); // the md value should still be the same
 
             bgIteration_handleCommandReplication(c->db->id, c->cmd, c->argc, c->argv);
-        }
-
-
-        // Simulate execution of a MULTI/EXEC transaction for a client `c` without blocking.
-        //  It replays all queued commands and ensures replication matches a real transaction.
-        //  command replication flag is revalidated when exec command is processed.
-        //  This requires a scenario where we don't expect the client to be blocked.
-        void simulateUnblockedMultiExec(client *c) {
-
-            // simulate EXEC command of the multi/exec client
-            simulateUnblockedWrite(c);
-            server.in_exec = 1;
-
-            // If there are other commands, call both blockClientIfRequired and handleCommandReplication for each of the command.
-            for (int i = 0;  i < c->mstate->count;  i++) {
-                advanceMultiClientToCommand(c, i);
-                simulateUnblockedWrite(c);
-
-                // Replicate MULTI if this is the first instruction inside MULTI/EXEC
-                if (i == 0) {
-                    robj *argv[1];
-                    argv[0] = createStringObjectFromCString("multi");
-                    bgIteration_handleCommandReplication(c->db->id, lookupCommandByCString("multi"), 1, argv);
-                    decrRefCount(argv[0]);
-                }
-                bgIteration_handleCommandReplication(c->db->id, c->cmd, c->argc, c->argv);
-            }
-
-            // Call handleCommandReplication for EXEC
-            robj *argv[1];
-            argv[0] = createStringObjectFromCString("EXEC");
-            bgIteration_handleCommandReplication(c->db->id, lookupCommandByCString("exec"), 1, argv);
-            server.in_exec = 0;
-            decrRefCount(argv[0]);
         }
 
 

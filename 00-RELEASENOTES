@@ -10,6 +10,31 @@ SECURITY: There are security fixes in the release.
 --------------------------------------------------------------------------------
 
 ================================================================================
+Valkey 8.1.8  -  Tue 02 June 2026
+================================================================================
+
+Upgrade urgency HIGH: There is a critical bug that may affect a subset of users.
+
+Bug fixes
+=========
+* Fix ZDIFF algorithm 2 memory leak on early exit (#3342)
+* Strictly check CRLF when parsing querybuf (#2872)
+* Fix incorrect memory overhead calculation for watched keys (#3359)
+* Fix `valkey-cli --cluster del-node` for unreachable nodes (#3209)
+* Fix race condition during async client freeing with IO threading enabled (#3458)
+* Fix double free in stream consumer PEL loading with corrupt RDB data (#3498)
+* Fixes server crash when RDMA benchmark clients disconnect (#3448)
+* Fix misleading log "I/O error reading bulk count from PRIMARY: Success" (#3580)
+* Handle NULL pointer in streamTrim listpack delta calculation (#3591)
+* Fix Deferred Reply Placeholders in Active Deferred Buffers (#3578)
+* Add NULL check in updateSSLPendingFlag (#3641)
+* Fix heap-use-after-free in ACL LOAD when client free is deferred (#3800)
+* Redacting customer information when hide_user_data_from_log is true in rdb.c, networking.c, debug.c and t_hash  (#3872)
+* Fix use-after-free in VM_RegisterClusterMessageReceiver (#3846)
+* Harden SENTINEL commands and config rewrite against control-character injection (#3847)
+* Fix CLUSTER SLOTS crash when called from module timer callback (#2915)
+
+================================================================================
 Valkey 8.1.7  -  Tue 05 May 2026
 ================================================================================
 

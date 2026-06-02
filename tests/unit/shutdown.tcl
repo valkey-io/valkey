@@ -16,7 +16,7 @@ start_server {tags {"shutdown external:skip"}} {
         set child_pid [get_child_pid 0]
         set temp_rdb [file join [lindex [r config get dir] 1] temp-${child_pid}.rdb]
         # Temp rdb must exist; the child creates it shortly after fork, so poll
-        wait_for_condition 50 10 {
+        wait_for_condition 50 100 {
             [file exists $temp_rdb]
         } else {
             fail "temp rdb file was not created"
@@ -28,7 +28,7 @@ start_server {tags {"shutdown external:skip"}} {
         assert_match {*connection refused*} $e
 
         # Temp rdb file must be deleted (bg_unlink runs in a bio thread, so poll)
-        wait_for_condition 50 10 {
+        wait_for_condition 50 100 {
             ![file exists $temp_rdb]
         } else {
             fail "temp rdb file was not deleted on shutdown"

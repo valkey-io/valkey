@@ -765,6 +765,10 @@ struct serverObject {
     void *ptr;
 };
 
+/* Object accessors for backported code */
+#define objectGetVal(_o) ((_o)->ptr)
+#define objectSetVal(_o, _val) ((_o)->ptr = (_val))
+
 /* The string name for an object's type as listed above
  * Native types are checked against the OBJ_STRING, OBJ_LIST, OBJ_* defines,
  * and Module types have their registered name returned. */

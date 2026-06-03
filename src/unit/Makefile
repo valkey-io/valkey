@@ -114,19 +114,30 @@ WRAP_DIR := wrapped
 VALKEY_SERVER_WRAP_LIB := $(WRAP_DIR)/wrappedlibvalkey.a
 ENGINE_SERVER_WRAP_OBJ := $(addprefix $(WRAP_DIR)/, $(ENGINE_SERVER_OBJ))
 
+# Prefer LLVM tools already in PATH; fall back to the Homebrew installation.
+# Homebrew does not add llvm/bin to PATH by default, so we check the standard
+# Homebrew prefix locations for both Apple Silicon (/opt/homebrew) and Intel (/usr/local).
+BREW_LLVM_BIN := $(firstword $(wildcard /opt/homebrew/opt/llvm/bin /usr/local/opt/llvm/bin))
+LLC ?= $(if $(shell which llc 2>/dev/null),llc,$(BREW_LLVM_BIN)/llc)
+LLVM_DIS ?= $(if $(shell which llvm-dis 2>/dev/null),llvm-dis,$(BREW_LLVM_BIN)/llvm-dis)
+LLVM_OBJCOPY ?= $(if $(shell which llvm-objcopy 2>/dev/null),llvm-objcopy,$(BREW_LLVM_BIN)/llvm-objcopy)
+
 $(WRAP_DIR):
 	@mkdir -p $(WRAP_DIR)
 
 $(WRAP_DIR)/%.o: ../%.o $(WRAP_DIR) generated_wrappers.o
 	@mkdir -p $(dir $@)
 	@if file $< | grep -q "LLVM bitcode"; then \
-		llc $< -filetype=obj -o $(WRAP_DIR)/$*_temp.o; \
+		$(LLVM_DIS) $< -o $(WRAP_DIR)/$*_temp.ll; \
+		sed -i '' 's/ "probe-stack"="[^"]*"//g' $(WRAP_DIR)/$*_temp.ll; \
+		$(LLC) $(WRAP_DIR)/$*_temp.ll -filetype=obj -o $(WRAP_DIR)/$*_temp.o; \
+		rm -f $(WRAP_DIR)/$*_temp.ll; \
 		python3 generate-redefine-syms.py $(WRAP_DIR)/$*_temp.o > $(WRAP_DIR)/$*-wrap-syms; \
-		llvm-objcopy --redefine-syms=$(WRAP_DIR)/$*-wrap-syms $(WRAP_DIR)/$*_temp.o $@; \
+		$(LLVM_OBJCOPY) --redefine-syms=$(WRAP_DIR)/$*-wrap-syms $(WRAP_DIR)/$*_temp.o $@; \
 		rm -f $(WRAP_DIR)/$*_temp.o; \
 	else \
 		python3 generate-redefine-syms.py $< > $(WRAP_DIR)/$*-wrap-syms; \
-		llvm-objcopy --redefine-syms=$(WRAP_DIR)/$*-wrap-syms $< $@; \
+		$(LLVM_OBJCOPY) --redefine-syms=$(WRAP_DIR)/$*-wrap-syms $< $@; \
 	fi
 	@rm -f $(WRAP_DIR)/$*-wrap-syms
 

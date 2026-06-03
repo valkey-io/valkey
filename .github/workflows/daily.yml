@@ -71,8 +71,44 @@ permissions:
   contents: read
   pull-requests: read
 jobs:
-  test-ubuntu-jemalloc:
+  check-runner:
     runs-on: ubuntu-latest
+    if: always()
+    outputs:
+      x64: ${{ steps.pick.outputs.x64 }}
+      largemem: ${{ steps.pick.outputs.largemem }}
+      arm64: ${{ steps.pick.outputs.arm64 }}
+    steps:
+      - id: pick
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const selfHostedRepos = ['valkey-io/valkey', 'roshkhatri/valkey'];
+            const isSelfHostedRepo = selfHostedRepos.includes(context.payload.repository.full_name);
+            if ((context.eventName === 'schedule' || context.eventName === 'workflow_dispatch' || context.eventName === 'workflow_call') && isSelfHostedRepo) {
+              core.setOutput('x64', 'valkey-x64');
+              core.setOutput('largemem', 'valkey-x64-largemem');
+              core.setOutput('arm64', 'valkey-arm64');
+              return;
+            }
+            try {
+              await github.rest.teams.getMembershipForUserInOrg({
+                org: 'valkey-io',
+                team_slug: 'valkey-committers',
+                username: context.payload.pull_request.user.login
+              });
+              core.setOutput('x64', 'valkey-x64');
+              core.setOutput('largemem', 'valkey-x64-largemem');
+              core.setOutput('arm64', 'valkey-arm64');
+            } catch {
+              core.setOutput('x64', 'ubuntu-latest');
+              core.setOutput('largemem', 'ubuntu-latest');
+              core.setOutput('arm64', 'ubuntu-24.04-arm');
+            }
+
+  test-ubuntu-jemalloc:
+    runs-on: ${{ needs.check-runner.outputs.x64 }}
+    needs: check-runner
     # pull_request gate breakdown:
     # 1) (base != unstable) OR PR currently has run-extra-tests.
     # 2) Exclude all labeled events, except unstable + newly added run-extra-tests.
@@ -103,6 +139,11 @@ jobs:
         with:
           repository: ${{ inputs.use_repo || github.event.inputs.use_repo || github.repository }}
           ref: ${{ inputs.use_git_ref || github.event.inputs.use_git_ref || github.ref }}
+      - name: Install build dependencies
+        if: ${{ contains(runner.name, 'valkey') }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y wget build-essential autoconf automake pkg-config libssl-dev python3
       - name: Install libbacktrace
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -111,11 +152,11 @@ jobs:
           path: libbacktrace
       - run: cd libbacktrace && ./configure && make && sudo make install
       - name: Install gtest
-        run: sudo apt-get install pkg-config libgtest-dev libgmock-dev
+        run: sudo apt-get install -y pkg-config libgtest-dev libgmock-dev
       - name: make
         run: make all-with-unit-tests SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes
       - name: testprep
-        run: sudo apt-get install tcl8.6 tclx
+        run: sudo apt-get install -y tcl8.6 tclx
       - name: test
         if: true && !contains(github.event.inputs.skiptests, 'valkey')
         run: ./runtest ${{ github.event_name != 'pull_request' && '--accurate' || '' }} --failures-output test-failures/valkey.json --verbose --dump-logs ${{github.event.inputs.test_args}}
@@ -144,7 +185,7 @@ jobs:
           make
       - name: backward compatibility tests with OSS Redis 6.2
         run: |
-          sudo apt-get install tcl8.6 tclx
+          sudo apt-get install -y tcl8.6 tclx
           ./runtest --verbose --tags compatible-redis --dump-logs --other-server-path tests/tmp/redis-6.2.14/src/redis-server
       - name: install Redis OSS 7.0 server for compatibility testing
         run: |
@@ -157,7 +198,7 @@ jobs:
           make
       - name: backward compatibility tests with OSS Redis 7.0
         run: |
-          sudo apt-get install tcl8.6 tclx
+          sudo apt-get install -y tcl8.6 tclx
           ./runtest --verbose --tags compatible-redis --dump-logs --other-server-path tests/tmp/redis-7.0.15/src/redis-server
       - name: Upload test failures
         if: always()
@@ -165,7 +206,8 @@ jobs:
         with:
           job-name: ${{ github.job }}
   test-ubuntu-arm:
-    runs-on: ubuntu-24.04-arm
+    runs-on: ${{ needs.check-runner.outputs.arm64 }}
+    needs: check-runner
     if: |
       (github.event_name == 'workflow_call' || github.event_name == 'workflow_dispatch' ||
         (github.event_name == 'schedule' && github.repository == 'valkey-io/valkey') ||
@@ -176,7 +218,7 @@ jobs:
             (github.event.pull_request.base.ref == 'unstable' && github.event.label.name == 'run-extra-tests'))
         )) &&
       (!contains(github.event.inputs.skipjobs, 'ubuntu') || !contains(github.event.inputs.skipjobs, 'arm'))
-    timeout-minutes: 14400
+    timeout-minutes: 1440
     steps:
       - name: prep
         if: github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call'
@@ -191,6 +233,11 @@ jobs:
         with:
           repository: ${{ inputs.use_repo || github.event.inputs.use_repo || github.repository }}
           ref: ${{ inputs.use_git_ref || github.event.inputs.use_git_ref || github.ref }}
+      - name: Install build dependencies
+        if: ${{ contains(runner.name, 'valkey') }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y wget build-essential autoconf automake pkg-config libssl-dev python3
       - name: Install libbacktrace
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -199,11 +246,11 @@ jobs:
           path: libbacktrace
       - run: cd libbacktrace && ./configure && make && sudo make install
       - name: Install gtest
-        run: sudo apt-get install pkg-config libgtest-dev libgmock-dev
+        run: sudo apt-get install -y pkg-config libgtest-dev libgmock-dev
       - name: make
         run: make all-with-unit-tests SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes
       - name: testprep
-        run: sudo apt-get install tcl8.6 tclx
+        run: sudo apt-get install -y tcl8.6 tclx
       - name: test
         if: true && !contains(github.event.inputs.skiptests, 'valkey')
         run: ./runtest ${{ github.event_name != 'pull_request' && '--accurate' || '' }} --failures-output test-failures/valkey.json --verbose --dump-logs ${{github.event.inputs.test_args}}
@@ -328,7 +375,8 @@ jobs:
         with:
           job-name: ${{ github.job }}
   test-ubuntu-libc-malloc:
-    runs-on: ubuntu-latest
+    runs-on: ${{ needs.check-runner.outputs.x64 }}
+    needs: check-runner
     if: |
       (github.event_name == 'workflow_call' || github.event_name == 'workflow_dispatch' ||
         (github.event_name == 'schedule' && github.repository == 'valkey-io/valkey') ||
@@ -354,6 +402,11 @@ jobs:
         with:
           repository: ${{ inputs.use_repo || github.event.inputs.use_repo || github.repository }}
           ref: ${{ inputs.use_git_ref || github.event.inputs.use_git_ref || github.ref }}
+      - name: Install build dependencies
+        if: ${{ contains(runner.name, 'valkey') }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y wget build-essential autoconf automake pkg-config libssl-dev python3
       - name: Install libbacktrace
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -364,7 +417,7 @@ jobs:
       - name: make
         run: make MALLOC=libc SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes
       - name: testprep
-        run: sudo apt-get install tcl8.6 tclx
+        run: sudo apt-get install -y tcl8.6 tclx
       - name: test
         if: true && !contains(github.event.inputs.skiptests, 'valkey')
         run: ./runtest ${{ github.event_name != 'pull_request' && '--accurate' || '' }} --failures-output test-failures/valkey.json --verbose --dump-logs ${{github.event.inputs.test_args}}
@@ -380,7 +433,8 @@ jobs:
         with:
           job-name: ${{ github.job }}
   test-ubuntu-no-malloc-usable-size:
-    runs-on: ubuntu-latest
+    runs-on: ${{ needs.check-runner.outputs.x64 }}
+    needs: check-runner
     if: |
       (github.event_name == 'workflow_call' || github.event_name == 'workflow_dispatch' ||
         (github.event_name == 'schedule' && github.repository == 'valkey-io/valkey') ||
@@ -406,6 +460,11 @@ jobs:
         with:
           repository: ${{ inputs.use_repo || github.event.inputs.use_repo || github.repository }}
           ref: ${{ inputs.use_git_ref || github.event.inputs.use_git_ref || github.ref }}
+      - name: Install build dependencies
+        if: ${{ contains(runner.name, 'valkey') }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y wget build-essential autoconf automake pkg-config libssl-dev python3
       - name: Install libbacktrace
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -416,7 +475,7 @@ jobs:
       - name: make
         run: make MALLOC=libc CFLAGS=-DNO_MALLOC_USABLE_SIZE SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes
       - name: testprep
-        run: sudo apt-get install tcl8.6 tclx
+        run: sudo apt-get install -y tcl8.6 tclx
       - name: test
         if: true && !contains(github.event.inputs.skiptests, 'valkey')
         run: ./runtest ${{ github.event_name != 'pull_request' && '--accurate' || '' }} --failures-output test-failures/valkey.json --verbose --dump-logs ${{github.event.inputs.test_args}}
@@ -432,7 +491,8 @@ jobs:
         with:
           job-name: ${{ github.job }}
   test-ubuntu-32bit:
-    runs-on: ubuntu-latest
+    runs-on: ${{ needs.check-runner.outputs.x64 }}
+    needs: check-runner
     if: |
       (github.event_name == 'workflow_call' || github.event_name == 'workflow_dispatch' ||
         (github.event_name == 'schedule' && github.repository == 'valkey-io/valkey') ||
@@ -458,6 +518,11 @@ jobs:
         with:
           repository: ${{ inputs.use_repo || github.event.inputs.use_repo || github.repository }}
           ref: ${{ inputs.use_git_ref || github.event.inputs.use_git_ref || github.ref }}
+      - name: Install build dependencies
+        if: ${{ contains(runner.name, 'valkey') }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y wget build-essential cmake autoconf automake pkg-config libssl-dev python3
       - name: Install libbacktrace
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -466,12 +531,12 @@ jobs:
           path: libbacktrace
       - name: Build libbacktrace
         run: |
-          sudo apt-get update && sudo apt-get install libc6-dev-i386 g++-multilib
+          sudo apt-get update && sudo apt-get install -y libc6-dev-i386 g++-multilib
           cd libbacktrace && ./configure && make && sudo make install
       - name: Install gtest
         run: |
           sudo apt-get update
-          sudo apt-get install libgtest-dev
+          sudo apt-get install -y libgtest-dev
           mkdir -p /tmp/gtest32
           cd /tmp/gtest32
           cmake -B build32 \
@@ -489,7 +554,7 @@ jobs:
             GTEST_CFLAGS="-I/usr/src/googletest/googletest/include -I/usr/src/googletest/googlemock/include" \
             GTEST_LIBS="/usr/lib32/libgtest.a /usr/lib32/libgmock.a"
       - name: testprep
-        run: sudo apt-get install tcl8.6 tclx
+        run: sudo apt-get install -y tcl8.6 tclx
       - name: test
         if: true && !contains(github.event.inputs.skiptests, 'valkey')
         run: ./runtest ${{ github.event_name != 'pull_request' && '--accurate' || '' }} --failures-output test-failures/valkey.json --verbose --dump-logs ${{github.event.inputs.test_args}}
@@ -517,7 +582,8 @@ jobs:
         with:
           job-name: ${{ github.job }}
   test-ubuntu-tls:
-    runs-on: ubuntu-latest
+    runs-on: ${{ needs.check-runner.outputs.x64 }}
+    needs: check-runner
     if: |
       (github.event_name == 'workflow_call' || github.event_name == 'workflow_dispatch' ||
         (github.event_name == 'schedule' && github.repository == 'valkey-io/valkey') ||
@@ -543,6 +609,11 @@ jobs:
         with:
           repository: ${{ inputs.use_repo || github.event.inputs.use_repo || github.repository }}
           ref: ${{ inputs.use_git_ref || github.event.inputs.use_git_ref || github.ref }}
+      - name: Install build dependencies
+        if: ${{ contains(runner.name, 'valkey') }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y wget build-essential autoconf automake pkg-config libssl-dev python3
       - name: Install libbacktrace
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -554,7 +625,7 @@ jobs:
         run: make BUILD_TLS=yes SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes
       - name: testprep
         run: |
-          sudo apt-get install tcl8.6 tclx tcl-tls
+          sudo apt-get install -y tcl8.6 tclx tcl-tls
           ./utils/gen-test-certs.sh
       - name: test
         if: true && !contains(github.event.inputs.skiptests, 'valkey')
@@ -574,7 +645,8 @@ jobs:
         with:
           job-name: ${{ github.job }}
   test-ubuntu-tls-no-tls:
-    runs-on: ubuntu-latest
+    runs-on: ${{ needs.check-runner.outputs.x64 }}
+    needs: check-runner
     if: |
       (github.event_name == 'workflow_call' || github.event_name == 'workflow_dispatch' ||
         (github.event_name == 'schedule' && github.repository == 'valkey-io/valkey') ||
@@ -600,6 +672,11 @@ jobs:
         with:
           repository: ${{ inputs.use_repo || github.event.inputs.use_repo || github.repository }}
           ref: ${{ inputs.use_git_ref || github.event.inputs.use_git_ref || github.ref }}
+      - name: Install build dependencies
+        if: ${{ contains(runner.name, 'valkey') }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y wget build-essential autoconf automake pkg-config libssl-dev python3
       - name: Install libbacktrace
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -611,7 +688,7 @@ jobs:
         run: make BUILD_TLS=yes SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes
       - name: testprep
         run: |
-          sudo apt-get install tcl8.6 tclx tcl-tls
+          sudo apt-get install -y tcl8.6 tclx tcl-tls
           ./utils/gen-test-certs.sh
       - name: test
         if: true && !contains(github.event.inputs.skiptests, 'valkey')
@@ -631,7 +708,8 @@ jobs:
         with:
           job-name: ${{ github.job }}
   test-ubuntu-io-threads:
-    runs-on: ubuntu-latest
+    runs-on: ${{ needs.check-runner.outputs.x64 }}
+    needs: check-runner
     if: |
       (github.event_name == 'workflow_call' || github.event_name == 'workflow_dispatch' ||
         (github.event_name == 'schedule' && github.repository == 'valkey-io/valkey') ||
@@ -657,6 +735,11 @@ jobs:
         with:
           repository: ${{ inputs.use_repo || github.event.inputs.use_repo || github.repository }}
           ref: ${{ inputs.use_git_ref || github.event.inputs.use_git_ref || github.ref }}
+      - name: Install build dependencies
+        if: ${{ contains(runner.name, 'valkey') }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y wget build-essential autoconf automake pkg-config libssl-dev python3
       - name: Install libbacktrace
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -667,7 +750,7 @@ jobs:
       - name: make
         run: make SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes
       - name: testprep
-        run: sudo apt-get install tcl8.6 tclx
+        run: sudo apt-get install -y tcl8.6 tclx
       - name: test
         if: true && !contains(github.event.inputs.skiptests, 'valkey')
         run: ./runtest --io-threads --accurate --failures-output test-failures/valkey.json --verbose --tags network --dump-logs ${{github.event.inputs.test_args}}
@@ -677,7 +760,8 @@ jobs:
         with:
           job-name: ${{ github.job }}
   test-ubuntu-tls-io-threads:
-    runs-on: ubuntu-latest
+    runs-on: ${{ needs.check-runner.outputs.x64 }}
+    needs: check-runner
     if: |
       (github.event_name == 'workflow_call' || github.event_name == 'workflow_dispatch' ||
         (github.event_name == 'schedule' && github.repository == 'valkey-io/valkey') ||
@@ -703,6 +787,11 @@ jobs:
         with:
           repository: ${{ inputs.use_repo || github.event.inputs.use_repo || github.repository }}
           ref: ${{ inputs.use_git_ref || github.event.inputs.use_git_ref || github.ref }}
+      - name: Install build dependencies
+        if: ${{ contains(runner.name, 'valkey') }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y wget build-essential autoconf automake pkg-config libssl-dev python3
       - name: Install libbacktrace
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -714,7 +803,7 @@ jobs:
         run: make BUILD_TLS=yes SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes
       - name: testprep
         run: |
-          sudo apt-get install tcl8.6 tclx tcl-tls
+          sudo apt-get install -y tcl8.6 tclx tcl-tls
           ./utils/gen-test-certs.sh
       - name: test
         if: true && !contains(github.event.inputs.skiptests, 'valkey')
@@ -726,7 +815,8 @@ jobs:
         with:
           job-name: ${{ github.job }}
   test-ubuntu-reclaim-cache:
-    runs-on: ubuntu-latest
+    runs-on: ${{ needs.check-runner.outputs.x64 }}
+    needs: check-runner
     if: |
       (github.event_name == 'workflow_call' || github.event_name == 'workflow_dispatch' ||
         (github.event_name == 'schedule' && github.repository == 'valkey-io/valkey') ||
@@ -752,6 +842,11 @@ jobs:
         with:
           repository: ${{ inputs.use_repo || github.event.inputs.use_repo || github.repository }}
           ref: ${{ inputs.use_git_ref || github.event.inputs.use_git_ref || github.ref }}
+      - name: Install build dependencies
+        if: ${{ contains(runner.name, 'valkey') }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y wget build-essential autoconf automake pkg-config libssl-dev python3
       - name: Install libbacktrace
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -762,7 +857,7 @@ jobs:
       - name: make
         run: make SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes
       - name: testprep
-        run: "sudo apt-get install vmtouch\nmkdir /tmp/master \nmkdir /tmp/slave\n"
+        run: "sudo apt-get install -y vmtouch\nmkdir /tmp/master \nmkdir /tmp/slave\n"
       - name: warm up
         run: |
           ./src/valkey-server --daemonize yes --logfile /dev/null
@@ -815,7 +910,8 @@ jobs:
           echo "$CACHE"
           if [ "$(( $CACHE-$CACHE0 ))" -gt "8000000" ]; then exit 1; fi
   test-valgrind-test:
-    runs-on: ubuntu-latest
+    runs-on: ${{ needs.check-runner.outputs.largemem }}
+    needs: check-runner
     if: |
       (github.event_name == 'workflow_call' || github.event_name == 'workflow_dispatch' ||
         (github.event_name == 'schedule' && github.repository == 'valkey-io/valkey') ||
@@ -836,6 +932,11 @@ jobs:
         with:
           repository: ${{ inputs.use_repo || github.event.inputs.use_repo || github.repository }}
           ref: ${{ inputs.use_git_ref || github.event.inputs.use_git_ref || github.ref }}
+      - name: Install build dependencies
+        if: ${{ contains(runner.name, 'valkey') }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y wget build-essential autoconf automake pkg-config libssl-dev python3
       - name: Install libbacktrace
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -858,7 +959,8 @@ jobs:
         with:
           job-name: ${{ github.job }}
   test-valgrind-misc:
-    runs-on: ubuntu-latest
+    runs-on: ${{ needs.check-runner.outputs.largemem }}
+    needs: check-runner
     if: |
       (github.event_name == 'workflow_call' || github.event_name == 'workflow_dispatch' ||
         (github.event_name == 'schedule' && github.repository == 'valkey-io/valkey') ||
@@ -879,6 +981,11 @@ jobs:
         with:
           repository: ${{ inputs.use_repo || github.event.inputs.use_repo || github.repository }}
           ref: ${{ inputs.use_git_ref || github.event.inputs.use_git_ref || github.ref }}
+      - name: Install build dependencies
+        if: ${{ contains(runner.name, 'valkey') }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y wget build-essential autoconf automake pkg-config libssl-dev python3
       - name: Install libbacktrace
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -887,7 +994,7 @@ jobs:
           path: libbacktrace
       - run: cd libbacktrace && ./configure && make && sudo make install
       - name: Install gtest
-        run: sudo apt-get install pkg-config libgtest-dev libgmock-dev
+        run: sudo apt-get install -y pkg-config libgtest-dev libgmock-dev
       - name: make
         run: make valgrind all-with-unit-tests SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes
       - name: testprep
@@ -913,7 +1020,8 @@ jobs:
         with:
           job-name: ${{ github.job }}
   test-valgrind-no-malloc-usable-size-test:
-    runs-on: ubuntu-latest
+    runs-on: ${{ needs.check-runner.outputs.largemem }}
+    needs: check-runner
     if: |
       (github.event_name == 'workflow_call' || github.event_name == 'workflow_dispatch' ||
         (github.event_name == 'schedule' && github.repository == 'valkey-io/valkey') ||
@@ -934,6 +1042,11 @@ jobs:
         with:
           repository: ${{ inputs.use_repo || github.event.inputs.use_repo || github.repository }}
           ref: ${{ inputs.use_git_ref || github.event.inputs.use_git_ref || github.ref }}
+      - name: Install build dependencies
+        if: ${{ contains(runner.name, 'valkey') }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y wget build-essential autoconf automake pkg-config libssl-dev python3
       - name: Install libbacktrace
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -956,7 +1069,8 @@ jobs:
         with:
           job-name: ${{ github.job }}
   test-valgrind-no-malloc-usable-size-misc:
-    runs-on: ubuntu-latest
+    runs-on: ${{ needs.check-runner.outputs.largemem }}
+    needs: check-runner
     if: |
       (github.event_name == 'workflow_call' || github.event_name == 'workflow_dispatch' ||
         (github.event_name == 'schedule' && github.repository == 'valkey-io/valkey') ||
@@ -977,6 +1091,11 @@ jobs:
         with:
           repository: ${{ inputs.use_repo || github.event.inputs.use_repo || github.repository }}
           ref: ${{ inputs.use_git_ref || github.event.inputs.use_git_ref || github.ref }}
+      - name: Install build dependencies
+        if: ${{ contains(runner.name, 'valkey') }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y wget build-essential autoconf automake pkg-config libssl-dev python3
       - name: Install libbacktrace
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -985,7 +1104,7 @@ jobs:
           path: libbacktrace
       - run: cd libbacktrace && ./configure && make && sudo make install
       - name: Install gtest
-        run: sudo apt-get install pkg-config libgtest-dev libgmock-dev
+        run: sudo apt-get install -y pkg-config libgtest-dev libgmock-dev
       - name: make
         run: make valgrind all-with-unit-tests CFLAGS="-DNO_MALLOC_USABLE_SIZE" SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes
       - name: testprep
@@ -1011,7 +1130,8 @@ jobs:
         with:
           job-name: ${{ github.job }}
   test-sanitizer-address:
-    runs-on: ubuntu-latest
+    runs-on: ${{ needs.check-runner.outputs.x64 }}
+    needs: check-runner
     if: |
       (github.event_name == 'workflow_call' || github.event_name == 'workflow_dispatch' ||
         (github.event_name == 'schedule' && github.repository == 'valkey-io/valkey') ||
@@ -1043,6 +1163,11 @@ jobs:
         with:
           repository: ${{ inputs.use_repo || github.event.inputs.use_repo || github.repository }}
           ref: ${{ inputs.use_git_ref || github.event.inputs.use_git_ref || github.ref }}
+      - name: Install build dependencies
+        if: ${{ contains(runner.name, 'valkey') }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y wget build-essential autoconf automake pkg-config libssl-dev python3 clang
       - name: Install libbacktrace
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -1051,7 +1176,7 @@ jobs:
           path: libbacktrace
       - run: cd libbacktrace && ./configure && make && sudo make install
       - name: Install gtest
-        run: sudo apt-get install pkg-config libgtest-dev libgmock-dev
+        run: sudo apt-get install -y pkg-config libgtest-dev libgmock-dev
       - name: make
         run: make all-with-unit-tests OPT=-O3 SANITIZER=address SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes
       - name: testprep
@@ -1084,7 +1209,8 @@ jobs:
   # GitHub-hosted runners for public repos provide 16GB (ubuntu-latest).
   # These tests are borderline - monitoring memory usage to determine if they can run reliably.
   test-sanitizer-address-large-memory:
-    runs-on: ubuntu-latest
+    runs-on: ${{ needs.check-runner.outputs.largemem }}
+    needs: check-runner
     if: |
       (github.event_name == 'workflow_call' || github.event_name == 'workflow_dispatch' ||
         (github.event_name == 'schedule' && github.repository == 'valkey-io/valkey') ||
@@ -1119,8 +1245,13 @@ jobs:
         with:
           repository: ${{ inputs.use_repo || github.event.inputs.use_repo || github.repository }}
           ref: ${{ inputs.use_git_ref || github.event.inputs.use_git_ref || github.ref }}
+      - name: Install build dependencies
+        if: ${{ contains(runner.name, 'valkey') }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y wget build-essential autoconf automake pkg-config libssl-dev python3 clang
       - name: Install gtest
-        run: sudo apt-get install pkg-config libgtest-dev libgmock-dev
+        run: sudo apt-get install -y pkg-config libgtest-dev libgmock-dev
       - name: make
         run: make all-with-unit-tests OPT=-O3 SANITIZER=address SERVER_CFLAGS='-Werror'
       - name: testprep
@@ -1166,7 +1297,8 @@ jobs:
         with:
           job-name: ${{ github.job }}-${{ matrix.compiler }}
   test-sanitizer-undefined:
-    runs-on: ubuntu-latest
+    runs-on: ${{ needs.check-runner.outputs.x64 }}
+    needs: check-runner
     if: |
       (github.event_name == 'workflow_call' || github.event_name == 'workflow_dispatch' ||
         (github.event_name == 'schedule' && github.repository == 'valkey-io/valkey') ||
@@ -1198,6 +1330,11 @@ jobs:
         with:
           repository: ${{ inputs.use_repo || github.event.inputs.use_repo || github.repository }}
           ref: ${{ inputs.use_git_ref || github.event.inputs.use_git_ref || github.ref }}
+      - name: Install build dependencies
+        if: ${{ contains(runner.name, 'valkey') }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y wget build-essential autoconf automake pkg-config libssl-dev python3 clang
       - name: Install libbacktrace
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -1206,7 +1343,7 @@ jobs:
           path: libbacktrace
       - run: cd libbacktrace && ./configure && make && sudo make install
       - name: Install gtest
-        run: sudo apt-get install pkg-config libgtest-dev libgmock-dev
+        run: sudo apt-get install -y pkg-config libgtest-dev libgmock-dev
       - name: make
         run: make all-with-unit-tests OPT=-O3 SANITIZER=undefined SERVER_CFLAGS='-Werror' LUA_DEBUG=yes USE_LIBBACKTRACE=yes # we (ab)use this flow to also check Lua C API violations
       - name: testprep
@@ -1239,7 +1376,8 @@ jobs:
   # GitHub-hosted runners for public repos provide 16GB (ubuntu-latest).
   # These tests are borderline - monitoring memory usage to determine if they can run reliably.
   test-sanitizer-undefined-large-memory:
-    runs-on: ubuntu-latest
+    runs-on: ${{ needs.check-runner.outputs.largemem }}
+    needs: check-runner
     if: |
       (github.event_name == 'workflow_call' || github.event_name == 'workflow_dispatch' ||
         (github.event_name == 'schedule' && github.repository == 'valkey-io/valkey') ||
@@ -1274,8 +1412,13 @@ jobs:
         with:
           repository: ${{ inputs.use_repo || github.event.inputs.use_repo || github.repository }}
           ref: ${{ inputs.use_git_ref || github.event.inputs.use_git_ref || github.ref }}
+      - name: Install build dependencies
+        if: ${{ contains(runner.name, 'valkey') }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y wget build-essential autoconf automake pkg-config libssl-dev python3 clang
       - name: Install gtest
-        run: sudo apt-get install pkg-config libgtest-dev libgmock-dev
+        run: sudo apt-get install -y pkg-config libgtest-dev libgmock-dev
       - name: make
         run: make all-with-unit-tests OPT=-O3 SANITIZER=undefined SERVER_CFLAGS='-Werror' LUA_DEBUG=yes
       - name: testprep
@@ -1321,7 +1464,8 @@ jobs:
         with:
           job-name: ${{ github.job }}-${{ matrix.compiler }}
   test-sanitizer-force-defrag:
-    runs-on: ubuntu-latest
+    runs-on: ${{ needs.check-runner.outputs.x64 }}
+    needs: check-runner
     if: |
       (github.event_name == 'workflow_call' || github.event_name == 'workflow_dispatch' ||
         (github.event_name == 'schedule' && github.repository == 'valkey-io/valkey') ||
@@ -1349,6 +1493,11 @@ jobs:
         with:
           repository: ${{ inputs.use_repo || github.event.inputs.use_repo || github.repository }}
           ref: ${{ inputs.use_git_ref || github.event.inputs.use_git_ref || github.ref }}
+      - name: Install build dependencies
+        if: ${{ contains(runner.name, 'valkey') }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y wget build-essential autoconf automake pkg-config libssl-dev python3
       - name: Install libbacktrace
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -1357,7 +1506,7 @@ jobs:
           path: libbacktrace
       - run: cd libbacktrace && ./configure && make && sudo make install
       - name: Install gtest
-        run: sudo apt-get install pkg-config libgtest-dev libgmock-dev
+        run: sudo apt-get install -y pkg-config libgtest-dev libgmock-dev
       - name: make
         run: make all-with-unit-tests OPT=-O3 SANITIZER=address DEBUG_FORCE_DEFRAG=yes USE_JEMALLOC=no SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes
       - name: testprep
@@ -1387,7 +1536,8 @@ jobs:
         with:
           job-name: ${{ github.job }}
   test-ubuntu-lttng:
-    runs-on: ubuntu-latest
+    runs-on: ${{ needs.check-runner.outputs.x64 }}
+    needs: check-runner
     if: |
       (github.event_name == 'workflow_call' || github.event_name == 'workflow_dispatch' ||
         (github.event_name == 'schedule' && github.repository == 'valkey-io/valkey') ||
@@ -1413,6 +1563,11 @@ jobs:
         with:
           repository: ${{ inputs.use_repo || github.event.inputs.use_repo || github.repository }}
           ref: ${{ inputs.use_git_ref || github.event.inputs.use_git_ref || github.ref }}
+      - name: Install build dependencies
+        if: ${{ contains(runner.name, 'valkey') }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y wget build-essential autoconf automake pkg-config libssl-dev python3
       - name: Install libbacktrace
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -1421,12 +1576,12 @@ jobs:
           path: libbacktrace
       - name: Build libbacktrace
         run: |
-          sudo apt-get update && sudo apt-get install lttng-tools lttng-modules-dkms liblttng-ust-dev
+          sudo apt-get update && sudo apt-get install -y lttng-tools lttng-modules-dkms liblttng-ust-dev
           cd libbacktrace && ./configure && make && sudo make install
       - name: make
         run: make -j4 USE_LTTNG=yes USE_LIBBACKTRACE=yes
       - name: testprep
-        run: sudo apt-get install tcl8.6 tclx
+        run: sudo apt-get install -y tcl8.6 tclx
       - name: test
         if: true && !contains(github.event.inputs.skiptests, 'valkey')
         run: ./runtest ${{ github.event_name != 'pull_request' && '--accurate' || '' }} --failures-output test-failures/valkey.json --verbose --dump-logs ${{github.event.inputs.test_args}}
@@ -2078,7 +2233,8 @@ jobs:
           job-name: ${{ github.job }}
 
   reply-schemas-validator:
-    runs-on: ubuntu-latest
+    runs-on: ${{ needs.check-runner.outputs.x64 }}
+    needs: check-runner
     timeout-minutes: 1440
     if: |
       (github.event_name == 'workflow_call' || github.event_name == 'workflow_dispatch' ||
@@ -2104,6 +2260,11 @@ jobs:
         with:
           repository: ${{ inputs.use_repo || github.event.inputs.use_repo || github.repository }}
           ref: ${{ inputs.use_git_ref || github.event.inputs.use_git_ref || github.ref }}
+      - name: Install build dependencies
+        if: ${{ contains(runner.name, 'valkey') }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y wget build-essential autoconf automake pkg-config libssl-dev python3 python3-pip python3-venv
       - name: Install libbacktrace
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -2114,7 +2275,7 @@ jobs:
       - name: make
         run: make SERVER_CFLAGS='-Werror -DLOG_REQ_RES' USE_LIBBACKTRACE=yes
       - name: testprep
-        run: sudo apt-get install tcl8.6 tclx
+        run: sudo apt-get install -y tcl8.6 tclx
       - name: test
         if: true && !contains(github.event.inputs.skiptests, 'valkey')
         run: ./runtest --failures-output test-failures/valkey.json --log-req-res --no-latency --dont-clean --force-resp3 --tags -slow --verbose --dump-logs ${{github.event.inputs.test_args}}
@@ -2124,7 +2285,14 @@ jobs:
       - name: sentinel tests
         if: true && !contains(github.event.inputs.skiptests, 'sentinel')
         run: ./runtest-sentinel --failures-output test-failures/sentinel.json --log-req-res --dont-clean --force-resp3 ${{github.event.inputs.cluster_test_args}}
+      - name: Install Python dependencies (self-hosted)
+        if: ${{ contains(runner.name, 'valkey') }}
+        run: |
+          python3 -m venv .venv
+          .venv/bin/pip install -r ./utils/req-res-validator/requirements.txt
+          echo "$PWD/.venv/bin" >> $GITHUB_PATH
       - name: Install Python dependencies
+        if: ${{ !contains(runner.name, 'valkey') }}
         uses: py-actions/py-dependency-install@30aa0023464ed4b5b116bd9fbdab87acf01a484e # v4.1.0
         with:
           path: "./utils/req-res-validator/requirements.txt"

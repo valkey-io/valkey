@@ -273,7 +273,6 @@ static clusterMsgSendBlock *clusterRaftBuildAllOffsetsMsg(void) {
         if (n->flags & CLUSTER_NODE_MEET) continue;
         long long off = (n == myself) ? getNodeReplicationOffset(myself)
                                       : n->repl_offset;
-        if (off == 0) continue;
         msg = sdscatlen(msg, " ", 1);
         msg = sdscatlen(msg, n->name, CLUSTER_NAMELEN);
         msg = sdscatfmt(msg, " %I", off);
@@ -1311,8 +1310,10 @@ static int clusterRaftProcessAppendEntriesResponse(clusterLink *link, int argc, 
     node->repl_offset = follower_repl_offset;
 
     /* Broadcast this node's offset to all peers when it transitions
-     * from 0 to non-zero (e.g. replica finishes initial sync). */
-    if (prev_offset == 0 && follower_repl_offset > 0 && !(node->flags & CLUSTER_NODE_MEET)) {
+     * between 0 and non-zero (replica finishes sync or starts resync). */
+    if (prev_offset != follower_repl_offset &&
+        (prev_offset == 0 || follower_repl_offset == 0) &&
+        !(node->flags & CLUSTER_NODE_MEET)) {
         clusterRaftBroadcastNodeOffset(node, follower_repl_offset);
     }
 
@@ -1520,6 +1521,7 @@ static void clusterRaftInit(void) {
     rs->deferred_meets = listCreate();
     rs->my_last_committed_info = sdsempty();
     rs->last_node_info_check = monotonicMs();
+    rs->last_repl_offsets_broadcast = monotonicMs();
     server.cluster->size = 0; /* Incremented by NODE_JOIN apply */
 }
 

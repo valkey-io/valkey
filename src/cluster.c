@@ -774,15 +774,13 @@ int verifyClusterNodeId(const char *name, int length) {
 }
 
 static int isValidAuxChar(unsigned char c) {
-    /* Reject control characters (0x00-0x1F) and DEL (0x7F). */
-    if (c <= 0x1F || c == 0x7F) return 0;
+    /* Reject everything up through ',' (0x2C) inclusive: control characters
+     * (0x00-0x1F), space !"#$%&'()*+, (0x20-0x2C), and DEL (0x7F). */
+    if (c <= ',' || c == 0x7F) return 0;
 
-    /* Reject characters that are format-significant in nodes.conf, plus
-     * quotes, backslash, and the historical legacy reserved set.
-     * Format-significant characters are the line/field separators that
-     * clusterLoadConfig parses on: newline (via the control-char check
-     * above), space, comma, and equals. */
-    static const char *invalid_charset = "!#$%&()*+,;<=>?@[]^{|}~ \"'\\";
+    /* Reject additional characters above 0x2C (comma) that are format-significant in
+     * nodes.conf or otherwise unsafe. */
+    static const char *invalid_charset = ";<=>?@[]^{|}~\\";
 
     return strchr(invalid_charset, c) == NULL;
 }

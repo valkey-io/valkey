@@ -37,6 +37,8 @@
 #include "fpconv_dtoa.h"
 #include "fmtargs.h"
 #include "io_threads.h"
+#include "throttle.h"
+#include "throttle_repl.h"
 #include "module.h"
 #include "connection.h"
 #include "zmalloc.h"
@@ -2019,6 +2021,9 @@ void unlinkClient(client *c) {
         c->conn = NULL;
     }
 
+    /* Remove from throttle queue if needed. */
+    throttle_removeClient(c);
+
     /* Remove from the list of pending writes if needed. */
     if (c->flag.pending_write) {
         serverAssert(server.clients_pending_write->len > 0);
@@ -2213,6 +2218,7 @@ int freeClient(client *c) {
     if (c->lib_name) decrRefCount(c->lib_name);
     if (c->lib_ver) decrRefCount(c->lib_ver);
     freeClientMultiState(c);
+    if (c->cob_trend) zfree(c->cob_trend);
     sdsfree(c->peerid);
     sdsfree(c->sockname);
     zfree(c);
@@ -3333,6 +3339,7 @@ void resetClient(client *c) {
     c->flag.replication_done = 0;
     c->flag.buffered_reply = 0;
     c->flag.keyspace_notified = 0;
+    c->flag.throttle_checked = 0;
     c->net_output_bytes_curr_cmd = 0;
 
     /* Make sure the duration has been recorded to some command. */
@@ -3840,7 +3847,7 @@ void commandProcessed(client *c) {
      *    The client will be reset in unblockClient().
      * 2. Don't update replication offset or propagate commands to replicas,
      *    since we have not applied the command. */
-    if (c->flag.blocked) return;
+    if (c->flag.blocked || c->flag.throttled) return;
 
     reqresAppendResponse(c);
     clusterSlotStatsAddNetworkBytesInForUserClient(c);
@@ -4373,7 +4380,7 @@ int isClientConnIpV6(client *c) {
  * readable format, into the sds string 's'. */
 sds catClientInfoString(sds s, client *client, int hide_user_data) {
     if (!server.crashed) waitForClientIO(client);
-    char flags[17], events[3], capa[9], conninfo[CONN_INFO_LEN], *p;
+    char flags[18], events[3], capa[9], conninfo[CONN_INFO_LEN], *p;
 
     p = flags;
     if (client->flag.replica) {
@@ -4398,6 +4405,7 @@ sds catClientInfoString(sds s, client *client, int hide_user_data) {
     if (client->flag.readonly) *p++ = 'r';
     if (client->flag.no_evict) *p++ = 'e';
     if (client->flag.no_touch) *p++ = 'T';
+    if (client->flag.throttled) *p++ = 'h';
     if (client->flag.import_source) *p++ = 'I';
     if (client->slot_migration_job && isImportSlotMigrationJob(client->slot_migration_job)) *p++ = 'i';
     if (client->slot_migration_job && !isImportSlotMigrationJob(client->slot_migration_job)) *p++ = 'E';
@@ -6169,6 +6177,7 @@ int checkClientOutputBufferLimits(client *c) {
     } else {
         c->obuf_soft_limit_reached_time = 0;
     }
+    if ((soft || hard) && throttleRepl_isClientExempt(c)) return 0;
     return soft || hard;
 }
 

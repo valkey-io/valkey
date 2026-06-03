@@ -58,4 +58,16 @@ static inline uint64_t elapsedMs(monotime start_time) {
     return elapsedUs(start_time) / 1000;
 }
 
+static inline uint64_t elapsedSec(monotime start_time) {
+    return elapsedUs(start_time) / 1000000;
+}
+
+static inline uint64_t durationUs(monotime start_time, monotime end_time) {
+    return end_time - start_time;
+}
+
+static inline uint64_t durationMs(monotime start_time, monotime end_time) {
+    return durationUs(start_time, end_time) / 1000;
+}
+
 #endif

@@ -51,6 +51,8 @@
 #include "sds.h"
 #include "module.h"
 #include "scripting_engine.h"
+#include "throttle.h"
+#include "throttle_repl.h"
 #include "util.h"
 
 #include "eval.h"
@@ -1698,6 +1700,8 @@ long long serverCron(struct aeEventLoop *eventLoop, long long id, void *clientDa
         run_with_period(1000) replicationCron();
     }
 
+    run_with_period(100) throttleRepl_adjustThrottling();
+
     /* Run the Cluster cron. */
     if (server.cluster_enabled) {
         run_with_period(CLUSTER_CRON_PERIOD_MS) clusterCron();
@@ -3115,6 +3119,7 @@ void initServer(void) {
 
     commandlogInit();
     latencyMonitorInit();
+    throttle_init();
     initSharedQueryBuf();
 
     /* Initialize ACL default password if it exists */
@@ -4686,6 +4691,9 @@ int processCommand(client *c) {
         return C_OK;
     }
 
+    /* Throttle framework: defer command if rate-limited. */
+    if (throttle_deferCommand(c)) return C_OK;
+
     /* Exec the command */
     if (c->flag.multi && c->cmd->proc != execCommand && c->cmd->proc != discardCommand &&
         c->cmd->proc != quitCommand &&
@@ -6068,6 +6076,7 @@ dict *genInfoSectionDict(robj **argv, int argc, char **defaults, int *out_all, i
         "errorstats",
         "cluster",
         "keyspace",
+        "throttle",
         NULL,
     };
     if (!defaults) defaults = default_sections;
@@ -6797,6 +6806,17 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                                     db->expiry[KEYS].avg_ttl, keysvitems);
             }
         }
+    }
+
+    /* Throttle */
+    if (all_sections || (dictFind(section_dict, "throttle") != NULL)) {
+        if (sections++) info = sdscat(info, "\r\n");
+        info = sdscat(info, "# Throttle\r\n");
+        info = sdscatprintf(info,
+                            "throttle_total_throttled_commands:%lld\r\n",
+                            server.total_throttled_commands);
+        info = throttle_sdscatMetrics(info);
+        info = throttleRepl_sdscatMetrics(info);
     }
 
     /* Get info from modules.

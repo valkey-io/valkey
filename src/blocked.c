@@ -165,6 +165,7 @@ void processUnblockedClients(void) {
         c = ln->value;
         listDelNode(server.unblocked_clients, ln);
         c->flag.unblocked = 0;
+        serverAssert(!c->flag.throttled);
 
         if (c->flag.module) {
             if (!c->flag.blocked) {

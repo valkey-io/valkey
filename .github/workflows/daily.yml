@@ -118,13 +118,13 @@ jobs:
         run: sudo apt-get install tcl8.6 tclx
       - name: test
         if: true && !contains(github.event.inputs.skiptests, 'valkey')
-        run: ./runtest ${{ github.event_name != 'pull_request' && '--accurate' || '' }} --failures-output test-failures/valkey.json --verbose --dump-logs ${{github.event.inputs.test_args}}
+        run: ./runtest ${{ github.event_name != 'pull_request' && '--accurate' || '' }} $([ -f .github/actions/upload-test-failures/action.yml ] && echo "--failures-output test-failures/valkey.json") --verbose --dump-logs ${{github.event.inputs.test_args}}
       - name: module api test
         if: true && !contains(github.event.inputs.skiptests, 'modules')
-        run: CFLAGS='-Werror' ./runtest-moduleapi --failures-output test-failures/moduleapi.json --verbose --dump-logs ${{github.event.inputs.test_args}}
+        run: CFLAGS='-Werror' ./runtest-moduleapi $([ -f .github/actions/upload-test-failures/action.yml ] && echo "--failures-output test-failures/moduleapi.json") --verbose --dump-logs ${{github.event.inputs.test_args}}
       - name: sentinel tests
         if: true && !contains(github.event.inputs.skiptests, 'sentinel')
-        run: ./runtest-sentinel --failures-output test-failures/sentinel.json ${{github.event.inputs.cluster_test_args}}
+        run: ./runtest-sentinel $([ -f .github/actions/upload-test-failures/action.yml ] && echo "--failures-output test-failures/sentinel.json") ${{github.event.inputs.cluster_test_args}}
       - name: unittest
         if: true && !contains(github.event.inputs.skiptests, 'unittest')
         run: |
@@ -161,9 +161,11 @@ jobs:
           ./runtest --verbose --tags compatible-redis --dump-logs --other-server-path tests/tmp/redis-7.0.15/src/redis-server
       - name: Upload test failures
         if: always()
-        uses: ./.github/actions/upload-test-failures
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
-          job-name: ${{ github.job }}
+          name: test-failures-${{ github.job }}
+          path: test-failures/
+          if-no-files-found: ignore
   test-ubuntu-arm:
     runs-on: ubuntu-24.04-arm
     if: |
@@ -206,13 +208,13 @@ jobs:
         run: sudo apt-get install tcl8.6 tclx
       - name: test
         if: true && !contains(github.event.inputs.skiptests, 'valkey')
-        run: ./runtest ${{ github.event_name != 'pull_request' && '--accurate' || '' }} --failures-output test-failures/valkey.json --verbose --dump-logs ${{github.event.inputs.test_args}}
+        run: ./runtest ${{ github.event_name != 'pull_request' && '--accurate' || '' }} $([ -f .github/actions/upload-test-failures/action.yml ] && echo "--failures-output test-failures/valkey.json") --verbose --dump-logs ${{github.event.inputs.test_args}}
       - name: module api test
         if: true && !contains(github.event.inputs.skiptests, 'modules')
-        run: CFLAGS='-Werror' ./runtest-moduleapi --failures-output test-failures/moduleapi.json --verbose --dump-logs ${{github.event.inputs.test_args}}
+        run: CFLAGS='-Werror' ./runtest-moduleapi $([ -f .github/actions/upload-test-failures/action.yml ] && echo "--failures-output test-failures/moduleapi.json") --verbose --dump-logs ${{github.event.inputs.test_args}}
       - name: sentinel tests
         if: true && !contains(github.event.inputs.skiptests, 'sentinel')
-        run: ./runtest-sentinel --failures-output test-failures/sentinel.json ${{github.event.inputs.cluster_test_args}}
+        run: ./runtest-sentinel $([ -f .github/actions/upload-test-failures/action.yml ] && echo "--failures-output test-failures/sentinel.json") ${{github.event.inputs.cluster_test_args}}
       - name: unittest
         if: true && !contains(github.event.inputs.skiptests, 'unittest')
         run: |
@@ -223,9 +225,11 @@ jobs:
           fi
       - name: Upload test failures
         if: always()
-        uses: ./.github/actions/upload-test-failures
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
-          job-name: ${{ github.job }}
+          name: test-failures-${{ github.job }}
+          path: test-failures/
+          if-no-files-found: ignore
   test-s390x:
     runs-on: ubuntu-latest
     if: |
@@ -307,13 +311,13 @@ jobs:
         run: apt-get install -y tcl8.6 tclx procps
       - name: test
         if: true && !contains(github.event.inputs.skiptests, 'valkey')
-        run: ./runtest ${{ github.event_name != 'pull_request' && '--accurate' || '' }} --failures-output test-failures/valkey.json --verbose --dump-logs ${{github.event.inputs.test_args}}
+        run: ./runtest ${{ github.event_name != 'pull_request' && '--accurate' || '' }} $([ -f .github/actions/upload-test-failures/action.yml ] && echo "--failures-output test-failures/valkey.json") --verbose --dump-logs ${{github.event.inputs.test_args}}
       - name: module api test
         if: true && !contains(github.event.inputs.skiptests, 'modules')
-        run: CFLAGS='-Werror' ./runtest-moduleapi --failures-output test-failures/moduleapi.json --verbose --dump-logs ${{github.event.inputs.test_args}}
+        run: CFLAGS='-Werror' ./runtest-moduleapi $([ -f .github/actions/upload-test-failures/action.yml ] && echo "--failures-output test-failures/moduleapi.json") --verbose --dump-logs ${{github.event.inputs.test_args}}
       - name: sentinel tests
         if: true && !contains(github.event.inputs.skiptests, 'sentinel')
-        run: ./runtest-sentinel --failures-output test-failures/sentinel.json ${{github.event.inputs.cluster_test_args}}
+        run: ./runtest-sentinel $([ -f .github/actions/upload-test-failures/action.yml ] && echo "--failures-output test-failures/sentinel.json") ${{github.event.inputs.cluster_test_args}}
       - name: unittest
         if: true && !contains(github.event.inputs.skiptests, 'unittest')
         run: |
@@ -324,9 +328,11 @@ jobs:
           fi
       - name: Upload test failures
         if: always()
-        uses: ./.github/actions/upload-test-failures
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
-          job-name: ${{ github.job }}
+          name: test-failures-${{ github.job }}
+          path: test-failures/
+          if-no-files-found: ignore
   test-ubuntu-libc-malloc:
     runs-on: ubuntu-latest
     if: |
@@ -367,18 +373,20 @@ jobs:
         run: sudo apt-get install tcl8.6 tclx
       - name: test
         if: true && !contains(github.event.inputs.skiptests, 'valkey')
-        run: ./runtest ${{ github.event_name != 'pull_request' && '--accurate' || '' }} --failures-output test-failures/valkey.json --verbose --dump-logs ${{github.event.inputs.test_args}}
+        run: ./runtest ${{ github.event_name != 'pull_request' && '--accurate' || '' }} $([ -f .github/actions/upload-test-failures/action.yml ] && echo "--failures-output test-failures/valkey.json") --verbose --dump-logs ${{github.event.inputs.test_args}}
       - name: module api test
         if: true && !contains(github.event.inputs.skiptests, 'modules')
-        run: CFLAGS='-Werror' ./runtest-moduleapi --failures-output test-failures/moduleapi.json --verbose --dump-logs ${{github.event.inputs.test_args}}
+        run: CFLAGS='-Werror' ./runtest-moduleapi $([ -f .github/actions/upload-test-failures/action.yml ] && echo "--failures-output test-failures/moduleapi.json") --verbose --dump-logs ${{github.event.inputs.test_args}}
       - name: sentinel tests
         if: true && !contains(github.event.inputs.skiptests, 'sentinel')
-        run: ./runtest-sentinel --failures-output test-failures/sentinel.json ${{github.event.inputs.cluster_test_args}}
+        run: ./runtest-sentinel $([ -f .github/actions/upload-test-failures/action.yml ] && echo "--failures-output test-failures/sentinel.json") ${{github.event.inputs.cluster_test_args}}
       - name: Upload test failures
         if: always()
-        uses: ./.github/actions/upload-test-failures
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
-          job-name: ${{ github.job }}
+          name: test-failures-${{ github.job }}
+          path: test-failures/
+          if-no-files-found: ignore
   test-ubuntu-no-malloc-usable-size:
     runs-on: ubuntu-latest
     if: |
@@ -419,18 +427,20 @@ jobs:
         run: sudo apt-get install tcl8.6 tclx
       - name: test
         if: true && !contains(github.event.inputs.skiptests, 'valkey')
-        run: ./runtest ${{ github.event_name != 'pull_request' && '--accurate' || '' }} --failures-output test-failures/valkey.json --verbose --dump-logs ${{github.event.inputs.test_args}}
+        run: ./runtest ${{ github.event_name != 'pull_request' && '--accurate' || '' }} $([ -f .github/actions/upload-test-failures/action.yml ] && echo "--failures-output test-failures/valkey.json") --verbose --dump-logs ${{github.event.inputs.test_args}}
       - name: module api test
         if: true && !contains(github.event.inputs.skiptests, 'modules')
-        run: CFLAGS='-Werror' ./runtest-moduleapi --failures-output test-failures/moduleapi.json --verbose --dump-logs ${{github.event.inputs.test_args}}
+        run: CFLAGS='-Werror' ./runtest-moduleapi $([ -f .github/actions/upload-test-failures/action.yml ] && echo "--failures-output test-failures/moduleapi.json") --verbose --dump-logs ${{github.event.inputs.test_args}}
       - name: sentinel tests
         if: true && !contains(github.event.inputs.skiptests, 'sentinel')
-        run: ./runtest-sentinel --failures-output test-failures/sentinel.json ${{github.event.inputs.cluster_test_args}}
+        run: ./runtest-sentinel $([ -f .github/actions/upload-test-failures/action.yml ] && echo "--failures-output test-failures/sentinel.json") ${{github.event.inputs.cluster_test_args}}
       - name: Upload test failures
         if: always()
-        uses: ./.github/actions/upload-test-failures
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
-          job-name: ${{ github.job }}
+          name: test-failures-${{ github.job }}
+          path: test-failures/
+          if-no-files-found: ignore
   test-ubuntu-32bit:
     runs-on: ubuntu-latest
     if: |
@@ -492,15 +502,15 @@ jobs:
         run: sudo apt-get install tcl8.6 tclx
       - name: test
         if: true && !contains(github.event.inputs.skiptests, 'valkey')
-        run: ./runtest ${{ github.event_name != 'pull_request' && '--accurate' || '' }} --failures-output test-failures/valkey.json --verbose --dump-logs ${{github.event.inputs.test_args}}
+        run: ./runtest ${{ github.event_name != 'pull_request' && '--accurate' || '' }} $([ -f .github/actions/upload-test-failures/action.yml ] && echo "--failures-output test-failures/valkey.json") --verbose --dump-logs ${{github.event.inputs.test_args}}
       - name: module api test
         if: true && !contains(github.event.inputs.skiptests, 'modules')
         run: |
           make -C tests/modules 32bit # the script below doesn't have an argument, we must build manually ahead of time
-          CFLAGS='-Werror' ./runtest-moduleapi --failures-output test-failures/moduleapi.json --verbose --dump-logs ${{github.event.inputs.test_args}}
+          CFLAGS='-Werror' ./runtest-moduleapi $([ -f .github/actions/upload-test-failures/action.yml ] && echo "--failures-output test-failures/moduleapi.json") --verbose --dump-logs ${{github.event.inputs.test_args}}
       - name: sentinel tests
         if: true && !contains(github.event.inputs.skiptests, 'sentinel')
-        run: ./runtest-sentinel --failures-output test-failures/sentinel.json ${{github.event.inputs.cluster_test_args}}
+        run: ./runtest-sentinel $([ -f .github/actions/upload-test-failures/action.yml ] && echo "--failures-output test-failures/sentinel.json") ${{github.event.inputs.cluster_test_args}}
       - name: unittest
         if: true && !contains(github.event.inputs.skiptests, 'unittest')
         run: |
@@ -513,9 +523,11 @@ jobs:
           fi
       - name: Upload test failures
         if: always()
-        uses: ./.github/actions/upload-test-failures
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
-          job-name: ${{ github.job }}
+          name: test-failures-${{ github.job }}
+          path: test-failures/
+          if-no-files-found: ignore
   test-ubuntu-tls:
     runs-on: ubuntu-latest
     if: |
@@ -559,20 +571,22 @@ jobs:
       - name: test
         if: true && !contains(github.event.inputs.skiptests, 'valkey')
         run: |
-          ./runtest ${{ github.event_name != 'pull_request' && '--accurate' || '' }} --failures-output test-failures/valkey.json --verbose --dump-logs --tls ${{github.event.inputs.test_args}}
+          ./runtest ${{ github.event_name != 'pull_request' && '--accurate' || '' }} $([ -f .github/actions/upload-test-failures/action.yml ] && echo "--failures-output test-failures/valkey.json") --verbose --dump-logs --tls ${{github.event.inputs.test_args}}
       - name: module api test
         if: true && !contains(github.event.inputs.skiptests, 'modules')
         run: |
-          CFLAGS='-Werror' ./runtest-moduleapi --failures-output test-failures/moduleapi.json --verbose --dump-logs --tls ${{github.event.inputs.test_args}}
+          CFLAGS='-Werror' ./runtest-moduleapi $([ -f .github/actions/upload-test-failures/action.yml ] && echo "--failures-output test-failures/moduleapi.json") --verbose --dump-logs --tls ${{github.event.inputs.test_args}}
       - name: sentinel tests
         if: true && !contains(github.event.inputs.skiptests, 'sentinel')
         run: |
-          ./runtest-sentinel --failures-output test-failures/sentinel.json --tls ${{github.event.inputs.cluster_test_args}}
+          ./runtest-sentinel $([ -f .github/actions/upload-test-failures/action.yml ] && echo "--failures-output test-failures/sentinel.json") --tls ${{github.event.inputs.cluster_test_args}}
       - name: Upload test failures
         if: always()
-        uses: ./.github/actions/upload-test-failures
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
-          job-name: ${{ github.job }}
+          name: test-failures-${{ github.job }}
+          path: test-failures/
+          if-no-files-found: ignore
   test-ubuntu-tls-no-tls:
     runs-on: ubuntu-latest
     if: |
@@ -616,20 +630,22 @@ jobs:
       - name: test
         if: true && !contains(github.event.inputs.skiptests, 'valkey')
         run: |
-          ./runtest ${{ github.event_name != 'pull_request' && '--accurate' || '' }} --failures-output test-failures/valkey.json --verbose --dump-logs ${{github.event.inputs.test_args}}
+          ./runtest ${{ github.event_name != 'pull_request' && '--accurate' || '' }} $([ -f .github/actions/upload-test-failures/action.yml ] && echo "--failures-output test-failures/valkey.json") --verbose --dump-logs ${{github.event.inputs.test_args}}
       - name: module api test
         if: true && !contains(github.event.inputs.skiptests, 'modules')
         run: |
-          CFLAGS='-Werror' ./runtest-moduleapi --failures-output test-failures/moduleapi.json --verbose --dump-logs ${{github.event.inputs.test_args}}
+          CFLAGS='-Werror' ./runtest-moduleapi $([ -f .github/actions/upload-test-failures/action.yml ] && echo "--failures-output test-failures/moduleapi.json") --verbose --dump-logs ${{github.event.inputs.test_args}}
       - name: sentinel tests
         if: true && !contains(github.event.inputs.skiptests, 'sentinel')
         run: |
-          ./runtest-sentinel --failures-output test-failures/sentinel.json ${{github.event.inputs.cluster_test_args}}
+          ./runtest-sentinel $([ -f .github/actions/upload-test-failures/action.yml ] && echo "--failures-output test-failures/sentinel.json") ${{github.event.inputs.cluster_test_args}}
       - name: Upload test failures
         if: always()
-        uses: ./.github/actions/upload-test-failures
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
-          job-name: ${{ github.job }}
+          name: test-failures-${{ github.job }}
+          path: test-failures/
+          if-no-files-found: ignore
   test-ubuntu-io-threads:
     runs-on: ubuntu-latest
     if: |
@@ -670,12 +686,14 @@ jobs:
         run: sudo apt-get install tcl8.6 tclx
       - name: test
         if: true && !contains(github.event.inputs.skiptests, 'valkey')
-        run: ./runtest --io-threads --accurate --failures-output test-failures/valkey.json --verbose --tags network --dump-logs ${{github.event.inputs.test_args}}
+        run: ./runtest --io-threads --accurate $([ -f .github/actions/upload-test-failures/action.yml ] && echo "--failures-output test-failures/valkey.json") --verbose --tags network --dump-logs ${{github.event.inputs.test_args}}
       - name: Upload test failures
         if: always()
-        uses: ./.github/actions/upload-test-failures
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
-          job-name: ${{ github.job }}
+          name: test-failures-${{ github.job }}
+          path: test-failures/
+          if-no-files-found: ignore
   test-ubuntu-tls-io-threads:
     runs-on: ubuntu-latest
     if: |
@@ -719,12 +737,14 @@ jobs:
       - name: test
         if: true && !contains(github.event.inputs.skiptests, 'valkey')
         run: |
-          ./runtest --io-threads --tls --accurate --failures-output test-failures/valkey.json --verbose --tags network --dump-logs ${{github.event.inputs.test_args}}
+          ./runtest --io-threads --tls --accurate $([ -f .github/actions/upload-test-failures/action.yml ] && echo "--failures-output test-failures/valkey.json") --verbose --tags network --dump-logs ${{github.event.inputs.test_args}}
       - name: Upload test failures
         if: always()
-        uses: ./.github/actions/upload-test-failures
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
-          job-name: ${{ github.job }}
+          name: test-failures-${{ github.job }}
+          path: test-failures/
+          if-no-files-found: ignore
   test-ubuntu-reclaim-cache:
     runs-on: ubuntu-latest
     if: |
@@ -851,12 +871,14 @@ jobs:
           sudo apt-get install tcl8.6 tclx valgrind -y
       - name: test
         if: true && !contains(github.event.inputs.skiptests, 'valkey')
-        run: ./runtest --valgrind --no-latency --failures-output test-failures/valkey.json --verbose --clients 1 --timeout 2400 --dump-logs ${{github.event.inputs.test_args}}
+        run: ./runtest --valgrind --no-latency $([ -f .github/actions/upload-test-failures/action.yml ] && echo "--failures-output test-failures/valkey.json") --verbose --clients 1 --timeout 2400 --dump-logs ${{github.event.inputs.test_args}}
       - name: Upload test failures
         if: always()
-        uses: ./.github/actions/upload-test-failures
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
-          job-name: ${{ github.job }}
+          name: test-failures-${{ github.job }}
+          path: test-failures/
+          if-no-files-found: ignore
   test-valgrind-misc:
     runs-on: ubuntu-latest
     if: |
@@ -896,7 +918,7 @@ jobs:
           sudo apt-get install tcl8.6 tclx valgrind -y
       - name: module api test
         if: true && !contains(github.event.inputs.skiptests, 'modules')
-        run: CFLAGS='-Werror' ./runtest-moduleapi --valgrind --no-latency --failures-output test-failures/moduleapi.json --verbose --clients 1 --timeout 2400 --dump-logs ${{github.event.inputs.test_args}}
+        run: CFLAGS='-Werror' ./runtest-moduleapi --valgrind --no-latency $([ -f .github/actions/upload-test-failures/action.yml ] && echo "--failures-output test-failures/moduleapi.json") --verbose --clients 1 --timeout 2400 --dump-logs ${{github.event.inputs.test_args}}
       - name: unittest
         if: true && !contains(github.event.inputs.skiptests, 'unittest')
         run: |
@@ -909,9 +931,11 @@ jobs:
           fi
       - name: Upload test failures
         if: always()
-        uses: ./.github/actions/upload-test-failures
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
-          job-name: ${{ github.job }}
+          name: test-failures-${{ github.job }}
+          path: test-failures/
+          if-no-files-found: ignore
   test-valgrind-no-malloc-usable-size-test:
     runs-on: ubuntu-latest
     if: |
@@ -949,12 +973,14 @@ jobs:
           sudo apt-get install tcl8.6 tclx valgrind -y
       - name: test
         if: true && !contains(github.event.inputs.skiptests, 'valkey')
-        run: ./runtest --valgrind --no-latency --failures-output test-failures/valkey.json --verbose --clients 1 --timeout 2400 --dump-logs ${{github.event.inputs.test_args}}
+        run: ./runtest --valgrind --no-latency $([ -f .github/actions/upload-test-failures/action.yml ] && echo "--failures-output test-failures/valkey.json") --verbose --clients 1 --timeout 2400 --dump-logs ${{github.event.inputs.test_args}}
       - name: Upload test failures
         if: always()
-        uses: ./.github/actions/upload-test-failures
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
-          job-name: ${{ github.job }}
+          name: test-failures-${{ github.job }}
+          path: test-failures/
+          if-no-files-found: ignore
   test-valgrind-no-malloc-usable-size-misc:
     runs-on: ubuntu-latest
     if: |
@@ -994,7 +1020,7 @@ jobs:
           sudo apt-get install tcl8.6 tclx valgrind -y
       - name: module api test
         if: true && !contains(github.event.inputs.skiptests, 'modules')
-        run: CFLAGS='-Werror' ./runtest-moduleapi --valgrind --no-latency --failures-output test-failures/moduleapi.json --verbose --clients 1 --timeout 2400 --dump-logs ${{github.event.inputs.test_args}}
+        run: CFLAGS='-Werror' ./runtest-moduleapi --valgrind --no-latency $([ -f .github/actions/upload-test-failures/action.yml ] && echo "--failures-output test-failures/moduleapi.json") --verbose --clients 1 --timeout 2400 --dump-logs ${{github.event.inputs.test_args}}
       - name: unittest
         if: true && !contains(github.event.inputs.skiptests, 'unittest')
         run: |
@@ -1007,9 +1033,11 @@ jobs:
           fi
       - name: Upload test failures
         if: always()
-        uses: ./.github/actions/upload-test-failures
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
-          job-name: ${{ github.job }}
+          name: test-failures-${{ github.job }}
+          path: test-failures/
+          if-no-files-found: ignore
   test-sanitizer-address:
     runs-on: ubuntu-latest
     if: |
@@ -1060,13 +1088,13 @@ jobs:
           sudo apt-get install tcl8.6 tclx -y
       - name: test
         if: true && !contains(github.event.inputs.skiptests, 'valkey')
-        run: ./runtest --accurate --failures-output test-failures/valkey.json --verbose --dump-logs ${{github.event.inputs.test_args}}
+        run: ./runtest --accurate $([ -f .github/actions/upload-test-failures/action.yml ] && echo "--failures-output test-failures/valkey.json") --verbose --dump-logs ${{github.event.inputs.test_args}}
       - name: module api test
         if: true && !contains(github.event.inputs.skiptests, 'modules')
-        run: CFLAGS='-Werror' ./runtest-moduleapi --failures-output test-failures/moduleapi.json --verbose --dump-logs ${{github.event.inputs.test_args}}
+        run: CFLAGS='-Werror' ./runtest-moduleapi $([ -f .github/actions/upload-test-failures/action.yml ] && echo "--failures-output test-failures/moduleapi.json") --verbose --dump-logs ${{github.event.inputs.test_args}}
       - name: sentinel tests
         if: true && !contains(github.event.inputs.skiptests, 'sentinel')
-        run: ./runtest-sentinel --failures-output test-failures/sentinel.json ${{github.event.inputs.cluster_test_args}}
+        run: ./runtest-sentinel $([ -f .github/actions/upload-test-failures/action.yml ] && echo "--failures-output test-failures/sentinel.json") ${{github.event.inputs.cluster_test_args}}
       - name: unittest
         if: true && !contains(github.event.inputs.skiptests, 'unittest')
         run: |
@@ -1077,9 +1105,11 @@ jobs:
           fi
       - name: Upload test failures
         if: always()
-        uses: ./.github/actions/upload-test-failures
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
-          job-name: ${{ github.job }}-${{ matrix.compiler }}
+          name: test-failures-${{ github.job }}
+          path: test-failures/
+          if-no-files-found: ignore-${{ matrix.compiler }}
   # Large-memory tests with sanitizers require 10-14GB RAM due to ASAN/UBSAN overhead.
   # GitHub-hosted runners for public repos provide 16GB (ubuntu-latest).
   # These tests are borderline - monitoring memory usage to determine if they can run reliably.
@@ -1146,10 +1176,10 @@ jobs:
           fi
       - name: large memory tests
         if: true && !contains(github.event.inputs.skiptests, 'valkey')
-        run: ./runtest --accurate --failures-output test-failures/valkey.json --verbose --dump-logs --clients 1 --large-memory --tags large-memory ${{github.event.inputs.test_args}}
+        run: ./runtest --accurate $([ -f .github/actions/upload-test-failures/action.yml ] && echo "--failures-output test-failures/valkey.json") --verbose --dump-logs --clients 1 --large-memory --tags large-memory ${{github.event.inputs.test_args}}
       - name: large memory module api tests
         if: true && !contains(github.event.inputs.skiptests, 'modules')
-        run: CFLAGS='-Werror' ./runtest-moduleapi --failures-output test-failures/moduleapi.json --verbose --dump-logs --clients 1 --large-memory --tags large-memory ${{github.event.inputs.test_args}}
+        run: CFLAGS='-Werror' ./runtest-moduleapi $([ -f .github/actions/upload-test-failures/action.yml ] && echo "--failures-output test-failures/moduleapi.json") --verbose --dump-logs --clients 1 --large-memory --tags large-memory ${{github.event.inputs.test_args}}
       - name: Memory usage summary
         if: always()
         run: |
@@ -1162,9 +1192,11 @@ jobs:
           fi
       - name: Upload test failures
         if: always()
-        uses: ./.github/actions/upload-test-failures
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
-          job-name: ${{ github.job }}-${{ matrix.compiler }}
+          name: test-failures-${{ github.job }}
+          path: test-failures/
+          if-no-files-found: ignore-${{ matrix.compiler }}
   test-sanitizer-undefined:
     runs-on: ubuntu-latest
     if: |
@@ -1215,13 +1247,13 @@ jobs:
           sudo apt-get install tcl8.6 tclx -y
       - name: test
         if: true && !contains(github.event.inputs.skiptests, 'valkey')
-        run: ./runtest --accurate --failures-output test-failures/valkey.json --verbose --dump-logs ${{github.event.inputs.test_args}}
+        run: ./runtest --accurate $([ -f .github/actions/upload-test-failures/action.yml ] && echo "--failures-output test-failures/valkey.json") --verbose --dump-logs ${{github.event.inputs.test_args}}
       - name: module api test
         if: true && !contains(github.event.inputs.skiptests, 'modules')
-        run: CFLAGS='-Werror' ./runtest-moduleapi --failures-output test-failures/moduleapi.json --verbose --dump-logs ${{github.event.inputs.test_args}}
+        run: CFLAGS='-Werror' ./runtest-moduleapi $([ -f .github/actions/upload-test-failures/action.yml ] && echo "--failures-output test-failures/moduleapi.json") --verbose --dump-logs ${{github.event.inputs.test_args}}
       - name: sentinel tests
         if: true && !contains(github.event.inputs.skiptests, 'sentinel')
-        run: ./runtest-sentinel --failures-output test-failures/sentinel.json ${{github.event.inputs.cluster_test_args}}
+        run: ./runtest-sentinel $([ -f .github/actions/upload-test-failures/action.yml ] && echo "--failures-output test-failures/sentinel.json") ${{github.event.inputs.cluster_test_args}}
       - name: unittest
         if: true && !contains(github.event.inputs.skiptests, 'unittest')
         run: |
@@ -1232,9 +1264,11 @@ jobs:
           fi
       - name: Upload test failures
         if: always()
-        uses: ./.github/actions/upload-test-failures
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
-          job-name: ${{ github.job }}-${{ matrix.compiler }}
+          name: test-failures-${{ github.job }}
+          path: test-failures/
+          if-no-files-found: ignore-${{ matrix.compiler }}
   # Large-memory tests with sanitizers require 10-14GB RAM due to ASAN/UBSAN overhead.
   # GitHub-hosted runners for public repos provide 16GB (ubuntu-latest).
   # These tests are borderline - monitoring memory usage to determine if they can run reliably.
@@ -1301,10 +1335,10 @@ jobs:
           fi
       - name: large memory tests
         if: true && !contains(github.event.inputs.skiptests, 'valkey')
-        run: ./runtest --accurate --failures-output test-failures/valkey.json --verbose --dump-logs --clients 1 --large-memory --tags large-memory ${{github.event.inputs.test_args}}
+        run: ./runtest --accurate $([ -f .github/actions/upload-test-failures/action.yml ] && echo "--failures-output test-failures/valkey.json") --verbose --dump-logs --clients 1 --large-memory --tags large-memory ${{github.event.inputs.test_args}}
       - name: large memory module api tests
         if: true && !contains(github.event.inputs.skiptests, 'modules')
-        run: CFLAGS='-Werror' ./runtest-moduleapi --failures-output test-failures/moduleapi.json --verbose --dump-logs --clients 1 --large-memory --tags large-memory ${{github.event.inputs.test_args}}
+        run: CFLAGS='-Werror' ./runtest-moduleapi $([ -f .github/actions/upload-test-failures/action.yml ] && echo "--failures-output test-failures/moduleapi.json") --verbose --dump-logs --clients 1 --large-memory --tags large-memory ${{github.event.inputs.test_args}}
       - name: Memory usage summary
         if: always()
         run: |
@@ -1317,9 +1351,11 @@ jobs:
           fi
       - name: Upload test failures
         if: always()
-        uses: ./.github/actions/upload-test-failures
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
-          job-name: ${{ github.job }}-${{ matrix.compiler }}
+          name: test-failures-${{ github.job }}
+          path: test-failures/
+          if-no-files-found: ignore-${{ matrix.compiler }}
   test-sanitizer-force-defrag:
     runs-on: ubuntu-latest
     if: |
@@ -1366,13 +1402,13 @@ jobs:
           sudo apt-get install tcl8.6 tclx -y
       - name: test
         if: true && !contains(github.event.inputs.skiptests, 'valkey')
-        run: ./runtest --accurate --failures-output test-failures/valkey.json --verbose --dump-logs ${{github.event.inputs.test_args}}
+        run: ./runtest --accurate $([ -f .github/actions/upload-test-failures/action.yml ] && echo "--failures-output test-failures/valkey.json") --verbose --dump-logs ${{github.event.inputs.test_args}}
       - name: module api test
         if: true && !contains(github.event.inputs.skiptests, 'modules')
-        run: CFLAGS='-Werror' ./runtest-moduleapi --failures-output test-failures/moduleapi.json --verbose --dump-logs ${{github.event.inputs.test_args}}
+        run: CFLAGS='-Werror' ./runtest-moduleapi $([ -f .github/actions/upload-test-failures/action.yml ] && echo "--failures-output test-failures/moduleapi.json") --verbose --dump-logs ${{github.event.inputs.test_args}}
       - name: sentinel tests
         if: true && !contains(github.event.inputs.skiptests, 'sentinel')
-        run: ./runtest-sentinel --failures-output test-failures/sentinel.json ${{github.event.inputs.cluster_test_args}}
+        run: ./runtest-sentinel $([ -f .github/actions/upload-test-failures/action.yml ] && echo "--failures-output test-failures/sentinel.json") ${{github.event.inputs.cluster_test_args}}
       - name: unittest
         if: true && !contains(github.event.inputs.skiptests, 'unittest')
         run: |
@@ -1383,9 +1419,11 @@ jobs:
           fi
       - name: Upload test failures
         if: always()
-        uses: ./.github/actions/upload-test-failures
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
-          job-name: ${{ github.job }}
+          name: test-failures-${{ github.job }}
+          path: test-failures/
+          if-no-files-found: ignore
   test-ubuntu-lttng:
     runs-on: ubuntu-latest
     if: |
@@ -1429,18 +1467,20 @@ jobs:
         run: sudo apt-get install tcl8.6 tclx
       - name: test
         if: true && !contains(github.event.inputs.skiptests, 'valkey')
-        run: ./runtest ${{ github.event_name != 'pull_request' && '--accurate' || '' }} --failures-output test-failures/valkey.json --verbose --dump-logs ${{github.event.inputs.test_args}}
+        run: ./runtest ${{ github.event_name != 'pull_request' && '--accurate' || '' }} $([ -f .github/actions/upload-test-failures/action.yml ] && echo "--failures-output test-failures/valkey.json") --verbose --dump-logs ${{github.event.inputs.test_args}}
       - name: module api test
         if: true && !contains(github.event.inputs.skiptests, 'modules')
-        run: CFLAGS='-Werror' ./runtest-moduleapi --failures-output test-failures/moduleapi.json --verbose --dump-logs ${{github.event.inputs.test_args}}
+        run: CFLAGS='-Werror' ./runtest-moduleapi $([ -f .github/actions/upload-test-failures/action.yml ] && echo "--failures-output test-failures/moduleapi.json") --verbose --dump-logs ${{github.event.inputs.test_args}}
       - name: sentinel tests
         if: true && !contains(github.event.inputs.skiptests, 'sentinel')
-        run: ./runtest-sentinel --failures-output test-failures/sentinel.json ${{github.event.inputs.cluster_test_args}}
+        run: ./runtest-sentinel $([ -f .github/actions/upload-test-failures/action.yml ] && echo "--failures-output test-failures/sentinel.json") ${{github.event.inputs.cluster_test_args}}
       - name: Upload test failures
         if: always()
-        uses: ./.github/actions/upload-test-failures
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
-          job-name: ${{ github.job }}
+          name: test-failures-${{ github.job }}
+          path: test-failures/
+          if-no-files-found: ignore
   test-rpm-distros-jemalloc:
     if: |
       (github.event_name == 'workflow_call' || github.event_name == 'workflow_dispatch' ||
@@ -1506,18 +1546,20 @@ jobs:
         run: dnf -y install tcl tcltls
       - name: test
         if: true && !contains(github.event.inputs.skiptests, 'valkey')
-        run: ./runtest ${{ github.event_name != 'pull_request' && '--accurate' || '' }} --failures-output test-failures/valkey.json --verbose --dump-logs ${{github.event.inputs.test_args}}
+        run: ./runtest ${{ github.event_name != 'pull_request' && '--accurate' || '' }} $([ -f .github/actions/upload-test-failures/action.yml ] && echo "--failures-output test-failures/valkey.json") --verbose --dump-logs ${{github.event.inputs.test_args}}
       - name: module api test
         if: true && !contains(github.event.inputs.skiptests, 'modules')
-        run: CFLAGS='-Werror' ./runtest-moduleapi --failures-output test-failures/moduleapi.json --verbose --dump-logs ${{github.event.inputs.test_args}}
+        run: CFLAGS='-Werror' ./runtest-moduleapi $([ -f .github/actions/upload-test-failures/action.yml ] && echo "--failures-output test-failures/moduleapi.json") --verbose --dump-logs ${{github.event.inputs.test_args}}
       - name: sentinel tests
         if: true && !contains(github.event.inputs.skiptests, 'sentinel')
-        run: ./runtest-sentinel --failures-output test-failures/sentinel.json ${{github.event.inputs.cluster_test_args}}
+        run: ./runtest-sentinel $([ -f .github/actions/upload-test-failures/action.yml ] && echo "--failures-output test-failures/sentinel.json") ${{github.event.inputs.cluster_test_args}}
       - name: Upload test failures
         if: always()
-        uses: ./.github/actions/upload-test-failures
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
-          job-name: ${{ matrix.name }}
+          name: test-failures-${{ matrix.name }}
+          path: test-failures/
+          if-no-files-found: ignore
   test-rpm-distros-tls-module:
     if: |
       (github.event_name == 'workflow_call' || github.event_name == 'workflow_dispatch' ||
@@ -1586,20 +1628,22 @@ jobs:
       - name: test
         if: true && !contains(github.event.inputs.skiptests, 'valkey')
         run: |
-          ./runtest ${{ github.event_name != 'pull_request' && '--accurate' || '' }} --failures-output test-failures/valkey.json --verbose --dump-logs --tls-module ${{github.event.inputs.test_args}}
+          ./runtest ${{ github.event_name != 'pull_request' && '--accurate' || '' }} $([ -f .github/actions/upload-test-failures/action.yml ] && echo "--failures-output test-failures/valkey.json") --verbose --dump-logs --tls-module ${{github.event.inputs.test_args}}
       - name: module api test
         if: true && !contains(github.event.inputs.skiptests, 'modules')
         run: |
-          CFLAGS='-Werror' ./runtest-moduleapi --failures-output test-failures/moduleapi.json --verbose --dump-logs --tls-module ${{github.event.inputs.test_args}}
+          CFLAGS='-Werror' ./runtest-moduleapi $([ -f .github/actions/upload-test-failures/action.yml ] && echo "--failures-output test-failures/moduleapi.json") --verbose --dump-logs --tls-module ${{github.event.inputs.test_args}}
       - name: sentinel tests
         if: true && !contains(github.event.inputs.skiptests, 'sentinel')
         run: |
-          ./runtest-sentinel --failures-output test-failures/sentinel.json ${{github.event.inputs.cluster_test_args}}
+          ./runtest-sentinel $([ -f .github/actions/upload-test-failures/action.yml ] && echo "--failures-output test-failures/sentinel.json") ${{github.event.inputs.cluster_test_args}}
       - name: Upload test failures
         if: always()
-        uses: ./.github/actions/upload-test-failures
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
-          job-name: ${{ matrix.name }}
+          name: test-failures-${{ matrix.name }}
+          path: test-failures/
+          if-no-files-found: ignore
   test-rpm-distros-tls-module-no-tls:
     if: |
       (github.event_name == 'workflow_call' || github.event_name == 'workflow_dispatch' ||
@@ -1663,20 +1707,22 @@ jobs:
       - name: test
         if: true && !contains(github.event.inputs.skiptests, 'valkey')
         run: |
-          ./runtest --accurate --failures-output test-failures/valkey.json --verbose --dump-logs ${{github.event.inputs.test_args}}
+          ./runtest --accurate $([ -f .github/actions/upload-test-failures/action.yml ] && echo "--failures-output test-failures/valkey.json") --verbose --dump-logs ${{github.event.inputs.test_args}}
       - name: module api test
         if: true && !contains(github.event.inputs.skiptests, 'modules')
         run: |
-          CFLAGS='-Werror' ./runtest-moduleapi --failures-output test-failures/moduleapi.json --verbose --dump-logs ${{github.event.inputs.test_args}}
+          CFLAGS='-Werror' ./runtest-moduleapi $([ -f .github/actions/upload-test-failures/action.yml ] && echo "--failures-output test-failures/moduleapi.json") --verbose --dump-logs ${{github.event.inputs.test_args}}
       - name: sentinel tests
         if: true && !contains(github.event.inputs.skiptests, 'sentinel')
         run: |
-          ./runtest-sentinel --failures-output test-failures/sentinel.json ${{github.event.inputs.cluster_test_args}}
+          ./runtest-sentinel $([ -f .github/actions/upload-test-failures/action.yml ] && echo "--failures-output test-failures/sentinel.json") ${{github.event.inputs.cluster_test_args}}
       - name: Upload test failures
         if: always()
-        uses: ./.github/actions/upload-test-failures
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
-          job-name: ${{ matrix.name }}
+          name: test-failures-${{ matrix.name }}
+          path: test-failures/
+          if-no-files-found: ignore
   test-macos-latest:
     runs-on: macos-latest
     if: |
@@ -1715,15 +1761,17 @@ jobs:
         run: make SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes
       - name: test
         if: true && !contains(github.event.inputs.skiptests, 'valkey')
-        run: ./runtest ${{ github.event_name != 'pull_request' && '--accurate' || '' }} --failures-output test-failures/valkey.json --verbose --clients 1 --no-latency --dump-logs ${{github.event.inputs.test_args}}
+        run: ./runtest ${{ github.event_name != 'pull_request' && '--accurate' || '' }} $([ -f .github/actions/upload-test-failures/action.yml ] && echo "--failures-output test-failures/valkey.json") --verbose --clients 1 --no-latency --dump-logs ${{github.event.inputs.test_args}}
       - name: module api test
         if: true && !contains(github.event.inputs.skiptests, 'modules')
-        run: CFLAGS='-Werror' ./runtest-moduleapi --failures-output test-failures/moduleapi.json --verbose --clients 1 --no-latency --dump-logs ${{github.event.inputs.test_args}}
+        run: CFLAGS='-Werror' ./runtest-moduleapi $([ -f .github/actions/upload-test-failures/action.yml ] && echo "--failures-output test-failures/moduleapi.json") --verbose --clients 1 --no-latency --dump-logs ${{github.event.inputs.test_args}}
       - name: Upload test failures
         if: always()
-        uses: ./.github/actions/upload-test-failures
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
-          job-name: ${{ github.job }}
+          name: test-failures-${{ github.job }}
+          path: test-failures/
+          if-no-files-found: ignore
   test-macos-latest-sentinel:
     runs-on: macos-latest
     if: |
@@ -1762,12 +1810,14 @@ jobs:
         run: make SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes
       - name: sentinel tests
         if: true && !contains(github.event.inputs.skiptests, 'sentinel')
-        run: ./runtest-sentinel --failures-output test-failures/sentinel.json ${{github.event.inputs.cluster_test_args}}
+        run: ./runtest-sentinel $([ -f .github/actions/upload-test-failures/action.yml ] && echo "--failures-output test-failures/sentinel.json") ${{github.event.inputs.cluster_test_args}}
       - name: Upload test failures
         if: always()
-        uses: ./.github/actions/upload-test-failures
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
-          job-name: ${{ github.job }}
+          name: test-failures-${{ github.job }}
+          path: test-failures/
+          if-no-files-found: ignore
   test-macos-latest-cluster:
     runs-on: macos-latest
     if: |
@@ -1880,12 +1930,14 @@ jobs:
           run: |
             sudo pkg install -y bash gmake lang/tcl86 lang/tclX
             gmake
-            ./runtest --failures-output test-failures/valkey.json --single unit/keyspace --single unit/auth --single unit/networking --single unit/protocol
+            ./runtest $([ -f .github/actions/upload-test-failures/action.yml ] && echo "--failures-output test-failures/valkey.json") --single unit/keyspace --single unit/auth --single unit/networking --single unit/protocol
       - name: Upload test failures
         if: always()
-        uses: ./.github/actions/upload-test-failures
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
-          job-name: ${{ github.job }}
+          name: test-failures-${{ github.job }}
+          path: test-failures/
+          if-no-files-found: ignore
   test-alpine-jemalloc:
     runs-on: ubuntu-latest
     if: |
@@ -1929,18 +1981,20 @@ jobs:
         run: apk add tcl procps tclx
       - name: test
         if: true && !contains(github.event.inputs.skiptests, 'valkey')
-        run: ./runtest ${{ github.event_name != 'pull_request' && '--accurate' || '' }} --failures-output test-failures/valkey.json --verbose --dump-logs ${{github.event.inputs.test_args}}
+        run: ./runtest ${{ github.event_name != 'pull_request' && '--accurate' || '' }} $([ -f .github/actions/upload-test-failures/action.yml ] && echo "--failures-output test-failures/valkey.json") --verbose --dump-logs ${{github.event.inputs.test_args}}
       - name: module api test
         if: true && !contains(github.event.inputs.skiptests, 'modules')
-        run: CFLAGS='-Werror' ./runtest-moduleapi --failures-output test-failures/moduleapi.json --verbose --dump-logs ${{github.event.inputs.test_args}}
+        run: CFLAGS='-Werror' ./runtest-moduleapi $([ -f .github/actions/upload-test-failures/action.yml ] && echo "--failures-output test-failures/moduleapi.json") --verbose --dump-logs ${{github.event.inputs.test_args}}
       - name: sentinel tests
         if: true && !contains(github.event.inputs.skiptests, 'sentinel')
-        run: ./runtest-sentinel --failures-output test-failures/sentinel.json ${{github.event.inputs.cluster_test_args}}
+        run: ./runtest-sentinel $([ -f .github/actions/upload-test-failures/action.yml ] && echo "--failures-output test-failures/sentinel.json") ${{github.event.inputs.cluster_test_args}}
       - name: Upload test failures
         if: always()
-        uses: ./.github/actions/upload-test-failures
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
-          job-name: ${{ github.job }}
+          name: test-failures-${{ github.job }}
+          path: test-failures/
+          if-no-files-found: ignore
   test-alpine-libc-malloc:
     runs-on: ubuntu-latest
     if: |
@@ -1984,18 +2038,20 @@ jobs:
         run: apk add tcl procps tclx
       - name: test
         if: true && !contains(github.event.inputs.skiptests, 'valkey')
-        run: ./runtest ${{ github.event_name != 'pull_request' && '--accurate' || '' }} --failures-output test-failures/valkey.json --verbose --dump-logs ${{github.event.inputs.test_args}}
+        run: ./runtest ${{ github.event_name != 'pull_request' && '--accurate' || '' }} $([ -f .github/actions/upload-test-failures/action.yml ] && echo "--failures-output test-failures/valkey.json") --verbose --dump-logs ${{github.event.inputs.test_args}}
       - name: module api test
         if: true && !contains(github.event.inputs.skiptests, 'modules')
-        run: CFLAGS='-Werror' ./runtest-moduleapi --failures-output test-failures/moduleapi.json --verbose --dump-logs ${{github.event.inputs.test_args}}
+        run: CFLAGS='-Werror' ./runtest-moduleapi $([ -f .github/actions/upload-test-failures/action.yml ] && echo "--failures-output test-failures/moduleapi.json") --verbose --dump-logs ${{github.event.inputs.test_args}}
       - name: sentinel tests
         if: true && !contains(github.event.inputs.skiptests, 'sentinel')
-        run: ./runtest-sentinel --failures-output test-failures/sentinel.json ${{github.event.inputs.cluster_test_args}}
+        run: ./runtest-sentinel $([ -f .github/actions/upload-test-failures/action.yml ] && echo "--failures-output test-failures/sentinel.json") ${{github.event.inputs.cluster_test_args}}
       - name: Upload test failures
         if: always()
-        uses: ./.github/actions/upload-test-failures
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
-          job-name: ${{ github.job }}
+          name: test-failures-${{ github.job }}
+          path: test-failures/
+          if-no-files-found: ignore
   test-alpine-32bit:
     runs-on: ubuntu-latest
     if: |
@@ -2055,27 +2111,29 @@ jobs:
 
               case "${SKIPTESTS:-}" in
                 *valkey*) ;;
-                *) ./runtest ${RUN_ACCURATE:-} --failures-output test-failures/valkey.json --verbose --dump-logs ${TEST_ARGS:-} ;;
+                *) ./runtest ${RUN_ACCURATE:-} $([ -f .github/actions/upload-test-failures/action.yml ] && echo "--failures-output test-failures/valkey.json") --verbose --dump-logs ${TEST_ARGS:-} ;;
               esac
 
               case "${SKIPTESTS:-}" in
                 *modules*) ;;
                 *)
                   make -C tests/modules 32bit
-                  CFLAGS="-Werror" ./runtest-moduleapi --failures-output test-failures/moduleapi.json --verbose --dump-logs ${TEST_ARGS:-}
+                  CFLAGS="-Werror" ./runtest-moduleapi $([ -f .github/actions/upload-test-failures/action.yml ] && echo "--failures-output test-failures/moduleapi.json") --verbose --dump-logs ${TEST_ARGS:-}
                   ;;
               esac
 
               case "${SKIPTESTS:-}" in
                 *sentinel*) ;;
-                *) ./runtest-sentinel --failures-output test-failures/sentinel.json ${CLUSTER_TEST_ARGS:-} ;;
+                *) ./runtest-sentinel $([ -f .github/actions/upload-test-failures/action.yml ] && echo "--failures-output test-failures/sentinel.json") ${CLUSTER_TEST_ARGS:-} ;;
               esac
             '
       - name: Upload test failures
         if: always()
-        uses: ./.github/actions/upload-test-failures
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
-          job-name: ${{ github.job }}
+          name: test-failures-${{ github.job }}
+          path: test-failures/
+          if-no-files-found: ignore
 
   reply-schemas-validator:
     runs-on: ubuntu-latest
@@ -2117,13 +2175,13 @@ jobs:
         run: sudo apt-get install tcl8.6 tclx
       - name: test
         if: true && !contains(github.event.inputs.skiptests, 'valkey')
-        run: ./runtest --failures-output test-failures/valkey.json --log-req-res --no-latency --dont-clean --force-resp3 --tags -slow --verbose --dump-logs ${{github.event.inputs.test_args}}
+        run: ./runtest $([ -f .github/actions/upload-test-failures/action.yml ] && echo "--failures-output test-failures/valkey.json") --log-req-res --no-latency --dont-clean --force-resp3 --tags -slow --verbose --dump-logs ${{github.event.inputs.test_args}}
       - name: module api test
         if: true && !contains(github.event.inputs.skiptests, 'modules')
-        run: CFLAGS='-Werror' ./runtest-moduleapi --failures-output test-failures/moduleapi.json --log-req-res --no-latency --dont-clean --force-resp3 --dont-pre-clean --verbose --dump-logs ${{github.event.inputs.test_args}}
+        run: CFLAGS='-Werror' ./runtest-moduleapi $([ -f .github/actions/upload-test-failures/action.yml ] && echo "--failures-output test-failures/moduleapi.json") --log-req-res --no-latency --dont-clean --force-resp3 --dont-pre-clean --verbose --dump-logs ${{github.event.inputs.test_args}}
       - name: sentinel tests
         if: true && !contains(github.event.inputs.skiptests, 'sentinel')
-        run: ./runtest-sentinel --failures-output test-failures/sentinel.json --log-req-res --dont-clean --force-resp3 ${{github.event.inputs.cluster_test_args}}
+        run: ./runtest-sentinel $([ -f .github/actions/upload-test-failures/action.yml ] && echo "--failures-output test-failures/sentinel.json") --log-req-res --dont-clean --force-resp3 ${{github.event.inputs.cluster_test_args}}
       - name: Install Python dependencies
         uses: py-actions/py-dependency-install@30aa0023464ed4b5b116bd9fbdab87acf01a484e # v4.1.0
         with:
@@ -2132,9 +2190,11 @@ jobs:
         run: ./utils/req-res-log-validator.py --verbose --fail-missing-reply-schemas ${{ (!contains(github.event.inputs.skiptests, 'valkey') && !contains(github.event.inputs.skiptests, 'module') && !contains(github.event.inputs.skiptests, 'sentinel') && !contains(github.event.inputs.skiptests, 'cluster')) && (inputs.test_args || github.event.inputs.test_args || '') == '' && (inputs.cluster_test_args || github.event.inputs.cluster_test_args || '') == '' && '--fail-commands-not-all-hit' || '' }}
       - name: Upload test failures
         if: always()
-        uses: ./.github/actions/upload-test-failures
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
-          job-name: ${{ github.job }}
+          name: test-failures-${{ github.job }}
+          path: test-failures/
+          if-no-files-found: ignore
   consolidate-test-failures:
     runs-on: ubuntu-latest
     if: |

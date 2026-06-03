@@ -242,8 +242,16 @@ auxFieldHandler auxFieldHandlers[] = {
     {"tls-port", auxTlsPortSetter, auxTlsPortGetter, auxTlsPortPresent},
 };
 
-int isValidAuxChar(int c) {
-    return isalnum(c) || (strchr("!#$%&()*+:;<>?@[]^{|}~", c) == NULL);
+static int isValidAuxChar(unsigned char c) {
+    /* Reject everything up through ',' (0x2C) inclusive: control characters
+     * (0x00-0x1F), space !"#$%&'()*+, (0x20-0x2C), and DEL (0x7F). */
+    if (c <= ',' || c == 0x7F) return 0;
+
+    /* Reject additional characters above 0x2C (comma) that are format-significant in
+     * nodes.conf or otherwise unsafe. */
+    static const char *invalid_charset = ";<=>?@[]^{|}~\\";
+
+    return strchr(invalid_charset, c) == NULL;
 }
 
 int isValidAuxString(char *s, unsigned int length) {

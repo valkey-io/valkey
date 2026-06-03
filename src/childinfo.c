@@ -38,6 +38,7 @@ typedef struct {
     double progress;
     size_t repl_output_bytes;
     childInfoType information_type; /* Type of information */
+    rdbObjectStats obj_stats;       /* Per-type object stats (RDB save). */
 } child_info_data;
 
 /* Open a child-parent channel used in order to move information about the
@@ -116,8 +117,24 @@ void sendChildInfoGeneric(childInfoType info_type, size_t keys, size_t repl_outp
     }
 }
 
+/* Send per-type RDB object statistics to the parent. Only invoked from the
+ * RDB save child process when RDBFLAGS_STAT_MEMORY is set. */
+void sendChildInfoRdbObjectStats(const rdbObjectStats *stats) {
+    if (server.child_info_pipe[1] == -1 || stats == NULL) return;
+
+    child_info_data data = {0};
+    data.information_type = CHILD_INFO_TYPE_RDB_OBJECT_STATS;
+    data.obj_stats = *stats;
+
+    ssize_t wlen = sizeof(data);
+    if (write(server.child_info_pipe[1], &data, wlen) != wlen) {
+        serverLog(LL_WARNING, "Child failed reporting RDB object stats to parent, exiting. %s", strerror(errno));
+        exitFromChild(1);
+    }
+}
+
 /* Update Child info. */
-void updateChildInfo(childInfoType information_type, size_t cow, monotime cow_updated, size_t keys, size_t repl_output_bytes, double progress) {
+void updateChildInfo(childInfoType information_type, size_t cow, monotime cow_updated, size_t keys, size_t repl_output_bytes, double progress, const rdbObjectStats *obj_stats) {
     if (cow > server.stat_current_cow_peak) server.stat_current_cow_peak = cow;
 
     if (information_type == CHILD_INFO_TYPE_CURRENT_INFO) {
@@ -135,6 +152,11 @@ void updateChildInfo(childInfoType information_type, size_t cow, monotime cow_up
         server.stat_slot_migration_cow_bytes = server.stat_current_cow_peak;
     } else if (information_type == CHILD_INFO_TYPE_REPL_OUTPUT_BYTES) {
         server.stat_net_repl_output_bytes += (long long)repl_output_bytes;
+    } else if (information_type == CHILD_INFO_TYPE_RDB_OBJECT_STATS) {
+        if (obj_stats) {
+            server.stat_rdb_last_object_stats = *obj_stats;
+            server.stat_rdb_last_object_stats_valid = 1;
+        }
     }
 }
 
@@ -142,7 +164,7 @@ void updateChildInfo(childInfoType information_type, size_t cow, monotime cow_up
  * if complete data read into the buffer,
  * data is stored into *buffer, and returns 1.
  * otherwise, the partial data is left in the buffer, waiting for the next read, and returns 0. */
-int readChildInfo(childInfoType *information_type, size_t *cow, monotime *cow_updated, size_t *keys, size_t *repl_output_bytes, double *progress) {
+int readChildInfo(childInfoType *information_type, size_t *cow, monotime *cow_updated, size_t *keys, size_t *repl_output_bytes, double *progress, rdbObjectStats *obj_stats) {
     /* We are using here a static buffer in combination with the server.child_info_nread to handle short reads */
     static child_info_data buffer;
     ssize_t wlen = sizeof(buffer);
@@ -164,6 +186,7 @@ int readChildInfo(childInfoType *information_type, size_t *cow, monotime *cow_up
         *keys = buffer.keys;
         *repl_output_bytes = buffer.repl_output_bytes;
         *progress = buffer.progress;
+        if (obj_stats) *obj_stats = buffer.obj_stats;
         return 1;
     } else {
         return 0;
@@ -180,9 +203,10 @@ void receiveChildInfo(void) {
     size_t repl_output_bytes;
     double progress;
     childInfoType information_type;
+    rdbObjectStats obj_stats;
 
     /* Drain the pipe and update child info so that we get the final message. */
-    while (readChildInfo(&information_type, &cow, &cow_updated, &keys, &repl_output_bytes, &progress)) {
-        updateChildInfo(information_type, cow, cow_updated, keys, repl_output_bytes, progress);
+    while (readChildInfo(&information_type, &cow, &cow_updated, &keys, &repl_output_bytes, &progress, &obj_stats)) {
+        updateChildInfo(information_type, cow, cow_updated, keys, repl_output_bytes, progress, &obj_stats);
     }
 }

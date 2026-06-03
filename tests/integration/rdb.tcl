@@ -588,4 +588,103 @@ start_server {} {
     }
 }
 
+start_server {overrides {save ""}} {
+    test {BGSAVE STAT_MEMORY logs per-type object stats} {
+        # Populate a few keys of different types so the summary contains
+        # non-zero counts for at least string/list/hash/set/zset.
+        r flushall
+        r set str:1 "hello"
+        r set str:2 "world"
+        r rpush list:1 a b c
+        r sadd set:1 a b c
+        r zadd zset:1 1 a 2 b 3 c
+        r hset hash:1 f1 v1 f2 v2
+
+        # Baseline: plain BGSAVE should not emit the summary line.
+        set loglines [count_log_lines 0]
+        r bgsave
+        wait_for_condition 50 100 {
+            [s rdb_bgsave_in_progress] == 0
+        } else {
+            fail "bgsave not done (baseline)"
+        }
+        wait_for_log_messages 0 {"*Background saving terminated with success*"} $loglines 50 100
+        verify_no_log_message 0 "*RDB object stats: total keys=*" $loglines
+
+        # BGSAVE STAT_MEMORY should emit the summary line.
+        set loglines [count_log_lines 0]
+        r bgsave stat_memory
+        wait_for_condition 50 100 {
+            [s rdb_bgsave_in_progress] == 0
+        } else {
+            fail "bgsave not done (stat_memory)"
+        }
+        set res [wait_for_log_messages 0 {"*RDB object stats: total keys=*"} $loglines 50 100]
+        set line [lindex $res 0]
+
+        # Total keys should match the number we wrote (6).
+        assert {[regexp {total keys=([0-9]+)} $line _ total]}
+        assert_equal 6 $total
+
+        # Each populated type should report a non-zero count. The format is
+        # "type=count/bytesB", e.g. "string=2/64B".
+        foreach t {string list set zset hash} {
+            assert {[regexp "$t=(\[0-9\]+)/" $line _ cnt]}
+            assert {$cnt > 0}
+        }
+    }
+}
+
+start_server {overrides {save ""}} {
+    test {BGSAVE STAT_MEMORY logs memory breakdown} {
+        # Populate some user data so kv.user / um.kvstore are non-zero.
+        r flushall
+        r set str:1 "hello"
+        r set str:2 "world"
+        r rpush list:1 a b c
+        r hset hash:1 f1 v1 f2 v2
+        # Set TTL on a key to populate the expiration kvstore.
+        r set ttl:1 "x"
+        r pexpire ttl:1 600000
+
+        # Baseline: plain BGSAVE should not emit the breakdown line.
+        set loglines [count_log_lines 0]
+        r bgsave
+        wait_for_condition 50 100 {
+            [s rdb_bgsave_in_progress] == 0
+        } else {
+            fail "bgsave not done (baseline)"
+        }
+        wait_for_log_messages 0 {"*Background saving terminated with success*"} $loglines 50 100
+        verify_no_log_message 0 "*RDB memory breakdown:*" $loglines
+
+        # BGSAVE STAT_MEMORY should emit the breakdown line.
+        set loglines [count_log_lines 0]
+        r bgsave stat_memory
+        wait_for_condition 50 100 {
+            [s rdb_bgsave_in_progress] == 0
+        } else {
+            fail "bgsave not done (stat_memory)"
+        }
+        set res [wait_for_log_messages 0 {"*RDB memory breakdown:*"} $loglines 50 100]
+        set line [lindex $res 0]
+
+        # Validate the structure of the line and that load-bearing categories
+        # are populated based on what we set up above.
+        assert {[regexp {kv\[user=([0-9]+)B expire=([0-9]+)B hash_meta=([0-9]+)B\]} \
+                 $line _ kv_user kv_expire kv_hash_meta]}
+        assert {[regexp {user_meta\[kvstore=([0-9]+)B clients=([0-9]+)B\]} \
+                 $line _ um_kvstore um_clients]}
+        assert {[regexp {sys\[aof_buf=([0-9]+)B repl_buf=([0-9]+)B repl_backlog=([0-9]+)B\]} \
+                 $line _ sys_aof sys_repl_buf sys_repl_backlog]}
+
+        # We wrote keys, so user-data robj bytes must be > 0.
+        assert {$kv_user > 0}
+        # We set a TTL, so the expiration kvstore must report > 0.
+        assert {$kv_expire > 0}
+        # The main keyspace kvstore overhead must be > 0.
+        assert {$um_kvstore > 0}
+    }
+}
+
 } ;# tags

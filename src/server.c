@@ -3026,6 +3026,8 @@ void initServer(void) {
     server.child_info_pipe[0] = -1;
     server.child_info_pipe[1] = -1;
     server.child_info_nread = 0;
+    memset(&server.stat_rdb_last_object_stats, 0, sizeof(server.stat_rdb_last_object_stats));
+    server.stat_rdb_last_object_stats_valid = 0;
     server.aof_buf = sdsempty();
     server.lastsave = time(NULL); /* At startup we consider the DB saved. */
     server.lastbgsave_try = 0;    /* At startup we never tried to BGSAVE. */

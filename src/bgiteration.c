@@ -13,9 +13,6 @@
 #include "mutexqueue.h"
 #include "server.h"
 
-// Just for the moment, until https://github.com/valkey-io/valkey/issues/3450 is resolved
-// clang-format off
-
 int getFlushCommandFlags(client *c, int *flags);                                                        // in db.c
 uint64_t dictObjHash(const void *key);                                                                  // in server.c
 int dictObjKeyCompare(const void *key1, const void *key2);                                              // in server.c
@@ -23,21 +20,14 @@ size_t objectComputeSize(robj *key, robj *o, size_t sample_size, int dbid);     
 robj *createStringObjectWithKeyAndExpire(const char *ptr, size_t len, const sds key, long long expire); // in object.c
 
 
-static bool receiveItemsBackFromOneIterator(bgIterator *it); // in bgiteration.c - forward declaration
-
-// ################  TEMP COMPILE HACKS   ###########################
-// Issue found.  server.db has changed from an array of db to an array of pointers to db (change all refs to server.db)
-// Issue: iterators (kvstore/hashtable) are not safe across event loop invocations.  Hashtable (kvstore?) needs to track and maintain safe iterators.
+static bool receiveItemsBackFromOneIterator(bgIterator *it);
 
 
-// Don't think there's any current need for this...
+// Future extendability 
 static bool ignoreKeyForSave(const_sds key) {
     UNUSED(key);
     return false;
 }
-
-//------- END OF COMPILE HACKS -------------------
-
 
 // Returns true if the cmd is a script command that may replicate.
 static bool isScriptCallWriteCmd(struct serverCommand *cmd) {
@@ -56,12 +46,16 @@ static bool isDeleteCmd(struct serverCommand *cmd) {
 }
 
 
+/* This utility utilizes the main thread and backgound threads for processing.  The API is split,
+ * with some of the functions intended for the main thread and others intended for the background
+ * clients.  This sanity check ensures that we maintain thread safety, calling the API as intended. */
 static bool onValkeyMainThread(void) {
     // Modules interact with the main thread using a mutex.  If a module owns the mutex, consider
     //  that equivalent to being on the main thread.
     bool inModule = (atomic_load_explicit(&server.module_gil_acquired, memory_order_relaxed) == 0);
     return (inModule || pthread_equal(server.main_thread_id, pthread_self()) != 0);
 }
+
 
 /* Parse a parameters robj, extracting a valid DBID.
  * Returns FALSE if DBID isn't valid.
@@ -173,6 +167,7 @@ static void resumeReshahForKvsHashtable(kvstore *kvs, int didx) {
     if (ht != NULL) hashtableResumeRehashing(ht);
 }
 
+
 /* DictType for SDS->ptr.  The SDS is referenced, no destructor. */
 static dictType sdsrefToPtrDictType = {
     .entryGetKey = dictEntryGetKey,
@@ -240,6 +235,7 @@ typedef enum {
     BGITERATION_TYPE_CLUSTERSLOT
 } bgIterationType;
 
+
 /* Flag indicates that a consistent iteration is required.  This is used to create a point-in-time
  * iteration.  The iteration client will see all keys AS THEY EXISTED at the time when the iterator
  * was created.
@@ -253,6 +249,7 @@ typedef enum {
  * to achieve a consistent view at the END of the iteration.
  * NOTE:  Replication events will be provided ordered and synchronized with any SWAPDB events. */
 #define BGITERATOR_FLAG_REPLICATION (1 << 1)
+
 
 /* Extensions to bgIteratorItemType.  These enumerations are used internally, and are not part of
  *  the published interface.  These allow for extensibility in the internal information-passing
@@ -270,6 +267,7 @@ typedef struct {
     bgIterator *iter;
 } bgIteratorItemExtClose;
 
+
 /* Used for dictEntryPtrDictType. This dict grows and shrinks constantly during the iteration.
  * There is no point to rehash it all the time. */
 static int neverShrink(size_t moreMem, double usedRatio) {
@@ -280,9 +278,9 @@ static int neverShrink(size_t moreMem, double usedRatio) {
 // A dictionary with a pointer (itself) as a key (the address pointed to is NOT referenced).
 //  Nothing is duplicated, this is a very fast dictionary, but potentially unsafe if the original
 //  items are deleted or moved.
-// WARNING:  Can't have active defrag running!  It might reallocate memory blocks, swapping their
-//           pointer values!  A check must be made in active defrag to ensure that no iteration is
-//           active.
+// WARNING:  This needs to maintain safety with things that may move the object.
+//   * In db.c, if the object is reallocatd, bgIteration_updateDbEntryPtr() is called.
+//   * In defrag.c, we don't defrag if there are multiple references to an object (and we incr the refcount)
 
 // Thomas Wang's 64-bit mix
 static uint64_t pointerHash(const void *key) {
@@ -2393,7 +2391,7 @@ void bgIteration_keyDelete(int dbid, const_sds key) {
         if (it->iteration_flags & BGITERATOR_FLAG_CONSISTENT
                 && ((bgIterationEntryMetadata *)objectGetMetadata(de))->iterator_epoch <= it->consistent_modification_id) {
             if (!it->keyset_iter->hasPassedItem(it->keyset_iter, key, dbid)
-                    && !(dictFind(it->early_iterate_entries, de) != NULL)) {
+                    && (dictFind(it->early_iterate_entries, de) == NULL)) {
                 addEarlyIterationKey(it, de, dbid); // (may also add to inUseEntries)
             }
         }

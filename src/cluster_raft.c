@@ -1549,13 +1549,16 @@ static void clusterRaftInit(void) {
 static void clusterRaftInitLast(void) {
     clusterListenerInit();
 
-    /* Mark myself as not yet in the raft log. Cleared when our own
-     * NODE_JOIN is applied. Prevents NODE_INFO with empty IP. */
-    myself->flags |= CLUSTER_NODE_MEET;
+    /* On fresh start (size == 0), mark myself as not yet in the raft log.
+     * Cleared when our own NODE_JOIN is applied. On restart, size is
+     * restored by postLoad so we skip this. */
+    if (server.cluster->size == 0) {
+        myself->flags |= CLUSTER_NODE_MEET;
+    }
 
-    /* Single-node cluster: become leader immediately. */
+    /* Fresh single-node cluster: become leader immediately. */
     clusterRaftState *rs = RAFT_STATE();
-    if (dictSize(server.cluster->nodes) == 1) {
+    if (dictSize(server.cluster->nodes) == 1 && server.cluster->size == 0) {
         rs->role = RAFT_ROLE_LEADER;
         rs->current_term = 1;
         memcpy(rs->leader, myself->name, CLUSTER_NAMELEN);
@@ -2341,6 +2344,14 @@ static void clusterRaftPostLoad(void) {
      * the leader will update it via AE. For now, ensure it's consistent. */
     if (rs->commit_index < rs->last_applied)
         rs->commit_index = rs->last_applied;
+    /* Restore cluster size from loaded nodes (NODE_JOIN already applied). */
+    dictIterator *di = dictGetSafeIterator(server.cluster->nodes);
+    dictEntry *de;
+    while ((de = dictNext(di)) != NULL) {
+        clusterNode *node = dictGetVal(de);
+        if (!(node->flags & CLUSTER_NODE_MEET)) server.cluster->size++;
+    }
+    dictReleaseIterator(di);
     /* If we're a replica, start replication. */
     if (server.cluster->myself &&
         nodeIsReplica(server.cluster->myself) &&

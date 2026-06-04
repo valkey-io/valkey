@@ -57,6 +57,17 @@ proc raft_recv {fd {timeout 5000}} {
     return $payload
 }
 
+proc get_cluster_info_field {client field} {
+    set info [$client CLUSTER INFO]
+    foreach line [split $info "\n"] {
+        set line [string trim $line "\r"]
+        if {[string match "${field}:*" $line]} {
+            return [lindex [split $line ":"] 1]
+        }
+    }
+    return ""
+}
+
 tags {tls:skip external:skip cluster singledb} {
 
 # Listen on a random port, accept one connection, close the listener.
@@ -334,6 +345,57 @@ test "Raft proto: leader sends REPL_OFFSETS after follower offset changes" {
         assert_equal 1 $found "leader should send REPL_OFFSETS with offset 5000"
 
         close $fd
+    }
+}
+
+test "Raft proto: leader steps down after losing quorum freshness" {
+    start_multiple_servers 3 {overrides {cluster-enabled yes cluster-protocol raft cluster-node-timeout 1000}} {
+        set r0 [srv 0 client]
+        set r1 [srv -1 client]
+        set r2 [srv -2 client]
+
+        $r0 CLUSTER MEET [srv -1 host] [srv -1 port]
+        $r0 CLUSTER MEET [srv -2 host] [srv -2 port]
+
+        wait_for_condition 50 100 {
+            [get_cluster_info_field $r0 cluster_size] == 3 &&
+            [get_cluster_info_field $r1 cluster_size] == 3 &&
+            [get_cluster_info_field $r2 cluster_size] == 3
+        } else {
+            fail "Cluster did not form: sizes=[get_cluster_info_field $r0 cluster_size],[get_cluster_info_field $r1 cluster_size],[get_cluster_info_field $r2 cluster_size]"
+        }
+
+        set leader_idx -999
+        set leader_client ""
+        foreach {idx client} [list 0 $r0 -1 $r1 -2 $r2] {
+            if {[get_cluster_info_field $client cluster_raft_role] eq "leader"} {
+                set leader_idx $idx
+                set leader_client $client
+                break
+            }
+        }
+        assert {$leader_idx != -999}
+
+        set paused [list]
+        foreach idx {0 -1 -2} {
+            if {$idx == $leader_idx} continue
+            pause_process [srv $idx pid]
+            lappend paused $idx
+        }
+
+        wait_for_condition 100 50 {
+            [get_cluster_info_field $leader_client cluster_raft_role] eq "follower" &&
+            [get_cluster_info_field $leader_client cluster_raft_leader] eq ""
+        } else {
+            foreach idx $paused {
+                resume_process [srv $idx pid]
+            }
+            fail "Leader did not step down after losing quorum freshness: role=[get_cluster_info_field $leader_client cluster_raft_role] leader=[get_cluster_info_field $leader_client cluster_raft_leader]"
+        }
+
+        foreach idx $paused {
+            resume_process [srv $idx pid]
+        }
     }
 }
 

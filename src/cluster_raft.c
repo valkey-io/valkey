@@ -143,6 +143,8 @@ typedef struct {
     mstime_t election_timeout;            /* Randomized timeout */
     mstime_t last_heartbeat;              /* Last time we heard from leader */
     mstime_t last_repl_offsets_broadcast; /* Last REPL_OFFSETS broadcast */
+    mstime_t lost_quorum_since;           /* When leader quorum freshness was lost */
+    mstime_t last_fresh_quorum_time;      /* Last AE_ACK-confirmed fresh quorum time */
     mstime_t joiner_since;                /* When we became a joiner (for timeout) */
 
     /* Leader identity */
@@ -319,12 +321,53 @@ static void clusterRaftRandomizeElectionTimeout(void) {
     RAFT_STATE()->election_timeout = base + (rand() % base);
 }
 
+static int clusterRaftQuorum(void) {
+    return server.cluster->size / 2 + 1;
+}
+
+static void clusterRaftStepDown(clusterRaftState *rs, mstime_t now, const char *reason) {
+    clusterRaftDeferPendingProposals();
+    rs->role = RAFT_ROLE_FOLLOWER;
+    rs->votes_received = 0;
+    rs->lost_quorum_since = 0;
+    rs->last_fresh_quorum_time = 0;
+    memset(rs->voted_for, 0, CLUSTER_NAMELEN);
+    memset(rs->leader, 0, CLUSTER_NAMELEN);
+    clusterRaftRandomizeElectionTimeout();
+    rs->last_heartbeat = now;
+    serverLog(LL_NOTICE, "Stepping down to follower: %s.", reason);
+}
+
+static int clusterRaftLeaderHasFreshQuorum(clusterRaftState *rs, mstime_t now) {
+    if (rs->role != RAFT_ROLE_LEADER || server.cluster->size <= 1) return 1;
+
+    int fresh = 1; /* Self */
+    int quorum = clusterRaftQuorum();
+    dictIterator *di = dictGetSafeIterator(server.cluster->nodes);
+    dictEntry *de;
+    while ((de = dictNext(di)) != NULL) {
+        clusterNode *node = dictGetVal(de);
+        if (node == myself) continue;
+        if (node->flags & CLUSTER_NODE_MEET) continue;
+        clusterNodeRaftData *rd = RAFT_NODE(node);
+        if (rd->last_ack_time > 0 &&
+            now - rd->last_ack_time <= server.cluster_node_timeout) {
+            fresh++;
+            if (fresh >= quorum) break;
+        }
+    }
+    dictReleaseIterator(di);
+    return fresh >= quorum;
+}
+
 /* Singleton leader steps down to joiner when joining another cluster. */
 static void clusterRaftSingletonStepDown(void) {
     clusterRaftState *rs = RAFT_STATE();
     clusterRaftDeferPendingProposals();
     rs->role = RAFT_ROLE_JOINER;
     rs->joiner_since = monotonicMs();
+    rs->lost_quorum_since = 0;
+    rs->last_fresh_quorum_time = 0;
     memset(rs->leader, 0, CLUSTER_NAMELEN);
     memset(rs->voted_for, 0, CLUSTER_NAMELEN);
     clusterRaftRandomizeElectionTimeout();
@@ -826,13 +869,8 @@ static void clusterRaftDeferPendingProposals(void) {
 /* Step down to follower if we see a higher term. Returns 1 if stepped down. */
 static int clusterRaftMaybeStepDown(clusterRaftState *rs, uint64_t term) {
     if (term > rs->current_term) {
-        clusterRaftDeferPendingProposals();
         rs->current_term = term;
-        rs->role = RAFT_ROLE_FOLLOWER;
-        memset(rs->voted_for, 0, CLUSTER_NAMELEN);
-        memset(rs->leader, 0, CLUSTER_NAMELEN);
-        clusterRaftRandomizeElectionTimeout();
-        rs->last_heartbeat = monotonicMs();
+        clusterRaftStepDown(rs, monotonicMs(), "observed higher term");
         return 1;
     }
     return 0;
@@ -972,6 +1010,7 @@ static void raftLogApply(raftLogEntry *e) {
             if (memcmp(argv[0], myself->name, CLUSTER_NAMELEN) == 0) {
                 if (rs->role == RAFT_ROLE_JOINER) {
                     rs->role = RAFT_ROLE_FOLLOWER;
+                    rs->lost_quorum_since = 0;
                     serverLog(LL_NOTICE, "Promoted from joiner to follower.");
 
                     /* Propose SLOT_CHANGE for slots assigned before joining
@@ -1230,6 +1269,8 @@ static int clusterRaftProcessAppendEntries(clusterLink *link, int argc, sds *arg
 
     /* Accept heartbeat. */
     if (rs->role != RAFT_ROLE_JOINER) rs->role = RAFT_ROLE_FOLLOWER;
+    rs->lost_quorum_since = 0;
+    rs->last_fresh_quorum_time = 0;
     rs->last_heartbeat = monotonicMs();
     memcpy(rs->leader, argv[1], CLUSTER_NAMELEN);
 
@@ -1305,6 +1346,10 @@ static int clusterRaftProcessAppendEntriesResponse(clusterLink *link, int argc, 
     if (!node) return 1;
     clusterNodeRaftData *rd = RAFT_NODE(node);
     rd->last_ack_time = monotonicMs();
+    if (clusterRaftLeaderHasFreshQuorum(rs, rd->last_ack_time)) {
+        rs->lost_quorum_since = 0;
+        rs->last_fresh_quorum_time = rd->last_ack_time;
+    }
     /* Keep node->repl_offset in sync for CLUSTER SLOTS/SHARDS on the leader. */
     long long prev_offset = node->repl_offset;
     node->repl_offset = follower_repl_offset;
@@ -1445,6 +1490,8 @@ static int clusterRaftProcessRequestVoteResponse(clusterLink *link, int argc, sd
             char old_leader[CLUSTER_NAMELEN];
             memcpy(old_leader, rs->leader, CLUSTER_NAMELEN);
             rs->role = RAFT_ROLE_LEADER;
+            rs->lost_quorum_since = 0;
+            rs->last_fresh_quorum_time = monotonicMs();
             memcpy(rs->leader, myself->name, CLUSTER_NAMELEN);
             serverLog(LL_NOTICE, "Elected as Raft leader (term %llu, %d votes).",
                       (unsigned long long)rs->current_term, rs->votes_received);
@@ -1500,6 +1547,8 @@ static void clusterRaftStartElection(void) {
     int quorum = server.cluster->size / 2 + 1;
     if (rs->votes_received >= quorum) {
         rs->role = RAFT_ROLE_LEADER;
+        rs->lost_quorum_since = 0;
+        rs->last_fresh_quorum_time = monotonicMs();
         memcpy(rs->leader, myself->name, CLUSTER_NAMELEN);
         serverLog(LL_NOTICE, "Elected as Raft leader (term %llu, %d votes).",
                   (unsigned long long)rs->current_term, rs->votes_received);
@@ -1537,6 +1586,8 @@ static void clusterRaftInitLast(void) {
     if (dictSize(server.cluster->nodes) == 1) {
         rs->role = RAFT_ROLE_LEADER;
         rs->current_term = 1;
+        rs->lost_quorum_since = 0;
+        rs->last_fresh_quorum_time = monotonicMs();
         memcpy(rs->leader, myself->name, CLUSTER_NAMELEN);
         serverLog(LL_NOTICE, "Single-node cluster: becoming Raft leader (term %llu).",
                   (unsigned long long)rs->current_term);
@@ -1566,6 +1617,10 @@ static void clusterRaftDetectFailures(mstime_t now) {
     dictReleaseIterator(di);
 
     if (overdue > total / 2) {
+        if (RAFT_STATE()->lost_quorum_since) {
+            /* Let quorum-loss step-down proceed without refreshing ack state. */
+            return;
+        }
         /* Majority overdue — reset all ack times. */
         di = dictGetSafeIterator(server.cluster->nodes);
         while ((de = dictNext(di)) != NULL) {
@@ -1703,6 +1758,8 @@ static void clusterRaftCron(void) {
         serverLog(LL_NOTICE, "Joiner timed out waiting to be added, reverting to singleton leader.");
         rs->role = RAFT_ROLE_LEADER;
         rs->current_term++;
+        rs->lost_quorum_since = 0;
+        rs->last_fresh_quorum_time = monotonicMs();
         memcpy(rs->voted_for, myself->name, CLUSTER_NAMELEN);
         memcpy(rs->leader, myself->name, CLUSTER_NAMELEN);
     }
@@ -1712,6 +1769,18 @@ static void clusterRaftCron(void) {
         if ((rs->role == RAFT_ROLE_FOLLOWER || rs->role == RAFT_ROLE_CANDIDATE) &&
             now - rs->last_heartbeat > rs->election_timeout) {
             clusterRaftStartElection();
+        }
+
+        if (rs->role == RAFT_ROLE_LEADER) {
+            if (!clusterRaftLeaderHasFreshQuorum(rs, now)) {
+                if (rs->lost_quorum_since == 0) {
+                    rs->lost_quorum_since = now;
+                    serverLog(LL_NOTICE, "Leader lost quorum freshness, waiting before step-down.");
+                } else if (rs->last_fresh_quorum_time > 0 &&
+                           now - rs->last_fresh_quorum_time > server.cluster_node_timeout) {
+                    clusterRaftStepDown(rs, now, "lost quorum freshness");
+                }
+            }
         }
 
         /* Expire stale pending proposals to prevent unbounded buildup

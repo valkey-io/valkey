@@ -44,9 +44,9 @@ static void IOJobQueue_cleanup(IOJobQueue *jq) {
 static int IOJobQueue_isFull(const IOJobQueue *jq) {
     debugServerAssertWithInfo(NULL, NULL, inMainThread());
     size_t current_head = atomic_load_explicit(&jq->head, memory_order_relaxed);
-    /* We don't use memory_order_acquire for the tail due to performance reasons,
-     * In the worst case we will just assume wrongly the buffer is full and the main thread will do the job by itself. */
-    size_t current_tail = atomic_load_explicit(&jq->tail, memory_order_relaxed);
+    /* Use memory_order_acquire for the tail to pair with the memory_order_release in IOJobQueue_removeJob.
+     * This ensures the data/handler NULL stores are visible before we check the slot in IOJobQueue_push. */
+    size_t current_tail = atomic_load_explicit(&jq->tail, memory_order_acquire);
     size_t next_head = (current_head + 1) % jq->size;
     return next_head == current_tail;
 }
@@ -102,16 +102,21 @@ static int IOJobQueue_isEmpty(const IOJobQueue *jq) {
 }
 
 /* Removes the next job from the given job queue by advancing the tail index.
- * Called by the IO thread.
+ * Called by the IO thread (consumer).
  * The caller must ensure that the queue is not empty before calling this function.
- * This function uses relaxed memory order, so the caller need to use an release memory fence
- * after calling this function to make sure the updated tail is visible to the producer (main thread). */
+ * Uses memory_order_release on the tail store to ensure the data/handler NULL stores
+ * are visible to the producer (main thread) before the tail advance. */
 static void IOJobQueue_removeJob(IOJobQueue *jq) {
     debugServerAssertWithInfo(NULL, NULL, !inMainThread());
     size_t current_tail = atomic_load_explicit(&jq->tail, memory_order_relaxed);
     jq->ring_buffer[current_tail].data = NULL;
     jq->ring_buffer[current_tail].handler = NULL;
-    atomic_store_explicit(&jq->tail, (current_tail + 1) % jq->size, memory_order_relaxed);
+    /* Use memory_order_release to ensure the NULL stores above are visible to the
+     * producer (main thread) before the tail advance. Without this, on weakly-ordered
+     * architectures (e.g. ARM/aarch64), the tail store could be reordered before the
+     * data/handler stores, causing the main thread to see a "free" slot with stale
+     * non-NULL data, potentially triggering crashes or undefined behavior. */
+    atomic_store_explicit(&jq->tail, (current_tail + 1) % jq->size, memory_order_release);
 }
 
 /* Retrieves the next job handler and data from the job queue without removal.
@@ -250,9 +255,10 @@ static void *IOThreadMain(void *myid) {
             /* Remove the job after it was processed */
             IOJobQueue_removeJob(jq);
         }
-        /* Memory barrier to make sure the main thread sees the updated tail index.
-         * We do it once per loop and not per tail-update for optimization reasons.
-         * As the main-thread main concern is to check if the queue is empty, it's enough to do it once at the end. */
+        /* Note: IOJobQueue_removeJob uses memory_order_release on the tail store,
+         * ensuring visibility of each slot's cleared data before the tail advance.
+         * This additional fence ensures the main thread's IOJobQueue_isEmpty sees
+         * the final tail value promptly when spinning in drainIOThreadsQueue. */
         atomic_thread_fence(memory_order_release);
     }
     freeSharedQueryBuf();

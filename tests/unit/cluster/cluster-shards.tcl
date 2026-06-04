@@ -285,6 +285,7 @@ test "CLUSTER MYSHARDID reports same shard id after shard restart" {
     set node_ids {}
     for {set i 0} {$i < 8} {incr i 4} {
         dict set node_ids $i [R $i cluster myshardid]
+        R $i cluster saveconfig
         pause_process [srv [expr -1*$i] pid]
     }
     for {set i 0} {$i < 8} {incr i 4} {
@@ -300,6 +301,9 @@ test "CLUSTER MYSHARDID reports same shard id after cluster restart" {
     set node_ids {}
     for {set i 0} {$i < 8} {incr i} {
         dict set node_ids $i [R $i cluster myshardid]
+    }
+    for {set i 0} {$i < 8} {incr i} {
+        R $i cluster saveconfig
     }
     for {set i 0} {$i < 8} {incr i} {
         pause_process [srv [expr -1*$i] pid]

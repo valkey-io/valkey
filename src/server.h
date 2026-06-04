@@ -1863,6 +1863,7 @@ struct valkeyServer {
     long long stat_numcommands;                    /* Number of processed commands */
     long long stat_numconnections;                 /* Number of connections received */
     long long stat_expiredkeys;                    /* Number of expired keys */
+    long long stat_tunnel_sessions;                /* Number of tunnel sessions */
     long long stat_expiredfields;                  /* Number of expired hash fields */
     double stat_expired_keys_stale_perc;           /* Percentage of keys probably expired */
     double stat_expired_keys_with_vola_stale_perc; /* Percentage of keys probably expired */
@@ -2376,6 +2377,13 @@ struct valkeyServer {
     long reply_buffer_peak_reset_time;       /* The amount of time (in milliseconds) to wait between reply buffer peak resets */
     int reply_buffer_resizing_enabled;       /* Is reply buffer resizing enabled (1 by default) */
     sds availability_zone;                   /* When run in a cloud environment we can configure the availability zone it is running in */
+    int enable_tunneling;            /* Boolean flag, 0 to enable tunneling */
+    list *tunnels_to_close;
+    list *active_tunnel_sessions;
+    char *primary_endpoint_ip;
+    struct sockaddr_storage *primary_endpoint_sa;
+    int tunnel_timeout;                 /* Duration in seconds to keep tunneling active after failover. */
+    mstime_t tunnel_activation_time;    /* Timestamp (ms) when tunneling was activated. 0 if inactive. */
     /* Local environment */
     char *locale_collate;
     char *debug_context; /* A free-form string that has no impact on server except being included in a crash report. */
@@ -3447,6 +3455,7 @@ int processCommand(client *c);
 int processPendingCommandAndInputBuffer(client *c);
 int processCommandAndResetClient(client *c);
 void setupSignalHandlers(void);
+struct sockaddr_storage *createSockaddrFromIP(const char *ipstr);
 int createSocketAcceptHandler(connListener *sfd, aeFileProc *accept_handler);
 connListener *listenerByType(int type);
 int changeListener(connListener *listener);

@@ -46,6 +46,7 @@
 #include <string.h>
 #include <locale.h>
 #include <ctype.h>
+#include "tunnel.h"
 
 /*-----------------------------------------------------------------------------
  * Config file name-value maps.
@@ -3266,6 +3267,39 @@ static int isValidDbHashSeed(sds val, const char **err) {
     return 1;
 }
 
+static int onTunnelFailoverConfigChange(const char **err) {
+    UNUSED(err);
+
+    if (!server.enable_tunneling) {
+        serverLog(LL_NOTICE, "Tunneling disabled. Aborting all tunnel sessions.");
+        abortAllTunnelSessions();
+    }
+
+    return 1;
+}
+
+static int onPrimaryEndpointChange(const char **err) {
+    if (server.primary_endpoint_sa != NULL) {
+        zfree(server.primary_endpoint_sa);
+        server.primary_endpoint_sa = NULL;
+    }
+
+    if (server.primary_endpoint_ip == NULL) {
+        return 1;
+    }
+
+    server.primary_endpoint_sa = createSockaddrFromIP(server.primary_endpoint_ip);
+
+    if (server.primary_endpoint_sa == NULL) {
+        if (err) *err = "Invalid IP address for 'primary-endpoint-ip'";
+        return 0;
+    }
+
+    abortAllTunnelSessions();
+
+    return 1;
+}
+
 standardConfig static_configs[] = {
     /* Bool configs */
     createBoolConfig("rdbchecksum", NULL, IMMUTABLE_CONFIG, server.rdb_checksum, 1, NULL, NULL),
@@ -3489,6 +3523,9 @@ standardConfig static_configs[] = {
     createTimeTConfig("repl-backlog-ttl", NULL, MODIFIABLE_CONFIG, 0, LONG_MAX, server.repl_backlog_time_limit, 60 * 60, INTEGER_CONFIG, NULL, NULL), /* Default: 1 hour */
     createOffTConfig("auto-aof-rewrite-min-size", NULL, MODIFIABLE_CONFIG, 0, LLONG_MAX, server.aof_rewrite_min_size, 64 * 1024 * 1024, MEMORY_CONFIG, NULL, NULL),
     createOffTConfig("loading-process-events-interval-bytes", NULL, MODIFIABLE_CONFIG | HIDDEN_CONFIG, 1024, INT_MAX, server.loading_process_events_interval_bytes, 1024 * 1024 * 2, INTEGER_CONFIG, NULL, NULL),
+    createBoolConfig("enable-tunneling", NULL, MODIFIABLE_CONFIG, server.enable_tunneling, 1, NULL, onTunnelFailoverConfigChange),
+    createStringConfig("primary-endpoint-ip", NULL, VOLATILE_CONFIG | MODIFIABLE_CONFIG, EMPTY_STRING_IS_NULL, server.primary_endpoint_ip, NULL, NULL, onPrimaryEndpointChange),
+    createIntConfig("tunnel-timeout", NULL, MODIFIABLE_CONFIG, 0, 600, server.tunnel_timeout, 30, INTEGER_CONFIG, NULL, NULL),
 
     /* Tls configs */
     createIntConfig("tls-port", NULL, MODIFIABLE_CONFIG, 0, 65535, server.tls_port, 0, INTEGER_CONFIG, NULL, applyTLSPort), /* TCP port. */

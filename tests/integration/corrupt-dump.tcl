@@ -36,6 +36,22 @@ test {corrupt payload: hash with valid zip list header, invalid entry len} {
     }
 }
 
+test {corrupt payload: zipmap value length integer overflow} {
+    # A zipmap value length of 0xFFFFFFFF with a free byte of 1 makes the
+    # internal 'l + e' sum wrap to 0 in 32-bit arithmetic. Before the fix the
+    # validator advanced its cursor by the wrapped value and wrongly accepted
+    # the payload, which leads to out-of-bounds access on 32-bit builds.
+    start_server [list overrides [list loglevel verbose use-exit-on-panic yes crash-memcheck-enabled no] ] {
+        r debug set-skip-checksum-validation 1
+        catch {
+            r restore key 0 "\x09\x0c\x01\x03\x66\x6f\x6f\xfe\xff\xff\xff\xff\x01\xff\x0b\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+        } err
+        assert_match "*Bad data format*" $err
+        verify_log_message 0 "*Zipmap integrity check failed*" 0
+        assert_equal [r ping] "PONG"
+    }
+}
+
 test {corrupt payload: invalid zlbytes header} {
     start_server [list overrides [list loglevel verbose use-exit-on-panic yes crash-memcheck-enabled no] ] {
         catch {

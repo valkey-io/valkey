@@ -2954,6 +2954,7 @@ void resetServerStats(void) {
     server.stat_total_forks = 0;
     server.stat_rejected_conn = 0;
     server.stat_rejected_priority_conn = 0;
+    server.stat_total_deferred_pipeline_clients = 0;
     server.stat_sync_full = 0;
     server.stat_sync_partial_ok = 0;
     server.stat_sync_partial_err = 0;
@@ -3107,6 +3108,7 @@ void initServer(void) {
     server.paused_actions = 0;
     memset(server.client_pause_per_purpose, 0, sizeof(server.client_pause_per_purpose));
     server.postponed_clients = listCreate();
+    server.deferred_pipeline_clients = listCreate();
     server.events_processed_while_blocked = 0;
     server.system_memory_size = zmalloc_get_memory_size();
     server.blocked_last_cron = 0;
@@ -6626,6 +6628,7 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                 "client_recent_max_input_buffer:%zu\r\n", maxin,
                 "client_recent_max_output_buffer:%zu\r\n", maxout,
                 "blocked_clients:%d\r\n", server.blocked_clients,
+                "deferred_pipeline_clients:%lu\r\n", listLength(server.deferred_pipeline_clients),
                 "tracking_clients:%d\r\n", server.tracking_clients,
                 "pubsub_clients:%d\r\n", server.pubsub_clients,
                 "watching_clients:%d\r\n", server.watching_clients,
@@ -6878,6 +6881,7 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                 "instantaneous_output_repl_kbps:%.2f\r\n", (float)getInstantaneousMetric(STATS_METRIC_NET_OUTPUT_REPLICATION) / 1024,
                 "rejected_connections:%lld\r\n", server.stat_rejected_conn,
                 "rejected_priority_connections:%lld\r\n", server.stat_rejected_priority_conn,
+                "total_deferred_pipeline_clients:%lld\r\n", server.stat_total_deferred_pipeline_clients,
                 "sync_full:%lld\r\n", server.stat_sync_full,
                 "sync_partial_ok:%lld\r\n", server.stat_sync_partial_ok,
                 "sync_partial_err:%lld\r\n", server.stat_sync_partial_err,

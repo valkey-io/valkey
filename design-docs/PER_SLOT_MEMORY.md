@@ -150,11 +150,30 @@ returns false immediately. No function calls, no branches taken.
   cumulative counter. `CONFIG RESETSTAT` preserves it.
 - Only the cumulative metrics (cpu_usec, network_bytes_in/out) are reset.
 
-### Slot ownership changes (CLUSTER ADDSLOTS / DELSLOTS)
+### Slot ownership changes (CLUSTER ADDSLOTS / DELSLOTS, slot migration)
 
-- `clusterSlotStatReset(slot)` zeroes the entire `slotStat` struct including
-  `data_bytes`. This is correct because keys migrate with the slot — the new
-  owner will rebuild the counters as keys arrive via RESTORE/MIGRATE.
+`data_bytes` is a **gauge** (it reflects the data currently in the slot), unlike
+the other slot stats, which are **cumulative counters**. The ownership-change
+bookkeeping clears all of a slot's stats in one blanket step. That is correct
+for the cumulative counters — a new owner should start its tally fresh — but it
+must **not** apply to `data_bytes`:
+
+- The gauge stays accurate on its own. It rises as keys arrive (RESTORE /
+  MIGRATE / import) and falls as keys leave (deletion / expiry), all through
+  the same add/delete hooks. Nothing about an ownership change adds or removes
+  keys, so the gauge should be left untouched.
+- Zeroing it on an ownership change desynchronizes it from the keys that are
+  actually present. This is especially visible with atomic slot migration,
+  where the keys are imported **first** and ownership is claimed **after** — so
+  the reset would wipe a count that was already correct.
+- Worse, once the gauge has been forced to zero, the later deletion of those
+  still-present keys subtracts from zero and **underflows** the unsigned
+  counter (it wraps to a huge value) instead of settling back down.
+
+**Resolution:** exclude `data_bytes` from the ownership-change reset; let the
+key add/delete hooks be its only source of truth. Slot-key removal already runs
+through the normal delete path, so losing a slot drains the gauge correctly
+without any explicit reset.
 
 ### Module API (RM_StreamAppendItem, RM_StringSet, RM_HashSet, etc.)
 

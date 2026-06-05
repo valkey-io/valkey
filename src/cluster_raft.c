@@ -923,18 +923,9 @@ static int clusterRaftPreValidateEpoch(int type, sds data) {
 
     int ok = 1;
     switch (type) {
-    case RAFT_ENTRY_FAILOVER: {
-        /* Format: <replica-id> <primary-id> <shard-id> <shard-epoch> */
-        if (argc < 4) {
-            ok = 0;
-        } else {
-            uint64_t epoch = strtoull(argv[3], NULL, 10);
-            ok = isShardEpochCurrent(argv[2], epoch);
-        }
-        break;
-    }
+    case RAFT_ENTRY_FAILOVER:
     case RAFT_ENTRY_SET_REPLICA_OF: {
-        /* Format: <replica-id> <primary-id-or-dash> <shard-id> <epoch> */
+        /* Format: <..ids..> <shard-id> <shard-epoch> (argv[2] and argv[3]) */
         if (argc < 4) {
             ok = 0;
         } else {
@@ -1177,13 +1168,6 @@ static int clusterCheckAndBumpSlotChangeEpochs(const char *source_shard_id,
         return 0;
     }
 
-    /* Both passed — bump both. */
-    if (source_shard_id) {
-        clusterSetShardEpoch(source_shard_id, src_current == 0 ? 1 : src_current + 1);
-    }
-    if (target_shard_id) {
-        clusterSetShardEpoch(target_shard_id, tgt_current == 0 ? 1 : tgt_current + 1);
-    }
     return 1;
 }
 
@@ -1421,7 +1405,8 @@ static void raftLogApply(raftLogEntry *e) {
                 sdsclear(node->announce_client_ipv6);
                 sdsclear(node->availability_zone);
                 clusterNodeParseAddressString(node, argv[1]);
-                /* Apply self-set flags. */
+                /* Apply self-set flags. TODO: split on comma and compare
+                 * each part individually when more flags are added. */
                 if (argc >= 3) {
                     node->flags &= ~CLUSTER_NODE_NOFAILOVER;
                     if (strstr(argv[2], "nofailover")) {

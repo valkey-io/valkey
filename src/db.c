@@ -28,6 +28,7 @@
  */
 
 #include "server.h"
+#include "listpack.h"
 #include "cluster.h"
 #include "cluster_migrateslots.h"
 #include "latency.h"
@@ -1331,7 +1332,8 @@ void scanGenericCommandWithOptions(client *c, robj *o, unsigned long long cursor
         setTypeReleaseIterator(si);
         cursor = 0;
     } else if ((o->type == OBJ_HASH || o->type == OBJ_ZSET) && o->encoding == OBJ_ENCODING_LISTPACK) {
-        unsigned char *p = lpFirst(objectGetVal(o));
+        unsigned char *zl = objectGetVal(o);
+        unsigned char *p = lpFirst(zl);
         unsigned char *str;
         int64_t len;
         unsigned char intbuf[LP_INTBUF_SIZE];
@@ -1340,9 +1342,21 @@ void scanGenericCommandWithOptions(client *c, robj *o, unsigned long long cursor
             str = lpGet(p, &len, intbuf);
             /* point to the value */
             p = lpNext(objectGetVal(o), p);
+            unsigned char *vptr = p;
+            /* Check if this f/v pair is expired */
+            unsigned char *next = lpNext(zl, vptr);
+            int is_expired = 0;
+            if (next && lpIsMetadata(next)) {
+                long long expiry = lpGetMetadataValue(next);
+                if (expiry != EXPIRY_NONE && expiry <= commandTimeSnapshot()) {
+                    is_expired = 1;
+                }
+                p = lpNext(zl, next);
+            } else {
+                p = next;
+            }
+            if (is_expired) continue;
             if (opts->use_pattern && !stringmatchlen(opts->pat, opts->patlen, (char *)str, len, 0)) {
-                /* jump to the next key/val pair */
-                p = lpNext(objectGetVal(o), p);
                 continue;
             }
             /* add key object */
@@ -1350,11 +1364,10 @@ void scanGenericCommandWithOptions(client *c, robj *o, unsigned long long cursor
             addScanDataItem(&result, (const char *)item, sdslen(item));
             /* add value object */
             if (!opts->only_keys) {
-                str = lpGet(p, &len, intbuf);
+                str = lpGet(vptr, &len, intbuf);
                 item = sdsnewlen(str, len);
                 addScanDataItem(&result, (const char *)item, sdslen(item));
             }
-            p = lpNext(objectGetVal(o), p);
         }
         cursor = 0;
     } else {

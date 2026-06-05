@@ -38,6 +38,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <stdbool.h>
 
 #include "listpack.h"
 #include "listpack_malloc.h"
@@ -47,7 +48,6 @@
 
 #define LP_HDR_SIZE 6 /* 32 bit total len + 16 bit number of elements. */
 #define LP_HDR_NUMELE_UNKNOWN UINT16_MAX
-#define LP_MAX_INT_ENCODING_LEN 9
 #define LP_MAX_BACKLEN_SIZE 5
 #define LP_ENCODING_INT 0
 #define LP_ENCODING_STRING 1
@@ -94,15 +94,16 @@
 #define LP_ENCODING_32BIT_STR_MASK 0xFF
 #define LP_ENCODING_IS_32BIT_STR(byte) (((byte) & LP_ENCODING_32BIT_STR_MASK) == LP_ENCODING_32BIT_STR)
 
+#define LP_ENCODING_TAGGED 0xF5
+#define LP_ENCODING_TAGGED_MASK 0xFF
+#define LP_ENCODING_IS_TAGGED(byte) (((byte) & LP_ENCODING_TAGGED_MASK) == LP_ENCODING_TAGGED)
+
 #define LP_EOF 0xFF
 
 #define LP_ENCODING_6BIT_STR_LEN(p) ((p)[0] & 0x3F)
 #define LP_ENCODING_12BIT_STR_LEN(p) ((((p)[0] & 0xF) << 8) | (p)[1])
 #define LP_ENCODING_32BIT_STR_LEN(p) \
     (((uint32_t)(p)[1] << 0) | ((uint32_t)(p)[2] << 8) | ((uint32_t)(p)[3] << 16) | ((uint32_t)(p)[4] << 24))
-
-#define lpGetTotalBytes(p) \
-    (((uint32_t)(p)[0] << 0) | ((uint32_t)(p)[1] << 8) | ((uint32_t)(p)[2] << 16) | ((uint32_t)(p)[3] << 24))
 
 #define lpGetNumElements(p) (((uint32_t)(p)[4] << 0) | ((uint32_t)(p)[5] << 8))
 #define lpSetTotalBytes(p, v)        \
@@ -164,6 +165,15 @@ void lpFree(unsigned char *lp) {
     lp_free(lp);
 }
 
+/* Get value stored in the metadata */
+long long lpGetMetadataValue(unsigned char *p) {
+    unsigned char *inner = p + 1;
+    unsigned int slen;
+    long long value = 0;
+    lpGetValue(inner, &slen, &value);
+    return value;
+}
+
 /* Same as lpFree, but useful for when you are passing the listpack
  * into a generic free function that expects (void *) */
 void lpFreeVoid(void *lp) {
@@ -181,7 +191,7 @@ unsigned char *lpShrinkToFit(unsigned char *lp) {
 }
 
 /* Stores the integer encoded representation of 'v' in the 'intenc' buffer. */
-static inline void lpEncodeIntegerGetType(int64_t v, unsigned char *intenc, uint64_t *enclen) {
+void lpEncodeIntegerGetType(int64_t v, unsigned char *intenc, uint64_t *enclen) {
     if (v >= 0 && v <= 127) {
         /* Single byte 0-127 integer. */
         intenc[0] = v;
@@ -355,6 +365,12 @@ static inline uint32_t lpCurrentEncodedSizeUnsafe(unsigned char *p) {
     if (LP_ENCODING_IS_64BIT_INT(p[0])) return 9;
     if (LP_ENCODING_IS_12BIT_STR(p[0])) return 2 + LP_ENCODING_12BIT_STR_LEN(p);
     if (LP_ENCODING_IS_32BIT_STR(p[0])) return 5 + LP_ENCODING_32BIT_STR_LEN(p);
+    if (LP_ENCODING_IS_TAGGED(p[0])) {
+        unsigned char *inner = p + 1;
+        uint32_t inner_size = lpCurrentEncodedSizeUnsafe(inner);
+        return inner_size + 1; /* tagged byte + inner element */
+    }
+
     if (p[0] == LP_EOF) return 1;
     return 0;
 }
@@ -373,6 +389,7 @@ static inline uint32_t lpCurrentEncodedSizeBytes(unsigned char *p) {
     if (LP_ENCODING_IS_64BIT_INT(p[0])) return 1;
     if (LP_ENCODING_IS_12BIT_STR(p[0])) return 2;
     if (LP_ENCODING_IS_32BIT_STR(p[0])) return 5;
+    if (LP_ENCODING_IS_TAGGED(p[0])) return 1;
     if (p[0] == LP_EOF) return 1;
     return 0;
 }
@@ -458,6 +475,12 @@ unsigned long lpLength(unsigned char *lp) {
      * set it. */
     if (count < LP_HDR_NUMELE_UNKNOWN) lpSetNumElements(lp, count);
     return count;
+}
+
+/* Returns 1 if the element at 'p' is a metadata tagged element */
+int lpIsMetadata(unsigned char *p) {
+    if (p[0] == LP_EOF) return 0;
+    return LP_ENCODING_IS_TAGGED(p[0]);
 }
 
 /* Return the listpack element pointed by 'p'.
@@ -609,6 +632,23 @@ unsigned char *lpFind(unsigned char *lp, unsigned char *p, unsigned char *s, uin
 
     assert(p);
     while (p) {
+        /* Check if we are reading a metadata entry if so skip it */
+        if (lpIsMetadata(p)) {
+            p = lpSkip(p);
+            if (unlikely(p[0] == LP_EOF)) {
+                /* EOF must only appear at the end of a listpack. */
+                assert(p + 1 == lp + lp_bytes);
+                break;
+            }
+            /* The next call to lpGetWithSize could read at most 8 bytes past `p`
+             * We use the slower validation call only when necessary. */
+            if (p + 8 >= lp + lp_bytes)
+                lpAssertValidEntry(lp, lp_bytes, p);
+            else
+                assert(p >= lp + LP_HDR_SIZE && p < lp + lp_bytes);
+            continue;
+        }
+
         if (skipcnt == 0) {
             value = lpGetWithSize(p, &ll, NULL, &entry_size);
             if (value) {
@@ -696,7 +736,8 @@ unsigned char *lpInsert(unsigned char *lp,
                         uint32_t size,
                         unsigned char *p,
                         int where,
-                        unsigned char **newp) {
+                        unsigned char **newp,
+                        bool tagged) {
     unsigned char intenc[LP_MAX_INT_ENCODING_LEN];
     unsigned char backlen[LP_MAX_BACKLEN_SIZE];
 
@@ -723,7 +764,10 @@ unsigned char *lpInsert(unsigned char *lp,
     unsigned long poff = p - lp;
 
     int enctype;
-    if (elestr) {
+    if (tagged) {
+        enctype = LP_ENCODING_TAGGED;
+        enclen = size + 1; /* size is the encoded value +1 for the prefixed tag */
+    } else if (elestr) {
         /* Calling lpEncodeGetType() results into the encoded version of the
          * element to be stored into 'intenc' in case it is representable as
          * an integer: in that case, the function returns LP_ENCODING_INT.
@@ -795,6 +839,13 @@ unsigned char *lpInsert(unsigned char *lp,
     if (!del_ele) {
         if (enctype == LP_ENCODING_INT) {
             memcpy(dst, eleint, enclen);
+        } else if (enctype == LP_ENCODING_TAGGED) {
+            dst[0] = LP_ENCODING_TAGGED;
+            if (eleint) {
+                memcpy(dst + 1, eleint, size);
+            } else if (elestr) {
+                memcpy(dst + 1, elestr, size);
+            }
         } else if (elestr) {
             lpEncodeString(dst, elestr, size);
         } else {
@@ -839,10 +890,22 @@ unsigned char *lpInsert(unsigned char *lp,
     return lp;
 }
 
+/* Just a wrapper for lpInsert() to insert a provided element with the metadata tag */
+unsigned char *
+lpInsertMetadata(unsigned char *lp,
+                 unsigned char *elestr,
+                 unsigned char *eleint,
+                 uint32_t size,
+                 unsigned char *p,
+                 int where,
+                 unsigned char **newp) {
+    return lpInsert(lp, elestr, eleint, size, p, where, newp, true);
+}
+
 /* This is just a wrapper for lpInsert() to directly use a string. */
 unsigned char *
 lpInsertString(unsigned char *lp, unsigned char *s, uint32_t slen, unsigned char *p, int where, unsigned char **newp) {
-    return lpInsert(lp, s, NULL, slen, p, where, newp);
+    return lpInsert(lp, s, NULL, slen, p, where, newp, false);
 }
 
 /* This is just a wrapper for lpInsert() to directly use a 64 bit integer
@@ -852,14 +915,14 @@ unsigned char *lpInsertInteger(unsigned char *lp, long long lval, unsigned char 
     unsigned char intenc[LP_MAX_INT_ENCODING_LEN];
 
     lpEncodeIntegerGetType(lval, intenc, &enclen);
-    return lpInsert(lp, NULL, intenc, enclen, p, where, newp);
+    return lpInsert(lp, NULL, intenc, enclen, p, where, newp, false);
 }
 
 /* Append the specified element 's' of length 'slen' at the head of the listpack. */
 unsigned char *lpPrepend(unsigned char *lp, unsigned char *s, uint32_t slen) {
     unsigned char *p = lpFirst(lp);
     if (!p) return lpAppend(lp, s, slen);
-    return lpInsert(lp, s, NULL, slen, p, LP_BEFORE, NULL);
+    return lpInsert(lp, s, NULL, slen, p, LP_BEFORE, NULL, false);
 }
 
 /* Append the specified integer element 'lval' at the head of the listpack. */
@@ -875,7 +938,7 @@ unsigned char *lpPrependInteger(unsigned char *lp, long long lval) {
 unsigned char *lpAppend(unsigned char *lp, unsigned char *ele, uint32_t size) {
     uint64_t listpack_bytes = lpGetTotalBytes(lp);
     unsigned char *eofptr = lp + listpack_bytes - 1;
-    return lpInsert(lp, ele, NULL, size, eofptr, LP_BEFORE, NULL);
+    return lpInsert(lp, ele, NULL, size, eofptr, LP_BEFORE, NULL, false);
 }
 
 /* Append the specified integer element 'lval' at the end of the listpack. */
@@ -889,7 +952,7 @@ unsigned char *lpAppendInteger(unsigned char *lp, long long lval) {
  * the current element. The function returns the new listpack as return
  * value, and also updates the current cursor by updating '*p'. */
 unsigned char *lpReplace(unsigned char *lp, unsigned char **p, unsigned char *s, uint32_t slen) {
-    return lpInsert(lp, s, NULL, slen, *p, LP_REPLACE, p);
+    return lpInsert(lp, s, NULL, slen, *p, LP_REPLACE, p, false);
 }
 
 /* This is just a wrapper for lpInsertInteger() to directly use a 64 bit integer
@@ -905,7 +968,7 @@ unsigned char *lpReplaceInteger(unsigned char *lp, unsigned char **p, long long 
  * deleted one) is returned by reference. If the deleted element was the
  * last one, '*newp' is set to NULL. */
 unsigned char *lpDelete(unsigned char *lp, unsigned char *p, unsigned char **newp) {
-    return lpInsert(lp, NULL, NULL, 0, p, LP_REPLACE, newp);
+    return lpInsert(lp, NULL, NULL, 0, p, LP_REPLACE, newp, false);
 }
 
 /* Delete a range of entries from the listpack start with the element pointed by 'p'. */

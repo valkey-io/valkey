@@ -174,6 +174,51 @@ static int lpValidation(unsigned char *p, unsigned int head_count, void *userdat
     return ret;
 }
 
+static unsigned char *createListWithMetadata(void) {
+    unsigned char *lp = lpNew(0);
+
+    lp = lpAppend(lp, (unsigned char *)"field1", 6);
+    lp = lpAppend(lp, (unsigned char *)"value1", 6);
+
+    /* field 1 expiry */
+    unsigned char intenc[LP_MAX_INT_ENCODING_LEN];
+    uint64_t enclen;
+    lpEncodeIntegerGetType(1234567890, intenc, &enclen);
+    unsigned char *eofptr = lp + lpGetTotalBytes(lp) - 1;
+    lp = lpInsertMetadata(lp, NULL, intenc, enclen, eofptr, LP_BEFORE, NULL);
+
+    lp = lpAppend(lp, (unsigned char *)"field2", 6);
+    lp = lpAppend(lp, (unsigned char *)"value2", 6);
+
+    return lp;
+}
+
+static unsigned char *createListWithAllMetadata(void) {
+    unsigned char *lp = lpNew(0);
+
+    lp = lpAppend(lp, (unsigned char *)"field1", 6);
+    lp = lpAppend(lp, (unsigned char *)"value1", 6);
+
+    /* field 1 expiry */
+    unsigned char intenc[LP_MAX_INT_ENCODING_LEN];
+    uint64_t enclen;
+    lpEncodeIntegerGetType(1234567890, intenc, &enclen);
+    unsigned char *eofptr = lp + lpGetTotalBytes(lp) - 1;
+    lp = lpInsertMetadata(lp, NULL, intenc, enclen, eofptr, LP_BEFORE, NULL);
+
+    lp = lpAppend(lp, (unsigned char *)"field2", 6);
+    lp = lpAppend(lp, (unsigned char *)"value2", 6);
+
+    /* field 2 expiry */
+    unsigned char intenc2[LP_MAX_INT_ENCODING_LEN];
+    uint64_t enclen2;
+    lpEncodeIntegerGetType(1234567890, intenc2, &enclen2);
+    unsigned char *eofptr2 = lp + lpGetTotalBytes(lp) - 1;
+    lp = lpInsertMetadata(lp, NULL, intenc2, enclen2, eofptr2, LP_BEFORE, NULL);
+
+    return lp;
+}
+
 class ListpackTest : public ::testing::Test {
   protected:
     void SetUp() override {
@@ -937,6 +982,30 @@ TEST_F(ListpackTest, listpackLpFind) {
                 (unsigned char *)("hello"), 5);
     verifyEntry(lpFind(lp, lpFirst(lp), (unsigned char *)("1024"), 4, 0),
                 (unsigned char *)("1024"), 4);
+    lpFree(lp);
+}
+
+TEST_F(ListpackTest, listpackLpFindWithMetadata) {
+    /* test lpFind with metadata fields */
+    unsigned char *lp;
+
+    lp = createListWithMetadata();
+
+    ASSERT_NE(lpFind(lp, lpFirst(lp), (unsigned char *)"field1", 6, 1), nullptr);
+    ASSERT_NE(lpFind(lp, lpFirst(lp), (unsigned char *)"field2", 6, 1), nullptr);
+    ASSERT_EQ(lpFind(lp, lpFirst(lp), (unsigned char *)"1234567890", 10, 0), nullptr);
+    lpFree(lp);
+}
+
+TEST_F(ListpackTest, listpackLpFindWithAllMetadata) {
+    /* test lpFind with all fields having metadata */
+    unsigned char *lp;
+
+    lp = createListWithAllMetadata();
+
+    ASSERT_NE(lpFind(lp, lpFirst(lp), (unsigned char *)"field1", 6, 1), nullptr);
+    ASSERT_NE(lpFind(lp, lpFirst(lp), (unsigned char *)"field2", 6, 1), nullptr);
+    ASSERT_EQ(lpFind(lp, lpFirst(lp), (unsigned char *)"1234567890", 10, 0), nullptr);
     lpFree(lp);
 }
 

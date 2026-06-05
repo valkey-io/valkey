@@ -27,11 +27,14 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
+#include "expire.h"
+#include "listpack.h"
 #include "server.h"
 #include "bio.h"
 #include "rio.h"
 #include "functions.h"
 #include "module.h"
+#include "util.h"
 
 #include <signal.h>
 #include <fcntl.h>
@@ -2083,52 +2086,144 @@ static int rioWriteHashIteratorCursor(rio *r, hashTypeIterator *hi, int what) {
 int rewriteHashObject(rio *r, robj *key, robj *o) {
     hashTypeIterator hi;
     long long count = 0, volatile_items = 0, non_volatile_items;
+    unsigned char field_intbuf[LP_INTBUF_SIZE];
+    unsigned char value_intbuf[LP_INTBUF_SIZE];
+
     /* First serialize volatile items if exist */
     if (hashTypeHasVolatileFields(o)) {
-        hashTypeInitVolatileIterator(o, &hi);
-        while (hashTypeNext(&hi) != C_ERR) {
-            long long expiry = entryGetExpiry(hi.next);
-            sds field = entryGetField(hi.next);
-            size_t value_len;
-            char *value = entryGetValue(hi.next, &value_len);
-            if (rioWriteBulkCount(r, '*', 8) == 0) return 0;
-            if (rioWriteBulkString(r, "HSETEX", 6) == 0) return 0;
-            if (rioWriteBulkObject(r, key) == 0) return 0;
-            if (rioWriteBulkString(r, "PXAT", 4) == 0) return 0;
-            if (rioWriteBulkLongLong(r, expiry) == 0) return 0;
-            if (rioWriteBulkString(r, "FIELDS", 6) == 0) return 0;
-            if (rioWriteBulkLongLong(r, 1) == 0) return 0;
-            if (rioWriteBulkString(r, field, sdslen(field)) == 0) return 0;
-            if (rioWriteBulkString(r, value, value_len) == 0) return 0;
-            volatile_items++;
+        if (o->encoding == OBJ_ENCODING_LISTPACK) {
+            unsigned char *zl = objectGetVal(o);
+            unsigned char *p = lpFirst(zl);
+
+            while (p) {
+                int64_t flen;
+                unsigned char *field = lpGet(p, &flen, field_intbuf);
+                unsigned char *vptr = lpNext(zl, p);
+                if (!vptr) break;
+                int64_t vlen;
+                unsigned char *value = lpGet(vptr, &vlen, value_intbuf);
+
+                /* Get metadata */
+                unsigned char *meta = lpNext(zl, vptr);
+                if (meta && lpIsMetadata(meta)) {
+                    mstime_t expiry = lpGetMetadataValue(meta);
+                    /* Write if not expired */
+                    if (expiry != EXPIRY_NONE && expiry > commandTimeSnapshot()) {
+                        if (rioWriteBulkCount(r, '*', 8) == 0) return 0;
+                        if (rioWriteBulkString(r, "HSETEX", 6) == 0) return 0;
+                        if (rioWriteBulkObject(r, key) == 0) return 0;
+                        if (rioWriteBulkString(r, "PXAT", 4) == 0) return 0;
+                        if (rioWriteBulkLongLong(r, expiry) == 0) return 0;
+                        if (rioWriteBulkString(r, "FIELDS", 6) == 0) return 0;
+                        if (rioWriteBulkLongLong(r, 1) == 0) return 0;
+                        if (rioWriteBulkString(r, (char *)field, flen) == 0) return 0;
+                        if (rioWriteBulkString(r, (char *)value, vlen) == 0) return 0;
+                        volatile_items++;
+                    }
+                    p = lpNext(zl, meta);
+                } else {
+                    p = meta;
+                }
+            }
+        } else {
+            hashTypeInitVolatileIterator(o, &hi);
+            while (hashTypeNext(&hi) != C_ERR) {
+                long long expiry = entryGetExpiry(hi.next);
+                sds field = entryGetField(hi.next);
+                size_t value_len;
+                char *value = entryGetValue(hi.next, &value_len);
+                if (rioWriteBulkCount(r, '*', 8) == 0) return 0;
+                if (rioWriteBulkString(r, "HSETEX", 6) == 0) return 0;
+                if (rioWriteBulkObject(r, key) == 0) return 0;
+                if (rioWriteBulkString(r, "PXAT", 4) == 0) return 0;
+                if (rioWriteBulkLongLong(r, expiry) == 0) return 0;
+                if (rioWriteBulkString(r, "FIELDS", 6) == 0) return 0;
+                if (rioWriteBulkLongLong(r, 1) == 0) return 0;
+                if (rioWriteBulkString(r, field, sdslen(field)) == 0) return 0;
+                if (rioWriteBulkString(r, value, value_len) == 0) return 0;
+                volatile_items++;
+            }
+            hashTypeResetIterator(&hi);
         }
-        hashTypeResetIterator(&hi);
     }
-    non_volatile_items = hashTypeLength(o) - volatile_items;
-    hashTypeInitIterator(o, &hi);
-    while (hashTypeNext(&hi) != C_ERR) {
-        if (volatile_items > 0 && entryHasExpiry(hi.next))
-            continue;
 
-        if (count == 0) {
-            int cmd_items = (non_volatile_items > AOF_REWRITE_ITEMS_PER_CMD) ? AOF_REWRITE_ITEMS_PER_CMD : non_volatile_items;
+    if (o->encoding == OBJ_ENCODING_LISTPACK) {
+        unsigned char *zl = objectGetVal(o);
+        unsigned char *p = lpFirst(zl);
 
-            if (!rioWriteBulkCount(r, '*', 2 + cmd_items * 2) || !rioWriteBulkString(r, "HMSET", 5) ||
-                !rioWriteBulkObject(r, key)) {
+        /* Count only the field/value pairs that will actually be emitted as
+         * part of HMSET below. Pairs carrying expiry metadata are skipped here
+         * (and emitted separately via HSETEX above), but volatile_items only
+         * tracks the non-expired ones, so hashTypeLength(o) - volatile_items
+         * would over-count when expired or EXPIRY_NONE metadata pairs exist. */
+        non_volatile_items = 0;
+        while (p) {
+            unsigned char *vptr = lpNext(zl, p);
+            if (!vptr) break;
+            unsigned char *meta = lpNext(zl, vptr);
+            if (meta && lpIsMetadata(meta)) {
+                p = lpNext(zl, meta);
+                continue;
+            }
+            non_volatile_items++;
+            p = meta;
+        }
+
+        p = lpFirst(zl);
+        while (p) {
+            int64_t flen, vlen;
+            unsigned char *field = lpGet(p, &flen, field_intbuf);
+            unsigned char *vptr = lpNext(zl, p);
+            if (!vptr) break;
+            unsigned char *value = lpGet(vptr, &vlen, value_intbuf);
+            /* Check for metadata */
+            unsigned char *meta = lpNext(zl, vptr);
+            if (meta && lpIsMetadata(meta)) {
+                p = lpNext(zl, meta);
+                continue;
+            }
+            /* Write as part of HMSET */
+            if (count == 0) {
+                int cmd_items = (non_volatile_items > AOF_REWRITE_ITEMS_PER_CMD)
+                                    ? AOF_REWRITE_ITEMS_PER_CMD
+                                    : non_volatile_items;
+                if (!rioWriteBulkCount(r, '*', 2 + cmd_items * 2) ||
+                    !rioWriteBulkString(r, "HMSET", 5) ||
+                    !rioWriteBulkObject(r, key)) {
+                    return 0;
+                }
+            }
+
+            if (rioWriteBulkString(r, (char *)field, flen) == 0) return 0;
+            if (rioWriteBulkString(r, (char *)value, vlen) == 0) return 0;
+            if (++count == AOF_REWRITE_ITEMS_PER_CMD) count = 0;
+            non_volatile_items--;
+            p = meta;
+        }
+    } else {
+        non_volatile_items = hashTypeLength(o) - volatile_items;
+        hashTypeInitIterator(o, &hi);
+        while (hashTypeNext(&hi) != C_ERR) {
+            if (volatile_items > 0 && entryHasExpiry(hi.next))
+                continue;
+            if (count == 0) {
+                int cmd_items = (non_volatile_items > AOF_REWRITE_ITEMS_PER_CMD) ? AOF_REWRITE_ITEMS_PER_CMD : non_volatile_items;
+                if (!rioWriteBulkCount(r, '*', 2 + cmd_items * 2) || !rioWriteBulkString(r, "HMSET", 5) ||
+                    !rioWriteBulkObject(r, key)) {
+                    hashTypeResetIterator(&hi);
+                    return 0;
+                }
+            }
+            if (!rioWriteHashIteratorCursor(r, &hi, OBJ_HASH_FIELD) || !rioWriteHashIteratorCursor(r, &hi, OBJ_HASH_VALUE)) {
                 hashTypeResetIterator(&hi);
                 return 0;
             }
+            if (++count == AOF_REWRITE_ITEMS_PER_CMD) count = 0;
+            non_volatile_items--;
         }
-
-        if (!rioWriteHashIteratorCursor(r, &hi, OBJ_HASH_FIELD) || !rioWriteHashIteratorCursor(r, &hi, OBJ_HASH_VALUE)) {
-            hashTypeResetIterator(&hi);
-            return 0;
-        }
-        if (++count == AOF_REWRITE_ITEMS_PER_CMD) count = 0;
-        non_volatile_items--;
+        hashTypeResetIterator(&hi);
     }
 
-    hashTypeResetIterator(&hi);
     return 1;
 }
 

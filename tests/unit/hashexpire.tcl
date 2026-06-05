@@ -1,119 +1,119 @@
 proc info_field {info field} {
-    foreach line [split $info "\n"] {
-        if {[string match "$field:*" $line]} {
-            return [string trim [lindex [split $line ":"] 1]]
-        }
+  foreach line [split $info "\n"] {
+    if {[string match "$field:*" $line]} {
+      return [string trim [lindex [split $line ":"] 1]]
     }
-    return [s field_name]
+  }
+  return [s field_name]
 }
 
 proc get_keys_with_volatile_items {r} {
-    set line [$r info keyspace]
-    set match [regexp -inline {keys_with_volatile_items=([\d]+)} $line]
+  set line [$r info keyspace]
+  set match [regexp -inline {keys_with_volatile_items=([\d]+)} $line]
 
-    if {[llength $match] == 2} {
-        return [lindex $match 1]
-    } else {
-        return 0
-    }
+  if {[llength $match] == 2} {
+    return [lindex $match 1]
+  } else {
+    return 0
+  }
 }
 
 proc get_keys {r} {
-    set line [$r info keyspace]
-    set match [regexp -inline {keys=([\d]+)} $line]
+  set line [$r info keyspace]
+  set match [regexp -inline {keys=([\d]+)} $line]
 
-    if {[llength $match] == 2} {
-        return [lindex $match 1]
-    } else {
-        return 0
-    }
+  if {[llength $match] == 2} {
+    return [lindex $match 1]
+  } else {
+    return 0
+  }
 }
 
 proc check_myhash_and_expired_subkeys {r myhash expected_len initial_expired expected_increment} {
-    expr {
-        [$r HLEN $myhash] == $expected_len &&
-        [info_field [$r info stats] expired_fields] == ($initial_expired + $expected_increment)
-    }
+  expr {
+    [$r HLEN $myhash] == $expected_len &&
+    [info_field [$r info stats] expired_fields] == ($initial_expired + $expected_increment)
+  }
 }
 
 proc get_short_expire_value {command} {
-    expr {
-        ($command eq "HEXPIRE" || $command eq "EX") ? 1 :
-        ($command eq "HPEXPIRE" || $command eq "PX") ? 1000 :
-        ($command eq "HEXPIREAT" || $command eq "EXAT") ? [clock seconds] + 1 :
-        [clock milliseconds] + 1000
-    }
+  expr {
+    ($command eq "HEXPIRE" || $command eq "EX") ? 1 :
+    ($command eq "HPEXPIRE" || $command eq "PX") ? 1000 :
+    ($command eq "HEXPIREAT" || $command eq "EXAT") ? [clock seconds] + 1 :
+    [clock milliseconds] + 1000
+  }
 }
 
 proc get_long_expire_value {command} {
-    expr {
-        ($command eq "HEXPIRE" || $command eq "EX") ? 60000000 :
-        ($command eq "HPEXPIRE" || $command eq "PX") ? 60000000 :
-        ($command eq "HEXPIREAT" || $command eq "EXAT") ? [clock seconds] + 60000000 :
-        [clock milliseconds] + 60000000
-    }
+  expr {
+    ($command eq "HEXPIRE" || $command eq "EX") ? 60000000 :
+    ($command eq "HPEXPIRE" || $command eq "PX") ? 60000000 :
+    ($command eq "HEXPIREAT" || $command eq "EXAT") ? [clock seconds] + 60000000 :
+    [clock milliseconds] + 60000000
+  }
 }
 
 proc get_longer_then_long_expire_value {command} {
-    expr {
-        ($command eq "HEXPIRE" || $command eq "EX") ? 1200000000 :
-        ($command eq "HPEXPIRE" || $command eq "PX") ? 1200000000 :
-        ($command eq "HEXPIREAT" || $command eq "EXAT") ? [clock seconds] + 1200000000 :
-        [clock milliseconds] + 1200000000
-    }
+  expr {
+    ($command eq "HEXPIRE" || $command eq "EX") ? 1200000000 :
+    ($command eq "HPEXPIRE" || $command eq "PX") ? 1200000000 :
+    ($command eq "HEXPIREAT" || $command eq "EXAT") ? [clock seconds] + 1200000000 :
+    [clock milliseconds] + 1200000000
+  }
 }
 
 proc get_past_zero_expire_value {command} {
-    expr {
-        ($command eq "HEXPIRE" || $command eq "EX") ? 0 :
-        ($command eq "HPEXPIRE" || $command eq "PX") ? 0 :
-        ($command eq "HEXPIREAT" || $command eq "EXAT") ? [clock seconds] - 200000 :
-        [clock milliseconds] - 200000
-    }
+  expr {
+    ($command eq "HEXPIRE" || $command eq "EX") ? 0 :
+    ($command eq "HPEXPIRE" || $command eq "PX") ? 0 :
+    ($command eq "HEXPIREAT" || $command eq "EXAT") ? [clock seconds] - 200000 :
+    [clock milliseconds] - 200000
+  }
 }
 
 proc get_check_ttl_command {command} {
-    if {$command eq "EX"} {
-        return "HTTL"
-    } elseif {$command eq "PX"} {
-        return "HPTTL"
-    } elseif {$command eq "EXAT"} {
-        return "HEXPIRETIME"
-    } else {
-        return "HPEXPIRETIME"
-    }
+  if {$command eq "EX"} {
+    return "HTTL"
+  } elseif {$command eq "PX"} {
+    return "HPTTL"
+  } elseif {$command eq "EXAT"} {
+    return "HEXPIRETIME"
+  } else {
+    return "HPEXPIRETIME"
+  }
 }
 
 proc assert_keyevent_patterns {rd key args} {
-    foreach event_type $args {
-        set event [$rd read]
-        assert_match "pmessage __keyevent@* __keyevent@*:$event_type $key" $event
-    }
+  foreach event_type $args {
+    set event [$rd read]
+    assert_match "pmessage __keyevent@* __keyevent@*:$event_type $key" $event
+  }
 }
 
 proc setup_replication_test {primary replica primary_host primary_port} {
-    $primary FLUSHALL
-    $replica replicaof $primary_host $primary_port
-    wait_for_condition 50 100 {
+  $primary FLUSHALL
+  $replica replicaof $primary_host $primary_port
+  wait_for_condition 50 100 {
         [lindex [$replica role] 0] eq {slave} &&
         [string match {*master_link_status:up*} [$replica info replication]]
     } else {
         fail "Can't turn the instance into a replica"
     }
-    set primary_initial_expired [info_field [$primary info stats] expired_fields]
-    set replica_initial_expired [info_field [$replica info stats] expired_fields]
-    return [list $primary_initial_expired $replica_initial_expired]
+  set primary_initial_expired [info_field [$primary info stats] expired_fields]
+  set replica_initial_expired [info_field [$replica info stats] expired_fields]
+  return [list $primary_initial_expired $replica_initial_expired]
 }
 
 proc setup_single_keyspace_notification {r} {
-    $r config set notify-keyspace-events KEA
-    set rd [valkey_deferring_client]
-    assert_equal {1} [psubscribe $rd __keyevent@*]
-    return $rd
+  $r config set notify-keyspace-events KEA
+  set rd [valkey_deferring_client]
+  assert_equal {1} [psubscribe $rd __keyevent@*]
+  return $rd
 }
 
 proc wait_for_active_expiry {r key expected_len initial_expired expected_increment {timeout 100} {interval 100}} {
-    wait_for_condition $timeout $interval {
+  wait_for_condition $timeout $interval {
         [check_myhash_and_expired_subkeys $r $key $expected_len $initial_expired $expected_increment]
     } else {
         set expired_fields [info_field [$r info stats] expired_fields]
@@ -2276,7 +2276,7 @@ start_server {tags {"hashexpire external:skip"}} {
         }
 
         test {HASH TTL - field expired on master gets deleted on replica} {
-            $primary flushall            
+            $primary flushall
 
             $primary HSETEX myhash PX 10 FIELDS 1 f1 val1
             after 20
@@ -2805,21 +2805,21 @@ start_cluster 3 0 {tags {"cluster mytest external:skip"} overrides {cluster-node
 
 #### AOF Test #####
 proc validate_aof_content {aof_file pxat_count hdel_count} {
-    wait_for_condition 100 100 {
+  wait_for_condition 100 100 {
         [file exists $aof_file] eq 1
     } else {
         fail "hash value was not expired after timeout"
     }
 
-    set aof_content [exec cat $aof_file]
+  set aof_content [exec cat $aof_file]
 
-    # Verify amount of PXAT and HDEL
-    # Count PXAT commands
-    set got_pxat_count [regexp -all {PXAT} $aof_content]
-    assert_equal $got_pxat_count $pxat_count
-    # Count HDEL commands
-    set got_hdel_count [regexp -all {HDEL} $aof_content]
-    assert_equal $got_hdel_count $hdel_count
+  # Verify amount of PXAT and HDEL
+  # Count PXAT commands
+  set got_pxat_count [regexp -all {PXAT} $aof_content]
+  assert_equal $got_pxat_count $pxat_count
+  # Count HDEL commands
+  set got_hdel_count [regexp -all {HDEL} $aof_content]
+  assert_equal $got_hdel_count $hdel_count
 }
 tags {"aof external:skip"} {
     foreach rdb_preamble {"yes" "no"} {

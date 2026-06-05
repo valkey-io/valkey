@@ -1876,6 +1876,9 @@ static int _lpEntryValidation(unsigned char *p, unsigned int head_count, void *u
         hashtable *fields;
     } *data = userdata;
 
+    /* Metadata entries are not real field/value records */
+    if (lpIsMetadata(p)) return 1;
+
     if (data->fields == NULL) {
         data->fields = hashtableCreate(&setHashtableType);
         hashtableExpand(data->fields, data->pairs ? head_count / 2 : head_count);

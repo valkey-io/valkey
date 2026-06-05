@@ -557,6 +557,11 @@ start_multiple_servers 2 {overrides {cluster-enabled yes cluster-protocol raft c
 
     set node_id [$r0 CLUSTER MYID]
     set node1_id [$r1 CLUSTER MYID]
+
+    # Make r1 a replica of r0. This commits a SET_REPLICA_OF entry
+    # which bumps the shard epoch from 0 to 1.
+    $r1 CLUSTER REPLICATE $node_id
+
     set port [srv 0 port]
     set cport [expr {$port + 10000}]
 
@@ -600,13 +605,20 @@ start_multiple_servers 2 {overrides {cluster-enabled yes cluster-protocol raft c
         lassign $case entry_type propose_msg state_check
 
         test "Raft shard epoch: stale $entry_type is rejected (pre-validation, no log append)" {
-            # Record commit index before injection.
+            # Record commit index and rejection counter before injection.
             set commit_before [get_cluster_info_field $r0 cluster_raft_commit_index]
+            set rejected_before [get_cluster_info_field $r0 cluster_stats_proposals_rejected_prevalidation]
 
             # Connect and inject stale PROPOSE.
             set fd [connect_fake_node $cport]
             raft_send $fd $propose_msg
-            after 500
+
+            # Wait for the rejection counter to increase.
+            wait_for_condition 50 100 {
+                [get_cluster_info_field $r0 cluster_stats_proposals_rejected_prevalidation] > $rejected_before
+            } else {
+                fail "Stale $entry_type proposal was not rejected"
+            }
 
             # Verify log index unchanged (rejected at pre-validation).
             set commit_after [get_cluster_info_field $r0 cluster_raft_commit_index]
@@ -636,10 +648,17 @@ start_multiple_servers 2 {overrides {cluster-enabled yes cluster-protocol raft c
 
         test "Raft shard epoch: $label is rejected (pre-validation, no log append)" {
             set commit_before [get_cluster_info_field $r0 cluster_raft_commit_index]
+            set rejected_before [get_cluster_info_field $r0 cluster_stats_proposals_rejected_prevalidation]
 
             set fd [connect_fake_node $cport]
             raft_send $fd $propose_msg
-            after 500
+
+            # Wait for the rejection counter to increase.
+            wait_for_condition 50 100 {
+                [get_cluster_info_field $r0 cluster_stats_proposals_rejected_prevalidation] > $rejected_before
+            } else {
+                fail "$label proposal was not rejected"
+            }
 
             # Verify log index unchanged (rejected at pre-validation).
             set commit_after [get_cluster_info_field $r0 cluster_raft_commit_index]
@@ -649,30 +668,27 @@ start_multiple_servers 2 {overrides {cluster-enabled yes cluster-protocol raft c
         }
     }
 
-    # --------------------------------------------------------------------------
-    # FAILOVER with wrong shard-id: passes pre-validation (unknown shard has
-    # epoch 0, so isShardEpochCurrent returns true) but is rejected at apply
-    # because primary's current shard_id doesn't match the entry.
-    # --------------------------------------------------------------------------
-
-    test "Raft shard epoch: FAILOVER with wrong shard-id is rejected at apply" {
+    test "Raft shard epoch: FAILOVER with wrong shard-id is rejected at pre-validation" {
         # Use a bogus shard-id that doesn't match node_id's actual shard.
         set wrong_shard [string repeat "1" 40]
 
-        # Get current commit index.
         set commit_before [get_cluster_info_field $r0 cluster_raft_commit_index]
+        set rejected_before [get_cluster_info_field $r0 cluster_stats_proposals_rejected_prevalidation]
 
-        # Propose FAILOVER with correct epoch (0, since wrong_shard has no
-        # epoch tracked) but wrong shard-id.
+        # Propose FAILOVER with wrong shard-id.
         set fd [connect_fake_node $cport]
         raft_send $fd "PROPOSE FAILOVER $node1_id $node_id $wrong_shard 0"
-        after 500
 
-        # The entry passes pre-validation (epoch 0 for unknown shard is valid)
-        # and gets appended + committed. But apply rejects it due to shard mismatch.
-        # Commit index advances (entry was appended) but state is unchanged.
+        # Wait for the rejection counter to increase.
+        wait_for_condition 50 100 {
+            [get_cluster_info_field $r0 cluster_stats_proposals_rejected_prevalidation] > $rejected_before
+        } else {
+            fail "FAILOVER with wrong shard-id was not rejected"
+        }
+
+        # Verify log index unchanged (rejected at pre-validation).
         set commit_after [get_cluster_info_field $r0 cluster_raft_commit_index]
-        assert {$commit_after > $commit_before}
+        assert_equal $commit_before $commit_after
 
         # Verify the failover did NOT happen: r0 is still primary with all slots.
         set nodes [$r0 CLUSTER NODES]

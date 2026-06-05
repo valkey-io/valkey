@@ -185,6 +185,8 @@ typedef struct {
     uint64_t stats_pubsub_bytes_received;
     uint64_t stats_module_bytes_sent;
     uint64_t stats_module_bytes_received;
+    uint64_t stats_proposals_rejected_prevalidation;
+    uint64_t stats_proposals_rejected_apply;
 
     /* Shard epoch tracking (per-shard monotonic counter for stale proposal detection). */
     dict *shard_epochs;
@@ -851,21 +853,11 @@ static uint64_t clusterGetShardEpoch(const char *shard_id) {
 static void clusterSetShardEpoch(const char *shard_id, uint64_t epoch) {
     clusterRaftState *rs = RAFT_STATE();
     sds s = sdsnewlen(shard_id, CLUSTER_NAMELEN);
-    dictEntry *de = dictFind(rs->shard_epochs, s);
-    if (de) {
-        /* Existing entry — just update the value. */
-        dictSetUnsignedIntegerVal(de, epoch);
+    dictEntry *de = dictAddOrFind(rs->shard_epochs, s);
+    if (dictGetKey(de) != s) {
         sdsfree(s);
-    } else {
-        /* Only create a new epoch entry if the shard actually exists. */
-        dictEntry *shard_de = dictFind(server.cluster->shards, s);
-        if (shard_de) {
-            de = dictAddRaw(rs->shard_epochs, s, NULL);
-            dictSetUnsignedIntegerVal(de, epoch);
-        } else {
-            sdsfree(s);
-        }
     }
+    dictSetUnsignedIntegerVal(de, epoch);
 }
 
 static int isShardEpochCurrent(const char *shard_id, uint64_t entry_epoch) {
@@ -929,13 +921,21 @@ static int clusterRaftPreValidateEpoch(int type, sds data) {
         if (argc < 4) {
             ok = 0;
         } else {
-            uint64_t epoch = strtoull(argv[3], NULL, 10);
-            ok = isShardEpochCurrent(argv[2], epoch);
+            /* Validate shard-id matches the primary's current shard. */
+            clusterNode *primary = (sdslen(argv[1]) == CLUSTER_NAMELEN)
+                                       ? clusterLookupNode(argv[1], CLUSTER_NAMELEN)
+                                       : NULL;
+            if (primary && memcmp(primary->shard_id, argv[2], CLUSTER_NAMELEN) != 0) {
+                ok = 0;
+            } else {
+                uint64_t epoch = strtoull(argv[3], NULL, 10);
+                ok = isShardEpochCurrent(argv[2], epoch);
+            }
         }
         break;
     }
     case RAFT_ENTRY_SLOT_CHANGE: {
-        /* Format: <source-id-or-dash> <source-epoch> <target-id-or-dash> <target-epoch> <ranges...> */
+        /* Format: <source-node-id-or-dash> <source-epoch> <target-node-id-or-dash> <target-epoch> <ranges...> */
         if (argc < 5) {
             ok = 0;
         } else {
@@ -970,6 +970,7 @@ static int clusterRaftPreValidateEpoch(int type, sds data) {
 
     sdsfreesplitres(argv, argc);
     if (!ok) {
+        RAFT_STATE()->stats_proposals_rejected_prevalidation++;
         serverLog(LL_NOTICE, "Leader pre-validation: rejecting %s proposal (missing or stale epoch).",
                   raftEntryTypeName(type));
     }
@@ -1133,7 +1134,7 @@ static uint64_t raftLogTermAt(uint64_t index) {
  * Returns 1 if the entry should be applied, 0 if stale.
  * On success, increments the shard epoch (or sets it to 1 if currently 0).
  * If shard_id is NULL, always returns 1 (no shard to validate). */
-static int clusterCheckAndBumpShardEpoch(const char *shard_id, uint64_t entry_epoch) {
+static int clusterValidateAndBumpShardEpoch(const char *shard_id, uint64_t entry_epoch) {
     if (!shard_id) return 1;
     uint64_t current = clusterGetShardEpoch(shard_id);
     if (current == 0) {
@@ -1148,14 +1149,14 @@ static int clusterCheckAndBumpShardEpoch(const char *shard_id, uint64_t entry_ep
     return 0;
 }
 
-/* Validate and bump epochs for SLOT_CHANGE (two shards).
+/* Validate SLOT_CHANGE (two shards). We do not bump epoch to support
+ * concurrent slot migration.
  * Returns 1 if the entry should be applied, 0 if either epoch is stale.
- * On success, increments both source and target epochs.
  * source_shard_id may be NULL (unassigned slots). */
-static int clusterCheckAndBumpSlotChangeEpochs(const char *source_shard_id,
-                                               uint64_t source_epoch,
-                                               const char *target_shard_id,
-                                               uint64_t target_epoch) {
+static int clusterValidateSlotChangeEpochs(const char *source_shard_id,
+                                           uint64_t source_epoch,
+                                           const char *target_shard_id,
+                                           uint64_t target_epoch) {
     uint64_t src_current = source_shard_id ? clusterGetShardEpoch(source_shard_id) : 0;
     uint64_t tgt_current = target_shard_id ? clusterGetShardEpoch(target_shard_id) : 0;
 
@@ -1326,7 +1327,7 @@ static void raftLogApply(raftLogEntry *e) {
         if (node && node != myself) {
             /* Epoch validation. */
             uint64_t epoch = strtoull(argv[1], NULL, 10);
-            if (!clusterCheckAndBumpShardEpoch(node->shard_id, epoch)) {
+            if (!clusterValidateAndBumpShardEpoch(node->shard_id, epoch)) {
                 entry_error = "stale shard epoch";
                 serverLog(LL_NOTICE, "Applied NODE_FORGET %.40s (index %llu) [stale].",
                           argv[0], (unsigned long long)e->index);
@@ -1431,6 +1432,10 @@ static void raftLogApply(raftLogEntry *e) {
         serverLog(LL_NOTICE, "Applied log entry type %d (index %llu).", e->type,
                   (unsigned long long)e->index);
         break;
+    }
+
+    if (entry_error) {
+        rs->stats_proposals_rejected_apply++;
     }
 
     /* Check pending proposals for a match and remove it. */
@@ -2903,6 +2908,8 @@ static void clusterRaftResetStats(void) {
     rs->stats_pubsub_bytes_received = 0;
     rs->stats_module_bytes_sent = 0;
     rs->stats_module_bytes_received = 0;
+    rs->stats_proposals_rejected_prevalidation = 0;
+    rs->stats_proposals_rejected_apply = 0;
 }
 
 static sds clusterRaftAppendInfoFields(sds info) {
@@ -2957,6 +2964,8 @@ static sds clusterRaftAppendInfoFields(sds info) {
                         "cluster_stats_pubsub_bytes_received:%llu\r\n"
                         "cluster_stats_module_bytes_sent:%llu\r\n"
                         "cluster_stats_module_bytes_received:%llu\r\n"
+                        "cluster_stats_proposals_rejected_prevalidation:%llu\r\n"
+                        "cluster_stats_proposals_rejected_apply:%llu\r\n"
                         "total_cluster_links_buffer_limit_exceeded:%llu\r\n",
                         role_str, (unsigned long long)rs->current_term,
                         (unsigned long long)rs->commit_index, (unsigned long long)rs->last_applied,
@@ -2969,6 +2978,8 @@ static sds clusterRaftAppendInfoFields(sds info) {
                         (unsigned long long)rs->stats_pubsub_bytes_received,
                         (unsigned long long)rs->stats_module_bytes_sent,
                         (unsigned long long)rs->stats_module_bytes_received,
+                        (unsigned long long)rs->stats_proposals_rejected_prevalidation,
+                        (unsigned long long)rs->stats_proposals_rejected_apply,
                         (unsigned long long)server.cluster->stat_cluster_links_buffer_limit_exceeded);
     return info;
 }
@@ -3082,8 +3093,8 @@ static const char *clusterRaftApplySlotChange(sds data) {
     if (!info.valid) goto done;
 
     /* Epoch validation: validate both source and target epochs. */
-    if (!clusterCheckAndBumpSlotChangeEpochs(info.source_shard_id, info.source_epoch,
-                                             info.target_shard_id, info.target_epoch)) {
+    if (!clusterValidateSlotChangeEpochs(info.source_shard_id, info.source_epoch,
+                                         info.target_shard_id, info.target_epoch)) {
         error = "stale shard epoch";
         goto done;
     }
@@ -3139,10 +3150,8 @@ static const char *clusterRaftApplySetReplica(sds data) {
     if (replica == myself) rs->todo_save_config = 1;
 
     char *shard_id = argv[2];
-
-    /* Epoch validation: validate against the shard-id from the entry. */
     uint64_t epoch = strtoull(argv[3], NULL, 10);
-    if (!clusterCheckAndBumpShardEpoch(shard_id, epoch)) {
+    if (!clusterValidateAndBumpShardEpoch(shard_id, epoch)) {
         error = "stale shard epoch";
         goto done;
     }
@@ -3206,18 +3215,18 @@ static const char *clusterRaftApplyFailover(sds data) {
     clusterNode *primary = clusterLookupNode(argv[1], sdslen(argv[1]));
     if (!replica || !primary) goto done;
 
-    /* Epoch validation: validate against the shard-id from the entry. */
-    uint64_t epoch = strtoull(argv[3], NULL, 10);
-    if (!clusterCheckAndBumpShardEpoch(argv[2], epoch)) {
-        error = "stale shard epoch";
-        goto done;
-    }
-
     /* Validate that the primary still belongs to the shard claimed in the entry. */
     if (memcmp(primary->shard_id, argv[2], CLUSTER_NAMELEN) != 0) {
         serverLog(LL_WARNING, "FAILOVER rejected: primary %.40s shard mismatch (expected %.40s, got %.40s).",
                   primary->name, argv[2], primary->shard_id);
         error = "primary shard mismatch";
+        goto done;
+    }
+
+    /* Epoch validation: validate against the shard-id from the entry. */
+    uint64_t epoch = strtoull(argv[3], NULL, 10);
+    if (!clusterValidateAndBumpShardEpoch(argv[2], epoch)) {
+        error = "stale shard epoch";
         goto done;
     }
 

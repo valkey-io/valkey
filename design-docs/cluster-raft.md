@@ -138,20 +138,20 @@ NODE_JOIN <node-id> <address>
     via MEET. The node starts as a learner and is promoted to follower
     when the entry is committed.
 
-NODE_FORGET <node-id>
+NODE_FORGET <node-id> <shard-epoch>
     Remove a node from the cluster (CLUSTER FORGET). Not yet implemented.
 
 SLOT_CHANGE <source-node-id-or-dash> <source-epoch> <target-node-id-or-dash> <target-epoch> <range> [<range> ...]
     Assign or remove slot ownership. A dash means "no owner" (delete
     slots). Ranges use the nodes.conf format: "0-5460" or "5461".
 
-SET_REPLICA_OF <replica-id> <primary-id-or-dash> <shard-id>
+SET_REPLICA_OF <replica-id> <primary-id-or-dash> <shard-id> <target-shard-epoch>
     Set a node as replica of a primary (CLUSTER REPLICATE). A dash as
     primary means promote to primary. The shard-id is the target shard:
     for promotion, a new random id; for assignment, the primary's
     current shard-id (used as a guard against concurrent changes).
 
-FAILOVER <replica-id> <primary-id>
+FAILOVER <replica-id> <primary-id> <shard-epoch>
     The replica takes over the primary's slots and becomes primary.
     The old primary becomes a replica of the new primary.
 
@@ -736,11 +736,11 @@ inconsistencies — such as moving a slot to a node that no longer owns
 the corresponding keys.
 
 A shard-epoch is a per-shard monotonically increasing counter stored
-in `server.cluster->shard_epochs`. It is bumped each time a topology
-change is applied to the shard. Entries that modify shard topology
-include the shard's current epoch at proposal time. Epoch is validated
-at prepare time and at apply time. If the epoch has advanced past the
-value in the entry, the entry is stale and is ignored.
+in `server.cluster->shard_epochs`. It is bumped each time membership or
+leadership of the shard changes. Such entries include the shard's
+current epoch at proposal time. Epoch is validated at prepare time
+and at apply time. If the epoch has advanced past the value in the entry,
+the entry is stale and is ignored.
 
 ### Example: slot migration racing with failover
 

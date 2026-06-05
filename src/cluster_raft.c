@@ -1098,7 +1098,10 @@ static void raftLogApply(raftLogEntry *e) {
         break;
     }
     case RAFT_ENTRY_NODE_INFO: {
-        /* Format: "<node-id> <address-string> <flags>" */
+        /* Format: "<node-id> <address-string> <flags>"
+         * Propagates address/hostname/port changes. Shard-id is intentionally
+         * excluded from the address string because it is authoritatively
+         * managed by NODE_JOIN and SET_REPLICA_OF entries. */
         int argc;
         sds *argv = sdssplitlen(e->data, sdslen(e->data), " ", 1, &argc);
         if (argv && argc >= 2 && sdslen(argv[0]) == CLUSTER_NAMELEN) {
@@ -1770,7 +1773,7 @@ static void clusterRaftCron(void) {
             rs->last_node_info_check = now;
             sds current = sdscatlen(sdsempty(), myself->name, CLUSTER_NAMELEN);
             current = sdscatlen(current, " ", 1);
-            current = clusterNodeAppendAddressString(current, myself, server.tls_cluster);
+            current = clusterNodeAppendAddressStringNoShardId(current, myself, server.tls_cluster);
             current = sdscatfmt(current, " %s",
                                 (myself->flags & CLUSTER_NODE_NOFAILOVER) ? "nofailover" : "noflags");
             if (sdscmp(current, rs->my_last_committed_info) != 0) {
@@ -2207,7 +2210,7 @@ static void clusterRaftUpdateMyself(int old_flags) {
     sds entry = sdsnew("NODE_INFO ");
     entry = sdscatlen(entry, myself->name, CLUSTER_NAMELEN);
     entry = sdscatlen(entry, " ", 1);
-    entry = clusterNodeAppendAddressString(entry, myself, server.tls_cluster);
+    entry = clusterNodeAppendAddressStringNoShardId(entry, myself, server.tls_cluster);
     entry = sdscatlen(entry, " ", 1);
     if (myself->flags & CLUSTER_NODE_NOFAILOVER) {
         entry = sdscat(entry, "nofailover");

@@ -331,8 +331,9 @@ static sds representSlotInfo(sds ci, uint16_t *slot_info_pairs, int slot_info_pa
 }
 
 /* Append the address+aux string for a node to an sds: ip:port@cport[,hostname][,aux=val]*
- * This is the same format used in the second column of nodes.conf. */
-sds clusterNodeAppendAddressString(sds s, clusterNode *node, int tls_primary) {
+ * This is the same format used in the second column of nodes.conf.
+ * skip_aux is a bitmask of auxFieldIndex values to omit. */
+static sds clusterNodeAppendAddressStringSkip(sds s, clusterNode *node, int tls_primary, unsigned int skip_aux) {
     int port = tls_primary ? node->tls_port : node->tcp_port;
     s = sdscatfmt(s, "%s:%i@%i", node->ip, port, node->cport);
     if (sdslen(node->hostname) != 0) {
@@ -341,6 +342,7 @@ sds clusterNodeAppendAddressString(sds s, clusterNode *node, int tls_primary) {
         s = sdscatlen(s, ",", 1);
     }
     for (int i = af_count - 1; i >= 0; i--) {
+        if (skip_aux & (1u << i)) continue;
         if ((tls_primary && i == af_tls_port) || (!tls_primary && i == af_tcp_port)) continue;
         if (auxFieldHandlers[i].isPresent(node)) {
             s = sdscatfmt(s, ",%s=", auxFieldHandlers[i].field);
@@ -348,6 +350,16 @@ sds clusterNodeAppendAddressString(sds s, clusterNode *node, int tls_primary) {
         }
     }
     return s;
+}
+
+sds clusterNodeAppendAddressString(sds s, clusterNode *node, int tls_primary) {
+    return clusterNodeAppendAddressStringSkip(s, node, tls_primary, 0);
+}
+
+/* Like clusterNodeAppendAddressString but omits shard-id, which is managed
+ * by dedicated raft log entries (NODE_JOIN, SET_REPLICA_OF). */
+sds clusterNodeAppendAddressStringNoShardId(sds s, clusterNode *node, int tls_primary) {
+    return clusterNodeAppendAddressStringSkip(s, node, tls_primary, 1u << af_shard_id);
 }
 
 /* Parse an address+aux string onto a node. The string format is:

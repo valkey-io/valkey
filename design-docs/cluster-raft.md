@@ -145,7 +145,9 @@ FAILOVER <replica-id> <primary-id>
 
 NODE_INFO <node-id> <address-string> <flags>
     Update node address and self-set flags. The address-string uses
-    the nodes.conf format. Flags is "nofailover" or "noflags".
+    the nodes.conf format but excludes shard-id, which is not a
+    property of the node but of the shard and is managed by NODE_JOIN
+    and SET_REPLICA_OF. Flags is "nofailover" or "noflags".
 
 NODE_FAIL <node-id>
     Mark a node as failed. Proposed by the leader when a peer exceeds

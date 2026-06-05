@@ -3613,11 +3613,18 @@ static int evalMode(int argc, char **argv) {
  * Cluster Manager
  *--------------------------------------------------------------------------- */
 
+typedef enum {
+    CLUSTER_MANAGER_PROTOCOL_UNKNOWN = 0,
+    CLUSTER_MANAGER_PROTOCOL_GOSSIP,
+    CLUSTER_MANAGER_PROTOCOL_RAFT,
+} clusterManagerProtocol;
+
 /* The Cluster Manager global structure */
 static struct clusterManager {
     list *nodes; /* List of nodes in the configuration. */
     list *errors;
-    int unreachable_primaries; /* Primaries we are not able to reach. */
+    int unreachable_primaries;       /* Primaries we are not able to reach. */
+    clusterManagerProtocol protocol; /* Cached from CONFIG GET cluster-protocol. */
 } cluster_manager;
 
 /* Used by clusterManagerFixSlotsCoverage */
@@ -3706,6 +3713,8 @@ static int clusterManagerNodeIsCluster(clusterManagerNode *node, char **err);
 static void clusterManagerPrintNotClusterNodeError(clusterManagerNode *node, char *err);
 static int clusterManagerNodeLoadInfo(clusterManagerNode *node, int opts, char **err);
 static int clusterManagerLoadInfoFromNode(clusterManagerNode *node);
+static clusterManagerProtocol clusterManagerDetectProtocol(clusterManagerNode *node);
+static void clusterManagerEnsureProtocolDetected(clusterManagerNode *node);
 static int clusterManagerNodeIsEmpty(clusterManagerNode *node, char **err);
 static int clusterManagerGetAntiAffinityScore(clusterManagerNodeArray *ipnodes,
                                               int ip_count,
@@ -3925,9 +3934,27 @@ static void freeClusterManagerNode(clusterManagerNode *node) {
     zfree(node);
 }
 
+static clusterManagerProtocol clusterManagerDetectProtocol(clusterManagerNode *node) {
+    valkeyReply *reply = CLUSTER_MANAGER_COMMAND(node, "CONFIG GET cluster-protocol");
+    if (reply == NULL || reply->type == VALKEY_REPLY_ERROR || reply->elements != 2) {
+        if (reply) freeReplyObject(reply);
+        return CLUSTER_MANAGER_PROTOCOL_GOSSIP;
+    }
+    clusterManagerProtocol protocol = CLUSTER_MANAGER_PROTOCOL_GOSSIP;
+    if (!strcasecmp(reply->element[1]->str, "raft")) protocol = CLUSTER_MANAGER_PROTOCOL_RAFT;
+    freeReplyObject(reply);
+    return protocol;
+}
+
+static void clusterManagerEnsureProtocolDetected(clusterManagerNode *node) {
+    if (cluster_manager.protocol != CLUSTER_MANAGER_PROTOCOL_UNKNOWN) return;
+    cluster_manager.protocol = clusterManagerDetectProtocol(node);
+}
+
 static void freeClusterManager(void) {
     listIter li;
     listNode *ln;
+    cluster_manager.protocol = CLUSTER_MANAGER_PROTOCOL_UNKNOWN;
     if (cluster_manager.nodes != NULL) {
         listRewind(cluster_manager.nodes, &li);
         while ((ln = listNext(&li)) != NULL) {
@@ -5015,7 +5042,14 @@ static int clusterManagerOnSetOwnerErr(valkeyReply *reply, clusterManagerNode *n
     return (bulk_idx != 1);
 }
 
-static int clusterManagerSetSlotOwner(clusterManagerNode *owner, int slot, int do_clear) {
+static int clusterManagerSetSlotOwnerRaft(clusterManagerNode *owner, int slot, int do_clear) {
+    if (!clusterManagerDelSlot(owner, slot, 1)) return 0;
+    if (!clusterManagerAddSlot(owner, slot)) return 0;
+    if (do_clear && !clusterManagerClearSlotStatus(owner, slot)) return 0;
+    return 1;
+}
+
+static int clusterManagerSetSlotOwnerGossip(clusterManagerNode *owner, int slot, int do_clear) {
     int success = clusterManagerStartTransaction(owner);
     if (!success) return 0;
     /* Ensure the slot is not already assigned. */
@@ -5026,6 +5060,13 @@ static int clusterManagerSetSlotOwner(clusterManagerNode *owner, int slot, int d
     clusterManagerBumpEpoch(owner);
     success = clusterManagerExecTransaction(owner, clusterManagerOnSetOwnerErr);
     return success;
+}
+
+static int clusterManagerSetSlotOwner(clusterManagerNode *owner, int slot, int do_clear) {
+    clusterManagerEnsureProtocolDetected(owner);
+    if (cluster_manager.protocol == CLUSTER_MANAGER_PROTOCOL_RAFT)
+        return clusterManagerSetSlotOwnerRaft(owner, slot, do_clear);
+    return clusterManagerSetSlotOwnerGossip(owner, slot, do_clear);
 }
 
 /* Get the hash for the values of the specified keys in *keys_reply for the
@@ -5803,6 +5844,7 @@ static int clusterManagerLoadInfoCommon(clusterManagerNode *node, int include_un
         freeClusterManagerNode(node);
         return 0;
     }
+    clusterManagerEnsureProtocolDetected(node);
     e = NULL;
     if (!clusterManagerNodeLoadInfo(node, CLUSTER_MANAGER_OPT_GETFRIENDS, &e)) {
         if (e) {
@@ -7122,6 +7164,7 @@ static void clusterManagerMode(clusterManagerCommandProc *proc) {
     int argc = config.cluster_manager_command.argc;
     char **argv = config.cluster_manager_command.argv;
     cluster_manager.nodes = NULL;
+    cluster_manager.protocol = CLUSTER_MANAGER_PROTOCOL_UNKNOWN;
     int success = proc(argc, argv);
 
     /* Initialized in createClusterManagerCommand. */
@@ -7324,15 +7367,18 @@ assign_replicas:
                 zfree(err);
         }
         clusterManagerLogInfo(">>> Nodes configuration updated\n");
-        clusterManagerLogInfo(">>> Assign a different config epoch to "
-                              "each node\n");
-        int config_epoch = 1;
-        listRewind(cluster_manager.nodes, &li);
-        while ((ln = listNext(&li)) != NULL) {
-            clusterManagerNode *node = ln->value;
-            valkeyReply *reply = NULL;
-            reply = CLUSTER_MANAGER_COMMAND(node, "cluster set-config-epoch %d", config_epoch++);
-            if (reply != NULL) freeReplyObject(reply);
+        clusterManagerEnsureProtocolDetected(listFirst(cluster_manager.nodes)->value);
+        if (cluster_manager.protocol != CLUSTER_MANAGER_PROTOCOL_RAFT) {
+            clusterManagerLogInfo(">>> Assign a different config epoch to "
+                                  "each node\n");
+            int config_epoch = 1;
+            listRewind(cluster_manager.nodes, &li);
+            while ((ln = listNext(&li)) != NULL) {
+                clusterManagerNode *node = ln->value;
+                valkeyReply *reply = NULL;
+                reply = CLUSTER_MANAGER_COMMAND(node, "cluster set-config-epoch %d", config_epoch++);
+                if (reply != NULL) freeReplyObject(reply);
+            }
         }
         clusterManagerLogInfo(">>> Sending CLUSTER MEET messages to join "
                               "the cluster\n");

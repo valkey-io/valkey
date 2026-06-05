@@ -7,8 +7,7 @@
 
 source tests/support/cluster_util.tcl
 
-# cluster-raft:skip because valkey-cli --cluster fix uses MULTI internally,
-# which is not supported for cluster mutation commands in raft mode.
+# Raft: slot migration / SETSLOT NODE paths differ; CLI fix is covered in cluster-raft-cli.tcl.
 start_cluster 2 0 {tags {external:skip cluster cluster-raft:skip}} {
 
 config_set_all_nodes cluster-allow-replica-migration no

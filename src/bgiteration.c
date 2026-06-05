@@ -50,16 +50,15 @@ static bool isDeleteCmd(struct serverCommand *cmd) {
  * with some of the functions intended for the main thread and others intended for the background
  * clients.  This sanity check ensures that we maintain thread safety, calling the API as intended. */
 static bool onValkeyMainThread(void) {
-    // Modules interact with the main thread using a mutex.  If a module owns the mutex, consider
-    //  that equivalent to being on the main thread.
+    /* Modules interact with the main thread using a mutex.  If a module owns the mutex, consider
+     *  that equivalent to being on the main thread. */
     bool inModule = (atomic_load_explicit(&server.module_gil_acquired, memory_order_relaxed) == 0);
     return (inModule || pthread_equal(server.main_thread_id, pthread_self()) != 0);
 }
 
 
 /* Parse a parameters robj, extracting a valid DBID.
- * Returns FALSE if DBID isn't valid.
- */
+ * Returns FALSE if DBID isn't valid. */
 static bool getDbIdFromRobj(robj *obj, int *db_id) {
     long long value;
     if (getLongLongFromObject(obj, &value) != C_OK) return false;
@@ -69,8 +68,7 @@ static bool getDbIdFromRobj(robj *obj, int *db_id) {
 }
 
 /* Parse the parameters of the COPY command, extracting the target DBID.
- * Returns FALSE if the command would not run.
- */
+ * Returns FALSE if the command would not run. */
 static bool getTargetDbIdForCopyCommand(int argc, robj **argv, int selected_dbid, int *target_dbid) {
     const int COPY_COMMAND_OPTIONAL_ARG_START_INDEX = 3;
 
@@ -83,8 +81,7 @@ static bool getTargetDbIdForCopyCommand(int argc, robj **argv, int selected_dbid
             /* Note the parsing here needs to perfectly match what we have in Valkey OSS for COPY.
              * The following command is considered OK by Valkey 8.1 so we can't return here, but
              * must continue to parse till the last db which is the one that's effectively used.
-             *    COPY key1 key2 db 1 db 2 db 3    // (This will use db 3)
-             */
+             *    COPY key1 key2 db 1 db 2 db 3    (This will use db 3) */
             if (!getDbIdFromRobj(argv[i + 1], target_dbid)) {
                 return false; // parse failure
             }
@@ -98,8 +95,7 @@ static bool getTargetDbIdForCopyCommand(int argc, robj **argv, int selected_dbid
 
 /* Get parameters for the SWAPDB command.
  * The optional permission_client allows for checking of a client's permission for swapdb.
- * Returns true if command would be executed.
- */
+ * Returns true if command would be executed. */
 static bool getParamsForSwapdb(int argc, robj **argv, client *permission_client, int *id1_p, int *id2_p) {
     static struct serverCommand *swapdb_cmd = NULL;
 
@@ -131,8 +127,7 @@ static bool getParamsForSwapdb(int argc, robj **argv, client *permission_client,
 
 /* Get parameters for the SELECT command.
  * The optional permission_client allows for checking of a client's permission for select.
- * Returns true if command would be executed.
- */
+ * Returns true if command would be executed. */
 static bool getParamsForSelect(int argc, robj **argv, client *permission_client, int *dbid_p) {
     static struct serverCommand *select_cmd = NULL;
 
@@ -485,8 +480,7 @@ static sds debugBuffer;
 /* The full scan iterator performs the actual iteration over the Valkey keyset.  The iterator is
  * only used from within the Valkey main thread.  Iteration proceeds one DB at a time, based on
  * the DB ordering at the time of iterator creation.  Each time the iterator returns items, all
- * of the dictionary entries from a single hash bucket are returned.
- */
+ * of the dictionary entries from a single hash bucket are returned. */
 
 struct fullScanIterator {
     genericIterator callbacks; // (must be first item)
@@ -653,8 +647,7 @@ static genericIterator *fullScanIteratorCreate(void) {
 //                        Cluster Slot Iterator
 //=============================================================================================
 /* The cluster slot iterator performs iteration over one cluster slot of the Valkey keyset.  The
- * iterator is only used from within the Valkey main thread.
- */
+ * iterator is only used from within the Valkey main thread. */
 struct clusterSlotIterator {
     genericIterator callbacks; // (must be first item)
 };
@@ -1224,8 +1217,7 @@ static bool expediteKeysForCopy(bgIterator *it,
  * Iterator:  CONSISTENT = YES, REPLICATION = YES
  *   (Combination only valid in cluster mode - no SWAPDB possible)
  *   - Block if any write-key is in use by an the iterator
- *   - Block and immediately queue any key (read or write) that has not already been iterated
- */
+ *   - Block and immediately queue any key (read or write) that has not already been iterated */
 static bool expediteKeysForWrite(bgIterator *it,
                                  int dbid,
                                  struct serverCommand *cmd,
@@ -1980,8 +1972,7 @@ static bool expediteKeysForMultiExec(client *c, hashtable *waitingOnKeys) {
     /* For MULTI/EXEC, Valkey buffers all of the commands until hitting the EXEC.
      * At this point, the client holds all of the commands to be executed.  This function searches
      * for all of the keys used by any of the buffered write commands.  In addition, if SWAPDB or
-     * SELECT is used, this tracks the DBIDs through various swap/select operations.
-     */
+     * SELECT is used, this tracks the DBIDs through various swap/select operations. */
 
     /* There's a special concern for a NON-consistent iteration with replication.  If the keys are
      * all "future" keys (which haven't been processed by the iterator yet), then we don't expedite
@@ -2005,8 +1996,7 @@ static bool expediteKeysForMultiExec(client *c, hashtable *waitingOnKeys) {
      * these will be caught on the 2nd time around.
      *
      * Checking replication status before/after ensures that there can only be a single recursive
-     * call.
-     */
+     * call. */
     bool initiallyAnIteratorWillReplicate = anIteratorWillReplicateForThisCommand();
 
     bool mustBlock = false;
@@ -2647,8 +2637,7 @@ void bgIteration_handleCommandReplication(int dbid,
          * In the case of a client driven DEL command, the key will have already been deleted when
          *  we hit this routine.  In the case of EXPIRE/EVICT, they propagate happens before the key
          *  is deleted.  So if the key is missing, we can use the cached replication decision.  But
-         *  if the key still exists (indicating EXPIRE/EVICT) we evaluate it specially.
-         */
+         *  if the key still exists (indicating EXPIRE/EVICT) we evaluate it specially. */
         bool shouldReplicateDelCommand = false;
         bool isDelCommand = isDeleteCmd(cmd);
         if (isDelCommand) {
@@ -2679,9 +2668,7 @@ void bgIteration_handleCommandReplication(int dbid,
              * 1) For consistent iteration - it->cur_cmd_may_replicate is always true
              * 2) For non-consistent, if any of the keys have been processed, expediteKeysForWrite
              *    will ensure that ALL of the keys have been expedited - and we should replicate
-             * 3) For non-consistent, if NONE of the keys have been processed, no need to replicate
-             */
-
+             * 3) For non-consistent, if NONE of the keys have been processed, no need to replicate */
             if (BGITERATION_DEBUG) {
                 debugBuffer = sdscat(debugBuffer, " (queued)\n");
             }

@@ -3720,7 +3720,7 @@ static void propagateNow(int dbid, robj **argv, int argc, int target, int slot) 
  *
  * Called from alsoPropagate with regular params.
  * Called from propagatePendingCommands with dbid = -1 (to close multi/exec). */
-void propagateToBgIteration(int dbid, int argc, robj **argv, int target) {
+static void propagateToBgIteration(int dbid, int argc, robj **argv, int target) {
     /* STATIC indicates that we have sent the MULTI, and need to match it with
      *  an EXEC during propagatePendingCommands. */
     static bool sentMultiToBgIterator = false;

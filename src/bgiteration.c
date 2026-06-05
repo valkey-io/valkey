@@ -336,6 +336,12 @@ static dictType dictEntryPtrDictType = {
     .resizeAllowed = neverShrink,
     .entryDestructor = zfree};
 
+static hashtableType  dbEntryPtrHashtableType = {
+    .hashFunction = pointerHash,
+    .keyCompare = pointerCompare,
+    .resizeAllowed = neverShrink};
+
+
 // A TEMP set of robj's (of type sds).  This is only for temporary sets as the robj's are not
 //  ref-counted at insertion/deletion.
 static hashtableType tempKeysetHashtableType = {
@@ -378,11 +384,10 @@ struct bgIterator {
 
     genericIterator *keyset_iter; // Low-level iterator (polymorphic)
 
-    dict *early_iterate_entries; // Used to keep track of what items have already been iterated
-                                 // over by out-of-order expedited process, ensuring a bgIterator
-                                 // does not try to reprocess items.
-                                 // Used only by main thread.
-                                 // dictEntry -> NULL
+    hashtable *early_iterate_entries; /* A set of dbEntry, compared by pointer.  Used to track items
+                                       * which have already been iterated over by out-of-order
+                                       * expedited processing.  Ensures a bgIterator does not try to
+                                       * reprocess items.  Used only by main thread. */
 
     mutexQueue *items_for_iterator; // Created/Destroyed in main thread, used in both (threadsafe)
 
@@ -923,7 +928,7 @@ static void bgIteratorRelease(bgIterator *it) {
     it->keyset_iter->release(it->keyset_iter);
     it->keyset_iter = NULL;
 
-    dictRelease(it->early_iterate_entries);
+    hashtableRelease(it->early_iterate_entries);
     it->early_iterate_entries = NULL;
 
     sdsfree(it->name);
@@ -1030,8 +1035,7 @@ static void feedIterator(bgIterator *it, monotime end_time_us) {
             }
 
             // Remove any items which have been processed early
-            if (dictFind(it->early_iterate_entries, de) != NULL) {
-                dictDelete(it->early_iterate_entries, de);
+            if (hashtableDelete(it->early_iterate_entries, de)) {
                 if (BGITERATION_DEBUG) {
                     sds entryString = createEntryString(dbid, de);
                     debugBuffer = sdscatprintf(debugBuffer, "SKIPPING ITEM(early iterate): %s\n", entryString);
@@ -1072,8 +1076,8 @@ static void feedIterator(bgIterator *it, monotime end_time_us) {
 
 
 static bool addEarlyIterationKey(bgIterator *it, dbEntry *earlyEntry, int cur_dbid) {
-    int rc = dictAdd(it->early_iterate_entries, earlyEntry, NULL);
-    serverAssert(rc == DICT_OK);
+    bool wasAdded = hashtableAdd(it->early_iterate_entries, earlyEntry);
+    serverAssert(wasAdded);
 
     int dbid = (it->iteration_flags & BGITERATOR_FLAG_CONSISTENT)
                    ? it->keyset_iter->originalDb(it->keyset_iter, cur_dbid)
@@ -1120,7 +1124,7 @@ static bool expediteSingleKeyWithoutOptimization(bgIterator *it,
     dbEntry *de = dbFind(server.db[dbid], key);
     if (de != NULL) {
         if (!(iterComplete || it->keyset_iter->hasPassedItem(it->keyset_iter, key, dbid)) &&
-            (dictFind(it->early_iterate_entries, de) == NULL)) {
+            !hashtableFind(it->early_iterate_entries, de, NULL)) {
             if (addEarlyIterationKey(it, de, dbid)) {
                 mustBlock = true;
                 hashtableAdd(waitingOnKeys, oKey);
@@ -1267,7 +1271,7 @@ static bool expediteKeysForWrite(bgIterator *it,
             dbEntry *de = dbFind(server.db[dbid], key);
             if (de == NULL) continue; // New key, no need to expedite
             if (!(iterComplete || it->keyset_iter->hasPassedItem(it->keyset_iter, key, dbid)) &&
-                dictFind(it->early_iterate_entries, de) == NULL &&
+                !hashtableFind(it->early_iterate_entries, de, NULL) &&
                 ((bgIterationEntryMetadata *)objectGetMetadata(de))->iterator_epoch <= it->consistent_modification_id) {
                 if (addEarlyIterationKey(it, de, dbid)) {
                     mustBlock = true;
@@ -1306,7 +1310,7 @@ static bool expediteKeysForWrite(bgIterator *it,
                 }
                 if (iterComplete ||
                     it->keyset_iter->hasPassedItem(it->keyset_iter, key, dbid) ||
-                    (dictFind(it->early_iterate_entries, de) != NULL)) {
+                    hashtableFind(it->early_iterate_entries, de, NULL)) {
                     someIterated = true;
                 } else {
                     dictAdd(notIteratedKeys, de, oKey);
@@ -1799,7 +1803,7 @@ static void removePtrFromEarlyIterate(dbEntry *de) {
     listRewind(allIterators, &li);
     while ((node = listNext(&li)) != NULL) {
         bgIterator *it = listNodeValue(node);
-        dictDelete(it->early_iterate_entries, de); // just try delete (might not be here)
+        hashtableDelete(it->early_iterate_entries, de); // just try delete (might not be here)
     }
 }
 
@@ -2096,8 +2100,8 @@ static bgIterator *bgIteratorCreate(const char *name,
     it->iteration_type = iter_type;
     it->consistent_modification_id = bgIteration_epoch++;
     it->keyset_iter = keyset_iter;
-    it->early_iterate_entries = dictCreate(&dictEntryPtrDictType);
-    dictExpand(it->early_iterate_entries, BGITER_EARLY_ITERATE_DICT_INITIAL_SIZE);
+    it->early_iterate_entries = hashtableCreate(&dbEntryPtrHashtableType);
+    hashtableExpand(it->early_iterate_entries, BGITER_EARLY_ITERATE_DICT_INITIAL_SIZE);
     it->current_item = NULL;
     it->client_is_active = false;
     it->completed = false;
@@ -2351,7 +2355,7 @@ void bgIteration_keyDelete(int dbid, const_sds key) {
         if (it->iteration_flags & BGITERATOR_FLAG_CONSISTENT &&
             ((bgIterationEntryMetadata *)objectGetMetadata(de))->iterator_epoch <= it->consistent_modification_id) {
             if (!it->keyset_iter->hasPassedItem(it->keyset_iter, key, dbid) &&
-                (dictFind(it->early_iterate_entries, de) == NULL)) {
+                !hashtableFind(it->early_iterate_entries, de, NULL)) {
                 addEarlyIterationKey(it, de, dbid); // (may also add to inUseEntries)
             }
         }
@@ -2557,7 +2561,7 @@ void bgIteration_handleCommandReplication(int dbid,
             if (special_dbEntry != NULL) {
                 if (it->cur_cmd_may_replicate &&
                     !it->keyset_iter->hasPassedItem(it->keyset_iter, special_key, special_dbid)) {
-                    dictAdd(it->early_iterate_entries, special_dbEntry, NULL);
+                    hashtableAdd(it->early_iterate_entries, special_dbEntry);
                     if (BGITERATION_DEBUG) {
                         sds entryString = createEntryString(special_dbid, special_dbEntry);
                         debugBuffer = sdscatprintf(debugBuffer, "EARLY(special): %s\n", entryString);
@@ -2586,7 +2590,8 @@ void bgIteration_handleCommandReplication(int dbid,
                             //  key which we haven't yet reached in iteration, it needs to be added
                             //  to the set of early iterate entries.  (We know that it's not already
                             //  in that set because it's a newly created key!)
-                            dictAdd(it->early_iterate_entries, de, NULL);
+                            bool wasAdded = hashtableAdd(it->early_iterate_entries, de);
+                            serverAssert(wasAdded);
                             if (BGITERATION_DEBUG) {
                                 sds entryString = createEntryString(dbid, de);
                                 debugBuffer = sdscatprintf(debugBuffer, "EARLY(NEW): %s\n", entryString);
@@ -2649,7 +2654,7 @@ void bgIteration_handleCommandReplication(int dbid,
                     //        BEFORE the actual delete.  So if the dbEntry still exists, we are doing
                     //        an expire/evict which is not preceded by blockClientIfRequired().
                     if (it->keyset_iter->hasPassedItem(it->keyset_iter, key, dbid) ||
-                        (dictFind(it->early_iterate_entries, de) != NULL)) {
+                        hashtableFind(it->early_iterate_entries, de, NULL)) {
                         shouldReplicateDelCommand = true;
                     }
                 } else {
@@ -2729,11 +2734,12 @@ void bgIteration_updateDbEntryPtr(dbEntry *old, dbEntry *new) {
     listRewind(allIterators, &li);
     while ((node = listNext(&li)) != NULL) {
         bgIterator *it = listNodeValue(node);
-        if (dictDelete(it->early_iterate_entries, old) == DICT_OK) {
+        if (hashtableDelete(it->early_iterate_entries, old)) {
             if (BGITERATION_DEBUG) {
                 debugBuffer = sdscatprintf(debugBuffer, "EARLY LIST UPDATE %p -> %p\n", (void *)old, (void *)new);
             }
-            dictAdd(it->early_iterate_entries, new, NULL);
+            bool wasAdded = hashtableAdd(it->early_iterate_entries, new);
+            serverAssert(wasAdded);
         }
     }
 }

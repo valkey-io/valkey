@@ -44,6 +44,14 @@
 /* From module.c */
 void moduleCallClusterReceivers(const char *sender_id, uint64_t module_id, uint8_t type, const unsigned char *payload, uint32_t len);
 
+/* Shard epoch dict type, mapping shard_id to epoch. */
+static dictType raftShardEpochDictType = {
+    .entryGetKey = dictEntryGetKey,
+    .hashFunction = dictSdsHash,
+    .keyCompare = dictSdsKeyCompare,
+    .entryDestructor = dictEntryDestructorSdsKey,
+};
+
 /* --------------------------------------------------------------------------
  * Raft log entry types — what gets replicated
  * -------------------------------------------------------------------------- */
@@ -177,6 +185,9 @@ typedef struct {
     uint64_t stats_pubsub_bytes_received;
     uint64_t stats_module_bytes_sent;
     uint64_t stats_module_bytes_received;
+
+    /* Shard epoch tracking (per-shard monotonic counter for stale proposal detection). */
+    dict *shard_epochs;
 } clusterRaftState;
 
 #define RAFT_STATE() ((clusterRaftState *)server.cluster->protocol_data)
@@ -821,6 +832,38 @@ static void clusterRaftPropose(sds entry, void *ctx, void (*callback)(void *ctx,
         msg = sdscatlen(msg, entry, sdslen(entry));
         msg = wireFinishMsg(msg);
         clusterRaftSendMsg(leader->link, msg);
+    }
+}
+
+/* --------------------------------------------------------------------------
+ * Shard epoch helpers
+ * -------------------------------------------------------------------------- */
+
+static uint64_t clusterGetShardEpoch(const char *shard_id) {
+    clusterRaftState *rs = RAFT_STATE();
+    sds s = sdsnewlen(shard_id, CLUSTER_NAMELEN);
+    dictEntry *de = dictFind(rs->shard_epochs, s);
+    sdsfree(s);
+    return de ? dictGetUnsignedIntegerVal(de) : 0;
+}
+
+static void clusterSetShardEpoch(const char *shard_id, uint64_t epoch) {
+    clusterRaftState *rs = RAFT_STATE();
+    sds s = sdsnewlen(shard_id, CLUSTER_NAMELEN);
+    dictEntry *de = dictFind(rs->shard_epochs, s);
+    if (de) {
+        /* Existing entry — just update the value. */
+        dictSetUnsignedIntegerVal(de, epoch);
+        sdsfree(s);
+    } else {
+        /* Only create a new epoch entry if the shard actually exists. */
+        dictEntry *shard_de = dictFind(server.cluster->shards, s);
+        if (shard_de) {
+            de = dictAddRaw(rs->shard_epochs, s, NULL);
+            dictSetUnsignedIntegerVal(de, epoch);
+        } else {
+            sdsfree(s);
+        }
     }
 }
 
@@ -1926,7 +1969,11 @@ static void clusterRaftInit(void) {
     rs->my_last_committed_info = sdsempty();
     rs->last_node_info_check = monotonicMs();
     rs->last_repl_offsets_broadcast = monotonicMs();
+<<<<<<< HEAD
     rs->todo_update_slot_coverage = 1;
+=======
+    rs->shard_epochs = dictCreate(&raftShardEpochDictType);
+>>>>>>> 4ec207fbe (Use existing configEpoch field API for shard epoch)
     server.cluster->size = 0; /* Incremented by NODE_JOIN apply */
 }
 
@@ -2439,6 +2486,7 @@ static void clusterRaftHandleServerShutdown(void) {
     }
     zfree(rs->log);
     sdsfree(rs->my_last_committed_info);
+    dictRelease(rs->shard_epochs);
     zfree(rs);
     server.cluster->protocol_data = NULL;
 }
@@ -2662,6 +2710,22 @@ static void clusterRaftInitNodeData(clusterNode *node) {
 
 static void clusterRaftFreeNodeData(clusterNode *node) {
     zfree(node->protocol_data);
+}
+
+/* For raft, the config_epoch field in nodes.conf stores the shard epoch.
+ * ping_sent and pong_received have no meaning in raft (no gossip). */
+static void clusterRaftGetNodePingPongEpoch(clusterNode *node, long long *ping_sent, long long *pong_received, uint64_t *config_epoch) {
+    *ping_sent = 0;
+    *pong_received = 0;
+    *config_epoch = clusterGetShardEpoch(node->shard_id);
+}
+
+/* On load, the config_epoch field is the shard epoch for this node's shard.
+ * We use it to restore the shard_epochs dict. ping/pong are ignored. */
+static void clusterRaftSetNodePingPongEpoch(clusterNode *node, int ping_active, int pong_active, uint64_t shard_epoch) {
+    UNUSED(ping_active);
+    UNUSED(pong_active);
+    clusterSetShardEpoch(node->shard_id, shard_epoch);
 }
 
 static sds clusterRaftAppendVarsLine(sds config) {
@@ -3365,7 +3429,7 @@ static void clusterRaftResetCluster(int hard) {
 
     /* Recreate shards dict. */
     dictEmpty(server.cluster->shards, NULL);
-    dictEmpty(server.cluster->shard_epochs, NULL);
+    dictEmpty(rs->shard_epochs, NULL);
 
     /* Forget all nodes except myself. */
     dictIterator *di = dictGetSafeIterator(server.cluster->nodes);
@@ -3478,8 +3542,8 @@ clusterBusType clusterRaftBus = {
     .resetStats = clusterRaftResetStats,
     .appendInfoFields = clusterRaftAppendInfoFields,
     .getFailureReportsCount = clusterRaftGetFailureReportsCount,
-    .getNodePingPongEpoch = NULL,
-    .setNodePingPongEpoch = NULL,
+    .getNodePingPongEpoch = clusterRaftGetNodePingPongEpoch,
+    .setNodePingPongEpoch = clusterRaftSetNodePingPongEpoch,
     .setNodeFailed = NULL,
     .appendVarsLine = clusterRaftAppendVarsLine,
     .parseVarsLine = clusterRaftParseVarsLine,

@@ -70,7 +70,6 @@ void clusterInit(void) {
     server.cluster->size = 0;
     server.cluster->nodes = dictCreate(&clusterNodesDictType);
     server.cluster->shards = dictCreate(&clusterSdsToListType);
-    server.cluster->shard_epochs = dictCreate(&clusterShardEpochDictType);
     server.cluster->migrating_slots_to = dictCreate(&clusterSlotDictType);
     server.cluster->importing_slots_from = dictCreate(&clusterSlotDictType);
     server.cluster->stat_cluster_links_buffer_limit_exceeded = 0;

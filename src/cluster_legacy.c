@@ -735,7 +735,6 @@ static void clusterLegacyReset(int hard) {
 
     /* Recreate shards dict */
     dictEmpty(server.cluster->shards, NULL);
-    dictEmpty(server.cluster->shard_epochs, NULL);
 
     /* Forget all the nodes, but myself. */
     di = dictGetSafeIterator(server.cluster->nodes);

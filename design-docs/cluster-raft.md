@@ -212,9 +212,9 @@ changes are infrequent.
 ## PROPOSE and Leader Validation
 
 Followers forward proposals to the leader using the PROPOSE message,
-sent on the outbound link to the leader. The leader always accepts
-proposals without validation — it appends them to the log and
-replicates them. Validation happens at apply time, where the apply
+sent on the outbound link to the leader. The leader accepts
+proposals with best effort pre-validations — it appends them to the log and
+replicates them. Authoritative validation happens at apply time, where the apply
 function can detect conflicts and treat them as no-ops.
 
 This design simplifies the leader: it doesn't need to understand the
@@ -738,9 +738,9 @@ the corresponding keys.
 A shard-epoch is a per-shard monotonically increasing counter stored
 in `server.cluster->shard_epochs`. It is bumped each time a topology
 change is applied to the shard. Entries that modify shard topology
-include the shard's current epoch at proposal time. On apply, if the
-epoch has advanced past the value in the entry, the entry is stale
-and becomes a no-op.
+include the shard's current epoch at proposal time. Epoch is validated
+at prepare time and at apply time. If the epoch has advanced past the
+value in the entry, the entry is stale and is ignored.
 
 ### Example: slot migration racing with failover
 

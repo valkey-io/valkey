@@ -867,6 +867,25 @@ double zzlGetScore(unsigned char *sptr) {
     return score;
 }
 
+/* Validate that none of the scores in a listpack-encoded sorted set is NAN.
+ * The structural layout (member, score, member, score, ...) must already have
+ * been validated by lpValidateIntegrityAndDups. Returns 1 if all scores are
+ * valid, 0 if a NAN score is found. This guards against crafted RESTORE
+ * payloads: zslInsertNode() asserts the score is not NAN, so a NAN score in a
+ * listpack zset would crash the server when it is later converted to a
+ * skiplist. The skiplist RDB format rejects NAN scores at load time; this is
+ * the equivalent check for the listpack format. */
+int zzlValidateScores(unsigned char *zl) {
+    unsigned char *eptr = lpSeek(zl, 0), *sptr;
+    while (eptr != NULL) {
+        sptr = lpNext(zl, eptr);
+        if (sptr == NULL) return 0; /* odd number of elements */
+        if (isnan(zzlGetScore(sptr))) return 0;
+        eptr = lpNext(zl, sptr);
+    }
+    return 1;
+}
+
 /* Return a listpack element as an SDS string. */
 sds lpGetObject(unsigned char *sptr) {
     unsigned char *vstr;

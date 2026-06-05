@@ -46,7 +46,7 @@ static bool isDeleteCmd(struct serverCommand *cmd) {
 }
 
 
-/* This utility utilizes the main thread and backgound threads for processing.  The API is split,
+/* This utility utilizes the main thread and background threads for processing.  The API is split,
  * with some of the functions intended for the main thread and others intended for the background
  * clients.  This sanity check ensures that we maintain thread safety, calling the API as intended. */
 static bool onValkeyMainThread(void) {

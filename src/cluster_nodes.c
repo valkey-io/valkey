@@ -95,9 +95,13 @@ static int auxShardIdSetter(clusterNode *n, void *value, size_t length) {
     if (verifyClusterNodeId(value, length) == C_ERR) {
         return C_ERR;
     }
+    if (memcmp(n->shard_id, value, CLUSTER_NAMELEN) == 0) {
+        return C_OK;
+    }
+    clusterRemoveNodeFromShard(n);
     memcpy(n->shard_id, value, CLUSTER_NAMELEN);
-    /* if n already has replicas, make sure they all agree
-     * on the shard id. If not, update them. */
+    clusterAddNodeToShard(n->shard_id, n);
+    /* If n has replicas, make sure they follow the new shard id. */
     for (int i = 0; i < n->num_replicas; i++) {
         if (memcmp(n->replicas[i]->shard_id, n->shard_id, CLUSTER_NAMELEN) != 0) {
             serverLog(LL_NOTICE,
@@ -109,7 +113,6 @@ static int auxShardIdSetter(clusterNode *n, void *value, size_t length) {
             clusterAddNodeToShard(n->shard_id, n->replicas[i]);
         }
     }
-    clusterAddNodeToShard(value, n);
     return C_OK;
 }
 

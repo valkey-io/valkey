@@ -118,9 +118,17 @@ ENGINE_SERVER_WRAP_OBJ := $(addprefix $(WRAP_DIR)/, $(ENGINE_SERVER_OBJ))
 # Homebrew does not add llvm/bin to PATH by default, so we check the standard
 # Homebrew prefix locations for both Apple Silicon (/opt/homebrew) and Intel (/usr/local).
 BREW_LLVM_BIN := $(firstword $(wildcard /opt/homebrew/opt/llvm/bin /usr/local/opt/llvm/bin))
-LLC ?= $(if $(shell which llc 2>/dev/null),llc,$(BREW_LLVM_BIN)/llc)
-LLVM_DIS ?= $(if $(shell which llvm-dis 2>/dev/null),llvm-dis,$(BREW_LLVM_BIN)/llvm-dis)
-LLVM_OBJCOPY ?= $(if $(shell which llvm-objcopy 2>/dev/null),llvm-objcopy,$(BREW_LLVM_BIN)/llvm-objcopy)
+ifneq ($(shell command -v llc 2>/dev/null),)
+  LLC ?= llc
+  LLVM_DIS ?= llvm-dis
+  LLVM_OBJCOPY ?= llvm-objcopy
+else ifneq ($(BREW_LLVM_BIN),)
+  LLC ?= $(BREW_LLVM_BIN)/llc
+  LLVM_DIS ?= $(BREW_LLVM_BIN)/llvm-dis
+  LLVM_OBJCOPY ?= $(BREW_LLVM_BIN)/llvm-objcopy
+else
+  $(error LLVM tools not found. Install via Homebrew: brew install llvm)
+endif
 
 $(WRAP_DIR):
 	@mkdir -p $(WRAP_DIR)

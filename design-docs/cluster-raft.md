@@ -141,7 +141,7 @@ NODE_JOIN <node-id> <address>
 NODE_FORGET <node-id>
     Remove a node from the cluster (CLUSTER FORGET). Not yet implemented.
 
-SLOT_CHANGE <node-id-or-dash> <range> [<range> ...]
+SLOT_CHANGE <source-node-id-or-dash> <source-epoch> <target-node-id-or-dash> <target-epoch> <range> [<range> ...]
     Assign or remove slot ownership. A dash means "no owner" (delete
     slots). Ranges use the nodes.conf format: "0-5460" or "5461".
 
@@ -171,7 +171,7 @@ NODE_RECOVER <node-id>
 ```
 
 Ranges in SLOT_CHANGE use the same format as nodes.conf: `0-5460` or
-`5461`. A dash as node-id means "no owner" (delete slots) or "no
+`5461`. A dash as source/target-id means "no owner" (delete slots) or "no
 primary" (promote to primary).
 
 ### Why typed entries instead of a key-value store?
@@ -759,9 +759,9 @@ value in the entry, the entry is stale and is ignored.
 ### Entry formats with epoch
 
 ```
-FAILOVER <replica-id> <primary-id> <epoch>
+FAILOVER <replica-id> <primary-id> <shard-id> <shard-epoch>
 SET_REPLICA_OF <replica-id> <primary-id-or-dash> <shard-id> <epoch>
-SLOT_CHANGE <target-id-or-dash> <ranges...> <source-epoch> <target-epoch>
+SLOT_CHANGE <source-node-id-or-dash> <source-epoch> <target-node-id-or-dash> <target-epoch> <ranges...>
 NODE_FORGET <node-id> <epoch>
 ```
 

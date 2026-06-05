@@ -560,6 +560,18 @@ start_multiple_servers 2 {overrides {cluster-enabled yes cluster-protocol raft c
     set port [srv 0 port]
     set cport [expr {$port + 10000}]
 
+    # Extract shard-id of r0 from CLUSTER SHARDS output.
+    set node0_shard ""
+    set shards [$r0 CLUSTER SHARDS]
+    foreach shard $shards {
+        foreach node [dict get $shard nodes] {
+            if {[dict get $node id] eq $node_id} {
+                set node0_shard [dict get $shard id]
+            }
+        }
+    }
+    assert {$node0_shard ne ""}
+
     # Helper: connect to cluster bus and complete HELLO handshake.
     proc connect_fake_node {cport} {
         set fake_id [string repeat "f" 40]
@@ -574,10 +586,10 @@ start_multiple_servers 2 {overrides {cluster-enabled yes cluster-protocol raft c
 
     # Each entry: {entry_type propose_msg state_check}
     set stale_proposals [list \
-        [list "SLOT_CHANGE" "PROPOSE SLOT_CHANGE - 50 0 0" {
+        [list "SLOT_CHANGE" "PROPOSE SLOT_CHANGE $node_id 50 $node1_id 0 0-100" {
             assert_equal 16384 [get_cluster_info_field $r0 cluster_slots_assigned]
         }] \
-        [list "FAILOVER" "PROPOSE FAILOVER $node1_id $node_id 0" {
+        [list "FAILOVER" "PROPOSE FAILOVER $node1_id $node_id $node0_shard 50" {
             set nodes [$r0 CLUSTER NODES]
             assert_match "*$node_id*myself,master*" $nodes
             assert_equal 16384 [get_cluster_info_field $r0 cluster_slots_assigned]
@@ -600,7 +612,7 @@ start_multiple_servers 2 {overrides {cluster-enabled yes cluster-protocol raft c
             set commit_after [get_cluster_info_field $r0 cluster_raft_commit_index]
             assert_equal $commit_before $commit_after
 
-            # Verify cluster state unchanged.
+            # Verify cluster state unchanged (stale proposal had no effect).
             eval $state_check
 
             close $fd
@@ -613,8 +625,8 @@ start_multiple_servers 2 {overrides {cluster-enabled yes cluster-protocol raft c
     # --------------------------------------------------------------------------
 
     set missing_epoch_proposals [list \
-        [list "SLOT_CHANGE (missing epoch)" "PROPOSE SLOT_CHANGE - 50"] \
-        [list "FAILOVER (missing epoch)" "PROPOSE FAILOVER $node1_id $node_id"] \
+        [list "SLOT_CHANGE (missing epoch)" "PROPOSE SLOT_CHANGE $node_id 1 $node1_id"] \
+        [list "FAILOVER (missing epoch)" "PROPOSE FAILOVER $node1_id $node_id $node0_shard"] \
         [list "SET_REPLICA_OF (missing epoch)" "PROPOSE SET_REPLICA_OF $node1_id $node_id [string repeat a 40]"] \
         [list "NODE_FORGET (missing epoch)" "PROPOSE NODE_FORGET $node1_id"] \
     ]
@@ -635,6 +647,39 @@ start_multiple_servers 2 {overrides {cluster-enabled yes cluster-protocol raft c
 
             close $fd
         }
+    }
+
+    # --------------------------------------------------------------------------
+    # FAILOVER with wrong shard-id: passes pre-validation (unknown shard has
+    # epoch 0, so isShardEpochCurrent returns true) but is rejected at apply
+    # because primary's current shard_id doesn't match the entry.
+    # --------------------------------------------------------------------------
+
+    test "Raft shard epoch: FAILOVER with wrong shard-id is rejected at apply" {
+        # Use a bogus shard-id that doesn't match node_id's actual shard.
+        set wrong_shard [string repeat "1" 40]
+
+        # Get current commit index.
+        set commit_before [get_cluster_info_field $r0 cluster_raft_commit_index]
+
+        # Propose FAILOVER with correct epoch (0, since wrong_shard has no
+        # epoch tracked) but wrong shard-id.
+        set fd [connect_fake_node $cport]
+        raft_send $fd "PROPOSE FAILOVER $node1_id $node_id $wrong_shard 0"
+        after 500
+
+        # The entry passes pre-validation (epoch 0 for unknown shard is valid)
+        # and gets appended + committed. But apply rejects it due to shard mismatch.
+        # Commit index advances (entry was appended) but state is unchanged.
+        set commit_after [get_cluster_info_field $r0 cluster_raft_commit_index]
+        assert {$commit_after > $commit_before}
+
+        # Verify the failover did NOT happen: r0 is still primary with all slots.
+        set nodes [$r0 CLUSTER NODES]
+        assert_match "*$node_id*myself,master*" $nodes
+        assert_equal 16384 [get_cluster_info_field $r0 cluster_slots_assigned]
+
+        close $fd
     }
 }
 

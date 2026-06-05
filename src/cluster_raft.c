@@ -433,8 +433,9 @@ static void clusterRaftSelfJoin(void) {
             slots = sdscatfmt(slots, " %i-%i", start, j);
     }
     if (sdslen(slots) > 0) {
-        entry = sdsnew("SLOT_CHANGE ");
+        entry = sdsnew("SLOT_CHANGE - 0 ");
         entry = sdscatlen(entry, myself->name, CLUSTER_NAMELEN);
+        entry = sdscatfmt(entry, " %U", (unsigned long long)0);
         entry = sdscatsds(entry, slots);
         clusterRaftPropose(entry, NULL, NULL);
         sdsfree(entry);
@@ -731,7 +732,7 @@ static int clusterRaftProcessMeetRejected(clusterLink *link, int argc, sds *argv
  *
  * Examples:
  *   PROPOSE NODE_JOIN <node-id> <address>
- *   PROPOSE SLOT_CHANGE <node-id-or-dash> <range> [<range> ...]
+ *   PROPOSE SLOT_CHANGE <source-id-or-dash> <source-epoch> <target-id-or-dash> <target-epoch> <range> [<range> ...]
  * -------------------------------------------------------------------------- */
 static int raftEntryTypeByName(const char *name) {
     if (!strcasecmp(name, "NODE_JOIN")) return RAFT_ENTRY_NODE_JOIN;
@@ -761,7 +762,7 @@ static const char *raftEntryTypeName(uint8_t type) {
 
 /* Propose a log entry. The entry is an sds containing the type name
  * followed by the data, e.g. "NODE_JOIN <id> <addr>" or
- * "SLOT_CHANGE <id> 0-5460". On the leader, it's appended directly
+ * "SLOT_CHANGE <src-id> <src-epoch> <target-id> <target-epoch> 0-5460". On the leader, it's appended directly
  * to the log. On followers, it's forwarded to the leader. */
 static void clusterRaftPropose(sds entry, void *ctx, void (*callback)(void *ctx, const char *error)) {
     clusterRaftState *rs = RAFT_STATE();
@@ -873,56 +874,48 @@ static int isShardEpochCurrent(const char *shard_id, uint64_t entry_epoch) {
 }
 
 /* Parsed fields from a SLOT_CHANGE entry's epoch-related data.
- * Format: "<target-id-or-dash> <ranges...> <source-epoch> <target-epoch>" */
+ * Format: "<source-id-or-dash> <source-epoch> <target-id-or-dash> <target-epoch> <ranges...>" */
 typedef struct {
     clusterNode *target;         /* Target node (NULL if dash). */
-    clusterNode *source_owner;   /* Current owner of the first slot in the range. */
+    clusterNode *source_owner;   /* Source node (NULL if dash). */
     const char *source_shard_id; /* source_owner->shard_id or NULL. */
     const char *target_shard_id; /* target->shard_id or NULL. */
     uint64_t source_epoch;
     uint64_t target_epoch;
-    int range_end; /* Index in argv where ranges end (argc - 2). */
+    int range_end; /* Index in argv where ranges begin (first range element). */
     int valid;     /* 1 if parsing succeeded, 0 otherwise. */
 } slotChangeEpochInfo;
 
-/* Parse epoch-related fields from a SLOT_CHANGE entry's split argv.
- * Caller must have split data and verified argc >= 4. */
+/* Parse fields from a SLOT_CHANGE entry's split argv.
+ * Format: "<source-id-or-dash> <source-epoch> <target-id-or-dash> <target-epoch> <ranges...>"
+ * Caller must have verified argc >= 5. */
 static slotChangeEpochInfo parseSlotChangeEpochs(sds *argv, int argc) {
     slotChangeEpochInfo info = {0};
-    if (argc < 4) return info;
 
-    info.target = (sdslen(argv[0]) == CLUSTER_NAMELEN)
-                      ? clusterLookupNode(argv[0], CLUSTER_NAMELEN)
-                      : NULL;
-    info.source_epoch = strtoull(argv[argc - 2], NULL, 10);
-    info.target_epoch = strtoull(argv[argc - 1], NULL, 10);
-    info.range_end = argc - 2;
-
-    /* Derive source shard from current owner of the first slot in the range. */
-    int first_start;
-    char *dash = strchr(argv[1], '-');
-    if (dash) {
-        *dash = '\0';
-        first_start = atoi(argv[1]);
-        *dash = '-';
-    } else {
-        first_start = atoi(argv[1]);
-    }
-    info.source_owner = (first_start >= 0 && first_start < CLUSTER_SLOTS)
-                            ? server.cluster->slots[first_start]
+    /* argv[0] = source-id-or-dash */
+    info.source_owner = (sdslen(argv[0]) == CLUSTER_NAMELEN)
+                            ? clusterLookupNode(argv[0], CLUSTER_NAMELEN)
                             : NULL;
+    /* argv[1] = source-epoch */
+    info.source_epoch = strtoull(argv[1], NULL, 10);
+    /* argv[2] = target-id-or-dash */
+    info.target = (sdslen(argv[2]) == CLUSTER_NAMELEN)
+                      ? clusterLookupNode(argv[2], CLUSTER_NAMELEN)
+                      : NULL;
+    /* argv[3] = target-epoch */
+    info.target_epoch = strtoull(argv[3], NULL, 10);
+    /* argv[4..argc-1] = ranges */
+    info.range_end = 4;
+
     info.source_shard_id = info.source_owner ? info.source_owner->shard_id : NULL;
     info.target_shard_id = info.target ? info.target->shard_id : NULL;
-    info.valid = 1;
+    info.valid = (argc > 4);
     return info;
 }
 
 /* Pre-validate shard epoch on the leader before appending to the log.
- * This is an optimization: reject obviously stale proposals early to avoid
- * wasting log space and replication bandwidth.
- * Returns 1 if the entry should be appended, 0 if stale. */
-/* Returns 0 if the entry_epoch is stale relative to the shard's current epoch.
- * Returns 1 if valid (epoch matches or shard is at epoch 0). */
+ * Rejects stale proposals early to avoid wasting log space.
+ * Returns 1 if valid, 0 if stale. */
 static int clusterRaftPreValidateEpoch(int type, sds data) {
     int argc;
     sds *argv = sdssplitlen(data, sdslen(data), " ", 1, &argc);
@@ -931,15 +924,12 @@ static int clusterRaftPreValidateEpoch(int type, sds data) {
     int ok = 1;
     switch (type) {
     case RAFT_ENTRY_FAILOVER: {
-        /* Format: <replica-id> <primary-id> <epoch> */
-        if (argc < 3) {
+        /* Format: <replica-id> <primary-id> <shard-id> <shard-epoch> */
+        if (argc < 4) {
             ok = 0;
         } else {
-            clusterNode *primary = clusterLookupNode(argv[1], sdslen(argv[1]));
-            if (primary) {
-                uint64_t epoch = strtoull(argv[2], NULL, 10);
-                ok = isShardEpochCurrent(primary->shard_id, epoch);
-            }
+            uint64_t epoch = strtoull(argv[3], NULL, 10);
+            ok = isShardEpochCurrent(argv[2], epoch);
         }
         break;
     }
@@ -954,8 +944,8 @@ static int clusterRaftPreValidateEpoch(int type, sds data) {
         break;
     }
     case RAFT_ENTRY_SLOT_CHANGE: {
-        /* Format: <target-id-or-dash> <ranges...> <source-epoch> <target-epoch> */
-        if (argc < 4) {
+        /* Format: <source-id-or-dash> <source-epoch> <target-id-or-dash> <target-epoch> <ranges...> */
+        if (argc < 5) {
             ok = 0;
         } else {
             slotChangeEpochInfo info = parseSlotChangeEpochs(argv, argc);
@@ -1276,23 +1266,27 @@ static void raftLogApply(raftLogEntry *e) {
 
                     /* Propose SLOT_CHANGE for slots assigned before joining
                      * the cluster (from our singleton state). */
-                    sds entry = sdsnew("SLOT_CHANGE ");
-                    entry = sdscatlen(entry, myself->name, CLUSTER_NAMELEN);
                     int count = 0;
+                    sds slot_range = sdsempty();
                     for (int j = 0; j < CLUSTER_SLOTS; j++) {
                         if (server.cluster->slots[j] != myself) continue;
                         int start = j;
                         while (j + 1 < CLUSTER_SLOTS && server.cluster->slots[j + 1] == myself) j++;
                         if (j == start)
-                            entry = sdscatfmt(entry, " %i", start);
+                            slot_range = sdscatfmt(slot_range, " %i", start);
                         else
-                            entry = sdscatfmt(entry, " %i-%i", start, j);
+                            slot_range = sdscatfmt(slot_range, " %i-%i", start, j);
                         count++;
                     }
                     if (count > 0) {
+                        sds entry = sdsnew("SLOT_CHANGE - 0 ");
+                        entry = sdscatlen(entry, myself->name, CLUSTER_NAMELEN);
+                        entry = sdscatfmt(entry, " %U", (unsigned long long)0);
+                        entry = sdscatsds(entry, slot_range);
                         clusterRaftPropose(entry, NULL, NULL);
+                        sdsfree(entry);
                     }
-                    sdsfree(entry);
+                    sdsfree(slot_range);
                 }
             }
 
@@ -2247,7 +2241,8 @@ static void clusterRaftCron(void) {
             entry = sdscatlen(entry, myself->name, CLUSTER_NAMELEN);
             entry = sdscatlen(entry, " ", 1);
             entry = sdscatlen(entry, primary->name, CLUSTER_NAMELEN);
-            /* Append primary's shard epoch. */
+            entry = sdscatlen(entry, " ", 1);
+            entry = sdscatlen(entry, primary->shard_id, CLUSTER_NAMELEN);
             uint64_t epoch = clusterGetShardEpoch(primary->shard_id);
             entry = sdscatfmt(entry, " %U", (unsigned long long)epoch);
             clusterRaftPropose(entry, rs->mf_ctx, rs->mf_callback);
@@ -2269,7 +2264,8 @@ static void clusterRaftCron(void) {
             entry = sdscatlen(entry, myself->name, CLUSTER_NAMELEN);
             entry = sdscatlen(entry, " ", 1);
             entry = sdscatlen(entry, primary->name, CLUSTER_NAMELEN);
-            /* Append primary's shard epoch. */
+            entry = sdscatlen(entry, " ", 1);
+            entry = sdscatlen(entry, primary->shard_id, CLUSTER_NAMELEN);
             uint64_t epoch = clusterGetShardEpoch(primary->shard_id);
             entry = sdscatfmt(entry, " %U", (unsigned long long)epoch);
             clusterRaftPropose(entry, NULL, NULL);
@@ -3058,21 +3054,23 @@ static void clusterRaftSlotChange(slotRange *ranges, int numranges, clusterNode 
         return;
     }
 
-    /* Build entry: "SLOT_CHANGE <node-id-or-dash> <ranges...> <source-epoch> <target-epoch>" */
+    /* Build entry: "SLOT_CHANGE <source-id-or-dash> <source-epoch> <target-id-or-dash> <target-epoch> <ranges...>" */
+    clusterNode *source_owner = server.cluster->slots[ranges[0].start_slot];
+    serverAssert(source_owner || target); /* At least one side must be set. */
+    uint64_t source_epoch = (source_owner) ? clusterGetShardEpoch(source_owner->shard_id) : 0;
+    uint64_t target_epoch = target ? clusterGetShardEpoch(target->shard_id) : 0;
+
     sds entry = sdsnew("SLOT_CHANGE ");
+    entry = sdscatlen(entry, source_owner ? source_owner->name : "-", source_owner ? CLUSTER_NAMELEN : 1);
+    entry = sdscatfmt(entry, " %U ", (unsigned long long)source_epoch);
     entry = sdscatlen(entry, target ? target->name : "-", target ? CLUSTER_NAMELEN : 1);
+    entry = sdscatfmt(entry, " %U", (unsigned long long)target_epoch);
     for (int i = 0; i < numranges; i++) {
         if (ranges[i].start_slot == ranges[i].end_slot)
             entry = sdscatfmt(entry, " %i", ranges[i].start_slot);
         else
             entry = sdscatfmt(entry, " %i-%i", ranges[i].start_slot, ranges[i].end_slot);
     }
-
-    /* Append source-epoch and target-epoch as last two fields. */
-    clusterNode *source_owner = server.cluster->slots[ranges[0].start_slot];
-    uint64_t source_epoch = (source_owner) ? clusterGetShardEpoch(source_owner->shard_id) : 0;
-    uint64_t target_epoch = target ? clusterGetShardEpoch(target->shard_id) : 0;
-    entry = sdscatfmt(entry, " %U %U", (unsigned long long)source_epoch, (unsigned long long)target_epoch);
 
     /* Propose through Raft leader. The callback is invoked when the entry is
      * committed and applied. We use two chained callbacks, to handle some
@@ -3086,15 +3084,14 @@ static void clusterRaftSlotChange(slotRange *ranges, int numranges, clusterNode 
     sdsfree(entry);
 }
 
-/* Apply a SLOT_CHANGE entry. Format: "<node-id-or-dash> <ranges...> <source-epoch> <target-epoch>"
- * Ranges use the same format as nodes.conf: "0-5460" or "5461".
- * The last two fields are the source and target shard epochs. */
+/* Apply a SLOT_CHANGE entry. Format: "<source-id-or-dash> <source-epoch> <target-id-or-dash> <target-epoch> <ranges...>"
+ * Ranges use the same format as nodes.conf: "0-5460" or "5461". */
 static const char *clusterRaftApplySlotChange(sds data) {
     const char *error = NULL;
     int argc;
     sds *argv = sdssplitlen(data, sdslen(data), " ", 1, &argc);
-    /* Need at least: target + one_range + source_epoch + target_epoch = 4 */
-    if (!argv || argc < 4) goto done;
+    /* Need at least: source + source_epoch + target + target_epoch + one_range = 5 */
+    if (!argv || argc < 5) goto done;
 
     slotChangeEpochInfo info = parseSlotChangeEpochs(argv, argc);
     if (!info.valid) goto done;
@@ -3106,8 +3103,8 @@ static const char *clusterRaftApplySlotChange(sds data) {
         goto done;
     }
 
-    /* Range fields are argv[1] through argv[range_end-1] (excluding last two epoch fields). */
-    for (int i = 1; i < info.range_end; i++) {
+    /* Range fields are argv[range_end] through argv[argc-1]. */
+    for (int i = info.range_end; i < argc; i++) {
         int start, end;
         char *p = strchr(argv[i], '-');
         if (p) {
@@ -3210,7 +3207,7 @@ done:
     return error;
 }
 
-/* Apply a FAILOVER entry. Format: "<replica-id> <primary-id> <epoch>"
+/* Apply a FAILOVER entry. Format: "<replica-id> <primary-id> <shard-id> <shard-epoch>"
  * The replica takes over the primary's slots and becomes primary.
  * The old primary becomes a replica of the new primary. */
 static const char *clusterRaftApplyFailover(sds data) {
@@ -3218,16 +3215,24 @@ static const char *clusterRaftApplyFailover(sds data) {
     const char *error = NULL;
     int argc;
     sds *argv = sdssplitlen(data, sdslen(data), " ", 1, &argc);
-    if (!argv || argc != 3) goto done;
+    if (!argv || argc != 4) goto done;
 
     clusterNode *replica = clusterLookupNode(argv[0], sdslen(argv[0]));
     clusterNode *primary = clusterLookupNode(argv[1], sdslen(argv[1]));
     if (!replica || !primary) goto done;
 
-    /* Epoch validation: validate against primary's shard before domain logic. */
-    uint64_t epoch = strtoull(argv[2], NULL, 10);
-    if (!clusterCheckAndBumpShardEpoch(primary->shard_id, epoch)) {
+    /* Epoch validation: validate against the shard-id from the entry. */
+    uint64_t epoch = strtoull(argv[3], NULL, 10);
+    if (!clusterCheckAndBumpShardEpoch(argv[2], epoch)) {
         error = "stale shard epoch";
+        goto done;
+    }
+
+    /* Validate that the primary still belongs to the shard claimed in the entry. */
+    if (memcmp(primary->shard_id, argv[2], CLUSTER_NAMELEN) != 0) {
+        serverLog(LL_WARNING, "FAILOVER rejected: primary %.40s shard mismatch (expected %.40s, got %.40s).",
+                  primary->name, argv[2], primary->shard_id);
+        error = "primary shard mismatch";
         goto done;
     }
 
@@ -3331,7 +3336,8 @@ static void clusterRaftFailover(int force, int takeover, void *ctx, void (*callb
         entry = sdscatlen(entry, myself->name, CLUSTER_NAMELEN);
         entry = sdscatlen(entry, " ", 1);
         entry = sdscatlen(entry, primary->name, CLUSTER_NAMELEN);
-        /* Append primary's shard epoch. */
+        entry = sdscatlen(entry, " ", 1);
+        entry = sdscatlen(entry, primary->shard_id, CLUSTER_NAMELEN);
         uint64_t epoch = clusterGetShardEpoch(primary->shard_id);
         entry = sdscatfmt(entry, " %U", (unsigned long long)epoch);
         clusterRaftPropose(entry, ctx, callback);

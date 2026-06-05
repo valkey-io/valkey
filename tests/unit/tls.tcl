@@ -137,17 +137,17 @@ start_server {tags {"tls"}} {
 
             set valkey_crt [format "%s/tests/tls/valkey.crt" [pwd]]
             set valkey_key [format "%s/tests/tls/valkey.key" [pwd]]
-            set valkey_pqc_crt [format "%s/tests/tls/valkey-mldsa.crt" [pwd]]
-            set valkey_pqc_key [format "%s/tests/tls/valkey-mldsa.key" [pwd]]
+            set valkey_ec_crt [format "%s/tests/tls/valkey-ec.crt" [pwd]]
+            set valkey_ec_key [format "%s/tests/tls/valkey-ec.key" [pwd]]
             try {
-                r CONFIG SET tls-cert-file $valkey_pqc_crt tls-key-file $valkey_pqc_key tls-alt-cert-file $valkey_crt tls-alt-key-file $valkey_key
+                r CONFIG SET tls-cert-file $valkey_ec_crt tls-key-file $valkey_ec_key tls-alt-cert-file $valkey_crt tls-alt-key-file $valkey_key
                 set s [valkey_client]
                 assert_equal "PONG" [$s PING]
                 $s close
-                # also test connecting with openssl without pqc ciphers support
+                # also test connecting with openssl without ec ciphers support
                 set port [lindex [r config get tls-port] 1]
                 catch {exec openssl s_client -connect localhost:$port -CAfile $valkey_crt -sigalgs "rsa_pss_pss_sha256:rsa_pss_rsae_sha256" < /dev/null} out
-                assert_match {*Peer signature type: rsa_pss_rsae_sha256*} $out
+                assert_match {*Peer signature type: [rR][sS][aA][-_][pP][sS][sS]*} $out
             } finally {
                 #cleanup
                 r CONFIG SET tls-cert-file $orig_server_crt tls-key-file $orig_server_key tls-alt-cert-file $orig_server_alt_crt tls-alt-key-file $orig_server_alt_key
@@ -199,19 +199,19 @@ start_server {tags {"tls"}} {
 
             set valkey_crt [format "%s/tests/tls/valkey.crt" [pwd]]
             set valkey_key [format "%s/tests/tls/valkey.key" [pwd]]
-            set valkey_pqc_crt [format "%s/tests/tls/valkey-mldsa.crt" [pwd]]
-            set valkey_pqc_key [format "%s/tests/tls/valkey-mldsa.key" [pwd]]
+            set valkey_ec_crt [format "%s/tests/tls/valkey-ec.crt" [pwd]]
+            set valkey_ec_key [format "%s/tests/tls/valkey-ec.key" [pwd]]
             set valkey_pw_crt [format "%s/tests/tls/valkey-pw.crt" [pwd]]
             set valkey_pw_key [format "%s/tests/tls/valkey-pw.key" [pwd]]
-            set valkey_pqc_pw_crt [format "%s/tests/tls/valkey-mldsa-pw.crt" [pwd]]
-            set valkey_pqc_pw_key [format "%s/tests/tls/valkey-mldsa-pw.key" [pwd]]
+            set valkey_ec_pw_crt [format "%s/tests/tls/valkey-ec-pw.crt" [pwd]]
+            set valkey_ec_pw_key [format "%s/tests/tls/valkey-ec-pw.key" [pwd]]
 
             try {
-                r CONFIG SET tls-cert-file $valkey_pqc_crt tls-key-file $valkey_pqc_key tls-alt-cert-file $valkey_crt tls-alt-key-file $valkey_key
+                r CONFIG SET tls-cert-file $valkey_ec_crt tls-key-file $valkey_ec_key tls-alt-cert-file $valkey_crt tls-alt-key-file $valkey_key
                 set s [valkey_client]
                 assert_equal "PONG" [$s PING]
                 $s close
-                catch {r CONFIG SET tls-alt-cert-file $valkey_pqc_pw_crt tls-alt-key-file $valkey_pqc_pw_key tls-key-file-pass 1234} e
+                catch {r CONFIG SET tls-alt-cert-file $valkey_ec_pw_crt tls-alt-key-file $valkey_ec_pw_key tls-key-file-pass 1234} e
                 assert_match {*Unable to update TLS configuration*} $e
                 catch {r CONFIG SET tls-cert-file $valkey_pw_crt tls-key-file $valkey_pw_key tls-key-file-pass 1234} e
                 assert_match {*Unable to update TLS configuration*} $e
@@ -230,20 +230,20 @@ start_server {tags {"tls"}} {
 
             set valkey_crt [format "%s/tests/tls/valkey.crt" [pwd]]
             set valkey_key [format "%s/tests/tls/valkey.key" [pwd]]
-            set valkey_pqc_crt [format "%s/tests/tls/valkey-mldsa.crt" [pwd]]
-            set valkey_pqc_key [format "%s/tests/tls/valkey-mldsa.key" [pwd]]
+            set valkey_ec_crt [format "%s/tests/tls/valkey-ec.crt" [pwd]]
+            set valkey_ec_key [format "%s/tests/tls/valkey-ec.key" [pwd]]
             set valkey_pw_crt [format "%s/tests/tls/valkey-pw.crt" [pwd]]
             set valkey_pw_key [format "%s/tests/tls/valkey-pw.key" [pwd]]
-            set valkey_pqc_pw_crt [format "%s/tests/tls/valkey-mldsa-pw.crt" [pwd]]
-            set valkey_pqc_pw_key [format "%s/tests/tls/valkey-mldsa-pw.key" [pwd]]
+            set valkey_ec_pw_crt [format "%s/tests/tls/valkey-ec-pw.crt" [pwd]]
+            set valkey_ec_pw_key [format "%s/tests/tls/valkey-ec-pw.key" [pwd]]
 
             try {
-                r CONFIG SET tls-cert-file $valkey_pqc_pw_crt tls-key-file $valkey_pqc_pw_key tls-alt-cert-file $valkey_crt tls-alt-key-file $valkey_key tls-key-file-pass asdf tls-alt-key-file-pass 1234
+                r CONFIG SET tls-cert-file $valkey_ec_pw_crt tls-key-file $valkey_ec_pw_key tls-alt-cert-file $valkey_crt tls-alt-key-file $valkey_key tls-key-file-pass asdf tls-alt-key-file-pass 1234
                 set s [valkey_client]
                 assert_equal "PONG" [$s PING]
                 $s close
-                r CONFIG SET tls-cert-file $valkey_pqc_pw_crt tls-key-file $valkey_pqc_pw_key tls-alt-cert-file $valkey_pw_crt tls-alt-key-file $valkey_pw_key
-                r CONFIG SET tls-cert-file $valkey_pqc_crt tls-key-file $valkey_pqc_key tls-alt-cert-file $valkey_pw_crt tls-alt-key-file $valkey_pw_key
+                r CONFIG SET tls-cert-file $valkey_ec_pw_crt tls-key-file $valkey_ec_pw_key tls-alt-cert-file $valkey_pw_crt tls-alt-key-file $valkey_pw_key
+                r CONFIG SET tls-cert-file $valkey_ec_crt tls-key-file $valkey_ec_key tls-alt-cert-file $valkey_pw_crt tls-alt-key-file $valkey_pw_key
             } finally {
                 #cleanup
                 r CONFIG SET tls-cert-file $orig_server_crt tls-key-file $orig_server_key tls-alt-cert-file $orig_server_alt_crt tls-alt-key-file $orig_server_alt_key tls-key-file-pass "" tls-alt-key-file-pass ""
@@ -383,8 +383,8 @@ start_server {tags {"tls"}} {
             set orig_server_key [lindex [r config get tls-key-file] 1]
             set orig_server_alt_crt [lindex [r config get tls-alt-cert-file] 1]
             set orig_server_alt_key [lindex [r config get tls-alt-key-file] 1]
-            set valkey_alt_crt [format "%s/tests/tls/valkey-mldsa.crt" [pwd]]
-            set valkey_alt_key [format "%s/tests/tls/valkey-mldsa.key" [pwd]]
+            set valkey_alt_crt [format "%s/tests/tls/valkey-ec.crt" [pwd]]
+            set valkey_alt_key [format "%s/tests/tls/valkey-ec.key" [pwd]]
             set orig_server_key_pass [lindex [r config get tls-alt-key-file-pass] 1]
 
             # Create temporary certificate files (copies of current ones)
@@ -443,8 +443,8 @@ start_server {tags {"tls"}} {
                 assert {$serial2 ne "none"}
                 assert {$serial1 ne $serial2}
 
-                set valkey_alt_crt [format "%s/tests/tls/valkey-mldsa-pw.crt" [pwd]]
-                set valkey_alt_key [format "%s/tests/tls/valkey-mldsa-pw.key" [pwd]]
+                set valkey_alt_crt [format "%s/tests/tls/valkey-ec-pw.crt" [pwd]]
+                set valkey_alt_key [format "%s/tests/tls/valkey-ec-pw.key" [pwd]]
                 file copy -force $valkey_alt_crt $temp_alt_crt
                 file copy -force $valkey_alt_key $temp_alt_key
 

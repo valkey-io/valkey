@@ -19,7 +19,8 @@
 generate_cert() {
     local name=$1
     local cn="$2"
-    local opts="$3"
+    local reqopts="$3"
+    local opts="$4"
 
     local keyfile=tests/tls/${name}.key
     local certfile=tests/tls/${name}.crt
@@ -28,7 +29,8 @@ generate_cert() {
     openssl req \
         -new -sha256 \
         -subj "/O=Valkey Test/CN=$cn" \
-        -key "$keyfile" | \
+        -key "$keyfile" \
+        $reqopts | \
         openssl x509 \
             -req -sha256 \
             -CA tests/tls/ca.crt \
@@ -64,40 +66,17 @@ subjectAltName = URI:urn:valkey:user:first, URI:urn:valkey:user:second
 subjectAltName = IP:127.0.0.1, IP:::1, DNS:localhost
 _END_
 
-generate_cert server "Server-only" "-extfile tests/tls/openssl.cnf -extensions server_cert"
-generate_cert client "Client-only" "-extfile tests/tls/openssl.cnf -extensions client_cert"
-generate_cert valkey "Generic-cert" "-extfile tests/tls/openssl.cnf -extensions generic_cert"
+generate_cert server "Server-only" "" "-extfile tests/tls/openssl.cnf -extensions server_cert"
+generate_cert client "Client-only" "" "-extfile tests/tls/openssl.cnf -extensions client_cert"
+generate_cert valkey "Generic-cert" "" "-extfile tests/tls/openssl.cnf -extensions generic_cert"
 
-openssl req \
-    -x509 \
-    -newkey rsa:2048 \
-    -keyout tests/tls/valkey-pw.key \
-    -subj "/O=Valkey Test/CN=Generic-cert" \
-    -CA tests/tls/ca.crt \
-    -CAkey tests/tls/ca.key \
-    -days 365 \
-    -passout pass:1234 \
-    -out tests/tls/valkey-pw.crt
-openssl req \
-    -x509 \
-    -newkey mldsa65 \
-    -keyout tests/tls/valkey-mldsa.key \
-    -subj "/O=Valkey Test/CN=Generic-cert" \
-    -CA tests/tls/ca.crt \
-    -CAkey tests/tls/ca.key \
-    -days 365 \
-    -nodes \
-    -out tests/tls/valkey-mldsa.crt
-openssl req \
-    -x509 \
-    -newkey mldsa65 \
-    -keyout tests/tls/valkey-mldsa-pw.key \
-    -subj "/O=Valkey Test/CN=Generic-cert" \
-    -CA tests/tls/ca.crt \
-    -CAkey tests/tls/ca.key \
-    -days 365 \
-    -passout pass:asdf \
-    -out tests/tls/valkey-mldsa-pw.crt
+openssl genrsa -passout pass:1234 -aes256 -out tests/tls/valkey-pw.key 2048
+openssl ecparam -name prime256v1 -genkey -noout -out tests/tls/valkey-ec.key
+openssl ecparam -name prime256v1 -genkey | openssl ec -passout pass:asdf -aes256 -out tests/tls/valkey-ec-pw.key
+
+generate_cert valkey-pw "Generic-cert-passworded" "-passin pass:1234"
+generate_cert valkey-ec "EC-cert"
+generate_cert valkey-ec-pw "EC-cert-passworded" "-passin pass:asdf"
 
 # Create a CA bundle and hashed CA directory used by TLS tests.
 # (ca-multi.crt and ca-dir/)

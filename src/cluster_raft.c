@@ -1435,12 +1435,20 @@ static int clusterRaftProcessRequestVote(clusterLink *link, int argc, sds *argv)
     if (msg_term < rs->current_term) {
         /* Stale term. */
     } else if (clusterRaftIsVotedForNone() || memcmp(rs->voted_for, argv[1], CLUSTER_NAMELEN) == 0) {
-        /* TODO: log completeness check (compare last log index/term) */
-        granted = 1;
-        memcpy(rs->voted_for, argv[1], CLUSTER_NAMELEN);
-        rs->last_heartbeat = monotonicMs(); /* Reset election timer */
-        rs->todo_save_config = 1;
-        serverLog(LL_NOTICE, "Voted for %.40s in term %llu.", argv[1], (unsigned long long)msg_term);
+        /* Log completeness check: only grant vote if candidate's log is
+         * at least as up-to-date as ours (Raft §5.4.1). */
+        uint64_t candidate_last_index = strtoull(argv[3], NULL, 10);
+        uint64_t candidate_last_term = strtoull(argv[4], NULL, 10);
+        uint64_t my_last_term = raftLogLastTerm();
+        uint64_t my_last_index = raftLogLastIndex();
+        if (candidate_last_term > my_last_term ||
+            (candidate_last_term == my_last_term && candidate_last_index >= my_last_index)) {
+            granted = 1;
+            memcpy(rs->voted_for, argv[1], CLUSTER_NAMELEN);
+            rs->last_heartbeat = monotonicMs(); /* Reset election timer */
+            rs->todo_save_config = 1;
+            serverLog(LL_NOTICE, "Voted for %.40s in term %llu.", argv[1], (unsigned long long)msg_term);
+        }
     }
 
     clusterRaftSendVoteResponse(link, rs->current_term, granted);

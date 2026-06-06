@@ -408,18 +408,10 @@ start_server [list overrides [list cluster-enabled yes cluster-node-timeout 1 cl
 } ;# foreach ip_or_localhost
 
 # Test valkey-cli --cluster del-node
-set base_conf [list cluster-enabled yes cluster-node-timeout 1000]
-start_multiple_servers 3 [list overrides $base_conf] {
-
-    # Create cluster with 1 primary and 2 replicas for del-node tests
-    exec $::VALKEY_CLI_BIN --cluster-yes --cluster create \
-                    127.0.0.1:[srv 0 port] \
-                    127.0.0.1:[srv -1 port] \
-                    127.0.0.1:[srv -2 port] \
-                    --cluster-replicas 2
-
-    # Wait for the cluster to be ready
-    wait_for_cluster_state ok
+# Build the 1-primary + 2-replica cluster directly with CLUSTER commands.
+# valkey-cli --cluster create rejects fewer than 3 primaries on this branch,
+# so the cluster is assembled via start_cluster instead.
+start_cluster 1 2 {} {
 
     test "del-node: Cannot delete node with slots" {
         set node1 [srv 0 client]

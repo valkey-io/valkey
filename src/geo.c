@@ -873,7 +873,7 @@ void georadiusGeneric(client *c, int srcKeyIndex, int flags) {
         int i;
         for (i = 0; i < returned_items; i++) {
             geoPoint *gp = ga.array + i;
-            gp->dist /= shape.conversion; /* Fix according to unit. */
+            gp->dist /= shape.conversion;     /* Fix according to unit. */
             gp->pathdist /= shape.conversion; /* Fix according to unit. */
 
             /* If we have options in option_length, return each sub-result

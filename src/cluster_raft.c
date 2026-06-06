@@ -1554,6 +1554,7 @@ static void clusterRaftInit(void) {
     rs->my_last_committed_info = sdsempty();
     rs->last_node_info_check = monotonicMs();
     rs->last_repl_offsets_broadcast = monotonicMs();
+    rs->todo_update_slot_coverage = 1;
     server.cluster->size = 0; /* Incremented by NODE_JOIN apply */
 }
 

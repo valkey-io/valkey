@@ -311,7 +311,6 @@ static void clusterRaftApplyFailover(sds data);
 static void raftLogApply(raftLogEntry *e);
 static raftLogEntry *raftLogCreate(uint64_t term, uint64_t index, uint8_t type, sds data);
 static void raftLogAppend(raftLogEntry *e);
-static void raftLogMarkDirty(uint64_t index);
 static raftLogEntry *raftLogGet(uint64_t index);
 static uint64_t raftLogLastIndex(void);
 static uint64_t raftLogTermAt(uint64_t index);
@@ -734,7 +733,6 @@ static void clusterRaftPropose(sds entry, void *ctx, void (*callback)(void *ctx,
 
         uint64_t idx = raftLogLastIndex() + 1;
         raftLogAppend(raftLogCreate(rs->current_term, idx, type, data));
-        raftLogMarkDirty(idx);
         serverLog(LL_NOTICE, "Leader appended %s (index %llu).",
                   raftEntryTypeName(type), (unsigned long long)idx);
 
@@ -791,7 +789,6 @@ static int clusterRaftProcessPropose(clusterLink *link, int argc, sds *argv) {
 
     uint64_t idx = raftLogLastIndex() + 1;
     raftLogAppend(raftLogCreate(rs->current_term, idx, type, data));
-    raftLogMarkDirty(idx);
     serverLog(LL_NOTICE, "Leader appended proposed %s (index %llu).",
               raftEntryTypeName(type), (unsigned long long)idx);
 
@@ -876,14 +873,10 @@ static void raftLogAppend(raftLogEntry *e) {
         rs->log = zrealloc(rs->log, rs->log_alloc * sizeof(raftLogEntry *));
     }
     rs->log[rs->log_count++] = e;
-}
-
-/* Mark that new log entries need to be persisted in the next beforeSleep. */
-static void raftLogMarkDirty(uint64_t index) {
-    clusterRaftState *rs = RAFT_STATE();
+    /* Schedule persistence in next beforeSleep. */
     if (!rs->todo_persist_log) {
         rs->todo_persist_log = 1;
-        rs->persist_log_from = index;
+        rs->persist_log_from = e->index;
     }
 }
 
@@ -1287,7 +1280,6 @@ static int clusterRaftProcessAppendEntries(clusterLink *link, int argc, sds *arg
         }
         if (!existing) {
             raftLogAppend(raftLogCreate(e_term, new_index, e_type, e_data));
-            raftLogMarkDirty(new_index);
         } else {
             sdsfree(e_data); /* Already have this entry. */
         }
@@ -1699,7 +1691,6 @@ static void clusterRaftRetryProposals(void) {
             raftPendingProposal *pp = listNodeValue(ln);
             uint64_t idx = raftLogLastIndex() + 1;
             raftLogAppend(raftLogCreate(rs->current_term, idx, pp->type, sdsdup(pp->data)));
-            raftLogMarkDirty(idx);
             serverLog(LL_NOTICE, "Leader appended deferred %s (index %llu).",
                       raftEntryTypeName(pp->type), (unsigned long long)idx);
         }
@@ -2356,6 +2347,8 @@ static void clusterRaftPostLoad(void) {
      * the leader will update it via AE. For now, ensure it's consistent. */
     if (rs->commit_index < rs->last_applied)
         rs->commit_index = rs->last_applied;
+    /* Log entries loaded from disk are already persisted; don't re-write. */
+    rs->todo_persist_log = 0;
     /* Restore cluster size from loaded nodes (NODE_JOIN already applied). */
     dictIterator *di = dictGetSafeIterator(server.cluster->nodes);
     dictEntry *de;

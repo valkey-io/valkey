@@ -136,6 +136,7 @@ typedef struct {
     unsigned int todo_persist_log : 1;
     unsigned int todo_save_config : 1;
     uint64_t persist_log_from; /* First index to persist in next batch */
+    uint64_t last_rewrite_applied; /* last_applied at last full rewrite */
 
     /* NODE_INFO divergence detection. */
     sds my_last_committed_info;
@@ -1888,10 +1889,12 @@ static void clusterRaftBeforeSleep(void) {
         clusterConnectNodes();
     }
 
-    if (rs->todo_save_config) {
+    if (rs->todo_save_config ||
+        (rs->todo_persist_log && rs->last_applied - rs->last_rewrite_applied >= 100)) {
         rs->todo_save_config = 0;
-        rs->todo_persist_log = 0; /* Full rewrite includes log entries. */
+        rs->todo_persist_log = 0;
         clusterSaveConfigOrDie(1);
+        rs->last_rewrite_applied = rs->last_applied;
     } else if (rs->todo_persist_log) {
         rs->todo_persist_log = 0;
         clusterRaftPersistNewLogEntries(rs->persist_log_from);

@@ -259,6 +259,124 @@ test "Raft proto: REPL_OFFSETS updates node replication offset" {
     }
 }
 
+test "Raft proto: PRE_VOTE denied while leader lease is active" {
+    start_server {overrides {cluster-enabled yes cluster-protocol raft cluster-node-timeout 1000}} {
+        set cport [expr {[srv 0 port] + 10000}]
+        set fake_id [string repeat "d" 40]
+        set fake_addr "127.0.0.1:9995@19995,,tls-port=0,shard-id=[string repeat e 40]"
+
+        set fd [raft_connect 127.0.0.1 $cport]
+        raft_send $fd "HELLO $fake_id $fake_addr"
+        set reply [raft_recv $fd]
+        assert_match "HI *" $reply
+
+        set term [CI 0 cluster_raft_current_term]
+        set next_term [expr {$term + 1}]
+        raft_send $fd "PRE_VOTE_REQ $fake_id $next_term 0 0"
+        set reply [raft_recv $fd]
+        assert_match "PRE_VOTE $term 0" $reply
+        assert_equal $term [CI 0 cluster_raft_current_term]
+
+        close $fd
+    }
+}
+
+test "Raft proto: PRE_VOTE granted when no leader lease is active" {
+    start_server {overrides {cluster-enabled yes cluster-protocol raft cluster-node-timeout 1000}} {
+        set cport [expr {[srv 0 port] + 10000}]
+        set candidate1 [string repeat "g" 40]
+        set addr1 "127.0.0.1:9994@19994,,tls-port=0,shard-id=[string repeat h 40]"
+        set candidate2 [string repeat "i" 40]
+        set addr2 "127.0.0.1:9993@19993,,tls-port=0,shard-id=[string repeat j 40]"
+
+        # Link 1: move node from singleton leader -> follower by higher-term VOTE_REQ.
+        set fd1 [raft_connect 127.0.0.1 $cport]
+        raft_send $fd1 "HELLO $candidate1 $addr1"
+        set reply [raft_recv $fd1]
+        assert_match "HI *" $reply
+
+        set term [CI 0 cluster_raft_current_term]
+        set vote_term [expr {$term + 1}]
+        raft_send $fd1 "VOTE_REQ $candidate1 $vote_term 0 0"
+        set reply [raft_recv $fd1]
+        assert_match "VOTE $vote_term 1" $reply
+        assert_equal "follower" [CI 0 cluster_raft_role]
+        assert_equal "" [CI 0 cluster_raft_leader]
+
+        # Link 2: with leader unknown, PRE_VOTE should be grantable.
+        set fd2 [raft_connect 127.0.0.1 $cport]
+        raft_send $fd2 "HELLO $candidate2 $addr2"
+        set reply [raft_recv $fd2]
+        assert_match "HI *" $reply
+
+        set prevote_term [expr {$vote_term + 1}]
+        raft_send $fd2 "PRE_VOTE_REQ $candidate2 $prevote_term 0 0"
+        set reply [raft_recv $fd2]
+        assert_match "PRE_VOTE $prevote_term 1" $reply
+        assert_equal $vote_term [CI 0 cluster_raft_current_term]
+
+        close $fd1
+        close $fd2
+    }
+}
+
+test "Raft proto: PRE_VOTE denied when candidate log is stale" {
+    start_server {overrides {cluster-enabled yes cluster-protocol raft cluster-node-timeout 1000}} {
+        set cport [expr {[srv 0 port] + 10000}]
+
+        # 1) Seed one committed log entry so receiver's last_log is not empty.
+        set seed_id [string repeat "k" 40]
+        set seed_addr "127.0.0.1:9992@19992,,tls-port=0,shard-id=[string repeat l 40]"
+        set joined_id [string repeat "m" 40]
+        set joined_addr "127.0.0.1:9991@19991,,tls-port=0,shard-id=[string repeat l 40]"
+        set fd_seed [raft_connect 127.0.0.1 $cport]
+        raft_send $fd_seed "HELLO $seed_id $seed_addr"
+        set reply [raft_recv $fd_seed]
+        assert_match "HI *" $reply
+
+        set ae "AE $seed_id 1 0 0 1 1\n"
+        append ae "1 NODE_JOIN $joined_id $joined_addr"
+        raft_send $fd_seed $ae
+        set reply [raft_recv $fd_seed]
+        assert_match "AE_ACK 1 1 1 *" $reply
+        assert {[CI 0 cluster_raft_log_entries] >= 1}
+
+        # 2) Step down with higher-term VOTE_REQ to clear known leader lease gate.
+        set voter_id [string repeat "n" 40]
+        set voter_addr "127.0.0.1:9990@19990,,tls-port=0,shard-id=[string repeat o 40]"
+        set fd_vote [raft_connect 127.0.0.1 $cport]
+        raft_send $fd_vote "HELLO $voter_id $voter_addr"
+        set reply [raft_recv $fd_vote]
+        assert_match "HI *" $reply
+
+        set current_term [CI 0 cluster_raft_current_term]
+        set vote_term [expr {$current_term + 1}]
+        raft_send $fd_vote "VOTE_REQ $voter_id $vote_term 1 1"
+        set reply [raft_recv $fd_vote]
+        assert_match "VOTE $vote_term 1" $reply
+        assert_equal "follower" [CI 0 cluster_raft_role]
+        assert_equal "" [CI 0 cluster_raft_leader]
+
+        # 3) Candidate with stale log (0/0) must be denied.
+        set stale_id [string repeat "p" 40]
+        set stale_addr "127.0.0.1:9989@19989,,tls-port=0,shard-id=[string repeat q 40]"
+        set fd_prevote [raft_connect 127.0.0.1 $cport]
+        raft_send $fd_prevote "HELLO $stale_id $stale_addr"
+        set reply [raft_recv $fd_prevote]
+        assert_match "HI *" $reply
+
+        set prevote_term [expr {$vote_term + 1}]
+        raft_send $fd_prevote "PRE_VOTE_REQ $stale_id $prevote_term 0 0"
+        set reply [raft_recv $fd_prevote]
+        assert_match "PRE_VOTE $vote_term 0" $reply
+        assert_equal $vote_term [CI 0 cluster_raft_current_term]
+
+        close $fd_seed
+        close $fd_vote
+        close $fd_prevote
+    }
+}
+
 test "Raft proto: leader sends REPL_OFFSETS after follower offset changes" {
     start_server {overrides {cluster-enabled yes cluster-protocol raft cluster-node-timeout 1000}} {
         set port [srv 0 port]

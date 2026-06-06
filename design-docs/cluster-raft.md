@@ -62,6 +62,14 @@ VOTE <term> <granted>
     Response to VOTE_REQ. Indicates whether the vote was granted.
     Always sent, even on deny, so the candidate can learn higher terms.
 
+PRE_VOTE_REQ <candidate-id> <term> <last-log-index> <last-log-term>
+    Request for speculative election. Sent by pre-candidates before
+    incrementing currentTerm. The term is currentTerm+1.
+
+PRE_VOTE <term> <granted>
+    Response to PRE_VOTE_REQ. Indicates whether the node would grant
+    a real vote in that term.
+
 PROPOSE <entry>
     Forwards a proposal from a follower to the leader. The entry
     uses the same format as log entries (type followed by data).
@@ -110,6 +118,7 @@ cluster with only one member. Singleton means that it's alone.
 - **Follower**: Participates in elections and counts for quorum.
   Promoted from joiner when the node's NODE_JOIN entry is applied.
 - **Candidate**: Requesting votes after election timeout.
+- **Pre-candidate**: Runs a pre-vote round without incrementing term.
 - **Leader**: Accepts proposals, replicates log, sends heartbeats.
 
 The Raft leader is independent of the data primary/replica role. Any
@@ -459,6 +468,11 @@ The election timeout is based on `cluster-node-timeout`:
 `[T, 2T)` where T = max(cluster-node-timeout, 1000ms). The heartbeat
 interval is `election_timeout / 10`, minimum 100ms.
 
+On timeout, a follower starts a pre-vote round first. It only starts a
+real election (increments `currentTerm` and sends VOTE_REQ) after
+receiving PRE_VOTE grants from a majority. Nodes deny PRE_VOTE and
+VOTE_REQ if they received leader heartbeats within one election timeout.
+
 ### Backdating on leader election
 
 When a node wins an election, it backdates the old leader's
@@ -684,7 +698,8 @@ Entries that don't need a shard-epoch:
 On graceful shutdown, the leader sends a `TIMEOUT_NOW` message to the
 follower with the highest `match_index`. The message is flushed
 synchronously to the socket before shutdown proceeds. The target
-immediately starts an election without waiting for the election timeout.
+immediately starts a real election (skipping pre-vote) without waiting
+for the election timeout.
 (See Ongaro dissertation §3.10.)
 
 Nodes in handshake or with the MEET flag are excluded as transfer
@@ -692,7 +707,6 @@ targets.
 
 ## Future Work
 
-- Pre-vote protocol to avoid term inflation from partitioned nodes.
 - Minority partition detection and leader step-down (prevents append
   entries, especially don't trigger primary/replica failovers in a
   minority partition).

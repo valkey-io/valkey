@@ -612,11 +612,12 @@ When new log entries arrive (from AE or local proposals), they are
 appended to the end of the file with a single batched write + fsync
 (deferred to `beforeSleep`). No full rewrite is needed.
 
-**Safety invariant:** The fsync in `beforeSleep` must complete before
-the AE_ACK is written to the socket. This holds because `beforeSleep`
-runs before the event loop's writable handlers flush outgoing buffers.
-If fsync is ever moved to a background thread, the AE_ACK must be
-deferred until the fsync completes.
+**Safety invariant:** The fsync must complete before the AE_ACK reaches
+the leader. This is enforced by deferring the success AE_ACK: the AE
+handler sets `todo_send_ae_ack` instead of sending immediately, and
+`beforeSleep` sends the ACK only after persistence completes. If fsync
+is ever moved to a background thread, the ACK must be deferred until
+the background fsync completes.
 
 ### Startup
 

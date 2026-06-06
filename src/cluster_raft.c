@@ -135,7 +135,8 @@ typedef struct {
     unsigned int todo_update_replication : 1;
     unsigned int todo_persist_log : 1;
     unsigned int todo_save_config : 1;
-    uint64_t persist_log_from; /* First index to persist in next batch */
+    unsigned int todo_send_ae_ack : 1;
+    uint64_t persist_log_from;     /* First index to persist in next batch */
     uint64_t last_rewrite_applied; /* last_applied at last full rewrite */
 
     /* NODE_INFO divergence detection. */
@@ -1297,7 +1298,9 @@ static int clusterRaftProcessAppendEntries(clusterLink *link, int argc, sds *arg
         if (e) raftLogApply(e);
     }
 
-    clusterRaftSendAppendEntriesResponse(link, rs->current_term, 1);
+    /* Defer AE_ACK until after persistence in beforeSleep. This ensures
+     * entries are on stable storage before the leader counts our ACK. */
+    rs->todo_send_ae_ack = 1;
     return 1;
 }
 
@@ -1898,6 +1901,16 @@ static void clusterRaftBeforeSleep(void) {
     } else if (rs->todo_persist_log) {
         rs->todo_persist_log = 0;
         clusterRaftPersistNewLogEntries(rs->persist_log_from);
+    }
+
+    if (rs->todo_send_ae_ack) {
+        rs->todo_send_ae_ack = 0;
+        clusterNode *leader = clusterLookupNode(rs->leader, CLUSTER_NAMELEN);
+        /* AE arrives on the inbound link (leader connects to us). */
+        clusterLink *link = leader ? (leader->inbound_link ? leader->inbound_link : leader->link) : NULL;
+        if (link) {
+            clusterRaftSendAppendEntriesResponse(link, rs->current_term, 1);
+        }
     }
 
     if (rs->todo_broadcast_ae) {

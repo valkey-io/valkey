@@ -705,3 +705,5 @@ targets.
   atomically or not.
 - `valkey-cli --cluster` tooling compatibility (uses MULTI internally in
   some cases, which doesn't work with blocking admin commands).
+- Checksums for appended log lines to detect partial writes and
+  bit-rot, instead of relying solely on trailing newline detection.

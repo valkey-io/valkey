@@ -10,8 +10,7 @@
 typedef struct geoPoint {
     double longitude;
     double latitude;
-    double dist;     /* cross-track distance (buffdist) for PATH, center distance for others */
-    double pathdist; /* along-path distance from first vertex (PATH_TYPE only) */
+    double dist;
     double score;
     char *member;
 } geoPoint;

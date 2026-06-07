@@ -93,8 +93,14 @@ typedef struct {
 #define RECTANGLE_TYPE 2
 #define POLYGON_TYPE 3
 #define PATH_TYPE 4
+
+/* Distance type for PATH searches */
+#define GEO_DIST_BUFFDIST 0 /* cross-track distance (default) */
+#define GEO_DIST_PATHDIST 1 /* along-path distance from first vertex */
+
 typedef struct {
     int type;          /* search type */
+    int dist_type;     /* GEO_DIST_BUFFDIST or GEO_DIST_PATHDIST (PATH_TYPE only) */
     double xy[2];      /* search center point, xy[0]: lon, xy[1]: lat */
     double conversion; /* km: 1000 */
     double bounds[4];  /* bounds[0]: min_lon, bounds[1]: min_lat

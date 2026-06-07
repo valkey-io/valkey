@@ -58,7 +58,7 @@ void geoArrayInit(geoArray *ga) {
 }
 
 /* Add and populate with data a new entry to the geoArray. */
-geoPoint *geoArrayAppend(geoArray *ga, double *xy, double dist, double pathdist, double score, char *member) {
+geoPoint *geoArrayAppend(geoArray *ga, double *xy, double dist, double score, char *member) {
     if (ga->used == ga->buckets) {
         ga->buckets = ga->buckets * 2;
         if (ga->array == ga->arraybuf) {
@@ -72,7 +72,6 @@ geoPoint *geoArrayAppend(geoArray *ga, double *xy, double dist, double pathdist,
     gp->longitude = xy[0];
     gp->latitude = xy[1];
     gp->dist = dist;
-    gp->pathdist = pathdist;
     gp->member = member;
     gp->score = score;
     ga->used++;
@@ -238,9 +237,9 @@ void addReplyDoubleDistance(client *c, double d) {
  * The return value is C_OK if the point is within search area, or C_ERR if it is outside.
  * "*xy" is populated with the decoded lat,long.
  * "*distance" is populated with the distance between the center of the shape and the point.
- * "*pathdist" is populated with the along-path distance (PATH_TYPE only, 0 otherwise).
+ * For PATH_TYPE, the distance type depends on shape->dist_type.
  */
-int geoWithinShape(GeoShape *shape, double score, double *xy, double *distance, double *pathdist) {
+int geoWithinShape(GeoShape *shape, double score, double *xy, double *distance) {
     if (!decodeGeohash(score, xy)) return C_ERR; /* Can't decode. */
     /* Note that geohashGetDistanceIfInRadiusWGS84() takes arguments in
      * reverse order: longitude first, latitude later. */
@@ -259,7 +258,8 @@ int geoWithinShape(GeoShape *shape, double score, double *xy, double *distance, 
         }
     } else if (shape->type == PATH_TYPE) {
         if (!geohashGetDistanceIfInPath(xy, shape->t.path.points,
-                                        shape->t.path.num_points, shape->t.path.radius * shape->conversion, distance, pathdist)) {
+                                        shape->t.path.num_points, shape->t.path.radius * shape->conversion,
+                                        shape->dist_type, distance)) {
             return C_ERR;
         }
     }
@@ -300,17 +300,16 @@ int geoGetPointsInRange(robj *zobj, double min, double max, GeoShape *shape, geo
         while (eptr) {
             double xy[2];
             double distance = 0;
-            double pathdist = 0;
             score = zzlGetScore(sptr);
 
             /* If we fell out of range, break. */
             if (!zslValueLteMax(score, &range)) break;
 
             vstr = lpGetValue(eptr, &vlen, &vlong);
-            if (geoWithinShape(shape, score, xy, &distance, &pathdist) == C_OK) {
+            if (geoWithinShape(shape, score, xy, &distance) == C_OK) {
                 /* Append the new element. */
                 char *member = (vstr == NULL) ? sdsfromlonglong(vlong) : sdsnewlen(vstr, vlen);
-                geoArrayAppend(ga, xy, distance, pathdist, score, member);
+                geoArrayAppend(ga, xy, distance, score, member);
             }
             if (ga->used && limit && ga->used >= limit) break;
             zzlNext(zl, &eptr, &sptr);
@@ -328,13 +327,12 @@ int geoGetPointsInRange(robj *zobj, double min, double max, GeoShape *shape, geo
         while (ln) {
             double xy[2];
             double distance = 0;
-            double pathdist = 0;
             /* Abort when the node is no longer in range. */
             if (!zslValueLteMax(ln->score, &range)) break;
-            if (geoWithinShape(shape, ln->score, xy, &distance, &pathdist) == C_OK) {
+            if (geoWithinShape(shape, ln->score, xy, &distance) == C_OK) {
                 /* Append the new element. */
                 sds ele = zslGetNodeElement(ln);
-                geoArrayAppend(ga, xy, distance, pathdist, ln->score, sdsdup(ele));
+                geoArrayAppend(ga, xy, distance, ln->score, sdsdup(ele));
             }
             if (ga->used && limit && ga->used >= limit) break;
             ln = ln->level[0].forward;
@@ -771,6 +769,10 @@ void georadiusGeneric(client *c, int srcKeyIndex, int flags) {
         return;
     }
 
+    /* Set the distance type on the shape so geohashGetDistanceIfInPath knows
+     * which metric to compute. */
+    if (withpathdist) shape.dist_type = GEO_DIST_PATHDIST;
+
     if ((flags & GEOSEARCH) && !(frommember || fromloc) && !bypolygon && !bypath) {
         addReplyErrorFormat(c, "exactly one of FROMMEMBER or FROMLONLAT can be specified for %s",
                             (char *)objectGetVal(c->argv[0]));
@@ -873,8 +875,7 @@ void georadiusGeneric(client *c, int srcKeyIndex, int flags) {
         int i;
         for (i = 0; i < returned_items; i++) {
             geoPoint *gp = ga.array + i;
-            gp->dist /= shape.conversion;     /* Fix according to unit. */
-            gp->pathdist /= shape.conversion; /* Fix according to unit. */
+            gp->dist /= shape.conversion; /* Fix according to unit. */
 
             /* If we have options in option_length, return each sub-result
              * as a nested multi-bulk.  Add 1 to account for result value
@@ -886,7 +887,7 @@ void georadiusGeneric(client *c, int srcKeyIndex, int flags) {
 
             if (withdist) addReplyDoubleDistance(c, gp->dist);
 
-            if (withpathdist) addReplyDoubleDistance(c, gp->pathdist);
+            if (withpathdist) addReplyDoubleDistance(c, gp->dist);
 
             if (withhash) addReplyLongLong(c, gp->score);
 

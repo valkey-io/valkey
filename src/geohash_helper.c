@@ -113,7 +113,10 @@ static int computeBoundingBoxAndCentroid(double (*points)[2], int count, double 
          * expansion is never underestimated. */
         double lat_delta = rad_deg(buffer_m / EARTH_RADIUS_IN_METERS);
         double extreme_lat = fabs(min_lat) > fabs(max_lat) ? min_lat : max_lat;
-        double lon_delta = rad_deg(buffer_m / EARTH_RADIUS_IN_METERS / cos(deg_rad(extreme_lat)));
+        double adjusted_extreme_lat = extreme_lat + (extreme_lat > 0 ? lat_delta : -lat_delta);
+        if (adjusted_extreme_lat > GEO_LAT_MAX) adjusted_extreme_lat = GEO_LAT_MAX;
+        if (adjusted_extreme_lat < -GEO_LAT_MAX) adjusted_extreme_lat = -GEO_LAT_MAX;
+        double lon_delta = rad_deg(buffer_m / EARTH_RADIUS_IN_METERS / cos(deg_rad(adjusted_extreme_lat)));
         min_lon -= lon_delta;
         min_lat -= lat_delta;
         max_lon += lon_delta;
@@ -402,25 +405,29 @@ int geohashGetDistanceIfInPolygon(double centroidLon, double centroidLat, double
  * We then use Haversine to compute the great-circle distance.
  *
  * Returns 1 if the point is within the path buffer, 0 otherwise.
- * Sets *buffdist to the minimum cross-track distance from the point to the path.
- * Sets *pathdist to the along-track distance from the first vertex to the
- * closest point on the path (cumulative segment lengths + fractional segment). */
+ * When dist_type == GEO_DIST_PATHDIST, sets *distance to the along-track distance
+ * from the first vertex. Otherwise sets *distance to the cross-track (buffer) distance. */
 int geohashGetDistanceIfInPath(double *point,
                                double (*pathPoints)[2],
                                int num_points,
                                double radius_m,
-                               double *buffdist,
-                               double *pathdist) {
+                               int dist_type,
+                               double *distance) {
     double min_dist = INFINITY;
-    double along_path_at_min = 0.0;
+    double along_path_at_min = 0.0; /* Along-path distance from first vertex to the
+                                     * projection point of the closest segment. */
     double cumulative_len = 0.0;
 
     for (int i = 0; i < num_points - 1; i++) {
         double ax = pathPoints[i][0], ay = pathPoints[i][1];
         double bx = pathPoints[i + 1][0], by = pathPoints[i + 1][1];
 
-        /* Compute the full segment length via Haversine for along-path distance. */
-        double seg_len = geohashGetDistance(ax, ay, bx, by);
+        /* Compute the full segment length via Haversine for along-path distance.
+         * Only needed when pathdist is requested. */
+        double seg_len = 0.0;
+        if (dist_type == GEO_DIST_PATHDIST) {
+            seg_len = geohashGetDistance(ax, ay, bx, by);
+        }
 
         /* Project point onto the segment using equirectangular approximation.
          * Scale longitude differences by cos(latitude) to account for the
@@ -466,17 +473,13 @@ int geohashGetDistanceIfInPath(double *point,
         double dist = geohashGetDistance(point[0], point[1], cx, cy);
         if (dist < min_dist) {
             min_dist = dist;
-            /* Along-path distance: cumulative length of previous segments
-             * plus the fraction of this segment up to the projection point. */
             along_path_at_min = cumulative_len + t * seg_len;
         }
-
         cumulative_len += seg_len;
     }
 
     if (min_dist <= radius_m) {
-        *buffdist = min_dist;
-        *pathdist = along_path_at_min;
+        *distance = (dist_type == GEO_DIST_PATHDIST) ? along_path_at_min : min_dist;
         return 1;
     }
     return 0;

@@ -71,50 +71,6 @@ proc pointInRectangle {width_km height_km lon lat search_lon search_lat error} {
     return true
 }
 
-# Compute the minimum distance from a point to a polyline (path).
-# Returns the minimum Haversine distance in meters from (lon, lat) to any
-# segment of the path defined by path_points (flat list: lon1 lat1 lon2 lat2 ...).
-proc pointToPathDistance {lon lat path_points} {
-    set num_coords [llength $path_points]
-    set num_points [expr {$num_coords / 2}]
-    set min_dist Inf
-
-    for {set i 0} {$i < $num_points - 1} {incr i} {
-        set ax [lindex $path_points [expr {$i*2}]]
-        set ay [lindex $path_points [expr {$i*2+1}]]
-        set bx [lindex $path_points [expr {($i+1)*2}]]
-        set by [lindex $path_points [expr {($i+1)*2+1}]]
-
-        # Project point onto segment using equirectangular approximation.
-        # Scale longitude by cos(latitude) to account for meridian convergence.
-        set cos_lat [expr {cos(($ay + $by) / 2.0 * 3.14159265358979323846 / 180.0)}]
-        set dx [expr {($bx - $ax) * $cos_lat}]
-        set dy [expr {$by - $ay}]
-        set len_sq [expr {$dx*$dx + $dy*$dy}]
-
-        if {$len_sq < 1e-20} {
-            set t 0.0
-        } else {
-            set px [expr {($lon - $ax) * $cos_lat}]
-            set py [expr {$lat - $ay}]
-            set t [expr {($px*$dx + $py*$dy) / $len_sq}]
-            if {$t < 0.0} {set t 0.0}
-            if {$t > 1.0} {set t 1.0}
-        }
-
-        # Closest point on segment (in lon/lat for Haversine)
-        set cx [expr {$ax + $t*($bx - $ax)}]
-        set cy [expr {$ay + $t*($by - $ay)}]
-
-        # Haversine distance
-        set dist [geo_distance $lon $lat $cx $cy]
-        if {$dist < $min_dist} {
-            set min_dist $dist
-        }
-    }
-    return $min_dist
-}
-
 proc verify_geo_edge_response_bylonlat {expected_response expected_store_response} {
     catch {r georadius src{t} 1 1 1 km} response
     assert_match $expected_response $response
@@ -874,16 +830,16 @@ start_server {tags {"geo"}} {
     }
 
     test {GEOSEARCHSTORE BYPATH when line path walks search space} {
-        r del routes dest
-        r geoadd routes -73.9857 40.7484 "EmpireState"
-        r geoadd routes -73.9712 40.7614 "Rockefeller"
-        r geoadd routes -73.9855 40.7580 "TimesSquare"
-        r geoadd routes -74.0060 40.7128 "WallStreet"
+        r del routes{t} dest{t}
+        r geoadd routes{t} -73.9857 40.7484 "EmpireState"
+        r geoadd routes{t} -73.9712 40.7614 "Rockefeller"
+        r geoadd routes{t} -73.9855 40.7580 "TimesSquare"
+        r geoadd routes{t} -74.0060 40.7128 "WallStreet"
 
-        set count [r GEOSEARCHSTORE dest routes BYPATH 2 -73.9857 40.7484 -73.9712 40.7614 500 m]
+        set count [r GEOSEARCHSTORE dest{t} routes{t} BYPATH 2 -73.9857 40.7484 -73.9712 40.7614 500 m]
         assert {$count >= 2}
         # Verify stored members exist in destination
-        set members [r ZRANGE dest 0 -1]
+        set members [r ZRANGE dest{t} 0 -1]
         assert_equal 1 [expr {"EmpireState" in $members}]
         assert_equal 1 [expr {"Rockefeller" in $members}]
         assert_equal 0 [expr {"WallStreet" in $members}]

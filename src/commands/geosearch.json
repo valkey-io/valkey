@@ -297,6 +297,13 @@
                 "optional": true
             },
             {
+                "name": "withpathdist",
+                "token": "WITHPATHDIST",
+                "type": "pure-token",
+                "optional": true,
+                "since": "10.0.0"
+            },
+            {
                 "name": "withhash",
                 "token": "WITHHASH",
                 "type": "pure-token",

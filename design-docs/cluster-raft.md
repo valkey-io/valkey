@@ -145,13 +145,14 @@ SLOT_CHANGE <source-node-id-or-dash> <source-epoch> <target-node-id-or-dash> <ta
     Assign or remove slot ownership. A dash means "no owner" (delete
     slots). Ranges use the nodes.conf format: "0-5460" or "5461".
 
-SET_REPLICA_OF <replica-id> <primary-id-or-dash> <shard-id> <target-shard-epoch>
+SET_REPLICA_OF <replica-id> <source-shard> <source-epoch> <primary-id-or-dash> <target-shard> <target-epoch>
     Set a node as replica of a primary (CLUSTER REPLICATE). A dash as
-    primary means promote to primary. The shard-id is the target shard:
+    primary means promote to primary. Both source and target shard epochs
+    are validated to guard against concurrent shard changes.
     for promotion, a new random id; for assignment, the primary's
     current shard-id (used as a guard against concurrent changes).
 
-FAILOVER <replica-id> <primary-id> <shard-epoch>
+FAILOVER <replica-id> <primary-id> <shard-id> <shard-epoch>
     The replica takes over the primary's slots and becomes primary.
     The old primary becomes a replica of the new primary.
 
@@ -760,7 +761,7 @@ the entry is stale and is ignored.
 
 ```
 FAILOVER <replica-id> <primary-id> <shard-id> <shard-epoch>
-SET_REPLICA_OF <replica-id> <primary-id-or-dash> <shard-id> <epoch>
+SET_REPLICA_OF <replica-id> <source-shard> <source-epoch> <primary-id-or-dash> <target-shard> <target-epoch>
 SLOT_CHANGE <source-node-id-or-dash> <source-epoch> <target-node-id-or-dash> <target-epoch> <ranges...>
 NODE_FORGET <node-id> <epoch>
 ```

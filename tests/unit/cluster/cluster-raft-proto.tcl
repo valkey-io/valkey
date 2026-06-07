@@ -639,7 +639,7 @@ start_multiple_servers 2 {overrides {cluster-enabled yes cluster-protocol raft c
     set missing_epoch_proposals [list \
         [list "SLOT_CHANGE (missing epoch)" "PROPOSE SLOT_CHANGE $node_id 1 $node1_id"] \
         [list "FAILOVER (missing epoch)" "PROPOSE FAILOVER $node1_id $node_id $node0_shard"] \
-        [list "SET_REPLICA_OF (missing epoch)" "PROPOSE SET_REPLICA_OF $node1_id $node_id [string repeat a 40]"] \
+        [list "SET_REPLICA_OF (missing epoch)" "PROPOSE SET_REPLICA_OF $node1_id [string repeat a 40] 1 $node_id [string repeat b 40]"] \
         [list "NODE_FORGET (missing epoch)" "PROPOSE NODE_FORGET $node1_id"] \
     ]
 
@@ -668,34 +668,46 @@ start_multiple_servers 2 {overrides {cluster-enabled yes cluster-protocol raft c
         }
     }
 
-    test "Raft shard epoch: FAILOVER with wrong shard-id is rejected at pre-validation" {
-        # Use a bogus shard-id that doesn't match node_id's actual shard.
-        set wrong_shard [string repeat "1" 40]
+    # --------------------------------------------------------------------------
+    # Wrong shard-id: proposals where the shard-id doesn't match the node's
+    # actual shard are rejected at pre-validation.
+    # --------------------------------------------------------------------------
 
-        set commit_before [get_cluster_info_field $r0 cluster_raft_commit_index]
-        set rejected_before [get_cluster_info_field $r0 cluster_stats_proposals_rejected_prevalidation]
+    set wrong_shard [string repeat "1" 40]
 
-        # Propose FAILOVER with wrong shard-id.
-        set fd [connect_fake_node $cport]
-        raft_send $fd "PROPOSE FAILOVER $node1_id $node_id $wrong_shard 0"
+    set wrong_shard_proposals [list \
+        [list "FAILOVER" "PROPOSE FAILOVER $node1_id $node_id $wrong_shard 0"] \
+        [list "SET_REPLICA_OF" "PROPOSE SET_REPLICA_OF $node1_id $node0_shard 1 $node_id $wrong_shard 0"] \
+    ]
 
-        # Wait for the rejection counter to increase.
-        wait_for_condition 50 100 {
-            [get_cluster_info_field $r0 cluster_stats_proposals_rejected_prevalidation] > $rejected_before
-        } else {
-            fail "FAILOVER with wrong shard-id was not rejected"
+    foreach case $wrong_shard_proposals {
+        lassign $case entry_type propose_msg
+
+        test "Raft shard epoch: $entry_type with wrong shard-id is rejected at pre-validation" {
+            set commit_before [get_cluster_info_field $r0 cluster_raft_commit_index]
+            set rejected_before [get_cluster_info_field $r0 cluster_stats_proposals_rejected_prevalidation]
+
+            set fd [connect_fake_node $cport]
+            raft_send $fd $propose_msg
+
+            # Wait for the rejection counter to increase.
+            wait_for_condition 50 100 {
+                [get_cluster_info_field $r0 cluster_stats_proposals_rejected_prevalidation] > $rejected_before
+            } else {
+                fail "$entry_type with wrong shard-id was not rejected"
+            }
+
+            # Verify log index unchanged (rejected at pre-validation, epoch not bumped).
+            set commit_after [get_cluster_info_field $r0 cluster_raft_commit_index]
+            assert_equal $commit_before $commit_after
+
+            # Verify cluster state unchanged.
+            set nodes [$r0 CLUSTER NODES]
+            assert_match "*$node_id*myself,master*" $nodes
+            assert_equal 16384 [get_cluster_info_field $r0 cluster_slots_assigned]
+
+            close $fd
         }
-
-        # Verify log index unchanged (rejected at pre-validation).
-        set commit_after [get_cluster_info_field $r0 cluster_raft_commit_index]
-        assert_equal $commit_before $commit_after
-
-        # Verify the failover did NOT happen: r0 is still primary with all slots.
-        set nodes [$r0 CLUSTER NODES]
-        assert_match "*$node_id*myself,master*" $nodes
-        assert_equal 16384 [get_cluster_info_field $r0 cluster_slots_assigned]
-
-        close $fd
     }
 }
 

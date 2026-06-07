@@ -915,13 +915,11 @@ static int clusterRaftPreValidateEpoch(int type, sds data) {
 
     int ok = 1;
     switch (type) {
-    case RAFT_ENTRY_FAILOVER:
-    case RAFT_ENTRY_SET_REPLICA_OF: {
-        /* Format: <..ids..> <shard-id> <shard-epoch> (argv[2] and argv[3]) */
+    case RAFT_ENTRY_FAILOVER: {
+        /* Format: <replica-id> <primary-id> <shard-id> <shard-epoch> */
         if (argc < 4) {
             ok = 0;
         } else {
-            /* Validate shard-id matches the primary's current shard. */
             clusterNode *primary = (sdslen(argv[1]) == CLUSTER_NAMELEN)
                                        ? clusterLookupNode(argv[1], CLUSTER_NAMELEN)
                                        : NULL;
@@ -930,6 +928,29 @@ static int clusterRaftPreValidateEpoch(int type, sds data) {
             } else {
                 uint64_t epoch = strtoull(argv[3], NULL, 10);
                 ok = isShardEpochCurrent(argv[2], epoch);
+            }
+        }
+        break;
+    }
+    case RAFT_ENTRY_SET_REPLICA_OF: {
+        /* Format: <replica-id> <source-shard> <source-epoch> <primary-id-or-dash> <target-shard> <target-epoch> */
+        if (argc < 6) {
+            ok = 0;
+        } else {
+            /* Validate source shard epoch. */
+            uint64_t source_epoch = strtoull(argv[2], NULL, 10);
+            ok = isShardEpochCurrent(argv[1], source_epoch);
+            /* Validate target shard epoch. */
+            if (ok) {
+                uint64_t target_epoch = strtoull(argv[5], NULL, 10);
+                ok = isShardEpochCurrent(argv[4], target_epoch);
+            }
+            /* Validate primary's shard matches target-shard. */
+            if (ok && sdslen(argv[3]) == CLUSTER_NAMELEN) {
+                clusterNode *primary = clusterLookupNode(argv[3], CLUSTER_NAMELEN);
+                if (primary && memcmp(primary->shard_id, argv[4], CLUSTER_NAMELEN) != 0) {
+                    ok = 0;
+                }
             }
         }
         break;
@@ -1130,33 +1151,13 @@ static uint64_t raftLogTermAt(uint64_t index) {
  * Shard epoch validation helpers
  * -------------------------------------------------------------------------- */
 
-/* Validate and bump epoch for a single-shard entry.
- * Returns 1 if the entry should be applied, 0 if stale.
- * On success, increments the shard epoch (or sets it to 1 if currently 0).
- * If shard_id is NULL, always returns 1 (no shard to validate). */
-static int clusterValidateAndBumpShardEpoch(const char *shard_id, uint64_t entry_epoch) {
-    if (!shard_id) return 1;
-    uint64_t current = clusterGetShardEpoch(shard_id);
-    if (current == 0) {
-        /* First operation on this shard — apply unconditionally, bump to 1. */
-        clusterSetShardEpoch(shard_id, 1);
-        return 1;
-    }
-    if (entry_epoch == current) {
-        clusterSetShardEpoch(shard_id, current + 1);
-        return 1;
-    }
-    return 0;
-}
-
-/* Validate SLOT_CHANGE (two shards). We do not bump epoch to support
- * concurrent slot migration.
- * Returns 1 if the entry should be applied, 0 if either epoch is stale.
- * source_shard_id may be NULL (unassigned slots). */
-static int clusterValidateSlotChangeEpochs(const char *source_shard_id,
-                                           uint64_t source_epoch,
-                                           const char *target_shard_id,
-                                           uint64_t target_epoch) {
+/* Validate a pair of shard epochs (source and target).
+ * Returns 1 if both are current, 0 if either is stale.
+ * Either shard_id may be NULL (skipped). Does not bump. */
+static int clusterValidateShardEpochPair(const char *source_shard_id,
+                                         uint64_t source_epoch,
+                                         const char *target_shard_id,
+                                         uint64_t target_epoch) {
     uint64_t src_current = source_shard_id ? clusterGetShardEpoch(source_shard_id) : 0;
     uint64_t tgt_current = target_shard_id ? clusterGetShardEpoch(target_shard_id) : 0;
 
@@ -1325,15 +1326,17 @@ static void raftLogApply(raftLogEntry *e) {
         }
         clusterNode *node = clusterLookupNode(argv[0], sdslen(argv[0]));
         if (node && node != myself) {
-            /* Epoch validation. */
+            /* Epoch validation (no bump yet). */
             uint64_t epoch = strtoull(argv[1], NULL, 10);
-            if (!clusterValidateAndBumpShardEpoch(node->shard_id, epoch)) {
+            if (!isShardEpochCurrent(node->shard_id, epoch)) {
                 entry_error = "stale shard epoch";
-                serverLog(LL_NOTICE, "Applied NODE_FORGET %.40s (index %llu) [stale].",
-                          argv[0], (unsigned long long)e->index);
                 sdsfreesplitres(argv, argc);
                 break;
             }
+            /* Save shard_id before deleting the node. */
+            char shard_id[CLUSTER_NAMELEN];
+            memcpy(shard_id, node->shard_id, CLUSTER_NAMELEN);
+
             /* Detach link before deleting so clusterReadHandler can detect
              * that the node it was talking to is gone. */
             if (node->link) {
@@ -1343,6 +1346,10 @@ static void raftLogApply(raftLogEntry *e) {
             clusterDelNode(node);
             rs->todo_update_slot_coverage = 1;
             rs->todo_invalidate_slots_cache = 1;
+
+            /* Bump shard epoch after successful delete. */
+            uint64_t current = clusterGetShardEpoch(shard_id);
+            clusterSetShardEpoch(shard_id, current == 0 ? 1 : current + 1);
         }
         serverLog(LL_NOTICE, "Applied NODE_FORGET %.40s (index %llu).",
                   argv[0], (unsigned long long)e->index);
@@ -1953,11 +1960,8 @@ static void clusterRaftInit(void) {
     rs->my_last_committed_info = sdsempty();
     rs->last_node_info_check = monotonicMs();
     rs->last_repl_offsets_broadcast = monotonicMs();
-<<<<<<< HEAD
     rs->todo_update_slot_coverage = 1;
-=======
     rs->shard_epochs = dictCreate(&raftShardEpochDictType);
->>>>>>> 4ec207fbe (Use existing configEpoch field API for shard epoch)
     server.cluster->size = 0; /* Incremented by NODE_JOIN apply */
 }
 
@@ -3093,8 +3097,8 @@ static const char *clusterRaftApplySlotChange(sds data) {
     if (!info.valid) goto done;
 
     /* Epoch validation: validate both source and target epochs. */
-    if (!clusterValidateSlotChangeEpochs(info.source_shard_id, info.source_epoch,
-                                         info.target_shard_id, info.target_epoch)) {
+    if (!clusterValidateShardEpochPair(info.source_shard_id, info.source_epoch,
+                                       info.target_shard_id, info.target_epoch)) {
         error = "stale shard epoch";
         goto done;
     }
@@ -3136,28 +3140,35 @@ done:
 }
 
 /* Apply a SET_REPLICA_OF entry.
- * Format: "<replica-id> <primary-id-or-dash> <shard-id> <epoch>" */
+ * Format: "<replica-id> <source-shard> <source-epoch> <primary-id-or-dash> <target-shard> <target-epoch>" */
 static const char *clusterRaftApplySetReplica(sds data) {
     clusterRaftState *rs = RAFT_STATE();
     const char *error = NULL;
     int argc;
     sds *argv = sdssplitlen(data, sdslen(data), " ", 1, &argc);
-    if (!argv || argc != 4) goto done;
+    if (!argv || argc != 6) goto done;
 
     clusterNode *replica = clusterLookupNode(argv[0], sdslen(argv[0]));
     if (!replica) goto done;
 
-    if (replica == myself) rs->todo_save_config = 1;
-
     char *shard_id = argv[2];
     uint64_t epoch = strtoull(argv[3], NULL, 10);
-    if (!clusterValidateAndBumpShardEpoch(shard_id, epoch)) {
+    char *source_shard = argv[1];
+    uint64_t source_epoch = strtoull(argv[2], NULL, 10);
+    char *target_shard = argv[4];
+    uint64_t target_epoch = strtoull(argv[5], NULL, 10);
+
+    /* Validate both shard epochs without bumping. */
+    if (!clusterValidateShardEpochPair(source_shard, source_epoch,
+                                       target_shard, target_epoch)) {
         error = "stale shard epoch";
         goto done;
     }
 
-    if (sdslen(argv[1]) == 1 && argv[1][0] == '-') {
-        /* Promote to primary with the shard-id from the entry. */
+    if (replica == myself) rs->todo_save_config = 1;
+
+    if (sdslen(argv[3]) == 1 && argv[3][0] == '-') {
+        /* Promote to primary with the target-shard from the entry. */
         if (nodeIsReplica(replica)) {
             if (replica->replicaof) clusterNodeRemoveReplica(replica->replicaof, replica);
             replica->flags &= ~CLUSTER_NODE_REPLICA;
@@ -3166,13 +3177,13 @@ static const char *clusterRaftApplySetReplica(sds data) {
             if (replica == myself) rs->todo_update_replication = 1;
         }
         clusterRemoveNodeFromShard(replica);
-        memcpy(replica->shard_id, shard_id, CLUSTER_NAMELEN);
-        clusterAddNodeToShard(shard_id, replica);
+        memcpy(replica->shard_id, target_shard, CLUSTER_NAMELEN);
+        clusterAddNodeToShard(target_shard, replica);
     } else {
-        clusterNode *primary = clusterLookupNode(argv[1], sdslen(argv[1]));
+        clusterNode *primary = clusterLookupNode(argv[3], sdslen(argv[3]));
         if (!primary) goto done;
         /* Guard: skip if the primary's shard-id has changed. */
-        if (memcmp(primary->shard_id, shard_id, CLUSTER_NAMELEN) != 0) goto done;
+        if (memcmp(primary->shard_id, target_shard, CLUSTER_NAMELEN) != 0) goto done;
         if (replica == myself) {
             /* Update cluster state; actual replication change deferred to beforeSleep. */
             if (myself->replicaof) clusterNodeRemoveReplica(myself->replicaof, myself);
@@ -3196,6 +3207,10 @@ static const char *clusterRaftApplySetReplica(sds data) {
             clusterAddNodeToShard(primary->shard_id, replica);
         }
     }
+
+    /* Bump both shard epochs after successful apply. */
+    clusterSetShardEpoch(source_shard, source_epoch + 1);
+    clusterSetShardEpoch(target_shard, target_epoch + 1);
 done:
     if (argv) sdsfreesplitres(argv, argc);
     return error;
@@ -3223,9 +3238,9 @@ static const char *clusterRaftApplyFailover(sds data) {
         goto done;
     }
 
-    /* Epoch validation: validate against the shard-id from the entry. */
-    uint64_t epoch = strtoull(argv[3], NULL, 10);
-    if (!clusterValidateAndBumpShardEpoch(argv[2], epoch)) {
+    /* Epoch validation: validate against the shard-id from the entry (no bump yet). */
+    uint64_t shard_epoch = strtoull(argv[3], NULL, 10);
+    if (!isShardEpochCurrent(argv[2], shard_epoch)) {
         error = "stale shard epoch";
         goto done;
     }
@@ -3276,6 +3291,10 @@ static const char *clusterRaftApplyFailover(sds data) {
         rs->todo_update_replication = 1;
         rs->todo_save_config = 1;
     }
+
+    /* Bump shard epoch after successful apply. */
+    clusterSetShardEpoch(argv[2], shard_epoch + 1);
+
 done:
     if (argv) sdsfreesplitres(argv, argc);
     return error;
@@ -3293,25 +3312,29 @@ static void clusterRaftForgetNode(const char *node_id, size_t id_len, void *ctx,
 }
 
 static void clusterRaftSetReplicaOf(clusterNode *primary, void *ctx, void (*callback)(void *ctx, const char *error)) {
-    /* Propose SET_REPLICA_OF: "<myself-id> <primary-id-or-dash> <shard-id>"
-     * For promotion (dash): shard-id is a new random id.
-     * For assignment: shard-id is the primary's current shard-id, used
-     * as a guard against concurrent shard changes. */
+    /* Propose SET_REPLICA_OF:
+     * "<replica-id> <source-shard> <source-epoch> <primary-id-or-dash> <target-shard> <target-epoch>"
+     * Source is myself's current shard. Target is the primary's shard (for assignment)
+     * or a new random shard (for promotion to primary). */
+    uint64_t source_epoch = clusterGetShardEpoch(myself->shard_id);
+
+    char target_shard[CLUSTER_NAMELEN];
+    if (primary) {
+        memcpy(target_shard, primary->shard_id, CLUSTER_NAMELEN);
+    } else {
+        getRandomHexChars(target_shard, CLUSTER_NAMELEN);
+    }
+    uint64_t target_epoch = primary ? clusterGetShardEpoch(primary->shard_id) : 0;
+
     sds entry = sdsnew("SET_REPLICA_OF ");
     entry = sdscatlen(entry, myself->name, CLUSTER_NAMELEN);
     entry = sdscatlen(entry, " ", 1);
+    entry = sdscatlen(entry, myself->shard_id, CLUSTER_NAMELEN);
+    entry = sdscatfmt(entry, " %U ", (unsigned long long)source_epoch);
     entry = sdscatlen(entry, primary ? primary->name : "-", primary ? CLUSTER_NAMELEN : 1);
     entry = sdscatlen(entry, " ", 1);
-    if (primary) {
-        entry = sdscatlen(entry, primary->shard_id, CLUSTER_NAMELEN);
-    } else {
-        char new_shard_id[CLUSTER_NAMELEN];
-        getRandomHexChars(new_shard_id, CLUSTER_NAMELEN);
-        entry = sdscatlen(entry, new_shard_id, CLUSTER_NAMELEN);
-    }
-    /* Append target shard epoch: use primary's shard epoch for assignment, 0 for promotion. */
-    uint64_t epoch = primary ? clusterGetShardEpoch(primary->shard_id) : 0;
-    entry = sdscatfmt(entry, " %U", (unsigned long long)epoch);
+    entry = sdscatlen(entry, target_shard, CLUSTER_NAMELEN);
+    entry = sdscatfmt(entry, " %U", (unsigned long long)target_epoch);
     clusterRaftPropose(entry, ctx, callback);
     sdsfree(entry);
 }

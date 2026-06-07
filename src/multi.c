@@ -122,7 +122,7 @@ void queueMultiCommand(client *c, uint64_t cmd_flags) {
                 long long dbid;
                 /* The helper has already validated argv[positions[i]] as a
                  * valid in-range dbid, so this should never fail. */
-                serverAssert (getLongLongFromObject(mc->argv[positions[0]], &dbid) == C_OK);
+                serverAssert(getLongLongFromObject(mc->argv[positions[0]], &dbid) == C_OK);
                 c->mstate->transaction_db_id = (int)dbid;
             }
             zfree(positions);

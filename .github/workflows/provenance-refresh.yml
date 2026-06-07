@@ -18,12 +18,12 @@ jobs:
           fetch-depth: 0
 
       - name: Refresh Fingerprints
-        uses: valkey-io/verify-provenance@05ee217ecf96b948ce996dbc965f285cbe73752a
+        uses: valkey-io/verify-provenance@cd066c9e51f64b322f3bfaa8e86ae6d26f079e3c
         with:
           mode: "refresh"
           source_repo: "redis/redis"
           target_repo: "${{ github.repository }}"
-          branding_pairs: "Redis:Valkey,KeyDB:Valkey"
+          branding_pairs: "Redis:Valkey,master:primary,slave:replica"
           prefix_pairs: "RM_:VM_,REDISMODULE_:VALKEYMODULE_"
           github_token: "${{ secrets.GITHUB_TOKEN }}"
           db_branch: "verify-provenance-db"

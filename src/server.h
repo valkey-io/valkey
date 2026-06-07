@@ -2551,7 +2551,17 @@ typedef enum {
 
 typedef void serverCommandProc(client *c);
 typedef int serverGetKeysProc(struct serverCommand *cmd, robj **argv, int argc, getKeysResult *result);
-typedef int *commandDbIdArgs(robj **argv, int argc, int *count, int **positions);
+
+/* Returns a heap-allocated array of argv indices that hold a database id
+ * argument to be validated by db-level ACL. The caller dereferences each
+ * argv[positions[i]] (via getLongLongFromObject) to obtain the dbid value.
+ * On success, *count is set to the array length.
+ *
+ * Returns NULL on syntax error or if the command has no dbid arguments;
+ * *count is unspecified in that case.
+ *
+ * Caller should free the returned array. */
+typedef int *commandDbIdArgs(robj **argv, int argc, int *count);
 
 /* Command structure.
  *
@@ -4222,10 +4232,10 @@ void resetCommand(client *c);
 void failoverCommand(client *c);
 
 /* Helper functions for getting database id args from argv, argc */
-int *selectDbIdArgs(robj **argv, int argc, int *count, int **positions);
-int *swapdbDbIdArgs(robj **argv, int argc, int *count, int **positions);
-int *moveDbIdArgs(robj **argv, int argc, int *count, int **positions);
-int *copyDbIdArgs(robj **argv, int argc, int *count, int **positions);
+int *selectDbIdArgs(robj **argv, int argc, int *count);
+int *swapdbDbIdArgs(robj **argv, int argc, int *count);
+int *moveDbIdArgs(robj **argv, int argc, int *count);
+int *copyDbIdArgs(robj **argv, int argc, int *count);
 
 #if defined(__GNUC__)
 void *calloc(size_t count, size_t size) __attribute__((deprecated));

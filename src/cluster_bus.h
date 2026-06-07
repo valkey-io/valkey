@@ -20,7 +20,7 @@ typedef struct clusterBusType {
     void (*init)(void);
     void (*initLast)(void);
     void (*cron)(void);
-    void (*beforeSleep)(void);
+    void (*beforeSleep)(bool blocked);
     void (*prepareShutdown)(void); /* Called early in shutdown to allow graceful handoff. */
     void (*handleServerShutdown)(void);
 

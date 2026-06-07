@@ -1884,7 +1884,8 @@ static void clusterRaftCheckSlotCoverage(void) {
     server.cluster->state = all_slots_covered ? CLUSTER_OK : CLUSTER_FAIL;
 }
 
-static void clusterRaftBeforeSleep(void) {
+static void clusterRaftBeforeSleep(bool blocked) {
+    UNUSED(blocked);
     clusterRaftState *rs = RAFT_STATE();
 
     if (rs->todo_connect_nodes) {

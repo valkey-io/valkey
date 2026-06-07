@@ -4653,7 +4653,8 @@ static void clusterLegacyCron(void) {
  * reaction to events fired but that are not safe to perform inside event
  * handlers, or to perform potentially expansive tasks that we need to do
  * a single time before replying to clients. */
-static void clusterLegacyBeforeSleep(void) {
+static void clusterLegacyBeforeSleep(bool blocked) {
+    if (blocked) return;
     int flags = LEGACY_STATE()->todo_before_sleep;
 
     /* Reset our flags (not strictly needed since every single function

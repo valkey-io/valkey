@@ -1604,7 +1604,7 @@ static void clusterRaftDetectFailures(mstime_t now) {
     /* Check individual nodes. */
     dictIterator *di = dictGetSafeIterator(server.cluster->nodes);
     dictEntry *de;
-     while ((de = dictNext(di)) != NULL) {
+    while ((de = dictNext(di)) != NULL) {
         clusterNode *node = dictGetVal(de);
         if (node == myself) continue;
 

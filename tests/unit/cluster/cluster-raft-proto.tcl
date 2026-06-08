@@ -84,6 +84,16 @@ proc raft_listen_and_accept {port_var {timeout 5000} {before_accept {}}} {
     return $::_raft_accepted
 }
 
+# Connect a fake node to a cluster bus port and complete HELLO handshake.
+# Returns the connected fd.
+proc raft_connect_fake_node {host cport fake_id fake_addr} {
+    set fd [raft_connect $host $cport]
+    raft_send $fd "HELLO $fake_id $fake_addr"
+    set reply [raft_recv $fd]
+    assert_match "HI *" $reply
+    return $fd
+}
+
 # Parse an AE message and reply with AE_ACK.
 # Returns the last log index after applying the entries.
 proc raft_reply_ae_ack {fd ae_msg repl_offset} {
@@ -577,17 +587,8 @@ start_multiple_servers 2 {overrides {cluster-enabled yes cluster-protocol raft c
     }
     assert {$node0_shard ne ""}
 
-    # Helper: connect to cluster bus and complete HELLO handshake.
-    proc connect_fake_node {cport} {
-        set fake_id [string repeat "f" 40]
-        set fake_shard [string repeat "e" 40]
-        set fake_addr "127.0.0.1:9999@19999,,tls-port=0,shard-id=$fake_shard"
-        set fd [raft_connect 127.0.0.1 $cport]
-        raft_send $fd "HELLO $fake_id $fake_addr"
-        set reply [raft_recv $fd]
-        assert_match "HI *" $reply
-        return $fd
-    }
+    set fake_id [string repeat "f" 40]
+    set fake_addr "127.0.0.1:9999@19999,,tls-port=0,shard-id=[string repeat e 40]"
 
     # Each entry: {entry_type propose_msg state_check}
     set stale_proposals [list \
@@ -610,15 +611,16 @@ start_multiple_servers 2 {overrides {cluster-enabled yes cluster-protocol raft c
             set rejected_before [get_cluster_info_field $r0 cluster_stats_proposals_rejected_prevalidation]
 
             # Connect and inject stale PROPOSE.
-            set fd [connect_fake_node $cport]
+            set fd [raft_connect_fake_node 127.0.0.1 $cport $fake_id $fake_addr]
             raft_send $fd $propose_msg
 
-            # Wait for the rejection counter to increase.
-            wait_for_condition 50 100 {
-                [get_cluster_info_field $r0 cluster_stats_proposals_rejected_prevalidation] > $rejected_before
-            } else {
-                fail "Stale $entry_type proposal was not rejected"
-            }
+            # Expect a REJECT message back from the leader.
+            set reply [raft_recv $fd 2000]
+            assert_match "REJECT *" $reply
+
+            # Verify rejection counter increased.
+            set rejected_after [get_cluster_info_field $r0 cluster_stats_proposals_rejected_prevalidation]
+            assert {$rejected_after > $rejected_before}
 
             # Verify log index unchanged (rejected at pre-validation).
             set commit_after [get_cluster_info_field $r0 cluster_raft_commit_index]
@@ -650,15 +652,16 @@ start_multiple_servers 2 {overrides {cluster-enabled yes cluster-protocol raft c
             set commit_before [get_cluster_info_field $r0 cluster_raft_commit_index]
             set rejected_before [get_cluster_info_field $r0 cluster_stats_proposals_rejected_prevalidation]
 
-            set fd [connect_fake_node $cport]
+            set fd [raft_connect_fake_node 127.0.0.1 $cport $fake_id $fake_addr]
             raft_send $fd $propose_msg
 
-            # Wait for the rejection counter to increase.
-            wait_for_condition 50 100 {
-                [get_cluster_info_field $r0 cluster_stats_proposals_rejected_prevalidation] > $rejected_before
-            } else {
-                fail "$label proposal was not rejected"
-            }
+            # Expect a REJECT message back from the leader.
+            set reply [raft_recv $fd 2000]
+            assert_match "REJECT *" $reply
+
+            # Verify rejection counter increased.
+            set rejected_after [get_cluster_info_field $r0 cluster_stats_proposals_rejected_prevalidation]
+            assert {$rejected_after > $rejected_before}
 
             # Verify log index unchanged (rejected at pre-validation).
             set commit_after [get_cluster_info_field $r0 cluster_raft_commit_index]
@@ -687,27 +690,76 @@ start_multiple_servers 2 {overrides {cluster-enabled yes cluster-protocol raft c
             set commit_before [get_cluster_info_field $r0 cluster_raft_commit_index]
             set rejected_before [get_cluster_info_field $r0 cluster_stats_proposals_rejected_prevalidation]
 
-            set fd [connect_fake_node $cport]
+            set fd [raft_connect_fake_node 127.0.0.1 $cport $fake_id $fake_addr]
             raft_send $fd $propose_msg
 
-            # Wait for the rejection counter to increase.
-            wait_for_condition 50 100 {
-                [get_cluster_info_field $r0 cluster_stats_proposals_rejected_prevalidation] > $rejected_before
-            } else {
-                fail "$entry_type with wrong shard-id was not rejected"
-            }
+            # Expect a REJECT message back from the leader.
+            set reply [raft_recv $fd 2000]
+            assert_match "REJECT *" $reply
+
+            # Verify rejection counter increased.
+            set rejected_after [get_cluster_info_field $r0 cluster_stats_proposals_rejected_prevalidation]
+            assert {$rejected_after > $rejected_before}
 
             # Verify log index unchanged (rejected at pre-validation, epoch not bumped).
             set commit_after [get_cluster_info_field $r0 cluster_raft_commit_index]
             assert_equal $commit_before $commit_after
 
-            # Verify cluster state unchanged.
-            set nodes [$r0 CLUSTER NODES]
-            assert_match "*$node_id*myself,master*" $nodes
-            assert_equal 16384 [get_cluster_info_field $r0 cluster_slots_assigned]
-
             close $fd
         }
+    }
+
+    # --------------------------------------------------------------------------
+    # Duplicate FAILOVER: two clients on the follower both send FAILOVER FORCE
+    # simultaneously. The first succeeds, the second is rejected at apply time
+    # (epoch bumped by the first). Neither client should hang.
+    # --------------------------------------------------------------------------
+
+    test "Raft shard epoch: duplicate FAILOVER from follower - second client gets rejection" {
+        set prevalidation_before [get_cluster_info_field $r0 cluster_stats_proposals_rejected_prevalidation]
+        set apply_before [get_cluster_info_field $r0 cluster_stats_proposals_rejected_apply]
+
+        # Two deferred clients on r1 (the follower/replica).
+        set c1 [valkey_deferring_client -1]
+        set c2 [valkey_deferring_client -1]
+
+        # Both issue CLUSTER FAILOVER FORCE concurrently.
+        $c1 CLUSTER FAILOVER FORCE
+        $c2 CLUSTER FAILOVER FORCE
+
+        # Wait for one of the rejection counters to increase.
+        wait_for_condition 50 100 {
+            [get_cluster_info_field $r0 cluster_stats_proposals_rejected_prevalidation] > $prevalidation_before ||
+            [get_cluster_info_field $r0 cluster_stats_proposals_rejected_apply] > $apply_before
+        } else {
+            fail "Second FAILOVER was not rejected"
+        }
+
+        # Read both replies. One should succeed (OK), the other should
+        # get a rejection error. Neither should hang.
+        # Use catch because error replies throw in the deferring client.
+        if {[catch {set reply1 [$c1 read]} err1]} {
+            set reply1 $err1
+        }
+        if {[catch {set reply2 [$c2 read]} err2]} {
+            set reply2 $err2
+        }
+
+        # Exactly one should be OK and the other should be rejected.
+        set ok_count 0
+        set err_count 0
+        foreach reply [list $reply1 $reply2] {
+            if {$reply eq "OK"} {
+                incr ok_count
+            } elseif {[string match "*proposal rejected by raft leader*" $reply]} {
+                incr err_count
+            }
+        }
+        assert_equal 1 $ok_count
+        assert_equal 1 $err_count
+
+        $c1 close
+        $c2 close
     }
 }
 

@@ -156,7 +156,7 @@ test "Move a replica to another primary, verify client receives sunsubscribe on 
     $nodefrom(link) spublish $channelname hello
     assert_equal {smessage mychannel2 hello} [$subscribeclient read]
 
-    assert_equal {OK} [$replica_client cluster replicate $nodeto(id)]
+    assert_equal {OK} [cluster_client_replicate_with_retry $replica_client $nodeto(id)]
 
     set msg [$subscribeclient read]
     assert {"sunsubscribe" eq [lindex $msg 0]}

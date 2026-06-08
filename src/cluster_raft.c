@@ -41,6 +41,9 @@
 
 #include <arpa/inet.h>
 
+/* Generic error message returned to clients when a proposal is rejected. */
+#define GENERIC_PROPOSAL_REJECTION_MSG "proposal rejected by raft leader"
+
 /* From module.c */
 void moduleCallClusterReceivers(const char *sender_id, uint64_t module_id, uint8_t type, const unsigned char *payload, uint32_t len);
 
@@ -321,6 +324,7 @@ static clusterMsgSendBlock *clusterRaftBuildAllOffsetsMsg(void) {
 
 static void clusterRaftPropose(sds entry, void *ctx, void (*callback)(void *ctx, const char *error));
 static void clusterRaftDeferPendingProposals(void);
+static void clusterRaftCompletePendingProposal(int type, sds data, const char *error);
 static int clusterRaftPreValidateEpoch(int type, sds data);
 static void clusterRaftUpdateMyself(int old_flags);
 static sds clusterRaftBuildMyNodeInfo(void);
@@ -784,7 +788,7 @@ static void clusterRaftPropose(sds entry, void *ctx, void (*callback)(void *ctx,
     if (rs->role == RAFT_ROLE_LEADER) {
         /* Pre-validate epoch on the leader to reject obviously stale proposals. */
         if (!clusterRaftPreValidateEpoch(type, data)) {
-            if (callback) callback(ctx, "stale shard epoch");
+            if (callback) callback(ctx, GENERIC_PROPOSAL_REJECTION_MSG);
             sdsfree(data);
             return;
         }
@@ -1019,6 +1023,14 @@ static int clusterRaftProcessPropose(clusterLink *link, int argc, sds *argv) {
 
     /* Pre-validate epoch on the leader to reject obviously stale proposals. */
     if (!clusterRaftPreValidateEpoch(type, data)) {
+        /* Send REJECT back to the proposing follower so it can unblock the client. */
+        if (link) {
+            sds msg = wireNewMsg("REJECT");
+            msg = sdscatlen(msg, " ", 1);
+            msg = sdscatlen(msg, entry, sdslen(entry));
+            msg = wireFinishMsg(msg);
+            clusterRaftSendMsg(link, msg);
+        }
         sdsfree(data);
         sdsfree(entry);
         return 1;
@@ -1036,6 +1048,26 @@ static int clusterRaftProcessPropose(clusterLink *link, int argc, sds *argv) {
     }
 
     sdsfree(entry);
+    return 1;
+}
+
+/* Handle a REJECT message from the leader. The leader sends this when it
+ * rejects a forwarded PROPOSE at pre-validation. We match it against our
+ * pending_proposals and fire the callback with an error so the client
+ * gets an immediate reply instead of hanging until timeout.
+ * Format: "REJECT <type> <data...>" (echoes back the original entry). */
+static int clusterRaftProcessReject(clusterLink *link, int argc, sds *argv) {
+    UNUSED(link);
+
+    /* argv[0]="REJECT", argv[1]=type, argv[2..]=data */
+    if (argc < 2) return 1;
+
+    int type = raftEntryTypeByName(argv[1]);
+    if (type < 0) return 1;
+
+    sds data = (argc >= 3) ? sdsjoinsds(argv + 2, argc - 2, " ", 1) : sdsempty();
+    clusterRaftCompletePendingProposal(type, data, GENERIC_PROPOSAL_REJECTION_MSG);
+    sdsfree(data);
     return 1;
 }
 
@@ -1171,6 +1203,28 @@ static int clusterValidateShardEpochPair(const char *source_shard_id,
     }
 
     return 1;
+}
+
+/* Find a pending proposal matching type+data, fire its callback, and remove it.
+ * Called both when an entry is applied (from raftLogApply) and when the leader
+ * sends a REJECT for a forwarded proposal. */
+static void clusterRaftCompletePendingProposal(int type, sds data, const char *error) {
+    clusterRaftState *rs = RAFT_STATE();
+    if (listLength(rs->pending_proposals) == 0) return;
+
+    listIter li;
+    listNode *ln;
+    listRewind(rs->pending_proposals, &li);
+    while ((ln = listNext(&li)) != NULL) {
+        raftPendingProposal *pp = listNodeValue(ln);
+        if (pp->type == type && !sdscmp(pp->data, data)) {
+            if (pp->callback) pp->callback(pp->ctx, error);
+            sdsfree(pp->data);
+            zfree(pp);
+            listDelNode(rs->pending_proposals, ln);
+            break;
+        }
+    }
 }
 
 /* Apply a committed log entry. */
@@ -1329,7 +1383,7 @@ static void raftLogApply(raftLogEntry *e) {
             /* Epoch validation (no bump yet). */
             uint64_t epoch = strtoull(argv[1], NULL, 10);
             if (!isShardEpochCurrent(node->shard_id, epoch)) {
-                entry_error = "stale shard epoch";
+                entry_error = GENERIC_PROPOSAL_REJECTION_MSG;
                 sdsfreesplitres(argv, argc);
                 break;
             }
@@ -1446,21 +1500,7 @@ static void raftLogApply(raftLogEntry *e) {
     }
 
     /* Check pending proposals for a match and remove it. */
-    if (listLength(rs->pending_proposals) > 0) {
-        listIter li;
-        listNode *ln;
-        listRewind(rs->pending_proposals, &li);
-        while ((ln = listNext(&li)) != NULL) {
-            raftPendingProposal *pp = listNodeValue(ln);
-            if (pp->type == e->type && !sdscmp(pp->data, e->data)) {
-                if (pp->callback) pp->callback(pp->ctx, entry_error);
-                sdsfree(pp->data);
-                zfree(pp);
-                listDelNode(rs->pending_proposals, ln);
-                break;
-            }
-        }
-    }
+    clusterRaftCompletePendingProposal(e->type, e->data, entry_error);
 }
 
 /* --------------------------------------------------------------------------
@@ -2530,6 +2570,8 @@ static int clusterRaftProcessMessage(struct clusterLink *link) {
         ret = clusterRaftProcessMeetRejected(link, argc, argv);
     } else if (!strcasecmp(argv[0], "PROPOSE")) {
         ret = clusterRaftProcessPropose(link, argc, argv);
+    } else if (!strcasecmp(argv[0], "REJECT")) {
+        ret = clusterRaftProcessReject(link, argc, argv);
     } else if (!strcasecmp(argv[0], "AE")) {
         ret = clusterRaftProcessAppendEntries(link, argc, argv, lines + 1, line_count - 1);
     } else if (!strcasecmp(argv[0], "AE_ACK")) {
@@ -3091,16 +3133,15 @@ static const char *clusterRaftApplySlotChange(sds data) {
     int argc;
     sds *argv = sdssplitlen(data, sdslen(data), " ", 1, &argc);
     /* Need at least: source + source_epoch + target + target_epoch + one_range = 5 */
-    if (!argv || argc < 5) goto done;
+    if (!argv || argc < 5) goto reject;
 
     slotChangeEpochInfo info = parseSlotChangeEpochs(argv, argc);
-    if (!info.valid) goto done;
+    if (!info.valid) goto reject;
 
     /* Epoch validation: validate both source and target epochs. */
     if (!clusterValidateShardEpochPair(info.source_shard_id, info.source_epoch,
                                        info.target_shard_id, info.target_epoch)) {
-        error = "stale shard epoch";
-        goto done;
+        goto reject;
     }
 
     /* Range fields are argv[range_end] through argv[argc-1]. */
@@ -3134,6 +3175,10 @@ static const char *clusterRaftApplySlotChange(sds data) {
             }
         }
     }
+    goto done;
+
+reject:
+    if (!error) error = GENERIC_PROPOSAL_REJECTION_MSG;
 done:
     if (argv) sdsfreesplitres(argv, argc);
     return error;
@@ -3146,10 +3191,10 @@ static const char *clusterRaftApplySetReplica(sds data) {
     const char *error = NULL;
     int argc;
     sds *argv = sdssplitlen(data, sdslen(data), " ", 1, &argc);
-    if (!argv || argc != 6) goto done;
+    if (!argv || argc != 6) goto reject;
 
     clusterNode *replica = clusterLookupNode(argv[0], sdslen(argv[0]));
-    if (!replica) goto done;
+    if (!replica) goto reject;
 
     char *shard_id = argv[2];
     uint64_t epoch = strtoull(argv[3], NULL, 10);
@@ -3161,8 +3206,7 @@ static const char *clusterRaftApplySetReplica(sds data) {
     /* Validate both shard epochs without bumping. */
     if (!clusterValidateShardEpochPair(source_shard, source_epoch,
                                        target_shard, target_epoch)) {
-        error = "stale shard epoch";
-        goto done;
+        goto reject;
     }
 
     if (replica == myself) rs->todo_save_config = 1;
@@ -3181,9 +3225,9 @@ static const char *clusterRaftApplySetReplica(sds data) {
         clusterAddNodeToShard(target_shard, replica);
     } else {
         clusterNode *primary = clusterLookupNode(argv[3], sdslen(argv[3]));
-        if (!primary) goto done;
+        if (!primary) goto reject;
         /* Guard: skip if the primary's shard-id has changed. */
-        if (memcmp(primary->shard_id, target_shard, CLUSTER_NAMELEN) != 0) goto done;
+        if (memcmp(primary->shard_id, target_shard, CLUSTER_NAMELEN) != 0) goto reject;
         if (replica == myself) {
             /* Update cluster state; actual replication change deferred to beforeSleep. */
             if (myself->replicaof) clusterNodeRemoveReplica(myself->replicaof, myself);
@@ -3211,6 +3255,10 @@ static const char *clusterRaftApplySetReplica(sds data) {
     /* Bump both shard epochs after successful apply. */
     clusterSetShardEpoch(source_shard, source_epoch + 1);
     clusterSetShardEpoch(target_shard, target_epoch + 1);
+    goto done;
+
+reject:
+    if (!error) error = GENERIC_PROPOSAL_REJECTION_MSG;
 done:
     if (argv) sdsfreesplitres(argv, argc);
     return error;
@@ -3224,28 +3272,26 @@ static const char *clusterRaftApplyFailover(sds data) {
     const char *error = NULL;
     int argc;
     sds *argv = sdssplitlen(data, sdslen(data), " ", 1, &argc);
-    if (!argv || argc != 4) goto done;
+    if (!argv || argc != 4) goto reject;
 
     clusterNode *replica = clusterLookupNode(argv[0], sdslen(argv[0]));
     clusterNode *primary = clusterLookupNode(argv[1], sdslen(argv[1]));
-    if (!replica || !primary) goto done;
+    if (!replica || !primary) goto reject;
 
     /* Validate that the primary still belongs to the shard claimed in the entry. */
     if (memcmp(primary->shard_id, argv[2], CLUSTER_NAMELEN) != 0) {
         serverLog(LL_WARNING, "FAILOVER rejected: primary %.40s shard mismatch (expected %.40s, got %.40s).",
                   primary->name, argv[2], primary->shard_id);
-        error = "primary shard mismatch";
-        goto done;
+        goto reject;
     }
 
     /* Epoch validation: validate against the shard-id from the entry (no bump yet). */
     uint64_t shard_epoch = strtoull(argv[3], NULL, 10);
     if (!isShardEpochCurrent(argv[2], shard_epoch)) {
-        error = "stale shard epoch";
-        goto done;
+        goto reject;
     }
 
-    if (!nodeIsReplica(replica) || nodeIsReplica(primary) || replica->replicaof != primary) goto done;
+    if (!nodeIsReplica(replica) || nodeIsReplica(primary) || replica->replicaof != primary) goto reject;
 
     /* Transfer slots from old primary to new primary. */
     for (int j = 0; j < CLUSTER_SLOTS; j++) {
@@ -3294,7 +3340,10 @@ static const char *clusterRaftApplyFailover(sds data) {
 
     /* Bump shard epoch after successful apply. */
     clusterSetShardEpoch(argv[2], shard_epoch + 1);
+    goto done;
 
+reject:
+    if (!error) error = GENERIC_PROPOSAL_REJECTION_MSG;
 done:
     if (argv) sdsfreesplitres(argv, argc);
     return error;

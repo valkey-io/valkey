@@ -1353,10 +1353,6 @@ static int clusterRaftProcessAppendEntriesResponse(clusterLink *link, int argc, 
     if (!node) return 1;
     clusterNodeRaftData *rd = RAFT_NODE(node);
     rd->last_ack_time = monotonicMs();
-    if (clusterRaftLeaderHasFreshQuorum(rd->last_ack_time)) {
-        rs->lost_quorum_since = 0;
-        rs->last_fresh_quorum_time = rd->last_ack_time;
-    }
     /* Keep node->repl_offset in sync for CLUSTER SLOTS/SHARDS on the leader. */
     long long prev_offset = node->repl_offset;
     node->repl_offset = follower_repl_offset;
@@ -1779,7 +1775,10 @@ static void clusterRaftCron(void) {
         }
 
         if (rs->role == RAFT_ROLE_LEADER) {
-            if (!clusterRaftLeaderHasFreshQuorum(now)) {
+            if (clusterRaftLeaderHasFreshQuorum(now)) {
+                rs->lost_quorum_since = 0;
+                rs->last_fresh_quorum_time = now;
+            } else {
                 if (rs->lost_quorum_since == 0) {
                     rs->lost_quorum_since = now;
                     serverLog(LL_NOTICE, "Leader lost quorum freshness, waiting before step-down.");

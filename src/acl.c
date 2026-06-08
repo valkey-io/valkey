@@ -1856,25 +1856,20 @@ static int ACLSelectorCheckCmd(aclSelector *selector,
     /* Check database level permissions based on cmd->get_dbid_args implementation. */
     if (cmd->get_dbid_args) {
         int count = 0;
-        int *dbids = cmd->get_dbid_args(argv, argc, &count);
-        if (dbids) {
+        int *positions = cmd->get_dbid_args(argv, argc, &count);
+        if (positions) {
             for (int i = 0; i < count; i++) {
-                if (!ACLSelectorCanAccessDb(selector, dbids[i])) {
-                    if (keyidxptr) {
-                        if (cmd->proc == selectCommand)
-                            *keyidxptr = 1;
-                        else if (cmd->proc == moveCommand)
-                            *keyidxptr = 2;
-                        else if (cmd->proc == swapdbCommand)
-                            *keyidxptr = (i == 0) ? 1 : 2;
-                        else
-                            *keyidxptr = 0;
-                    }
-                    zfree(dbids);
+                long long dbid;
+                /* The helper has already validated argv[positions[i]] as a
+                 * valid in-range dbid, so this should never fail. */
+                serverAssert(getLongLongFromObject(argv[positions[i]], &dbid) == C_OK);
+                if (!ACLSelectorCanAccessDb(selector, (int)dbid)) {
+                    if (keyidxptr) *keyidxptr = positions[i];
+                    zfree(positions);
                     return ACL_DENIED_DB;
                 }
             }
-            zfree(dbids);
+            zfree(positions);
         }
     } else if ((cmd->flags & CMD_ALL_DBS) && !(selector->flags & SELECTOR_FLAG_ALLDBS)) {
         for (int i = 0; i < server.dbnum; i++) {

@@ -226,7 +226,8 @@ int hashTypeGetFromListpack(robj *o, sds field, unsigned char **vstr, unsigned i
              * to check if this field is already expired */
             if (meta_ptr != NULL && lpIsMetadata(meta_ptr)) {
                 long long entry_expiry = lpGetMetadataValue(meta_ptr);
-                if (checkAlreadyExpired(entry_expiry)) {
+                /* compare with pure time otherwise different behavior across replica and primary */
+                if (entry_expiry != EXPIRY_NONE && entry_expiry <= commandTimeSnapshot()) {
                     return -1;
                 }
             }
@@ -2403,9 +2404,10 @@ void hrandfieldWithCountCommand(client *c, long l, int withvalues) {
                 listpackEntry field, value;
                 if (hashTypeRandomElement(hash, size, &field, &value) != C_OK)
                     break;
-                if (withvalues && c->resp > 2) addWritePreparedReplyArrayLen(wpc, 2);
-                addWritePreparedReplyBulkCBuffer(wpc, field.sval, field.slen);
-                if (withvalues) addWritePreparedReplyBulkCBuffer(wpc, value.sval, value.slen);
+                /* A listpack field/value may be integer-encoded, in which case
+                 * 'sval' is NULL and the value is held in 'lval'. Use the helper
+                 * that handles both cases instead of assuming a string buffer. */
+                hrandfieldReplyWithListpack(wpc, 1, &field, withvalues ? &value : NULL);
                 if (c->flag.close_asap) break;
                 reply_size++;
             }

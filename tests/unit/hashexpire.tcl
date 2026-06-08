@@ -4781,7 +4781,7 @@ start_server {tags {"hash"}} {
        r config set import-mode yes
        assert_equal [r hsetex myhash exat 0 fields 2 f2 v2 f3 v3] 1
        assert_equal [r hlen myhash] 3
-       assert_equal [r OBJECT ENCODING myhash] "hashtable"
+       assert_equal [r OBJECT ENCODING myhash] "listpack"
        r config set import-mode no
        wait_for_condition 30 100 {
            [r hlen myhash] == 1

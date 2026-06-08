@@ -47,6 +47,7 @@
 #include <ctype.h>
 #include <stdatomic.h>
 #include <stdbool.h>
+#include <arpa/inet.h>
 
 /* This struct is used to encapsulate filtering criteria for operations on clients
  * such as identifying specific clients to kill or retrieve. Each field in the struct
@@ -1833,9 +1834,58 @@ void clientAcceptHandler(connection *conn) {
     moduleFireServerEvent(VALKEYMODULE_EVENT_CLIENT_CHANGE, VALKEYMODULE_SUBEVENT_CLIENT_CHANGE_CONNECTED, c);
 }
 
+/* Check if the given IP address matches a CIDR notation (e.g. "10.0.0.0/16"). */
+static int cidrMatch(const char *ip, const char *cidr) {
+    char buf[NET_IP_STR_LEN];
+    char *slash = strchr(cidr, '/');
+    int prefix_len;
+    struct in_addr addr, net;
+    uint32_t mask;
+
+    if (slash) {
+        size_t len = slash - cidr;
+        if (len >= sizeof(buf)) return 0;
+        memcpy(buf, cidr, len);
+        buf[len] = '\0';
+        prefix_len = atoi(slash + 1);
+        if (prefix_len < 0 || prefix_len > 32) return 0;
+    } else {
+        strncpy(buf, cidr, sizeof(buf) - 1);
+        buf[sizeof(buf) - 1] = '\0';
+        prefix_len = 32;
+    }
+
+    if (inet_pton(AF_INET, ip, &addr) != 1) return 0;
+    if (inet_pton(AF_INET, buf, &net) != 1) return 0;
+
+    mask = prefix_len ? htonl(~((1 << (32 - prefix_len)) - 1)) : 0;
+    return (addr.s_addr & mask) == (net.s_addr & mask);
+}
+
+/* Check if a connection comes from a trusted source. */
+static int isConnTrusted(connection *conn, struct ClientFlags flags, const char *ip) {
+    if (flags.unix_socket && server.trust_unix_sockets) return 1;
+
+    if (!ip || !server.trusted_sources || sdslen(server.trusted_sources) == 0) return 0;
+
+    char *copy = sdsdup(server.trusted_sources);
+    char *saveptr;
+    char *token = strtok_r(copy, " ", &saveptr);
+    int matched = 0;
+    while (token) {
+        if (cidrMatch(ip, token)) {
+            matched = 1;
+            break;
+        }
+        token = strtok_r(NULL, " ", &saveptr);
+    }
+    sdsfree(copy);
+    return matched;
+}
+
 void acceptCommonHandler(connection *conn, struct ClientFlags flags, char *ip) {
     client *c;
-    UNUSED(ip);
+    int is_trusted;
 
     char addr[CONN_ADDR_STR_LEN] = {0};
     char laddr[CONN_ADDR_STR_LEN] = {0};
@@ -1849,28 +1899,40 @@ void acceptCommonHandler(connection *conn, struct ClientFlags flags, char *ip) {
         return;
     }
 
+    is_trusted = isConnTrusted(conn, flags, ip);
+
     /* Limit the number of connections we take at the same time.
      *
      * Admission control will happen before a client is created and connAccept()
      * called, because we don't want to even start transport-level negotiation
      * if rejected. */
-    if (listLength(server.clients) + getClusterConnectionsCount() >= server.maxclients) {
-        char *err;
-        if (server.cluster_enabled)
-            err = "-ERR max number of clients + cluster "
-                  "connections reached\r\n";
-        else
-            err = "-ERR max number of clients reached\r\n";
+    if (is_trusted) {
+        if (server.trusted_clients >= server.trusted_maxclients) {
+            char *err = "-ERR max number of trusted clients reached\r\n";
 
-        /* That's a best effort error message, don't check write errors.
-         * Note that for TLS connections, no handshake was done yet so nothing
-         * is written and the connection will just drop. */
-        if (connWrite(conn, err, strlen(err)) == -1) {
-            /* Nothing to do, Just to avoid the warning... */
+            if (connWrite(conn, err, strlen(err)) == -1) {
+                /* Nothing to do, Just to avoid the warning... */
+            }
+            server.stat_rejected_trusted_conn++;
+            connClose(conn);
+            return;
         }
-        server.stat_rejected_conn++;
-        connClose(conn);
-        return;
+    } else {
+        if (listLength(server.clients) + getClusterConnectionsCount() >= server.maxclients) {
+            char *err;
+            if (server.cluster_enabled)
+                err = "-ERR max number of clients + cluster "
+                      "connections reached\r\n";
+            else
+                err = "-ERR max number of clients reached\r\n";
+
+            if (connWrite(conn, err, strlen(err)) == -1) {
+                /* Nothing to do, Just to avoid the warning... */
+            }
+            server.stat_rejected_conn++;
+            connClose(conn);
+            return;
+        }
     }
 
     /* Create connection and client */
@@ -1883,6 +1945,10 @@ void acceptCommonHandler(connection *conn, struct ClientFlags flags, char *ip) {
 
     /* Last chance to keep flags */
     if (flags.unix_socket) c->flag.unix_socket = 1;
+    if (is_trusted) {
+        c->flag.trusted = 1;
+        server.trusted_clients++;
+    }
 
     /* Initiate accept.
      *
@@ -2193,6 +2259,8 @@ int freeClient(client *c) {
     /* Remove the contribution that this client gave to our
      * incrementally computed memory usage. */
     if (c->conn) server.stat_clients_type_memory[c->last_memory_type] -= c->last_memory_usage;
+
+    if (c->flag.trusted) server.trusted_clients--;
 
     /* Unlink the client: this will close the socket, remove the I/O
      * handlers, and remove references of the client from different

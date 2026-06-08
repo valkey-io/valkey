@@ -1864,6 +1864,7 @@ static int cidrMatch(const char *ip, const char *cidr) {
 
 /* Check if a connection comes from a trusted source. */
 static int isConnTrusted(connection *conn, struct ClientFlags flags, const char *ip) {
+    UNUSED(conn);
     if (flags.unix_socket && server.trust_unix_sockets) return 1;
 
     if (!ip || !server.trusted_sources || sdslen(server.trusted_sources) == 0) return 0;

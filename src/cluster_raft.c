@@ -1595,46 +1595,16 @@ static void clusterRaftInitLast(void) {
 }
 
 /* Leader: detect node failures and propose NODE_FAIL.
- * If a majority of peers are overdue, the problem is likely on our side
- * (paused or partitioned) — reset ack times to avoid false positives. */
+ * Skip failure detection while quorum loss is in progress so a stale leader
+ * does not keep originating NODE_FAIL proposals in a minority partition. */
 static void clusterRaftDetectFailures(mstime_t now) {
     mstime_t node_timeout = server.cluster_node_timeout;
-
-    /* Check if a majority of peers are overdue. */
-    int overdue = 0, total = 0;
-    dictIterator *di = dictGetSafeIterator(server.cluster->nodes);
-    dictEntry *de;
-    while ((de = dictNext(di)) != NULL) {
-        clusterNode *n = dictGetVal(de);
-        if (n == myself) continue;
-        total++;
-        clusterNodeRaftData *rd = RAFT_NODE(n);
-        if (rd->last_ack_time > 0 &&
-            now - rd->last_ack_time > node_timeout) {
-            overdue++;
-        }
-    }
-    dictReleaseIterator(di);
-
-    if (overdue > total / 2) {
-        if (RAFT_STATE()->lost_quorum_since) {
-            /* Let quorum-loss step-down proceed without refreshing ack state. */
-            return;
-        }
-        /* Majority overdue — reset all ack times. */
-        di = dictGetSafeIterator(server.cluster->nodes);
-        while ((de = dictNext(di)) != NULL) {
-            clusterNode *n = dictGetVal(de);
-            if (n == myself) continue;
-            RAFT_NODE(n)->last_ack_time = now;
-        }
-        dictReleaseIterator(di);
-        return;
-    }
+    if (RAFT_STATE()->lost_quorum_since) return;
 
     /* Check individual nodes. */
-    di = dictGetSafeIterator(server.cluster->nodes);
-    while ((de = dictNext(di)) != NULL) {
+    dictIterator *di = dictGetSafeIterator(server.cluster->nodes);
+    dictEntry *de;
+     while ((de = dictNext(di)) != NULL) {
         clusterNode *node = dictGetVal(de);
         if (node == myself) continue;
 

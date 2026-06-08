@@ -1393,7 +1393,7 @@ static int clusterRaftProcessAppendEntriesResponse(clusterLink *link, int argc, 
             }
             dictReleaseIterator(di);
 
-            int quorum = server.cluster->size / 2 + 1;
+            int quorum = clusterRaftQuorum();
             if (matches >= quorum) {
                 rs->commit_index = idx;
                 break;
@@ -1485,7 +1485,7 @@ static int clusterRaftProcessRequestVoteResponse(clusterLink *link, int argc, sd
 
     if (granted) {
         rs->votes_received++;
-        int quorum = server.cluster->size / 2 + 1;
+        int quorum = clusterRaftQuorum();
         if (rs->votes_received >= quorum) {
             char old_leader[CLUSTER_NAMELEN];
             memcpy(old_leader, rs->leader, CLUSTER_NAMELEN);
@@ -1544,7 +1544,7 @@ static void clusterRaftStartElection(void) {
     dictReleaseIterator(di);
 
     /* Single-node: already have quorum. */
-    int quorum = server.cluster->size / 2 + 1;
+    int quorum = clusterRaftQuorum();
     if (rs->votes_received >= quorum) {
         rs->role = RAFT_ROLE_LEADER;
         rs->lost_quorum_since = 0;

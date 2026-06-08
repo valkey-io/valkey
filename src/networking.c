@@ -1858,7 +1858,7 @@ static int cidrMatch(const char *ip, const char *cidr) {
     if (inet_pton(AF_INET, ip, &addr) != 1) return 0;
     if (inet_pton(AF_INET, buf, &net) != 1) return 0;
 
-    mask = prefix_len ? htonl(~((1 << (32 - prefix_len)) - 1)) : 0;
+    mask = prefix_len ? htonl(~((1U << (32 - prefix_len)) - 1)) : 0;
     return (addr.s_addr & mask) == (net.s_addr & mask);
 }
 

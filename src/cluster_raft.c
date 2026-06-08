@@ -1017,7 +1017,6 @@ static void raftLogApply(raftLogEntry *e) {
             if (memcmp(argv[0], myself->name, CLUSTER_NAMELEN) == 0) {
                 if (rs->role == RAFT_ROLE_JOINER) {
                     rs->role = RAFT_ROLE_FOLLOWER;
-                    rs->lost_quorum_since = 0;
                     serverLog(LL_NOTICE, "Promoted from joiner to follower.");
 
                     /* Propose SLOT_CHANGE for slots assigned before joining
@@ -1276,8 +1275,6 @@ static int clusterRaftProcessAppendEntries(clusterLink *link, int argc, sds *arg
 
     /* Accept heartbeat. */
     if (rs->role != RAFT_ROLE_JOINER) rs->role = RAFT_ROLE_FOLLOWER;
-    rs->lost_quorum_since = 0;
-    rs->last_fresh_quorum_time = 0;
     rs->last_heartbeat = monotonicMs();
     memcpy(rs->leader, argv[1], CLUSTER_NAMELEN);
 

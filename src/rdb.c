@@ -1218,8 +1218,12 @@ int rdbSaveKeyValuePair(rio *rdb, robj *key, robj *val, long long expiretime, in
     /* Save type, key, value */
     int rdbtype = rdbGetObjectType(val, rdbver);
     if (rdbtype == -1) {
-        serverLog(LL_WARNING, "Can't store key '%s' (db %d) in RDB version %d",
-                  (char *)objectGetVal(key), dbid, rdbver);
+        if (server.hide_user_data_from_log) {
+            serverLog(LL_WARNING, "Can't store key (db %d) in RDB version %d", dbid, rdbver);
+        } else {
+            serverLog(LL_WARNING, "Can't store key '%s' (db %d) in RDB version %d",
+                      (char *)objectGetVal(key), dbid, rdbver);
+        }
         return -1;
     }
     if (rdbSaveType(rdb, rdbtype) == -1) return -1;
@@ -2729,7 +2733,11 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
 
             streamCG *cgroup = streamCreateCG(s, cgname, sdslen(cgname), &cg_id, cg_offset);
             if (cgroup == NULL) {
-                rdbReportCorruptRDB("Duplicated consumer group name %s", cgname);
+                if (server.hide_user_data_from_log) {
+                    rdbReportCorruptRDB("Duplicated consumer group name");
+                } else {
+                    rdbReportCorruptRDB("Duplicated consumer group name %s", cgname);
+                }
                 decrRefCount(o);
                 sdsfree(cgname);
                 return NULL;
@@ -3458,7 +3466,13 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
              * in an RDB file, instead we will silently discard it and
              * continue loading. */
             if (error == RDB_LOAD_ERR_EMPTY_KEY) {
-                if (empty_keys_skipped++ < 10) serverLog(LL_NOTICE, "rdbLoadObject skipping empty key: %s", key);
+                if (empty_keys_skipped++ < 10) {
+                    if (server.hide_user_data_from_log) {
+                        serverLog(LL_NOTICE, "rdbLoadObject skipping empty key");
+                    } else {
+                        serverLog(LL_NOTICE, "rdbLoadObject skipping empty key: %s", key);
+                    }
+                }
                 sdsfree(key);
             } else if (error == RDB_LOAD_ERR_UNKNOWN_TYPE) {
                 sdsfree(key);
@@ -3503,7 +3517,11 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
                     added = dbAddRDBLoad(db, key, &val);
                     serverAssert(added);
                 } else {
-                    serverLog(LL_WARNING, "RDB has duplicated key '%s' in DB %d", key, db->id);
+                    if (server.hide_user_data_from_log) {
+                        serverLog(LL_WARNING, "RDB has duplicated key in DB %d", db->id);
+                    } else {
+                        serverLog(LL_WARNING, "RDB has duplicated key '%s' in DB %d", key, db->id);
+                    }
                     serverPanic("Duplicated key found in RDB file");
                 }
             }

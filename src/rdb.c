@@ -2568,9 +2568,37 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
             }
             o->type = OBJ_HASH;
             o->encoding = OBJ_ENCODING_LISTPACK;
+
+            /* On a primary loading a non-preamble RDB, drop any fields that are
+             * already expired relative to 'now', mirroring the RDB_TYPE_HASH_2
+             * path above. Replicas and AOF-preamble loads keep them and wait
+             * for an explicit HDEL/DEL from the primary. 'now' is 0 in the
+             * RESTORE path, so expired fields are preserved there as expected. */
+            if (iAmPrimary() && !(rdbflags & RDBFLAGS_AOF_PREAMBLE) && now != 0) {
+                unsigned long nfields = hashTypeLength(o);
+                if (nfields > 0) {
+                    robj **expired_fields = zmalloc(sizeof(robj *) * nfields);
+                    size_t nexpired = hashTypeDeleteExpiredFields(o, now, nfields, expired_fields);
+                    /* Feed an HDEL to replicas for every dropped field. */
+                    if (nexpired && (rdbflags & RDBFLAGS_FEED_REPL) && server.repl_backlog) {
+                        robj keyobj;
+                        initStaticStringObject(keyobj, key);
+                        for (size_t i = 0; i < nexpired; i++) {
+                            robj *argv[3] = {shared.hdel, &keyobj, expired_fields[i]};
+                            replicationFeedReplicas(dbid, argv, 3);
+                        }
+                    }
+                    for (size_t i = 0; i < nexpired; i++) decrRefCount(expired_fields[i]);
+                    zfree(expired_fields);
+                }
+            }
+
+            /* If all fields were expired the hash is now empty; skip the key
+             * (counted separately from genuinely empty keys). */
             if (hashTypeLength(o) == 0) {
                 decrRefCount(o);
-                goto emptykey;
+                if (error) *error = RDB_LOAD_ERR_ALL_ITEMS_EXPIRED;
+                return NULL;
             }
 
             if (hashTypeLength(o) > server.hash_max_listpack_entries) hashTypeConvert(o, OBJ_ENCODING_HASHTABLE);

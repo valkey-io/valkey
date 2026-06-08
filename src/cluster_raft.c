@@ -325,6 +325,8 @@ static int clusterRaftQuorum(void) {
     return server.cluster->size / 2 + 1;
 }
 
+/* Leader step-down to follower. Unlike clusterRaftSingletonStepDown(),
+ * this is used when a non-singleton leader loses leadership. */
 static void clusterRaftStepDown(mstime_t now, const char *reason) {
     clusterRaftState *rs = RAFT_STATE();
     clusterRaftDeferPendingProposals();
@@ -339,6 +341,8 @@ static void clusterRaftStepDown(mstime_t now, const char *reason) {
     serverLog(LL_NOTICE, "Stepping down to follower: %s.", reason);
 }
 
+/* Return non-zero if the leader still has a recently responsive voting
+ * quorum based on follower AE_ACK timing. */
 static int clusterRaftLeaderHasFreshQuorum(mstime_t now) {
     clusterRaftState *rs = RAFT_STATE();
     if (rs->role != RAFT_ROLE_LEADER || server.cluster->size <= 1) return 1;

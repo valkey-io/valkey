@@ -239,6 +239,8 @@ jobs:
           export AR=/opt/homebrew/opt/llvm/bin/llvm-ar
           export RANLIB=/opt/homebrew/opt/llvm/bin/llvm-ranlib
           make -j3 all-with-unit-tests SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes LIBBACKTRACE_PREFIX=/usr/local
+      - name: unit tests
+        run: make test-unit
 
   build-32bit:
     runs-on: ubuntu-latest

@@ -325,7 +325,8 @@ static int clusterRaftQuorum(void) {
     return server.cluster->size / 2 + 1;
 }
 
-static void clusterRaftStepDown(clusterRaftState *rs, mstime_t now, const char *reason) {
+static void clusterRaftStepDown(mstime_t now, const char *reason) {
+    clusterRaftState *rs = RAFT_STATE();
     clusterRaftDeferPendingProposals();
     rs->role = RAFT_ROLE_FOLLOWER;
     rs->votes_received = 0;
@@ -338,7 +339,8 @@ static void clusterRaftStepDown(clusterRaftState *rs, mstime_t now, const char *
     serverLog(LL_NOTICE, "Stepping down to follower: %s.", reason);
 }
 
-static int clusterRaftLeaderHasFreshQuorum(clusterRaftState *rs, mstime_t now) {
+static int clusterRaftLeaderHasFreshQuorum(mstime_t now) {
+    clusterRaftState *rs = RAFT_STATE();
     if (rs->role != RAFT_ROLE_LEADER || server.cluster->size <= 1) return 1;
 
     int fresh = 1; /* Self */
@@ -867,10 +869,11 @@ static void clusterRaftDeferPendingProposals(void) {
 }
 
 /* Step down to follower if we see a higher term. Returns 1 if stepped down. */
-static int clusterRaftMaybeStepDown(clusterRaftState *rs, uint64_t term) {
+static int clusterRaftMaybeStepDown(uint64_t term) {
+    clusterRaftState *rs = RAFT_STATE();
     if (term > rs->current_term) {
         rs->current_term = term;
-        clusterRaftStepDown(rs, monotonicMs(), "observed higher term");
+        clusterRaftStepDown(monotonicMs(), "observed higher term");
         return 1;
     }
     return 0;
@@ -1265,7 +1268,7 @@ static int clusterRaftProcessAppendEntries(clusterLink *link, int argc, sds *arg
         return 1;
     }
 
-    clusterRaftMaybeStepDown(rs, msg_term);
+    clusterRaftMaybeStepDown(msg_term);
 
     /* Accept heartbeat. */
     if (rs->role != RAFT_ROLE_JOINER) rs->role = RAFT_ROLE_FOLLOWER;
@@ -1339,14 +1342,14 @@ static int clusterRaftProcessAppendEntriesResponse(clusterLink *link, int argc, 
     uint64_t follower_last_index = strtoull(argv[3], NULL, 10);
     long long follower_repl_offset = (argc >= 5) ? strtoll(argv[4], NULL, 10) : 0;
 
-    clusterRaftMaybeStepDown(rs, msg_term);
+    clusterRaftMaybeStepDown(msg_term);
     if (rs->role != RAFT_ROLE_LEADER) return 1;
 
     clusterNode *node = link->node;
     if (!node) return 1;
     clusterNodeRaftData *rd = RAFT_NODE(node);
     rd->last_ack_time = monotonicMs();
-    if (clusterRaftLeaderHasFreshQuorum(rs, rd->last_ack_time)) {
+    if (clusterRaftLeaderHasFreshQuorum(rd->last_ack_time)) {
         rs->lost_quorum_since = 0;
         rs->last_fresh_quorum_time = rd->last_ack_time;
     }
@@ -1453,7 +1456,7 @@ static int clusterRaftProcessRequestVote(clusterLink *link, int argc, sds *argv)
     uint64_t msg_term = strtoull(argv[2], NULL, 10);
     int granted = 0;
 
-    clusterRaftMaybeStepDown(rs, msg_term);
+    clusterRaftMaybeStepDown(msg_term);
 
     if (msg_term < rs->current_term) {
         /* Stale term. */
@@ -1478,7 +1481,7 @@ static int clusterRaftProcessRequestVoteResponse(clusterLink *link, int argc, sd
     uint64_t msg_term = strtoull(argv[1], NULL, 10);
     int granted = atoi(argv[2]);
 
-    clusterRaftMaybeStepDown(rs, msg_term);
+    clusterRaftMaybeStepDown(msg_term);
 
     if (rs->role != RAFT_ROLE_CANDIDATE) return 1;
     if (msg_term != rs->current_term) return 1;
@@ -1772,13 +1775,13 @@ static void clusterRaftCron(void) {
         }
 
         if (rs->role == RAFT_ROLE_LEADER) {
-            if (!clusterRaftLeaderHasFreshQuorum(rs, now)) {
+            if (!clusterRaftLeaderHasFreshQuorum(now)) {
                 if (rs->lost_quorum_since == 0) {
                     rs->lost_quorum_since = now;
                     serverLog(LL_NOTICE, "Leader lost quorum freshness, waiting before step-down.");
                 } else if (rs->last_fresh_quorum_time > 0 &&
                            now - rs->last_fresh_quorum_time > server.cluster_node_timeout) {
-                    clusterRaftStepDown(rs, now, "lost quorum freshness");
+                    clusterRaftStepDown(now, "lost quorum freshness");
                 }
             }
         }

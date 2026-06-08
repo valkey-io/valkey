@@ -303,6 +303,7 @@ static clusterMsgSendBlock *clusterRaftBuildAllOffsetsMsg(void) {
 static void clusterRaftPropose(sds entry, void *ctx, void (*callback)(void *ctx, const char *error));
 static void clusterRaftDeferPendingProposals(void);
 static void clusterRaftUpdateMyself(int old_flags);
+static sds clusterRaftBuildMyNodeInfo(void);
 static void clusterRaftCheckSlotCoverage(void);
 static void clusterRaftBroadcastAppendEntries(void);
 static void clusterRaftSendAppendEntries(clusterLink *link, clusterNode *node);
@@ -982,6 +983,9 @@ static void raftLogApply(raftLogEntry *e) {
 
             /* If this entry is about us, promote from joiner to follower. */
             if (memcmp(argv[0], myself->name, CLUSTER_NAMELEN) == 0) {
+                sdsfree(rs->my_last_committed_info);
+                rs->my_last_committed_info = clusterRaftBuildMyNodeInfo();
+
                 if (rs->role == RAFT_ROLE_JOINER) {
                     rs->role = RAFT_ROLE_FOLLOWER;
                     rs->todo_save_config = 1;
@@ -1775,11 +1779,7 @@ static void clusterRaftCron(void) {
          * out). Re-propose if needed. Check every 10 seconds. */
         if (now - rs->last_node_info_check > 10000) {
             rs->last_node_info_check = now;
-            sds current = sdscatlen(sdsempty(), myself->name, CLUSTER_NAMELEN);
-            current = sdscatlen(current, " ", 1);
-            current = clusterNodeAppendAddressStringNoShardId(current, myself, server.tls_cluster);
-            current = sdscatfmt(current, " %s",
-                                (myself->flags & CLUSTER_NODE_NOFAILOVER) ? "nofailover" : "noflags");
+            sds current = clusterRaftBuildMyNodeInfo();
             if (sdscmp(current, rs->my_last_committed_info) != 0) {
                 serverLog(LL_NOTICE, "NODE_INFO diverged from last commit. Re-proposing.");
                 serverLog(LL_NOTICE, "Old committed and new proposed node-info: %s -> %s",
@@ -2215,6 +2215,17 @@ static void clusterRaftPostConnect(struct clusterLink *link) {
  * Config updates — broadcast metadata changes through Raft log
  * -------------------------------------------------------------------------- */
 
+/* Build the NODE_INFO data string for myself: "<node-id> <address> <flags>".
+ * Caller must sdsfree() the result. */
+static sds clusterRaftBuildMyNodeInfo(void) {
+    sds s = sdscatlen(sdsempty(), myself->name, CLUSTER_NAMELEN);
+    s = sdscatlen(s, " ", 1);
+    s = clusterNodeAppendAddressStringNoShardId(s, myself, server.tls_cluster);
+    s = sdscatlen(s, " ", 1);
+    s = sdscat(s, (myself->flags & CLUSTER_NODE_NOFAILOVER) ? "nofailover" : "noflags");
+    return s;
+}
+
 static void clusterRaftUpdateMyself(int old_flags) {
     UNUSED(old_flags);
     /* Clear cached CLUSTER SLOTS immediately — our address/hostname
@@ -2224,16 +2235,10 @@ static void clusterRaftUpdateMyself(int old_flags) {
      * or if our IP is not yet known. */
     if ((myself->flags & CLUSTER_NODE_MEET) || myself->ip[0] == '\0') return;
     /* Propose NODE_INFO to propagate the change to other nodes. */
+    sds data = clusterRaftBuildMyNodeInfo();
     sds entry = sdsnew("NODE_INFO ");
-    entry = sdscatlen(entry, myself->name, CLUSTER_NAMELEN);
-    entry = sdscatlen(entry, " ", 1);
-    entry = clusterNodeAppendAddressStringNoShardId(entry, myself, server.tls_cluster);
-    entry = sdscatlen(entry, " ", 1);
-    if (myself->flags & CLUSTER_NODE_NOFAILOVER) {
-        entry = sdscat(entry, "nofailover");
-    } else {
-        entry = sdscat(entry, "noflags");
-    }
+    entry = sdscatsds(entry, data);
+    sdsfree(data);
     clusterRaftPropose(entry, NULL, NULL);
     sdsfree(entry);
 }

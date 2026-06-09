@@ -1,0 +1,102 @@
+{
+    "HMOVENX": {
+        "summary": "Moves one or more fields from one hash to another only when the destination field does not exist.",
+        "complexity": "O(N) where N is the number of field move pairs.",
+        "group": "hash",
+        "since": "9.2.0",
+        "arity": -5,
+        "function": "hmovenxCommand",
+        "command_flags": [
+            "WRITE",
+            "FAST"
+        ],
+        "acl_categories": [
+            "FAST",
+            "HASH",
+            "WRITE"
+        ],
+        "key_specs": [
+            {
+                "flags": [
+                    "RW",
+                    "ACCESS",
+                    "DELETE"
+                ],
+                "begin_search": {
+                    "index": {
+                        "pos": 1
+                    }
+                },
+                "find_keys": {
+                    "range": {
+                        "lastkey": 0,
+                        "step": 1,
+                        "limit": 0
+                    }
+                }
+            },
+            {
+                "flags": [
+                    "RW",
+                    "INSERT"
+                ],
+                "begin_search": {
+                    "index": {
+                        "pos": 2
+                    }
+                },
+                "find_keys": {
+                    "range": {
+                        "lastkey": 0,
+                        "step": 1,
+                        "limit": 0
+                    }
+                }
+            }
+        ],
+        "reply_schema": {
+            "description": "List of integer codes indicating the result of each field move pair, in the same order as requested.",
+            "type": "array",
+            "minItems": 1,
+            "items": {
+                "oneOf": [
+                    {
+                        "description": "The source field does not exist, or the destination field already exists.",
+                        "const": 0
+                    },
+                    {
+                        "description": "The source field was moved.",
+                        "const": 1
+                    }
+                ]
+            }
+        },
+        "arguments": [
+            {
+                "name": "source",
+                "type": "key",
+                "key_spec_index": 0
+            },
+            {
+                "name": "destination",
+                "type": "key",
+                "key_spec_index": 1
+            },
+            {
+                "name": "data",
+                "type": "block",
+                "multiple": true,
+                "arguments": [
+                    {
+                        "name": "old-field",
+                        "type": "string"
+                    },
+                    {
+                        "name": "new-field",
+                        "type": "string"
+                    }
+                ]
+            }
+        ]
+    }
+}

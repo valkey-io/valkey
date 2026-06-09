@@ -611,6 +611,25 @@ bool hashTypeDelete(robj *o, sds field) {
     return deleted;
 }
 
+/* Move a hash field. Return 1 when moved, or 0 when the source field does
+ * not exist or, for NX, the target field already exists. */
+static int hashTypeMoveField(robj *src, robj *dst, sds oldfield, sds newfield, int nx) {
+    unsigned char *vstr = NULL;
+    unsigned int vlen = UINT_MAX;
+    long long vll = LLONG_MAX;
+    mstime_t expiry = EXPIRY_NONE;
+    sds value;
+
+    if (src == dst && sdscmp(oldfield, newfield) == 0) return hashTypeExists(src, oldfield) ? !nx : 0;
+    if (nx && hashTypeExists(dst, newfield)) return 0;
+    if (hashTypeGetValue(src, oldfield, &vstr, &vlen, &vll, &expiry) != C_OK) return 0;
+
+    value = vstr ? sdsnewlen(vstr, vlen) : sdsfromlonglong(vll);
+    serverAssert(hashTypeDelete(src, oldfield));
+    hashTypeSet(dst, newfield, value, expiry, HASH_SET_TAKE_VALUE, NULL);
+    return 1;
+}
+
 /* Return the number of elements in a hash. */
 unsigned long hashTypeLength(const robj *o) {
     switch (o->encoding) {
@@ -1210,6 +1229,92 @@ void hgetdelCommand(client *c) {
     }
 
     commitDeferredReplyBuffer(c, 1);
+}
+
+void hmoveGenericCommand(client *c, int nx) {
+    if (c->argc < 5 || ((c->argc - 3) % 2) != 0) {
+        addReplyErrorArity(c);
+        return;
+    }
+
+    robj *srckey = c->argv[1];
+    robj *dstkey = c->argv[2];
+    int num_pairs = (c->argc - 3) / 2;
+    int samekey = sdscmp(objectGetVal(srckey), objectGetVal(dstkey)) == 0;
+
+    robj *src = lookupKeyWrite(c->db, srckey);
+    robj *dst = samekey ? src : lookupKeyWrite(c->db, dstkey);
+    if (checkType(c, src, OBJ_HASH) || (!samekey && checkType(c, dst, OBJ_HASH))) return;
+
+    initDeferredReplyBuffer(c);
+    addReplyArrayLen(c, num_pairs);
+
+    if (src && src->encoding == OBJ_ENCODING_HASHTABLE) hashtablePauseAutoShrink(objectGetVal(src));
+    bool dst_existed = false;
+    if (dst) {
+        dst_existed = true;
+    } else {
+        dst = createHashObject();
+    }
+
+    int moved = 0;
+
+    for (int i = 3; i < c->argc; i += 2) {
+        int result = 0;
+
+        if (src) {
+            sds oldfield = objectGetVal(c->argv[i]);
+            sds newfield = objectGetVal(c->argv[i + 1]);
+
+            if (hashTypeMoveField(src, dst, oldfield, newfield, nx)) {
+                result = 1;
+                moved++;
+                if (hashTypeLength(src) == 0) {
+                    dbUntrackKeyWithVolatileItems(c->db, src);
+                    dbDelete(c->db, srckey);
+                    src = NULL;
+                }
+            }
+        }
+
+        addReplyLongLong(c, result);
+    }
+
+    if (!dst_existed) {
+        if (moved) {
+            dbAdd(c->db, dstkey, &dst);
+        } else {
+            /* If we ended up with an empty dst object, just free it and do not add it to the db. */
+            decrRefCount(dst);
+        }
+    }
+
+    if (src && src->encoding == OBJ_ENCODING_HASHTABLE) hashtableResumeAutoShrink(objectGetVal(src));
+
+    if (moved) {
+        if (src) {
+            dbUpdateObjectWithVolatileItemsTracking(c->db, src);
+        }
+        if (!samekey) {
+            dbUpdateObjectWithVolatileItemsTracking(c->db, dst);
+        }
+        signalModifiedKey(c, c->db, srckey);
+        if (!samekey) signalModifiedKey(c, c->db, dstkey);
+        notifyKeyspaceEvent(NOTIFY_HASH, "hdel", srckey, c->db->id);
+        notifyKeyspaceEvent(NOTIFY_HASH, "hset", dstkey, c->db->id);
+        if (!src) notifyKeyspaceEvent(NOTIFY_GENERIC, "del", srckey, c->db->id);
+        server.dirty += moved;
+    }
+
+    commitDeferredReplyBuffer(c, 1);
+}
+
+void hmoveCommand(client *c) {
+    hmoveGenericCommand(c, 0);
+}
+
+void hmovenxCommand(client *c) {
+    hmoveGenericCommand(c, 1);
 }
 
 void hlenCommand(client *c) {

@@ -5674,8 +5674,8 @@ void clusterHandleReplicaFailover(void) {
      * elapsed, we can setup a new one. */
     if (auth_age > auth_retry_time) {
         server.cluster->failover_auth_time = now +
-                                             delay +           /* Fixed delay to let FAIL msg propagate. */
-                                             random() % delay; /* Random delay between 0 and the fixed delay. */
+                                             delay +                         /* Fixed delay to let FAIL msg propagate. */
+                                             (delay ? random() % delay : 0); /* Random delay between 0 and the fixed delay. */
         server.cluster->failover_auth_count = 0;
         server.cluster->failover_auth_sent = 0;
         server.cluster->failover_auth_rank = clusterGetReplicaRank();

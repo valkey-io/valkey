@@ -136,6 +136,7 @@ typedef struct {
     unsigned int todo_persist_log : 1;
     unsigned int todo_save_config : 1;
     unsigned int todo_send_ae_ack : 1;
+    unsigned int todo_send_vote_response : 1;
     uint64_t persist_log_from;     /* First index to persist in next batch */
     uint64_t last_rewrite_applied; /* last_applied at last full rewrite */
 
@@ -1451,7 +1452,13 @@ static int clusterRaftProcessRequestVote(clusterLink *link, int argc, sds *argv)
         }
     }
 
-    clusterRaftSendVoteResponse(link, rs->current_term, granted);
+    if (granted) {
+        /* Defer response until votedFor is persisted. todo_save_config triggers
+         * a full rewrite in beforeSleep; the response is sent after that. */
+        rs->todo_send_vote_response = 1;
+    } else {
+        clusterRaftSendVoteResponse(link, rs->current_term, 0);
+    }
     return 1;
 }
 
@@ -1911,6 +1918,16 @@ static void clusterRaftBeforeSleep(bool blocked) {
         clusterLink *link = leader ? (leader->inbound_link ? leader->inbound_link : leader->link) : NULL;
         if (link) {
             clusterRaftSendAppendEntriesResponse(link, rs->current_term, 1);
+        }
+    }
+
+    if (rs->todo_send_vote_response) {
+        rs->todo_send_vote_response = 0;
+        /* Send granted vote response to the candidate we voted for. */
+        clusterNode *candidate = clusterLookupNode(rs->voted_for, CLUSTER_NAMELEN);
+        clusterLink *link = candidate ? (candidate->inbound_link ? candidate->inbound_link : candidate->link) : NULL;
+        if (link) {
+            clusterRaftSendVoteResponse(link, rs->current_term, 1);
         }
     }
 

@@ -2480,10 +2480,10 @@ void bgIteration_handleCommandReplication(int dbid,
     }
 
     /* Implementation note regarding LUA and MULTI:  LUA scripts and MULTI-EXEC blocks must be
-     *  treated atomically.  We need to ensure that either ALL of the replication (or none of the
-     *  replication) for the atomic operation is processed by the iterator(s).  This is handled
-     *  naturally as we can only "complete" the iteration during the feeding process - and feeding
-     *  is only performed when handling timer events (after the LUA/MULTI has completed).  */
+     * treated atomically.  We need to ensure that either ALL of the replication (or none of the
+     * replication) for the atomic operation is processed by the iterator(s).  This is handled
+     * naturally as we can only "complete" the iteration during the feeding process - and feeding
+     * is only performed when handling timer events (after the LUA/MULTI has completed).  */
 
     listIter li;
     listNode *node;
@@ -2643,6 +2643,7 @@ size_t bgIteration_memoryInuseForReplication(void) {
 // PUBLIC API
 bool bgIteration_isEntryInuse(dbEntry *de) {
     serverAssert(onValkeyMainThread());
+    if (!bgIteration_iterationActive()) return false;
     return isEntryInuseByAnyIterator(de);
 }
 

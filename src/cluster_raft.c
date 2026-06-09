@@ -741,18 +741,9 @@ static void clusterRaftPropose(sds entry, void *ctx, void (*callback)(void *ctx,
         serverLog(LL_NOTICE, "Leader appended %s (index %llu).",
                   raftEntryTypeName(type), (unsigned long long)idx);
 
-        /* Single-node cluster: commit and apply immediately. */
-        if (server.cluster->size <= 1) {
-            rs->commit_index = idx;
-            while (rs->last_applied < rs->commit_index) {
-                rs->last_applied++;
-                raftLogEntry *e = raftLogGet(rs->last_applied);
-                if (e) raftLogApply(e);
-            }
-            /* If we just grew beyond singleton, replicate to the new peer. */
-            if (server.cluster->size > 1) rs->todo_broadcast_ae = 1;
-        } else {
-            /* Replicate to followers immediately. */
+        /* Multi-node: replicate to followers. Single-node: commit is
+         * deferred to beforeSleep after persistence. */
+        if (server.cluster->size > 1) {
             rs->todo_broadcast_ae = 1;
         }
     } else {
@@ -797,16 +788,9 @@ static int clusterRaftProcessPropose(clusterLink *link, int argc, sds *argv) {
     serverLog(LL_NOTICE, "Leader appended proposed %s (index %llu).",
               raftEntryTypeName(type), (unsigned long long)idx);
 
-    /* Single-node cluster: commit and apply immediately. */
-    if (server.cluster->size <= 1) {
-        rs->commit_index = idx;
-        while (rs->last_applied < rs->commit_index) {
-            rs->last_applied++;
-            raftLogEntry *e = raftLogGet(rs->last_applied);
-            if (e) raftLogApply(e);
-        }
-    } else {
-        /* Replicate to followers immediately. */
+    /* Multi-node: replicate to followers. Single-node: commit is
+     * deferred to beforeSleep after persistence. */
+    if (server.cluster->size > 1) {
         rs->todo_broadcast_ae = 1;
     }
 
@@ -1906,6 +1890,19 @@ static void clusterRaftBeforeSleep(bool blocked) {
     } else if (rs->todo_persist_log) {
         rs->todo_persist_log = 0;
         clusterRaftPersistNewLogEntries(rs->persist_log_from);
+    }
+
+    /* Singleton leader: commit after persistence (quorum = 1). */
+    if (rs->role == RAFT_ROLE_LEADER && server.cluster->size <= 1 &&
+        raftLogLastIndex() > rs->commit_index) {
+        rs->commit_index = raftLogLastIndex();
+        while (rs->last_applied < rs->commit_index) {
+            rs->last_applied++;
+            raftLogEntry *e = raftLogGet(rs->last_applied);
+            if (e) raftLogApply(e);
+        }
+        /* If we just grew beyond singleton, replicate to the new peer. */
+        if (server.cluster->size > 1) rs->todo_broadcast_ae = 1;
     }
 
     if (rs->todo_send_ae_ack) {

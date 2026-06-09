@@ -5425,6 +5425,11 @@ void clusterSendFailoverAuthIfNeeded(clusterNode *node, clusterMsg *request) {
                       "Node %.40s (%s) has old slots configuration, sending "
                       "an UPDATE message about %.40s (%s)",
                       node->name, humanNodename(node), slot_owner->name, humanNodename(slot_owner));
+            /* Send UPDATE first so the replica can fix its slot config; the NACK
+             * that follows then triggers fast-fail, letting the replica retry
+             * with the freshly-updated configEpoch right away instead of waiting
+             * for auth_timeout. TCP ordering on the same link guarantees the
+             * UPDATE arrives before the NACK. */
             clusterSendUpdate(node->link, slot_owner);
             clusterSendFailoverNack(node, CLUSTERMSG_FAILOVER_AUTH_NACK_REASON_STALE_CONFIG);
             return;

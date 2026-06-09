@@ -2037,6 +2037,9 @@ static void clusterRaftPrepareShutdown(void) {
 }
 
 static void clusterRaftHandleServerShutdown(void) {
+    /* Compact the log on disk so restart is fast. */
+    clusterSaveConfigOrDie(1);
+
     clusterRaftState *rs = RAFT_STATE();
     /* Free pending proposals. */
     listIter li;

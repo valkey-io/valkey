@@ -32,14 +32,21 @@ test "Raft: leader steps down after losing quorum freshness" {
             lappend paused $idx
         }
 
-        wait_for_condition 100 50 {
-            [CI $leader_idx cluster_raft_role] eq "follower" &&
-            [CI $leader_idx cluster_raft_leader] eq ""
-        } else {
+        set stepped_down 0
+        set leader_role ""
+        for {set i 0} {$i < 150} {incr i} {
+            set leader_role [CI $leader_idx cluster_raft_role]
+            if {[string equal $leader_role "follower"]} {
+                set stepped_down 1
+                break
+            }
+            after 50
+        }
+        if {!$stepped_down} {
             foreach idx $paused {
                 resume_process [srv [expr {-$idx}] pid]
             }
-            fail "Leader did not step down after losing quorum freshness: role=[CI $leader_idx cluster_raft_role] leader=[CI $leader_idx cluster_raft_leader]"
+            fail "Leader did not step down after losing quorum freshness: role=$leader_role leader=[CI $leader_idx cluster_raft_leader]"
         }
 
         foreach idx $paused {

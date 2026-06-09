@@ -582,7 +582,7 @@ start_cluster 2 0 {tags {external:skip cluster}} {
     }
 }
 
-start_cluster 3 0 {tags {external:skip cluster}} {
+start_cluster 3 0 {tags {external:skip cluster} overrides {cluster-node-timeout 1000}} {
     test "CLUSTERSCAN returns correct errors on cluster down and unassigned slots" {
         # Hashtag reference: {06S} -> slot 0 -> R0, {6ZJ} -> slot 16383 -> R2.
 

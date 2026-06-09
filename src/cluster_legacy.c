@@ -4438,10 +4438,12 @@ int clusterProcessPacket(clusterLink *link) {
         if (!sender) return 1; /* We don't know that node. */
 
         /* We consider this nack only if the sender is a primary serving
-         * a non zero number of slots, and its currentEpoch is greater or
+         * a non-zero number of slots, and its currentEpoch is greater or
          * equal to epoch where this node started the election. */
-        if (server.cluster->failover_auth_time && server.cluster->failover_auth_sent &&
-            clusterNodeIsVotingPrimary(sender) && sender_claimed_current_epoch >= server.cluster->failover_auth_epoch) {
+        if (server.cluster->failover_auth_time &&
+            server.cluster->failover_auth_sent &&
+            clusterNodeIsVotingPrimary(sender) &&
+            sender_claimed_current_epoch >= server.cluster->failover_auth_epoch) {
             clusterProcessFailoverAuthNack(sender, msg);
         }
     } else if (type == CLUSTERMSG_TYPE_MFSTART) {
@@ -5450,7 +5452,7 @@ void clusterProcessFailoverAuthNack(clusterNode *sender, clusterMsg *request) {
      * for a specific cause; the trailing NACKs k/N gives at-a-glance
      * progress towards the fast-fail threshold. */
     server.cluster->failover_auth_nack_count++;
-    serverLog(LL_WARNING,
+    serverLog(LL_NOTICE,
               "Failover auth NACK [%s] from %.40s (%s) for epoch %llu (NACKs %d/%d)",
               clusterNackReasonString(request->data.failover_nack.nack.reason), sender->name,
               humanNodename(sender), (unsigned long long)server.cluster->failover_auth_epoch,
@@ -5463,7 +5465,7 @@ void clusterProcessFailoverAuthNack(clusterNode *sender, clusterMsg *request) {
     int needed_quorum = (server.cluster->size / 2) + 1;
     int max_possible_acks = server.cluster->size - server.cluster->failover_auth_nack_count;
     if (max_possible_acks < needed_quorum) {
-        serverLog(LL_WARNING,
+        serverLog(LL_NOTICE,
                   "Failover election for epoch %llu cannot reach quorum %d (NACKs %d/%d). "
                   "Resetting the election since we cannot win an election without quorum.",
                   (unsigned long long)server.cluster->failover_auth_epoch, needed_quorum,

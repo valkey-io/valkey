@@ -63,6 +63,25 @@ start_server {tags {"scripting"}} {
         r fcall TEST 0
     } {hello1}
 
+    test {FUNCTION - registering names differing only in case is rejected} {
+        catch {
+            r function load {#!lua name=casecollision
+                server.register_function('myfunc', function() return 1 end)
+                server.register_function('MYFUNC', function() return 2 end)}
+        } e
+        set _ $e
+    } {*Function already exists in the library*}
+
+    test {FUNCTION - delete after case collision attempt does not crash server} {
+        # Before the fix, the rejected case-collision above could leave the
+        # library and the global function dict inconsistent and crash the
+        # server on the next delete. Confirm the server is still responsive.
+        r function load REPLACE {#!lua name=casecollision
+            server.register_function('safefunc', function() return 1 end)}
+        assert_equal {OK} [r function delete casecollision]
+        r ping
+    } {PONG}
+
     test {FUNCTION - test replace argument with failure keeps old libraries} {
         catch {r function load REPLACE [get_function_code LUA test test {error}]} e
         assert_match {ERR Error compiling function*} $e

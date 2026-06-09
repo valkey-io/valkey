@@ -902,6 +902,9 @@ static void raftLogTruncateFrom(uint64_t index) {
     while (rs->log_count > 0 && rs->log[rs->log_count - 1]->index >= index) {
         raftLogFree(rs->log[--rs->log_count]);
     }
+    /* Truncated entries may already be on disk; a full rewrite is needed
+     * to remove them. */
+    rs->todo_save_config = 1;
 }
 
 static uint64_t raftLogLastIndex(void) {

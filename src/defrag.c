@@ -822,7 +822,7 @@ static int defragLaterItem(robj *ob, unsigned long *cursor, monotime endtime, in
             *cursor = 0;
             return 0;
         }
-        
+
         if (ob->type == OBJ_LIST && ob->encoding == OBJ_ENCODING_QUICKLIST) {
             return scanLaterList(ob, cursor, endtime);
         } else if (ob->type == OBJ_SET && ob->encoding == OBJ_ENCODING_HASHTABLE) {

@@ -1847,7 +1847,9 @@ static int cidrMatch(const char *ip, const char *cidr) {
         if (len >= sizeof(buf)) return 0;
         memcpy(buf, cidr, len);
         buf[len] = '\0';
-        prefix_len = atoi(slash + 1);
+        char *endptr;
+        prefix_len = strtol(slash + 1, &endptr, 10);
+        if (endptr == slash + 1 || *endptr != '\0') return 0;
     } else {
         strncpy(buf, cidr, sizeof(buf) - 1);
         buf[sizeof(buf) - 1] = '\0';

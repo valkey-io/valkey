@@ -2542,7 +2542,13 @@ static int isValidTrustedSources(sds val, const char **err) {
             }
             memcpy(addr, token, len);
             addr[len] = '\0';
-            prefix_len = atoi(slash + 1);
+            char *endptr;
+            prefix_len = strtol(slash + 1, &endptr, 10);
+            if (endptr == slash + 1 || *endptr != '\0') {
+                *err = "Invalid CIDR prefix in trusted-sources";
+                ret = 0;
+                break;
+            }
         } else {
             strncpy(addr, token, sizeof(addr) - 1);
             addr[sizeof(addr) - 1] = '\0';
@@ -2552,12 +2558,12 @@ static int isValidTrustedSources(sds val, const char **err) {
         struct in6_addr addr6;
 
         if (inet_pton(AF_INET, addr, &addr4) == 1) {
-            if (prefix_len > 32) {
+            if (prefix_len < 0 || prefix_len > 32) {
                 *err = "Invalid IPv4 CIDR prefix length in trusted-sources";
                 ret = 0;
             }
         } else if (inet_pton(AF_INET6, addr, &addr6) == 1) {
-            if (prefix_len > 128) {
+            if (prefix_len < 0 || prefix_len > 128) {
                 *err = "Invalid IPv6 CIDR prefix length in trusted-sources";
                 ret = 0;
             }

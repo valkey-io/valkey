@@ -1867,9 +1867,12 @@ static int cidrMatch(const char *ip, const char *cidr) {
         int i;
         for (i = 0; i < 16; i++) {
             int bits = plen - i * 8;
-            if (bits >= 8) mask[i] = 0xff;
-            else if (bits <= 0) mask[i] = 0;
-            else mask[i] = (unsigned char)(0xff << (8 - bits));
+            if (bits >= 8)
+                mask[i] = 0xff;
+            else if (bits <= 0)
+                mask[i] = 0;
+            else
+                mask[i] = (unsigned char)(0xff << (8 - bits));
         }
         for (i = 0; i < 16; i++) {
             if ((addr6.s6_addr[i] & mask[i]) != (net6.s6_addr[i] & mask[i]))

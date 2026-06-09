@@ -16,14 +16,8 @@ test "Raft: leader steps down after losing quorum freshness" {
             fail "Cluster did not form: sizes=[CI 0 cluster_size],[CI 1 cluster_size],[CI 2 cluster_size]"
         }
 
-        set leader_idx -999
-        foreach idx {0 1 2} {
-            if {[CI $idx cluster_raft_role] eq "leader"} {
-                set leader_idx $idx
-                break
-            }
-        }
-        assert {$leader_idx != -999}
+        assert_equal [CI 0 cluster_raft_role] "leader"
+        set leader_idx 0
 
         set paused [list]
         foreach idx {0 1 2} {
@@ -32,21 +26,13 @@ test "Raft: leader steps down after losing quorum freshness" {
             lappend paused $idx
         }
 
-        set stepped_down 0
-        set leader_role ""
-        for {set i 0} {$i < 150} {incr i} {
-            set leader_role [CI $leader_idx cluster_raft_role]
-            if {[string equal $leader_role "follower"]} {
-                set stepped_down 1
-                break
-            }
-            after 50
-        }
-        if {!$stepped_down} {
+        wait_for_condition 100 50 {
+            [CI $leader_idx cluster_raft_role] eq "follower"
+        } else {
             foreach idx $paused {
                 resume_process [srv [expr {-$idx}] pid]
             }
-            fail "Leader did not step down after losing quorum freshness: role=$leader_role leader=[CI $leader_idx cluster_raft_leader]"
+            fail "Leader did not step down after losing quorum freshness: role=[CI $leader_idx cluster_raft_role] leader=[CI $leader_idx cluster_raft_leader]"
         }
 
         foreach idx $paused {

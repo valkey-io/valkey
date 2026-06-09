@@ -1834,13 +1834,13 @@ void clientAcceptHandler(connection *conn) {
     moduleFireServerEvent(VALKEYMODULE_EVENT_CLIENT_CHANGE, VALKEYMODULE_SUBEVENT_CLIENT_CHANGE_CONNECTED, c);
 }
 
-/* Check if the given IP address matches a CIDR notation (e.g. "10.0.0.0/16"). */
+/* Check if the given IP address matches a CIDR notation (e.g. "10.0.0.0/16" or "::1/128"). */
 static int cidrMatch(const char *ip, const char *cidr) {
     char buf[NET_IP_STR_LEN];
     char *slash = strchr(cidr, '/');
-    int prefix_len;
-    struct in_addr addr, net;
-    uint32_t mask;
+    int prefix_len = -1;
+    struct in_addr addr4, net4;
+    struct in6_addr addr6, net6;
 
     if (slash) {
         size_t len = slash - cidr;
@@ -1848,18 +1848,37 @@ static int cidrMatch(const char *ip, const char *cidr) {
         memcpy(buf, cidr, len);
         buf[len] = '\0';
         prefix_len = atoi(slash + 1);
-        if (prefix_len < 0 || prefix_len > 32) return 0;
     } else {
         strncpy(buf, cidr, sizeof(buf) - 1);
         buf[sizeof(buf) - 1] = '\0';
-        prefix_len = 32;
     }
 
-    if (inet_pton(AF_INET, ip, &addr) != 1) return 0;
-    if (inet_pton(AF_INET, buf, &net) != 1) return 0;
+    if (inet_pton(AF_INET, ip, &addr4) == 1 && inet_pton(AF_INET, buf, &net4) == 1) {
+        int plen = (prefix_len >= 0) ? prefix_len : 32;
+        if (plen < 0 || plen > 32) return 0;
+        uint32_t mask = plen ? htonl(~((1U << (32 - plen)) - 1)) : 0;
+        return (addr4.s_addr & mask) == (net4.s_addr & mask);
+    }
 
-    mask = prefix_len ? htonl(~((1U << (32 - prefix_len)) - 1)) : 0;
-    return (addr.s_addr & mask) == (net.s_addr & mask);
+    if (inet_pton(AF_INET6, ip, &addr6) == 1 && inet_pton(AF_INET6, buf, &net6) == 1) {
+        int plen = (prefix_len >= 0) ? prefix_len : 128;
+        if (plen < 0 || plen > 128) return 0;
+        unsigned char mask[16];
+        int i;
+        for (i = 0; i < 16; i++) {
+            int bits = plen - i * 8;
+            if (bits >= 8) mask[i] = 0xff;
+            else if (bits <= 0) mask[i] = 0;
+            else mask[i] = (unsigned char)(0xff << (8 - bits));
+        }
+        for (i = 0; i < 16; i++) {
+            if ((addr6.s6_addr[i] & mask[i]) != (net6.s6_addr[i] & mask[i]))
+                return 0;
+        }
+        return 1;
+    }
+
+    return 0;
 }
 
 /* Check if a connection comes from a trusted source. */

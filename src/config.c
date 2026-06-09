@@ -2519,6 +2519,60 @@ static int isValidMptcp(int val, const char **err) {
     return 1;
 }
 
+/* Validate trusted-sources is a space-separated list of valid IP/CIDR entries. */
+static int isValidTrustedSources(sds val, const char **err) {
+    if (sdslen(val) == 0) return 1;
+
+    char *copy = sdsdup(val);
+    char *saveptr;
+    char *token = strtok_r(copy, " ", &saveptr);
+    int ret = 1;
+
+    while (token && ret) {
+        char *slash = strchr(token, '/');
+        char addr[NET_IP_STR_LEN];
+        int prefix_len = -1;
+
+        if (slash) {
+            size_t len = slash - token;
+            if (len >= sizeof(addr)) {
+                *err = "IP address too long in trusted-sources";
+                ret = 0;
+                break;
+            }
+            memcpy(addr, token, len);
+            addr[len] = '\0';
+            prefix_len = atoi(slash + 1);
+        } else {
+            strncpy(addr, token, sizeof(addr) - 1);
+            addr[sizeof(addr) - 1] = '\0';
+        }
+
+        struct in_addr addr4;
+        struct in6_addr addr6;
+
+        if (inet_pton(AF_INET, addr, &addr4) == 1) {
+            if (prefix_len > 32) {
+                *err = "Invalid IPv4 CIDR prefix length in trusted-sources";
+                ret = 0;
+            }
+        } else if (inet_pton(AF_INET6, addr, &addr6) == 1) {
+            if (prefix_len > 128) {
+                *err = "Invalid IPv6 CIDR prefix length in trusted-sources";
+                ret = 0;
+            }
+        } else {
+            *err = "Invalid IP address in trusted-sources";
+            ret = 0;
+        }
+
+        token = strtok_r(NULL, " ", &saveptr);
+    }
+
+    sdsfree(copy);
+    return ret;
+}
+
 /* Validate specified string is a valid proc-title-template */
 static int isValidProcTitleTemplate(char *val, const char **err) {
     if (!validateProcTitleTemplate(val)) {
@@ -3357,7 +3411,7 @@ standardConfig static_configs[] = {
     /* SDS Configs */
     createSDSConfig("primaryauth", "masterauth", MODIFIABLE_CONFIG | SENSITIVE_CONFIG, EMPTY_STRING_IS_NULL, server.primary_auth, NULL, NULL, NULL),
     createSDSConfig("requirepass", NULL, MODIFIABLE_CONFIG | SENSITIVE_CONFIG, EMPTY_STRING_IS_NULL, server.requirepass, NULL, NULL, updateRequirePass),
-    createSDSConfig("trusted-sources", NULL, MODIFIABLE_CONFIG, EMPTY_STRING_IS_NULL, server.trusted_sources, NULL, NULL, NULL),
+    createSDSConfig("trusted-sources", NULL, MODIFIABLE_CONFIG, EMPTY_STRING_IS_NULL, server.trusted_sources, NULL, isValidTrustedSources, NULL),
     createSDSConfig("availability-zone", NULL, MODIFIABLE_CONFIG, ALLOW_EMPTY_STRING, server.availability_zone, "", NULL, updateClusterAvailabilityZone),
     createSDSConfig("hash-seed", NULL, IMMUTABLE_CONFIG, EMPTY_STRING_IS_NULL, server.hash_seed, NULL, isValidDbHashSeed, NULL),
 

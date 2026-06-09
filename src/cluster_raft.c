@@ -1748,8 +1748,9 @@ static void clusterRaftCron(void) {
                 if (rs->lost_quorum_since == 0) {
                     rs->lost_quorum_since = now;
                     serverLog(LL_NOTICE, "Leader lost quorum freshness, waiting before step-down.");
-                } else if (rs->last_fresh_quorum_time > 0 &&
-                           now - rs->last_fresh_quorum_time > server.cluster_node_timeout) {
+                }
+                if (rs->last_fresh_quorum_time > 0 &&
+                    now - rs->last_fresh_quorum_time > server.cluster_node_timeout) {
                     clusterRaftStepDown(now, "lost quorum freshness");
                 }
             }

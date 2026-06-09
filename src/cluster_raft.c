@@ -197,6 +197,7 @@ typedef struct {
 
 #define RAFT_HDR_SIZE 8
 #define REPL_OFFSETS_BROADCAST_PERIOD_MS 10000
+#define RAFT_LOG_REWRITE_THRESHOLD 100
 
 /* Monotonic millisecond clock for timeouts and failure detection.
  * Unlike gettimeofday(), this is not affected by system clock adjustments. */
@@ -1882,7 +1883,8 @@ static void clusterRaftBeforeSleep(bool blocked) {
     }
 
     if (rs->todo_save_config ||
-        (rs->todo_persist_log && rs->last_applied - rs->last_rewrite_applied >= 100)) {
+        (rs->todo_persist_log &&
+         rs->last_applied - rs->last_rewrite_applied >= RAFT_LOG_REWRITE_THRESHOLD)) {
         rs->todo_save_config = 0;
         rs->todo_persist_log = 0;
         clusterSaveConfigOrDie(1);

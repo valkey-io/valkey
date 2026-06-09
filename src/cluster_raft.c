@@ -137,6 +137,7 @@ typedef struct {
     unsigned int todo_save_config : 1;
     unsigned int todo_send_ae_ack : 1;
     unsigned int todo_send_vote_response : 1;
+    unsigned int todo_broadcast_vote_request : 1;
     uint64_t persist_log_from;     /* First index to persist in next batch */
     uint64_t last_rewrite_applied; /* last_applied at last full rewrite */
 
@@ -1522,18 +1523,11 @@ static void clusterRaftStartElection(void) {
     clusterRaftRandomizeElectionTimeout();
     rs->last_heartbeat = monotonicMs();
     rs->todo_save_config = 1;
+    /* Defer sending RequestVote until after the term bump and self-vote
+     * are persisted. Otherwise a crash could allow double-voting. */
+    rs->todo_broadcast_vote_request = 1;
 
     serverLog(LL_NOTICE, "Starting Raft election (term %llu).", (unsigned long long)rs->current_term);
-
-    dictIterator *di = dictGetSafeIterator(server.cluster->nodes);
-    dictEntry *de;
-    while ((de = dictNext(di)) != NULL) {
-        clusterNode *node = dictGetVal(de);
-        if (node == myself || !node->link) continue;
-        if (node->flags & CLUSTER_NODE_MEET) continue;
-        clusterRaftSendRequestVote(node->link);
-    }
-    dictReleaseIterator(di);
 
     /* Single-node: already have quorum. */
     int quorum = server.cluster->size / 2 + 1;
@@ -1929,6 +1923,19 @@ static void clusterRaftBeforeSleep(bool blocked) {
         if (link) {
             clusterRaftSendVoteResponse(link, rs->current_term, 1);
         }
+    }
+
+    if (rs->todo_broadcast_vote_request) {
+        rs->todo_broadcast_vote_request = 0;
+        dictIterator *di = dictGetSafeIterator(server.cluster->nodes);
+        dictEntry *de;
+        while ((de = dictNext(di)) != NULL) {
+            clusterNode *node = dictGetVal(de);
+            if (node == myself || !node->link) continue;
+            if (node->flags & CLUSTER_NODE_MEET) continue;
+            clusterRaftSendRequestVote(node->link);
+        }
+        dictReleaseIterator(di);
     }
 
     if (rs->todo_broadcast_ae) {

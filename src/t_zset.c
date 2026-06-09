@@ -249,6 +249,32 @@ static int zslCompareNodes(const zskiplistNode *a, const zskiplistNode *b) {
     return sdscmp(zslGetNodeElement(a), zslGetNodeElement(b));
 }
 
+/* Compares node and score/ele; defines zset ordering. Return value:
+ *     positive if node comes after score/ele.
+ *     negative if node comes before score/ele.
+ *     0 if node's score and ele are both equal to score/ele. */
+static int zslCompareNodeWithScoreElement(const zskiplistNode *node, double score, const_sds ele) {
+    if (node == NULL) return 1;
+
+    if (node->score > score) return 1;
+    if (node->score < score) return -1;
+
+    return sdscmp(zslGetNodeElement(node), ele);
+}
+
+/* Returns true if node would still be strictly between its level-0 neighbors
+ * after changing its score. The sorted-set order is (score, element), so equal
+ * scores still need the lexicographic tie-breaker. */
+static int zslNodeCanKeepPosition(zskiplistNode *node, double newscore) {
+    sds ele = zslGetNodeElement(node);
+    zskiplistNode *prev = node->backward;
+    zskiplistNode *next = node->level[0].forward;
+
+    if (prev != NULL && zslCompareNodeWithScoreElement(prev, newscore, ele) >= 0) return 0;
+    if (next != NULL && zslCompareNodeWithScoreElement(next, newscore, ele) <= 0) return 0;
+    return 1;
+}
+
 /* Insert a node in the skiplist. Assumes the element does not already exist in
  * the skiplist (up to the caller to enforce that). The skiplist takes ownership
  * of the passed node. */
@@ -366,8 +392,7 @@ static zskiplistNode *zslUpdateScore(zskiplist *zsl, zskiplistNode *node, double
     /* If the node, after the score update, would be still exactly
      * at the same position, we can just update the score without
      * actually removing and re-inserting the element in the skiplist. */
-    if ((node->backward == NULL || node->backward->score < newscore) &&
-        (node->level[0].forward == NULL || node->level[0].forward->score > newscore)) {
+    if (zslNodeCanKeepPosition(node, newscore)) {
         node->score = newscore;
         return NULL;
     }

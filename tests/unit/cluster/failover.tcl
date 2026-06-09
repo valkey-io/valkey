@@ -278,9 +278,5 @@ start_cluster 3 1 {tags {external:skip cluster}} {
 } ;# start_cluster
 
 start_cluster 3 1 {tags {external:skip cluster}} {
-    test_small_timeout 15
-} ;# start_cluster
-
-start_cluster 3 1 {tags {external:skip cluster}} {
     test_small_timeout 0
 } ;# start_cluster

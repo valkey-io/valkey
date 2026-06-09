@@ -666,12 +666,6 @@ int clusterLoadConfig(char *filename) {
          * before the truncate() call. */
         if (line[0] == '\n' || line[0] == '\0') continue;
 
-        /* A line without a trailing newline means the write was interrupted
-         * (crash during append). Stop reading — this and anything after is
-         * potentially incomplete. */
-        size_t linelen = strlen(line);
-        if (linelen > 0 && line[linelen - 1] != '\n') break;
-
         /* Split the line into arguments for processing. */
         argv = sdssplitargs(line, &argc);
         if (argv == NULL) goto fmterr;

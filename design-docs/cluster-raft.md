@@ -633,10 +633,10 @@ The leader will send AE after reconnection, updating `commit_index`.
 Entries between `lastApplied + 1` and the new `commit_index` are then
 applied.
 
-### Incomplete lines
+### Crash detection
 
-If the last line lacks a trailing newline (crash during append), it and
-everything after it is discarded.
+Not yet implemented. A future improvement will add per-line checksums
+to detect partial writes and corruption (see Future Work).
 
 ### File format
 

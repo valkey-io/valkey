@@ -5317,7 +5317,7 @@ void clusterSendFailoverNack(clusterNode *node, uint8_t reason) {
     clusterMsgSendBlock *msgblock = createClusterMsgSendBlock(CLUSTERMSG_TYPE_FAILOVER_AUTH_NACK, msglen);
 
     clusterMsg *hdr = getMessageFromSendBlock(msgblock);
-    hdr->data.failover_nack.nack.reason = reason;
+    memcpy(&hdr->data.failover_nack.nack.reason, &reason, sizeof(reason));
 
     clusterSendMessage(node->link, msgblock);
     clusterMsgSendBlockDecrRefCount(msgblock);
@@ -5452,7 +5452,7 @@ void clusterProcessFailoverAuthNack(clusterNode *sender, clusterMsg *request) {
     server.cluster->failover_auth_nack_count++;
     serverLog(LL_WARNING,
               "Failover auth NACK [%s] from %.40s (%s) for epoch %llu (NACKs %d/%d)",
-              clusterNackReasonString(request->data.failover_nack.nack.reason),  sender->name,
+              clusterNackReasonString(request->data.failover_nack.nack.reason), sender->name,
               humanNodename(sender), (unsigned long long)server.cluster->failover_auth_epoch,
               server.cluster->failover_auth_nack_count, server.cluster->size);
 

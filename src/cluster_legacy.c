@@ -5299,12 +5299,12 @@ void clusterSendFailoverAuth(clusterNode *node) {
 
 static const char *clusterNackReasonString(uint8_t reason) {
     switch (reason) {
-    case CLUSTERMSG_FAILOVER_AUTH_NACK_REASON_NOT_SAFE:      return "not-safe";
+    case CLUSTERMSG_FAILOVER_AUTH_NACK_REASON_NOT_SAFE: return "not-safe";
     case CLUSTERMSG_FAILOVER_AUTH_NACK_REASON_REQ_EPOCH_OLD: return "req-epoch-old";
     case CLUSTERMSG_FAILOVER_AUTH_NACK_REASON_ALREADY_VOTED: return "already-voted";
-    case CLUSTERMSG_FAILOVER_AUTH_NACK_REASON_PRIMARY_UP:    return "primary-up";
-    case CLUSTERMSG_FAILOVER_AUTH_NACK_REASON_STALE_CONFIG:  return "stale-config";
-    default:                                                 return "unknown";
+    case CLUSTERMSG_FAILOVER_AUTH_NACK_REASON_PRIMARY_UP: return "primary-up";
+    case CLUSTERMSG_FAILOVER_AUTH_NACK_REASON_STALE_CONFIG: return "stale-config";
+    default: return "unknown";
     }
 }
 

@@ -138,6 +138,7 @@ typedef struct {
     unsigned int todo_send_ae_ack : 1;
     unsigned int todo_send_vote_response : 1;
     unsigned int todo_broadcast_vote_request : 1;
+    unsigned int log_corrupt : 1;  /* Corrupt log line detected during load */
     uint64_t persist_log_from;     /* First index to persist in next batch */
     uint64_t last_rewrite_applied; /* last_applied at last full rewrite */
 
@@ -2324,6 +2325,20 @@ static int clusterRaftParseVarsLine(const char *name, const char *value) {
     return 0;
 }
 
+/* Format a single log line with CRC64 checksum. */
+static sds raftLogFormatLine(sds buf, raftLogEntry *e) {
+    sds payload = sdscatprintf(sdsempty(), "%llu %llu %s %s",
+                               (unsigned long long)e->index,
+                               (unsigned long long)e->term,
+                               raftEntryTypeName(e->type),
+                               e->data);
+    uint64_t crc = crc64(0, (unsigned char *)payload, sdslen(payload));
+    buf = sdscatprintf(buf, "log %016llx %s\n",
+                       (unsigned long long)crc, payload);
+    sdsfree(payload);
+    return buf;
+}
+
 /* Append uncommitted log entries (index > last_applied) as "log" lines
  * at the end of nodes.conf during a full rewrite. */
 static sds clusterRaftAppendLogLines(sds config) {
@@ -2331,11 +2346,7 @@ static sds clusterRaftAppendLogLines(sds config) {
     for (uint64_t i = 0; i < rs->log_count; i++) {
         raftLogEntry *e = rs->log[i];
         if (e->index <= rs->last_applied) continue;
-        config = sdscatprintf(config, "log %llu %llu %s %s\n",
-                              (unsigned long long)e->index,
-                              (unsigned long long)e->term,
-                              raftEntryTypeName(e->type),
-                              e->data);
+        config = raftLogFormatLine(config, e);
     }
     return config;
 }
@@ -2348,11 +2359,7 @@ static void clusterRaftPersistNewLogEntries(uint64_t from) {
     for (uint64_t i = 0; i < rs->log_count; i++) {
         raftLogEntry *e = rs->log[i];
         if (e->index < from) continue;
-        buf = sdscatprintf(buf, "log %llu %llu %s %s\n",
-                           (unsigned long long)e->index,
-                           (unsigned long long)e->term,
-                           raftEntryTypeName(e->type),
-                           e->data);
+        buf = raftLogFormatLine(buf, e);
     }
     if (sdslen(buf) == 0) {
         sdsfree(buf);
@@ -2374,16 +2381,36 @@ static void clusterRaftPersistNewLogEntries(uint64_t from) {
 
 
 static void clusterRaftParseLogLine(sds *argv, int argc) {
-    /* Format: log <index> <term> <type> <data...> */
-    if (argc < 5) return;
-    uint64_t index = strtoull(argv[1], NULL, 10);
-    uint64_t term = strtoull(argv[2], NULL, 10);
-    int type = raftEntryTypeByName(argv[3]);
+    /* Format: log <crc64hex> <index> <term> <type> <data...> */
+    if (RAFT_STATE()->log_corrupt) return;
+    if (argc < 6) {
+        serverLog(LL_WARNING, "Corrupt log line in nodes.conf (too few fields), "
+                  "discarding this and all subsequent log lines.");
+        RAFT_STATE()->log_corrupt = 1;
+        return;
+    }
+
+    /* Verify CRC over everything after the checksum field. */
+    uint64_t expected_crc = strtoull(argv[1], NULL, 16);
+    sds payload = sdsjoinsds(argv + 2, argc - 2, " ", 1);
+    uint64_t actual_crc = crc64(0, (unsigned char *)payload, sdslen(payload));
+    sdsfree(payload);
+    if (expected_crc != actual_crc) {
+        serverLog(LL_WARNING, "Corrupt log line in nodes.conf (CRC mismatch), "
+                  "discarding this and all subsequent log lines.");
+        /* Signal to stop loading further log lines. */
+        RAFT_STATE()->log_corrupt = 1;
+        return;
+    }
+
+    uint64_t index = strtoull(argv[2], NULL, 10);
+    uint64_t term = strtoull(argv[3], NULL, 10);
+    int type = raftEntryTypeByName(argv[4]);
     if (type < 0) return;
 
     /* Reconstruct data from remaining args (space-separated). */
-    sds data = sdsdup(argv[4]);
-    for (int i = 5; i < argc; i++) {
+    sds data = sdsdup(argv[5]);
+    for (int i = 6; i < argc; i++) {
         data = sdscatlen(data, " ", 1);
         data = sdscatsds(data, argv[i]);
     }

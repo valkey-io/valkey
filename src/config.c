@@ -587,8 +587,16 @@ void loadServerConfigFromString(sds config) {
         } else if (!strcasecmp(argv[0], "user") && argc >= 2) {
             int argc_err;
             if (ACLAppendUserForLoading(argv, argc, &argc_err) == C_ERR) {
-                const char *errmsg = ACLSetUserStringError();
+                const char *errmsg = ACLSetStringError();
                 snprintf(buf, sizeof(buf), "Error in user declaration '%s': %s", argv[argc_err], errmsg);
+                err = buf;
+                goto loaderr;
+            }
+        } else if (!strcasecmp(argv[0], "role") && argc >= 2) {
+            int argc_err;
+            if (ACLAppendRoleForLoading(argv, argc, &argc_err) == C_ERR) {
+                const char *errmsg = ACLSetStringError();
+                snprintf(buf, sizeof(buf), "Error in role declaration '%s': %s", argv[argc_err], errmsg);
                 err = buf;
                 goto loaderr;
             }

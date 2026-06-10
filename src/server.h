@@ -1036,6 +1036,13 @@ typedef struct readyList {
 #define SELECTOR_FLAG_ALLDBS (1 << 4)      /* Allow all databases */
 
 
+typedef struct role {
+    sds name;         /* Role name */
+    list *selectors;  /* List of selectors (same structure as user selectors) */
+    list *members;    /* List of user pointers */
+    robj *acl_string; /* Cached ACL string representation */
+} role;
+
 typedef struct user {
     sds name;         /* The username as an SDS string. */
     uint32_t flags;   /* See USER_FLAG_* */
@@ -1043,6 +1050,7 @@ typedef struct user {
     list *selectors;  /* A list of selectors this user validates commands
                          against. This list will always contain at least
                          one selector for backwards compatibility. */
+    list *roles;      /* A list of roles assigned to this user. */
     robj *acl_string; /* cached string represent of ACLs */
 } user;
 
@@ -3387,7 +3395,7 @@ uint64_t ACLGetCommandCategoryFlagByName(const char *name);
 int ACLAddCommandCategory(const char *name, uint64_t flag);
 void ACLCleanupCategoriesOnFailure(size_t num_acl_categories_added);
 int ACLAppendUserForLoading(sds *argv, int argc, int *argc_err);
-const char *ACLSetUserStringError(void);
+const char *ACLSetStringError(void);
 robj *ACLDescribeUser(user *u);
 void ACLLoadUsersAtStartup(void);
 void addReplyCommandCategories(client *c, struct serverCommand *cmd);
@@ -3398,6 +3406,9 @@ sds getAclErrorMessage(int acl_res, user *user, struct serverCommand *cmd, sds e
 void ACLUpdateDefaultUserPassword(sds password);
 sds genValkeyInfoStringACLStats(sds info);
 void ACLRecomputeCommandBitsFromCommandRulesAllUsers(void);
+role *ACLGetRoleByName(const char *name, size_t namelen);
+int ACLAppendRoleForLoading(sds *argv, int argc, int *argc_err);
+void ACLLoadRolesAtStartup(void);
 
 /* Sorted sets data type */
 

@@ -148,5 +148,5 @@ start_cluster 2 0 {tags {external:skip cluster} overrides {cluster-ping-interval
         } else {
             fail "Availability zone was not restored after restart in CLUSTER SHARDS"
         }
-    } {} {cluster-raft:skip} ;# Raft persistence not yet implemented
+    }
 }

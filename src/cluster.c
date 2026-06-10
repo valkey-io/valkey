@@ -158,12 +158,12 @@ void clusterCron(void) {
     clusterCurrentBus->cron();
     clusterCheckReplicaMigration();
 }
-void clusterBeforeSleep(void) {
-    if (server.cluster->before_sleep_handle_slot_migration) {
+void clusterBeforeSleep(bool blocked) {
+    if (!blocked && server.cluster->before_sleep_handle_slot_migration) {
         server.cluster->before_sleep_handle_slot_migration = 0;
         clusterSlotMigrationCron();
     }
-    clusterCurrentBus->beforeSleep();
+    clusterCurrentBus->beforeSleep(blocked);
 }
 static void clusterAutoFailoverOnShutdown(void) {
     if (!nodeIsPrimary(myself)) return;

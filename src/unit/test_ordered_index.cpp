@@ -52,6 +52,9 @@ class OrderedIndexTest : public ::testing::TestWithParam<OrderedIndexTestApi *> 
     OrderedIndex *oi = nullptr;
 
     void SetUp() override {
+        /* Ensure shared lex sentinels are initialized (normally done by createSharedObjects) */
+        if (!shared.minstring) shared.minstring = sdsnew("minstring");
+        if (!shared.maxstring) shared.maxstring = sdsnew("maxstring");
         oi = api.create();
     }
     void TearDown() override {
@@ -1063,6 +1066,41 @@ TEST_P(OrderedIndexTest, DeleteRangeByLexPreservesOutside) {
     }
 }
 
+TEST_P(OrderedIndexTest, LexRangeSentinels) {
+    /* Insert 5 elements at the same score (lex ordering) */
+    insert(0.0, "alpha");
+    insert(0.0, "bravo");
+    insert(0.0, "charlie");
+    insert(0.0, "delta");
+    insert(0.0, "echo");
+
+    /* Count with sentinels */
+    ASSERT_EQ(countLexRange("minstring", "maxstring", 0, 0), 0UL); /* literal strings, not sentinels */
+    ASSERT_EQ(api.countLexRange(oi, shared.minstring, shared.maxstring, 0, 0), 5UL);
+    ASSERT_EQ(api.countLexRange(oi, shared.minstring, sdsnew("charlie"), 0, 0), 3UL);
+    ASSERT_EQ(api.countLexRange(oi, sdsnew("charlie"), shared.maxstring, 0, 0), 3UL);
+
+    /* Inverted range (max < min sentinel) should return 0 */
+    ASSERT_EQ(api.countLexRange(oi, shared.maxstring, shared.minstring, 0, 0), 0UL);
+    ASSERT_EQ(api.countLexRange(oi, sdsnew("charlie"), shared.minstring, 0, 0), 0UL);
+
+    /* Seek with sentinels - iterate all */
+    OrderedIndexIterator it;
+    api.initIterator(&it, oi);
+    api.seekToLexRange(&it, shared.minstring, shared.maxstring, 0, 0, 0);
+    assertNextScore(&it, 0.0); /* alpha */
+    assertNextScore(&it, 0.0); /* bravo */
+    assertNextScore(&it, 0.0); /* charlie */
+    assertNextScore(&it, 0.0); /* delta */
+    assertNextScore(&it, 0.0); /* echo */
+    ASSERT_EQ(api.next(&it), nullptr);
+    api.resetIterator(&it);
+
+    /* Delete with sentinels - delete all */
+    ASSERT_EQ(api.deleteRangeByLex(oi, shared.minstring, shared.maxstring, 0, 0, NULL, NULL), 5UL);
+    ASSERT_EQ(api.length(oi), 0UL);
+}
+
 /* ========== Randomized property tests ========== */
 
 /* Default fuzz seed — overridden by --seed flag if provided. */
@@ -1493,7 +1531,7 @@ static void testOnDeleteCallback(OrderedIndexItem *item, void *ctx) {
     size_t len;
     skiplistGetElementRaw(item, &ptr, &len);
     rec->elements.emplace_back(ptr, len);
-    orderedIndexFreeItem(item);
+    /* Item is freed by the index after this callback returns. */
 }
 
 class OnDeleteCallbackTest : public ::testing::Test {
@@ -1826,7 +1864,7 @@ static void hashtableConsistencyOnDelete(OrderedIndexItem *item, void *ctx) {
     size_t len;
     skiplistGetElementRaw(item, &ptr, &len);
     ht->erase(std::string(ptr, len));
-    orderedIndexFreeItem(item);
+    /* Item is freed by the index after this callback returns. */
 }
 
 class RangeDeleteHashtableConsistencyTest : public ::testing::Test {

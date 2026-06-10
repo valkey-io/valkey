@@ -1325,7 +1325,6 @@ static void zsetIndexDeleteCallback(OrderedIndexItem *item, void *ctx) {
     size_t len;
     orderedIndexGetElementRaw(item, &ptr, &len);
     hashtableDelete(ht, (sds)ptr);
-    orderedIndexFreeItem(item);
 }
 
 /* Implements ZREMRANGEBYRANK, ZREMRANGEBYSCORE, ZREMRANGEBYLEX commands. */

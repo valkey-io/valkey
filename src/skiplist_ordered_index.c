@@ -103,11 +103,8 @@ unsigned long skiplistDeleteRangeByScore(OrderedIndex *oi, double min, double ma
     while (x && zsetScoreLteMax(x->score, &range)) {
         zskiplistNode *next = x->level[0].forward;
         zslUnlinkNode(zsl, x, update);
-        if (on_delete) {
-            on_delete((OrderedIndexItem *)x, ctx);
-        } else {
-            zslFreeNode(x);
-        }
+        if (on_delete) on_delete((OrderedIndexItem *)x, ctx);
+        zslFreeNode(x);
 
         removed++;
         x = next;
@@ -139,11 +136,8 @@ unsigned long skiplistDeleteRangeByIndex(OrderedIndex *oi, unsigned long start, 
     while (x && traversed <= end) {
         zskiplistNode *next = x->level[0].forward;
         zslUnlinkNode(zsl, x, update);
-        if (on_delete) {
-            on_delete((OrderedIndexItem *)x, ctx);
-        } else {
-            zslFreeNode(x);
-        }
+        if (on_delete) on_delete((OrderedIndexItem *)x, ctx);
+        zslFreeNode(x);
 
         removed++;
         traversed++;
@@ -178,11 +172,8 @@ unsigned long skiplistDeleteRangeByLex(OrderedIndex *oi, const_sds min, const_sd
         if (!zsetLexLteMax(ele, sdslen(ele), &range)) break;
         zskiplistNode *next = x->level[0].forward;
         zslUnlinkNode(zsl, x, update);
-        if (on_delete) {
-            on_delete((OrderedIndexItem *)x, ctx);
-        } else {
-            zslFreeNode(x);
-        }
+        if (on_delete) on_delete((OrderedIndexItem *)x, ctx);
+        zslFreeNode(x);
 
         removed++;
         x = next;

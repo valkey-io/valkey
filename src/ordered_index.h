@@ -34,7 +34,9 @@ typedef struct OrderedIndexItem OrderedIndexItem;
 typedef uint64_t OrderedIndexIterator[2];
 
 /* Callback invoked for each item removed during a range-delete operation.
- * The callback receives ownership of the item — it must free it or store it. */
+ * The item pointer is valid for the duration of the callback but will be
+ * freed by the index immediately after the callback returns. Do NOT free
+ * the item or store the pointer beyond the callback's scope. */
 typedef void (*OrderedIndexOnDelete)(OrderedIndexItem *item, void *ctx);
 
 /* Callback invoked during defrag when an item is reallocated. Allows the

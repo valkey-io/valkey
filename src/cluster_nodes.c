@@ -95,9 +95,13 @@ static int auxShardIdSetter(clusterNode *n, void *value, size_t length) {
     if (verifyClusterNodeId(value, length) == C_ERR) {
         return C_ERR;
     }
+    if (memcmp(n->shard_id, value, CLUSTER_NAMELEN) == 0) {
+        return C_OK;
+    }
+    clusterRemoveNodeFromShard(n);
     memcpy(n->shard_id, value, CLUSTER_NAMELEN);
-    /* if n already has replicas, make sure they all agree
-     * on the shard id. If not, update them. */
+    clusterAddNodeToShard(n->shard_id, n);
+    /* If n has replicas, make sure they follow the new shard id. */
     for (int i = 0; i < n->num_replicas; i++) {
         if (memcmp(n->replicas[i]->shard_id, n->shard_id, CLUSTER_NAMELEN) != 0) {
             serverLog(LL_NOTICE,
@@ -109,7 +113,6 @@ static int auxShardIdSetter(clusterNode *n, void *value, size_t length) {
             clusterAddNodeToShard(n->shard_id, n->replicas[i]);
         }
     }
-    clusterAddNodeToShard(value, n);
     return C_OK;
 }
 
@@ -328,8 +331,9 @@ static sds representSlotInfo(sds ci, uint16_t *slot_info_pairs, int slot_info_pa
 }
 
 /* Append the address+aux string for a node to an sds: ip:port@cport[,hostname][,aux=val]*
- * This is the same format used in the second column of nodes.conf. */
-sds clusterNodeAppendAddressString(sds s, clusterNode *node, int tls_primary) {
+ * This is the same format used in the second column of nodes.conf.
+ * skip_aux is a bitmask of auxFieldIndex values to omit. */
+static sds clusterNodeAppendAddressStringSkip(sds s, clusterNode *node, int tls_primary, unsigned int skip_aux) {
     int port = tls_primary ? node->tls_port : node->tcp_port;
     s = sdscatfmt(s, "%s:%i@%i", node->ip, port, node->cport);
     if (sdslen(node->hostname) != 0) {
@@ -338,6 +342,7 @@ sds clusterNodeAppendAddressString(sds s, clusterNode *node, int tls_primary) {
         s = sdscatlen(s, ",", 1);
     }
     for (int i = af_count - 1; i >= 0; i--) {
+        if (skip_aux & (1u << i)) continue;
         if ((tls_primary && i == af_tls_port) || (!tls_primary && i == af_tcp_port)) continue;
         if (auxFieldHandlers[i].isPresent(node)) {
             s = sdscatfmt(s, ",%s=", auxFieldHandlers[i].field);
@@ -345,6 +350,16 @@ sds clusterNodeAppendAddressString(sds s, clusterNode *node, int tls_primary) {
         }
     }
     return s;
+}
+
+sds clusterNodeAppendAddressString(sds s, clusterNode *node, int tls_primary) {
+    return clusterNodeAppendAddressStringSkip(s, node, tls_primary, 0);
+}
+
+/* Like clusterNodeAppendAddressString but omits shard-id, which is managed
+ * by dedicated raft log entries (NODE_JOIN, SET_REPLICA_OF). */
+sds clusterNodeAppendAddressStringNoShardId(sds s, clusterNode *node, int tls_primary) {
+    return clusterNodeAppendAddressStringSkip(s, node, tls_primary, 1u << af_shard_id);
 }
 
 /* Parse an address+aux string onto a node. The string format is:
@@ -670,6 +685,14 @@ int clusterLoadConfig(char *filename) {
             continue;
         }
 
+        /* Handle "log" lines (protocol-specific WAL entries). */
+        if (strcasecmp(argv[0], "log") == 0) {
+            if (clusterCurrentBus->parseLogLine)
+                clusterCurrentBus->parseLogLine(argv, argc);
+            sdsfreesplitres(argv, argc);
+            continue;
+        }
+
         /* Regular config lines have at least eight fields */
         if (argc < 8) {
             sdsfreesplitres(argv, argc);
@@ -894,6 +917,8 @@ int clusterSaveConfig(int do_fsync) {
     ci = clusterGenNodesDescription(NULL, CLUSTER_NODE_HANDSHAKE, 0);
     if (clusterCurrentBus->appendVarsLine)
         ci = clusterCurrentBus->appendVarsLine(ci);
+    if (clusterCurrentBus->appendLogLines)
+        ci = clusterCurrentBus->appendLogLines(ci);
     content_size = sdslen(ci);
 
     /* Create a temp file with the new content. */

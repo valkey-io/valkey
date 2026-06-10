@@ -347,6 +347,24 @@ start_server {tags {"acl external:skip"}} {
         assert_equal "" [dict get $secondary_selector databases]
     }
 
+    test {Test ACL LIST omits implicit alldbs} {
+        set response [lindex [r ACL LIST] [lsearch [r ACL LIST] "user default*"]]
+        assert_no_match "* alldbs *" $response
+
+        r ACL SETUSER user-list-alldbs on nopass -@all +get ~* &* alldbs
+        set response [lindex [r ACL LIST] [lsearch [r ACL LIST] "user user-list-alldbs*"]]
+        assert_no_match "* alldbs *" $response
+
+        r ACL SETUSER user-list-alldbs db=0,1
+        set response [lindex [r ACL LIST] [lsearch [r ACL LIST] "user user-list-alldbs*"]]
+        assert_match "* db=0,1 *" $response
+
+        r ACL SETUSER user-list-alldbs resetdbs
+        set response [lindex [r ACL LIST] [lsearch [r ACL LIST] "user user-list-alldbs*"]]
+        assert_match "* resetdbs *" $response
+
+        r ACL DELUSER user-list-alldbs
+    }
 
     test {Test ACL list idempotency} {
         r ACL SETUSER user-idempotency off -@all +get resetchannels &channel1 %R~foo1 %W~bar1 ~baz1 (-@all +set resetchannels &channel2 %R~foo2 %W~bar2 ~baz2)

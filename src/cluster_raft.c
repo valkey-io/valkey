@@ -138,7 +138,6 @@ typedef struct {
     unsigned int todo_send_ae_ack : 1;
     unsigned int todo_send_vote_response : 1;
     unsigned int todo_broadcast_vote_request : 1;
-    unsigned int log_corrupt : 1;  /* Corrupt log line detected during load */
     uint64_t persist_log_from;     /* First index to persist in next batch */
     uint64_t last_rewrite_applied; /* last_applied at last full rewrite */
 
@@ -2380,14 +2379,11 @@ static void clusterRaftPersistNewLogEntries(uint64_t from) {
 }
 
 
-static void clusterRaftParseLogLine(sds *argv, int argc) {
+static int clusterRaftParseLogLine(sds *argv, int argc) {
     /* Format: log <crc64hex> <index> <term> <type> <data...> */
-    if (RAFT_STATE()->log_corrupt) return;
     if (argc < 6) {
-        serverLog(LL_WARNING, "Corrupt log line in nodes.conf (too few fields), "
-                  "discarding this and all subsequent log lines.");
-        RAFT_STATE()->log_corrupt = 1;
-        return;
+        serverLog(LL_WARNING, "Corrupt raft log line: too few fields (%d).", argc);
+        return C_ERR;
     }
 
     /* Verify CRC over everything after the checksum field. */
@@ -2396,17 +2392,26 @@ static void clusterRaftParseLogLine(sds *argv, int argc) {
     uint64_t actual_crc = crc64(0, (unsigned char *)payload, sdslen(payload));
     sdsfree(payload);
     if (expected_crc != actual_crc) {
-        serverLog(LL_WARNING, "Corrupt log line in nodes.conf (CRC mismatch), "
-                  "discarding this and all subsequent log lines.");
-        /* Signal to stop loading further log lines. */
-        RAFT_STATE()->log_corrupt = 1;
-        return;
+        serverLog(LL_WARNING, "Corrupt raft log line: CRC mismatch.");
+        return C_ERR;
     }
 
     uint64_t index = strtoull(argv[2], NULL, 10);
+    /* Verify indices are consecutive (catches missing log lines). */
+    clusterRaftState *rs = RAFT_STATE();
+    uint64_t expected_index = raftLogLastIndex() > 0 ? raftLogLastIndex() + 1 : rs->last_applied + 1;
+    if (index != expected_index) {
+        serverLog(LL_WARNING, "Corrupt raft log: index gap (expected %llu, got %llu).",
+                  (unsigned long long)expected_index, (unsigned long long)index);
+        return C_ERR;
+    }
     uint64_t term = strtoull(argv[3], NULL, 10);
     int type = raftEntryTypeByName(argv[4]);
-    if (type < 0) return;
+    if (type < 0) {
+        serverLog(LL_WARNING, "Corrupt raft log line at index %llu: unknown type '%s'.",
+                  (unsigned long long)index, argv[4]);
+        return C_ERR;
+    }
 
     /* Reconstruct data from remaining args (space-separated). */
     sds data = sdsdup(argv[5]);
@@ -2417,6 +2422,7 @@ static void clusterRaftParseLogLine(sds *argv, int argc) {
 
     raftLogEntry *e = raftLogCreate(term, index, type, data);
     raftLogAppend(e);
+    return C_OK;
 }
 
 static void clusterRaftPostLoad(void) {

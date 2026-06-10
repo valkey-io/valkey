@@ -687,8 +687,11 @@ int clusterLoadConfig(char *filename) {
 
         /* Handle "log" lines (protocol-specific WAL entries). */
         if (strcasecmp(argv[0], "log") == 0) {
-            if (clusterCurrentBus->parseLogLine)
-                clusterCurrentBus->parseLogLine(argv, argc);
+            if (clusterCurrentBus->parseLogLine &&
+                clusterCurrentBus->parseLogLine(argv, argc) == C_ERR) {
+                sdsfreesplitres(argv, argc);
+                goto fmterr;
+            }
             sdsfreesplitres(argv, argc);
             continue;
         }

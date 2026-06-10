@@ -1977,6 +1977,7 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
         } while (last_processed != 0);
         processed += freeClientsInAsyncFreeQueue();
         server.events_processed_while_blocked += processed;
+        if (server.cluster_enabled) clusterBeforeSleep(ProcessingEventsWhileBlocked);
         return;
     }
 
@@ -1999,7 +2000,7 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
      * may change the state of Cluster (from ok to fail or vice versa),
      * so it's a good idea to call it before serving the unblocked clients
      * later in this function, must be done before blockedBeforeSleep. */
-    if (server.cluster_enabled) clusterBeforeSleep();
+    if (server.cluster_enabled) clusterBeforeSleep(ProcessingEventsWhileBlocked);
 
     /* Release keys from bgIteration before processing unblocked clients. */
     bgIteration_beforeSleep();

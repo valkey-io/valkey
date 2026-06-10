@@ -5186,7 +5186,9 @@ static void clusterLegacyCron(void) {
  * reaction to events fired but that are not safe to perform inside event
  * handlers, or to perform potentially expansive tasks that we need to do
  * a single time before replying to clients. */
-static void clusterLegacyBeforeSleep(void) {
+static void clusterLegacyBeforeSleep(bool blocked) {
+    if (blocked) return;
+
     /* Update the cluster state first. It may abort a failover election and
      * request a retry, which is then handled below in the same pass. */
     if (LEGACY_STATE()->todo_before_sleep & CLUSTER_TODO_UPDATE_STATE) clusterUpdateState();

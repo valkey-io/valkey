@@ -89,7 +89,7 @@ proc cluster_ensure_master {id} {
 # transiently-orphaned primary during the cluster restart test and change its
 # shard id. Migration semantics are not under test here (CLUSTER REPLICATE is
 # manual and unaffected).
-start_cluster 4 5 {tags {external:skip cluster cluster-raft:skip} overrides {cluster-allow-replica-migration no}} { ;# Restarts servers (needs raft persistence)
+start_cluster 4 5 {tags {external:skip cluster} overrides {cluster-allow-replica-migration no}} {
 
 # cluster_master_nodes and cluster_replica_nodes refer to the active cluster members.
 set ::cluster_master_nodes 4
@@ -320,7 +320,10 @@ test "CLUSTER MYSHARDID reports same shard id after cluster restart" {
     for {set i 0} {$i < 8} {incr i} {
         assert_equal [dict get $node_ids $i] [R $i cluster myshardid]
     }
-}
+} {} {cluster-raft:skip} ;# Skipped under raft: R8 stays running while R0-R7
+                          # restart, inflating its term with failed elections.
+                          # This disrupts leader election when others come back.
+                          # Needs pre-vote (Raft §9.6) to fix.
 
 test "CLUSTER SHARDS id response validation" {
     # For each node in the cluster

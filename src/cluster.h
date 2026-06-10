@@ -54,7 +54,7 @@ struct clusterState;
 void clusterInit(void);
 void clusterInitLast(void);
 void clusterCron(void);
-void clusterBeforeSleep(void);
+void clusterBeforeSleep(bool blocked);
 int verifyClusterConfigWithData(void);
 void clusterPrepareShutdown(void);
 void clusterHandleServerShutdown(bool auto_failover);

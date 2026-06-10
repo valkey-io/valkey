@@ -214,7 +214,7 @@ test "Test restart will keep hostname information" {
 
     # As a sanity check, make sure everyone eventually agrees
     wait_for_cluster_propagation
-} {} {cluster-raft:skip} ;# Raft persistence not yet implemented
+}
 
 test "Test hostname validation" {
     catch {R 0 config set cluster-announce-hostname [string repeat x 256]} err

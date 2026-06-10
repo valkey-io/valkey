@@ -165,7 +165,7 @@ start_cluster 3 1 {tags {external:skip cluster}} {
 # In this test a different node is killed in a loop for N
 # iterations. The test checks that certain properties
 # are preserved across iterations.
-start_cluster 5 5 {tags {external:skip cluster cluster-raft:skip}} { ;# Restarts servers (needs raft persistence)
+start_cluster 5 5 {tags {external:skip cluster}} {
     set iterations 10
     set cluster [valkey_cluster 127.0.0.1:[srv 0 port]]
 
@@ -217,11 +217,11 @@ start_cluster 5 5 {tags {external:skip cluster cluster-raft:skip}} { ;# Restarts
         }
 
         if {$role eq {master}} {
-            test "Wait failover by #$slave with old epoch $slave_config_epoch" {
+            test "Wait failover by #$slave" {
                 wait_for_condition 1000 50 {
-                    [CI $slave cluster_my_epoch] > $slave_config_epoch
+                    [s -$slave role] eq {master}
                 } else {
-                    fail "No failover detected, epoch is still [CI $slave cluster_my_epoch]"
+                    fail "No failover detected, slave #$slave is still a slave"
                 }
             }
         }
@@ -263,7 +263,7 @@ start_cluster 5 5 {tags {external:skip cluster cluster-raft:skip}} { ;# Restarts
         for {set id 0} {$id < [llength $::servers]} {incr id} {
             assert {[CI $id cluster_current_epoch] >= [CI $id cluster_my_epoch]}
         }
-    }
+    } {} {cluster-raft:skip} ;# Epochs are a gossip concept
 } ;# start_cluster
 
 proc test_small_timeout {timeout} {

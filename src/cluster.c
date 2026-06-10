@@ -161,12 +161,12 @@ void clusterCron(void) {
     clusterCurrentBus->cron();
     clusterCheckReplicaMigration();
 }
-void clusterBeforeSleep(void) {
-    if (server.cluster->before_sleep_handle_slot_migration) {
+void clusterBeforeSleep(bool blocked) {
+    if (!blocked && server.cluster->before_sleep_handle_slot_migration) {
         server.cluster->before_sleep_handle_slot_migration = 0;
         clusterSlotMigrationCron();
     }
-    clusterCurrentBus->beforeSleep();
+    clusterCurrentBus->beforeSleep(blocked);
 }
 /* Request a best-effort failover to a fully synchronized replica on shutdown.
  * Only known cluster nodes without NOFAILOVER are eligible.

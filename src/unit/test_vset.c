@@ -462,6 +462,73 @@ int test_vset_remove_expire_shrink(int argc, char **argv, int flags) {
     return 0;
 }
 
+/* Regression test for the HT-bucket-size-1 invariant violation.
+ *
+ * vsetBucketRemoveExpired_HASHTABLE() drains an HT-encoded time-bucket up to
+ * a caller-supplied quota but only collapses the bucket when it becomes
+ * fully empty -- it never downgrades HT -> SINGLE when a single entry
+ * survives. This mirrors the production active-expire path
+ * (dbReclaimExpiredFields -> hashTypeDeleteExpiredFields -> vsetRemoveExpired),
+ * whose per-key quota can stop one entry short of draining the bucket.
+ *
+ * Once an HT bucket is left holding exactly one entry, removing that entry
+ * through the *normal* removal path (vsetRemoveEntry -> removeFromBucket_HASHTABLE,
+ * the same path HDEL and a cross-bucket HSETEX update take) deletes the sole
+ * entry and trips:
+ *
+ *     assert(hashtableSize(ht) > 0);   // vset.c, removeFromBucket_HASHTABLE
+ *
+ * because the size goes 1 -> 0. The production crash hit this via
+ * hsetexCommand -> hashTypeSet -> hashTypeTrackUpdateEntry -> vsetUpdateEntry
+ * -> vsetBucketUpdateEntry_RAX -> removeEntryFromRaxBucket -> removeFromBucket_HASHTABLE.
+ *
+ * This test reproduces the precondition deterministically (no timing race):
+ * fill one time-bucket past the VECTOR->HT threshold, expire all but one
+ * entry, then remove the survivor via vsetRemoveEntry. */
+int test_vset_remove_expired_leaves_ht_bucket_size_one(int argc, char **argv, int flags) {
+    (void)argc;
+    (void)argv;
+    (void)flags;
+
+    vset set;
+    vsetInit(&set);
+
+    /* 200 > VOLATILESET_VECTOR_BUCKET_MAX_SIZE (127): same expiry forces a
+     * single time-bucket that converts to HT encoding. */
+    const long long expiry_time = 1000LL;
+    const size_t total_entries = 200;
+
+    for (size_t i = 0; i < total_entries; i++) {
+        insert_mock_entry_with_expiry(&set, expiry_time);
+    }
+    TEST_ASSERT(!vsetIsEmpty(&set));
+
+    /* Active-expire style drain that stops one entry short of empty,
+     * exactly as the per-key quota does in dbReclaimExpiredFields. This
+     * leaves the HT bucket holding a single entry. */
+    mstime_t now = expiry_time + 10000;
+    size_t count = vsetRemoveExpired(&set, mockGetExpiry, mock_entry_expire, now, mock_entry_count - 1, &now);
+    TEST_ASSERT(count == total_entries - 1);
+    TEST_ASSERT(!vsetIsEmpty(&set));
+    TEST_ASSERT((size_t)mock_entry_count == 1);
+
+    /* Remove the lone survivor through the normal removal path. With the
+     * bug present this hits removeFromBucket_HASHTABLE on a size-1 HT
+     * bucket and aborts on assert(hashtableSize(ht) > 0). With the fix
+     * (downgrade HT -> SINGLE when one entry remains during expiry) this
+     * succeeds and empties the set. */
+    mock_entry *survivor = mock_entries[0];
+    TEST_ASSERT(vsetRemoveEntry(&set, mockGetExpiry, survivor));
+    mockFreeEntry(survivor);
+    mock_entries[0] = mock_entries[--mock_entry_count];
+
+    TEST_ASSERT(vsetIsEmpty(&set));
+
+    vsetRelease(&set);
+    free_mock_entries();
+    return 0;
+}
+
 /* --------- Defrag Test --------- */
 int test_vset_defrag(int argc, char **argv, int flags) {
     UNUSED(argc);

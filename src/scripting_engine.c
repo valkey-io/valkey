@@ -7,6 +7,7 @@
 #include "scripting_engine.h"
 #include "bio.h"
 #include "dict.h"
+#include "eval.h"
 #include "functions.h"
 #include "module.h"
 #include "server.h"
@@ -65,17 +66,11 @@ static engineManager engineMgr = {
     .total_memory_overhead = 0,
 };
 
-static uint64_t dictStrCaseHash(const void *key) {
-    return dictGenCaseHashFunction((unsigned char *)key, strlen((char *)key));
-}
-
 dictType engineDictType = {
-    dictStrCaseHash,       /* hash function */
-    NULL,                  /* key dup */
-    dictSdsKeyCaseCompare, /* key compare */
-    NULL,                  /* key destructor */
-    NULL,                  /* val destructor */
-    NULL                   /* allow to expand */
+    .entryGetKey = dictEntryGetKey,
+    .hashFunction = dictCStrCaseHash,
+    .keyCompare = dictSdsKeyCaseCompare,
+    .entryDestructor = zfree,
 };
 
 static int isCalledFromAsyncThread(void) {
@@ -184,6 +179,7 @@ int scriptingEngineManagerUnregister(const char *engine_name) {
     scriptingEngine *e = dictGetVal(entry);
 
     functionsRemoveLibFromEngine(e);
+    evalRemoveScriptsFromEngine(e);
 
     engineMemoryInfo mem_info = scriptingEngineCallGetMemoryInfo(e, VMSE_ALL);
     engineMgr.total_memory_overhead -= zmalloc_size(e) +

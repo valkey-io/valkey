@@ -13,24 +13,39 @@ start_cluster 3 0 [list config_lines $modules] {
     set node3 [srv -2 client]
 
     test "Cluster module send message API - VM_SendClusterMessage" {
+        R 0 CONFIG RESETSTAT
+        R 1 CONFIG RESETSTAT
+        R 2 CONFIG RESETSTAT
+
         assert_equal OK [$node1 test.pingall]
         assert_equal 2 [CI 0 cluster_stats_messages_module_sent]
         wait_for_condition 50 100 {
             [CI 1 cluster_stats_messages_module_received] eq 1 &&
-            [CI 2 cluster_stats_messages_module_received] eq 1
+            [CI 2 cluster_stats_messages_module_received] eq 1 &&
+            [CI 1 cluster_stats_module_bytes_received] > 0 &&
+            [CI 2 cluster_stats_module_bytes_received] > 0
         } else {
             fail "node 2 or node 3 didn't receive cluster module message"
         }
+        set sent_module_bytes [CI 0 cluster_stats_module_bytes_sent]
+        set received_module_bytes [expr {[CI 1 cluster_stats_module_bytes_received] + [CI 2 cluster_stats_module_bytes_received]}]
+        assert {$sent_module_bytes > 0}
+        assert_equal $sent_module_bytes $received_module_bytes
         verify_log_message -1 "*DING (type 1) RECEIVED*Hey*" 0
         verify_log_message -2 "*DING (type 1) RECEIVED*Hey*" 0
     }
 
     test "Cluster module receive message API - VM_RegisterClusterMessageReceiver" {
         wait_for_condition 50 100 {
-            [CI 0 cluster_stats_messages_module_received] eq 2
+            [CI 0 cluster_stats_messages_module_received] eq 2 &&
+            [CI 0 cluster_stats_module_bytes_received] > 0
         } else {
             fail "node 1 didn't receive DONG messages"
         }
+        set received_module_bytes [CI 0 cluster_stats_module_bytes_received]
+        set sent_module_bytes [expr {[CI 1 cluster_stats_module_bytes_sent] + [CI 2 cluster_stats_module_bytes_sent]}]
+        assert {$received_module_bytes > 0}
+        assert_equal $received_module_bytes $sent_module_bytes
         wait_for_condition 50 100 {
             [count_log_message 0 "* <cluster> DONG (type 2) RECEIVED*"] eq 2
         } else {
@@ -296,6 +311,28 @@ start_cluster 3 0 [list config_lines $modules] {
         } else {
             fail "Timer did not execute CLUSTER SLOTS or server crashed"
         }
+    }
+
+    test "VM_RegisterClusterMessageReceiver - unregister head and re-register does not crash" {
+        # Register a receiver for type 3 on node1
+        assert_equal OK [$node1 test.register_receiver]
+
+        # Unregister it (this is the head of the list for type 3)
+        assert_equal OK [$node1 test.unregister_receiver]
+
+        # Re-register - on the buggy code this traverses freed memory and crashes
+        assert_equal OK [$node1 test.register_receiver]
+
+        # Send from node2 so node1 receives it via the re-registered receiver
+        R 0 CONFIG RESETSTAT
+        assert_equal OK [$node2 test.send_msg_type3]
+
+        wait_for_condition 50 100 {
+            [CI 0 cluster_stats_messages_module_received] >= 1
+        } else {
+            fail "node1 didn't receive cluster module message after re-registration"
+        }
+        verify_log_message 0 "*DING (type 3) RECEIVED*TestUAF*" 0
     }
 }
 

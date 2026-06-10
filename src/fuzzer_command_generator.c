@@ -9,14 +9,15 @@
 #include "fuzzer_command_generator.h"
 #include "sds.h"
 #include "dict.h"
-#include "server.h"
-
+#include "zmalloc.h"
+#include "util.h"
 #include <assert.h>
 #include <string.h>
 #include <math.h>
 #include <time.h>
 #include <ctype.h>
 #include <stdlib.h>
+#include <stdint.h>
 #include <unistd.h>
 #include <sys/time.h>
 #include <pthread.h>
@@ -296,21 +297,22 @@ static int sdsKeyCompare(const void *key1, const void *key2) {
 }
 
 static uint64_t sdsHash(const void *key) {
-    return dictGenHashFunction((unsigned char *)key, sdslen((char *)key));
+    return dictGenHashFunction(key, sdslen(key));
 }
 
-static void sdsDestructor(void *val) {
-    sdsfree(val);
+static void dictEntryDestructorSdsKeyConfigVal(void *entry) {
+    dictEntry *de = entry;
+    sdsfree(dictGetKey(de));
+    configDictValDestructor(dictGetVal(de));
+    zfree(de);
 }
 
 /* Dictionary type for config entries */
 static dictType configDictType = {
-    sdsHash,                 /* hash function */
-    NULL,                    /* key dup */
-    sdsKeyCompare,           /* key compare */
-    sdsDestructor,           /* key destructor */
-    configDictValDestructor, /* val destructor */
-    NULL                     /* allow to expand */
+    .entryGetKey = dictEntryGetKey,
+    .hashFunction = sdsHash,
+    .keyCompare = sdsKeyCompare,
+    .entryDestructor = dictEntryDestructorSdsKeyConfigVal,
 };
 
 dict *initConfigDict(void) {
@@ -325,7 +327,6 @@ static int isEnumConfig(const char *key) {
         "appendfsync",
         "oom-score-adj",
         "acl-pubsub-default",
-        "sanitize-dump-payload",
         "cluster-preferred-endpoint-type",
         "propagation-error-behavior",
         "shutdown-on-sigint",
@@ -447,9 +448,6 @@ void generateRandomEnumValue(FuzzerCommand *cmd, ConfigEntry *entry, const char 
     } else if (strcasecmp(config_name, "acl-pubsub-default") == 0) {
         static const char *options[] = {"allchannels", "resetchannels"};
         appendArg(cmd, sdsnew(options[rand() % 2]));
-    } else if (strcasecmp(config_name, "sanitize-dump-payload") == 0) {
-        static const char *options[] = {"no", "yes", "clients"};
-        appendArg(cmd, sdsnew(options[rand() % 3]));
     } else if (strcasecmp(config_name, "propagation-error-behavior") == 0) {
         static const char *options[] = {"ignore", "panic", "panic-on-replicas"};
         appendArg(cmd, sdsnew(options[rand() % 3]));
@@ -1657,7 +1655,7 @@ static void addArgumentToCommand(FuzzerCommand *cmd, CommandArgument *arg) {
             time_t currentTime = time(NULL);
             /* add a random number of seconds to the current time */
             currentTime += rand() % RANDOM_TIME_VARIANCE;
-            appendArg(cmd, sdscatprintf(sdsempty(), "%ld", currentTime));
+            appendArg(cmd, sdscatprintf(sdsempty(), "%jd", (intmax_t)currentTime));
         } else if (arg->type == ARG_TYPE_PATTERN) {
             appendArg(cmd, sdsnew("*"));
         } else if (arg->type == ARG_TYPE_KEY) {

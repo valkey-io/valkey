@@ -35,6 +35,44 @@
 #define REPLY_FLAG_RESP3 (1 << 2)
 #define REPLY_FLAG_EXACT_TYPE (1 << 3)
 
+/* ============================================================
+ * Two-level callback architecture
+ * ============================================================
+ *
+ * There are two distinct sets of callbacks used in this file:
+ *
+ * Level 1 – ReplyParserCallbacks (resp_parser.h)
+ *   The low-level, recursive-descent parser in resp_parser.c calls these
+ *   during a single pass over a raw RESP buffer.  Collection callbacks
+ *   (array, set, map, attribute) receive a `ReplyParser *` so they can
+ *   recurse into child elements by calling parseReply() themselves.
+ *   Scalar callbacks receive the raw wire bytes (proto/proto_len) in
+ *   addition to the parsed value.  Two separate Level-1 callback tables
+ *   are defined below:
+ *
+ *     CallReplyParserCallbacks – each callback receives the target
+ *       CallReply* directly as ctx; used by callReplyParse() to build a
+ *       CallReply node tree from a captured RESP buffer.  Passing
+ *       CallReply* directly makes this path naturally reentrant: a
+ *       module that calls VM_Call from inside a VM_CallArgv typed
+ *       callback triggers a nested callReplyParse() that operates on an
+ *       entirely independent CallReply tree.
+ *
+ *     ReplyHandlersParserCallbacks – wires the replyHandlers* adapter
+ *       functions; used by invokeReplyHandlers() to dispatch a live
+ *       reply to the ValkeyModuleReplyHandlers provided by the module.
+ *
+ * Level 2 – ValkeyModuleReplyHandlers (valkeymodule.h)
+ *   The public module API.  These user-supplied callbacks receive only
+ *   clean, parsed values (no raw RESP bytes, no ReplyParser pointer).
+ *   Collection callbacks come in matched Start/End pairs so the module
+ *   does not need to drive the parser itself.  The replyHandlers*
+ *   adapters bridge Level 1 → Level 2: they accept Level-1 arguments,
+ *   strip the parser internals, and call the corresponding
+ *   ValkeyModuleReplyHandlers callback with just the value arguments.
+ * ============================================================ */
+
+
 /* --------------------------------------------------------
  * An opaque struct used to parse a RESP protocol reply and
  * represent it. Used when parsing replies such as in RM_Call
@@ -270,7 +308,13 @@ CallReply *callReplyCreatePromise(void *private_data) {
     return res;
 }
 
-static const ReplyParserCallbacks DefaultParserCallbacks = {
+/* Callback table used by callReplyParse() to build a CallReply tree from a
+ * captured RESP buffer.  Each callback receives the target CallReply* directly
+ * as its opaque ctx argument.  Because every callReplyParse() invocation is
+ * stack-local and carries no shared state, this path is naturally reentrant:
+ * a module that calls VM_Call from inside a VM_CallArgv typed callback will
+ * trigger a nested callReplyParse() with an independent CallReply tree. */
+static const ReplyParserCallbacks CallReplyParserCallbacks = {
     .null_callback = callReplyNull,
     .bulk_string_callback = callReplyBulkString,
     .null_bulk_string_callback = callReplyNullBulkString,
@@ -296,7 +340,7 @@ static void callReplyParse(CallReply *rep) {
         return;
     }
 
-    ReplyParser parser = {.curr_location = rep->proto, .callbacks = DefaultParserCallbacks};
+    ReplyParser parser = {.curr_location = rep->proto, .callbacks = CallReplyParserCallbacks};
 
     parseReply(&parser, rep);
     rep->flags |= REPLY_FLAG_PARSED;
@@ -581,4 +625,244 @@ CallReply *callReplyCreateError(sds reply, void *private_data) {
 void enableParseExactReplyTypeFlag(CallReply *rep) {
     serverAssert(!(rep->flags & REPLY_FLAG_PARSED));
     rep->flags |= REPLY_FLAG_EXACT_TYPE;
+}
+
+/* Internal pairing of a const callback table with its associated context.
+ * Created on the stack by callers so the public ValkeyModuleReplyHandlers
+ * struct remains immutable (no context field). The recursive-descent parser
+ * receives a pointer to one of these as its opaque `ctx` argument. */
+typedef struct {
+    const ValkeyModuleReplyHandlers *handlers;
+    void *context;
+} RespHandlersCtx;
+
+static void replyHandlersNull(void *ctx, const char *proto, size_t proto_len) {
+    UNUSED(proto);
+    UNUSED(proto_len);
+    RespHandlersCtx *w = (RespHandlersCtx *)ctx;
+    if (!w->handlers->null) return;
+    w->handlers->null(w->context);
+}
+
+static void replyHandlersBulkString(void *ctx, const char *str, size_t len, const char *proto, size_t proto_len) {
+    UNUSED(proto);
+    UNUSED(proto_len);
+    RespHandlersCtx *w = (RespHandlersCtx *)ctx;
+    if (!w->handlers->bulkString) return;
+    w->handlers->bulkString(w->context, str, len);
+}
+
+static void replyHandlersNullBulkString(void *ctx, const char *proto, size_t proto_len) {
+    UNUSED(proto);
+    UNUSED(proto_len);
+    RespHandlersCtx *w = (RespHandlersCtx *)ctx;
+    if (!w->handlers->nullBulkString) return;
+    w->handlers->nullBulkString(w->context);
+}
+
+static void replyHandlersNullArray(void *ctx, const char *proto, size_t proto_len) {
+    UNUSED(proto);
+    UNUSED(proto_len);
+    RespHandlersCtx *w = (RespHandlersCtx *)ctx;
+    if (!w->handlers->nullArray) return;
+    w->handlers->nullArray(w->context);
+}
+
+static void replyHandlersError(void *ctx, const char *str, size_t len, const char *proto, size_t proto_len) {
+    UNUSED(proto);
+    UNUSED(proto_len);
+    RespHandlersCtx *w = (RespHandlersCtx *)ctx;
+    if (!w->handlers->error) return;
+    w->handlers->error(w->context, str, len);
+}
+
+static void replyHandlersSimpleStr(void *ctx, const char *str, size_t len, const char *proto, size_t proto_len) {
+    UNUSED(proto);
+    UNUSED(proto_len);
+    RespHandlersCtx *w = (RespHandlersCtx *)ctx;
+    if (!w->handlers->simpleString) return;
+    w->handlers->simpleString(w->context, str, len);
+}
+
+static void replyHandlersLong(void *ctx, long long val, const char *proto, size_t proto_len) {
+    UNUSED(proto);
+    UNUSED(proto_len);
+    RespHandlersCtx *w = (RespHandlersCtx *)ctx;
+    if (!w->handlers->integer) return;
+    w->handlers->integer(w->context, val);
+}
+
+static void replyHandlersArray(ReplyParser *parser, void *ctx, size_t len, const char *proto) {
+    UNUSED(proto);
+    RespHandlersCtx *w = (RespHandlersCtx *)ctx;
+    if (w->handlers->arrayStart) w->handlers->arrayStart(w->context, len);
+    /* Always consume all child elements to keep the parser in sync,
+     * regardless of whether the start/end callbacks are set. */
+    for (size_t i = 0; i < len; i++) {
+        parseReply(parser, ctx);
+    }
+    if (w->handlers->arrayEnd) w->handlers->arrayEnd(w->context);
+}
+
+static void replyHandlersSet(ReplyParser *parser, void *ctx, size_t len, const char *proto) {
+    UNUSED(proto);
+    RespHandlersCtx *w = (RespHandlersCtx *)ctx;
+    if (w->handlers->setStart) w->handlers->setStart(w->context, len);
+    for (size_t i = 0; i < len; i++) {
+        parseReply(parser, ctx);
+    }
+    if (w->handlers->setEnd) w->handlers->setEnd(w->context);
+}
+
+static void replyHandlersMap(ReplyParser *parser, void *ctx, size_t len, const char *proto) {
+    UNUSED(proto);
+    RespHandlersCtx *w = (RespHandlersCtx *)ctx;
+    if (w->handlers->mapStart) w->handlers->mapStart(w->context, len);
+    for (size_t i = 0; i < len; i++) {
+        parseReply(parser, ctx);
+        parseReply(parser, ctx);
+    }
+    if (w->handlers->mapEnd) w->handlers->mapEnd(w->context);
+}
+
+static void replyHandlersDouble(void *ctx, double val, const char *proto, size_t proto_len) {
+    UNUSED(proto);
+    UNUSED(proto_len);
+    RespHandlersCtx *w = (RespHandlersCtx *)ctx;
+    if (!w->handlers->doubleVal) return;
+    w->handlers->doubleVal(w->context, val);
+}
+
+static void replyHandlersBool(void *ctx, int val, const char *proto, size_t proto_len) {
+    UNUSED(proto);
+    UNUSED(proto_len);
+    RespHandlersCtx *w = (RespHandlersCtx *)ctx;
+    if (!w->handlers->boolVal) return;
+    w->handlers->boolVal(w->context, val);
+}
+
+static void replyHandlersBigNumber(void *ctx, const char *str, size_t len, const char *proto, size_t proto_len) {
+    UNUSED(proto);
+    UNUSED(proto_len);
+    RespHandlersCtx *w = (RespHandlersCtx *)ctx;
+    if (!w->handlers->bigNumber) return;
+    w->handlers->bigNumber(w->context, str, len);
+}
+
+static void replyHandlersVerbatimString(void *ctx,
+                                        const char *format,
+                                        const char *str,
+                                        size_t len,
+                                        const char *proto,
+                                        size_t proto_len) {
+    UNUSED(proto);
+    UNUSED(proto_len);
+    RespHandlersCtx *w = (RespHandlersCtx *)ctx;
+    if (!w->handlers->verbatimString) return;
+    w->handlers->verbatimString(w->context, str, len, format);
+}
+
+static void replyHandlersAttribute(ReplyParser *parser, void *ctx, size_t len, const char *proto) {
+    UNUSED(proto);
+    RespHandlersCtx *w = (RespHandlersCtx *)ctx;
+    if (w->handlers->attributeStart) w->handlers->attributeStart(w->context, len);
+    for (size_t i = 0; i < len; i++) {
+        parseReply(parser, ctx);
+        parseReply(parser, ctx);
+    }
+    if (w->handlers->attributeEnd) w->handlers->attributeEnd(w->context);
+    /* Always parse the element that follows the attribute section. */
+    parseReply(parser, ctx);
+}
+
+static void replyHandlersParseError(void *ctx) {
+    RespHandlersCtx *w = (RespHandlersCtx *)ctx;
+    if (!w->handlers->replyParsingError) return;
+    w->handlers->replyParsingError(w->context);
+}
+
+static const ReplyParserCallbacks ReplyHandlersParserCallbacks = {
+    .null_callback = replyHandlersNull,
+    .bulk_string_callback = replyHandlersBulkString,
+    .null_bulk_string_callback = replyHandlersNullBulkString,
+    .null_array_callback = replyHandlersNullArray,
+    .error_callback = replyHandlersError,
+    .simple_str_callback = replyHandlersSimpleStr,
+    .long_callback = replyHandlersLong,
+    .array_callback = replyHandlersArray,
+    .set_callback = replyHandlersSet,
+    .map_callback = replyHandlersMap,
+    .double_callback = replyHandlersDouble,
+    .bool_callback = replyHandlersBool,
+    .big_number_callback = replyHandlersBigNumber,
+    .verbatim_string_callback = replyHandlersVerbatimString,
+    .attribute_callback = replyHandlersAttribute,
+    .error = replyHandlersParseError,
+};
+
+/* Parse the RESP reply accumulated in client `c`'s output buffer and deliver
+ * it to the handler callbacks in `handlers`.
+ *
+ * If `handlers->onRespAvailable` is set it is called first with the raw
+ * RESP bytes.  When it returns 0, per-type callbacks are skipped; when it
+ * returns 1 (or is NULL), the reply is walked recursively and each value is
+ * dispatched to the matching typed callback.
+ *
+ * The client's output buffer is consumed by this call (bufpos reset, reply
+ * list drained). */
+void invokeReplyHandlers(ValkeyModuleCtx *ctx, client *c, const ValkeyModuleReplyHandlers *handlers, void *reply_ctx) {
+    char *buf = NULL;
+    size_t buf_len = 0;
+    int free_buffer = 0;
+
+    serverAssert(!c->flag.blocked);
+
+    if (listLength(c->reply) == 0 && (size_t)c->bufpos < c->buf_usable_size) {
+        /* This is a fast path for the common case of a reply inside the
+         * client static buffer. Don't create an SDS string but just use
+         * the client buffer directly. */
+        c->buf[c->bufpos] = '\0';
+        buf = c->buf;
+        buf_len = c->bufpos;
+        c->bufpos = 0;
+    } else {
+        listIter iter;
+        listRewind(c->reply, &iter);
+        listNode *node;
+        size_t lensum = c->bufpos;
+        while ((node = listNext(&iter))) {
+            clientReplyBlock *o = listNodeValue(node);
+            lensum += o->used;
+        }
+        buf = zmalloc_usable(lensum + 1, NULL);
+        char *ptr = buf;
+        memcpy(ptr, c->buf, c->bufpos);
+        ptr += c->bufpos;
+        c->bufpos = 0;
+        while (listLength(c->reply)) {
+            clientReplyBlock *o = listNodeValue(listFirst(c->reply));
+            memcpy(ptr, o->buf, o->used);
+            ptr += o->used;
+            listDelNode(c->reply, listFirst(c->reply));
+        }
+        ptr[0] = '\0';
+        buf_len = lensum;
+        free_buffer = 1;
+    }
+
+    int continue_parsing = 1;
+
+    if (handlers->onRespAvailable) {
+        continue_parsing = handlers->onRespAvailable(reply_ctx, ctx, buf, buf_len);
+    }
+
+    if (continue_parsing) {
+        RespHandlersCtx dispatch_ctx = {.handlers = handlers, .context = reply_ctx};
+        ReplyParser parser = {.curr_location = buf, .callbacks = ReplyHandlersParserCallbacks};
+        parseReply(&parser, &dispatch_ctx);
+    }
+
+    if (free_buffer) {
+        zfree(buf);
+    }
 }

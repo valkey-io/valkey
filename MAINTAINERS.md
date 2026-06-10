@@ -15,8 +15,8 @@ Maintainers listed in alphabetical order by their github ID.
 | Maintainer          | GitHub ID     | Affiliation |
 | ------------------- | ------------- | ----------- |
 | Binbin Zhu          | @enjoy-binbin | Tencent     |
-| Harkrishn Patro     | @hpatro       | Amazon      |
-| Lucas Yang          | @lucasyonge   | -           |
+| Harkrishn Patro     | @hpatro       | Apple       |
+| Lucas Yang          | @lucasyonge   | Percona     |
 | Madelyn Olson       | @madolson     | Amazon      |
 | Jacob Murphy        | @murphyjacob4 | Google      |
 | Ping Xie            | @pingxie      | Oracle      |

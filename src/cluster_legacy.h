@@ -350,11 +350,13 @@ static_assert(offsetof(clusterMsg, data) == 2256, "unexpected field offset");
 #define CLUSTERMSG_FLAG0_EXT_DATA (1 << 2) /* Message contains extension data */
 
 /* Reason values carried in clusterMsgDataFailoverNack.reason. */
-#define CLUSTERMSG_FAILOVER_AUTH_NACK_REASON_NOT_SAFE 1      /* Voter is not safe to vote yet. */
-#define CLUSTERMSG_FAILOVER_AUTH_NACK_REASON_REQ_EPOCH_OLD 2 /* Request epoch < voter's currentEpoch. */
-#define CLUSTERMSG_FAILOVER_AUTH_NACK_REASON_ALREADY_VOTED 3 /* Voter already voted in this epoch. */
-#define CLUSTERMSG_FAILOVER_AUTH_NACK_REASON_PRIMARY_UP 4    /* Replica's primary is not failed. */
-#define CLUSTERMSG_FAILOVER_AUTH_NACK_REASON_STALE_CONFIG 5  /* Replica's slot config is stale. */
+#define CLUSTERMSG_FAILOVER_AUTH_NACK_REASON_NOT_SAFE 1       /* Voter is not safe to vote yet. */
+#define CLUSTERMSG_FAILOVER_AUTH_NACK_REASON_REQ_EPOCH_OLD 2  /* Request epoch < voter's currentEpoch. */
+#define CLUSTERMSG_FAILOVER_AUTH_NACK_REASON_ALREADY_VOTED 3  /* Voter already voted in this epoch. */
+#define CLUSTERMSG_FAILOVER_AUTH_NACK_REASON_REQ_IS_PRIMARY 4 /* Requester is a primary itself. */
+#define CLUSTERMSG_FAILOVER_AUTH_NACK_REASON_NO_PRIMARY 5     /* Voter doesn't know it's primary. */
+#define CLUSTERMSG_FAILOVER_AUTH_NACK_REASON_PRIMARY_UP 6     /* Voter still sees it's primary up. */
+#define CLUSTERMSG_FAILOVER_AUTH_NACK_REASON_STALE_CONFIG 7   /* Replica's slot config is stale. */
 
 typedef struct {
     char sig[4];     /* Signature "RCmb" (Cluster message bus). */

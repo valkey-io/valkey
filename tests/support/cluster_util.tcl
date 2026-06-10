@@ -292,6 +292,20 @@ proc cluster_has_flag {node flag} {
     expr {[lsearch -exact [dict get $node flags] $flag] != -1}
 }
 
+# Returns 1 only when every server instance in `srv_idxs` sees every
+# node id in `node_ids` carrying `flag` in its CLUSTER NODES output.
+proc cluster_all_see_flag {srv_idxs node_ids flag} {
+    foreach idx $srv_idxs {
+        foreach id $node_ids {
+            set node [cluster_get_node_by_id $idx $id]
+            if {![cluster_has_flag $node $flag]} {
+                return 0
+            }
+        }
+    }
+    return 1
+}
+
 # Returns the parsed "myself" node entry as a dictionary.
 proc cluster_get_myself id {
     set nodes [get_cluster_nodes $id]

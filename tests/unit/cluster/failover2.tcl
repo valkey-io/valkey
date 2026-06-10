@@ -76,7 +76,22 @@ proc test_same_epoch {delay} {
         R 9 DEBUG CLUSTER-FAILOVER-DELAY $delay
 
         # Killing there primary nodes.
+        set primary_ids [list [R 0 cluster myid] [R 1 cluster myid] [R 2 cluster myid]]
         exec kill -SIGSTOP [srv 0 pid] [srv -1 pid] [srv -2 pid]
+
+        # Wait until every voter (idx 3..6) sees all three paused primaries
+        # as fail, so the upcoming election is granted on the first round.
+        # Otherwise voter might reply with NACK primary-up.
+        wait_for_condition 1000 50 {
+            [cluster_all_see_flag {3 4 5 6} $primary_ids fail]
+        } else {
+            fail "Voters did not mark all paused primaries as fail"
+        }
+
+        # Now let the replicas proceed with the election.
+        R 7 CONFIG SET cluster-replica-no-failover no
+        R 8 CONFIG SET cluster-replica-no-failover no
+        R 9 CONFIG SET cluster-replica-no-failover no
 
         # Wait for the failover
         wait_for_condition 1000 50 {
@@ -104,11 +119,11 @@ proc test_same_epoch {delay} {
     }
 }
 
-start_cluster 7 3 {tags {external:skip cluster} overrides {cluster-ping-interval 1000}} {
+start_cluster 7 3 {tags {external:skip cluster} overrides {cluster-ping-interval 1000 cluster-replica-no-failover yes}} {
     test_same_epoch 500
 } ;# start_cluster
 
-start_cluster 7 3 {tags {external:skip cluster} overrides {cluster-ping-interval 1000}} {
+start_cluster 7 3 {tags {external:skip cluster} overrides {cluster-ping-interval 1000 cluster-replica-no-failover yes}} {
     test_same_epoch 0
 } ;# start_cluster
 

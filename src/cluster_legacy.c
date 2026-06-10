@@ -5306,6 +5306,8 @@ static const char *clusterNackReasonString(uint8_t reason) {
     case CLUSTERMSG_FAILOVER_AUTH_NACK_REASON_NOT_SAFE: return "not-safe";
     case CLUSTERMSG_FAILOVER_AUTH_NACK_REASON_REQ_EPOCH_OLD: return "req-epoch-old";
     case CLUSTERMSG_FAILOVER_AUTH_NACK_REASON_ALREADY_VOTED: return "already-voted";
+    case CLUSTERMSG_FAILOVER_AUTH_NACK_REASON_REQ_IS_PRIMARY: return "req-is-primary";
+    case CLUSTERMSG_FAILOVER_AUTH_NACK_REASON_NO_PRIMARY: return "no-primary";
     case CLUSTERMSG_FAILOVER_AUTH_NACK_REASON_PRIMARY_UP: return "primary-up";
     case CLUSTERMSG_FAILOVER_AUTH_NACK_REASON_STALE_CONFIG: return "stale-config";
     default: return "unknown";
@@ -5388,14 +5390,16 @@ void clusterSendFailoverAuthIfNeeded(clusterNode *node, clusterMsg *request) {
         if (clusterNodeIsPrimary(node)) {
             serverLog(LL_WARNING, "Failover auth denied to %.40s (%s) for epoch %llu: it is a primary node", node->name,
                       humanNodename(node), (unsigned long long)requestCurrentEpoch);
+            clusterSendFailoverNack(node, CLUSTERMSG_FAILOVER_AUTH_NACK_REASON_REQ_IS_PRIMARY);
         } else if (primary == NULL) {
             serverLog(LL_WARNING, "Failover auth denied to %.40s (%s) for epoch %llu: I don't know its primary",
                       node->name, humanNodename(node), (unsigned long long)requestCurrentEpoch);
+            clusterSendFailoverNack(node, CLUSTERMSG_FAILOVER_AUTH_NACK_REASON_NO_PRIMARY);
         } else if (!nodeFailed(primary)) {
             serverLog(LL_WARNING, "Failover auth denied to %.40s (%s) for epoch %llu: its primary is up", node->name,
                       humanNodename(node), (unsigned long long)requestCurrentEpoch);
+            clusterSendFailoverNack(node, CLUSTERMSG_FAILOVER_AUTH_NACK_REASON_PRIMARY_UP);
         }
-        clusterSendFailoverNack(node, CLUSTERMSG_FAILOVER_AUTH_NACK_REASON_PRIMARY_UP);
         return;
     }
 

@@ -3320,7 +3320,11 @@ void processClientIOWriteDone(client *c) {
 
     connSetPostponeUpdateState(c->conn, mask);
     if (postWriteToClient(c) == C_ERR) return;
+    uint64_t id = c->id;
     connUpdateState(c->conn);
+
+    c = lookupClientByID(id);
+    if (!c || !c->conn) return;
 
     if (!clientHasPendingReplies(c)) return;
 

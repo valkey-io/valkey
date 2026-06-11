@@ -866,7 +866,7 @@ static sds ACLDescribeSelector(aclSelector *selector) {
 
     /* Database permissions. */
     if (selector->flags & SELECTOR_FLAG_ALLDBS) {
-        res = sdscatlen(res, "alldbs ", 7);
+        /* alldbs is default, avoid emitting it in ACL strings for compatibility. */
     } else if (intsetLen(selector->dbs) == 0) {
         res = sdscatlen(res, "resetdbs ", 9);
     } else {

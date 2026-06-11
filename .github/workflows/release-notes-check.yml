@@ -1,0 +1,43 @@
+# Enforce the release-notes labelling policy on pull requests to unstable.
+#
+# Every PR to unstable must carry exactly one of the labels `release-notes` or
+# `no-release-notes`. When labelled `release-notes`, the PR must also add at
+# least one bullet to the `## Unreleased` block of 00-RELEASENOTES. The check
+# logic lives in utils/releasetools/check_release_notes.py so it is unit
+# tested and runnable locally.
+#
+# This is the "run-extra-tests"-style label gate referenced in the proposal,
+# implemented as its own workflow because run-extra-tests is only a label
+# condition inside daily.yml, not a standalone workflow.
+name: Release Notes Check
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+
+concurrency:
+  group: release-notes-check-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Check release-notes label and entry
+    # Only gate PRs targeting unstable; release branches keep a frozen file.
+    if: github.event.pull_request.base.ref == 'unstable'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout PR head
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          # Fetch the merge-base so the check can diff 00-RELEASENOTES against
+          # the PR base and require a *net-new* Unreleased entry.
+          fetch-depth: 0
+
+      - name: Enforce release-notes policy
+        env:
+          PR_LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: python3 utils/releasetools/check_release_notes.py

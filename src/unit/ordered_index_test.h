@@ -15,8 +15,6 @@ extern "C" {
 }
 
 #include <string>
-#include <utility>
-#include <vector>
 
 /* ---- Abstract interface ---- */
 
@@ -68,21 +66,6 @@ class OrderedIndexTestApi {
     /* Convenience (non-virtual) */
     OrderedIndexItem *insertSds(OrderedIndex *oi, double score, const_sds ele) {
         return insert(oi, score, ele, sdslen(ele));
-    }
-
-    std::vector<std::pair<double, std::string>> collectAll(OrderedIndex *oi) {
-        std::vector<std::pair<double, std::string>> result;
-        OrderedIndexIterator iter;
-        OrderedIndexItem *pos;
-        initIterator(&iter, oi);
-        while ((pos = next(&iter)) != NULL) {
-            const char *ptr;
-            size_t len;
-            getElementRaw(pos, &ptr, &len);
-            result.emplace_back(getScore(pos), std::string(ptr, len));
-        }
-        resetIterator(&iter);
-        return result;
     }
 };
 

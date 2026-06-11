@@ -10,24 +10,84 @@ extern "C" {
 #include "server.h"
 }
 
-/* Undefine min/max macros from server.h to avoid conflicts with C++ standard library */
+/* Undefine min/max macros from server.h to avoid conflicts */
 #undef min
 #undef max
 
 #include "ordered_index_test.h"
 
-#include <algorithm>
 #include <cmath>
 #include <cstring>
-#include <set>
-#include <string>
-#include <vector>
+#include <string> /* only for GTest name generator */
 
 /* Clean up shared lex sentinels allocated by OrderedIndexTest::SetUp(). */
 static void cleanupSharedSentinels(void) __attribute__((destructor));
 static void cleanupSharedSentinels(void) {
-    if (shared.minstring) { sdsfree(shared.minstring); shared.minstring = NULL; }
-    if (shared.maxstring) { sdsfree(shared.maxstring); shared.maxstring = NULL; }
+    if (shared.minstring) {
+        sdsfree(shared.minstring);
+        shared.minstring = NULL;
+    }
+    if (shared.maxstring) {
+        sdsfree(shared.maxstring);
+        shared.maxstring = NULL;
+    }
+}
+
+/* ---- C-style test helpers ---- */
+
+#define TEST_MIN(a, b) ((a) < (b) ? (a) : (b))
+#define TEST_MAX(a, b) ((a) > (b) ? (a) : (b))
+
+/* Collect all elements from an ordered index into a pre-allocated sds array.
+ * Caller must free each sds and the array itself. */
+static sds *collectIndexToSds(OrderedIndexTestApi &api, OrderedIndex *oi, size_t *out_n) {
+    size_t n = api.length(oi);
+    *out_n = n;
+    if (n == 0) return NULL;
+    sds *arr = (sds *)zmalloc(sizeof(sds) * n);
+    OrderedIndexIterator iter;
+    api.initIterator(&iter, oi);
+    for (size_t i = 0; i < n; i++) {
+        OrderedIndexItem *pos = api.next(&iter);
+        const char *ptr;
+        size_t len;
+        api.getElementRaw(pos, &ptr, &len);
+        arr[i] = sdsnewlen(ptr, len);
+    }
+    api.resetIterator(&iter);
+    return arr;
+}
+
+static void freeSdsArray(sds *arr, size_t n) {
+    for (size_t i = 0; i < n; i++) sdsfree(arr[i]);
+    zfree(arr);
+}
+
+/* Assert that an sds array matches an expected list of C strings. */
+#define ASSERT_SDS_ARRAY_EQ(arr, n, ...)                \
+    do {                                                \
+        const char *_exp[] = {__VA_ARGS__};             \
+        size_t _exp_n = sizeof(_exp) / sizeof(_exp[0]); \
+        ASSERT_EQ((size_t)(n), _exp_n);                 \
+        for (size_t _i = 0; _i < _exp_n; _i++) {        \
+            ASSERT_STREQ(arr[_i], _exp[_i]);            \
+        }                                               \
+    } while (0)
+
+static int sdsArrayCmp(const void *a, const void *b) {
+    return sdscmp(*(sds *)a, *(sds *)b);
+}
+
+static void sortSdsArray(sds *arr, size_t n) {
+    qsort(arr, n, sizeof(sds), sdsArrayCmp);
+}
+
+static void reverseDoubleArray(double *arr, size_t n) {
+    for (size_t i = 0; i < n / 2; i++) {
+        double tmp = arr[i];
+        arr[i] = arr[n - 1 - i];
+        arr[n - 1 - i] = tmp;
+    }
 }
 
 /* Verify structural integrity of the ordered index after mutations. */
@@ -247,8 +307,10 @@ TEST_P(OrderedIndexTest, DuplicateScores) {
     OrderedIndexItem *pos;
     api.initIterator(&iter, oi);
     for (int i = 0; i < 5; i++) {
+        char buf[32];
+        snprintf(buf, sizeof(buf), "key%d", i);
         pos = assertNextScore(&iter, 1.0);
-        assertElement(pos, (std::string("key") + std::to_string(i)).c_str());
+        assertElement(pos, buf);
     }
     api.resetIterator(&iter);
 }
@@ -1122,7 +1184,7 @@ static uint32_t test_fuzz_seed(void) {
     return s;
 }
 
-/* Simple xorshift32 PRNG — deterministic, seedable, no STL. */
+/* Simple xorshift32 PRNG — deterministic and seedable. */
 static uint32_t test_rand_next(uint32_t *state) {
     *state ^= *state << 13;
     *state ^= *state >> 17;
@@ -1141,12 +1203,12 @@ static double test_rand_double(uint32_t *state, double lo, double hi) {
 struct RandomIndexEntry {
     OrderedIndexItem *node;
     double score;
-    std::string element;
+    sds element;
 };
 
-static std::string test_random_element(uint32_t *state, int maxLen) {
+static sds test_random_element(uint32_t *state, int maxLen) {
     int len = test_rand_range(state, 1, maxLen);
-    std::string s(len, ' ');
+    sds s = sdsnewlen(NULL, len);
     for (int i = 0; i < len; i++) s[i] = (char)test_rand_range(state, 'a', 'z');
     return s;
 }
@@ -1155,15 +1217,22 @@ static double test_random_score(uint32_t *state) {
     return test_rand_double(state, -1e6, 1e6);
 }
 
-static std::vector<RandomIndexEntry> test_build_random_index(OrderedIndexTestApi &api, OrderedIndex *oi, uint32_t *state, int count) {
-    std::vector<RandomIndexEntry> entries;
+static RandomIndexEntry *test_build_random_index(OrderedIndexTestApi &api, OrderedIndex *oi, uint32_t *state, int count) {
+    RandomIndexEntry *entries = (RandomIndexEntry *)zmalloc(sizeof(RandomIndexEntry) * count);
     for (int i = 0; i < count; i++) {
         double score = test_random_score(state);
-        std::string elem = test_random_element(state, 16) + std::to_string(i);
-        OrderedIndexItem *node = api.insert(oi, score, elem.c_str(), elem.size());
-        entries.push_back({node, score, elem});
+        sds elem = test_random_element(state, 16);
+        /* Append index to ensure uniqueness */
+        elem = sdscatfmt(elem, "%i", i);
+        OrderedIndexItem *node = api.insert(oi, score, elem, sdslen(elem));
+        entries[i] = {node, score, elem};
     }
     return entries;
+}
+
+static void freeRandomEntries(RandomIndexEntry *entries, int count) {
+    for (int i = 0; i < count; i++) sdsfree(entries[i].element);
+    zfree(entries);
 }
 
 TEST_P(OrderedIndexTest, RandomizedInsertAndTraversal) {
@@ -1171,7 +1240,10 @@ TEST_P(OrderedIndexTest, RandomizedInsertAndTraversal) {
     for (int trial = 0; trial < 20; trial++) {
         int n = test_rand_range(&rng, 1, 50);
 
-        test_build_random_index(api, oi, &rng, n);
+        {
+            RandomIndexEntry *_e = test_build_random_index(api, oi, &rng, n);
+            freeRandomEntries(_e, n);
+        }
 
         ASSERT_EQ(api.length(oi), (unsigned long)n);
         verifyOI();
@@ -1199,7 +1271,10 @@ TEST_P(OrderedIndexTest, RandomizedBackwardTraversal) {
     for (int trial = 0; trial < 20; trial++) {
         int n = test_rand_range(&rng, 1, 50);
 
-        test_build_random_index(api, oi, &rng, n);
+        {
+            RandomIndexEntry *_e = test_build_random_index(api, oi, &rng, n);
+            freeRandomEntries(_e, n);
+        }
 
         OrderedIndexIterator iter;
         OrderedIndexItem *pos;
@@ -1224,11 +1299,12 @@ TEST_P(OrderedIndexTest, RandomizedScoreRetrieval) {
     for (int trial = 0; trial < 20; trial++) {
         int n = test_rand_range(&rng, 1, 50);
 
-        auto entries = test_build_random_index(api, oi, &rng, n);
+        RandomIndexEntry *entries = test_build_random_index(api, oi, &rng, n);
 
-        for (auto &e : entries) {
-            assertScore(e.node, e.score);
+        for (int i = 0; i < n; i++) {
+            assertScore(entries[i].node, entries[i].score);
         }
+        freeRandomEntries(entries, n);
         api.free(oi);
         oi = api.create();
     }
@@ -1239,7 +1315,10 @@ TEST_P(OrderedIndexTest, RandomizedIndexConsistency) {
     for (int trial = 0; trial < 20; trial++) {
         int n = test_rand_range(&rng, 1, 50);
 
-        test_build_random_index(api, oi, &rng, n);
+        {
+            RandomIndexEntry *_e = test_build_random_index(api, oi, &rng, n);
+            freeRandomEntries(_e, n);
+        }
 
         OrderedIndexIterator iter;
         OrderedIndexItem *pos;
@@ -1264,7 +1343,7 @@ TEST_P(OrderedIndexTest, RandomizedDelete) {
     for (int trial = 0; trial < 20; trial++) {
         int n = test_rand_range(&rng, 2, 30);
 
-        auto entries = test_build_random_index(api, oi, &rng, n);
+        RandomIndexEntry *entries = test_build_random_index(api, oi, &rng, n);
 
         int delIdx = test_rand_range(&rng, 0, n - 1);
         api.deleteItem(oi, entries[delIdx].node);
@@ -1294,7 +1373,7 @@ TEST_P(OrderedIndexTest, RandomizedUpdateScore) {
     for (int trial = 0; trial < 20; trial++) {
         int n = test_rand_range(&rng, 2, 30);
 
-        auto entries = test_build_random_index(api, oi, &rng, n);
+        RandomIndexEntry *entries = test_build_random_index(api, oi, &rng, n);
 
         int updIdx = test_rand_range(&rng, 0, n - 1);
         double newScore = test_random_score(&rng);
@@ -1324,7 +1403,10 @@ TEST_P(OrderedIndexTest, RandomizedPop) {
     for (int trial = 0; trial < 10; trial++) {
         int n = test_rand_range(&rng, 3, 30);
 
-        test_build_random_index(api, oi, &rng, n);
+        {
+            RandomIndexEntry *_e = test_build_random_index(api, oi, &rng, n);
+            freeRandomEntries(_e, n);
+        }
 
         OrderedIndexIterator iter;
         OrderedIndexItem *pos;
@@ -1369,14 +1451,14 @@ TEST_P(OrderedIndexTest, RandomizedDeleteRangeByScore) {
     for (int trial = 0; trial < 20; trial++) {
         int n = test_rand_range(&rng, 5, 40);
 
-        auto entries = test_build_random_index(api, oi, &rng, n);
+        RandomIndexEntry *entries = test_build_random_index(api, oi, &rng, n);
 
         double s1 = test_random_score(&rng), s2 = test_random_score(&rng);
-        double lo = (std::min)(s1, s2), hi = (std::max)(s1, s2);
+        double lo = TEST_MIN(s1, s2), hi = TEST_MAX(s1, s2);
 
         int expectedDeleted = 0;
-        for (auto &e : entries) {
-            if (e.score >= lo && e.score <= hi) expectedDeleted++;
+        for (int i = 0; i < n; i++) {
+            if (entries[i].score >= lo && entries[i].score <= hi) expectedDeleted++;
         }
 
         unsigned long deleted = api.deleteRangeByScore(oi, lo, hi, 0, 0, NULL, NULL);
@@ -1405,11 +1487,14 @@ TEST_P(OrderedIndexTest, RandomizedDeleteRangeByIndex) {
     for (int trial = 0; trial < 20; trial++) {
         int n = test_rand_range(&rng, 5, 40);
 
-        test_build_random_index(api, oi, &rng, n);
+        {
+            RandomIndexEntry *_e = test_build_random_index(api, oi, &rng, n);
+            freeRandomEntries(_e, n);
+        }
 
         int r1 = test_rand_range(&rng, 0, n - 1), r2 = test_rand_range(&rng, 0, n - 1);
-        unsigned long start = (unsigned long)(std::min)(r1, r2);
-        unsigned long end = (unsigned long)(std::max)(r1, r2);
+        unsigned long start = (unsigned long)TEST_MIN(r1, r2);
+        unsigned long end = (unsigned long)TEST_MAX(r1, r2);
         unsigned long expectedDeleted = end - start + 1;
 
         unsigned long deleted = api.deleteRangeByIndex(oi, start, end, NULL, NULL);
@@ -1439,29 +1524,36 @@ TEST_P(OrderedIndexTest, RandomizedForwardBackwardMirror) {
     for (int trial = 0; trial < 20; trial++) {
         int n = test_rand_range(&rng, 1, 50);
 
-        test_build_random_index(api, oi, &rng, n);
+        {
+            RandomIndexEntry *_e = test_build_random_index(api, oi, &rng, n);
+            freeRandomEntries(_e, n);
+        }
 
-        std::vector<double> forwardScores;
+        double *forwardScores = (double *)zmalloc(sizeof(double) * n);
         OrderedIndexIterator iter;
         OrderedIndexItem *pos;
+        int fi = 0;
         api.initIterator(&iter, oi);
         while (((pos = api.next(&iter)) != NULL)) {
-            forwardScores.push_back(api.getScore(pos));
+            forwardScores[fi++] = api.getScore(pos);
         }
         api.resetIterator(&iter);
 
-        std::vector<double> backwardScores;
+        double *backwardScores = (double *)zmalloc(sizeof(double) * n);
+        int bi = 0;
         api.initIterator(&iter, oi);
         while (((pos = api.prev(&iter)) != NULL)) {
-            backwardScores.push_back(api.getScore(pos));
+            backwardScores[bi++] = api.getScore(pos);
         }
         api.resetIterator(&iter);
 
-        ASSERT_EQ(forwardScores.size(), backwardScores.size());
-        std::reverse(backwardScores.begin(), backwardScores.end());
-        for (size_t i = 0; i < forwardScores.size(); i++) {
+        ASSERT_EQ(fi, bi);
+        reverseDoubleArray(backwardScores, bi);
+        for (int i = 0; i < fi; i++) {
             ASSERT_DOUBLE_EQ(forwardScores[i], backwardScores[i]);
         }
+        zfree(forwardScores);
+        zfree(backwardScores);
         api.free(oi);
         oi = api.create();
     }
@@ -1532,16 +1624,28 @@ INSTANTIATE_TEST_SUITE_P(AllImplementations,
 
 struct OnDeleteRecord {
     int count;
-    std::vector<std::string> elements;
+    int capacity;
+    sds *elements; /* Fixed-size array allocated at init */
 };
+
+static void initOnDeleteRecord(OnDeleteRecord *rec, int capacity) {
+    rec->count = 0;
+    rec->capacity = capacity;
+    rec->elements = (sds *)zmalloc(sizeof(sds) * capacity);
+}
+
+static void freeOnDeleteRecord(OnDeleteRecord *rec) {
+    for (int i = 0; i < rec->count; i++) sdsfree(rec->elements[i]);
+    zfree(rec->elements);
+}
 
 static void testOnDeleteCallback(OrderedIndexItem *item, void *ctx) {
     OnDeleteRecord *rec = (OnDeleteRecord *)ctx;
-    rec->count++;
     const char *ptr;
     size_t len;
     skiplistGetElementRaw(item, &ptr, &len);
-    rec->elements.emplace_back(ptr, len);
+    rec->elements[rec->count] = sdsnewlen(ptr, len);
+    rec->count++;
     /* Item is freed by the index after this callback returns. */
 }
 
@@ -1568,37 +1672,29 @@ class OnDeleteCallbackTest : public ::testing::Test {
 
     void insertN(int n) {
         for (int i = 0; i < n; i++) {
-            std::string name = "key" + std::to_string(i);
-            insert((double)i, name.c_str());
+            char buf[32];
+            snprintf(buf, sizeof(buf), "key%d", i);
+            insert((double)i, buf);
         }
     }
 
-    void insertLex(const std::vector<std::string> &elems, double score = 1.0) {
-        for (auto &e : elems) {
-            insert(score, e.c_str());
+    void insertLex(const char *elems[], int count, double score = 1.0) {
+        for (int i = 0; i < count; i++) {
+            insert(score, elems[i]);
         }
     }
 
-    std::vector<std::string> collectElements(OrderedIndex *oi) {
-        std::vector<std::string> result;
-        OrderedIndexIterator iter;
-        OrderedIndexItem *pos;
-        api.initIterator(&iter, oi);
-        while (((pos = api.next(&iter)) != NULL)) {
-            const char *ptr;
-            size_t len;
-            api.getElementRaw(pos, &ptr, &len);
-            result.emplace_back(ptr, len);
-        }
-        api.resetIterator(&iter);
-        return result;
+    /* Collect elements into caller-owned sds array. Caller must freeSdsArray(). */
+    sds *collectElements(OrderedIndex *idx, size_t *out_n) {
+        return collectIndexToSds(api, idx, out_n);
     }
 };
 
 /* DeleteRangeByScore */
 
 TEST_F(OnDeleteCallbackTest, DeleteRangeByScore_EmptyAndNoMatch) {
-    OnDeleteRecord rec = {0, {}};
+    OnDeleteRecord rec;
+    initOnDeleteRecord(&rec, 10);
 
     unsigned long deleted = api.deleteRangeByScore(oi, 0.0, 10.0, 0, 0, testOnDeleteCallback, &rec);
     ASSERT_EQ(deleted, 0UL);
@@ -1617,24 +1713,30 @@ TEST_F(OnDeleteCallbackTest, DeleteRangeByScore_EmptyAndNoMatch) {
 TEST_F(OnDeleteCallbackTest, DeleteRangeByScore_Subset) {
     insertN(10);
 
-    OnDeleteRecord rec = {0, {}};
+    OnDeleteRecord rec;
+    initOnDeleteRecord(&rec, 10);
     unsigned long deleted = api.deleteRangeByScore(oi, 3.0, 6.0, 0, 0, testOnDeleteCallback, &rec);
     ASSERT_EQ(deleted, 4UL);
     ASSERT_EQ(rec.count, 4);
     ASSERT_EQ(api.length(oi), 6UL);
     verifyOI();
 
-    std::sort(rec.elements.begin(), rec.elements.end());
-    ASSERT_EQ(rec.elements, (std::vector<std::string>{"key3", "key4", "key5", "key6"}));
+    sortSdsArray(rec.elements, rec.count);
+    ASSERT_SDS_ARRAY_EQ(rec.elements, rec.count, "key3", "key4", "key5", "key6");
 
-    auto remaining = collectElements(oi);
-    ASSERT_EQ(remaining, (std::vector<std::string>{"key0", "key1", "key2", "key7", "key8", "key9"}));
+    {
+        size_t _rn;
+        sds *_r = collectElements(oi, &_rn);
+        ASSERT_SDS_ARRAY_EQ(_r, _rn, "key0", "key1", "key2", "key7", "key8", "key9");
+        freeSdsArray(_r, _rn);
+    }
 }
 
 TEST_F(OnDeleteCallbackTest, DeleteRangeByScore_All) {
     insertN(5);
 
-    OnDeleteRecord rec = {0, {}};
+    OnDeleteRecord rec;
+    initOnDeleteRecord(&rec, 10);
     unsigned long deleted = api.deleteRangeByScore(oi, NEG_INF, POS_INF, 0, 0, testOnDeleteCallback, &rec);
     ASSERT_EQ(deleted, 5UL);
     ASSERT_EQ(rec.count, 5);
@@ -1653,30 +1755,33 @@ TEST_F(OnDeleteCallbackTest, DeleteRangeByScore_NullCallback) {
 TEST_F(OnDeleteCallbackTest, DeleteRangeByScore_ExclusiveBounds) {
     insertN(10);
 
-    OnDeleteRecord rec = {0, {}};
+    OnDeleteRecord rec;
+    initOnDeleteRecord(&rec, 10);
     unsigned long deleted = api.deleteRangeByScore(oi, 3.0, 7.0, 1, 1, testOnDeleteCallback, &rec);
     ASSERT_EQ(deleted, 3UL);
     ASSERT_EQ(rec.count, 3);
-    std::sort(rec.elements.begin(), rec.elements.end());
-    ASSERT_EQ(rec.elements, (std::vector<std::string>{"key4", "key5", "key6"}));
+    sortSdsArray(rec.elements, rec.count);
+    ASSERT_SDS_ARRAY_EQ(rec.elements, rec.count, "key4", "key5", "key6");
     ASSERT_EQ(api.length(oi), 7UL);
 }
 
 TEST_F(OnDeleteCallbackTest, DeleteRangeByScore_SingleElement) {
     insertN(5);
 
-    OnDeleteRecord rec = {0, {}};
+    OnDeleteRecord rec;
+    initOnDeleteRecord(&rec, 10);
     unsigned long deleted = api.deleteRangeByScore(oi, 2.0, 2.0, 0, 0, testOnDeleteCallback, &rec);
     ASSERT_EQ(deleted, 1UL);
     ASSERT_EQ(rec.count, 1);
-    ASSERT_EQ(rec.elements[0], "key2");
+    ASSERT_STREQ(rec.elements[0], "key2");
     ASSERT_EQ(api.length(oi), 4UL);
 }
 
 /* DeleteRangeByIndex */
 
 TEST_F(OnDeleteCallbackTest, DeleteRangeByIndex_EmptyAndNoMatch) {
-    OnDeleteRecord rec = {0, {}};
+    OnDeleteRecord rec;
+    initOnDeleteRecord(&rec, 10);
 
     unsigned long deleted = api.deleteRangeByIndex(oi, 0, 4, testOnDeleteCallback, &rec);
     ASSERT_EQ(deleted, 0UL);
@@ -1695,23 +1800,29 @@ TEST_F(OnDeleteCallbackTest, DeleteRangeByIndex_EmptyAndNoMatch) {
 TEST_F(OnDeleteCallbackTest, DeleteRangeByIndex_Subset) {
     insertN(10);
 
-    OnDeleteRecord rec = {0, {}};
+    OnDeleteRecord rec;
+    initOnDeleteRecord(&rec, 10);
     unsigned long deleted = api.deleteRangeByIndex(oi, 2, 4, testOnDeleteCallback, &rec);
     ASSERT_EQ(deleted, 3UL);
     ASSERT_EQ(rec.count, 3);
     ASSERT_EQ(api.length(oi), 7UL);
 
-    std::sort(rec.elements.begin(), rec.elements.end());
-    ASSERT_EQ(rec.elements, (std::vector<std::string>{"key2", "key3", "key4"}));
+    sortSdsArray(rec.elements, rec.count);
+    ASSERT_SDS_ARRAY_EQ(rec.elements, rec.count, "key2", "key3", "key4");
 
-    auto remaining = collectElements(oi);
-    ASSERT_EQ(remaining, (std::vector<std::string>{"key0", "key1", "key5", "key6", "key7", "key8", "key9"}));
+    {
+        size_t _rn;
+        sds *_r = collectElements(oi, &_rn);
+        ASSERT_SDS_ARRAY_EQ(_r, _rn, "key0", "key1", "key5", "key6", "key7", "key8", "key9");
+        freeSdsArray(_r, _rn);
+    }
 }
 
 TEST_F(OnDeleteCallbackTest, DeleteRangeByIndex_All) {
     insertN(5);
 
-    OnDeleteRecord rec = {0, {}};
+    OnDeleteRecord rec;
+    initOnDeleteRecord(&rec, 10);
     unsigned long deleted = api.deleteRangeByIndex(oi, 0, 4, testOnDeleteCallback, &rec);
     ASSERT_EQ(deleted, 5UL);
     ASSERT_EQ(rec.count, 5);
@@ -1729,31 +1840,38 @@ TEST_F(OnDeleteCallbackTest, DeleteRangeByIndex_NullCallback) {
 TEST_F(OnDeleteCallbackTest, DeleteRangeByIndex_ExclusiveBounds) {
     insertN(5);
 
-    OnDeleteRecord rec = {0, {}};
+    OnDeleteRecord rec;
+    initOnDeleteRecord(&rec, 10);
     unsigned long deleted = api.deleteRangeByIndex(oi, 2, 2, testOnDeleteCallback, &rec);
     ASSERT_EQ(deleted, 1UL);
     ASSERT_EQ(rec.count, 1);
-    ASSERT_EQ(rec.elements[0], "key2");
+    ASSERT_STREQ(rec.elements[0], "key2");
 
-    auto remaining = collectElements(oi);
-    ASSERT_EQ(remaining, (std::vector<std::string>{"key0", "key1", "key3", "key4"}));
+    {
+        size_t _rn;
+        sds *_r = collectElements(oi, &_rn);
+        ASSERT_SDS_ARRAY_EQ(_r, _rn, "key0", "key1", "key3", "key4");
+        freeSdsArray(_r, _rn);
+    }
 }
 
 TEST_F(OnDeleteCallbackTest, DeleteRangeByIndex_SingleElement) {
     insertN(5);
 
-    OnDeleteRecord rec = {0, {}};
+    OnDeleteRecord rec;
+    initOnDeleteRecord(&rec, 10);
     unsigned long deleted = api.deleteRangeByIndex(oi, 0, 0, testOnDeleteCallback, &rec);
     ASSERT_EQ(deleted, 1UL);
     ASSERT_EQ(rec.count, 1);
-    ASSERT_EQ(rec.elements[0], "key0");
+    ASSERT_STREQ(rec.elements[0], "key0");
     ASSERT_EQ(api.length(oi), 4UL);
 }
 
 /* DeleteRangeByLex */
 
 TEST_F(OnDeleteCallbackTest, DeleteRangeByLex_EmptyAndNoMatch) {
-    OnDeleteRecord rec = {0, {}};
+    OnDeleteRecord rec;
+    initOnDeleteRecord(&rec, 10);
 
     sds min = sdsnew("a");
     sds max = sdsnew("z");
@@ -1765,7 +1883,10 @@ TEST_F(OnDeleteCallbackTest, DeleteRangeByLex_EmptyAndNoMatch) {
     api.free(oi);
 
     oi = api.create();
-    insertLex({"apple", "banana", "cherry"});
+    {
+        const char *_l[] = {"apple", "banana", "cherry"};
+        insertLex(_l, 3);
+    }
     rec = {0, {}};
     min = sdsnew("x");
     max = sdsnew("z");
@@ -1778,9 +1899,13 @@ TEST_F(OnDeleteCallbackTest, DeleteRangeByLex_EmptyAndNoMatch) {
 }
 
 TEST_F(OnDeleteCallbackTest, DeleteRangeByLex_Subset) {
-    insertLex({"apple", "banana", "cherry", "date", "elderberry"});
+    {
+        const char *_l[] = {"apple", "banana", "cherry", "date", "elderberry"};
+        insertLex(_l, 5);
+    }
 
-    OnDeleteRecord rec = {0, {}};
+    OnDeleteRecord rec;
+    initOnDeleteRecord(&rec, 10);
     sds min = sdsnew("banana");
     sds max = sdsnew("date");
     unsigned long deleted = api.deleteRangeByLex(oi, min, max, 0, 0, testOnDeleteCallback, &rec);
@@ -1788,20 +1913,28 @@ TEST_F(OnDeleteCallbackTest, DeleteRangeByLex_Subset) {
     ASSERT_EQ(rec.count, 3);
     ASSERT_EQ(api.length(oi), 2UL);
 
-    std::sort(rec.elements.begin(), rec.elements.end());
-    ASSERT_EQ(rec.elements, (std::vector<std::string>{"banana", "cherry", "date"}));
+    sortSdsArray(rec.elements, rec.count);
+    ASSERT_SDS_ARRAY_EQ(rec.elements, rec.count, "banana", "cherry", "date");
 
-    auto remaining = collectElements(oi);
-    ASSERT_EQ(remaining, (std::vector<std::string>{"apple", "elderberry"}));
+    {
+        size_t _rn;
+        sds *_r = collectElements(oi, &_rn);
+        ASSERT_SDS_ARRAY_EQ(_r, _rn, "apple", "elderberry");
+        freeSdsArray(_r, _rn);
+    }
 
     sdsfree(min);
     sdsfree(max);
 }
 
 TEST_F(OnDeleteCallbackTest, DeleteRangeByLex_All) {
-    insertLex({"apple", "banana", "cherry"});
+    {
+        const char *_l[] = {"apple", "banana", "cherry"};
+        insertLex(_l, 3);
+    }
 
-    OnDeleteRecord rec = {0, {}};
+    OnDeleteRecord rec;
+    initOnDeleteRecord(&rec, 10);
     sds min = sdsnew("a");
     sds max = sdsnew("z");
     unsigned long deleted = api.deleteRangeByLex(oi, min, max, 0, 0, testOnDeleteCallback, &rec);
@@ -1814,7 +1947,10 @@ TEST_F(OnDeleteCallbackTest, DeleteRangeByLex_All) {
 }
 
 TEST_F(OnDeleteCallbackTest, DeleteRangeByLex_NullCallback) {
-    insertLex({"apple", "banana", "cherry", "date"});
+    {
+        const char *_l[] = {"apple", "banana", "cherry", "date"};
+        insertLex(_l, 4);
+    }
 
     sds min = sdsnew("banana");
     sds max = sdsnew("cherry");
@@ -1822,46 +1958,66 @@ TEST_F(OnDeleteCallbackTest, DeleteRangeByLex_NullCallback) {
     ASSERT_EQ(deleted, 2UL);
     ASSERT_EQ(api.length(oi), 2UL);
 
-    auto remaining = collectElements(oi);
-    ASSERT_EQ(remaining, (std::vector<std::string>{"apple", "date"}));
+    {
+        size_t _rn;
+        sds *_r = collectElements(oi, &_rn);
+        ASSERT_SDS_ARRAY_EQ(_r, _rn, "apple", "date");
+        freeSdsArray(_r, _rn);
+    }
 
     sdsfree(min);
     sdsfree(max);
 }
 
 TEST_F(OnDeleteCallbackTest, DeleteRangeByLex_ExclusiveBounds) {
-    insertLex({"apple", "banana", "cherry", "date", "elderberry"});
+    {
+        const char *_l[] = {"apple", "banana", "cherry", "date", "elderberry"};
+        insertLex(_l, 5);
+    }
 
-    OnDeleteRecord rec = {0, {}};
+    OnDeleteRecord rec;
+    initOnDeleteRecord(&rec, 10);
     sds min = sdsnew("banana");
     sds max = sdsnew("date");
     unsigned long deleted = api.deleteRangeByLex(oi, min, max, 1, 1, testOnDeleteCallback, &rec);
     ASSERT_EQ(deleted, 1UL);
     ASSERT_EQ(rec.count, 1);
-    ASSERT_EQ(rec.elements[0], "cherry");
+    ASSERT_STREQ(rec.elements[0], "cherry");
     ASSERT_EQ(api.length(oi), 4UL);
 
-    auto remaining = collectElements(oi);
-    ASSERT_EQ(remaining, (std::vector<std::string>{"apple", "banana", "date", "elderberry"}));
+    {
+        size_t _rn;
+        sds *_r = collectElements(oi, &_rn);
+        ASSERT_SDS_ARRAY_EQ(_r, _rn, "apple", "banana", "date", "elderberry");
+        freeSdsArray(_r, _rn);
+    }
 
     sdsfree(min);
     sdsfree(max);
 }
 
 TEST_F(OnDeleteCallbackTest, DeleteRangeByLex_SingleElement) {
-    insertLex({"apple", "banana", "cherry"});
+    {
+        const char *_l[] = {"apple", "banana", "cherry"};
+        insertLex(_l, 3);
+    }
 
-    OnDeleteRecord rec = {0, {}};
+    OnDeleteRecord rec;
+    initOnDeleteRecord(&rec, 10);
     sds min = sdsnew("banana");
     sds max = sdsnew("banana");
     unsigned long deleted = api.deleteRangeByLex(oi, min, max, 0, 0, testOnDeleteCallback, &rec);
     ASSERT_EQ(deleted, 1UL);
     ASSERT_EQ(rec.count, 1);
-    ASSERT_EQ(rec.elements[0], "banana");
+    ASSERT_STREQ(rec.elements[0], "banana");
     ASSERT_EQ(api.length(oi), 2UL);
 
-    auto remaining = collectElements(oi);
-    ASSERT_EQ(remaining, (std::vector<std::string>{"apple", "cherry"}));
+    {
+        size_t _rn;
+        sds *_r = collectElements(oi, &_rn);
+        ASSERT_SDS_ARRAY_EQ(_r, _rn, "apple", "cherry");
+        freeSdsArray(_r, _rn);
+    }
 
     sdsfree(min);
     sdsfree(max);
@@ -1869,12 +2025,48 @@ TEST_F(OnDeleteCallbackTest, DeleteRangeByLex_SingleElement) {
 
 /* ========== Range-Delete Hashtable Consistency Tests ========== */
 
+/* Simulated hashtable: sorted sds array (allows set-equality comparison). */
+struct SimHt {
+    sds *elems;
+    int count;
+    int capacity;
+};
+
+static void simHtInit(SimHt *ht, int cap) {
+    ht->elems = (sds *)zmalloc(sizeof(sds) * cap);
+    ht->count = 0;
+    ht->capacity = cap;
+}
+
+static void simHtFree(SimHt *ht) {
+    for (int i = 0; i < ht->count; i++) sdsfree(ht->elems[i]);
+    zfree(ht->elems);
+}
+
+static void simHtAdd(SimHt *ht, const char *s, size_t len) {
+    ht->elems[ht->count++] = sdsnewlen(s, len);
+}
+
+static void simHtRemove(SimHt *ht, const char *s, size_t len) {
+    for (int i = 0; i < ht->count; i++) {
+        if (sdslen(ht->elems[i]) == len && memcmp(ht->elems[i], s, len) == 0) {
+            sdsfree(ht->elems[i]);
+            ht->elems[i] = ht->elems[--ht->count];
+            return;
+        }
+    }
+}
+
+static void simHtSort(SimHt *ht) {
+    sortSdsArray(ht->elems, ht->count);
+}
+
 static void hashtableConsistencyOnDelete(OrderedIndexItem *item, void *ctx) {
-    std::set<std::string> *ht = (std::set<std::string> *)ctx;
+    SimHt *ht = (SimHt *)ctx;
     const char *ptr;
     size_t len;
     skiplistGetElementRaw(item, &ptr, &len);
-    ht->erase(std::string(ptr, len));
+    simHtRemove(ht, ptr, len);
     /* Item is freed by the index after this callback returns. */
 }
 
@@ -1894,152 +2086,150 @@ class RangeDeleteHashtableConsistencyTest : public ::testing::Test {
         api.insert(oi, score, ele, strlen(ele));
     }
 
-    void insertN(std::set<std::string> &ht, int n) {
+    void insertN(SimHt &ht, int n) {
         for (int i = 0; i < n; i++) {
-            std::string name = "key" + std::to_string(i);
-            insert((double)i, name.c_str());
-            ht.insert(name);
+            char buf[32];
+            snprintf(buf, sizeof(buf), "key%d", i);
+            insert((double)i, buf);
+            simHtAdd(&ht, buf, strlen(buf));
         }
     }
 
-    void insertLex(std::set<std::string> &ht, const std::vector<std::string> &elems, double score = 1.0) {
-        for (auto &e : elems) {
-            insert(score, e.c_str());
-            ht.insert(e);
+    void insertLex(SimHt &ht, const char *elems[], int count, double score = 1.0) {
+        for (int i = 0; i < count; i++) {
+            insert(score, elems[i]);
+            simHtAdd(&ht, elems[i], strlen(elems[i]));
         }
     }
 
-    std::set<std::string> collectIndexElements(OrderedIndex *oi) {
-        std::set<std::string> result;
-        OrderedIndexIterator iter;
-        OrderedIndexItem *pos;
-        api.initIterator(&iter, oi);
-        while (((pos = api.next(&iter)) != NULL)) {
-            const char *ptr;
-            size_t len;
-            api.getElementRaw(pos, &ptr, &len);
-            result.insert(std::string(ptr, len));
+    void assertHtMatchesIndex(SimHt &ht) {
+        size_t idx_n;
+        sds *idx_elems = collectIndexToSds(api, oi, &idx_n);
+        sortSdsArray(idx_elems, idx_n);
+        simHtSort(&ht);
+        ASSERT_EQ(idx_n, (size_t)ht.count);
+        for (size_t i = 0; i < idx_n; i++) {
+            ASSERT_STREQ(idx_elems[i], ht.elems[i]);
         }
-        api.resetIterator(&iter);
-        return result;
+        freeSdsArray(idx_elems, idx_n);
     }
 };
 
 /* ByScore */
 
 TEST_F(RangeDeleteHashtableConsistencyTest, ByScore_PartialDelete) {
-    std::set<std::string> simulatedHt;
+    SimHt simulatedHt;
+    simHtInit(&simulatedHt, 20);
     insertN(simulatedHt, 10);
 
     api.deleteRangeByScore(oi, 3.0, 6.0, 0, 0, hashtableConsistencyOnDelete, &simulatedHt);
 
-    std::set<std::string> indexElements = collectIndexElements(oi);
-    ASSERT_EQ(indexElements, simulatedHt);
-    ASSERT_EQ(indexElements.size(), 6UL);
+    assertHtMatchesIndex(simulatedHt);
 }
 
 TEST_F(RangeDeleteHashtableConsistencyTest, ByScore_FullDelete) {
-    std::set<std::string> simulatedHt;
+    SimHt simulatedHt;
+    simHtInit(&simulatedHt, 20);
     insertN(simulatedHt, 10);
 
     api.deleteRangeByScore(oi, NEG_INF, POS_INF, 0, 0, hashtableConsistencyOnDelete, &simulatedHt);
 
-    std::set<std::string> indexElements = collectIndexElements(oi);
-    ASSERT_EQ(indexElements, simulatedHt);
-    ASSERT_TRUE(indexElements.empty());
+    assertHtMatchesIndex(simulatedHt);
 }
 
 TEST_F(RangeDeleteHashtableConsistencyTest, ByScore_EmptyRange) {
-    std::set<std::string> simulatedHt;
+    SimHt simulatedHt;
+    simHtInit(&simulatedHt, 20);
     insertN(simulatedHt, 10);
 
     api.deleteRangeByScore(oi, 20.0, 30.0, 0, 0, hashtableConsistencyOnDelete, &simulatedHt);
 
-    std::set<std::string> indexElements = collectIndexElements(oi);
-    ASSERT_EQ(indexElements, simulatedHt);
-    ASSERT_EQ(indexElements.size(), 10UL);
+    assertHtMatchesIndex(simulatedHt);
 }
 
 /* ByIndex */
 
 TEST_F(RangeDeleteHashtableConsistencyTest, ByIndex_PartialDelete) {
-    std::set<std::string> simulatedHt;
+    SimHt simulatedHt;
+    simHtInit(&simulatedHt, 20);
     insertN(simulatedHt, 10);
 
     api.deleteRangeByIndex(oi, 2, 4, hashtableConsistencyOnDelete, &simulatedHt);
 
-    std::set<std::string> indexElements = collectIndexElements(oi);
-    ASSERT_EQ(indexElements, simulatedHt);
-    ASSERT_EQ(indexElements.size(), 7UL);
+    assertHtMatchesIndex(simulatedHt);
 }
 
 TEST_F(RangeDeleteHashtableConsistencyTest, ByIndex_FullDelete) {
-    std::set<std::string> simulatedHt;
+    SimHt simulatedHt;
+    simHtInit(&simulatedHt, 20);
     insertN(simulatedHt, 10);
 
     api.deleteRangeByIndex(oi, 0, 9, hashtableConsistencyOnDelete, &simulatedHt);
 
-    std::set<std::string> indexElements = collectIndexElements(oi);
-    ASSERT_EQ(indexElements, simulatedHt);
-    ASSERT_TRUE(indexElements.empty());
+    assertHtMatchesIndex(simulatedHt);
 }
 
 TEST_F(RangeDeleteHashtableConsistencyTest, ByIndex_EmptyRange) {
-    std::set<std::string> simulatedHt;
+    SimHt simulatedHt;
+    simHtInit(&simulatedHt, 20);
     insertN(simulatedHt, 10);
 
     api.deleteRangeByIndex(oi, 20, 30, hashtableConsistencyOnDelete, &simulatedHt);
 
-    std::set<std::string> indexElements = collectIndexElements(oi);
-    ASSERT_EQ(indexElements, simulatedHt);
-    ASSERT_EQ(indexElements.size(), 10UL);
+    assertHtMatchesIndex(simulatedHt);
 }
 
 /* ByLex */
 
 TEST_F(RangeDeleteHashtableConsistencyTest, ByLex_PartialDelete) {
-    std::set<std::string> simulatedHt;
-    insertLex(simulatedHt, {"apple", "banana", "cherry", "date", "elderberry"});
+    SimHt simulatedHt;
+    simHtInit(&simulatedHt, 20);
+    {
+        const char *_l[] = {"apple", "banana", "cherry", "date", "elderberry"};
+        insertLex(simulatedHt, _l, 5);
+    }
 
     sds min = sdsnew("banana");
     sds max = sdsnew("date");
     api.deleteRangeByLex(oi, min, max, 0, 0, hashtableConsistencyOnDelete, &simulatedHt);
 
-    std::set<std::string> indexElements = collectIndexElements(oi);
-    ASSERT_EQ(indexElements, simulatedHt);
-    ASSERT_EQ(indexElements.size(), 2UL);
+    assertHtMatchesIndex(simulatedHt);
 
     sdsfree(min);
     sdsfree(max);
 }
 
 TEST_F(RangeDeleteHashtableConsistencyTest, ByLex_FullDelete) {
-    std::set<std::string> simulatedHt;
-    insertLex(simulatedHt, {"apple", "banana", "cherry", "date", "elderberry"});
+    SimHt simulatedHt;
+    simHtInit(&simulatedHt, 20);
+    {
+        const char *_l[] = {"apple", "banana", "cherry", "date", "elderberry"};
+        insertLex(simulatedHt, _l, 5);
+    }
 
     sds min = sdsnew("a");
     sds max = sdsnew("z");
     api.deleteRangeByLex(oi, min, max, 0, 0, hashtableConsistencyOnDelete, &simulatedHt);
 
-    std::set<std::string> indexElements = collectIndexElements(oi);
-    ASSERT_EQ(indexElements, simulatedHt);
-    ASSERT_TRUE(indexElements.empty());
+    assertHtMatchesIndex(simulatedHt);
 
     sdsfree(min);
     sdsfree(max);
 }
 
 TEST_F(RangeDeleteHashtableConsistencyTest, ByLex_EmptyRange) {
-    std::set<std::string> simulatedHt;
-    insertLex(simulatedHt, {"apple", "banana", "cherry", "date", "elderberry"});
+    SimHt simulatedHt;
+    simHtInit(&simulatedHt, 20);
+    {
+        const char *_l[] = {"apple", "banana", "cherry", "date", "elderberry"};
+        insertLex(simulatedHt, _l, 5);
+    }
 
     sds min = sdsnew("zzz");
     sds max = sdsnew("zzzz");
     api.deleteRangeByLex(oi, min, max, 0, 0, hashtableConsistencyOnDelete, &simulatedHt);
 
-    std::set<std::string> indexElements = collectIndexElements(oi);
-    ASSERT_EQ(indexElements, simulatedHt);
-    ASSERT_EQ(indexElements.size(), 5UL);
+    assertHtMatchesIndex(simulatedHt);
 
     sdsfree(min);
     sdsfree(max);

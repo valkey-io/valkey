@@ -975,6 +975,14 @@ void keysCommand(client *c) {
 
 #define DEFAULT_SCAN_COMMAND_COUNT 10
 
+/* Multiplier for the per-call result size cap. Each SCAN/HSCAN/SSCAN/ZSCAN call
+ * returns at most (COUNT * SCAN_RESULT_CAP_MULTIPLIER) elements. This prevents
+ * a single call from returning an unreasonable number of elements when the hash
+ * table has deeply chained buckets (see issue #3955 where count=1 returned 4979
+ * items). The default of 10x allows natural hash-table variability while
+ * capping extreme cases. */
+#define SCAN_RESULT_CAP_MULTIPLIER 10
+
 /* The SCAN command's default COUNT is 10.
  * Since it may store keys + values, the
  * buffer size is roughly 10 * 2 = 20.
@@ -990,6 +998,14 @@ typedef struct {
     sds pattern;    /* pattern string, NULL means no pattern */
     long sampled;   /* cumulative number of keys sampled */
     int only_keys;  /* set to 1 means to return keys only */
+    /* Cap on result vector size to prevent a single SCAN call from
+     * returning an unreasonably large number of elements. When the
+     * hash table has a deeply chained bucket, a single bucket index
+     * can contain thousands of entries. Without this cap, a count=1
+     * SSCAN could return 5000+ items in one reply. The cap is set to
+     * count * 10, which prevents pathological ballooning while
+     * allowing the natural variability of hash table distribution. */
+    long max_result_size;
 } scanData;
 
 /* Helper function to compare key type in scan commands */
@@ -1014,11 +1030,35 @@ static void addScanDataItem(vector *result, const char *buf, size_t len) {
     item->len = len;
 }
 
+/* Check if scan result has reached the maximum allowed size.
+ * Returns 1 if the cap has been reached. */
+static int scanResultLimitReached(scanData *data) {
+    if (data->max_result_size > 0 && (long)vectorLen(data->result) >= data->max_result_size) {
+        /* Log a warning when a scan result is capped. This indicates
+         * a pathological hash table bucket chain that should be
+         * investigated, as it can cause performance issues and
+         * incomplete scan results. */
+        static int capped_logged = 0;
+        if (!capped_logged) {
+            capped_logged = 1;
+            serverLog(LL_WARNING,
+                "SCAN result capped at %ld elements. The hash table has "
+                "an abnormally deep bucket chain. Consider using a larger "
+                "COUNT value for scan operations on this key.",
+                (long)vectorLen(data->result));
+        }
+        return 1;
+    }
+    return 0;
+}
+
 /* Hashtable scan callback used by scanCallback when scanning the keyspace. */
 void keysScanCallback(void *privdata, void *entry, int didx) {
     scanData *data = (scanData *)privdata;
     robj *obj = entry;
     data->sampled++;
+
+    if (scanResultLimitReached(data)) return;
 
     /* Filter an object if it isn't the type we want. */
     if (data->type != LLONG_MAX) {
@@ -1056,6 +1096,8 @@ void hashtableScanCallback(void *privdata, void *entry) {
 
     robj *o = data->o;
     data->sampled++;
+
+    if (scanResultLimitReached(data)) return;
 
     /* This callback is only used for scanning elements within a key (hash
      * fields, set elements, etc.) so o must be set here. */
@@ -1265,11 +1307,14 @@ void scanGenericCommandWithOptions(client *c, robj *o, unsigned long long cursor
 
     /* For main hash table scan or scannable data structure. */
     if (!o || ht) {
-        /* We set the max number of iterations to ten times the specified
+        /* Set the max number of iterations to ten times the specified
          * COUNT, so if the hash table is in a pathological state (very
          * sparsely populated) we avoid to block too much time at the cost
-         * of returning no or very few elements. */
+         * of returning no or very few elements.
+         * Also cap at a minimum to prevent excessive iterations when
+         * COUNT is very small. */
         unsigned long maxiterations = (unsigned long)opts->count * 10UL;
+        if (maxiterations < 10UL) maxiterations = 10UL;
 
         /* We pass scanData which have three pointers to the callback:
          * 1. data.keys: the list to which it will add new elements;
@@ -1292,6 +1337,7 @@ void scanGenericCommandWithOptions(client *c, robj *o, unsigned long long cursor
             .pattern = opts->use_pattern ? opts->pat : NULL,
             .sampled = 0,
             .only_keys = opts->only_keys,
+            .max_result_size = (long)opts->count * SCAN_RESULT_CAP_MULTIPLIER,
         };
 
         /* For regular SCAN in cluster mode, derive the slot from the pattern's hashtag. */

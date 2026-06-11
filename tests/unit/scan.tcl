@@ -216,6 +216,48 @@ proc test_scan {type} {
             set keys [lsort -unique $keys]
             assert_equal $count [llength $keys]
         }
+
+        # Verify that per-call reply size is bounded to prevent pathological
+        # cases where a single SSCAN returns thousands of items even with a
+        # small COUNT (see issue #3955). This only applies to the hashtable
+        # encoding path where deep bucket chains can occur.
+        if {$enc eq "hashtable"} {
+            test "{$type} SSCAN COUNT reply cap with encoding $enc" {
+                r del set
+                set prefix "ele:"
+                set total 1000
+                set elements {}
+                for {set j 0} {$j < $total} {incr j} {
+                    lappend elements ${prefix}${j}
+                }
+                r sadd set {*}$elements
+
+                # Scan with small COUNT and verify no single call returns
+                # an unreasonably large number of items.
+                set cur 0
+                set keys {}
+                set max_per_call 0
+                while 1 {
+                    set res [r sscan set $cur count 10]
+                    set cur [lindex $res 0]
+                    set k [lindex $res 1]
+                    set num [llength $k]
+                    if {$num > $max_per_call} {
+                        set max_per_call $num
+                    }
+                    lappend keys {*}$k
+                    if {$cur == 0} break
+                }
+
+                # A single call should never return more than count * 10 items (100).
+                # This prevents the pathological case where a deep bucket chain
+                # causes the reply to balloon to thousands of items.
+                assert {$max_per_call <= 100}
+
+                set keys [lsort -unique $keys]
+                assert_equal $total [llength $keys]
+            }
+        }
     }
 
     foreach enc {listpack hashtable} {

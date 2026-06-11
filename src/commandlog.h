@@ -27,8 +27,8 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#ifndef __COMMANDLOG_H__
-#define __COMMANDLOG_H__
+#ifndef VALKEY_COMMANDLOG_H
+#define VALKEY_COMMANDLOG_H
 
 #include "server.h"
 

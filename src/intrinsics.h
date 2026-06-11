@@ -1,5 +1,5 @@
-#ifndef __INTRINSICS_H
-#define __INTRINSICS_H
+#ifndef VALKEY_INTRINSICS_H
+#define VALKEY_INTRINSICS_H
 
 #include <stdint.h>
 

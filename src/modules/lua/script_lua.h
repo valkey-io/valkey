@@ -27,8 +27,8 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#ifndef __SCRIPT_LUA_H_
-#define __SCRIPT_LUA_H_
+#ifndef VALKEY_SCRIPT_LUA_H
+#define VALKEY_SCRIPT_LUA_H
 
 #include "engine_structs.h"
 

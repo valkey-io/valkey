@@ -27,8 +27,8 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#ifndef __BIO_H
-#define __BIO_H
+#ifndef VALKEY_BIO_H
+#define VALKEY_BIO_H
 
 typedef void lazy_free_fn(void *args[]);
 

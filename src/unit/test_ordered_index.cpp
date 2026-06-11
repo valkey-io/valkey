@@ -23,6 +23,13 @@ extern "C" {
 #include <string>
 #include <vector>
 
+/* Clean up shared lex sentinels allocated by OrderedIndexTest::SetUp(). */
+static void cleanupSharedSentinels(void) __attribute__((destructor));
+static void cleanupSharedSentinels(void) {
+    if (shared.minstring) { sdsfree(shared.minstring); shared.minstring = NULL; }
+    if (shared.maxstring) { sdsfree(shared.maxstring); shared.maxstring = NULL; }
+}
+
 /* Verify structural integrity of the ordered index after mutations. */
 static ::testing::AssertionResult verifyIntegrity(OrderedIndexTestApi &api, OrderedIndex *oi) {
     char errmsg[256];
@@ -1074,15 +1081,17 @@ TEST_P(OrderedIndexTest, LexRangeSentinels) {
     insert(0.0, "delta");
     insert(0.0, "echo");
 
+    sds charlie = sdsnew("charlie");
+
     /* Count with sentinels */
     ASSERT_EQ(countLexRange("minstring", "maxstring", 0, 0), 0UL); /* literal strings, not sentinels */
     ASSERT_EQ(api.countLexRange(oi, shared.minstring, shared.maxstring, 0, 0), 5UL);
-    ASSERT_EQ(api.countLexRange(oi, shared.minstring, sdsnew("charlie"), 0, 0), 3UL);
-    ASSERT_EQ(api.countLexRange(oi, sdsnew("charlie"), shared.maxstring, 0, 0), 3UL);
+    ASSERT_EQ(api.countLexRange(oi, shared.minstring, charlie, 0, 0), 3UL);
+    ASSERT_EQ(api.countLexRange(oi, charlie, shared.maxstring, 0, 0), 3UL);
 
     /* Inverted range (max < min sentinel) should return 0 */
     ASSERT_EQ(api.countLexRange(oi, shared.maxstring, shared.minstring, 0, 0), 0UL);
-    ASSERT_EQ(api.countLexRange(oi, sdsnew("charlie"), shared.minstring, 0, 0), 0UL);
+    ASSERT_EQ(api.countLexRange(oi, charlie, shared.minstring, 0, 0), 0UL);
 
     /* Seek with sentinels - iterate all */
     OrderedIndexIterator it;
@@ -1099,6 +1108,8 @@ TEST_P(OrderedIndexTest, LexRangeSentinels) {
     /* Delete with sentinels - delete all */
     ASSERT_EQ(api.deleteRangeByLex(oi, shared.minstring, shared.maxstring, 0, 0, NULL, NULL), 5UL);
     ASSERT_EQ(api.length(oi), 0UL);
+
+    sdsfree(charlie);
 }
 
 /* ========== Randomized property tests ========== */

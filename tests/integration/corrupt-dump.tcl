@@ -36,6 +36,22 @@ test {corrupt payload: hash with valid zip list header, invalid entry len} {
     }
 }
 
+test {corrupt payload: zipmap value length integer overflow} {
+    # A zipmap value length of 0xFFFFFFFF with a free byte of 1 makes the
+    # internal 'l + e' sum wrap to 0 in 32-bit arithmetic. Before the fix the
+    # validator advanced its cursor by the wrapped value and wrongly accepted
+    # the payload, which leads to out-of-bounds access on 32-bit builds.
+    start_server [list overrides [list loglevel verbose use-exit-on-panic yes crash-memcheck-enabled no] ] {
+        r debug set-skip-checksum-validation 1
+        catch {
+            r restore key 0 "\x09\x0c\x01\x03\x66\x6f\x6f\xfe\xff\xff\xff\xff\x01\xff\x0b\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+        } err
+        assert_match "*Bad data format*" $err
+        verify_log_message 0 "*Zipmap integrity check failed*" 0
+        assert_equal [r ping] "PONG"
+    }
+}
+
 test {corrupt payload: invalid zlbytes header} {
     start_server [list overrides [list loglevel verbose use-exit-on-panic yes crash-memcheck-enabled no] ] {
         catch {
@@ -706,6 +722,34 @@ test {corrupt payload: fuzzer findings - zset zslInsert with a NAN score} {
         catch {r restore _nan_zset 0 "\x05\x0A\x02\x5F\x39\x00\x00\x00\x00\x00\x00\x22\x40\xC0\x08\x00\x00\x00\x00\x00\x00\x20\x40\x02\x5F\x37\x00\x00\x00\x00\x00\x00\x1C\x40\xC0\x06\x00\x00\x00\x00\x00\x00\x18\x40\x02\x5F\x35\x00\x00\x00\x00\x00\x00\x14\x40\xC0\x04\x00\x00\x00\x00\x00\x00\x10\x40\x02\x5F\x33\x00\x00\x00\x00\x00\x00\x08\x40\xC0\x02\x00\x00\x00\x00\x00\x00\x00\x40\x02\x5F\x31\x00\x00\x00\x00\x00\x55\xF0\x7F\xC0\x00\x00\x00\x00\x00\x00\x00\x00\x00\x0A\x00\xEC\x94\x86\xD8\xFD\x5C\x5F\xD8"} err
         assert_match "*Bad data format*" $err
         r ping
+    }
+}
+
+test {corrupt payload: zset listpack with NAN score} {
+    # A listpack-encoded sorted set whose score parses to NAN must be rejected
+    # on load. zslInsertNode() asserts the score is not NAN, so otherwise the
+    # server would crash when the zset is converted to a skiplist (e.g. when it
+    # grows past zset-max-listpack-entries). The skiplist RDB format already
+    # rejects NAN scores; this covers the listpack format.
+    start_server [list overrides [list loglevel verbose use-exit-on-panic yes crash-memcheck-enabled no] ] {
+        r debug set-skip-checksum-validation 1
+        catch {r restore _nan_zset_lp 0 "\x11\x19\x19\x00\x00\x00\x04\x00\x82\x6D\x31\x03\x83\x6E\x61\x6E\x04\x82\x6D\x32\x03\x83\x32\x2E\x35\x04\xFF\x50\x00\xC5\x5C\xC6\x0C\x7D\xFF\xB5\x52"} err
+        assert_match "*Bad data format*" $err
+        verify_log_message 0 "*NAN score*" 0
+        assert_equal [r ping] "PONG"
+    }
+}
+
+test {corrupt payload: zset ziplist with NAN score} {
+    # Same as the listpack case but for the legacy ziplist format, which is
+    # converted to a listpack on load. A NAN score must be rejected so it can
+    # not crash the server when the zset is later converted to a skiplist.
+    start_server [list overrides [list loglevel verbose use-exit-on-panic yes crash-memcheck-enabled no] ] {
+        r debug set-skip-checksum-validation 1
+        catch {r restore _nan_zset_zl 0 "\x0C\x1D\x1D\x00\x00\x00\x17\x00\x00\x00\x04\x00\x00\x02\x6D\x31\x04\x03\x6E\x61\x6E\x05\x02\x6D\x32\x04\x03\x32\x2E\x35\xFF\x0B\x00\x00\x00\x00\x00\x00\x00\x00\x00"} err
+        assert_match "*Bad data format*" $err
+        verify_log_message 0 "*NAN score*" 0
+        assert_equal [r ping] "PONG"
     }
 }
 

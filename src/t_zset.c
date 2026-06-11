@@ -1527,7 +1527,8 @@ static void zuiInitIterator(zsetopsrc *op) {
         } else if (op->encoding == OBJ_ENCODING_SKIPLIST) {
             it->sl.zs = objectGetVal(op->subject);
             orderedIndexInitIterator(&it->sl.iter, it->sl.zs->oi);
-            orderedIndexSeekToIndex(&it->sl.iter, orderedIndexLength(it->sl.zs->oi) - 1);
+            unsigned long len = orderedIndexLength(it->sl.zs->oi);
+            if (len > 0) orderedIndexSeekToIndex(&it->sl.iter, len - 1);
             it->sl.node = NULL;
         } else {
             serverPanic("Unknown sorted set encoding");

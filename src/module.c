@@ -12024,8 +12024,12 @@ static void moduleScanKeyHashtableCallback(void *privdata, void *entry) {
         const char *ele;
         size_t ele_len;
         orderedIndexGetElementRaw((const OrderedIndexItem *)entry, &ele, &ele_len);
-        key = (sds)ele;
+        robj *field = createStringObject(ele, ele_len);
         value = createStringObjectFromLongDouble(orderedIndexGetScore((const OrderedIndexItem *)entry), 0);
+        data->fn(data->key, field, value, data->user_data);
+        decrRefCount(field);
+        if (value) decrRefCount(value);
+        return;
     } else if (o->type == OBJ_HASH) {
         key = entryGetField(entry);
         size_t val_len;

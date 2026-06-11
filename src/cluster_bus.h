@@ -20,7 +20,7 @@ typedef struct clusterBusType {
     void (*init)(void);
     void (*initLast)(void);
     void (*cron)(void);
-    void (*beforeSleep)(void);
+    void (*beforeSleep)(bool blocked);
     void (*prepareShutdown)(void); /* Called early in shutdown to allow graceful handoff. */
     void (*handleServerShutdown)(void);
 
@@ -82,6 +82,13 @@ typedef struct clusterBusType {
     /* Parse a protocol-specific variable from the nodes.conf "vars" line.
      * Returns 1 if the variable was handled, 0 otherwise. */
     int (*parseVarsLine)(const char *name, const char *value);
+
+    /* Parse a "log" line from nodes.conf. argv/argc are the split line
+     * (argv[0] is "log"). */
+    void (*parseLogLine)(sds *argv, int argc);
+
+    /* Append "log" lines during a full config rewrite. */
+    sds (*appendLogLines)(sds config);
 
     /* Called after nodes.conf is fully loaded, for post-load fixups
      * (e.g. ensuring currentEpoch >= max configEpoch). If NULL, skipped. */

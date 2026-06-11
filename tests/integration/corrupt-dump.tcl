@@ -725,6 +725,34 @@ test {corrupt payload: fuzzer findings - zset zslInsert with a NAN score} {
     }
 }
 
+test {corrupt payload: zset listpack with NAN score} {
+    # A listpack-encoded sorted set whose score parses to NAN must be rejected
+    # on load. zslInsertNode() asserts the score is not NAN, so otherwise the
+    # server would crash when the zset is converted to a skiplist (e.g. when it
+    # grows past zset-max-listpack-entries). The skiplist RDB format already
+    # rejects NAN scores; this covers the listpack format.
+    start_server [list overrides [list loglevel verbose use-exit-on-panic yes crash-memcheck-enabled no] ] {
+        r debug set-skip-checksum-validation 1
+        catch {r restore _nan_zset_lp 0 "\x11\x19\x19\x00\x00\x00\x04\x00\x82\x6D\x31\x03\x83\x6E\x61\x6E\x04\x82\x6D\x32\x03\x83\x32\x2E\x35\x04\xFF\x50\x00\xC5\x5C\xC6\x0C\x7D\xFF\xB5\x52"} err
+        assert_match "*Bad data format*" $err
+        verify_log_message 0 "*NAN score*" 0
+        assert_equal [r ping] "PONG"
+    }
+}
+
+test {corrupt payload: zset ziplist with NAN score} {
+    # Same as the listpack case but for the legacy ziplist format, which is
+    # converted to a listpack on load. A NAN score must be rejected so it can
+    # not crash the server when the zset is later converted to a skiplist.
+    start_server [list overrides [list loglevel verbose use-exit-on-panic yes crash-memcheck-enabled no] ] {
+        r debug set-skip-checksum-validation 1
+        catch {r restore _nan_zset_zl 0 "\x0C\x1D\x1D\x00\x00\x00\x17\x00\x00\x00\x04\x00\x00\x02\x6D\x31\x04\x03\x6E\x61\x6E\x05\x02\x6D\x32\x04\x03\x32\x2E\x35\xFF\x0B\x00\x00\x00\x00\x00\x00\x00\x00\x00"} err
+        assert_match "*Bad data format*" $err
+        verify_log_message 0 "*NAN score*" 0
+        assert_equal [r ping] "PONG"
+    }
+}
+
 test {corrupt payload: fuzzer findings - streamLastValidID panic} {
     start_server [list overrides [list loglevel verbose use-exit-on-panic yes crash-memcheck-enabled no] ] {
         r debug set-skip-checksum-validation 1

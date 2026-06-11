@@ -8939,8 +8939,10 @@ static void getRDB(clusterManagerNode *node) {
     }
     if (usemark) {
         payload = ULLONG_MAX - payload - RDB_EOF_MARK_SIZE;
-        if (!write_to_stdout && ftruncate(fd, payload) == -1)
+        if (!write_to_stdout && ftruncate(fd, payload) == -1) {
             fprintf(stderr, "ftruncate failed: %s.\n", strerror(errno));
+            exit(1);
+        }
         fprintf(stderr, "Transfer finished with success after %llu bytes\n", payload);
     } else {
         fprintf(stderr, "Transfer finished with success.\n");

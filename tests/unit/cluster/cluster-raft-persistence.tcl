@@ -22,7 +22,7 @@ test "Raft persistence: corrupt log line CRC prevents startup" {
         close $fp
 
         # Try to start server — it should panic.
-        catch {exec src/valkey-server $config_file --port $port --dir $dir} output
+        catch {exec $::VALKEY_SERVER_BIN $config_file --port $port --dir $dir} output
         assert_match "*Corrupt raft log line: CRC mismatch*" $output
 
         # Restart cleanly for framework teardown (remove corrupt line).
@@ -51,7 +51,7 @@ test "Raft persistence: missing log entry (index gap) prevents startup" {
         close $fp
 
         # Try to start server — it should panic.
-        catch {exec src/valkey-server $config_file --port $port --dir $dir} output
+        catch {exec $::VALKEY_SERVER_BIN $config_file --port $port --dir $dir} output
         assert_match "*Corrupt raft log: index gap*" $output
 
         # Restart cleanly for framework teardown (remove corrupt line).
@@ -81,7 +81,7 @@ test "Raft persistence: corrupt snapshot CRC prevents startup" {
         close $fp
 
         # Try to start server — it should panic due to CRC mismatch.
-        catch {exec src/valkey-server $config_file --port $port --dir $dir} output
+        catch {exec $::VALKEY_SERVER_BIN $config_file --port $port --dir $dir} output
         assert_match "*snapshot CRC mismatch*" $output
     }
 }

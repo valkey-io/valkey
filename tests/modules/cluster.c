@@ -66,6 +66,7 @@ int test_cluster_shards(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
 
 #define MSGTYPE_DING 1
 #define MSGTYPE_DONG 2
+#define MSGTYPE_TEST_UAF 3
 
 /* test.pingall */
 int PingallCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
@@ -89,6 +90,27 @@ void DongReceiver(ValkeyModuleCtx *ctx, const char *sender_id, uint8_t type, con
     ValkeyModule_Log(ctx, "notice", "DONG (type %d) RECEIVED from %.*s: '%.*s'", type, VALKEYMODULE_NODE_ID_LEN, sender_id, (int)len, payload);
 }
 
+int test_register_receiver(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    UNUSED(argv);
+    UNUSED(argc);
+    ValkeyModule_RegisterClusterMessageReceiver(ctx, MSGTYPE_TEST_UAF, DingReceiver);
+    return ValkeyModule_ReplyWithSimpleString(ctx, "OK");
+}
+
+int test_unregister_receiver(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    UNUSED(argv);
+    UNUSED(argc);
+    ValkeyModule_RegisterClusterMessageReceiver(ctx, MSGTYPE_TEST_UAF, NULL);
+    return ValkeyModule_ReplyWithSimpleString(ctx, "OK");
+}
+
+int test_send_msg_type3(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    UNUSED(argv);
+    UNUSED(argc);
+    ValkeyModule_SendClusterMessage(ctx, NULL, MSGTYPE_TEST_UAF, "TestUAF", 7);
+    return ValkeyModule_ReplyWithSimpleString(ctx, "OK");
+}
+
 int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     VALKEYMODULE_NOT_USED(argv);
     VALKEYMODULE_NOT_USED(argc);
@@ -107,6 +129,13 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
         return VALKEYMODULE_ERR;
 
     if (ValkeyModule_CreateCommand(ctx, "test.start_cluster_timer", test_start_cluster_timer, "", 0, 0, 0) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
+
+    if (ValkeyModule_CreateCommand(ctx, "test.register_receiver", test_register_receiver, "", 0, 0, 0) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
+    if (ValkeyModule_CreateCommand(ctx, "test.unregister_receiver", test_unregister_receiver, "", 0, 0, 0) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
+    if (ValkeyModule_CreateCommand(ctx, "test.send_msg_type3", test_send_msg_type3, "", 0, 0, 0) == VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
 
     /* Register our handlers for different message types. */

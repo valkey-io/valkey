@@ -97,10 +97,14 @@ static void dictEntryDestructorSdsKeyEngineFunctionValue(void *entry) {
     zfree(de);
 }
 
+/* Must be case-insensitive to stay consistent with functionDictType (the
+ * global function dict). Otherwise names differing only in case (e.g. "aaa"
+ * and "AAA") are stored as distinct entries here but collapse to one entry in
+ * the global dict, which later trips an assertion in libraryUnlink. */
 dictType libraryFunctionDictType = {
     .entryGetKey = dictEntryGetKey,
-    .hashFunction = dictSdsHash,
-    .keyCompare = dictSdsKeyCompare,
+    .hashFunction = dictCStrCaseHash,
+    .keyCompare = dictSdsKeyCaseCompare,
     .entryDestructor = dictEntryDestructorSdsKeyEngineFunctionValue,
 };
 

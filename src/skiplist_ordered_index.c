@@ -191,6 +191,14 @@ OrderedIndexItem *skiplistGetByIndex(OrderedIndex *oi, unsigned long index) {
     return (OrderedIndexItem *)zslGetElementByRank((zskiplist *)oi, index + 1);
 }
 
+OrderedIndexItem *skiplistGetFirst(OrderedIndex *oi) {
+    return (OrderedIndexItem *)zslGetFirst((const zskiplist *)oi);
+}
+
+OrderedIndexItem *skiplistGetLast(OrderedIndex *oi) {
+    return (OrderedIndexItem *)zslGetLast((const zskiplist *)oi);
+}
+
 unsigned long skiplistGetIndex(OrderedIndex *oi, const OrderedIndexItem *node) {
     return zslGetRank((zskiplist *)oi, (const zskiplistNode *)node) - 1;
 }

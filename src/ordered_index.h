@@ -115,6 +115,12 @@ unsigned long orderedIndexLength(OrderedIndex *oi);
 /* Return the item at the given 0-based index, or NULL if out of range. */
 OrderedIndexItem *orderedIndexGetByIndex(OrderedIndex *oi, unsigned long index);
 
+/* Return the first (lowest) item, or NULL if empty. O(1). */
+OrderedIndexItem *orderedIndexGetFirst(OrderedIndex *oi);
+
+/* Return the last (highest) item, or NULL if empty. O(1). */
+OrderedIndexItem *orderedIndexGetLast(OrderedIndex *oi);
+
 /* Return the 0-based index of an item. The item must be in the index. */
 unsigned long orderedIndexGetIndex(OrderedIndex *oi, const OrderedIndexItem *item);
 

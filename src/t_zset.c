@@ -3289,7 +3289,7 @@ void genericZpopCommand(client *c,
             OrderedIndexItem *zln;
 
             /* Get the first or last element in the sorted set. */
-            zln = (where == ZSET_MAX ? orderedIndexGetByIndex(oi, orderedIndexLength(oi) - 1) : orderedIndexGetByIndex(oi, 0));
+            zln = (where == ZSET_MAX ? orderedIndexGetLast(oi) : orderedIndexGetFirst(oi));
 
             /* There must be an element in the sorted set. */
             serverAssertWithInfo(c, zobj, zln != NULL);

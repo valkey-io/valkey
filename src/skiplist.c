@@ -651,6 +651,10 @@ zskiplistNode *zslGetFirst(const zskiplist *zsl) {
     return ((zskiplist *)zsl)->header.level[0].forward;
 }
 
+zskiplistNode *zslGetLast(const zskiplist *zsl) {
+    return zslGetTail(zsl);
+}
+
 double zslGetScore(const zskiplistNode *node) {
     return node->score;
 }

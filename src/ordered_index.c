@@ -81,6 +81,14 @@ OrderedIndexItem *orderedIndexGetByIndex(OrderedIndex *oi, unsigned long rank) {
     return skiplistGetByIndex(oi, rank);
 }
 
+OrderedIndexItem *orderedIndexGetFirst(OrderedIndex *oi) {
+    return skiplistGetFirst(oi);
+}
+
+OrderedIndexItem *orderedIndexGetLast(OrderedIndex *oi) {
+    return skiplistGetLast(oi);
+}
+
 unsigned long orderedIndexGetIndex(OrderedIndex *oi, const OrderedIndexItem *item) {
     return skiplistGetIndex(oi, item);
 }

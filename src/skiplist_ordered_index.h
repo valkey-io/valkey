@@ -39,6 +39,8 @@ unsigned long skiplistDeleteRangeByLex(OrderedIndex *oi, const_sds min, const_sd
 /* Query */
 unsigned long skiplistLength(OrderedIndex *oi);
 OrderedIndexItem *skiplistGetByIndex(OrderedIndex *oi, unsigned long rank);
+OrderedIndexItem *skiplistGetFirst(OrderedIndex *oi);
+OrderedIndexItem *skiplistGetLast(OrderedIndex *oi);
 unsigned long skiplistGetIndex(OrderedIndex *oi, const OrderedIndexItem *item);
 void skiplistGetElementRaw(const OrderedIndexItem *item, const char **ptr, size_t *len);
 double skiplistGetScore(const OrderedIndexItem *item);

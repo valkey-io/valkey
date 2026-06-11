@@ -655,6 +655,7 @@ int clusterLoadConfig(char *filename) {
     maxline = 1024 + CLUSTER_SLOTS * 128;
     line = zmalloc(maxline);
     tmp_cluster_nodes = dictCreate(&clusterNodesDictType);
+    uint64_t running_crc = 0;
     while (fgets(line, maxline, fp) != NULL) {
         int argc;
         sds *argv;
@@ -665,6 +666,23 @@ int clusterLoadConfig(char *filename) {
          * editing nodes.conf or by the config writing process if stopped
          * before the truncate() call. */
         if (line[0] == '\n' || line[0] == '\0') continue;
+
+        /* Handle "crc" line: verify integrity of all preceding lines
+         * (including any prior "crc" lines).
+         * Invariant: CRC is computed identically on write and read —
+         * blank lines are excluded, lines include trailing \n. */
+        if (strncasecmp(line, "crc ", 4) == 0) {
+            uint64_t expected = strtoull(line + 4, NULL, 16);
+            if (expected != running_crc) {
+                serverLog(LL_WARNING, "Corrupt cluster config: snapshot CRC mismatch.");
+                goto fmterr;
+            }
+            running_crc = crc64(running_crc, (unsigned char *)line, strlen(line));
+            continue;
+        }
+
+        /* Accumulate running CRC. */
+        running_crc = crc64(running_crc, (unsigned char *)line, strlen(line));
 
         /* Split the line into arguments for processing. */
         argv = sdssplitargs(line, &argc);
@@ -920,6 +938,11 @@ int clusterSaveConfig(int do_fsync) {
     ci = clusterGenNodesDescription(NULL, CLUSTER_NODE_HANDSHAKE, 0);
     if (clusterCurrentBus->appendVarsLine)
         ci = clusterCurrentBus->appendVarsLine(ci);
+    /* CRC over snapshot (node lines + vars), before log lines. */
+    if (clusterCurrentBus->appendLogLines) {
+        uint64_t crc = crc64(0, (unsigned char *)ci, sdslen(ci));
+        ci = sdscatprintf(ci, "crc %016llx\n", (unsigned long long)crc);
+    }
     if (clusterCurrentBus->appendLogLines)
         ci = clusterCurrentBus->appendLogLines(ci);
     content_size = sdslen(ci);

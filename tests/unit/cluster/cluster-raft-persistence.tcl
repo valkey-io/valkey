@@ -60,4 +60,29 @@ test "Raft persistence: missing log entry (index gap) prevents startup" {
         restart_server 0 true true
     }
 }
+
+test "Raft persistence: corrupt snapshot CRC prevents startup" {
+    start_server {overrides {cluster-enabled yes cluster-protocol raft cluster-node-timeout 1000}} {
+        set dir [lindex [R 0 CONFIG GET dir] 1]
+        set nodes_conf "$dir/nodes.conf"
+        set port [srv 0 port]
+        set config_file [srv 0 config_file]
+
+        # Stop server gracefully.
+        catch {R 0 SHUTDOWN NOSAVE}
+
+        # Replace the crc line with a wrong checksum.
+        set fp [open $nodes_conf r]
+        set content [read $fp]
+        close $fp
+        regsub {crc [0-9a-f]+} $content {crc 0000000000000000} content
+        set fp [open $nodes_conf w]
+        puts -nonewline $fp $content
+        close $fp
+
+        # Try to start server — it should panic due to CRC mismatch.
+        catch {exec src/valkey-server $config_file --port $port --dir $dir} output
+        assert_match "*snapshot CRC mismatch*" $output
+    }
+}
 } ;# tags

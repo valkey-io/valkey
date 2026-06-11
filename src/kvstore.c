@@ -689,6 +689,16 @@ int kvstoreIteratorGetCurrentHashtableIndex(kvstoreIterator *kvs_it) {
     return kvs_it->didx;
 }
 
+/* This is an internal function - not part of the standard API.  It must be explicitly declared
+ * where used.  It shouldn't be included in any .h (API) file.  Use of this interface is discouraged
+ * as it depends on the internal structure, which may change.
+ *
+ * Return the current hashtableIterator from within the kvstoreIterator.
+ */
+hashtableIterator *kvstoreInternalIteratorGetCurrentHashtableIterator(kvstoreIterator *kvs_it) {
+    return &kvs_it->di;
+}
+
 /* Fetches the next element and returns true. Returns false if there are no more elements. */
 bool kvstoreIteratorNext(kvstoreIterator *kvs_it, void **next) {
     if (kvs_it->didx != KVSTORE_INDEX_NOT_FOUND && hashtableNext(&kvs_it->di, next)) {

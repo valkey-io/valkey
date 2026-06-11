@@ -764,7 +764,6 @@ void clusterCommandSyncSlotsFinish(client *c) {
         return;
     }
 
-    addReply(c, shared.ok);
     slotMigrationJob *job = clusterLookupMigrationJob(name);
     if (!job) {
         addReplyError(c, "No such slot migration job");
@@ -781,6 +780,7 @@ void clusterCommandSyncSlotsFinish(client *c) {
         return;
     }
 
+    addReply(c, shared.ok);
     forceCommandPropagation(c, PROPAGATE_REPL | PROPAGATE_AOF);
     finishSlotMigrationJob(job, target_state, message);
 }
@@ -939,9 +939,10 @@ void clusterUpdateSlotImportsOnOwnershipChange(void) {
             finishSlotMigrationJob(job, SLOT_MIGRATION_JOB_FAILED,
                                    "Slots were unexpectedly assigned to myself "
                                    "during import");
+        } else {
+            finishSlotMigrationJob(job, SLOT_MIGRATION_JOB_FAILED,
+                                   "Slots are no longer owned by source node");
         }
-        finishSlotMigrationJob(job, SLOT_MIGRATION_JOB_FAILED,
-                               "Slots are no longer owned by source node");
     }
 }
 

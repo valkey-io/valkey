@@ -196,7 +196,7 @@ OrderedIndexItem *skiplistGetFirst(OrderedIndex *oi) {
 }
 
 OrderedIndexItem *skiplistGetLast(OrderedIndex *oi) {
-    return (OrderedIndexItem *)zslGetLast((const zskiplist *)oi);
+    return (OrderedIndexItem *)zslGetTail((const zskiplist *)oi);
 }
 
 unsigned long skiplistGetIndex(OrderedIndex *oi, const OrderedIndexItem *node) {

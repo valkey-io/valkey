@@ -40,6 +40,8 @@ class OrderedIndexTestApi {
     /* Query */
     virtual unsigned long length(OrderedIndex *oi) = 0;
     virtual OrderedIndexItem *getByIndex(OrderedIndex *oi, unsigned long rank) = 0;
+    virtual OrderedIndexItem *getFirst(OrderedIndex *oi) = 0;
+    virtual OrderedIndexItem *getLast(OrderedIndex *oi) = 0;
     virtual unsigned long getIndex(OrderedIndex *oi, const OrderedIndexItem *pos) = 0;
     virtual void getElementRaw(const OrderedIndexItem *pos, const char **ptr, size_t *len) = 0;
     virtual double getScore(const OrderedIndexItem *pos) = 0;
@@ -113,6 +115,12 @@ class SkiplistOrderedIndex : public OrderedIndexTestApi {
     }
     OrderedIndexItem *getByIndex(OrderedIndex *oi, unsigned long rank) override {
         return skiplistGetByIndex(oi, rank);
+    }
+    OrderedIndexItem *getFirst(OrderedIndex *oi) override {
+        return skiplistGetFirst(oi);
+    }
+    OrderedIndexItem *getLast(OrderedIndex *oi) override {
+        return skiplistGetLast(oi);
     }
     unsigned long getIndex(OrderedIndex *oi, const OrderedIndexItem *pos) override {
         return skiplistGetIndex(oi, pos);

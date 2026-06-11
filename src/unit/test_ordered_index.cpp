@@ -400,6 +400,28 @@ TEST_P(OrderedIndexTest, PopLast) {
     verifyOI();
 }
 
+TEST_P(OrderedIndexTest, GetFirstAndLast) {
+    /* Empty index returns NULL */
+    ASSERT_EQ(api.getFirst(oi), nullptr);
+    ASSERT_EQ(api.getLast(oi), nullptr);
+
+    insert(2.0, "bravo");
+    insert(1.0, "alpha");
+    insert(3.0, "charlie");
+
+    assertElement(api.getFirst(oi), "alpha");
+    assertScore(api.getFirst(oi), 1.0);
+    assertElement(api.getLast(oi), "charlie");
+    assertScore(api.getLast(oi), 3.0);
+
+    /* Single element: first == last */
+    api.deleteItem(oi, api.getFirst(oi));
+    api.deleteItem(oi, api.getLast(oi));
+    ASSERT_EQ(api.length(oi), 1UL);
+    assertElement(api.getFirst(oi), "bravo");
+    assertElement(api.getLast(oi), "bravo");
+}
+
 TEST_P(OrderedIndexTest, UpdateScore) {
     OrderedIndexItem *node1 = insert(1.0, "key1");
     OrderedIndexItem *node2 = insert(2.0, "key2");
@@ -1363,6 +1385,7 @@ TEST_P(OrderedIndexTest, RandomizedDelete) {
         }
         ASSERT_EQ(count, n - 1);
         api.resetIterator(&iter);
+        freeRandomEntries(entries, n);
         api.free(oi);
         oi = api.create();
     }
@@ -1394,6 +1417,7 @@ TEST_P(OrderedIndexTest, RandomizedUpdateScore) {
         }
         api.resetIterator(&iter);
         api.free(oi);
+        freeRandomEntries(entries, n);
         oi = api.create();
     }
 }
@@ -1478,6 +1502,7 @@ TEST_P(OrderedIndexTest, RandomizedDeleteRangeByScore) {
         }
         api.resetIterator(&iter);
         api.free(oi);
+        freeRandomEntries(entries, n);
         oi = api.create();
     }
 }
@@ -1703,11 +1728,12 @@ TEST_F(OnDeleteCallbackTest, DeleteRangeByScore_EmptyAndNoMatch) {
 
     oi = api.create();
     insertN(5);
-    rec = {0, {}};
+    rec.count = 0;
     deleted = api.deleteRangeByScore(oi, 10.0, 20.0, 0, 0, testOnDeleteCallback, &rec);
     ASSERT_EQ(deleted, 0UL);
     ASSERT_EQ(rec.count, 0);
     ASSERT_EQ(api.length(oi), 5UL);
+    freeOnDeleteRecord(&rec);
 }
 
 TEST_F(OnDeleteCallbackTest, DeleteRangeByScore_Subset) {
@@ -1730,6 +1756,7 @@ TEST_F(OnDeleteCallbackTest, DeleteRangeByScore_Subset) {
         ASSERT_SDS_ARRAY_EQ(_r, _rn, "key0", "key1", "key2", "key7", "key8", "key9");
         freeSdsArray(_r, _rn);
     }
+    freeOnDeleteRecord(&rec);
 }
 
 TEST_F(OnDeleteCallbackTest, DeleteRangeByScore_All) {
@@ -1742,6 +1769,7 @@ TEST_F(OnDeleteCallbackTest, DeleteRangeByScore_All) {
     ASSERT_EQ(rec.count, 5);
     ASSERT_EQ(api.length(oi), 0UL);
     verifyOI();
+    freeOnDeleteRecord(&rec);
 }
 
 TEST_F(OnDeleteCallbackTest, DeleteRangeByScore_NullCallback) {
@@ -1763,6 +1791,7 @@ TEST_F(OnDeleteCallbackTest, DeleteRangeByScore_ExclusiveBounds) {
     sortSdsArray(rec.elements, rec.count);
     ASSERT_SDS_ARRAY_EQ(rec.elements, rec.count, "key4", "key5", "key6");
     ASSERT_EQ(api.length(oi), 7UL);
+    freeOnDeleteRecord(&rec);
 }
 
 TEST_F(OnDeleteCallbackTest, DeleteRangeByScore_SingleElement) {
@@ -1775,6 +1804,7 @@ TEST_F(OnDeleteCallbackTest, DeleteRangeByScore_SingleElement) {
     ASSERT_EQ(rec.count, 1);
     ASSERT_STREQ(rec.elements[0], "key2");
     ASSERT_EQ(api.length(oi), 4UL);
+    freeOnDeleteRecord(&rec);
 }
 
 /* DeleteRangeByIndex */
@@ -1790,11 +1820,12 @@ TEST_F(OnDeleteCallbackTest, DeleteRangeByIndex_EmptyAndNoMatch) {
 
     oi = api.create();
     insertN(3);
-    rec = {0, {}};
+    rec.count = 0;
     deleted = api.deleteRangeByIndex(oi, 10, 20, testOnDeleteCallback, &rec);
     ASSERT_EQ(deleted, 0UL);
     ASSERT_EQ(rec.count, 0);
     ASSERT_EQ(api.length(oi), 3UL);
+    freeOnDeleteRecord(&rec);
 }
 
 TEST_F(OnDeleteCallbackTest, DeleteRangeByIndex_Subset) {
@@ -1816,6 +1847,7 @@ TEST_F(OnDeleteCallbackTest, DeleteRangeByIndex_Subset) {
         ASSERT_SDS_ARRAY_EQ(_r, _rn, "key0", "key1", "key5", "key6", "key7", "key8", "key9");
         freeSdsArray(_r, _rn);
     }
+    freeOnDeleteRecord(&rec);
 }
 
 TEST_F(OnDeleteCallbackTest, DeleteRangeByIndex_All) {
@@ -1827,6 +1859,7 @@ TEST_F(OnDeleteCallbackTest, DeleteRangeByIndex_All) {
     ASSERT_EQ(deleted, 5UL);
     ASSERT_EQ(rec.count, 5);
     ASSERT_EQ(api.length(oi), 0UL);
+    freeOnDeleteRecord(&rec);
 }
 
 TEST_F(OnDeleteCallbackTest, DeleteRangeByIndex_NullCallback) {
@@ -1853,6 +1886,7 @@ TEST_F(OnDeleteCallbackTest, DeleteRangeByIndex_ExclusiveBounds) {
         ASSERT_SDS_ARRAY_EQ(_r, _rn, "key0", "key1", "key3", "key4");
         freeSdsArray(_r, _rn);
     }
+    freeOnDeleteRecord(&rec);
 }
 
 TEST_F(OnDeleteCallbackTest, DeleteRangeByIndex_SingleElement) {
@@ -1865,6 +1899,7 @@ TEST_F(OnDeleteCallbackTest, DeleteRangeByIndex_SingleElement) {
     ASSERT_EQ(rec.count, 1);
     ASSERT_STREQ(rec.elements[0], "key0");
     ASSERT_EQ(api.length(oi), 4UL);
+    freeOnDeleteRecord(&rec);
 }
 
 /* DeleteRangeByLex */
@@ -1887,7 +1922,7 @@ TEST_F(OnDeleteCallbackTest, DeleteRangeByLex_EmptyAndNoMatch) {
         const char *_l[] = {"apple", "banana", "cherry"};
         insertLex(_l, 3);
     }
-    rec = {0, {}};
+    rec.count = 0;
     min = sdsnew("x");
     max = sdsnew("z");
     deleted = api.deleteRangeByLex(oi, min, max, 0, 0, testOnDeleteCallback, &rec);
@@ -1896,6 +1931,7 @@ TEST_F(OnDeleteCallbackTest, DeleteRangeByLex_EmptyAndNoMatch) {
     ASSERT_EQ(api.length(oi), 3UL);
     sdsfree(min);
     sdsfree(max);
+    freeOnDeleteRecord(&rec);
 }
 
 TEST_F(OnDeleteCallbackTest, DeleteRangeByLex_Subset) {
@@ -1925,6 +1961,7 @@ TEST_F(OnDeleteCallbackTest, DeleteRangeByLex_Subset) {
 
     sdsfree(min);
     sdsfree(max);
+    freeOnDeleteRecord(&rec);
 }
 
 TEST_F(OnDeleteCallbackTest, DeleteRangeByLex_All) {
@@ -1944,6 +1981,7 @@ TEST_F(OnDeleteCallbackTest, DeleteRangeByLex_All) {
 
     sdsfree(min);
     sdsfree(max);
+    freeOnDeleteRecord(&rec);
 }
 
 TEST_F(OnDeleteCallbackTest, DeleteRangeByLex_NullCallback) {
@@ -1994,6 +2032,7 @@ TEST_F(OnDeleteCallbackTest, DeleteRangeByLex_ExclusiveBounds) {
 
     sdsfree(min);
     sdsfree(max);
+    freeOnDeleteRecord(&rec);
 }
 
 TEST_F(OnDeleteCallbackTest, DeleteRangeByLex_SingleElement) {
@@ -2021,6 +2060,7 @@ TEST_F(OnDeleteCallbackTest, DeleteRangeByLex_SingleElement) {
 
     sdsfree(min);
     sdsfree(max);
+    freeOnDeleteRecord(&rec);
 }
 
 /* ========== Range-Delete Hashtable Consistency Tests ========== */
@@ -2125,6 +2165,7 @@ TEST_F(RangeDeleteHashtableConsistencyTest, ByScore_PartialDelete) {
     api.deleteRangeByScore(oi, 3.0, 6.0, 0, 0, hashtableConsistencyOnDelete, &simulatedHt);
 
     assertHtMatchesIndex(simulatedHt);
+    simHtFree(&simulatedHt);
 }
 
 TEST_F(RangeDeleteHashtableConsistencyTest, ByScore_FullDelete) {
@@ -2135,6 +2176,7 @@ TEST_F(RangeDeleteHashtableConsistencyTest, ByScore_FullDelete) {
     api.deleteRangeByScore(oi, NEG_INF, POS_INF, 0, 0, hashtableConsistencyOnDelete, &simulatedHt);
 
     assertHtMatchesIndex(simulatedHt);
+    simHtFree(&simulatedHt);
 }
 
 TEST_F(RangeDeleteHashtableConsistencyTest, ByScore_EmptyRange) {
@@ -2145,6 +2187,7 @@ TEST_F(RangeDeleteHashtableConsistencyTest, ByScore_EmptyRange) {
     api.deleteRangeByScore(oi, 20.0, 30.0, 0, 0, hashtableConsistencyOnDelete, &simulatedHt);
 
     assertHtMatchesIndex(simulatedHt);
+    simHtFree(&simulatedHt);
 }
 
 /* ByIndex */
@@ -2157,6 +2200,7 @@ TEST_F(RangeDeleteHashtableConsistencyTest, ByIndex_PartialDelete) {
     api.deleteRangeByIndex(oi, 2, 4, hashtableConsistencyOnDelete, &simulatedHt);
 
     assertHtMatchesIndex(simulatedHt);
+    simHtFree(&simulatedHt);
 }
 
 TEST_F(RangeDeleteHashtableConsistencyTest, ByIndex_FullDelete) {
@@ -2167,6 +2211,7 @@ TEST_F(RangeDeleteHashtableConsistencyTest, ByIndex_FullDelete) {
     api.deleteRangeByIndex(oi, 0, 9, hashtableConsistencyOnDelete, &simulatedHt);
 
     assertHtMatchesIndex(simulatedHt);
+    simHtFree(&simulatedHt);
 }
 
 TEST_F(RangeDeleteHashtableConsistencyTest, ByIndex_EmptyRange) {
@@ -2177,6 +2222,7 @@ TEST_F(RangeDeleteHashtableConsistencyTest, ByIndex_EmptyRange) {
     api.deleteRangeByIndex(oi, 20, 30, hashtableConsistencyOnDelete, &simulatedHt);
 
     assertHtMatchesIndex(simulatedHt);
+    simHtFree(&simulatedHt);
 }
 
 /* ByLex */
@@ -2197,6 +2243,7 @@ TEST_F(RangeDeleteHashtableConsistencyTest, ByLex_PartialDelete) {
 
     sdsfree(min);
     sdsfree(max);
+    simHtFree(&simulatedHt);
 }
 
 TEST_F(RangeDeleteHashtableConsistencyTest, ByLex_FullDelete) {
@@ -2215,6 +2262,7 @@ TEST_F(RangeDeleteHashtableConsistencyTest, ByLex_FullDelete) {
 
     sdsfree(min);
     sdsfree(max);
+    simHtFree(&simulatedHt);
 }
 
 TEST_F(RangeDeleteHashtableConsistencyTest, ByLex_EmptyRange) {
@@ -2233,4 +2281,5 @@ TEST_F(RangeDeleteHashtableConsistencyTest, ByLex_EmptyRange) {
 
     sdsfree(min);
     sdsfree(max);
+    simHtFree(&simulatedHt);
 }

@@ -12015,30 +12015,26 @@ static void moduleScanKeyHashtableCallback(void *privdata, void *entry) {
     ScanKeyCBData *data = privdata;
     robj *o = data->key->value;
     robj *value = NULL;
-    sds key = NULL;
+    const char *key_ptr = NULL;
+    size_t key_len = 0;
 
     if (o->type == OBJ_SET) {
-        key = entry;
+        key_ptr = entry;
+        key_len = sdslen(entry);
         /* no value */
     } else if (o->type == OBJ_ZSET) {
-        const char *ele;
-        size_t ele_len;
-        orderedIndexGetElementRaw((const OrderedIndexItem *)entry, &ele, &ele_len);
-        robj *field = createStringObject(ele, ele_len);
+        orderedIndexGetElementRaw((const OrderedIndexItem *)entry, &key_ptr, &key_len);
         value = createStringObjectFromLongDouble(orderedIndexGetScore((const OrderedIndexItem *)entry), 0);
-        data->fn(data->key, field, value, data->user_data);
-        decrRefCount(field);
-        if (value) decrRefCount(value);
-        return;
     } else if (o->type == OBJ_HASH) {
-        key = entryGetField(entry);
+        key_ptr = entryGetField(entry);
+        key_len = sdslen(entryGetField(entry));
         size_t val_len;
         char *val = entryGetValue(entry, &val_len);
         value = createStringObject(val, val_len);
     } else {
         serverPanic("unexpected object type");
     }
-    robj *field = createStringObject(key, sdslen(key));
+    robj *field = createStringObject(key_ptr, key_len);
 
     data->fn(data->key, field, value, data->user_data);
     decrRefCount(field);

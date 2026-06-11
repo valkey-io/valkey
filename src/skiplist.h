@@ -174,7 +174,6 @@ void zslSeekToLexRange(zslIter *iter, const_sds min, const_sds max, int min_ex, 
 
 /* Additional accessors */
 zskiplistNode *zslGetFirst(const zskiplist *zsl);
-zskiplistNode *zslGetLast(const zskiplist *zsl);
 double zslGetScore(const zskiplistNode *node);
 zskiplistNode *zslDetachNode(zskiplist *zsl, zskiplistNode *node);
 

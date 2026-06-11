@@ -88,6 +88,8 @@ License: CC0-1.0 AND BSD-2-Clause
 
 Files: deps/lua/*
 Copyright: 1994-2012, Lua.org, PUC-Rio
+           2008-2012, Mike Pall
+           2010-2012, Mark Pulford <mark@kyne.com.au>
            2015-2024, Redis Ltd.
            2024-present, Valkey contributors
 License: MIT
@@ -97,7 +99,8 @@ Copyright: 2021, The fast_float authors
 License: MIT
 
 Files: deps/fpconv/*
-Copyright: 2013, Andreas Samoljuk
+Copyright: 2013-2019, Andreas Samoljuk <as.smljk@gmail.com>
+           2009, Florian Loitsch <florian.loitsch@inria.fr>
 License: BSL-1.0
 
 Files: deps/gtest-parallel/*

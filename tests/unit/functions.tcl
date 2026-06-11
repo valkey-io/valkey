@@ -63,6 +63,25 @@ start_server {tags {"scripting"}} {
         r fcall TEST 0
     } {hello1}
 
+    test {FUNCTION - registering names differing only in case is rejected} {
+        catch {
+            r function load {#!lua name=casecollision
+                server.register_function('myfunc', function() return 1 end)
+                server.register_function('MYFUNC', function() return 2 end)}
+        } e
+        set _ $e
+    } {*Function already exists in the library*}
+
+    test {FUNCTION - delete after case collision attempt does not crash server} {
+        # Before the fix, the rejected case-collision above could leave the
+        # library and the global function dict inconsistent and crash the
+        # server on the next delete. Confirm the server is still responsive.
+        r function load REPLACE {#!lua name=casecollision
+            server.register_function('safefunc', function() return 1 end)}
+        assert_equal {OK} [r function delete casecollision]
+        r ping
+    } {PONG}
+
     test {FUNCTION - test replace argument with failure keeps old libraries} {
         catch {r function load REPLACE [get_function_code LUA test test {error}]} e
         assert_match {ERR Error compiling function*} $e
@@ -1272,4 +1291,44 @@ start_server {tags {"scripting"}} {
         set _ $e
     } {*Script attempted to access nonexistent global variable 'getmetatable'*}
 
+}
+
+start_multiple_servers 2 {tags {"repl scripting external:skip needs:debug"}} {
+    test "Full sync events are not processed during the replica slow script" {
+        set primary [srv -1 client]
+        set primary_host [srv -1 host]
+        set primary_port [srv -1 port]
+
+        set replica [srv 0 client]
+        $replica config set busy-reply-threshold 1
+        $replica config set loading-process-events-interval-bytes 1024
+        $replica config set repl-diskless-load flush-before-load
+
+        # Load a `while true` function.
+        $primary function load [get_no_writes_function_code lua test test {while true do end}]
+
+        # Setup the replication
+        $replica replicaof $primary_host $primary_port
+        wait_for_sync $replica
+
+        # Replica executes the function and make sure it enters the BUSY state.
+        set rd [valkey_deferring_client]
+        $rd fcall_ro test 0
+        set loglines [wait_for_log_messages 0 {"*Slow script detected*"} 0 1000 10]
+        assert_error {BUSY*} {$replica ping}
+
+        # Trigger a full sync.
+        $primary debug change-repl-id
+        $primary client kill type replica
+        wait_replica_online $primary
+
+        # Replica is still running the function and it is OK
+        assert_error {BUSY*} {$replica ping}
+        $replica function kill
+        after 200 ; # Give some time to Lua to call the hook again...
+        wait_for_sync $replica
+        $replica ping
+
+        $rd close
+    }
 }

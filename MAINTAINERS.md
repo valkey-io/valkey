@@ -28,10 +28,11 @@ Maintainers listed in alphabetical order by their github ID.
 
 Committers listed in alphabetical order by their github ID.
 
-| Committer           | GitHub ID     | Affiliation |
-| ------------------- | ------------- | ----------- |
-| Jim Brunner         | @JimB123      | Amazon      |
-| Ricardo Dias        | @rjd15372     | Percona     |
+| Committer           | GitHub ID          | Affiliation |
+| ------------------- | ------------------ | ----------- |
+| Jim Brunner         | @JimB123           | Amazon      |
+| Ricardo Dias        | @rjd15372          | Percona     |
+| Sarthak Aggarwal    | @sarthakaggarwal97 | Amazon      |
 
 ## Former Maintainers and Committers 
 

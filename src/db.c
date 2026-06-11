@@ -432,8 +432,7 @@ void setKey(client *c, serverDb *db, robj *key, robj **valref, int flags) {
     } else {
         dbSetValue(db, key, valref, 1, NULL);
     }
-    bgIterationEntryMetadata *md = (bgIterationEntryMetadata *)objectGetMetadata(*valref);
-    if (md) md->iterator_epoch = bgIteration_getEpoch();
+    bgIteration_dbEntryModified(*valref);
     if (!(flags & SETKEY_KEEPTTL)) removeExpire(db, key);
     if (!(flags & SETKEY_NO_SIGNAL)) signalModifiedKey(c, db, key);
 }
@@ -762,15 +761,7 @@ long long dbTotalServerKeyCount(void) {
 void signalModifiedKey(client *c, serverDb *db, robj *key) {
     touchWatchedKey(db, key);
     trackingInvalidateKey(c, key, 1);
-
-    /* If bgIteration is running, need to maintain the iteration epoch. */
-    if (bgIteration_iterationActive()) {
-        dbEntry *o = dbFind(db, objectGetVal(key));
-        if (o) {
-            bgIterationEntryMetadata *md = (bgIterationEntryMetadata *)objectGetMetadata(o);
-            if (md) md->iterator_epoch = bgIteration_getEpoch();
-        }
-    }
+    bgIteration_keyModified(db->id, objectGetVal(key));
 }
 
 void signalFlushedDb(int dbid, int async) {

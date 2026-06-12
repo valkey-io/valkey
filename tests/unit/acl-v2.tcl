@@ -347,6 +347,24 @@ start_server {tags {"acl external:skip"}} {
         assert_equal "" [dict get $secondary_selector databases]
     }
 
+    test {Test ACL LIST omits implicit alldbs} {
+        set response [lindex [r ACL LIST] [lsearch [r ACL LIST] "user default*"]]
+        assert_no_match "* alldbs *" $response
+
+        r ACL SETUSER user-list-alldbs on nopass -@all +get ~* &* alldbs
+        set response [lindex [r ACL LIST] [lsearch [r ACL LIST] "user user-list-alldbs*"]]
+        assert_no_match "* alldbs *" $response
+
+        r ACL SETUSER user-list-alldbs db=0,1
+        set response [lindex [r ACL LIST] [lsearch [r ACL LIST] "user user-list-alldbs*"]]
+        assert_match "* db=0,1 *" $response
+
+        r ACL SETUSER user-list-alldbs resetdbs
+        set response [lindex [r ACL LIST] [lsearch [r ACL LIST] "user user-list-alldbs*"]]
+        assert_match "* resetdbs *" $response
+
+        r ACL DELUSER user-list-alldbs
+    }
 
     test {Test ACL list idempotency} {
         r ACL SETUSER user-idempotency off -@all +get resetchannels &channel1 %R~foo1 %W~bar1 ~baz1 (-@all +set resetchannels &channel2 %R~foo2 %W~bar2 ~baz2)
@@ -953,18 +971,24 @@ start_server {tags {"acl external:skip"}} {
         assert_equal "OK" [r ACL DRYRUN db-dryrun SELECT 0]
         assert_equal "OK" [r ACL DRYRUN db-dryrun SELECT 1]
         
-        assert_match "*has no permissions to access database*" [r ACL DRYRUN db-dryrun SELECT 2]
-        assert_match "*has no permissions to access database*" [r ACL DRYRUN db-dryrun MOVE key 2]
-        assert_match "*has no permissions to access database*" [r ACL DRYRUN db-dryrun SWAPDB 0 2]
+        # The denied error message should point at the specific dbid.
+        assert_match "*has no permissions to access database 2*" [r ACL DRYRUN db-dryrun SELECT 2]
+        assert_match "*has no permissions to access database 2*" [r ACL DRYRUN db-dryrun MOVE key 2]
+        assert_match "*has no permissions to access database 2*" [r ACL DRYRUN db-dryrun SWAPDB 0 2]
 
         assert_equal "OK" [r ACL DRYRUN db-dryrun COPY key1 key2 DB 1]
         assert_equal "OK" [r ACL DRYRUN db-dryrun COPY key1 key2 DB 1 REPLACE]
         assert_equal "OK" [r ACL DRYRUN db-dryrun COPY key1 key2 REPLACE DB 1]
-        assert_match "*has no permissions to access database*" [r ACL DRYRUN db-dryrun COPY key1 key2 DB 2]
-        assert_match "*has no permissions to access database*" [r ACL DRYRUN db-dryrun COPY key1 key2 DB 2 REPLACE]
-        assert_match "*has no permissions to access database*" [r ACL DRYRUN db-dryrun COPY key1 key2 REPLACE DB 2]
+        assert_match "*has no permissions to access database 2*" [r ACL DRYRUN db-dryrun COPY key1 key2 DB 2]
+        assert_match "*has no permissions to access database 2*" [r ACL DRYRUN db-dryrun COPY key1 key2 DB 2 REPLACE]
+        assert_match "*has no permissions to access database 2*" [r ACL DRYRUN db-dryrun COPY key1 key2 REPLACE DB 2]
+
+        # When DB appears more than once in COPY, the error should
+        # name the first denied dbid (here DB 2 is the offending one).
+        assert_match "*has no permissions to access database 2*" [r ACL DRYRUN db-dryrun COPY key1 key2 DB 2 DB 1]
+        assert_match "*has no permissions to access database 2*" [r ACL DRYRUN db-dryrun COPY key1 key2 DB 1 DB 2]
     }
-    
+
     test {Test db= with maximum database ID} {
         set max_db [expr {[lindex [r config get databases] 1] - 1}]
         r ACL SETUSER db-max on nopass +@all ~* db=$max_db
@@ -1485,7 +1509,41 @@ start_server {tags {"acl external:skip"}} {
         assert {[s acl_access_denied_db] eq [expr $current_invalid_db_accesses + 3]}
         
         # Cleanup
+        $r2 reset
         r ACL deluser invaliddbuser
+    }
+
+    test {ACL LOG records the offending dbid for db=denied commands} {
+        r ACL SETUSER db-log-user on nopass +@all ~* db=0,1
+        $r2 auth db-log-user password
+        $r2 select 0
+        $r2 set src hello
+
+        # Each command exercises a different argv position for the dbid.
+        foreach {cmd expected} {
+            {SELECT 2}                        "2"
+            {MOVE k 2}                        "2"
+            {SWAPDB 2 0}                      "2"
+            {SWAPDB 0 2}                      "2"
+            {COPY src dst DB 2}               "2"
+            {COPY src dst REPLACE DB 2}       "2"
+            {COPY src dst DB 2 REPLACE}       "2"
+            {COPY src dst DB 1 DB 2}          "2"
+            {COPY src dst REPLACE DB 1 DB 2}  "2"
+            {COPY src dst DB 1 REPLACE DB 2}  "2"
+            {COPY src dst DB 1 DB 2 REPLACE}  "2"
+            {COPY src dst DB 2 DB 1}          "2"
+            {COPY src dst REPLACE DB 2 DB 1}  "2"
+            {COPY src dst DB 2 REPLACE DB 1}  "2"
+            {COPY src dst DB 2 DB 1 REPLACE}  "2"
+            {FLUSHALL}                        "flushall"
+        } {
+            r ACL LOG RESET
+            assert_error {NOPERM *} {$r2 {*}$cmd}
+            set entry [lindex [r ACL LOG] 0]
+            assert_equal "database" [dict get $entry reason]
+            assert_equal $expected [dict get $entry object]
+        }
     }
 
     $r2 close

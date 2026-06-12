@@ -585,8 +585,10 @@ start_server {tags {"other external:skip"}} {
 
 start_server {tags {"other external:skip"}} {
     test "test io-threads are runtime modifiable" {
+        # Each toggle spawns/joins real pthreads; too slow for 100 iterations under Valgrind.
+        set iterations [expr {$::valgrind ? 10 : 100}]
         # Randomly set the number of threads between 1 and 5
-        for {set i 0} {$i < 100} {incr i} {
+        for {set i 0} {$i < $iterations} {incr i} {
             set random_num [expr {int(rand() * 5) + 1}]
             r config set io-threads $random_num
             set thread_num [lindex [r config get io-threads] 1]

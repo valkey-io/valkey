@@ -8626,7 +8626,7 @@ static void freeClusterNodesMemory(dict *nodes) {
 /* clusterx setnodes $all_nodes_info $version $force
  * one line of $all_nodes_info: $node_id $host $port $role $master_node_id $slot_range */
 int setClusterNodes(client *c, sds nodes_str, long long version) {
-    char (*slots_nodes)[CLUSTER_NAMELEN] =zcalloc(CLUSTER_SLOTS * CLUSTER_NAMELEN);
+    char (*slots_nodes)[CLUSTER_NAMELEN] = zcalloc(CLUSTER_SLOTS * CLUSTER_NAMELEN);
     dict *new_nodes = dictCreate(&clusterNodesDictType);
 
     int result = parseClusterNodes(c, nodes_str, new_nodes, slots_nodes);
@@ -8828,7 +8828,7 @@ int parseClusterNodes(client *c, sds nodes_str, dict *new_nodes, char slots_node
 
             if ((p = strchr(argv[j], '-')) != NULL) {
                 long val = strtol(argv[j], &endptr, 10);
-                if (endptr != p || val < 0 || val >=CLUSTER_SLOTS) {
+                if (endptr != p || val < 0 || val >= CLUSTER_SLOTS) {
                     addReplyErrorFormat(c, "Invalid slot range, line %d, '%s'", i, argv[j]);
                     sdsfreesplitres(argv, argc);
                     goto checkerr;
@@ -8900,8 +8900,7 @@ int parseClusterNodes(client *c, sds nodes_str, dict *new_nodes, char slots_node
     }
 
     /* Check that all slots are covered */
-    for (int i=0; i < CLUSTER_SLOTS; i++)
-    {
+    for (int i = 0; i < CLUSTER_SLOTS; i++) {
         if (slots_nodes[i][0] == '\0') {
             addReplyErrorFormat(c, "Slot %d is not covered by any node", i);
             return C_ERR;

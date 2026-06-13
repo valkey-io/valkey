@@ -73,9 +73,9 @@ typedef struct {
 enum raftRole {
     RAFT_ROLE_JOINER = 0, /* Stepped down singleton waiting to be added to a cluster */
     RAFT_ROLE_FOLLOWER = 1,
-    RAFT_ROLE_CANDIDATE = 2,
-    RAFT_ROLE_LEADER = 3,
-    RAFT_ROLE_PRE_CANDIDATE = 4,
+    RAFT_ROLE_PRE_CANDIDATE = 2,
+    RAFT_ROLE_CANDIDATE = 3,
+    RAFT_ROLE_LEADER = 4,
 };
 
 /* --------------------------------------------------------------------------
@@ -313,7 +313,7 @@ static sds clusterRaftBuildMyNodeInfo(void);
 static void clusterRaftCheckSlotCoverage(void);
 static void clusterRaftBroadcastAppendEntries(void);
 static void clusterRaftSendAppendEntries(clusterLink *link, clusterNode *node);
-static void clusterRaftSendPreVote(clusterLink *link, uint64_t term);
+static void clusterRaftSendPreVoteRequest(clusterLink *link, uint64_t term);
 static void clusterRaftUnblockMeet(clusterNode *node);
 static void clusterRaftApplySlotChange(sds data);
 static void clusterRaftApplySetReplica(sds data);
@@ -328,6 +328,7 @@ static void raftLogTruncateFrom(uint64_t index);
 static void clusterRaftPersistNewLogEntries(uint64_t from);
 static uint64_t raftLogLastTerm(void);
 static int clusterRaftCanGrantVote(clusterRaftState *rs, uint64_t candidate_last_index, uint64_t candidate_last_term);
+static void clusterRaftStartElection(void);
 
 static void clusterRaftRandomizeElectionTimeout(void) {
     mstime_t base = server.cluster_node_timeout;
@@ -853,7 +854,7 @@ static int clusterRaftProcessPropose(clusterLink *link, int argc, sds *argv) {
  * -------------------------------------------------------------------------- */
 
 /* Forward declarations for pre-vote handlers. */
-static int clusterRaftProcessPreVote(clusterLink *link, int argc, sds *argv);
+static int clusterRaftProcessPreVoteRequest(clusterLink *link, int argc, sds *argv);
 static int clusterRaftProcessPreVoteResponse(clusterLink *link, int argc, sds *argv);
 static void clusterRaftStartPreVote(void);
 
@@ -1440,8 +1441,8 @@ static int clusterRaftProcessAppendEntriesResponse(clusterLink *link, int argc, 
     return 1;
 }
 
-/* VOTE_REQ <candidate-id> <term> <last-log-index> <last-log-term> */
-static void clusterRaftSendPreVote(clusterLink *link, uint64_t term) {
+/* PRE_VOTE_REQ <candidate-id> <term> <last-log-index> <last-log-term> */
+static void clusterRaftSendPreVoteRequest(clusterLink *link, uint64_t term) {
     sds msg = wireNewMsg("PRE_VOTE_REQ");
     msg = sdscatlen(msg, " ", 1);
     msg = sdscatlen(msg, myself->name, CLUSTER_NAMELEN);
@@ -1496,7 +1497,7 @@ static int clusterRaftCanGrantVote(clusterRaftState *rs, uint64_t candidate_last
     return candidate_last_index >= raftLogLastIndex();
 }
 
-static int clusterRaftProcessPreVote(clusterLink *link, int argc, sds *argv) {
+static int clusterRaftProcessPreVoteRequest(clusterLink *link, int argc, sds *argv) {
     /* argv: PRE_VOTE_REQ <candidate-id> <term> <last-log-index> <last-log-term> */
     if (argc < 5) return 1;
     if (sdslen(argv[1]) != CLUSTER_NAMELEN) return 1;
@@ -1515,8 +1516,6 @@ static int clusterRaftProcessPreVote(clusterLink *link, int argc, sds *argv) {
     clusterRaftSendPreVoteResponse(link, granted ? msg_term : rs->current_term, granted);
     return 1;
 }
-
-static void clusterRaftStartElection(void);
 
 static int clusterRaftProcessPreVoteResponse(clusterLink *link, int argc, sds *argv) {
     UNUSED(link);
@@ -1648,7 +1647,7 @@ static void clusterRaftStartPreVote(void) {
         clusterNode *node = dictGetVal(de);
         if (node == myself || !node->link) continue;
         if (node->flags & CLUSTER_NODE_MEET) continue;
-        clusterRaftSendPreVote(node->link, candidate_term);
+        clusterRaftSendPreVoteRequest(node->link, candidate_term);
     }
     dictReleaseIterator(di);
 
@@ -2264,7 +2263,7 @@ static int clusterRaftProcessMessage(struct clusterLink *link) {
     } else if (!strcasecmp(argv[0], "AE_ACK")) {
         ret = clusterRaftProcessAppendEntriesResponse(link, argc, argv);
     } else if (!strcasecmp(argv[0], "PRE_VOTE_REQ")) {
-        ret = clusterRaftProcessPreVote(link, argc, argv);
+        ret = clusterRaftProcessPreVoteRequest(link, argc, argv);
     } else if (!strcasecmp(argv[0], "PRE_VOTE")) {
         ret = clusterRaftProcessPreVoteResponse(link, argc, argv);
     } else if (!strcasecmp(argv[0], "VOTE_REQ")) {
@@ -2659,7 +2658,7 @@ static sds clusterRaftAppendInfoFields(sds info) {
     /* Raft-specific fields. */
     const char *role_str = rs->role == RAFT_ROLE_LEADER          ? "leader"
                            : rs->role == RAFT_ROLE_CANDIDATE     ? "candidate"
-                           : rs->role == RAFT_ROLE_PRE_CANDIDATE ? "precandidate"
+                           : rs->role == RAFT_ROLE_PRE_CANDIDATE ? "pre-candidate"
                            : rs->role == RAFT_ROLE_JOINER        ? "joiner"
                                                                  : "follower";
     info = sdscatprintf(info,

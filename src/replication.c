@@ -4764,6 +4764,7 @@ void replicationCachePrimary(client *c) {
      * pending outputs to the primary. */
     sdsclear(server.primary->querybuf);
     server.primary->qb_pos = 0;
+    server.primary->qb_applied = 0;
     server.primary->repl_data->repl_applied = 0;
     server.primary->repl_data->read_reploff = server.primary->repl_data->reploff;
     if (c->flag.multi) discardTransaction(c);

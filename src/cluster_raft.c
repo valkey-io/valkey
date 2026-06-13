@@ -1530,7 +1530,7 @@ static int clusterRaftProcessPreVoteResponse(clusterLink *link, int argc, sds *a
      * not cause local term changes; only denied responses may carry a real
      * higher term worth stepping down for. */
     if (!granted && msg_term > rs->current_term) {
-        clusterRaftMaybeStepDown(rs, msg_term);
+        clusterRaftMaybeStepDown(msg_term);
     }
 
     if (rs->role != RAFT_ROLE_PRE_CANDIDATE) return 1;

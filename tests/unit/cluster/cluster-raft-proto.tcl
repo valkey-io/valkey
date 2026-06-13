@@ -70,8 +70,9 @@ proc raft_listen_and_accept {port_var {timeout 5000}} {
     }
     set listen_fd [socket -server _raft_on_accept -myaddr 127.0.0.1 0]
     set listen_port [lindex [fconfigure $listen_fd -sockname] 2]
-    after $timeout {set ::_raft_accepted timeout}
+    set accept_after [after $timeout {set ::_raft_accepted timeout}]
     vwait ::_raft_accepted
+    after cancel $accept_after
     close $listen_fd
     if {$::_raft_accepted eq "timeout"} {
         error "timeout waiting for connection"
@@ -412,8 +413,9 @@ test "Raft proto: pre-vote timeout does not inflate term without quorum" {
         assert_equal 2 [CI 0 cluster_raft_current_term]
         assert_equal 2 [CI 0 cluster_size]
 
-        after 5000 {set ::_raft_accepted timeout}
+        set accept_after [after 5000 {set ::_raft_accepted timeout}]
         vwait ::_raft_accepted
+        after cancel $accept_after
         close $listen_fd
         assert {$::_raft_accepted ne "timeout"}
         set fd $::_raft_accepted
@@ -480,8 +482,9 @@ test "Raft proto: leader sends REPL_OFFSETS after follower offset changes" {
         $meet_client CLUSTER MEET 127.0.0.1 $fake_port
 
         # Wait for the leader to connect.
-        after 5000 {set ::_raft_accepted timeout}
+        set accept_after [after 5000 {set ::_raft_accepted timeout}]
         vwait ::_raft_accepted
+        after cancel $accept_after
         close $listen_fd
         assert {$::_raft_accepted ne "timeout"}
         set fd $::_raft_accepted

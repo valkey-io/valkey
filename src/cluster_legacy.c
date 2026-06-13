@@ -8624,7 +8624,9 @@ static void freeClusterNodesMemory(dict *nodes) {
 }
 
 /* clusterx setnodes $all_nodes_info $version $force
- * one line of $all_nodes_info: $node_id $host $port $role $master_node_id $slot_range */
+ * master node: $node_id $host $port $role - $slot_range
+ * slave noe: $node_id $host $port $role $master_node_id $slot_range
+ */
 int setClusterNodes(client *c, sds nodes_str, long long version) {
     char (*slots_nodes)[CLUSTER_NAMELEN] = zcalloc(CLUSTER_SLOTS * CLUSTER_NAMELEN);
     dict *new_nodes = dictCreate(&clusterNodesDictType);

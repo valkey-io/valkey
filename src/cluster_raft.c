@@ -1845,7 +1845,7 @@ static void clusterRaftCron(void) {
     clusterRaftState *rs = RAFT_STATE();
     mstime_t now = monotonicMs();
 
-    clusterConnectNodes();
+    if (!server.debug_cluster_disable_reconnection) clusterConnectNodes();
 
     /* Joiner timeout: if we stepped down to join a cluster but never
      * received AE, revert to singleton leader so the admin can retry. */

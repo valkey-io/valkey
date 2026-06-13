@@ -1038,7 +1038,7 @@ int clusterLoadConfig(char *filename) {
                 server.cluster->size++;
             }
         }
-        dictResetIterator(di);
+        dictReleaseIterator(di);
     }
 #endif
 
@@ -8597,8 +8597,15 @@ static void freeNodeMemory(clusterNode *n) {
         n->fail_reports = NULL;
     }
 
-    n->link = NULL;
-    n->inbound_link = NULL;
+    if (n->link) {
+        freeClusterLink(n->link);
+        n->link = NULL;
+    }
+    if (n->inbound_link) {
+        freeClusterLink(n->inbound_link);
+        n->inbound_link = NULL;
+    }
+
     n->replicaof = NULL;
 
     zfree(n);
@@ -8618,14 +8625,14 @@ static void freeClusterNodesMemory(dict *nodes) {
 
 /* clusterx setnodes $all_nodes_info $version $force
  * one line of $all_nodes_info: $node_id $host $port $role $master_node_id $slot_range */
-int setClusterNodes(client *c, const char *nodes_str, long long version) {
-    char slots_nodes[CLUSTER_SLOTS][CLUSTER_NAMELEN];
-    memset(slots_nodes, 0, sizeof(slots_nodes));
+int setClusterNodes(client *c, sds nodes_str, long long version) {
+    char (*slots_nodes)[CLUSTER_NAMELEN] =zcalloc(CLUSTER_SLOTS * CLUSTER_NAMELEN);
     dict *new_nodes = dictCreate(&clusterNodesDictType);
 
     int result = parseClusterNodes(c, nodes_str, new_nodes, slots_nodes);
     if (result == C_ERR) {
         freeClusterNodesMemory(new_nodes);
+        zfree(slots_nodes);
         return C_ERR;
     }
 
@@ -8657,7 +8664,8 @@ int setClusterNodes(client *c, const char *nodes_str, long long version) {
     sdsfree(s);
     if (dex == NULL) {
         freeClusterNodesMemory(new_nodes);
-        addReplyError(c, "Invalid cluster nodes info");
+        zfree(slots_nodes);
+        addReplyError(c, "Invalid cluster nodes info, cannot find myself, check node ip and port");
         return C_ERR;
     }
 
@@ -8671,14 +8679,12 @@ int setClusterNodes(client *c, const char *nodes_str, long long version) {
     } else {
         server.cluster->nodes = old_nodes;
         freeClusterNodesMemory(new_nodes);
+        zfree(slots_nodes);
         addReplyError(c, "Invalid cluster nodes info");
         return C_ERR;
     }
     server.cluster->topologyVersion = version;
     server.cluster->size = 0;
-    if (old_nodes) {
-        freeClusterNodesMemory(old_nodes);
-    }
 
     /* Recreate shards dict */
     dictEmpty(server.cluster->shards, NULL);
@@ -8710,20 +8716,25 @@ int setClusterNodes(client *c, const char *nodes_str, long long version) {
         server.cluster->slots[i] = clusterLookupNode(slots_nodes[i], CLUSTER_NAMELEN);
     }
 
+    if (old_nodes) {
+        freeClusterNodesMemory(old_nodes);
+    }
+
     if (iAmPrimary()) {
         replicationUnsetPrimary();
     } else {
         if (myself->replicaof) {
-            replicationSetPrimary(myself->replicaof->ip, getNodeDefaultReplicationPort(myself->replicaof), 0, false);
+            replicationSetPrimary(myself->replicaof->ip, getNodeDefaultReplicationPort(myself->replicaof), 0, true);
         }
     }
 
     clusterCloseAllSlots();
+    zfree(slots_nodes);
     clusterSaveConfigOrDie(1);
     return C_OK;
 }
 
-int parseClusterNodes(client *c, const char *nodes_str, dict *new_nodes, char slots_nodes[][CLUSTER_NAMELEN]) {
+int parseClusterNodes(client *c, sds nodes_str, dict *new_nodes, char slots_nodes[][CLUSTER_NAMELEN]) {
     int totlines = 0;
     sds *lines = sdssplitlen(nodes_str, sdslen(nodes_str), "\n", 1, &totlines);
     if (totlines == 0) {
@@ -8734,7 +8745,6 @@ int parseClusterNodes(client *c, const char *nodes_str, dict *new_nodes, char sl
     for (int i = 0; i < totlines; i++) {
         int argc;
         sds *argv;
-        printf("line %d = %s\n", i, lines[i]);
 
         /* Skip blank lines */
         if (lines[i][0] == '\n' || lines[i][0] == '\0') continue;
@@ -8751,10 +8761,9 @@ int parseClusterNodes(client *c, const char *nodes_str, dict *new_nodes, char sl
         }
 
         /* Create this node if it does not exist */
-        printf("argv[0] = %s\n", argv[0]);
         if (verifyClusterNodeId(argv[0], sdslen(argv[0])) == C_ERR) {
-            sdsfreesplitres(argv, argc);
             addReplyErrorFormat(c, "Invalid cluster nodes info, line %d, id '%s'", i, argv[0]);
+            sdsfreesplitres(argv, argc);
             goto checkerr;
         }
         clusterNode *node;
@@ -8764,29 +8773,28 @@ int parseClusterNodes(client *c, const char *nodes_str, dict *new_nodes, char sl
             int retval = dictAdd(new_nodes, sdsnewlen(node->name, CLUSTER_NAMELEN), node);
             serverAssert(retval == DICT_OK);
         } else {
-            node = dictGetVal(de);
+            addReplyErrorFormat(c, "Duplicated node id, line %d, id '%s'", i, argv[0]);
+            sdsfreesplitres(argv, argc);
+            goto checkerr;
         }
 
         /* host ip */
-        printf("argv[1] = %s\n", argv[1]);
         size_t iplen = sdslen(argv[1]);
         if (iplen >= sizeof(node->ip)) iplen = sizeof(node->ip) - 1;
         memcpy(node->ip, argv[1], iplen);
         node->ip[iplen] = '\0';
 
         /* host port */
-        printf("argv[2] = %s\n", argv[2]);
         long port;
         if (string2l(argv[2], sdslen(argv[2]), &port) == 0 || port <= 0 || port > 65535) {
-            sdsfreesplitres(argv, argc);
             addReplyErrorFormat(c, "Invalid cluster nodes info, line %d, port '%s'", i, argv[2]);
+            sdsfreesplitres(argv, argc);
             goto checkerr;
         }
         node->tcp_port = port;
         node->cport = node->tcp_port + CLUSTER_PORT_INCR;
 
         /* role */
-        printf("argv[3] = %s\n", argv[3]);
         if (!strcasecmp(argv[3], "master")) {
             node->flags |= CLUSTER_NODE_PRIMARY;
             memcpy(node->shard_id, node->name, CLUSTER_NAMELEN);
@@ -8798,16 +8806,15 @@ int parseClusterNodes(client *c, const char *nodes_str, dict *new_nodes, char sl
             }
             node->flags |= CLUSTER_NODE_REPLICA;
         } else {
-            sdsfreesplitres(argv, argc);
             addReplyErrorFormat(c, "Invalid cluster nodes role, line %d, role '%s'", i, argv[3]);
+            sdsfreesplitres(argv, argc);
             goto checkerr;
         }
 
         /* master id */
-        printf("argv[4] = %s\n", argv[4]);
         if ((nodeIsPrimary(node) && argv[4][0] != '-') || (nodeIsReplica(node) && verifyClusterNodeId(argv[4], sdslen(argv[4])) == C_ERR)) {
-            sdsfreesplitres(argv, argc);
             addReplyErrorFormat(c, "Invalid cluster nodes info, line %d, id '%s'", i, argv[4]);
+            sdsfreesplitres(argv, argc);
             goto checkerr;
         }
         if (nodeIsReplica(node)) {
@@ -8816,19 +8823,37 @@ int parseClusterNodes(client *c, const char *nodes_str, dict *new_nodes, char sl
 
         /* populate hash slots */
         for (int j = 5; j < argc; j++) {
-            printf("slots: %s\n", argv[j]);
             int start, stop;
-            char *p;
+            char *p, *endptr;
 
             if ((p = strchr(argv[j], '-')) != NULL) {
-                start = atoi(argv[j]);
-                stop = atoi(p + 1);
+                long val = strtol(argv[j], &endptr, 10);
+                if (endptr != p || val < 0 || val >=CLUSTER_SLOTS) {
+                    addReplyErrorFormat(c, "Invalid slot range, line %d, '%s'", i, argv[j]);
+                    sdsfreesplitres(argv, argc);
+                    goto checkerr;
+                }
+                start = (int)val;
+
+                long val2 = strtol(p + 1, &endptr, 10);
+                if (*endptr != '\0' || val2 < 0 || val2 >= CLUSTER_SLOTS) {
+                    addReplyErrorFormat(c, "Invalid slot range, line %d, '%s'", i, argv[j]);
+                    sdsfreesplitres(argv, argc);
+                    goto checkerr;
+                }
+                stop = (int)val2;
             } else {
-                start = stop = atoi(argv[j]);
+                long val = strtol(argv[j], &endptr, 10);
+                if (*endptr != '\0' || val < 0 || val >= CLUSTER_SLOTS) {
+                    addReplyErrorFormat(c, "Invalid slot number, line %d, '%s'", i, argv[j]);
+                    sdsfreesplitres(argv, argc);
+                    goto checkerr;
+                }
+                start = stop = (int)val;
             }
-            if (start < 0 || start >= CLUSTER_SLOTS || stop < 0 || stop >= CLUSTER_SLOTS) {
-                sdsfreesplitres(argv, argc);
+            if (start > stop) {
                 addReplyErrorFormat(c, "Slot is out of range, line %d", i);
+                sdsfreesplitres(argv, argc);
                 goto checkerr;
             }
             for (int s = start; s <= stop; s++) {
@@ -8872,6 +8897,15 @@ int parseClusterNodes(client *c, const char *nodes_str, dict *new_nodes, char sl
             }
         }
         dictReleaseIterator(di);
+    }
+
+    /* Check that all slots are covered */
+    for (int i=0; i < CLUSTER_SLOTS; i++)
+    {
+        if (slots_nodes[i][0] == '\0') {
+            addReplyErrorFormat(c, "Slot %d is not covered by any node", i);
+            return C_ERR;
+        }
     }
     return C_OK;
 

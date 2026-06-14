@@ -604,12 +604,16 @@ void lsetCommand(client *c) {
 
     if ((getLongFromObjectOrReply(c, c->argv[2], &index, NULL) != C_OK)) return;
 
-    listTypeTryConversionAppend(o, c->argv, 3, 3, NULL, NULL);
+    int old_encoding = o->encoding;
     if (listTypeReplaceAtIndex(o, index, value)) {
-        /* We might replace a big item with a small one or vice versa, but we've
-         * already handled the growing case in listTypeTryConversionAppend()
-         * above, so here we just need to try the conversion for shrinking. */
-        listTypeTryConversion(o, LIST_CONV_SHRINKING, NULL, NULL);
+        /* LSET replaces an existing element, so conversion decisions must be
+         * based on the final list state rather than treating the new value as
+         * an appended element. A listpack may need to grow into a quicklist,
+         * while a quicklist may shrink into a listpack. */
+        if (old_encoding == OBJ_ENCODING_LISTPACK)
+            listTypeTryConversion(o, LIST_CONV_GROWING, NULL, NULL);
+        else
+            listTypeTryConversion(o, LIST_CONV_SHRINKING, NULL, NULL);
         signalModifiedKey(c, c->db, c->argv[1]);
         notifyKeyspaceEvent(NOTIFY_LIST, "lset", c->argv[1], c->db->id);
         server.dirty++;

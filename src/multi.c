@@ -115,11 +115,17 @@ void queueMultiCommand(client *c, uint64_t cmd_flags) {
     mc->slot = c->slot;
 
     if (mc->cmd->get_dbid_args && mc->cmd->proc == selectCommand) {
-        int count;
-        int *dbids = mc->cmd->get_dbid_args(mc->argv, mc->argc, &count);
-        if (dbids && count > 0) {
-            c->mstate->transaction_db_id = dbids[0];
-            zfree(dbids);
+        int count = 0;
+        int *positions = mc->cmd->get_dbid_args(mc->argv, mc->argc, &count);
+        if (positions) {
+            if (count > 0) {
+                long long dbid;
+                /* The helper has already validated argv[positions[i]] as a
+                 * valid in-range dbid, so this should never fail. */
+                serverAssert(getLongLongFromObject(mc->argv[positions[0]], &dbid) == C_OK);
+                c->mstate->transaction_db_id = (int)dbid;
+            }
+            zfree(positions);
         }
     }
 

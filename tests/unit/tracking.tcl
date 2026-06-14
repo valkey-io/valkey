@@ -432,6 +432,30 @@ start_server {tags {"tracking network logreqres:skip"}} {
         $r CLIENT TRACKING OFF
     }
 
+    test {BCAST self-collision at later index is rejected} {
+        set r [valkey_client]
+        catch {$r CLIENT TRACKING ON BCAST PREFIX aaa PREFIX bbb PREFIX bbbc} output
+        assert_match {ERR*Prefix*overlaps*} $output
+        assert_match {*off*} [$r CLIENT TRACKINGINFO]
+        $r close
+    }
+
+    test {BCAST identical prefix at later index is rejected} {
+        set r [valkey_client]
+        catch {$r CLIENT TRACKING ON BCAST PREFIX xxx PREFIX yyy PREFIX yyy} output
+        assert_match {ERR*Prefix*overlaps*} $output
+        assert_match {*off*} [$r CLIENT TRACKINGINFO]
+        $r close
+    }
+
+    test {BCAST empty prefix collides with any prefix} {
+        set r [valkey_client]
+        catch {$r CLIENT TRACKING ON BCAST PREFIX {} PREFIX foo} output
+        assert_match {ERR*Prefix*overlaps*} $output
+        assert_match {*off*} [$r CLIENT TRACKINGINFO]
+        $r close
+    }
+
     test {hdel deliver invalidate message after response in the same connection} {
         r CLIENT TRACKING off
         r HELLO 3

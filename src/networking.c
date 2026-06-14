@@ -313,6 +313,7 @@ client *createClient(connection *conn) {
     c->buf_peak = c->buf_usable_size;
     c->buf_peak_last_reset_time = server.unixtime;
     c->qb_pos = 0;
+    c->qb_applied = 0;
     c->querybuf = NULL;
     c->querybuf_peak = 0;
     c->reqtype = 0;
@@ -521,6 +522,20 @@ void deleteCachedResponseClient(client *recording_client) {
     freeClient(recording_client);
 }
 
+/* Return the reply list that new reply data should be appended to.
+ * When the deferred reply buffer is active, replies go to
+ * c->deferred_reply; otherwise they go to c->reply. */
+static inline list *clientGetReplyList(client *c) {
+    return isDeferredReplyEnabled(c) ? c->deferred_reply : c->reply;
+}
+
+/* Return the reply bytes for the client.
+ * When the deferred reply buffer is active, replies go to
+ * c->deferred_reply_bytes; otherwise they go to c->reply_bytes. */
+static inline unsigned long long *clientGetReplyBytesPtr(client *c) {
+    return isDeferredReplyEnabled(c) ? &c->deferred_reply_bytes : &c->reply_bytes;
+}
+
 /* -----------------------------------------------------------------------------
  * Low level functions to add more data to output buffers.
  * -------------------------------------------------------------------------- */
@@ -675,7 +690,7 @@ static void _addReplyPayloadToList(client *c, list *reply_list, const char *payl
         memcpy(tail->buf + tail->used, payload, len);
         tail->used += len;
         listAddNodeTail(reply_list, tail);
-        unsigned long long *reply_bytes = (isDeferredReplyEnabled(c)) ? &c->deferred_reply_bytes : &c->reply_bytes;
+        unsigned long long *reply_bytes = clientGetReplyBytesPtr(c);
         *reply_bytes += tail->size;
 
         closeClientOnOutputBufferLimitReached(c, 1);
@@ -1065,8 +1080,9 @@ void addReplyStatusFormat(client *c, const char *fmt, ...) {
  * the previous one, when that happens, we wanna try to trim the unused space
  * at the end of the last reply node which we won't use anymore. */
 void trimReplyUnusedTailSpace(client *c) {
-    listNode *ln = listLast(c->reply);
+    listNode *ln = listLast(clientGetReplyList(c));
     clientReplyBlock *tail = ln ? listNodeValue(ln) : NULL;
+    unsigned long long *reply_bytes = clientGetReplyBytesPtr(c);
 
     /* Note that 'tail' may be NULL even if we have a tail node, because when
      * addReplyDeferredLen() is used */
@@ -1084,7 +1100,7 @@ void trimReplyUnusedTailSpace(client *c) {
         /* take over the allocation's internal fragmentation (at least for
          * memory usage tracking) */
         tail->size = usable_size - sizeof(clientReplyBlock);
-        c->reply_bytes = c->reply_bytes + tail->size - old_size;
+        *reply_bytes = *reply_bytes + tail->size - old_size;
         listNodeValue(ln) = tail;
     }
 }
@@ -1112,9 +1128,15 @@ void *addReplyDeferredLen(client *c) {
      * buffer offset (see function comment) */
     reqresSaveClientReplyOffset(c);
 
+    /* When the deferred reply buffer is active, the placeholder must go into
+     * the same list that subsequent ReplyWith* calls will append to.
+     * Otherwise setDeferredReply will fill the placeholder in c->reply while
+     * the array elements live in c->deferred_reply, producing a malformed
+     * response after commitDeferredReplyBuffer joins the two lists. */
+    list *reply_list = clientGetReplyList(c);
     trimReplyUnusedTailSpace(c);
-    listAddNodeTail(c->reply, NULL); /* NULL is our placeholder. */
-    return listLast(c->reply);
+    listAddNodeTail(reply_list, NULL); /* NULL is our placeholder. */
+    return listLast(reply_list);
 }
 
 void setDeferredReply(client *c, void *node, const char *s, size_t length) {
@@ -1125,6 +1147,11 @@ void setDeferredReply(client *c, void *node, const char *s, size_t length) {
      * we return NULL in addReplyDeferredLen() */
     if (node == NULL) return;
     serverAssert(!listNodeValue(ln));
+
+    /* The placeholder node may live in c->deferred_reply when the deferred
+     * reply buffer is active.  Use the same list for deletion/accounting. */
+    list *reply_list = clientGetReplyList(c);
+    unsigned long long *reply_bytes = clientGetReplyBytesPtr(c);
 
     /* Normally we fill this dummy NULL node, added by addReplyDeferredLen(),
      * with a new buffer structure containing the protocol needed to specify
@@ -1147,7 +1174,7 @@ void setDeferredReply(client *c, void *node, const char *s, size_t length) {
         prev->used += len_to_copy;
         length -= len_to_copy;
         if (length == 0) {
-            listDelNode(c->reply, ln);
+            listDelNode(reply_list, ln);
             return;
         }
         s += len_to_copy;
@@ -1159,7 +1186,7 @@ void setDeferredReply(client *c, void *node, const char *s, size_t length) {
         memcpy(next->buf, s, length);
         c->net_output_bytes_curr_cmd += length;
         next->used += length;
-        listDelNode(c->reply, ln);
+        listDelNode(reply_list, ln);
     } else {
         /* Create a new node */
         size_t usable_size;
@@ -1171,7 +1198,7 @@ void setDeferredReply(client *c, void *node, const char *s, size_t length) {
         memcpy(buf->buf, s, length);
         c->net_output_bytes_curr_cmd += length;
         listNodeValue(ln) = buf;
-        c->reply_bytes += buf->size;
+        *reply_bytes += buf->size;
 
         closeClientOnOutputBufferLimitReached(c, 1);
     }
@@ -2076,6 +2103,14 @@ int freeClient(client *c) {
         return 0;
     }
 
+    /* Debug: force async free for the primary client to deterministically
+     * reproduce the deferred-free replication state clobber race. */
+    if (server.debug_force_free_primary_async && c->flag.primary) {
+        server.debug_force_free_primary_async = 0;
+        freeClientAsync(c);
+        return 0;
+    }
+
     /* For connected clients, call the disconnection event of modules hooks. */
     if (c->conn) {
         moduleFireServerEvent(VALKEYMODULE_EVENT_CLIENT_CHANGE, VALKEYMODULE_SUBEVENT_CLIENT_CHANGE_DISCONNECTED, c);
@@ -2244,6 +2279,7 @@ void resetSharedQueryBuf(client *c) {
     c->querybuf = NULL;
     sdsclear(thread_shared_qb);
     c->qb_pos = 0;
+    c->qb_applied = 0;
 }
 
 /* Trims the client query buffer to the current position. */
@@ -2261,6 +2297,7 @@ void trimClientQueryBuffer(client *c) {
     if (c->qb_pos > 0) {
         sdsrange(c->querybuf, c->qb_pos, -1);
         c->qb_pos = 0;
+        c->qb_applied = 0;
     }
 }
 
@@ -2291,6 +2328,11 @@ void beforeNextClient(client *c) {
         if (c->repl_data->repl_applied) {
             sdsrange(c->querybuf, c->repl_data->repl_applied, -1);
             c->qb_pos -= c->repl_data->repl_applied;
+            /* qb_applied is an absolute offset, shift it together with the trimmed
+             * querybuf. commandProcessed() advances repl_applied to qb_applied after
+             * each command, so qb_applied >= repl_applied should always true here. */
+            serverAssert(c->qb_applied >= (size_t)c->repl_data->repl_applied);
+            c->qb_applied -= c->repl_data->repl_applied;
             c->repl_data->repl_applied = 0;
         }
     } else {
@@ -3046,9 +3088,13 @@ void sendReplyToClient(connection *conn) {
 
 void handleQbLimitReached(client *c) {
     sds ci = catClientInfoString(sdsempty(), c, server.hide_user_data_from_log), bytes = sdsempty();
-    bytes = sdscatrepr(bytes, c->querybuf, 64);
-    serverLog(LL_WARNING, "Closing client that reached max query buffer length: %s (qbuf initial bytes: %s)", ci,
-              bytes);
+    if (server.hide_user_data_from_log) {
+        serverLog(LL_WARNING, "Closing client that reached max query buffer length: %s", ci);
+    } else {
+        bytes = sdscatrepr(bytes, c->querybuf, 64);
+        serverLog(LL_WARNING, "Closing client that reached max query buffer length: %s (qbuf initial bytes: %s)", ci,
+                  bytes);
+    }
     sdsfree(ci);
     sdsfree(bytes);
     freeClientAsync(c);
@@ -3472,6 +3518,8 @@ void parseInlineBuffer(client *c) {
      * */
     c->net_input_bytes_curr_cmd = (c->argv_len_sum + (c->argc - 1) + 2);
     c->read_flags |= READ_FLAGS_PARSING_COMPLETED;
+    /* Record qb_pos so commandProcessed() can update reploff precisely. */
+    c->qb_applied = c->qb_pos;
     c->reqtype = 0;
 }
 
@@ -3525,16 +3573,14 @@ void parseMultibulkBuffer(client *c) {
                               &c->argv_len_sum, &c->net_input_bytes_curr_cmd);
     c->read_flags |= flag;
 
+    /* Record qb_pos for commandProcessed(). Written unconditionally because a
+     * client may become replicated mid-command (e.g. CLUSTER SYNCSLOTS ESTABLISH
+     * installs slot_migration_job inside its own handler). */
+    if (c->read_flags & READ_FLAGS_PARSING_COMPLETED) c->qb_applied = c->qb_pos;
+
     if (c->read_flags & READ_FLAGS_AUTH_REQUIRED) {
         /* Execute client's AUTH command before parsing more, because it affects
          * parser limits for max allowed bulk and multibulk lengths. */
-        return;
-    }
-
-    if (isReplicatedClient(c)) {
-        /* TODO: some change is required for replication offset which is
-         * computed from c->qb_pos, assuming we only parse one command at a
-         * time. Disable multi-command parsing for replication for now. */
         return;
     }
 
@@ -3726,6 +3772,7 @@ static int parseMultibulk(client *c,
                     }
                     sdsrange(c->querybuf, c->qb_pos, -1);
                     c->qb_pos = 0;
+                    c->qb_applied = 0;
                     /* Hint the sds library about the amount of bytes this string is
                      * going to contain. */
                     c->querybuf = sdsMakeRoomForNonGreedy(c->querybuf, ll + 2 - sdslen(c->querybuf));
@@ -3812,8 +3859,16 @@ void commandProcessed(client *c) {
 
     long long prev_offset = c->repl_data->reploff;
     if (isReplicatedClient(c) && !c->flag.multi) {
-        /* Update the applied replication offset of our primary. */
-        c->repl_data->reploff = c->repl_data->read_reploff - sdslen(c->querybuf) + c->qb_pos;
+        /* Advance reploff by exactly this command's bytes. Use qb_applied
+         * (current command's right boundary) instead of qb_pos, which may
+         * have run ahead due to multi-command parsing. */
+        c->repl_data->reploff = c->repl_data->read_reploff - sdslen(c->querybuf) + c->qb_applied;
+        /* Every applied non-MULTI command should consume >0 bytes from the
+         * replication stream, so reploff must strictly advance. A no-op
+         * advance means qb_applied was not maintained for the command we
+         * just processed (e.g. a command was backfilled into querybuf without
+         * updating qb_applied). */
+        serverAssert(c->repl_data->reploff > prev_offset);
     }
 
     /* If the client is replicated we need to compute the difference
@@ -3989,6 +4044,7 @@ static bool consumeCommandQueue(client *c) {
     c->net_input_bytes_curr_cmd = p->input_bytes;
     c->parsed_cmd = p->cmd;
     c->slot = p->slot;
+    c->qb_applied += p->input_bytes;
     if (queue->off == queue->len) {
         /* The queue is empty. Don't free it here, because if parsing is done in
          * I/O threads, we want to free it in I/O threads too, to avoid
@@ -5078,7 +5134,7 @@ void clientHelpCommand(client *c) {
         "CAPA <option> [options...]",
         "    The client claims its some capability options. Options are:",
         "    * REDIRECT",
-        "      The client can handle redirection during primary and replica failover in standalone mode.",
+        "      The client can handle redirection (standalone failover and keyless commands on replicas).",
         "GETREDIR",
         "    Return the client ID we are redirecting to when tracking is enabled.",
         "GETNAME",
@@ -6494,31 +6550,16 @@ void evictClients(void) {
     size_t client_eviction_limit = getClientEvictionLimit();
     if (client_eviction_limit == 0) return;
 
-    /* Variable to track memory of clients marked for close but not yet freed */
-    size_t pending_freed = 0;
-
     while (server.stat_clients_type_memory[CLIENT_TYPE_NORMAL] +
-               server.stat_clients_type_memory[CLIENT_TYPE_PUBSUB] -
-               pending_freed >
+               server.stat_clients_type_memory[CLIENT_TYPE_PUBSUB] >
            client_eviction_limit) {
         listNode *ln = listNext(&bucket_iter);
         if (ln) {
             client *c = ln->value;
-            if (c->flag.close_asap) {
-                /* Already scheduled to close. Count memory as freed and skip. */
-                pending_freed += getClientMemoryUsage(c, NULL);
-                continue;
-            }
             sds ci = catClientInfoString(sdsempty(), c, server.hide_user_data_from_log);
             serverLog(LL_NOTICE, "Evicting client: %s", ci);
+            if (freeClient(c)) server.stat_evictedclients++;
             sdsfree(ci);
-            server.stat_evictedclients++;
-
-            if (freeClient(c) == 0) {
-                /* Protected client (async close). Count memory as freed and skip. */
-                pending_freed += getClientMemoryUsage(c, NULL);
-                continue;
-            }
         } else {
             curr_bucket--;
             if (curr_bucket < 0) {

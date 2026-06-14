@@ -521,11 +521,6 @@ typedef enum {
 #define TLS_CLIENT_FIELD_CN 1
 #define TLS_CLIENT_FIELD_URI 2
 
-/* Sanitize dump payload */
-#define SANITIZE_DUMP_NO 0
-#define SANITIZE_DUMP_YES 1
-#define SANITIZE_DUMP_CLIENTS 2
-
 /* Enable protected config/command */
 #define PROTECTED_ACTION_ALLOWED_NO 0
 #define PROTECTED_ACTION_ALLOWED_YES 1
@@ -1013,23 +1008,18 @@ typedef struct readyList {
 /* This structure represents a user. This is useful for ACLs, the
  * user is associated to the connection after the connection is authenticated.
  * If there is no associated user, the connection uses the default user. */
-#define USER_COMMAND_BITS_COUNT 1024             /* The total number of command bits     \
-                                                   in the user structure. The last valid \
-                                                   command ID we can set in the user     \
-                                                   is USER_COMMAND_BITS_COUNT-1. */
-#define USER_FLAG_ENABLED (1 << 0)               /* The user is active. */
-#define USER_FLAG_DISABLED (1 << 1)              /* The user is disabled. */
-#define USER_FLAG_NOPASS (1 << 2)                /* The user requires no password, any   \
-                                                    provided password will work. For the \
-                                                    default user, this also means that   \
-                                                    no AUTH is needed, and every         \
-                                                    connection is immediately            \
-                                                    authenticated. */
-#define USER_FLAG_SANITIZE_PAYLOAD (1 << 3)      /* The user require a deep RESTORE \
-                                                  * payload sanitization. */
-#define USER_FLAG_SANITIZE_PAYLOAD_SKIP (1 << 4) /* The user should skip the     \
-                                                  * deep sanitization of RESTORE \
-                                                  * payload. */
+#define USER_COMMAND_BITS_COUNT 1024 /* The total number of command bits     \
+                                       in the user structure. The last valid \
+                                       command ID we can set in the user     \
+                                       is USER_COMMAND_BITS_COUNT-1. */
+#define USER_FLAG_ENABLED (1 << 0)   /* The user is active. */
+#define USER_FLAG_DISABLED (1 << 1)  /* The user is disabled. */
+#define USER_FLAG_NOPASS (1 << 2)    /* The user requires no password, any   \
+                                        provided password will work. For the \
+                                        default user, this also means that   \
+                                        no AUTH is needed, and every         \
+                                        connection is immediately            \
+                                        authenticated. */
 
 #define SELECTOR_FLAG_ROOT (1 << 0)        /* This is the root user permission \
                                             * selector. */
@@ -1311,6 +1301,10 @@ typedef struct client {
     /* Input buffer and command parsing fields */
     sds querybuf;        /* Buffer we use to accumulate client queries. */
     size_t qb_pos;       /* The position we have read in querybuf. */
+    size_t qb_applied;   /* Right boundary of the *current* command in querybuf.
+                          * qb_pos may run ahead due to multi-command parsing, so
+                          * we use qb_applied (replicated clients only) to advance
+                          * reploff by exactly this command's bytes. */
     robj **argv;         /* Arguments of current command. */
     int argc;            /* Num of arguments of current command. */
     int argv_len;        /* Size of argv array (may be more than argc) */
@@ -1972,7 +1966,6 @@ struct valkeyServer {
     int active_expire_effort;    /* From 1 (default) to 10, active effort. */
     int lazy_expire_disabled;    /* If > 0, don't trigger lazy expire */
     int active_defrag_enabled;
-    int sanitize_dump_payload;                   /* Enables deep sanitization for ziplist and listpack in RDB and RESTORE. */
     int skip_checksum_validation;                /* Disable checksum validation for RDB and RESTORE payload. */
     int rdb_version_check;                       /* Try to load RDB produced by a future version. */
     int jemalloc_bg_thread;                      /* Enable jemalloc background thread */
@@ -2561,6 +2554,16 @@ typedef enum {
 
 typedef void serverCommandProc(client *c);
 typedef int serverGetKeysProc(struct serverCommand *cmd, robj **argv, int argc, getKeysResult *result);
+
+/* Returns a heap-allocated array of argv indices that hold a database id
+ * argument to be validated by db-level ACL. The caller dereferences each
+ * argv[positions[i]] (via getLongLongFromObject) to obtain the dbid value.
+ * On success, *count is set to the array length.
+ *
+ * Returns NULL on syntax error or if the command has no dbid arguments;
+ * *count is unspecified in that case.
+ *
+ * Caller should free the returned array. */
 typedef int *commandDbIdArgs(robj **argv, int argc, int *count);
 
 /* Command structure.
@@ -3413,6 +3416,7 @@ zskiplistNode *zslInsert(zskiplist *zsl, double score, const_sds ele);
 zskiplistNode *zslNthInRange(zskiplist *zsl, zrangespec *range, long n, long *rank);
 sds zslGetNodeElement(const zskiplistNode *x);
 double zzlGetScore(unsigned char *sptr);
+int zzlValidateScores(unsigned char *zl);
 void zzlNext(unsigned char *zl, unsigned char **eptr, unsigned char **sptr);
 void zzlPrev(unsigned char *zl, unsigned char **eptr, unsigned char **sptr);
 unsigned char *zzlFirstInRange(unsigned char *zl, zrangespec *range);
@@ -3888,7 +3892,7 @@ void signalKeyAsReady(serverDb *db, robj *key, int type);
 void blockForKeys(client *c, int btype, robj **keys, int numkeys, mstime_t timeout, int unblock_on_nokey);
 void blockClientShutdown(client *c);
 void blockPostponeClient(client *c);
-void blockClientForReplicaAck(client *c, mstime_t timeout, long long offset, long numreplicas, int numlocal);
+void blockClientForReplicaAck(client *c, mstime_t timeout, long long offset, int numreplicas, int numlocal);
 void replicationRequestAckFromReplicas(void);
 void signalDeletedKeyAsReady(serverDb *db, robj *key, int type);
 void updateStatsOnUnblock(client *c, long blocked_us, long reply_us, int failed_or_rejected);
@@ -4140,7 +4144,6 @@ void watchCommand(client *c);
 void unwatchCommand(client *c);
 void clusterCommand(client *c);
 void clusterKeySlotCommand(client *c);
-void clusterFlushslotCommand(client *c);
 void clusterSlotStatsCommand(client *c);
 void clusterscanCommand(client *c);
 void restoreCommand(client *c);

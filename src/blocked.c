@@ -657,7 +657,7 @@ static void handleClientsBlockedOnKey(readyList *rl) {
 }
 
 /* block a client for replica acknowledgement */
-void blockClientForReplicaAck(client *c, mstime_t timeout, long long offset, long numreplicas, int numlocal) {
+void blockClientForReplicaAck(client *c, mstime_t timeout, long long offset, int numreplicas, int numlocal) {
     initClientBlockingState(c);
     c->bstate->timeout = timeout;
     c->bstate->reploffset = offset;

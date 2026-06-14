@@ -4764,6 +4764,7 @@ void replicationCachePrimary(client *c) {
      * pending outputs to the primary. */
     sdsclear(server.primary->querybuf);
     server.primary->qb_pos = 0;
+    server.primary->qb_applied = 0;
     server.primary->repl_data->repl_applied = 0;
     server.primary->repl_data->read_reploff = server.primary->repl_data->reploff;
     if (c->flag.multi) discardTransaction(c);
@@ -5036,7 +5037,7 @@ void waitCommand(client *c) {
     }
 
     /* Argument parsing. */
-    if (getLongFromObjectOrReply(c, c->argv[1], &numreplicas, NULL) != C_OK) return;
+    if (getRangeLongFromObjectOrReply(c, c->argv[1], 0, INT_MAX, &numreplicas, NULL) != C_OK) return;
     if (getTimeoutFromObjectOrReply(c, c->argv[2], &timeout, UNIT_MILLISECONDS) != C_OK) return;
 
     /* First try without blocking at all. */
@@ -5063,7 +5064,7 @@ void waitaofCommand(client *c) {
 
     /* Argument parsing. */
     if (getRangeLongFromObjectOrReply(c, c->argv[1], 0, 1, &numlocal, NULL) != C_OK) return;
-    if (getPositiveLongFromObjectOrReply(c, c->argv[2], &numreplicas, NULL) != C_OK) return;
+    if (getRangeLongFromObjectOrReply(c, c->argv[2], 0, INT_MAX, &numreplicas, NULL) != C_OK) return;
     if (getTimeoutFromObjectOrReply(c, c->argv[3], &timeout, UNIT_MILLISECONDS) != C_OK) return;
 
     if (server.primary_host) {
@@ -5220,8 +5221,8 @@ void handleBioThreadFinishedRDBDownload(void) {
     debugServerAssert(bio_save_state == REPL_BIO_DISK_SAVE_STATE_FINISHED);
 
     /* Bio termination detected - we can get rid of the state vars */
-    int bio_repl_transfer_size = server.bio_repl_transfer_size;
-    int bio_repl_transfer_read = server.bio_repl_transfer_read;
+    off_t bio_repl_transfer_size = server.bio_repl_transfer_size;
+    off_t bio_repl_transfer_read = server.bio_repl_transfer_read;
     resetBioRDBSaveState();
 
     serverLog(LL_NOTICE, "Replica main thread detected RDB download completion in Bio thread");

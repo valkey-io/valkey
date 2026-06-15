@@ -764,7 +764,6 @@ void clusterCommandSyncSlotsFinish(client *c) {
         return;
     }
 
-    addReply(c, shared.ok);
     slotMigrationJob *job = clusterLookupMigrationJob(name);
     if (!job) {
         addReplyError(c, "No such slot migration job");
@@ -781,6 +780,7 @@ void clusterCommandSyncSlotsFinish(client *c) {
         return;
     }
 
+    addReply(c, shared.ok);
     forceCommandPropagation(c, PROPAGATE_REPL | PROPAGATE_AOF);
     finishSlotMigrationJob(job, target_state, message);
 }
@@ -835,6 +835,9 @@ slotMigrationJob *createSlotImportJob(client *c,
     if (!job->client->querybuf) {
         job->client->querybuf = generateSyncSlotsEstablishCommand(job);
         job->client->qb_pos = sdslen(job->client->querybuf);
+        /* The backfilled ESTABLISH command is already applied, so qb_applied
+         * must match qb_pos for commandProcessed() to advance reploff. */
+        job->client->qb_applied = job->client->qb_pos;
     }
     job->client->repl_data->read_reploff = sdslen(job->client->querybuf);
 
@@ -939,9 +942,10 @@ void clusterUpdateSlotImportsOnOwnershipChange(void) {
             finishSlotMigrationJob(job, SLOT_MIGRATION_JOB_FAILED,
                                    "Slots were unexpectedly assigned to myself "
                                    "during import");
+        } else {
+            finishSlotMigrationJob(job, SLOT_MIGRATION_JOB_FAILED,
+                                   "Slots are no longer owned by source node");
         }
-        finishSlotMigrationJob(job, SLOT_MIGRATION_JOB_FAILED,
-                               "Slots are no longer owned by source node");
     }
 }
 
@@ -1303,6 +1307,13 @@ void slotExportConnectHandler(connection *conn) {
  * the job as private data. */
 int connectSlotExportJob(slotMigrationJob *job) {
     clusterNode *n = clusterLookupNode(job->target_node_name, CLUSTER_NAMELEN);
+    if (n == NULL) {
+        serverLog(LL_WARNING,
+                  "Slot migration %s: target node %.40s not found in cluster, "
+                  "aborting connection attempt.",
+                  job->description, job->target_node_name);
+        return C_ERR;
+    }
     int port = getNodeDefaultReplicationPort(n);
     serverLog(LL_NOTICE, "Connecting slot migration %s (ip: %s, port %d)",
               job->description,
@@ -1995,10 +2006,11 @@ void proceedWithSlotMigration(slotMigrationJob *job) {
                 status = proceedWithSlotExportJobConnecting(job, &completed);
             }
             if (status == C_ERR) {
+                const char *conn_err = job->conn ? connGetLastError(job->conn) : "target node not found";
                 sds status_msg =
                     sdscatfmt(sdsempty(),
                               "Unable to connect to target node: %s",
-                              connGetLastError(job->conn));
+                              conn_err);
                 finishSlotMigrationJob(job, SLOT_MIGRATION_JOB_FAILED,
                                        status_msg);
                 sdsfree(status_msg);

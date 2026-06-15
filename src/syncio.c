@@ -94,7 +94,10 @@ ssize_t syncRead(int fd, char *ptr, ssize_t size, long long timeout) {
         /* Optimistically try to read before checking if the file descriptor
          * is actually readable. At worst we get EAGAIN. */
         nread = read(fd, ptr, size);
-        if (nread == 0) return -1; /* short read. */
+        if (nread == 0) {
+            errno = ECONNRESET;
+            return -1;
+        }
         if (nread == -1) {
             if (errno != EAGAIN) return -1;
         } else {

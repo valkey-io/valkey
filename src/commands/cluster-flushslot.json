@@ -10,7 +10,8 @@
         "command_flags": [
             "WRITE",
             "NO_ASYNC_LOADING",
-            "ADMIN"
+            "ADMIN",
+            "ALL_DBS"
         ],
         "acl_categories": [
             "ADMIN",

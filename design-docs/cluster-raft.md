@@ -117,10 +117,11 @@ cluster with only one member. Singleton means that it's alone.
   after 4× cluster-node-timeout if no AE arrives.
 - **Follower**: Participates in elections and counts for quorum.
   Promoted from joiner when the node's NODE_JOIN entry is applied.
-- **Candidate**: Requesting votes after election timeout.
 - **Pre-candidate**: Runs a pre-vote round without incrementing term.
   Reverts to follower if no quorum is reached within one election timeout
   (see [Election timeout](#election-timeout)).
+- **Candidate**: Runs a formal election by sending VOTE_REQ after
+  winning a pre-vote round.
 - **Leader**: Accepts proposals, replicates log, sends heartbeats.
 
 The Raft leader is independent of the data primary/replica role. Any
@@ -496,76 +497,45 @@ timeout. The same log-up-to-date check applies to both message types.
 #### Timeout state machine
 
 ```
-         +----------+
-         | FOLLOWER |
-         +----------+
-              |
-              | election timeout
-              v
-     +---------------+
-     | PRE_CANDIDATE |<----------------------+
-     +---------------+                       |
-          |     |                            |
-          |     | pre-vote timeout           |
-          |     | (no quorum, no term change)|
-          |     v                            |
-          | +----------+                     |
-          | | FOLLOWER |                     |
-          | +----------+                     |
-          |                                  |
-          | quorum PRE_VOTE                  | election timeout
-          v                                  |
-     +-----------+                           |
-     | CANDIDATE |--------------------------+
-     +-----------+
-          |
-          | quorum VOTE
-          v
-       LEADER
+                +----------+
+                | FOLLOWER |
+                +----------+
+                   |    ^
+  election timeout |    | pre-vote timeout
+                   v    |
+              +---------------+
+              | PRE_CANDIDATE |
+              +---------------+
+                   |    ^
+   quorum PRE_VOTE |    | election timeout
+                   v    |
+               +-----------+
+               | CANDIDATE |
+               +-----------+
+                   |
+       quorum VOTE |
+                   v
+               +--------+
+               | LEADER |
+               +--------+
 ```
 
-`clusterRaftCron()` drives three transitions (see `src/cluster_raft.c`):
+The non-obvious transition is `CANDIDATE -> PRE_CANDIDATE`. After a
+split vote, the node has already bumped `currentTerm`; immediately
+starting another election would bump it again even if the node cannot
+reach a majority. Re-entering pre-vote first confirms that a quorum is
+reachable before committing to another term increment.
 
-1. **Follower or candidate → pre-candidate.** When
-   `now - last_heartbeat > election_timeout`, the node calls
-   `clusterRaftStartPreVote()`. This applies to both followers (no
-   leader heartbeats) and candidates (split vote or lost election).
-   Entering pre-candidate randomizes a new timeout and records
-   `pre_vote_started`; `currentTerm` is unchanged.
+Pre-vote is an in-memory probe. It uses the speculative term
+`currentTerm + 1`, but it does not update or persist `currentTerm` or
+`votedFor`. Only `StartElection()` persists a new term and self-vote,
+and only after a majority has granted pre-vote.
 
-2. **Pre-candidate → candidate.** On a majority of `PRE_VOTE` grants
-   for term `currentTerm + 1`, `clusterRaftStartElection()` bumps
-   `currentTerm`, sets `votedFor` to self, persists, and sends
-   `VOTE_REQ`.
-
-3. **Pre-candidate → follower (rollback).** If no quorum arrives within
-   one election timeout (`now - pre_vote_started > election_timeout`),
-   the node drops back to follower **without** incrementing
-   `currentTerm`. It randomizes the election timeout and sets
-   `last_heartbeat = now`, so the next probe waits another full
-   `[T, 2T)` window. This rollback is the piece most absent from the
-   paper: it is what keeps an isolated node from either inflating its
-   term or hammering the network with doomed election attempts.
-
-**Why candidates re-enter pre-vote.** After a formal election the term
-has already been bumped. On split vote the node stays candidate until
-the election timer fires again; at that point it does not immediately
-start another `StartElection()` (which would bump the term again).
-Instead it runs another pre-vote round at the *next* speculative term
-(`currentTerm + 1`) to confirm a majority is reachable before
-committing to another term increment.
-
-**What pre-vote does not undo.** Pre-vote prevents *future* term
-inflation while partitioned. It does not roll back a term that was
-already committed by a prior `StartElection()`. A node that became
-candidate, failed to win, and then regains quorum will proceed from its
-current term (or higher, if it learned a newer term from a denied
-`PRE_VOTE` / `VOTE` response).
-
-**Persistence.** Pre-vote and the pre-candidate rollback touch only
-in-memory role and timers. `currentTerm` and `votedFor` are written to
-`nodes.conf` only when `StartElection()` runs (or when stepping down
-to a higher term learned from a peer).
+The leader lease check is shared by pre-vote and real vote requests:
+nodes that have heard from the leader within one election timeout deny
+both. This keeps a reachable leader stable while still allowing a node
+whose pre-vote timed out to fall back to follower and retry later
+without inflating its term.
 
 ### Backdating on leader election
 

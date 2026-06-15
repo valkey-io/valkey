@@ -62,6 +62,14 @@ VOTE <term> <granted>
     Response to VOTE_REQ. Indicates whether the vote was granted.
     Always sent, even on deny, so the candidate can learn higher terms.
 
+PRE_VOTE_REQ <candidate-id> <term> <last-log-index> <last-log-term>
+    Request for speculative election. Sent by pre-candidates before
+    incrementing currentTerm. The term is currentTerm+1.
+
+PRE_VOTE <term> <granted>
+    Response to PRE_VOTE_REQ. Indicates whether the node would grant
+    a real vote in that term.
+
 PROPOSE <entry>
     Forwards a proposal from a follower to the leader. The entry
     uses the same format as log entries (type followed by data).
@@ -109,7 +117,11 @@ cluster with only one member. Singleton means that it's alone.
   after 4× cluster-node-timeout if no AE arrives.
 - **Follower**: Participates in elections and counts for quorum.
   Promoted from joiner when the node's NODE_JOIN entry is applied.
-- **Candidate**: Requesting votes after election timeout.
+- **Pre-candidate**: Runs a pre-vote round without incrementing term.
+  Reverts to follower if no quorum is reached within one election timeout
+  (see [Election timeout](#election-timeout)).
+- **Candidate**: Runs a formal election by sending VOTE_REQ after
+  winning a pre-vote round.
 - **Leader**: Accepts proposals, replicates log, sends heartbeats.
 
 The Raft leader is independent of the data primary/replica role. Any
@@ -459,6 +471,72 @@ The election timeout is based on `cluster-node-timeout`:
 `[T, 2T)` where T = max(cluster-node-timeout, 1000ms). The heartbeat
 interval is `election_timeout / 10`, minimum 100ms.
 
+#### Pre-vote and term inflation
+
+Ongaro's dissertation (§9.6) introduces pre-vote to reduce disruption
+when a partitioned node rejoins, but it does not spell out the full
+election-timeout state machine that production implementations need.
+In classic Raft, every election timeout on a follower increments
+`currentTerm` and sends RequestVote. A node isolated from the quorum
+will therefore bump its term on every timeout even though it can never
+win — when it rejoins, its higher term forces the real leader to step
+down.
+
+Pre-vote breaks this cycle by separating *connectivity probing* from
+*term commitment*. A pre-vote round sends `PRE_VOTE_REQ` with a
+*speculative* term of `currentTerm + 1` but does **not** change local
+`currentTerm`, `votedFor`, or the on-disk vars line. Only after a
+majority grants `PRE_VOTE` does the node call `StartElection()`, which
+increments `currentTerm`, votes for itself, and persists the new term
+before broadcasting `VOTE_REQ`.
+
+Nodes deny `PRE_VOTE` and `VOTE_REQ` when they still consider the
+current leader alive: `last_heartbeat` is younger than one election
+timeout. The same log-up-to-date check applies to both message types.
+
+#### Timeout state machine
+
+```
+                +----------+
+                | FOLLOWER |
+                +----------+
+                   |    ^
+  election timeout |    | pre-vote timeout
+                   v    |
+              +---------------+
+              | PRE_CANDIDATE |
+              +---------------+
+                   |    ^
+   quorum PRE_VOTE |    | election timeout
+                   v    |
+               +-----------+
+               | CANDIDATE |
+               +-----------+
+                   |
+       quorum VOTE |
+                   v
+               +--------+
+               | LEADER |
+               +--------+
+```
+
+The non-obvious transition is `CANDIDATE -> PRE_CANDIDATE`. After a
+split vote, the node has already bumped `currentTerm`; immediately
+starting another election would bump it again even if the node cannot
+reach a majority. Re-entering pre-vote first confirms that a quorum is
+reachable before committing to another term increment.
+
+Pre-vote is an in-memory probe. It uses the speculative term
+`currentTerm + 1`, but it does not update or persist `currentTerm` or
+`votedFor`. Only `StartElection()` persists a new term and self-vote,
+and only after a majority has granted pre-vote.
+
+The leader lease check is shared by pre-vote and real vote requests:
+nodes that have heard from the leader within one election timeout deny
+both. This keeps a reachable leader stable while still allowing a node
+whose pre-vote timed out to fall back to follower and retry later
+without inflating its term.
+
 ### Backdating on leader election
 
 When a node wins an election, it backdates the old leader's
@@ -684,7 +762,8 @@ Entries that don't need a shard-epoch:
 On graceful shutdown, the leader sends a `TIMEOUT_NOW` message to the
 follower with the highest `match_index`. The message is flushed
 synchronously to the socket before shutdown proceeds. The target
-immediately starts an election without waiting for the election timeout.
+immediately starts a real election (skipping pre-vote) without waiting
+for the election timeout.
 (See Ongaro dissertation §3.10.)
 
 Nodes in handshake or with the MEET flag are excluded as transfer
@@ -692,7 +771,6 @@ targets.
 
 ## Future Work
 
-- Pre-vote protocol to avoid term inflation from partitioned nodes.
 - Minority partition detection and leader step-down (prevents append
   entries, especially don't trigger primary/replica failovers in a
   minority partition).

@@ -473,6 +473,13 @@ static long long bgIterator_timeproc_id;
 // Incremented on each new iteration, this is updated in dbEntry metadata whenever an entry is modified.
 static uint32_t bgIteration_epoch = 1;
 
+/* If true, the iterators' cur_cmd_may_replicate flag was determined in the last call to
+ * blockClientIfRequired.  Otherwise, we skipped over computing this flag (maybe because it was a
+ * READ command).
+ * If this is true, AND we are in the context of executing a command inside of call(), then we
+ * should respect the setting of cur_cmd_may_replicate. */
+static bool iteratorReplicationFlagsWereUpdated;
+
 
 /* BgIteration debug captures BgIteration activity to a large sds buffer.  When an iterator is
  * completed, the entire buffer is written to a file in the current working directory.  Note that
@@ -616,9 +623,6 @@ static bool fullScanIteratorHasPassedItem(genericIterator *genIt, const_sds key,
     // At this point, we're down to a specific hashtable.
 
     hashtable *ht = kvstoreGetHashtable(it->kvs, keySlot);
-    // If key doesn't exist, we consider it passed - we MIGHT have iterated over it had it existed.
-    if (!hashtableFind(ht, key, NULL)) return true;
-
     if (hashtableScanHasPassedKey(ht, key, it->ht_cursor)) return true;
 
     if (ignoreKeyForSave(key)) return true; // if slot being purged, pretend we have passed it
@@ -2322,6 +2326,7 @@ void bgIteration_flushall(void) {
 // PUBLIC API
 bool bgIteration_blockClientIfRequired(client *c) {
     serverAssert(onValkeyMainThread());
+    iteratorReplicationFlagsWereUpdated = false;
     if (!bgIteration_iterationActive()) return false;
     if (!isWriteCmd(c->cmd)) return false;
 
@@ -2334,6 +2339,7 @@ bool bgIteration_blockClientIfRequired(client *c) {
      * iterator.  If it's determined that the command should replicate, the flag will be set
      * as the command and keys are examined for expedite. */
     resetReplicationFlagForIterators(c);
+    iteratorReplicationFlagsWereUpdated = true;
 
     if (c->cmd->proc == flushdbCommand || c->cmd->proc == flushallCommand) {
         // Handle flush commands prior to execution
@@ -2590,19 +2596,17 @@ void bgIteration_handleCommandReplication(int dbid,
         if (isDelCommand) {
             sds key = objectGetVal(argv[1]);
             if (it->keyset_iter->isKeyInScope(it->keyset_iter, key)) {
-                dbEntry *de = dbFind(server.db[dbid], key);
-                if (de) {
-                    // NOTE:  It's weird, but helpful, for both EXPIRE and EVICT the propagation happens
-                    //        BEFORE the actual delete.  So if the dbEntry still exists, we are doing
-                    //        an expire/evict which is not preceded by blockClientIfRequired().
+                bool blockClientIfRequiredWasCalled = (server.in_call > 0);
+                if (blockClientIfRequiredWasCalled && iteratorReplicationFlagsWereUpdated) {
+                    // Here we know that the DEL is related to the running command
+                    shouldReplicateDelCommand = it->cur_cmd_may_replicate;
+                } else {
+                    // Otherwise, it's something like active expiration or eviction (unrelated)
+                    dbEntry *de = dbFind(server.db[dbid], key);
                     if (it->keyset_iter->hasPassedItem(it->keyset_iter, key, dbid) ||
-                        hashtableFind(it->early_iterate_entries, de, NULL)) {
+                        (de && hashtableFind(it->early_iterate_entries, de, NULL))) {
                         shouldReplicateDelCommand = true;
                     }
-                } else {
-                    // The dbEntry has already been deleted, this must be part of normal command
-                    //  processing.
-                    shouldReplicateDelCommand = it->cur_cmd_may_replicate;
                 }
             }
         }

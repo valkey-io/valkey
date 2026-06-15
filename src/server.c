@@ -3044,6 +3044,7 @@ void initServer(void) {
     server.watching_clients = 0;
     server.cronloops = 0;
     server.in_exec = 0;
+    server.in_call = 0;
     server.busy_module_yield_flags = BUSY_MODULE_YIELD_NONE;
     server.busy_module_yield_reply = NULL;
     server.client_pause_in_transaction = 0;
@@ -3980,6 +3981,8 @@ int incrCommandStatsOnError(struct serverCommand *cmd, int flags) {
 void call(client *c, int flags) {
     if (bgIteration_blockClientIfRequired(c)) return;
 
+    server.in_call++;
+
     long long dirty;
     struct ClientFlags client_old_flags = c->flag;
 
@@ -4194,6 +4197,7 @@ void call(client *c, int flags) {
     }
 
     server.executing_client = prev_client;
+    server.in_call--;
 }
 
 /* Used when a command that is ready for execution needs to be rejected, due to

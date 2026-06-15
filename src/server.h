@@ -1779,6 +1779,7 @@ struct valkeyServer {
     size_t initial_memory_usage;         /* Bytes used after initialization. */
     int always_show_logo;                /* Show logo even for non-stdout logging. */
     int in_exec;                         /* Are we inside EXEC? */
+    int in_call;                         /* Nesting level within the call() function. */
     int busy_module_yield_flags;         /* Are we inside a busy module? (triggered by RM_Yield). see BUSY_MODULE_YIELD_ flags. */
     const char *busy_module_yield_reply; /* When non-null, we are inside RM_Yield. */
     char *ignore_warnings;               /* Config: warnings that should be ignored. */

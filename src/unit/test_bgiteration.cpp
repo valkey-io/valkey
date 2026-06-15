@@ -880,7 +880,9 @@ class BgIterationTest : public ::testing::Test {
             EXPECT_EQ(md, objectGetMetadata(de)); // the md location shouldn't have changed
             EXPECT_EQ(md_after_setkey, *md); // the md value should still be the same
 
+            server.in_call++;
             bgIteration_handleCommandReplication(c->db->id, c->cmd, c->argc, c->argv);
+            server.in_call--;
         }
 
 
@@ -888,22 +890,22 @@ class BgIterationTest : public ::testing::Test {
         void simulateExpiration(int itemNum) {
             ASSERT_NE(getItem(itemNum), nullptr); // Should be there before expire
 
-            // NOTE: This seems weird, but Valkey propagates the delete before actually expiring the
-            //       key.  BgIterator expects this behavior and expects the key to exist when the
-            //       DEL is received for propagation.
-
             // Send bgIteration the DEL
             int db = getDbFromItemNum(itemNum);
             robj *argv[2];
             argv[0] = createStringObjectFromCString("DEL");
             argv[1] = createStringObjectFromCString(keyStr(itemNum));
             serverCommand *cmd = lookupCommandByCString("DEL");
-            bgIteration_handleCommandReplication(db, cmd, 2, argv);
+            // KeyDelete should be called before the deletion occurs
             bgIteration_keyDelete(db, static_cast<sds>(objectGetVal(argv[1])));
-            decrRefCount(argv[0]);
-            decrRefCount(argv[1]);
 
             simpleDelItem(itemNum);     // Simulate the actual del
+
+            // Replication happens after the deletion occurs
+            ASSERT_EQ(server.in_call, 0); // test sanity check
+            bgIteration_handleCommandReplication(db, cmd, 2, argv);
+            decrRefCount(argv[0]);
+            decrRefCount(argv[1]);
 
             EXPECT_EQ(getItem(itemNum), nullptr);
         }
